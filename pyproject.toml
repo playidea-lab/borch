@@ -1,6 +1,6 @@
 [project]
 name = "nanotorch"
-version = "0.2.0"
+version = "1.2.2"
 description = "numpy 위에 얹은 PyTorch 모양의 얇은 층 — 설치 없이 브라우저에서 문법 연습"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]

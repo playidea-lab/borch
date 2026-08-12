@@ -2,8 +2,24 @@
 
 **numpy 위에 얹은 PyTorch 모양의 얇은 층.** 설치 없이 브라우저에서 PyTorch 문법을 연습한다.
 
+브라우저(Pyodide)에서:
+
 ```python
-import nanotorch as torch          # 또는 sys.modules["torch"] 로 심어 쓴다
+import micropip
+await micropip.install("https://github.com/playidea-lab/nanotorch/releases/latest/download/nanotorch-1.2.2-py3-none-any.whl")
+
+import sys, nanotorch
+sys.modules["torch"] = nanotorch          # 이 뒤로는 `import torch` 가 그대로 통한다
+```
+
+로컬에서:
+
+```bash
+uv add nanotorch --find-links https://github.com/playidea-lab/nanotorch/releases/latest
+```
+
+```python
+import nanotorch as torch
 
 w = torch.tensor(3.0, requires_grad=True)
 loss = (w - 5.0) ** 2
