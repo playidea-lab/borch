@@ -2,21 +2,31 @@
 
 **numpy 위에 얹은 PyTorch 모양의 얇은 층.** 설치 없이 브라우저에서 PyTorch 문법을 연습한다.
 
-브라우저(Pyodide)에서:
+## 설치
+
+순수 파이썬 휠 하나(17KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
+
+```bash
+uv add ./nanotorch-1.2.2-py3-none-any.whl        # 릴리스에서 받은 파일
+```
+
+브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
+
+```js
+py.FS.writeFile("/nanotorch.whl", new Uint8Array(wheelBytes));
+await py.runPythonAsync(`
+import micropip
+await micropip.install("emfs:/nanotorch.whl")
+`);
+```
 
 ```python
-import micropip
-await micropip.install("https://github.com/playidea-lab/nanotorch/releases/latest/download/nanotorch-1.2.2-py3-none-any.whl")
-
 import sys, nanotorch
 sys.modules["torch"] = nanotorch          # 이 뒤로는 `import torch` 가 그대로 통한다
 ```
 
-로컬에서:
-
-```bash
-uv add nanotorch --find-links https://github.com/playidea-lab/nanotorch/releases/latest
-```
+> **저장소가 private 이라 릴리스 URL 을 그대로 `micropip.install()` 에 넣을 수 없다.**
+> 익명 요청은 404 를 받는다(실제로 그렇게 해보고 알았다). 공개로 돌리면 URL 한 줄로 끝난다.
 
 ```python
 import nanotorch as torch
