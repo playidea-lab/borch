@@ -738,13 +738,17 @@ def test_sampler_and_shuffle_conflict():
 # ---------------------------------------------------------------- 거절
 
 @pytest.mark.parametrize("call", [
-    lambda: mini.nn.Transformer(),
-    lambda: mini.nn.TransformerDecoderLayer(8, 2),
     lambda: mini.zeros(2).to("cuda"),
+    lambda: mini.zeros(2).to(device="cuda"),
     lambda: mini.cuda.synchronize(),
+    lambda: mini.nn.Module().to("mps"),
 ])
 def test_unsupported_raises_loudly(call):
-    """없는 것은 근사하지 않고 멈춘다. 조용히 다른 값을 내느니 여기서 끝낸다."""
+    """없는 것은 근사하지 않고 멈춘다. 조용히 다른 값을 내느니 여기서 끝낸다.
+
+    이 목록은 지원 범위가 늘 때마다 줄어들었고, 그때마다 낡은 채로 남아 두 번 깨졌다.
+    그래서 지금은 **브라우저에 존재할 수 없는 것만** 남긴다 — 늘어날 일이 없는 항목들이다.
+    """
     with pytest.raises(mini.NanoTorchError):
         call()
 
