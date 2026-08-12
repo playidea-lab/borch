@@ -546,6 +546,9 @@ class Tensor:
     # ---- 모양
 
     def reshape(self, *shape):
+        # numpy 의 reshape 는 가능하면 뷰를 준다 — 그대로 들고 있으면 저장소가 공유되고,
+        # 그것이 torch 의 동작이다. `b = a.view(2,2); b[0,0]=9` 가 a 를 바꾼다.
+        # 복사해 두면 편하지만, 실무에서 사고가 나는 바로 그 지점을 안 가르치게 된다.
         shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
         old = self.data.shape
         try:
@@ -558,6 +561,18 @@ class Tensor:
         return self._make(out, (self,), lambda g: (g.reshape(old),), "ViewBackward0")
 
     def view(self, *shape):
+        """`reshape` 과 달리 **저장소를 그대로 쓸 수 있을 때만** 된다.
+
+        transpose 한 텐서처럼 메모리 순서가 어긋난 것에는 torch 가 거부하고
+        `reshape` 을 쓰라고 안내한다. 둘의 차이를 여기서 배우는 게 맞다.
+        """
+        if not self.data.flags["C_CONTIGUOUS"]:
+            raise RuntimeError(_like_torch(
+                "메모리 순서가 어긋난 텐서에는 view() 를 쓸 수 없습니다 — "
+                "`.contiguous().view(...)` 또는 `.reshape(...)` 을 쓰세요.",
+                "view size is not compatible with input tensor's size and stride "
+                "(at least one dimension spans across two contiguous subspaces). "
+                "Use .reshape(...) instead."))
         return self.reshape(*shape)
 
     def unsqueeze(self, dim):

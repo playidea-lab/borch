@@ -332,6 +332,58 @@ def report_dtypes():
     return len(bad)
 
 
+# ---------------------------------------------------------------- 저장소 공유
+
+# torch 의 view·transpose·슬라이스는 **저장소를 공유한다.** 사본을 주면 편하지만,
+# 실무에서 사고가 나는 바로 그 지점을 안 가르치게 된다.
+VIEW_CASES = {
+    "view 수정 → 원본": lambda t: _mutate(t.zeros(4), lambda a: a.view(2, 2), (0, 0), 9),
+    "transpose 수정 → 원본": lambda t: _mutate(t.zeros(2, 2), lambda a: a.transpose(0, 1), (0, 1), 7),
+    "인덱싱 수정 → 원본": lambda t: _mutate(t.zeros(2, 2), lambda a: a[0], 0, 5),
+    "슬라이스 수정 → 원본": lambda t: _mutate(t.zeros(5), lambda a: a[1:3], 0, 9),
+    "flatten 수정 → 원본": lambda t: _mutate(t.zeros(2, 2), lambda a: a.flatten(0), 0, 9),
+    "squeeze 수정 → 원본": lambda t: _mutate(t.zeros(1, 3), lambda a: a.squeeze(), 0, 9),
+    "unsqueeze 수정 → 원본": lambda t: _mutate(t.zeros(3), lambda a: a.unsqueeze(0), (0, 0), 9),
+    "permute 수정 → 원본": lambda t: _mutate(t.zeros(2, 3), lambda a: a.permute(1, 0), (0, 1), 9),
+    "clone 은 독립": lambda t: _mutate(t.zeros(2), lambda a: a.clone(), 0, 3),
+    "detach 는 공유": lambda t: _mutate(t.zeros(2), lambda a: a.detach(), 0, 4),
+    "팬시 인덱싱은 사본": lambda t: _mutate(t.zeros(3), lambda a: a[[0, 1]], 0, 9),
+    "비연속 view 는 거부": lambda t: t.zeros(3, 4).transpose(0, 1).view(12).tolist(),
+    "비연속 reshape 은 허용": lambda t: tuple(t.zeros(3, 4).transpose(0, 1).reshape(12).shape),
+}
+
+
+def _mutate(base, make_view, key, value):
+    """뷰를 만들어 한 칸 고치고, **원본**이 어떻게 됐는지 돌려준다."""
+    view = make_view(base)
+    view[key] = value
+    return base.tolist()
+
+
+def report_views():
+    same, problems = 0, []
+    for name, fn in VIEW_CASES.items():
+        r, n = _outcome(real, fn), _outcome(nano, fn)
+        if r == n:
+            same += 1
+        else:
+            problems.append(f"{name}: torch {r} · nano {n}")
+    print(f"\n적합성 저장소 공유 — 케이스 {len(VIEW_CASES)}개")
+    print(f"  일치 {same}/{len(VIEW_CASES)}")
+    if problems:
+        print("\n갈린 곳:")
+        for why in problems:
+            print(f"  ✗ {why}")
+    return len(problems)
+
+
+def _outcome(lib, fn):
+    try:
+        return str(fn(lib))
+    except Exception as exc:                                        # noqa: BLE001
+        return f"<{type(exc).__name__}>"
+
+
 # ---------------------------------------------------------------- T3 표현
 
 # 학습자가 가장 많이 하는 일이 print(tensor) 다. 교재의 예시와 화면이 다르면
@@ -488,5 +540,5 @@ def report():
 
 
 if __name__ == "__main__":
-    failed = report() + report_errors() + report_repr() + report_dtypes()
+    failed = report() + report_errors() + report_repr() + report_dtypes() + report_views()
     raise SystemExit(1 if failed else 0)
