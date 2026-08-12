@@ -198,6 +198,28 @@ BatchNorm 의 `running_mean`·`running_var` 가 `state_dict` 에 없었다.
 통합 시나리오는 `tests/scenario.py` 로 남겼다. 단위 대조가 연산 하나씩만 보는 반면
 이쪽은 **조각이 엮였을 때**를 본다 — 세 결함 전부 그 자리에서 나왔다.
 
+### 9. 학습 루프에 필요한 것들 · **완료**
+
+"예제로 학습을 돌리려면 DataLoader·옵티마이저·스케줄러는 있어야 하지 않나"에서 출발했다.
+**이름은 다 있었는데 쓰는 법이 달랐다** — 16가지를 재보니 13개가 갈렸다.
+
+가장 큰 것은 `param_groups` 였다. torch 에서 학습률을 읽고 쓰는 표준 경로가
+`opt.param_groups[0]["lr"]` 이고 스케줄러도 그것을 고친다. 우리는 `opt.lr` 이었고,
+그러면 **남의 코드가 안 돌고 남의 스케줄러를 못 쓴다.**
+
+그리고 **내 테스트가 그 차이를 덮고 있었다.** StepLR 대조가 torch 는 `param_groups[0]["lr"]`,
+nano 는 `.lr` 로 읽고 있었다 — 양쪽을 같은 식으로 읽지 않으면 검사가 아니라 합리화다.
+지금은 같은 헬퍼로 읽고, **한 값이 아니라 궤적 전체**를 본다.
+
+더한 것: `AdamW`·`RMSprop`, 스케줄러 6종(`ReduceLROnPlateau` 포함),
+옵티마이저 `state_dict`(6장의 "이어서 학습하기"가 여기 걸려 있다),
+`WeightedRandomSampler`(5장이 가르치는데 없었다) · `Subset` · `ConcatDataset` ·
+`Generator`(`random_split` 을 고정하는 것) · `sin`/`cos`(10장 위치 인코딩) ·
+`F.mse_loss`·`F.one_hot`.
+
+**범위는 교재가 정했다.** 교재·랩이 언급하는 이름을 전부 뽑아 없는 것만 채웠고,
+남은 것은 `amp`·`backends`·`float16` — 전부 GPU 장이고 의도적 거절이다.
+
 ---
 
 ## 로드맵이 비었다

@@ -723,16 +723,78 @@ def test_adam_multi_step():
     same(rl.weight, ml.weight, what="Adam 열 스텝 뒤 가중치")
 
 
-def test_step_lr():
+def _lr(opt):
+    """학습률을 읽는 표준 경로. 양쪽에서 같은 식으로 읽어야 차이가 드러난다 —
+    전에는 torch 만 param_groups 로 읽고 nano 는 `.lr` 로 읽어, **테스트가 차이를 덮고 있었다.**"""
+    return opt.param_groups[0]["lr"]
+
+
+@pytest.mark.parametrize("make,steps", [
+    (lambda L, o: L.optim.lr_scheduler.StepLR(o, step_size=2, gamma=0.5), 6),
+    (lambda L, o: L.optim.lr_scheduler.MultiStepLR(o, milestones=[2, 4], gamma=0.5), 6),
+    (lambda L, o: L.optim.lr_scheduler.ExponentialLR(o, gamma=0.9), 5),
+    (lambda L, o: L.optim.lr_scheduler.CosineAnnealingLR(o, T_max=5), 5),
+    (lambda L, o: L.optim.lr_scheduler.LambdaLR(o, lambda e: 1 / (1 + e)), 5),
+])
+def test_scheduler_trajectory(make, steps):
+    """한 값이 아니라 **궤적 전체**를 본다. 마지막만 맞고 중간이 다른 경우가 있다."""
+    ro = real.optim.SGD(real.nn.Linear(2, 1).parameters(), lr=1.0)
+    mo = mini.optim.SGD(mini.nn.Linear(2, 1).parameters(), lr=1.0)
+    rs, ms = make(real, ro), make(mini, mo)
+    for epoch in range(steps):
+        assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"{epoch}에폭에서 갈렸다: {_lr(ro)} vs {_lr(mo)}"
+        rs.step()
+        ms.step()
+
+
+def test_reduce_on_plateau():
+    ro = real.optim.SGD(real.nn.Linear(2, 1).parameters(), lr=1.0)
+    mo = mini.optim.SGD(mini.nn.Linear(2, 1).parameters(), lr=1.0)
+    rs = real.optim.lr_scheduler.ReduceLROnPlateau(ro, patience=1, factor=0.5)
+    ms = mini.optim.lr_scheduler.ReduceLROnPlateau(mo, patience=1, factor=0.5)
+    for metric in [1.0, 1.0, 1.0, 1.0, 0.1, 0.1, 0.1, 0.1]:
+        rs.step(metric)
+        ms.step(metric)
+        assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"metric={metric} 에서 갈렸다"
+
+
+@pytest.mark.parametrize("name,kwargs", [
+    ("SGD", {"lr": 0.05}), ("SGD", {"lr": 0.05, "momentum": 0.9}),
+    ("SGD", {"lr": 0.05, "weight_decay": 0.01}),
+    ("Adam", {"lr": 0.01}), ("Adam", {"lr": 0.01, "weight_decay": 0.01}),
+    ("AdamW", {"lr": 0.01, "weight_decay": 0.05}),
+    ("RMSprop", {"lr": 0.01}),
+])
+def test_optimizer_trajectory(name, kwargs):
     rl, ml = real.nn.Linear(2, 1), mini.nn.Linear(2, 1)
-    ro = real.optim.SGD(rl.parameters(), lr=1.0)
-    mo = mini.optim.SGD(ml.parameters(), lr=1.0)
-    rs = real.optim.lr_scheduler.StepLR(ro, step_size=2, gamma=0.5)
-    ms = mini.optim.lr_scheduler.StepLR(mo, step_size=2, gamma=0.5)
-    for _ in range(4):
-        ro.step(); mo.step()
-        rs.step(); ms.step()
-    assert abs(ro.param_groups[0]["lr"] - mo.lr) < 1e-9
+    copy_linear(rl, ml)
+    ro = getattr(real.optim, name)(rl.parameters(), **kwargs)
+    mo = getattr(mini.optim, name)(ml.parameters(), **kwargs)
+    _train(rl, real.tensor, ro, steps=8)
+    _train(ml, mini.tensor, mo, steps=8)
+    same(rl.weight, ml.weight, tol=1e-5, what=f"{name}{kwargs} 여덟 스텝")
+
+
+def test_optimizer_state_dict_roundtrip():
+    """Adam 은 파라미터마다 보폭을 기억한다. 그 기억을 버리고 이어 학습하면
+    손실이 한 번 튄다 — 오류는 안 나고 곡선만 이상해진다(6장)."""
+    ml = mini.nn.Linear(2, 1)
+    mo = mini.optim.Adam(ml.parameters(), lr=0.01)
+    _train(ml, mini.tensor, mo, steps=5)
+    saved = mo.state_dict()
+    before = [p.data.copy() for p in ml.parameters()]
+
+    fresh_opt = mini.optim.Adam(ml.parameters(), lr=0.01)
+    fresh_opt.load_state_dict(saved)
+    _train(ml, mini.tensor, fresh_opt, steps=1)
+    after_restored = [p.data.copy() for p in ml.parameters()]
+
+    for p, b in zip(ml.parameters(), before):
+        p.data = mini.tensor(b)
+    _train(ml, mini.tensor, mo, steps=1)
+    for restored, continued in zip(after_restored, [p.data for p in ml.parameters()]):
+        assert np.allclose(restored, continued, atol=1e-6), (
+            "불러온 optimizer 가 이어서 같은 걸음을 걷지 않는다")
 
 
 # ---------------------------------------------------------------- 저장·불러오기

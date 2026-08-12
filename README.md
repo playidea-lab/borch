@@ -89,8 +89,9 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태 |
 | **트랜스포머** | `MultiheadAttention` · 인코더·디코더 층 · `nn.Transformer` — 불리언·실수 마스크 · `norm_first` · gelu |
 | **손실** | `MSELoss` · `BCELoss` · `BCEWithLogitsLoss` · `CrossEntropyLoss` |
-| **optim** | `SGD`(momentum) · `Adam` · `lr_scheduler.StepLR` |
-| **데이터** | `Dataset` · `TensorDataset` · `DataLoader` · 샘플러 · `random_split` · `collate_fn` |
+| **optim** | `SGD`(momentum·weight_decay) · `Adam` · `AdamW` · `RMSprop` — `param_groups` · `state_dict` |
+| **스케줄러** | `StepLR` · `MultiStepLR` · `ExponentialLR` · `CosineAnnealingLR` · `LambdaLR` · `ReduceLROnPlateau` |
+| **데이터** | `Dataset` · `TensorDataset` · `Subset` · `ConcatDataset` · `DataLoader` · `WeightedRandomSampler` · `random_split(generator=)` · `collate_fn` |
 | **저장** | `state_dict` · `load_state_dict` · `save`/`load` (Pyodide 가상 FS 에서도 된다) |
 
 ## 일부러 지원하지 않는 것
