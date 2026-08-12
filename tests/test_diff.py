@@ -855,6 +855,8 @@ def test_scheduler_trajectory(make, steps):
     rs, ms = make(real, ro), make(mini, mo)
     for epoch in range(steps):
         assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"{epoch}에폭에서 갈렸다: {_lr(ro)} vs {_lr(mo)}"
+        ro.step()          # torch 는 optimizer 를 먼저 부르라고 경고한다
+        mo.step()
         rs.step()
         ms.step()
 

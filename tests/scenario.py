@@ -7,7 +7,9 @@
   있어서 오래 남아 있었다 — 학습은 돌아가고 손실도 내려가는데 값만 달랐다
 - `p.data = ndarray` 를 받아주고 있었다. torch 는 거부한다
 
-`LIB` 만 바꿔 같은 코드를 돌리고, 나온 숫자가 같아야 한다.
+`LIB` 만 바꿔 같은 코드를 돌리고, 나온 숫자를 **허용 오차 안에서** 비교한다.
+문자열로 견주면 안 된다 — 비트 동등은 이 프로젝트의 명시적 비목표이고, 실제로
+리눅스의 BLAS 와 맥의 BLAS 가 소수점 여섯 자리에서 다르다(CI 가 그걸로 빨갛게 떴다).
 
     uv run --with numpy --with torch python tests/scenario.py real
     uv run --with numpy python tests/scenario.py nano
@@ -58,7 +60,7 @@ model.eval()
 with torch.no_grad():
     correct = sum(int((model(xb).argmax(dim=1) == yb.long()).sum().item()) for xb, yb in test)
 out["① MLP 정확도"] = correct / 40
-out["① 최종 손실"] = round(float(crit(model(torch.tensor(X[:32])), torch.tensor(y[:32]).long()).item()), 5)
+out["① 최종 손실"] = float(crit(model(torch.tensor(X[:32])), torch.tensor(y[:32]).long()).item())
 
 # ── ② CNN 한 배치 학습
 img = rng.standard_normal((8, 1, 12, 12)).astype(np.float32)
@@ -71,7 +73,7 @@ o2 = optim.SGD(cnn.parameters(), lr=0.05, momentum=0.9)
 for _ in range(5):
     o2.zero_grad(); nn.CrossEntropyLoss()(cnn(torch.tensor(img)), torch.tensor(lab)).backward(); o2.step()
 cnn.eval()
-out["② CNN 손실"] = round(float(nn.CrossEntropyLoss()(cnn(torch.tensor(img)), torch.tensor(lab)).item()), 5)
+out["② CNN 손실"] = float(nn.CrossEntropyLoss()(cnn(torch.tensor(img)), torch.tensor(lab)).item())
 
 # ── ③ 시퀀스: LSTM + Linear
 seq = rng.standard_normal((10, 4, 3)).astype(np.float32)
@@ -84,7 +86,7 @@ for _ in range(10):
     o3.zero_grad()
     h = lstm(torch.tensor(seq))[0][-1]
     nn.MSELoss()(head(h), tgt).backward(); o3.step()
-out["③ LSTM 손실"] = round(float(nn.MSELoss()(head(lstm(torch.tensor(seq))[0][-1]), tgt).item()), 5)
+out["③ LSTM 손실"] = float(nn.MSELoss()(head(lstm(torch.tensor(seq))[0][-1]), tgt).item())
 
 # ── ④ 트랜스포머 인코더 + 인과 마스크
 emb = nn.Embedding(20, 8)
@@ -98,7 +100,7 @@ tokens = torch.tensor(rng.integers(0, 20, (2, 6)).astype(np.int64))
 mask = nn.Transformer.generate_square_subsequent_mask(6)
 enc.eval()
 logits = proj(enc(emb(tokens), mask=mask))
-out["④ 트랜스포머 로짓합"] = round(float(logits.sum().item()), 4)
+out["④ 트랜스포머 로짓합"] = float(logits.sum().item())
 
 # ── ⑤ 저장·불러오기
 import tempfile, os
@@ -108,6 +110,6 @@ fresh = nn.Sequential(nn.Linear(6, 16), nn.ReLU(), nn.Dropout(0.0), nn.Linear(16
 fresh.load_state_dict(torch.load(path))
 fresh.eval()
 with torch.no_grad():
-    out["⑤ 불러온 뒤 출력합"] = round(float(fresh(torch.tensor(X[:8])).sum().item()), 5)
+    out["⑤ 불러온 뒤 출력합"] = float(fresh(torch.tensor(X[:8])).sum().item())
 
-for k, v in out.items(): print(f"{k}\t{v}")
+for k, v in out.items(): print(f"{k}\t{v!r}")
