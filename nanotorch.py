@@ -106,6 +106,20 @@ def _unbroadcast(grad, shape):
     return grad.reshape(shape)
 
 
+def _promote(data, scalar):
+    """파이썬 스칼라와 섞을 때의 dtype.
+
+    torch 는 numpy 와 규칙이 다르다 — 정수 텐서에 파이썬 float 를 더하면
+    torch 는 float32 를 주고 numpy 는 float64 를 준다. 흉내가 numpy 규칙을 물려받으면
+    학습자는 틀린 것을 배운다.
+    """
+    if isinstance(scalar, bool):
+        return data.dtype
+    if isinstance(scalar, float) and data.dtype.kind in "biu":
+        return _np.float32
+    return data.dtype
+
+
 _grad_enabled = True
 
 
@@ -265,10 +279,17 @@ class Tensor:
     # ---- 산술
 
     def _binary(self, other, forward, back_self, back_other):
-        o = other if isinstance(other, Tensor) else Tensor(_np.asarray(other, dtype=self.data.dtype))
-        out = forward(self.data, o.data)
-        return self._make(out, (self, o), lambda g: (back_self(g, self.data, o.data),
-                                                     back_other(g, self.data, o.data)))
+        if isinstance(other, Tensor):
+            o, mine = other, self.data
+        else:
+            # 파이썬 스칼라를 텐서 dtype 으로 끌어온 뒤 계산한다. numpy 에 맡기면
+            # int64 + float32 가 float64 로 올라가는데 torch 는 float32 를 준다.
+            target = _promote(self.data, other)
+            o = Tensor(_np.asarray(other, dtype=target))
+            mine = self.data.astype(target) if self.data.dtype != target else self.data
+        out = forward(mine, o.data)
+        return self._make(out, (self, o), lambda g: (back_self(g, mine, o.data),
+                                                     back_other(g, mine, o.data)))
 
     def __add__(self, o):
         return self._binary(o, _np.add, lambda g, a, b: g, lambda g, a, b: g)
