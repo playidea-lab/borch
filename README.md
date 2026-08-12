@@ -82,17 +82,18 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 
 | | |
 |---|---|
-| **텐서** | 모양·브로드캐스팅·dtype 승격 규칙 · 인덱싱 · reshape/view/permute/squeeze |
+| **텐서** | 모양·브로드캐스팅·dtype 승격 · 인덱싱 · reshape/view/permute/squeeze · split·chunk·flip·roll·gather·narrow·index_select·masked_select |
 | **autograd** | `requires_grad` · `backward()` · `.grad` · `no_grad()` · `detach()` · 누적 |
-| **축약** | `sum`·`mean`·`max`·`min`(values/indices) · `std`(편향/비편향) — 전부 역전파 포함 |
+| **축약** | `sum`·`mean`·`max`·`min`·`prod`·`median`·`norm`·`cumsum`·`topk`·`sort`·`unique`·`std` — 역전파 포함 |
 | **nn** | `Module` · `Linear` · `Conv2d` · `MaxPool2d` · `Embedding` · `LayerNorm` · `BatchNorm2d` · `Dropout` · `Sequential` · `ModuleList` |
 | **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태 |
 | **트랜스포머** | `MultiheadAttention` · 인코더·디코더 층 · `nn.Transformer` — 불리언·실수 마스크 · `norm_first` · gelu |
-| **손실** | `MSELoss` · `BCELoss` · `BCEWithLogitsLoss` · `CrossEntropyLoss` |
+| **손실** | `MSELoss`·`L1Loss`·`SmoothL1Loss`·`BCELoss`·`BCEWithLogitsLoss`·`CrossEntropyLoss`·`NLLLoss` |
 | **optim** | `SGD`(momentum·weight_decay) · `Adam` · `AdamW` · `RMSprop` — `param_groups` · `state_dict` |
 | **스케줄러** | `StepLR` · `MultiStepLR` · `ExponentialLR` · `CosineAnnealingLR` · `LambdaLR` · `ReduceLROnPlateau` |
 | **데이터** | `Dataset` · `TensorDataset` · `Subset` · `ConcatDataset` · `DataLoader` · `WeightedRandomSampler` · `random_split(generator=)` · `collate_fn` |
-| **저장** | `state_dict` · `load_state_dict` · `save`/`load` (Pyodide 가상 FS 에서도 된다) |
+| **저장** | `state_dict` · `load_state_dict` · `save`/`load` · 버퍼(`running_mean` 등) 포함 |
+| **nn.functional** | 25종 — 활성·손실·`pad`·`normalize`·`cosine_similarity`·`one_hot`·`layer_norm`·`embedding` |
 
 ## 일부러 지원하지 않는 것
 
@@ -114,6 +115,8 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | **dtype 승격** | **112/112** — 4 dtype × 4 연산 × 텐서·스칼라 |
 | **저장소 공유** (view·slice) | **13/13** |
 | **통합 시나리오** | **6/6** — 같은 코드를 임포트만 바꿔 돌린 결과 |
+| **넓은 표면** (수학·모양·functional) | **58/58** |
+| **흔한 API 이름** | **144/144** |
 | T4 비트 동등 | **명시적 비목표** |
 
 ```bash

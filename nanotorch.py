@@ -1041,6 +1041,423 @@ def clamp(t, min=None, max=None):
     return t._make(out, (t,), lambda g: (g * inside,), "ClampBackward0")
 
 
+
+# ---------------------------------------------------------------- 원소별 함수
+#
+# 대부분 numpy 한 줄에 미분 한 줄이다. 미분이 없는 것(floor·sign 등)은 기울기를 0 으로 둔다 —
+# torch 도 그렇게 한다. 계단 함수의 미분은 거의 모든 곳에서 0 이기 때문이다.
+
+def _unary(name, forward, derivative=None, op=None):
+    def fn(t):
+        t = _wrap(t)
+        out = forward(t.data)
+        if derivative is None:
+            return Tensor(out)
+        return t._make(out, (t,), lambda g: (g * derivative(t.data, out),), op or f"{name}Backward0")
+    fn.__name__ = name
+    return fn
+
+
+log2 = _unary("Log2", _np.log2, lambda x, o: 1.0 / (x * _np.log(2)))
+log10 = _unary("Log10", _np.log10, lambda x, o: 1.0 / (x * _np.log(10)))
+rsqrt = _unary("Rsqrt", lambda x: 1.0 / _np.sqrt(x), lambda x, o: -0.5 * o / x)
+square = _unary("Square", _np.square, lambda x, o: 2 * x)
+reciprocal = _unary("Reciprocal", _np.reciprocal, lambda x, o: -o * o)
+tan = _unary("Tan", _np.tan, lambda x, o: 1 + o * o)
+sinh = _unary("Sinh", _np.sinh, lambda x, o: _np.cosh(x))
+cosh = _unary("Cosh", _np.cosh, lambda x, o: _np.sinh(x))
+erf = _unary("Erf", lambda x: _np.vectorize(_math.erf)(x).astype(x.dtype),
+             lambda x, o: 2 / _np.sqrt(_np.pi) * _np.exp(-x * x))
+# 계단 모양 — 미분이 거의 모든 곳에서 0 이다. torch 도 0 을 준다.
+sign = _unary("Sign", _np.sign)
+floor = _unary("Floor", _np.floor)
+ceil = _unary("Ceil", _np.ceil)
+round = _unary("Round", lambda x: _np.round(x))
+
+
+def neg(t): return -_wrap(t)
+def pow(t, exponent): return _wrap(t) ** exponent
+
+
+# ---------------------------------------------------------------- 비교
+
+def _compare(name, fn):
+    def cmp(a, b):
+        a = _wrap(a)
+        bd = b.data if isinstance(b, Tensor) else b
+        return Tensor(fn(a.data, bd))
+    cmp.__name__ = name
+    return cmp
+
+
+eq = _compare("eq", _np.equal)
+ne = _compare("ne", _np.not_equal)
+lt = _compare("lt", _np.less)
+le = _compare("le", _np.less_equal)
+gt = _compare("gt", _np.greater)
+ge = _compare("ge", _np.greater_equal)
+logical_and = _compare("logical_and", _np.logical_and)
+logical_or = _compare("logical_or", _np.logical_or)
+isnan = _unary("IsNan", _np.isnan)
+isinf = _unary("IsInf", _np.isinf)
+
+
+def logical_not(t): return Tensor(_np.logical_not(_wrap(t).data))
+
+
+def maximum(a, b):
+    a, b = _wrap(a), _wrap(b)
+    pick = a.data >= b.data
+    return a._make(_np.maximum(a.data, b.data), (a, b),
+                   lambda g: (g * pick, g * ~pick), "MaximumBackward0")
+
+
+def minimum(a, b):
+    a, b = _wrap(a), _wrap(b)
+    pick = a.data <= b.data
+    return a._make(_np.minimum(a.data, b.data), (a, b),
+                   lambda g: (g * pick, g * ~pick), "MinimumBackward0")
+
+
+# ---------------------------------------------------------------- 모양·선택
+
+def split(t, size, dim=0):
+    t = _wrap(t)
+    n = t.data.shape[dim]
+    sizes = size if isinstance(size, (list, tuple)) else \
+        [size] * (n // size) + ([n % size] if n % size else [])
+    cuts, out, start = [], [], 0
+    for sz in sizes[:-1]:
+        start += sz
+        cuts.append(start)
+    return tuple(t[_slice_at(dim, s, e)] for s, e in zip([0] + cuts, cuts + [n]))
+
+
+def chunk(t, chunks, dim=0):
+    t = _wrap(t)
+    n = t.data.shape[dim]
+    size = -(-n // chunks)
+    return split(t, size, dim)
+
+
+def _slice_at(dim, start, end):
+    return tuple(slice(None) for _ in range(dim)) + (slice(start, end),)
+
+
+def unbind(t, dim=0):
+    t = _wrap(t)
+    return tuple(t[_slice_at(dim, i, i + 1)].squeeze(dim) for i in range(t.data.shape[dim]))
+
+
+def narrow(t, dim, start, length):
+    return _wrap(t)[_slice_at(dim, start, start + length)]
+
+
+def flip(t, dims):
+    t = _wrap(t)
+    dims = (dims,) if isinstance(dims, int) else tuple(dims)
+    return t._make(_np.flip(t.data, dims).copy(), (t,),
+                   lambda g: (_np.flip(_np.asarray(g), dims).copy(),), "FlipBackward0")
+
+
+def roll(t, shifts, dims=None):
+    t = _wrap(t)
+    return t._make(_np.roll(t.data, shifts, dims), (t,),
+                   lambda g: (_np.roll(_np.asarray(g), _negate(shifts), dims),), "RollBackward0")
+
+
+def _negate(shifts):
+    return -shifts if isinstance(shifts, int) else tuple(-s for s in shifts)
+
+
+def index_select(t, dim, index):
+    t = _wrap(t)
+    idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
+    return t[_index_at(dim, idx)]
+
+
+def _index_at(dim, idx):
+    return tuple(slice(None) for _ in range(dim)) + (idx,)
+
+
+def masked_select(t, mask):
+    t = _wrap(t)
+    m = mask.data.astype(bool) if isinstance(mask, Tensor) else _np.asarray(mask, dtype=bool)
+    return t[m]
+
+
+def gather(t, dim, index):
+    """index 가 가리키는 자리를 뽑는다. 분류에서 정답 클래스의 확률을 꺼낼 때 쓴다."""
+    t = _wrap(t)
+    idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
+    out = _np.take_along_axis(t.data, idx, axis=dim)
+    shape = t.data.shape
+
+    def back(g):
+        z = _np.zeros(shape, dtype=_np.asarray(g).dtype)
+        _np.put_along_axis(z, idx, _np.asarray(g), axis=dim)
+        return (z,)
+
+    return t._make(out, (t,), back, "GatherBackward0")
+
+
+def repeat_interleave(t, repeats, dim=None):
+    t = _wrap(t)
+    return Tensor(_np.repeat(t.data, repeats, axis=dim))
+
+
+def tile(t, reps):
+    return Tensor(_np.tile(_wrap(t).data, reps))
+
+
+def movedim(t, source, destination):
+    return Tensor(_np.moveaxis(_wrap(t).data, source, destination))
+
+
+# ---------------------------------------------------------------- 축약(추가)
+
+def prod(t, dim=None):
+    t = _wrap(t)
+    out = _np.prod(t.data, axis=dim)
+    return t._make(out, (t,), lambda g: (_np.asarray(g) * out / t.data,), "ProdBackward0")
+
+
+def median(t, dim=None):
+    """torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다. numpy 는 평균을 낸다 —
+    그대로 쓰면 조용히 다른 값이 나온다."""
+    t = _wrap(t)
+    if dim is None:
+        flat = _np.sort(t.data.reshape(-1))
+        return Tensor(flat[(flat.size - 1) // 2])
+    values = _np.sort(t.data, axis=dim)
+    idx = (values.shape[dim] - 1) // 2
+    picked = _np.take(values, idx, axis=dim)
+    order = _np.argsort(t.data, axis=dim)
+    return _MinMax(Tensor(picked), Tensor(_np.take(order, idx, axis=dim)))
+
+
+def norm(t, p=2, dim=None):
+    t = _wrap(t)
+    if p == 1:
+        return t.abs().sum(dim=dim)
+    return (t * t).sum(dim=dim) ** 0.5
+
+
+def cumsum(t, dim):
+    t = _wrap(t)
+    return t._make(_np.cumsum(t.data, axis=dim), (t,),
+                   lambda g: (_np.flip(_np.cumsum(_np.flip(_np.asarray(g), dim), axis=dim), dim),),
+                   "CumsumBackward0")
+
+
+def cumprod(t, dim):
+    return Tensor(_np.cumprod(_wrap(t).data, axis=dim))
+
+
+def count_nonzero(t, dim=None):
+    return Tensor(_np.count_nonzero(_wrap(t).data, axis=dim))
+
+
+def topk(t, k, dim=-1, largest=True):
+    """상위 k개의 (값, 번호). 32장의 top-k 샘플링이 이것이다."""
+    t = _wrap(t)
+    order = _np.argsort(t.data, axis=dim)
+    if largest:
+        order = _np.flip(order, axis=dim)
+    idx = _np.take(order, _np.arange(k), axis=dim)
+    values = _np.take_along_axis(t.data, idx, axis=dim)
+    return _MinMax(Tensor(values), Tensor(idx))
+
+
+def sort(t, dim=-1, descending=False):
+    t = _wrap(t)
+    idx = _np.argsort(t.data, axis=dim)
+    if descending:
+        idx = _np.flip(idx, axis=dim)
+    return _MinMax(Tensor(_np.take_along_axis(t.data, idx, axis=dim)), Tensor(idx))
+
+
+def argsort(t, dim=-1, descending=False):
+    return sort(t, dim, descending).indices
+
+
+def unique(t, sorted=True, return_counts=False):
+    values, counts = _np.unique(_wrap(t).data, return_counts=True)
+    return (Tensor(values), Tensor(counts)) if return_counts else Tensor(values)
+
+
+# ---------------------------------------------------------------- 선형대수
+
+def mm(a, b): return _wrap(a) @ _wrap(b)
+def bmm(a, b): return _wrap(a) @ _wrap(b)
+
+
+def dot(a, b): return (_wrap(a) * _wrap(b)).sum()
+
+
+def outer(a, b):
+    a, b = _wrap(a), _wrap(b)
+    return a.reshape(-1, 1) @ b.reshape(1, -1)
+
+
+def diag(t):
+    return Tensor(_np.diag(_wrap(t).data))
+
+
+def trace(t):
+    return Tensor(_np.trace(_wrap(t).data))
+
+
+def einsum(equation, *operands):
+    ops = [_wrap(o) for o in operands]
+    return Tensor(_np.einsum(equation, *[o.data for o in ops]))
+
+
+def empty(*shape, dtype=None):
+    return zeros(*shape, dtype=dtype)
+
+
+
+
+def leaky_relu(t, negative_slope=0.01):
+    t = _wrap(t)
+    pick = t.data > 0
+    return t._make(_np.where(pick, t.data, negative_slope * t.data), (t,),
+                   lambda g: (g * _np.where(pick, 1.0, negative_slope),), "LeakyReluBackward0")
+
+
+def elu(t, alpha=1.0):
+    t = _wrap(t)
+    pick = t.data > 0
+    out = _np.where(pick, t.data, alpha * (_np.exp(_np.minimum(t.data, 0)) - 1))
+    return t._make(out, (t,), lambda g: (g * _np.where(pick, 1.0, out + alpha),),
+                   "EluBackward0")
+
+
+def silu(t):
+    """x·σ(x). Swish 라고도 한다."""
+    t = _wrap(t)
+    sig = 1.0 / (1.0 + _np.exp(-_np.clip(t.data, -60, 60)))
+    return t._make(t.data * sig, (t,),
+                   lambda g: (g * (sig * (1 + t.data * (1 - sig))),), "SiluBackward0")
+
+
+def gelu(t):
+    return _gelu(_wrap(t))
+
+
+def log_softmax(t, dim=-1):
+    t = _wrap(t)
+    shifted = t.data - t.data.max(axis=dim, keepdims=True)
+    out = shifted - _np.log(_np.exp(shifted).sum(axis=dim, keepdims=True))
+    soft = _np.exp(out)
+
+    def back(g):
+        g = _np.asarray(g)
+        return (g - soft * g.sum(axis=dim, keepdims=True),)
+
+    return t._make(out, (t,), back, "LogSoftmaxBackward0")
+
+
+def dropout(t, p=0.5, training=True):
+    if not training or p == 0:
+        return _wrap(t)
+    t = _wrap(t)
+    mask = (_rng.random(t.data.shape) > p).astype(t.data.dtype) / (1 - p)
+    return t * Tensor(mask)
+
+
+def avg_pool2d(x, kernel_size, stride=None):
+    stride = stride or kernel_size
+    xd = x.data
+    N, C, H, W = xd.shape
+    OH = (H - kernel_size) // stride + 1
+    OW = (W - kernel_size) // stride + 1
+    win = _np.lib.stride_tricks.sliding_window_view(xd, (kernel_size, kernel_size), axis=(2, 3))
+    win = win[:, :, ::stride, ::stride, :, :]
+    out = win.mean(axis=(4, 5))
+    area = kernel_size * kernel_size
+
+    def back(g):
+        g = _np.asarray(g) / area
+        gx = _np.zeros_like(xd)
+        for i in range(kernel_size):
+            for j in range(kernel_size):
+                gx[:, :, i:i + OH * stride:stride, j:j + OW * stride:stride] += g
+        return (gx,)
+
+    return x._make(out, (x,), back, "AvgPool2DBackward0")
+
+
+def _pool_all(x):
+    """AdaptiveAvgPool2d(1) 만 지원한다 — 흔한 것은 그것뿐이고, 나머지는 거절한다."""
+    return x.mean(dim=2).mean(dim=2).reshape(x.data.shape[0], x.data.shape[1], 1, 1)
+
+
+def layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
+    mean = x.mean(dim=-1, keepdim=True)
+    centered = x - mean
+    var = (centered * centered).mean(dim=-1, keepdim=True)
+    out = centered / (var + eps) ** 0.5
+    if weight is not None:
+        out = out * weight
+    return out + bias if bias is not None else out
+
+
+def embedding(idx, weight):
+    ids = idx.data.astype(int)
+    dim = weight.data.shape[1]
+    out = weight.data[ids]
+
+    def back(g):
+        gw = _np.zeros_like(weight.data)
+        _np.add.at(gw, ids.reshape(-1), _np.asarray(g).reshape(-1, dim))
+        return (gw,)
+
+    return weight._make(out, (weight,), back, "EmbeddingBackward0")
+
+
+def nll_loss(log_probs, target):
+    n = log_probs.data.shape[0]
+    picked = log_probs[_np.arange(n), target.data.astype(int)]
+    return -picked.mean()
+
+
+def l1_loss(pred, target):
+    return (pred - target).abs().mean()
+
+
+def smooth_l1_loss(pred, target, beta=1.0):
+    """작은 오차는 제곱, 큰 오차는 절댓값. 이상치에 덜 흔들린다."""
+    diff = pred - target
+    small = _np.abs(diff.data) < beta
+    return (where(Tensor(small), 0.5 * diff * diff / beta, diff.abs() - 0.5 * beta)).mean()
+
+
+def pad(x, padding, value=0.0):
+    """마지막 차원부터 (앞, 뒤) 순으로 받는다 — torch 의 규칙이다."""
+    x = _wrap(x)
+    pairs = [(0, 0)] * x.data.ndim
+    for i in range(0, len(padding), 2):
+        pairs[-(i // 2 + 1)] = (padding[i], padding[i + 1])
+    out = _np.pad(x.data, pairs, constant_values=value)
+    cuts = tuple(slice(a, s - b if b else None) for (a, b), s in zip(pairs, out.shape))
+    return x._make(out, (x,), lambda g: (_np.asarray(g)[cuts],), "PadBackward0")
+
+
+def normalize(x, p=2, dim=1, eps=1e-12):
+    x = _wrap(x)
+    denom = norm(x, p=p, dim=dim)
+    return x / maximum(denom.unsqueeze(dim), Tensor(_np.array(eps, dtype=_DEFAULT_DTYPE)))
+
+
+def cosine_similarity(a, b, dim=1, eps=1e-8):
+    a, b = _wrap(a), _wrap(b)
+    return (a * b).sum(dim=dim) / maximum(
+        norm(a, dim=dim) * norm(b, dim=dim), Tensor(_np.array(eps, dtype=_DEFAULT_DTYPE)))
+
+
+
 def tril(t, diagonal=0):
     return Tensor(_np.tril(t.data, k=diagonal))
 
@@ -1916,6 +2333,142 @@ nn.Conv2d = Conv2d
 nn.Embedding = Embedding
 nn.LayerNorm = LayerNorm
 nn.BatchNorm2d = BatchNorm2d
+class _Activation(Module):
+    """활성함수 층 — 상태가 없으니 함수 하나를 감싼다."""
+
+    fn = staticmethod(relu)
+
+    def forward(self, x):
+        return type(self).fn(x)
+
+
+class GELU(_Activation):
+    fn = staticmethod(gelu)
+
+
+class SiLU(_Activation):
+    fn = staticmethod(silu)
+
+
+class LeakyReLU(Module):
+    def __init__(self, negative_slope=0.01):
+        super().__init__()
+        self.negative_slope = negative_slope
+
+    def forward(self, x):
+        return leaky_relu(x, self.negative_slope)
+
+
+class ELU(Module):
+    def __init__(self, alpha=1.0):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, x):
+        return elu(x, self.alpha)
+
+
+class Softmax(Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return softmax(x, dim=self.dim)
+
+
+class LogSoftmax(Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return log_softmax(x, dim=self.dim)
+
+
+class AvgPool2d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return avg_pool2d(x, self.kernel_size, self.stride)
+
+
+class AdaptiveAvgPool2d(Module):
+    """출력 크기 1 만 지원한다 — 실무에서 쓰이는 것은 대개 그것이고, 나머지는 거절한다."""
+
+    def __init__(self, output_size):
+        super().__init__()
+        if output_size not in (1, (1, 1)):
+            _unsupported("AdaptiveAvgPool2d(출력 크기가 1 이 아닌 것)")
+        self.output_size = output_size
+
+    def forward(self, x):
+        return _pool_all(x)
+
+
+class Unflatten(Module):
+    def __init__(self, dim, unflattened_size):
+        super().__init__()
+        self.dim, self.unflattened_size = dim, tuple(unflattened_size)
+
+    def forward(self, x):
+        return x.reshape(x.data.shape[:self.dim] + self.unflattened_size)
+
+
+class L1Loss(Module):
+    def forward(self, pred, target):
+        return l1_loss(pred, target)
+
+
+class SmoothL1Loss(Module):
+    def __init__(self, beta=1.0):
+        super().__init__()
+        self.beta = beta
+
+    def forward(self, pred, target):
+        return smooth_l1_loss(pred, target, self.beta)
+
+
+class NLLLoss(Module):
+    def forward(self, log_probs, target):
+        return nll_loss(log_probs, target)
+
+
+class BatchNorm1d(Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super().__init__()
+        self.eps, self.momentum = eps, momentum
+        self.weight = Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
+        self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+        self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+        self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
+        self.register_buffer("num_batches_tracked", 0)
+
+    def forward(self, x):
+        if self.training:
+            mean = x.mean(dim=0)
+            centered = x - mean
+            var = (centered * centered).mean(dim=0)
+            with no_grad():
+                self.running_mean = ((1 - self.momentum) * self.running_mean
+                                     + self.momentum * mean.data)
+                self.running_var = ((1 - self.momentum) * self.running_var
+                                    + self.momentum * x.data.var(axis=0, ddof=1))
+                self.num_batches_tracked = self.num_batches_tracked + 1
+            normed = centered / (var + self.eps) ** 0.5
+        else:
+            normed = ((x - Tensor(self.running_mean))
+                      / Tensor(_np.sqrt(self.running_var + self.eps)))
+        return normed * self.weight + self.bias
+
+
+for _cls in (GELU, SiLU, LeakyReLU, ELU, Softmax, LogSoftmax, AvgPool2d,
+             AdaptiveAvgPool2d, Unflatten, L1Loss, SmoothL1Loss, NLLLoss, BatchNorm1d):
+    setattr(nn, _cls.__name__, _cls)
+for _name in ("Conv1d", "Conv3d", "BatchNorm3d", "Upsample", "MaxPool1d", "MaxPool3d"):
+    setattr(nn, _name, _nn_unsupported(_name))
 nn.RNN = RNN
 nn.LSTM = LSTM
 nn.GRU = GRU
@@ -1942,10 +2495,25 @@ def one_hot(t, num_classes=-1):
 
 class _Functional:
     softmax = staticmethod(softmax)
+    log_softmax = staticmethod(log_softmax)
     relu = staticmethod(relu)
+    leaky_relu = staticmethod(leaky_relu)
+    elu = staticmethod(elu)
+    silu = staticmethod(silu)
+    gelu = staticmethod(gelu)
     sigmoid = staticmethod(sigmoid)
     tanh = staticmethod(tanh)
     one_hot = staticmethod(one_hot)
+    dropout = staticmethod(dropout)
+    avg_pool2d = staticmethod(avg_pool2d)
+    layer_norm = staticmethod(layer_norm)
+    embedding = staticmethod(embedding)
+    nll_loss = staticmethod(nll_loss)
+    l1_loss = staticmethod(l1_loss)
+    smooth_l1_loss = staticmethod(smooth_l1_loss)
+    pad = staticmethod(pad)
+    normalize = staticmethod(normalize)
+    cosine_similarity = staticmethod(cosine_similarity)
 
     @staticmethod
     def mse_loss(pred, target):

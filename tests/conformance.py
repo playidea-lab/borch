@@ -181,6 +181,98 @@ def build_cases():
     return cases
 
 
+# ---------------------------------------------------------------- 넓은 표면
+
+# 교재가 요구하는 범위 밖이지만 튜토리얼·실무에서 흔한 것들. 이름만 있고 값이 다르면
+# 그것도 거짓이라, 있는 것은 전부 값으로 대조한다.
+def _wide_cases():
+    rng = np.random.default_rng(0)
+    x1 = rng.standard_normal(6).astype(np.float32)
+    xp = np.abs(x1) + 0.2
+    x2 = rng.standard_normal((3, 4)).astype(np.float32)
+    img = rng.standard_normal((2, 3, 4, 4)).astype(np.float32)
+    idx2 = np.array([[0, 2], [1, 3], [2, 0]])
+
+    cases = []
+    for fn in ("log2 log10 rsqrt square reciprocal tan sinh cosh erf sign floor ceil round "
+               "sqrt exp abs sin cos").split():
+        cases.append((fn, lambda L, f=fn: getattr(L, f)(L.tensor(xp))))
+    for fn in ("prod count_nonzero",).__getitem__(0).split():
+        cases.append((fn, lambda L, f=fn: getattr(L, f)(L.tensor(x1))))
+    cases += [
+        ("median", lambda L: L.median(L.tensor(x1))),
+        ("median(dim)", lambda L: L.median(L.tensor(x2), dim=1).values),
+        ("cumsum", lambda L: L.cumsum(L.tensor(x1), 0)),
+        ("cumprod", lambda L: L.cumprod(L.tensor(x1), 0)),
+        ("norm", lambda L: L.norm(L.tensor(x2))),
+        ("topk", lambda L: L.topk(L.tensor(x1), 3).values),
+        ("sort", lambda L: L.sort(L.tensor(x1)).values),
+        ("unique", lambda L: L.unique(L.tensor(np.array([1., 1., 2., 3.], dtype=np.float32)))),
+        ("gather", lambda L: L.gather(L.tensor(x2), 1, L.tensor(idx2))),
+        ("flip", lambda L: L.flip(L.tensor(x2), [0])),
+        ("roll", lambda L: L.roll(L.tensor(x1), 2)),
+        ("index_select", lambda L: L.index_select(L.tensor(x2), 0, L.tensor(np.array([2, 0])))),
+        ("masked_select", lambda L: L.masked_select(L.tensor(x1), L.tensor(x1) > 0)),
+        ("narrow", lambda L: L.narrow(L.tensor(x2), 1, 1, 2)),
+        ("split", lambda L: L.split(L.tensor(x1), 2)[1]),
+        ("chunk", lambda L: L.chunk(L.tensor(x1), 3)[2]),
+        ("unbind", lambda L: L.unbind(L.tensor(x2))[1]),
+        ("maximum", lambda L: L.maximum(L.tensor(x1), L.tensor(-x1))),
+        ("minimum", lambda L: L.minimum(L.tensor(x1), L.tensor(-x1))),
+        ("clamp", lambda L: L.clamp(L.tensor(x1), min=-0.5, max=0.5)),
+        ("mm", lambda L: L.mm(L.tensor(x2), L.tensor(x2.T))),
+        ("dot", lambda L: L.dot(L.tensor(x1), L.tensor(x1))),
+        ("outer", lambda L: L.outer(L.tensor(x1[:2]), L.tensor(x1[:3]))),
+        ("diag", lambda L: L.diag(L.tensor(x2[:3, :3]))),
+        ("trace", lambda L: L.trace(L.tensor(x2[:3, :3]))),
+        ("F.gelu", lambda L: L.nn.functional.gelu(L.tensor(x1))),
+        ("F.silu", lambda L: L.nn.functional.silu(L.tensor(x1))),
+        ("F.leaky_relu", lambda L: L.nn.functional.leaky_relu(L.tensor(x1), 0.1)),
+        ("F.elu", lambda L: L.nn.functional.elu(L.tensor(x1))),
+        ("F.log_softmax", lambda L: L.nn.functional.log_softmax(L.tensor(x2), dim=-1)),
+        ("F.avg_pool2d", lambda L: L.nn.functional.avg_pool2d(L.tensor(img), 2)),
+        ("F.l1_loss", lambda L: L.nn.functional.l1_loss(L.tensor(x1), L.tensor(-x1))),
+        ("F.smooth_l1_loss",
+         lambda L: L.nn.functional.smooth_l1_loss(L.tensor(x1), L.tensor(-x1))),
+        ("F.nll_loss", lambda L: L.nn.functional.nll_loss(
+            L.nn.functional.log_softmax(L.tensor(x2), dim=-1), L.tensor(np.array([0, 1, 2])))),
+        ("F.pad", lambda L: L.nn.functional.pad(L.tensor(x2), (1, 1))),
+        ("F.normalize", lambda L: L.nn.functional.normalize(L.tensor(x2), dim=1)),
+        ("F.cosine_similarity",
+         lambda L: L.nn.functional.cosine_similarity(L.tensor(x2), L.tensor(x2 * 2))),
+        ("F.one_hot", lambda L: L.nn.functional.one_hot(L.tensor(np.array([0, 2])), 3)),
+    ]
+    return cases
+
+
+def report_wide():
+    cases = _wide_cases()
+    bad = []
+    for name, fn in cases:
+        try:
+            r = fn(real).detach().numpy()
+        except Exception as exc:                                    # noqa: BLE001
+            bad.append(f"{name}: 진짜 torch 에서 실패 — {type(exc).__name__}")
+            continue
+        try:
+            n = fn(nano).data
+        except Exception as exc:                                    # noqa: BLE001
+            bad.append(f"{name}: {type(exc).__name__} — {str(exc).splitlines()[0][:50]}")
+            continue
+        if r.shape != n.shape:
+            bad.append(f"{name}: 모양 {r.shape} vs {n.shape}")
+        elif not np.allclose(r, n, atol=1e-4, rtol=1e-4):
+            bad.append(f"{name}: 최대차 {np.abs(r - n).max():.2e}")
+
+    print(f"\n적합성 넓은 표면 — 연산 {len(cases)}개")
+    print(f"  일치 {len(cases) - len(bad)}/{len(cases)}")
+    if bad:
+        print("\n갈린 곳:")
+        for why in bad:
+            print(f"  ✗ {why}")
+    return len(bad)
+
+
 # ---------------------------------------------------------------- T2 오류
 
 # 학습자가 실제로 만나는 실패들. 같은 조건에서 **같은 종류의 예외**가 나야 하고,
@@ -540,5 +632,5 @@ def report():
 
 
 if __name__ == "__main__":
-    failed = report() + report_errors() + report_repr() + report_dtypes() + report_views()
+    failed = report() + report_errors() + report_repr() + report_dtypes() + report_views() + report_wide()
     raise SystemExit(1 if failed else 0)
