@@ -1,0 +1,12 @@
+name: 진짜 torch 와 대조
+
+on: [push, pull_request]
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: 값 대조
+        run: uv run --with pytest --with numpy --with torch --quiet pytest tests/ -q

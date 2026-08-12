@@ -1,0 +1,487 @@
+"""nanotorch 와 진짜 torch 를 값으로 대조한다.
+
+이 파일이 nanotorch 의 존재 근거다. 흉내가 조금이라도 다르게 동작하면 그것을 배우는
+사람은 거짓을 배운다. "돌아간다"로는 부족하고 **같은 숫자가 나와야** 한다.
+
+같은 입력을 양쪽에 넣고 값과 모양을 비교한다. 무작위로 초기화되는 층은 한쪽의 가중치를
+복사해 심어 비교 가능하게 만든다.
+
+    uv run --with pytest --with numpy --with torch pytest tests/
+"""
+
+import importlib.util
+import pathlib
+
+import numpy as np
+import pytest
+import torch as real
+
+_spec = importlib.util.spec_from_file_location(
+    "nanotorch", pathlib.Path(__file__).resolve().parent.parent / "nanotorch.py")
+mini = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mini)
+
+TOL = 1e-4
+
+
+def same(a, b, tol=TOL, what=""):
+    """양쪽 텐서의 값과 모양이 같은가."""
+    an = a.detach().numpy() if isinstance(a, real.Tensor) else a.data
+    bn = b.detach().numpy() if isinstance(b, real.Tensor) else b.data
+    assert an.shape == bn.shape, f"{what} 모양이 다르다: {an.shape} vs {bn.shape}"
+    assert np.allclose(an, bn, atol=tol, rtol=tol), (
+        f"{what} 값이 다르다\n  진짜: {an}\n  축소판: {bn}"
+    )
+
+
+def pair(data, requires_grad=False):
+    """같은 데이터로 양쪽 텐서를 만든다."""
+    arr = np.asarray(data, dtype=np.float32)
+    return (real.tensor(arr, requires_grad=requires_grad),
+            mini.tensor(arr, requires_grad=requires_grad))
+
+
+def grads_match(fn_real, fn_mini, data, what=""):
+    """같은 계산의 기울기가 같은가. fn 은 텐서를 받아 스칼라를 돌려준다."""
+    r, m = pair(data, requires_grad=True)
+    fn_real(r).backward()
+    fn_mini(m).backward()
+    same(r.grad, m.grad, what=f"{what} 기울기")
+
+
+# ---------------------------------------------------------------- 축약
+
+@pytest.mark.parametrize("dim", [None, 0, 1])
+@pytest.mark.parametrize("keepdim", [False, True])
+def test_sum(dim, keepdim):
+    r, m = pair([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    kw = {} if dim is None else {"dim": dim, "keepdim": keepdim}
+    same(r.sum(**kw), m.sum(**kw), what=f"sum(dim={dim}, keepdim={keepdim})")
+
+
+@pytest.mark.parametrize("dim", [None, 0, 1])
+def test_mean(dim):
+    r, m = pair([[1.0, 2.0], [3.0, 4.0]])
+    kw = {} if dim is None else {"dim": dim}
+    same(r.mean(**kw), m.mean(**kw), what=f"mean(dim={dim})")
+
+
+@pytest.mark.parametrize("dim", [0, 1])
+def test_max_values_and_indices(dim):
+    r, m = pair([[1.0, 7.0, 3.0], [9.0, 2.0, 5.0]])
+    same(r.max(dim=dim).values, m.max(dim=dim).values, what=f"max(dim={dim}).values")
+    assert r.max(dim=dim).indices.tolist() == m.max(dim=dim).indices.tolist()
+
+
+@pytest.mark.parametrize("dim", [0, 1])
+def test_min_values(dim):
+    r, m = pair([[1.0, 7.0, 3.0], [9.0, 2.0, 5.0]])
+    same(r.min(dim=dim).values, m.min(dim=dim).values, what=f"min(dim={dim})")
+
+
+def test_sum_backward():
+    grads_match(lambda t: t.sum(), lambda t: t.sum(), [[1.0, 2.0], [3.0, 4.0]], "sum")
+
+
+def test_sum_dim_backward():
+    grads_match(lambda t: (t.sum(dim=0) * 2).sum(),
+                lambda t: (t.sum(dim=0) * 2).sum(), [[1.0, 2.0], [3.0, 4.0]], "sum(dim=0)")
+
+
+def test_mean_backward():
+    grads_match(lambda t: t.mean(), lambda t: t.mean(), [[1.0, 2.0], [3.0, 4.0]], "mean")
+
+
+def test_max_backward_goes_to_one_place():
+    """최댓값 자리에만 기울기가 간다 — 나눠 가지면 학습이 미묘하게 달라진다."""
+    grads_match(lambda t: t.max(dim=1).values.sum(),
+                lambda t: t.max(dim=1).values.sum(), [[1.0, 7.0], [9.0, 2.0]], "max")
+
+
+def test_std_unbiased_both_ways():
+    r, m = pair([1.0, 2.0, 3.0, 4.0])
+    same(r.std(unbiased=False), m.std(unbiased=False), what="std(unbiased=False)")
+    same(r.std(unbiased=True), m.std(unbiased=True), what="std(unbiased=True)")
+
+
+# ---------------------------------------------------------------- 모양·인덱싱
+
+def test_indexing_backward():
+    grads_match(lambda t: t[0].sum(), lambda t: t[0].sum(), [[1.0, 2.0], [3.0, 4.0]], "t[0]")
+
+
+def test_fancy_indexing_backward():
+    """같은 자리를 두 번 고르면 기울기가 더해져야 한다."""
+    idx = [0, 0, 1]
+    grads_match(lambda t: t[idx].sum(), lambda t: t[idx].sum(),
+                [[1.0, 2.0], [3.0, 4.0]], "t[[0,0,1]]")
+
+
+def test_reshape_backward():
+    grads_match(lambda t: (t.reshape(4) * torch_ramp()).sum(),
+                lambda t: (t.reshape(4) * mini_ramp()).sum(),
+                [[1.0, 2.0], [3.0, 4.0]], "reshape")
+
+
+def torch_ramp():
+    return real.tensor([1.0, 2.0, 3.0, 4.0])
+
+
+def mini_ramp():
+    return mini.tensor([1.0, 2.0, 3.0, 4.0])
+
+
+def test_transpose_and_matmul_backward():
+    r, m = pair([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+    rb = real.tensor([[1.0, 0.0], [0.5, 2.0]])
+    mb = mini.tensor([[1.0, 0.0], [0.5, 2.0]])
+    (r @ rb.T).sum().backward()
+    (m @ mb.T).sum().backward()
+    same(r.grad, m.grad, what="matmul+transpose 기울기")
+
+
+def test_batched_matmul():
+    a = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    b = np.arange(8, dtype=np.float32).reshape(2, 4, 1)
+    same(real.tensor(a) @ real.tensor(b), mini.tensor(a) @ mini.tensor(b), what="배치 matmul")
+
+
+def test_squeeze_unsqueeze():
+    r, m = pair([[1.0], [2.0]])
+    same(r.squeeze(-1), m.squeeze(-1), what="squeeze")
+    same(r.unsqueeze(0), m.unsqueeze(0), what="unsqueeze")
+
+
+def test_permute():
+    a = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    same(real.tensor(a).permute(2, 0, 1), mini.tensor(a).permute(2, 0, 1), what="permute")
+
+
+# ---------------------------------------------------------------- 브로드캐스팅
+
+def test_broadcast_bias_backward():
+    """(N,D) + (D,) 의 기울기는 (D,) 로 접혀야 한다."""
+    rb = real.tensor([1.0, 1.0], requires_grad=True)
+    mb = mini.tensor([1.0, 1.0], requires_grad=True)
+    (real.tensor([[1.0, 2.0], [3.0, 4.0]]) + rb).sum().backward()
+    (mini.tensor([[1.0, 2.0], [3.0, 4.0]]) + mb).sum().backward()
+    same(rb.grad, mb.grad, what="브로드캐스트 bias 기울기")
+
+
+def test_broadcast_column_backward():
+    rb = real.tensor([[1.0], [2.0]], requires_grad=True)
+    mb = mini.tensor([[1.0], [2.0]], requires_grad=True)
+    (rb * real.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
+    (mb * mini.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
+    same(rb.grad, mb.grad, what="열 브로드캐스트 기울기")
+
+
+# ---------------------------------------------------------------- 함수
+
+@pytest.mark.parametrize("fn", ["sigmoid", "relu", "tanh", "exp", "log", "sqrt", "abs"])
+def test_elementwise(fn):
+    data = [0.5, 1.5, 2.5]
+    same(getattr(real, fn)(real.tensor(data)), getattr(mini, fn)(mini.tensor(data)), what=fn)
+
+
+@pytest.mark.parametrize("fn", ["sigmoid", "relu", "tanh", "exp"])
+def test_elementwise_backward(fn):
+    grads_match(lambda t: getattr(real, fn)(t).sum(),
+                lambda t: getattr(mini, fn)(t).sum(), [0.5, 1.5, -0.5], fn)
+
+
+def test_sigmoid_extreme():
+    """큰 음수·양수에서 터지지 않는가."""
+    data = [-1000.0, -50.0, 0.0, 50.0, 1000.0]
+    same(real.sigmoid(real.tensor(data)), mini.sigmoid(mini.tensor(data)), what="sigmoid 극단값")
+
+
+def test_softmax_and_backward():
+    data = [[1.0, 2.0, 3.0], [1000.0, 1001.0, 1002.0]]
+    same(real.nn.functional.softmax(real.tensor(data), dim=-1),
+         mini.softmax(mini.tensor(data), dim=-1), what="softmax")
+    grads_match(lambda t: (real.nn.functional.softmax(t, dim=-1) * torch_ramp()[:3]).sum(),
+                lambda t: (mini.softmax(t, dim=-1) * mini_ramp()[:3]).sum(),
+                [1.0, 2.0, 3.0], "softmax")
+
+
+def test_masked_fill_backward():
+    mask_r = real.tensor([[1, 0], [1, 1]])
+    mask_m = mini.tensor([[1, 0], [1, 1]])
+    grads_match(lambda t: t.masked_fill(mask_r == 0, 0.0).sum(),
+                lambda t: t.masked_fill(mask_m == 0, 0.0).sum(),
+                [[1.0, 2.0], [3.0, 4.0]], "masked_fill")
+
+
+def test_where():
+    cond_r, cond_m = real.tensor([True, False]), mini.tensor([True, False])
+    same(real.where(cond_r, real.tensor([1.0, 2.0]), real.tensor([3.0, 4.0])),
+         mini.where(cond_m, mini.tensor([1.0, 2.0]), mini.tensor([3.0, 4.0])), what="where")
+
+
+def test_tril_triu():
+    a = np.ones((3, 3), dtype=np.float32)
+    same(real.tril(real.tensor(a)), mini.tril(mini.tensor(a)), what="tril")
+    same(real.triu(real.tensor(a), diagonal=1), mini.triu(mini.tensor(a), diagonal=1), what="triu")
+
+
+# ---------------------------------------------------------------- dtype
+
+def test_dtype_rules():
+    assert str(real.tensor([1, 2, 3]).dtype) == str(mini.tensor([1, 2, 3]).dtype)
+    assert str(real.tensor([1.0, 2.0]).dtype) == str(mini.tensor([1.0, 2.0]).dtype)
+
+
+def test_int_tensor_refuses_grad():
+    with pytest.raises(RuntimeError):
+        real.tensor([1, 2, 3], requires_grad=True)
+    with pytest.raises(RuntimeError):
+        mini.tensor([1, 2, 3], requires_grad=True)
+
+
+# ---------------------------------------------------------------- 층
+
+def copy_linear(src, dst):
+    dst.weight.data = src.weight.detach().numpy().copy()
+    dst.bias.data = src.bias.detach().numpy().copy()
+
+
+def test_linear_forward_and_backward():
+    rl, ml = real.nn.Linear(3, 2), mini.nn.Linear(3, 2)
+    copy_linear(rl, ml)
+    x = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+    ro, mo = rl(real.tensor(x)), ml(mini.tensor(x))
+    same(ro, mo, what="Linear 출력")
+    ro.sum().backward()
+    mo.sum().backward()
+    same(rl.weight.grad, ml.weight.grad, what="Linear weight 기울기")
+    same(rl.bias.grad, ml.bias.grad, what="Linear bias 기울기")
+
+
+def test_embedding_forward_and_backward():
+    rl, ml = real.nn.Embedding(5, 3), mini.nn.Embedding(5, 3)
+    ml.weight.data = rl.weight.detach().numpy().copy()
+    ids = [[0, 2, 2]]
+    ro = rl(real.tensor(ids))
+    mo = ml(mini.tensor(ids))
+    same(ro, mo, what="Embedding 출력")
+    ro.sum().backward()
+    mo.sum().backward()
+    same(rl.weight.grad, ml.weight.grad, what="Embedding 기울기 (같은 번호는 더해져야 한다)")
+
+
+def test_layernorm():
+    rl, ml = real.nn.LayerNorm(4), mini.nn.LayerNorm(4)
+    x = np.array([[1.0, 2.0, 3.0, 4.0], [10.0, 0.0, -5.0, 3.0]], dtype=np.float32)
+    same(rl(real.tensor(x)), ml(mini.tensor(x)), what="LayerNorm")
+
+
+def test_batchnorm_train_and_eval():
+    rl, ml = real.nn.BatchNorm2d(2), mini.nn.BatchNorm2d(2)
+    x = np.arange(2 * 2 * 3 * 3, dtype=np.float32).reshape(2, 2, 3, 3)
+    same(rl(real.tensor(x)), ml(mini.tensor(x)), tol=1e-3, what="BatchNorm2d (학습 모드)")
+    rl.eval(); ml.eval()
+    same(rl(real.tensor(x)), ml(mini.tensor(x)), tol=1e-3, what="BatchNorm2d (평가 모드)")
+
+
+def test_dropout_eval_is_identity():
+    x = np.ones((4, 4), dtype=np.float32)
+    rd, md = real.nn.Dropout(0.5), mini.nn.Dropout(0.5)
+    rd.eval(); md.eval()
+    same(rd(real.tensor(x)), md(mini.tensor(x)), what="Dropout(eval)")
+
+
+@pytest.mark.parametrize("padding,stride", [(0, 1), (1, 1), (1, 2)])
+def test_conv2d(padding, stride):
+    x = np.arange(1 * 2 * 5 * 5, dtype=np.float32).reshape(1, 2, 5, 5)
+    w = np.arange(3 * 2 * 3 * 3, dtype=np.float32).reshape(3, 2, 3, 3) / 10
+    same(real.nn.functional.conv2d(real.tensor(x), real.tensor(w), stride=stride, padding=padding),
+         mini.conv2d(mini.tensor(x), mini.tensor(w), stride=stride, padding=padding),
+         tol=1e-3, what=f"conv2d(pad={padding}, stride={stride})")
+
+
+def test_conv2d_backward():
+    x = np.arange(1 * 1 * 4 * 4, dtype=np.float32).reshape(1, 1, 4, 4)
+    w = np.ones((1, 1, 3, 3), dtype=np.float32)
+    rx, mx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    rw, mw = real.tensor(w, requires_grad=True), mini.tensor(w, requires_grad=True)
+    real.nn.functional.conv2d(rx, rw).sum().backward()
+    mini.conv2d(mx, mw).sum().backward()
+    same(rx.grad, mx.grad, tol=1e-3, what="conv2d 입력 기울기")
+    same(rw.grad, mw.grad, tol=1e-3, what="conv2d 필터 기울기")
+
+
+def test_max_pool2d_and_backward():
+    x = np.arange(1 * 1 * 4 * 4, dtype=np.float32).reshape(1, 1, 4, 4)
+    rx, mx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    ro = real.nn.functional.max_pool2d(rx, 2)
+    mo = mini.max_pool2d(mx, 2)
+    same(ro, mo, what="max_pool2d")
+    ro.sum().backward()
+    mo.sum().backward()
+    same(rx.grad, mx.grad, what="max_pool2d 기울기")
+
+
+# ---------------------------------------------------------------- 손실
+
+def test_mse_loss():
+    p, t = [[1.0], [2.0]], [[1.5], [1.0]]
+    same(real.nn.MSELoss()(real.tensor(p), real.tensor(t)),
+         mini.nn.MSELoss()(mini.tensor(p), mini.tensor(t)), what="MSELoss")
+
+
+def test_bce_with_logits():
+    p, t = [[0.5], [-2.0], [8.0]], [[1.0], [0.0], [1.0]]
+    same(real.nn.BCEWithLogitsLoss()(real.tensor(p), real.tensor(t)),
+         mini.nn.BCEWithLogitsLoss()(mini.tensor(p), mini.tensor(t)), what="BCEWithLogitsLoss")
+
+
+def test_bce_with_logits_backward():
+    t_real, t_mini = real.tensor([[1.0], [0.0]]), mini.tensor([[1.0], [0.0]])
+    grads_match(lambda x: real.nn.BCEWithLogitsLoss()(x, t_real),
+                lambda x: mini.nn.BCEWithLogitsLoss()(x, t_mini),
+                [[0.5], [-1.0]], "BCEWithLogitsLoss")
+
+
+def test_cross_entropy():
+    logits = [[1.0, 2.0, 0.5], [0.1, 0.2, 3.0]]
+    target = [1, 2]
+    same(real.nn.CrossEntropyLoss()(real.tensor(logits), real.tensor(target)),
+         mini.nn.CrossEntropyLoss()(mini.tensor(logits), mini.tensor(target)),
+         what="CrossEntropyLoss")
+
+
+# ---------------------------------------------------------------- optimizer
+
+def _train(module, tensor_fn, optimizer, steps=5):
+    x = tensor_fn([[1.0, 2.0], [3.0, 4.0]])
+    y = tensor_fn([[1.0], [0.0]])
+    for _ in range(steps):
+        optimizer.zero_grad()
+        loss = ((module(x) - y) ** 2).mean()
+        loss.backward()
+        optimizer.step()
+    return module
+
+
+@pytest.mark.parametrize("momentum", [0.0, 0.9])
+def test_sgd_multi_step(momentum):
+    rl, ml = real.nn.Linear(2, 1), mini.nn.Linear(2, 1)
+    copy_linear(rl, ml)
+    _train(rl, real.tensor, real.optim.SGD(rl.parameters(), lr=0.05, momentum=momentum))
+    _train(ml, mini.tensor, mini.optim.SGD(ml.parameters(), lr=0.05, momentum=momentum))
+    same(rl.weight, ml.weight, what=f"SGD(momentum={momentum}) 다섯 스텝 뒤 가중치")
+
+
+def test_adam_multi_step():
+    rl, ml = real.nn.Linear(2, 1), mini.nn.Linear(2, 1)
+    copy_linear(rl, ml)
+    _train(rl, real.tensor, real.optim.Adam(rl.parameters(), lr=0.01), steps=10)
+    _train(ml, mini.tensor, mini.optim.Adam(ml.parameters(), lr=0.01), steps=10)
+    same(rl.weight, ml.weight, what="Adam 열 스텝 뒤 가중치")
+
+
+def test_step_lr():
+    rl, ml = real.nn.Linear(2, 1), mini.nn.Linear(2, 1)
+    ro = real.optim.SGD(rl.parameters(), lr=1.0)
+    mo = mini.optim.SGD(ml.parameters(), lr=1.0)
+    rs = real.optim.lr_scheduler.StepLR(ro, step_size=2, gamma=0.5)
+    ms = mini.optim.lr_scheduler.StepLR(mo, step_size=2, gamma=0.5)
+    for _ in range(4):
+        ro.step(); mo.step()
+        rs.step(); ms.step()
+    assert abs(ro.param_groups[0]["lr"] - mo.lr) < 1e-9
+
+
+# ---------------------------------------------------------------- 저장·불러오기
+
+def test_state_dict_roundtrip(tmp_path):
+    m = mini.nn.Sequential(mini.nn.Linear(3, 2), mini.nn.ReLU(), mini.nn.Linear(2, 1))
+    x = mini.tensor([[1.0, 2.0, 3.0]])
+    before = m(x)
+
+    path = tmp_path / "m.pt"
+    mini.save(m.state_dict(), str(path))
+
+    fresh = mini.nn.Sequential(mini.nn.Linear(3, 2), mini.nn.ReLU(), mini.nn.Linear(2, 1))
+    fresh.load_state_dict(mini.load(str(path)))
+    same(before, fresh(x), what="저장하고 불러온 모델의 출력")
+
+
+def test_state_dict_keys_match_real():
+    rm = real.nn.Sequential(real.nn.Linear(3, 2), real.nn.ReLU(), real.nn.Linear(2, 1))
+    mm = mini.nn.Sequential(mini.nn.Linear(3, 2), mini.nn.ReLU(), mini.nn.Linear(2, 1))
+    assert list(rm.state_dict().keys()) == list(mm.state_dict().keys())
+
+
+def test_load_state_dict_rejects_wrong_shape():
+    m = mini.nn.Linear(3, 2)
+    bad = {"weight": mini.zeros(5, 5), "bias": mini.zeros(2)}
+    with pytest.raises(RuntimeError):
+        m.load_state_dict(bad)
+
+
+# ---------------------------------------------------------------- 데이터
+
+def test_dataloader_batches_match():
+    x = np.arange(20, dtype=np.float32).reshape(10, 2)
+    y = np.arange(10, dtype=np.float32)
+
+    rd = real.utils.data.DataLoader(
+        real.utils.data.TensorDataset(real.tensor(x), real.tensor(y)), batch_size=3, shuffle=False)
+    md = mini.utils.data.DataLoader(
+        mini.utils.data.TensorDataset(mini.tensor(x), mini.tensor(y)), batch_size=3, shuffle=False)
+
+    rb = list(rd)
+    mb = list(md)
+    assert len(rb) == len(mb) == 4, "10개를 3씩 나누면 마지막 자투리까지 네 묶음"
+    for (rx, ry), (mx, my) in zip(rb, mb):
+        same(rx, mx, what="배치 x")
+        same(ry, my, what="배치 y")
+
+
+def test_dataloader_len():
+    ds = mini.utils.data.TensorDataset(mini.zeros(10, 2), mini.zeros(10))
+    assert len(mini.utils.data.DataLoader(ds, batch_size=3)) == 4
+    assert len(mini.utils.data.DataLoader(ds, batch_size=3, drop_last=True)) == 3
+
+
+def test_sampler_and_shuffle_conflict():
+    ds = mini.utils.data.TensorDataset(mini.zeros(4, 2), mini.zeros(4))
+    sampler = mini.utils.data.SequentialSampler(ds)
+    with pytest.raises(ValueError):
+        mini.utils.data.DataLoader(ds, sampler=sampler, shuffle=True)
+
+
+# ---------------------------------------------------------------- 거절
+
+@pytest.mark.parametrize("call", [
+    lambda: mini.nn.LSTM(2, 2),
+    lambda: mini.nn.TransformerEncoderLayer(8, 2),
+    lambda: mini.zeros(2).to("cuda"),
+    lambda: mini.cuda.synchronize(),
+])
+def test_unsupported_raises_loudly(call):
+    """없는 것은 근사하지 않고 멈춘다. 조용히 다른 값을 내느니 여기서 끝낸다."""
+    with pytest.raises(mini.NanoTorchError):
+        call()
+
+
+def test_cuda_reports_unavailable():
+    assert mini.cuda.is_available() is False
+
+
+def test_no_grad_blocks_graph():
+    r, m = pair([1.0, 2.0], requires_grad=True)
+    with real.no_grad():
+        assert (r * 2).requires_grad is False
+    with mini.no_grad():
+        assert (m * 2).requires_grad is False
+
+
+def test_inplace_on_grad_tensor_raises():
+    r, m = pair([1.0], requires_grad=True)
+    with pytest.raises(RuntimeError):
+        r += 1
+    with pytest.raises(RuntimeError):
+        m += 1
