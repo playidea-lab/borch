@@ -179,18 +179,62 @@ def _unbroadcast(grad, shape):
     return grad.reshape(shape)
 
 
+# torch 의 dtype 승격은 numpy 와 다르다 — **범주**로 먼저 가르고, 그 범주 안에서만 올린다.
+#
+#   범주:  bool(0) < 정수(1) < 실수(2)
+#   규칙:  참여한 것 중 가장 높은 범주를 고르고, 그 범주에 속한 것들 중 큰 것을 쓴다.
+#          낮은 범주는 높은 범주를 **끌어올리지 않는다.**
+#
+# 그래서 float32 + int64 가 torch 에서는 float32 다 (numpy 는 float64 로 올린다).
+# 여기를 numpy 에 맡기면 학습자는 틀린 규칙을 배운다.
+
+_CATEGORY = {"b": 0, "i": 1, "u": 1, "f": 2}
+_RANK = {_np.dtype("bool"): 0, _np.dtype("int64"): 10,
+         _np.dtype("float32"): 20, _np.dtype("float64"): 21}
+_DEFAULT_BY_CATEGORY = {0: _np.dtype("bool"), 1: _np.dtype("int64"), 2: _np.dtype("float32")}
+
+
+def _category(dt):
+    return _CATEGORY.get(_np.dtype(dt).kind, 2)
+
+
+def result_type(a, b):
+    """두 텐서 dtype 의 결과 타입. torch.result_type 과 같은 규칙."""
+    da, db = _np.dtype(a), _np.dtype(b)
+    cat = max(_category(da), _category(db))
+    same = [d for d in (da, db) if _category(d) == cat]
+    return max(same, key=lambda d: _RANK.get(d, 0))
+
+
+def _scalar_category(value):
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return 1
+    return 2
+
+
+def _no_bool_subtract(dtype, other):
+    """torch 는 불리언에 `-` 를 허용하지 않는다. `^` 나 `~` 를 쓰라고 안내한다."""
+    other_dtype = other.data.dtype if isinstance(other, Tensor) else _np.asarray(other).dtype
+    if _np.dtype(dtype).kind == "b" or other_dtype.kind == "b":
+        raise RuntimeError(_like_torch(
+            "불리언 텐서에는 뺄셈(`-`)을 쓸 수 없습니다. "
+            "`^`(배타적 논리합)나 `~`(부정)를 쓰세요.",
+            "Subtraction, the `-` operator, with a bool tensor is not supported. "
+            "If you are trying to invert a mask use the `~` or `logical_not()` operator instead."))
+
+
 def _promote(data, scalar):
     """파이썬 스칼라와 섞을 때의 dtype.
 
-    torch 는 numpy 와 규칙이 다르다 — 정수 텐서에 파이썬 float 를 더하면
-    torch 는 float32 를 주고 numpy 는 float64 를 준다. 흉내가 numpy 규칙을 물려받으면
-    학습자는 틀린 것을 배운다.
+    스칼라는 텐서보다 약하다 — 범주가 텐서보다 낮거나 같으면 텐서의 dtype 을 따르고,
+    높을 때만 그 범주의 기본형으로 올라간다. int 텐서 + 파이썬 float 가
+    float64 가 아니라 **float32** 인 이유다.
     """
-    if isinstance(scalar, bool):
-        return data.dtype
-    if isinstance(scalar, float) and data.dtype.kind in "biu":
-        return _np.float32
-    return data.dtype
+    tcat = _category(data.dtype)
+    scat = _scalar_category(scalar)
+    return data.dtype if scat <= tcat else _DEFAULT_BY_CATEGORY[scat]
 
 
 _grad_enabled = True
@@ -371,7 +415,9 @@ class Tensor:
 
     def _binary(self, other, forward, back_self, back_other, op=None):
         if isinstance(other, Tensor):
-            o, mine = other, self.data
+            target = result_type(self.data.dtype, other.data.dtype)
+            o = other if other.data.dtype == target else Tensor(other.data.astype(target))
+            mine = self.data if self.data.dtype == target else self.data.astype(target)
         else:
             # 파이썬 스칼라를 텐서 dtype 으로 끌어온 뒤 계산한다. numpy 에 맡기면
             # int64 + float32 가 float64 로 올라가는데 torch 는 float32 를 준다.
@@ -398,9 +444,11 @@ class Tensor:
     __radd__ = __add__
 
     def __sub__(self, o):
+        _no_bool_subtract(self.data.dtype, o)
         return self._binary(o, _np.subtract, lambda g, a, b: g, lambda g, a, b: -g, "SubBackward0")
 
     def __rsub__(self, o):
+        _no_bool_subtract(self.data.dtype, o)
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__sub__(self)
 
     def __mul__(self, o):
@@ -410,7 +458,12 @@ class Tensor:
     __rmul__ = __mul__
 
     def __truediv__(self, o):
-        return self._binary(o, _np.divide, lambda g, a, b: g / b,
+        # torch 의 나눗셈은 정수·불리언끼리여도 기본 실수형(float32)을 낸다.
+        # numpy 에 맡기면 int64/int64 가 float64 가 된다.
+        def div(a, b):
+            out = _np.divide(a, b)
+            return out.astype(_DEFAULT_DTYPE) if a.dtype.kind not in "fc" else out
+        return self._binary(o, div, lambda g, a, b: g / b,
                             lambda g, a, b: -g * a / (b * b), "DivBackward0")
 
     def __rtruediv__(self, o):

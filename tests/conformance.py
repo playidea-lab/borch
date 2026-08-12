@@ -271,6 +271,67 @@ def report_errors():
     return len(problems)
 
 
+# ---------------------------------------------------------------- dtype 승격 전수
+
+# torch 의 승격은 **범주**(bool < 정수 < 실수)로 가르고 그 범주 안에서만 올린다.
+# numpy 는 다르게 올린다(float32 + int64 → float64). 한 칸이라도 물려받으면
+# 학습자는 틀린 규칙을 배우므로 조합을 전부 훑는다.
+DTYPES = ["float32", "float64", "int64", "bool"]
+BIN_OPS = ["+", "-", "*", "/"]
+PY_SCALARS = [("파이썬 int", 2), ("파이썬 float", 2.0), ("파이썬 bool", True)]
+
+
+def _dt(lib, name):
+    if name != "bool":
+        return getattr(lib, name)
+    return real.bool if lib is real else lib.bool_
+
+
+def _mk(lib, name):
+    return lib.tensor([1, 0] if name == "bool" else [1, 2], dtype=_dt(lib, name))
+
+
+def _dtype_of(fn):
+    try:
+        return str(fn().dtype)
+    except Exception as exc:                                        # noqa: BLE001
+        return f"<{type(exc).__name__}>"
+
+
+def report_dtypes():
+    bad, total = [], 0
+    for a in DTYPES:
+        for b in DTYPES:
+            for op in BIN_OPS:
+                total += 1
+                r = _dtype_of(lambda: eval(f"x {op} y", {},                      # noqa: S307
+                                           {"x": _mk(real, a), "y": _mk(real, b)}))
+                n = _dtype_of(lambda: eval(f"x {op} y", {},                      # noqa: S307
+                                           {"x": _mk(nano, a), "y": _mk(nano, b)}))
+                if r != n:
+                    bad.append((f"{a} {op} {b}", r, n))
+    for a in DTYPES:
+        for label, value in PY_SCALARS:
+            for op in BIN_OPS:
+                total += 1
+                r = _dtype_of(lambda: eval(f"x {op} s", {},                      # noqa: S307
+                                           {"x": _mk(real, a), "s": value}))
+                n = _dtype_of(lambda: eval(f"x {op} s", {},                      # noqa: S307
+                                           {"x": _mk(nano, a), "s": value}))
+                if r != n:
+                    bad.append((f"{a} {op} {label}", r, n))
+
+    print(f"\n적합성 dtype 승격 — 조합 {total}건")
+    print(f"  일치 {total - len(bad)}/{total}")
+    if bad:
+        print("\n갈린 곳:")
+        for name, r, n in bad[:20]:
+            print(f"  ✗ {name:30} torch {r:<18} nano {n}")
+        if len(bad) > 20:
+            print(f"  … 외 {len(bad) - 20}건")
+    return len(bad)
+
+
 # ---------------------------------------------------------------- T3 표현
 
 # 학습자가 가장 많이 하는 일이 print(tensor) 다. 교재의 예시와 화면이 다르면
@@ -427,5 +488,5 @@ def report():
 
 
 if __name__ == "__main__":
-    failed = report() + report_errors() + report_repr()
+    failed = report() + report_errors() + report_repr() + report_dtypes()
     raise SystemExit(1 if failed else 0)
