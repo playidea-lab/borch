@@ -29,6 +29,16 @@ PyTorch 는 WebAssembly 로 포팅되지 않는다. 수백 MB의 네이티브 �
 그래서 **범위 밖은 근사하지 않고 예외를 던진다.**
 
 ```python
+>>> torch.tensor([-1.5, 2.0, -0.25])
+tensor([-1.5000,  2.0000, -0.2500])          # 진짜와 같은 자리·같은 정렬
+
+>>> torch.tensor([1.0], requires_grad=True) * 2
+tensor([2.], grad_fn=<MulBackward0>)
+
+>>> torch.randn(3, 4) @ torch.randn(3, 2)
+RuntimeError: 행렬곱의 모양이 안 맞습니다 (3x4 @ 3x2) — 앞의 열(4)과 뒤의 행(3)이 같아야 합니다.
+(torch: mat1 and mat2 shapes cannot be multiplied (3x4 and 3x2))
+
 >>> torch.nn.LSTM(2, 2)
 NanoTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — 축소판은 문법 연습용이고,
@@ -96,8 +106,8 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | 등급 | 지금 |
 |---|---|
 | **T1 값·기울기** (`allclose 1e-5`) | **100%** — 생성 케이스 132개 |
-| T2 오류 동등 | 일부 |
-| T3 표현(`repr`) 동등 | 없음 |
+| **T2 오류 동등** | **12/12** — 예외 종류 · 검색 가능한 메시지 9/9 |
+| **T3 표현(`repr`) 동등** | **15/15** |
 | T4 비트 동등 | **명시적 비목표** |
 
 ```bash

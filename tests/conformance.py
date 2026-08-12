@@ -271,6 +271,63 @@ def report_errors():
     return len(problems)
 
 
+# ---------------------------------------------------------------- T3 표현
+
+# 학습자가 가장 많이 하는 일이 print(tensor) 다. 교재의 예시와 화면이 다르면
+# 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다.
+REPR_CASES = [
+    ("스칼라", "tensor(3.14)"),
+    ("정수값 float", "tensor([1.0, 2.0, 3.0])"),
+    ("소수", "tensor([0.1, 0.25])"),
+    ("음수 섞임", "tensor([-1.5, 2.0, -0.25])"),
+    ("2차원", "tensor([[1.0, 2.0], [3.0, 4.0]])"),
+    ("3차원", "zeros(2, 1, 3)"),
+    ("정수", "tensor([1, 2, 3])"),
+    ("불리언", "tensor([True, False])"),
+    ("빈 텐서", "tensor([])"),
+    ("큰 값·작은 값", "tensor([1e6, 2e-6])"),
+    ("긴 1차원 줄바꿈", "arange(30).float()"),
+    ("requires_grad", "tensor([1.0, 2.0], requires_grad=True)"),
+    ("비잎 노드 grad_fn", "tensor([1.0], requires_grad=True) * 2"),
+    ("합계 grad_fn", "tensor([1.0, 2.0], requires_grad=True).sum()"),
+    ("relu grad_fn", "relu(tensor([-1.0, 2.0], requires_grad=True))"),
+]
+
+
+def report_repr():
+    same, problems = 0, []
+    for name, expr in REPR_CASES:
+        try:
+            r = repr(eval(expr, {"__builtins__": {}}, _ns(real)))     # noqa: S307
+        except Exception as exc:                                      # noqa: BLE001
+            problems.append(f"{name}: 진짜 torch 에서 실패 — {exc}")
+            continue
+        try:
+            n = repr(eval(expr, {"__builtins__": {}}, _ns(nano)))     # noqa: S307
+        except Exception as exc:                                      # noqa: BLE001
+            problems.append(f"{name}: {type(exc).__name__} — {exc}")
+            continue
+        if r == n:
+            same += 1
+        else:
+            problems.append(f"{name}:\n      torch {r!r}\n      nano  {n!r}")
+
+    print(f"\n적합성 T3(표현) — 케이스 {len(REPR_CASES)}개")
+    print(f"  일치 {same}/{len(REPR_CASES)}")
+    if problems:
+        print("\n갈린 곳:")
+        for why in problems:
+            print(f"  ✗ {why}")
+    return len(problems)
+
+
+def _ns(lib):
+    """표현식에서 tensor(...) 처럼 쓰도록 이름을 펼친다."""
+    return {n: getattr(lib, n) for n in
+            ("tensor", "zeros", "ones", "arange", "randn", "relu", "sigmoid")
+            if hasattr(lib, n)}
+
+
 # ---------------------------------------------------------------- 판정
 
 def compare(case):
@@ -370,5 +427,5 @@ def report():
 
 
 if __name__ == "__main__":
-    failed = report() + report_errors()
+    failed = report() + report_errors() + report_repr()
     raise SystemExit(1 if failed else 0)

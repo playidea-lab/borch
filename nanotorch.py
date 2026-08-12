@@ -96,6 +96,70 @@ def _resolve(data, dt):
     return _np.float32
 
 
+
+# ---------------------------------------------------------------- 표현(repr)
+#
+# 학습자가 가장 많이 하는 일이 print(tensor) 다. 진짜와 다르게 찍히면 교재의 예시와
+# 화면이 안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다.
+# torch/_tensor_str.py 의 규칙을 따른다.
+
+_PRINT_PRECISION = 4
+_LINE_WIDTH = 80
+
+
+def set_printoptions(precision=None, linewidth=None):
+    global _PRINT_PRECISION, _LINE_WIDTH
+    if precision is not None:
+        _PRINT_PRECISION = precision
+    if linewidth is not None:
+        _LINE_WIDTH = linewidth
+
+
+def _float_formatter(arr):
+    """torch 의 규칙: 값이 전부 정수면 `1.`, 아니면 소수 네 자리, 범위가 넓으면 지수."""
+    finite = arr[_np.isfinite(arr)]
+    nonzero = finite[finite != 0]
+    if nonzero.size == 0:
+        return lambda v: f"{v:.0f}."
+    amax, amin = _np.abs(nonzero).max(), _np.abs(nonzero).min()
+    integral = bool(_np.all(finite == _np.floor(finite)))
+
+    if integral and amax < 1e8:
+        return lambda v: f"{v:.0f}."
+    if amax / amin > 1000 or amax > 1e8 or amin < 1e-4:
+        return lambda v, p=_PRINT_PRECISION: f"{v:.{p}e}"
+    return lambda v, p=_PRINT_PRECISION: f"{v:.{p}f}"
+
+
+def _tensor_str(data):
+    if data.size == 0:
+        return "[]" if data.ndim else "[]"
+    if data.dtype.kind == "f":
+        fmt = _float_formatter(data)
+        # torch 는 원소를 같은 너비로 오른쪽 정렬한다 — 음수가 섞이면 양수 앞에 자리가 생긴다.
+        width = max((len(fmt(v)) for v in data.reshape(-1)), default=0)
+        padded = lambda v, f=fmt, w=width: f(v).rjust(w)
+        body = _np.array2string(
+            data, formatter={"float_kind": padded}, separator=", ",
+            max_line_width=_LINE_WIDTH - 8, threshold=1000)
+    else:
+        body = _np.array2string(data, separator=", ",
+                                max_line_width=_LINE_WIDTH - 8, threshold=1000)
+    # numpy 는 이어지는 줄을 한 칸 들여쓴다. torch 는 "tensor(" 만큼(8칸) 들여쓴다.
+    return body.replace("\n ", "\n" + " " * 8)
+
+
+def _tensor_repr(t):
+    parts = [_tensor_str(t.data)]
+    if t.data.dtype not in (_np.dtype("float32"), _np.dtype("int64"), _np.dtype("bool")):
+        parts.append(f"dtype={t.dtype}")
+    if t._op:
+        parts.append(f"grad_fn=<{t._op}>")
+    elif t.requires_grad:
+        parts.append("requires_grad=True")
+    return f"tensor({', '.join(parts)})"
+
+
 # ---------------------------------------------------------------- Size
 
 class Size(tuple):
@@ -140,6 +204,7 @@ class Tensor:
         self._parents = _parents
         self._backward = _backward
         self._freed = False        # backward 한 번이면 그래프를 놓는다 (torch 와 같다)
+        self._op = None            # grad_fn 표시용 — 어느 연산에서 나왔는가
 
         if self.requires_grad and self.data.dtype.kind not in "fc":
             raise RuntimeError(
@@ -185,9 +250,9 @@ class Tensor:
         return len(self.data)
 
     def __repr__(self):
-        body = _np.array2string(self.data, precision=4, separator=", ")
-        tail = ", requires_grad=True" if self.requires_grad else ""
-        return f"tensor({body}{tail})"
+        return _tensor_repr(self)
+
+    __str__ = __repr__
 
     def __iter__(self):
         for i in range(len(self.data)):
@@ -204,11 +269,12 @@ class Tensor:
 
     # ---- 그래프
 
-    def _make(self, data, parents, backward):
+    def _make(self, data, parents, backward, op=None):
         needs = _grad_enabled and any(p.requires_grad for p in parents)
         out = Tensor(data, requires_grad=False, _parents=parents if needs else (),
                      _backward=backward if needs else None)
         out.requires_grad = needs
+        out._op = op if needs else None
         return out
 
     def backward(self, gradient=None, retain_graph=False):
@@ -303,7 +369,7 @@ class Tensor:
 
     # ---- 산술
 
-    def _binary(self, other, forward, back_self, back_other):
+    def _binary(self, other, forward, back_self, back_other, op=None):
         if isinstance(other, Tensor):
             o, mine = other, self.data
         else:
@@ -324,27 +390,28 @@ class Tensor:
                 f"The size of tensor a ({a[-bad]}) must match the size of tensor b "
                 f"({b[-bad]}) at non-singleton dimension {len(a) - bad}")) from None
         return self._make(out, (self, o), lambda g: (back_self(g, mine, o.data),
-                                                     back_other(g, mine, o.data)))
+                                                     back_other(g, mine, o.data)), op)
 
     def __add__(self, o):
-        return self._binary(o, _np.add, lambda g, a, b: g, lambda g, a, b: g)
+        return self._binary(o, _np.add, lambda g, a, b: g, lambda g, a, b: g, "AddBackward0")
 
     __radd__ = __add__
 
     def __sub__(self, o):
-        return self._binary(o, _np.subtract, lambda g, a, b: g, lambda g, a, b: -g)
+        return self._binary(o, _np.subtract, lambda g, a, b: g, lambda g, a, b: -g, "SubBackward0")
 
     def __rsub__(self, o):
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__sub__(self)
 
     def __mul__(self, o):
-        return self._binary(o, _np.multiply, lambda g, a, b: g * b, lambda g, a, b: g * a)
+        return self._binary(o, _np.multiply, lambda g, a, b: g * b, lambda g, a, b: g * a,
+                            "MulBackward0")
 
     __rmul__ = __mul__
 
     def __truediv__(self, o):
         return self._binary(o, _np.divide, lambda g, a, b: g / b,
-                            lambda g, a, b: -g * a / (b * b))
+                            lambda g, a, b: -g * a / (b * b), "DivBackward0")
 
     def __rtruediv__(self, o):
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__truediv__(self)
@@ -352,10 +419,11 @@ class Tensor:
     def __pow__(self, p):
         if isinstance(p, Tensor):
             _unsupported("텐서 지수")
-        return self._make(self.data ** p, (self,), lambda g: (g * p * self.data ** (p - 1),))
+        return self._make(self.data ** p, (self,), lambda g: (g * p * self.data ** (p - 1),),
+                          "PowBackward0")
 
     def __neg__(self):
-        return self._make(-self.data, (self,), lambda g: (-g,))
+        return self._make(-self.data, (self,), lambda g: (-g,), "NegBackward0")
 
     def __mod__(self, o):
         return Tensor(_np.mod(self.data, o.data if isinstance(o, Tensor) else o))
@@ -375,6 +443,7 @@ class Tensor:
         return self._make(
             self.data @ o.data, (self, o),
             lambda g: (g @ _np.swapaxes(o.data, -1, -2), _np.swapaxes(self.data, -1, -2) @ g),
+            "MmBackward0" if self.data.ndim == 2 else "BmmBackward0",
         )
 
     def matmul(self, o):
@@ -433,14 +502,15 @@ class Tensor:
             raise RuntimeError(_like_torch(
                 f"모양 {want} 은 원소 {self.data.size}개짜리 텐서에 맞지 않습니다.",
                 f"shape '{want}' is invalid for input of size {self.data.size}")) from None
-        return self._make(out, (self,), lambda g: (g.reshape(old),))
+        return self._make(out, (self,), lambda g: (g.reshape(old),), "ViewBackward0")
 
     def view(self, *shape):
         return self.reshape(*shape)
 
     def unsqueeze(self, dim):
         old = self.data.shape
-        return self._make(_np.expand_dims(self.data, dim), (self,), lambda g: (g.reshape(old),))
+        return self._make(_np.expand_dims(self.data, dim), (self,), lambda g: (g.reshape(old),),
+                          "UnsqueezeBackward0")
 
     def squeeze(self, dim=None):
         old = self.data.shape
@@ -449,7 +519,7 @@ class Tensor:
 
     def transpose(self, d0, d1):
         return self._make(_np.swapaxes(self.data, d0, d1), (self,),
-                          lambda g: (_np.swapaxes(g, d0, d1),))
+                          lambda g: (_np.swapaxes(g, d0, d1),), "TransposeBackward0")
 
     @property
     def T(self):
@@ -489,10 +559,10 @@ class Tensor:
 
     # ---- 축약
 
-    def _reduce(self, fn, dim, keepdim, grad_fn):
+    def _reduce(self, fn, dim, keepdim, grad_fn, op=None):
         axis = dim
         out = fn(self.data, axis=axis, keepdims=keepdim)
-        return self._make(out, (self,), lambda g: (grad_fn(g, axis, keepdim),))
+        return self._make(out, (self,), lambda g: (grad_fn(g, axis, keepdim),), op)
 
     def sum(self, dim=None, keepdim=False):
         shape = self.data.shape
@@ -503,7 +573,8 @@ class Tensor:
                 g = _np.expand_dims(g, axis)
             return _np.broadcast_to(g, shape).copy()
 
-        return self._reduce(_np.sum, dim, keepdim, back)
+        return self._reduce(_np.sum, dim, keepdim, back,
+                            "SumBackward0" if dim is None else "SumBackward1")
 
     def mean(self, dim=None, keepdim=False):
         shape = self.data.shape
@@ -515,7 +586,8 @@ class Tensor:
                 g = _np.expand_dims(g, axis)
             return _np.broadcast_to(g, shape).copy() / n
 
-        return self._reduce(_np.mean, dim, keepdim, back)
+        return self._reduce(_np.mean, dim, keepdim, back,
+                            "MeanBackward0" if dim is None else "MeanBackward1")
 
     def _argreduce(self, np_fn, np_arg, dim, keepdim):
         if dim is None:
@@ -717,16 +789,16 @@ def where(cond, a, b):
 
 def sigmoid(t):
     out = 1.0 / (1.0 + _np.exp(-_np.clip(t.data, -60, 60)))
-    return t._make(out, (t,), lambda g: (g * out * (1 - out),))
+    return t._make(out, (t,), lambda g: (g * out * (1 - out),), "SigmoidBackward0")
 
 
 def relu(t):
-    return t._make(_np.maximum(t.data, 0), (t,), lambda g: (g * (t.data > 0),))
+    return t._make(_np.maximum(t.data, 0), (t,), lambda g: (g * (t.data > 0),), "ReluBackward0")
 
 
 def tanh(t):
     out = _np.tanh(t.data)
-    return t._make(out, (t,), lambda g: (g * (1 - out * out),))
+    return t._make(out, (t,), lambda g: (g * (1 - out * out),), "TanhBackward0")
 
 
 def exp(t): return t.exp()
@@ -744,7 +816,7 @@ def softmax(t, dim=-1):
         s = (g * out).sum(axis=dim, keepdims=True)
         return ((out * (g - s)),)
 
-    return t._make(out, (t,), back)
+    return t._make(out, (t,), back, "SoftmaxBackward0")
 
 
 
