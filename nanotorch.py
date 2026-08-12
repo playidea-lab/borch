@@ -268,7 +268,10 @@ class Tensor:
 
     def __init__(self, data, requires_grad=False, _parents=(), _backward=None):
         self._array = data if isinstance(data, _np.ndarray) else _np.asarray(data)
-        self.requires_grad = bool(requires_grad) and _grad_enabled
+        # no_grad 는 **연산의 결과**가 그래프를 안 갖게 할 뿐, 직접 만든 잎의 requires_grad 를
+        # 끄지는 않는다. torch 도 그렇다 — 여기서 끄면 no_grad 블록 안에서 만든 파라미터가
+        # 학습 대상에서 조용히 빠진다.
+        self.requires_grad = bool(requires_grad)
         self.grad = None
         self._parents = _parents
         self._backward = _backward
@@ -1258,6 +1261,20 @@ def count_nonzero(t, dim=None):
     return Tensor(_np.count_nonzero(_wrap(t).data, axis=dim))
 
 
+def _pick(t, idx, dim, op):
+    """뽑은 값에 **기울기 길을 남긴다.** 뽑기만 하고 끊으면 학습이 조용히 멈춘다 —
+    top-k 샘플링이나 정렬을 끼운 손실에서 그 일이 난다."""
+    values = _np.take_along_axis(t.data, idx, axis=dim)
+    shape = t.data.shape
+
+    def back(g):
+        z = _np.zeros(shape, dtype=_np.asarray(g).dtype)
+        _np.put_along_axis(z, idx, _np.asarray(g), axis=dim)
+        return (z,)
+
+    return t._make(values, (t,), back, op)
+
+
 def topk(t, k, dim=-1, largest=True):
     """상위 k개의 (값, 번호). 32장의 top-k 샘플링이 이것이다."""
     t = _wrap(t)
@@ -1265,8 +1282,7 @@ def topk(t, k, dim=-1, largest=True):
     if largest:
         order = _np.flip(order, axis=dim)
     idx = _np.take(order, _np.arange(k), axis=dim)
-    values = _np.take_along_axis(t.data, idx, axis=dim)
-    return _MinMax(Tensor(values), Tensor(idx))
+    return _MinMax(_pick(t, idx, dim, "TopkBackward0"), Tensor(idx))
 
 
 def sort(t, dim=-1, descending=False):
@@ -1274,7 +1290,7 @@ def sort(t, dim=-1, descending=False):
     idx = _np.argsort(t.data, axis=dim)
     if descending:
         idx = _np.flip(idx, axis=dim)
-    return _MinMax(Tensor(_np.take_along_axis(t.data, idx, axis=dim)), Tensor(idx))
+    return _MinMax(_pick(t, idx, dim, "SortBackward0"), Tensor(idx))
 
 
 def argsort(t, dim=-1, descending=False):

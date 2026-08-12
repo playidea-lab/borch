@@ -664,6 +664,118 @@ def test_transformer_backward():
     same(rs.grad, ns.grad, tol=1e-4, what="Transformer 입력 기울기")
 
 
+# 커버리지를 재보니 아래 층들은 **한 번도 안 돌아본 채** 있었다. 전부 통과했지만,
+# 검사가 없었을 뿐이지 맞다는 근거는 없었다 — BatchNorm2d 가 그렇게 오래 틀려 있었다.
+
+@pytest.mark.parametrize("mode", ["train", "eval"])
+def test_batchnorm1d(mode):
+    rl, ml = real.nn.BatchNorm1d(4), mini.nn.BatchNorm1d(4)
+    copy_state(rl, ml)
+    getattr(rl, mode)()
+    getattr(ml, mode)()
+    x = np.random.default_rng(0).standard_normal((8, 4)).astype(np.float32)
+    same(rl(real.tensor(x)), ml(mini.tensor(x)), tol=1e-4, what=f"BatchNorm1d {mode}")
+
+
+def test_batchnorm1d_backward_and_running():
+    rl, ml = real.nn.BatchNorm1d(4), mini.nn.BatchNorm1d(4)
+    copy_state(rl, ml)
+    x = np.random.default_rng(0).standard_normal((8, 4)).astype(np.float32)
+    for _ in range(3):
+        rl(real.tensor(x))
+        ml(mini.tensor(x))
+    assert np.allclose(rl.running_mean.numpy(), ml.running_mean, atol=1e-5)
+    rx, mx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    rl(rx).sum().backward()
+    ml(mx).sum().backward()
+    same(rx.grad, mx.grad, tol=1e-4, what="BatchNorm1d 기울기")
+
+
+@pytest.mark.parametrize("build,shape", [
+    (lambda L: L.nn.Softmax(dim=-1), (3, 4)),
+    (lambda L: L.nn.LogSoftmax(dim=-1), (3, 4)),
+    (lambda L: L.nn.GELU(), (6,)),
+    (lambda L: L.nn.SiLU(), (6,)),
+    (lambda L: L.nn.LeakyReLU(0.1), (6,)),
+    (lambda L: L.nn.ELU(), (6,)),
+    (lambda L: L.nn.AvgPool2d(2), (1, 1, 4, 4)),
+    (lambda L: L.nn.AdaptiveAvgPool2d(1), (1, 2, 3, 4)),
+    (lambda L: L.nn.Unflatten(1, (2, 3)), (2, 6)),
+])
+def test_stateless_layers(build, shape):
+    x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    same(build(real)(real.tensor(x)), build(mini)(mini.tensor(x)), tol=1e-4,
+         what=f"{type(build(mini)).__name__}")
+
+
+@pytest.mark.parametrize("name", ["L1Loss", "SmoothL1Loss"])
+def test_extra_losses(name):
+    x = np.random.default_rng(0).standard_normal((3, 4)).astype(np.float32)
+    same(getattr(real.nn, name)()(real.tensor(x), real.tensor(-x)),
+         getattr(mini.nn, name)()(mini.tensor(x), mini.tensor(-x)), what=name)
+
+
+def test_nll_loss_layer():
+    x = np.random.default_rng(0).standard_normal((4, 4)).astype(np.float32)
+    target = np.array([0, 1, 2, 3])
+    same(real.nn.NLLLoss()(real.nn.LogSoftmax(dim=-1)(real.tensor(x)), real.tensor(target)),
+         mini.nn.NLLLoss()(mini.nn.LogSoftmax(dim=-1)(mini.tensor(x)), mini.tensor(target)),
+         what="NLLLoss")
+
+
+@pytest.mark.parametrize("name,build,data", [
+    ("topk", lambda L, t: L.topk(t, 3).values, np.array([3., 1., 4., 1., 5., 9.], dtype=np.float32)),
+    ("sort", lambda L, t: L.sort(t).values, np.array([3., 1., 4., 1., 5., 9.], dtype=np.float32)),
+])
+def test_selection_keeps_gradient(name, build, data):
+    """뽑기만 하고 그래프를 끊으면 학습이 조용히 멈춘다 — top-k 샘플링이 그 자리다."""
+    weights = np.arange(1.0, 4.0, dtype=np.float32)
+    rt, mt = real.tensor(data, requires_grad=True), mini.tensor(data, requires_grad=True)
+    rv, mv = build(real, rt), build(mini, mt)
+    w = weights if rv.shape[0] == 3 else np.arange(1.0, rv.shape[0] + 1.0, dtype=np.float32)
+    (rv * real.tensor(w)).sum().backward()
+    (mv * mini.tensor(w)).sum().backward()
+    same(rt.grad, mt.grad, what=f"{name} 기울기")
+
+
+def test_no_grad_does_not_disable_leaves():
+    """no_grad 는 **연산 결과**가 그래프를 안 갖게 할 뿐이다.
+    직접 만든 잎까지 끄면 그 안에서 만든 파라미터가 학습에서 조용히 빠진다."""
+    for lib in (real, mini):
+        with lib.no_grad():
+            leaf = lib.tensor([1.0], requires_grad=True)
+            derived = lib.tensor([2.0], requires_grad=True) * 2
+        assert leaf.requires_grad is True, f"{lib.__name__}: 잎은 켜져 있어야 한다"
+        assert derived.requires_grad is False, f"{lib.__name__}: 연산 결과는 꺼져야 한다"
+
+
+def test_weighted_sampler_actually_weights():
+    """가중치가 큰 쪽이 실제로 더 자주 뽑혀야 한다. 도는 것만으로는 근거가 없다."""
+    weights = [1.0, 1.0, 8.0]
+    for lib in (real, mini):
+        picks = list(lib.utils.data.WeightedRandomSampler(weights, 2000))
+        share = picks.count(2) / len(picks)
+        assert 0.6 < share < 0.9, f"{lib.__name__}: 세 번째가 {share:.2f} 비율로 뽑혔다"
+
+
+def test_concat_dataset():
+    for lib in (real, mini):
+        a = lib.utils.data.TensorDataset(lib.zeros(2, 3))
+        b = lib.utils.data.TensorDataset(lib.ones(3, 3))
+        joined = lib.utils.data.ConcatDataset([a, b])
+        assert len(joined) == 5
+        assert float(joined[0][0].sum()) == 0.0
+        assert float(joined[4][0].sum()) == 3.0
+
+
+def test_minmax_result_unpacks_both_ways():
+    for lib in (real, mini):
+        result = lib.tensor([[1.0, 3.0], [4.0, 2.0]]).max(dim=1)
+        values, indices = result
+        assert values.tolist() == result[0].tolist() == result.values.tolist()
+        assert indices.tolist() == result[1].tolist() == result.indices.tolist()
+
+
 # ---------------------------------------------------------------- 손실
 
 def test_mse_loss():
