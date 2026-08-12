@@ -181,6 +181,96 @@ def build_cases():
     return cases
 
 
+# ---------------------------------------------------------------- T2 오류
+
+# 학습자가 실제로 만나는 실패들. 같은 조건에서 **같은 종류의 예외**가 나야 하고,
+# 우리 메시지에는 torch 의 정규 영문 문구가 들어 있어야 한다 — 그래야 검색이 통한다.
+ERROR_CASES = [
+    ("행렬곱 모양 불일치", lambda t: t.randn(3, 4) @ t.randn(3, 2),
+     "shapes cannot be multiplied"),
+    ("브로드캐스트 불가", lambda t: t.randn(3, 4) + t.randn(3, 2),
+     "must match the size of tensor"),
+    ("reshape 원소수 불일치", lambda t: t.randn(2, 3).reshape(4, 2),
+     "is invalid for input of size"),
+    ("스칼라 아닌 backward", lambda t: t.randn(3, requires_grad=True).backward(),
+     "grad can be implicitly created only for scalar outputs"),
+    ("requires_grad 없이 backward", lambda t: t.randn(3).sum().backward(),
+     "does not require grad"),
+    ("정수 텐서에 requires_grad", lambda t: t.tensor([1, 2, 3], requires_grad=True), None),
+    ("여러 원소에 item()", lambda t: t.randn(3).item(),
+     "cannot be converted to Scalar"),
+    ("Linear 입력 차원 불일치", lambda t: t.nn.Linear(4, 2)(t.randn(3, 5)),
+     "shapes cannot be multiplied"),
+    ("Conv2d 채널 불일치",
+     lambda t: t.nn.functional.conv2d(t.randn(1, 3, 8, 8), t.randn(4, 1, 3, 3))
+     if t is real else t.conv2d(t.randn(1, 3, 8, 8), t.randn(4, 1, 3, 3)), None),
+    ("인덱스 범위 초과", lambda t: t.randn(3)[5], "out of bounds"),
+    ("leaf 제자리 수정", lambda t: _inplace_leaf(t), None),
+    ("backward 두 번", lambda t: _backward_twice(t),
+     "backward through the graph a second time"),
+]
+
+
+def _inplace_leaf(t):
+    x = t.randn(3, requires_grad=True)
+    x += 1
+    return x
+
+
+def _backward_twice(t):
+    x = t.randn(3, requires_grad=True)
+    y = (x * 2).sum()
+    y.backward()
+    y.backward()
+
+
+def _raised(lib, fn):
+    try:
+        fn(lib)
+        return None, ""
+    except Exception as exc:                                        # noqa: BLE001
+        return type(exc).__name__, str(exc)
+
+
+def report_errors():
+    same_kind = 0
+    searchable = 0
+    needs_phrase = 0
+    problems = []
+
+    for name, fn, phrase in ERROR_CASES:
+        rk, _ = _raised(real, fn)
+        nk, nm = _raised(nano, fn)
+
+        if rk is None:
+            problems.append(f"{name}: 진짜 torch 가 예외를 안 낸다 — 케이스가 틀렸다")
+            continue
+        if nk is None:
+            problems.append(f"{name}: nanotorch 가 조용히 지나간다 (torch 는 {rk})")
+            continue
+        if nk != rk:
+            problems.append(f"{name}: {rk} 여야 하는데 {nk}")
+            continue
+        same_kind += 1
+
+        if phrase:
+            needs_phrase += 1
+            if phrase in nm:
+                searchable += 1
+            else:
+                problems.append(f"{name}: 메시지에 검색용 문구가 없다 — \"{phrase}\"")
+
+    total = len(ERROR_CASES)
+    print(f"\n적합성 T2(오류) — 케이스 {total}개")
+    print(f"  예외 종류 일치 {same_kind}/{total}"
+          f" · 검색 가능한 메시지 {searchable}/{needs_phrase}")
+    if problems:
+        print("\n갈린 곳:")
+        for why in problems:
+            print(f"  ✗ {why}")
+    return len(problems)
+
+
 # ---------------------------------------------------------------- 판정
 
 def compare(case):
@@ -280,4 +370,5 @@ def report():
 
 
 if __name__ == "__main__":
-    raise SystemExit(1 if report() else 0)
+    failed = report() + report_errors()
+    raise SystemExit(1 if failed else 0)

@@ -40,6 +40,15 @@ class NanoTorchError(NotImplementedError):
     """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
 
 
+def _like_torch(korean: str, torch_phrase: str) -> str:
+    """오류 메시지의 규격.
+
+    한국어 설명만 두면 학습자가 검색해서 답을 못 찾고, 영문만 베끼면 이 교재가
+    한국어인 이유가 사라진다. 둘 다 넣는다 — 설명은 읽고, 영문 문구는 검색한다.
+    """
+    return f"{korean}\n(torch: {torch_phrase})"
+
+
 def _unsupported(what: str):
     raise NanoTorchError(
         f"{what} 은(는) 브라우저 축소판에 없습니다.\n"
@@ -130,6 +139,7 @@ class Tensor:
         self.grad = None
         self._parents = _parents
         self._backward = _backward
+        self._freed = False        # backward 한 번이면 그래프를 놓는다 (torch 와 같다)
 
         if self.requires_grad and self.data.dtype.kind not in "fc":
             raise RuntimeError(
@@ -161,6 +171,11 @@ class Tensor:
         return int(self.data.size)
 
     def item(self):
+        if self.data.size != 1:
+            raise RuntimeError(_like_torch(
+                f"값이 {self.data.size}개인 텐서는 하나의 숫자로 바꿀 수 없습니다. "
+                "`.tolist()` 나 인덱싱을 쓰세요.",
+                f"a Tensor with {self.data.size} elements cannot be converted to Scalar"))
         return self.data.reshape(-1)[0].item()
 
     def tolist(self):
@@ -196,17 +211,22 @@ class Tensor:
         out.requires_grad = needs
         return out
 
-    def backward(self, gradient=None):
+    def backward(self, gradient=None, retain_graph=False):
         if not self.requires_grad:
-            raise RuntimeError(
-                "requires_grad 가 아닌 텐서에는 backward() 를 부를 수 없습니다."
-            )
+            raise RuntimeError(_like_torch(
+                "requires_grad 가 아닌 텐서에는 backward() 를 부를 수 없습니다.",
+                "element 0 of tensors does not require grad and does not have a grad_fn"))
+        if self._freed:
+            raise RuntimeError(_like_torch(
+                "이미 backward() 를 부른 그래프입니다. 한 번 되짚으면 그래프를 놓습니다 — "
+                "다시 계산하거나 `backward(retain_graph=True)` 를 쓰세요.",
+                "Trying to backward through the graph a second time"))
         if gradient is None:
             if self.data.size != 1:
-                raise RuntimeError(
+                raise RuntimeError(_like_torch(
                     "값이 하나가 아닌 텐서에는 gradient 를 줘야 합니다. "
-                    "보통은 손실을 스칼라로 만든 뒤 부릅니다."
-                )
+                    "보통은 손실을 스칼라로 만든 뒤 부릅니다.",
+                    "grad can be implicitly created only for scalar outputs"))
             gradient = _np.ones_like(self.data)
 
         # 위상 정렬 — 뒤에서 앞으로 한 번씩만 지나간다
@@ -237,6 +257,11 @@ class Tensor:
                 # 잎의 .grad 는 위의 분기에서만 채운다. 여기서도 채우면 두 번 쌓인다.
                 pg = _unbroadcast(_np.asarray(pg), parent.data.shape)
                 grads[id(parent)] = pg if id(parent) not in grads else grads[id(parent)] + pg
+
+        if not retain_graph:
+            for t in order:
+                if t._backward is not None:
+                    t._freed = True
 
     def detach(self):
         return Tensor(self.data)
@@ -287,7 +312,17 @@ class Tensor:
             target = _promote(self.data, other)
             o = Tensor(_np.asarray(other, dtype=target))
             mine = self.data.astype(target) if self.data.dtype != target else self.data
-        out = forward(mine, o.data)
+        try:
+            out = forward(mine, o.data)
+        except ValueError:
+            a, b = mine.shape, o.data.shape
+            bad = next((i for i in range(1, min(len(a), len(b)) + 1)
+                        if a[-i] != b[-i] and a[-i] != 1 and b[-i] != 1), 1)
+            raise RuntimeError(_like_torch(
+                f"모양 {tuple(a)} 과 {tuple(b)} 은 브로드캐스팅되지 않습니다 — "
+                "뒤에서부터 맞춰볼 때 크기가 같거나 한쪽이 1이어야 합니다.",
+                f"The size of tensor a ({a[-bad]}) must match the size of tensor b "
+                f"({b[-bad]}) at non-singleton dimension {len(a) - bad}")) from None
         return self._make(out, (self, o), lambda g: (back_self(g, mine, o.data),
                                                      back_other(g, mine, o.data)))
 
@@ -330,6 +365,13 @@ class Tensor:
 
     def __matmul__(self, o):
         o = o if isinstance(o, Tensor) else Tensor(o)
+        if self.data.ndim >= 2 and o.data.ndim >= 2 and self.data.shape[-1] != o.data.shape[-2]:
+            a = "x".join(str(n) for n in self.data.shape[-2:])
+            b = "x".join(str(n) for n in o.data.shape[-2:])
+            raise RuntimeError(_like_torch(
+                f"행렬곱의 모양이 안 맞습니다 ({a} @ {b}) — "
+                f"앞의 열({self.data.shape[-1]})과 뒤의 행({o.data.shape[-2]})이 같아야 합니다.",
+                f"mat1 and mat2 shapes cannot be multiplied ({a} and {b})"))
         return self._make(
             self.data @ o.data, (self, o),
             lambda g: (g @ _np.swapaxes(o.data, -1, -2), _np.swapaxes(self.data, -1, -2) @ g),
@@ -384,7 +426,14 @@ class Tensor:
     def reshape(self, *shape):
         shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
         old = self.data.shape
-        return self._make(self.data.reshape(shape), (self,), lambda g: (g.reshape(old),))
+        try:
+            out = self.data.reshape(shape)
+        except ValueError:
+            want = list(shape)
+            raise RuntimeError(_like_torch(
+                f"모양 {want} 은 원소 {self.data.size}개짜리 텐서에 맞지 않습니다.",
+                f"shape '{want}' is invalid for input of size {self.data.size}")) from None
+        return self._make(out, (self,), lambda g: (g.reshape(old),))
 
     def view(self, *shape):
         return self.reshape(*shape)
