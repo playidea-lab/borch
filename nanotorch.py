@@ -240,9 +240,34 @@ def _promote(data, scalar):
 _grad_enabled = True
 
 
+class _DataDescriptor:
+    """`t.data` 는 읽을 때 numpy 를, 쓸 때는 **텐서만** 받는다.
+
+    torch 가 `p.data = ndarray` 를 거부하기 때문이다. 여기서 받아주면 브라우저에서 돌던
+    코드가 자기 컴퓨터에서 깨진다 — 관대한 것도 갈리는 것이다.
+    """
+
+    def __get__(self, obj, owner=None):
+        return obj._array if obj is not None else self
+
+    def __set__(self, obj, value):
+        if isinstance(value, Tensor):
+            obj._array = value._array
+            return
+        if isinstance(value, _np.ndarray):
+            raise TypeError(_like_torch(
+                "`.data` 에는 텐서만 넣을 수 있습니다. `torch.tensor(...)` 로 감싸세요.",
+                "Variable data has to be a tensor, but got numpy.ndarray"))
+        raise TypeError(_like_torch(
+            f"`.data` 에는 텐서만 넣을 수 있습니다 ({type(value).__name__} 을 받았습니다).",
+            f"Variable data has to be a tensor, but got {type(value).__name__}"))
+
+
 class Tensor:
+    data = _DataDescriptor()
+
     def __init__(self, data, requires_grad=False, _parents=(), _backward=None):
-        self.data = data if isinstance(data, _np.ndarray) else _np.asarray(data)
+        self._array = data if isinstance(data, _np.ndarray) else _np.asarray(data)
         self.requires_grad = bool(requires_grad) and _grad_enabled
         self.grad = None
         self._parents = _parents
@@ -510,7 +535,7 @@ class Tensor:
                 "`with torch.no_grad():` 안에서 하세요."
             )
         o = other.data if isinstance(other, Tensor) else other
-        self.data = fn(self.data, o).astype(self.data.dtype)
+        self._array = fn(self._array, o).astype(self._array.dtype)
         return self
 
     def __iadd__(self, o):
@@ -1101,14 +1126,32 @@ class Module:
     def __init__(self):
         self._modules = {}
         self._params = {}
+        self._buffers = {}          # 학습은 안 하지만 저장·복원되는 값 (running_mean 등)
         self.training = True
+
+    def register_buffer(self, name, value):
+        """torch 의 `register_buffer`. `state_dict` 에 들어가고 학습 대상은 아니다.
+
+        BatchNorm 의 running_mean 이 여기 들어간다 — 빠뜨리면 저장했다 불러왔을 때
+        **평가 모드가 초기값으로 돌아가고**, 학습은 멀쩡해 보이는데 추론만 틀린다.
+        """
+        self.__dict__.setdefault("_buffers", {})[name] = value
+        object.__setattr__(self, name, value)
 
     def __setattr__(self, name, value):
         if isinstance(value, Parameter):
             self.__dict__.setdefault("_params", {})[name] = value
         elif isinstance(value, Module):
             self.__dict__.setdefault("_modules", {})[name] = value
+        elif name in self.__dict__.get("_buffers", {}):
+            self._buffers[name] = value
         object.__setattr__(self, name, value)
+
+    def named_buffers(self, prefix=""):
+        for n, b in self.__dict__.get("_buffers", {}).items():
+            yield (f"{prefix}{n}", b)
+        for n, m in self._modules.items():
+            yield from m.named_buffers(f"{prefix}{n}.")
 
     def parameters(self):
         for p in self._params.values():
@@ -1147,17 +1190,29 @@ class Module:
             p.grad = None
 
     def state_dict(self):
-        return {name: Tensor(p.data.copy()) for name, p in self.named_parameters()}
+        out = {name: Tensor(p.data.copy()) for name, p in self.named_parameters()}
+        for name, buf in self.named_buffers():
+            out[name] = Tensor(_np.array(buf, copy=True))
+        return out
 
     def load_state_dict(self, state, strict=True):
         own = dict(self.named_parameters())
-        missing = [k for k in own if k not in state]
-        unexpected = [k for k in state if k not in own]
+        buffers = dict(self.named_buffers())
+        missing = [k for k in list(own) + list(buffers) if k not in state]
+        unexpected = [k for k in state if k not in own and k not in buffers]
         if strict and (missing or unexpected):
             raise RuntimeError(
                 f"state_dict 가 안 맞습니다. 빠진 것: {missing}, 남는 것: {unexpected}"
             )
         for name, value in state.items():
+            if name in buffers:
+                data = value.data if isinstance(value, Tensor) else _np.asarray(value)
+                holder = self
+                *path, leaf = name.split(".")
+                for part in path:
+                    holder = holder._modules[part]
+                holder.register_buffer(leaf, data.copy() if data.ndim else data.item())
+                continue
             if name in own:
                 target = own[name]
                 incoming = value.data if isinstance(value, Tensor) else _np.asarray(value)
@@ -1165,7 +1220,7 @@ class Module:
                     raise RuntimeError(
                         f"{name} 의 모양이 다릅니다: {incoming.shape} vs {tuple(target.data.shape)}"
                     )
-                target.data = incoming.astype(target.data.dtype).copy()
+                target._array = incoming.astype(target._array.dtype).copy()
         return self
 
     def forward(self, *a, **k):
@@ -1383,25 +1438,34 @@ class BatchNorm2d(Module):
         self.eps, self.momentum = eps, momentum
         self.weight = Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
         self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
-        self.running_mean = _np.zeros(num_features, dtype=_DEFAULT_DTYPE)
-        self.running_var = _np.ones(num_features, dtype=_DEFAULT_DTYPE)
+        self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+        self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
+        self.register_buffer("num_batches_tracked", 0)
 
     def forward(self, x):
         shape = (1, -1, 1, 1)
         if self.training:
-            mean = x.data.mean(axis=(0, 2, 3))
+            # 평균·분산을 **그래프 안에서** 계산해야 한다. numpy 로 빼서 상수처럼 쓰면
+            # x → mean → y 로 흐르는 길이 끊겨 기울기가 틀리고, weight 에는 아예 안 간다.
+            # (BatchNorm 순방향만 대조하고 역방향은 안 봤던 탓에 오래 남아 있었다.)
+            mean = x.mean(dim=0).mean(dim=1).mean(dim=1)          # (C,)
+            centered = x - mean.reshape(shape)
+            var = (centered * centered).mean(dim=0).mean(dim=1).mean(dim=1)
+
             # 진짜 torch 는 두 곳에서 다른 분산을 쓴다 — 정규화는 편향(ddof=0),
             # running_var 갱신은 비편향(ddof=1). 둘 다 편향으로 두면 값이 2.6% 어긋난다.
-            var = x.data.var(axis=(0, 2, 3))
-            unbiased = x.data.var(axis=(0, 2, 3), ddof=1)
-            self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * mean
-            self.running_var = (1 - self.momentum) * self.running_var + self.momentum * unbiased
+            with no_grad():
+                unbiased = x.data.var(axis=(0, 2, 3), ddof=1)
+                self.running_mean = ((1 - self.momentum) * self.running_mean
+                                     + self.momentum * mean.data)
+                self.running_var = ((1 - self.momentum) * self.running_var
+                                    + self.momentum * unbiased)
+                self.num_batches_tracked = self.num_batches_tracked + 1
+            normed = centered / (var.reshape(shape) + self.eps) ** 0.5
         else:
-            mean, var = self.running_mean, self.running_var
-        normed = (x - Tensor(mean.reshape(shape))) / Tensor(
-            _np.sqrt(var + self.eps).reshape(shape))
-        return normed * Tensor(self.weight.data.reshape(shape)) + Tensor(
-            self.bias.data.reshape(shape))
+            normed = ((x - Tensor(self.running_mean.reshape(shape)))
+                      / Tensor(_np.sqrt(self.running_var + self.eps).reshape(shape)))
+        return normed * self.weight.reshape(shape) + self.bias.reshape(shape)
 
 
 
@@ -1887,7 +1951,7 @@ class SGD(Optimizer):
             if self.momentum:
                 self._v[i] = self.momentum * self._v[i] + g
                 g = self._v[i]
-            p.data = p.data - self.lr * g
+            p._array = p._array - self.lr * g
 
 
 class Adam(Optimizer):
@@ -1909,7 +1973,7 @@ class Adam(Optimizer):
             self._v[i] = self.b2 * self._v[i] + (1 - self.b2) * (g * g)
             mh = self._m[i] / (1 - self.b1 ** self.t)
             vh = self._v[i] / (1 - self.b2 ** self.t)
-            p.data = p.data - self.lr * mh / (_np.sqrt(vh) + self.eps)
+            p._array = p._array - self.lr * mh / (_np.sqrt(vh) + self.eps)
 
 
 class _Optim:

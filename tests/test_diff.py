@@ -242,8 +242,8 @@ def test_int_tensor_refuses_grad():
 # ---------------------------------------------------------------- 층
 
 def copy_linear(src, dst):
-    dst.weight.data = src.weight.detach().numpy().copy()
-    dst.bias.data = src.bias.detach().numpy().copy()
+    dst.weight.data = mini.tensor(src.weight.detach().numpy().copy())
+    dst.bias.data = mini.tensor(src.bias.detach().numpy().copy())
 
 
 def test_linear_forward_and_backward():
@@ -260,7 +260,7 @@ def test_linear_forward_and_backward():
 
 def test_embedding_forward_and_backward():
     rl, ml = real.nn.Embedding(5, 3), mini.nn.Embedding(5, 3)
-    ml.weight.data = rl.weight.detach().numpy().copy()
+    ml.weight.data = mini.tensor(rl.weight.detach().numpy().copy())
     ids = [[0, 2, 2]]
     ro = rl(real.tensor(ids))
     mo = ml(mini.tensor(ids))
@@ -274,6 +274,57 @@ def test_layernorm():
     rl, ml = real.nn.LayerNorm(4), mini.nn.LayerNorm(4)
     x = np.array([[1.0, 2.0, 3.0, 4.0], [10.0, 0.0, -5.0, 3.0]], dtype=np.float32)
     same(rl(real.tensor(x)), ml(mini.tensor(x)), what="LayerNorm")
+
+
+def test_batchnorm_backward():
+    """순방향만 맞고 역방향이 틀린 채로 오래 있었다 — 평균·분산을 그래프 밖에서 계산했다.
+
+    학습은 돌아가고 손실도 내려가는데 값만 다르다. 순방향만 대조하면 안 잡힌다.
+    """
+    rl, ml = real.nn.BatchNorm2d(2), mini.nn.BatchNorm2d(2)
+    copy_state(rl, ml)
+    x = np.random.default_rng(0).standard_normal((4, 2, 3, 3)).astype(np.float32)
+    rx, mx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    rl(rx).sum().backward()
+    ml(mx).sum().backward()
+    same(rx.grad, mx.grad, tol=1e-4, what="BatchNorm 입력 기울기")
+    same(rl.weight.grad, ml.weight.grad, tol=1e-4, what="BatchNorm weight 기울기")
+    same(rl.bias.grad, ml.bias.grad, tol=1e-4, what="BatchNorm bias 기울기")
+    assert np.allclose(rl.running_mean.numpy(), ml.running_mean, atol=1e-5)
+    assert np.allclose(rl.running_var.numpy(), ml.running_var, atol=1e-4)
+
+
+@pytest.mark.parametrize("layer,shape", [
+    (lambda L: L.nn.Linear(3, 2), (4, 3)),
+    (lambda L: L.nn.LayerNorm(3), (4, 3)),
+    (lambda L: L.nn.BatchNorm2d(2), (4, 2, 3, 3)),
+    (lambda L: L.nn.Conv2d(2, 3, 3, padding=1), (2, 2, 5, 5)),
+    (lambda L: L.nn.Embedding(5, 3), None),
+])
+def test_every_layer_passes_gradient_to_its_weights(layer, shape):
+    """층마다 **가중치에 기울기가 실제로 도착하는가.** None 이면 그래프가 끊긴 것이다."""
+    rl, ml = layer(real), layer(mini)
+    copy_state(rl, ml)
+    if shape is None:
+        rx, mx = real.tensor([[0, 1]]), mini.tensor([[0, 1]])
+    else:
+        x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+        rx, mx = real.tensor(x), mini.tensor(x)
+    rl(rx).sum().backward()
+    ml(mx).sum().backward()
+    for (name, rp), (_, mp) in zip(rl.named_parameters(), ml.named_parameters()):
+        assert rp.grad is not None, f"진짜 torch 도 {name} 기울기가 없다 — 케이스가 틀렸다"
+        assert mp.grad is not None, f"{name} 에 기울기가 안 왔다 — 그래프가 끊겼다"
+        same(rp.grad, mp.grad, tol=1e-4, what=f"{name} 기울기")
+
+
+def test_data_assignment_rejects_ndarray():
+    """torch 는 `p.data = ndarray` 를 거부한다. 받아주면 브라우저에서 되던 코드가
+    자기 컴퓨터에서 깨진다 — 관대한 것도 갈리는 것이다."""
+    for lib in (real, mini):
+        p = lib.nn.Linear(2, 2).weight
+        with pytest.raises(TypeError):
+            p.data = np.zeros((2, 2), dtype=np.float32)
 
 
 def test_batchnorm_train_and_eval():
@@ -324,7 +375,7 @@ def test_max_pool2d_and_backward():
 
 def copy_rnn(src, dst):
     for key, value in src.state_dict().items():
-        getattr(dst, key).data = value.detach().numpy().copy()
+        getattr(dst, key).data = mini.tensor(value.detach().numpy().copy())
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -385,12 +436,21 @@ def test_stack_and_cat_backward():
 
 
 def copy_state(src, dst):
-    """torch 쪽 가중치를 그대로 심는다. 초기값이 같아야 값을 비교할 수 있다."""
+    """torch 쪽 상태를 그대로 심는다. 초기값이 같아야 값을 비교할 수 있다.
+
+    파라미터만이 아니라 **버퍼도** 옮긴다 — BatchNorm 의 running_mean 이 그것이고,
+    빠뜨리면 평가 모드에서만 값이 갈린다.
+    """
     assert list(src.state_dict().keys()) == list(dst.state_dict().keys()), (
         f"state_dict 키가 다르다\n  torch {list(src.state_dict())}\n  nano  {list(dst.state_dict())}")
     own = dict(dst.named_parameters())
+    buffers = dict(dst.named_buffers())
     for key, value in src.state_dict().items():
-        own[key].data = value.detach().numpy().copy()
+        array = value.detach().numpy().copy()
+        if key in own:
+            own[key].data = mini.tensor(array)
+        elif key in buffers:
+            dst.load_state_dict({key: mini.tensor(array)}, strict=False)
 
 
 @pytest.mark.parametrize("cls", ["RNN", "LSTM", "GRU"])
