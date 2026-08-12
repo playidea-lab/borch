@@ -1619,7 +1619,7 @@ class MultiheadAttention(Module):
 
         scores = (q @ k.transpose(-2, -1)) / _math.sqrt(self.head_dim)
         if attn_mask is not None:
-            scores = scores.masked_fill(_mask_to_bool(attn_mask), float("-inf"))
+            scores = _apply_mask(scores, attn_mask)
         weights = softmax(scores, dim=-1)
 
         merged = (weights @ v).transpose(1, 2).reshape(B, T, E)
@@ -1638,14 +1638,19 @@ def _split_heads(t, B, T, heads, head_dim):
     return t.reshape(B, T, heads, head_dim).transpose(1, 2)      # (B, heads, T, head_dim)
 
 
-def _mask_to_bool(mask):
-    """torch 는 두 가지를 받는다 — 불리언(True 가 가림)과 실수(더한다).
+def _apply_mask(scores, mask):
+    """torch 는 마스크를 두 가지로 받는다.
 
-    여기서는 불리언만 지원하고, 실수 마스크는 0 이 아닌 자리를 가리는 것으로 본다.
-    (인과 마스크는 어느 쪽으로 만들어도 결과가 같다.)
+      불리언 — True 인 자리를 가린다(-inf 로 채운다)
+      실수   — 점수에 **더한다.** `generate_square_subsequent_mask` 가 주는 0/-inf 가 그것이다
+
+    실수 마스크를 "0 이 아니면 가림"으로 뭉뚱그리면 인과 마스크는 우연히 맞지만
+    가중치를 조절하는 마스크에서 어긋난다.
     """
-    data = mask.data if isinstance(mask, Tensor) else _np.asarray(mask)
-    return Tensor(data.astype(bool) if data.dtype.kind == "b" else (data != 0))
+    m = mask if isinstance(mask, Tensor) else Tensor(_np.asarray(mask))
+    if m.data.dtype.kind == "b":
+        return scores.masked_fill(m, float("-inf"))
+    return scores + m
 
 
 class TransformerEncoderLayer(Module):
@@ -1709,8 +1714,101 @@ class TransformerEncoder(Module):
         return self.norm(x) if self.norm is not None else x
 
 
-for _name in ("Transformer", "TransformerDecoder", "TransformerDecoderLayer"):
-    setattr(nn, _name, _nn_unsupported(_name))
+
+class TransformerDecoderLayer(Module):
+    """자기 어텐션 → **인코더를 보는 어텐션** → 피드포워드.
+
+    인코더 층과 다른 점은 가운데 하나다 — `multihead_attn` 이 자기 자신이 아니라
+    인코더의 출력(memory)을 본다. 번역에서 "지금까지 쓴 문장"과 "원문"을 함께 보는 자리다.
+    """
+
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
+                 activation="relu", batch_first=False, norm_first=False, layer_norm_eps=1e-5):
+        super().__init__()
+        self.self_attn = MultiheadAttention(d_model, nhead, batch_first=batch_first)
+        self.multihead_attn = MultiheadAttention(d_model, nhead, batch_first=batch_first)
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.linear2 = Linear(dim_feedforward, d_model)
+        self.norm1 = LayerNorm(d_model, eps=layer_norm_eps)
+        self.norm2 = LayerNorm(d_model, eps=layer_norm_eps)
+        self.norm3 = LayerNorm(d_model, eps=layer_norm_eps)
+        self.dropout = Dropout(dropout)
+        self.norm_first = norm_first
+        self.activation = relu if activation == "relu" else (
+            _gelu if activation == "gelu" else activation)
+
+    def _sa(self, x, mask):
+        return self.dropout(self.self_attn(x, attn_mask=mask, need_weights=False)[0])
+
+    def _mha(self, x, memory, mask):
+        return self.dropout(
+            self.multihead_attn(x, memory, memory, attn_mask=mask, need_weights=False)[0])
+
+    def _ff(self, x):
+        return self.dropout(self.linear2(self.dropout(self.activation(self.linear1(x)))))
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None):
+        x = tgt
+        if self.norm_first:
+            x = x + self._sa(self.norm1(x), tgt_mask)
+            x = x + self._mha(self.norm2(x), memory, memory_mask)
+            x = x + self._ff(self.norm3(x))
+        else:
+            x = self.norm1(x + self._sa(x, tgt_mask))
+            x = self.norm2(x + self._mha(x, memory, memory_mask))
+            x = self.norm3(x + self._ff(x))
+        return x
+
+
+class TransformerDecoder(Module):
+    def __init__(self, decoder_layer, num_layers, norm=None):
+        super().__init__()
+        import copy as _copy
+        self.layers = ModuleList([_copy.deepcopy(decoder_layer) for _ in range(num_layers)])
+        self._modules["layers"] = self.layers
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None):
+        x = tgt
+        for layer in self.layers:
+            x = layer(x, memory, tgt_mask=tgt_mask, memory_mask=memory_mask)
+        return self.norm(x) if self.norm is not None else x
+
+
+class Transformer(Module):
+    """인코더와 디코더를 묶은 것. 「Attention Is All You Need」의 그림 전체다."""
+
+    def __init__(self, d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
+                 dim_feedforward=2048, dropout=0.1, activation="relu",
+                 batch_first=False, norm_first=False, layer_norm_eps=1e-5):
+        super().__init__()
+        common = dict(dim_feedforward=dim_feedforward, dropout=dropout, activation=activation,
+                      batch_first=batch_first, norm_first=norm_first, layer_norm_eps=layer_norm_eps)
+        self.encoder = TransformerEncoder(
+            TransformerEncoderLayer(d_model, nhead, **common), num_encoder_layers,
+            LayerNorm(d_model, eps=layer_norm_eps))
+        self.decoder = TransformerDecoder(
+            TransformerDecoderLayer(d_model, nhead, **common), num_decoder_layers,
+            LayerNorm(d_model, eps=layer_norm_eps))
+        self.d_model = d_model
+        self.nhead = nhead
+        self.batch_first = batch_first
+
+    def forward(self, src, tgt, src_mask=None, tgt_mask=None, memory_mask=None):
+        memory = self.encoder(src, mask=src_mask)
+        return self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_mask=memory_mask)
+
+    @staticmethod
+    def generate_square_subsequent_mask(sz):
+        """윗삼각을 -inf 로 채운 **실수** 마스크. 더해서 쓴다.
+
+        32장의 "미래를 보지 못하게" 가 이 한 줄이다.
+        """
+        m = _np.zeros((sz, sz), dtype=_DEFAULT_DTYPE)
+        m[_np.triu_indices(sz, 1)] = -_np.inf
+        return Tensor(m)
+
 
 nn.Module = Module
 nn.Parameter = Parameter
@@ -1731,6 +1829,9 @@ nn.GRU = GRU
 nn.MultiheadAttention = MultiheadAttention
 nn.TransformerEncoderLayer = TransformerEncoderLayer
 nn.TransformerEncoder = TransformerEncoder
+nn.TransformerDecoderLayer = TransformerDecoderLayer
+nn.TransformerDecoder = TransformerDecoder
+nn.Transformer = Transformer
 nn.MaxPool2d = MaxPool2d
 nn.Sequential = Sequential
 nn.ModuleList = ModuleList

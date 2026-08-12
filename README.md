@@ -87,7 +87,7 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | **축약** | `sum`·`mean`·`max`·`min`(values/indices) · `std`(편향/비편향) — 전부 역전파 포함 |
 | **nn** | `Module` · `Linear` · `Conv2d` · `MaxPool2d` · `Embedding` · `LayerNorm` · `BatchNorm2d` · `Dropout` · `Sequential` · `ModuleList` |
 | **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태 |
-| **트랜스포머** | `MultiheadAttention` · `TransformerEncoderLayer` · `TransformerEncoder` — 인과 마스크 · `norm_first` · gelu |
+| **트랜스포머** | `MultiheadAttention` · 인코더·디코더 층 · `nn.Transformer` — 불리언·실수 마스크 · `norm_first` · gelu |
 | **손실** | `MSELoss` · `BCELoss` · `BCEWithLogitsLoss` · `CrossEntropyLoss` |
 | **optim** | `SGD`(momentum) · `Adam` · `lr_scheduler.StepLR` |
 | **데이터** | `Dataset` · `TensorDataset` · `DataLoader` · 샘플러 · `random_split` · `collate_fn` |
@@ -95,7 +95,7 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 
 ## 일부러 지원하지 않는 것
 
-`CUDA` · 사전학습 가중치 · 디코더(`Transformer`·`TransformerDecoder`) · 혼합정밀도
+`CUDA` · 사전학습 가중치 · 혼합정밀도 · 분산 · `torch.compile`
 
 **거절 목록이 긴 것이 의도다.** GPU·저장된 모델·사전학습은 브라우저를 벗어나야 배우는 것들이고,
 여기서 흉내 내면 그 교훈이 사라진다.

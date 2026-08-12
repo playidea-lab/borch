@@ -522,6 +522,88 @@ def test_encoder_backward():
          what="in_proj_weight 기울기")
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"norm_first": True}])
+def test_decoder_layer(kwargs):
+    rl = real.nn.TransformerDecoderLayer(8, 2, dim_feedforward=16, dropout=0.0,
+                                         batch_first=True, **kwargs)
+    nl = mini.nn.TransformerDecoderLayer(8, 2, dim_feedforward=16, dropout=0.0,
+                                         batch_first=True, **kwargs)
+    copy_state(rl, nl)
+    rl.eval()
+    nl.eval()
+    rng = np.random.default_rng(0)
+    tgt = rng.standard_normal((2, 4, 8)).astype(np.float32)
+    mem = rng.standard_normal((2, 6, 8)).astype(np.float32)
+    same(rl(real.tensor(tgt), real.tensor(mem)),
+         nl(mini.tensor(tgt), mini.tensor(mem)), tol=1e-4, what=f"DecoderLayer {kwargs}")
+
+
+def test_square_subsequent_mask():
+    r = real.nn.Transformer.generate_square_subsequent_mask(4).numpy()
+    n = mini.nn.Transformer.generate_square_subsequent_mask(4).data
+    assert np.array_equal(np.isneginf(r), np.isneginf(n)), "가려지는 자리가 같아야 한다"
+    assert np.array_equal(np.nan_to_num(r, neginf=0.0), np.nan_to_num(n, neginf=0.0))
+
+
+def test_float_mask_is_added_not_thresholded():
+    """실수 마스크는 점수에 **더한다.** 0 이 아니면 가린다고 뭉뚱그리면 여기서 갈린다."""
+    rm = real.nn.MultiheadAttention(8, 2, batch_first=True)
+    nm = mini.nn.MultiheadAttention(8, 2, batch_first=True)
+    copy_state(rm, nm)
+    x = np.random.default_rng(0).standard_normal((1, 4, 8)).astype(np.float32)
+    bias = np.zeros((4, 4), dtype=np.float32)
+    bias[0, 1] = -2.0                    # 가리는 게 아니라 **낮추는** 마스크
+    _, rw = rm(real.tensor(x), real.tensor(x), real.tensor(x), attn_mask=real.tensor(bias))
+    _, nw = nm(mini.tensor(x), mini.tensor(x), mini.tensor(x), attn_mask=mini.tensor(bias))
+    same(rw, nw, what="실수 마스크(가중치 조절)")
+
+
+def test_decoder_layer_causal_mask():
+    rl = real.nn.TransformerDecoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    nl = mini.nn.TransformerDecoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    copy_state(rl, nl)
+    rl.eval()
+    nl.eval()
+    rng = np.random.default_rng(0)
+    tgt = rng.standard_normal((2, 4, 8)).astype(np.float32)
+    mem = rng.standard_normal((2, 6, 8)).astype(np.float32)
+    same(rl(real.tensor(tgt), real.tensor(mem),
+            tgt_mask=real.nn.Transformer.generate_square_subsequent_mask(4)),
+         nl(mini.tensor(tgt), mini.tensor(mem),
+            tgt_mask=mini.nn.Transformer.generate_square_subsequent_mask(4)),
+         tol=1e-4, what="DecoderLayer 인과 마스크")
+
+
+def test_full_transformer():
+    kw = dict(d_model=8, nhead=2, num_encoder_layers=2, num_decoder_layers=2,
+              dim_feedforward=16, dropout=0.0, batch_first=True)
+    rt, nt = real.nn.Transformer(**kw), mini.nn.Transformer(**kw)
+    copy_state(rt, nt)
+    rt.eval()
+    nt.eval()
+    rng = np.random.default_rng(0)
+    src = rng.standard_normal((2, 6, 8)).astype(np.float32)
+    tgt = rng.standard_normal((2, 4, 8)).astype(np.float32)
+    same(rt(real.tensor(src), real.tensor(tgt)),
+         nt(mini.tensor(src), mini.tensor(tgt)), tol=1e-4, what="nn.Transformer")
+
+
+def test_transformer_backward():
+    kw = dict(d_model=8, nhead=2, num_encoder_layers=1, num_decoder_layers=1,
+              dim_feedforward=16, dropout=0.0, batch_first=True)
+    rt, nt = real.nn.Transformer(**kw), mini.nn.Transformer(**kw)
+    copy_state(rt, nt)
+    rt.eval()
+    nt.eval()
+    rng = np.random.default_rng(4)
+    src = rng.standard_normal((1, 3, 8)).astype(np.float32)
+    tgt = rng.standard_normal((1, 2, 8)).astype(np.float32)
+    rs, ns = real.tensor(src, requires_grad=True), mini.tensor(src, requires_grad=True)
+    rt(rs, real.tensor(tgt)).sum().backward()
+    nt(ns, mini.tensor(tgt)).sum().backward()
+    same(rs.grad, ns.grad, tol=1e-4, what="Transformer 입력 기울기")
+
+
 # ---------------------------------------------------------------- 손실
 
 def test_mse_loss():
