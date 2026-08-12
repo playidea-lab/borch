@@ -13,10 +13,11 @@ uv add ./nanotorch-1.2.2-py3-none-any.whl        # 릴리스에서 받은 파일
 브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
 
 ```js
-py.FS.writeFile("/nanotorch.whl", new Uint8Array(wheelBytes));
+// 파일 이름을 그대로 써야 한다 — micropip 이 이름에서 패키지명과 버전을 읽는다.
+py.FS.writeFile("/nanotorch-1.2.2-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
-await micropip.install("emfs:/nanotorch.whl")
+await micropip.install("emfs:/nanotorch-1.2.2-py3-none-any.whl")
 `);
 ```
 
