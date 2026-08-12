@@ -837,15 +837,25 @@ def _wrap(t):
 def stack(items, dim=0):
     items = [_wrap(t) for t in items]
     out = _np.stack([t.data for t in items], axis=dim)
-    return Tensor(out, any(t.requires_grad for t in items)) if not any(
-        t.requires_grad for t in items) else items[0]._make(
+    if not items:
+        return Tensor(out)
+    return items[0]._make(
         out, tuple(items),
-        lambda g: tuple(_np.take(g, i, axis=dim) for i in range(len(items))))
+        lambda g: tuple(_np.take(_np.asarray(g), i, axis=dim) for i in range(len(items))),
+        "StackBackward0")
 
 
 def cat(items, dim=0):
     items = [_wrap(t) for t in items]
-    return Tensor(_np.concatenate([t.data for t in items], axis=dim))
+    out = _np.concatenate([t.data for t in items], axis=dim)
+    sizes = [t.data.shape[dim] for t in items]
+
+    def back(g):
+        g = _np.asarray(g)
+        cuts = _np.cumsum(sizes)[:-1]
+        return tuple(_np.split(g, cuts, axis=dim))
+
+    return items[0]._make(out, tuple(items), back, "CatBackward0")
 
 
 def where(cond, a, b):
@@ -1394,7 +1404,82 @@ class BatchNorm2d(Module):
             self.bias.data.reshape(shape))
 
 
-for _name in ("TransformerEncoderLayer", "TransformerEncoder", "LSTM", "GRU", "RNN"):
+
+class RNN(Module):
+    """가장 단순한 순환 층. 29장이 가르치는 그것이다.
+
+        h_t = tanh(W_ih·x_t + b_ih + W_hh·h_{t-1} + b_hh)
+
+    시간 방향은 파이썬 반복문이다 — 순환은 원래 앞을 끝내야 뒤를 볼 수 있어서
+    (30장) 병렬화가 안 되고, 그래서 느리다. 그 느림 자체가 배울 점이기도 하다.
+    """
+
+    def __init__(self, input_size, hidden_size, num_layers=1, nonlinearity="tanh",
+                 bias=True, batch_first=False):
+        super().__init__()
+        if nonlinearity not in ("tanh", "relu"):
+            raise ValueError("nonlinearity 는 'tanh' 나 'relu' 여야 합니다.")
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.nonlinearity = nonlinearity
+        self.batch_first = batch_first
+        self.has_bias = bias
+
+        bound = 1.0 / _math.sqrt(hidden_size)
+        for layer in range(num_layers):
+            in_size = input_size if layer == 0 else hidden_size
+            # 이름을 torch 와 같게 둔다 — state_dict 키가 맞아야 저장·불러오기가 통한다.
+            setattr(self, f"weight_ih_l{layer}", Parameter(
+                _rng.uniform(-bound, bound, (hidden_size, in_size)).astype(_DEFAULT_DTYPE)))
+            setattr(self, f"weight_hh_l{layer}", Parameter(
+                _rng.uniform(-bound, bound, (hidden_size, hidden_size)).astype(_DEFAULT_DTYPE)))
+            if bias:
+                setattr(self, f"bias_ih_l{layer}", Parameter(
+                    _rng.uniform(-bound, bound, hidden_size).astype(_DEFAULT_DTYPE)))
+                setattr(self, f"bias_hh_l{layer}", Parameter(
+                    _rng.uniform(-bound, bound, hidden_size).astype(_DEFAULT_DTYPE)))
+
+    def forward(self, x, hx=None):
+        if self.batch_first:
+            x = x.transpose(0, 1)                      # (N,T,I) → (T,N,I)
+        T, N = x.data.shape[0], x.data.shape[1]
+        act = tanh if self.nonlinearity == "tanh" else relu
+
+        if hx is None:
+            hx = zeros(self.num_layers, N, self.hidden_size)
+
+        layer_input = x
+        finals = []
+        for layer in range(self.num_layers):
+            w_ih = getattr(self, f"weight_ih_l{layer}")
+            w_hh = getattr(self, f"weight_hh_l{layer}")
+            b_ih = getattr(self, f"bias_ih_l{layer}", None)
+            b_hh = getattr(self, f"bias_hh_l{layer}", None)
+
+            h = hx[layer]
+            steps = []
+            for t in range(T):
+                z = layer_input[t] @ w_ih.transpose(0, 1) + h @ w_hh.transpose(0, 1)
+                if self.has_bias:
+                    z = z + b_ih + b_hh
+                h = act(z)
+                steps.append(h)
+            layer_input = stack(steps)                 # (T, N, H)
+            finals.append(h)
+
+        out = layer_input
+        if self.batch_first:
+            out = out.transpose(0, 1)
+        return out, stack(finals)
+
+    def __repr__(self):
+        return (f"RNN({self.input_size}, {self.hidden_size}"
+                + (f", num_layers={self.num_layers}" if self.num_layers > 1 else "")
+                + (", batch_first=True" if self.batch_first else "") + ")")
+
+
+for _name in ("TransformerEncoderLayer", "TransformerEncoder", "LSTM", "GRU"):
     setattr(nn, _name, _nn_unsupported(_name))
 
 nn.Module = Module
@@ -1410,6 +1495,7 @@ nn.Conv2d = Conv2d
 nn.Embedding = Embedding
 nn.LayerNorm = LayerNorm
 nn.BatchNorm2d = BatchNorm2d
+nn.RNN = RNN
 nn.MaxPool2d = MaxPool2d
 nn.Sequential = Sequential
 nn.ModuleList = ModuleList

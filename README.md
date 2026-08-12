@@ -93,7 +93,7 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 
 ## 일부러 지원하지 않는 것
 
-`CUDA` · 사전학습 가중치 · `TransformerEncoderLayer` · `LSTM`/`GRU`/`RNN` · 혼합정밀도
+`CUDA` · 사전학습 가중치 · `TransformerEncoderLayer` · `LSTM`/`GRU` · 혼합정밀도
 
 **거절 목록이 긴 것이 의도다.** GPU·저장된 모델·사전학습은 브라우저를 벗어나야 배우는 것들이고,
 여기서 흉내 내면 그 교훈이 사라진다.

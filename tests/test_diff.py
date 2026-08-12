@@ -322,6 +322,68 @@ def test_max_pool2d_and_backward():
     same(rx.grad, mx.grad, what="max_pool2d 기울기")
 
 
+def copy_rnn(src, dst):
+    for key, value in src.state_dict().items():
+        getattr(dst, key).data = value.detach().numpy().copy()
+
+
+@pytest.mark.parametrize("kwargs", [
+    {}, {"num_layers": 2}, {"batch_first": True},
+    {"nonlinearity": "relu"}, {"bias": False},
+])
+def test_rnn_forward(kwargs):
+    rr, nr = real.nn.RNN(4, 6, **kwargs), mini.nn.RNN(4, 6, **kwargs)
+    copy_rnn(rr, nr)
+    shape = (5, 3, 4) if kwargs.get("batch_first") else (3, 5, 4)
+    x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    ro, rh = rr(real.tensor(x))
+    no, nh = nr(mini.tensor(x))
+    same(ro, no, what=f"RNN 출력 {kwargs}")
+    same(rh, nh, what=f"RNN h_n {kwargs}")
+
+
+def test_rnn_state_dict_keys():
+    rr, nr = real.nn.RNN(3, 4, num_layers=2), mini.nn.RNN(3, 4, num_layers=2)
+    assert list(rr.state_dict().keys()) == list(nr.state_dict().keys())
+
+
+def test_rnn_backward():
+    rr, nr = real.nn.RNN(3, 4), mini.nn.RNN(3, 4)
+    copy_rnn(rr, nr)
+    x = np.random.default_rng(1).standard_normal((5, 2, 3)).astype(np.float32)
+    rx, nx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    rr(rx)[0].sum().backward()
+    nr(nx)[0].sum().backward()
+    same(rx.grad, nx.grad, tol=1e-4, what="RNN 입력 기울기")
+    same(rr.weight_hh_l0.grad, nr.weight_hh_l0.grad, tol=1e-4, what="RNN weight_hh 기울기")
+
+
+def test_rnn_initial_hidden():
+    """h_0 를 직접 주면 그것부터 시작해야 한다."""
+    rr, nr = real.nn.RNN(3, 4), mini.nn.RNN(3, 4)
+    copy_rnn(rr, nr)
+    x = np.zeros((2, 1, 3), dtype=np.float32)
+    h0 = np.ones((1, 1, 4), dtype=np.float32) * 0.5
+    same(rr(real.tensor(x), real.tensor(h0))[0], nr(mini.tensor(x), mini.tensor(h0))[0],
+         what="RNN 초기 은닉 상태")
+
+
+def test_stack_and_cat_backward():
+    a = mini.tensor([1.0, 2.0], requires_grad=True)
+    b = mini.tensor([3.0, 4.0], requires_grad=True)
+    ra = real.tensor([1.0, 2.0], requires_grad=True)
+    rb = real.tensor([3.0, 4.0], requires_grad=True)
+    (mini.stack([a, b]) * mini.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
+    (real.stack([ra, rb]) * real.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
+    same(ra.grad, a.grad, what="stack 기울기")
+
+    c = mini.tensor([1.0], requires_grad=True)
+    rc = real.tensor([1.0], requires_grad=True)
+    mini.cat([c, c * 2]).sum().backward()
+    real.cat([rc, rc * 2]).sum().backward()
+    same(rc.grad, c.grad, what="cat 기울기")
+
+
 # ---------------------------------------------------------------- 손실
 
 def test_mse_loss():
