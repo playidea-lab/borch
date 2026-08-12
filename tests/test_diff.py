@@ -384,6 +384,144 @@ def test_stack_and_cat_backward():
     same(rc.grad, c.grad, what="cat 기울기")
 
 
+def copy_state(src, dst):
+    """torch 쪽 가중치를 그대로 심는다. 초기값이 같아야 값을 비교할 수 있다."""
+    assert list(src.state_dict().keys()) == list(dst.state_dict().keys()), (
+        f"state_dict 키가 다르다\n  torch {list(src.state_dict())}\n  nano  {list(dst.state_dict())}")
+    own = dict(dst.named_parameters())
+    for key, value in src.state_dict().items():
+        own[key].data = value.detach().numpy().copy()
+
+
+@pytest.mark.parametrize("cls", ["RNN", "LSTM", "GRU"])
+@pytest.mark.parametrize("kwargs", [
+    {}, {"num_layers": 2}, {"batch_first": True}, {"bias": False},
+])
+def test_recurrent_forward(cls, kwargs):
+    rr = getattr(real.nn, cls)(4, 6, **kwargs)
+    nr = getattr(mini.nn, cls)(4, 6, **kwargs)
+    copy_state(rr, nr)
+    shape = (5, 3, 4) if kwargs.get("batch_first") else (3, 5, 4)
+    x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    ro, rs = rr(real.tensor(x))
+    no, ns = nr(mini.tensor(x))
+    same(ro, no, what=f"{cls} 출력 {kwargs}")
+    if cls == "LSTM":
+        same(rs[0], ns[0], what="LSTM h_n")
+        same(rs[1], ns[1], what="LSTM c_n")
+    else:
+        same(rs, ns, what=f"{cls} 마지막 상태")
+
+
+@pytest.mark.parametrize("cls", ["RNN", "LSTM", "GRU"])
+def test_recurrent_backward(cls):
+    rr, nr = getattr(real.nn, cls)(3, 4), getattr(mini.nn, cls)(3, 4)
+    copy_state(rr, nr)
+    x = np.random.default_rng(1).standard_normal((5, 2, 3)).astype(np.float32)
+    rx, nx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    rr(rx)[0].sum().backward()
+    nr(nx)[0].sum().backward()
+    same(rx.grad, nx.grad, tol=1e-4, what=f"{cls} 입력 기울기")
+    same(rr.weight_hh_l0.grad, nr.weight_hh_l0.grad, tol=1e-4, what=f"{cls} weight_hh 기울기")
+
+
+def test_lstm_gate_order():
+    """게이트 순서(i, f, g, o)가 틀리면 값은 그럴듯한데 학습이 안 된다."""
+    rr, nr = real.nn.LSTM(2, 3), mini.nn.LSTM(2, 3)
+    copy_state(rr, nr)
+    x = np.ones((1, 1, 2), dtype=np.float32)
+    same(rr(real.tensor(x))[1][1], nr(mini.tensor(x))[1][1], what="LSTM c_n (게이트 순서)")
+
+
+def test_gru_bias_inside_reset_gate():
+    """n 게이트에서 r 은 편향까지 포함한 은닉 항에 곱해진다. 밖에 두면 미세하게 어긋난다."""
+    rr, nr = real.nn.GRU(2, 3), mini.nn.GRU(2, 3)
+    copy_state(rr, nr)
+    x = np.random.default_rng(2).standard_normal((4, 1, 2)).astype(np.float32)
+    same(rr(real.tensor(x))[0], nr(mini.tensor(x))[0], what="GRU 출력")
+
+
+@pytest.mark.parametrize("batch_first", [True, False])
+def test_multihead_attention(batch_first):
+    rm = real.nn.MultiheadAttention(8, 2, batch_first=batch_first)
+    nm = mini.nn.MultiheadAttention(8, 2, batch_first=batch_first)
+    copy_state(rm, nm)
+    x = np.random.default_rng(0).standard_normal(
+        (2, 5, 8) if batch_first else (5, 2, 8)).astype(np.float32)
+    ro, rw = rm(real.tensor(x), real.tensor(x), real.tensor(x))
+    no, nw = nm(mini.tensor(x), mini.tensor(x), mini.tensor(x))
+    same(ro, no, what="MHA 출력")
+    same(rw, nw, what="MHA 가중치(헤드 평균)")
+
+
+def test_multihead_attention_mask():
+    rm = real.nn.MultiheadAttention(8, 2, batch_first=True)
+    nm = mini.nn.MultiheadAttention(8, 2, batch_first=True)
+    copy_state(rm, nm)
+    x = np.random.default_rng(0).standard_normal((2, 5, 8)).astype(np.float32)
+    mask = np.triu(np.ones((5, 5), dtype=bool), 1)
+    _, rw = rm(real.tensor(x), real.tensor(x), real.tensor(x), attn_mask=real.tensor(mask))
+    _, nw = nm(mini.tensor(x), mini.tensor(x), mini.tensor(x), attn_mask=mini.tensor(mask))
+    same(rw, nw, what="MHA 인과 마스크")
+    upper = np.triu(np.ones((5, 5)), 1).astype(bool)
+    assert np.abs(nw.data[0][upper]).max() < 1e-6, "가려진 자리는 0이어야 한다"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {}, {"norm_first": True}, {"activation": "gelu"},
+])
+def test_encoder_layer(kwargs):
+    rl = real.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0,
+                                         batch_first=True, **kwargs)
+    nl = mini.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0,
+                                         batch_first=True, **kwargs)
+    copy_state(rl, nl)
+    rl.eval()
+    nl.eval()
+    x = np.random.default_rng(0).standard_normal((2, 5, 8)).astype(np.float32)
+    same(rl(real.tensor(x)), nl(mini.tensor(x)), tol=1e-4, what=f"EncoderLayer {kwargs}")
+
+
+@pytest.mark.parametrize("mode", ["eval", "train"])
+def test_encoder_layer_mask(mode):
+    rl = real.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    nl = mini.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    copy_state(rl, nl)
+    getattr(rl, mode)()
+    getattr(nl, mode)()
+    x = np.random.default_rng(0).standard_normal((2, 5, 8)).astype(np.float32)
+    mask = np.triu(np.ones((5, 5), dtype=bool), 1)
+    same(rl(real.tensor(x), src_mask=real.tensor(mask)),
+         nl(mini.tensor(x), src_mask=mini.tensor(mask)), tol=1e-4,
+         what=f"EncoderLayer 마스크 ({mode})")
+
+
+def test_transformer_encoder_stack():
+    rl = real.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    nl = mini.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    re_, ne = real.nn.TransformerEncoder(rl, 3), mini.nn.TransformerEncoder(nl, 3)
+    copy_state(re_, ne)
+    re_.eval()
+    ne.eval()
+    x = np.random.default_rng(0).standard_normal((2, 5, 8)).astype(np.float32)
+    same(re_(real.tensor(x)), ne(mini.tensor(x)), tol=1e-4, what="TransformerEncoder 3층")
+
+
+def test_encoder_backward():
+    rl = real.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    nl = mini.nn.TransformerEncoderLayer(8, 2, dim_feedforward=16, dropout=0.0, batch_first=True)
+    copy_state(rl, nl)
+    rl.eval()
+    nl.eval()
+    x = np.random.default_rng(3).standard_normal((2, 5, 8)).astype(np.float32)
+    rx, nx = real.tensor(x, requires_grad=True), mini.tensor(x, requires_grad=True)
+    rl(rx).sum().backward()
+    nl(nx).sum().backward()
+    same(rx.grad, nx.grad, tol=1e-4, what="EncoderLayer 입력 기울기")
+    same(rl.self_attn.in_proj_weight.grad, nl.self_attn.in_proj_weight.grad, tol=1e-4,
+         what="in_proj_weight 기울기")
+
+
 # ---------------------------------------------------------------- 손실
 
 def test_mse_loss():
@@ -518,8 +656,8 @@ def test_sampler_and_shuffle_conflict():
 # ---------------------------------------------------------------- 거절
 
 @pytest.mark.parametrize("call", [
-    lambda: mini.nn.LSTM(2, 2),
-    lambda: mini.nn.TransformerEncoderLayer(8, 2),
+    lambda: mini.nn.Transformer(),
+    lambda: mini.nn.TransformerDecoderLayer(8, 2),
     lambda: mini.zeros(2).to("cuda"),
     lambda: mini.cuda.synchronize(),
 ])

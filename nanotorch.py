@@ -1405,81 +1405,311 @@ class BatchNorm2d(Module):
 
 
 
-class RNN(Module):
-    """가장 단순한 순환 층. 29장이 가르치는 그것이다.
+class _RNNBase(Module):
+    """RNN·LSTM·GRU 의 공통 부분 — 파라미터 만들기와 층·시간 루프.
 
-        h_t = tanh(W_ih·x_t + b_ih + W_hh·h_{t-1} + b_hh)
+    파라미터 이름을 torch 와 같게 둔다(`weight_ih_l0` …). 이름이 맞아야 `state_dict` 키가
+    맞고, 체크포인트가 양쪽을 오간다.
 
-    시간 방향은 파이썬 반복문이다 — 순환은 원래 앞을 끝내야 뒤를 볼 수 있어서
-    (30장) 병렬화가 안 되고, 그래서 느리다. 그 느림 자체가 배울 점이기도 하다.
+    시간 방향은 파이썬 반복문이다. 순환은 앞을 끝내야 뒤를 볼 수 있어서(30장) 병렬화가 안 되고,
+    그 느림이 곧 트랜스포머가 나온 이유다. 다만 **입력 쪽 곱은 h 에 안 걸리므로**
+    시간 전체를 한 번에 계산해 둔다 — 반복문 안에는 은닉 쪽 곱만 남는다.
     """
 
-    def __init__(self, input_size, hidden_size, num_layers=1, nonlinearity="tanh",
-                 bias=True, batch_first=False):
+    gates = 1
+
+    def __init__(self, input_size, hidden_size, num_layers=1, bias=True, batch_first=False):
         super().__init__()
-        if nonlinearity not in ("tanh", "relu"):
-            raise ValueError("nonlinearity 는 'tanh' 나 'relu' 여야 합니다.")
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.nonlinearity = nonlinearity
         self.batch_first = batch_first
         self.has_bias = bias
 
         bound = 1.0 / _math.sqrt(hidden_size)
+        g = self.gates
         for layer in range(num_layers):
             in_size = input_size if layer == 0 else hidden_size
-            # 이름을 torch 와 같게 둔다 — state_dict 키가 맞아야 저장·불러오기가 통한다.
             setattr(self, f"weight_ih_l{layer}", Parameter(
-                _rng.uniform(-bound, bound, (hidden_size, in_size)).astype(_DEFAULT_DTYPE)))
+                _rng.uniform(-bound, bound, (g * hidden_size, in_size)).astype(_DEFAULT_DTYPE)))
             setattr(self, f"weight_hh_l{layer}", Parameter(
-                _rng.uniform(-bound, bound, (hidden_size, hidden_size)).astype(_DEFAULT_DTYPE)))
+                _rng.uniform(-bound, bound, (g * hidden_size, hidden_size)).astype(_DEFAULT_DTYPE)))
             if bias:
                 setattr(self, f"bias_ih_l{layer}", Parameter(
-                    _rng.uniform(-bound, bound, hidden_size).astype(_DEFAULT_DTYPE)))
+                    _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE)))
                 setattr(self, f"bias_hh_l{layer}", Parameter(
-                    _rng.uniform(-bound, bound, hidden_size).astype(_DEFAULT_DTYPE)))
+                    _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE)))
 
-    def forward(self, x, hx=None):
+    def _weights(self, layer):
+        return (getattr(self, f"weight_ih_l{layer}"), getattr(self, f"weight_hh_l{layer}"),
+                getattr(self, f"bias_ih_l{layer}", None), getattr(self, f"bias_hh_l{layer}", None))
+
+    def _run(self, x, init):
+        """(출력, 층별 마지막 상태 목록). init 은 층별 초기 상태를 주는 함수."""
         if self.batch_first:
-            x = x.transpose(0, 1)                      # (N,T,I) → (T,N,I)
+            x = x.transpose(0, 1)                       # (N,T,I) → (T,N,I)
         T, N = x.data.shape[0], x.data.shape[1]
-        act = tanh if self.nonlinearity == "tanh" else relu
-
-        if hx is None:
-            hx = zeros(self.num_layers, N, self.hidden_size)
 
         layer_input = x
         finals = []
         for layer in range(self.num_layers):
-            w_ih = getattr(self, f"weight_ih_l{layer}")
-            w_hh = getattr(self, f"weight_hh_l{layer}")
-            b_ih = getattr(self, f"bias_ih_l{layer}", None)
-            b_hh = getattr(self, f"bias_hh_l{layer}", None)
-
-            h = hx[layer]
+            w_ih, w_hh, b_ih, b_hh = self._weights(layer)
+            pre = layer_input @ w_ih.transpose(0, 1)     # (T, N, gates*H) — h 와 무관
+            if self.has_bias:
+                pre = pre + b_ih
+            state = init(layer, N)
             steps = []
             for t in range(T):
-                z = layer_input[t] @ w_ih.transpose(0, 1) + h @ w_hh.transpose(0, 1)
-                if self.has_bias:
-                    z = z + b_ih + b_hh
-                h = act(z)
-                steps.append(h)
-            layer_input = stack(steps)                 # (T, N, H)
-            finals.append(h)
+                state, out = self._step(pre[t], state, w_hh, b_hh)
+                steps.append(out)
+            layer_input = stack(steps)
+            finals.append(state)
 
         out = layer_input
         if self.batch_first:
             out = out.transpose(0, 1)
-        return out, stack(finals)
+        return out, finals
+
+    def _step(self, pre_t, state, w_hh, b_hh):
+        raise NotImplementedError
 
     def __repr__(self):
-        return (f"RNN({self.input_size}, {self.hidden_size}"
+        return (f"{type(self).__name__}({self.input_size}, {self.hidden_size}"
                 + (f", num_layers={self.num_layers}" if self.num_layers > 1 else "")
                 + (", batch_first=True" if self.batch_first else "") + ")")
 
 
-for _name in ("TransformerEncoderLayer", "TransformerEncoder", "LSTM", "GRU"):
+class RNN(_RNNBase):
+    """h_t = tanh(W_ih·x_t + b_ih + W_hh·h_{t-1} + b_hh) — 29장이 가르치는 그것."""
+
+    def __init__(self, *a, nonlinearity="tanh", **k):
+        if nonlinearity not in ("tanh", "relu"):
+            raise ValueError("nonlinearity 는 'tanh' 나 'relu' 여야 합니다.")
+        self.nonlinearity = nonlinearity
+        super().__init__(*a, **k)
+
+    def _step(self, pre_t, h, w_hh, b_hh):
+        act = tanh if self.nonlinearity == "tanh" else relu
+        z = pre_t + h @ w_hh.transpose(0, 1)
+        if self.has_bias:
+            z = z + b_hh
+        h = act(z)
+        return h, h
+
+    def forward(self, x, hx=None):
+        if hx is None:
+            hx = zeros(self.num_layers, x.data.shape[1 if not self.batch_first else 0],
+                       self.hidden_size)
+        out, finals = self._run(x, lambda layer, n: hx[layer])
+        return out, stack(finals)
+
+
+class LSTM(_RNNBase):
+    """게이트 넷으로 **무엇을 잊고 무엇을 남길지** 배운다.
+
+        i = σ(...)  잊지 말고 넣을 것      f = σ(...)  버릴 것
+        g = tanh(...) 넣을 값             o = σ(...)  내보낼 것
+        c' = f·c + i·g                   h' = o·tanh(c')
+
+    `weight_ih_l0` 는 (4H, I) 이고 행 순서가 **i, f, g, o** 다. torch 와 같게 둬야
+    체크포인트가 오간다 — 순서를 바꾸면 값은 그럴듯한데 학습이 안 된다.
+    """
+
+    gates = 4
+
+    def _step(self, pre_t, state, w_hh, b_hh):
+        h, c = state
+        z = pre_t + h @ w_hh.transpose(0, 1)
+        if self.has_bias:
+            z = z + b_hh
+        H = self.hidden_size
+        i = sigmoid(z[:, 0 * H:1 * H])
+        f = sigmoid(z[:, 1 * H:2 * H])
+        g = tanh(z[:, 2 * H:3 * H])
+        o = sigmoid(z[:, 3 * H:4 * H])
+        c = f * c + i * g
+        h = o * tanh(c)
+        return (h, c), h
+
+    def forward(self, x, hx=None):
+        batch = x.data.shape[0 if self.batch_first else 1]
+        if hx is None:
+            zero = zeros(self.num_layers, batch, self.hidden_size)
+            hx = (zero, zeros(self.num_layers, batch, self.hidden_size))
+        h0, c0 = hx
+        out, finals = self._run(x, lambda layer, n: (h0[layer], c0[layer]))
+        return out, (stack([h for h, _ in finals]), stack([c for _, c in finals]))
+
+
+class GRU(_RNNBase):
+    """게이트 셋. LSTM 보다 단순하고 대개 비슷하게 동작한다.
+
+        r = σ(...)  과거를 얼마나 볼까      z = σ(...)  얼마나 갈아탈까
+        n = tanh(W_in·x + b_in + r·(W_hn·h + b_hn))
+        h' = (1-z)·n + z·h
+
+    n 게이트에서 **r 이 편향까지 포함한 은닉 항에 곱해진다** — 편향을 밖에 두면
+    값이 미세하게 어긋나고, 그건 눈에 안 띈다.
+    """
+
+    gates = 3
+
+    def _step(self, pre_t, h, w_hh, b_hh):
+        H = self.hidden_size
+        hh = h @ w_hh.transpose(0, 1)
+        if self.has_bias:
+            hh = hh + b_hh
+        r = sigmoid(pre_t[:, 0 * H:1 * H] + hh[:, 0 * H:1 * H])
+        z = sigmoid(pre_t[:, 1 * H:2 * H] + hh[:, 1 * H:2 * H])
+        n = tanh(pre_t[:, 2 * H:3 * H] + r * hh[:, 2 * H:3 * H])
+        h = (1 - z) * n + z * h
+        return h, h
+
+    def forward(self, x, hx=None):
+        if hx is None:
+            hx = zeros(self.num_layers, x.data.shape[0 if self.batch_first else 1],
+                       self.hidden_size)
+        out, finals = self._run(x, lambda layer, n: hx[layer])
+        return out, stack(finals)
+
+
+
+
+class MultiheadAttention(Module):
+    """45일차에 짠 어텐션을 여러 관점으로 나눈 것.
+
+    torch 는 Q·K·V 의 가중치를 **하나로 묶어** `in_proj_weight` (3E, E) 에 담는다 —
+    행렬곱을 세 번이 아니라 한 번 하려는 것이고, 그래서 체크포인트도 그 모양이다.
+    나눠 들면 값은 같아도 `state_dict` 가 안 맞는다.
+    """
+
+    def __init__(self, embed_dim, num_heads, bias=True, batch_first=False):
+        super().__init__()
+        if embed_dim % num_heads:
+            raise ValueError(f"embed_dim({embed_dim}) 이 num_heads({num_heads}) 로 안 나뉩니다.")
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.batch_first = batch_first
+
+        bound = _math.sqrt(1.0 / embed_dim)
+        self.in_proj_weight = Parameter(
+            _rng.uniform(-bound, bound, (3 * embed_dim, embed_dim)).astype(_DEFAULT_DTYPE))
+        self.in_proj_bias = Parameter(_np.zeros(3 * embed_dim, dtype=_DEFAULT_DTYPE)) if bias else None
+        self.out_proj = Linear(embed_dim, embed_dim, bias=bias)
+
+    def forward(self, query, key=None, value=None, attn_mask=None, need_weights=True):
+        key = query if key is None else key
+        value = query if value is None else value
+        if not self.batch_first:
+            query, key, value = (t.transpose(0, 1) for t in (query, key, value))
+
+        B, T, E = query.data.shape
+        S = key.data.shape[1]
+        w, b = self.in_proj_weight, self.in_proj_bias
+
+        def project(t, index, length):
+            piece = w[index * E:(index + 1) * E]
+            out = t @ piece.transpose(0, 1)
+            return out + b[index * E:(index + 1) * E] if b is not None else out
+
+        q = _split_heads(project(query, 0, T), B, T, self.num_heads, self.head_dim)
+        k = _split_heads(project(key, 1, S), B, S, self.num_heads, self.head_dim)
+        v = _split_heads(project(value, 2, S), B, S, self.num_heads, self.head_dim)
+
+        scores = (q @ k.transpose(-2, -1)) / _math.sqrt(self.head_dim)
+        if attn_mask is not None:
+            scores = scores.masked_fill(_mask_to_bool(attn_mask), float("-inf"))
+        weights = softmax(scores, dim=-1)
+
+        merged = (weights @ v).transpose(1, 2).reshape(B, T, E)
+        out = self.out_proj(merged)
+        if not self.batch_first:
+            out = out.transpose(0, 1)
+        if not need_weights:
+            return out, None
+        return out, weights.mean(dim=1)          # torch 는 헤드 평균을 돌려준다
+
+    def __repr__(self):
+        return f"MultiheadAttention(embed_dim={self.embed_dim}, num_heads={self.num_heads})"
+
+
+def _split_heads(t, B, T, heads, head_dim):
+    return t.reshape(B, T, heads, head_dim).transpose(1, 2)      # (B, heads, T, head_dim)
+
+
+def _mask_to_bool(mask):
+    """torch 는 두 가지를 받는다 — 불리언(True 가 가림)과 실수(더한다).
+
+    여기서는 불리언만 지원하고, 실수 마스크는 0 이 아닌 자리를 가리는 것으로 본다.
+    (인과 마스크는 어느 쪽으로 만들어도 결과가 같다.)
+    """
+    data = mask.data if isinstance(mask, Tensor) else _np.asarray(mask)
+    return Tensor(data.astype(bool) if data.dtype.kind == "b" else (data != 0))
+
+
+class TransformerEncoderLayer(Module):
+    """어텐션 + 피드포워드, 각각에 잔차와 정규화. 10장의 Block 그대로다."""
+
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
+                 activation="relu", batch_first=False, norm_first=False, layer_norm_eps=1e-5):
+        super().__init__()
+        self.self_attn = MultiheadAttention(d_model, nhead, batch_first=batch_first)
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.linear2 = Linear(dim_feedforward, d_model)
+        self.norm1 = LayerNorm(d_model, eps=layer_norm_eps)
+        self.norm2 = LayerNorm(d_model, eps=layer_norm_eps)
+        self.dropout = Dropout(dropout)
+        self.norm_first = norm_first
+        self.activation = relu if activation == "relu" else (
+            _gelu if activation == "gelu" else activation)
+
+    def _sa(self, x, mask):
+        return self.dropout(self.self_attn(x, attn_mask=mask, need_weights=False)[0])
+
+    def _ff(self, x):
+        return self.dropout(self.linear2(self.dropout(self.activation(self.linear1(x)))))
+
+    def forward(self, src, src_mask=None):
+        x = src
+        if self.norm_first:
+            x = x + self._sa(self.norm1(x), src_mask)
+            x = x + self._ff(self.norm2(x))
+        else:
+            x = self.norm1(x + self._sa(x, src_mask))
+            x = self.norm2(x + self._ff(x))
+        return x
+
+
+def _gelu(t):
+    """torch 의 기본 gelu(정확형)와 같은 식."""
+    from math import erf, sqrt
+    vec = _np.vectorize(lambda v: 0.5 * v * (1 + erf(v / sqrt(2))))
+    out = vec(t.data).astype(t.data.dtype)
+    grad = _np.vectorize(
+        lambda v: 0.5 * (1 + erf(v / sqrt(2))) + v * _np.exp(-v * v / 2) / sqrt(2 * _np.pi))
+    return t._make(out, (t,), lambda g: (g * grad(t.data),), "GeluBackward0")
+
+
+class TransformerEncoder(Module):
+    """같은 층을 여러 겹. torch 와 같이 `layers.N.…` 로 이름이 붙는다."""
+
+    def __init__(self, encoder_layer, num_layers, norm=None):
+        super().__init__()
+        import copy as _copy
+        self.layers = ModuleList([_copy.deepcopy(encoder_layer) for _ in range(num_layers)])
+        self._modules["layers"] = self.layers
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, src, mask=None):
+        x = src
+        for layer in self.layers:
+            x = layer(x, src_mask=mask)
+        return self.norm(x) if self.norm is not None else x
+
+
+for _name in ("Transformer", "TransformerDecoder", "TransformerDecoderLayer"):
     setattr(nn, _name, _nn_unsupported(_name))
 
 nn.Module = Module
@@ -1496,6 +1726,11 @@ nn.Embedding = Embedding
 nn.LayerNorm = LayerNorm
 nn.BatchNorm2d = BatchNorm2d
 nn.RNN = RNN
+nn.LSTM = LSTM
+nn.GRU = GRU
+nn.MultiheadAttention = MultiheadAttention
+nn.TransformerEncoderLayer = TransformerEncoderLayer
+nn.TransformerEncoder = TransformerEncoder
 nn.MaxPool2d = MaxPool2d
 nn.Sequential = Sequential
 nn.ModuleList = ModuleList
