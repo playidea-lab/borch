@@ -45,8 +45,8 @@ def dump(path=DEFAULT_PATH):
     """1단계 — 진짜 torch 의 기대값을 굳힌다. 여기서만 torch 가 필요하다."""
     import torch as real
 
-    inp = cases_mod.wide_inputs()
-    cases = cases_mod.wide_cases(inp)
+    inp = cases_mod.golden_inputs()
+    cases = cases_mod.golden_cases(inp)
     data, broken = {}, []
     for name, fn in cases:
         try:
@@ -69,8 +69,8 @@ def dump(path=DEFAULT_PATH):
 def check(lib, path=DEFAULT_PATH):
     """2단계 — 골든과 대조한다. (갈린 곳 목록, 케이스 수)."""
     z = np.load(path, allow_pickle=False)
-    inp = cases_mod.wide_inputs()
-    cases = cases_mod.wide_cases(inp)
+    inp = cases_mod.golden_inputs()
+    cases = cases_mod.golden_cases(inp)
 
     if str(z["__manifest__"]) != cases_mod.manifest_hash(cases):
         raise SystemExit(

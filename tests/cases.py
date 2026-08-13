@@ -13,7 +13,7 @@ import hashlib
 import numpy as np
 
 
-def wide_inputs():
+def golden_inputs():
     """케이스가 쓰는 입력. 뽑는 **순서**가 값을 정하므로 건드리지 않는다."""
     rng = np.random.default_rng(0)
     x1 = rng.standard_normal(6).astype(np.float32)
@@ -28,7 +28,19 @@ def wide_inputs():
     # erf·gelu 의 꼬리. xp 는 양수 0.2 이상만 보고 x1 은 대략 [-2, 2] 라,
     # 자릿수가 날아가는 두 자리(원점 근처와 큰 |x|)를 아무도 안 보고 있었다.
     tail = np.array([-8., -6., -4., -1., -1e-3, 0., 1e-3, 1., 4., 6., 8.], dtype=np.float32)
-    return {"x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail}
+
+    # 학습 케이스용. 가중치를 고정해 넣어야 세 라이브러리가 **같은 자리에서 출발**한다 —
+    # 각자 초기화하면 무엇이 갈렸는지가 아니라 초기화가 갈렸는지를 보게 된다.
+    train_x = rng.standard_normal((24, 6)).astype(np.float32)
+    train_y = rng.integers(0, 3, 24).astype(np.int64)
+    w0 = (rng.standard_normal((8, 6)) * 0.3).astype(np.float32)
+    b0 = (rng.standard_normal(8) * 0.1).astype(np.float32)
+    w1 = (rng.standard_normal((3, 8)) * 0.3).astype(np.float32)
+    b1 = (rng.standard_normal(3) * 0.1).astype(np.float32)
+
+    return {"x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail,
+            "train_x": train_x, "train_y": train_y,
+            "w0": w0, "b0": b0, "w1": w1, "b1": b1}
 
 
 def wide_cases(inp=None):
@@ -36,7 +48,7 @@ def wide_cases(inp=None):
 
     이름만 있고 값이 다르면 그것도 거짓이라, 있는 것은 전부 값으로 대조한다.
     """
-    inp = wide_inputs() if inp is None else inp
+    inp = golden_inputs() if inp is None else inp
     x1, xp, x2 = inp["x1"], inp["xp"], inp["x2"]
     img, idx2, tail = inp["img"], inp["idx2"], inp["tail"]
 
@@ -95,6 +107,157 @@ def wide_cases(inp=None):
         ("F.gelu(꼬리)", lambda L: L.nn.functional.gelu(L.tensor(tail))),
     ]
     return cases
+
+
+def _grad_of(leaf, name):
+    """잎에 기울기가 **실제로 도착했는지** 확인하고 꺼낸다.
+
+    안 왔으면(None) 그래프가 끊긴 것이다. 그냥 두면 대조 단계에서 엉뚱한 오류가 나고,
+    코어가 겪은 그대로 "학습은 도는데 가중치가 안 움직이는" 상태를 못 잡는다.
+    """
+    if leaf.grad is None:
+        raise RuntimeError(f"{name}: 기울기가 잎에 도착하지 않았다 — 그래프가 끊겼다")
+    return leaf.grad
+
+
+def grad_cases(inp=None):
+    """**기울기**를 대조한다.
+
+    순방향만 맞고 역방향이 틀리면 "학습은 돌아가고 손실도 내려가는데 값이 다른" 상태가
+    된다. 코어가 BatchNorm 으로 오래 겪은 종류이고, 값 대조만으로는 안 잡힌다.
+
+    각 케이스는 잎을 만들어 스칼라로 접고 `backward()` 를 부른 뒤 **잎의 기울기**를 준다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    x1, xp, x2 = inp["x1"], inp["xp"], inp["x2"]
+
+    cases = []
+
+    def unary(name, fn, arr=x1):
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            f(L, x).sum().backward()
+            return _grad_of(x, n)
+        cases.append((f"grad::{name}", run))
+
+    def binary(name, fn, which, a1=x1, a2=x1):
+        def run(L, f=fn, w=which, p=a1, q=a2, n=name):
+            a = L.tensor(p, requires_grad=True)
+            b = L.tensor(q, requires_grad=True)
+            f(L, a, b).sum().backward()
+            return _grad_of(a if w == "a" else b, n)
+        cases.append((f"grad::{name}/{which}", run))
+
+    # 원소별 — 양수만 받는 것은 xp 로 준다
+    for name, fn in [("exp", lambda L, x: L.exp(x)), ("abs", lambda L, x: L.abs(x)),
+                     ("sin", lambda L, x: L.sin(x)), ("cos", lambda L, x: L.cos(x)),
+                     ("tan", lambda L, x: L.tan(x)), ("sinh", lambda L, x: L.sinh(x)),
+                     ("cosh", lambda L, x: L.cosh(x)), ("tanh", lambda L, x: L.tanh(x)),
+                     ("erf", lambda L, x: L.erf(x)), ("square", lambda L, x: L.square(x))]:
+        unary(name, fn)
+    for name, fn in [("log", lambda L, x: L.log(x)), ("log2", lambda L, x: L.log2(x)),
+                     ("log10", lambda L, x: L.log10(x)), ("sqrt", lambda L, x: L.sqrt(x)),
+                     ("rsqrt", lambda L, x: L.rsqrt(x)),
+                     ("reciprocal", lambda L, x: L.reciprocal(x))]:
+        unary(name, fn, xp)
+
+    # 활성 — 학습 경로가 실제로 지나는 곳
+    for name, fn in [("relu", lambda L, x: L.relu(x)),
+                     ("sigmoid", lambda L, x: L.sigmoid(x)),
+                     ("gelu", lambda L, x: L.nn.functional.gelu(x)),
+                     ("silu", lambda L, x: L.nn.functional.silu(x)),
+                     ("leaky_relu", lambda L, x: L.nn.functional.leaky_relu(x, 0.1)),
+                     ("elu", lambda L, x: L.nn.functional.elu(x)),
+                     ("pow2", lambda L, x: x ** 2), ("neg", lambda L, x: -x)]:
+        unary(name, fn)
+
+    # 축약·모양
+    unary("sum", lambda L, x: x.sum(), x2)
+    unary("sum(dim)", lambda L, x: x.sum(dim=1), x2)
+    unary("mean", lambda L, x: x.mean(), x2)
+    unary("mean(dim)", lambda L, x: x.mean(dim=0), x2)
+    unary("softmax", lambda L, x: L.nn.functional.softmax(x, dim=-1), x2)
+    unary("log_softmax", lambda L, x: L.nn.functional.log_softmax(x, dim=-1), x2)
+    unary("cumsum", lambda L, x: L.cumsum(x, 0))
+    unary("flip", lambda L, x: L.flip(x, [0]))
+    unary("clamp", lambda L, x: L.clamp(x, min=-0.5, max=0.5))
+    unary("norm", lambda L, x: L.norm(x), x2)
+    unary("normalize", lambda L, x: L.nn.functional.normalize(x, dim=1), x2)
+
+    # 뽑기·손실 — **여기가 그래프를 끊기 쉬운 자리다.** 값만 떼어 돌려주면 뽑은 자리로
+    # 기울기가 안 가고, 분류 손실이 통째로 미분 불가가 된다. 실제로 그렇게 났다.
+    idx2, targets = inp["idx2"], np.array([0, 1, 2], dtype=np.int64)
+    unary("gather", lambda L, x: L.gather(x, 1, L.tensor(idx2)), x2)
+    unary("nll_loss", lambda L, x: L.nn.functional.nll_loss(
+        L.nn.functional.log_softmax(x, dim=-1), L.tensor(targets)), x2)
+    unary("cross_entropy",
+          lambda L, x: L.nn.functional.cross_entropy(x, L.tensor(targets)), x2)
+
+    # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
+    for which in ("a", "b"):
+        binary("add", lambda L, a, b: a + b, which)
+        binary("sub", lambda L, a, b: a - b, which)
+        binary("mul", lambda L, a, b: a * b, which)
+        binary("div", lambda L, a, b: a / b, which, xp, xp)
+        binary("maximum", lambda L, a, b: L.maximum(a, b), which, x1, -x1)
+        binary("minimum", lambda L, a, b: L.minimum(a, b), which, x1, -x1)
+        binary("matmul", lambda L, a, b: a @ b, which, x2, x2.T.copy())
+        binary("l1_loss", lambda L, a, b: L.nn.functional.l1_loss(a, b), which)
+        binary("mse_loss", lambda L, a, b: L.nn.functional.mse_loss(a, b), which)
+        binary("smooth_l1_loss",
+               lambda L, a, b: L.nn.functional.smooth_l1_loss(a, b), which)
+        binary("cosine_similarity",
+               lambda L, a, b: L.nn.functional.cosine_similarity(a, b), which, x2, x2 * 2)
+
+    return cases
+
+
+_TRAIN_STEPS = 5
+
+
+def train_cases(inp=None):
+    """**학습이 도는가** — 조각이 엮였을 때를 본다.
+
+    단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,
+    코어가 통합 시나리오에서 잡은 결함 셋은 전부 그 자리에서 나왔다.
+
+    스텝을 적게(5) 두는 것은 의도다. 학습은 차이를 증폭시키므로, 길게 돌리면 무엇이
+    틀렸는지가 아니라 float32 가 갈라진 것을 보게 된다 — T4 는 비목표다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    xin, yin = inp["train_x"], inp["train_y"]
+    weights = {"0.weight": inp["w0"], "0.bias": inp["b0"],
+               "2.weight": inp["w1"], "2.bias": inp["b1"]}
+
+    def trained(L, opt_name):
+        model = L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(), L.nn.Linear(8, 3))
+        model.load_state_dict({k: L.tensor(v) for k, v in weights.items()})
+        opt = getattr(L.optim, opt_name)(model.parameters(), lr=0.05)
+        crit = L.nn.CrossEntropyLoss()
+        x, y = L.tensor(xin), L.tensor(yin)
+        for _ in range(_TRAIN_STEPS):
+            opt.zero_grad()
+            crit(model(x), y).backward()
+            opt.step()
+        return model
+
+    def loss_of(L, model):
+        return L.nn.CrossEntropyLoss()(model(L.tensor(xin)), L.tensor(yin))
+
+    cases = []
+    for opt_name in ("SGD", "Adam"):
+        cases.append((f"train::{opt_name}/손실",
+                      lambda L, o=opt_name: loss_of(L, trained(L, o))))
+        # 가중치까지 본다. 손실만 보면 **파라미터가 안 움직여도** 비슷해 보일 수 있다.
+        cases.append((f"train::{opt_name}/0.weight",
+                      lambda L, o=opt_name: dict(trained(L, o).named_parameters())["0.weight"]))
+    return cases
+
+
+def golden_cases(inp=None):
+    """골든이 다루는 전부 — 값·기울기·학습."""
+    inp = golden_inputs() if inp is None else inp
+    return wide_cases(inp) + grad_cases(inp) + train_cases(inp)
 
 
 def to_numpy(t):

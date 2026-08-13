@@ -136,13 +136,30 @@ class Tensor:
         return self.numpy().reshape(-1)[0].item()
 
     def detach(self):
-        return Tensor(self._h)
+        # **복제해야 한다.** 손잡이를 나눠 가지면 둘 중 하나가 사라질 때 다른 쪽의
+        # 버퍼까지 놓아버린다. tf.clone 은 데이터를 공유하고 참조만 하나 더 든다.
+        return Tensor(_tf.clone(self._h))
 
     def dispose(self):
-        """GPU 버퍼를 놓는다. TF.js 는 수동 해제라 파이썬 GC 에 맡기면 샌다."""
+        """GPU 버퍼를 놓는다."""
         if self._h is not None:
-            self._h.dispose()
+            try:
+                self._h.dispose()
+            except Exception:                                        # noqa: BLE001
+                pass          # 이미 놓인 것 — 두 번 놓는 것은 실패가 아니다
             self._h = None
+
+    def __del__(self):
+        """파이썬이 이 텐서를 놓을 때 GPU 버퍼도 같이 놓는다.
+
+        TF.js 는 수동 해제라 안 걸어두면 **스텝마다 샌다**(실측: 학습 한 스텝에
+        텐서 118개). CPython 은 참조 세기라 순환만 없으면 즉시 떨어지고, 이 그래프는
+        자식이 부모를 가리킬 뿐 반대가 없어서 순환이 없다.
+        """
+        try:
+            self.dispose()
+        except Exception:                                            # noqa: BLE001
+            pass          # 종료 중일 수 있다. 여기서 시끄러워봐야 얻을 것이 없다
 
     def __repr__(self):
         return f"tensor({self.numpy()!r})"
@@ -253,10 +270,24 @@ class Tensor:
     def matmul(self, o):
         return self.__matmul__(o)
 
+    def transpose(self, d0, d1):
+        perm = list(range(self.ndim))
+        perm[d0], perm[d1] = perm[d1], perm[d0]
+        return self._make(_tf.transpose(self._h, _to_js(perm)), (self,),
+                          lambda g: (_tf.transpose(g, _to_js(perm)),), "TransposeBackward0")
+
+    @property
+    def T(self):
+        return self.transpose(-2, -1)
+
     # ---- 비교 (기울기 없음)
 
     def _cmp(self, o, fn):
-        return Tensor(fn(self._h, _wrap(o)._h))
+        # `fn(self._h, _wrap(o)._h)` 로 쓰면 안 된다. `._h` 를 꺼내는 순간 임시 텐서의
+        # 참조가 0 이 되어 `__del__` 이 버퍼를 놓고, **그 뒤에** fn 이 불린다.
+        # 이름을 붙여 호출이 끝날 때까지 살려둔다.
+        other = _wrap(o)
+        return Tensor(fn(self._h, other._h))
 
     def __gt__(self, o): return self._cmp(o, _tf.greater)
     def __ge__(self, o): return self._cmp(o, _tf.greaterEqual)
@@ -331,7 +362,7 @@ def _unbroadcast(g, shape):
 
 def tensor(data, dtype=None, requires_grad=False):
     if isinstance(data, Tensor):
-        return Tensor(data._h, requires_grad)
+        return Tensor(_tf.clone(data._h), requires_grad)     # 손잡이를 나눠 갖지 않는다
     return Tensor(_to_tf(_np.asarray(data)), requires_grad)
 
 
@@ -587,7 +618,7 @@ def roll(t, shifts, dims=None):
     n = t.shape[axis]
     s = int(shifts) % n
     if s == 0:
-        return Tensor(t._h)
+        return Tensor(_tf.clone(t._h))
     head = _slice_along(t._h, axis, n - s, s)
     tail = _slice_along(t._h, axis, 0, n - s)
     return Tensor(_tf.concat(_to_js([head, tail]), axis))
@@ -631,23 +662,28 @@ def unbind(t, dim=0):
 
 
 def gather(t, dim, index):
+    """torch 의 `gather` — 원소마다 자리를 고른다. TF.js 의 `gather` 는 축을 통째로
+    뽑는 다른 연산이라 그대로 못 쓴다.
+
+    자리를 원-핫으로 만들어 곱하고 접는다. 그러면 **역전파가 그냥 따라온다** —
+    뽑기만 하고 그래프를 끊으면 뽑은 자리로 기울기가 안 가고, 분류 손실이 통째로
+    미분 불가가 된다(실제로 그랬다).
+    """
     t = _wrap(t)
-    idx = _to_int32(index)
-    # TF.js 의 gather 는 축 하나를 통째로 뽑는다. torch 의 gather 는 원소마다 자리를
-    # 고르므로 같지 않다 — 평평하게 편 번호로 바꿔 뽑고 모양을 되돌린다.
+    if t.ndim != 2 or dim != 1:
+        _unsupported("gather(2차원 · dim=1 이 아닌 것)")
     rows, cols = t.shape
-    # 두 항 모두 int32 로 둔다. 하나라도 float 가 섞이면 TF.js 가 gather 에서 거부한다.
-    flat_idx = _tf.add(_row_offsets(rows, cols), idx)
-    picked = _tf.gather(_tf.reshape(t._h, _to_js([rows * cols])),
-                        _tf.reshape(flat_idx, _to_js([-1])))
-    return Tensor(_tf.reshape(picked, _to_js(list(_shape_of(idx)))))
+    idx32 = _to_int32(index)
+    k = _shape_of(idx32)[1]
+    onehot = _tf.cast(_tf.oneHot(_tf.reshape(idx32, _to_js([rows * k])), cols), "float32")
+    onehot = _tf.reshape(onehot, _to_js([rows, k, cols]))
 
+    picked = _tf.sum(_tf.mul(onehot, _tf.reshape(t._h, _to_js([rows, 1, cols]))), 2)
 
-def _row_offsets(rows, cols):
-    base = _np.arange(rows, dtype=_np.int32).reshape(rows, 1) * cols
-    buf = _js.Int32Array.new(base.size)
-    buf.assign(base.reshape(-1))
-    return _tf.tensor(buf, _to_js([rows, 1]), "int32")
+    def back(g):
+        return (_tf.sum(_tf.mul(onehot, _tf.reshape(g, _to_js([rows, k, 1]))), 1),)
+
+    return t._make(picked, (t,), back, "GatherBackward0")
 
 
 def _to_int32(index):
@@ -825,11 +861,337 @@ class _Functional:
     avg_pool2d = staticmethod(avg_pool2d)
 
 
+# ---------------------------------------------------------------- nn.Module
+#
+# 구조는 코어와 같게 둔다 — 이름 규약(`0.weight` …)이 같아야 체크포인트가 오가고,
+# 같은 학습 코드가 임포트만 바꿔서 돈다.
+
+class Parameter(Tensor):
+    """학습 대상. 처음부터 requires_grad 다."""
+
+    def __init__(self, data):
+        handle = data._h if isinstance(data, Tensor) else _to_tf(_np.asarray(data))
+        super().__init__(handle, requires_grad=True)
+
+
+class Module:
+    def __init__(self):
+        self._modules = {}
+        self._params = {}
+        self.training = True
+
+    def __setattr__(self, name, value):
+        if isinstance(value, Parameter):
+            self.__dict__.setdefault("_params", {})[name] = value
+        elif isinstance(value, Module):
+            self.__dict__.setdefault("_modules", {})[name] = value
+        object.__setattr__(self, name, value)
+
+    def parameters(self):
+        for p in self._params.values():
+            yield p
+        for m in self._modules.values():
+            yield from m.parameters()
+
+    def named_parameters(self, prefix=""):
+        for n, p in self._params.items():
+            yield (f"{prefix}{n}", p)
+        for n, m in self._modules.items():
+            yield from m.named_parameters(f"{prefix}{n}.")
+
+    def state_dict(self):
+        return {n: Tensor(_tf.clone(p._h)) for n, p in self.named_parameters()}
+
+    def load_state_dict(self, state, strict=True):
+        own = dict(self.named_parameters())
+        missing = [k for k in own if k not in state]
+        unexpected = [k for k in state if k not in own]
+        if strict and (missing or unexpected):
+            raise RuntimeError(f"state_dict 가 안 맞습니다. 빠진 것: {missing}, 남는 것: {unexpected}")
+        for name, value in state.items():
+            if name not in own:
+                continue
+            target = own[name]
+            incoming = value._h if isinstance(value, Tensor) else _to_tf(_np.asarray(value))
+            if _shape_of(incoming) != target.shape:
+                raise RuntimeError(
+                    f"{name} 의 모양이 다릅니다: {_shape_of(incoming)} vs {target.shape}")
+            target._h.dispose()
+            target._h = _tf.clone(incoming)
+        return self
+
+    def zero_grad(self):
+        for p in self.parameters():
+            p.grad = None
+
+    def train(self, mode=True):
+        self.training = mode
+        for m in self._modules.values():
+            m.train(mode)
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+    def forward(self, *a, **k):
+        raise NotImplementedError("forward 를 구현하세요.")
+
+    def __call__(self, *a, **k):
+        return self.forward(*a, **k)
+
+
+class Linear(Module):
+    def __init__(self, in_features, out_features, bias=True):
+        super().__init__()
+        self.in_features, self.out_features = in_features, out_features
+        # 코어와 같은 초기화 — U(-1/√fan_in, 1/√fan_in)
+        bound = 1.0 / _np.sqrt(in_features)
+        rng = _np.random.default_rng(0)
+        self.weight = Parameter(
+            rng.uniform(-bound, bound, (out_features, in_features)).astype(_np.float32))
+        self.bias = Parameter(
+            rng.uniform(-bound, bound, out_features).astype(_np.float32)) if bias else None
+
+    def forward(self, x):
+        out = x @ self.weight.transpose(0, 1)
+        return out + self.bias if self.bias is not None else out
+
+    def __repr__(self):
+        return f"Linear(in_features={self.in_features}, out_features={self.out_features})"
+
+
+class _Activation(Module):
+    fn = staticmethod(relu)
+
+    def forward(self, x):
+        return type(self).fn(x)
+
+
+class ReLU(_Activation):
+    pass
+
+
+class Sigmoid(_Activation):
+    fn = staticmethod(sigmoid)
+
+
+class Tanh(_Activation):
+    fn = staticmethod(tanh)
+
+
+class GELU(_Activation):
+    fn = staticmethod(gelu)
+
+
+class Sequential(Module):
+    def __init__(self, *layers):
+        super().__init__()
+        self._layers = list(layers)
+        for i, m in enumerate(layers):
+            self._modules[str(i)] = m
+
+    def forward(self, x):
+        for m in self._layers:
+            x = m(x)
+        return x
+
+    def __getitem__(self, i):
+        return self._layers[i]
+
+    def __len__(self):
+        return len(self._layers)
+
+
+class MSELoss(Module):
+    def forward(self, pred, target):
+        return mse_loss(pred, target)
+
+
+class CrossEntropyLoss(Module):
+    def forward(self, logits, target):
+        return cross_entropy(logits, target)
+
+
 class _NN:
     functional = _Functional()
+    Module = Module
+    Parameter = Parameter
+    Linear = Linear
+    ReLU = ReLU
+    Sigmoid = Sigmoid
+    Tanh = Tanh
+    GELU = GELU
+    Sequential = Sequential
+    MSELoss = MSELoss
+    CrossEntropyLoss = CrossEntropyLoss
 
 
 nn = _NN()
+
+
+# ---------------------------------------------------------------- optim
+#
+# 갱신은 **GPU 에서** 한다. 파라미터를 읽어와 numpy 로 고치면 매 스텝 전량 왕복이
+# 생기고, 그 순간 GPU 를 쓰는 의미가 사라진다(WEBGPU-DESIGN.md 8절 S3).
+
+def _replace(state, key, handle):
+    """옵티마이저 상태를 갈아끼우고 옛 버퍼를 놓는다.
+
+    상태는 `Tensor` 가 아니라 손잡이라 파이썬 GC 가 안 봐준다 — 여기서 직접 놓지 않으면
+    모멘텀·Adam 상태가 스텝마다 쌓인다.
+    """
+    old = state.get(key)
+    state[key] = _keep(handle)
+    if old is not None and old is not handle:
+        try:
+            old.dispose()
+        except Exception:                                            # noqa: BLE001
+            pass
+    return handle
+
+
+class Optimizer:
+    def __init__(self, params, defaults):
+        params = list(params)
+        if params and isinstance(params[0], dict):
+            self.param_groups = [dict(defaults, **g) for g in params]
+            for g in self.param_groups:
+                g["params"] = list(g["params"])
+        else:
+            self.param_groups = [dict(defaults, params=params)]
+        self.state = {}
+        self.defaults = defaults
+
+    @property
+    def params(self):
+        return [p for g in self.param_groups for p in g["params"]]
+
+    def zero_grad(self, set_to_none=True):
+        for p in self.params:
+            p.grad = None
+
+    def _state(self, p):
+        return self.state.setdefault(id(p), {})
+
+    def _assign(self, p, handle):
+        """새 값으로 갈아끼우고 **옛 버퍼를 놓는다.** TF.js 는 수동 해제라
+        안 놓으면 스텝마다 GPU 메모리가 는다."""
+        old = p._h
+        p._h = _keep(handle)          # 스코프를 나가도 파라미터는 살아야 한다
+        old.dispose()
+
+    def step(self):
+        raise NotImplementedError
+
+
+class SGD(Optimizer):
+    def __init__(self, params, lr=0.01, momentum=0.0, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad._h
+                if group["weight_decay"]:
+                    g = _tf.add(g, _tf.mul(float(group["weight_decay"]), p._h))
+                if group["momentum"]:
+                    st = self._state(p)
+                    buf = st.get("momentum_buffer")
+                    g = g if buf is None else _tf.add(_tf.mul(float(group["momentum"]), buf), g)
+                    _replace(st, "momentum_buffer", g)
+                self._assign(p, _tf.sub(p._h, _tf.mul(float(group["lr"]), g)))
+
+
+class Adam(Optimizer):
+    decoupled = False
+
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            b1, b2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("exp_avg", _tf.zerosLike(p._h))
+                st.setdefault("exp_avg_sq", _tf.zerosLike(p._h))
+                st["step"] += 1
+                g = p.grad._h
+                if group["weight_decay"] and not self.decoupled:
+                    g = _tf.add(g, _tf.mul(float(group["weight_decay"]), p._h))
+                # 상태를 갈아끼울 때 **옛 버퍼를 놓는다.** 파라미터와 달리 이쪽은
+                # 텐서가 아니라 손잡이라 파이썬 GC 가 안 봐준다.
+                st["exp_avg"] = _replace(st, "exp_avg",
+                                         _tf.add(_tf.mul(float(b1), st["exp_avg"]),
+                                                 _tf.mul(1.0 - float(b1), g)))
+                st["exp_avg_sq"] = _replace(st, "exp_avg_sq",
+                                            _tf.add(_tf.mul(float(b2), st["exp_avg_sq"]),
+                                                    _tf.mul(1.0 - float(b2), _tf.mul(g, g))))
+                mh = _tf.div(st["exp_avg"], 1.0 - float(b1) ** st["step"])
+                vh = _tf.div(st["exp_avg_sq"], 1.0 - float(b2) ** st["step"])
+                new = _tf.sub(p._h, _tf.mul(float(group["lr"]),
+                                            _tf.div(mh, _tf.add(_tf.sqrt(vh),
+                                                                float(group["eps"])))))
+                if group["weight_decay"] and self.decoupled:
+                    new = _tf.sub(new, _tf.mul(float(group["lr"]) * float(group["weight_decay"]),
+                                               p._h))
+                self._assign(p, new)
+
+
+class AdamW(Adam):
+    decoupled = True
+
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
+        super().__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+
+
+class _Optim:
+    Optimizer = Optimizer
+    SGD = SGD
+    Adam = Adam
+    AdamW = AdamW
+
+
+optim = _Optim()
+
+
+class scope:
+    """한 스텝 동안 만들어진 GPU 버퍼를 통째로 놓는다.
+
+    파이썬 GC 는 `Tensor` 가 든 손잡이만 놓아준다. 그런데 **역전파 클로저가 붙들고 있는
+    중간 버퍼**(gelu 의 `ope`, gather 의 `onehot` 같은 것)는 `Tensor` 가 아니라
+    아무도 안 놓는다 — 실측으로 학습 스텝당 92.7개가 남았다.
+
+    설계 문서 7절은 "backward() 시점에 묶으면 사용자 API 에 스코프를 노출하지 않아도
+    된다"고 적었는데, **그 전제가 틀렸다.** 클로저가 든 것은 그래프를 훑어서 찾을 수
+    없다. 그래서 노출한다 — 코어와 다른 한 줄이 생기지만, 새는 것보다 낫다.
+
+        with torch.scope():
+            opt.zero_grad(); crit(model(x), y).backward(); opt.step()
+
+    파라미터와 옵티마이저 상태는 `tf.keep` 으로 살려두므로 스코프를 나가도 남는다.
+    """
+
+    def __enter__(self):
+        _tf.engine().startScope()
+        return self
+
+    def __exit__(self, *exc):
+        _tf.engine().endScope()
+        return False
+
+
+def _keep(handle):
+    """스코프가 끝나도 살려둘 것. 파라미터와 옵티마이저 상태가 여기 해당한다."""
+    try:
+        return _tf.keep(handle)
+    except Exception:                                                # noqa: BLE001
+        return handle          # 스코프 밖이면 keep 이 필요 없다
 
 
 class no_grad:
