@@ -133,8 +133,21 @@ def wide_cases(inp=None):
             L.tensor(img), L.tensor(cw), L.tensor(cb), 2, 1)),
         ("F.max_pool2d", lambda L: L.nn.functional.max_pool2d(L.tensor(img), 2)),
         ("BatchNorm2d(학습)", lambda L: L.nn.BatchNorm2d(3)(L.tensor(img))),
+        # **저장·복원 뒤의 평가 모드.** running 통계가 state_dict 에서 빠지면 여기서만
+        # 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
+        ("BatchNorm2d(저장→복원→eval)", lambda L: _bn_roundtrip(L, img)),
+        ("median(dim).indices", lambda L: L.median(L.tensor(x2), dim=1).indices),
     ]
     return cases
+
+
+def _bn_roundtrip(L, img):
+    trained = L.nn.BatchNorm2d(3)
+    trained(L.tensor(img))                      # running 통계가 갱신된다
+    fresh = L.nn.BatchNorm2d(3)
+    fresh.load_state_dict(trained.state_dict())
+    fresh.eval()
+    return fresh(L.tensor(img))
 
 
 def _grad_of(leaf, name):
@@ -220,6 +233,21 @@ def grad_cases(inp=None):
         L.nn.functional.log_softmax(x, dim=-1), L.tensor(targets)), x2)
     unary("cross_entropy",
           lambda L, x: L.nn.functional.cross_entropy(x, L.tensor(targets)), x2)
+
+    # 뽑기·자르기 계열 — **여기가 그래프를 끊기 가장 쉬운 자리다.** 값만 떼어 돌려주면
+    # 뽑은 자리로 기울기가 안 가고 학습이 조용히 멈춘다. 코어가 ROADMAP 11번에서
+    # topk·sort 로 겪었고, 이 라이브러리도 리뷰 전까지 같은 상태였다.
+    unary("topk", lambda L, x: L.topk(x, 3).values)
+    unary("sort", lambda L, x: L.sort(x).values)
+    unary("sort(내림차순)", lambda L, x: L.sort(x, descending=True).values)
+    unary("narrow", lambda L, x: L.narrow(x, 0, 1, 3))
+    unary("split", lambda L, x: L.split(x, 2)[1])
+    unary("chunk", lambda L, x: L.chunk(x, 3)[2])
+    unary("unbind", lambda L, x: L.unbind(x)[1], x2)
+    unary("index_select",
+          lambda L, x: L.index_select(x, 0, L.tensor(np.array([2, 0], dtype=np.int64))), x2)
+    unary("pad", lambda L, x: L.nn.functional.pad(x, (1, 1)), x2)
+    unary("prod", lambda L, x: L.prod(x), xp)
 
     # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
     for which in ("a", "b"):

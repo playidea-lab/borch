@@ -10,3 +10,4 @@ tests/golden.npz
 # CIFAR-10 원본. 브라우저는 CORS 때문에 직접 못 받으므로 로컬로 받아 서빙한다.
 cifar-10-*
 cifar-batch*.bin
+cifar-fake.bin

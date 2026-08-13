@@ -15,10 +15,16 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
 그러려면 역방향을 우리가 들고 있어야 한다. 테이프 구조는 코어와 같게 둔다 —
 같은 모양이면 코어에서 고친 것을 여기로 옮기기 쉽다.
 
-## 아직 없는 것
+## 한계 — 코어와 다른 점
 
-S2 범위다. 원소별·축약·행렬곱과 그 역전파까지. conv·풀링·BatchNorm 은 S3,
-옵티마이저의 GPU 화도 S3 다. 없는 것은 근사하지 않고 예외를 던진다.
+- **dtype 이 없다.** 전부 float32 다. TF.js 에 int64 가 없고, 인덱스는 int32 로 돈다.
+  코어는 torch 의 dtype 승격을 112/112 로 맞추지만 이쪽은 그 축이 아예 없다
+- **오류·표현 동등(T2·T3)을 맞추지 않았다.** 코어는 12/12 · 15/15 다
+- **`scope()` 를 노출한다.** 역전파 클로저가 든 중간 버퍼는 파이썬 GC 가 못 놓는다.
+  코어와 다른 한 줄이고, 이유는 WEBGPU-DESIGN.md 7절에 있다
+
+없는 것은 근사하지 않고 예외를 던진다. `topk(largest=False)` 처럼 TF.js 가 못 하는
+인자도 조용히 무시하지 않고 거절한다 — 조용히 다른 값을 내는 것이 가장 나쁘다.
 """
 
 import numpy as _np
@@ -230,7 +236,11 @@ class Tensor:
                 continue
             if t._backward is None:                     # 잎 — 여기에 쌓는다
                 if t.requires_grad:
-                    t.grad = Tensor(g) if t.grad is None else Tensor(_tf.add(t.grad._h, g))
+                    # **스코프를 넘겨 살린다.** 안 그러면 `with scope():` 안에서 backward 한
+                    # 뒤 밖에서 `p.grad` 를 읽으면 이미 놓인 버퍼다. torch 는 zero_grad
+                    # 할 때까지 기울기를 들고 있고, 여기도 그래야 한다.
+                    total = g if t.grad is None else _tf.add(t.grad._h, g)
+                    t.grad = Tensor(_keep(total))
                 continue
             for parent, pg in zip(t._parents, t._backward(g)):
                 if pg is None:
@@ -469,7 +479,7 @@ def randn(*shape, requires_grad=False):
 
 def _unary(name, forward, derivative=None):
     def fn(t):
-        t = _canonical(t)
+        t = _wrap(t)          # 원소별이라 레이아웃과 무관하다 — 되돌리면 안 된다
         out = forward(t._h)
         if derivative is None:
             return Tensor(out)
@@ -518,7 +528,7 @@ def neg(t):
 def prod(t, dim=None):
     t = _canonical(t)
     out = _tf.prod(t._h) if dim is None else _tf.prod(t._h, dim)
-    return Tensor(out)
+    return t._make(out, (t,), lambda g: (_tf.div(_tf.mul(g, out), t._h),), "ProdBackward0")
 
 
 def count_nonzero(t, dim=None):
@@ -630,21 +640,54 @@ class _ValuesIndices:
         return (self.values, self.indices)[i]
 
 
+def _pick_last(t, idx32):
+    """마지막 축에서 번호대로 뽑되 **그래프를 잇는다.**
+
+    자리를 원-핫으로 만들어 곱하고 접으면 역전파가 저절로 따라온다. 값만 떼어
+    돌려주면 뽑은 자리로 기울기가 안 가고, top-k 샘플링이나 정렬을 끼운 손실에서
+    **학습이 조용히 멈춘다** — 코어가 ROADMAP 11번에서 겪은 그대로다.
+    """
+    shape = t.shape
+    n = shape[-1]
+    rows = int(_np.prod(shape[:-1])) if len(shape) > 1 else 1
+    k = _shape_of(idx32)[-1]
+
+    flat = t.reshape(rows, n)
+    onehot = _tf.cast(_tf.oneHot(_tf.reshape(idx32, _to_js([rows * k])), n), "float32")
+    onehot = _tf.reshape(onehot, _to_js([rows, k, n]))
+    picked = _tf.sum(_tf.mul(onehot, _tf.reshape(flat._h, _to_js([rows, 1, n]))), 2)
+
+    def back(g):
+        return (_tf.sum(_tf.mul(onehot, _tf.reshape(g, _to_js([rows, k, 1]))), 1),)
+
+    out = flat._make(picked, (flat,), back, "TopkBackward0")
+    return out.reshape(tuple(shape[:-1]) + (k,)) if len(shape) > 1 else out.reshape(k)
+
+
+def _last_axis_only(t, dim, what):
+    """TF.js 의 `topk` 는 **마지막 축만** 본다. 다른 축을 받으면 조용히 다른 값이
+    나오므로 여기서 멈춘다 — 없는 기능이 틀린 답보다 낫다."""
+    if dim not in (-1, t.ndim - 1):
+        _unsupported(f"{what}(마지막 축이 아닌 dim)")
+
+
 def topk(t, k, dim=-1, largest=True):
     t = _canonical(t)
-    out = _tf.topk(t._h, k)
-    return _ValuesIndices(Tensor(out.values), Tensor(_tf.cast(out.indices, "float32")))
+    _last_axis_only(t, dim, "topk")
+    if not largest:
+        _unsupported("topk(largest=False)")
+    idx = _tf.topk(t._h, k).indices
+    return _ValuesIndices(_pick_last(t, idx), Tensor(idx))
 
 
 def sort(t, dim=-1, descending=False):
     """TF.js 에는 정렬이 없다. `topk` 로 전부 뽑으면 내림차순이므로, 오름차순은 뒤집는다."""
     t = _canonical(t)
-    n = t.shape[dim]
-    out = _tf.topk(t._h, n)
-    values, idx = out.values, out.indices
+    _last_axis_only(t, dim, "sort")
+    idx = _tf.topk(t._h, t.shape[-1]).indices
     if not descending:
-        values, idx = _tf.reverse(values, -1), _tf.reverse(idx, -1)
-    return _ValuesIndices(Tensor(values), Tensor(_tf.cast(idx, "float32")))
+        idx = _tf.reverse(idx, -1)
+    return _ValuesIndices(_pick_last(t, idx), Tensor(idx))
 
 
 def unique(t, sorted=True, return_counts=False):
@@ -674,11 +717,18 @@ def median(t, dim=None):
         asc = _tf.reverse(_tf.topk(flat, n).values, -1)
         picked = _tf.slice(asc, _to_js([(n - 1) // 2]), _to_js([1]))
         return Tensor(_tf.reshape(picked, _to_js([])))      # torch 는 0차원을 준다
-    n = t.shape[dim]
-    asc = _tf.reverse(_tf.topk(t._h, n).values, -1)
-    idx = (n - 1) // 2
-    picked = _tf.squeeze(_tf.slice(asc, _to_js([0, idx]), _to_js([t.shape[0], 1])), _to_js([1]))
-    return _ValuesIndices(Tensor(picked), Tensor(_tf.zerosLike(picked)))
+    _last_axis_only(t, dim, "median")
+    if t.ndim != 2:
+        _unsupported("median(2차원이 아닌 것에 dim 을 준 경우)")
+    rows, n = t.shape
+    order = _tf.reverse(_tf.topk(t._h, n).indices, -1)          # 오름차순 자리 번호
+    idx = _tf.slice(order, _to_js([0, (n - 1) // 2]), _to_js([rows, 1]))
+    # **진짜 번호를 준다.** 예전에는 0 으로 채워 돌려줬는데, 값만 맞고 번호는 거짓이었다.
+    #
+    # 번호는 int32 그대로 둔다. `tf.cast(int32 → float32)` 는 WebGPU 에서 dtype 라벨만
+    # 바꾸고 **비트를 안 바꾼다**(실측: 2 가 2.8e-45 로 읽힌다). torch 도 번호는 정수다.
+    return _ValuesIndices(_pick_last(t, idx).reshape(rows),
+                          Tensor(_tf.reshape(idx, _to_js([rows]))))
 
 
 def flip(t, dims):
@@ -709,10 +759,17 @@ def _slice_along(handle, axis, start, length):
     return _tf.slice(handle, _to_js(begin), _to_js(size))
 
 
-def narrow(t, dim, start, length):
-    t = _canonical(t)
+def _slice_tensor(t, dim, start, length):
+    """잘라내되 **그래프를 잇는다.** 역방향은 잘라낸 자리 밖을 0 으로 채우는 것이다."""
+    shape = t.shape
+    pairs = [[0, 0] for _ in shape]
+    pairs[dim] = [start, shape[dim] - start - length]
     return t._make(_slice_along(t._h, dim, start, length), (t,),
-                   lambda g: _unsupported("narrow 의 역전파"), "SliceBackward0")
+                   lambda g: (_tf.pad(g, _to_js(pairs)),), "SliceBackward0")
+
+
+def narrow(t, dim, start, length):
+    return _slice_tensor(_canonical(t), dim, start, length)
 
 
 def split(t, size, dim=0):
@@ -722,7 +779,7 @@ def split(t, size, dim=0):
         [size] * (n // size) + ([n % size] if n % size else [])
     out, start = [], 0
     for sz in sizes:
-        out.append(Tensor(_slice_along(t._h, dim, start, sz)))
+        out.append(_slice_tensor(t, dim, start, sz))
         start += sz
     return tuple(out)
 
@@ -735,7 +792,9 @@ def chunk(t, chunks, dim=0):
 
 def unbind(t, dim=0):
     t = _canonical(t)
-    return tuple(Tensor(h) for h in _tf.unstack(t._h, dim))
+    shape = t.shape
+    rest = tuple(s for i, s in enumerate(shape) if i != dim)
+    return tuple(_slice_tensor(t, dim, i, 1).reshape(rest) for i in range(shape[dim]))
 
 
 def gather(t, dim, index):
@@ -769,8 +828,21 @@ def _to_int32(index):
 
 
 def index_select(t, dim, index):
+    """원-핫 행렬을 곱해서 뽑는다 — 그래야 역전파가 따라온다."""
     t = _canonical(t)
-    return Tensor(_tf.gather(t._h, _tf.reshape(_to_int32(index), _to_js([-1])), dim))
+    if dim != 0:
+        _unsupported("index_select(dim=0 이 아닌 것)")
+    shape = t.shape
+    n = shape[0]
+    idx32 = _tf.reshape(_to_int32(index), _to_js([-1]))
+    k = _shape_of(idx32)[0]
+    onehot = _tf.cast(_tf.oneHot(idx32, n), "float32")           # (k, n)
+    rest = int(_np.prod(shape[1:])) if len(shape) > 1 else 1
+    flat = t.reshape(n, rest)
+    picked = flat._make(_tf.matMul(onehot, flat._h), (flat,),
+                        lambda g: (_tf.matMul(onehot, g, True, False),),
+                        "IndexSelectBackward0")
+    return picked.reshape((k,) + tuple(shape[1:]))
 
 
 # ---------------------------------------------------------------- nn.functional
@@ -852,10 +924,15 @@ def one_hot(t, num_classes=-1):
 def pad(x, padding, value=0.0):
     """마지막 차원부터 (앞, 뒤) 순으로 받는다 — torch 의 규칙이다."""
     x = _canonical(x)
+    old = x.shape
     pairs = [[0, 0] for _ in range(x.ndim)]
     for i in range(0, len(padding), 2):
         pairs[-(i // 2 + 1)] = [int(padding[i]), int(padding[i + 1])]
-    return Tensor(_tf.pad(x._h, _to_js(pairs), float(value)))
+
+    def back(g):
+        return (_tf.slice(g, _to_js([p[0] for p in pairs]), _to_js(list(old))),)
+
+    return x._make(_tf.pad(x._h, _to_js(pairs), float(value)), (x,), back, "PadBackward0")
 
 
 def normalize(x, p=2, dim=1, eps=1e-12):
@@ -1127,14 +1204,32 @@ class Module:
     def __init__(self):
         self._modules = {}
         self._params = {}
+        self._buffers = {}          # 학습은 안 하지만 저장·복원되는 값 (running_mean 등)
         self.training = True
+
+    def register_buffer(self, name, value):
+        """`state_dict` 에는 들어가고 학습 대상은 아닌 값.
+
+        빠뜨리면 저장했다 불러왔을 때 **평가 모드가 초기값으로 돌아간다** — 학습은
+        멀쩡해 보이고 추론만 틀린다. 코어가 ROADMAP 8번에서 겪은 그대로다.
+        """
+        self.__dict__.setdefault("_buffers", {})[name] = value
+        object.__setattr__(self, name, value)
 
     def __setattr__(self, name, value):
         if isinstance(value, Parameter):
             self.__dict__.setdefault("_params", {})[name] = value
         elif isinstance(value, Module):
             self.__dict__.setdefault("_modules", {})[name] = value
+        elif name in self.__dict__.get("_buffers", {}):
+            self._buffers[name] = value
         object.__setattr__(self, name, value)
+
+    def named_buffers(self, prefix=""):
+        for n, b in self.__dict__.get("_buffers", {}).items():
+            yield (f"{prefix}{n}", b)
+        for n, m in self._modules.items():
+            yield from m.named_buffers(f"{prefix}{n}.")
 
     def parameters(self):
         for p in self._params.values():
@@ -1149,15 +1244,27 @@ class Module:
             yield from m.named_parameters(f"{prefix}{n}.")
 
     def state_dict(self):
-        return {n: Tensor(_tf.clone(p._h)) for n, p in self.named_parameters()}
+        out = {n: Tensor(_tf.clone(p._h)) for n, p in self.named_parameters()}
+        for name, buf in self.named_buffers():
+            out[name] = Tensor(_tf.clone(buf._h)) if isinstance(buf, Tensor) else buf
+        return out
 
     def load_state_dict(self, state, strict=True):
         own = dict(self.named_parameters())
-        missing = [k for k in own if k not in state]
-        unexpected = [k for k in state if k not in own]
+        buffers = dict(self.named_buffers())
+        missing = [k for k in list(own) + list(buffers) if k not in state]
+        unexpected = [k for k in state if k not in own and k not in buffers]
         if strict and (missing or unexpected):
             raise RuntimeError(f"state_dict 가 안 맞습니다. 빠진 것: {missing}, 남는 것: {unexpected}")
         for name, value in state.items():
+            if name in buffers:
+                holder = self
+                *path, leaf = name.split(".")
+                for part in path:
+                    holder = holder._modules[part]
+                holder.register_buffer(
+                    leaf, tensor(value) if isinstance(value, Tensor) else value)
+                continue
             if name not in own:
                 continue
             target = own[name]
@@ -1328,31 +1435,34 @@ class BatchNorm2d(Module):
         self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
         self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
         # running 통계는 **GPU 에 둔다.** 스텝마다 읽어오면 층마다 동기화가 한 번씩
-        # 걸리고, ResNet-18 은 그런 층이 20개다.
-        self._stats = {"mean": _keep(_tf.zeros(_to_js([num_features]))),
-                       "var": _keep(_tf.ones(_to_js([num_features])))}
+        # 걸리고, ResNet-18 은 그런 층이 20개다. 그리고 **버퍼로 등록한다** —
+        # state_dict 에서 빠지면 저장·복원 뒤 추론만 조용히 틀린다.
+        self.register_buffer("running_mean", Tensor(_keep(_tf.zeros(_to_js([num_features])))))
+        self.register_buffer("running_var", Tensor(_keep(_tf.ones(_to_js([num_features])))))
+        self.register_buffer("num_batches_tracked", 0)
 
     def forward(self, x):
-        x = _canonical(x)
+        x = _wrap(x)          # `batch_norm` 이 레이아웃을 보고 축을 고른다 — 되돌리면 안 된다
         if self.training:
             out, mu, var = batch_norm(x, self.weight, self.bias, self.eps)
             raw = _shape_of(x._h)
             n = raw[0] * (raw[1] * raw[2] if x._nhwc else raw[2] * raw[3])
             flat = _to_js([self.num_features])
             keep = 1.0 - self.momentum
-            _replace(self._stats, "mean",
-                     _keep(_tf.add(_tf.mul(keep, self._stats["mean"]),
-                                   _tf.mul(self.momentum, _tf.reshape(mu, flat)))))
+            self.running_mean = Tensor(_keep(_tf.add(
+                _tf.mul(keep, self.running_mean._h),
+                _tf.mul(self.momentum, _tf.reshape(mu, flat)))))
             # torch 는 running_var 에만 **비편향** 분산을 쓴다. 둘 다 편향으로 두면 2.6% 어긋난다.
-            _replace(self._stats, "var",
-                     _keep(_tf.add(_tf.mul(keep, self._stats["var"]),
-                                   _tf.mul(self.momentum * n / (n - 1), _tf.reshape(var, flat)))))
+            self.running_var = Tensor(_keep(_tf.add(
+                _tf.mul(keep, self.running_var._h),
+                _tf.mul(self.momentum * n / (n - 1), _tf.reshape(var, flat)))))
+            self.num_batches_tracked = self.num_batches_tracked + 1
             return out
 
         bshape = [1, 1, 1, self.num_features] if x._nhwc else [1, self.num_features, 1, 1]
-        mean_t = Tensor(_tf.reshape(self._stats["mean"], _to_js(bshape)))
+        mean_t = Tensor(_tf.reshape(self.running_mean._h, _to_js(bshape)))
         inv_t = Tensor(_tf.reshape(
-            _tf.rsqrt(_tf.add(self._stats["var"], float(self.eps))), _to_js(bshape)))
+            _tf.rsqrt(_tf.add(self.running_var._h, float(self.eps))), _to_js(bshape)))
         mean_t._nhwc = inv_t._nhwc = x._nhwc          # 이미 속 순서로 만들었다
         w = Tensor(_tf.reshape(self.weight._h, _to_js(bshape)))
         b = Tensor(_tf.reshape(self.bias._h, _to_js(bshape)))
