@@ -17,20 +17,20 @@
 
 ## 설치
 
-순수 파이썬 휠 하나(17KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
+순수 파이썬 휠 하나(34KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
 
 ```bash
-uv add ./browsertorch-1.2.2-py3-none-any.whl        # 릴리스에서 받은 파일
+uv add ./browsertorch-1.3.0-py3-none-any.whl        # 릴리스에서 받은 파일
 ```
 
 브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
 
 ```js
 // 파일 이름을 그대로 써야 한다 — micropip 이 이름에서 패키지명과 버전을 읽는다.
-py.FS.writeFile("/browsertorch-1.2.2-py3-none-any.whl", new Uint8Array(wheelBytes));
+py.FS.writeFile("/browsertorch-1.3.0-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
-await micropip.install("emfs:/browsertorch-1.2.2-py3-none-any.whl")
+await micropip.install("emfs:/browsertorch-1.3.0-py3-none-any.whl")
 `);
 ```
 
@@ -120,7 +120,26 @@ uv run --with pytest --with numpy --with torch pytest tests/
 torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓이고, 그중에서도
 큰 행렬곱만 유독 나쁘다(Pyodide 의 BLAS 가 SIMD·멀티스레드를 못 쓴다).
 
-**MNIST 급까지는 브라우저에서 실제로 학습된다.** 그 위는 자기 컴퓨터나 원격 장비다.
+**MNIST 급까지는 브라우저에서 실제로 학습된다.** 그 위는 자기 컴퓨터나 원격 장비다 —
+또는 아래의 자매 라이브러리다.
+
+## 그 위가 필요하면 — `browsertorch-webgpu`
+
+이것(코어)은 **numpy 위에서 MNIST 급까지**다. 그 경계를 넘고 싶으면 별도 배포판이 있다.
+
+| | 코어 `browsertorch` | 자매 `browsertorch-webgpu` |
+|---|---|---|
+| 무엇 위에 | numpy | TF.js WebGPU |
+| 휠 | 순수 파이썬 34KB | 순수 파이썬(TF.js 는 페이지가 싣는다) |
+| 어디서 | 어디서나 | **브라우저 안에서만** |
+| 천장 | MNIST 급 | **CIFAR ResNet-18 이 에폭 1.9분** (실측) |
+| 읽히는가 | 그것이 전부다 | 아니다. 성능이 목적이다 |
+
+**코어를 대체하지 않는다.** 왜 하나로 합치지 않았는지는 [ROADMAP 의 ADR-001](ROADMAP.md)
+에 적었다 — 요약하면 휠의 성질이 전염되고, 브라우저·드라이버 실패가 `import` 로 올라오고,
+"임포트만 바꾸면 같은 코드"라는 약속이 `device`·비동기와 양립하지 않기 때문이다.
+
+설계와 실측은 [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md) 에 있다.
 
 ## 지원 범위
 
@@ -159,9 +178,17 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | **dtype 승격** | **112/112** — 4 dtype × 4 연산 × 텐서·스칼라 |
 | **저장소 공유** (view·slice) | **13/13** |
 | **통합 시나리오** | **6/6** — 같은 코드를 임포트만 바꿔 돌린 결과 |
-| **넓은 표면** (수학·모양·functional) | **60/60** |
+| **넓은 표면** (수학·모양·functional) | **67/67** |
 | **흔한 API 이름** | **144/144** |
 | T4 비트 동등 | **명시적 비목표** |
+
+그리고 **골든 262건**이 코어와 자매 라이브러리를 **같은 기대값**에 대조한다. 진짜 torch 를
+브라우저에 넣을 수 없어서, 네이티브에서 기대값을 굳혀 브라우저로 들고 간다.
+
+```bash
+uv run --with numpy --with torch python tests/golden.py dump   # 1단계: 굳힌다
+uv run --with numpy python tests/golden.py check               # 2단계: 대조한다
+```
 
 ```bash
 uv run --with numpy --with torch python tests/conformance.py
