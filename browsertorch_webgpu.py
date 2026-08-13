@@ -1929,6 +1929,118 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     return xin._make(out, parents, back, "ConvolutionBackward0")
 
 
+_warned = set()
+
+
+def _warn_once(key, message):
+    """느린 길을 **조용히** 타지 않게 한다. 느린 것은 틀린 것이 아니지만,
+    모르고 타는 것은 나중에 원인을 못 찾는 종류가 된다."""
+    if key in _warned:
+        return
+    _warned.add(key)
+    try:
+        _js.console.warn("[browsertorch-webgpu] " + message)
+    except Exception:                                                # noqa: BLE001
+        pass
+
+
+def _pad_spatial(handle, shape, pads):
+    """공간 축에 0 을 두른다. **`tf.pad` 를 쓰지 않는다.**
+
+    랭크 5 에서 `tf.pad` 는 모양만 맞고 값이 깨진다 — 예외도 안 던진다. 항등 커널로
+    재보면 나와야 할 합 28 대신 0.238 이 나왔다. 랭크 6 의 reshape+pad 에서 겪은 것과
+    같은 종류이며, 그때처럼 랭크를 안 올리는 연산으로 바꾼다. `concat` 은 랭크 5 에서
+    멀쩡하다(같은 프로브에서 확인).
+
+    `shape` 는 `handle` 의 현재 모양, `pads` 는 (축, 양쪽에 댈 두께) 목록이다.
+    """
+    cur = list(shape)
+    for axis, pad in pads:
+        if not pad:
+            continue
+        block = list(cur)
+        block[axis] = pad
+        zeros = _tf.zeros(_to_js(block))
+        handle = _tf.concat(_to_js([zeros, handle, zeros]), axis)
+        cur[axis] += 2 * pad
+    return handle
+
+
+def conv3d(x, weight, bias=None, stride=1, padding=0):
+    """3차원 합성곱. **역방향은 TF.js 에 맡긴다 — 느리다.**
+
+    2차원은 역방향을 손으로 써서 `tf.grad` 대비 약 10배를 얻었는데, 그 유도가 3차원으로
+    그대로 넘어가지 않는다. 그래서 여기서는 `tf.grad` 를 쓴다. 값은 맞고 속도는 그만큼
+    못 나온다 — 처음 부를 때 한 번 경고한다.
+    """
+    x, weight = _canonical(x), _canonical(weight)
+    n, c, d, h, w = x.shape
+    f, c2, kd, kh, kw = weight.shape
+    if c != c2:
+        raise RuntimeError(f"채널이 안 맞습니다: 입력 {c}, 필터 {c2}")
+    _warn_once("conv3d",
+               "conv3d 의 역방향은 TF.js 커널을 씁니다 — 2차원처럼 손으로 쓰지 않아서 "
+               "느립니다. 부피 데이터가 주 용도라면 그 유도부터 하는 것이 순서입니다.")
+
+    sd, sh, sw = (stride, stride, stride) if isinstance(stride, int) else tuple(stride)
+    pd, ph, pw = (padding, padding, padding) if isinstance(padding, int) else tuple(padding)
+    ncdhw_to_ndhwc, back_perm = [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]
+
+    xh = _tf.transpose(x._h, _to_js(ncdhw_to_ndhwc))
+    xh = _pad_spatial(xh, [n, d, h, w, c], [(1, pd), (2, ph), (3, pw)])
+    wh = _tf.transpose(weight._h, _to_js([2, 3, 4, 1, 0]))    # (F,C,D,H,W) → (D,H,W,C,F)
+    strides = _to_js([sd, sh, sw])
+    out = _tf.conv3d(xh, wh, strides, "valid")
+
+    bias_t = _wrap(bias) if bias is not None else None
+    result = out if bias_t is None else _tf.add(out, bias_t._h)
+
+    def back(g):
+        gh = _tf.transpose(g, _to_js(ncdhw_to_ndhwc))
+        fx = _create_proxy(lambda t: _tf.conv3d(t, wh, strides, "valid"))
+        fw = _create_proxy(lambda t: _tf.conv3d(xh, t, strides, "valid"))
+        try:
+            dx_pad = _tf.grad(fx)(xh, gh)
+            dw = _tf.grad(fw)(wh, gh)
+        finally:
+            fx.destroy()
+            fw.destroy()
+        if (pd, ph, pw) != (0, 0, 0):
+            dx_pad = _tf.slice(dx_pad, _to_js([0, pd, ph, pw, 0]),
+                               _to_js([n, d, h, w, c]))
+        grads = [_tf.transpose(dx_pad, _to_js(back_perm)),
+                 _tf.transpose(dw, _to_js([4, 3, 0, 1, 2]))]
+        if bias_t is not None:
+            grads.append(_tf.sum(gh, _to_js([0, 1, 2, 3])))
+        return tuple(grads)
+
+    parents = (x, weight) if bias_t is None else (x, weight, bias_t)
+    return x._make(_tf.transpose(result, _to_js(back_perm)), parents, back,
+                   "Conv3DBackward0")
+
+
+def max_pool3d(x, kernel_size, stride=None):
+    """`MaxPool2d` 와 같은 방식이다 — 역방향을 `tf.grad` 에 맡긴다.
+    최댓값 자리를 우리가 다시 만들면 동점에서 torch 와 갈리기 때문이고, 2차원에서
+    이미 그렇게 하고 있으므로 여기서 새로 치르는 대가는 없다."""
+    x = _canonical(x)
+    stride = stride or kernel_size
+    ncdhw_to_ndhwc, back_perm = [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]
+    xh = _tf.transpose(x._h, _to_js(ncdhw_to_ndhwc))
+    k, s = _to_js([kernel_size] * 3), _to_js([stride] * 3)
+    out = _tf.maxPool3d(xh, k, s, "valid")
+
+    def back(g):
+        fn = _create_proxy(lambda t: _tf.maxPool3d(t, k, s, "valid"))
+        try:
+            dx = _tf.grad(fn)(xh, _tf.transpose(g, _to_js(ncdhw_to_ndhwc)))
+        finally:
+            fn.destroy()
+        return (_tf.transpose(dx, _to_js(back_perm)),)
+
+    return x._make(_tf.transpose(out, _to_js(back_perm)), (x,), back, "MaxPool3DBackward0")
+
+
 def conv1d(x, weight, bias=None, stride=1, padding=0):
     """`(N,C,L)` 을 `(N,C,1,L)` 로 세워 **검증된 2차원 경로**를 그대로 쓴다.
 
@@ -2007,9 +2119,16 @@ def batch_norm(x, weight, bias, eps=1e-5):
     """
     x, weight, bias = _wrap(x), _wrap(weight), _wrap(bias)
     raw = _shape_of(x._h)
-    axes = _to_js([0, 1, 2] if x._nhwc else [0, 2, 3])
-    m = float(raw[0] * (raw[1] * raw[2] if x._nhwc else raw[2] * raw[3]))
-    bshape = _to_js([1, 1, 1, raw[3]] if x._nhwc else [1, raw[1], 1, 1])
+    rank = len(raw)
+    # 채널 축만 남기고 나머지를 접는다. 랭크를 안 따지므로 1·2·3차원 정규화가
+    # 같은 함수를 쓴다 — (N,C) 든 (N,C,H,W) 든 (N,C,D,H,W) 든.
+    caxis = rank - 1 if x._nhwc else 1
+    reduced = [i for i in range(rank) if i != caxis]
+    axes = _to_js(reduced)
+    m = float(_np.prod([raw[i] for i in reduced]))
+    broadcast = [1] * rank
+    broadcast[caxis] = raw[caxis]
+    bshape = _to_js(broadcast)
 
     mu = _tf.mean(x._h, axes, True)
     centered = _tf.sub(x._h, mu)
@@ -2088,6 +2207,8 @@ class _Functional:
     max_pool1d = staticmethod(max_pool1d)
     max_pool2d = staticmethod(max_pool2d)
     interpolate = staticmethod(interpolate)
+    conv3d = staticmethod(conv3d)
+    max_pool3d = staticmethod(max_pool3d)
     adaptive_avg_pool2d = staticmethod(adaptive_avg_pool2d)
     dropout = staticmethod(dropout)
     layer_norm = staticmethod(layer_norm)
@@ -2650,6 +2771,38 @@ class Upsample(Module):
         return interpolate(x, self.scale_factor, self.mode)
 
 
+class Conv3d(Module):
+    """역방향이 `tf.grad` 를 타서 2차원만큼 빠르지 않다 — 처음 부를 때 경고한다."""
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True):
+        super().__init__()
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        k = kernel_size
+        bound = 1.0 / _np.sqrt(in_channels * k * k * k)
+        self.weight = Parameter(_rng.uniform(
+            -bound, bound, (out_channels, in_channels, k, k, k)).astype(_np.float32))
+        self.bias = Parameter(
+            _rng.uniform(-bound, bound, out_channels).astype(_np.float32)) if bias else None
+
+    def forward(self, x):
+        return conv3d(x, self.weight, self.bias, self.stride, self.padding)
+
+    def __repr__(self):
+        return (f"Conv3d({self.in_channels}, {self.out_channels}, "
+                f"kernel_size={self.kernel_size}, stride={self.stride}, "
+                f"padding={self.padding})")
+
+
+class MaxPool3d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return max_pool3d(x, self.kernel_size, self.stride)
+
+
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None):
         super().__init__()
@@ -2713,10 +2866,15 @@ class BatchNorm2d(Module):
 
     def forward(self, x):
         x = _wrap(x)          # `batch_norm` 이 레이아웃을 보고 축을 고른다 — 되돌리면 안 된다
+        raw = _shape_of(x._h)
+        rank = len(raw)
+        caxis = rank - 1 if x._nhwc else 1
+        bshape = [1] * rank
+        bshape[caxis] = self.num_features
+
         if self.training:
             out, mu, var = batch_norm(x, self.weight, self.bias, self.eps)
-            raw = _shape_of(x._h)
-            n = raw[0] * (raw[1] * raw[2] if x._nhwc else raw[2] * raw[3])
+            n = int(_np.prod([raw[i] for i in range(rank) if i != caxis]))
             flat = _to_js([self.num_features])
             keep = 1.0 - self.momentum
             self.running_mean = Tensor(_keep(_tf.add(
@@ -2729,7 +2887,6 @@ class BatchNorm2d(Module):
             self.num_batches_tracked = self.num_batches_tracked + 1
             return out
 
-        bshape = [1, 1, 1, self.num_features] if x._nhwc else [1, self.num_features, 1, 1]
         mean_t = Tensor(_tf.reshape(self.running_mean._h, _to_js(bshape)))
         inv_t = Tensor(_tf.reshape(
             _tf.rsqrt(_tf.add(self.running_var._h, float(self.eps))), _to_js(bshape)))
@@ -2948,6 +3105,15 @@ class Transformer(Module):
         return Tensor(_to_tf(m), dt=float32)
 
 
+class BatchNorm3d(BatchNorm2d):
+    """`BatchNorm2d` 와 **같은 코드다.**
+
+    `batch_norm` 이 랭크를 안 따지고 채널 축만 남기므로 (N,C,D,H,W) 도 그대로 통한다 —
+    3차원이라고 새로 쓸 것이 없었다. 처음에 이것을 conv3d·maxPool3d 와 한 덩이로 묶어
+    거절했는데, 셋의 사정이 전혀 달랐다.
+    """
+
+
 class MSELoss(Module):
     def forward(self, pred, target):
         return mse_loss(pred, target)
@@ -2958,28 +3124,11 @@ class CrossEntropyLoss(Module):
         return cross_entropy(logits, target)
 
 
-def _volumetric(name):
-    """3차원 계열은 **거절한다. 없어서가 아니라 값이 안 맞아서다.**
-
-    TF.js 에 `conv3d`·`maxPool3d` 는 실제로 있다(확인했다). 문제는 역방향이다 —
-    우리가 손으로 쓴 conv 역방향(순방향 conv 로 다시 쓰기)은 3차원으로 그대로
-    넘어가지 않고, `tf.grad` 에 맡기면 2차원에서 잰 **26배 느림**을 그대로 물려받는다.
-    빠르지 않은 GPU 라이브러리는 존재 이유가 없다.
-
-    그리고 이 라이브러리가 겨누는 것은 브라우저에서 도는 2차원 영상이다. 부피 데이터가
-    필요해지면 그때 역방향을 3차원으로 다시 유도하는 것이 순서다 — 지금 넣으면
-    느린 채로 조용히 쓰이게 된다.
-    """
-    def factory(*a, **k):
-        _unsupported(f"nn.{name} (3차원 역방향을 아직 손으로 안 썼습니다)")
-    return factory
-
-
 class _NN:
     functional = _Functional()
-    Conv3d = staticmethod(_volumetric("Conv3d"))
-    MaxPool3d = staticmethod(_volumetric("MaxPool3d"))
-    BatchNorm3d = staticmethod(_volumetric("BatchNorm3d"))
+    Conv3d = Conv3d
+    MaxPool3d = MaxPool3d
+    BatchNorm3d = BatchNorm3d
     Module = Module
     Parameter = Parameter
     Linear = Linear

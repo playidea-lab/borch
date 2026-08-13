@@ -577,7 +577,44 @@ def webgpu_cases(inp=None):
         return _grad_of(x, "Upsample")
 
     cases.append((WEBGPU_PREFIX + "grad::Upsample", upsample_grad))
+
+    # 3차원 계열. conv3d 의 역방향만 `tf.grad` 를 타서 느리지만, **느린 것은 틀린 것이
+    # 아니다** — 값이 맞는지는 여기서 붙잡고, 느리다는 사실은 코드가 경고로 알린다.
+    vol = np.random.default_rng(17).standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
+    ck3 = (np.random.default_rng(19).standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
+
+    def conv3d_grad(which):
+        def run(L, w=which):
+            x = L.tensor(vol, requires_grad=True)
+            k = L.tensor(ck3, requires_grad=True)
+            L.nn.functional.conv3d(x, k, None, 1, 1).sum().backward()
+            return _grad_of(x if w == "x" else k, f"conv3d/{w}")
+        return run
+
+    def bn3d_grad(L):
+        x = L.tensor(vol, requires_grad=True)
+        L.nn.BatchNorm3d(2)(x).sum().backward()
+        return _grad_of(x, "BatchNorm3d")
+
+    cases += [
+        (WEBGPU_PREFIX + "F.conv3d",
+         lambda L: L.nn.functional.conv3d(L.tensor(vol), L.tensor(ck3), None, 1, 1)),
+        (WEBGPU_PREFIX + "grad::conv3d/x", conv3d_grad("x")),
+        (WEBGPU_PREFIX + "grad::conv3d/w", conv3d_grad("w")),
+        (WEBGPU_PREFIX + "F.max_pool3d",
+         lambda L: L.nn.functional.max_pool3d(L.tensor(vol), 2)),
+        (WEBGPU_PREFIX + "grad::max_pool3d",
+         lambda L: _grad_of(_pool3d_leaf(L, vol), "max_pool3d")),
+        (WEBGPU_PREFIX + "BatchNorm3d(학습)", lambda L: L.nn.BatchNorm3d(2)(L.tensor(vol))),
+        (WEBGPU_PREFIX + "grad::BatchNorm3d", bn3d_grad),
+    ]
     return cases
+
+
+def _pool3d_leaf(L, vol):
+    x = L.tensor(vol, requires_grad=True)
+    L.nn.functional.max_pool3d(x, 2).sum().backward()
+    return x
 
 
 def golden_cases(inp=None):
