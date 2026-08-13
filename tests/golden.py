@@ -34,11 +34,16 @@ _INPUT_PREFIX = "input::"
 
 
 def load_browsertorch():
-    spec = importlib.util.spec_from_file_location(
-        "browsertorch", _here.parent / "browsertorch.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """저장소 루트의 `browsertorch` 를 들여온다.
+
+    예전에는 파일 하나를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다 —
+    `__init__.py` 만 실행해도 상대 임포트가 패키지 문맥을 요구하기 때문이다.
+    """
+    root = str(_here.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import browsertorch
+    return browsertorch
 
 
 def dump(path=DEFAULT_PATH):

@@ -1,0 +1,723 @@
+"""browsertorch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+
+import numpy as _np
+
+try:
+    import js as _js
+    from pyodide.ffi import create_proxy as _create_proxy
+    from pyodide.ffi import to_js as _to_js
+except ImportError as _exc:                                          # pragma: no cover
+    raise ImportError(
+        "browsertorch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
+        "네이티브에서는 `browsertorch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
+        "GPU 로 돌렸다고 착각하게 됩니다."
+    ) from _exc
+
+_tf = getattr(_js, "tf", None)
+if _tf is None:                                                      # pragma: no cover
+    raise ImportError("TF.js 가 페이지에 없습니다. tf.min.js 를 먼저 실으세요.")
+
+from ._tensor import (
+    Tensor, _align, _canonical, _storage_for, _wrap,
+)
+from ._base import (
+    _ValuesIndices, _dtype_of, _last_axis_only, _pick_last, _reject_float64, _shape_of,
+    _slice_along, _slice_tensor, _to_np, _to_tf, _unsupported, bool_, dtype, float32,
+    int64,
+)
+
+# ---------------------------------------------------------------- 만들기
+
+def tensor(data, dtype=None, requires_grad=False):
+    _reject_float64(dtype)
+    if isinstance(data, Tensor):
+        out = Tensor(_tf.clone(data._h), requires_grad,      # 손잡이를 나눠 갖지 않는다
+                     dt=dtype or data._dtype)
+        out._nhwc = data._nhwc
+        return out
+    arr = _np.asarray(data)
+    dt = dtype or _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), requires_grad, dt=dt)
+
+
+def from_numpy(arr):
+    arr = _np.asarray(arr)
+    dt = _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), dt=dt)
+
+
+def zeros(*shape, dtype=None, requires_grad=False):
+    _reject_float64(dtype)
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+    return Tensor(_tf.zeros(_to_js(list(shape))), requires_grad, dt=dtype or float32)
+
+
+def ones(*shape, dtype=None, requires_grad=False):
+    _reject_float64(dtype)
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+    return Tensor(_tf.ones(_to_js(list(shape))), requires_grad, dt=dtype or float32)
+
+
+# 난수는 **numpy 로 뽑아 올린다.** TF.js 의 난수를 쓰면 `manual_seed` 가 코어와 다른
+# 흐름을 타서 같은 씨앗에 다른 값이 나온다. 초기화는 한 번뿐이라 올리는 비용도 없다.
+_rng = _np.random.default_rng(0)
+
+
+def manual_seed(seed):
+    global _rng
+    _rng = _np.random.default_rng(seed)
+    return seed
+
+
+class Generator:
+    """씨앗을 담아 다니는 그릇. `random_split(generator=...)` 이 이것을 받는다 —
+    나누기를 고정하지 않으면 모델을 바꿔 좋아진 건지 나누기가 운이 좋았던 건지 알 수 없다."""
+
+    def __init__(self):
+        self.seed = 0
+
+    def manual_seed(self, seed):
+        self.seed = seed
+        return self
+
+    def rng(self):
+        return _np.random.default_rng(self.seed)
+
+
+def rand(*shape):
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+    return Tensor(_to_tf(_rng.random(shape).astype(_np.float32)), dt=float32)
+
+
+def randint(low, high, shape):
+    return Tensor(_to_tf(_rng.integers(low, high, shape).astype(_np.int64), int64), dt=int64)
+
+
+def randperm(n):
+    return Tensor(_to_tf(_rng.permutation(n).astype(_np.int64), int64), dt=int64)
+
+
+def arange(*args, dtype=None):
+    _reject_float64(dtype)
+    arr = _np.arange(*args)
+    dt = dtype or _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), dt=dt)
+
+
+def randn(*shape, requires_grad=False):
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+    return Tensor(_to_tf(_rng.standard_normal(shape).astype(_np.float32)),
+                  requires_grad, dt=float32)
+
+
+# ---------------------------------------------------------------- 원소별
+#
+# TF.js 이름과 torch 이름이 갈리는 자리가 있어서 표로 둔다(matMul·notEqual 등).
+# 미분이 정의되지 않는 것(sign·floor·ceil·round)은 기울기를 0 으로 둔다 — torch 도 그렇다.
+
+def _unary(name, forward, derivative=None, keeps_dtype=False):
+    """`keeps_dtype` 은 정수를 정수로 돌려주는 것들이다 — torch 에서 `abs`·`sign`·
+    `floor`·`relu` 가 그렇고, `exp`·`log` 같은 것은 정수를 넣어도 실수를 준다."""
+    def fn(t):
+        t = _wrap(t)          # 원소별이라 레이아웃과 무관하다 — 되돌리면 안 된다
+        dt = t._dtype if keeps_dtype else float32
+        h = _storage_for(t, dt)
+        out = forward(h)
+        if derivative is None:
+            return Tensor(out, dt=dt)
+        return t._make(out, (t,), lambda g: (_tf.mul(g, derivative(h, out)),),
+                       f"{name}Backward0", dt=dt)
+    fn.__name__ = name
+    return fn
+
+
+_LN2 = float(_np.log(2.0))
+_LN10 = float(_np.log(10.0))
+
+exp = _unary("Exp", lambda x: _tf.exp(x), lambda x, o: o)
+log = _unary("Log", lambda x: _tf.log(x), lambda x, o: _tf.div(1.0, x))
+log2 = _unary("Log2", lambda x: _tf.div(_tf.log(x), _LN2),
+              lambda x, o: _tf.div(1.0, _tf.mul(x, _LN2)))
+log10 = _unary("Log10", lambda x: _tf.div(_tf.log(x), _LN10),
+               lambda x, o: _tf.div(1.0, _tf.mul(x, _LN10)))
+sqrt = _unary("Sqrt", lambda x: _tf.sqrt(x), lambda x, o: _tf.div(0.5, o))
+rsqrt = _unary("Rsqrt", lambda x: _tf.rsqrt(x), lambda x, o: _tf.div(_tf.mul(-0.5, o), x))
+square = _unary("Square", lambda x: _tf.square(x), lambda x, o: _tf.mul(2.0, x))
+reciprocal = _unary("Reciprocal", lambda x: _tf.reciprocal(x), lambda x, o: _tf.neg(_tf.mul(o, o)))
+abs = _unary("Abs", lambda x: _tf.abs(x), lambda x, o: _tf.sign(x), keeps_dtype=True)
+sin = _unary("Sin", lambda x: _tf.sin(x), lambda x, o: _tf.cos(x))
+cos = _unary("Cos", lambda x: _tf.cos(x), lambda x, o: _tf.neg(_tf.sin(x)))
+tan = _unary("Tan", lambda x: _tf.tan(x), lambda x, o: _tf.add(1.0, _tf.mul(o, o)))
+sinh = _unary("Sinh", lambda x: _tf.sinh(x), lambda x, o: _tf.cosh(x))
+cosh = _unary("Cosh", lambda x: _tf.cosh(x), lambda x, o: _tf.sinh(x))
+tanh = _unary("Tanh", lambda x: _tf.tanh(x), lambda x, o: _tf.sub(1.0, _tf.mul(o, o)))
+erf = _unary("Erf", lambda x: _tf.erf(x),
+             lambda x, o: _tf.mul(2.0 / float(_np.sqrt(_np.pi)), _tf.exp(_tf.neg(_tf.square(x)))))
+relu = _unary("Relu", lambda x: _tf.relu(x), lambda x, o: _tf.step(x), keeps_dtype=True)
+sigmoid = _unary("Sigmoid", lambda x: _tf.sigmoid(x),
+                 lambda x, o: _tf.mul(o, _tf.sub(1.0, o)))
+# 계단 모양 — 미분이 거의 모든 곳에서 0 이다.
+sign = _unary("Sign", lambda x: _tf.sign(x), keeps_dtype=True)
+floor = _unary("Floor", lambda x: _tf.floor(x), keeps_dtype=True)
+ceil = _unary("Ceil", lambda x: _tf.ceil(x), keeps_dtype=True)
+round = _unary("Round", lambda x: _tf.round(x), keeps_dtype=True)
+
+
+def neg(t):
+    return -_wrap(t)
+
+
+def prod(t, dim=None):
+    t = _canonical(t)
+    out = _tf.prod(t._h) if dim is None else _tf.prod(t._h, dim)
+    return t._make(out, (t,), lambda g: (_tf.div(_tf.mul(g, out), t._h),), "ProdBackward0")
+
+
+def count_nonzero(t, dim=None):
+    t = _canonical(t)
+    nz = _tf.cast(_tf.notEqual(t._h, 0.0), "float32")
+    return Tensor(_tf.sum(nz) if dim is None else _tf.sum(nz, dim))
+
+
+def matmul(a, b):
+    return _wrap(a) @ _wrap(b)
+
+
+def mm(a, b):
+    return _wrap(a) @ _wrap(b)
+
+
+# ---------------------------------------------------------------- 비교·클램프
+
+def maximum(a, b):
+    a, b = _align(_wrap(a), _wrap(b))
+    pick = _tf.cast(_tf.greaterEqual(a._h, b._h), "float32")
+    return a._make(_tf.maximum(a._h, b._h), (a, b),
+                   lambda g: (_tf.mul(g, pick), _tf.mul(g, _tf.sub(1.0, pick))),
+                   "MaximumBackward0")
+
+
+def minimum(a, b):
+    a, b = _align(_wrap(a), _wrap(b))
+    pick = _tf.cast(_tf.lessEqual(a._h, b._h), "float32")
+    return a._make(_tf.minimum(a._h, b._h), (a, b),
+                   lambda g: (_tf.mul(g, pick), _tf.mul(g, _tf.sub(1.0, pick))),
+                   "MinimumBackward0")
+
+
+def clamp(t, min=None, max=None):
+    t = _canonical(t)
+    lo = -1e30 if min is None else float(min)
+    hi = 1e30 if max is None else float(max)
+    inside = _tf.cast(_tf.logicalAnd(_tf.greaterEqual(t._h, lo), _tf.lessEqual(t._h, hi)), "float32")
+    return t._make(_tf.clipByValue(t._h, lo, hi), (t,),
+                   lambda g: (_tf.mul(g, inside),), "ClampBackward0")
+
+
+# ---------------------------------------------------------------- 선형대수
+
+def dot(a, b):
+    return (_wrap(a) * _wrap(b)).sum()
+
+
+def bmm(a, b):
+    return _wrap(a) @ _wrap(b)
+
+
+def eye(n):
+    return Tensor(_tf.eye(n), dt=float32)
+
+
+def full(shape, value, dtype=None):
+    _reject_float64(dtype)
+    dt = dtype or (int64 if isinstance(value, int) and not isinstance(value, bool) else float32)
+    return Tensor(_tf.fill(_to_js(list(shape)), float(value)), dt=dt)
+
+
+def full_like(t, value):
+    return full(_wrap(t).shape, value)
+
+
+def zeros_like(t, dtype=None):
+    t = _wrap(t)
+    return Tensor(_tf.zerosLike(t._h), dt=dtype or t._dtype)
+
+
+def ones_like(t, dtype=None):
+    t = _wrap(t)
+    return Tensor(_tf.onesLike(t._h), dt=dtype or t._dtype)
+
+
+def empty(*shape, dtype=None):
+    return zeros(*shape, dtype=dtype)
+
+
+def linspace(start, end, steps):
+    return Tensor(_to_tf(_np.linspace(start, end, steps).astype(_np.float32)), dt=float32)
+
+
+def as_tensor(data, dtype=None):
+    if isinstance(data, Tensor) and dtype is None:
+        return data
+    return tensor(data, dtype)
+
+
+def where(cond, a, b):
+    """조건이 참인 자리는 a, 아니면 b. 기울기도 그 자리로만 간다."""
+    c = _wrap(cond)
+    mask = c._h if c._dtype is bool_ else _tf.notEqual(c._h, 0.0)
+    ta, tb = _align(_wrap(a), _wrap(b))
+    keep = _tf.cast(mask, "float32")
+    return ta._make(_tf.where(mask, ta._h, tb._h), (ta, tb),
+                    lambda g: (_tf.mul(g, keep), _tf.mul(g, _tf.sub(1.0, keep))),
+                    "WhereBackward0")
+
+
+def _masked(t, mask, op):
+    """마스크를 곱한다. 역방향은 **같은 마스크를 다시 곱하는** 것이다 — 지운 자리는
+    출력에 안 나타났으니 기울기도 0 이다.
+
+    마스크 손잡이를 닫아두지 않고 역방향에서 새로 만든다. 붙잡아 두면 `scope()` 가
+    닫힐 때 이미 놓인 버퍼를 가리키게 되고, 그건 이 파일에서 세 번 겪은 함정이다.
+    """
+    return t._make(_tf.mul(t._h, _to_tf(mask)), (t,),
+                   lambda g: (_tf.mul(g, _to_tf(mask)),), op)
+
+
+def tril(t, diagonal=0):
+    t = _canonical(t)
+    n, m = t.shape[-2], t.shape[-1]
+    return _masked(t, _np.tril(_np.ones((n, m), dtype=_np.float32), k=diagonal),
+                   "TrilBackward0")
+
+
+def triu(t, diagonal=0):
+    t = _canonical(t)
+    n, m = t.shape[-2], t.shape[-1]
+    return _masked(t, _np.triu(_np.ones((n, m), dtype=_np.float32), k=diagonal),
+                   "TriuBackward0")
+
+
+def masked_fill(t, mask, value):
+    t = _canonical(t)
+    m = _wrap(mask)
+    keep = _tf.cast(_tf.logicalNot(m._h if m._dtype is bool_
+                                   else _tf.notEqual(m._h, 0.0)), "float32")
+    filled = _tf.where(m._h if m._dtype is bool_ else _tf.notEqual(m._h, 0.0),
+                       _tf.fill(_to_js(list(t.shape)), float(value)), t._h)
+    return t._make(filled, (t,), lambda g: (_tf.mul(g, keep),), "MaskedFillBackward0")
+
+
+def repeat_interleave(t, repeats, dim=None):
+    """제자리에서 늘린다. **`stack` 과 `reshape` 로 짠다** — 둘 다 이미 그래프를 잇는다.
+
+    셋 다 전에는 numpy 로 내려받아 다시 올렸다. 값은 맞았지만 GPU 를 왕복하면서
+    기울기가 끊겼다 — 되찾는 가장 안전한 길은 역방향을 새로 쓰는 것이 아니라 **이미
+    검증된 연산으로 다시 짜는 것**이다.
+    """
+    t = _canonical(t)
+    if not isinstance(repeats, int):
+        _unsupported("repeat_interleave(repeats 가 정수가 아닌 경우)")
+    if dim is None:
+        n = t.numel()
+        return stack([t.reshape(n)] * repeats, 1).reshape(n * repeats)
+    shape = tuple(t.shape)
+    merged = shape[:dim] + (shape[dim] * repeats,) + shape[dim + 1:]
+    return stack([t] * repeats, dim + 1).reshape(*merged)
+
+
+def tile(t, reps):
+    """통째로 반복해 붙인다. `cat` 으로 짠다."""
+    t = _canonical(t)
+    reps_t = (reps,) if isinstance(reps, int) else tuple(reps)
+    nd = max(t.ndim, len(reps_t))
+    if t.ndim < nd:                       # reps 가 더 길면 앞에 1 차원을 세운다
+        t = t.reshape(*((1,) * (nd - t.ndim) + tuple(t.shape)))
+    out = t
+    for axis, r in enumerate((1,) * (nd - len(reps_t)) + reps_t):
+        if r > 1:
+            out = cat([out] * r, axis)
+    return out
+
+
+def movedim(t, source, destination):
+    t = _canonical(t)
+    order = list(range(t.ndim))
+    order.insert(destination, order.pop(source))
+    return t.permute(*order)
+
+
+def argsort(t, dim=-1, descending=False):
+    return sort(t, dim, descending).indices
+
+
+def bincount(t):
+    # int32 로 낮춰서 센다 — wasm32 에서는 numpy 의 intp 가 32비트라 int64 를 거부한다.
+    counts = _np.bincount(_canonical(t).numpy().astype(_np.int32))
+    return Tensor(_to_tf(counts.astype(_np.int64), int64), dt=int64)
+
+
+def multinomial(probs, num_samples, replacement=True):
+    p = _canonical(probs).numpy().astype(_np.float64)
+    p = p / p.sum(axis=-1, keepdims=True)
+    if p.ndim == 1:
+        out = _rng.choice(len(p), size=num_samples, p=p)
+    else:
+        out = _np.asarray([_rng.choice(p.shape[-1], size=num_samples, p=row) for row in p])
+    return Tensor(_to_tf(out.astype(_np.int64), int64), dt=int64)
+
+
+def einsum(equation, *operands):
+    """TF.js 에 einsum 이 없어 numpy 로 계산한다. **역방향도 numpy 로 한다.**
+
+    이미 내려받아 계산하고 있었으므로 역방향을 붙인다고 더 느려지지 않는다. 규칙은
+    하나다 — 출력 첨자를 항의 자리에 바꿔 넣으면 그 항의 기울기가 나온다. 어떤 첨자가
+    그 항에만 있으면(`ij->i` 의 `j`) einsum 이 없던 축을 못 만들므로 1 로 채운 항을
+    끼워 넣는다. `...` 과 한 항 안의 반복 첨자는 이 규칙이 안 통해서 **틀린 기울기를
+    주는 대신 기울기를 안 준다** — 그때는 `backward()` 가 거절한다.
+    """
+    ops = [_canonical(o) for o in operands]
+    arrays = [o.numpy() for o in ops]
+    out = _np.einsum(equation, *arrays)
+    eq = equation.replace(" ", "")
+    if "->" in eq:
+        lhs, rhs = eq.split("->")
+    else:
+        lhs = eq
+        counts = {}
+        for c in lhs.replace(",", ""):
+            counts[c] = counts.get(c, 0) + 1
+        rhs = "".join(sorted(c for c, k in counts.items() if k == 1))
+    subs = lhs.split(",")
+    if "..." in eq or any(len(set(s)) != len(s) for s in subs):
+        return Tensor(_to_tf(out), dt=float32)
+
+    def back(g):
+        gg = _np.asarray(_to_np(g), dtype=_np.float32).reshape(out.shape)
+        grads = []
+        for i, mine in enumerate(subs):
+            rest = [(subs[j], arrays[j]) for j in range(len(subs)) if j != i]
+            known = set(rhs) | {c for s, _ in rest for c in s}
+            missing = [c for c in mine if c not in known]
+            spec = [rhs] + [s for s, _ in rest]
+            terms = [gg] + [d for _, d in rest]
+            if missing:
+                spec.append("".join(missing))
+                terms.append(_np.ones([arrays[i].shape[mine.index(c)] for c in missing],
+                                      dtype=_np.float32))
+            grads.append(_to_tf(_np.einsum(",".join(spec) + "->" + mine, *terms)))
+        return tuple(grads)
+
+    return ops[0]._make(_to_tf(out), tuple(ops), back, "EinsumBackward0")
+
+
+def allclose(a, b, rtol=1e-5, atol=1e-8):
+    return bool(_np.allclose(_wrap(a).numpy(), _wrap(b).numpy(), rtol=rtol, atol=atol))
+
+
+def equal(a, b):
+    return bool(_np.array_equal(_wrap(a).numpy(), _wrap(b).numpy()))
+
+
+def _compare(name, fn):
+    def cmp(a, b):
+        ta, tb = _align(_wrap(a), _wrap(b))
+        return Tensor(fn(ta._h, tb._h), dt=bool_)
+    cmp.__name__ = name
+    return cmp
+
+
+eq = _compare("eq", lambda a, b: _tf.equal(a, b))
+ne = _compare("ne", lambda a, b: _tf.notEqual(a, b))
+lt = _compare("lt", lambda a, b: _tf.less(a, b))
+le = _compare("le", lambda a, b: _tf.lessEqual(a, b))
+gt = _compare("gt", lambda a, b: _tf.greater(a, b))
+ge = _compare("ge", lambda a, b: _tf.greaterEqual(a, b))
+logical_and = _compare("logical_and", lambda a, b: _tf.logicalAnd(a, b))
+logical_or = _compare("logical_or", lambda a, b: _tf.logicalOr(a, b))
+
+
+def logical_not(t):
+    t = _wrap(t)
+    h = t._h if t._dtype is bool_ else _tf.notEqual(t._h, 0.0)
+    return Tensor(_tf.logicalNot(h), dt=bool_)
+
+
+def isnan(t):
+    return Tensor(_tf.isNaN(_wrap(t)._h), dt=bool_)
+
+
+def isinf(t):
+    return Tensor(_tf.isInf(_wrap(t)._h), dt=bool_)
+
+
+def isfinite(t):
+    return Tensor(_tf.isFinite(_wrap(t)._h), dt=bool_)
+
+
+def pow(t, exponent):
+    return _wrap(t) ** exponent
+
+
+def outer(a, b):
+    a, b = _wrap(a), _wrap(b)
+    return reshape(a, (-1, 1)) @ reshape(b, (1, -1))
+
+
+def reshape(t, shape):
+    t = _canonical(t)
+    old = t.shape
+    return t._make(_tf.reshape(t._h, _to_js(list(shape))), (t,),
+                   lambda g: (_tf.reshape(g, _to_js(list(old))),), "ViewBackward0")
+
+
+def diag(t):
+    """torch 의 `diag` 는 **행렬에서 대각을 뽑는다.** TF.js 의 `diag` 는 반대로
+    벡터에서 행렬을 만든다 — 이름이 같고 뜻이 반대라, 그대로 부르면 조용히 다른 값이 나온다."""
+    t = _canonical(t)
+    if t.ndim == 1:                       # 벡터 → 대각행렬
+        n = t.shape[0]
+        return t.reshape(n, 1) * eye(n)
+    # 행렬 → 대각. 단위행렬을 곱해 한 축을 접으면 되고, **곱셈과 합은 이미 그래프를
+    # 잇는다** — 손으로 역방향을 쓸 이유가 없다.
+    return (t * eye(t.shape[0])).sum(dim=1)
+
+
+def trace(t):
+    t = _canonical(t)
+    return (t * eye(t.shape[0])).sum()
+
+
+def norm(t, p=2, dim=None):
+    t = _canonical(t)
+    if p == 1:
+        return abs(t).sum(dim=dim)
+    return (t * t).sum(dim=dim) ** 0.5
+
+
+def cumsum(t, dim):
+    t = _canonical(t)
+    return t._make(_tf.cumsum(t._h, dim), (t,),
+                   lambda g: (_tf.reverse(_tf.cumsum(_tf.reverse(g, dim), dim), dim),),
+                   "CumsumBackward0")
+
+
+def cumprod(t, dim):
+    """누적 곱. **역방향은 CPU 에서 정확히 센다.**
+
+    GPU 로 짜려면 `dL/dx_k = (1/x_k) * sum_{j>=k} g_j y_j` 를 쓰게 되는데, 입력에 0 이
+    있으면 거기서 나눗셈이 터져 조용히 `nan` 이 흐른다. 예외도 안 난다 — 이 저장소가
+    가장 싫어하는 모양이다. 그래서 `x_k` 를 뺀 곱을 직접 쌓는다. 내려받았다 올리므로
+    느리지만 `cumprod` 는 학습 경로의 안쪽이 아니고, **0 이 섞였을 때 답이 맞는 쪽**이
+    기준이다.
+    """
+    t = _canonical(t)
+
+    def back(g):
+        x = _np.moveaxis(t.numpy(), dim, 0)
+        gg = _np.moveaxis(_np.asarray(_to_np(g), dtype=_np.float32), dim, 0)
+        grad = _np.zeros_like(x, dtype=_np.float32)
+        prefix = _np.ones_like(x[0])
+        for k in range(x.shape[0]):
+            run = prefix.copy()
+            acc = gg[k] * run
+            for j in range(k + 1, x.shape[0]):
+                run = run * x[j]
+                acc = acc + gg[j] * run
+            grad[k] = acc
+            prefix = prefix * x[k]
+        return (_to_tf(_np.moveaxis(grad, 0, dim)),)
+
+    return t._make(_tf.cumprod(t._h, dim), (t,), back, "CumprodBackward0")
+
+
+# ---------------------------------------------------------------- 뽑기·모양
+
+
+def topk(t, k, dim=-1, largest=True):
+    t = _canonical(t)
+    _last_axis_only(t, dim, "topk")
+    if not largest:
+        _unsupported("topk(largest=False)")
+    idx = _tf.topk(t._h, k).indices
+    return _ValuesIndices(_pick_last(t, idx), Tensor(idx))
+
+
+def sort(t, dim=-1, descending=False):
+    """TF.js 에는 정렬이 없다. `topk` 로 전부 뽑으면 내림차순이므로, 오름차순은 뒤집는다."""
+    t = _canonical(t)
+    _last_axis_only(t, dim, "sort")
+    idx = _tf.topk(t._h, t.shape[-1]).indices
+    if not descending:
+        idx = _tf.reverse(idx, -1)
+    return _ValuesIndices(_pick_last(t, idx), Tensor(idx))
+
+
+def unique(t, sorted=True, return_counts=False):
+    """**TF.js 의 WebGPU 백엔드에 `Unique` 커널이 없다**(실측: Kernel not registered).
+
+    그리고 결과의 크기가 값에 따라 정해지므로 GPU 에 두기도 어렵다. 읽어와서 numpy 로
+    하고 다시 올린다 — 동기화 한 번을 무는 대신 값이 맞는다. 학습 경로에는 안 쓰인다.
+    """
+    values = _np.unique(_wrap(t).numpy())
+    return Tensor(_to_tf(values))
+
+
+def masked_select(t, mask):
+    """골라낸 개수가 값에 따라 달라진다. TF.js 의 `booleanMask` 는 **비동기**라
+    동기 API 를 지키려면 쓸 수 없다. unique 와 같은 이유로 읽어와서 처리한다."""
+    t = _canonical(t)
+    m = mask.numpy() if isinstance(mask, Tensor) else _np.asarray(mask)
+    return Tensor(_to_tf(t.numpy()[m.astype(bool)]))
+
+
+def median(t, dim=None):
+    """torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다."""
+    t = _canonical(t)
+    if dim is None:
+        # 고른 자리를 **원-핫으로 곱해** 꺼낸다. 값만 슬라이스해 오면 그래프가 끊기는데,
+        # 곱하고 더하는 길로 가면 기울기가 그 한 자리로만 흐른다 — torch 도 그렇다.
+        n = t.numel()
+        order = _np.argsort(t.numpy().reshape(-1), kind="stable")
+        hot = _np.zeros(n, dtype=_np.float32)
+        hot[order[(n - 1) // 2]] = 1.0
+        return (t.reshape(n) * Tensor(_to_tf(hot))).sum()   # torch 는 0차원을 준다
+    _last_axis_only(t, dim, "median")
+    if t.ndim != 2:
+        _unsupported("median(2차원이 아닌 것에 dim 을 준 경우)")
+    rows, n = t.shape
+    order = _tf.reverse(_tf.topk(t._h, n).indices, -1)          # 오름차순 자리 번호
+    idx = _tf.slice(order, _to_js([0, (n - 1) // 2]), _to_js([rows, 1]))
+    # **진짜 번호를 준다.** 예전에는 0 으로 채워 돌려줬는데, 값만 맞고 번호는 거짓이었다.
+    #
+    # 번호는 int32 그대로 둔다. `tf.cast(int32 → float32)` 는 WebGPU 에서 dtype 라벨만
+    # 바꾸고 **비트를 안 바꾼다**(실측: 2 가 2.8e-45 로 읽힌다). torch 도 번호는 정수다.
+    return _ValuesIndices(_pick_last(t, idx).reshape(rows),
+                          Tensor(_tf.reshape(idx, _to_js([rows]))))
+
+
+def flip(t, dims):
+    t = _canonical(t)
+    dims = [dims] if isinstance(dims, int) else list(dims)
+    return t._make(_tf.reverse(t._h, _to_js(dims)), (t,),
+                   lambda g: (_tf.reverse(g, _to_js(dims)),), "FlipBackward0")
+
+
+def roll(t, shifts, dims=None):
+    """TF.js 에 `roll` 이 없다. 잘라서 순서를 바꿔 붙인다."""
+    t = _canonical(t)
+    axis = 0 if dims is None else (dims if isinstance(dims, int) else dims[0])
+    n = t.shape[axis]
+    s = int(shifts) % n
+    if s == 0:
+        return Tensor(_tf.clone(t._h))
+    head = _slice_along(t._h, axis, n - s, s)
+    tail = _slice_along(t._h, axis, 0, n - s)
+    return Tensor(_tf.concat(_to_js([head, tail]), axis))
+
+
+def cat(items, dim=0):
+    """이어 붙인다. 역방향은 붙인 자리대로 도로 자르는 것이다."""
+    items = [_canonical(_wrap(t)) for t in items]
+    sizes = [t.shape[dim] for t in items]
+    out = _tf.concat(_to_js([t._h for t in items]), dim)
+
+    def back(g):
+        pieces, start = [], 0
+        for size in sizes:
+            pieces.append(_slice_along(g, dim, start, size))
+            start += size
+        return tuple(pieces)
+
+    return items[0]._make(out, tuple(items), back, "CatBackward0")
+
+
+def stack(items, dim=0):
+    """새 축을 만들어 쌓는다. 역방향은 그 축에서 한 장씩 떼는 것이다."""
+    items = [_canonical(_wrap(t)) for t in items]
+    out = _tf.stack(_to_js([t._h for t in items]), dim)
+
+    def back(g):
+        return tuple(_tf.squeeze(_slice_along(g, dim, i, 1), _to_js([dim]))
+                     for i in range(len(items)))
+
+    return items[0]._make(out, tuple(items), back, "StackBackward0")
+
+
+def narrow(t, dim, start, length):
+    return _slice_tensor(_canonical(t), dim, start, length)
+
+
+def split(t, size, dim=0):
+    t = _canonical(t)
+    n = t.shape[dim]
+    sizes = size if isinstance(size, (list, tuple)) else \
+        [size] * (n // size) + ([n % size] if n % size else [])
+    out, start = [], 0
+    for sz in sizes:
+        out.append(_slice_tensor(t, dim, start, sz))
+        start += sz
+    return tuple(out)
+
+
+def chunk(t, chunks, dim=0):
+    t = _canonical(t)
+    n = t.shape[dim]
+    return split(t, -(-n // chunks), dim)
+
+
+def unbind(t, dim=0):
+    t = _canonical(t)
+    shape = t.shape
+    rest = tuple(s for i, s in enumerate(shape) if i != dim)
+    return tuple(_slice_tensor(t, dim, i, 1).reshape(rest) for i in range(shape[dim]))
+
+
+def gather(t, dim, index):
+    """torch 의 `gather` — 원소마다 자리를 고른다. TF.js 의 `gather` 는 축을 통째로
+    뽑는 다른 연산이라 그대로 못 쓴다.
+
+    자리를 원-핫으로 만들어 곱하고 접는다. 그러면 **역전파가 그냥 따라온다** —
+    뽑기만 하고 그래프를 끊으면 뽑은 자리로 기울기가 안 가고, 분류 손실이 통째로
+    미분 불가가 된다(실제로 그랬다).
+    """
+    t = _canonical(t)
+    if t.ndim != 2 or dim != 1:
+        _unsupported("gather(2차원 · dim=1 이 아닌 것)")
+    rows, cols = t.shape
+    idx32 = _to_int32(index)
+    k = _shape_of(idx32)[1]
+    onehot = _tf.cast(_tf.oneHot(_tf.reshape(idx32, _to_js([rows * k])), cols), "float32")
+    onehot = _tf.reshape(onehot, _to_js([rows, k, cols]))
+
+    picked = _tf.sum(_tf.mul(onehot, _tf.reshape(t._h, _to_js([rows, 1, cols]))), 2)
+
+    def back(g):
+        return (_tf.sum(_tf.mul(onehot, _tf.reshape(g, _to_js([rows, k, 1]))), 1),)
+
+    return t._make(picked, (t,), back, "GatherBackward0")
+
+
+def _to_int32(index):
+    handle = index._h if isinstance(index, Tensor) else _to_tf(_np.asarray(index))
+    return _tf.cast(handle, "int32")
+
+
+def index_select(t, dim, index):
+    """원-핫 행렬을 곱해서 뽑는다 — 그래야 역전파가 따라온다."""
+    t = _canonical(t)
+    if dim != 0:
+        _unsupported("index_select(dim=0 이 아닌 것)")
+    shape = t.shape
+    n = shape[0]
+    idx32 = _tf.reshape(_to_int32(index), _to_js([-1]))
+    k = _shape_of(idx32)[0]
+    onehot = _tf.cast(_tf.oneHot(idx32, n), "float32")           # (k, n)
+    rest = int(_np.prod(shape[1:])) if len(shape) > 1 else 1
+    flat = t.reshape(n, rest)
+    picked = flat._make(_tf.matMul(onehot, flat._h), (flat,),
+                        lambda g: (_tf.matMul(onehot, g, True, False),),
+                        "IndexSelectBackward0")
+    return picked.reshape((k,) + tuple(shape[1:]))
+
+

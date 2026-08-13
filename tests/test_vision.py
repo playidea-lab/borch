@@ -8,8 +8,8 @@
 같은 자리를 자르거나, 배치 전체에 같은 뽑기를 쓰거나) 골든은 초록이다. 여기가 그 자리다.
 """
 
-import importlib.util
 import pathlib
+import sys
 
 import numpy as np
 import pytest
@@ -17,15 +17,12 @@ import pytest
 _root = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load(name):
-    spec = importlib.util.spec_from_file_location(name, _root / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
+import browsertorch as BT                                            # noqa: E402
+import browsertorch_vision as V                                      # noqa: E402
 
-V = _load("browsertorch_vision")
-BT = _load("browsertorch")
 V.use(BT)
 
 # 한쪽 끝에만 표시를 둔 그림. 뒤집히면 표시가 반대쪽으로 간다 — 뒤집혔는지를

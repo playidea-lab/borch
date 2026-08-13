@@ -39,14 +39,23 @@ window.GOLDEN_RESULT = null;
 
 // 저장소 안의 경로 → Pyodide 가상 파일시스템의 경로.
 // 오른쪽 모양을 왼쪽과 같게 두는 것이 요점이다.
+//
+// 두 라이브러리는 **패키지다**(예전에는 파일 하나였다). 모듈을 여기 적어야 한다 —
+// 빠뜨리면 `ImportError` 로 시끄럽게 터진다. 조용히 반쪽만 실리는 것보다 낫다.
+const PACKAGES = {
+  browsertorch: ["__init__", "_base", "_tensor", "_ops", "_nn", "_optim", "_data", "_rnn"],
+  browsertorch_webgpu: ["__init__", "_base", "_tensor", "_ops", "_functional",
+                        "_nn", "_optim", "_data"],
+};
 const FILES = [
-  ["/browsertorch.py", "/work/browsertorch.py"],
-  ["/browsertorch_webgpu.py", "/work/browsertorch_webgpu.py"],
   ["/browsertorch_vision.py", "/work/browsertorch_vision.py"],
   ["/tests/cases.py", "/work/tests/cases.py"],
   ["/tests/golden.py", "/work/tests/golden.py"],
   ["/tests/browser/bench.py", "/work/bench.py"],
 ];
+for (const [pkg, mods] of Object.entries(PACKAGES)) {
+  for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);
+}
 const BINARY = [["/tests/golden.npz", "/work/tests/golden.npz"]];
 
 // TF.js 는 GPU 경로에서만 필요하다. 코어 browsertorch 는 numpy 뿐이라 안 부른다.
@@ -83,13 +92,20 @@ async function main() {
   await py.loadPackage("numpy");
 
   py.FS.mkdirTree("/work/tests");
+  for (const pkg of Object.keys(PACKAGES)) py.FS.mkdirTree(`/work/${pkg}`);
+  // `fetch` 는 404 에 예외를 안 던진다. 확인 안 하면 **오류 페이지의 HTML 이 그대로
+  // 파이썬 파일로 써진다** — 실제로 그렇게 해서 `<!DOCTYPE HTML>` 에서 SyntaxError 가
+  // 났다. 없는 파일은 없다고 말해야 한다.
+  const grab = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`파일을 못 받았다: ${url} (HTTP ${res.status})`);
+    return res;
+  };
   for (const [url, dst] of FILES) {
-    const text = await (await fetch(url)).text();
-    py.FS.writeFile(dst, text);
+    py.FS.writeFile(dst, await (await grab(url)).text());
   }
   for (const [url, dst] of BINARY) {
-    const buf = await (await fetch(url)).arrayBuffer();
-    py.FS.writeFile(dst, new Uint8Array(buf));
+    py.FS.writeFile(dst, new Uint8Array(await (await grab(url)).arrayBuffer()));
   }
   say(`대조 대상: ${lib}`);
   let backend = "numpy (브라우저 GPU 안 씀)";

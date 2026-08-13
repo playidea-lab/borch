@@ -9,17 +9,19 @@
     uv run --with pytest --with numpy --with torch pytest tests/
 """
 
-import importlib.util
 import pathlib
+import sys
 
 import numpy as np
 import pytest
 import torch as real
 
-_spec = importlib.util.spec_from_file_location(
-    "browsertorch", pathlib.Path(__file__).resolve().parent.parent / "browsertorch.py")
-bt = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(bt)
+# 예전에는 `browsertorch.py` 를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다.
+_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
+import browsertorch as bt                                            # noqa: E402
 
 TOL = 1e-4
 

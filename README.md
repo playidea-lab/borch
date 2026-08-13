@@ -17,8 +17,8 @@
 
 ## 설치
 
-순수 파이썬 휠 하나(42KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
-`browsertorch` 와 `browsertorch_vision` 두 모듈이 들어 있다.
+순수 파이썬 휠 하나다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
+`browsertorch` 패키지와 `browsertorch_vision` 모듈이 들어 있다.
 
 ```bash
 uv add ./browsertorch-1.4.0-py3-none-any.whl        # 릴리스에서 받은 파일
@@ -91,6 +91,28 @@ BrowserTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 ```
 
 조용히 다른 값을 내느니 시끄럽게 멈춘다.
+
+## 파일 구조 — 한 파일이 아니다
+
+`browsertorch` 는 **패키지다**. 처음에는 파일 하나였고 그것이 "얹으면 끝"이라는 배포
+이야기의 일부였는데, 3,300 줄이 되면서 그 명분이 먼저 사라졌다.
+
+| | 줄 | 무엇 |
+|---|---|---|
+| `_base.py` | 147 | dtype · 오류 규격 · `repr` |
+| `_tensor.py` | 656 | `Tensor` 와 autograd |
+| `_ops.py` | 1,026 | 수학 · 모양 · `nn.functional` |
+| `_nn.py` | 1,000 | 층 · 순환 · 트랜스포머 |
+| `_optim.py` | 293 | 옵티마이저 · 스케줄러 |
+| `_data.py` | 168 | `Dataset` · `DataLoader` |
+| `_rnn.py` | 65 | `nn.utils.rnn` |
+| `__init__.py` | 120 | 전부 모으고 `torch` 로 심는 자리 |
+
+**공개 이름은 안 바뀌었다** — 쪼개기 전후로 197개 그대로다. `import browsertorch` 는
+같은 것을 준다. 자매도 같은 모양으로 쪼갰다(`_functional` 이 하나 더 있다).
+
+손으로 옮기지 않았다. 자르는 자리만 정하고 나머지는 스크립트가 했다 — 3천 줄을 사람이
+오려 붙이면 조용히 한 줄이 사라지고, 그건 골든이 잡기 전까지 아무도 모른다.
 
 ## 어떻게 보증하는가
 

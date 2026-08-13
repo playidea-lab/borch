@@ -24,14 +24,15 @@ torch 쪽 순서는 SIMD 폭과 스레드 수에 따라 또 달라진다. 쫓을
 import importlib.util
 import itertools
 import pathlib
+import sys
 
 import numpy as np
 import torch as real
 
 _here = pathlib.Path(__file__).resolve().parent
-_spec = importlib.util.spec_from_file_location("browsertorch", _here.parent / "browsertorch.py")
-nano = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(nano)
+if str(_here.parent) not in sys.path:
+    sys.path.insert(0, str(_here.parent))
+import browsertorch as nano                                          # noqa: E402
 
 # 케이스 표는 별도 파일이다 — 왜인지는 cases.py 첫 줄에 있다.
 _cases_spec = importlib.util.spec_from_file_location("bt_cases", _here / "cases.py")

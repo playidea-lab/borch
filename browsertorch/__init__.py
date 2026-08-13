@@ -1,0 +1,120 @@
+"""browsertorch — numpy 위에 얹은 PyTorch 모양의 얇은 층.
+
+설치 없이 브라우저(Pyodide)에서 PyTorch **문법**을 연습하기 위한 것이다.
+torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코드에, 손튜닝된 AVX·NEON
+커널은 wasm SIMD 로 옮겨지지 않고, OpenMP 스레드는 Pyodide 가 싣지 않는 헤더를 요구한다.
+그런데 **문법을 익히는 데는 그중 아무것도 필요하지 않다.** numpy 면 된다.
+
+## 설계 원칙 — 틀린 답보다 없는 기능이 낫다
+
+축소판이 진짜와 조금이라도 다르게 동작하면 학생은 거짓을 배운다. 그래서
+**없는 것은 근사하지 않고 예외를 던진다.** 조용히 다른 값을 내느니 시끄럽게 멈춘다.
+
+지원 범위 밖을 만나면 `BrowserTorchError` 가 나고, 메시지가 "자기 컴퓨터에서 하라"고 말한다.
+
+## 어떻게 보장하는가
+
+두 겹이다.
+
+1. `browsertorch-check` — 같은 **랩 테스트**를 진짜 torch 와 축소판 양쪽에서 돌린다.
+2. `browsertorch-diff` — 랩과 무관하게 **같은 연산의 숫자를 직접 비교**한다
+   (`tests/test_browsertorch_diff.py`). 1번만으로는 랩이 지나가는 길만 봐서
+   축소판의 73% 였고, 그 사각지대에 역전파가 들어 있었다.
+
+지금은 두 검사가 86% 를 덮는다. 남은 곳은 `__repr__` 처럼 값이 걸리지 않는 자리다.
+
+`browsertorch-diff` 가 실제로 잡은 것: BatchNorm 은 정규화에 편향 분산을,
+running_var 갱신에는 비편향 분산을 쓴다. 둘 다 편향으로 두면 2.6% 어긋난다.
+"""
+
+
+import math as _math
+
+import numpy as _np
+
+from ._base import (
+    BrowserTorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
+    _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _math, _np, _resolve,
+    _tensor_repr, _tensor_str, _unsupported, bool_, dtype, float32, float64, int64,
+    long, set_printoptions,
+)
+from ._tensor import (
+    Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,
+    _category, _grad_mode, _no_bool_subtract, _promote, _scalar_category, _unbroadcast,
+    result_type,
+)
+from ._ops import (
+    Generator, _Cuda, _ERF_A, _ERF_P, _Namespace, _col2im, _compare, _diagonal_scatter,
+    _erf64, _erfc_pos, _from_plain, _gelu, _im2col, _index_at, _negate, _one_plus_erf64,
+    _pad2d, _pick, _pool_all, _rng, _slice_at, _to_plain, _unary, _wrap, abs, allclose,
+    arange, argsort, as_tensor, avg_pool2d, bincount, bmm, cat, ceil, chunk, clamp,
+    conv2d, cos, cosh, cosine_similarity, count_nonzero, cuda, cumprod, cumsum, diag,
+    dot, dropout, einsum, elu, embedding, empty, eq, equal, erf, exp, eye, flip, floor,
+    from_numpy, full, full_like, gather, ge, gelu, gt, index_select, isfinite, isinf,
+    isnan, l1_loss, layer_norm, le, leaky_relu, linspace, load, log, log10, log2,
+    log_softmax, logical_and, logical_not, logical_or, lt, manual_seed, masked_select,
+    max_pool2d, maximum, median, minimum, mm, movedim, multinomial, narrow, ne, neg,
+    nll_loss, no_grad, norm, normalize, ones, ones_like, outer, pad, pow, prod, rand,
+    randint, randn, randperm, reciprocal, relu, repeat_interleave, roll, round, rsqrt,
+    save, sigmoid, sign, silu, sin, sinh, smooth_l1_loss, softmax, sort, split, sqrt,
+    square, stack, tan, tanh, tensor, tile, topk, trace, tril, triu, unbind, unique,
+    where, zeros, zeros_like,
+)
+from ._nn import (
+    AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,
+    Conv2d, CrossEntropyLoss, Dropout, ELU, Embedding, Flatten, GELU, GRU, Identity,
+    L1Loss, LSTM, LayerNorm, LeakyReLU, Linear, LogSoftmax, MSELoss, MaxPool2d, Module,
+    ModuleList, MultiheadAttention, NLLLoss, Parameter, RNN, ReLU, Sequential, SiLU,
+    Sigmoid, SmoothL1Loss, Softmax, Tanh, Transformer, TransformerDecoder,
+    TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer, Unflatten,
+    _Activation, _Functional, _NN, _RNNBase, _apply_mask, _cls, _name, _nn_unsupported,
+    _split_heads, nn, one_hot,
+)
+from ._optim import (
+    Adam, AdamW, CosineAnnealingLR, ExponentialLR, LambdaLR, MultiStepLR, Optimizer,
+    RMSprop, ReduceLROnPlateau, SGD, StepLR, _LRScheduler, _Optim, _Scheduler, optim,
+)
+from ._data import (
+    ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
+    TensorDataset, WeightedRandomSampler, _Utils, _UtilsData, random_split, utils,
+)
+from ._rnn import (
+    _NnUtils, _NnUtilsRnn, pad_sequence,
+)
+
+# ================================================================ install
+
+def install(name="torch", modules=None):
+    """`import torch` 가 이 축소판을 집도록 하위 모듈 경로를 심는다.
+
+    경로를 손으로 적으면 어긋난다 — 실제로 어긋났다. 러너·검사기·테스트가 각자
+    목록을 들고 있었고 셋 다 `torch.optim.lr_scheduler` 를 빠뜨려서, 물건은 있는데
+    `from torch.optim.lr_scheduler import StepLR` 이 교재 본문에서 멈췄다.
+    그래서 목록을 두지 않고 `_Namespace` 를 훑어 만든다.
+
+    뿌리(`sys.modules["torch"]`)는 부르는 쪽이 심는다 — 모듈 객체를 쥔 것은 그쪽이다.
+    """
+    import sys
+
+    modules = sys.modules if modules is None else modules
+    registered = []
+
+    def walk(namespace, prefix):
+        for key in sorted(dir(namespace)):
+            if key.startswith("_"):
+                continue
+            value = getattr(namespace, key)
+            if isinstance(value, _Namespace):
+                path = prefix + "." + key
+                modules[path] = value
+                registered.append(path)
+                walk(value, path)
+
+    walk_root = [(key, value) for key, value in sorted(globals().items())
+                 if not key.startswith("_") and isinstance(value, _Namespace)]
+    for key, value in walk_root:
+        path = name + "." + key
+        modules[path] = value
+        registered.append(path)
+        walk(value, path)
+    return registered

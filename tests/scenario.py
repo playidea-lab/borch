@@ -19,11 +19,11 @@ import numpy as np
 
 LIB = sys.argv[1]
 if LIB == "nano":
-    import importlib.util
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
-    spec = importlib.util.spec_from_file_location("browsertorch", root / "browsertorch.py")
-    torch = importlib.util.module_from_spec(spec); spec.loader.exec_module(torch)
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    import browsertorch as torch
     sys.modules["torch"] = torch
     nn, optim = torch.nn, torch.optim
     from_data = torch.utils.data
