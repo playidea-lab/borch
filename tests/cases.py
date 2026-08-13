@@ -375,9 +375,59 @@ def train_cases(inp=None):
 
 
 def golden_cases(inp=None):
-    """골든이 다루는 전부 — 값·기울기·학습."""
+    """골든이 다루는 전부 — 값·기울기·학습·dtype."""
     inp = golden_inputs() if inp is None else inp
-    return wide_cases(inp) + grad_cases(inp) + train_cases(inp)
+    return wide_cases(inp) + grad_cases(inp) + train_cases(inp) + dtype_cases(inp)
+
+
+_DTYPES = ["float32", "int64", "bool"]
+_BIN_OPS = ["+", "-", "*", "/"]
+_PY_SCALARS = [("파이썬 int", 2), ("파이썬 float", 2.0), ("파이썬 bool", True)]
+
+
+def _dtype_tensor(L, name):
+    """양쪽에서 **같은 뜻의** dtype 을 고른다. 이름이 갈리는 것은 bool 뿐이다."""
+    kind = getattr(L, "bool", None) if name == "bool" else getattr(L, name)
+    if name == "bool":
+        kind = getattr(L, "bool_", None) or L.bool
+    return L.tensor([1, 0] if name == "bool" else [1, 2], dtype=kind)
+
+
+def dtype_cases(inp=None):
+    """dtype 승격 — torch 는 **범주**(bool < 정수 < 실수)로 가르고 그 안에서만 올린다.
+
+    numpy 규칙을 물려받으면 `float32 + int64` 가 float64 가 되고, 학습자는 틀린 규칙을
+    배운다. 코어는 이 표를 112건으로 덮는데, 여기는 **float64 가 빠진 3종**이다 —
+    TF.js 에 배정도가 없어서 있을 수가 없다.
+
+    결과는 dtype 이름 문자열이다. 값이 아니라 **어떤 형이 나오는가**를 묻는다.
+    거부하는 조합(불리언 뺄셈)은 **예외 종류**를 답으로 적는다 — 거부하는 것도 명세다.
+    """
+
+    def outcome(fn):
+        try:
+            return str(fn().dtype)
+        except Exception as exc:                                    # noqa: BLE001
+            return f"<{type(exc).__name__}>"
+
+    cases = []
+    for a in _DTYPES:
+        for b in _DTYPES:
+            for op in _BIN_OPS:
+                cases.append((
+                    f"dtype::{a} {op} {b}",
+                    lambda L, x=a, y=b, o=op: outcome(
+                        lambda: eval(f"p {o} q", {},                 # noqa: S307
+                                     {"p": _dtype_tensor(L, x), "q": _dtype_tensor(L, y)}))))
+    for a in _DTYPES:
+        for label, value in _PY_SCALARS:
+            for op in _BIN_OPS:
+                cases.append((
+                    f"dtype::{a} {op} {label}",
+                    lambda L, x=a, v=value, o=op: outcome(
+                        lambda: eval(f"p {o} s", {},                 # noqa: S307
+                                     {"p": _dtype_tensor(L, x), "s": v}))))
+    return cases
 
 
 def to_numpy(t):

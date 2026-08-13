@@ -17,9 +17,12 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
 
 ## 한계 — 코어와 다른 점
 
-- **dtype 이 없다.** 전부 float32 다. TF.js 에 int64 가 없고, 인덱스는 int32 로 돈다.
-  코어는 torch 의 dtype 승격을 112/112 로 맞추지만 이쪽은 그 축이 아예 없다
-- **오류·표현 동등(T2·T3)을 맞추지 않았다.** 코어는 12/12 · 15/15 다
+- **dtype 은 `float32` · `int64` · `bool` 세 가지다.** 승격 규칙은 torch 와 같게
+  맞췄지만(72/72), **`float64` 는 없다** — TF.js 에 배정도가 없어서 거절한다.
+  그리고 정수는 float32 에 담으므로 **2^24 까지 정확**하고, 넘으면 조용히 자르지 않고
+  던진다. 코어는 float64 까지 112/112 다
+- **표현 동등(T3)을 맞추지 않았다.** 코어는 15/15 다. 오류는 dtype 이 거부하는
+  조합만 골든이 본다
 - **`scope()` 를 노출한다.** 역전파 클로저가 든 중간 버퍼는 파이썬 GC 가 못 놓는다.
   코어와 다른 한 줄이고, 이유는 WEBGPU-DESIGN.md 7절에 있다
 
@@ -62,11 +65,81 @@ def _shape_of(handle):
     return tuple(int(n) for n in handle.shape)
 
 
-def _to_tf(arr):
+# ---------------------------------------------------------------- dtype
+#
+# **저장은 float32 한 가지, dtype 은 그 위의 라벨이다.**
+#
+# TF.js 에는 int64 도 float64 도 없다. 그리고 `cast(int32 → float32)` 가 WebGPU 에서
+# dtype 라벨만 바꾸고 **비트를 안 바꾼다**(실측: 2 가 2.8e-45 로 읽힌다). 그래서 정수를
+# int32 로 저장하면 정수+실수 승격을 아예 할 수 없다.
+#
+# 라벨로 두면 승격이 **캐스팅 없이 라벨 변경만으로** 끝나 그 버그를 통째로 피한다.
+# 대신 정수는 float32 가 정확히 담는 2^24 까지다 — 넘으면 조용히 자르지 않고 던진다.
+# 불리언만 TF.js 의 bool 로 든다(비교 결과가 그것으로 나온다).
+
+_INT_EXACT = 2 ** 24
+
+
+class dtype:
+    def __init__(self, name, np_type, category, rank, storage):
+        self.name = name
+        self.np = np_type
+        self.category = category        # bool(0) < 정수(1) < 실수(2)
+        self.rank = rank
+        self.storage = storage          # TF.js 가 실제로 드는 것
+
+    def __repr__(self):
+        return f"torch.{self.name}"
+
+    def __eq__(self, other):
+        return isinstance(other, dtype) and self.name == other.name
+
+    def __hash__(self):
+        return hash(self.name)
+
+
+float32 = dtype("float32", _np.float32, 2, 20, "float32")
+int64 = dtype("int64", _np.int64, 1, 10, "float32")
+long = int64
+bool_ = dtype("bool", _np.bool_, 0, 0, "bool")
+
+_BY_CATEGORY = {0: bool_, 1: int64, 2: float32}
+
+
+def _dtype_of(arr):
+    """numpy 배열의 dtype → 우리 dtype. torch 의 규칙을 따른다."""
+    kind = _np.asarray(arr).dtype.kind
+    if kind == "b":
+        return bool_
+    if kind in "iu":
+        return int64
+    if _np.asarray(arr).dtype == _np.float64:
+        # 조용히 float32 로 떨어뜨리지 않는다. 코어는 float64 를 진짜로 지원한다.
+        return float32
+    return float32
+
+
+def _reject_float64(dt):
+    if dt is not None and getattr(dt, "name", None) == "float64":
+        _unsupported("float64 (TF.js 에 배정도가 없습니다)")
+
+
+def _to_tf(arr, dt=None):
     """numpy → tf.Tensor. 평평하게 펴서 올리고 모양을 따로 준다."""
-    arr = _np.ascontiguousarray(arr, dtype=_np.float32)
-    buf = _js.Float32Array.new(arr.size)
-    buf.assign(arr.reshape(-1))
+    arr = _np.asarray(arr)
+    dt = dt or _dtype_of(arr)
+    if dt is bool_:
+        flat = _np.ascontiguousarray(arr.astype(_np.bool_)).reshape(-1)
+        buf = _js.Uint8Array.new(flat.size)
+        buf.assign(flat.view(_np.uint8))
+        return _tf.tensor(buf, _to_js(list(arr.shape)), "bool")
+    if dt is int64 and arr.size and _np.abs(arr.astype(_np.float64)).max() > _INT_EXACT:
+        raise RuntimeError(
+            f"정수가 {_INT_EXACT} 를 넘습니다. 이 라이브러리는 정수를 float32 에 담으므로 "
+            "그 위로는 정확하지 않습니다 — 조용히 자르지 않고 여기서 멈춥니다.")
+    flat = _np.ascontiguousarray(arr, dtype=_np.float32).reshape(-1)
+    buf = _js.Float32Array.new(flat.size)
+    buf.assign(flat)
     return _tf.tensor(buf, _to_js(list(arr.shape)), "float32")
 
 
@@ -115,7 +188,7 @@ class Tensor:
     `shape` 는 언제나 torch 순서로 답한다 — 밖에서는 이 사정이 보이면 안 된다.
     """
 
-    def __init__(self, handle, requires_grad=False, _parents=(), _backward=None):
+    def __init__(self, handle, requires_grad=False, _parents=(), _backward=None, dt=None):
         self._h = handle
         self.requires_grad = bool(requires_grad)
         self.grad = None
@@ -123,6 +196,8 @@ class Tensor:
         self._backward = _backward
         self._op = None
         self._nhwc = False
+        # 라벨이 없으면 저장이 말해주는 대로. bool 저장은 bool, 나머지는 실수다.
+        self._dtype = dt or (bool_ if str(handle.dtype) == "bool" else float32)
 
     # ---- 기본 정보
 
@@ -133,6 +208,10 @@ class Tensor:
             n, h, w, c = raw
             return (n, c, h, w)
         return raw
+
+    @property
+    def dtype(self):
+        return self._dtype
 
     @property
     def ndim(self):
@@ -150,7 +229,44 @@ class Tensor:
 
     def numpy(self):
         arr = _to_np(self._h)
+        if arr.dtype != self._dtype.np:
+            arr = arr.astype(self._dtype.np)      # 라벨이 말하는 dtype 으로 내보낸다
         return arr.transpose(0, 3, 1, 2) if self._nhwc else arr
+
+    # ---- 형 변환
+
+    def to(self, *args, **kwargs):
+        for a in list(args) + list(kwargs.values()):
+            if isinstance(a, dtype):
+                return self._cast_to(a)
+            if isinstance(a, str) and a != "cpu":
+                _unsupported(f"장치 '{a}'")
+        return self
+
+    def _cast_to(self, dt):
+        if dt is self._dtype:
+            return self
+        handle = self._h
+        if dt is bool_:
+            handle = _tf.notEqual(handle, 0.0)
+        elif self._dtype is bool_:
+            handle = _tf.cast(handle, "float32")
+        elif dt is int64:
+            handle = _tf.floor(handle)            # torch 의 정수 변환은 0 쪽으로 자른다
+        out = Tensor(handle if handle is not self._h else _tf.clone(handle), dt=dt)
+        out._nhwc = self._nhwc
+        return out
+
+    def float(self):
+        return self._cast_to(float32)
+
+    def long(self):
+        return self._cast_to(int64)
+
+    int = long
+
+    def bool(self):
+        return self._cast_to(bool_)
 
     def tolist(self):
         return self.numpy().tolist()
@@ -165,7 +281,7 @@ class Tensor:
     def detach(self):
         # **복제해야 한다.** 손잡이를 나눠 가지면 둘 중 하나가 사라질 때 다른 쪽의
         # 버퍼까지 놓아버린다. tf.clone 은 데이터를 공유하고 참조만 하나 더 든다.
-        out = Tensor(_tf.clone(self._h))
+        out = Tensor(_tf.clone(self._h), dt=self._dtype)
         out._nhwc = self._nhwc          # 레이아웃도 같이 물려준다 — 안 그러면 속이 밖으로 샌다
         return out
 
@@ -195,11 +311,12 @@ class Tensor:
 
     # ---- 그래프
 
-    def _make(self, handle, parents, backward, op=None):
+    def _make(self, handle, parents, backward, op=None, dt=None):
         needs = _grad_enabled and any(p.requires_grad for p in parents)
         out = Tensor(handle, requires_grad=needs,
                      _parents=parents if needs else (),
-                     _backward=backward if needs else None)
+                     _backward=backward if needs else None,
+                     dt=dt or self._dtype)
         out._op = op if needs else None
         # 원소별 연산은 레이아웃을 그대로 물려준다. 랭크가 4 에서 벗어나면 뜻이 없다.
         out._nhwc = self._nhwc and len(_shape_of(handle)) == 4
@@ -252,34 +369,47 @@ class Tensor:
 
     # ---- 산술
 
-    def _binary(self, o, forward, back, op):
-        """두 짝의 레이아웃을 맞춘 뒤 계산한다. 맞추는 규칙은 `_align` 에 있다."""
+    def _binary(self, o, forward, back, op, force=None):
+        """레이아웃을 맞추고 dtype 을 승격한 뒤 계산한다.
+
+        승격은 **라벨만 바꾼다** — 수치 저장이 전부 float32 라서 캐스팅이 필요 없다.
+        불리언만 저장이 달라서, 수치 연산에 들어갈 때 실수로 바꾼다.
+        """
+        target = _result_dtype(self, o)
         a, b = _align(self, _wrap(o))
-        return a._make(forward(a._h, b._h), (a, b), lambda g: back(g, a._h, b._h), op)
+        out_dt = force(target) if force else target
+        ah, bh = _storage_for(a, out_dt), _storage_for(b, out_dt)
+        return a._make(forward(ah, bh), (a, b), lambda g: back(g, ah, bh), op, dt=out_dt)
 
     def __add__(self, o):
+        if _both_bool(self, o):
+            return self._binary(o, _tf.logicalOr, lambda g, x, y: (g, g), "AddBackward0")
         return self._binary(o, _tf.add, lambda g, x, y: (g, g), "AddBackward0")
 
     __radd__ = __add__
 
     def __sub__(self, o):
+        _no_bool_subtract(self, o)
         return self._binary(o, _tf.sub, lambda g, x, y: (g, _tf.neg(g)), "SubBackward0")
 
     def __rsub__(self, o):
         return _wrap(o).__sub__(self)
 
     def __mul__(self, o):
+        if _both_bool(self, o):
+            return self._binary(o, _tf.logicalAnd, lambda g, x, y: (g, g), "MulBackward0")
         return self._binary(o, _tf.mul,
                             lambda g, x, y: (_tf.mul(g, y), _tf.mul(g, x)), "MulBackward0")
 
     __rmul__ = __mul__
 
     def __truediv__(self, o):
+        # torch 의 나눗셈은 정수끼리여도, 불리언끼리여도 **기본 실수형**을 낸다.
         return self._binary(
             o, _tf.div,
             lambda g, x, y: (_tf.div(g, y),
                              _tf.neg(_tf.div(_tf.mul(g, x), _tf.mul(y, y)))),
-            "DivBackward0")
+            "DivBackward0", force=lambda dt: float32)
 
     def __rtruediv__(self, o):
         return _wrap(o).__truediv__(self)
@@ -382,6 +512,56 @@ class Tensor:
 
 # ---------------------------------------------------------------- 도우미
 
+def result_type(a, b):
+    """두 dtype 의 결과 타입 — torch 의 규칙.
+
+    **범주**(bool < 정수 < 실수)로 먼저 가르고 **그 범주 안에서만** 올린다. 낮은 범주가
+    높은 것을 끌어올리지 않는다. 이걸 numpy 에 맡기면 학습자가 틀린 규칙을 배운다.
+    """
+    cat = max(a.category, b.category)
+    same = [d for d in (a, b) if d.category == cat]
+    return max(same, key=lambda d: d.rank)
+
+
+def _scalar_dtype(t_dtype, value):
+    """파이썬 스칼라는 텐서보다 약하다.
+
+    범주가 텐서보다 낮거나 같으면 텐서를 따르고, 높을 때만 그 범주의 기본형으로
+    올라간다 — 정수 텐서 + 파이썬 float 가 float32 인 이유다.
+    """
+    cat = 0 if isinstance(value, bool) else (1 if isinstance(value, int) else 2)
+    return t_dtype if cat <= t_dtype.category else _BY_CATEGORY[cat]
+
+
+def _result_dtype(t, o):
+    if isinstance(o, Tensor):
+        return result_type(t._dtype, o._dtype)
+    if isinstance(o, (bool, int, float)):
+        return _scalar_dtype(t._dtype, o)
+    return result_type(t._dtype, _dtype_of(o))
+
+
+def _storage_for(t, target):
+    """연산에 넣을 손잡이. 불리언 저장을 수치 연산에 쓰려면 실수로 바꾼다."""
+    if target is bool_ or t._dtype is not bool_:
+        return t._h
+    return _tf.cast(t._h, "float32")
+
+
+def _both_bool(t, o):
+    return t._dtype is bool_ and isinstance(o, Tensor) and o._dtype is bool_
+
+
+def _no_bool_subtract(t, o):
+    """torch 는 불리언에 `-` 를 허용하지 않고 `~`·`^` 를 쓰라고 안내한다."""
+    other = o._dtype if isinstance(o, Tensor) else (bool_ if isinstance(o, bool) else None)
+    if t._dtype is bool_ or other is bool_:
+        raise RuntimeError(
+            "불리언 텐서에는 뺄셈(`-`)을 쓸 수 없습니다. `^` 나 `~` 를 쓰세요.\n"
+            "(torch: Subtraction, the `-` operator, with a bool tensor is not supported. "
+            "If you are trying to invert a mask use the `~` or `logical_not()` operator instead.)")
+
+
 def _relayout(t, to_nhwc):
     """레이아웃을 바꾼다. **그래프 안에서** 하므로 역전파가 그냥 따라온다."""
     if t._nhwc == to_nhwc or len(_shape_of(t._h)) != 4:
@@ -418,9 +598,13 @@ def _align(a, b):
 def _wrap(x):
     if isinstance(x, Tensor):
         return x
+    if isinstance(x, bool):                       # bool 이 int 의 하위형이라 먼저 본다
+        return Tensor(_to_tf(_np.asarray(x), bool_), dt=bool_)
     if isinstance(x, (int, float)):
-        return Tensor(_tf.scalar(float(x)))
-    return Tensor(_to_tf(_np.asarray(x)))
+        return Tensor(_tf.scalar(float(x)), dt=int64 if isinstance(x, int) else float32)
+    arr = _np.asarray(x)
+    dt = _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), dt=dt)
 
 
 def _reshape_for_broadcast(g, shape, dim, keepdim):
@@ -446,25 +630,33 @@ def _unbroadcast(g, shape):
 # ---------------------------------------------------------------- 만들기
 
 def tensor(data, dtype=None, requires_grad=False):
+    _reject_float64(dtype)
     if isinstance(data, Tensor):
-        out = Tensor(_tf.clone(data._h), requires_grad)      # 손잡이를 나눠 갖지 않는다
+        out = Tensor(_tf.clone(data._h), requires_grad,      # 손잡이를 나눠 갖지 않는다
+                     dt=dtype or data._dtype)
         out._nhwc = data._nhwc
         return out
-    return Tensor(_to_tf(_np.asarray(data)), requires_grad)
+    arr = _np.asarray(data)
+    dt = dtype or _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), requires_grad, dt=dt)
 
 
 def from_numpy(arr):
-    return Tensor(_to_tf(arr))
+    arr = _np.asarray(arr)
+    dt = _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), dt=dt)
 
 
-def zeros(*shape, requires_grad=False):
+def zeros(*shape, dtype=None, requires_grad=False):
+    _reject_float64(dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_tf.zeros(_to_js(list(shape))), requires_grad)
+    return Tensor(_tf.zeros(_to_js(list(shape))), requires_grad, dt=dtype or float32)
 
 
-def ones(*shape, requires_grad=False):
+def ones(*shape, dtype=None, requires_grad=False):
+    _reject_float64(dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_tf.ones(_to_js(list(shape))), requires_grad)
+    return Tensor(_tf.ones(_to_js(list(shape))), requires_grad, dt=dtype or float32)
 
 
 def randn(*shape, requires_grad=False):
@@ -477,14 +669,18 @@ def randn(*shape, requires_grad=False):
 # TF.js 이름과 torch 이름이 갈리는 자리가 있어서 표로 둔다(matMul·notEqual 등).
 # 미분이 정의되지 않는 것(sign·floor·ceil·round)은 기울기를 0 으로 둔다 — torch 도 그렇다.
 
-def _unary(name, forward, derivative=None):
+def _unary(name, forward, derivative=None, keeps_dtype=False):
+    """`keeps_dtype` 은 정수를 정수로 돌려주는 것들이다 — torch 에서 `abs`·`sign`·
+    `floor`·`relu` 가 그렇고, `exp`·`log` 같은 것은 정수를 넣어도 실수를 준다."""
     def fn(t):
         t = _wrap(t)          # 원소별이라 레이아웃과 무관하다 — 되돌리면 안 된다
-        out = forward(t._h)
+        dt = t._dtype if keeps_dtype else float32
+        h = _storage_for(t, dt)
+        out = forward(h)
         if derivative is None:
-            return Tensor(out)
-        return t._make(out, (t,), lambda g: (_tf.mul(g, derivative(t._h, out)),),
-                       f"{name}Backward0")
+            return Tensor(out, dt=dt)
+        return t._make(out, (t,), lambda g: (_tf.mul(g, derivative(h, out)),),
+                       f"{name}Backward0", dt=dt)
     fn.__name__ = name
     return fn
 
@@ -502,7 +698,7 @@ sqrt = _unary("Sqrt", lambda x: _tf.sqrt(x), lambda x, o: _tf.div(0.5, o))
 rsqrt = _unary("Rsqrt", lambda x: _tf.rsqrt(x), lambda x, o: _tf.div(_tf.mul(-0.5, o), x))
 square = _unary("Square", lambda x: _tf.square(x), lambda x, o: _tf.mul(2.0, x))
 reciprocal = _unary("Reciprocal", lambda x: _tf.reciprocal(x), lambda x, o: _tf.neg(_tf.mul(o, o)))
-abs = _unary("Abs", lambda x: _tf.abs(x), lambda x, o: _tf.sign(x))
+abs = _unary("Abs", lambda x: _tf.abs(x), lambda x, o: _tf.sign(x), keeps_dtype=True)
 sin = _unary("Sin", lambda x: _tf.sin(x), lambda x, o: _tf.cos(x))
 cos = _unary("Cos", lambda x: _tf.cos(x), lambda x, o: _tf.neg(_tf.sin(x)))
 tan = _unary("Tan", lambda x: _tf.tan(x), lambda x, o: _tf.add(1.0, _tf.mul(o, o)))
@@ -511,14 +707,14 @@ cosh = _unary("Cosh", lambda x: _tf.cosh(x), lambda x, o: _tf.sinh(x))
 tanh = _unary("Tanh", lambda x: _tf.tanh(x), lambda x, o: _tf.sub(1.0, _tf.mul(o, o)))
 erf = _unary("Erf", lambda x: _tf.erf(x),
              lambda x, o: _tf.mul(2.0 / float(_np.sqrt(_np.pi)), _tf.exp(_tf.neg(_tf.square(x)))))
-relu = _unary("Relu", lambda x: _tf.relu(x), lambda x, o: _tf.step(x))
+relu = _unary("Relu", lambda x: _tf.relu(x), lambda x, o: _tf.step(x), keeps_dtype=True)
 sigmoid = _unary("Sigmoid", lambda x: _tf.sigmoid(x),
                  lambda x, o: _tf.mul(o, _tf.sub(1.0, o)))
 # 계단 모양 — 미분이 거의 모든 곳에서 0 이다.
-sign = _unary("Sign", lambda x: _tf.sign(x))
-floor = _unary("Floor", lambda x: _tf.floor(x))
-ceil = _unary("Ceil", lambda x: _tf.ceil(x))
-round = _unary("Round", lambda x: _tf.round(x))
+sign = _unary("Sign", lambda x: _tf.sign(x), keeps_dtype=True)
+floor = _unary("Floor", lambda x: _tf.floor(x), keeps_dtype=True)
+ceil = _unary("Ceil", lambda x: _tf.ceil(x), keeps_dtype=True)
+round = _unary("Round", lambda x: _tf.round(x), keeps_dtype=True)
 
 
 def neg(t):

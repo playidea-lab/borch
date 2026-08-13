@@ -50,7 +50,10 @@ def dump(path=DEFAULT_PATH):
     data, broken = {}, []
     for name, fn in cases:
         try:
-            data[_PREFIX + name] = cases_mod.to_numpy(fn(real))
+            got = fn(real)
+            # dtype 케이스는 값이 아니라 **형 이름**을 묻는다. 문자열 그대로 굳힌다.
+            data[_PREFIX + name] = (np.array(got) if isinstance(got, str)
+                                    else cases_mod.to_numpy(got))
         except Exception as exc:                                    # noqa: BLE001
             broken.append(f"{name}: {type(exc).__name__}: {exc}")
     if broken:
@@ -89,9 +92,14 @@ def check(lib, path=DEFAULT_PATH):
     for name, fn in cases:
         want = z[_PREFIX + name]
         try:
-            got = cases_mod.to_numpy(fn(lib))
+            raw = fn(lib)
+            got = np.array(raw) if isinstance(raw, str) else cases_mod.to_numpy(raw)
         except Exception as exc:                                    # noqa: BLE001
             bad.append(f"{name}: {type(exc).__name__} — {str(exc).splitlines()[0][:60]}")
+            continue
+        if want.dtype.kind == "U" or got.dtype.kind == "U":
+            if str(want) != str(got):
+                bad.append(f"{name}: {want} 여야 하는데 {got}")
             continue
         if want.shape != got.shape:
             bad.append(f"{name}: 모양 {want.shape} vs {got.shape}")
