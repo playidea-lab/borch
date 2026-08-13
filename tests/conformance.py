@@ -242,6 +242,15 @@ def _wide_cases():
          lambda L: L.nn.functional.cosine_similarity(L.tensor(x2), L.tensor(x2 * 2))),
         ("F.one_hot", lambda L: L.nn.functional.one_hot(L.tensor(np.array([0, 2])), 3)),
     ]
+
+    # erf·gelu 의 꼬리. 위의 xp 는 **양수 0.2 이상**만 보고 x1 은 대략 [-2, 2] 라,
+    # 자릿수가 날아가는 두 자리(원점 근처와 큰 |x|)를 아무도 안 보고 있었다.
+    # erf 를 `1 - erfc` 로 두면 원점에서, gelu 를 `1 + erf` 로 두면 왼쪽 꼬리에서 갈린다.
+    tail = np.array([-8., -6., -4., -1., -1e-3, 0., 1e-3, 1., 4., 6., 8.], dtype=np.float32)
+    cases += [
+        ("erf(꼬리)", lambda L: L.erf(L.tensor(tail))),
+        ("F.gelu(꼬리)", lambda L: L.nn.functional.gelu(L.tensor(tail))),
+    ]
     return cases
 
 
