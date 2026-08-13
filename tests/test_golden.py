@@ -55,3 +55,48 @@ def test_check_rejects_mismatched_inputs(tmp_path, monkeypatch):
     monkeypatch.setattr(golden.cases_mod, "input_fingerprint", lambda inp: "다른입력의지문")
     with pytest.raises(SystemExit, match="입력이 골든과 다르다"):
         golden.check(golden.load_browsertorch(), path)
+
+
+# ---- 기울기 흐름 표가 제 일을 하는지
+#
+# 이 표는 값이 아니라 "기울기가 흐르는가"를 묻는다. 그런데 그것을 **묻기만 하고 못
+# 잡으면** 아무것도 안 하면서 초록을 하나 더 만드는 것이다. 그래서 조용히 끊기는 두
+# 모양을 일부러 만들어 걸리는지 본다 — 실제로 자매에서 둘 다 나왔던 모양이다.
+
+class _Shim:
+    """라이브러리 하나를 흉내 내되 이름 하나만 바꿔치기한다."""
+
+    def __init__(self, lib, **swapped):
+        self._lib, self._swapped = lib, swapped
+
+    def __getattr__(self, key):
+        return self._swapped.get(key) or getattr(self._lib, key)
+
+
+def _flow_case(name):
+    return dict(golden.cases_mod.flow_cases())["flow::" + name]
+
+
+def test_flow_table_catches_a_severed_graph():
+    """맨 텐서를 돌려주는 연산 — `roll` 과 `masked_select` 가 실제로 그랬다."""
+    core = golden.load_browsertorch()
+    assert _flow_case("roll")(core).startswith("흐름")
+
+    severed = _Shim(core, roll=lambda t, s, dims=None: core.tensor(
+        core.roll(t, s, dims).numpy()))
+    assert _flow_case("roll")(severed).startswith("안흐름")
+
+
+def test_flow_table_catches_requires_grad_without_a_gradient():
+    """**더 나쁜 쪽.** `requires_grad` 는 True 인데 되짚으면 `.grad` 가 `None` 이다.
+
+    `.float()` 이 정확히 이랬고, `requires_grad` 만 묻는 검사는 이것을 통과시킨다.
+    """
+    core = golden.load_browsertorch()
+    assert _flow_case("sqrt")(core) == "흐름/기울기있음"
+
+    def lying_sqrt(t):
+        # 부모를 안 달고 requires_grad 만 켠다 — 옛 `.float()` 과 같은 모양이다.
+        return core.Tensor(core.sqrt(t).numpy(), requires_grad=True)
+
+    assert _flow_case("sqrt")(_Shim(core, sqrt=lying_sqrt)) == "흐름/조용히None"

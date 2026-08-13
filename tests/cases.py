@@ -1118,8 +1118,18 @@ def flow_cases(inp=None):
         fn, arr = calls[name]
 
         def run(L):
+            """**두 가지를 함께 답한다.** `requires_grad` 만 물으면 부족하다 —
+            `.float()` 은 True 라고 말해놓고 `.grad` 를 `None` 으로 남겼고, 그 검사만
+            있었으면 통과했을 것이다. 되짚어서 기울기가 실제로 생겼는지까지 본다.
+            """
             x = L.tensor(arr, requires_grad=True)
-            return "흐름" if bool(getattr(fn(L, x), "requires_grad", False)) else "안흐름"
+            out = fn(L, x)
+            flow = "흐름" if bool(getattr(out, "requires_grad", False)) else "안흐름"
+            try:
+                out.sum().backward()
+            except Exception:                                       # noqa: BLE001
+                return f"{flow}/역전파거절"
+            return f"{flow}/{'기울기있음' if x.grad is not None else '조용히None'}"
         return run
 
     return [(FLOW_PREFIX + name, asks(name)) for name in _FLOW_OPS]
