@@ -11,3 +11,7 @@ tests/golden.npz
 cifar-10-*
 cifar-batch*.bin
 cifar-fake.bin
+
+# 바깥에서 받아온 것 — 저장소에는 **해시만** 둔다(tests/browser/assets.lock).
+# 28MB 이고, 그중 numpy 하나가 12MB 다. 이 프로젝트가 파는 것은 17KB 짜리 휠이다.
+vendor/

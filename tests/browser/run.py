@@ -17,12 +17,18 @@ GitHub 호스팅 러너에는 GPU 가 없어 SwiftShader 로 떨어지고, 그�
 import argparse
 import functools
 import http.server
+import importlib.util
 import pathlib
 import socketserver
 import sys
 import threading
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+
+_vspec = importlib.util.spec_from_file_location(
+    "bt_vendor", pathlib.Path(__file__).resolve().parent / "vendor.py")
+vendor = importlib.util.module_from_spec(_vspec)
+_vspec.loader.exec_module(vendor)
 GOLDEN = ROOT / "tests" / "golden.npz"
 TIMEOUT_MS = 180_000          # Pyodide + numpy 내려받기가 첫 실행에서 느리다
 
@@ -82,6 +88,9 @@ def main():
         print(f"골든이 없다: {GOLDEN}\n"
               "  먼저: uv run --with numpy --with torch python tests/golden.py dump")
         return 1
+
+    # Pyodide 와 TF.js 는 로컬에서 온다. 없으면 한 번 받고, 있으면 해시로 대조한다.
+    vendor.ensure()
 
     result, probed = run(args.lib, args.headed, args.probe)
     if probed is not None:
