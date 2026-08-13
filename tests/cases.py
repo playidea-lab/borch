@@ -291,10 +291,15 @@ def train_cases(inp=None):
     weights = {"0.weight": inp["w0"], "0.bias": inp["b0"],
                "2.weight": inp["w1"], "2.bias": inp["b1"]}
 
+    # 모멘텀을 **따로 본다.** 모멘텀 없는 SGD 만 보고 있었더니, 버퍼가 첫 스텝에
+    # grad 의 손잡이를 물고 있다가 두 번째 스텝에서 터지는 것을 못 잡았다.
+    _OPTS = {"SGD": {}, "SGD(모멘텀)": {"momentum": 0.9}, "Adam": {}}
+
     def trained(L, opt_name):
         model = L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(), L.nn.Linear(8, 3))
         model.load_state_dict({k: L.tensor(v) for k, v in weights.items()})
-        opt = getattr(L.optim, opt_name)(model.parameters(), lr=0.05)
+        kind = opt_name.split("(")[0]
+        opt = getattr(L.optim, kind)(model.parameters(), lr=0.05, **_OPTS[opt_name])
         crit = L.nn.CrossEntropyLoss()
         x, y = L.tensor(xin), L.tensor(yin)
         for _ in range(_TRAIN_STEPS):
@@ -307,7 +312,7 @@ def train_cases(inp=None):
         return L.nn.CrossEntropyLoss()(model(L.tensor(xin)), L.tensor(yin))
 
     cases = []
-    for opt_name in ("SGD", "Adam"):
+    for opt_name in ("SGD", "SGD(모멘텀)", "Adam"):
         cases.append((f"train::{opt_name}/손실",
                       lambda L, o=opt_name: loss_of(L, trained(L, o))))
         # 가중치까지 본다. 손실만 보면 **파라미터가 안 움직여도** 비슷해 보일 수 있다.

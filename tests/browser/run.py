@@ -70,7 +70,13 @@ def main():
     ap.add_argument("--headed", action="store_true",
                     help="창을 띄운다. **WebGPU 는 헤드리스에서 안 뜬다**(실측 — WebGL 로 떨어진다)")
     ap.add_argument("--probe", help="대조 뒤 브라우저 안에서 돌릴 파이썬. 디버깅용")
+    ap.add_argument("--bench", action="store_true",
+                    help="ResNet-18 로 실제 학습 스텝을 잰다(tests/browser/bench.py)")
     args = ap.parse_args()
+    if args.bench and not args.probe:
+        args.probe = (f"import bench, importlib\n"
+                      f"L = importlib.import_module({args.lib!r})\n"
+                      f"bench.report(L)")
 
     if not GOLDEN.exists():
         print(f"골든이 없다: {GOLDEN}\n"

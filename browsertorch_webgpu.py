@@ -949,6 +949,18 @@ def max_pool2d(x, kernel_size, stride=None):
     return x._make(_to_nchw(out), (x,), back, "MaxPool2DBackward0")
 
 
+def adaptive_avg_pool2d(x, output_size=1):
+    """출력 크기 1 만 지원한다 — ResNet 이 쓰는 것이 그것이고, 나머지는 거절한다.
+
+    우리 연산으로 조립한다. 그래야 역전파가 그냥 따라온다.
+    """
+    if output_size not in (1, (1, 1)):
+        _unsupported("adaptive_avg_pool2d(출력 크기가 1 이 아닌 것)")
+    x = _wrap(x)
+    n, c = x.shape[0], x.shape[1]
+    return x.mean(dim=2).mean(dim=2).reshape(n, c, 1, 1)
+
+
 def avg_pool2d(x, kernel_size, stride=None):
     """torch 는 NCHW, TF.js 는 NHWC 다. 축을 바꿔 넣고 되돌린다."""
     x = _wrap(x)
@@ -981,6 +993,7 @@ class _Functional:
     avg_pool2d = staticmethod(avg_pool2d)
     conv2d = staticmethod(conv2d)
     max_pool2d = staticmethod(max_pool2d)
+    adaptive_avg_pool2d = staticmethod(adaptive_avg_pool2d)
 
 
 # ---------------------------------------------------------------- nn.Module
@@ -1164,6 +1177,17 @@ class AvgPool2d(Module):
         return avg_pool2d(x, self.kernel_size, self.stride)
 
 
+class AdaptiveAvgPool2d(Module):
+    def __init__(self, output_size):
+        super().__init__()
+        if output_size not in (1, (1, 1)):
+            _unsupported("AdaptiveAvgPool2d(출력 크기가 1 이 아닌 것)")
+        self.output_size = output_size
+
+    def forward(self, x):
+        return adaptive_avg_pool2d(x, self.output_size)
+
+
 class Flatten(Module):
     def __init__(self, start_dim=1):
         super().__init__()
@@ -1235,6 +1259,7 @@ class _NN:
     Conv2d = Conv2d
     MaxPool2d = MaxPool2d
     AvgPool2d = AvgPool2d
+    AdaptiveAvgPool2d = AdaptiveAvgPool2d
     Flatten = Flatten
     BatchNorm2d = BatchNorm2d
     MSELoss = MSELoss
@@ -1314,7 +1339,11 @@ class SGD(Optimizer):
                 if group["momentum"]:
                     st = self._state(p)
                     buf = st.get("momentum_buffer")
-                    g = g if buf is None else _tf.add(_tf.mul(float(group["momentum"]), buf), g)
+                    # 첫 스텝에서 **복제해야 한다.** 그대로 두면 버퍼가 `p.grad` 의
+                    # 손잡이를 물고, 다음 zero_grad 에서 grad 가 사라질 때 __del__ 이
+                    # 그 버퍼까지 놓는다 — 두 번째 스텝이 죽은 손잡이를 읽는다.
+                    g = (_tf.clone(g) if buf is None
+                         else _tf.add(_tf.mul(float(group["momentum"]), buf), g))
                     _replace(st, "momentum_buffer", g)
                 self._assign(p, _tf.sub(p._h, _tf.mul(float(group["lr"]), g)))
 
