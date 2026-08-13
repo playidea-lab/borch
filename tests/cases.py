@@ -20,7 +20,11 @@ def wide_inputs():
     xp = np.abs(x1) + 0.2
     x2 = rng.standard_normal((3, 4)).astype(np.float32)
     img = rng.standard_normal((2, 3, 4, 4)).astype(np.float32)
-    idx2 = np.array([[0, 2], [1, 3], [2, 0]])
+    # dtype 을 반드시 적는다. numpy 의 기본 정수는 C 의 `long` 을 따르는데, 그게
+    # 64비트 맥·리눅스에서는 int64 지만 **wasm32(Pyodide)에서는 int32** 다.
+    # 안 적으면 브라우저와 네이티브가 다른 입력을 만들고, 골든 대조가 대조가 아니게 된다.
+    # (실측으로 걸렸다 — 입력 지문 검사가 잡아준 첫 건이다.)
+    idx2 = np.array([[0, 2], [1, 3], [2, 0]], dtype=np.int64)
     # erf·gelu 의 꼬리. xp 는 양수 0.2 이상만 보고 x1 은 대략 [-2, 2] 라,
     # 자릿수가 날아가는 두 자리(원점 근처와 큰 |x|)를 아무도 안 보고 있었다.
     tail = np.array([-8., -6., -4., -1., -1e-3, 0., 1e-3, 1., 4., 6., 8.], dtype=np.float32)
@@ -54,7 +58,8 @@ def wide_cases(inp=None):
         ("gather", lambda L: L.gather(L.tensor(x2), 1, L.tensor(idx2))),
         ("flip", lambda L: L.flip(L.tensor(x2), [0])),
         ("roll", lambda L: L.roll(L.tensor(x1), 2)),
-        ("index_select", lambda L: L.index_select(L.tensor(x2), 0, L.tensor(np.array([2, 0])))),
+        ("index_select",
+         lambda L: L.index_select(L.tensor(x2), 0, L.tensor(np.array([2, 0], dtype=np.int64)))),
         ("masked_select", lambda L: L.masked_select(L.tensor(x1), L.tensor(x1) > 0)),
         ("narrow", lambda L: L.narrow(L.tensor(x2), 1, 1, 2)),
         ("split", lambda L: L.split(L.tensor(x1), 2)[1]),
@@ -78,12 +83,14 @@ def wide_cases(inp=None):
         ("F.smooth_l1_loss",
          lambda L: L.nn.functional.smooth_l1_loss(L.tensor(x1), L.tensor(-x1))),
         ("F.nll_loss", lambda L: L.nn.functional.nll_loss(
-            L.nn.functional.log_softmax(L.tensor(x2), dim=-1), L.tensor(np.array([0, 1, 2])))),
+            L.nn.functional.log_softmax(L.tensor(x2), dim=-1),
+            L.tensor(np.array([0, 1, 2], dtype=np.int64)))),
         ("F.pad", lambda L: L.nn.functional.pad(L.tensor(x2), (1, 1))),
         ("F.normalize", lambda L: L.nn.functional.normalize(L.tensor(x2), dim=1)),
         ("F.cosine_similarity",
          lambda L: L.nn.functional.cosine_similarity(L.tensor(x2), L.tensor(x2 * 2))),
-        ("F.one_hot", lambda L: L.nn.functional.one_hot(L.tensor(np.array([0, 2])), 3)),
+        ("F.one_hot",
+         lambda L: L.nn.functional.one_hot(L.tensor(np.array([0, 2], dtype=np.int64)), 3)),
         ("erf(꼬리)", lambda L: L.erf(L.tensor(tail))),
         ("F.gelu(꼬리)", lambda L: L.nn.functional.gelu(L.tensor(tail))),
     ]
@@ -108,17 +115,32 @@ def manifest_hash(cases):
     return h.hexdigest()
 
 
+def input_fingerprints(inp):
+    """입력 배열의 **키별** 지문. dtype·모양·바이트를 전부 문다.
+
+    통짜 해시 하나만 두면 "입력이 다르다"까지만 알고 **어느 것이** 다른지는 모른다.
+    그러면 갈렸을 때 사람이 처음부터 뒤져야 한다 — 실제로 한 번 그랬다.
+    """
+    out = {}
+    for key in sorted(inp):
+        arr = np.ascontiguousarray(inp[key])
+        h = hashlib.sha256()
+        h.update(str(arr.dtype).encode("utf-8"))
+        h.update(str(arr.shape).encode("utf-8"))
+        h.update(arr.tobytes())
+        out[key] = h.hexdigest()
+    return out
+
+
 def input_fingerprint(inp):
-    """입력 배열의 지문.
+    """입력 전체의 지문.
 
     numpy 의 `default_rng` 는 버전이 달라도 같은 수를 주기로 되어 있다. 그 약속에
     검사를 안 걸어두면, 어긋났을 때 **다른 입력끼리 조용히 비교**하게 된다 —
     그러면 하네스가 통과 도장을 찍는데 아무것도 대조하지 않은 셈이 된다.
     """
     h = hashlib.sha256()
-    for key in sorted(inp):
-        arr = np.ascontiguousarray(inp[key])
+    for key, digest in sorted(input_fingerprints(inp).items()):
         h.update(key.encode("utf-8"))
-        h.update(str(arr.dtype).encode("utf-8"))
-        h.update(arr.tobytes())
+        h.update(digest.encode("utf-8"))
     return h.hexdigest()

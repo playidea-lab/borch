@@ -30,6 +30,7 @@ _cases_spec.loader.exec_module(cases_mod)
 # 넓은 표면 하네스와 같은 허용치. 비트 동등(T4)은 이 프로젝트의 명시적 비목표다.
 ATOL = RTOL = 1e-4
 _PREFIX = "case::"
+_INPUT_PREFIX = "input::"
 
 
 def load_browsertorch():
@@ -55,11 +56,14 @@ def dump(path=DEFAULT_PATH):
     if broken:
         # 진짜 torch 가 못 하는 것은 기대값이 아니라 **틀린 케이스**다. 굳히면 안 된다.
         raise SystemExit("진짜 torch 에서 실패한 케이스가 있다:\n  " + "\n  ".join(broken))
+    # 키별 지문도 같이 굳힌다 — 갈렸을 때 **어느 입력이** 갈렸는지 말해주기 위해서다.
+    for key, digest in cases_mod.input_fingerprints(inp).items():
+        data[_INPUT_PREFIX + key] = np.array(digest)
     np.savez(path,
              __manifest__=np.array(cases_mod.manifest_hash(cases)),
              __inputs__=np.array(cases_mod.input_fingerprint(inp)),
              **data)
-    return len(data), path
+    return len(cases), path
 
 
 def check(lib, path=DEFAULT_PATH):
@@ -72,8 +76,14 @@ def check(lib, path=DEFAULT_PATH):
         raise SystemExit(
             "골든이 낡았다 — 케이스 표가 바뀌었다. dump 를 다시 돌려라.")
     if str(z["__inputs__"]) != cases_mod.input_fingerprint(inp):
+        mine = cases_mod.input_fingerprints(inp)
+        drifted = [k for k, d in mine.items()
+                   if _INPUT_PREFIX + k not in z or str(z[_INPUT_PREFIX + k]) != d]
+        detail = ", ".join(
+            f"{k}(여기서는 {inp[k].dtype} {inp[k].shape})" for k in drifted) or "(어느 것인지 못 짚었다)"
         raise SystemExit(
-            "입력이 골든과 다르다 — 난수가 갈렸다. 이 상태의 비교는 대조가 아니다.")
+            "입력이 골든과 다르다 — 이 상태의 비교는 대조가 아니다.\n"
+            f"  갈린 입력: {detail}")
 
     bad = []
     for name, fn in cases:
