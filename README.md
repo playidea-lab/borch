@@ -117,11 +117,15 @@ BrowserTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 ## 어떻게 보증하는가
 
 `tests/test_diff.py` 가 **같은 연산을 진짜 torch 와 browsertorch 양쪽에 넣고 숫자를 비교한다.**
-76개, 커버리지 86%.
+pytest 180개, **코드 커버리지 93%**.
 
 ```bash
 uv run --with pytest --with numpy --with torch pytest tests/
 ```
+
+> **자매는 코드 커버리지를 못 잰다.** 브라우저 안에서만 돌아서 `pytest --cov` 가 닿지
+> 않는다. 그쪽에 대해 말할 수 있는 것은 **골든 799건이 지난다**는 것뿐이고, 그것은
+> 표면 검사이지 줄 검사가 아니다. 두 수를 같은 것처럼 적지 않는다.
 
 이 검사가 첫 실행에서 잡은 것: PyTorch 의 `BatchNorm2d` 는 **같은 forward 안에서 분산을
 두 가지로 쓴다** — 정규화는 편향(ddof=0), `running_var` 갱신은 비편향(ddof=1).
