@@ -50,7 +50,12 @@ def golden_inputs():
     fw = (rng.standard_normal((3, 64)) * 0.2).astype(np.float32)
     fb = (rng.standard_normal(3) * 0.1).astype(np.float32)
 
+    # 순환·어텐션용. (T=5, N=2, I=3) 과 (B=2, T=5, E=4).
+    seq_x = rng.standard_normal((5, 2, 3)).astype(np.float32)
+    attn_x = rng.standard_normal((2, 5, 4)).astype(np.float32)
+
     return {"x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail,
+            "seq_x": seq_x, "attn_x": attn_x,
             "train_x": train_x, "train_y": train_y,
             "w0": w0, "b0": b0, "w1": w1, "b1": b1,
             "cw": cw, "cb": cb,
@@ -488,6 +493,39 @@ def train_cases(inp=None):
         return L.tensor(seen)
 
     cases.append(("sched::ReduceLROnPlateau", plateau))
+
+    # 순환·트랜스포머 — 가중치를 고정해 넣어야 세 라이브러리가 같은 자리에서 출발한다.
+    # 파라미터 **이름**이 torch 와 같아야 state_dict 로 넣을 수 있다는 것도 여기서 걸린다.
+    seq_x = inp["seq_x"]
+
+    def recurrent(L, kind, batch_first=False):
+        mod = getattr(L.nn, kind)(3, 4, batch_first=batch_first)
+        rng = np.random.default_rng(7)
+        fixed = {n: L.tensor((rng.standard_normal(tuple(p.shape)) * 0.2).astype(np.float32))
+                 for n, p in mod.named_parameters()}
+        mod.load_state_dict(fixed, strict=False)
+        return mod
+
+    for kind in ("RNN", "LSTM", "GRU"):
+        cases.append((f"seq::{kind}/출력", lambda L, k=kind: recurrent(L, k)(L.tensor(seq_x))[0]))
+        cases.append((f"seq::{kind}/마지막상태", lambda L, k=kind: (
+            recurrent(L, k)(L.tensor(seq_x))[1][0] if k == "LSTM"
+            else recurrent(L, k)(L.tensor(seq_x))[1])))
+
+    def attention(L, mask=None):
+        mod = L.nn.MultiheadAttention(4, 2, batch_first=True)
+        rng = np.random.default_rng(11)
+        fixed = {n: L.tensor((rng.standard_normal(tuple(p.shape)) * 0.2).astype(np.float32))
+                 for n, p in mod.named_parameters()}
+        mod.load_state_dict(fixed, strict=False)
+        x = L.tensor(inp["attn_x"])
+        return mod(x, x, x, attn_mask=mask(L) if mask else None, need_weights=False)[0]
+
+    cases.append(("seq::MultiheadAttention", lambda L: attention(L)))
+    # 인과 마스크는 **실수**다(0/-inf). "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
+    cases.append(("seq::MultiheadAttention(인과 마스크)",
+                  lambda L: attention(L, lambda LL: LL.nn.Transformer
+                                      .generate_square_subsequent_mask(5))))
 
     # RMSprop — 옵티마이저 중 유일하게 골든이 안 보던 것
     cases.append(("train::RMSprop/0.weight", lambda L: dict(
