@@ -702,6 +702,216 @@ def norm(t, p=2, dim=None):
     return (t * t).sum(dim=dim) ** 0.5
 
 
+# ---- 축약의 나머지
+#
+# `amax`·`amin` 은 `max`·`min` 과 값이 같고 **번호를 안 준다.** 다른 것은 그것뿐이 아니다 —
+# 동점일 때 기울기를 **똑같이 나눈다**(실측: [1,3,3,2] 의 amax 기울기가 [0,.5,.5,0]).
+# 한 자리에만 몰아주면 값 검사는 통과하고 학습만 미묘하게 갈린다.
+
+def _spread_max(t, dim, keepdim, take, name):
+    """최댓값(또는 최솟값)으로 축약하되 **동점에 기울기를 고르게 나눈다.**"""
+    t = _wrap(t)
+    out = take(t.data, axis=dim, keepdims=True)
+    hit = (t.data == out).astype(t.data.dtype)
+    share = hit / hit.sum(axis=dim, keepdims=True)
+    final = out if keepdim else (out if dim is None else _np.squeeze(out, axis=dim))
+    if dim is None:
+        final = out.reshape(())
+
+    def back(g):
+        gg = _np.asarray(g)
+        if dim is not None and not keepdim:
+            gg = _np.expand_dims(gg, dim)
+        return (gg * share,)
+
+    return t._make(final, (t,), back, name)
+
+
+def amax(t, dim=None, keepdim=False):
+    return _spread_max(t, dim, keepdim, _np.max, "AmaxBackward0")
+
+
+def amin(t, dim=None, keepdim=False):
+    return _spread_max(t, dim, keepdim, _np.min, "AminBackward0")
+
+
+def aminmax(t, dim=None, keepdim=False):
+    return _MinMax(amin(t, dim, keepdim), amax(t, dim, keepdim))
+
+
+def _nan_mask(t):
+    """nan 자리를 0 으로 바꾼 것과, 어디가 nan 이었는지."""
+    bad = _np.isnan(t.data)
+    return _np.where(bad, 0.0, t.data), bad
+
+
+def nansum(t, dim=None, keepdim=False):
+    """nan 을 **0 으로 세는** 합. 기울기도 그 자리로는 안 간다."""
+    t = _wrap(t)
+    clean, bad = _nan_mask(t)
+    return t._make(clean.sum(axis=dim, keepdims=keepdim), (t,),
+                   lambda g: (_np.where(bad, 0.0, _expand_reduced(g, t.data.shape, dim, keepdim)),),
+                   "NansumBackward0")
+
+
+def nanmean(t, dim=None, keepdim=False):
+    """nan 을 **빼고** 낸 평균 — 세는 개수도 nan 이 아닌 것만이다."""
+    t = _wrap(t)
+    clean, bad = _nan_mask(t)
+    count = (~bad).sum(axis=dim, keepdims=keepdim)
+    total = clean.sum(axis=dim, keepdims=keepdim)
+    out = total / count
+
+    def back(g):
+        gg = _expand_reduced(g, t.data.shape, dim, keepdim)
+        n = _expand_reduced(count, t.data.shape, dim, keepdim) if dim is not None else count
+        return (_np.where(bad, 0.0, gg / n),)
+
+    return t._make(out, (t,), back, "NanmeanBackward0")
+
+
+def _expand_reduced(g, shape, dim, keepdim):
+    """축약으로 접힌 축을 되살려 원래 모양에 퍼질 수 있게 한다."""
+    gg = _np.asarray(g)
+    if dim is None:
+        return _np.broadcast_to(gg, shape)
+    if not keepdim:
+        gg = _np.expand_dims(gg, dim)
+    return _np.broadcast_to(gg, shape)
+
+
+def logsumexp(t, dim=None, keepdim=False):
+    """`log(sum(exp(x)))` 를 **넘치지 않게** 센다 — 큰 값을 빼고 더한다."""
+    t = _wrap(t)
+    big = _np.max(t.data, axis=dim, keepdims=True)
+    shifted = _np.exp(t.data - big)
+    total = shifted.sum(axis=dim, keepdims=True)
+    out = _np.log(total) + big
+    soft = shifted / total
+    if not keepdim:
+        out = out.reshape(()) if dim is None else _np.squeeze(out, axis=dim)
+    return t._make(out, (t,),
+                   lambda g: (_expand_reduced(g, t.data.shape, dim, keepdim) * soft,),
+                   "LogsumexpBackward0")
+
+
+def _cum_extreme(t, dim, pick, name):
+    """누적 최대·최소. 값과 **번호**를 준다 — torch 와 같은 모양이다."""
+    t = _wrap(t)
+    idx = pick(t.data, axis=dim)
+    out = _np.take_along_axis(t.data, idx, axis=dim)
+
+    def back(g):
+        # 기울기는 **뽑힌 자리로만** 간다. 같은 자리가 여러 번 뽑혔으면 그만큼 쌓인다.
+        z = _np.zeros_like(t.data)
+        _np.add.at(z, _index_for(idx, dim, t.data.ndim), _np.asarray(g))
+        return (z,)
+
+    return _MinMax(t._make(out, (t,), back, name), Tensor(idx.astype(_np.int64)))
+
+
+def _index_for(idx, dim, ndim):
+    """`np.add.at` 에 줄 색인 — 축마다 좌표를 만들어 튜플로 준다."""
+    grid = _np.indices(idx.shape)
+    return tuple(idx if a == dim % ndim else grid[a] for a in range(ndim))
+
+
+def _running_idx(better):
+    """누적 최대·최소의 **번호**를 낸다. 축을 따라 한 칸씩 간다.
+
+    벡터화로 짜보다 접었다. torch 는 동점일 때 **나중 자리**를 준다(실측:
+    [1,3,3,2] 의 cummax 번호가 [0,1,2,2] — i=2 에서 1 이 아니라 2 다). 그 규칙은
+    `>=` 한 글자에 담기는데, 억지로 벡터화하면 그 한 글자가 안 보이는 곳으로 숨는다.
+    """
+    def make(d, axis):
+        moved = _np.moveaxis(d, axis, 0)
+        idx = _np.zeros(moved.shape, dtype=_np.intp)
+        best = moved[0].copy()
+        for i in range(1, moved.shape[0]):
+            take = better(moved[i], best)
+            idx[i] = _np.where(take, i, idx[i - 1])
+            best = _np.where(take, moved[i], best)
+        return _np.moveaxis(idx, 0, axis)
+    return make
+
+
+def cummax(t, dim):
+    return _cum_extreme(t, dim, _running_idx(lambda cur, best: cur >= best),
+                        "CummaxBackward0")
+
+
+def cummin(t, dim):
+    return _cum_extreme(t, dim, _running_idx(lambda cur, best: cur <= best),
+                        "CumminBackward0")
+
+
+def kthvalue(t, k, dim=-1, keepdim=False):
+    """**k 번째로 작은** 값. torch 는 1 부터 센다."""
+    t = _wrap(t)
+    order = _np.argsort(t.data, axis=dim, kind="stable")
+    at = _np.take(order, k - 1, axis=dim)
+    at_e = _np.expand_dims(at, dim)
+    out = _np.take_along_axis(t.data, at_e, axis=dim)
+    if not keepdim:
+        out = _np.squeeze(out, axis=dim)
+
+    def back(g):
+        z = _np.zeros_like(t.data)
+        gg = _np.asarray(g)
+        _np.put_along_axis(z, at_e, gg if keepdim else _np.expand_dims(gg, dim), axis=dim)
+        return (z,)
+
+    return _MinMax(t._make(out, (t,), back, "KthvalueBackward0"),
+                   Tensor(at.astype(_np.int64)))
+
+
+def msort(t):
+    """**첫 축을 따라** 정렬한다. `sort(dim=0)` 의 값 쪽과 같다."""
+    return sort(_wrap(t), dim=0).values
+
+
+def diff(t, n=1, dim=-1):
+    """이웃한 것의 차. `x[1:] - x[:-1]` 을 n 번 한다.
+
+    **자르기로 짠다** — 자르기가 이미 그래프를 이으므로 역방향을 새로 쓸 것이 없다.
+    """
+    out = _wrap(t)
+    axis = dim % out.data.ndim
+    for _ in range(n):
+        length = out.data.shape[axis]
+        out = out[_slice_at(axis, 1, length)] - out[_slice_at(axis, 0, length - 1)]
+    return out
+
+
+def dist(a, b, p=2):
+    """두 텐서 사이의 거리 — `norm(a - b, p)` 다."""
+    return norm(_wrap(a) - _wrap(b), p=p)
+
+
+def quantile(t, q, dim=None, keepdim=False):
+    """분위수. torch 의 기본은 **선형 보간**이고 numpy 와 같다."""
+    t = _wrap(t)
+    qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
+    out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim)
+    return Tensor(_np.asarray(out, dtype=t.data.dtype))
+
+
+def nanquantile(t, q, dim=None, keepdim=False):
+    t = _wrap(t)
+    qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
+    out = _np.nanquantile(t.data, qq, axis=dim, keepdims=keepdim)
+    return Tensor(_np.asarray(out, dtype=t.data.dtype))
+
+
+def nonzero(t):
+    """0 이 아닌 자리의 좌표. **모양이 값에 달렸다** — 그래서 기울기가 없다."""
+    return Tensor(_np.stack(_np.nonzero(_wrap(t).data), axis=-1).astype(_np.int64))
+
+
+def argwhere(t):
+    return nonzero(t)
+
+
 def cumsum(t, dim):
     t = _wrap(t)
     return t._make(_np.cumsum(t.data, axis=dim), (t,),

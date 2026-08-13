@@ -1032,6 +1032,80 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+REDUCE_PREFIX = "reduce::"
+
+
+def reduce_cases(inp=None):
+    """축약의 나머지 — `amax`·`nansum`·`logsumexp`·`cummax`·`kthvalue` 등.
+
+    **동점을 일부러 넣는다.** `amax` 는 동점일 때 기울기를 고르게 나누고(실측:
+    [1,3,3,2] → [0,.5,.5,0]) `cummax` 는 나중 자리를 준다. 동점 없는 입력으로 재면
+    그 규칙을 하나도 안 보게 되고, 값은 맞는데 학습이 미묘하게 갈리는 자리가 남는다.
+    """
+    tie = np.array([1., 3., 3., 2.], dtype=np.float32)          # 동점이 있다
+    mat = np.array([[1., 5., 3.], [4., 2., 6.]], dtype=np.float32)
+    withnan = np.array([1., np.nan, 3., 5.], dtype=np.float32)
+    zeros_in = np.array([0., 1., 0., 2.], dtype=np.float32)
+    weights = np.arange(1, 5, dtype=np.float32)
+
+    def values_of(got):
+        return got if hasattr(got, "numpy") else got.values
+
+    cases = []
+
+    def add(name, fn, grad_of=None):
+        cases.append((REDUCE_PREFIX + name, lambda L, f=fn: values_of(f(L))))
+        if grad_of is not None:
+            def run(L, f=fn, arr=grad_of):
+                x = L.tensor(arr, requires_grad=True)
+                out = values_of(f(L, x))
+                w = L.arange(out.numel()).reshape(out.shape).float() if out.shape else None
+                (out * w if w is not None else out).sum().backward()
+                return _grad_of(x, name)
+            cases.append((REDUCE_PREFIX + f"grad::{name}", run))
+
+    add("amax", lambda L, x=None: L.amax(x if x is not None else L.tensor(tie)), tie)
+    add("amin", lambda L, x=None: L.amin(x if x is not None else L.tensor(tie)), tie)
+    add("amax(dim)", lambda L, x=None: L.amax(x if x is not None else L.tensor(mat), dim=1), mat)
+    add("amin(keepdim)",
+        lambda L, x=None: L.amin(x if x is not None else L.tensor(mat), dim=1, keepdim=True), mat)
+    add("nansum", lambda L, x=None: L.nansum(x if x is not None else L.tensor(withnan)), withnan)
+    add("nanmean", lambda L, x=None: L.nanmean(x if x is not None else L.tensor(withnan)), withnan)
+    add("logsumexp", lambda L, x=None: L.logsumexp(x if x is not None else L.tensor(tie), 0), tie)
+    add("logsumexp(dim1)",
+        lambda L, x=None: L.logsumexp(x if x is not None else L.tensor(mat), 1), mat)
+    add("cummax", lambda L, x=None: L.cummax(x if x is not None else L.tensor(tie), 0), tie)
+    add("cummin", lambda L, x=None: L.cummin(x if x is not None else L.tensor(tie), 0), tie)
+    add("kthvalue", lambda L, x=None: L.kthvalue(x if x is not None else L.tensor(tie), 2), tie)
+    add("msort", lambda L, x=None: L.msort(x if x is not None else L.tensor(mat)))
+    add("diff", lambda L, x=None: L.diff(x if x is not None else L.tensor(tie)), tie)
+    add("diff(n=2)", lambda L, x=None: L.diff(x if x is not None else L.tensor(tie), n=2), tie)
+    add("dist", lambda L, x=None: L.dist(x if x is not None else L.tensor(tie),
+                                         L.tensor(np.zeros(4, dtype=np.float32))), tie)
+
+    # 번호를 주는 것들 — 값만 보면 번호가 틀려도 통과한다.
+    for name, fn in (("cummax", lambda L: L.cummax(L.tensor(tie), 0)),
+                     ("cummin", lambda L: L.cummin(L.tensor(tie), 0)),
+                     ("kthvalue", lambda L: L.kthvalue(L.tensor(tie), 2))):
+        cases.append((REDUCE_PREFIX + f"{name} 번호", lambda L, f=fn: f(L).indices))
+
+    # 기울기가 없는 것들. 값만 굳힌다.
+    cases += [
+        (REDUCE_PREFIX + "quantile", lambda L: L.quantile(L.tensor(tie), 0.5)),
+        (REDUCE_PREFIX + "quantile(여럿)",
+         lambda L: L.quantile(L.tensor(tie), L.tensor(np.array([0.25, 0.75], dtype=np.float32)))),
+        (REDUCE_PREFIX + "nanquantile",
+         lambda L: L.nanquantile(L.tensor(withnan), 0.5)),
+        (REDUCE_PREFIX + "nonzero", lambda L: L.nonzero(L.tensor(zeros_in))),
+        (REDUCE_PREFIX + "argwhere", lambda L: L.argwhere(L.tensor(zeros_in))),
+        # **색인으로 묻는다.** torch 의 `aminmax` 는 `.min`·`.max` 로 부르고 우리 것은
+        # `.values`·`.indices` 라 이름이 안 맞는다 — 자리로 물으면 양쪽 다 통한다.
+        (REDUCE_PREFIX + "aminmax/최소", lambda L: L.aminmax(L.tensor(tie))[0]),
+        (REDUCE_PREFIX + "aminmax/최대", lambda L: L.aminmax(L.tensor(tie))[1]),
+    ]
+    return cases
+
+
 MATH_PREFIX = "math::"
 
 # 새로 붙인 수학 함수들. **입력 범위가 함수마다 다르다** — `acos` 는 [-1,1] 밖에서
@@ -1152,7 +1226,7 @@ _METHOD_ARGS = {
     "sigmoid": (), "sign": (), "sin": (), "sinh": (), "square": (), "tan": (),
     "tanh": (), "prod": (), "norm": (), "argsort": (), "unique": (),
     "clamp": (0.0, 1.0), "pow": (2,), "roll": (1,), "cumsum": (0,), "cumprod": (0,),
-    "softmax": (0,), "narrow": (0, 0, 2), "movedim": (0, 0), "flip": ((0,),),
+    "softmax": (0,), "narrow": (0, 0, 2), "flip": ((0,),),
     "tile": ((2,),), "topk": (2,), "sort": (), "median": (),
 }
 # 양수만 받는 것 — 음수를 주면 NaN 이 나오고 NaN 은 자기 자신과도 다르다.
@@ -1220,6 +1294,13 @@ def method_cases(inp=None):
                   lambda L: str(bool(L.tensor(vec).allclose(L.tensor(vec))))))
 
     # 행렬곱 계열은 모양이 달라 따로 준다.
+    # `movedim` 은 **네 조합을 다 묻는다.** 전에는 `(0, 0)` 하나였는데 그건 항등이라
+    # 아무것도 안 물은 것과 같았고, 그 뒤에 숨어 있던 자매의 `movedim(0, -1)` 이
+    # 조용히 항등으로 굴고 있었다(`list.insert(-1, …)` 은 맨 뒤가 아니다).
+    for src, dst in ((0, -1), (-1, 0), (0, 1), (1, 0)):
+        cases.append((METHOD_PREFIX + f"movedim({src},{dst})",
+                      lambda L, s=src, d=dst: L.tensor(mat).movedim(s, d)))
+
     cases.append((METHOD_PREFIX + "mm", lambda L: L.tensor(mat).mm(L.tensor(mat))))
     cases.append((METHOD_PREFIX + "gather",
                   lambda L: L.tensor(mat).gather(1, L.tensor(
@@ -1240,7 +1321,7 @@ def golden_cases(inp=None):
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
-            + webgpu_cases(inp))
+            + reduce_cases(inp) + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

@@ -502,9 +502,21 @@ def tile(t, reps):
 
 
 def movedim(t, source, destination):
+    """축 하나를 다른 자리로 옮긴다.
+
+    **음수 자리를 먼저 편다.** `list.insert(-1, x)` 는 맨 뒤가 아니라 **마지막 앞**에
+    넣는다 — `movedim(0, -1)` 이 아무 일도 안 하고 원래 모양을 돌려줬다. 예외도 없이
+    조용히 항등이 되는 종류다.
+
+    골든이 이것을 못 봤던 이유도 적어둔다. 내가 세운 케이스가 `movedim(0, 0)` 이었다.
+    프로브에서 `IndexError` 를 피하려고 고른 인자였고, 그래서 **음수 자리는 아무도
+    물어본 적이 없었다.** 통과하는 검사가 있다는 것과 그것이 무엇을 물었는지는 다르다.
+    """
     t = _canonical(t)
-    order = list(range(t.ndim))
-    order.insert(destination, order.pop(source))
+    n = t.ndim
+    src, dst = source % n, destination % n
+    order = list(range(n))
+    order.insert(dst, order.pop(src))
     return t.permute(*order)
 
 
@@ -654,6 +666,202 @@ def norm(t, p=2, dim=None):
     if p == 1:
         return abs(t).sum(dim=dim)
     return (t * t).sum(dim=dim) ** 0.5
+
+
+# ---- 축약의 나머지
+#
+# 코어와 같은 의미를 지킨다. 특히 `amax`·`amin` 은 **동점일 때 기울기를 고르게 나눈다**
+# (실측: [1,3,3,2] 의 amax 기울기가 [0,.5,.5,0]). 한 자리에 몰아주면 값 검사는 통과하고
+# 학습만 미묘하게 갈린다.
+
+def _spread_extreme(t, dim, keepdim, take, name):
+    t = _canonical(t)
+    raw = _tf.max(t._h, dim) if take == "max" else _tf.min(t._h, dim)
+    kept = raw if dim is None else (
+        _tf.max(t._h, dim, True) if take == "max" else _tf.min(t._h, dim, True))
+    hit = _tf.cast(_tf.equal(t._h, kept if dim is not None else raw), "float32")
+    share = _tf.div(hit, _tf.sum(hit, dim, True) if dim is not None else _tf.sum(hit))
+    out = kept if (keepdim and dim is not None) else raw
+
+    def back(g):
+        gg = g if (dim is None or keepdim) else _tf.expandDims(g, dim)
+        return (_tf.mul(gg, share),)
+
+    return t._make(out, (t,), back, name)
+
+
+def amax(t, dim=None, keepdim=False):
+    return _spread_extreme(t, dim, keepdim, "max", "AmaxBackward0")
+
+
+def amin(t, dim=None, keepdim=False):
+    return _spread_extreme(t, dim, keepdim, "min", "AminBackward0")
+
+
+def aminmax(t, dim=None, keepdim=False):
+    return _ValuesIndices(amin(t, dim, keepdim), amax(t, dim, keepdim))
+
+
+def _nan_split(t):
+    """nan 자리를 0 으로 바꾼 손잡이와, 어디가 nan 이었는지."""
+    bad = _tf.logicalNot(_tf.equal(t._h, t._h))          # nan 은 자기 자신과 다르다
+    return _tf.where(bad, _tf.zerosLike(t._h), t._h), bad
+
+
+def nansum(t, dim=None, keepdim=False):
+    """nan 을 **0 으로 세는** 합. 기울기도 그 자리로는 안 간다."""
+    t = _canonical(t)
+    clean, bad = _nan_split(t)
+    out = _tf.sum(clean) if dim is None else _tf.sum(clean, dim, keepdim)
+
+    def back(g):
+        gg = g if (dim is None or keepdim) else _tf.expandDims(g, dim)
+        spread = _tf.mul(_tf.onesLike(t._h), gg)
+        return (_tf.where(bad, _tf.zerosLike(spread), spread),)
+
+    return t._make(out, (t,), back, "NansumBackward0")
+
+
+def nanmean(t, dim=None, keepdim=False):
+    """nan 을 **빼고** 낸 평균 — 세는 개수도 nan 이 아닌 것만이다."""
+    t = _canonical(t)
+    clean, bad = _nan_split(t)
+    good = _tf.cast(_tf.logicalNot(bad), "float32")
+    count = _tf.sum(good) if dim is None else _tf.sum(good, dim, True)
+    total = _tf.sum(clean) if dim is None else _tf.sum(clean, dim, True)
+    full = _tf.div(total, count)
+    out = full if (keepdim or dim is None) else _tf.squeeze(full, _to_js([dim]))
+
+    def back(g):
+        gg = g if (dim is None or keepdim) else _tf.expandDims(g, dim)
+        spread = _tf.div(_tf.mul(_tf.onesLike(t._h), gg), count)
+        return (_tf.where(bad, _tf.zerosLike(spread), spread),)
+
+    return t._make(out, (t,), back, "NanmeanBackward0")
+
+
+def logsumexp(t, dim=None, keepdim=False):
+    """`log(sum(exp(x)))` 를 **넘치지 않게** 센다 — 큰 값을 빼고 더한다."""
+    t = _canonical(t)
+    big = _tf.max(t._h) if dim is None else _tf.max(t._h, dim, True)
+    shifted = _tf.exp(_tf.sub(t._h, big))
+    total = _tf.sum(shifted) if dim is None else _tf.sum(shifted, dim, True)
+    full = _tf.add(_tf.log(total), big)
+    soft = _tf.div(shifted, total)
+    out = full if (keepdim or dim is None) else _tf.squeeze(full, _to_js([dim]))
+
+    def back(g):
+        gg = g if (dim is None or keepdim) else _tf.expandDims(g, dim)
+        return (_tf.mul(gg, soft),)
+
+    return t._make(out, (t,), back, "LogsumexpBackward0")
+
+
+def _cum_extreme(t, dim, better, name):
+    """누적 최대·최소. **번호는 CPU 에서 낸다.**
+
+    TF.js 에 `cummax` 가 없고, 자리마다 앞을 돌아보는 계산이라 원시 연산 조합으로는
+    안 나온다. 값은 뽑은 번호로 GPU 에서 모으므로 **기울기는 그래프 안에 남는다** —
+    번호가 CPU 에서 나왔다고 그래프가 끊기지는 않는다.
+    """
+    t = _canonical(t)
+    d = t.numpy()
+    axis = dim % d.ndim
+
+    # 번호는 앞을 돌아보며 한 칸씩 정한다. torch 는 동점에서 **나중 자리**를 준다.
+    moved = _np.moveaxis(d, axis, 0)
+    idx = _np.zeros(moved.shape, dtype=_np.intp)
+    best = moved[0].copy()
+    for i in range(1, moved.shape[0]):
+        take = better(moved[i], best)
+        idx[i] = _np.where(take, i, idx[i - 1])
+        best = _np.where(take, moved[i], best)
+    idx = _np.moveaxis(idx, 0, axis)
+
+    # 값은 **원-핫 곱으로 GPU 에서** 모은다 — 그래야 역전파가 저절로 따라온다.
+    # 축을 마지막으로 옮겨서 곱하고 되돌린다.
+    n = d.shape[axis]
+    order = [i for i in range(d.ndim) if i != axis] + [axis]
+    back_order = [order.index(i) for i in range(d.ndim)]
+    xm = t.permute(*order) if order != list(range(d.ndim)) else t
+    im = _np.moveaxis(idx, axis, -1)
+    onehot = Tensor(_to_tf((im[..., None] == _np.arange(n)).astype(_np.float32)))
+    lifted = xm.reshape(*(tuple(xm.shape[:-1]) + (1, n)))
+    got = (onehot * lifted).sum(dim=-1)
+    out = got.permute(*back_order) if back_order != list(range(d.ndim)) else got
+    return _ValuesIndices(out, Tensor(_to_tf(idx.astype(_np.float32)), dt=int64))
+
+
+def cummax(t, dim):
+    return _cum_extreme(t, dim, lambda cur, best: cur >= best, "CummaxBackward0")
+
+
+def cummin(t, dim):
+    return _cum_extreme(t, dim, lambda cur, best: cur <= best, "CumminBackward0")
+
+
+def kthvalue(t, k, dim=-1, keepdim=False):
+    """**k 번째로 작은** 값. torch 는 1 부터 센다."""
+    t = _canonical(t)
+    _last_axis_only(t, dim, "kthvalue")
+    d = t.numpy()
+    order = _np.argsort(d, axis=-1, kind="stable")
+    at = _np.take(order, k - 1, axis=-1)
+    # **int32 로 올린다.** `tf.oneHot` 은 다른 것을 받지 않는다 — float32 에 int64
+    # 라벨을 붙여 넘겼더니 거기서 멈췄다. 시끄럽게 멈춘 것이 다행이다.
+    picked = _pick_last(t, _tf.cast(_to_tf(at[..., None].astype(_np.float32)), "int32"))
+    values = picked if keepdim else picked.reshape(*d.shape[:-1])
+    return _ValuesIndices(values, Tensor(_to_tf(at.astype(_np.float32)), dt=int64))
+
+
+def msort(t):
+    """**첫 축을 따라** 정렬한다."""
+    t = _canonical(t)
+    if t.ndim == 1:
+        return sort(t).values
+    return sort(t.movedim(0, -1)).values.movedim(-1, 0)
+
+
+def diff(t, n=1, dim=-1):
+    """이웃한 것의 차. **자르기로 짠다** — 자르기가 이미 그래프를 잇는다."""
+    out = _canonical(t)
+    axis = dim % out.ndim
+    for _ in range(n):
+        length = out.shape[axis]
+        out = narrow(out, axis, 1, length - 1) - narrow(out, axis, 0, length - 1)
+    return out
+
+
+def dist(a, b, p=2):
+    return norm(_wrap(a) - _wrap(b), p=p)
+
+
+def quantile(t, q, dim=None, keepdim=False):
+    """분위수. **CPU 에서 센다** — TF.js 에 보간이 없고, 정렬 뒤 두 값을 섞는 계산이
+    자리마다 달라서 원시 연산으로 안 나온다. 기울기는 없다(torch 도 여기서는 잘 안 쓴다)."""
+    t = _canonical(t)
+    qq = q.numpy() if isinstance(q, Tensor) else _np.asarray(q, dtype=_np.float32)
+    out = _np.quantile(t.numpy().astype(_np.float64), qq, axis=dim, keepdims=keepdim)
+    return Tensor(_to_tf(_np.asarray(out, dtype=_np.float32)))
+
+
+def nanquantile(t, q, dim=None, keepdim=False):
+    t = _canonical(t)
+    qq = q.numpy() if isinstance(q, Tensor) else _np.asarray(q, dtype=_np.float32)
+    out = _np.nanquantile(t.numpy().astype(_np.float64), qq, axis=dim, keepdims=keepdim)
+    return Tensor(_to_tf(_np.asarray(out, dtype=_np.float32)))
+
+
+def nonzero(t):
+    """0 이 아닌 자리의 좌표. **모양이 값에 달렸다** — 그래서 기울기가 없고, GPU 위에서
+    모양을 미리 알 수 없어 읽어와서 만든다."""
+    t = _canonical(t)
+    out = _np.stack(_np.nonzero(t.numpy()), axis=-1)
+    return Tensor(_to_tf(out.astype(_np.float32)), dt=int64)
+
+
+def argwhere(t):
+    return nonzero(t)
 
 
 def cumsum(t, dim):

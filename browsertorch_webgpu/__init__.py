@@ -92,21 +92,23 @@ from ._tensor import (
     _scalar_dtype, _storage_bool, _storage_for, _tf, _unbroadcast, _wrap, result_type,
 )
 from ._ops import (
-    Generator, _DEG, _LN10, _LN2, _binary_math, _compare, _logaddexp_h, _masked, _rng,
-    _tf, _to_int32, _trunc, _unary, _zeros_like, abs, absolute, acos, acosh, allclose,
-    arange, arccos, arccosh, arcsin, arcsinh, arctan, arctanh, argsort, as_tensor, asin,
-    asinh, atan, atan2, atanh, bincount, bmm, cat, ceil, chunk, clamp, clip, copysign,
-    cos, cosh, count_nonzero, cumprod, cumsum, deg2rad, diag, dot, einsum, empty, eq,
-    equal, erf, erfc, exp, exp2, expm1, eye, fix, flip, floor, frac, from_numpy, full,
-    full_like, gather, ge, gt, heaviside, hypot, index_select, isfinite, isinf, isnan,
-    ldexp, le, linspace, log, log10, log1p, log2, logaddexp, logaddexp2, logical_and,
-    logical_not, logical_or, logit, lt, manual_seed, masked_fill, masked_select, matmul,
-    maximum, median, minimum, mm, movedim, multinomial, narrow, ne, neg, negative, norm,
-    ones, ones_like, outer, positive, pow, prod, rad2deg, rand, randint, randn,
-    randperm, reciprocal, relu, repeat_interleave, reshape, roll, round, rsqrt, sgn,
-    sigmoid, sign, signbit, sin, sinc, sinh, sort, split, sqrt, square, stack, tan,
-    tanh, tensor, tile, topk, trace, tril, triu, trunc, unbind, unique, where, xlogy,
-    zeros, zeros_like,
+    Generator, _DEG, _LN10, _LN2, _binary_math, _compare, _cum_extreme, _logaddexp_h,
+    _masked, _nan_split, _rng, _spread_extreme, _tf, _to_int32, _trunc, _unary,
+    _zeros_like, abs, absolute, acos, acosh, allclose, amax, amin, aminmax, arange,
+    arccos, arccosh, arcsin, arcsinh, arctan, arctanh, argsort, argwhere, as_tensor,
+    asin, asinh, atan, atan2, atanh, bincount, bmm, cat, ceil, chunk, clamp, clip,
+    copysign, cos, cosh, count_nonzero, cummax, cummin, cumprod, cumsum, deg2rad, diag,
+    diff, dist, dot, einsum, empty, eq, equal, erf, erfc, exp, exp2, expm1, eye, fix,
+    flip, floor, frac, from_numpy, full, full_like, gather, ge, gt, heaviside, hypot,
+    index_select, isfinite, isinf, isnan, kthvalue, ldexp, le, linspace, log, log10,
+    log1p, log2, logaddexp, logaddexp2, logical_and, logical_not, logical_or, logit,
+    logsumexp, lt, manual_seed, masked_fill, masked_select, matmul, maximum, median,
+    minimum, mm, movedim, msort, multinomial, nanmean, nanquantile, nansum, narrow, ne,
+    neg, negative, nonzero, norm, ones, ones_like, outer, positive, pow, prod, quantile,
+    rad2deg, rand, randint, randn, randperm, reciprocal, relu, repeat_interleave,
+    reshape, roll, round, rsqrt, sgn, sigmoid, sign, signbit, sin, sinc, sinh, sort,
+    split, sqrt, square, stack, tan, tanh, tensor, tile, topk, trace, tril, triu, trunc,
+    unbind, unique, where, xlogy, zeros, zeros_like,
 )
 from ._functional import (
     _Functional, _SQRT2, _SQRT2PI, _dilate, _pair, _tf, _to_nchw, _to_nhwc, _warn_once,
@@ -166,6 +168,10 @@ _AS_METHOD = (
     "deg2rad", "erfc", "exp2", "expm1", "fix", "frac", "heaviside", "hypot", "ldexp",
     "log1p", "logaddexp", "logaddexp2", "logit", "negative", "positive", "rad2deg",
     "sgn", "signbit", "sinc", "trunc", "xlogy",
+    # 축약 묶음. 코어와 같은 목록이다.
+    "amax", "amin", "aminmax", "argwhere", "cummax", "cummin", "diff", "dist",
+    "kthvalue", "logsumexp", "msort", "nanmean", "nanquantile", "nansum", "nonzero",
+    "quantile",
 )
 
 for _method in _AS_METHOD:
