@@ -21,13 +21,26 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
   맞췄지만(72/72), **`float64` 는 없다** — TF.js 에 배정도가 없어서 거절한다.
   그리고 정수는 float32 에 담으므로 **2^24 까지 정확**하고, 넘으면 조용히 자르지 않고
   던진다. 코어는 float64 까지 112/112 다
-- **인덱싱(`t[0]`)과 제자리 갱신(`+=`)이 없다.** 코어에는 있다. 오류 동등(T2)에서
-  이 둘에 걸린 두 건을 못 덮는 것도 그래서다 — 메시지가 아니라 기능이 없다
+- **뷰가 저장소를 공유하지 않는다.** torch 는 `b = a.view(2,2); b[0,0] = 9` 로 `a` 가
+  바뀌는데, TF.js 텐서는 불변이라 그럴 수 없다. 코어는 이것을 13/13 로 맞춘다.
+  조용히 다르게 두지 않고, **뷰에 대입하면 거절한다**
 - **`scope()` 를 노출한다.** 역전파 클로저가 든 중간 버퍼는 파이썬 GC 가 못 놓는다.
   코어와 다른 한 줄이고, 이유는 WEBGPU-DESIGN.md 7절에 있다
 
 없는 것은 근사하지 않고 예외를 던진다. `topk(largest=False)` 처럼 TF.js 가 못 하는
 인자도 조용히 무시하지 않고 거절한다 — 조용히 다른 값을 내는 것이 가장 나쁘다.
+
+## 이 파일을 고칠 때의 규칙 하나
+
+**`_wrap(x)._h` 를 인라인으로 쓰지 마라.** `x` 가 텐서가 아니면 `_wrap` 이 임시를
+만드는데, `._h` 를 꺼내는 순간 그 임시의 참조가 0 이 되어 `__del__` 이 버퍼를 놓는다.
+그 다음 줄이 이미 죽은 손잡이를 넘긴다.
+
+    나쁨:  _tf.add(a, _wrap(b)._h)
+    좋음:  bt = _wrap(b); _tf.add(a, bt._h)
+
+이 함정에 **세 번** 걸렸다(`_cmp`, `__setitem__`, 그리고 디버깅용 프로브). 증상은
+`TypeError: Cannot read properties of undefined (reading 'backend')` 다.
 """
 
 import numpy as _np
@@ -285,6 +298,7 @@ class Tensor:
         self._op = None
         self._nhwc = False
         self._freed = False         # backward 한 번이면 그래프를 놓는다 (torch 와 같다)
+        self._derived = False       # 다른 텐서에서 나왔는가 — 제자리 대입을 막는 근거다
         # 라벨이 없으면 저장이 말해주는 대로. bool 저장은 bool, 나머지는 실수다.
         self._dtype = dt or (bool_ if str(handle.dtype) == "bool" else float32)
 
@@ -378,6 +392,7 @@ class Tensor:
         # 버퍼까지 놓아버린다. tf.clone 은 데이터를 공유하고 참조만 하나 더 든다.
         out = Tensor(_tf.clone(self._h), dt=self._dtype)
         out._nhwc = self._nhwc          # 레이아웃도 같이 물려준다 — 안 그러면 속이 밖으로 샌다
+        out._derived = True             # torch 의 detach 는 저장소를 **공유한다** — 우리는 못 한다
         return out
 
     def dispose(self):
@@ -415,6 +430,8 @@ class Tensor:
         out._op = op if needs else None
         # 원소별 연산은 레이아웃을 그대로 물려준다. 랭크가 4 에서 벗어나면 뜻이 없다.
         out._nhwc = self._nhwc and len(_shape_of(handle)) == 4
+        # no_grad 안에서도 표시한다 — 그래프가 아니라 **어디서 나왔는가**의 문제다.
+        out._derived = True
         return out
 
     def backward(self, gradient=None, retain_graph=False):
@@ -585,6 +602,116 @@ class Tensor:
     @property
     def T(self):
         return self.transpose(-2, -1)
+
+    # ---- 인덱싱
+
+    def __getitem__(self, idx):
+        """정수·슬라이스·정수목록·불리언 마스크. **그래프를 잇는다.**
+
+        축마다 잘라내는 것을 겹쳐서 만든다 — 자르기의 역방향이 이미 0 채우기라
+        역전파가 저절로 따라온다. 걸음이 1 이 아닌 슬라이스처럼 못 하는 것은
+        근사하지 않고 거절한다.
+        """
+        t = _canonical(self)
+        keys = idx if isinstance(idx, tuple) else (idx,)
+
+        if len(keys) == 1:
+            key = keys[0]
+            if isinstance(key, Tensor) and key._dtype is bool_:
+                return masked_select(t, key)
+            if isinstance(key, (list, _np.ndarray)) or (
+                    isinstance(key, Tensor) and key._dtype is int64):
+                return index_select(t, 0, key)
+
+        out, drop, axis = t, [], 0
+        for key in keys:
+            if isinstance(key, slice):
+                start, stop, step = key.indices(out.shape[axis])
+                if step != 1:
+                    _unsupported("걸음(step)이 1 이 아닌 슬라이스")
+                out = _slice_tensor(out, axis, start, max(0, stop - start))
+                axis += 1
+            elif isinstance(key, int):
+                n = out.shape[axis]
+                i = key + n if key < 0 else key
+                if not 0 <= i < n:
+                    raise IndexError(_like_torch(
+                        f"인덱스 {key} 는 크기 {n} 인 축 {axis} 의 범위를 벗어납니다.",
+                        f"index {key} is out of bounds for dimension {axis} with size {n}"))
+                out = _slice_tensor(out, axis, i, 1)
+                drop.append(axis)
+                axis += 1
+            else:
+                _unsupported(f"인덱싱에 {type(key).__name__}")
+        if drop:
+            out = out.reshape(tuple(s for i, s in enumerate(out.shape) if i not in drop))
+        return out
+
+    def __setitem__(self, idx, value):
+        """축 0 의 정수·슬라이스에만. 잘라서 새 값을 끼워 다시 붙인다.
+
+        TF.js 텐서는 불변이라 제자리 수정이 없다 — 다시 만드는 수밖에 없다.
+        """
+        if self.requires_grad and _grad_enabled:
+            raise RuntimeError(
+                "기울기가 필요한 텐서에는 제자리 대입을 할 수 없습니다. "
+                "`with torch.no_grad():` 안에서 하세요.")
+        if self._derived:
+            # torch 는 뷰가 **저장소를 공유**해서 뷰를 고치면 원본도 바뀐다.
+            # TF.js 텐서는 불변이라 그렇게 할 수 없다. 조용히 다르게 도느니 멈춘다.
+            _unsupported(
+                "다른 텐서에서 나온 것(뷰·슬라이스·연산 결과)에 대입하는 것 — "
+                "torch 는 저장소를 공유해 원본까지 바꾸는데 TF.js 텐서는 불변이라 "
+                "여기서는 그럴 수 없습니다")
+        t = _canonical(self)
+        n = t.shape[0]
+        if isinstance(idx, int):
+            start, length = (idx + n if idx < 0 else idx), 1
+        elif isinstance(idx, slice):
+            a, b, step = idx.indices(n)
+            if step != 1:
+                _unsupported("걸음(step)이 1 이 아닌 슬라이스에 대입")
+            start, length = a, max(0, b - a)
+        else:
+            _unsupported(f"{type(idx).__name__} 로 대입")
+
+        # `_wrap(value)._h` 로 쓰면 안 된다 — 이름을 붙여 호출이 끝날 때까지 살려둔다.
+        val = _wrap(value)
+        target = list(t.shape)
+        target[0] = length
+        piece = _tf.broadcastTo(val._h, _to_js(target))
+        parts = []
+        if start:
+            parts.append(_slice_along(t._h, 0, 0, start))
+        parts.append(piece)
+        if start + length < n:
+            parts.append(_slice_along(t._h, 0, start + length, n - start - length))
+        old = self._h
+        self._h = _keep(_tf.concat(_to_js(parts), 0) if len(parts) > 1 else parts[0])
+        self._nhwc = t._nhwc
+        old.dispose()
+
+    # ---- 제자리 갱신 — no_grad 안에서만 (진짜 torch 도 같은 규칙)
+
+    def _inplace(self, fn, other):
+        if self.requires_grad and _grad_enabled:
+            raise RuntimeError(
+                "기울기가 필요한 텐서를 제자리에서 바꿀 수 없습니다. "
+                "`with torch.no_grad():` 안에서 하세요.")
+        o = _wrap(other)
+        old = self._h
+        self._h = _keep(fn(self._h, _storage_for(o, self._dtype)))
+        old.dispose()
+        return self
+
+    def __iadd__(self, o):
+        return self._inplace(_tf.add, o)
+
+    def __isub__(self, o):
+        return self._inplace(_tf.sub, o)
+
+    def __imul__(self, o):
+        return self._inplace(_tf.mul, o)
 
     # ---- 비교 (기울기 없음)
 
@@ -949,7 +1076,8 @@ def cumsum(t, dim):
 
 
 def cumprod(t, dim):
-    return Tensor(_tf.cumprod(_wrap(t)._h, dim))
+    t = _canonical(t)
+    return Tensor(_tf.cumprod(t._h, dim))
 
 
 # ---------------------------------------------------------------- 뽑기·모양
@@ -1369,9 +1497,10 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     xh = xin._h
     wh = _tf.transpose(weight._h, _to_js([2, 3, 1, 0]))          # (F,C,KH,KW) → (KH,KW,C,F)
     out = _tf.conv2d(xh, wh, stride, padding)
-    if bias is not None:
+    bias_t = _wrap(bias) if bias is not None else None
+    if bias_t is not None:
         # NHWC 는 마지막 축이 채널이라 1차원 편향이 그대로 붙는다. 모양을 만들 필요가 없다.
-        out = _tf.add(out, _wrap(bias)._h)
+        out = _tf.add(out, bias_t._h)
     extra = (H + 2 * padding - KH) % stride
 
     def back(gd):                                                # gd 는 NHWC 로 온다
@@ -1393,7 +1522,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
             return (dx, dw)
         return (dx, dw, _tf.sum(gd, _to_js([0, 1, 2])))
 
-    parents = (xin, weight) if bias is None else (xin, weight, _wrap(bias))
+    parents = (xin, weight) if bias_t is None else (xin, weight, bias_t)
     return xin._make(out, parents, back, "ConvolutionBackward0")
 
 

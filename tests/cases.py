@@ -249,6 +249,15 @@ def grad_cases(inp=None):
     unary("pad", lambda L, x: L.nn.functional.pad(x, (1, 1)), x2)
     unary("prod", lambda L, x: L.prod(x), xp)
 
+    # 인덱싱 — torch 코드가 가장 자주 하는 일이고, 자르기와 같은 이유로 그래프를 잇는다.
+    unary("idx[0]", lambda L, x: x[0], x2)
+    unary("idx[-1]", lambda L, x: x[-1], x2)
+    unary("idx[1:3]", lambda L, x: x[1:3])
+    unary("idx[:, 1]", lambda L, x: x[:, 1], x2)
+    unary("idx[1, 2]", lambda L, x: x[1, 2], x2)
+    unary("idx[0:2, 1:3]", lambda L, x: x[0:2, 1:3], x2)
+    unary("idx[목록]", lambda L, x: x[[2, 0]], x2)
+
     # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
     for which in ("a", "b"):
         binary("add", lambda L, a, b: a + b, which)
@@ -431,6 +440,12 @@ def dtype_cases(inp=None):
     return cases
 
 
+def _inplace_leaf(L):
+    x = L.randn(3, requires_grad=True)
+    x += 1
+    return x
+
+
 def _backward_twice(L):
     x = L.tensor([1.0, 2.0], requires_grad=True)
     y = (x * 2).sum()
@@ -463,6 +478,8 @@ _ERROR_CASES = [
      lambda L: L.nn.functional.conv2d(L.randn(1, 3, 8, 8), L.randn(4, 1, 3, 3)), None),
     ("backward 두 번", _backward_twice,
      "backward through the graph a second time"),
+    ("인덱스 범위 초과", lambda L: L.randn(3)[5], "out of bounds"),
+    ("leaf 제자리 수정", _inplace_leaf, None),
 ]
 
 
