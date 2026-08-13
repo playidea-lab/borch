@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
 <title>browsertorch — 골든 대조</title>
+<!-- 빈 favicon. 없으면 매 실행마다 404 가 콘솔에 찍혀 진짜 오류를 덮는다. -->
+<link rel="icon" href="data:,">
 
 <!--
   골든 2단계. 브라우저 안에서 라이브러리를 골든과 대조한다.
@@ -27,15 +29,45 @@ window.GOLDEN_RESULT = null;
 // 오른쪽 모양을 왼쪽과 같게 두는 것이 요점이다.
 const FILES = [
   ["/browsertorch.py", "/work/browsertorch.py"],
+  ["/browsertorch_webgpu.py", "/work/browsertorch_webgpu.py"],
   ["/tests/cases.py", "/work/tests/cases.py"],
   ["/tests/golden.py", "/work/tests/golden.py"],
 ];
 const BINARY = [["/tests/golden.npz", "/work/tests/golden.npz"]];
 
+// TF.js 는 GPU 경로에서만 필요하다. 코어 browsertorch 는 numpy 뿐이라 안 부른다.
+const TFJS = [
+  "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js",
+  "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgpu@4.22.0/dist/tf-backend-webgpu.min.js",
+];
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = () => res(src);
+    s.onerror = () => rej(new Error("스크립트를 못 받았다: " + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function startTfjs() {
+  for (const src of TFJS) await loadScript(src);
+  await tf.setBackend("webgpu");
+  await tf.ready();
+  if (tf.getBackend() !== "webgpu") {
+    throw new Error("WebGPU 백엔드가 안 붙었다 — 지금 백엔드: " + tf.getBackend());
+  }
+  return tf.getBackend();
+}
+
 async function main() {
   const lib = new URLSearchParams(location.search).get("lib") || "browsertorch";
   OUT.textContent = "Pyodide 를 올리는 중…";
   const py = await loadPyodide();
+  // 대조가 끝난 뒤 드라이버가 임의의 파이썬을 물어볼 수 있게 남겨둔다.
+  // 브라우저 안에서만 재현되는 것을 눈으로 보려면 이 통로가 있어야 한다.
+  window.PY = py;
   say("numpy 를 올리는 중…");
   await py.loadPackage("numpy");
 
@@ -49,19 +81,25 @@ async function main() {
     py.FS.writeFile(dst, new Uint8Array(buf));
   }
   say(`대조 대상: ${lib}`);
+  let backend = "numpy (브라우저 GPU 안 씀)";
+  if (lib !== "browsertorch") {
+    say("TF.js 를 올리는 중…");
+    backend = await startTfjs();
+    say(`TF.js 백엔드: ${backend}`);
+  }
 
   const code = `
-import importlib.util, json
+import importlib, importlib.util, json, sys
+
+if "/work" not in sys.path:
+    sys.path.insert(0, "/work")
 
 _spec = importlib.util.spec_from_file_location("bt_golden", "/work/tests/golden.py")
 g = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(g)
 
 LIB = ${JSON.stringify(lib)}
-if LIB == "browsertorch":
-    lib = g.load_browsertorch()          # GPU 백엔드가 생기면 여기가 갈리는 자리다
-else:
-    lib = importlib.import_module(LIB)
+lib = g.load_browsertorch() if LIB == "browsertorch" else importlib.import_module(LIB)
 
 bad, total = g.check(lib, "/work/tests/golden.npz")
 json.dumps({"lib": LIB, "total": total, "bad": bad})
@@ -71,7 +109,7 @@ json.dumps({"lib": LIB, "total": total, "bad": bad})
   say(`\n골든 대조 — 케이스 ${result.total}개`);
   say(`  일치 ${result.total - result.bad.length}/${result.total}`);
   for (const why of result.bad) say(`  ✗ ${why}`);
-  window.GOLDEN_RESULT = { ...result, ok };
+  window.GOLDEN_RESULT = { ...result, ok, backend };
 }
 
 main().catch((e) => {

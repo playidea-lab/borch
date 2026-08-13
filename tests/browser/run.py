@@ -40,11 +40,12 @@ def serve(root):
     return httpd.server_address[1], httpd.shutdown
 
 
-def run(lib, headed):
+def run(lib, headed, probe=None):
     from playwright.sync_api import sync_playwright
 
     port, stop = serve(ROOT)
     url = f"http://127.0.0.1:{port}/tests/browser/runner.html?lib={lib}"
+    probed = None
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=not headed)
@@ -53,17 +54,22 @@ def run(lib, headed):
             page.goto(url)
             page.wait_for_function("window.GOLDEN_RESULT !== null", timeout=TIMEOUT_MS)
             result = page.evaluate("window.GOLDEN_RESULT")
+            if probe:
+                # 브라우저 안에서만 재현되는 것을 눈으로 보는 통로다.
+                probed = page.evaluate(
+                    "async (code) => String(await window.PY.runPythonAsync(code))", probe)
             browser.close()
     finally:
         stop()
-    return result
+    return result, probed
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lib", default="browsertorch", help="대조할 라이브러리")
     ap.add_argument("--headed", action="store_true",
-                    help="창을 띄운다. GPU 백엔드는 헤드리스에서 안 뜰 수 있다")
+                    help="창을 띄운다. **WebGPU 는 헤드리스에서 안 뜬다**(실측 — WebGL 로 떨어진다)")
+    ap.add_argument("--probe", help="대조 뒤 브라우저 안에서 돌릴 파이썬. 디버깅용")
     args = ap.parse_args()
 
     if not GOLDEN.exists():
@@ -71,7 +77,11 @@ def main():
               "  먼저: uv run --with numpy --with torch python tests/golden.py dump")
         return 1
 
-    result = run(args.lib, args.headed)
+    result, probed = run(args.lib, args.headed, args.probe)
+    if probed is not None:
+        print("-- probe --")
+        print(probed)
+        print()
     total, bad = result["total"], result["bad"]
     if result.get("error"):
         print("러너가 터졌다:\n" + result["error"])
