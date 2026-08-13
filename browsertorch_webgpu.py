@@ -1440,6 +1440,58 @@ def gelu(t):
     return t._make(_tf.mul(0.5, _tf.mul(t._h, ope)), (t,), back, "GeluBackward0")
 
 
+def dropout(t, p=0.5, training=True):
+    if not training or p == 0:
+        return _wrap(t)
+    t = _wrap(t)
+    mask = (_rng.random(t.shape) > p).astype(_np.float32) / (1 - p)
+    return t * Tensor(_to_tf(mask))
+
+
+def layer_norm(x, normalized_shape=None, weight=None, bias=None, eps=1e-5):
+    """마지막 축에서 평균·분산을 낸다. 그래프 안에서 계산해야 기울기가 흐른다."""
+    x = _canonical(x)
+    mean = x.mean(dim=-1, keepdim=True)
+    centered = x - mean
+    var = (centered * centered).mean(dim=-1, keepdim=True)
+    out = centered / (var + eps) ** 0.5
+    if weight is not None:
+        out = out * weight
+    return out + bias if bias is not None else out
+
+
+def embedding(idx, weight):
+    """번호를 벡터로. 원-핫 곱이라 역전파가 따라온다 — 같은 번호가 여러 번 나오면
+    그 행에 기울기가 **쌓여야** 하고, 곱셈이 그것을 알아서 해준다."""
+    weight = _canonical(weight)
+    rows, dim = weight.shape
+    flat = _tf.reshape(_to_int32(idx), _to_js([-1]))
+    n = _shape_of(flat)[0]
+    onehot = _tf.cast(_tf.oneHot(flat, rows), "float32")          # (n, rows)
+    out = weight._make(_tf.matMul(onehot, weight._h), (weight,),
+                       lambda g: (_tf.matMul(onehot, g, True, False),),
+                       "EmbeddingBackward0")
+    shape = tuple(idx.shape) if isinstance(idx, Tensor) else _np.asarray(idx).shape
+    return out.reshape(tuple(shape) + (dim,))
+
+
+def linear(x, weight, bias=None):
+    out = _wrap(x) @ _canonical(weight).transpose(0, 1)
+    return out + bias if bias is not None else out
+
+
+def binary_cross_entropy_with_logits(logits, target):
+    # log(1+e^-|x|) + max(x,0) - x*t — 큰 값에서도 안전한 형태
+    x, t = _wrap(logits), _wrap(target)
+    return (relu(x) - x * t + (1 + (-(x.abs())).exp()).log()).mean()
+
+
+def binary_cross_entropy(p, target):
+    p, t = _wrap(p), _wrap(target)
+    eps = 1e-12
+    return -(t * (p + eps).log() + (1 - t) * (1 - p + eps).log()).mean()
+
+
 def one_hot(t, num_classes=-1):
     t = _canonical(t)
     depth = int(t.numpy().max()) + 1 if num_classes == -1 else int(num_classes)
@@ -1711,6 +1763,12 @@ class _Functional:
     conv2d = staticmethod(conv2d)
     max_pool2d = staticmethod(max_pool2d)
     adaptive_avg_pool2d = staticmethod(adaptive_avg_pool2d)
+    dropout = staticmethod(dropout)
+    layer_norm = staticmethod(layer_norm)
+    embedding = staticmethod(embedding)
+    linear = staticmethod(linear)
+    binary_cross_entropy = staticmethod(binary_cross_entropy)
+    binary_cross_entropy_with_logits = staticmethod(binary_cross_entropy_with_logits)
 
 
 # ---------------------------------------------------------------- nn.Module
@@ -1866,6 +1924,175 @@ class GELU(_Activation):
     fn = staticmethod(gelu)
 
 
+class Identity(Module):
+    def forward(self, x):
+        return x
+
+
+class Dropout(Module):
+    def __init__(self, p=0.5):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x):
+        return dropout(x, self.p, self.training)
+
+
+class LeakyReLU(Module):
+    def __init__(self, negative_slope=0.01):
+        super().__init__()
+        self.negative_slope = negative_slope
+
+    def forward(self, x):
+        return leaky_relu(x, self.negative_slope)
+
+
+class ELU(Module):
+    def __init__(self, alpha=1.0):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, x):
+        return elu(x, self.alpha)
+
+
+class SiLU(_Activation):
+    fn = staticmethod(silu)
+
+
+class Softmax(Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return softmax(x, dim=self.dim)
+
+
+class LogSoftmax(Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return log_softmax(x, dim=self.dim)
+
+
+class LayerNorm(Module):
+    def __init__(self, normalized_shape, eps=1e-5):
+        super().__init__()
+        shape = ((normalized_shape,) if isinstance(normalized_shape, int)
+                 else tuple(normalized_shape))
+        self.eps = eps
+        self.weight = Parameter(_np.ones(shape, dtype=_np.float32))
+        self.bias = Parameter(_np.zeros(shape, dtype=_np.float32))
+
+    def forward(self, x):
+        return layer_norm(x, weight=self.weight, bias=self.bias, eps=self.eps)
+
+
+class BatchNorm1d(Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super().__init__()
+        self.num_features, self.eps, self.momentum = num_features, eps, momentum
+        self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
+        self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
+        self.register_buffer("running_mean", Tensor(_keep(_tf.zeros(_to_js([num_features])))))
+        self.register_buffer("running_var", Tensor(_keep(_tf.ones(_to_js([num_features])))))
+        self.register_buffer("num_batches_tracked", 0)
+
+    def forward(self, x):
+        x = _canonical(x)
+        if self.training:
+            mean = x.mean(dim=0)
+            centered = x - mean
+            var = (centered * centered).mean(dim=0)
+            n = x.shape[0]
+            keep = 1.0 - self.momentum
+            self.running_mean = Tensor(_keep(_tf.add(
+                _tf.mul(keep, self.running_mean._h), _tf.mul(self.momentum, mean._h))))
+            self.running_var = Tensor(_keep(_tf.add(
+                _tf.mul(keep, self.running_var._h),
+                _tf.mul(self.momentum * n / (n - 1), var._h))))
+            self.num_batches_tracked = self.num_batches_tracked + 1
+            normed = centered / (var + self.eps) ** 0.5
+        else:
+            inv = Tensor(_tf.rsqrt(_tf.add(self.running_var._h, float(self.eps))))
+            normed = (x - self.running_mean) * inv
+        return normed * self.weight + self.bias
+
+
+class Embedding(Module):
+    """번호를 벡터로 바꾸는 학습 가능한 표."""
+
+    def __init__(self, num_embeddings, embedding_dim):
+        super().__init__()
+        self.num_embeddings, self.embedding_dim = num_embeddings, embedding_dim
+        self.weight = Parameter(
+            _rng.standard_normal((num_embeddings, embedding_dim)).astype(_np.float32))
+
+    def forward(self, idx):
+        return embedding(idx, self.weight)
+
+    def __repr__(self):
+        return f"Embedding({self.num_embeddings}, {self.embedding_dim})"
+
+
+class ModuleList(Module):
+    def __init__(self, mods=()):
+        super().__init__()
+        self._layers = list(mods)
+        for i, m in enumerate(self._layers):
+            self._modules[str(i)] = m
+
+    def __iter__(self):
+        return iter(self._layers)
+
+    def __getitem__(self, i):
+        return self._layers[i]
+
+    def __len__(self):
+        return len(self._layers)
+
+
+class Unflatten(Module):
+    def __init__(self, dim, unflattened_size):
+        super().__init__()
+        self.dim, self.unflattened_size = dim, tuple(unflattened_size)
+
+    def forward(self, x):
+        return x.reshape(tuple(x.shape[:self.dim]) + self.unflattened_size)
+
+
+class L1Loss(Module):
+    def forward(self, pred, target):
+        return l1_loss(pred, target)
+
+
+class SmoothL1Loss(Module):
+    def __init__(self, beta=1.0):
+        super().__init__()
+        self.beta = beta
+
+    def forward(self, pred, target):
+        return smooth_l1_loss(pred, target, self.beta)
+
+
+class NLLLoss(Module):
+    def forward(self, log_probs, target):
+        return nll_loss(log_probs, target)
+
+
+class BCELoss(Module):
+    def forward(self, p, target):
+        return binary_cross_entropy(p, target)
+
+
+class BCEWithLogitsLoss(Module):
+    def forward(self, logits, target):
+        return binary_cross_entropy_with_logits(logits, target)
+
+
 class Sequential(Module):
     def __init__(self, *layers):
         super().__init__()
@@ -2016,6 +2243,23 @@ class _NN:
     Tanh = Tanh
     GELU = GELU
     Sequential = Sequential
+    ModuleList = ModuleList
+    Identity = Identity
+    Dropout = Dropout
+    LeakyReLU = LeakyReLU
+    ELU = ELU
+    SiLU = SiLU
+    Softmax = Softmax
+    LogSoftmax = LogSoftmax
+    LayerNorm = LayerNorm
+    BatchNorm1d = BatchNorm1d
+    Embedding = Embedding
+    Unflatten = Unflatten
+    L1Loss = L1Loss
+    SmoothL1Loss = SmoothL1Loss
+    NLLLoss = NLLLoss
+    BCELoss = BCELoss
+    BCEWithLogitsLoss = BCEWithLogitsLoss
     Conv2d = Conv2d
     MaxPool2d = MaxPool2d
     AvgPool2d = AvgPool2d

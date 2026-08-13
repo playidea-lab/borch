@@ -269,6 +269,31 @@ def grad_cases(inp=None):
     unary("메서드 x.exp()", lambda L, x: x.exp())
     unary("메서드 x.sqrt()", lambda L, x: x.sqrt(), xp)
 
+    # 층 래퍼 — functional 판이 이미 있던 것들을 감쌌다. 값과 기울기 둘 다 본다.
+    unary("LayerNorm", lambda L, x: L.nn.LayerNorm(4)(x), x2)
+    unary("F.layer_norm", lambda L, x: L.nn.functional.layer_norm(x, (4,)), x2)
+    unary("BatchNorm1d", lambda L, x: L.nn.BatchNorm1d(4)(x), x2)
+    unary("F.linear", lambda L, x: L.nn.functional.linear(x, L.tensor(x2)), x2)
+    unary("Softmax(층)", lambda L, x: L.nn.Softmax(dim=-1)(x), x2)
+    unary("LogSoftmax(층)", lambda L, x: L.nn.LogSoftmax(dim=-1)(x), x2)
+    unary("LeakyReLU(층)", lambda L, x: L.nn.LeakyReLU(0.1)(x))
+    unary("ELU(층)", lambda L, x: L.nn.ELU()(x))
+    unary("SiLU(층)", lambda L, x: L.nn.SiLU()(x))
+    unary("Identity", lambda L, x: L.nn.Identity()(x))
+    unary("Unflatten", lambda L, x: L.nn.Unflatten(0, (3, 2))(x))
+    binary("L1Loss(층)", lambda L, a, b: L.nn.L1Loss()(a, b), "a")
+    binary("SmoothL1Loss(층)", lambda L, a, b: L.nn.SmoothL1Loss()(a, b), "a")
+    binary("BCEWithLogitsLoss", lambda L, a, b: L.nn.BCEWithLogitsLoss()(a, b), "a")
+
+    # Embedding — 같은 번호가 여러 번 나오면 그 행에 기울기가 **쌓여야** 한다.
+    def emb_grad(L):
+        w = L.tensor(inp["w0"][:5], requires_grad=True)      # (5, 6)
+        idx = L.tensor(np.array([0, 2, 0, 4], dtype=np.int64))
+        L.nn.functional.embedding(idx, w).sum().backward()
+        return _grad_of(w, "embedding")
+
+    cases.append(("grad::embedding(중복 번호)", emb_grad))
+
     # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
     for which in ("a", "b"):
         binary("add", lambda L, a, b: a + b, which)
