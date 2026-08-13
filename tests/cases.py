@@ -378,7 +378,7 @@ def golden_cases(inp=None):
     """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
     inp = golden_inputs() if inp is None else inp
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
-            + dtype_cases(inp) + repr_cases(inp))
+            + dtype_cases(inp) + repr_cases(inp) + error_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
@@ -429,6 +429,56 @@ def dtype_cases(inp=None):
                         lambda: eval(f"p {o} s", {},                 # noqa: S307
                                      {"p": _dtype_tensor(L, x), "s": v}))))
     return cases
+
+
+def _backward_twice(L):
+    x = L.tensor([1.0, 2.0], requires_grad=True)
+    y = (x * 2).sum()
+    y.backward()
+    y.backward()
+
+
+# 학습자가 실제로 만나는 실패들. 같은 조건에서 **같은 종류의 예외**가 나야 하고,
+# 메시지에는 torch 의 정규 영문 문구가 들어 있어야 한다 — 그래야 검색이 통한다.
+#
+# 코어의 12건 중 10건이다. 빠진 둘(인덱스 범위 초과 · leaf 제자리 수정)은 메시지가
+# 아니라 **기능이 없어서** 못 덮는다. 없는 기능은 AttributeError 로 시끄럽게 죽는다.
+_ERROR_CASES = [
+    ("행렬곱 모양 불일치", lambda L: L.randn(3, 4) @ L.randn(3, 2),
+     "shapes cannot be multiplied"),
+    ("브로드캐스트 불가", lambda L: L.randn(3, 4) + L.randn(3, 2),
+     "must match the size of tensor"),
+    ("reshape 원소수 불일치", lambda L: L.randn(2, 3).reshape(4, 2),
+     "is invalid for input of size"),
+    ("스칼라 아닌 backward", lambda L: L.randn(3, requires_grad=True).backward(),
+     "grad can be implicitly created only for scalar outputs"),
+    ("requires_grad 없이 backward", lambda L: L.randn(3).sum().backward(),
+     "does not require grad"),
+    ("정수 텐서에 requires_grad", lambda L: L.tensor([1, 2, 3], requires_grad=True), None),
+    ("여러 원소에 item()", lambda L: L.randn(3).item(),
+     "cannot be converted to Scalar"),
+    ("Linear 입력 차원 불일치", lambda L: L.nn.Linear(4, 2)(L.randn(3, 5)),
+     "shapes cannot be multiplied"),
+    ("Conv2d 채널 불일치",
+     lambda L: L.nn.functional.conv2d(L.randn(1, 3, 8, 8), L.randn(4, 1, 3, 3)), None),
+    ("backward 두 번", _backward_twice,
+     "backward through the graph a second time"),
+]
+
+
+def error_cases(inp=None):
+    """T2 — 같은 조건에서 같은 예외가, 검색 가능한 문구와 함께 나는가."""
+
+    def outcome(L, fn, phrase):
+        try:
+            fn(L)
+            return "예외가 안 났다"
+        except Exception as exc:                                    # noqa: BLE001
+            found = (phrase in str(exc)) if phrase else True
+            return f"{type(exc).__name__}|문구={found}"
+
+    return [(f"error::{name}", lambda L, f=fn, p=phrase: outcome(L, f, p))
+            for name, fn, phrase in _ERROR_CASES]
 
 
 _REPR_CASES = [

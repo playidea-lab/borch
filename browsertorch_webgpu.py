@@ -21,8 +21,8 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
   맞췄지만(72/72), **`float64` 는 없다** — TF.js 에 배정도가 없어서 거절한다.
   그리고 정수는 float32 에 담으므로 **2^24 까지 정확**하고, 넘으면 조용히 자르지 않고
   던진다. 코어는 float64 까지 112/112 다
-- **오류 동등(T2)은 부분이다.** 코어는 예외 종류 12/12 에 검색 가능한 영문 문구
-  9/9 를 맞추지만, 여기는 dtype 이 거부하는 조합만 골든이 본다
+- **인덱싱(`t[0]`)과 제자리 갱신(`+=`)이 없다.** 코어에는 있다. 오류 동등(T2)에서
+  이 둘에 걸린 두 건을 못 덮는 것도 그래서다 — 메시지가 아니라 기능이 없다
 - **`scope()` 를 노출한다.** 역전파 클로저가 든 중간 버퍼는 파이썬 GC 가 못 놓는다.
   코어와 다른 한 줄이고, 이유는 WEBGPU-DESIGN.md 7절에 있다
 
@@ -50,6 +50,26 @@ if _tf is None:                                                      # pragma: n
 
 class BrowserTorchError(NotImplementedError):
     """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
+
+
+def _like_torch(korean, torch_phrase):
+    """오류 메시지의 규격 — 코어와 같다.
+
+    한국어 설명만 두면 학습자가 검색해서 답을 못 찾고, 영문만 베끼면 이 교재가
+    한국어인 이유가 사라진다. 둘 다 넣는다 — 설명은 읽고, 영문 문구는 검색한다.
+    """
+    return f"{korean}\n(torch: {torch_phrase})"
+
+
+def _broadcast_error(a, b):
+    """torch 가 내는 것과 같은 자리·같은 문구로 알린다."""
+    bad = next((i for i in range(1, min(len(a), len(b)) + 1)
+                if a[-i] != b[-i] and a[-i] != 1 and b[-i] != 1), 1)
+    raise RuntimeError(_like_torch(
+        f"모양 {tuple(a)} 과 {tuple(b)} 은 브로드캐스팅되지 않습니다 — "
+        "뒤에서부터 맞춰볼 때 크기가 같거나 한쪽이 1이어야 합니다.",
+        f"The size of tensor a ({a[-bad]}) must match the size of tensor b "
+        f"({b[-bad]}) at non-singleton dimension {len(a) - bad}"))
 
 
 def _unsupported(what):
@@ -264,8 +284,14 @@ class Tensor:
         self._backward = _backward
         self._op = None
         self._nhwc = False
+        self._freed = False         # backward 한 번이면 그래프를 놓는다 (torch 와 같다)
         # 라벨이 없으면 저장이 말해주는 대로. bool 저장은 bool, 나머지는 실수다.
         self._dtype = dt or (bool_ if str(handle.dtype) == "bool" else float32)
+
+        if self.requires_grad and _backward is None and self._dtype.category != 2:
+            raise RuntimeError(
+                "정수 텐서에는 기울기가 흐르지 않습니다. 미분은 실수에서만 정의됩니다 "
+                "— `.float()` 로 바꾸세요.")
 
     # ---- 기본 정보
 
@@ -341,9 +367,10 @@ class Tensor:
 
     def item(self):
         if self.numel() != 1:
-            raise RuntimeError(
-                f"값이 {self.numel()}개인 텐서는 하나의 숫자로 바꿀 수 없습니다.\n"
-                "(torch: a Tensor with more than one element cannot be converted to Scalar)")
+            raise RuntimeError(_like_torch(
+                f"값이 {self.numel()}개인 텐서는 하나의 숫자로 바꿀 수 없습니다. "
+                "`.tolist()` 나 인덱싱을 쓰세요.",
+                f"a Tensor with {self.numel()} elements cannot be converted to Scalar"))
         return self.numpy().reshape(-1)[0].item()
 
     def detach(self):
@@ -390,17 +417,25 @@ class Tensor:
         out._nhwc = self._nhwc and len(_shape_of(handle)) == 4
         return out
 
-    def backward(self, gradient=None):
+    def backward(self, gradient=None, retain_graph=False):
         if not self.requires_grad:
-            raise RuntimeError(
-                "requires_grad 가 아닌 텐서에는 backward() 를 부를 수 없습니다.\n"
-                "(torch: element 0 of tensors does not require grad and does not have a grad_fn)")
+            raise RuntimeError(_like_torch(
+                "requires_grad 가 아닌 텐서에는 backward() 를 부를 수 없습니다.",
+                "element 0 of tensors does not require grad and does not have a grad_fn"))
+        if self._freed:
+            raise RuntimeError(_like_torch(
+                "이미 backward() 를 부른 그래프입니다. 한 번 되짚으면 그래프를 놓습니다 — "
+                "다시 계산하거나 `backward(retain_graph=True)` 를 쓰세요.",
+                "Trying to backward through the graph a second time"))
         if gradient is None:
             if self.numel() != 1:
-                raise RuntimeError(
-                    "값이 하나가 아닌 텐서에는 gradient 를 줘야 합니다.\n"
-                    "(torch: grad can be implicitly created only for scalar outputs)")
+                raise RuntimeError(_like_torch(
+                    "값이 하나가 아닌 텐서에는 gradient 를 줘야 합니다. "
+                    "보통은 손실을 스칼라로 만든 뒤 부릅니다.",
+                    "grad can be implicitly created only for scalar outputs"))
             gradient = _tf.onesLike(self._h)
+        elif isinstance(gradient, Tensor):
+            gradient = gradient._h          # torch 처럼 텐서를 받는다
 
         order, seen = [], set()
 
@@ -435,6 +470,11 @@ class Tensor:
                 pg = _unbroadcast(pg, _shape_of(parent._h))
                 grads[id(parent)] = pg if id(parent) not in grads else _tf.add(grads[id(parent)], pg)
 
+        if not retain_graph:
+            for t in order:
+                if t._backward is not None:
+                    t._freed = True
+
     # ---- 산술
 
     def _binary(self, o, forward, back, op, force=None):
@@ -447,7 +487,12 @@ class Tensor:
         a, b = _align(self, _wrap(o))
         out_dt = force(target) if force else target
         ah, bh = _storage_for(a, out_dt), _storage_for(b, out_dt)
-        return a._make(forward(ah, bh), (a, b), lambda g: back(g, ah, bh), op, dt=out_dt)
+        try:
+            handle = forward(ah, bh)
+        except Exception:                                            # noqa: BLE001
+            # TF.js 는 자기 말로 던진다. torch 를 쓰던 사람이 검색할 수 있는 문구로 바꾼다.
+            _broadcast_error(a.shape, b.shape)
+        return a._make(handle, (a, b), lambda g: back(g, ah, bh), op, dt=out_dt)
 
     def __add__(self, o):
         if _both_bool(self, o):
@@ -495,6 +540,14 @@ class Tensor:
 
     def __matmul__(self, o):
         self, o = _canonical(self), _canonical(_wrap(o))
+        sa, sb = self.shape, o.shape
+        if len(sa) >= 2 and len(sb) >= 2 and sa[-1] != sb[-2]:
+            left = "x".join(str(n) for n in sa[-2:])
+            right = "x".join(str(n) for n in sb[-2:])
+            raise RuntimeError(_like_torch(
+                f"행렬곱의 모양이 안 맞습니다 ({left} @ {right}) — "
+                f"앞의 열({sa[-1]})과 뒤의 행({sb[-2]})이 같아야 합니다.",
+                f"mat1 and mat2 shapes cannot be multiplied ({left} and {right})"))
         return self._make(
             _tf.matMul(self._h, o._h), (self, o),
             lambda g: (_tf.matMul(g, o._h, False, True),
@@ -508,6 +561,11 @@ class Tensor:
         shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
         t = _canonical(self)          # 모양을 다시 짜는 것은 torch 순서에서만 뜻이 있다
         old = t.shape
+        want = list(shape)
+        if -1 not in want and int(_np.prod(want)) != t.numel():
+            raise RuntimeError(_like_torch(
+                f"모양 {want} 은 원소 {t.numel()}개짜리 텐서에 맞지 않습니다.",
+                f"shape '{want}' is invalid for input of size {t.numel()}"))
         return t._make(_tf.reshape(t._h, _to_js(list(shape))), (t,),
                        lambda g: (_tf.reshape(g, _to_js(list(old))),), "ViewBackward0")
 
