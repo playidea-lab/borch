@@ -247,6 +247,25 @@ def grad_cases(inp=None):
                      ("reciprocal", lambda L, x: L.reciprocal(x))]:
         unary(name, fn, xp)
 
+    # 형 변환. **여기에 조용히 틀린 자리가 있었다.**
+    #
+    # `.float()` 과 `.double()` 이 결과에 `requires_grad=True` 를 붙여놓고 부모를 안 달았다.
+    # 그래서 `backward()` 는 예외 없이 잘 돌고 원래 텐서의 `.grad` 만 `None` 으로 남았다 —
+    # 경고도 예외도 없이. `x.float()` 는 튜토리얼에 흔하니 조용히 학습이 안 되는 자리였다.
+    # 다른 열두 군데(tril·diag·einsum·cumprod 등)도 기울기가 없지만 그쪽은 결과가
+    # `requires_grad=False` 라 `backward()` 가 **거절한다** — 없는 것과 틀린 것의 차이다.
+    unary("float()", lambda L, x: x.float())
+
+    # `.double()` 은 같은 `_cast` 를 지나므로 산수는 위에서 이미 대조된다. 여기서 남은
+    # 질문은 **자매가 이것을 거절하는가**다 — TF.js 에 배정도가 없어 float64 를 아예
+    # 거절하는 것이 문서화된 한계이고, 그 한계가 조용히 넓어지지 않는지를 붙잡는다.
+    def double_grad(L):
+        x = L.tensor(x1, requires_grad=True)
+        x.double().sum().backward()
+        return _grad_of(x, "double()")
+
+    cases.append(("grad::double()=자매는거절", _as_expected(double_grad)))
+
     # 활성 — 학습 경로가 실제로 지나는 곳
     for name, fn in [("relu", lambda L, x: L.relu(x)),
                      ("sigmoid", lambda L, x: L.sigmoid(x)),

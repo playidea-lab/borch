@@ -412,8 +412,21 @@ class Tensor:
 
     # ---- 형 변환
 
+    def _cast(self, target):
+        """실수끼리의 형 변환은 **그래프를 잇는다.** torch 가 그렇다.
+
+        전에는 `Tensor(..., self.requires_grad)` 였는데, 그러면 결과가 `requires_grad=True`
+        라고 말하면서 부모가 없다. `backward()` 는 예외 없이 잘 돌고 원래 텐서의 `.grad`
+        만 `None` 으로 남는다 — **예외도 경고도 없다.** 이 저장소가 가장 싫어하는 모양이고,
+        `x.float()` 는 튜토리얼 코드에 흔해서 조용히 학습이 안 되는 자리가 된다.
+
+        정수·불리언으로 가는 변환은 여기 안 온다. 거기서는 torch 도 기울기를 끊는다.
+        """
+        out = self.data.astype(target)
+        return self._make(out, (self,), lambda g: (g.astype(self.data.dtype),), "ToCopyBackward0")
+
     def float(self):
-        return Tensor(self.data.astype(_np.float32), self.requires_grad)
+        return self._cast(_np.float32)
 
     def long(self):
         return Tensor(self.data.astype(_np.int64))
@@ -425,10 +438,13 @@ class Tensor:
         return Tensor(self.data.astype(_np.bool_))
 
     def double(self):
-        return Tensor(self.data.astype(_np.float64), self.requires_grad)
+        return self._cast(_np.float64)
 
     def type(self, dt):
-        return Tensor(self.data.astype(dt.np if isinstance(dt, dtype) else dt), self.requires_grad)
+        target = dt.np if isinstance(dt, dtype) else dt
+        if _np.dtype(target).kind != "f":
+            return Tensor(self.data.astype(target))
+        return self._cast(target)
 
     def to(self, *args, **kwargs):
         for a in list(args) + list(kwargs.values()):
