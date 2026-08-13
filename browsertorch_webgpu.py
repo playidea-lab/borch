@@ -603,6 +603,107 @@ class Tensor:
     def T(self):
         return self.transpose(-2, -1)
 
+    # ---- 모양·축약 (메서드로만 있는 것들)
+
+    @property
+    def data(self):
+        """torch 처럼 **텐서**를 준다(코어는 numpy 를 준다).
+
+        torch 의 `.data` 는 저장소를 공유하지만 우리는 못 하므로 사본이다.
+        쓰는 쪽(`p.data = ...`)은 손잡이를 갈아끼우니 파라미터 초기화에는 그대로 통한다.
+        """
+        return self.detach()
+
+    @data.setter
+    def data(self, value):
+        if not isinstance(value, Tensor):
+            raise TypeError(_like_torch(
+                f"`.data` 에는 텐서만 넣을 수 있습니다 ({type(value).__name__} 을 받았습니다).",
+                f"Variable data has to be a tensor, but got {type(value).__name__}"))
+        old = self._h
+        self._h = _keep(_tf.clone(value._h))
+        self._nhwc, self._dtype = value._nhwc, value._dtype
+        old.dispose()
+
+    def clone(self):
+        return self._make(_tf.clone(self._h), (self,), lambda g: (g,), "CloneBackward0")
+
+    def contiguous(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def double(self):
+        _unsupported("float64 (TF.js 에 배정도가 없습니다)")
+
+    def type(self, dt):
+        return self._cast_to(dt)
+
+    def permute(self, *dims):
+        dims = dims[0] if len(dims) == 1 and isinstance(dims[0], (tuple, list)) else dims
+        t = _canonical(self)
+        inv = [int(i) for i in _np.argsort(dims)]
+        return t._make(_tf.transpose(t._h, _to_js(list(dims))), (t,),
+                       lambda g: (_tf.transpose(g, _to_js(inv)),), "PermuteBackward0")
+
+    def squeeze(self, dim=None):
+        t = _canonical(self)
+        old = t.shape
+        out = (_tf.squeeze(t._h) if dim is None else _tf.squeeze(t._h, _to_js([dim])))
+        return t._make(out, (t,), lambda g: (_tf.reshape(g, _to_js(list(old))),),
+                       "SqueezeBackward0")
+
+    def _argreduce(self, big, dim, keepdim):
+        """dim 이 없으면 값 하나, 있으면 (값, 번호). torch 와 같은 모양이다."""
+        t = _canonical(self)
+        pick = _tf.max if big else _tf.min
+        if dim is None:
+            return Tensor(pick(t._h), dt=t._dtype)
+        _last_axis_only(t, dim, "max/min")
+        arg = (_tf.argMax if big else _tf.argMin)(t._h, -1)
+        idx = _tf.reshape(arg, _to_js(list(t.shape[:-1]) + [1]))
+        values = _pick_last(t, idx)
+        if not keepdim:
+            values = values.reshape(tuple(t.shape[:-1]))
+        return _ValuesIndices(values, Tensor(arg))
+
+    def max(self, dim=None, keepdim=False):
+        return self._argreduce(True, dim, keepdim)
+
+    def min(self, dim=None, keepdim=False):
+        return self._argreduce(False, dim, keepdim)
+
+    def argmax(self, dim=None):
+        t = _canonical(self)
+        h = t._h if dim is not None else _tf.reshape(t._h, _to_js([-1]))
+        return Tensor(_tf.argMax(h, -1 if dim is None else dim), dt=int64)
+
+    def argmin(self, dim=None):
+        t = _canonical(self)
+        h = t._h if dim is not None else _tf.reshape(t._h, _to_js([-1]))
+        return Tensor(_tf.argMin(h, -1 if dim is None else dim), dt=int64)
+
+    def var(self, dim=None, unbiased=True, keepdim=False):
+        t = _canonical(self)
+        n = t.numel() if dim is None else t.shape[dim]
+        mean = t.mean(dim=dim, keepdim=True) if dim is not None else t.mean()
+        centered = t - mean
+        out = (centered * centered).sum(dim=dim, keepdim=keepdim)
+        return out / float(n - 1 if unbiased else n)
+
+    def std(self, dim=None, unbiased=True, keepdim=False):
+        return self.var(dim=dim, unbiased=unbiased, keepdim=keepdim) ** 0.5
+
+    def all(self):
+        return Tensor(_tf.all(_storage_bool(self)), dt=bool_)
+
+    def any(self):
+        return Tensor(_tf.any(_storage_bool(self)), dt=bool_)
+
+    def bincount(self):
+        return bincount(self)
+
     # ---- 인덱싱
 
     def __getitem__(self, idx):
@@ -792,6 +893,11 @@ def _result_dtype(t, o):
     if isinstance(o, (bool, int, float)):
         return _scalar_dtype(t._dtype, o)
     return result_type(t._dtype, _dtype_of(o))
+
+
+def _storage_bool(t):
+    """불리언 연산에 넣을 손잡이. 수치 저장이면 0 이 아닌 것을 참으로 본다."""
+    return t._h if t._dtype is bool_ else _tf.notEqual(t._h, 0.0)
 
 
 def _storage_for(t, target):
@@ -1072,6 +1178,171 @@ def clamp(t, min=None, max=None):
 
 def dot(a, b):
     return (_wrap(a) * _wrap(b)).sum()
+
+
+def bmm(a, b):
+    return _wrap(a) @ _wrap(b)
+
+
+def eye(n):
+    return Tensor(_tf.eye(n), dt=float32)
+
+
+def full(shape, value, dtype=None):
+    _reject_float64(dtype)
+    dt = dtype or (int64 if isinstance(value, int) and not isinstance(value, bool) else float32)
+    return Tensor(_tf.fill(_to_js(list(shape)), float(value)), dt=dt)
+
+
+def full_like(t, value):
+    return full(_wrap(t).shape, value)
+
+
+def zeros_like(t, dtype=None):
+    t = _wrap(t)
+    return Tensor(_tf.zerosLike(t._h), dt=dtype or t._dtype)
+
+
+def ones_like(t, dtype=None):
+    t = _wrap(t)
+    return Tensor(_tf.onesLike(t._h), dt=dtype or t._dtype)
+
+
+def empty(*shape, dtype=None):
+    return zeros(*shape, dtype=dtype)
+
+
+def linspace(start, end, steps):
+    return Tensor(_to_tf(_np.linspace(start, end, steps).astype(_np.float32)), dt=float32)
+
+
+def as_tensor(data, dtype=None):
+    if isinstance(data, Tensor) and dtype is None:
+        return data
+    return tensor(data, dtype)
+
+
+def where(cond, a, b):
+    """조건이 참인 자리는 a, 아니면 b. 기울기도 그 자리로만 간다."""
+    c = _wrap(cond)
+    mask = c._h if c._dtype is bool_ else _tf.notEqual(c._h, 0.0)
+    ta, tb = _align(_wrap(a), _wrap(b))
+    keep = _tf.cast(mask, "float32")
+    return ta._make(_tf.where(mask, ta._h, tb._h), (ta, tb),
+                    lambda g: (_tf.mul(g, keep), _tf.mul(g, _tf.sub(1.0, keep))),
+                    "WhereBackward0")
+
+
+def tril(t, diagonal=0):
+    t = _canonical(t)
+    n, m = t.shape[-2], t.shape[-1]
+    mask = _np.tril(_np.ones((n, m), dtype=_np.float32), k=diagonal)
+    return Tensor(_tf.mul(t._h, _to_tf(mask)), dt=t._dtype)
+
+
+def triu(t, diagonal=0):
+    t = _canonical(t)
+    n, m = t.shape[-2], t.shape[-1]
+    mask = _np.triu(_np.ones((n, m), dtype=_np.float32), k=diagonal)
+    return Tensor(_tf.mul(t._h, _to_tf(mask)), dt=t._dtype)
+
+
+def masked_fill(t, mask, value):
+    t = _canonical(t)
+    m = _wrap(mask)
+    keep = _tf.cast(_tf.logicalNot(m._h if m._dtype is bool_
+                                   else _tf.notEqual(m._h, 0.0)), "float32")
+    filled = _tf.where(m._h if m._dtype is bool_ else _tf.notEqual(m._h, 0.0),
+                       _tf.fill(_to_js(list(t.shape)), float(value)), t._h)
+    return t._make(filled, (t,), lambda g: (_tf.mul(g, keep),), "MaskedFillBackward0")
+
+
+def repeat_interleave(t, repeats, dim=None):
+    t = _canonical(t)
+    return Tensor(_to_tf(_np.repeat(t.numpy(), repeats, axis=dim)), dt=t._dtype)
+
+
+def tile(t, reps):
+    t = _canonical(t)
+    return Tensor(_to_tf(_np.tile(t.numpy(), reps)), dt=t._dtype)
+
+
+def movedim(t, source, destination):
+    t = _canonical(t)
+    return Tensor(_to_tf(_np.moveaxis(t.numpy(), source, destination)), dt=t._dtype)
+
+
+def argsort(t, dim=-1, descending=False):
+    return sort(t, dim, descending).indices
+
+
+def bincount(t):
+    # int32 로 낮춰서 센다 — wasm32 에서는 numpy 의 intp 가 32비트라 int64 를 거부한다.
+    counts = _np.bincount(_canonical(t).numpy().astype(_np.int32))
+    return Tensor(_to_tf(counts.astype(_np.int64), int64), dt=int64)
+
+
+def multinomial(probs, num_samples, replacement=True):
+    p = _canonical(probs).numpy().astype(_np.float64)
+    p = p / p.sum(axis=-1, keepdims=True)
+    if p.ndim == 1:
+        out = _rng.choice(len(p), size=num_samples, p=p)
+    else:
+        out = _np.asarray([_rng.choice(p.shape[-1], size=num_samples, p=row) for row in p])
+    return Tensor(_to_tf(out.astype(_np.int64), int64), dt=int64)
+
+
+def einsum(equation, *operands):
+    ops = [_canonical(o) for o in operands]
+    return Tensor(_to_tf(_np.einsum(equation, *[o.numpy() for o in ops])), dt=float32)
+
+
+def allclose(a, b, rtol=1e-5, atol=1e-8):
+    return bool(_np.allclose(_wrap(a).numpy(), _wrap(b).numpy(), rtol=rtol, atol=atol))
+
+
+def equal(a, b):
+    return bool(_np.array_equal(_wrap(a).numpy(), _wrap(b).numpy()))
+
+
+def _compare(name, fn):
+    def cmp(a, b):
+        ta, tb = _align(_wrap(a), _wrap(b))
+        return Tensor(fn(ta._h, tb._h), dt=bool_)
+    cmp.__name__ = name
+    return cmp
+
+
+eq = _compare("eq", lambda a, b: _tf.equal(a, b))
+ne = _compare("ne", lambda a, b: _tf.notEqual(a, b))
+lt = _compare("lt", lambda a, b: _tf.less(a, b))
+le = _compare("le", lambda a, b: _tf.lessEqual(a, b))
+gt = _compare("gt", lambda a, b: _tf.greater(a, b))
+ge = _compare("ge", lambda a, b: _tf.greaterEqual(a, b))
+logical_and = _compare("logical_and", lambda a, b: _tf.logicalAnd(a, b))
+logical_or = _compare("logical_or", lambda a, b: _tf.logicalOr(a, b))
+
+
+def logical_not(t):
+    t = _wrap(t)
+    h = t._h if t._dtype is bool_ else _tf.notEqual(t._h, 0.0)
+    return Tensor(_tf.logicalNot(h), dt=bool_)
+
+
+def isnan(t):
+    return Tensor(_tf.isNaN(_wrap(t)._h), dt=bool_)
+
+
+def isinf(t):
+    return Tensor(_tf.isInf(_wrap(t)._h), dt=bool_)
+
+
+def isfinite(t):
+    return Tensor(_tf.isFinite(_wrap(t)._h), dt=bool_)
+
+
+def pow(t, exponent):
+    return _wrap(t) ** exponent
 
 
 def outer(a, b):
@@ -2863,8 +3134,62 @@ def decode_cifar10(raw):
 # 섞어 쓴다. 같은 구현을 가리키므로 갈릴 자리가 없다.
 for _name in ("abs", "exp", "log", "sqrt", "unsqueeze", "clamp", "flip", "norm",
               "gather", "prod", "cumsum", "topk", "sort", "split", "chunk", "unbind",
-              "narrow", "index_select", "masked_select", "median"):
+              "narrow", "index_select", "masked_select", "median", "masked_fill",
+              "cumprod", "roll", "repeat_interleave", "tile", "movedim", "argsort"):
     setattr(Tensor, _name, globals()[_name])
+
+
+def _to_plain(obj):
+    """텐서를 numpy 로 바꿔 저장 가능한 형태로. 중첩 dict/list 도 따라간다."""
+    if isinstance(obj, Tensor):
+        return {"__tensor__": obj.numpy()}
+    if isinstance(obj, dict):
+        return {k: _to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_to_plain(v) for v in obj)
+    return obj
+
+
+def _from_plain(obj):
+    if isinstance(obj, dict):
+        if "__tensor__" in obj:
+            return tensor(obj["__tensor__"])
+        return {k: _from_plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_from_plain(v) for v in obj)
+    return obj
+
+
+def save(obj, path):
+    """브라우저에도 가상 파일시스템이 있어 경로가 통한다. pickle 한 겹만 쓴다."""
+    import pickle
+    with open(path, "wb") as f:
+        pickle.dump(_to_plain(obj), f)
+
+
+def load(path, **kwargs):
+    import pickle
+    with open(path, "rb") as f:
+        return _from_plain(pickle.load(f))
+
+
+class _Cuda:
+    """이 라이브러리는 GPU 를 쓰지만 **CUDA 는 아니다.** 흉내 내면 8장의 교훈이 사라진다."""
+
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def manual_seed_all(seed):
+        return None
+
+    @staticmethod
+    def synchronize():
+        _unsupported("torch.cuda.synchronize")
+
+
+cuda = _Cuda()
 
 
 def backend():

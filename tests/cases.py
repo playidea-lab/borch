@@ -137,6 +137,33 @@ def wide_cases(inp=None):
         # 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
         ("BatchNorm2d(저장→복원→eval)", lambda L: _bn_roundtrip(L, img)),
         ("median(dim).indices", lambda L: L.median(L.tensor(x2), dim=1).indices),
+        # 3단계에서 더한 수학·모양·비교. 값만 보는 것들이라 여기 둔다.
+        ("eye", lambda L: L.eye(3)),
+        ("full", lambda L: L.full((2, 3), 2.5)),
+        ("zeros_like", lambda L: L.zeros_like(L.tensor(x2))),
+        ("ones_like", lambda L: L.ones_like(L.tensor(x2))),
+        ("linspace", lambda L: L.linspace(0, 1, 5)),
+        ("tril", lambda L: L.tril(L.tensor(x2[:3, :3]))),
+        ("triu", lambda L: L.triu(L.tensor(x2[:3, :3]), 1)),
+        ("argmax", lambda L: L.tensor(x2).argmax(dim=1)),
+        ("argmin", lambda L: L.tensor(x2).argmin(dim=1)),
+        ("argsort", lambda L: L.argsort(L.tensor(x1))),
+        ("bincount", lambda L: L.bincount(L.tensor(np.array([0, 1, 1, 3], dtype=np.int64)))),
+        ("eq", lambda L: L.eq(L.tensor(x1), L.tensor(x1))),
+        ("gt", lambda L: L.gt(L.tensor(x1), L.tensor(-x1))),
+        ("logical_and", lambda L: L.logical_and(L.tensor(x1) > 0, L.tensor(-x1) > 0)),
+        ("logical_not", lambda L: L.logical_not(L.tensor(x1) > 0)),
+        ("isnan", lambda L: L.isnan(L.tensor(x1))),
+        ("isfinite", lambda L: L.isfinite(L.tensor(x1))),
+        ("all", lambda L: (L.tensor(x1) > -99).all()),
+        ("any", lambda L: (L.tensor(x1) > 99).any()),
+        ("bmm", lambda L: L.bmm(L.tensor(x2.reshape(1, 3, 4)),
+                                L.tensor(x2.T.copy().reshape(1, 4, 3)))),
+        ("einsum", lambda L: L.einsum("ij,kj->ik", L.tensor(x2), L.tensor(x2))),
+        ("repeat_interleave", lambda L: L.repeat_interleave(L.tensor(x1), 2)),
+        ("tile", lambda L: L.tile(L.tensor(x1), (2,))),
+        ("movedim", lambda L: L.movedim(L.tensor(x2), 0, 1)),
+        ("as_tensor", lambda L: L.as_tensor(x1)),
     ]
     return cases
 
@@ -293,6 +320,17 @@ def grad_cases(inp=None):
         return _grad_of(w, "embedding")
 
     cases.append(("grad::embedding(중복 번호)", emb_grad))
+
+    # 수학·모양 — 각각 TF.js 대응은 있지만 역전파를 붙여야 했던 것들
+    unary("where", lambda L, x: L.where(x > 0, x, x * 0.1))
+    unary("masked_fill", lambda L, x: x.masked_fill(x > 0, -1.0))
+    unary("clone", lambda L, x: x.clone())
+    unary("permute", lambda L, x: x.permute(1, 0), x2)
+    unary("squeeze", lambda L, x: x.unsqueeze(0).squeeze())
+    unary("max(dim)", lambda L, x: x.max(dim=1).values, x2)
+    unary("min(dim)", lambda L, x: x.min(dim=1).values, x2)
+    unary("var", lambda L, x: x.var())
+    unary("std", lambda L, x: x.std())
 
     # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
     for which in ("a", "b"):

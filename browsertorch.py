@@ -717,13 +717,21 @@ class Tensor:
     def argmin(self, dim=None):
         return Tensor(_np.argmin(self.data, axis=dim))
 
-    def std(self, dim=None, unbiased=True, keepdim=False):
-        ddof = 1 if unbiased else 0
-        return Tensor(_np.std(self.data, axis=dim, ddof=ddof, keepdims=keepdim))
-
     def var(self, dim=None, unbiased=True, keepdim=False):
-        ddof = 1 if unbiased else 0
-        return Tensor(_np.var(self.data, axis=dim, ddof=ddof, keepdims=keepdim))
+        """**그래프 안에서** 계산한다.
+
+        전에는 `np.var` 로 값만 떼어 돌려줬다. 값은 맞지만 기울기가 안 흐른다 —
+        분산을 손실에 끼우면 학습이 조용히 멈춘다. ROADMAP 11번이 topk·sort 에서
+        잡은 것과 같은 종류인데, 여기는 검사가 없어서 남아 있었다.
+        """
+        n = self.data.size if dim is None else self.data.shape[dim]
+        mean = self.mean(dim=dim, keepdim=True) if dim is not None else self.mean()
+        centered = self - mean
+        total = (centered * centered).sum(dim=dim, keepdim=keepdim)
+        return total / float(n - 1 if unbiased else n)
+
+    def std(self, dim=None, unbiased=True, keepdim=False):
+        return self.var(dim=dim, unbiased=unbiased, keepdim=keepdim) ** 0.5
 
     def abs(self):
         return self._make(_np.abs(self.data), (self,), lambda g: (g * _np.sign(self.data),))
