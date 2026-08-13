@@ -88,8 +88,14 @@ def check(lib, path=DEFAULT_PATH):
             "입력이 골든과 다르다 — 이 상태의 비교는 대조가 아니다.\n"
             f"  갈린 입력: {detail}")
 
-    bad = []
+    # 두 라이브러리의 범위가 갈린다. 자매 쪽에만 있는 것은 자매만 대조한다 —
+    # 코어가 일부러 거절하는 것을 코어에게 물으면 그건 검사가 아니라 오답이다.
+    is_webgpu = hasattr(lib, "backend")
+    bad, skipped = [], 0
     for name, fn in cases:
+        if name.startswith(cases_mod.WEBGPU_PREFIX) and not is_webgpu:
+            skipped += 1
+            continue
         want = z[_PREFIX + name]
         try:
             raw = fn(lib)
@@ -105,7 +111,7 @@ def check(lib, path=DEFAULT_PATH):
             bad.append(f"{name}: 모양 {want.shape} vs {got.shape}")
         elif not np.allclose(want, got, atol=ATOL, rtol=RTOL):
             bad.append(f"{name}: 최대차 {np.abs(want - got).max():.2e}")
-    return bad, len(cases)
+    return bad, len(cases) - skipped
 
 
 def main(argv):

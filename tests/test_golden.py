@@ -20,12 +20,18 @@ _spec.loader.exec_module(golden)
 
 
 def test_golden_dump_then_check_matches_browsertorch(tmp_path):
+    """코어는 **자기 범위만** 대조한다.
+
+    골든은 진짜 torch 로 굳히므로 자매 라이브러리에만 있는 것까지 담는다. 코어는 그것들을
+    일부러 거절하므로 건너뛴다 — 두 라이브러리의 범위가 갈리기 시작했고, 건너뛴 수가
+    정확히 자매 전용 케이스 수와 같아야 그 갈림이 의도한 대로라는 뜻이다.
+    """
     path = tmp_path / "golden.npz"
     count, _ = golden.dump(path)
     assert count > 0, "골든이 비었다 — 케이스 표가 안 실렸다"
 
     bad, total = golden.check(golden.load_browsertorch(), path)
-    assert total == count
+    assert total == count - len(golden.cases_mod.webgpu_cases())
     assert not bad, "골든과 갈렸다:\n  " + "\n  ".join(bad)
 
 

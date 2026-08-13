@@ -1847,6 +1847,10 @@ def _to_nchw(h):
     return _tf.transpose(h, _to_js([0, 3, 1, 2]))
 
 
+def _pair(v):
+    return (v, v) if isinstance(v, int) else (int(v[0]), int(v[1]))
+
+
 def _dilate(handle, stride, extra):
     """기울기 사이에 0 을 끼운다.
 
@@ -1858,18 +1862,22 @@ def _dilate(handle, stride, extra):
     던지지도 않았다 — 6차원 경로가 조용히 0 을 준다. 그래서 5차원을 넘지 않게
     `stack` 으로 다시 짰다.
     """
+    sh, sw = _pair(stride)
+    eh, ew = _pair(extra)
     n, oh, ow, f = _shape_of(handle)
 
-    zeros_h = _tf.zerosLike(handle)
-    stacked = _tf.stack(_to_js([handle] + [zeros_h] * (stride - 1)), 2)   # (n,oh,s,ow,f)
-    x = _tf.reshape(stacked, _to_js([n, oh * stride, ow, f]))
+    x = handle
+    if sh > 1:
+        zeros_h = _tf.zerosLike(x)
+        x = _tf.reshape(_tf.stack(_to_js([x] + [zeros_h] * (sh - 1)), 2),
+                        _to_js([n, oh * sh, ow, f]))
+    if sw > 1:
+        zeros_w = _tf.zerosLike(x)
+        x = _tf.reshape(_tf.stack(_to_js([x] + [zeros_w] * (sw - 1)), 3),
+                        _to_js([n, _shape_of(x)[1], ow * sw, f]))
 
-    zeros_w = _tf.zerosLike(x)
-    stacked = _tf.stack(_to_js([x] + [zeros_w] * (stride - 1)), 3)        # (n,oh*s,ow,s,f)
-    x = _tf.reshape(stacked, _to_js([n, oh * stride, ow * stride, f]))
-
-    keep_h = (oh - 1) * stride + 1 + extra
-    keep_w = (ow - 1) * stride + 1 + extra
+    keep_h = (oh - 1) * sh + 1 + eh
+    keep_w = (ow - 1) * sw + 1 + ew
     return _tf.slice(x, _to_js([0, 0, 0, 0]), _to_js([n, keep_h, keep_w, f]))
 
 
@@ -1879,33 +1887,37 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     F, C2, KH, KW = weight.shape
     if C != C2:
         raise RuntimeError(f"채널이 안 맞습니다: 입력 {C}, 필터 {C2}")
-    if KH != KW:
-        _unsupported("정사각형이 아닌 커널")
+
+    # 축별로 받는다 — 1차원 합성곱이 (1, K) 커널로 이 경로를 그대로 쓰기 때문이다.
+    sh, sw = _pair(stride)
+    ph, pw = _pair(padding)
 
     # **들어올 때 한 번만 바꾼다.** 이미 NHWC 면 그냥 지나가고, 결과도 NHWC 로 나가서
     # 다음 conv·BN·활성까지 전치 없이 이어진다.
     xin = _relayout(x, True)
     xh = xin._h
     wh = _tf.transpose(weight._h, _to_js([2, 3, 1, 0]))          # (F,C,KH,KW) → (KH,KW,C,F)
-    out = _tf.conv2d(xh, wh, stride, padding)
+    xpad_fwd = xh if (ph, pw) == (0, 0) else _tf.pad(
+        xh, _to_js([[0, 0], [ph, ph], [pw, pw], [0, 0]]))
+    out = _tf.conv2d(xpad_fwd, wh, _to_js([sh, sw]), "valid")
     bias_t = _wrap(bias) if bias is not None else None
     if bias_t is not None:
         # NHWC 는 마지막 축이 채널이라 1차원 편향이 그대로 붙는다. 모양을 만들 필요가 없다.
         out = _tf.add(out, bias_t._h)
-    extra = (H + 2 * padding - KH) % stride
+    extra = ((H + 2 * ph - KH) % sh, (W + 2 * pw - KW) % sw)
 
     def back(gd):                                                # gd 는 NHWC 로 온다
-        if stride > 1:
-            gd = _dilate(gd, stride, extra)
+        if (sh, sw) != (1, 1) or extra != (0, 0):
+            gd = _dilate(gd, (sh, sw), extra)
 
         # dx — 커널을 공간 반전하고 입출력 채널을 바꾸면 **순방향 conv 가 된다**
         wflip = _tf.transpose(_tf.reverse(wh, _to_js([0, 1])), _to_js([0, 1, 3, 2]))
-        dx = _tf.conv2d(gd, wflip, 1, KH - 1 - padding)
+        gpad = _tf.pad(gd, _to_js([[0, 0], [KH - 1 - ph, KH - 1 - ph],
+                                   [KW - 1 - pw, KW - 1 - pw], [0, 0]]))
+        dx = _tf.conv2d(gpad, wflip, 1, "valid")
 
         # dw — 배치와 채널을 맞바꾸고 기울기를 필터로 쓰면 역시 순방향 conv 가 된다
-        xpad = _tf.pad(xh, _to_js([[0, 0], [padding, padding],
-                                   [padding, padding], [0, 0]]))
-        xt = _tf.transpose(xpad, _to_js([3, 1, 2, 0]))           # (C, H', W', N)
+        xt = _tf.transpose(xpad_fwd, _to_js([3, 1, 2, 0]))       # (C, H', W', N)
         gt = _tf.transpose(gd, _to_js([1, 2, 0, 3]))             # (OH, OW, N, F)
         dw = _tf.transpose(_tf.conv2d(xt, gt, 1, "valid"), _to_js([3, 0, 1, 2]))
 
@@ -1917,6 +1929,46 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     return xin._make(out, parents, back, "ConvolutionBackward0")
 
 
+def conv1d(x, weight, bias=None, stride=1, padding=0):
+    """`(N,C,L)` 을 `(N,C,1,L)` 로 세워 **검증된 2차원 경로**를 그대로 쓴다.
+
+    TF.js 에 `conv1d` 가 있지만 부르지 않는다 — 그쪽 역방향은 우리가 손으로 쓴 것보다
+    느린 커널을 탄다(2차원에서 26배를 쟀다). 세워서 쓰면 그 이득이 1차원에도 그대로 온다.
+    """
+    x, weight = _wrap(x), _canonical(weight)
+    n, c, length = x.shape
+    f, c2, k = weight.shape
+    out = conv2d(x.reshape(n, c, 1, length), weight.reshape(f, c2, 1, k),
+                 bias, (1, stride), (0, padding))
+    on, of, _, ol = out.shape
+    return out.reshape(on, of, ol)
+
+
+def max_pool1d(x, kernel_size, stride=None):
+    x = _wrap(x)
+    n, c, length = x.shape
+    out = max_pool2d(x.reshape(n, c, 1, length), (1, kernel_size),
+                     (1, stride or kernel_size))
+    on, oc, _, ol = out.shape
+    return out.reshape(on, oc, ol)
+
+
+def interpolate(x, scale_factor=2, mode="nearest"):
+    """최근접 확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다."""
+    if mode != "nearest":
+        _unsupported(f"interpolate(mode={mode!r}) — 최근접만 있습니다")
+    xin = _relayout(_wrap(x), True)
+    _, h, w, _ = _shape_of(xin._h)
+    sh, sw = _pair(scale_factor)
+    out = _tf.image.resizeNearestNeighbor(xin._h, _to_js([h * sh, w * sw]))
+
+    def back(g):
+        pooled = _tf.avgPool(g, _to_js([sh, sw]), _to_js([sh, sw]), "valid")
+        return (_tf.mul(pooled, float(sh * sw)),)
+
+    return xin._make(out, (xin,), back, "UpsampleBackward0")
+
+
 def max_pool2d(x, kernel_size, stride=None):
     """역방향은 TF.js 에 맡긴다.
 
@@ -1926,7 +1978,7 @@ def max_pool2d(x, kernel_size, stride=None):
     xin = _relayout(_wrap(x), True)
     stride = stride or kernel_size
     xh = xin._h
-    ksize, strides = _to_js([kernel_size, kernel_size]), _to_js([stride, stride])
+    ksize, strides = _to_js(list(_pair(kernel_size))), _to_js(list(_pair(stride)))
     out = _tf.maxPool(xh, ksize, strides, "valid")
 
     def back(g):
@@ -1998,7 +2050,7 @@ def adaptive_avg_pool2d(x, output_size=1):
 def avg_pool2d(x, kernel_size, stride=None):
     xin = _relayout(_wrap(x), True)
     stride = stride or kernel_size
-    ksize, strides = _to_js([kernel_size, kernel_size]), _to_js([stride, stride])
+    ksize, strides = _to_js(list(_pair(kernel_size))), _to_js(list(_pair(stride)))
     out = _tf.avgPool(xin._h, ksize, strides, "valid")
 
     def back(g):
@@ -2031,8 +2083,11 @@ class _Functional:
     nll_loss = staticmethod(nll_loss)
     cross_entropy = staticmethod(cross_entropy)
     avg_pool2d = staticmethod(avg_pool2d)
+    conv1d = staticmethod(conv1d)
     conv2d = staticmethod(conv2d)
+    max_pool1d = staticmethod(max_pool1d)
     max_pool2d = staticmethod(max_pool2d)
+    interpolate = staticmethod(interpolate)
     adaptive_avg_pool2d = staticmethod(adaptive_avg_pool2d)
     dropout = staticmethod(dropout)
     layer_norm = staticmethod(layer_norm)
@@ -2557,6 +2612,44 @@ class Conv2d(Module):
                 f"padding={self.padding})")
 
 
+class Conv1d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True):
+        super().__init__()
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        bound = 1.0 / _np.sqrt(in_channels * kernel_size)
+        self.weight = Parameter(_rng.uniform(
+            -bound, bound, (out_channels, in_channels, kernel_size)).astype(_np.float32))
+        self.bias = Parameter(
+            _rng.uniform(-bound, bound, out_channels).astype(_np.float32)) if bias else None
+
+    def forward(self, x):
+        return conv1d(x, self.weight, self.bias, self.stride, self.padding)
+
+    def __repr__(self):
+        return (f"Conv1d({self.in_channels}, {self.out_channels}, "
+                f"kernel_size={self.kernel_size}, stride={self.stride}, "
+                f"padding={self.padding})")
+
+
+class MaxPool1d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return max_pool1d(x, self.kernel_size, self.stride)
+
+
+class Upsample(Module):
+    def __init__(self, scale_factor=2, mode="nearest"):
+        super().__init__()
+        self.scale_factor, self.mode = scale_factor, mode
+
+    def forward(self, x):
+        return interpolate(x, self.scale_factor, self.mode)
+
+
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None):
         super().__init__()
@@ -2865,8 +2958,28 @@ class CrossEntropyLoss(Module):
         return cross_entropy(logits, target)
 
 
+def _volumetric(name):
+    """3차원 계열은 **거절한다. 없어서가 아니라 값이 안 맞아서다.**
+
+    TF.js 에 `conv3d`·`maxPool3d` 는 실제로 있다(확인했다). 문제는 역방향이다 —
+    우리가 손으로 쓴 conv 역방향(순방향 conv 로 다시 쓰기)은 3차원으로 그대로
+    넘어가지 않고, `tf.grad` 에 맡기면 2차원에서 잰 **26배 느림**을 그대로 물려받는다.
+    빠르지 않은 GPU 라이브러리는 존재 이유가 없다.
+
+    그리고 이 라이브러리가 겨누는 것은 브라우저에서 도는 2차원 영상이다. 부피 데이터가
+    필요해지면 그때 역방향을 3차원으로 다시 유도하는 것이 순서다 — 지금 넣으면
+    느린 채로 조용히 쓰이게 된다.
+    """
+    def factory(*a, **k):
+        _unsupported(f"nn.{name} (3차원 역방향을 아직 손으로 안 썼습니다)")
+    return factory
+
+
 class _NN:
     functional = _Functional()
+    Conv3d = staticmethod(_volumetric("Conv3d"))
+    MaxPool3d = staticmethod(_volumetric("MaxPool3d"))
+    BatchNorm3d = staticmethod(_volumetric("BatchNorm3d"))
     Module = Module
     Parameter = Parameter
     Linear = Linear
@@ -2901,8 +3014,11 @@ class _NN:
     TransformerDecoderLayer = TransformerDecoderLayer
     TransformerDecoder = TransformerDecoder
     Transformer = Transformer
+    Conv1d = Conv1d
     Conv2d = Conv2d
+    MaxPool1d = MaxPool1d
     MaxPool2d = MaxPool2d
+    Upsample = Upsample
     AvgPool2d = AvgPool2d
     AdaptiveAvgPool2d = AdaptiveAvgPool2d
     Flatten = Flatten

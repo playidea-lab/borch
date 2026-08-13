@@ -533,11 +533,59 @@ def train_cases(inp=None):
     return cases
 
 
+WEBGPU_PREFIX = "webgpu::"
+
+
+def webgpu_cases(inp=None):
+    """**자매 라이브러리에만 있는 것들.**
+
+    코어는 이것들을 일부러 거절한다 — 커리큘럼이 안 쓰고, 표면이 늘면 조용히 틀릴
+    자리가 늘기 때문이다. 자매 쪽은 헌장이 달라서(성능·실전 모델) 넣는다.
+
+    기대값은 **진짜 torch** 로 굳힌다. 코어는 이 케이스들을 건너뛰고 자매만 대조한다 —
+    두 라이브러리의 범위가 갈리기 시작했고, 하네스가 그것을 표현해야 한다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    seq = inp["seq_x"].transpose(1, 2, 0).copy()          # (N=2, C=3, L=5)
+    img = inp["img"]
+    ck1 = (np.random.default_rng(13).standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
+
+    def conv1d_grad(which):
+        def run(L, w=which):
+            x = L.tensor(seq, requires_grad=True)
+            k = L.tensor(ck1, requires_grad=True)
+            L.nn.functional.conv1d(x, k, None, 1, 1).sum().backward()
+            return _grad_of(x if w == "x" else k, f"conv1d/{w}")
+        return run
+
+    cases = [
+        (WEBGPU_PREFIX + "F.conv1d",
+         lambda L: L.nn.functional.conv1d(L.tensor(seq), L.tensor(ck1), None, 1, 1)),
+        (WEBGPU_PREFIX + "F.conv1d(스트라이드2)",
+         lambda L: L.nn.functional.conv1d(L.tensor(seq), L.tensor(ck1), None, 2, 1)),
+        (WEBGPU_PREFIX + "grad::conv1d/x", conv1d_grad("x")),
+        (WEBGPU_PREFIX + "grad::conv1d/w", conv1d_grad("w")),
+        (WEBGPU_PREFIX + "F.max_pool1d",
+         lambda L: L.nn.functional.max_pool1d(L.tensor(seq), 2)),
+        (WEBGPU_PREFIX + "Upsample(최근접)",
+         lambda L: L.nn.Upsample(scale_factor=2)(L.tensor(img))),
+    ]
+
+    def upsample_grad(L):
+        x = L.tensor(img, requires_grad=True)
+        L.nn.Upsample(scale_factor=2)(x).sum().backward()
+        return _grad_of(x, "Upsample")
+
+    cases.append((WEBGPU_PREFIX + "grad::Upsample", upsample_grad))
+    return cases
+
+
 def golden_cases(inp=None):
     """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
     inp = golden_inputs() if inp is None else inp
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
-            + dtype_cases(inp) + repr_cases(inp) + error_cases(inp))
+            + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
+            + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
