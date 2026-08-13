@@ -148,6 +148,47 @@ def run_with_loader(L, batch=128, images=5120, steps=5, warmup=2):
             "loss": round(float(last), 4)}
 
 
+async def cifar_from(L, url, name="cifar-batch1.bin"):
+    """CIFAR-10 한 덩이를 받아 캐시하고 푼다.
+
+    주소를 인자로 받는 이유: **원본은 CORS 헤더를 안 준다**(실측). 브라우저에서 직접
+    못 받으므로, 직접 호스팅하거나 CORS 를 주는 미러를 쓰거나 사용자가 파일을 골라
+    `cache_put` 으로 넣는다. 여기서는 첫 번째 — 로컬 서버가 서빙한다.
+    """
+    raw = await L.fetch_cached(url, name)
+    return L.decode_cifar10(raw)
+
+
+def run_real(L, x, y, batch=128, steps=20, lr=0.05):
+    """진짜 이미지로 학습한다. **손실이 내려가는지**를 본다 — 합성 데이터로는
+    라벨이 무작위라 내려갈 수가 없어서 그 부분이 확인이 안 됐다."""
+    loader = L.utils.data.DataLoader(
+        L.utils.data.TensorDataset(x, y), batch_size=batch, shuffle=True, drop_last=True)
+    model = resnet18(L)
+    opt = L.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    crit = L.nn.CrossEntropyLoss()
+
+    losses, done = [], 0
+    t0 = js.performance.now()
+    while done < steps:
+        for bx, by in loader:
+            with L.scope():
+                opt.zero_grad()
+                loss = crit(model(bx), by)
+                loss.backward()
+                opt.step()
+                losses.append(round(float(loss.item()), 4))
+            done += 1
+            if done >= steps:
+                break
+    per_step = (js.performance.now() - t0) / steps
+    return {"steps": steps, "batch": batch,
+            "first": losses[0], "last": losses[-1],
+            "curve": losses[::max(1, steps // 8)],
+            "ms_per_step": round(per_step, 1),
+            "epoch_min": round(per_step * -(-CIFAR_TRAIN_IMAGES // batch) / 60000, 2)}
+
+
 def report(L, batches=(16, 32, 64)):
     lines = []
     for b in batches:
