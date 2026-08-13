@@ -1042,6 +1042,39 @@ def unbind(t, dim=0):
     return tuple(_slice_tensor(t, dim, i, 1).reshape(rest) for i in range(shape[dim]))
 
 
+# ---- 원소별 제자리 연산
+#
+# `Tensor` 안의 `_inplace` 를 그대로 쓴다. 목록도 코어와 같다 — 산수는 이미 있는 함수가
+# 하고 여기서는 되쓰기만 하므로, 같은 식을 두 벌로 둘 자리가 없다.
+
+_INPLACE_UNARY = ("abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh", "sigmoid",
+                  "relu", "erf", "floor", "ceil", "round", "sign", "reciprocal",
+                  "square", "trunc", "frac", "neg", "rsqrt", "log2", "log10",
+                  "expm1", "log1p", "acos", "asin", "atan", "sinh", "cosh")
+
+
+def _make_inplace(name):
+    fn = globals()[name]
+
+    def method(self):
+        return self._write_back(lambda: fn(self), name + "_")
+
+    method.__name__ = name + "_"
+    return method
+
+
+for _nm in _INPLACE_UNARY:
+    setattr(Tensor, _nm + "_", _make_inplace(_nm))
+
+
+def clamp_(self, min=None, max=None):
+    return self._write_back(lambda: clamp(self, min, max), "clamp_")
+
+
+Tensor.clamp_ = clamp_
+Tensor.clip_ = clamp_
+
+
 # ---- 모양 바꾸기의 나머지
 #
 # 거의 전부 **이미 있는 연산으로 짠다** — `cat`·`stack`·자르기·`permute` 는 그래프를

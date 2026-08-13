@@ -569,6 +569,32 @@ def roll(t, shifts, dims=None):
                    lambda g: (_np.roll(_np.asarray(g), _negate(shifts), dims),), "RollBackward0")
 
 
+# ---- 원소별 제자리 연산
+#
+# `Tensor` 안의 `_inplace` 를 그대로 쓴다. 산수는 이미 있는 함수가 하고, 여기서는
+# **그 결과를 제 버퍼에 되쓰는 것**만 한다 — 같은 식을 두 벌로 두면 언젠가 갈린다.
+
+_INPLACE_UNARY = ("abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh", "sigmoid",
+                  "relu", "erf", "floor", "ceil", "round", "sign", "reciprocal",
+                  "square", "trunc", "frac", "neg", "rsqrt", "log2", "log10",
+                  "expm1", "log1p", "acos", "asin", "atan", "sinh", "cosh")
+
+
+def _make_inplace(name):
+    fn = globals()[name]
+
+    def method(self):
+        return self._inplace(lambda: fn(self), name + "_")
+
+    method.__name__ = name + "_"
+    method.__doc__ = f"`{name}` 을 제자리에서. 산수는 `{name}` 이 하고 여기서는 되쓰기만 한다."
+    return method
+
+
+for _nm in _INPLACE_UNARY:
+    setattr(Tensor, _nm + "_", _make_inplace(_nm))
+
+
 # ---- 모양 바꾸기의 나머지
 #
 # **이 파일에서는 `abs`·`round`·`pow` 가 파이썬 것이 아니다.** 위에서 같은 이름의 텐서

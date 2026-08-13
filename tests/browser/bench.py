@@ -10,6 +10,7 @@ FLOPs 로 나눈 추정 대신 이 파일이 있다.
 """
 
 import asyncio
+import gc as _gc
 
 import js
 import numpy as np
@@ -93,6 +94,14 @@ def run(L, batch=32, steps=5, warmup=2):
     for _ in range(warmup):
         one()
 
+    # **기준선을 잡기 전에 파이썬 쓰레기를 먼저 치운다.**
+    #
+    # 안 그러면 워밍업이 남긴 것이 측정 창 안에서 뒤늦게 풀리고, 아래 나눗셈이 그
+    # 한 번의 정리를 **스텝당 비율로 둔갑시킨다.** 실제로 배치 32 에서 "누수 -24.8"
+    # 이 나왔는데, 스텝 수를 5·10·20 으로 바꿔 보니 총량이 늘 0 아니면 정확히 -124 였다 —
+    # 스텝당이 아니라 한 번짜리라는 뜻이다. 음수라 새는 쪽은 아니었지만, 이름이
+    # 말하는 것과 다른 수를 내는 계측은 다음에 진짜 누수를 만났을 때도 못 믿는다.
+    _gc.collect()
     before = int(js.tf.memory().numTensors)
     t0 = js.performance.now()
     last = None

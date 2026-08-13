@@ -1032,6 +1032,85 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+INPLACE_PREFIX = "inplace::"
+
+_INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh_",
+                  "sigmoid_", "relu_", "erf_", "floor_", "ceil_", "round_", "sign_",
+                  "reciprocal_", "square_", "trunc_", "frac_", "neg_", "rsqrt_",
+                  "log2_", "log10_", "expm1_", "log1p_", "sinh_", "cosh_")
+
+
+def inplace_cases(inp=None):
+    """제자리 연산. **두 라이브러리가 처음으로 일부러 갈리는 자리다.**
+
+    갈리는 것은 하나뿐이다 — 뷰를 통한 전파. torch 와 코어는 저장소를 공유해서
+    `b = a.view(2,2); b.add_(10)` 이 `a` 까지 바꾸고, 자매는 TF.js 텐서가 불변이라
+    그럴 수 없어 거절한다. 나머지(자기 자신 고치기)는 셋 다 같다.
+
+    그 갈림을 여기서 못 박는다. 자매가 어느 날 조용히 값을 돌려주기 시작하면
+    (그 값이 맞든 틀리든) 빌드가 깨진다.
+    """
+    plain = np.array([1., 4., 9., 2.], dtype=np.float32)
+    small = np.array([0.5, 0.8, 0.3, 0.9], dtype=np.float32)   # 정의역이 좁은 것들용
+
+    def run(name, call, arr):
+        def go(L, f=call, a=arr):
+            x = L.tensor(a.copy())
+            f(x)
+            return x               # **되돌려받은 것이 아니라 원본을 본다**
+        return (INPLACE_PREFIX + name, go)
+
+    cases = [
+        run("add_", lambda x: x.add_(1), plain),
+        run("add_(alpha)", lambda x: x.add_(1, alpha=2), plain),
+        run("sub_", lambda x: x.sub_(1), plain),
+        run("mul_", lambda x: x.mul_(2), plain),
+        run("div_", lambda x: x.div_(2), plain),
+        run("pow_", lambda x: x.pow_(2), plain),
+        run("neg_", lambda x: x.neg_(), plain),
+        run("zero_", lambda x: x.zero_(), plain),
+        run("fill_", lambda x: x.fill_(7), plain),
+        run("clamp_", lambda x: x.clamp_(2, 5), plain),
+        run("clip_", lambda x: x.clip_(2, 5), plain),
+        # **이어 부르기가 진짜 시험이다.** 되돌려준 것이 자기 자신이어야 이어진다.
+        run("이어 부르기", lambda x: x.mul_(2).add_(1).clamp_(0, 10), plain),
+    ]
+    for name in _INPLACE_UNARY:
+        arr = small if name in ("asin_", "acos_", "atan_", "log_", "log2_", "log10_",
+                                "sqrt_", "rsqrt_", "log1p_") else plain
+        cases.append(run(name, lambda x, n=name: getattr(x, n)(), arr))
+
+    # 뷰 전파 — **자매만 거절한다.**
+    def view_propagates(L):
+        a = L.arange(4).float()
+        a.view(2, 2).add_(10)
+        return a
+
+    cases.append((INPLACE_PREFIX + "뷰 전파=자매는거절",
+                  _as_expected(view_propagates)))
+
+    # 잎에 기울기가 켜져 있으면 **셋 다** 거절한다.
+    def leaf_refuses(L):
+        x = L.tensor(plain, requires_grad=True)
+        try:
+            x.add_(1)
+        except Exception:                                       # noqa: BLE001
+            return "기대대로 거절"
+        return "뜻밖의 성공"
+
+    cases.append((INPLACE_PREFIX + "잎 제자리 수정=거절", leaf_refuses))
+
+    # `no_grad` 안에서는 잎도 고칠 수 있다 — 옵티마이저가 실제로 그렇게 한다.
+    def under_no_grad(L):
+        x = L.tensor(plain, requires_grad=True)
+        with L.no_grad():
+            x.add_(1)
+        return x
+
+    cases.append((INPLACE_PREFIX + "no_grad 안에서는 된다", under_no_grad))
+    return cases
+
+
 SHAPE_PREFIX = "shape::"
 
 
@@ -1395,7 +1474,8 @@ def golden_cases(inp=None):
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
-            + reduce_cases(inp) + shape_cases(inp) + webgpu_cases(inp))
+            + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
+            + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

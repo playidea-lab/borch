@@ -536,6 +536,59 @@ class Tensor:
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         self.data[key] = value.data if isinstance(value, Tensor) else value
 
+    # ---- 제자리 연산
+    #
+    # **버퍼를 진짜로 고친다.** 코어의 뷰는 numpy 배열을 공유하므로(실측:
+    # `np.shares_memory(a.data, a.view(2,2).data)` 가 참) 뷰를 고치면 원본도 바뀐다 —
+    # torch 와 같다. 자매는 TF.js 텐서가 불변이라 그 전파를 못 하고, 거기서 둘이 갈린다.
+    #
+    # torch 가 거절하는 자리도 따라 거절한다. 잎에 기울기가 켜져 있으면 못 고치고,
+    # 역전파에 필요한 값을 덮는 것도 못 한다 — 후자는 우리가 안 잡지만, 잎 쪽은 잡는다.
+
+    def _inplace(self, fn, what):
+        if self.requires_grad and _grad_mode.enabled:
+            raise RuntimeError(_like_torch(
+                f"기울기가 필요한 잎 텐서에는 `{what}` 을(를) 쓸 수 없습니다. "
+                "`with torch.no_grad():` 안에서 하거나 제자리가 아닌 연산을 쓰세요.",
+                "a leaf Variable that requires grad is being used in an in-place operation"))
+        out = fn()
+        self.data[...] = out.data if isinstance(out, Tensor) else out
+        return self
+
+    def add_(self, other, alpha=1):
+        return self._inplace(lambda: self + (other * alpha if alpha != 1 else other), "add_")
+
+    def sub_(self, other, alpha=1):
+        return self._inplace(lambda: self - (other * alpha if alpha != 1 else other), "sub_")
+
+    def mul_(self, other):
+        return self._inplace(lambda: self * other, "mul_")
+
+    def div_(self, other):
+        return self._inplace(lambda: self / other, "div_")
+
+    def pow_(self, exponent):
+        return self._inplace(lambda: self ** exponent, "pow_")
+
+    def neg_(self):
+        return self._inplace(lambda: -self, "neg_")
+
+    def zero_(self):
+        return self._inplace(lambda: _np.zeros_like(self.data), "zero_")
+
+    def fill_(self, value):
+        return self._inplace(lambda: _np.full_like(self.data, value), "fill_")
+
+    def copy_(self, other):
+        return self._inplace(
+            lambda: (other.data if isinstance(other, Tensor) else _np.asarray(other)),
+            "copy_")
+
+    def clamp_(self, min=None, max=None):
+        return self._inplace(lambda: _np.clip(self.data, min, max), "clamp_")
+
+    clip_ = clamp_
+
     # ---- 축약
 
     def _reduce(self, fn, dim, keepdim, grad_fn, op=None):

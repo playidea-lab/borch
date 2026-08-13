@@ -260,6 +260,78 @@ class Tensor:
 
     # ---- 산술
 
+    # ---- 제자리 연산
+    #
+    # **된다. 다만 코어와 한 가지가 다르다.**
+    #
+    # `x.add_(1)` 처럼 자기 자신을 고치는 것은 손잡이를 새것으로 갈아 끼우면 끝이고,
+    # 저장소 공유가 필요 없다. 튜토리얼이 쓰는 것은 거의 이쪽이다.
+    #
+    # 못 하는 것은 **뷰를 통한 전파**다. torch 는 `b = a.view(2,2); b.add_(10)` 으로
+    # `a` 까지 바뀌는데, TF.js 텐서는 불변이라 그럴 수 없다. 코어는 numpy 배열을
+    # 공유하므로 그것까지 torch 와 같다(실측). 여기서는 조용히 다르게 굴지 않고
+    # **파생 텐서의 제자리 수정을 거절한다** — `_derived` 가 그 판단의 근거다.
+
+    def _write_back(self, fn, what):
+        # 이름이 `_inplace` 가 아닌 이유: **이미 그 이름이 있었다.** 아래쪽에
+        # `+=` 계열이 쓰는 `_inplace(fn, other)` 가 따로 있고, 같은 이름으로 두면
+        # 그것을 덮어써서 `x += 1` 이 이름 문자열을 값으로 받는다. 실제로 그렇게
+        # 터졌고(`could not convert string to float: 'add_'`), 시끄럽게 터진 것이
+        # 다행이다 — 서명이 우연히 맞았으면 조용히 틀렸다.
+        if self.requires_grad and _grad_mode.enabled:
+            raise RuntimeError(_like_torch(
+                f"기울기가 필요한 잎 텐서에는 `{what}` 을(를) 쓸 수 없습니다. "
+                "`with torch.no_grad():` 안에서 하거나 제자리가 아닌 연산을 쓰세요.",
+                "a leaf Variable that requires grad is being used in an in-place operation"))
+        if self._derived:
+            _unsupported(
+                f"다른 텐서에서 나온 것(뷰·슬라이스·연산 결과)에 `{what}` 을(를) 쓰는 것 — "
+                "torch 는 저장소를 공유해 원본까지 바꾸는데 TF.js 텐서는 불변이라 "
+                "여기서는 그럴 수 없습니다. 코어 `browsertorch` 는 이것을 지원합니다")
+        out = fn()
+        old = self._h
+        self._h = out._h if isinstance(out, Tensor) else out
+        if isinstance(out, Tensor):
+            out._h = None          # 손잡이를 넘겨받았다 — 둘이 나눠 들면 한쪽이 놓는다
+            self._dtype = out._dtype
+            self._nhwc = out._nhwc
+        if old is not None and old is not self._h:
+            try:
+                old.dispose()
+            except Exception:                                        # noqa: BLE001
+                pass
+        return self
+
+    def add_(self, other, alpha=1):
+        return self._write_back(lambda: self + (other * alpha if alpha != 1 else other), "add_")
+
+    def sub_(self, other, alpha=1):
+        return self._write_back(lambda: self - (other * alpha if alpha != 1 else other), "sub_")
+
+    def mul_(self, other):
+        return self._write_back(lambda: self * other, "mul_")
+
+    def div_(self, other):
+        return self._write_back(lambda: self / other, "div_")
+
+    def pow_(self, exponent):
+        return self._write_back(lambda: self ** exponent, "pow_")
+
+    def neg_(self):
+        return self._write_back(lambda: -self, "neg_")
+
+    def zero_(self):
+        return self._write_back(
+            lambda: Tensor(_tf.zerosLike(self._h), dt=self._dtype), "zero_")
+
+    def fill_(self, value):
+        return self._write_back(
+            lambda: Tensor(_tf.fill(_to_js(list(self.shape)), float(value))), "fill_")
+
+    def copy_(self, other):
+        return self._write_back(
+            lambda: Tensor(_tf.clone(_wrap(other)._h), dt=self._dtype), "copy_")
+
     def _binary(self, o, forward, back, op, force=None):
         """레이아웃을 맞추고 dtype 을 승격한 뒤 계산한다.
 
