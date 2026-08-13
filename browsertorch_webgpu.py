@@ -32,12 +32,18 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
 
 ## 이 파일을 고칠 때의 규칙 둘
 
-**랭크 5 이상에서 `_tf.pad` 를 직접 부르지 마라. `_pad_zeros` 를 거쳐라.**
+**랭크 5 이상에서 `_tf.pad` 를 직접 부르지 마라. `_pad_const` 를 거쳐라.**
 거기서 `tf.pad` 는 모양을 맞게 돌려주고 값을 깨뜨리며 **예외를 안 던진다.**
-랭크 6 의 reshape+pad 에서 한 번, 랭크 5 의 conv3d 에서 또 한 번 걸렸다. 두 번째
-때는 conv3d 만 고치고 넘어갈 뻔했는데, 케이스를 세워 물어보니 자르기의 역방향도
-같은 함수를 부르고 있어서 `narrow`·`unbind`·`split` 셋이 랭크 5 에서 조용히
-틀린 기울기를 내고 있었다. 이런 것은 눈으로 훑어서는 안 나온다.
+
+이 하나를 잡는 데 세 번 걸렸고, 세 번 다 "고쳤다"고 생각한 뒤에 다음이 나왔다.
+conv3d 에서 처음 보고 거기만 고쳤더니, 케이스를 세워 물어보니 자르기의 역방향이
+같은 함수를 불러 `narrow`·`unbind`·`split` 셋이 랭크 5 에서 틀린 기울기를 내고
+있었다. 그것도 고치고 랭크 6 을 물어보니 이번에는 `F.pad` 자신 — 사용자가 직접
+부르는 문 — 이 랭크 5·6 양쪽에서 틀리고 있었다. **눈으로 훑어서는 세 번 다 못 봤고,
+케이스를 세워 물어봐서 세 번 다 나왔다.**
+
+랭크 6 자체는 멀쩡하다. 원소별·축 합·permute·reshape·기울기 전부 맞는다. 고장난
+것은 랭크가 아니라 `pad` 이므로, 고랭크를 만났다고 거절할 이유는 없다.
 
 **`_wrap(x)._h` 를 인라인으로 쓰지 마라.** `x` 가 텐서가 아니면 `_wrap` 이 임시를
 만드는데, `._h` 를 꺼내는 순간 그 임시의 참조가 0 이 되어 `__del__` 이 버퍼를 놓는다.
@@ -1554,31 +1560,36 @@ def stack(items, dim=0):
     return items[0]._make(out, tuple(items), back, "StackBackward0")
 
 
-# 랭크 5 부터는 `tf.pad` 를 못 믿는다 — 아래 `_pad_zeros` 참고.
+# 랭크 5 부터는 `tf.pad` 를 못 믿는다 — 아래 `_pad_const` 참고.
 _PAD_SAFE_RANK = 4
 
 
-def _pad_zeros(handle, shape, pads):
-    """0 을 두른다. `shape` 는 `handle` 의 현재 모양, `pads` 는 (축, 앞, 뒤) 목록이다.
+def _pad_const(handle, shape, pads, value=0.0):
+    """상수로 두른다. `shape` 는 `handle` 의 현재 모양, `pads` 는 (축, 앞, 뒤) 목록이다.
 
     **랭크 5 이상에서는 `tf.pad` 를 쓰지 않는다.** 거기서 pad 는 모양을 맞게 돌려주고
     값을 깨뜨리며, 예외를 안 던진다 — 부르는 쪽은 아무것도 모른 채 틀린 답을 받는다.
     conv3d 를 굳히다 잡았다: 1×1×1 항등 커널을 씌운 결과의 합이 28 이어야 하는데
-    0.238 이었다. 랭크 6 의 reshape+pad 에서 겪은 것과 같은 종류다.
+    0.238 이었다.
 
-    이것이 conv3d 만의 사고가 아니었다는 것은 케이스를 세워 물어보고 알았다. 자르기의
-    역방향이 잘려나간 자리를 도로 0 으로 메울 때 같은 함수를 부르는데, 랭크 5 를
-    자르면 **narrow·unbind·split 셋 다 조용히 틀린 기울기**를 내고 있었다. 그러니
-    호출 지점은 여기 하나로 모으고, 랭크 판단도 여기서만 한다.
+    한 번에 안 끝났다는 것을 적어둔다. 처음에는 conv3d 만 고쳤고, 그 다음 케이스를
+    세워 물어보니 자르기의 역방향도 같은 함수를 불러 **narrow·unbind·split 셋이 랭크 5
+    에서 조용히 틀린 기울기**를 내고 있었다. 거기서 또 멈췄는데, 랭크 6 을 물어보니
+    이번에는 **`F.pad` 자신** — 사용자가 직접 부르는 문 — 이 랭크 5·6 양쪽에서 틀리고
+    있었다. 세 번 다 "고쳤다"고 생각한 뒤에 나왔다. 그러니 호출 지점은 여기 하나로
+    모으고, 랭크 판단도 여기서만 한다.
 
-    랭크 4 이하는 `tf.pad` 그대로 둔다. 골든 350 건과 ResNet-18 의 매 스텝이 지나는
+    랭크 6 자체는 멀쩡하다는 것도 그때 같이 확인했다 — 원소별·축 합·permute·reshape·
+    기울기 전부 맞았다. 고장난 것은 랭크가 아니라 `pad` 다.
+
+    랭크 4 이하는 `tf.pad` 그대로 둔다. 골든 361 건과 ResNet-18 의 매 스텝이 지나는
     길이고 거기서는 값이 맞는다 — 안 깨진 것을 바꾸면 바꾼 쪽이 새 위험이 된다.
     """
     if len(shape) <= _PAD_SAFE_RANK:
         pairs = [[0, 0] for _ in shape]
         for axis, before, after in pads:
             pairs[axis] = [before, after]
-        return _tf.pad(handle, _to_js(pairs))
+        return _tf.pad(handle, _to_js(pairs), float(value))
 
     cur = list(shape)
     for axis, before, after in pads:
@@ -1587,7 +1598,8 @@ def _pad_zeros(handle, shape, pads):
                 continue
             block = list(cur)
             block[axis] = width
-            zeros = _tf.zeros(_to_js(block))
+            zeros = (_tf.zeros(_to_js(block)) if value == 0.0
+                     else _tf.fill(_to_js(block), float(value)))
             parts = [zeros, handle] if at_front else [handle, zeros]
             handle = _tf.concat(_to_js(parts), axis)
             cur[axis] += width
@@ -1610,7 +1622,7 @@ def _slice_tensor(t, dim, start, length):
     out_shape[dim] = length
     pads = [(dim, start, shape[dim] - start - length)]
     return t._make(_slice_along(t._h, dim, start, length), (t,),
-                   lambda g: (_pad_zeros(g, out_shape, pads),), "SliceBackward0")
+                   lambda g: (_pad_const(g, out_shape, pads),), "SliceBackward0")
 
 
 def narrow(t, dim, start, length):
@@ -1829,7 +1841,8 @@ def pad(x, padding, value=0.0):
     def back(g):
         return (_tf.slice(g, _to_js([p[0] for p in pairs]), _to_js(list(old))),)
 
-    return x._make(_tf.pad(x._h, _to_js(pairs), float(value)), (x,), back, "PadBackward0")
+    pads = [(i, p[0], p[1]) for i, p in enumerate(pairs) if p != [0, 0]]
+    return x._make(_pad_const(x._h, list(old), pads, value), (x,), back, "PadBackward0")
 
 
 def normalize(x, p=2, dim=1, eps=1e-12):
@@ -2014,7 +2027,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
     ncdhw_to_ndhwc, back_perm = [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]
 
     xh = _tf.transpose(x._h, _to_js(ncdhw_to_ndhwc))
-    xh = _pad_zeros(xh, [n, d, h, w, c], [(1, pd, pd), (2, ph, ph), (3, pw, pw)])
+    xh = _pad_const(xh, [n, d, h, w, c], [(1, pd, pd), (2, ph, ph), (3, pw, pw)])
     wh = _tf.transpose(weight._h, _to_js([2, 3, 4, 1, 0]))    # (F,C,D,H,W) → (D,H,W,C,F)
     strides = _to_js([sd, sh, sw])
     out = _tf.conv3d(xh, wh, strides, "valid")

@@ -631,6 +631,58 @@ def webgpu_cases(inp=None):
 
     for kind in ("narrow", "unbind", "split"):
         cases.append((WEBGPU_PREFIX + f"grad::랭크5 {kind}", slice5_grad(kind)))
+
+    # 랭크 6. `_dilate` 를 쓸 때 reshape+pad 가 0 을 뱉는 것을 보고 **우회만 했지**
+    # 어디까지 깨지는지는 안 재봤다. 그리고 랭크 5 를 고친 방법이 `concat` 인데,
+    # 그것이 랭크 6 에서도 도는지 역시 안 봤다 — 고친 줄 알고 안 고친 자리가 여기 있을
+    # 수 있다. 그래서 "될 것 같다"를 지우고 물어본다. TF.js 가 정말 못 하는 것이면
+    # 답은 조용히 틀린 값이 아니라 **거절**이어야 하고, 그것도 여기서 드러난다.
+    v6 = np.random.default_rng(23).standard_normal((2, 2, 2, 3, 2, 2)).astype(np.float32)
+
+    def slice6_grad(kind):
+        def run(L, k=kind):
+            x = L.tensor(v6, requires_grad=True)
+            if k == "narrow":
+                out = L.narrow(x, 3, 1, 2)
+            elif k == "unbind":
+                out = L.unbind(x, 3)[1]
+            else:
+                out = L.split(x, 1, dim=3)[0]
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, f"랭크6 {k}")
+        return run
+
+    def elemwise6(L):
+        x = L.tensor(v6, requires_grad=True)
+        (x * x + x).sum().backward()
+        return _grad_of(x, "랭크6 원소별")
+
+    cases += [
+        # 값이 통째로 나오는 케이스를 먼저 둔다 — 스칼라로 줄이면 자리가 뒤바뀌어도
+        # 합이 같아 통과한다.
+        (WEBGPU_PREFIX + "랭크6 원소별", lambda L: L.tensor(v6) * 2.0 + 1.0),
+        (WEBGPU_PREFIX + "랭크6 합(축)", lambda L: L.tensor(v6).sum(dim=3)),
+        (WEBGPU_PREFIX + "랭크6 permute",
+         lambda L: L.tensor(v6).permute(3, 0, 5, 2, 1, 4)),
+        (WEBGPU_PREFIX + "랭크6 reshape",
+         lambda L: L.tensor(v6).reshape(2, 2, 2, 2, 3, 2)),
+        (WEBGPU_PREFIX + "랭크5→6 reshape",
+         lambda L: L.tensor(vol).reshape(1, 2, 2, 2, 4, 4)),
+        (WEBGPU_PREFIX + "grad::랭크6 원소별", elemwise6),
+    ]
+    for kind in ("narrow", "unbind", "split"):
+        cases.append((WEBGPU_PREFIX + f"grad::랭크6 {kind}", slice6_grad(kind)))
+
+    # `F.pad` 는 공개 API 로 `tf.pad` 에 닿는 **또 하나의 문**이다. 자르기의 역방향만
+    # 고치고 이쪽을 안 봤으면, 같은 버그가 사용자가 직접 부르는 경로에 그대로 남는다.
+    for rank, src in (("랭크4", img), ("랭크5", vol), ("랭크6", v6)):
+        cases.append((WEBGPU_PREFIX + f"F.pad({rank})",
+                      lambda L, s=src: L.nn.functional.pad(L.tensor(s), (1, 2))))
+        # 0 이 아닌 값으로도 채운다. 고랭크에서는 0 과 다른 코드가 도므로
+        # (`zeros` 대신 `fill`), 0 만 재면 그쪽은 아무도 안 지나간 채 남는다.
+        cases.append((WEBGPU_PREFIX + f"F.pad({rank}, 값)",
+                      lambda L, s=src: L.nn.functional.pad(
+                          L.tensor(s), (2, 1, 1, 0), value=-1.5)))
     return cases
 
 
