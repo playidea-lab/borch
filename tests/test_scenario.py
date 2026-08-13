@@ -26,7 +26,7 @@ def test_scenario_matches_real_torch():
     real_out, nano_out = _run("real"), _run("nano")
     assert real_out, "시나리오가 아무 값도 안 냈다"
     for key, value in real_out.items():
-        assert key in nano_out, f"{key} 가 nanotorch 쪽에 없다"
+        assert key in nano_out, f"{key} 가 browsertorch 쪽에 없다"
         expected, got = float(value), float(nano_out[key])
         assert abs(expected - got) <= TOLERANCE * max(1.0, abs(expected)), (
-            f"{key} 가 갈렸다 — torch {expected} · nanotorch {got}")
+            f"{key} 가 갈렸다 — torch {expected} · browsertorch {got}")

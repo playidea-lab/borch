@@ -1,4 +1,4 @@
-"""nanotorch — numpy 위에 얹은 PyTorch 모양의 얇은 층.
+"""browsertorch — numpy 위에 얹은 PyTorch 모양의 얇은 층.
 
 설치 없이 브라우저(Pyodide)에서 PyTorch **문법**을 연습하기 위한 것이다.
 torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코드에, 손튜닝된 AVX·NEON
@@ -10,20 +10,20 @@ torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코�
 축소판이 진짜와 조금이라도 다르게 동작하면 학생은 거짓을 배운다. 그래서
 **없는 것은 근사하지 않고 예외를 던진다.** 조용히 다른 값을 내느니 시끄럽게 멈춘다.
 
-지원 범위 밖을 만나면 `NanoTorchError` 가 나고, 메시지가 "자기 컴퓨터에서 하라"고 말한다.
+지원 범위 밖을 만나면 `BrowserTorchError` 가 나고, 메시지가 "자기 컴퓨터에서 하라"고 말한다.
 
 ## 어떻게 보장하는가
 
 두 겹이다.
 
-1. `nanotorch-check` — 같은 **랩 테스트**를 진짜 torch 와 축소판 양쪽에서 돌린다.
-2. `nanotorch-diff` — 랩과 무관하게 **같은 연산의 숫자를 직접 비교**한다
-   (`tests/test_nanotorch_diff.py`). 1번만으로는 랩이 지나가는 길만 봐서
+1. `browsertorch-check` — 같은 **랩 테스트**를 진짜 torch 와 축소판 양쪽에서 돌린다.
+2. `browsertorch-diff` — 랩과 무관하게 **같은 연산의 숫자를 직접 비교**한다
+   (`tests/test_browsertorch_diff.py`). 1번만으로는 랩이 지나가는 길만 봐서
    축소판의 73% 였고, 그 사각지대에 역전파가 들어 있었다.
 
 지금은 두 검사가 86% 를 덮는다. 남은 곳은 `__repr__` 처럼 값이 걸리지 않는 자리다.
 
-`nanotorch-diff` 가 실제로 잡은 것: BatchNorm 은 정규화에 편향 분산을,
+`browsertorch-diff` 가 실제로 잡은 것: BatchNorm 은 정규화에 편향 분산을,
 running_var 갱신에는 비편향 분산을 쓴다. 둘 다 편향으로 두면 2.6% 어긋난다.
 """
 
@@ -36,7 +36,7 @@ __all__ = ["Tensor", "tensor", "nn", "optim", "no_grad"]
 _DEFAULT_DTYPE = _np.float32
 
 
-class NanoTorchError(NotImplementedError):
+class BrowserTorchError(NotImplementedError):
     """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
 
 
@@ -50,7 +50,7 @@ def _like_torch(korean: str, torch_phrase: str) -> str:
 
 
 def _unsupported(what: str):
-    raise NanoTorchError(
+    raise BrowserTorchError(
         f"{what} 은(는) 브라우저 축소판에 없습니다.\n"
         "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
         "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다."

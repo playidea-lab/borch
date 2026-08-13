@@ -1,36 +1,53 @@
-# nanotorch
+# browsertorch
 
-**numpy 위에 얹은 PyTorch 모양의 얇은 층.** 설치 없이 브라우저에서 PyTorch 문법을 연습한다.
+**브라우저에서 도는 PyTorch.** numpy 위에 얹은 얇은 층이고, 설치 없이 PyTorch 문법을 연습한다.
+
+> ## 먼저, 이것이 **아닌** 것
+>
+> PyTorch 가 아니다. 표면의 **11%**, 코드로는 **0.1%** 다.
+> `CUDA` · 분산 · 혼합정밀도 · `torch.compile` · 사전학습 가중치는 **영원히 없다** —
+> 브라우저에 존재할 수 없거나, 그것을 배우려면 브라우저를 벗어나야 하는 것들이다.
+>
+> 할 수 있는 말은 하나다. **입문 튜토리얼 코드가 임포트만 바꿔 같은 값을 낸다.**
+> 그건 실측했다(아래 적합성).
+>
+> 이름이 비슷한 다른 프로젝트들과 무관하다 —
+> [minitorch](https://minitorch.github.io) · [nanotorch](https://pypi.org/project/nanotorch/) ·
+> [edutorch](https://pypi.org/project/edutorch/).
 
 ## 설치
 
 순수 파이썬 휠 하나(17KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
 
 ```bash
-uv add ./nanotorch-1.2.2-py3-none-any.whl        # 릴리스에서 받은 파일
+uv add ./browsertorch-1.2.2-py3-none-any.whl        # 릴리스에서 받은 파일
 ```
 
 브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
 
 ```js
 // 파일 이름을 그대로 써야 한다 — micropip 이 이름에서 패키지명과 버전을 읽는다.
-py.FS.writeFile("/nanotorch-1.2.2-py3-none-any.whl", new Uint8Array(wheelBytes));
+py.FS.writeFile("/browsertorch-1.2.2-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
-await micropip.install("emfs:/nanotorch-1.2.2-py3-none-any.whl")
+await micropip.install("emfs:/browsertorch-1.2.2-py3-none-any.whl")
 `);
 ```
 
 ```python
-import sys, nanotorch
-sys.modules["torch"] = nanotorch          # 이 뒤로는 `import torch` 가 그대로 통한다
+import sys, browsertorch
+sys.modules["torch"] = browsertorch          # 이 뒤로는 `import torch` 가 그대로 통한다
 ```
+
+> **`torch` 로 심는 것은 강력하고 위험하다.** 그 뒤로는 **남의 라이브러리가 하는 `import torch` 도**
+> 축소판을 받는다. 학습자 한 명의 연습 환경에서는 그게 편의지만, 다른 코드가 섞인 곳에서는
+> 원인을 못 찾는 오류가 된다. 섞이는 자리에서는 `import browsertorch as torch` 를 쓴다.
 
 > **저장소가 private 이라 릴리스 URL 을 그대로 `micropip.install()` 에 넣을 수 없다.**
 > 익명 요청은 404 를 받는다(실제로 그렇게 해보고 알았다). 공개로 돌리면 URL 한 줄로 끝난다.
 
 ```python
-import nanotorch as torch
+import browsertorch as torch
 
 w = torch.tensor(3.0, requires_grad=True)
 loss = (w - 5.0) ** 2
@@ -67,7 +84,7 @@ RuntimeError: 행렬곱의 모양이 안 맞습니다 (3x4 @ 3x2) — 앞의 열
 (torch: mat1 and mat2 shapes cannot be multiplied (3x4 and 3x2))
 
 >>> torch.nn.LSTM(2, 2)
-NanoTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
+BrowserTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — 축소판은 문법 연습용이고,
 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.
 ```
@@ -76,7 +93,7 @@ NanoTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 
 ## 어떻게 보증하는가
 
-`tests/test_diff.py` 가 **같은 연산을 진짜 torch 와 nanotorch 양쪽에 넣고 숫자를 비교한다.**
+`tests/test_diff.py` 가 **같은 연산을 진짜 torch 와 browsertorch 양쪽에 넣고 숫자를 비교한다.**
 76개, 커버리지 86%.
 
 ```bash

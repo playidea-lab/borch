@@ -1,10 +1,10 @@
 {
-  "name": "nanotorch",
-  "version": "0.1.0",
+  "name": "browsertorch",
+  "version": "1.3.0",
   "description": "numpy 위에 얹은 PyTorch 모양의 얇은 층 — 브라우저에서 문법 연습",
   "license": "Apache-2.0",
-  "main": "nanotorch.py",
-  "files": ["nanotorch.py", "README.md", "LICENSE"],
+  "main": "browsertorch.py",
+  "files": ["browsertorch.py", "README.md", "LICENSE"],
   "scripts": {
     "test": "uv run --with pytest --with numpy --with torch --quiet pytest tests/ -q"
   }

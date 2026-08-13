@@ -29,7 +29,7 @@ import numpy as np
 import torch as real
 
 _spec = importlib.util.spec_from_file_location(
-    "nanotorch", pathlib.Path(__file__).resolve().parent.parent / "nanotorch.py")
+    "browsertorch", pathlib.Path(__file__).resolve().parent.parent / "browsertorch.py")
 nano = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(nano)
 
@@ -338,7 +338,7 @@ def report_errors():
             problems.append(f"{name}: 진짜 torch 가 예외를 안 낸다 — 케이스가 틀렸다")
             continue
         if nk is None:
-            problems.append(f"{name}: nanotorch 가 조용히 지나간다 (torch 는 {rk})")
+            problems.append(f"{name}: browsertorch 가 조용히 지나간다 (torch 는 {rk})")
             continue
         if nk != rk:
             problems.append(f"{name}: {rk} 여야 하는데 {nk}")
@@ -543,7 +543,7 @@ def compare(case):
         return None, f"진짜 torch 가 실패: {type(exc).__name__}"
     try:
         n = case.run_nano()
-    except nano.NanoTorchError as exc:
+    except nano.BrowserTorchError as exc:
         return False, f"미지원: {str(exc).splitlines()[0]}"
     except Exception as exc:                                        # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
@@ -563,7 +563,7 @@ def compare(case):
             ok, why = compare_grad(case)
             if not ok:
                 return False, f"기울기: {why}"
-        except nano.NanoTorchError as exc:
+        except nano.BrowserTorchError as exc:
             return False, f"기울기 미지원: {str(exc).splitlines()[0]}"
         except Exception as exc:                                    # noqa: BLE001
             return False, f"기울기 {type(exc).__name__}: {exc}"

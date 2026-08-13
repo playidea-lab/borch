@@ -22,7 +22,7 @@ if LIB == "nano":
     import importlib.util
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
-    spec = importlib.util.spec_from_file_location("nanotorch", root / "nanotorch.py")
+    spec = importlib.util.spec_from_file_location("browsertorch", root / "browsertorch.py")
     torch = importlib.util.module_from_spec(spec); spec.loader.exec_module(torch)
     sys.modules["torch"] = torch
     nn, optim = torch.nn, torch.optim
