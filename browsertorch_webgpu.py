@@ -565,6 +565,22 @@ class Tensor:
     def __neg__(self):
         return self._make(_tf.neg(self._h), (self,), lambda g: (_tf.neg(g),), "NegBackward0")
 
+    def __mod__(self, o):
+        """나머지. 코어에는 있는데 여기에는 아예 없었다 — 골든이 표면을 넓히면서 드러났다.
+
+        기울기는 나누어지는 쪽으로 **그대로** 흐른다(계단이 뛰는 자리를 빼면).
+        나누는 쪽으로는 `-floor(a/b)` 다.
+        """
+        other = _wrap(o)
+        parents = (self, other) if isinstance(o, Tensor) else (self,)
+
+        def back(g):
+            if isinstance(o, Tensor):
+                return (g, _tf.neg(_tf.mul(g, _tf.floor(_tf.div(self._h, other._h)))))
+            return (g,)
+
+        return self._make(_tf.mod(self._h, other._h), parents, back, "RemainderBackward0")
+
     def __pow__(self, p):
         if isinstance(p, Tensor):
             _unsupported("텐서 지수")
@@ -1251,18 +1267,29 @@ def where(cond, a, b):
                     "WhereBackward0")
 
 
+def _masked(t, mask, op):
+    """마스크를 곱한다. 역방향은 **같은 마스크를 다시 곱하는** 것이다 — 지운 자리는
+    출력에 안 나타났으니 기울기도 0 이다.
+
+    마스크 손잡이를 닫아두지 않고 역방향에서 새로 만든다. 붙잡아 두면 `scope()` 가
+    닫힐 때 이미 놓인 버퍼를 가리키게 되고, 그건 이 파일에서 세 번 겪은 함정이다.
+    """
+    return t._make(_tf.mul(t._h, _to_tf(mask)), (t,),
+                   lambda g: (_tf.mul(g, _to_tf(mask)),), op)
+
+
 def tril(t, diagonal=0):
     t = _canonical(t)
     n, m = t.shape[-2], t.shape[-1]
-    mask = _np.tril(_np.ones((n, m), dtype=_np.float32), k=diagonal)
-    return Tensor(_tf.mul(t._h, _to_tf(mask)), dt=t._dtype)
+    return _masked(t, _np.tril(_np.ones((n, m), dtype=_np.float32), k=diagonal),
+                   "TrilBackward0")
 
 
 def triu(t, diagonal=0):
     t = _canonical(t)
     n, m = t.shape[-2], t.shape[-1]
-    mask = _np.triu(_np.ones((n, m), dtype=_np.float32), k=diagonal)
-    return Tensor(_tf.mul(t._h, _to_tf(mask)), dt=t._dtype)
+    return _masked(t, _np.triu(_np.ones((n, m), dtype=_np.float32), k=diagonal),
+                   "TriuBackward0")
 
 
 def masked_fill(t, mask, value):
@@ -1276,18 +1303,42 @@ def masked_fill(t, mask, value):
 
 
 def repeat_interleave(t, repeats, dim=None):
+    """제자리에서 늘린다. **`stack` 과 `reshape` 로 짠다** — 둘 다 이미 그래프를 잇는다.
+
+    셋 다 전에는 numpy 로 내려받아 다시 올렸다. 값은 맞았지만 GPU 를 왕복하면서
+    기울기가 끊겼다 — 되찾는 가장 안전한 길은 역방향을 새로 쓰는 것이 아니라 **이미
+    검증된 연산으로 다시 짜는 것**이다.
+    """
     t = _canonical(t)
-    return Tensor(_to_tf(_np.repeat(t.numpy(), repeats, axis=dim)), dt=t._dtype)
+    if not isinstance(repeats, int):
+        _unsupported("repeat_interleave(repeats 가 정수가 아닌 경우)")
+    if dim is None:
+        n = t.numel()
+        return stack([t.reshape(n)] * repeats, 1).reshape(n * repeats)
+    shape = tuple(t.shape)
+    merged = shape[:dim] + (shape[dim] * repeats,) + shape[dim + 1:]
+    return stack([t] * repeats, dim + 1).reshape(*merged)
 
 
 def tile(t, reps):
+    """통째로 반복해 붙인다. `cat` 으로 짠다."""
     t = _canonical(t)
-    return Tensor(_to_tf(_np.tile(t.numpy(), reps)), dt=t._dtype)
+    reps_t = (reps,) if isinstance(reps, int) else tuple(reps)
+    nd = max(t.ndim, len(reps_t))
+    if t.ndim < nd:                       # reps 가 더 길면 앞에 1 차원을 세운다
+        t = t.reshape(*((1,) * (nd - t.ndim) + tuple(t.shape)))
+    out = t
+    for axis, r in enumerate((1,) * (nd - len(reps_t)) + reps_t):
+        if r > 1:
+            out = cat([out] * r, axis)
+    return out
 
 
 def movedim(t, source, destination):
     t = _canonical(t)
-    return Tensor(_to_tf(_np.moveaxis(t.numpy(), source, destination)), dt=t._dtype)
+    order = list(range(t.ndim))
+    order.insert(destination, order.pop(source))
+    return t.permute(*order)
 
 
 def argsort(t, dim=-1, descending=False):
@@ -1311,8 +1362,47 @@ def multinomial(probs, num_samples, replacement=True):
 
 
 def einsum(equation, *operands):
+    """TF.js 에 einsum 이 없어 numpy 로 계산한다. **역방향도 numpy 로 한다.**
+
+    이미 내려받아 계산하고 있었으므로 역방향을 붙인다고 더 느려지지 않는다. 규칙은
+    하나다 — 출력 첨자를 항의 자리에 바꿔 넣으면 그 항의 기울기가 나온다. 어떤 첨자가
+    그 항에만 있으면(`ij->i` 의 `j`) einsum 이 없던 축을 못 만들므로 1 로 채운 항을
+    끼워 넣는다. `...` 과 한 항 안의 반복 첨자는 이 규칙이 안 통해서 **틀린 기울기를
+    주는 대신 기울기를 안 준다** — 그때는 `backward()` 가 거절한다.
+    """
     ops = [_canonical(o) for o in operands]
-    return Tensor(_to_tf(_np.einsum(equation, *[o.numpy() for o in ops])), dt=float32)
+    arrays = [o.numpy() for o in ops]
+    out = _np.einsum(equation, *arrays)
+    eq = equation.replace(" ", "")
+    if "->" in eq:
+        lhs, rhs = eq.split("->")
+    else:
+        lhs = eq
+        counts = {}
+        for c in lhs.replace(",", ""):
+            counts[c] = counts.get(c, 0) + 1
+        rhs = "".join(sorted(c for c, k in counts.items() if k == 1))
+    subs = lhs.split(",")
+    if "..." in eq or any(len(set(s)) != len(s) for s in subs):
+        return Tensor(_to_tf(out), dt=float32)
+
+    def back(g):
+        gg = _np.asarray(_to_np(g), dtype=_np.float32).reshape(out.shape)
+        grads = []
+        for i, mine in enumerate(subs):
+            rest = [(subs[j], arrays[j]) for j in range(len(subs)) if j != i]
+            known = set(rhs) | {c for s, _ in rest for c in s}
+            missing = [c for c in mine if c not in known]
+            spec = [rhs] + [s for s, _ in rest]
+            terms = [gg] + [d for _, d in rest]
+            if missing:
+                spec.append("".join(missing))
+                terms.append(_np.ones([arrays[i].shape[mine.index(c)] for c in missing],
+                                      dtype=_np.float32))
+            grads.append(_to_tf(_np.einsum(",".join(spec) + "->" + mine, *terms)))
+        return tuple(grads)
+
+    return ops[0]._make(_to_tf(out), tuple(ops), back, "EinsumBackward0")
 
 
 def allclose(a, b, rtol=1e-5, atol=1e-8):
@@ -1379,15 +1469,17 @@ def diag(t):
     """torch 의 `diag` 는 **행렬에서 대각을 뽑는다.** TF.js 의 `diag` 는 반대로
     벡터에서 행렬을 만든다 — 이름이 같고 뜻이 반대라, 그대로 부르면 조용히 다른 값이 나온다."""
     t = _canonical(t)
-    n = t.shape[0]
-    eye = _tf.eye(n)
-    return Tensor(_tf.sum(_tf.mul(t._h, eye), 1))
+    if t.ndim == 1:                       # 벡터 → 대각행렬
+        n = t.shape[0]
+        return t.reshape(n, 1) * eye(n)
+    # 행렬 → 대각. 단위행렬을 곱해 한 축을 접으면 되고, **곱셈과 합은 이미 그래프를
+    # 잇는다** — 손으로 역방향을 쓸 이유가 없다.
+    return (t * eye(t.shape[0])).sum(dim=1)
 
 
 def trace(t):
     t = _canonical(t)
-    n = t.shape[0]
-    return Tensor(_tf.sum(_tf.mul(t._h, _tf.eye(n))))
+    return (t * eye(t.shape[0])).sum()
 
 
 def norm(t, p=2, dim=None):
@@ -1405,8 +1497,32 @@ def cumsum(t, dim):
 
 
 def cumprod(t, dim):
+    """누적 곱. **역방향은 CPU 에서 정확히 센다.**
+
+    GPU 로 짜려면 `dL/dx_k = (1/x_k) * sum_{j>=k} g_j y_j` 를 쓰게 되는데, 입력에 0 이
+    있으면 거기서 나눗셈이 터져 조용히 `nan` 이 흐른다. 예외도 안 난다 — 이 저장소가
+    가장 싫어하는 모양이다. 그래서 `x_k` 를 뺀 곱을 직접 쌓는다. 내려받았다 올리므로
+    느리지만 `cumprod` 는 학습 경로의 안쪽이 아니고, **0 이 섞였을 때 답이 맞는 쪽**이
+    기준이다.
+    """
     t = _canonical(t)
-    return Tensor(_tf.cumprod(t._h, dim))
+
+    def back(g):
+        x = _np.moveaxis(t.numpy(), dim, 0)
+        gg = _np.moveaxis(_np.asarray(_to_np(g), dtype=_np.float32), dim, 0)
+        grad = _np.zeros_like(x, dtype=_np.float32)
+        prefix = _np.ones_like(x[0])
+        for k in range(x.shape[0]):
+            run = prefix.copy()
+            acc = gg[k] * run
+            for j in range(k + 1, x.shape[0]):
+                run = run * x[j]
+                acc = acc + gg[j] * run
+            grad[k] = acc
+            prefix = prefix * x[k]
+        return (_to_tf(_np.moveaxis(grad, 0, dim)),)
+
+    return t._make(_tf.cumprod(t._h, dim), (t,), back, "CumprodBackward0")
 
 
 # ---------------------------------------------------------------- 뽑기·모양
@@ -1498,11 +1614,13 @@ def median(t, dim=None):
     """torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다."""
     t = _canonical(t)
     if dim is None:
+        # 고른 자리를 **원-핫으로 곱해** 꺼낸다. 값만 슬라이스해 오면 그래프가 끊기는데,
+        # 곱하고 더하는 길로 가면 기울기가 그 한 자리로만 흐른다 — torch 도 그렇다.
         n = t.numel()
-        flat = _tf.reshape(t._h, _to_js([n]))
-        asc = _tf.reverse(_tf.topk(flat, n).values, -1)
-        picked = _tf.slice(asc, _to_js([(n - 1) // 2]), _to_js([1]))
-        return Tensor(_tf.reshape(picked, _to_js([])))      # torch 는 0차원을 준다
+        order = _np.argsort(t.numpy().reshape(-1), kind="stable")
+        hot = _np.zeros(n, dtype=_np.float32)
+        hot[order[(n - 1) // 2]] = 1.0
+        return (t.reshape(n) * Tensor(_to_tf(hot))).sum()   # torch 는 0차원을 준다
     _last_axis_only(t, dim, "median")
     if t.ndim != 2:
         _unsupported("median(2차원이 아닌 것에 dim 을 준 경우)")

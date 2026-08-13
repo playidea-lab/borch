@@ -266,6 +266,53 @@ def grad_cases(inp=None):
 
     cases.append(("grad::double()=자매는거절", _as_expected(double_grad)))
 
+    # torch 는 흘리는데 코어가 안 흘리던 열두 자리. 전부 결과가 `requires_grad=False`
+    # 라 `backward()` 가 거절했으므로 **조용히 틀리지는 않았지만**, 없는 것과 있는 것의
+    # 차이는 남는다. 이제 흘린다.
+    #
+    # 자리마다 다른 가중치를 곱해서 받는다. 그냥 `sum()` 이면 기울기가 전부 1 이라
+    # `movedim` 이 축을 뒤바꿔도, `tile` 이 조각을 엉뚱하게 겹쳐도 통과한다.
+    mat = np.arange(1, 10, dtype=np.float32).reshape(3, 3)
+    mat2 = np.array([[2., 0., 1.], [1., 3., 2.], [0., 1., 4.]], dtype=np.float32)
+    vec = np.array([1., 2., 3., 4.], dtype=np.float32)
+    zeroed = np.array([2., 0., 3., 4.], dtype=np.float32)
+    short = np.array([1., 5., 2.], dtype=np.float32)
+
+    def flows(name, fn, *arrays, which=0):
+        def run(L, f=fn, a=arrays, n=name, w=which):
+            leaves = [L.tensor(x, requires_grad=True) for x in a]
+            out = f(L, *leaves)
+            if out.shape:
+                out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(leaves[w], n)
+        cases.append((f"grad::{name}", run))
+
+    flows("tril", lambda L, x: L.tril(x), mat)
+    flows("triu(k=1)", lambda L, x: L.triu(x, 1), mat)
+    flows("diag(2차원)", lambda L, x: L.diag(x), mat)
+    flows("diag(1차원)", lambda L, x: L.diag(x), short)
+    flows("trace", lambda L, x: L.trace(x), mat)
+    flows("einsum(ij->i)", lambda L, x: L.einsum("ij->i", x), mat)
+    for who in (0, 1):
+        flows(f"einsum(ij,jk->ik)/{'ab'[who]}",
+              lambda L, a, b: L.einsum("ij,jk->ik", a, b), mat, mat2, which=who)
+    flows("cumprod", lambda L, x: L.cumprod(x, 0), vec)
+    # 0 이 섞인 입력. 흔한 유도는 여기서 나눗셈이 터져 조용히 nan 을 흘린다.
+    flows("cumprod(0포함)", lambda L, x: L.cumprod(x, 0), zeroed)
+    flows("cumprod(2차원)", lambda L, x: L.cumprod(x, 1), mat)
+    flows("tile", lambda L, x: L.tile(x, (2,)), vec)
+    flows("tile(2차원)", lambda L, x: L.tile(x, (2, 3)), mat)
+    flows("movedim", lambda L, x: L.movedim(x, 0, 1), mat)
+    flows("repeat_interleave", lambda L, x: L.repeat_interleave(x, 3), vec)
+    flows("repeat_interleave(dim)", lambda L, x: L.repeat_interleave(x, 2, 0), mat)
+    flows("median()", lambda L, x: L.median(x), vec)
+    flows("median(dim)", lambda L, x: L.median(x, dim=1).values, mat)
+    flows("fmod(%)", lambda L, x: x % 2, vec)
+    for who in (0, 1):
+        flows(f"pad_sequence/{'ab'[who]}",
+              lambda L, a, b: L.nn.utils.rnn.pad_sequence([a, b]), vec, short, which=who)
+
     # 활성 — 학습 경로가 실제로 지나는 곳
     for name, fn in [("relu", lambda L, x: L.relu(x)),
                      ("sigmoid", lambda L, x: L.sigmoid(x)),

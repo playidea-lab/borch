@@ -523,7 +523,18 @@ class Tensor:
         return self._make(-self.data, (self,), lambda g: (-g,), "NegBackward0")
 
     def __mod__(self, o):
-        return Tensor(_np.mod(self.data, o.data if isinstance(o, Tensor) else o))
+        """나머지. **기울기는 나누어지는 쪽으로 그대로 흐른다** — `a % b` 는 `a` 에 대해
+        기울기 1 이다(계단이 뛰는 자리를 빼면). 나누는 쪽으로는 `-floor(a/b)` 다."""
+        od = o.data if isinstance(o, Tensor) else o
+        parents = (self, o) if isinstance(o, Tensor) else (self,)
+
+        def back(g):
+            g = _np.asarray(g)
+            if isinstance(o, Tensor):
+                return (g, -g * _np.floor_divide(self.data, od))
+            return (g,)
+
+        return self._make(_np.mod(self.data, od), parents, back, "RemainderBackward0")
 
     def __floordiv__(self, o):
         return Tensor(_np.floor_divide(self.data, o.data if isinstance(o, Tensor) else o))
@@ -1263,16 +1274,52 @@ def gather(t, dim, index):
 
 
 def repeat_interleave(t, repeats, dim=None):
+    """제자리에서 늘린다. 역방향은 늘어난 것들을 **묶음마다 도로 합치는** 것이다."""
     t = _wrap(t)
-    return Tensor(_np.repeat(t.data, repeats, axis=dim))
+    out = _np.repeat(t.data, repeats, axis=dim)
+    length = t.data.size if dim is None else t.data.shape[dim]
+    counts = (_np.full(length, repeats, dtype=_np.int64) if isinstance(repeats, int)
+              else _np.asarray(repeats, dtype=_np.int64))
+    starts = _np.concatenate(([0], _np.cumsum(counts)[:-1]))
+    axis = 0 if dim is None else dim
+
+    def back(g):
+        gg = _np.asarray(g)
+        if dim is None:
+            gg = gg.reshape(-1)
+        return (_np.add.reduceat(gg, starts, axis=axis).reshape(t.data.shape),)
+
+    return t._make(out, (t,), back, "RepeatInterleaveBackward0")
 
 
 def tile(t, reps):
-    return Tensor(_np.tile(_wrap(t).data, reps))
+    """통째로 반복해 붙인다. 역방향은 **반복된 조각들을 겹쳐 더하는** 것이다.
+
+    축마다 출력이 (반복수 × 원래길이) 이므로, 그 축을 둘로 쪼개 반복 쪽만 더하면 된다.
+    """
+    t = _wrap(t)
+    reps_t = (reps,) if isinstance(reps, int) else tuple(reps)
+    out = _np.tile(t.data, reps_t)
+    src = t.data.shape
+    nd = max(len(src), len(reps_t))
+    src_p = (1,) * (nd - len(src)) + src
+    reps_p = (1,) * (nd - len(reps_t)) + reps_t
+
+    def back(g):
+        split = []
+        for r, s in zip(reps_p, src_p):
+            split += [r, s]
+        gg = _np.asarray(g).reshape(split).sum(axis=tuple(range(0, 2 * nd, 2)))
+        return (gg.reshape(src),)
+
+    return t._make(out, (t,), back, "TileBackward0")
 
 
 def movedim(t, source, destination):
-    return Tensor(_np.moveaxis(_wrap(t).data, source, destination))
+    t = _wrap(t)
+    return t._make(_np.moveaxis(t.data, source, destination), (t,),
+                   lambda g: (_np.moveaxis(_np.asarray(g), destination, source),),
+                   "MovedimBackward0")
 
 
 # ---------------------------------------------------------------- 축약(추가)
@@ -1288,13 +1335,30 @@ def median(t, dim=None):
     그대로 쓰면 조용히 다른 값이 나온다."""
     t = _wrap(t)
     if dim is None:
-        flat = _np.sort(t.data.reshape(-1))
-        return Tensor(flat[(flat.size - 1) // 2])
-    values = _np.sort(t.data, axis=dim)
-    idx = (values.shape[dim] - 1) // 2
-    picked = _np.take(values, idx, axis=dim)
+        flat = t.data.reshape(-1)
+        pick = int(_np.argsort(flat)[(flat.size - 1) // 2])
+
+        # 기울기는 **뽑힌 그 자리 하나로만** 간다. 중앙값은 고른 원소를 그대로 내놓는
+        # 연산이라, 나머지 원소를 조금 흔들어도 답이 안 움직인다.
+        def back(g):
+            z = _np.zeros_like(flat)
+            z[pick] = _np.asarray(g)
+            return (z.reshape(t.data.shape),)
+
+        return t._make(flat[pick], (t,), back, "MedianBackward0")
+
     order = _np.argsort(t.data, axis=dim)
-    return _MinMax(Tensor(picked), Tensor(_np.take(order, idx, axis=dim)))
+    idx = (t.data.shape[dim] - 1) // 2
+    take = _np.take(order, idx, axis=dim)
+    at = _np.expand_dims(take, dim)
+    picked = _np.take_along_axis(t.data, at, axis=dim).squeeze(dim)
+
+    def back_dim(g):
+        z = _np.zeros_like(t.data)
+        _np.put_along_axis(z, at, _np.expand_dims(_np.asarray(g), dim), axis=dim)
+        return (z,)
+
+    return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
 
 
 def norm(t, p=2, dim=None):
@@ -1312,7 +1376,32 @@ def cumsum(t, dim):
 
 
 def cumprod(t, dim):
-    return Tensor(_np.cumprod(_wrap(t).data, axis=dim))
+    """누적 곱. 역방향을 **나눗셈 없이** 쓴다.
+
+    흔한 유도는 `dL/dx_k = (1/x_k) * sum_{j>=k} g_j y_j` 인데, 입력에 0 이 있으면
+    거기서 나눗셈이 터져 조용히 `nan` 이 흐른다. 예외도 안 난다. 그래서 각 k 마다
+    `x_k` 를 뺀 곱을 직접 쌓는다 — 길이의 제곱만큼 걸리지만 `cumprod` 는 학습 경로의
+    안쪽이 아니고, **0 이 섞였을 때 답이 맞는 쪽**이 이 저장소의 기준이다.
+    """
+    t = _wrap(t)
+    out = _np.cumprod(t.data, axis=dim)
+
+    def back(g):
+        x = _np.moveaxis(t.data, dim, 0)
+        gg = _np.moveaxis(_np.asarray(g), dim, 0)
+        grad = _np.zeros_like(x, dtype=_np.result_type(x.dtype, _np.float32))
+        prefix = _np.ones_like(x[0])                 # x_0 … x_{k-1}
+        for k in range(x.shape[0]):
+            run = prefix.copy()                      # j=k 일 때의 곱 (x_k 를 뺀 것)
+            acc = gg[k] * run
+            for j in range(k + 1, x.shape[0]):
+                run = run * x[j]
+                acc = acc + gg[j] * run
+            grad[k] = acc
+            prefix = prefix * x[k]
+        return (_np.moveaxis(grad, 0, dim),)
+
+    return t._make(out, (t,), back, "CumprodBackward0")
 
 
 def count_nonzero(t, dim=None):
@@ -1374,17 +1463,77 @@ def outer(a, b):
     return a.reshape(-1, 1) @ b.reshape(1, -1)
 
 
+def _diagonal_scatter(shape, g):
+    """대각선 위에 `g` 를 얹은 영행렬. `diag`·`trace` 의 역방향이 같은 모양이다."""
+    z = _np.zeros(shape, dtype=_np.asarray(g).dtype)
+    n = min(shape)
+    z[_np.arange(n), _np.arange(n)] = g
+    return z
+
+
 def diag(t):
-    return Tensor(_np.diag(_wrap(t).data))
+    """1차원이면 대각행렬을 만들고, 2차원이면 대각선을 뽑는다 — 방향이 반대라
+    역방향도 반대다."""
+    t = _wrap(t)
+    out = _np.diag(t.data)
+    if t.data.ndim == 1:
+        def back(g):
+            return (_np.diag(_np.asarray(g)),)
+    else:
+        def back(g):
+            return (_diagonal_scatter(t.data.shape, _np.asarray(g)),)
+    return t._make(out, (t,), back, "DiagBackward0")
 
 
 def trace(t):
-    return Tensor(_np.trace(_wrap(t).data))
+    t = _wrap(t)
+    return t._make(_np.trace(t.data), (t,),
+                   lambda g: (_diagonal_scatter(t.data.shape, _np.asarray(g)),),
+                   "TraceBackward0")
 
 
 def einsum(equation, *operands):
+    """역방향도 einsum 이다 — 출력 첨자를 항의 자리에 바꿔 넣으면 그 항의 기울기가 나온다.
+
+    한 가지 걸리는 자리가 있다. 어떤 첨자가 **그 항에만** 있고 출력에도 다른 항에도
+    없으면(`ij->i` 의 `j`), einsum 은 없던 축을 만들지 못한다. 그럴 때는 그 축만큼의
+    1 로 채운 항을 하나 더 끼워 넣는다 — 값은 안 바뀌고 축만 생긴다.
+
+    `...` 과 한 항 안의 반복 첨자(`ii->i`)는 이 규칙이 그대로 안 통한다. 그래서 **틀린
+    기울기를 주는 대신 기울기를 안 준다** — 그 경우 `backward()` 가 거절한다.
+    """
     ops = [_wrap(o) for o in operands]
-    return Tensor(_np.einsum(equation, *[o.data for o in ops]))
+    out = _np.einsum(equation, *[o.data for o in ops])
+    eq = equation.replace(" ", "")
+    if "->" in eq:
+        lhs, rhs = eq.split("->")
+    else:
+        lhs = eq
+        counts = {}
+        for c in lhs.replace(",", ""):
+            counts[c] = counts.get(c, 0) + 1
+        rhs = "".join(sorted(c for c, k in counts.items() if k == 1))
+    subs = lhs.split(",")
+    if "..." in eq or any(len(set(s)) != len(s) for s in subs):
+        return Tensor(out)
+
+    def back(g):
+        g = _np.asarray(g)
+        grads = []
+        for i, mine in enumerate(subs):
+            rest = [(subs[j], ops[j].data) for j in range(len(subs)) if j != i]
+            known = set(rhs) | {c for s, _ in rest for c in s}
+            missing = [c for c in mine if c not in known]
+            spec = [rhs] + [s for s, _ in rest]
+            terms = [g] + [d for _, d in rest]
+            if missing:
+                sizes = [ops[i].data.shape[mine.index(c)] for c in missing]
+                spec.append("".join(missing))
+                terms.append(_np.ones(sizes, dtype=ops[i].data.dtype))
+            grads.append(_np.einsum(",".join(spec) + "->" + mine, *terms))
+        return tuple(grads)
+
+    return ops[0]._make(out, tuple(ops), back, "EinsumBackward0")
 
 
 def empty(*shape, dtype=None):
@@ -1533,11 +1682,17 @@ def cosine_similarity(a, b, dim=1, eps=1e-8):
 
 
 def tril(t, diagonal=0):
-    return Tensor(_np.tril(t.data, k=diagonal))
+    """아래 삼각만 남긴다. 역방향은 **같은 자리만 통과시키는** 것이다 — 지운 자리는
+    출력에 안 나타났으니 기울기도 0 이다."""
+    t = _wrap(t)
+    return t._make(_np.tril(t.data, k=diagonal), (t,),
+                   lambda g: (_np.tril(_np.asarray(g), k=diagonal),), "TrilBackward0")
 
 
 def triu(t, diagonal=0):
-    return Tensor(_np.triu(t.data, k=diagonal))
+    t = _wrap(t)
+    return t._make(_np.triu(t.data, k=diagonal), (t,),
+                   lambda g: (_np.triu(_np.asarray(g), k=diagonal),), "TriuBackward0")
 
 
 def allclose(a, b, rtol=1e-5, atol=1e-8):
@@ -3090,7 +3245,16 @@ def pad_sequence(sequences, batch_first=False, padding_value=0.0):
         padded[i, :t.data.shape[0]] = t.data
     if not batch_first:
         padded = padded.swapaxes(0, 1)
-    return Tensor(padded)
+
+    # 역방향은 **채운 자리를 도로 떼어내는** 것이다. 채운 값은 입력에서 온 것이 아니므로
+    # 그 자리의 기울기는 아무에게도 안 간다.
+    def back(g):
+        gg = _np.asarray(g)
+        if not batch_first:
+            gg = gg.swapaxes(0, 1)
+        return tuple(gg[i, :t.data.shape[0]] for i, t in enumerate(tensors))
+
+    return tensors[0]._make(padded, tuple(tensors), back, "PadSequenceBackward0")
 
 
 class _NnUtilsRnn(_Namespace):
