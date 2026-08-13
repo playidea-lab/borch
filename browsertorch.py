@@ -1593,7 +1593,16 @@ class no_grad:
         return wrapper
 
 
-class _Cuda:
+class _Namespace:
+    """torch 의 하위 모듈 자리(`torch.nn`, `torch.optim.lr_scheduler` …).
+
+    파이썬 모듈이 아니라 객체지만, `install()` 이 이것을 훑어 `sys.modules` 에 심어주면
+    `from torch.optim.lr_scheduler import StepLR` 같은 import 가 그대로 통한다.
+    상속만이 표시다 — 여기 들어오지 않은 자리는 import 경로가 안 생긴다.
+    """
+
+
+class _Cuda(_Namespace):
     @staticmethod
     def is_available():
         return False
@@ -1612,7 +1621,7 @@ cuda = _Cuda()
 
 # ================================================================ nn
 
-class _NN:
+class _NN(_Namespace):
     pass
 
 
@@ -2560,7 +2569,7 @@ def one_hot(t, num_classes=-1):
     return Tensor(_np.eye(n, dtype=_np.int64)[idx])
 
 
-class _Functional:
+class _Functional(_Namespace):
     softmax = staticmethod(softmax)
     log_softmax = staticmethod(log_softmax)
     relu = staticmethod(relu)
@@ -2866,7 +2875,7 @@ class ReduceLROnPlateau:
         return [g["lr"] for g in self.optimizer.param_groups]
 
 
-class _LRScheduler:
+class _LRScheduler(_Namespace):
     StepLR = StepLR
     MultiStepLR = MultiStepLR
     ExponentialLR = ExponentialLR
@@ -2875,13 +2884,13 @@ class _LRScheduler:
     ReduceLROnPlateau = ReduceLROnPlateau
 
 
-class _Optim:
+class _Optim(_Namespace):
     SGD = SGD
     Adam = Adam
     AdamW = AdamW
     RMSprop = RMSprop
     Optimizer = Optimizer
-    lr_scheduler = _LRScheduler
+    lr_scheduler = _LRScheduler()
 
 
 optim = _Optim()
@@ -3020,7 +3029,7 @@ class Subset(Dataset):
         return self.dataset[self.indices[i]]
 
 
-class _UtilsData:
+class _UtilsData(_Namespace):
     Dataset = Dataset
     TensorDataset = TensorDataset
     ConcatDataset = ConcatDataset
@@ -3032,8 +3041,86 @@ class _UtilsData:
     random_split = staticmethod(random_split)
 
 
-class _Utils:
+class _Utils(_Namespace):
     data = _UtilsData()
 
 
 utils = _Utils()
+
+
+# ================================================================ nn.utils.rnn
+
+def pad_sequence(sequences, batch_first=False, padding_value=0.0):
+    """길이가 제각각인 텐서들을 가장 긴 것에 맞춰 채워 하나로 쌓는다.
+
+    길이가 다른 것들을 한 배치에 담으려면 어딘가는 채워야 한다. 채운 자리가
+    진짜 값처럼 보이면 안 되므로 `padding_value` 가 무엇이었는지 기억해야 하고,
+    그래서 진짜 torch 도 이 함수와 마스크를 짝으로 쓴다.
+    """
+    tensors = [_wrap(s) for s in sequences]
+    if not tensors:
+        raise ValueError("빈 목록은 쌓을 수 없습니다.")
+    rest = tensors[0].data.shape[1:]
+    for t in tensors:
+        if t.data.shape[1:] != rest:
+            raise RuntimeError(_like_torch(
+                f"첫 차원 말고는 모양이 같아야 합니다 — {rest} 와 {t.data.shape[1:]} 가 다릅니다.",
+                "pad_sequence expects trailing dimensions to match",
+            ))
+    longest = max(t.data.shape[0] for t in tensors)
+    padded = _np.full((len(tensors), longest) + rest, padding_value,
+                      dtype=tensors[0].data.dtype)
+    for i, t in enumerate(tensors):
+        padded[i, :t.data.shape[0]] = t.data
+    if not batch_first:
+        padded = padded.swapaxes(0, 1)
+    return Tensor(padded)
+
+
+class _NnUtilsRnn(_Namespace):
+    pad_sequence = staticmethod(pad_sequence)
+
+
+class _NnUtils(_Namespace):
+    rnn = _NnUtilsRnn()
+
+
+nn.utils = _NnUtils()
+
+
+# ================================================================ install
+
+def install(name="torch", modules=None):
+    """`import torch` 가 이 축소판을 집도록 하위 모듈 경로를 심는다.
+
+    경로를 손으로 적으면 어긋난다 — 실제로 어긋났다. 러너·검사기·테스트가 각자
+    목록을 들고 있었고 셋 다 `torch.optim.lr_scheduler` 를 빠뜨려서, 물건은 있는데
+    `from torch.optim.lr_scheduler import StepLR` 이 교재 본문에서 멈췄다.
+    그래서 목록을 두지 않고 `_Namespace` 를 훑어 만든다.
+
+    뿌리(`sys.modules["torch"]`)는 부르는 쪽이 심는다 — 모듈 객체를 쥔 것은 그쪽이다.
+    """
+    import sys
+
+    modules = sys.modules if modules is None else modules
+    registered = []
+
+    def walk(namespace, prefix):
+        for key in sorted(dir(namespace)):
+            if key.startswith("_"):
+                continue
+            value = getattr(namespace, key)
+            if isinstance(value, _Namespace):
+                path = prefix + "." + key
+                modules[path] = value
+                registered.append(path)
+                walk(value, path)
+
+    walk_root = [(key, value) for key, value in sorted(globals().items())
+                 if not key.startswith("_") and isinstance(value, _Namespace)]
+    for key, value in walk_root:
+        path = name + "." + key
+        modules[path] = value
+        registered.append(path)
+        walk(value, path)
+    return registered

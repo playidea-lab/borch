@@ -169,8 +169,21 @@ def wide_cases(inp=None):
         ("tile", lambda L: L.tile(L.tensor(x1), (2,))),
         ("movedim", lambda L: L.movedim(L.tensor(x2), 0, 1)),
         ("as_tensor", lambda L: L.as_tensor(x1)),
+        # 길이가 다른 것을 한 배치에 담는 자리. 교재 ch05 가 이 경로를 그대로 쓴다.
+        ("pad_sequence", lambda L: _pad(L)),
+        ("pad_sequence(batch_first)", lambda L: _pad(L, batch_first=True)),
+        ("pad_sequence(채움값)", lambda L: _pad(L, batch_first=True, padding_value=-1.0)),
+        ("pad_sequence(2차원)", lambda L: L.nn.utils.rnn.pad_sequence(
+            [L.tensor(x2[:3]), L.tensor(x2[:1])], batch_first=True)),
     ]
     return cases
+
+
+def _pad(L, **kwargs):
+    """길이 3·1·2 짜리 셋을 쌓는다. 채운 자리가 어디인지 눈으로 보이는 최소 크기."""
+    parts = [L.tensor(np.array(v, dtype=np.float32))
+             for v in ([1., 2., 3.], [4.], [5., 6.])]
+    return L.nn.utils.rnn.pad_sequence(parts, **kwargs)
 
 
 def _bn_roundtrip(L, img):
@@ -632,6 +645,20 @@ def webgpu_cases(inp=None):
     for kind in ("narrow", "unbind", "split"):
         cases.append((WEBGPU_PREFIX + f"grad::랭크5 {kind}", slice5_grad(kind)))
 
+    # `pad_sequence` 의 **기울기**. 값은 코어와 자매가 같아서 공용 케이스 4건이 보지만,
+    # 기울기는 자매에만 있다. 코어 쪽은 numpy 로 자리를 메워 맨 텐서를 돌려주므로 그래프가
+    # 끊긴다 — 실측하면 `backward()` 가 "requires_grad 가 아닌 텐서" 라며 거절한다.
+    # 진짜 torch 는 미분되므로 그건 코어의 구멍이고, 이 케이스를 자매 전용으로 둔 것은
+    # 그 구멍을 덮으려는 것이 아니라 **자매가 안 끊는다는 사실을 붙잡아 두려는** 것이다.
+    # (조용히 틀리는 것이 아니라 시끄럽게 거절하는 쪽이라 급한 불은 아니다.)
+    def pad_sequence_grad(L):
+        a = L.tensor(np.array([[1., 2.], [3., 4.]], dtype=np.float32), requires_grad=True)
+        b = L.tensor(np.array([[5., 6.]], dtype=np.float32), requires_grad=True)
+        out = L.nn.utils.rnn.pad_sequence([a, b])
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(a, "pad_sequence")
+
+    cases.append((WEBGPU_PREFIX + "grad::pad_sequence", pad_sequence_grad))
     cases += _highrank_battery(HIGH_RANKS)
     cases += _rank_ceiling_cases(CEILING_RANKS)
 
@@ -756,6 +783,116 @@ def _rank_ceiling_cases(ranks):
     return cases
 
 
+VISION_PREFIX = "vision::"
+_BT_VISION = None
+
+
+def _is_real_torch(L):
+    return getattr(L, "__name__", "") == "torch"
+
+
+def _vision(L):
+    """`L` 에 짝지어지는 torchvision 을 준다 — 진짜 torch 면 **진짜 torchvision** 이다.
+
+    이것이 이 표의 값어치다. 우리 변환을 우리 기대값에 대조하면 아무것도 증명 못 한다.
+    """
+    if _is_real_torch(L):
+        from torchvision import transforms as real
+        return real
+    global _BT_VISION
+    if _BT_VISION is None:
+        try:                                    # 브라우저에서는 /work 가 경로에 있다
+            import browsertorch_vision as mod
+        except ImportError:                     # 네이티브에서는 저장소 루트를 짚는다
+            import importlib.util
+            import pathlib
+            path = pathlib.Path(__file__).resolve().parent.parent / "browsertorch_vision.py"
+            spec = importlib.util.spec_from_file_location("browsertorch_vision", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        _BT_VISION = mod
+    _BT_VISION.use(L)                           # 어느 라이브러리의 텐서를 만들지는 여기서
+    return _BT_VISION.transforms
+
+
+def _pil_position(L, arr):
+    """torchvision 에서 이 자리에 오는 것은 **PIL 이미지**이고, 우리에게는 PIL 이 없어서
+    (H,W,C) 배열이 그 자리를 대신한다. 같은 그림을 각자의 형식으로 준다 — 형식을 맞추지
+    않고 비교하면 그건 대조가 아니라 우연이다."""
+    if _is_real_torch(L):
+        from PIL import Image
+        return Image.fromarray(arr)
+    return arr
+
+
+def _as_tensor(L, arr):
+    """골든은 `.detach().numpy()` 로 값을 꺼낸다. PIL·배열로 나온 것을 그 규격에 맞춘다."""
+    return L.tensor(np.ascontiguousarray(np.asarray(arr, dtype=np.float32)))
+
+
+def vision_cases(inp=None):
+    """`browsertorch_vision` — torchvision 의 `transforms` 만.
+
+    **무작위 변환은 뽑기를 대조할 수 없다.** torch 의 난수기를 우리가 못 쓰기 때문이다.
+    그래서 확률을 0 이나 1 로 못 박거나, 자를 자리가 하나뿐이게 만들어 **결정적인
+    자리만** 묻는다. 뽑기 자체가 제대로 도는지는 pytest 가 분포로 본다 —
+    여기서 "무작위니까 대조 못 한다"고 넘기면 그게 안 본 것을 봤다고 적는 짓이다.
+    """
+    rng = np.random.default_rng(31)
+    img_u8 = rng.integers(0, 256, (5, 4, 3), dtype=np.uint8)     # (H,W,C)
+    img_f = rng.random((5, 4, 3)).astype(np.float32)
+    gray = rng.integers(0, 256, (5, 4), dtype=np.uint8)
+    mean, std = (0.5, 0.4, 0.3), (0.2, 0.3, 0.4)
+
+    def compose(L):
+        T = _vision(L)
+        return T.Compose([T.ToTensor(), T.Normalize(mean, std)])(img_u8)
+
+    def normalize(L):
+        T = _vision(L)
+        return T.Normalize(mean, std)(T.ToTensor()(img_u8))
+
+    def flip(L, p):
+        T = _vision(L)
+        out = T.RandomHorizontalFlip(p=p)(_pil_position(L, img_u8))
+        return _as_tensor(L, out)
+
+    def crop(L, size, padding):
+        # 자를 자리가 **하나뿐**이 되게 크기를 맞춘다. 그래야 뽑기와 무관하게 결정적이다.
+        T = _vision(L)
+        out = T.RandomCrop(size, padding=padding)(_pil_position(L, img_u8))
+        return _as_tensor(L, out)
+
+    cases = [
+        # ToTensor 의 핵심은 **uint8 일 때만 255 로 나눈다**는 것이다. 실수를 한 번 더
+        # 나누면 예외 없이 255 배 어두워지고 학습만 조용히 안 된다.
+        (VISION_PREFIX + "ToTensor(uint8)", lambda L: _vision(L).ToTensor()(img_u8)),
+        (VISION_PREFIX + "ToTensor(실수)", lambda L: _vision(L).ToTensor()(img_f)),
+        (VISION_PREFIX + "ToTensor(2차원)", lambda L: _vision(L).ToTensor()(gray)),
+        (VISION_PREFIX + "Normalize", normalize),
+        (VISION_PREFIX + "Compose", compose),
+        (VISION_PREFIX + "Flip(p=1)", lambda L: flip(L, 1.0)),
+        (VISION_PREFIX + "Flip(p=0)", lambda L: flip(L, 0.0)),
+        (VISION_PREFIX + "Crop(패딩없음)", lambda L: crop(L, (5, 4), 0)),
+        # 패딩을 준 뒤 크기를 딱 맞추면 자를 자리가 하나다 — 패딩 자체가 대조된다.
+        (VISION_PREFIX + "Crop(패딩1)", lambda L: crop(L, (7, 6), 1)),
+    ]
+
+    # 표현(T3). 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을
+    # 하고, 거기서 다르면 학습자는 다른 것을 배운다.
+    reprs = (
+        ("ToTensor", lambda T: T.ToTensor()),
+        ("Normalize", lambda T: T.Normalize(mean, std)),
+        ("RandomHorizontalFlip", lambda T: T.RandomHorizontalFlip(p=0.5)),
+        ("RandomCrop", lambda T: T.RandomCrop(32, padding=4)),
+        ("Compose", lambda T: T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])),
+    )
+    for name, build in reprs:
+        cases.append((VISION_PREFIX + f"repr::{name}",
+                      lambda L, b=build: repr(b(_vision(L)))))
+    return cases
+
+
 def _highrank_battery(ranks):
     """랭크가 올라갈 때 **어디서 무너지는지** 본다.
 
@@ -834,7 +971,7 @@ def golden_cases(inp=None):
     inp = golden_inputs() if inp is None else inp
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + webgpu_cases(inp))
+            + vision_cases(inp) + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

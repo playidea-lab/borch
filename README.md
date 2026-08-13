@@ -20,17 +20,17 @@
 순수 파이썬 휠 하나(34KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
 
 ```bash
-uv add ./browsertorch-1.3.0-py3-none-any.whl        # 릴리스에서 받은 파일
+uv add ./browsertorch-1.4.0-py3-none-any.whl        # 릴리스에서 받은 파일
 ```
 
 브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
 
 ```js
 // 파일 이름을 그대로 써야 한다 — micropip 이 이름에서 패키지명과 버전을 읽는다.
-py.FS.writeFile("/browsertorch-1.3.0-py3-none-any.whl", new Uint8Array(wheelBytes));
+py.FS.writeFile("/browsertorch-1.4.0-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
-await micropip.install("emfs:/browsertorch-1.3.0-py3-none-any.whl")
+await micropip.install("emfs:/browsertorch-1.4.0-py3-none-any.whl")
 `);
 ```
 
@@ -135,6 +135,40 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | 천장 | MNIST 급 | **CIFAR ResNet-18 이 에폭 약 2분** (실측) |
 | 읽히는가 | 그것이 전부다 | 아니다. 성능이 목적이다 |
 
+### 그래서 몇 %인가
+
+천장을 **속도로만** 말해왔다. "에폭 2분"은 맞지만 "그래서 몇 %"는 오래 아무도 안 물었다.
+잰 값은 아래와 같다 — CIFAR-10 학습 1만 장, **학습에 안 쓴** 시험 1만 장, ResNet-18,
+10 에폭, 배치 128.
+
+| 10 에폭 뒤 | 늘리기 없음 | 늘리기 있음 |
+|---|---|---|
+| 학습 정확도 | 80.9% | 64.8% |
+| **시험 정확도** | 59.9% | **60.4%** |
+| **둘의 차이(과적합)** | **+21.0%** | **+4.3%** |
+| 가장 좋았던 시험 | 61.4% (8에폭) | 62.2% (9에폭) |
+
+**학습 정확도만 봤으면 늘리기가 해롭다고 결론냈을 것이다**(80.9% → 64.8%). 시험 정확도만
+봤어도 거의 같아서(59.9% vs 60.4%) 아무 일도 없는 줄 알았을 것이다. 둘을 같이 봐야
+보이는 것이 **과적합이 21.0%에서 4.3%로 줄었다**는 것이고, 늘리기가 하라고 있는 일이
+정확히 그것이다. 늘리기 없는 쪽은 8 에폭에서 시험 정확도가 꺾여 내려간다.
+
+두 조건은 **각자 새 페이지에서** 돌린다. 한 세션에 이어 돌리면 둘째 모델은 난수기가
+진행된 뒤라 초기 가중치가 달라지고, 재려는 것이 늘리기의 효과인데 초기값 차이가 섞인다.
+
+```bash
+# cifar-batch1.bin(학습)과 cifar-batch-test.bin(시험)이 저장소 루트에 있어야 한다.
+# 원본은 CORS 로 못 받으므로 직접 가져다 둔다 — 아래 transforms 절 참고.
+uv run --with playwright python tests/browser/run.py \
+    --lib browsertorch_webgpu --headed --accuracy --epochs 10 --augment off
+uv run --with playwright python tests/browser/run.py \
+    --lib browsertorch_webgpu --headed --accuracy --epochs 10 --augment on
+```
+
+> 이 수는 **1만 장으로 10 에폭**을 돌린 값이다. CIFAR 전체(5만 장)나 더 긴 학습의 값이
+> 아니고, 발표된 ResNet-18 수치와 비교할 것도 아니다. 여기서 말하려는 것은 절대 수치가
+> 아니라 **재는 자리가 생겼다**는 것과 늘리기가 실제로 듣는다는 것이다.
+
 **코어를 대체하지 않는다.** 왜 하나로 합치지 않았는지는 [ROADMAP 의 ADR-001](ROADMAP.md)
 에 적었다 — 요약하면 휠의 성질이 전염되고, 브라우저·드라이버 실패가 `import` 로 올라오고,
 "임포트만 바꾸면 같은 코드"라는 약속이 `device`·비동기와 양립하지 않기 때문이다.
@@ -157,6 +191,34 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | **데이터** | `Dataset` · `TensorDataset` · `Subset` · `ConcatDataset` · `DataLoader` · `WeightedRandomSampler` · `random_split(generator=)` · `collate_fn` |
 | **저장** | `state_dict` · `load_state_dict` · `save`/`load` · 버퍼(`running_mean` 등) 포함 |
 | **nn.functional** | 25종 — 활성·손실·`pad`·`normalize`·`cosine_similarity`·`one_hot`·`layer_norm`·`embedding` |
+
+## torchvision — `transforms` 만 (`browsertorch_vision`)
+
+파이토치 입문 튜토리얼의 **첫 열 줄이 torchvision** 이다.
+
+```python
+datasets.MNIST(root, transform=transforms.ToTensor())
+```
+
+"임포트만 바꿔 같은 값을 낸다"는 약속이 여기서 먼저 걸리므로, `transforms` 는 있다.
+별도 파일인 이유는 `torchvision.transforms` 이지 `torch.transforms` 가 아니어서다 —
+코어 안에 넣으면 진짜 torch 에 **없는 자리**를 만들게 된다.
+
+```python
+import browsertorch_vision as torchvision
+from browsertorch_vision import transforms
+```
+
+| 있는 것 | `Compose` · `ToTensor` · `Normalize` · `RandomHorizontalFlip` · `RandomCrop` |
+|---|---|
+| **`datasets`** | 없다. 받아오는 쪽이 막혀 있다 — `cs.toronto.edu` 가 CORS 헤더를 안 준다(실측). 게다가 torch 의 `download=True` 는 받아두고 재사용하는데 Pyodide 파일시스템은 새로고침에 날아간다. **바이트를 손에 넣은 뒤는 이미 된다** (`fetch_cached`·`cache_put`·`TensorDataset`) |
+| **`ops`** | 없다. `nms` 는 numpy 로 짧아서 "크다"는 이유는 거짓이고, 진짜 이유는 아무도 그 앞에 안 선다는 것이다 — 검출은 사전학습 백본과 COCO 급 데이터가 있어야 끝까지 간다 |
+| **사전학습 가중치** | 없다. `.pth` 는 pickle 이라 torch 내부 클래스를 흉내 내야 읽히고, 미묘하게 틀리면 모양 맞는 가중치에 틀린 수가 들어온다. ResNet-18 만 45MB 이며, 무엇보다 `pretrained=True` 가 돌면 사람들은 발표된 top-1 과 비교한다 — 비트 동등은 명시적 비목표라 지킬 수 없는 약속이다 |
+
+**난수는 torch 와 다르다.** 같은 씨앗을 줘도 torchvision 과 같은 장면이 나오지 않는다 —
+torch 의 난수기를 쓸 수 없어서다. 그래서 골든은 확률을 0·1 로 못 박은 자리만 대조하고,
+뽑기가 실제로 도는지는 `tests/test_vision.py` 가 분포로 본다. 둘 중 하나만 하면
+"무작위니까 못 잰다"로 안 잰 것을 잰 것처럼 적게 된다.
 
 ## 일부러 지원하지 않는 것
 

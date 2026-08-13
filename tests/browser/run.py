@@ -56,7 +56,13 @@ def run(lib, headed, probe=None):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=not headed)
             page = browser.new_page()
-            page.on("console", lambda m: print(f"  [브라우저] {m.text}") if m.type == "error" else None)
+            # 정확도 측정은 몇 분씩 걸린다. 기본 제한에 걸려 죽으면 잰 것이 없어진다.
+            page.set_default_timeout(0)
+            # 오류는 늘 내보내고, `[bench]` 로 시작하는 것도 내보낸다 — 긴 측정은
+            # 도중에 죽으면 반환값이 통째로 사라져서, 그때까지 잰 것을 잃지 않으려면
+            # 진행 중에 흘려보낸 것만 남는다.
+            page.on("console", lambda m: print(f"  [브라우저] {m.text}")
+                    if m.type == "error" or m.text.startswith("[bench]") else None)
             page.goto(url)
             page.wait_for_function("window.GOLDEN_RESULT !== null", timeout=TIMEOUT_MS)
             result = page.evaluate("window.GOLDEN_RESULT")
@@ -78,11 +84,36 @@ def main():
     ap.add_argument("--probe", help="대조 뒤 브라우저 안에서 돌릴 파이썬. 디버깅용")
     ap.add_argument("--bench", action="store_true",
                     help="ResNet-18 로 실제 학습 스텝을 잰다(tests/browser/bench.py)")
+    ap.add_argument("--accuracy", action="store_true",
+                    help="**정확도**를 잰다 — 늘리기를 켠 쪽과 끈 쪽을 나란히. "
+                         "cifar-batch1.bin 과 cifar-batch-test.bin 이 저장소 루트에 있어야 한다")
+    ap.add_argument("--epochs", type=int, default=6, help="--accuracy 의 에폭 수")
+    ap.add_argument("--images", type=int, default=0,
+                    help="--accuracy 에서 쓸 장수 상한(0 이면 전부). 기계를 확인할 때 쓴다")
+    ap.add_argument("--augment", choices=("on", "off"),
+                    help="한 조건만 돌린다. **갈라 돌리는 편이 실험으로 낫다** — 한 세션에 "
+                         "이어 돌리면 둘째 모델의 초기 가중치가 달라져 늘리기의 효과에 섞인다")
     args = ap.parse_args()
     if args.bench and not args.probe:
         args.probe = (f"import bench, importlib\n"
                       f"L = importlib.import_module({args.lib!r})\n"
                       f"bench.report(L)")
+    if args.accuracy and not args.probe:
+        # 시험 데이터는 **학습에 안 쓴 것**이어야 한다. 그래서 원본 아카이브의
+        # test_batch 를 따로 꺼내 둔다 — 같은 덩이를 나눠 쓰면 재는 것이 정확도가 아니다.
+        args.probe = (
+            f"import bench, importlib\n"
+            f"L = importlib.import_module({args.lib!r})\n"
+            # 늘리기의 뽑기도 씨앗을 박는다. 안 그러면 같은 명령이 매번 다른 답을 내고,
+            # 두 조건의 차이인지 뽑기의 차이인지 못 가른다.
+            f"import browsertorch_vision as V; V.use(L); V.manual_seed(0)\n"
+            f"tr = await bench.cifar_from(L, '/cifar-batch1.bin', 'cifar-batch1.bin')\n"
+            f"te = await bench.cifar_from(L, '/cifar-batch-test.bin', 'cifar-test.bin')\n"
+            f"cap = {args.images}\n"
+            f"tr = (tr[0][:cap], tr[1][:cap]) if cap else tr\n"
+            f"te = (te[0][:cap], te[1][:cap]) if cap else te\n"
+            f"only = {None if args.augment is None else args.augment == 'on'!r}\n"
+            f"await bench.report_accuracy(L, tr, te, epochs={args.epochs}, only=only)")
 
     if not GOLDEN.exists():
         print(f"골든이 없다: {GOLDEN}\n"

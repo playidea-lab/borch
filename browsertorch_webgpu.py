@@ -3224,6 +3224,49 @@ class _NN:
 nn = _NN()
 
 
+# ---------------------------------------------------------------- nn.utils.rnn
+
+def pad_sequence(sequences, batch_first=False, padding_value=0.0):
+    """길이가 제각각인 텐서들을 가장 긴 것에 맞춰 채워 하나로 쌓는다.
+
+    **그래프를 잇는다.** 이미 있는 `pad` 와 `stack` 으로만 짜서 역방향이 저절로 따라온다.
+    numpy 로 자리를 메워 맨 텐서로 돌려주면 값은 맞고 기울기가 조용히 사라지는데, 이
+    저장소가 `var`·`std` 에서 정확히 그것을 한 번 겪었다(커밋 3ada1db).
+
+    채운 자리가 진짜 값처럼 보이면 안 되므로 진짜 torch 도 이 함수를 마스크와 짝으로 쓴다.
+    """
+    tensors = [_canonical(_wrap(s)) for s in sequences]
+    if not tensors:
+        raise ValueError("빈 목록은 쌓을 수 없습니다.")
+    rest = tuple(tensors[0].shape[1:])
+    for t in tensors:
+        if tuple(t.shape[1:]) != rest:
+            raise RuntimeError(_like_torch(
+                f"첫 차원 말고는 모양이 같아야 합니다 — {rest} 와 {tuple(t.shape[1:])} 가 다릅니다.",
+                "pad_sequence expects trailing dimensions to match",
+            ))
+    longest = max(t.shape[0] for t in tensors)
+    # `pad` 는 torch 규칙대로 **마지막 차원부터** 받는다. 첫 차원만 뒤로 늘리려면
+    # 나머지 차원을 0 으로 채운 뒤 맨 끝에 그 한 쌍을 둔다.
+    padded = []
+    for t in tensors:
+        gap = longest - t.shape[0]
+        spec = [0, 0] * (len(rest)) + [0, gap]
+        padded.append(pad(t, spec, padding_value) if gap else t)
+    return stack(padded, 0 if batch_first else 1)
+
+
+class _NnUtilsRnn:
+    pad_sequence = staticmethod(pad_sequence)
+
+
+class _NnUtils:
+    rnn = _NnUtilsRnn()
+
+
+nn.utils = _NnUtils()
+
+
 # ---------------------------------------------------------------- optim
 #
 # 갱신은 **GPU 에서** 한다. 파라미터를 읽어와 numpy 로 고치면 매 스텝 전량 왕복이
