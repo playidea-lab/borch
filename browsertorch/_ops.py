@@ -1561,6 +1561,204 @@ class _Namespace:
     """
 
 
+# ---------------------------------------------------------------- 선형대수(분해)
+#
+# numpy 가 다 해준다. **기울기는 닫힌 꼴이 있는 것만 넣는다** — `det`·`logdet`·
+# `inverse`·`solve`·`cholesky` 가 그렇고, 이 다섯은 유도해서 torch 와 대조했다
+# (콜레스키는 최대차 2.8e-17).
+#
+# `qr`·`svd`·`pinverse`·`lstsq` 는 값만 준다. torch 는 이것들도 미분하는데 우리는 안 한다 —
+# 유도가 까다롭고(특히 특잇값이 겹칠 때) 틀리면 조용히 틀린다. `backward()` 가 거절하므로
+# 없다는 것이 시끄럽게 드러난다.
+
+def _mat(t, what):
+    t = _wrap(t)
+    if t.data.ndim != 2:
+        _unsupported(f"{what}(2차원이 아닌 것)")
+    return t
+
+
+def det(t):
+    t = _mat(t, "det")
+    out = _np.linalg.det(t.data)
+    inv_t = _np.linalg.inv(t.data).T
+    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,),
+                   lambda g: (_np.asarray(g) * out * inv_t,), "DetBackward0")
+
+
+def logdet(t):
+    t = _mat(t, "logdet")
+    sign, logabs = _np.linalg.slogdet(t.data)
+    out = _np.where(sign > 0, logabs, _np.nan)
+    inv_t = _np.linalg.inv(t.data).T
+    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,),
+                   lambda g: (_np.asarray(g) * inv_t,), "LogdetBackward0")
+
+
+def slogdet(t):
+    t = _mat(t, "slogdet")
+    sign, logabs = _np.linalg.slogdet(t.data)
+    inv_t = _np.linalg.inv(t.data).T
+    return _MinMax(Tensor(_np.asarray(sign, dtype=t.data.dtype)),
+                   t._make(_np.asarray(logabs, dtype=t.data.dtype), (t,),
+                           lambda g: (_np.asarray(g) * inv_t,), "SlogdetBackward0"))
+
+
+def inverse(t):
+    """역행렬. 기울기는 `-A^-T G A^-T` 다."""
+    t = _mat(t, "inverse")
+    out = _np.linalg.inv(t.data)
+    return t._make(out, (t,),
+                   lambda g: (-out.T @ _np.asarray(g) @ out.T,), "InverseBackward0")
+
+
+def solve(a, b):
+    """`A x = b` 를 푼다. 역행렬을 만들어 곱하는 것보다 정확하고 빠르다."""
+    a = _mat(a, "solve")
+    bt = _wrap(b)
+    x = _np.linalg.solve(a.data, bt.data)
+    inv_t = _np.linalg.inv(a.data).T
+
+    def back(g):
+        gg = _np.asarray(g)
+        gb = inv_t @ gg
+        # x 가 벡터면 바깥곱이 되도록 축을 세워준다.
+        ga = -(_np.outer(gb, x) if x.ndim == 1 else gb @ x.T)
+        return (ga, gb)
+
+    return a._make(x, (a, bt), back, "SolveBackward0")
+
+
+def cholesky(t, upper=False):
+    """`A = L Lᵀ` 의 아래삼각 `L`. **기울기가 있다** — Murray 알고리즘을 유도해
+    torch 와 대조했고 최대차가 2.8e-17 이었다."""
+    t = _mat(t, "cholesky")
+    low = _np.linalg.cholesky(t.data.astype(_np.float64))
+
+    def back(g):
+        gg = _np.asarray(g, dtype=_np.float64)
+        if upper:
+            gg = gg.T
+        bar = low.T @ gg
+        half = _np.tril(bar)
+        half[_np.diag_indices_from(half)] *= 0.5
+        low_inv = _np.linalg.inv(low)
+        sym = low_inv.T @ half @ low_inv
+        return (((sym + sym.T) * 0.5).astype(t.data.dtype),)
+
+    out = (low.T if upper else low).astype(t.data.dtype)
+    return t._make(out, (t,), back, "CholeskyBackward0")
+
+
+def matrix_power(t, n):
+    """**곱셈을 이어 붙여 만든다** — 그러면 역방향이 저절로 따라온다.
+    분해로 짜면 미분식을 새로 써야 하고, 그건 틀릴 자리를 하나 더 만드는 것이다."""
+    t = _mat(t, "matrix_power")
+    if n < 0:
+        return matrix_power(inverse(t), -n)
+    if n == 0:
+        return Tensor(_np.eye(t.data.shape[0], dtype=t.data.dtype))
+    out = t
+    for _ in range(n - 1):
+        out = out @ t
+    return out
+
+
+def qr(t, mode="reduced"):
+    """QR 분해. **값만 준다** — 기울기는 안 넣었다(위 주석 참고)."""
+    t = _mat(t, "qr")
+    q, r = _np.linalg.qr(t.data, mode=mode)
+    return _MinMax(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
+
+
+def svd(t, full_matrices=True):
+    """특잇값 분해. **값만 준다.** torch 와 같이 (U, S, Vh) 순서로 돌려준다."""
+    t = _mat(t, "svd")
+    u, s, vh = _np.linalg.svd(t.data, full_matrices=full_matrices)
+    return _SVD(Tensor(_np.ascontiguousarray(u)), Tensor(s),
+                Tensor(_np.ascontiguousarray(vh)))
+
+
+class _SVD:
+    """torch 의 `linalg.svd` 가 돌려주는 (U, S, Vh)."""
+
+    def __init__(self, U, S, Vh):
+        self.U, self.S, self.Vh = U, S, Vh
+
+    def __iter__(self):
+        yield from (self.U, self.S, self.Vh)
+
+    def __getitem__(self, i):
+        return (self.U, self.S, self.Vh)[i]
+
+
+def pinverse(t, rcond=1e-15):
+    """유사역행렬. **값만 준다.**"""
+    t = _mat(t, "pinverse")
+    return Tensor(_np.linalg.pinv(t.data, rcond=rcond))
+
+
+def matrix_rank(t, tol=None):
+    t = _mat(t, "matrix_rank")
+    return Tensor(_np.asarray(_np.linalg.matrix_rank(t.data, tol=tol), dtype=_np.int64))
+
+
+def eigh(t):
+    """대칭 행렬의 고윳값·고유벡터. **값만 준다.**"""
+    t = _mat(t, "eigh")
+    w, v = _np.linalg.eigh(t.data)
+    return _MinMax(Tensor(w), Tensor(_np.ascontiguousarray(v)))
+
+
+class _Lstsq:
+    """torch 의 `linalg.lstsq` 가 돌려주는 것 — 해만이 아니다.
+
+    `.solution` 으로 물어야 한다. 그냥 텐서를 돌려주면 torch 코드가 `.solution` 에서
+    멈추고, 그건 "값이 맞는데 안 통하는" 자리가 된다.
+    """
+
+    def __init__(self, solution, residuals, rank, singular_values):
+        self.solution = solution
+        self.residuals = residuals
+        self.rank = rank
+        self.singular_values = singular_values
+
+    def __iter__(self):
+        yield from (self.solution, self.residuals, self.rank, self.singular_values)
+
+    def __getitem__(self, i):
+        return (self.solution, self.residuals, self.rank, self.singular_values)[i]
+
+
+def lstsq(a, b):
+    """최소제곱 해. **값만 준다.**"""
+    a, bt = _mat(a, "lstsq"), _wrap(b)
+    sol, res, rank, sv = _np.linalg.lstsq(a.data, bt.data, rcond=None)
+    return _Lstsq(Tensor(_np.ascontiguousarray(sol)), Tensor(_np.asarray(res)),
+                  Tensor(_np.asarray(rank, dtype=_np.int64)), Tensor(_np.asarray(sv)))
+
+
+class _Linalg(_Namespace):
+    """`torch.linalg` 자리. 같은 구현을 가리키므로 갈릴 자리가 없다."""
+
+    det = staticmethod(det)
+    slogdet = staticmethod(slogdet)
+    inv = staticmethod(inverse)
+    solve = staticmethod(solve)
+    cholesky = staticmethod(cholesky)
+    matrix_power = staticmethod(matrix_power)
+    qr = staticmethod(qr)
+    svd = staticmethod(svd)
+    pinv = staticmethod(pinverse)
+    matrix_rank = staticmethod(matrix_rank)
+    eigh = staticmethod(eigh)
+    lstsq = staticmethod(lstsq)
+    norm = staticmethod(norm)
+
+
+linalg = _Linalg()
+
+
 class _Cuda(_Namespace):
     @staticmethod
     def is_available():

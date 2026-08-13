@@ -42,6 +42,24 @@ def _broadcast_error(a, b):
         f"({b[-bad]}) at non-singleton dimension {len(a) - bad}"))
 
 
+_warned = set()
+
+
+def _warn_once(key, message):
+    """느린 길을 **조용히** 타지 않게 한다. 느린 것은 틀린 것이 아니지만,
+    모르고 타는 것은 나중에 원인을 못 찾는 종류가 된다.
+
+    `_functional` 에 있던 것을 여기로 올렸다 — `_ops` 도 써야 하는데 그쪽이 먼저 실린다.
+    """
+    if key in _warned:
+        return
+    _warned.add(key)
+    try:
+        _js.console.warn("[browsertorch-webgpu] " + message)
+    except Exception:                                                # noqa: BLE001
+        pass
+
+
 def _unsupported(what):
     raise BrowserTorchError(
         f"{what} 은(는) 아직 browsertorch-webgpu 에 없습니다. "

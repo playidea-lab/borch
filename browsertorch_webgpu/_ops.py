@@ -22,8 +22,8 @@ from ._tensor import (
 )
 from ._base import (
     _ValuesIndices, _dtype_of, _last_axis_only, _pick_last, _reject_float64, _shape_of,
-    _slice_along, _slice_tensor, _to_np, _to_tf, _unsupported, bool_, dtype, float32,
-    int64,
+    _slice_along, _slice_tensor, _to_np, _to_tf, _unsupported, _warn_once, bool_, dtype,
+    float32, int64,
 )
 
 # ---------------------------------------------------------------- 만들기
@@ -1065,6 +1065,214 @@ def _make_inplace(name):
 
 for _nm in _INPLACE_UNARY:
     setattr(Tensor, _nm + "_", _make_inplace(_nm))
+
+
+# ---------------------------------------------------------------- 선형대수(분해)
+#
+# **TF.js 에 없다. 그래서 읽어와서 numpy 로 하고 다시 올린다.**
+#
+# 이 라이브러리는 이미 열일곱 군데에서 그렇게 하고 있다(`einsum`·`quantile`·`unique`·
+# `nonzero`·`cummax` 번호 등). "TF.js 에 없으니 자매는 못 한다"는 것은 사실이 아니고,
+# 처음에 그렇게 적었다가 고쳤다 — 3D 계열에서 이미 한 번 같은 실수를 했다.
+# 느린 것은 틀린 것이 아니다. 대신 **처음 부를 때 한 번 경고한다.**
+#
+# 기울기는 코어와 같은 닫힌 꼴을 쓴다. 계산은 CPU 에서 하고 결과만 올린다.
+
+def _mat_np(t, what):
+    t = _canonical(t)
+    if t.ndim != 2:
+        _unsupported(f"{what}(2차원이 아닌 것)")
+    _warn_once("linalg", "선형대수 분해(det·inverse·svd 등)는 TF.js 에 없어서 "
+                         "값을 CPU 로 읽어와 numpy 로 계산합니다 — 느립니다. "
+                         "학습 루프 안에서 부르지 마세요.")
+    return t, t.numpy().astype(_np.float64)
+
+
+def det(t):
+    t, d = _mat_np(t, "det")
+    out = _np.linalg.det(d)
+    inv_t = _np.linalg.inv(d).T
+    return t._make(_to_tf(_np.asarray(out, dtype=_np.float32)), (t,),
+                   lambda g: (_to_tf((_to_np(g).astype(_np.float64) * out * inv_t)
+                                     .astype(_np.float32)),), "DetBackward0")
+
+
+def logdet(t):
+    t, d = _mat_np(t, "logdet")
+    sign, logabs = _np.linalg.slogdet(d)
+    inv_t = _np.linalg.inv(d).T
+    out = logabs if sign > 0 else _np.nan
+    return t._make(_to_tf(_np.asarray(out, dtype=_np.float32)), (t,),
+                   lambda g: (_to_tf((_to_np(g).astype(_np.float64) * inv_t)
+                                     .astype(_np.float32)),), "LogdetBackward0")
+
+
+def slogdet(t):
+    t, d = _mat_np(t, "slogdet")
+    sign, logabs = _np.linalg.slogdet(d)
+    inv_t = _np.linalg.inv(d).T
+    return _ValuesIndices(
+        Tensor(_to_tf(_np.asarray(sign, dtype=_np.float32))),
+        t._make(_to_tf(_np.asarray(logabs, dtype=_np.float32)), (t,),
+                lambda g: (_to_tf((_to_np(g).astype(_np.float64) * inv_t)
+                                  .astype(_np.float32)),), "SlogdetBackward0"))
+
+
+def inverse(t):
+    t, d = _mat_np(t, "inverse")
+    out = _np.linalg.inv(d)
+
+    def back(g):
+        gg = _to_np(g).astype(_np.float64).reshape(out.shape)
+        return (_to_tf((-out.T @ gg @ out.T).astype(_np.float32)),)
+
+    return t._make(_to_tf(out.astype(_np.float32)), (t,), back, "InverseBackward0")
+
+
+def solve(a, b):
+    a, d = _mat_np(a, "solve")
+    bt = _canonical(_wrap(b))
+    rhs = bt.numpy().astype(_np.float64)
+    x = _np.linalg.solve(d, rhs)
+    inv_t = _np.linalg.inv(d).T
+
+    def back(g):
+        gg = _to_np(g).astype(_np.float64).reshape(x.shape)
+        gb = inv_t @ gg
+        ga = -(_np.outer(gb, x) if x.ndim == 1 else gb @ x.T)
+        return (_to_tf(ga.astype(_np.float32)), _to_tf(gb.astype(_np.float32)))
+
+    return a._make(_to_tf(x.astype(_np.float32)), (a, bt), back, "SolveBackward0")
+
+
+def cholesky(t, upper=False):
+    """`A = L Lᵀ` 의 아래삼각 `L`. 기울기는 코어와 같은 유도다(torch 와 최대차 2.8e-17)."""
+    t, d = _mat_np(t, "cholesky")
+    low = _np.linalg.cholesky(d)
+
+    def back(g):
+        gg = _to_np(g).astype(_np.float64).reshape(low.shape)
+        if upper:
+            gg = gg.T
+        bar = low.T @ gg
+        half = _np.tril(bar)
+        half[_np.diag_indices_from(half)] *= 0.5
+        low_inv = _np.linalg.inv(low)
+        sym = low_inv.T @ half @ low_inv
+        return (_to_tf(((sym + sym.T) * 0.5).astype(_np.float32)),)
+
+    out = (low.T if upper else low).astype(_np.float32)
+    return t._make(_to_tf(out), (t,), back, "CholeskyBackward0")
+
+
+def matrix_power(t, n):
+    """**곱셈을 이어 붙여 만든다** — 그러면 역방향이 저절로 따라오고 GPU 에서 돈다."""
+    t = _canonical(t)
+    if n < 0:
+        return matrix_power(inverse(t), -n)
+    if n == 0:
+        return eye(t.shape[0])
+    out = t
+    for _ in range(n - 1):
+        out = out @ t
+    return out
+
+
+def qr(t, mode="reduced"):
+    """QR 분해. **값만 준다** — 기울기는 안 넣었다(코어와 같다)."""
+    t, d = _mat_np(t, "qr")
+    q, r = _np.linalg.qr(d, mode=mode)
+    return _ValuesIndices(Tensor(_to_tf(q.astype(_np.float32))),
+                          Tensor(_to_tf(r.astype(_np.float32))))
+
+
+class _SVD:
+    """torch 의 `linalg.svd` 가 돌려주는 (U, S, Vh)."""
+
+    def __init__(self, U, S, Vh):
+        self.U, self.S, self.Vh = U, S, Vh
+
+    def __iter__(self):
+        yield from (self.U, self.S, self.Vh)
+
+    def __getitem__(self, i):
+        return (self.U, self.S, self.Vh)[i]
+
+
+def svd(t, full_matrices=True):
+    """특잇값 분해. **값만 준다.** torch 와 같이 (U, S, Vh) 순서다."""
+    t, d = _mat_np(t, "svd")
+    u, s, vh = _np.linalg.svd(d, full_matrices=full_matrices)
+    return _SVD(Tensor(_to_tf(u.astype(_np.float32))),
+                Tensor(_to_tf(s.astype(_np.float32))),
+                Tensor(_to_tf(vh.astype(_np.float32))))
+
+
+def pinverse(t, rcond=1e-15):
+    t, d = _mat_np(t, "pinverse")
+    return Tensor(_to_tf(_np.linalg.pinv(d, rcond=rcond).astype(_np.float32)))
+
+
+def matrix_rank(t, tol=None):
+    t, d = _mat_np(t, "matrix_rank")
+    return Tensor(_to_tf(_np.asarray(_np.linalg.matrix_rank(d, tol=tol),
+                                     dtype=_np.float32)), dt=int64)
+
+
+def eigh(t):
+    """대칭 행렬의 고윳값·고유벡터. **값만 준다.**"""
+    t, d = _mat_np(t, "eigh")
+    w, v = _np.linalg.eigh(d)
+    return _ValuesIndices(Tensor(_to_tf(w.astype(_np.float32))),
+                          Tensor(_to_tf(v.astype(_np.float32))))
+
+
+class _Lstsq:
+    """torch 의 `linalg.lstsq` 가 돌려주는 것 — 해만이 아니다. `.solution` 으로 묻는다."""
+
+    def __init__(self, solution, residuals, rank, singular_values):
+        self.solution = solution
+        self.residuals = residuals
+        self.rank = rank
+        self.singular_values = singular_values
+
+    def __iter__(self):
+        yield from (self.solution, self.residuals, self.rank, self.singular_values)
+
+    def __getitem__(self, i):
+        return (self.solution, self.residuals, self.rank, self.singular_values)[i]
+
+
+def lstsq(a, b):
+    """최소제곱 해. **값만 준다.**"""
+    a, d = _mat_np(a, "lstsq")
+    rhs = _canonical(_wrap(b)).numpy().astype(_np.float64)
+    sol, res, rank, sv = _np.linalg.lstsq(d, rhs, rcond=None)
+    return _Lstsq(Tensor(_to_tf(sol.astype(_np.float32))),
+                  Tensor(_to_tf(_np.asarray(res, dtype=_np.float32))),
+                  Tensor(_to_tf(_np.asarray(rank, dtype=_np.float32)), dt=int64),
+                  Tensor(_to_tf(_np.asarray(sv, dtype=_np.float32))))
+
+
+class _Linalg:
+    """`torch.linalg` 자리. 같은 구현을 가리키므로 갈릴 자리가 없다."""
+
+    det = staticmethod(det)
+    slogdet = staticmethod(slogdet)
+    inv = staticmethod(inverse)
+    solve = staticmethod(solve)
+    cholesky = staticmethod(cholesky)
+    matrix_power = staticmethod(matrix_power)
+    qr = staticmethod(qr)
+    svd = staticmethod(svd)
+    pinv = staticmethod(pinverse)
+    matrix_rank = staticmethod(matrix_rank)
+    eigh = staticmethod(eigh)
+    lstsq = staticmethod(lstsq)
+    norm = staticmethod(norm)
+
+
+linalg = _Linalg()
 
 
 def clamp_(self, min=None, max=None):

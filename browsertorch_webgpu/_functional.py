@@ -21,7 +21,7 @@ from ._tensor import (
     Tensor, _canonical, _relayout, _wrap,
 )
 from ._base import (
-    _pad_const, _shape_of, _to_tf, _unsupported,
+    _pad_const, _shape_of, _to_tf, _unsupported, _warn_once,
 )
 from ._ops import (
     _rng, _to_int32, abs, gather, gt, maximum, norm, relu, sigmoid, tanh,
@@ -319,16 +319,8 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
 _warned = set()
 
 
-def _warn_once(key, message):
-    """느린 길을 **조용히** 타지 않게 한다. 느린 것은 틀린 것이 아니지만,
-    모르고 타는 것은 나중에 원인을 못 찾는 종류가 된다."""
-    if key in _warned:
-        return
-    _warned.add(key)
-    try:
-        _js.console.warn("[browsertorch-webgpu] " + message)
-    except Exception:                                                # noqa: BLE001
-        pass
+# `_warn_once` 는 `_base` 로 옮겼다 — `_ops` 도 써야 하는데 이 모듈은 그보다 늦게
+# 실린다. 여기서는 들여온 것을 그대로 쓴다.
 
 
 def conv3d(x, weight, bias=None, stride=1, padding=0):

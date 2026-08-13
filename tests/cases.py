@@ -1032,6 +1032,88 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+LINALG_PREFIX = "linalg::"
+
+
+def linalg_cases(inp=None):
+    """선형대수 분해. **양쪽 다 넣었다** — 자매는 CPU 로 읽어와 numpy 로 계산하고,
+    처음 부를 때 한 번 느리다고 경고한다.
+
+    기울기는 닫힌 꼴이 있는 것만 있다(`det`·`logdet`·`inverse`·`solve`·`cholesky`·
+    `matrix_power`). `qr`·`svd`·`pinverse`·`lstsq` 는 값만 준다 — torch 는 미분하는데
+    우리는 안 한다. 유도가 까다롭고 틀리면 조용히 틀리므로, 없는 것을 시끄럽게 둔다.
+    """
+    mat = np.array([[4., 1.], [2., 3.]], dtype=np.float32)
+    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)      # 대칭 양정부호
+    vec = np.array([1., 2.], dtype=np.float32)
+
+    cases = [
+        (LINALG_PREFIX + "det", lambda L: L.det(L.tensor(mat))),
+        (LINALG_PREFIX + "logdet", lambda L: L.logdet(L.tensor(sym))),
+        (LINALG_PREFIX + "slogdet/부호", lambda L: L.slogdet(L.tensor(mat))[0]),
+        (LINALG_PREFIX + "slogdet/로그", lambda L: L.slogdet(L.tensor(mat))[1]),
+        (LINALG_PREFIX + "inverse", lambda L: L.inverse(L.tensor(mat))),
+        (LINALG_PREFIX + "pinverse", lambda L: L.pinverse(L.tensor(mat))),
+        (LINALG_PREFIX + "matrix_power", lambda L: L.matrix_power(L.tensor(mat), 3)),
+        (LINALG_PREFIX + "matrix_power(음수)",
+         lambda L: L.matrix_power(L.tensor(mat), -1)),
+        (LINALG_PREFIX + "cholesky", lambda L: L.linalg.cholesky(L.tensor(sym))),
+        (LINALG_PREFIX + "solve", lambda L: L.linalg.solve(L.tensor(mat), L.tensor(vec))),
+        (LINALG_PREFIX + "matrix_rank",
+         lambda L: L.linalg.matrix_rank(L.tensor(mat))),
+        # torch 의 `linalg.lstsq` 는 해 말고도 잔차·랭크를 같이 준다. `.solution` 으로
+        # 물어야 셋이 같은 것을 비교한다 — 우리 것도 그 이름을 갖게 했다.
+        (LINALG_PREFIX + "lstsq",
+         lambda L: L.linalg.lstsq(L.tensor(mat), L.tensor(vec)).solution),
+        (LINALG_PREFIX + "eigh/고윳값", lambda L: L.linalg.eigh(L.tensor(sym))[0]),
+        # `torch.linalg` 이름으로도 닿아야 한다 — 튜토리얼이 그쪽을 쓴다.
+        (LINALG_PREFIX + "linalg.det", lambda L: L.linalg.det(L.tensor(mat))),
+        (LINALG_PREFIX + "linalg.inv", lambda L: L.linalg.inv(L.tensor(mat))),
+        (LINALG_PREFIX + "qr/R", lambda L: L.linalg.qr(L.tensor(mat))[1]),
+    ]
+
+    # **부호 규약이 구현마다 다르다.** QR 의 Q 와 SVD 의 U·Vh 는 열 부호를 뒤집어도
+    # 같은 분해이므로 절댓값으로 묻는다 — 부호까지 맞추라고 하면 numpy 와 LAPACK 의
+    # 규약 차이를 재는 것이지 우리 구현을 재는 것이 아니다.
+    cases += [
+        (LINALG_PREFIX + "qr/|Q|", lambda L: L.linalg.qr(L.tensor(mat))[0].abs()),
+        (LINALG_PREFIX + "svd/|U|", lambda L: L.linalg.svd(L.tensor(mat))[0].abs()),
+        (LINALG_PREFIX + "svd/S", lambda L: L.linalg.svd(L.tensor(mat))[1]),
+        (LINALG_PREFIX + "svd/|Vh|", lambda L: L.linalg.svd(L.tensor(mat))[2].abs()),
+    ]
+
+    grads = (
+        ("det", lambda L, x: L.det(x), mat),
+        ("logdet", lambda L, x: L.logdet(x), sym),
+        ("slogdet", lambda L, x: L.slogdet(x)[1], mat),
+        ("inverse", lambda L, x: L.inverse(x), mat),
+        ("cholesky", lambda L, x: L.linalg.cholesky(x), sym),
+        ("matrix_power", lambda L, x: L.matrix_power(x, 3), mat),
+    )
+    for name, fn, arr in grads:
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            if out.shape:
+                out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(x, n)
+        cases.append((LINALG_PREFIX + f"grad::{name}", run))
+
+    def solve_grad(which):
+        def run(L, w=which):
+            a = L.tensor(mat, requires_grad=True)
+            b = L.tensor(vec, requires_grad=True)
+            out = L.linalg.solve(a, b)
+            (out * L.tensor(np.array([1., 2.], dtype=np.float32))).sum().backward()
+            return _grad_of(a if w == "a" else b, f"solve/{w}")
+        return run
+
+    for who in ("a", "b"):
+        cases.append((LINALG_PREFIX + f"grad::solve/{who}", solve_grad(who)))
+    return cases
+
+
 INPLACE_PREFIX = "inplace::"
 
 _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh_",
@@ -1475,7 +1557,7 @@ def golden_cases(inp=None):
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
-            + webgpu_cases(inp))
+            + linalg_cases(inp) + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
