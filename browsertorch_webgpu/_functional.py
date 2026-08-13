@@ -507,14 +507,22 @@ def batch_norm(x, weight, bias, eps=1e-5):
 
 
 def adaptive_avg_pool2d(x, output_size=1):
-    """출력 크기 1 만 지원한다 — ResNet 이 쓰는 것이 그것이고, 나머지는 거절한다.
+    """출력 크기를 정해 평균 풀링.
 
-    우리 연산으로 조립한다. 그래야 역전파가 그냥 따라온다.
+    **1 만 받던 것을 넓혔다.** 코어에 같은 것을 넣고 같은 케이스를 자매에도 물었더니
+    거기서 걸렸다 — 코어에서 되고 자매에서 안 되는, 방향만 반대인 같은 비대칭이었다.
+    (ResNet 이 쓰는 것은 1 이라 그것만으로 오래 버텼다.)
+
+    1 은 평균 한 번으로 끝내고, 그 밖은 `avg_pool2d` 에 넘긴다 — 우리 연산으로
+    조립하므로 역전파가 그냥 따라온다.
     """
-    if output_size not in (1, (1, 1)):
-        _unsupported("adaptive_avg_pool2d(출력 크기가 1 이 아닌 것)")
     xin = _relayout(_wrap(x), True)
     _, h, w, _ = _shape_of(xin._h)
+    oh, ow = _pair(output_size)
+    if (oh, ow) != (1, 1):
+        if h % oh or w % ow:
+            _unsupported("adaptive_avg_pool2d(입력이 출력의 배수가 아닌 경우)")
+        return avg_pool2d(x, (h // oh, w // ow))
     out = _tf.mean(xin._h, _to_js([1, 2]), True)                 # (N,1,1,C)
 
     def back(g):

@@ -190,19 +190,26 @@ def softmax(t, dim=-1):
 
 
 
+def _pair(v):
+    """`3` 도 `(3, 3)` 도 받는다 — torch 가 그렇다."""
+    return (v, v) if isinstance(v, int) else tuple(v)
+
+
 def _pad2d(x, padding):
-    if padding == 0:
+    ph, pw = _pair(padding)
+    if ph == 0 and pw == 0:
         return x
-    return _np.pad(x, ((0, 0), (0, 0), (padding, padding), (padding, padding)))
+    return _np.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
 
 
 def _im2col(xd, KH, KW, stride):
     """(N,C,H,W) 를 (N*OH*OW, C*KH*KW) 로 편다. GEMM 한 번으로 합성곱을 끝내기 위한 것."""
+    sh, sw = _pair(stride)
     N, C, H, W = xd.shape
-    OH = (H - KH) // stride + 1
-    OW = (W - KW) // stride + 1
+    OH = (H - KH) // sh + 1
+    OW = (W - KW) // sw + 1
     win = _np.lib.stride_tricks.sliding_window_view(xd, (KH, KW), axis=(2, 3))
-    win = win[:, :, ::stride, ::stride, :, :]          # (N, C, OH, OW, KH, KW)
+    win = win[:, :, ::sh, ::sw, :, :]                  # (N, C, OH, OW, KH, KW)
     cols = win.transpose(0, 2, 3, 1, 4, 5)             # (N, OH, OW, C, KH, KW)
     return _np.ascontiguousarray(cols).reshape(N * OH * OW, C * KH * KW), OH, OW
 
@@ -210,12 +217,13 @@ def _im2col(xd, KH, KW, stride):
 def _col2im(gcols, shape, KH, KW, stride, OH, OW):
     """im2col 의 역. 출력 자리(OH×OW)가 아니라 **필터 자리(KH×KW)** 를 돈다 —
     28×28 이미지에서 784번 대신 9번이면 끝난다."""
+    sh, sw = _pair(stride)
     N, C, H, W = shape
     gx = _np.zeros(shape, dtype=gcols.dtype)
     g = gcols.reshape(N, OH, OW, C, KH, KW).transpose(0, 3, 4, 5, 1, 2)   # (N,C,KH,KW,OH,OW)
     for i in range(KH):
         for j in range(KW):
-            gx[:, :, i:i + OH * stride:stride, j:j + OW * stride:stride] += g[:, :, i, j]
+            gx[:, :, i:i + OH * sh:sh, j:j + OW * sw:sw] += g[:, :, i, j]
     return gx
 
 
@@ -225,9 +233,14 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     im2col 로 펴서 행렬곱 한 번으로 끝낸다 — numpy 가 BLAS 를 부르므로,
     창을 돌며 einsum 하는 것보다 (실측) 20배 이상 빠르다.
     빠르다고 해도 실제 학습은 진짜 torch 로 한다.
+
+    **stride·padding 을 축마다 다르게 받는다.** 정사각만 받으면 `conv1d` 를 이 위에
+    얹을 수 없다 — 1차원은 높이를 1 로 끼워 넣는 것이라 높이 쪽 padding 이 0 이어야 한다.
+    자매가 이미 축별로 받으므로 거기에 맞춘다.
     """
     xd = _pad2d(x.data, padding)
     wd = weight.data
+    ph, pw = _pair(padding)
     N, C, H, W = xd.shape
     F, C2, KH, KW = wd.shape
     if C != C2:
@@ -244,12 +257,138 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
         g2 = g.transpose(0, 2, 3, 1).reshape(-1, F)
         gw = (g2.T @ cols).reshape(wd.shape)
         gx = _col2im(g2 @ w2, xd.shape, KH, KW, stride, OH, OW)
-        if padding:
-            gx = gx[:, :, padding:-padding, padding:-padding]
+        if ph:
+            gx = gx[:, :, ph:-ph, :]
+        if pw:
+            gx = gx[:, :, :, pw:-pw]
         return (gx, gw) if bias is None else (gx, gw, g.sum(axis=(0, 2, 3)))
 
     parents = (x, weight) if bias is None else (x, weight, bias)
     return x._make(out if bias is None else out + bias.data.reshape(1, -1, 1, 1), parents, back)
+
+
+def conv1d(x, weight, bias=None, stride=1, padding=0):
+    """1차원 합성곱. **`conv2d` 에 높이 1 을 끼워 넣어 짠다.**
+
+    자매(webgpu)가 이미 이 방식이다. 새 im2col 을 쓰면 같은 계산을 두 벌로 두게 되고,
+    그러면 한쪽만 고쳐진 채로 갈리는 날이 온다.
+    """
+    x, weight = _wrap(x), _wrap(weight)
+    n, c, length = x.data.shape
+    f, c2, k = weight.data.shape
+    lifted = x.reshape(n, c, 1, length)
+    kernel = weight.reshape(f, c2, 1, k)
+    # 높이 축은 건드리지 않는다 — 걸음 1, 채움 0.
+    out = conv2d(lifted, kernel, bias, (1, stride), (0, padding))
+    shape = out.data.shape
+    return out.reshape(shape[0], shape[1], shape[3])
+
+
+def conv3d(x, weight, bias=None, stride=1, padding=0):
+    """3차원 합성곱. **깊이마다 2차원 합성곱을 돌려 더한다.**
+
+    im2col 을 3차원으로 다시 쓰지 않는다 — 곱셈과 덧셈으로 짜면 역방향이 저절로
+    따라오고, 새로 쓸 미분식이 없다. 느리지만 틀리지 않는다.
+    """
+    x, weight = _wrap(x), _wrap(weight)
+    n, c, d, h, w = x.data.shape
+    f, c2, kd, kh, kw = weight.data.shape
+    if c != c2:
+        raise RuntimeError(f"채널이 안 맞습니다: 입력 {c}, 필터 {c2}")
+    sd, sh, sw = (stride, stride, stride) if isinstance(stride, int) else tuple(stride)
+    pd, ph, pw = (padding, padding, padding) if isinstance(padding, int) else tuple(padding)
+    if pd:
+        pads = [(0, 0)] * 5
+        pads[2] = (pd, pd)
+        x = x._make(_np.pad(x.data, pads), (x,),
+                    lambda g: (_np.asarray(g)[:, :, pd:-pd],), "Pad3dBackward0")
+        d = x.data.shape[2]
+
+    out_d = (d - kd) // sd + 1
+    slabs = []
+    for od in range(out_d):
+        acc = None
+        for i in range(kd):
+            plane = x[_slice_at(2, od * sd + i, od * sd + i + 1)].reshape(n, c, h, w)
+            slab = weight[_slice_at(2, i, i + 1)].reshape(f, c2, kh, kw)
+            part = conv2d(plane, slab, None, (sh, sw), (ph, pw))
+            acc = part if acc is None else acc + part
+        shape = acc.data.shape
+        slabs.append(acc.reshape(shape[0], shape[1], 1, shape[2], shape[3]))
+    out = cat(slabs, 2)
+    if bias is not None:
+        bt = _wrap(bias)
+        out = out + bt.reshape(1, -1, 1, 1, 1)
+    return out
+
+
+def max_pool1d(x, kernel_size, stride=None):
+    """`max_pool2d` 에 높이 1 을 끼워 넣는다. 높이가 1 이고 창도 1 이라 그 축은 안 움직인다."""
+    x = _wrap(x)
+    n, c, length = x.data.shape
+    stride = stride or kernel_size
+    out_len = (length - kernel_size) // stride + 1
+    lifted = x.reshape(n, c, 1, length)
+    pooled = _pool_1d_over_last(lifted, kernel_size, stride)
+    return pooled.reshape(n, c, out_len)
+
+
+def _pool_1d_over_last(x, kernel_size, stride):
+    """마지막 축만 창으로 줄인다 — 높이 축은 창 1·걸음 1 로 그대로 둔다."""
+    parts = []
+    length = x.data.shape[3]
+    for start in range(0, length - kernel_size + 1, stride):
+        window = [x[_slice_at(3, start + i, start + i + 1)] for i in range(kernel_size)]
+        acc = window[0]
+        for piece in window[1:]:
+            acc = maximum(acc, piece)
+        parts.append(acc)
+    return cat(parts, 3)
+
+
+def max_pool3d(x, kernel_size, stride=None):
+    """깊이 방향은 잘라서 최댓값을 겹쳐 취하고, 나머지는 `max_pool2d` 가 한다."""
+    x = _wrap(x)
+    stride = stride or kernel_size
+    n, c, d, h, w = x.data.shape
+    out_d = (d - kernel_size) // stride + 1
+    slabs = []
+    for od in range(out_d):
+        acc = None
+        for i in range(kernel_size):
+            plane = x[_slice_at(2, od * stride + i, od * stride + i + 1)].reshape(n, c, h, w)
+            pooled = max_pool2d(plane, kernel_size, stride)
+            acc = pooled if acc is None else maximum(acc, pooled)
+        shape = acc.data.shape
+        slabs.append(acc.reshape(shape[0], shape[1], 1, shape[2], shape[3]))
+    return cat(slabs, 2)
+
+
+def interpolate(x, scale_factor=2, mode="nearest"):
+    """최근접 확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다."""
+    if mode != "nearest":
+        _unsupported(f"interpolate(mode={mode!r}) — 최근접만 있습니다")
+    x = _wrap(x)
+    sh, sw = _pair(scale_factor)
+    xd = x.data
+    n, c, h, w = xd.shape
+    out = _np.repeat(_np.repeat(xd, sh, axis=2), sw, axis=3)
+
+    def back(g):
+        gg = _np.asarray(g).reshape(n, c, h, sh, w, sw)
+        return (gg.sum(axis=(3, 5)),)
+
+    return x._make(out, (x,), back, "UpsampleBackward0")
+
+
+def adaptive_avg_pool2d(x, output_size):
+    """출력 크기를 정해 평균 풀링. 자매에 있고 코어에 없던 자리다."""
+    x = _wrap(x)
+    oh, ow = _pair(output_size)
+    n, c, h, w = x.data.shape
+    if h % oh or w % ow:
+        _unsupported("adaptive_avg_pool2d(입력이 출력의 배수가 아닌 경우)")
+    return avg_pool2d(x, (h // oh, w // ow))
 
 
 def max_pool2d(x, kernel_size, stride=None):
@@ -802,6 +941,27 @@ def index_select(t, dim, index):
 
 def _index_at(dim, idx):
     return tuple(slice(None) for _ in range(dim)) + (idx,)
+
+
+# 메서드로만 있던 것들의 **함수 형태.** torch 는 `torch.matmul(a, b)` 도 `a @ b` 도
+# 주는데 우리는 뒤쪽만 있었다 — 자매와 맞춰보다 드러났고, 자매 대비만이 아니라
+# torch 대비 구멍이었다.
+
+def matmul(a, b):
+    return _wrap(a) @ _wrap(b)
+
+
+def reshape(t, *shape):
+    return _wrap(t).reshape(*shape)
+
+
+def unsqueeze(t, dim):
+    return _wrap(t).unsqueeze(dim)
+
+
+def masked_fill(t, mask, value):
+    t, m = _wrap(t), _wrap(mask)
+    return where(m, Tensor(_np.asarray(value, dtype=t.data.dtype)), t)
 
 
 def masked_select(t, mask):
@@ -1380,22 +1540,25 @@ def dropout(t, p=0.5, training=True):
 
 
 def avg_pool2d(x, kernel_size, stride=None):
-    stride = stride or kernel_size
+    """**축마다 다른 창을 받는다.** `adaptive_avg_pool2d` 가 세로·가로를 다르게 줄일 수
+    있어야 해서다 — 정사각만 받으면 그 위에 못 얹는다."""
+    kh, kw = _pair(kernel_size)
+    sh, sw = _pair(stride if stride is not None else kernel_size)
     xd = x.data
     N, C, H, W = xd.shape
-    OH = (H - kernel_size) // stride + 1
-    OW = (W - kernel_size) // stride + 1
-    win = _np.lib.stride_tricks.sliding_window_view(xd, (kernel_size, kernel_size), axis=(2, 3))
-    win = win[:, :, ::stride, ::stride, :, :]
+    OH = (H - kh) // sh + 1
+    OW = (W - kw) // sw + 1
+    win = _np.lib.stride_tricks.sliding_window_view(xd, (kh, kw), axis=(2, 3))
+    win = win[:, :, ::sh, ::sw, :, :]
     out = win.mean(axis=(4, 5))
-    area = kernel_size * kernel_size
+    area = kh * kw
 
     def back(g):
         g = _np.asarray(g) / area
         gx = _np.zeros_like(xd)
-        for i in range(kernel_size):
-            for j in range(kernel_size):
-                gx[:, :, i:i + OH * stride:stride, j:j + OW * stride:stride] += g
+        for i in range(kh):
+            for j in range(kw):
+                gx[:, :, i:i + OH * sh:sh, j:j + OW * sw:sw] += g
         return (gx,)
 
     return x._make(out, (x,), back, "AvgPool2DBackward0")

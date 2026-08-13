@@ -11,10 +11,11 @@ from ._base import (
     _DEFAULT_DTYPE, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _rng, avg_pool2d, conv2d, cosine_similarity, dropout,
-    elu, embedding, gelu, l1_loss, layer_norm, leaky_relu, log_softmax, max_pool2d,
-    nll_loss, no_grad, norm, normalize, pad, relu, sigmoid, silu, smooth_l1_loss,
-    softmax, stack, tanh, zeros,
+    _Namespace, _gelu, _pool_all, _rng, adaptive_avg_pool2d, avg_pool2d, conv1d, conv2d,
+    conv3d, cosine_similarity, dropout, elu, embedding, gelu, interpolate, l1_loss,
+    layer_norm, leaky_relu, log_softmax, max_pool1d, max_pool2d, max_pool3d, nll_loss,
+    no_grad, norm, normalize, pad, relu, sigmoid, silu, smooth_l1_loss, softmax, stack,
+    tanh, zeros,
 )
 
 # ================================================================ nn
@@ -354,19 +355,27 @@ class BatchNorm2d(Module):
         self.register_buffer("num_batches_tracked", 0)
 
     def forward(self, x):
-        shape = (1, -1, 1, 1)
+        # **랭크를 안 따진다.** 채널 축만 남기고 나머지를 전부 줄이므로 (N,C,H,W) 도
+        # (N,C,D,H,W) 도 같은 코드로 돈다 — `BatchNorm3d` 가 이것을 그대로 물려받는다.
+        rank = x.data.ndim
+        shape = (1, -1) + (1,) * (rank - 2)
+        reduced = tuple(i for i in range(rank) if i != 1)
         if self.training:
             # 평균·분산을 **그래프 안에서** 계산해야 한다. numpy 로 빼서 상수처럼 쓰면
             # x → mean → y 로 흐르는 길이 끊겨 기울기가 틀리고, weight 에는 아예 안 간다.
             # (BatchNorm 순방향만 대조하고 역방향은 안 봤던 탓에 오래 남아 있었다.)
-            mean = x.mean(dim=0).mean(dim=1).mean(dim=1)          # (C,)
+            mean = x.mean(dim=0)
+            for _ in range(rank - 2):
+                mean = mean.mean(dim=1)                           # (C,)
             centered = x - mean.reshape(shape)
-            var = (centered * centered).mean(dim=0).mean(dim=1).mean(dim=1)
+            var = (centered * centered).mean(dim=0)
+            for _ in range(rank - 2):
+                var = var.mean(dim=1)
 
             # 진짜 torch 는 두 곳에서 다른 분산을 쓴다 — 정규화는 편향(ddof=0),
             # running_var 갱신은 비편향(ddof=1). 둘 다 편향으로 두면 값이 2.6% 어긋난다.
             with no_grad():
-                unbiased = x.data.var(axis=(0, 2, 3), ddof=1)
+                unbiased = x.data.var(axis=reduced, ddof=1)
                 self.running_mean = ((1 - self.momentum) * self.running_mean
                                      + self.momentum * mean.data)
                 self.running_var = ((1 - self.momentum) * self.running_var
@@ -919,11 +928,105 @@ class BatchNorm1d(Module):
         return normed * self.weight + self.bias
 
 
+# ---- 1차원·3차원 계열
+#
+# **거절 stub 이었다.** 자매(webgpu)에는 실물이 있는데 코어에는 없어서, `import` 하나
+# 바꾸면 코드가 깨지는 방향이 열려 있었다 — 이 프로젝트의 약속이 정확히 그 반대다.
+#
+# 산수는 `conv2d`·`max_pool2d` 가 한다. 새 im2col 을 쓰지 않는다: 같은 계산을 두 벌로
+# 두면 한쪽만 고쳐진 채로 갈리는 날이 온다.
+
+class Conv1d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 bias=True):
+        super().__init__()
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        bound = 1.0 / _math.sqrt(in_channels * kernel_size)
+        self.weight = Parameter(_rng.uniform(
+            -bound, bound, (out_channels, in_channels, kernel_size)).astype(_DEFAULT_DTYPE))
+        self.bias = Parameter(
+            _rng.uniform(-bound, bound, (out_channels,)).astype(_DEFAULT_DTYPE)) if bias else None
+
+    def forward(self, x):
+        return conv1d(x, self.weight, self.bias, self.stride, self.padding)
+
+    def __repr__(self):
+        return (f"Conv1d({self.in_channels}, {self.out_channels}, "
+                f"kernel_size=({self.kernel_size},), stride=({self.stride},))")
+
+
+class Conv3d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 bias=True):
+        super().__init__()
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        k = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
+        bound = 1.0 / _math.sqrt(in_channels * k * k * k)
+        shape = (out_channels, in_channels) + ((k, k, k) if isinstance(kernel_size, int)
+                                               else tuple(kernel_size))
+        self.weight = Parameter(_rng.uniform(-bound, bound, shape).astype(_DEFAULT_DTYPE))
+        self.bias = Parameter(
+            _rng.uniform(-bound, bound, (out_channels,)).astype(_DEFAULT_DTYPE)) if bias else None
+
+    def forward(self, x):
+        return conv3d(x, self.weight, self.bias, self.stride, self.padding)
+
+    def __repr__(self):
+        return (f"Conv3d({self.in_channels}, {self.out_channels}, "
+                f"kernel_size={self.kernel_size}, stride={self.stride})")
+
+
+class MaxPool1d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return max_pool1d(x, self.kernel_size, self.stride)
+
+    def __repr__(self):
+        return f"MaxPool1d(kernel_size={self.kernel_size}, stride={self.stride})"
+
+
+class MaxPool3d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return max_pool3d(x, self.kernel_size, self.stride)
+
+    def __repr__(self):
+        return f"MaxPool3d(kernel_size={self.kernel_size}, stride={self.stride})"
+
+
+class BatchNorm3d(BatchNorm2d):
+    """`BatchNorm2d` 와 **같은 코드다** — 위에서 랭크를 안 따지게 고쳤으므로
+    (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
+
+
+class Upsample(Module):
+    """최근접 확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다."""
+
+    def __init__(self, scale_factor=2, mode="nearest"):
+        super().__init__()
+        if mode != "nearest":
+            _unsupported(f"Upsample(mode={mode!r})")
+        self.scale_factor, self.mode = scale_factor, mode
+
+    def forward(self, x):
+        return interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
+
+    def __repr__(self):
+        return f"Upsample(scale_factor={self.scale_factor}, mode={self.mode!r})"
+
+
 for _cls in (GELU, SiLU, LeakyReLU, ELU, Softmax, LogSoftmax, AvgPool2d,
-             AdaptiveAvgPool2d, Unflatten, L1Loss, SmoothL1Loss, NLLLoss, BatchNorm1d):
+             AdaptiveAvgPool2d, Unflatten, L1Loss, SmoothL1Loss, NLLLoss, BatchNorm1d,
+             Conv1d, Conv3d, MaxPool1d, MaxPool3d, BatchNorm3d, Upsample):
     setattr(nn, _cls.__name__, _cls)
-for _name in ("Conv1d", "Conv3d", "BatchNorm3d", "Upsample", "MaxPool1d", "MaxPool3d"):
-    setattr(nn, _name, _nn_unsupported(_name))
 nn.RNN = RNN
 nn.LSTM = LSTM
 nn.GRU = GRU
@@ -969,6 +1072,15 @@ class _Functional(_Namespace):
     pad = staticmethod(pad)
     normalize = staticmethod(normalize)
     cosine_similarity = staticmethod(cosine_similarity)
+    # 1차원·3차원 계열. **자매에는 있고 여기에는 없던 것들이다.**
+    conv1d = staticmethod(conv1d)
+    conv2d = staticmethod(conv2d)
+    conv3d = staticmethod(conv3d)
+    max_pool1d = staticmethod(max_pool1d)
+    max_pool2d = staticmethod(max_pool2d)
+    max_pool3d = staticmethod(max_pool3d)
+    adaptive_avg_pool2d = staticmethod(adaptive_avg_pool2d)
+    interpolate = staticmethod(interpolate)
 
     @staticmethod
     def mse_loss(pred, target):

@@ -1032,6 +1032,104 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+NDIM_PREFIX = "ndim::"
+
+
+def ndim_cases(inp=None):
+    """1차원·3차원 계열. **자매에는 있고 코어에는 거절 stub 이던 자리다.**
+
+    비대칭이 이 프로젝트의 약속과 정면으로 어긋났다 — "임포트만 바꾸면 같은 코드"인데,
+    자매에서 돌던 `nn.Conv1d` 가 코어에서 `BrowserTorchError` 로 멈췄다. 이 표가 그
+    비대칭이 다시 벌어지는 것을 막는다.
+    """
+    rng = np.random.default_rng(41)
+    seq = rng.standard_normal((2, 3, 8)).astype(np.float32)
+    k1 = (rng.standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
+    vol = rng.standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
+    k3 = (rng.standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
+    img = rng.standard_normal((2, 3, 4, 4)).astype(np.float32)
+
+    calls = (
+        ("F.conv1d", lambda L: L.nn.functional.conv1d(
+            L.tensor(seq), L.tensor(k1), None, 1, 1), seq),
+        ("F.conv1d(걸음2)", lambda L: L.nn.functional.conv1d(
+            L.tensor(seq), L.tensor(k1), None, 2, 1), seq),
+        ("F.conv1d(채움0)", lambda L: L.nn.functional.conv1d(
+            L.tensor(seq), L.tensor(k1), None, 1, 0), seq),
+        ("F.conv3d", lambda L: L.nn.functional.conv3d(
+            L.tensor(vol), L.tensor(k3), None, 1, 1), vol),
+        ("F.conv3d(채움0)", lambda L: L.nn.functional.conv3d(
+            L.tensor(vol), L.tensor(k3), None, 1, 0), vol),
+        ("F.max_pool1d", lambda L: L.nn.functional.max_pool1d(L.tensor(seq), 2), seq),
+        ("F.max_pool3d", lambda L: L.nn.functional.max_pool3d(L.tensor(vol), 2), vol),
+        ("F.interpolate", lambda L: L.nn.functional.interpolate(
+            L.tensor(img), scale_factor=2), img),
+        ("F.adaptive_avg_pool2d", lambda L: L.nn.functional.adaptive_avg_pool2d(
+            L.tensor(img), 2), img),
+    )
+    cases = [(NDIM_PREFIX + name, fn) for name, fn, _ in calls]
+
+    # 모듈 쪽. 가중치는 밖에서 넣어 **양쪽이 같은 자리에서 출발**하게 한다 —
+    # 각자 초기화하면 무엇이 갈렸는지가 아니라 초기화가 갈렸는지를 보게 된다.
+    def conv1d_module(L):
+        m = L.nn.Conv1d(3, 4, 3, padding=1)
+        # **`load_state_dict` 로 넣는다.** `m.weight.data[...] = ndarray` 는 torch 가
+        # 거절한다(`can't assign a numpy.ndarray to a torch.FloatTensor`) — 셋 다
+        # 통하는 길은 이것뿐이고, 마침 이 라이브러리가 맞춰둔 표면이기도 하다.
+        m.load_state_dict({"weight": L.tensor(k1),
+                           "bias": L.tensor(np.zeros(4, dtype=np.float32))})
+        return m(L.tensor(seq))
+
+    cases += [
+        (NDIM_PREFIX + "nn.Conv1d", conv1d_module),
+        (NDIM_PREFIX + "nn.MaxPool1d", lambda L: L.nn.MaxPool1d(2)(L.tensor(seq))),
+        (NDIM_PREFIX + "nn.MaxPool3d", lambda L: L.nn.MaxPool3d(2)(L.tensor(vol))),
+        (NDIM_PREFIX + "nn.BatchNorm3d", lambda L: L.nn.BatchNorm3d(2)(L.tensor(vol))),
+        (NDIM_PREFIX + "nn.Upsample",
+         lambda L: L.nn.Upsample(scale_factor=2)(L.tensor(img))),
+    ]
+
+    # 메서드로만 있던 것들의 **함수 형태**. torch 는 둘 다 주는데 코어는 한쪽만
+    # 있었고, 자매와 맞춰보다 드러났다.
+    mask = np.array([[True, False, True, False]] * 2)
+    flat = np.arange(8, dtype=np.float32).reshape(2, 4)
+    cases += [
+        (NDIM_PREFIX + "torch.matmul",
+         lambda L: L.matmul(L.tensor(flat), L.tensor(flat.T.copy()))),
+        # **모양을 튜플 하나로 받는다.** `torch.reshape(x, 4, 2)` 는 torch 가 거절한다 —
+        # 메서드(`x.reshape(4, 2)`)와 함수의 서명이 다르다.
+        (NDIM_PREFIX + "torch.reshape", lambda L: L.reshape(L.tensor(flat), (4, 2))),
+        (NDIM_PREFIX + "torch.unsqueeze", lambda L: L.unsqueeze(L.tensor(flat), 1)),
+        (NDIM_PREFIX + "torch.masked_fill",
+         lambda L: L.masked_fill(L.tensor(flat), L.tensor(mask), -1.0)),
+        (NDIM_PREFIX + "x.masked_fill",
+         lambda L: L.tensor(flat).masked_fill(L.tensor(mask), -1.0)),
+        (NDIM_PREFIX + "x.index_select",
+         lambda L: L.tensor(flat).index_select(0, L.tensor(np.array([1, 0], dtype=np.int64)))),
+        (NDIM_PREFIX + "x.masked_select",
+         lambda L: L.tensor(flat).masked_select(L.tensor(mask))),
+        (NDIM_PREFIX + "x.repeat_interleave",
+         lambda L: L.tensor(flat).repeat_interleave(2)),
+    ]
+
+    grads = (
+        ("conv1d", lambda L, x: L.nn.functional.conv1d(x, L.tensor(k1), None, 1, 1), seq),
+        ("conv3d", lambda L, x: L.nn.functional.conv3d(x, L.tensor(k3), None, 1, 1), vol),
+        ("max_pool1d", lambda L, x: L.nn.functional.max_pool1d(x, 2), seq),
+        ("max_pool3d", lambda L, x: L.nn.functional.max_pool3d(x, 2), vol),
+        ("interpolate", lambda L, x: L.nn.functional.interpolate(x, scale_factor=2), img),
+        ("BatchNorm3d", lambda L, x: L.nn.BatchNorm3d(2)(x), vol),
+    )
+    for name, fn, arr in grads:
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, n)
+        cases.append((NDIM_PREFIX + f"grad::{name}", run))
+    return cases
+
+
 LINALG_PREFIX = "linalg::"
 
 
@@ -1557,7 +1655,7 @@ def golden_cases(inp=None):
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
-            + linalg_cases(inp) + webgpu_cases(inp))
+            + linalg_cases(inp) + ndim_cases(inp) + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

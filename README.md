@@ -206,7 +206,7 @@ uv run --with playwright python tests/browser/run.py \
 | **텐서** | 모양·브로드캐스팅·dtype 승격 · 인덱싱 · reshape/view/permute/squeeze · split·chunk·flip·roll·gather·narrow·index_select·masked_select |
 | **autograd** | `requires_grad` · `backward()` · `.grad` · `no_grad()` · `detach()` · 누적 |
 | **축약** | `sum`·`mean`·`max`·`min`·`prod`·`median`·`norm`·`cumsum`·`topk`·`sort`·`unique`·`std` — 역전파 포함 |
-| **nn** | `Module` · `Linear` · `Conv2d` · `MaxPool2d` · `Embedding` · `LayerNorm` · `BatchNorm2d` · `Dropout` · `Sequential` · `ModuleList` |
+| **nn** | `Module` · `Linear` · `Conv1d/2d/3d` · `MaxPool1d/2d/3d` · `Upsample` · `Embedding` · `LayerNorm` · `BatchNorm1d/2d/3d` · `Dropout` · `Sequential` · `ModuleList` |
 | **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태 |
 | **트랜스포머** | `MultiheadAttention` · 인코더·디코더 층 · `nn.Transformer` — 불리언·실수 마스크 · `norm_first` · gelu |
 | **손실** | `MSELoss`·`L1Loss`·`SmoothL1Loss`·`BCELoss`·`BCEWithLogitsLoss`·`CrossEntropyLoss`·`NLLLoss` |
@@ -268,8 +268,8 @@ torch 의 난수기를 쓸 수 없어서다. 그래서 골든은 확률을 0·1 
 | **흔한 API 이름** | **144/144** |
 | T4 비트 동등 | **명시적 비목표** |
 
-그리고 **골든 718건**이 코어와 자매 라이브러리를 **같은 기대값**에 대조한다.
-(코어는 그중 자매 전용 53건을 건너뛰어 665건을 본다 — 코어가 일부러 거절하는 것을
+그리고 **골든 746건**이 코어와 자매 라이브러리를 **같은 기대값**에 대조한다.
+(코어는 그중 자매 전용 53건을 건너뛰어 693건을 본다 — 코어가 일부러 거절하는 것을
 코어에게 물으면 그건 검사가 아니라 오답이다.) 진짜 torch 를
 브라우저에 넣을 수 없어서, 네이티브에서 기대값을 굳혀 브라우저로 들고 간다.
 
