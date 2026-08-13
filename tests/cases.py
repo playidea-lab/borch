@@ -608,6 +608,29 @@ def webgpu_cases(inp=None):
         (WEBGPU_PREFIX + "BatchNorm3d(학습)", lambda L: L.nn.BatchNorm3d(2)(L.tensor(vol))),
         (WEBGPU_PREFIX + "grad::BatchNorm3d", bn3d_grad),
     ]
+
+    # conv3d 를 굳히다가 `tf.pad` 가 랭크 5 에서 **모양만 맞고 값이 깨지는** 것을 잡았다.
+    # 예외를 안 던지므로 부르는 쪽은 아무것도 모른다. conv3d 는 고쳤지만, 같은 함수를
+    # 부르는 자리가 거기만은 아니다 — 자르기의 역방향이 잘려나간 자리를 0 으로 도로
+    # 메울 때 `pad` 를 쓴다. 그 입력이 랭크 5 면 **틀린 기울기가 조용히 나온다.**
+    # 그러니 눈으로 훑어 "없더라" 하지 말고, 걸릴 자리를 세워 두고 물어본다.
+    def slice5_grad(kind):
+        def run(L, k=kind):
+            x = L.tensor(vol, requires_grad=True)
+            if k == "narrow":
+                out = L.narrow(x, 2, 1, 2)
+            elif k == "unbind":
+                out = L.unbind(x, 2)[1]
+            else:
+                out = L.split(x, 2, dim=3)[0]
+            # 가중치를 다르게 줘야 어느 자리가 0 이어야 하는지가 값으로 드러난다 —
+            # 그냥 sum() 이면 기울기가 전부 1 이라 자리가 뒤바뀌어도 안 걸린다.
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, f"랭크5 {k}")
+        return run
+
+    for kind in ("narrow", "unbind", "split"):
+        cases.append((WEBGPU_PREFIX + f"grad::랭크5 {kind}", slice5_grad(kind)))
     return cases
 
 

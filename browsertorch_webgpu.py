@@ -30,7 +30,14 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
 없는 것은 근사하지 않고 예외를 던진다. `topk(largest=False)` 처럼 TF.js 가 못 하는
 인자도 조용히 무시하지 않고 거절한다 — 조용히 다른 값을 내는 것이 가장 나쁘다.
 
-## 이 파일을 고칠 때의 규칙 하나
+## 이 파일을 고칠 때의 규칙 둘
+
+**랭크 5 이상에서 `_tf.pad` 를 직접 부르지 마라. `_pad_zeros` 를 거쳐라.**
+거기서 `tf.pad` 는 모양을 맞게 돌려주고 값을 깨뜨리며 **예외를 안 던진다.**
+랭크 6 의 reshape+pad 에서 한 번, 랭크 5 의 conv3d 에서 또 한 번 걸렸다. 두 번째
+때는 conv3d 만 고치고 넘어갈 뻔했는데, 케이스를 세워 물어보니 자르기의 역방향도
+같은 함수를 부르고 있어서 `narrow`·`unbind`·`split` 셋이 랭크 5 에서 조용히
+틀린 기울기를 내고 있었다. 이런 것은 눈으로 훑어서는 안 나온다.
 
 **`_wrap(x)._h` 를 인라인으로 쓰지 마라.** `x` 가 텐서가 아니면 `_wrap` 이 임시를
 만드는데, `._h` 를 꺼내는 순간 그 임시의 참조가 0 이 되어 `__del__` 이 버퍼를 놓는다.
@@ -1547,6 +1554,46 @@ def stack(items, dim=0):
     return items[0]._make(out, tuple(items), back, "StackBackward0")
 
 
+# 랭크 5 부터는 `tf.pad` 를 못 믿는다 — 아래 `_pad_zeros` 참고.
+_PAD_SAFE_RANK = 4
+
+
+def _pad_zeros(handle, shape, pads):
+    """0 을 두른다. `shape` 는 `handle` 의 현재 모양, `pads` 는 (축, 앞, 뒤) 목록이다.
+
+    **랭크 5 이상에서는 `tf.pad` 를 쓰지 않는다.** 거기서 pad 는 모양을 맞게 돌려주고
+    값을 깨뜨리며, 예외를 안 던진다 — 부르는 쪽은 아무것도 모른 채 틀린 답을 받는다.
+    conv3d 를 굳히다 잡았다: 1×1×1 항등 커널을 씌운 결과의 합이 28 이어야 하는데
+    0.238 이었다. 랭크 6 의 reshape+pad 에서 겪은 것과 같은 종류다.
+
+    이것이 conv3d 만의 사고가 아니었다는 것은 케이스를 세워 물어보고 알았다. 자르기의
+    역방향이 잘려나간 자리를 도로 0 으로 메울 때 같은 함수를 부르는데, 랭크 5 를
+    자르면 **narrow·unbind·split 셋 다 조용히 틀린 기울기**를 내고 있었다. 그러니
+    호출 지점은 여기 하나로 모으고, 랭크 판단도 여기서만 한다.
+
+    랭크 4 이하는 `tf.pad` 그대로 둔다. 골든 350 건과 ResNet-18 의 매 스텝이 지나는
+    길이고 거기서는 값이 맞는다 — 안 깨진 것을 바꾸면 바꾼 쪽이 새 위험이 된다.
+    """
+    if len(shape) <= _PAD_SAFE_RANK:
+        pairs = [[0, 0] for _ in shape]
+        for axis, before, after in pads:
+            pairs[axis] = [before, after]
+        return _tf.pad(handle, _to_js(pairs))
+
+    cur = list(shape)
+    for axis, before, after in pads:
+        for width, at_front in ((before, True), (after, False)):
+            if not width:
+                continue
+            block = list(cur)
+            block[axis] = width
+            zeros = _tf.zeros(_to_js(block))
+            parts = [zeros, handle] if at_front else [handle, zeros]
+            handle = _tf.concat(_to_js(parts), axis)
+            cur[axis] += width
+    return handle
+
+
 def _slice_along(handle, axis, start, length):
     shape = _shape_of(handle)
     begin = [0] * len(shape)
@@ -1557,11 +1604,13 @@ def _slice_along(handle, axis, start, length):
 
 def _slice_tensor(t, dim, start, length):
     """잘라내되 **그래프를 잇는다.** 역방향은 잘라낸 자리 밖을 0 으로 채우는 것이다."""
-    shape = t.shape
-    pairs = [[0, 0] for _ in shape]
-    pairs[dim] = [start, shape[dim] - start - length]
+    shape = list(t.shape)
+    # 메울 대상은 들어온 기울기, 즉 **잘라낸 뒤의** 모양이다.
+    out_shape = list(shape)
+    out_shape[dim] = length
+    pads = [(dim, start, shape[dim] - start - length)]
     return t._make(_slice_along(t._h, dim, start, length), (t,),
-                   lambda g: (_tf.pad(g, _to_js(pairs)),), "SliceBackward0")
+                   lambda g: (_pad_zeros(g, out_shape, pads),), "SliceBackward0")
 
 
 def narrow(t, dim, start, length):
@@ -1944,28 +1993,6 @@ def _warn_once(key, message):
         pass
 
 
-def _pad_spatial(handle, shape, pads):
-    """공간 축에 0 을 두른다. **`tf.pad` 를 쓰지 않는다.**
-
-    랭크 5 에서 `tf.pad` 는 모양만 맞고 값이 깨진다 — 예외도 안 던진다. 항등 커널로
-    재보면 나와야 할 합 28 대신 0.238 이 나왔다. 랭크 6 의 reshape+pad 에서 겪은 것과
-    같은 종류이며, 그때처럼 랭크를 안 올리는 연산으로 바꾼다. `concat` 은 랭크 5 에서
-    멀쩡하다(같은 프로브에서 확인).
-
-    `shape` 는 `handle` 의 현재 모양, `pads` 는 (축, 양쪽에 댈 두께) 목록이다.
-    """
-    cur = list(shape)
-    for axis, pad in pads:
-        if not pad:
-            continue
-        block = list(cur)
-        block[axis] = pad
-        zeros = _tf.zeros(_to_js(block))
-        handle = _tf.concat(_to_js([zeros, handle, zeros]), axis)
-        cur[axis] += 2 * pad
-    return handle
-
-
 def conv3d(x, weight, bias=None, stride=1, padding=0):
     """3차원 합성곱. **역방향은 TF.js 에 맡긴다 — 느리다.**
 
@@ -1987,7 +2014,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
     ncdhw_to_ndhwc, back_perm = [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]
 
     xh = _tf.transpose(x._h, _to_js(ncdhw_to_ndhwc))
-    xh = _pad_spatial(xh, [n, d, h, w, c], [(1, pd), (2, ph), (3, pw)])
+    xh = _pad_zeros(xh, [n, d, h, w, c], [(1, pd, pd), (2, ph, ph), (3, pw, pw)])
     wh = _tf.transpose(weight._h, _to_js([2, 3, 4, 1, 0]))    # (F,C,D,H,W) → (D,H,W,C,F)
     strides = _to_js([sd, sh, sw])
     out = _tf.conv3d(xh, wh, strides, "valid")
