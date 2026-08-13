@@ -170,3 +170,15 @@ uv run --with numpy --with torch python tests/conformance.py
 ## 라이선스
 
 Apache-2.0 · PI Lab
+
+의존은 numpy(BSD-3-Clause) 하나다. 순수 파이썬 휠이라 다른 것을 묶어 팔지 않는다.
+
+> **브라우저에 띄우는 쪽은 Pyodide 를 함께 서빙하게 된다.** Pyodide 는 MPL-2.0 이고,
+> 실행 형태로 배포하면 **소스를 구할 길을 알려야 한다**(MPL §3.2). 우리 코드로 번지지는
+> 않는다 — 파일 단위 약한 카피레프트라 browsertorch 는 Apache-2.0 그대로다.
+> 페이지 어딘가에 이 한 줄을 두면 된다:
+>
+> > 이 페이지는 [Pyodide](https://github.com/pyodide/pyodide) 를 포함하며 Mozilla Public
+> > License 2.0 을 따릅니다. 소스는 해당 저장소에서 받을 수 있습니다.
+>
+> 무엇에 기대고 무엇을 지켜야 하는지는 [THIRD-PARTY.md](THIRD-PARTY.md) 에 정리했다.

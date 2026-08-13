@@ -17,6 +17,16 @@
 
 <pre id="out">시작하는 중…</pre>
 
+<!-- 이 페이지는 Pyodide 를 서빙한다 = 실행 형태로 배포한다. MPL-2.0 §3.2 가 소스를
+     구할 길을 알리라고 하므로, 문서에만 적어두지 않고 페이지에 둔다. -->
+<footer style="margin-top:2rem;font:12px/1.6 system-ui;color:#666">
+  이 페이지는 <a href="https://github.com/pyodide/pyodide">Pyodide</a>(MPL-2.0)와
+  <a href="https://github.com/tensorflow/tfjs">TensorFlow.js</a>(Apache-2.0)를 포함합니다.
+  각 소스는 링크된 저장소에서 받을 수 있습니다.
+  numpy(BSD-3-Clause)와 CPython 표준 라이브러리(PSF)도 함께 실립니다 —
+  <a href="/THIRD-PARTY.md">THIRD-PARTY.md</a>.
+</footer>
+
 <!-- 전부 로컬에서 온다. CDN 은 테스트 시점에 살아 있어야 하는 의존이었고 실제로
      한 번 끊겼다 — `tests/browser/vendor.py` 가 받아 두고 해시로 잠근다. -->
 <script src="/vendor/pyodide/pyodide.js"></script>

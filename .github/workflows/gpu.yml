@@ -1,0 +1,50 @@
+# GPU 경로 검증 — **self-hosted 러너**에서 돈다.
+#
+# GitHub 호스팅 러너에는 GPU 가 없다. WebGPU 가 SwiftShader 로 떨어지고, 그건 실제
+# 사용자가 지나지 않는 소프트웨어 경로라 거기서 통과해도 증명되는 것이 없다.
+# 그래서 진짜 GPU 가 달린 기계를 러너로 등록해서 쓴다.
+#
+# **창을 띄워야 한다(`--headed`).** 실측이다 — 헤드리스 Chromium 에는 `navigator.gpu`
+# 가 없어 TF.js 가 조용히 WebGL 로 떨어진다. 러너가 백엔드를 확인하고 webgpu 가 아니면
+# 멈추므로 조용히 틀린 결과를 보지는 않지만, 화면 세션이 있는 사용자 프로세스로 러너를
+# 돌려야 잡이 통과한다.
+#
+# 기존 `test.yml`(네이티브 pytest)은 건드리지 않는다. 코어 browsertorch 는 numpy 뿐이라
+# 브라우저가 애초에 필요 없다 — 이 워크플로는 GPU 경로에만 붙는다.
+#
+# 러너 등록은 저장소 설정과 토큰이 필요하므로 **사람이 한다.** 등록되기 전까지 이
+# 워크플로는 돌 곳이 없어 대기만 한다.
+
+name: gpu
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  golden-in-browser:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      # 진짜 torch 가 필요한 유일한 단계다. 여기서 기대값을 굳힌다.
+      - name: 골든을 굳힌다
+        run: uv run --with numpy --with torch python tests/golden.py dump
+
+      # Pyodide·TF.js 를 받아 두고 해시로 잠근다. 이미 있으면 대조만 한다.
+      # (CDN 이 테스트 시점에 살아 있어야 하는 의존이었고, 실제로 한 번 끊겼다.)
+      - name: 바깥 자산을 준비한다
+        run: uv run python tests/browser/vendor.py check
+
+      - name: 브라우저를 준비한다
+        run: uv run --with playwright playwright install chromium
+
+      # 코어와 GPU 경로 둘 다 본다. 같은 골든을 쓰므로 갈리면 어느 쪽인지 바로 나온다.
+      - name: 코어를 골든과 대조한다
+        run: uv run --with playwright python tests/browser/run.py --lib browsertorch --headed
+
+      - name: GPU 경로를 골든과 대조한다
+        run: uv run --with playwright python tests/browser/run.py --lib browsertorch_webgpu --headed
