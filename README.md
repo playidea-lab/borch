@@ -17,7 +17,8 @@
 
 ## 설치
 
-순수 파이썬 휠 하나(34KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
+순수 파이썬 휠 하나(42KB)다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
+`browsertorch` 와 `browsertorch_vision` 두 모듈이 들어 있다.
 
 ```bash
 uv add ./browsertorch-1.4.0-py3-none-any.whl        # 릴리스에서 받은 파일
@@ -130,7 +131,7 @@ torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓�
 | | 코어 `browsertorch` | 자매 `browsertorch-webgpu` |
 |---|---|---|
 | 무엇 위에 | numpy | TF.js WebGPU |
-| 휠 | 순수 파이썬 34KB | 순수 파이썬(TF.js 는 페이지가 싣는다) |
+| 휠 | 순수 파이썬 42KB | 휠에 없다(브라우저 전용, TF.js 는 페이지가 싣는다) |
 | 어디서 | 어디서나 | **브라우저 안에서만** |
 | 천장 | MNIST 급 | **CIFAR ResNet-18 이 에폭 약 2분** (실측) |
 | 읽히는가 | 그것이 전부다 | 아니다. 성능이 목적이다 |
