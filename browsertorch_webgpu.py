@@ -94,7 +94,21 @@ def _to_np(handle):
 _grad_enabled = True
 
 
+_NCHW_TO_NHWC = [0, 2, 3, 1]
+_NHWC_TO_NCHW = [0, 3, 1, 2]
+
+
 class Tensor:
+    """torch 의 모양(NCHW)을 말하되, 4차원은 **속으로 NHWC 를 들 수 있다.**
+
+    TF.js 의 conv·풀링은 NHWC 만 빠르다(NCHW 로 부르면 346 GFLOPS, NHWC 는 2,306 —
+    실측). 그래서 conv 를 지날 때마다 전치하면 33.5MB 를 두 번 훑고, 그게 순방향
+    시간의 88% 였다. 대신 **레이아웃을 들고 다니게** 해서 conv·BN·활성·잔차 덧셈이
+    전부 NHWC 로 이어지게 한다. 전치는 들어올 때와 나갈 때 한 번씩이다.
+
+    `shape` 는 언제나 torch 순서로 답한다 — 밖에서는 이 사정이 보이면 안 된다.
+    """
+
     def __init__(self, handle, requires_grad=False, _parents=(), _backward=None):
         self._h = handle
         self.requires_grad = bool(requires_grad)
@@ -102,12 +116,17 @@ class Tensor:
         self._parents = _parents
         self._backward = _backward
         self._op = None
+        self._nhwc = False
 
     # ---- 기본 정보
 
     @property
     def shape(self):
-        return _shape_of(self._h)
+        raw = _shape_of(self._h)
+        if self._nhwc:
+            n, h, w, c = raw
+            return (n, c, h, w)
+        return raw
 
     @property
     def ndim(self):
@@ -124,7 +143,8 @@ class Tensor:
         return int(_np.prod(shape)) if shape else 1
 
     def numpy(self):
-        return _to_np(self._h)
+        arr = _to_np(self._h)
+        return arr.transpose(0, 3, 1, 2) if self._nhwc else arr
 
     def tolist(self):
         return self.numpy().tolist()
@@ -139,7 +159,9 @@ class Tensor:
     def detach(self):
         # **복제해야 한다.** 손잡이를 나눠 가지면 둘 중 하나가 사라질 때 다른 쪽의
         # 버퍼까지 놓아버린다. tf.clone 은 데이터를 공유하고 참조만 하나 더 든다.
-        return Tensor(_tf.clone(self._h))
+        out = Tensor(_tf.clone(self._h))
+        out._nhwc = self._nhwc          # 레이아웃도 같이 물려준다 — 안 그러면 속이 밖으로 샌다
+        return out
 
     def dispose(self):
         """GPU 버퍼를 놓는다."""
@@ -173,6 +195,8 @@ class Tensor:
                      _parents=parents if needs else (),
                      _backward=backward if needs else None)
         out._op = op if needs else None
+        # 원소별 연산은 레이아웃을 그대로 물려준다. 랭크가 4 에서 벗어나면 뜻이 없다.
+        out._nhwc = self._nhwc and len(_shape_of(handle)) == 4
         return out
 
     def backward(self, gradient=None):
@@ -211,39 +235,40 @@ class Tensor:
             for parent, pg in zip(t._parents, t._backward(g)):
                 if pg is None:
                     continue
-                pg = _unbroadcast(pg, parent.shape)
+                # 부모의 **속 모양**으로 되돌린다. `parent.shape` 는 torch 순서라
+                # 부모가 NHWC 를 들고 있으면 축이 어긋난다.
+                pg = _unbroadcast(pg, _shape_of(parent._h))
                 grads[id(parent)] = pg if id(parent) not in grads else _tf.add(grads[id(parent)], pg)
 
     # ---- 산술
 
+    def _binary(self, o, forward, back, op):
+        """두 짝의 레이아웃을 맞춘 뒤 계산한다. 맞추는 규칙은 `_align` 에 있다."""
+        a, b = _align(self, _wrap(o))
+        return a._make(forward(a._h, b._h), (a, b), lambda g: back(g, a._h, b._h), op)
+
     def __add__(self, o):
-        o = _wrap(o)
-        return self._make(_tf.add(self._h, o._h), (self, o),
-                          lambda g: (g, g), "AddBackward0")
+        return self._binary(o, _tf.add, lambda g, x, y: (g, g), "AddBackward0")
 
     __radd__ = __add__
 
     def __sub__(self, o):
-        o = _wrap(o)
-        return self._make(_tf.sub(self._h, o._h), (self, o),
-                          lambda g: (g, _tf.neg(g)), "SubBackward0")
+        return self._binary(o, _tf.sub, lambda g, x, y: (g, _tf.neg(g)), "SubBackward0")
 
     def __rsub__(self, o):
         return _wrap(o).__sub__(self)
 
     def __mul__(self, o):
-        o = _wrap(o)
-        return self._make(_tf.mul(self._h, o._h), (self, o),
-                          lambda g: (_tf.mul(g, o._h), _tf.mul(g, self._h)), "MulBackward0")
+        return self._binary(o, _tf.mul,
+                            lambda g, x, y: (_tf.mul(g, y), _tf.mul(g, x)), "MulBackward0")
 
     __rmul__ = __mul__
 
     def __truediv__(self, o):
-        o = _wrap(o)
-        return self._make(
-            _tf.div(self._h, o._h), (self, o),
-            lambda g: (_tf.div(g, o._h),
-                       _tf.neg(_tf.div(_tf.mul(g, self._h), _tf.mul(o._h, o._h)))),
+        return self._binary(
+            o, _tf.div,
+            lambda g, x, y: (_tf.div(g, y),
+                             _tf.neg(_tf.div(_tf.mul(g, x), _tf.mul(y, y)))),
             "DivBackward0")
 
     def __rtruediv__(self, o):
@@ -261,7 +286,7 @@ class Tensor:
             "PowBackward0")
 
     def __matmul__(self, o):
-        o = _wrap(o)
+        self, o = _canonical(self), _canonical(_wrap(o))
         return self._make(
             _tf.matMul(self._h, o._h), (self, o),
             lambda g: (_tf.matMul(g, o._h, False, True),
@@ -273,9 +298,10 @@ class Tensor:
 
     def reshape(self, *shape):
         shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-        old = self.shape
-        return self._make(_tf.reshape(self._h, _to_js(list(shape))), (self,),
-                          lambda g: (_tf.reshape(g, _to_js(list(old))),), "ViewBackward0")
+        t = _canonical(self)          # 모양을 다시 짜는 것은 torch 순서에서만 뜻이 있다
+        old = t.shape
+        return t._make(_tf.reshape(t._h, _to_js(list(shape))), (t,),
+                       lambda g: (_tf.reshape(g, _to_js(list(old))),), "ViewBackward0")
 
     def view(self, *shape):
         return self.reshape(*shape)
@@ -284,10 +310,11 @@ class Tensor:
         return self.reshape(self.shape[:start_dim] + (-1,))
 
     def transpose(self, d0, d1):
-        perm = list(range(self.ndim))
+        t = _canonical(self)
+        perm = list(range(t.ndim))
         perm[d0], perm[d1] = perm[d1], perm[d0]
-        return self._make(_tf.transpose(self._h, _to_js(perm)), (self,),
-                          lambda g: (_tf.transpose(g, _to_js(perm)),), "TransposeBackward0")
+        return t._make(_tf.transpose(t._h, _to_js(perm)), (t,),
+                       lambda g: (_tf.transpose(g, _to_js(perm)),), "TransposeBackward0")
 
     @property
     def T(self):
@@ -299,8 +326,10 @@ class Tensor:
         # `fn(self._h, _wrap(o)._h)` 로 쓰면 안 된다. `._h` 를 꺼내는 순간 임시 텐서의
         # 참조가 0 이 되어 `__del__` 이 버퍼를 놓고, **그 뒤에** fn 이 불린다.
         # 이름을 붙여 호출이 끝날 때까지 살려둔다.
-        other = _wrap(o)
-        return Tensor(fn(self._h, other._h))
+        a, b = _align(self, _wrap(o))
+        out = Tensor(fn(a._h, b._h))
+        out._nhwc = a._nhwc and len(_shape_of(out._h)) == 4
+        return out
 
     def __gt__(self, o): return self._cmp(o, _tf.greater)
     def __ge__(self, o): return self._cmp(o, _tf.greaterEqual)
@@ -317,31 +346,64 @@ class Tensor:
     # ---- 축약
 
     def sum(self, dim=None, keepdim=False):
-        shape = self.shape
-        handle = (_tf.sum(self._h) if dim is None
-                  else _tf.sum(self._h, dim, keepdim))
+        # 축을 지정하지 않으면 레이아웃과 무관하다 — 그때는 되돌릴 이유가 없다.
+        t = self if dim is None else _canonical(self)
+        handle = _tf.sum(t._h) if dim is None else _tf.sum(t._h, dim, keepdim)
 
         def back(g):
-            return (_tf.mul(_tf.onesLike(self._h), _reshape_for_broadcast(g, shape, dim, keepdim)),)
+            return (_tf.mul(_tf.onesLike(t._h),
+                            _reshape_for_broadcast(g, t.shape, dim, keepdim)),)
 
-        return self._make(handle, (self,), back,
-                          "SumBackward0" if dim is None else "SumBackward1")
+        return t._make(handle, (t,), back,
+                       "SumBackward0" if dim is None else "SumBackward1")
 
     def mean(self, dim=None, keepdim=False):
-        shape = self.shape
-        n = self.numel() if dim is None else shape[dim]
-        handle = (_tf.mean(self._h) if dim is None
-                  else _tf.mean(self._h, dim, keepdim))
+        t = self if dim is None else _canonical(self)
+        n = t.numel() if dim is None else t.shape[dim]
+        handle = _tf.mean(t._h) if dim is None else _tf.mean(t._h, dim, keepdim)
 
         def back(g):
-            spread = _reshape_for_broadcast(g, shape, dim, keepdim)
-            return (_tf.div(_tf.mul(_tf.onesLike(self._h), spread), float(n)),)
+            spread = _reshape_for_broadcast(g, t.shape, dim, keepdim)
+            return (_tf.div(_tf.mul(_tf.onesLike(t._h), spread), float(n)),)
 
-        return self._make(handle, (self,), back,
-                          "MeanBackward0" if dim is None else "MeanBackward1")
+        return t._make(handle, (t,), back,
+                       "MeanBackward0" if dim is None else "MeanBackward1")
 
 
 # ---------------------------------------------------------------- 도우미
+
+def _relayout(t, to_nhwc):
+    """레이아웃을 바꾼다. **그래프 안에서** 하므로 역전파가 그냥 따라온다."""
+    if t._nhwc == to_nhwc or len(_shape_of(t._h)) != 4:
+        return t
+    perm = _NCHW_TO_NHWC if to_nhwc else _NHWC_TO_NCHW
+    inv = _NHWC_TO_NCHW if to_nhwc else _NCHW_TO_NHWC
+    out = t._make(_tf.transpose(t._h, _to_js(perm)), (t,),
+                  lambda g: (_tf.transpose(g, _to_js(inv)),), "LayoutBackward0")
+    out._nhwc = to_nhwc
+    return out
+
+
+def _canonical(t):
+    """torch 순서(NCHW)로 되돌린다. 레이아웃을 모르는 연산은 전부 이것을 먼저 부른다 —
+    느릴 수는 있어도 **틀리지는 않는다.**"""
+    return _relayout(_wrap(t), False)
+
+
+def _align(a, b):
+    """이항 연산의 두 짝을 같은 레이아웃으로.
+
+    4차원끼리면 한쪽을 맞추고, 짝이 4차원이 아니면 **안전한 쪽(NCHW)으로 되돌린다** —
+    1차원 편향 같은 것은 마지막 축에 붙는데, 그 축이 레이아웃마다 다르기 때문이다.
+    스칼라는 어느 쪽이든 같아서 그냥 둔다.
+    """
+    ra, rb = len(_shape_of(a._h)), len(_shape_of(b._h))
+    if ra == 4 and rb == 4:
+        return a, (_relayout(b, a._nhwc) if a._nhwc != b._nhwc else b)
+    if rb == 0 or ra == 0:
+        return a, b
+    return _relayout(a, False), _relayout(b, False)
+
 
 def _wrap(x):
     if isinstance(x, Tensor):
@@ -375,7 +437,9 @@ def _unbroadcast(g, shape):
 
 def tensor(data, dtype=None, requires_grad=False):
     if isinstance(data, Tensor):
-        return Tensor(_tf.clone(data._h), requires_grad)     # 손잡이를 나눠 갖지 않는다
+        out = Tensor(_tf.clone(data._h), requires_grad)      # 손잡이를 나눠 갖지 않는다
+        out._nhwc = data._nhwc
+        return out
     return Tensor(_to_tf(_np.asarray(data)), requires_grad)
 
 
@@ -405,7 +469,7 @@ def randn(*shape, requires_grad=False):
 
 def _unary(name, forward, derivative=None):
     def fn(t):
-        t = _wrap(t)
+        t = _canonical(t)
         out = forward(t._h)
         if derivative is None:
             return Tensor(out)
@@ -452,13 +516,13 @@ def neg(t):
 
 
 def prod(t, dim=None):
-    t = _wrap(t)
+    t = _canonical(t)
     out = _tf.prod(t._h) if dim is None else _tf.prod(t._h, dim)
     return Tensor(out)
 
 
 def count_nonzero(t, dim=None):
-    t = _wrap(t)
+    t = _canonical(t)
     nz = _tf.cast(_tf.notEqual(t._h, 0.0), "float32")
     return Tensor(_tf.sum(nz) if dim is None else _tf.sum(nz, dim))
 
@@ -474,7 +538,7 @@ def mm(a, b):
 # ---------------------------------------------------------------- 비교·클램프
 
 def maximum(a, b):
-    a, b = _wrap(a), _wrap(b)
+    a, b = _align(_wrap(a), _wrap(b))
     pick = _tf.cast(_tf.greaterEqual(a._h, b._h), "float32")
     return a._make(_tf.maximum(a._h, b._h), (a, b),
                    lambda g: (_tf.mul(g, pick), _tf.mul(g, _tf.sub(1.0, pick))),
@@ -482,7 +546,7 @@ def maximum(a, b):
 
 
 def minimum(a, b):
-    a, b = _wrap(a), _wrap(b)
+    a, b = _align(_wrap(a), _wrap(b))
     pick = _tf.cast(_tf.lessEqual(a._h, b._h), "float32")
     return a._make(_tf.minimum(a._h, b._h), (a, b),
                    lambda g: (_tf.mul(g, pick), _tf.mul(g, _tf.sub(1.0, pick))),
@@ -490,7 +554,7 @@ def minimum(a, b):
 
 
 def clamp(t, min=None, max=None):
-    t = _wrap(t)
+    t = _canonical(t)
     lo = -1e30 if min is None else float(min)
     hi = 1e30 if max is None else float(max)
     inside = _tf.cast(_tf.logicalAnd(_tf.greaterEqual(t._h, lo), _tf.lessEqual(t._h, hi)), "float32")
@@ -510,7 +574,7 @@ def outer(a, b):
 
 
 def reshape(t, shape):
-    t = _wrap(t)
+    t = _canonical(t)
     old = t.shape
     return t._make(_tf.reshape(t._h, _to_js(list(shape))), (t,),
                    lambda g: (_tf.reshape(g, _to_js(list(old))),), "ViewBackward0")
@@ -519,27 +583,27 @@ def reshape(t, shape):
 def diag(t):
     """torch 의 `diag` 는 **행렬에서 대각을 뽑는다.** TF.js 의 `diag` 는 반대로
     벡터에서 행렬을 만든다 — 이름이 같고 뜻이 반대라, 그대로 부르면 조용히 다른 값이 나온다."""
-    t = _wrap(t)
+    t = _canonical(t)
     n = t.shape[0]
     eye = _tf.eye(n)
     return Tensor(_tf.sum(_tf.mul(t._h, eye), 1))
 
 
 def trace(t):
-    t = _wrap(t)
+    t = _canonical(t)
     n = t.shape[0]
     return Tensor(_tf.sum(_tf.mul(t._h, _tf.eye(n))))
 
 
 def norm(t, p=2, dim=None):
-    t = _wrap(t)
+    t = _canonical(t)
     if p == 1:
         return abs(t).sum(dim=dim)
     return (t * t).sum(dim=dim) ** 0.5
 
 
 def cumsum(t, dim):
-    t = _wrap(t)
+    t = _canonical(t)
     return t._make(_tf.cumsum(t._h, dim), (t,),
                    lambda g: (_tf.reverse(_tf.cumsum(_tf.reverse(g, dim), dim), dim),),
                    "CumsumBackward0")
@@ -567,14 +631,14 @@ class _ValuesIndices:
 
 
 def topk(t, k, dim=-1, largest=True):
-    t = _wrap(t)
+    t = _canonical(t)
     out = _tf.topk(t._h, k)
     return _ValuesIndices(Tensor(out.values), Tensor(_tf.cast(out.indices, "float32")))
 
 
 def sort(t, dim=-1, descending=False):
     """TF.js 에는 정렬이 없다. `topk` 로 전부 뽑으면 내림차순이므로, 오름차순은 뒤집는다."""
-    t = _wrap(t)
+    t = _canonical(t)
     n = t.shape[dim]
     out = _tf.topk(t._h, n)
     values, idx = out.values, out.indices
@@ -596,14 +660,14 @@ def unique(t, sorted=True, return_counts=False):
 def masked_select(t, mask):
     """골라낸 개수가 값에 따라 달라진다. TF.js 의 `booleanMask` 는 **비동기**라
     동기 API 를 지키려면 쓸 수 없다. unique 와 같은 이유로 읽어와서 처리한다."""
-    t = _wrap(t)
+    t = _canonical(t)
     m = mask.numpy() if isinstance(mask, Tensor) else _np.asarray(mask)
     return Tensor(_to_tf(t.numpy()[m.astype(bool)]))
 
 
 def median(t, dim=None):
     """torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다."""
-    t = _wrap(t)
+    t = _canonical(t)
     if dim is None:
         n = t.numel()
         flat = _tf.reshape(t._h, _to_js([n]))
@@ -618,7 +682,7 @@ def median(t, dim=None):
 
 
 def flip(t, dims):
-    t = _wrap(t)
+    t = _canonical(t)
     dims = [dims] if isinstance(dims, int) else list(dims)
     return t._make(_tf.reverse(t._h, _to_js(dims)), (t,),
                    lambda g: (_tf.reverse(g, _to_js(dims)),), "FlipBackward0")
@@ -626,7 +690,7 @@ def flip(t, dims):
 
 def roll(t, shifts, dims=None):
     """TF.js 에 `roll` 이 없다. 잘라서 순서를 바꿔 붙인다."""
-    t = _wrap(t)
+    t = _canonical(t)
     axis = 0 if dims is None else (dims if isinstance(dims, int) else dims[0])
     n = t.shape[axis]
     s = int(shifts) % n
@@ -646,13 +710,13 @@ def _slice_along(handle, axis, start, length):
 
 
 def narrow(t, dim, start, length):
-    t = _wrap(t)
+    t = _canonical(t)
     return t._make(_slice_along(t._h, dim, start, length), (t,),
                    lambda g: _unsupported("narrow 의 역전파"), "SliceBackward0")
 
 
 def split(t, size, dim=0):
-    t = _wrap(t)
+    t = _canonical(t)
     n = t.shape[dim]
     sizes = size if isinstance(size, (list, tuple)) else \
         [size] * (n // size) + ([n % size] if n % size else [])
@@ -664,13 +728,13 @@ def split(t, size, dim=0):
 
 
 def chunk(t, chunks, dim=0):
-    t = _wrap(t)
+    t = _canonical(t)
     n = t.shape[dim]
     return split(t, -(-n // chunks), dim)
 
 
 def unbind(t, dim=0):
-    t = _wrap(t)
+    t = _canonical(t)
     return tuple(Tensor(h) for h in _tf.unstack(t._h, dim))
 
 
@@ -682,7 +746,7 @@ def gather(t, dim, index):
     뽑기만 하고 그래프를 끊으면 뽑은 자리로 기울기가 안 가고, 분류 손실이 통째로
     미분 불가가 된다(실제로 그랬다).
     """
-    t = _wrap(t)
+    t = _canonical(t)
     if t.ndim != 2 or dim != 1:
         _unsupported("gather(2차원 · dim=1 이 아닌 것)")
     rows, cols = t.shape
@@ -705,14 +769,14 @@ def _to_int32(index):
 
 
 def index_select(t, dim, index):
-    t = _wrap(t)
+    t = _canonical(t)
     return Tensor(_tf.gather(t._h, _tf.reshape(_to_int32(index), _to_js([-1])), dim))
 
 
 # ---------------------------------------------------------------- nn.functional
 
 def softmax(t, dim=-1):
-    t = _wrap(t)
+    t = _canonical(t)
     out = _tf.softmax(t._h, dim)
 
     def back(g):
@@ -723,7 +787,7 @@ def softmax(t, dim=-1):
 
 
 def log_softmax(t, dim=-1):
-    t = _wrap(t)
+    t = _canonical(t)
     out = _tf.logSoftmax(t._h, dim)
     soft = _tf.exp(out)
 
@@ -734,7 +798,7 @@ def log_softmax(t, dim=-1):
 
 
 def leaky_relu(t, negative_slope=0.01):
-    t = _wrap(t)
+    t = _canonical(t)
     pick = _tf.cast(_tf.greater(t._h, 0.0), "float32")
     return t._make(
         _tf.leakyRelu(t._h, float(negative_slope)), (t,),
@@ -743,7 +807,7 @@ def leaky_relu(t, negative_slope=0.01):
 
 
 def elu(t, alpha=1.0):
-    t = _wrap(t)
+    t = _canonical(t)
     out = _tf.elu(t._h)
     pick = _tf.cast(_tf.greater(t._h, 0.0), "float32")
     return t._make(
@@ -755,7 +819,7 @@ def elu(t, alpha=1.0):
 
 def silu(t):
     """x·σ(x). Swish 라고도 한다."""
-    t = _wrap(t)
+    t = _canonical(t)
     sig = _tf.sigmoid(t._h)
     return t._make(
         _tf.mul(t._h, sig), (t,),
@@ -769,7 +833,7 @@ _SQRT2PI = float(_np.sqrt(2.0 * _np.pi))
 
 def gelu(t):
     """torch 의 기본 gelu(정확형) — 0.5·x·(1 + erf(x/√2)). TF.js 에 erf 가 있다."""
-    t = _wrap(t)
+    t = _canonical(t)
     ope = _tf.add(1.0, _tf.erf(_tf.div(t._h, _SQRT2)))
 
     def back(g):
@@ -780,14 +844,14 @@ def gelu(t):
 
 
 def one_hot(t, num_classes=-1):
-    t = _wrap(t)
+    t = _canonical(t)
     depth = int(t.numpy().max()) + 1 if num_classes == -1 else int(num_classes)
     return Tensor(_tf.oneHot(_to_int32(t), depth))
 
 
 def pad(x, padding, value=0.0):
     """마지막 차원부터 (앞, 뒤) 순으로 받는다 — torch 의 규칙이다."""
-    x = _wrap(x)
+    x = _canonical(x)
     pairs = [[0, 0] for _ in range(x.ndim)]
     for i in range(0, len(padding), 2):
         pairs[-(i // 2 + 1)] = [int(padding[i]), int(padding[i + 1])]
@@ -795,13 +859,13 @@ def pad(x, padding, value=0.0):
 
 
 def normalize(x, p=2, dim=1, eps=1e-12):
-    x = _wrap(x)
+    x = _canonical(x)
     denom = norm(x, p=p, dim=dim)
     return x / maximum(unsqueeze(denom, dim), _wrap(eps))
 
 
 def unsqueeze(t, dim):
-    t = _wrap(t)
+    t = _canonical(t)
     old = t.shape
     return t._make(_tf.expandDims(t._h, dim), (t,),
                    lambda g: (_tf.reshape(g, _to_js(list(old))),), "UnsqueezeBackward0")
@@ -893,13 +957,18 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     if KH != KW:
         _unsupported("정사각형이 아닌 커널")
 
-    xh = _to_nhwc(x._h)
+    # **들어올 때 한 번만 바꾼다.** 이미 NHWC 면 그냥 지나가고, 결과도 NHWC 로 나가서
+    # 다음 conv·BN·활성까지 전치 없이 이어진다.
+    xin = _relayout(x, True)
+    xh = xin._h
     wh = _tf.transpose(weight._h, _to_js([2, 3, 1, 0]))          # (F,C,KH,KW) → (KH,KW,C,F)
     out = _tf.conv2d(xh, wh, stride, padding)
+    if bias is not None:
+        # NHWC 는 마지막 축이 채널이라 1차원 편향이 그대로 붙는다. 모양을 만들 필요가 없다.
+        out = _tf.add(out, _wrap(bias)._h)
     extra = (H + 2 * padding - KH) % stride
 
-    def back(g):
-        gd = _to_nhwc(g)
+    def back(gd):                                                # gd 는 NHWC 로 온다
         if stride > 1:
             gd = _dilate(gd, stride, extra)
 
@@ -915,14 +984,11 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
         dw = _tf.transpose(_tf.conv2d(xt, gt, 1, "valid"), _to_js([3, 0, 1, 2]))
 
         if bias is None:
-            return (_to_nchw(dx), dw)
-        return (_to_nchw(dx), dw, _tf.sum(g, _to_js([0, 2, 3])))
+            return (dx, dw)
+        return (dx, dw, _tf.sum(gd, _to_js([0, 1, 2])))
 
-    parents = (x, weight) if bias is None else (x, weight, _wrap(bias))
-    result = _to_nchw(out)
-    if bias is not None:
-        result = _tf.add(result, _tf.reshape(_wrap(bias)._h, _to_js([1, F, 1, 1])))
-    return x._make(result, parents, back, "ConvolutionBackward0")
+    parents = (xin, weight) if bias is None else (xin, weight, _wrap(bias))
+    return xin._make(out, parents, back, "ConvolutionBackward0")
 
 
 def max_pool2d(x, kernel_size, stride=None):
@@ -931,9 +997,9 @@ def max_pool2d(x, kernel_size, stride=None):
     conv 와 달리 풀링은 전체 계산에서 차지하는 몫이 작고, 최댓값이 **어느 자리에**
     있었는지를 우리가 다시 만들면 동점일 때 torch 와 갈린다. 정확한 쪽을 고른다.
     """
-    x = _wrap(x)
+    xin = _relayout(_wrap(x), True)
     stride = stride or kernel_size
-    xh = _to_nhwc(x._h)
+    xh = xin._h
     ksize, strides = _to_js([kernel_size, kernel_size]), _to_js([stride, stride])
     out = _tf.maxPool(xh, ksize, strides, "valid")
 
@@ -942,11 +1008,48 @@ def max_pool2d(x, kernel_size, stride=None):
         # 호출이 끝나는 순간 파괴되는데, tf.grad 는 **나중에** 부른다.
         fn = _create_proxy(lambda t: _tf.maxPool(t, ksize, strides, "valid"))
         try:
-            return (_to_nchw(_tf.grad(fn)(xh, _to_nhwc(g))),)
+            return (_tf.grad(fn)(xh, g),)
         finally:
             fn.destroy()
 
-    return x._make(_to_nchw(out), (x,), back, "MaxPool2DBackward0")
+    return xin._make(out, (xin,), back, "MaxPool2DBackward0")
+
+
+def batch_norm(x, weight, bias, eps=1e-5):
+    """학습 모드 배치 정규화 — **역전파를 손으로 썼다.**
+
+    우리 연산으로 조립하면 레이아웃마다 축이 달라져 다루기 까다롭고 커널도 는다.
+    식은 알려진 그대로다.
+
+        x̂ = (x-μ)/√(σ²+ε),   y = γ·x̂ + β
+        dx = γ/(m√(σ²+ε)) · (m·dy − Σdy − x̂·Σ(dy·x̂))
+
+    (μ, σ², 결과)를 돌려준다 — running 통계는 부르는 쪽이 갱신한다. torch 가 정규화에는
+    편향 분산을, running_var 에는 비편향을 쓰는 것도 거기서 처리한다.
+    """
+    x, weight, bias = _wrap(x), _wrap(weight), _wrap(bias)
+    raw = _shape_of(x._h)
+    axes = _to_js([0, 1, 2] if x._nhwc else [0, 2, 3])
+    m = float(raw[0] * (raw[1] * raw[2] if x._nhwc else raw[2] * raw[3]))
+    bshape = _to_js([1, 1, 1, raw[3]] if x._nhwc else [1, raw[1], 1, 1])
+
+    mu = _tf.mean(x._h, axes, True)
+    centered = _tf.sub(x._h, mu)
+    var = _tf.mean(_tf.square(centered), axes, True)
+    inv = _tf.rsqrt(_tf.add(var, float(eps)))
+    xhat = _tf.mul(centered, inv)
+    gamma = _tf.reshape(weight._h, bshape)
+    out = _tf.add(_tf.mul(xhat, gamma), _tf.reshape(bias._h, bshape))
+
+    def back(g):
+        dxhat = _tf.mul(g, gamma)
+        s1 = _tf.sum(dxhat, axes, True)
+        s2 = _tf.sum(_tf.mul(dxhat, xhat), axes, True)
+        dx = _tf.mul(_tf.div(inv, m),
+                     _tf.sub(_tf.sub(_tf.mul(m, dxhat), s1), _tf.mul(xhat, s2)))
+        return (dx, _tf.sum(_tf.mul(g, xhat), axes), _tf.sum(g, axes))
+
+    return x._make(out, (x, weight, bias), back, "NativeBatchNormBackward0"), mu, var
 
 
 def adaptive_avg_pool2d(x, output_size=1):
@@ -956,19 +1059,30 @@ def adaptive_avg_pool2d(x, output_size=1):
     """
     if output_size not in (1, (1, 1)):
         _unsupported("adaptive_avg_pool2d(출력 크기가 1 이 아닌 것)")
-    x = _wrap(x)
-    n, c = x.shape[0], x.shape[1]
-    return x.mean(dim=2).mean(dim=2).reshape(n, c, 1, 1)
+    xin = _relayout(_wrap(x), True)
+    _, h, w, _ = _shape_of(xin._h)
+    out = _tf.mean(xin._h, _to_js([1, 2]), True)                 # (N,1,1,C)
+
+    def back(g):
+        return (_tf.div(_tf.mul(_tf.onesLike(xin._h), g), float(h * w)),)
+
+    return xin._make(out, (xin,), back, "MeanBackward1")
 
 
 def avg_pool2d(x, kernel_size, stride=None):
-    """torch 는 NCHW, TF.js 는 NHWC 다. 축을 바꿔 넣고 되돌린다."""
-    x = _wrap(x)
+    xin = _relayout(_wrap(x), True)
     stride = stride or kernel_size
-    nhwc = _tf.transpose(x._h, _to_js([0, 2, 3, 1]))
-    pooled = _tf.avgPool(nhwc, _to_js([kernel_size, kernel_size]),
-                         _to_js([stride, stride]), "valid")
-    return Tensor(_tf.transpose(pooled, _to_js([0, 3, 1, 2])))
+    ksize, strides = _to_js([kernel_size, kernel_size]), _to_js([stride, stride])
+    out = _tf.avgPool(xin._h, ksize, strides, "valid")
+
+    def back(g):
+        fn = _create_proxy(lambda t: _tf.avgPool(t, ksize, strides, "valid"))
+        try:
+            return (_tf.grad(fn)(xin._h, g),)
+        finally:
+            fn.destroy()
+
+    return xin._make(out, (xin,), back, "AvgPool2DBackward0")
 
 
 class _Functional:
@@ -1213,27 +1327,37 @@ class BatchNorm2d(Module):
         self.num_features, self.eps, self.momentum = num_features, eps, momentum
         self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
         self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
-        self.running_mean = _np.zeros(num_features, dtype=_np.float32)
-        self.running_var = _np.ones(num_features, dtype=_np.float32)
+        # running 통계는 **GPU 에 둔다.** 스텝마다 읽어오면 층마다 동기화가 한 번씩
+        # 걸리고, ResNet-18 은 그런 층이 20개다.
+        self._stats = {"mean": _keep(_tf.zeros(_to_js([num_features]))),
+                       "var": _keep(_tf.ones(_to_js([num_features])))}
 
     def forward(self, x):
-        shape = (1, -1, 1, 1)
+        x = _canonical(x)
         if self.training:
-            mean = x.mean(dim=0).mean(dim=1).mean(dim=1)              # (C,)
-            centered = x - mean.reshape(shape)
-            var = (centered * centered).mean(dim=0).mean(dim=1).mean(dim=1)
-            with no_grad():
-                n = x.shape[0] * x.shape[2] * x.shape[3]
-                unbiased = var.numpy() * (n / (n - 1))
-                self.running_mean = ((1 - self.momentum) * self.running_mean
-                                     + self.momentum * mean.numpy())
-                self.running_var = ((1 - self.momentum) * self.running_var
-                                    + self.momentum * unbiased)
-            normed = centered / (var.reshape(shape) + self.eps) ** 0.5
-        else:
-            normed = ((x - tensor(self.running_mean.reshape(1, -1, 1, 1)))
-                      / tensor(_np.sqrt(self.running_var + self.eps).reshape(1, -1, 1, 1)))
-        return normed * self.weight.reshape(shape) + self.bias.reshape(shape)
+            out, mu, var = batch_norm(x, self.weight, self.bias, self.eps)
+            raw = _shape_of(x._h)
+            n = raw[0] * (raw[1] * raw[2] if x._nhwc else raw[2] * raw[3])
+            flat = _to_js([self.num_features])
+            keep = 1.0 - self.momentum
+            _replace(self._stats, "mean",
+                     _keep(_tf.add(_tf.mul(keep, self._stats["mean"]),
+                                   _tf.mul(self.momentum, _tf.reshape(mu, flat)))))
+            # torch 는 running_var 에만 **비편향** 분산을 쓴다. 둘 다 편향으로 두면 2.6% 어긋난다.
+            _replace(self._stats, "var",
+                     _keep(_tf.add(_tf.mul(keep, self._stats["var"]),
+                                   _tf.mul(self.momentum * n / (n - 1), _tf.reshape(var, flat)))))
+            return out
+
+        bshape = [1, 1, 1, self.num_features] if x._nhwc else [1, self.num_features, 1, 1]
+        mean_t = Tensor(_tf.reshape(self._stats["mean"], _to_js(bshape)))
+        inv_t = Tensor(_tf.reshape(
+            _tf.rsqrt(_tf.add(self._stats["var"], float(self.eps))), _to_js(bshape)))
+        mean_t._nhwc = inv_t._nhwc = x._nhwc          # 이미 속 순서로 만들었다
+        w = Tensor(_tf.reshape(self.weight._h, _to_js(bshape)))
+        b = Tensor(_tf.reshape(self.bias._h, _to_js(bshape)))
+        w._nhwc = b._nhwc = x._nhwc
+        return (x - mean_t) * inv_t * w + b
 
 
 class MSELoss(Module):
@@ -1551,6 +1675,24 @@ async def fetch_cached(url, name=None):
     data = _u8_to_np(_js.Uint8Array.new(await response.arrayBuffer()))
     await _opfs_write(key, data)
     return data
+
+
+async def cache_put(name, data):
+    """받아온 바이트를 캐시에 직접 넣는다.
+
+    **CIFAR-10 원본(`cs.toronto.edu`)은 CORS 헤더를 주지 않는다**(실측: 브라우저가
+    차단한다). 그래서 `fetch_cached` 로는 못 받는다. 사용자가 파일을 골라 넣거나
+    CORS 를 주는 미러에서 받은 바이트를 여기로 넣으면 그다음은 같다.
+    """
+    await _opfs_write(name, _np.asarray(data, dtype=_np.uint8))
+
+
+async def cache_get(name):
+    """캐시에 있는 바이트. 없으면 None."""
+    try:
+        return await _opfs_read(name)
+    except Exception:                                                # noqa: BLE001
+        return None
 
 
 _CIFAR_RECORD = 1 + 3 * 32 * 32          # 라벨 1바이트 + 픽셀 3072바이트
