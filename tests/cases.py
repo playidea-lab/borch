@@ -1032,6 +1032,80 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+SHAPE_PREFIX = "shape::"
+
+
+def shape_cases(inp=None):
+    """모양 바꾸기의 나머지.
+
+    **메서드로 부른다.** `expand`·`repeat`·`ravel`·`select`·`unfold`·`expand_as` 는
+    torch 에 모듈 함수가 없고 메서드로만 있다 — 부르는 법이 하나뿐이라 그쪽으로 묻는다.
+    """
+    mat = np.arange(6, dtype=np.float32).reshape(2, 3)
+    square = np.arange(9, dtype=np.float32).reshape(3, 3)
+    line = np.arange(5, dtype=np.float32)
+    col = mat[:, :1].copy()
+    flat6 = np.arange(6, dtype=np.float32)
+    pair = np.array([1., 2.], dtype=np.float32)
+
+    calls = (
+        ("expand", lambda t: t.expand(2, 3), col),
+        ("expand(-1)", lambda t: t.expand(-1, 3), col),
+        ("expand(앞에 축 추가)", lambda t: t.expand(2, 2, 3), mat),
+        ("repeat", lambda t: t.repeat(2, 1), mat),
+        ("repeat(둘 다)", lambda t: t.repeat(2, 3), mat),
+        ("ravel", lambda t: t.ravel(), mat),
+        ("swapaxes", lambda t: t.swapaxes(0, 1), mat),
+        ("swapdims", lambda t: t.swapdims(0, 1), mat),
+        ("select", lambda t: t.select(0, 1), mat),
+        ("select(dim1)", lambda t: t.select(1, 2), mat),
+        ("diagonal", lambda t: t.diagonal(), square),
+        ("diagonal(위로 1)", lambda t: t.diagonal(offset=1), square),
+        ("diagonal(아래로 1)", lambda t: t.diagonal(offset=-1), square),
+        ("diagflat", lambda t: t.diagflat(), pair),
+        ("rot90", lambda t: t.rot90(1, (0, 1)), mat),
+        ("rot90(두 번)", lambda t: t.rot90(2, (0, 1)), mat),
+        ("unfold", lambda t: t.unfold(0, 3, 1), line),
+        ("unfold(걸음2)", lambda t: t.unfold(0, 2, 2), line),
+        ("unflatten", lambda t: t.unflatten(0, (2, 3)), flat6),
+        ("fliplr", lambda t: t.fliplr(), mat),
+        ("flipud", lambda t: t.flipud(), mat),
+    )
+    cases = [(SHAPE_PREFIX + name, lambda L, f=fn, a=arr: f(L.tensor(a)))
+             for name, fn, arr in calls]
+
+    # 나누는 것들 — 조각마다 이름을 붙인다. 하나만 보면 나머지가 안 걸린다.
+    for name, parts in (("hsplit", 3), ("vsplit", 2)):
+        for i in range(parts):
+            cases.append((SHAPE_PREFIX + f"{name}[{i}]",
+                          lambda L, n=name, p=parts, k=i: getattr(L.tensor(mat), n)(p)[k]))
+
+    cases.append((SHAPE_PREFIX + "atleast_2d",
+                  lambda L: L.atleast_2d(L.tensor(np.float32(1.)))))
+
+    # 기울기. **`expand` 와 `unfold` 가 여기서 갈린다** — expand 는 늘린 축을 도로
+    # 합치고, unfold 는 겹친 창만큼 쌓는다(실측: 길이 5 를 3·1 로 펴면 [1,2,3,2,1]).
+    grads = (
+        ("expand", lambda t: t.expand(2, 3), col),
+        ("repeat", lambda t: t.repeat(2, 1), mat),
+        ("diagonal", lambda t: t.diagonal(), square),
+        ("diagonal(위로 1)", lambda t: t.diagonal(offset=1), square),
+        ("diagflat", lambda t: t.diagflat(), pair),
+        ("rot90", lambda t: t.rot90(1, (0, 1)), mat),
+        ("unfold(겹침)", lambda t: t.unfold(0, 3, 1), line),
+        ("select", lambda t: t.select(0, 1), mat),
+        ("swapaxes", lambda t: t.swapaxes(0, 1), mat),
+    )
+    for name, fn, arr in grads:
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(x)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, n)
+        cases.append((SHAPE_PREFIX + f"grad::{name}", run))
+    return cases
+
+
 REDUCE_PREFIX = "reduce::"
 
 
@@ -1321,7 +1395,7 @@ def golden_cases(inp=None):
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
-            + reduce_cases(inp) + webgpu_cases(inp))
+            + reduce_cases(inp) + shape_cases(inp) + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

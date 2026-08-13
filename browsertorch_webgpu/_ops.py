@@ -1042,6 +1042,164 @@ def unbind(t, dim=0):
     return tuple(_slice_tensor(t, dim, i, 1).reshape(rest) for i in range(shape[dim]))
 
 
+# ---- 모양 바꾸기의 나머지
+#
+# 거의 전부 **이미 있는 연산으로 짠다** — `cat`·`stack`·자르기·`permute` 는 그래프를
+# 이미 이으므로 역방향을 새로 쓸 것이 없다. 새 미분식을 안 쓰는 것이 틀릴 여지가 작다.
+#
+# `expand` 와 `repeat` 은 이름이 비슷한데 하는 일이 다르다. `expand` 는 **크기 1 인
+# 축만** 늘리고, `repeat` 은 통째로 이어 붙인다.
+
+def expand(t, *sizes):
+    """크기 1 인 축을 늘린다. `-1` 은 "그대로 두라"는 뜻이다."""
+    t = _canonical(t)
+    want = sizes[0] if len(sizes) == 1 and isinstance(sizes[0], (list, tuple)) else sizes
+    src = tuple(t.shape)
+    lead = len(want) - len(src)
+    out = t.reshape(*((1,) * lead + src)) if lead else t
+    for i, size in enumerate(want):
+        have = 1 if i < lead else src[i - lead]
+        if size == -1 or int(size) == have:
+            continue
+        if have != 1:
+            raise RuntimeError(_like_torch(
+                f"크기 {have} 인 축은 {size} 로 늘릴 수 없습니다 — expand 는 크기 1 인 "
+                "축만 늘립니다.",
+                f"The expanded size of the tensor ({size}) must match the existing size "
+                f"({have}) at non-singleton dimension {i - lead}"))
+        # 크기 1 인 축을 잇는다 — `cat` 이 역방향에서 도로 잘라 합쳐 준다.
+        out = cat([out] * int(size), i)
+    return out
+
+
+def expand_as(t, other):
+    return expand(t, *tuple(_canonical(_wrap(other)).shape))
+
+
+def repeat(t, *reps):
+    """통째로 반복해 붙인다. **`tile` 과 같은 일이다** — torch 가 이름을 둘 둔 것뿐이다."""
+    want = reps[0] if len(reps) == 1 and isinstance(reps[0], (list, tuple)) else reps
+    return tile(t, tuple(int(r) for r in want))
+
+
+def ravel(t):
+    return _canonical(t).reshape(-1)
+
+
+def swapaxes(t, a, b):
+    t = _canonical(t)
+    order = list(range(t.ndim))
+    order[a % t.ndim], order[b % t.ndim] = order[b % t.ndim], order[a % t.ndim]
+    return t.permute(*order)
+
+
+swapdims = swapaxes
+
+
+def select(t, dim, index):
+    """축 하나에서 한 장을 뽑되 **그 축을 없앤다.**"""
+    t = _canonical(t)
+    axis = dim % t.ndim
+    rest = tuple(s for i, s in enumerate(t.shape) if i != axis)
+    return _slice_tensor(t, axis, index, 1).reshape(rest)
+
+
+def diagonal(t, offset=0, dim1=0, dim2=1):
+    """대각선을 뽑는다. **원-핫 마스크를 곱해 접는다** — 그래야 역전파가 따라온다."""
+    t = _canonical(t)
+    if t.ndim != 2:
+        _unsupported("diagonal(2차원이 아닌 것)")
+    rows, cols = t.shape
+    if dim1 != 0 or dim2 != 1:
+        _unsupported("diagonal(dim1=0, dim2=1 이 아닌 것)")
+    start_r, start_c = max(0, -offset), max(0, offset)
+    count = min(rows - start_r, cols - start_c)
+    # 자리마다 원-핫 판을 만들어 한 번에 곱하고 접는다 — 자리마다 따로 접으면
+    # 대각선 길이만큼 커널을 부르게 된다.
+    spread = _np.zeros((count, rows, cols), dtype=_np.float32)
+    spread[_np.arange(count), start_r + _np.arange(count), start_c + _np.arange(count)] = 1.0
+    return (Tensor(_to_tf(spread)) * t.reshape(1, rows, cols)).sum(dim=2).sum(dim=1)
+
+
+def diagflat(t, offset=0):
+    """평평하게 편 뒤 대각행렬로 만든다."""
+    t = _canonical(t)
+    flat = t.reshape(-1)
+    k = flat.shape[0]
+    n = k + (offset if offset >= 0 else -offset)
+    rows = _np.arange(k) + max(0, -offset)
+    cols = _np.arange(k) + max(0, offset)
+    # 자리마다 원-핫 판을 만들어 곱해 더한다 — 곱셈과 합은 이미 그래프를 잇는다.
+    spread = _np.zeros((k, n, n), dtype=_np.float32)
+    spread[_np.arange(k), rows, cols] = 1.0
+    return (flat.reshape(k, 1, 1) * Tensor(_to_tf(spread))).sum(dim=0)
+
+
+def rot90(t, k=1, dims=(0, 1)):
+    """90도씩 돌린다. 뒤집기와 축 바꾸기로 짠다."""
+    t = _canonical(t)
+    a, b = int(dims[0]) % t.ndim, int(dims[1]) % t.ndim
+    out = t
+    for _ in range(k % 4):
+        out = flip(swapaxes(out, a, b), (a,))
+    return out
+
+
+def unfold(t, dim, size, step):
+    """미끄러지는 창을 새 축으로 만든다. 창이 겹치면 역방향에서 기울기가 쌓인다 —
+    `stack` 이 그것을 알아서 해준다."""
+    t = _canonical(t)
+    axis = dim % t.ndim
+    count = (t.shape[axis] - size) // step + 1
+    pieces = [_slice_tensor(t, axis, i * step, size) for i in range(count)]
+    moved = [p.permute(*([j for j in range(t.ndim) if j != axis] + [axis]))
+             if axis != t.ndim - 1 else p for p in pieces]
+    return stack(moved, axis)
+
+
+def hsplit(t, parts):
+    t = _canonical(t)
+    return chunk(t, parts, dim=0 if t.ndim == 1 else 1)
+
+
+def vsplit(t, parts):
+    return chunk(_canonical(t), parts, dim=0)
+
+
+def dsplit(t, parts):
+    return chunk(_canonical(t), parts, dim=2)
+
+
+def fliplr(t):
+    return flip(_canonical(t), (1,))
+
+
+def flipud(t):
+    return flip(_canonical(t), (0,))
+
+
+def unflatten(t, dim, sizes):
+    t = _canonical(t)
+    shape = list(t.shape)
+    shape[dim:dim + 1] = list(sizes)
+    return t.reshape(*shape)
+
+
+def atleast_1d(t):
+    t = _canonical(t)
+    return t if t.ndim >= 1 else t.reshape(1)
+
+
+def atleast_2d(t):
+    t = atleast_1d(t)
+    return t if t.ndim >= 2 else t.reshape(1, t.shape[0])
+
+
+def atleast_3d(t):
+    t = atleast_2d(t)
+    return t if t.ndim >= 3 else t.reshape(*(tuple(t.shape) + (1,)))
+
+
 def gather(t, dim, index):
     """torch 의 `gather` — 원소마다 자리를 고른다. TF.js 의 `gather` 는 축을 통째로
     뽑는 다른 연산이라 그대로 못 쓴다.

@@ -1,11 +1,12 @@
 """browsertorch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
 
+import builtins as _builtins
 import math as _math
 
 import numpy as _np
 
 from ._tensor import (
-    Tensor, _MinMax, _grad_mode,
+    Tensor, _MinMax, _grad_mode, _unbroadcast,
 )
 from ._base import (
     _DEFAULT_DTYPE, _math, _np, _resolve, _unsupported, dtype,
@@ -566,6 +567,201 @@ def roll(t, shifts, dims=None):
     t = _wrap(t)
     return t._make(_np.roll(t.data, shifts, dims), (t,),
                    lambda g: (_np.roll(_np.asarray(g), _negate(shifts), dims),), "RollBackward0")
+
+
+# ---- 모양 바꾸기의 나머지
+#
+# **이 파일에서는 `abs`·`round`·`pow` 가 파이썬 것이 아니다.** 위에서 같은 이름의 텐서
+# 함수를 정의했기 때문이다. 정수에 쓰면 `'int' object has no attribute 'abs'` 로
+# 멈춘다 — 실제로 `diagflat` 에서 그렇게 멈췄다. 그래서 정수용 별칭을 따로 둔다.
+_abs = _builtins.abs
+#
+# `expand` 와 `repeat` 은 이름이 비슷한데 하는 일이 다르다 — 헷갈리면 조용히 다른 모양이
+# 나온다. `expand` 는 **크기 1 인 축만** 늘리고 값을 복제하지 않는다(torch 에서는 뷰다).
+# `repeat` 은 통째로 이어 붙인다. 기울기도 그만큼 다르다: expand 는 늘린 축을 도로 합치고,
+# repeat 은 반복된 조각을 겹쳐 더한다.
+
+def expand(t, *sizes):
+    """크기 1 인 축을 늘린다. `-1` 은 "그대로 두라"는 뜻이다.
+
+    torch 에서는 저장소를 공유하는 뷰지만 우리는 복제한다 — 뷰 공유는 코어의 명시적
+    한계이고, 여기서만 흉내 내면 그 한계가 자리마다 달라진다.
+    """
+    t = _wrap(t)
+    want = sizes[0] if len(sizes) == 1 and isinstance(sizes[0], (list, tuple)) else sizes
+    src = t.data.shape
+    lead = len(want) - len(src)
+    target = []
+    for i, size in enumerate(want):
+        if i < lead:
+            target.append(int(size))
+            continue
+        have = src[i - lead]
+        if size == -1:
+            target.append(have)
+        elif have != 1 and int(size) != have:
+            raise RuntimeError(_like_torch(
+                f"크기 {have} 인 축은 {size} 로 늘릴 수 없습니다 — expand 는 크기 1 인 "
+                "축만 늘립니다.",
+                f"The expanded size of the tensor ({size}) must match the existing size "
+                f"({have}) at non-singleton dimension {i - lead}"))
+        else:
+            target.append(int(size))
+    target = tuple(target)
+    lifted = t.data.reshape((1,) * lead + src)
+    out = _np.broadcast_to(lifted, target)
+
+    def back(g):
+        return (_unbroadcast(_np.asarray(g), src),)
+
+    return t._make(_np.ascontiguousarray(out), (t,), back, "ExpandBackward0")
+
+
+def expand_as(t, other):
+    return expand(t, *_wrap(other).data.shape)
+
+
+def repeat(t, *reps):
+    """통째로 반복해 붙인다. **`tile` 과 같은 일이다** — torch 가 이름을 둘 둔 것뿐이라
+    한쪽을 다시 쓰지 않는다."""
+    want = reps[0] if len(reps) == 1 and isinstance(reps[0], (list, tuple)) else reps
+    return tile(t, tuple(int(r) for r in want))
+
+
+def ravel(t):
+    return _wrap(t).reshape(-1)
+
+
+def swapaxes(t, a, b):
+    """두 축을 맞바꾼다. `transpose` 와 같고, torch 가 numpy 를 따라 이름을 하나 더 둔 것이다."""
+    t = _wrap(t)
+    order = list(range(t.data.ndim))
+    order[a], order[b] = order[b % t.data.ndim], order[a % t.data.ndim]
+    return t.permute(*order)
+
+
+swapdims = swapaxes
+
+
+def select(t, dim, index):
+    """축 하나에서 한 장을 뽑되 **그 축을 없앤다.** 자르기와 달리 랭크가 하나 준다."""
+    t = _wrap(t)
+    return t[_slice_at(dim % t.data.ndim, index, index + 1)].squeeze(dim)
+
+
+def diagonal(t, offset=0, dim1=0, dim2=1):
+    """대각선을 뽑는다. `offset` 은 위·아래로 몇 칸 옮긴 대각선인지다.
+
+    역방향은 뽑은 자리에만 돌려놓는 것이다 — numpy 의 `diagonal` 은 읽기 전용 뷰를
+    주므로 거기에 쓰지 않고 빈 판을 만들어 채운다.
+    """
+    t = _wrap(t)
+    out = _np.diagonal(t.data, offset=offset, axis1=dim1, axis2=dim2)
+
+    def back(g):
+        # numpy 의 `diagonal` 은 **읽기 전용 뷰**라 거기에 쓸 수 없다. 빈 판을 만들고
+        # 좌표를 직접 계산해 넣는다.
+        z = _np.zeros_like(t.data)
+        n = out.shape[-1]
+        rows = _np.arange(n) + max(0, -offset)
+        cols = _np.arange(n) + max(0, offset)
+        idx = [slice(None)] * z.ndim
+        idx[dim1], idx[dim2] = rows, cols
+        z[tuple(idx)] = _np.moveaxis(_np.asarray(g), -1, 0)
+        return (z,)
+
+    return t._make(_np.ascontiguousarray(out), (t,), back, "DiagonalBackward0")
+
+
+def diagflat(t, offset=0):
+    """평평하게 편 뒤 대각행렬로 만든다."""
+    t = _wrap(t)
+    flat = t.reshape(-1)
+    n = flat.data.shape[0] + _abs(offset)
+    out = _np.zeros((n, n), dtype=t.data.dtype)
+    rows = _np.arange(flat.data.shape[0]) + max(0, -offset)
+    cols = _np.arange(flat.data.shape[0]) + max(0, offset)
+    out[rows, cols] = flat.data
+
+    def back(g):
+        return (_np.asarray(g)[rows, cols].reshape(flat.data.shape),)
+
+    return flat._make(out, (flat,), back, "DiagflatBackward0")
+
+
+def rot90(t, k=1, dims=(0, 1)):
+    t = _wrap(t)
+    dims = tuple(dims)
+    return t._make(_np.ascontiguousarray(_np.rot90(t.data, k, dims)), (t,),
+                   lambda g: (_np.ascontiguousarray(_np.rot90(_np.asarray(g), -k, dims)),),
+                   "Rot90Backward0")
+
+
+def unfold(t, dim, size, step):
+    """미끄러지는 창을 새 축으로 만든다. 창이 겹치면 **역방향에서 기울기가 쌓인다**
+    (실측: 길이 5 를 크기 3·걸음 1 로 펴면 [1,2,3,2,1] 이 나온다)."""
+    t = _wrap(t)
+    axis = dim % t.data.ndim
+    count = (t.data.shape[axis] - size) // step + 1
+    starts = _np.arange(count) * step
+    pieces = [_np.take(t.data, _np.arange(s, s + size), axis=axis) for s in starts]
+    out = _np.stack([_np.moveaxis(p, axis, -1) for p in pieces], axis=axis)
+
+    def back(g):
+        z = _np.zeros_like(t.data)
+        gg = _np.asarray(g)
+        for i, s in enumerate(starts):
+            piece = _np.moveaxis(_np.take(gg, i, axis=axis), -1, axis)
+            idx = [slice(None)] * z.ndim
+            idx[axis] = slice(s, s + size)
+            z[tuple(idx)] += piece
+        return (z,)
+
+    return t._make(out, (t,), back, "UnfoldBackward0")
+
+
+def hsplit(t, parts):
+    """가로로 나눈다 — 1차원이면 축 0, 아니면 축 1 이다."""
+    t = _wrap(t)
+    return chunk(t, parts, dim=0 if t.data.ndim == 1 else 1)
+
+
+def vsplit(t, parts):
+    return chunk(_wrap(t), parts, dim=0)
+
+
+def dsplit(t, parts):
+    return chunk(_wrap(t), parts, dim=2)
+
+
+def fliplr(t):
+    return flip(_wrap(t), (1,))
+
+
+def flipud(t):
+    return flip(_wrap(t), (0,))
+
+
+def unflatten(t, dim, sizes):
+    t = _wrap(t)
+    shape = list(t.data.shape)
+    shape[dim:dim + 1] = list(sizes)
+    return t.reshape(*shape)
+
+
+def atleast_1d(t):
+    t = _wrap(t)
+    return t if t.data.ndim >= 1 else t.reshape(1)
+
+
+def atleast_2d(t):
+    t = atleast_1d(_wrap(t))
+    return t if t.data.ndim >= 2 else t.reshape(1, t.data.shape[0])
+
+
+def atleast_3d(t):
+    t = atleast_2d(_wrap(t))
+    return t if t.data.ndim >= 3 else t.reshape(*(t.data.shape + (1,)))
 
 
 def _negate(shifts):
