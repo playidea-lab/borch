@@ -83,28 +83,33 @@ from ._base import (
     BrowserTorchError, Size, _BY_CATEGORY, _INT_EXACT, _LINE_WIDTH, _PAD_SAFE_RANK,
     _PRINT_PRECISION, _ValuesIndices, _broadcast_error, _dtype_of, _float_formatter,
     _keep, _last_axis_only, _like_torch, _pad_const, _pick_last, _reject_float64,
-    _shape_of, _slice_along, _slice_tensor, _tensor_repr, _tensor_str, _to_np, _to_tf,
-    _unsupported, bool_, dtype, float32, int64, long, set_printoptions,
+    _shape_of, _slice_along, _slice_tensor, _tensor_repr, _tensor_str, _tf, _to_np,
+    _to_tf, _unsupported, bool_, dtype, float32, int64, long, set_printoptions,
 )
 from ._tensor import (
     Tensor, _GradMode, _NCHW_TO_NHWC, _NHWC_TO_NCHW, _align, _both_bool, _canonical,
     _grad_mode, _no_bool_subtract, _relayout, _reshape_for_broadcast, _result_dtype,
-    _scalar_dtype, _storage_bool, _storage_for, _unbroadcast, _wrap, result_type,
+    _scalar_dtype, _storage_bool, _storage_for, _tf, _unbroadcast, _wrap, result_type,
 )
 from ._ops import (
-    Generator, _LN10, _LN2, _compare, _masked, _rng, _to_int32, _unary, abs, allclose,
-    arange, argsort, as_tensor, bincount, bmm, cat, ceil, chunk, clamp, cos, cosh,
-    count_nonzero, cumprod, cumsum, diag, dot, einsum, empty, eq, equal, erf, exp, eye,
-    flip, floor, from_numpy, full, full_like, gather, ge, gt, index_select, isfinite,
-    isinf, isnan, le, linspace, log, log10, log2, logical_and, logical_not, logical_or,
-    lt, manual_seed, masked_fill, masked_select, matmul, maximum, median, minimum, mm,
-    movedim, multinomial, narrow, ne, neg, norm, ones, ones_like, outer, pow, prod,
-    rand, randint, randn, randperm, reciprocal, relu, repeat_interleave, reshape, roll,
-    round, rsqrt, sigmoid, sign, sin, sinh, sort, split, sqrt, square, stack, tan, tanh,
-    tensor, tile, topk, trace, tril, triu, unbind, unique, where, zeros, zeros_like,
+    Generator, _DEG, _LN10, _LN2, _binary_math, _compare, _logaddexp_h, _masked, _rng,
+    _tf, _to_int32, _trunc, _unary, _zeros_like, abs, absolute, acos, acosh, allclose,
+    arange, arccos, arccosh, arcsin, arcsinh, arctan, arctanh, argsort, as_tensor, asin,
+    asinh, atan, atan2, atanh, bincount, bmm, cat, ceil, chunk, clamp, clip, copysign,
+    cos, cosh, count_nonzero, cumprod, cumsum, deg2rad, diag, dot, einsum, empty, eq,
+    equal, erf, erfc, exp, exp2, expm1, eye, fix, flip, floor, frac, from_numpy, full,
+    full_like, gather, ge, gt, heaviside, hypot, index_select, isfinite, isinf, isnan,
+    ldexp, le, linspace, log, log10, log1p, log2, logaddexp, logaddexp2, logical_and,
+    logical_not, logical_or, logit, lt, manual_seed, masked_fill, masked_select, matmul,
+    maximum, median, minimum, mm, movedim, multinomial, narrow, ne, neg, negative, norm,
+    ones, ones_like, outer, positive, pow, prod, rad2deg, rand, randint, randn,
+    randperm, reciprocal, relu, repeat_interleave, reshape, roll, round, rsqrt, sgn,
+    sigmoid, sign, signbit, sin, sinc, sinh, sort, split, sqrt, square, stack, tan,
+    tanh, tensor, tile, topk, trace, tril, triu, trunc, unbind, unique, where, xlogy,
+    zeros, zeros_like,
 )
 from ._functional import (
-    _Functional, _SQRT2, _SQRT2PI, _dilate, _pair, _to_nchw, _to_nhwc, _warn_once,
+    _Functional, _SQRT2, _SQRT2PI, _dilate, _pair, _tf, _to_nchw, _to_nhwc, _warn_once,
     _warned, adaptive_avg_pool2d, avg_pool2d, batch_norm, binary_cross_entropy,
     binary_cross_entropy_with_logits, conv1d, conv2d, conv3d, cosine_similarity,
     cross_entropy, dropout, elu, embedding, gelu, interpolate, l1_loss, layer_norm,
@@ -120,19 +125,19 @@ from ._nn import (
     SmoothL1Loss, Softmax, Tanh, Transformer, TransformerDecoder,
     TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer, Unflatten,
     Upsample, _Activation, _NN, _NnUtils, _NnUtilsRnn, _RNNBase, _apply_mask,
-    _split_heads, nn, pad_sequence,
+    _split_heads, _tf, nn, pad_sequence,
 )
 from ._optim import (
     Adam, AdamW, CosineAnnealingLR, ExponentialLR, LambdaLR, MultiStepLR, Optimizer,
     RMSprop, ReduceLROnPlateau, SGD, StepLR, _LRScheduler, _Optim, _Scheduler, _replace,
-    no_grad, optim, scope,
+    _tf, no_grad, optim, scope,
 )
 from ._data import (
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
     TensorDataset, WeightedRandomSampler, _CIFAR_RECORD, _Cuda, _Utils, _UtilsData,
-    _from_plain, _np_to_u8, _opfs_read, _opfs_write, _to_plain, _u8_to_np,
-    backend, cache_get, cache_put, cuda, decode_cifar10, fetch_cached, load,
-    random_split, save, utils,
+    _from_plain, _np_to_u8, _opfs_read, _opfs_write, _tf, _to_plain, _u8_to_np, backend,
+    cache_get, cache_put, cuda, decode_cifar10, fetch_cached, load, random_split, save,
+    utils,
 )
 
 # 모듈 함수를 메서드로도 노출한다 — torch 코드는 `x.exp()` 와 `torch.exp(x)` 를
@@ -155,6 +160,12 @@ _AS_METHOD = (
     "sigmoid", "sign", "sin", "sinh", "softmax", "sort", "split", "sqrt", "square",
     "tan", "tanh", "tile", "topk", "trace", "tril", "triu", "unbind", "unique",
     "unsqueeze",
+    # 수학 함수 묶음. 코어와 같은 목록이다.
+    "acos", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan", "arctanh",
+    "asin", "asinh", "atan", "atan2", "atanh", "absolute", "clip", "copysign",
+    "deg2rad", "erfc", "exp2", "expm1", "fix", "frac", "heaviside", "hypot", "ldexp",
+    "log1p", "logaddexp", "logaddexp2", "logit", "negative", "positive", "rad2deg",
+    "sgn", "signbit", "sinc", "trunc", "xlogy",
 )
 
 for _method in _AS_METHOD:

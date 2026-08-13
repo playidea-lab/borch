@@ -157,14 +157,172 @@ relu = _unary("Relu", lambda x: _tf.relu(x), lambda x, o: _tf.step(x), keeps_dty
 sigmoid = _unary("Sigmoid", lambda x: _tf.sigmoid(x),
                  lambda x, o: _tf.mul(o, _tf.sub(1.0, o)))
 # 계단 모양 — 미분이 거의 모든 곳에서 0 이다.
-sign = _unary("Sign", lambda x: _tf.sign(x), keeps_dtype=True)
-floor = _unary("Floor", lambda x: _tf.floor(x), keeps_dtype=True)
-ceil = _unary("Ceil", lambda x: _tf.ceil(x), keeps_dtype=True)
-round = _unary("Round", lambda x: _tf.round(x), keeps_dtype=True)
+#
+# **0 을 흘린다. 그래프를 끊지 않는다.** torch 에 물어보니 넷 다 `backward()` 가 돌고
+# `.grad` 가 0 으로 채워진다. 전에는 맨 텐서를 돌려줘 `backward()` 가 거절했는데,
+# 그건 "없는 기능"이지 torch 와 같은 것이 아니었다. 계단을 중간에 낀 손실은 torch 에서
+# 실제로 돈다.
+_zeros_like = lambda x, o: _tf.zerosLike(x)                          # noqa: E731
+
+sign = _unary("Sign", lambda x: _tf.sign(x), _zeros_like, keeps_dtype=True)
+floor = _unary("Floor", lambda x: _tf.floor(x), _zeros_like, keeps_dtype=True)
+ceil = _unary("Ceil", lambda x: _tf.ceil(x), _zeros_like, keeps_dtype=True)
+round = _unary("Round", lambda x: _tf.round(x), _zeros_like, keeps_dtype=True)
+
+
+# ---- 삼각·지수·로그의 나머지
+#
+# 코어와 같은 목록이다. TF.js 에 원시 함수가 다 있는지 브라우저에 **물어보고** 넣었다 —
+# 없는 것을 근사로 채우면 그게 조용히 틀리는 자리가 된다. 34개 중 없는 것은 없었다.
+
+acos = _unary("Acos", lambda x: _tf.acos(x),
+              lambda x, o: _tf.neg(_tf.rsqrt(_tf.sub(1.0, _tf.square(x)))))
+asin = _unary("Asin", lambda x: _tf.asin(x),
+              lambda x, o: _tf.rsqrt(_tf.sub(1.0, _tf.square(x))))
+atan = _unary("Atan", lambda x: _tf.atan(x),
+              lambda x, o: _tf.div(1.0, _tf.add(1.0, _tf.square(x))))
+acosh = _unary("Acosh", lambda x: _tf.acosh(x),
+               lambda x, o: _tf.rsqrt(_tf.sub(_tf.square(x), 1.0)))
+asinh = _unary("Asinh", lambda x: _tf.asinh(x),
+               lambda x, o: _tf.rsqrt(_tf.add(_tf.square(x), 1.0)))
+atanh = _unary("Atanh", lambda x: _tf.atanh(x),
+               lambda x, o: _tf.div(1.0, _tf.sub(1.0, _tf.square(x))))
+expm1 = _unary("Expm1", lambda x: _tf.expm1(x), lambda x, o: _tf.add(o, 1.0))
+log1p = _unary("Log1p", lambda x: _tf.log1p(x),
+               lambda x, o: _tf.div(1.0, _tf.add(1.0, x)))
+exp2 = _unary("Exp2", lambda x: _tf.exp(_tf.mul(x, _LN2)),
+              lambda x, o: _tf.mul(o, _LN2))
+_DEG = float(180.0 / _np.pi)
+deg2rad = _unary("Deg2rad", lambda x: _tf.div(x, _DEG), lambda x, o: _tf.fill(
+    _to_js(list(_shape_of(x))), 1.0 / _DEG))
+rad2deg = _unary("Rad2deg", lambda x: _tf.mul(x, _DEG), lambda x, o: _tf.fill(
+    _to_js(list(_shape_of(x))), _DEG))
+# 0 쪽으로 자른다 — `floor` 는 아래로 자르므로 음수에서 갈린다.
+_trunc = lambda x: _tf.mul(_tf.sign(x), _tf.floor(_tf.abs(x)))       # noqa: E731
+trunc = _unary("Trunc", _trunc, _zeros_like, keeps_dtype=True)
+frac = _unary("Frac", lambda x: _tf.sub(x, _trunc(x)),
+              lambda x, o: _tf.onesLike(x))
+# `sgn` 은 실수에서 `sign` 과 같다 — 0 을 흘린다. (한 번 "torch 가 거절한다"고 적었는데
+# 그 예외는 `backward()` 가 아니라 결과를 찍던 쪽에서 났다. 코어 `_ops` 에 자세히 적었다.)
+sgn = _unary("Sgn", lambda x: _tf.sign(x), _zeros_like, keeps_dtype=True)
+positive = _unary("Positive", lambda x: _tf.clone(x), lambda x, o: _tf.onesLike(x))
+erfc = _unary("Erfc", lambda x: _tf.sub(1.0, _tf.erf(x)),
+              lambda x, o: _tf.mul(-2.0 / float(_np.sqrt(_np.pi)),
+                                   _tf.exp(_tf.neg(_tf.square(x)))))
+logit = _unary("Logit", lambda x: _tf.log(_tf.div(x, _tf.sub(1.0, x))),
+               lambda x, o: _tf.div(1.0, _tf.mul(x, _tf.sub(1.0, x))))
+
+
+def sinc(t):
+    """`sin(πx)/(πx)`, x=0 에서는 1. **0 에서 나누지 않도록** 자리를 미리 바꾼다."""
+    t = _wrap(t)
+    h = _storage_for(t, float32)
+    zero = _tf.equal(h, 0.0)
+    safe = _tf.where(zero, _tf.onesLike(h), h)
+    pix = _tf.mul(safe, float(_np.pi))
+    out = _tf.where(zero, _tf.onesLike(h), _tf.div(_tf.sin(pix), pix))
+
+    def back(g):
+        # d/dx sinc(x) = (cos(πx) - sinc(x)) / x, x=0 에서는 0.
+        d = _tf.div(_tf.sub(_tf.cos(pix), out), safe)
+        return (_tf.mul(g, _tf.where(zero, _tf.zerosLike(h), d)),)
+
+    return t._make(out, (t,), back, "SincBackward0")
+
+
+def _binary_math(name, forward, d_a, d_b):
+    """두 텐서를 받는 원소별 함수. 브로드캐스팅과 되돌리기를 `_binary` 에 맡긴다.
+
+    `_binary` 는 역방향을 **하나만** 받고 그것이 짝을 돌려준다(코어는 둘을 받는다).
+    두 라이브러리에서 같은 실수를 하지 않으려고 여기서 감싼다.
+    """
+    def fn(a, b):
+        a = _wrap(a)
+        return a._binary(b, forward,
+                         lambda g, x, y: (d_a(g, x, y), d_b(g, x, y)),
+                         f"{name}Backward0")
+    fn.__name__ = name
+    return fn
+
+
+atan2 = _binary_math(
+    "Atan2", lambda x, y: _tf.atan2(x, y),
+    lambda g, x, y: _tf.mul(g, _tf.div(y, _tf.add(_tf.square(x), _tf.square(y)))),
+    lambda g, x, y: _tf.mul(g, _tf.neg(_tf.div(x, _tf.add(_tf.square(x), _tf.square(y))))))
+hypot = _binary_math(
+    "Hypot", lambda x, y: _tf.sqrt(_tf.add(_tf.square(x), _tf.square(y))),
+    lambda g, x, y: _tf.mul(g, _tf.div(x, _tf.sqrt(_tf.add(_tf.square(x), _tf.square(y))))),
+    lambda g, x, y: _tf.mul(g, _tf.div(y, _tf.sqrt(_tf.add(_tf.square(x), _tf.square(y))))))
+# |x|·sign(y) 이므로 x 로는 sign(x)·sign(y), y 로는 0 이다(계단).
+copysign = _binary_math(
+    "Copysign", lambda x, y: _tf.mul(_tf.abs(x), _tf.sign(y)),
+    lambda g, x, y: _tf.mul(g, _tf.mul(_tf.sign(x), _tf.sign(y))),
+    lambda g, x, y: _tf.zerosLike(_tf.mul(g, y)))
+
+
+def _logaddexp_h(x, y, base=None):
+    """`log(exp(x) + exp(y))` 를 **넘치지 않게** 센다 — 큰 쪽을 빼고 더한다."""
+    big = _tf.maximum(x, y)
+    small = _tf.minimum(x, y)
+    diff = _tf.sub(small, big)
+    if base is None:
+        return _tf.add(big, _tf.log1p(_tf.exp(diff)))
+    return _tf.add(big, _tf.div(_tf.log1p(_tf.exp(_tf.mul(diff, _LN2))), _LN2))
+
+
+logaddexp = _binary_math(
+    "Logaddexp", lambda x, y: _logaddexp_h(x, y),
+    lambda g, x, y: _tf.mul(g, _tf.exp(_tf.sub(x, _logaddexp_h(x, y)))),
+    lambda g, x, y: _tf.mul(g, _tf.exp(_tf.sub(y, _logaddexp_h(x, y)))))
+logaddexp2 = _binary_math(
+    "Logaddexp2", lambda x, y: _logaddexp_h(x, y, base=2),
+    lambda g, x, y: _tf.mul(g, _tf.exp(_tf.mul(_tf.sub(x, _logaddexp_h(x, y, 2)), _LN2))),
+    lambda g, x, y: _tf.mul(g, _tf.exp(_tf.mul(_tf.sub(y, _logaddexp_h(x, y, 2)), _LN2))))
+
+
+def xlogy(a, b):
+    """`x · log(y)` 인데 **x 가 0 이면 0 이다** — `0 · log(0)` 을 nan 으로 두지 않는다."""
+    a = _wrap(a)
+    zero = lambda x: _tf.equal(x, 0.0)                               # noqa: E731
+    return a._binary(
+        b,
+        lambda x, y: _tf.where(zero(x), _tf.zerosLike(x), _tf.mul(x, _tf.log(y))),
+        lambda g, x, y: (
+            _tf.mul(g, _tf.where(zero(x), _tf.zerosLike(x), _tf.log(y))),
+            _tf.mul(g, _tf.where(zero(x), _tf.zerosLike(x), _tf.div(x, y)))),
+        "XlogyBackward0")
+
+
+def signbit(t):
+    t = _wrap(t)
+    return Tensor(_tf.less(_storage_for(t, float32), 0.0), dt=bool_)
+
+
+def heaviside(t, values):
+    """x<0 이면 0, x>0 이면 1, x=0 이면 `values`."""
+    t, v = _wrap(t), _wrap(values)
+    h = _storage_for(t, float32)
+    return Tensor(_tf.where(_tf.equal(h, 0.0), _storage_for(v, float32), _tf.step(h)))
+
+
+def ldexp(t, other):
+    t, o = _wrap(t), _wrap(other)
+    return t * Tensor(_tf.exp(_tf.mul(_storage_for(o, float32), _LN2)))
+
+
+# torch 의 별칭들. 같은 함수를 가리킨다. `clip` 은 `clamp` 정의 뒤에 있어야 해서
+# 이 묶음에 없다 — 아래 `clamp` 바로 밑에 있다.
+arccos, arcsin, arctan = acos, asin, atan
+arccosh, arcsinh, arctanh = acosh, asinh, atanh
+fix = trunc
+absolute = abs
 
 
 def neg(t):
     return -_wrap(t)
+
+
+negative = neg
 
 
 def prod(t, dim=None):
@@ -212,6 +370,9 @@ def clamp(t, min=None, max=None):
     inside = _tf.cast(_tf.logicalAnd(_tf.greaterEqual(t._h, lo), _tf.lessEqual(t._h, hi)), "float32")
     return t._make(_tf.clipByValue(t._h, lo, hi), (t,),
                    lambda g: (_tf.mul(g, inside),), "ClampBackward0")
+
+
+clip = clamp                                    # torch 의 별칭
 
 
 # ---------------------------------------------------------------- 선형대수

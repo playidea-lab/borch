@@ -353,15 +353,132 @@ sinh = _unary("Sinh", _np.sinh, lambda x, o: _np.cosh(x))
 cosh = _unary("Cosh", _np.cosh, lambda x, o: _np.sinh(x))
 erf = _unary("Erf", lambda x: _erf64(x).astype(x.dtype),
              lambda x, o: 2 / _np.sqrt(_np.pi) * _np.exp(-x * x))
-# 계단 모양 — 미분이 거의 모든 곳에서 0 이다. torch 도 0 을 준다.
-sign = _unary("Sign", _np.sign)
-floor = _unary("Floor", _np.floor)
-ceil = _unary("Ceil", _np.ceil)
-round = _unary("Round", lambda x: _np.round(x))
+# 계단 모양 — 미분이 거의 모든 곳에서 0 이다.
+#
+# **0 을 흘린다. 그래프를 끊지 않는다.** torch 에 물어보니 넷 다 `backward()` 가 돌고
+# `.grad` 가 0 으로 채워진다. 전에는 맨 텐서를 돌려줘서 `backward()` 가 거절했는데,
+# 그건 "없는 기능"이지 torch 와 같은 것이 아니었다. 값이 0 인 것과 부를 수 없는 것은
+# 다르고, 계단 함수를 중간에 낀 손실은 실제로 torch 에서 돈다.
+_zero_grad = lambda x, o: _np.zeros_like(x)                          # noqa: E731
+
+sign = _unary("Sign", _np.sign, _zero_grad)
+floor = _unary("Floor", _np.floor, _zero_grad)
+ceil = _unary("Ceil", _np.ceil, _zero_grad)
+round = _unary("Round", lambda x: _np.round(x), _zero_grad)
 
 
 def neg(t): return -_wrap(t)
 def pow(t, exponent): return _wrap(t) ** exponent
+
+
+# ---- 삼각·지수·로그의 나머지
+#
+# 전부 원소별이고 도함수가 닫힌 꼴이라 `_unary` 로 끝난다. 하나씩 손으로 쓸 이유가 없다.
+# **torch 의 별칭도 같이 단다** — `arccos` 는 `acos` 와 같은 함수이고, 튜토리얼이 둘 다
+# 쓴다. 이름만 다르고 구현이 하나이므로 갈릴 자리가 없다.
+
+acos = _unary("Acos", _np.arccos, lambda x, o: -1.0 / _np.sqrt(1 - x * x))
+asin = _unary("Asin", _np.arcsin, lambda x, o: 1.0 / _np.sqrt(1 - x * x))
+atan = _unary("Atan", _np.arctan, lambda x, o: 1.0 / (1 + x * x))
+acosh = _unary("Acosh", _np.arccosh, lambda x, o: 1.0 / _np.sqrt(x * x - 1))
+asinh = _unary("Asinh", _np.arcsinh, lambda x, o: 1.0 / _np.sqrt(x * x + 1))
+atanh = _unary("Atanh", _np.arctanh, lambda x, o: 1.0 / (1 - x * x))
+expm1 = _unary("Expm1", _np.expm1, lambda x, o: o + 1.0)
+log1p = _unary("Log1p", _np.log1p, lambda x, o: 1.0 / (1 + x))
+exp2 = _unary("Exp2", _np.exp2, lambda x, o: o * _np.log(2))
+deg2rad = _unary("Deg2rad", _np.deg2rad, lambda x, o: _np.float32(_np.pi / 180))
+rad2deg = _unary("Rad2deg", _np.rad2deg, lambda x, o: _np.float32(180 / _np.pi))
+# 잘라내는 것 — 계단이라 0 을 흘린다(위 `floor` 와 같은 이유).
+trunc = _unary("Trunc", _np.trunc, _zero_grad)
+frac = _unary("Frac", lambda x: x - _np.trunc(x), lambda x, o: _np.ones_like(x))
+# `sgn` 은 실수에서 `sign` 과 같다 — 0 을 흘린다.
+#
+# 처음에 "torch 는 sgn 역전파를 거절한다"고 적었는데 **틀렸다.** 예외가 `backward()`
+# 가 아니라 결과를 찍던 내 `print` 에서 났고, 그것을 거절로 읽었다. torch 의 sgn 기울기는
+# ZeroTensor(게으른 0 텐서)라 `.numpy()` 가 거절할 뿐 값은 0 이다.
+sgn = _unary("Sgn", _np.sign, _zero_grad)
+positive = _unary("Positive", lambda x: x, lambda x, o: _np.ones_like(x))
+# `erfc = 1 - erf` 로 쓰면 꼬리에서 자릿수가 날아간다. **`_erfc_pos` 가 원형이므로**
+# 거기서 직접 유도한다 — erf 를 그렇게 세운 이유가 바로 이것이다.
+erfc = _unary("Erfc",
+              lambda x: _np.where(x >= 0, _erfc_pos(_np.abs(_np.asarray(x, _np.float64))),
+                                  2.0 - _erfc_pos(_np.abs(_np.asarray(x, _np.float64)))
+                                  ).astype(x.dtype),
+              lambda x, o: -2 / _np.sqrt(_np.pi) * _np.exp(-x * x))
+sinc = _unary("Sinc", _np.sinc,
+              # d/dx sinc(x) = (cos(πx) - sinc(x)) / x, x=0 에서는 0.
+              lambda x, o: _np.where(x == 0, 0.0,
+                                     (_np.cos(_np.pi * _np.where(x == 0, 1.0, x)) - o)
+                                     / _np.where(x == 0, 1.0, x)))
+logit = _unary("Logit", lambda x: _np.log(x / (1 - x)), lambda x, o: 1.0 / (x * (1 - x)))
+
+# torch 의 별칭들. 같은 함수를 가리킨다.
+arccos, arcsin, arctan = acos, asin, atan
+arccosh, arcsinh, arctanh = acosh, asinh, atanh
+fix = trunc
+absolute = abs
+negative = neg
+clip = clamp
+
+
+def _binary_math(name, forward, d_a, d_b, op=None):
+    """두 텐서를 받는 원소별 함수. 브로드캐스팅과 역방향을 `_binary` 에 맡긴다.
+
+    도함수는 `(x, y)` 를 받아 **기울기에 곱할 것**을 돌려준다. `_binary` 가 넘겨주는
+    서명은 `(g, x, y)` 이므로 여기서 감싼다.
+    """
+    def fn(a, b):
+        a = _wrap(a)
+        return a._binary(b, forward,
+                         lambda g, x, y: g * d_a(x, y),
+                         lambda g, x, y: g * d_b(x, y),
+                         op or f"{name}Backward0")
+    fn.__name__ = name
+    return fn
+
+
+atan2 = _binary_math("Atan2", _np.arctan2,
+                     lambda x, y: y / (x * x + y * y),
+                     lambda x, y: -x / (x * x + y * y))
+hypot = _binary_math("Hypot", _np.hypot,
+                     lambda x, y: x / _np.hypot(x, y),
+                     lambda x, y: y / _np.hypot(x, y))
+# |x|·sign(y) 이므로 x 로는 sign(x)·sign(y), y 로는 0 이다(계단).
+copysign = _binary_math("Copysign", _np.copysign,
+                        lambda x, y: _np.sign(x) * _np.sign(y),
+                        lambda x, y: _np.zeros_like(_np.copysign(x, y)))
+logaddexp = _binary_math("Logaddexp", _np.logaddexp,
+                         lambda x, y: _np.exp(x - _np.logaddexp(x, y)),
+                         lambda x, y: _np.exp(y - _np.logaddexp(x, y)))
+logaddexp2 = _binary_math("Logaddexp2", _np.logaddexp2,
+                          lambda x, y: _np.exp2(x - _np.logaddexp2(x, y)),
+                          lambda x, y: _np.exp2(y - _np.logaddexp2(x, y)))
+
+
+def xlogy(a, b):
+    """`x · log(y)` 인데 **x 가 0 이면 0 이다** — `0 · log(0)` 을 nan 으로 두지 않는다."""
+    a = _wrap(a)
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        return a._binary(
+            b,
+            lambda x, y: _np.where(x == 0, 0.0, x * _np.log(y)),
+            lambda g, x, y: g * _np.where(x == 0, 0.0, _np.log(y)),
+            lambda g, x, y: g * _np.where(x == 0, 0.0, x / y),
+            "XlogyBackward0")
+
+
+def signbit(t):
+    return Tensor(_np.signbit(_wrap(t).data))
+
+
+def heaviside(t, values):
+    t, v = _wrap(t), _wrap(values)
+    return Tensor(_np.heaviside(t.data, v.data))
+
+
+def ldexp(t, other):
+    t, o = _wrap(t), _wrap(other)
+    return t * Tensor(_np.exp2(o.data.astype(t.data.dtype)))
 
 
 # ---------------------------------------------------------------- 비교

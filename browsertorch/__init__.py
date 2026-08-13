@@ -34,9 +34,9 @@ import numpy as _np
 
 from ._base import (
     BrowserTorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
-    _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _math, _np, _resolve,
-    _tensor_repr, _tensor_str, _unsupported, bool_, dtype, float32, float64, int64,
-    long, set_printoptions,
+    _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
+    _tensor_str, _unsupported, bool_, dtype, float32, float64, int64, long,
+    set_printoptions,
 )
 from ._tensor import (
     Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,
@@ -44,21 +44,25 @@ from ._tensor import (
     result_type,
 )
 from ._ops import (
-    Generator, _Cuda, _ERF_A, _ERF_P, _Namespace, _col2im, _compare, _diagonal_scatter,
-    _erf64, _erfc_pos, _from_plain, _gelu, _im2col, _index_at, _negate, _one_plus_erf64,
-    _pad2d, _pick, _pool_all, _rng, _slice_at, _to_plain, _unary, _wrap, abs, allclose,
-    arange, argsort, as_tensor, avg_pool2d, bincount, bmm, cat, ceil, chunk, clamp,
-    conv2d, cos, cosh, cosine_similarity, count_nonzero, cuda, cumprod, cumsum, diag,
-    dot, dropout, einsum, elu, embedding, empty, eq, equal, erf, exp, eye, flip, floor,
-    from_numpy, full, full_like, gather, ge, gelu, gt, index_select, isfinite, isinf,
-    isnan, l1_loss, layer_norm, le, leaky_relu, linspace, load, log, log10, log2,
-    log_softmax, logical_and, logical_not, logical_or, lt, manual_seed, masked_select,
-    max_pool2d, maximum, median, minimum, mm, movedim, multinomial, narrow, ne, neg,
-    nll_loss, no_grad, norm, normalize, ones, ones_like, outer, pad, pow, prod, rand,
-    randint, randn, randperm, reciprocal, relu, repeat_interleave, roll, round, rsqrt,
-    save, sigmoid, sign, silu, sin, sinh, smooth_l1_loss, softmax, sort, split, sqrt,
-    square, stack, tan, tanh, tensor, tile, topk, trace, tril, triu, unbind, unique,
-    where, zeros, zeros_like,
+    Generator, _Cuda, _ERF_A, _ERF_P, _Namespace, _binary_math, _col2im, _compare,
+    _diagonal_scatter, _erf64, _erfc_pos, _from_plain, _gelu, _im2col, _index_at,
+    _negate, _one_plus_erf64, _pad2d, _pick, _pool_all, _rng, _slice_at, _to_plain,
+    _unary, _wrap, _zero_grad, abs, absolute, acos, acosh, allclose, arange, arccos,
+    arccosh, arcsin, arcsinh, arctan, arctanh, argsort, as_tensor, asin, asinh, atan,
+    atan2, atanh, avg_pool2d, bincount, bmm, cat, ceil, chunk, clamp, clip, conv2d,
+    copysign, cos, cosh, cosine_similarity, count_nonzero, cuda, cumprod, cumsum,
+    deg2rad, diag, dot, dropout, einsum, elu, embedding, empty, eq, equal, erf, erfc,
+    exp, exp2, expm1, eye, fix, flip, floor, frac, from_numpy, full, full_like, gather,
+    ge, gelu, gt, heaviside, hypot, index_select, isfinite, isinf, isnan, l1_loss,
+    layer_norm, ldexp, le, leaky_relu, linspace, load, log, log10, log1p, log2,
+    log_softmax, logaddexp, logaddexp2, logical_and, logical_not, logical_or, logit, lt,
+    manual_seed, masked_select, max_pool2d, maximum, median, minimum, mm, movedim,
+    multinomial, narrow, ne, neg, negative, nll_loss, no_grad, norm, normalize, ones,
+    ones_like, outer, pad, positive, pow, prod, rad2deg, rand, randint, randn, randperm,
+    reciprocal, relu, repeat_interleave, roll, round, rsqrt, save, sgn, sigmoid, sign,
+    signbit, silu, sin, sinc, sinh, smooth_l1_loss, softmax, sort, split, sqrt, square,
+    stack, tan, tanh, tensor, tile, topk, trace, tril, triu, trunc, unbind, unique,
+    where, xlogy, zeros, zeros_like,
 )
 from ._nn import (
     AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,
@@ -100,6 +104,12 @@ _AS_METHOD = (
     "norm", "outer", "pow", "prod", "reciprocal", "relu", "roll", "round", "rsqrt",
     "sigmoid", "sign", "sin", "sinh", "softmax", "sort", "split", "square", "tan",
     "tanh", "tile", "topk", "trace", "tril", "triu", "unbind", "unique",
+    # 수학 함수 묶음. 같은 방법으로 확인했다 — torch 에게 물어보고 같다고 한 것만.
+    "acos", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan", "arctanh",
+    "asin", "asinh", "atan", "atan2", "atanh", "absolute", "clip", "copysign",
+    "deg2rad", "erfc", "exp2", "expm1", "fix", "frac", "heaviside", "hypot", "ldexp",
+    "log1p", "logaddexp", "logaddexp2", "logit", "negative", "positive", "rad2deg",
+    "sgn", "signbit", "sinc", "trunc", "xlogy",
 )
 
 for _method in _AS_METHOD:

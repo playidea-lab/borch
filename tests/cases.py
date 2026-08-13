@@ -1032,6 +1032,110 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+MATH_PREFIX = "math::"
+
+# 새로 붙인 수학 함수들. **입력 범위가 함수마다 다르다** — `acos` 는 [-1,1] 밖에서
+# NaN 이고, NaN 은 자기 자신과도 달라서 대조가 통과할 수가 없다. 그래서 정의역 안에서만
+# 묻는다. 밖에서 무엇을 하는지는 별개 질문이고, 여기서 섞으면 둘 다 못 본다.
+_MATH_DOMAIN = {
+    "acos": "unit", "asin": "unit", "atanh": "unit", "logit": "unit",
+    "arccos": "unit", "arcsin": "unit", "arctanh": "unit",
+    "acosh": "big", "arccosh": "big",
+    "log1p": "pos",
+}
+_MATH_UNARY = (
+    "acos", "acosh", "asin", "asinh", "atan", "atanh", "expm1", "log1p", "exp2",
+    "deg2rad", "rad2deg", "trunc", "frac", "positive", "erfc", "sinc", "logit",
+    "arccos", "arccosh", "arcsin", "arcsinh", "arctan", "arctanh", "fix", "absolute",
+)
+_MATH_BINARY = ("atan2", "hypot", "copysign", "logaddexp", "logaddexp2")
+
+
+def math_cases(inp=None):
+    """삼각·지수·로그의 나머지. 값과 기울기를 **둘 다** 묻는다.
+
+    기울기를 같이 묻는 이유가 있다. 값만 맞고 그래프가 끊긴 함수는 값 검사를 통과하고,
+    이 저장소는 그런 것을 이미 열넷 찾았다.
+    """
+    plain = np.array([0.5, 2.0, -1.5, 3.0], dtype=np.float32)
+    unit = np.array([0.2, 0.6, -0.9, 0.45], dtype=np.float32)      # (-1, 1) 안
+    big = np.array([1.5, 2.5, 3.0, 1.2], dtype=np.float32)          # > 1
+    pos = np.array([0.5, 2.0, 1.5, 3.0], dtype=np.float32)
+    other = np.array([1.0, 2.0, -3.0, 0.5], dtype=np.float32)
+    logit_in = np.array([0.2, 0.6, 0.35, 0.45], dtype=np.float32)   # (0, 1) 안
+    weights = np.arange(1, 5, dtype=np.float32)                     # 자리마다 다른 가중치
+
+    def pick(name):
+        kind = _MATH_DOMAIN.get(name)
+        if name in ("logit",):
+            return logit_in
+        return {"unit": unit, "big": big, "pos": pos}.get(kind, plain)
+
+    cases = []
+    for name in _MATH_UNARY:
+        cases.append((MATH_PREFIX + name,
+                      lambda L, n=name: getattr(L, n)(L.tensor(pick(n)))))
+
+        def grad(L, n=name):
+            x = L.tensor(pick(n), requires_grad=True)
+            (getattr(L, n)(x) * L.tensor(weights)).sum().backward()
+            return _grad_of(x, n)
+
+        cases.append((MATH_PREFIX + f"grad::{name}", grad))
+
+    for name in _MATH_BINARY:
+        cases.append((MATH_PREFIX + name,
+                      lambda L, n=name: getattr(L, n)(L.tensor(plain), L.tensor(other))))
+        for who in (0, 1):
+            def bgrad(L, n=name, w=who):
+                leaves = [L.tensor(plain, requires_grad=True),
+                          L.tensor(other, requires_grad=True)]
+                (getattr(L, n)(*leaves) * L.tensor(weights)).sum().backward()
+                return _grad_of(leaves[w], f"{n}/{'ab'[w]}")
+
+            cases.append((MATH_PREFIX + f"grad::{name}/{'ab'[who]}", bgrad))
+
+    # `x·log(y)` — **x 가 0 인 자리가 있어야 이 함수를 시험하는 것이다.**
+    zeros_in = np.array([0.0, 2.0, 0.0, 3.0], dtype=np.float32)
+    ypos = np.array([1.0, 2.0, 0.5, 4.0], dtype=np.float32)
+    cases.append((MATH_PREFIX + "xlogy(x에 0 포함)",
+                  lambda L: L.xlogy(L.tensor(zeros_in), L.tensor(ypos))))
+
+    # 계단 함수는 **0 을 흘린다.** 전에는 그래프를 끊어 `backward()` 가 거절했는데
+    # torch 는 0 을 준다 — 없는 것과 0 인 것은 다르다.
+    for name in ("sign", "floor", "ceil", "round", "trunc", "fix"):
+        def zgrad(L, n=name):
+            x = L.tensor(plain, requires_grad=True)
+            (getattr(L, n)(x) * L.tensor(weights)).sum().backward()
+            return _grad_of(x, n)
+
+        cases.append((MATH_PREFIX + f"grad::{name}(0이어야)", zgrad))
+
+    # 값만 있고 기울기가 없는 것들 — 참·거짓이거나 계단이다.
+    cases.append((MATH_PREFIX + "signbit", lambda L: L.signbit(L.tensor(plain))))
+    cases.append((MATH_PREFIX + "heaviside",
+                  lambda L: L.heaviside(L.tensor(np.array([-1., 0., 1., 0.], dtype=np.float32)),
+                                        L.tensor(np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)))))
+    cases.append((MATH_PREFIX + "ldexp",
+                  lambda L: L.ldexp(L.tensor(plain),
+                                    L.tensor(np.array([1., 2., 0., -1.], dtype=np.float32)))))
+    cases.append((MATH_PREFIX + "sgn", lambda L: L.sgn(L.tensor(plain))))
+
+    def sgn_grad(L):
+        x = L.tensor(plain, requires_grad=True)
+        L.sgn(x).sum().backward()
+        # **`clone()` 이 필요하다.** torch 의 sgn 기울기는 ZeroTensor(게으른 0 텐서)라
+        # `.numpy()` 가 거절한다 — 곱셈으로는 안 풀리고(`* 1.0` 도 ZeroTensor 다),
+        # 복제해야 진짜 버퍼가 생긴다. 값은 0 이다.
+        #
+        # 이 자리를 처음에는 "torch 가 sgn 역전파를 거절한다"고 읽고 거절 케이스로
+        # 굳혔다. 틀렸다 — 예외는 `backward()` 가 아니라 결과를 찍던 쪽에서 났다.
+        return x.grad.detach().clone()
+
+    cases.append((MATH_PREFIX + "grad::sgn(0이어야)", sgn_grad))
+    return cases
+
+
 METHOD_PREFIX = "method::"
 
 # `x.f(...)` 로 부를 수 있어야 하는 것들과, 그때 줄 인자.
@@ -1135,7 +1239,8 @@ def golden_cases(inp=None):
     inp = golden_inputs() if inp is None else inp
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + method_cases(inp) + webgpu_cases(inp))
+            + vision_cases(inp) + method_cases(inp) + math_cases(inp)
+            + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
