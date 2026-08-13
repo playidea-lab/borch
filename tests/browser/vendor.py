@@ -11,6 +11,11 @@ CDN 은 **테스트 시점에 살아 있어야 하는 의존**이다. 실제로 
 
     uv run python tests/browser/vendor.py fetch   # 받아서 잠금 파일을 쓴다
     uv run python tests/browser/vendor.py check   # 있는 것과 잠금을 대조한다
+
+여기서 받는 것들의 라이선스는 [THIRD-PARTY.md](../../THIRD-PARTY.md) 에 있다.
+**Pyodide 는 MPL-2.0 이다** — 우리 코드로 번지지는 않지만, 페이지에 실어 배포하면
+소스를 구할 길을 알려야 한다. 이 저장소는 `vendor/` 를 커밋하지 않으므로 재배포하지
+않지만, 브라우저에 띄우는 쪽은 재배포하게 된다.
 """
 
 import hashlib
