@@ -136,13 +136,38 @@ from ._data import (
 )
 
 # 모듈 함수를 메서드로도 노출한다 — torch 코드는 `x.exp()` 와 `torch.exp(x)` 를
-# 섞어 쓴다. 같은 구현을 가리키므로 갈릴 자리가 없다.
+# 섞어 쓴다.
 #
 # **여기 있어야 한다.** 예전에는 파일 맨 아래, 즉 쪼갠 뒤의 `_data` 에 있었는데
 # 거기서는 `globals()` 에 이 이름들이 없다(각자 다른 모듈에 있다). 전부 모이는
 # 자리는 여기뿐이다.
-for _name in ("abs", "exp", "log", "sqrt", "unsqueeze", "clamp", "flip", "norm",
-              "gather", "prod", "cumsum", "topk", "sort", "split", "chunk", "unbind",
-              "narrow", "index_select", "masked_select", "median", "masked_fill",
-              "cumprod", "roll", "repeat_interleave", "tile", "movedim", "argsort"):
-    setattr(Tensor, _name, globals()[_name])
+#
+# 목록은 **코어와 같다.** 손으로 고르지 않고 torch 에게 `x.f(...)` 와 `torch.f(x, ...)`
+# 가 같은 값을 내는지 물어 같다고 답한 것만 담았다. 없는 이름은 건너뛴다 — 자매에만
+# 없는 것이 몇 개 있고, 없는 것을 붙이려다 임포트가 통째로 멈추면 안 된다.
+_AS_METHOD = (
+    "abs", "allclose", "argsort", "bmm", "ceil", "chunk", "clamp", "cos", "cosh",
+    "cumprod", "cumsum", "diag", "dot", "eq", "equal", "erf", "exp", "flip", "floor",
+    "gather", "ge", "gt", "index_select", "isfinite", "isinf", "isnan", "le", "log",
+    "log10", "log2", "lt", "masked_fill", "masked_select", "maximum", "median",
+    "minimum", "mm", "movedim", "multinomial", "narrow", "ne", "neg", "norm", "outer",
+    "pow", "prod", "reciprocal", "relu", "repeat_interleave", "roll", "round", "rsqrt",
+    "sigmoid", "sign", "sin", "sinh", "softmax", "sort", "split", "sqrt", "square",
+    "tan", "tanh", "tile", "topk", "trace", "tril", "triu", "unbind", "unique",
+    "unsqueeze",
+)
+
+for _method in _AS_METHOD:
+    if _method in globals() and not hasattr(Tensor, _method):
+        setattr(Tensor, _method, globals()[_method])
+
+
+def _where_method(self, condition, other):
+    """**인자 순서가 함수와 다르다.** `x.where(조건, y)` 는 `torch.where(조건, x, y)` 다.
+
+    이것만 그냥 붙이면 `x` 가 조건 자리로 들어가 조용히 틀린 답이 나온다.
+    """
+    return where(condition, self, other)
+
+
+Tensor.where = _where_method

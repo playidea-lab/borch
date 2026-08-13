@@ -82,6 +82,43 @@ from ._rnn import (
     _NnUtils, _NnUtilsRnn, pad_sequence,
 )
 
+# ================================================================ 메서드 노출
+#
+# torch 코드는 `torch.sin(x)` 와 `x.sin()` 을 섞어 쓴다. 우리는 모듈 함수만 갖고 있어서
+# 점 표기를 쓴 튜토리얼이 `AttributeError` 로 멈췄다 — **있는 기능인데 부르는 법이 하나
+# 모자란** 자리였다.
+#
+# 이 목록은 손으로 고르지 않았다. torch 에게 `x.f(...)` 와 `torch.f(x, ...)` 가 같은
+# 값을 내는지 물어보고, 같다고 답한 것만 담았다. 62개가 같다고 나왔고 하나가 달랐다 —
+# `where` 다(아래 참고). 그런 것을 그냥 붙이면 조용히 틀린 답이 나온다.
+
+_AS_METHOD = (
+    "allclose", "argsort", "bmm", "ceil", "chunk", "clamp", "cos", "cosh", "cumprod",
+    "cumsum", "diag", "dot", "eq", "equal", "erf", "flip", "floor", "gather", "ge",
+    "gt", "isfinite", "isinf", "isnan", "le", "log10", "log2", "lt", "maximum",
+    "median", "minimum", "mm", "movedim", "multinomial", "narrow", "ne", "neg",
+    "norm", "outer", "pow", "prod", "reciprocal", "relu", "roll", "round", "rsqrt",
+    "sigmoid", "sign", "sin", "sinh", "softmax", "sort", "split", "square", "tan",
+    "tanh", "tile", "topk", "trace", "tril", "triu", "unbind", "unique",
+)
+
+for _method in _AS_METHOD:
+    if not hasattr(Tensor, _method):
+        setattr(Tensor, _method, globals()[_method])
+
+
+def _where_method(self, condition, other):
+    """**인자 순서가 함수와 다르다.** `x.where(조건, y)` 는 `torch.where(조건, x, y)` 다.
+
+    이것만 그냥 붙이면 `x` 가 조건 자리로 들어가 조용히 틀린 답이 나온다.
+    torch 에 물어봐서 알았지, 목록을 눈으로 훑어서는 안 나왔을 자리다.
+    """
+    return where(condition, self, other)
+
+
+Tensor.where = _where_method
+
+
 # ================================================================ install
 
 def install(name="torch", modules=None):

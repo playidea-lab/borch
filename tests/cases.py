@@ -1032,12 +1032,110 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+METHOD_PREFIX = "method::"
+
+# `x.f(...)` 로 부를 수 있어야 하는 것들과, 그때 줄 인자.
+#
+# **표면이 늘면 조용히 틀릴 자리가 는다** — 이 저장소가 그것을 네 번 겪었다. 그래서
+# 이름을 붙이는 것과 그 이름에 케이스를 세우는 것을 한 번에 한다. 케이스 없는 표면은
+# 안 넣는다는 것이 이번에 기능을 늘리기로 하면서 붙인 유일한 조건이다.
+#
+# `x.f(...)` 와 `torch.f(x, ...)` 가 같은지도 torch 에게 물어보고 담았다. 하나가
+# 달랐다 — `where` 는 인자 순서가 뒤집혀서, 그냥 붙였으면 `x` 가 조건 자리로 갔다.
+_METHOD_ARGS = {
+    "ceil": (), "cos": (), "cosh": (), "erf": (), "floor": (), "isfinite": (),
+    "isinf": (), "isnan": (), "neg": (), "reciprocal": (), "relu": (), "round": (),
+    "sigmoid": (), "sign": (), "sin": (), "sinh": (), "square": (), "tan": (),
+    "tanh": (), "prod": (), "norm": (), "argsort": (), "unique": (),
+    "clamp": (0.0, 1.0), "pow": (2,), "roll": (1,), "cumsum": (0,), "cumprod": (0,),
+    "softmax": (0,), "narrow": (0, 0, 2), "movedim": (0, 0), "flip": ((0,),),
+    "tile": ((2,),), "topk": (2,), "sort": (), "median": (),
+}
+# 양수만 받는 것 — 음수를 주면 NaN 이 나오고 NaN 은 자기 자신과도 다르다.
+_METHOD_ARGS_POS = {"log2": (), "log10": (), "rsqrt": ()}
+# 짝이 필요한 것. 상대는 같은 모양의 다른 벡터다.
+_METHOD_ARGS_PAIR = {"eq": (), "ne": (), "lt": (), "le": (), "gt": (), "ge": (),
+                     "maximum": (), "minimum": (), "dot": (), "outer": ()}
+# 행렬이어야 하는 것.
+_METHOD_ARGS_MAT = {"diag": (), "trace": (), "tril": (), "triu": ()}
+
+
+def method_cases(inp=None):
+    """모듈 함수를 **메서드로도** 부를 수 있는가. 값까지 대조한다.
+
+    이름만 있고 값이 다르면 그것도 거짓이다 — 이 표는 `hasattr` 을 묻지 않는다.
+    """
+    pos = np.array([0.5, 2.0, 1.5, 3.0], dtype=np.float32)
+    vec = np.array([0.5, 2.0, -1.5, 3.0], dtype=np.float32)
+    other = np.array([1.0, 2.0, -3.0, 0.5], dtype=np.float32)
+    mat = np.arange(1, 10, dtype=np.float32).reshape(3, 3)
+    mask = np.array([True, False, True, False])
+
+    def values_of(got):
+        """(값, 번호) 를 주는 것들은 값 쪽만 본다 — 번호는 동점에서 갈릴 수 있다.
+
+        `getattr(got, "values", got)` 로 쓰면 안 된다. **진짜 torch 텐서에는 `.values`
+        가 메서드로 있어서**(희소 텐서용) 텐서 대신 그 메서드가 나온다 — 굳히기가
+        `'builtin_function_or_method' object has no attribute 'detach'` 로 터지며
+        알려줬다. 텐서인지를 먼저 묻는다.
+        """
+        return got if hasattr(got, "numpy") else got.values
+
+    def call(name, args, arr, extra=()):
+        def run(L, n=name, a=args, base=arr, ex=extra):
+            return values_of(
+                getattr(L.tensor(base), n)(*[L.tensor(e) for e in ex], *a))
+        return run
+
+    cases = []
+    for name, args in _METHOD_ARGS.items():
+        cases.append((METHOD_PREFIX + name, call(name, args, vec)))
+    for name, args in _METHOD_ARGS_POS.items():
+        cases.append((METHOD_PREFIX + name, call(name, args, pos)))
+    for name, args in _METHOD_ARGS_PAIR.items():
+        cases.append((METHOD_PREFIX + name, call(name, args, vec, extra=(other,))))
+    for name, args in _METHOD_ARGS_MAT.items():
+        cases.append((METHOD_PREFIX + name, call(name, args, mat)))
+
+    # 여럿을 돌려주는 것들은 조각마다 이름을 붙인다 — 하나만 보면 나머지가 안 걸린다.
+    for name, args in (("chunk", (2,)), ("split", (2,)), ("unbind", ())):
+        for piece in (0, 1):
+            cases.append((
+                METHOD_PREFIX + f"{name}[{piece}]",
+                lambda L, n=name, a=args, p=piece: getattr(L.tensor(vec), n)(*a)[p]))
+
+    # `where` — **인자 순서가 함수와 뒤집힌 유일한 자리다.**
+    cases.append((METHOD_PREFIX + "where",
+                  lambda L: L.tensor(vec).where(L.tensor(mask), L.tensor(other))))
+    # 참·거짓을 돌려주는 것들. 값이 아니라 **판정**을 굳힌다.
+    cases.append((METHOD_PREFIX + "equal",
+                  lambda L: str(bool(L.tensor(vec).equal(L.tensor(vec))))))
+    cases.append((METHOD_PREFIX + "equal(다른 것)",
+                  lambda L: str(bool(L.tensor(vec).equal(L.tensor(other))))))
+    cases.append((METHOD_PREFIX + "allclose",
+                  lambda L: str(bool(L.tensor(vec).allclose(L.tensor(vec))))))
+
+    # 행렬곱 계열은 모양이 달라 따로 준다.
+    cases.append((METHOD_PREFIX + "mm", lambda L: L.tensor(mat).mm(L.tensor(mat))))
+    cases.append((METHOD_PREFIX + "gather",
+                  lambda L: L.tensor(mat).gather(1, L.tensor(
+                      np.array([[0, 2], [1, 0], [2, 1]], dtype=np.int64)))))
+    # 기울기도 본다. 메서드로 불렀다고 그래프가 끊기면 값만 보는 검사는 통과한다.
+    def method_grad(L):
+        x = L.tensor(vec, requires_grad=True)
+        (x.square() * L.arange(4).float()).sum().backward()
+        return _grad_of(x, "method::square")
+
+    cases.append((METHOD_PREFIX + "grad::square", method_grad))
+    return cases
+
+
 def golden_cases(inp=None):
     """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
     inp = golden_inputs() if inp is None else inp
     return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + webgpu_cases(inp))
+            + vision_cases(inp) + method_cases(inp) + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
