@@ -632,50 +632,13 @@ def webgpu_cases(inp=None):
     for kind in ("narrow", "unbind", "split"):
         cases.append((WEBGPU_PREFIX + f"grad::랭크5 {kind}", slice5_grad(kind)))
 
-    # 랭크 6. `_dilate` 를 쓸 때 reshape+pad 가 0 을 뱉는 것을 보고 **우회만 했지**
-    # 어디까지 깨지는지는 안 재봤다. 그리고 랭크 5 를 고친 방법이 `concat` 인데,
-    # 그것이 랭크 6 에서도 도는지 역시 안 봤다 — 고친 줄 알고 안 고친 자리가 여기 있을
-    # 수 있다. 그래서 "될 것 같다"를 지우고 물어본다. TF.js 가 정말 못 하는 것이면
-    # 답은 조용히 틀린 값이 아니라 **거절**이어야 하고, 그것도 여기서 드러난다.
-    v6 = np.random.default_rng(23).standard_normal((2, 2, 2, 3, 2, 2)).astype(np.float32)
-
-    def slice6_grad(kind):
-        def run(L, k=kind):
-            x = L.tensor(v6, requires_grad=True)
-            if k == "narrow":
-                out = L.narrow(x, 3, 1, 2)
-            elif k == "unbind":
-                out = L.unbind(x, 3)[1]
-            else:
-                out = L.split(x, 1, dim=3)[0]
-            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
-            return _grad_of(x, f"랭크6 {k}")
-        return run
-
-    def elemwise6(L):
-        x = L.tensor(v6, requires_grad=True)
-        (x * x + x).sum().backward()
-        return _grad_of(x, "랭크6 원소별")
-
-    cases += [
-        # 값이 통째로 나오는 케이스를 먼저 둔다 — 스칼라로 줄이면 자리가 뒤바뀌어도
-        # 합이 같아 통과한다.
-        (WEBGPU_PREFIX + "랭크6 원소별", lambda L: L.tensor(v6) * 2.0 + 1.0),
-        (WEBGPU_PREFIX + "랭크6 합(축)", lambda L: L.tensor(v6).sum(dim=3)),
-        (WEBGPU_PREFIX + "랭크6 permute",
-         lambda L: L.tensor(v6).permute(3, 0, 5, 2, 1, 4)),
-        (WEBGPU_PREFIX + "랭크6 reshape",
-         lambda L: L.tensor(v6).reshape(2, 2, 2, 2, 3, 2)),
-        (WEBGPU_PREFIX + "랭크5→6 reshape",
-         lambda L: L.tensor(vol).reshape(1, 2, 2, 2, 4, 4)),
-        (WEBGPU_PREFIX + "grad::랭크6 원소별", elemwise6),
-    ]
-    for kind in ("narrow", "unbind", "split"):
-        cases.append((WEBGPU_PREFIX + f"grad::랭크6 {kind}", slice6_grad(kind)))
+    cases += _highrank_battery(HIGH_RANKS)
+    cases += _rank_ceiling_cases(CEILING_RANKS)
 
     # `F.pad` 는 공개 API 로 `tf.pad` 에 닿는 **또 하나의 문**이다. 자르기의 역방향만
-    # 고치고 이쪽을 안 봤으면, 같은 버그가 사용자가 직접 부르는 경로에 그대로 남는다.
-    for rank, src in (("랭크4", img), ("랭크5", vol), ("랭크6", v6)):
+    # 고치고 이쪽을 안 봤더니, 같은 버그가 사용자가 직접 부르는 경로에 그대로 남아 있었다.
+    # 랭크 6 이상은 배터리가 본다. 여기는 그 아래 둘이다.
+    for rank, src in (("랭크4", img), ("랭크5", vol)):
         cases.append((WEBGPU_PREFIX + f"F.pad({rank})",
                       lambda L, s=src: L.nn.functional.pad(L.tensor(s), (1, 2))))
         # 0 이 아닌 값으로도 채운다. 고랭크에서는 0 과 다른 코드가 도므로
@@ -683,6 +646,180 @@ def webgpu_cases(inp=None):
         cases.append((WEBGPU_PREFIX + f"F.pad({rank}, 값)",
                       lambda L, s=src: L.nn.functional.pad(
                           L.tensor(s), (2, 1, 1, 0), value=-1.5)))
+    return cases
+
+
+# 자매가 **torch 와 값이 같다고 주장하는** 랭크. 배터리 전부를 통과해야 여기 든다.
+HIGH_RANKS = (6,)
+# 그 위. TF.js 커널이 없어 **일부 연산만 거절되는** 구간이라 따로 본다 — 자세한 사정은
+# `_rank_ceiling_cases` 에 적었다.
+CEILING_RANKS = (7, 8)
+
+
+def _as_expected(fn):
+    """**torch 는 되고 자매는 거절하는** 자리를 골든에 담는 방법.
+
+    골든은 진짜 torch 로 굳는데, 이 자리는 자매가 torch 와 **일부러 다르다.** 그래서
+    값을 물으면 영원히 갈린 채로 남는다. 값 대신 "문서에 적은 대로 굴었는가"를 묻는다 —
+    torch 는 성공이 정답이고 자매는 거절이 정답이라, 양쪽 다 제대로면 같은 답이 나온다.
+
+    자매가 어느 날 조용히 값을 돌려주기 시작하면 (그 값이 맞든 틀리든) 여기서 갈린다.
+    TF.js 가 나중에 고랭크 커널을 채워도 갈린다 — 그때는 한계를 **의도적으로** 다시
+    적으라는 뜻이지, 저절로 넓어지면 안 된다.
+    """
+    def run(L):
+        must_reject = hasattr(L, "backend")      # golden.check 와 같은 판별이다
+        try:
+            fn(L)
+        except Exception as exc:                                # noqa: BLE001
+            return "기대대로" if must_reject else f"뜻밖의 거절 <{type(exc).__name__}>"
+        return "뜻밖의 성공" if must_reject else "기대대로"
+    return run
+
+
+def _rank_ceiling_cases(ranks):
+    """랭크 7 이상 — **되는 것과 안 되는 것이 갈리는 구간.**
+
+    재보니 TF.js 는 랭크 7 부터 `GPU for rank 7 is not yet supported` 를 던진다.
+    다만 전부가 아니라 일부다: 원소별·permute·reshape 는 그대로 돌고, **축을 따라
+    줄이는 것**과 `fill` 이 없다. 그래서 "랭크 7 은 된다"도 "안 된다"도 둘 다 거짓이고,
+    한 줄로 못 적는 것을 한 줄로 적으면 그게 다음 사람이 믿을 거짓말이 된다.
+
+    되는 쪽은 값으로 굳힌다 — torch 와 같은 값이 나오는 것이 사실이기 때문이다.
+    안 되는 쪽은 `_as_expected` 로 감싸 거절 자체를 굳힌다.
+
+    **가장 중요한 사실**: 잰 범위에서 자매는 랭크 7·8 에서 **틀린 값을 낸 적이 없다.**
+    되거나 던지거나 둘 중 하나였다. 랭크 5·6 의 `pad` 와 정반대다 — 거기서는 모양만
+    맞고 값이 깨졌고 아무도 몰랐다. 이 대비가 이 표를 세운 이유다.
+    """
+    cases = []
+    for r in ranks:
+        shape = [2] * r
+        axis = r // 2
+        shape[axis] = 3
+        count = int(np.prod(shape))
+        v = np.random.default_rng(100 + r).standard_normal(shape).astype(np.float32)
+        tag = f"랭크{r}"
+
+        cases += [
+            (WEBGPU_PREFIX + f"{tag} 원소별", lambda L, a=v: L.tensor(a) * 2.0 + 1.0),
+            (WEBGPU_PREFIX + f"{tag} permute",
+             lambda L, a=v, p=tuple(reversed(range(r))): L.tensor(a).permute(*p)),
+            (WEBGPU_PREFIX + f"{tag} reshape(내림)",
+             lambda L, a=v, s=tuple(shape[:-2]) + (shape[-2] * shape[-1],):
+             L.tensor(a).reshape(*s)),
+            (WEBGPU_PREFIX + f"{tag} reshape(올림)",
+             lambda L, n=count, s=tuple(shape): L.arange(n).float().reshape(*s)),
+            (WEBGPU_PREFIX + f"F.pad({tag})",
+             lambda L, a=v: L.nn.functional.pad(L.tensor(a), (1, 2))),
+        ]
+
+        def elemwise_grad(L, a=v):
+            x = L.tensor(a, requires_grad=True)
+            (x * x + x).sum().backward()
+            return x.grad
+
+        refused = (
+            ("합(축)", lambda L, a=v, ax=axis: L.tensor(a).sum(dim=ax)),
+            ("F.pad(값)",
+             lambda L, a=v: L.nn.functional.pad(L.tensor(a), (2, 1, 1, 0), value=-1.5)),
+            ("기울기", elemwise_grad),
+        )
+        for what, fn in refused:
+            cases.append((WEBGPU_PREFIX + f"{tag} {what}=거절", _as_expected(fn)))
+
+    # 경계가 **연산 이름에도, 입력 랭크에도** 깔끔하게 안 걸린다는 증거다.
+    #
+    # 처음에는 "랭크 8 을 unbind 하면 결과가 랭크 7 이라 거절될 것"이라고 적었다.
+    # 물어보니 순방향은 통과했다 — 앞서 본 실패는 순방향이 아니라 **기울기**의 것이었고,
+    # 나는 실패 이름에 붙은 `grad::` 를 안 읽고 원인을 지어냈다. 그래서 넷을 따로 적는다:
+    # 랭크 7 은 순방향도 기울기도 되고, 랭크 8 은 값은 나오는데 기울기가 없다.
+    #
+    # 이런 자리를 "고랭크는 안 된다" 한 줄로 덮으면 셋은 맞고 하나는 틀린 문서가 된다.
+    v7 = np.random.default_rng(107).standard_normal([2] * 7).astype(np.float32)
+    v8 = np.random.default_rng(108).standard_normal([2] * 8).astype(np.float32)
+
+    def unbind_grad(arr):
+        def run(L):
+            x = L.tensor(arr, requires_grad=True)
+            out = L.unbind(x, 0)[1]
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, "unbind 기울기")
+        return run
+
+    cases += [
+        (WEBGPU_PREFIX + "랭크7 unbind(순방향)", lambda L: L.unbind(L.tensor(v7), 0)[1]),
+        (WEBGPU_PREFIX + "랭크8 unbind(순방향)", lambda L: L.unbind(L.tensor(v8), 0)[1]),
+        (WEBGPU_PREFIX + "grad::랭크7 unbind", unbind_grad(v7)),
+        (WEBGPU_PREFIX + "grad::랭크8 unbind=거절", _as_expected(unbind_grad(v8))),
+    ]
+    return cases
+
+
+def _highrank_battery(ranks):
+    """랭크가 올라갈 때 **어디서 무너지는지** 본다.
+
+    처음에는 랭크 6 만 손으로 적었다. 그런데 랭크 5 에서 셋, 랭크 6 에서 하나가
+    나왔고 전부 "고쳤다"고 생각한 다음에 나왔다. 그러니 랭크마다 케이스를 베껴 적는
+    방식은 다음 랭크를 물을 때 또 베끼게 된다 — 랭크를 인자로 받게 만들어 둔다.
+
+    무엇을 묻는가: 값이 통째로 나오는 것부터 묻는다. 스칼라로 줄이면 자리가 뒤바뀌어도
+    합이 같아 통과하기 때문이다. 기울기도 `sum()` 대신 자리마다 다른 가중치를 곱해
+    받는다 — 그냥 `sum()` 이면 기울기가 전부 1 이라 0 이 엉뚱한 자리에 박혀도 안 걸린다.
+
+    TF.js 가 정말 못 하는 랭크가 있으면 답은 조용히 틀린 값이 아니라 **거절**이어야
+    하고, 그것도 여기서 드러난다 — 골든은 진짜 torch 로 굳으므로 torch 가 내는 값과
+    다르면 그것이 예외든 틀린 수든 갈린 것으로 잡힌다.
+    """
+    cases = []
+    for r in ranks:
+        # 축이 뒤바뀌면 값보다 **모양**에서 먼저 걸리도록 한 축만 3 으로 둔다.
+        shape = [2] * r
+        axis = r // 2
+        shape[axis] = 3
+        count = int(np.prod(shape))
+        v = np.random.default_rng(100 + r).standard_normal(shape).astype(np.float32)
+        tag = f"랭크{r}"
+
+        def slice_grad(kind, arr=v, ax=axis, t=tag):
+            def run(L):
+                x = L.tensor(arr, requires_grad=True)
+                if kind == "narrow":
+                    out = L.narrow(x, ax, 1, 2)
+                elif kind == "unbind":
+                    out = L.unbind(x, ax)[1]
+                else:
+                    out = L.split(x, 1, dim=ax)[0]
+                (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+                return _grad_of(x, f"{t} {kind}")
+            return run
+
+        def elemwise_grad(L, arr=v, t=tag):
+            x = L.tensor(arr, requires_grad=True)
+            (x * x + x).sum().backward()
+            return _grad_of(x, f"{t} 원소별")
+
+        cases += [
+            (WEBGPU_PREFIX + f"{tag} 원소별", lambda L, a=v: L.tensor(a) * 2.0 + 1.0),
+            (WEBGPU_PREFIX + f"{tag} 합(축)",
+             lambda L, a=v, ax=axis: L.tensor(a).sum(dim=ax)),
+            (WEBGPU_PREFIX + f"{tag} permute",
+             lambda L, a=v, p=tuple(reversed(range(r))): L.tensor(a).permute(*p)),
+            # 랭크를 내리는 reshape 과 올리는 reshape 을 둘 다 본다. `_dilate` 때
+            # 걸린 것이 reshape 과 pad 가 붙은 자리였으므로 따로 떼어 묻는다.
+            (WEBGPU_PREFIX + f"{tag} reshape(내림)",
+             lambda L, a=v, s=tuple(shape[:-2]) + (shape[-2] * shape[-1],):
+             L.tensor(a).reshape(*s)),
+            (WEBGPU_PREFIX + f"{tag} reshape(올림)",
+             lambda L, n=count, s=tuple(shape): L.arange(n).float().reshape(*s)),
+            (WEBGPU_PREFIX + f"grad::{tag} 원소별", elemwise_grad),
+            (WEBGPU_PREFIX + f"F.pad({tag})",
+             lambda L, a=v: L.nn.functional.pad(L.tensor(a), (1, 2))),
+            (WEBGPU_PREFIX + f"F.pad({tag}, 값)",
+             lambda L, a=v: L.nn.functional.pad(L.tensor(a), (2, 1, 1, 0), value=-1.5)),
+        ]
+        for kind in ("narrow", "unbind", "split"):
+            cases.append((WEBGPU_PREFIX + f"grad::{tag} {kind}", slice_grad(kind)))
     return cases
 
 
