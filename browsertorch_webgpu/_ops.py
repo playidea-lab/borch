@@ -933,11 +933,22 @@ def unique(t, sorted=True, return_counts=False):
 
 
 def masked_select(t, mask):
-    """골라낸 개수가 값에 따라 달라진다. TF.js 의 `booleanMask` 는 **비동기**라
-    동기 API 를 지키려면 쓸 수 없다. unique 와 같은 이유로 읽어와서 처리한다."""
+    """골라낸 **개수**가 값에 따라 달라진다. TF.js 의 `booleanMask` 는 비동기라
+    동기 API 를 지키려면 쓸 수 없어서, 어느 자리를 고를지는 읽어와서 정한다.
+
+    **다만 값은 원-핫 곱으로 GPU 에서 꺼낸다.** 전에는 numpy 로 골라 맨 텐서를
+    돌려줬고 그래서 기울기가 조용히 끊겼다 — 값은 맞아서 골든이 못 봤다.
+    자리를 CPU 에서 정하는 것과 그래프를 끊는 것은 별개다(`median` 이 같은 방식이다).
+    """
     t = _canonical(t)
     m = mask.numpy() if isinstance(mask, Tensor) else _np.asarray(mask)
-    return Tensor(_to_tf(t.numpy()[m.astype(bool)]))
+    picks = _np.flatnonzero(_np.broadcast_to(m.astype(bool), tuple(t.shape)).reshape(-1))
+    n = t.numel()
+    if picks.size == 0:
+        return Tensor(_to_tf(_np.zeros(0, dtype=_np.float32)))
+    onehot = _np.zeros((picks.size, n), dtype=_np.float32)
+    onehot[_np.arange(picks.size), picks] = 1.0
+    return (Tensor(_to_tf(onehot)) * t.reshape(1, n)).sum(dim=1)
 
 
 def median(t, dim=None):
@@ -973,16 +984,21 @@ def flip(t, dims):
 
 
 def roll(t, shifts, dims=None):
-    """TF.js 에 `roll` 이 없다. 잘라서 순서를 바꿔 붙인다."""
+    """TF.js 에 `roll` 이 없다. 잘라서 순서를 바꿔 붙인다.
+
+    **손잡이가 아니라 텐서로 자르고 붙인다.** 전에는 `_slice_along` 과 `_tf.concat` 을
+    직접 불러 맨 텐서를 돌려줬고, 그래서 **기울기가 조용히 끊겼다** — 값은 맞아서
+    골든이 못 봤다. `_slice_tensor` 와 `cat` 은 이미 역방향을 들고 있다.
+    """
     t = _canonical(t)
     axis = 0 if dims is None else (dims if isinstance(dims, int) else dims[0])
     n = t.shape[axis]
     s = int(shifts) % n
     if s == 0:
-        return Tensor(_tf.clone(t._h))
-    head = _slice_along(t._h, axis, n - s, s)
-    tail = _slice_along(t._h, axis, 0, n - s)
-    return Tensor(_tf.concat(_to_js([head, tail]), axis))
+        return t + 0.0                      # 복제하되 그래프는 잇는다
+    head = _slice_tensor(t, axis, n - s, s)
+    tail = _slice_tensor(t, axis, 0, n - s)
+    return cat([head, tail], axis)
 
 
 def cat(items, dim=0):

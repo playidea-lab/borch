@@ -1032,6 +1032,99 @@ def _pool3d_leaf(L, vol):
     return x
 
 
+FLOW_PREFIX = "flow::"
+
+# **기울기가 흐르는지만 묻는 표.**
+#
+# 값만 대조하는 검사는 그래프가 끊긴 것을 못 본다 — 값은 맞기 때문이다. 실제로
+# 자매의 `roll` 과 `masked_select` 가 그렇게 조용히 끊겨 있었고, 골든 746건이 전부
+# 초록인 채였다. 두 라이브러리에 같은 것을 물어 갈리는지 보는 것이 그것을 잡는 길이다.
+#
+# 여기 담긴 것은 **셋 다 흘려야 하는 것들**이다. 흐르지 않는 것(`nonzero`·`quantile`·
+# `argsort`·`signbit` 등)은 값이 모양에 달렸거나 계단이라 torch 도 안 흘리거나,
+# 우리가 일부러 안 넣은 것이라 여기 없다.
+_FLOW_OPS = (
+    "exp", "log", "sqrt", "abs", "sin", "tanh", "sigmoid", "relu", "erf", "erfc",
+    "sinc", "sum", "mean", "prod", "norm", "amax", "amin", "nansum", "nanmean",
+    "logsumexp", "cumsum", "cumprod", "median", "msort", "diff", "flip", "roll",
+    "tile", "repeat_interleave", "narrow", "index_select", "masked_select",
+    "masked_fill", "unbind", "ravel", "clamp", "softmax", "einsum", "diag", "trace",
+    "tril", "diagonal", "diagflat", "rot90", "select", "swapaxes", "movedim",
+    "det", "logdet", "inverse", "cholesky", "matrix_power", "gather",
+)
+
+
+def flow_cases(inp=None):
+    """각 연산이 **기울기를 흘리는가**. 값이 아니라 그 사실을 굳힌다.
+
+    `requires_grad` 하나를 문자열로 답한다 — 값을 묻는 다른 표와 겹치지 않게 하고,
+    "흐른다고 했는데 안 흐른다"가 딱 하나의 이유로 갈리게 하기 위해서다.
+    """
+    vec = np.array([0.5, 2.0, 1.5, 3.0], dtype=np.float32)
+    mat = np.arange(1, 10, dtype=np.float32).reshape(3, 3)
+    pair = np.arange(1., 7., dtype=np.float32).reshape(2, 3)
+    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
+    idx2 = np.array([[0, 2], [1, 0]], dtype=np.int64)
+    idx1 = np.array([1, 0], dtype=np.int64)
+    mask = np.array([True, False, True, False])
+
+    calls = {
+        "exp": (lambda L, x: L.exp(x), vec), "log": (lambda L, x: L.log(x), vec),
+        "sqrt": (lambda L, x: L.sqrt(x), vec), "abs": (lambda L, x: L.abs(x), vec),
+        "sin": (lambda L, x: L.sin(x), vec), "tanh": (lambda L, x: L.tanh(x), vec),
+        "sigmoid": (lambda L, x: L.sigmoid(x), vec),
+        "relu": (lambda L, x: L.relu(x), vec), "erf": (lambda L, x: L.erf(x), vec),
+        "erfc": (lambda L, x: L.erfc(x), vec), "sinc": (lambda L, x: L.sinc(x), vec),
+        "sum": (lambda L, x: x.sum(), vec), "mean": (lambda L, x: x.mean(), vec),
+        "prod": (lambda L, x: L.prod(x), vec), "norm": (lambda L, x: L.norm(x), vec),
+        "amax": (lambda L, x: L.amax(x), vec), "amin": (lambda L, x: L.amin(x), vec),
+        "nansum": (lambda L, x: L.nansum(x), vec),
+        "nanmean": (lambda L, x: L.nanmean(x), vec),
+        "logsumexp": (lambda L, x: L.logsumexp(x, 0), vec),
+        "cumsum": (lambda L, x: L.cumsum(x, 0), vec),
+        "cumprod": (lambda L, x: L.cumprod(x, 0), vec),
+        "median": (lambda L, x: L.median(x), vec),
+        "msort": (lambda L, x: L.msort(x), vec),
+        "diff": (lambda L, x: L.diff(x), vec),
+        "flip": (lambda L, x: L.flip(x, (0,)), vec),
+        "roll": (lambda L, x: L.roll(x, 1), vec),
+        "tile": (lambda L, x: L.tile(x, (2,)), vec),
+        "repeat_interleave": (lambda L, x: L.repeat_interleave(x, 2), vec),
+        "narrow": (lambda L, x: L.narrow(x, 0, 0, 2), vec),
+        "index_select": (lambda L, x: L.index_select(x, 0, L.tensor(idx1)), vec),
+        "masked_select": (lambda L, x: L.masked_select(x, L.tensor(mask)), vec),
+        "masked_fill": (lambda L, x: L.masked_fill(x, L.tensor(mask), 0.0), vec),
+        "unbind": (lambda L, x: L.unbind(x, 0)[1], vec),
+        "ravel": (lambda L, x: L.ravel(x), vec),
+        "clamp": (lambda L, x: L.clamp(x, 1.0, 2.0), vec),
+        "softmax": (lambda L, x: L.softmax(x, 0), vec),
+        "einsum": (lambda L, x: L.einsum("ij->i", x), mat),
+        "diag": (lambda L, x: L.diag(x), mat), "trace": (lambda L, x: L.trace(x), mat),
+        "tril": (lambda L, x: L.tril(x), mat),
+        "diagonal": (lambda L, x: L.diagonal(x), mat),
+        "diagflat": (lambda L, x: L.diagflat(x), vec),
+        "rot90": (lambda L, x: L.rot90(x, 1, (0, 1)), mat),
+        "select": (lambda L, x: L.select(x, 0, 1), mat),
+        "swapaxes": (lambda L, x: L.swapaxes(x, 0, 1), mat),
+        "movedim": (lambda L, x: L.movedim(x, 0, 1), mat),
+        "det": (lambda L, x: L.det(x), sym), "logdet": (lambda L, x: L.logdet(x), sym),
+        "inverse": (lambda L, x: L.inverse(x), sym),
+        "cholesky": (lambda L, x: L.linalg.cholesky(x), sym),
+        "matrix_power": (lambda L, x: L.matrix_power(x, 2), sym),
+        "gather": (lambda L, x: L.gather(x, 1, L.tensor(idx2)), pair),
+    }
+
+    def asks(name):
+        fn, arr = calls[name]
+
+        def run(L):
+            x = L.tensor(arr, requires_grad=True)
+            return "흐름" if bool(getattr(fn(L, x), "requires_grad", False)) else "안흐름"
+        return run
+
+    return [(FLOW_PREFIX + name, asks(name)) for name in _FLOW_OPS]
+
+
 NDIM_PREFIX = "ndim::"
 
 
@@ -1655,7 +1748,8 @@ def golden_cases(inp=None):
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
-            + linalg_cases(inp) + ndim_cases(inp) + webgpu_cases(inp))
+            + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
+            + webgpu_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
