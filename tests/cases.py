@@ -38,9 +38,23 @@ def golden_inputs():
     w1 = (rng.standard_normal((3, 8)) * 0.3).astype(np.float32)
     b1 = (rng.standard_normal(3) * 0.1).astype(np.float32)
 
+    # 합성곱용. img 는 (2,3,4,4) 라 3채널 → 4채널 3×3 필터가 맞는다.
+    cw = (rng.standard_normal((4, 3, 3, 3)) * 0.3).astype(np.float32)
+    cb = (rng.standard_normal(4) * 0.1).astype(np.float32)
+
+    # CNN 학습용 — (8,1,8,8) → conv → pool → flatten(64) → 3
+    cnn_x = rng.standard_normal((8, 1, 8, 8)).astype(np.float32)
+    cnn_y = rng.integers(0, 3, 8).astype(np.int64)
+    ck = (rng.standard_normal((4, 1, 3, 3)) * 0.3).astype(np.float32)
+    ckb = (rng.standard_normal(4) * 0.1).astype(np.float32)
+    fw = (rng.standard_normal((3, 64)) * 0.2).astype(np.float32)
+    fb = (rng.standard_normal(3) * 0.1).astype(np.float32)
+
     return {"x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail,
             "train_x": train_x, "train_y": train_y,
-            "w0": w0, "b0": b0, "w1": w1, "b1": b1}
+            "w0": w0, "b0": b0, "w1": w1, "b1": b1,
+            "cw": cw, "cb": cb,
+            "cnn_x": cnn_x, "cnn_y": cnn_y, "ck": ck, "ckb": ckb, "fw": fw, "fb": fb}
 
 
 def wide_cases(inp=None):
@@ -105,6 +119,20 @@ def wide_cases(inp=None):
          lambda L: L.nn.functional.one_hot(L.tensor(np.array([0, 2], dtype=np.int64)), 3)),
         ("erf(꼬리)", lambda L: L.erf(L.tensor(tail))),
         ("F.gelu(꼬리)", lambda L: L.nn.functional.gelu(L.tensor(tail))),
+    ]
+
+    # 합성곱·풀링·정규화 — S3 가 더한 것들. 스트라이드 2 를 같이 보는 것은 의도다.
+    # 역방향에서 기울기 사이에 0 을 끼우는 경로가 거기서만 돈다.
+    cw, cb = inp["cw"], inp["cb"]
+    cases += [
+        ("F.conv2d", lambda L: L.nn.functional.conv2d(
+            L.tensor(img), L.tensor(cw), L.tensor(cb), 1, 1)),
+        ("F.conv2d(패딩0)", lambda L: L.nn.functional.conv2d(
+            L.tensor(img), L.tensor(cw), None, 1, 0)),
+        ("F.conv2d(스트라이드2)", lambda L: L.nn.functional.conv2d(
+            L.tensor(img), L.tensor(cw), L.tensor(cb), 2, 1)),
+        ("F.max_pool2d", lambda L: L.nn.functional.max_pool2d(L.tensor(img), 2)),
+        ("BatchNorm2d(학습)", lambda L: L.nn.BatchNorm2d(3)(L.tensor(img))),
     ]
     return cases
 
@@ -209,6 +237,40 @@ def grad_cases(inp=None):
         binary("cosine_similarity",
                lambda L, a, b: L.nn.functional.cosine_similarity(a, b), which, x2, x2 * 2)
 
+    # 합성곱 — **역방향을 직접 짠 자리다.** 입력·가중치·편향 셋 다 본다.
+    # 스트라이드 2 를 같이 보는 것은 의도다 — 기울기 사이에 0 을 끼우는 경로가 거기서만 돈다.
+    img, cw, cb = inp["img"], inp["cw"], inp["cb"]
+
+    def conv_grad(label, which, stride, padding, use_bias):
+        def run(L, w=which, s=stride, p=padding, ub=use_bias, n=label):
+            x = L.tensor(img, requires_grad=True)
+            k = L.tensor(cw, requires_grad=True)
+            b = L.tensor(cb, requires_grad=True) if ub else None
+            L.nn.functional.conv2d(x, k, b, s, p).sum().backward()
+            return _grad_of({"x": x, "w": k, "b": b}[w], n)
+        cases.append((f"grad::{label}/{which}", run))
+
+    for which in ("x", "w", "b"):
+        conv_grad("conv2d", which, 1, 1, True)
+    for which in ("x", "w"):
+        conv_grad("conv2d(패딩0)", which, 1, 0, False)
+        conv_grad("conv2d(스트라이드2)", which, 2, 1, False)
+
+    unary("max_pool2d", lambda L, x: L.nn.functional.max_pool2d(x, 2), img)
+
+    # BatchNorm — 평균·분산이 그래프 안에 있어야 한다. 밖으로 빼면 입력 기울기가
+    # 어긋나고 weight 에는 **아예 안 온다**(None). 그래서 둘 다 본다.
+    def bn_grad(which):
+        def run(L, w=which):
+            x = L.tensor(img, requires_grad=True)
+            bn = L.nn.BatchNorm2d(3)
+            bn(x).sum().backward()
+            return _grad_of(x if w == "x" else bn.weight, f"BatchNorm2d/{w}")
+        cases.append((f"grad::BatchNorm2d/{which}", run))
+
+    for which in ("x", "weight"):
+        bn_grad(which)
+
     return cases
 
 
@@ -251,6 +313,31 @@ def train_cases(inp=None):
         # 가중치까지 본다. 손실만 보면 **파라미터가 안 움직여도** 비슷해 보일 수 있다.
         cases.append((f"train::{opt_name}/0.weight",
                       lambda L, o=opt_name: dict(trained(L, o).named_parameters())["0.weight"]))
+
+    # CNN — 합성곱·풀링이 학습 루프 안에서 엮였을 때. 코어가 잡은 결함 셋이 전부
+    # 이렇게 엮인 자리에서 나왔고, 단위 대조는 그것을 못 봤다.
+    cnn_x, cnn_y = inp["cnn_x"], inp["cnn_y"]
+    cnn_w = {"0.weight": inp["ck"], "0.bias": inp["ckb"],
+             "4.weight": inp["fw"], "4.bias": inp["fb"]}
+
+    def cnn_trained(L):
+        model = L.nn.Sequential(
+            L.nn.Conv2d(1, 4, 3, padding=1), L.nn.ReLU(), L.nn.MaxPool2d(2),
+            L.nn.Flatten(), L.nn.Linear(4 * 4 * 4, 3))
+        model.load_state_dict({k: L.tensor(v) for k, v in cnn_w.items()}, strict=False)
+        opt = L.optim.SGD(model.parameters(), lr=0.05)
+        crit = L.nn.CrossEntropyLoss()
+        x, y = L.tensor(cnn_x), L.tensor(cnn_y)
+        for _ in range(_TRAIN_STEPS):
+            opt.zero_grad()
+            crit(model(x), y).backward()
+            opt.step()
+        return model
+
+    cases.append(("train::CNN/손실", lambda L: L.nn.CrossEntropyLoss()(
+        cnn_trained(L)(L.tensor(cnn_x)), L.tensor(cnn_y))))
+    cases.append(("train::CNN/conv.weight",
+                  lambda L: dict(cnn_trained(L).named_parameters())["0.weight"]))
     return cases
 
 

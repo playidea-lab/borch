@@ -25,6 +25,7 @@ import numpy as _np
 
 try:
     import js as _js
+    from pyodide.ffi import create_proxy as _create_proxy
     from pyodide.ffi import to_js as _to_js
 except ImportError as _exc:                                          # pragma: no cover
     raise ImportError(
@@ -269,6 +270,18 @@ class Tensor:
 
     def matmul(self, o):
         return self.__matmul__(o)
+
+    def reshape(self, *shape):
+        shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+        old = self.shape
+        return self._make(_tf.reshape(self._h, _to_js(list(shape))), (self,),
+                          lambda g: (_tf.reshape(g, _to_js(list(old))),), "ViewBackward0")
+
+    def view(self, *shape):
+        return self.reshape(*shape)
+
+    def flatten(self, start_dim=0):
+        return self.reshape(self.shape[:start_dim] + (-1,))
 
     def transpose(self, d0, d1):
         perm = list(range(self.ndim))
@@ -829,6 +842,113 @@ def cross_entropy(logits, target):
     return nll_loss(log_softmax(logits, dim=-1), target)
 
 
+# ---------------------------------------------------------------- 합성곱
+#
+# torch 는 NCHW, TF.js 는 NHWC 다. 축을 바꿔 넣고 되돌린다.
+#
+# **역방향을 직접 짠다.** TF.js 의 conv 역방향 커널은 순방향의 1/26 이고(S0 실측),
+# 같은 계산을 **순방향 conv 로 다시 쓰면 33배 빠르다**. 그래서 `tf.grad` 에 안 맡긴다 —
+# 이 라이브러리가 자체 테이프를 드는 이유가 이것이다.
+
+def _to_nhwc(h):
+    return _tf.transpose(h, _to_js([0, 2, 3, 1]))
+
+
+def _to_nchw(h):
+    return _tf.transpose(h, _to_js([0, 3, 1, 2]))
+
+
+def _dilate(handle, stride, extra):
+    """기울기 사이에 0 을 끼운다.
+
+    스트라이드가 1보다 크면 순방향이 칸을 건너뛴 것이므로, 역방향에서는 그 자리를
+    0 으로 되살려야 스트라이드 1 짜리 conv 로 계산할 수 있다. `extra` 는 입력 크기가
+    스트라이드로 나누어떨어지지 않을 때 남는 칸이다.
+
+    처음에는 6차원으로 펴서 `pad` 로 끼웠는데, **모양은 맞고 값이 전부 0 으로 나왔다.**
+    던지지도 않았다 — 6차원 경로가 조용히 0 을 준다. 그래서 5차원을 넘지 않게
+    `stack` 으로 다시 짰다.
+    """
+    n, oh, ow, f = _shape_of(handle)
+
+    zeros_h = _tf.zerosLike(handle)
+    stacked = _tf.stack(_to_js([handle] + [zeros_h] * (stride - 1)), 2)   # (n,oh,s,ow,f)
+    x = _tf.reshape(stacked, _to_js([n, oh * stride, ow, f]))
+
+    zeros_w = _tf.zerosLike(x)
+    stacked = _tf.stack(_to_js([x] + [zeros_w] * (stride - 1)), 3)        # (n,oh*s,ow,s,f)
+    x = _tf.reshape(stacked, _to_js([n, oh * stride, ow * stride, f]))
+
+    keep_h = (oh - 1) * stride + 1 + extra
+    keep_w = (ow - 1) * stride + 1 + extra
+    return _tf.slice(x, _to_js([0, 0, 0, 0]), _to_js([n, keep_h, keep_w, f]))
+
+
+def conv2d(x, weight, bias=None, stride=1, padding=0):
+    x, weight = _wrap(x), _wrap(weight)
+    N, C, H, W = x.shape
+    F, C2, KH, KW = weight.shape
+    if C != C2:
+        raise RuntimeError(f"채널이 안 맞습니다: 입력 {C}, 필터 {C2}")
+    if KH != KW:
+        _unsupported("정사각형이 아닌 커널")
+
+    xh = _to_nhwc(x._h)
+    wh = _tf.transpose(weight._h, _to_js([2, 3, 1, 0]))          # (F,C,KH,KW) → (KH,KW,C,F)
+    out = _tf.conv2d(xh, wh, stride, padding)
+    extra = (H + 2 * padding - KH) % stride
+
+    def back(g):
+        gd = _to_nhwc(g)
+        if stride > 1:
+            gd = _dilate(gd, stride, extra)
+
+        # dx — 커널을 공간 반전하고 입출력 채널을 바꾸면 **순방향 conv 가 된다**
+        wflip = _tf.transpose(_tf.reverse(wh, _to_js([0, 1])), _to_js([0, 1, 3, 2]))
+        dx = _tf.conv2d(gd, wflip, 1, KH - 1 - padding)
+
+        # dw — 배치와 채널을 맞바꾸고 기울기를 필터로 쓰면 역시 순방향 conv 가 된다
+        xpad = _tf.pad(xh, _to_js([[0, 0], [padding, padding],
+                                   [padding, padding], [0, 0]]))
+        xt = _tf.transpose(xpad, _to_js([3, 1, 2, 0]))           # (C, H', W', N)
+        gt = _tf.transpose(gd, _to_js([1, 2, 0, 3]))             # (OH, OW, N, F)
+        dw = _tf.transpose(_tf.conv2d(xt, gt, 1, "valid"), _to_js([3, 0, 1, 2]))
+
+        if bias is None:
+            return (_to_nchw(dx), dw)
+        return (_to_nchw(dx), dw, _tf.sum(g, _to_js([0, 2, 3])))
+
+    parents = (x, weight) if bias is None else (x, weight, _wrap(bias))
+    result = _to_nchw(out)
+    if bias is not None:
+        result = _tf.add(result, _tf.reshape(_wrap(bias)._h, _to_js([1, F, 1, 1])))
+    return x._make(result, parents, back, "ConvolutionBackward0")
+
+
+def max_pool2d(x, kernel_size, stride=None):
+    """역방향은 TF.js 에 맡긴다.
+
+    conv 와 달리 풀링은 전체 계산에서 차지하는 몫이 작고, 최댓값이 **어느 자리에**
+    있었는지를 우리가 다시 만들면 동점일 때 torch 와 갈린다. 정확한 쪽을 고른다.
+    """
+    x = _wrap(x)
+    stride = stride or kernel_size
+    xh = _to_nhwc(x._h)
+    ksize, strides = _to_js([kernel_size, kernel_size]), _to_js([stride, stride])
+    out = _tf.maxPool(xh, ksize, strides, "valid")
+
+    def back(g):
+        # 파이썬 함수를 JS 로 넘길 때는 프록시를 직접 들고 있어야 한다. 그냥 넘기면
+        # 호출이 끝나는 순간 파괴되는데, tf.grad 는 **나중에** 부른다.
+        fn = _create_proxy(lambda t: _tf.maxPool(t, ksize, strides, "valid"))
+        try:
+            return (_to_nchw(_tf.grad(fn)(xh, _to_nhwc(g))),)
+        finally:
+            fn.destroy()
+
+    return x._make(_to_nchw(out), (x,), back, "MaxPool2DBackward0")
+
+
 def avg_pool2d(x, kernel_size, stride=None):
     """torch 는 NCHW, TF.js 는 NHWC 다. 축을 바꿔 넣고 되돌린다."""
     x = _wrap(x)
@@ -859,6 +979,8 @@ class _Functional:
     nll_loss = staticmethod(nll_loss)
     cross_entropy = staticmethod(cross_entropy)
     avg_pool2d = staticmethod(avg_pool2d)
+    conv2d = staticmethod(conv2d)
+    max_pool2d = staticmethod(max_pool2d)
 
 
 # ---------------------------------------------------------------- nn.Module
@@ -1002,6 +1124,94 @@ class Sequential(Module):
         return len(self._layers)
 
 
+class Conv2d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True):
+        super().__init__()
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        bound = 1.0 / _np.sqrt(in_channels * kernel_size * kernel_size)
+        rng = _np.random.default_rng(0)
+        self.weight = Parameter(rng.uniform(
+            -bound, bound,
+            (out_channels, in_channels, kernel_size, kernel_size)).astype(_np.float32))
+        self.bias = Parameter(
+            rng.uniform(-bound, bound, out_channels).astype(_np.float32)) if bias else None
+
+    def forward(self, x):
+        return conv2d(x, self.weight, self.bias, self.stride, self.padding)
+
+    def __repr__(self):
+        return (f"Conv2d({self.in_channels}, {self.out_channels}, "
+                f"kernel_size={self.kernel_size}, stride={self.stride}, "
+                f"padding={self.padding})")
+
+
+class MaxPool2d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return max_pool2d(x, self.kernel_size, self.stride)
+
+
+class AvgPool2d(Module):
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size, self.stride = kernel_size, stride
+
+    def forward(self, x):
+        return avg_pool2d(x, self.kernel_size, self.stride)
+
+
+class Flatten(Module):
+    def __init__(self, start_dim=1):
+        super().__init__()
+        self.start_dim = start_dim
+
+    def forward(self, x):
+        return x.flatten(self.start_dim)
+
+
+class BatchNorm2d(Module):
+    """학습 중에는 이번 배치로, 평가 때는 모아둔 값으로.
+
+    평균·분산을 **그래프 안에서** 계산해야 한다. 손잡이로 빼서 상수처럼 쓰면
+    x → mean → y 로 흐르는 길이 끊겨 기울기가 틀리고 weight 에는 아예 안 간다 —
+    코어가 그 상태로 오래 있었고, 순방향만 대조하고 있어서 안 드러났다.
+
+    그리고 torch 는 두 곳에서 **다른 분산**을 쓴다. 정규화는 편향(ddof=0),
+    running_var 갱신은 비편향(ddof=1). 둘 다 편향으로 두면 2.6% 어긋난다.
+    """
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super().__init__()
+        self.num_features, self.eps, self.momentum = num_features, eps, momentum
+        self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
+        self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
+        self.running_mean = _np.zeros(num_features, dtype=_np.float32)
+        self.running_var = _np.ones(num_features, dtype=_np.float32)
+
+    def forward(self, x):
+        shape = (1, -1, 1, 1)
+        if self.training:
+            mean = x.mean(dim=0).mean(dim=1).mean(dim=1)              # (C,)
+            centered = x - mean.reshape(shape)
+            var = (centered * centered).mean(dim=0).mean(dim=1).mean(dim=1)
+            with no_grad():
+                n = x.shape[0] * x.shape[2] * x.shape[3]
+                unbiased = var.numpy() * (n / (n - 1))
+                self.running_mean = ((1 - self.momentum) * self.running_mean
+                                     + self.momentum * mean.numpy())
+                self.running_var = ((1 - self.momentum) * self.running_var
+                                    + self.momentum * unbiased)
+            normed = centered / (var.reshape(shape) + self.eps) ** 0.5
+        else:
+            normed = ((x - tensor(self.running_mean.reshape(1, -1, 1, 1)))
+                      / tensor(_np.sqrt(self.running_var + self.eps).reshape(1, -1, 1, 1)))
+        return normed * self.weight.reshape(shape) + self.bias.reshape(shape)
+
+
 class MSELoss(Module):
     def forward(self, pred, target):
         return mse_loss(pred, target)
@@ -1022,6 +1232,11 @@ class _NN:
     Tanh = Tanh
     GELU = GELU
     Sequential = Sequential
+    Conv2d = Conv2d
+    MaxPool2d = MaxPool2d
+    AvgPool2d = AvgPool2d
+    Flatten = Flatten
+    BatchNorm2d = BatchNorm2d
     MSELoss = MSELoss
     CrossEntropyLoss = CrossEntropyLoss
 
