@@ -21,8 +21,8 @@ TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 
   맞췄지만(72/72), **`float64` 는 없다** — TF.js 에 배정도가 없어서 거절한다.
   그리고 정수는 float32 에 담으므로 **2^24 까지 정확**하고, 넘으면 조용히 자르지 않고
   던진다. 코어는 float64 까지 112/112 다
-- **표현 동등(T3)을 맞추지 않았다.** 코어는 15/15 다. 오류는 dtype 이 거부하는
-  조합만 골든이 본다
+- **오류 동등(T2)은 부분이다.** 코어는 예외 종류 12/12 에 검색 가능한 영문 문구
+  9/9 를 맞추지만, 여기는 dtype 이 거부하는 조합만 골든이 본다
 - **`scope()` 를 노출한다.** 역전파 클로저가 든 중간 버퍼는 파이썬 GC 가 못 놓는다.
   코어와 다른 한 줄이고, 이유는 WEBGPU-DESIGN.md 7절에 있다
 
@@ -168,6 +168,74 @@ def _to_np(handle):
     return out.astype(bool) if kind == "bool" else out
 
 
+# ---------------------------------------------------------------- 표현(repr)
+#
+# 학습자가 가장 많이 하는 일이 print(tensor) 다. 진짜와 다르게 찍히면 교재의 예시와
+# 화면이 안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다.
+#
+# **코어와 같은 알고리즘이다.** 두 벌로 쓰면 언젠가 갈리므로 규칙을 그대로 옮겼다 —
+# torch/_tensor_str.py 의 규칙이고, 코어가 15/15 로 맞춰둔 것이다.
+
+_PRINT_PRECISION = 4
+_LINE_WIDTH = 80
+
+
+def set_printoptions(precision=None, linewidth=None):
+    global _PRINT_PRECISION, _LINE_WIDTH
+    if precision is not None:
+        _PRINT_PRECISION = precision
+    if linewidth is not None:
+        _LINE_WIDTH = linewidth
+
+
+def _float_formatter(arr):
+    """torch 의 규칙: 값이 전부 정수면 `1.`, 아니면 소수 네 자리, 범위가 넓으면 지수."""
+    finite = arr[_np.isfinite(arr)]
+    nonzero = finite[finite != 0]
+    if nonzero.size == 0:
+        return lambda v: f"{v:.0f}."
+    amax, amin = _np.abs(nonzero).max(), _np.abs(nonzero).min()
+    integral = bool(_np.all(finite == _np.floor(finite)))
+
+    if integral and amax < 1e8:
+        return lambda v: f"{v:.0f}."
+    if amax / amin > 1000 or amax > 1e8 or amin < 1e-4:
+        return lambda v, p=_PRINT_PRECISION: f"{v:.{p}e}"
+    return lambda v, p=_PRINT_PRECISION: f"{v:.{p}f}"
+
+
+def _tensor_str(data):
+    if data.size == 0:
+        return "[]"
+    if data.dtype.kind == "f":
+        fmt = _float_formatter(data)
+        # torch 는 원소를 같은 너비로 오른쪽 정렬한다 — 음수가 섞이면 양수 앞에 자리가 생긴다.
+        width = max((len(fmt(v)) for v in data.reshape(-1)), default=0)
+        padded = lambda v, f=fmt, w=width: f(v).rjust(w)             # noqa: E731
+        body = _np.array2string(
+            data, formatter={"float_kind": padded}, separator=", ",
+            max_line_width=_LINE_WIDTH - 8, threshold=1000)
+    else:
+        body = _np.array2string(data, separator=", ",
+                                max_line_width=_LINE_WIDTH - 8, threshold=1000)
+    # numpy 는 이어지는 줄을 한 칸 들여쓴다. torch 는 "tensor(" 만큼(8칸) 들여쓴다.
+    return body.replace("\n ", "\n" + " " * 8)
+
+
+def _tensor_repr(t):
+    parts = [_tensor_str(t.numpy())]
+    if t._op:
+        parts.append(f"grad_fn=<{t._op}>")
+    elif t.requires_grad:
+        parts.append("requires_grad=True")
+    return f"tensor({', '.join(parts)})"
+
+
+class Size(tuple):
+    def __repr__(self):
+        return f"torch.Size([{', '.join(str(x) for x in self)}])"
+
+
 # ---------------------------------------------------------------- Tensor
 
 _grad_enabled = True
@@ -206,8 +274,8 @@ class Tensor:
         raw = _shape_of(self._h)
         if self._nhwc:
             n, h, w, c = raw
-            return (n, c, h, w)
-        return raw
+            return Size((n, c, h, w))
+        return Size(raw)
 
     @property
     def dtype(self):
@@ -307,7 +375,7 @@ class Tensor:
             pass          # 종료 중일 수 있다. 여기서 시끄러워봐야 얻을 것이 없다
 
     def __repr__(self):
-        return f"tensor({self.numpy()!r})"
+        return _tensor_repr(self)
 
     # ---- 그래프
 
@@ -657,6 +725,13 @@ def ones(*shape, dtype=None, requires_grad=False):
     _reject_float64(dtype)
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return Tensor(_tf.ones(_to_js(list(shape))), requires_grad, dt=dtype or float32)
+
+
+def arange(*args, dtype=None):
+    _reject_float64(dtype)
+    arr = _np.arange(*args)
+    dt = dtype or _dtype_of(arr)
+    return Tensor(_to_tf(arr, dt), dt=dt)
 
 
 def randn(*shape, requires_grad=False):

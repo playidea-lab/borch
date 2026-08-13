@@ -375,9 +375,10 @@ def train_cases(inp=None):
 
 
 def golden_cases(inp=None):
-    """골든이 다루는 전부 — 값·기울기·학습·dtype."""
+    """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
     inp = golden_inputs() if inp is None else inp
-    return wide_cases(inp) + grad_cases(inp) + train_cases(inp) + dtype_cases(inp)
+    return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
+            + dtype_cases(inp) + repr_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]
@@ -428,6 +429,42 @@ def dtype_cases(inp=None):
                         lambda: eval(f"p {o} s", {},                 # noqa: S307
                                      {"p": _dtype_tensor(L, x), "s": v}))))
     return cases
+
+
+_REPR_CASES = [
+    ("스칼라", "tensor(3.14)"),
+    ("정수값 float", "tensor([1.0, 2.0, 3.0])"),
+    ("소수", "tensor([0.1, 0.25])"),
+    ("음수 섞임", "tensor([-1.5, 2.0, -0.25])"),
+    ("2차원", "tensor([[1.0, 2.0], [3.0, 4.0]])"),
+    ("3차원", "zeros(2, 1, 3)"),
+    ("정수", "tensor([1, 2, 3])"),
+    ("불리언", "tensor([True, False])"),
+    ("빈 텐서", "tensor([])"),
+    ("큰 값·작은 값", "tensor([1e6, 2e-6])"),
+    ("긴 1차원 줄바꿈", "arange(30).float()"),
+    ("requires_grad", "tensor([1.0, 2.0], requires_grad=True)"),
+    ("비잎 노드 grad_fn", "tensor([1.0], requires_grad=True) * 2"),
+    ("합계 grad_fn", "tensor([1.0, 2.0], requires_grad=True).sum()"),
+    ("relu grad_fn", "relu(tensor([-1.0, 2.0], requires_grad=True))"),
+    ("Size", "tensor([[1.0, 2.0], [3.0, 4.0]]).shape"),
+]
+
+
+def repr_cases(inp=None):
+    """T3 — `print(t)` 가 진짜와 같은가.
+
+    학습자가 가장 많이 하는 일이 print(tensor) 다. 다르게 찍히면 교재의 예시와 화면이
+    안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다. 값이 아니라 **글자**를 본다.
+    """
+
+    def ns(L):
+        names = ("tensor", "zeros", "ones", "arange", "relu", "sigmoid")
+        return {n: getattr(L, n) for n in names if hasattr(L, n)}
+
+    return [(f"repr::{name}",
+             lambda L, e=expr: repr(eval(e, {"__builtins__": {}}, ns(L))))   # noqa: S307
+            for name, expr in _REPR_CASES]
 
 
 def to_numpy(t):
