@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 dist/
+
+# 골든은 생성물이다 — 1단계(네이티브 + torch)가 굳히고 2단계가 읽는다.
+tests/golden.npz

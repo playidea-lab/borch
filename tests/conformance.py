@@ -28,10 +28,15 @@ import pathlib
 import numpy as np
 import torch as real
 
-_spec = importlib.util.spec_from_file_location(
-    "browsertorch", pathlib.Path(__file__).resolve().parent.parent / "browsertorch.py")
+_here = pathlib.Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("browsertorch", _here.parent / "browsertorch.py")
 nano = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(nano)
+
+# 케이스 표는 별도 파일이다 — 왜인지는 cases.py 첫 줄에 있다.
+_cases_spec = importlib.util.spec_from_file_location("bt_cases", _here / "cases.py")
+cases_mod = importlib.util.module_from_spec(_cases_spec)
+_cases_spec.loader.exec_module(cases_mod)
 
 ATOL = 1e-5
 
@@ -183,75 +188,10 @@ def build_cases():
 
 # ---------------------------------------------------------------- 넓은 표면
 
-# 교재가 요구하는 범위 밖이지만 튜토리얼·실무에서 흔한 것들. 이름만 있고 값이 다르면
-# 그것도 거짓이라, 있는 것은 전부 값으로 대조한다.
+# 표 자체는 `cases.py` 에 있다. 골든 2단계는 브라우저에서 도는데 거기엔 torch 가 없어서,
+# 표가 이 파일에 있으면 그쪽에서 임포트조차 안 된다. 두 벌로 두면 언젠가 갈린다.
 def _wide_cases():
-    rng = np.random.default_rng(0)
-    x1 = rng.standard_normal(6).astype(np.float32)
-    xp = np.abs(x1) + 0.2
-    x2 = rng.standard_normal((3, 4)).astype(np.float32)
-    img = rng.standard_normal((2, 3, 4, 4)).astype(np.float32)
-    idx2 = np.array([[0, 2], [1, 3], [2, 0]])
-
-    cases = []
-    for fn in ("log2 log10 rsqrt square reciprocal tan sinh cosh erf sign floor ceil round "
-               "sqrt exp abs sin cos").split():
-        cases.append((fn, lambda L, f=fn: getattr(L, f)(L.tensor(xp))))
-    for fn in ("prod count_nonzero",).__getitem__(0).split():
-        cases.append((fn, lambda L, f=fn: getattr(L, f)(L.tensor(x1))))
-    cases += [
-        ("median", lambda L: L.median(L.tensor(x1))),
-        ("median(dim)", lambda L: L.median(L.tensor(x2), dim=1).values),
-        ("cumsum", lambda L: L.cumsum(L.tensor(x1), 0)),
-        ("cumprod", lambda L: L.cumprod(L.tensor(x1), 0)),
-        ("norm", lambda L: L.norm(L.tensor(x2))),
-        ("topk", lambda L: L.topk(L.tensor(x1), 3).values),
-        ("sort", lambda L: L.sort(L.tensor(x1)).values),
-        ("unique", lambda L: L.unique(L.tensor(np.array([1., 1., 2., 3.], dtype=np.float32)))),
-        ("gather", lambda L: L.gather(L.tensor(x2), 1, L.tensor(idx2))),
-        ("flip", lambda L: L.flip(L.tensor(x2), [0])),
-        ("roll", lambda L: L.roll(L.tensor(x1), 2)),
-        ("index_select", lambda L: L.index_select(L.tensor(x2), 0, L.tensor(np.array([2, 0])))),
-        ("masked_select", lambda L: L.masked_select(L.tensor(x1), L.tensor(x1) > 0)),
-        ("narrow", lambda L: L.narrow(L.tensor(x2), 1, 1, 2)),
-        ("split", lambda L: L.split(L.tensor(x1), 2)[1]),
-        ("chunk", lambda L: L.chunk(L.tensor(x1), 3)[2]),
-        ("unbind", lambda L: L.unbind(L.tensor(x2))[1]),
-        ("maximum", lambda L: L.maximum(L.tensor(x1), L.tensor(-x1))),
-        ("minimum", lambda L: L.minimum(L.tensor(x1), L.tensor(-x1))),
-        ("clamp", lambda L: L.clamp(L.tensor(x1), min=-0.5, max=0.5)),
-        ("mm", lambda L: L.mm(L.tensor(x2), L.tensor(x2.T))),
-        ("dot", lambda L: L.dot(L.tensor(x1), L.tensor(x1))),
-        ("outer", lambda L: L.outer(L.tensor(x1[:2]), L.tensor(x1[:3]))),
-        ("diag", lambda L: L.diag(L.tensor(x2[:3, :3]))),
-        ("trace", lambda L: L.trace(L.tensor(x2[:3, :3]))),
-        ("F.gelu", lambda L: L.nn.functional.gelu(L.tensor(x1))),
-        ("F.silu", lambda L: L.nn.functional.silu(L.tensor(x1))),
-        ("F.leaky_relu", lambda L: L.nn.functional.leaky_relu(L.tensor(x1), 0.1)),
-        ("F.elu", lambda L: L.nn.functional.elu(L.tensor(x1))),
-        ("F.log_softmax", lambda L: L.nn.functional.log_softmax(L.tensor(x2), dim=-1)),
-        ("F.avg_pool2d", lambda L: L.nn.functional.avg_pool2d(L.tensor(img), 2)),
-        ("F.l1_loss", lambda L: L.nn.functional.l1_loss(L.tensor(x1), L.tensor(-x1))),
-        ("F.smooth_l1_loss",
-         lambda L: L.nn.functional.smooth_l1_loss(L.tensor(x1), L.tensor(-x1))),
-        ("F.nll_loss", lambda L: L.nn.functional.nll_loss(
-            L.nn.functional.log_softmax(L.tensor(x2), dim=-1), L.tensor(np.array([0, 1, 2])))),
-        ("F.pad", lambda L: L.nn.functional.pad(L.tensor(x2), (1, 1))),
-        ("F.normalize", lambda L: L.nn.functional.normalize(L.tensor(x2), dim=1)),
-        ("F.cosine_similarity",
-         lambda L: L.nn.functional.cosine_similarity(L.tensor(x2), L.tensor(x2 * 2))),
-        ("F.one_hot", lambda L: L.nn.functional.one_hot(L.tensor(np.array([0, 2])), 3)),
-    ]
-
-    # erf·gelu 의 꼬리. 위의 xp 는 **양수 0.2 이상**만 보고 x1 은 대략 [-2, 2] 라,
-    # 자릿수가 날아가는 두 자리(원점 근처와 큰 |x|)를 아무도 안 보고 있었다.
-    # erf 를 `1 - erfc` 로 두면 원점에서, gelu 를 `1 + erf` 로 두면 왼쪽 꼬리에서 갈린다.
-    tail = np.array([-8., -6., -4., -1., -1e-3, 0., 1e-3, 1., 4., 6., 8.], dtype=np.float32)
-    cases += [
-        ("erf(꼬리)", lambda L: L.erf(L.tensor(tail))),
-        ("F.gelu(꼬리)", lambda L: L.nn.functional.gelu(L.tensor(tail))),
-    ]
-    return cases
+    return cases_mod.wide_cases()
 
 
 def report_wide():
