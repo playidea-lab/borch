@@ -258,6 +258,17 @@ def grad_cases(inp=None):
     unary("idx[0:2, 1:3]", lambda L, x: x[0:2, 1:3], x2)
     unary("idx[목록]", lambda L, x: x[[2, 0]], x2)
 
+    # 이어 붙이기·쌓기 — DataLoader 의 collate 가 이것 위에 선다
+    unary("cat", lambda L, x: L.cat([x, x * 2]))
+    unary("cat(dim=1)", lambda L, x: L.cat([x, x * 2], 1), x2)
+    unary("stack", lambda L, x: L.stack([x, x * 3]))
+    unary("stack(dim=1)", lambda L, x: L.stack([x, x * 3], 1), x2)
+
+    # 메서드 형태 — torch 코드는 `x.exp()` 와 `torch.exp(x)` 를 섞어 쓴다
+    unary("메서드 x.abs()", lambda L, x: x.abs())
+    unary("메서드 x.exp()", lambda L, x: x.exp())
+    unary("메서드 x.sqrt()", lambda L, x: x.sqrt(), xp)
+
     # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
     for which in ("a", "b"):
         binary("add", lambda L, a, b: a + b, which)
@@ -330,7 +341,7 @@ def train_cases(inp=None):
 
     # 모멘텀을 **따로 본다.** 모멘텀 없는 SGD 만 보고 있었더니, 버퍼가 첫 스텝에
     # grad 의 손잡이를 물고 있다가 두 번째 스텝에서 터지는 것을 못 잡았다.
-    _OPTS = {"SGD": {}, "SGD(모멘텀)": {"momentum": 0.9}, "Adam": {}}
+    _OPTS = {"SGD": {}, "SGD(모멘텀)": {"momentum": 0.9}, "Adam": {}, "RMSprop": {}}
 
     def trained(L, opt_name):
         model = L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(), L.nn.Linear(8, 3))
@@ -380,6 +391,44 @@ def train_cases(inp=None):
         cnn_trained(L)(L.tensor(cnn_x)), L.tensor(cnn_y))))
     cases.append(("train::CNN/conv.weight",
                   lambda L: dict(cnn_trained(L).named_parameters())["0.weight"]))
+
+    # 스케줄러는 **파이썬 실수 연산뿐**이라 torch 와 값이 그대로 같아야 한다.
+    # 한 값이 아니라 **궤적 전체**를 본다 — 코어가 그렇게 하다가 StepLR 의 차이를 잡았다.
+    def lr_traj(L, make, steps=6):
+        p = L.tensor([1.0], requires_grad=True)
+        opt = L.optim.SGD([p], lr=1.0)
+        sch = make(L, opt)
+        seen = [opt.param_groups[0]["lr"]]
+        for _ in range(steps):
+            sch.step()
+            seen.append(opt.param_groups[0]["lr"])
+        return L.tensor(seen)
+
+    schedules = {
+        "StepLR": lambda L, o: L.optim.lr_scheduler.StepLR(o, step_size=2, gamma=0.5),
+        "MultiStepLR": lambda L, o: L.optim.lr_scheduler.MultiStepLR(o, [2, 4], gamma=0.5),
+        "ExponentialLR": lambda L, o: L.optim.lr_scheduler.ExponentialLR(o, gamma=0.9),
+        "CosineAnnealingLR": lambda L, o: L.optim.lr_scheduler.CosineAnnealingLR(o, T_max=6),
+        "LambdaLR": lambda L, o: L.optim.lr_scheduler.LambdaLR(o, lambda e: 1.0 / (1 + e)),
+    }
+    for name, make in schedules.items():
+        cases.append((f"sched::{name}", lambda L, m=make: lr_traj(L, m)))
+
+    def plateau(L):
+        p = L.tensor([1.0], requires_grad=True)
+        opt = L.optim.SGD([p], lr=1.0)
+        sch = L.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=1, factor=0.5)
+        seen = []
+        for metric in [1.0, 1.0, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0]:
+            sch.step(metric)
+            seen.append(opt.param_groups[0]["lr"])
+        return L.tensor(seen)
+
+    cases.append(("sched::ReduceLROnPlateau", plateau))
+
+    # RMSprop — 옵티마이저 중 유일하게 골든이 안 보던 것
+    cases.append(("train::RMSprop/0.weight", lambda L: dict(
+        trained(L, "RMSprop").named_parameters())["0.weight"]))
     return cases
 
 

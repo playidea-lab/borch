@@ -912,6 +912,45 @@ def ones(*shape, dtype=None, requires_grad=False):
     return Tensor(_tf.ones(_to_js(list(shape))), requires_grad, dt=dtype or float32)
 
 
+# 난수는 **numpy 로 뽑아 올린다.** TF.js 의 난수를 쓰면 `manual_seed` 가 코어와 다른
+# 흐름을 타서 같은 씨앗에 다른 값이 나온다. 초기화는 한 번뿐이라 올리는 비용도 없다.
+_rng = _np.random.default_rng(0)
+
+
+def manual_seed(seed):
+    global _rng
+    _rng = _np.random.default_rng(seed)
+    return seed
+
+
+class Generator:
+    """씨앗을 담아 다니는 그릇. `random_split(generator=...)` 이 이것을 받는다 —
+    나누기를 고정하지 않으면 모델을 바꿔 좋아진 건지 나누기가 운이 좋았던 건지 알 수 없다."""
+
+    def __init__(self):
+        self.seed = 0
+
+    def manual_seed(self, seed):
+        self.seed = seed
+        return self
+
+    def rng(self):
+        return _np.random.default_rng(self.seed)
+
+
+def rand(*shape):
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+    return Tensor(_to_tf(_rng.random(shape).astype(_np.float32)), dt=float32)
+
+
+def randint(low, high, shape):
+    return Tensor(_to_tf(_rng.integers(low, high, shape).astype(_np.int64), int64), dt=int64)
+
+
+def randperm(n):
+    return Tensor(_to_tf(_rng.permutation(n).astype(_np.int64), int64), dt=int64)
+
+
 def arange(*args, dtype=None):
     _reject_float64(dtype)
     arr = _np.arange(*args)
@@ -921,7 +960,8 @@ def arange(*args, dtype=None):
 
 def randn(*shape, requires_grad=False):
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_tf.randomNormal(_to_js(list(shape))), requires_grad)
+    return Tensor(_to_tf(_rng.standard_normal(shape).astype(_np.float32)),
+                  requires_grad, dt=float32)
 
 
 # ---------------------------------------------------------------- 원소별
@@ -1206,6 +1246,34 @@ def roll(t, shifts, dims=None):
     head = _slice_along(t._h, axis, n - s, s)
     tail = _slice_along(t._h, axis, 0, n - s)
     return Tensor(_tf.concat(_to_js([head, tail]), axis))
+
+
+def cat(items, dim=0):
+    """이어 붙인다. 역방향은 붙인 자리대로 도로 자르는 것이다."""
+    items = [_canonical(_wrap(t)) for t in items]
+    sizes = [t.shape[dim] for t in items]
+    out = _tf.concat(_to_js([t._h for t in items]), dim)
+
+    def back(g):
+        pieces, start = [], 0
+        for size in sizes:
+            pieces.append(_slice_along(g, dim, start, size))
+            start += size
+        return tuple(pieces)
+
+    return items[0]._make(out, tuple(items), back, "CatBackward0")
+
+
+def stack(items, dim=0):
+    """새 축을 만들어 쌓는다. 역방향은 그 축에서 한 장씩 떼는 것이다."""
+    items = [_canonical(_wrap(t)) for t in items]
+    out = _tf.stack(_to_js([t._h for t in items]), dim)
+
+    def back(g):
+        return tuple(_tf.squeeze(_slice_along(g, dim, i, 1), _to_js([dim]))
+                     for i in range(len(items)))
+
+    return items[0]._make(out, tuple(items), back, "StackBackward0")
 
 
 def _slice_along(handle, axis, start, length):
@@ -1759,12 +1827,13 @@ class Linear(Module):
         super().__init__()
         self.in_features, self.out_features = in_features, out_features
         # 코어와 같은 초기화 — U(-1/√fan_in, 1/√fan_in)
+        # 모듈 수준 `_rng` 를 쓴다. 매번 `default_rng(0)` 을 새로 만들면 **층마다 같은
+        # 가중치가 나온다** — 값을 명시적으로 넣는 골든에서는 안 드러나는 종류다.
         bound = 1.0 / _np.sqrt(in_features)
-        rng = _np.random.default_rng(0)
         self.weight = Parameter(
-            rng.uniform(-bound, bound, (out_features, in_features)).astype(_np.float32))
+            _rng.uniform(-bound, bound, (out_features, in_features)).astype(_np.float32))
         self.bias = Parameter(
-            rng.uniform(-bound, bound, out_features).astype(_np.float32)) if bias else None
+            _rng.uniform(-bound, bound, out_features).astype(_np.float32)) if bias else None
 
     def forward(self, x):
         out = x @ self.weight.transpose(0, 1)
@@ -1822,12 +1891,11 @@ class Conv2d(Module):
         self.in_channels, self.out_channels = in_channels, out_channels
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
         bound = 1.0 / _np.sqrt(in_channels * kernel_size * kernel_size)
-        rng = _np.random.default_rng(0)
-        self.weight = Parameter(rng.uniform(
+        self.weight = Parameter(_rng.uniform(
             -bound, bound,
             (out_channels, in_channels, kernel_size, kernel_size)).astype(_np.float32))
         self.bias = Parameter(
-            rng.uniform(-bound, bound, out_channels).astype(_np.float32)) if bias else None
+            _rng.uniform(-bound, bound, out_channels).astype(_np.float32)) if bias else None
 
     def forward(self, x):
         return conv2d(x, self.weight, self.bias, self.stride, self.padding)
@@ -2086,11 +2154,160 @@ class AdamW(Adam):
         super().__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
 
 
+class RMSprop(Optimizer):
+    def __init__(self, params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, alpha=alpha, eps=eps, weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                g = p.grad._h
+                if group["weight_decay"]:
+                    g = _tf.add(g, _tf.mul(float(group["weight_decay"]), p._h))
+                prev = st.get("square_avg")
+                sq = _tf.mul(g, g)
+                new_avg = (_tf.mul(1.0 - float(group["alpha"]), sq) if prev is None
+                           else _tf.add(_tf.mul(float(group["alpha"]), prev),
+                                        _tf.mul(1.0 - float(group["alpha"]), sq)))
+                _replace(st, "square_avg", _keep(new_avg))
+                self._assign(p, _tf.sub(p._h, _tf.div(
+                    _tf.mul(float(group["lr"]), g),
+                    _tf.add(_tf.sqrt(st["square_avg"]), float(group["eps"])))))
+
+
+# ---------------------------------------------------------------- 스케줄러
+#
+# 코어에서 그대로 옮겼다. **파이썬 실수 연산뿐이라 텐서를 안 건드린다** — 옮기면서
+# 바꿀 것이 없었고, 두 벌로 두면 갈릴 이유도 없다.
+#
+# 스케줄러는 `optimizer.param_groups` 의 lr 을 고친다. `opt.lr` 로 두면 짧지만
+# 남의 코드가 안 돌고 남의 스케줄러를 못 쓴다.
+
+class _Scheduler:
+    def __init__(self, optimizer, last_epoch=-1):
+        self.optimizer = optimizer
+        self.base_lrs = [g["lr"] for g in optimizer.param_groups]
+        self.last_epoch = last_epoch
+        self.step()
+
+    def get_lr(self):
+        raise NotImplementedError
+
+    def step(self):
+        self.last_epoch += 1
+        for group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+            group["lr"] = lr
+
+    def get_last_lr(self):
+        return [g["lr"] for g in self.optimizer.param_groups]
+
+
+class StepLR(_Scheduler):
+    """step_size 에폭마다 gamma 를 곱한다 — 멀리서는 성큼, 가까이서는 조심."""
+
+    def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1):
+        self.step_size, self.gamma = step_size, gamma
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [base * self.gamma ** (self.last_epoch // self.step_size)
+                for base in self.base_lrs]
+
+
+class MultiStepLR(_Scheduler):
+    def __init__(self, optimizer, milestones, gamma=0.1, last_epoch=-1):
+        self.milestones, self.gamma = sorted(milestones), gamma
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        passed = sum(1 for m in self.milestones if m <= self.last_epoch)
+        return [base * self.gamma ** passed for base in self.base_lrs]
+
+
+class ExponentialLR(_Scheduler):
+    def __init__(self, optimizer, gamma, last_epoch=-1):
+        self.gamma = gamma
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [base * self.gamma ** self.last_epoch for base in self.base_lrs]
+
+
+class CosineAnnealingLR(_Scheduler):
+    """T_max 에폭에 걸쳐 코사인 곡선으로 내린다. 끝에서 부드럽게 멎는다."""
+
+    def __init__(self, optimizer, T_max, eta_min=0.0, last_epoch=-1):
+        self.T_max, self.eta_min = T_max, eta_min
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        import math
+        return [self.eta_min + (base - self.eta_min)
+                * (1 + math.cos(math.pi * self.last_epoch / self.T_max)) / 2
+                for base in self.base_lrs]
+
+
+class LambdaLR(_Scheduler):
+    def __init__(self, optimizer, lr_lambda, last_epoch=-1):
+        self.lr_lambda = lr_lambda
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [base * self.lr_lambda(self.last_epoch) for base in self.base_lrs]
+
+
+class ReduceLROnPlateau:
+    """**좋아지지 않을 때** 내린다. 다른 것들과 달리 `step(metric)` 으로 값을 받는다."""
+
+    def __init__(self, optimizer, mode="min", factor=0.1, patience=10,
+                 threshold=1e-4, min_lr=0.0):
+        self.optimizer = optimizer
+        self.mode, self.factor, self.patience = mode, factor, patience
+        self.threshold, self.min_lr = threshold, min_lr
+        self.best = None
+        self.num_bad_epochs = 0
+
+    def _better(self, value):
+        if self.best is None:
+            return True
+        if self.mode == "min":
+            return value < self.best * (1 - self.threshold)
+        return value > self.best * (1 + self.threshold)
+
+    def step(self, metric):
+        metric = float(metric.item() if isinstance(metric, Tensor) else metric)
+        if self._better(metric):
+            self.best, self.num_bad_epochs = metric, 0
+        else:
+            self.num_bad_epochs += 1
+            if self.num_bad_epochs > self.patience:
+                for group in self.optimizer.param_groups:
+                    group["lr"] = max(group["lr"] * self.factor, self.min_lr)
+                self.num_bad_epochs = 0
+
+    def get_last_lr(self):
+        return [g["lr"] for g in self.optimizer.param_groups]
+
+
+class _LRScheduler:
+    StepLR = StepLR
+    MultiStepLR = MultiStepLR
+    ExponentialLR = ExponentialLR
+    CosineAnnealingLR = CosineAnnealingLR
+    LambdaLR = LambdaLR
+    ReduceLROnPlateau = ReduceLROnPlateau
+
+
 class _Optim:
     Optimizer = Optimizer
     SGD = SGD
     Adam = Adam
     AdamW = AdamW
+    RMSprop = RMSprop
+    lr_scheduler = _LRScheduler
 
 
 optim = _Optim()
@@ -2148,41 +2365,157 @@ class no_grad:
 # 데이터는 **CPU(numpy)에 둔다.** CIFAR-10 을 통째로 GPU 에 올리면 614MB 이고,
 # 배치 하나는 3MB 다. 매 배치 올리는 쪽이 싸고, GPU 메모리를 모델에 남긴다.
 
-class TensorDataset:
+class Dataset:
+    def __len__(self):
+        raise NotImplementedError
+
+    def __getitem__(self, i):
+        raise NotImplementedError
+
+
+class TensorDataset(Dataset):
     def __init__(self, *arrays):
         self.arrays = [_np.asarray(a) for a in arrays]
 
     def __len__(self):
         return len(self.arrays[0])
 
+    def __getitem__(self, i):
+        return tuple(tensor(a[i]) for a in self.arrays)
 
-class DataLoader:
-    """배치마다 GPU 로 올린다. 셔플은 CPU 에서 번호만 섞는다."""
 
-    def __init__(self, dataset, batch_size=1, shuffle=False, drop_last=False, seed=0):
+class Subset(Dataset):
+    def __init__(self, dataset, indices):
         self.dataset = dataset
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.drop_last = drop_last
-        self._rng = _np.random.default_rng(seed)
+        self.indices = list(indices)
 
     def __len__(self):
-        n = len(self.dataset)
-        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
+        return len(self.indices)
+
+    def __getitem__(self, i):
+        return self.dataset[self.indices[i]]
+
+
+class ConcatDataset(Dataset):
+    def __init__(self, datasets):
+        self.datasets = list(datasets)
+
+    def __len__(self):
+        return sum(len(d) for d in self.datasets)
+
+    def __getitem__(self, i):
+        for d in self.datasets:
+            if i < len(d):
+                return d[i]
+            i -= len(d)
+        raise IndexError(i)
+
+
+class SequentialSampler:
+    def __init__(self, data_source):
+        self.data_source = data_source
 
     def __iter__(self):
-        n = len(self.dataset)
-        order = self._rng.permutation(n) if self.shuffle else _np.arange(n)
-        for start in range(0, n, self.batch_size):
-            idx = order[start:start + self.batch_size]
-            if self.drop_last and len(idx) < self.batch_size:
-                break
-            yield tuple(tensor(a[idx]) for a in self.dataset.arrays)
+        return iter(range(len(self.data_source)))
+
+    def __len__(self):
+        return len(self.data_source)
+
+
+class RandomSampler:
+    def __init__(self, data_source):
+        self.data_source = data_source
+
+    def __iter__(self):
+        return iter(_rng.permutation(len(self.data_source)).tolist())
+
+    def __len__(self):
+        return len(self.data_source)
+
+
+class WeightedRandomSampler:
+    """드문 것을 더 자주 뽑는다. 1000명 중 10명이 환자인 데이터에서 배치에 환자가
+    한 명도 없는 일을 막는다."""
+
+    def __init__(self, weights, num_samples, replacement=True, generator=None):
+        self.weights = _np.asarray(
+            [float(w) for w in (weights.tolist() if isinstance(weights, Tensor) else weights)])
+        self.num_samples = num_samples
+        self.replacement = replacement
+        self.generator = generator
+
+    def __iter__(self):
+        rng = self.generator.rng() if self.generator is not None else _rng
+        p = self.weights / self.weights.sum()
+        return iter(rng.choice(len(p), size=self.num_samples,
+                               replace=self.replacement, p=p).tolist())
+
+    def __len__(self):
+        return self.num_samples
+
+
+def random_split(dataset, lengths, generator=None):
+    rng = generator.rng() if generator is not None else _rng
+    idx = rng.permutation(len(dataset)).tolist()
+    out, start = [], 0
+    for n in lengths:
+        out.append(Subset(dataset, idx[start:start + n]))
+        start += n
+    return out
+
+
+class DataLoader:
+    """배치마다 GPU 로 올린다. 셔플은 CPU 에서 번호만 섞는다.
+
+    `TensorDataset` 은 numpy 째로 잘라 한 번에 올린다(빠른 길). 그 밖의 Dataset 은
+    한 칸씩 꺼내 `stack` 으로 모은다 — 코어와 같은 방식이고 느리지만 무엇이든 받는다.
+    """
+
+    def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
+                 num_workers=0, drop_last=False, collate_fn=None):
+        if sampler is not None and shuffle:
+            raise ValueError("sampler 와 shuffle 은 같이 쓸 수 없습니다.")
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.collate_fn = collate_fn
+        self.sampler = sampler or (RandomSampler(dataset) if shuffle
+                                   else SequentialSampler(dataset))
+
+    def __len__(self):
+        n = len(self.sampler)
+        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
+
+    def _fast(self, idx):
+        return tuple(tensor(a[_np.asarray(idx)]) for a in self.dataset.arrays)
+
+    def __iter__(self):
+        plain = isinstance(self.dataset, TensorDataset) and self.collate_fn is None
+        batch = []
+        for i in self.sampler:
+            batch.append(i if plain else self.dataset[i])
+            if len(batch) == self.batch_size:
+                yield self._fast(batch) if plain else self._collate(batch)
+                batch = []
+        if batch and not self.drop_last:
+            yield self._fast(batch) if plain else self._collate(batch)
+
+    def _collate(self, batch):
+        if self.collate_fn:
+            return self.collate_fn(batch)
+        return tuple(stack([_wrap(x) for x in col]) for col in zip(*batch))
 
 
 class _UtilsData:
+    Dataset = Dataset
     TensorDataset = TensorDataset
+    Subset = Subset
+    ConcatDataset = ConcatDataset
     DataLoader = DataLoader
+    RandomSampler = RandomSampler
+    SequentialSampler = SequentialSampler
+    WeightedRandomSampler = WeightedRandomSampler
+    random_split = staticmethod(random_split)
 
 
 class _Utils:
@@ -2280,6 +2613,14 @@ def decode_cifar10(raw):
     y = rows[:, 0].astype(_np.int64)
     x = rows[:, 1:].reshape(-1, 3, 32, 32).astype(_np.float32) / 255.0
     return x, y
+
+
+# 모듈 함수를 메서드로도 노출한다 — torch 코드는 `x.exp()` 와 `torch.exp(x)` 를
+# 섞어 쓴다. 같은 구현을 가리키므로 갈릴 자리가 없다.
+for _name in ("abs", "exp", "log", "sqrt", "unsqueeze", "clamp", "flip", "norm",
+              "gather", "prod", "cumsum", "topk", "sort", "split", "chunk", "unbind",
+              "narrow", "index_select", "masked_select", "median"):
+    setattr(Tensor, _name, globals()[_name])
 
 
 def backend():
