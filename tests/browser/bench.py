@@ -105,6 +105,49 @@ def run(L, batch=32, steps=5, warmup=2):
     }
 
 
+def run_with_loader(L, batch=128, images=5120, steps=5, warmup=2):
+    """DataLoader 를 거쳐 잰다 — **배치마다 CPU→GPU 업로드가 붙는다.**
+
+    위의 `run` 은 같은 텐서를 계속 쓴다. 실제 학습은 배치마다 새 데이터를 올리므로,
+    그 값이 스텝 시간에 얼마나 붙는지는 따로 재야 안다.
+
+    이미지 수를 줄여 둔 것은 의도다 — 5만 장을 float32 로 들면 614MB 이고,
+    그건 이 측정이 묻는 것(업로드 비용)이 아니라 파이썬 힙을 묻게 된다.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((images, 3, 32, 32)).astype(np.float32)
+    y = rng.integers(0, 10, images).astype(np.int64)
+    loader = L.utils.data.DataLoader(
+        L.utils.data.TensorDataset(x, y), batch_size=batch, shuffle=True, drop_last=True)
+
+    model = resnet18(L)
+    opt = L.optim.SGD(model.parameters(), lr=0.05, momentum=0.9)
+    crit = L.nn.CrossEntropyLoss()
+
+    def go(limit):
+        done, last = 0, None
+        for bx, by in loader:
+            with L.scope():
+                opt.zero_grad()
+                loss = crit(model(bx), by)
+                loss.backward()
+                opt.step()
+                last = loss.item()
+            done += 1
+            if done >= limit:
+                break
+        return last
+
+    go(warmup)
+    t0 = js.performance.now()
+    last = go(steps)
+    per_step = (js.performance.now() - t0) / steps
+    steps_per_epoch = -(-CIFAR_TRAIN_IMAGES // batch)
+    return {"batch": batch, "ms_per_step": round(per_step, 1),
+            "epoch_min": round(per_step * steps_per_epoch / 60000, 2),
+            "loss": round(float(last), 4)}
+
+
 def report(L, batches=(16, 32, 64)):
     lines = []
     for b in batches:

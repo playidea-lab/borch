@@ -1451,6 +1451,127 @@ class no_grad:
         return False
 
 
+# ---------------------------------------------------------------- utils.data
+#
+# 데이터는 **CPU(numpy)에 둔다.** CIFAR-10 을 통째로 GPU 에 올리면 614MB 이고,
+# 배치 하나는 3MB 다. 매 배치 올리는 쪽이 싸고, GPU 메모리를 모델에 남긴다.
+
+class TensorDataset:
+    def __init__(self, *arrays):
+        self.arrays = [_np.asarray(a) for a in arrays]
+
+    def __len__(self):
+        return len(self.arrays[0])
+
+
+class DataLoader:
+    """배치마다 GPU 로 올린다. 셔플은 CPU 에서 번호만 섞는다."""
+
+    def __init__(self, dataset, batch_size=1, shuffle=False, drop_last=False, seed=0):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self._rng = _np.random.default_rng(seed)
+
+    def __len__(self):
+        n = len(self.dataset)
+        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
+
+    def __iter__(self):
+        n = len(self.dataset)
+        order = self._rng.permutation(n) if self.shuffle else _np.arange(n)
+        for start in range(0, n, self.batch_size):
+            idx = order[start:start + self.batch_size]
+            if self.drop_last and len(idx) < self.batch_size:
+                break
+            yield tuple(tensor(a[idx]) for a in self.dataset.arrays)
+
+
+class _UtilsData:
+    TensorDataset = TensorDataset
+    DataLoader = DataLoader
+
+
+class _Utils:
+    data = _UtilsData()
+
+
+utils = _Utils()
+
+
+# ---------------------------------------------------------------- 내려받기·캐시
+
+def _u8_to_np(view):
+    out = _np.empty(int(view.length), dtype=_np.uint8)
+    view.assign_to(out)
+    return out
+
+
+def _np_to_u8(arr):
+    buf = _js.Uint8Array.new(arr.size)
+    buf.assign(arr)
+    return buf
+
+
+async def _opfs_read(name):
+    root = await _js.navigator.storage.getDirectory()
+    handle = await root.getFileHandle(name)
+    blob = await handle.getFile()
+    return _u8_to_np(_js.Uint8Array.new(await blob.arrayBuffer()))
+
+
+async def _opfs_write(name, arr):
+    root = await _js.navigator.storage.getDirectory()
+    opts = _to_js({"create": True}, dict_converter=_js.Object.fromEntries)
+    handle = await root.getFileHandle(name, opts)
+    writable = await handle.createWritable()
+    await writable.write(_np_to_u8(arr))
+    await writable.close()
+
+
+async def fetch_cached(url, name=None):
+    """받아서 OPFS 에 넣고, 다음부터는 넣어둔 것을 쓴다.
+
+    **비동기다.** OPFS 에 동기 API 가 없다(워커 안에서만 있다). 다만 이것은 학습
+    루프가 아니라 **준비 단계에서 한 번** 부르는 것이라, 스텝을 동기로 유지한다는
+    약속은 그대로다.
+
+    URL 은 부르는 쪽이 준다. 데이터셋 주소를 라이브러리에 박아두면 그것이 사라졌을 때
+    라이브러리를 고쳐야 한다.
+    """
+    key = name or url.rsplit("/", 1)[-1]
+    try:
+        return await _opfs_read(key)
+    except Exception:                                                # noqa: BLE001
+        pass                       # 아직 없다 — 받아온다
+    response = await _js.fetch(url)
+    if not response.ok:
+        raise RuntimeError(f"내려받기 실패 {response.status}: {url}")
+    data = _u8_to_np(_js.Uint8Array.new(await response.arrayBuffer()))
+    await _opfs_write(key, data)
+    return data
+
+
+_CIFAR_RECORD = 1 + 3 * 32 * 32          # 라벨 1바이트 + 픽셀 3072바이트
+
+
+def decode_cifar10(raw):
+    """CIFAR-10 의 바이너리 한 덩이를 (x, y) 로 푼다.
+
+    한 장이 3073 바이트다 — 라벨 1 바이트에 R·G·B 가 각각 1024 바이트씩 이어 붙는다.
+    그 순서가 곧 (3, 32, 32) 이라 torch 의 NCHW 와 같다.
+    """
+    arr = _np.asarray(raw, dtype=_np.uint8)
+    if arr.size % _CIFAR_RECORD:
+        raise ValueError(
+            f"CIFAR-10 바이너리가 아닙니다 — {arr.size} 바이트는 {_CIFAR_RECORD} 의 배수가 아닙니다")
+    rows = arr.reshape(-1, _CIFAR_RECORD)
+    y = rows[:, 0].astype(_np.int64)
+    x = rows[:, 1:].reshape(-1, 3, 32, 32).astype(_np.float32) / 255.0
+    return x, y
+
+
 def backend():
     """지금 붙어 있는 TF.js 백엔드. 'webgpu' 가 아니면 GPU 로 돌고 있지 않다."""
     return str(_tf.getBackend())
