@@ -520,6 +520,9 @@ class Tensor:
         values = _pick_last(t, idx)
         if not keepdim:
             values = values.reshape(tuple(t.shape[:-1]))
+        # **번호의 모양을 명시한다.** 1차원을 접으면 torch 는 스칼라를 주는데 여기서
+        # 나오는 것은 (1,) 이었다. 값 쪽은 위에서 이미 못 박고 있었고 번호만 빠져 있었다.
+        arg = _tf.reshape(arg, _to_js(list(t.shape[:-1])))
         return _ValuesIndices(values, Tensor(arg))
 
     def max(self, dim=None, keepdim=False):
@@ -528,15 +531,19 @@ class Tensor:
     def min(self, dim=None, keepdim=False):
         return self._argreduce(False, dim, keepdim)
 
-    def argmax(self, dim=None):
+    def _argpick(self, pick, dim):
         t = _canonical(self)
         h = t._h if dim is not None else _tf.reshape(t._h, _to_js([-1]))
-        return Tensor(_tf.argMax(h, -1 if dim is None else dim), dt=int64)
+        out = pick(h, -1 if dim is None else dim)
+        # dim 이 없으면 스칼라, 있으면 그 축만 빠진 모양이다 — torch 와 같게 못 박는다.
+        keep = [] if dim is None else [n for i, n in enumerate(t.shape) if i != dim]
+        return Tensor(_tf.reshape(out, _to_js(keep)), dt=int64)
+
+    def argmax(self, dim=None):
+        return self._argpick(_tf.argMax, dim)
 
     def argmin(self, dim=None):
-        t = _canonical(self)
-        h = t._h if dim is not None else _tf.reshape(t._h, _to_js([-1]))
-        return Tensor(_tf.argMin(h, -1 if dim is None else dim), dt=int64)
+        return self._argpick(_tf.argMin, dim)
 
     def var(self, dim=None, unbiased=True, keepdim=False):
         t = _canonical(self)

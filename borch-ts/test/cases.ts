@@ -483,7 +483,103 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addTrain(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
+  addEdge(out);
   return out;
+}
+
+/**
+ * 꺾이는 자리.
+ *
+ * 다른 표의 입력은 거의 다 정규분포 난수다. 좋은 기본값이지만 **특별한 값이 한 번도
+ * 안 나온다** — 정확히 0, 정확히 같은 두 수, 정확히 경계값, 정확히 .5. 함수가 꺾이는
+ * 자리가 전부 거기에 있고, `relu` 가 그래서 골든 798 건을 뚫고 나갔다.
+ *
+ * 접을 때 자리마다 다른 가중치를 곱하는 것이 조건이다. 균일하게 접으면 꺾인 한 자리의
+ * 차이가 합계에 묻힌다.
+ */
+function addEdge(out: Map<string, Case>): void {
+  const z = [-2, -1, 0, 1, 2, 0];              // 정확히 0 을 품는다
+  const ta = [1, 2, 3, 2], tb = [1, 5, 3, 0];  // 자리 0·2 가 동점
+  const half = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5];
+  const dup = [1, 3, 2, 3];
+
+  const set = (name: string, fn: Case): void => { out.set(`edge::${name}`, fn); };
+  const seed = (t: Tensor): Tensor =>
+    t.mul(Tensor.from([...Array(t.size).keys()], t.shape));
+
+  const grad = (name: string, src: readonly number[],
+                fn: (x: Tensor) => Tensor): void => {
+    set(`grad::${name}`, () => {
+      const x = Tensor.from([...src], [src.length], true);
+      seed(fn(x)).sum().backward();
+      return gradOf(x, name);
+    });
+  };
+
+  // ── 0 에서 꺾이는 것들 ──
+  const kinks: ReadonlyArray<readonly [string, (x: Tensor) => Tensor]> = [
+    ["abs", (x) => x.abs()],
+    ["sign", (x) => x.sign()],
+    ["relu", (x) => x.relu()],
+    ["F.leaky_relu", (x) => x.leakyRelu(0.1)],
+    ["F.elu", (x) => x.unary("elu")],
+    ["F.gelu", (x) => x.unary("gelu")],
+    ["F.silu", (x) => x.unary("silu")],
+  ];
+  for (const [name, fn] of kinks) {
+    set(`${name}(0포함)`, () => fn(Tensor.from([...z])));
+    grad(`${name}(0포함)`, z, fn);
+  }
+
+  // ── 경계에 정확히 닿는 clamp ──
+  set("clamp(경계에서)", () => Tensor.from([...z]).clamp(-1, 1));
+  grad("clamp(경계에서)", z, (x) => x.clamp(-1, 1));
+
+  // ── 동점 ──
+  // **torch 는 동점에서 기울기를 나눠 준다** — 두 입력이 같으면 각각 절반씩이다.
+  // 한쪽에 몰아주거나 양쪽에 1 씩 주는 구현은 순방향이 완벽히 같아서 값으로는 안 잡힌다.
+  set("maximum(동점)", () =>
+    Tensor.from([...ta]).binary("maximum", Tensor.from([...tb])));
+  set("minimum(동점)", () =>
+    Tensor.from([...ta]).binary("minimum", Tensor.from([...tb])));
+  for (const [who, tag] of ["a", "b"].entries()) {
+    for (const op of ["maximum", "minimum"]) {
+      set(`grad::${op}(동점)/${tag}`, () => {
+        const leaves = [
+          Tensor.from([...ta], [ta.length], true),
+          Tensor.from([...tb], [tb.length], true),
+        ] as const;
+        seed(leaves[0].binary(op, leaves[1])).sum().backward();
+        const leaf = leaves[who];
+        if (!leaf) throw new Error(`${op}: 잎 ${who} 가 없다`);
+        return gradOf(leaf, `${op}(동점)/${tag}`);
+      });
+    }
+  }
+
+  set("argmax(동점)", () => Tensor.from([...dup]).argmax());
+  set("sort(동점).values", () => Tensor.from([...dup]).sort(0).values);
+  set("sort(동점).indices", () => Tensor.from([...dup]).sort(0).indices);
+  set("topk(동점).indices", () => Tensor.from([...dup]).topk(3, 0).indices);
+
+  // 창 안에 같은 값이 둘 있는 풀링. **`maximum` 과 답이 다르다** — torch 의 풀링은
+  // 이긴 자리 하나를 골라 거기로만 흘리고 나누지 않는다. 이 라이브러리의 커널은
+  // "동점이면 먼저 나온 자리" 라고 적혀 있는데 그것을 확인한 적이 없었다.
+  const tied = [1, 1, 2, 0, 1, 0, 2, 2, 3, 3, 0, 1, 0, 3, 1, 1];
+  set("max_pool2d(동점)", () => Tensor.from([...tied], [1, 1, 4, 4]).maxPool2d(2));
+  set("grad::max_pool2d(동점)", () => {
+    const x = Tensor.from([...tied], [1, 1, 4, 4], true);
+    seed(x.maxPool2d(2)).sum().backward();
+    return gradOf(x, "max_pool2d(동점)");
+  });
+
+  // ── 반올림 규칙 ──
+  // **torch 는 .5 를 짝수로 붙인다.** `floor(x + 0.5)` 로 쓰면 전부 위로 올라가 갈린다.
+  set("round(.5에서)", () => Tensor.from([...half]).round());
+  set("floor(정수에서)", () => Tensor.from([...z]).floor());
+  set("ceil(정수에서)", () => Tensor.from([...z]).ceil());
+  set("trunc(음수)", () => Tensor.from([...half]).trunc());
+  set("frac(음수)", () => Tensor.from([...half]).frac());
 }
 
 /**

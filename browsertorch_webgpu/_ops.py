@@ -347,19 +347,34 @@ def mm(a, b):
 
 # ---------------------------------------------------------------- 비교·클램프
 
+def _share_at_ties(a, b, strict):
+    """왼쪽 몫. **동점이면 반씩 나눈다** — torch 의 `maximum`/`minimum` 이 그렇다.
+
+    `>=` 하나로 가르면 동점에서 왼쪽이 전부 가져가고 오른쪽이 0 을 받는다. 순방향은
+    어느 쪽이든 똑같이 맞아서 값 대조로는 안 잡히고, 난수 입력끼리 정확히 같아질 일도
+    없어서 오래 안 보였다.
+
+    `strict` 는 왼쪽이 온전히 이기는 비교다 — `maximum` 이면 `>`, `minimum` 이면 `<`.
+    """
+    tie = _tf.cast(_tf.equal(a, b), "float32")
+    win = _tf.cast(strict, "float32")
+    # 동점 자리는 win 이 0 이므로 거기에 0.5 를 얹으면 된다.
+    return _tf.add(win, _tf.mul(tie, 0.5))
+
+
 def maximum(a, b):
     a, b = _align(_wrap(a), _wrap(b))
-    pick = _tf.cast(_tf.greaterEqual(a._h, b._h), "float32")
+    left = _share_at_ties(a._h, b._h, _tf.greater(a._h, b._h))
     return a._make(_tf.maximum(a._h, b._h), (a, b),
-                   lambda g: (_tf.mul(g, pick), _tf.mul(g, _tf.sub(1.0, pick))),
+                   lambda g: (_tf.mul(g, left), _tf.mul(g, _tf.sub(1.0, left))),
                    "MaximumBackward0")
 
 
 def minimum(a, b):
     a, b = _align(_wrap(a), _wrap(b))
-    pick = _tf.cast(_tf.lessEqual(a._h, b._h), "float32")
+    left = _share_at_ties(a._h, b._h, _tf.less(a._h, b._h))
     return a._make(_tf.minimum(a._h, b._h), (a, b),
-                   lambda g: (_tf.mul(g, pick), _tf.mul(g, _tf.sub(1.0, pick))),
+                   lambda g: (_tf.mul(g, left), _tf.mul(g, _tf.sub(1.0, left))),
                    "MinimumBackward0")
 
 
@@ -913,12 +928,16 @@ def topk(t, k, dim=-1, largest=True):
 
 
 def sort(t, dim=-1, descending=False):
-    """TF.js 에는 정렬이 없다. `topk` 로 전부 뽑으면 내림차순이므로, 오름차순은 뒤집는다."""
+    """TF.js 에는 정렬이 없다. `topk` 가 내림차순이므로 오름차순은 **부호를 뒤집어** 뽑는다.
+
+    뒤집어서(`reverse`) 만들면 안 된다 — 같은 값끼리의 순서까지 뒤집혀서 torch 가 앞에
+    두는 쪽(번호가 작은 쪽)이 뒤로 간다. 동점이 없는 입력에서는 두 방법의 답이 같으므로
+    오래 안 보였고, `edge::sort(동점).indices` 가 이것을 묻는다.
+    """
     t = _canonical(t)
     _last_axis_only(t, dim, "sort")
-    idx = _tf.topk(t._h, t.shape[-1]).indices
-    if not descending:
-        idx = _tf.reverse(idx, -1)
+    keys = t._h if descending else _tf.neg(t._h)
+    idx = _tf.topk(keys, t.shape[-1]).indices
     return _ValuesIndices(_pick_last(t, idx), Tensor(idx))
 
 

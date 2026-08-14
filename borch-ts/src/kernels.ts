@@ -206,8 +206,23 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
   // 우연히 맞고 역방향의 부호만 뒤집힌다. 정수 지수는 `Tensor.powScalar` 가 곱셈으로
   // 돌아가므로 이 자리를 안 지난다.
   pow: { fwd: "pow(x, y)", da: "y * pow(x, y - 1.0)", db: "o * log(x)" },
-  maximum: { fwd: "max(x, y)", da: "step(y, x)", db: "step(x, y)" },
-  minimum: { fwd: "min(x, y)", da: "step(x, y)", db: "step(y, x)" },
+  // **동점이면 반씩 나눈다.** torch 가 그렇다 — `maximum(2, 2)` 의 기울기는 양쪽 다
+  // 0.5 이지 1 이 아니다. `step(y, x)` 는 `x >= y` 라 동점에서 양쪽에 1 을 줬고,
+  // 그러면 합이 torch 의 두 배가 된다. 순방향은 어느 쪽이든 똑같이 맞으므로 값 대조로는
+  // 안 잡히고, `edge::grad::maximum(동점)` 이 이것을 묻는다.
+  //
+  // `clamp` 와 `leakyRelu` 는 여기 얹혀 있었는데 **torch 에서 그 둘은 나누지 않는다** —
+  // 경계에서 기울기를 온전히 흘린다. 그래서 각자 커널을 갖게 했다(`clampScalar`·`leakyRelu`).
+  maximum: {
+    fwd: "max(x, y)",
+    da: "select(select(0.0, 1.0, x > y), 0.5, x == y)",
+    db: "select(select(0.0, 1.0, y > x), 0.5, x == y)",
+  },
+  minimum: {
+    fwd: "min(x, y)",
+    da: "select(select(0.0, 1.0, x < y), 0.5, x == y)",
+    db: "select(select(0.0, 1.0, y < x), 0.5, x == y)",
+  },
   atan2: {
     fwd: "atan2(x, y)",
     da: "y / (x * x + y * y)",
@@ -300,8 +315,34 @@ function flatId(n: number): string {
 export type UnaryName = keyof typeof UNARY & string;
 export type BinaryName = keyof typeof BINARY & string;
 
+/**
+ * 상수를 품은 단항 연산.
+ *
+ * `clamp(-1, 1)` 이나 `leakyRelu(0.1)` 처럼 인자가 식에 섞이는 것들이다. 인자를
+ * 유니폼으로 넣으면 셰이더가 하나로 끝나지만 이 파일이 그 반대를 고르는 이유가 여기도
+ * 그대로 적용된다 — 상수로 구우면 접힌다. 이름에 그 상수가 들어가므로 파이프라인
+ * 캐시가 알아서 갈라지고, 같은 인자로 두 번 부르면 같은 셰이더를 쓴다.
+ */
+const DERIVED: Record<string, UnarySpec> = {};
+
+/** WGSL 의 f32 리터럴. 정수처럼 보이는 값도 소수점을 달아야 형이 안 갈린다. */
+export function f32lit(v: number): string {
+  return Number.isInteger(v) ? `${v}.0` : String(v);
+}
+
+/** 상수를 구운 단항 연산을 등록하고 그 이름을 준다. 이미 있으면 다시 안 만든다. */
+export function unaryWith(key: string, make: () => UnarySpec): string {
+  DERIVED[key] ??= make();
+  return key;
+}
+
+/** 이 이름으로 단항 커널을 만들 수 있는가. 표에 있는 것과 구운 것을 함께 본다. */
+export function hasUnary(name: string): boolean {
+  return Boolean(UNARY[name] ?? DERIVED[name]);
+}
+
 function unarySpec(name: string): UnarySpec {
-  const op = UNARY[name];
+  const op = UNARY[name] ?? DERIVED[name];
   if (!op) throw new Error(`모르는 단항 연산: ${name}`);
   return op;
 }

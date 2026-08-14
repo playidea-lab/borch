@@ -535,6 +535,34 @@ def grad_cases(inp=None):
 
     unary("max_pool2d", lambda L, x: L.nn.functional.max_pool2d(x, 2), img)
 
+    # **평균 풀링의 역방향을 아무도 안 묻고 있었다.**
+    #
+    # `F.avg_pool2d` 는 순방향만 표에 있었다. 그런데 borch.ts 에서 평균 풀링의 역방향이
+    # **아예 안 도는** 것을 통합 시험에서 잡았다 — 쓰지 않는 바인딩이 레이아웃에서
+    # 빠지면서 커맨드 버퍼가 통째로 무효가 됐는데, WebGPU 는 그걸 예외로 안 던진다.
+    # 손실은 ln 10 에 앉아 있었고 ms/step 은 계속 나왔다. 표가 이것을 물었다면
+    # 통합까지 갈 일이 아니었다.
+    #
+    # 최댓값 풀링과 갈리는 지점이 핵심이다. max 는 이긴 자리 하나에만 흘리고 avg 는
+    # 창의 모든 자리에 1/n 씩 나눈다. 둘을 바꿔 구현해도 순방향은 멀쩡하다.
+    def pool_grad(name, fn, arr=img):
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            # 자리마다 다른 가중치. 균일하게 접으면 avg 든 max 든 **입력 기울기의 합이
+            # 같아서** 나누는 방식이 틀려도 통과한다.
+            out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(x, n)
+        cases.append((f"grad::{name}", run))
+
+    pool_grad("avg_pool2d", lambda L, x: L.nn.functional.avg_pool2d(x, 2))
+    pool_grad("avg_pool2d(스트라이드1)",
+              lambda L, x: L.nn.functional.avg_pool2d(x, 2, 1))
+    pool_grad("adaptive_avg_pool2d",
+              lambda L, x: L.nn.functional.adaptive_avg_pool2d(x, 1))
+    pool_grad("max_pool2d(가중치)", lambda L, x: L.nn.functional.max_pool2d(x, 2))
+
     # BatchNorm — 평균·분산이 그래프 안에 있어야 한다. 밖으로 빼면 입력 기울기가
     # 어긋나고 weight 에는 **아예 안 온다**(None). 그래서 둘 다 본다.
     def bn_grad(which):
@@ -547,6 +575,29 @@ def grad_cases(inp=None):
 
     for which in ("x", "weight"):
         bn_grad(which)
+
+    # **위의 `sum()` 이 BatchNorm 역방향의 절반을 가린다.**
+    #
+    # 입력 기울기는 세 항으로 되어 있다. 곧바로 오는 항 하나와, 평균·분산이 입력에
+    # 의존하기 때문에 생기는 보정항 둘이다. 그런데 상류 기울기가 **전부 1** 이면
+    # 그 보정항 둘이 정확히 상쇄된다 — 위 케이스의 기대값이 4.7e-10 인 것이 그
+    # 상쇄의 흔적이고, 즉 저 케이스는 보정항을 아예 안 묻고 있다.
+    #
+    # 보정항을 빼먹은 구현(평균·분산을 상수 취급하는 흔한 실수)은 위를 통과하고
+    # 아래에서 걸린다. 자리마다 다른 가중치로 접으면 상쇄가 깨진다.
+    def bn_grad_weighted(which):
+        def run(L, w=which):
+            x = L.tensor(img, requires_grad=True)
+            bn = L.nn.BatchNorm2d(3)
+            out = bn(x)
+            out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(x if w == "x" else bn.weight,
+                            f"BatchNorm2d(가중치)/{w}")
+        cases.append((f"grad::BatchNorm2d(가중치)/{which}", run))
+
+    for which in ("x", "weight"):
+        bn_grad_weighted(which)
 
     return cases
 
@@ -1836,6 +1887,133 @@ def method_cases(inp=None):
     return cases
 
 
+EDGE_PREFIX = "edge::"
+
+
+def edge_cases(inp=None):
+    """**꺾이는 자리.** 나머지 표가 구조적으로 못 보는 곳을 모아 둔다.
+
+    다른 표의 입력은 거의 다 `default_rng` 가 뽑은 정규분포다. 그것은 좋은 기본값이지만
+    한 가지를 못 한다 — **특별한 값이 한 번도 안 나온다.** 정확히 0, 정확히 같은 두 수,
+    정확히 경계값, 정확히 .5. 함수가 꺾이는 자리가 전부 거기에 있다.
+
+    `relu` 가 그래서 뚫렸다. 입력이 정확히 0 일 때 torch 는 기울기를 0 으로 주는데
+    (`x > 0` 이지 `x >= 0` 이 아니다) borch.ts 는 1 을 흘렸고, 골든 798 건이 전부
+    통과했다. relu 케이스의 입력에 0 이 없었기 때문이다. 그 하나를 고치는 것으로는
+    부족하다 — 같은 이유로 안 보이는 자리가 이만큼 더 있다.
+
+    **여기서는 답을 추측하지 않는다.** 동점에서 torch 가 기울기를 나눠 주는지 한쪽에만
+    주는지, `round(0.5)` 가 0 인지 1 인지는 우리가 정할 것이 아니다. 진짜 torch 가
+    무엇을 하든 그것이 답이고, 이 표는 그 답을 묻기만 한다.
+    """
+    cases = []
+
+    def value(name, fn):
+        cases.append((EDGE_PREFIX + name, fn))
+
+    def grad(name, fn, arr, which=0):
+        """자리마다 다른 가중치로 접는다 — 균일하게 접으면 꺾인 자리가 묻힌다."""
+        def run(L, f=fn, a=arr, n=name, w=which):
+            leaves = [L.tensor(x.copy(), requires_grad=True) for x in a]
+            out = f(L, *leaves)
+            if out.shape:
+                out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(leaves[w], n)
+        cases.append((EDGE_PREFIX + "grad::" + name, run))
+
+    # 정확히 0 을 품은 입력. 이 표의 거의 모든 케이스가 이것을 쓴다.
+    z = np.array([-2., -1., 0., 1., 2., 0.], dtype=np.float32)
+    # 정확히 같은 값이 겹친 짝. 동점에서 기울기가 어디로 가는가를 묻는다.
+    ta = np.array([1., 2., 3., 2.], dtype=np.float32)
+    tb = np.array([1., 5., 3., 0.], dtype=np.float32)      # 자리 0·2 가 동점
+    # .5 로 끝나는 값들 — 반올림 규칙(짝수로 붙이기)이 여기서만 드러난다.
+    half = np.array([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], dtype=np.float32)
+    # 부호가 섞인 나눗셈. `%` 의 부호 규칙이 언어마다 갈리는 자리다.
+    neg = np.array([-7., -3., 3., 7.], dtype=np.float32)
+
+    # ── 0 에서 꺾이는 것들 ─────────────────────────────────────────────────
+    for name, fn in (
+        ("abs", lambda L, x: L.abs(x)),
+        ("sign", lambda L, x: L.sign(x)),
+        ("relu", lambda L, x: L.nn.functional.relu(x)),
+        ("F.leaky_relu", lambda L, x: L.nn.functional.leaky_relu(x, 0.1)),
+        ("F.elu", lambda L, x: L.nn.functional.elu(x)),
+        ("F.gelu", lambda L, x: L.nn.functional.gelu(x)),
+        ("F.silu", lambda L, x: L.nn.functional.silu(x)),
+    ):
+        value(f"{name}(0포함)", lambda L, f=fn, a=z: f(L, L.tensor(a)))
+        grad(f"{name}(0포함)", fn, (z,))
+
+    # ── 경계에 정확히 닿는 clamp ───────────────────────────────────────────
+    # 입력에 -1 과 1 이 그대로 있다. 자르는 쪽과 흘리는 쪽의 경계가 `<` 인지 `<=` 인지가
+    # 여기서만 갈린다.
+    value("clamp(경계에서)", lambda L: L.clamp(L.tensor(z), min=-1., max=1.))
+    grad("clamp(경계에서)", lambda L, x: L.clamp(x, min=-1., max=1.), (z,))
+    grad("clamp(위만)", lambda L, x: L.clamp(x, max=1.), (z,))
+    grad("clamp(아래만)", lambda L, x: L.clamp(x, min=-1.), (z,))
+
+    # ── 동점 ───────────────────────────────────────────────────────────────
+    # **torch 는 동점에서 기울기를 나눠 준다.** maximum 의 두 입력이 같으면 각각 절반씩
+    # 받는다. 한쪽에 몰아주는 구현은 순방향이 완벽히 같으므로 값 대조로는 절대 안 잡힌다.
+    value("maximum(동점)", lambda L: L.maximum(L.tensor(ta), L.tensor(tb)))
+    value("minimum(동점)", lambda L: L.minimum(L.tensor(ta), L.tensor(tb)))
+    for who in (0, 1):
+        grad(f"maximum(동점)/{'ab'[who]}",
+             lambda L, a, b: L.maximum(a, b), (ta, tb), which=who)
+        grad(f"minimum(동점)/{'ab'[who]}",
+             lambda L, a, b: L.minimum(a, b), (ta, tb), which=who)
+
+    # 접는 쪽의 동점 — 최댓값이 두 자리에 있을 때 어디로 흘리는가.
+    # (`max`·`min`·`argmax` 는 두 라이브러리에 **메서드로만** 있다. torch 에는 모듈
+    #  함수도 있으니 그 자체가 갈림이지만, 여기서 묻는 것은 동점이므로 메서드로 쓴다.)
+    dup = np.array([1., 3., 2., 3.], dtype=np.float32)
+    value("max(동점).indices", lambda L: L.tensor(dup).max(dim=0).indices)
+    value("min(동점).indices", lambda L: L.tensor(-dup).min(dim=0).indices)
+    value("argmax(동점)", lambda L: L.tensor(dup).argmax())
+    grad("max(동점)", lambda L, x: x.max(dim=0).values.reshape(1), (dup,))
+
+    # 정렬의 동점 — 같은 값끼리의 **순서**가 안정적인가. 답이 갈리면 indices 가 갈린다.
+    value("sort(동점).values", lambda L: L.sort(L.tensor(dup)).values)
+    value("sort(동점).indices", lambda L: L.sort(L.tensor(dup)).indices)
+    value("topk(동점).indices", lambda L: L.topk(L.tensor(dup), 3).indices)
+
+    # 창 안에 같은 값이 둘 있는 풀링. **`maximum` 과 답이 다르다** — torch 의 풀링은
+    # 이긴 자리 하나를 골라 거기로만 흘리고 나누지 않는다. 풀링을 `maximum` 위에
+    # 얹어 구현하면(세 라이브러리 중 둘이 그랬다) 여기서만 갈린다.
+    tied_img = np.array([[[[1., 1., 2., 0.],
+                           [1., 0., 2., 2.],
+                           [3., 3., 0., 1.],
+                           [0., 3., 1., 1.]]]], dtype=np.float32)
+    value("max_pool2d(동점)", lambda L: L.nn.functional.max_pool2d(L.tensor(tied_img), 2))
+
+    def pooled_tie(L):
+        x = L.tensor(tied_img.copy(), requires_grad=True)
+        out = L.nn.functional.max_pool2d(x, 2)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "max_pool2d(동점)")
+
+    cases.append((EDGE_PREFIX + "grad::max_pool2d(동점)", pooled_tie))
+
+    # ── 반올림 규칙 ────────────────────────────────────────────────────────
+    # **torch 는 .5 를 짝수로 붙인다** — round(0.5)=0, round(1.5)=2, round(2.5)=2.
+    # 흔한 구현(`floor(x+0.5)`)은 전부 위로 올려서 조용히 갈린다.
+    value("round(.5에서)", lambda L: L.round(L.tensor(half)))
+    value("floor(정수에서)", lambda L: L.floor(L.tensor(z)))
+    value("ceil(정수에서)", lambda L: L.ceil(L.tensor(z)))
+    value("trunc(음수)", lambda L: L.trunc(L.tensor(half)))
+    value("frac(음수)", lambda L: L.frac(L.tensor(half)))
+
+    # ── 나머지의 부호 ──────────────────────────────────────────────────────
+    # **torch 의 `%` 는 나누는 수의 부호를 따른다** — `-7 % 3` 이 2 이지 -1 이 아니다.
+    # JS 의 `%` 는 반대로 나뉘는 수의 부호를 따르므로(-1), 그것을 그대로 쓰면 음수에서만
+    # 갈린다. 양수 입력으로는 절대 안 드러나고, 두 규칙 다 "나머지"라고 불린다.
+    value("%(음수)", lambda L: L.tensor(neg) % 3.)
+    value("%(음수로 나누기)", lambda L: L.tensor(neg) % -3.)
+
+    return cases
+
+
 def golden_cases(inp=None):
     """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
     inp = golden_inputs() if inp is None else inp
@@ -1844,7 +2022,7 @@ def golden_cases(inp=None):
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
-            + webgpu_cases(inp))
+            + webgpu_cases(inp) + edge_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

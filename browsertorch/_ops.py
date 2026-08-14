@@ -341,7 +341,7 @@ def _pool_1d_over_last(x, kernel_size, stride):
         window = [x[_slice_at(3, start + i, start + i + 1)] for i in range(kernel_size)]
         acc = window[0]
         for piece in window[1:]:
-            acc = maximum(acc, piece)
+            acc = _maximum_first(acc, piece)
         parts.append(acc)
     return cat(parts, 3)
 
@@ -358,7 +358,7 @@ def max_pool3d(x, kernel_size, stride=None):
         for i in range(kernel_size):
             plane = x[_slice_at(2, od * stride + i, od * stride + i + 1)].reshape(n, c, h, w)
             pooled = max_pool2d(plane, kernel_size, stride)
-            acc = pooled if acc is None else maximum(acc, pooled)
+            acc = pooled if acc is None else _maximum_first(acc, pooled)
         shape = acc.data.shape
         slabs.append(acc.reshape(shape[0], shape[1], 1, shape[2], shape[3]))
     return cat(slabs, 2)
@@ -647,18 +647,43 @@ isinf = _unary("IsInf", _np.isinf)
 def logical_not(t): return Tensor(_np.logical_not(_wrap(t).data))
 
 
-def maximum(a, b):
+def _split_at_ties(a, b):
+    """**동점이면 반씩 나눈다.** torch 가 그렇다 — `maximum(2, 2)` 의 기울기는 양쪽 다 0.5 다.
+
+    `a >= b` 하나로 가르면 동점에서 a 가 전부 가져가고 b 는 0 을 받는다. 순방향은
+    어느 쪽이든 똑같이 맞으므로 값 대조로는 절대 안 잡히고, 동점이 없는 입력으로도
+    안 잡힌다 — 난수 두 벌이 정확히 같을 일이 없기 때문이다.
+    """
+    tie = a.data == b.data
+    left = _np.where(tie, 0.5, (a.data > b.data).astype(a.data.dtype))
+    return left, 1.0 - left
+
+
+def _maximum_first(a, b):
+    """동점이면 **먼저 온 쪽**이 다 가져간다 — 최댓값 풀링이 이쪽이다.
+
+    `maximum` 과 갈라 둔 이유가 있다. torch 의 `maximum` 은 동점에서 반씩 나누지만
+    `max_pool` 은 이긴 자리 **하나**를 골라 거기로만 흘린다(안에서 argmax 를 쓴다).
+    풀링을 `maximum` 위에 얹어 두면 창 안에 같은 값이 둘 있을 때만 조용히 갈린다.
+    """
     a, b = _wrap(a), _wrap(b)
     pick = a.data >= b.data
     return a._make(_np.maximum(a.data, b.data), (a, b),
                    lambda g: (g * pick, g * ~pick), "MaximumBackward0")
 
 
+def maximum(a, b):
+    a, b = _wrap(a), _wrap(b)
+    la, lb = _split_at_ties(a, b)
+    return a._make(_np.maximum(a.data, b.data), (a, b),
+                   lambda g: (g * la, g * lb), "MaximumBackward0")
+
+
 def minimum(a, b):
     a, b = _wrap(a), _wrap(b)
-    pick = a.data <= b.data
+    lb, la = _split_at_ties(a, b)
     return a._make(_np.minimum(a.data, b.data), (a, b),
-                   lambda g: (g * pick, g * ~pick), "MinimumBackward0")
+                   lambda g: (g * la, g * lb), "MinimumBackward0")
 
 
 # ---------------------------------------------------------------- 모양·선택
@@ -1348,21 +1373,28 @@ def _pick(t, idx, dim, op):
     return t._make(values, (t,), back, op)
 
 
+def _order(data, dim, descending):
+    """정렬 번호. **동점끼리의 순서가 답의 일부다.**
+
+    오름차순으로 정렬한 뒤 뒤집으면 같은 값끼리의 순서까지 뒤집혀서, torch 가 앞에
+    두는 쪽(번호가 작은 쪽)이 뒤로 간다. 부호를 뒤집어 안정 정렬하면 유지된다.
+    numpy 의 기본 정렬은 quicksort 라 안정적이지 않으므로 오름차순도 명시한다 —
+    지금 맞는 것은 우연이고, 입력이 길어지면 갈린다.
+    """
+    return _np.argsort(-data if descending else data, axis=dim, kind="stable")
+
+
 def topk(t, k, dim=-1, largest=True):
     """상위 k개의 (값, 번호). 32장의 top-k 샘플링이 이것이다."""
     t = _wrap(t)
-    order = _np.argsort(t.data, axis=dim)
-    if largest:
-        order = _np.flip(order, axis=dim)
+    order = _order(t.data, dim, largest)
     idx = _np.take(order, _np.arange(k), axis=dim)
     return _MinMax(_pick(t, idx, dim, "TopkBackward0"), Tensor(idx))
 
 
 def sort(t, dim=-1, descending=False):
     t = _wrap(t)
-    idx = _np.argsort(t.data, axis=dim)
-    if descending:
-        idx = _np.flip(idx, axis=dim)
+    idx = _order(t.data, dim, descending)
     return _MinMax(_pick(t, idx, dim, "SortBackward0"), Tensor(idx))
 
 

@@ -439,25 +439,55 @@ def interpolate(x, scale_factor=2, mode="nearest"):
 
 
 def max_pool2d(x, kernel_size, stride=None):
-    """역방향은 TF.js 에 맡긴다.
+    """역방향은 **번호를 받아서 그 자리에만** 흘린다.
 
-    conv 와 달리 풀링은 전체 계산에서 차지하는 몫이 작고, 최댓값이 **어느 자리에**
-    있었는지를 우리가 다시 만들면 동점일 때 torch 와 갈린다. 정확한 쪽을 고른다.
+    원래 `tf.grad(maxPool)` 에 맡기고 "동점일 때 정확한 쪽"이라고 적어 두었는데,
+    **그 가정이 틀렸다.** 창 안에 최댓값이 둘 있으면 TF.js 는 기울기를 양쪽에 나눠
+    주고 torch 는 먼저 나온 자리 하나에만 준다(안에서 argmax 를 쓴다). 값 대조로는
+    순방향이 같아서 안 잡히고, `edge::grad::max_pool2d(동점)` 이 최대차 3 으로 잡았다.
+
+    흔한 자리다. ReLU 뒤에는 정확히 0 이 널려 있어서, 창이 통째로 0 이면 매번 동점이다.
+
+    `maxPoolWithArgmax` 가 이긴 자리의 **평평한 번호**를 준다. 그 번호로 흩뿌리면
+    torch 와 같아진다 — 나누는 일이 없다.
     """
     xin = _relayout(_wrap(x), True)
     stride = stride or kernel_size
     xh = xin._h
     ksize, strides = _to_js(list(_pair(kernel_size))), _to_js(list(_pair(stride)))
-    out = _tf.maxPool(xh, ksize, strides, "valid")
+    # **번호에 배치를 포함시킨다(마지막 인자).** 기본값은 배치를 빼고 세는 것이라
+    # 배치가 여럿이면 같은 번호가 겹쳐서, 흩뿌릴 때 첫 장으로 전부 몰린다.
+    picked = _tf.maxPoolWithArgmax(xh, ksize, strides, "valid", True)
+    out, where = picked.result, picked.indexes
+    shape = list(_shape_of(xh))
+    kh, kw = _pair(kernel_size)
+    sh, sw = _pair(stride)
+    # 창과 걸음이 같고 나누어떨어지면 창끼리 안 겹친다 — 그때만 아래의 정확한 길이 선다.
+    tidy = (kh, kw) == (sh, sw) and shape[1] % kh == 0 and shape[2] % kw == 0
+
+    total = shape[0] * shape[1] * shape[2] * shape[3]
+    full = _to_js([shape[1], shape[2]])
 
     def back(g):
-        # 파이썬 함수를 JS 로 넘길 때는 프록시를 직접 들고 있어야 한다. 그냥 넘기면
-        # 호출이 끝나는 순간 파괴되는데, tf.grad 는 **나중에** 부른다.
-        fn = _create_proxy(lambda t: _tf.maxPool(t, ksize, strides, "valid"))
-        try:
-            return (_tf.grad(fn)(xh, g),)
-        finally:
-            fn.destroy()
+        if tidy:
+            # **동점이면 번호가 가장 작은 자리로 간다** — torch 가 그렇게 한다.
+            # `maxPoolWithArgmax` 도 자리 하나를 고르기는 하는데 동점에서 고르는 자리가
+            # torch 와 다르다. 창이 안 겹치면 창의 최댓값을 도로 펼쳐서 같은 자리를 전부
+            # 찾고, 그중 최소 번호를 다시 창으로 접어 정확히 하나만 남길 수 있다.
+            idx = _tf.reshape(_tf.range(0, float(total), 1, "float32"), _to_js(shape))
+            big = _tf.mul(_tf.onesLike(idx), float(total + 1))
+            spread = _tf.image.resizeNearestNeighbor(out, full)
+            masked = _tf.where(_tf.equal(xh, spread), idx, big)
+            # 최댓값 풀링으로 최소를 내려면 부호를 뒤집는다.
+            low = _tf.neg(_tf.maxPool(_tf.neg(masked), ksize, strides, "valid"))
+            keep = _tf.cast(_tf.equal(masked, _tf.image.resizeNearestNeighbor(low, full)),
+                            "float32")
+            return (_tf.mul(keep, _tf.image.resizeNearestNeighbor(g, full)),)
+        # 겹치는 창은 자리를 나눠 갖지 않으므로 위의 펼치기가 안 선다. 번호를 그대로
+        # 쓴다 — 동점이 아니면 정확하고, 동점이면 torch 와 다른 자리를 고른다.
+        flat = _tf.reshape(_tf.cast(where, "int32"), _to_js([-1, 1]))
+        spread = _tf.scatterND(flat, _tf.reshape(g, _to_js([-1])), _to_js([total]))
+        return (_tf.reshape(spread, _to_js(shape)),)
 
     return xin._make(out, (xin,), back, "MaxPool2DBackward0")
 

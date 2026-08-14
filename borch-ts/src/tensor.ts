@@ -63,9 +63,12 @@ import {
   sortAxis,
   sumSplits,
   triangle,
+  f32lit,
+  hasUnary,
   UNARY,
   unaryBackward,
   unaryForward,
+  unaryWith,
   upsampleNearest,
   upsampleNearestBackward,
   whereBackward,
@@ -353,7 +356,7 @@ export class Tensor implements Node<Tensor> {
   // ── 원소별 ────────────────────────────────────────────────────────────
 
   unary(name: string): Tensor {
-    if (!UNARY[name]) throw new Error(`모르는 단항 연산: ${name}`);
+    if (!hasUnary(name)) throw new Error(`모르는 단항 연산: ${name}`);
     const n = this.size;
     const out = dev().alloc(n);
     dev().run1d(
@@ -1454,10 +1457,19 @@ export class Tensor implements Node<Tensor> {
     return this.reshape([this.size, 1]).mul(other.reshape([1, other.size]));
   }
 
-  /** 위아래로 자른다. */
+  /**
+   * 위아래로 자른다.
+   *
+   * **`maximum`·`minimum` 위에 얹으면 안 된다.** 그 둘은 동점에서 기울기를 반씩
+   * 나누는데(torch 가 그렇다) `clamp` 는 경계에서 온전히 흘린다. 얹어 두었더니
+   * `x` 가 정확히 경계에 앉은 자리에서만 기울기가 절반이 됐다.
+   */
   clamp(low: number, high: number): Tensor {
-    return this.binary("maximum", Tensor.full([], low))
-      .binary("minimum", Tensor.full([], high));
+    const lo = f32lit(low), hi = f32lit(high);
+    return this.unary(unaryWith(`clamp<${lo},${hi}>`, () => ({
+      fwd: `clamp(x, ${lo}, ${hi})`,
+      bwd: `select(0.0, 1.0, x >= ${lo} && x <= ${hi})`,
+    })));
   }
 
   /**
@@ -1567,9 +1579,19 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 기울기 0.1 짜리 왼쪽. `max(x, slope·x)` 라 새 커널이 필요 없다. */
+  /**
+   * 기울기가 완만한 왼쪽.
+   *
+   * `max(x, slope·x)` 로 두었더니 **x 가 정확히 0 인 자리에서 틀렸다.** 그 자리는 두
+   * 항이 동점이고 `maximum` 은 동점에서 반씩 나누므로 (1 + slope)/2 가 나오는데,
+   * torch 는 slope 를 준다 — `x > 0` 하나로 가르지 동점이라는 개념이 없다.
+   */
   leakyRelu(slope = 0.01): Tensor {
-    return this.binary("maximum", this.binary("mul", Tensor.full([], slope)));
+    const s = f32lit(slope);
+    return this.unary(unaryWith(`leakyRelu<${s}>`, () => ({
+      fwd: `select(x * ${s}, x, x > 0.0)`,
+      bwd: `select(${s}, 1.0, x > 0.0)`,
+    })));
   }
 
   /** 축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다. */
