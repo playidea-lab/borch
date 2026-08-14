@@ -8,8 +8,10 @@
 
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
+import { byRank, type DType, promote, rankOf } from "./dtype.js";
 import { RuntimeError, TORCH } from "./errors.js";
 import * as LA from "./linalg.js";
+import { formatSize, formatTensor } from "./repr.js";
 import {
   argReduce,
   type AxisRule,
@@ -132,6 +134,24 @@ export function alignStrides(
   return strides;
 }
 
+/** 비교와 논리 연산은 입력이 무엇이든 참·거짓을 낸다. */
+const BOOL_RESULT = new Set([
+  "eq", "ne", "lt", "le", "gt", "ge", "logical_and", "logical_or",
+]);
+
+/** 산술 연산 이름을 승격 규칙의 기호로. 표에 없는 것은 높은 범주를 그대로 쓴다. */
+const ARITH: Readonly<Record<string, "+" | "-" | "*" | "/">> = {
+  add: "+", sub: "-", mul: "*", div: "/",
+};
+
+function resultDType(name: string, a: DType, b: DType): DType {
+  if (BOOL_RESULT.has(name)) return "bool";
+  const op = ARITH[name];
+  if (op) return promote(a, b, op);
+  // `maximum`·`pow` 처럼 표에 없는 것들. 형을 새로 만들지 않고 높은 쪽을 쓴다.
+  return byRank(Math.max(rankOf(a), rankOf(b)));
+}
+
 /** `shape` 를 `out` 랭크에 오른쪽 맞춤한 것 — `reduceBroadcast` 가 쓴다. */
 function padShape(shape: readonly number[], rank: number): number[] {
   const out: number[] = new Array<number>(rank).fill(1);
@@ -149,6 +169,10 @@ export class Tensor implements Node<Tensor> {
   requiresGrad: boolean;
   grad: Tensor | null = null;
   freed = false;
+  /**
+   * **이름표다.** 값은 언제나 float32 버퍼에 있다 — 자세한 사정은 `src/dtype.ts`.
+   */
+  readonly dtype: DType;
   readonly parents: readonly Tensor[];
   readonly backwardFn: ((grad: Tensor) => readonly (Tensor | null)[]) | null;
   readonly gradName: string;
@@ -161,6 +185,7 @@ export class Tensor implements Node<Tensor> {
       parents?: readonly Tensor[];
       backwardFn?: (grad: Tensor) => readonly (Tensor | null)[];
       gradName?: string;
+      dtype?: DType;
     } = {},
   ) {
     this.buffer = buffer;
@@ -168,6 +193,7 @@ export class Tensor implements Node<Tensor> {
     this.size = numel(this.shape);
     this.parents = options.parents ?? [];
     this.gradName = options.gradName ?? "";
+    this.dtype = options.dtype ?? "float32";
     // 부모 중 하나라도 흘리면 흘린다. no_grad 안에서는 아무도 안 흘린다.
     const inherited =
       gradMode.enabled && this.parents.some((p) => p.requiresGrad);
@@ -188,11 +214,12 @@ export class Tensor implements Node<Tensor> {
     parents: readonly Tensor[],
     backwardFn: (grad: Tensor) => readonly (Tensor | null)[],
     gradName: string,
+    dtype: DType = "float32",
   ): Tensor {
     if (!gradMode.enabled || !parents.some((p) => p.requiresGrad)) {
-      return new Tensor(buffer, shape, { requiresGrad: false });
+      return new Tensor(buffer, shape, { requiresGrad: false, dtype });
     }
-    return new Tensor(buffer, shape, { parents, backwardFn, gradName });
+    return new Tensor(buffer, shape, { parents, backwardFn, gradName, dtype });
   }
 
   // ── 만들기 ────────────────────────────────────────────────────────────
@@ -201,13 +228,14 @@ export class Tensor implements Node<Tensor> {
     data: ArrayLike<number>,
     shape?: readonly number[],
     requiresGrad = false,
+    dtype: DType = "float32",
   ): Tensor {
     const flat = data instanceof Float32Array ? data : Float32Array.from(data);
     const shp = shape ?? [flat.length];
     if (numel(shp) !== flat.length) {
       throw new Error(`모양 [${shp}] 는 원소 ${flat.length}개와 안 맞는다.`);
     }
-    return new Tensor(dev().upload(flat), shp, { requiresGrad });
+    return new Tensor(dev().upload(flat), shp, { requiresGrad, dtype });
   }
 
   static full(shape: readonly number[], value: number): Tensor {
@@ -293,9 +321,14 @@ export class Tensor implements Node<Tensor> {
     return result;
   }
 
-  binary(name: string, other: Tensor): Tensor {
+  /**
+   * @param dtype 결과의 형. 안 주면 산술 승격 규칙을 따른다. 비교 연산처럼 형이
+   *   입력과 무관한 것은 여기서 못 박는다.
+   */
+  binary(name: string, other: Tensor, dtype?: DType): Tensor {
     const spec = BINARY[name];
     if (!spec) throw new Error(`모르는 이항 연산: ${name}`);
+    const outType = dtype ?? resultDType(name, this.dtype, other.dtype);
     const shape = broadcastShapes(this.shape, other.shape);
     const sa = alignStrides(this.shape, shape);
     const sb = alignStrides(other.shape, shape);
@@ -331,6 +364,7 @@ export class Tensor implements Node<Tensor> {
         ];
       },
       `${name[0]?.toUpperCase()}${name.slice(1)}Backward0`,
+      outType,
     );
     return result;
   }
@@ -2147,6 +2181,44 @@ export class Tensor implements Node<Tensor> {
       const w = b[i] ?? Number.NaN;
       return Math.abs(v - w) <= atol + rtol * Math.abs(w);
     });
+  }
+
+  /**
+   * `print(t)` 가 찍는 글자. **GPU 에서 읽어 오므로 비동기다.**
+   *
+   * 교재가 이 글자를 그대로 싣기 때문에 이 프로젝트는 이것도 명세로 본다 —
+   * 자세한 이유는 `src/repr.ts` 에 있다.
+   */
+  async repr(): Promise<string> {
+    const values = Array.from(await this.toArray());
+    return formatTensor({
+      values,
+      shape: this.shape,
+      dtype: this.dtype,
+      requiresGrad: this.requiresGrad,
+      gradName: this.parents.length > 0 ? this.gradName : "",
+    });
+  }
+
+  /** `torch.Size([2, 2])`. 모양도 찍히는 것이라 명세다. */
+  sizeRepr(): string {
+    return formatSize(this.shape);
+  }
+
+  /** 형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다. */
+  to(dtype: DType): Tensor {
+    if (dtype === this.dtype) return this;
+    const from = this.dtype;
+    return Tensor.make(
+      this.buffer,
+      this.shape,
+      [this],
+      // 형만 바뀐 것이라 기울기는 그대로 지난다. **끊지 않는다** — 코어에서
+      // `.float()` 이 조용히 끊겨 있던 자리가 정확히 이것이다.
+      (g) => [new Tensor(g.buffer, this.shape, { dtype: from })],
+      "ToCopyBackward0",
+      dtype,
+    );
   }
 
   async item(): Promise<number> {

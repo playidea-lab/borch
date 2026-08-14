@@ -19,6 +19,7 @@
  * 값이 갈리면 대조가 대조가 아니게 되므로, 옮길 때 그대로 옮겼다.
  */
 
+import { type DType, dtypeName } from "../src/dtype.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -314,7 +315,96 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addGrad(out, inputs);
   addInplace(out);
   addLinalg(out);
+  addDType(out);
+  addRepr(out);
   return out;
+}
+
+const DTYPES: readonly DType[] = ["float32", "int64", "bool"];
+const BIN_OPS = ["+", "-", "*", "/"] as const;
+const OP_NAME: Readonly<Record<typeof BIN_OPS[number], string>> = {
+  "+": "add", "-": "sub", "*": "mul", "/": "div",
+};
+
+/**
+ * dtype 승격. **값이 아니라 어떤 형이 나오는가**를 묻는다.
+ *
+ * 거부하는 조합(뺄셈에 bool 이 낀 것)은 예외의 종류를 답으로 적는다 — 거부하는 것도
+ * 명세이기 때문이다. 골든은 float64 가 빠진 세 종이다: 우리에게 배정도가 없다.
+ */
+function addDType(out: Map<string, Case>): void {
+  const make = (d: DType) =>
+    Tensor.from(d === "bool" ? [1, 0] : [1, 2], [2], false, d);
+
+  const verdictOf = (fn: () => Tensor): string => {
+    try {
+      return dtypeName(fn().dtype);
+    } catch (err) {
+      return `<${err instanceof Error ? err.constructor.name : "?"}>`;
+    }
+  };
+
+  for (const a of DTYPES) {
+    for (const b of DTYPES) {
+      for (const op of BIN_OPS) {
+        out.set(`dtype::${a} ${op} ${b}`, () =>
+          verdictOf(() => make(a).binary(OP_NAME[op] ?? "add", make(b))));
+      }
+    }
+  }
+  // 파이썬 스칼라는 **약하다** — 범주만 올리고 폭은 안 건드린다. 폭이 범주마다
+  // 하나뿐인 여기서는 결과가 "높은 범주" 하나로 정리된다.
+  //
+  // **형을 값에서 유추하면 안 된다.** 파이썬의 `2.0` 은 float 인데 JS 의 `2.0` 은
+  // 그냥 `2` 이고 `Number.isInteger` 가 참이다. 그 구분이 언어에 없으므로 여기서
+  // 적어 준다 — 유추에 맡기면 `int64 + 파이썬 float` 이 조용히 int64 가 된다.
+  const scalars: [string, number, DType][] = [
+    ["파이썬 int", 2, "int64"],
+    ["파이썬 float", 2, "float32"],
+    ["파이썬 bool", 1, "bool"],
+  ];
+  for (const a of DTYPES) {
+    for (const [label, value, kind] of scalars) {
+      for (const op of BIN_OPS) {
+        out.set(`dtype::${a} ${op} ${label}`, () =>
+          verdictOf(() =>
+            make(a).binary(OP_NAME[op] ?? "add",
+              Tensor.from([value], [], false, kind))));
+      }
+    }
+  }
+}
+
+/**
+ * `print(t)` 가 진짜와 같은가. 값이 아니라 **글자**를 본다.
+ *
+ * 배우는 사람이 가장 많이 하는 일이 이것이고, 다르게 찍히면 교재의 예시와 화면이
+ * 안 맞는다.
+ */
+function addRepr(out: Map<string, Case>): void {
+  const t = (v: number[], shape?: number[], grad = false, d: DType = "float32") =>
+    Tensor.from(v, shape ?? [v.length], grad, d);
+
+  const cases: [string, () => Promise<string> | string][] = [
+    ["스칼라", async () => t([3.14], []).repr()],
+    ["정수값 float", async () => t([1, 2, 3]).repr()],
+    ["소수", async () => t([0.1, 0.25]).repr()],
+    ["음수 섞임", async () => t([-1.5, 2.0, -0.25]).repr()],
+    ["2차원", async () => t([1, 2, 3, 4], [2, 2]).repr()],
+    ["3차원", async () => Tensor.zeros([2, 1, 3]).repr()],
+    ["정수", async () => t([1, 2, 3], undefined, false, "int64").repr()],
+    ["불리언", async () => t([1, 0], undefined, false, "bool").repr()],
+    ["빈 텐서", async () => t([], [0]).repr()],
+    ["큰 값·작은 값", async () => t([1e6, 2e-6]).repr()],
+    ["긴 1차원 줄바꿈", async () => Tensor.arange(30).repr()],
+    ["requires_grad", async () => t([1, 2], undefined, true).repr()],
+    ["비잎 노드 grad_fn",
+      async () => t([1], undefined, true).binary("mul", Tensor.full([], 2)).repr()],
+    ["합계 grad_fn", async () => t([1, 2], undefined, true).sum().repr()],
+    ["relu grad_fn", async () => t([-1, 2], undefined, true).unary("relu").repr()],
+    ["Size", () => t([1, 2, 3, 4], [2, 2]).sizeRepr()],
+  ];
+  for (const [name, fn] of cases) out.set(`repr::${name}`, fn);
 }
 
 /**

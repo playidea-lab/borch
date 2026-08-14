@@ -240,6 +240,9 @@ export class Device {
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
+    // 빈 텐서를 읽으면 빈 것이 나와야 한다. 버퍼는 최소 한 칸을 잡으므로, 그것을
+    // 그대로 읽으면 있지도 않은 원소 하나가 딸려 나온다.
+    if (count === 0) return new Float32Array(0);
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
     let free = this.stagingFree.get(bytes);
     if (!free) {
