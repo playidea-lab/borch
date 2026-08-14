@@ -151,6 +151,16 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
     prelude: NAN_PRELUDE,
   },
   notNan: { fwd: "select(1.0, 0.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
+  isnan: { fwd: "select(0.0, 1.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
+  // 무한대 판정도 비트로 본다 — 지수부가 전부 1 이고 가수부가 0 이다.
+  isinf: {
+    fwd: "select(0.0, 1.0, (bitcast<u32>(x) & 0x7fffffffu) == 0x7f800000u)",
+    bwd: "0.0",
+  },
+  isfinite: {
+    fwd: "select(0.0, 1.0, (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u)",
+    bwd: "0.0",
+  },
 };
 
 export const BINARY: Readonly<Record<string, BinarySpec>> = {
@@ -200,6 +210,14 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
     db: "select(0.0, 1.0, x == 0.0)",
   },
   ldexp: { fwd: "x * exp2(y)", da: "exp2(y)", db: "o * 0.6931471805599453" },
+  // 비교는 0/1 을 낸다. dtype 이 float32 하나뿐이라 bool 을 따로 안 든다 —
+  // 골든의 bool 케이스와는 0/1 로 맞는다. **기울기는 양쪽 다 0 이다.**
+  eq: { fwd: "select(0.0, 1.0, x == y)", da: "0.0", db: "0.0" },
+  ne: { fwd: "select(0.0, 1.0, x != y)", da: "0.0", db: "0.0" },
+  lt: { fwd: "select(0.0, 1.0, x < y)", da: "0.0", db: "0.0" },
+  le: { fwd: "select(0.0, 1.0, x <= y)", da: "0.0", db: "0.0" },
+  gt: { fwd: "select(0.0, 1.0, x > y)", da: "0.0", db: "0.0" },
+  ge: { fwd: "select(0.0, 1.0, x >= y)", da: "0.0", db: "0.0" },
 };
 
 /** 워크그룹 크기. 원소별과 축약은 1차원이다. */
@@ -546,7 +564,7 @@ export function reduceParts(n: number): number {
  * 도는 꼴이라, 큰 텐서에서는 `Device.sumAll` 의 트리가 맞다. 여기 쓰는 것은 축이
  * 실제로 있을 때다.
  */
-export type ReduceKind = "sum" | "max" | "min";
+export type ReduceKind = "sum" | "max" | "min" | "prod";
 
 /**
  * 축약의 시작값과 한 걸음.
@@ -561,15 +579,19 @@ export type ReduceKind = "sum" | "max" | "min";
  */
 const REDUCE_INIT: Readonly<Record<ReduceKind, string>> = {
   sum: "0.0",
+  prod: "1.0",
   max: "A[base]",
   min: "A[base]",
 };
 
 /** 시작값이 첫 원소면 그 자리를 두 번 세지 않는다. */
-const REDUCE_FROM: Readonly<Record<ReduceKind, number>> = { sum: 0, max: 1, min: 1 };
+const REDUCE_FROM: Readonly<Record<ReduceKind, number>> = {
+  sum: 0, prod: 0, max: 1, min: 1,
+};
 
 const REDUCE_STEP: Readonly<Record<ReduceKind, string>> = {
   sum: "acc = acc + v;",
+  prod: "acc = acc * v;",
   max: "acc = max(acc, v);",
   min: "acc = min(acc, v);",
 };
@@ -666,10 +688,15 @@ export interface AxisRule {
   readonly kind: "lin" | "mod" | "rev";
   /** `mod`·`rev` 의 주기. 보통 입력 축의 크기다. */
   readonly wrap: number;
+  /** `mod` 에 더해지는 자리이동. `roll` 이 쓴다 — `repeat` 은 0 이다. */
+  readonly bias?: number;
 }
 
 function ruleCoord(r: AxisRule, c: string): string {
-  if (r.kind === "mod") return `(${c} % ${r.wrap}u)`;
+  if (r.kind === "mod") {
+    const bias = r.bias ?? 0;
+    return bias === 0 ? `(${c} % ${r.wrap}u)` : `((${c} + ${bias}u) % ${r.wrap}u)`;
+  }
   if (r.kind === "rev") return `(${r.wrap - 1}u - ${c})`;
   return c;
 }
@@ -696,6 +723,19 @@ function sourceIndex(
 
 function ruleCount(rules: readonly AxisRule[]): number {
   return rules.reduce((a, r) => a * r.size, 1);
+}
+
+/**
+ * 규칙 묶음의 서명. **파이프라인 캐시의 열쇠다.**
+ *
+ * 규칙의 어느 한 자리라도 빠뜨리면 다른 연산이 같은 셰이더를 물려받는다 — 모양을
+ * 굽는 설계라 그것은 조용히 틀린 답이 된다. 그래서 이 함수가 규칙 옆에 있다.
+ */
+export function ruleKey(rules: readonly AxisRule[], offset: number): string {
+  const parts = rules.map(
+    (r) => `${r.kind}:${r.size}:${r.stride}:${r.wrap}:${r.bias ?? 0}`,
+  );
+  return `${parts.join(",")}|${offset}`;
 }
 
 export function gather(rules: readonly AxisRule[], offset: number): string {
@@ -774,6 +814,145 @@ export function diagflatBackward(n: number): string {
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   Out[gid] = G[gid * ${n + 1}u];
+}`;
+}
+
+/**
+ * `where(조건, x, y)` — 조건 자리마다 둘 중 하나.
+ *
+ * 기울기는 **고른 쪽으로만** 간다. 안 고른 쪽으로 0 을 보내는 것과 같은 값이지만,
+ * 안 고른 쪽이 NaN 이면 다르다 — `0 * NaN` 은 NaN 이다. 그래서 곱하지 않고 고른다.
+ */
+export function whereKernel(n: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> C: array<f32>;
+@group(0) @binding(1) var<storage, read> A: array<f32>;
+@group(0) @binding(2) var<storage, read> B: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = select(B[gid], A[gid], C[gid] != 0.0);
+}`;
+}
+
+/** `where` 의 역방향, 한쪽 몫. 고른 자리에만 기울기를 놓는다. */
+export function whereBackward(n: number, take: "a" | "b"): string {
+  const test = take === "a" ? "C[gid] != 0.0" : "C[gid] == 0.0";
+  return `
+@group(0) @binding(0) var<storage, read> C: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = select(0.0, G[gid], ${test});
+}`;
+}
+
+/** 아래·위 삼각만 남기고 0. `diagonal` 이 아니라 **면**을 남긴다. */
+export function triangle(rows: number, cols: number, lower: boolean, diagonal: number): string {
+  const n = rows * cols;
+  // tril 은 j - i <= diagonal, triu 는 j - i >= diagonal 을 남긴다. 정수 뺄셈이
+  // 음수가 될 수 있어 i32 로 본다 — u32 로 두면 아래쪽 절반이 거대한 수가 된다.
+  const test = lower
+    ? `(i32(j) - i32(i)) <= ${diagonal}`
+    : `(i32(j) - i32(i)) >= ${diagonal}`;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let i = gid / ${cols}u;
+  let j = gid % ${cols}u;
+  Out[gid] = select(0.0, A[gid], ${test});
+}`;
+}
+
+/**
+ * 누적 합·곱. 스레드 하나가 자기 앞자리를 전부 훑는다.
+ *
+ * 병렬 스캔(Hillis-Steele 등)이 있지만 안 쓴다. 여기 필요한 길이가 짧고, 병렬 스캔은
+ * **더하는 순서가 바뀌어** 같은 입력에서 다른 값이 나올 수 있다. 재현이 먼저다.
+ */
+export function cumulative(
+  kind: "sum" | "prod",
+  outer: number,
+  len: number,
+  inner: number,
+): string {
+  const n = outer * len * inner;
+  const init = kind === "sum" ? "0.0" : "1.0";
+  const step = kind === "sum" ? "acc = acc + v;" : "acc = acc * v;";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${len * inner}u;
+  let rest = gid % ${len * inner}u;
+  let k = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  let base = o * ${len * inner}u + i;
+  var acc = ${init};
+  for (var t = 0u; t <= k; t = t + 1u) {
+    let v = A[base + t * ${inner}u];
+    ${step}
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/** `cumsum` 의 역방향 — 뒤에서부터 누적한다. 앞자리는 뒤 전부에 기여했다. */
+export function cumsumBackward(outer: number, len: number, inner: number): string {
+  const n = outer * len * inner;
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${len * inner}u;
+  let rest = gid % ${len * inner}u;
+  let k = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  let base = o * ${len * inner}u + i;
+  var acc = 0.0;
+  for (var t = k; t < ${len}u; t = t + 1u) {
+    acc = acc + G[base + t * ${inner}u];
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * `gather(dim, index)` — 축 하나를 색인 텐서가 가리키는 대로 고른다.
+ *
+ * 색인이 float32 에 담겨 온다. dtype 이 하나뿐이라 그런데, 정수 값이 float32 에
+ * 정확히 담기는 범위(2²⁴)를 넘으면 조용히 틀린 자리를 읽는다 — 지금 쓰는 크기에서는
+ * 한참 아래다.
+ */
+export function gatherIndex(
+  outer: number,
+  axis: number,
+  inner: number,
+  outAxis: number,
+): string {
+  const n = outer * outAxis * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> I: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${outAxis * inner}u;
+  let rest = gid % ${outAxis * inner}u;
+  let i = rest % ${inner}u;
+  let want = u32(I[gid]);
+  Out[gid] = A[o * ${axis * inner}u + want * ${inner}u + i];
 }`;
 }
 

@@ -13,6 +13,8 @@ import {
   BINARY,
   binaryBackward,
   binaryForward,
+  cumsumBackward,
+  cumulative,
   diagflat,
   diagflatBackward,
   expandDim,
@@ -20,12 +22,18 @@ import {
   fill,
   gather,
   gatherBackward,
+  gatherIndex,
   matmul,
   reduceBroadcast,
   reduceDim,
+  type ReduceKind,
+  ruleKey,
+  triangle,
   UNARY,
   unaryBackward,
   unaryForward,
+  whereBackward,
+  whereKernel,
 } from "./kernels.js";
 
 /** 장치를 **객체 안에** 둔다. `autograd.ts` 의 `gradMode` 와 같은 이유다. */
@@ -344,7 +352,7 @@ export class Tensor implements Node<Tensor> {
    * 전체 합만 `Device.sumAll` 의 트리로 간다 — 축 축약 커널은 스레드 하나가 축을
    * 훑는 구조라 전체 축약에 쓰면 스레드 하나가 n 번 돈다.
    */
-  private reduceOver(kind: "sum" | "max" | "min", dim?: number, keepdim = false): Tensor {
+  private reduceOver(kind: ReduceKind, dim?: number, keepdim = false): Tensor {
     if (dim === undefined) {
       if (kind === "sum") return this.sum();
       // 전체 최대·최소는 평평하게 본 뒤 축 하나로 접는다.
@@ -375,6 +383,11 @@ export class Tensor implements Node<Tensor> {
       outShape,
       [this],
       (g) => {
+        if (kind === "prod") {
+          // out/x 로 쓰면 x 에 0 이 하나라도 있는 축에서 조용히 틀린다. 제대로 하려면
+          // 접두·접미 곱을 따로 들어야 하고, 아직 그것을 요구하는 케이스가 없다.
+          throw new Error("prod 의 역방향은 아직 없다 — 틀린 답보다 없는 편이 낫다.");
+        }
         const gi = dev().alloc(this.size);
         if (kind === "sum") {
           dev().run1d(
@@ -520,7 +533,7 @@ export class Tensor implements Node<Tensor> {
     gradName: string,
   ): Tensor {
     const n = outShape.reduce((a, b) => a * b, 1);
-    const key = `${rules.map((r) => `${r.kind}${r.size}/${r.stride}/${r.wrap}`).join(",")}|${offset}`;
+    const key = ruleKey(rules, offset);
     const out = dev().alloc(n);
     dev().run1d(dev().pipeline(`gt:${key}`, () => gather(rules, offset)), [this.buffer, out], n);
     const inSize = this.size;
@@ -834,6 +847,287 @@ export class Tensor implements Node<Tensor> {
     return this.split(0, parts);
   }
 
+  /** 축을 원하는 자리로 옮긴다. `swapaxes` 와 달리 나머지 순서를 지킨다. */
+  movedim(src: number, dst: number): Tensor {
+    const rank = this.shape.length;
+    const from = src < 0 ? src + rank : src;
+    const to = dst < 0 ? dst + rank : dst;
+    const order = [...Array(rank).keys()].filter((d) => d !== from);
+    order.splice(to, 0, from);
+    return this.permute(order);
+  }
+
+  /** 축 순서를 통째로 바꾼다. */
+  permute(order: readonly number[]): Tensor {
+    const own = this.strides();
+    const rules: AxisRule[] = order.map((s) => ({
+      size: this.shape[s] ?? 1,
+      stride: own[s] ?? 1,
+      kind: "lin" as const,
+      wrap: this.shape[s] ?? 1,
+    }));
+    return this.viewAs(rules, 0, order.map((s) => this.shape[s] ?? 1), "PermuteBackward0");
+  }
+
+  /** 축 하나에서 `start` 부터 `length` 개만. */
+  narrow(dim: number, start: number, length: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const own = this.strides();
+    const rules: AxisRule[] = this.shape.map((size, d) => ({
+      size: d === axis ? length : size,
+      stride: own[d] ?? 1,
+      kind: "lin" as const,
+      wrap: d === axis ? length : size,
+    }));
+    const outShape = this.shape.map((size, d) => (d === axis ? length : size));
+    return this.viewAs(rules, start * (own[axis] ?? 1), outShape, "SliceBackward0");
+  }
+
+  /**
+   * 축 하나를 자리이동. **끝에서 빠진 것이 앞으로 돌아온다.**
+   *
+   * `out[i] = in[(i - shift) mod n]` 이라, 규칙 표의 `mod` 에 자리이동을 얹으면 된다.
+   */
+  roll(shift: number, dim = 0): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const size = this.shape[axis] ?? 1;
+    const own = this.strides();
+    const bias = ((-shift % size) + size) % size;
+    const rules: AxisRule[] = this.shape.map((s, d) => ({
+      size: s,
+      stride: own[d] ?? 1,
+      kind: d === axis ? ("mod" as const) : ("lin" as const),
+      wrap: s,
+      ...(d === axis ? { bias } : {}),
+    }));
+    return this.viewAs(rules, 0, this.shape, "RollBackward0");
+  }
+
+  /** `repeat` 과 같은 일이되 torch 가 이름을 둘 다 갖는다. */
+  tile(...times: number[]): Tensor {
+    return this.repeat(...times);
+  }
+
+  /** 축 하나를 크기로 나눈다. `split` 은 조각 **크기**, `chunk` 는 조각 **수**다. */
+  splitSize(dim: number, size: number): Tensor[] {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const axisSize = this.shape[axis] ?? 0;
+    const out: Tensor[] = [];
+    for (let start = 0; start < axisSize; start += size) {
+      out.push(this.narrow(axis, start, Math.min(size, axisSize - start)));
+    }
+    return out;
+  }
+
+  chunk(parts: number, dim = 0): Tensor[] {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const axisSize = this.shape[axis] ?? 0;
+    return this.splitSize(axis, Math.ceil(axisSize / parts));
+  }
+
+  /** 축 하나를 따라 낱개로 뜯는다. 그 축이 사라진다. */
+  unbind(dim = 0): Tensor[] {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const size = this.shape[axis] ?? 0;
+    return Array.from({ length: size }, (_, i) => this.select(axis, i));
+  }
+
+  /** 아래 삼각. `diagonal` 위쪽을 0 으로 만든다. */
+  tril(diagonal = 0): Tensor {
+    return this.triangleAs(true, diagonal);
+  }
+
+  triu(diagonal = 0): Tensor {
+    return this.triangleAs(false, diagonal);
+  }
+
+  private triangleAs(lower: boolean, diagonal: number): Tensor {
+    if (this.shape.length !== 2) {
+      throw new Error(`tril/triu 는 2차원이다: [${this.shape}]`);
+    }
+    const rows = this.shape[0] ?? 0;
+    const cols = this.shape[1] ?? 0;
+    const n = rows * cols;
+    const key = `${lower ? "l" : "u"}:${rows}:${cols}:${diagonal}`;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`tri:${key}`, () => triangle(rows, cols, lower, diagonal)),
+      [this.buffer, out],
+      n,
+    );
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      shape,
+      [this],
+      // 남긴 자리로만 흐른다. 0 으로 만든 자리는 결과에 안 들어갔다.
+      (g) => {
+        const gi = dev().alloc(n);
+        dev().run1d(
+          dev().pipeline(`tri:${key}`, () => triangle(rows, cols, lower, diagonal)),
+          [g.buffer, gi],
+          n,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      lower ? "TrilBackward0" : "TriuBackward0",
+    );
+  }
+
+  /** 대각선의 합. */
+  trace(): Tensor {
+    return this.diagonal().sum();
+  }
+
+  /** 2차원이면 대각선을 뽑고, 1차원이면 대각선에 놓는다 — torch 의 `diag` 다. */
+  diag(): Tensor {
+    return this.shape.length === 2 ? this.diagonal() : this.diagflat();
+  }
+
+  /** 축 하나를 누적한다. */
+  cumsum(dim = 0): Tensor {
+    return this.scan("sum", dim);
+  }
+
+  cumprod(dim = 0): Tensor {
+    return this.scan("prod", dim);
+  }
+
+  private scan(kind: "sum" | "prod", dim: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const len = this.shape[axis] ?? 1;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const n = this.size;
+    const key = `${outer}:${len}:${inner}`;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`cum:${kind}:${key}`, () => cumulative(kind, outer, len, inner)),
+      [this.buffer, out],
+      n,
+    );
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      shape,
+      [this],
+      (g) => {
+        if (kind !== "sum") {
+          // 0 이 섞인 곱의 역방향은 나눗셈으로 못 쓴다. 제대로 하려면 접두·접미
+          // 곱을 따로 들어야 하고, 아직 그것을 요구하는 케이스가 없다.
+          throw new Error("cumprod 의 역방향은 아직 없다 — 틀린 답보다 없는 편이 낫다.");
+        }
+        const gi = dev().alloc(n);
+        dev().run1d(
+          dev().pipeline(`cumb:${key}`, () => cumsumBackward(outer, len, inner)),
+          [g.buffer, gi],
+          n,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      kind === "sum" ? "CumsumBackward0" : "CumprodBackward0",
+    );
+  }
+
+  /** 축 하나를 색인 텐서가 가리키는 대로 고른다. 색인은 float32 에 담겨 온다. */
+  gather(dim: number, index: Tensor): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const axisSize = this.shape[axis] ?? 1;
+    const outAxis = index.shape[axis] ?? 1;
+    const n = index.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(
+        `gi:${outer}:${axisSize}:${inner}:${outAxis}`,
+        () => gatherIndex(outer, axisSize, inner, outAxis),
+      ),
+      [this.buffer, index.buffer, out],
+      n,
+    );
+    // 값만 낸다. 역방향은 흩뿌리기라 결정적으로 쓰려면 따로 세워야 하고,
+    // 그것을 요구하는 케이스가 아직 없다.
+    return new Tensor(out, index.shape);
+  }
+
+  /** 조건 자리마다 이쪽 아니면 저쪽. torch 의 메서드 형태는 `x.where(조건, 다른쪽)` 이다. */
+  where(cond: Tensor, other: Tensor): Tensor {
+    const n = this.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`wh:${n}`, () => whereKernel(n)),
+      [cond.buffer, this.buffer, other.buffer, out],
+      n,
+    );
+    const shape = this.shape;
+    const side = (g: Tensor, take: "a" | "b"): Tensor => {
+      const gi = dev().alloc(n);
+      dev().run1d(
+        dev().pipeline(`whb:${take}:${n}`, () => whereBackward(n, take)),
+        [cond.buffer, g.buffer, gi],
+        n,
+      );
+      return new Tensor(gi, shape);
+    };
+    return Tensor.make(
+      out,
+      shape,
+      [this, other],
+      (g) => [
+        this.requiresGrad ? side(g, "a") : null,
+        other.requiresGrad ? side(g, "b") : null,
+      ],
+      "WhereBackward0",
+    );
+  }
+
+  /** 전부 곱한다. */
+  prod(dim?: number, keepdim = false): Tensor {
+    if (dim === undefined) return this.flat().reduceOver("prod", 0, false);
+    return this.reduceOver("prod", dim, keepdim);
+  }
+
+  /** L2 노름. */
+  norm(): Tensor {
+    return this.square().sum().sqrt();
+  }
+
+  /** 두 벡터의 안쪽 곱. */
+  dot(other: Tensor): Tensor {
+    return this.mul(other).sum();
+  }
+
+  /** 두 벡터의 바깥 곱. 브로드캐스팅으로 나온다 — 새 커널이 필요 없다. */
+  outer(other: Tensor): Tensor {
+    return this.reshape([this.size, 1]).mul(other.reshape([1, other.size]));
+  }
+
+  /** 위아래로 자른다. */
+  clamp(low: number, high: number): Tensor {
+    return this.binary("maximum", Tensor.full([], low))
+      .binary("minimum", Tensor.full([], high));
+  }
+
+  /** 상수 지수. */
+  powScalar(k: number): Tensor {
+    return this.binary("pow", Tensor.full([], k));
+  }
+
+  /** `exp(x) / Σ exp(x)`. **최대값을 빼고 계산한다** — 안 그러면 큰 값에서 넘친다. */
+  softmax(dim = 0): Tensor {
+    const m = this.amax(dim, true).detach();
+    const e = this.sub(m).exp();
+    return e.div(e.sumDim(dim, true));
+  }
+
   // ── 역전파 ────────────────────────────────────────────────────────────
 
   backward(): void {
@@ -850,6 +1144,34 @@ export class Tensor implements Node<Tensor> {
 
   async toArray(): Promise<Float32Array> {
     return dev().read(this.buffer, this.size);
+  }
+
+  /**
+   * 모양과 값이 **정확히** 같은가. 허용 오차가 없다 — 그것이 `allclose` 와 다른 점이다.
+   *
+   * GPU 에서 읽어 온다. 판정 하나를 위해 왕복하는 것이 아깝지만, CPU 에 사본을 들고
+   * 있다가 비교하면 GPU 에서 무슨 일이 있었는지를 못 본다.
+   */
+  async equal(other: Tensor): Promise<boolean> {
+    if (this.shape.length !== other.shape.length ||
+        this.shape.some((d, i) => d !== other.shape[i])) {
+      return false;
+    }
+    const [a, b] = await Promise.all([this.toArray(), other.toArray()]);
+    return a.every((v, i) => v === b[i]);
+  }
+
+  /** 허용 오차 안에서 같은가. torch 의 기본값과 같다. */
+  async allclose(other: Tensor, rtol = 1e-5, atol = 1e-8): Promise<boolean> {
+    if (this.shape.length !== other.shape.length ||
+        this.shape.some((d, i) => d !== other.shape[i])) {
+      return false;
+    }
+    const [a, b] = await Promise.all([this.toArray(), other.toArray()]);
+    return a.every((v, i) => {
+      const w = b[i] ?? Number.NaN;
+      return Math.abs(v - w) <= atol + rtol * Math.abs(w);
+    });
   }
 
   async item(): Promise<number> {

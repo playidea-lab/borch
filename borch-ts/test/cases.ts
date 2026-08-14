@@ -21,8 +21,14 @@
 
 import { Tensor } from "../src/tensor.js";
 
-/** 케이스 하나. 결과 텐서를 낸다 — 러너가 읽어서 골든과 맞춘다. */
-export type Case = () => Tensor;
+/**
+ * 케이스 하나.
+ *
+ * 보통은 결과 텐서를 낸다. **문자열을 내는 것도 있다** — `equal` 이 참인가, 어떤
+ * 예외가 나는가처럼 값이 아니라 판정을 굳힌 케이스다. 그런 것은 근사가 아니라
+ * 정확히 같아야 한다.
+ */
+export type Case = () => Tensor | string | Promise<Tensor | string>;
 
 // ── tests/cases.py 의 math_cases 가 쓰는 입력. 그대로 옮긴 것이다. ──────────
 const plain = [0.5, 2.0, -1.5, 3.0];
@@ -67,6 +73,17 @@ const MATH_BINARY: readonly string[] = [
 
 /** 계단 함수. **0 을 흘린다** — 없는 것과 0 인 것은 다르다. */
 const STEPS: readonly string[] = ["sign", "floor", "ceil", "round", "trunc", "fix"];
+
+/**
+ * 참·거짓을 **골든이 굳힌 철자로** 적는다.
+ *
+ * 굳힐 때 파이썬의 `str(bool(...))` 을 썼으므로 `True`/`False` 다. JS 의 `String(true)`
+ * 는 `true` 라 그대로 두면 안 맞는다. 이것은 판정이 다른 것이 아니라 적는 법이
+ * 다른 것이고, 골든이 답을 들고 있는 쪽이니 이쪽이 맞춘다.
+ */
+function verdict(value: boolean): string {
+  return value ? "True" : "False";
+}
 
 /** `x.grad` 를 낸다. 안 도착했으면 조용히 넘기지 않고 던진다. */
 function gradOf(leaf: Tensor, name: string): Tensor {
@@ -131,6 +148,7 @@ export function cases(): Map<string, Case> {
 
   addReduce(out);
   addShape(out);
+  addMethod(out);
   return out;
 }
 
@@ -264,6 +282,105 @@ function addShape(out: Map<string, Case>): void {
       return gradOf(leaf, name);
     });
   }
+}
+
+// ── tests/cases.py 의 method_cases 가 쓰는 입력. ───────────────────────────
+const M_POS = [0.5, 2.0, 1.5, 3.0];
+const M_VEC = [0.5, 2.0, -1.5, 3.0];
+const M_OTHER = [1.0, 2.0, -3.0, 0.5];
+const M_MAT = [1, 2, 3, 4, 5, 6, 7, 8, 9]; // (3, 3), 1 부터
+const M_MASK = [1, 0, 1, 0]; // bool 을 0/1 로
+
+/**
+ * `x.f(...)` 로 부를 수 있어야 하는 것들.
+ *
+ * **아직 안 쓴 것은 등록하지 않는다.** `sort`·`argsort`·`topk`·`median`·`unique` 는
+ * GPU 정렬이 필요하고 그것을 아직 안 세웠다. 이름만 올려두고 던지게 하면 러너가
+ * "실패" 로 세는데, 그건 틀린 것이 아니라 없는 것이다 — 러너는 안 물은 수를 따로
+ * 세므로 여기 없는 것이 그 수에 잡힌다.
+ */
+function addMethod(out: Map<string, Case>): void {
+  const vec = (grad = false) => Tensor.from(M_VEC, [4], grad);
+  const other = () => Tensor.from(M_OTHER, [4]);
+  const mat = () => Tensor.from(M_MAT, [3, 3]);
+
+  // 표에 있는 단항은 이름만 적으면 된다.
+  const unaryOn: [readonly number[], readonly string[]][] = [
+    [M_VEC, ["ceil", "cos", "cosh", "erf", "floor", "isfinite", "isinf", "isnan",
+      "neg", "reciprocal", "relu", "round", "sigmoid", "sign", "sin", "sinh",
+      "square", "tan", "tanh"]],
+    [M_POS, ["log2", "log10", "rsqrt"]],
+  ];
+  for (const [src, names] of unaryOn) {
+    for (const name of names) {
+      out.set(`method::${name}`, () => Tensor.from(src, [4]).unary(name));
+    }
+  }
+
+  // 짝이 필요한 것. 비교는 0/1 을 내고 골든의 bool 과 그대로 맞는다.
+  for (const name of ["eq", "ne", "lt", "le", "gt", "ge", "maximum", "minimum"]) {
+    out.set(`method::${name}`, () => vec().binary(name, other()));
+  }
+  out.set("method::dot", () => vec().dot(other()));
+  out.set("method::outer", () => vec().outer(other()));
+
+  const single: [string, () => Tensor][] = [
+    ["prod", () => vec().prod()],
+    ["norm", () => vec().norm()],
+    ["clamp", () => vec().clamp(0.0, 1.0)],
+    ["pow", () => vec().powScalar(2)],
+    ["roll", () => vec().roll(1)],
+    ["cumsum", () => vec().cumsum(0)],
+    ["cumprod", () => vec().cumprod(0)],
+    ["softmax", () => vec().softmax(0)],
+    ["narrow", () => vec().narrow(0, 0, 2)],
+    ["flip", () => vec().flip(0)],
+    ["tile", () => vec().tile(2)],
+    ["diag", () => mat().diag()],
+    ["trace", () => mat().trace()],
+    ["tril", () => mat().tril()],
+    ["triu", () => mat().triu()],
+    ["mm", () => mat().mm(mat())],
+    // **인자 순서가 함수와 뒤집힌 유일한 자리다** — 메서드는 `x.where(조건, 저쪽)` 이다.
+    ["where", () => vec().where(Tensor.from(M_MASK, [4]), other())],
+    ["gather", () => mat().gather(1, Tensor.from([0, 2, 1, 0, 2, 1], [3, 2]))],
+  ];
+  for (const [name, fn] of single) out.set(`method::${name}`, fn);
+
+  // 여럿을 돌려주는 것 — 조각마다 이름을 붙인다. 하나만 보면 나머지가 안 걸린다.
+  const pieces: [string, () => Tensor[]][] = [
+    ["chunk", () => vec().chunk(2)],
+    ["split", () => vec().splitSize(0, 2)],
+    ["unbind", () => vec().unbind(0)],
+  ];
+  for (const [name, fn] of pieces) {
+    for (const k of [0, 1]) {
+      out.set(`method::${name}[${k}]`, () => {
+        const part = fn()[k];
+        if (!part) throw new Error(`${name} 조각 ${k} 가 없다`);
+        return part;
+      });
+    }
+  }
+
+  // **movedim 은 네 조합을 다 묻는다.** (0,0) 하나였을 때는 항등이라 아무것도 안
+  // 물은 것과 같았고, 그 뒤에 자매의 movedim(0,-1) 이 조용히 항등으로 굴고 있었다.
+  for (const [s, d] of [[0, -1], [-1, 0], [0, 1], [1, 0]] as const) {
+    out.set(`method::movedim(${s},${d})`, () => mat().movedim(s, d));
+  }
+
+  // 값이 아니라 **판정**을 굳힌 것들. 라이브러리에게 물어야 한다 — 여기서 JS 배열을
+  // 비교해 답하면 통과는 하는데 아무것도 시험하지 않는다.
+  out.set("method::equal", async () => verdict(await vec().equal(vec())));
+  out.set("method::equal(다른 것)", async () => verdict(await vec().equal(other())));
+  out.set("method::allclose", async () => verdict(await vec().allclose(vec())));
+
+  out.set("method::grad::square", () => {
+    const x = vec(true);
+    x.square().mul(Tensor.from([0, 1, 2, 3], [4])).sum().backward();
+    return gradOf(x, "method::square");
+  });
+
 }
 
 /**

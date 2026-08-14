@@ -12,7 +12,7 @@
  * 정확히 그 모양이었다 — 값은 그럴듯하고 아무도 안 보고 있었다.
  */
 
-import { init, Tensor } from "../src/tensor.js";
+import { init } from "../src/tensor.js";
 import { cases as registered } from "./cases.js";
 
 interface GoldenValue {
@@ -64,7 +64,7 @@ function compare(
   tol: { atol: number; rtol: number },
 ): string | null {
   if (want.kind === "string") {
-    return `문자열 케이스다 — 텐서로 답할 수 없다 (기대: ${want.value})`;
+    return `문자열 케이스인데 텐서로 답했다 (기대: ${want.value})`;
   }
   const shape = want.shape ?? [];
   const values = want.values ?? [];
@@ -126,9 +126,17 @@ export async function run(url: string): Promise<Report> {
     }
     let why: string | null;
     try {
-      const result: Tensor = body();
-      const got = await result.toArray();
-      why = compare(got, result.shape, want, doc.tolerance);
+      const result = await body();
+      if (typeof result === "string") {
+        // 값이 아니라 **판정**을 굳힌 케이스다 — `equal` 이 참인가, 어떤 예외가
+        // 나는가 같은 것. 이런 것은 근사가 아니라 정확히 같아야 한다.
+        why = want.kind === "string"
+          ? (result === want.value ? null : `"${result}" ≠ "${want.value}"`)
+          : `문자열로 답했는데 골든은 ${want.kind} 다`;
+      } else {
+        const got = await result.toArray();
+        why = compare(got, result.shape, want, doc.tolerance);
+      }
     } catch (err) {
       why = `던졌다: ${err instanceof Error ? err.message : String(err)}`;
     }

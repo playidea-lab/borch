@@ -35,8 +35,15 @@ export class Device {
   private readonly limits: GPUSupportedLimits;
   /** 모양까지 포함한 서명 → 파이프라인. */
   private readonly pipelines = new Map<string, GPUComputePipeline>();
-  /** 읽어올 때 쓰는 staging 버퍼. 크기별로 하나씩 재사용한다. */
-  private readonly staging = new Map<number, GPUBuffer>();
+  /**
+   * 읽어올 때 쓰는 staging 버퍼의 **놀고 있는 것들**. 크기별로 여러 개다.
+   *
+   * 처음에는 크기마다 하나만 두고 돌려썼는데, 읽기 둘이 겹치면 같은 버퍼를 두 번
+   * 매핑하게 되어 "Buffer already has an outstanding map pending" 으로 터졌다.
+   * `equal` 이 두 텐서를 `Promise.all` 로 읽자마자 나왔다 — 겹쳐 읽는 것은 흔한 일이라
+   * 하나로는 안 된다.
+   */
+  private readonly stagingFree = new Map<number, GPUBuffer[]>();
 
   private constructor(device: GPUDevice) {
     this.device = device;
@@ -220,23 +227,32 @@ export class Device {
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
-    const bytes = count * BYTES_PER_F32;
-    let stage = this.staging.get(bytes);
-    if (!stage) {
-      stage = this.device.createBuffer({
-        size: bytes,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-      });
-      this.staging.set(bytes, stage);
+    const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
+    let free = this.stagingFree.get(bytes);
+    if (!free) {
+      free = [];
+      this.stagingFree.set(bytes, free);
     }
-    const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(buffer, 0, stage, 0, bytes);
-    this.device.queue.submit([encoder.finish()]);
-    await stage.mapAsync(GPUMapMode.READ);
-    // 매핑된 메모리는 unmap 하면 사라진다. 반드시 복사해서 내보낸다.
-    const out = new Float32Array(stage.getMappedRange().slice(0));
-    stage.unmap();
-    return out;
+    const stage = free.pop() ?? this.device.createBuffer({
+      size: bytes,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    try {
+      const encoder = this.device.createCommandEncoder();
+      encoder.copyBufferToBuffer(buffer, 0, stage, 0, bytes);
+      this.device.queue.submit([encoder.finish()]);
+      await stage.mapAsync(GPUMapMode.READ);
+      // 매핑된 메모리는 unmap 하면 사라진다. 반드시 복사해서 내보낸다.
+      const out = new Float32Array(stage.getMappedRange().slice(0));
+      stage.unmap();
+      // **성공했을 때만 돌려놓는다.** 실패한 버퍼는 매핑 상태를 모르고, 그것을
+      // 풀에 넣으면 다음 사람이 깨진 상태를 물려받아 원인이 한 단계 멀어진다.
+      free.push(stage);
+      return out;
+    } catch (err) {
+      stage.destroy();
+      throw err;
+    }
   }
 
   /** 워크그룹 크기. 커널과 장치가 같은 값을 봐야 한다. */
