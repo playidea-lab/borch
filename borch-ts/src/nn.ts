@@ -145,8 +145,18 @@ export abstract class Module {
 
 /** 층을 줄줄이 세운 것. 자리 번호가 곧 이름이다. */
 export class Sequential extends Module {
-  constructor(private readonly layers: Module[]) {
+  private readonly layers: Module[];
+
+  /**
+   * **층을 그냥 나열한다** — `new Sequential(a, b, c)`. torch 가 그 모양이다.
+   *
+   * 배열 하나를 받게 두었더니 `index.ts` 에 적은 첫 예시부터 틀렸다. 쓰는 사람이
+   * torch 코드를 옮겨 적을 때 대괄호를 빼먹는 것이 기본값이고, 그 기본값이 맞는
+   * 쪽이어야 한다. 배열도 그대로 받는다 — 이미 그렇게 쓰던 자리가 있다.
+   */
+  constructor(...layers: readonly (Module | readonly Module[])[]) {
     super();
+    this.layers = layers.flatMap((l) => (Array.isArray(l) ? [...l] : [l as Module]));
   }
 
   override children(): Module[] {
@@ -155,7 +165,9 @@ export class Sequential extends Module {
 
   override forward(x: Tensor): Tensor {
     let cur = x;
-    for (const layer of this.layers) cur = layer.forward(cur);
+    // 안에서도 `call` 로 지난다 — 권하는 길을 라이브러리 자신이 안 가면 그 권함은
+    // 남이 볼 예시에서 지워진다.
+    for (const layer of this.layers) cur = layer.call(cur);
     return cur;
   }
 }
