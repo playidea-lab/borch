@@ -31,6 +31,62 @@ def _read(handle):
     return _np.asarray(_run_sync(handle.toArray()), dtype=_np.float32)
 
 
+def _core_repr(shim):
+    """코어의 `_tensor_repr` 을 빌려온다. 브라우저에서는 `/work` 아래에 있다."""
+    global _REPR
+    if _REPR is None:
+        from borch._base import _tensor_repr as fn
+        _REPR = fn
+    return _REPR(shim)
+
+
+_REPR = None
+
+
+class _Shim:
+    """`_tensor_repr` 이 보는 것만 흉내 낸다 — `.data` · `.dtype` · `._op` · `.requires_grad`."""
+
+    __slots__ = ("data", "dtype", "_op", "requires_grad")
+
+    def __init__(self, t):
+        self.data = t.numpy()
+        self.dtype = t.dtype
+        self._op = t._h.gradName or None
+        self.requires_grad = bool(t._h.requiresGrad)
+
+
+class _DType(str):
+    """형 이름. 값은 borch.ts 의 이름이고 **보이는 것은 torch 의 이름**이다.
+
+    골든이 `str(x.dtype)` 를 답으로 굳혔고 그 답은 `torch.float32` 다. 그런데 우리
+    내부에서는 `"float32"` 로 다녀야 borch.ts 에 그대로 넘길 수 있다 — 문자열을
+    물려받아 두 이름을 한 물건에 담는다.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return f"torch.{self}" if self != "bool" else "torch.bool"
+
+    def __str__(self):
+        return f"torch.{str.__str__(self)}"
+
+    @property
+    def plain(self):
+        return str.__str__(self)
+
+
+class _Size(tuple):
+    """모양. `torch.Size([2, 2])` 로 보여야 한다 — 골든이 그 문자열을 굳혔다."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return f"torch.Size([{', '.join(str(n) for n in self)}])"
+
+    __str__ = __repr__
+
+
 class Tensor:
     """borch.ts 텐서 하나를 감싼다.
 
@@ -68,11 +124,16 @@ class Tensor:
 
     @property
     def shape(self):
-        return tuple(int(n) for n in self._h.shape)
+        return _Size(int(n) for n in self._h.shape)
 
     @property
     def dtype(self):
-        return str(self._h.dtype)
+        """**`torch.float32` 로 보여야 한다.** borch.ts 는 `"float32"` 라고 말한다.
+
+        골든의 dtype 케이스는 값이 아니라 **형 이름 문자열**을 답으로 굳혔다. 이름이
+        다르면 승격 규칙이 다 맞아도 전부 실패한다 — 실제로 그렇게 나왔다.
+        """
+        return _DType(str(self._h.dtype))
 
     @property
     def ndim(self):
@@ -97,7 +158,15 @@ class Tensor:
         return self.shape[0] if self.shape else 0
 
     def __repr__(self):
-        return f"tensor({self.numpy()!r})"
+        """**코어의 규칙을 빌린다.** 여기서 다시 쓰면 두 번째가 다른 날이 온다.
+
+        `borch/_base.py` 의 `_tensor_repr` 이 torch 의 출력 규칙(정렬·자릿수·줄바꿈·
+        여덟 칸 들여쓰기)을 이미 담고 있고, 골든이 그 문자열을 답으로 굳혔다. 값과
+        몇 가지 표시만 넘겨주면 그 함수가 답을 만든다.
+        """
+        return _core_repr(_Shim(self))
+
+    __str__ = __repr__
 
     # ── 나머지는 전부 넘긴다 ──────────────────────────────────────────────
 
@@ -176,7 +245,8 @@ def tensor(data, dtype=None, requires_grad=False):
     """`torch.tensor` 자리. numpy 배열·중첩 리스트·수를 받는다."""
     arr = _np.asarray(data)
     if dtype is not None:
-        name = str(dtype)
+        # `torch.float32` 로 보이는 물건이 와도 borch.ts 에는 `float32` 로 넘긴다.
+        name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
     elif arr.dtype == bool:
         name = "bool"
     elif arr.dtype.kind in "iu":

@@ -57,7 +57,11 @@ from ._ops import (                                      # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 
-# dtype 은 borch.ts 에서 float32 저장 위의 이름표다. 여기서도 이름으로 둔다.
-float32 = "float32"
-int64 = "int64"
-bool_ = "bool"
+# dtype 은 borch.ts 에서 float32 저장 위의 이름표다. 여기서도 이름으로 두되,
+# 보이는 이름은 torch 의 것이다 — 골든이 `torch.float32` 를 답으로 굳혔다.
+from ._base import _DType                                # noqa: E402
+
+float32 = _DType("float32")
+int64 = _DType("int64")
+bool = _DType("bool")                                    # noqa: A001
+
