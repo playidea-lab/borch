@@ -16,6 +16,48 @@
 
 import { keepAlive, noGrad, Tensor } from "./tensor.js";
 
+/**
+ * 가중치 초기화.
+ *
+ * **없으면 학습이 안 된다.** 0 으로 시작하면 같은 층의 뉴런들이 같은 기울기를 받아
+ * 영원히 같은 값으로 움직인다 — ResNet 을 그렇게 돌리면 손실이 ln(10)=2.303 에
+ * 붙은 채로 스텝만 지나간다. 실제로 그 상태로 벤치를 냈고, 골든 798건은 그것을
+ * 못 잡았다: 케이스마다 가중치를 밖에서 넣어 주기 때문에 초기값을 아무도 안 본다.
+ *
+ * torch 의 기본과 같은 식이다 — `kaiming_uniform_(a=√5)` 는 경계가 `1/√fan_in` 으로
+ * 접히고, 편향도 같은 경계의 균등분포다.
+ *
+ * **난수기는 torch 와 다르다.** 같을 수가 없고, 같은 척해서도 안 된다. 골든은 초기값을
+ * 안 묻고 가중치를 늘 밖에서 넣으므로 여기서 갈릴 것이 없다.
+ */
+const initRng = { state: 0x9e3779b9 };
+
+export function manualSeed(seed: number): void {
+  initRng.state = (seed >>> 0) || 1;
+}
+
+function nextUniform(): number {
+  let x = initRng.state;
+  x ^= x << 13; x >>>= 0;
+  x ^= x >> 17;
+  x ^= x << 5; x >>>= 0;
+  initRng.state = x;
+  return x / 0x100000000;
+}
+
+/** `[-bound, bound]` 균등분포로 채운 텐서. */
+function uniform(shape: readonly number[], bound: number): Tensor {
+  const n = shape.reduce((a, b) => a * b, 1);
+  const data = new Float32Array(n);
+  for (let i = 0; i < n; i++) data[i] = (nextUniform() * 2 - 1) * bound;
+  return Tensor.from(data, shape);
+}
+
+/** 들어오는 갈래 수. 가중치의 첫 축을 뺀 나머지의 곱이다. */
+function fanIn(shape: readonly number[]): number {
+  return shape.slice(1).reduce((a, b) => a * b, 1);
+}
+
 /** 층 하나. 값을 지나가게 하고, 자기 파라미터를 이름과 함께 내놓는다. */
 export abstract class Module {
   /** 학습 모드인가. `BatchNorm` 처럼 모드에 따라 다르게 구는 층이 본다. */
@@ -126,8 +168,9 @@ export class Linear extends Module {
     super();
     // 골든은 가중치를 밖에서 넣는다. 여기 초기값이 무엇이든 덮어쓰이지만,
     // 안 넣고 쓰는 경우를 위해 0 이 아닌 값을 둔다.
-    this.weight = Tensor.zeros([outFeatures, inFeatures]);
-    this.bias = Tensor.zeros([outFeatures]);
+    const bound = 1 / Math.sqrt(Math.max(1, inFeatures));
+    this.weight = uniform([outFeatures, inFeatures], bound);
+    this.bias = uniform([outFeatures], bound);
     this.claim(this.weight, this.bias);
   }
 
@@ -161,10 +204,12 @@ export class ConvND extends Module {
     useBias = true,
   ) {
     super();
-    this.weight = Tensor.zeros([
+    const shape = [
       outChannels, inChannels, ...new Array<number>(spatial).fill(kernel),
-    ]);
-    this.bias = useBias ? Tensor.zeros([outChannels]) : null;
+    ];
+    const bound = 1 / Math.sqrt(Math.max(1, fanIn(shape)));
+    this.weight = uniform(shape, bound);
+    this.bias = useBias ? uniform([outChannels], bound) : null;
     this.claim(this.weight);
     if (this.bias) this.claim(this.bias);
   }
@@ -346,10 +391,12 @@ export class Recurrent extends Module {
     super();
     const gates = kind === "LSTM" ? 4 : kind === "GRU" ? 3 : 1;
     const rows = hidden * gates;
-    this.weightIh = Tensor.zeros([rows, inputSize]);
-    this.weightHh = Tensor.zeros([rows, hidden]);
-    this.biasIh = Tensor.zeros([rows]);
-    this.biasHh = Tensor.zeros([rows]);
+    // torch 의 순환망은 은닉 크기로 경계를 잡는다 — 네 가중치가 같은 경계를 쓴다.
+    const bound = 1 / Math.sqrt(Math.max(1, hidden));
+    this.weightIh = uniform([rows, inputSize], bound);
+    this.weightHh = uniform([rows, hidden], bound);
+    this.biasIh = uniform([rows], bound);
+    this.biasHh = uniform([rows], bound);
     this.claim(this.weightIh, this.weightHh, this.biasIh, this.biasHh);
   }
 
@@ -424,9 +471,11 @@ export class MultiheadAttention extends Module {
 
   constructor(private readonly embed: number, private readonly heads: number) {
     super();
-    this.inWeight = Tensor.zeros([3 * embed, embed]);
+    const bound = 1 / Math.sqrt(Math.max(1, embed));
+    this.inWeight = uniform([3 * embed, embed], bound);
+    // torch 의 어텐션은 편향을 0 에서 시작한다 — 여기는 대칭이 안 깨질 자리가 아니다.
     this.inBias = Tensor.zeros([3 * embed]);
-    this.outWeight = Tensor.zeros([embed, embed]);
+    this.outWeight = uniform([embed, embed], bound);
     this.outBias = Tensor.zeros([embed]);
     this.claim(this.inWeight, this.inBias, this.outWeight, this.outBias);
   }
