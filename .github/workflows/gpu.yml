@@ -31,8 +31,16 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       # 진짜 torch 가 필요한 유일한 단계다. 여기서 기대값을 굳힌다.
+      #
+      # **torchvision 이 있어야 한다.** vision 케이스 14 건이 진짜 torchvision 을
+      # 부르고(그것이 그 케이스들의 값어치다 — 우리 변환을 우리 기대값에 맞추면
+      # 아무것도 증명 못 한다), 없으면 dump 가 그 14 건을 실패로 세고 멈춘다.
       - name: 골든을 굳힌다
-        run: uv run --with numpy --with torch python tests/golden.py dump
+        run: uv run --with numpy --with torch --with torchvision python tests/golden.py dump
+
+      # borch.ts 는 골든을 JSON 으로 읽는다. npz 와 갈리지 않게 여기서 다시 뽑는다.
+      - name: 골든을 JSON 으로 뽑는다
+        run: uv run --with numpy python tests/export_json.py
 
       # Pyodide·TF.js 를 받아 두고 해시로 잠근다. 이미 있으면 대조만 한다.
       # (CDN 이 테스트 시점에 살아 있어야 하는 의존이었고, 실제로 한 번 끊겼다.)
@@ -48,3 +56,17 @@ jobs:
 
       - name: GPU 경로를 골든과 대조한다
         run: uv run --with playwright python tests/browser/run.py --lib browsertorch_webgpu --headed
+
+      # borch.ts — 세 번째 구현이다. 브라우저가 TS 를 못 읽으므로 먼저 JS 로 내보낸다.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: borch.ts 를 컴파일한다
+        run: npm ci
+
+      - name: borch.ts 를 빌드한다
+        run: npm run build:ts
+
+      - name: borch.ts 를 골든과 대조한다
+        run: uv run --with playwright python borch-ts/test/run.py --headed

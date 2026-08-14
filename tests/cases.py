@@ -1434,7 +1434,8 @@ def inplace_cases(inp=None):
         run("mul_", lambda x: x.mul_(2), plain),
         run("div_", lambda x: x.div_(2), plain),
         run("pow_", lambda x: x.pow_(2), plain),
-        run("neg_", lambda x: x.neg_(), plain),
+        # `neg_` 는 인자가 없어서 아래 `_INPLACE_UNARY` 루프가 만든다. 여기 한 번 더
+        # 있었고, 이름이 같아 루프 것이 이것을 덮고 있었다.
         run("zero_", lambda x: x.zero_(), plain),
         run("fill_", lambda x: x.fill_(7), plain),
         run("clamp_", lambda x: x.clamp_(2, 5), plain),
