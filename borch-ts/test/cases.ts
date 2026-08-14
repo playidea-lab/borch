@@ -23,6 +23,7 @@ import { type DType, dtypeName } from "../src/dtype.js";
 import { einsum } from "../src/einsum.js";
 import * as nn from "../src/nn.js";
 import * as optim from "../src/optim.js";
+import * as vision from "../src/vision.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -48,19 +49,27 @@ export interface RawInput {
  * 숫자를 쓰는 것이 대조를 대조로 만든다.
  */
 export class Inputs {
-  constructor(private readonly raw: Readonly<Record<string, RawInput>>) {}
+  constructor(private readonly raw_: Readonly<Record<string, RawInput>>) {}
 
   /** 매번 새 텐서를 만든다 — 케이스끼리 텐서를 나눠 쓰면 기울기가 쌓인다. */
   get(name: string, requiresGrad = false): Tensor {
-    const entry = this.raw[name];
+    const entry = this.raw_[name];
     if (!entry?.values) throw new Error(`골든에 입력 '${name}' 이 없다`);
     const flat = entry.values.map((v) =>
       typeof v === "boolean" ? (v ? 1 : 0) : (v ?? Number.NaN));
     return Tensor.from(flat, entry.shape ?? [flat.length], requiresGrad);
   }
 
+  /** 텐서로 안 만들고 값만. 이미지처럼 GPU 에 안 올리는 것이 쓴다. */
+  raw(name: string): number[] {
+    const entry = this.raw_[name];
+    if (!entry?.values) throw new Error(`골든에 입력 '${name}' 이 없다`);
+    return entry.values.map((v) =>
+      typeof v === "boolean" ? (v ? 1 : 0) : (v ?? Number.NaN));
+  }
+
   shapeOf(name: string): number[] {
-    const entry = this.raw[name];
+    const entry = this.raw_[name];
     if (!entry) throw new Error(`골든에 입력 '${name}' 이 없다`);
     return entry.shape ?? [entry.values?.length ?? 0];
   }
@@ -472,7 +481,67 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addRepr(out);
   addNdim(out, inputs);
   addTrain(out, inputs);
+  addVision(out, inputs);
   return out;
+}
+
+/**
+ * `torchvision.transforms` 모양의 변환.
+ *
+ * **무작위 변환은 뽑기를 대조할 수 없다** — torch 의 난수기를 우리가 못 쓰기 때문이다.
+ * 그래서 골든이 확률을 0 이나 1 로 못 박거나 자를 자리가 하나뿐이게 만들어 결정적인
+ * 자리만 묻는다. 여기서 "무작위니까 대조 못 한다"고 넘기면 그게 안 본 것을 봤다고
+ * 적는 짓이다.
+ */
+function addVision(out: Map<string, Case>, inp: Inputs): void {
+  const mean = [0.5, 0.4, 0.3];
+  const std = [0.2, 0.3, 0.4];
+
+  /** 골든의 (H,W,C) 입력을 그대로 이미지로 본다. */
+  const pic = (name: string, isByte: boolean): vision.Image => {
+    const shape = inp.shapeOf(name);
+    const [h = 1, w = 1, c = 1] = shape;
+    return vision.image(inp.raw(name), h, w, shape.length === 2 ? 1 : c, isByte);
+  };
+  const u8 = () => pic("vis_u8", true);
+  const asTensor = (img: vision.Image): Tensor =>
+    Tensor.from(img.data, [img.height, img.width, img.channels]);
+
+  out.set("vision::ToTensor(uint8)", () => new vision.ToTensor().apply(u8()) as Tensor);
+  out.set("vision::ToTensor(실수)",
+    () => new vision.ToTensor().apply(pic("vis_f", false)) as Tensor);
+  out.set("vision::ToTensor(2차원)",
+    () => new vision.ToTensor().apply(pic("vis_gray", true)) as Tensor);
+  out.set("vision::Normalize", () =>
+    new vision.Normalize(mean, std).apply(new vision.ToTensor().apply(u8())));
+  out.set("vision::Compose", () =>
+    new vision.Compose([new vision.ToTensor(), new vision.Normalize(mean, std)])
+      .apply(u8()) as Tensor);
+
+  // 확률을 못 박아 뽑기와 무관하게 만든다.
+  for (const p of [1.0, 0.0]) {
+    out.set(`vision::Flip(p=${p === 1 ? 1 : 0})`, () =>
+      asTensor(new vision.RandomHorizontalFlip(p).apply(u8()) as vision.Image));
+  }
+  // 자를 자리가 **하나뿐**이 되게 크기를 맞춘다. 그래야 뽑기와 무관하게 결정적이다.
+  out.set("vision::Crop(패딩없음)",
+    () => asTensor(new vision.RandomCrop([5, 4], 0).apply(u8()) as vision.Image));
+  out.set("vision::Crop(패딩1)",
+    () => asTensor(new vision.RandomCrop([7, 6], 1).apply(u8()) as vision.Image));
+
+  // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
+  const reprs: [string, () => vision.Transform][] = [
+    ["ToTensor", () => new vision.ToTensor()],
+    ["Normalize", () => new vision.Normalize(mean, std)],
+    ["RandomHorizontalFlip", () => new vision.RandomHorizontalFlip(0.5)],
+    ["RandomCrop", () => new vision.RandomCrop(32, 4)],
+    ["Compose", () => new vision.Compose([
+      new vision.ToTensor(), new vision.Normalize([0.5], [0.5]),
+    ])],
+  ];
+  for (const [name, build] of reprs) {
+    out.set(`vision::repr::${name}`, () => build().describe());
+  }
 }
 
 /** 골든이 쓰는 스텝 수. 적게 두는 것은 의도다 — 길게 돌리면 무엇이 틀렸는지가 아니라
