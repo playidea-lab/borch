@@ -9,12 +9,17 @@
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
 import {
+  type AxisRule,
   BINARY,
   binaryBackward,
   binaryForward,
+  diagflat,
+  diagflatBackward,
   expandDim,
   extremeBackward,
   fill,
+  gather,
+  gatherBackward,
   matmul,
   reduceBroadcast,
   reduceDim,
@@ -489,6 +494,344 @@ export class Tensor implements Node<Tensor> {
       (g) => [new Tensor(g.buffer, shape)],
       "SqueezeBackward0",
     );
+  }
+
+  // ── 모양 ──────────────────────────────────────────────────────────────
+
+  /** 이 텐서의 연속 스트라이드. 모양 연산이 규칙을 짤 때 쓴다. */
+  private strides(): number[] {
+    const s: number[] = new Array<number>(this.shape.length).fill(1);
+    for (let d = this.shape.length - 2; d >= 0; d--) {
+      s[d] = (s[d + 1] ?? 1) * (this.shape[d + 1] ?? 1);
+    }
+    return s;
+  }
+
+  /**
+   * 규칙대로 값을 모아 새 텐서를 만든다. 모양 연산이 전부 이리로 온다.
+   *
+   * 지금은 **실제로 옮겨 담는다.** 뷰로 두면 복사가 없어 빠르지만, 뷰가 생기는 순간
+   * 제자리 연산이 어디까지 번지는지를 정해야 하고 그것은 아직 정할 때가 아니다.
+   */
+  private viewAs(
+    rules: readonly AxisRule[],
+    offset: number,
+    outShape: readonly number[],
+    gradName: string,
+  ): Tensor {
+    const n = outShape.reduce((a, b) => a * b, 1);
+    const key = `${rules.map((r) => `${r.kind}${r.size}/${r.stride}/${r.wrap}`).join(",")}|${offset}`;
+    const out = dev().alloc(n);
+    dev().run1d(dev().pipeline(`gt:${key}`, () => gather(rules, offset)), [this.buffer, out], n);
+    const inSize = this.size;
+    const inShape = this.shape;
+    return Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(inSize);
+        dev().run1d(
+          dev().pipeline(`gb:${key}|${inSize}`, () => gatherBackward(rules, offset, inSize)),
+          [g.buffer, gi],
+          inSize,
+        );
+        return [new Tensor(gi, inShape)];
+      },
+      gradName,
+    );
+  }
+
+  /** 같은 버퍼를 다른 모양으로 본다. 원소 순서가 안 바뀌므로 커널이 필요 없다. */
+  reshape(shape: readonly number[]): Tensor {
+    const n = shape.reduce((a, b) => a * b, 1);
+    if (n !== this.size) {
+      throw new Error(`모양 [${shape}] 는 원소 ${this.size}개와 안 맞는다.`);
+    }
+    const from = this.shape;
+    return Tensor.make(
+      this.buffer,
+      shape,
+      [this],
+      (g) => [new Tensor(g.buffer, from)],
+      "ViewBackward0",
+    );
+  }
+
+  ravel(): Tensor {
+    return this.reshape([this.size]);
+  }
+
+  /** 축 하나를 여러 축으로 편다. */
+  unflatten(dim: number, sizes: readonly number[]): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const shape = [...this.shape.slice(0, axis), ...sizes, ...this.shape.slice(axis + 1)];
+    return this.reshape(shape);
+  }
+
+  /** 적어도 2차원으로. 이미 2차원 이상이면 그대로. */
+  atleast2d(): Tensor {
+    if (this.shape.length >= 2) return this;
+    if (this.shape.length === 1) return this.reshape([1, this.shape[0] ?? 0]);
+    return this.reshape([1, 1]);
+  }
+
+  /**
+   * 크기 1 인 축을 늘린다. `-1` 은 "그대로 두라"는 뜻이다.
+   *
+   * 앞에 축을 더 붙일 수도 있다 — 그 축들은 걸음이 0 이라 **복제하지 않는다.**
+   */
+  expand(...sizes: number[]): Tensor {
+    const rank = sizes.length;
+    if (rank < this.shape.length) {
+      throw new Error(`expand 는 축을 못 줄인다: [${this.shape}] → [${sizes}]`);
+    }
+    const own = this.strides();
+    const rules: AxisRule[] = [];
+    const outShape: number[] = [];
+    for (let i = 0; i < rank; i++) {
+      const src = this.shape.length - rank + i;
+      const dim = src >= 0 ? (this.shape[src] ?? 1) : 1;
+      const want = sizes[i] ?? -1;
+      const size = want === -1 ? dim : want;
+      if (want !== -1 && dim !== 1 && want !== dim) {
+        throw new Error(`축 ${i} 는 ${dim} 이라 ${want} 로 못 늘린다.`);
+      }
+      const stride = src >= 0 && dim !== 1 ? (own[src] ?? 1) : 0;
+      rules.push({ size, stride, kind: "lin", wrap: size });
+      outShape.push(size);
+    }
+    return this.viewAs(rules, 0, outShape, "ExpandBackward0");
+  }
+
+  /** 축마다 정수 배로 되풀이한다. `expand` 와 달리 실제로 여러 벌이 된다. */
+  repeat(...times: number[]): Tensor {
+    const rank = times.length;
+    if (rank < this.shape.length) {
+      throw new Error(`repeat 는 축을 못 줄인다: [${this.shape}] → [${times}]`);
+    }
+    const own = this.strides();
+    const rules: AxisRule[] = [];
+    const outShape: number[] = [];
+    for (let i = 0; i < rank; i++) {
+      const src = this.shape.length - rank + i;
+      const dim = src >= 0 ? (this.shape[src] ?? 1) : 1;
+      const k = times[i] ?? 1;
+      rules.push({
+        size: dim * k,
+        stride: src >= 0 ? (own[src] ?? 1) : 0,
+        kind: "mod",
+        wrap: dim,
+      });
+      outShape.push(dim * k);
+    }
+    return this.viewAs(rules, 0, outShape, "RepeatBackward0");
+  }
+
+  /** 축 둘을 맞바꾼다. `swapdims` 와 같다 — torch 가 이름을 둘 다 갖는다. */
+  swapaxes(a: number, b: number): Tensor {
+    const rank = this.shape.length;
+    const i = a < 0 ? a + rank : a;
+    const j = b < 0 ? b + rank : b;
+    const own = this.strides();
+    const order = [...Array(rank).keys()];
+    order[i] = j;
+    order[j] = i;
+    const rules: AxisRule[] = order.map((src) => ({
+      size: this.shape[src] ?? 1,
+      stride: own[src] ?? 1,
+      kind: "lin" as const,
+      wrap: this.shape[src] ?? 1,
+    }));
+    return this.viewAs(rules, 0, order.map((src) => this.shape[src] ?? 1), "TransposeBackward0");
+  }
+
+  /** 축 하나에서 한 자리를 고르고 그 축을 없앤다. */
+  select(dim: number, index: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const own = this.strides();
+    const offset = index * (own[axis] ?? 1);
+    const rules: AxisRule[] = [];
+    const outShape: number[] = [];
+    for (let d = 0; d < rank; d++) {
+      if (d === axis) continue;
+      rules.push({
+        size: this.shape[d] ?? 1,
+        stride: own[d] ?? 1,
+        kind: "lin",
+        wrap: this.shape[d] ?? 1,
+      });
+      outShape.push(this.shape[d] ?? 1);
+    }
+    return this.viewAs(rules, offset, outShape, "SelectBackward0");
+  }
+
+  /** 2차원의 대각선. `offset` 이 양수면 위쪽, 음수면 아래쪽 대각선이다. */
+  diagonal(offset = 0): Tensor {
+    if (this.shape.length !== 2) {
+      throw new Error(`diagonal 은 아직 2차원만이다: [${this.shape}]`);
+    }
+    const rows = this.shape[0] ?? 0;
+    const cols = this.shape[1] ?? 0;
+    const own = this.strides();
+    const rowStride = own[0] ?? 1;
+    const colStride = own[1] ?? 1;
+    const start = offset >= 0 ? offset * colStride : -offset * rowStride;
+    const length = offset >= 0
+      ? Math.max(0, Math.min(rows, cols - offset))
+      : Math.max(0, Math.min(rows + offset, cols));
+    // 한 걸음에 행과 열이 같이 하나씩 간다 — 그래서 걸음이 둘의 합이다.
+    const rules: AxisRule[] = [
+      { size: length, stride: rowStride + colStride, kind: "lin", wrap: length },
+    ];
+    return this.viewAs(rules, start, [length], "DiagonalBackward0");
+  }
+
+  /** 벡터를 대각선에 놓은 정사각 행렬. */
+  diagflat(): Tensor {
+    const n = this.size;
+    const out = dev().alloc(n * n);
+    dev().run1d(dev().pipeline(`df:${n}`, () => diagflat(n)), [this.buffer, out], n * n);
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      [n, n],
+      [this],
+      (g) => {
+        const gi = dev().alloc(n);
+        dev().run1d(
+          dev().pipeline(`dfb:${n}`, () => diagflatBackward(n)),
+          [g.buffer, gi],
+          n,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      "DiagflatBackward0",
+    );
+  }
+
+  /** 축 하나를 거꾸로. */
+  flip(dim: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const own = this.strides();
+    const rules: AxisRule[] = this.shape.map((size, d) => ({
+      size,
+      stride: own[d] ?? 1,
+      kind: d === axis ? ("rev" as const) : ("lin" as const),
+      wrap: size,
+    }));
+    return this.viewAs(rules, 0, this.shape, "FlipBackward0");
+  }
+
+  fliplr(): Tensor {
+    return this.flip(1);
+  }
+
+  flipud(): Tensor {
+    return this.flip(0);
+  }
+
+  /**
+   * 2차원 평면 안에서 90° 씩 돌린다.
+   *
+   * `k=1` 이면 `out[i][j] = in[j][C-1-i]` 다 — 축을 바꾸면서 한쪽을 뒤집는 것이라,
+   * 규칙 표로 그대로 적힌다.
+   */
+  rot90(k = 1): Tensor {
+    if (this.shape.length !== 2) {
+      throw new Error(`rot90 은 아직 2차원만이다: [${this.shape}]`);
+    }
+    const turns = ((k % 4) + 4) % 4;
+    if (turns === 0) return this.reshape(this.shape);
+    const rows = this.shape[0] ?? 0;
+    const cols = this.shape[1] ?? 0;
+    const own = this.strides();
+    const rowStride = own[0] ?? 1;
+    const colStride = own[1] ?? 1;
+    if (turns === 2) {
+      const rules: AxisRule[] = [
+        { size: rows, stride: rowStride, kind: "rev", wrap: rows },
+        { size: cols, stride: colStride, kind: "rev", wrap: cols },
+      ];
+      return this.viewAs(rules, 0, [rows, cols], "Rot90Backward0");
+    }
+    if (turns === 1) {
+      const rules: AxisRule[] = [
+        { size: cols, stride: colStride, kind: "rev", wrap: cols },
+        { size: rows, stride: rowStride, kind: "lin", wrap: rows },
+      ];
+      return this.viewAs(rules, 0, [cols, rows], "Rot90Backward0");
+    }
+    const rules: AxisRule[] = [
+      { size: cols, stride: colStride, kind: "lin", wrap: cols },
+      { size: rows, stride: rowStride, kind: "rev", wrap: rows },
+    ];
+    return this.viewAs(rules, 0, [cols, rows], "Rot90Backward0");
+  }
+
+  /**
+   * 미끄러지는 창. 걸음이 창 크기보다 작으면 창끼리 겹친다.
+   *
+   * **겹치면 역방향에서 쌓인다** — 길이 5 를 `unfold(0, 3, 1)` 로 펴면 기울기가
+   * `[1,2,3,2,1]` 이다. 안 더하면 전부 1 이 되고, 값 검사만으로는 안 걸린다.
+   */
+  unfold(dim: number, size: number, step: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const own = this.strides();
+    const axisSize = this.shape[axis] ?? 0;
+    const windows = Math.floor((axisSize - size) / step) + 1;
+    if (windows < 1) {
+      throw new Error(`창 ${size}, 걸음 ${step} 로는 길이 ${axisSize} 에서 창이 안 나온다.`);
+    }
+    const axisStride = own[axis] ?? 1;
+    const rules: AxisRule[] = [];
+    const outShape: number[] = [];
+    for (let d = 0; d < rank; d++) {
+      const dim_ = d === axis ? windows : (this.shape[d] ?? 1);
+      const stride = d === axis ? axisStride * step : (own[d] ?? 1);
+      rules.push({ size: dim_, stride, kind: "lin", wrap: dim_ });
+      outShape.push(dim_);
+    }
+    // 창 안쪽이 맨 뒤 축으로 붙는다.
+    rules.push({ size, stride: axisStride, kind: "lin", wrap: size });
+    outShape.push(size);
+    return this.viewAs(rules, 0, outShape, "UnfoldBackward0");
+  }
+
+  /** 축 하나를 같은 크기 조각으로 나눈다. 조각마다 새 텐서다. */
+  split(dim: number, parts: number): Tensor[] {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const axisSize = this.shape[axis] ?? 0;
+    if (axisSize % parts !== 0) {
+      throw new Error(`축 ${dim} 의 크기 ${axisSize} 는 ${parts} 로 안 나뉜다.`);
+    }
+    const each = axisSize / parts;
+    const own = this.strides();
+    const out: Tensor[] = [];
+    for (let k = 0; k < parts; k++) {
+      const rules: AxisRule[] = this.shape.map((size, d) => ({
+        size: d === axis ? each : size,
+        stride: own[d] ?? 1,
+        kind: "lin" as const,
+        wrap: d === axis ? each : size,
+      }));
+      const outShape = this.shape.map((size, d) => (d === axis ? each : size));
+      out.push(this.viewAs(rules, k * each * (own[axis] ?? 1), outShape, "SliceBackward0"));
+    }
+    return out;
+  }
+
+  hsplit(parts: number): Tensor[] {
+    return this.split(1, parts);
+  }
+
+  vsplit(parts: number): Tensor[] {
+    return this.split(0, parts);
   }
 
   // ── 역전파 ────────────────────────────────────────────────────────────

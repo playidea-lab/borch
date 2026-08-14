@@ -650,6 +650,133 @@ ${flatId(n)}
 }`;
 }
 
+/**
+ * 출력 축 하나가 입력의 어디를 보는가.
+ *
+ * `expand`·`repeat`·`swapaxes`·`select`·`diagonal`·`rot90`·`unfold`·`flip`·`split` 이
+ * 전부 이 세 규칙의 조합이다. 연산마다 커널을 쓰면 열 몇 개가 되고, 그중 하나만
+ * 고치는 날이 온다.
+ */
+export interface AxisRule {
+  /** 출력 축의 크기. */
+  readonly size: number;
+  /** 입력에서의 걸음. **0 이면 늘린 축이다** — 복제하지 않고 같은 값을 다시 읽는다. */
+  readonly stride: number;
+  /** `lin` 은 그대로, `mod` 는 되돌아가고(repeat), `rev` 는 거꾸로(flip). */
+  readonly kind: "lin" | "mod" | "rev";
+  /** `mod`·`rev` 의 주기. 보통 입력 축의 크기다. */
+  readonly wrap: number;
+}
+
+function ruleCoord(r: AxisRule, c: string): string {
+  if (r.kind === "mod") return `(${c} % ${r.wrap}u)`;
+  if (r.kind === "rev") return `(${r.wrap - 1}u - ${c})`;
+  return c;
+}
+
+/** 출력 번호에서 입력 번호를 내는 WGSL. 제수가 전부 리터럴이라 나눗셈이 안 남는다. */
+function sourceIndex(
+  rules: readonly AxisRule[],
+  offset: number,
+  from: string,
+  out: string,
+): string {
+  const lines = [`  var rest_${out} = ${from};`, `  var ${out} = ${offset}u;`];
+  for (let d = rules.length - 1; d >= 0; d--) {
+    const r = rules[d];
+    if (!r) continue;
+    lines.push(`  { let c = rest_${out} % ${r.size}u; rest_${out} = rest_${out} / ${r.size}u;`);
+    if (r.stride !== 0) {
+      lines.push(`    ${out} = ${out} + ${ruleCoord(r, "c")} * ${r.stride}u;`);
+    }
+    lines.push("  }");
+  }
+  return lines.join("\n");
+}
+
+function ruleCount(rules: readonly AxisRule[]): number {
+  return rules.reduce((a, r) => a * r.size, 1);
+}
+
+export function gather(rules: readonly AxisRule[], offset: number): string {
+  const n = ruleCount(rules);
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+${sourceIndex(rules, offset, "gid", "src")}
+  Out[gid] = A[src];
+}`;
+}
+
+/**
+ * gather 의 역방향 — 흩어진 것을 도로 모은다.
+ *
+ * **입력 자리마다 출력 전체를 훑는다.** 원자 덧셈으로 흩뿌리면 순서가 매번 달라지고,
+ * 부동소수는 순서가 바뀌면 값이 바뀌어 같은 씨앗의 학습이 두 번 다르게 간다.
+ * 여기서는 출력 번호를 오름차순으로 도니 몇 번을 돌려도 같은 값이다.
+ *
+ * 대신 비용이 **입력 크기 × 출력 크기**다. 지금 쓰는 자리(모양 연산의 역방향, 원소
+ * 수십 개)에서는 문제가 없지만, 학습 루프 안쪽에 이 커널이 들어가면 안 된다.
+ * 그때는 연산별로 접는 법이 따로 있다(`expand` 는 축약, `flip` 은 다시 뒤집기).
+ *
+ * 겹치는 자리를 제대로 더하는 것이 요점이다 — 길이 5 를 `unfold(3, 1)` 로 펴면
+ * 기울기가 `[1,2,3,2,1]` 이 된다. 겹친 만큼 쌓이는 것이고, 안 더하면 전부 1 이 된다.
+ */
+export function gatherBackward(
+  rules: readonly AxisRule[],
+  offset: number,
+  inSize: number,
+): string {
+  const outN = ruleCount(rules);
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(inSize)}
+  var acc = 0.0;
+  for (var t = 0u; t < ${outN}u; t = t + 1u) {
+${sourceIndex(rules, offset, "t", "src")}
+    if (src == gid) { acc = acc + G[t]; }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * `diagflat` — 벡터를 대각선에 놓고 나머지는 0.
+ *
+ * 이것만 gather 로 안 된다. 출력의 대부분이 입력의 **어느 자리도 안 보기** 때문이다.
+ */
+export function diagflat(n: number): string {
+  const total = n * n;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(total)}
+  let i = gid / ${n}u;
+  let j = gid % ${n}u;
+  Out[gid] = select(0.0, A[i], i == j);
+}`;
+}
+
+/** `diagflat` 의 역방향 — 대각선만 거둔다. */
+export function diagflatBackward(n: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = G[gid * ${n + 1}u];
+}`;
+}
+
 /** 값 하나로 채운다. 기울기 씨앗(`backward()` 의 1.0)과 `zeros` 가 쓴다. */
 export function fill(n: number, value: number): string {
   return `

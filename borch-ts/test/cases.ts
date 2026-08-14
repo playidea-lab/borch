@@ -130,6 +130,7 @@ export function cases(): Map<string, Case> {
     Tensor.from(plain).binary("ldexp", Tensor.from([1.0, 2.0, 0.0, -1.0])));
 
   addReduce(out);
+  addShape(out);
   return out;
 }
 
@@ -181,4 +182,107 @@ function addReduce(out: Map<string, Case>): void {
   // 기울기 케이스가 없는 것들. 골든도 값만 굳혔다.
   out.set("reduce::aminmax/최소", () => Tensor.from(tie).amin());
   out.set("reduce::aminmax/최대", () => Tensor.from(tie).amax());
+}
+
+// ── tests/cases.py 의 shape_cases 가 쓰는 입력. ────────────────────────────
+const seq = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
+const SQUARE = seq(9); // (3, 3)
+const LINE = seq(5);
+const COL = [0.0, 3.0]; // mat[:, :1] — (2, 1)
+
+function addShape(out: Map<string, Case>): void {
+  /** 이 표에서 쓰는 (2,3) 짜리. 매번 새로 올려야 케이스끼리 상태를 안 나눈다. */
+  const m = (grad = false) => Tensor.from(seq(6), [2, 3], grad);
+  const sq = (grad = false) => Tensor.from(SQUARE, [3, 3], grad);
+  const line = (grad = false) => Tensor.from(LINE, [5], grad);
+  const col = (grad = false) => Tensor.from(COL, [2, 1], grad);
+  const pair = (grad = false) => Tensor.from([1.0, 2.0], [2], grad);
+
+  const value: [string, () => Tensor][] = [
+    ["expand", () => col().expand(2, 3)],
+    ["expand(-1)", () => col().expand(-1, 3)],
+    ["expand(앞에 축 추가)", () => m().expand(2, 2, 3)],
+    ["repeat", () => m().repeat(2, 1)],
+    ["repeat(둘 다)", () => m().repeat(2, 3)],
+    ["ravel", () => m().ravel()],
+    ["swapaxes", () => m().swapaxes(0, 1)],
+    ["swapdims", () => m().swapaxes(0, 1)],
+    ["select", () => m().select(0, 1)],
+    ["select(dim1)", () => m().select(1, 2)],
+    ["diagonal", () => sq().diagonal()],
+    ["diagonal(위로 1)", () => sq().diagonal(1)],
+    ["diagonal(아래로 1)", () => sq().diagonal(-1)],
+    ["diagflat", () => pair().diagflat()],
+    ["rot90", () => m().rot90(1)],
+    ["rot90(두 번)", () => m().rot90(2)],
+    ["unfold", () => line().unfold(0, 3, 1)],
+    ["unfold(걸음2)", () => line().unfold(0, 2, 2)],
+    ["unflatten", () => Tensor.from(seq(6), [6]).unflatten(0, [2, 3])],
+    ["fliplr", () => m().fliplr()],
+    ["flipud", () => m().flipud()],
+    ["atleast_2d", () => Tensor.from([1.0], []).atleast2d()],
+  ];
+  for (const [name, fn] of value) out.set(`shape::${name}`, fn);
+
+  for (let k = 0; k < 3; k++) {
+    out.set(`shape::hsplit[${k}]`, () => {
+      const part = m().hsplit(3)[k];
+      if (!part) throw new Error(`hsplit 조각 ${k} 가 없다`);
+      return part;
+    });
+  }
+  for (let k = 0; k < 2; k++) {
+    out.set(`shape::vsplit[${k}]`, () => {
+      const part = m().vsplit(2)[k];
+      if (!part) throw new Error(`vsplit 조각 ${k} 가 없다`);
+      return part;
+    });
+  }
+
+  // **expand 와 unfold 가 여기서 갈린다.** expand 는 늘린 축을 도로 합치고, unfold 는
+  // 겹친 창만큼 쌓는다 — 길이 5 를 3·1 로 펴면 [1,2,3,2,1] 이다.
+  const grads: [string, () => Tensor, (g: boolean) => Tensor][] = [
+    ["expand", () => col(true).expand(2, 3), col],
+    ["repeat", () => m(true).repeat(2, 1), m],
+    ["diagonal", () => sq(true).diagonal(), sq],
+    ["diagonal(위로 1)", () => sq(true).diagonal(1), sq],
+    ["diagflat", () => pair(true).diagflat(), pair],
+    ["rot90", () => m(true).rot90(1), m],
+    ["unfold(겹침)", () => line(true).unfold(0, 3, 1), line],
+    ["select", () => m(true).select(0, 1), m],
+    ["swapaxes", () => m(true).swapaxes(0, 1), m],
+  ];
+  for (const [name, build] of grads) {
+    out.set(`shape::grad::${name}`, () => {
+      // 잎을 다시 잡으려면 케이스 안에서 만들어야 한다 — 밖에서 만들면 케이스끼리
+      // 같은 텐서를 나눠 쓰고 기울기가 쌓인다.
+      const leaves: Tensor[] = [];
+      const res = withLeafCapture(build, leaves);
+      seeded(res).backward();
+      const leaf = leaves[0];
+      if (!leaf) throw new Error(`${name}: 잎을 못 잡았다`);
+      return gradOf(leaf, name);
+    });
+  }
+}
+
+/**
+ * `requires_grad` 인 잎을 붙잡는다.
+ *
+ * 케이스 본문이 `col(true).expand(...)` 처럼 잎을 그 자리에서 만들기 때문에, 나중에
+ * `x.grad` 를 보려면 그 잎을 되찾아야 한다. 결과에서 그래프를 거슬러 올라가 잎을
+ * 찾는 쪽이 본문을 둘로 쪼개는 것보다 낫다 — 본문이 골든 이름과 짝이어야 읽힌다.
+ */
+function withLeafCapture(build: () => Tensor, into: Tensor[]): Tensor {
+  const result = build();
+  const seen = new Set<Tensor>();
+  const stack: Tensor[] = [result];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || seen.has(node)) continue;
+    seen.add(node);
+    if (node.parents.length === 0 && node.requiresGrad) into.push(node);
+    for (const p of node.parents) stack.push(p as Tensor);
+  }
+  return result;
 }
