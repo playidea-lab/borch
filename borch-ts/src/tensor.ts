@@ -2674,3 +2674,35 @@ export interface Tensor {
 }
 
 export { noGrad } from "./autograd.js";
+
+/**
+ * 구역 하나를 열고 닫는다. 안에서 만든 GPU 버퍼는 나갈 때 놓는다.
+ *
+ * **학습 루프에 이것이 없으면 안 돈다.** 한 스텝이 중간 버퍼를 수천 개 만들고,
+ * 자바스크립트의 쓰레기 수집은 GPU 메모리를 제때 안 놓아준다.
+ *
+ * @param keep 구역 밖으로 들고 나갈 텐서. 나머지는 놓는다.
+ */
+export async function scope<T>(
+  body: () => Promise<T>,
+  keep: () => readonly Tensor[] = () => [],
+): Promise<T> {
+  const d = dev();
+  d.beginScope();
+  try {
+    return await body();
+  } finally {
+    d.endScope(keep().map((t) => t.buffer));
+  }
+}
+
+/** 구역이 닫혀도 살려 둔다. 파라미터와 옵티마이저 상태가 쓴다. */
+export function keepAlive(t: Tensor): Tensor {
+  dev().keep(t.buffer);
+  return t;
+}
+
+/** 놓은 버퍼 수를 세는 자리. 벤치가 누수를 본다. */
+export function device(): Device {
+  return dev();
+}

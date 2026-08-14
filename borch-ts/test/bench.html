@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  borch.ts 학습 스텝 벤치. `tests/browser/bench.py` 와 같은 잣대다.
+
+      npm run build:ts
+      uv run --with playwright python borch-ts/test/bench.py
+
+  결과는 화면과 `window.__borchBench` 양쪽에 남는다.
+-->
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>borch.ts — 학습 스텝 벤치</title>
+  <style>
+    body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+           margin: 2rem; max-width: 60rem; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>borch.ts — ResNet-18(CIFAR) 학습 스텝</h1>
+  <pre id="out">재는 중… (한참 걸린다)</pre>
+  <script type="module">
+    import { init } from "../dist/src/tensor.js";
+    import { report } from "../dist/test/bench.js";
+
+    const out = document.getElementById("out");
+    try {
+      await init();
+      const text = await report();
+      window.__borchBench = { text };
+      out.textContent = text;
+    } catch (err) {
+      // 실패를 조용히 넘기지 않는다 — 안 돈 것과 느린 것은 다르다.
+      window.__borchBench = { error: String(err && err.stack ? err.stack : err) };
+      out.textContent = `재지 못했다: ${err && err.stack ? err.stack : err}`;
+    }
+  </script>
+</body>
+</html>

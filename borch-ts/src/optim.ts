@@ -15,7 +15,7 @@
  * 없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다.
  */
 
-import { noGrad, Tensor } from "./tensor.js";
+import { keepAlive, noGrad, Tensor } from "./tensor.js";
 
 export interface ParamGroup {
   lr: number;
@@ -52,10 +52,17 @@ export abstract class Optimizer {
 }
 
 export class SGD extends Optimizer {
-  private readonly buffers = new Map<number, Tensor>();
+  private readonly buffers: Tensor[];
 
   constructor(params: Tensor[], lr: number, private readonly momentum = 0) {
     super(params, lr);
+    // **상태를 미리 잡는다.** 스텝마다 새 텐서를 만들면 구역이 닫힐 때 그것이 놓이고,
+    // 다음 스텝의 버퍼가 사라진 자리를 가리킨다. torch 도 상태를 붙박이로 든다.
+    //
+    // 0 에서 시작해도 torch 와 값이 같다: 첫 스텝의 `0·momentum + grad` 가 torch 의
+    // `buf = grad.clone()` 과 같은 수다.
+    this.buffers = momentum === 0 ? []
+      : params.map((p) => keepAlive(Tensor.zeros(p.shape)));
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -63,19 +70,16 @@ export class SGD extends Optimizer {
       param.copyFrom(param.sub(grad.binary("mul", Tensor.full([], this.lr))));
       return;
     }
-    const held = this.buffers.get(index);
-    // **첫 스텝에서 기울기를 그대로 물면 안 된다.** 다음 스텝에 그 텐서가 바뀐다.
-    const next = held
-      ? held.binary("mul", Tensor.full([], this.momentum)).add(grad)
-      : grad.clone().detach();
-    this.buffers.set(index, next);
-    param.copyFrom(param.sub(next.binary("mul", Tensor.full([], this.lr))));
+    const buf = this.buffers[index];
+    if (!buf) throw new Error(`SGD: 파라미터 ${index} 의 버퍼가 없다`);
+    buf.copyFrom(buf.binary("mul", Tensor.full([], this.momentum)).add(grad));
+    param.copyFrom(param.sub(buf.binary("mul", Tensor.full([], this.lr))));
   }
 }
 
 export class Adam extends Optimizer {
-  private readonly first = new Map<number, Tensor>();
-  private readonly second = new Map<number, Tensor>();
+  private readonly first: Tensor[];
+  private readonly second: Tensor[];
   private stepCount = 0;
 
   constructor(
@@ -86,6 +90,8 @@ export class Adam extends Optimizer {
     private readonly eps = 1e-8,
   ) {
     super(params, lr);
+    this.first = params.map((p) => keepAlive(Tensor.zeros(p.shape)));
+    this.second = params.map((p) => keepAlive(Tensor.zeros(p.shape)));
   }
 
   override step(): void {
@@ -95,25 +101,24 @@ export class Adam extends Optimizer {
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
-    const m = this.first.get(index) ?? Tensor.zeros(param.shape);
-    const v = this.second.get(index) ?? Tensor.zeros(param.shape);
-    const mNext = m.binary("mul", Tensor.full([], this.beta1))
-      .add(grad.binary("mul", Tensor.full([], 1 - this.beta1)));
-    const vNext = v.binary("mul", Tensor.full([], this.beta2))
-      .add(grad.square().binary("mul", Tensor.full([], 1 - this.beta2)));
-    this.first.set(index, mNext);
-    this.second.set(index, vNext);
+    const m = this.first[index];
+    const v = this.second[index];
+    if (!m || !v) throw new Error(`Adam: 파라미터 ${index} 의 상태가 없다`);
+    m.copyFrom(m.binary("mul", Tensor.full([], this.beta1))
+      .add(grad.binary("mul", Tensor.full([], 1 - this.beta1))));
+    v.copyFrom(v.binary("mul", Tensor.full([], this.beta2))
+      .add(grad.square().binary("mul", Tensor.full([], 1 - this.beta2))));
     const c1 = 1 - this.beta1 ** this.stepCount;
     const c2 = 1 - this.beta2 ** this.stepCount;
-    const mHat = mNext.binary("div", Tensor.full([], c1));
-    const vHat = vNext.binary("div", Tensor.full([], c2));
+    const mHat = m.binary("div", Tensor.full([], c1));
+    const vHat = v.binary("div", Tensor.full([], c2));
     const stepSize = mHat.div(vHat.sqrt().binary("add", Tensor.full([], this.eps)));
     param.copyFrom(param.sub(stepSize.binary("mul", Tensor.full([], this.lr))));
   }
 }
 
 export class RMSprop extends Optimizer {
-  private readonly squares = new Map<number, Tensor>();
+  private readonly squares: Tensor[];
 
   constructor(
     params: Tensor[],
@@ -122,14 +127,15 @@ export class RMSprop extends Optimizer {
     private readonly eps = 1e-8,
   ) {
     super(params, lr);
+    this.squares = params.map((p) => keepAlive(Tensor.zeros(p.shape)));
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
-    const prev = this.squares.get(index) ?? Tensor.zeros(param.shape);
-    const next = prev.binary("mul", Tensor.full([], this.alpha))
-      .add(grad.square().binary("mul", Tensor.full([], 1 - this.alpha)));
-    this.squares.set(index, next);
-    const stepSize = grad.div(next.sqrt().binary("add", Tensor.full([], this.eps)));
+    const sq = this.squares[index];
+    if (!sq) throw new Error(`RMSprop: 파라미터 ${index} 의 상태가 없다`);
+    sq.copyFrom(sq.binary("mul", Tensor.full([], this.alpha))
+      .add(grad.square().binary("mul", Tensor.full([], 1 - this.alpha))));
+    const stepSize = grad.div(sq.sqrt().binary("add", Tensor.full([], this.eps)));
     param.copyFrom(param.sub(stepSize.binary("mul", Tensor.full([], this.lr))));
   }
 }

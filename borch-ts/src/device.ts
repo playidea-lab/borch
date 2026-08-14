@@ -133,6 +133,55 @@ export class Device {
     return this.pipelines.size;
   }
 
+  /**
+   * 지금 열려 있는 구역들. `alloc` 이 만든 것을 여기 적어 두고 구역이 닫힐 때 놓는다.
+   *
+   * **없으면 학습이 안 돈다.** ResNet 한 스텝이 중간 버퍼를 수천 개 만드는데, GPU
+   * 버퍼는 자바스크립트의 쓰레기 수집이 제때 안 놓아준다 — 손잡이가 사라져도 메모리가
+   * 남는다. 자매도 같은 이유로 `scope()` 를 든다.
+   */
+  private readonly scopes: Set<GPUBuffer>[] = [];
+  /** 구역이 닫혀도 살아남는 것 — 파라미터와 옵티마이저 상태다. */
+  private readonly kept = new WeakSet<GPUBuffer>();
+
+  beginScope(): void {
+    this.scopes.push(new Set());
+  }
+
+  /**
+   * 구역을 닫고 그 안에서 만든 것을 놓는다.
+   *
+   * @param keep 살려 둘 것. 바깥 구역이 있으면 그쪽으로 넘긴다 — 안 넘기면 바깥이
+   *   닫힐 때 아무도 안 놓아준다.
+   * @returns 놓은 버퍼 수. 재는 쪽이 이것을 본다.
+   */
+  endScope(keep: readonly GPUBuffer[] = []): number {
+    const frame = this.scopes.pop();
+    if (!frame) return 0;
+    const spare = new Set(keep);
+    const outer = this.scopes[this.scopes.length - 1];
+    let freed = 0;
+    for (const buf of frame) {
+      if (spare.has(buf) || this.kept.has(buf)) {
+        outer?.add(buf);
+        continue;
+      }
+      buf.destroy();
+      freed += 1;
+    }
+    return freed;
+  }
+
+  /** 구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다. */
+  keep(buffer: GPUBuffer): void {
+    this.kept.add(buffer);
+  }
+
+  /** 열려 있는 구역의 깊이. 테스트가 균형을 본다. */
+  get scopeDepth(): number {
+    return this.scopes.length;
+  }
+
   alloc(count: number): GPUBuffer {
     const bytes = count * BYTES_PER_F32;
     const max = this.limits.maxStorageBufferBindingSize;
@@ -143,10 +192,12 @@ export class Device {
           `${(max / 1048576).toFixed(0)}MB (maxStorageBufferBindingSize)`,
       );
     }
-    return this.device.createBuffer({
+    const buf = this.device.createBuffer({
       size: Math.max(bytes, BYTES_PER_F32),
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
+    this.scopes[this.scopes.length - 1]?.add(buf);
+    return buf;
   }
 
   upload(data: Float32Array): GPUBuffer {

@@ -14,7 +14,7 @@
  * 배선이 갈린다.
  */
 
-import { noGrad, Tensor } from "./tensor.js";
+import { keepAlive, noGrad, Tensor } from "./tensor.js";
 
 /** 층 하나. 값을 지나가게 하고, 자기 파라미터를 이름과 함께 내놓는다. */
 export abstract class Module {
@@ -51,6 +51,20 @@ export abstract class Module {
 
   parameters(): Tensor[] {
     return Object.values(this.namedParameters());
+  }
+
+  /**
+   * 파라미터를 구역 밖에서도 살려 둔다.
+   *
+   * 층을 학습 구역 **안에서** 세우면 그 구역이 닫힐 때 가중치가 놓인다. 밖에서
+   * 세우는 것이 정석이지만, 정석을 안 지켰을 때 조용히 이상해지는 것보다 여기서
+   * 못 박아 두는 편이 낫다.
+   */
+  protected claim(...params: Tensor[]): void {
+    for (const p of params) {
+      p.requiresGrad = true;
+      keepAlive(p);
+    }
   }
 
   /**
@@ -114,8 +128,7 @@ export class Linear extends Module {
     // 안 넣고 쓰는 경우를 위해 0 이 아닌 값을 둔다.
     this.weight = Tensor.zeros([outFeatures, inFeatures]);
     this.bias = Tensor.zeros([outFeatures]);
-    this.weight.requiresGrad = true;
-    this.bias.requiresGrad = true;
+    this.claim(this.weight, this.bias);
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -135,7 +148,8 @@ export class Linear extends Module {
  */
 export class ConvND extends Module {
   readonly weight: Tensor;
-  readonly bias: Tensor;
+  /** 편향이 없을 수도 있다 — 뒤에 정규화가 오면 편향이 상수항으로 흡수된다. */
+  readonly bias: Tensor | null;
 
   constructor(
     inChannels: number,
@@ -144,18 +158,21 @@ export class ConvND extends Module {
     spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
+    useBias = true,
   ) {
     super();
     this.weight = Tensor.zeros([
       outChannels, inChannels, ...new Array<number>(spatial).fill(kernel),
     ]);
-    this.bias = Tensor.zeros([outChannels]);
-    this.weight.requiresGrad = true;
-    this.bias.requiresGrad = true;
+    this.bias = useBias ? Tensor.zeros([outChannels]) : null;
+    this.claim(this.weight);
+    if (this.bias) this.claim(this.bias);
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return { weight: this.weight, bias: this.bias };
+    return this.bias
+      ? { weight: this.weight, bias: this.bias }
+      : { weight: this.weight };
   }
 
   override forward(x: Tensor): Tensor {
@@ -164,20 +181,23 @@ export class ConvND extends Module {
 }
 
 export class Conv1d extends ConvND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0) {
-    super(inC, outC, kernel, 1, stride, padding);
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+              bias = true) {
+    super(inC, outC, kernel, 1, stride, padding, bias);
   }
 }
 
 export class Conv2d extends ConvND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0) {
-    super(inC, outC, kernel, 2, stride, padding);
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+              bias = true) {
+    super(inC, outC, kernel, 2, stride, padding, bias);
   }
 }
 
 export class Conv3d extends ConvND {
-  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0) {
-    super(inC, outC, kernel, 3, stride, padding);
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+              bias = true) {
+    super(inC, outC, kernel, 3, stride, padding, bias);
   }
 }
 
@@ -233,10 +253,12 @@ export class BatchNormND extends Module {
     super();
     this.weight = Tensor.ones([channels]);
     this.bias = Tensor.zeros([channels]);
-    this.weight.requiresGrad = true;
-    this.bias.requiresGrad = true;
+    this.claim(this.weight, this.bias);
     this.runningMean = Tensor.zeros([channels]);
     this.runningVar = Tensor.ones([channels]);
+    // 이동 통계는 기울기를 안 받지만 **구역이 닫혀도 살아야 한다.**
+    keepAlive(this.runningMean);
+    keepAlive(this.runningVar);
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -328,9 +350,7 @@ export class Recurrent extends Module {
     this.weightHh = Tensor.zeros([rows, hidden]);
     this.biasIh = Tensor.zeros([rows]);
     this.biasHh = Tensor.zeros([rows]);
-    for (const p of [this.weightIh, this.weightHh, this.biasIh, this.biasHh]) {
-      p.requiresGrad = true;
-    }
+    this.claim(this.weightIh, this.weightHh, this.biasIh, this.biasHh);
   }
 
   override ownParameters(): Record<string, Tensor> {
@@ -408,9 +428,7 @@ export class MultiheadAttention extends Module {
     this.inBias = Tensor.zeros([3 * embed]);
     this.outWeight = Tensor.zeros([embed, embed]);
     this.outBias = Tensor.zeros([embed]);
-    for (const p of [this.inWeight, this.inBias, this.outWeight, this.outBias]) {
-      p.requiresGrad = true;
-    }
+    this.claim(this.inWeight, this.inBias, this.outWeight, this.outBias);
   }
 
   override ownParameters(): Record<string, Tensor> {
