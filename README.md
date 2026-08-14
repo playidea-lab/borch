@@ -284,7 +284,17 @@ torch 의 난수기를 쓸 수 없어서다. 그래서 골든은 확률을 0·1 
 ```bash
 uv run --with numpy --with torch python tests/golden.py dump   # 1단계: 굳힌다
 uv run --with numpy python tests/golden.py check               # 2단계: 대조한다
+uv run --with numpy python tests/export_json.py                # 3단계: 밖으로 뽑는다
 ```
+
+3단계가 `tests/golden.json`(290KB)을 만든다. **파이썬이 아닌 구현도 이 기대값을 쓸 수
+있게** 하려는 것이다 — 진짜 torch 를 돌려 얻은 숫자가 이 저장소에서 가장 비싼 자산인데,
+파이썬 안에만 두면 다음 구현은 검증 없이 자란다.
+
+**케이스 본문은 안 들어 있다.** `lambda L: L.amax(...)` 는 기계적으로 다른 언어가 되지
+않는다. 받는 쪽은 같은 이름의 케이스를 자기 언어로 쓰고, 그 답을 여기서 맞춘다 —
+비싼 절반(숫자)은 건너가고 싼 절반(호출 한 줄)은 다시 쓴다. 실제로 되는지는 재봤다:
+JSON 만으로 코어 746건, 자매 799건이 대조된다.
 
 ```bash
 uv run --with numpy --with torch python tests/conformance.py

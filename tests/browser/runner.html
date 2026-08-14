@@ -57,6 +57,10 @@ for (const [pkg, mods] of Object.entries(PACKAGES)) {
   for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);
 }
 const BINARY = [["/tests/golden.npz", "/work/tests/golden.npz"]];
+// 뽑아둔 JSON 도 같이 싣는다 — 브라우저에서 그것만으로 대조가 되는지 확인할 수
+// 있어야 "다른 언어도 쓸 수 있다"가 주장이 아니라 실측이 된다.
+FILES.push(["/tests/golden.json", "/work/tests/golden.json"]);
+FILES.push(["/tests/export_json.py", "/work/tests/export_json.py"]);
 
 // TF.js 는 GPU 경로에서만 필요하다. 코어 browsertorch 는 numpy 뿐이라 안 부른다.
 const TFJS = ["/vendor/tf.min.js", "/vendor/tf-backend-webgpu.min.js"];
