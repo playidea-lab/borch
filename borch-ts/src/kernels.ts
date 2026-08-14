@@ -1830,6 +1830,117 @@ ${flatId(n)}
 }`;
 }
 
+/**
+ * 배치 정규화의 채널 통계 — 합과 제곱합을 **한 번에** 낸다.
+ *
+ * 조립으로 두면 `sumDim` 셋 + `sub` + `square` + `sumDim` 셋 + 나눗셈 몇으로 열 몇
+ * dispatch 가 되고, 그것이 층마다 스무 번이다. 실측에서 ResNet 한 스텝의 dispatch
+ * 1,636 개 중 태반이 여기서 나왔다.
+ *
+ * 스레드 하나가 채널 하나를 맡아 배치·공간을 전부 훑는다. 순서가 정해져 있으므로
+ * 원자 연산이 없고 두 번 돌리면 같은 값이다.
+ */
+export function batchNormStats(N: number, C: number, S: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Mean: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Var: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(C)}
+  var total = 0.0;
+  var sq = 0.0;
+  for (var n = 0u; n < ${N}u; n = n + 1u) {
+    let base = (n * ${C}u + gid) * ${S}u;
+    for (var i = 0u; i < ${S}u; i = i + 1u) {
+      let v = X[base + i];
+      total = total + v;
+      sq = fma(v, v, sq);
+    }
+  }
+  let m = total / ${(N * S).toFixed(1)};
+  Mean[gid] = m;
+  // **편향추정이다**(n 으로 나눈다) — torch 의 BatchNorm 이 정규화에 쓰는 것이 이것이고,
+  // 이동 통계에 넣는 불편추정과는 다른 수다. 하나로 합치면 평가 모드에서만 갈린다.
+  Var[gid] = sq / ${(N * S).toFixed(1)} - m * m;
+}`;
+}
+
+/** 통계를 받아 정규화하고 크기·치우침까지 한 번에 먹인다. */
+export function batchNormApply(N: number, C: number, S: number, eps: number): string {
+  const n = N * C * S;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Mean: array<f32>;
+@group(0) @binding(2) var<storage, read> Var: array<f32>;
+@group(0) @binding(3) var<storage, read> Wt: array<f32>;
+@group(0) @binding(4) var<storage, read> B: array<f32>;
+@group(0) @binding(5) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let c = (gid / ${S}u) % ${C}u;
+  Out[gid] = (X[gid] - Mean[c]) * inverseSqrt(Var[c] + ${eps}) * Wt[c] + B[c];
+}`;
+}
+
+/**
+ * 배치 정규화의 역방향.
+ *
+ * **평균과 분산이 그래프 안에 있다.** 밖으로 빼면 입력 기울기가 어긋나고 `weight`
+ * 에는 아예 안 온다 — 코어가 오래 겪은 자리다. 식은
+ *
+ *     dx = γ·σ⁻¹·(dy − mean(dy) − x̂·mean(dy·x̂))
+ *
+ * 이고, 여기 필요한 두 평균을 채널마다 한 번 세고 그 뒤에 원소별로 먹인다.
+ */
+export function batchNormStatsBackward(N: number, C: number, S: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> Xh: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> SumG: array<f32>;
+@group(0) @binding(3) var<storage, read_write> SumGXh: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(C)}
+  var sg = 0.0;
+  var sgx = 0.0;
+  for (var n = 0u; n < ${N}u; n = n + 1u) {
+    let base = (n * ${C}u + gid) * ${S}u;
+    for (var i = 0u; i < ${S}u; i = i + 1u) {
+      let gv = G[base + i];
+      sg = sg + gv;
+      sgx = fma(gv, Xh[base + i], sgx);
+    }
+  }
+  SumG[gid] = sg;
+  SumGXh[gid] = sgx;
+}`;
+}
+
+export function batchNormBackwardApply(
+  N: number, C: number, S: number,
+): string {
+  const n = N * C * S;
+  const count = (N * S).toFixed(1);
+  return `
+@group(0) @binding(0) var<storage, read> Xh: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read> SumG: array<f32>;
+@group(0) @binding(3) var<storage, read> SumGXh: array<f32>;
+@group(0) @binding(4) var<storage, read> Wt: array<f32>;
+@group(0) @binding(5) var<storage, read> InvStd: array<f32>;
+@group(0) @binding(6) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let c = (gid / ${S}u) % ${C}u;
+  let xh = Xh[gid];
+  Out[gid] = Wt[c] * InvStd[c] *
+    (G[gid] - SumG[c] / ${count} - xh * SumGXh[c] / ${count});
+}`;
+}
+
 /** 값 하나로 채운다. 기울기 씨앗(`backward()` 의 1.0)과 `zeros` 가 쓴다. */
 export function fill(n: number, value: number): string {
   return `

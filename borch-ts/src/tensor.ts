@@ -15,6 +15,10 @@ import { formatSize, formatTensor } from "./repr.js";
 import {
   argReduce,
   type AxisRule,
+  batchNormApply,
+  batchNormBackwardApply,
+  batchNormStats,
+  batchNormStatsBackward,
   BINARY,
   binaryBackward,
   binaryForward,
@@ -74,6 +78,17 @@ const deviceHolder: { current: Device | null } = { current: null };
  * 커널로 가고, 거기서는 음수 밑이 답이 없다.
  */
 const MAX_UNROLLED_POWER = 8;
+
+/**
+ * 값 하나짜리 상수 텐서를 값으로 캐시한다.
+ *
+ * 학습 루프는 같은 상수를 매 스텝 다시 만든다 — 학습률, eps, 0.5, 게이트 수. 버퍼가
+ * 4바이트이므로 들고 있는 값이 만드는 값보다 훨씬 싸다. 구역이 닫혀도 살아남게
+ * 표시해 둔다(안 그러면 다음 스텝이 놓인 버퍼를 가리킨다).
+ *
+ * **쓰기는 안 간다.** 여기 오는 텐서는 상수이고, 제자리 연산은 자기 버퍼에만 쓴다.
+ */
+const scalarCache = new Map<number, GPUBuffer>();
 
 export async function init(): Promise<Device> {
   if (!deviceHolder.current) deviceHolder.current = await Device.create();
@@ -267,6 +282,18 @@ export class Tensor implements Node<Tensor> {
 
   static full(shape: readonly number[], value: number): Tensor {
     const n = numel(shape);
+    // **스칼라는 커널을 안 부른다.** 원소 하나를 쓰겠다고 dispatch 를 보내는 것은
+    // 순수한 낭비인데, `x * 0.5` 같은 식이 전부 이리로 와서 ResNet 한 스텝에 286 번
+    // 돌고 있었다(실측 — dispatch 1,636 개 중 17%). 게다가 학습 루프에서는 같은
+    // 상수가 매 스텝 되풀이되므로 값으로 캐시한다.
+    if (n === 1) {
+      const hit = scalarCache.get(value);
+      if (hit) return new Tensor(hit, shape);
+      const buf = dev().upload(Float32Array.of(value));
+      dev().keep(buf);
+      scalarCache.set(value, buf);
+      return new Tensor(buf, shape);
+    }
     const out = dev().alloc(n);
     dev().run1d(
       dev().pipeline(`fill:${n}:${value}`, () => fill(n, value)),
@@ -2437,6 +2464,73 @@ export class Tensor implements Node<Tensor> {
    * 축 셋을 한꺼번에 접어야 해서 `layerNorm` 을 못 쓴다. 축약을 겹쳐 쓰면 새 커널이
    * 필요 없다 — 대신 중간 텐서가 몇 개 생기고, 그게 지금 치르는 값이다.
    */
+  /**
+   * 융합 배치 정규화. 통계·정규화·크기·치우침을 커널 셋으로 끝낸다.
+   *
+   * 조립판은 층 하나에 dispatch 가 스무 개 넘게 들었고 ResNet 한 스텝의 1,636 개
+   * 중 태반이 거기서 나왔다(실측). 여기서는 순방향 둘, 역방향 둘이다.
+   *
+   * @returns 정규화 결과와, 이동 통계를 갱신할 평균·분산.
+   */
+  batchNormFused(
+    weight: Tensor, bias: Tensor, eps = 1e-5,
+  ): { out: Tensor; mean: Tensor; variance: Tensor } {
+    const [N = 1, C = 1] = this.shape;
+    const S = this.shape.slice(2).reduce((a, b) => a * b, 1);
+    const key = `${N}:${C}:${S}`;
+    const mean = dev().alloc(C);
+    const variance = dev().alloc(C);
+    dev().run1d(
+      dev().pipeline(`bns:${key}`, () => batchNormStats(N, C, S)),
+      [this.buffer, mean, variance],
+      C,
+    );
+    const out = dev().alloc(this.size);
+    dev().run1d(
+      dev().pipeline(`bna:${key}:${eps}`, () => batchNormApply(N, C, S, eps)),
+      [this.buffer, mean, variance, weight.buffer, bias.buffer, out],
+      this.size,
+    );
+    // 표준화된 값은 역방향이 다시 쓴다. 여기서 한 번 만들어 들고 간다 —
+    // 역방향에서 다시 세면 커널이 둘 더 는다.
+    const meanT = new Tensor(mean, [C]);
+    const varT = new Tensor(variance, [C]);
+    const invStd = varT.binary("add", Tensor.full([], eps)).unary("rsqrt");
+    const shape4 = [1, C, ...new Array<number>(this.shape.length - 2).fill(1)];
+    const xhat = this.sub(meanT.reshape(shape4)).mul(invStd.reshape(shape4));
+    const self = this;
+    const result = Tensor.make(
+      out,
+      this.shape,
+      [this, weight, bias],
+      (g) => {
+        const sumG = dev().alloc(C);
+        const sumGXh = dev().alloc(C);
+        dev().run1d(
+          dev().pipeline(`bnsb:${key}`, () => batchNormStatsBackward(N, C, S)),
+          [xhat.buffer, g.buffer, sumG, sumGXh],
+          C,
+        );
+        const parts: (Tensor | null)[] = [];
+        if (self.requiresGrad) {
+          const gi = dev().alloc(self.size);
+          dev().run1d(
+            dev().pipeline(`bnba:${key}`, () => batchNormBackwardApply(N, C, S)),
+            [xhat.buffer, g.buffer, sumG, sumGXh, weight.buffer, invStd.buffer, gi],
+            self.size,
+          );
+          parts.push(new Tensor(gi, self.shape));
+        } else parts.push(null);
+        // 가중치·치우침의 기울기는 이미 센 두 합이다 — 새 커널이 필요 없다.
+        parts.push(weight.requiresGrad ? new Tensor(sumGXh, [C]) : null);
+        parts.push(bias.requiresGrad ? new Tensor(sumG, [C]) : null);
+        return parts;
+      },
+      "NativeBatchNormBackward0",
+    );
+    return { out: result, mean: meanT, variance: varT };
+  }
+
   batchNorm2d(eps = 1e-5): Tensor {
     const [N = 1, C = 1, H = 1, W = 1] = this.shape;
     const count = N * H * W;

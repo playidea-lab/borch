@@ -345,24 +345,19 @@ export class BatchNormND extends Module {
       return scaled.mul(w).add(b);
     }
     const count = x.size / this.channels;
-    const perChannel = (t: Tensor): Tensor => {
-      // 배치를 접고, 남은 공간 축을 하나씩 접는다. 접을 때마다 채널이 앞으로 온다.
-      let acc = t.sumDim(0);
-      for (let d = 0; d < spatial; d++) acc = acc.sumDim(1);
-      return acc.reshape(shape);
-    };
-    const mean = perChannel(x).div(Tensor.full([], count));
-    const centered = x.sub(mean);
-    const biased = perChannel(centered.square()).div(Tensor.full([], count));
+    void w;
+    void b;
+    // **융합 커널로 간다.** 조립판은 층 하나에 dispatch 스무 개가 넘었고, ResNet 한
+    // 스텝의 1,636 개 중 태반이 거기서 나왔다(실측).
+    const { out, mean, variance } = x.batchNormFused(this.weight, this.bias, this.eps);
     // 이동 통계에는 **불편추정**이 들어간다 — torch 가 그렇다. 정규화에 쓰는 것은
     // 편향추정이라 둘이 다르고, 하나로 합치면 평가 모드에서만 갈린다.
     noGrad(() => {
-      const unbiased = biased.binary("mul", Tensor.full([], count / (count - 1)));
-      this.runningMean.lerpFrom(mean.reshape([this.channels]), this.momentum);
-      this.runningVar.lerpFrom(unbiased.reshape([this.channels]), this.momentum);
+      const unbiased = variance.binary("mul", Tensor.full([], count / (count - 1)));
+      this.runningMean.lerpFrom(mean, this.momentum);
+      this.runningVar.lerpFrom(unbiased, this.momentum);
     });
-    const norm = centered.div(biased.binary("add", Tensor.full([], this.eps)).sqrt());
-    return norm.mul(w).add(b);
+    return out;
   }
 }
 
