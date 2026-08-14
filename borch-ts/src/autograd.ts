@@ -28,6 +28,13 @@ export interface Node<T> {
   readonly backwardFn: ((grad: T) => readonly (T | null)[]) | null;
   /** torch 의 `grad_fn` 이름. 오류 메시지와 골든의 `repr::` 케이스가 쓴다. */
   readonly gradName: string;
+  /**
+   * 역전파가 이미 지나간 마디인가.
+   *
+   * torch 는 한 번 흘리고 나면 그래프를 놓아준다 — 중간 값들이 메모리를 붙들고
+   * 있기 때문이다. 두 번째 호출은 거절이지 다시 계산이 아니다.
+   */
+  freed: boolean;
 }
 
 /**
@@ -80,7 +87,12 @@ function topoOrder<T>(root: Node<T>): Node<T>[] {
  *
  * @param add 기울기 둘을 더하는 법. 한 값이 여러 곳에 쓰였으면 그만큼 더해진다.
  */
-export function backward<T>(root: Node<T>, seed: T, add: (a: T, b: T) => T): void {
+export function backward<T>(
+  root: Node<T>,
+  seed: T,
+  add: (a: T, b: T) => T,
+  options: { retainGraph?: boolean; onSecondPass?: () => never } = {},
+): void {
   if (!root.requiresGrad) {
     throw new Error(
       "requiresGrad 가 아닌 텐서에서 backward 를 불렀다. " +
@@ -97,6 +109,8 @@ export function backward<T>(root: Node<T>, seed: T, add: (a: T, b: T) => T): voi
       node.grad = node.grad === null ? g : add(node.grad, g);
       continue;
     }
+    if (node.freed && options.onSecondPass) options.onSecondPass();
+    if (!options.retainGraph) node.freed = true;
     const parts = node.backwardFn(g);
     if (parts.length !== node.parents.length) {
       // 조용히 틀리는 대신 멈춘다. 부모 하나를 빠뜨린 미분식은 값이 그럴듯해서

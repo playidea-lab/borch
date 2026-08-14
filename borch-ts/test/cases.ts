@@ -149,7 +149,167 @@ export function cases(): Map<string, Case> {
   addReduce(out);
   addShape(out);
   addMethod(out);
+  addFlow(out);
+  addError(out);
   return out;
+}
+
+/**
+ * 같은 조건에서 **같은 종류의 예외**가, 검색 가능한 문구와 함께 나는가.
+ *
+ * 답의 모양은 `종류|문구=참거짓` 이다. 종류 이름까지 굳혀 두었기 때문에 torch 의
+ * `RuntimeError` 를 흉내 내야 맞는다 — 자세한 이유는 `src/errors.ts` 에 있다.
+ *
+ * **여기 없는 다섯은 기능이 없어서다.** 정수 dtype·`nn.Linear`·`conv2d`·색인·제자리
+ * 연산이 아직 없다. 없는 것을 등록해 두면 러너가 "실패" 로 세는데, 그것은 틀린 것이
+ * 아니라 없는 것이다.
+ */
+function addError(out: Map<string, Case>): void {
+  // **비동기까지 받는다.** `item()` 은 GPU 에서 읽어 오므로 async 이고, 그 안의
+  // throw 는 동기 try 로 안 잡힌다 — 그대로 두면 "예외가 안 났다" 로 답한다.
+  const raised = async (
+    fn: () => unknown | Promise<unknown>,
+    phrase: string | null,
+  ): Promise<string> => {
+    try {
+      await fn();
+      return "예외가 안 났다";
+    } catch (err) {
+      const kind = err instanceof Error ? err.constructor.name : typeof err;
+      const text = err instanceof Error ? err.message : String(err);
+      const found = phrase === null ? true : text.includes(phrase);
+      return `${kind}|문구=${verdict(found)}`;
+    }
+  };
+
+  const cases: [string, () => unknown | Promise<unknown>, string | null][] = [
+    ["행렬곱 모양 불일치",
+      () => Tensor.zeros([3, 4]).mm(Tensor.zeros([3, 2])),
+      "shapes cannot be multiplied"],
+    ["브로드캐스트 불가",
+      () => Tensor.zeros([3, 4]).add(Tensor.zeros([3, 2])),
+      "must match the size of tensor"],
+    ["reshape 원소수 불일치",
+      () => Tensor.zeros([2, 3]).reshape([4, 2]),
+      "is invalid for input of size"],
+    ["스칼라 아닌 backward",
+      () => Tensor.from([0, 0, 0], [3], true).backward(),
+      "grad can be implicitly created only for scalar outputs"],
+    ["requires_grad 없이 backward",
+      () => Tensor.zeros([3]).sum().backward(),
+      "does not require grad"],
+    ["여러 원소에 item()",
+      () => Tensor.zeros([3]).item(),
+      "cannot be converted to Scalar"],
+    ["backward 두 번", () => {
+      const x = Tensor.from([1.0, 2.0], [2], true);
+      const y = x.mul(Tensor.full([], 2)).sum();
+      y.backward();
+      y.backward();
+    }, "backward through the graph a second time"],
+  ];
+  for (const [name, fn, phrase] of cases) {
+    out.set(`error::${name}`, () => raised(fn, phrase));
+  }
+}
+
+// ── tests/cases.py 의 flow_cases 가 쓰는 입력. ─────────────────────────────
+const F_VEC = [0.5, 2.0, 1.5, 3.0];
+const F_MAT = [1, 2, 3, 4, 5, 6, 7, 8, 9]; // (3, 3), 1 부터
+const F_PAIR = [1, 2, 3, 4, 5, 6]; // (2, 3)
+const F_SYM = [4, 1, 1, 3]; // (2, 2)
+const F_MASK = [1, 0, 1, 0];
+
+/**
+ * 기울기가 **흐르는가**만 묻는 표.
+ *
+ * 값만 대조하는 검사는 그래프가 끊긴 것을 못 본다 — 값은 맞기 때문이다. 자매의
+ * `roll` 과 `masked_select` 가 그렇게 조용히 끊겨 있었고 골든 746건이 전부 초록이었다.
+ *
+ * **두 가지를 함께 답한다.** `requires_grad` 만 물으면 부족하다 — `.float()` 이
+ * 참이라고 말해놓고 `.grad` 를 비워둔 적이 있고, 그 검사만 있었으면 통과했다.
+ */
+function addFlow(out: Map<string, Case>): void {
+  const vec = () => Tensor.from(F_VEC, [4], true);
+  const mat = () => Tensor.from(F_MAT, [3, 3], true);
+  const pair = () => Tensor.from(F_PAIR, [2, 3], true);
+  const sym = () => Tensor.from(F_SYM, [2, 2], true);
+  const idx1 = () => Tensor.from([1, 0], [2]);
+  const idx2 = () => Tensor.from([0, 2, 1, 0], [2, 2]);
+  const mask = () => Tensor.from(F_MASK, [4]);
+
+  /**
+   * 여기 없는 것은 **아직 없는 것**이다. `median`·`msort` 는 GPU 정렬이,
+   * `masked_select` 는 결과 크기가 값에 달려서 CPU 왕복이, `einsum`·`det`·`logdet`·
+   * `inverse`·`cholesky` 는 선형대수가 필요하다. 등록하고 던지게 하면 "실패" 로
+   * 세는데, 그건 틀린 것이 아니라 없는 것이다.
+   */
+  // 이름이 곧 단항 연산인 것들.
+  const unaries = ["exp", "log", "sqrt", "abs", "sin", "tanh", "sigmoid",
+    "relu", "erf", "erfc", "sinc"];
+  for (const name of unaries) {
+    out.set(`flow::${name}`, () => asks(vec(), (x) => x.unary(name)));
+  }
+
+  const others: [string, () => Tensor, (x: Tensor) => Tensor][] = [
+    ["sum", vec, (x) => x.sum()],
+    ["mean", vec, (x) => x.mean()],
+    ["prod", vec, (x) => x.prod()],
+    ["norm", vec, (x) => x.norm()],
+    ["amax", vec, (x) => x.amax()],
+    ["amin", vec, (x) => x.amin()],
+    ["nansum", vec, (x) => x.nansum()],
+    ["nanmean", vec, (x) => x.nanmean()],
+    ["logsumexp", vec, (x) => x.logsumexp(0)],
+    ["cumsum", vec, (x) => x.cumsum(0)],
+    ["cumprod", vec, (x) => x.cumprod(0)],
+    ["diff", vec, (x) => x.diff()],
+    ["flip", vec, (x) => x.flip(0)],
+    ["roll", vec, (x) => x.roll(1)],
+    ["tile", vec, (x) => x.tile(2)],
+    ["repeat_interleave", vec, (x) => x.repeatInterleave(2)],
+    ["narrow", vec, (x) => x.narrow(0, 0, 2)],
+    ["index_select", vec, (x) => x.indexSelect(0, idx1())],
+    ["masked_fill", vec, (x) => x.maskedFill(mask(), 0.0)],
+    ["unbind", vec, (x) => {
+      const part = x.unbind(0)[1];
+      if (!part) throw new Error("unbind 조각 1 이 없다");
+      return part;
+    }],
+    ["ravel", vec, (x) => x.ravel()],
+    ["clamp", vec, (x) => x.clamp(1.0, 2.0)],
+    ["softmax", vec, (x) => x.softmax(0)],
+    ["diagflat", vec, (x) => x.diagflat()],
+    ["diag", mat, (x) => x.diag()],
+    ["trace", mat, (x) => x.trace()],
+    ["tril", mat, (x) => x.tril()],
+    ["diagonal", mat, (x) => x.diagonal()],
+    ["rot90", mat, (x) => x.rot90(1)],
+    ["select", mat, (x) => x.select(0, 1)],
+    ["swapaxes", mat, (x) => x.swapaxes(0, 1)],
+    ["movedim", mat, (x) => x.movedim(0, 1)],
+    ["matrix_power", sym, (x) => x.matrixPower(2)],
+    ["gather", pair, (x) => x.gather(1, idx2())],
+  ];
+  for (const [name, leaf, fn] of others) {
+    out.set(`flow::${name}`, () => asks(leaf(), fn));
+  }
+}
+
+/**
+ * 흘렀는가, 그리고 실제로 기울기가 잎에 닿았는가.
+ *
+ * 답의 철자는 골든이 굳힌 그대로다 — 파이썬 쪽 케이스가 이 문자열을 만들었다.
+ */
+function asks(leaf: Tensor, fn: (x: Tensor) => Tensor): string {
+  const result = fn(leaf);
+  const flow = result.requiresGrad ? "흐름" : "안흐름";
+  try {
+    result.sum().backward();
+  } catch {
+    return `${flow}/역전파거절`;
+  }
+  return `${flow}/${leaf.grad !== null ? "기울기있음" : "조용히None"}`;
 }
 
 // ── tests/cases.py 의 reduce_cases 가 쓰는 입력. 그대로 옮긴 것이다. ────────

@@ -8,11 +8,13 @@
 
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
+import { RuntimeError, TORCH } from "./errors.js";
 import {
   type AxisRule,
   BINARY,
   binaryBackward,
   binaryForward,
+  cumprodBackward,
   cumsumBackward,
   cumulative,
   diagflat,
@@ -23,7 +25,11 @@ import {
   gather,
   gatherBackward,
   gatherIndex,
+  gatherIndexBackward,
+  indexSelect,
+  indexSelectBackward,
   matmul,
+  prodBackward,
   reduceBroadcast,
   reduceDim,
   type ReduceKind,
@@ -67,7 +73,10 @@ export function broadcastShapes(
     const da = a[a.length - rank + i] ?? 1;
     const db = b[b.length - rank + i] ?? 1;
     if (da !== db && da !== 1 && db !== 1) {
-      throw new Error(`브로드캐스팅이 안 된다: [${a}] 와 [${b}]`);
+      throw new RuntimeError(
+        `The size of tensor a (${da}) ${TORCH.broadcast} b (${db}) at ` +
+          `non-singleton dimension ${i}: [${a}] 와 [${b}]`,
+      );
     }
     out[i] = Math.max(da, db);
   }
@@ -115,6 +124,7 @@ export class Tensor implements Node<Tensor> {
   readonly buffer: GPUBuffer;
   requiresGrad: boolean;
   grad: Tensor | null = null;
+  freed = false;
   readonly parents: readonly Tensor[];
   readonly backwardFn: ((grad: Tensor) => readonly (Tensor | null)[]) | null;
   readonly gradName: string;
@@ -294,7 +304,10 @@ export class Tensor implements Node<Tensor> {
     const K2 = other.shape[0] ?? 0;
     const N = other.shape[1] ?? 0;
     if (K !== K2) {
-      throw new Error(`안쪽 차원이 다르다: [${this.shape}] × [${other.shape}]`);
+      throw new RuntimeError(
+        `mat1 and mat2 ${TORCH.matmulShape} ` +
+          `(${M}x${K} and ${K2}x${N})`,
+      );
     }
     const out = dev().alloc(M * N);
     dev().run(
@@ -383,12 +396,15 @@ export class Tensor implements Node<Tensor> {
       outShape,
       [this],
       (g) => {
-        if (kind === "prod") {
-          // out/x 로 쓰면 x 에 0 이 하나라도 있는 축에서 조용히 틀린다. 제대로 하려면
-          // 접두·접미 곱을 따로 들어야 하고, 아직 그것을 요구하는 케이스가 없다.
-          throw new Error("prod 의 역방향은 아직 없다 — 틀린 답보다 없는 편이 낫다.");
-        }
         const gi = dev().alloc(this.size);
+        if (kind === "prod") {
+          dev().run1d(
+            dev().pipeline(`pb:${key}`, () => prodBackward(outer, red, inner)),
+            [this.buffer, g.buffer, gi],
+            this.size,
+          );
+          return [new Tensor(gi, this.shape)];
+        }
         if (kind === "sum") {
           dev().run1d(
             dev().pipeline(`xd:${key}`, () => expandDim(outer, red, inner)),
@@ -559,7 +575,9 @@ export class Tensor implements Node<Tensor> {
   reshape(shape: readonly number[]): Tensor {
     const n = shape.reduce((a, b) => a * b, 1);
     if (n !== this.size) {
-      throw new Error(`모양 [${shape}] 는 원소 ${this.size}개와 안 맞는다.`);
+      throw new RuntimeError(
+        `shape '[${shape}]' ${TORCH.reshapeSize} ${this.size}`,
+      );
     }
     const from = this.shape;
     return Tensor.make(
@@ -1018,17 +1036,20 @@ export class Tensor implements Node<Tensor> {
       shape,
       [this],
       (g) => {
-        if (kind !== "sum") {
-          // 0 이 섞인 곱의 역방향은 나눗셈으로 못 쓴다. 제대로 하려면 접두·접미
-          // 곱을 따로 들어야 하고, 아직 그것을 요구하는 케이스가 없다.
-          throw new Error("cumprod 의 역방향은 아직 없다 — 틀린 답보다 없는 편이 낫다.");
-        }
         const gi = dev().alloc(n);
-        dev().run1d(
-          dev().pipeline(`cumb:${key}`, () => cumsumBackward(outer, len, inner)),
-          [g.buffer, gi],
-          n,
-        );
+        if (kind === "sum") {
+          dev().run1d(
+            dev().pipeline(`cumb:${key}`, () => cumsumBackward(outer, len, inner)),
+            [g.buffer, gi],
+            n,
+          );
+        } else {
+          dev().run1d(
+            dev().pipeline(`cumpb:${key}`, () => cumprodBackward(outer, len, inner)),
+            [this.buffer, g.buffer, gi],
+            n,
+          );
+        }
         return [new Tensor(gi, shape)];
       },
       kind === "sum" ? "CumsumBackward0" : "CumprodBackward0",
@@ -1053,9 +1074,104 @@ export class Tensor implements Node<Tensor> {
       [this.buffer, index.buffer, out],
       n,
     );
-    // 값만 낸다. 역방향은 흩뿌리기라 결정적으로 쓰려면 따로 세워야 하고,
-    // 그것을 요구하는 케이스가 아직 없다.
-    return new Tensor(out, index.shape);
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      index.shape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(this.size);
+        dev().run1d(
+          dev().pipeline(
+            `gib:${outer}:${axisSize}:${inner}:${outAxis}`,
+            () => gatherIndexBackward(outer, axisSize, inner, outAxis),
+          ),
+          [index.buffer, g.buffer, gi],
+          this.size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      "GatherBackward0",
+    );
+  }
+
+  /** 축 하나를 색인 **벡터**가 고른다. `gather` 와 달리 색인이 자리마다 다르지 않다. */
+  indexSelect(dim: number, index: Tensor): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const axisSize = this.shape[axis] ?? 1;
+    const count = index.size;
+    const outShape = this.shape.map((s, d) => (d === axis ? count : s));
+    const n = outer * count * inner;
+    const key = `${outer}:${axisSize}:${inner}:${count}`;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`is:${key}`, () => indexSelect(outer, axisSize, inner, count)),
+      [this.buffer, index.buffer, out],
+      n,
+    );
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(this.size);
+        dev().run1d(
+          dev().pipeline(
+            `isb:${key}`,
+            () => indexSelectBackward(outer, axisSize, inner, count),
+          ),
+          [index.buffer, g.buffer, gi],
+          this.size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      "IndexSelectBackward0",
+    );
+  }
+
+  /** 자리마다 되풀이한다. `[a,b]` 를 2 번씩이면 `[a,a,b,b]` 다 — `tile` 과 다르다. */
+  repeatInterleave(times: number, dim = 0): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const own = this.strides();
+    const rules: AxisRule[] = this.shape.map((size, d) => ({
+      size: d === axis ? size * times : size,
+      stride: own[d] ?? 1,
+      kind: d === axis ? ("div" as const) : ("lin" as const),
+      wrap: d === axis ? times : size,
+    }));
+    const outShape = this.shape.map((s, d) => (d === axis ? s * times : s));
+    return this.viewAs(rules, 0, outShape, "RepeatInterleaveBackward0");
+  }
+
+  /** 이웃 차. `n` 번 되풀이하면 그만큼 짧아진다. */
+  diff(n = 1, dim = 0): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    let cur: Tensor = this;
+    for (let k = 0; k < n; k++) {
+      const len = cur.shape[axis] ?? 0;
+      if (len < 2) throw new Error(`축 ${dim} 가 짧아서 diff 를 더 못 한다.`);
+      cur = cur.narrow(axis, 1, len - 1).sub(cur.narrow(axis, 0, len - 1));
+    }
+    return cur;
+  }
+
+  /** 참인 자리를 값으로 덮는다. **덮은 자리로는 기울기가 안 간다.** */
+  maskedFill(mask: Tensor, value: number): Tensor {
+    return Tensor.full(this.shape, value).where(mask, this);
+  }
+
+  /** 정수 거듭제곱. 지금은 곱셈을 되풀이한다 — 지수가 작을 때만 쓸 것이다. */
+  matrixPower(k: number): Tensor {
+    if (k < 1) throw new Error(`matrix_power 는 아직 1 이상만이다: ${k}`);
+    let out: Tensor = this;
+    for (let i = 1; i < k; i++) out = out.mm(this);
+    return out;
   }
 
   /** 조건 자리마다 이쪽 아니면 저쪽. torch 의 메서드 형태는 `x.where(조건, 다른쪽)` 이다. */
@@ -1130,14 +1246,31 @@ export class Tensor implements Node<Tensor> {
 
   // ── 역전파 ────────────────────────────────────────────────────────────
 
-  backward(): void {
+  /**
+   * @param retainGraph 참이면 그래프를 놓지 않는다. torch 와 같이 **기본은 놓는 것**이다 —
+   *   중간 값들이 메모리를 붙들고 있어서, 안 놓으면 학습 루프에서 계속 쌓인다.
+   */
+  backward(retainGraph = false): void {
     if (this.size !== 1) {
-      throw new Error(
-        `backward 는 스칼라에서만 부른다. 지금 모양은 [${this.shape}] 다 — ` +
+      throw new RuntimeError(
+        `${TORCH.nonScalarBackward}: 지금 모양은 [${this.shape}] 다 — ` +
           ".sum() 을 먼저 불러라.",
       );
     }
-    tapeBackward<Tensor>(this, Tensor.full([], 1), (a, b) => a.add(b));
+    if (!this.requiresGrad) {
+      throw new RuntimeError(
+        `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: ` +
+          "no_grad 안이었거나 흐름을 끊는 연산을 지났다.",
+      );
+    }
+    tapeBackward<Tensor>(this, Tensor.full([], 1), (a, b) => a.add(b), {
+      retainGraph,
+      onSecondPass: () => {
+        throw new RuntimeError(
+          `${TORCH.secondBackward}. 다시 흘리려면 backward(true) 로 그래프를 남겨라.`,
+        );
+      },
+    });
   }
 
   // ── 읽기 ──────────────────────────────────────────────────────────────
@@ -1176,7 +1309,9 @@ export class Tensor implements Node<Tensor> {
 
   async item(): Promise<number> {
     if (this.size !== 1) {
-      throw new Error(`item 은 원소 하나짜리에서만이다: [${this.shape}]`);
+      throw new RuntimeError(
+        `a Tensor with ${this.size} elements ${TORCH.itemScalar}`,
+      );
     }
     const arr = await this.toArray();
     return arr[0] ?? Number.NaN;

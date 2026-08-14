@@ -684,8 +684,11 @@ export interface AxisRule {
   readonly size: number;
   /** 입력에서의 걸음. **0 이면 늘린 축이다** — 복제하지 않고 같은 값을 다시 읽는다. */
   readonly stride: number;
-  /** `lin` 은 그대로, `mod` 는 되돌아가고(repeat), `rev` 는 거꾸로(flip). */
-  readonly kind: "lin" | "mod" | "rev";
+  /**
+   * `lin` 은 그대로, `mod` 는 되돌아가고(repeat), `rev` 는 거꾸로(flip),
+   * `div` 는 같은 자리에 머무른다(repeat_interleave).
+   */
+  readonly kind: "lin" | "mod" | "rev" | "div";
   /** `mod`·`rev` 의 주기. 보통 입력 축의 크기다. */
   readonly wrap: number;
   /** `mod` 에 더해지는 자리이동. `roll` 이 쓴다 — `repeat` 은 0 이다. */
@@ -698,6 +701,8 @@ function ruleCoord(r: AxisRule, c: string): string {
     return bias === 0 ? `(${c} % ${r.wrap}u)` : `((${c} + ${bias}u) % ${r.wrap}u)`;
   }
   if (r.kind === "rev") return `(${r.wrap - 1}u - ${c})`;
+  // `wrap` 이 되풀이 횟수다. `[a,b]` 를 2 번씩이면 `[a,a,b,b]` 가 된다.
+  if (r.kind === "div") return `(${c} / ${r.wrap}u)`;
   return c;
 }
 
@@ -953,6 +958,156 @@ ${flatId(n)}
   let i = rest % ${inner}u;
   let want = u32(I[gid]);
   Out[gid] = A[o * ${axis * inner}u + want * ${inner}u + i];
+}`;
+}
+
+/**
+ * `prod` 의 역방향.
+ *
+ * **`out / x` 로 안 쓴다.** 그 식은 x 에 0 이 하나만 있어도 무너진다 — 0 인 자리에서
+ * 0/0 이 되고, 나머지 자리에서는 out 이 0 이라 전부 0 이 된다. torch 는 그 축의
+ * 다른 값들의 곱을 준다.
+ *
+ * 자기를 뺀 나머지를 그때그때 곱한다. 축 길이만큼 도는 값이고, 나눗셈이 없으니
+ * 0 이 섞여도 맞는다.
+ */
+export function prodBackward(outer: number, red: number, inner: number): string {
+  const n = outer * red * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${red * inner}u;
+  let rest = gid % ${red * inner}u;
+  let r = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  let base = o * ${red * inner}u + i;
+  var others = 1.0;
+  for (var t = 0u; t < ${red}u; t = t + 1u) {
+    if (t != r) { others = others * A[base + t * ${inner}u]; }
+  }
+  Out[gid] = G[o * ${inner}u + i] * others;
+}`;
+}
+
+/**
+ * `cumprod` 의 역방향.
+ *
+ * `out[j]` 는 `A[0..j]` 의 곱이므로, `A[k]` 는 `j >= k` 인 모든 출력에 기여한다.
+ * 그 기여가 **자기를 뺀 나머지의 곱**이라 여기도 나눗셈이 없다 — 0 이 섞여도 맞는다.
+ *
+ * 비용이 축 길이의 세제곱이다. 짧은 축에서만 쓸 것이고, 길어지면 접두·접미 곱을
+ * 미리 들어야 한다. 지금 그것을 요구하는 자리가 없어서 안 한다.
+ */
+export function cumprodBackward(outer: number, len: number, inner: number): string {
+  const n = outer * len * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${len * inner}u;
+  let rest = gid % ${len * inner}u;
+  let k = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  let base = o * ${len * inner}u + i;
+  var acc = 0.0;
+  for (var j = k; j < ${len}u; j = j + 1u) {
+    var others = 1.0;
+    for (var t = 0u; t <= j; t = t + 1u) {
+      if (t != k) { others = others * A[base + t * ${inner}u]; }
+    }
+    acc = acc + G[base + j * ${inner}u] * others;
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * `gather(dim, index)` 의 역방향 — 읽어간 자리로 도로 모은다.
+ *
+ * 같은 자리를 여러 번 읽었으면 그만큼 쌓인다. 입력 자리마다 출력을 오름차순으로
+ * 훑으므로 원자 연산이 없고, 두 번 돌리면 같은 값이다. 비용은 입력 × 출력이다.
+ */
+export function gatherIndexBackward(
+  outer: number,
+  axis: number,
+  inner: number,
+  outAxis: number,
+): string {
+  const inN = outer * axis * inner;
+  const outN = outer * outAxis * inner;
+  return `
+@group(0) @binding(0) var<storage, read> I: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(inN)}
+  var acc = 0.0;
+  for (var t = 0u; t < ${outN}u; t = t + 1u) {
+    let o = t / ${outAxis * inner}u;
+    let rest = t % ${outAxis * inner}u;
+    let i = rest % ${inner}u;
+    let src = o * ${axis * inner}u + u32(I[t]) * ${inner}u + i;
+    if (src == gid) { acc = acc + G[t]; }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/** `index_select` — 축 하나를 색인 **벡터**가 고른다. 색인이 자리마다 다르지 않다. */
+export function indexSelect(
+  outer: number,
+  axis: number,
+  inner: number,
+  count: number,
+): string {
+  const n = outer * count * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> I: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${count * inner}u;
+  let rest = gid % ${count * inner}u;
+  let k = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  Out[gid] = A[o * ${axis * inner}u + u32(I[k]) * ${inner}u + i];
+}`;
+}
+
+/** `index_select` 의 역방향. 같은 자리를 여러 번 골랐으면 쌓인다. */
+export function indexSelectBackward(
+  outer: number,
+  axis: number,
+  inner: number,
+  count: number,
+): string {
+  const inN = outer * axis * inner;
+  return `
+@group(0) @binding(0) var<storage, read> I: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(inN)}
+  let o = gid / ${axis * inner}u;
+  let rest = gid % ${axis * inner}u;
+  let r = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  var acc = 0.0;
+  for (var k = 0u; k < ${count}u; k = k + 1u) {
+    if (u32(I[k]) == r) { acc = acc + G[o * ${count * inner}u + k * ${inner}u + i]; }
+  }
+  Out[gid] = acc;
 }`;
 }
 
