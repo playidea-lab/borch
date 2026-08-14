@@ -19,7 +19,7 @@
  * 값이 갈리면 대조가 대조가 아니게 되므로, 옮길 때 그대로 옮겼다.
  */
 
-import { Tensor } from "../src/tensor.js";
+import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
  * 케이스 하나.
@@ -312,7 +312,155 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addError(out);
   addWide(out, inputs);
   addGrad(out, inputs);
+  addInplace(out);
+  addLinalg(out);
   return out;
+}
+
+/**
+ * 선형대수. **CPU 를 한 번 왕복하므로 전부 비동기다.**
+ *
+ * 기울기는 닫힌 꼴이 있는 것만 있다. `qr`·`svd`·`pinverse`·`lstsq` 는 값만 준다 —
+ * torch 는 미분하는데 우리는 안 한다. 유도가 까다롭고 틀리면 조용히 틀리므로,
+ * 없는 것을 시끄럽게 둔다.
+ */
+function addLinalg(out: Map<string, Case>): void {
+  const mat = (g = false) => Tensor.from([4, 1, 2, 3], [2, 2], g);
+  const sym = (g = false) => Tensor.from([4, 1, 1, 3], [2, 2], g); // 대칭 양정부호
+  const vec = (g = false) => Tensor.from([1, 2], [2], g);
+
+  const value: [string, () => Promise<Tensor>][] = [
+    ["det", async () => mat().det()],
+    ["logdet", async () => sym().logdet()],
+    ["slogdet/부호", async () => (await mat().slogdet()).sign],
+    ["slogdet/로그", async () => (await mat().slogdet()).logabs],
+    ["inverse", async () => mat().inverse()],
+    ["pinverse", async () => mat().pinverse()],
+    ["matrix_power", async () => mat().matrixPower(3)],
+    ["matrix_power(음수)", async () => mat().inverse()],
+    ["cholesky", async () => sym().cholesky()],
+    ["solve", async () => mat().solve(vec())],
+    ["matrix_rank", async () => mat().matrixRank()],
+    ["lstsq", async () => mat().lstsq(vec())],
+    ["eigh/고윳값", async () => (await sym().eigh()).values],
+    ["linalg.det", async () => mat().det()],
+    ["linalg.inv", async () => mat().inverse()],
+    ["qr/R", async () => (await mat().qr()).r],
+    // **부호 규약이 구현마다 다르다.** 열 부호를 뒤집어도 같은 분해라 절댓값으로 묻는다.
+    ["qr/|Q|", async () => (await mat().qr()).q.abs()],
+    ["svd/|U|", async () => (await mat().svd()).u.abs()],
+    ["svd/S", async () => (await mat().svd()).s],
+    ["svd/|Vh|", async () => (await mat().svd()).vt.abs()],
+  ];
+  for (const [name, fn] of value) out.set(`linalg::${name}`, fn);
+
+  const grads: [string, (g: boolean) => Tensor, (x: Tensor) => Promise<Tensor>][] = [
+    ["det", mat, async (x) => x.det()],
+    ["logdet", sym, async (x) => x.logdet()],
+    ["slogdet", mat, async (x) => (await x.slogdet()).logabs],
+    ["inverse", mat, async (x) => x.inverse()],
+    ["cholesky", sym, async (x) => x.cholesky()],
+    ["matrix_power", mat, async (x) => x.matrixPower(3)],
+  ];
+  for (const [name, src, fn] of grads) {
+    out.set(`linalg::grad::${name}`, async () => {
+      const x = src(true);
+      seeded(await fn(x)).backward();
+      return gradOf(x, name);
+    });
+  }
+
+  for (const [which, tag] of ["a", "b"].entries()) {
+    out.set(`linalg::grad::solve/${tag}`, async () => {
+      const a = mat(true);
+      const b = vec(true);
+      const res = await a.solve(b);
+      res.mul(Tensor.from([1, 2], [2])).sum().backward();
+      const leaf = which === 0 ? a : b;
+      return gradOf(leaf, `solve/${tag}`);
+    });
+  }
+}
+
+/** `tests/cases.py` 의 inplace_cases 가 쓰는 입력. */
+const IP_PLAIN = [1.0, 4.0, 9.0, 2.0];
+const IP_SMALL = [0.5, 0.8, 0.3, 0.9]; // 정의역이 좁은 것들용
+
+/** 정의역이 좁아 `small` 을 받아야 하는 것들. */
+const IP_NARROW = new Set(["log", "log2", "log10", "sqrt", "rsqrt", "log1p"]);
+
+/**
+ * 제자리 연산.
+ *
+ * **되돌려받은 것이 아니라 원본을 본다** — 새 텐서를 만들어 돌려주면 제자리가 아니고,
+ * 그래도 반환값만 보는 검사는 통과한다.
+ */
+function addInplace(out: Map<string, Case>): void {
+  const each = (name: string, fn: (x: Tensor) => unknown, src = IP_PLAIN) => {
+    out.set(`inplace::${name}`, () => {
+      const x = Tensor.from(src, [src.length]);
+      fn(x);
+      return x;
+    });
+  };
+
+  each("add_", (x) => x.add_(1));
+  each("add_(alpha)", (x) => x.add_(1, 2));
+  each("sub_", (x) => x.sub_(1));
+  each("mul_", (x) => x.mul_(2));
+  each("div_", (x) => x.div_(2));
+  each("pow_", (x) => x.pow_(2));
+  each("neg_", (x) => x.inplaceUnary("neg"));
+  each("zero_", (x) => x.zero_());
+  each("fill_", (x) => x.fill_(7));
+  each("clamp_", (x) => x.clamp_(2, 5));
+  each("clip_", (x) => x.clip_(2, 5));
+  // **이어 부르기가 진짜 시험이다.** 돌려준 것이 자기 자신이어야 이어진다.
+  each("이어 부르기", (x) => x.mul_(2).add_(1).clamp_(0, 10));
+
+  for (const name of ["abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh",
+    "sigmoid", "relu", "erf", "floor", "ceil", "round", "sign", "reciprocal",
+    "square", "trunc", "frac", "neg", "rsqrt", "log2", "log10", "expm1",
+    "log1p", "sinh", "cosh"]) {
+    each(`${name}_`, (x) => x.inplaceUnary(name),
+      IP_NARROW.has(name) ? IP_SMALL : IP_PLAIN);
+  }
+
+  /**
+   * **자매만 거절하는 자리다.**
+   *
+   * 골든이 값을 안 묻고 "문서에 적은 대로 굴었는가" 를 묻는다 — torch 는 성공이
+   * 정답이고 자매는 거절이 정답이라, 값으로 물으면 영원히 갈린 채로 남기 때문이다.
+   * borch.ts 는 자매가 아니다. 버퍼를 같이 쓰므로 번지고, 그래서 우리 답은 torch 와
+   * 같은 "기대대로" 다.
+   */
+  out.set("inplace::뷰 전파=자매는거절", () => {
+    try {
+      const a = Tensor.arange(4);
+      a.view(2, 2).add_(10);
+    } catch (err) {
+      return `뜻밖의 거절 <${err instanceof Error ? err.constructor.name : "?"}>`;
+    }
+    return "기대대로";
+  });
+
+  // 기울기가 켜진 잎은 셋 다 거절한다.
+  out.set("inplace::잎 제자리 수정=거절", () => {
+    const x = Tensor.from(IP_PLAIN, [4], true);
+    try {
+      x.add_(1);
+    } catch {
+      return "기대대로 거절";
+    }
+    return "뜻밖의 성공";
+  });
+
+  // `no_grad` 안에서는 잎도 고칠 수 있다 — 옵티마이저가 실제로 그렇게 한다.
+  out.set("inplace::no_grad 안에서는 된다", () => {
+    const x = Tensor.from(IP_PLAIN, [4], true);
+    noGrad(() => x.add_(1));
+    return x;
+  });
 }
 
 /**

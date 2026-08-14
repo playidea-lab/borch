@@ -226,6 +226,19 @@ export class Device {
     return copy;
   }
 
+  /**
+   * 버퍼 하나를 다른 버퍼에 덮어쓴다. 제자리 연산이 쓴다.
+   *
+   * 커널이 아니라 복사다 — 결과를 새 버퍼에 만든 뒤 원래 자리로 옮긴다. 원래
+   * 버퍼를 읽으면서 같이 쓰면 스레드끼리 순서가 없어 값이 섞인다.
+   */
+  copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
+    const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
+    const encoder = this.device.createCommandEncoder();
+    encoder.copyBufferToBuffer(src, 0, dst, 0, bytes);
+    this.device.queue.submit([encoder.finish()]);
+  }
+
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
     let free = this.stagingFree.get(bytes);

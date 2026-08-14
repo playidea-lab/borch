@@ -9,6 +9,7 @@
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
 import { RuntimeError, TORCH } from "./errors.js";
+import * as LA from "./linalg.js";
 import {
   argReduce,
   type AxisRule,
@@ -236,6 +237,13 @@ export class Tensor implements Node<Tensor> {
     const data = new Float32Array(n * n);
     for (let i = 0; i < n; i++) data[i * n + i] = 1;
     return Tensor.from(data, [n, n]);
+  }
+
+  /** `0` 부터 `n-1` 까지. */
+  static arange(n: number): Tensor {
+    const data = new Float32Array(n);
+    for (let i = 0; i < n; i++) data[i] = i;
+    return Tensor.from(data, [n]);
   }
 
   /** 양끝을 포함해 고르게 나눈 값들. */
@@ -1539,6 +1547,253 @@ export class Tensor implements Node<Tensor> {
     return near.where(isNear, far).mean();
   }
 
+  // ── 선형대수 ──────────────────────────────────────────────────────────
+
+  /**
+   * CPU 로 읽어 와 정사각 행렬로 본다. 선형대수가 전부 여기를 지난다.
+   *
+   * **왕복이 생긴다.** 그래도 그렇게 하는 이유는 `src/linalg.ts` 에 적었다 —
+   * 분해는 순차적이라 GPU 로 펼 자리가 거의 없고, 여기서 미는 크기에서는 커널을
+   * 띄우는 값이 계산보다 비싸다.
+   */
+  private async asSquare(): Promise<{ a: LA.Mat; n: number }> {
+    if (this.shape.length !== 2 || this.shape[0] !== this.shape[1]) {
+      throw new RuntimeError(
+        `linalg: 정사각 행렬이어야 한다 — 지금은 [${this.shape}] 다`,
+      );
+    }
+    return { a: LA.fromF32(await this.toArray()), n: this.shape[0] ?? 0 };
+  }
+
+  /** CPU 에서 만든 값을 다시 GPU 로. */
+  private static fromMat(a: LA.Mat, shape: readonly number[]): Tensor {
+    return Tensor.from(LA.toF32(a), shape);
+  }
+
+  /** 행렬식. 역방향은 `det·A⁻ᵀ` 다. */
+  async det(): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    const f = LA.lu(a, n);
+    const value = LA.det(f);
+    const invT = LA.transpose(LA.inverse(a, n), n, n);
+    return this.linalgNode(Tensor.from([value], []), (g) =>
+      Tensor.fromMat(invT, [n, n]).mul(g.mul(Tensor.from([value], []))), "DetBackward0");
+  }
+
+  /** `log|det|`. 역방향은 `A⁻ᵀ` — 행렬식이 곱해지지 않아 더 안정적이다. */
+  async logdet(): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    const { logabs } = LA.slogdet(LA.lu(a, n));
+    const invT = LA.transpose(LA.inverse(a, n), n, n);
+    return this.linalgNode(Tensor.from([logabs], []), (g) =>
+      Tensor.fromMat(invT, [n, n]).mul(g), "LogdetBackward0");
+  }
+
+  /** 부호와 로그 절댓값을 따로. 행렬식이 아주 작아도 자릿수가 안 날아간다. */
+  async slogdet(): Promise<{ sign: Tensor; logabs: Tensor }> {
+    const { a, n } = await this.asSquare();
+    const { sign, logabs } = LA.slogdet(LA.lu(a, n));
+    const invT = LA.transpose(LA.inverse(a, n), n, n);
+    return {
+      // 부호는 계단이라 안 흐른다.
+      sign: Tensor.from([sign], []),
+      logabs: this.linalgNode(Tensor.from([logabs], []), (g) =>
+        Tensor.fromMat(invT, [n, n]).mul(g), "SlogdetBackward0"),
+    };
+  }
+
+  /** 역행렬. 역방향은 `-A⁻ᵀ·Ḡ·A⁻ᵀ` 다. */
+  async inverse(): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    const inv = LA.inverse(a, n);
+    const invT = LA.transpose(inv, n, n);
+    return this.linalgNode(Tensor.fromMat(inv, [n, n]), (g) => {
+      const t = Tensor.fromMat(invT, [n, n]);
+      return t.mm(g).mm(t).neg();
+    }, "InverseBackward0");
+  }
+
+  /** 유사역행렬. 값만 낸다 — 역방향 유도가 까다롭고 틀리면 조용히 틀린다. */
+  async pinverse(): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    return Tensor.fromMat(LA.pinverse(a, n), [n, n]);
+  }
+
+  /**
+   * 아래 삼각 콜레스키. 대칭 양정부호가 아니면 던진다.
+   *
+   * **역방향을 GPU 에서 쓴다.** 식은 `Ā = sym(L⁻ᵀ·Φ(Lᵀ·L̄)·L⁻¹)` 이고 `Φ` 는 아래
+   * 삼각을 취하되 대각을 반으로 줄이는 것인데, 전부 행렬 연산이라 이미 있는 커널로
+   * 적힌다. `L` 과 `L⁻¹` 만 순방향에서 CPU 로 구해 상수로 들고 온다 — 역방향 안에서는
+   * GPU 를 기다릴 수가 없으므로 그 값이 미리 있어야 한다.
+   */
+  async cholesky(): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    const l = LA.cholesky(a, n);
+    const linv = LA.inverse(l, n);
+    const lt = Tensor.fromMat(LA.transpose(l, n, n), [n, n]);
+    const linvT = Tensor.fromMat(LA.transpose(linv, n, n), [n, n]);
+    const linvC = Tensor.fromMat(linv, [n, n]);
+    const eye = Tensor.eye(n);
+    return this.linalgNode(Tensor.fromMat(l, [n, n]), (g) => {
+      const m = lt.mm(g);
+      // Φ — 아래 삼각을 남기고 대각만 반으로.
+      const p = m.tril().sub(m.mul(eye).binary("mul", Tensor.full([], 0.5)));
+      const abar = linvT.mm(p).mm(linvC);
+      // A 가 대칭이라 위·아래 삼각이 같은 자유도를 나눠 갖는다 — 대칭화가 그 몫이다.
+      return abar.add(abar.transpose()).binary("mul", Tensor.full([], 0.5));
+    }, "CholeskyBackward0");
+  }
+
+  /** `A x = b`. 역방향은 `b` 로는 `A⁻ᵀ·Ḡ`, `A` 로는 `-A⁻ᵀ·Ḡ·xᵀ` 다. */
+  async solve(b: Tensor): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    const cols = b.shape.length === 1 ? 1 : (b.shape[1] ?? 1);
+    const rhs = LA.fromF32(await b.toArray());
+    const x = LA.solve(LA.lu(a, n), rhs, cols);
+    const invT = LA.transpose(LA.inverse(a, n), n, n);
+    const out = Tensor.fromMat(x, b.shape);
+    const shape = this.shape;
+    return Tensor.make(
+      out.buffer,
+      b.shape,
+      [this, b],
+      (g) => {
+        const at = Tensor.fromMat(invT, [n, n]);
+        const gb = at.mm(g.reshape([n, cols]));
+        const ga = gb.mm(Tensor.fromMat(x, [n, cols]).transpose()).neg();
+        return [
+          this.requiresGrad ? ga.reshape(shape) : null,
+          b.requiresGrad ? gb.reshape(b.shape) : null,
+        ];
+      },
+      "SolveBackward0",
+    );
+  }
+
+  /** QR 분해. 값만 낸다. */
+  async qr(): Promise<{ q: Tensor; r: Tensor }> {
+    const { a, n } = await this.asSquare();
+    const { q, r } = LA.qr(a, n, n);
+    return { q: Tensor.fromMat(q, [n, n]), r: Tensor.fromMat(r, [n, n]) };
+  }
+
+  /** 특이값 분해. 값만 낸다. */
+  async svd(): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
+    const { a, n } = await this.asSquare();
+    const { u, s, vt } = LA.svd(a, n);
+    return {
+      u: Tensor.fromMat(u, [n, n]),
+      s: Tensor.from(LA.toF32(s), [n]),
+      vt: Tensor.fromMat(vt, [n, n]),
+    };
+  }
+
+  /** 대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다. */
+  async eigh(): Promise<{ values: Tensor; vectors: Tensor }> {
+    const { a, n } = await this.asSquare();
+    const { values, vectors } = LA.eigh(a, n);
+    return {
+      values: Tensor.from(LA.toF32(values), [n]),
+      vectors: Tensor.fromMat(vectors, [n, n]),
+    };
+  }
+
+  async matrixRank(): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    return Tensor.from([LA.matrixRank(a, n)], []);
+  }
+
+  /** 최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다. */
+  async lstsq(b: Tensor): Promise<Tensor> {
+    const { a, n } = await this.asSquare();
+    const cols = b.shape.length === 1 ? 1 : (b.shape[1] ?? 1);
+    const rhs = LA.fromF32(await b.toArray());
+    return Tensor.fromMat(LA.matmul(LA.pinverse(a, n), rhs, n, n, cols), b.shape);
+  }
+
+  /** 값은 CPU 에서 이미 나왔고, 여기서는 그래프만 잇는다. */
+  private linalgNode(
+    value: Tensor,
+    backwardFn: (g: Tensor) => Tensor,
+    gradName: string,
+  ): Tensor {
+    return Tensor.make(value.buffer, value.shape, [this],
+      (g) => [backwardFn(g)], gradName);
+  }
+
+  // ── 제자리 연산 ───────────────────────────────────────────────────────
+
+  /**
+   * 제자리 연산의 공통 관문.
+   *
+   * **기울기가 켜진 잎은 거절한다.** torch 가 그렇고, 이유가 있다 — 잎의 값이 바뀌면
+   * 이미 그 값을 쓴 역방향이 틀린 수를 쓰게 되는데 아무도 알 수가 없다. 옵티마이저가
+   * 실제로 가중치를 제자리에서 고치는데, 그것은 `no_grad` 안이라 여기를 안 지난다.
+   *
+   * 결과를 새 버퍼에 만든 뒤 옮긴다. 읽으면서 같이 쓰면 스레드 순서가 없어 섞인다.
+   *
+   * **뷰로 번진다.** `reshape` 계열이 버퍼를 같이 쓰므로 `a.view(2,2).add_(10)` 이
+   * `a` 까지 바꾼다 — torch 와 같다. 자매는 TF.js 텐서가 불변이라 그것을 거절한다.
+   */
+  private mutate(compute: () => Tensor): Tensor {
+    if (gradMode.enabled && this.requiresGrad && this.parents.length === 0) {
+      throw new RuntimeError(
+        "a leaf Variable that requires grad is being used in an in-place operation.",
+      );
+    }
+    const result = compute();
+    dev().copyInto(this.buffer, result.buffer, this.size);
+    return this;
+  }
+
+  add_(other: number, alpha = 1): Tensor {
+    return this.mutate(() => this.binary("add", Tensor.full([], other * alpha)));
+  }
+
+  sub_(other: number, alpha = 1): Tensor {
+    return this.mutate(() => this.binary("sub", Tensor.full([], other * alpha)));
+  }
+
+  mul_(other: number): Tensor {
+    return this.mutate(() => this.binary("mul", Tensor.full([], other)));
+  }
+
+  div_(other: number): Tensor {
+    return this.mutate(() => this.binary("div", Tensor.full([], other)));
+  }
+
+  pow_(k: number): Tensor {
+    return this.mutate(() => this.powScalar(k));
+  }
+
+  zero_(): Tensor {
+    return this.mutate(() => Tensor.zeros(this.shape));
+  }
+
+  fill_(value: number): Tensor {
+    return this.mutate(() => Tensor.full(this.shape, value));
+  }
+
+  clamp_(low: number, high: number): Tensor {
+    return this.mutate(() => this.clamp(low, high));
+  }
+
+  /** `clamp_` 와 같다 — torch 가 이름을 둘 다 갖는다. */
+  clip_(low: number, high: number): Tensor {
+    return this.clamp_(low, high);
+  }
+
+  /** 표의 단항을 제자리로. `abs_` 같은 이름들이 이리로 온다. */
+  inplaceUnary(name: string): Tensor {
+    return this.mutate(() => this.unary(name));
+  }
+
+  /** 같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다. */
+  view(...shape: number[]): Tensor {
+    return this.reshape(shape);
+  }
+
   // ── 정렬 계열 ─────────────────────────────────────────────────────────
 
   /**
@@ -1965,11 +2220,23 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 }`;
 }
 
-/** 표에 있는 단항을 전부 메서드로 단다. 이름을 두 번 적지 않는다. */
+/**
+ * 표에 있는 단항을 전부 메서드로 단다. 이름을 두 번 적지 않는다.
+ *
+ * 제자리 판(`abs_` 처럼 밑줄이 붙은 것)도 같이 단다 — 스물일곱 개를 손으로 적으면
+ * 그중 하나가 다른 연산을 부르는 날이 온다.
+ */
 for (const name of Object.keys(UNARY)) {
   Object.defineProperty(Tensor.prototype, name, {
     value: function (this: Tensor): Tensor {
       return this.unary(name);
+    },
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(Tensor.prototype, `${name}_`, {
+    value: function (this: Tensor): Tensor {
+      return this.inplaceUnary(name);
     },
     writable: true,
     configurable: true,
