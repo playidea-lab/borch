@@ -115,7 +115,10 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
   log10: { fwd: "log(x) * 0.4342944819032518", bwd: "0.4342944819032518 / x" },
   expm1: { fwd: "exp(x) - 1.0", bwd: "o + 1.0" },
   log1p: { fwd: "log(1.0 + x)", bwd: "1.0 / (1.0 + x)" },
-  relu: { fwd: "max(x, 0.0)", bwd: "step(0.0, x)" },
+  // **0 에서 안 흘린다.** `step(0.0, x)` 는 `x >= 0` 이라 정확히 0 인 자리에서 1 을
+  // 주는데 torch 는 0 을 준다. 골든의 relu 케이스는 입력에 0 이 없어 이것을 못 봤고,
+  // ResNet 을 진짜 torch 와 맞춰보다 드러났다.
+  relu: { fwd: "max(x, 0.0)", bwd: "select(0.0, 1.0, x > 0.0)" },
   sigmoid: { fwd: "1.0 / (1.0 + exp(-x))", bwd: "o * (1.0 - o)" },
   // 계단 — 0 을 흘린다. torch 가 그렇다.
   sign: { fwd: "sign(x)", bwd: "0.0" },

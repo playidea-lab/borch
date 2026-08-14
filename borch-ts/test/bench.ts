@@ -17,7 +17,7 @@ import { device, keepAlive, noGrad, scope, Tensor } from "../src/tensor.js";
 const CIFAR_TRAIN_IMAGES = 50000;
 
 /** ResNet 의 기본 블록. 지름길이 모양을 바꿔야 할 때만 1×1 을 둔다. */
-class Block extends nn.Module {
+export class Block extends nn.Module {
   private readonly conv1: nn.Conv2d;
   private readonly bn1: nn.BatchNormND;
   private readonly conv2: nn.Conv2d;
@@ -288,3 +288,113 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
 
 /** 구역을 밖에서도 쓸 수 있게 — 러너가 전체를 한 겹 더 감싼다. */
 export { scope };
+
+/**
+ * 조각을 하나씩 떼어 **자리마다 다른 가중치로** 역전파해 본다.
+ *
+ * 전체 모델만 견주면 갈렸을 때 어디인지 모른다. 그리고 그냥 `sum()` 으로 접으면
+ * 상류 기울기가 전부 1 이라 **BatchNorm 역방향의 보정항 둘이 정확히 상쇄된다** —
+ * 골든의 `grad::BatchNorm2d/x` 가 기대값 4.7e-10 인 이유가 그것이고, 그래서 그
+ * 케이스는 보정항을 하나도 안 물어본다.
+ */
+export async function dumpPieces(): Promise<Record<string, {
+  params: number[][];
+  shapes: number[][];
+  input: number[];
+  inputShape: number[];
+  output: number[];
+  inputGrad: number[];
+  paramGrads: (number[] | null)[];
+}>> {
+  const pieces: Record<string, () => { mod: nn.Module; shape: number[] }> = {
+    bn: () => ({ mod: new nn.BatchNormND(3), shape: [2, 3, 4, 4] }),
+    avgpool: () => ({ mod: new AvgPoolTo1(), shape: [2, 3, 4, 4] }),
+    relu: () => ({ mod: new nn.ReLU(), shape: [2, 3, 4, 4] }),
+    conv: () => ({ mod: new nn.Conv2d(3, 4, 3, 1, 1, false), shape: [2, 3, 4, 4] }),
+    block: () => ({ mod: new Block(3, 3, 1), shape: [2, 3, 4, 4] }),
+    blockDown: () => ({ mod: new Block(3, 6, 2), shape: [2, 3, 8, 8] }),
+  };
+  const out: Record<string, {
+    params: number[][]; shapes: number[][]; input: number[]; inputShape: number[];
+    output: number[]; inputGrad: number[]; paramGrads: (number[] | null)[];
+  }> = {};
+  for (const [name, build] of Object.entries(pieces)) {
+    const { mod, shape } = build();
+    const n = shape.reduce((a, b) => a * b, 1);
+    const data = new Float32Array(n);
+    for (let i = 0; i < n; i++) data[i] = Math.sin(i * 0.31) * 0.7;
+    const x = keepAlive(Tensor.from(data, shape, true));
+    const y = mod.forward(x);
+    // **자리마다 다른 가중치.** 전부 1 이면 보정항이 상쇄되어 아무것도 안 묻는다.
+    const w = new Float32Array(y.size);
+    for (let i = 0; i < w.length; i++) w[i] = ((i % 7) + 1) * 0.3;
+    y.mul(Tensor.from(w, y.shape)).sum().backward();
+    const grad = x.grad;
+    if (!grad) throw new Error(`${name}: 입력 기울기가 안 왔다`);
+    const params = mod.parameters();
+    out[name] = {
+      params: await Promise.all(params.map(async (p) => [...await p.toArray()])),
+      shapes: params.map((p) => [...p.shape]),
+      input: [...data],
+      inputShape: shape,
+      output: [...await y.toArray()],
+      inputGrad: [...await grad.toArray()],
+      paramGrads: await Promise.all(params.map(async (p) =>
+        p.grad ? [...await p.grad.toArray()] : null)),
+    };
+  }
+  return out;
+}
+
+/** 비교용 껍데기 — 파이썬 쪽 `AdaptiveAvgPool2d(1)` 과 짝이다. */
+class AvgPoolTo1 extends nn.Module {
+  override forward(x: Tensor): Tensor {
+    return x.adaptiveAvgPool(1);
+  }
+}
+
+/**
+ * 이 ResNet-18 이 **파이썬 쪽 것과 같은 모델인지** 확인할 재료를 낸다.
+ *
+ * 벤치의 모델은 `tests/browser/bench.py` 를 눈으로 읽어 옮긴 것이라 골든 밖에 있다.
+ * 블록 구성이나 BN 자리가 미묘하게 다르면 속도도 정확도도 **다른 모델끼리 비교한
+ * 것**이 되는데, 그 갈림은 값으로만 보인다.
+ *
+ * 파라미터를 **순서대로** 내보낸다. 구조가 같으면 모양 목록이 정확히 같고, 다르면
+ * 거기서 먼저 갈린다 — 이름 짓는 규칙이 두 언어에서 다르므로 자리로 맞춘다.
+ */
+export async function dumpForComparison(batch = 2): Promise<{
+  shapes: number[][];
+  params: number[][];
+  input: number[];
+  output: number[];
+  loss: number;
+  inputGrad: number[];
+}> {
+  const model = new ResNet18();
+  const params = model.parameters();
+  // 입력도 라벨도 못 박는다 — 두 쪽이 같은 수를 봐야 비교다.
+  const pixels = new Float32Array(batch * 3 * 32 * 32);
+  for (let i = 0; i < pixels.length; i++) {
+    pixels[i] = Math.sin(i * 0.017) * 0.5;
+  }
+  const labels = new Float32Array(batch);
+  for (let i = 0; i < batch; i++) labels[i] = i % 10;
+
+  const x = keepAlive(Tensor.from(pixels, [batch, 3, 32, 32], true));
+  const y = keepAlive(Tensor.from(labels, [batch], false, "int64"));
+  const out = model.forward(x);
+  const loss = new nn.CrossEntropyLoss().forward(out, y);
+  loss.backward();
+
+  const grad = x.grad;
+  if (!grad) throw new Error("입력 기울기가 안 왔다 — 그래프가 끊겼다");
+  return {
+    shapes: params.map((p) => [...p.shape]),
+    params: await Promise.all(params.map(async (p) => [...await p.toArray()])),
+    input: [...pixels],
+    output: [...await out.toArray()],
+    loss: await loss.item(),
+    inputGrad: [...await grad.toArray()],
+  };
+}
