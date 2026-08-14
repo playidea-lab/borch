@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    // WebGPU 타입은 아직 TypeScript 의 기본 DOM 라이브러리에 없다. W3C 사양에서
+    // 생성된 타입 전용 패키지이며, 손으로 옮겨 적으면 그 자체가 틀릴 자리가 된다.
+    "types": ["@webgpu/types"],
+    "outDir": "dist",
+    "rootDir": ".",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "declaration": true,
+    "sourceMap": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  borch.ts 골든 러너.
+
+  저장소 루트에서 정적 서버를 띄우고 /borch-ts/test/ 를 연다. 예:
+      python3 -m http.server 8000
+  실행 결과는 화면과 콘솔 양쪽으로 나가고, `window.__borchReport` 에도 남는다 —
+  Playwright 같은 자동 러너가 그것을 읽으면 된다.
+-->
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>borch.ts — 골든 대조</title>
+  <style>
+    body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+           margin: 2rem; max-width: 60rem; }
+    pre { white-space: pre-wrap; }
+    .fail { color: #b00020; }
+    .ok { color: #0a7b34; }
+  </style>
+</head>
+<body>
+  <h1>borch.ts — 골든 대조</h1>
+  <pre id="out">돌리는 중…</pre>
+  <script type="module">
+    // dist 는 `npm run build:ts` 가 만든다. 소스가 아니라 방출물을 부른다 —
+    // 브라우저는 TypeScript 를 그대로 못 읽는다.
+    import { run, format } from "../dist/test/golden.js";
+
+    const out = document.getElementById("out");
+    // 경로만 상대로 준다. 호스트를 박으면 어디서 서빙하든 한 군데만 맞는다.
+    const GOLDEN = "../../tests/golden.json";
+
+    try {
+      const report = await run(GOLDEN);
+      window.__borchReport = report;
+      out.textContent = format(report);
+      out.className = report.failed.length === 0 && report.unknown.length === 0
+        ? "ok" : "fail";
+    } catch (err) {
+      // 실패를 조용히 넘기지 않는다 — 안 돈 것과 통과한 것은 다르다.
+      window.__borchReport = { error: String(err) };
+      out.textContent = `돌지 못했다: ${err && err.stack ? err.stack : err}`;
+      out.className = "fail";
+    }
+  </script>
+</body>
+</html>
