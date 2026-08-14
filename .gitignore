@@ -10,6 +10,11 @@ dist/
 .claude/
 .mcp.json
 
+# typescript 하나뿐이지만 그 의존 트리가 통째로 들어온다. **package-lock.json 은
+# 커밋한다** — 무엇이 이 기계에 들어왔는지가 저장소에 남아야 한다.
+node_modules/
+borch-ts/dist/
+
 # 골든은 생성물이다 — 1단계(네이티브 + torch)가 굳히고 2단계가 읽는다.
 tests/golden.npz
 #

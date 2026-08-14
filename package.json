@@ -6,6 +6,17 @@
   "main": "browsertorch.py",
   "files": ["browsertorch.py", "README.md", "LICENSE"],
   "scripts": {
-    "test": "uv run --with pytest --with numpy --with torch --quiet pytest tests/ -q"
+    "test": "uv run --with pytest --with numpy --with torch --quiet pytest tests/ -q",
+    "build:ts": "tsc -p borch-ts/tsconfig.json",
+    "check:ts": "tsc -p borch-ts/tsconfig.json --noEmit"
+  },
+  "//": [
+    "borch.ts 는 borch-ts/ 아래에 있고 설계는 BORCH-TS.md 에 있다.",
+    "빌드를 스크립트로 걸어두는 이유: `npx tsc` 로 이름만 불러 받아 쓰면 무엇을 돌렸는지가",
+    "저장소에 안 남는다. 여기 적어두면 남는다.",
+    "받는 것은 typescript 하나다 — 다른 것이 필요해지면 그때 적는다."
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.0"
   }
 }
