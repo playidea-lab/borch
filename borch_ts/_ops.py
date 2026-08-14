@@ -145,6 +145,16 @@ def positional(name, args, kw):
     return [_arg(a) for a in out]
 
 
+# borch.ts 에서 **이항 표에만 있는 것들.** 메서드로는 안 달려 있고
+# `x.binary("maximum", y)` 로 부른다 — 표에서 자동으로 메서드가 되는 것은 단항뿐이다.
+_BINARY_ONLY = frozenset((
+    "maximum", "minimum", "atan2", "hypot", "copysign", "logaddexp",
+    "logaddexp2", "xlogy", "heaviside", "ldexp", "pow",
+    "eq", "ne", "lt", "le", "gt", "ge",
+    "logical_and", "logical_or", "logical_xor",
+))
+
+
 def __getattr__(name):
     """모듈에 없는 이름은 **첫 인자의 메서드**로 넘긴다.
 
@@ -153,6 +163,12 @@ def __getattr__(name):
     if name.startswith("_"):
         raise AttributeError(name)
     js_name = camel(name)
+
+    if name in _BINARY_ONLY:
+        def call(a, b, *rest, **kw):
+            return guarded(handle(a).binary, js_name, handle(b))
+        call.__name__ = name
+        return call
 
     def call(x, *args, **kw):
         h = handle(x)
@@ -208,3 +224,36 @@ def cat(parts, dim=0):
 
 def stack(parts, dim=0):
     return wrap(_ts.Tensor.stack(_js.Array.from_([p._h for p in parts]), dim))
+
+
+def linspace(start, end, count, **kw):
+    return wrap(_ts.Tensor.linspace(start, end, count))
+
+
+def einsum(spec, *operands):
+    """borch.ts 의 `einsum` 은 정적 함수다 — 첫 인자가 텐서가 아니다."""
+    return guarded(_ts.einsum, spec, _js.Array.new(*[handle(t) for t in operands]))
+
+
+def as_tensor(data, dtype=None):
+    from ._base import tensor as _t
+    return data if isinstance(data, Tensor) else _t(data, dtype)
+
+
+# **`torch.linalg` 는 이름 공간이다.** 대부분 텐서 메서드로 있고, 값에 따라 크기가
+# 정해지는 것들(`cholesky`·`svd`·`eigh`)은 비동기라 `settle` 이 기다린다.
+class _Linalg:
+    def __getattr__(self, name):
+        js_name = camel({"inv": "inverse", "matrix_rank": "matrixRank"}.get(name, name))
+
+        def call(x, *args, **kw):
+            fn = getattr(handle(x), js_name, None)
+            if fn is None:
+                raise AttributeError(f"borch.ts 에 `{js_name}` 이 없다 (linalg.{name})")
+            return guarded(fn, *[_arg(a) for a in args])
+
+        call.__name__ = name
+        return call
+
+
+linalg = _Linalg()

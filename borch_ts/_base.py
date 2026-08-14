@@ -158,6 +158,26 @@ class Tensor:
     def backward(self, *args):
         return guarded(self._h.backward, *[handle(a) for a in args])
 
+    # dtype 을 바꾸는 이름들. borch.ts 는 `to("float32")` 하나로 받는다.
+    def to(self, dtype):
+        name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
+        return guarded(self._h.to, name.replace("torch.", ""))
+
+    def float(self):
+        return self.to("float32")
+
+    def long(self):
+        return self.to("int64")
+
+    def int(self):
+        return self.to("int64")
+
+    def bool(self):
+        return self.to("bool")
+
+    def type(self, dtype=None):
+        return self.dtype if dtype is None else self.to(dtype)
+
     def tolist(self):
         return self.numpy().tolist()
 
@@ -189,9 +209,12 @@ class Tensor:
         `'function' object has no attribute 'detach'` 로 나왔다. 값을 돌려줄 자리에
         함수를 돌려주면 그 다음 줄에서야 터지고, 그러면 원인이 한 칸 밀린다.
         """
-        from ._ops import camel, positional
+        from ._ops import _BINARY_ONLY, camel, positional
 
         js_name = camel(name)
+        if name in _BINARY_ONLY:
+            # borch.ts 는 단항만 표에서 메서드로 만든다. 이항은 `binary(이름, 상대)` 다.
+            return lambda other, *_: guarded(self._h.binary, js_name, handle(other))
         got = getattr(self._h, js_name, None)
         if got is None:
             raise AttributeError(
