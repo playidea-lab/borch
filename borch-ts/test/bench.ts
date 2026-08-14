@@ -54,7 +54,7 @@ class Block extends nn.Module {
 /**
  * CIFAR 판 — 3×3 스템에 맥스풀이 없다. 32×32 를 7×7 스템으로 받으면 너무 줄어든다.
  */
-class ResNet18 extends nn.Module {
+export class ResNet18 extends nn.Module {
   private readonly stem: nn.Conv2d;
   private readonly bn: nn.BatchNormND;
   private readonly body: nn.Sequential;

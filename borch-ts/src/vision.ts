@@ -206,6 +206,72 @@ export class RandomCrop implements Transform {
   }
 }
 
+/**
+ * `(N,C,H,W)` 배치를 한 번에 늘린다. **torchvision 에 없는 우리 것이다.**
+ *
+ * 장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생긴다 — 한 에폭이 만 장이면 만 개다.
+ * 배치를 CPU 에서 다 늘린 뒤 텐서를 **하나** 만드는 것이 감당되는 유일한 순서라,
+ * 그 순서를 이름 붙여 내놓는다.
+ *
+ * **뽑기는 장마다 따로 한다.** 배치 전체에 같은 자르기·뒤집기를 쓰면 배치 안에서
+ * 늘어난 것이 없어 augmentation 의 효과가 사라진다.
+ */
+export function augmentBatch(
+  x: Float32Array,
+  n: number, c: number, h: number, w: number,
+  opts: { crop?: number; padding?: number; hflipP?: number; fill?: number } = {},
+): Float32Array {
+  const pad = opts.padding ?? 0;
+  const fill = opts.fill ?? 0;
+  const ph = h + 2 * pad;
+  const pw = w + 2 * pad;
+  const th = opts.crop ?? ph;
+  const tw = opts.crop ?? pw;
+  if (ph < th || pw < tw) {
+    throw new Error(`자를 크기 (${th}, ${tw}) 가 이미지 (${ph}, ${pw}) 보다 큽니다`);
+  }
+  const hflipP = opts.hflipP ?? 0;
+  const out = new Float32Array(n * c * th * tw);
+  for (let i = 0; i < n; i++) {
+    const top = nextInt(ph - th + 1);
+    const left = nextInt(pw - tw + 1);
+    const flip = nextFloat() < hflipP;
+    for (let ch = 0; ch < c; ch++) {
+      const src = (i * c + ch) * h * w;
+      const dst = (i * c + ch) * th * tw;
+      for (let y = 0; y < th; y++) {
+        // 채운 자리는 원본 밖이다 — 거기서는 `fill` 을 쓴다.
+        const sy = top + y - pad;
+        for (let t = 0; t < tw; t++) {
+          const sx0 = left + t - pad;
+          const sx = flip ? left + (tw - 1 - t) - pad : sx0;
+          const inside = sy >= 0 && sy < h && sx >= 0 && sx < w;
+          out[dst + y * tw + t] = inside ? (x[src + sy * w + sx] ?? 0) : fill;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** 채널마다 `(x - mean) / std`. CPU 에서 배치째 — 텐서를 만들기 전에 끝낸다. */
+export function normalizeBatch(
+  x: Float32Array,
+  n: number, c: number, hw: number,
+  mean: readonly number[], std: readonly number[],
+): Float32Array {
+  const out = new Float32Array(x.length);
+  for (let i = 0; i < n; i++) {
+    for (let ch = 0; ch < c; ch++) {
+      const m = mean[ch] ?? 0;
+      const s = std[ch] ?? 1;
+      const base = (i * c + ch) * hw;
+      for (let k = 0; k < hw; k++) out[base + k] = ((x[base + k] ?? 0) - m) / s;
+    }
+  }
+  return out;
+}
+
 function asImage(x: Image | Tensor, who: string): Image {
   if (x instanceof Tensor) {
     throw new Error(

@@ -55,7 +55,12 @@ export abstract class Optimizer {
 export class SGD extends Optimizer {
   private readonly buffers: Tensor[];
 
-  constructor(params: Tensor[], lr: number, private readonly momentum = 0) {
+  constructor(
+    params: Tensor[],
+    lr: number,
+    private readonly momentum = 0,
+    private readonly weightDecay = 0,
+  ) {
     super(params, lr);
     // **상태를 미리 잡는다.** 스텝마다 새 텐서를 만들면 구역이 닫힐 때 그것이 놓이고,
     // 다음 스텝의 버퍼가 사라진 자리를 가리킨다. torch 도 상태를 붙박이로 든다.
@@ -76,8 +81,8 @@ export class SGD extends Optimizer {
       buffers.push(buf.buffer);
     }
     d.run1d(
-      d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}`,
-        () => sgdStep(n, this.lr, this.momentum)),
+      d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}:${this.weightDecay}`,
+        () => sgdStep(n, this.lr, this.momentum, this.weightDecay)),
       buffers,
       n,
     );

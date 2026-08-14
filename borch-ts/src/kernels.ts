@@ -2044,8 +2044,15 @@ ${flatId(n)}
  * **읽으면서 같은 자리에 쓴다.** 스레드 하나가 자기 원소만 보므로 순서가 섞일 자리가
  * 없다 — 브로드캐스팅도 축약도 없는 원소별 갱신이라 가능한 일이다.
  */
-export function sgdStep(n: number, lr: number, momentum: number): string {
+export function sgdStep(
+  n: number, lr: number, momentum: number, weightDecay = 0,
+): string {
   const hasMomentum = momentum !== 0;
+  // **가중치 감쇠는 기울기에 더한다.** 파라미터를 따로 줄이는 것과 다른 수다 —
+  // 모멘텀 버퍼가 감쇠를 함께 들고 가느냐가 갈린다. torch 의 SGD 가 이쪽이다.
+  const grad = weightDecay !== 0
+    ? `G[gid] + P[gid] * ${weightDecay}`
+    : "G[gid]";
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
@@ -2053,11 +2060,12 @@ ${hasMomentum ? "@group(0) @binding(2) var<storage, read_write> Buf: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
+  let gv = ${grad};
 ${hasMomentum
-    ? `  let b = Buf[gid] * ${momentum} + G[gid];
+    ? `  let b = Buf[gid] * ${momentum} + gv;
   Buf[gid] = b;
   P[gid] = P[gid] - b * ${lr};`
-    : `  P[gid] = P[gid] - G[gid] * ${lr};`}
+    : `  P[gid] = P[gid] - gv * ${lr};`}
 }`;
 }
 
