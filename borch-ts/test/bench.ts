@@ -94,6 +94,8 @@ export interface StepResult {
   dispatches: number;
   /** dispatch 하나당 벽시계. 커널 시간이 아니라 **부르는 값**의 상한이다. */
   usPerDispatch: number;
+  /** 커널 종류별 dispatch 수, 많은 것부터. 다음에 무엇을 고칠지가 여기서 나온다. */
+  kinds: [string, number][];
   loss: number;
 }
 
@@ -148,10 +150,18 @@ export async function runStep(
 
   const t0 = performance.now();
   const d0 = device().dispatches;
+  const k0 = new Map(device().byKind);
   let last = 0;
   for (let i = 0; i < steps; i++) last = await one();
   const perStep = (performance.now() - t0) / steps;
   const perStepDispatches = (device().dispatches - d0) / steps;
+  // 종류별로 갈라 둔다 — 총수만으로는 다음에 무엇을 고칠지 안 나온다.
+  const kinds: [string, number][] = [];
+  for (const [kind, n] of device().byKind) {
+    const grew = (n - (k0.get(kind) ?? 0)) / steps;
+    if (grew > 0) kinds.push([kind, Math.round(grew)]);
+  }
+  kinds.sort((a, b) => b[1] - a[1]);
 
   // 누수는 **구역이 안 놓고 내보낸 버퍼 수**다.
   //
@@ -185,6 +195,7 @@ export async function runStep(
     leakPerStep: leak,
     dispatches: Math.round(perStepDispatches),
     usPerDispatch: Math.round((perStep * 1000) / Math.max(1, perStepDispatches)),
+    kinds,
     loss: Math.round(last * 10000) / 10000,
   };
 }
@@ -204,6 +215,12 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
         `누수 ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
         `손실 ${r.loss.toFixed(4)}`,
       );
+      // 종류별 내역은 배치마다 같으므로 한 번만 찍는다.
+      if (b === batches[0]) {
+        const top = r.kinds.slice(0, 8)
+          .map(([kind, n]) => `${kind} ${n}`).join(" · ");
+        lines.push(`         dispatch 내역: ${top}`);
+      }
     } catch (err) {
       lines.push(`batch ${String(b).padStart(3)}  실패: ` +
         `${err instanceof Error ? `${err.constructor.name}: ${err.message.slice(0, 120)}` : String(err)}`);

@@ -123,6 +123,17 @@ export class Device {
   dispatches = 0;
 
   /**
+   * 커널 종류별 dispatch 수.
+   *
+   * 총수만으로는 다음에 무엇을 고칠지 모른다. 1,636 개가 conv 스무 번인지 BatchNorm
+   * 조립 오백 번인지에 따라 할 일이 다르다 — 그 갈림을 재려고 둔다.
+   */
+  readonly byKind = new Map<string, number>();
+
+  /** 지금 어느 커널을 부르는지. `pipeline` 이 서명의 앞머리를 여기 남긴다. */
+  private current = "?";
+
+  /**
    * 셰이더 컴파일 오류를 삼키지 않는다.
    *
    * **WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,
@@ -131,6 +142,9 @@ export class Device {
    * 0 을 냈고, 그때 아무 오류도 안 보였다. 그래서 진단 정보를 직접 꺼내 본다.
    */
   pipeline(signature: string, source: () => string): GPUComputePipeline {
+    // 서명의 첫 토막이 커널 종류다(`cnt:...`, `u:relu:...`). 모양까지 세면 종류가
+    // 수백 개가 되어 어디가 무거운지가 안 보인다.
+    this.current = signature.split(":")[0] ?? "?";
     const hit = this.pipelines.get(signature);
     if (hit) return hit;
     const code = source();
@@ -263,6 +277,7 @@ export class Device {
     pass.end();
     this.device.queue.submit([encoder.finish()]);
     this.dispatches += 1;
+    this.byKind.set(this.current, (this.byKind.get(this.current) ?? 0) + 1);
   }
 
   /** 1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다. */
