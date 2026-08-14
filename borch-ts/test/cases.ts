@@ -21,6 +21,8 @@
 
 import { type DType, dtypeName } from "../src/dtype.js";
 import { einsum } from "../src/einsum.js";
+import * as nn from "../src/nn.js";
+import * as optim from "../src/optim.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -195,7 +197,17 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
       () => inp.get("img").conv2d(inp.get("cw"), inp.get("cb"), 2, 1)],
     ["F.max_pool2d", () => inp.get("img").maxPool2d(2)],
     ["F.avg_pool2d", () => inp.get("img").avgPool2d(2)],
-    ["BatchNorm2d(학습)", () => inp.get("img").batchNorm2d()],
+    ["BatchNorm2d(학습)", () => new nn.BatchNorm2d(3).forward(inp.get("img"))],
+    // **저장·복원 뒤의 평가 모드.** 이동 통계가 state_dict 에서 빠지면 여기서만
+    // 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
+    ["BatchNorm2d(저장→복원→eval)", () => {
+      const trained = new nn.BatchNorm2d(3);
+      trained.forward(inp.get("img")); // 이동 통계가 갱신된다
+      const fresh = new nn.BatchNorm2d(3);
+      fresh.loadStateDict(trained.stateDict());
+      fresh.eval();
+      return fresh.forward(inp.get("img"));
+    }],
     ["median", () => x1().median().values],
     ["median(dim)", () => x2().median(1).values],
     ["median(dim).indices", () => x2().median(1).indices],
@@ -342,7 +354,141 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addDType(out);
   addRepr(out);
   addNdim(out, inputs);
+  addTrain(out, inputs);
   return out;
+}
+
+/** 골든이 쓰는 스텝 수. 적게 두는 것은 의도다 — 길게 돌리면 무엇이 틀렸는지가 아니라
+ * float32 가 갈라진 것을 보게 된다. */
+const TRAIN_STEPS = 5;
+
+/**
+ * **학습이 도는가** — 조각이 엮였을 때를 본다.
+ *
+ * 단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,
+ * 이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다.
+ */
+function addTrain(out: Map<string, Case>, inp: Inputs): void {
+  const build = (kind: "SGD" | "SGD(모멘텀)" | "Adam" | "RMSprop"): nn.Sequential => {
+    const model = new nn.Sequential([
+      new nn.Linear(6, 8), new nn.ReLU(), new nn.Linear(8, 3),
+    ]);
+    model.loadStateDict({
+      "0.weight": inp.get("w0"), "0.bias": inp.get("b0"),
+      "2.weight": inp.get("w1"), "2.bias": inp.get("b1"),
+    });
+    void kind;
+    return model;
+  };
+
+  const optimizerFor = (kind: string, params: Tensor[]): optim.Optimizer => {
+    if (kind === "SGD") return new optim.SGD(params, 0.05);
+    if (kind === "SGD(모멘텀)") return new optim.SGD(params, 0.05, 0.9);
+    if (kind === "Adam") return new optim.Adam(params, 0.05);
+    return new optim.RMSprop(params, 0.05);
+  };
+
+  const trained = (kind: "SGD" | "SGD(모멘텀)" | "Adam" | "RMSprop"): nn.Sequential => {
+    const model = build(kind);
+    const opt = optimizerFor(kind, model.parameters());
+    const crit = new nn.CrossEntropyLoss();
+    const x = inp.get("train_x");
+    const y = inp.get("train_y");
+    for (let i = 0; i < TRAIN_STEPS; i++) {
+      opt.zeroGrad();
+      crit.forward(model.forward(x), y).backward();
+      opt.step();
+    }
+    return model;
+  };
+
+  for (const kind of ["SGD", "SGD(모멘텀)", "Adam"] as const) {
+    out.set(`train::${kind}/손실`, () => {
+      const model = trained(kind);
+      return new nn.CrossEntropyLoss()
+        .forward(model.forward(inp.get("train_x")), inp.get("train_y"));
+    });
+    // **가중치까지 본다.** 손실만 보면 파라미터가 안 움직여도 비슷해 보일 수 있다.
+    out.set(`train::${kind}/0.weight`, () => {
+      const w = trained(kind).namedParameters()["0.weight"];
+      if (!w) throw new Error("0.weight 가 없다");
+      return w;
+    });
+  }
+  out.set("train::RMSprop/0.weight", () => {
+    const w = trained("RMSprop").namedParameters()["0.weight"];
+    if (!w) throw new Error("0.weight 가 없다");
+    return w;
+  });
+
+  // 합성곱·풀링이 학습 루프 **안에서** 엮였을 때. 단위 대조는 이것을 못 본다.
+  const cnnTrained = (): nn.Sequential => {
+    const model = new nn.Sequential([
+      new nn.Conv2d(1, 4, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+      new nn.Flatten(), new nn.Linear(4 * 4 * 4, 3),
+    ]);
+    model.loadStateDict({
+      "0.weight": inp.get("ck"), "0.bias": inp.get("ckb"),
+      "4.weight": inp.get("fw"), "4.bias": inp.get("fb"),
+    }, false);
+    const opt = new optim.SGD(model.parameters(), 0.05);
+    const crit = new nn.CrossEntropyLoss();
+    const x = inp.get("cnn_x");
+    const y = inp.get("cnn_y");
+    for (let i = 0; i < TRAIN_STEPS; i++) {
+      opt.zeroGrad();
+      crit.forward(model.forward(x), y).backward();
+      opt.step();
+    }
+    return model;
+  };
+  out.set("train::CNN/손실", () => {
+    const model = cnnTrained();
+    return new nn.CrossEntropyLoss()
+      .forward(model.forward(inp.get("cnn_x")), inp.get("cnn_y"));
+  });
+  out.set("train::CNN/conv.weight", () => {
+    const w = cnnTrained().namedParameters()["0.weight"];
+    if (!w) throw new Error("0.weight 가 없다");
+    return w;
+  });
+
+  // 스케줄은 실수 연산뿐이라 값이 그대로 같아야 한다. **한 값이 아니라 궤적 전체**를
+  // 본다 — 코어가 그렇게 하다가 StepLR 의 차이를 잡았다.
+  const trajectory = (make: (o: optim.Optimizer) => optim.LRScheduler): Tensor => {
+    const p = Tensor.from([1.0], [1], true);
+    const opt = new optim.SGD([p], 1.0);
+    const sch = make(opt);
+    const seen = [opt.paramGroups[0]?.lr ?? 0];
+    for (let i = 0; i < 6; i++) {
+      sch.step();
+      seen.push(opt.paramGroups[0]?.lr ?? 0);
+    }
+    return Tensor.from(seen, [seen.length]);
+  };
+
+  const schedules: [string, (o: optim.Optimizer) => optim.LRScheduler][] = [
+    ["StepLR", (o) => new optim.StepLR(o, 2, 0.5)],
+    ["MultiStepLR", (o) => new optim.MultiStepLR(o, [2, 4], 0.5)],
+    ["ExponentialLR", (o) => new optim.ExponentialLR(o, 0.9)],
+    ["CosineAnnealingLR", (o) => new optim.CosineAnnealingLR(o, 6)],
+    ["LambdaLR", (o) => new optim.LambdaLR(o, (e) => 1.0 / (1 + e))],
+  ];
+  for (const [name, make] of schedules) {
+    out.set(`sched::${name}`, () => trajectory(make));
+  }
+
+  out.set("sched::ReduceLROnPlateau", () => {
+    const p = Tensor.from([1.0], [1], true);
+    const opt = new optim.SGD([p], 1.0);
+    const sch = new optim.ReduceLROnPlateau(opt, 0.5, 1);
+    const seen: number[] = [];
+    for (const metric of [1.0, 1.0, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0]) {
+      sch.step(metric);
+      seen.push(opt.paramGroups[0]?.lr ?? 0);
+    }
+    return Tensor.from(seen, [seen.length]);
+  });
 }
 
 /**
@@ -801,6 +947,18 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     convGrad("conv2d(스트라이드2)", which, 2, 1, false);
   }
   one("max_pool2d", () => inp.get("img", true), (x) => x.maxPool2d(2));
+
+  // **평균·분산이 그래프 안에 있어야 한다.** 밖으로 빼면 입력 기울기가 어긋나고
+  // weight 에는 아예 안 온다(None). 그래서 둘 다 본다.
+  for (const which of ["x", "weight"] as const) {
+    out.set(`grad::BatchNorm2d/${which}`, () => {
+      const x = inp.get("img", true);
+      const bn = new nn.BatchNorm2d(3);
+      bn.forward(x).sum().backward();
+      const leaf = which === "x" ? x : bn.weight;
+      return gradOf(leaf, `BatchNorm2d/${which}`);
+    });
+  }
   // **뽑기 계열이 그래프를 끊기 가장 쉬운 자리다.** 값만 떼어 돌려주면 뽑은 자리로
   // 기울기가 안 가고 학습이 조용히 멈춘다.
   one("topk", x1, (x) => x.topk(3).values);
@@ -921,6 +1079,20 @@ function addError(out: Map<string, Case>): void {
       y.backward();
       y.backward();
     }, "backward through the graph a second time"],
+    ["Linear 입력 차원 불일치", () => {
+      const layer = new nn.Linear(4, 2);
+      layer.forward(Tensor.zeros([3, 5]));
+    }, "shapes cannot be multiplied"],
+    ["Conv2d 채널 불일치",
+      () => Tensor.zeros([1, 3, 8, 8]).conv2d(Tensor.zeros([4, 1, 3, 3])),
+      null],
+    ["leaf 제자리 수정", () => {
+      const x = Tensor.from([1, 2, 3], [3], true);
+      x.add_(1);
+    }, null],
+    ["인덱스 범위 초과", () => Tensor.zeros([3]).select(0, 5), "out of bounds"],
+    ["정수 텐서에 requires_grad",
+      () => Tensor.from([1, 2, 3], [3], true, "int64"), null],
   ];
   for (const [name, fn, phrase] of cases) {
     out.set(`error::${name}`, () => raised(fn, phrase));

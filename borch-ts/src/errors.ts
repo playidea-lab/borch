@@ -25,6 +25,17 @@ export class RuntimeError extends Error {
   override readonly name = "RuntimeError";
 }
 
+/**
+ * 색인이 범위를 넘은 것.
+ *
+ * **`RuntimeError` 가 아니다.** torch 는 여기에 파이썬의 `IndexError` 를 쓰고, 골든이
+ * 예외의 종류까지 굳혔으므로 그 이름이어야 한다. 종류를 뭉뚱그리면 `except IndexError`
+ * 로 잡던 코드가 안 잡힌다 — 예외의 종류도 API 다.
+ */
+export class IndexError extends Error {
+  override readonly name = "IndexError";
+}
+
 /** torch 가 내는 문구. 검색이 통하라고 원문 그대로 둔다. */
 export const TORCH = {
   matmulShape: "shapes cannot be multiplied",

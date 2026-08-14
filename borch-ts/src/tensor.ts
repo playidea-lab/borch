@@ -9,7 +9,7 @@
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
 import { byRank, type DType, promote, rankOf } from "./dtype.js";
-import { RuntimeError, TORCH } from "./errors.js";
+import { IndexError, RuntimeError, TORCH } from "./errors.js";
 import * as LA from "./linalg.js";
 import { formatSize, formatTensor } from "./repr.js";
 import {
@@ -250,6 +250,13 @@ export class Tensor implements Node<Tensor> {
     const shp = shape ?? [flat.length];
     if (numel(shp) !== flat.length) {
       throw new Error(`모양 [${shp}] 는 원소 ${flat.length}개와 안 맞는다.`);
+    }
+    if (requiresGrad && dtype !== "float32") {
+      // 정수와 참·거짓에는 기울기가 정의되지 않는다. torch 도 여기서 멈춘다 —
+      // 흘려보내면 학습이 도는데 그 값이 아무 뜻도 없는 상태가 된다.
+      throw new RuntimeError(
+        "Only Tensors of floating point and complex dtype can require gradients",
+      );
     }
     return new Tensor(dev().upload(flat), shp, { requiresGrad, dtype });
   }
@@ -859,8 +866,17 @@ export class Tensor implements Node<Tensor> {
   select(dim: number, index: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
+    const size = this.shape[axis] ?? 0;
+    const at = index < 0 ? index + size : index;
+    if (at < 0 || at >= size) {
+      // 범위를 넘겨 읽으면 WGSL 은 던지지 않고 **가장자리 값이나 0 을 준다.**
+      // 조용히 틀린 값을 내는 대신 여기서 멈춘다.
+      throw new IndexError(
+        `index ${index} is out of bounds for dimension ${dim} with size ${size}`,
+      );
+    }
     const own = this.strides();
-    const offset = index * (own[axis] ?? 1);
+    const offset = at * (own[axis] ?? 1);
     const rules: AxisRule[] = [];
     const outShape: number[] = [];
     for (let d = 0; d < rank; d++) {
@@ -1984,6 +2000,27 @@ export class Tensor implements Node<Tensor> {
   /** `clamp_` 와 같다 — torch 가 이름을 둘 다 갖는다. */
   clip_(low: number, high: number): Tensor {
     return this.clamp_(low, high);
+  }
+
+  /**
+   * 다른 텐서의 값을 이 버퍼로 옮긴다. **텐서를 바꿔치지 않는다.**
+   *
+   * 옵티마이저가 파라미터의 손잡이를 들고 있으므로, 가중치를 넣을 때 새 텐서를
+   * 만들어 갈아끼우면 옵티마이저가 다른 것을 보게 된다 — 학습이 도는데 파라미터가
+   * 안 움직이는 상태다. 그래서 자리는 그대로 두고 값만 옮긴다.
+   */
+  copyFrom(src: Tensor): Tensor {
+    if (src.size !== this.size) {
+      throw new Error(`크기가 다르다: [${this.shape}] ← [${src.shape}]`);
+    }
+    return this.mutate(() => src);
+  }
+
+  /** `this ← (1-t)·this + t·other`. 이동 통계가 쓴다. */
+  lerpFrom(other: Tensor, t: number): Tensor {
+    return this.mutate(() =>
+      this.binary("mul", Tensor.full([], 1 - t))
+        .add(other.binary("mul", Tensor.full([], t))));
   }
 
   /** 표의 단항을 제자리로. `abs_` 같은 이름들이 이리로 온다. */
