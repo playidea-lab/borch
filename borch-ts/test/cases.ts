@@ -197,13 +197,13 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
       () => inp.get("img").conv2d(inp.get("cw"), inp.get("cb"), 2, 1)],
     ["F.max_pool2d", () => inp.get("img").maxPool2d(2)],
     ["F.avg_pool2d", () => inp.get("img").avgPool2d(2)],
-    ["BatchNorm2d(학습)", () => new nn.BatchNorm2d(3).forward(inp.get("img"))],
+    ["BatchNorm2d(학습)", () => new nn.BatchNormND(3).forward(inp.get("img"))],
     // **저장·복원 뒤의 평가 모드.** 이동 통계가 state_dict 에서 빠지면 여기서만
     // 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
     ["BatchNorm2d(저장→복원→eval)", () => {
-      const trained = new nn.BatchNorm2d(3);
+      const trained = new nn.BatchNormND(3);
       trained.forward(inp.get("img")); // 이동 통계가 갱신된다
-      const fresh = new nn.BatchNorm2d(3);
+      const fresh = new nn.BatchNormND(3);
       fresh.loadStateDict(trained.stateDict());
       fresh.eval();
       return fresh.forward(inp.get("img"));
@@ -252,6 +252,123 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
  */
 function asLeaf(t: Tensor): Tensor {
   return new Tensor(t.buffer, t.shape, { requiresGrad: true });
+}
+
+/**
+ * 랭크가 올라갈 때 **어디서 무너지는지** 본다.
+ *
+ * 자매에게는 이것이 한계를 재는 표였다 — TF.js 가 랭크 7 부터 일부 연산을 거절해서
+ * `=거절` 이 붙은 케이스들은 "거절하는 것이 정답" 이었다. borch.ts 에는 그 한계가
+ * 없으므로 **torch 와 같이 성공이 정답**이고, 답도 torch 의 것을 그대로 쓴다.
+ *
+ * 값을 통째로 묻는다 — 스칼라로 줄이면 자리가 뒤바뀌어도 합이 같아 통과한다.
+ * 기울기도 자리마다 다른 가중치를 곱해 받는다.
+ */
+function addHighRank(out: Map<string, Case>, inp: Inputs): void {
+  for (const r of [6, 7, 8]) {
+    const key = `rank${r}`;
+    const tag = `랭크${r}`;
+    const shape = inp.shapeOf(key);
+    const axis = Math.floor(r / 2);
+    const count = shape.reduce((a, b) => a * b, 1);
+    const v = (g = false) => inp.get(key, g);
+    const reversed = [...Array(r).keys()].reverse();
+    const lowered = [...shape.slice(0, -2),
+      (shape[r - 2] ?? 1) * (shape[r - 1] ?? 1)];
+
+    const table: [string, () => Tensor][] = [
+      [`${tag} 원소별`,
+        () => v().binary("mul", Tensor.full([], 2)).binary("add", Tensor.full([], 1))],
+      [`${tag} permute`, () => v().permute(reversed)],
+      [`${tag} reshape(내림)`, () => v().reshape(lowered)],
+      [`${tag} reshape(올림)`, () => Tensor.arange(count).reshape(shape)],
+      [`F.pad(${tag})`, () => v().pad(-1, 1, 2)],
+    ];
+    for (const [name, fn] of table) out.set(`webgpu::${name}`, fn);
+
+    // 랭크 6 은 값으로 굳혔고, 7·8 은 자매가 거절하던 자리라 "문서대로 굴었는가" 로
+    // 굳혔다. 우리는 되므로 답이 "기대대로" 다.
+    const asExpected = (name: string, fn: () => Tensor) => {
+      out.set(`webgpu::${name}`, () => {
+        try {
+          fn();
+        } catch (err) {
+          return `뜻밖의 거절 <${err instanceof Error ? err.constructor.name : "?"}>`;
+        }
+        return "기대대로";
+      });
+    };
+    if (r === 6) {
+      out.set(`webgpu::${tag} 합(축)`, () => v().sumDim(axis));
+      out.set(`webgpu::F.pad(${tag}, 값)`,
+        () => v().pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
+      out.set(`webgpu::grad::${tag} 원소별`, () => {
+        const x = v(true);
+        x.mul(x).add(x).sum().backward();
+        return gradOf(x, `${tag} 원소별`);
+      });
+    } else {
+      asExpected(`${tag} 합(축)=거절`, () => v().sumDim(axis));
+      asExpected(`${tag} F.pad(값)=거절`,
+        () => v().pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
+      asExpected(`${tag} 기울기=거절`, () => {
+        const x = v(true);
+        x.mul(x).add(x).sum().backward();
+        return gradOf(x, `${tag} 기울기`);
+      });
+    }
+
+    if (r === 6) {
+      for (const kind of ["narrow", "unbind", "split"] as const) {
+        out.set(`webgpu::grad::${tag} ${kind}`, () => {
+          const x = v(true);
+          const res = kind === "narrow" ? x.narrow(axis, 1, 2)
+            : kind === "unbind" ? piece(x.unbind(axis), 1)
+              : piece(x.splitSize(axis, 1), 0);
+          seeded(res).backward();
+          return gradOf(x, `${tag} ${kind}`);
+        });
+      }
+    }
+  }
+
+  // 랭크 7 은 순방향도 기울기도 되고, 랭크 8 은 자매에서 값만 나오고 기울기가 없었다.
+  // 경계가 연산 이름에도 입력 랭크에도 깔끔하게 안 걸린다는 증거로 넷을 따로 둔다.
+  for (const r of [7, 8]) {
+    const key = `rank${r}_unbind`;
+    out.set(`webgpu::랭크${r} unbind(순방향)`,
+      () => piece(inp.get(key).unbind(0), 1));
+  }
+  out.set("webgpu::grad::랭크7 unbind", () => {
+    const x = inp.get("rank7_unbind", true);
+    seeded(piece(x.unbind(0), 1)).backward();
+    return gradOf(x, "랭크7 unbind");
+  });
+  out.set("webgpu::grad::랭크8 unbind=거절", () => {
+    try {
+      const x = inp.get("rank8_unbind", true);
+      seeded(piece(x.unbind(0), 1)).backward();
+      gradOf(x, "랭크8 unbind");
+    } catch (err) {
+      return `뜻밖의 거절 <${err instanceof Error ? err.constructor.name : "?"}>`;
+    }
+    return "기대대로";
+  });
+
+  // 랭크 5 는 자매가 `tf.pad` 로 조용히 값을 깨뜨리던 자리다. 우리 것도 물어둔다.
+  for (const kind of ["narrow", "unbind", "split"] as const) {
+    out.set(`webgpu::grad::랭크5 ${kind}`, () => {
+      const x = inp.get("vol5", true);
+      const res = kind === "narrow" ? x.narrow(2, 1, 2)
+        : kind === "unbind" ? piece(x.unbind(2), 1)
+          : piece(x.splitSize(3, 2), 0);
+      seeded(res).backward();
+      return gradOf(x, `랭크5 ${kind}`);
+    });
+  }
+  out.set("webgpu::F.pad(랭크5)", () => inp.get("vol5").pad(-1, 1, 2));
+  out.set("webgpu::F.pad(랭크5, 값)",
+    () => inp.get("vol5").pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
 }
 
 /** 길이 3·1·2 짜리 셋. 채운 자리가 어디인지 눈으로 보이는 최소 크기다. */
@@ -502,6 +619,46 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   const flat = () => Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [2, 4]);
   const mask = () => Tensor.from([1, 0, 1, 0, 1, 0, 1, 0], [2, 4], false, "bool");
 
+  // 1·3차원 계열. 입력이 골든에 실리고 나서 열린 자리다.
+  const nd = (name: string, g = false) => inp.get(name, g);
+  const values: [string, () => Tensor][] = [
+    ["F.conv1d", () => nd("nd_seq").conv1d(nd("nd_k1"), null, 1, 1)],
+    ["F.conv1d(걸음2)", () => nd("nd_seq").conv1d(nd("nd_k1"), null, 2, 1)],
+    ["F.conv1d(채움0)", () => nd("nd_seq").conv1d(nd("nd_k1"), null, 1, 0)],
+    ["F.conv3d", () => nd("nd_vol").conv3d(nd("nd_k3"), null, 1, 1)],
+    ["F.conv3d(채움0)", () => nd("nd_vol").conv3d(nd("nd_k3"), null, 1, 0)],
+    ["F.max_pool1d", () => nd("nd_seq").maxPool1d(2)],
+    ["F.max_pool3d", () => nd("nd_vol").maxPool3d(2)],
+    ["F.interpolate", () => nd("nd_img").upsample(2)],
+    ["F.adaptive_avg_pool2d", () => nd("nd_img").adaptiveAvgPool(2)],
+    ["nn.Conv1d", () => {
+      const m = new nn.Conv1d(3, 4, 3, 1, 1);
+      m.loadStateDict({ weight: nd("nd_k1"), bias: Tensor.zeros([4]) });
+      return m.forward(nd("nd_seq"));
+    }],
+    ["nn.MaxPool1d", () => nd("nd_seq").maxPool1d(2)],
+    ["nn.MaxPool3d", () => nd("nd_vol").maxPool3d(2)],
+    ["nn.BatchNorm3d", () => new nn.BatchNormND(2).forward(nd("nd_vol"))],
+    ["nn.Upsample", () => nd("nd_img").upsample(2)],
+  ];
+  for (const [name, fn] of values) out.set(`ndim::${name}`, fn);
+
+  const grads: [string, string, (x: Tensor) => Tensor][] = [
+    ["conv1d", "nd_seq", (x) => x.conv1d(nd("nd_k1"), null, 1, 1)],
+    ["conv3d", "nd_vol", (x) => x.conv3d(nd("nd_k3"), null, 1, 1)],
+    ["max_pool1d", "nd_seq", (x) => x.maxPool1d(2)],
+    ["max_pool3d", "nd_vol", (x) => x.maxPool3d(2)],
+    ["interpolate", "nd_img", (x) => x.upsample(2)],
+    ["BatchNorm3d", "nd_vol", (x) => new nn.BatchNormND(2).forward(x)],
+  ];
+  for (const [name, src, fn] of grads) {
+    out.set(`ndim::grad::${name}`, () => {
+      const x = nd(src, true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  }
+
   out.set("ndim::torch.matmul", () => flat().mm(flat().transpose()));
   out.set("ndim::torch.reshape", () => flat().reshape([4, 2]));
   out.set("ndim::torch.unsqueeze", () => flat().unsqueeze(1));
@@ -513,10 +670,61 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   out.set("ndim::x.repeat_interleave",
     () => flat().ravel().repeatInterleave(2));
 
+  addHighRank(out, inp);
+
   // `webgpu::` 중 입력이 골든에 실린 것들. 나머지는 위와 같은 이유로 닿을 수 없다.
   out.set("webgpu::F.pad(랭크4)", () => inp.get("img").pad(-1, 1, 2));
   out.set("webgpu::F.pad(랭크4, 값)",
     () => inp.get("img").pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
+  // `seq_x` 를 (N, C, L) 로 돌린 것. 골든이 그렇게 만든다.
+  // **잎이어야 기울기가 쌓인다.** `permute` 결과는 파생 텐서라 그대로 쓰면
+  // "기울기가 안 왔다" 로 죽는다 — 구현이 아니라 케이스 탓으로.
+  const wseq = (g = false) => {
+    const t = inp.get("seq_x").permute([1, 2, 0]);
+    return g ? asLeaf(t) : t;
+  };
+  const ck1 = () => inp.get("ck1");
+  const vol = (g = false) => inp.get("vol5", g);
+  const ck3 = () => inp.get("ck3");
+  out.set("webgpu::F.conv1d", () => wseq().conv1d(ck1(), null, 1, 1));
+  out.set("webgpu::F.conv1d(스트라이드2)", () => wseq().conv1d(ck1(), null, 2, 1));
+  out.set("webgpu::F.max_pool1d", () => wseq().maxPool1d(2));
+  out.set("webgpu::F.conv3d", () => vol().conv3d(ck3(), null, 1, 1));
+  out.set("webgpu::F.max_pool3d", () => vol().maxPool3d(2));
+  out.set("webgpu::Upsample(최근접)", () => inp.get("img").upsample(2));
+  out.set("webgpu::BatchNorm3d(학습)",
+    () => new nn.BatchNormND(2).forward(vol()));
+
+  out.set("webgpu::grad::Upsample", () => {
+    const x = inp.get("img", true);
+    x.upsample(2).sum().backward();
+    return gradOf(x, "Upsample");
+  });
+  out.set("webgpu::grad::max_pool3d", () => {
+    const x = vol(true);
+    x.maxPool3d(2).sum().backward();
+    return gradOf(x, "max_pool3d");
+  });
+  out.set("webgpu::grad::BatchNorm3d", () => {
+    const x = vol(true);
+    new nn.BatchNormND(2).forward(x).sum().backward();
+    return gradOf(x, "BatchNorm3d");
+  });
+  for (const [which, tag] of [["x", "x"], ["w", "w"]] as const) {
+    out.set(`webgpu::grad::conv1d/${tag}`, () => {
+      const x = wseq(true);
+      const k = inp.get("ck1", true);
+      x.conv1d(k, null, 1, 1).sum().backward();
+      return gradOf(which === "x" ? x : k, `conv1d/${tag}`);
+    });
+    out.set(`webgpu::grad::conv3d/${tag}`, () => {
+      const x = vol(true);
+      const k = inp.get("ck3", true);
+      x.conv3d(k, null, 1, 1).sum().backward();
+      return gradOf(which === "x" ? x : k, `conv3d/${tag}`);
+    });
+  }
+
   out.set("webgpu::grad::pad_sequence", () => {
     const a = Tensor.from([1, 2, 3, 4], [2, 2], true);
     const b = Tensor.from([5, 6], [1, 2], true);
@@ -953,7 +1161,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   for (const which of ["x", "weight"] as const) {
     out.set(`grad::BatchNorm2d/${which}`, () => {
       const x = inp.get("img", true);
-      const bn = new nn.BatchNorm2d(3);
+      const bn = new nn.BatchNormND(3);
       bn.forward(x).sum().backward();
       const leaf = which === "x" ? x : bn.weight;
       return gradOf(leaf, `BatchNorm2d/${which}`);

@@ -127,19 +127,28 @@ export class Linear extends Module {
   }
 }
 
-export class Conv2d extends Module {
+/**
+ * 차원 수에 상관없는 합성곱 층. `spatial` 이 공간 축의 수다.
+ *
+ * `Conv1d`·`Conv2d`·`Conv3d` 가 그 수만 다르다 — 클래스를 셋 세우면 그중 하나만
+ * 고치는 날이 온다.
+ */
+export class ConvND extends Module {
   readonly weight: Tensor;
   readonly bias: Tensor;
 
   constructor(
     inChannels: number,
     outChannels: number,
-    private readonly kernel: number,
+    kernel: number,
+    spatial: number,
     private readonly stride = 1,
     private readonly padding = 0,
   ) {
     super();
-    this.weight = Tensor.zeros([outChannels, inChannels, kernel, kernel]);
+    this.weight = Tensor.zeros([
+      outChannels, inChannels, ...new Array<number>(spatial).fill(kernel),
+    ]);
     this.bias = Tensor.zeros([outChannels]);
     this.weight.requiresGrad = true;
     this.bias.requiresGrad = true;
@@ -150,8 +159,25 @@ export class Conv2d extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    void this.kernel;
-    return x.conv2d(this.weight, this.bias, this.stride, this.padding);
+    return x.convND(this.weight, this.bias, this.stride, this.padding);
+  }
+}
+
+export class Conv1d extends ConvND {
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0) {
+    super(inC, outC, kernel, 1, stride, padding);
+  }
+}
+
+export class Conv2d extends ConvND {
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0) {
+    super(inC, outC, kernel, 2, stride, padding);
+  }
+}
+
+export class Conv3d extends ConvND {
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0) {
+    super(inC, outC, kernel, 3, stride, padding);
   }
 }
 
@@ -187,7 +213,13 @@ export class Flatten extends Module {
  * 드러나는데, 코어가 겪은 결함이 정확히 거기였다 — 이동 통계가 `state_dict` 에서
  * 빠져서 학습은 멀쩡하고 추론만 틀렸다.
  */
-export class BatchNorm2d extends Module {
+/**
+ * 차원 수에 상관없는 배치 정규화. `BatchNorm1d`·`2d`·`3d` 가 전부 이것이다.
+ *
+ * 접는 축이 배치와 공간 전부이고 채널만 남는다 — 공간 축이 몇 개든 규칙이 같아서
+ * 차원마다 클래스를 세울 이유가 없다.
+ */
+export class BatchNormND extends Module {
   readonly weight: Tensor;
   readonly bias: Tensor;
   readonly runningMean: Tensor;
@@ -234,7 +266,9 @@ export class BatchNorm2d extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    const shape = [1, this.channels, 1, 1];
+    const spatial = x.shape.length - 2;
+    // 채널만 남기고 나머지를 1 로. 공간 축이 몇 개든 이 한 줄이 맞춰 준다.
+    const shape = [1, this.channels, ...new Array<number>(spatial).fill(1)];
     const w = this.weight.reshape(shape);
     const b = this.bias.reshape(shape);
     if (!this.training) {
@@ -243,10 +277,13 @@ export class BatchNorm2d extends Module {
         this.runningVar.reshape(shape).binary("add", Tensor.full([], this.eps)).sqrt());
       return scaled.mul(w).add(b);
     }
-    const [n = 1, , h = 1, wdt = 1] = x.shape;
-    const count = n * h * wdt;
-    const perChannel = (t: Tensor): Tensor =>
-      t.sumDim(0).sumDim(1).sumDim(1).reshape(shape);
+    const count = x.size / this.channels;
+    const perChannel = (t: Tensor): Tensor => {
+      // 배치를 접고, 남은 공간 축을 하나씩 접는다. 접을 때마다 채널이 앞으로 온다.
+      let acc = t.sumDim(0);
+      for (let d = 0; d < spatial; d++) acc = acc.sumDim(1);
+      return acc.reshape(shape);
+    };
     const mean = perChannel(x).div(Tensor.full([], count));
     const centered = x.sub(mean);
     const biased = perChannel(centered.square()).div(Tensor.full([], count));

@@ -54,12 +54,55 @@ def golden_inputs():
     seq_x = rng.standard_normal((5, 2, 3)).astype(np.float32)
     attn_x = rng.standard_normal((2, 5, 4)).astype(np.float32)
 
+    # ── 여기부터는 원래 케이스 함수 **안에서** 만들던 것들이다 ──────────────
+    #
+    # 옮긴 이유: 케이스 안에서 만들면 `golden.json` 에 안 실리고, 그러면 파이썬이
+    # 아닌 구현은 **기대값은 있는데 입력이 없는** 상태가 된다. 실제로 borch.ts 가
+    # 그 이유 하나로 87건에서 막혔다 — numpy 의 난수기를 다시 만들지 않는 한 방법이
+    # 없고, 그것을 다시 만들면 틀렸을 때 조용히 틀린다.
+    #
+    # **각자 자기 시드를 그대로 쓰고 맨 뒤에 붙인다.** 위의 `rng` 를 더 소비하면
+    # x1 이하가 통째로 갈리기 때문이다 — 이 함수의 docstring 이 경고하는 그것이다.
+    # 값이 한 자리도 안 바뀌므로 기존 기대값도 안 바뀐다.
+    ck1 = (np.random.default_rng(13).standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
+    vol5 = np.random.default_rng(17).standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
+    ck3 = (np.random.default_rng(19).standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
+
+    # 고랭크 배터리. 축이 뒤바뀌면 값보다 **모양**에서 먼저 걸리도록 한 축만 3 이다.
+    high = {}
+    for r in (6, 7, 8):
+        shape = [2] * r
+        shape[r // 2] = 3
+        high[f"rank{r}"] = np.random.default_rng(100 + r).standard_normal(shape).astype(np.float32)
+    v7 = np.random.default_rng(107).standard_normal([2] * 7).astype(np.float32)
+    v8 = np.random.default_rng(108).standard_normal([2] * 8).astype(np.float32)
+
+    # 1·3차원 계열. **한 rng 를 순서대로 쓴다** — 순서가 값을 정하므로 그대로 옮긴다.
+    nd = np.random.default_rng(41)
+    nd_seq = nd.standard_normal((2, 3, 8)).astype(np.float32)
+    nd_k1 = (nd.standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
+    nd_vol = nd.standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
+    nd_k3 = (nd.standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
+    nd_img = nd.standard_normal((2, 3, 4, 4)).astype(np.float32)
+
+    # 변환용 이미지. uint8 과 실수를 **둘 다** 둔다 — ToTensor 가 uint8 일 때만
+    # 255 로 나누는 것이 요점이라, 한쪽만 있으면 그 규칙을 안 보게 된다.
+    vis = np.random.default_rng(31)
+    vis_u8 = vis.integers(0, 256, (5, 4, 3), dtype=np.uint8)
+    vis_f = vis.random((5, 4, 3)).astype(np.float32)
+    vis_gray = vis.integers(0, 256, (5, 4), dtype=np.uint8)
+
     return {"x1": x1, "xp": xp, "x2": x2, "img": img, "idx2": idx2, "tail": tail,
             "seq_x": seq_x, "attn_x": attn_x,
             "train_x": train_x, "train_y": train_y,
             "w0": w0, "b0": b0, "w1": w1, "b1": b1,
             "cw": cw, "cb": cb,
-            "cnn_x": cnn_x, "cnn_y": cnn_y, "ck": ck, "ckb": ckb, "fw": fw, "fb": fb}
+            "cnn_x": cnn_x, "cnn_y": cnn_y, "ck": ck, "ckb": ckb, "fw": fw, "fb": fb,
+            "ck1": ck1, "vol5": vol5, "ck3": ck3,
+            **high, "rank7_unbind": v7, "rank8_unbind": v8,
+            "nd_seq": nd_seq, "nd_k1": nd_k1, "nd_vol": nd_vol, "nd_k3": nd_k3,
+            "nd_img": nd_img,
+            "vis_u8": vis_u8, "vis_f": vis_f, "vis_gray": vis_gray}
 
 
 def wide_cases(inp=None):
@@ -627,7 +670,7 @@ def webgpu_cases(inp=None):
     inp = golden_inputs() if inp is None else inp
     seq = inp["seq_x"].transpose(1, 2, 0).copy()          # (N=2, C=3, L=5)
     img = inp["img"]
-    ck1 = (np.random.default_rng(13).standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
+    ck1 = inp["ck1"]
 
     def conv1d_grad(which):
         def run(L, w=which):
@@ -659,8 +702,8 @@ def webgpu_cases(inp=None):
 
     # 3차원 계열. conv3d 의 역방향만 `tf.grad` 를 타서 느리지만, **느린 것은 틀린 것이
     # 아니다** — 값이 맞는지는 여기서 붙잡고, 느리다는 사실은 코드가 경고로 알린다.
-    vol = np.random.default_rng(17).standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
-    ck3 = (np.random.default_rng(19).standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
+    vol = inp["vol5"]
+    ck3 = inp["ck3"]
 
     def conv3d_grad(which):
         def run(L, w=which):
@@ -725,8 +768,8 @@ def webgpu_cases(inp=None):
         return _grad_of(a, "pad_sequence")
 
     cases.append((WEBGPU_PREFIX + "grad::pad_sequence", pad_sequence_grad))
-    cases += _highrank_battery(HIGH_RANKS)
-    cases += _rank_ceiling_cases(CEILING_RANKS)
+    cases += _highrank_battery(HIGH_RANKS, inp)
+    cases += _rank_ceiling_cases(CEILING_RANKS, inp)
 
     # `F.pad` 는 공개 API 로 `tf.pad` 에 닿는 **또 하나의 문**이다. 자르기의 역방향만
     # 고치고 이쪽을 안 봤더니, 같은 버그가 사용자가 직접 부르는 경로에 그대로 남아 있었다.
@@ -770,7 +813,7 @@ def _as_expected(fn):
     return run
 
 
-def _rank_ceiling_cases(ranks):
+def _rank_ceiling_cases(ranks, inp):
     """랭크 7 이상 — **되는 것과 안 되는 것이 갈리는 구간.**
 
     재보니 TF.js 는 랭크 7 부터 `GPU for rank 7 is not yet supported` 를 던진다.
@@ -791,7 +834,7 @@ def _rank_ceiling_cases(ranks):
         axis = r // 2
         shape[axis] = 3
         count = int(np.prod(shape))
-        v = np.random.default_rng(100 + r).standard_normal(shape).astype(np.float32)
+        v = inp[f"rank{r}"]
         tag = f"랭크{r}"
 
         cases += [
@@ -829,8 +872,8 @@ def _rank_ceiling_cases(ranks):
     # 랭크 7 은 순방향도 기울기도 되고, 랭크 8 은 값은 나오는데 기울기가 없다.
     #
     # 이런 자리를 "고랭크는 안 된다" 한 줄로 덮으면 셋은 맞고 하나는 틀린 문서가 된다.
-    v7 = np.random.default_rng(107).standard_normal([2] * 7).astype(np.float32)
-    v8 = np.random.default_rng(108).standard_normal([2] * 8).astype(np.float32)
+    v7 = inp["rank7_unbind"]
+    v8 = inp["rank8_unbind"]
 
     def unbind_grad(arr):
         def run(L):
@@ -904,10 +947,10 @@ def vision_cases(inp=None):
     자리만** 묻는다. 뽑기 자체가 제대로 도는지는 pytest 가 분포로 본다 —
     여기서 "무작위니까 대조 못 한다"고 넘기면 그게 안 본 것을 봤다고 적는 짓이다.
     """
-    rng = np.random.default_rng(31)
-    img_u8 = rng.integers(0, 256, (5, 4, 3), dtype=np.uint8)     # (H,W,C)
-    img_f = rng.random((5, 4, 3)).astype(np.float32)
-    gray = rng.integers(0, 256, (5, 4), dtype=np.uint8)
+    inp = golden_inputs() if inp is None else inp
+    img_u8 = inp["vis_u8"]                                       # (H,W,C)
+    img_f = inp["vis_f"]
+    gray = inp["vis_gray"]
     mean, std = (0.5, 0.4, 0.3), (0.2, 0.3, 0.4)
 
     def compose(L):
@@ -959,7 +1002,7 @@ def vision_cases(inp=None):
     return cases
 
 
-def _highrank_battery(ranks):
+def _highrank_battery(ranks, inp):
     """랭크가 올라갈 때 **어디서 무너지는지** 본다.
 
     처음에는 랭크 6 만 손으로 적었다. 그런데 랭크 5 에서 셋, 랭크 6 에서 하나가
@@ -981,7 +1024,7 @@ def _highrank_battery(ranks):
         axis = r // 2
         shape[axis] = 3
         count = int(np.prod(shape))
-        v = np.random.default_rng(100 + r).standard_normal(shape).astype(np.float32)
+        v = inp[f"rank{r}"]
         tag = f"랭크{r}"
 
         def slice_grad(kind, arr=v, ax=axis, t=tag):
@@ -1145,12 +1188,10 @@ def ndim_cases(inp=None):
     자매에서 돌던 `nn.Conv1d` 가 코어에서 `BrowserTorchError` 로 멈췄다. 이 표가 그
     비대칭이 다시 벌어지는 것을 막는다.
     """
-    rng = np.random.default_rng(41)
-    seq = rng.standard_normal((2, 3, 8)).astype(np.float32)
-    k1 = (rng.standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
-    vol = rng.standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
-    k3 = (rng.standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
-    img = rng.standard_normal((2, 3, 4, 4)).astype(np.float32)
+    inp = golden_inputs() if inp is None else inp
+    seq, k1 = inp["nd_seq"], inp["nd_k1"]
+    vol, k3 = inp["nd_vol"], inp["nd_k3"]
+    img = inp["nd_img"]
 
     calls = (
         ("F.conv1d", lambda L: L.nn.functional.conv1d(
