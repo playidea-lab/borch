@@ -1255,73 +1255,149 @@ function suffixStrides(dims: readonly number[]): number[] {
   return out;
 }
 
-/** 공간 축을 도는 중첩 반복문을 편다. 축 수가 상수라 펴는 것이 가능하다. */
-function spatialLoops(
-  s: ConvNDShape,
-  body: string,
-  coord: (axis: number) => string,
-): string {
-  const inStride = suffixStrides(s.inDims);
-  const kStride = suffixStrides(s.kernel);
-  const open: string[] = [];
-  const close: string[] = [];
-  const terms: string[] = [];
-  const kTerms: string[] = [];
-  for (const [d, size] of s.kernel.entries()) {
-    open.push(`  for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
-    open.push(`    let p${d} = ${coord(d)};`);
-    open.push(`    if (p${d} < 0 || p${d} >= ${s.inDims[d] ?? 0}) { continue; }`);
-    close.push("  }");
-    terms.push(`u32(p${d}) * ${inStride[d] ?? 1}u`);
-    kTerms.push(`u32(k${d}) * ${kStride[d] ?? 1}u`);
-  }
-  return [
-    ...open,
-    `    let spatial = ${terms.join(" + ")};`,
-    `    let kspatial = ${kTerms.join(" + ")};`,
-    body,
-    ...close,
-  ].join("\n");
-}
 
 /**
- * 합성곱 순방향. **im2col 을 안 쓴다.**
+ * 타일링 합성곱 — **암묵적 GEMM**.
  *
- * 벤치에서 im2col+행렬곱과 융합 커널을 둘 다 재봤고, 모양을 셰이더에 굳힌 융합
- * 커널이 TF.js 의 72~284% 였다(im2col 은 펼친 행렬을 메모리에 쓴다). 유니폼 제수를
- * 없앤 것이 43% → 284% 를 갈랐다 — 그래서 여기 나눗셈이 하나도 안 남는다.
+ * `tests/browser/wgsl_conv.js` 가 TF.js 의 72~284% 로 잰 커널을 옮긴 것이다. 옮기기
+ * 전에는 아래의 단순 커널이 들어 있었고, ResNet 한 스텝이 자매의 272 배였다.
+ *
+ * ## 축을 뒤집었다
+ *
+ * 벤치 판은 결과를 `(N·OH·OW, O)` 로 쓴다. 우리는 NCHW 라 그대로 두면 전치가 한 번
+ * 더 필요하다. 대신 GEMM 을 `(O, N·OH·OW)` 로 뒤집으면
+ *
+ * - 가중치 타일이 `W[f·K + k]` 로 이어진 자리를 읽고,
+ * - 결과 타일의 이웃 스레드가 이웃 `ow` 를 써서 NCHW 로 바로 합쳐진다.
+ *
+ * ## 모양을 굽는 이유가 여기서 제일 크다
+ *
+ * 타일을 실을 때마다 원소당 나눗셈을 예닐곱 번 다시 한다. 제수가 유니폼이면 컴파일러가
+ * 그것을 곱셈·시프트로 못 바꾸고 GPU 에는 정수 나눗셈 하드웨어가 없다 — 벤치에서 그
+ * 하나가 43% 와 284% 를 갈랐다.
  */
-export function convNDForward(s: ConvNDShape, hasBias: boolean): string {
+export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
+  const inStride = suffixStrides(s.inDims);
+  const outStride = suffixStrides(s.outDims);
+  const kStride = suffixStrides(s.kernel);
   const inSpace = s.inDims.reduce((a, b) => a * b, 1);
   const outSpace = s.outDims.reduce((a, b) => a * b, 1);
   const kSpace = s.kernel.reduce((a, b) => a * b, 1);
-  const outStride = suffixStrides(s.outDims);
-  const n = s.N * s.O * outSpace;
-  const decode = s.outDims.map((_, d) =>
-    `  let o${d} = i32((r2 / ${outStride[d] ?? 1}u) % ${s.outDims[d] ?? 1}u);`).join("\n");
+  const K = s.C * kSpace;
+  const P = s.N * outSpace;
+
+  // 타일 안에서 쓰는 좌표 풀기. 제수가 전부 리터럴이라 상수 접기로 사라진다.
+  const kParts: string[] = [`      let ch = kk / ${kSpace}u;`];
+  for (const [d, size] of s.kernel.entries()) {
+    kParts.push(
+      `      let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`,
+    );
+  }
+  const pParts: string[] = [`      let bn = col / ${outSpace}u;`];
+  const coords: string[] = [];
+  for (const [d, size] of s.outDims.entries()) {
+    pParts.push(`      let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`);
+    coords.push(
+      `      let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d}) - ${s.pad[d] ?? 0};`,
+    );
+  }
+  const guard = s.inDims
+    .map((size, d) => `i${d} >= 0 && i${d} < ${size}`)
+    .join(" && ");
+  const offset = s.inDims
+    .map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`)
+    .join(" + ");
+
+  const decl: string[] = [];
+  const zero: string[] = [];
+  const fma: string[] = [];
+  const store: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      decl.push(`  var c${i}${j}: f32;`);
+      zero.push(`  c${i}${j} = 0.0;`);
+      fma.push(`      c${i}${j} = fma(a${i}, b${j}, c${i}${j});`);
+      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}${j});`);
+    }
+  }
+
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
-@group(0) @binding(1) var<storage, read> K: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
 ${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
 @group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;
-@compute @workgroup_size(${WORKGROUP})
-fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(n)}
-  let bn = gid / ${s.O * outSpace}u;
-  let r1 = gid % ${s.O * outSpace}u;
-  let oc = r1 / ${outSpace}u;
-  let r2 = r1 % ${outSpace}u;
-${decode}
-  var acc = ${hasBias ? "B[oc]" : "0.0"};
-  for (var c = 0u; c < ${s.C}u; c = c + 1u) {
-    let xbase = (bn * ${s.C}u + c) * ${inSpace}u;
-    let kbase = (oc * ${s.C}u + c) * ${kSpace}u;
-${spatialLoops(s,
-    "      acc = fma(X[xbase + spatial], K[kbase + kspatial], acc);",
-    (d) => `o${d} * ${s.stride[d] ?? 1} + k${d} - ${s.pad[d] ?? 0}`)}
+
+var<workgroup> As: array<f32, 1024>;
+var<workgroup> Bs: array<f32, 1024>;
+
+fn emit(f: u32, col: u32, v: f32) {
+  if (f >= ${s.O}u || col >= ${P}u) { return; }
+${pParts.join("\n")}
+  let at = (bn * ${s.O}u + f) * ${outSpace}u
+    + ${s.outDims.map((_, d) => `o${d} * ${outStride[d] ?? 1}u`).join(" + ")};
+  Out[at] = v${hasBias ? " + B[f]" : ""};
+}
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
+  let tid = lid.y * 16u + lid.x;
+  let row0 = wid.y * 64u + lid.y * 4u;
+  let col0 = wid.x * 64u + lid.x * 4u;
+${decl.join("\n")}
+${zero.join("\n")}
+  for (var t = 0u; t < ${Math.ceil(K / 16)}u; t = t + 1u) {
+    for (var sload = 0u; sload < 4u; sload = sload + 1u) {
+      let idx = sload * 256u + tid;
+      // 가중치 타일 — 행이 출력 채널, 열이 K. 가중치가 (O, K) 로 이어져 있다.
+      {
+        let ar = idx / 16u;
+        let ak = idx % 16u;
+        let f = wid.y * 64u + ar;
+        let kk = t * 16u + ak;
+        As[idx] = select(0.0, Wt[f * ${K}u + kk], f < ${s.O}u && kk < ${K}u);
+      }
+      // 입력 타일 — 행이 K, 열이 (배치·출력자리). im2col 을 **메모리에 안 펴고**
+      // 여기서 바로 만든다.
+      {
+        let bk = idx / 64u;
+        let bc = idx % 64u;
+        let kk = t * 16u + bk;
+        let col = wid.x * 64u + bc;
+        var v = 0.0;
+        if (kk < ${K}u && col < ${P}u) {
+${kParts.join("\n")}
+${pParts.join("\n")}
+${coords.join("\n")}
+          if (${guard}) {
+            v = X[(bn * ${s.C}u + ch) * ${inSpace}u + ${offset}];
+          }
+        }
+        Bs[idx] = v;
+      }
+    }
+    workgroupBarrier();
+    for (var k = 0u; k < 16u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
+      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
+      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
+      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
+      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
+      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
+      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
+      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
+${fma.join("\n")}
+    }
+    workgroupBarrier();
   }
-  Out[gid] = acc;
+${store.join("\n")}
 }`;
+}
+
+/** 타일링 conv 가 쓸 dispatch 격자. 행이 출력 채널, 열이 배치·출력 자리다. */
+export function convTiledGrid(s: ConvNDShape): [number, number, number] {
+  const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
+  return [Math.ceil(P / 64), Math.ceil(s.O / 64), 1];
 }
 
 /**

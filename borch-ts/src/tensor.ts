@@ -18,12 +18,13 @@ import {
   BINARY,
   binaryBackward,
   binaryForward,
-  convNDForward,
+  convNDForwardTiled,
   convNDGradInput,
   convNDGradWeight,
   convNDKey,
   type ConvNDShape,
   convOut,
+  convTiledGrid,
   cumExtreme,
   cumprodBackward,
   cumsumBackward,
@@ -2267,12 +2268,14 @@ export class Tensor implements Node<Tensor> {
     const outShape = [s.N, s.O, ...s.outDims];
     const n = outShape.reduce((a, b) => a * b, 1);
     const out = dev().alloc(n);
-    dev().run1d(
-      dev().pipeline(`cn:${key}:${bias ? "b" : "n"}`,
-        () => convNDForward(s, bias !== null)),
+    // 타일링 판을 쓴다. 단순 판보다 셰이더가 길고 컴파일이 한 번 더 들지만, 모양
+    // 서명으로 캐시되므로 그것은 한 번이고 스텝마다 도는 것은 커널 쪽이다.
+    dev().run(
+      dev().pipeline(`cnt:${key}:${bias ? "b" : "n"}`,
+        () => convNDForwardTiled(s, bias !== null)),
       bias ? [this.buffer, weight.buffer, bias.buffer, out]
         : [this.buffer, weight.buffer, out],
-      n,
+      convTiledGrid(s),
     );
     const parents = bias ? [this, weight, bias] : [this, weight];
     return Tensor.make(
