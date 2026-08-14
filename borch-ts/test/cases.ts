@@ -534,6 +534,8 @@ function addEdge(out: Map<string, Case>): void {
   // ── 경계에 정확히 닿는 clamp ──
   set("clamp(경계에서)", () => Tensor.from([...z]).clamp(-1, 1));
   grad("clamp(경계에서)", z, (x) => x.clamp(-1, 1));
+  grad("clamp(위만)", z, (x) => x.clampMax(1));
+  grad("clamp(아래만)", z, (x) => x.clampMin(-1));
 
   // ── 동점 ──
   // **torch 는 동점에서 기울기를 나눠 준다** — 두 입력이 같으면 각각 절반씩이다.
@@ -558,6 +560,13 @@ function addEdge(out: Map<string, Case>): void {
   }
 
   set("argmax(동점)", () => Tensor.from([...dup]).argmax());
+  set("max(동점).indices", () => Tensor.from([...dup]).max(0).indices);
+  set("min(동점).indices", () => Tensor.from([...dup]).neg().min(0).indices);
+  set("grad::max(동점)", () => {
+    const x = Tensor.from([...dup], [dup.length], true);
+    seed(x.max(0).values.reshape([1])).sum().backward();
+    return gradOf(x, "max(동점)");
+  });
   set("sort(동점).values", () => Tensor.from([...dup]).sort(0).values);
   set("sort(동점).indices", () => Tensor.from([...dup]).sort(0).indices);
   set("topk(동점).indices", () => Tensor.from([...dup]).topk(3, 0).indices);
@@ -580,6 +589,12 @@ function addEdge(out: Map<string, Case>): void {
   set("ceil(정수에서)", () => Tensor.from([...z]).ceil());
   set("trunc(음수)", () => Tensor.from([...half]).trunc());
   set("frac(음수)", () => Tensor.from([...half]).frac());
+
+  // **`%` 는 제수의 부호를 따른다** — `-7 % 3` 이 2 이지 -1 이 아니다. JS 의 `%` 는
+  // 반대이므로 그것을 그대로 쓰면 음수 입력에서만 갈린다. 양수로는 절대 안 드러난다.
+  const neg = [-7, -3, 3, 7];
+  set("%(음수)", () => Tensor.from([...neg]).remainder(3));
+  set("%(음수로 나누기)", () => Tensor.from([...neg]).remainder(-3));
 }
 
 /**
@@ -1360,6 +1375,27 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   }
   one("max_pool2d", () => inp.get("img", true), (x) => x.maxPool2d(2));
 
+  // **평균 풀링의 역방향을 아무도 안 묻고 있었다.**
+  //
+  // 이 라이브러리에서 평균 풀링의 역방향이 아예 안 도는 것을 통합 시험이 잡았다 —
+  // 쓰지 않는 바인딩이 레이아웃에서 빠지면서 커맨드 버퍼가 통째로 무효가 됐는데
+  // WebGPU 는 그것을 예외로 안 던진다. 손실이 ln 10 에 앉아 있는데 ms/step 은 계속
+  // 나왔다. 표가 이것을 물었다면 통합까지 갈 일이 아니었다.
+  //
+  // 균일하게 접으면 안 된다. max 는 이긴 자리 하나에 흘리고 avg 는 창 전체에 1/n 씩
+  // 나누는데, 상류가 전부 1 이면 **입력 기울기의 합이 같아서** 둘을 바꿔 놔도 통과한다.
+  const pooled = (name: string, fn: (x: Tensor) => Tensor) => {
+    out.set(`grad::${name}`, () => {
+      const x = inp.get("img", true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  };
+  pooled("avg_pool2d", (x) => x.avgPool2d(2));
+  pooled("avg_pool2d(스트라이드1)", (x) => x.avgPool2d(2, 1));
+  pooled("adaptive_avg_pool2d", (x) => x.adaptiveAvgPool(1));
+  pooled("max_pool2d(가중치)", (x) => x.maxPool2d(2));
+
   // **평균·분산이 그래프 안에 있어야 한다.** 밖으로 빼면 입력 기울기가 어긋나고
   // weight 에는 아예 안 온다(None). 그래서 둘 다 본다.
   for (const which of ["x", "weight"] as const) {
@@ -1369,6 +1405,17 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
       bn.forward(x).sum().backward();
       const leaf = which === "x" ? x : bn.weight;
       return gradOf(leaf, `BatchNorm2d/${which}`);
+    });
+    // **위의 `sum()` 이 BatchNorm 역방향의 절반을 가린다.** 입력 기울기는 곧바로
+    // 오는 항 하나와, 평균·분산이 입력에 의존해서 생기는 보정항 둘로 되어 있다.
+    // 상류가 전부 1 이면 그 보정항 둘이 정확히 상쇄되어(기대값 4.7e-10) 위 케이스는
+    // 보정항을 아예 안 묻는다. 자리마다 다른 가중치를 주면 상쇄가 깨진다.
+    out.set(`grad::BatchNorm2d(가중치)/${which}`, () => {
+      const x = inp.get("img", true);
+      const bn = new nn.BatchNormND(3);
+      seeded(bn.forward(x)).backward();
+      const leaf = which === "x" ? x : bn.weight;
+      return gradOf(leaf, `BatchNorm2d(가중치)/${which}`);
     });
   }
   // **뽑기 계열이 그래프를 끊기 가장 쉬운 자리다.** 값만 떼어 돌려주면 뽑은 자리로

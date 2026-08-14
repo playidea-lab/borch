@@ -8,5 +8,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # **torchvision 이 있어야 한다.** pytest 가 골든을 그 자리에서 굳히는데(npz 는
+      # 커밋 안 한다 — 진짜 torch 로 다시 뽑는 것이 요점이다), vision 케이스 14 건이
+      # 진짜 torchvision 을 부른다. 우리 변환을 우리 기대값에 맞추면 아무것도 증명
+      # 못 하므로 그것이 그 케이스들의 값어치다. 없으면 dump 가 14 건을 실패로 세고
+      # 멈춰서, transforms 가 들어온 뒤로 이 잡이 매 push 마다 빨갰다.
       - name: 값 대조
-        run: uv run --with pytest --with numpy --with torch --quiet pytest tests/ -q
+        run: uv run --with pytest --with numpy --with torch --with torchvision --quiet pytest tests/ -q

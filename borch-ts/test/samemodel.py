@@ -175,6 +175,16 @@ def main(argv):
     import torch
 
     print(f"어댑터: {dump['adapter']}")
+    # **소프트웨어 래스터라이저에서는 판정하지 않는다.**
+    #
+    # 헤드리스 Chromium 은 SwiftShader 를 준다. 조각 대조는 거기서도 통과하는데
+    # 전체 모델은 최대차 3.9e-03 이 나온다 — 스무 층을 지나며 쌓인 부동소수점 차이지
+    # 결함이 아니다(같은 코드가 Metal 에서는 4.6e-06 이다). 그것을 갈림으로 읽으면
+    # 없는 버그를 쫓게 되고, 반대로 허용 오차를 그만큼 늘리면 진짜 갈림을 놓친다.
+    if "swiftshader" in dump["adapter"].lower() or "llvmpipe" in dump["adapter"].lower():
+        print("소프트웨어 어댑터다 — 판정하지 않는다. `--headed` 로 다시 돌려라.",
+              file=sys.stderr)
+        return 1
     if _check_pieces(dump.get("pieces", {})):
         return 1
     model = _torch_model()

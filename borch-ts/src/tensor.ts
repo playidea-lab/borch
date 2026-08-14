@@ -1515,6 +1515,36 @@ export class Tensor implements Node<Tensor> {
     return this.argReduceOver("min", dim);
   }
 
+  /**
+   * 값과 번호를 함께. torch 의 `x.max(dim)` 이다.
+   *
+   * `amax` 와 `argmax` 로 따로 부르면 되기는 하는데, torch 코드가 쓰는 모양은
+   * 이쪽이고 **둘이 같은 자리를 가리키는지**가 여기서만 확인된다. `amax` 는 동점을
+   * 고르게 나누고 `argmax` 는 먼저 나온 자리 하나를 고르는데, 값을 번호로 다시
+   * 뽑아 오면 나누는 일이 없다 — torch 의 `max(dim)` 이 그쪽이다.
+   */
+  max(dim = 0): { values: Tensor; indices: Tensor } {
+    return this.pickReduce("max", dim);
+  }
+
+  min(dim = 0): { values: Tensor; indices: Tensor } {
+    return this.pickReduce("min", dim);
+  }
+
+  private pickReduce(kind: "max" | "min", dim: number):
+    { values: Tensor; indices: Tensor } {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const indices = this.argReduceOver(kind, axis);
+    // 번호로 다시 뽑는다 — 그래야 기울기가 이긴 자리 **하나**로만 간다.
+    // `gather` 는 랭크가 같아야 하므로 접혔던 축을 되살렸다가 다시 접는다.
+    const lifted = [...this.shape];
+    lifted[axis] = 1;
+    const values = this.gather(axis, indices.reshape(lifted))
+      .reshape(indices.shape);
+    return { values, indices };
+  }
+
   private argReduceOver(kind: "max" | "min", dim: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -1697,6 +1727,40 @@ export class Tensor implements Node<Tensor> {
     const d = Tensor.full([], divisor);
     const q = this.div(d).unary("trunc").detach();
     return this.sub(q.binary("mul", d));
+  }
+
+  /**
+   * 나머지 — **`fmod` 와 부호가 다르다.**
+   *
+   * torch 의 `remainder`(그리고 파이썬·torch 의 `%`)는 **제수**의 부호를 따르고
+   * `fmod` 는 피제수의 부호를 따른다. `-7` 을 `3` 으로 나눈 나머지가 이쪽은 2 이고
+   * 저쪽은 -1 이다. 둘 다 "나머지" 라고 불리는 것이 함정이고, JS 의 `%` 는 `fmod`
+   * 쪽이라 그것을 그대로 쓰면 음수 입력에서만 조용히 갈린다.
+   *
+   * 잘라내기(`trunc`)냐 내림(`floor`)이냐 하나 차이다.
+   */
+  remainder(divisor: number): Tensor {
+    const d = Tensor.full([], divisor);
+    const q = this.div(d).unary("floor").detach();
+    return this.sub(q.binary("mul", d));
+  }
+
+  /** 아래로만 자른다. torch 의 `clamp(min=…)` 이다. */
+  clampMin(low: number): Tensor {
+    const lo = f32lit(low);
+    return this.unary(unaryWith(`clampMin<${lo}>`, () => ({
+      fwd: `max(x, ${lo})`,
+      bwd: `select(0.0, 1.0, x >= ${lo})`,
+    })));
+  }
+
+  /** 위로만 자른다. torch 의 `clamp(max=…)` 이다. */
+  clampMax(high: number): Tensor {
+    const hi = f32lit(high);
+    return this.unary(unaryWith(`clampMax<${hi}>`, () => ({
+      fwd: `min(x, ${hi})`,
+      bwd: `select(0.0, 1.0, x <= ${hi})`,
+    })));
   }
 
   /**
