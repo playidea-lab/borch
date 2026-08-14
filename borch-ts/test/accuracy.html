@@ -23,6 +23,7 @@
   <pre id="out">데이터를 받는 중…</pre>
   <script type="module">
     import { init } from "../dist/src/tensor.js";
+    import { Device } from "../dist/src/device.js";
     import { decodeCifar, report } from "../dist/test/accuracy.js";
 
     const out = document.getElementById("out");
@@ -53,7 +54,9 @@
         cut(train), cut(test), epochs,
         only === null ? undefined : only === "on",
       );
-      window.__borchAccuracy = { text };
+      // 어댑터를 본문에만 두면 러너가 못 본다 — 사람이 읽는 글에서 파내는 것은
+      // 붙였다 떨어지는 연결이다.
+      window.__borchAccuracy = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
       window.__borchAccuracy = { error: String(err && err.stack ? err.stack : err) };

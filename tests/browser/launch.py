@@ -19,9 +19,46 @@ Chromium 을 쓰는 것이 기본인데, GPU 서버에는 그것이 없고 배�
 """
 
 import os
+import re
+import sys
 
 # WebGPU 를 켜고 리눅스에서 Vulkan 을 쓰게 한다. macOS 는 Metal 이라 뒤엣것이 무시된다.
 FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan"]
+
+# CPU 로 도는 구현들. Chrome 은 SwiftShader, 리눅스 Mesa 는 lavapipe(llvmpipe)다.
+_SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)
+
+
+def is_software(adapter):
+    """이 어댑터가 CPU 인가. 이름으로 가른다 — WebGPU 는 그것을 안 알려준다."""
+    return bool(adapter and _SOFTWARE.search(str(adapter)))
+
+
+def refuse_if_software(adapter, what):
+    """**시간과 자원을 재는 것은 CPU 에서 무효다.** 무효면 True 를 준다.
+
+    값은 장치가 안 바꾸므로 골든은 소프트웨어 어댑터에서도 유효한 증거다 — 로직이
+    맞다는 증거이지 GPU 경로가 돈다는 증거가 아닐 뿐이다. 그래서 골든은 안 막고
+    벤치·정확도만 막는다.
+
+    이 구분이 이 함수가 있는 이유다. 리눅스 GPU 서버에서 헤드리스로 골든을 돌렸더니
+    845/845 가 나왔는데 어댑터는 `google / swiftshader` 였다 — 통과는 진짜였지만
+    "다른 벤더에서 확인했다"는 주장은 거짓이었다. 사람이 로그 첫 줄을 안 읽으면
+    그대로 지나간다.
+    """
+    if not is_software(adapter):
+        return False
+    print(f"**소프트웨어 어댑터다({adapter}) — 이 장치에서 {what} 은 무효다.**\n"
+          "  CPU 로 돈 것이라 이 수는 GPU 의 수가 아니다. `--headed` 로,\n"
+          "  진짜 GPU 가 붙은 화면에서 다시 재라.", file=sys.stderr)
+    return True
+
+
+def warn_if_software(adapter, what):
+    """골든처럼 **값만 묻는** 것에 쓴다. 막지 않고, 무엇을 증명했는지만 좁혀 적는다."""
+    if is_software(adapter):
+        print(f"  (소프트웨어 어댑터다 — {what} 이 맞다는 것은 증명되지만,\n"
+              "   GPU 경로가 도는지는 이 실행이 증명하지 않는다.)")
 
 
 def launch(playwright, headed=False, flags=FLAGS):

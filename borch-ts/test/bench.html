@@ -22,13 +22,16 @@
   <pre id="out">재는 중… (한참 걸린다)</pre>
   <script type="module">
     import { init } from "../dist/src/tensor.js";
+    import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/bench.js";
 
     const out = document.getElementById("out");
     try {
       await init();
       const text = await report();
-      window.__borchBench = { text };
+      // **어댑터를 본문에만 두면 안 된다.** 러너가 그것을 보고 CPU 에서 잰 수를
+      // 거부해야 하는데, 사람이 읽는 글에서 파내는 것은 붙였다 떨어지는 연결이다.
+      window.__borchBench = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
       // 실패를 조용히 넘기지 않는다 — 안 돈 것과 느린 것은 다르다.

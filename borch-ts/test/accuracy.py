@@ -13,7 +13,7 @@
 import sys
 
 import run as runner
-from launch import launch
+from launch import launch, refuse_if_software
 
 TIMEOUT_MS = 7_200_000
 
@@ -62,6 +62,11 @@ def main(argv):
         print(f"재지 못했다: {result['error']}", file=sys.stderr)
         return 1
     print(result["text"])
+    # 정확도 자체는 장치가 안 바꾼다. 그런데 **에폭 시간이 같이 적히고**, 소프트웨어
+    # 어댑터에서는 그 절반이 거짓이 된다. 한 보고 안에 유효한 수와 무효한 수를 섞어
+    # 내보내느니 다시 재라고 하는 편이 낫다.
+    if refuse_if_software(result.get("adapter"), "에폭 시간"):
+        return 1
     return 0
 
 

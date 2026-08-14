@@ -20,7 +20,7 @@ import socketserver
 import sys
 import threading
 
-from launch import launch
+from launch import launch, warn_if_software
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = "/borch-ts/test/index.html"
@@ -97,7 +97,13 @@ def main(argv):
     # **어느 장치에서 돌았는지 먼저 적는다.** 값은 장치가 안 바꾸지만, 안 적어두면
     # 성능을 재는 쪽이 헤드리스의 소프트웨어 어댑터를 진짜 GPU 로 착각한다 —
     # 이 저장소에서 실제로 그렇게 됐다.
-    print(f"어댑터: {report.get('adapter', '(모름)')}")
+    adapter = report.get("adapter", "(모름)")
+    print(f"어댑터: {adapter}")
+    # **여기서는 막지 않는다.** 골든은 값을 묻고 값은 장치가 안 바꾸므로, CPU 에서
+    # 통과해도 그것은 진짜 통과다. 다만 그 통과가 증명하는 범위가 좁아지므로 적는다 —
+    # 실제로 리눅스 GPU 서버에서 845/845 를 받고 "다른 벤더에서 확인했다"고 읽을
+    # 뻔했는데 어댑터가 `google / swiftshader` 였다.
+    warn_if_software(adapter, "값")
     gap = report["total"] - report["registered"]
     print(f"골든 {report['total']}건 중 {report['registered']}건을 TS 로 썼다 "
           f"— {gap}건은 아직 안 물었다.")
