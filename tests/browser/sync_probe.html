@@ -1,0 +1,110 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pyodide 에서 borch.ts 를 동기로 부를 수 있는가</title>
+<body>
+<pre id="out">재는 중…</pre>
+<script src="/vendor/pyodide/pyodide.js"></script>
+<script type="module">
+  /*
+   * 묻는 것은 하나다: **Pyodide 의 파이썬에서 borch.ts 의 비동기 읽기를 동기로
+   * 부를 수 있는가.**
+   *
+   * 이것이 갈림길인 이유. 자매(`borch_webgpu`)의 파이썬 API 는 통째로 동기다 —
+   * TF.js 의 `dataSync()` 가 WebGPU 에 동기 읽기 API 가 없는데도 받아주기 때문이다.
+   * borch.ts 는 `await stage.mapAsync(...)` 라 비동기이고, 그대로 얹으면
+   * `loss.item()` 이 `await loss.item()` 이 된다. 그러면 "튜토리얼 코드를 임포트만
+   * 바꿔 돌린다" 는 이 프로젝트의 유일한 주장이 깨진다.
+   *
+   * 그래서 답이 갈린다. 되면 자매를 borch.ts 위로 옮길 수 있고, 안 되면 그 길은
+   * 여기서 끝난다. **추측하지 않고 잰다.**
+   */
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+
+  try {
+    const borch = await import("/borch-ts/dist/src/index.js");
+    await borch.init();
+    // Pyodide 의 파이썬이 `import js` 로 닿을 수 있게 전역에 둔다.
+    globalThis.borch = borch;
+    say(`어댑터: ${borch.Device.adapterInfo}`);
+
+    const py = await loadPyodide({ indexURL: "/vendor/pyodide/" });
+    say(`Pyodide ${py.version}`);
+
+    // 1) JSPI 가 이 브라우저에 있는가. `run_sync` 는 그 위에 선다.
+    const jspi = typeof WebAssembly.Suspending === "function";
+    say(`WebAssembly JSPI: ${jspi ? "있다" : "없다"}`);
+
+    // 2) run_sync 가 파이썬 쪽에 있는가.
+    const hasRunSync = py.runPython(`
+import pyodide.ffi
+hasattr(pyodide.ffi, "run_sync")
+`);
+    say(`pyodide.ffi.run_sync: ${hasRunSync ? "있다" : "없다"}`);
+
+    // 3) **진짜로 되는가.** 있다는 것과 도는 것은 다르다.
+    //
+    // 진입점이 중요하다. `runPython`(동기 진입)으로 들어가면 스택에 중단점이 없어서
+    // `run_sync` 가 구조상 실패한다("No suspender") — 처음에 그렇게 재고 안 된다고
+    // 읽을 뻔했다. **실제 시나리오는 그것이 아니다.** 페이지는 비동기로 들어가고
+    // (`runPythonAsync`), 그 안에서 도는 사용자 코드가 동기다. torch 코드가 딱 그 모양이다.
+    const BODY = `
+import js
+from pyodide.ffi import run_sync
+
+def user_code():
+    """**여기가 사용자가 쓰는 코드다.** await 이 하나도 없어야 한다."""
+    t = js.borch.Tensor.from_(js.Float32Array.new([1.0, 2.0, 3.0]), js.Array.of(3))
+    doubled = t.mul(js.borch.Tensor.full(js.Array.new(), 2.0))
+    return list(run_sync(doubled.toArray()))
+
+user_code()
+`;
+    let verdict = null;
+    try {
+      verdict = py.runPython(BODY);
+      say(`동기 읽기(동기 진입): ${JSON.stringify(Array.from(verdict))} — 된다`);
+    } catch (err) {
+      // **자르지 않는다.** 앞의 두 줄만 보면 파이썬 트레이스백의 껍데기만 보이고
+      // 진짜 이유는 맨 아래에 있다 — 잘라 보다 한 번 헛짚었다.
+      say(`동기 읽기(동기 진입): 안 된다 — ${String(err).trim().split("\n").pop()}`);
+    }
+    let deep = null;
+    try {
+      deep = await py.runPythonAsync(BODY);
+      say(`동기 읽기(비동기 진입): ${JSON.stringify(Array.from(deep))} — **된다**`);
+    } catch (err) {
+      say(`동기 읽기(비동기 진입): 안 된다\n${String(err)}`);
+    }
+    verdict = deep ?? verdict;
+
+    // 4) 대조군. 비동기로는 당연히 되어야 한다 — 안 되면 위의 실패가 동기 때문이
+    //    아니라 다른 것 때문이라는 뜻이다.
+    let async_ok = false;
+    try {
+      const got = await py.runPythonAsync(`
+import js
+t = js.borch.Tensor.from_(js.Float32Array.new([1.0, 2.0, 3.0]), js.Array.of(3))
+got = await t.toArray()
+list(got)
+`);
+      async_ok = true;
+      say(`비동기 읽기(대조군): ${JSON.stringify(Array.from(got))} — 된다`);
+    } catch (err) {
+      say(`비동기 읽기(대조군): **안 된다**\n${String(err)}`);
+    }
+
+    window.__syncProbe = {
+      adapter: borch.Device.adapterInfo,
+      jspi, hasRunSync,
+      sync: verdict !== null && verdict !== undefined,
+      async: async_ok,
+      text: lines.join("\n"),
+    };
+  } catch (err) {
+    window.__syncProbe = { error: String(err && err.stack ? err.stack : err) };
+    say(`재지 못했다: ${err && err.stack ? err.stack : err}`);
+  }
+</script>
+</body>
