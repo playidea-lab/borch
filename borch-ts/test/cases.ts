@@ -56,7 +56,7 @@ const MATH_UNARY: Readonly<Record<string, string>> = {
   acos: "acos", acosh: "acosh", asin: "asin", asinh: "asinh",
   atan: "atan", atanh: "atanh", expm1: "expm1", log1p: "log1p", exp2: "exp2",
   deg2rad: "deg2rad", rad2deg: "rad2deg", trunc: "trunc", frac: "frac",
-  positive: "positive", logit: "logit", sinc: "sinc",
+  positive: "positive", logit: "logit", sinc: "sinc", erfc: "erfc",
   arccos: "acos", arccosh: "acosh", arcsin: "asin", arcsinh: "asinh",
   arctan: "atan", arctanh: "atanh", fix: "trunc", absolute: "abs",
 };
@@ -107,7 +107,7 @@ export function cases(): Map<string, Case> {
     }
   }
 
-  for (const name of STEPS) {
+  for (const name of [...STEPS, "sgn"]) {
     const op = name === "fix" ? "trunc" : name;
     out.set(`math::grad::${name}(0이어야)`, () => {
       const x = Tensor.from(plain, undefined, true);
@@ -116,5 +116,69 @@ export function cases(): Map<string, Case> {
     });
   }
 
+  // 값만 묻는 나머지. 참·거짓이거나 계단이라 기울기 케이스가 없다.
+  out.set("math::sgn", () => Tensor.from(plain).unary("sgn"));
+  out.set("math::signbit", () => Tensor.from(plain).unary("signbit"));
+  // **x 에 0 이 있어야 이 함수를 시험하는 것이다.** 없으면 `x * log(y)` 와 구별이 안 된다.
+  out.set("math::xlogy(x에 0 포함)", () =>
+    Tensor.from([0.0, 2.0, 0.0, 3.0])
+      .binary("xlogy", Tensor.from([1.0, 2.0, 0.5, 4.0])));
+  out.set("math::heaviside", () =>
+    Tensor.from([-1.0, 0.0, 1.0, 0.0])
+      .binary("heaviside", Tensor.from([0.5, 0.5, 0.5, 0.5])));
+  out.set("math::ldexp", () =>
+    Tensor.from(plain).binary("ldexp", Tensor.from([1.0, 2.0, 0.0, -1.0])));
+
+  addReduce(out);
   return out;
+}
+
+// ── tests/cases.py 의 reduce_cases 가 쓰는 입력. 그대로 옮긴 것이다. ────────
+// **동점이 일부러 들어 있다.** amax 는 동점일 때 기울기를 고르게 나누고([1,3,3,2]
+// → [0,.5,.5,0]), 동점 없는 입력으로 재면 그 규칙을 하나도 안 보게 된다.
+const tie = [1.0, 3.0, 3.0, 2.0];
+const mat = [1.0, 5.0, 3.0, 4.0, 2.0, 6.0]; // (2, 3)
+const withnan = [1.0, Number.NaN, 3.0, 5.0];
+
+/**
+ * `reduce_cases` 의 기울기 케이스는 출력에 **자리마다 다른 가중치**를 곱한 뒤
+ * 더해서 역전파한다. 스칼라 출력이면 가중치가 없다 — 곱할 자리가 없으므로.
+ */
+function seeded(out: Tensor): Tensor {
+  if (out.shape.length === 0) return out.sum();
+  const w = Array.from({ length: out.size }, (_, i) => i);
+  return out.mul(Tensor.from(w, out.shape)).sum();
+}
+
+function addReduce(out: Map<string, Case>): void {
+  /** 값 케이스와 기울기 케이스를 같이 단다 — 둘을 떼면 한쪽만 물어보게 된다. */
+  const add = (
+    name: string,
+    fn: (x: Tensor) => Tensor,
+    src: readonly number[],
+    shape?: readonly number[],
+    withGrad = true,
+  ): void => {
+    out.set(`reduce::${name}`, () => fn(Tensor.from(src, shape)));
+    if (!withGrad) return;
+    out.set(`reduce::grad::${name}`, () => {
+      const x = Tensor.from(src, shape, true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  };
+
+  add("amax", (x) => x.amax(), tie);
+  add("amin", (x) => x.amin(), tie);
+  add("amax(dim)", (x) => x.amax(1), mat, [2, 3]);
+  add("amin(keepdim)", (x) => x.amin(1, true), mat, [2, 3]);
+  add("nansum", (x) => x.nansum(), withnan);
+  add("nanmean", (x) => x.nanmean(), withnan);
+  add("logsumexp", (x) => x.logsumexp(0), tie);
+  add("logsumexp(dim1)", (x) => x.logsumexp(1), mat, [2, 3]);
+  add("dist", (x) => x.dist(Tensor.zeros([4])), tie);
+
+  // 기울기 케이스가 없는 것들. 골든도 값만 굳혔다.
+  out.set("reduce::aminmax/최소", () => Tensor.from(tie).amin());
+  out.set("reduce::aminmax/최대", () => Tensor.from(tie).amax());
 }

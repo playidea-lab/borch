@@ -22,6 +22,8 @@ export interface UnarySpec {
   readonly fwd: string;
   /** 도함수 WGSL 식. `x` 는 입력, `o` 는 순방향 결과다 — 다시 안 센다. */
   readonly bwd: string;
+  /** 식이 부르는 보조 함수의 WGSL 정의. 한 줄로 안 되는 것만 여기 온다. */
+  readonly prelude?: string;
 }
 
 /** 원소별 이항 — `da`·`db` 는 각 입력으로 가는 기울기에 곱할 것이다. */
@@ -29,7 +31,57 @@ export interface BinarySpec {
   readonly fwd: string;
   readonly da: string;
   readonly db: string;
+  readonly prelude?: string;
 }
+
+/**
+ * erf 계열의 보조 함수.
+ *
+ * Abramowitz & Stegun 7.1.26 이고 코어(`browsertorch/_ops.py`)와 **같은 계수**다.
+ * 셋이 다른 근사를 쓰면 값이 갈릴 때 구현이 갈린 것인지 근사가 갈린 것인지 못 가른다.
+ *
+ * 원형은 `erfc_pos` 다 — 다항식 × exp(-y²) 라 뺄셈이 없어서 꼬리에서 자릿수가 안 난다.
+ *
+ * **원점 근처는 코어와 다르게 간다.** 코어는 `1 - erfc_pos(|x|)` 를 float64 로 계산해
+ * 상쇄를 피하는데, WGSL 에는 f64 가 없다. 그래서 |x| < 0.5 는 급수로 답한다 —
+ * 그 구간에서 다음 항이 4e-7 이라 이 프로젝트의 허용 오차(1e-4) 한참 아래다.
+ * f32 로 그냥 빼면 코어가 실측으로 확인한 그 자리(4.6만 점 중 5,124 점)가 되살아난다.
+ */
+/**
+ * NaN 판정.
+ *
+ * **`x != x` 는 여기서 안 통했다.** WGSL 에 `isNan` 내장이 없어 그것을 썼는데,
+ * `nansum` 이 NaN 을 그대로 더하고 `nanmean` 의 개수가 3 대신 4 로 나왔다 —
+ * 셰이더 컴파일러가 부동소수 비교를 NaN 없는 것으로 접었다는 뜻이다.
+ *
+ * 지수부가 전부 1 이고 가수부가 0 이 아니면 NaN 이다. 비트로 보면 접힐 여지가 없다.
+ */
+const NAN_PRELUDE = `
+fn is_nan(x: f32) -> bool {
+  let b = bitcast<u32>(x);
+  return (b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u;
+}`;
+
+const ERF_PRELUDE = `
+fn erfc_pos(y: f32) -> f32 {
+  let t = 1.0 / (1.0 + 0.3275911 * y);
+  let poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741
+           + t * (-1.453152027 + t * 1.061405429))));
+  return poly * exp(-y * y);
+}
+fn erf_(x: f32) -> f32 {
+  let a = abs(x);
+  if (a < 0.5) {
+    let z = x * x;
+    return x * 1.1283791670955126 * (1.0 - z * (0.3333333333333333
+         - z * (0.1 - z * (0.023809523809523808 - z * 0.004629629629629629))));
+  }
+  return sign(x) * (1.0 - erfc_pos(a));
+}
+fn erfc_(x: f32) -> f32 {
+  // x >= 0 은 원형을 그대로 쓴다 — 뺄셈이 아예 없다.
+  return select(2.0 - erfc_pos(abs(x)), erfc_pos(x), x >= 0.0);
+}`;
 
 /**
  * 도함수가 없는 것(`sign`·`floor` 같은 계단)은 `bwd: "0.0"` 이다.
@@ -83,6 +135,22 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
     bwd:
       "select((cos(3.141592653589793 * x) - o) / x, 0.0, x == 0.0)",
   },
+  erf: { fwd: "erf_(x)", bwd: "1.1283791670955126 * exp(-x * x)", prelude: ERF_PRELUDE },
+  erfc: { fwd: "erfc_(x)", bwd: "-1.1283791670955126 * exp(-x * x)", prelude: ERF_PRELUDE },
+  // sgn 은 실수에서 sign 과 같다. 별칭이지만 torch 가 둘 다 가지므로 이름을 남긴다.
+  sgn: { fwd: "sign(x)", bwd: "0.0" },
+  // 참·거짓을 0/1 로 낸다. dtype 이 float32 하나뿐이라 bool 을 따로 안 든다.
+  // **-0.0 은 여기서 거짓이다** — torch 는 참으로 본다. 지금 케이스에 -0.0 이 없어
+  // 안 갈리지만, 갈리는 날이 오면 이 줄이 원인이다.
+  signbit: { fwd: "select(0.0, 1.0, x < 0.0)", bwd: "0.0" },
+  // 둘 다 torch 의 공개 이름이 아니라 `nansum`·`nanmean` 을 조립하는 조각이다.
+  nanToZero: {
+    fwd: "select(x, 0.0, is_nan(x))",
+    // NaN 자리로는 안 흘린다. 그 자리는 합에 안 들어갔으므로 0 이 맞다.
+    bwd: "select(1.0, 0.0, is_nan(x))",
+    prelude: NAN_PRELUDE,
+  },
+  notNan: { fwd: "select(1.0, 0.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
 };
 
 export const BINARY: Readonly<Record<string, BinarySpec>> = {
@@ -118,6 +186,20 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
     da: "1.0 / (1.0 + exp2(y - x))",
     db: "1.0 / (1.0 + exp2(x - y))",
   },
+  // **x 가 0 이면 y 와 무관하게 0 이다.** y 가 0 이어도 그렇다 — 그러라고 있는 함수이고,
+  // 그 자리를 안 보면 `x * log(y)` 와 구별이 안 된다.
+  xlogy: {
+    fwd: "select(x * log(y), 0.0, x == 0.0)",
+    da: "log(y)",
+    db: "x / y",
+  },
+  // x<0 이면 0, x>0 이면 1, x==0 이면 y 를 그대로. 계단이라 x 로는 안 흐른다.
+  heaviside: {
+    fwd: "select(select(0.0, 1.0, x > 0.0), y, x == 0.0)",
+    da: "0.0",
+    db: "select(0.0, 1.0, x == 0.0)",
+  },
+  ldexp: { fwd: "x * exp2(y)", da: "exp2(y)", db: "o * 0.6931471805599453" },
 };
 
 /** 워크그룹 크기. 원소별과 축약은 1차원이다. */
@@ -166,7 +248,7 @@ function unarySpec(name: string): UnarySpec {
 /** 원소별 단항 순방향. 원소 수를 상수로 굽는다 — 경계 검사가 접힌다. */
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
-  return `
+  return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
@@ -180,7 +262,7 @@ ${flatId(n)}
 /** 원소별 단항 역방향. 순방향 결과를 받아 다시 안 센다. */
 export function unaryBackward(name: string, n: number): string {
   const op = unarySpec(name);
-  return `
+  return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> O: array<f32>;
 @group(0) @binding(2) var<storage, read> G: array<f32>;
@@ -229,7 +311,7 @@ export function binaryForward(
   const op = BINARY[name];
   if (!op) throw new Error(`모르는 이항 연산: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
-  return `
+  return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Out: array<f32>;
@@ -263,7 +345,7 @@ export function binaryBackward(
   const op = BINARY[name];
   if (!op) throw new Error(`모르는 이항 연산: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
-  return `
+  return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;
 @group(0) @binding(2) var<storage, read> O: array<f32>;
@@ -452,6 +534,120 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>,
 /** `reduceSum` 한 번이 내는 부분합 개수. 하나가 될 때까지 다시 부른다. */
 export function reduceParts(n: number): number {
   return Math.max(1, Math.ceil(n / WORKGROUP));
+}
+
+/**
+ * 축 하나를 접는다. 축약 축을 가운데 두고 `(바깥, 축약, 안쪽)` 으로 본다.
+ *
+ * 스레드 하나가 결과 한 칸을 맡아 축약 축을 **정해진 순서로** 훑는다. 원자 연산도
+ * 트리도 없다 — 같은 입력이면 같은 값이 나온다.
+ *
+ * **전체 축약에는 이걸 쓰지 않는다.** `outer = inner = 1` 이면 스레드 하나가 n 번
+ * 도는 꼴이라, 큰 텐서에서는 `Device.sumAll` 의 트리가 맞다. 여기 쓰는 것은 축이
+ * 실제로 있을 때다.
+ */
+export type ReduceKind = "sum" | "max" | "min";
+
+/**
+ * 축약의 시작값과 한 걸음.
+ *
+ * **최대·최소는 파수꾼 값을 안 쓴다.** 처음에 `-3.4028235e38` 을 넣었더니 WGSL 이
+ * "f32 로 표현할 수 없다" 며 거부했고(JS 가 찍은 십진수가 f32 최대값보다 위로
+ * 반올림된다), 비트캐스트로 -inf 를 만들었더니 그것도 거부했다 — WGSL 은 상수식에
+ * 무한대를 못 담는다. 둘 다 예외가 아니라 결과 0 으로만 보였다.
+ *
+ * 첫 원소에서 시작해 나머지를 훑는 쪽이 그 문제가 아예 없고, 답도 더 정확하다.
+ * 축약 길이는 항상 1 이상이라 첫 원소는 늘 있다.
+ */
+const REDUCE_INIT: Readonly<Record<ReduceKind, string>> = {
+  sum: "0.0",
+  max: "A[base]",
+  min: "A[base]",
+};
+
+/** 시작값이 첫 원소면 그 자리를 두 번 세지 않는다. */
+const REDUCE_FROM: Readonly<Record<ReduceKind, number>> = { sum: 0, max: 1, min: 1 };
+
+const REDUCE_STEP: Readonly<Record<ReduceKind, string>> = {
+  sum: "acc = acc + v;",
+  max: "acc = max(acc, v);",
+  min: "acc = min(acc, v);",
+};
+
+export function reduceDim(
+  kind: ReduceKind,
+  outer: number,
+  red: number,
+  inner: number,
+): string {
+  const n = outer * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${inner}u;
+  let i = gid % ${inner}u;
+  let base = o * ${red * inner}u + i;
+  var acc = ${REDUCE_INIT[kind]};
+  for (var r = ${REDUCE_FROM[kind]}u; r < ${red}u; r = r + 1u) {
+    let v = A[base + r * ${inner}u];
+    ${REDUCE_STEP[kind]}
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/** `sum(dim)` 의 역방향 — 접힌 축으로 도로 편다. */
+export function expandDim(outer: number, red: number, inner: number): string {
+  const n = outer * red * inner;
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${red * inner}u;
+  let i = gid % ${inner}u;
+  Out[gid] = G[o * ${inner}u + i];
+}`;
+}
+
+/**
+ * `amax`/`amin` 의 역방향. **동점이면 고르게 나눈다.**
+ *
+ * torch 의 실측이 그렇다 — `[1,3,3,2]` 의 `amax` 기울기는 `[0,.5,.5,0]` 이다.
+ * 하나만 골라 주면 값 검사는 통과하고 학습만 미묘하게 갈린다. 그래서 골든의 입력에
+ * 동점이 일부러 들어 있고, 여기서 그 규칙을 지킨다.
+ *
+ * 자기 축을 한 번 더 훑어 동점 수를 센다. 축약 길이만큼의 추가 비용이고, 그 값을
+ * 순방향에서 들고 오면 버퍼가 하나 더 필요하다 — 지금 크기에서는 다시 세는 쪽이 싸다.
+ */
+export function extremeBackward(
+  outer: number,
+  red: number,
+  inner: number,
+): string {
+  const n = outer * red * inner;
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> O: array<f32>;
+@group(0) @binding(2) var<storage, read> G: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${red * inner}u;
+  let i = gid % ${inner}u;
+  let base = o * ${red * inner}u + i;
+  let m = O[o * ${inner}u + i];
+  var ties = 0.0;
+  for (var r = 0u; r < ${red}u; r = r + 1u) {
+    if (A[base + r * ${inner}u] == m) { ties = ties + 1.0; }
+  }
+  Out[gid] = select(0.0, G[o * ${inner}u + i] / ties, A[gid] == m);
+}`;
 }
 
 /** 값 하나로 채운다. 기울기 씨앗(`backward()` 의 1.0)과 `zeros` 가 쓴다. */

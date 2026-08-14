@@ -19,6 +19,17 @@ import { grid1d, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
 
 const BYTES_PER_F32 = 4;
 
+/** 검증 오류를 몇 건까지 찍을 것인가. 첫 건이 원인이고 나머지는 그 여파다. */
+const MAX_REPORTED_ERRORS = 3;
+
+/** 오류 메시지가 가리키는 줄을 찾을 수 있게 셰이더에 번호를 붙인다. */
+function numbered(code: string): string {
+  return code
+    .split("\n")
+    .map((line, i) => `${String(i + 1).padStart(3)} | ${line}`)
+    .join("\n");
+}
+
 export class Device {
   private readonly device: GPUDevice;
   private readonly limits: GPUSupportedLimits;
@@ -50,6 +61,25 @@ export class Device {
       maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
     };
     const device = await adapter.requestDevice({ requiredLimits: want });
+    // 검증 오류도 예외로 안 온다. 붙잡지 않으면 잘못 만든 파이프라인이 조용히
+    // 아무것도 안 하고, 그 결과를 우리는 "값이 틀렸다" 로만 보게 된다.
+    //
+    // 처음 것들만 낸다 — 셰이더 하나가 깨지면 그 뒤 dispatch 마다 같은 오류가 다시
+    // 나서 진짜 원인(첫 줄)이 스크롤 밖으로 밀린다. 실측으로 그렇게 됐다.
+    // **줄이는 것이지 삼키는 것이 아니다.** 몇 건을 접었는지는 마지막에 적는다.
+    const seen = { count: 0 };
+    device.addEventListener("uncapturederror", (event) => {
+      seen.count += 1;
+      const err = (event as GPUUncapturedErrorEvent).error;
+      if (seen.count <= MAX_REPORTED_ERRORS) {
+        console.error(`[borch.ts] WebGPU 검증 오류 ${seen.count}: ${err.message}`);
+      } else if (seen.count === MAX_REPORTED_ERRORS + 1) {
+        console.error(
+          `[borch.ts] 검증 오류가 ${MAX_REPORTED_ERRORS} 건을 넘었다 — ` +
+            "이후는 안 찍는다. 원인은 위의 첫 건이다.",
+        );
+      }
+    });
     device.lost
       .then((info) => {
         // 장치 소실은 조용히 오면 안 된다 — 이후 모든 결과가 의미 없어진다.
@@ -61,11 +91,28 @@ export class Device {
     return new Device(device);
   }
 
-  /** 셰이더 컴파일 오류를 삼키지 않는다. */
+  /**
+   * 셰이더 컴파일 오류를 삼키지 않는다.
+   *
+   * **WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,
+   * 그 파이프라인으로 dispatch 하면 아무 일도 안 일어난다 — 결과 버퍼가 0 인 채로
+   * 남고 화면에는 "값이 다르다"만 뜬다. 실제로 이 러너에서 축약 커널이 그렇게
+   * 0 을 냈고, 그때 아무 오류도 안 보였다. 그래서 진단 정보를 직접 꺼내 본다.
+   */
   pipeline(signature: string, source: () => string): GPUComputePipeline {
     const hit = this.pipelines.get(signature);
     if (hit) return hit;
-    const module = this.device.createShaderModule({ code: source() });
+    const code = source();
+    const module = this.device.createShaderModule({ code });
+    void module.getCompilationInfo().then((info) => {
+      for (const m of info.messages) {
+        if (m.type !== "error" && m.type !== "warning") continue;
+        console.error(
+          `[borch.ts] ${signature} 셰이더 ${m.type} ${m.lineNum}:${m.linePos} — ` +
+            `${m.message}\n${numbered(code)}`,
+        );
+      }
+    });
     const pipeline = this.device.createComputePipeline({
       layout: "auto",
       compute: { module, entryPoint: "main" },

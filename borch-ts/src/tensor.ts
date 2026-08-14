@@ -12,9 +12,12 @@ import {
   BINARY,
   binaryBackward,
   binaryForward,
+  expandDim,
+  extremeBackward,
   fill,
   matmul,
   reduceBroadcast,
+  reduceDim,
   UNARY,
   unaryBackward,
   unaryForward,
@@ -327,6 +330,164 @@ export class Tensor implements Node<Tensor> {
       // d(sum)/dx 는 어디서나 1 이므로 씨앗을 모양대로 펴 준다.
       (g) => [foldFrom(g, shape)],
       "SumBackward0",
+    );
+  }
+
+  /**
+   * 축 하나를 접는다. `dim` 이 없으면 전부 접어 스칼라로.
+   *
+   * 전체 합만 `Device.sumAll` 의 트리로 간다 — 축 축약 커널은 스레드 하나가 축을
+   * 훑는 구조라 전체 축약에 쓰면 스레드 하나가 n 번 돈다.
+   */
+  private reduceOver(kind: "sum" | "max" | "min", dim?: number, keepdim = false): Tensor {
+    if (dim === undefined) {
+      if (kind === "sum") return this.sum();
+      // 전체 최대·최소는 평평하게 본 뒤 축 하나로 접는다.
+      return this.flat().reduceOver(kind, 0, false);
+    }
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    if (axis < 0 || axis >= rank) {
+      throw new Error(`축이 범위를 벗어났다: ${dim} (랭크 ${rank})`);
+    }
+    const red = this.shape[axis] ?? 1;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const outShape = [...this.shape];
+    if (keepdim) outShape[axis] = 1;
+    else outShape.splice(axis, 1);
+
+    const n = outer * inner;
+    const out = dev().alloc(n);
+    const key = `${outer}:${red}:${inner}`;
+    dev().run1d(
+      dev().pipeline(`rd:${kind}:${key}`, () => reduceDim(kind, outer, red, inner)),
+      [this.buffer, out],
+      n,
+    );
+    const result = Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(this.size);
+        if (kind === "sum") {
+          dev().run1d(
+            dev().pipeline(`xd:${key}`, () => expandDim(outer, red, inner)),
+            [g.buffer, gi],
+            this.size,
+          );
+        } else {
+          dev().run1d(
+            dev().pipeline(`eb:${key}`, () => extremeBackward(outer, red, inner)),
+            [this.buffer, result.buffer, g.buffer, gi],
+            this.size,
+          );
+        }
+        return [new Tensor(gi, this.shape)];
+      },
+      kind === "sum" ? "SumBackward1" : "AmaxBackward0",
+    );
+    return result;
+  }
+
+  /** 같은 버퍼를 1차원으로 본다. 원소 순서가 그대로라 복사가 필요 없다. */
+  private flat(): Tensor {
+    if (this.shape.length === 1) return this;
+    return Tensor.make(
+      this.buffer,
+      [this.size],
+      [this],
+      (g) => [new Tensor(g.buffer, this.shape)],
+      "ViewBackward0",
+    );
+  }
+
+  amax(dim?: number, keepdim = false): Tensor {
+    return this.reduceOver("max", dim, keepdim);
+  }
+
+  amin(dim?: number, keepdim = false): Tensor {
+    return this.reduceOver("min", dim, keepdim);
+  }
+
+  sumDim(dim: number, keepdim = false): Tensor {
+    return this.reduceOver("sum", dim, keepdim);
+  }
+
+  mean(dim?: number, keepdim = false): Tensor {
+    const count = dim === undefined
+      ? this.size
+      : (this.shape[dim < 0 ? dim + this.shape.length : dim] ?? 1);
+    const total = dim === undefined ? this.sum() : this.sumDim(dim, keepdim);
+    return total.div(Tensor.full([], count));
+  }
+
+  /**
+   * 그래프에서 뗀 사본. 버퍼는 **공유한다** — 값을 읽기만 할 자리에 쓴다.
+   *
+   * `logsumexp` 가 최대값을 뗄 때 쓴다. 안 떼면 `m` 이 자기 기울기를 갖고, 수식상
+   * 그 몫이 정확히 상쇄되긴 하지만 부동소수에서는 큰 것끼리 빼는 꼴이 된다.
+   */
+  detach(): Tensor {
+    return new Tensor(this.buffer, this.shape, { requiresGrad: false });
+  }
+
+  /**
+   * `log(Σ exp(x))`. **최대값을 빼고 계산한다** — 그냥 쓰면 x 가 89 를 넘는 순간
+   * float32 의 exp 가 inf 가 되고 그 뒤가 전부 inf 다.
+   *
+   * 조립으로 둔다. 역방향은 이미 있는 연산들의 미분에서 나오므로 새 미분식을 손으로
+   * 쓰지 않는다 — 그 자리가 이번 주에 가장 자주 틀린 자리였다.
+   */
+  logsumexp(dim?: number, keepdim = false): Tensor {
+    const m = (dim === undefined ? this.amax() : this.amax(dim, true)).detach();
+    const shifted = this.sub(m);
+    const summed = dim === undefined
+      ? shifted.exp().sum()
+      : shifted.exp().sumDim(dim, true);
+    const logged = summed.log().add(m);
+    if (dim === undefined || keepdim) return logged;
+    return logged.squeeze(dim);
+  }
+
+  /** `‖x - y‖₂`. 조립이라 역방향이 저절로 따라온다. */
+  dist(other: Tensor): Tensor {
+    return this.sub(other).square().sum().sqrt();
+  }
+
+  /** NaN 을 0 으로 보고 더한다. NaN 자리로는 기울기가 안 간다. */
+  nansum(dim?: number, keepdim = false): Tensor {
+    const clean = this.unary("nanToZero");
+    return dim === undefined ? clean.sum() : clean.sumDim(dim, keepdim);
+  }
+
+  /** NaN 을 빼고 평균낸다. **개수도 NaN 을 빼고 센다** — 그것이 mean 과 다른 점이다. */
+  nanmean(dim?: number, keepdim = false): Tensor {
+    const total = this.nansum(dim, keepdim);
+    const present = this.unary("notNan");
+    const count = (dim === undefined
+      ? present.sum()
+      : present.sumDim(dim, keepdim)).detach();
+    return total.div(count);
+  }
+
+  /** 크기 1 인 축을 뺀다. */
+  squeeze(dim: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    if (this.shape[axis] !== 1) {
+      throw new Error(`축 ${dim} 의 크기가 1 이 아니다: [${this.shape}]`);
+    }
+    const outShape = [...this.shape];
+    outShape.splice(axis, 1);
+    const shape = this.shape;
+    return Tensor.make(
+      this.buffer,
+      outShape,
+      [this],
+      (g) => [new Tensor(g.buffer, shape)],
+      "SqueezeBackward0",
     );
   }
 
