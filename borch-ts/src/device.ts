@@ -36,6 +36,13 @@ export class Device {
   /** 모양까지 포함한 서명 → 파이프라인. */
   private readonly pipelines = new Map<string, GPUComputePipeline>();
   /**
+   * 파이프라인 → 바인드 그룹 배치.
+   *
+   * `getBindGroupLayout` 은 부를 때마다 **새 객체를 만든다** — 사양이 캐시를 약속하지
+   * 않는다. dispatch 마다 부르면 그만큼 만들고 버리는 것이고, 스텝당 칠백 번이다.
+   */
+  private readonly layouts = new WeakMap<GPUComputePipeline, GPUBindGroupLayout>();
+  /**
    * 읽어올 때 쓰는 staging 버퍼의 **놀고 있는 것들**. 크기별로 여러 개다.
    *
    * 처음에는 크기마다 하나만 두고 돌려썼는데, 읽기 둘이 겹치면 같은 버퍼를 두 번
@@ -134,6 +141,22 @@ export class Device {
   private current = "?";
 
   /**
+   * 아직 안 보낸 명령들.
+   *
+   * **연산마다 제출하면 안 된다.** 처음에는 dispatch 마다 명령 인코더를 새로 만들어
+   * 제출했는데, 배치를 4 배로 늘렸을 때 시간이 2.1 배밖에 안 늘었다 — 직선으로 맞추면
+   * 배치와 무관한 고정비가 스텝당 5.2 초, dispatch 당 7.4ms 였다. 제출 하나에 그런
+   * 값이 들 리 없으니 그것이 곧 제출 횟수의 값이었다.
+   *
+   * 이제 한 인코더에 쌓아 두고 **읽을 때** 한 번 보낸다. WebGPU 는 한 패스 안의
+   * dispatch 사이에 장벽을 알아서 넣으므로 순서는 그대로 지켜진다.
+   */
+  private encoder: GPUCommandEncoder | null = null;
+  private pass: GPUComputePassEncoder | null = null;
+  /** 지금까지 실제로 보낸 제출 수. 묶기가 도는지 재는 쪽이 본다. */
+  submits = 0;
+
+  /**
    * 셰이더 컴파일 오류를 삼키지 않는다.
    *
    * **WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,
@@ -181,6 +204,16 @@ export class Device {
   private readonly scopes: Set<GPUBuffer>[] = [];
   /** 구역이 닫혀도 살아남는 것 — 파라미터와 옵티마이저 상태다. */
   private readonly kept = new WeakSet<GPUBuffer>();
+  /**
+   * 놓인 버퍼를 크기별로 되쓴다.
+   *
+   * `createBuffer` 는 드라이버를 거쳐 GPU 메모리를 잡는 일이고, 학습 한 스텝이 그것을
+   * 수백 번 한다. 그런데 **스텝마다 같은 크기가 되풀이된다** — 모양이 매번 같기
+   * 때문이다. 파괴하고 다시 만드는 대신 돌려쓰면 그 일이 한 번으로 준다.
+   */
+  private readonly spare = new Map<number, GPUBuffer[]>();
+  /** 버퍼가 실제로 몇 바이트인지. 반납할 때 어느 통에 넣을지가 여기서 나온다. */
+  private readonly sizes = new WeakMap<GPUBuffer, number>();
 
   beginScope(): void {
     this.scopes.push(new Set());
@@ -207,7 +240,21 @@ export class Device {
         survived += 1;
         continue;
       }
-      buf.destroy();
+      // 파괴하지 않고 통에 돌려놓는다. 다음 스텝이 같은 크기를 다시 부른다.
+      const size = this.sizes.get(buf);
+      if (size === undefined) {
+        // 여기 오는 것은 `alloc` 이 안 만든 버퍼다. 아직 안 보낸 명령이 이것을
+        // 가리킬 수 있으므로 보내고 나서 놓는다.
+        this.flush();
+        buf.destroy();
+      } else {
+        let pool = this.spare.get(size);
+        if (!pool) {
+          pool = [];
+          this.spare.set(size, pool);
+        }
+        pool.push(buf);
+      }
       freed += 1;
     }
     return { freed, survived };
@@ -223,7 +270,14 @@ export class Device {
     return this.scopes.length;
   }
 
-  alloc(count: number): GPUBuffer {
+  /**
+   * @param recycle 통에 있는 것을 꺼내 써도 되는가.
+   *
+   * **올리기는 꺼내 쓰면 안 된다.** `writeBuffer` 는 큐의 지금 자리에서 도는데, 우리는
+   * 명령을 쌓아 두었다가 나중에 보낸다 — 통에서 꺼낸 버퍼를 아직 안 보낸 dispatch 가
+   * 읽을 참이면 그것을 덮어쓰게 된다. 새로 만들면 그 자리가 아예 없다.
+   */
+  alloc(count: number, recycle = true): GPUBuffer {
     const bytes = count * BYTES_PER_F32;
     const max = this.limits.maxStorageBufferBindingSize;
     if (bytes > max) {
@@ -233,16 +287,19 @@ export class Device {
           `${(max / 1048576).toFixed(0)}MB (maxStorageBufferBindingSize)`,
       );
     }
-    const buf = this.device.createBuffer({
-      size: Math.max(bytes, BYTES_PER_F32),
+    const size = Math.max(bytes, BYTES_PER_F32);
+    const reused = recycle ? this.spare.get(size)?.pop() : undefined;
+    const buf = reused ?? this.device.createBuffer({
+      size,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
+    this.sizes.set(buf, size);
     this.scopes[this.scopes.length - 1]?.add(buf);
     return buf;
   }
 
   upload(data: Float32Array): GPUBuffer {
-    const buf = this.alloc(data.length);
+    const buf = this.alloc(data.length, false);
     this.device.queue.writeBuffer(buf, 0, data as unknown as BufferSource);
     return buf;
   }
@@ -265,17 +322,19 @@ export class Device {
         );
       }
     }
+    let layout = this.layouts.get(pipeline);
+    if (!layout) {
+      layout = pipeline.getBindGroupLayout(0);
+      this.layouts.set(pipeline, layout);
+    }
     const bindGroup = this.device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
+      layout,
       entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
-    const encoder = this.device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
+    const pass = this.openPass();
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
-    pass.end();
-    this.device.queue.submit([encoder.finish()]);
     this.dispatches += 1;
     this.byKind.set(this.current, (this.byKind.get(this.current) ?? 0) + 1);
   }
@@ -305,7 +364,8 @@ export class Device {
         [src, dst],
         size,
       );
-      if (owned) owned.destroy();
+      // **여기서 놓으면 안 된다.** 명령을 쌓아 두었다가 나중에 보내므로, 방금 건
+      // dispatch 가 아직 이 버퍼를 읽을 참이다. 구역이 닫힐 때 통으로 돌아간다.
       owned = dst;
       src = dst;
       count = parts;
@@ -328,9 +388,41 @@ export class Device {
    */
   copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
-    const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(src, 0, dst, 0, bytes);
-    this.device.queue.submit([encoder.finish()]);
+    // 복사는 계산 패스 안에 못 들어간다. 패스를 닫고 같은 인코더에 얹으면 순서는
+    // 그대로이고 제출은 여전히 한 번이다.
+    this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
+  }
+
+  /** 계산 패스를 연다. 이미 열려 있으면 그것을 쓴다. */
+  private openPass(): GPUComputePassEncoder {
+    if (!this.pass) this.pass = this.openEncoder().beginComputePass();
+    return this.pass;
+  }
+
+  /** 인코더를 연다. 계산 패스가 열려 있으면 닫는다 — 복사가 그 밖에 있어야 한다. */
+  private openEncoder(): GPUCommandEncoder {
+    if (this.pass) {
+      this.pass.end();
+      this.pass = null;
+    }
+    this.encoder ??= this.device.createCommandEncoder();
+    return this.encoder;
+  }
+
+  /**
+   * 쌓아 둔 명령을 보낸다.
+   *
+   * 값을 읽기 전에 반드시 지나야 한다 — 안 보낸 명령의 결과를 읽으면 옛 값이 나온다.
+   */
+  flush(): void {
+    if (this.pass) {
+      this.pass.end();
+      this.pass = null;
+    }
+    if (!this.encoder) return;
+    this.device.queue.submit([this.encoder.finish()]);
+    this.encoder = null;
+    this.submits += 1;
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
@@ -348,9 +440,9 @@ export class Device {
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     try {
-      const encoder = this.device.createCommandEncoder();
-      encoder.copyBufferToBuffer(buffer, 0, stage, 0, bytes);
-      this.device.queue.submit([encoder.finish()]);
+      // 쌓아 둔 명령까지 한 인코더에 얹고 **여기서 한 번** 보낸다.
+      this.openEncoder().copyBufferToBuffer(buffer, 0, stage, 0, bytes);
+      this.flush();
       await stage.mapAsync(GPUMapMode.READ);
       // 매핑된 메모리는 unmap 하면 사라진다. 반드시 복사해서 내보낸다.
       const out = new Float32Array(stage.getMappedRange().slice(0));

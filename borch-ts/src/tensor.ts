@@ -22,9 +22,11 @@ import {
   BINARY,
   binaryBackward,
   binaryForward,
+  convGradInputGrid,
+  convGradWeightGrid,
   convNDForwardTiled,
-  convNDGradInput,
-  convNDGradWeight,
+  convNDGradInputTiled,
+  convNDGradWeightTiled,
   convNDKey,
   type ConvNDShape,
   convOut,
@@ -2313,19 +2315,19 @@ export class Tensor implements Node<Tensor> {
         const parts: (Tensor | null)[] = [];
         if (this.requiresGrad) {
           const gi = dev().alloc(this.size);
-          dev().run1d(
-            dev().pipeline(`cnx:${key}`, () => convNDGradInput(s)),
+          dev().run(
+            dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
             [g.buffer, weight.buffer, gi],
-            this.size,
+            convGradInputGrid(s),
           );
           parts.push(new Tensor(gi, this.shape));
         } else parts.push(null);
         if (weight.requiresGrad) {
           const gw = dev().alloc(weight.size);
-          dev().run1d(
-            dev().pipeline(`cnw:${key}`, () => convNDGradWeight(s)),
+          dev().run(
+            dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
             [this.buffer, g.buffer, gw],
-            weight.size,
+            convGradWeightGrid(s),
           );
           parts.push(new Tensor(gw, weight.shape));
         } else parts.push(null);

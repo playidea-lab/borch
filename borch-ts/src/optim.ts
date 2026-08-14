@@ -15,7 +15,8 @@
  * 없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다.
  */
 
-import { keepAlive, noGrad, Tensor } from "./tensor.js";
+import { adamStep, rmspropStep, sgdStep } from "./kernels.js";
+import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
 export interface ParamGroup {
   lr: number;
@@ -66,14 +67,20 @@ export class SGD extends Optimizer {
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
-    if (this.momentum === 0) {
-      param.copyFrom(param.sub(grad.binary("mul", Tensor.full([], this.lr))));
-      return;
+    const n = param.size;
+    const d = device();
+    const buffers = [param.buffer, grad.buffer];
+    if (this.momentum !== 0) {
+      const buf = this.buffers[index];
+      if (!buf) throw new Error(`SGD: 파라미터 ${index} 의 버퍼가 없다`);
+      buffers.push(buf.buffer);
     }
-    const buf = this.buffers[index];
-    if (!buf) throw new Error(`SGD: 파라미터 ${index} 의 버퍼가 없다`);
-    buf.copyFrom(buf.binary("mul", Tensor.full([], this.momentum)).add(grad));
-    param.copyFrom(param.sub(buf.binary("mul", Tensor.full([], this.lr))));
+    d.run1d(
+      d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}`,
+        () => sgdStep(n, this.lr, this.momentum)),
+      buffers,
+      n,
+    );
   }
 }
 
@@ -104,16 +111,19 @@ export class Adam extends Optimizer {
     const m = this.first[index];
     const v = this.second[index];
     if (!m || !v) throw new Error(`Adam: 파라미터 ${index} 의 상태가 없다`);
-    m.copyFrom(m.binary("mul", Tensor.full([], this.beta1))
-      .add(grad.binary("mul", Tensor.full([], 1 - this.beta1))));
-    v.copyFrom(v.binary("mul", Tensor.full([], this.beta2))
-      .add(grad.square().binary("mul", Tensor.full([], 1 - this.beta2))));
-    const c1 = 1 - this.beta1 ** this.stepCount;
-    const c2 = 1 - this.beta2 ** this.stepCount;
-    const mHat = m.binary("div", Tensor.full([], c1));
-    const vHat = v.binary("div", Tensor.full([], c2));
-    const stepSize = mHat.div(vHat.sqrt().binary("add", Tensor.full([], this.eps)));
-    param.copyFrom(param.sub(stepSize.binary("mul", Tensor.full([], this.lr))));
+    // 편향 보정은 스텝마다 달라지므로 셰이더에 굽지 않고 작은 버퍼로 넘긴다.
+    const corr = Tensor.from([
+      1 - this.beta1 ** this.stepCount,
+      1 - this.beta2 ** this.stepCount,
+    ], [2]);
+    const n = param.size;
+    const d = device();
+    d.run1d(
+      d.pipeline(`adam:${n}:${this.lr}:${this.beta1}:${this.beta2}:${this.eps}`,
+        () => adamStep(n, this.lr, this.beta1, this.beta2, this.eps)),
+      [param.buffer, grad.buffer, m.buffer, v.buffer, corr.buffer],
+      n,
+    );
   }
 }
 
@@ -133,10 +143,14 @@ export class RMSprop extends Optimizer {
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const sq = this.squares[index];
     if (!sq) throw new Error(`RMSprop: 파라미터 ${index} 의 상태가 없다`);
-    sq.copyFrom(sq.binary("mul", Tensor.full([], this.alpha))
-      .add(grad.square().binary("mul", Tensor.full([], 1 - this.alpha))));
-    const stepSize = grad.div(sq.sqrt().binary("add", Tensor.full([], this.eps)));
-    param.copyFrom(param.sub(stepSize.binary("mul", Tensor.full([], this.lr))));
+    const n = param.size;
+    const d = device();
+    d.run1d(
+      d.pipeline(`rms:${n}:${this.lr}:${this.alpha}:${this.eps}`,
+        () => rmspropStep(n, this.lr, this.alpha, this.eps)),
+      [param.buffer, grad.buffer, sq.buffer],
+      n,
+    );
   }
 }
 

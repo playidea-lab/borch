@@ -14,7 +14,8 @@
  * 배선이 갈린다.
  */
 
-import { keepAlive, noGrad, Tensor } from "./tensor.js";
+import { runningStats } from "./kernels.js";
+import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
 /**
  * 가중치 초기화.
@@ -352,11 +353,16 @@ export class BatchNormND extends Module {
     const { out, mean, variance } = x.batchNormFused(this.weight, this.bias, this.eps);
     // 이동 통계에는 **불편추정**이 들어간다 — torch 가 그렇다. 정규화에 쓰는 것은
     // 편향추정이라 둘이 다르고, 하나로 합치면 평가 모드에서만 갈린다.
-    noGrad(() => {
-      const unbiased = variance.binary("mul", Tensor.full([], count / (count - 1)));
-      this.runningMean.lerpFrom(mean, this.momentum);
-      this.runningVar.lerpFrom(unbiased, this.momentum);
-    });
+    //
+    // 둘을 커널 하나로 갱신한다. 조립판은 층마다 여덟 dispatch 였고 층이 스무 개다.
+    const unbias = count / (count - 1);
+    const d = device();
+    d.run1d(
+      d.pipeline(`rs:${this.channels}:${this.momentum}:${unbias}`,
+        () => runningStats(this.channels, this.momentum, unbias)),
+      [this.runningMean.buffer, this.runningVar.buffer, mean.buffer, variance.buffer],
+      this.channels,
+    );
     return out;
   }
 }

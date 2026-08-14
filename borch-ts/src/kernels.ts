@@ -1401,106 +1401,223 @@ export function convTiledGrid(s: ConvNDShape): [number, number, number] {
 }
 
 /**
- * 입력으로 가는 기울기. 흩뿌리지 않고 **자기에게 온 출력을 모은다.**
+ * 타일링 GEMM 의 뼈대.
  *
- * 걸음이 1 보다 크면 그 사이 자리로는 아무것도 안 오는데, 나눗셈이 딱 떨어지는지로
- * 그것을 가린다 — 2 차원에서 이 한 줄을 지웠더니 걸음 2 케이스만 갈렸다.
+ * 순방향·역방향 셋이 **같은 구조에 색인만 다르다.** 뼈대를 세 번 베껴 적으면 그중
+ * 하나만 고치는 날이 오고, 그 하나는 기울기 쪽일 것이다 — 값 검사가 못 보는 쪽.
+ *
+ * @param loadA 행 `arow`, 안쪽 `kk` 에서 왼쪽 타일 원소를 내는 WGSL(식 하나).
+ * @param loadB 안쪽 `kk`, 열 `col` 에서 오른쪽 타일 원소를 내는 WGSL 블록. `v` 에 담는다.
+ * @param emit 행 `f`, 열 `col`, 값 `v` 를 쓰는 WGSL 블록.
  */
-export function convNDGradInput(s: ConvNDShape): string {
-  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
-  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
-  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
-  const inStride = suffixStrides(s.inDims);
-  const outStride = suffixStrides(s.outDims);
-  const kStride = suffixStrides(s.kernel);
-  const n = s.N * s.C * inSpace;
-  const decode = s.inDims.map((_, d) =>
-    `  let i${d} = i32((r2 / ${inStride[d] ?? 1}u) % ${s.inDims[d] ?? 1}u);`).join("\n");
-  const open: string[] = [];
-  const close: string[] = [];
-  const oTerms: string[] = [];
-  const kTerms: string[] = [];
-  for (const [d, size] of s.kernel.entries()) {
-    const st = s.stride[d] ?? 1;
-    open.push(`    for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
-    open.push(`      let t${d} = i${d} + ${s.pad[d] ?? 0} - k${d};`);
-    open.push(`      if (t${d} < 0 || t${d} % ${st} != 0) { continue; }`);
-    open.push(`      let o${d} = t${d} / ${st};`);
-    open.push(`      if (o${d} >= ${s.outDims[d] ?? 0}) { continue; }`);
-    close.push("    }");
-    oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
-    kTerms.push(`u32(k${d}) * ${kStride[d] ?? 1}u`);
+function tiledGemm(opts: {
+  readonly M: number;
+  readonly N: number;
+  readonly K: number;
+  readonly bindings: string;
+  readonly loadA: string;
+  readonly loadB: string;
+  readonly emit: string;
+}): string {
+  const decl: string[] = [];
+  const zero: string[] = [];
+  const fma: string[] = [];
+  const store: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      decl.push(`  var c${i}${j}: f32;`);
+      zero.push(`  c${i}${j} = 0.0;`);
+      fma.push(`      c${i}${j} = fma(a${i}, b${j}, c${i}${j});`);
+      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}${j});`);
+    }
   }
   return `
-@group(0) @binding(0) var<storage, read> G: array<f32>;
-@group(0) @binding(1) var<storage, read> K: array<f32>;
-@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
-@compute @workgroup_size(${WORKGROUP})
-fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(n)}
-  let bn = gid / ${s.C * inSpace}u;
-  let r1 = gid % ${s.C * inSpace}u;
-  let c = r1 / ${inSpace}u;
-  let r2 = r1 % ${inSpace}u;
-${decode}
-  var acc = 0.0;
-  for (var oc = 0u; oc < ${s.O}u; oc = oc + 1u) {
-    let gbase = (bn * ${s.O}u + oc) * ${outSpace}u;
-    let kbase = (oc * ${s.C}u + c) * ${kSpace}u;
-${open.join("\n")}
-      acc = fma(G[gbase + ${oTerms.join(" + ")}], K[kbase + ${kTerms.join(" + ")}], acc);
-${close.join("\n")}
+${opts.bindings}
+
+var<workgroup> As: array<f32, 1024>;
+var<workgroup> Bs: array<f32, 1024>;
+
+fn emit(f: u32, col: u32, v: f32) {
+  if (f >= ${opts.M}u || col >= ${opts.N}u) { return; }
+${opts.emit}
+}
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
+  let tid = lid.y * 16u + lid.x;
+  let row0 = wid.y * 64u + lid.y * 4u;
+  let col0 = wid.x * 64u + lid.x * 4u;
+${decl.join("\n")}
+${zero.join("\n")}
+  for (var t = 0u; t < ${Math.ceil(opts.K / 16)}u; t = t + 1u) {
+    for (var sload = 0u; sload < 4u; sload = sload + 1u) {
+      let idx = sload * 256u + tid;
+      {
+        let arow = wid.y * 64u + idx / 16u;
+        let kk = t * 16u + idx % 16u;
+        var v = 0.0;
+        if (arow < ${opts.M}u && kk < ${opts.K}u) {
+${opts.loadA}
+        }
+        As[idx] = v;
+      }
+      {
+        let kk = t * 16u + idx / 64u;
+        let col = wid.x * 64u + idx % 64u;
+        var v = 0.0;
+        if (kk < ${opts.K}u && col < ${opts.N}u) {
+${opts.loadB}
+        }
+        Bs[idx] = v;
+      }
+    }
+    workgroupBarrier();
+    for (var k = 0u; k < 16u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
+      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
+      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
+      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
+      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
+      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
+      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
+      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
+${fma.join("\n")}
+    }
+    workgroupBarrier();
   }
-  Out[gid] = acc;
+${store.join("\n")}
 }`;
 }
 
-/** 가중치로 가는 기울기. 무게 한 칸이 배치·출력 자리 전부에 쓰였으므로 거기를 훑는다. */
-export function convNDGradWeight(s: ConvNDShape): string {
-  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
-  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
-  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+/** 입력 자리(`col`)와 커널 자리(`kk`)를 좌표로 푸는 WGSL. */
+function patchCoords(s: ConvNDShape, indent: string): {
+  kParts: string; pParts: string; coords: string; guard: string; offset: string;
+} {
   const inStride = suffixStrides(s.inDims);
   const outStride = suffixStrides(s.outDims);
   const kStride = suffixStrides(s.kernel);
-  const n = s.O * s.C * kSpace;
-  const decode = s.kernel.map((_, d) =>
-    `  let k${d} = i32((r2 / ${kStride[d] ?? 1}u) % ${s.kernel[d] ?? 1}u);`).join("\n");
-  const open: string[] = [];
-  const close: string[] = [];
-  const oTerms: string[] = [];
-  const xTerms: string[] = [];
-  for (const [d, size] of s.outDims.entries()) {
-    open.push(`    for (var o${d} = 0; o${d} < ${size}; o${d} = o${d} + 1) {`);
-    open.push(`      let p${d} = o${d} * ${s.stride[d] ?? 1} + k${d} - ${s.pad[d] ?? 0};`);
-    open.push(`      if (p${d} < 0 || p${d} >= ${s.inDims[d] ?? 0}) { continue; }`);
-    close.push("    }");
-    oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
-    xTerms.push(`u32(p${d}) * ${inStride[d] ?? 1}u`);
-  }
-  return `
-@group(0) @binding(0) var<storage, read> X: array<f32>;
-@group(0) @binding(1) var<storage, read> G: array<f32>;
-@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
-@compute @workgroup_size(${WORKGROUP})
-fn main(@builtin(global_invocation_id) g: vec3<u32>) {
-${flatId(n)}
-  let oc = gid / ${s.C * kSpace}u;
-  let r1 = gid % ${s.C * kSpace}u;
-  let c = r1 / ${kSpace}u;
-  let r2 = r1 % ${kSpace}u;
-${decode}
-  var acc = 0.0;
-  for (var bn = 0u; bn < ${s.N}u; bn = bn + 1u) {
-    let xbase = (bn * ${s.C}u + c) * ${inSpace}u;
-    let gbase = (bn * ${s.O}u + oc) * ${outSpace}u;
-${open.join("\n")}
-      acc = fma(X[xbase + ${xTerms.join(" + ")}], G[gbase + ${oTerms.join(" + ")}], acc);
-${close.join("\n")}
-  }
-  Out[gid] = acc;
-}`;
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  return {
+    kParts: [`${indent}let ch = kk / ${kSpace}u;`,
+      ...s.kernel.map((size, d) =>
+        `${indent}let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`)].join("\n"),
+    pParts: [`${indent}let bn = col / ${outSpace}u;`,
+      ...s.outDims.map((size, d) =>
+        `${indent}let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`)].join("\n"),
+    coords: s.outDims.map((_, d) =>
+      `${indent}let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d}) - ${s.pad[d] ?? 0};`)
+      .join("\n"),
+    guard: s.inDims.map((size, d) => `i${d} >= 0 && i${d} < ${size}`).join(" && "),
+    offset: s.inDims.map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`).join(" + "),
+  };
 }
+
+/**
+ * 가중치로 가는 기울기 — 타일링 판.
+ *
+ * `dW[o, (c,k)] = Σ_p G[p, o] · X_col[p, (c,k)]` 인 GEMM 이다. 행이 출력 채널,
+ * 열이 `(입력 채널, 커널 자리)`, 안쪽이 배치·출력 자리다. 결과가 `(O, K)` 로
+ * 이어져 나오므로 가중치 모양 그대로다.
+ */
+export function convNDGradWeightTiled(s: ConvNDShape): string {
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
+  const K = s.N * outSpace;
+  const cols = s.C * kSpace;
+  const c = patchCoords({ ...s }, "          ");
+  return tiledGemm({
+    M: s.O, N: cols, K,
+    bindings: `@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;`,
+    // 왼쪽: G 를 (출력채널 × 배치·출력자리) 로 본다.
+    loadA: `          let gn = kk / ${outSpace}u;
+          let gp = kk % ${outSpace}u;
+          v = G[(gn * ${s.O}u + arow) * ${outSpace}u + gp];`,
+    // 오른쪽: im2col 을 **메모리에 안 펴고** 여기서 만든다. 열이 (채널, 커널 자리),
+    // 안쪽이 (배치, 출력 자리)다 — 순방향과 축만 바뀐 같은 계산이다.
+    loadB: `          let ch = col / ${kSpace}u;
+${s.kernel.map((size, d) =>
+      `          let kk${d} = (col / ${suffixStrides(s.kernel)[d] ?? 1}u) % ${size}u;`).join("\n")}
+          let bn = kk / ${outSpace}u;
+${s.outDims.map((size, d) =>
+      `          let o${d} = (kk / ${suffixStrides(s.outDims)[d] ?? 1}u) % ${size}u;`).join("\n")}
+${c.coords}
+          if (${c.guard}) {
+            v = X[(bn * ${s.C}u + ch) * ${inSpace}u + ${c.offset}];
+          }`,
+    emit: `  Out[f * ${cols}u + col] = v;`,
+  });
+}
+
+/**
+ * 입력으로 가는 기울기 — 타일링 판.
+ *
+ * `dX[(n,i), c] = Σ_{o,k} G[(n,o자리), o] · W[o, c, k]` 이고, 합의 짝 `(o, k)` 가
+ * 안쪽 축이다. **걸음이 1 보다 크면 나눗셈이 안 떨어지는 자리가 있고 거기로는
+ * 아무것도 안 온다** — 그 판정이 오른쪽 타일 안에 있다.
+ */
+export function convNDGradInputTiled(s: ConvNDShape): string {
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(s.inDims);
+  const outStride = suffixStrides(s.outDims);
+  const kStride = suffixStrides(s.kernel);
+  const K = s.O * kSpace;
+  const cols = s.N * inSpace;
+  return tiledGemm({
+    M: s.C, N: cols, K,
+    bindings: `@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;`,
+    // 왼쪽: 가중치를 (입력채널 × (출력채널, 커널자리)) 로 본다.
+    loadA: `          let oc = kk / ${kSpace}u;
+          let kp = kk % ${kSpace}u;
+          v = Wt[(oc * ${s.C}u + arow) * ${kSpace}u + kp];`,
+    // 오른쪽: 이 입력 자리에 **닿는** 출력 자리를 찾는다. 안 닿으면 0 이다.
+    loadB: `          let oc = kk / ${kSpace}u;
+${s.kernel.map((size, d) =>
+      `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
+          let bn = col / ${inSpace}u;
+${s.inDims.map((size, d) =>
+      `          let i${d} = i32((col / ${inStride[d] ?? 1}u) % ${size}u);`).join("\n")}
+          var ok = true;
+          var off = 0u;
+${s.inDims.map((_, d) => {
+      const st = s.stride[d] ?? 1;
+      return `          {
+            let t${d} = i${d} + ${s.pad[d] ?? 0} - i32(kk${d});
+            if (t${d} < 0 || t${d} % ${st} != 0) { ok = false; }
+            else {
+              let o${d} = t${d} / ${st};
+              if (o${d} >= ${s.outDims[d] ?? 0}) { ok = false; }
+              else { off = off + u32(o${d}) * ${outStride[d] ?? 1}u; }
+            }
+          }`;
+    }).join("\n")}
+          if (ok) {
+            v = G[(bn * ${s.O}u + oc) * ${outSpace}u + off];
+          }`,
+    emit: `  Out[col / ${inSpace}u * ${s.C * inSpace}u + f * ${inSpace}u + col % ${inSpace}u] = v;`,
+  });
+}
+
+/** 가중치 기울기의 격자 — 행이 출력 채널, 열이 (입력 채널, 커널 자리). */
+export function convGradWeightGrid(s: ConvNDShape): [number, number, number] {
+  const cols = s.C * s.kernel.reduce((a, b) => a * b, 1);
+  return [Math.ceil(cols / 64), Math.ceil(s.O / 64), 1];
+}
+
+/** 입력 기울기의 격자 — 행이 입력 채널, 열이 배치·입력 자리. */
+export function convGradInputGrid(s: ConvNDShape): [number, number, number] {
+  const cols = s.N * s.inDims.reduce((a, b) => a * b, 1);
+  return [Math.ceil(cols / 64), Math.ceil(s.C / 64), 1];
+}
+
 
 /**
  * 차원 수에 상관없는 풀링. 채널을 배치에 접어 넣는다.
@@ -1938,6 +2055,92 @@ ${flatId(n)}
   let xh = Xh[gid];
   Out[gid] = Wt[c] * InvStd[c] *
     (G[gid] - SumG[c] / ${count} - xh * SumGXh[c] / ${count});
+}`;
+}
+
+/**
+ * 옵티마이저 한 걸음 — **파라미터와 상태를 제자리에서 고친다.**
+ *
+ * 조립판은 파라미터 하나에 dispatch 넷이 들었다(모멘텀 곱, 기울기 더하기, 학습률 곱,
+ * 빼기). ResNet-18 은 파라미터 텐서가 예순둘이라 그것만 이백사십 번이고, 실측에서
+ * 원소별 dispatch 사백칠십 개의 절반을 넘었다.
+ *
+ * **읽으면서 같은 자리에 쓴다.** 스레드 하나가 자기 원소만 보므로 순서가 섞일 자리가
+ * 없다 — 브로드캐스팅도 축약도 없는 원소별 갱신이라 가능한 일이다.
+ */
+export function sgdStep(n: number, lr: number, momentum: number): string {
+  const hasMomentum = momentum !== 0;
+  return `
+@group(0) @binding(0) var<storage, read_write> P: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+${hasMomentum ? "@group(0) @binding(2) var<storage, read_write> Buf: array<f32>;" : ""}
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+${hasMomentum
+    ? `  let b = Buf[gid] * ${momentum} + G[gid];
+  Buf[gid] = b;
+  P[gid] = P[gid] - b * ${lr};`
+    : `  P[gid] = P[gid] - G[gid] * ${lr};`}
+}`;
+}
+
+/** Adam 한 걸음. 편향 보정을 스텝 수로 받아 굽지 않는다 — 매 스텝 달라진다. */
+export function adamStep(
+  n: number, lr: number, beta1: number, beta2: number, eps: number,
+): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> P: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> M: array<f32>;
+@group(0) @binding(3) var<storage, read_write> V: array<f32>;
+@group(0) @binding(4) var<storage, read> Corr: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let gv = G[gid];
+  let m = M[gid] * ${beta1} + gv * ${1 - beta1};
+  let v = V[gid] * ${beta2} + gv * gv * ${1 - beta2};
+  M[gid] = m;
+  V[gid] = v;
+  // Corr[0] = 1-β₁ᵗ, Corr[1] = 1-β₂ᵗ. 스텝마다 달라지므로 굽지 않고 받는다.
+  P[gid] = P[gid] - ${lr} * (m / Corr[0]) / (sqrt(v / Corr[1]) + ${eps});
+}`;
+}
+
+export function rmspropStep(n: number, lr: number, alpha: number, eps: number): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> P: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> S: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let gv = G[gid];
+  let s = S[gid] * ${alpha} + gv * gv * ${1 - alpha};
+  S[gid] = s;
+  P[gid] = P[gid] - ${lr} * gv / (sqrt(s) + ${eps});
+}`;
+}
+
+/**
+ * 이동 통계 갱신 — `running ← (1−t)·running + t·new`, 두 개를 한 번에.
+ *
+ * 조립판은 BatchNorm 하나에 여덟 dispatch 였고 층이 스무 개다. 채널 수만큼만 도는
+ * 작은 일이라 커널 하나로 충분하다.
+ */
+export function runningStats(C: number, momentum: number, unbias: number): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> RunMean: array<f32>;
+@group(0) @binding(1) var<storage, read_write> RunVar: array<f32>;
+@group(0) @binding(2) var<storage, read> Mean: array<f32>;
+@group(0) @binding(3) var<storage, read> Var: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(C)}
+  RunMean[gid] = RunMean[gid] * ${1 - momentum} + Mean[gid] * ${momentum};
+  // **이동 통계에는 불편추정이 들어간다** — 정규화에 쓰는 편향추정과 다른 수다.
+  RunVar[gid] = RunVar[gid] * ${1 - momentum} + Var[gid] * ${unbias * momentum};
 }`;
 }
 

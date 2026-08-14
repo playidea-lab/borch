@@ -10,7 +10,7 @@
 
 import * as nn from "../src/nn.js";
 import { SGD } from "../src/optim.js";
-import { device, keepAlive, scope, Tensor } from "../src/tensor.js";
+import { device, keepAlive, noGrad, scope, Tensor } from "../src/tensor.js";
 
 /** 에폭 시간을 내는 데 쓰는 장수. 파이썬 벤치와 같은 수여야 비교가 된다. */
 const CIFAR_TRAIN_IMAGES = 50000;
@@ -96,6 +96,10 @@ export interface StepResult {
   usPerDispatch: number;
   /** 커널 종류별 dispatch 수, 많은 것부터. 다음에 무엇을 고칠지가 여기서 나온다. */
   kinds: [string, number][];
+  /** 스텝당 실제 제출 수. dispatch 수와 갈리는 만큼이 묶인 것이다. */
+  submits: number;
+  /** 순방향만 돌렸을 때의 벽시계. 나머지가 역방향과 옵티마이저의 몫이다. */
+  msForward: number;
   loss: number;
 }
 
@@ -150,11 +154,13 @@ export async function runStep(
 
   const t0 = performance.now();
   const d0 = device().dispatches;
+  const s0 = device().submits;
   const k0 = new Map(device().byKind);
   let last = 0;
   for (let i = 0; i < steps; i++) last = await one();
   const perStep = (performance.now() - t0) / steps;
   const perStepDispatches = (device().dispatches - d0) / steps;
+  const perStepSubmits = (device().submits - s0) / steps;
   // 종류별로 갈라 둔다 — 총수만으로는 다음에 무엇을 고칠지 안 나온다.
   const kinds: [string, number][] = [];
   for (const [kind, n] of device().byKind) {
@@ -171,6 +177,30 @@ export async function runStep(
   // 못 믿는다") 나는 그것을 읽고도 같은 것을 만들었다.
   await one();
   const leak = survived;
+
+  /**
+   * 순방향만.
+   *
+   * **역방향의 몫을 추측하지 않으려고 잰다.** 전체에서 이것을 빼면 남는 것이
+   * 역방향과 옵티마이저이고, 그 둘 중 어느 쪽을 먼저 고칠지가 거기서 정해진다.
+   * 손실을 읽는 것까지 같이 해야 GPU 를 기다리는 지점이 같다.
+   */
+  const forwardOnly = async (): Promise<void> => {
+    const d = device();
+    d.beginScope();
+    try {
+      // `noGrad` 는 **동기** 본문을 받는다 — 비동기를 넣으면 기울기 스위치가 읽기보다
+      // 먼저 되돌아간다. 그래프 세우기만 감싸고 읽기는 밖에서 기다린다.
+      const out = noGrad(() => crit.forward(model.forward(x), y));
+      await out.item();
+    } finally {
+      d.endScope();
+    }
+  };
+  await forwardOnly();
+  const f0 = performance.now();
+  for (let i = 0; i < steps; i++) await forwardOnly();
+  const perForward = (performance.now() - f0) / steps;
 
   // **검증 오류가 하나라도 났으면 수를 안 낸다.**
   //
@@ -196,6 +226,8 @@ export async function runStep(
     dispatches: Math.round(perStepDispatches),
     usPerDispatch: Math.round((perStep * 1000) / Math.max(1, perStepDispatches)),
     kinds,
+    submits: Math.round(perStepSubmits),
+    msForward: Math.round(perForward * 10) / 10,
     loss: Math.round(last * 10000) / 10000,
   };
 }
@@ -209,8 +241,10 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
       lines.push(
         `batch ${String(r.batch).padStart(3)}  ` +
         `${r.msPerStep.toFixed(1).padStart(8)} ms/step  ` +
+        `(순방향 ${r.msForward.toFixed(1).padStart(7)})  ` +
         `에폭 ${r.epochMin.toFixed(2).padStart(6)}분  ` +
-        `dispatch ${String(r.dispatches).padStart(5)}/step  ` +
+        `dispatch ${String(r.dispatches).padStart(5)}  ` +
+        `제출 ${String(r.submits).padStart(3)}  ` +
         `${String(r.usPerDispatch).padStart(5)}µs/dispatch  ` +
         `누수 ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
         `손실 ${r.loss.toFixed(4)}`,
