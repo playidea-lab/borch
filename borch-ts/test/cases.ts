@@ -194,6 +194,19 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
   }
 }
 
+/**
+ * 계산해서 얻은 텐서를 **잎으로** 세운다.
+ *
+ * 골든 쪽은 `L.tensor(x2.T.copy(), requires_grad=True)` 처럼 값을 미리 만들어 잎으로
+ * 넣는다. 이쪽에서 `x2().transpose()` 를 그대로 쓰면 그것은 파생 텐서라 기울기가
+ * 안 쌓이고, 케이스가 "기울기가 안 왔다" 로 죽는다 — 구현이 멀쩡한데도.
+ *
+ * 버퍼는 같이 쓴다. 값을 다시 계산할 이유가 없다.
+ */
+function asLeaf(t: Tensor): Tensor {
+  return new Tensor(t.buffer, t.shape, { requiresGrad: true });
+}
+
 /** `x > 0` 을 0/1 로. `logical_*` 케이스가 그 형태를 쓴다. */
 function positive(t: Tensor): Tensor {
   return t.binary("gt", Tensor.full([], 0));
@@ -283,7 +296,181 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addFlow(out);
   addError(out);
   addWide(out, inputs);
+  addGrad(out, inputs);
   return out;
+}
+
+/**
+ * **기울기**를 대조하는 표.
+ *
+ * 순방향만 맞고 역방향이 틀리면 "학습은 돌고 손실도 내려가는데 값이 다른" 상태가
+ * 된다. 코어가 BatchNorm 으로 오래 겪은 종류이고, 값 대조로는 안 잡힌다.
+ *
+ * 여기 없는 것: 정렬(`topk`·`sort`·`median`), `einsum`, `pad_sequence`, `fmod`,
+ * dtype 이 필요한 `float()`·`double()`·`nll_loss`·`cross_entropy`, 그리고 합성곱.
+ */
+function addGrad(out: Map<string, Case>, inp: Inputs): void {
+  const x1 = (g = false) => inp.get("x1", g);
+  const xp = (g = false) => inp.get("xp", g);
+  const x2 = (g = false) => inp.get("x2", g);
+
+  /** 잎 하나를 만들고, 접어서 흘리고, 그 잎의 기울기를 낸다. */
+  const one = (name: string, src: (g: boolean) => Tensor, fn: (x: Tensor) => Tensor) => {
+    out.set(`grad::${name}`, () => {
+      const x = src(true);
+      fn(x).sum().backward();
+      return gradOf(x, name);
+    });
+  };
+
+  /**
+   * 자리마다 다른 가중치를 곱해 받는다. 그냥 `sum()` 이면 기울기가 전부 1 이라
+   * `movedim` 이 축을 뒤바꿔도, `tile` 이 조각을 엉뚱하게 겹쳐도 통과한다.
+   */
+  const weighted = (name: string, make: () => Tensor[], fn: (...xs: Tensor[]) => Tensor,
+                    which = 0) => {
+    out.set(`grad::${name}`, () => {
+      const leaves = make();
+      const res = fn(...leaves);
+      seeded(res).backward();
+      const leaf = leaves[which];
+      if (!leaf) throw new Error(`${name}: 잎 ${which} 가 없다`);
+      return gradOf(leaf, name);
+    });
+  };
+
+  for (const name of ["exp", "abs", "sin", "cos", "tan", "sinh", "cosh", "tanh",
+    "erf", "square", "relu", "sigmoid", "gelu", "silu", "elu", "neg"]) {
+    one(name, x1, (x) => x.unary(name));
+  }
+  for (const name of ["log", "log2", "log10", "sqrt", "rsqrt", "reciprocal"]) {
+    one(name, xp, (x) => x.unary(name));
+  }
+  one("leaky_relu", x1, (x) => x.leakyRelu(0.1));
+  one("pow2", x1, (x) => x.powScalar(2));
+
+  const mat = (g = false) => Tensor.from([1, 2, 3, 4, 5, 6, 7, 8, 9], [3, 3], g);
+  const vec = (g = false) => Tensor.from([1, 2, 3, 4], [4], g);
+  // 0 이 섞인 입력. 흔한 유도(out/x)는 여기서 나눗셈이 터져 조용히 NaN 을 흘린다.
+  const zeroed = (g = false) => Tensor.from([2, 0, 3, 4], [4], g);
+  const short = (g = false) => Tensor.from([1, 5, 2], [3], g);
+
+  weighted("tril", () => [mat(true)], (x) => x.tril());
+  weighted("triu(k=1)", () => [mat(true)], (x) => x.triu(1));
+  weighted("diag(2차원)", () => [mat(true)], (x) => x.diag());
+  weighted("diag(1차원)", () => [short(true)], (x) => x.diag());
+  weighted("trace", () => [mat(true)], (x) => x.trace());
+  weighted("cumprod", () => [vec(true)], (x) => x.cumprod(0));
+  weighted("cumprod(0포함)", () => [zeroed(true)], (x) => x.cumprod(0));
+  weighted("cumprod(2차원)", () => [mat(true)], (x) => x.cumprod(1));
+  weighted("tile", () => [vec(true)], (x) => x.tile(2));
+  weighted("tile(2차원)", () => [mat(true)], (x) => x.tile(2, 3));
+  weighted("movedim", () => [mat(true)], (x) => x.movedim(0, 1));
+  weighted("repeat_interleave", () => [vec(true)], (x) => x.repeatInterleave(3));
+  weighted("repeat_interleave(dim)", () => [mat(true)], (x) => x.repeatInterleave(2, 0));
+
+  one("sum", x2, (x) => x.sum());
+  one("sum(dim)", x2, (x) => x.sumDim(1));
+  one("mean", x2, (x) => x.mean());
+  one("mean(dim)", x2, (x) => x.mean(0));
+  one("softmax", x2, (x) => x.softmax(-1));
+  one("log_softmax", x2, (x) => x.logSoftmax(-1));
+  one("cumsum", x1, (x) => x.cumsum(0));
+  one("flip", x1, (x) => x.flip(0));
+  one("clamp", x1, (x) => x.clamp(-0.5, 0.5));
+  one("norm", x2, (x) => x.norm());
+  one("normalize", x2, (x) => x.normalize(1));
+  one("gather", x2, (x) => x.gather(1, inp.get("idx2")));
+  one("narrow", x1, (x) => x.narrow(0, 1, 3));
+  one("split", x1, (x) => piece(x.splitSize(0, 2), 1));
+  one("chunk", x1, (x) => piece(x.chunk(3), 2));
+  one("unbind", x2, (x) => piece(x.unbind(0), 1));
+  one("index_select", x2, (x) => x.indexSelect(0, Tensor.from([2, 0], [2])));
+  one("pad", x2, (x) => x.pad(-1, 1, 1));
+  one("prod", xp, (x) => x.prod());
+
+  // 인덱싱 — torch 코드가 가장 자주 하는 일이고, 자르기와 같은 이유로 그래프를 잇는다.
+  one("idx[0]", x2, (x) => x.select(0, 0));
+  one("idx[-1]", x2, (x) => x.select(0, (x.shape[0] ?? 1) - 1));
+  one("idx[1:3]", x1, (x) => x.narrow(0, 1, 2));
+  one("idx[:, 1]", x2, (x) => x.select(1, 1));
+  one("idx[1, 2]", x2, (x) => x.select(0, 1).select(0, 2));
+  one("idx[0:2, 1:3]", x2, (x) => x.narrow(0, 0, 2).narrow(1, 1, 2));
+  one("idx[목록]", x2, (x) => x.indexSelect(0, Tensor.from([2, 0], [2])));
+
+  // 이어 붙이기·쌓기 — DataLoader 의 collate 가 이것 위에 선다.
+  const twice = (x: Tensor) => x.binary("mul", Tensor.full([], 2));
+  const thrice = (x: Tensor) => x.binary("mul", Tensor.full([], 3));
+  one("cat", x1, (x) => Tensor.cat([x, twice(x)]));
+  one("cat(dim=1)", x2, (x) => Tensor.cat([x, twice(x)], 1));
+  one("stack", x1, (x) => Tensor.stack([x, thrice(x)]));
+  one("stack(dim=1)", x2, (x) => Tensor.stack([x, thrice(x)], 1));
+
+  one("메서드 x.abs()", x1, (x) => x.abs());
+  one("메서드 x.exp()", x1, (x) => x.exp());
+  one("메서드 x.sqrt()", xp, (x) => x.sqrt());
+
+  one("LayerNorm", x2, (x) => x.layerNorm(-1));
+  one("F.layer_norm", x2, (x) => x.layerNorm(-1));
+  one("BatchNorm1d", x2, (x) => x.batchNorm(0));
+  one("F.linear", x2, (x) => x.linear(inp.get("x2")));
+  one("Softmax(층)", x2, (x) => x.softmax(-1));
+  one("LogSoftmax(층)", x2, (x) => x.logSoftmax(-1));
+  one("LeakyReLU(층)", x1, (x) => x.leakyRelu(0.1));
+  one("ELU(층)", x1, (x) => x.unary("elu"));
+  one("SiLU(층)", x1, (x) => x.unary("silu"));
+  one("Identity", x1, (x) => x.clone());
+  one("Unflatten", x1, (x) => x.unflatten(0, [3, 2]));
+
+  one("where", x1, (x) => x.where(positive(x), x.binary("mul", Tensor.full([], 0.1))));
+  one("masked_fill", x1, (x) => x.maskedFill(positive(x), -1.0));
+  one("clone", x1, (x) => x.clone());
+  one("permute", x2, (x) => x.permute([1, 0]));
+  one("squeeze", x1, (x) => x.unsqueeze(0).squeezeAll());
+  one("max(dim)", x2, (x) => x.amax(1));
+  one("min(dim)", x2, (x) => x.amin(1));
+  one("var", x1, (x) => x.variance());
+  one("std", x1, (x) => x.std());
+
+  // **같은 번호가 여러 번 나오면 그 행에 기울기가 쌓여야 한다.**
+  out.set("grad::embedding(중복 번호)", () => {
+    const w = asLeaf(inp.get("w0").narrow(0, 0, 5)); // (5, 6)
+    w.indexSelect(0, Tensor.from([0, 2, 0, 4], [4])).sum().backward();
+    return gradOf(w, "embedding");
+  });
+
+  // 이항 — 양쪽 잎을 다 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
+  const pairs: [string, (a: Tensor, b: Tensor) => Tensor, () => [Tensor, Tensor]][] = [
+    ["add", (a, b) => a.add(b), () => [x1(true), x1(true)]],
+    ["sub", (a, b) => a.sub(b), () => [x1(true), x1(true)]],
+    ["mul", (a, b) => a.mul(b), () => [x1(true), x1(true)]],
+    ["div", (a, b) => a.div(b), () => [xp(true), xp(true)]],
+    // **오른쪽도 잎이어야 한다.** `x1().neg()` 은 파생 텐서라 기울기가 안 쌓이고,
+    // 그러면 `/b` 케이스가 "기울기가 안 왔다" 로 죽는다 — 구현이 아니라 케이스 탓으로.
+    ["maximum", (a, b) => a.binary("maximum", b), () => [x1(true), asLeaf(x1().neg())]],
+    ["minimum", (a, b) => a.binary("minimum", b), () => [x1(true), asLeaf(x1().neg())]],
+    ["matmul", (a, b) => a.mm(b), () => [x2(true), asLeaf(x2().transpose())]],
+    ["l1_loss", (a, b) => a.l1Loss(b), () => [x1(true), x1(true)]],
+    ["mse_loss", (a, b) => a.mseLoss(b), () => [x1(true), x1(true)]],
+    ["smooth_l1_loss", (a, b) => a.smoothL1Loss(b), () => [x1(true), x1(true)]],
+    ["cosine_similarity", (a, b) => a.cosineSimilarity(b),
+      () => [x2(true), asLeaf(x2().binary("mul", Tensor.full([], 2)))]],
+  ];
+  for (const [name, fn, make] of pairs) {
+    for (const [which, tag] of ["a", "b"].entries()) {
+      out.set(`grad::${name}/${tag}`, () => {
+        const leaves = make();
+        fn(leaves[0], leaves[1]).sum().backward();
+        const leaf = leaves[which];
+        if (!leaf) throw new Error(`${name}: 잎 ${tag} 가 없다`);
+        return gradOf(leaf, `${name}/${tag}`);
+      });
+    }
+  }
+  // 골든이 이항 형태로 굳혔으므로 이름 뒤에 잎 표시가 붙는다.
+  one("L1Loss(층)/a", x1, (x) => x.l1Loss(inp.get("x1")));
+  one("SmoothL1Loss(층)/a", x1, (x) => x.smoothL1Loss(inp.get("x1")));
+  one("BCEWithLogitsLoss/a", x1, (x) => x.bceWithLogits(inp.get("x1")));
 }
 
 /**

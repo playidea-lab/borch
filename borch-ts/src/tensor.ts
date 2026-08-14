@@ -47,6 +47,14 @@ import {
 /** 장치를 **객체 안에** 둔다. `autograd.ts` 의 `gradMode` 와 같은 이유다. */
 const deviceHolder: { current: Device | null } = { current: null };
 
+/**
+ * 이만큼까지의 정수 지수는 곱셈으로 편다.
+ *
+ * 위로 갈수록 커널 호출이 그만큼 늘어나므로 무한정 펴지는 않는다. 이 위는 `pow`
+ * 커널로 가고, 거기서는 음수 밑이 답이 없다.
+ */
+const MAX_UNROLLED_POWER = 8;
+
 export async function init(): Promise<Device> {
   if (!deviceHolder.current) deviceHolder.current = await Device.create();
   return deviceHolder.current;
@@ -534,6 +542,74 @@ export class Tensor implements Node<Tensor> {
       ? present.sum()
       : present.sumDim(dim, keepdim)).detach();
     return total.div(count);
+  }
+
+  /** 크기 1 인 축을 끼워 넣는다. */
+  unsqueeze(dim: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank + 1 : dim;
+    const shape = [...this.shape];
+    shape.splice(axis, 0, 1);
+    return this.reshape(shape);
+  }
+
+  /** 크기 1 인 축을 **전부** 뺀다. 인자 없는 `squeeze()` 다. */
+  squeezeAll(): Tensor {
+    return this.reshape(this.shape.filter((d) => d !== 1));
+  }
+
+  /** 값이 같은 새 텐서. 그래프는 이어진다 — 그것이 `detach` 와 다른 점이다. */
+  clone(): Tensor {
+    return this.unary("positive");
+  }
+
+  /**
+   * 축 하나를 따라 이어 붙인다.
+   *
+   * **새 커널이 없다.** 각자를 상대 크기만큼 덧대고 더하면 된다 — 덧댄 자리는 0 이고
+   * 겹치지 않으므로 합이 곧 이어 붙인 것이다. 역방향도 `pad` 의 것이 그대로 쓰인다.
+   * 메모리를 두 배 쓰지만, 손으로 쓴 역방향 하나를 안 만드는 값이 더 크다.
+   */
+  static cat(parts: readonly Tensor[], dim = 0): Tensor {
+    if (parts.length === 0) throw new Error("cat 에 줄 것이 없다");
+    const first = parts[0];
+    if (!first) throw new Error("cat 에 줄 것이 없다");
+    const rank = first.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const sizes = parts.map((p) => p.shape[axis] ?? 0);
+    const total = sizes.reduce((a, b) => a + b, 0);
+    let before = 0;
+    let acc: Tensor | null = null;
+    for (const [i, part] of parts.entries()) {
+      const size = sizes[i] ?? 0;
+      const padded = part.pad(axis, before, total - before - size);
+      acc = acc === null ? padded : acc.add(padded);
+      before += size;
+    }
+    if (!acc) throw new Error("cat 에 줄 것이 없다");
+    return acc;
+  }
+
+  /** 새 축을 만들어 쌓는다. `cat` 에 축을 하나 끼워 넣은 것과 같다. */
+  static stack(parts: readonly Tensor[], dim = 0): Tensor {
+    return Tensor.cat(parts.map((p) => p.unsqueeze(dim)), dim);
+  }
+
+  /**
+   * 분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면
+   * 값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.
+   */
+  variance(correction = 1): Tensor {
+    const n = this.size;
+    // **평균을 떼도 기울기가 같다.** 평균을 통과하는 몫은 Σ(x−m) 에 비례하는데
+    // 그 합이 정의상 0 이라 통째로 사라진다. 이어두면 큰 항 둘이 상쇄되는 계산이
+    // 되므로, 떼는 쪽이 값도 더 정확하다.
+    const centered = this.sub(this.mean().detach());
+    return centered.square().sum().div(Tensor.full([], n - correction));
+  }
+
+  std(correction = 1): Tensor {
+    return this.variance(correction).sqrt();
   }
 
   /** 크기 1 인 축을 뺀다. */
@@ -1262,8 +1338,22 @@ export class Tensor implements Node<Tensor> {
       .binary("minimum", Tensor.full([], high));
   }
 
-  /** 상수 지수. */
+  /**
+   * 상수 지수.
+   *
+   * **정수 지수는 곱셈으로 간다.** WGSL 의 `pow(x, y)` 는 `exp2(y·log2(x))` 라 밑이
+   * 음수면 답이 없고, 실제로 `|x|` 를 쓴 것 같은 값이 나온다. 짝수 지수에서는 값이
+   * 우연히 맞아서 `method::pow` 는 통과했고, `grad::pow2` 에서 부호가 뒤집힌 채로
+   * 잡혔다 — 값은 맞고 기울기만 틀리는 그 종류다.
+   */
   powScalar(k: number): Tensor {
+    if (Number.isInteger(k) && k >= 0 && k <= MAX_UNROLLED_POWER) {
+      if (k === 0) return Tensor.ones(this.shape);
+      let acc: Tensor = this;
+      for (let i = 1; i < k; i++) acc = acc.mul(this);
+      return acc;
+    }
+    // 정수가 아니면 음수 밑에서 답이 없는 것이 맞다. 그대로 커널에 맡긴다.
     return this.binary("pow", Tensor.full([], k));
   }
 
@@ -1383,6 +1473,51 @@ export class Tensor implements Node<Tensor> {
    * 작을 때는 제곱, 클 때는 절대값. **원점에서 미분이 이어진다** — 그것이 이 손실을
    * 쓰는 이유이므로 `beta` 를 경계로 두 식을 붙인다.
    */
+  /** 제곱 오차의 평균. */
+  mseLoss(target: Tensor): Tensor {
+    return this.sub(target).square().mean();
+  }
+
+  /**
+   * 로짓을 그대로 받는 이진 교차엔트로피.
+   *
+   * **`sigmoid` 를 먼저 구해서 로그를 취하지 않는다.** 그러면 확신이 큰 자리에서
+   * `log(0)` 이 되어 손실이 무한대가 된다. `max(x,0) − x·y + log(1+exp(−|x|))` 는
+   * 같은 값을 넘침 없이 낸다 — 이 함수가 따로 있는 이유가 그것이다.
+   */
+  bceWithLogits(target: Tensor): Tensor {
+    const zero = Tensor.full([], 0);
+    const hinge = this.binary("maximum", zero);
+    const stable = this.abs().neg().exp().unary("log1p");
+    return hinge.sub(this.mul(target)).add(stable).mean();
+  }
+
+  /**
+   * 마지막 축들을 평균 0, 분산 1 로. **분산은 편향추정(n 으로 나눔)이다** —
+   * torch 의 `layer_norm` 이 그렇고, `var()` 의 기본과 다르다.
+   */
+  layerNorm(dim = -1, eps = 1e-5): Tensor {
+    const m = this.mean(dim, true);
+    const centered = this.sub(m);
+    const v = centered.square().mean(dim, true);
+    return centered.div(v.binary("add", Tensor.full([], eps)).sqrt());
+  }
+
+  /**
+   * 배치 축을 따라 정규화. 학습 모드 — 이동 통계를 안 쓰고 이 배치로 센다.
+   *
+   * `layer_norm` 과 접는 축만 다르다. 축이 다르면 접는 축을 바꾸면 되지, 함수를
+   * 따로 세울 일이 아니다.
+   */
+  batchNorm(dim = 0, eps = 1e-5): Tensor {
+    return this.layerNorm(dim, eps);
+  }
+
+  /** `x @ Wᵀ`. torch 의 `F.linear` 는 가중치를 (출력, 입력) 으로 받는다. */
+  linear(weight: Tensor): Tensor {
+    return this.mm(weight.transpose());
+  }
+
   smoothL1Loss(target: Tensor, beta = 1.0): Tensor {
     const d = this.sub(target);
     const near = d.square().binary("mul", Tensor.full([], 0.5 / beta));

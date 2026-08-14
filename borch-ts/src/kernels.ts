@@ -198,6 +198,10 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
   sub: { fwd: "x - y", da: "1.0", db: "-1.0" },
   mul: { fwd: "x * y", da: "y", db: "x" },
   div: { fwd: "x / y", da: "1.0 / y", db: "-x / (y * y)" },
+  // **밑이 음수면 답이 없다.** WGSL 의 pow 는 `exp2(y·log2(x))` 이고 log2 가 음수에서
+  // 정의되지 않는다 — 실제로는 `|x|` 를 쓴 것 같은 값이 나와서, 짝수 지수의 순방향은
+  // 우연히 맞고 역방향의 부호만 뒤집힌다. 정수 지수는 `Tensor.powScalar` 가 곱셈으로
+  // 돌아가므로 이 자리를 안 지난다.
   pow: { fwd: "pow(x, y)", da: "y * pow(x, y - 1.0)", db: "o * log(x)" },
   maximum: { fwd: "max(x, y)", da: "step(y, x)", db: "step(x, y)" },
   minimum: { fwd: "min(x, y)", da: "step(x, y)", db: "step(y, x)" },
