@@ -375,6 +375,19 @@ def grad_cases(inp=None):
     flows("movedim", lambda L, x: L.movedim(x, 0, 1), mat)
     flows("repeat_interleave", lambda L, x: L.repeat_interleave(x, 3), vec)
     flows("repeat_interleave(dim)", lambda L, x: L.repeat_interleave(x, 2, 0), mat)
+    # **꺾이는 자리에서 흘리는가.**
+    #
+    # torch 의 relu 는 입력이 정확히 0 이면 기울기를 0 으로 준다 — `x > 0` 이지
+    # `x >= 0` 이 아니다. 위의 `x1` 은 무작위 정규분포라 0 이 한 번도 안 나오고,
+    # 그래서 이 자리를 골든 798 건 중 아무도 안 보고 있었다. borch.ts 가 거기서 1 을
+    # 흘리고 있었는데 ResNet 을 진짜 torch 와 맞춰보다 드러났다(입력 기울기 최대차 1.5e-2).
+    #
+    # **가중치를 자리마다 다르게 주는 것이 조건이다.** 그냥 `sum()` 이면 0 자리의
+    # 기울기가 1 이든 0 이든 합계만 달라져서 다른 자리에 묻힌다 — `flows` 가 자리마다
+    # 다른 가중치를 곱하는 이유가 이것이고, 여기서는 그것이 검사 자체다.
+    edge = np.array([-1., 0., 1., 0.], dtype=np.float32)
+    flows("relu(0에서)", lambda L, x: L.relu(x), edge)
+
     flows("median()", lambda L, x: L.median(x), vec)
     flows("median(dim)", lambda L, x: L.median(x, dim=1).values, mat)
     flows("fmod(%)", lambda L, x: x % 2, vec)

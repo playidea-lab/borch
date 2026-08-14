@@ -1280,6 +1280,12 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   one("topk", x1, (x) => x.topk(3).values);
   one("sort", x1, (x) => x.sort(0).values);
   one("sort(내림차순)", x1, (x) => x.sort(0, true).values);
+  // **꺾이는 자리에서 흘리는가.** torch 의 relu 는 입력이 정확히 0 이면 기울기를
+  // 0 으로 준다. `x1` 은 무작위 정규분포라 0 이 없어서 골든이 이 자리를 안 보고
+  // 있었고, 이 라이브러리가 거기서 1 을 흘리고 있었다.
+  weighted("relu(0에서)",
+    () => [Tensor.from([-1, 0, 1, 0], [4], true)], (x) => x.unary("relu"));
+
   weighted("median()", () => [vec(true)], (x) => x.median().values);
   weighted("median(dim)", () => [mat(true)], (x) => x.median(1).values);
 
