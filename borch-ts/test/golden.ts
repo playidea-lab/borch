@@ -12,6 +12,7 @@
  * 정확히 그 모양이었다 — 값은 그럴듯하고 아무도 안 보고 있었다.
  */
 
+import { Device } from "../src/device.js";
 import { init } from "../src/tensor.js";
 import { cases as registered, Inputs } from "./cases.js";
 
@@ -47,6 +48,14 @@ export interface Report {
   unknown: string[];
   /** 실제로 물어본 이름들. 무엇이 남았는지 세려면 개수가 아니라 이름이 필요하다. */
   asked: string[];
+  /**
+   * 어느 어댑터에서 돌았는가.
+   *
+   * 값은 장치가 안 바꾸므로 통과 여부에는 상관없다. 그래도 적는 이유는, 헤드리스
+   * 브라우저가 소프트웨어 어댑터를 주는 일이 있고 그것을 모르면 **성능을 재는 쪽이
+   * 같은 함정에 빠지기** 때문이다. 실제로 이 저장소에서 그렇게 됐다.
+   */
+  adapter: string;
   manifest: string;
 }
 
@@ -122,6 +131,7 @@ export async function run(url: string): Promise<Report> {
     failed: [],
     unknown: [],
     asked: [],
+    adapter: Device.adapterInfo,
     manifest: doc.manifest,
   };
 
@@ -158,6 +168,7 @@ export async function run(url: string): Promise<Report> {
 export function format(report: Report): string {
   const lines: string[] = [];
   const gap = report.total - report.registered;
+  lines.push(`어댑터: ${report.adapter}`);
   lines.push(`골든 ${report.total}건 중 ${report.registered}건을 TS 로 썼다 — ` +
     `${gap}건은 아직 안 물었다.`);
   if (report.unknown.length > 0) {

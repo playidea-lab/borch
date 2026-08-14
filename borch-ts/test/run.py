@@ -32,10 +32,21 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
 
 def serve(root):
     """저장소 루트를 임시 포트에 얹고 (포트, 종료함수) 를 돌려준다."""
-    handler = functools.partial(_Quiet, directory=str(root))
+    handler = functools.partial(_ReportMissing, directory=str(root))
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd.server_address[1], httpd.shutdown
+
+
+class _ReportMissing(_Quiet):
+    """**못 찾은 것을 찍는다.** 설명 안 된 404 를 덮어두면 안 된다 — 이 저장소의
+    러너가 한 번 404 HTML 을 파이썬 파일로 받아 엉뚱한 자리에서 터진 적이 있다.
+    브라우저가 알아서 찾는 것(favicon)도 여기 걸리므로 정체가 드러난다."""
+
+    def send_error(self, code, message=None, explain=None):
+        if code == 404:
+            print(f"  [404] {self.path}")
+        super().send_error(code, message, explain)
 
 
 def run(headed=False):
@@ -58,6 +69,10 @@ def run(headed=False):
             page.on("console", lambda m: print(f"  [브라우저] {m.text}")
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
+            # 설명 안 된 404 는 덮어두면 안 된다 — 이 저장소의 러너가 한 번
+            # 404 HTML 을 파이썬 파일로 받아 엉뚱한 자리에서 터진 적이 있다.
+            page.on("response", lambda r: print(f"  [404] {r.url}")
+                    if r.status == 404 else None)
             page.goto(url)
             page.wait_for_function("window.__borchReport !== undefined",
                                    timeout=TIMEOUT_MS)
@@ -80,6 +95,10 @@ def main(argv):
         print(f"돌지 못했다: {report['error']}", file=sys.stderr)
         return 1
 
+    # **어느 장치에서 돌았는지 먼저 적는다.** 값은 장치가 안 바꾸지만, 안 적어두면
+    # 성능을 재는 쪽이 헤드리스의 소프트웨어 어댑터를 진짜 GPU 로 착각한다 —
+    # 이 저장소에서 실제로 그렇게 됐다.
+    print(f"어댑터: {report.get('adapter', '(모름)')}")
     gap = report["total"] - report["registered"]
     print(f"골든 {report['total']}건 중 {report['registered']}건을 TS 로 썼다 "
           f"— {gap}건은 아직 안 물었다.")
