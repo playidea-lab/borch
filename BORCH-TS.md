@@ -137,9 +137,23 @@ T2 까지 왔다. 골든 798건 전부와, 그 위에 `nn.Module`·`Sequential`�
 `BatchNormND`·`Recurrent`(RNN·LSTM·GRU)·`MultiheadAttention`, 옵티마이저 넷(SGD·모멘텀·
 Adam·RMSprop), 스케줄 여섯, 선형대수, `transforms` 가 있다.
 
-**T3 은 아직 안 잰 것이다.** 자매는 에폭 2.00분, 시험 정확도 60.4% 다(CIFAR 1만 장·
-10 에폭). 같은 벤치로 재기 전까지 borch.ts 가 더 빠르다는 말은 근거가 없다 —
-커널 벤치가 TF.js 의 72~284% 였다는 것은 커널 하나의 이야기이지 에폭의 이야기가 아니다.
+### T3 — 자매 기준선 (이 기계, 같은 날)
+
+    uv run --with playwright python tests/browser/run.py --lib browsertorch_webgpu --headed --bench
+
+| 배치 | ms/step | 에폭 | GPU |
+|---|---|---|---|
+| 16 | 48.7 | 2.54분 | 136MB |
+| 32 | 86.0 | 2.24분 | 181MB |
+| 64 | 154.9 | **2.02분** | 226MB |
+
+**헤드리스로 재면 안 된다.** 그러면 TF.js 가 WebGPU 를 못 잡고 WebGL 로 조용히
+떨어진다(실측 — 러너가 경고를 찍는다). 그 수는 WebGPU 의 수가 아니다.
+
+borch.ts 쪽 수는 아직 없다. **커널 벤치가 TF.js 의 72~284% 였다는 것은 커널 하나의
+이야기이지 에폭의 이야기가 아니다** — 실제 스텝에는 BN·ReLU·잔차 덧셈처럼 대역폭에
+묶인 연산과 dispatch 당 비용이 같이 들어간다. 그것을 재기 전까지 borch.ts 가 더
+빠르다는 말은 근거가 없다.
 
 ### 잰 것
 

@@ -153,23 +153,26 @@ export class Device {
    *
    * @param keep 살려 둘 것. 바깥 구역이 있으면 그쪽으로 넘긴다 — 안 넘기면 바깥이
    *   닫힐 때 아무도 안 놓아준다.
-   * @returns 놓은 버퍼 수. 재는 쪽이 이것을 본다.
+   * @returns 놓은 수와 **살아남은 수**. 둘 다 준다 — 살아남은 수가 곧 이 구역이
+   *   바깥으로 흘린 것이고, 학습 루프에서 그것이 0 이 아니면 스텝마다 쌓인다.
    */
-  endScope(keep: readonly GPUBuffer[] = []): number {
+  endScope(keep: readonly GPUBuffer[] = []): { freed: number; survived: number } {
     const frame = this.scopes.pop();
-    if (!frame) return 0;
+    if (!frame) return { freed: 0, survived: 0 };
     const spare = new Set(keep);
     const outer = this.scopes[this.scopes.length - 1];
     let freed = 0;
+    let survived = 0;
     for (const buf of frame) {
       if (spare.has(buf) || this.kept.has(buf)) {
         outer?.add(buf);
+        survived += 1;
         continue;
       }
       buf.destroy();
       freed += 1;
     }
-    return freed;
+    return { freed, survived };
   }
 
   /** 구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다. */

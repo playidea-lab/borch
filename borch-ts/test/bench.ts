@@ -122,33 +122,39 @@ export async function runStep(
   const opt = new SGD(params, 0.05, 0.9);
   const crit = new nn.CrossEntropyLoss();
 
-  const one = async (): Promise<{ loss: number; freed: number }> => {
+  let survived = 0;
+  const one = async (): Promise<number> => {
     const d = device();
     d.beginScope();
+    let loss = 0;
     try {
       opt.zeroGrad();
-      const loss = crit.forward(model.forward(x), y);
-      loss.backward();
+      const out = crit.forward(model.forward(x), y);
+      out.backward();
       opt.step();
       // **구역 안에서 읽어야 한다** — 나가면 그 버퍼가 없다.
-      return { loss: await loss.item(), freed: 0 };
+      loss = await out.item();
     } finally {
-      d.endScope();
+      survived = d.endScope().survived;
     }
+    return loss;
   };
 
   for (let i = 0; i < warmup; i++) await one();
 
   const t0 = performance.now();
   let last = 0;
-  for (let i = 0; i < steps; i++) last = (await one()).loss;
+  for (let i = 0; i < steps; i++) last = await one();
   const perStep = (performance.now() - t0) / steps;
 
-  // 누수는 **구역이 안 놓은 것**으로 센다. 스텝을 하나 더 돌리고 그 구역이 몇 개를
-  // 남겼는지 보는 것이 가장 곧은 측정이다.
-  const before = device().scopeDepth;
+  // 누수는 **구역이 안 놓고 내보낸 버퍼 수**다.
+  //
+  // 처음에는 열린 구역의 깊이를 뺐는데, 그건 구역 밖에서 늘 0 이라 언제나 0 을 낸다 —
+  // 이름은 누수인데 재는 것이 아무것도 없는 계측이다. 파이썬 벤치가 같은 함정을
+  // 적어두었고("이름이 말하는 것과 다른 수를 내는 계측은 진짜 누수를 만났을 때도
+  // 못 믿는다") 나는 그것을 읽고도 같은 것을 만들었다.
   await one();
-  const leak = device().scopeDepth - before;
+  const leak = survived;
 
   const stepsPerEpoch = Math.ceil(CIFAR_TRAIN_IMAGES / batch);
   return {
