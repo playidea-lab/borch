@@ -113,7 +113,7 @@ class Tensor:
         `'function' object has no attribute 'detach'` 로 나왔다. 값을 돌려줄 자리에
         함수를 돌려주면 그 다음 줄에서야 터지고, 그러면 원인이 한 칸 밀린다.
         """
-        from ._ops import _arg, camel
+        from ._ops import camel, positional
 
         js_name = camel(name)
         got = getattr(self._h, js_name, None)
@@ -124,7 +124,7 @@ class Tensor:
             return wrap(got) if _js.borch.isTensor(got) else got
 
         def call(*args, **kw):
-            out = got(*[_arg(a) for a in args])
+            out = got(*positional(name, args, kw))
             return wrap(out) if _js.borch.isTensor(out) else out
 
         call.__name__ = name

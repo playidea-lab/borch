@@ -19,10 +19,84 @@ _ts = _js.borch
 
 # 두 언어에서 철자가 아예 다른 것들. 규칙으로 안 되는 것만 적는다.
 _RENAME = {
-    "logsumexp": "logsumexp",
-    "movedim": "movedim",
-    "amax": "amax",
-    "amin": "amin",
+    "adaptive_avg_pool2d": "adaptiveAvgPool",
+    "adaptive_avg_pool1d": "adaptiveAvgPool",
+    "absolute": "abs",
+    "arccos": "acos",
+    "arccosh": "acosh",
+    "arcsin": "asin",
+    "arcsinh": "asinh",
+    "arctan": "atan",
+    "arctanh": "atanh",
+    "clip": "clamp",
+    "fix": "trunc",
+    "swapdims": "transpose",
+    "interpolate": "upsample",
+    "as_tensor": "from_",
+}
+
+# **이름 붙은 인자를 자리로 바꾼다.**
+#
+# torch 코드는 `clamp(x, min=-0.5, max=0.5)` 처럼 이름으로 부르는 자리가 많은데,
+# JS 에는 그런 것이 없다. 처음에 `**kw` 를 그냥 버렸더니 `clamp(x, undefined,
+# undefined)` 가 셰이더로 내려가 WGSL 이 파싱에서 멈췄다 — 실패 72 건이 그것이었다.
+#
+# 그래서 자리 이름을 적어 둔다. borch.ts 쪽 **인자 순서**이고, torch 의 이름을 그
+# 자리에 놓는다. 여기 없는 함수는 이름 붙은 인자를 안 받는다는 뜻이다.
+_SIGNATURE = {
+    "clamp": ("min", "max"),
+    "clip": ("min", "max"),
+    "sum": ("dim", "keepdim"),
+    "mean": ("dim", "keepdim"),
+    "prod": ("dim", "keepdim"),
+    "amax": ("dim", "keepdim"),
+    "amin": ("dim", "keepdim"),
+    "var": ("dim", "keepdim"),
+    "std": ("dim", "keepdim"),
+    "logsumexp": ("dim", "keepdim"),
+    "argmax": ("dim",),
+    "argmin": ("dim",),
+    "softmax": ("dim",),
+    "log_softmax": ("dim",),
+    "cumsum": ("dim",),
+    "cumprod": ("dim",),
+    "sort": ("dim", "descending"),
+    "topk": ("k", "dim", "largest"),
+    "squeeze": ("dim",),
+    "unsqueeze": ("dim",),
+    "flatten": ("start_dim", "end_dim"),
+    "flip": ("dims",),
+    "roll": ("shifts", "dims"),
+    "norm": ("p", "dim", "keepdim"),
+    "diff": ("n", "dim"),
+    "median": ("dim", "keepdim"),
+    "gather": ("dim", "index"),
+    "index_select": ("dim", "index"),
+    "narrow": ("dim", "start", "length"),
+    "transpose": ("dim0", "dim1"),
+    "swapdims": ("dim0", "dim1"),
+    "movedim": ("source", "destination"),
+    "repeat_interleave": ("repeats", "dim"),
+    "cat": ("dim",),
+    "stack": ("dim",),
+    "split": ("size", "dim"),
+    "chunk": ("chunks", "dim"),
+    "unbind": ("dim",),
+    "conv1d": ("weight", "bias", "stride", "padding"),
+    "conv2d": ("weight", "bias", "stride", "padding"),
+    "conv3d": ("weight", "bias", "stride", "padding"),
+    "max_pool1d": ("kernel_size", "stride"),
+    "max_pool2d": ("kernel_size", "stride"),
+    "max_pool3d": ("kernel_size", "stride"),
+    "avg_pool2d": ("kernel_size", "stride"),
+    "adaptive_avg_pool2d": ("output_size",),
+    "normalize": ("dim", "eps"),
+    "cosine_similarity": ("other", "dim", "eps"),
+    "layer_norm": ("dim", "eps"),
+    "leaky_relu": ("negative_slope",),
+    "one_hot": ("num_classes",),
+    "smooth_l1_loss": ("target", "beta"),
+    "interpolate": ("scale_factor",),
 }
 
 
@@ -43,6 +117,34 @@ def _arg(a):
     return a
 
 
+def positional(name, args, kw):
+    """이름 붙은 인자를 **자리로 편다.**
+
+    JS 에는 이름 붙은 인자가 없다. 버리면 `undefined` 가 셰이더까지 내려가고, WGSL 은
+    그것을 파싱에서 거절한다 — 조용히 틀리지는 않지만 원인이 한참 멀리서 나온다.
+
+    뒤에 붙는 `undefined` 는 잘라낸다. borch.ts 의 기본값(`stride = kernel`)이
+    살아나야 하는데, `undefined` 를 명시로 넘기면 그 자리가 안 채워진다.
+    """
+    if not kw:
+        out = list(args)
+    else:
+        order = _SIGNATURE.get(name)
+        if order is None:
+            raise TypeError(
+                f"`{name}` 은 이름 붙은 인자를 안 받는다 (받은 것: {sorted(kw)})\n"
+                f"  받아야 한다면 `_SIGNATURE` 에 자리 순서를 적어라.")
+        out = list(args)
+        for i, key in enumerate(order):
+            if key in kw:
+                while len(out) <= i:
+                    out.append(None)
+                out[i] = kw[key]
+    while out and out[-1] is None:
+        out.pop()
+    return [_arg(a) for a in out]
+
+
 def __getattr__(name):
     """모듈에 없는 이름은 **첫 인자의 메서드**로 넘긴다.
 
@@ -58,7 +160,8 @@ def __getattr__(name):
         if fn is None:
             raise AttributeError(
                 f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
-        return wrap(fn(*[_arg(a) for a in args]))
+        out = fn(*positional(name, args, kw))
+        return wrap(out) if _ts.isTensor(out) else out
 
     call.__name__ = name
     return call

@@ -55,6 +55,7 @@ from ._ops import (                                      # noqa: E402,F401
     arange, cat, eye, full, ones, stack, zeros,
 )
 from ._ops import __getattr__                            # noqa: E402,F401
+from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 
 # dtype 은 borch.ts 에서 float32 저장 위의 이름표다. 여기서도 이름으로 둔다.
 float32 = "float32"
