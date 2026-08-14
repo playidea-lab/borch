@@ -161,6 +161,36 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
     fwd: "select(0.0, 1.0, (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u)",
     bwd: "0.0",
   },
+  logical_not: { fwd: "select(0.0, 1.0, x == 0.0)", bwd: "0.0" },
+  /**
+   * torch 의 기본 `gelu` — 근사형이 아니라 **정확형**이다.
+   *
+   * `0.5·x·(1 + erf(x/√2))`. 왼쪽 꼬리에서 `1` 과 `erf` 가 상쇄되는데, f32 에서
+   * `erf(-8)` 은 정확히 `-1` 이라 결과가 0 이 된다. torch 는 -4.9e-15 를 주므로
+   * 차이가 5e-15 이고, 이 프로젝트의 허용 오차(1e-4) 한참 아래다. 더 정확히 하려면
+   * 코어처럼 erfc 로 유도해야 하는데 지금 그럴 이유가 없다.
+   */
+  gelu: {
+    fwd: "0.5 * x * (1.0 + erf_(x * 0.7071067811865476))",
+    bwd:
+      "0.5 * (1.0 + erf_(x * 0.7071067811865476)) " +
+      "+ x * 0.3989422804014327 * exp(-0.5 * x * x)",
+    prelude: ERF_PRELUDE,
+  },
+  silu: {
+    fwd: "x / (1.0 + exp(-x))",
+    // s 를 두 번 쓰므로 보조 함수로 뺀다 — 식 안에 두면 exp 를 네 번 부른다.
+    bwd: "silu_grad(x)",
+    prelude: `
+fn silu_grad(x: f32) -> f32 {
+  let s = 1.0 / (1.0 + exp(-x));
+  return s * (1.0 + x * (1.0 - s));
+}`,
+  },
+  elu: {
+    fwd: "select(exp(x) - 1.0, x, x > 0.0)",
+    bwd: "select(o + 1.0, 1.0, x > 0.0)",
+  },
 };
 
 export const BINARY: Readonly<Record<string, BinarySpec>> = {
@@ -218,6 +248,12 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
   le: { fwd: "select(0.0, 1.0, x <= y)", da: "0.0", db: "0.0" },
   gt: { fwd: "select(0.0, 1.0, x > y)", da: "0.0", db: "0.0" },
   ge: { fwd: "select(0.0, 1.0, x >= y)", da: "0.0", db: "0.0" },
+  logical_and: {
+    fwd: "select(0.0, 1.0, x != 0.0 && y != 0.0)", da: "0.0", db: "0.0",
+  },
+  logical_or: {
+    fwd: "select(0.0, 1.0, x != 0.0 || y != 0.0)", da: "0.0", db: "0.0",
+  },
 };
 
 /** 워크그룹 크기. 원소별과 축약은 1차원이다. */
@@ -618,6 +654,74 @@ ${flatId(n)}
     ${REDUCE_STEP[kind]}
   }
   Out[gid] = acc;
+}`;
+}
+
+/**
+ * 축약하되 **값이 아니라 자리**를 낸다.
+ *
+ * 동점이면 **먼저 나온 자리**를 준다 — 뒤엣것으로 밀리지 않게 부등호를 엄격하게 쓴다.
+ * torch 도 그렇게 답한다.
+ */
+export function argReduce(
+  kind: "max" | "min",
+  outer: number,
+  red: number,
+  inner: number,
+): string {
+  const n = outer * inner;
+  const better = kind === "max" ? "v > best" : "v < best";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${inner}u;
+  let i = gid % ${inner}u;
+  let base = o * ${red * inner}u + i;
+  var best = A[base];
+  var at = 0u;
+  for (var r = 1u; r < ${red}u; r = r + 1u) {
+    let v = A[base + r * ${inner}u];
+    if (${better}) { best = v; at = r; }
+  }
+  Out[gid] = f32(at);
+}`;
+}
+
+/**
+ * 축 하나의 앞뒤에 상수를 덧댄다.
+ *
+ * 덧댄 자리는 입력의 **어느 자리도 안 보므로** gather 로 안 된다. 여러 축을 채우려면
+ * 이 커널을 축마다 부른다 — 한 번에 하는 커널을 따로 두면 두 벌을 고쳐야 한다.
+ */
+export function padAxis(
+  outer: number,
+  before: number,
+  size: number,
+  after: number,
+  inner: number,
+  value: number,
+): string {
+  const outSize = before + size + after;
+  const n = outer * outSize * inner;
+  const literal = Number.isInteger(value) ? value.toFixed(1) : String(value);
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${outSize * inner}u;
+  let rest = gid % ${outSize * inner}u;
+  let c = rest / ${inner}u;
+  let i = rest % ${inner}u;
+  if (c < ${before}u || c >= ${before + size}u) {
+    Out[gid] = ${literal};
+    return;
+  }
+  Out[gid] = A[o * ${size * inner}u + (c - ${before}u) * ${inner}u + i];
 }`;
 }
 

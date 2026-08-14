@@ -10,6 +10,7 @@ import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
 import { RuntimeError, TORCH } from "./errors.js";
 import {
+  argReduce,
   type AxisRule,
   BINARY,
   binaryBackward,
@@ -29,6 +30,7 @@ import {
   indexSelect,
   indexSelectBackward,
   matmul,
+  padAxis,
   prodBackward,
   reduceBroadcast,
   reduceDim,
@@ -203,6 +205,34 @@ export class Tensor implements Node<Tensor> {
 
   static ones(shape: readonly number[]): Tensor {
     return Tensor.full(shape, 1);
+  }
+
+  /**
+   * 단위 행렬. **CPU 에서 만들어 올린다** — 만드는 일은 한 번뿐이고, 이걸 위해
+   * 셰이더를 하나 더 굽는 것은 얻는 것보다 비싸다.
+   */
+  static eye(n: number): Tensor {
+    const data = new Float32Array(n * n);
+    for (let i = 0; i < n; i++) data[i * n + i] = 1;
+    return Tensor.from(data, [n, n]);
+  }
+
+  /** 양끝을 포함해 고르게 나눈 값들. */
+  static linspace(start: number, end: number, count: number): Tensor {
+    const data = new Float32Array(count);
+    // 마지막 값을 계산으로 내면 반올림이 쌓여 end 에 정확히 안 닿는다. 못 박는다.
+    const step = count > 1 ? (end - start) / (count - 1) : 0;
+    for (let i = 0; i < count; i++) data[i] = start + step * i;
+    if (count > 1) data[count - 1] = end;
+    return Tensor.from(data, [count]);
+  }
+
+  zerosLike(): Tensor {
+    return Tensor.zeros(this.shape);
+  }
+
+  onesLike(): Tensor {
+    return Tensor.ones(this.shape);
   }
 
   // ── 원소별 ────────────────────────────────────────────────────────────
@@ -1242,6 +1272,123 @@ export class Tensor implements Node<Tensor> {
     const m = this.amax(dim, true).detach();
     const e = this.sub(m).exp();
     return e.div(e.sumDim(dim, true));
+  }
+
+  /**
+   * `log(softmax(x))`. **`softmax` 를 구해 로그를 취하지 않는다** — 작은 확률에서
+   * 0 이 되어 로그가 -inf 가 된다. 빼기로 바로 쓰면 그 자리가 없다.
+   */
+  logSoftmax(dim = 0): Tensor {
+    return this.sub(this.logsumexp(dim, true));
+  }
+
+  /** 최대·최소가 **어디에** 있는가. 동점이면 먼저 나온 자리다. */
+  argmax(dim = 0): Tensor {
+    return this.argReduceOver("max", dim);
+  }
+
+  argmin(dim = 0): Tensor {
+    return this.argReduceOver("min", dim);
+  }
+
+  private argReduceOver(kind: "max" | "min", dim: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const red = this.shape[axis] ?? 1;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const outShape = [...this.shape];
+    outShape.splice(axis, 1);
+    const n = outer * inner;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(
+        `ar:${kind}:${outer}:${red}:${inner}`,
+        () => argReduce(kind, outer, red, inner),
+      ),
+      [this.buffer, out],
+      n,
+    );
+    // 자리는 값이 아니다 — 기울기가 흐를 자리가 없다. torch 도 안 흘린다.
+    return new Tensor(out, outShape);
+  }
+
+  /** 0 이 아닌 것의 개수. */
+  countNonzero(): Tensor {
+    return this.binary("ne", Tensor.full([], 0)).sum();
+  }
+
+  /** 전부 참인가 / 하나라도 참인가. 0/1 로 답한다. */
+  all(): Tensor {
+    return this.binary("ne", Tensor.full([], 0)).amin();
+  }
+
+  any(): Tensor {
+    return this.binary("ne", Tensor.full([], 0)).amax();
+  }
+
+  /** 축 하나의 앞뒤에 상수를 덧댄다. 여러 축이면 축마다 부른다. */
+  pad(dim: number, before: number, after: number, value = 0): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const size = this.shape[axis] ?? 0;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const outShape = this.shape.map((s, d) => (d === axis ? s + before + after : s));
+    const n = outShape.reduce((a, b) => a * b, 1);
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(
+        `pad:${outer}:${before}:${size}:${after}:${inner}:${value}`,
+        () => padAxis(outer, before, size, after, inner, value),
+      ),
+      [this.buffer, out],
+      n,
+    );
+    return Tensor.make(
+      out,
+      outShape,
+      [this],
+      // 덧댄 자리는 입력에서 온 것이 아니다 — 가운데만 돌려준다.
+      (g) => [g.narrow(axis, before, size)],
+      "ConstantPadNdBackward0",
+    );
+  }
+
+  /** 기울기 0.1 짜리 왼쪽. `max(x, slope·x)` 라 새 커널이 필요 없다. */
+  leakyRelu(slope = 0.01): Tensor {
+    return this.binary("maximum", this.binary("mul", Tensor.full([], slope)));
+  }
+
+  /** 축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다. */
+  normalize(dim = 1, eps = 1e-12): Tensor {
+    const len = this.square().sumDim(dim, true).sqrt();
+    return this.div(len.binary("maximum", Tensor.full([], eps)));
+  }
+
+  /** 두 묶음의 방향이 얼마나 같은가. */
+  cosineSimilarity(other: Tensor, dim = 1, eps = 1e-8): Tensor {
+    const dotted = this.mul(other).sumDim(dim, false);
+    const la = this.square().sumDim(dim, false).sqrt();
+    const lb = other.square().sumDim(dim, false).sqrt();
+    return dotted.div(la.mul(lb).binary("maximum", Tensor.full([], eps)));
+  }
+
+  /** 절대 오차의 평균. */
+  l1Loss(target: Tensor): Tensor {
+    return this.sub(target).abs().mean();
+  }
+
+  /**
+   * 작을 때는 제곱, 클 때는 절대값. **원점에서 미분이 이어진다** — 그것이 이 손실을
+   * 쓰는 이유이므로 `beta` 를 경계로 두 식을 붙인다.
+   */
+  smoothL1Loss(target: Tensor, beta = 1.0): Tensor {
+    const d = this.sub(target);
+    const near = d.square().binary("mul", Tensor.full([], 0.5 / beta));
+    const far = d.abs().binary("sub", Tensor.full([], 0.5 * beta));
+    const isNear = d.abs().binary("lt", Tensor.full([], beta));
+    return near.where(isNear, far).mean();
   }
 
   // ── 역전파 ────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
  */
 
 import { init } from "../src/tensor.js";
-import { cases as registered } from "./cases.js";
+import { cases as registered, Inputs } from "./cases.js";
 
 interface GoldenValue {
   kind: "float" | "int" | "bool" | "string";
@@ -26,6 +26,8 @@ interface GoldenValue {
 interface GoldenDoc {
   tolerance: { atol: number; rtol: number };
   manifest: string;
+  /** 케이스가 함께 쓰는 입력. 이름이 `golden_inputs()` 의 키와 같다. */
+  inputs: Record<string, GoldenValue>;
   cases: Record<string, GoldenValue>;
 }
 
@@ -108,7 +110,9 @@ export async function run(url: string): Promise<Report> {
   const doc = (await res.json()) as GoldenDoc;
 
   await init();
-  const table = registered();
+  // **입력은 골든에서 받는다.** 여기서 배열을 다시 적으면 그 자리가 틀릴 자리가 되고,
+  // 틀려도 "우리 값이 다르다" 로만 보인다. 굳힐 때 쓴 바로 그 숫자를 쓴다.
+  const table = registered(new Inputs(doc.inputs));
   const report: Report = {
     total: Object.keys(doc.cases).length,
     registered: table.size,

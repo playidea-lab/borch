@@ -30,6 +30,38 @@ import { Tensor } from "../src/tensor.js";
  */
 export type Case = () => Tensor | string | Promise<Tensor | string>;
 
+/** 골든이 실어 보낸 입력 하나. 값은 평평하고 모양이 따로 온다. */
+export interface RawInput {
+  readonly shape?: number[];
+  readonly values?: (number | boolean | null)[];
+}
+
+/**
+ * 케이스가 함께 쓰는 입력.
+ *
+ * **골든이 들고 온 것을 그대로 쓴다.** 여기서 배열을 다시 적으면 그 자리가 틀릴
+ * 자리가 되고, 틀려도 화면에는 "우리 값이 다르다" 로만 뜬다. 굳힐 때 쓴 바로 그
+ * 숫자를 쓰는 것이 대조를 대조로 만든다.
+ */
+export class Inputs {
+  constructor(private readonly raw: Readonly<Record<string, RawInput>>) {}
+
+  /** 매번 새 텐서를 만든다 — 케이스끼리 텐서를 나눠 쓰면 기울기가 쌓인다. */
+  get(name: string, requiresGrad = false): Tensor {
+    const entry = this.raw[name];
+    if (!entry?.values) throw new Error(`골든에 입력 '${name}' 이 없다`);
+    const flat = entry.values.map((v) =>
+      typeof v === "boolean" ? (v ? 1 : 0) : (v ?? Number.NaN));
+    return Tensor.from(flat, entry.shape ?? [flat.length], requiresGrad);
+  }
+
+  shapeOf(name: string): number[] {
+    const entry = this.raw[name];
+    if (!entry) throw new Error(`골든에 입력 '${name}' 이 없다`);
+    return entry.shape ?? [entry.values?.length ?? 0];
+  }
+}
+
 // ── tests/cases.py 의 math_cases 가 쓰는 입력. 그대로 옮긴 것이다. ──────────
 const plain = [0.5, 2.0, -1.5, 3.0];
 const unit = [0.2, 0.6, -0.9, 0.45]; // (-1, 1) 안
@@ -75,6 +107,105 @@ const MATH_BINARY: readonly string[] = [
 const STEPS: readonly string[] = ["sign", "floor", "ceil", "round", "trunc", "fix"];
 
 /**
+ * 접두사 없는 표 — 교재 범위 밖이지만 흔한 것들.
+ *
+ * 입력을 `Inputs` 에서 받는다. 여기 적힌 숫자가 하나도 없다는 것이 요점이다.
+ *
+ * **안 넣은 것들**: 정렬이 필요한 `median`·`topk`·`sort`·`unique`·`argsort`,
+ * 결과 크기가 값에 달린 `masked_select`·`bincount`, 정수 dtype 이 필요한
+ * `F.one_hot`·`F.nll_loss`, 그리고 합성곱·풀링·`BatchNorm2d`·`bmm`·`einsum`·
+ * `pad_sequence` 는 T2 다.
+ */
+function addWide(out: Map<string, Case>, inp: Inputs): void {
+  const xp = () => inp.get("xp");
+  const x1 = () => inp.get("x1");
+  const x2 = () => inp.get("x2");
+  const tail = () => inp.get("tail");
+
+  // xp 는 양수만 — log2·rsqrt 가 음수에서 NaN 이고, NaN 은 자기 자신과도 다르다.
+  for (const name of ["log2", "log10", "rsqrt", "square", "reciprocal", "tan",
+    "sinh", "cosh", "erf", "sign", "floor", "ceil", "round", "sqrt", "exp",
+    "abs", "sin", "cos"]) {
+    out.set(name, () => xp().unary(name));
+  }
+
+  const table: [string, () => Tensor][] = [
+    ["prod", () => x1().prod()],
+    ["count_nonzero", () => x1().countNonzero()],
+    ["cumsum", () => x1().cumsum(0)],
+    ["cumprod", () => x1().cumprod(0)],
+    ["norm", () => x2().norm()],
+    ["gather", () => x2().gather(1, inp.get("idx2"))],
+    ["flip", () => x2().flip(0)],
+    ["roll", () => x1().roll(2)],
+    ["index_select", () => x2().indexSelect(0, Tensor.from([2, 0], [2]))],
+    ["narrow", () => x2().narrow(1, 1, 2)],
+    ["split", () => piece(x1().splitSize(0, 2), 1)],
+    ["chunk", () => piece(x1().chunk(3), 2)],
+    ["unbind", () => piece(x2().unbind(0), 1)],
+    ["maximum", () => x1().binary("maximum", x1().neg())],
+    ["minimum", () => x1().binary("minimum", x1().neg())],
+    ["clamp", () => x1().clamp(-0.5, 0.5)],
+    ["mm", () => x2().mm(x2().transpose())],
+    ["dot", () => x1().dot(x1())],
+    ["outer", () => x1().narrow(0, 0, 2).outer(x1().narrow(0, 0, 3))],
+    ["diag", () => square3().diag()],
+    ["trace", () => square3().trace()],
+    ["F.gelu", () => x1().unary("gelu")],
+    ["F.silu", () => x1().unary("silu")],
+    ["F.leaky_relu", () => x1().leakyRelu(0.1)],
+    ["F.elu", () => x1().unary("elu")],
+    ["F.log_softmax", () => x2().logSoftmax(-1)],
+    ["F.l1_loss", () => x1().l1Loss(x1().neg())],
+    ["F.smooth_l1_loss", () => x1().smoothL1Loss(x1().neg())],
+    ["F.pad", () => x2().pad(-1, 1, 1)],
+    ["F.normalize", () => x2().normalize(1)],
+    ["F.cosine_similarity",
+      () => x2().cosineSimilarity(x2().binary("mul", Tensor.full([], 2)))],
+    ["erf(꼬리)", () => tail().unary("erf")],
+    ["F.gelu(꼬리)", () => tail().unary("gelu")],
+    ["eye", () => Tensor.eye(3)],
+    ["full", () => Tensor.full([2, 3], 2.5)],
+    ["zeros_like", () => x2().zerosLike()],
+    ["ones_like", () => x2().onesLike()],
+    ["linspace", () => Tensor.linspace(0, 1, 5)],
+    ["tril", () => square3().tril()],
+    ["triu", () => square3().triu(1)],
+    ["argmax", () => x2().argmax(1)],
+    ["argmin", () => x2().argmin(1)],
+    ["eq", () => x1().binary("eq", x1())],
+    ["gt", () => x1().binary("gt", x1().neg())],
+    ["logical_and", () => positive(x1()).binary("logical_and", positive(x1().neg()))],
+    ["logical_not", () => positive(x1()).unary("logical_not")],
+    ["isnan", () => x1().unary("isnan")],
+    ["isfinite", () => x1().unary("isfinite")],
+    ["all", () => x1().binary("gt", Tensor.full([], -99)).all()],
+    ["any", () => x1().binary("gt", Tensor.full([], 99)).any()],
+    ["repeat_interleave", () => x1().repeatInterleave(2)],
+    ["tile", () => x1().tile(2)],
+    ["movedim", () => x2().movedim(0, 1)],
+    ["as_tensor", () => x1()],
+  ];
+  for (const [name, fn] of table) out.set(name, fn);
+
+  /** `x2[:3, :3]` — 골든이 그 자리만 쓰는 케이스들이 있다. */
+  function square3(): Tensor {
+    return x2().narrow(0, 0, 3).narrow(1, 0, 3);
+  }
+}
+
+/** `x > 0` 을 0/1 로. `logical_*` 케이스가 그 형태를 쓴다. */
+function positive(t: Tensor): Tensor {
+  return t.binary("gt", Tensor.full([], 0));
+}
+
+function piece(parts: Tensor[], k: number): Tensor {
+  const part = parts[k];
+  if (!part) throw new Error(`조각 ${k} 가 없다`);
+  return part;
+}
+
+/**
  * 참·거짓을 **골든이 굳힌 철자로** 적는다.
  *
  * 굳힐 때 파이썬의 `str(bool(...))` 을 썼으므로 `True`/`False` 다. JS 의 `String(true)`
@@ -94,7 +225,7 @@ function gradOf(leaf: Tensor, name: string): Tensor {
   return g;
 }
 
-export function cases(): Map<string, Case> {
+export function cases(inputs: Inputs): Map<string, Case> {
   const out = new Map<string, Case>();
   const w = () => Tensor.from(weights);
 
@@ -151,6 +282,7 @@ export function cases(): Map<string, Case> {
   addMethod(out);
   addFlow(out);
   addError(out);
+  addWide(out, inputs);
   return out;
 }
 
