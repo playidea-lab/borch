@@ -1219,21 +1219,69 @@ ${flatId(inN)}
 }`;
 }
 
-/** 2차원 합성곱의 모양. 전부 셰이더에 상수로 굳는다. */
-export interface ConvShape {
-  readonly N: number; readonly C: number; readonly H: number; readonly W: number;
-  readonly O: number; readonly KH: number; readonly KW: number;
-  readonly SH: number; readonly SW: number;
-  readonly PH: number; readonly PW: number;
-  readonly OH: number; readonly OW: number;
-}
-
 export function convOut(size: number, pad: number, kernel: number, stride: number): number {
   return Math.floor((size + 2 * pad - kernel) / stride) + 1;
 }
 
-export function convKey(s: ConvShape): string {
-  return `${s.N}.${s.C}.${s.H}.${s.W}.${s.O}.${s.KH}.${s.KW}.${s.SH}.${s.SW}.${s.PH}.${s.PW}`;
+/**
+ * 차원 수에 상관없는 합성곱의 모양.
+ *
+ * 1·2·3 차원을 **한 커널 생성기로** 덮는다. 공간 축을 배열로 들면 conv1d 는 축이
+ * 하나, conv3d 는 셋일 뿐이고 나머지 구조가 같다 — 차원마다 커널을 따로 쓰면
+ * 세 벌이 되고, 그중 하나만 고치는 날이 온다. 실제로 자매가 그 상태였다.
+ */
+export interface ConvNDShape {
+  readonly N: number;
+  readonly C: number;
+  readonly O: number;
+  /** 입력의 공간 축들. */
+  readonly inDims: readonly number[];
+  readonly kernel: readonly number[];
+  readonly stride: readonly number[];
+  readonly pad: readonly number[];
+  readonly outDims: readonly number[];
+}
+
+export function convNDKey(s: ConvNDShape): string {
+  return [s.N, s.C, s.O, s.inDims, s.kernel, s.stride, s.pad].join("|");
+}
+
+/** 뒤에서부터 누적한 곱 — 축 하나를 한 칸 옮길 때 건너뛰는 원소 수다. */
+function suffixStrides(dims: readonly number[]): number[] {
+  const out: number[] = new Array<number>(dims.length).fill(1);
+  for (let d = dims.length - 2; d >= 0; d--) {
+    out[d] = (out[d + 1] ?? 1) * (dims[d + 1] ?? 1);
+  }
+  return out;
+}
+
+/** 공간 축을 도는 중첩 반복문을 편다. 축 수가 상수라 펴는 것이 가능하다. */
+function spatialLoops(
+  s: ConvNDShape,
+  body: string,
+  coord: (axis: number) => string,
+): string {
+  const inStride = suffixStrides(s.inDims);
+  const kStride = suffixStrides(s.kernel);
+  const open: string[] = [];
+  const close: string[] = [];
+  const terms: string[] = [];
+  const kTerms: string[] = [];
+  for (const [d, size] of s.kernel.entries()) {
+    open.push(`  for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
+    open.push(`    let p${d} = ${coord(d)};`);
+    open.push(`    if (p${d} < 0 || p${d} >= ${s.inDims[d] ?? 0}) { continue; }`);
+    close.push("  }");
+    terms.push(`u32(p${d}) * ${inStride[d] ?? 1}u`);
+    kTerms.push(`u32(k${d}) * ${kStride[d] ?? 1}u`);
+  }
+  return [
+    ...open,
+    `    let spatial = ${terms.join(" + ")};`,
+    `    let kspatial = ${kTerms.join(" + ")};`,
+    body,
+    ...close,
+  ].join("\n");
 }
 
 /**
@@ -1243,8 +1291,14 @@ export function convKey(s: ConvShape): string {
  * 커널이 TF.js 의 72~284% 였다(im2col 은 펼친 행렬을 메모리에 쓴다). 유니폼 제수를
  * 없앤 것이 43% → 284% 를 갈랐다 — 그래서 여기 나눗셈이 하나도 안 남는다.
  */
-export function conv2dForward(s: ConvShape, hasBias: boolean): string {
-  const n = s.N * s.O * s.OH * s.OW;
+export function convNDForward(s: ConvNDShape, hasBias: boolean): string {
+  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const outStride = suffixStrides(s.outDims);
+  const n = s.N * s.O * outSpace;
+  const decode = s.outDims.map((_, d) =>
+    `  let o${d} = i32((r2 / ${outStride[d] ?? 1}u) % ${s.outDims[d] ?? 1}u);`).join("\n");
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> K: array<f32>;
@@ -1253,39 +1307,54 @@ ${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let bn = gid / ${s.O * s.OH * s.OW}u;
-  let r1 = gid % ${s.O * s.OH * s.OW}u;
-  let oc = r1 / ${s.OH * s.OW}u;
-  let r2 = r1 % ${s.OH * s.OW}u;
-  let oh = i32(r2 / ${s.OW}u);
-  let ow = i32(r2 % ${s.OW}u);
+  let bn = gid / ${s.O * outSpace}u;
+  let r1 = gid % ${s.O * outSpace}u;
+  let oc = r1 / ${outSpace}u;
+  let r2 = r1 % ${outSpace}u;
+${decode}
   var acc = ${hasBias ? "B[oc]" : "0.0"};
   for (var c = 0u; c < ${s.C}u; c = c + 1u) {
-    for (var i = 0; i < ${s.KH}; i = i + 1) {
-      let ih = oh * ${s.SH} + i - ${s.PH};
-      if (ih < 0 || ih >= ${s.H}) { continue; }
-      for (var j = 0; j < ${s.KW}; j = j + 1) {
-        let iw = ow * ${s.SW} + j - ${s.PW};
-        if (iw < 0 || iw >= ${s.W}) { continue; }
-        let xi = (bn * ${s.C}u + c) * ${s.H * s.W}u + u32(ih) * ${s.W}u + u32(iw);
-        let ki = (oc * ${s.C}u + c) * ${s.KH * s.KW}u + u32(i) * ${s.KW}u + u32(j);
-        acc = fma(X[xi], K[ki], acc);
-      }
-    }
+    let xbase = (bn * ${s.C}u + c) * ${inSpace}u;
+    let kbase = (oc * ${s.C}u + c) * ${kSpace}u;
+${spatialLoops(s,
+    "      acc = fma(X[xbase + spatial], K[kbase + kspatial], acc);",
+    (d) => `o${d} * ${s.stride[d] ?? 1} + k${d} - ${s.pad[d] ?? 0}`)}
   }
   Out[gid] = acc;
 }`;
 }
 
 /**
- * 입력으로 가는 기울기.
+ * 입력으로 가는 기울기. 흩뿌리지 않고 **자기에게 온 출력을 모은다.**
  *
- * 흩뿌리지 않고 **입력 자리마다 자기에게 온 출력을 모은다** — 원자 덧셈이 없어야
- * 두 번 돌린 학습이 같다. 걸음이 1 보다 크면 그 사이 자리로는 아무것도 안 오는데,
- * 나눗셈이 딱 떨어지는지로 그것을 가린다. 걸음 2 를 골든이 따로 묻는 이유가 이것이다.
+ * 걸음이 1 보다 크면 그 사이 자리로는 아무것도 안 오는데, 나눗셈이 딱 떨어지는지로
+ * 그것을 가린다 — 2 차원에서 이 한 줄을 지웠더니 걸음 2 케이스만 갈렸다.
  */
-export function conv2dGradInput(s: ConvShape): string {
-  const n = s.N * s.C * s.H * s.W;
+export function convNDGradInput(s: ConvNDShape): string {
+  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(s.inDims);
+  const outStride = suffixStrides(s.outDims);
+  const kStride = suffixStrides(s.kernel);
+  const n = s.N * s.C * inSpace;
+  const decode = s.inDims.map((_, d) =>
+    `  let i${d} = i32((r2 / ${inStride[d] ?? 1}u) % ${s.inDims[d] ?? 1}u);`).join("\n");
+  const open: string[] = [];
+  const close: string[] = [];
+  const oTerms: string[] = [];
+  const kTerms: string[] = [];
+  for (const [d, size] of s.kernel.entries()) {
+    const st = s.stride[d] ?? 1;
+    open.push(`    for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
+    open.push(`      let t${d} = i${d} + ${s.pad[d] ?? 0} - k${d};`);
+    open.push(`      if (t${d} < 0 || t${d} % ${st} != 0) { continue; }`);
+    open.push(`      let o${d} = t${d} / ${st};`);
+    open.push(`      if (o${d} >= ${s.outDims[d] ?? 0}) { continue; }`);
+    close.push("    }");
+    oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
+    kTerms.push(`u32(k${d}) * ${kStride[d] ?? 1}u`);
+  }
   return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read> K: array<f32>;
@@ -1293,37 +1362,46 @@ export function conv2dGradInput(s: ConvShape): string {
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let bn = gid / ${s.C * s.H * s.W}u;
-  let r1 = gid % ${s.C * s.H * s.W}u;
-  let c = r1 / ${s.H * s.W}u;
-  let r2 = r1 % ${s.H * s.W}u;
-  let ih = i32(r2 / ${s.W}u);
-  let iw = i32(r2 % ${s.W}u);
+  let bn = gid / ${s.C * inSpace}u;
+  let r1 = gid % ${s.C * inSpace}u;
+  let c = r1 / ${inSpace}u;
+  let r2 = r1 % ${inSpace}u;
+${decode}
   var acc = 0.0;
   for (var oc = 0u; oc < ${s.O}u; oc = oc + 1u) {
-    for (var i = 0; i < ${s.KH}; i = i + 1) {
-      let t = ih + ${s.PH} - i;
-      if (t < 0 || t % ${s.SH} != 0) { continue; }
-      let oh = t / ${s.SH};
-      if (oh >= ${s.OH}) { continue; }
-      for (var j = 0; j < ${s.KW}; j = j + 1) {
-        let u = iw + ${s.PW} - j;
-        if (u < 0 || u % ${s.SW} != 0) { continue; }
-        let ow = u / ${s.SW};
-        if (ow >= ${s.OW}) { continue; }
-        let gi = (bn * ${s.O}u + oc) * ${s.OH * s.OW}u + u32(oh) * ${s.OW}u + u32(ow);
-        let ki = (oc * ${s.C}u + c) * ${s.KH * s.KW}u + u32(i) * ${s.KW}u + u32(j);
-        acc = fma(G[gi], K[ki], acc);
-      }
-    }
+    let gbase = (bn * ${s.O}u + oc) * ${outSpace}u;
+    let kbase = (oc * ${s.C}u + c) * ${kSpace}u;
+${open.join("\n")}
+      acc = fma(G[gbase + ${oTerms.join(" + ")}], K[kbase + ${kTerms.join(" + ")}], acc);
+${close.join("\n")}
   }
   Out[gid] = acc;
 }`;
 }
 
 /** 가중치로 가는 기울기. 무게 한 칸이 배치·출력 자리 전부에 쓰였으므로 거기를 훑는다. */
-export function conv2dGradWeight(s: ConvShape): string {
-  const n = s.O * s.C * s.KH * s.KW;
+export function convNDGradWeight(s: ConvNDShape): string {
+  const inSpace = s.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = s.outDims.reduce((a, b) => a * b, 1);
+  const kSpace = s.kernel.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(s.inDims);
+  const outStride = suffixStrides(s.outDims);
+  const kStride = suffixStrides(s.kernel);
+  const n = s.O * s.C * kSpace;
+  const decode = s.kernel.map((_, d) =>
+    `  let k${d} = i32((r2 / ${kStride[d] ?? 1}u) % ${s.kernel[d] ?? 1}u);`).join("\n");
+  const open: string[] = [];
+  const close: string[] = [];
+  const oTerms: string[] = [];
+  const xTerms: string[] = [];
+  for (const [d, size] of s.outDims.entries()) {
+    open.push(`    for (var o${d} = 0; o${d} < ${size}; o${d} = o${d} + 1) {`);
+    open.push(`      let p${d} = o${d} * ${s.stride[d] ?? 1} + k${d} - ${s.pad[d] ?? 0};`);
+    open.push(`      if (p${d} < 0 || p${d} >= ${s.inDims[d] ?? 0}) { continue; }`);
+    close.push("    }");
+    oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
+    xTerms.push(`u32(p${d}) * ${inStride[d] ?? 1}u`);
+  }
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
@@ -1331,92 +1409,132 @@ export function conv2dGradWeight(s: ConvShape): string {
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let oc = gid / ${s.C * s.KH * s.KW}u;
-  let r1 = gid % ${s.C * s.KH * s.KW}u;
-  let c = r1 / ${s.KH * s.KW}u;
-  let r2 = r1 % ${s.KH * s.KW}u;
-  let i = i32(r2 / ${s.KW}u);
-  let j = i32(r2 % ${s.KW}u);
+  let oc = gid / ${s.C * kSpace}u;
+  let r1 = gid % ${s.C * kSpace}u;
+  let c = r1 / ${kSpace}u;
+  let r2 = r1 % ${kSpace}u;
+${decode}
   var acc = 0.0;
   for (var bn = 0u; bn < ${s.N}u; bn = bn + 1u) {
-    for (var oh = 0; oh < ${s.OH}; oh = oh + 1) {
-      let ih = oh * ${s.SH} + i - ${s.PH};
-      if (ih < 0 || ih >= ${s.H}) { continue; }
-      for (var ow = 0; ow < ${s.OW}; ow = ow + 1) {
-        let iw = ow * ${s.SW} + j - ${s.PW};
-        if (iw < 0 || iw >= ${s.W}) { continue; }
-        let xi = (bn * ${s.C}u + c) * ${s.H * s.W}u + u32(ih) * ${s.W}u + u32(iw);
-        let gi = (bn * ${s.O}u + oc) * ${s.OH * s.OW}u + u32(oh) * ${s.OW}u + u32(ow);
-        acc = fma(X[xi], G[gi], acc);
-      }
-    }
+    let xbase = (bn * ${s.C}u + c) * ${inSpace}u;
+    let gbase = (bn * ${s.O}u + oc) * ${outSpace}u;
+${open.join("\n")}
+      acc = fma(X[xbase + ${xTerms.join(" + ")}], G[gbase + ${oTerms.join(" + ")}], acc);
+${close.join("\n")}
   }
   Out[gid] = acc;
 }`;
 }
 
-/** 풀링의 모양. 채널을 배치에 접어 넣어 하나의 평면 문제로 본다. */
-export interface PoolShape {
-  readonly NC: number; readonly H: number; readonly W: number;
-  readonly KH: number; readonly KW: number;
-  readonly SH: number; readonly SW: number;
-  readonly OH: number; readonly OW: number;
+/**
+ * 차원 수에 상관없는 풀링. 채널을 배치에 접어 넣는다.
+ *
+ * `max` 는 이긴 자리 **하나**로만 보낸다 — 동점이면 먼저 나온 자리다. `amax` 가
+ * 고르게 나누는 것과 다르고, torch 의 풀링이 그렇다.
+ */
+export interface PoolNDShape {
+  readonly NC: number;
+  readonly inDims: readonly number[];
+  readonly kernel: readonly number[];
+  readonly stride: readonly number[];
+  readonly outDims: readonly number[];
 }
 
-export function poolKey(p: PoolShape): string {
-  return `${p.NC}.${p.H}.${p.W}.${p.KH}.${p.KW}.${p.SH}.${p.SW}`;
+export function poolNDKey(p: PoolNDShape): string {
+  return [p.NC, p.inDims, p.kernel, p.stride].join("|");
 }
 
-export function pool2dForward(p: PoolShape, kind: "max" | "avg"): string {
-  const n = p.NC * p.OH * p.OW;
-  const init = kind === "max" ? "X[base + 0u]" : "0.0";
+export function poolNDForward(p: PoolNDShape, kind: "max" | "avg"): string {
+  const inSpace = p.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = p.outDims.reduce((a, b) => a * b, 1);
+  const kCount = p.kernel.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(p.inDims);
+  const outStride = suffixStrides(p.outDims);
+  const n = p.NC * outSpace;
+  const decode = p.outDims.map((_, d) =>
+    `  let o${d} = (r / ${outStride[d] ?? 1}u) % ${p.outDims[d] ?? 1}u;`).join("\n");
+  const open: string[] = [];
+  const close: string[] = [];
+  const terms: string[] = [];
+  for (const [d, size] of p.kernel.entries()) {
+    open.push(`    for (var k${d} = 0u; k${d} < ${size}u; k${d} = k${d} + 1u) {`);
+    close.push("    }");
+    terms.push(`(o${d} * ${p.stride[d] ?? 1}u + k${d}) * ${inStride[d] ?? 1}u`);
+  }
+  const init = kind === "max" ? "X[base]" : "0.0";
   const step = kind === "max" ? "acc = max(acc, v);" : "acc = acc + v;";
-  const done = kind === "max" ? "acc" : `acc / ${(p.KH * p.KW).toFixed(1)}`;
+  const done = kind === "max" ? "acc" : `acc / ${kCount.toFixed(1)}`;
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let plane = gid / ${p.OH * p.OW}u;
-  let r = gid % ${p.OH * p.OW}u;
-  let oh = r / ${p.OW}u;
-  let ow = r % ${p.OW}u;
-  let base = plane * ${p.H * p.W}u + oh * ${p.SH * p.W}u + ow * ${p.SW}u;
+  let plane = gid / ${outSpace}u;
+  let r = gid % ${outSpace}u;
+${decode}
+  let base = plane * ${inSpace}u + ${terms.map((t) => t.replace(/k\d+/g, "0u")).join(" + ")};
   var acc = ${init};
-  for (var i = 0u; i < ${p.KH}u; i = i + 1u) {
-    for (var j = 0u; j < ${p.KW}u; j = j + 1u) {
-      let v = X[base + i * ${p.W}u + j];
+${open.join("\n")}
+      let v = X[plane * ${inSpace}u + ${terms.join(" + ")}];
       ${step}
-    }
-  }
+${close.join("\n")}
   Out[gid] = ${done};
 }`;
 }
 
-/**
- * 풀링의 역방향.
- *
- * `max` 는 이긴 자리로만 보낸다. **동점이면 먼저 나온 자리 하나만** 받는다 —
- * torch 의 `max_pool2d` 가 그렇다(`amax` 가 고르게 나누는 것과 다르다).
- * `avg` 는 창 크기로 나눠 고르게 뿌린다.
- */
-export function pool2dBackward(p: PoolShape, kind: "max" | "avg"): string {
-  const n = p.NC * p.H * p.W;
+export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
+  const inSpace = p.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = p.outDims.reduce((a, b) => a * b, 1);
+  const kCount = p.kernel.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(p.inDims);
+  const outStride = suffixStrides(p.outDims);
+  const n = p.NC * inSpace;
+  const decode = p.inDims.map((_, d) =>
+    `  let i${d} = i32((r / ${inStride[d] ?? 1}u) % ${p.inDims[d] ?? 1}u);`).join("\n");
+  const open: string[] = [];
+  const close: string[] = [];
+  const oTerms: string[] = [];
+  const wTerms: string[] = [];
+  for (const [d, size] of p.outDims.entries()) {
+    const st = p.stride[d] ?? 1;
+    open.push(`    for (var o${d} = 0; o${d} < ${size}; o${d} = o${d} + 1) {`);
+    open.push(`      let d${d} = i${d} - o${d} * ${st};`);
+    open.push(`      if (d${d} < 0 || d${d} >= ${p.kernel[d] ?? 1}) { continue; }`);
+    close.push("    }");
+    oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
+    wTerms.push(`u32(o${d} * ${st}) * ${inStride[d] ?? 1}u`);
+  }
+  const kOpen: string[] = [];
+  const kClose: string[] = [];
+  const kTerms: string[] = [];
+  const kMatch: string[] = [];
+  for (const [d, size] of p.kernel.entries()) {
+    kOpen.push(`        for (var m${d} = 0u; m${d} < ${size}u; m${d} = m${d} + 1u) {`);
+    kClose.push("        }");
+    kTerms.push(`m${d} * ${inStride[d] ?? 1}u`);
+    kMatch.push(`m${d} == u32(d${d})`);
+  }
   const body = kind === "avg"
-    ? `        acc = acc + G[plane * ${p.OH * p.OW}u + oh * ${p.OW}u + ow] / ${(p.KH * p.KW).toFixed(1)};`
-    : `        var best = X[wbase];
-        var bi = 0u;
-        var bj = 0u;
-        for (var i = 0u; i < ${p.KH}u; i = i + 1u) {
-          for (var j = 0u; j < ${p.KW}u; j = j + 1u) {
-            let v = X[wbase + i * ${p.W}u + j];
-            if (v > best) { best = v; bi = i; bj = j; }
-          }
-        }
-        if (bi == u32(dh) && bj == u32(dw)) {
-          acc = acc + G[plane * ${p.OH * p.OW}u + oh * ${p.OW}u + ow];
-        }`;
+    ? `      acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}] / ${kCount.toFixed(1)};`
+    : `      {
+        let wbase = plane * ${inSpace}u + ${wTerms.join(" + ")};
+        var best = X[wbase];
+        var win = true;
+${kOpen.join("\n")}
+          let v = X[wbase + ${kTerms.join(" + ")}];
+          if (v > best) { best = v; }
+${kClose.join("\n")}
+        // 동점이면 **먼저 나온 자리**가 이긴다. 앞자리에 같은 값이 있으면 진다.
+        var earlier = false;
+${kOpen.join("\n")}
+          let idx = ${kTerms.join(" + ")};
+          let mine = ${wTerms.map((_, d) => `u32(d${d}) * ${inStride[d] ?? 1}u`).join(" + ")};
+          if (idx < mine && X[wbase + idx] == best) { earlier = true; }
+${kClose.join("\n")}
+        win = (X[wbase + ${wTerms.map((_, d) => `u32(d${d}) * ${inStride[d] ?? 1}u`).join(" + ")}] == best) && !earlier;
+        if (win) { acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}]; }
+      }`;
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
@@ -1424,23 +1542,82 @@ export function pool2dBackward(p: PoolShape, kind: "max" | "avg"): string {
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  let plane = gid / ${p.H * p.W}u;
-  let r = gid % ${p.H * p.W}u;
-  let ih = i32(r / ${p.W}u);
-  let iw = i32(r % ${p.W}u);
+  let plane = gid / ${inSpace}u;
+  let r = gid % ${inSpace}u;
+${decode}
   var acc = 0.0;
-  for (var oh = 0u; oh < ${p.OH}u; oh = oh + 1u) {
-    let dh = ih - i32(oh) * ${p.SH};
-    if (dh < 0 || dh >= ${p.KH}) { continue; }
-    for (var ow = 0u; ow < ${p.OW}u; ow = ow + 1u) {
-      let dw = iw - i32(ow) * ${p.SW};
-      if (dw < 0 || dw >= ${p.KW}) { continue; }
-      {
-        let wbase = plane * ${p.H * p.W}u + oh * ${p.SH * p.W}u + ow * ${p.SW}u;
+${open.join("\n")}
 ${body}
-      }
-    }
+${close.join("\n")}
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * 최근접 이웃 확대. 각 출력 자리가 자기를 낳은 입력 자리를 그대로 읽는다.
+ *
+ * 역방향은 자기를 읽어 간 출력들을 모으는 것이고, 배율이 정수라 그 개수가 일정하다.
+ */
+export function upsampleNearest(
+  NC: number,
+  inDims: readonly number[],
+  scale: number,
+): string {
+  const inSpace = inDims.reduce((a, b) => a * b, 1);
+  const outDims = inDims.map((d) => d * scale);
+  const outSpace = outDims.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(inDims);
+  const outStride = suffixStrides(outDims);
+  const n = NC * outSpace;
+  const terms = inDims.map((_, d) =>
+    `((r / ${outStride[d] ?? 1}u) % ${outDims[d] ?? 1}u / ${scale}u) * ${inStride[d] ?? 1}u`);
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${outSpace}u;
+  let r = gid % ${outSpace}u;
+  Out[gid] = X[plane * ${inSpace}u + ${terms.join(" + ")}];
+}`;
+}
+
+/** 확대의 역방향 — 자기를 읽어 간 자리를 모은다. */
+export function upsampleNearestBackward(
+  NC: number,
+  inDims: readonly number[],
+  scale: number,
+): string {
+  const inSpace = inDims.reduce((a, b) => a * b, 1);
+  const outDims = inDims.map((d) => d * scale);
+  const outSpace = outDims.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(inDims);
+  const outStride = suffixStrides(outDims);
+  const n = NC * inSpace;
+  const decode = inDims.map((_, d) =>
+    `  let i${d} = (r / ${inStride[d] ?? 1}u) % ${inDims[d] ?? 1}u;`).join("\n");
+  const open: string[] = [];
+  const close: string[] = [];
+  const terms: string[] = [];
+  for (const [d] of inDims.entries()) {
+    open.push(`    for (var s${d} = 0u; s${d} < ${scale}u; s${d} = s${d} + 1u) {`);
+    close.push("    }");
+    terms.push(`(i${d} * ${scale}u + s${d}) * ${outStride[d] ?? 1}u`);
   }
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${inSpace}u;
+  let r = gid % ${inSpace}u;
+${decode}
+  var acc = 0.0;
+${open.join("\n")}
+      acc = acc + G[plane * ${outSpace}u + ${terms.join(" + ")}];
+${close.join("\n")}
   Out[gid] = acc;
 }`;
 }

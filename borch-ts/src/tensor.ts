@@ -18,12 +18,12 @@ import {
   BINARY,
   binaryBackward,
   binaryForward,
-  conv2dForward,
-  conv2dGradInput,
-  conv2dGradWeight,
-  convKey,
+  convNDForward,
+  convNDGradInput,
+  convNDGradWeight,
+  convNDKey,
+  type ConvNDShape,
   convOut,
-  type ConvShape,
   cumExtreme,
   cumprodBackward,
   cumsumBackward,
@@ -41,10 +41,10 @@ import {
   indexSelectBackward,
   matmul,
   padAxis,
-  pool2dBackward,
-  pool2dForward,
-  poolKey,
-  type PoolShape,
+  poolNDBackward,
+  poolNDForward,
+  poolNDKey,
+  type PoolNDShape,
   prodBackward,
   reduceBroadcast,
   reduceDim,
@@ -56,6 +56,8 @@ import {
   UNARY,
   unaryBackward,
   unaryForward,
+  upsampleNearest,
+  upsampleNearestBackward,
   whereBackward,
   whereKernel,
 } from "./kernels.js";
@@ -2197,43 +2199,91 @@ export class Tensor implements Node<Tensor> {
     if (this.shape.length !== 4 || weight.shape.length !== 4) {
       throw new Error(`conv2d 는 4차원끼리다: [${this.shape}] × [${weight.shape}]`);
     }
-    const [N = 1, C = 1, H = 1, W = 1] = this.shape;
-    const [O = 1, WC = 1, KH = 1, KW = 1] = weight.shape;
+    return this.convND(weight, bias, stride, padding);
+  }
+
+  /** 1차원 합성곱. `(N, C, L)`. */
+  conv1d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
+    if (this.shape.length !== 3 || weight.shape.length !== 3) {
+      throw new Error(`conv1d 는 3차원끼리다: [${this.shape}] × [${weight.shape}]`);
+    }
+    return this.convND(weight, bias, stride, padding);
+  }
+
+  /** 3차원 합성곱. `(N, C, D, H, W)`. */
+  conv3d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
+    if (this.shape.length !== 5 || weight.shape.length !== 5) {
+      throw new Error(`conv3d 는 5차원끼리다: [${this.shape}] × [${weight.shape}]`);
+    }
+    return this.convND(weight, bias, stride, padding);
+  }
+
+  maxPool1d(kernel = 2, stride?: number): Tensor {
+    return this.poolND("max", kernel, stride);
+  }
+
+  maxPool3d(kernel = 2, stride?: number): Tensor {
+    return this.poolND("max", kernel, stride);
+  }
+
+  /**
+   * 차원 수에 상관없는 합성곱. `conv1d`·`conv2d`·`conv3d` 가 전부 이리로 온다.
+   *
+   * 공간 축이 하나면 1차원, 둘이면 2차원이다 — 차원마다 함수를 따로 두면 세 벌이
+   * 되고 그중 하나만 고치는 날이 온다. 자매가 실제로 그 상태였다.
+   */
+  convND(
+    weight: Tensor,
+    bias: Tensor | null = null,
+    stride: number | readonly number[] = 1,
+    padding: number | readonly number[] = 0,
+  ): Tensor {
+    const spatial = this.shape.length - 2;
+    if (spatial < 1 || weight.shape.length !== this.shape.length) {
+      throw new Error(`conv: 모양이 안 맞는다: [${this.shape}] × [${weight.shape}]`);
+    }
+    const spread = (v: number | readonly number[]): number[] =>
+      typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
+    const inDims = this.shape.slice(2);
+    const kernel = weight.shape.slice(2);
+    const st = spread(stride);
+    const pd = spread(padding);
+    const C = this.shape[1] ?? 1;
+    const WC = weight.shape[1] ?? 1;
     if (C !== WC) {
       throw new RuntimeError(
         `Given groups=1, weight of size [${weight.shape}], expected input` +
           `[${this.shape}] to have ${WC} channels, but got ${C} channels instead`,
       );
     }
-    const s: ConvShape = {
-      N, C, H, W, O, KH, KW,
-      SH: stride, SW: stride, PH: padding, PW: padding,
-      OH: convOut(H, padding, KH, stride),
-      OW: convOut(W, padding, KW, stride),
+    const s: ConvNDShape = {
+      N: this.shape[0] ?? 1, C, O: weight.shape[0] ?? 1,
+      inDims, kernel, stride: st, pad: pd,
+      outDims: inDims.map((d, i) =>
+        convOut(d, pd[i] ?? 0, kernel[i] ?? 1, st[i] ?? 1)),
     };
-    const key = convKey(s);
-    const n = s.N * s.O * s.OH * s.OW;
+    const key = convNDKey(s);
+    const outShape = [s.N, s.O, ...s.outDims];
+    const n = outShape.reduce((a, b) => a * b, 1);
     const out = dev().alloc(n);
-    const buffers = bias
-      ? [this.buffer, weight.buffer, bias.buffer, out]
-      : [this.buffer, weight.buffer, out];
     dev().run1d(
-      dev().pipeline(`cv:${key}:${bias ? "b" : "n"}`,
-        () => conv2dForward(s, bias !== null)),
-      buffers,
+      dev().pipeline(`cn:${key}:${bias ? "b" : "n"}`,
+        () => convNDForward(s, bias !== null)),
+      bias ? [this.buffer, weight.buffer, bias.buffer, out]
+        : [this.buffer, weight.buffer, out],
       n,
     );
     const parents = bias ? [this, weight, bias] : [this, weight];
     return Tensor.make(
       out,
-      [s.N, s.O, s.OH, s.OW],
+      outShape,
       parents,
       (g) => {
         const parts: (Tensor | null)[] = [];
         if (this.requiresGrad) {
           const gi = dev().alloc(this.size);
           dev().run1d(
-            dev().pipeline(`cvx:${key}`, () => conv2dGradInput(s)),
+            dev().pipeline(`cnx:${key}`, () => convNDGradInput(s)),
             [g.buffer, weight.buffer, gi],
             this.size,
           );
@@ -2242,23 +2292,119 @@ export class Tensor implements Node<Tensor> {
         if (weight.requiresGrad) {
           const gw = dev().alloc(weight.size);
           dev().run1d(
-            dev().pipeline(`cvw:${key}`, () => conv2dGradWeight(s)),
+            dev().pipeline(`cnw:${key}`, () => convNDGradWeight(s)),
             [this.buffer, g.buffer, gw],
             weight.size,
           );
           parts.push(new Tensor(gw, weight.shape));
         } else parts.push(null);
         if (bias) {
-          // 편향은 배치와 출력 자리 전부를 합친 것이다. 축약을 겹쳐 쓰면 되고
-          // 새 커널이 필요 없다.
-          parts.push(bias.requiresGrad
-            ? g.sumDim(0).sumDim(1).sumDim(1)
-            : null);
+          // 배치와 출력 자리를 전부 합친 것. 축약을 겹쳐 쓰면 새 커널이 없다.
+          let acc = g.sumDim(0);
+          for (let d = 0; d < spatial; d++) acc = acc.sumDim(1);
+          parts.push(bias.requiresGrad ? acc : null);
         }
         return parts;
       },
       "ConvolutionBackward0",
     );
+  }
+
+  /** 차원 수에 상관없는 풀링. */
+  poolND(kind: "max" | "avg", kernel: number, stride?: number): Tensor {
+    const spatial = this.shape.length - 2;
+    if (spatial < 1) throw new Error(`풀링: 모양이 안 맞는다: [${this.shape}]`);
+    const step = stride ?? kernel;
+    const inDims = this.shape.slice(2);
+    const p: PoolNDShape = {
+      // 채널을 배치에 접어 넣는다 — 풀링은 평면마다 따로 도는 일이다.
+      NC: (this.shape[0] ?? 1) * (this.shape[1] ?? 1),
+      inDims,
+      kernel: new Array<number>(spatial).fill(kernel),
+      stride: new Array<number>(spatial).fill(step),
+      outDims: inDims.map((d) => convOut(d, 0, kernel, step)),
+    };
+    const key = poolNDKey(p);
+    const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...p.outDims];
+    const n = outShape.reduce((a, b) => a * b, 1);
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`pn:${kind}:${key}`, () => poolNDForward(p, kind)),
+      [this.buffer, out],
+      n,
+    );
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(this.size);
+        dev().run1d(
+          dev().pipeline(`pnb:${kind}:${key}`, () => poolNDBackward(p, kind)),
+          [this.buffer, g.buffer, gi],
+          this.size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      kind === "max" ? "MaxPoolNDBackward0" : "AvgPoolNDBackward0",
+    );
+  }
+
+  /** 최근접 이웃으로 확대. `Upsample`·`interpolate` 가 이것이다. */
+  upsample(scale: number): Tensor {
+    const spatial = this.shape.length - 2;
+    const inDims = this.shape.slice(2);
+    const NC = (this.shape[0] ?? 1) * (this.shape[1] ?? 1);
+    const outShape = [
+      this.shape[0] ?? 1, this.shape[1] ?? 1, ...inDims.map((d) => d * scale),
+    ];
+    const n = outShape.reduce((a, b) => a * b, 1);
+    const key = `${NC}:${inDims}:${scale}`;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`up:${key}`, () => upsampleNearest(NC, inDims, scale)),
+      [this.buffer, out],
+      n,
+    );
+    void spatial;
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(this.size);
+        dev().run1d(
+          dev().pipeline(`upb:${key}`,
+            () => upsampleNearestBackward(NC, inDims, scale)),
+          [g.buffer, gi],
+          this.size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      "UpsampleNearestBackward0",
+    );
+  }
+
+  /**
+   * 출력 크기를 정해 놓고 평균 풀링. 창 크기가 입력에서 나온다.
+   *
+   * 입력이 출력으로 딱 나눠떨어질 때만이다 — torch 는 안 나눠떨어질 때 창을 자리마다
+   * 다르게 잡는데, 그것을 흉내 내다 틀리느니 아직 없는 편이 낫다.
+   */
+  adaptiveAvgPool(outSize: number): Tensor {
+    const inDims = this.shape.slice(2);
+    for (const d of inDims) {
+      if (d % outSize !== 0) {
+        throw new Error(
+          `adaptive_avg_pool: ${d} 가 ${outSize} 로 안 나눠떨어진다 — ` +
+            "고르지 않은 창은 아직 없다.",
+        );
+      }
+    }
+    const kernel = (inDims[0] ?? 1) / outSize;
+    return this.poolND("avg", kernel, kernel);
   }
 
   /** 겹치지 않는 창의 최대값. `this` 는 `(N, C, H, W)`. */
@@ -2274,37 +2420,7 @@ export class Tensor implements Node<Tensor> {
     if (this.shape.length !== 4) {
       throw new Error(`풀링은 4차원이다: [${this.shape}]`);
     }
-    const [N = 1, C = 1, H = 1, W = 1] = this.shape;
-    const p: PoolShape = {
-      // 채널을 배치에 접어 넣는다 — 풀링은 평면마다 따로 도는 일이라 축이 둘일 이유가 없다.
-      NC: N * C, H, W, KH: kernel, KW: kernel, SH: stride, SW: stride,
-      OH: convOut(H, 0, kernel, stride),
-      OW: convOut(W, 0, kernel, stride),
-    };
-    const key = poolKey(p);
-    const n = p.NC * p.OH * p.OW;
-    const out = dev().alloc(n);
-    dev().run1d(
-      dev().pipeline(`pl:${kind}:${key}`, () => pool2dForward(p, kind)),
-      [this.buffer, out],
-      n,
-    );
-    const shape = this.shape;
-    return Tensor.make(
-      out,
-      [N, C, p.OH, p.OW],
-      [this],
-      (g) => {
-        const gi = dev().alloc(this.size);
-        dev().run1d(
-          dev().pipeline(`plb:${kind}:${key}`, () => pool2dBackward(p, kind)),
-          [this.buffer, g.buffer, gi],
-          this.size,
-        );
-        return [new Tensor(gi, shape)];
-      },
-      kind === "max" ? "MaxPool2DBackward0" : "AvgPool2DBackward0",
-    );
+    return this.poolND(kind, kernel, stride);
   }
 
   /**
