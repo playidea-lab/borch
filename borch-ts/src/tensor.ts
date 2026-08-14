@@ -42,6 +42,7 @@ import {
   matmul,
   padAxis,
   poolNDBackward,
+  poolNDBackwardNeedsInput,
   poolNDForward,
   poolNDKey,
   type PoolNDShape,
@@ -2340,9 +2341,13 @@ export class Tensor implements Node<Tensor> {
       [this],
       (g) => {
         const gi = dev().alloc(this.size);
+        // 평균 풀링은 입력을 안 보므로 버퍼도 안 받는다 — 안 쓰는 바인딩을 넘기면
+        // WebGPU 가 명령 버퍼를 통째로 무효로 만들고, 그때 역방향이 조용히 안 돈다.
         dev().run1d(
           dev().pipeline(`pnb:${kind}:${key}`, () => poolNDBackward(p, kind)),
-          [this.buffer, g.buffer, gi],
+          poolNDBackwardNeedsInput(kind)
+            ? [this.buffer, g.buffer, gi]
+            : [g.buffer, gi],
           this.size,
         );
         return [new Tensor(gi, shape)];

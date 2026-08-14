@@ -90,6 +90,10 @@ export interface StepResult {
   epochMin: number;
   /** 스텝당 안 놓인 버퍼 수. 0 이 아니면 새는 것이다. */
   leakPerStep: number;
+  /** 스텝당 dispatch 수. 느린 것이 커널인지 부르는 횟수인지 가른다. */
+  dispatches: number;
+  /** dispatch 하나당 벽시계. 커널 시간이 아니라 **부르는 값**의 상한이다. */
+  usPerDispatch: number;
   loss: number;
 }
 
@@ -143,9 +147,11 @@ export async function runStep(
   for (let i = 0; i < warmup; i++) await one();
 
   const t0 = performance.now();
+  const d0 = device().dispatches;
   let last = 0;
   for (let i = 0; i < steps; i++) last = await one();
   const perStep = (performance.now() - t0) / steps;
+  const perStepDispatches = (device().dispatches - d0) / steps;
 
   // 누수는 **구역이 안 놓고 내보낸 버퍼 수**다.
   //
@@ -156,6 +162,20 @@ export async function runStep(
   await one();
   const leak = survived;
 
+  // **검증 오류가 하나라도 났으면 수를 안 낸다.**
+  //
+  // 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도 안 한다. 그 상태에서도
+  // 벽시계는 돌아서 ms/step 이 나오는데, 그건 측정이 아니라 학습이 안 되는 상태의
+  // 벽시계다. 실제로 그렇게 됐다 — 평균 풀링의 역방향이 통째로 무효였고 손실이
+  // 2.27 에서 안 움직이는 채로 "13070 ms/step" 이 나왔다.
+  const faults = device().faults;
+  if (faults.count > 0) {
+    throw new Error(
+      `WebGPU 검증 오류 ${faults.count}건이 났다 — 이 수는 측정이 아니다.\n` +
+        `첫 건: ${faults.first}`,
+    );
+  }
+
   const stepsPerEpoch = Math.ceil(CIFAR_TRAIN_IMAGES / batch);
   return {
     batch,
@@ -163,6 +183,8 @@ export async function runStep(
     msPerStep: Math.round(perStep * 10) / 10,
     epochMin: Math.round((perStep * stepsPerEpoch) / 600) / 100,
     leakPerStep: leak,
+    dispatches: Math.round(perStepDispatches),
+    usPerDispatch: Math.round((perStep * 1000) / Math.max(1, perStepDispatches)),
     loss: Math.round(last * 10000) / 10000,
   };
 }
@@ -176,7 +198,9 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
       lines.push(
         `batch ${String(r.batch).padStart(3)}  ` +
         `${r.msPerStep.toFixed(1).padStart(8)} ms/step  ` +
-        `에폭 ${r.epochMin.toFixed(2).padStart(5)}분  ` +
+        `에폭 ${r.epochMin.toFixed(2).padStart(6)}분  ` +
+        `dispatch ${String(r.dispatches).padStart(5)}/step  ` +
+        `${String(r.usPerDispatch).padStart(5)}µs/dispatch  ` +
         `누수 ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
         `손실 ${r.loss.toFixed(4)}`,
       );

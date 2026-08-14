@@ -1535,10 +1535,18 @@ ${kClose.join("\n")}
         win = (X[wbase + ${wTerms.map((_, d) => `u32(d${d}) * ${inStride[d] ?? 1}u`).join(" + ")}] == best) && !earlier;
         if (win) { acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}]; }
       }`;
-  return `
-@group(0) @binding(0) var<storage, read> X: array<f32>;
+  // **평균은 입력을 안 본다.** 그런데 `X` 를 선언만 해두면 `layout: "auto"` 가 안 쓰는
+  // 바인딩을 빼버리고, 부르는 쪽이 버퍼 셋을 넘기면 "binding index 0 not present" 로
+  // 거절한다. 그 거절은 예외가 아니라 **무효한 명령 버퍼**여서, 역방향이 통째로 안
+  // 돌면서 학습만 조용히 멈춘다. 실제로 ResNet 벤치가 그 상태로 수를 냈다.
+  const decl = kind === "max"
+    ? `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
-@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;`
+    : `@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;`;
+  return `
+${decl}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
@@ -1551,6 +1559,11 @@ ${body}
 ${close.join("\n")}
   Out[gid] = acc;
 }`;
+}
+
+/** 풀링 역방향이 받는 버퍼 수. 종류마다 다르므로 부르는 쪽이 여기서 받아 간다. */
+export function poolNDBackwardNeedsInput(kind: "max" | "avg"): boolean {
+  return kind === "max";
 }
 
 /**

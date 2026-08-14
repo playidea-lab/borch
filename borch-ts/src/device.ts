@@ -74,10 +74,15 @@ export class Device {
     // 처음 것들만 낸다 — 셰이더 하나가 깨지면 그 뒤 dispatch 마다 같은 오류가 다시
     // 나서 진짜 원인(첫 줄)이 스크롤 밖으로 밀린다. 실측으로 그렇게 됐다.
     // **줄이는 것이지 삼키는 것이 아니다.** 몇 건을 접었는지는 마지막에 적는다.
-    const seen = { count: 0 };
+    //
+    // **세어서 밖으로 내보낸다.** 찍기만 하면 재는 쪽이 그것을 못 본다 — ResNet 벤치가
+    // 무효한 명령 버퍼를 안고도 ms/step 을 냈고, 그 수는 측정이 아니라 학습이 안 되는
+    // 상태의 벽시계였다. 재는 쪽이 이 수를 보고 결과를 거절할 수 있어야 한다.
+    const seen = { count: 0, first: "" };
     device.addEventListener("uncapturederror", (event) => {
       seen.count += 1;
       const err = (event as GPUUncapturedErrorEvent).error;
+      if (seen.first === "") seen.first = err.message;
       if (seen.count <= MAX_REPORTED_ERRORS) {
         console.error(`[borch.ts] WebGPU 검증 오류 ${seen.count}: ${err.message}`);
       } else if (seen.count === MAX_REPORTED_ERRORS + 1) {
@@ -95,8 +100,27 @@ export class Device {
       .catch(() => {
         /* lost 는 거절되지 않지만, 거절되더라도 여기서 더 할 일이 없다 */
       });
-    return new Device(device);
+    const made = new Device(device);
+    made.faults = seen;
+    return made;
   }
+
+  /**
+   * 지금까지 난 검증 오류.
+   *
+   * **재는 쪽이 이것을 봐야 한다.** 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도
+   * 안 하므로, 그 상태에서도 벽시계는 돌고 수는 나온다 — 측정처럼 보이는 것이 나온다.
+   */
+  faults: { count: number; first: string } = { count: 0, first: "" };
+
+  /**
+   * 지금까지 보낸 dispatch 수.
+   *
+   * "느리다" 에서 멈추면 다음에 무엇을 할지 모른다. 스텝당 dispatch 수를 알면 느린
+   * 것이 **커널 자체인지 부르는 횟수인지**가 갈린다 — 지금 이 설계는 연산 하나마다
+   * 명령 인코더를 새로 만들어 제출하므로, 그 수가 크면 원인이 거기다.
+   */
+  dispatches = 0;
 
   /**
    * 셰이더 컴파일 오류를 삼키지 않는다.
@@ -238,6 +262,7 @@ export class Device {
     pass.dispatchWorkgroups(groups[0], groups[1], groups[2]);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
+    this.dispatches += 1;
   }
 
   /** 1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다. */
