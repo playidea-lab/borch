@@ -20,6 +20,8 @@ import socketserver
 import sys
 import threading
 
+from launch import launch
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = "/borch-ts/test/index.html"
 TIMEOUT_MS = 120_000
@@ -59,10 +61,7 @@ def run(headed=False):
             # 헤드리스 Chromium 은 기본으로 WebGPU 어댑터를 안 준다 — 요청하면
             # 예외가 아니라 null 이 온다. 이 프로젝트의 다른 러너는 TF.js 를 쓰고
             # TF.js 는 못 얻으면 WebGL 로 조용히 내려가서 이 문제가 안 보였다.
-            browser = p.chromium.launch(
-                headless=not headed,
-                args=["--enable-unsafe-webgpu", "--enable-features=Vulkan"],
-            )
+            browser = launch(p, headed=headed)
             page = browser.new_page()
             page.set_default_timeout(0)
             # 셰이더 컴파일 오류는 콘솔로만 나온다. 삼키면 원인을 못 찾는다.

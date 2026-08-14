@@ -13,6 +13,7 @@
 import sys
 
 import run as runner
+from launch import launch
 
 TIMEOUT_MS = 7_200_000
 
@@ -42,10 +43,7 @@ def main(argv):
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless="--headed" not in argv,
-                args=["--enable-unsafe-webgpu", "--enable-features=Vulkan"],
-            )
+            browser = launch(p, headed="--headed" in argv)
             page = browser.new_page()
             page.set_default_timeout(0)
             # 긴 측정은 도중에 죽으면 반환값이 통째로 사라진다. 진행 줄을 흘려보낸다.

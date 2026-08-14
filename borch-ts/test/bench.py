@@ -10,6 +10,7 @@ borch.ts 는 브라우저가 그냥 읽는 JS 다.
 import sys
 
 import run as runner
+from launch import launch
 
 PAGE = "/borch-ts/test/bench.html"
 TIMEOUT_MS = 1_800_000
@@ -26,10 +27,7 @@ def main(argv):
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless="--headed" not in argv,
-                args=["--enable-unsafe-webgpu", "--enable-features=Vulkan"],
-            )
+            browser = launch(p, headed="--headed" in argv)
             page = browser.new_page()
             page.set_default_timeout(0)
             page.on("console", lambda m: print(f"  [브라우저] {m.text}")

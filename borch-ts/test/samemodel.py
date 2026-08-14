@@ -23,6 +23,7 @@ import sys
 import numpy as np
 
 import run as runner
+from launch import launch
 
 # 골든과 같은 허용 오차. 비트 동등은 이 프로젝트의 명시적 비목표다.
 ATOL = 1e-4
@@ -153,10 +154,7 @@ def main(argv):
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless="--headed" not in argv,
-                args=["--enable-unsafe-webgpu", "--enable-features=Vulkan"],
-            )
+            browser = launch(p, headed="--headed" in argv)
             page = browser.new_page()
             page.set_default_timeout(0)
             page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
