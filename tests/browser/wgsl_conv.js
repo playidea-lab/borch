@@ -124,6 +124,177 @@ ${U4.fma}
 ${U4.store}
 }`;
 
+// 융합 conv — **im2col 을 따로 돌리지 않는다.**
+//
+// im2col 이 진 이유는 계산이 아니라 메모리다. 3×3 이면 입력을 9배로 부풀려 쓰고
+// 다시 읽는다(64→64 층에서 151MB). TF.js 가 그 왕복이 없는 이유는 conv 커널이
+// 입력을 직접 읽기 때문이고, 여기서 같은 것을 한다 — 위 행렬곱 커널에서 **A 조각을
+// 싣는 줄만** 바꿔 그 자리에서 (n, oh, ow, c, kh, kw) 를 풀어 입력에서 바로 읽는다.
+//
+// 나머지(타일 크기, 누산기 16개를 펼쳐 두는 것, 공유메모리 재사용)는 그대로다.
+const FUSED_WGSL = `
+struct P {
+  N: u32, C: u32, H: u32, W: u32,
+  KH: u32, KW: u32, OH: u32, OW: u32,
+  SH: u32, SW: u32, PH: u32, PW: u32,
+  M: u32, K: u32, F: u32, _pad: u32,
+};
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;   // (K, F)
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+
+var<workgroup> As: array<f32, 1024>;            // 64 행 × 16
+var<workgroup> Bs: array<f32, 1024>;            // 16 × 64 열
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
+  let tid = lid.y * 16u + lid.x;
+  let row0 = wid.y * 64u + lid.y * 4u;
+  let col0 = wid.x * 64u + lid.x * 4u;
+${U4.decl}
+${U4.zero}
+
+  let tiles = (p.K + 15u) / 16u;
+  for (var t = 0u; t < tiles; t = t + 1u) {
+    for (var s = 0u; s < 4u; s = s + 1u) {
+      let idx = s * 256u + tid;
+
+      // --- A 조각: im2col 색인을 **여기서** 푼다. 중간 버퍼가 없다.
+      let ar = idx / 16u;                       // 0..63, 출력 행 안의 자리
+      let ak = idx % 16u;                       // 0..15, K 타일 안의 자리
+      let arow = wid.y * 64u + ar;              // 전체 행 = (n, oh, ow)
+      let acol = t * 16u + ak;                  // 전체 열 = (c, kh, kw)
+      var av = 0.0;
+      if (arow < p.M && acol < p.K) {
+        let ow = arow % p.OW;
+        let oh = (arow / p.OW) % p.OH;
+        let n  = arow / (p.OW * p.OH);
+        let kw = acol % p.KW;
+        let kh = (acol / p.KW) % p.KH;
+        let ch = acol / (p.KW * p.KH);
+        let ih = i32(oh * p.SH + kh) - i32(p.PH);
+        let iw = i32(ow * p.SW + kw) - i32(p.PW);
+        if (ih >= 0 && iw >= 0 && u32(ih) < p.H && u32(iw) < p.W) {
+          av = X[((n * p.C + ch) * p.H + u32(ih)) * p.W + u32(iw)];
+        }
+      }
+      As[idx] = av;
+
+      // --- B 조각: 가중치는 이미 (K, F) 라 그대로 읽는다.
+      let bk = idx / 64u;
+      let bc = idx % 64u;
+      let brow = t * 16u + bk;
+      let bcol = wid.x * 64u + bc;
+      Bs[idx] = select(0.0, Wt[brow * p.F + bcol], brow < p.K && bcol < p.F);
+    }
+    workgroupBarrier();
+
+    for (var k = 0u; k < 16u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
+      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
+      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
+      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
+      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
+      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
+      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
+      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
+${U4.fma}
+    }
+    workgroupBarrier();
+  }
+
+${U4.store.replace(/d\.M/g, "p.M").replace(/d\.N/g, "p.F").replace(/C\[/g, "Out[")}
+}`;
+
+// 융합 conv, **모양을 상수로 구워 넣은 판.**
+//
+// 앞의 융합 커널은 채널이 늘수록 im2col 판보다도 느려졌다(512→512 에서 절반).
+// 원인은 읽기 패턴이 아니라 **나눗셈**이다. `p.OW`·`p.KW`·`p.C` 가 유니폼 값이라
+// 컴파일러가 나눗셈을 곱셈·시프트로 못 바꾸고, GPU 에는 정수 나눗셈 하드웨어가 없다.
+// 타일을 실을 때마다 원소당 나눗셈·나머지 7번을 다시 하고, 512채널 3×3 이면 타일이
+// 288번이다. im2col 은 같은 나눗셈을 **원소당 한 번만** 하고 펴놓은 것을 모두가 읽었다.
+//
+// 그래서 모양을 셰이더 문자열에 박는다. 모양마다 컴파일이 한 번 더 들지만 — 진짜
+// 라이브러리도 모양 서명으로 셰이더를 캐시한다 — 나눗셈이 전부 상수 접기로 사라진다.
+const fusedSpecialised = (s) => `
+struct P { N: u32, M: u32, K: u32, F: u32 };
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Wt: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(3) var<uniform> p: P;
+
+const C: u32 = ${s.C}u;   const H: u32 = ${s.H}u;   const W: u32 = ${s.W}u;
+const KH: u32 = ${s.KH}u; const KW: u32 = ${s.KW}u;
+const OH: u32 = ${s.OH}u; const OW: u32 = ${s.OW}u;
+const SH: u32 = ${s.S}u;  const SW: u32 = ${s.S}u;
+const PH: i32 = ${s.P};   const PW: i32 = ${s.P};
+const KHW: u32 = ${s.KH * s.KW}u;
+const OHW: u32 = ${s.OH * s.OW}u;
+
+var<workgroup> As: array<f32, 1024>;
+var<workgroup> Bs: array<f32, 1024>;
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
+  let tid = lid.y * 16u + lid.x;
+  let row0 = wid.y * 64u + lid.y * 4u;
+  let col0 = wid.x * 64u + lid.x * 4u;
+${U4.decl}
+${U4.zero}
+
+  let tiles = (p.K + 15u) / 16u;
+  for (var t = 0u; t < tiles; t = t + 1u) {
+    for (var s = 0u; s < 4u; s = s + 1u) {
+      let idx = s * 256u + tid;
+      let ar = idx / 16u;
+      let ak = idx % 16u;
+      let arow = wid.y * 64u + ar;
+      let acol = t * 16u + ak;
+      var av = 0.0;
+      if (arow < p.M && acol < p.K) {
+        // 제수가 전부 상수라 여기 나눗셈은 곱셈·시프트로 접힌다.
+        let ow = arow % OW;
+        let oh = (arow / OW) % OH;
+        let n  = arow / OHW;
+        let kw = acol % KW;
+        let kh = (acol / KW) % KH;
+        let ch = acol / KHW;
+        let ih = i32(oh * SH + kh) - PH;
+        let iw = i32(ow * SW + kw) - PW;
+        if (ih >= 0 && iw >= 0 && u32(ih) < H && u32(iw) < W) {
+          av = X[((n * C + ch) * H + u32(ih)) * W + u32(iw)];
+        }
+      }
+      As[idx] = av;
+
+      let bk = idx / 64u;
+      let bc = idx % 64u;
+      let brow = t * 16u + bk;
+      let bcol = wid.x * 64u + bc;
+      Bs[idx] = select(0.0, Wt[brow * p.F + bcol], brow < p.K && bcol < p.F);
+    }
+    workgroupBarrier();
+
+    for (var k = 0u; k < 16u; k = k + 1u) {
+      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
+      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
+      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
+      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
+      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
+      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
+      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
+      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
+${U4.fma}
+    }
+    workgroupBarrier();
+  }
+
+${U4.store.replace(/d\.M/g, "p.M").replace(/d\.N/g, "p.F").replace(/C\[/g, "Out[")}
+}`;
+
 const U = () => GPUBufferUsage;
 
 function pipe(device, code) {
@@ -163,6 +334,7 @@ window.wgslConv = async function (cases, iters) {
   });
   const imPipe = pipe(device, IM2COL_WGSL);
   const mmPipe = pipe(device, MATMUL_WGSL);
+  const fuPipe = pipe(device, FUSED_WGSL);
   const maxWg = lim.maxComputeWorkgroupsPerDimension;
   const lines = [`한계: 차원당 워크그룹 ${maxWg.toLocaleString()}개`, ""];
 
@@ -262,6 +434,64 @@ window.wgslConv = async function (cases, iters) {
     let diff = 0;
     for (let i = 0; i < got.length; i++) diff = Math.max(diff, Math.abs(got[i] - ref[i]));
 
+    // --- 융합 커널. 중간 버퍼 없이 입력에서 바로 읽는다.
+    const bufFP = device.createBuffer({ size: 64, usage: U().UNIFORM | U().COPY_DST });
+    device.queue.writeBuffer(bufFP, 0, new Uint32Array(
+      [N, C, H, W, KH, KW, OH, OW, S, S, P, P, M, K, F, 0]));
+    const bufFOut = mk(M * F, U().STORAGE | U().COPY_SRC);
+    const fuBind = bindOf(device, fuPipe, [bufX, bufW, bufFOut, bufFP]);
+    const runFused = () => {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      pass.setPipeline(fuPipe);
+      pass.setBindGroup(0, fuBind);
+      pass.dispatchWorkgroups(Math.ceil(F / 64), Math.ceil(M / 64));
+      pass.end();
+      device.queue.submit([enc.finish()]);
+    };
+    runFused();
+    await device.queue.onSubmittedWorkDone();
+    t0 = performance.now();
+    for (let i = 0; i < iters; i++) runFused();
+    await device.queue.onSubmittedWorkDone();
+    const fuMs = (performance.now() - t0) / iters;
+
+    const fuGot = await readBack(device, bufFOut, M * F);
+    let fuDiff = 0;
+    for (let i = 0; i < fuGot.length; i++) {
+      fuDiff = Math.max(fuDiff, Math.abs(fuGot[i] - ref[i]));
+    }
+
+    // --- 모양을 구워 넣은 융합. 셰이더 컴파일 시간은 재는 구간 밖에 둔다.
+    const t1 = performance.now();
+    const spPipe = pipe(device, fusedSpecialised({ ...cs, OH, OW }));
+    const compileMs = performance.now() - t1;
+    const bufSOut = mk(M * F, U().STORAGE | U().COPY_SRC);
+    const bufSP = device.createBuffer({ size: 16, usage: U().UNIFORM | U().COPY_DST });
+    device.queue.writeBuffer(bufSP, 0, new Uint32Array([N, M, K, F]));
+    const spBind = bindOf(device, spPipe, [bufX, bufW, bufSOut, bufSP]);
+    const runSp = () => {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      pass.setPipeline(spPipe);
+      pass.setBindGroup(0, spBind);
+      pass.dispatchWorkgroups(Math.ceil(F / 64), Math.ceil(M / 64));
+      pass.end();
+      device.queue.submit([enc.finish()]);
+    };
+    runSp();
+    await device.queue.onSubmittedWorkDone();
+    t0 = performance.now();
+    for (let i = 0; i < iters; i++) runSp();
+    await device.queue.onSubmittedWorkDone();
+    const spMs = (performance.now() - t0) / iters;
+
+    const spGot = await readBack(device, bufSOut, M * F);
+    let spDiff = 0;
+    for (let i = 0; i < spGot.length; i++) {
+      spDiff = Math.max(spDiff, Math.abs(spGot[i] - ref[i]));
+    }
+
     const ours = imMs + mmMs;
     const g = (ms) => flops / (ms / 1000) / 1e9;
     lines.push(
@@ -271,10 +501,17 @@ window.wgslConv = async function (cases, iters) {
       `  (TF.js 대비 ${(cs.tfMs / ours * 100).toFixed(0)}%)` +
       `\n    im2col     ${imMs.toFixed(2).padStart(7)} ms  (합계의 ${(imMs / ours * 100).toFixed(0)}%)` +
       `\n    행렬곱     ${mmMs.toFixed(2).padStart(7)} ms  ${g(mmMs).toFixed(0).padStart(5)} GFLOPS` +
-      `\n  ${diff < 1e-3 ? "최대차 " + diff.toExponential(1) : "값 틀림! 최대차 " + diff.toExponential(1)}`
+      `\n    ${diff < 1e-3 ? "최대차 " + diff.toExponential(1) : "값 틀림! 최대차 " + diff.toExponential(1)}` +
+      `\n  우리 융합    ${fuMs.toFixed(2).padStart(7)} ms  ${g(fuMs).toFixed(0).padStart(5)} GFLOPS` +
+      `  (TF.js 대비 ${(cs.tfMs / fuMs * 100).toFixed(0)}%)` +
+      `\n    ${fuDiff < 1e-3 ? "최대차 " + fuDiff.toExponential(1) : "값 틀림! 최대차 " + fuDiff.toExponential(1)}` +
+      `\n  융합+상수    ${spMs.toFixed(2).padStart(7)} ms  ${g(spMs).toFixed(0).padStart(5)} GFLOPS` +
+      `  (TF.js 대비 ${(cs.tfMs / spMs * 100).toFixed(0)}%)  컴파일 ${compileMs.toFixed(0)}ms` +
+      `\n    ${spDiff < 1e-3 ? "최대차 " + spDiff.toExponential(1) : "값 틀림! 최대차 " + spDiff.toExponential(1)}`
     );
 
-    [bufX, bufCols, bufP, bufW, bufOut, bufD].forEach((b) => b.destroy());
+    [bufX, bufCols, bufP, bufW, bufOut, bufD, bufFP, bufFOut, bufSOut, bufSP]
+      .forEach((b) => b.destroy());
   }
   return lines.join("\n");
 };
