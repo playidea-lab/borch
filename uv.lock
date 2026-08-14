@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "browsertorch"
+name = "borch"
 version = "1.4.0"
 source = { editable = "." }
 dependencies = [

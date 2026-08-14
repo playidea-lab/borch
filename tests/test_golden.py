@@ -1,6 +1,6 @@
 """골든 하네스 자체가 제 일을 하는지 본다.
 
-GPU 백엔드는 아직 없다. 그래서 browsertorch 를 **제3의 라이브러리인 척** 골든에
+GPU 백엔드는 아직 없다. 그래서 borch 를 **제3의 라이브러리인 척** 골든에
 대조시킨다 — 하네스가 도는지는 그것으로 드러나고, 백엔드가 생기면 같은 자리에 넣는다.
 
 그런데 "도는가"만 물으면 안 된다. 골든 하네스가 조용히 망가지는 방식은 두 가지다 —
@@ -19,7 +19,7 @@ golden = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(golden)
 
 
-def test_golden_dump_then_check_matches_browsertorch(tmp_path):
+def test_golden_dump_then_check_matches_borch(tmp_path):
     """코어는 **자기 범위만** 대조한다.
 
     골든은 진짜 torch 로 굳히므로 자매 라이브러리에만 있는 것까지 담는다. 코어는 그것들을
@@ -30,7 +30,7 @@ def test_golden_dump_then_check_matches_browsertorch(tmp_path):
     count, _ = golden.dump(path)
     assert count > 0, "골든이 비었다 — 케이스 표가 안 실렸다"
 
-    bad, total = golden.check(golden.load_browsertorch(), path)
+    bad, total = golden.check(golden.load_borch(), path)
     assert total == count - len(golden.cases_mod.webgpu_cases())
     assert not bad, "골든과 갈렸다:\n  " + "\n  ".join(bad)
 
@@ -41,7 +41,7 @@ def test_check_rejects_stale_golden(tmp_path, monkeypatch):
     golden.dump(path)
     monkeypatch.setattr(golden.cases_mod, "manifest_hash", lambda cases: "표가바뀐뒤의해시")
     with pytest.raises(SystemExit, match="낡았다"):
-        golden.check(golden.load_browsertorch(), path)
+        golden.check(golden.load_borch(), path)
 
 
 def test_check_rejects_mismatched_inputs(tmp_path, monkeypatch):
@@ -54,7 +54,7 @@ def test_check_rejects_mismatched_inputs(tmp_path, monkeypatch):
     golden.dump(path)
     monkeypatch.setattr(golden.cases_mod, "input_fingerprint", lambda inp: "다른입력의지문")
     with pytest.raises(SystemExit, match="입력이 골든과 다르다"):
-        golden.check(golden.load_browsertorch(), path)
+        golden.check(golden.load_borch(), path)
 
 
 # ---- 기울기 흐름 표가 제 일을 하는지
@@ -79,7 +79,7 @@ def _flow_case(name):
 
 def test_flow_table_catches_a_severed_graph():
     """맨 텐서를 돌려주는 연산 — `roll` 과 `masked_select` 가 실제로 그랬다."""
-    core = golden.load_browsertorch()
+    core = golden.load_borch()
     assert _flow_case("roll")(core).startswith("흐름")
 
     severed = _Shim(core, roll=lambda t, s, dims=None: core.tensor(
@@ -92,7 +92,7 @@ def test_flow_table_catches_requires_grad_without_a_gradient():
 
     `.float()` 이 정확히 이랬고, `requires_grad` 만 묻는 검사는 이것을 통과시킨다.
     """
-    core = golden.load_browsertorch()
+    core = golden.load_borch()
     assert _flow_case("sqrt")(core) == "흐름/기울기있음"
 
     def lying_sqrt(t):

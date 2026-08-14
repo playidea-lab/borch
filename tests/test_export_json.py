@@ -65,7 +65,7 @@ def test_json_alone_can_check_the_core(doc):
     이것이 되어야 다른 언어 쪽이 이 파일을 쓸 수 있다. 안 되면 뽑은 것은 그냥
     큰 파일이지 자산이 아니다.
     """
-    core = golden.load_browsertorch()
+    core = golden.load_borch()
     inp = cases_mod.golden_inputs()
     bad, checked = [], 0
     for name, fn in cases_mod.golden_cases(inp):

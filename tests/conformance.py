@@ -32,7 +32,7 @@ import torch as real
 _here = pathlib.Path(__file__).resolve().parent
 if str(_here.parent) not in sys.path:
     sys.path.insert(0, str(_here.parent))
-import browsertorch as nano                                          # noqa: E402
+import borch as nano                                          # noqa: E402
 
 # 케이스 표는 별도 파일이다 — 왜인지는 cases.py 첫 줄에 있다.
 _cases_spec = importlib.util.spec_from_file_location("bt_cases", _here / "cases.py")
@@ -288,7 +288,7 @@ def report_errors():
             problems.append(f"{name}: 진짜 torch 가 예외를 안 낸다 — 케이스가 틀렸다")
             continue
         if nk is None:
-            problems.append(f"{name}: browsertorch 가 조용히 지나간다 (torch 는 {rk})")
+            problems.append(f"{name}: borch 가 조용히 지나간다 (torch 는 {rk})")
             continue
         if nk != rk:
             problems.append(f"{name}: {rk} 여야 하는데 {nk}")

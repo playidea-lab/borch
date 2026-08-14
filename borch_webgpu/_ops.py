@@ -1,4 +1,4 @@
-"""browsertorch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""borch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
 
 import numpy as _np
 
@@ -8,8 +8,8 @@ try:
     from pyodide.ffi import to_js as _to_js
 except ImportError as _exc:                                          # pragma: no cover
     raise ImportError(
-        "browsertorch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `browsertorch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
+        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
+        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
         "GPU 로 돌렸다고 착각하게 됩니다."
     ) from _exc
 

@@ -1,7 +1,7 @@
 /**
  * `Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.
  *
- * 레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`browsertorch_webgpu`)가
+ * 레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가
  * NHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리
  * 커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다.
  */

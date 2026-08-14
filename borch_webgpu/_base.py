@@ -1,4 +1,4 @@
-"""browsertorch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""borch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
 
 import numpy as _np
 
@@ -8,8 +8,8 @@ try:
     from pyodide.ffi import to_js as _to_js
 except ImportError as _exc:                                          # pragma: no cover
     raise ImportError(
-        "browsertorch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `browsertorch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
+        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
+        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
         "GPU 로 돌렸다고 착각하게 됩니다."
     ) from _exc
 
@@ -55,15 +55,15 @@ def _warn_once(key, message):
         return
     _warned.add(key)
     try:
-        _js.console.warn("[browsertorch-webgpu] " + message)
+        _js.console.warn("[borch-webgpu] " + message)
     except Exception:                                                # noqa: BLE001
         pass
 
 
 def _unsupported(what):
     raise BrowserTorchError(
-        f"{what} 은(는) 아직 browsertorch-webgpu 에 없습니다. "
-        "코어 `browsertorch` 나 자기 컴퓨터의 진짜 PyTorch 를 쓰세요."
+        f"{what} 은(는) 아직 borch-webgpu 에 없습니다. "
+        "코어 `borch` 나 자기 컴퓨터의 진짜 PyTorch 를 쓰세요."
     )
 
 

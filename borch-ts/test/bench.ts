@@ -135,23 +135,17 @@ export async function runStep(
   const opt = new SGD(params, 0.05, 0.9);
   const crit = new nn.CrossEntropyLoss();
 
-  let survived = 0;
-  const one = async (): Promise<number> => {
-    const d = device();
-    d.beginScope();
-    let loss = 0;
-    try {
-      opt.zeroGrad();
-      const out = crit.forward(model.forward(x), y);
-      out.backward();
-      opt.step();
-      // **구역 안에서 읽어야 한다** — 나가면 그 버퍼가 없다.
-      loss = await out.item();
-    } finally {
-      survived = d.endScope().survived;
-    }
-    return loss;
-  };
+  // **쓰는 사람이 칠 그대로 친다.** 벤치는 남이 보는 유일한 학습 루프이므로, 여기가
+  // 저수준 `beginScope`/`endScope` 를 부르면 `scope()` 를 권한 것이 무의미해진다.
+  // 누수는 `device().lastScope` 로 본다 — 그것 때문에 저수준으로 내려가던 자리였다.
+  const one = async (): Promise<number> => scope(async () => {
+    opt.zeroGrad();
+    const out = crit.call(model.call(x), y);
+    out.backward();
+    opt.step();
+    // **구역 안에서 읽어야 한다** — 나가면 그 버퍼가 없다.
+    return await out.item();
+  });
 
   for (let i = 0; i < warmup; i++) await one();
 
@@ -179,7 +173,7 @@ export async function runStep(
   // 적어두었고("이름이 말하는 것과 다른 수를 내는 계측은 진짜 누수를 만났을 때도
   // 못 믿는다") 나는 그것을 읽고도 같은 것을 만들었다.
   await one();
-  const leak = survived;
+  const leak = device().lastScope.survived;
 
   /**
    * 순방향만.

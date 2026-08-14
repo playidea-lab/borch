@@ -263,8 +263,19 @@ export class Device {
       }
       freed += 1;
     }
-    return { freed, survived };
+    // **마지막 셈을 남긴다.** 이 값이 필요해서 `scope()` 를 못 쓰고 `beginScope`/
+    // `endScope` 를 직접 부르던 자리가 있었다 — 벤치가 누수를 재느라 그랬다.
+    // 권하는 길을 쓰면 못 보는 것이 있으면 그 권함은 안 지켜진다.
+    this.lastScope = { freed, survived };
+    return this.lastScope;
   }
+
+  /**
+   * 가장 최근에 닫힌 구역의 셈. `scope()` 로 닫아도 여기 남는다.
+   *
+   * **`survived` 가 0 이 아니면 스텝마다 쌓인다** — 학습 루프에서 그것이 누수다.
+   */
+  lastScope: { freed: number; survived: number } = { freed: 0, survived: 0 };
 
   /** 구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다. */
   keep(buffer: GPUBuffer): void {

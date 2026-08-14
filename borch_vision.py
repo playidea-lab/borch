@@ -1,17 +1,17 @@
-"""browsertorch-vision — torchvision 모양의 얇은 층. **`transforms` 만이다.**
+"""borch-vision — torchvision 모양의 얇은 층. **`transforms` 만이다.**
 
 ## 왜 별도 파일인가
 
 `torchvision.transforms` 이지 `torch.transforms` 가 아니다. 코어 안에 넣으면
-`browsertorch.transforms` 가 되는데 그건 진짜 torch 에 **없는 자리**다. 구조를 그대로
+`borch.transforms` 가 되는데 그건 진짜 torch 에 **없는 자리**다. 구조를 그대로
 흉내 내는 것이 이 프로젝트의 요점인데, 없는 자리를 만들면 그 요점이 먼저 깨진다.
 
-    import browsertorch_vision as torchvision
-    from browsertorch_vision import transforms
+    import borch_vision as torchvision
+    from borch_vision import transforms
 
 ## 어느 라이브러리의 텐서를 만드는가
 
-텐서를 만드는 것은 `ToTensor` 하나다. 기본은 코어 `browsertorch` 이고, 자매(WebGPU)
+텐서를 만드는 것은 `ToTensor` 하나다. 기본은 코어 `borch` 이고, 자매(WebGPU)
 쪽에 붙이려면 `use(L)` 를 부른다.
 
 ## 없는 것과 그 이유
@@ -55,7 +55,7 @@ def use(L):
 def _backend():
     global _lib
     if _lib is None:
-        import browsertorch as _core
+        import borch as _core
         _lib = _core
     return _lib
 
@@ -244,7 +244,7 @@ def augment_batch(x, crop=None, padding=0, hflip_p=0.0, fill=0.0):
 
 
 class _Transforms:
-    """`from browsertorch_vision import transforms` 를 위한 자리. torchvision 의
+    """`from borch_vision import transforms` 를 위한 자리. torchvision 의
     모듈 구조를 그대로 두려고 이름만 빌린다."""
 
 

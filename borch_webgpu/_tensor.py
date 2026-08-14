@@ -1,4 +1,4 @@
-"""browsertorch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""borch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
 
 import numpy as _np
 
@@ -8,8 +8,8 @@ try:
     from pyodide.ffi import to_js as _to_js
 except ImportError as _exc:                                          # pragma: no cover
     raise ImportError(
-        "browsertorch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `browsertorch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
+        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
+        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
         "GPU 로 돌렸다고 착각하게 됩니다."
     ) from _exc
 
@@ -287,7 +287,7 @@ class Tensor:
             _unsupported(
                 f"다른 텐서에서 나온 것(뷰·슬라이스·연산 결과)에 `{what}` 을(를) 쓰는 것 — "
                 "torch 는 저장소를 공유해 원본까지 바꾸는데 TF.js 텐서는 불변이라 "
-                "여기서는 그럴 수 없습니다. 코어 `browsertorch` 는 이것을 지원합니다")
+                "여기서는 그럴 수 없습니다. 코어 `borch` 는 이것을 지원합니다")
         out = fn()
         old = self._h
         self._h = out._h if isinstance(out, Tensor) else out

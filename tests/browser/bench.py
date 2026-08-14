@@ -6,7 +6,7 @@ FLOPs 로 나눈 추정 대신 이 파일이 있다.
 
 브라우저 안에서 돈다:
 
-    uv run --with playwright python tests/browser/run.py --lib browsertorch_webgpu --headed --bench
+    uv run --with playwright python tests/browser/run.py --lib borch_webgpu --headed --bench
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import gc as _gc
 import js
 import numpy as np
 
-import browsertorch_vision as vision
+import borch_vision as vision
 
 CIFAR_TRAIN_IMAGES = 50000
 # CIFAR-10 의 통상값. 정규화를 빼면 첫 에폭이 눈에 띄게 느리게 붙는다.

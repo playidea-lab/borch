@@ -1,6 +1,6 @@
-"""browsertorch-webgpu — TF.js WebGPU 위에 얹은 browsertorch 모양의 층.
+"""borch-webgpu — TF.js WebGPU 위에 얹은 borch 모양의 층.
 
-코어 `browsertorch` 를 **대체하지 않는다.** 코어는 numpy 위에서 MNIST 급까지 가고,
+코어 `borch` 를 **대체하지 않는다.** 코어는 numpy 위에서 MNIST 급까지 가고,
 이쪽은 GPU 위에서 그 위를 간다. 왜 별도인지는 ROADMAP.md 의 ADR-001 에 있다.
 
 ## 브라우저 안에서만 돈다
@@ -70,8 +70,8 @@ try:
     from pyodide.ffi import to_js as _to_js
 except ImportError as _exc:                                          # pragma: no cover
     raise ImportError(
-        "browsertorch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `browsertorch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
+        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
+        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
         "GPU 로 돌렸다고 착각하게 됩니다."
     ) from _exc
 

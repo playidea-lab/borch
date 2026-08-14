@@ -1,6 +1,6 @@
-"""browsertorch 와 진짜 torch 를 값으로 대조한다.
+"""borch 와 진짜 torch 를 값으로 대조한다.
 
-이 파일이 browsertorch 의 존재 근거다. 흉내가 조금이라도 다르게 동작하면 그것을 배우는
+이 파일이 borch 의 존재 근거다. 흉내가 조금이라도 다르게 동작하면 그것을 배우는
 사람은 거짓을 배운다. "돌아간다"로는 부족하고 **같은 숫자가 나와야** 한다.
 
 같은 입력을 양쪽에 넣고 값과 모양을 비교한다. 무작위로 초기화되는 층은 한쪽의 가중치를
@@ -16,12 +16,12 @@ import numpy as np
 import pytest
 import torch as real
 
-# 예전에는 `browsertorch.py` 를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다.
+# 예전에는 `borch.py` 를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다.
 _root = pathlib.Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-import browsertorch as bt                                            # noqa: E402
+import borch as bt                                            # noqa: E402
 
 TOL = 1e-4
 

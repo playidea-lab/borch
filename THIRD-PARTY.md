@@ -1,6 +1,6 @@
 # 남의 것 — 무엇에 기대고, 무엇을 지켜야 하나
 
-browsertorch 는 Apache-2.0 이다. 여기 적은 것은 **실행할 때 필요한 남의 코드**와
+borch 는 Apache-2.0 이다. 여기 적은 것은 **실행할 때 필요한 남의 코드**와
 그 조건이다. 라이선스는 기억으로 적지 않고 **받은 파일에서 직접 확인했다**.
 
 > **이 저장소는 아래 것들을 재배포하지 않는다.** `vendor/` 는 `.gitignore` 에 있고,
@@ -9,7 +9,7 @@ browsertorch 는 Apache-2.0 이다. 여기 적은 것은 **실행할 때 필요�
 
 ---
 
-## 코어 `browsertorch`
+## 코어 `borch`
 
 | | 라이선스 | 확인 |
 |---|---|---|
@@ -18,9 +18,9 @@ browsertorch 는 Apache-2.0 이다. 여기 적은 것은 **실행할 때 필요�
 이게 전부다. 순수 파이썬 휠 하나에 의존은 numpy 뿐이다.
 
 브라우저에서 쓰려면 Pyodide 가 필요하지만, 그건 **호스트 페이지가 싣는 것**이지
-browsertorch 가 묶어 파는 것이 아니다.
+borch 가 묶어 파는 것이 아니다.
 
-## 자매 `browsertorch-webgpu`
+## 자매 `borch-webgpu`
 
 | | 라이선스 | 확인 |
 |---|---|---|
@@ -42,8 +42,8 @@ browsertorch 가 묶어 파는 것이 아니다.
 
 이것 하나가 성질이 다르다. MPL 은 **파일 단위 약한 카피레프트**다.
 
-- 우리 코드로 **번지지 않는다.** Apache-2.0 인 browsertorch 와 한 페이지에 있어도
-  browsertorch 가 MPL 이 되지 않는다("Larger Work" 조항)
+- 우리 코드로 **번지지 않는다.** Apache-2.0 인 borch 와 한 페이지에 있어도
+  borch 가 MPL 이 되지 않는다("Larger Work" 조항)
 - 그러나 **Pyodide 를 실행 형태로 배포하면**(= 페이지에서 `pyodide.asm.wasm` 등을
   서빙하면) 그 파일들의 **소스 형태를 구할 방법을 받는 사람에게 알려야 한다**(§3.2)
 
@@ -69,10 +69,10 @@ browsertorch 가 묶어 파는 것이 아니다.
 
 ## PyTorch 와의 관계
 
-browsertorch 는 PyTorch(BSD-3-Clause)의 **코드를 가져오지 않았다.** API 모양만 맞췄고,
+borch 는 PyTorch(BSD-3-Clause)의 **코드를 가져오지 않았다.** API 모양만 맞췄고,
 값 대조는 진짜 torch 를 **테스트에서만** 부른다(`dev` 추가 의존).
 
-이름과 `sys.modules["torch"] = browsertorch` 에 대해서는 README 가 이미 경고를 달고
+이름과 `sys.modules["torch"] = borch` 에 대해서는 README 가 이미 경고를 달고
 있다. 상표 문제로 번질 수 있는 자리라, 공개 배포 전에 한 번 짚어보는 편이 좋다.
 
 ---

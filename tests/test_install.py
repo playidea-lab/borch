@@ -18,7 +18,7 @@ _root = pathlib.Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-import browsertorch as bt                                            # noqa: E402
+import borch as bt                                            # noqa: E402
 
 
 @pytest.fixture

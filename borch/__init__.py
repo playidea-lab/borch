@@ -1,4 +1,4 @@
-"""browsertorch — numpy 위에 얹은 PyTorch 모양의 얇은 층.
+"""borch — numpy 위에 얹은 PyTorch 모양의 얇은 층.
 
 설치 없이 브라우저(Pyodide)에서 PyTorch **문법**을 연습하기 위한 것이다.
 torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코드에, 손튜닝된 AVX·NEON
@@ -16,14 +16,14 @@ torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코�
 
 두 겹이다.
 
-1. `browsertorch-check` — 같은 **랩 테스트**를 진짜 torch 와 축소판 양쪽에서 돌린다.
-2. `browsertorch-diff` — 랩과 무관하게 **같은 연산의 숫자를 직접 비교**한다
-   (`tests/test_browsertorch_diff.py`). 1번만으로는 랩이 지나가는 길만 봐서
+1. `borch-check` — 같은 **랩 테스트**를 진짜 torch 와 축소판 양쪽에서 돌린다.
+2. `borch-diff` — 랩과 무관하게 **같은 연산의 숫자를 직접 비교**한다
+   (`tests/test_borch_diff.py`). 1번만으로는 랩이 지나가는 길만 봐서
    축소판의 73% 였고, 그 사각지대에 역전파가 들어 있었다.
 
 지금은 두 검사가 86% 를 덮는다. 남은 곳은 `__repr__` 처럼 값이 걸리지 않는 자리다.
 
-`browsertorch-diff` 가 실제로 잡은 것: BatchNorm 은 정규화에 편향 분산을,
+`borch-diff` 가 실제로 잡은 것: BatchNorm 은 정규화에 편향 분산을,
 running_var 갱신에는 비편향 분산을 쓴다. 둘 다 편향으로 두면 2.6% 어긋난다.
 """
 

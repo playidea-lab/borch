@@ -1,4 +1,4 @@
-"""browsertorch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
 
 import builtins as _builtins
 import math as _math

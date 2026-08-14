@@ -4,7 +4,7 @@ GitHub 호스팅 러너에는 GPU 가 없어 SwiftShader 로 떨어지고, 그�
 지나지 않는 경로다. 그래서 이 스크립트는 self-hosted 러너나 개발 기계에서 돈다.
 
     uv run --with playwright python tests/browser/run.py
-    uv run --with playwright python tests/browser/run.py --headed --lib browsertorch_webgpu
+    uv run --with playwright python tests/browser/run.py --headed --lib borch_webgpu
 
 먼저 골든이 있어야 한다:
 
@@ -83,7 +83,7 @@ def run(lib, headed, probe=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lib", default="browsertorch", help="대조할 라이브러리")
+    ap.add_argument("--lib", default="borch", help="대조할 라이브러리")
     ap.add_argument("--headed", action="store_true",
                     help="창을 띄운다. **WebGPU 는 헤드리스에서 안 뜬다**(실측 — WebGL 로 떨어진다)")
     ap.add_argument("--probe", help="대조 뒤 브라우저 안에서 돌릴 파이썬. 디버깅용")
@@ -111,7 +111,7 @@ def main():
             f"L = importlib.import_module({args.lib!r})\n"
             # 늘리기의 뽑기도 씨앗을 박는다. 안 그러면 같은 명령이 매번 다른 답을 내고,
             # 두 조건의 차이인지 뽑기의 차이인지 못 가른다.
-            f"import browsertorch_vision as V; V.use(L); V.manual_seed(0)\n"
+            f"import borch_vision as V; V.use(L); V.manual_seed(0)\n"
             f"tr = await bench.cifar_from(L, '/cifar-batch1.bin', 'cifar-batch1.bin')\n"
             f"te = await bench.cifar_from(L, '/cifar-batch-test.bin', 'cifar-test.bin')\n"
             f"cap = {args.images}\n"

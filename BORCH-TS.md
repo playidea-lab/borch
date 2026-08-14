@@ -51,7 +51,7 @@
 
 ## 무엇이 다른가 — 자매와의 비교
 
-자매(`browsertorch_webgpu`)는 TF.js 위에 있고, **73군데가 TF.js 우회 장치**다.
+자매(`borch_webgpu`)는 TF.js 위에 있고, **73군데가 TF.js 우회 장치**다.
 그 대부분이 여기서 사라진다.
 
 | | 자매 (TF.js) | borch.ts (WGSL) |
@@ -115,7 +115,7 @@ TS 로 쓰고 `golden.json` 의 답에 맞춘다. 연산을 하나 넣을 때 �
 
 ## 안 정한 것
 
-- **패키지 이름과 배포.** `browsertorch` 는 private 저장소라 아직 PyPI 에 없고,
+- **패키지 이름과 배포.** `borch` 는 private 저장소라 아직 PyPI 에 없고,
   npm 도 같은 판단이 필요하다. 사람이 정할 일이다.
 - **API 를 어디까지 torch 로 둘 것인가.** `x.add_(1)` 은 TS 에서 어색하고,
   `x.add(1)` 이 자연스럽다. torch 코드를 옮겨 오는 사람과 TS 를 쓰는 사람 중
@@ -173,7 +173,7 @@ torch 와 맞춰보다 드러났다(입력 기울기 최대차 1.5e-2).
 
 ### T3 — 자매 기준선 (이 기계, 같은 날)
 
-    uv run --with playwright python tests/browser/run.py --lib browsertorch_webgpu --headed --bench
+    uv run --with playwright python tests/browser/run.py --lib borch_webgpu --headed --bench
 
 | 배치 | ms/step | 에폭 | GPU |
 |---|---|---|---|

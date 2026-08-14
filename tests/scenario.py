@@ -23,7 +23,7 @@ if LIB == "nano":
     root = pathlib.Path(__file__).resolve().parent.parent
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    import browsertorch as torch
+    import borch as torch
     sys.modules["torch"] = torch
     nn, optim = torch.nn, torch.optim
     from_data = torch.utils.data

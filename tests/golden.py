@@ -6,7 +6,7 @@ GPU 경로는 브라우저에서만 돌고, 진짜 torch 는 브라우저에 없
     1단계(네이티브)  uv run --with numpy --with torch python tests/golden.py dump
     2단계(어디서든)  uv run --with numpy python tests/golden.py check
 
-2단계는 대조할 라이브러리를 골라 받는다. 지금은 browsertorch 뿐이고, GPU 백엔드가
+2단계는 대조할 라이브러리를 골라 받는다. 지금은 borch 뿐이고, GPU 백엔드가
 생기면 같은 자리에 그것을 넣는다 — 그때 하네스는 안 고친다.
 
 골든에 값만 담지 않는다. **케이스 목록의 해시**와 **입력의 지문**을 같이 담아, 표가
@@ -33,8 +33,8 @@ _PREFIX = "case::"
 _INPUT_PREFIX = "input::"
 
 
-def load_browsertorch():
-    """저장소 루트의 `browsertorch` 를 들여온다.
+def load_borch():
+    """저장소 루트의 `borch` 를 들여온다.
 
     예전에는 파일 하나를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다 —
     `__init__.py` 만 실행해도 상대 임포트가 패키지 문맥을 요구하기 때문이다.
@@ -42,8 +42,8 @@ def load_browsertorch():
     root = str(_here.parent)
     if root not in sys.path:
         sys.path.insert(0, root)
-    import browsertorch
-    return browsertorch
+    import borch
+    return borch
 
 
 def dump(path=DEFAULT_PATH):
@@ -130,7 +130,7 @@ def main(argv):
             print(f"골든이 없다: {DEFAULT_PATH}\n"
                   "  먼저: uv run --with numpy --with torch python tests/golden.py dump")
             return 1
-        bad, total = check(load_browsertorch())
+        bad, total = check(load_borch())
         print(f"골든 대조 — 케이스 {total}개")
         print(f"  일치 {total - len(bad)}/{total}")
         if bad:

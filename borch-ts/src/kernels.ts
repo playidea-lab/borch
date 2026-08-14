@@ -37,7 +37,7 @@ export interface BinarySpec {
 /**
  * erf 계열의 보조 함수.
  *
- * Abramowitz & Stegun 7.1.26 이고 코어(`browsertorch/_ops.py`)와 **같은 계수**다.
+ * Abramowitz & Stegun 7.1.26 이고 코어(`borch/_ops.py`)와 **같은 계수**다.
  * 셋이 다른 근사를 쓰면 값이 갈릴 때 구현이 갈린 것인지 근사가 갈린 것인지 못 가른다.
  *
  * 원형은 `erfc_pos` 다 — 다항식 × exp(-y²) 라 뺄셈이 없어서 꼬리에서 자릿수가 안 난다.
