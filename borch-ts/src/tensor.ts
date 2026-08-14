@@ -134,6 +134,22 @@ export function alignStrides(
   return strides;
 }
 
+/**
+ * 정렬된 값에서 분위수 하나를 뽑는다. **자리 사이를 선형으로 잇는다.**
+ *
+ * 가장 가까운 값을 고르는 방식과 다르다 — torch 의 기본이 보간이고, 홀수 개일 때만
+ * 둘이 같은 답을 낸다.
+ */
+function interpolate(sorted: readonly number[], q: number): number {
+  if (sorted.length === 0) return Number.NaN;
+  const pos = q * (sorted.length - 1);
+  const low = Math.floor(pos);
+  const high = Math.ceil(pos);
+  const a = sorted[low] ?? Number.NaN;
+  const b = sorted[high] ?? Number.NaN;
+  return a + (b - a) * (pos - low);
+}
+
 /** 비교와 논리 연산은 입력이 무엇이든 참·거짓을 낸다. */
 const BOOL_RESULT = new Set([
   "eq", "ne", "lt", "le", "gt", "ge", "logical_and", "logical_or",
@@ -1579,6 +1595,158 @@ export class Tensor implements Node<Tensor> {
     const far = d.abs().binary("sub", Tensor.full([], 0.5 * beta));
     const isNear = d.abs().binary("lt", Tensor.full([], beta));
     return near.where(isNear, far).mean();
+  }
+
+  /**
+   * 배치 행렬곱. `(B, N, K) × (B, K, M)`.
+   *
+   * 배치를 풀어 `mm` 을 되풀이한 뒤 쌓는다 — 배치 커널을 따로 두면 `mm` 과 두 벌을
+   * 고치게 된다. 배치가 커지면 그때 커널을 세울 자리다.
+   */
+  bmm(other: Tensor): Tensor {
+    if (this.shape.length !== 3 || other.shape.length !== 3) {
+      throw new Error(`bmm 은 3차원끼리다: [${this.shape}] × [${other.shape}]`);
+    }
+    const batch = this.shape[0] ?? 0;
+    const parts: Tensor[] = [];
+    for (let b = 0; b < batch; b++) {
+      parts.push(this.select(0, b).mm(other.select(0, b)));
+    }
+    return Tensor.stack(parts, 0);
+  }
+
+  /**
+   * 나머지. **torch 의 `fmod` 는 피제수의 부호를 따른다** — 파이썬의 `%` 와 다르다.
+   *
+   * 기울기는 피제수로 1 이 흐른다. 제수 쪽은 계단이라 안 흐른다.
+   */
+  fmod(divisor: number): Tensor {
+    const d = Tensor.full([], divisor);
+    const q = this.div(d).unary("trunc").detach();
+    return this.sub(q.binary("mul", d));
+  }
+
+  /**
+   * 길이가 다른 것들을 한 배치에 담는다.
+   *
+   * 기본은 `(가장 긴 길이, 개수, …)` 이고, `batchFirst` 면 앞의 둘이 바뀐다.
+   * **기울기가 각 조각으로 되돌아간다** — 덧댄 자리는 0 이므로 `pad` 의 역방향이
+   * 잘라내 준다.
+   */
+  static padSequence(
+    parts: readonly Tensor[],
+    batchFirst = false,
+    paddingValue = 0,
+  ): Tensor {
+    if (parts.length === 0) throw new Error("pad_sequence 에 줄 것이 없다");
+    const longest = Math.max(...parts.map((p) => p.shape[0] ?? 0));
+    const padded = parts.map((p) =>
+      p.pad(0, 0, longest - (p.shape[0] ?? 0), paddingValue));
+    const stacked = Tensor.stack(padded, 0); // (개수, 길이, …)
+    return batchFirst ? stacked : stacked.swapaxes(0, 1);
+  }
+
+  /** 번호를 자리 표시로. `n` 칸 중 자기 자리만 1 이다. */
+  oneHot(classes: number): Tensor {
+    const flat = this.reshape([this.size, 1]);
+    const ids = Tensor.arange(classes).reshape([1, classes]);
+    return flat.binary("eq", ids, "int64")
+      .reshape([...this.shape, classes]);
+  }
+
+  /**
+   * 음의 로그가능도. `this` 는 이미 `log_softmax` 를 지난 것이어야 한다.
+   *
+   * **정답 자리를 뽑는 곳에서 그래프가 끊기기 쉽다.** 값만 떼어 돌려주면 뽑은 자리로
+   * 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.
+   */
+  nllLoss(target: Tensor): Tensor {
+    const picked = this.gather(1, target.reshape([target.size, 1]));
+    return picked.mean().neg();
+  }
+
+  /** 로짓에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다. */
+  crossEntropy(target: Tensor): Tensor {
+    return this.logSoftmax(-1).nllLoss(target);
+  }
+
+  // ── 결과 크기가 값에 달린 것들 ────────────────────────────────────────
+  //
+  // 이 무리는 **몇 개가 나올지를 값을 봐야 안다.** GPU 는 버퍼 크기를 미리 정해야
+  // 하므로 값을 한 번 읽어 와야 하고, 그래서 전부 비동기다. 자매도 같은 이유로
+  // 여기서 CPU 를 왕복한다.
+
+  /** 참인 자리만 골라 1차원으로. **기울기가 고른 자리로 흐른다.** */
+  async maskedSelect(mask: Tensor): Promise<Tensor> {
+    const m = await mask.toArray();
+    const picks: number[] = [];
+    for (const [i, v] of m.entries()) if (v !== 0) picks.push(i);
+    return this.flat().indexSelect(0, Tensor.from(picks, [picks.length]));
+  }
+
+  /** 0 이 아닌 자리의 좌표. 자리는 값이 아니라 기울기가 없다. */
+  async nonzero(): Promise<Tensor> {
+    const values = await this.toArray();
+    const rank = Math.max(1, this.shape.length);
+    const dims = this.shape.length === 0 ? [1] : this.shape;
+    const rows: number[] = [];
+    let count = 0;
+    for (const [i, v] of values.entries()) {
+      if (v === 0) continue;
+      count += 1;
+      let rest = i;
+      const coord: number[] = new Array<number>(rank).fill(0);
+      for (let d = rank - 1; d >= 0; d--) {
+        const size = dims[d] ?? 1;
+        coord[d] = rest % size;
+        rest = Math.floor(rest / size);
+      }
+      rows.push(...coord);
+    }
+    return Tensor.from(rows, [count, rank], false, "int64");
+  }
+
+  /** `nonzero` 와 같다 — torch 가 이름을 둘 다 갖는다. */
+  async argwhere(): Promise<Tensor> {
+    return this.nonzero();
+  }
+
+  /** 서로 다른 값을 **오름차순으로**. torch 의 기본이 정렬해서 주는 것이다. */
+  async unique(): Promise<Tensor> {
+    const values = Array.from(await this.toArray());
+    const seen = [...new Set(values)].sort((a, b) => a - b);
+    return Tensor.from(seen, [seen.length], false, this.dtype);
+  }
+
+  /** 정수 값마다 몇 번 나왔는가. 길이는 가장 큰 값이 정한다. */
+  async bincount(): Promise<Tensor> {
+    const values = await this.toArray();
+    let top = 0;
+    for (const v of values) top = Math.max(top, Math.trunc(v));
+    const counts = new Float32Array(top + 1);
+    for (const v of values) counts[Math.trunc(v)] = (counts[Math.trunc(v)] ?? 0) + 1;
+    return Tensor.from(counts, [counts.length], false, "int64");
+  }
+
+  /**
+   * 분위수. **선형 보간이다** — torch 의 기본이 그렇고, 가장 가까운 값을 고르는 것과
+   * 다르다.
+   */
+  async quantile(q: number | readonly number[]): Promise<Tensor> {
+    const sorted = Array.from(await this.toArray()).sort((a, b) => a - b);
+    const wanted = typeof q === "number" ? [q] : [...q];
+    const picked = wanted.map((p) => interpolate(sorted, p));
+    return Tensor.from(picked, typeof q === "number" ? [] : [picked.length]);
+  }
+
+  /** NaN 을 빼고 센 분위수. */
+  async nanquantile(q: number | readonly number[]): Promise<Tensor> {
+    const clean = Array.from(await this.toArray())
+      .filter((v) => !Number.isNaN(v))
+      .sort((a, b) => a - b);
+    const wanted = typeof q === "number" ? [q] : [...q];
+    const picked = wanted.map((p) => interpolate(clean, p));
+    return Tensor.from(picked, typeof q === "number" ? [] : [picked.length]);
   }
 
   // ── 선형대수 ──────────────────────────────────────────────────────────

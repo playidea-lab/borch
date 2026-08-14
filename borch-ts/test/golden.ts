@@ -45,6 +45,8 @@ export interface Report {
   failed: Failure[];
   /** **등록했는데 골든에 없는 이름.** 오타이거나 골든이 낡았다. */
   unknown: string[];
+  /** 실제로 물어본 이름들. 무엇이 남았는지 세려면 개수가 아니라 이름이 필요하다. */
+  asked: string[];
   manifest: string;
 }
 
@@ -119,6 +121,7 @@ export async function run(url: string): Promise<Report> {
     passed: 0,
     failed: [],
     unknown: [],
+    asked: [],
     manifest: doc.manifest,
   };
 
@@ -128,6 +131,7 @@ export async function run(url: string): Promise<Report> {
       report.unknown.push(name);
       continue;
     }
+    report.asked.push(name);
     let why: string | null;
     try {
       const result = await body();

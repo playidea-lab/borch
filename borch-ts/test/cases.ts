@@ -20,6 +20,7 @@
  */
 
 import { type DType, dtypeName } from "../src/dtype.js";
+import { einsum } from "../src/einsum.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -201,8 +202,26 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["topk", () => x1().topk(3).values],
     ["sort", () => x1().sort(0).values],
     ["argsort", () => x1().argsort(0)],
+    ["bmm", () => x2().reshape([1, 3, 4]).bmm(x2().transpose().reshape([1, 4, 3]))],
+    ["einsum", () => einsum("ij,kj->ik", x2(), x2())],
+    ["F.one_hot", () => Tensor.from([0, 2], [2], false, "int64").oneHot(3)],
+    ["F.nll_loss",
+      () => x2().logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], false, "int64"))],
+    // 길이가 다른 것을 한 배치에 담는 자리. 교재 ch05 가 이 경로를 그대로 쓴다.
+    ["pad_sequence", () => Tensor.padSequence(ragged())],
+    ["pad_sequence(batch_first)", () => Tensor.padSequence(ragged(), true)],
+    ["pad_sequence(채움값)", () => Tensor.padSequence(ragged(), true, -1.0)],
+    ["pad_sequence(2차원)",
+      () => Tensor.padSequence([x2().narrow(0, 0, 3), x2().narrow(0, 0, 1)], true)],
   ];
   for (const [name, fn] of table) out.set(name, fn);
+
+  // 결과 크기가 값에 달린 것들 — CPU 를 한 번 왕복하므로 비동기다.
+  out.set("unique", async () => Tensor.from([1, 1, 2, 3], [4]).unique());
+  out.set("masked_select",
+    async () => x1().maskedSelect(x1().binary("gt", Tensor.full([], 0))));
+  out.set("bincount",
+    async () => Tensor.from([0, 1, 1, 3], [4], false, "int64").bincount());
 
   /** `x2[:3, :3]` — 골든이 그 자리만 쓰는 케이스들이 있다. */
   function square3(): Tensor {
@@ -221,6 +240,11 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
  */
 function asLeaf(t: Tensor): Tensor {
   return new Tensor(t.buffer, t.shape, { requiresGrad: true });
+}
+
+/** 길이 3·1·2 짜리 셋. 채운 자리가 어디인지 눈으로 보이는 최소 크기다. */
+function ragged(grad = false): Tensor[] {
+  return [[1, 2, 3], [4], [5, 6]].map((v) => Tensor.from(v, [v.length], grad));
 }
 
 /** `x > 0` 을 0/1 로. `logical_*` 케이스가 그 형태를 쓴다. */
@@ -317,7 +341,42 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addLinalg(out);
   addDType(out);
   addRepr(out);
+  addNdim(out, inputs);
   return out;
+}
+
+/**
+ * 함수 형태와 메서드 형태가 같은 것을 주는가.
+ *
+ * **여기 여덟 건만 등록한다.** 나머지 스무 건(`conv1d`·`conv3d`·풀링·`interpolate`)은
+ * 입력을 `np.random.default_rng` 로 케이스 안에서 만들어서 `golden.json` 에 안 실린다 —
+ * numpy 의 난수기를 TS 로 다시 만들지 않는 한 그 값을 얻을 방법이 없다.
+ */
+function addNdim(out: Map<string, Case>, inp: Inputs): void {
+  const flat = () => Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [2, 4]);
+  const mask = () => Tensor.from([1, 0, 1, 0, 1, 0, 1, 0], [2, 4], false, "bool");
+
+  out.set("ndim::torch.matmul", () => flat().mm(flat().transpose()));
+  out.set("ndim::torch.reshape", () => flat().reshape([4, 2]));
+  out.set("ndim::torch.unsqueeze", () => flat().unsqueeze(1));
+  out.set("ndim::torch.masked_fill", () => flat().maskedFill(mask(), -1.0));
+  out.set("ndim::x.masked_fill", () => flat().maskedFill(mask(), -1.0));
+  out.set("ndim::x.index_select",
+    () => flat().indexSelect(0, Tensor.from([1, 0], [2], false, "int64")));
+  out.set("ndim::x.masked_select", async () => flat().maskedSelect(mask()));
+  out.set("ndim::x.repeat_interleave",
+    () => flat().ravel().repeatInterleave(2));
+
+  // `webgpu::` 중 입력이 골든에 실린 것들. 나머지는 위와 같은 이유로 닿을 수 없다.
+  out.set("webgpu::F.pad(랭크4)", () => inp.get("img").pad(-1, 1, 2));
+  out.set("webgpu::F.pad(랭크4, 값)",
+    () => inp.get("img").pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
+  out.set("webgpu::grad::pad_sequence", () => {
+    const a = Tensor.from([1, 2, 3, 4], [2, 2], true);
+    const b = Tensor.from([5, 6], [1, 2], true);
+    seeded(Tensor.padSequence([a, b])).backward();
+    return gradOf(a, "pad_sequence");
+  });
 }
 
 const DTYPES: readonly DType[] = ["float32", "int64", "bool"];
@@ -754,6 +813,59 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   one("L1Loss(층)/a", x1, (x) => x.l1Loss(inp.get("x1")));
   one("SmoothL1Loss(층)/a", x1, (x) => x.smoothL1Loss(inp.get("x1")));
   one("BCEWithLogitsLoss/a", x1, (x) => x.bceWithLogits(inp.get("x1")));
+
+  // **형만 바꾼 자리에서 그래프가 끊긴 적이 있다.** 코어의 `.float()` 이 결과에
+  // requires_grad 를 붙여놓고 부모를 안 달아서, backward 가 예외 없이 돌고 잎의
+  // grad 만 None 으로 남았다. 경고도 예외도 없이.
+  one("float()", x1, (x) => x.to("float32"));
+  // 골든이 이 둘을 **가중치를 곱하는** 무리에 넣었다. 그냥 sum() 이면 기울기가 전부
+  // 1 이라 자리가 뒤바뀌어도 안 걸린다 — 그러라고 가중치를 준 것이다.
+  weighted("einsum(ij->i)", () => [mat(true)], (x) => einsum("ij->i", x));
+  weighted("fmod(%)", () => [vec(true)], (x) => x.fmod(2));
+  one("nll_loss", x2,
+    (x) => x.logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], false, "int64")));
+  one("cross_entropy", x2,
+    (x) => x.crossEntropy(Tensor.from([0, 1, 2], [3], false, "int64")));
+
+  // 자매만 거절하는 자리. 우리는 배정도가 없지만 **형을 바꾸는 것 자체는 되고**,
+  // float32 로 되돌아오는 것이라 torch 처럼 성공이 정답이다.
+  out.set("grad::double()=자매는거절", () => {
+    try {
+      const x = x1(true);
+      x.to("float32").sum().backward();
+      gradOf(x, "double()");
+    } catch (err) {
+      return `뜻밖의 거절 <${err instanceof Error ? err.constructor.name : "?"}>`;
+    }
+    return "기대대로";
+  });
+
+  const mat2 = () => Tensor.from([2, 0, 1, 1, 3, 2, 0, 1, 4], [3, 3], true);
+  for (const [which, tag] of ["a", "b"].entries()) {
+    out.set(`grad::einsum(ij,jk->ik)/${tag}`, () => {
+      const leaves = [mat(true), mat2()];
+      const a = leaves[0];
+      const b = leaves[1];
+      if (!a || !b) throw new Error("einsum: 잎이 없다");
+      seeded(einsum("ij,jk->ik", a, b)).backward();
+      const leaf = leaves[which];
+      if (!leaf) throw new Error(`einsum: 잎 ${tag} 가 없다`);
+      return gradOf(leaf, `einsum/${tag}`);
+    });
+    out.set(`grad::pad_sequence/${tag}`, () => {
+      const leaves = [
+        Tensor.from([1, 2, 3, 4], [4], true),
+        Tensor.from([1, 5, 2], [3], true),
+      ];
+      const a = leaves[0];
+      const b = leaves[1];
+      if (!a || !b) throw new Error("pad_sequence: 잎이 없다");
+      seeded(Tensor.padSequence([a, b])).backward();
+      const leaf = leaves[which];
+      if (!leaf) throw new Error(`pad_sequence: 잎 ${tag} 가 없다`);
+      return gradOf(leaf, `pad_sequence/${tag}`);
+    });
+  }
 }
 
 /**
@@ -896,6 +1008,37 @@ function addFlow(out: Map<string, Case>): void {
   for (const [name, leaf, fn] of others) {
     out.set(`flow::${name}`, () => asks(leaf(), fn));
   }
+
+  // CPU 를 왕복하는 것들. 흐르는지 묻는 것은 같고, 결과를 기다려야 할 뿐이다.
+  const slow: [string, () => Tensor, (x: Tensor) => Promise<Tensor>][] = [
+    ["median", vec, async (x) => x.median().values],
+    ["msort", vec, async (x) => x.msort()],
+    ["masked_select", vec,
+      async (x) => x.maskedSelect(Tensor.from(F_MASK, [4]))],
+    ["einsum", mat, async (x) => einsum("ij->i", x)],
+    ["det", sym, async (x) => x.det()],
+    ["logdet", sym, async (x) => x.logdet()],
+    ["inverse", sym, async (x) => x.inverse()],
+    ["cholesky", sym, async (x) => x.cholesky()],
+  ];
+  for (const [name, leaf, fn] of slow) {
+    out.set(`flow::${name}`, async () => asksSlow(leaf(), fn));
+  }
+}
+
+/** `asks` 와 같은 질문이되 결과를 기다린다. */
+async function asksSlow(
+  leaf: Tensor,
+  fn: (x: Tensor) => Promise<Tensor>,
+): Promise<string> {
+  const result = await fn(leaf);
+  const flow = result.requiresGrad ? "흐름" : "안흐름";
+  try {
+    result.sum().backward();
+  } catch {
+    return `${flow}/역전파거절`;
+  }
+  return `${flow}/${leaf.grad !== null ? "기울기있음" : "조용히None"}`;
 }
 
 /**
@@ -972,6 +1115,13 @@ function addReduce(out: Map<string, Case>): void {
   out.set("reduce::cummax 번호", () => Tensor.from(tie).cummax(0).indices);
   out.set("reduce::cummin 번호", () => Tensor.from(tie).cummin(0).indices);
   out.set("reduce::kthvalue 번호", () => Tensor.from(tie).kthvalue(2).indices);
+  out.set("reduce::quantile", async () => Tensor.from(tie).quantile(0.5));
+  out.set("reduce::quantile(여럿)",
+    async () => Tensor.from(tie).quantile([0.25, 0.75]));
+  out.set("reduce::nanquantile",
+    async () => Tensor.from([1, Number.NaN, 3, 5], [4]).nanquantile(0.5));
+  out.set("reduce::nonzero", async () => Tensor.from([0, 1, 0, 2], [4]).nonzero());
+  out.set("reduce::argwhere", async () => Tensor.from([0, 1, 0, 2], [4]).argwhere());
 }
 
 // ── tests/cases.py 의 shape_cases 가 쓰는 입력. ────────────────────────────
@@ -1144,6 +1294,7 @@ function addMethod(out: Map<string, Case>): void {
   for (const [s, d] of [[0, -1], [-1, 0], [0, 1], [1, 0]] as const) {
     out.set(`method::movedim(${s},${d})`, () => mat().movedim(s, d));
   }
+  out.set("method::unique", async () => vec().unique());
 
   // 값이 아니라 **판정**을 굳힌 것들. 라이브러리에게 물어야 한다 — 여기서 JS 배열을
   // 비교해 답하면 통과는 하는데 아무것도 시험하지 않는다.
