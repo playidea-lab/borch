@@ -1219,6 +1219,351 @@ ${flatId(inN)}
 }`;
 }
 
+/** 2차원 합성곱의 모양. 전부 셰이더에 상수로 굳는다. */
+export interface ConvShape {
+  readonly N: number; readonly C: number; readonly H: number; readonly W: number;
+  readonly O: number; readonly KH: number; readonly KW: number;
+  readonly SH: number; readonly SW: number;
+  readonly PH: number; readonly PW: number;
+  readonly OH: number; readonly OW: number;
+}
+
+export function convOut(size: number, pad: number, kernel: number, stride: number): number {
+  return Math.floor((size + 2 * pad - kernel) / stride) + 1;
+}
+
+export function convKey(s: ConvShape): string {
+  return `${s.N}.${s.C}.${s.H}.${s.W}.${s.O}.${s.KH}.${s.KW}.${s.SH}.${s.SW}.${s.PH}.${s.PW}`;
+}
+
+/**
+ * 합성곱 순방향. **im2col 을 안 쓴다.**
+ *
+ * 벤치에서 im2col+행렬곱과 융합 커널을 둘 다 재봤고, 모양을 셰이더에 굳힌 융합
+ * 커널이 TF.js 의 72~284% 였다(im2col 은 펼친 행렬을 메모리에 쓴다). 유니폼 제수를
+ * 없앤 것이 43% → 284% 를 갈랐다 — 그래서 여기 나눗셈이 하나도 안 남는다.
+ */
+export function conv2dForward(s: ConvShape, hasBias: boolean): string {
+  const n = s.N * s.O * s.OH * s.OW;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> K: array<f32>;
+${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
+@group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let bn = gid / ${s.O * s.OH * s.OW}u;
+  let r1 = gid % ${s.O * s.OH * s.OW}u;
+  let oc = r1 / ${s.OH * s.OW}u;
+  let r2 = r1 % ${s.OH * s.OW}u;
+  let oh = i32(r2 / ${s.OW}u);
+  let ow = i32(r2 % ${s.OW}u);
+  var acc = ${hasBias ? "B[oc]" : "0.0"};
+  for (var c = 0u; c < ${s.C}u; c = c + 1u) {
+    for (var i = 0; i < ${s.KH}; i = i + 1) {
+      let ih = oh * ${s.SH} + i - ${s.PH};
+      if (ih < 0 || ih >= ${s.H}) { continue; }
+      for (var j = 0; j < ${s.KW}; j = j + 1) {
+        let iw = ow * ${s.SW} + j - ${s.PW};
+        if (iw < 0 || iw >= ${s.W}) { continue; }
+        let xi = (bn * ${s.C}u + c) * ${s.H * s.W}u + u32(ih) * ${s.W}u + u32(iw);
+        let ki = (oc * ${s.C}u + c) * ${s.KH * s.KW}u + u32(i) * ${s.KW}u + u32(j);
+        acc = fma(X[xi], K[ki], acc);
+      }
+    }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * 입력으로 가는 기울기.
+ *
+ * 흩뿌리지 않고 **입력 자리마다 자기에게 온 출력을 모은다** — 원자 덧셈이 없어야
+ * 두 번 돌린 학습이 같다. 걸음이 1 보다 크면 그 사이 자리로는 아무것도 안 오는데,
+ * 나눗셈이 딱 떨어지는지로 그것을 가린다. 걸음 2 를 골든이 따로 묻는 이유가 이것이다.
+ */
+export function conv2dGradInput(s: ConvShape): string {
+  const n = s.N * s.C * s.H * s.W;
+  return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read> K: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let bn = gid / ${s.C * s.H * s.W}u;
+  let r1 = gid % ${s.C * s.H * s.W}u;
+  let c = r1 / ${s.H * s.W}u;
+  let r2 = r1 % ${s.H * s.W}u;
+  let ih = i32(r2 / ${s.W}u);
+  let iw = i32(r2 % ${s.W}u);
+  var acc = 0.0;
+  for (var oc = 0u; oc < ${s.O}u; oc = oc + 1u) {
+    for (var i = 0; i < ${s.KH}; i = i + 1) {
+      let t = ih + ${s.PH} - i;
+      if (t < 0 || t % ${s.SH} != 0) { continue; }
+      let oh = t / ${s.SH};
+      if (oh >= ${s.OH}) { continue; }
+      for (var j = 0; j < ${s.KW}; j = j + 1) {
+        let u = iw + ${s.PW} - j;
+        if (u < 0 || u % ${s.SW} != 0) { continue; }
+        let ow = u / ${s.SW};
+        if (ow >= ${s.OW}) { continue; }
+        let gi = (bn * ${s.O}u + oc) * ${s.OH * s.OW}u + u32(oh) * ${s.OW}u + u32(ow);
+        let ki = (oc * ${s.C}u + c) * ${s.KH * s.KW}u + u32(i) * ${s.KW}u + u32(j);
+        acc = fma(G[gi], K[ki], acc);
+      }
+    }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/** 가중치로 가는 기울기. 무게 한 칸이 배치·출력 자리 전부에 쓰였으므로 거기를 훑는다. */
+export function conv2dGradWeight(s: ConvShape): string {
+  const n = s.O * s.C * s.KH * s.KW;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let oc = gid / ${s.C * s.KH * s.KW}u;
+  let r1 = gid % ${s.C * s.KH * s.KW}u;
+  let c = r1 / ${s.KH * s.KW}u;
+  let r2 = r1 % ${s.KH * s.KW}u;
+  let i = i32(r2 / ${s.KW}u);
+  let j = i32(r2 % ${s.KW}u);
+  var acc = 0.0;
+  for (var bn = 0u; bn < ${s.N}u; bn = bn + 1u) {
+    for (var oh = 0; oh < ${s.OH}; oh = oh + 1) {
+      let ih = oh * ${s.SH} + i - ${s.PH};
+      if (ih < 0 || ih >= ${s.H}) { continue; }
+      for (var ow = 0; ow < ${s.OW}; ow = ow + 1) {
+        let iw = ow * ${s.SW} + j - ${s.PW};
+        if (iw < 0 || iw >= ${s.W}) { continue; }
+        let xi = (bn * ${s.C}u + c) * ${s.H * s.W}u + u32(ih) * ${s.W}u + u32(iw);
+        let gi = (bn * ${s.O}u + oc) * ${s.OH * s.OW}u + u32(oh) * ${s.OW}u + u32(ow);
+        acc = fma(X[xi], G[gi], acc);
+      }
+    }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/** 풀링의 모양. 채널을 배치에 접어 넣어 하나의 평면 문제로 본다. */
+export interface PoolShape {
+  readonly NC: number; readonly H: number; readonly W: number;
+  readonly KH: number; readonly KW: number;
+  readonly SH: number; readonly SW: number;
+  readonly OH: number; readonly OW: number;
+}
+
+export function poolKey(p: PoolShape): string {
+  return `${p.NC}.${p.H}.${p.W}.${p.KH}.${p.KW}.${p.SH}.${p.SW}`;
+}
+
+export function pool2dForward(p: PoolShape, kind: "max" | "avg"): string {
+  const n = p.NC * p.OH * p.OW;
+  const init = kind === "max" ? "X[base + 0u]" : "0.0";
+  const step = kind === "max" ? "acc = max(acc, v);" : "acc = acc + v;";
+  const done = kind === "max" ? "acc" : `acc / ${(p.KH * p.KW).toFixed(1)}`;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${p.OH * p.OW}u;
+  let r = gid % ${p.OH * p.OW}u;
+  let oh = r / ${p.OW}u;
+  let ow = r % ${p.OW}u;
+  let base = plane * ${p.H * p.W}u + oh * ${p.SH * p.W}u + ow * ${p.SW}u;
+  var acc = ${init};
+  for (var i = 0u; i < ${p.KH}u; i = i + 1u) {
+    for (var j = 0u; j < ${p.KW}u; j = j + 1u) {
+      let v = X[base + i * ${p.W}u + j];
+      ${step}
+    }
+  }
+  Out[gid] = ${done};
+}`;
+}
+
+/**
+ * 풀링의 역방향.
+ *
+ * `max` 는 이긴 자리로만 보낸다. **동점이면 먼저 나온 자리 하나만** 받는다 —
+ * torch 의 `max_pool2d` 가 그렇다(`amax` 가 고르게 나누는 것과 다르다).
+ * `avg` 는 창 크기로 나눠 고르게 뿌린다.
+ */
+export function pool2dBackward(p: PoolShape, kind: "max" | "avg"): string {
+  const n = p.NC * p.H * p.W;
+  const body = kind === "avg"
+    ? `        acc = acc + G[plane * ${p.OH * p.OW}u + oh * ${p.OW}u + ow] / ${(p.KH * p.KW).toFixed(1)};`
+    : `        var best = X[wbase];
+        var bi = 0u;
+        var bj = 0u;
+        for (var i = 0u; i < ${p.KH}u; i = i + 1u) {
+          for (var j = 0u; j < ${p.KW}u; j = j + 1u) {
+            let v = X[wbase + i * ${p.W}u + j];
+            if (v > best) { best = v; bi = i; bj = j; }
+          }
+        }
+        if (bi == u32(dh) && bj == u32(dw)) {
+          acc = acc + G[plane * ${p.OH * p.OW}u + oh * ${p.OW}u + ow];
+        }`;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${p.H * p.W}u;
+  let r = gid % ${p.H * p.W}u;
+  let ih = i32(r / ${p.W}u);
+  let iw = i32(r % ${p.W}u);
+  var acc = 0.0;
+  for (var oh = 0u; oh < ${p.OH}u; oh = oh + 1u) {
+    let dh = ih - i32(oh) * ${p.SH};
+    if (dh < 0 || dh >= ${p.KH}) { continue; }
+    for (var ow = 0u; ow < ${p.OW}u; ow = ow + 1u) {
+      let dw = iw - i32(ow) * ${p.SW};
+      if (dw < 0 || dw >= ${p.KW}) { continue; }
+      {
+        let wbase = plane * ${p.H * p.W}u + oh * ${p.SH * p.W}u + ow * ${p.SW}u;
+${body}
+      }
+    }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * 축 하나를 정렬한다. **자리도 같이 옮긴다** — 값만 옮기면 `argsort` 를 못 만들고,
+ * 기울기를 원래 자리로 되돌릴 수도 없다.
+ *
+ * 삽입 정렬이다. 축이 길어지면 나쁘지만, 여기서 미는 값이 축 길이 열 몇이고
+ * **안정 정렬**이라 동점의 순서가 torch 와 같다 — 비토닉 정렬은 그 순서를 안 지킨다.
+ * 스레드 하나가 축 하나를 통째로 맡으므로 원자 연산도 없다.
+ */
+export function sortAxis(
+  outer: number,
+  len: number,
+  inner: number,
+  descending: boolean,
+): string {
+  const n = outer * inner;
+  // 안정성을 지키려면 **같은 값에서 멈춰야** 한다. 엄격 부등호를 쓰는 이유다.
+  const test = descending ? "cur > prev" : "cur < prev";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> V: array<f32>;
+@group(0) @binding(2) var<storage, read_write> I: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${inner}u;
+  let i = gid % ${inner}u;
+  let base = o * ${len * inner}u + i;
+  for (var k = 0u; k < ${len}u; k = k + 1u) {
+    V[base + k * ${inner}u] = A[base + k * ${inner}u];
+    I[base + k * ${inner}u] = f32(k);
+  }
+  for (var k = 1u; k < ${len}u; k = k + 1u) {
+    var p = k;
+    loop {
+      if (p == 0u) { break; }
+      let cur = V[base + p * ${inner}u];
+      let prev = V[base + (p - 1u) * ${inner}u];
+      if (!(${test})) { break; }
+      V[base + p * ${inner}u] = prev;
+      V[base + (p - 1u) * ${inner}u] = cur;
+      let ci = I[base + p * ${inner}u];
+      I[base + p * ${inner}u] = I[base + (p - 1u) * ${inner}u];
+      I[base + (p - 1u) * ${inner}u] = ci;
+      p = p - 1u;
+    }
+  }
+}`;
+}
+
+/**
+ * 자리 표를 따라 기울기를 원래 자리로 되돌린다.
+ *
+ * `sort`·`topk`·`median` 의 역방향이 전부 이것이다 — 뽑아 온 자리로만 흘리고
+ * 나머지는 0. 값만 떼어 돌려주면 그 자리로 기울기가 안 가고 학습이 조용히 멈춘다.
+ */
+export function scatterByIndex(
+  outer: number,
+  len: number,
+  inner: number,
+  taken: number,
+): string {
+  const n = outer * len * inner;
+  return `
+@group(0) @binding(0) var<storage, read> I: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${len * inner}u;
+  let r = gid % ${len * inner}u;
+  let k = r / ${inner}u;
+  let i = r % ${inner}u;
+  var acc = 0.0;
+  for (var t = 0u; t < ${taken}u; t = t + 1u) {
+    let at = o * ${taken * inner}u + t * ${inner}u + i;
+    if (u32(I[at]) == k) { acc = acc + G[at]; }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * 누적 최대·최소. 값과 자리를 같이 낸다.
+ *
+ * **동점이면 나중 자리를 준다** — torch 의 `cummax` 가 그렇다(`argmax` 가 먼저
+ * 자리를 주는 것과 반대다). 등호를 포함하는 부등호 하나가 그 차이다.
+ */
+export function cumExtreme(
+  kind: "max" | "min",
+  outer: number,
+  len: number,
+  inner: number,
+): string {
+  const n = outer * len * inner;
+  const better = kind === "max" ? "v >= best" : "v <= best";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read_write> V: array<f32>;
+@group(0) @binding(2) var<storage, read_write> I: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${len * inner}u;
+  let r = gid % ${len * inner}u;
+  let k = r / ${inner}u;
+  let i = r % ${inner}u;
+  let base = o * ${len * inner}u + i;
+  var best = A[base];
+  var at = 0u;
+  for (var t = 1u; t <= k; t = t + 1u) {
+    let v = A[base + t * ${inner}u];
+    if (${better}) { best = v; at = t; }
+  }
+  V[gid] = best;
+  I[gid] = f32(at);
+}`;
+}
+
 /** 값 하나로 채운다. 기울기 씨앗(`backward()` 의 1.0)과 `zeros` 가 쓴다. */
 export function fill(n: number, value: number): string {
   return `

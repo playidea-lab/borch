@@ -185,6 +185,21 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["tile", () => x1().tile(2)],
     ["movedim", () => x2().movedim(0, 1)],
     ["as_tensor", () => x1()],
+    // 합성곱·풀링. **걸음 2 를 따로 묻는 것은 의도다** — 역방향에서 기울기 사이에
+    // 0 을 끼우는 경로가 거기서만 돈다.
+    ["F.conv2d", () => inp.get("img").conv2d(inp.get("cw"), inp.get("cb"), 1, 1)],
+    ["F.conv2d(패딩0)", () => inp.get("img").conv2d(inp.get("cw"), null, 1, 0)],
+    ["F.conv2d(스트라이드2)",
+      () => inp.get("img").conv2d(inp.get("cw"), inp.get("cb"), 2, 1)],
+    ["F.max_pool2d", () => inp.get("img").maxPool2d(2)],
+    ["F.avg_pool2d", () => inp.get("img").avgPool2d(2)],
+    ["BatchNorm2d(학습)", () => inp.get("img").batchNorm2d()],
+    ["median", () => x1().median().values],
+    ["median(dim)", () => x2().median(1).values],
+    ["median(dim).indices", () => x2().median(1).indices],
+    ["topk", () => x1().topk(3).values],
+    ["sort", () => x1().sort(0).values],
+    ["argsort", () => x1().argsort(0)],
   ];
   for (const [name, fn] of table) out.set(name, fn);
 
@@ -467,6 +482,36 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
       });
     }
   }
+  // 합성곱 — **역방향을 직접 짠 자리다.** 입력·가중치·편향 셋 다 본다.
+  // 걸음 2 를 같이 보는 것은 의도다: 기울기 사이에 0 을 끼우는 경로가 거기서만 돈다.
+  const convGrad = (
+    label: string, which: "x" | "w" | "b", stride: number, padding: number,
+    useBias: boolean,
+  ) => {
+    out.set(`grad::${label}/${which}`, () => {
+      const x = inp.get("img", true);
+      const k = inp.get("cw", true);
+      const b = useBias ? inp.get("cb", true) : null;
+      x.conv2d(k, b, stride, padding).sum().backward();
+      const leaf = which === "x" ? x : which === "w" ? k : b;
+      if (!leaf) throw new Error(`${label}: 잎 ${which} 가 없다`);
+      return gradOf(leaf, `${label}/${which}`);
+    });
+  };
+  for (const which of ["x", "w", "b"] as const) convGrad("conv2d", which, 1, 1, true);
+  for (const which of ["x", "w"] as const) {
+    convGrad("conv2d(패딩0)", which, 1, 0, false);
+    convGrad("conv2d(스트라이드2)", which, 2, 1, false);
+  }
+  one("max_pool2d", () => inp.get("img", true), (x) => x.maxPool2d(2));
+  // **뽑기 계열이 그래프를 끊기 가장 쉬운 자리다.** 값만 떼어 돌려주면 뽑은 자리로
+  // 기울기가 안 가고 학습이 조용히 멈춘다.
+  one("topk", x1, (x) => x.topk(3).values);
+  one("sort", x1, (x) => x.sort(0).values);
+  one("sort(내림차순)", x1, (x) => x.sort(0, true).values);
+  weighted("median()", () => [vec(true)], (x) => x.median().values);
+  weighted("median(dim)", () => [mat(true)], (x) => x.median(1).values);
+
   // 골든이 이항 형태로 굳혔으므로 이름 뒤에 잎 표시가 붙는다.
   one("L1Loss(층)/a", x1, (x) => x.l1Loss(inp.get("x1")));
   one("SmoothL1Loss(층)/a", x1, (x) => x.smoothL1Loss(inp.get("x1")));
@@ -675,10 +720,20 @@ function addReduce(out: Map<string, Case>): void {
   add("logsumexp", (x) => x.logsumexp(0), tie);
   add("logsumexp(dim1)", (x) => x.logsumexp(1), mat, [2, 3]);
   add("dist", (x) => x.dist(Tensor.zeros([4])), tie);
+  add("cummax", (x) => x.cummax(0).values, tie);
+  add("cummin", (x) => x.cummin(0).values, tie);
+  add("kthvalue", (x) => x.kthvalue(2).values, tie);
+  add("msort", (x) => x.msort(), mat, [2, 3], false);
+  add("diff", (x) => x.diff(), tie);
+  add("diff(n=2)", (x) => x.diff(2), tie);
 
   // 기울기 케이스가 없는 것들. 골든도 값만 굳혔다.
   out.set("reduce::aminmax/최소", () => Tensor.from(tie).amin());
   out.set("reduce::aminmax/최대", () => Tensor.from(tie).amax());
+  // **번호를 따로 묻는다** — 값만 보면 번호가 틀려도 통과한다.
+  out.set("reduce::cummax 번호", () => Tensor.from(tie).cummax(0).indices);
+  out.set("reduce::cummin 번호", () => Tensor.from(tie).cummin(0).indices);
+  out.set("reduce::kthvalue 번호", () => Tensor.from(tie).kthvalue(2).indices);
 }
 
 // ── tests/cases.py 의 shape_cases 가 쓰는 입력. ────────────────────────────
@@ -823,6 +878,10 @@ function addMethod(out: Map<string, Case>): void {
     // **인자 순서가 함수와 뒤집힌 유일한 자리다** — 메서드는 `x.where(조건, 저쪽)` 이다.
     ["where", () => vec().where(Tensor.from(M_MASK, [4]), other())],
     ["gather", () => mat().gather(1, Tensor.from([0, 2, 1, 0, 2, 1], [3, 2]))],
+    ["argsort", () => vec().argsort(0)],
+    ["sort", () => vec().sort(0).values],
+    ["topk", () => vec().topk(2).values],
+    ["median", () => vec().median().values],
   ];
   for (const [name, fn] of single) out.set(`method::${name}`, fn);
 

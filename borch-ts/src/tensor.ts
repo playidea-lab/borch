@@ -15,6 +15,13 @@ import {
   BINARY,
   binaryBackward,
   binaryForward,
+  conv2dForward,
+  conv2dGradInput,
+  conv2dGradWeight,
+  convKey,
+  convOut,
+  type ConvShape,
+  cumExtreme,
   cumprodBackward,
   cumsumBackward,
   cumulative,
@@ -31,11 +38,17 @@ import {
   indexSelectBackward,
   matmul,
   padAxis,
+  pool2dBackward,
+  pool2dForward,
+  poolKey,
+  type PoolShape,
   prodBackward,
   reduceBroadcast,
   reduceDim,
   type ReduceKind,
   ruleKey,
+  scatterByIndex,
+  sortAxis,
   triangle,
   UNARY,
   unaryBackward,
@@ -1524,6 +1537,298 @@ export class Tensor implements Node<Tensor> {
     const far = d.abs().binary("sub", Tensor.full([], 0.5 * beta));
     const isNear = d.abs().binary("lt", Tensor.full([], beta));
     return near.where(isNear, far).mean();
+  }
+
+  // ── 정렬 계열 ─────────────────────────────────────────────────────────
+
+  /**
+   * 축 하나를 정렬해 값과 자리를 낸다.
+   *
+   * **기울기가 값을 따라간다.** 뽑아 온 자리로만 흘리고 나머지는 0 인데, 값만 떼어
+   * 돌려주면 그 자리로 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.
+   * 코어가 `topk`·`sort` 에서 겪었고, 자매도 리뷰 전까지 같은 상태였다.
+   */
+  sort(dim = 0, descending = false): { values: Tensor; indices: Tensor } {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const len = this.shape[axis] ?? 1;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const values = dev().alloc(this.size);
+    const indices = dev().alloc(this.size);
+    dev().run1d(
+      dev().pipeline(
+        `srt:${outer}:${len}:${inner}:${descending ? "d" : "a"}`,
+        () => sortAxis(outer, len, inner, descending),
+      ),
+      [this.buffer, values, indices],
+      outer * inner,
+    );
+    const idx = new Tensor(indices, this.shape);
+    return {
+      values: this.gatherBack(values, this.shape, idx, axis, len, len),
+      indices: idx,
+    };
+  }
+
+  /** 정렬한 자리만. 값이 필요 없을 때 쓴다. */
+  argsort(dim = 0, descending = false): Tensor {
+    return this.sort(dim, descending).indices;
+  }
+
+  /** 가장 큰 `k` 개. `sort` 의 앞부분이다 — torch 도 내림차순으로 준다. */
+  topk(k: number, dim = 0): { values: Tensor; indices: Tensor } {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const sorted = this.sort(axis, true);
+    return {
+      values: sorted.values.narrow(axis, 0, k),
+      indices: sorted.indices.narrow(axis, 0, k),
+    };
+  }
+
+  /**
+   * `k` 번째로 작은 값. **1 부터 센다** — torch 가 그렇다.
+   */
+  kthvalue(k: number, dim = 0): { values: Tensor; indices: Tensor } {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const sorted = this.sort(axis, false);
+    return {
+      values: sorted.values.select(axis, k - 1),
+      indices: sorted.indices.select(axis, k - 1),
+    };
+  }
+
+  /**
+   * 중앙값. **짝수 개일 때 아래쪽을 준다** — torch 가 두 값을 평균내지 않는다.
+   */
+  median(dim?: number): { values: Tensor; indices: Tensor } {
+    if (dim === undefined) {
+      const flat = this.flat();
+      const k = Math.floor((flat.size + 1) / 2);
+      return flat.kthvalue(k, 0);
+    }
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const len = this.shape[axis] ?? 1;
+    return this.kthvalue(Math.floor((len + 1) / 2), axis);
+  }
+
+  /** 정렬만 하고 자리는 안 준다. */
+  msort(): Tensor {
+    return this.sort(0, false).values;
+  }
+
+  /** 누적 최대·최소. **동점이면 나중 자리**를 준다 — torch 가 그렇다. */
+  cummax(dim = 0): { values: Tensor; indices: Tensor } {
+    return this.cumExtremeOver("max", dim);
+  }
+
+  cummin(dim = 0): { values: Tensor; indices: Tensor } {
+    return this.cumExtremeOver("min", dim);
+  }
+
+  private cumExtremeOver(kind: "max" | "min", dim: number):
+    { values: Tensor; indices: Tensor } {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const len = this.shape[axis] ?? 1;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const values = dev().alloc(this.size);
+    const indices = dev().alloc(this.size);
+    dev().run1d(
+      dev().pipeline(
+        `cx:${kind}:${outer}:${len}:${inner}`,
+        () => cumExtreme(kind, outer, len, inner),
+      ),
+      [this.buffer, values, indices],
+      this.size,
+    );
+    const idx = new Tensor(indices, this.shape);
+    return {
+      values: this.gatherBack(values, this.shape, idx, axis, len, len),
+      indices: idx,
+    };
+  }
+
+  /**
+   * 이미 계산해 둔 값 버퍼에 **자리 표를 통한 역방향**을 붙인다.
+   *
+   * 순방향은 커널이 이미 냈다. 여기서 하는 일은 그래프를 잇는 것뿐이고, 역방향은
+   * 자리 표를 따라 원래 칸으로 되돌리는 것이다.
+   */
+  private gatherBack(
+    values: GPUBuffer,
+    shape: readonly number[],
+    indices: Tensor,
+    axis: number,
+    len: number,
+    taken: number,
+  ): Tensor {
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const inShape = this.shape;
+    const inSize = this.size;
+    return Tensor.make(
+      values,
+      shape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(inSize);
+        dev().run1d(
+          dev().pipeline(
+            `sbi:${outer}:${len}:${inner}:${taken}`,
+            () => scatterByIndex(outer, len, inner, taken),
+          ),
+          [indices.buffer, g.buffer, gi],
+          inSize,
+        );
+        return [new Tensor(gi, inShape)];
+      },
+      "SortBackward0",
+    );
+  }
+
+  // ── 합성곱·풀링 ───────────────────────────────────────────────────────
+
+  /**
+   * 2차원 합성곱. `this` 는 `(N, C, H, W)`, 커널은 `(O, C, KH, KW)` 다 — **NCHW** 다.
+   *
+   * 자매는 NHWC 를 들고 다녔는데 그것은 TF.js 의 conv 가 그 배치에서만 빨라서였다.
+   * 여기서는 커널을 우리가 쓰므로 torch 와 같은 배치를 그대로 쓴다.
+   */
+  conv2d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
+    if (this.shape.length !== 4 || weight.shape.length !== 4) {
+      throw new Error(`conv2d 는 4차원끼리다: [${this.shape}] × [${weight.shape}]`);
+    }
+    const [N = 1, C = 1, H = 1, W = 1] = this.shape;
+    const [O = 1, WC = 1, KH = 1, KW = 1] = weight.shape;
+    if (C !== WC) {
+      throw new RuntimeError(
+        `Given groups=1, weight of size [${weight.shape}], expected input` +
+          `[${this.shape}] to have ${WC} channels, but got ${C} channels instead`,
+      );
+    }
+    const s: ConvShape = {
+      N, C, H, W, O, KH, KW,
+      SH: stride, SW: stride, PH: padding, PW: padding,
+      OH: convOut(H, padding, KH, stride),
+      OW: convOut(W, padding, KW, stride),
+    };
+    const key = convKey(s);
+    const n = s.N * s.O * s.OH * s.OW;
+    const out = dev().alloc(n);
+    const buffers = bias
+      ? [this.buffer, weight.buffer, bias.buffer, out]
+      : [this.buffer, weight.buffer, out];
+    dev().run1d(
+      dev().pipeline(`cv:${key}:${bias ? "b" : "n"}`,
+        () => conv2dForward(s, bias !== null)),
+      buffers,
+      n,
+    );
+    const parents = bias ? [this, weight, bias] : [this, weight];
+    return Tensor.make(
+      out,
+      [s.N, s.O, s.OH, s.OW],
+      parents,
+      (g) => {
+        const parts: (Tensor | null)[] = [];
+        if (this.requiresGrad) {
+          const gi = dev().alloc(this.size);
+          dev().run1d(
+            dev().pipeline(`cvx:${key}`, () => conv2dGradInput(s)),
+            [g.buffer, weight.buffer, gi],
+            this.size,
+          );
+          parts.push(new Tensor(gi, this.shape));
+        } else parts.push(null);
+        if (weight.requiresGrad) {
+          const gw = dev().alloc(weight.size);
+          dev().run1d(
+            dev().pipeline(`cvw:${key}`, () => conv2dGradWeight(s)),
+            [this.buffer, g.buffer, gw],
+            weight.size,
+          );
+          parts.push(new Tensor(gw, weight.shape));
+        } else parts.push(null);
+        if (bias) {
+          // 편향은 배치와 출력 자리 전부를 합친 것이다. 축약을 겹쳐 쓰면 되고
+          // 새 커널이 필요 없다.
+          parts.push(bias.requiresGrad
+            ? g.sumDim(0).sumDim(1).sumDim(1)
+            : null);
+        }
+        return parts;
+      },
+      "ConvolutionBackward0",
+    );
+  }
+
+  /** 겹치지 않는 창의 최대값. `this` 는 `(N, C, H, W)`. */
+  maxPool2d(kernel = 2, stride?: number): Tensor {
+    return this.pool2d("max", kernel, stride ?? kernel);
+  }
+
+  avgPool2d(kernel = 2, stride?: number): Tensor {
+    return this.pool2d("avg", kernel, stride ?? kernel);
+  }
+
+  private pool2d(kind: "max" | "avg", kernel: number, stride: number): Tensor {
+    if (this.shape.length !== 4) {
+      throw new Error(`풀링은 4차원이다: [${this.shape}]`);
+    }
+    const [N = 1, C = 1, H = 1, W = 1] = this.shape;
+    const p: PoolShape = {
+      // 채널을 배치에 접어 넣는다 — 풀링은 평면마다 따로 도는 일이라 축이 둘일 이유가 없다.
+      NC: N * C, H, W, KH: kernel, KW: kernel, SH: stride, SW: stride,
+      OH: convOut(H, 0, kernel, stride),
+      OW: convOut(W, 0, kernel, stride),
+    };
+    const key = poolKey(p);
+    const n = p.NC * p.OH * p.OW;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`pl:${kind}:${key}`, () => pool2dForward(p, kind)),
+      [this.buffer, out],
+      n,
+    );
+    const shape = this.shape;
+    return Tensor.make(
+      out,
+      [N, C, p.OH, p.OW],
+      [this],
+      (g) => {
+        const gi = dev().alloc(this.size);
+        dev().run1d(
+          dev().pipeline(`plb:${kind}:${key}`, () => pool2dBackward(p, kind)),
+          [this.buffer, g.buffer, gi],
+          this.size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      kind === "max" ? "MaxPool2DBackward0" : "AvgPool2DBackward0",
+    );
+  }
+
+  /**
+   * `(N, C, H, W)` 를 채널마다 정규화한다. 학습 모드 — 이 배치로 통계를 센다.
+   *
+   * 축 셋을 한꺼번에 접어야 해서 `layerNorm` 을 못 쓴다. 축약을 겹쳐 쓰면 새 커널이
+   * 필요 없다 — 대신 중간 텐서가 몇 개 생기고, 그게 지금 치르는 값이다.
+   */
+  batchNorm2d(eps = 1e-5): Tensor {
+    const [N = 1, C = 1, H = 1, W = 1] = this.shape;
+    const count = N * H * W;
+    const perChannel = (t: Tensor): Tensor =>
+      t.sumDim(0).sumDim(1).sumDim(1).reshape([1, C, 1, 1]);
+    const mean = perChannel(this).div(Tensor.full([], count));
+    const centered = this.sub(mean);
+    // 분산은 편향추정(n 으로 나눔)이다 — torch 의 BatchNorm 이 그렇다.
+    const varc = perChannel(centered.square()).div(Tensor.full([], count));
+    return centered.div(varc.binary("add", Tensor.full([], eps)).sqrt());
   }
 
   // ── 역전파 ────────────────────────────────────────────────────────────
