@@ -1,0 +1,62 @@
+"""borch_ts — **borch.ts 위에 얹은 얇은 결속(binding).**
+
+`import borch_ts as torch` 로 쓰고, 밑에서는 TF.js 가 아니라 borch.ts(직접 쓴 WGSL)가
+돈다. 자매(`borch_webgpu`)와 같은 자리를 노리되 밑바닥이 다르다.
+
+## 왜 이것이 얇은가
+
+자매는 5,296 줄이다. TF.js 가 주는 것이 원시 연산 104 개뿐이라 autograd 테이프와
+`nn.Module` 과 옵티마이저를 **파이썬으로 다시 구현**해야 했다.
+
+borch.ts 에는 그것이 이미 다 있고 골든 845 건이 붙잡고 있다. 그러니 파이썬이 할 일은
+**이름을 바꿔 끼우는 것**뿐이다 — 그리고 그것마저 손으로 안 적는다. 모듈과 텐서의
+`__getattr__` 이 `masked_select` 를 `maskedSelect` 로 바꿔 넘기고, 없으면 멈춘다.
+
+## 동기로 도는 이유 — 이건 재봤다
+
+WebGPU 에 동기 읽기가 없다. borch.ts 의 `toArray()` 는 약속을 돌려준다. 그대로
+얹으면 `await loss.item()` 이 되고, 그러면 **"튜토리얼 코드를 임포트만 바꿔
+돌린다"** 는 이 프로젝트의 유일한 주장이 깨진다.
+
+Pyodide 의 `run_sync` 가 그 자리를 메운다(JSPI 위에 선다). 실측했다 —
+`tests/browser/sync_probe.py` 가 `[2,4,6]` 을 낸다. **조건이 하나 있다:** 파이썬에
+들어올 때 비동기 진입(`runPythonAsync`)이어야 한다. 동기 진입이면
+`RuntimeError: No suspender` 로 멈추는데, 라이브러리의 한계가 아니라 그 스택에
+중단할 자리가 없어서다. 러너는 이미 비동기로 들어간다.
+
+## 브라우저 안에서만 돈다
+
+`js.borch` 를 부른다. 네이티브 CPython 에서 임포트하면 바로 멈춘다 — 조용히 다른
+것으로 폴백하면 "GPU 로 돌렸다" 고 착각하게 되고, 그건 이 프로젝트가 가장 싫어하는
+종류다. 자매가 같은 이유로 같은 자리에서 멈춘다.
+
+## 지금 어디까지인가
+
+**전부가 아니다.** 이것은 자매를 borch.ts 위로 옮길 수 있는지를 재는 조각이고, 몇
+건이 지나는지가 곧 진도다. 되는 것과 안 되는 것의 경계는 골든이 붙잡는다 —
+`nn`·`optim` 은 아직 안 붙였고, 그 케이스들은 `AttributeError` 로 실패한다. 없는
+것을 근사해서 초록을 만들지 않는다.
+"""
+
+try:                                                    # pragma: no cover
+    import js as _js
+except ImportError as exc:                              # pragma: no cover
+    raise ImportError(
+        "borch_ts 는 브라우저 안에서만 돈다 — Pyodide 가 아니면 `js` 가 없다.\n"
+        "  네이티브에서는 `borch`(numpy)를 써라.") from exc
+
+if getattr(_js, "borch", None) is None:                 # pragma: no cover
+    raise ImportError(
+        "`js.borch` 가 없다 — 페이지가 borch.ts 를 싣고 `await init()` 을 부른 뒤\n"
+        "  전역에 두어야 한다. 조용히 다른 것으로 돌지 않으려고 여기서 멈춘다.")
+
+from ._base import Tensor, tensor                        # noqa: E402,F401
+from ._ops import (                                      # noqa: E402,F401
+    arange, cat, eye, full, ones, stack, zeros,
+)
+from ._ops import __getattr__                            # noqa: E402,F401
+
+# dtype 은 borch.ts 에서 float32 저장 위의 이름표다. 여기서도 이름으로 둔다.
+float32 = "float32"
+int64 = "int64"
+bool_ = "bool"

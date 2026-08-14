@@ -46,6 +46,8 @@ const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_nn", "_optim", "_data", "_rnn"],
   borch_webgpu: ["__init__", "_base", "_tensor", "_ops", "_functional",
                         "_nn", "_optim", "_data"],
+  // borch.ts 위에 얹은 얇은 결속. TF.js 대신 우리 WGSL 이 돈다.
+  borch_ts: ["__init__", "_base", "_ops"],
 };
 const FILES = [
   ["/borch_vision.py", "/work/borch_vision.py"],
@@ -113,7 +115,16 @@ async function main() {
   }
   say(`대조 대상: ${lib}`);
   let backend = "numpy (브라우저 GPU 안 씀)";
-  if (lib !== "borch") {
+  if (lib === "borch_ts") {
+    // borch.ts 는 TF.js 를 안 쓴다. 대신 ES 모듈을 올리고 어댑터를 잡은 뒤
+    // 전역에 둔다 — 파이썬 결속이 `js.borch` 로 그것을 잡는다.
+    say("borch.ts 를 올리는 중…");
+    const borch = await import("/borch-ts/dist/src/index.js");
+    await borch.init();
+    globalThis.borch = borch;
+    backend = `borch.ts — ${borch.Device.adapterInfo}`;
+    say(backend);
+  } else if (lib !== "borch") {
     say("TF.js 를 올리는 중…");
     backend = await startTfjs();
     say(`TF.js 백엔드: ${backend}`);

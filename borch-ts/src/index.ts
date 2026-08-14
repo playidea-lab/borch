@@ -58,7 +58,20 @@ export {
   Tensor,
 } from "./tensor.js";
 
+import { Tensor as TensorClass } from "./tensor.js";
+
 export { Device } from "./device.js";
+
+/**
+ * 이것이 텐서인가.
+ *
+ * 밖에서 이 라이브러리를 감싸는 쪽이 필요로 한다 — 메서드가 텐서를 주는지 수를
+ * 주는지 모양을 주는지에 따라 다르게 다뤄야 하는데, `instanceof` 를 쓰려면 클래스를
+ * 들여와야 하고 다른 언어에서는 그것이 안 된다. Pyodide 의 파이썬 결속이 첫 사용자다.
+ */
+export function isTensor(x: unknown): boolean {
+  return x instanceof TensorClass;
+}
 export { IndexError, RuntimeError } from "./errors.js";
 export type { DType } from "./dtype.js";
 
