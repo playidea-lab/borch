@@ -13,7 +13,7 @@
 
 import js as _js
 
-from ._base import Tensor, _js_list, handle, wrap
+from ._base import Tensor, _js_list, guarded, handle, settle, wrap
 
 _ts = _js.borch
 
@@ -160,8 +160,7 @@ def __getattr__(name):
         if fn is None:
             raise AttributeError(
                 f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
-        out = fn(*positional(name, args, kw))
-        return wrap(out) if _ts.isTensor(out) else out
+        return guarded(fn, *positional(name, args, kw))
 
     call.__name__ = name
     return call

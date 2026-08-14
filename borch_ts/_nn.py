@@ -14,7 +14,7 @@
 
 import js as _js
 
-from ._base import Tensor, handle, wrap
+from ._base import Tensor, guarded, handle, settle, wrap
 from ._ops import _arg, camel, positional
 
 _ts = _js.borch
@@ -32,8 +32,7 @@ class _Functional:
             if fn is None:
                 raise AttributeError(
                     f"borch.ts 텐서에 `{js_name}` 이 없다 (F.{name})")
-            out = fn(*positional(name, args, kw))
-            return wrap(out) if _ts.isTensor(out) else out
+            return guarded(fn, *positional(name, args, kw))
 
         call.__name__ = name
         return call
@@ -55,8 +54,7 @@ class Module:
         self._m = module
 
     def __call__(self, *args):
-        out = self._m.call(*[_arg(a) for a in args])
-        return wrap(out) if _ts.isTensor(out) else out
+        return guarded(self._m.call, *[_arg(a) for a in args])
 
     def forward(self, *args):
         return self(*args)

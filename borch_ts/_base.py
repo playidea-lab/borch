@@ -149,7 +149,14 @@ class Tensor:
         return self.shape if dim is None else self.shape[dim]
 
     def item(self):
+        """**원소가 하나여야 한다.** torch 가 그 자리에서 던지고 골든이 그것을 굳혔다."""
+        if self._h.size != 1:
+            raise RuntimeError(
+                f"a Tensor with {self._h.size} elements cannot be converted to Scalar")
         return float(_read(self._h)[0])
+
+    def backward(self, *args):
+        return guarded(self._h.backward, *[handle(a) for a in args])
 
     def tolist(self):
         return self.numpy().tolist()
@@ -190,11 +197,10 @@ class Tensor:
             raise AttributeError(
                 f"borch.ts 텐서에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
         if not callable(got):
-            return wrap(got) if _js.borch.isTensor(got) else got
+            return settle(got)
 
         def call(*args, **kw):
-            out = got(*positional(name, args, kw))
-            return wrap(out) if _js.borch.isTensor(out) else out
+            return guarded(got, *positional(name, args, kw))
 
         call.__name__ = name
         return call
@@ -202,12 +208,12 @@ class Tensor:
     # 연산자. `x + y` 는 `x.add(y)` 이고, 상대가 수여도 받는다.
     def _op(js_name):                                        # noqa: N805
         def go(self, other):
-            return wrap(self._h.binary(js_name, handle(other)))
+            return guarded(self._h.binary, js_name, handle(other))
         return go
 
     def _rop(js_name):                                       # noqa: N805
         def go(self, other):
-            return wrap(handle(other).binary(js_name, self._h))
+            return guarded(handle(other).binary, js_name, self._h)
         return go
 
     __add__, __radd__ = _op("add"), _rop("add")
@@ -223,6 +229,60 @@ class Tensor:
         return wrap(self._h.neg())
 
     del _op, _rop
+
+
+class RuntimeError_(RuntimeError):
+    """이름은 파이썬의 것이고 문구는 torch 의 것이다."""
+
+
+class IndexError_(IndexError):
+    pass
+
+
+def translate(exc):
+    """JS 쪽 예외를 **torch 가 내는 종류**로 옮긴다.
+
+    골든이 예외의 **종류 이름까지** 답으로 굳혔다(`RuntimeError|문구=True`). 그대로
+    두면 파이썬 쪽에 `JsException` 이 올라오고, `except RuntimeError` 로 잡던 코드가
+    안 잡힌다 — 예외의 종류도 API 다.
+
+    문구는 안 바꾼다. borch.ts 가 이미 torch 의 원문을 담고 있고, 그것이 검색을
+    통하게 하려고 그렇게 쓴 것이다.
+    """
+    text = str(exc)
+    kind = IndexError if ("index" in text.lower() or "색인" in text) else RuntimeError
+    return kind(text.replace("Error: ", "", 1))
+
+
+def settle(out):
+    """돌려받은 것을 파이썬이 쓸 모양으로 만든다.
+
+    **약속이면 여기서 기다린다.** borch.ts 에서 몇 개는 비동기다 — `unique`,
+    `bincount`, `masked_select` 처럼 **결과의 크기가 값에 달린** 것들이라 GPU 에서
+    한 번 읽어야 모양이 정해진다. 그것을 그대로 흘리면 파이썬 쪽에 `PyodideFuture` 가
+    돌아다니고, 실패는 그 다음 줄에서 `'PyodideFuture' object has no attribute
+    'detach'` 로 나온다 — 원인에서 한 칸 밀린 자리다.
+
+    `run_sync` 가 여기서도 그 자리를 메운다. 값을 읽는 것과 같은 장치다.
+    """
+    from pyodide.ffi import JsException
+
+    try:
+        if hasattr(out, "then"):
+            out = _run_sync(out)
+    except JsException as exc:
+        raise translate(exc) from None
+    return wrap(out) if _js.borch.isTensor(out) else out
+
+
+def guarded(fn, *args):
+    """부르고, JS 예외가 오면 torch 종류로 바꿔 던진다."""
+    from pyodide.ffi import JsException
+
+    try:
+        return settle(fn(*args))
+    except JsException as exc:
+        raise translate(exc) from None
 
 
 def wrap(x):
