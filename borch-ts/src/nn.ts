@@ -299,6 +299,171 @@ export class BatchNormND extends Module {
   }
 }
 
+/**
+ * 순환망 — `RNN`·`LSTM`·`GRU` 를 게이트 수만 바꿔 한 클래스로.
+ *
+ * 입력은 `(길이, 배치, 특징)` 이다 — torch 의 기본이고 `batch_first` 가 아니다.
+ *
+ * **시간 축은 순차적이라 펼 수가 없다.** 한 걸음의 출력이 다음 걸음의 입력이라
+ * 병렬로 돌 자리가 없고, 그래서 걸음마다 커널을 부른다. 짧은 시퀀스에서 도는 값이며,
+ * 길어지면 걸음당 호출 비용이 계산을 덮는다.
+ */
+export type RNNKind = "RNN" | "LSTM" | "GRU";
+
+export class Recurrent extends Module {
+  readonly weightIh: Tensor;
+  readonly weightHh: Tensor;
+  readonly biasIh: Tensor;
+  readonly biasHh: Tensor;
+
+  constructor(
+    inputSize: number,
+    readonly hidden: number,
+    readonly kind: RNNKind,
+  ) {
+    super();
+    const gates = kind === "LSTM" ? 4 : kind === "GRU" ? 3 : 1;
+    const rows = hidden * gates;
+    this.weightIh = Tensor.zeros([rows, inputSize]);
+    this.weightHh = Tensor.zeros([rows, hidden]);
+    this.biasIh = Tensor.zeros([rows]);
+    this.biasHh = Tensor.zeros([rows]);
+    for (const p of [this.weightIh, this.weightHh, this.biasIh, this.biasHh]) {
+      p.requiresGrad = true;
+    }
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return {
+      weight_ih_l0: this.weightIh, weight_hh_l0: this.weightHh,
+      bias_ih_l0: this.biasIh, bias_hh_l0: this.biasHh,
+    };
+  }
+
+  override forward(x: Tensor): Tensor {
+    return this.run(x).output;
+  }
+
+  /** 출력 전체와 마지막 상태를 같이 낸다. */
+  run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor } {
+    const [steps = 0, batch = 0] = x.shape;
+    const H = this.hidden;
+    let h = Tensor.zeros([batch, H]);
+    let c = Tensor.zeros([batch, H]);
+    const outs: Tensor[] = [];
+    for (let t = 0; t < steps; t++) {
+      const xt = x.select(0, t);
+      const gi = xt.linear(this.weightIh).add(this.biasIh);
+      const gh = h.linear(this.weightHh).add(this.biasHh);
+      if (this.kind === "RNN") {
+        h = gi.add(gh).unary("tanh");
+      } else if (this.kind === "LSTM") {
+        // torch 의 게이트 순서는 i, f, g, o 다. 순서가 틀리면 값이 그럴듯하게 틀린다.
+        const g = gi.add(gh);
+        const i = slice(g, 0, H).unary("sigmoid");
+        const f = slice(g, 1, H).unary("sigmoid");
+        const gg = slice(g, 2, H).unary("tanh");
+        const o = slice(g, 3, H).unary("sigmoid");
+        c = f.mul(c).add(i.mul(gg));
+        h = o.mul(c.unary("tanh"));
+      } else {
+        // GRU 는 r, z 까지만 더하고 **n 게이트에서 갈린다** — 은닉 쪽 몫에 r 을 곱한 뒤
+        // 더한다. 다 더하고 나서 곱하면 값이 조용히 달라진다.
+        const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
+        const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
+        const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
+        const one = Tensor.full([], 1);
+        h = one.sub(z).mul(n).add(z.mul(h));
+      }
+      outs.push(h);
+    }
+    return {
+      output: Tensor.stack(outs, 0),
+      hidden: h.reshape([1, batch, H]),
+      cell: c.reshape([1, batch, H]),
+    };
+  }
+}
+
+/** 게이트가 세로로 이어 붙어 있다 — `k` 번째 `H` 줄. */
+function slice(g: Tensor, k: number, H: number): Tensor {
+  return g.narrow(1, k * H, H);
+}
+
+/**
+ * 여러 머리로 나눠 보는 어텐션.
+ *
+ * 입력은 `(배치, 길이, 특징)` 이다(`batch_first=True`). 마스크는 **실수**다 —
+ * 0 과 -inf 이고, "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
+ */
+export class MultiheadAttention extends Module {
+  readonly inWeight: Tensor;
+  readonly inBias: Tensor;
+  readonly outWeight: Tensor;
+  readonly outBias: Tensor;
+
+  constructor(private readonly embed: number, private readonly heads: number) {
+    super();
+    this.inWeight = Tensor.zeros([3 * embed, embed]);
+    this.inBias = Tensor.zeros([3 * embed]);
+    this.outWeight = Tensor.zeros([embed, embed]);
+    this.outBias = Tensor.zeros([embed]);
+    for (const p of [this.inWeight, this.inBias, this.outWeight, this.outBias]) {
+      p.requiresGrad = true;
+    }
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return {
+      in_proj_weight: this.inWeight, in_proj_bias: this.inBias,
+      "out_proj.weight": this.outWeight, "out_proj.bias": this.outBias,
+    };
+  }
+
+  override forward(x: Tensor): Tensor {
+    return this.attend(x, null);
+  }
+
+  attend(x: Tensor, mask: Tensor | null): Tensor {
+    const [batch = 1, len = 1] = x.shape;
+    const E = this.embed;
+    const head = E / this.heads;
+    const flat = x.reshape([batch * len, E]);
+    const projected = flat.linear(this.inWeight).add(this.inBias);
+    const parts = [0, 1, 2].map((k) => projected.narrow(1, k * E, E));
+    const scale = Tensor.full([], 1 / Math.sqrt(head));
+    const outs: Tensor[] = [];
+    for (let b = 0; b < batch; b++) {
+      const perHead: Tensor[] = [];
+      for (let h = 0; h < this.heads; h++) {
+        const take = (t: Tensor | undefined): Tensor => {
+          if (!t) throw new Error("attention: 투영이 없다");
+          return t.reshape([batch, len, E]).select(0, b).narrow(1, h * head, head);
+        };
+        const q = take(parts[0]);
+        const k = take(parts[1]);
+        const v = take(parts[2]);
+        let scores = q.mm(k.transpose()).binary("mul", scale);
+        if (mask) scores = scores.add(mask);
+        perHead.push(scores.softmax(1).mm(v));
+      }
+      outs.push(Tensor.cat(perHead, 1));
+    }
+    const merged = Tensor.stack(outs, 0).reshape([batch * len, E]);
+    return merged.linear(this.outWeight).add(this.outBias)
+      .reshape([batch, len, E]);
+  }
+
+  /** 앞만 보게 하는 마스크. 위 삼각을 -inf 로 채운다. */
+  static causalMask(len: number): Tensor {
+    const data = new Float32Array(len * len);
+    for (let i = 0; i < len; i++) {
+      for (let j = i + 1; j < len; j++) data[i * len + j] = -Infinity;
+    }
+    return Tensor.from(data, [len, len]);
+  }
+}
+
 /** 로짓과 정답 번호에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다. */
 export class CrossEntropyLoss {
   forward(logits: Tensor, target: Tensor): Tensor {

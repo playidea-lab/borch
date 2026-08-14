@@ -482,7 +482,46 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNdim(out, inputs);
   addTrain(out, inputs);
   addVision(out, inputs);
+  addSeq(out, inputs);
   return out;
+}
+
+/**
+ * 순환망과 어텐션.
+ *
+ * 가중치를 밖에서 넣어 **셋이 같은 자리에서 출발**하게 한다 — 각자 초기화하면
+ * 무엇이 갈렸는지가 아니라 초기화가 갈렸는지를 보게 된다. 파라미터 **이름**이
+ * torch 와 같아야 `state_dict` 로 넣을 수 있다는 것도 여기서 걸린다.
+ */
+function addSeq(out: Map<string, Case>, inp: Inputs): void {
+  const build = (kind: nn.RNNKind): nn.Recurrent => {
+    const m = new nn.Recurrent(3, 4, kind);
+    const low = kind.toLowerCase();
+    m.loadStateDict({
+      weight_ih_l0: inp.get(`${low}_wih`), weight_hh_l0: inp.get(`${low}_whh`),
+      bias_ih_l0: inp.get(`${low}_bih`), bias_hh_l0: inp.get(`${low}_bhh`),
+    });
+    return m;
+  };
+  for (const kind of ["RNN", "LSTM", "GRU"] as const) {
+    out.set(`seq::${kind}/출력`, () => build(kind).run(inp.get("seq_x")).output);
+    // LSTM 만 상태가 둘이라 골든이 은닉만 꺼낸다.
+    out.set(`seq::${kind}/마지막상태`,
+      () => build(kind).run(inp.get("seq_x")).hidden);
+  }
+
+  const attention = (mask: Tensor | null): Tensor => {
+    const m = new nn.MultiheadAttention(4, 2);
+    m.loadStateDict({
+      in_proj_weight: inp.get("mha_in_w"), in_proj_bias: inp.get("mha_in_b"),
+      "out_proj.weight": inp.get("mha_out_w"), "out_proj.bias": inp.get("mha_out_b"),
+    });
+    return m.attend(inp.get("attn_x"), mask);
+  };
+  out.set("seq::MultiheadAttention", () => attention(null));
+  // 인과 마스크는 **실수**다(0/-inf). "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
+  out.set("seq::MultiheadAttention(인과 마스크)",
+    () => attention(nn.MultiheadAttention.causalMask(5)));
 }
 
 /**

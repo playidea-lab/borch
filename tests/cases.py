@@ -87,6 +87,29 @@ def golden_inputs():
 
     # 변환용 이미지. uint8 과 실수를 **둘 다** 둔다 — ToTensor 가 uint8 일 때만
     # 255 로 나누는 것이 요점이라, 한쪽만 있으면 그 규칙을 안 보게 된다.
+    # 순환·어텐션의 고정 가중치.
+    #
+    # 원래는 `mod.named_parameters()` 를 돌면서 그 자리에서 뽑았다. 그러면 torch 가
+    # 있어야 모양을 알 수 있어서 이 함수(numpy 만 쓰는 1단계)에 못 들어온다. 그래서
+    # **모양을 여기 적는다** — 틀리면 `load_state_dict` 가 굳히기 단계에서 시끄럽게
+    # 죽으므로 조용히 틀리지 않는다.
+    #
+    # 뽑는 **순서**가 값을 정한다. torch 의 `named_parameters()` 순서 그대로다:
+    # weight_ih, weight_hh, bias_ih, bias_hh.
+    def _fixed(seed, shapes):
+        r = np.random.default_rng(seed)
+        return [(r.standard_normal(s) * 0.2).astype(np.float32) for s in shapes]
+
+    # RNN(3,4)·LSTM(3,4)·GRU(3,4) 는 게이트 수만 다르다 — 1·4·3 배다.
+    rnn_w = {}
+    for kind, gates in (("RNN", 1), ("LSTM", 4), ("GRU", 3)):
+        h = 4 * gates
+        parts = _fixed(7, [(h, 3), (h, 4), (h,), (h,)])
+        for name, arr in zip(("wih", "whh", "bih", "bhh"), parts):
+            rnn_w[f"{kind.lower()}_{name}"] = arr
+    # MultiheadAttention(4, 2): in_proj_weight, in_proj_bias, out_proj.weight, out_proj.bias
+    mha = _fixed(11, [(12, 4), (12,), (4, 4), (4,)])
+
     vis = np.random.default_rng(31)
     vis_u8 = vis.integers(0, 256, (5, 4, 3), dtype=np.uint8)
     vis_f = vis.random((5, 4, 3)).astype(np.float32)
@@ -102,6 +125,9 @@ def golden_inputs():
             **high, "rank7_unbind": v7, "rank8_unbind": v8,
             "nd_seq": nd_seq, "nd_k1": nd_k1, "nd_vol": nd_vol, "nd_k3": nd_k3,
             "nd_img": nd_img,
+            **rnn_w,
+            "mha_in_w": mha[0], "mha_in_b": mha[1],
+            "mha_out_w": mha[2], "mha_out_b": mha[3],
             "vis_u8": vis_u8, "vis_f": vis_f, "vis_gray": vis_gray}
 
 
@@ -622,9 +648,12 @@ def train_cases(inp=None):
 
     def recurrent(L, kind, batch_first=False):
         mod = getattr(L.nn, kind)(3, 4, batch_first=batch_first)
-        rng = np.random.default_rng(7)
-        fixed = {n: L.tensor((rng.standard_normal(tuple(p.shape)) * 0.2).astype(np.float32))
-                 for n, p in mod.named_parameters()}
+        # 가중치가 `golden_inputs()` 에서 온다 — 그래야 JSON 으로 나가고 파이썬이
+        # 아닌 구현도 **같은 자리에서 출발**할 수 있다.
+        low = kind.lower()
+        fixed = {f"{n}_l0": L.tensor(inp[f"{low}_{k}"])
+                 for n, k in (("weight_ih", "wih"), ("weight_hh", "whh"),
+                              ("bias_ih", "bih"), ("bias_hh", "bhh"))}
         mod.load_state_dict(fixed, strict=False)
         return mod
 
@@ -636,9 +665,10 @@ def train_cases(inp=None):
 
     def attention(L, mask=None):
         mod = L.nn.MultiheadAttention(4, 2, batch_first=True)
-        rng = np.random.default_rng(11)
-        fixed = {n: L.tensor((rng.standard_normal(tuple(p.shape)) * 0.2).astype(np.float32))
-                 for n, p in mod.named_parameters()}
+        fixed = {"in_proj_weight": L.tensor(inp["mha_in_w"]),
+                 "in_proj_bias": L.tensor(inp["mha_in_b"]),
+                 "out_proj.weight": L.tensor(inp["mha_out_w"]),
+                 "out_proj.bias": L.tensor(inp["mha_out_b"])}
         mod.load_state_dict(fixed, strict=False)
         x = L.tensor(inp["attn_x"])
         return mod(x, x, x, attn_mask=mask(L) if mask else None, need_weights=False)[0]
