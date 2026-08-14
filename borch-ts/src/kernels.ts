@@ -1285,113 +1285,35 @@ export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
   const kSpace = s.kernel.reduce((a, b) => a * b, 1);
   const K = s.C * kSpace;
   const P = s.N * outSpace;
-
-  // 타일 안에서 쓰는 좌표 풀기. 제수가 전부 리터럴이라 상수 접기로 사라진다.
-  const kParts: string[] = [`      let ch = kk / ${kSpace}u;`];
-  for (const [d, size] of s.kernel.entries()) {
-    kParts.push(
-      `      let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`,
-    );
-  }
-  const pParts: string[] = [`      let bn = col / ${outSpace}u;`];
-  const coords: string[] = [];
-  for (const [d, size] of s.outDims.entries()) {
-    pParts.push(`      let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`);
-    coords.push(
-      `      let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d}) - ${s.pad[d] ?? 0};`,
-    );
-  }
-  const guard = s.inDims
-    .map((size, d) => `i${d} >= 0 && i${d} < ${size}`)
-    .join(" && ");
-  const offset = s.inDims
-    .map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`)
-    .join(" + ");
-
-  const decl: string[] = [];
-  const zero: string[] = [];
-  const fma: string[] = [];
-  const store: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 4; j++) {
-      decl.push(`  var c${i}${j}: f32;`);
-      zero.push(`  c${i}${j} = 0.0;`);
-      fma.push(`      c${i}${j} = fma(a${i}, b${j}, c${i}${j});`);
-      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}${j});`);
-    }
-  }
-
-  return `
-@group(0) @binding(0) var<storage, read> X: array<f32>;
+  return tiledGemm({
+    M: s.O, N: P, K,
+    bindings: `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> Wt: array<f32>;
 ${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
-@group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;
-
-var<workgroup> As: array<f32, 1024>;
-var<workgroup> Bs: array<f32, 1024>;
-
-fn emit(f: u32, col: u32, v: f32) {
-  if (f >= ${s.O}u || col >= ${P}u) { return; }
-${pParts.join("\n")}
-  let at = (bn * ${s.O}u + f) * ${outSpace}u
-    + ${s.outDims.map((_, d) => `o${d} * ${outStride[d] ?? 1}u`).join(" + ")};
-  Out[at] = v${hasBias ? " + B[f]" : ""};
-}
-
-@compute @workgroup_size(16, 16)
-fn main(@builtin(workgroup_id) wid: vec3<u32>,
-        @builtin(local_invocation_id) lid: vec3<u32>) {
-  let tid = lid.y * 16u + lid.x;
-  let row0 = wid.y * 64u + lid.y * 4u;
-  let col0 = wid.x * 64u + lid.x * 4u;
-${decl.join("\n")}
-${zero.join("\n")}
-  for (var t = 0u; t < ${Math.ceil(K / 16)}u; t = t + 1u) {
-    for (var sload = 0u; sload < 4u; sload = sload + 1u) {
-      let idx = sload * 256u + tid;
-      // 가중치 타일 — 행이 출력 채널, 열이 K. 가중치가 (O, K) 로 이어져 있다.
-      {
-        let ar = idx / 16u;
-        let ak = idx % 16u;
-        let f = wid.y * 64u + ar;
-        let kk = t * 16u + ak;
-        As[idx] = select(0.0, Wt[f * ${K}u + kk], f < ${s.O}u && kk < ${K}u);
-      }
-      // 입력 타일 — 행이 K, 열이 (배치·출력자리). im2col 을 **메모리에 안 펴고**
-      // 여기서 바로 만든다.
-      {
-        let bk = idx / 64u;
-        let bc = idx % 64u;
-        let kk = t * 16u + bk;
-        let col = wid.x * 64u + bc;
-        var v = 0.0;
-        if (kk < ${K}u && col < ${P}u) {
-${kParts.join("\n")}
-${pParts.join("\n")}
-${coords.join("\n")}
-          if (${guard}) {
-            v = X[(bn * ${s.C}u + ch) * ${inSpace}u + ${offset}];
-          }
-        }
-        Bs[idx] = v;
-      }
-    }
-    workgroupBarrier();
-    for (var k = 0u; k < 16u; k = k + 1u) {
-      let a0 = As[(lid.y * 4u + 0u) * 16u + k];
-      let a1 = As[(lid.y * 4u + 1u) * 16u + k];
-      let a2 = As[(lid.y * 4u + 2u) * 16u + k];
-      let a3 = As[(lid.y * 4u + 3u) * 16u + k];
-      let b0 = Bs[k * 64u + lid.x * 4u + 0u];
-      let b1 = Bs[k * 64u + lid.x * 4u + 1u];
-      let b2 = Bs[k * 64u + lid.x * 4u + 2u];
-      let b3 = Bs[k * 64u + lid.x * 4u + 3u];
-${fma.join("\n")}
-    }
-    workgroupBarrier();
-  }
-${store.join("\n")}
-}`;
+@group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;`,
+    // 가중치가 (O, K) 로 이어져 있어 행 하나가 통째로 붙어 있다.
+    loadA: `          v = Wt[arow * ${K}u + kk];`,
+    // im2col 을 **메모리에 안 펴고** 여기서 만든다.
+    loadB: `          let ch = kk / ${kSpace}u;
+${s.kernel.map((size, d) =>
+      `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
+          let bn = col / ${outSpace}u;
+${s.outDims.map((size, d) =>
+      `          let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n")}
+${s.outDims.map((_, d) =>
+      `          let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d}) - ${s.pad[d] ?? 0};`)
+      .join("\n")}
+          if (${s.inDims.map((size, d) => `i${d} >= 0 && i${d} < ${size}`).join(" && ")}) {
+            v = X[(bn * ${s.C}u + ch) * ${inSpace}u
+              + ${s.inDims.map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`).join(" + ")}];
+          }`,
+    emit: `  let bn = col / ${outSpace}u;
+${s.outDims.map((size, d) =>
+      `  let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n")}
+  Out[(bn * ${s.O}u + f) * ${outSpace}u
+    + ${s.outDims.map((_, d) => `o${d} * ${outStride[d] ?? 1}u`).join(" + ")}]
+    = v${hasBias ? " + B[f]" : ""};`,
+  });
 }
 
 /** 타일링 conv 가 쓸 dispatch 격자. 행이 출력 채널, 열이 배치·출력 자리다. */
@@ -1418,6 +1340,13 @@ function tiledGemm(opts: {
   readonly loadA: string;
   readonly loadB: string;
   readonly emit: string;
+  /**
+   * 축약을 몇 조각으로 나눌 것인가. 1 이면 안 나눈다.
+   *
+   * 나누면 `emit` 이 받는 것이 부분합이고, 어느 조각인지는 `part` 로 온다 —
+   * 부르는 쪽이 그것을 어디에 쌓을지 정한다.
+   */
+  readonly splits?: number;
 }): string {
   const decl: string[] = [];
   const zero: string[] = [];
@@ -1428,16 +1357,20 @@ function tiledGemm(opts: {
       decl.push(`  var c${i}${j}: f32;`);
       zero.push(`  c${i}${j} = 0.0;`);
       fma.push(`      c${i}${j} = fma(a${i}, b${j}, c${i}${j});`);
-      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}${j});`);
+      store.push(`  emit(row0 + ${i}u, col0 + ${j}u, c${i}${j}, wid.z);`);
     }
   }
+  const splits = opts.splits ?? 1;
+  // 조각마다 맡는 타일 수. 마지막 조각이 조금 덜 맡을 수 있으므로 경계를 넘지 않게 센다.
+  const allTiles = Math.ceil(opts.K / 16);
+  const perSplit = Math.ceil(allTiles / splits);
   return `
 ${opts.bindings}
 
 var<workgroup> As: array<f32, 1024>;
 var<workgroup> Bs: array<f32, 1024>;
 
-fn emit(f: u32, col: u32, v: f32) {
+fn emit(f: u32, col: u32, v: f32, part: u32) {
   if (f >= ${opts.M}u || col >= ${opts.N}u) { return; }
 ${opts.emit}
 }
@@ -1450,7 +1383,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
   let col0 = wid.x * 64u + lid.x * 4u;
 ${decl.join("\n")}
 ${zero.join("\n")}
-  for (var t = 0u; t < ${Math.ceil(opts.K / 16)}u; t = t + 1u) {
+  let tFrom = wid.z * ${perSplit}u;
+  let tTo = min(tFrom + ${perSplit}u, ${allTiles}u);
+  for (var t = tFrom; t < tTo; t = t + 1u) {
     for (var sload = 0u; sload < 4u; sload = sload + 1u) {
       let idx = sload * 256u + tid;
       {
@@ -1527,9 +1462,10 @@ export function convNDGradWeightTiled(s: ConvNDShape): string {
   const inSpace = s.inDims.reduce((a, b) => a * b, 1);
   const K = s.N * outSpace;
   const cols = s.C * kSpace;
+  const splits = convGradWeightSplit(s);
   const c = patchCoords({ ...s }, "          ");
   return tiledGemm({
-    M: s.O, N: cols, K,
+    M: s.O, N: cols, K, splits,
     bindings: `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Out: array<f32>;`,
@@ -1549,7 +1485,9 @@ ${c.coords}
           if (${c.guard}) {
             v = X[(bn * ${s.C}u + ch) * ${inSpace}u + ${c.offset}];
           }`,
-    emit: `  Out[f * ${cols}u + col] = v;`,
+    // 조각을 나눴으면 부분합을 조각별 칸에 쓴다. 안 나눴으면 그 칸이 하나뿐이라
+    // 그대로 결과다 — 부르는 쪽이 더하는 단계를 붙일지 말지 정한다.
+    emit: `  Out[part * ${s.O * cols}u + f * ${cols}u + col] = v;`,
   });
 }
 
@@ -1606,10 +1544,48 @@ ${s.inDims.map((_, d) => {
   });
 }
 
-/** 가중치 기울기의 격자 — 행이 출력 채널, 열이 (입력 채널, 커널 자리). */
+/**
+ * 가중치 기울기의 축약 축을 몇 조각으로 쪼갤 것인가.
+ *
+ * **이 GEMM 은 출력이 작고 축약이 크다.** 층 하나에서 출력이 `(64, 27)` 인데 축약이
+ * `배치 × 32 × 32 = 16,384` 인 식이라, 타일 격자가 워크그룹 **한 개**까지 떨어진다 —
+ * GPU 하나에 일감 하나다. 축약을 쪼개 여러 워크그룹에 나눠 주고 마지막에 더한다.
+ *
+ * 조각 수는 격자가 너무 작을 때만 늘린다. 쪼개면 부분합 버퍼와 더하는 단계가 붙으므로
+ * 이미 격자가 넉넉한 층에서는 손해다.
+ */
+export function convGradWeightSplit(s: ConvNDShape): number {
+  const cols = s.C * s.kernel.reduce((a, b) => a * b, 1);
+  const tiles = Math.ceil(cols / 64) * Math.ceil(s.O / 64);
+  const K = s.N * s.outDims.reduce((a, b) => a * b, 1);
+  // 워크그룹이 이만큼은 돼야 GPU 가 논다는 소리를 안 듣는다. 넘으면 안 쪼갠다.
+  const WANT = 64;
+  if (tiles >= WANT) return 1;
+  // 조각 하나가 최소 이만큼의 축약은 맡아야 나누는 값이 남는다.
+  const MIN_PER_SPLIT = 256;
+  return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
+}
+
+/** 가중치 기울기의 격자 — 행이 출력 채널, 열이 (입력 채널, 커널 자리), 깊이가 조각. */
 export function convGradWeightGrid(s: ConvNDShape): [number, number, number] {
   const cols = s.C * s.kernel.reduce((a, b) => a * b, 1);
-  return [Math.ceil(cols / 64), Math.ceil(s.O / 64), 1];
+  return [Math.ceil(cols / 64), Math.ceil(s.O / 64), convGradWeightSplit(s)];
+}
+
+/** 쪼갠 부분합을 더한다. 순서가 정해져 있어 두 번 돌려도 같은 값이다. */
+export function sumSplits(n: number, splits: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> Parts: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  var acc = 0.0;
+  for (var s = 0u; s < ${splits}u; s = s + 1u) {
+    acc = acc + Parts[s * ${n}u + gid];
+  }
+  Out[gid] = acc;
+}`;
 }
 
 /** 입력 기울기의 격자 — 행이 입력 채널, 열이 배치·입력 자리. */

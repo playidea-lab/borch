@@ -24,6 +24,7 @@ import {
   binaryForward,
   convGradInputGrid,
   convGradWeightGrid,
+  convGradWeightSplit,
   convNDForwardTiled,
   convNDGradInputTiled,
   convNDGradWeightTiled,
@@ -60,6 +61,7 @@ import {
   ruleKey,
   scatterByIndex,
   sortAxis,
+  sumSplits,
   triangle,
   UNARY,
   unaryBackward,
@@ -2323,12 +2325,24 @@ export class Tensor implements Node<Tensor> {
           parts.push(new Tensor(gi, this.shape));
         } else parts.push(null);
         if (weight.requiresGrad) {
-          const gw = dev().alloc(weight.size);
+          // 축약을 쪼갰으면 부분합이 조각 수만큼 나오고, 한 번 더 더해야 한다.
+          const splits = convGradWeightSplit(s);
+          const parted = dev().alloc(weight.size * splits);
           dev().run(
             dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
-            [this.buffer, g.buffer, gw],
+            [this.buffer, g.buffer, parted],
             convGradWeightGrid(s),
           );
+          let gw = parted;
+          if (splits > 1) {
+            gw = dev().alloc(weight.size);
+            dev().run1d(
+              dev().pipeline(`ss:${weight.size}:${splits}`,
+                () => sumSplits(weight.size, splits)),
+              [parted, gw],
+              weight.size,
+            );
+          }
           parts.push(new Tensor(gw, weight.shape));
         } else parts.push(null);
         if (bias) {

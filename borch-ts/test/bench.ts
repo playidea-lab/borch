@@ -10,6 +10,7 @@
 
 import * as nn from "../src/nn.js";
 import { SGD } from "../src/optim.js";
+import { Device } from "../src/device.js";
 import { device, keepAlive, noGrad, scope, Tensor } from "../src/tensor.js";
 
 /** 에폭 시간을 내는 데 쓰는 장수. 파이썬 벤치와 같은 수여야 비교가 된다. */
@@ -100,6 +101,8 @@ export interface StepResult {
   submits: number;
   /** 순방향만 돌렸을 때의 벽시계. 나머지가 역방향과 옵티마이저의 몫이다. */
   msForward: number;
+  /** 가중치 기울기를 끈 스텝. 전체에서 빼면 `gradWeight` 의 몫이다. */
+  msNoWeightGrad: number;
   loss: number;
 }
 
@@ -202,6 +205,21 @@ export async function runStep(
   for (let i = 0; i < steps; i++) await forwardOnly();
   const perForward = (performance.now() - f0) / steps;
 
+  /**
+   * 가중치 기울기를 끄고 한 스텝.
+   *
+   * **어느 커널이 무거운지를 추측 대신 뺄셈으로 낸다.** `gradWeight` 는 출력이 작고
+   * 축약이 큰 GEMM 이라 층에 따라 워크그룹이 한 개까지 떨어진다 — 그것이 실제로
+   * 비싼지는 켜고 끈 차이로만 알 수 있다. 학습은 이 동안 틀리지만 재는 것은 시간이다.
+   */
+  const convWeights = params.filter((p) => p.shape.length >= 3);
+  for (const p of convWeights) p.requiresGrad = false;
+  await one();
+  const w0 = performance.now();
+  for (let i = 0; i < steps; i++) await one();
+  const perNoWeightGrad = (performance.now() - w0) / steps;
+  for (const p of convWeights) p.requiresGrad = true;
+
   // **검증 오류가 하나라도 났으면 수를 안 낸다.**
   //
   // 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도 안 한다. 그 상태에서도
@@ -228,6 +246,7 @@ export async function runStep(
     kinds,
     submits: Math.round(perStepSubmits),
     msForward: Math.round(perForward * 10) / 10,
+    msNoWeightGrad: Math.round(perNoWeightGrad * 10) / 10,
     loss: Math.round(last * 10000) / 10000,
   };
 }
@@ -241,7 +260,8 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
       lines.push(
         `batch ${String(r.batch).padStart(3)}  ` +
         `${r.msPerStep.toFixed(1).padStart(8)} ms/step  ` +
-        `(순방향 ${r.msForward.toFixed(1).padStart(7)})  ` +
+        `(순방향 ${r.msForward.toFixed(1).padStart(7)} · dW뺀것 ` +
+        `${r.msNoWeightGrad.toFixed(1).padStart(7)})  ` +
         `에폭 ${r.epochMin.toFixed(2).padStart(6)}분  ` +
         `dispatch ${String(r.dispatches).padStart(5)}  ` +
         `제출 ${String(r.submits).padStart(3)}  ` +
@@ -260,7 +280,10 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
         `${err instanceof Error ? `${err.constructor.name}: ${err.message.slice(0, 120)}` : String(err)}`);
     }
   }
-  return "ResNet-18(CIFAR) · 배치별 실제 학습 스텝\n" + lines.join("\n");
+  // **어느 장치에서 잰 것인지가 수보다 먼저 온다.** 헤드리스 브라우저가 소프트웨어
+  // 어댑터를 주면 예외 없이 느린 수가 나오고, 그것은 라이브러리의 성적이 아니다.
+  return `ResNet-18(CIFAR) · 배치별 실제 학습 스텝\n어댑터: ${Device.adapterInfo}\n`
+    + lines.join("\n");
 }
 
 /** 구역을 밖에서도 쓸 수 있게 — 러너가 전체를 한 겹 더 감싼다. */

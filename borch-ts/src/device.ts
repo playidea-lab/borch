@@ -67,6 +67,12 @@ export class Device {
     }
     const adapter = await gpu.requestAdapter();
     if (!adapter) throw new Error("WebGPU 어댑터를 못 얻었다.");
+    // **어느 장치인지 알아야 잰 수가 뜻을 갖는다.** 헤드리스 브라우저는 진짜 GPU 대신
+    // 소프트웨어 어댑터를 주는 일이 있고, 그것도 어댑터라 예외가 안 난다 — 그러면
+    // 벽시계는 멀쩡히 돌고 "느리다" 는 결론만 남는다. 재는 쪽이 이것을 봐야 한다.
+    const info: Partial<GPUAdapterInfo> = adapter.info ?? {};
+    Device.adapterInfo = [info.vendor, info.architecture, info.device,
+      info.description].filter(Boolean).join(" / ") || "(알 수 없음)";
     // 기본 한계를 그대로 쓰지 않고 어댑터가 주는 최대치를 요청한다. 기본
     // maxStorageBufferBindingSize 는 128MB 이고, 그 위에서 조용히 틀린 답이 나온다.
     const want: Record<string, number> = {
@@ -459,4 +465,7 @@ export class Device {
 
   /** 워크그룹 크기. 커널과 장치가 같은 값을 봐야 한다. */
   static readonly workgroup = WORKGROUP;
+
+  /** 어느 어댑터에 붙었는가. 성능을 재는 쪽이 반드시 같이 적어야 하는 값이다. */
+  static adapterInfo = "(아직 안 붙음)";
 }
