@@ -321,7 +321,8 @@ def randn(*shape, **kw):
     from ._base import tensor as _t
 
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
-    return _t(_np.random.default_rng(0).standard_normal(tuple(shape)).astype("float32"))
+    return _t(_np.random.default_rng(0).standard_normal(tuple(shape)).astype("float32"),
+              requires_grad=kw.get("requires_grad", False))
 
 
 def rand(*shape, **kw):
@@ -342,10 +343,28 @@ def as_tensor(data, dtype=None):
     return data if isinstance(data, Tensor) else _t(data, dtype)
 
 
+def matrix_power(x, n):
+    """**음수 지수는 역행렬의 거듭제곱이다.** borch.ts 는 1 이상만 한다.
+
+    `A^-2 = (A^-1)^2` 라, 뒤집고 나서 양수로 부르면 된다. 0 은 단위행렬이다.
+    """
+    h = handle(x)
+    if n == 0:
+        return wrap(_ts.Tensor.eye(int(h.shape[0]), int(h.shape[0])))
+    if n < 0:
+        h = settle(h.inverse())._h
+        n = -n
+    return guarded(h.matrixPower, n)
+
+
 def quantile(x, q, dim=None, **kw):
     """`q` 는 수 하나일 수도 목록일 수도 있다 — borch.ts 는 늘 목록을 받는다."""
-    qs = [float(v) for v in ([q] if isinstance(q, (int, float)) else q)]
-    return guarded(handle(x).quantile, _to_js(qs))
+    one = isinstance(q, (int, float))
+    qs = [float(v) for v in ([q] if one else q)]
+    out = guarded(handle(x).quantile, _to_js(qs))
+    # **수 하나를 주면 스칼라가 나온다.** torch 가 그렇다 — 목록으로 물었을 때만
+    # 축이 생긴다. borch.ts 는 늘 목록이라 여기서 접는다.
+    return wrap(out._h.reshape(_js_list([]))) if one else out
 
 
 def squeeze(x, dim=None, **kw):
@@ -469,6 +488,18 @@ class _MinMax:
 # **`torch.linalg` 는 이름 공간이다.** 대부분 텐서 메서드로 있고, 값에 따라 크기가
 # 정해지는 것들(`cholesky`·`svd`·`eigh`)은 비동기라 `settle` 이 기다린다.
 class _Linalg:
+    def lstsq(self, a, b):
+        """torch 는 `.solution` 이 든 물건을 준다 — borch.ts 는 답을 바로 준다."""
+        from ._base import _Fields
+        got = settle(handle(a).lstsq(handle(b)))
+        out = _Fields.__new__(_Fields)
+        object.__setattr__(out, "_order", ["solution"])
+        object.__setattr__(out, "_d", {"solution": got})
+        return out
+
+    def matrix_power(self, a, n):
+        return matrix_power(a, n)
+
     def __getattr__(self, name):
         js_name = camel({"inv": "inverse", "matrix_rank": "matrixRank"}.get(name, name))
 

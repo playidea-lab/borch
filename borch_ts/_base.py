@@ -237,7 +237,11 @@ class Tensor:
 
         # **기울기가 켜진 잎은 제자리로 못 고친다.** torch 가 그 자리에서 던지고
         # 골든이 그것을 굳혔다 — 흘려보내면 역전파가 이미 지난 값을 보게 된다.
+        # **`no_grad` 안에서는 된다.** torch 도 그렇다 — 기울기를 안 만드는 동안에는
+        # 잎을 고쳐도 역전파가 볼 것이 없다. 그 조건을 빼먹었더니 옵티마이저가
+        # 파라미터를 갱신하는 정상 경로까지 막혔다.
         if name.endswith("_") and not name.endswith("__") and \
+                _ts.gradMode.enabled and \
                 bool(self._h.requiresGrad) and not self._h.parents.length:
             raise RuntimeError(
                 "a leaf Variable that requires grad is being used in an "
@@ -285,6 +289,19 @@ class Tensor:
 
     def __matmul__(self, other):
         return guarded(self._h.mm, handle(other))
+
+    def _inplace(js_name):                                   # noqa: N805
+        """`x += 1` 도 제자리 연산이다 — 잎에 기울기가 켜져 있으면 torch 가 거절한다."""
+        def go(self, other):
+            return getattr(self, f"{js_name}_")(other)
+        return go
+
+    __iadd__ = _inplace("add")
+    __isub__ = _inplace("sub")
+    __imul__ = _inplace("mul")
+    __itruediv__ = _inplace("div")
+
+    del _inplace
 
     def __neg__(self):
         return wrap(self._h.neg())
