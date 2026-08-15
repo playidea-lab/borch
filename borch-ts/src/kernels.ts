@@ -2234,3 +2234,49 @@ ${flatId(n)}
   Out[gid] = ${Number.isInteger(value) ? value.toFixed(1) : String(value)};
 }`;
 }
+
+/**
+ * 자리마다 난수를 만드는 해시. **상태를 안 들고 자리와 씨앗만으로 뽑는다.**
+ *
+ * GPU 에는 순서라는 것이 없다. 스레드가 어떤 차례로 도는지 정해져 있지 않으므로
+ * "다음 난수" 를 물려주는 방식은 여기서 뜻이 없고, 같은 입력에 같은 답이 나오지도
+ * 않는다. 그래서 `해시(자리, 씨앗)` 로 뽑는다 — 자리마다 독립이고, 같은 씨앗이면
+ * 같은 답이 나오고, 스레드 사이에 주고받을 것이 없다.
+ *
+ * 쓰는 것은 잘 알려진 정수 뒤섞기(Wang/Jenkins 계열)다. 암호용이 아니고 통계용도
+ * 아니다 — dropout 이 자리를 고르는 데 쓰는 만큼이면 된다. 통계적 성질이 걸린 일이
+ * 생기면 그때는 이것을 쓰면 안 되고, 그 사실을 여기 적어 둔다.
+ */
+const RANDOM_PRELUDE = `
+fn hash_u32(v: u32) -> u32 {
+  var x = v;
+  x = (x ^ 61u) ^ (x >> 16u);
+  x = x + (x << 3u);
+  x = x ^ (x >> 4u);
+  x = x * 0x27d4eb2du;
+  x = x ^ (x >> 15u);
+  return x;
+}
+fn rand01(gid: u32, seed: u32) -> f32 {
+  // 24 비트만 쓴다 — f32 의 가수부가 그만큼이라 그 위는 어차피 안 실린다.
+  let h = hash_u32(gid * 0x9e3779b9u + hash_u32(seed));
+  return f32(h >> 8u) * (1.0 / 16777216.0);
+}`;
+
+/**
+ * Dropout 의 가림막. **살아남은 자리에 `1/(1-p)` 를 적는다** — 0 아니면 그 값이다.
+ *
+ * 가림막을 따로 내놓는 이유는 역방향 때문이다. 순방향에서 뽑은 것과 **같은** 가림막을
+ * 역방향이 봐야 하는데, 다시 뽑으면 씨앗이 같아도 그것을 보장하려고 씨앗을 들고
+ * 다녀야 한다. 만들어 두고 곱하는 편이 짧고, 곱셈의 미분은 이미 있다.
+ */
+export function dropoutMask(n: number, p: number, seed: number): string {
+  const keep = f32lit(1 / (1 - p));
+  return `${RANDOM_PRELUDE}
+@group(0) @binding(0) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = select(0.0, ${keep}, rand01(gid, ${seed >>> 0}u) >= ${f32lit(p)});
+}`;
+}

@@ -876,6 +876,23 @@ class ConvTranspose3d(_ConvTransposeND):
     nd = 3
 
 
+class Dropout(Module):
+    """학습 때만 떨군다. **`_Wrap` 이 아니라 `Module` 인 이유가 모드다** —
+    `_Wrap` 은 `training` 을 안 들고, 그러면 `eval()` 이 내려가도 계속 떨군다."""
+
+    def __init__(self, p=0.5):
+        super().__init__()
+        self.p = p
+        self.training = True
+
+    def train(self, mode=True):
+        self.training = mode
+        return self
+
+    def forward(self, x):
+        return wrap(handle(x).dropout(self.p, self.training))
+
+
 def LayerNorm(shape, eps=1e-5):
     return _Wrap(lambda x: wrap(handle(x).layerNorm(-1, eps)))
 

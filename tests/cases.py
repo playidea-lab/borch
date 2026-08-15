@@ -710,6 +710,92 @@ def act_cases(inp=None):
     return cases
 
 
+DROPOUT_PREFIX = "dropout::"
+
+
+def dropout_cases(inp=None):
+    """Dropout. **값이 아니라 성질을 묻는다.**
+
+    이 표의 다른 케이스는 전부 진짜 torch 의 **값**을 답으로 굳힌다. 여기서는 그럴
+    수가 없다 — 답이 난수기에 달려 있고, 우리 난수기가 torch 의 것과 같을 이유가
+    없기 때문이다. 그렇다고 안 물으면 층 하나가 통째로 검사 밖에 남는다.
+
+    그래서 **torch 와 우리가 똑같이 답할 수 있는 것**만 묻는다:
+
+    - 평가 모드는 항등이다 (값으로 묻는다 — 난수가 안 낀다)
+    - `p=0` 도 항등이고 `p=1` 은 전부 0 이다
+    - 살아남은 값은 정확히 `x/(1-p)` 배다 (**보정을 빠뜨리는 것이 가장 흔한 실수**이고,
+      그러면 학습과 추론의 크기가 안 맞는다)
+    - 떨구는 비율이 대략 `p` 다
+    - 기울기는 살아남은 자리로만 흐른다
+
+    답이 "그런가/아닌가" 이므로 난수기가 달라도 양쪽이 같은 답을 낸다. **값을 못
+    묻는다고 안 묻는 것과, 물을 수 있는 것을 골라 묻는 것은 다르다.**
+    """
+    inp = golden_inputs() if inp is None else inp
+    # 비율을 재려면 표본이 많아야 한다. 작은 배열로 재면 난수의 흔들림이 답을 흔든다.
+    big = np.tile(inp["train_x"], (40, 1)).astype(np.float32)     # 960 × 6
+    x2 = inp["x2"]
+    cases = []
+
+    def verdict(name, fn):
+        cases.append((DROPOUT_PREFIX + name, lambda L, f=fn: f(L)))
+
+    # ── 난수가 안 끼는 자리는 값으로 묻는다. ────────────────────────────────
+    cases.append((DROPOUT_PREFIX + "eval 은 항등",
+                  lambda L: L.nn.functional.dropout(L.tensor(x2), 0.5, training=False)))
+    cases.append((DROPOUT_PREFIX + "p=0 은 항등",
+                  lambda L: L.nn.functional.dropout(L.tensor(x2), 0.0, training=True)))
+    cases.append((DROPOUT_PREFIX + "p=1 은 전부 0",
+                  lambda L: L.nn.functional.dropout(L.tensor(x2), 1.0, training=True)))
+    cases.append((DROPOUT_PREFIX + "nn.Dropout(eval) 은 항등",
+                  lambda L: L.nn.Dropout(0.5).eval()(L.tensor(x2))))
+
+    # ── 난수가 끼는 자리는 성질로 묻는다. ───────────────────────────────────
+    def scaled(L):
+        """살아남은 값이 정확히 `1/(1-p)` 배인가. **보정을 빼먹으면 여기서 걸린다.**"""
+        p = 0.5
+        x = L.tensor(big)
+        out = to_numpy(L.nn.functional.dropout(x, p, training=True))
+        src = np.asarray(big)
+        kept = out != 0
+        if not kept.any():
+            return "아무것도 안 남았다"
+        got = out[kept] / src[kept]
+        return "맞다" if np.allclose(got, 1 / (1 - p), atol=1e-4) else \
+            f"배율이 {float(np.abs(got - 1 / (1 - p)).max()):.3g} 만큼 어긋난다"
+
+    def ratio(L):
+        """떨구는 비율이 대략 `p` 인가. 표본 5,760 개에서 ±5%p 면 넉넉하다."""
+        p = 0.5
+        out = to_numpy(L.nn.functional.dropout(L.tensor(big), p, training=True))
+        dropped = float((out == 0).mean())
+        return "대략 맞다" if abs(dropped - p) < 0.05 else f"{dropped:.3f} 이 떨어졌다"
+
+    def flows(L):
+        """기울기가 **살아남은 자리로만** 흐르는가. 떨군 자리에 0 이 아닌 것이 오면 틀렸다."""
+        x = L.tensor(big, requires_grad=True)
+        out = L.nn.functional.dropout(x, 0.5, training=True)
+        out.sum().backward()
+        got = to_numpy(x.grad)
+        made = to_numpy(out)
+        stray = int(((made == 0) & (got != 0)).sum())
+        return "살아남은 자리로만" if stray == 0 else f"떨군 자리 {stray} 곳에 흘렀다"
+
+    def differs(L):
+        """두 번 부르면 **다른 자리**를 떨구는가. 한 번 뽑아 캐시하면 여기서 걸린다."""
+        x = L.tensor(big)
+        a = to_numpy(L.nn.functional.dropout(x, 0.5, training=True))
+        b = to_numpy(L.nn.functional.dropout(x, 0.5, training=True))
+        return "다르다" if not np.array_equal(a == 0, b == 0) else "두 번이 같다"
+
+    verdict("살아남은 값은 1/(1-p) 배", scaled)
+    verdict("대략 p 만큼 떨군다", ratio)
+    verdict("기울기는 살아남은 자리로만", flows)
+    verdict("두 번 부르면 다른 자리", differs)
+    return cases
+
+
 OPT_PREFIX = "opt::"
 
 # `(이름, 인자)`. **하나씩은 안 된다** — 옵티마이저는 상태를 쌓으므로 첫 스텝에서는
@@ -2594,7 +2680,8 @@ def golden_cases(inp=None):
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
-            + opt_cases(inp) + webgpu_cases(inp) + edge_cases(inp))
+            + opt_cases(inp) + dropout_cases(inp)
+            + webgpu_cases(inp) + edge_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

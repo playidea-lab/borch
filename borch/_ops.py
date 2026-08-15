@@ -1926,9 +1926,17 @@ def log_softmax(t, dim=-1):
 
 
 def dropout(t, p=0.5, training=True):
+    """살아남은 값을 `1/(1-p)` 로 키운다 — **그래야 학습과 추론의 크기가 맞는다.**
+
+    `p=1` 을 따로 가른다. 안 가르면 `1/(1-p)` 가 0 으로 나누기가 되어 NaN 이 나오고,
+    NaN 은 자기 자신과도 달라서 그 뒤로는 무엇을 비교해도 통과할 수 없다. torch 는
+    그 자리에서 0 을 준다.
+    """
     if not training or p == 0:
         return _wrap(t)
     t = _wrap(t)
+    if p == 1:
+        return t * Tensor(_np.zeros_like(t.data))
     mask = (_rng.random(t.data.shape) > p).astype(t.data.dtype) / (1 - p)
     return t * Tensor(mask)
 

@@ -38,6 +38,7 @@ import {
   cumulative,
   diagflat,
   diagflatBackward,
+  dropoutMask,
   expandDim,
   extremeBackward,
   fill,
@@ -1722,6 +1723,37 @@ export class Tensor implements Node<Tensor> {
   softmin(dim = -1): Tensor {
     return this.neg().softmax(dim);
   }
+
+  /**
+   * 자리를 골라 떨구고 **살아남은 값을 `1/(1-p)` 로 키운다.**
+   *
+   * 키우는 것이 요점이다 — 그래야 학습 때의 기댓값이 추론 때와 같고, 빼먹으면 두
+   * 모드의 크기가 안 맞는다. `p=1` 은 따로 가른다: `1/(1-p)` 가 0 으로 나누기가 되어
+   * NaN 이 나오고, NaN 은 자기 자신과도 달라서 그 뒤로 아무 비교도 통과 못 한다.
+   *
+   * **부를 때마다 다른 자리를 떨군다.** 씨앗을 하나 올려 가며 쓴다 — 한 번 뽑아
+   * 캐시하면 매 스텝 같은 자리가 죽고, 그것은 dropout 이 아니다.
+   */
+  dropout(p = 0.5, training = true): Tensor {
+    if (!training || p === 0) return this;
+    if (p >= 1) return this.mul(Tensor.full([], 0));
+    const n = this.size;
+    const d = dev();
+    const mask = d.alloc(n);
+    d.run1d(
+      // 씨앗이 이름에 들어가면 스텝마다 셰이더를 새로 굽게 된다. 상수로 굽는 것은
+      // `p` 뿐이고 씨앗은 이름 밖에 둔다 — 대신 파이프라인 하나를 돌려 쓴다.
+      d.pipeline(`drop:${n}:${p}:${Tensor.dropoutSeed}`,
+        () => dropoutMask(n, p, Tensor.dropoutSeed)),
+      [mask],
+      n,
+    );
+    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+    return this.mul(new Tensor(mask, this.shape));
+  }
+
+  /** dropout 이 쓰는 씨앗. 부를 때마다 오른다 — 같은 자리를 두 번 떨구지 않으려고. */
+  static dropoutSeed = 1;
 
   /** 축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다. */
   normalize(dim = 1, eps = 1e-12): Tensor {

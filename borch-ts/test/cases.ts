@@ -462,6 +462,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addAct(out, inputs);
   addNorm(out, inputs);
   addOpt(out, inputs);
+  addDropout(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1109,6 +1110,80 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     const b = new optim.ExponentialLR(o, 0.9).start();
     return new optim.ChainedScheduler([a, b]);
   }, 6));
+}
+
+/**
+ * Dropout. **값이 아니라 성질을 묻는다.**
+ *
+ * 답이 난수기에 달려 있고 우리 난수기가 torch 의 것과 같을 이유가 없다. 그렇다고
+ * 안 물으면 층 하나가 통째로 검사 밖에 남으므로, **양쪽이 똑같이 답할 수 있는 것**만
+ * 묻는다 — 평가 모드는 항등인가, 살아남은 값이 `1/(1-p)` 배인가, 대략 `p` 만큼
+ * 떨구는가, 기울기가 살아남은 자리로만 흐르는가, 두 번 부르면 다른가.
+ */
+function addDropout(out: Map<string, Case>, inp: Inputs): void {
+  const big = (grad = false): Tensor => {
+    // 골든 쪽과 같은 입력 — `train_x` 를 40 번 쌓은 것이다. 비율을 재려면 표본이
+    // 많아야 하고, 작으면 난수의 흔들림이 답을 흔든다.
+    const src = inp.get("train_x");
+    const rows = src.shape[0] ?? 1;
+    const cols = src.shape[1] ?? 1;
+    const tiled = src.expand(40, rows, cols).reshape([40 * rows, cols]);
+    return grad ? asLeaf(tiled) : tiled;
+  };
+
+  out.set("dropout::eval 은 항등", () => inp.get("x2").dropout(0.5, false));
+  out.set("dropout::p=0 은 항등", () => inp.get("x2").dropout(0, true));
+  out.set("dropout::p=1 은 전부 0", () => inp.get("x2").dropout(1, true));
+  out.set("dropout::nn.Dropout(eval) 은 항등",
+    () => new nn.Dropout(0.5).eval().call(inp.get("x2")));
+
+  out.set("dropout::살아남은 값은 1/(1-p) 배", async () => {
+    const x = big();
+    const made = await x.dropout(0.5, true).toArray();
+    const src = await x.toArray();
+    let worst = 0;
+    let any = false;
+    for (let i = 0; i < made.length; i++) {
+      const o = made[i] ?? 0;
+      const s = src[i] ?? 0;
+      if (o === 0 || s === 0) continue;
+      any = true;
+      worst = Math.max(worst, Math.abs(o / s - 2));
+    }
+    if (!any) return "아무것도 안 남았다";
+    return worst < 1e-4 ? "맞다" : `배율이 ${worst.toPrecision(3)} 만큼 어긋난다`;
+  });
+
+  out.set("dropout::대략 p 만큼 떨군다", async () => {
+    const made = await big().dropout(0.5, true).toArray();
+    const zeros = made.reduce((a, v) => a + (v === 0 ? 1 : 0), 0) / made.length;
+    return Math.abs(zeros - 0.5) < 0.05 ? "대략 맞다" : `${zeros.toFixed(3)} 이 떨어졌다`;
+  });
+
+  out.set("dropout::기울기는 살아남은 자리로만", async () => {
+    const x = big(true);
+    const made = x.dropout(0.5, true);
+    made.sum().backward();
+    const values = await made.toArray();
+    const grad = x.grad;
+    if (!grad) return "기울기가 없다";
+    const got = await grad.toArray();
+    let stray = 0;
+    for (let i = 0; i < values.length; i++) {
+      if ((values[i] ?? 0) === 0 && (got[i] ?? 0) !== 0) stray += 1;
+    }
+    return stray === 0 ? "살아남은 자리로만" : `떨군 자리 ${stray} 곳에 흘렀다`;
+  });
+
+  out.set("dropout::두 번 부르면 다른 자리", async () => {
+    const x = big();
+    const a = await x.dropout(0.5, true).toArray();
+    const b = await x.dropout(0.5, true).toArray();
+    for (let i = 0; i < a.length; i++) {
+      if (((a[i] ?? 0) === 0) !== ((b[i] ?? 0) === 0)) return "다르다";
+    }
+    return "두 번이 같다";
+  });
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

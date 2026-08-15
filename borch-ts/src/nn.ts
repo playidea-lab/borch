@@ -728,6 +728,22 @@ export class ConvTransposeND extends Module {
   }
 }
 
+/**
+ * 학습 때만 자리를 떨군다. **평가 모드에서는 항등이다.**
+ *
+ * `training` 은 `Module` 이 들고 있고 `eval()` 이 컨테이너를 뚫고 내려가 끈다 —
+ * 그 전파가 끊기면 학습은 멀쩡하고 추론만 틀린다.
+ */
+export class Dropout extends Module {
+  constructor(private readonly p = 0.5) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.dropout(this.p, this.training);
+  }
+}
+
 export class MaxPool2d extends Module {
   constructor(private readonly kernel = 2) {
     super();
