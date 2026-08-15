@@ -84,6 +84,9 @@ from ._ops import (
     # 색인으로 쓰는 쪽.
     bucketize, index_add, index_copy, index_fill, scatter, scatter_add,
     searchsorted, take, take_along_dim,
+    # 수치 계열. 뒤의 셋은 급수로 센다.
+    cdist, corrcoef, cov, cumulative_trapezoid, digamma, erfinv, lgamma,
+    tensordot, trapezoid,
 )
 from ._nn import (
     AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,

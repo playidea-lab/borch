@@ -710,6 +710,58 @@ def act_cases(inp=None):
     return cases
 
 
+NUM_PREFIX = "num::"
+
+
+def numeric_cases(inp=None):
+    """수치 계열. **조합되는 것과 급수로 세는 것이 섞여 있다.**
+
+    앞의 묶음들은 있는 연산을 엮으면 끝났다. 여기 `lgamma`·`digamma`·`erfinv` 는
+    닫힌 식이 없어서 근사식을 적어야 하고, 그러면 **얼마나 맞는가**가 곧 답이다 —
+    이 저장소의 허용 오차(1e-4)를 지나야 하고 그것이 이 케이스들의 값어치다.
+
+    `cdist`·`corrcoef`·`cov` 는 통계 쪽에서 늘 부르는 것들이고 전부 조합이다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    x1, x2 = inp["x1"], inp["xp"]                       # xp 는 양수만
+    mat = inp["x2"]                                     # (3, 4)
+    other = (mat * 0.5 + 1.0).astype(np.float32)
+    # 감마 계열은 **양수에서만** 본다. 음의 정수에서 발산하는 것이 정의라, 그 자리를
+    # 케이스로 두면 무한대 비교가 되고 근사식의 품질과 상관없는 것을 묻게 된다.
+    gam = np.array([0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.5], dtype=np.float32)
+    unit = np.array([-0.9, -0.5, -0.1, 0.0, 0.1, 0.5, 0.9], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((NUM_PREFIX + name, fn))
+
+    def with_grad(name, fn, arr):
+        add(name, lambda L, f=fn, a=arr: f(L, L.tensor(a)))
+
+        def grad(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, n)
+        cases.append((NUM_PREFIX + f"grad::{name}", grad))
+
+    # ── 조합되는 것들. ─────────────────────────────────────────────────────
+    add("cdist", lambda L: L.cdist(L.tensor(mat), L.tensor(other)))
+    add("corrcoef", lambda L: L.corrcoef(L.tensor(mat)))
+    add("cov", lambda L: L.cov(L.tensor(mat)))
+    add("tensordot",
+        lambda L: L.tensordot(L.tensor(mat), L.tensor(other), dims=([1], [1])))
+    add("trapezoid", lambda L: L.trapezoid(L.tensor(x2)))
+    add("trapezoid(dx)", lambda L: L.trapezoid(L.tensor(x2), dx=0.5))
+    add("cumulative_trapezoid", lambda L: L.cumulative_trapezoid(L.tensor(x2)))
+
+    # ── 급수로 세는 것들. **여기서는 얼마나 맞는가가 답이다.** ───────────────
+    with_grad("lgamma", lambda L, x: L.lgamma(x), gam)
+    with_grad("digamma", lambda L, x: L.digamma(x), gam)
+    with_grad("erfinv", lambda L, x: L.erfinv(x), unit)
+    return cases
+
+
 INDEX_PREFIX = "index::"
 
 
@@ -3058,7 +3110,7 @@ def golden_cases(inp=None):
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
-            + new_function_cases(inp) + index_cases(inp)
+            + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

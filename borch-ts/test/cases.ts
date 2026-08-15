@@ -468,6 +468,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addPool(out, inputs);
   addNewFn(out, inputs);
   addIndex(out, inputs);
+  addNumeric(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1523,6 +1524,82 @@ function addIndex(out: Map<string, Case>, inp: Inputs): void {
   out.set("index::searchsorted", () => counted(false));
   out.set("index::searchsorted(right)", () => counted(true));
   out.set("index::bucketize", () => counted(false));
+}
+
+/**
+ * 수치 계열. **조합되는 것과 급수로 세는 것이 섞여 있다.**
+ *
+ * `lgamma`·`digamma`·`erfinv` 는 닫힌 식이 없어서 근사식을 WGSL 에 적었다. 여기서
+ * 묻는 것은 **f32 로 센 것이 torch 의 배정도와 허용 오차 안인가**이고, 그것이
+ * 이 케이스들의 값어치 전부다.
+ */
+function addNumeric(out: Map<string, Case>, inp: Inputs): void {
+  const mat = (): Tensor => inp.get("x2");
+  const other = (): Tensor =>
+    mat().mul(Tensor.full([], 0.5)).add(Tensor.full([], 1));
+  const pos = (grad = false): Tensor => {
+    const t = inp.get("xp");
+    return grad ? asLeaf(t) : t;
+  };
+  // 감마 계열은 양수에서만 본다 — 음의 정수에서 발산하는 것이 정의다.
+  const gam = (grad = false): Tensor => {
+    const t = Tensor.from([0.1, 0.5, 1, 1.5, 2, 3, 5, 8.5], [8]);
+    return grad ? asLeaf(t) : t;
+  };
+  const unit = (grad = false): Tensor => {
+    const t = Tensor.from([-0.9, -0.5, -0.1, 0, 0.1, 0.5, 0.9], [7]);
+    return grad ? asLeaf(t) : t;
+  };
+
+  const cov = (t: Tensor): Tensor => {
+    const n = t.shape[1] ?? 1;
+    const centered = t.sub(t.mean(1, true));
+    return centered.mm(centered.transpose()).mul(Tensor.full([], 1 / (n - 1)));
+  };
+
+  /** 사다리꼴 조각. 이웃한 두 점의 평균에 간격을 곱한 것. */
+  const pieces = (y: Tensor, dx: number): Tensor => {
+    const n = y.shape[0] ?? 1;
+    return y.narrow(0, 0, n - 1).add(y.narrow(0, 1, n - 1))
+      .mul(Tensor.full([], dx / 2));
+  };
+
+  const table: [string, () => Tensor][] = [
+    ["cdist", () => {
+      const [n = 1, k = 1] = mat().shape;
+      const m = other().shape[0] ?? 1;
+      const diff = mat().reshape([n, 1, k]).sub(other().reshape([1, m, k]));
+      return diff.mul(diff).sumDim(2).sqrt();
+    }],
+    ["cov", () => cov(mat())],
+    ["corrcoef", () => {
+      const c = cov(mat());
+      const n = c.shape[0] ?? 1;
+      const d = c.diagonal();
+      return c.div(d.reshape([n, 1]).mul(d.reshape([1, n])).sqrt());
+    }],
+    ["tensordot", () => mat().mm(other().transpose())],
+    ["trapezoid", () => pieces(pos(), 1).sum()],
+    ["trapezoid(dx)", () => pieces(pos(), 0.5).sum()],
+    ["cumulative_trapezoid", () => pieces(pos(), 1).cumsum(0)],
+    ["lgamma", () => gam().lgamma()],
+    ["digamma", () => gam().digamma()],
+    ["erfinv", () => unit().erfinv()],
+  ];
+  for (const [name, fn] of table) out.set(`num::${name}`, fn);
+
+  const grads: [string, (x: Tensor) => Tensor, (g?: boolean) => Tensor][] = [
+    ["lgamma", (x) => x.lgamma(), gam],
+    ["digamma", (x) => x.digamma(), gam],
+    ["erfinv", (x) => x.erfinv(), unit],
+  ];
+  for (const [name, fn, make] of grads) {
+    out.set(`num::grad::${name}`, () => {
+      const x = make(true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  }
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

@@ -3267,6 +3267,9 @@ export interface Tensor {
   round(): Tensor;
   trunc(): Tensor;
   frac(): Tensor;
+  lgamma(): Tensor;
+  digamma(): Tensor;
+  erfinv(): Tensor;
   hardsigmoid(): Tensor;
   hardswish(): Tensor;
   logsigmoid(): Tensor;

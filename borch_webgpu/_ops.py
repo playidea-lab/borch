@@ -981,6 +981,100 @@ def cross(a, b, dim=-1, **kw):
                 part(a, 0) * part(b, 1) - part(a, 1) * part(b, 0)], axis)
 
 
+# ── 수치 계열. **급수로 세는 셋은 WGSL 에 있고 나머지는 조합이다.** ─────────
+
+def cdist(a, b, p=2.0, **kw):
+    """모든 짝 사이의 거리. 브로드캐스팅 하나로 풀린다."""
+    a, b = wrap(a), wrap(b)
+    n, k = _shape_list(a)
+    m = _shape_list(b)[0]
+    diff = (wrap(guarded(handle(a).reshape, _js_list([n, 1, k])))
+            - wrap(guarded(handle(b).reshape, _js_list([1, m, k]))))
+    if p == 2.0:
+        return (diff * diff).sum(dim=2).sqrt()
+    return ((_unary(diff, "abs") ** p).sum(dim=2)) ** (1.0 / p)
+
+
+def cov(t, correction=1, **kw):
+    """공분산. **줄이 변수이고 칸이 관측이다** — numpy 와 축이 반대라 헷갈린다."""
+    t = wrap(t)
+    shape = _shape_list(t)
+    if len(shape) == 1:
+        t = wrap(guarded(handle(t).reshape, _js_list([1, shape[0]])))
+        shape = [1, shape[0]]
+    n = shape[1]
+    centered = t - t.mean(dim=1, keepdim=True)
+    return (centered @ transpose(centered, 0, 1)) * (1.0 / builtins.max(1, n - correction))
+
+
+def corrcoef(t, **kw):
+    """공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다."""
+    c = cov(t)
+    n = _shape_list(c)[0]
+    diag = wrap(guarded(handle(c).diagonal))
+    scale = (wrap(guarded(handle(diag).reshape, _js_list([n, 1])))
+             * wrap(guarded(handle(diag).reshape, _js_list([1, n]))))
+    return c / _unary(scale, "sqrt")
+
+
+def tensordot(a, b, dims=2, **kw):
+    """지정한 축끼리 접어 곱한다. 접을 축을 몰고 행렬곱 한 번으로 끝낸다."""
+    a, b = wrap(a), wrap(b)
+    ash, bsh = _shape_list(a), _shape_list(b)
+    if isinstance(dims, int):
+        left = list(range(len(ash) - dims, len(ash)))
+        right = list(range(dims))
+    else:
+        left, right = [list(v) for v in dims]
+    a_keep = [i for i in range(len(ash)) if i not in left]
+    b_keep = [i for i in range(len(bsh)) if i not in right]
+    a_shape = [ash[i] for i in a_keep]
+    b_shape = [bsh[i] for i in b_keep]
+    inner = 1
+    for i in left:
+        inner *= ash[i]
+    rows = 1
+    for v in a_shape:
+        rows *= v
+    cols = 1
+    for v in b_shape:
+        cols *= v
+    am = wrap(guarded(handle(wrap(guarded(handle(a).permute,
+                                          _js_list(a_keep + left)))).reshape,
+                      _js_list([rows, inner])))
+    bm = wrap(guarded(handle(wrap(guarded(handle(b).permute,
+                                          _js_list(right + b_keep)))).reshape,
+                      _js_list([inner, cols])))
+    return wrap(guarded(handle(am @ bm).reshape, _js_list(a_shape + b_shape)))
+
+
+def _trapezoid_pieces(y, x, dx, dim):
+    y = wrap(y)
+    rank = len(_shape_list(y))
+    axis = dim + rank if dim < 0 else dim
+    n = _shape_list(y)[axis]
+    left = wrap(guarded(handle(y).narrow, axis, 0, n - 1))
+    right = wrap(guarded(handle(y).narrow, axis, 1, n - 1))
+    if x is None:
+        return (left + right) * (dx / 2.0), axis
+    x = wrap(x)
+    step = (wrap(guarded(handle(x).narrow, axis, 1, n - 1))
+            - wrap(guarded(handle(x).narrow, axis, 0, n - 1)))
+    return (left + right) * step * 0.5, axis
+
+
+def trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
+    """사다리꼴 적분. 이웃한 두 점의 평균에 간격을 곱해 더한다."""
+    pieces, axis = _trapezoid_pieces(y, x, kw.get("dx", dx), dim)
+    return pieces.sum(dim=axis)
+
+
+def cumulative_trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
+    """누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다."""
+    pieces, axis = _trapezoid_pieces(y, x, kw.get("dx", dx), dim)
+    return wrap(guarded(handle(pieces).cumsum, axis))
+
+
 # ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────
 
 def _spread_index(index, dim, shape):

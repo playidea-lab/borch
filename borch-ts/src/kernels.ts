@@ -84,6 +84,78 @@ fn erfc_(x: f32) -> f32 {
 }`;
 
 /**
+ * 감마 계열. **코어(numpy)와 같은 식을 적는다** — 두 벌을 다르게 적으면 어느 쪽이
+ * 맞는지를 골든이 못 가른다.
+ *
+ * `lgamma` 는 란초시(g=7, n=9), `digamma`·`trigamma` 는 되풀이 식으로 6 이상까지
+ * 밀고 스털링 점근 전개를 쓴다. 작은 x 에서 점근식이 안 맞기 때문이고, 미는 자리를
+ * 빼먹으면 0 근처에서만 조용히 틀린다.
+ */
+const GAMMA_PRELUDE = `
+const LANCZOS = array<f32, 9>(
+  0.9999999999998099, 676.5203681218851, -1259.1392167224028,
+  771.3234287776531, -176.6150291621406, 12.507343278686905,
+  -0.13857109526572012, 9.984369578019572e-6, 1.5056327351493116e-7);
+fn lgamma_(x: f32) -> f32 {
+  // 반사 공식으로 음수 쪽을 접는다: Γ(x)Γ(1−x) = π/sin(πx).
+  let neg = x < 0.5;
+  let z = select(x, 1.0 - x, neg) - 1.0;
+  var acc = LANCZOS[0];
+  for (var i = 1; i < 9; i = i + 1) { acc = acc + LANCZOS[i] / (z + f32(i)); }
+  let t = z + 7.5;
+  let out = 0.9189385332046727 + (z + 0.5) * log(t) - t + log(abs(acc));
+  let flipped = log(3.141592653589793 / abs(sin(3.141592653589793 * x))) - out;
+  return select(out, flipped, neg);
+}
+fn digamma_(x0: f32) -> f32 {
+  var x = x0;
+  var out = 0.0;
+  // 6 이상으로 민다 — 점근식이 그 아래에서 안 맞는다.
+  for (var i = 0; i < 8; i = i + 1) {
+    if (x >= 6.0) { break; }
+    out = out - 1.0 / x;
+    x = x + 1.0;
+  }
+  let inv = 1.0 / x;
+  let inv2 = inv * inv;
+  return out + log(x) - 0.5 * inv
+    - inv2 * (0.08333333333333333 - inv2 * (0.008333333333333333 - inv2 * 0.003968253968253968));
+}
+fn trigamma_(x0: f32) -> f32 {
+  var x = x0;
+  var out = 0.0;
+  for (var i = 0; i < 8; i = i + 1) {
+    if (x >= 6.0) { break; }
+    out = out + 1.0 / (x * x);
+    x = x + 1.0;
+  }
+  let inv = 1.0 / x;
+  let inv2 = inv * inv;
+  return out + inv * (1.0 + 0.5 * inv
+    + inv2 * (0.16666666666666666 - inv2 * (0.03333333333333333 - inv2 * 0.023809523809523808)));
+}`;
+
+/**
+ * `erf` 의 역함수. 구간을 둘로 가른다 — 가운데와 꼬리는 수렴이 달라서 한 식으로
+ * 못 덮고, 덮으려 들면 한쪽이 허용 오차를 넘는다. 마지막에 뉴턴 한 번으로 조인다.
+ */
+const ERFINV_PRELUDE = `
+fn erfinv_(x: f32) -> f32 {
+  let z = x * x;
+  let mid = x * (((-0.140543331 * z + 0.914624893) * z - 1.645349621) * z + 0.886226899)
+    / ((((0.012229801 * z - 0.329097515) * z + 1.442710462) * z - 2.118377725) * z + 1.0);
+  let safe = clamp(abs(x), 0.0, 0.999999);
+  let w = sqrt(-log((1.0 - safe) / 2.0));
+  let tail = sign(x) * (((1.641345311 * w + 3.429567803) * w - 1.624906493) * w - 1.970840454)
+    / ((1.6370678 * w + 3.5438892) * w + 1.0);
+  var out = select(tail, mid, abs(x) <= 0.7);
+  // 근사식만으로는 허용 오차 언저리다. 뉴턴 한 번이 그것을 넘긴다.
+  let err = erf_(out) - x;
+  out = out - err / (1.1283791670955126 * exp(-out * out));
+  return out;
+}`;
+
+/**
  * 도함수가 없는 것(`sign`·`floor` 같은 계단)은 `bwd: "0.0"` 이다.
  *
  * **그래프를 끊지 않는다.** torch 는 0 을 흘리고, 거절과 0 은 다르다 — 자매에서
@@ -245,6 +317,27 @@ fn softsign_grad(x: f32) -> f32 {
   tanhshrink: {
     fwd: "x - tanh(x)",
     bwd: "tanh(x) * tanh(x)",
+  },
+  // ── 급수로 세는 것들. **닫힌 식이 없다.** ────────────────────────────────
+  //
+  // 계수는 잘 알려진 표를 그대로 쓴다 — 자릿수를 줄이면 그만큼 답이 틀린다.
+  // 코어(numpy)와 **같은 식**을 적는다. 두 벌을 다르게 적으면 어느 쪽이 맞는지를
+  // 골든이 못 가른다.
+  lgamma: {
+    fwd: "lgamma_(x)",
+    bwd: "digamma_(x)",
+    prelude: `${GAMMA_PRELUDE}`,
+  },
+  digamma: {
+    fwd: "digamma_(x)",
+    bwd: "trigamma_(x)",
+    prelude: `${GAMMA_PRELUDE}`,
+  },
+  erfinv: {
+    fwd: "erfinv_(x)",
+    // d/dx erfinv(x) = √π/2 · exp(erfinv(x)²)
+    bwd: "0.8862269254527580 * exp(o * o)",
+    prelude: `${ERF_PRELUDE}${ERFINV_PRELUDE}`,
   },
 };
 

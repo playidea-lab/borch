@@ -1610,6 +1610,207 @@ def gather(t, dim, index):
     return t._make(out, (t,), back, "GatherBackward0")
 
 
+# ── 수치 계열 ──────────────────────────────────────────────────────────────
+
+def cdist(a, b, p=2.0):
+    """모든 짝 사이의 거리. **브로드캐스팅 하나로 풀린다** — 새 커널이 필요 없다."""
+    a, b = _wrap(a), _wrap(b)
+    n, k = a.data.shape
+    m = b.data.shape[0]
+    diff = a.reshape(n, 1, k) - b.reshape(1, m, k)
+    if p == 2.0:
+        return (diff * diff).sum(dim=2).sqrt()
+    return ((diff.abs() ** p).sum(dim=2)) ** (1.0 / p)
+
+
+def cov(t, correction=1, **kw):
+    """공분산. 줄이 변수이고 칸이 관측이다 — numpy 와 축이 반대라 헷갈리는 자리다."""
+    t = _wrap(t)
+    d = t.data
+    if d.ndim == 1:
+        d = d.reshape(1, -1)
+        t = t.reshape(1, d.shape[1])
+    n = d.shape[1]
+    centered = t - t.mean(dim=1, keepdim=True)
+    return (centered @ centered.transpose(0, 1)) * (1.0 / max(1, n - correction))
+
+
+def corrcoef(t):
+    """공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다."""
+    c = cov(t)
+    d = c.data
+    scale = _np.sqrt(_np.outer(_np.diag(d), _np.diag(d)))
+    return c / Tensor(scale.astype(d.dtype))
+
+
+def tensordot(a, b, dims=2, **kw):
+    """지정한 축끼리 접어 곱한다. 축 목록을 받는 꼴만 다룬다 — 그것이 torch 의 기본형이다."""
+    a, b = _wrap(a), _wrap(b)
+    if isinstance(dims, int):
+        rank = len(a.data.shape)
+        left = list(range(rank - dims, rank))
+        right = list(range(dims))
+    else:
+        left, right = [list(v) for v in dims]
+    # 접을 축을 뒤로·앞으로 몰고 행렬곱 한 번으로 끝낸다.
+    a_keep = [i for i in range(len(a.data.shape)) if i not in left]
+    b_keep = [i for i in range(len(b.data.shape)) if i not in right]
+    a_shape = [a.data.shape[i] for i in a_keep]
+    b_shape = [b.data.shape[i] for i in b_keep]
+    inner = int(_np.prod([a.data.shape[i] for i in left], dtype=int))
+    am = a.permute(*(a_keep + left)).reshape(int(_np.prod(a_shape, dtype=int)), inner)
+    bm = b.permute(*(right + b_keep)).reshape(inner, int(_np.prod(b_shape, dtype=int)))
+    return (am @ bm).reshape(*(a_shape + b_shape))
+
+
+def trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
+    """사다리꼴 적분. 이웃한 두 점의 평균에 간격을 곱해 더한다."""
+    y = _wrap(y)
+    rank = len(y.data.shape)
+    axis = dim + rank if dim < 0 else dim
+    n = y.data.shape[axis]
+    left = narrow(y, axis, 0, n - 1)
+    right = narrow(y, axis, 1, n - 1)
+    if x is None:
+        return ((left + right) * (dx / 2.0)).sum(dim=axis)
+    x = _wrap(x)
+    step = narrow(x, axis, 1, n - 1) - narrow(x, axis, 0, n - 1)
+    return ((left + right) * step * 0.5).sum(dim=axis)
+
+
+def cumulative_trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
+    """`trapezoid` 의 누적판. 마지막 값이 `trapezoid` 와 같아야 한다."""
+    y = _wrap(y)
+    rank = len(y.data.shape)
+    axis = dim + rank if dim < 0 else dim
+    n = y.data.shape[axis]
+    left = narrow(y, axis, 0, n - 1)
+    right = narrow(y, axis, 1, n - 1)
+    pieces = (left + right) * (dx / 2.0)
+    if x is not None:
+        x = _wrap(x)
+        step = narrow(x, axis, 1, n - 1) - narrow(x, axis, 0, n - 1)
+        pieces = (left + right) * step * 0.5
+    return cumsum(pieces, axis)
+
+
+# 란초시 계수(g=7, n=9). **손으로 안 고른다** — 잘 알려진 표이고, 여기서 자릿수를
+# 줄이면 그만큼 답이 틀린다.
+_LANCZOS = (0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+            771.32342877765313, -176.61502916214059, 12.507343278686905,
+            -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7)
+
+
+def _lgamma_np(d):
+    """감마의 로그. **numpy 에 없다** — 란초시 근사를 원소별로 적는다.
+
+    `np.vectorize` 를 안 쓴다. 이 저장소가 `gelu` 에서 그것으로 20 배를 잃었고,
+    원소별 numpy 로 바꿔 같은 값을 20 배 빠르게 냈다 — 같은 실수를 다시 하지 않는다.
+
+    반사 공식으로 음수 쪽을 접는다: `Γ(x)Γ(1−x) = π/sin(πx)`.
+    """
+    x = _np.asarray(d, dtype=_np.float64)
+    neg = x < 0.5
+    z = _np.where(neg, 1.0 - x, x) - 1.0
+    acc = _np.full(z.shape, _LANCZOS[0])
+    for i in range(1, len(_LANCZOS)):
+        acc = acc + _LANCZOS[i] / (z + i)
+    t = z + len(_LANCZOS) - 1.5
+    out = (0.5 * _math.log(2 * _math.pi) + (z + 0.5) * _np.log(t) - t
+           + _np.log(_np.abs(acc)))
+    # 반사: lgamma(x) = log(π/|sin(πx)|) − lgamma(1−x)
+    flipped = _np.log(_np.pi / _np.abs(_np.sin(_np.pi * _np.where(neg, x, 0.5)))) - out
+    return _np.where(neg, flipped, out)
+
+
+def _polygamma0(d):
+    """`digamma` — 감마의 로그미분. **되풀이 식으로 큰 쪽으로 밀고 점근식을 쓴다.**
+
+    작은 x 에서 점근식이 안 맞으므로 `ψ(x) = ψ(x+1) − 1/x` 로 6 이상까지 올린 뒤
+    센다. numpy 에 없는 몇 안 되는 자리라 손으로 적는다.
+    """
+    x = _np.asarray(d, dtype=_np.float64)
+    out = _np.zeros_like(x)
+    while _np.any(x < 6):
+        small = x < 6
+        out = _np.where(small, out - 1.0 / _np.where(small, x, 1.0), out)
+        x = _np.where(small, x + 1.0, x)
+    inv = 1.0 / x
+    inv2 = inv * inv
+    # 스털링 계열의 점근 전개. 여섯 항이면 x ≥ 6 에서 float32 정밀도를 넘는다.
+    series = (_np.log(x) - 0.5 * inv
+              - inv2 * (1.0 / 12 - inv2 * (1.0 / 120 - inv2 / 252)))
+    return out + series
+
+
+def _polygamma1(d):
+    """`trigamma` — `digamma` 의 미분. 같은 방식으로 밀고 점근식을 쓴다."""
+    x = _np.asarray(d, dtype=_np.float64)
+    out = _np.zeros_like(x)
+    while _np.any(x < 6):
+        small = x < 6
+        out = _np.where(small, out + 1.0 / _np.where(small, x, 1.0) ** 2, out)
+        x = _np.where(small, x + 1.0, x)
+    inv = 1.0 / x
+    inv2 = inv * inv
+    return out + inv * (1.0 + 0.5 * inv
+                        + inv2 * (1.0 / 6 - inv2 * (1.0 / 30 - inv2 / 42)))
+
+
+def _erfinv_np(d):
+    """`erf` 의 역함수. **닫힌 식이 없다** — 잘 알려진 유리식 근사를 쓴다.
+
+    구간을 둘로 가른다. 가운데(|x| ≤ 0.7)와 꼬리는 수렴이 달라서 한 식으로 못 덮고,
+    한 식으로 덮으려 들면 한쪽이 허용 오차를 넘는다.
+    """
+    x = _np.asarray(d, dtype=_np.float64)
+    a = (0.886226899, -1.645349621, 0.914624893, -0.140543331)
+    b = (1.0, -2.118377725, 1.442710462, -0.329097515, 0.012229801)
+    c = (-1.970840454, -1.624906493, 3.429567803, 1.641345311)
+    e = (1.0, 3.543889200, 1.637067800)
+
+    z = x * x
+    mid = (x * (((a[3] * z + a[2]) * z + a[1]) * z + a[0])
+           / ((((b[4] * z + b[3]) * z + b[2]) * z + b[1]) * z + b[0]))
+    # 꼬리 — `sqrt(-log((1−|x|)/2))` 로 옮겨 센다.
+    safe = _np.clip(_np.abs(x), 0.0, 1 - 1e-12)
+    w = _np.sqrt(-_np.log((1.0 - safe) / 2.0))
+    tail = (_np.sign(x) * (((c[3] * w + c[2]) * w + c[1]) * w + c[0])
+            / ((e[2] * w + e[1]) * w + e[0]))
+    out = _np.where(_np.abs(x) <= 0.7, mid, tail)
+    # 뉴턴 한 번. 근사식만으로는 float32 허용 오차 언저리라 한 번 더 조인다.
+    err = _erf64(out) - x
+    return out - err / (2.0 / _math.sqrt(_math.pi) * _np.exp(-out * out))
+
+
+def lgamma(t):
+    """감마 함수의 로그. **미분이 `digamma`** 라 둘 중 하나만 있으면 반쪽이다."""
+    t = _wrap(t)
+    d = t.data
+    out = _lgamma_np(d).astype(d.dtype)
+    return t._make(out, (t,), lambda g: (g * _polygamma0(d).astype(d.dtype),),
+                   "LgammaBackward0")
+
+
+def digamma(t):
+    """감마의 로그미분. 미분은 `trigamma` 다."""
+    t = _wrap(t)
+    d = t.data
+    out = _polygamma0(d).astype(d.dtype)
+    return t._make(out, (t,), lambda g: (g * _polygamma1(d).astype(d.dtype),),
+                   "DigammaBackward0")
+
+
+def erfinv(t):
+    """`erf` 의 역함수. 미분은 `√π/2 · exp(erfinv(x)²)` 다."""
+    t = _wrap(t)
+    d = t.data
+    out = _erfinv_np(d)
+    grad = (_math.sqrt(_math.pi) / 2.0) * _np.exp(out * out)
+    return t._make(out.astype(d.dtype), (t,),
+                   lambda g: (g * grad.astype(d.dtype),), "ErfinvBackward0")
+
+
 # ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────
 
 def _as_index(index):
