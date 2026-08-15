@@ -213,7 +213,7 @@ class Tensor:
 
         # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
-        if name in ("clamp", "clip", "split", "chunk", "aminmax"):
+        if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip", "pow"):
             from . import _ops
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(self, *a, **k)

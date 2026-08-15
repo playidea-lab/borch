@@ -124,7 +124,7 @@ _SIGNATURE = {
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
 # 파이썬은 `permute(0, 2, 1)` 로도 부른다. 흩어진 인자를 하나로 모아야 한다 —
 # 안 모으면 `order.map is not a function` 이 난다.
-_GATHERS = frozenset(("permute", "reshape", "view", "flip", "broadcast_to"))
+_GATHERS = frozenset(("permute", "reshape", "view", "broadcast_to"))
 
 # **가변 인자로 받는 것들.** borch.ts 가 `expand(...sizes)` 라 배열이 아니라 흩어진
 # 수를 원한다 — `_GATHERS` 와 정확히 반대다. 파이썬은 둘 다로 부르므로 여기서 편다.
@@ -203,6 +203,12 @@ def __getattr__(name):
     `torch.exp(x)` 와 `x.exp()` 가 같은 것이라는 torch 의 규칙을 그대로 쓴다.
     """
     if name.startswith("_"):
+        raise AttributeError(name)
+    # **`backend` 는 없다고 답해야 한다.** 골든 하네스가 `hasattr(lib, "backend")` 로
+    # 자매를 알아보고 `webgpu::` 케이스를 그쪽에만 묻는다. 그 케이스들은 TF.js 의 랭크
+    # 한계를 못 박는 것이라 여기서는 뜻이 없다 — 무엇이든 돌려주는 `__getattr__` 이
+    # 우리를 자매로 오인하게 만들고 있었다.
+    if name == "backend":
         raise AttributeError(name)
     # dtype 이름들. `bool` 을 모듈 전역에 두면 파이썬 내장을 가리므로 여기서 준다.
     if name in ("bool", "float32", "int64"):
@@ -333,6 +339,39 @@ def einsum(spec, *operands):
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)
+
+
+def flip(x, dims=None, **kw):
+    """torch 는 축 **목록**을 받고 borch.ts 는 하나씩 받는다. 차례로 뒤집는다."""
+    dims = kw.get("dims", dims)
+    if isinstance(dims, int):
+        dims = [dims]
+    out = handle(x)
+    for d in (dims or []):
+        out = out.flip(d)
+    return wrap(out)
+
+
+def pow(x, exponent):                                    # noqa: A001
+    """지수가 수면 `powScalar` 다 — 정수 지수를 곱셈으로 풀어 부호를 지킨다."""
+    if isinstance(exponent, Tensor):
+        return guarded(handle(x).binary, "pow", exponent._h)
+    return guarded(handle(x).powScalar, exponent)
+
+
+def pad(x, pairs, mode="constant", value=0.0, **kw):
+    """torch 의 `F.pad` 는 **마지막 축부터** 짝을 받는다 — `(왼, 오, 위, 아래, …)`.
+
+    borch.ts 의 `pad(축, 앞, 뒤, 값)` 은 축 하나씩이다. 짝을 뒤에서부터 풀어 차례로
+    두른다 — 순서를 뒤집지 않으면 엉뚱한 축이 늘어난다.
+    """
+    value = kw.get("value", value)
+    out = handle(x)
+    rank = len(out.shape)
+    for i in range(0, len(pairs), 2):
+        axis = rank - 1 - (i // 2)
+        out = out.pad(axis, pairs[i], pairs[i + 1], float(value))
+    return wrap(out)
 
 
 def split(x, size, dim=0):

@@ -24,6 +24,12 @@ class _Functional:
     """`nn.functional`. 첫 인자의 메서드로 넘긴다 — torch 의 규칙 그대로다."""
 
     def __getattr__(self, name):
+        # 모듈 쪽에 손으로 쓴 것은 여기서도 같은 것을 쓴다 — `F.pad` 가 그 예다.
+        from . import _ops
+        if name in ("pad", "clamp", "flip", "pow", "split", "chunk"):
+            fn = getattr(_ops, name)
+            return lambda *a, **k: fn(*a, **k)
+
         js_name = camel(name)
 
         def call(x, *args, **kw):
@@ -276,9 +282,14 @@ class _Recurrent(Module):
     def __call__(self, x, *rest):
         got = self._m.run(handle(x))
         out, h = wrap(got.output), wrap(got.hidden)
-        h = wrap(h._h.unsqueeze(0))
+        # **축을 셋으로 맞춘다.** torch 의 마지막 상태는 `(층수, 배치, 은닉)` 이다.
+        # 처음에 무조건 하나를 더 붙였더니 넷이 됐다 — 이미 셋이면 그대로 둔다.
+        if h.ndim == 2:
+            h = wrap(h._h.unsqueeze(0))
         if self._m.kind == "LSTM":
-            c = wrap(wrap(got.cell)._h.unsqueeze(0))
+            c = wrap(got.cell)
+            if c.ndim == 2:
+                c = wrap(c._h.unsqueeze(0))
             return out, (h, c)
         return out, h
 
