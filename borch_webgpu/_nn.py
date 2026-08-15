@@ -690,6 +690,74 @@ def Tanh():
     return _Wrap(lambda x: wrap(handle(x).unary("tanh")))
 
 
+# ── 활성함수 층. 전부 borch.ts 의 메서드 하나를 감싼다. ─────────────────────
+#
+# 인자 없는 것은 `unary` 표를 그대로 부르고, 인자를 받는 것은 그 인자를 상수로
+# 구운 커널로 간다 — 어느 쪽이든 파이썬은 이름만 옮긴다.
+
+def _unary_layer(name):
+    return lambda: _Wrap(lambda x, n=name: wrap(handle(x).unary(n)))
+
+
+Hardsigmoid = _unary_layer("hardsigmoid")
+Hardswish = _unary_layer("hardswish")
+LogSigmoid = _unary_layer("logsigmoid")
+Mish = _unary_layer("mish")
+ReLU6 = _unary_layer("relu6")
+SELU = _unary_layer("selu")
+Softsign = _unary_layer("softsign")
+Tanhshrink = _unary_layer("tanhshrink")
+
+
+def CELU(alpha=1.0):
+    return _Wrap(lambda x: wrap(handle(x).celu(alpha)))
+
+
+def Hardshrink(lambd=0.5):
+    return _Wrap(lambda x: wrap(handle(x).hardshrink(lambd)))
+
+
+def Softshrink(lambd=0.5):
+    return _Wrap(lambda x: wrap(handle(x).softshrink(lambd)))
+
+
+def Hardtanh(min_val=-1.0, max_val=1.0):
+    return _Wrap(lambda x: wrap(handle(x).hardtanh(min_val, max_val)))
+
+
+def Softplus(beta=1.0, threshold=20.0):
+    return _Wrap(lambda x: wrap(handle(x).softplus(beta, threshold)))
+
+
+def Threshold(threshold, value):
+    return _Wrap(lambda x: wrap(handle(x).threshold(threshold, value)))
+
+
+def Softmin(dim=-1):
+    return _Wrap(lambda x: wrap(handle(x).softmin(dim)))
+
+
+def GLU(dim=-1):
+    return _Wrap(lambda x: wrap(handle(x).glu(dim)))
+
+
+class PReLU(Module):
+    """음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
+
+    `_Wrap` 이 아니라 `Module` 인 이유가 그것이다 — `weight` 가 `named_parameters`
+    에 잡혀야 하고, 그 이름이 `state_dict` 열쇠가 된다.
+    """
+
+    def __init__(self, num_parameters=1, init=0.25):
+        super().__init__()
+        import numpy as _np
+
+        self.weight = Parameter(_np.full(num_parameters, init, dtype=_np.float32))
+
+    def forward(self, x):
+        return wrap(handle(x).prelu(handle(self.weight)))
+
+
 def LayerNorm(shape, eps=1e-5):
     return _Wrap(lambda x: wrap(handle(x).layerNorm(-1, eps)))
 

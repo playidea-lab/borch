@@ -1550,6 +1550,207 @@ def gelu(t):
     return _gelu(_wrap(t))
 
 
+# ── 활성함수 열일곱 ─────────────────────────────────────────────────────────
+#
+# **꺾이는 점에서 어느 쪽을 고르는지가 전부다.** 식은 문서에 있지만 `x == 0`,
+# `x == ±3`, `x == 6` 처럼 정확히 경계인 자리에서 torch 가 무엇을 주는지는 재봐야
+# 안다 — 난수 입력은 그 점을 절대 안 준다. 골든의 `kinks` 가 그 점들이다.
+#
+# 상수는 torch 의 것을 그대로 적는다. 근사치를 쓰면 값이 5 자리쯤에서 갈리고,
+# 그것은 "거의 맞는" 상태라 오래 안 걸린다.
+_SELU_ALPHA = 1.6732632423543772848170429916717
+_SELU_SCALE = 1.0507009873554804934193349852946
+
+
+def _sigmoid_of(d):
+    return 1.0 / (1.0 + _np.exp(-_np.clip(d, -60, 60)))
+
+
+def celu(t, alpha=1.0):
+    """CELU. `ELU` 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.
+
+    α=1 이면 ELU 와 같은 값이 나온다 — 그래서 α 를 안 주고 재면 둘을 못 가른다.
+    """
+    t = _wrap(t)
+    pick = t.data > 0
+    inner = _np.exp(_np.minimum(t.data, 0) / alpha)
+    out = _np.where(pick, t.data, alpha * (inner - 1))
+    return t._make(out, (t,), lambda g: (g * _np.where(pick, 1.0, inner),),
+                   "CeluBackward0")
+
+
+def hardshrink(t, lambd=0.5):
+    """|x| > λ 면 그대로, 아니면 0. **경계에서는 0 이다**(`>` 이지 `>=` 가 아니다)."""
+    t = _wrap(t)
+    keep = _np.abs(t.data) > lambd
+    return t._make(_np.where(keep, t.data, 0.0), (t,),
+                   lambda g: (g * keep,), "HardshrinkBackward0")
+
+
+def hardsigmoid(t):
+    """구간별 직선으로 시그모이드를 흉내 낸다. 꺾이는 점이 ±3 이다."""
+    t = _wrap(t)
+    d = t.data
+    out = _np.clip(d / 6.0 + 0.5, 0.0, 1.0)
+    inside = (d > -3.0) & (d < 3.0)
+    return t._make(out, (t,), lambda g: (g * _np.where(inside, 1.0 / 6.0, 0.0),),
+                   "HardsigmoidBackward0")
+
+
+def hardswish(t):
+    """x·hardsigmoid(x). 모바일 쪽에서 swish 대신 쓰는 것."""
+    t = _wrap(t)
+    d = t.data
+    out = _np.where(d <= -3.0, 0.0, _np.where(d >= 3.0, d, d * (d + 3.0) / 6.0))
+    grad = _np.where(d <= -3.0, 0.0, _np.where(d >= 3.0, 1.0, (2.0 * d + 3.0) / 6.0))
+    return t._make(out, (t,), lambda g: (g * grad,), "HardswishBackward0")
+
+
+def hardtanh(t, min_val=-1.0, max_val=1.0):
+    t = _wrap(t)
+    d = t.data
+    inside = (d > min_val) & (d < max_val)
+    return t._make(_np.clip(d, min_val, max_val), (t,),
+                   lambda g: (g * inside,), "HardtanhBackward0")
+
+
+def logsigmoid(t):
+    """log σ(x). **큰 음수에서 곧장 계산하면 log(0) 이 된다** — 안정형으로 쓴다."""
+    t = _wrap(t)
+    d = t.data
+    out = -(_np.logaddexp(0.0, -d))
+    sig = _sigmoid_of(d)
+    return t._make(out.astype(d.dtype), (t,), lambda g: (g * (1.0 - sig),),
+                   "LogSigmoidBackward0")
+
+
+def softplus(t, beta=1.0, threshold=20.0):
+    """(1/β)·log(1+e^{βx}). **βx 가 threshold 를 넘으면 그냥 x 다** — 넘치지 않게.
+
+    그 갈래를 빠뜨리면 큰 입력에서 `inf` 가 나오고, 그 뒤 기울기가 전부 NaN 이 된다.
+    """
+    t = _wrap(t)
+    d = t.data
+    big = beta * d > threshold
+    out = _np.where(big, d, _np.logaddexp(0.0, beta * d) / beta)
+    sig = _sigmoid_of(beta * d)
+    return t._make(out.astype(d.dtype), (t,),
+                   lambda g: (g * _np.where(big, 1.0, sig),), "SoftplusBackward0")
+
+
+def mish(t):
+    """x·tanh(softplus(x))."""
+    t = _wrap(t)
+    d = t.data
+    sp = _np.logaddexp(0.0, d)
+    th = _np.tanh(sp)
+    sig = _sigmoid_of(d)
+    out = (d * th).astype(d.dtype)
+    grad = th + d * (1.0 - th * th) * sig
+    return t._make(out, (t,), lambda g: (g * grad.astype(d.dtype),), "MishBackward0")
+
+
+def relu6(t):
+    """clamp(x, 0, 6). **경계에서 기울기가 0 이다** — 양쪽 다."""
+    t = _wrap(t)
+    d = t.data
+    inside = (d > 0.0) & (d < 6.0)
+    return t._make(_np.clip(d, 0.0, 6.0), (t,), lambda g: (g * inside,),
+                   "Relu6Backward0")
+
+
+def selu(t):
+    t = _wrap(t)
+    d = t.data
+    pick = d > 0
+    inner = _np.exp(_np.minimum(d, 0))
+    out = _SELU_SCALE * _np.where(pick, d, _SELU_ALPHA * (inner - 1))
+    grad = _SELU_SCALE * _np.where(pick, 1.0, _SELU_ALPHA * inner)
+    return t._make(out.astype(d.dtype), (t,), lambda g: (g * grad.astype(d.dtype),),
+                   "SeluBackward0")
+
+
+def softshrink(t, lambd=0.5):
+    """λ 만큼 **원점 쪽으로 당긴다.** `hardshrink` 와 달리 값이 이어진다."""
+    t = _wrap(t)
+    d = t.data
+    out = _np.where(d > lambd, d - lambd, _np.where(d < -lambd, d + lambd, 0.0))
+    keep = _np.abs(d) > lambd
+    return t._make(out.astype(d.dtype), (t,), lambda g: (g * keep,),
+                   "SoftshrinkBackward0")
+
+
+def softsign(t):
+    """x/(1+|x|)."""
+    t = _wrap(t)
+    d = t.data
+    denom = 1.0 + _np.abs(d)
+    return t._make((d / denom).astype(d.dtype), (t,),
+                   lambda g: (g / (denom * denom),), "SoftsignBackward0")
+
+
+def tanhshrink(t):
+    """x − tanh(x)."""
+    t = _wrap(t)
+    d = t.data
+    th = _np.tanh(d)
+    return t._make((d - th).astype(d.dtype), (t,), lambda g: (g * (th * th),),
+                   "TanhshrinkBackward0")
+
+
+def threshold(t, threshold, value):                      # noqa: A002
+    """x > threshold 면 그대로, 아니면 `value`. **경계는 value 쪽이다.**"""
+    t = _wrap(t)
+    keep = t.data > threshold
+    return t._make(_np.where(keep, t.data, value), (t,), lambda g: (g * keep,),
+                   "ThresholdBackward0")
+
+
+def softmin(t, dim=-1):
+    """softmax(−x). **부호를 빠뜨리면 softmax 와 같아진다** — 값으로만 갈린다."""
+    return softmax(-_wrap(t), dim=dim)
+
+
+def glu(t, dim=-1):
+    """축을 반으로 갈라 `a · σ(b)`. 활성함수 중 유일하게 원소별이 아니다."""
+    t = _wrap(t)
+    n = t.data.shape[dim]
+    if n % 2:
+        raise RuntimeError(f"glu 는 축 {dim} 의 길이가 짝수여야 합니다 (지금 {n})")
+    half = n // 2
+    a = narrow(t, dim, 0, half)
+    b = narrow(t, dim, half, half)
+    return a * sigmoid(b)
+
+
+def prelu(t, weight):
+    """음수 쪽 기울기가 **학습된다.** 가중치가 하나면 전 채널이 나눠 쓴다.
+
+    **정확히 0 은 음수 쪽이다.** 순방향은 어느 쪽으로 놓아도 0 이라 안 보이는데,
+    기울기는 갈린다 — torch 는 `x > 0` 일 때만 1 을 주고 `x == 0` 에는 w 를 준다.
+    처음에 `x < 0` 으로 갈랐더니 그 한 점에서 최대차 3.75 가 났고, 골든의 `kinks`
+    입력에 0 이 들어 있어서 잡혔다. 난수 입력이었으면 영원히 안 걸렸다.
+    """
+    t, weight = _wrap(t), _wrap(weight)
+    d = t.data
+    w = weight.data
+    if w.size != 1:
+        # 채널마다 다른 기울기 — 채널 축(1번)에 맞춰 편다.
+        shape = [1] * d.ndim
+        shape[1 if d.ndim > 1 else 0] = w.size
+        w = w.reshape(shape)
+    pos = d > 0
+    out = _np.where(pos, d, w * d)
+
+    def back(g):
+        g = _np.asarray(g)
+        dx = g * _np.where(pos, 1.0, w)
+        dw = _unbroadcast(g * _np.where(pos, 0.0, d), weight.data.shape)
+        return (dx, dw)
+
+    return t._make(out.astype(d.dtype), (t, weight), back, "PreluBackward0")
+
+
 def log_softmax(t, dim=-1):
     t = _wrap(t)
     shifted = t.data - t.data.max(axis=dim, keepdims=True)

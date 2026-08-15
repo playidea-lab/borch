@@ -110,6 +110,12 @@ def golden_inputs():
     # MultiheadAttention(4, 2): in_proj_weight, in_proj_bias, out_proj.weight, out_proj.bias
     mha = _fixed(11, [(12, 4), (12,), (4, 4), (4,)])
 
+    # 활성함수가 **꺾이는 자리.** 난수로는 절대 안 나오는 값들이라 손으로 적는다 —
+    # `hardtanh` 의 ±1, `relu6` 의 0·6, `hardsigmoid`·`hardswish` 의 ±3,
+    # shrink 계열의 ±0.5. 꺾이는 점을 안 넣으면 그 점에서 규칙이 갈려도 안 걸린다.
+    kinks = np.array([-6., -3., -1., -0.5, -1e-3, 0., 1e-3, 0.5, 1., 3., 6.],
+                     dtype=np.float32)
+
     vis = np.random.default_rng(31)
     vis_u8 = vis.integers(0, 256, (5, 4, 3), dtype=np.uint8)
     vis_f = vis.random((5, 4, 3)).astype(np.float32)
@@ -128,7 +134,8 @@ def golden_inputs():
             **rnn_w,
             "mha_in_w": mha[0], "mha_in_b": mha[1],
             "mha_out_w": mha[2], "mha_out_b": mha[3],
-            "vis_u8": vis_u8, "vis_f": vis_f, "vis_gray": vis_gray}
+            "vis_u8": vis_u8, "vis_f": vis_f, "vis_gray": vis_gray,
+            "kinks": kinks}
 
 
 def wide_cases(inp=None):
@@ -600,6 +607,95 @@ def grad_cases(inp=None):
     for which in ("x", "weight"):
         bn_grad_weighted(which)
 
+    return cases
+
+
+ACT_PREFIX = "act::"
+
+# `(함수 이름, 층 이름)` — 인자 없이 기본값으로 부를 수 있는 것들.
+# 함수 꼴과 층 꼴이 **같은 값**을 내야 한다. 층이 다른 함수를 부르는 실수는 값으로만
+# 잡히고, 한 줄짜리 감싸개일수록 그 실수를 눈으로 못 본다.
+_ACTS = [
+    ("celu", "CELU"),
+    ("hardshrink", "Hardshrink"),
+    ("hardsigmoid", "Hardsigmoid"),
+    ("hardswish", "Hardswish"),
+    ("hardtanh", "Hardtanh"),
+    ("logsigmoid", "LogSigmoid"),
+    ("mish", "Mish"),
+    ("relu6", "ReLU6"),
+    ("selu", "SELU"),
+    ("softplus", "Softplus"),
+    ("softshrink", "Softshrink"),
+    ("softsign", "Softsign"),
+    ("tanhshrink", "Tanhshrink"),
+]
+
+
+def act_cases(inp=None):
+    """활성함수 열일곱. **꺾이는 자리에서 묻는다.**
+
+    이 저장소가 `relu` 로 배운 것이 여기 그대로 적용된다 — 난수 입력은 특별한 값을
+    안 준다. 정확히 0, 정확히 ±1, 정확히 ±3, 정확히 6 은 뽑히지 않는데 활성함수는
+    바로 그 점에서 꺾인다. 그래서 입력을 손으로 적었다(`kinks`).
+
+    함수 꼴과 층 꼴을 **둘 다** 묻는다. 층은 함수를 감싼 한 줄이라 틀릴 데가 없어
+    보이지만, 틀리는 방식이 하나 있다 — 다른 함수를 부르는 것. 그것은 값으로만 잡힌다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    k = inp["kinks"]
+    x1, x2 = inp["x1"], inp["x2"]
+    cases = []
+
+    def add(name, fn, arr=k):
+        """값과 기울기를 짝으로 단다. 활성함수는 **기울기가 본체다.**"""
+        cases.append((ACT_PREFIX + name, lambda L, f=fn, a=arr: f(L, L.tensor(a))))
+
+        def grad(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            # 자리마다 다른 가중치를 곱해 접는다 — 그냥 `sum()` 이면 기울기가 전부
+            # 1 이라 어느 자리가 틀렸는지 값에 안 남는다.
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, n)
+        cases.append((ACT_PREFIX + f"grad::{name}", grad))
+
+    # 인자 없는 것들 — 함수 꼴은 값·기울기, 층 꼴은 값.
+    for fname, cls in _ACTS:
+        add(f"F.{fname}", lambda L, x, f=fname: getattr(L.nn.functional, f)(x))
+        cases.append((ACT_PREFIX + f"nn.{cls}",
+                      lambda L, c=cls, a=k: getattr(L.nn, c)()(L.tensor(a))))
+
+    # 인자를 받는 것들. **기본값만 물으면 그 인자가 아예 안 쓰여도 통과한다.**
+    add("F.hardtanh(범위)", lambda L, x: L.nn.functional.hardtanh(x, -0.5, 0.5))
+    add("F.softplus(beta)", lambda L, x: L.nn.functional.softplus(x, beta=2.0))
+    add("F.celu(alpha)", lambda L, x: L.nn.functional.celu(x, alpha=0.5))
+    add("F.hardshrink(람다)", lambda L, x: L.nn.functional.hardshrink(x, lambd=1.0))
+    add("F.softshrink(람다)", lambda L, x: L.nn.functional.softshrink(x, lambd=1.0))
+    add("F.threshold", lambda L, x: L.nn.functional.threshold(x, 0.5, -1.0))
+    cases.append((ACT_PREFIX + "nn.Threshold",
+                  lambda L: L.nn.Threshold(0.5, -1.0)(L.tensor(k))))
+    cases.append((ACT_PREFIX + "nn.Hardtanh(범위)",
+                  lambda L: L.nn.Hardtanh(-0.5, 0.5)(L.tensor(k))))
+
+    # `softmin` 은 `softmax(-x)` 다. **부호를 빠뜨리면 softmax 와 같아지고**, 그것은
+    # 이름만 다른 같은 함수라 값으로만 갈린다.
+    add("F.softmin", lambda L, x: L.nn.functional.softmin(x, dim=-1), x2)
+    cases.append((ACT_PREFIX + "nn.Softmin",
+                  lambda L: L.nn.Softmin(dim=-1)(L.tensor(x2))))
+
+    # `glu` 는 축을 반으로 갈라 한쪽을 게이트로 쓴다 — 원소별이 아닌 유일한 자리다.
+    add("F.glu", lambda L, x: L.nn.functional.glu(x, dim=-1), x1)
+    cases.append((ACT_PREFIX + "nn.GLU", lambda L: L.nn.GLU(dim=-1)(L.tensor(x1))))
+
+    # `prelu` 는 **학습되는 기울기**를 갖는다. 층 꼴에서 그것이 파라미터로 잡혀야
+    # 하는데, 그 자리가 방금 컨테이너에서 본 등록 문제와 같은 기계다.
+    add("F.prelu",
+        lambda L, x: L.nn.functional.prelu(
+            x, L.tensor(np.array([0.25], dtype=np.float32))))
+    cases.append((ACT_PREFIX + "nn.PReLU", lambda L: L.nn.PReLU()(L.tensor(k))))
+    cases.append((ACT_PREFIX + "nn.PReLU/파라미터 이름",
+                  lambda L: " ".join(n for n, _ in L.nn.PReLU().named_parameters())))
     return cases
 
 
@@ -2261,7 +2357,8 @@ def golden_cases(inp=None):
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
-            + container_cases(inp) + webgpu_cases(inp) + edge_cases(inp))
+            + container_cases(inp) + act_cases(inp)
+            + webgpu_cases(inp) + edge_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

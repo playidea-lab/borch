@@ -194,6 +194,58 @@ fn silu_grad(x: f32) -> f32 {
     fwd: "select(exp(x) - 1.0, x, x > 0.0)",
     bwd: "select(o + 1.0, 1.0, x > 0.0)",
   },
+  // ── 인자 없는 활성함수. 인자를 받는 것들은 `tensor.ts` 가 상수를 구워 만든다. ──
+  //
+  // **꺾이는 점에서 어느 쪽인지가 전부다.** 식은 문서에 있지만 `x == ±3`·`x == 6`
+  // 같은 정확한 경계에서 torch 가 무엇을 주는지는 재봐야 알고, 난수 입력은 그 점을
+  // 절대 안 준다. 골든이 그 점들을 손으로 들고 있다.
+  hardsigmoid: {
+    fwd: "clamp(x / 6.0 + 0.5, 0.0, 1.0)",
+    bwd: "select(0.0, 0.16666666666666666, x > -3.0 && x < 3.0)",
+  },
+  hardswish: {
+    fwd: "select(select(x * (x + 3.0) / 6.0, x, x >= 3.0), 0.0, x <= -3.0)",
+    bwd: "select(select((2.0 * x + 3.0) / 6.0, 1.0, x >= 3.0), 0.0, x <= -3.0)",
+  },
+  // log σ(x). **곧장 계산하면 큰 음수에서 log(0) 이 된다** — 안정형으로 쓴다.
+  logsigmoid: {
+    fwd: "-log(1.0 + exp(-abs(x))) + min(x, 0.0)",
+    bwd: "1.0 / (1.0 + exp(x))",
+  },
+  mish: {
+    fwd: "x * tanh(log(1.0 + exp(-abs(x))) + max(x, 0.0))",
+    bwd: "mish_grad(x)",
+    prelude: `
+fn mish_grad(x: f32) -> f32 {
+  let sp = log(1.0 + exp(-abs(x))) + max(x, 0.0);
+  let th = tanh(sp);
+  let s = 1.0 / (1.0 + exp(-x));
+  return th + x * (1.0 - th * th) * s;
+}`,
+  },
+  // **양쪽 경계에서 기울기가 0 이다.** `clamp` 를 그냥 미분하면 그 자리를 놓친다.
+  relu6: {
+    fwd: "clamp(x, 0.0, 6.0)",
+    bwd: "select(0.0, 1.0, x > 0.0 && x < 6.0)",
+  },
+  selu: {
+    fwd: "1.0507009873554805 * select(1.6732632423543772 * (exp(x) - 1.0), x, x > 0.0)",
+    bwd:
+      "1.0507009873554805 * select(1.6732632423543772 * exp(x), 1.0, x > 0.0)",
+  },
+  softsign: {
+    fwd: "x / (1.0 + abs(x))",
+    bwd: "softsign_grad(x)",
+    prelude: `
+fn softsign_grad(x: f32) -> f32 {
+  let d = 1.0 + abs(x);
+  return 1.0 / (d * d);
+}`,
+  },
+  tanhshrink: {
+    fwd: "x - tanh(x)",
+    bwd: "tanh(x) * tanh(x)",
+  },
 };
 
 export const BINARY: Readonly<Record<string, BinarySpec>> = {

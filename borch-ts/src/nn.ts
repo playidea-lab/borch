@@ -464,6 +464,162 @@ export class ReLU extends Module {
   }
 }
 
+// ── 활성함수 층. 전부 텐서 메서드 하나를 감싼다. ────────────────────────────
+//
+// 감싸개가 **다른 함수를 부르는** 것이 이 부류의 유일한 실패 방식이고, 그것은 눈으로
+// 안 보이고 값으로만 갈린다 — 그래서 골든이 함수 꼴과 층 꼴을 따로 묻는다.
+
+export class Hardsigmoid extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("hardsigmoid");
+  }
+}
+
+export class Hardswish extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("hardswish");
+  }
+}
+
+export class LogSigmoid extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("logsigmoid");
+  }
+}
+
+export class Mish extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("mish");
+  }
+}
+
+export class ReLU6 extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("relu6");
+  }
+}
+
+export class SELU extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("selu");
+  }
+}
+
+export class Softsign extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("softsign");
+  }
+}
+
+export class Tanhshrink extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("tanhshrink");
+  }
+}
+
+export class CELU extends Module {
+  constructor(private readonly alpha = 1.0) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.celu(this.alpha);
+  }
+}
+
+export class Hardshrink extends Module {
+  constructor(private readonly lambd = 0.5) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.hardshrink(this.lambd);
+  }
+}
+
+export class Softshrink extends Module {
+  constructor(private readonly lambd = 0.5) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.softshrink(this.lambd);
+  }
+}
+
+export class Hardtanh extends Module {
+  constructor(private readonly minVal = -1.0, private readonly maxVal = 1.0) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.hardtanh(this.minVal, this.maxVal);
+  }
+}
+
+export class Softplus extends Module {
+  constructor(private readonly beta = 1.0, private readonly threshold = 20.0) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.softplus(this.beta, this.threshold);
+  }
+}
+
+export class Threshold extends Module {
+  constructor(private readonly t: number, private readonly value: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.threshold(this.t, this.value);
+  }
+}
+
+export class Softmin extends Module {
+  constructor(private readonly dim = -1) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.softmin(this.dim);
+  }
+}
+
+export class GLU extends Module {
+  constructor(private readonly dim = -1) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.glu(this.dim);
+  }
+}
+
+/**
+ * 음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
+ *
+ * `weight` 라는 이름이 `stateDict` 열쇠가 되므로 torch 와 같아야 한다.
+ */
+export class PReLU extends Module {
+  readonly weight: Tensor;
+
+  constructor(numParameters = 1, init = 0.25) {
+    super();
+    this.weight = Tensor.full([numParameters], init);
+    this.claim(this.weight);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { weight: this.weight };
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.prelu(this.weight);
+  }
+}
+
 export class MaxPool2d extends Module {
   constructor(private readonly kernel = 2) {
     super();

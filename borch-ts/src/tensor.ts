@@ -1624,6 +1624,105 @@ export class Tensor implements Node<Tensor> {
     })));
   }
 
+  /**
+   * ELU 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.
+   *
+   * α=1 이면 ELU 와 같은 값이라, α 를 안 주고 재면 둘을 못 가른다.
+   */
+  celu(alpha = 1.0): Tensor {
+    const a = f32lit(alpha);
+    return this.unary(unaryWith(`celu<${a}>`, () => ({
+      fwd: `select(${a} * (exp(x / ${a}) - 1.0), x, x > 0.0)`,
+      bwd: `select(exp(x / ${a}), 1.0, x > 0.0)`,
+    })));
+  }
+
+  /** |x| > λ 면 그대로, 아니면 0. **경계는 0 쪽이다**(`>` 이지 `>=` 가 아니다). */
+  hardshrink(lambd = 0.5): Tensor {
+    const l = f32lit(lambd);
+    return this.unary(unaryWith(`hardshrink<${l}>`, () => ({
+      fwd: `select(0.0, x, abs(x) > ${l})`,
+      bwd: `select(0.0, 1.0, abs(x) > ${l})`,
+    })));
+  }
+
+  /** λ 만큼 **원점 쪽으로 당긴다.** `hardshrink` 와 달리 값이 이어진다. */
+  softshrink(lambd = 0.5): Tensor {
+    const l = f32lit(lambd);
+    return this.unary(unaryWith(`softshrink<${l}>`, () => ({
+      fwd: `select(select(0.0, x + ${l}, x < -${l}), x - ${l}, x > ${l})`,
+      bwd: `select(0.0, 1.0, abs(x) > ${l})`,
+    })));
+  }
+
+  hardtanh(minVal = -1.0, maxVal = 1.0): Tensor {
+    const lo = f32lit(minVal);
+    const hi = f32lit(maxVal);
+    return this.unary(unaryWith(`hardtanh<${lo},${hi}>`, () => ({
+      fwd: `clamp(x, ${lo}, ${hi})`,
+      bwd: `select(0.0, 1.0, x > ${lo} && x < ${hi})`,
+    })));
+  }
+
+  /**
+   * (1/β)·log(1+e^{βx}). **βx 가 threshold 를 넘으면 그냥 x 다.**
+   *
+   * 그 갈래를 빼면 큰 입력에서 `exp` 가 넘치고, 그 뒤 기울기가 전부 NaN 이 된다.
+   */
+  softplus(beta = 1.0, threshold = 20.0): Tensor {
+    const b = f32lit(beta);
+    const t = f32lit(threshold);
+    return this.unary(unaryWith(`softplus<${b},${t}>`, () => ({
+      fwd: `select(log(1.0 + exp(-abs(${b} * x))) / ${b} + max(x, 0.0), x, ${b} * x > ${t})`,
+      bwd: `select(1.0 / (1.0 + exp(-${b} * x)), 1.0, ${b} * x > ${t})`,
+    })));
+  }
+
+  /** x > t 면 그대로, 아니면 `value`. **경계는 value 쪽이다.** */
+  threshold(t: number, value: number): Tensor {
+    const th = f32lit(t);
+    const v = f32lit(value);
+    return this.unary(unaryWith(`threshold<${th},${v}>`, () => ({
+      fwd: `select(${v}, x, x > ${th})`,
+      bwd: `select(0.0, 1.0, x > ${th})`,
+    })));
+  }
+
+  /**
+   * 음수 쪽 기울기가 **학습된다.**
+   *
+   * **정확히 0 은 음수 쪽이다.** 순방향은 어느 쪽으로 놓아도 0 이라 안 보이는데
+   * 기울기는 갈린다 — torch 는 `x > 0` 일 때만 1 을 준다. 코어에서 `x < 0` 으로
+   * 갈랐다가 그 한 점에서 최대차 3.75 를 냈다.
+   *
+   * 가중치가 학습되므로 이항으로 엮는다 — 상수로 구우면 기울기가 안 흐른다.
+   */
+  prelu(weight: Tensor): Tensor {
+    // `gt` 의 기울기는 0 이다 — 가림막이 기울기를 나르면 안 된다.
+    // **float 으로 옮긴다.** 비교는 bool 을 내고 bool 로는 빼기가 거절된다(torch 도
+    // 그렇다). 가림막을 수로 쓸 것이므로 여기서 형을 맞춘다.
+    const pos = this.binary("gt", Tensor.full([], 0)).to("float32");
+    const neg = Tensor.full([], 1).sub(pos);
+    return this.mul(pos).add(this.mul(weight).mul(neg));
+  }
+
+  /** 축을 반으로 갈라 `a · σ(b)`. 활성함수 중 유일하게 원소별이 아니다. */
+  glu(dim = -1): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const n = this.shape[axis] ?? 0;
+    if (n % 2 !== 0) {
+      throw new Error(`glu 는 축 ${dim} 의 길이가 짝수여야 한다 (지금 ${n})`);
+    }
+    const half = n / 2;
+    return this.narrow(axis, 0, half).mul(this.narrow(axis, half, half).sigmoid());
+  }
+
+  /** softmax(−x). **부호를 빠뜨리면 softmax 와 같아진다** — 값으로만 갈린다. */
+  softmin(dim = -1): Tensor {
+    return this.neg().softmax(dim);
+  }
+
   /** 축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다. */
   normalize(dim = 1, eps = 1e-12): Tensor {
     const len = this.square().sumDim(dim, true).sqrt();
@@ -2875,6 +2974,14 @@ export interface Tensor {
   round(): Tensor;
   trunc(): Tensor;
   frac(): Tensor;
+  hardsigmoid(): Tensor;
+  hardswish(): Tensor;
+  logsigmoid(): Tensor;
+  mish(): Tensor;
+  relu6(): Tensor;
+  selu(): Tensor;
+  softsign(): Tensor;
+  tanhshrink(): Tensor;
 }
 
 export { noGrad } from "./autograd.js";

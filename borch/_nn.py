@@ -12,12 +12,18 @@ from ._base import (
     _DEFAULT_DTYPE, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _rng, adaptive_avg_pool2d, avg_pool2d, conv1d, conv2d,
-    conv3d, cosine_similarity, dropout, elu, embedding, gelu, interpolate, l1_loss,
-    layer_norm, leaky_relu, log_softmax, max_pool1d, max_pool2d, max_pool3d, nll_loss,
-    no_grad, norm, normalize, pad, relu, sigmoid, silu, smooth_l1_loss, softmax, stack,
-    tanh, zeros,
+    _Namespace, _gelu, _pool_all, _rng, adaptive_avg_pool2d, avg_pool2d, celu, conv1d,
+    conv2d, conv3d, cosine_similarity, dropout, elu, embedding, gelu, glu, hardshrink,
+    hardsigmoid, hardswish, hardtanh, interpolate, l1_loss, layer_norm, leaky_relu,
+    log_softmax, logsigmoid, max_pool1d, max_pool2d, max_pool3d, mish, nll_loss,
+    no_grad, norm, normalize, pad, prelu, relu, relu6, selu, sigmoid, silu,
+    smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign, stack, tanh,
+    tanhshrink, zeros,
 )
+# **`threshold` 만 이름을 바꿔 들여온다.** `Threshold` 층이 `self.threshold` 라는
+# 속성을 갖는데(torch 가 그 이름을 쓴다), 그러면 `forward` 안에서 같은 이름이 함수와
+# 속성 둘을 가리키게 된다. 이름을 갈라 두면 그 자리가 아예 안 생긴다.
+from ._ops import threshold as threshold_fn
 
 # ================================================================ nn
 
@@ -1013,6 +1019,131 @@ class ELU(Module):
         return elu(x, self.alpha)
 
 
+# ── 상태 없는 활성함수 층. 전부 함수 하나를 감싼다. ─────────────────────────
+#
+# 감싸개가 **다른 함수를 부르는** 실수가 이 부류의 유일한 실패 방식이고, 그것은
+# 눈으로 안 보이고 값으로만 갈린다 — 그래서 골든이 함수 꼴과 층 꼴을 따로 묻는다.
+
+class Hardsigmoid(_Activation):
+    fn = staticmethod(hardsigmoid)
+
+
+class Hardswish(_Activation):
+    fn = staticmethod(hardswish)
+
+
+class LogSigmoid(_Activation):
+    fn = staticmethod(logsigmoid)
+
+
+class Mish(_Activation):
+    fn = staticmethod(mish)
+
+
+class ReLU6(_Activation):
+    fn = staticmethod(relu6)
+
+
+class SELU(_Activation):
+    fn = staticmethod(selu)
+
+
+class Softsign(_Activation):
+    fn = staticmethod(softsign)
+
+
+class Tanhshrink(_Activation):
+    fn = staticmethod(tanhshrink)
+
+
+class CELU(Module):
+    def __init__(self, alpha=1.0):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, x):
+        return celu(x, self.alpha)
+
+
+class Hardshrink(Module):
+    def __init__(self, lambd=0.5):
+        super().__init__()
+        self.lambd = lambd
+
+    def forward(self, x):
+        return hardshrink(x, self.lambd)
+
+
+class Softshrink(Module):
+    def __init__(self, lambd=0.5):
+        super().__init__()
+        self.lambd = lambd
+
+    def forward(self, x):
+        return softshrink(x, self.lambd)
+
+
+class Hardtanh(Module):
+    def __init__(self, min_val=-1.0, max_val=1.0):
+        super().__init__()
+        self.min_val, self.max_val = min_val, max_val
+
+    def forward(self, x):
+        return hardtanh(x, self.min_val, self.max_val)
+
+
+class Softplus(Module):
+    def __init__(self, beta=1.0, threshold=20.0):
+        super().__init__()
+        self.beta, self.threshold = beta, threshold
+
+    def forward(self, x):
+        return softplus(x, self.beta, self.threshold)
+
+
+class Threshold(Module):
+    def __init__(self, threshold, value):
+        super().__init__()
+        self.threshold, self.value = threshold, value
+
+    def forward(self, x):
+        return threshold_fn(x, self.threshold, self.value)
+
+
+class Softmin(Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return softmin(x, dim=self.dim)
+
+
+class GLU(Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return glu(x, dim=self.dim)
+
+
+class PReLU(Module):
+    """음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
+
+    `weight` 라는 이름이 `state_dict` 열쇠가 되므로 torch 와 같아야 한다 — 이름이
+    갈리면 남의 체크포인트를 못 읽는다.
+    """
+
+    def __init__(self, num_parameters=1, init=0.25):
+        super().__init__()
+        self.num_parameters = num_parameters
+        self.weight = Parameter(_np.full(num_parameters, init, dtype=_DEFAULT_DTYPE))
+
+    def forward(self, x):
+        return prelu(x, self.weight)
+
+
 class Softmax(Module):
     def __init__(self, dim=-1):
         super().__init__()
@@ -1223,6 +1354,10 @@ nn.ModuleList = ModuleList
 nn.ModuleDict = ModuleDict
 nn.ParameterList = ParameterList
 nn.ParameterDict = ParameterDict
+for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid,
+             Mish, PReLU, ReLU6, SELU, Softmin, Softplus, Softshrink, Softsign,
+             Tanhshrink, Threshold):
+    setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
 nn.BCEWithLogitsLoss = BCEWithLogitsLoss
@@ -1245,6 +1380,23 @@ class _Functional(_Namespace):
     gelu = staticmethod(gelu)
     sigmoid = staticmethod(sigmoid)
     tanh = staticmethod(tanh)
+    celu = staticmethod(celu)
+    hardshrink = staticmethod(hardshrink)
+    hardsigmoid = staticmethod(hardsigmoid)
+    hardswish = staticmethod(hardswish)
+    hardtanh = staticmethod(hardtanh)
+    logsigmoid = staticmethod(logsigmoid)
+    mish = staticmethod(mish)
+    relu6 = staticmethod(relu6)
+    selu = staticmethod(selu)
+    softplus = staticmethod(softplus)
+    softshrink = staticmethod(softshrink)
+    softsign = staticmethod(softsign)
+    tanhshrink = staticmethod(tanhshrink)
+    threshold = staticmethod(threshold_fn)
+    softmin = staticmethod(softmin)
+    glu = staticmethod(glu)
+    prelu = staticmethod(prelu)
     one_hot = staticmethod(one_hot)
     dropout = staticmethod(dropout)
     avg_pool2d = staticmethod(avg_pool2d)

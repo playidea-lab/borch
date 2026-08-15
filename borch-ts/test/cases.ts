@@ -459,6 +459,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNdim(out, inputs);
   addTrain(out, inputs);
   addContainer(out, inputs);
+  addAct(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -866,6 +867,89 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
     m.eval();
     return m.forward(inp.get("train_x"));
   });
+}
+
+/**
+ * 활성함수 열일곱. **꺾이는 자리에서 묻는다.**
+ *
+ * 난수 입력은 특별한 값을 안 준다 — 정확히 0, ±1, ±3, 6 은 뽑히지 않는데 활성함수는
+ * 바로 그 점에서 꺾인다. 골든의 `kinks` 가 그 점들을 손으로 들고 있다.
+ *
+ * 함수 꼴(텐서 메서드)과 층 꼴을 둘 다 묻는다. 층은 한 줄짜리 감싸개라 틀릴 데가
+ * 없어 보이지만 틀리는 방식이 하나 있다 — 다른 함수를 부르는 것. 값으로만 잡힌다.
+ */
+function addAct(out: Map<string, Case>, inp: Inputs): void {
+  const add = (
+    name: string,
+    fn: (x: Tensor) => Tensor,
+    key: "kinks" | "x1" | "x2" = "kinks",
+  ): void => {
+    out.set(`act::${name}`, () => fn(inp.get(key)));
+    out.set(`act::grad::${name}`, () => {
+      const x = inp.get(key, true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  };
+
+  // 인자 없는 것들 — 표에서 자동으로 메서드가 된 이름을 그대로 부른다.
+  const plain: [string, string][] = [
+    ["celu", "CELU"], ["hardshrink", "Hardshrink"], ["hardsigmoid", "Hardsigmoid"],
+    ["hardswish", "Hardswish"], ["hardtanh", "Hardtanh"], ["logsigmoid", "LogSigmoid"],
+    ["mish", "Mish"], ["relu6", "ReLU6"], ["selu", "SELU"], ["softplus", "Softplus"],
+    ["softshrink", "Softshrink"], ["softsign", "Softsign"],
+    ["tanhshrink", "Tanhshrink"],
+  ];
+  const call = (x: Tensor, name: string): Tensor => {
+    // 인자를 받는 넷은 기본값으로 부른다. 나머지는 단항 표에 있다.
+    if (name === "celu") return x.celu();
+    if (name === "hardshrink") return x.hardshrink();
+    if (name === "softshrink") return x.softshrink();
+    if (name === "hardtanh") return x.hardtanh();
+    if (name === "softplus") return x.softplus();
+    return x.unary(name);
+  };
+  const layer = (cls: string): nn.Module => {
+    const table: Record<string, () => nn.Module> = {
+      CELU: () => new nn.CELU(), Hardshrink: () => new nn.Hardshrink(),
+      Hardsigmoid: () => new nn.Hardsigmoid(), Hardswish: () => new nn.Hardswish(),
+      Hardtanh: () => new nn.Hardtanh(), LogSigmoid: () => new nn.LogSigmoid(),
+      Mish: () => new nn.Mish(), ReLU6: () => new nn.ReLU6(),
+      SELU: () => new nn.SELU(), Softplus: () => new nn.Softplus(),
+      Softshrink: () => new nn.Softshrink(), Softsign: () => new nn.Softsign(),
+      Tanhshrink: () => new nn.Tanhshrink(),
+    };
+    const make = table[cls];
+    if (!make) throw new Error(`모르는 활성함수 층: ${cls}`);
+    return make();
+  };
+  for (const [fname, cls] of plain) {
+    add(`F.${fname}`, (x) => call(x, fname));
+    out.set(`act::nn.${cls}`, () => layer(cls).call(inp.get("kinks")));
+  }
+
+  // 인자를 받는 것들. **기본값만 물으면 그 인자가 아예 안 쓰여도 통과한다.**
+  add("F.hardtanh(범위)", (x) => x.hardtanh(-0.5, 0.5));
+  add("F.softplus(beta)", (x) => x.softplus(2.0));
+  add("F.celu(alpha)", (x) => x.celu(0.5));
+  add("F.hardshrink(람다)", (x) => x.hardshrink(1.0));
+  add("F.softshrink(람다)", (x) => x.softshrink(1.0));
+  add("F.threshold", (x) => x.threshold(0.5, -1.0));
+  out.set("act::nn.Threshold",
+    () => new nn.Threshold(0.5, -1.0).call(inp.get("kinks")));
+  out.set("act::nn.Hardtanh(범위)",
+    () => new nn.Hardtanh(-0.5, 0.5).call(inp.get("kinks")));
+
+  add("F.softmin", (x) => x.softmin(-1), "x2");
+  out.set("act::nn.Softmin", () => new nn.Softmin(-1).call(inp.get("x2")));
+
+  add("F.glu", (x) => x.glu(-1), "x1");
+  out.set("act::nn.GLU", () => new nn.GLU(-1).call(inp.get("x1")));
+
+  add("F.prelu", (x) => x.prelu(Tensor.full([1], 0.25)));
+  out.set("act::nn.PReLU", () => new nn.PReLU().call(inp.get("kinks")));
+  out.set("act::nn.PReLU/파라미터 이름",
+    () => Object.keys(new nn.PReLU().namedParameters()).join(" "));
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {
