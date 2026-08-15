@@ -710,6 +710,77 @@ def act_cases(inp=None):
     return cases
 
 
+POOL_PREFIX = "pool::"
+
+
+def pool_cases(inp=None):
+    """풀링의 나머지 차원과 나머지 종류.
+
+    `max_pool1d/2d/3d`·`avg_pool2d`·`adaptive_avg_pool2d` 만 있었다. 차원이 하나
+    있으면 나머지 둘도 있을 것이라고 읽히는 자리이고, 그 기대가 어긋나면 1 차원
+    신호나 3 차원 부피를 다루는 코드가 중간에 멈춘다.
+
+    **적응형은 창 크기를 입력에서 거꾸로 푼다.** 나누어떨어지지 않을 때 어느 자리를
+    어떻게 나눌지가 규칙이고, 그 규칙이 torch 와 갈리면 값이 조용히 다르다 — 그래서
+    나누어떨어지는 경우와 안 떨어지는 경우를 둘 다 묻는다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    seq, img, vol = inp["nd_seq"], inp["img"], inp["nd_vol"]
+    cases = []
+
+    def add(name, fn, arr):
+        cases.append((POOL_PREFIX + name, lambda L, f=fn, a=arr: f(L, L.tensor(a))))
+
+        def grad(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, n)
+        cases.append((POOL_PREFIX + f"grad::{name}", grad))
+
+    # ── 평균 풀링의 1·3 차원. 2 차원만 있었다. ─────────────────────────────
+    add("F.avg_pool1d", lambda L, x: L.nn.functional.avg_pool1d(x, 2), seq)
+    add("F.avg_pool3d", lambda L, x: L.nn.functional.avg_pool3d(x, 2), vol)
+    cases.append((POOL_PREFIX + "nn.AvgPool1d",
+                  lambda L: L.nn.AvgPool1d(2)(L.tensor(seq))))
+    cases.append((POOL_PREFIX + "nn.AvgPool3d",
+                  lambda L: L.nn.AvgPool3d(2)(L.tensor(vol))))
+
+    # ── 적응형 평균. **나누어떨어질 때와 아닐 때를 둘 다 본다.** ────────────
+    add("F.adaptive_avg_pool1d(4)",
+        lambda L, x: L.nn.functional.adaptive_avg_pool1d(x, 4), seq)
+    add("F.adaptive_avg_pool1d(3)",                       # 8 을 3 으로 — 안 떨어진다
+        lambda L, x: L.nn.functional.adaptive_avg_pool1d(x, 3), seq)
+    add("F.adaptive_avg_pool3d",
+        lambda L, x: L.nn.functional.adaptive_avg_pool3d(x, 2), vol)
+    cases.append((POOL_PREFIX + "nn.AdaptiveAvgPool1d",
+                  lambda L: L.nn.AdaptiveAvgPool1d(4)(L.tensor(seq))))
+    cases.append((POOL_PREFIX + "nn.AdaptiveAvgPool3d",
+                  lambda L: L.nn.AdaptiveAvgPool3d(2)(L.tensor(vol))))
+
+    # ── 적응형 최대. 평균과 **동점 규칙이 다르다** — 하나만 고른다. ─────────
+    add("F.adaptive_max_pool1d",
+        lambda L, x: L.nn.functional.adaptive_max_pool1d(x, 4), seq)
+    add("F.adaptive_max_pool2d",
+        lambda L, x: L.nn.functional.adaptive_max_pool2d(x, 2), img)
+    add("F.adaptive_max_pool2d(안 떨어짐)",
+        lambda L, x: L.nn.functional.adaptive_max_pool2d(x, 3), img)
+    add("F.adaptive_max_pool3d",
+        lambda L, x: L.nn.functional.adaptive_max_pool3d(x, 2), vol)
+    for nd, arr, size in (("1d", seq, 4), ("2d", img, 2), ("3d", vol, 2)):
+        cases.append((POOL_PREFIX + f"nn.AdaptiveMaxPool{nd}",
+                      lambda L, n=nd, a=arr, s=size:
+                      getattr(L.nn, f"AdaptiveMaxPool{n}")(s)(L.tensor(a))))
+
+    # ── LP 풀링. `p` 승 평균의 `p` 제곱근이다 — p=1 은 합, p=∞ 는 최대에 가깝다. ─
+    add("F.lp_pool1d(p=2)", lambda L, x: L.nn.functional.lp_pool1d(x, 2, 2), seq)
+    add("F.lp_pool2d(p=2)", lambda L, x: L.nn.functional.lp_pool2d(x, 2, 2), img)
+    add("F.lp_pool2d(p=1)", lambda L, x: L.nn.functional.lp_pool2d(x, 1, 2), img)
+    cases.append((POOL_PREFIX + "nn.LPPool2d",
+                  lambda L: L.nn.LPPool2d(2, 2)(L.tensor(img))))
+    return cases
+
+
 MODFN_PREFIX = "modfn::"
 
 
@@ -2795,7 +2866,7 @@ def golden_cases(inp=None):
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
-            + module_function_cases(inp)
+            + module_function_cases(inp) + pool_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

@@ -542,14 +542,126 @@ def interpolate(x, scale_factor=2, mode="nearest"):
     return x._make(out, (x,), back, "UpsampleBackward0")
 
 
-def adaptive_avg_pool2d(x, output_size):
-    """출력 크기를 정해 평균 풀링. 자매에 있고 코어에 없던 자리다."""
+def _spread(v, n):
+    """수 하나면 축마다 같은 값으로, 목록이면 그대로."""
+    return [v] * n if isinstance(v, int) else list(v)
+
+
+def _fold_axis(x, axis, windows, kind):
+    """축 하나를 창 목록대로 접는다. **창 목록이 길이가 달라도 된다.**
+
+    적응형 풀링이 그 자리다 — 8 을 3 으로 줄이면 창이 3·3·2 다. 창 크기를 고정으로
+    두면 안 떨어지는 경우를 통째로 못 하고, 실제로 그래서 `adaptive_avg_pool2d` 가
+    배수가 아니면 거절하고 있었다.
+
+    조각을 하나씩 꺼내 접으므로 **미분이 저절로 따라온다** — 새로 쓸 역전파식이 없다.
+    최댓값은 `_maximum_first` 로 접는데, 동점일 때 앞자리를 주는 것이 torch 의 규칙이다.
+    """
+    parts = []
+    for start, end in windows:
+        pieces = [x[_slice_at(axis, j, j + 1)] for j in range(start, end)]
+        acc = pieces[0]
+        for piece in pieces[1:]:
+            acc = acc + piece if kind == "avg" else _maximum_first(acc, piece)
+        parts.append(acc * (1.0 / len(pieces)) if kind == "avg" else acc)
+    return cat(parts, axis)
+
+
+def _adaptive_windows(n_in, n_out):
+    """torch 의 적응형 규칙. 시작은 내림, 끝은 올림이다.
+
+    나누어떨어지면 균등하고, 안 떨어지면 **창 크기가 자리마다 다르다.** 그 규칙을
+    한 줄로 못 적어서 값이 갈리는 자리이고, 골든이 떨어지는 경우와 아닌 경우를
+    둘 다 묻는다.
+    """
+    return [((i * n_in) // n_out, -((-(i + 1) * n_in) // n_out))
+            for i in range(n_out)]
+
+
+def _adaptive(x, output_size, kind):
+    """축을 하나씩 접는다. **창이 직사각형이라 축별로 나눠 해도 같은 값이다** —
+    평균은 각 줄의 길이가 같아서 평균의 평균이 전체 평균이고, 최댓값은 원래 그렇다."""
     x = _wrap(x)
-    oh, ow = _pair(output_size)
-    n, c, h, w = x.data.shape
-    if h % oh or w % ow:
-        _unsupported("adaptive_avg_pool2d(입력이 출력의 배수가 아닌 경우)")
-    return avg_pool2d(x, (h // oh, w // ow))
+    spatial = len(x.data.shape) - 2
+    sizes = _spread(output_size, spatial)
+    out = x
+    for k in range(spatial):
+        axis = 2 + k
+        out = _fold_axis(out, axis,
+                         _adaptive_windows(out.data.shape[axis], sizes[k]), kind)
+    return out
+
+
+def _fixed(x, kernel_size, stride, kind):
+    """고정 창. 적응형과 같은 기계에 창 목록만 다르게 준다."""
+    x = _wrap(x)
+    spatial = len(x.data.shape) - 2
+    kernels = _spread(kernel_size, spatial)
+    strides = _spread(stride if stride is not None else kernel_size, spatial)
+    out = x
+    for k in range(spatial):
+        axis = 2 + k
+        n_in = out.data.shape[axis]
+        step, size = strides[k], kernels[k]
+        windows = [(s, s + size) for s in range(0, n_in - size + 1, step)]
+        out = _fold_axis(out, axis, windows, kind)
+    return out
+
+
+def adaptive_avg_pool2d(x, output_size):
+    """출력 크기를 정해 평균 풀링.
+
+    **배수가 아니어도 된다.** 예전에는 거절했는데, torch 는 창 크기를 자리마다 달리
+    잡아 처리한다 — 거절하는 것이 흉내가 아니라 다른 규칙이었다.
+    """
+    return _adaptive(x, _pair(output_size), "avg")
+
+
+def adaptive_avg_pool1d(x, output_size):
+    return _adaptive(x, _spread(output_size, 1), "avg")
+
+
+def adaptive_avg_pool3d(x, output_size):
+    return _adaptive(x, _spread(output_size, 3), "avg")
+
+
+def adaptive_max_pool1d(x, output_size):
+    return _adaptive(x, _spread(output_size, 1), "max")
+
+
+def adaptive_max_pool2d(x, output_size):
+    return _adaptive(x, _pair(output_size), "max")
+
+
+def adaptive_max_pool3d(x, output_size):
+    return _adaptive(x, _spread(output_size, 3), "max")
+
+
+def avg_pool1d(x, kernel_size, stride=None):
+    return _fixed(x, _spread(kernel_size, 1), stride, "avg")
+
+
+def avg_pool3d(x, kernel_size, stride=None):
+    return _fixed(x, _spread(kernel_size, 3), stride, "avg")
+
+
+def lp_pool2d(x, norm_type, kernel_size, stride=None):
+    """`p` 승의 합을 `p` 제곱근한 것. p=1 이면 합, p 가 크면 최댓값에 가까워진다.
+
+    **torch 의 조립을 그대로 따른다** — 평균 풀링을 쓰고 창 크기를 곱해 합으로
+    되돌린 뒤 제곱근을 취한다. 부호와 `relu` 가 끼는 것도 그쪽 구현 그대로다.
+    """
+    x = _wrap(x)
+    kh, kw = _pair(kernel_size)
+    out = avg_pool2d(x ** norm_type, kernel_size, stride)
+    return ((out.sign() * relu(out.abs())) * (kh * kw)) ** (1.0 / norm_type)
+
+
+def lp_pool1d(x, norm_type, kernel_size, stride=None):
+    x = _wrap(x)
+    k = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
+    out = avg_pool1d(x ** norm_type, k, stride)
+    return ((out.sign() * relu(out.abs())) * k) ** (1.0 / norm_type)
 
 
 def max_pool2d(x, kernel_size, stride=None):

@@ -2798,23 +2798,57 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 출력 크기를 정해 놓고 평균 풀링. 창 크기가 입력에서 나온다.
+   * 출력 크기를 정해 놓고 접는다. 창 크기가 입력에서 나온다.
    *
-   * 입력이 출력으로 딱 나눠떨어질 때만이다 — torch 는 안 나눠떨어질 때 창을 자리마다
-   * 다르게 잡는데, 그것을 흉내 내다 틀리느니 아직 없는 편이 낫다.
+   * **나눠떨어지지 않아도 된다.** 예전에는 거절했는데, torch 는 창을 자리마다 다르게
+   * 잡는다 — 거절은 흉내의 한 방식이 아니라 다른 규칙이었다. 시작은 내림, 끝은
+   * 올림이고, 8 을 3 으로 줄이면 창이 3·3·2 다.
+   *
+   * 축을 하나씩 접는다. 창이 직사각형이라 축별로 나눠 해도 같은 값이다 — 평균은 각
+   * 줄의 길이가 같아서 평균의 평균이 전체 평균이고, 최댓값은 원래 그렇다.
+   *
+   * 전용 커널을 안 쓴다. 창이 자리마다 다르면 셰이더에 상수로 구울 것이 없고,
+   * 적응형은 대개 마지막 한 번이라 스텝마다 도는 자리가 아니다.
    */
-  adaptiveAvgPool(outSize: number): Tensor {
-    const inDims = this.shape.slice(2);
-    for (const d of inDims) {
-      if (d % outSize !== 0) {
-        throw new Error(
-          `adaptive_avg_pool: ${d} 가 ${outSize} 로 안 나눠떨어진다 — ` +
-            "고르지 않은 창은 아직 없다.",
-        );
+  adaptivePool(kind: "max" | "avg", outSize: number | readonly number[]): Tensor {
+    const spatial = this.shape.length - 2;
+    const sizes = typeof outSize === "number"
+      ? new Array<number>(spatial).fill(outSize) : [...outSize];
+    let out: Tensor = this;
+    for (let k = 0; k < spatial; k++) {
+      const axis = 2 + k;
+      const n = out.shape[axis] ?? 1;
+      const want = sizes[k] ?? 1;
+      const parts: Tensor[] = [];
+      for (let i = 0; i < want; i++) {
+        const start = Math.floor((i * n) / want);
+        const end = Math.ceil(((i + 1) * n) / want);
+        const window = out.narrow(axis, start, end - start);
+        parts.push(kind === "avg" ? window.mean(axis, true) : window.amax(axis, true));
       }
+      out = Tensor.cat(parts, axis);
     }
-    const kernel = (inDims[0] ?? 1) / outSize;
-    return this.poolND("avg", kernel, kernel);
+    return out;
+  }
+
+  /** 예전 이름. `adaptivePool("avg", …)` 와 같다 — 부르던 자리가 있어 남긴다. */
+  adaptiveAvgPool(outSize: number): Tensor {
+    return this.adaptivePool("avg", outSize);
+  }
+
+  /**
+   * `p` 승의 합을 `p` 제곱근한 것.
+   *
+   * **torch 의 조립을 그대로 따른다** — 평균 풀링을 쓰고 창 크기를 곱해 합으로
+   * 되돌린 뒤 제곱근을 취한다. 부호와 `relu` 가 끼는 것도 그쪽 구현 그대로다.
+   */
+  lpPool(normType: number, kernel: number, stride?: number): Tensor {
+    const spatial = this.shape.length - 2;
+    const count = kernel ** spatial;
+    const powered = this.powScalar(normType);
+    const out = powered.poolND("avg", kernel, stride ?? kernel);
+    const signed = out.unary("sign").mul(out.abs().unary("relu"));
+    return signed.mul(Tensor.full([], count)).powScalar(1 / normType);
   }
 
   /** 겹치지 않는 창의 최대값. `this` 는 `(N, C, H, W)`. */

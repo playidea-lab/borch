@@ -465,6 +465,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addDropout(out, inputs);
   addSdpa(out, inputs);
   addModFn(out, inputs);
+  addPool(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1264,6 +1265,53 @@ function addModFn(out: Map<string, Case>, inp: Inputs): void {
     t.inplaceUnary("relu");
     return t;
   });
+}
+
+/**
+ * 풀링의 나머지 차원과 나머지 종류.
+ *
+ * **적응형은 나눠떨어지지 않을 때가 요점이다.** 창을 자리마다 다르게 잡는 규칙이
+ * torch 와 갈리면 값이 조용히 다르고, 떨어지는 경우만 물으면 그 규칙을 한 번도
+ * 안 보게 된다.
+ */
+function addPool(out: Map<string, Case>, inp: Inputs): void {
+  const add = (name: string, fn: (x: Tensor) => Tensor, key: string): void => {
+    out.set(`pool::${name}`, () => fn(inp.get(key)));
+    out.set(`pool::grad::${name}`, () => {
+      const x = inp.get(key, true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  };
+
+  add("F.avg_pool1d", (x) => x.poolND("avg", 2, 2), "nd_seq");
+  add("F.avg_pool3d", (x) => x.poolND("avg", 2, 2), "nd_vol");
+  out.set("pool::nn.AvgPool1d", () => inp.get("nd_seq").poolND("avg", 2, 2));
+  out.set("pool::nn.AvgPool3d", () => inp.get("nd_vol").poolND("avg", 2, 2));
+
+  add("F.adaptive_avg_pool1d(4)", (x) => x.adaptivePool("avg", 4), "nd_seq");
+  add("F.adaptive_avg_pool1d(3)", (x) => x.adaptivePool("avg", 3), "nd_seq");
+  add("F.adaptive_avg_pool3d", (x) => x.adaptivePool("avg", 2), "nd_vol");
+  out.set("pool::nn.AdaptiveAvgPool1d",
+    () => inp.get("nd_seq").adaptivePool("avg", 4));
+  out.set("pool::nn.AdaptiveAvgPool3d",
+    () => inp.get("nd_vol").adaptivePool("avg", 2));
+
+  add("F.adaptive_max_pool1d", (x) => x.adaptivePool("max", 4), "nd_seq");
+  add("F.adaptive_max_pool2d", (x) => x.adaptivePool("max", 2), "img");
+  add("F.adaptive_max_pool2d(안 떨어짐)", (x) => x.adaptivePool("max", 3), "img");
+  add("F.adaptive_max_pool3d", (x) => x.adaptivePool("max", 2), "nd_vol");
+  for (const [nd, key, size] of [
+    ["1d", "nd_seq", 4], ["2d", "img", 2], ["3d", "nd_vol", 2],
+  ] as const) {
+    out.set(`pool::nn.AdaptiveMaxPool${nd}`,
+      () => inp.get(key).adaptivePool("max", size));
+  }
+
+  add("F.lp_pool1d(p=2)", (x) => x.lpPool(2, 2), "nd_seq");
+  add("F.lp_pool2d(p=2)", (x) => x.lpPool(2, 2), "img");
+  add("F.lp_pool2d(p=1)", (x) => x.lpPool(1, 2), "img");
+  out.set("pool::nn.LPPool2d", () => inp.get("img").lpPool(2, 2));
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

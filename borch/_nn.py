@@ -12,7 +12,10 @@ from ._base import (
     _DEFAULT_DTYPE, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _rng, _wrap, adaptive_avg_pool2d, avg_pool2d, celu,
+    _Namespace, _gelu, _pool_all, _rng, _wrap, adaptive_avg_pool1d,
+    adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
+    adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
+    celu, lp_pool1d, lp_pool2d,
     conv1d,
     conv2d, conv3d, conv_transpose1d, conv_transpose2d, conv_transpose3d,
     cosine_similarity, dropout, elu, embedding, gelu, glu, group_norm, hardshrink,
@@ -1313,17 +1316,82 @@ class AvgPool2d(Module):
         return avg_pool2d(x, self.kernel_size, self.stride)
 
 
-class AdaptiveAvgPool2d(Module):
-    """출력 크기 1 만 지원한다 — 실무에서 쓰이는 것은 대개 그것이고, 나머지는 거절한다."""
+class _PoolND(Module):
+    """창을 정해 접는 층들의 몸통. **어느 함수를 부르느냐만 다르다.**
 
-    def __init__(self, output_size):
+    층마다 `forward` 를 따로 적으면 그중 하나가 다른 함수를 부르는 날이 오고, 그것은
+    값으로만 갈린다 — 활성함수 쪽에서 같은 이유로 함수 꼴과 층 꼴을 따로 물었다.
+    """
+
+    fn = staticmethod(avg_pool2d)
+    adaptive = False
+
+    def __init__(self, size, stride=None):
         super().__init__()
-        if output_size not in (1, (1, 1)):
-            _unsupported("AdaptiveAvgPool2d(출력 크기가 1 이 아닌 것)")
-        self.output_size = output_size
+        self.size, self.stride = size, stride
 
     def forward(self, x):
-        return _pool_all(x)
+        fn = type(self).fn
+        return fn(x, self.size) if type(self).adaptive else fn(x, self.size, self.stride)
+
+
+class AvgPool1d(_PoolND):
+    fn = staticmethod(avg_pool1d)
+
+
+class AvgPool3d(_PoolND):
+    fn = staticmethod(avg_pool3d)
+
+
+class AdaptiveAvgPool1d(_PoolND):
+    fn = staticmethod(adaptive_avg_pool1d)
+    adaptive = True
+
+
+class AdaptiveAvgPool3d(_PoolND):
+    fn = staticmethod(adaptive_avg_pool3d)
+    adaptive = True
+
+
+class AdaptiveMaxPool1d(_PoolND):
+    fn = staticmethod(adaptive_max_pool1d)
+    adaptive = True
+
+
+class AdaptiveMaxPool2d(_PoolND):
+    fn = staticmethod(adaptive_max_pool2d)
+    adaptive = True
+
+
+class AdaptiveMaxPool3d(_PoolND):
+    fn = staticmethod(adaptive_max_pool3d)
+    adaptive = True
+
+
+class LPPool1d(Module):
+    def __init__(self, norm_type, kernel_size, stride=None):
+        super().__init__()
+        self.norm_type, self.kernel_size, self.stride = norm_type, kernel_size, stride
+
+    def forward(self, x):
+        return lp_pool1d(x, self.norm_type, self.kernel_size, self.stride)
+
+
+class LPPool2d(LPPool1d):
+    def forward(self, x):
+        return lp_pool2d(x, self.norm_type, self.kernel_size, self.stride)
+
+
+class AdaptiveAvgPool2d(_PoolND):
+    """**출력 크기가 1 이 아니어도 된다.**
+
+    예전에는 1 만 받고 나머지를 거절했다. 그때는 `_pool_all` 로 전부 평균 내는 것이
+    전부여서 그랬는데, 이제 창을 자리마다 달리 잡는 기계가 생겼으므로 거절할 이유가
+    없다 — 거절은 흉내의 한 방식이 아니라 다른 규칙이었다.
+    """
+
+    fn = staticmethod(adaptive_avg_pool2d)
+    adaptive = True
 
 
 class Unflatten(Module):
@@ -1500,7 +1568,10 @@ for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid
              Mish, PReLU, ReLU6, SELU, Softmin, Softplus, Softshrink, Softsign,
              Tanhshrink, Threshold,
              ConvTranspose1d, ConvTranspose2d, ConvTranspose3d, GroupNorm,
-             InstanceNorm1d, InstanceNorm2d, InstanceNorm3d, RMSNorm):
+             InstanceNorm1d, InstanceNorm2d, InstanceNorm3d, RMSNorm,
+             AvgPool1d, AvgPool3d, AdaptiveAvgPool1d, AdaptiveAvgPool3d,
+             AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d,
+             LPPool1d, LPPool2d):
     setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
@@ -1545,6 +1616,15 @@ class _Functional(_Namespace):
     instance_norm = staticmethod(instance_norm)
     rms_norm = staticmethod(rms_norm)
     scaled_dot_product_attention = staticmethod(scaled_dot_product_attention)
+    avg_pool1d = staticmethod(avg_pool1d)
+    avg_pool3d = staticmethod(avg_pool3d)
+    adaptive_avg_pool1d = staticmethod(adaptive_avg_pool1d)
+    adaptive_avg_pool3d = staticmethod(adaptive_avg_pool3d)
+    adaptive_max_pool1d = staticmethod(adaptive_max_pool1d)
+    adaptive_max_pool2d = staticmethod(adaptive_max_pool2d)
+    adaptive_max_pool3d = staticmethod(adaptive_max_pool3d)
+    lp_pool1d = staticmethod(lp_pool1d)
+    lp_pool2d = staticmethod(lp_pool2d)
     conv_transpose1d = staticmethod(conv_transpose1d)
     conv_transpose2d = staticmethod(conv_transpose2d)
     conv_transpose3d = staticmethod(conv_transpose3d)

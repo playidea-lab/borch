@@ -66,6 +66,20 @@ def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
         handle(weight), handle(bias) if bias is not None else None, stride, padding))
 
 
+def _pool_fn(kind, adaptive):
+    """풀링 하나. **차원별 이름이 저쪽엔 없다** — `poolND` 하나가 전부를 한다."""
+    def call(x, size, stride=None, **kw):
+        h = handle(x)
+        if adaptive:
+            return wrap(h.adaptivePool(kind, size))
+        return wrap(h.poolND(kind, size, stride if stride is not None else size))
+    return call
+
+
+def _lp_pool(x, norm_type, kernel_size, stride=None, **kw):
+    return wrap(handle(x).lpPool(norm_type, kernel_size, stride))
+
+
 def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
           scale=None):
     """borch.ts 쪽은 자유 함수라 텐서 메서드로 안 간다."""
@@ -76,6 +90,15 @@ def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 
 _HAND_WRITTEN = {
     "scaled_dot_product_attention": _sdpa,
+    "avg_pool1d": _pool_fn("avg", False),
+    "avg_pool3d": _pool_fn("avg", False),
+    "adaptive_avg_pool1d": _pool_fn("avg", True),
+    "adaptive_avg_pool3d": _pool_fn("avg", True),
+    "adaptive_max_pool1d": _pool_fn("max", True),
+    "adaptive_max_pool2d": _pool_fn("max", True),
+    "adaptive_max_pool3d": _pool_fn("max", True),
+    "lp_pool1d": _lp_pool,
+    "lp_pool2d": _lp_pool,
     "rms_norm": _rms_norm,
     "conv_transpose1d": _conv_transpose,
     "conv_transpose2d": _conv_transpose,
@@ -690,9 +713,29 @@ def Identity():
     return _Wrap(lambda x: x)
 
 
-def AdaptiveAvgPool2d(output_size=1):
-    n = output_size[0] if isinstance(output_size, (list, tuple)) else output_size
-    return _Wrap(lambda x: wrap(handle(x).adaptiveAvgPool(n)))
+def _pool_layer(kind, adaptive):
+    def make(size, stride=None):
+        n = size[0] if isinstance(size, (list, tuple)) else size
+        fn = _pool_fn(kind, adaptive)
+        return _Wrap(lambda x: fn(x, n, stride))
+    return make
+
+
+AdaptiveAvgPool2d = _pool_layer("avg", True)
+AdaptiveAvgPool1d = _pool_layer("avg", True)
+AdaptiveAvgPool3d = _pool_layer("avg", True)
+AdaptiveMaxPool1d = _pool_layer("max", True)
+AdaptiveMaxPool2d = _pool_layer("max", True)
+AdaptiveMaxPool3d = _pool_layer("max", True)
+AvgPool1d = _pool_layer("avg", False)
+AvgPool3d = _pool_layer("avg", False)
+
+
+def LPPool1d(norm_type, kernel_size, stride=None):
+    return _Wrap(lambda x: _lp_pool(x, norm_type, kernel_size, stride))
+
+
+LPPool2d = LPPool1d
 
 
 def AvgPool2d(k=2, stride=None):
