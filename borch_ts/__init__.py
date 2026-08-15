@@ -57,8 +57,9 @@ from ._base import Tensor, tensor                        # noqa: E402,F401
 from ._ops import (                                      # noqa: E402,F401
     aminmax, arange, as_tensor, cat, chunk, clamp, clip, einsum, eye, flatten,
     flip,
-    full, linalg, linspace, matrix_power, memory, no_grad, ones, pow, quantile,
-    rand, randn, repeat_interleave, scope, split, squeeze, stack, where, zeros,
+    full, linalg, linspace, matrix_power, memory, no_grad, norm, ones, pow,
+    quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
+    sum, swapdims, transpose, where, zeros,
 )
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401

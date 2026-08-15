@@ -1548,6 +1548,10 @@ def shape_cases(inp=None):
     col = mat[:, :1].copy()
     flat6 = np.arange(6, dtype=np.float32)
     pair = np.array([1., 2.], dtype=np.float32)
+    # **랭크 3.** 축을 바꾸는 것을 2차원으로만 물으면 `(0,1)` 밖의 자리를 못 본다 —
+    # 2차원에서는 어느 두 축을 골라도 답이 하나뿐이라, 축 인자를 통째로 버리는
+    # 구현도 통과한다. 축 길이를 전부 다르게 두어 모양에서 먼저 걸리게 한다.
+    cube = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
 
     calls = (
         ("expand", lambda t: t.expand(2, 3), col),
@@ -1558,6 +1562,10 @@ def shape_cases(inp=None):
         ("ravel", lambda t: t.ravel(), mat),
         ("swapaxes", lambda t: t.swapaxes(0, 1), mat),
         ("swapdims", lambda t: t.swapdims(0, 1), mat),
+        ("transpose(랭크3)", lambda t: t.transpose(1, 2), cube),
+        ("transpose(랭크3, 0과2)", lambda t: t.transpose(0, 2), cube),
+        ("transpose(랭크3, 음수축)", lambda t: t.transpose(-1, -3), cube),
+        ("swapdims(랭크3)", lambda t: t.swapdims(0, 1), cube),
         ("select", lambda t: t.select(0, 1), mat),
         ("select(dim1)", lambda t: t.select(1, 2), mat),
         ("diagonal", lambda t: t.diagonal(), square),
@@ -1657,6 +1665,25 @@ def reduce_cases(inp=None):
     add("diff(n=2)", lambda L, x=None: L.diff(x if x is not None else L.tensor(tie), n=2), tie)
     add("dist", lambda L, x=None: L.dist(x if x is not None else L.tensor(tie),
                                          L.tensor(np.zeros(4, dtype=np.float32))), tie)
+
+    # **축을 받는 것은 값으로 물어야 한다.** 기울기로만 물으면 축을 통째로 무시해도
+    # 통과한다 — `sum(dim=1).sum()` 과 `sum().sum()` 의 기울기가 둘 다 전부 1 이라
+    # 답이 같기 때문이다. `grad::sum(dim)` 이라는 이름의 케이스가 이미 있었고, 그
+    # 이름 때문에 아무도 다시 안 봤다.
+    #
+    # 그 사이 `borch_ts` 는 `sum(dim=1)` 에 **축을 무시한 스칼라**를 내고 있었다.
+    # borch.ts 가 전체 합과 축 합을 다른 이름으로 두는데 JS 가 남는 인자를 조용히
+    # 버려서다. 랭크 6 케이스 하나가 모양으로 걸릴 때까지 792 건이 전부 초록이었다.
+    #
+    # **메서드로 묻는다.** 모듈 함수 `L.sum` 은 코어에도 자매에도 없다 — torch 에는
+    # 있으므로 그것대로 구멍이지만 이 케이스가 잡으려는 것과 다른 이야기다.
+    add("sum(dim)", lambda L, x=None: (x if x is not None else L.tensor(mat)).sum(dim=1), mat)
+    add("sum(dim0)", lambda L, x=None: (x if x is not None else L.tensor(mat)).sum(dim=0), mat)
+    add("sum(dim,keepdim)",
+        lambda L, x=None: (x if x is not None else L.tensor(mat)).sum(dim=1, keepdim=True), mat)
+    add("norm(dim)", lambda L, x=None: (x if x is not None else L.tensor(mat)).norm(dim=1), mat)
+    add("norm(p=1,dim)",
+        lambda L, x=None: (x if x is not None else L.tensor(mat)).norm(p=1, dim=0), mat)
 
     # 번호를 주는 것들 — 값만 보면 번호가 틀려도 통과한다.
     for name, fn in (("cummax", lambda L: L.cummax(L.tensor(tie), 0)),

@@ -1745,6 +1745,15 @@ function addReduce(out: Map<string, Case>): void {
   add("diff", (x) => x.diff(), tie);
   add("diff(n=2)", (x) => x.diff(2), tie);
 
+  // **축을 받는 것은 값으로 묻는다.** 기울기로만 물으면 축을 통째로 무시해도
+  // 통과한다 — `sum(dim=1).sum()` 과 `sum().sum()` 의 기울기가 둘 다 전부 1 이라
+  // 답이 같기 때문이다. 파이썬 결속이 실제로 그 구멍으로 축을 버리고 있었다.
+  add("sum(dim)", (x) => x.sumDim(1), mat, [2, 3]);
+  add("sum(dim0)", (x) => x.sumDim(0), mat, [2, 3]);
+  add("sum(dim,keepdim)", (x) => x.sumDim(1, true), mat, [2, 3]);
+  add("norm(dim)", (x) => x.square().sumDim(1).sqrt(), mat, [2, 3]);
+  add("norm(p=1,dim)", (x) => x.abs().sumDim(0), mat, [2, 3]);
+
   // 기울기 케이스가 없는 것들. 골든도 값만 굳혔다.
   out.set("reduce::aminmax/최소", () => Tensor.from(tie).amin());
   out.set("reduce::aminmax/최대", () => Tensor.from(tie).amax());
@@ -1774,6 +1783,11 @@ function addShape(out: Map<string, Case>): void {
   const line = (grad = false) => Tensor.from(LINE, [5], grad);
   const col = (grad = false) => Tensor.from(COL, [2, 1], grad);
   const pair = (grad = false) => Tensor.from([1.0, 2.0], [2], grad);
+  // **랭크 3.** 축을 바꾸는 것을 2차원으로만 물으면 `(0,1)` 밖의 자리를 못 본다 —
+  // 2차원에서는 어느 두 축을 골라도 답이 하나뿐이라 축 인자를 버리는 구현도 통과한다.
+  // 여기서는 `permute` 로 적는다. borch.ts 의 `transpose()` 는 2차원 전용이고 축을
+  // 안 받는다 — 파이썬 쪽이 두 축을 받아 이 순서를 만들어 넘긴다.
+  const cube = (grad = false) => Tensor.from(seq(24), [2, 3, 4], grad);
 
   const value: [string, () => Tensor][] = [
     ["expand", () => col().expand(2, 3)],
@@ -1784,6 +1798,10 @@ function addShape(out: Map<string, Case>): void {
     ["ravel", () => m().ravel()],
     ["swapaxes", () => m().swapaxes(0, 1)],
     ["swapdims", () => m().swapaxes(0, 1)],
+    ["transpose(랭크3)", () => cube().permute([0, 2, 1])],
+    ["transpose(랭크3, 0과2)", () => cube().permute([2, 1, 0])],
+    ["transpose(랭크3, 음수축)", () => cube().permute([2, 1, 0])],
+    ["swapdims(랭크3)", () => cube().permute([1, 0, 2])],
     ["select", () => m().select(0, 1)],
     ["select(dim1)", () => m().select(1, 2)],
     ["diagonal", () => sq().diagonal()],

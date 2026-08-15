@@ -145,6 +145,40 @@ def camel(name):
     return head + "".join(p[:1].upper() + p[1:] for p in rest) + tail
 
 
+# borch.ts 쪽이 인자를 **선언조차 안 한** 이름들. 한 번 물어보고 기억한다.
+_NULLARY = {}
+
+
+def refuse_if_nullary(js_name, fn, count):
+    """넘기는 인자를 저쪽이 **안 받으면 멈춘다.**
+
+    이 결속의 구조적 구멍이었다. JS 는 남는 인자를 조용히 버리므로, borch.ts 의
+    `sum()` 에 `sum(dim=1)` 을 넘기면 **축을 무시한 전체 합이 값으로 나온다.**
+    예외도 경고도 없다.
+
+    골든도 못 봤다. `grad::sum(dim)` 케이스가 있었지만 그것은 결과를 스칼라로 접고
+    기울기만 봤는데, `sum(dim=1).sum()` 과 `sum().sum()` 의 기울기가 **둘 다 전부
+    1** 이라 축을 틀려도 답이 같았다. 이름만 케이스였다.
+
+    그래서 이름 하나를 고치는 대신 부류를 막는다. 인자 목록이 비었다고 **소스에
+    적혀 있는** 것만 걸린다 — 기본값이 있는 것은(`softmax(dim = -1)`) 목록에
+    이름이 남으므로 여기 안 걸린다. 재보니 이 표에서 걸리는 것은 넷이었다.
+    """
+    if not count:
+        return
+    known = _NULLARY.get(js_name)
+    if known is None:
+        src = fn.toString()
+        head = src[:src.find(")") + 1]
+        known = head.endswith("()")
+        _NULLARY[js_name] = known
+    if known:
+        raise TypeError(
+            f"borch.ts 의 `{js_name}` 은 인자를 안 받는데 {count} 개를 넘겼다.\n"
+            f"  그대로 두면 조용히 무시되고 **다른 값**이 나온다.\n"
+            f"  이 이름은 `_ops.py` 에 손으로 적어 맞춰야 한다.")
+
+
 def _arg(a):
     """텐서면 손잡이로, 목록이면 JS 배열로, 나머지는 그대로."""
     if isinstance(a, Tensor):
@@ -205,12 +239,8 @@ def __getattr__(name):
     """
     if name.startswith("_"):
         raise AttributeError(name)
-    # **`backend` 는 없다고 답해야 한다.** 골든 하네스가 `hasattr(lib, "backend")` 로
-    # 자매를 알아보고 `webgpu::` 케이스를 그쪽에만 묻는다. 그 케이스들은 TF.js 의 랭크
-    # 한계를 못 박는 것이라 여기서는 뜻이 없다 — 무엇이든 돌려주는 `__getattr__` 이
-    # 우리를 자매로 오인하게 만들고 있었다.
     if name == "backend":
-        raise AttributeError(name)
+        return _ts.Device.adapterInfo
     # dtype 이름들. `bool` 을 모듈 전역에 두면 파이썬 내장을 가리므로 여기서 준다.
     if name in ("bool", "float32", "int64"):
         from ._base import _DType
@@ -229,7 +259,9 @@ def __getattr__(name):
         if fn is None:
             raise AttributeError(
                 f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
-        return guarded(fn, *positional(name, args, kw))
+        laid = positional(name, args, kw)
+        refuse_if_nullary(js_name, fn, len(laid))
+        return guarded(fn, *laid)
 
     call.__name__ = name
     return call
@@ -417,6 +449,66 @@ def squeeze(x, dim=None, **kw):
         return guarded(h.squeeze, dim)
     keep = [int(n) for n in h.shape if int(n) != 1]
     return guarded(h.reshape, _js_list(keep))
+
+
+def sum(x, dim=None, keepdim=False, **kw):               # noqa: A001
+    """borch.ts 는 전체 합(`sum()`)과 축 합(`sumDim`)을 **다른 이름**으로 둔다.
+
+    이 자리가 조용히 틀렸다. `sum(dim=1)` 이 `sum()` 으로 가서 축을 무시한 스칼라를
+    냈고, 예외가 없으니 아무도 몰랐다 — 랭크 6 케이스 하나가 모양으로 걸릴 때까지.
+    """
+    dim = kw.get("dim", dim)
+    keepdim = kw.get("keepdim", keepdim)
+    h = handle(x)
+    if dim is None:
+        return guarded(h.sum)
+    return guarded(h.sumDim, dim, bool(keepdim))
+
+
+def norm(x, p=2, dim=None, keepdim=False, **kw):
+    """borch.ts 의 `norm()` 은 **전체** L2 하나뿐이다. 축과 차수는 여기서 만든다.
+
+    넘겨봐야 조용히 버려지던 자리다 — `norm(dim=1)` 이 전체 노름을 냈다.
+    """
+    p = kw.get("p", p)
+    dim = kw.get("dim", dim)
+    keepdim = kw.get("keepdim", keepdim)
+    h = handle(x)
+    if dim is None and p == 2:
+        return guarded(h.norm)
+    if p == 2:
+        return guarded(handle(guarded(h.square).sumDim(dim, bool(keepdim))).sqrt)
+    if p == 1:
+        got = guarded(h.abs)
+        return wrap(got.sum() if dim is None else got.sumDim(dim, bool(keepdim)))
+    if p == float("inf"):
+        got = guarded(h.abs)
+        return wrap(got.max() if dim is None else got.amax(dim, bool(keepdim)))
+    raise NotImplementedError(f"norm 의 p={p} 는 아직 없다 — 근사하지 않는다")
+
+
+def transpose(x, dim0=None, dim1=None, **kw):
+    """borch.ts 의 `transpose()` 는 **2차원 전용**이고 축을 안 받는다.
+
+    torch 는 어느 랭크에서든 두 축을 바꾼다. 축을 넘기면 버려지던 자리인데, 랭크 2
+    에서는 답이 우연히 같고 랭크 3 이상에서는 borch.ts 가 던져서 조용히 틀리지는
+    않았다. 그래도 `x.transpose(1, 2)` 는 torch 코드가 늘 하는 일이라 맞춰 준다.
+    """
+    dim0 = kw.get("dim0", dim0)
+    dim1 = kw.get("dim1", dim1)
+    h = handle(x)
+    if dim0 is None:
+        return guarded(h.transpose)
+    rank = len(h.shape)
+    a = dim0 + rank if dim0 < 0 else dim0
+    b = dim1 + rank if dim1 < 0 else dim1
+    order = list(range(rank))
+    order[a], order[b] = order[b], order[a]
+    return guarded(h.permute, _js_list(order))
+
+
+def swapdims(x, dim0=None, dim1=None, **kw):
+    return transpose(x, dim0, dim1, **kw)
 
 
 def where(cond, a, b):

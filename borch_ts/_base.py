@@ -225,12 +225,13 @@ class Tensor:
         `'function' object has no attribute 'detach'` 로 나왔다. 값을 돌려줄 자리에
         함수를 돌려주면 그 다음 줄에서야 터지고, 그러면 원인이 한 칸 밀린다.
         """
-        from ._ops import _BINARY_ONLY, camel, positional
+        from ._ops import _BINARY_ONLY, camel, positional, refuse_if_nullary
 
         # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
         if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
-                    "pow", "squeeze", "repeat_interleave", "flatten"):
+                    "pow", "squeeze", "repeat_interleave", "flatten",
+                    "sum", "norm", "transpose", "swapdims"):
             from . import _ops
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(self, *a, **k)
@@ -259,7 +260,9 @@ class Tensor:
             return settle(got)
 
         def call(*args, **kw):
-            return guarded(got, *positional(name, args, kw))
+            laid = positional(name, args, kw)
+            refuse_if_nullary(js_name, got, len(laid))
+            return guarded(got, *laid)
 
         call.__name__ = name
         return call
