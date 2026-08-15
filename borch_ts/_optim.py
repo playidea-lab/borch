@@ -25,7 +25,8 @@ class _Opt:
 
     @property
     def param_groups(self):
-        return self._o.paramGroups
+        # JS 배열은 파이썬에서 바로 못 돈다 — 목록으로 받는다.
+        return self._o.paramGroups.to_py()
 
 
 def _params(ps):
@@ -46,11 +47,38 @@ def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
                                       weight_decay))
 
 
+class _Sched:
+    __slots__ = ("_s",)
+
+    def __init__(self, s):
+        self._s = s
+
+    def step(self, *args):
+        self._s.step(*args)
+
+    def get_last_lr(self):
+        return list(self._s.getLastLr())
+
+
 def _sched(js_name):
     def make(opt, *args, **kw):
-        return _Opt(getattr(_ts.optim, js_name).new(opt._o, *args))
+        from ._ops import _arg
+        return _Sched(getattr(_ts.optim, js_name).new(
+            opt._o, *[_arg(a) for a in args]))
     return make
 
+
+# **`torch.optim.lr_scheduler` 는 이름 공간이다.** 골든이 그 경로로 부른다.
+class _LRScheduler:
+    StepLR = staticmethod(_sched("StepLR"))
+    MultiStepLR = staticmethod(_sched("MultiStepLR"))
+    ExponentialLR = staticmethod(_sched("ExponentialLR"))
+    CosineAnnealingLR = staticmethod(_sched("CosineAnnealingLR"))
+    LambdaLR = staticmethod(_sched("LambdaLR"))
+    ReduceLROnPlateau = staticmethod(_sched("ReduceLROnPlateau"))
+
+
+lr_scheduler = _LRScheduler()
 
 StepLR = _sched("StepLR")
 MultiStepLR = _sched("MultiStepLR")

@@ -112,6 +112,12 @@ _SIGNATURE = {
     "cumulative_trapezoid": ("dim",),
 }
 
+# **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
+# 파이썬은 `permute(0, 2, 1)` 로도 부른다. 흩어진 인자를 하나로 모아야 한다 —
+# 안 모으면 `order.map is not a function` 이 난다.
+_GATHERS = frozenset(("permute", "reshape", "view", "tile", "repeat",
+                      "expand", "broadcast_to", "flip", "quantile", "unflatten"))
+
 
 def camel(name):
     """`masked_select` → `maskedSelect`. 밑줄 뒤 첫 글자를 올린다.
@@ -160,6 +166,12 @@ def positional(name, args, kw):
                 out[i] = kw[key]
     while out and out[-1] is None:
         out.pop()
+    # 흩어진 축 번호를 배열 하나로 모은다. `permute(0, 2, 1)` → `permute([0,2,1])`.
+    if name in _GATHERS and len(out) > 1 and all(isinstance(a, int) for a in out):
+        out = [list(out)]
+    elif name in _GATHERS and len(out) == 1 and isinstance(out[0], int):
+        # `unflatten(dim, sizes)` 처럼 첫 인자가 축인 것은 안 모은다.
+        out = [[out[0]]] if name not in ("unflatten",) else out
     return [_arg(a) for a in out]
 
 
@@ -263,6 +275,28 @@ def linspace(start, end, count, **kw):
     return wrap(_ts.Tensor.linspace(start, end, count))
 
 
+def randn(*shape, **kw):
+    """정규분포 난수. **borch.ts 에는 없어서 여기서 만든다.**
+
+    골든에서 이것을 쓰는 자리는 오류 케이스뿐이고, 거기서는 값을 안 보고 **던지는지**만
+    본다(`L.randn(3, 4) @ L.randn(3, 2)`). 그래서 씨앗을 못 박은 재현 가능한 난수면
+    충분하다 — 값을 묻는 케이스가 생기면 그때는 borch.ts 쪽에 제대로 넣어야 한다.
+    """
+    import numpy as _np
+    from ._base import tensor as _t
+
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
+    return _t(_np.random.default_rng(0).standard_normal(tuple(shape)).astype("float32"))
+
+
+def rand(*shape, **kw):
+    import numpy as _np
+    from ._base import tensor as _t
+
+    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
+    return _t(_np.random.default_rng(0).random(tuple(shape)).astype("float32"))
+
+
 def einsum(spec, *operands):
     """borch.ts 의 `einsum` 은 정적 함수다 — 첫 인자가 텐서가 아니다."""
     return guarded(_ts.einsum, spec, _js.Array.new(*[handle(t) for t in operands]))
@@ -271,6 +305,42 @@ def einsum(spec, *operands):
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)
+
+
+def clamp(x, min=None, max=None):                        # noqa: A002
+    """**한쪽만 주는 것이 흔하다.** borch.ts 는 `clamp(low, high)` 로 둘 다 받고,
+    한쪽에 `undefined` 를 넘기면 그것이 셰이더 안까지 내려가 WGSL 이 거절한다.
+    그래서 여기서 `clampMin`·`clampMax` 로 갈라 준다."""
+    h = handle(x)
+    if min is not None and max is not None:
+        return guarded(h.clamp, min, max)
+    if min is not None:
+        return guarded(h.clampMin, min)
+    if max is not None:
+        return guarded(h.clampMax, max)
+    return wrap(h)
+
+
+clip = clamp
+
+
+def aminmax(x, **kw):
+    """최소와 최대를 함께. borch.ts 는 둘을 따로 갖고 있어서 여기서 묶는다."""
+    h = handle(x)
+    return _MinMax(wrap(h.amin()), wrap(h.amax()))
+
+
+class _MinMax:
+    """`aminmax` 의 답. torch 는 `.min` 과 `.max` 라고 부른다."""
+
+    __slots__ = ("min", "max")
+
+    def __init__(self, lo, hi):
+        self.min, self.max = lo, hi
+
+    def __iter__(self):
+        yield self.min
+        yield self.max
 
 
 # **`torch.linalg` 는 이름 공간이다.** 대부분 텐서 메서드로 있고, 값에 따라 크기가

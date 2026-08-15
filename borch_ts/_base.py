@@ -211,6 +211,11 @@ class Tensor:
         """
         from ._ops import _BINARY_ONLY, camel, positional
 
+        # 한쪽만 자르는 clamp 는 갈라 줘야 한다 — 모듈 쪽과 같은 함수를 쓴다.
+        if name in ("clamp", "clip"):
+            from ._ops import clamp as _clamp
+            return lambda *a, **k: _clamp(self, *a, **k)
+
         js_name = camel(name)
         if name in _BINARY_ONLY:
             # borch.ts 는 단항만 표에서 메서드로 만든다. 이항은 `binary(이름, 상대)` 다.
@@ -248,8 +253,11 @@ class Tensor:
     __lt__, __le__ = _op("lt"), _op("le")
     __gt__, __ge__ = _op("gt"), _op("ge")
 
-    __mod__ = _op("remainder")
-    __matmul__ = _op("matmul")
+    def __mod__(self, other):
+        return guarded(self._h.remainder, float(other))
+
+    def __matmul__(self, other):
+        return guarded(self._h.mm, handle(other))
 
     def __neg__(self):
         return wrap(self._h.neg())
