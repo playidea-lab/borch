@@ -88,7 +88,78 @@ def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
         handle(attn_mask) if attn_mask is not None else None, bool(is_causal)))
 
 
+# ── 손실과 거리 ─────────────────────────────────────────────────────────
+#
+# **자리 순서를 손으로 적는다.** 일반 길(`positional`)은 빈 자리를 `None` 으로 메우는데,
+# torch 의 손실은 `reduction` 이 가운데 있고 `delta`·`margin` 이 뒤에 있어서 하나만
+# 이름으로 주면 앞자리에 구멍이 생긴다. 그 구멍이 저쪽의 기본값을 지운다.
+
+def _lay_out(order, args, kw):
+    """이름으로 받은 것을 **자리로 편다.** 빈 자리는 비워서 넘긴다.
+
+    **가운데가 비면 멈추면 안 된다.** 처음에 그렇게 적었더니
+    `huber_loss(x, y, reduction="none")` 이 `delta` 자리에서 끊겨 `reduction` 을
+    통째로 잃었다 — 예외가 아니라 **기본값으로 조용히 다른 답**이었고, 열세 케이스가
+    한꺼번에 그 모양으로 갈렸다.
+
+    빈 자리는 `None` 으로 둔다. Pyodide 가 그것을 `undefined` 로 넘기므로 저쪽의
+    기본값이 그대로 산다. 뒤에 남는 것은 잘라낸다.
+    """
+    got = dict(zip(order, args))
+    got.update(kw)
+    laid = [_arg(got[key]) if key in got else None for key in order]
+    while laid and laid[-1] is None:
+        laid.pop()
+    return laid
+
+
+def _loss(js_name, order):
+    """torch 의 인자를 **borch.ts 의 자리 순서**로 옮긴다."""
+    def call(x, *args, **kw):
+        return guarded(getattr(handle(x), js_name), *_lay_out(order, args, kw))
+
+    call.__name__ = js_name
+    return call
+
+
+_LOSSES = {
+    "huber_loss": ("huberLoss", ("target", "delta", "reduction")),
+    "kl_div": ("klDiv", ("target", "reduction", "log_target")),
+    "poisson_nll_loss": ("poissonNllLoss",
+                         ("target", "log_input", "full", "eps", "reduction")),
+    "gaussian_nll_loss": ("gaussianNllLoss",
+                          ("target", "var", "full", "eps", "reduction")),
+    "margin_ranking_loss": ("marginRankingLoss",
+                            ("input2", "target", "margin", "reduction")),
+    "cosine_embedding_loss": ("cosineEmbeddingLoss",
+                              ("input2", "target", "margin", "reduction")),
+    "hinge_embedding_loss": ("hingeEmbeddingLoss",
+                             ("target", "margin", "reduction")),
+    "soft_margin_loss": ("softMarginLoss", ("target", "reduction")),
+    "triplet_margin_loss": ("tripletMarginLoss",
+                            ("positive", "negative", "margin", "p", "eps",
+                             "swap", "reduction")),
+    "multilabel_soft_margin_loss": ("multilabelSoftMarginLoss",
+                                    ("target", "reduction")),
+    "multi_margin_loss": ("multiMarginLoss",
+                          ("target", "p", "margin", "weight", "reduction")),
+    "multilabel_margin_loss": ("multilabelMarginLoss", ("target", "reduction")),
+    "pairwise_distance": ("pairwiseDistance", ("x2", "p", "eps", "keepdim")),
+    "pdist": ("pdist", ("p",)),
+}
+
+
+def _triplet_with_distance(anchor, positive, negative, distance_function=None,
+                           margin=1.0, swap=False, reduction="mean"):
+    """거리 함수를 받는 삼중항. 층 쪽에 있는 것을 함수 이름으로도 낸다."""
+    layer = _ts.nn.TripletMarginWithDistanceLoss.new(
+        distance_function, float(margin), bool(swap), reduction)
+    return wrap(guarded(layer.call, handle(anchor), handle(positive),
+                        handle(negative)))
+
+
 _HAND_WRITTEN = {
+    "triplet_margin_with_distance_loss": _triplet_with_distance,
     "scaled_dot_product_attention": _sdpa,
     "avg_pool1d": _pool_fn("avg", False),
     "avg_pool3d": _pool_fn("avg", False),
@@ -103,6 +174,7 @@ _HAND_WRITTEN = {
     "conv_transpose1d": _conv_transpose,
     "conv_transpose2d": _conv_transpose,
     "conv_transpose3d": _conv_transpose,
+    **{name: _loss(js, order) for name, (js, order) in _LOSSES.items()},
 }
 
 
@@ -691,6 +763,43 @@ def Conv2d(cin, cout, k, stride=1, padding=0, bias=True):
 
 def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
+
+
+# ── 손실 층 ─────────────────────────────────────────────────────────────
+#
+# 전부 borch.ts 쪽에 있다. 여기서는 **인자 순서만 옮긴다** — torch 는 `reduction` 을
+# 가운데 두고 저쪽은 뒤에 두므로, 이름으로 받아 자리로 편다.
+
+_LOSS_LAYERS = {
+    "HuberLoss": ("delta", "reduction"),
+    "KLDivLoss": ("reduction", "log_target"),
+    "PoissonNLLLoss": ("log_input", "full", "eps", "reduction"),
+    "GaussianNLLLoss": ("full", "eps", "reduction"),
+    "MarginRankingLoss": ("margin", "reduction"),
+    "CosineEmbeddingLoss": ("margin", "reduction"),
+    "HingeEmbeddingLoss": ("margin", "reduction"),
+    "SoftMarginLoss": ("reduction",),
+    "TripletMarginLoss": ("margin", "p", "eps", "swap", "reduction"),
+    "TripletMarginWithDistanceLoss": ("distance_function", "margin", "swap",
+                                      "reduction"),
+    "MultiLabelSoftMarginLoss": ("reduction",),
+    "MultiMarginLoss": ("p", "margin", "weight", "reduction"),
+    "MultiLabelMarginLoss": ("reduction",),
+    "PairwiseDistance": ("p", "eps", "keepdim"),
+    "CosineSimilarity": ("dim", "eps"),
+}
+
+
+def _loss_layer(name, order):
+    def make(*args, **kw):
+        return _layer(name, *_lay_out(order, args, kw))
+
+    make.__name__ = name
+    return make
+
+
+for _loss_name, _loss_order in _LOSS_LAYERS.items():
+    globals()[_loss_name] = _loss_layer(_loss_name, _loss_order)
 
 
 # ── 패딩 층 열다섯 ──────────────────────────────────────────────────────

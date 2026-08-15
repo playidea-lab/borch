@@ -24,6 +24,9 @@ const SINGULAR_INFO = 2;
 /** `F.pad` 가 받는 네 가지. */
 export type PadMode = "constant" | "reflect" | "replicate" | "circular";
 
+/** 손실이 접는 방식. **`KLDivLoss` 만 넷째(`batchmean`)를 더 받는다.** */
+export type Reduction = "none" | "mean" | "sum";
+
 /**
  * 출력 자리마다 **입력의 어느 자리를 읽는지.**
  *
@@ -1997,6 +2000,236 @@ export class Tensor implements Node<Tensor> {
     const far = d.abs().binary("sub", Tensor.full([], 0.5 * beta));
     const isNear = d.abs().binary("lt", Tensor.full([], beta));
     return near.where(isNear, far).mean();
+  }
+
+  // ── 손실과 거리 ───────────────────────────────────────────────────────
+  //
+  // **접는 방식이 손실의 일부다.** torch 의 손실은 전부 `reduction` 을 받고, 그 값에
+  // 따라 원소별·평균·합이 된다. 한 자리에 모아 두면 열셋이 같은 규칙을 쓴다.
+
+  private reduceAs(reduction: Reduction): Tensor {
+    if (reduction === "none") return this;
+    return reduction === "sum" ? this.sum() : this.mean();
+  }
+
+  /**
+   * **`smoothL1Loss` 와 δ=1 에서만 같다.**
+   *
+   * 실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은
+   * 함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.
+   */
+  huberLoss(target: Tensor, delta = 1.0, reduction: Reduction = "mean"): Tensor {
+    const d = this.sub(target);
+    const near = d.square().binary("mul", Tensor.full([], 0.5));
+    const far = d.abs().binary("sub", Tensor.full([], 0.5 * delta))
+      .binary("mul", Tensor.full([], delta));
+    const isNear = d.abs().binary("lt", Tensor.full([], delta));
+    return near.where(isNear, far).reduceAs(reduction);
+  }
+
+  /**
+   * `target · (log target − this)`. **이쪽은 이미 로그**여야 한다.
+   *
+   * **`reduction` 이 넷이다.** `mean` 은 원소 수로 나누고 `batchmean` 은 배치 크기로
+   * 나눈다 — 수학적 정의에 맞는 것은 뒤쪽이고, torch 자신도 바꾸겠다고 경고한다.
+   */
+  klDiv(
+    target: Tensor, reduction: Reduction | "batchmean" = "mean", logTarget = false,
+  ): Tensor {
+    const each = logTarget
+      ? target.exp().mul(target.sub(this))
+      : target.mul(target.log().sub(this));
+    if (reduction === "batchmean") {
+      return each.sum().binary("div", Tensor.full([], this.shape[0] ?? 1));
+    }
+    return each.reduceAs(reduction);
+  }
+
+  /**
+   * 포아송 음의 로그가능도.
+   *
+   * **스털링 보정은 `target > 1` 일 때만 더한다** — 조건 없이 늘 더하면 target 이
+   * 작은 자리에서만 틀린다(실측으로 확인했다).
+   */
+  poissonNllLoss(
+    target: Tensor, logInput = true, full = false, eps = 1e-8,
+    reduction: Reduction = "mean",
+  ): Tensor {
+    let out = logInput
+      ? this.exp().sub(target.mul(this))
+      : this.sub(target.mul(this.binary("add", Tensor.full([], eps)).log()));
+    if (full) {
+      const half = Tensor.full([], 0.5);
+      const twoPi = Tensor.full([], 2 * Math.PI);
+      const stirling = target.mul(target.log()).sub(target)
+        .add(twoPi.mul(target).log().mul(half));
+      const big = target.binary("gt", Tensor.full([], 1));
+      out = out.add(stirling.where(big, Tensor.zeros(target.shape)));
+    }
+    return out.reduceAs(reduction);
+  }
+
+  /**
+   * 가우스 음의 로그가능도.
+   *
+   * **분산을 `eps` 로 자른다.** 안 자르면 0 으로 나눠 무한대가 된다.
+   */
+  gaussianNllLoss(
+    target: Tensor, variance: Tensor, full = false, eps = 1e-6,
+    reduction: Reduction = "mean",
+  ): Tensor {
+    const safe = variance.binary("maximum", Tensor.full([], eps));
+    const d = this.sub(target);
+    let out = safe.log().add(d.square().div(safe))
+      .binary("mul", Tensor.full([], 0.5));
+    if (full) {
+      out = out.binary("add", Tensor.full([], 0.5 * Math.log(2 * Math.PI)));
+    }
+    return out.reduceAs(reduction);
+  }
+
+  /** `max(0, −y·(x₁ − x₂) + margin)`. */
+  marginRankingLoss(
+    other: Tensor, target: Tensor, margin = 0.0, reduction: Reduction = "mean",
+  ): Tensor {
+    return target.neg().mul(this.sub(other))
+      .binary("add", Tensor.full([], margin)).unary("relu").reduceAs(reduction);
+  }
+
+  /** `y=1` 이면 `1 − cos`, `y=−1` 이면 `max(0, cos − margin)`. */
+  cosineEmbeddingLoss(
+    other: Tensor, target: Tensor, margin = 0.0, reduction: Reduction = "mean",
+  ): Tensor {
+    const cos = this.cosineSimilarity(other, 1);
+    const same = target.binary("gt", Tensor.full([], 0));
+    const positive = Tensor.full([], 1).sub(cos);
+    const negative = cos.binary("sub", Tensor.full([], margin)).unary("relu");
+    return positive.where(same, negative).reduceAs(reduction);
+  }
+
+  /**
+   * `y=1` 이면 `x` 그대로, `y=−1` 이면 `max(0, margin − x)`.
+   *
+   * **둘로 가르는 것이 아니라 둘을 더한다.** torch 는 `y ≠ 1` 인 자리에 여백 항을,
+   * `y ≠ −1` 인 자리에 `x` 를 놓고 **합한다** — ±1 에서는 한쪽만 켜져 평소 식과
+   * 같지만 `y=0` 에서는 **둘 다** 켜진다. `y > 0` 으로 갈라 놓았더니 거기서 조용히
+   * 갈렸고, `sign()` 은 0 을 만든다.
+   */
+  hingeEmbeddingLoss(
+    target: Tensor, margin = 1.0, reduction: Reduction = "mean",
+  ): Tensor {
+    const one = Tensor.full([], 1);
+    const notOne = target.binary("ne", one);
+    const notNeg = target.binary("ne", Tensor.full([], -1));
+    const marginPart = Tensor.full([], margin).sub(this).unary("relu").mul(notOne);
+    return marginPart.add(this.mul(notNeg)).reduceAs(reduction);
+  }
+
+  /** `log(1 + e^{−y·x})`. `softplus` 로 가면 큰 값에서 안 넘친다. */
+  softMarginLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    return target.mul(this).neg().softplus().reduceAs(reduction);
+  }
+
+  /**
+   * 짝지어진 두 줄 사이의 거리.
+   *
+   * **`eps` 는 결과가 아니라 차에 더한다.** `p=1` 로 차가 정확히 1.0 인 자리를
+   * 물으면 1.0000020 이 나온다(= 1 + 2·1e-6) — 결과에 더한다고 읽으면 1.000001 이
+   * 되어 자릿수 하나가 갈린다. 실측으로 확인했다.
+   */
+  pairwiseDistance(other: Tensor, p = 2.0, eps = 1e-6, keepdim = false): Tensor {
+    const diff = this.sub(other).binary("add", Tensor.full([], eps));
+    const out = diff.vectorNorm(p, this.shape.length - 1);
+    return keepdim ? out.reshape([...out.shape, 1]) : out;
+  }
+
+  /** 한 묶음 안의 **모든 짝** 사이 거리. 위 삼각만 준다. */
+  pdist(p = 2.0): Tensor {
+    const n = this.shape[0] ?? 0;
+    const rows: number[] = [];
+    const cols: number[] = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) { rows.push(i); cols.push(j); }
+    }
+    const pick = (idx: number[]) =>
+      this.indexSelect(0, Tensor.from(idx, [idx.length]));
+    return pick(rows).sub(pick(cols)).vectorNorm(p, 1);
+  }
+
+  /** `max(0, d(a,p) − d(a,n) + margin)`. */
+  tripletMarginLoss(
+    positive: Tensor, negative: Tensor, margin = 1.0, p = 2.0, eps = 1e-6,
+    swap = false, reduction: Reduction = "mean",
+  ): Tensor {
+    const dp = this.pairwiseDistance(positive, p, eps);
+    let dn = this.pairwiseDistance(negative, p, eps);
+    // 음성이 양성에 더 가까우면 그쪽이 더 어려운 짝이다.
+    if (swap) dn = dn.binary("minimum", positive.pairwiseDistance(negative, p, eps));
+    return dp.sub(dn).binary("add", Tensor.full([], margin)).unary("relu")
+      .reduceAs(reduction);
+  }
+
+  /** 자리마다 독립인 이진 분류를 **반 전체로 평균**한다. */
+  multilabelSoftMarginLoss(
+    target: Tensor, reduction: Reduction = "mean",
+  ): Tensor {
+    const each = target.mul(this.logsigmoid())
+      .add(Tensor.full([], 1).sub(target).mul(this.neg().logsigmoid()));
+    const dim = this.shape.length - 1;
+    return each.neg().mean(dim).reduceAs(reduction);
+  }
+
+  /**
+   * 정답 자리와 나머지 사이의 여백.
+   *
+   * **반의 개수로 나눈다** — 견준 짝의 수가 아니다. 정답 자리도 분모에 들어간다는
+   * 뜻이고, 짝의 수로 나누면 반이 셋일 때 3/2 배가 나온다.
+   */
+  multiMarginLoss(
+    target: Tensor, p = 1, margin = 1.0, weight: Tensor | null = null,
+    reduction: Reduction = "mean",
+  ): Tensor {
+    const rows = this.shape[0] ?? 0;
+    const classes = this.shape[1] ?? 0;
+    const idx = target.reshape([rows, 1]);
+    const correct = this.gather(1, idx);
+    let each = Tensor.full([], margin).sub(correct).add(this).unary("relu");
+    if (p === 2) each = each.square();
+    if (weight) each = each.mul(weight.indexSelect(0, target).reshape([rows, 1]));
+    // 정답 자리는 `margin` 이 그대로 남으므로 뺀다.
+    const keep = Tensor.ones([rows, classes])
+      .scatterSet(1, idx, Tensor.zeros([rows, 1]));
+    return each.mul(keep).sumDim(1, false)
+      .binary("div", Tensor.full([], classes)).reduceAs(reduction);
+  }
+
+  /**
+   * **표적이 자리 목록이고 −1 이 끝을 뜻한다.**
+   *
+   * `[3, 0, -1, 1]` 은 "3 번과 0 번이 정답" 이라는 뜻이고 뒤의 1 은 안 읽는다. 그
+   * 규약을 안 지키면 −1 을 반의 하나로 세거나 끝난 뒤를 계속 읽는다.
+   *
+   * 어디까지 읽을지는 **누적합**으로 정한다 — `−1` 을 만난 뒤로는 전부 꺼진다. 그
+   * 뒤 정답 자리를 0/1 로 흩어 담으면 CPU 로 읽어 올 일이 없다. 덮어쓰기가 아니라
+   * **모아 더하기**로 담는 이유는, 끝난 뒤의 자리가 clamp 되어 앞의 1 을 지울 수
+   * 있기 때문이다.
+   */
+  multilabelMarginLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    const rows = this.shape[0] ?? 0;
+    const classes = this.shape[1] ?? 0;
+    const stop = target.binary("eq", Tensor.full([], -1));
+    const live = stop.cumsum(1).binary("eq", Tensor.full([], 0));
+    const safe = target.binary("maximum", Tensor.full([], 0));
+    const isPos = Tensor.zeros([rows, classes]).scatterAdd(1, safe, live);
+    const isNeg = Tensor.full([], 1).sub(isPos);
+    // `diff[r,i,j] = 1 − (x[r,i] − x[r,j])`, 정답 i 와 오답 j 만 센다.
+    const asRow = this.reshape([rows, classes, 1]);
+    const asCol = this.reshape([rows, 1, classes]);
+    const term = Tensor.full([], 1).sub(asRow.sub(asCol)).unary("relu");
+    const mask = isPos.reshape([rows, classes, 1])
+      .mul(isNeg.reshape([rows, 1, classes]));
+    return term.mul(mask).sumDim(2, false).sumDim(1, false)
+      .binary("div", Tensor.full([], classes)).reduceAs(reduction);
   }
 
   /**

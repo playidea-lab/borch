@@ -463,6 +463,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addAct(out, inputs);
   addNorm(out, inputs);
   addPad(out);
+  addLoss(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -970,6 +971,187 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
  * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
  * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
  */
+/**
+ * 손실 열셋과 거리 셋.
+ *
+ * 함정 셋은 파이썬 쪽 `loss_cases` 에 적었다 — 짧게: `huber(δ)` 는 `smooth_l1(β=δ)`
+ * 의 δ 배이고(δ=1 에서만 같다), `KLDivLoss` 의 `mean` 과 `batchmean` 은 나누는 수가
+ * 다르며, `pairwise_distance` 의 `eps` 는 결과가 아니라 **차에** 더해진다.
+ */
+function addLoss(out: Map<string, Case>): void {
+  const X = [0.5, -1.0, 2.0, 1.5, 0.25, -0.5];
+  const Y = [1.0, 0.0, -1.0, 0.5, 1.0, 0.25];
+  const x = (g = false) => Tensor.from(X, [2, 3], g);
+  const y = () => Tensor.from(Y, [2, 3]);
+  const sgn = () => Tensor.from(Y.map(Math.sign), [2, 3]);
+  const counts = () => Tensor.from([1, 2, 0, 3, 0.5, 1], [2, 3]);
+  const variance = () => Tensor.from([1, 0.5, 2, 0.25, 1.5, 1], [2, 3]);
+  const positive = (g = false) => Tensor.from(X.map(Math.abs).map((v) => v + 0.5),
+    [2, 3], g);
+  const a = (g = false) => Tensor.from([1, 2, 0.5, -1], [2, 2], g);
+  const b = () => Tensor.from([0.5, 1.5, 1, -0.5], [2, 2]);
+  const sign2 = () => Tensor.from([1, -1], [2]);
+  const anc = (g = false) => Tensor.from([1, 0, 0, 1], [2, 2], g);
+  const pos = () => Tensor.from([2, 0.5, 1.5, 1], [2, 2]);
+  const neg = () => Tensor.from([1.1, 0.1, 0.2, 0.9], [2, 2]);
+  const hinge = () => Tensor.from([0.5, 1.5, 2, 0.25], [2, 2]);
+  const htgt = () => Tensor.from([1, -1, -1, 1], [2, 2]);
+  const mm = () => Tensor.from([0.1, 0.2, 0.4, 0.8, 0.3, 0.1], [2, 3]);
+  const mmt = () => Tensor.from([2, 0], [2]);
+  const logp = () => x().logSoftmax(1);
+  const tgtp = () => y().softmax(1);
+
+  const value: [string, () => Tensor][] = [
+    ["huber(기본)", () => x().huberLoss(y())],
+    ["huber(δ=0.5)", () => x().huberLoss(y(), 0.5)],
+    ["huber(δ=2)", () => x().huberLoss(y(), 2.0)],
+    ["huber(none)", () => x().huberLoss(y(), 1.0, "none")],
+    ["huber(sum)", () => x().huberLoss(y(), 1.0, "sum")],
+    ["huber(δ=0.5)/smooth_l1(β=0.5)",
+      () => x().huberLoss(y(), 0.5).div(x().smoothL1Loss(y(), 0.5))],
+
+    ["kl_div(none)", () => logp().klDiv(tgtp(), "none")],
+    ["kl_div(mean)", () => logp().klDiv(tgtp(), "mean")],
+    ["kl_div(sum)", () => logp().klDiv(tgtp(), "sum")],
+    ["kl_div(batchmean)", () => logp().klDiv(tgtp(), "batchmean")],
+    ["kl_div(log_target)", () => logp().klDiv(tgtp().log(), "mean", true)],
+
+    ["poisson(log_input=True,full=False)",
+      () => positive().poissonNllLoss(counts(), true, false)],
+    ["poisson(log_input=True,full=True)",
+      () => positive().poissonNllLoss(counts(), true, true)],
+    ["poisson(log_input=False,full=False)",
+      () => positive().poissonNllLoss(counts(), false, false)],
+    ["poisson(log_input=False,full=True)",
+      () => positive().poissonNllLoss(counts(), false, true)],
+    ["poisson(none)",
+      () => positive().poissonNllLoss(counts(), true, false, 1e-8, "none")],
+
+    ["gaussian(full=False)", () => x().gaussianNllLoss(y(), variance(), false)],
+    ["gaussian(full=True)", () => x().gaussianNllLoss(y(), variance(), true)],
+    ["gaussian(var<eps)",
+      () => x().gaussianNllLoss(y(), Tensor.from([1e-9, 1, 1, 1, 1, 1], [2, 3]),
+        false, 1e-6, "none")],
+    ["gaussian(eps=1e-2)",
+      () => x().gaussianNllLoss(y(), Tensor.from([1e-9, 1, 1, 1, 1, 1], [2, 3]),
+        false, 1e-2, "none")],
+
+    ["margin_ranking", () => Tensor.from([1, 2], [2])
+      .marginRankingLoss(Tensor.from([2, 1], [2]), sign2(), 0.5)],
+    ["margin_ranking(none)", () => Tensor.from([1, 2], [2])
+      .marginRankingLoss(Tensor.from([2, 1], [2]), sign2(), 0.5, "none")],
+    ["cosine_embedding(margin=0.0)",
+      () => a().cosineEmbeddingLoss(b(), sign2(), 0.0, "none")],
+    ["cosine_embedding(margin=0.5)",
+      () => a().cosineEmbeddingLoss(b(), sign2(), 0.5, "none")],
+    ["hinge_embedding(margin=1.0)",
+      () => hinge().hingeEmbeddingLoss(htgt(), 1.0, "none")],
+    ["hinge_embedding(margin=2.0)",
+      () => hinge().hingeEmbeddingLoss(htgt(), 2.0, "none")],
+    // 표적이 ±1 이 아닌 자리 — 두 항이 **둘 다** 켜진다.
+    ["hinge_embedding(y=0)",
+      () => Tensor.from([-1, 0.5, 2], [1, 3])
+        .hingeEmbeddingLoss(Tensor.zeros([1, 3]), 1.0, "none")],
+    ["soft_margin", () => x().softMarginLoss(sgn())],
+    ["soft_margin(none)", () => x().softMarginLoss(sgn(), "none")],
+
+    ["triplet(기본)", () => anc().tripletMarginLoss(pos(), neg())],
+    ["triplet(margin=2)", () => anc().tripletMarginLoss(pos(), neg(), 2.0)],
+    ["triplet(p=1)", () => anc().tripletMarginLoss(pos(), neg(), 1.0, 1)],
+    ["triplet(swap)",
+      () => anc().tripletMarginLoss(pos(), neg(), 1.0, 2.0, 1e-6, true)],
+    ["triplet(none)",
+      () => anc().tripletMarginLoss(pos(), neg(), 1.0, 2.0, 1e-6, false, "none")],
+    ["triplet_with_distance(기본)",
+      () => new nn.TripletMarginWithDistanceLoss().call(anc(), pos(), neg())],
+    ["triplet_with_distance(margin=2)",
+      () => new nn.TripletMarginWithDistanceLoss(null, 2.0).call(anc(), pos(), neg())],
+
+    ["multilabel_soft_margin", () => Tensor.from([0.5, -1, 2], [1, 3])
+      .multilabelSoftMarginLoss(Tensor.from([1, 0, 1], [1, 3]))],
+    ["multi_margin(기본)", () => mm().multiMarginLoss(mmt(), 1, 1.0, null, "none")],
+    ["multi_margin(margin=0.5)",
+      () => mm().multiMarginLoss(mmt(), 1, 0.5, null, "none")],
+    ["multi_margin(p=2)", () => mm().multiMarginLoss(mmt(), 2, 1.0, null, "none")],
+    ["multi_margin(weight)",
+      () => mm().multiMarginLoss(mmt(), 1, 1.0, Tensor.from([1, 2, 0.5], [3]))],
+    ["multilabel_margin", () => Tensor.from([0.1, 0.2, 0.4, 0.8], [1, 4])
+      .multilabelMarginLoss(Tensor.from([3, 0, -1, 1], [1, 4]))],
+
+    ["pairwise_distance", () => a().pairwiseDistance(b())],
+    ["pairwise_distance(p=1)", () => a().pairwiseDistance(b(), 1)],
+    ["pairwise_distance(eps=0)", () => a().pairwiseDistance(b(), 1, 0)],
+    ["pairwise_distance(keepdim)", () => a().pairwiseDistance(b(), 2, 1e-6, true)],
+    ["pdist", () => Tensor.from([0, 0, 3, 4, 1, 1], [3, 2]).pdist()],
+    // 원소 하나를 접기 — 파이썬 쪽 주석에 이유를 적었다. 여기가 0 을 내던 자리다.
+    ["원소 하나를 mean",
+      () => Tensor.from([1, 2, 3], [3]).sum().binary("mul", Tensor.full([], 1))
+        .reshape([1]).mean()],
+    ["원소 하나를 sum",
+      () => Tensor.from([1, 2, 3], [3]).sum().binary("mul", Tensor.full([], 1))
+        .reshape([1]).sum()],
+  ];
+  for (const [name, fn] of value) out.set(`loss::${name}`, fn);
+
+  const layers: [string, () => Tensor][] = [
+    ["HuberLoss", () => new nn.HuberLoss(0.5).call(x(), y())],
+    ["KLDivLoss", () => new nn.KLDivLoss("batchmean").call(logp(), tgtp())],
+    ["PoissonNLLLoss", () => new nn.PoissonNLLLoss().call(positive(), counts())],
+    ["GaussianNLLLoss",
+      () => new nn.GaussianNLLLoss().call(x(), y(), variance())],
+    ["MarginRankingLoss", () => new nn.MarginRankingLoss(0.5)
+      .call(Tensor.from([1, 2], [2]), Tensor.from([2, 1], [2]), sign2())],
+    ["CosineEmbeddingLoss",
+      () => new nn.CosineEmbeddingLoss().call(a(), b(), sign2())],
+    ["HingeEmbeddingLoss",
+      () => new nn.HingeEmbeddingLoss().call(hinge(), htgt())],
+    ["SoftMarginLoss", () => new nn.SoftMarginLoss().call(x(), sgn())],
+    ["TripletMarginLoss",
+      () => new nn.TripletMarginLoss().call(anc(), pos(), neg())],
+    ["TripletMarginWithDistanceLoss",
+      () => new nn.TripletMarginWithDistanceLoss().call(anc(), pos(), neg())],
+    ["MultiLabelSoftMarginLoss", () => new nn.MultiLabelSoftMarginLoss()
+      .call(Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]))],
+    ["MultiMarginLoss", () => new nn.MultiMarginLoss().call(mm(), mmt())],
+    ["MultiLabelMarginLoss", () => new nn.MultiLabelMarginLoss()
+      .call(Tensor.from([0.1, 0.2, 0.4, 0.8], [1, 4]),
+        Tensor.from([3, 0, -1, 1], [1, 4]))],
+    ["PairwiseDistance", () => new nn.PairwiseDistance().call(a(), b())],
+    ["CosineSimilarity", () => new nn.CosineSimilarity(1).call(a(), b())],
+  ];
+  for (const [name, fn] of layers) out.set(`loss::층::${name}`, fn);
+
+  // **손실은 기울기가 전부다.** 값이 맞고 기울기가 틀리면 학습이 조용히 다른 데로 간다.
+  const grads: [string, (p: Tensor) => Tensor][] = [
+    ["huber", (p) => p.huberLoss(y(), 0.5)],
+    ["kl_div", (p) => p.logSoftmax(1).klDiv(tgtp())],
+    ["poisson", (p) => p.poissonNllLoss(counts())],
+    ["gaussian", (p) => p.gaussianNllLoss(y(), variance())],
+    ["soft_margin", (p) => p.softMarginLoss(sgn())],
+    ["hinge_embedding", (p) => p.hingeEmbeddingLoss(sgn())],
+    ["multilabel_soft_margin",
+      (p) => p.multilabelSoftMarginLoss(
+        Tensor.from(Y.map((v) => (v > 0 ? 1 : 0)), [2, 3]))],
+  ];
+  for (const [name, fn] of grads) {
+    out.set(`loss::grad::${name}`, () => {
+      const p = x(true);
+      fn(p).backward();
+      return gradOf(p, name);
+    });
+  }
+  out.set("loss::grad::triplet", () => {
+    const p = anc(true);
+    p.tripletMarginLoss(pos(), neg()).backward();
+    return gradOf(p, "triplet");
+  });
+  out.set("loss::grad::cosine_embedding", () => {
+    const p = a(true);
+    p.cosineEmbeddingLoss(b(), sign2()).backward();
+    return gradOf(p, "cosine_embedding");
+  });
+}
+
 /**
  * 패딩 — 네 모드와 층 열다섯.
  *

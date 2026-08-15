@@ -421,10 +421,14 @@ export class Device {
     if (owned) return owned;
     // 원소가 하나면 접을 것이 없다. 입력을 그대로 돌려주면 호출자가 남의 버퍼를
     // 파괴하게 되므로 복사해서 준다.
+    //
+    // **쌓아 둔 줄에 얹어야 한다.** 여기서 인코더를 따로 만들어 바로 제출했더니, 아직
+    // 안 보낸 명령이 만들 값을 **먼저** 복사해서 0 이 나왔다 — 뒤늦게 그 값이 계산돼도
+    // 복사본은 이미 떠난 뒤다. 예외도 NaN 도 아니고 **그냥 0** 이라, `x.mean()` 의
+    // `x` 가 원소 하나일 때 손실이 조용히 0 이 되는 자리였다. 원소가 하나인 텐서를
+    // 접는 일이 드물어서 골든 1,399 건이 초록인 채로 지나갔다.
     const copy = this.alloc(1);
-    const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(input, 0, copy, 0, BYTES_PER_F32);
-    this.device.queue.submit([encoder.finish()]);
+    this.copyInto(copy, input, 1);
     return copy;
   }
 

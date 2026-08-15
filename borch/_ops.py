@@ -2774,15 +2774,226 @@ def nll_loss(log_probs, target):
     return -picked.mean()
 
 
-def l1_loss(pred, target):
-    return (pred - target).abs().mean()
+def l1_loss(pred, target, reduction="mean"):
+    return _reduce((_wrap(pred) - _wrap(target)).abs(), reduction)
 
 
-def smooth_l1_loss(pred, target, beta=1.0):
+def smooth_l1_loss(pred, target, beta=1.0, reduction="mean"):
     """작은 오차는 제곱, 큰 오차는 절댓값. 이상치에 덜 흔들린다."""
-    diff = pred - target
+    diff = _wrap(pred) - _wrap(target)
     small = _np.abs(diff.data) < beta
-    return (where(Tensor(small), 0.5 * diff * diff / beta, diff.abs() - 0.5 * beta)).mean()
+    return _reduce(where(Tensor(small), 0.5 * diff * diff / beta,
+                         diff.abs() - 0.5 * beta), reduction)
+
+
+# ---------------------------------------------------------------- 손실
+#
+# **접는 방식이 손실의 일부다.** torch 의 손실은 전부 `reduction` 을 받고, 그 값에
+# 따라 원소별·평균·합이 된다. 한 자리에 모아 두면 열셋이 같은 규칙을 쓴다 — 손실마다
+# 적으면 열세 자리에서 어긋날 수 있는데 실제로 갈리는 것은 여기 세 줄뿐이다.
+
+def _reduce(out, reduction):
+    if reduction == "none":
+        return out
+    if reduction == "sum":
+        return out.sum()
+    return out.mean()
+
+
+def huber_loss(pred, target, reduction="mean", delta=1.0):
+    """**`SmoothL1Loss` 와 δ=1 에서만 같다.**
+
+    실제 관계는 `huber(δ) = δ · smooth_l1(β=δ)` 다. 기본값으로만 재면 둘을 같은
+    함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.
+    """
+    diff = _wrap(pred) - _wrap(target)
+    small = _np.abs(diff.data) < delta
+    return _reduce(where(Tensor(small), 0.5 * diff * diff,
+                         delta * (diff.abs() - 0.5 * delta)), reduction)
+
+
+def kl_div(pred, target, reduction="mean", log_target=False):
+    """`target · (log target − pred)`. `pred` 는 **이미 로그**여야 한다.
+
+    **`reduction` 이 넷이다.** `mean` 은 원소 수로 나누고 `batchmean` 은 배치 크기로
+    나눈다 — 수학적 정의에 맞는 것은 뒤쪽이고, torch 자신도 "다음 주 버전에서 바꾸겠다"
+    고 경고를 낸다. 지금 값을 맞춰야 하므로 지금 규칙을 따른다.
+    """
+    p, t = _wrap(pred), _wrap(target)
+    out = (t.exp() * (t - p)) if log_target else (t * (t.log() - p))
+    if reduction == "batchmean":
+        return out.sum() / out.data.shape[0]
+    return _reduce(out, reduction)
+
+
+def poisson_nll_loss(pred, target, log_input=True, full=False, eps=1e-8,
+                     reduction="mean"):
+    """포아송 음의 로그가능도.
+
+    **스털링 보정은 `target > 1` 일 때만 더한다.** 조건 없이 늘 더하면 target 이 작은
+    자리에서만 틀린다 — 실측으로 확인했다(target 이 0·0.5·1 이면 차이가 0 이다).
+    """
+    p, t = _wrap(pred), _wrap(target)
+    out = (p.exp() - t * p) if log_input else (p - t * (p + eps).log())
+    if full:
+        big = t.data > 1
+        stirling = (t * t.log() - t + 0.5 * (2 * _math.pi * t).log())
+        out = out + where(Tensor(big.astype(t.data.dtype)), stirling,
+                          Tensor(_np.zeros_like(t.data)))
+    return _reduce(out, reduction)
+
+
+def gaussian_nll_loss(pred, target, var, full=False, eps=1e-6, reduction="mean"):
+    """가우스 음의 로그가능도.
+
+    **분산을 `eps` 로 자른다.** 안 자르면 0 으로 나눠 무한대가 된다 — `var=1e-9` 에
+    기본 `eps=1e-6` 이면 잘린 값으로 124993 이 나온다(실측).
+    """
+    p, t, v = _wrap(pred), _wrap(target), _wrap(var)
+    safe = clamp(v, min=eps)
+    diff = p - t
+    out = 0.5 * (safe.log() + diff * diff / safe)
+    if full:
+        out = out + 0.5 * _math.log(2 * _math.pi)
+    return _reduce(out, reduction)
+
+
+def margin_ranking_loss(input1, input2, target, margin=0.0, reduction="mean"):
+    """`max(0, −y·(x₁ − x₂) + margin)`."""
+    a, b, t = _wrap(input1), _wrap(input2), _wrap(target)
+    return _reduce(relu(-t * (a - b) + margin), reduction)
+
+
+def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction="mean"):
+    """`y=1` 이면 `1 − cos`, `y=−1` 이면 `max(0, cos − margin)`."""
+    a, b, t = _wrap(input1), _wrap(input2), _wrap(target)
+    cos = cosine_similarity(a, b, dim=1)
+    same = Tensor((t.data > 0).astype(cos.data.dtype))
+    return _reduce(same * (1 - cos) + (1 - same) * relu(cos - margin), reduction)
+
+
+def hinge_embedding_loss(pred, target, margin=1.0, reduction="mean"):
+    """`y=1` 이면 `x` 그대로, `y=−1` 이면 `max(0, margin − x)`.
+
+    **둘로 가르는 것이 아니라 둘을 더한다.** torch 는 `y ≠ 1` 인 자리에 여백 항을,
+    `y ≠ −1` 인 자리에 `x` 를 놓고 **합한다** — ±1 에서는 한쪽만 켜져 평소 식과 같지만
+    `y=0` 에서는 **둘 다** 켜진다(실측: `x=−1` 에 1.0, `x=2` 에 2.0).
+
+    `y > 0` 으로 갈라 놓았더니 여기서 조용히 갈렸다. 손실이 ±1 만 받는다고 적혀 있어도
+    실제로 오는 값이 그것뿐이라는 보장은 없고, `sign()` 은 0 을 만든다.
+    """
+    p, t = _wrap(pred), _wrap(target)
+    dt = p.data.dtype
+    not_one = Tensor((t.data != 1).astype(dt))
+    not_neg = Tensor((t.data != -1).astype(dt))
+    return _reduce(not_one * relu(margin - p) + not_neg * p, reduction)
+
+
+def soft_margin_loss(pred, target, reduction="mean"):
+    """`log(1 + e^{−y·x})`. 로그·지수를 그대로 쓰면 큰 값에서 넘치므로 `softplus` 로 간다."""
+    p, t = _wrap(pred), _wrap(target)
+    return _reduce(softplus(-t * p), reduction)
+
+
+def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
+    """짝지어진 두 줄 사이의 거리.
+
+    **`eps` 는 결과가 아니라 차에 더한다.** `p=1` 로 차가 정확히 1.0 인 자리를
+    물으면 1.0000020 이 나온다(= 1 + 2·1e-6) — 결과에 더한다고 읽으면 1.000001 이
+    되어 자릿수 하나가 갈린다. 실측으로 확인했다.
+    """
+    a, b = _wrap(x1), _wrap(x2)
+    diff = (a - b) + eps
+    return vector_norm(diff, ord=p, dim=-1, keepdim=keepdim)
+
+
+def pdist(x, p=2.0):
+    """한 묶음 안의 **모든 짝** 사이 거리. 위 삼각만 준다."""
+    t = _wrap(x)
+    n = t.data.shape[0]
+    rows = [i for i in range(n) for _ in range(i + 1, n)]
+    cols = [j for i in range(n) for j in range(i + 1, n)]
+    diff = t[rows] - t[cols]
+    return vector_norm(diff, ord=p, dim=-1)
+
+
+def triplet_margin_loss(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
+                        swap=False, reduction="mean"):
+    """`max(0, d(a,p) − d(a,n) + margin)`.
+
+    `swap` 은 `d(a,n)` 대신 `min(d(a,n), d(p,n))` 을 쓴다 — 음성이 양성에 더 가까우면
+    그쪽이 더 어려운 짝이기 때문이다.
+    """
+    a, pos, neg = _wrap(anchor), _wrap(positive), _wrap(negative)
+    dp = pairwise_distance(a, pos, p=p, eps=eps)
+    dn = pairwise_distance(a, neg, p=p, eps=eps)
+    if swap:
+        dn = minimum(dn, pairwise_distance(pos, neg, p=p, eps=eps))
+    return _reduce(relu(dp - dn + margin), reduction)
+
+
+def triplet_margin_with_distance_loss(anchor, positive, negative,
+                                      distance_function=None, margin=1.0,
+                                      swap=False, reduction="mean"):
+    """거리 함수를 받는 삼중항. 기본값은 쌍별 거리라 위와 같은 답이 나온다."""
+    a, pos, neg = _wrap(anchor), _wrap(positive), _wrap(negative)
+    dist = distance_function or (lambda u, v: pairwise_distance(u, v))
+    dp, dn = dist(a, pos), dist(a, neg)
+    if swap:
+        dn = minimum(dn, dist(pos, neg))
+    return _reduce(relu(dp - dn + margin), reduction)
+
+
+def multilabel_soft_margin_loss(pred, target, weight=None, reduction="mean"):
+    """자리마다 독립인 이진 분류를 **반 전체로 평균**한다."""
+    p, t = _wrap(pred), _wrap(target)
+    each = t * logsigmoid(p) + (1 - t) * logsigmoid(-p)
+    if weight is not None:
+        each = each * _wrap(weight)
+    return _reduce(-each.mean(dim=-1), reduction)
+
+
+def multi_margin_loss(pred, target, p=1, margin=1.0, weight=None, reduction="mean"):
+    """정답 자리와 나머지 사이의 여백.
+
+    **반의 개수로 나눈다** — 견준 짝의 수가 아니다. 정답 자리도 분모에 들어간다는
+    뜻이고, 짝의 수로 나누면 클래스가 셋일 때 3/2 배가 나온다.
+    """
+    x, t = _wrap(pred), _wrap(target)
+    n, classes = x.data.shape
+    idx = _np.arange(n)
+    correct = x[idx, t.data.astype(_np.intp)].unsqueeze(1)
+    each = relu(margin - correct + x) ** p
+    if weight is not None:
+        each = each * _wrap(weight)[t.data.astype(_np.intp)].unsqueeze(1)
+    # 정답 자리는 `margin` 이 그대로 남으므로 빼 준다.
+    keep = _np.ones((n, classes), dtype=x.data.dtype)
+    keep[idx, t.data.astype(_np.intp)] = 0.0
+    return _reduce((each * Tensor(keep)).sum(dim=1) / classes, reduction)
+
+
+def multilabel_margin_loss(pred, target, reduction="mean"):
+    """**표적이 자리 목록이고 −1 이 끝을 뜻한다.**
+
+    `[3, 0, -1, 1]` 은 "3 번과 0 번이 정답" 이라는 뜻이고 뒤의 1 은 안 읽는다. 그
+    규약을 안 지키면 −1 을 반의 하나로 세거나 끝난 뒤를 계속 읽는다.
+    """
+    x, t = _wrap(pred), _wrap(target)
+    rows, classes = x.data.shape
+    total = None
+    for r in range(rows):
+        labels = []
+        for v in t.data[r]:
+            if v < 0:
+                break
+            labels.append(int(v))
+        others = [c for c in range(classes) if c not in labels]
+        for i in labels:
+            for j in others:
+                term = relu(1 - (x[r, i] - x[r, j]))
+                total = term if total is None else total + term
+    out = (total if total is not None else Tensor(_np.zeros((), dtype=x.data.dtype)))
+    return _reduce(out.reshape(1) / classes, reduction)
 
 
 def _pad_index(mode, size, before, after):

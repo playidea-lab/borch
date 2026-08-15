@@ -24,6 +24,11 @@ from ._ops import (
     nll_loss, no_grad, norm, normalize, pad, prelu, relu, relu6, rms_norm, selu,
     sigmoid, silu, smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign,
     stack, tanh, tanhshrink, zeros,
+    # 손실과 거리.
+    cosine_embedding_loss, gaussian_nll_loss, hinge_embedding_loss, huber_loss,
+    kl_div, margin_ranking_loss, multi_margin_loss, multilabel_margin_loss,
+    multilabel_soft_margin_loss, pairwise_distance, pdist, poisson_nll_loss,
+    soft_margin_loss, triplet_margin_loss, triplet_margin_with_distance_loss,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -1529,6 +1534,91 @@ class BatchNorm3d(BatchNorm2d):
     (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
 
 
+# ---------------------------------------------------------------- 손실 층
+#
+# **전부 같은 모양이다** — 만들 때 인자를 받아 두고 부를 때 함수로 넘긴다. torch 의
+# 손실 층이 하는 일이 그것뿐이라, 층마다 `forward` 를 적으면 같은 두 줄을 열세 번
+# 적는 것이 된다. 인자 이름만 표로 두고 나머지는 여기서 찍는다.
+
+class _Loss(Module):
+    """손실 층의 뿌리. `_fn` 이 함수를, `_keys` 가 넘길 인자 이름을 정한다."""
+
+    _fn = None
+    _keys = ()
+
+    def __init__(self, *args, reduction="mean", **kw):
+        super().__init__()
+        self.reduction = reduction
+        for key, value in zip(self._keys, args):
+            kw.setdefault(key, value)
+        self._opts = kw
+
+    def forward(self, *inputs):
+        return type(self)._fn(*inputs, reduction=self.reduction, **self._opts)
+
+    def __repr__(self):
+        # torch 는 손실 층을 **인자 없이** 찍는다 — `HuberLoss(delta=0.5)` 도
+        # `HuberLoss()` 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
+        return f"{type(self).__name__}()"
+
+
+def _make_losses():
+    table = (
+        ("HuberLoss", huber_loss, ("delta",)),
+        ("KLDivLoss", kl_div, ("log_target",)),
+        ("PoissonNLLLoss", poisson_nll_loss, ("log_input", "full", "eps")),
+        ("GaussianNLLLoss", gaussian_nll_loss, ("full", "eps")),
+        ("MarginRankingLoss", margin_ranking_loss, ("margin",)),
+        ("CosineEmbeddingLoss", cosine_embedding_loss, ("margin",)),
+        ("HingeEmbeddingLoss", hinge_embedding_loss, ("margin",)),
+        ("SoftMarginLoss", soft_margin_loss, ()),
+        ("TripletMarginLoss", triplet_margin_loss, ("margin", "p", "eps", "swap")),
+        ("TripletMarginWithDistanceLoss", triplet_margin_with_distance_loss,
+         ("distance_function", "margin", "swap")),
+        ("MultiLabelSoftMarginLoss", multilabel_soft_margin_loss, ("weight",)),
+        ("MultiMarginLoss", multi_margin_loss, ("p", "margin", "weight")),
+        ("MultiLabelMarginLoss", multilabel_margin_loss, ()),
+    )
+    return {name: type(name, (_Loss,), {"_fn": staticmethod(fn), "_keys": keys})
+            for name, fn, keys in table}
+
+
+for _name, _loss_cls in _make_losses().items():
+    globals()[_name] = _loss_cls
+    setattr(nn, _name, _loss_cls)
+
+
+class PairwiseDistance(Module):
+    """짝지어진 두 줄 사이의 거리. **`eps` 는 차에 더한다** — 함수 쪽에 적었다."""
+
+    def __init__(self, p=2.0, eps=1e-6, keepdim=False):
+        super().__init__()
+        self.p, self.eps, self.keepdim = p, eps, keepdim
+
+    def forward(self, x1, x2):
+        return pairwise_distance(x1, x2, p=self.p, eps=self.eps,
+                                 keepdim=self.keepdim)
+
+    def __repr__(self):
+        return "PairwiseDistance()"
+
+
+class CosineSimilarity(Module):
+    def __init__(self, dim=1, eps=1e-8):
+        super().__init__()
+        self.dim, self.eps = dim, eps
+
+    def forward(self, x1, x2):
+        return cosine_similarity(x1, x2, dim=self.dim, eps=self.eps)
+
+    def __repr__(self):
+        return "CosineSimilarity()"
+
+
+nn.PairwiseDistance = PairwiseDistance
+nn.CosineSimilarity = CosineSimilarity
+
+
 # ---------------------------------------------------------------- 패딩 층
 #
 # **열다섯 개가 한 기계에서 나온다.** 셋(1·2·3 차원) × 다섯(reflect·replicate·zero·
@@ -1639,6 +1729,23 @@ def one_hot(t, num_classes=-1):
 
 
 class _Functional(_Namespace):
+    # 손실과 거리. **층과 같은 함수를 가리킨다** — 두 벌이면 어긋난다.
+    huber_loss = staticmethod(huber_loss)
+    kl_div = staticmethod(kl_div)
+    poisson_nll_loss = staticmethod(poisson_nll_loss)
+    gaussian_nll_loss = staticmethod(gaussian_nll_loss)
+    margin_ranking_loss = staticmethod(margin_ranking_loss)
+    cosine_embedding_loss = staticmethod(cosine_embedding_loss)
+    hinge_embedding_loss = staticmethod(hinge_embedding_loss)
+    soft_margin_loss = staticmethod(soft_margin_loss)
+    triplet_margin_loss = staticmethod(triplet_margin_loss)
+    triplet_margin_with_distance_loss = staticmethod(
+        triplet_margin_with_distance_loss)
+    multilabel_soft_margin_loss = staticmethod(multilabel_soft_margin_loss)
+    multi_margin_loss = staticmethod(multi_margin_loss)
+    multilabel_margin_loss = staticmethod(multilabel_margin_loss)
+    pairwise_distance = staticmethod(pairwise_distance)
+    pdist = staticmethod(pdist)
     softmax = staticmethod(softmax)
     log_softmax = staticmethod(log_softmax)
     relu = staticmethod(relu)

@@ -1354,6 +1354,288 @@ def opt_cases(inp=None):
     return cases
 
 
+LOSS_PREFIX = "loss::"
+
+# 손실용 입력. **값이 0 으로 뭉개지지 않게 골랐다** — 처음 쓴 삼중항 입력은 여백이
+# 한 번도 안 걸려서 네 갈래가 전부 0.0 이었고, 그러면 무엇을 바꿔도 통과한다.
+_LOSS_X = np.array([[0.5, -1.0, 2.0], [1.5, 0.25, -0.5]], dtype=np.float32)
+_LOSS_Y = np.array([[1.0, 0.0, -1.0], [0.5, 1.0, 0.25]], dtype=np.float32)
+_LOSS_ANC = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+_LOSS_POS = np.array([[2.0, 0.5], [1.5, 1.0]], dtype=np.float32)
+_LOSS_NEG = np.array([[1.1, 0.1], [0.2, 0.9]], dtype=np.float32)
+_LOSS_A = np.array([[1.0, 2.0], [0.5, -1.0]], dtype=np.float32)
+_LOSS_B = np.array([[0.5, 1.5], [1.0, -0.5]], dtype=np.float32)
+_LOSS_SIGN = np.array([1.0, -1.0], dtype=np.float32)
+_LOSS_HINGE = np.array([[0.5, 1.5], [2.0, 0.25]], dtype=np.float32)
+_LOSS_HTGT = np.array([[1.0, -1.0], [-1.0, 1.0]], dtype=np.float32)
+_LOSS_COUNT = np.array([[1.0, 2.0, 0.0], [3.0, 0.5, 1.0]], dtype=np.float32)
+_LOSS_VAR = np.array([[1.0, 0.5, 2.0], [0.25, 1.5, 1.0]], dtype=np.float32)
+_LOSS_MM = np.array([[0.1, 0.2, 0.4], [0.8, 0.3, 0.1]], dtype=np.float32)
+
+
+def loss_cases(inp=None):
+    """손실 열셋과 거리 셋.
+
+    ## 기본값이 차이를 덮는 자리가 둘
+
+    `HuberLoss(δ)` 와 `SmoothL1Loss(β)` 는 **δ=1 에서만 같다.** 실제 관계는
+    `huber(δ) = δ · smooth_l1(β=δ)` 라 δ=0.5 면 두 배, δ=2 면 절반이다. 기본값으로만
+    물으면 둘을 같은 함수로 두고도 통과한다 — 그래서 δ 를 바꿔 묻는다.
+
+    `KLDivLoss` 는 reduction 이 **넷**이다. `mean` 은 원소 수로 나누고 `batchmean` 은
+    배치 크기로 나눈다 — 여기서는 6 으로 나누느냐 2 로 나누느냐이고, torch 자신도
+    "다음 주 버전에서 `mean` 을 `batchmean` 처럼 바꾸겠다" 고 경고한다. 둘 다 묻는다.
+
+    ## 켜고 끄는 항이 조건부인 것 둘
+
+    `PoissonNLLLoss(full=True)` 의 스털링 보정은 **`target > 1` 일 때만** 더해진다
+    (실측: target 이 0·0.5·1 이면 차이가 0 이고 2 에서 0.6518 이 붙는다). 조건 없이
+    늘 더하면 target 이 작은 자리에서만 틀린다.
+
+    `GaussianNLLLoss` 는 분산을 `eps` 로 자른다 — `var=1e-9` 에 기본 `eps=1e-6` 이면
+    `1e-6` 으로 잘려 124993 이 나오고, `eps=1e-2` 로 주면 10.2 다. 안 자르면 0 으로
+    나눠 무한대가 된다.
+
+    ## `pairwise_distance` 의 `eps` 는 **차에** 더한다
+
+    결과에 더하는 것이 아니다. `p=1` 로 차가 정확히 1.0 인 자리를 물으면 1.0000020 이
+    나온다(=1 + 2·1e-6). 결과에 더한다고 읽으면 1.000001 이 되어 자릿수 하나가 갈린다.
+    """
+    x, y = _LOSS_X, _LOSS_Y
+    a, b, sign = _LOSS_A, _LOSS_B, _LOSS_SIGN
+    anc, pos, neg = _LOSS_ANC, _LOSS_POS, _LOSS_NEG
+
+    def F(L):
+        return L.nn.functional
+
+    cases = []
+
+    def add(name, fn):
+        cases.append((LOSS_PREFIX + name, fn))
+
+    # ── Huber — 기본값이 SmoothL1 과 겹치는 자리 ─────────────────────────
+    for tag, delta in (("기본", None), ("δ=0.5", 0.5), ("δ=2", 2.0)):
+        add(f"huber({tag})",
+            lambda L, d=delta: F(L).huber_loss(L.tensor(x), L.tensor(y))
+            if d is None else F(L).huber_loss(L.tensor(x), L.tensor(y), delta=d))
+    add("huber(none)",
+        lambda L: F(L).huber_loss(L.tensor(x), L.tensor(y), reduction="none"))
+    add("huber(sum)",
+        lambda L: F(L).huber_loss(L.tensor(x), L.tensor(y), reduction="sum"))
+    # **같은 δ 로 물으면 둘의 관계가 값에 드러난다.**
+    add("huber(δ=0.5)/smooth_l1(β=0.5)",
+        lambda L: F(L).huber_loss(L.tensor(x), L.tensor(y), delta=0.5)
+        / F(L).smooth_l1_loss(L.tensor(x), L.tensor(y), beta=0.5))
+
+    # ── KL — reduction 이 넷 ─────────────────────────────────────────────
+    def kl(L, red, log_target=False):
+        logp = F(L).log_softmax(L.tensor(x), dim=1)
+        tgt = F(L).softmax(L.tensor(y), dim=1)
+        if log_target:
+            tgt = tgt.log()
+        return F(L).kl_div(logp, tgt, reduction=red, log_target=log_target)
+
+    for red in ("none", "mean", "sum", "batchmean"):
+        add(f"kl_div({red})", lambda L, r=red: kl(L, r))
+    add("kl_div(log_target)", lambda L: kl(L, "mean", log_target=True))
+
+    # ── 포아송·가우스 ───────────────────────────────────────────────────
+    for log_input in (True, False):
+        for full in (False, True):
+            add(f"poisson(log_input={log_input},full={full})",
+                lambda L, li=log_input, f=full: F(L).poisson_nll_loss(
+                    L.tensor(np.abs(x) + 0.5), L.tensor(_LOSS_COUNT),
+                    log_input=li, full=f))
+    add("poisson(none)",
+        lambda L: F(L).poisson_nll_loss(L.tensor(np.abs(x) + 0.5),
+                                        L.tensor(_LOSS_COUNT), reduction="none"))
+    for full in (False, True):
+        add(f"gaussian(full={full})",
+            lambda L, f=full: F(L).gaussian_nll_loss(
+                L.tensor(x), L.tensor(y), L.tensor(_LOSS_VAR), full=f))
+    # 분산이 `eps` 아래로 내려가는 자리 — 안 자르면 여기서 무한대가 된다.
+    tiny = np.array([[1e-9, 1.0, 1.0], [1.0, 1.0, 1.0]], dtype=np.float32)
+    add("gaussian(var<eps)",
+        lambda L: F(L).gaussian_nll_loss(L.tensor(x), L.tensor(y), L.tensor(tiny),
+                                         reduction="none"))
+    add("gaussian(eps=1e-2)",
+        lambda L: F(L).gaussian_nll_loss(L.tensor(x), L.tensor(y), L.tensor(tiny),
+                                         eps=1e-2, reduction="none"))
+
+    # ── 여백 계열 ───────────────────────────────────────────────────────
+    add("margin_ranking",
+        lambda L: F(L).margin_ranking_loss(
+            L.tensor(np.array([1., 2.], dtype=np.float32)),
+            L.tensor(np.array([2., 1.], dtype=np.float32)),
+            L.tensor(sign), margin=0.5))
+    add("margin_ranking(none)",
+        lambda L: F(L).margin_ranking_loss(
+            L.tensor(np.array([1., 2.], dtype=np.float32)),
+            L.tensor(np.array([2., 1.], dtype=np.float32)),
+            L.tensor(sign), margin=0.5, reduction="none"))
+    for margin in (0.0, 0.5):
+        add(f"cosine_embedding(margin={margin})",
+            lambda L, m=margin: F(L).cosine_embedding_loss(
+                L.tensor(a), L.tensor(b), L.tensor(sign), margin=m,
+                reduction="none"))
+    for margin in (1.0, 2.0):
+        add(f"hinge_embedding(margin={margin})",
+            lambda L, m=margin: F(L).hinge_embedding_loss(
+                L.tensor(_LOSS_HINGE), L.tensor(_LOSS_HTGT), margin=m,
+                reduction="none"))
+    # **표적이 ±1 이 아닌 자리.** torch 는 두 항을 갈라 고르는 것이 아니라 **더한다** —
+    # `y ≠ 1` 에 여백 항, `y ≠ −1` 에 `x` 를 놓고 합하므로 `y=0` 에서는 둘 다 켜진다.
+    # ±1 만 물으면 한쪽씩만 켜져서 그 차이가 안 드러나고, `sign()` 은 0 을 만든다.
+    add("hinge_embedding(y=0)",
+        lambda L: F(L).hinge_embedding_loss(
+            L.tensor(np.array([[-1., 0.5, 2.]], dtype=np.float32)),
+            L.tensor(np.array([[0., 0., 0.]], dtype=np.float32)), reduction="none"))
+    add("soft_margin",
+        lambda L: F(L).soft_margin_loss(L.tensor(x), L.tensor(np.sign(y))))
+    add("soft_margin(none)",
+        lambda L: F(L).soft_margin_loss(L.tensor(x), L.tensor(np.sign(y)),
+                                        reduction="none"))
+
+    # ── 삼중항 ──────────────────────────────────────────────────────────
+    triplets = (("기본", {}), ("margin=2", {"margin": 2.0}), ("p=1", {"p": 1}),
+                ("swap", {"swap": True}))
+    for tag, kw in triplets:
+        add(f"triplet({tag})",
+            lambda L, k=kw: F(L).triplet_margin_loss(
+                L.tensor(anc), L.tensor(pos), L.tensor(neg), **k))
+    add("triplet(none)",
+        lambda L: F(L).triplet_margin_loss(L.tensor(anc), L.tensor(pos),
+                                           L.tensor(neg), reduction="none"))
+    for tag, margin in (("기본", 1.0), ("margin=2", 2.0)):
+        add(f"triplet_with_distance({tag})",
+            lambda L, m=margin: F(L).triplet_margin_with_distance_loss(
+                L.tensor(anc), L.tensor(pos), L.tensor(neg), margin=m))
+
+    # ── 여러 라벨 ───────────────────────────────────────────────────────
+    add("multilabel_soft_margin",
+        lambda L: F(L).multilabel_soft_margin_loss(
+            L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+            L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32))))
+    for tag, kw in (("기본", {}), ("margin=0.5", {"margin": 0.5}), ("p=2", {"p": 2})):
+        add(f"multi_margin({tag})",
+            lambda L, k=kw: F(L).multi_margin_loss(
+                L.tensor(_LOSS_MM),
+                L.tensor(np.array([2, 0], dtype=np.int64)), reduction="none", **k))
+    add("multi_margin(weight)",
+        lambda L: F(L).multi_margin_loss(
+            L.tensor(_LOSS_MM), L.tensor(np.array([2, 0], dtype=np.int64)),
+            weight=L.tensor(np.array([1., 2., 0.5], dtype=np.float32))))
+    # **표적이 목록이고 −1 이 끝을 뜻한다.** 그 규약을 안 지키면 −1 을 반의 하나로 센다.
+    add("multilabel_margin",
+        lambda L: F(L).multilabel_margin_loss(
+            L.tensor(np.array([[0.1, 0.2, 0.4, 0.8]], dtype=np.float32)),
+            L.tensor(np.array([[3, 0, -1, 1]], dtype=np.int64))))
+
+    # ── 거리 ────────────────────────────────────────────────────────────
+    add("pairwise_distance",
+        lambda L: F(L).pairwise_distance(L.tensor(a), L.tensor(b)))
+    # `eps` 를 결과가 아니라 **차에** 더한다 — p=1 에서 자릿수로 드러난다.
+    add("pairwise_distance(p=1)",
+        lambda L: F(L).pairwise_distance(L.tensor(a), L.tensor(b), p=1))
+    add("pairwise_distance(eps=0)",
+        lambda L: F(L).pairwise_distance(L.tensor(a), L.tensor(b), p=1, eps=0))
+    add("pairwise_distance(keepdim)",
+        lambda L: F(L).pairwise_distance(L.tensor(a), L.tensor(b), keepdim=True))
+    add("pdist",
+        lambda L: F(L).pdist(L.tensor(np.array([[0., 0.], [3., 4.], [1., 1.]],
+                                               dtype=np.float32))))
+
+    # **원소가 하나인 것을 접기.** 접을 것이 없다는 뜻이라 그냥 값이 나와야 하는데,
+    # GPU 쪽이 그 자리에서 0 을 냈다 — 명령을 모아 두었다가 보내는데 이 길만 자기
+    # 인코더를 만들어 **먼저** 제출해서, 아직 계산 안 된 버퍼를 복사했다. 예외도
+    # NaN 도 아닌 0 이라 손실이 조용히 사라지는 자리였고, 손실 하나가 배치 1 로
+    # 물어보기 전까지 골든 1,399 건이 초록이었다.
+    add("원소 하나를 mean",
+        lambda L: (L.tensor(np.array([1., 2., 3.], dtype=np.float32)).sum()
+                   * 1.0).reshape(1).mean())
+    add("원소 하나를 sum",
+        lambda L: (L.tensor(np.array([1., 2., 3.], dtype=np.float32)).sum()
+                   * 1.0).reshape(1).sum())
+
+    # ── 층으로도 닿아야 한다 ────────────────────────────────────────────
+    layers = (
+        ("HuberLoss", lambda L: L.nn.HuberLoss(delta=0.5)(L.tensor(x), L.tensor(y))),
+        ("KLDivLoss", lambda L: L.nn.KLDivLoss(reduction="batchmean")(
+            F(L).log_softmax(L.tensor(x), dim=1), F(L).softmax(L.tensor(y), dim=1))),
+        ("PoissonNLLLoss", lambda L: L.nn.PoissonNLLLoss()(
+            L.tensor(np.abs(x) + 0.5), L.tensor(_LOSS_COUNT))),
+        ("GaussianNLLLoss", lambda L: L.nn.GaussianNLLLoss()(
+            L.tensor(x), L.tensor(y), L.tensor(_LOSS_VAR))),
+        ("MarginRankingLoss", lambda L: L.nn.MarginRankingLoss(margin=0.5)(
+            L.tensor(np.array([1., 2.], dtype=np.float32)),
+            L.tensor(np.array([2., 1.], dtype=np.float32)), L.tensor(sign))),
+        ("CosineEmbeddingLoss", lambda L: L.nn.CosineEmbeddingLoss()(
+            L.tensor(a), L.tensor(b), L.tensor(sign))),
+        ("HingeEmbeddingLoss", lambda L: L.nn.HingeEmbeddingLoss()(
+            L.tensor(_LOSS_HINGE), L.tensor(_LOSS_HTGT))),
+        ("SoftMarginLoss", lambda L: L.nn.SoftMarginLoss()(
+            L.tensor(x), L.tensor(np.sign(y)))),
+        ("TripletMarginLoss", lambda L: L.nn.TripletMarginLoss()(
+            L.tensor(anc), L.tensor(pos), L.tensor(neg))),
+        ("TripletMarginWithDistanceLoss",
+         lambda L: L.nn.TripletMarginWithDistanceLoss()(
+             L.tensor(anc), L.tensor(pos), L.tensor(neg))),
+        ("MultiLabelSoftMarginLoss", lambda L: L.nn.MultiLabelSoftMarginLoss()(
+            L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+            L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)))),
+        ("MultiMarginLoss", lambda L: L.nn.MultiMarginLoss()(
+            L.tensor(_LOSS_MM), L.tensor(np.array([2, 0], dtype=np.int64)))),
+        ("MultiLabelMarginLoss", lambda L: L.nn.MultiLabelMarginLoss()(
+            L.tensor(np.array([[0.1, 0.2, 0.4, 0.8]], dtype=np.float32)),
+            L.tensor(np.array([[3, 0, -1, 1]], dtype=np.int64)))),
+        ("PairwiseDistance", lambda L: L.nn.PairwiseDistance()(
+            L.tensor(a), L.tensor(b))),
+        ("CosineSimilarity", lambda L: L.nn.CosineSimilarity(dim=1)(
+            L.tensor(a), L.tensor(b))),
+    )
+    for name, fn in layers:
+        add(f"층::{name}", fn)
+
+    # ── 기울기 ──────────────────────────────────────────────────────────
+    #
+    # **손실은 기울기가 전부다.** 값이 맞고 기울기가 틀리면 학습이 조용히 다른 데로
+    # 간다 — 이 저장소가 BatchNorm 으로 오래 겪은 종류다.
+    grads = (
+        ("huber", lambda L, p: F(L).huber_loss(p, L.tensor(y), delta=0.5)),
+        ("kl_div", lambda L, p: F(L).kl_div(F(L).log_softmax(p, dim=1),
+                                            F(L).softmax(L.tensor(y), dim=1))),
+        ("poisson", lambda L, p: F(L).poisson_nll_loss(p, L.tensor(_LOSS_COUNT))),
+        ("gaussian", lambda L, p: F(L).gaussian_nll_loss(
+            p, L.tensor(y), L.tensor(_LOSS_VAR))),
+        ("soft_margin", lambda L, p: F(L).soft_margin_loss(p, L.tensor(np.sign(y)))),
+        ("hinge_embedding", lambda L, p: F(L).hinge_embedding_loss(
+            p, L.tensor(np.sign(y)))),
+        ("multilabel_soft_margin", lambda L, p: F(L).multilabel_soft_margin_loss(
+            p, L.tensor((y > 0).astype(np.float32)))),
+    )
+    for name, fn in grads:
+        def run(L, f=fn, n=name):
+            p = L.tensor(x, requires_grad=True)
+            f(L, p).backward()
+            return _grad_of(p, n)
+        cases.append((LOSS_PREFIX + f"grad::{name}", run))
+
+    def triplet_grad(L):
+        p = L.tensor(anc, requires_grad=True)
+        F(L).triplet_margin_loss(p, L.tensor(pos), L.tensor(neg)).backward()
+        return _grad_of(p, "triplet")
+
+    cases.append((LOSS_PREFIX + "grad::triplet", triplet_grad))
+
+    def cosine_grad(L):
+        p = L.tensor(a, requires_grad=True)
+        F(L).cosine_embedding_loss(p, L.tensor(b), L.tensor(sign)).backward()
+        return _grad_of(p, "cosine_embedding")
+
+    cases.append((LOSS_PREFIX + "grad::cosine_embedding", cosine_grad))
+    return cases
+
+
 PAD_PREFIX = "pad::"
 
 # 패딩용 입력. 값이 자리 번호라 **어디서 온 값인지 답만 보고 알 수 있다** —
@@ -3689,7 +3971,7 @@ def golden_cases(inp=None):
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
-            + pad_cases(inp)
+            + pad_cases(inp) + loss_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

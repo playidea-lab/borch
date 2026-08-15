@@ -15,7 +15,9 @@
  */
 
 import { runningStats } from "./kernels.js";
-import { device, keepAlive, noGrad, type PadMode, Tensor } from "./tensor.js";
+import {
+  device, keepAlive, noGrad, type PadMode, type Reduction, Tensor,
+} from "./tensor.js";
 
 /**
  * 가중치 초기화.
@@ -812,6 +814,261 @@ export class Flatten extends Module {
     const batch = x.shape[0] ?? 1;
     return x.reshape([batch, x.size / batch]);
   }
+}
+
+// ── 손실 층 ─────────────────────────────────────────────────────────────
+//
+// **전부 같은 모양이다** — 만들 때 인자를 받아 두고 부를 때 텐서 메서드로 넘긴다.
+// torch 의 손실 층이 하는 일이 그것뿐이라, 층마다 `forward` 를 적으면 같은 두 줄을
+// 열세 번 적는 것이 된다.
+//
+// **torch 는 손실 층을 인자 없이 찍는다** — `HuberLoss(delta=0.5)` 도 `HuberLoss()`
+// 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
+
+export class HuberLoss {
+  constructor(readonly delta = 1.0, readonly reduction: Reduction = "mean") {
+  }
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.huberLoss(target, this.delta, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "HuberLoss()"; }
+}
+
+export class KLDivLoss {
+  constructor(
+    readonly reduction: Reduction | "batchmean" = "mean",
+    readonly logTarget = false,
+  ) {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.klDiv(target, this.reduction, this.logTarget);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "KLDivLoss()"; }
+}
+
+export class PoissonNLLLoss {
+  constructor(
+    readonly logInput = true, readonly full = false, readonly eps = 1e-8,
+    readonly reduction: Reduction = "mean",
+  ) {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.poissonNllLoss(target, this.logInput, this.full, this.eps,
+      this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "PoissonNLLLoss()"; }
+}
+
+export class GaussianNLLLoss {
+  constructor(
+    readonly full = false, readonly eps = 1e-6,
+    readonly reduction: Reduction = "mean",
+  ) {}
+
+  forward(x: Tensor, target: Tensor, variance: Tensor): Tensor {
+    return x.gaussianNllLoss(target, variance, this.full, this.eps, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor, variance: Tensor): Tensor {
+    return this.forward(x, target, variance);
+  }
+
+  describe(): string { return "GaussianNLLLoss()"; }
+}
+
+export class MarginRankingLoss {
+  constructor(readonly margin = 0.0, readonly reduction: Reduction = "mean") {
+  }
+
+  forward(x1: Tensor, x2: Tensor, target: Tensor): Tensor {
+    return x1.marginRankingLoss(x2, target, this.margin, this.reduction);
+  }
+
+  call(x1: Tensor, x2: Tensor, target: Tensor): Tensor {
+    return this.forward(x1, x2, target);
+  }
+
+  describe(): string { return "MarginRankingLoss()"; }
+}
+
+export class CosineEmbeddingLoss {
+  constructor(readonly margin = 0.0, readonly reduction: Reduction = "mean") {
+  }
+
+  forward(x1: Tensor, x2: Tensor, target: Tensor): Tensor {
+    return x1.cosineEmbeddingLoss(x2, target, this.margin, this.reduction);
+  }
+
+  call(x1: Tensor, x2: Tensor, target: Tensor): Tensor {
+    return this.forward(x1, x2, target);
+  }
+
+  describe(): string { return "CosineEmbeddingLoss()"; }
+}
+
+export class HingeEmbeddingLoss {
+  constructor(readonly margin = 1.0, readonly reduction: Reduction = "mean") {
+  }
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.hingeEmbeddingLoss(target, this.margin, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "HingeEmbeddingLoss()"; }
+}
+
+export class SoftMarginLoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.softMarginLoss(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "SoftMarginLoss()"; }
+}
+
+export class TripletMarginLoss {
+  constructor(
+    readonly margin = 1.0, readonly p = 2.0, readonly eps = 1e-6,
+    readonly swap = false, readonly reduction: Reduction = "mean",
+  ) {}
+
+  forward(anchor: Tensor, positive: Tensor, negative: Tensor): Tensor {
+    return anchor.tripletMarginLoss(positive, negative, this.margin, this.p,
+      this.eps, this.swap, this.reduction);
+  }
+
+  call(anchor: Tensor, positive: Tensor, negative: Tensor): Tensor {
+    return this.forward(anchor, positive, negative);
+  }
+
+  describe(): string { return "TripletMarginLoss()"; }
+}
+
+/** 거리 함수를 받는 삼중항. 기본값이 쌍별 거리라 위와 같은 답이 나온다. */
+export class TripletMarginWithDistanceLoss {
+  constructor(
+    readonly distanceFunction: ((a: Tensor, b: Tensor) => Tensor) | null = null,
+    readonly margin = 1.0, readonly swap = false,
+    readonly reduction: Reduction = "mean",
+  ) {}
+
+  forward(anchor: Tensor, positive: Tensor, negative: Tensor): Tensor {
+    const dist = this.distanceFunction ?? ((a: Tensor, b: Tensor) =>
+      a.pairwiseDistance(b));
+    const dp = dist(anchor, positive);
+    let dn = dist(anchor, negative);
+    if (this.swap) dn = dn.binary("minimum", dist(positive, negative));
+    const out = dp.sub(dn).binary("add", Tensor.full([], this.margin)).unary("relu");
+    return this.reduction === "none" ? out
+      : (this.reduction === "sum" ? out.sum() : out.mean());
+  }
+
+  call(anchor: Tensor, positive: Tensor, negative: Tensor): Tensor {
+    return this.forward(anchor, positive, negative);
+  }
+
+  describe(): string { return "TripletMarginWithDistanceLoss()"; }
+}
+
+export class MultiLabelSoftMarginLoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.multilabelSoftMarginLoss(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "MultiLabelSoftMarginLoss()"; }
+}
+
+export class MultiMarginLoss {
+  constructor(
+    readonly p = 1, readonly margin = 1.0, readonly weight: Tensor | null = null,
+    readonly reduction: Reduction = "mean",
+  ) {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.multiMarginLoss(target, this.p, this.margin, this.weight,
+      this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "MultiMarginLoss()"; }
+}
+
+export class MultiLabelMarginLoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.multilabelMarginLoss(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "MultiLabelMarginLoss()"; }
+}
+
+/** 짝지어진 두 줄 사이의 거리. **`eps` 는 차에 더한다** — 텐서 쪽에 적었다. */
+export class PairwiseDistance {
+  constructor(readonly p = 2.0, readonly eps = 1e-6, readonly keepdim = false) {
+  }
+
+  forward(x1: Tensor, x2: Tensor): Tensor {
+    return x1.pairwiseDistance(x2, this.p, this.eps, this.keepdim);
+  }
+
+  call(x1: Tensor, x2: Tensor): Tensor {
+    return this.forward(x1, x2);
+  }
+
+  describe(): string { return "PairwiseDistance()"; }
+}
+
+export class CosineSimilarity {
+  constructor(readonly dim = 1, readonly eps = 1e-8) {}
+
+  forward(x1: Tensor, x2: Tensor): Tensor {
+    return x1.cosineSimilarity(x2, this.dim, this.eps);
+  }
+
+  call(x1: Tensor, x2: Tensor): Tensor {
+    return this.forward(x1, x2);
+  }
+
+  describe(): string { return "CosineSimilarity()"; }
 }
 
 /**
