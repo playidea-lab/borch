@@ -79,6 +79,9 @@ from ._ops import (                                      # noqa: E402,F401
     cross, empty_like, float_power, fmax, fmin, inner, isclose, isin, isneginf,
     isposinf, isreal, kron, lerp, logical_xor, logspace, meshgrid, nan_to_num,
     rand_like, randint_like, randn_like, scalar_tensor, std_mean, var_mean, vdot,
+    # 색인으로 쓰는 쪽.
+    bucketize, index_add, index_copy, index_fill, scatter, scatter_add,
+    searchsorted, take, take_along_dim,
 )
 from ._ops import (                                      # noqa: E402,F401
     Generator, manual_seed, randint, randperm,

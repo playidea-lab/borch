@@ -981,6 +981,91 @@ def cross(a, b, dim=-1, **kw):
                 part(a, 0) * part(b, 1) - part(a, 1) * part(b, 0)], axis)
 
 
+# ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────
+
+def _spread_index(index, dim, shape):
+    """1 차원 번호를 `shape` 모양으로 편다.
+
+    `index_add` 류는 번호가 **줄**을 가리키는데 커널은 칸마다의 번호를 받는다.
+    축 하나에 놓고 나머지로 늘리면 그 둘이 같은 것이 된다 — 새 커널이 필요 없다.
+    """
+    lifted = [1] * len(shape)
+    lifted[dim] = int(handle(index).size)
+    return broadcast_to(wrap(guarded(handle(index).reshape, _js_list(lifted))), shape)
+
+
+def scatter(t, dim, index, src, **kw):
+    """번호가 가리키는 자리에 **덮어쓴다.** 겹치면 마지막에 쓴 것이 남는다."""
+    t = wrap(t)
+    if not isinstance(src, Tensor):
+        src = zeros(*[int(n) for n in handle(index).shape]) + float(src)
+    return wrap(guarded(handle(t).scatterSet, dim, handle(index), handle(src)))
+
+
+def scatter_add(t, dim, index, src, **kw):
+    """번호가 가리키는 자리에 **더한다.** 겹치면 쌓인다 — `scatter` 와 여기서 갈린다."""
+    return wrap(guarded(handle(t).scatterAdd, dim, handle(index), handle(src)))
+
+
+def index_add(t, dim, index, source, alpha=1, **kw):
+    t, source = wrap(t), wrap(source)
+    shape = [int(n) for n in handle(source).shape]
+    spread = _spread_index(index, dim, shape)
+    return scatter_add(t, dim, spread, source if alpha == 1 else source * alpha)
+
+
+def index_copy(t, dim, index, source, **kw):
+    t, source = wrap(t), wrap(source)
+    shape = [int(n) for n in handle(source).shape]
+    return scatter(t, dim, _spread_index(index, dim, shape), source)
+
+
+def index_fill(t, dim, index, value, **kw):
+    t = wrap(t)
+    shape = [int(n) for n in handle(t).shape]
+    shape[dim] = int(handle(index).size)
+    return scatter(t, dim, _spread_index(index, dim, shape),
+                   zeros(*shape) + float(value))
+
+
+def take(t, index, **kw):
+    """**평평하게 펴서** 뽑는다 — 축이라는 개념이 없다."""
+    h = handle(t)
+    flat = wrap(guarded(h.reshape, _js_list([int(h.size)])))
+    picked = wrap(guarded(handle(flat).indexSelect, 0,
+                          handle(wrap(index).reshape(int(handle(index).size)))))
+    return wrap(guarded(handle(picked).reshape,
+                        _js_list([int(n) for n in handle(index).shape])))
+
+
+def take_along_dim(t, indices, dim=None, **kw):
+    if dim is None:
+        return take(t, indices)
+    return wrap(guarded(handle(t).gather, dim, handle(indices)))
+
+
+def searchsorted(sorted_sequence, values, right=False, **kw):
+    """정렬된 것 안에서 들어갈 자리. **`right` 가 동점의 어느 쪽인지 정한다.**
+
+    커널이 필요 없다 — "나보다 작은 것이 몇 개인가" 를 세면 그것이 자리다.
+    """
+    right = kw.get("right", right)
+    seq, want = wrap(sorted_sequence), wrap(values)
+    n = int(handle(seq).size)
+    m = int(handle(want).size)
+    row = wrap(guarded(handle(seq).reshape, _js_list([1, n])))
+    col = wrap(guarded(handle(want).reshape, _js_list([m, 1])))
+    hit = (row <= col) if right else (row < col)
+    counted = wrap(guarded(handle(hit).to, "float32")).sum(dim=1)
+    return wrap(guarded(handle(counted).to, "int64")).reshape(
+        *[int(v) for v in handle(want).shape])
+
+
+def bucketize(values, boundaries, right=False, **kw):
+    """`searchsorted` 와 **인자 순서가 뒤집혀 있다.** 그것이 두 이름의 차이 전부다."""
+    return searchsorted(boundaries, values, right=kw.get("right", right))
+
+
 row_stack = vstack
 multiply = mul
 divide = div

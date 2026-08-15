@@ -1983,6 +1983,44 @@ ${flatId(n)}
 }
 
 /**
+ * `scatterByIndex` 의 **덮어쓰는** 판. 겹치는 번호에서 마지막에 쓴 것이 남는다.
+ *
+ * 쌓는 것과 덮는 것의 차이가 `scatter_add` 와 `scatter` 의 차이 전부다 — 번호가
+ * 안 겹치면 두 함수가 같은 답을 내므로, 겹치는 번호로 재야만 갈린다.
+ *
+ * **출력 쪽에서 읽는다.** 입력 쪽에서 쓰면 같은 칸에 여러 스레드가 달려들어
+ * 누가 마지막인지가 정해지지 않는다 — 여기서는 각 출력 칸이 자기에게 오는 것을
+ * 훑으므로 순서가 정해진다.
+ */
+export function scatterOverwrite(
+  outer: number,
+  len: number,
+  inner: number,
+  taken: number,
+): string {
+  const n = outer * len * inner;
+  return `
+@group(0) @binding(0) var<storage, read> I: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read> Base: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let o = gid / ${len * inner}u;
+  let r = gid % ${len * inner}u;
+  let k = r / ${inner}u;
+  let i = r % ${inner}u;
+  var acc = Base[gid];
+  for (var t = 0u; t < ${taken}u; t = t + 1u) {
+    let at = o * ${taken * inner}u + t * ${inner}u + i;
+    if (u32(I[at]) == k) { acc = G[at]; }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
  * 누적 최대·최소. 값과 자리를 같이 낸다.
  *
  * **동점이면 나중 자리를 준다** — torch 의 `cummax` 가 그렇다(`argmax` 가 먼저

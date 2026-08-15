@@ -1610,6 +1610,140 @@ def gather(t, dim, index):
     return t._make(out, (t,), back, "GatherBackward0")
 
 
+# ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────
+
+def _as_index(index):
+    return (index.data.astype(int) if isinstance(index, Tensor)
+            else _np.asarray(index, dtype=int))
+
+
+def scatter(t, dim, index, src):
+    """번호가 가리키는 자리에 **덮어쓴다.** 겹치면 마지막에 쓴 것이 남는다.
+
+    `scatter_add` 와 겹치는 번호에서만 갈린다 — 안 겹치는 번호로 재면 두 함수가
+    같아 보인다. 그래서 골든이 0 이 두 번 나오는 번호로 묻는다.
+    """
+    t = _wrap(t)
+    idx = _as_index(index)
+    out = t.data.copy()
+    scalar = not isinstance(src, Tensor)
+    values = (_np.full(idx.shape, src, dtype=t.data.dtype) if scalar
+              else _wrap(src).data)
+    _np.put_along_axis(out, idx, values, axis=dim)
+
+    def back(g):
+        g = _np.asarray(g)
+        # 덮어쓴 자리는 원본과 끊긴다 — 그 자리에는 0 이 간다.
+        keep = _np.ones(t.data.shape, dtype=g.dtype)
+        _np.put_along_axis(keep, idx, 0.0, axis=dim)
+        got = (g * keep,)
+        return got if scalar else got + (_np.take_along_axis(g, idx, axis=dim),)
+
+    parents = (t,) if scalar else (t, _wrap(src))
+    return t._make(out, parents, back, "ScatterBackward0")
+
+
+def scatter_add(t, dim, index, src):
+    """번호가 가리키는 자리에 **더한다.** 겹치면 쌓인다 — `scatter` 와 여기서 갈린다."""
+    t, src = _wrap(t), _wrap(src)
+    idx = _as_index(index)
+    out = t.data.copy()
+    # `put_along_axis` 는 덮어쓰므로 못 쓴다. 겹치는 번호를 제대로 쌓으려면
+    # `add.at` 이어야 한다 — 그것이 이 함수와 `scatter` 의 차이 전부다.
+    grid = _np.indices(idx.shape)
+    where = list(grid)
+    where[dim] = idx
+    _np.add.at(out, tuple(where), src.data)
+
+    def back(g):
+        g = _np.asarray(g)
+        return (g, _np.take_along_axis(g, idx, axis=dim))
+
+    return t._make(out, (t, src), back, "ScatterAddBackward0")
+
+
+def index_add(t, dim, index, source, alpha=1):
+    """번호가 가리키는 **줄**에 더한다. 번호가 겹치면 쌓인다."""
+    t, source = _wrap(t), _wrap(source)
+    idx = _as_index(index)
+    out = t.data.copy()
+    _np.add.at(out, (slice(None),) * dim + (idx,), source.data * alpha)
+
+    def back(g):
+        g = _np.asarray(g)
+        return (g, _np.take(g, idx, axis=dim) * alpha)
+
+    return t._make(out, (t, source), back, "IndexAddBackward0")
+
+
+def index_copy(t, dim, index, source):
+    """번호가 가리키는 줄을 **갈아 끼운다.** 그 줄로는 기울기가 안 간다."""
+    t, source = _wrap(t), _wrap(source)
+    idx = _as_index(index)
+    out = t.data.copy()
+    picker = (slice(None),) * dim + (idx,)
+    out[picker] = source.data
+
+    def back(g):
+        g = _np.asarray(g)
+        keep = _np.ones(t.data.shape, dtype=g.dtype)
+        keep[picker] = 0.0
+        return (g * keep, _np.take(g, idx, axis=dim))
+
+    return t._make(out, (t, source), back, "IndexCopyBackward0")
+
+
+def index_fill(t, dim, index, value):
+    """번호가 가리키는 줄을 한 값으로 채운다."""
+    t = _wrap(t)
+    idx = _as_index(index)
+    out = t.data.copy()
+    picker = (slice(None),) * dim + (idx,)
+    out[picker] = value
+
+    def back(g):
+        g = _np.asarray(g)
+        keep = _np.ones(t.data.shape, dtype=g.dtype)
+        keep[picker] = 0.0
+        return (g * keep,)
+
+    return t._make(out, (t,), back, "IndexFillBackward0")
+
+
+def take(t, index):
+    """**평평하게 펴서** 뽑는다 — 축이라는 개념이 없다."""
+    t = _wrap(t)
+    idx = _as_index(index)
+    shape = t.data.shape
+
+    def back(g):
+        z = _np.zeros(int(_np.prod(shape)), dtype=_np.asarray(g).dtype)
+        _np.add.at(z, idx.reshape(-1), _np.asarray(g).reshape(-1))
+        return (z.reshape(shape),)
+
+    return t._make(_np.take(t.data, idx), (t,), back, "TakeBackward0")
+
+
+def take_along_dim(t, indices, dim=None):
+    """`gather` 와 같은 것. torch 가 두 이름을 다 준다."""
+    if dim is None:
+        return take(t, indices)
+    return gather(t, dim, indices)
+
+
+def searchsorted(sorted_sequence, values, right=False, **kw):
+    """정렬된 것 안에서 들어갈 자리. **`right` 가 동점의 어느 쪽인지 정한다.**"""
+    seq = _wrap(sorted_sequence).data
+    want = _wrap(values).data
+    return Tensor(_np.searchsorted(seq, want, side="right" if right else "left")
+                  .astype(_np.int64))
+
+
+def bucketize(values, boundaries, right=False, **kw):
+    """`searchsorted` 와 **인자 순서가 뒤집혀 있다.** 그것이 두 이름의 차이 전부다."""
+    return searchsorted(boundaries, values, right=right)
+
+
 def repeat_interleave(t, repeats, dim=None):
     """제자리에서 늘린다. 역방향은 늘어난 것들을 **묶음마다 도로 합치는** 것이다."""
     t = _wrap(t)

@@ -231,7 +231,10 @@ class Tensor:
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
         if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
                     "pow", "squeeze", "repeat_interleave", "flatten",
-                    "sum", "norm", "transpose", "swapdims"):
+                    "sum", "norm", "transpose", "swapdims",
+                    # 색인으로 쓰는 쪽 — 이름과 인자가 borch.ts 와 다르다.
+                    "scatter", "scatter_add", "index_add", "index_copy",
+                    "index_fill", "take", "take_along_dim"):
             from . import _ops
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(self, *a, **k)

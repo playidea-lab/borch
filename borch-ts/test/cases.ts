@@ -467,6 +467,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addModFn(out, inputs);
   addPool(out, inputs);
   addNewFn(out, inputs);
+  addIndex(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1463,6 +1464,65 @@ function crossOf(a: Tensor, b: Tensor): Tensor {
     p(a, 2).mul(p(b, 0)).sub(p(a, 0).mul(p(b, 2))),
     p(a, 0).mul(p(b, 1)).sub(p(a, 1).mul(p(b, 0))),
   ], 1);
+}
+
+/**
+ * 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)은 이미 있었다.
+ *
+ * **번호가 겹칠 때가 요점이다.** `scatterSet` 은 마지막에 쓴 것이 남고
+ * `scatterAdd` 는 더한다 — 안 겹치는 번호로만 재면 둘이 같아 보인다.
+ */
+function addIndex(out: Map<string, Case>, inp: Inputs): void {
+  const base = (): Tensor => Tensor.zeros([3, 4]);
+  const src = (grad = false): Tensor => {
+    const s = inp.get("x2").mul(Tensor.full([], 10));
+    return grad ? asLeaf(s) : s;
+  };
+  // 0 이 두 번 나온다 — 겹치는 자리가 여기다.
+  const dup = (): Tensor =>
+    Tensor.from([0, 0, 1, 2, 1, 1, 2, 3, 2, 2, 3, 0], [3, 4]);
+  const rows = (values: number[]): Tensor => Tensor.from(values, [values.length]);
+
+  /** 1 차원 번호를 줄 단위로 편다 — `index_add` 류가 쓰는 모양이다. */
+  const spread = (index: Tensor, dim: number, shape: number[]): Tensor => {
+    const lifted = shape.map(() => 1);
+    lifted[dim] = index.size;
+    return index.reshape(lifted).expand(...shape);
+  };
+
+  const table: [string, () => Tensor][] = [
+    ["scatter(겹치는 번호)", () => base().scatterSet(1, dup(), src())],
+    ["scatter_add(겹치는 번호)", () => base().scatterAdd(1, dup(), src())],
+    ["scatter(스칼라)",
+      () => base().scatterSet(1, dup(), Tensor.zeros([3, 4]).add(Tensor.full([], 7)))],
+    ["index_add", () => base().scatterAdd(0, spread(rows([0, 0, 2]), 0, [3, 4]),
+      inp.get("x2"))],
+    ["index_copy", () => base().scatterSet(0, spread(rows([2, 1, 0]), 0, [3, 4]),
+      inp.get("x2"))],
+    ["index_fill", () => inp.get("x2").scatterSet(
+      1, spread(rows([0, 2]), 1, [3, 2]),
+      Tensor.zeros([3, 2]).add(Tensor.full([], -1)))],
+    // `take` 는 평평하게 펴서 뽑는다 — 축이라는 개념이 없다.
+    ["take", () => inp.get("x2").reshape([12]).indexSelect(0, rows([0, 2, 2, 5]))],
+    ["take_along_dim", () => inp.get("x2").gather(1, dup())],
+  ];
+  for (const [name, fn] of table) out.set(`index::${name}`, fn);
+
+  out.set("index::grad::scatter_add", () => {
+    const s = src(true);
+    seeded(base().scatterAdd(1, dup(), s)).backward();
+    return gradOf(s, "scatter_add");
+  });
+
+  // 정렬된 것 안에서 자리를 찾는다 — "나보다 작은 것이 몇 개인가" 를 센다.
+  const seq = (): Tensor => Tensor.from([1, 3, 5, 7], [1, 4]);
+  const want = (): Tensor => Tensor.from([0, 3, 6, 9], [4, 1]);
+  const counted = (right: boolean): Tensor =>
+    seq().binary(right ? "le" : "lt", want()).to("float32").sumDim(1)
+      .to("int64").reshape([4]);
+  out.set("index::searchsorted", () => counted(false));
+  out.set("index::searchsorted(right)", () => counted(true));
+  out.set("index::bucketize", () => counted(false));
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

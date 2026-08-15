@@ -61,6 +61,7 @@ import {
   type ReduceKind,
   ruleKey,
   scatterByIndex,
+  scatterOverwrite,
   sortAxis,
   sumSplits,
   triangle,
@@ -2476,6 +2477,90 @@ export class Tensor implements Node<Tensor> {
       },
       "SortBackward0",
     );
+  }
+
+  /**
+   * 번호가 가리키는 자리에 **더한다.** 겹치면 쌓인다.
+   *
+   * `gather` 의 반대다. 한쪽만 있으면 "꺼낼 수는 있는데 되돌려 넣을 수가 없는"
+   * 상태이고, 임베딩이나 원-핫을 손으로 만드는 코드가 그 자리를 바로 만난다.
+   */
+  scatterAdd(dim: number, index: Tensor, src: Tensor): Tensor {
+    return this.scatterWith(dim, index, src, "add");
+  }
+
+  /** 번호가 가리키는 자리에 **덮어쓴다.** 겹치면 마지막에 쓴 것이 남는다. */
+  scatterSet(dim: number, index: Tensor, src: Tensor): Tensor {
+    return this.scatterWith(dim, index, src, "set");
+  }
+
+  private scatterWith(
+    dim: number,
+    index: Tensor,
+    src: Tensor,
+    kind: "add" | "set",
+  ): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
+    const inner = this.shape.slice(axis + 1).reduce((a, b) => a * b, 1);
+    const len = this.shape[axis] ?? 1;
+    const taken = index.shape[axis] ?? 1;
+    const d = dev();
+    const out = d.alloc(this.size);
+    if (kind === "add") {
+      const spread = d.alloc(this.size);
+      d.run1d(
+        d.pipeline(`sbi:${outer}:${len}:${inner}:${taken}`,
+          () => scatterByIndex(outer, len, inner, taken)),
+        [index.buffer, src.buffer, spread],
+        this.size,
+      );
+      // **그래프를 이어야 한다.** 맨 `new Tensor` 로 두면 `src` 로 기울기가 안
+      // 가고, 증상은 "requires grad 가 아니다" 라는 먼 자리의 오류였다.
+      // 흩뿌리기의 반대는 모으기이므로 역방향이 `gather` 다.
+      const scattered = Tensor.make(
+        spread, this.shape, [src],
+        (g) => [g.gather(axis, index)],
+        "ScatterAddBackward0",
+      );
+      return this.add(scattered);
+    }
+    d.run1d(
+      d.pipeline(`sbo:${outer}:${len}:${inner}:${taken}`,
+        () => scatterOverwrite(outer, len, inner, taken)),
+      [index.buffer, src.buffer, this.buffer, out],
+      this.size,
+    );
+    // 덮어쓴 자리는 원본과 끊긴다 — 그 자리에는 0 이 간다. 자리 표를 그대로
+    // 쓰면 되므로 새 커널이 필요 없다.
+    const written = Tensor.zeros(this.shape)
+      .scatterSetMask(index, outer, len, inner, taken);
+    const keep = Tensor.full([], 1).sub(written);
+    return Tensor.make(
+      out,
+      this.shape,
+      [this, src],
+      (g) => [g.mul(keep), g.gather(axis, index)],
+      "ScatterBackward0",
+    );
+  }
+
+  /** 어느 칸이 쓰였는지의 표. 값이 1 인 자리가 덮어쓴 자리다. */
+  private scatterSetMask(
+    index: Tensor,
+    outer: number, len: number, inner: number, taken: number,
+  ): Tensor {
+    const d = dev();
+    const mask = d.alloc(this.size);
+    d.run1d(
+      d.pipeline(`sbo:${outer}:${len}:${inner}:${taken}`,
+        () => scatterOverwrite(outer, len, inner, taken)),
+      [index.buffer, Tensor.zeros(index.shape).add(Tensor.full([], 1)).buffer,
+        this.buffer, mask],
+      this.size,
+    );
+    return new Tensor(mask, this.shape);
   }
 
   // ── 합성곱·풀링 ───────────────────────────────────────────────────────

@@ -81,6 +81,9 @@ from ._ops import (
     cross, empty_like, float_power, fmax, fmin, inner, isclose, isin, isneginf,
     isposinf, isreal, kron, lerp, logical_xor, logspace, meshgrid, nan_to_num,
     rand_like, randint_like, randn_like, scalar_tensor, std_mean, var_mean, vdot,
+    # 색인으로 쓰는 쪽.
+    bucketize, index_add, index_copy, index_fill, scatter, scatter_add,
+    searchsorted, take, take_along_dim,
 )
 from ._nn import (
     AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,
@@ -146,6 +149,9 @@ _AS_METHOD = (
     "unflatten", "unfold", "vsplit",
     # 자매에는 메서드로 있고 여기에는 함수로만 있던 셋. torch 도 메서드로 준다.
     "index_select", "masked_select", "repeat_interleave", "masked_fill",
+    # 색인으로 쓰는 쪽. torch 는 전부 메서드로도 준다 — `x.scatter_(…)` 가 그 꼴이다.
+    "scatter", "scatter_add", "index_add", "index_copy", "index_fill", "take",
+    "take_along_dim",
 )
 
 for _method in _AS_METHOD:

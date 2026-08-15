@@ -710,6 +710,71 @@ def act_cases(inp=None):
     return cases
 
 
+INDEX_PREFIX = "index::"
+
+
+def index_cases(inp=None):
+    """색인으로 **쓰는** 쪽. 읽는 쪽(`gather`·`index_select`)은 이미 있었다.
+
+    `gather` 는 있는데 그 반대인 `scatter` 가 없었다. 한쪽만 있으면 "꺼낼 수는 있는데
+    되돌려 넣을 수가 없는" 상태이고, 그 자리는 임베딩이나 원-핫을 손으로 만드는
+    코드가 바로 만난다.
+
+    **번호가 겹칠 때가 요점이다.** `scatter` 는 마지막에 쓴 것이 남고 `scatter_add`
+    는 더한다 — 겹치지 않는 번호로만 재면 둘이 같은 함수처럼 보인다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    x2 = inp["x2"]                                       # (3, 4)
+    src = (x2 * 10).astype(np.float32)
+    # 겹치는 번호. 0 이 두 번 나온다 — `scatter` 와 `scatter_add` 가 여기서 갈린다.
+    dup = np.array([[0, 0, 1, 2], [1, 1, 2, 3], [2, 2, 3, 0]], dtype=np.int64)
+    flat_idx = np.array([0, 2, 2, 5], dtype=np.int64)
+    cases = []
+
+    def add(name, fn):
+        cases.append((INDEX_PREFIX + name, fn))
+
+    add("scatter(겹치는 번호)",
+        lambda L: L.zeros(3, 4).scatter(1, L.tensor(dup), L.tensor(src)))
+    add("scatter_add(겹치는 번호)",
+        lambda L: L.zeros(3, 4).scatter_add(1, L.tensor(dup), L.tensor(src)))
+    add("scatter(스칼라)",
+        lambda L: L.zeros(3, 4).scatter(1, L.tensor(dup), 7.0))
+
+    # 기울기도 본다. **쓰인 자리로만 흘러야 한다.**
+    def scatter_grad(L):
+        s = L.tensor(src, requires_grad=True)
+        out = L.zeros(3, 4).scatter_add(1, L.tensor(dup), s)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(s, "scatter_add")
+
+    cases.append((INDEX_PREFIX + "grad::scatter_add", scatter_grad))
+
+    add("index_add",
+        lambda L: L.zeros(3, 4).index_add(
+            0, L.tensor(np.array([0, 0, 2], dtype=np.int64)), L.tensor(x2)))
+    add("index_copy",
+        lambda L: L.zeros(3, 4).index_copy(
+            0, L.tensor(np.array([2, 1, 0], dtype=np.int64)), L.tensor(x2)))
+    add("index_fill",
+        lambda L: L.tensor(x2).index_fill(
+            1, L.tensor(np.array([0, 2], dtype=np.int64)), -1.0))
+
+    # `take` 는 **평평하게 펴서** 뽑는다 — 축이라는 개념이 없다.
+    add("take", lambda L: L.take(L.tensor(x2), L.tensor(flat_idx)))
+    add("take_along_dim",
+        lambda L: L.take_along_dim(L.tensor(x2), L.tensor(dup), dim=1))
+
+    # 정렬된 것 안에서 자리를 찾는다. **`right` 가 동점의 어느 쪽인지를 정한다.**
+    line = np.array([1., 3., 5., 7.], dtype=np.float32)
+    want = np.array([0., 3., 6., 9.], dtype=np.float32)
+    add("searchsorted", lambda L: L.searchsorted(L.tensor(line), L.tensor(want)))
+    add("searchsorted(right)",
+        lambda L: L.searchsorted(L.tensor(line), L.tensor(want), right=True))
+    add("bucketize", lambda L: L.bucketize(L.tensor(want), L.tensor(line)))
+    return cases
+
+
 NEWFN_PREFIX = "newfn::"
 
 
@@ -2993,7 +3058,7 @@ def golden_cases(inp=None):
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
-            + new_function_cases(inp)
+            + new_function_cases(inp) + index_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 
