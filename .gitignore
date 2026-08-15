@@ -24,6 +24,15 @@ tests/golden.npz
 # 진짜 torch 를 깔아야 한다면 그건 언어 중립이 아니다. 290KB 이고, 낡으면 매니페스트
 # 해시가 갈린다(tests/test_export_json.py 가 그것을 붙잡는다).
 
+# 진짜 torch 에 규약을 물어보는 일회용 스크립트들.
+#
+# **버리는 것이 맞다.** 물어서 얻은 답은 골든에 굳고 이유는 주석에 남으므로, 물어본
+# 절차까지 저장소에 둘 이유가 없다 — 남겨 두면 다음 사람이 "이건 왜 있지" 를 묻는
+# 파일이 하나씩 는다. 다시 물어야 하면 다시 쓰는 것이 싸다.
+tests/probe_*.py
+tests/browser/probe_*.py
+tests/fix_*.py
+
 # CIFAR-10 원본. 브라우저는 CORS 때문에 직접 못 받으므로 로컬로 받아 서빙한다.
 cifar-10-*
 cifar-batch*.bin
