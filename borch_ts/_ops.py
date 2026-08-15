@@ -110,13 +110,21 @@ _SIGNATURE = {
     "index_fill": ("dim", "index", "value"),
     "scatter": ("dim", "index", "src"),
     "cumulative_trapezoid": ("dim",),
+    "diagonal": ("offset",),
+    "squeeze": ("dim",),
+    "expand": ("shape",),
+    "unflatten": ("dim", "sizes"),
+    "quantile": ("q", "dim"),
 }
 
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
 # 파이썬은 `permute(0, 2, 1)` 로도 부른다. 흩어진 인자를 하나로 모아야 한다 —
 # 안 모으면 `order.map is not a function` 이 난다.
-_GATHERS = frozenset(("permute", "reshape", "view", "tile", "repeat",
-                      "expand", "broadcast_to", "flip", "quantile", "unflatten"))
+_GATHERS = frozenset(("permute", "reshape", "view", "flip", "broadcast_to"))
+
+# **가변 인자로 받는 것들.** borch.ts 가 `expand(...sizes)` 라 배열이 아니라 흩어진
+# 수를 원한다 — `_GATHERS` 와 정확히 반대다. 파이썬은 둘 다로 부르므로 여기서 편다.
+_SPREADS = frozenset(("expand", "tile", "repeat"))
 
 
 def camel(name):
@@ -167,11 +175,11 @@ def positional(name, args, kw):
     while out and out[-1] is None:
         out.pop()
     # 흩어진 축 번호를 배열 하나로 모은다. `permute(0, 2, 1)` → `permute([0,2,1])`.
-    if name in _GATHERS and len(out) > 1 and all(isinstance(a, int) for a in out):
+    if name in _GATHERS and all(isinstance(a, int) for a in out):
         out = [list(out)]
-    elif name in _GATHERS and len(out) == 1 and isinstance(out[0], int):
-        # `unflatten(dim, sizes)` 처럼 첫 인자가 축인 것은 안 모은다.
-        out = [[out[0]]] if name not in ("unflatten",) else out
+    # 반대로, 배열 하나로 온 것을 흩뿌린다. `expand([2,3])` → `expand(2, 3)`.
+    elif name in _SPREADS and len(out) == 1 and isinstance(out[0], (list, tuple)):
+        out = list(out[0])
     return [_arg(a) for a in out]
 
 
@@ -305,6 +313,17 @@ def einsum(spec, *operands):
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)
+
+
+def split(x, size, dim=0):
+    """**인자 순서가 뒤집혀 있다.** torch 는 `split(조각크기, 축)`, borch.ts 는
+    `splitSize(축, 조각크기)` 다. 그대로 넘기면 축 자리에 크기가 들어가 엉뚱한 데서
+    터진다 — `축 2 의 크기 0 는 undefined 로 안 나뉜다` 가 그것이었다."""
+    return [wrap(t) for t in handle(x).splitSize(dim, size)]
+
+
+def chunk(x, chunks, dim=0):
+    return [wrap(t) for t in handle(x).split(dim, chunks)]
 
 
 def clamp(x, min=None, max=None):                        # noqa: A002

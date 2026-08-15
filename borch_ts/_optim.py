@@ -30,6 +30,9 @@ class _Opt:
 
 
 def _params(ps):
+    # 파라미터가 JS 배열로 올 수도 있다 — `model.parameters()` 를 그대로 넘기는 자리다.
+    if hasattr(ps, "to_py"):
+        ps = ps.to_py()
     return _js.Array.new(*[handle(p) for p in ps])
 
 

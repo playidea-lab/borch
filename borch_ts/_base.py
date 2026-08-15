@@ -211,10 +211,12 @@ class Tensor:
         """
         from ._ops import _BINARY_ONLY, camel, positional
 
-        # 한쪽만 자르는 clamp 는 갈라 줘야 한다 — 모듈 쪽과 같은 함수를 쓴다.
-        if name in ("clamp", "clip"):
-            from ._ops import clamp as _clamp
-            return lambda *a, **k: _clamp(self, *a, **k)
+        # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
+        # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
+        if name in ("clamp", "clip", "split", "chunk", "aminmax"):
+            from . import _ops
+            fn = getattr(_ops, name)
+            return lambda *a, **k: fn(self, *a, **k)
 
         js_name = camel(name)
         if name in _BINARY_ONLY:
