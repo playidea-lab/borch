@@ -184,7 +184,11 @@ class Linear(Module):
         return out + self.bias if self.bias is not None else out
 
     def __repr__(self):
-        return f"Linear(in_features={self.in_features}, out_features={self.out_features})"
+        # `bias=` 까지 찍는다 — torch 가 그렇고, 게으른 층이 굳은 뒤의 글자를 골든이
+        # 묻기 시작하면서 드러났다. 편향이 있는지는 `state_dict` 열쇠를 바꾸는 정보다.
+        return (f"Linear(in_features={self.in_features}, "
+                f"out_features={self.out_features}, "
+                f"bias={getattr(self, 'bias', None) is not None})")
 
 
 class ReLU(Module):
@@ -1532,6 +1536,146 @@ class MaxPool3d(Module):
 class BatchNorm3d(BatchNorm2d):
     """`BatchNorm2d` 와 **같은 코드다** — 위에서 랭크를 안 따지게 고쳤으므로
     (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
+
+
+# ---------------------------------------------------------------- 게으른 층
+#
+# **모양을 첫 forward 에서 알아낸다.** `nn.LazyLinear(3)` 은 `in_features` 를 안 받고
+# 처음 지나가는 값을 보고 정한다 — 합성곱 뒤에 몇 채널이 나오는지를 손으로 세는 일이
+# 사라지므로 실제 코드가 자주 쓴다.
+#
+# **굳으면 클래스가 바뀐다.** 이것이 규약의 핵심이고 짐작으로는 안 나온다. 첫 forward
+# 뒤에 그 물건은 더 이상 `LazyLinear` 가 아니라 `Linear` 다 — 이름도 `isinstance` 도
+# 바뀌고 `has_uninitialized_params` 라는 메서드 자체가 사라진다(진짜 torch 에 물어
+# 확인했다). 깃발 하나로 처리하면 이름이 안 바뀌고, 그러면 `repr` 이 갈린다.
+
+class UninitializedParameter(Parameter):
+    """아직 모양을 모르는 파라미터.
+
+    **있기는 있다.** `parameters()` 가 내놓고 `state_dict` 에 열쇠가 있다 — 그래서
+    굳기 전에 옵티마이저에 넣는 것이 된다(torch 가 허용하고 그 순서로 짜는 코드가
+    있다). 다만 모양을 묻거나 셈을 하면 던진다.
+    """
+
+    def __init__(self):
+        super().__init__(_np.zeros((0,), dtype=_DEFAULT_DTYPE))
+
+    @property
+    def shape(self):
+        raise RuntimeError(
+            "Can't access the shape of an uninitialized parameter or buffer. "
+            "This error usually happens in `load_state_dict` when the parameter "
+            "has not been materialized — 먼저 한 번 지나가게 하세요.")
+
+    def __repr__(self):
+        return "<UninitializedParameter>"
+
+    def _refuse(self, *_a, **_k):
+        raise ValueError(
+            "Attempted to use an uninitialized parameter — 먼저 한 번 지나가게 하세요.")
+
+    __add__ = __radd__ = __mul__ = __rmul__ = _refuse
+    __sub__ = __rsub__ = __truediv__ = __rtruediv__ = _refuse
+    __matmul__ = __rmatmul__ = __pow__ = _refuse
+
+
+class UninitializedBuffer(UninitializedParameter):
+    def __repr__(self):
+        return "<UninitializedBuffer>"
+
+
+def Buffer(data):
+    """`nn.Buffer(t)` — 학습 안 하지만 저장되는 값이라는 표시.
+
+    torch 에서 이것은 텐서 자신이다(`isinstance(nn.Buffer(t), Tensor)` 가 참).
+    표시를 실제로 읽는 것은 `register_buffer` 쪽이라, 여기서는 그대로 돌려준다.
+    """
+    return data
+
+
+class _Lazy(Module):
+    """게으른 층의 뿌리. `_becomes` 가 굳은 뒤 될 클래스이고 `_infer` 가 모양을 읽는다.
+
+    굳는 자리를 `forward` 에 둔다 — 그래야 `Sequential` 안에서든 손으로 부르든 같은
+    자리를 지난다. 굳은 뒤에는 **자기 자신을 진짜 층으로 바꿔치고** 다시 부른다.
+    """
+
+    _becomes = None
+    _names = ()
+
+    def __init__(self, *args, **kw):
+        super().__init__()
+        self._lazy_args, self._lazy_kw = list(args), dict(kw)
+        self.weight = UninitializedParameter()
+        if kw.get("bias", True):
+            self.bias = UninitializedParameter()
+
+    def has_uninitialized_params(self):
+        return True
+
+    def _infer(self, x):
+        """모양에서 읽어낸 첫 인자. 층마다 다르므로 여기서 갈린다."""
+        raise NotImplementedError
+
+    def forward(self, x):
+        cls = type(self)._becomes
+        real = cls(*self._infer(x), *self._lazy_args, **self._lazy_kw)
+        # 속을 통째로 갈아 끼운다. 새 물건을 돌려주면 이미 옵티마이저에 들어간
+        # 파라미터와 딴 것이 되어, 학습이 도는데 가중치가 안 움직인다.
+        self.__dict__.clear()
+        self.__dict__.update(real.__dict__)
+        self.__class__ = cls
+        return self(x)
+
+    def __repr__(self):
+        inner = ", ".join(f"{n}={v}" for n, v in
+                          zip(self._names, [0] + self._lazy_args))
+        tail = ", bias=True" if self._lazy_kw.get("bias", True) else ", bias=False"
+        return f"{type(self).__name__}({inner}{tail})"
+
+
+class LazyLinear(_Lazy):
+    _becomes = Linear
+    _names = ("in_features", "out_features")
+
+    def _infer(self, x):
+        return (x.shape[-1],)
+
+
+def _lazy_channels(x):
+    """(N, C, …) 에서 채널 수. 합성곱과 정규화가 같이 쓴다."""
+    return (x.shape[1],)
+
+
+def _make_lazies():
+    """열두 개를 여기서 찍는다. 무엇이 될지와 무엇을 읽을지만 다르다."""
+    table = (
+        ("LazyConv1d", Conv1d, ("in_channels", "out_channels")),
+        ("LazyConv2d", Conv2d, ("in_channels", "out_channels")),
+        ("LazyConv3d", Conv3d, ("in_channels", "out_channels")),
+        ("LazyConvTranspose1d", ConvTranspose1d, ("in_channels", "out_channels")),
+        ("LazyConvTranspose2d", ConvTranspose2d, ("in_channels", "out_channels")),
+        ("LazyConvTranspose3d", ConvTranspose3d, ("in_channels", "out_channels")),
+        ("LazyBatchNorm1d", BatchNorm1d, ("num_features",)),
+        ("LazyBatchNorm2d", BatchNorm2d, ("num_features",)),
+        ("LazyBatchNorm3d", BatchNorm3d, ("num_features",)),
+        ("LazyInstanceNorm1d", InstanceNorm1d, ("num_features",)),
+        ("LazyInstanceNorm2d", InstanceNorm2d, ("num_features",)),
+        ("LazyInstanceNorm3d", InstanceNorm3d, ("num_features",)),
+    )
+    return {name: type(name, (_Lazy,), {
+        "_becomes": becomes, "_names": names,
+        "_infer": staticmethod(_lazy_channels),
+    }) for name, becomes, names in table}
+
+
+for _name, _lazy_cls in {"LazyLinear": LazyLinear, **_make_lazies()}.items():
+    globals()[_name] = _lazy_cls
+    setattr(nn, _name, _lazy_cls)
+
+nn.UninitializedParameter = UninitializedParameter
+nn.UninitializedBuffer = UninitializedBuffer
+nn.Buffer = Buffer
 
 
 # ---------------------------------------------------------------- 손실 층

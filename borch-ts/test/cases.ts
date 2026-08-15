@@ -464,6 +464,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNorm(out, inputs);
   addPad(out);
   addLoss(out);
+  addLazy(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -971,6 +972,98 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
  * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
  * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
  */
+/**
+ * 모양을 첫 forward 에서 알아내는 층들.
+ *
+ * **굳으면 딴 것이 된다.** 파이썬 쪽은 클래스를 바꾸고 이쪽은 프로토타입을 갈아
+ * 끼운다 — 같은 자리를 다른 언어로 짚은 것이다. 사용자가 보는 것은 `print(model)`
+ * 이므로 골든이 그 글자를 묻는다. 자세한 것은 `tests/cases.py` 의 `lazy_cases` 에.
+ */
+function addLazy(out: Map<string, Case>): void {
+  const x2d = () => Tensor.from(Array.from({ length: 10 }, (_, i) => i), [2, 5]);
+  const img = () => Tensor.from(
+    Array.from({ length: 2 * 2 * 8 * 8 }, (_, i) => i / 100), [2, 2, 8, 8]);
+
+  out.set("lazy::굳기전::repr", async () => new nn.LazyLinear(3).describe());
+  out.set("lazy::굳은뒤::repr", async () => {
+    const m = new nn.LazyLinear(3);
+    m.call(x2d());
+    return (m as unknown as nn.Linear).describe();
+  });
+  out.set("lazy::has_uninitialized_params 가 사라진다", async () => {
+    const m = new nn.LazyLinear(3);
+    const has = (o: object) =>
+      typeof (o as { hasUninitializedParams?: unknown })
+        .hasUninitializedParams === "function";
+    const before = has(m);
+    m.call(x2d());
+    return `전 ${before ? "True" : "False"} 후 ${has(m) ? "True" : "False"}`;
+  });
+
+  const shapes: [string, () => nn.LazyModule, () => Tensor][] = [
+    ["LazyLinear", () => new nn.LazyLinear(3), x2d],
+    ["LazyConv2d", () => new nn.LazyConv2d(4, 3), img],
+    ["LazyBatchNorm2d", () => new nn.LazyBatchNorm2d(), img],
+    ["LazyInstanceNorm2d", () => new nn.LazyInstanceNorm2d(), img],
+    ["LazyConvTranspose2d", () => new nn.LazyConvTranspose2d(4, 3), img],
+  ];
+  for (const [name, make, src] of shapes) {
+    out.set(`lazy::굳은뒤::${name}`,
+      async () => `(${make().call(src()).shape.join(", ")})`);
+  }
+
+  out.set("lazy::굳은뒤::가중치 모양", async () => {
+    const m = new nn.LazyLinear(3);
+    m.call(x2d());
+    return `(${(m as unknown as nn.Linear).weight.shape.join(", ")})`;
+  });
+
+  out.set("lazy::성질::같은 씨앗이면 같은 초기화", async () => {
+    nn.manualSeed(0);
+    const lazy = new nn.LazyLinear(3);
+    const got = await lazy.call(x2d()).toArray();
+    nn.manualSeed(0);
+    const eager = new nn.Linear(5, 3);
+    const want = await eager.call(x2d()).toArray();
+    const same = got.every((v, i) => Math.abs(v - (want[i] ?? 0)) < 1e-5);
+    return `같다=${same ? "True" : "False"}`;
+  });
+
+  out.set("lazy::성질::굳은 뒤 학습이 돈다", async () => {
+    nn.manualSeed(0);
+    const m = new nn.LazyLinear(2);
+    const opt = new optim.SGD((m as unknown as nn.Linear).parameters(), 0.1);
+    const target = Tensor.zeros([2, 2]);
+    let first = 0;
+    for (let step = 0; step < 3; step++) {
+      const loss = m.call(x2d()).sub(target).square().mean();
+      if (step === 0) first = (await loss.toArray())[0] ?? 0;
+      opt.zeroGrad();
+      loss.backward();
+      opt.step();
+    }
+    const last = (await m.call(x2d()).sub(target).square().mean().toArray())[0] ?? 0;
+    return `손실이 내려갔다=${last < first ? "True" : "False"}`;
+  });
+
+  // 씨앗이 층 초기화와 dropout 에 닿는가. 코어가 여기서 결함을 하나 냈다 —
+  // 파이썬 쪽 주석에 그 이야기를 적었다.
+  const same = async (make: () => Tensor) => {
+    nn.manualSeed(0);
+    const a = await make().toArray();
+    nn.manualSeed(0);
+    const b = await make().toArray();
+    const ok = a.every((v, i) => v === b[i]);
+    return `재현된다=${ok ? "True" : "False"}`;
+  };
+  out.set("lazy::씨앗::Linear 초기화",
+    async () => same(() => new nn.Linear(4, 3).weight));
+  out.set("lazy::씨앗::Conv2d 초기화",
+    async () => same(() => new nn.Conv2d(2, 3, 3).weight));
+  out.set("lazy::씨앗::dropout 마스크",
+    async () => same(() => Tensor.ones([8]).dropout(0.5, true)));
+}
+
 /**
  * 손실 열셋과 거리 셋.
  *

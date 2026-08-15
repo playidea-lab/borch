@@ -89,8 +89,24 @@ class Generator:
 
 
 def manual_seed(seed):
-    global _rng
-    _rng = _np.random.default_rng(seed)
+    """씨앗을 심는다. **있는 생성기의 상태를 갈아 끼운다 — 새로 만들지 않는다.**
+
+    앞의 판은 `global _rng` 로 이름을 다시 묶었다. 그런데 `_nn.py` 가 임포트 때
+    `from ._ops import _rng` 로 **그 시점의 물건**을 붙잡아 두므로, 다시 묶어도 저쪽은
+    옛 생성기를 계속 쓴다. 그 결과가 이랬다(실측):
+
+        borch.manual_seed(0); Linear(4,3).weight   ← 매번 다른 값
+        borch.manual_seed(0); borch.randn(3)       ← 재현된다
+
+    **층 초기화와 dropout 이 씨앗을 안 따랐다.** 학습을 재현하려는 사람이 가장 먼저
+    기대하는 것이 그 둘인데, `randn` 만 재현되니 "씨앗이 먹는다" 고 읽고 넘어간다.
+    골든이 오래 못 본 것은 케이스마다 가중치를 밖에서 넣어 주기 때문이다 — 게으른
+    층이 초기화를 스스로 하면서 처음으로 그 자리가 물어졌다.
+
+    상태를 갈아 끼우면 **누가 어디서 붙잡아 갔든** 같이 고쳐진다. 이름을 다시 묶는
+    쪽은 붙잡아 간 자리를 전부 찾아 고쳐야 하고, 그 목록은 늘어난다.
+    """
+    _rng.bit_generator.state = _np.random.default_rng(seed).bit_generator.state
     return seed
 
 

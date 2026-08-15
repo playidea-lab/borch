@@ -374,6 +374,14 @@ class Module:
 
 
 def _layer(js_name, *args):
+    """저쪽 층을 감싼다.
+
+    **여기서 나오는 것은 전부 `Module` 한 클래스다.** 그래서
+    `type(model.fc).__name__` 이 늘 `Module` 이고, torch 는 그 자리에서 `Linear` 라고
+    말한다. 이름별 클래스를 찍어 주면 되지만 borch.ts 쪽에 차원별 이름이 없어서
+    (`BatchNorm2d` 가 저쪽엔 `BatchNormND` 하나다) 반만 맞는 이름이 나온다 —
+    반만 맞는 이름은 `Module` 보다 더 헷갈린다. 저쪽 이름을 먼저 갈라야 하는 일이다.
+    """
     return Module(getattr(_ts.nn, js_name).new(*args))
 
 
@@ -763,6 +771,18 @@ def Conv2d(cin, cout, k, stride=1, padding=0, bias=True):
 
 def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
+
+
+# ── 게으른 층 열셋 ──────────────────────────────────────────────────────
+#
+# 전부 borch.ts 쪽에 있다. **굳는 자리도 저쪽이다** — 프로토타입을 갈아 끼우므로
+# 파이썬 쪽 감싼 물건은 그대로 두고 속만 바뀐다. `__repr__` 이 `describe()` 를
+# 물으므로 굳기 전후의 글자도 저절로 따라온다.
+
+for _lazy in ("LazyLinear",
+              *(f"Lazy{k}{d}d" for k in ("Conv", "ConvTranspose", "BatchNorm",
+                                         "InstanceNorm") for d in (1, 2, 3))):
+    globals()[_lazy] = (lambda name: lambda *a: _layer(name, *a))(_lazy)
 
 
 # ── 손실 층 ─────────────────────────────────────────────────────────────

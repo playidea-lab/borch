@@ -37,6 +37,11 @@ const initRng = { state: 0x9e3779b9 };
 
 export function manualSeed(seed: number): void {
   initRng.state = (seed >>> 0) || 1;
+  // **dropout 도 같이 되돌린다.** 그쪽은 부를 때마다 오르는 계수기를 따로 들고
+  // 있어서, 여기서 안 건드리면 씨앗을 심어도 마스크가 매번 달라진다 — "같은 씨앗에
+  // 같은 결과" 를 기대하는 사람이 가장 먼저 확인하는 자리가 층 초기화와 dropout 이다.
+  // 코어도 같은 갈래의 결함을 갖고 있었고 같은 케이스가 둘 다 잡았다.
+  Tensor.dropoutSeed = 1;
 }
 
 function nextUniform(): number {
@@ -394,6 +399,17 @@ export class Linear extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.linear(this.weight).add(this.bias);
+  }
+
+  /**
+   * 파이썬이 찍는 그대로.
+   *
+   * **게으른 층이 굳으면 이 글자가 답이 된다** — 그 물건은 그때부터 `Linear` 이고,
+   * 사용자가 `print(model)` 로 보는 것이 이것이다.
+   */
+  describe(): string {
+    const [out, inF] = [this.weight.shape[0] ?? 0, this.weight.shape[1] ?? 0];
+    return `Linear(in_features=${inF}, out_features=${out}, bias=True)`;
   }
 }
 
@@ -814,6 +830,126 @@ export class Flatten extends Module {
     const batch = x.shape[0] ?? 1;
     return x.reshape([batch, x.size / batch]);
   }
+}
+
+// ── 게으른 층 ───────────────────────────────────────────────────────────
+//
+// **모양을 첫 forward 에서 알아낸다.** `new nn.LazyLinear(3)` 은 들어오는 크기를 안
+// 받고 처음 지나가는 값을 보고 정한다 — 합성곱 뒤에 몇 채널이 나오는지를 손으로 세는
+// 일이 사라진다.
+//
+// **굳으면 딴 것이 된다.** torch 는 첫 forward 뒤에 그 물건의 클래스를 바꿔 버린다.
+// 여기서는 프로토타입을 갈아 끼우고 속을 옮겨 같은 자리를 짚는다 — 새 물건을
+// 돌려주면 이미 붙잡아 둔 쪽이 옛것을 계속 들고 있게 된다.
+
+export class LazyModule extends Module {
+  private built: Module | null = null;
+
+  constructor(
+    /** 굳기 전에 찍을 글자. `describe()` 가 쓴다. */
+    readonly label: string,
+    /** 알아낸 크기로 진짜 층을 만든다. */
+    private readonly build: (inferred: number) => Module,
+    /** 입력에서 무엇을 읽을지. 선형은 마지막 축, 나머지는 채널이다. */
+    private readonly read: (x: Tensor) => number,
+  ) {
+    super();
+  }
+
+  hasUninitializedParams(): boolean {
+    return this.built === null;
+  }
+
+  override forward(x: Tensor): Tensor {
+    if (!this.built) {
+      const real = this.build(this.read(x));
+      // 속을 옮기고 프로토타입을 갈아 끼운다 — 이 뒤로 이 물건은 진짜 층이다.
+      Object.assign(this, real);
+      Object.setPrototypeOf(this, Object.getPrototypeOf(real));
+      return (this as unknown as Module).forward(x);
+    }
+    return this.built.forward(x);
+  }
+
+  describe(): string {
+    return this.label;
+  }
+}
+
+/** 입력에서 무엇을 읽을지. */
+const lastAxis = (x: Tensor) => x.shape[x.shape.length - 1] ?? 0;
+const channels = (x: Tensor) => x.shape[1] ?? 0;
+
+export class LazyLinear extends LazyModule {
+  constructor(outFeatures: number) {
+    super(`LazyLinear(in_features=0, out_features=${outFeatures}, bias=True)`,
+      (inF) => new Linear(inF, outFeatures), lastAxis);
+  }
+}
+
+// 이름을 붙여 열둘. **찍어내는 함수로 두지 않는다** — 익명 클래스를 내보내면
+// TypeScript 가 `Module` 의 비공개 자리를 이유로 거절한다. 패딩 층에서 같은 벽을
+// 만났고, 상속을 무너뜨리는 것보다 세 줄씩 적는 편이 싸다.
+class LazyConvBase extends LazyModule {
+  constructor(spatial: number, transpose: boolean, outC: number, kernel: number,
+              stride = 1, padding = 0, bias = true) {
+    super(`Lazy${transpose ? "ConvTranspose" : "Conv"}${spatial}d`,
+      (inC) => (transpose
+        ? new ConvTransposeND(inC, outC, kernel, spatial, stride, padding, bias)
+        : new ConvND(inC, outC, kernel, spatial, stride, padding, bias)),
+      channels);
+  }
+}
+
+type ConvArgs = [number, number, number?, number?, boolean?];
+
+export class LazyConv1d extends LazyConvBase {
+  constructor(...a: ConvArgs) { super(1, false, ...a); }
+}
+export class LazyConv2d extends LazyConvBase {
+  constructor(...a: ConvArgs) { super(2, false, ...a); }
+}
+export class LazyConv3d extends LazyConvBase {
+  constructor(...a: ConvArgs) { super(3, false, ...a); }
+}
+export class LazyConvTranspose1d extends LazyConvBase {
+  constructor(...a: ConvArgs) { super(1, true, ...a); }
+}
+export class LazyConvTranspose2d extends LazyConvBase {
+  constructor(...a: ConvArgs) { super(2, true, ...a); }
+}
+export class LazyConvTranspose3d extends LazyConvBase {
+  constructor(...a: ConvArgs) { super(3, true, ...a); }
+}
+
+class LazyNormBase extends LazyModule {
+  constructor(kind: "batch" | "instance", spatial: number, eps = 1e-5,
+              momentum = 0.1) {
+    super(`Lazy${kind === "batch" ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
+      (c) => (kind === "batch"
+        ? new BatchNormND(c, eps, momentum)
+        : new InstanceNormND(eps)),
+      channels);
+  }
+}
+
+export class LazyBatchNorm1d extends LazyNormBase {
+  constructor(eps?: number, m?: number) { super("batch", 1, eps, m); }
+}
+export class LazyBatchNorm2d extends LazyNormBase {
+  constructor(eps?: number, m?: number) { super("batch", 2, eps, m); }
+}
+export class LazyBatchNorm3d extends LazyNormBase {
+  constructor(eps?: number, m?: number) { super("batch", 3, eps, m); }
+}
+export class LazyInstanceNorm1d extends LazyNormBase {
+  constructor(eps?: number) { super("instance", 1, eps); }
+}
+export class LazyInstanceNorm2d extends LazyNormBase {
+  constructor(eps?: number) { super("instance", 2, eps); }
+}
+export class LazyInstanceNorm3d extends LazyNormBase {
+  constructor(eps?: number) { super("instance", 3, eps); }
 }
 
 // ── 손실 층 ─────────────────────────────────────────────────────────────

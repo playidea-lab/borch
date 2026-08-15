@@ -1354,6 +1354,150 @@ def opt_cases(inp=None):
     return cases
 
 
+LAZY_PREFIX = "lazy::"
+
+
+def lazy_cases(inp=None):
+    """모양을 **첫 forward 에서 알아내는** 층들.
+
+    `nn.LazyLinear(3)` 은 `in_features` 를 안 받는다. 처음 지나가는 값을 보고 정한다 —
+    합성곱 뒤에 몇 채널이 나오는지를 손으로 세는 일이 사라지므로 실제 코드가 자주 쓴다.
+
+    ## 클래스가 바뀐다
+
+    이것이 규약의 핵심이고 짐작으로는 안 나온다. 첫 forward 뒤에 그 물건은 **더 이상
+    `LazyLinear` 가 아니라 `Linear` 다** — `type(m).__name__` 이 바뀌고
+    `isinstance(m, nn.LazyLinear)` 이 거짓이 되며 `has_uninitialized_params` 라는
+    메서드 자체가 사라진다(실측). 깃발 하나로 처리하면 이름이 안 바뀌고, 그러면
+    `repr` 도 `isinstance` 도 갈린다.
+
+    ## 여기서는 **셋 다 답할 수 있는 것만** 묻는다
+
+    torch 는 굳기 전에도 파라미터를 둘 내놓고(`<UninitializedParameter>`), 모양을
+    물으면 던지고, 그런데도 옵티마이저에는 넣게 해 준다. 그 기계는 코어에만 있다 —
+    브라우저 쪽 층은 굳기 전에 텐서가 아예 없다.
+
+    그래서 그쪽은 `tests/test_lazy.py` 가 **코어와 진짜 torch 를 직접 견준다.**
+    골든에 넣으면 브라우저 둘이 답할 수 없는 질문이 되고, 답할 수 없는 질문을 표에
+    두면 그 표가 "무엇이 통과했는가" 를 못 말하게 된다.
+
+    ## 값은 못 묻는다
+
+    가중치 초기값은 난수기에서 나오고 우리 난수기는 torch 와 다르다. 대신 **성질**을
+    묻는다: 같은 씨앗에서 `LazyLinear` 가 굳은 것과 `Linear` 를 바로 세운 것이 같은가.
+    torch 에서 참이고(실측), 우리에게서도 참이어야 한다 — 게으른 쪽이 다른 초기화를
+    쓰면 학습이 미묘하게 갈린다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((LAZY_PREFIX + name, fn))
+
+    x2d = np.arange(10, dtype=np.float32).reshape(2, 5)
+    img = np.arange(2 * 2 * 8 * 8, dtype=np.float32).reshape(2, 2, 8, 8) / 100
+
+    # ── 굳으면 딴 것이 된다 ────────────────────────────────────────────
+    #
+    # 사용자가 실제로 보는 것은 `print(model)` 이다. 그 글자가 바뀌는 것이 이 규약의
+    # 관찰 가능한 알맹이라, 이름과 `isinstance` 대신 그것을 묻는다 — 결속의 층은
+    # 파이썬 쪽에서 전부 한 클래스라 이름으로는 셋이 못 맞춘다.
+    add("굳기전::repr", lambda L: repr(L.nn.LazyLinear(3)))
+
+    def repr_after(L):
+        m = L.nn.LazyLinear(3)
+        m(L.tensor(x2d))
+        return repr(m)
+
+    add("굳은뒤::repr", repr_after)
+
+    def method_gone(L):
+        m = L.nn.LazyLinear(3)
+        before = hasattr(m, "has_uninitialized_params")
+        m(L.tensor(x2d))
+        return f"전 {before} 후 {hasattr(m, 'has_uninitialized_params')}"
+
+    add("has_uninitialized_params 가 사라진다", method_gone)
+
+    # ── 굳은 뒤의 모양 ─────────────────────────────────────────────────
+    shapes = (
+        ("LazyLinear", lambda L: L.nn.LazyLinear(3), x2d),
+        ("LazyConv2d", lambda L: L.nn.LazyConv2d(4, 3), img),
+        ("LazyBatchNorm2d", lambda L: L.nn.LazyBatchNorm2d(), img),
+        ("LazyInstanceNorm2d", lambda L: L.nn.LazyInstanceNorm2d(), img),
+        ("LazyConvTranspose2d", lambda L: L.nn.LazyConvTranspose2d(4, 3), img),
+    )
+    # **모양만 묻는다.** 굳은 뒤의 클래스 이름은 결속 쪽이 못 답한다 — 거기서는 층이
+    # 전부 `Module` 한 클래스다. 이름이 바뀐다는 것은 `repr` 과 `test_lazy.py` 가
+    # 이미 붙잡고 있으므로, 여기서는 셋 다 답할 수 있는 것만 묻는다.
+    for name, make, arr in shapes:
+        def run(L, m=make, a=arr):
+            return str(tuple(m(L)(L.tensor(a)).shape))
+        add(f"굳은뒤::{name}", run)
+
+    def weight_shape(L):
+        m = L.nn.LazyLinear(3)
+        m(L.tensor(x2d))
+        return str(tuple(m.weight.shape))
+
+    add("굳은뒤::가중치 모양", weight_shape)
+
+    # ── 성질: 게으른 쪽과 바로 세운 쪽이 같은 초기화를 쓰는가 ──────────
+    def same_init(L):
+        L.manual_seed(0)
+        lazy = L.nn.LazyLinear(3)
+        got = lazy(L.tensor(x2d))
+        L.manual_seed(0)
+        eager = L.nn.Linear(5, 3)
+        want = eager(L.tensor(x2d))
+        same = bool(np.allclose(np.asarray(got.detach().numpy()),
+                                np.asarray(want.detach().numpy()), atol=1e-5))
+        return f"같다={same}"
+
+    add("성질::같은 씨앗이면 같은 초기화", same_init)
+
+    # 학습이 실제로 돈다 — 굳은 뒤 옵티마이저가 그 파라미터를 움직이는가.
+    def trains(L):
+        L.manual_seed(0)
+        m = L.nn.LazyLinear(2)
+        opt = L.optim.SGD(m.parameters(), lr=0.1)
+        target = L.tensor(np.zeros((2, 2), dtype=np.float32))
+        first = None
+        for _ in range(3):
+            loss = ((m(L.tensor(x2d)) - target) ** 2).mean()
+            first = float(loss.item()) if first is None else first
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        last = float(((m(L.tensor(x2d)) - target) ** 2).mean().item())
+        return f"손실이 내려갔다={last < first}"
+
+    add("성질::굳은 뒤 학습이 돈다", trains)
+
+    # ── 씨앗이 층 초기화에도 닿는가 ────────────────────────────────────
+    #
+    # **게으른 층이 끌어낸 결함이다.** 코어의 `manual_seed` 가 모듈 전역 이름을 다시
+    # 묶기만 해서, 임포트 때 그 생성기를 붙잡아 간 `_nn` 쪽은 옛것을 계속 썼다 —
+    # `randn` 만 재현되고 **층 초기화와 dropout 은 씨앗을 안 따랐다.**
+    #
+    # 골든이 오래 못 본 이유는 케이스마다 가중치를 밖에서 넣어 주기 때문이다. 게으른
+    # 층이 초기화를 스스로 하면서 처음으로 그 자리가 물어졌다. 이 셋이 남는다.
+    def reproducible(L, make):
+        L.manual_seed(0)
+        first = np.asarray(make().detach().numpy()).copy()
+        L.manual_seed(0)
+        again = np.asarray(make().detach().numpy()).copy()
+        return f"재현된다={bool(np.array_equal(first, again))}"
+
+    add("씨앗::Linear 초기화",
+        lambda L: reproducible(L, lambda: L.nn.Linear(4, 3).weight))
+    add("씨앗::Conv2d 초기화",
+        lambda L: reproducible(L, lambda: L.nn.Conv2d(2, 3, 3).weight))
+    add("씨앗::dropout 마스크",
+        lambda L: reproducible(
+            L, lambda: L.nn.Dropout(0.5)(L.ones(8))))
+    return cases
+
+
 LOSS_PREFIX = "loss::"
 
 # 손실용 입력. **값이 0 으로 뭉개지지 않게 골랐다** — 처음 쓴 삼중항 입력은 여백이
@@ -3986,7 +4130,7 @@ def golden_cases(inp=None):
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
-            + pad_cases(inp) + loss_cases(inp)
+            + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

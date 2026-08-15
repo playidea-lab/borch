@@ -413,9 +413,18 @@ _rng = _np.random.default_rng(0)
 
 
 def manual_seed(seed):
-    """씨앗을 다시 심는다. torch 와 같은 이름·같은 뜻이다."""
+    """씨앗을 다시 심는다. torch 와 같은 이름·같은 뜻이다.
+
+    **저쪽에도 심어야 한다.** 여기 numpy 생성기는 `randn`·`randperm` 이 쓰고, 층
+    초기화와 dropout 은 borch.ts 안의 다른 생성기가 쓴다 — 이쪽만 심으면 `randn` 은
+    재현되고 가중치는 매번 달라진다. "같은 씨앗에 같은 결과" 를 확인하는 사람이 가장
+    먼저 보는 것이 그 둘인데, 앞의 것만 재현되니 먹는 줄 알고 넘어간다.
+
+    세 구현이 같은 갈래의 결함을 하나씩 갖고 있었고 게으른 층 케이스가 셋 다 잡았다.
+    """
     global _rng
     _rng = _np.random.default_rng(seed)
+    _ts.nn.manualSeed(int(seed))
     return _rng
 
 
