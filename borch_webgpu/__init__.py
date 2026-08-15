@@ -1,200 +1,124 @@
-"""borch-webgpu — TF.js WebGPU 위에 얹은 borch 모양의 층.
+"""borch_webgpu — **borch.ts 위에 얹은 얇은 결속(binding).**
 
-코어 `borch` 를 **대체하지 않는다.** 코어는 numpy 위에서 MNIST 급까지 가고,
-이쪽은 GPU 위에서 그 위를 간다. 왜 별도인지는 ROADMAP.md 의 ADR-001 에 있다.
+`import borch_webgpu as torch` 로 쓰고, 밑에서 직접 쓴 WGSL 커널이 돈다.
+
+## 이 이름은 한 번 주인이 바뀌었다
+
+전에는 같은 이름이 TF.js 판이었다. 그쪽은 **2,312 줄**이었는데, TF.js 가 주는 것이
+원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
+다시 구현해야 했기 때문이다. 이쪽은 **900 줄**이다 — borch.ts 에 그것이 이미 다
+있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
+
+이름은 사용자가 보는 것을 말한다: 브라우저에서, GPU 로. 그 뜻이 안 바뀌었으므로
+이름도 안 바꿨고, 갈아탄 것은 밑바닥이다. 재보니 같은 벤치에서 배치 64 기준
+154.7ms → 123.4ms 였고, 골든 859 건이 양쪽에 같은 질문을 했다.
+
+이름 바꿔 끼우는 것마저 손으로 안 적는다. 모듈과 텐서의 `__getattr__` 이
+`masked_select` 를 `maskedSelect` 로 바꿔 넘기고, 없으면 멈춘다. **넘기는 인자를
+저쪽이 안 받으면 그것도 멈춘다** — JS 는 남는 인자를 조용히 버리므로, 그 확인이
+없던 동안 `sum(dim=1)` 이 축을 무시한 전체 합을 값으로 냈다.
+
+## 동기로 도는 이유 — 이건 재봤다
+
+WebGPU 에 동기 읽기가 없다. borch.ts 의 `toArray()` 는 약속을 돌려준다. 그대로
+얹으면 `await loss.item()` 이 되고, 그러면 **"튜토리얼 코드를 임포트만 바꿔
+돌린다"** 는 이 프로젝트의 유일한 주장이 깨진다.
+
+Pyodide 의 `run_sync` 가 그 자리를 메운다(JSPI 위에 선다). 실측했다 —
+`tests/browser/sync_probe.py` 가 `[2,4,6]` 을 낸다. **조건이 하나 있다:** 파이썬에
+들어올 때 비동기 진입(`runPythonAsync`)이어야 한다. 동기 진입이면
+`RuntimeError: No suspender` 로 멈추는데, 라이브러리의 한계가 아니라 그 스택에
+중단할 자리가 없어서다. 러너는 이미 비동기로 들어간다.
 
 ## 브라우저 안에서만 돈다
 
-`js.tf` 를 부른다. 네이티브 CPython 에서 임포트하면 바로 멈춘다 — 조용히 다른 것으로
-폴백하면 "GPU 로 돌렸다"고 착각하게 되고, 그건 이 프로젝트가 가장 싫어하는 종류다.
+`js.borch` 를 부른다. 네이티브 CPython 에서 임포트하면 바로 멈춘다 — 조용히 다른
+것으로 폴백하면 "GPU 로 돌렸다" 고 착각하게 되고, 그건 이 프로젝트가 가장 싫어하는
+종류다. 코어(`borch`, numpy)가 네이티브 쪽 답이다.
 
-## 왜 자체 autograd 인가
+## 지금 어디까지인가
 
-TF.js 의 `tf.grad` 를 쓰지 않는다. 재봤더니 conv 역방향 커널이 순방향의 1/26 이었고
-(WEBGPU-DESIGN.md 1.5절), 역방향을 **순방향 conv 로 다시 써야** 목표에 닿는다.
-그러려면 역방향을 우리가 들고 있어야 한다. 테이프 구조는 코어와 같게 둔다 —
-같은 모양이면 코어에서 고친 것을 여기로 옮기기 쉽다.
+골든 **859 건 전부**를 지난다. 코어(numpy)는 그중 806 건을 보는데, 나머지 53 건은
+코어가 일부러 거절하는 것들(1·3 차원 합성곱, 랭크 7·8)이라 안 묻는다.
 
-## 한계 — 코어와 다른 점
-
-- **dtype 은 `float32` · `int64` · `bool` 세 가지다.** 승격 규칙은 torch 와 같게
-  맞췄지만(72/72), **`float64` 는 없다** — TF.js 에 배정도가 없어서 거절한다.
-  그리고 정수는 float32 에 담으므로 **2^24 까지 정확**하고, 넘으면 조용히 자르지 않고
-  던진다. 코어는 float64 까지 112/112 다
-- **뷰가 저장소를 공유하지 않는다.** torch 는 `b = a.view(2,2); b[0,0] = 9` 로 `a` 가
-  바뀌는데, TF.js 텐서는 불변이라 그럴 수 없다. 코어는 이것을 13/13 로 맞춘다.
-  조용히 다르게 두지 않고, **뷰에 대입하면 거절한다**
-- **랭크 6 까지다.** 랭크 7 부터 TF.js 가 커널을 안 갖고 있고, 그것도 **일부만**이다 —
-  원소별·`permute`·`reshape`·0 으로 두르는 `pad` 는 랭크 8 에서도 돌지만, **축을 따라
-  줄이는 것**(`sum(dim=)`)과 `fill`, 그리고 대부분의 기울기가 없다. 없는 자리는
-  `GPU for rank 7 is not yet supported` 를 던진다. 재본 범위에서 **틀린 값을 낸 적은
-  없다** — 되거나 던지거나 둘 중 하나였고, 그 경계를 골든이 붙잡고 있다
-- **`scope()` 를 노출한다.** 역전파 클로저가 든 중간 버퍼는 파이썬 GC 가 못 놓는다.
-  코어와 다른 한 줄이고, 이유는 WEBGPU-DESIGN.md 7절에 있다
-
-없는 것은 근사하지 않고 예외를 던진다. `topk(largest=False)` 처럼 TF.js 가 못 하는
-인자도 조용히 무시하지 않고 거절한다 — 조용히 다른 값을 내는 것이 가장 나쁘다.
-
-## 이 파일을 고칠 때의 규칙 둘
-
-**랭크 5 이상에서 `_tf.pad` 를 직접 부르지 마라. `_pad_const` 를 거쳐라.**
-거기서 `tf.pad` 는 모양을 맞게 돌려주고 값을 깨뜨리며 **예외를 안 던진다.**
-
-이 하나를 잡는 데 세 번 걸렸고, 세 번 다 "고쳤다"고 생각한 뒤에 다음이 나왔다.
-conv3d 에서 처음 보고 거기만 고쳤더니, 케이스를 세워 물어보니 자르기의 역방향이
-같은 함수를 불러 `narrow`·`unbind`·`split` 셋이 랭크 5 에서 틀린 기울기를 내고
-있었다. 그것도 고치고 랭크 6 을 물어보니 이번에는 `F.pad` 자신 — 사용자가 직접
-부르는 문 — 이 랭크 5·6 양쪽에서 틀리고 있었다. **눈으로 훑어서는 세 번 다 못 봤고,
-케이스를 세워 물어봐서 세 번 다 나왔다.**
-
-랭크 6 자체는 멀쩡하다. 원소별·축 합·permute·reshape·기울기 전부 맞는다. 고장난
-것은 랭크가 아니라 `pad` 이므로, 고랭크를 만났다고 거절할 이유는 없다.
-
-**`_wrap(x)._h` 를 인라인으로 쓰지 마라.** `x` 가 텐서가 아니면 `_wrap` 이 임시를
-만드는데, `._h` 를 꺼내는 순간 그 임시의 참조가 0 이 되어 `__del__` 이 버퍼를 놓는다.
-그 다음 줄이 이미 죽은 손잡이를 넘긴다.
-
-    나쁨:  _tf.add(a, _wrap(b)._h)
-    좋음:  bt = _wrap(b); _tf.add(a, bt._h)
-
-이 함정에 **세 번** 걸렸다(`_cmp`, `__setitem__`, 그리고 디버깅용 프로브). 증상은
-`TypeError: Cannot read properties of undefined (reading 'backend')` 다.
+경계는 골든이 붙잡는다. 없는 것을 근사해서 초록을 만들지 않는다.
 """
 
-
-import numpy as _np
-
-try:
+try:                                                    # pragma: no cover
     import js as _js
-    from pyodide.ffi import create_proxy as _create_proxy
-    from pyodide.ffi import to_js as _to_js
-except ImportError as _exc:                                          # pragma: no cover
+except ImportError as exc:                              # pragma: no cover
     raise ImportError(
-        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
-        "GPU 로 돌렸다고 착각하게 됩니다."
-    ) from _exc
+        "borch_webgpu 는 브라우저 안에서만 돈다 — Pyodide 가 아니면 `js` 가 없다.\n"
+        "  네이티브에서는 `borch`(numpy)를 써라.") from exc
 
-_tf = getattr(_js, "tf", None)
-if _tf is None:                                                      # pragma: no cover
-    raise ImportError("TF.js 가 페이지에 없습니다. tf.min.js 를 먼저 실으세요.")
+if getattr(_js, "borch", None) is None:                 # pragma: no cover
+    raise ImportError(
+        "`js.borch` 가 없다 — 페이지가 borch.ts 를 싣고 `await init()` 을 부른 뒤\n"
+        "  전역에 두어야 한다. 조용히 다른 것으로 돌지 않으려고 여기서 멈춘다.")
 
-from ._base import (
-    BrowserTorchError, Size, _BY_CATEGORY, _INT_EXACT, _LINE_WIDTH, _PAD_SAFE_RANK,
-    _PRINT_PRECISION, _ValuesIndices, _broadcast_error, _dtype_of, _float_formatter,
-    _keep, _last_axis_only, _like_torch, _pad_const, _pick_last, _reject_float64,
-    _shape_of, _slice_along, _slice_tensor, _tensor_repr, _tensor_str, _tf, _to_np,
-    _to_tf, _unsupported, _warn_once, _warned, bool_, dtype, float32, int64, long,
-    set_printoptions,
+from ._base import Tensor, tensor                        # noqa: E402,F401
+# **이름 붙은 것을 먼저 들여온다.** 모듈의 `__getattr__` 은 여기 없는 이름만 받으므로,
+# `linalg`·`einsum` 처럼 첫 인자가 텐서가 아닌 것들이 그쪽으로 새면 안 된다 —
+# 실제로 `linalg` 가 함수로 잡혀서 `linalg.cholesky` 가 통째로 실패했다.
+from ._ops import (                                      # noqa: E402,F401
+    aminmax, arange, as_tensor, cat, chunk, clamp, clip, einsum, eye, flatten,
+    flip,
+    full, linalg, linspace, matrix_power, memory, no_grad, norm, ones, pow,
+    quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
+    sum, swapdims, transpose, where, zeros,
 )
-from ._tensor import (
-    Tensor, _GradMode, _NCHW_TO_NHWC, _NHWC_TO_NCHW, _align, _both_bool, _canonical,
-    _grad_mode, _no_bool_subtract, _relayout, _reshape_for_broadcast, _result_dtype,
-    _scalar_dtype, _storage_bool, _storage_for, _tf, _unbroadcast, _wrap, result_type,
+from ._ops import (                                      # noqa: E402,F401
+    Generator, manual_seed, randint, randperm,
 )
-from ._ops import (
-    Generator, _DEG, _INPLACE_UNARY, _LN10, _LN2, _Linalg, _Lstsq, _SVD, _binary_math,
-    _compare, _cum_extreme, _logaddexp_h, _make_inplace, _masked, _mat_np, _nan_split,
-    _nm, _rng, _spread_extreme, _tf, _to_int32, _trunc, _unary, _zeros_like, abs,
-    absolute, acos, acosh, allclose, amax, amin, aminmax, arange, arccos, arccosh,
-    arcsin, arcsinh, arctan, arctanh, argsort, argwhere, as_tensor, asin, asinh, atan,
-    atan2, atanh, atleast_1d, atleast_2d, atleast_3d, bincount, bmm, cat, ceil,
-    cholesky, chunk, clamp, clamp_, clip, copysign, cos, cosh, count_nonzero, cummax,
-    cummin, cumprod, cumsum, deg2rad, det, diag, diagflat, diagonal, diff, dist, dot,
-    dsplit, eigh, einsum, empty, eq, equal, erf, erfc, exp, exp2, expand, expand_as,
-    expm1, eye, fix, flip, fliplr, flipud, floor, frac, from_numpy, full, full_like,
-    gather, ge, gt, heaviside, hsplit, hypot, index_select, inverse, isfinite, isinf,
-    isnan, kthvalue, ldexp, le, linalg, linspace, log, log10, log1p, log2, logaddexp,
-    logaddexp2, logdet, logical_and, logical_not, logical_or, logit, logsumexp, lstsq,
-    lt, manual_seed, masked_fill, masked_select, matmul, matrix_power, matrix_rank,
-    maximum, median, minimum, mm, movedim, msort, multinomial, nanmean, nanquantile,
-    nansum, narrow, ne, neg, negative, nonzero, norm, ones, ones_like, outer, pinverse,
-    positive, pow, prod, qr, quantile, rad2deg, rand, randint, randn, randperm, ravel,
-    reciprocal, relu, repeat, repeat_interleave, reshape, roll, rot90, round, rsqrt,
-    select, sgn, sigmoid, sign, signbit, sin, sinc, sinh, slogdet, solve, sort, split,
-    sqrt, square, stack, svd, swapaxes, swapdims, tan, tanh, tensor, tile, topk, trace,
-    tril, triu, trunc, unbind, unflatten, unfold, unique, vsplit, where, xlogy, zeros,
-    zeros_like,
-)
-from ._functional import (
-    _Functional, _SQRT2, _SQRT2PI, _dilate, _pair, _tf, _to_nchw, _to_nhwc, _warned,
-    adaptive_avg_pool2d, avg_pool2d, batch_norm, binary_cross_entropy,
-    binary_cross_entropy_with_logits, conv1d, conv2d, conv3d, cosine_similarity,
-    cross_entropy, dropout, elu, embedding, gelu, interpolate, l1_loss, layer_norm,
-    leaky_relu, linear, log_softmax, max_pool1d, max_pool2d, max_pool3d, mse_loss,
-    nll_loss, normalize, one_hot, pad, silu, smooth_l1_loss, softmax, unsqueeze,
-)
-from ._nn import (
-    AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,
-    BatchNorm3d, Conv1d, Conv2d, Conv3d, CrossEntropyLoss, Dropout, ELU, Embedding,
-    Flatten, GELU, GRU, Identity, L1Loss, LSTM, LayerNorm, LeakyReLU, Linear,
-    LogSoftmax, MSELoss, MaxPool1d, MaxPool2d, MaxPool3d, Module, ModuleList,
-    MultiheadAttention, NLLLoss, Parameter, RNN, ReLU, Sequential, SiLU, Sigmoid,
-    SmoothL1Loss, Softmax, Tanh, Transformer, TransformerDecoder,
-    TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer, Unflatten,
-    Upsample, _Activation, _NN, _NnUtils, _NnUtilsRnn, _RNNBase, _apply_mask,
-    _split_heads, _tf, nn, pad_sequence,
-)
-from ._optim import (
-    Adam, AdamW, CosineAnnealingLR, ExponentialLR, LambdaLR, MultiStepLR, Optimizer,
-    RMSprop, ReduceLROnPlateau, SGD, StepLR, _LRScheduler, _Optim, _Scheduler, _replace,
-    _tf, memory, no_grad, optim, scope,
-)
-from ._data import (
+from ._data import (                                     # noqa: E402,F401
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
-    TensorDataset, WeightedRandomSampler, _CIFAR_RECORD, _Cuda, _Utils, _UtilsData,
-    _from_plain, _np_to_u8, _opfs_read, _opfs_write, _tf, _to_plain, _u8_to_np, backend,
-    cache_get, cache_put, cuda, decode_cifar10, fetch_cached, load, random_split, save,
-    utils,
+    TensorDataset, WeightedRandomSampler, backend, cache_get, cache_put, cuda,
+    decode_cifar10, fetch_cached, load, random_split, save, utils,
 )
+from ._ops import __getattr__                            # noqa: E402,F401
+from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 
-# 모듈 함수를 메서드로도 노출한다 — torch 코드는 `x.exp()` 와 `torch.exp(x)` 를
-# 섞어 쓴다.
-#
-# **여기 있어야 한다.** 예전에는 파일 맨 아래, 즉 쪼갠 뒤의 `_data` 에 있었는데
-# 거기서는 `globals()` 에 이 이름들이 없다(각자 다른 모듈에 있다). 전부 모이는
-# 자리는 여기뿐이다.
-#
-# 목록은 **코어와 같다.** 손으로 고르지 않고 torch 에게 `x.f(...)` 와 `torch.f(x, ...)`
-# 가 같은 값을 내는지 물어 같다고 답한 것만 담았다. 없는 이름은 건너뛴다 — 자매에만
-# 없는 것이 몇 개 있고, 없는 것을 붙이려다 임포트가 통째로 멈추면 안 된다.
-_AS_METHOD = (
-    "abs", "allclose", "argsort", "bmm", "ceil", "chunk", "clamp", "cos", "cosh",
-    "cumprod", "cumsum", "diag", "dot", "eq", "equal", "erf", "exp", "flip", "floor",
-    "gather", "ge", "gt", "index_select", "isfinite", "isinf", "isnan", "le", "log",
-    "log10", "log2", "lt", "masked_fill", "masked_select", "maximum", "median",
-    "minimum", "mm", "movedim", "multinomial", "narrow", "ne", "neg", "norm", "outer",
-    "pow", "prod", "reciprocal", "relu", "repeat_interleave", "roll", "round", "rsqrt",
-    "sigmoid", "sign", "sin", "sinh", "softmax", "sort", "split", "sqrt", "square",
-    "tan", "tanh", "tile", "topk", "trace", "tril", "triu", "unbind", "unique",
-    "unsqueeze",
-    # 수학 함수 묶음. 코어와 같은 목록이다.
-    "acos", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan", "arctanh",
-    "asin", "asinh", "atan", "atan2", "atanh", "absolute", "clip", "copysign",
-    "deg2rad", "erfc", "exp2", "expm1", "fix", "frac", "heaviside", "hypot", "ldexp",
-    "log1p", "logaddexp", "logaddexp2", "logit", "negative", "positive", "rad2deg",
-    "sgn", "signbit", "sinc", "trunc", "xlogy",
-    # 축약 묶음. 코어와 같은 목록이다.
-    "amax", "amin", "aminmax", "argwhere", "cummax", "cummin", "diff", "dist",
-    "kthvalue", "logsumexp", "msort", "nanmean", "nanquantile", "nansum", "nonzero",
-    "quantile",
-    # 모양 묶음. 코어와 같은 목록이다.
-    "diagflat", "diagonal", "dsplit", "expand", "expand_as", "fliplr", "flipud",
-    "hsplit", "ravel", "repeat", "rot90", "select", "swapaxes", "swapdims",
-    "unflatten", "unfold", "vsplit",
-)
+# dtype 은 borch.ts 에서 float32 저장 위의 이름표다. 여기서도 이름으로 두되,
+# 보이는 이름은 torch 의 것이다 — 골든이 `torch.float32` 를 답으로 굳혔다.
+from ._base import _DType                                # noqa: E402
 
-for _method in _AS_METHOD:
-    if _method in globals() and not hasattr(Tensor, _method):
-        setattr(Tensor, _method, globals()[_method])
+def install(name="borch_webgpu", modules=None):
+    """`from <name>.nn import Linear` 이 통하게 하위 경로를 심는다.
 
+    **기본은 심지 않는 것이다.** `import borch_webgpu as torch` 로 `torch.nn.Linear` 는
+    그냥 닿는다 — 속성 접근이라 별칭이면 된다. 교재 코드의 대부분이 그 모양이다.
 
-def _where_method(self, condition, other):
-    """**인자 순서가 함수와 다르다.** `x.where(조건, y)` 는 `torch.where(조건, x, y)` 다.
+    안 닿는 것은 `from … import` 다. 그것은 `sys.modules` 에 등록된 **경로**를 보고,
+    별칭은 그 파일 안의 이름 하나일 뿐이라 거기까지 못 간다. 경계는 재봤고
+    `tests/test_alias.py` 가 값으로 붙잡고 있다.
 
-    이것만 그냥 붙이면 `x` 가 조건 자리로 들어가 조용히 틀린 답이 나온다.
+    **이름은 기본이 자기 이름이다.** `torch` 로 심으면 남의 라이브러리가 하는
+    `import torch` 까지 축소판을 받아서, 섞인 환경에서는 원인을 못 찾는 오류가 된다.
+    자기 이름으로 심으면 하위 경로가 열리면서 남의 코드는 안 건드린다.
+
+    코어의 `install()` 과 같은 모양이고 같은 이유다 — 하위 경로를 손으로 적으면
+    어긋난다. 코어는 실제로 어긋나서 `from torch.optim.lr_scheduler import StepLR` 이
+    교재 본문에서 멈춘 적이 있다.
     """
-    return where(condition, self, other)
+    import sys
+
+    modules = sys.modules if modules is None else modules
+    modules[name] = sys.modules[__name__]
+    registered = [name]
+    for path, mod in (("nn", nn), ("optim", optim), ("linalg", linalg),
+                      ("nn.functional", nn.functional),
+                      ("nn.utils", nn.utils), ("nn.utils.rnn", nn.utils.rnn),
+                      ("optim.lr_scheduler", optim.lr_scheduler)):
+        full = f"{name}.{path}"
+        modules[full] = mod
+        registered.append(full)
+    return registered
 
 
-Tensor.where = _where_method
+float32 = _DType("float32")
+int64 = _DType("int64")
+# **`bool` 은 모듈 전역에 두지 않는다.** 파이썬 내장을 가려서 `isinstance(x, bool)` 이
+# 깨지고, 그 자리가 `_DType` 의 `__repr__` 로 새어 나왔다. 골든은 `L.bool` 로 부르므로
+# 모듈의 `__getattr__` 이 그 이름만 골라 준다 — `_ops.__getattr__` 이 그 일을 한다.
+bool_ = _DType("bool")
+

@@ -56,9 +56,9 @@ def run(lib, headed, probe=None):
     probed = None
     try:
         with sync_playwright() as p:
-            # **자매 러너에는 여태 플래그가 없었다.** macOS 에서는 그래도 WebGPU 가
+            # **이 러너에는 여태 플래그가 없었다.** macOS 에서는 그래도 WebGPU 가
             # 나와서 안 보였는데, 리눅스 GPU 서버에서는 Vulkan 을 켜 줘야 한다.
-            # borch.ts 쪽과 다른 조건으로 재면 그때부터 같은 잣대가 아니다.
+            # borch.ts 쪽 러너와 다른 조건으로 재면 그때부터 같은 잣대가 아니다.
             browser = _launch(p, headed=headed)
             page = browser.new_page()
             # 정확도 측정은 몇 분씩 걸린다. 기본 제한에 걸려 죽으면 잰 것이 없어진다.
@@ -125,7 +125,7 @@ def main():
               "  먼저: uv run --with numpy --with torch python tests/golden.py dump")
         return 1
 
-    # Pyodide 와 TF.js 는 로컬에서 온다. 없으면 한 번 받고, 있으면 해시로 대조한다.
+    # Pyodide 는 로컬에서 온다. 없으면 한 번 받고, 있으면 해시로 대조한다.
     vendor.ensure()
 
     result, probed = run(args.lib, args.headed, args.probe)

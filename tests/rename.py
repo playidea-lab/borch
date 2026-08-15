@@ -22,10 +22,16 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # 긴 것부터. 짧은 것을 먼저 바꾸면 긴 이름의 앞부분이 먼저 잡힌다.
+#
+# 지금 표에 든 것은 **결속이 자매의 이름을 물려받는** 자리다. TF.js 판 자매를 지우고
+# 그 이름을 borch.ts 위의 결속에게 넘겼다 — 사용자에게 그 이름이 뜻하는 것(브라우저,
+# GPU)은 그대로이고 밑바닥만 바뀌었기 때문이다.
+#
+# **밑줄과 붙임표와 점은 다른 것이다.** `borch_ts`(파이썬 패키지)만 바뀌고
+# `borch-ts`(TypeScript 디렉토리)와 `borch.ts`(글에서 부르는 이름)는 그대로 남는다.
+# 이 셋이 눈으로는 비슷해 보이는 것이 애초에 이 개명을 부른 이유다.
 RULES = [
-    ("browsertorch_webgpu", "borch_webgpu"),
-    ("browsertorch_vision", "borch_vision"),
-    ("browsertorch", "borch"),
+    ("borch_ts", "borch_webgpu"),
 ]
 
 # `.claude`·`.mcp.json` 은 이 기계의 설정이지 프로젝트가 아니다 — 저장소 경로가

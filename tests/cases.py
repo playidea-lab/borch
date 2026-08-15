@@ -326,14 +326,15 @@ def grad_cases(inp=None):
     unary("float()", lambda L, x: x.float())
 
     # `.double()` 은 같은 `_cast` 를 지나므로 산수는 위에서 이미 대조된다. 여기서 남은
-    # 질문은 **자매가 이것을 거절하는가**다 — TF.js 에 배정도가 없어 float64 를 아예
-    # 거절하는 것이 문서화된 한계이고, 그 한계가 조용히 넓어지지 않는지를 붙잡는다.
+    # 질문은 **브라우저 쪽이 이것을 거절하는가**다. 배정도가 없는 것이 문서화된
+    # 한계이고(TF.js 도 그랬고 WGSL 의 f32 도 그렇다), 그 한계가 조용히 넓어지지
+    # 않는지를 붙잡는다.
     def double_grad(L):
         x = L.tensor(x1, requires_grad=True)
         x.double().sum().backward()
         return _grad_of(x, "double()")
 
-    cases.append(("grad::double()=자매는거절", _as_expected(double_grad)))
+    cases.append(("grad::double()=브라우저는거절", _as_expected(double_grad)))
 
     # torch 는 흘리는데 코어가 안 흘리던 열두 자리. 전부 결과가 `requires_grad=False`
     # 라 `backward()` 가 거절했으므로 **조용히 틀리지는 않았지만**, 없는 것과 있는 것의
@@ -753,13 +754,14 @@ WEBGPU_PREFIX = "webgpu::"
 
 
 def webgpu_cases(inp=None):
-    """**자매 라이브러리에만 있는 것들.**
+    """**브라우저 구현에만 있는 것들.**
 
     코어는 이것들을 일부러 거절한다 — 커리큘럼이 안 쓰고, 표면이 늘면 조용히 틀릴
-    자리가 늘기 때문이다. 자매 쪽은 헌장이 달라서(성능·실전 모델) 넣는다.
+    자리가 늘기 때문이다. 브라우저 쪽은 헌장이 달라서(성능·실전 모델) 넣는다.
 
-    기대값은 **진짜 torch** 로 굳힌다. 코어는 이 케이스들을 건너뛰고 자매만 대조한다 —
-    두 라이브러리의 범위가 갈리기 시작했고, 하네스가 그것을 표현해야 한다.
+    기대값은 **진짜 torch** 로 굳힌다. 코어는 이 케이스들을 건너뛴다 — 두 구현의
+    범위가 갈리고, 하네스가 그것을 표현해야 한다. 하네스는 `hasattr(lib, "backend")`
+    로 브라우저 쪽을 알아본다.
     """
     inp = golden_inputs() if inp is None else inp
     seq = inp["seq_x"].transpose(1, 2, 0).copy()          # (N=2, C=3, L=5)
@@ -887,21 +889,23 @@ CEILING_RANKS = (7, 8)
 
 
 def _as_expected(fn):
-    """**torch 는 되고 자매는 거절하는** 자리를 골든에 담는 방법.
+    """**torch 는 되고 브라우저 구현은 거절하는** 자리를 골든에 담는 방법.
 
-    골든은 진짜 torch 로 굳는데, 이 자리는 자매가 torch 와 **일부러 다르다.** 그래서
-    값을 물으면 영원히 갈린 채로 남는다. 값 대신 "문서에 적은 대로 굴었는가"를 묻는다 —
-    torch 는 성공이 정답이고 자매는 거절이 정답이라, 양쪽 다 제대로면 같은 답이 나온다.
+    골든은 진짜 torch 로 굳는데, 이 자리는 브라우저 쪽이 torch 와 **일부러 다르다.**
+    그래서 값을 물으면 영원히 갈린 채로 남는다. 값 대신 "문서에 적은 대로 굴었는가"를
+    묻는다 — torch 는 성공이, 브라우저 쪽은 거절이 정답이라 양쪽 다 제대로면 같은
+    답이 나온다.
 
-    자매가 어느 날 조용히 값을 돌려주기 시작하면 (그 값이 맞든 틀리든) 여기서 갈린다.
-    TF.js 가 나중에 고랭크 커널을 채워도 갈린다 — 그때는 한계를 **의도적으로** 다시
-    적으라는 뜻이지, 저절로 넓어지면 안 된다.
+    브라우저 쪽이 어느 날 조용히 값을 돌려주기 시작하면 (그 값이 맞든 틀리든) 여기서
+    갈린다. **그 일이 실제로 났다** — TF.js 판을 걷어내니 랭크 7·8 을 거절하던 일곱
+    자리가 전부 값을 냈고, 이 장치가 그것을 일곱 건의 "뜻밖의 성공" 으로 보고했다.
+    그때 한 일은 한계를 **의도적으로** 다시 적는 것이었지 케이스를 지우는 것이 아니었다.
+    저절로 넓어지면 안 된다는 것이 이 함수가 있는 이유다.
     """
     def run(L):
-        # **브라우저에서 도는 구현은 거절하는 쪽이다.** 자매는 TF.js 텐서가 불변이라,
-        # borch.ts 는 GPU 버퍼를 뷰로 나눠 갖지 않아서 — 이유가 다르고 결론이 같다.
-        # 처음에는 `hasattr(L, "backend")` 하나로 갈랐는데 그것은 자매만 가리켰다.
-        must_reject = hasattr(L, "backend") or getattr(L, "__name__", "") == "borch_ts"
+        # 밑바닥이 GPU 버퍼라 뷰로 나눠 갖지 않는다. 배정도도 없다. 두 이유가
+        # 여기 모이는 몇 자리를 만든다.
+        must_reject = hasattr(L, "backend")
         try:
             fn(L)
         except Exception as exc:                                # noqa: BLE001
@@ -1465,13 +1469,14 @@ _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh
 
 
 def inplace_cases(inp=None):
-    """제자리 연산. **두 라이브러리가 처음으로 일부러 갈리는 자리다.**
+    """제자리 연산. **두 구현이 일부러 갈리는 자리다.**
 
     갈리는 것은 하나뿐이다 — 뷰를 통한 전파. torch 와 코어는 저장소를 공유해서
-    `b = a.view(2,2); b.add_(10)` 이 `a` 까지 바꾸고, 자매는 TF.js 텐서가 불변이라
-    그럴 수 없어 거절한다. 나머지(자기 자신 고치기)는 셋 다 같다.
+    `b = a.view(2,2); b.add_(10)` 이 `a` 까지 바꾸고, 브라우저 쪽은 GPU 버퍼를 뷰로
+    나눠 갖지 않아 그럴 수 없어 거절한다. (TF.js 판일 때도 결론이 같았는데 이유는
+    달랐다 — 그쪽은 텐서가 불변이었다.) 나머지(자기 자신 고치기)는 양쪽이 같다.
 
-    그 갈림을 여기서 못 박는다. 자매가 어느 날 조용히 값을 돌려주기 시작하면
+    그 갈림을 여기서 못 박는다. 브라우저 쪽이 어느 날 조용히 값을 돌려주기 시작하면
     (그 값이 맞든 틀리든) 빌드가 깨진다.
     """
     plain = np.array([1., 4., 9., 2.], dtype=np.float32)
@@ -1505,16 +1510,16 @@ def inplace_cases(inp=None):
                                 "sqrt_", "rsqrt_", "log1p_") else plain
         cases.append(run(name, lambda x, n=name: getattr(x, n)(), arr))
 
-    # 뷰 전파 — **자매만 거절한다.**
+    # 뷰 전파 — **브라우저 쪽만 거절한다.**
     def view_propagates(L):
         a = L.arange(4).float()
         a.view(2, 2).add_(10)
         return a
 
-    cases.append((INPLACE_PREFIX + "뷰 전파=자매는거절",
+    cases.append((INPLACE_PREFIX + "뷰 전파=브라우저는거절",
                   _as_expected(view_propagates)))
 
-    # 잎에 기울기가 켜져 있으면 **셋 다** 거절한다.
+    # 잎에 기울기가 켜져 있으면 **양쪽 다** 거절한다.
     def leaf_refuses(L):
         x = L.tensor(plain, requires_grad=True)
         try:
@@ -1674,7 +1679,7 @@ def reduce_cases(inp=None):
     # 답이 같기 때문이다. `grad::sum(dim)` 이라는 이름의 케이스가 이미 있었고, 그
     # 이름 때문에 아무도 다시 안 봤다.
     #
-    # 그 사이 `borch_ts` 는 `sum(dim=1)` 에 **축을 무시한 스칼라**를 내고 있었다.
+    # 그 사이 `borch_webgpu` 는 `sum(dim=1)` 에 **축을 무시한 스칼라**를 내고 있었다.
     # borch.ts 가 전체 합과 축 합을 다른 이름으로 두는데 JS 가 남는 인자를 조용히
     # 버려서다. 랭크 6 케이스 하나가 모양으로 걸릴 때까지 792 건이 전부 초록이었다.
     #

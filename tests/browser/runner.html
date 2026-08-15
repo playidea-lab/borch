@@ -44,10 +44,8 @@ window.GOLDEN_RESULT = null;
 // 빠뜨리면 `ImportError` 로 시끄럽게 터진다. 조용히 반쪽만 실리는 것보다 낫다.
 const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_nn", "_optim", "_data", "_rnn"],
-  borch_webgpu: ["__init__", "_base", "_tensor", "_ops", "_functional",
-                        "_nn", "_optim", "_data"],
-  // borch.ts 위에 얹은 얇은 결속. TF.js 대신 우리 WGSL 이 돈다.
-  borch_ts: ["__init__", "_base", "_ops", "_nn", "_optim", "_data"],
+  // borch.ts 위에 얹은 얇은 결속. 예전에는 이 이름이 TF.js 판이었다.
+  borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data"],
 };
 const FILES = [
   ["/borch_vision.py", "/work/borch_vision.py"],
@@ -64,28 +62,10 @@ const BINARY = [["/tests/golden.npz", "/work/tests/golden.npz"]];
 FILES.push(["/tests/golden.json", "/work/tests/golden.json"]);
 FILES.push(["/tests/export_json.py", "/work/tests/export_json.py"]);
 
-// TF.js 는 GPU 경로에서만 필요하다. 코어 borch 는 numpy 뿐이라 안 부른다.
-const TFJS = ["/vendor/tf.min.js", "/vendor/tf-backend-webgpu.min.js"];
-
-function loadScript(src) {
-  return new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = src;
-    s.onload = () => res(src);
-    s.onerror = () => rej(new Error("스크립트를 못 받았다: " + src));
-    document.head.appendChild(s);
-  });
-}
-
-async function startTfjs() {
-  for (const src of TFJS) await loadScript(src);
-  await tf.setBackend("webgpu");
-  await tf.ready();
-  if (tf.getBackend() !== "webgpu") {
-    throw new Error("WebGPU 백엔드가 안 붙었다 — 지금 백엔드: " + tf.getBackend());
-  }
-  return tf.getBackend();
-}
+// **TF.js 를 싣던 자리가 여기였다.** `vendor/tf.min.js` 를 스크립트 태그로 올리고
+// `tf.setBackend("webgpu")` 가 실제로 붙었는지 확인하는 코드가 스무 줄쯤 있었다.
+// 그 구현을 지웠으므로 벤더 파일도 이 러너도 그것을 안 부른다 — 이 페이지가 밖에서
+// 받아 오는 것은 이제 Pyodide 뿐이다.
 
 async function main() {
   const lib = new URLSearchParams(location.search).get("lib") || "borch";
@@ -115,19 +95,15 @@ async function main() {
   }
   say(`대조 대상: ${lib}`);
   let backend = "numpy (브라우저 GPU 안 씀)";
-  if (lib === "borch_ts") {
-    // borch.ts 는 TF.js 를 안 쓴다. 대신 ES 모듈을 올리고 어댑터를 잡은 뒤
-    // 전역에 둔다 — 파이썬 결속이 `js.borch` 로 그것을 잡는다.
+  if (lib !== "borch") {
+    // ES 모듈을 올리고 어댑터를 잡은 뒤 전역에 둔다 — 파이썬 결속이 `js.borch` 로
+    // 그것을 잡는다. **TF.js 를 싣던 갈래는 없어졌다** — 그쪽 구현을 지웠다.
     say("borch.ts 를 올리는 중…");
     const borch = await import("/borch-ts/dist/src/index.js");
     await borch.init();
     globalThis.borch = borch;
     backend = `borch.ts — ${borch.Device.adapterInfo}`;
     say(backend);
-  } else if (lib !== "borch") {
-    say("TF.js 를 올리는 중…");
-    backend = await startTfjs();
-    say(`TF.js 백엔드: ${backend}`);
   }
 
   const code = `

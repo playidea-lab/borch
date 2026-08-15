@@ -5,9 +5,8 @@
 # 그래서 진짜 GPU 가 달린 기계를 러너로 등록해서 쓴다.
 #
 # **창을 띄워야 한다(`--headed`).** 실측이다 — 헤드리스 Chromium 에는 `navigator.gpu`
-# 가 없어 TF.js 가 조용히 WebGL 로 떨어진다. 러너가 백엔드를 확인하고 webgpu 가 아니면
-# 멈추므로 조용히 틀린 결과를 보지는 않지만, 화면 세션이 있는 사용자 프로세스로 러너를
-# 돌려야 잡이 통과한다.
+# 가 없거나 소프트웨어 어댑터를 준다. 러너가 어댑터를 확인해 적으므로 조용히 틀린
+# 결과를 보지는 않지만, 화면 세션이 있는 사용자 프로세스로 러너를 돌려야 잡이 통과한다.
 #
 # 기존 `test.yml`(네이티브 pytest)은 건드리지 않는다. 코어 borch 는 numpy 뿐이라
 # 브라우저가 애초에 필요 없다 — 이 워크플로는 GPU 경로에만 붙는다.
@@ -58,7 +57,7 @@ jobs:
       - name: 골든을 JSON 으로 뽑는다
         run: uv run --with numpy python tests/export_json.py
 
-      # Pyodide·TF.js 를 받아 두고 해시로 잠근다. 이미 있으면 대조만 한다.
+      # Pyodide 를 받아 두고 해시로 잠근다. 이미 있으면 대조만 한다.
       # (CDN 이 테스트 시점에 살아 있어야 하는 의존이었고, 실제로 한 번 끊겼다.)
       - name: 바깥 자산을 준비한다
         run: uv run python tests/browser/vendor.py check
@@ -73,7 +72,8 @@ jobs:
       - name: GPU 경로를 골든과 대조한다
         run: uv run --with playwright python tests/browser/run.py --lib borch_webgpu --headed
 
-      # borch.ts — 세 번째 구현이다. 브라우저가 TS 를 못 읽으므로 먼저 JS 로 내보낸다.
+      # borch.ts — 위의 파이썬 결속이 얹혀 있는 바로 그 층이다. 같은 골든을 자기
+      # 언어로 다시 묻는다. 브라우저가 TS 를 못 읽으므로 먼저 JS 로 내보낸다.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

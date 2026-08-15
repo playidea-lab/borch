@@ -1,36 +1,28 @@
-"""borch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""`utils.data`·내려받기 캐시·저장/불러오기.
+
+자매(`borch_webgpu/_data.py`)에서 옮겨왔다. 옮기면서 바뀐 것은 **한 줄**이다 —
+`backend()` 가 TF.js 대신 borch.ts 의 어댑터를 답한다. 나머지는 numpy 와 브라우저
+API 만 쓰므로 밑바닥이 무엇이든 같다.
+
+데이터는 **CPU(numpy)에 둔다.** CIFAR-10 을 통째로 GPU 에 올리면 614MB 이고 배치
+하나는 3MB 다. 매 배치 올리는 쪽이 싸고, GPU 메모리를 모델에 남긴다.
+"""
 
 import numpy as _np
 
-try:
-    import js as _js
-    from pyodide.ffi import create_proxy as _create_proxy
-    from pyodide.ffi import to_js as _to_js
-except ImportError as _exc:                                          # pragma: no cover
-    raise ImportError(
-        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
-        "GPU 로 돌렸다고 착각하게 됩니다."
-    ) from _exc
+import js as _js
+from pyodide.ffi import to_js as _to_js
 
-_tf = getattr(_js, "tf", None)
-if _tf is None:                                                      # pragma: no cover
-    raise ImportError("TF.js 가 페이지에 없습니다. tf.min.js 를 먼저 실으세요.")
+from ._base import Tensor, tensor, wrap
+from ._ops import _rng, stack
 
-from ._tensor import (
-    Tensor, _wrap,
-)
-from ._ops import (
-    _rng, stack, tensor,
-)
-from ._base import (
-    _unsupported,
-)
+
+def _unsupported(what):
+    raise RuntimeError(
+        f"{what} 은(는) 아직 여기 없다. 코어 `borch` 나 진짜 PyTorch 를 써라.")
+
 
 # ---------------------------------------------------------------- utils.data
-#
-# 데이터는 **CPU(numpy)에 둔다.** CIFAR-10 을 통째로 GPU 에 올리면 614MB 이고,
-# 배치 하나는 3MB 다. 매 배치 올리는 쪽이 싸고, GPU 메모리를 모델에 남긴다.
 
 class Dataset:
     def __len__(self):
@@ -141,7 +133,7 @@ class DataLoader:
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
                  num_workers=0, drop_last=False, collate_fn=None):
         if sampler is not None and shuffle:
-            raise ValueError("sampler 와 shuffle 은 같이 쓸 수 없습니다.")
+            raise ValueError("sampler 와 shuffle 은 같이 쓸 수 없다.")
         self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
@@ -170,9 +162,13 @@ class DataLoader:
     def _collate(self, batch):
         if self.collate_fn:
             return self.collate_fn(batch)
-        return tuple(stack([_wrap(x) for x in col]) for col in zip(*batch))
+        return tuple(stack([x if isinstance(x, Tensor) else wrap(x) for x in col])
+                     for col in zip(*batch))
 
 
+# `torch.utils.data` 와 `torch.nn.utils` 는 **다른 `utils`** 다. 이름이 같아서
+# 한쪽이 다른 쪽을 덮으면 `nn.utils.rnn.pad_sequence` 나 `utils.data.DataLoader`
+# 중 하나가 조용히 사라진다. 여기 것은 최상위 쪽이고, `nn` 쪽은 `_nn.py` 에 있다.
 class _UtilsData:
     Dataset = Dataset
     TensorDataset = TensorDataset
@@ -275,7 +271,8 @@ def decode_cifar10(raw):
     arr = _np.asarray(raw, dtype=_np.uint8)
     if arr.size % _CIFAR_RECORD:
         raise ValueError(
-            f"CIFAR-10 바이너리가 아닙니다 — {arr.size} 바이트는 {_CIFAR_RECORD} 의 배수가 아닙니다")
+            f"CIFAR-10 바이너리가 아니다 — {arr.size} 바이트는 "
+            f"{_CIFAR_RECORD} 의 배수가 아니다")
     rows = arr.reshape(-1, _CIFAR_RECORD)
     y = rows[:, 0].astype(_np.int64)
     x = rows[:, 1:].reshape(-1, 3, 32, 32).astype(_np.float32) / 255.0
@@ -317,7 +314,7 @@ def load(path, **kwargs):
 
 
 class _Cuda:
-    """이 라이브러리는 GPU 를 쓰지만 **CUDA 는 아니다.** 흉내 내면 8장의 교훈이 사라진다."""
+    """이 라이브러리는 GPU 를 쓰지만 **CUDA 는 아니다.** 흉내 내면 교훈이 사라진다."""
 
     @staticmethod
     def is_available():
@@ -336,5 +333,16 @@ cuda = _Cuda()
 
 
 def backend():
-    """지금 붙어 있는 TF.js 백엔드. 'webgpu' 가 아니면 GPU 로 돌고 있지 않다."""
-    return str(_tf.getBackend())
+    """지금 붙어 있는 어댑터. **옮겨오면서 바뀐 유일한 줄이다.**
+
+    자매는 여기서 `tf.getBackend()` 를 물어 `'webgpu'` 라는 문자열을 냈다. 이쪽은
+    TF.js 를 안 거치므로 물을 것이 없고, 대신 borch.ts 가 실제로 붙은 어댑터를
+    답한다(`apple / metal-3` 처럼). 재는 쪽이 반드시 같이 적어야 하는 값이다 —
+    헤드리스 브라우저는 GPU 가 없으면 **말없이** 소프트웨어 래스터라이저를 준다.
+
+    골든 하네스가 `hasattr(lib, "backend")` 로 브라우저 구현을 알아본다. 그래서 이
+    이름은 표면일 뿐 아니라 **어느 케이스를 받을지**를 정한다.
+    """
+    from ._ops import _ts
+
+    return str(_ts.Device.adapterInfo)

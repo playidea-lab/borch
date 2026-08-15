@@ -1,6 +1,6 @@
 """실패한 골든 케이스를 **사유별로** 묶는다.
 
-    uv run --with playwright python tests/browser/why_failing.py --lib borch_ts --headed
+    uv run --with playwright python tests/browser/why_failing.py --lib borch_webgpu --headed
 
 새 구현을 얹는 중에 필요한 것은 실패 목록이 아니라 **실패의 종류**다. 617 줄을 눈으로
 읽으면 어디부터 손대야 하는지가 안 보이고, 종류로 묶으면 "이 하나를 고치면 몇 건이
@@ -46,7 +46,7 @@ def bucket(why):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lib", default="borch_ts")
+    ap.add_argument("--lib", default="borch_webgpu")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--samples", type=int, default=0,
                     help="사유마다 본보기를 몇 줄 보여줄지")

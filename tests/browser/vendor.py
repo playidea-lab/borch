@@ -35,14 +35,12 @@ PYODIDE_FILES = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm",
                  "python_stdlib.zip", "pyodide-lock.json"]
 PYODIDE_PACKAGES = ["numpy"]          # 파일 이름은 lock 에서 찾는다
 
-TFJS_VERSION = "4.22.0"
-TFJS = {
-    "tf.min.js":
-        f"https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@{TFJS_VERSION}/dist/tf.min.js",
-    "tf-backend-webgpu.min.js":
-        f"https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgpu@{TFJS_VERSION}"
-        "/dist/tf-backend-webgpu.min.js",
-}
+# **TF.js 를 받던 자리다.** `@tensorflow/tfjs@4.22.0` 두 파일을 CDN 에서 받아
+# `vendor/` 에 두었다. 그 위에 서던 구현을 손으로 쓴 WGSL 로 갈아치우면서 필요가
+# 없어졌다 — 이제 밖에서 받아 오는 것은 Pyodide 하나뿐이다.
+#
+# 남은 벤더가 하나여도 이 파일은 남긴다. CDN 은 테스트 시점에 살아 있어야 하는
+# 의존이고 실제로 한 번 끊겼다.
 
 
 def _sha(data):
@@ -56,10 +54,8 @@ def _get(url):
 
 def _targets():
     """(저장 경로, 주소) 목록. numpy 는 lock 을 읽어야 이름을 알 수 있다."""
-    out = [(pathlib.Path(name), url) for name, url in TFJS.items()]
-    out += [(pathlib.Path("pyodide") / name, PYODIDE_BASE + name)
+    return [(pathlib.Path("pyodide") / name, PYODIDE_BASE + name)
             for name in PYODIDE_FILES]
-    return out
 
 
 def _package_targets(lock_bytes):

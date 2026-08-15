@@ -1133,7 +1133,7 @@ function addInplace(out: Map<string, Case>): void {
    * borch.ts 는 자매가 아니다. 버퍼를 같이 쓰므로 번지고, 그래서 우리 답은 torch 와
    * 같은 "기대대로" 다.
    */
-  out.set("inplace::뷰 전파=자매는거절", () => {
+  out.set("inplace::뷰 전파=브라우저는거절", () => {
     try {
       const a = Tensor.arange(4);
       a.view(2, 2).add_(10);
@@ -1429,7 +1429,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
 
   // 자매만 거절하는 자리. 우리는 배정도가 없지만 **형을 바꾸는 것 자체는 되고**,
   // float32 로 되돌아오는 것이라 torch 처럼 성공이 정답이다.
-  out.set("grad::double()=자매는거절", () => {
+  out.set("grad::double()=브라우저는거절", () => {
     try {
       const x = x1(true);
       x.to("float32").sum().backward();

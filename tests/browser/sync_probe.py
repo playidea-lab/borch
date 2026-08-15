@@ -5,11 +5,13 @@
 
 ## 왜 이걸 재는가
 
-자매(`borch_webgpu`)를 TF.js 대신 borch.ts 위로 옮길 수 있는지가 여기서 갈린다.
+**파이썬 쪽 GPU 구현을 TF.js 대신 borch.ts 위로 옮길 수 있는지가 여기서 갈렸다.**
+답이 "된다" 로 나왔고, 그래서 지금 `borch_webgpu` 가 borch.ts 위에 서 있다. 이
+파일은 그 결정을 낸 계측이고 여전히 돈다 — 그 조건이 깨지면 여기가 먼저 빨개진다.
 
-자매의 파이썬 API 는 통째로 동기다. TF.js 의 `dataSync()` 가 — WebGPU 에 동기 읽기
-API 가 없는데도 — 받아주기 때문이고, 그 덕에 `loss.item()` 이 `await` 없이 돈다.
-borch.ts 는 `await stage.mapAsync(...)` 라 비동기다.
+파이썬 API 는 통째로 동기여야 한다. 예전 TF.js 판은 `dataSync()` 덕에 공짜로 그랬다
+(WebGPU 에 동기 읽기 API 가 없는데도 그쪽이 받아줬다). borch.ts 는
+`await stage.mapAsync(...)` 라 비동기다.
 
 그대로 얹으면 `await loss.item()` 이 되고, 그러면 **"튜토리얼 코드를 임포트만 바꿔
 돌린다"** 는 이 프로젝트의 유일한 주장이 깨진다. 그 주장이 이 라이브러리의 존재
@@ -60,14 +62,15 @@ def main(argv):
     print(got["text"])
     print()
     if got["sync"]:
-        print("**된다** — 자매를 borch.ts 위로 옮기는 길이 열려 있다.")
+        print("**된다** — `borch_webgpu` 가 서 있는 바닥이 그대로다.")
         return 0
     if not got["async"]:
         print("비동기조차 안 됐다 — 동기 여부와 무관한 다른 문제다. 위 줄을 보라.")
         return 1
     print("**안 된다** — 파이썬 API 를 동기로 유지할 수 없다.\n"
-          "  이 길로 가려면 `await loss.item()` 을 받아들여야 하고, 그것은\n"
-          "  '임포트만 바꿔 돌린다' 를 깨뜨린다. 자매는 TF.js 위에 남는다.")
+          "  `borch_webgpu` 가 이 위에 서 있으므로 이것은 그 패키지가 지금\n"
+          "  깨졌다는 뜻이다. 여기서 `await loss.item()` 을 받아들이면\n"
+          "  '임포트만 바꿔 돌린다' 가 통째로 없어진다.")
     return 1
 
 

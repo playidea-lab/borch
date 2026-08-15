@@ -1,260 +1,403 @@
-"""borch_webgpu 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""JS 쪽 텐서를 파이썬에서 잡는 손잡이, 그리고 값을 **동기로** 읽는 길.
 
+이 파일이 이 결속의 전부라고 해도 된다. 나머지는 이름을 옮겨 적는 일이다.
+"""
+
+import js as _js
 import numpy as _np
+from pyodide.ffi import run_sync as _run_sync, to_js as _to_js
 
-try:
-    import js as _js
-    from pyodide.ffi import create_proxy as _create_proxy
-    from pyodide.ffi import to_js as _to_js
-except ImportError as _exc:                                          # pragma: no cover
-    raise ImportError(
-        "borch_webgpu 는 브라우저(Pyodide) 안에서만 돕니다. "
-        "네이티브에서는 `borch` 를 쓰세요 — 이쪽을 CPU 로 흉내 내면 "
-        "GPU 로 돌렸다고 착각하게 됩니다."
-    ) from _exc
-
-_tf = getattr(_js, "tf", None)
-if _tf is None:                                                      # pragma: no cover
-    raise ImportError("TF.js 가 페이지에 없습니다. tf.min.js 를 먼저 실으세요.")
+_ts = _js.borch
 
 
-class BrowserTorchError(NotImplementedError):
-    """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
+def _js_list(seq):
+    """파이썬 목록 → JS 배열. 프록시를 그냥 넘기면 JS 쪽이 배열로 안 본다."""
+    return _to_js(list(int(n) for n in seq))
 
 
-def _like_torch(korean, torch_phrase):
-    """오류 메시지의 규격 — 코어와 같다.
+def _read(handle):
+    """GPU 에서 값을 가져온다 — **`await` 없이.**
 
-    한국어 설명만 두면 학습자가 검색해서 답을 못 찾고, 영문만 베끼면 이 교재가
-    한국어인 이유가 사라진다. 둘 다 넣는다 — 설명은 읽고, 영문 문구는 검색한다.
+    WebGPU 에 동기 읽기가 없다. borch.ts 의 `toArray()` 는 `mapAsync` 위에 서 있어서
+    약속(Promise)을 돌려준다. `run_sync` 가 JSPI(WebAssembly 의 Promise 통합)로 그
+    자리를 메운다 — 파이썬 스택을 중단했다가 값이 오면 재개한다.
+
+    **비동기 진입점 아래에서만 된다.** 페이지가 `runPythonAsync` 로 들어와야 스택에
+    중단할 자리가 있고, `runPython` 으로 들어오면 `RuntimeError: No suspender` 로
+    멈춘다. 라이브러리의 한계가 아니라 그 스택의 사정이다. 실측해서 안 것이고
+    (`tests/browser/sync_probe.py`), 그것 하나로 이 결속이 성립한다 — 안 되면
+    `await loss.item()` 이 되고 그러면 이 프로젝트의 주장이 깨진다.
     """
-    return f"{korean}\n(torch: {torch_phrase})"
+    return _np.asarray(_run_sync(handle.toArray()), dtype=_np.float32)
 
 
-def _broadcast_error(a, b):
-    """torch 가 내는 것과 같은 자리·같은 문구로 알린다."""
-    bad = next((i for i in range(1, min(len(a), len(b)) + 1)
-                if a[-i] != b[-i] and a[-i] != 1 and b[-i] != 1), 1)
-    raise RuntimeError(_like_torch(
-        f"모양 {tuple(a)} 과 {tuple(b)} 은 브로드캐스팅되지 않습니다 — "
-        "뒤에서부터 맞춰볼 때 크기가 같거나 한쪽이 1이어야 합니다.",
-        f"The size of tensor a ({a[-bad]}) must match the size of tensor b "
-        f"({b[-bad]}) at non-singleton dimension {len(a) - bad}"))
+def int64_name():
+    """색인 텐서의 형. 이름을 한 곳에서만 적는다."""
+    return _DType("int64")
 
 
-_warned = set()
+def _core_repr(shim):
+    """코어의 `_tensor_repr` 을 빌려온다. 브라우저에서는 `/work` 아래에 있다."""
+    global _REPR
+    if _REPR is None:
+        from borch._base import _tensor_repr as fn
+        _REPR = fn
+    return _REPR(shim)
 
 
-def _warn_once(key, message):
-    """느린 길을 **조용히** 타지 않게 한다. 느린 것은 틀린 것이 아니지만,
-    모르고 타는 것은 나중에 원인을 못 찾는 종류가 된다.
+_REPR = None
 
-    `_functional` 에 있던 것을 여기로 올렸다 — `_ops` 도 써야 하는데 그쪽이 먼저 실린다.
+
+class _Shim:
+    """`_tensor_repr` 이 보는 것만 흉내 낸다 — `.data` · `.dtype` · `._op` · `.requires_grad`."""
+
+    __slots__ = ("data", "dtype", "_op", "requires_grad")
+
+    def __init__(self, t):
+        self.data = t.numpy()
+        self.dtype = t.dtype
+        self._op = t._h.gradName or None
+        self.requires_grad = bool(t._h.requiresGrad)
+
+
+class _DType(str):
+    """형 이름. 값은 borch.ts 의 이름이고 **보이는 것은 torch 의 이름**이다.
+
+    골든이 `str(x.dtype)` 를 답으로 굳혔고 그 답은 `torch.float32` 다. 그런데 우리
+    내부에서는 `"float32"` 로 다녀야 borch.ts 에 그대로 넘길 수 있다 — 문자열을
+    물려받아 두 이름을 한 물건에 담는다.
     """
-    if key in _warned:
-        return
-    _warned.add(key)
-    try:
-        _js.console.warn("[borch-webgpu] " + message)
-    except Exception:                                                # noqa: BLE001
-        pass
 
-
-def _unsupported(what):
-    raise BrowserTorchError(
-        f"{what} 은(는) 아직 borch-webgpu 에 없습니다. "
-        "코어 `borch` 나 자기 컴퓨터의 진짜 PyTorch 를 쓰세요."
-    )
-
-
-# ---------------------------------------------------------------- 경계
-
-def _shape_of(handle):
-    return tuple(int(n) for n in handle.shape)
-
-
-# ---------------------------------------------------------------- dtype
-#
-# **저장은 float32 한 가지, dtype 은 그 위의 라벨이다.**
-#
-# TF.js 에는 int64 도 float64 도 없다. 그리고 `cast(int32 → float32)` 가 WebGPU 에서
-# dtype 라벨만 바꾸고 **비트를 안 바꾼다**(실측: 2 가 2.8e-45 로 읽힌다). 그래서 정수를
-# int32 로 저장하면 정수+실수 승격을 아예 할 수 없다.
-#
-# 라벨로 두면 승격이 **캐스팅 없이 라벨 변경만으로** 끝나 그 버그를 통째로 피한다.
-# 대신 정수는 float32 가 정확히 담는 2^24 까지다 — 넘으면 조용히 자르지 않고 던진다.
-# 불리언만 TF.js 의 bool 로 든다(비교 결과가 그것으로 나온다).
-
-_INT_EXACT = 2 ** 24
-
-
-class dtype:
-    def __init__(self, name, np_type, category, rank, storage):
-        self.name = name
-        self.np = np_type
-        self.category = category        # bool(0) < 정수(1) < 실수(2)
-        self.rank = rank
-        self.storage = storage          # TF.js 가 실제로 드는 것
+    __slots__ = ()
 
     def __repr__(self):
-        return f"torch.{self.name}"
+        return f"torch.{self}" if self != "bool" else "torch.bool"
 
-    def __eq__(self, other):
-        return isinstance(other, dtype) and self.name == other.name
+    def __str__(self):
+        return f"torch.{str.__str__(self)}"
+
+    @property
+    def plain(self):
+        return str.__str__(self)
+
+
+class _Size(tuple):
+    """모양. `torch.Size([2, 2])` 로 보여야 한다 — 골든이 그 문자열을 굳혔다."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return f"torch.Size([{', '.join(str(n) for n in self)}])"
+
+    __str__ = __repr__
+
+
+class Tensor:
+    """borch.ts 텐서 하나를 감싼다.
+
+    **값을 파이썬에 안 들고 있는다.** 손잡이만 들고 필요할 때 GPU 에서 읽는다 —
+    양쪽에 두면 어느 쪽이 진짜인지 갈리는 날이 온다.
+    """
+
+    __slots__ = ("_h",)
+
+    def __init__(self, handle):
+        self._h = handle
+
+    # ── 하네스가 요구하는 둘 ──────────────────────────────────────────────
+    #
+    # `tests/cases.py` 의 `to_numpy` 가 `t.detach().numpy()` 만 부른다. 그 둘만
+    # 맞추면 골든 하네스를 한 줄도 안 고치고 이 구현을 대조할 수 있다.
+
+    def detach(self):
+        return Tensor(self._h.detach())
+
+    def numpy(self):
+        flat = _read(self._h)
+        shape = self.shape
+        out = flat.reshape(shape) if shape else flat.reshape(())
+        # dtype 은 borch.ts 에서 float32 저장 위의 **이름표**다. 되돌릴 때 그 이름을
+        # 따라간다 — 안 그러면 int64 케이스가 실수로 나오고, 값은 맞아 보인다.
+        kind = str(self._h.dtype)
+        if kind == "int64":
+            return out.astype(_np.int64)
+        if kind == "bool":
+            return out.astype(bool)
+        return out
+
+    # ── 파이썬다움 ────────────────────────────────────────────────────────
+
+    @property
+    def shape(self):
+        return _Size(int(n) for n in self._h.shape)
+
+    @property
+    def dtype(self):
+        """**`torch.float32` 로 보여야 한다.** borch.ts 는 `"float32"` 라고 말한다.
+
+        골든의 dtype 케이스는 값이 아니라 **형 이름 문자열**을 답으로 굳혔다. 이름이
+        다르면 승격 규칙이 다 맞아도 전부 실패한다 — 실제로 그렇게 나왔다.
+        """
+        return _DType(str(self._h.dtype))
+
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    def dim(self):
+        return len(self.shape)
+
+    def numel(self):
+        return int(self._h.size)
+
+    def size(self, dim=None):
+        return self.shape if dim is None else self.shape[dim]
+
+    def item(self):
+        """**원소가 하나여야 한다.** torch 가 그 자리에서 던지고 골든이 그것을 굳혔다."""
+        if self._h.size != 1:
+            raise RuntimeError(
+                f"a Tensor with {self._h.size} elements cannot be converted to Scalar")
+        return float(_read(self._h)[0])
+
+    def backward(self, *args):
+        return guarded(self._h.backward, *[handle(a) for a in args])
+
+    # dtype 을 바꾸는 이름들. borch.ts 는 `to("float32")` 하나로 받는다.
+    def to(self, dtype):
+        name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
+        return guarded(self._h.to, name.replace("torch.", ""))
+
+    def float(self):
+        return self.to("float32")
+
+    def double(self):
+        """**없다.** WebGPU 의 셰이더에 배정도가 없다.
+
+        자매(`borch_webgpu`)가 TF.js 때문에 거절하는 것과 같은 자리다 — 이유가 다를
+        뿐 결론이 같고, 골든이 그 거절을 답으로 굳혔다. 조용히 float32 로 돌려주면
+        "배정도로 계산했다" 고 믿는 코드가 생긴다.
+        """
+        raise RuntimeError(
+            "Only Tensors of floating point dtype float32 are supported — "
+            "float64 는 WebGPU 셰이더에 없다")
+
+    def long(self):
+        return self.to("int64")
+
+    def int(self):
+        return self.to("int64")
+
+    def bool(self):
+        return self.to("bool")
+
+    def type(self, dtype=None):
+        return self.dtype if dtype is None else self.to(dtype)
+
+    def tolist(self):
+        return self.numpy().tolist()
+
+    def __len__(self):
+        return self.shape[0] if self.shape else 0
+
+    def __repr__(self):
+        """**코어의 규칙을 빌린다.** 여기서 다시 쓰면 두 번째가 다른 날이 온다.
+
+        `borch/_base.py` 의 `_tensor_repr` 이 torch 의 출력 규칙(정렬·자릿수·줄바꿈·
+        여덟 칸 들여쓰기)을 이미 담고 있고, 골든이 그 문자열을 답으로 굳혔다. 값과
+        몇 가지 표시만 넘겨주면 그 함수가 답을 만든다.
+        """
+        return _core_repr(_Shim(self))
+
+    __str__ = __repr__
+
+    # ── 나머지는 전부 넘긴다 ──────────────────────────────────────────────
+
+    def __getattr__(self, name):
+        """이 클래스에 없는 이름은 **borch.ts 텐서 쪽**으로 넘긴다.
+
+        `x.exp()` · `x.masked_select(m)` 처럼 케이스가 메서드로 부르는 자리가 많다.
+        손으로 옮겨 적으면 그중 하나가 다른 연산을 부르는 날이 오므로 안 적고 넘긴다.
+        없으면 `AttributeError` 로 멈춘다 — 근사하지 않는다.
+
+        **메서드인지 속성인지를 JS 쪽에 물어서 가른다.** 전부 메서드로 감쌌더니
+        `x.T` 나 `x.grad` 가 함수를 돌려주었고, 그것이 실패 96 건이었다 — 원인은
+        `'function' object has no attribute 'detach'` 로 나왔다. 값을 돌려줄 자리에
+        함수를 돌려주면 그 다음 줄에서야 터지고, 그러면 원인이 한 칸 밀린다.
+        """
+        from ._ops import _BINARY_ONLY, camel, positional, refuse_if_nullary
+
+        # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
+        # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
+        if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
+                    "pow", "squeeze", "repeat_interleave", "flatten",
+                    "sum", "norm", "transpose", "swapdims"):
+            from . import _ops
+            fn = getattr(_ops, name)
+            return lambda *a, **k: fn(self, *a, **k)
+
+        # **기울기가 켜진 잎은 제자리로 못 고친다.** torch 가 그 자리에서 던지고
+        # 골든이 그것을 굳혔다 — 흘려보내면 역전파가 이미 지난 값을 보게 된다.
+        # **`no_grad` 안에서는 된다.** torch 도 그렇다 — 기울기를 안 만드는 동안에는
+        # 잎을 고쳐도 역전파가 볼 것이 없다. 그 조건을 빼먹었더니 옵티마이저가
+        # 파라미터를 갱신하는 정상 경로까지 막혔다.
+        if name.endswith("_") and not name.endswith("__") and \
+                _ts.gradMode.enabled and \
+                bool(self._h.requiresGrad) and not self._h.parents.length:
+            raise RuntimeError(
+                "a leaf Variable that requires grad is being used in an "
+                "in-place operation.")
+
+        js_name = camel(name)
+        if name in _BINARY_ONLY:
+            # borch.ts 는 단항만 표에서 메서드로 만든다. 이항은 `binary(이름, 상대)` 다.
+            return lambda other, *_: guarded(self._h.binary, js_name, handle(other))
+        got = getattr(self._h, js_name, None)
+        if got is None:
+            raise AttributeError(
+                f"borch.ts 텐서에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
+        if not callable(got):
+            return settle(got)
+
+        def call(*args, **kw):
+            laid = positional(name, args, kw)
+            refuse_if_nullary(js_name, got, len(laid))
+            return guarded(got, *laid)
+
+        call.__name__ = name
+        return call
+
+    # 연산자. `x + y` 는 `x.add(y)` 이고, 상대가 수여도 받는다.
+    def _op(js_name):                                        # noqa: N805
+        def go(self, other):
+            return guarded(self._h.binary, js_name, handle(other))
+        return go
+
+    def _rop(js_name):                                       # noqa: N805
+        def go(self, other):
+            return guarded(handle(other).binary, js_name, self._h)
+        return go
+
+    __add__, __radd__ = _op("add"), _rop("add")
+    __sub__, __rsub__ = _op("sub"), _rop("sub")
+    __mul__, __rmul__ = _op("mul"), _rop("mul")
+    __truediv__, __rtruediv__ = _op("div"), _rop("div")
+    def __pow__(self, other):
+        """**정수 지수는 곱셈으로 푼다.** WGSL 의 `pow` 는 `exp2(y·log2(x))` 라 밑이
+        음수면 답이 없고, 짝수 지수의 순방향만 우연히 맞고 기울기가 nan 이 된다 —
+        `borch.ts` 의 `powScalar` 가 그 자리를 위해 있다."""
+        from ._ops import pow as _pow
+        return _pow(self, other)
+    __eq__, __ne__ = _op("eq"), _op("ne")
+    __lt__, __le__ = _op("lt"), _op("le")
+    __gt__, __ge__ = _op("gt"), _op("ge")
+
+    def __mod__(self, other):
+        return guarded(self._h.remainder, float(other))
+
+    def __matmul__(self, other):
+        return guarded(self._h.mm, handle(other))
+
+    def _inplace(js_name):                                   # noqa: N805
+        """`x += 1` 도 제자리 연산이다 — 잎에 기울기가 켜져 있으면 torch 가 거절한다."""
+        def go(self, other):
+            return getattr(self, f"{js_name}_")(other)
+        return go
+
+    __iadd__ = _inplace("add")
+    __isub__ = _inplace("sub")
+    __imul__ = _inplace("mul")
+    __itruediv__ = _inplace("div")
+
+    del _inplace
+
+    def __neg__(self):
+        return wrap(self._h.neg())
+
+    def __getitem__(self, key):
+        """`x[0]` · `x[1:3]` · `x[:, 1]`. torch 코드가 가장 자주 하는 일이다."""
+        keys = key if isinstance(key, tuple) else (key,)
+        out, axis = self, 0
+        for k in keys:
+            if isinstance(k, slice):
+                start = 0 if k.start is None else k.start
+                stop = out.shape[axis] if k.stop is None else k.stop
+                out = wrap(out._h.narrow(axis, start, stop - start))
+                axis += 1
+            elif isinstance(k, (Tensor, list, tuple)):
+                # `x[[2, 0]]` — 번호 목록으로 고르는 자리. torch 코드가 흔히 쓴다.
+                idx = k if isinstance(k, Tensor) else tensor(list(k), int64_name())
+                out = wrap(out._h.indexSelect(axis, idx._h))
+                axis += 1
+            else:
+                n = out.shape[axis]
+                at = k + n if k < 0 else k
+                if not 0 <= at < n:
+                    # torch 는 여기서 `IndexError` 다 — 종류도 API 이므로 맞춘다.
+                    raise IndexError(
+                        f"index {k} is out of bounds for dimension {axis} "
+                        f"with size {n}")
+                out = wrap(out._h.select(axis, at))
+        return out
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def __bool__(self):
+        return bool(_read(self._h)[0])
+
+    def __float__(self):
+        return self.item()
 
     def __hash__(self):
-        return hash(self.name)
+        return id(self)
+
+    del _op, _rop
 
 
-float32 = dtype("float32", _np.float32, 2, 20, "float32")
-int64 = dtype("int64", _np.int64, 1, 10, "float32")
-long = int64
-bool_ = dtype("bool", _np.bool_, 0, 0, "bool")
-
-_BY_CATEGORY = {0: bool_, 1: int64, 2: float32}
+class RuntimeError_(RuntimeError):
+    """이름은 파이썬의 것이고 문구는 torch 의 것이다."""
 
 
-def _dtype_of(arr):
-    """numpy 배열의 dtype → 우리 dtype. torch 의 규칙을 따른다."""
-    kind = _np.asarray(arr).dtype.kind
-    if kind == "b":
-        return bool_
-    if kind in "iu":
-        return int64
-    if _np.asarray(arr).dtype == _np.float64:
-        # 조용히 float32 로 떨어뜨리지 않는다. 코어는 float64 를 진짜로 지원한다.
-        return float32
-    return float32
+class IndexError_(IndexError):
+    pass
 
 
-def _reject_float64(dt):
-    if dt is not None and getattr(dt, "name", None) == "float64":
-        _unsupported("float64 (TF.js 에 배정도가 없습니다)")
+def translate(exc):
+    """JS 쪽 예외를 **torch 가 내는 종류**로 옮긴다.
 
+    골든이 예외의 **종류 이름까지** 답으로 굳혔다(`RuntimeError|문구=True`). 그대로
+    두면 파이썬 쪽에 `JsException` 이 올라오고, `except RuntimeError` 로 잡던 코드가
+    안 잡힌다 — 예외의 종류도 API 다.
 
-def _to_tf(arr, dt=None):
-    """numpy → tf.Tensor. 평평하게 펴서 올리고 모양을 따로 준다."""
-    arr = _np.asarray(arr)
-    dt = dt or _dtype_of(arr)
-    if dt is bool_:
-        flat = _np.ascontiguousarray(arr.astype(_np.bool_)).reshape(-1)
-        buf = _js.Uint8Array.new(flat.size)
-        buf.assign(flat.view(_np.uint8))
-        return _tf.tensor(buf, _to_js(list(arr.shape)), "bool")
-    if dt is int64 and arr.size and _np.abs(arr.astype(_np.float64)).max() > _INT_EXACT:
-        raise RuntimeError(
-            f"정수가 {_INT_EXACT} 를 넘습니다. 이 라이브러리는 정수를 float32 에 담으므로 "
-            "그 위로는 정확하지 않습니다 — 조용히 자르지 않고 여기서 멈춥니다.")
-    flat = _np.ascontiguousarray(arr, dtype=_np.float32).reshape(-1)
-    buf = _js.Float32Array.new(flat.size)
-    buf.assign(flat)
-    return _tf.tensor(buf, _to_js(list(arr.shape)), "float32")
-
-
-def _to_np(handle):
-    """tf.Tensor → numpy.
-
-    `dataSync()` 를 쓴다. WebGPU 에 동기 읽기 API 가 없는데도 TF.js 가 이것을
-    받아준다는 것을 실측으로 확인했고(3.35ms 대 비동기 1.72ms), 그래서 이 라이브러리의
-    파이썬 API 가 통째로 동기로 남을 수 있다.
+    문구는 안 바꾼다. borch.ts 가 이미 torch 의 원문을 담고 있고, 그것이 검색을
+    통하게 하려고 그렇게 쓴 것이다.
     """
-    shape = _shape_of(handle)
-    size = int(_np.prod(shape)) if shape else 1
-
-    # dtype 을 보고 받을 그릇을 고른다. 전부 float32 로 받으면 int32 텐서의 **비트를
-    # 그대로 실수로 읽는다** — one_hot 의 1 이 1.4e-45 로 나왔던 것이 그것이다.
-    # 조용히 틀리는 종류라, 값을 보기 전에는 안 드러난다.
-    kind = str(handle.dtype)
-    if kind == "int32":
-        flat = _np.empty(size, dtype=_np.int32)
-    elif kind == "bool":
-        flat = _np.empty(size, dtype=_np.uint8)
-    else:
-        flat = _np.empty(size, dtype=_np.float32)
-    handle.dataSync().assign_to(flat)
-    out = flat.reshape(shape)
-    return out.astype(bool) if kind == "bool" else out
+    text = str(exc)
+    # **앞머리만 벗긴다.** `replace` 로 첫 번째 `Error: ` 를 지웠더니 `RuntimeError:
+    # shape …` 이 `Runtimeshape …` 이 되어 문구가 망가졌다 — 검색이 통하라고 원문을
+    # 담아 둔 것을 우리가 부순 셈이다.
+    for head in ("RuntimeError: ", "IndexError: ", "Error: "):
+        if text.startswith(head):
+            text = text[len(head):]
+            break
+    kind = IndexError if ("index" in text.lower() or "색인" in text) else RuntimeError
+    return kind(text)
 
 
-# ---------------------------------------------------------------- 표현(repr)
-#
-# 학습자가 가장 많이 하는 일이 print(tensor) 다. 진짜와 다르게 찍히면 교재의 예시와
-# 화면이 안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다.
-#
-# **코어와 같은 알고리즘이다.** 두 벌로 쓰면 언젠가 갈리므로 규칙을 그대로 옮겼다 —
-# torch/_tensor_str.py 의 규칙이고, 코어가 15/15 로 맞춰둔 것이다.
+class _Pair:
+    """`values` 와 `indices` 를 함께 주는 것들 — `sort`·`topk`·`median`·`max(dim)`.
 
-_PRINT_PRECISION = 4
-_LINE_WIDTH = 80
+    borch.ts 는 평범한 JS 객체를 준다. 그대로 흘리면 `.values` 가 JS 프록시라
+    `.numpy()` 가 없고, 실패는 `AttributeError: numpy` 로 한 칸 밀려서 나온다.
+    """
 
+    __slots__ = ("values", "indices")
 
-def set_printoptions(precision=None, linewidth=None):
-    global _PRINT_PRECISION, _LINE_WIDTH
-    if precision is not None:
-        _PRINT_PRECISION = precision
-    if linewidth is not None:
-        _LINE_WIDTH = linewidth
-
-
-def _float_formatter(arr):
-    """torch 의 규칙: 값이 전부 정수면 `1.`, 아니면 소수 네 자리, 범위가 넓으면 지수."""
-    finite = arr[_np.isfinite(arr)]
-    nonzero = finite[finite != 0]
-    if nonzero.size == 0:
-        return lambda v: f"{v:.0f}."
-    amax, amin = _np.abs(nonzero).max(), _np.abs(nonzero).min()
-    integral = bool(_np.all(finite == _np.floor(finite)))
-
-    if integral and amax < 1e8:
-        return lambda v: f"{v:.0f}."
-    if amax / amin > 1000 or amax > 1e8 or amin < 1e-4:
-        return lambda v, p=_PRINT_PRECISION: f"{v:.{p}e}"
-    return lambda v, p=_PRINT_PRECISION: f"{v:.{p}f}"
-
-
-def _tensor_str(data):
-    if data.size == 0:
-        return "[]"
-    if data.dtype.kind == "f":
-        fmt = _float_formatter(data)
-        # torch 는 원소를 같은 너비로 오른쪽 정렬한다 — 음수가 섞이면 양수 앞에 자리가 생긴다.
-        width = max((len(fmt(v)) for v in data.reshape(-1)), default=0)
-        padded = lambda v, f=fmt, w=width: f(v).rjust(w)             # noqa: E731
-        body = _np.array2string(
-            data, formatter={"float_kind": padded}, separator=", ",
-            max_line_width=_LINE_WIDTH - 8, threshold=1000)
-    else:
-        body = _np.array2string(data, separator=", ",
-                                max_line_width=_LINE_WIDTH - 8, threshold=1000)
-    # numpy 는 이어지는 줄을 한 칸 들여쓴다. torch 는 "tensor(" 만큼(8칸) 들여쓴다.
-    return body.replace("\n ", "\n" + " " * 8)
-
-
-def _tensor_repr(t):
-    parts = [_tensor_str(t.numpy())]
-    if t._op:
-        parts.append(f"grad_fn=<{t._op}>")
-    elif t.requires_grad:
-        parts.append("requires_grad=True")
-    return f"tensor({', '.join(parts)})"
-
-
-class Size(tuple):
-    def __repr__(self):
-        return f"torch.Size([{', '.join(str(x) for x in self)}])"
-
-
-# 아래 일곱은 **`Tensor` 라는 이름을 안 쓴다.** `t._make(...)` 처럼 넘겨받은 것의
-# 메서드를 부를 뿐이라 `Tensor` 보다 먼저 놓을 수 있고, 그래서 여기가 제자리다.
-# 예전에는 파일 한참 아래에 있었는데 `Tensor` 의 메서드들이 그것을 부르고 있었다 —
-# 파일 하나일 때는 안 보이던 층위 뒤집힘이다.
-
-class _ValuesIndices:
-    """`x.max(dim=0)` 이 돌려주는 (values, indices). 진짜 torch 와 같은 모양."""
-
-    def __init__(self, values, indices):
-        self.values = values
-        self.indices = indices
+    def __init__(self, obj):
+        self.values = wrap(obj.values)
+        self.indices = wrap(obj.indices)
 
     def __iter__(self):
         yield self.values
@@ -263,112 +406,126 @@ class _ValuesIndices:
     def __getitem__(self, i):
         return (self.values, self.indices)[i]
 
+    def __getattr__(self, name):
+        """**값 쪽으로 넘긴다.** torch 의 `median()` 은 dim 없이 부르면 값 하나를
+        주는데 borch.ts 는 늘 쌍을 준다 — 그 자리에서 `.numpy()` 나 `.shape` 를
+        물으면 값을 묻는 것이다."""
+        return getattr(self.values, name)
 
-def _pick_last(t, idx32):
-    """마지막 축에서 번호대로 뽑되 **그래프를 잇는다.**
 
-    자리를 원-핫으로 만들어 곱하고 접으면 역전파가 저절로 따라온다. 값만 떼어
-    돌려주면 뽑은 자리로 기울기가 안 가고, top-k 샘플링이나 정렬을 끼운 손실에서
-    **학습이 조용히 멈춘다** — 코어가 ROADMAP 11번에서 겪은 그대로다.
+def settle(out):
+    """돌려받은 것을 파이썬이 쓸 모양으로 만든다.
+
+    **약속이면 여기서 기다린다.** borch.ts 에서 몇 개는 비동기다 — `unique`,
+    `bincount`, `masked_select` 처럼 **결과의 크기가 값에 달린** 것들이라 GPU 에서
+    한 번 읽어야 모양이 정해진다. 그것을 그대로 흘리면 파이썬 쪽에 `PyodideFuture` 가
+    돌아다니고, 실패는 그 다음 줄에서 `'PyodideFuture' object has no attribute
+    'detach'` 로 나온다 — 원인에서 한 칸 밀린 자리다.
+
+    `run_sync` 가 여기서도 그 자리를 메운다. 값을 읽는 것과 같은 장치다.
     """
-    shape = t.shape
-    n = shape[-1]
-    rows = int(_np.prod(shape[:-1])) if len(shape) > 1 else 1
-    k = _shape_of(idx32)[-1]
+    from pyodide.ffi import JsException
 
-    flat = t.reshape(rows, n)
-    onehot = _tf.cast(_tf.oneHot(_tf.reshape(idx32, _to_js([rows * k])), n), "float32")
-    onehot = _tf.reshape(onehot, _to_js([rows, k, n]))
-    picked = _tf.sum(_tf.mul(onehot, _tf.reshape(flat._h, _to_js([rows, 1, n]))), 2)
-
-    def back(g):
-        return (_tf.sum(_tf.mul(onehot, _tf.reshape(g, _to_js([rows, k, 1]))), 1),)
-
-    out = flat._make(picked, (flat,), back, "TopkBackward0")
-    return out.reshape(tuple(shape[:-1]) + (k,)) if len(shape) > 1 else out.reshape(k)
-
-
-def _last_axis_only(t, dim, what):
-    """TF.js 의 `topk` 는 **마지막 축만** 본다. 다른 축을 받으면 조용히 다른 값이
-    나오므로 여기서 멈춘다 — 없는 기능이 틀린 답보다 낫다."""
-    if dim not in (-1, t.ndim - 1):
-        _unsupported(f"{what}(마지막 축이 아닌 dim)")
-
-
-# 랭크 5 부터는 `tf.pad` 를 못 믿는다 — 아래 `_pad_const` 참고.
-_PAD_SAFE_RANK = 4
-
-
-def _pad_const(handle, shape, pads, value=0.0):
-    """상수로 두른다. `shape` 는 `handle` 의 현재 모양, `pads` 는 (축, 앞, 뒤) 목록이다.
-
-    **랭크 5 이상에서는 `tf.pad` 를 쓰지 않는다.** 거기서 pad 는 모양을 맞게 돌려주고
-    값을 깨뜨리며, 예외를 안 던진다 — 부르는 쪽은 아무것도 모른 채 틀린 답을 받는다.
-    conv3d 를 굳히다 잡았다: 1×1×1 항등 커널을 씌운 결과의 합이 28 이어야 하는데
-    0.238 이었다.
-
-    한 번에 안 끝났다는 것을 적어둔다. 처음에는 conv3d 만 고쳤고, 그 다음 케이스를
-    세워 물어보니 자르기의 역방향도 같은 함수를 불러 **narrow·unbind·split 셋이 랭크 5
-    에서 조용히 틀린 기울기**를 내고 있었다. 거기서 또 멈췄는데, 랭크 6 을 물어보니
-    이번에는 **`F.pad` 자신** — 사용자가 직접 부르는 문 — 이 랭크 5·6 양쪽에서 틀리고
-    있었다. 세 번 다 "고쳤다"고 생각한 뒤에 나왔다. 그러니 호출 지점은 여기 하나로
-    모으고, 랭크 판단도 여기서만 한다.
-
-    랭크 6 자체는 멀쩡하다는 것도 그때 같이 확인했다 — 원소별·축 합·permute·reshape·
-    기울기 전부 맞았다. 고장난 것은 랭크가 아니라 `pad` 다.
-
-    랭크 4 이하는 `tf.pad` 그대로 둔다. 골든 427 건과 ResNet-18 의 매 스텝이 지나는
-    길이고 거기서는 값이 맞는다 — 안 깨진 것을 바꾸면 바꾼 쪽이 새 위험이 된다.
-    """
-    if len(shape) <= _PAD_SAFE_RANK:
-        pairs = [[0, 0] for _ in shape]
-        for axis, before, after in pads:
-            pairs[axis] = [before, after]
-        return _tf.pad(handle, _to_js(pairs), float(value))
-
-    cur = list(shape)
-    for axis, before, after in pads:
-        for width, at_front in ((before, True), (after, False)):
-            if not width:
-                continue
-            block = list(cur)
-            block[axis] = width
-            zeros = (_tf.zeros(_to_js(block)) if value == 0.0
-                     else _tf.fill(_to_js(block), float(value)))
-            parts = [zeros, handle] if at_front else [handle, zeros]
-            handle = _tf.concat(_to_js(parts), axis)
-            cur[axis] += width
-    return handle
-
-
-def _slice_along(handle, axis, start, length):
-    shape = _shape_of(handle)
-    begin = [0] * len(shape)
-    size = list(shape)
-    begin[axis], size[axis] = start, length
-    return _tf.slice(handle, _to_js(begin), _to_js(size))
-
-
-def _slice_tensor(t, dim, start, length):
-    """잘라내되 **그래프를 잇는다.** 역방향은 잘라낸 자리 밖을 0 으로 채우는 것이다."""
-    shape = list(t.shape)
-    # 메울 대상은 들어온 기울기, 즉 **잘라낸 뒤의** 모양이다.
-    out_shape = list(shape)
-    out_shape[dim] = length
-    pads = [(dim, start, shape[dim] - start - length)]
-    return t._make(_slice_along(t._h, dim, start, length), (t,),
-                   lambda g: (_pad_const(g, out_shape, pads),), "SliceBackward0")
-
-
-def _keep(handle):
-    """스코프가 끝나도 살려둘 것. 파라미터와 옵티마이저 상태가 여기 해당한다.
-
-    **`_data` 쪽에 있던 것을 여기로 올렸다.** `Tensor` 와 `nn` 이 둘 다 부르는데
-    정의는 파일 맨 아래였다 — 파일 하나일 때는 안 보이던 층위 뒤집힘이다.
-    """
     try:
-        return _tf.keep(handle)
-    except Exception:                                                # noqa: BLE001
-        return handle          # 스코프 밖이면 keep 이 필요 없다
+        if hasattr(out, "then"):
+            out = _run_sync(out)
+    except JsException as exc:
+        raise translate(exc) from None
+    if _js.borch.isTensor(out):
+        return wrap(out)
+    # `{values, indices}` 쌍과 텐서 배열은 그대로 흘리면 프록시가 파이썬에 남는다.
+    if hasattr(out, "values") and hasattr(out, "indices"):
+        return _Pair(out)
+    if _js.Array.isArray(out):
+        return [wrap(x) if _js.borch.isTensor(x) else x for x in out]
+    # **이름 붙은 자리를 여럿 주는 것들** — `slogdet` 의 `{sign, logabs}`,
+    # `qr` 의 `{q, r}`, `svd` 의 `{u, s, vt}`. 그대로 흘리면 파이썬에서 첨자도
+    # 속성 접근도 안 되는 프록시가 남는다.
+    if hasattr(out, "constructor") and str(getattr(out, "constructor", "")) and \
+            not callable(out) and hasattr(out, "toString"):
+        keys = [str(k) for k in _js.Object.keys(out)]
+        if keys and all(not k.isdigit() for k in keys):
+            return _Fields({k: getattr(out, k) for k in keys})
+    return out
 
 
+class _Fields:
+    """이름 붙은 자리를 여럿 주는 답. 첨자로도 이름으로도 닿는다 — torch 가 그렇다."""
+
+    __slots__ = ("_d", "_order")
+
+    def __init__(self, d):
+        self._order = list(d)
+        object.__setattr__(self, "_d", {
+            k: (wrap(v) if _js.borch.isTensor(v) else v) for k, v in d.items()})
+
+    def __getattr__(self, name):
+        try:
+            return self._d[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __getitem__(self, i):
+        return self._d[self._order[i]] if isinstance(i, int) else self._d[i]
+
+    def __iter__(self):
+        for k in self._order:
+            yield self._d[k]
+
+
+def guarded(fn, *args):
+    """부르고, JS 예외가 오면 torch 종류로 바꿔 던진다."""
+    from pyodide.ffi import JsException
+
+    try:
+        return settle(fn(*args))
+    except JsException as exc:
+        raise translate(exc) from None
+
+
+def wrap(x):
+    """JS 텐서든 파이썬 수든 우리 `Tensor` 로."""
+    if isinstance(x, Tensor):
+        return x
+    # **파이썬 수의 형이 승격 규칙에 들어간다.** `int64 + 2` 는 int64 이고
+    # `int64 + 2.0` 은 float32 다. 전부 float32 스칼라로 만들었더니 승격이 다 float32 로
+    # 무너졌다 — 값은 맞는데 형 이름만 갈리는 자리라 값 대조로는 안 보인다.
+    if isinstance(x, bool):
+        return Tensor(_ts.Tensor.from_(
+            _js.Float32Array.new(_to_js([1.0 if x else 0.0])),
+            _js_list([]), False, "bool"))
+    if isinstance(x, int):
+        return Tensor(_ts.Tensor.from_(
+            _js.Float32Array.new(_to_js([float(x)])), _js_list([]), False, "int64"))
+    if isinstance(x, float):
+        return Tensor(_ts.Tensor.full(_js_list([]), x))
+    return Tensor(x)
+
+
+def handle(x):
+    """상대가 우리 텐서면 손잡이를, 수면 스칼라 텐서를 만들어 그 손잡이를."""
+    return wrap(x)._h
+
+
+def tensor(data, dtype=None, requires_grad=False):
+    """`torch.tensor` 자리. numpy 배열·중첩 리스트·수를 받는다."""
+    from pyodide.ffi import JsException
+
+    arr = _np.asarray(data)
+    if dtype is not None:
+        # `torch.float32` 로 보이는 물건이 와도 borch.ts 에는 `float32` 로 넘긴다.
+        name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
+    elif arr.dtype == bool:
+        name = "bool"
+    elif arr.dtype.kind in "iu":
+        name = "int64"
+    else:
+        name = "float32"
+    flat = _js.Float32Array.new(_to_js(arr.ravel().astype(_np.float32)))
+    try:
+        return Tensor(
+            _ts.Tensor.from_(flat, _js_list(arr.shape), requires_grad, name))
+    except JsException as exc:
+        # 정수·참거짓에 기울기를 켜는 것은 torch 도 거절한다. 종류를 옮겨 준다 —
+        # `except RuntimeError` 로 잡던 코드가 안 잡히면 안 된다.
+        raise translate(exc) from None
