@@ -603,6 +603,207 @@ def grad_cases(inp=None):
     return cases
 
 
+CONTAINER_PREFIX = "container::"
+
+
+def container_cases(inp=None):
+    """합성 구조를 뚫고 **파라미터가 보이는가.**
+
+    이 표에서 가장 늦게 생긴 자리이고, 늦은 이유가 이 케이스들의 값어치다.
+
+    ## 왜 이것이 다른 케이스와 종류가 다른가
+
+    나머지 케이스는 **값**을 묻는다 — `exp` 가 틀리면 숫자가 다르고 바로 보인다.
+    여기서 묻는 것은 **순회**다. `parameters()` 가 어떤 파라미터를 안 내놓으면
+    옵티마이저가 그것을 못 보고, 못 보면 안 갱신하고, 안 갱신해도 **손실은 내려간다**
+    (남은 파라미터가 대신 맞춘다). 예외도 경고도 없다. 이 저장소가 반복해서 잡아온
+    결함의 모양 그대로인데, 그 자리를 여태 아무도 안 물었다.
+
+    ## 어떻게 묻는가 — 이름과 값을 **둘 다**
+
+    이름만 물으면 등록은 됐는데 갱신이 안 되는 경우를 놓친다. 값만 물으면 이름이
+    `layers.0.weight` 가 아니라 `0.weight` 로 나와도 통과한다 — 그러면
+    `load_state_dict` 가 남의 체크포인트를 못 읽는다.
+
+    그래서 자리마다 둘을 짝으로 둔다: `named_parameters` 의 **이름 목록**과, SGD 를
+    몇 스텝 돌린 뒤의 **파라미터 값**. 등록이 빠지면 값이 출발점 그대로 남아 갈린다.
+
+    ## 왜 여기가 비어 있었나
+
+    표의 모든 모델이 `nn.Sequential` 로 세워져 있었다. 그것 하나만 물으면 torch 코드가
+    가장 흔히 하는 일 — `nn.Module` 을 상속하고 층을 속성으로 붙이는 것 — 이 한 번도
+    안 걸린다. 실제로 벤치가 진짜 ResNet 을 세우다 `Module.__init__() missing 1
+    required positional argument` 로 멈춰서야 알았다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    xin, yin = inp["train_x"], inp["train_y"]
+    w0, b0, w1, b1 = inp["w0"], inp["b0"], inp["w1"], inp["b1"]
+    # 손으로 만드는 선형층용 — `(6, 8)` 로 눕혀 `x @ w` 가 되게 한다. 전치를 케이스
+    # 안에서 하면 그 전치가 틀렸는지 순회가 틀렸는지 못 가른다.
+    flat_w = w0.T.copy()
+
+    cases = []
+
+    def add(name, build, load, forward, want_names):
+        """자리 하나에 **이름·값** 두 케이스를 단다.
+
+        `build(L)` 이 모델을 세우고, `load(L, m)` 이 고정 가중치를 넣고,
+        `forward(L, m, x)` 가 출력을 낸다. 셋을 나눈 것은 컨테이너마다 값을 넣는
+        방법이 다르기 때문이다(`load_state_dict` 가 닿는 자리와 안 닿는 자리).
+        """
+        def names(L):
+            m = build(L)
+            return " ".join(n for n, _ in m.named_parameters())
+
+        def trained(L):
+            m = build(L)
+            load(L, m)
+            opt = L.optim.SGD(m.parameters(), lr=0.05)
+            x, y = L.tensor(xin), L.tensor(yin)
+            for _ in range(3):
+                opt.zero_grad()
+                out = forward(L, m, x)
+                # 출력 모양이 자리마다 달라서 손실을 하나로 못 쓴다. 자리마다 다른
+                # 가중치를 곱해 접는다 — 그냥 `sum()` 이면 기울기가 전부 1 이라
+                # 어느 자리가 안 움직였는지가 값에 안 남는다.
+                w = L.arange(out.numel()).reshape(out.shape).float()
+                (out * w).sum().backward()
+                opt.step()
+            return m
+
+        cases.append((CONTAINER_PREFIX + f"{name}/이름", names))
+        cases.append((CONTAINER_PREFIX + f"{name}/학습",
+                      lambda L: dict(trained(L).named_parameters())[want_names]))
+
+    # ── 상속한 Module. **torch 코드가 가장 흔히 하는 일이다.** ────────────────
+    def build_subclass(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc1 = L.nn.Linear(6, 8)
+                self.fc2 = L.nn.Linear(8, 3)
+        return Net()
+
+    add("상속", build_subclass,
+        lambda L, m: m.load_state_dict({
+            "fc1.weight": L.tensor(w0), "fc1.bias": L.tensor(b0),
+            "fc2.weight": L.tensor(w1), "fc2.bias": L.tensor(b1)}),
+        lambda L, m, x: m.fc2(L.relu(m.fc1(x))),
+        "fc1.weight")
+
+    # ── ModuleList. 층 수가 변하는 모델이 전부 이것을 쓴다. ──────────────────
+    def build_list(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = L.nn.ModuleList([L.nn.Linear(6, 8), L.nn.Linear(8, 3)])
+        return Net()
+
+    add("ModuleList", build_list,
+        lambda L, m: m.load_state_dict({
+            "layers.0.weight": L.tensor(w0), "layers.0.bias": L.tensor(b0),
+            "layers.1.weight": L.tensor(w1), "layers.1.bias": L.tensor(b1)}),
+        lambda L, m, x: m.layers[1](L.relu(m.layers[0](x))),
+        "layers.0.weight")
+
+    # **`append` 로 세운 것도 같은 이름이 나와야 한다.** 층 수가 정해지지 않은
+    # 모델을 쓰는 법이 이것뿐이고, 생성자로 넣은 것과 갈리면 그 자리에서 갈린다.
+    def build_appended(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = L.nn.ModuleList()
+                self.layers.append(L.nn.Linear(6, 8))
+                self.layers.append(L.nn.Linear(8, 3))
+        return Net()
+
+    add("ModuleList(append)", build_appended,
+        lambda L, m: m.load_state_dict({
+            "layers.0.weight": L.tensor(w0), "layers.0.bias": L.tensor(b0),
+            "layers.1.weight": L.tensor(w1), "layers.1.bias": L.tensor(b1)}),
+        lambda L, m, x: m.layers[1](L.relu(m.layers[0](x))),
+        "layers.1.weight")
+
+    # ── ModuleDict. 이름으로 갈래를 고르는 모델이 쓴다. ─────────────────────
+    def build_dict(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.blocks = L.nn.ModuleDict({
+                    "down": L.nn.Linear(6, 8), "up": L.nn.Linear(8, 3)})
+        return Net()
+
+    add("ModuleDict", build_dict,
+        lambda L, m: m.load_state_dict({
+            "blocks.down.weight": L.tensor(w0), "blocks.down.bias": L.tensor(b0),
+            "blocks.up.weight": L.tensor(w1), "blocks.up.bias": L.tensor(b1)}),
+        lambda L, m, x: m.blocks["up"](L.relu(m.blocks["down"](x))),
+        "blocks.down.weight")
+
+    # ── ParameterList. **여기가 조용히 틀리는 자리다.** ──────────────────────
+    #
+    # 맨 리스트에 `Parameter` 를 담아 속성으로 붙이면 `__setattr__` 이 그것을
+    # `Parameter` 로도 `Module` 로도 못 알아본다 — 어느 목록에도 안 들어가고,
+    # `parameters()` 가 안 내놓고, 옵티마이저가 못 본다. torch 도 똑같이 못 알아보고
+    # **그래서 `ParameterList` 가 존재한다.** 그것이 없으면 이 자리에 올바른 방법이 없다.
+    def build_plist(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.ws = L.nn.ParameterList(
+                    [L.nn.Parameter(L.tensor(flat_w)), L.nn.Parameter(L.tensor(b0))])
+        return Net()
+
+    add("ParameterList", build_plist,
+        lambda L, m: None,                       # 세울 때 이미 고정값이 들어갔다
+        lambda L, m, x: x @ m.ws[0] + m.ws[1],
+        "ws.0")
+
+    def build_pdict(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.ws = L.nn.ParameterDict({
+                    "w": L.nn.Parameter(L.tensor(flat_w)),
+                    "b": L.nn.Parameter(L.tensor(b0))})
+        return Net()
+
+    add("ParameterDict", build_pdict,
+        lambda L, m: None,
+        lambda L, m, x: x @ m.ws["w"] + m.ws["b"],
+        "ws.w")
+
+    # ── `state_dict` 의 열쇠. 이름이 갈리면 남의 체크포인트를 못 읽는다. ─────
+    cases.append((CONTAINER_PREFIX + "상속/state_dict 열쇠",
+                  lambda L: " ".join(sorted(build_subclass(L).state_dict()))))
+    cases.append((CONTAINER_PREFIX + "ModuleDict/state_dict 열쇠",
+                  lambda L: " ".join(sorted(build_dict(L).state_dict()))))
+
+    # ── `eval()` 이 컨테이너를 **뚫고** 내려가는가. ─────────────────────────
+    #
+    # 안 내려가면 학습은 멀쩡해 보이고 **추론만 틀린다.** 가장 늦게 발견되는 종류다.
+    #
+    # BatchNorm 으로 묻는다. 갓 세운 것은 `running_mean=0`·`running_var=1` 이라
+    # 평가 모드의 출력이 입력과 거의 같고, 학습 모드는 배치 통계로 정규화해서
+    # 눈에 띄게 다른 값이 된다 — `eval()` 이 안 내려가면 그 차이가 값에 남는다.
+    #
+    # 원래 `Dropout` 으로 쓰려 했는데 borch.ts 에 없다(난수 커널이 없다). 여기서
+    # 그것을 우회한 것이 아니라, 이 케이스가 묻는 것이 순회이지 Dropout 이 아니다.
+    def eval_through(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = L.nn.ModuleList([L.nn.Linear(6, 8), L.nn.BatchNorm1d(8)])
+        m = Net()
+        m.load_state_dict({"layers.0.weight": L.tensor(w0), "layers.0.bias": L.tensor(b0)},
+                          strict=False)
+        m.eval()
+        return m.layers[1](m.layers[0](L.tensor(xin)))
+
+    cases.append((CONTAINER_PREFIX + "eval 이 컨테이너를 뚫는다", eval_through))
+    return cases
+
+
 _TRAIN_STEPS = 5
 
 
@@ -2060,7 +2261,7 @@ def golden_cases(inp=None):
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
-            + webgpu_cases(inp) + edge_cases(inp))
+            + container_cases(inp) + webgpu_cases(inp) + edge_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

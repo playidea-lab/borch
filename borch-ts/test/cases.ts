@@ -458,6 +458,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addRepr(out);
   addNdim(out, inputs);
   addTrain(out, inputs);
+  addContainer(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -681,6 +682,192 @@ const TRAIN_STEPS = 5;
  * 단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,
  * 이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다.
  */
+/**
+ * 합성 구조를 뚫고 **파라미터가 보이는가.**
+ *
+ * 나머지 케이스는 값을 묻는다 — 틀리면 숫자가 다르고 바로 보인다. 여기서 묻는 것은
+ * 순회다. `parameters()` 가 어떤 파라미터를 안 내놓으면 옵티마이저가 그것을 못 보고,
+ * 못 보면 안 갱신하고, **손실은 그래도 내려간다**(남은 파라미터가 대신 맞춘다).
+ *
+ * 그래서 자리마다 둘을 짝으로 둔다 — `namedParameters` 의 **이름 목록**과, SGD 를
+ * 세 스텝 돌린 뒤의 **파라미터 값**. 등록이 빠지면 값이 출발점 그대로 남아 갈린다.
+ */
+function addContainer(out: Map<string, Case>, inp: Inputs): void {
+  const STEPS = 3;
+
+  const run = (
+    name: string,
+    build: () => nn.Module,
+    load: (m: nn.Module) => void,
+    forward: (m: nn.Module, x: Tensor) => Tensor,
+    want: string,
+  ): void => {
+    out.set(`container::${name}/이름`,
+      () => Object.keys(build().namedParameters()).join(" "));
+    out.set(`container::${name}/학습`, () => {
+      const m = build();
+      load(m);
+      const opt = new optim.SGD(m.parameters(), 0.05);
+      const x = inp.get("train_x");
+      for (let i = 0; i < STEPS; i++) {
+        opt.zeroGrad();
+        const o = forward(m, x);
+        // 자리마다 다른 가중치를 곱해 접는다 — 그냥 `sum()` 이면 기울기가 전부 1 이라
+        // 어느 자리가 안 움직였는지가 값에 안 남는다.
+        o.mul(Tensor.arange(o.size).reshape(o.shape)).sum().backward();
+        opt.step();
+      }
+      const got = m.namedParameters()[want];
+      if (!got) throw new Error(`${want} 가 없다`);
+      return got;
+    });
+  };
+
+  // ── 이름 붙인 자식. torch 의 `self.fc1 = …` 자리다. ──────────────────────
+  class Named extends nn.Module {
+    readonly fc1 = new nn.Linear(6, 8);
+    readonly fc2 = new nn.Linear(8, 3);
+
+    override namedChildren(): Record<string, nn.Module> {
+      return { fc1: this.fc1, fc2: this.fc2 };
+    }
+
+    override forward(x: Tensor): Tensor {
+      return this.fc2.call(this.fc1.call(x).relu());
+    }
+  }
+
+  const loadTwo = (m: nn.Module, a: string, b: string): void => {
+    m.loadStateDict({
+      [`${a}.weight`]: inp.get("w0"), [`${a}.bias`]: inp.get("b0"),
+      [`${b}.weight`]: inp.get("w1"), [`${b}.bias`]: inp.get("b1"),
+    });
+  };
+
+  run("상속", () => new Named(), (m) => loadTwo(m, "fc1", "fc2"),
+    (m, x) => m.forward(x), "fc1.weight");
+
+  // ── ModuleList — 생성자로 세운 것과 `append` 로 세운 것. ─────────────────
+  class Listed extends nn.Module {
+    readonly layers: nn.ModuleList;
+
+    constructor(appended: boolean) {
+      super();
+      this.layers = appended ? new nn.ModuleList() : new nn.ModuleList([
+        new nn.Linear(6, 8), new nn.Linear(8, 3),
+      ]);
+      if (appended) {
+        this.layers.append(new nn.Linear(6, 8));
+        this.layers.append(new nn.Linear(8, 3));
+      }
+    }
+
+    override namedChildren(): Record<string, nn.Module> {
+      return { layers: this.layers };
+    }
+
+    override forward(x: Tensor): Tensor {
+      return this.layers.at(1).call(this.layers.at(0).call(x).relu());
+    }
+  }
+
+  run("ModuleList", () => new Listed(false),
+    (m) => loadTwo(m, "layers.0", "layers.1"),
+    (m, x) => m.forward(x), "layers.0.weight");
+  run("ModuleList(append)", () => new Listed(true),
+    (m) => loadTwo(m, "layers.0", "layers.1"),
+    (m, x) => m.forward(x), "layers.1.weight");
+
+  // ── ModuleDict — 이름으로 갈래를 고른다. ────────────────────────────────
+  class Dicted extends nn.Module {
+    readonly blocks = new nn.ModuleDict({
+      down: new nn.Linear(6, 8), up: new nn.Linear(8, 3),
+    });
+
+    override namedChildren(): Record<string, nn.Module> {
+      return { blocks: this.blocks };
+    }
+
+    override forward(x: Tensor): Tensor {
+      return this.blocks.at("up").call(this.blocks.at("down").call(x).relu());
+    }
+  }
+
+  run("ModuleDict", () => new Dicted(),
+    (m) => loadTwo(m, "blocks.down", "blocks.up"),
+    (m, x) => m.forward(x), "blocks.down.weight");
+
+  // ── ParameterList·ParameterDict — 층에 안 붙은 파라미터. ────────────────
+  //
+  // `w0` 를 눕혀(`(6,8)`) `x @ w` 가 되게 한다. 잎으로 다시 세우는 것이 요점이다 —
+  // 전치한 결과를 그대로 쓰면 부모가 달린 텐서라 파라미터가 아니다.
+  const flatW = (): Tensor => asLeaf(inp.get("w0").transpose());
+  const bias = (): Tensor => asLeaf(inp.get("b0"));
+
+  class PList extends nn.Module {
+    readonly ws = new nn.ParameterList([flatW(), bias()]);
+
+    override namedChildren(): Record<string, nn.Module> {
+      return { ws: this.ws };
+    }
+
+    override forward(x: Tensor): Tensor {
+      return x.mm(this.ws.at(0)).add(this.ws.at(1));
+    }
+  }
+
+  run("ParameterList", () => new PList(), () => undefined,
+    (m, x) => m.forward(x), "ws.0");
+
+  class PDict extends nn.Module {
+    readonly ws = new nn.ParameterDict({ w: flatW(), b: bias() });
+
+    override namedChildren(): Record<string, nn.Module> {
+      return { ws: this.ws };
+    }
+
+    override forward(x: Tensor): Tensor {
+      return x.mm(this.ws.at("w")).add(this.ws.at("b"));
+    }
+  }
+
+  run("ParameterDict", () => new PDict(), () => undefined,
+    (m, x) => m.forward(x), "ws.w");
+
+  // ── `stateDict` 의 열쇠. 갈리면 남의 체크포인트를 못 읽는다. ────────────
+  out.set("container::상속/state_dict 열쇠",
+    () => Object.keys(new Named().stateDict()).sort().join(" "));
+  out.set("container::ModuleDict/state_dict 열쇠",
+    () => Object.keys(new Dicted().stateDict()).sort().join(" "));
+
+  // ── `eval()` 이 컨테이너를 뚫고 내려가는가. ─────────────────────────────
+  //
+  // 갓 세운 BatchNorm 은 `running_mean=0`·`running_var=1` 이라 평가 모드의 출력이
+  // 입력과 거의 같고, 학습 모드는 배치 통계로 정규화해 눈에 띄게 다른 값이 된다.
+  class Normed extends nn.Module {
+    readonly layers = new nn.ModuleList([
+      new nn.Linear(6, 8), new nn.BatchNormND(8),
+    ]);
+
+    override namedChildren(): Record<string, nn.Module> {
+      return { layers: this.layers };
+    }
+
+    override forward(x: Tensor): Tensor {
+      return this.layers.at(1).call(this.layers.at(0).call(x));
+    }
+  }
+
+  out.set("container::eval 이 컨테이너를 뚫는다", () => {
+    const m = new Normed();
+    m.loadStateDict({
+      "layers.0.weight": inp.get("w0"), "layers.0.bias": inp.get("b0"),
+    }, false);
+    m.eval();
+    return m.forward(inp.get("train_x"));
+  });
+}
+
 function addTrain(out: Map<string, Case>, inp: Inputs): void {
   const build = (kind: "SGD" | "SGD(모멘텀)" | "Adam" | "RMSprop"): nn.Sequential => {
     const model = new nn.Sequential([

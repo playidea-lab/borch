@@ -80,14 +80,30 @@ export abstract class Module {
     return [];
   }
 
-  /** `0.weight` 처럼 자리 번호를 앞에 붙인 이름표. */
+  /**
+   * 자식을 **이름과 함께** 준다. 기본은 자리 번호다 — `Sequential` 이 그 모양이다.
+   *
+   * 이것이 없을 때는 `namedParameters` 가 자식을 번호로만 불렀고, 그러면
+   * `fc1.weight` 같은 이름을 낼 수가 없었다. torch 는 속성 이름을 쓰는데
+   * TypeScript 에는 속성을 훑어 층을 알아보는 자리가 없으므로, 이름을 붙이고
+   * 싶은 층이 여기를 덮어쓴다.
+   *
+   * **`state_dict` 의 열쇠가 이 이름이다.** 갈리면 남의 체크포인트를 못 읽는다.
+   */
+  namedChildren(): Record<string, Module> {
+    const out: Record<string, Module> = {};
+    for (const [i, child] of this.children().entries()) out[String(i)] = child;
+    return out;
+  }
+
+  /** `0.weight` 처럼 자리 이름을 앞에 붙인 이름표. */
   namedParameters(prefix = ""): Record<string, Tensor> {
     const out: Record<string, Tensor> = {};
     for (const [name, p] of Object.entries(this.ownParameters())) {
       out[`${prefix}${name}`] = p;
     }
-    for (const [i, child] of this.children().entries()) {
-      Object.assign(out, child.namedParameters(`${prefix}${i}.`));
+    for (const [name, child] of Object.entries(this.namedChildren())) {
+      Object.assign(out, child.namedParameters(`${prefix}${name}.`));
     }
     return out;
   }
@@ -134,7 +150,9 @@ export abstract class Module {
 
   train(mode = true): this {
     this.training = mode;
-    for (const c of this.children()) c.train(mode);
+    // **`namedChildren` 으로 돈다.** 이름을 붙인 층이 `children` 을 안 덮어써도
+    // 모드가 내려가야 한다 — 안 그러면 학습은 멀쩡하고 추론만 틀린다.
+    for (const c of Object.values(this.namedChildren())) c.train(mode);
     return this;
   }
 
@@ -169,6 +187,187 @@ export class Sequential extends Module {
     // 남이 볼 예시에서 지워진다.
     for (const layer of this.layers) cur = layer.call(cur);
     return cur;
+  }
+}
+
+/**
+ * 층 목록. 번호가 곧 이름이다 — `layers.0.weight`.
+ *
+ * `Sequential` 과 다른 점은 **부르지 않는다**는 것이다. 어떤 순서로 어떻게 쓸지는
+ * 가진 쪽이 정하고, 이쪽은 파라미터가 보이게만 한다. 층 수가 정해지지 않은 모델이
+ * 이것을 쓴다.
+ */
+export class ModuleList extends Module {
+  private readonly items: Module[];
+
+  constructor(mods: readonly Module[] = []) {
+    super();
+    this.items = [...mods];
+  }
+
+  override children(): Module[] {
+    return this.items;
+  }
+
+  /** **부르는 층이 아니다.** 지나가려 하면 여기서 멈춘다 — torch 도 그렇다. */
+  override forward(): Tensor {
+    throw new Error("ModuleList 는 부르는 층이 아니다 — 안의 층을 골라 불러라");
+  }
+
+  append(module: Module): this {
+    this.items.push(module);
+    return this;
+  }
+
+  extend(mods: readonly Module[]): this {
+    this.items.push(...mods);
+    return this;
+  }
+
+  insert(index: number, module: Module): this {
+    this.items.splice(index, 0, module);
+    return this;
+  }
+
+  at(i: number): Module {
+    const got = this.items.at(i);
+    if (!got) throw new Error(`ModuleList 자리 ${i} 가 없다 (길이 ${this.items.length})`);
+    return got;
+  }
+
+  get length(): number {
+    return this.items.length;
+  }
+
+  [Symbol.iterator](): Iterator<Module> {
+    return this.items[Symbol.iterator]();
+  }
+}
+
+/**
+ * torch 의 순서 규칙. **평범한 객체는 열쇠를 정렬해서 넣는다.**
+ *
+ * 안 맞추면 `namedParameters` 의 순서가 갈리고 그것이 곧 `stateDict` 의 순서다 —
+ * 골든이 실제로 이 자리를 잡았다(`{w, b}` 에 torch 는 `ws.b ws.w` 를 냈다).
+ */
+function sortedEntries<T>(obj: Readonly<Record<string, T>>): [string, T][] {
+  return Object.entries(obj).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** 이름 붙은 층 묶음. 준 이름이 그대로 `stateDict` 열쇠가 된다. */
+export class ModuleDict extends Module {
+  private readonly items = new Map<string, Module>();
+
+  constructor(mods: Readonly<Record<string, Module>> = {}) {
+    super();
+    for (const [name, m] of sortedEntries(mods)) this.items.set(name, m);
+  }
+
+  override children(): Module[] {
+    return [...this.items.values()];
+  }
+
+  override namedChildren(): Record<string, Module> {
+    return Object.fromEntries(this.items);
+  }
+
+  override forward(): Tensor {
+    throw new Error("ModuleDict 는 부르는 층이 아니다 — 안의 층을 골라 불러라");
+  }
+
+  at(key: string): Module {
+    const got = this.items.get(key);
+    if (!got) throw new Error(`ModuleDict 에 '${key}' 가 없다`);
+    return got;
+  }
+
+  set(key: string, module: Module): this {
+    this.items.set(key, module);
+    return this;
+  }
+
+  has(key: string): boolean {
+    return this.items.has(key);
+  }
+
+  keys(): string[] {
+    return [...this.items.keys()];
+  }
+}
+
+/**
+ * 학습되는 텐서 목록. **이것이 없으면 대신할 방법이 없다.**
+ *
+ * 층에 안 붙은 파라미터는 `ownParameters` 를 손으로 적지 않는 한 아무 데도 안
+ * 잡힌다. 안 잡히면 옵티마이저가 못 보고, 못 보면 안 갱신하고, 그런데 **손실은
+ * 내려간다** — 남은 파라미터가 대신 맞추기 때문이다. 예외도 경고도 없다.
+ */
+export class ParameterList extends Module {
+  private readonly items: Tensor[];
+
+  constructor(params: readonly Tensor[] = []) {
+    super();
+    this.items = [...params];
+    this.claim(...this.items);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return Object.fromEntries(this.items.map((p, i) => [String(i), p]));
+  }
+
+  override forward(): Tensor {
+    throw new Error("ParameterList 는 부르는 층이 아니다");
+  }
+
+  append(param: Tensor): this {
+    this.claim(param);
+    this.items.push(param);
+    return this;
+  }
+
+  at(i: number): Tensor {
+    const got = this.items.at(i);
+    if (!got) throw new Error(`ParameterList 자리 ${i} 가 없다 (길이 ${this.items.length})`);
+    return got;
+  }
+
+  get length(): number {
+    return this.items.length;
+  }
+}
+
+/** 이름 붙은 파라미터 묶음. `ParameterList` 와 같은 이유로 있다. */
+export class ParameterDict extends Module {
+  private readonly items = new Map<string, Tensor>();
+
+  constructor(params: Readonly<Record<string, Tensor>> = {}) {
+    super();
+    for (const [name, p] of sortedEntries(params)) this.items.set(name, p);
+    this.claim(...this.items.values());
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return Object.fromEntries(this.items);
+  }
+
+  override forward(): Tensor {
+    throw new Error("ParameterDict 는 부르는 층이 아니다");
+  }
+
+  at(key: string): Tensor {
+    const got = this.items.get(key);
+    if (!got) throw new Error(`ParameterDict 에 '${key}' 가 없다`);
+    return got;
+  }
+
+  set(key: string, param: Tensor): this {
+    this.claim(param);
+    this.items.set(key, param);
+    return this;
+  }
+
+  keys(): string[] {
+    return [...this.items.keys()];
   }
 }
 

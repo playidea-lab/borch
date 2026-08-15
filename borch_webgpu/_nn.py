@@ -129,8 +129,10 @@ class Module:
         for key, value in vars(self).items():
             if key.startswith("_"):
                 continue
-            if isinstance(value, (Module, _Wrap, _Sequential)) or \
-                    isinstance(value, Tensor):
+            # **`_Holder` 를 빠뜨리면 컨테이너가 컨테이너 노릇을 못 한다.** 그 클래스들이
+            # 있는 이유가 "맨 리스트는 안 보인다" 인데, 여기 안 적으면 컨테이너 자신이
+            # 안 보이게 되어 같은 자리로 돌아온다.
+            if isinstance(value, (Module, _Wrap, _Sequential, _Holder, Tensor)):
                 got.append((key, value))
         return got
 
@@ -327,6 +329,269 @@ def _params_of(m):
 
 def _state_of(m):
     return m.state_dict() if hasattr(m, "state_dict") else {}
+
+
+# ── 컨테이너 ────────────────────────────────────────────────────────────────
+#
+# **여기가 조용히 틀리는 자리다.** 맨 리스트에 층이나 파라미터를 담아 속성으로 붙이면
+# `Module._children()` 이 그것을 못 알아본다 — `parameters()` 가 안 내놓고, 옵티마이저가
+# 못 보고, 그런데 **손실은 내려간다**(남은 파라미터가 대신 맞춘다). 예외도 경고도 없다.
+#
+# torch 도 똑같이 못 알아보고, 그래서 torch 에 이 네 클래스가 있다.
+
+def Parameter(value, requires_grad=True):
+    """학습되는 텐서. torch 는 `Tensor` 의 하위 클래스인데 여기서는 **잎 텐서**다.
+
+    borch.ts 에 `Parameter` 라는 것이 따로 없다 — 기울기를 받는 잎이면 그것이
+    파라미터다. 값을 CPU 로 한 번 돌려 새 잎으로 세우는데, 모델을 세울 때 한 번씩만
+    도는 자리라 학습 루프의 비용이 아니다.
+    """
+    from ._base import tensor as _t
+
+    arr = value.numpy() if isinstance(value, Tensor) else value
+    return _t(arr, requires_grad=requires_grad)
+
+
+class _Holder:
+    """컨테이너 넷이 나눠 쓰는 살림. **이름 규칙이 여기 한 군데 있어야 한다.**
+
+    `state_dict` 열쇠는 `layers.0.weight` 처럼 자리 이름을 앞에 붙여 만드는데, 그
+    규칙이 컨테이너마다 따로 적히면 하나가 갈렸을 때 어디서 갈렸는지 못 찾는다.
+    """
+
+    def parameters(self):
+        return [p for _, m in self._entries() for p in _params_of(m)]
+
+    def state_dict(self):
+        out = {}
+        for name, m in self._entries():
+            for k, v in _state_of(m).items():
+                out[f"{name}.{k}"] = v
+        return out
+
+    def named_parameters(self):
+        return list(self.state_dict().items())
+
+    def load_state_dict(self, values, strict=True):
+        own = dict(self._entries())
+        groups = {}
+        for key, v in values.items():
+            head, _, rest = key.partition(".")
+            groups.setdefault(head, {})[rest] = v
+        for head, sub in groups.items():
+            if head in own:
+                own[head].load_state_dict(sub, strict)
+            elif strict:
+                raise RuntimeError(f"load_state_dict: 모르는 이름 '{head}'")
+        return self
+
+    def train(self, mode=True):
+        for _, m in self._entries():
+            if hasattr(m, "train"):
+                m.train(mode)
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+
+def _ordered(mapping):
+    """torch 의 순서 규칙. **평범한 dict 는 열쇠를 정렬해서 넣는다.**
+
+    `OrderedDict` 로 주면 넣은 순서를 지키고 그냥 `dict` 면 정렬한다. 안 맞추면
+    `named_parameters` 의 순서가 갈리고 그것이 곧 `state_dict` 의 순서다 — 골든이
+    실제로 이 자리를 잡았다(`{"w":…, "b":…}` 에 torch 는 `ws.b ws.w` 를 냈다).
+    """
+    import collections as _c
+
+    items = dict(mapping or {})
+    if isinstance(mapping, (_ModuleDict, _ParameterDict, _c.OrderedDict)):
+        return list(items.items())
+    return sorted(items.items(), key=lambda kv: str(kv[0]))
+
+
+class _ModuleList(_Holder):
+    """층 목록. 번호가 곧 이름이다 — `layers.0.weight`.
+
+    `append` 가 없으면 층 수가 정해지지 않은 모델을 쓸 방법이 없다.
+    """
+
+    def __init__(self, mods=()):
+        self.layers = list(mods)
+
+    def _entries(self):
+        return [(str(i), m) for i, m in enumerate(self.layers)]
+
+    def append(self, module):
+        self.layers.append(module)
+        return self
+
+    def extend(self, mods):
+        self.layers.extend(mods)
+        return self
+
+    def insert(self, index, module):
+        self.layers.insert(index, module)
+        return self
+
+    def __getitem__(self, i):
+        return self.layers[i]
+
+    def __setitem__(self, i, module):
+        self.layers[i] = module
+
+    def __iadd__(self, mods):
+        return self.extend(mods)
+
+    def __iter__(self):
+        return iter(self.layers)
+
+    def __len__(self):
+        return len(self.layers)
+
+
+class _ModuleDict(_Holder):
+    """이름 붙은 층 묶음. 준 이름이 그대로 `state_dict` 열쇠가 된다."""
+
+    def __init__(self, mods=None):
+        self.mods = dict(_ordered(mods))
+
+    def _entries(self):
+        return list(self.mods.items())
+
+    def __getitem__(self, key):
+        return self.mods[key]
+
+    def __setitem__(self, key, module):
+        self.mods[str(key)] = module
+
+    def __contains__(self, key):
+        return key in self.mods
+
+    def __iter__(self):
+        return iter(self.mods)
+
+    def __len__(self):
+        return len(self.mods)
+
+    def keys(self):
+        return self.mods.keys()
+
+    def values(self):
+        return self.mods.values()
+
+    def items(self):
+        return self.mods.items()
+
+    def update(self, mods):
+        self.mods.update(dict(_ordered(mods)))
+        return self
+
+
+class _ParamHolder(_Holder):
+    """파라미터를 직접 담는 쪽. 잎이 텐서라 `_Holder` 의 순회를 못 쓴다."""
+
+    def parameters(self):
+        return [p for _, p in self._entries()]
+
+    def state_dict(self):
+        return dict(self._entries())
+
+    def load_state_dict(self, values, strict=True):
+        own = dict(self._entries())
+        for key, v in values.items():
+            if key in own:
+                own[key]._h.copyFrom(handle(v))
+            elif strict:
+                raise RuntimeError(f"load_state_dict: 모르는 이름 '{key}'")
+        return self
+
+    def train(self, mode=True):
+        return self
+
+
+class _ParameterList(_ParamHolder):
+    """`Parameter` 목록. **이것이 없으면 대신할 방법이 없다.**"""
+
+    def __init__(self, params=()):
+        self.params = list(params)
+
+    def _entries(self):
+        return [(str(i), p) for i, p in enumerate(self.params)]
+
+    def append(self, param):
+        self.params.append(param)
+        return self
+
+    def extend(self, params):
+        self.params.extend(params)
+        return self
+
+    def __getitem__(self, i):
+        return self.params[i]
+
+    def __setitem__(self, i, param):
+        self.params[i] = param
+
+    def __iter__(self):
+        return iter(self.params)
+
+    def __len__(self):
+        return len(self.params)
+
+
+class _ParameterDict(_ParamHolder):
+    """이름 붙은 `Parameter` 묶음."""
+
+    def __init__(self, params=None):
+        self.params = dict(_ordered(params))
+
+    def _entries(self):
+        return list(self.params.items())
+
+    def __getitem__(self, key):
+        return self.params[key]
+
+    def __setitem__(self, key, param):
+        self.params[str(key)] = param
+
+    def __contains__(self, key):
+        return key in self.params
+
+    def __iter__(self):
+        return iter(self.params)
+
+    def __len__(self):
+        return len(self.params)
+
+    def keys(self):
+        return self.params.keys()
+
+    def values(self):
+        return self.params.values()
+
+    def items(self):
+        return self.params.items()
+
+    def update(self, params):
+        self.params.update(dict(_ordered(params)))
+        return self
+
+
+def ModuleList(mods=()):
+    return _ModuleList(mods)
+
+
+def ModuleDict(mods=None):
+    return _ModuleDict(mods)
+
+
+def ParameterList(params=()):
+    return _ParameterList(params)
+
+
+def ParameterDict(params=None):
+    return _ParameterDict(params)
 
 
 def Sequential(*layers):

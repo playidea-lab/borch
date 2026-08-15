@@ -1,5 +1,6 @@
 """borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
 
+import collections as _collections
 import math as _math
 
 import numpy as _np
@@ -225,11 +226,46 @@ class Sequential(Module):
 
 
 class ModuleList(Module):
+    """층 목록. **번호가 곧 이름이다** — `layers.0.weight` 처럼.
+
+    `append` 가 없으면 층 수가 정해지지 않은 모델을 쓸 방법이 없다. torch 코드에서
+    가장 흔한 모양이 그것이다:
+
+        self.layers = nn.ModuleList()
+        for _ in range(depth):
+            self.layers.append(Block())
+    """
+
     def __init__(self, mods=()):
         super().__init__()
         self._layers = list(mods)
         for i, m in enumerate(self._layers):
             self._modules[str(i)] = m
+
+    def _renumber(self):
+        """`_modules` 를 목록 순서대로 다시 매긴다.
+
+        `insert` 가 있으면 번호가 밀리므로 통째로 다시 쓴다. 밀린 자리만 고치면
+        중간에 옛 이름이 남고, 그것은 `state_dict` 열쇠로 새어 나온다.
+        """
+        self._modules.clear()
+        for i, m in enumerate(self._layers):
+            self._modules[str(i)] = m
+
+    def append(self, module):
+        self._layers.append(module)
+        self._modules[str(len(self._layers) - 1)] = module
+        return self
+
+    def extend(self, mods):
+        for m in mods:
+            self.append(m)
+        return self
+
+    def insert(self, index, module):
+        self._layers.insert(index, module)
+        self._renumber()
+        return self
 
     def __iter__(self):
         return iter(self._layers)
@@ -237,8 +273,153 @@ class ModuleList(Module):
     def __getitem__(self, i):
         return self._layers[i]
 
+    def __setitem__(self, i, module):
+        self._layers[i] = module
+        self._renumber()
+
+    def __iadd__(self, mods):
+        return self.extend(mods)
+
     def __len__(self):
         return len(self._layers)
+
+
+def _ordered(mapping):
+    """torch 의 순서 규칙. **평범한 dict 는 열쇠를 정렬해서 넣는다.**
+
+    `OrderedDict` 나 같은 종류의 컨테이너로 주면 넣은 순서를 지키고, 그냥 `dict`
+    로 주면 정렬한다. torch 가 그렇게 하는데(옛 파이썬의 dict 가 순서를 안 지켰다),
+    안 맞추면 `named_parameters` 의 순서가 갈리고 그것이 곧 `state_dict` 의 순서다.
+
+    골든이 이 자리를 잡았다 — `{"w": …, "b": …}` 를 넣었더니 torch 는 `ws.b ws.w`
+    를 내고 우리는 `ws.w ws.b` 를 냈다. 두 열쇠를 알파벳 순으로 골랐으면 우연히
+    통과했을 자리다.
+    """
+    items = dict(mapping or {})
+    if isinstance(mapping, (ModuleDict, ParameterDict, _collections.OrderedDict)):
+        return list(items.items())
+    return sorted(items.items(), key=lambda kv: str(kv[0]))
+
+
+class ModuleDict(Module):
+    """이름 붙은 층 묶음. 갈래를 이름으로 고르는 모델이 쓴다.
+
+    번호 대신 준 이름이 그대로 `state_dict` 열쇠가 된다 — `blocks.down.weight`.
+    """
+
+    def __init__(self, mods=None):
+        super().__init__()
+        for name, m in _ordered(mods):
+            self._modules[str(name)] = m
+
+    def __getitem__(self, key):
+        return self._modules[key]
+
+    def __setitem__(self, key, module):
+        self._modules[str(key)] = module
+
+    def __contains__(self, key):
+        return key in self._modules
+
+    def __iter__(self):
+        return iter(self._modules)
+
+    def __len__(self):
+        return len(self._modules)
+
+    def keys(self):
+        return self._modules.keys()
+
+    def values(self):
+        return self._modules.values()
+
+    def items(self):
+        return self._modules.items()
+
+    def update(self, mods):
+        for name, m in _ordered(mods):
+            self._modules[str(name)] = m
+        return self
+
+
+class ParameterList(Module):
+    """`Parameter` 목록. **이것이 없으면 대신할 방법이 없다.**
+
+    맨 리스트에 `Parameter` 를 담아 속성으로 붙이면 `Module.__setattr__` 이 그것을
+    `Parameter` 로도 `Module` 로도 못 알아본다. 어느 목록에도 안 들어가고,
+    `parameters()` 가 안 내놓고, 옵티마이저가 못 본다 — 그런데 **손실은 내려간다.**
+    남은 파라미터가 대신 맞추기 때문이다. 예외도 경고도 없다.
+
+    torch 도 똑같이 못 알아보고, 그래서 torch 에 이 클래스가 있다.
+    """
+
+    def __init__(self, params=()):
+        super().__init__()
+        for i, p in enumerate(params):
+            self._params[str(i)] = p
+
+    def _at(self, i):
+        keys = list(self._params)
+        return keys[i]
+
+    def append(self, param):
+        self._params[str(len(self._params))] = param
+        return self
+
+    def extend(self, params):
+        for p in params:
+            self.append(p)
+        return self
+
+    def __getitem__(self, i):
+        return self._params[self._at(i)]
+
+    def __setitem__(self, i, param):
+        self._params[self._at(i)] = param
+
+    def __iter__(self):
+        return iter(self._params.values())
+
+    def __len__(self):
+        return len(self._params)
+
+
+class ParameterDict(Module):
+    """이름 붙은 `Parameter` 묶음. `ParameterList` 와 같은 이유로 있다."""
+
+    def __init__(self, params=None):
+        super().__init__()
+        for name, p in _ordered(params):
+            self._params[str(name)] = p
+
+    def __getitem__(self, key):
+        return self._params[key]
+
+    def __setitem__(self, key, param):
+        self._params[str(key)] = param
+
+    def __contains__(self, key):
+        return key in self._params
+
+    def __iter__(self):
+        return iter(self._params)
+
+    def __len__(self):
+        return len(self._params)
+
+    def keys(self):
+        return self._params.keys()
+
+    def values(self):
+        return self._params.values()
+
+    def items(self):
+        return self._params.items()
+
+    def update(self, params):
+        for name, p in _ordered(params):
+            self._params[str(name)] = p
+        return self
 
 
 class MSELoss(Module):
@@ -1039,6 +1220,9 @@ nn.Transformer = Transformer
 nn.MaxPool2d = MaxPool2d
 nn.Sequential = Sequential
 nn.ModuleList = ModuleList
+nn.ModuleDict = ModuleDict
+nn.ParameterList = ParameterList
+nn.ParameterDict = ParameterDict
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
 nn.BCEWithLogitsLoss = BCEWithLogitsLoss
