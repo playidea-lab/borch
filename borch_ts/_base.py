@@ -380,7 +380,39 @@ def settle(out):
         return _Pair(out)
     if _js.Array.isArray(out):
         return [wrap(x) if _js.borch.isTensor(x) else x for x in out]
+    # **이름 붙은 자리를 여럿 주는 것들** — `slogdet` 의 `{sign, logabs}`,
+    # `qr` 의 `{q, r}`, `svd` 의 `{u, s, vt}`. 그대로 흘리면 파이썬에서 첨자도
+    # 속성 접근도 안 되는 프록시가 남는다.
+    if hasattr(out, "constructor") and str(getattr(out, "constructor", "")) and \
+            not callable(out) and hasattr(out, "toString"):
+        keys = [str(k) for k in _js.Object.keys(out)]
+        if keys and all(not k.isdigit() for k in keys):
+            return _Fields({k: getattr(out, k) for k in keys})
     return out
+
+
+class _Fields:
+    """이름 붙은 자리를 여럿 주는 답. 첨자로도 이름으로도 닿는다 — torch 가 그렇다."""
+
+    __slots__ = ("_d", "_order")
+
+    def __init__(self, d):
+        self._order = list(d)
+        object.__setattr__(self, "_d", {
+            k: (wrap(v) if _js.borch.isTensor(v) else v) for k, v in d.items()})
+
+    def __getattr__(self, name):
+        try:
+            return self._d[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __getitem__(self, i):
+        return self._d[self._order[i]] if isinstance(i, int) else self._d[i]
+
+    def __iter__(self):
+        for k in self._order:
+            yield self._d[k]
 
 
 def guarded(fn, *args):

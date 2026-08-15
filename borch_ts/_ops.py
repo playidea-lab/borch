@@ -115,6 +115,10 @@ _SIGNATURE = {
     "expand": ("shape",),
     "unflatten": ("dim", "sizes"),
     "quantile": ("q", "dim"),
+    "add_": ("other", "alpha"),
+    "sub_": ("other", "alpha"),
+    "add": ("other", "alpha"),
+    "sub": ("other", "alpha"),
 }
 
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
@@ -279,6 +283,22 @@ def stack(parts, dim=0):
     return wrap(_ts.Tensor.stack(_js.Array.from_([p._h for p in parts]), dim))
 
 
+class no_grad:                                           # noqa: N801
+    """`with L.no_grad():`.
+
+    borch.ts 의 `noGrad` 는 **함수를 받는다**(`noGrad(() => …)`). 파이썬은 `with` 를
+    쓰므로 여기서 모양을 바꾼다 — 안쪽 스위치를 직접 여닫는다.
+    """
+
+    def __enter__(self):
+        _ts.gradMode.enabled = False
+        return self
+
+    def __exit__(self, *exc):
+        _ts.gradMode.enabled = True
+        return False
+
+
 def linspace(start, end, count, **kw):
     return wrap(_ts.Tensor.linspace(start, end, count))
 
@@ -306,8 +326,8 @@ def rand(*shape, **kw):
 
 
 def einsum(spec, *operands):
-    """borch.ts 의 `einsum` 은 정적 함수다 — 첫 인자가 텐서가 아니다."""
-    return guarded(_ts.einsum, spec, _js.Array.new(*[handle(t) for t in operands]))
+    """borch.ts 의 `einsum` 은 자유 함수이고 **피연산자를 흩어서** 받는다."""
+    return guarded(_ts.einsum, spec, *[handle(t) for t in operands])
 
 
 def as_tensor(data, dtype=None):
@@ -360,6 +380,9 @@ class _MinMax:
     def __iter__(self):
         yield self.min
         yield self.max
+
+    def __getitem__(self, i):
+        return (self.min, self.max)[i]
 
 
 # **`torch.linalg` 는 이름 공간이다.** 대부분 텐서 메서드로 있고, 값에 따라 크기가

@@ -61,6 +61,10 @@ export {
 import { Tensor as TensorClass } from "./tensor.js";
 
 export { Device } from "./device.js";
+export { einsum } from "./einsum.js";
+// **밖에서 여닫을 수 있어야 한다.** `noGrad(fn)` 은 함수를 받는 모양이라 파이썬의
+// `with` 로 옮길 수가 없다 — 결속이 스위치를 직접 쥔다.
+export { gradMode } from "./autograd.js";
 
 /**
  * 이것이 텐서인가.

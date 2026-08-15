@@ -265,14 +265,44 @@ def CrossEntropyLoss():
     return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(handle(b))))
 
 
+class _Recurrent(Module):
+    """**torch 의 순환망은 튜플을 준다** — `(출력, 마지막상태)`.
+
+    borch.ts 의 `forward` 는 출력만 주고 `run()` 이 셋을 함께 준다. LSTM 은 상태가
+    둘(`h`, `c`)이라 `(출력, (h, c))` 이고, 나머지는 `(출력, h)` 다. 모양까지 맞춘다 —
+    torch 의 마지막 상태는 `(층수, 배치, 은닉)` 이라 축이 하나 더 있다.
+    """
+
+    def __call__(self, x, *rest):
+        got = self._m.run(handle(x))
+        out, h = wrap(got.output), wrap(got.hidden)
+        h = wrap(h._h.unsqueeze(0))
+        if self._m.kind == "LSTM":
+            c = wrap(wrap(got.cell)._h.unsqueeze(0))
+            return out, (h, c)
+        return out, h
+
+
 def _recurrent(kind):
     def make(inp, hid, **kw):
-        return _layer("Recurrent", inp, hid, kind)
+        return _Recurrent(_ts.nn.Recurrent.new(inp, hid, kind))
     return make
 
 
 RNN, LSTM, GRU = _recurrent("RNN"), _recurrent("LSTM"), _recurrent("GRU")
 
 
+class _Attention(Module):
+    """torch 의 어텐션은 `(질의, 키, 값)` 셋을 받고 `(출력, 가중치)` 를 준다."""
+
+    def __call__(self, q, k=None, v=None, attn_mask=None, **kw):
+        got = self._m.call(handle(q), handle(k if k is not None else q),
+                           handle(v if v is not None else q),
+                           handle(attn_mask) if attn_mask is not None else None)
+        if _ts.isTensor(got):
+            return wrap(got), None
+        return wrap(got.output), wrap(got.weights)
+
+
 def MultiheadAttention(embed, heads, batch_first=False):
-    return _layer("MultiheadAttention", embed, heads)
+    return _Attention(_ts.nn.MultiheadAttention.new(embed, heads))
