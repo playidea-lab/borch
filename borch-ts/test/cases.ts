@@ -465,6 +465,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addPad(out);
   addLoss(out);
   addLazy(out);
+  addShuffle(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -972,6 +973,124 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
  * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
  * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
  */
+/**
+ * 자리를 옮기는 층 셋과 채널째 떨구는 dropout 다섯.
+ *
+ * 난수가 안 끼는 자리는 값으로, 끼는 자리는 성질로 묻는다 — 자세한 것은
+ * `tests/cases.py` 의 `shuffle_cases` 에 적었다.
+ */
+function addShuffle(out: Map<string, Case>): void {
+  const seq = (n: number, shape: number[]) =>
+    Tensor.from(Array.from({ length: n }, (_, i) => i), shape);
+  const pix = () => seq(32, [1, 8, 2, 2]);
+  const flat = () => seq(16, [1, 1, 4, 4]);
+  const chan = () => seq(4, [1, 4, 1, 1]);
+  const chan6 = () => seq(12, [1, 6, 2, 1]);
+  const img = () => seq(16, [1, 4, 2, 2]);
+
+  const value: [string, () => Tensor][] = [
+    ["pixel_shuffle", () => pix().pixelShuffle(2)],
+    ["pixel_unshuffle", () => flat().pixelUnshuffle(2)],
+    ["pixel 왕복", () => pix().pixelShuffle(2).pixelUnshuffle(2)],
+    ["channel_shuffle(2)", () => chan().channelShuffle(2)],
+    ["channel_shuffle(3)", () => chan6().channelShuffle(3)],
+    ["층::PixelShuffle", () => new nn.PixelShuffle(2).call(pix())],
+    ["층::PixelUnshuffle", () => new nn.PixelUnshuffle(2).call(flat())],
+    ["층::ChannelShuffle", () => new nn.ChannelShuffle(2).call(chan())],
+  ];
+  for (const [name, fn] of value) out.set(`shuffle::${name}`, fn);
+
+  out.set("shuffle::grad::pixel_shuffle", () => {
+    const x = Tensor.from(Array.from({ length: 32 }, (_, i) => i),
+      [1, 8, 2, 2], true);
+    seeded(x.pixelShuffle(2)).backward();
+    return gradOf(x, "pixel_shuffle");
+  });
+
+  for (const [name, make] of [
+    ["PixelShuffle", () => new nn.PixelShuffle(2)],
+    ["PixelUnshuffle", () => new nn.PixelUnshuffle(2)],
+    ["ChannelShuffle", () => new nn.ChannelShuffle(2)],
+  ] as const) {
+    out.set(`shuffle::repr::${name}`, async () => make().describe());
+  }
+
+  // 난수가 안 끼는 자리는 값으로.
+  const ranks: Record<string, () => Tensor> = {
+    dropout1d: () => seq(12, [1, 4, 3]),
+    dropout2d: img,
+    dropout3d: () => seq(6, [1, 3, 2, 1, 1]),
+    alpha_dropout: img,
+    feature_alpha_dropout: img,
+  };
+  for (const [name, src] of Object.entries(ranks)) {
+    const alpha = name.includes("alpha");
+    const perChannel = name !== "alpha_dropout";
+    out.set(`shuffle::${name}::eval 은 항등`, () => (alpha
+      ? src().alphaDropout(0.5, false, perChannel)
+      : src().featureDropout(0.5, false)));
+    out.set(`shuffle::${name}::p=0 은 항등`, () => (alpha
+      ? src().alphaDropout(0, true, perChannel)
+      : src().featureDropout(0, true)));
+  }
+
+  // 난수가 끼는 자리는 성질로.
+  const big = () => Tensor.ones([200, 8, 2, 2]);
+  const perChannelSame = async (make: () => Tensor, label: string) => {
+    const got = await make().toArray();
+    let uniform = true;
+    for (let i = 0; i < 200 * 8 && uniform; i++) {
+      const base = got[i * 4] ?? 0;
+      for (let k = 1; k < 4; k++) if (got[i * 4 + k] !== base) uniform = false;
+    }
+    void label;
+    return `채널마다 한 덩어리=${uniform ? "True" : "False"}`;
+  };
+  out.set("shuffle::dropout2d::채널째 떨군다",
+    async () => perChannelSame(() => big().featureDropout(0.5, true), "d2"));
+  out.set("shuffle::feature_alpha_dropout::채널째 떨군다",
+    async () => perChannelSame(
+      () => big().alphaDropout(0.5, true, true), "fa"));
+
+  out.set("shuffle::dropout2d::살아남은 배율", async () => {
+    const got = await big().featureDropout(0.5, true).toArray();
+    const kept = [...got].filter((v) => v !== 0);
+    const mean = kept.reduce((a, b) => a + b, 0) / Math.max(1, kept.length);
+    // 자릿수를 못 박는다 — 파이썬은 `2.0` 을, JS 는 `2` 를 낸다.
+    return kept.length ? `배율=${mean.toFixed(3)}` : "배율=none";
+  });
+  out.set("shuffle::dropout2d::떨구는 비율", async () => {
+    const got = await big().featureDropout(0.5, true).toArray();
+    let zeros = 0;
+    for (let i = 0; i < 200 * 8; i++) if ((got[i * 4] ?? 0) === 0) zeros += 1;
+    const rate = zeros / (200 * 8);
+    return `대략 절반=${rate > 0.4 && rate < 0.6 ? "True" : "False"}`;
+  });
+  out.set("shuffle::alpha_dropout::떨군 자리가 0 이 아니다", async () => {
+    const got = await Tensor.ones([400, 8]).alphaDropout(0.5, true, false)
+      .toArray();
+    const seen = new Set([...got].map((v) => Math.round(v * 1e4) / 1e4));
+    const vals = [...seen].sort((a, b) => a - b);
+    const lo = vals[0] ?? 0;
+    const hi = vals[vals.length - 1] ?? 0;
+    return `값이 둘=${vals.length === 2 ? "True" : "False"} ` +
+      `낮은쪽=${Math.round(lo * 1000) / 1000} 높은쪽=${Math.round(hi * 1000) / 1000}`;
+  });
+
+  const layers: [string, () => nn.Module, () => Tensor][] = [
+    ["Dropout1d", () => new nn.Dropout1d(0.5), () => seq(12, [1, 4, 3])],
+    ["Dropout2d", () => new nn.Dropout2d(0.5), img],
+    ["Dropout3d", () => new nn.Dropout3d(0.5), () => seq(6, [1, 3, 2, 1, 1])],
+    ["AlphaDropout", () => new nn.AlphaDropout(0.5), img],
+    ["FeatureAlphaDropout", () => new nn.FeatureAlphaDropout(0.5), img],
+  ];
+  for (const [name, make, src] of layers) {
+    out.set(`shuffle::층::${name}(eval)`, () => make().eval().call(src()));
+    out.set(`shuffle::repr::${name}`,
+      async () => (make() as unknown as { describe(): string }).describe());
+  }
+}
+
 /**
  * 모양을 첫 forward 에서 알아내는 층들.
  *

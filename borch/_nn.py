@@ -29,6 +29,9 @@ from ._ops import (
     kl_div, margin_ranking_loss, multi_margin_loss, multilabel_margin_loss,
     multilabel_soft_margin_loss, pairwise_distance, pdist, poisson_nll_loss,
     soft_margin_loss, triplet_margin_loss, triplet_margin_with_distance_loss,
+    # 자리 옮기기와 채널째 dropout.
+    alpha_dropout, channel_shuffle, dropout1d, dropout2d, dropout3d,
+    feature_alpha_dropout, pixel_shuffle, pixel_unshuffle,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -1538,6 +1541,72 @@ class BatchNorm3d(BatchNorm2d):
     (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
 
 
+# ------------------------------------------------- 자리 옮기기·채널째 dropout
+#
+# 여덟 층이 전부 함수 하나를 부른다. 갈리는 것은 넘길 인자와 찍는 글자뿐이다.
+
+class _Rearrange(Module):
+    _fn = None
+    _arg = "factor"
+
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+    def forward(self, x):
+        return type(self)._fn(x, self.value)
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self._arg}={self.value})"
+
+
+class PixelShuffle(_Rearrange):
+    _fn = staticmethod(pixel_shuffle)
+    _arg = "upscale_factor"
+
+
+class PixelUnshuffle(_Rearrange):
+    _fn = staticmethod(pixel_unshuffle)
+    _arg = "downscale_factor"
+
+
+class ChannelShuffle(_Rearrange):
+    _fn = staticmethod(channel_shuffle)
+    _arg = "groups"
+
+
+class _FeatureDropout(Module):
+    """채널째 떨구는 것들. **`inplace` 까지 찍는다** — torch 가 그렇다."""
+
+    _fn = None
+
+    def __init__(self, p=0.5, inplace=False):
+        super().__init__()
+        self.p, self.inplace = p, inplace
+
+    def forward(self, x):
+        return type(self)._fn(x, self.p, self.training)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(p={self.p}, inplace={self.inplace})"
+
+
+def _make_feature_dropouts():
+    table = (("Dropout1d", dropout1d), ("Dropout2d", dropout2d),
+             ("Dropout3d", dropout3d), ("AlphaDropout", alpha_dropout),
+             ("FeatureAlphaDropout", feature_alpha_dropout))
+    return {name: type(name, (_FeatureDropout,), {"_fn": staticmethod(fn)})
+            for name, fn in table}
+
+
+for _name, _cls in {"PixelShuffle": PixelShuffle,
+                    "PixelUnshuffle": PixelUnshuffle,
+                    "ChannelShuffle": ChannelShuffle,
+                    **_make_feature_dropouts()}.items():
+    globals()[_name] = _cls
+    setattr(nn, _name, _cls)
+
+
 # ---------------------------------------------------------------- 게으른 층
 #
 # **모양을 첫 forward 에서 알아낸다.** `nn.LazyLinear(3)` 은 `in_features` 를 안 받고
@@ -1890,6 +1959,18 @@ class _Functional(_Namespace):
     multilabel_margin_loss = staticmethod(multilabel_margin_loss)
     pairwise_distance = staticmethod(pairwise_distance)
     pdist = staticmethod(pdist)
+    # 자리 옮기기와 채널째 dropout.
+    pixel_shuffle = staticmethod(pixel_shuffle)
+    pixel_unshuffle = staticmethod(pixel_unshuffle)
+    channel_shuffle = staticmethod(channel_shuffle)
+    # `native_channel_shuffle` 은 안 낸다. ATen 의 밑단 진입점이고 위에 부르는 이름이
+    # 따로 있다 — 빈자리 표에 그렇게 적어 두고 여기서 만들면 표가 거짓말을 한다.
+    # 실제로 한 번 만들었다가 `test_gap.py` 가 그 모순을 잡았다.
+    dropout1d = staticmethod(dropout1d)
+    dropout2d = staticmethod(dropout2d)
+    dropout3d = staticmethod(dropout3d)
+    alpha_dropout = staticmethod(alpha_dropout)
+    feature_alpha_dropout = staticmethod(feature_alpha_dropout)
     softmax = staticmethod(softmax)
     log_softmax = staticmethod(log_softmax)
     relu = staticmethod(relu)

@@ -28,6 +28,14 @@ export type PadMode = "constant" | "reflect" | "replicate" | "circular";
 export type Reduction = "none" | "mean" | "sum";
 
 /**
+ * SELU 의 고정점. `alphaDropout` 이 떨군 자리에 넣는 값이 여기서 나온다.
+ *
+ * 0 이 아니라 이 수를 넣어야 SELU 의 자기정규화가 유지된다 — 실측으로 확인했다
+ * (입력이 전부 1 일 때 답이 `-0.779` 와 `1.666` 두 값이다).
+ */
+const ALPHA_PRIME = -1.7580993408473766;
+
+/**
  * 출력 자리마다 **입력의 어느 자리를 읽는지.**
  *
  * 네 모드가 여기서만 갈린다. `[0,1,2]` 를 앞 2·뒤 1 로 늘리면(진짜 torch 에 물어
@@ -1693,6 +1701,91 @@ export class Tensor implements Node<Tensor> {
       (g) => [g.narrow(axis, before, size)],
       "ConstantPadNdBackward0",
     );
+  }
+
+  // ── 자리 옮기기 ───────────────────────────────────────────────────────
+  //
+  // 셋 다 **값을 안 바꾸고 자리만 바꾼다.** 순방향이 `reshape` + 축 바꾸기이고
+  // 역방향은 그 반대라, 이미 있는 것의 조합이다.
+
+  /**
+   * `(N, C·r², H, W)` → `(N, C, H·r, W·r)`. 채널을 잘라 공간에 심는다.
+   *
+   * **엇갈리는 순서가 값의 전부다.** 채널을 `(C, r, r)` 로 갈라 두 `r` 을 각각 `H` 와
+   * `W` 뒤에 끼워 넣는다. 순서를 바꾸면 모양은 같고 그림만 뒤섞인다.
+   */
+  pixelShuffle(upscaleFactor: number): Tensor {
+    const r = upscaleFactor;
+    const [n, c, h, w] = this.shape as [number, number, number, number];
+    return this.reshape([n, c / (r * r), r, r, h, w])
+      .permute([0, 1, 4, 2, 5, 3])
+      .reshape([n, c / (r * r), h * r, w * r]);
+  }
+
+  /** `pixelShuffle` 의 역. 공간을 잘라 채널에 쌓는다. */
+  pixelUnshuffle(downscaleFactor: number): Tensor {
+    const r = downscaleFactor;
+    const [n, c, h, w] = this.shape as [number, number, number, number];
+    return this.reshape([n, c, h / r, r, w / r, r])
+      .permute([0, 1, 3, 5, 2, 4])
+      .reshape([n, c * r * r, h / r, w / r]);
+  }
+
+  /**
+   * 채널을 묶음으로 갈라 **엇갈려 다시 놓는다.**
+   *
+   * `[0,1,2,3]` 을 두 묶음으로 섞으면 `[0,2,1,3]` 이다 — 묶음별 합성곱 뒤에 정보가
+   * 묶음 안에만 갇히는 것을 푸는 자리라, 엇갈리는 방향이 값의 전부다.
+   */
+  channelShuffle(groups: number): Tensor {
+    const [n, c] = this.shape as [number, number];
+    const rest = this.shape.slice(2);
+    // `transpose` 는 2 차원 전용이라 `permute` 로 간다 — 뒤에 공간 축이 몇이든
+    // 앞의 두 자리만 바꾸면 된다.
+    const tail = rest.map((_, i) => i + 3);
+    return this.reshape([n, groups, c / groups, ...rest])
+      .permute([0, 2, 1, ...tail])
+      .reshape([n, c, ...rest]);
+  }
+
+  /**
+   * **원소가 아니라 채널을 떨군다.**
+   *
+   * 이름이 `dropout` 옆에 있어서 "N 차원용" 으로 읽기 쉬운데 하는 일이 다르다 —
+   * 한 채널을 통째로 0 으로 만들거나 통째로 남긴다. 마스크를 `(N, C, 1, …)` 로 뽑아
+   * 브로드캐스트하면 그 뜻이 그대로 적힌다.
+   */
+  featureDropout(p = 0.5, training = true): Tensor {
+    if (!training || p === 0) return this;
+    if (p >= 1) return this.mul(Tensor.full([], 0));
+    const lead = this.shape.slice(0, 2);
+    const ones = new Array<number>(this.shape.length - 2).fill(1);
+    const mask = Tensor.ones([...lead, ...ones]).dropout(p, true);
+    return this.mul(mask);
+  }
+
+  /**
+   * SELU 와 함께 쓰는 dropout. **떨군 자리에 0 을 안 넣는다.**
+   *
+   * 음의 상수를 넣고 전체에 아핀 변환을 걸어 평균과 분산을 지킨다 — 0 을 넣으면
+   * SELU 의 자기정규화가 깨지는데, 값이 그럴듯해서 학습이 도는 동안은 안 보인다.
+   */
+  alphaDropout(p = 0.5, training = false, perChannel = false): Tensor {
+    if (!training || p === 0) return this;
+    const lead = perChannel
+      ? [...this.shape.slice(0, 2), ...new Array<number>(this.shape.length - 2).fill(1)]
+      : this.shape;
+    // `dropout` 은 살아남은 자리를 `1/(1-p)` 로 키운다. 여기서는 0/1 이 필요하므로
+    // 되돌려 곱한다 — 마스크를 따로 뽑는 커널을 하나 더 두지 않으려는 것이다.
+    const keep = Tensor.ones(lead).dropout(p, true)
+      .binary("mul", Tensor.full([], 1 - p));
+    const a = ((1 - p) * (1 + p * ALPHA_PRIME ** 2)) ** -0.5;
+    const b = -a * p * ALPHA_PRIME;
+    const one = Tensor.full([], 1);
+    const kept = this.mul(keep);
+    const dropped = one.sub(keep).binary("mul", Tensor.full([], ALPHA_PRIME));
+    return kept.add(dropped).binary("mul", Tensor.full([], a))
+      .binary("add", Tensor.full([], b));
   }
 
   /**

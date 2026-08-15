@@ -3012,6 +3012,121 @@ def multilabel_margin_loss(pred, target, reduction="mean"):
     return _reduce(out.reshape(1) / classes, reduction)
 
 
+# ---------------------------------------------------------------- 자리 옮기기
+#
+# 셋 다 **값을 안 바꾸고 자리만 바꾼다.** 그래서 순방향이 `reshape` + 축 바꾸기이고
+# 역방향은 그 반대다 — 우리 `transpose`·`reshape` 가 이미 그 일을 하므로 여기는
+# 조합이다. 입력을 `arange` 로 두면 어느 자리가 어디로 갔는지가 답에 그대로 나온다.
+
+def pixel_shuffle(x, upscale_factor):
+    """`(N, C·r², H, W)` → `(N, C, H·r, W·r)`. 채널을 잘라 공간에 심는다.
+
+    **엇갈리는 순서가 값의 전부다.** 채널을 `(C, r, r)` 로 갈라 두 `r` 을 각각 `H` 와
+    `W` 뒤에 끼워 넣는다 — `(N, C, H, r, W, r)` 로 세운 뒤 붙이는 것이 그 뜻이다.
+    순서를 바꾸면 모양은 같고 그림만 뒤섞인다.
+    """
+    t = _wrap(x)
+    r = upscale_factor
+    n, c, h, w = t.data.shape
+    out = t.reshape(n, c // (r * r), r, r, h, w).permute(0, 1, 4, 2, 5, 3)
+    return out.reshape(n, c // (r * r), h * r, w * r)
+
+
+def pixel_unshuffle(x, downscale_factor):
+    """`pixel_shuffle` 의 역. 공간을 잘라 채널에 쌓는다."""
+    t = _wrap(x)
+    r = downscale_factor
+    n, c, h, w = t.data.shape
+    out = t.reshape(n, c, h // r, r, w // r, r).permute(0, 1, 3, 5, 2, 4)
+    return out.reshape(n, c * r * r, h // r, w // r)
+
+
+def channel_shuffle(x, groups):
+    """채널을 묶음으로 갈라 **엇갈려 다시 놓는다.**
+
+    `[0,1,2,3]` 을 두 묶음으로 섞으면 `[0,2,1,3]` 이다 — 묶음별 합성곱 뒤에 정보가
+    묶음 안에만 갇히는 것을 푸는 자리라, 엇갈리는 방향이 값의 전부다.
+    """
+    t = _wrap(x)
+    n, c = t.data.shape[0], t.data.shape[1]
+    rest = t.data.shape[2:]
+    out = t.reshape(n, groups, c // groups, *rest)
+    out = out.transpose(1, 2)
+    return out.reshape(n, c, *rest)
+
+
+# ---------------------------------------------------------------- 채널째 dropout
+#
+# **원소가 아니라 채널을 떨군다.** 이름이 `Dropout` 옆에 있어서 "2 차원용" 으로 읽기
+# 쉬운데 하는 일이 다르다 — 한 채널을 통째로 0 으로 만들거나 통째로 남긴다.
+#
+# `AlphaDropout` 은 거기에 더해 **0 을 안 넣는다.** SELU 와 함께 쓰라고 만든 것이라
+# 떨군 자리에 음의 상수를 넣고 전체에 아핀 변환을 걸어 평균과 분산을 지킨다. 0 을
+# 넣으면 SELU 의 자기정규화가 깨지는데, 값이 그럴듯해서 학습이 도는 동안은 안 보인다.
+
+def _channel_mask(t, p):
+    """채널마다 하나씩 뽑은 0/1. 공간 축은 1 로 두어 브로드캐스트한다."""
+    shape = t.data.shape[:2] + (1,) * (t.data.ndim - 2)
+    return (_rng.random(shape) > p).astype(t.data.dtype)
+
+
+def _feature_dropout(x, p, training, name):
+    t = _wrap(x)
+    if not training or p == 0:
+        return t
+    if p >= 1:
+        return t * Tensor(_np.zeros((), dtype=t.data.dtype))
+    return t * Tensor(_channel_mask(t, p) / (1 - p))
+
+
+def dropout1d(x, p=0.5, training=True, inplace=False):
+    t = _wrap(x)
+    if t.data.ndim not in (2, 3):
+        raise RuntimeError(
+            f"dropout1d: Expected 2D or 3D input, but received a {t.data.ndim}D "
+            "input. Note that dropout1d exists to provide channel-wise dropout on "
+            "inputs with 1 spatial dimension, a channel dimension, and an optional "
+            "batch dimension (i.e. 2D or 3D inputs).")
+    return _feature_dropout(t, p, training, "dropout1d")
+
+
+def dropout2d(x, p=0.5, training=True, inplace=False):
+    return _feature_dropout(x, p, training, "dropout2d")
+
+
+def dropout3d(x, p=0.5, training=True, inplace=False):
+    return _feature_dropout(x, p, training, "dropout3d")
+
+
+# SELU 의 고정점. `alpha_dropout` 이 떨군 자리에 넣는 값이 여기서 나온다.
+_ALPHA_PRIME = -1.7580993408473766
+
+
+def _alpha_affine(p):
+    """떨군 자리를 상수로 채운 뒤 평균과 분산을 되돌리는 아핀 계수 `(a, b)`."""
+    a = ((1 - p) * (1 + p * _ALPHA_PRIME ** 2)) ** -0.5
+    return a, -a * p * _ALPHA_PRIME
+
+
+def alpha_dropout(x, p=0.5, training=False, inplace=False):
+    t = _wrap(x)
+    if not training or p == 0:
+        return t
+    keep = Tensor((_rng.random(t.data.shape) > p).astype(t.data.dtype))
+    a, b = _alpha_affine(p)
+    return (t * keep + (1 - keep) * _ALPHA_PRIME) * a + b
+
+
+def feature_alpha_dropout(x, p=0.5, training=False, inplace=False):
+    """채널째 떨구는 `alpha_dropout`."""
+    t = _wrap(x)
+    if not training or p == 0:
+        return t
+    keep = Tensor(_channel_mask(t, p))
+    a, b = _alpha_affine(p)
+    return (t * keep + (1 - keep) * _ALPHA_PRIME) * a + b
+
+
 def _pad_index(mode, size, before, after):
     """출력 자리마다 **입력의 어느 자리를 읽는지.** `-1` 은 채운 자리다.
 

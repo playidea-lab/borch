@@ -832,6 +832,64 @@ export class Flatten extends Module {
   }
 }
 
+// ── 자리 옮기기·채널째 dropout ──────────────────────────────────────────
+//
+// 여덟 층이 전부 텐서 메서드 하나를 부른다. 갈리는 것은 넘길 인자와 찍는 글자뿐이다.
+
+export class PixelShuffle extends Module {
+  constructor(readonly factor: number) { super(); }
+  override forward(x: Tensor): Tensor { return x.pixelShuffle(this.factor); }
+  describe(): string { return `PixelShuffle(upscale_factor=${this.factor})`; }
+}
+
+export class PixelUnshuffle extends Module {
+  constructor(readonly factor: number) { super(); }
+  override forward(x: Tensor): Tensor { return x.pixelUnshuffle(this.factor); }
+  describe(): string { return `PixelUnshuffle(downscale_factor=${this.factor})`; }
+}
+
+export class ChannelShuffle extends Module {
+  constructor(readonly groups: number) { super(); }
+  override forward(x: Tensor): Tensor { return x.channelShuffle(this.groups); }
+  describe(): string { return `ChannelShuffle(groups=${this.groups})`; }
+}
+
+/** 채널째 떨구는 것들의 뿌리. **`inplace` 까지 찍는다** — torch 가 그렇다. */
+class FeatureDropoutBase extends Module {
+  constructor(
+    readonly label: string,
+    readonly p = 0.5,
+    private readonly alpha = false,
+    private readonly perChannel = true,
+  ) { super(); }
+
+  override forward(x: Tensor): Tensor {
+    return this.alpha
+      ? x.alphaDropout(this.p, this.training, this.perChannel)
+      : x.featureDropout(this.p, this.training);
+  }
+
+  describe(): string {
+    return `${this.label}(p=${this.p}, inplace=False)`;
+  }
+}
+
+export class Dropout1d extends FeatureDropoutBase {
+  constructor(p?: number) { super("Dropout1d", p); }
+}
+export class Dropout2d extends FeatureDropoutBase {
+  constructor(p?: number) { super("Dropout2d", p); }
+}
+export class Dropout3d extends FeatureDropoutBase {
+  constructor(p?: number) { super("Dropout3d", p); }
+}
+export class AlphaDropout extends FeatureDropoutBase {
+  constructor(p?: number) { super("AlphaDropout", p, true, false); }
+}
+export class FeatureAlphaDropout extends FeatureDropoutBase {
+  constructor(p?: number) { super("FeatureAlphaDropout", p, true, true); }
+}
+
 // ── 게으른 층 ───────────────────────────────────────────────────────────
 //
 // **모양을 첫 forward 에서 알아낸다.** `new nn.LazyLinear(3)` 은 들어오는 크기를 안

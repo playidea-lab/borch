@@ -146,7 +146,34 @@ _LOSSES = {
     "multilabel_margin_loss": ("multilabelMarginLoss", ("target", "reduction")),
     "pairwise_distance": ("pairwiseDistance", ("x2", "p", "eps", "keepdim")),
     "pdist": ("pdist", ("p",)),
+    # 자리 옮기기. 이름만 갈린다.
+    "pixel_shuffle": ("pixelShuffle", ("upscale_factor",)),
+    "pixel_unshuffle": ("pixelUnshuffle", ("downscale_factor",)),
+    "channel_shuffle": ("channelShuffle", ("groups",)),
+    # **채널째 떨구는 것들.** 저쪽은 이름 하나(`featureDropout`)이고 랭크는 안 따진다 —
+    # 랭크 검사는 `dropout1d` 만 하므로 아래에서 따로 단다.
+    "dropout2d": ("featureDropout", ("p", "training")),
+    "dropout3d": ("featureDropout", ("p", "training")),
 }
+
+
+def _dropout1d(x, p=0.5, training=True, **kw):
+    """**4 차원을 거절한다.** torch 가 그렇고, 이름에 공간 축의 수가 들어 있다."""
+    rank = len(handle(x).shape)
+    if rank not in (2, 3):
+        raise RuntimeError(
+            f"dropout1d: Expected 2D or 3D input, but received a {rank}D input. "
+            "Note that dropout1d exists to provide channel-wise dropout on inputs "
+            "with 1 spatial dimension, a channel dimension, and an optional batch "
+            "dimension (i.e. 2D or 3D inputs).")
+    return wrap(guarded(handle(x).featureDropout, float(p), bool(training)))
+
+
+def _alpha_dropout(per_channel):
+    def call(x, p=0.5, training=False, **kw):
+        return wrap(guarded(handle(x).alphaDropout, float(p), bool(training),
+                            per_channel))
+    return call
 
 
 def _triplet_with_distance(anchor, positive, negative, distance_function=None,
@@ -159,6 +186,9 @@ def _triplet_with_distance(anchor, positive, negative, distance_function=None,
 
 
 _HAND_WRITTEN = {
+    "dropout1d": _dropout1d,
+    "alpha_dropout": _alpha_dropout(False),
+    "feature_alpha_dropout": _alpha_dropout(True),
     "triplet_margin_with_distance_loss": _triplet_with_distance,
     "scaled_dot_product_attention": _sdpa,
     "avg_pool1d": _pool_fn("avg", False),
@@ -771,6 +801,14 @@ def Conv2d(cin, cout, k, stride=1, padding=0, bias=True):
 
 def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
+
+
+# ── 자리 옮기기·채널째 dropout ──────────────────────────────────────────
+
+for _shuffle in ("PixelShuffle", "PixelUnshuffle", "ChannelShuffle",
+                 "Dropout1d", "Dropout2d", "Dropout3d", "AlphaDropout",
+                 "FeatureAlphaDropout"):
+    globals()[_shuffle] = (lambda name: lambda *a: _layer(name, *a))(_shuffle)
 
 
 # ── 게으른 층 열셋 ──────────────────────────────────────────────────────

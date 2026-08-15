@@ -1354,6 +1354,157 @@ def opt_cases(inp=None):
     return cases
 
 
+SHUFFLE_PREFIX = "shuffle::"
+
+
+def shuffle_cases(inp=None):
+    """자리를 옮기는 층 셋과 **채널째 떨구는** dropout 다섯.
+
+    ## `Dropout2d` 는 원소가 아니라 채널을 떨군다
+
+    이름이 `Dropout` 옆에 있어서 "2 차원용" 으로 읽기 쉬운데, 하는 일이 다르다 —
+    한 채널을 **통째로** 0 으로 만들거나 통째로 남긴다. 그래서 채널 안이 섞인 답이
+    나오면 그것은 원소별 dropout 이고, 값 하나만 봐서는 구분이 안 된다. 골든이
+    "채널 안이 전부 같은가" 를 묻는 이유다.
+
+    ## `AlphaDropout` 은 0 을 안 넣는다
+
+    SELU 와 함께 쓰라고 만든 것이라, 떨군 자리에 **음의 상수**를 넣고 전체에 아핀
+    변환을 걸어 평균과 분산을 지킨다. 입력이 전부 1 일 때 답이 `-0.779` 와 `1.666`
+    두 값이었다(실측). 0 을 넣으면 SELU 의 자기정규화가 깨지는데, 값이 그럴듯해서
+    학습이 도는 동안은 안 보인다.
+
+    ## 자리 옮기기는 값으로 묻는다
+
+    `PixelShuffle`·`PixelUnshuffle`·`ChannelShuffle` 은 난수가 안 끼므로 값을 그대로
+    묻는다. 입력을 `arange` 로 두면 **어느 자리가 어디로 갔는지**가 답에 그대로 나온다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((SHUFFLE_PREFIX + name, fn))
+
+    def F(L):
+        return L.nn.functional
+
+    # ── 자리 옮기기 — 값으로 ────────────────────────────────────────────
+    pix = np.arange(8 * 2 * 2, dtype=np.float32).reshape(1, 8, 2, 2)
+    flat = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+    chan = np.arange(4, dtype=np.float32).reshape(1, 4, 1, 1)
+    chan6 = np.arange(6 * 2, dtype=np.float32).reshape(1, 6, 2, 1)
+
+    add("pixel_shuffle", lambda L: F(L).pixel_shuffle(L.tensor(pix), 2))
+    add("pixel_unshuffle", lambda L: F(L).pixel_unshuffle(L.tensor(flat), 2))
+    # 되돌리면 그대로여야 한다 — 둘이 서로의 역이라는 것이 규약이다.
+    add("pixel 왕복",
+        lambda L: F(L).pixel_unshuffle(F(L).pixel_shuffle(L.tensor(pix), 2), 2))
+    add("channel_shuffle(2)", lambda L: F(L).channel_shuffle(L.tensor(chan), 2))
+    add("channel_shuffle(3)", lambda L: F(L).channel_shuffle(L.tensor(chan6), 3))
+    add("층::PixelShuffle", lambda L: L.nn.PixelShuffle(2)(L.tensor(pix)))
+    add("층::PixelUnshuffle", lambda L: L.nn.PixelUnshuffle(2)(L.tensor(flat)))
+    add("층::ChannelShuffle", lambda L: L.nn.ChannelShuffle(2)(L.tensor(chan)))
+    for name, layer in (("PixelShuffle", "PixelShuffle(2)"),
+                        ("PixelUnshuffle", "PixelUnshuffle(2)"),
+                        ("ChannelShuffle", "ChannelShuffle(2)")):
+        add(f"repr::{name}",
+            lambda L, c=name: repr(getattr(L.nn, c)(2)))
+
+    def shuffle_grad(L):
+        x = L.tensor(pix, requires_grad=True)
+        out = F(L).pixel_shuffle(x, 2)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "pixel_shuffle")
+
+    add("grad::pixel_shuffle", shuffle_grad)
+
+    # ── 난수가 안 끼는 자리는 값으로 ────────────────────────────────────
+    img = np.arange(1 * 4 * 2 * 2, dtype=np.float32).reshape(1, 4, 2, 2)
+    for name in ("dropout1d", "dropout2d", "dropout3d",
+                 "alpha_dropout", "feature_alpha_dropout"):
+        arr = (np.arange(1 * 4 * 3, dtype=np.float32).reshape(1, 4, 3)
+               if name == "dropout1d" else
+               np.arange(1 * 3 * 2 * 1 * 1, dtype=np.float32).reshape(1, 3, 2, 1, 1)
+               if name == "dropout3d" else img)
+        add(f"{name}::eval 은 항등",
+            lambda L, n=name, a=arr: getattr(F(L), n)(L.tensor(a), 0.5,
+                                                      training=False))
+        add(f"{name}::p=0 은 항등",
+            lambda L, n=name, a=arr: getattr(F(L), n)(L.tensor(a), 0.0,
+                                                      training=True))
+
+    # ── 난수가 끼는 자리는 성질로 ───────────────────────────────────────
+    #
+    # 답이 난수기에 달렸고 우리 난수기는 torch 의 것과 다르다. 그래도 **양쪽이 똑같이
+    # 답할 수 있는 것**은 있다 — 채널 안이 한 덩어리인가, 살아남은 값이 몇 배인가.
+    big = np.ones((200, 8, 2, 2), dtype=np.float32)
+
+    def whole_channels(L):
+        """채널 안이 **전부 같은가.** 원소별로 떨구면 여기서 갈린다."""
+        out = to_numpy(F(L).dropout2d(L.tensor(big), 0.5, training=True))
+        flat_ch = out.reshape(out.shape[0], out.shape[1], -1)
+        uniform = np.all(flat_ch == flat_ch[:, :, :1], axis=2)
+        return f"채널마다 한 덩어리={bool(uniform.all())}"
+
+    add("dropout2d::채널째 떨군다", whole_channels)
+
+    def channel_scale(L):
+        """살아남은 채널은 정확히 `1/(1-p)` 배다.
+
+        **자릿수를 못 박는다.** `round()` 로 두었더니 파이썬이 `2.0` 을 내고 JS 가
+        `2` 를 내서 값이 아니라 글자에서 갈렸다 — 답이 문자열인 케이스는 그 문자열이
+        곧 계약이라 만드는 쪽에서 모양을 정해야 한다.
+        """
+        out = to_numpy(F(L).dropout2d(L.tensor(big), 0.5, training=True))
+        kept = out[out != 0]
+        return f"배율={float(kept.mean()):.3f}" if kept.size else "배율=none"
+
+    add("dropout2d::살아남은 배율", channel_scale)
+
+    def channel_rate(L):
+        """떨구는 비율이 대략 `p` 다. 채널 단위로 센다."""
+        out = to_numpy(F(L).dropout2d(L.tensor(big), 0.5, training=True))
+        per = out.reshape(out.shape[0], out.shape[1], -1)[:, :, 0]
+        return f"대략 절반={bool(0.4 < float((per == 0).mean()) < 0.6)}"
+
+    add("dropout2d::떨구는 비율", channel_rate)
+
+    def alpha_values(L):
+        """**떨군 자리가 0 이 아니다.** 답에 나오는 서로 다른 값이 둘뿐이어야 한다."""
+        ones = np.ones((400, 8), dtype=np.float32)
+        out = to_numpy(F(L).alpha_dropout(L.tensor(ones), 0.5, training=True))
+        vals = np.unique(np.round(out, 4))
+        lo, hi = float(vals.min()), float(vals.max())
+        return (f"값이 둘={len(vals) == 2} 낮은쪽={round(lo, 3)} "
+                f"높은쪽={round(hi, 3)}")
+
+    add("alpha_dropout::떨군 자리가 0 이 아니다", alpha_values)
+
+    def feature_alpha_whole(L):
+        out = to_numpy(F(L).feature_alpha_dropout(L.tensor(big), 0.5,
+                                                  training=True))
+        flat_ch = out.reshape(out.shape[0], out.shape[1], -1)
+        uniform = np.all(flat_ch == flat_ch[:, :, :1], axis=2)
+        return f"채널마다 한 덩어리={bool(uniform.all())}"
+
+    add("feature_alpha_dropout::채널째 떨군다", feature_alpha_whole)
+
+    # 층으로도 닿아야 한다. **랭크가 층마다 다르다** — `Dropout1d` 는 4 차원을
+    # 거절한다("2D 나 3D 를 달라"). 공간 축의 수가 이름에 들어 있으니 당연한데,
+    # 같은 입력을 다섯에 돌려 쓰려다 걸렸다.
+    ranks = {
+        "Dropout1d": np.arange(4 * 3, dtype=np.float32).reshape(1, 4, 3),
+        "Dropout2d": img,
+        "Dropout3d": np.arange(3 * 2, dtype=np.float32).reshape(1, 3, 2, 1, 1),
+        "AlphaDropout": img,
+        "FeatureAlphaDropout": img,
+    }
+    for name, arr in ranks.items():
+        add(f"층::{name}(eval)",
+            lambda L, c=name, a=arr: getattr(L.nn, c)(0.5).eval()(L.tensor(a)))
+        add(f"repr::{name}", lambda L, c=name: repr(getattr(L.nn, c)(0.5)))
+    return cases
+
+
 LAZY_PREFIX = "lazy::"
 
 
@@ -4131,6 +4282,7 @@ def golden_cases(inp=None):
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
+            + shuffle_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
