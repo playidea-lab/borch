@@ -48,15 +48,6 @@ await micropip.install("emfs:/borch-1.4.0-py3-none-any.whl")
 `);
 ```
 
-```python
-import sys, borch
-sys.modules["torch"] = borch          # 이 뒤로는 `import torch` 가 그대로 통한다
-```
-
-> **`torch` 로 심는 것은 강력하고 위험하다.** 그 뒤로는 **남의 라이브러리가 하는 `import torch` 도**
-> 축소판을 받는다. 학습자 한 명의 연습 환경에서는 그게 편의지만, 다른 코드가 섞인 곳에서는
-> 원인을 못 찾는 오류가 된다. 섞이는 자리에서는 `import borch as torch` 를 쓴다.
-
 > **저장소가 private 이라 릴리스 URL 을 그대로 `micropip.install()` 에 넣을 수 없다.**
 > 익명 요청은 404 를 받는다(실제로 그렇게 해보고 알았다). 공개로 돌리면 URL 한 줄로 끝난다.
 
@@ -67,6 +58,33 @@ w = torch.tensor(3.0, requires_grad=True)
 loss = (w - 5.0) ** 2
 loss.backward()
 print(w.grad.item())               # -4.0
+```
+
+### 이름을 어떻게 붙일 것인가 — 셋이고, 경계는 재봤다
+
+`import borch as torch` 는 **그 파일 안의 이름** 하나를 만든다. `from X.Y import Z` 는
+`sys.modules` 에 등록된 **경로**를 보므로 별칭이 안 닿는다. 그 차이가 어디서 갈리는지를
+`tests/test_alias.py` 가 못 박는다.
+
+| | `torch.nn.Linear` | `from borch.nn import Linear` | `from torch.… import` | 남의 `import torch` |
+|---|---|---|---|---|
+| `import borch as torch` | ✅ | ❌ | ❌ | 안 건드림 |
+| `borch.install("borch")` | ✅ | ✅ | ❌ | 안 건드림 |
+| `sys.modules["torch"] = borch` | ✅ | ✅ | ✅ | **가로챔** |
+
+**기본은 첫 줄이다.** 대부분의 교재 코드가 `torch.nn.Linear` 처럼 속성으로 닿고, 그건
+별칭만으로 된다.
+
+`from … import` 가 필요하면 **자기 이름으로 심는다** — `borch.install("borch")`. 하위
+경로가 열리면서 남의 코드는 안 건드린다.
+
+`torch` 로 심는 것은 마지막이다. 그 뒤로는 **남의 라이브러리가 하는 `import torch` 도**
+축소판을 받는다. 학습자 한 명의 연습 환경에서는 편의지만, 다른 코드가 섞인 곳에서는
+원인을 못 찾는 오류가 된다.
+
+```python
+import sys, borch
+sys.modules["torch"] = borch          # 정말 필요할 때만
 ```
 
 ---
@@ -297,6 +315,25 @@ for (let i = 0; i < steps; i++) {
 **이 예시는 실제로 돈다** — `npm run example:ts` 가 그대로 실행하고 손실이 내려가는
 것까지 본다. 문서의 코드는 안 돌리면 썩고, 이 저장소는 설치 안내가 실제로는 안 듣던
 것을 이미 두 번 잡았다.
+
+### Pyodide 에서 파이썬으로 — `borch_ts`
+
+파이썬 코드를 **borch.ts 위에서** 돌린다. TF.js 를 안 거친다.
+
+```python
+import borch_ts as torch          # 별칭이면 대부분 된다
+```
+
+WebGPU 에 동기 읽기가 없는데도 **`await` 이 안 나온다.** Pyodide 의 `run_sync`(JSPI)가
+그 자리를 메운다 — 재봤고(`tests/browser/sync_probe.py`), 조건이 하나 있다: 페이지가
+비동기로 파이썬에 들어와야 한다. 러너는 이미 그렇게 들어간다.
+
+`from borch_ts.nn import Linear` 처럼 하위 경로가 필요하면 `borch_ts.install()` 을
+부른다. 기본값이 자기 이름이라 남의 `import torch` 는 안 건드린다 — 위의 표와 같은
+선택이다.
+
+같은 골든 **792 건**을 지난다. 코어(numpy)가 보는 것과 같은 수이고, 자매 전용
+케이스(TF.js 의 랭크 한계를 못 박는 것들)는 여기 해당이 없어서 빠진다.
 
 ### torch 와 갈리는 네 자리
 

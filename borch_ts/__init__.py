@@ -67,6 +67,39 @@ from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 # 보이는 이름은 torch 의 것이다 — 골든이 `torch.float32` 를 답으로 굳혔다.
 from ._base import _DType                                # noqa: E402
 
+def install(name="borch_ts", modules=None):
+    """`from <name>.nn import Linear` 이 통하게 하위 경로를 심는다.
+
+    **기본은 심지 않는 것이다.** `import borch_ts as torch` 로 `torch.nn.Linear` 는
+    그냥 닿는다 — 속성 접근이라 별칭이면 된다. 교재 코드의 대부분이 그 모양이다.
+
+    안 닿는 것은 `from … import` 다. 그것은 `sys.modules` 에 등록된 **경로**를 보고,
+    별칭은 그 파일 안의 이름 하나일 뿐이라 거기까지 못 간다. 경계는 재봤고
+    `tests/test_alias.py` 가 값으로 붙잡고 있다.
+
+    **이름은 기본이 자기 이름이다.** `torch` 로 심으면 남의 라이브러리가 하는
+    `import torch` 까지 축소판을 받아서, 섞인 환경에서는 원인을 못 찾는 오류가 된다.
+    자기 이름으로 심으면 하위 경로가 열리면서 남의 코드는 안 건드린다.
+
+    코어의 `install()` 과 같은 모양이고 같은 이유다 — 하위 경로를 손으로 적으면
+    어긋난다. 코어는 실제로 어긋나서 `from torch.optim.lr_scheduler import StepLR` 이
+    교재 본문에서 멈춘 적이 있다.
+    """
+    import sys
+
+    modules = sys.modules if modules is None else modules
+    modules[name] = sys.modules[__name__]
+    registered = [name]
+    for path, mod in (("nn", nn), ("optim", optim), ("linalg", linalg),
+                      ("nn.functional", nn.functional),
+                      ("nn.utils", nn.utils), ("nn.utils.rnn", nn.utils.rnn),
+                      ("optim.lr_scheduler", optim.lr_scheduler)):
+        full = f"{name}.{path}"
+        modules[full] = mod
+        registered.append(full)
+    return registered
+
+
 float32 = _DType("float32")
 int64 = _DType("int64")
 # **`bool` 은 모듈 전역에 두지 않는다.** 파이썬 내장을 가려서 `isinstance(x, bool)` 이
