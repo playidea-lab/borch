@@ -373,6 +373,24 @@ SKIPPED = {
     "Future": "TorchScript 비동기 실행의 약속 — 탭 하나 안이다",
     "conv_tbc": "옛 레이아웃(시간-배치-채널) 합성곱 — 부르는 코드가 없다",
 
+    # **최상위의 날 ATen 손실들.** 이름은 `F` 와 같은데 **같은 함수가 아니다** —
+    # 기본 reduction 이 `none` 이고 `reduction` 이 문자열이 아니라 정수다(0·1·2).
+    # `torch.kl_div(a, b)` 는 `[2,2]` 를 내고 `F.kl_div(a, b)` 는 스칼라를 낸다.
+    #
+    # 그래서 `F` 의 것을 최상위에 별명으로 걸면 **모양부터 갈린다.** 튜토리얼이
+    # 부르는 것은 `F` 쪽이고, 이쪽은 ATen 이 이름을 낸 것뿐이다. 재서 확인했다 —
+    # 같은 함수인 것은 `pairwise_distance` 와 `pdist` 둘뿐이고 그 둘은 냈다.
+    # **자리를 붙여 적는다.** 이름만 적으면 `F` 쪽 같은 이름까지 삼킨다 — `F.kl_div`
+    # 는 우리가 만들었고 `F.ctc_loss` 는 진짜 빈자리다.
+    "torch.binary_cross_entropy_with_logits":
+        "최상위는 날 ATen 연산 — 기본 reduction 이 none 이고 인자가 정수다",
+    "torch.cosine_embedding_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
+    "torch.hinge_embedding_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
+    "torch.kl_div": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
+    "torch.margin_ranking_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
+    "torch.poisson_nll_loss": "최상위는 날 ATen 연산 — 기본값이 아예 없다",
+    "torch.triplet_margin_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
+
     # 아직 안 굳은 것.
     "LinearCrossEntropyLoss": "torch 에 갓 들어온 것 — 굳으면 본다",
     "LinearCrossEntropyOptions": "위와 같다",
@@ -460,8 +478,12 @@ def _why(space, name):
 
     돌려주는 것은 `(갈래, 사유)` 다. 갈래를 안 나누면 "API 가 아니라 안 센다" 와
     "API 인데 안 한다" 가 한 수로 뭉개지고, 그 둘은 읽는 사람에게 다른 말이다.
+
+    **최상위도 자리를 붙인다**(`torch.kl_div`). 안 붙였더니 최상위만 두고 싶은 판단이
+    `nn.functional` 의 같은 이름까지 삼켰다 — 그쪽 `kl_div` 는 우리가 만들었고
+    `ctc_loss` 는 아직 진짜 빈자리다.
     """
-    full = f"{space}.{name}" if space != "torch" else name
+    full = f"{space}.{name}"
     for key, reason in DELIBERATE.items():
         if full.startswith(key) or name.startswith(key):
             return ("자리", reason)

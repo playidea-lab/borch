@@ -1083,6 +1083,10 @@ function addLoss(out: Map<string, Case>): void {
     ["pairwise_distance(eps=0)", () => a().pairwiseDistance(b(), 1, 0)],
     ["pairwise_distance(keepdim)", () => a().pairwiseDistance(b(), 2, 1e-6, true)],
     ["pdist", () => Tensor.from([0, 0, 3, 4, 1, 1], [3, 2]).pdist()],
+    // torch 에서 이 둘은 최상위와 `F` 가 **글자 그대로 같은 함수**다. 같이 드러난
+    // 손실 일곱은 최상위 쪽이 날 ATen 연산이라 서명이 달라서 안 낸다.
+    ["최상위::pairwise_distance", () => a().pairwiseDistance(b())],
+    ["최상위::pdist", () => Tensor.from([0, 0, 3, 4, 1, 1], [3, 2]).pdist()],
     // 원소 하나를 접기 — 파이썬 쪽 주석에 이유를 적었다. 여기가 0 을 내던 자리다.
     ["원소 하나를 mean",
       () => Tensor.from([1, 2, 3], [3]).sum().binary("mul", Tensor.full([], 1))

@@ -34,7 +34,7 @@ def _every_torch_name():
     for space, theirs, _ours in _spaces():
         for name in _public(theirs):
             got.add(name)
-            got.add(name if space == "torch" else f"{space}.{name}")
+            got.add(f"{space}.{name}")
     return got
 
 
@@ -95,7 +95,7 @@ def test_not_api_does_not_claim_what_we_implement():
     clashes = []
     for space, _theirs, ours in _spaces():
         for name in _public(ours):
-            full = name if space == "torch" else f"{space}.{name}"
+            full = f"{space}.{name}"
             reason = _look(NOT_API, name, full)
             if reason:
                 clashes.append(f"{full} — '{reason}'")

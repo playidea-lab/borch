@@ -88,6 +88,14 @@ from ._ops import (
     # 수치 계열. 뒤의 셋은 급수로 센다.
     cdist, corrcoef, cov, cumulative_trapezoid, digamma, erfinv, lgamma,
     tensordot, trapezoid,
+    # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
+    # 함수**다(`torch.pdist is F.pdist` 가 참이다).
+    #
+    # 같이 드러난 손실 일곱(`kl_div`·`poisson_nll_loss` …)은 안 낸다 — 최상위 쪽이
+    # 날 ATen 연산이라 **기본 reduction 이 `none` 이고 `reduction` 이 정수다.**
+    # `torch.kl_div(a, b)` 는 `[2,2]` 를 내고 `F.kl_div(a, b)` 는 스칼라를 낸다.
+    # 친절한 별명으로 두면 모양부터 갈린다.
+    pairwise_distance, pdist,
 )
 from ._nn import (
     AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,

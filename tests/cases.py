@@ -1596,6 +1596,21 @@ def loss_cases(inp=None):
     for name, fn in layers:
         add(f"층::{name}", fn)
 
+    # ── 최상위로도 닿아야 한다 ──────────────────────────────────────────
+    #
+    # 빈자리 목록을 정리하자 "`F` 에 있는데 최상위에 없는" 이름 아홉이 드러났다.
+    # 그런데 재 보니 **일곱은 최상위 쪽이 다른 함수였다** — 날 ATen 연산이라 기본
+    # reduction 이 `none` 이고 `reduction` 이 문자열이 아니라 정수다.
+    # `torch.kl_div(a, b)` 는 `[2,2]` 를 내고 `F.kl_div(a, b)` 는 스칼라를 낸다.
+    #
+    # 친절한 별명으로 걸었으면 **모양부터 갈렸을 것이다.** 글자 그대로 같은 함수인
+    # 것은 이 둘뿐이고(`torch.pdist is F.pdist` 가 참이다), 그래서 둘만 낸다.
+    add("최상위::pairwise_distance",
+        lambda L: L.pairwise_distance(L.tensor(a), L.tensor(b)))
+    add("최상위::pdist",
+        lambda L: L.pdist(L.tensor(np.array([[0., 0.], [3., 4.], [1., 1.]],
+                                            dtype=np.float32))))
+
     # ── 기울기 ──────────────────────────────────────────────────────────
     #
     # **손실은 기울기가 전부다.** 값이 맞고 기울기가 틀리면 학습이 조용히 다른 데로
