@@ -334,6 +334,17 @@ class scope:
         return False
 
 
+def memory():
+    """지금 잡고 있는 것 — `{"tensors": n, "bytes": n}`.
+
+    **벤치가 누수를 재는 자리다.** 여태 `js.tf.memory()` 를 직접 불렀는데, 그러면
+    계측이 TF.js 에 묶여서 같은 벤치를 다른 구현으로 못 돌린다 — 실제로 borch_ts 를
+    같은 잣대로 재려다 거기서 막혔다. 라이브러리에 물으면 누가 밑에 있든 답한다.
+    """
+    got = _tf.memory()
+    return {"tensors": int(got.numTensors), "bytes": int(got.numBytes)}
+
+
 class no_grad:
     def __enter__(self):
         self._prev = _grad_mode.enabled

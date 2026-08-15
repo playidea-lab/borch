@@ -138,7 +138,7 @@ from ._nn import (
 from ._optim import (
     Adam, AdamW, CosineAnnealingLR, ExponentialLR, LambdaLR, MultiStepLR, Optimizer,
     RMSprop, ReduceLROnPlateau, SGD, StepLR, _LRScheduler, _Optim, _Scheduler, _replace,
-    _tf, no_grad, optim, scope,
+    _tf, memory, no_grad, optim, scope,
 )
 from ._data import (
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,

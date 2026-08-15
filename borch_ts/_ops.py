@@ -290,6 +290,33 @@ def stack(parts, dim=0):
     return wrap(_ts.Tensor.stack(_js.Array.from_([p._h for p in parts]), dim))
 
 
+class scope:                                             # noqa: N801
+    """`with L.scope():` — 이 안에서 만든 GPU 버퍼를 나갈 때 놓는다.
+
+    **학습 루프에 이것이 없으면 안 돈다.** 한 스텝이 중간 버퍼를 수천 개 만들고,
+    파이썬·자바스크립트 어느 쪽 쓰레기 수집도 GPU 메모리를 제때 안 놓아준다.
+    자매도 같은 이유로 같은 이름을 노출한다.
+    """
+
+    def __enter__(self):
+        _ts.device().beginScope()
+        return self
+
+    def __exit__(self, *exc):
+        _ts.device().endScope()
+        return False
+
+
+def memory():
+    """지금 잡고 있는 것. **벤치가 누수를 재는 자리다.**
+
+    자매는 `js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 다른
+    구현으로는 같은 벤치를 못 돌린다. 라이브러리에 물으면 누가 밑에 있든 답한다.
+    """
+    got = _ts.device().memory
+    return {"tensors": int(got.tensors), "bytes": int(got.bytes)}
+
+
 class no_grad:                                           # noqa: N801
     """`with L.no_grad():`.
 

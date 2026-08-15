@@ -277,6 +277,33 @@ export class Device {
    */
   lastScope: { freed: number; survived: number } = { freed: 0, survived: 0 };
 
+  /**
+   * 지금 잡고 있는 버퍼의 수와 바이트.
+   *
+   * 벤치가 누수를 재려면 밖에서 이것을 물을 수 있어야 한다. 자매 쪽 벤치는
+   * `js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 같은 벤치를
+   * 다른 구현으로 못 돌린다 — 실제로 그것 때문에 못 돌렸다.
+   *
+   * `spare` 에 든 것은 뺀다. 통에 돌아와 다음 스텝을 기다리는 버퍼는 잡고 있는
+   * 것이 맞지만 **새는 것은 아니다** — 그것을 세면 누수가 아닌 것을 누수로 읽는다.
+   */
+  get memory(): { tensors: number; bytes: number } {
+    let spare = 0;
+    let spareBytes = 0;
+    for (const [size, pool] of this.spare) {
+      spare += pool.length;
+      spareBytes += size * pool.length;
+    }
+    return { tensors: this.made - spare, bytes: this.madeBytes - spareBytes };
+  }
+
+  // `sizes` 는 WeakMap 이라 셀 수 없다 — 셀 수 있게 두면 버퍼가 안 죽는다.
+  // 그래서 만들 때 센다. **빼는 자리는 없다** — `alloc` 이 만든 버퍼는 파괴하지
+  // 않고 통에 돌려놓기 때문이다(`endScope`). 파괴하는 두 자리(`alloc` 밖에서 온
+  // 버퍼, 읽기용 staging)는 애초에 여기 안 세어졌다.
+  private made = 0;
+  private madeBytes = 0;
+
   /** 구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다. */
   keep(buffer: GPUBuffer): void {
     this.kept.add(buffer);
@@ -310,6 +337,10 @@ export class Device {
       size,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
+    if (!reused) {
+      this.made += 1;
+      this.madeBytes += size;
+    }
     this.sizes.set(buf, size);
     this.scopes[this.scopes.length - 1]?.add(buf);
     return buf;

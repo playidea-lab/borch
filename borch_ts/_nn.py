@@ -100,28 +100,67 @@ utils = _Utils()
 
 
 class Module:
-    """borch.ts 의 층 하나를 감싼다.
+    """층 하나. **감싸는 쪽과 상속하는 쪽 둘 다 된다.**
 
-    파이썬 쪽에서 필요한 것은 셋이다 — 부를 수 있을 것, 파라미터를 줄 것,
-    `state_dict` 로 값을 넣고 뺄 수 있을 것.
+    감쌀 때는 borch.ts 의 층을 하나 받는다(`Module(js_layer)`).
+
+    **상속도 받아야 한다.** torch 코드가 가장 흔히 하는 일이 이것이다 —
+    `class Net(nn.Module)` 를 쓰고 `__init__` 에서 층을 속성으로 붙인 뒤 `forward` 를
+    적는다. 골든의 케이스들이 전부 `nn.Sequential` 로만 모델을 세워서 이 자리를 한
+    번도 안 물었고, 벤치가 진짜 ResNet 을 세우다 `Module.__init__() missing 1
+    required positional argument` 로 걸렸다.
+
+    상속한 쪽은 `_m` 이 없다. 파라미터와 `state_dict` 는 **속성에 붙은 층들을 훑어**
+    모은다 — torch 도 그렇게 한다.
     """
 
-    __slots__ = ("_m",)
+    def __init__(self, module=None):
+        object.__setattr__(self, "_m", module)
 
-    def __init__(self, module):
-        self._m = module
+    # ── 상속한 쪽이 속성으로 붙인 층들 ────────────────────────────────────
+
+    def _children(self):
+        """속성에 붙은 층과 텐서를 **붙인 순서대로** 준다.
+
+        이름 규칙이 torch 와 같아야 한다 — `state_dict` 의 열쇠가 `conv1.weight`
+        처럼 속성 이름으로 만들어지고, 골든이 그 이름으로 가중치를 넣는다.
+        """
+        got = []
+        for key, value in vars(self).items():
+            if key.startswith("_"):
+                continue
+            if isinstance(value, (Module, _Wrap, _Sequential)) or \
+                    isinstance(value, Tensor):
+                got.append((key, value))
+        return got
 
     def __call__(self, *args):
+        # 상속한 쪽은 자기 `forward` 를 갖는다. 감싼 쪽만 JS 로 넘긴다.
+        if self._m is None:
+            return self.forward(*args)
         return guarded(self._m.call, *[_arg(a) for a in args])
 
     def forward(self, *args):
+        if self._m is None:
+            raise NotImplementedError(f"{type(self).__name__} 에 forward 가 없다")
         return self(*args)
 
     def parameters(self):
+        if self._m is None:
+            return [p for _, m in self._children() for p in _params_of(m)]
         # JS 배열은 파이썬에서 바로 못 돈다 — `to_py` 로 목록을 받아야 한다.
         return [wrap(p) for p in self._m.parameters().to_py()]
 
     def state_dict(self):
+        if self._m is None:
+            out = {}
+            for name, m in self._children():
+                if isinstance(m, Tensor):
+                    out[name] = m
+                    continue
+                for k, v in _state_of(m).items():
+                    out[f"{name}.{k}"] = v
+            return out
         got = self._m.stateDict()
         return {str(k): wrap(getattr(got, k)) for k in _js.Object.keys(got)}
 
@@ -134,19 +173,38 @@ class Module:
         return list(self.state_dict().items())
 
     def load_state_dict(self, values, strict=True):
-        from pyodide.ffi import to_js
+        if self._m is None:
+            # 이름 앞머리로 갈라 자식에게 넘긴다 — `conv1.weight` → `conv1` 의 `weight`.
+            own = dict(self._children())
+            groups = {}
+            for key, v in values.items():
+                head, _, rest = key.partition(".")
+                if not rest and isinstance(own.get(head), Tensor):
+                    own[head]._h.copyFrom(handle(v))
+                    continue
+                groups.setdefault(head, {})[rest] = v
+            for head, sub in groups.items():
+                if head in own:
+                    own[head].load_state_dict(sub, strict)
+                elif strict:
+                    raise RuntimeError(f"load_state_dict: 모르는 이름 '{head}'")
+            return
         obj = _js.Object.new()
         for k, v in values.items():
             setattr(obj, k, handle(v))
         self._m.loadStateDict(obj, strict)
 
     def train(self, mode=True):
+        if self._m is None:
+            for _, m in self._children():
+                if hasattr(m, "train"):
+                    m.train(mode)
+            return self
         self._m.train(mode)
         return self
 
     def eval(self):
-        self._m.eval()
-        return self
+        return self.train(False)
 
     def __getattr__(self, name):
         """`bn.weight` 처럼 층이 들고 있는 것을 그대로 넘긴다.
@@ -155,7 +213,7 @@ class Module:
         오면 `__getattr__` 이 자기 자신을 부르고 무한 재귀가 된다 — 실패는 CNN 학습
         케이스에서 `RecursionError` 로 나왔고, 원인에서 한참 떨어진 자리다.
         """
-        if name.startswith("_"):
+        if name.startswith("_") or self._m is None:
             raise AttributeError(name)
         got = getattr(self._m, camel(name), None)
         if got is None:
@@ -324,6 +382,15 @@ def Flatten(start_dim=1, end_dim=-1):
 
 def Identity():
     return _Wrap(lambda x: x)
+
+
+def AdaptiveAvgPool2d(output_size=1):
+    n = output_size[0] if isinstance(output_size, (list, tuple)) else output_size
+    return _Wrap(lambda x: wrap(handle(x).adaptiveAvgPool(n)))
+
+
+def AvgPool2d(k=2, stride=None):
+    return _Wrap(lambda x: wrap(handle(x).avgPool2d(k, stride)))
 
 
 def Softmax(dim=-1):

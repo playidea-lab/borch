@@ -102,13 +102,17 @@ def run(L, batch=32, steps=5, warmup=2):
     # 스텝당이 아니라 한 번짜리라는 뜻이다. 음수라 새는 쪽은 아니었지만, 이름이
     # 말하는 것과 다른 수를 내는 계측은 다음에 진짜 누수를 만났을 때도 못 믿는다.
     _gc.collect()
-    before = int(js.tf.memory().numTensors)
+    # **계측을 라이브러리에 묻는다.** 여기서 `js.tf.memory()` 를 직접 부르면 이 벤치가
+    # TF.js 에 묶여서 다른 구현으로는 못 돌린다 — 실제로 borch_ts 를 같은 잣대로
+    # 재려다 이 세 줄에서 막혔다. 같은 잣대라는 말이 성립하려면 잣대가 한쪽 밑바닥을
+    # 알면 안 된다.
+    before = L.memory()["tensors"]
     t0 = js.performance.now()
     last = None
     for _ in range(steps):
         last = one()
     per_step = (js.performance.now() - t0) / steps
-    leak = (int(js.tf.memory().numTensors) - before) / steps
+    leak = (L.memory()["tensors"] - before) / steps
 
     steps_per_epoch = -(-CIFAR_TRAIN_IMAGES // batch)
     return {
@@ -118,7 +122,7 @@ def run(L, batch=32, steps=5, warmup=2):
         "epoch_min": round(per_step * steps_per_epoch / 60000, 2),
         "leak_per_step": round(leak, 1),
         "loss": round(float(last), 4),
-        "gpu_mb": round(float(js.tf.memory().numBytes) / 1e6, 1),
+        "gpu_mb": round(L.memory()["bytes"] / 1e6, 1),
     }
 
 
@@ -282,10 +286,10 @@ async def train_eval(L, train, test, epochs=6, batch=128, lr=0.05, augment=False
         # 콘솔에 나간 것은 남는다 — 실제로 한 번 죽어서 아무것도 못 건졌다.
         # 텐서 수와 바이트도 같이 낸다. 긴 측정이 죽었을 때 **누수인지 브라우저가
         # 죽인 것인지**를 가르는 것이 이 두 수다 — 없으면 둘 다 그럴듯해서 못 고른다.
-        mem = js.tf.memory()
+        mem = L.memory()
         js.console.log(f"[bench] 에폭 {len(rows)}/{epochs} 늘리기={augment} "
                        f"학습 {row['train']:.3f} 시험 {row['test']:.3f} {row['sec']}초 "
-                       f"텐서 {int(mem.numTensors)} GPU {float(mem.numBytes) / 1e6:.0f}MB")
+                       f"텐서 {mem['tensors']} GPU {mem['bytes'] / 1e6:.0f}MB")
     return rows
 
 
