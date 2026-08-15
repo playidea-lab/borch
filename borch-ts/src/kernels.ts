@@ -2418,6 +2418,23 @@ fn rand01(gid: u32, seed: u32) -> f32 {
  * 역방향이 봐야 하는데, 다시 뽑으면 씨앗이 같아도 그것을 보장하려고 씨앗을 들고
  * 다녀야 한다. 만들어 두고 곱하는 편이 짧고, 곱셈의 미분은 이미 있다.
  */
+/**
+ * `[lo, hi)` 균등난수.
+ *
+ * dropout 이 쓰던 해시를 그대로 쓴다 — 자리와 씨앗만으로 뽑으므로 GPU 에 순서가
+ * 없어도 같은 답이 나온다. `rrelu` 가 학습 모드에서 기울기를 여기서 뽑는다.
+ */
+export function uniformFill(n: number, lo: number, hi: number,
+                            seed: number): string {
+  return `${RANDOM_PRELUDE}
+@group(0) @binding(0) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = ${f32lit(lo)} + rand01(gid, ${seed >>> 0}u) * ${f32lit(hi - lo)};
+}`;
+}
+
 export function dropoutMask(n: number, p: number, seed: number): string {
   const keep = f32lit(1 / (1 - p));
   return `${RANDOM_PRELUDE}

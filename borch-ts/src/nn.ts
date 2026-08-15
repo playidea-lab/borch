@@ -832,6 +832,187 @@ export class Flatten extends Module {
   }
 }
 
+// ── 나머지 층 ───────────────────────────────────────────────────────────
+
+export class Unfold extends Module {
+  constructor(readonly kernel: number, readonly dilation = 1,
+              readonly padding = 0, readonly stride = 1) { super(); }
+
+  override forward(x: Tensor): Tensor {
+    return x.unfoldIm2col(this.kernel, this.dilation, this.padding, this.stride);
+  }
+
+  describe(): string {
+    return `Unfold(kernel_size=${this.kernel}, dilation=${this.dilation}, ` +
+      `padding=${this.padding}, stride=${this.stride})`;
+  }
+}
+
+export class Fold extends Module {
+  constructor(readonly outputSize: [number, number], readonly kernel: number,
+              readonly dilation = 1, readonly padding = 0,
+              readonly stride = 1) { super(); }
+
+  override forward(x: Tensor): Tensor {
+    return x.fold(this.outputSize, this.kernel, this.dilation, this.padding,
+      this.stride);
+  }
+
+  describe(): string {
+    return `Fold(output_size=(${this.outputSize.join(", ")}), ` +
+      `kernel_size=${this.kernel}, dilation=${this.dilation}, ` +
+      `padding=${this.padding}, stride=${this.stride})`;
+  }
+}
+
+/** 두 입력을 **한꺼번에** 섞는다. 가중치가 `(out, in1, in2)` 세 축이다. */
+export class Bilinear extends Module {
+  readonly weight: Tensor;
+  readonly bias: Tensor;
+
+  constructor(readonly in1: number, readonly in2: number, readonly out: number) {
+    super();
+    const bound = 1 / Math.sqrt(Math.max(1, in1));
+    this.weight = uniform([out, in1, in2], bound);
+    this.bias = uniform([out], bound);
+    this.claim(this.weight, this.bias);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { weight: this.weight, bias: this.bias };
+  }
+
+  override forward(x: Tensor): Tensor { return x; }
+
+  call2(x1: Tensor, x2: Tensor): Tensor {
+    return x1.bilinear(x2, this.weight, this.bias);
+  }
+
+  describe(): string {
+    return `Bilinear(in1_features=${this.in1}, in2_features=${this.in2}, ` +
+      `out_features=${this.out}, bias=True)`;
+  }
+}
+
+export class LocalResponseNorm extends Module {
+  constructor(readonly size: number, readonly alpha = 1e-4,
+              readonly beta = 0.75, readonly k = 1.0) { super(); }
+
+  override forward(x: Tensor): Tensor {
+    return x.localResponseNorm(this.size, this.alpha, this.beta, this.k);
+  }
+
+  describe(): string {
+    // **파이썬 꼴로 찍는다.** `k=1` 이 아니라 `k=1.0` 이다 — JS 는 정수처럼 보이는
+    // 실수에서 소수점을 지우고, 골든은 글자를 굳혔다.
+    const py = (v: number) => (Number.isInteger(v) ? `${v}.0` : String(v));
+    return `LocalResponseNorm(${this.size}, alpha=${this.alpha}, ` +
+      `beta=${py(this.beta)}, k=${py(this.k)})`;
+  }
+}
+
+/** `(N, C, H, W)` 의 **채널 방향** softmax. `softmax(dim=1)` 과 같다. */
+export class Softmax2d extends Module {
+  override forward(x: Tensor): Tensor { return x.softmax(1); }
+  describe(): string { return "Softmax2d()"; }
+}
+
+export class RReLU extends Module {
+  constructor(readonly lower = 1 / 8, readonly upper = 1 / 3) { super(); }
+
+  override forward(x: Tensor): Tensor {
+    return x.rrelu(this.lower, this.upper, this.training);
+  }
+
+  describe(): string {
+    return `RReLU(lower=${this.lower}, upper=${this.upper})`;
+  }
+}
+
+/**
+ * 옛 이름 둘.
+ *
+ * **`UpsamplingBilinear2d` 는 `alignCorners=true` 다** — `Upsample(bilinear)` 의
+ * 기본값과 다르다. 이름만 보고 별명으로 두면 가장자리가 어긋난다.
+ */
+class UpsamplingBase extends Module {
+  constructor(readonly label: string, readonly scale: number,
+              readonly mode: "nearest" | "bilinear") { super(); }
+
+  override forward(x: Tensor): Tensor {
+    if (this.mode === "nearest") return x.upsample(this.scale);
+    const h = (x.shape[2] ?? 1) * this.scale;
+    const w = (x.shape[3] ?? 1) * this.scale;
+    return x.interpolateBilinear(h, w, true);
+  }
+
+  describe(): string {
+    return `${this.label}(scale_factor=${this.scale.toFixed(1)}, ` +
+      `mode='${this.mode}')`;
+  }
+}
+
+export class UpsamplingNearest2d extends UpsamplingBase {
+  constructor(scale = 2) { super("UpsamplingNearest2d", scale, "nearest"); }
+}
+export class UpsamplingBilinear2d extends UpsamplingBase {
+  constructor(scale = 2) { super("UpsamplingBilinear2d", scale, "bilinear"); }
+}
+
+/** 가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 층이다. */
+export class EmbeddingBag extends Module {
+  readonly weight: Tensor;
+
+  constructor(readonly num: number, readonly dim: number,
+              readonly mode: "sum" | "mean" | "max" = "mean") {
+    super();
+    this.weight = uniform([num, dim], 1);
+    this.claim(this.weight);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { weight: this.weight };
+  }
+
+  override forward(idx: Tensor): Tensor {
+    const bags = idx.shape[0] ?? 1;
+    const each = idx.shape[1] ?? 1;
+    const picked = this.weight
+      .indexSelect(0, idx.reshape([bags * each]))
+      .reshape([bags, each, this.dim]);
+    return this.squash(picked, 1);
+  }
+
+  /**
+   * 1 차원 번호 줄을 `offsets` 로 잘라 가방을 만든다.
+   *
+   * **가방 길이가 제각각인 자리가 이 이름의 이유다.** 2 차원 입력은 길이가 같은
+   * 가방만 되고, 실제로 쓰는 쪽(장바구니·문장)은 길이가 다르다.
+   */
+  callOffsets(idx: Tensor, offsets: readonly number[]): Tensor {
+    const total = idx.size;
+    const bounds = [...offsets, total];
+    const parts: Tensor[] = [];
+    for (let b = 0; b + 1 < bounds.length; b++) {
+      const from = bounds[b] ?? 0;
+      const len = (bounds[b + 1] ?? total) - from;
+      const picked = this.weight.indexSelect(0, idx.narrow(0, from, len));
+      parts.push(this.squash(picked, 0));
+    }
+    return Tensor.stack(parts, 0);
+  }
+
+  private squash(picked: Tensor, dim: number): Tensor {
+    if (this.mode === "sum") return picked.sumDim(dim, false);
+    if (this.mode === "max") return picked.amax(dim, false);
+    return picked.mean(dim, false);
+  }
+
+  describe(): string {
+    return `EmbeddingBag(${this.num}, ${this.dim}, mode='${this.mode}')`;
+  }
+}
+
 // ── 자리 옮기기·채널째 dropout ──────────────────────────────────────────
 //
 // 여덟 층이 전부 텐서 메서드 하나를 부른다. 갈리는 것은 넘길 인자와 찍는 글자뿐이다.

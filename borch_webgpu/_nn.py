@@ -147,6 +147,12 @@ _LOSSES = {
     "pairwise_distance": ("pairwiseDistance", ("x2", "p", "eps", "keepdim")),
     "pdist": ("pdist", ("p",)),
     # 자리 옮기기. 이름만 갈린다.
+    # 창 펴기와 나머지. **`F.unfold` 는 im2col 이다** — `Tensor.unfold` 와 다르다.
+    "unfold": ("unfoldIm2col", ("kernel_size", "dilation", "padding", "stride")),
+    "fold": ("fold", ("output_size", "kernel_size", "dilation", "padding",
+                      "stride")),
+    "local_response_norm": ("localResponseNorm", ("size", "alpha", "beta", "k")),
+    "rrelu": ("rrelu", ("lower", "upper", "training")),
     "pixel_shuffle": ("pixelShuffle", ("upscale_factor",)),
     "pixel_unshuffle": ("pixelUnshuffle", ("downscale_factor",)),
     "channel_shuffle": ("channelShuffle", ("groups",)),
@@ -185,7 +191,36 @@ def _triplet_with_distance(anchor, positive, negative, distance_function=None,
                         handle(negative)))
 
 
+def _interpolate(x, size=None, scale_factor=2, mode="nearest",
+                 align_corners=None, **kw):
+    """**`mode` 를 받아만 놓고 안 쓰던 자리다.**
+
+    일반 길은 `upsample` 로 넘기는데 그쪽은 최근접뿐이라, 겹선형을 달라고 해도
+    최근접이 나왔다 — 예외가 아니라 조용히 다른 값이다. `F.pad` 가 같은 모양으로
+    한 번 걸렸고, 그때와 마찬가지로 골든에 그 갈래를 묻는 케이스가 생기고서 드러났다.
+    """
+    h = handle(x)
+    if mode == "nearest":
+        return wrap(guarded(h.upsample, scale_factor))
+    if mode != "bilinear":
+        raise RuntimeError(f"interpolate(mode={mode!r}) — 최근접과 겹선형만 있습니다")
+    if size is not None:
+        oh, ow = (size, size) if isinstance(size, int) else tuple(size)
+    else:
+        s = scale_factor if isinstance(scale_factor, int) else scale_factor[0]
+        oh, ow = int(h.shape[2] * s), int(h.shape[3] * s)
+    return wrap(guarded(h.interpolateBilinear, oh, ow, bool(align_corners)))
+
+
+def _bilinear(x1, x2, weight, bias=None):
+    """가중치를 밖에서 받는 꼴. 층 쪽과 같은 텐서 메서드로 간다."""
+    return wrap(guarded(handle(x1).bilinear, handle(x2), handle(weight),
+                        handle(bias) if bias is not None else None))
+
+
 _HAND_WRITTEN = {
+    "interpolate": _interpolate,
+    "bilinear": _bilinear,
     "dropout1d": _dropout1d,
     "alpha_dropout": _alpha_dropout(False),
     "feature_alpha_dropout": _alpha_dropout(True),
@@ -801,6 +836,59 @@ def Conv2d(cin, cout, k, stride=1, padding=0, bias=True):
 
 def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
+
+
+# ── 나머지 층 ───────────────────────────────────────────────────────────
+#
+# **인자가 둘 이상인 층은 `_layer` 로 못 간다.** 감싼 쪽의 `__call__` 이 저쪽
+# `call(x)` 로 넘기는데 `Bilinear` 는 둘을, `EmbeddingBag(offsets)` 은 목록을 받는다.
+# 그 둘만 손으로 잇는다.
+
+class _Bilinear(Module):
+    def __call__(self, x1, x2):
+        return wrap(guarded(self._m.call2, handle(x1), handle(x2)))
+
+
+def Bilinear(in1, in2, out, bias=True):
+    return _Bilinear(_ts.nn.Bilinear.new(in1, in2, out))
+
+
+class _EmbeddingBag(Module):
+    def __call__(self, idx, offsets=None):
+        if offsets is None:
+            return wrap(guarded(self._m.call, handle(idx)))
+        starts = [int(v) for v in _to_list(offsets)]
+        return wrap(guarded(self._m.callOffsets, handle(idx),
+                            _js_list(starts)))
+
+
+def _to_list(t):
+    got = handle(t).toArray() if hasattr(handle(t), "toArray") else t
+    return settle(got) if hasattr(got, "then") else list(got)
+
+
+def EmbeddingBag(num, dim, mode="mean", **kw):
+    return _EmbeddingBag(_ts.nn.EmbeddingBag.new(num, dim, mode))
+
+
+def _misc_layer(name):
+    def make(*args, **kw):
+        # **파이썬 튜플을 그대로 넘기면 안 된다.** 저쪽에서 잠깐 빌린 프록시가 되어
+        # 곧 버려지고, 실패는 나중에 `borrowed proxy was automatically destroyed` 로
+        # 나온다 — `Fold((4,4), 2)` 가 그 자리였다.
+        laid = [_js_list(list(a)) if isinstance(a, (list, tuple)) else a
+                for a in args]
+        if "scale_factor" in kw:
+            laid.append(kw["scale_factor"])
+        return _layer(name, *laid)
+
+    make.__name__ = name
+    return make
+
+
+for _misc in ("Unfold", "Fold", "LocalResponseNorm", "Softmax2d", "RReLU",
+              "UpsamplingNearest2d", "UpsamplingBilinear2d"):
+    globals()[_misc] = _misc_layer(_misc)
 
 
 # ── 자리 옮기기·채널째 dropout ──────────────────────────────────────────

@@ -541,11 +541,26 @@ def max_pool3d(x, kernel_size, stride=None):
     return cat(slabs, 2)
 
 
-def interpolate(x, scale_factor=2, mode="nearest"):
-    """최근접 확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다."""
-    if mode != "nearest":
-        _unsupported(f"interpolate(mode={mode!r}) — 최근접만 있습니다")
+def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None):
+    """확대. 최근접과 겹선형 둘.
+
+    **`align_corners` 가 값을 바꾼다.** 참이면 양 끝을 못 박고 그 사이를 고르게
+    나누고(`src = i·(in−1)/(out−1)`), 거짓이면 칸의 **가운데**를 기준으로 잰다.
+    `UpsamplingBilinear2d` 는 참이고 `Upsample(mode='bilinear')` 의 기본값은
+    거짓이라, 이름만 보고 별명으로 두면 가장자리가 어긋난다 — 안쪽은 비슷해서
+    눈으로는 안 갈린다.
+    """
     x = _wrap(x)
+    if mode == "bilinear":
+        return _interpolate_bilinear(x, size, scale_factor, bool(align_corners))
+    if mode != "nearest":
+        _unsupported(f"interpolate(mode={mode!r}) — 최근접과 겹선형만 있습니다")
+    if size is not None:
+        n, c, h, w = x.data.shape
+        oh, ow = _pair(size)
+        if oh % h or ow % w:
+            _unsupported("interpolate(size=) — 배수가 아닌 확대")
+        scale_factor = (oh // h, ow // w)
     sh, sw = _pair(scale_factor)
     xd = x.data
     n, c, h, w = xd.shape
@@ -556,6 +571,54 @@ def interpolate(x, scale_factor=2, mode="nearest"):
         return (gg.sum(axis=(3, 5)),)
 
     return x._make(out, (x,), back, "UpsampleBackward0")
+
+
+def _bilinear_axis(size_in, size_out, align_corners):
+    """출력 자리마다 **어느 두 입력 자리를 얼마씩** 섞을지."""
+    if align_corners:
+        # 양 끝을 못 박고 그 사이를 고르게 나눈다.
+        src = (_np.arange(size_out, dtype=_np.float64)
+               * ((size_in - 1) / max(1, size_out - 1)))
+    else:
+        # 칸의 가운데를 기준으로 잰다. 밖으로 나가는 자리는 가장자리에 붙인다.
+        scale = size_in / size_out
+        src = (_np.arange(size_out, dtype=_np.float64) + 0.5) * scale - 0.5
+        src = _np.clip(src, 0, None)
+    lo = _np.floor(src).astype(_np.intp)
+    hi = _np.minimum(lo + 1, size_in - 1)
+    return lo, hi, (src - lo)
+
+
+def _interpolate_bilinear(x, size, scale_factor, align_corners):
+    n, c, h, w = x.data.shape
+    if size is not None:
+        oh, ow = _pair(size)
+    else:
+        sh, sw = _pair(scale_factor)
+        oh, ow = int(h * sh), int(w * sw)
+    y0, y1, wy = _bilinear_axis(h, oh, align_corners)
+    x0, x1, wx = _bilinear_axis(w, ow, align_corners)
+    wy = wy.astype(x.data.dtype)[:, None]
+    wx = wx.astype(x.data.dtype)[None, :]
+
+    def blend(t):
+        top = t[:, :, y0][:, :, :, x0] * (1 - wx) + t[:, :, y0][:, :, :, x1] * wx
+        bot = t[:, :, y1][:, :, :, x0] * (1 - wx) + t[:, :, y1][:, :, :, x1] * wx
+        return top * (1 - wy) + bot * wy
+
+    def back(g):
+        gg = _np.asarray(g)
+        out = _np.zeros_like(x.data)
+        for ys, wgt_y in ((y0, 1 - wy), (y1, wy)):
+            for xs, wgt_x in ((x0, 1 - wx), (x1, wx)):
+                share = gg * wgt_y * wgt_x
+                # 같은 자리를 여러 번 읽으므로 **모아 더한다.**
+                for i, yi in enumerate(ys):
+                    _np.add.at(out[:, :, yi], (slice(None), slice(None), xs),
+                               share[:, :, i])
+        return (out,)
+
+    return x._make(blend(x.data), (x,), back, "UpsampleBilinear2DBackward0")
 
 
 def _spread(v, n):
@@ -3010,6 +3073,146 @@ def multilabel_margin_loss(pred, target, reduction="mean"):
                 total = term if total is None else total + term
     out = (total if total is not None else Tensor(_np.zeros((), dtype=x.data.dtype)))
     return _reduce(out.reshape(1) / classes, reduction)
+
+
+# ---------------------------------------------------------------- 창 펴기
+#
+# **`unfold` 와 `fold` 는 서로의 역이 아니다.** `unfold` 는 창을 열로 펴고 `fold` 는
+# 그것을 되접는데 **겹친 자리를 더한다** — 4×4 를 2×2 창으로 펴서 그대로 되접으면
+# 가운데가 네 번 세어져 원본이 안 나온다. 합치는 것이 규약이다.
+#
+# 그래서 색인 하나로 둘을 만든다. 어느 자리에서 왔는지를 정리해 두면 `unfold` 는
+# 그 자리를 모으는 것이고 `fold` 는 그 자리로 **더해 넣는 것**이라, 한쪽의 역방향이
+# 곧 다른 쪽이 된다. 패딩에서 쓴 것과 같은 기계다.
+
+def _window_index(shape, kernel, dilation, padding, stride):
+    """`(C·kh·kw, L)` 자리표. 값은 **패딩된** 입력의 평평한 자리다."""
+    c, h, w = shape
+    kh, kw = kernel
+    dh, dw = dilation
+    ph, pw = padding
+    sh, sw = stride
+    hp, wp = h + 2 * ph, w + 2 * pw
+    out_h = (hp - dh * (kh - 1) - 1) // sh + 1
+    out_w = (wp - dw * (kw - 1) - 1) // sw + 1
+    idx = _np.empty((c * kh * kw, out_h * out_w), dtype=_np.intp)
+    row = 0
+    for ch in range(c):
+        for i in range(kh):
+            for j in range(kw):
+                col = 0
+                for oh in range(out_h):
+                    for ow in range(out_w):
+                        y = oh * sh + i * dh
+                        x = ow * sw + j * dw
+                        idx[row, col] = (ch * hp + y) * wp + x
+                        col += 1
+                row += 1
+    return idx, (out_h, out_w)
+
+
+def _pair(v):
+    return (v, v) if isinstance(v, int) else tuple(v)
+
+
+def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
+    """창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
+
+    **이름이 이미 있는 것과 부딪힌다.** `Tensor.unfold(dim, size, step)` 은 한 축을
+    창으로 미는 **뷰**이고 이것은 im2col 이다 — torch 도 이름이 같고 하는 일이 다르다
+    (`torch.Tensor.unfold` 대 `torch.nn.functional.unfold`). 모듈 자리에 같은 이름으로
+    두었더니 앞의 것을 덮어서 `shape::unfold` 케이스 셋이 한꺼번에 무너졌다.
+    여기서는 이름을 갈라 두고 `F.unfold` 쪽에만 이것을 건다.
+    """
+    t = _mat(x, "unfold", square=False)
+    if t.data.ndim != 4:
+        _unsupported("unfold(4차원이 아닌 것)")
+    kernel, dil = _pair(kernel_size), _pair(dilation)
+    pad_, strd = _pair(padding), _pair(stride)
+    padded = pad(t, (pad_[1], pad_[1], pad_[0], pad_[0]))
+    n, c = t.data.shape[0], t.data.shape[1]
+    idx, _ = _window_index(t.data.shape[1:], kernel, dil, pad_, strd)
+    flat = padded.reshape(n, -1)
+    return flat[:, idx.reshape(-1)].reshape(n, idx.shape[0], idx.shape[1])
+
+
+def fold(x, output_size, kernel_size, dilation=1, padding=0, stride=1):
+    """편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다."""
+    t = _wrap(x)
+    kernel, dil = _pair(kernel_size), _pair(dilation)
+    pad_, strd = _pair(padding), _pair(stride)
+    out_h, out_w = _pair(output_size)
+    n = t.data.shape[0]
+    c = t.data.shape[1] // (kernel[0] * kernel[1])
+    idx, _ = _window_index((c, out_h, out_w), kernel, dil, pad_, strd)
+    hp, wp = out_h + 2 * pad_[0], out_w + 2 * pad_[1]
+    flat_idx = idx.reshape(-1)
+
+    def back(g):
+        gg = _np.asarray(g).reshape(n, -1)
+        return (gg[:, flat_idx].reshape(t.data.shape),)
+
+    out = _np.zeros((n, c * hp * wp), dtype=t.data.dtype)
+    _np.add.at(out, (slice(None), flat_idx), t.data.reshape(n, -1))
+    made = out.reshape(n, c, hp, wp)
+    if pad_[0] or pad_[1]:
+        made = made[:, :, pad_[0]:hp - pad_[0], pad_[1]:wp - pad_[1]]
+    return t._make(made, (t,), back, "FoldBackward0")
+
+
+# ---------------------------------------------------------------- 나머지 층
+
+def bilinear(input1, input2, weight, bias=None):
+    """`y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. 가중치가 **세 축**이다."""
+    a, b_, w = _wrap(input1), _wrap(input2), _wrap(weight)
+    out = einsum("bi,oij,bj->bo", a, w, b_)
+    return out + _wrap(bias) if bias is not None else out
+
+
+def local_response_norm(x, size, alpha=1e-4, beta=0.75, k=1.0):
+    """이웃 채널로 나눈다.
+
+    **창이 한쪽으로 치우쳐 있다.** 채널 `c` 의 창은 `[c − n//2, c + n − 1 − n//2]`
+    이고, `size=2` 면 `{c−1, c}` 이지 `{c, c+1}` 이 아니다 — 재서 확인했다.
+    가운데를 잡으면 값이 한 칸씩 밀리는데 크기가 같아서 모양으로는 안 보인다.
+    """
+    t = _wrap(x)
+    left = size // 2
+    sq = t * t
+    total = None
+    for offset in range(size):
+        shift = offset - left
+        piece = _np.zeros_like(sq.data)
+        c = sq.data.shape[1]
+        src = slice(max(0, shift), min(c, c + shift))
+        dst = slice(max(0, -shift), min(c, c - shift))
+        piece[:, dst] = 1.0
+        moved = _roll_channels(sq, shift) * Tensor(piece)
+        total = moved if total is None else total + moved
+    return t / (total * (alpha / size) + k) ** beta
+
+
+def _roll_channels(t, shift):
+    """채널 축을 `shift` 만큼 민다. 밖에서 들어온 자리는 뒤에서 0 으로 지운다."""
+    if shift == 0:
+        return t
+    rolled = _np.roll(t.data, -shift, axis=1)
+    return t._make(rolled, (t,),
+                   lambda g: (_np.roll(_np.asarray(g), shift, axis=1),),
+                   "RollBackward0")
+
+
+def rrelu(x, lower=1.0 / 8, upper=1.0 / 3, training=False, inplace=False):
+    """음수 쪽 기울기를 뽑아 쓴다.
+
+    **평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.
+    학습 때만 `[lower, upper]` 에서 뽑으므로, 난수가 끼는 자리는 그쪽뿐이다.
+    """
+    t = _wrap(x)
+    if not training:
+        return leaky_relu(t, (lower + upper) / 2)
+    slope = _rng.uniform(lower, upper, t.data.shape).astype(t.data.dtype)
+    return where(Tensor((t.data > 0).astype(t.data.dtype)), t, t * Tensor(slope))
 
 
 # ---------------------------------------------------------------- 자리 옮기기

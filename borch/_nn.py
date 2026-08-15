@@ -32,6 +32,9 @@ from ._ops import (
     # 자리 옮기기와 채널째 dropout.
     alpha_dropout, channel_shuffle, dropout1d, dropout2d, dropout3d,
     feature_alpha_dropout, pixel_shuffle, pixel_unshuffle,
+    # 창 펴기와 나머지. **`unfold_im2col` 은 이름이 갈려 있다** — `Tensor.unfold` 와
+    # 하는 일이 달라서 모듈 자리를 나눠 쓸 수가 없다(그쪽 주석 참고).
+    amax, bilinear, fold, local_response_norm, rrelu, unfold_im2col,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -1541,6 +1544,169 @@ class BatchNorm3d(BatchNorm2d):
     (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
 
 
+# ---------------------------------------------------------------- 나머지 층
+
+class Unfold(Module):
+    def __init__(self, kernel_size, dilation=1, padding=0, stride=1):
+        super().__init__()
+        self.kernel_size, self.dilation = kernel_size, dilation
+        self.padding, self.stride = padding, stride
+
+    def forward(self, x):
+        return unfold_im2col(x, self.kernel_size, self.dilation, self.padding,
+                             self.stride)
+
+    def __repr__(self):
+        return (f"Unfold(kernel_size={self.kernel_size}, "
+                f"dilation={self.dilation}, padding={self.padding}, "
+                f"stride={self.stride})")
+
+
+class Fold(Module):
+    def __init__(self, output_size, kernel_size, dilation=1, padding=0, stride=1):
+        super().__init__()
+        self.output_size, self.kernel_size = output_size, kernel_size
+        self.dilation, self.padding, self.stride = dilation, padding, stride
+
+    def forward(self, x):
+        return fold(x, self.output_size, self.kernel_size, self.dilation,
+                    self.padding, self.stride)
+
+    def __repr__(self):
+        return (f"Fold(output_size={self.output_size}, "
+                f"kernel_size={self.kernel_size}, dilation={self.dilation}, "
+                f"padding={self.padding}, stride={self.stride})")
+
+
+class Bilinear(Module):
+    """두 입력을 **한꺼번에** 섞는다. 가중치가 세 축이라 `(out, in1, in2)` 다."""
+
+    def __init__(self, in1_features, in2_features, out_features, bias=True):
+        super().__init__()
+        self.in1_features, self.in2_features = in1_features, in2_features
+        self.out_features = out_features
+        bound = 1.0 / _math.sqrt(in1_features)
+        self.weight = Parameter(_rng.uniform(
+            -bound, bound, (out_features, in1_features, in2_features)
+        ).astype(_DEFAULT_DTYPE))
+        if bias:
+            self.bias = Parameter(
+                _rng.uniform(-bound, bound, out_features).astype(_DEFAULT_DTYPE))
+
+    def forward(self, x1, x2):
+        return bilinear(x1, x2, self.weight, getattr(self, "bias", None))
+
+    def __repr__(self):
+        return (f"Bilinear(in1_features={self.in1_features}, "
+                f"in2_features={self.in2_features}, "
+                f"out_features={self.out_features}, "
+                f"bias={getattr(self, 'bias', None) is not None})")
+
+
+class LocalResponseNorm(Module):
+    def __init__(self, size, alpha=1e-4, beta=0.75, k=1.0):
+        super().__init__()
+        self.size, self.alpha, self.beta, self.k = size, alpha, beta, k
+
+    def forward(self, x):
+        return local_response_norm(x, self.size, self.alpha, self.beta, self.k)
+
+    def __repr__(self):
+        return (f"LocalResponseNorm({self.size}, alpha={self.alpha}, "
+                f"beta={self.beta}, k={self.k})")
+
+
+class Softmax2d(Module):
+    """`(N, C, H, W)` 의 **채널 방향** softmax. `softmax(dim=1)` 과 같다."""
+
+    def forward(self, x):
+        return softmax(x, dim=1)
+
+    def __repr__(self):
+        return "Softmax2d()"
+
+
+class RReLU(Module):
+    def __init__(self, lower=1.0 / 8, upper=1.0 / 3, inplace=False):
+        super().__init__()
+        self.lower, self.upper, self.inplace = lower, upper, inplace
+
+    def forward(self, x):
+        return rrelu(x, self.lower, self.upper, self.training)
+
+    def __repr__(self):
+        return f"RReLU(lower={self.lower}, upper={self.upper})"
+
+
+class _Upsampling(Module):
+    """옛 이름 둘. **`UpsamplingBilinear2d` 는 `align_corners=True` 다** —
+    `Upsample(mode='bilinear')` 의 기본값과 다르다."""
+
+    _mode = "nearest"
+    _corners = None
+
+    def __init__(self, size=None, scale_factor=None):
+        super().__init__()
+        self.size, self.scale_factor = size, scale_factor
+
+    def forward(self, x):
+        return interpolate(x, size=self.size, scale_factor=self.scale_factor,
+                           mode=self._mode, align_corners=self._corners)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(scale_factor="
+                f"{float(self.scale_factor)}, mode={self._mode!r})")
+
+
+class UpsamplingNearest2d(_Upsampling):
+    _mode = "nearest"
+
+
+class UpsamplingBilinear2d(_Upsampling):
+    _mode = "bilinear"
+    _corners = True
+
+
+class EmbeddingBag(Module):
+    """가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 층이다.
+
+    `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인
+    자리가 그 모양이다.
+    """
+
+    def __init__(self, num_embeddings, embedding_dim, mode="mean"):
+        super().__init__()
+        self.num_embeddings, self.embedding_dim = num_embeddings, embedding_dim
+        self.mode = mode
+        self.weight = Parameter(
+            _rng.standard_normal((num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE))
+
+    def forward(self, idx, offsets=None):
+        picked = embedding(idx, self.weight)
+        if offsets is None:
+            return self._squash(picked, dim=1)
+        bounds = [int(v) for v in _wrap(offsets).data] + [int(_wrap(idx).data.size)]
+        parts = [self._squash(picked[bounds[i]:bounds[i + 1]], dim=0)
+                 for i in range(len(bounds) - 1)]
+        return stack(parts, dim=0)
+
+    def _squash(self, picked, dim):
+        if self.mode == "sum":
+            return picked.sum(dim=dim)
+        if self.mode == "max":
+            return amax(picked, dim=dim)
+        return picked.mean(dim=dim)
+
+    def __repr__(self):
+        return (f"EmbeddingBag({self.num_embeddings}, {self.embedding_dim}, "
+                f"mode={self.mode!r})")
+
+
+for _cls in (Unfold, Fold, Bilinear, LocalResponseNorm, Softmax2d, RReLU,
+             UpsamplingNearest2d, UpsamplingBilinear2d, EmbeddingBag):
+    setattr(nn, _cls.__name__, _cls)
+
+
 # ------------------------------------------------- 자리 옮기기·채널째 dropout
 #
 # 여덟 층이 전부 함수 하나를 부른다. 갈리는 것은 넘길 인자와 찍는 글자뿐이다.
@@ -1971,6 +2137,12 @@ class _Functional(_Namespace):
     dropout3d = staticmethod(dropout3d)
     alpha_dropout = staticmethod(alpha_dropout)
     feature_alpha_dropout = staticmethod(feature_alpha_dropout)
+    # 창 펴기와 나머지. **`F.unfold` 는 im2col 이다** — `Tensor.unfold` 와 다르다.
+    unfold = staticmethod(unfold_im2col)
+    fold = staticmethod(fold)
+    bilinear = staticmethod(bilinear)
+    local_response_norm = staticmethod(local_response_norm)
+    rrelu = staticmethod(rrelu)
     softmax = staticmethod(softmax)
     log_softmax = staticmethod(log_softmax)
     relu = staticmethod(relu)

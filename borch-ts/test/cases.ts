@@ -466,6 +466,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addLoss(out);
   addLazy(out);
   addShuffle(out);
+  addMisc(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -973,6 +974,112 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
  * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
  * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
  */
+/**
+ * 남은 층 아홉 — 창을 펴는 둘과 나머지.
+ *
+ * 함정 넷은 파이썬 쪽 `misc_cases` 에 적었다 — 짧게: `fold` 는 겹친 자리를 더하고,
+ * `LocalResponseNorm` 의 창은 왼쪽으로 치우쳐 있으며, `RReLU` 는 평가 모드에서
+ * 기울기가 정해지고, `UpsamplingBilinear2d` 는 `alignCorners=true` 다.
+ */
+function addMisc(out: Map<string, Case>): void {
+  const seq = (n: number, shape: number[]) =>
+    Tensor.from(Array.from({ length: n }, (_, i) => i), shape);
+  const img = () => seq(16, [1, 1, 4, 4]);
+  const img3 = () => seq(48, [1, 3, 4, 4]);
+  const small = () => seq(4, [1, 1, 2, 2]);
+  const chans = () => Tensor.from([1, 2, 3, 4], [1, 4, 1, 1]);
+  const cube = () => seq(12, [1, 3, 2, 2]);
+
+  const value: [string, () => Tensor][] = [
+    ["unfold", () => img().unfoldIm2col(2)],
+    ["unfold(stride=2)", () => img().unfoldIm2col(2, 1, 0, 2)],
+    ["unfold(padding=1)", () => img().unfoldIm2col(2, 1, 1)],
+    ["unfold(채널 셋)", () => img3().unfoldIm2col(2)],
+    ["fold(겹친 자리는 더한다)", () => img().unfoldIm2col(2).fold([4, 4], 2)],
+    ["fold(stride=2 면 안 겹친다)",
+      () => img().unfoldIm2col(2, 1, 0, 2).fold([4, 4], 2, 1, 0, 2)],
+    ["층::Unfold", () => new nn.Unfold(2).call(img())],
+    ["층::Fold",
+      () => new nn.Fold([4, 4], 2).call(new nn.Unfold(2).call(img()))],
+
+    ["local_response_norm", () => chans().localResponseNorm(2)],
+    ["local_response_norm(alpha=1)",
+      () => chans().localResponseNorm(2, 1, 1, 1)],
+    ["local_response_norm(size=3)",
+      () => chans().localResponseNorm(3, 1, 1, 1)],
+    ["층::LocalResponseNorm", () => new nn.LocalResponseNorm(2).call(chans())],
+
+    ["층::Softmax2d", () => new nn.Softmax2d().call(cube())],
+    ["Softmax2d 는 softmax(dim=1)",
+      () => new nn.Softmax2d().call(cube()).sub(cube().softmax(1))],
+
+    ["rrelu(eval)", () => Tensor.from([-1, -2, 1], [1, 3]).rrelu()],
+    ["층::RReLU(eval)",
+      () => new nn.RReLU().eval().call(Tensor.from([-1, -2, 1], [1, 3]))],
+    ["rrelu(eval, 범위 지정)",
+      () => Tensor.from([-1, -2, 1], [1, 3]).rrelu(0.2, 0.4, false)],
+
+    ["층::UpsamplingNearest2d",
+      () => new nn.UpsamplingNearest2d(2).call(small())],
+    ["층::UpsamplingBilinear2d",
+      () => new nn.UpsamplingBilinear2d(2).call(small())],
+    ["UpsamplingBilinear2d 는 align_corners=True",
+      () => new nn.UpsamplingBilinear2d(2).call(small())
+        .sub(small().interpolateBilinear(4, 4, true))],
+  ];
+  for (const [name, fn] of value) out.set(`misc::${name}`, fn);
+
+  out.set("misc::grad::unfold", () => {
+    const x = Tensor.from(Array.from({ length: 16 }, (_, i) => i),
+      [1, 1, 4, 4], true);
+    seeded(x.unfoldIm2col(2)).backward();
+    return gradOf(x, "unfold");
+  });
+
+  const w = Array.from({ length: 24 }, (_, i) => i / 10);
+  const bias = [0.5, -0.25];
+  const a1 = () => Tensor.from([1, 2, 3], [1, 3]);
+  const a2 = () => Tensor.from([1, 1, 1, 1], [1, 4]);
+  out.set("misc::bilinear", () =>
+    a1().bilinear(a2(), Tensor.from(w, [2, 3, 4]), Tensor.from(bias, [2])));
+  out.set("misc::bilinear(편향 없이)", () =>
+    a1().bilinear(a2(), Tensor.from(w, [2, 3, 4])));
+  out.set("misc::층::Bilinear", () => {
+    const layer = new nn.Bilinear(3, 4, 2);
+    layer.loadStateDict({
+      weight: Tensor.from(w, [2, 3, 4]), bias: Tensor.from(bias, [2]),
+    });
+    return layer.call2(a1(), a2());
+  });
+
+  const table = Array.from({ length: 15 }, (_, i) => i);
+  const bags = () => Tensor.from([0, 1, 2, 3], [2, 2]);
+  for (const mode of ["sum", "mean", "max"] as const) {
+    out.set(`misc::층::EmbeddingBag(${mode})`, () => {
+      const layer = new nn.EmbeddingBag(5, 3, mode);
+      layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
+      return layer.call(bags());
+    });
+  }
+
+  out.set("misc::층::EmbeddingBag(offsets)", () => {
+    const layer = new nn.EmbeddingBag(5, 3, "sum");
+    layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
+    return layer.callOffsets(Tensor.from([0, 1, 2, 3], [4]), [0, 2]);
+  });
+
+  for (const [name, make] of [
+    ["Bilinear", () => new nn.Bilinear(3, 4, 2)],
+    ["LocalResponseNorm", () => new nn.LocalResponseNorm(2)],
+    ["Softmax2d", () => new nn.Softmax2d()],
+    ["RReLU", () => new nn.RReLU()],
+    ["EmbeddingBag", () => new nn.EmbeddingBag(5, 3)],
+  ] as const) {
+    out.set(`misc::repr::${name}`,
+      async () => (make() as unknown as { describe(): string }).describe());
+  }
+}
+
 /**
  * 자리를 옮기는 층 셋과 채널째 떨구는 dropout 다섯.
  *

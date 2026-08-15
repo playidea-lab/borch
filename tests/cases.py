@@ -1354,6 +1354,161 @@ def opt_cases(inp=None):
     return cases
 
 
+MISC_PREFIX = "misc::"
+
+
+def misc_cases(inp=None):
+    """남은 층 아홉 — 창을 펴는 둘과 나머지.
+
+    ## `Unfold` 와 `Fold` 는 서로의 역이 아니다
+
+    `Unfold` 는 창을 열로 펴고 `Fold` 는 그것을 되접는데, **겹친 자리를 더한다.**
+    4×4 를 2×2 창으로 펴서 그대로 되접으면 가운데 값이 네 번 세어져 원본이 안 나온다
+    (실측: `[[0,2,4,3],[8,20,24,14],…]`). 되돌리기로 읽으면 조용히 틀리는 자리다.
+
+    합치는 것이 규약이라 **역방향이 저절로 맞는다** — `Unfold` 의 역방향이 곧 `Fold`
+    이고 그 반대도 같다. 색인 하나로 적으면 둘이 한 기계가 된다.
+
+    ## `LocalResponseNorm` 의 창은 한쪽으로 치우쳐 있다
+
+    채널 `c` 의 창이 `[c − n//2, c + n − 1 − n//2]` 다. `size=2` 면 `{c−1, c}` 이지
+    `{c, c+1}` 이 아니다 — 재서 확인했다. 가운데를 잡으면 값이 한 칸씩 밀리는데,
+    크기가 같아서 모양으로는 안 보인다.
+
+    ## `RReLU` 는 평가 모드에서 기울기가 정해진다
+
+    학습 때는 `[lower, upper]` 에서 뽑고 평가 때는 그 **가운데**를 쓴다 —
+    기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다. 난수가 안 끼는 쪽만 값으로 묻는다.
+
+    ## `UpsamplingBilinear2d` 는 `align_corners=True` 다
+
+    `Upsample(mode='bilinear')` 의 기본값은 `False` 라 값이 다르다. 이름만 보고
+    별명으로 두면 가장자리가 어긋나는데, 안쪽은 비슷해서 눈으로는 안 갈린다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((MISC_PREFIX + name, fn))
+
+    def F(L):
+        return L.nn.functional
+
+    img = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+    img3 = np.arange(3 * 16, dtype=np.float32).reshape(1, 3, 4, 4)
+    small = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+    chans = (np.arange(4, dtype=np.float32).reshape(1, 4, 1, 1) + 1)
+    cube = np.arange(3 * 4, dtype=np.float32).reshape(1, 3, 2, 2)
+
+    # ── 창을 펴고 되접기 ────────────────────────────────────────────────
+    add("unfold", lambda L: F(L).unfold(L.tensor(img), 2))
+    add("unfold(stride=2)", lambda L: F(L).unfold(L.tensor(img), 2, stride=2))
+    add("unfold(padding=1)", lambda L: F(L).unfold(L.tensor(img), 2, padding=1))
+    add("unfold(채널 셋)", lambda L: F(L).unfold(L.tensor(img3), 2))
+    # **되접으면 겹친 자리가 더해진다.** 원본이 안 나오는 것이 규약이다.
+    add("fold(겹친 자리는 더한다)",
+        lambda L: F(L).fold(F(L).unfold(L.tensor(img), 2), (4, 4), 2))
+    add("fold(stride=2 면 안 겹친다)",
+        lambda L: F(L).fold(F(L).unfold(L.tensor(img), 2, stride=2), (4, 4), 2,
+                            stride=2))
+    add("층::Unfold", lambda L: L.nn.Unfold(2)(L.tensor(img)))
+    add("층::Fold",
+        lambda L: L.nn.Fold((4, 4), 2)(L.nn.Unfold(2)(L.tensor(img))))
+
+    def unfold_grad(L):
+        x = L.tensor(img, requires_grad=True)
+        out = F(L).unfold(x, 2)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "unfold")
+
+    add("grad::unfold", unfold_grad)
+
+    # ── Bilinear ────────────────────────────────────────────────────────
+    w = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) / 10
+    bias = np.array([0.5, -0.25], dtype=np.float32)
+    a1 = np.array([[1., 2., 3.]], dtype=np.float32)
+    a2 = np.array([[1., 1., 1., 1.]], dtype=np.float32)
+    add("bilinear",
+        lambda L: F(L).bilinear(L.tensor(a1), L.tensor(a2), L.tensor(w),
+                                L.tensor(bias)))
+    add("bilinear(편향 없이)",
+        lambda L: F(L).bilinear(L.tensor(a1), L.tensor(a2), L.tensor(w)))
+
+    def bilinear_layer(L):
+        # **`load_state_dict` 로 넣는다.** `.data =` 는 라이브러리마다 뜻이 달라서
+        # (torch 는 텐서를, 우리 코어는 numpy 배열을 준다) 케이스 본문이 한쪽 편을
+        # 들게 된다 — 이 표가 이미 그 이유로 그쪽을 안 쓴다.
+        layer = L.nn.Bilinear(3, 4, 2)
+        layer.load_state_dict({"weight": L.tensor(w), "bias": L.tensor(bias)})
+        return layer(L.tensor(a1), L.tensor(a2))
+
+    add("층::Bilinear", bilinear_layer)
+    add("repr::Bilinear", lambda L: repr(L.nn.Bilinear(3, 4, 2)))
+
+    # ── LocalResponseNorm ───────────────────────────────────────────────
+    add("local_response_norm",
+        lambda L: F(L).local_response_norm(L.tensor(chans), 2))
+    # 기본값은 차이가 아주 작아서 창의 자리를 못 가른다. 알파를 키워 묻는다.
+    add("local_response_norm(alpha=1)",
+        lambda L: F(L).local_response_norm(L.tensor(chans), 2, alpha=1.0,
+                                           beta=1.0, k=1.0))
+    add("local_response_norm(size=3)",
+        lambda L: F(L).local_response_norm(L.tensor(chans), 3, alpha=1.0,
+                                           beta=1.0, k=1.0))
+    add("층::LocalResponseNorm",
+        lambda L: L.nn.LocalResponseNorm(2)(L.tensor(chans)))
+    add("repr::LocalResponseNorm", lambda L: repr(L.nn.LocalResponseNorm(2)))
+
+    # ── Softmax2d ───────────────────────────────────────────────────────
+    add("층::Softmax2d", lambda L: L.nn.Softmax2d()(L.tensor(cube)))
+    add("Softmax2d 는 softmax(dim=1)",
+        lambda L: L.nn.Softmax2d()(L.tensor(cube)) - F(L).softmax(L.tensor(cube),
+                                                                  dim=1))
+    add("repr::Softmax2d", lambda L: repr(L.nn.Softmax2d()))
+
+    # ── RReLU — 난수가 안 끼는 쪽만 ─────────────────────────────────────
+    neg = np.array([[-1., -2., 1.]], dtype=np.float32)
+    add("rrelu(eval)", lambda L: F(L).rrelu(L.tensor(neg), training=False))
+    add("층::RReLU(eval)", lambda L: L.nn.RReLU().eval()(L.tensor(neg)))
+    add("rrelu(eval, 범위 지정)",
+        lambda L: F(L).rrelu(L.tensor(neg), lower=0.2, upper=0.4,
+                             training=False))
+    add("repr::RReLU", lambda L: repr(L.nn.RReLU()))
+
+    # ── Upsampling — 옛 이름 둘 ─────────────────────────────────────────
+    add("층::UpsamplingNearest2d",
+        lambda L: L.nn.UpsamplingNearest2d(scale_factor=2)(L.tensor(small)))
+    add("층::UpsamplingBilinear2d",
+        lambda L: L.nn.UpsamplingBilinear2d(scale_factor=2)(L.tensor(small)))
+    # **`align_corners=True` 다.** `Upsample` 의 기본값과 다르다는 것이 요점이라
+    # 그 차이를 값으로 묻는다.
+    add("UpsamplingBilinear2d 는 align_corners=True",
+        lambda L: L.nn.UpsamplingBilinear2d(scale_factor=2)(L.tensor(small))
+        - F(L).interpolate(L.tensor(small), scale_factor=2, mode="bilinear",
+                           align_corners=True))
+
+    # ── EmbeddingBag ────────────────────────────────────────────────────
+    table = np.arange(15, dtype=np.float32).reshape(5, 3)
+    bags = np.array([[0, 1], [2, 3]], dtype=np.int64)
+
+    def bag(L, mode):
+        layer = L.nn.EmbeddingBag(5, 3, mode=mode)
+        layer.load_state_dict({"weight": L.tensor(table)})
+        return layer(L.tensor(bags))
+
+    for mode in ("sum", "mean", "max"):
+        add(f"층::EmbeddingBag({mode})", lambda L, m=mode: bag(L, m))
+    add("repr::EmbeddingBag", lambda L: repr(L.nn.EmbeddingBag(5, 3)))
+
+    def bag_offsets(L):
+        layer = L.nn.EmbeddingBag(5, 3, mode="sum")
+        layer.load_state_dict({"weight": L.tensor(table)})
+        return layer(L.tensor(np.array([0, 1, 2, 3], dtype=np.int64)),
+                     L.tensor(np.array([0, 2], dtype=np.int64)))
+
+    add("층::EmbeddingBag(offsets)", bag_offsets)
+    return cases
+
+
 SHUFFLE_PREFIX = "shuffle::"
 
 
@@ -4282,7 +4437,7 @@ def golden_cases(inp=None):
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
-            + shuffle_cases(inp)
+            + shuffle_cases(inp) + misc_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

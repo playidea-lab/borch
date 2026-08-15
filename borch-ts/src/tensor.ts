@@ -35,6 +35,65 @@ export type Reduction = "none" | "mean" | "sum";
  */
 const ALPHA_PRIME = -1.7580993408473766;
 
+/** 수 하나면 축마다 같은 값으로. */
+function pairOf(v: number | readonly number[]): [number, number] {
+  return typeof v === "number" ? [v, v] : [v[0] ?? 0, v[1] ?? 0];
+}
+
+/**
+ * `(C·kh·kw, L)` 자리표. 값은 **덧댄** 입력의 평평한 자리다.
+ *
+ * `unfold` 는 이 자리를 모으고 `fold` 는 이 자리로 더해 넣는다 — 둘이 한 표를
+ * 나눠 쓰므로 한쪽의 역방향이 곧 다른 쪽이 된다.
+ */
+function windowIndex(
+  shape: [number, number, number],
+  kernel: [number, number],
+  dilation: [number, number],
+  padding: [number, number],
+  stride: [number, number],
+): { idx: number[]; rows: number; cols: number } {
+  const [c, h, w] = shape;
+  const [kh, kw] = kernel;
+  const [dh, dw] = dilation;
+  const [ph, pw] = padding;
+  const [sh, sw] = stride;
+  const hp = h + 2 * ph;
+  const wp = w + 2 * pw;
+  const outH = Math.floor((hp - dh * (kh - 1) - 1) / sh) + 1;
+  const outW = Math.floor((wp - dw * (kw - 1) - 1) / sw) + 1;
+  const idx: number[] = [];
+  for (let ch = 0; ch < c; ch++) {
+    for (let i = 0; i < kh; i++) {
+      for (let j = 0; j < kw; j++) {
+        for (let oh = 0; oh < outH; oh++) {
+          for (let ow = 0; ow < outW; ow++) {
+            idx.push((ch * hp + oh * sh + i * dh) * wp + ow * sw + j * dw);
+          }
+        }
+      }
+    }
+  }
+  return { idx, rows: c * kh * kw, cols: outH * outW };
+}
+
+/** 겹선형 확대가 출력 자리마다 **어느 두 입력 자리를 얼마씩** 섞을지. */
+function bilinearAxis(sizeIn: number, sizeOut: number, alignCorners: boolean) {
+  const lo: number[] = [];
+  const hi: number[] = [];
+  const frac: number[] = [];
+  for (let i = 0; i < sizeOut; i++) {
+    const src = alignCorners
+      ? i * ((sizeIn - 1) / Math.max(1, sizeOut - 1))
+      : Math.max(0, (i + 0.5) * (sizeIn / sizeOut) - 0.5);
+    const base = Math.floor(src);
+    lo.push(base);
+    hi.push(Math.min(base + 1, sizeIn - 1));
+    frac.push(src - base);
+  }
+  return { lo, hi, frac };
+}
+
 /**
  * 출력 자리마다 **입력의 어느 자리를 읽는지.**
  *
@@ -92,6 +151,7 @@ import {
   diagflat,
   diagflatBackward,
   dropoutMask,
+  uniformFill,
   expandDim,
   extremeBackward,
   fill,
@@ -1701,6 +1761,143 @@ export class Tensor implements Node<Tensor> {
       (g) => [g.narrow(axis, before, size)],
       "ConstantPadNdBackward0",
     );
+  }
+
+  // ── 창 펴기 ───────────────────────────────────────────────────────────
+  //
+  // **`unfold` 와 `fold` 는 서로의 역이 아니다.** 되접을 때 겹친 자리를 **더한다** —
+  // 4×4 를 2×2 창으로 펴서 그대로 되접으면 가운데가 네 번 세어진다.
+  //
+  // 색인 하나로 둘을 만든다. 어디서 왔는지를 정리해 두면 펴는 것은 모으기이고
+  // 되접는 것은 그 자리로 더해 넣기라, 한쪽의 역방향이 곧 다른 쪽이다.
+
+  /** 창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`. */
+  unfoldIm2col(kernel: number | [number, number], dilation = 1, padding = 0,
+               stride = 1): Tensor {
+    const [n, c, h, w] = this.shape as [number, number, number, number];
+    const [kh, kw] = pairOf(kernel);
+    const [ph, pw] = pairOf(padding);
+    const padded = padding
+      ? this.padND([pw, pw, ph, ph], "constant", 0)
+      : this;
+    const { idx, rows, cols } = windowIndex(
+      [c, h, w], [kh, kw], pairOf(dilation), [ph, pw], pairOf(stride));
+    return padded.reshape([n, padded.size / n])
+      .indexSelect(1, Tensor.from(idx, [idx.length]))
+      .reshape([n, rows, cols]);
+  }
+
+  /** 편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다. */
+  fold(outputSize: number | [number, number], kernel: number | [number, number],
+       dilation = 1, padding = 0, stride = 1): Tensor {
+    const n = this.shape[0] ?? 1;
+    const [kh, kw] = pairOf(kernel);
+    const [oh, ow] = pairOf(outputSize);
+    const [ph, pw] = pairOf(padding);
+    const c = (this.shape[1] ?? 1) / (kh * kw);
+    const { idx } = windowIndex(
+      [c, oh, ow], [kh, kw], pairOf(dilation), [ph, pw], pairOf(stride));
+    const hp = oh + 2 * ph;
+    const wp = ow + 2 * pw;
+    // 배치마다 같은 자리표를 쓴다 — `scatterAdd` 는 색인이 원본과 같은 모양이길 바란다.
+    const wide = new Float32Array(n * idx.length);
+    for (let b = 0; b < n; b++) wide.set(idx, b * idx.length);
+    const flat = Tensor.zeros([n, c * hp * wp]).scatterAdd(
+      1, Tensor.from(wide, [n, idx.length]), this.reshape([n, idx.length]));
+    const made = flat.reshape([n, c, hp, wp]);
+    if (!ph && !pw) return made;
+    return made.narrow(2, ph, oh).narrow(3, pw, ow);
+  }
+
+  // ── 나머지 층이 쓰는 것들 ─────────────────────────────────────────────
+
+  /**
+   * `y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. 가중치가 **세 축**이다.
+   *
+   * `einsum` 을 안 부른다 — 그쪽이 이 파일을 들여오므로 서로 물게 된다. 두 걸음으로
+   * 나누면 이미 있는 것들로 적힌다: 먼저 `x₂` 를 `W` 에 태워 `(B, O, I)` 를 만들고,
+   * 그 다음 `x₁` 과 마지막 축에서 접는다.
+   */
+  bilinear(other: Tensor, weight: Tensor, bias: Tensor | null = null): Tensor {
+    const [o, i, j] = weight.shape as [number, number, number];
+    const b = this.shape[0] ?? 1;
+    const mixed = other.linear(weight.reshape([o * i, j])).reshape([b, o, i]);
+    const out = this.reshape([b, 1, i]).mul(mixed).sumDim(2, false);
+    return bias ? out.add(bias) : out;
+  }
+
+  /**
+   * 이웃 채널로 나눈다.
+   *
+   * **창이 한쪽으로 치우쳐 있다.** 채널 `c` 의 창은 `[c − n//2, c + n − 1 − n//2]`
+   * 이고 `size=2` 면 `{c−1, c}` 다 — 가운데를 잡으면 값이 한 칸씩 밀리는데 크기가
+   * 같아서 모양으로는 안 보인다.
+   */
+  localResponseNorm(size: number, alpha = 1e-4, beta = 0.75, k = 1.0): Tensor {
+    const c = this.shape[1] ?? 1;
+    const left = Math.floor(size / 2);
+    const right = size - 1 - left;
+    // 채널 축에 0 을 덧대면 가장자리가 저절로 잘린다. `padND` 는 마지막 축부터
+    // 세므로 4 차원에서 채널은 셋째 짝이다.
+    const tail = new Array<number>(2 * (this.shape.length - 2)).fill(0);
+    const padded = this.square().padND([...tail, left, right], "constant", 0);
+    let total: Tensor | null = null;
+    for (let i = 0; i < size; i++) {
+      const piece = padded.narrow(1, i, c);
+      total = total ? total.add(piece) : piece;
+    }
+    const scaled = total!.binary("mul", Tensor.full([], alpha / size))
+      .binary("add", Tensor.full([], k));
+    return this.div(scaled.powScalar(beta));
+  }
+
+  /**
+   * 음수 쪽 기울기를 뽑아 쓴다.
+   *
+   * **평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.
+   * 난수가 끼는 것은 학습 모드뿐이다.
+   */
+  rrelu(lower = 1 / 8, upper = 1 / 3, training = false): Tensor {
+    if (!training) return this.leakyRelu((lower + upper) / 2);
+    const n = this.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`uni:${n}:${lower}:${upper}:${Tensor.dropoutSeed}`,
+        () => uniformFill(n, lower, upper, Tensor.dropoutSeed)),
+      [out],
+      n,
+    );
+    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+    const slope = new Tensor(out, this.shape);
+    const positive = this.binary("gt", Tensor.full([], 0));
+    return this.where(positive, this.mul(slope));
+  }
+
+  /**
+   * 겹선형 확대.
+   *
+   * **`alignCorners` 가 값을 바꾼다.** 참이면 양 끝을 못 박고 그 사이를 고르게
+   * 나누고, 거짓이면 칸의 가운데를 기준으로 잰다. `UpsamplingBilinear2d` 는 참이고
+   * `Upsample(mode='bilinear')` 의 기본값은 거짓이라, 이름만 보고 별명으로 두면
+   * 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다.
+   */
+  interpolateBilinear(outH: number, outW: number, alignCorners: boolean): Tensor {
+    const h = this.shape[2] ?? 1;
+    const w = this.shape[3] ?? 1;
+    const ys = bilinearAxis(h, outH, alignCorners);
+    const xs = bilinearAxis(w, outW, alignCorners);
+    const pick = (t: Tensor, axis: number, at: number[]) =>
+      t.indexSelect(axis, Tensor.from(at, [at.length]));
+    const wy = Tensor.from(ys.frac, [outH, 1]);
+    const wx = Tensor.from(xs.frac, [1, outW]);
+    const one = Tensor.full([], 1);
+    const corner = (yi: number[], xi: number[]) =>
+      pick(pick(this, 2, yi), 3, xi);
+    const top = corner(ys.lo, xs.lo).mul(one.sub(wx))
+      .add(corner(ys.lo, xs.hi).mul(wx));
+    const bottom = corner(ys.hi, xs.lo).mul(one.sub(wx))
+      .add(corner(ys.hi, xs.hi).mul(wx));
+    return top.mul(one.sub(wy)).add(bottom.mul(wy));
   }
 
   // ── 자리 옮기기 ───────────────────────────────────────────────────────
