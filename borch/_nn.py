@@ -1529,6 +1529,59 @@ class BatchNorm3d(BatchNorm2d):
     (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
 
 
+# ---------------------------------------------------------------- 패딩 층
+#
+# **열다섯 개가 한 기계에서 나온다.** 셋(1·2·3 차원) × 다섯(reflect·replicate·zero·
+# constant·circular)이고, 갈리는 것은 모드 이름과 짝의 개수뿐이다. 손으로 열다섯 벌을
+# 적으면 열다섯 자리가 어긋날 수 있는데, 실제로 갈리는 것은 두 가지뿐이다.
+#
+# **`ConstantPad` 만 다르게 찍는다** — 나머지는 짝만 찍고 그쪽은 이름을 붙인다
+# (`ConstantPad1d(padding=(2, 2), value=7.0)`). 진짜 torch 가 그렇고, 골든이 글자를
+# 굳혔으므로 그 차이가 답의 일부다.
+
+class _PadNd(Module):
+    _mode = "constant"
+    _dims = 1
+
+    def __init__(self, padding, value=0.0):
+        super().__init__()
+        pairs = 2 * self._dims
+        self.padding = ((padding,) * pairs if isinstance(padding, int)
+                        else tuple(padding))
+        self.value = value
+
+    def forward(self, x):
+        return pad(x, self.padding, mode=self._mode, value=self.value)
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.padding})"
+
+
+class _ConstantPadNd(_PadNd):
+    def __repr__(self):
+        return (f"{type(self).__name__}(padding={self.padding}, "
+                f"value={self.value})")
+
+
+def _make_pads():
+    """열다섯 개를 여기서 찍는다. 이름과 모드와 차수만 다르다."""
+    made = {}
+    for kind, mode, base in (("Reflection", "reflect", _PadNd),
+                             ("Replication", "replicate", _PadNd),
+                             ("Circular", "circular", _PadNd),
+                             ("Zero", "constant", _PadNd),
+                             ("Constant", "constant", _ConstantPadNd)):
+        for dims in (1, 2, 3):
+            name = f"{kind}Pad{dims}d"
+            made[name] = type(name, (base,), {"_mode": mode, "_dims": dims})
+    return made
+
+
+for _name, _pad_cls in _make_pads().items():
+    globals()[_name] = _pad_cls
+    setattr(nn, _name, _pad_cls)
+
+
 class Upsample(Module):
     """최근접 확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다."""
 

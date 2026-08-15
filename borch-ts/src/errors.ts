@@ -37,6 +37,17 @@ export class IndexError extends Error {
 }
 
 /**
+ * 조합이 아직 없는 것.
+ *
+ * **거절도 종류가 있다.** torch 는 "이 랭크에 이 패딩 짝수는 안 된다" 를
+ * `NotImplementedError` 로 내고, 그것은 "값이 잘못됐다"(`RuntimeError`)와 다른
+ * 말이다 — 앞은 언젠가 생길 수 있는 것이고 뒤는 부른 쪽이 틀린 것이다.
+ */
+export class NotImplementedError extends Error {
+  override readonly name = "NotImplementedError";
+}
+
+/**
  * 선형대수가 답을 못 내는 것 — 특이행렬, 양정부호가 아닌 콜레스키.
  *
  * **이름이 하는 일이 있다.** 특이행렬을 만날 수 있는 코드는 `except LinAlgError` 로

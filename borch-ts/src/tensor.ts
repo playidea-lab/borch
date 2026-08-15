@@ -9,7 +9,9 @@
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
 import { byRank, type DType, promote, rankOf } from "./dtype.js";
-import { IndexError, LinAlgError, RuntimeError, TORCH } from "./errors.js";
+import {
+  IndexError, LinAlgError, NotImplementedError, RuntimeError, TORCH,
+} from "./errors.js";
 
 /**
  * `_ex` 계열이 상한 행렬에 담는 값.
@@ -18,6 +20,38 @@ import { IndexError, LinAlgError, RuntimeError, TORCH } from "./errors.js";
  * 맞춘다 — 진짜 torch 에 2×2 특이행렬을 주니 2 였다.
  */
 const SINGULAR_INFO = 2;
+
+/** `F.pad` 가 받는 네 가지. */
+export type PadMode = "constant" | "reflect" | "replicate" | "circular";
+
+/**
+ * 출력 자리마다 **입력의 어느 자리를 읽는지.**
+ *
+ * 네 모드가 여기서만 갈린다. `[0,1,2]` 를 앞 2·뒤 1 로 늘리면(진짜 torch 에 물어
+ * 자리마다 맞췄다):
+ *
+ *     reflect    2 1 [0 1 2] 1   ← 가장자리를 거울로 **하되 가장자리는 안 겹친다**
+ *     replicate  0 0 [0 1 2] 2   ← 가장자리를 늘인다
+ *     circular   1 2 [0 1 2] 0   ← 반대편에서 가져온다
+ *
+ * 색인 하나로 정리하면 순방향은 `indexSelect` 이고 역방향은 그것이 이미 하는
+ * **모아 더하기**다 — 거울과 감기는 한 입력을 여러 번 읽으므로 덮어쓰면 그만큼이
+ * 사라지는데, 그 자리를 새로 적을 필요가 없어진다.
+ */
+function padIndex(
+  mode: PadMode, size: number, before: number, after: number,
+): number[] {
+  const idx: number[] = [];
+  for (let i = -before; i < size + after; i++) {
+    if (i >= 0 && i < size) { idx.push(i); continue; }
+    if (mode === "replicate") { idx.push(i < 0 ? 0 : size - 1); continue; }
+    if (mode === "circular") { idx.push(((i % size) + size) % size); continue; }
+    let j = i;
+    while (j < 0 || j >= size) j = j < 0 ? -j : 2 * (size - 1) - j;
+    idx.push(j);
+  }
+  return idx;
+}
 import * as LA from "./linalg.js";
 import { formatSize, formatTensor } from "./repr.js";
 import {
@@ -1656,6 +1690,51 @@ export class Tensor implements Node<Tensor> {
       (g) => [g.narrow(axis, before, size)],
       "ConstantPadNdBackward0",
     );
+  }
+
+  /**
+   * `F.pad` 의 자리 — **마지막 축부터 (앞, 뒤) 순으로** 받는다.
+   *
+   * **짝의 개수와 랭크가 맞물린다.** 짝이 하나면 2·3 차원, 둘이면 3·4 차원, 셋이면
+   * 4·5 차원이라야 한다 — torch 가 그 밖을 거절한다. 아무 랭크나 받으면 축을 잘못
+   * 잡고도 통과한다.
+   *
+   * 상수는 이미 있는 커널이 짧아서 그쪽으로 보내고, 나머지 셋은 색인으로 간다.
+   */
+  padND(padding: readonly number[], mode: PadMode = "constant", value = 0): Tensor {
+    const rank = this.shape.length;
+    const pairs = Math.floor(padding.length / 2);
+    if (mode !== "constant" && rank !== pairs + 1 && rank !== pairs + 2) {
+      // **거절의 종류가 답의 일부다.** torch 는 여기를 `NotImplementedError` 로 내고,
+      // 그것은 "부른 쪽이 틀렸다" 와 다른 말이다.
+      throw new NotImplementedError(
+        `Padding size ${padding.length} is not supported for ${rank}D input tensor`,
+      );
+    }
+    let out: Tensor = this;
+    for (let i = 0; i < pairs; i++) {
+      const axis = rank - 1 - i;
+      const before = padding[2 * i] ?? 0;
+      const after = padding[2 * i + 1] ?? 0;
+      if (before === 0 && after === 0) continue;
+      if (mode === "constant") {
+        out = out.pad(axis, before, after, value);
+        continue;
+      }
+      const size = out.shape[axis] ?? 0;
+      // **`reflect` 만 크기를 따진다.** 거울로 접으려면 접을 것이 있어야 한다.
+      // `replicate` 는 다섯 칸을 늘려도 되는데, 늘일 값이 늘 있기 때문이다.
+      if (mode === "reflect" && (before >= size || after >= size)) {
+        throw new RuntimeError(
+          "Argument #4: Padding size should be less than the corresponding input " +
+          `dimension, but got: padding (${before}, ${after}) at dimension ${axis} ` +
+          `of input ${rank}`,
+        );
+      }
+      const idx = padIndex(mode, size, before, after);
+      out = out.indexSelect(axis, Tensor.from(idx, [idx.length]));
+    }
+    return out;
   }
 
   /**

@@ -2785,15 +2785,90 @@ def smooth_l1_loss(pred, target, beta=1.0):
     return (where(Tensor(small), 0.5 * diff * diff / beta, diff.abs() - 0.5 * beta)).mean()
 
 
-def pad(x, padding, value=0.0):
-    """마지막 차원부터 (앞, 뒤) 순으로 받는다 — torch 의 규칙이다."""
+def _pad_index(mode, size, before, after):
+    """출력 자리마다 **입력의 어느 자리를 읽는지.** `-1` 은 채운 자리다.
+
+    네 모드가 여기서만 갈린다. 아래 세 줄이 규약의 전부이고, 진짜 torch 에 물어
+    자리마다 맞췄다(`[0,1,2]` 를 앞 2·뒤 1 로 늘린 것):
+
+        reflect    2 1 [0 1 2] 1   ← 가장자리를 거울로 **하되 가장자리는 안 겹친다**
+        replicate  0 0 [0 1 2] 2   ← 가장자리를 늘인다
+        circular   1 2 [0 1 2] 0   ← 반대편에서 가져온다
+
+    색인 하나로 정리해 두면 순방향은 `take` 이고 역방향은 **같은 색인으로 모아
+    더하기**다. 모드마다 역방향을 따로 적으면 네 번 틀릴 자리가 생긴다.
+    """
+    idx = []
+    for i in range(-before, size + after):
+        if 0 <= i < size:
+            idx.append(i)
+        elif mode == "constant":
+            idx.append(-1)
+        elif mode == "replicate":
+            idx.append(0 if i < 0 else size - 1)
+        elif mode == "circular":
+            idx.append(i % size)
+        else:
+            j = i
+            while not (0 <= j < size):
+                j = -j if j < 0 else 2 * (size - 1) - j
+            idx.append(j)
+    return _np.asarray(idx, dtype=_np.intp)
+
+
+def pad(x, padding, mode="constant", value=0.0):
+    """마지막 차원부터 (앞, 뒤) 순으로 받는다 — torch 의 규칙이다.
+
+    **짝의 개수와 랭크가 맞물린다.** 짝이 하나면 2·3 차원, 둘이면 3·4 차원, 셋이면
+    4·5 차원이라야 한다 — torch 가 그 밖을 `NotImplementedError` 로 거절한다. 아무
+    랭크나 받으면 축을 잘못 잡고도 통과하므로 여기서 같이 막는다.
+    """
     x = _wrap(x)
-    pairs = [(0, 0)] * x.data.ndim
-    for i in range(0, len(padding), 2):
-        pairs[-(i // 2 + 1)] = (padding[i], padding[i + 1])
-    out = _np.pad(x.data, pairs, constant_values=value)
-    cuts = tuple(slice(a, s - b if b else None) for (a, b), s in zip(pairs, out.shape))
-    return x._make(out, (x,), lambda g: (_np.asarray(g)[cuts],), "PadBackward0")
+    rank = x.data.ndim
+    pairs = len(padding) // 2
+    if mode != "constant" and rank not in (pairs + 1, pairs + 2):
+        raise NotImplementedError(
+            f"Padding size {len(padding)} is not supported for {rank}D input tensor")
+
+    data = x.data
+    steps = []
+    for i in range(pairs):
+        axis = rank - 1 - i
+        before, after = padding[2 * i], padding[2 * i + 1]
+        if before == 0 and after == 0:
+            continue
+        size = data.shape[axis]
+        if mode == "reflect" and (before >= size or after >= size):
+            raise RuntimeError(
+                "Argument #4: Padding size should be less than the corresponding "
+                f"input dimension, but got: padding ({before}, {after}) at dimension "
+                f"{axis} of input {rank}")
+        idx = _pad_index(mode, size, before, after)
+        steps.append((axis, idx, size))
+        taken = _np.take(data, _np.maximum(idx, 0), axis=axis)
+        if mode == "constant":
+            hole = idx < 0
+            if hole.any():
+                cut = [slice(None)] * rank
+                cut[axis] = hole
+                taken[tuple(cut)] = value
+        data = taken
+
+    def back(g):
+        gg = _np.asarray(g)
+        # 뒤에서부터 되짚는다. 읽어 온 자리마다 **모아 더한다** — 거울과 감기는
+        # 한 입력을 여러 번 읽으므로 덮어쓰면 그만큼이 사라진다.
+        for axis, idx, size in reversed(steps):
+            shape = list(gg.shape)
+            shape[axis] = size
+            out = _np.zeros(shape, dtype=gg.dtype)
+            keep = idx >= 0
+            head = (slice(None),) * axis
+            _np.add.at(out, head + (idx[keep],), gg[head + (keep,)])
+            gg = out
+        return (gg,)
+
+    return x._make(data, (x,), back, "PadBackward0")
 
 
 def normalize(x, p=2, dim=1, eps=1e-12):

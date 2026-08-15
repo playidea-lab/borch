@@ -14,7 +14,7 @@
 
 import js as _js
 
-from ._base import Tensor, guarded, handle, settle, wrap
+from ._base import Tensor, _js_list, guarded, handle, settle, wrap
 from ._ops import _arg, camel, positional
 
 _ts = _js.borch
@@ -205,6 +205,18 @@ class Module:
         if self._m is None:
             raise NotImplementedError(f"{type(self).__name__} 에 forward 가 없다")
         return self(*args)
+
+    def __repr__(self):
+        """**찍는 것도 borch.ts 에 물어본다.**
+
+        층이 자기를 어떻게 찍는지는 값과 같은 자격의 답이다 — 교재가 `print(model)`
+        을 하고 골든이 그 글자를 굳혔다. 파이썬 쪽에서 다시 조립하면 두 벌이 되고,
+        두 벌은 어긋난다. 저쪽에 `describe` 가 없으면 클래스 이름만 준다.
+        """
+        if self._m is None:
+            return f"{type(self).__name__}()"
+        fn = getattr(self._m, "describe", None)
+        return str(fn()) if fn is not None else f"{type(self).__name__}()"
 
     def parameters(self):
         if self._m is None:
@@ -679,6 +691,32 @@ def Conv2d(cin, cout, k, stride=1, padding=0, bias=True):
 
 def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
+
+
+# ── 패딩 층 열다섯 ──────────────────────────────────────────────────────
+#
+# 전부 borch.ts 쪽에 있다. 여기서는 이름을 잇고 **파이썬의 `int`/튜플을 JS 가 읽을
+# 수 있는 것으로 바꾸는 일**만 한다 — 파이썬 튜플을 그대로 넘기면 저쪽에서
+# `typeof padding === "number"` 도 아니고 배열도 아닌 프록시가 된다.
+
+def _pad_arg(padding):
+    return padding if isinstance(padding, int) else _js_list(list(padding))
+
+
+def _pad_layer(name):
+    def make(padding, value=0.0):
+        args = (_pad_arg(padding),)
+        if name.startswith("ConstantPad"):
+            args += (float(value),)
+        return _layer(name, *args)
+    make.__name__ = name
+    return make
+
+
+for _dims in (1, 2, 3):
+    for _kind in ("Reflection", "Replication", "Circular", "Zero", "Constant"):
+        _pad_name = f"{_kind}Pad{_dims}d"
+        globals()[_pad_name] = _pad_layer(_pad_name)
 
 
 def _batchnorm(n, eps=1e-5, momentum=0.1):

@@ -462,6 +462,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addContainer(out, inputs);
   addAct(out, inputs);
   addNorm(out, inputs);
+  addPad(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -969,6 +970,85 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
  * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
  * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
  */
+/**
+ * 패딩 — 네 모드와 층 열다섯.
+ *
+ * 입력이 `arange` 라 **답만 보고 어디서 온 값인지** 알 수 있다. 거울인지 되풀이인지
+ * 감기인지가 값에 그대로 드러나므로, 이 케이스들이 규약을 통째로 붙잡는다.
+ * 자세한 것은 `tests/cases.py` 의 `pad_cases` 에 적었다.
+ */
+function addPad(out: Map<string, Case>): void {
+  const seq = (n: number) => Array.from({ length: n }, (_, i) => i);
+  const p1 = (g = false) => Tensor.from(seq(6), [1, 2, 3], g);
+  const p2 = (g = false) => Tensor.from(seq(12), [1, 1, 3, 4], g);
+  const p3 = (g = false) => Tensor.from(seq(24), [1, 1, 2, 3, 4], g);
+  const shapes: [string, (g?: boolean) => Tensor, number[]][] = [
+    ["1d", p1, [2, 1]],
+    ["2d", p2, [1, 1, 1, 1]],
+    ["3d", p3, [1, 1, 1, 1, 1, 1]],
+  ];
+  const modes = ["constant", "reflect", "replicate", "circular"] as const;
+  for (const [tag, src, pads] of shapes) {
+    for (const mode of modes) {
+      const value = mode === "constant" ? 9 : 0;
+      out.set(`pad::${tag}::${mode}`, () => src().padND(pads, mode, value));
+      out.set(`pad::grad::${tag}::${mode}`, () => {
+        const x = src(true);
+        seeded(x.padND(pads, mode)).backward();
+        return gradOf(x, `pad ${mode}`);
+      });
+    }
+  }
+
+  out.set("pad::비대칭::reflect", () => p2().padND([1, 2, 0, 1], "reflect"));
+  out.set("pad::비대칭::circular", () => p2().padND([2, 1, 1, 0], "circular"));
+  out.set("pad::replicate(크게)", () => p1().padND([5, 0], "replicate"));
+  out.set("pad::2차원 입력::reflect",
+    () => Tensor.arange(6).reshape([2, 3]).padND([1, 1], "reflect"));
+
+  const layers: [string, () => nn.PadNd, () => Tensor][] = [
+    ["ReflectionPad1d", () => new nn.ReflectionPad1d(2), p1],
+    ["ReflectionPad2d", () => new nn.ReflectionPad2d(1), p2],
+    ["ReflectionPad2d(비대칭)", () => new nn.ReflectionPad2d([1, 2, 0, 1]), p2],
+    ["ReflectionPad3d", () => new nn.ReflectionPad3d(1), p3],
+    ["ReplicationPad1d", () => new nn.ReplicationPad1d(2), p1],
+    ["ReplicationPad2d", () => new nn.ReplicationPad2d(1), p2],
+    ["ReplicationPad3d", () => new nn.ReplicationPad3d(1), p3],
+    ["ZeroPad1d", () => new nn.ZeroPad1d(2), p1],
+    ["ZeroPad2d", () => new nn.ZeroPad2d(1), p2],
+    ["ZeroPad3d", () => new nn.ZeroPad3d(1), p3],
+    ["CircularPad1d", () => new nn.CircularPad1d(2), p1],
+    ["CircularPad2d", () => new nn.CircularPad2d(1), p2],
+    ["CircularPad3d", () => new nn.CircularPad3d(1), p3],
+    ["ConstantPad1d", () => new nn.ConstantPad1d(2, 7), p1],
+    ["ConstantPad2d", () => new nn.ConstantPad2d(1, 7), p2],
+    ["ConstantPad3d", () => new nn.ConstantPad3d(1, 7), p3],
+  ];
+  for (const [name, make, src] of layers) {
+    out.set(`pad::층::${name}`, () => make().call(src()));
+    out.set(`pad::repr::${name}`, async () => make().describe());
+  }
+
+  out.set("pad::grad::층::ReflectionPad2d", () => {
+    const x = p2(true);
+    seeded(new nn.ReflectionPad2d(1).call(x)).backward();
+    return gradOf(x, "ReflectionPad2d");
+  });
+
+  const refuses = (fn: () => Tensor): string => {
+    try {
+      fn();
+    } catch (e) {
+      return (e as Error).name;
+    }
+    return "예외가 안 났다";
+  };
+  out.set("pad::거절::reflect(크기 초과)",
+    async () => refuses(() => p1().padND([3, 0], "reflect")));
+  out.set("pad::거절::짝 개수가 랭크와 안 맞음",
+    async () => refuses(() => p2().padND([1, 1], "reflect")));
+}
+
 function addNorm(out: Map<string, Case>, inp: Inputs): void {
   const add = (name: string, fn: (x: Tensor) => Tensor, key: string): void => {
     out.set(`norm::${name}`, () => fn(inp.get(key)));

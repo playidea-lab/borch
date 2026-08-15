@@ -388,10 +388,13 @@ def translate(exc):
     통하게 하려고 그렇게 쓴 것이다.
     """
     text = str(exc)
-    # 선형대수가 답을 못 내는 것은 **따로 잡힌다.** 아래의 어림짐작(문구에 index 가
-    # 있으면 IndexError)에 맡기면 안 되는 자리라 앞에서 가른다.
-    if text.startswith("LinAlgError: "):
-        return LinAlgError(text[len("LinAlgError: "):])
+    # 아래의 어림짐작(문구에 index 가 있으면 IndexError)에 맡기면 안 되는 것들.
+    # **거절도 종류가 있다** — "아직 없다"(NotImplementedError)와 "부른 쪽이
+    # 틀렸다"(RuntimeError)는 다른 말이고, 골든이 그 이름을 답으로 굳혔다.
+    for head, cls in (("LinAlgError: ", LinAlgError),
+                      ("NotImplementedError: ", NotImplementedError)):
+        if text.startswith(head):
+            return cls(text[len(head):])
     # **앞머리만 벗긴다.** `replace` 로 첫 번째 `Error: ` 를 지웠더니 `RuntimeError:
     # shape …` 이 `Runtimeshape …` 이 되어 문구가 망가졌다 — 검색이 통하라고 원문을
     # 담아 둔 것을 우리가 부순 셈이다.

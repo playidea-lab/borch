@@ -15,7 +15,7 @@
  */
 
 import { runningStats } from "./kernels.js";
-import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
+import { device, keepAlive, noGrad, type PadMode, Tensor } from "./tensor.js";
 
 /**
  * 가중치 초기화.
@@ -811,6 +811,111 @@ export class Flatten extends Module {
   override forward(x: Tensor): Tensor {
     const batch = x.shape[0] ?? 1;
     return x.reshape([batch, x.size / batch]);
+  }
+}
+
+/**
+ * 패딩 층 열다섯 개의 뿌리.
+ *
+ * **셋(1·2·3 차원) × 다섯(reflect·replicate·zero·constant·circular)이 한 기계에서
+ * 나온다.** 갈리는 것은 모드 이름과 짝의 개수뿐이라, 손으로 열다섯 벌을 적으면
+ * 실제로 다른 두 가지를 열다섯 자리에 흩어 놓는 것이 된다.
+ */
+export class PadNd extends Module {
+  readonly padding: number[];
+
+  constructor(
+    /** 찍을 이름. **`constructor.name` 에 안 기댄다** — 묶는 도구가 이름을 줄이면
+     * 그때부터 조용히 다른 글자가 나오고, 골든은 우리 빌드만 본다. */
+    readonly label: string,
+    padding: number | readonly number[],
+    readonly mode: PadMode,
+    dims: number,
+    readonly value = 0,
+  ) {
+    super();
+    this.padding = typeof padding === "number"
+      ? new Array<number>(2 * dims).fill(padding)
+      : [...padding];
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.padND(this.padding, this.mode, this.value);
+  }
+
+  /**
+   * 파이썬이 찍는 그대로.
+   *
+   * **`ConstantPad` 만 이름을 붙여 찍는다** — 나머지는 짝만 찍는다. 진짜 torch 가
+   * 그렇고 골든이 글자를 굳혔으므로 그 차이가 답의 일부다. 값도 파이썬 꼴이라
+   * 정수여도 소수점을 단다(`value=7.0`).
+   */
+  describe(): string {
+    const pairs = `(${this.padding.join(", ")})`;
+    if (!this.label.startsWith("ConstantPad")) return `${this.label}(${pairs})`;
+    const v = Number.isInteger(this.value) ? `${this.value}.0` : String(this.value);
+    return `${this.label}(padding=${pairs}, value=${v})`;
+  }
+}
+
+// 이름을 붙여 열다섯. **찍어내는 함수로 두지 않는다** — 익명 클래스를 내보내면
+// TypeScript 가 `Module` 의 비공개 자리를 이유로 거절하고, 그 자리를 열려고 상속을
+// 무너뜨리는 것보다 세 줄씩 적는 편이 싸다.
+export class ReflectionPad1d extends PadNd {
+  constructor(p: number | readonly number[]) { super("ReflectionPad1d", p, "reflect", 1); }
+}
+export class ReflectionPad2d extends PadNd {
+  constructor(p: number | readonly number[]) { super("ReflectionPad2d", p, "reflect", 2); }
+}
+export class ReflectionPad3d extends PadNd {
+  constructor(p: number | readonly number[]) { super("ReflectionPad3d", p, "reflect", 3); }
+}
+export class ReplicationPad1d extends PadNd {
+  constructor(p: number | readonly number[]) {
+    super("ReplicationPad1d", p, "replicate", 1);
+  }
+}
+export class ReplicationPad2d extends PadNd {
+  constructor(p: number | readonly number[]) {
+    super("ReplicationPad2d", p, "replicate", 2);
+  }
+}
+export class ReplicationPad3d extends PadNd {
+  constructor(p: number | readonly number[]) {
+    super("ReplicationPad3d", p, "replicate", 3);
+  }
+}
+export class CircularPad1d extends PadNd {
+  constructor(p: number | readonly number[]) { super("CircularPad1d", p, "circular", 1); }
+}
+export class CircularPad2d extends PadNd {
+  constructor(p: number | readonly number[]) { super("CircularPad2d", p, "circular", 2); }
+}
+export class CircularPad3d extends PadNd {
+  constructor(p: number | readonly number[]) { super("CircularPad3d", p, "circular", 3); }
+}
+export class ZeroPad1d extends PadNd {
+  constructor(p: number | readonly number[]) { super("ZeroPad1d", p, "constant", 1); }
+}
+export class ZeroPad2d extends PadNd {
+  constructor(p: number | readonly number[]) { super("ZeroPad2d", p, "constant", 2); }
+}
+export class ZeroPad3d extends PadNd {
+  constructor(p: number | readonly number[]) { super("ZeroPad3d", p, "constant", 3); }
+}
+export class ConstantPad1d extends PadNd {
+  constructor(p: number | readonly number[], v = 0) {
+    super("ConstantPad1d", p, "constant", 1, v);
+  }
+}
+export class ConstantPad2d extends PadNd {
+  constructor(p: number | readonly number[], v = 0) {
+    super("ConstantPad2d", p, "constant", 2, v);
+  }
+}
+export class ConstantPad3d extends PadNd {
+  constructor(p: number | readonly number[], v = 0) {
+    super("ConstantPad3d", p, "constant", 3, v);
   }
 }
 

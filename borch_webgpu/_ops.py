@@ -1232,16 +1232,13 @@ def pow(x, exponent):                                    # noqa: A001
 def pad(x, pairs, mode="constant", value=0.0, **kw):
     """torch 의 `F.pad` 는 **마지막 축부터** 짝을 받는다 — `(왼, 오, 위, 아래, …)`.
 
-    borch.ts 의 `pad(축, 앞, 뒤, 값)` 은 축 하나씩이다. 짝을 뒤에서부터 풀어 차례로
-    두른다 — 순서를 뒤집지 않으면 엉뚱한 축이 늘어난다.
+    **`mode` 를 받아만 놓고 안 쓰던 자리다.** 인자에는 있는데 아래로 안 내려가서
+    `reflect` 를 달라고 해도 상수 패딩이 나왔다 — 예외가 아니라 **조용히 다른 값**이라,
+    골든에 그 모드를 묻는 케이스가 생기고 나서야 드러났다. JS 가 남는 인자를 버리는
+    것과 같은 종류인데 이번에는 파이썬 쪽에서 버렸다.
     """
     value = kw.get("value", value)
-    out = handle(x)
-    rank = len(out.shape)
-    for i in range(0, len(pairs), 2):
-        axis = rank - 1 - (i // 2)
-        out = out.pad(axis, pairs[i], pairs[i + 1], float(value))
-    return wrap(out)
+    return wrap(guarded(handle(x).padND, _js_list(list(pairs)), mode, float(value)))
 
 
 def split(x, size, dim=0):

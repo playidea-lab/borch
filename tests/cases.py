@@ -1354,6 +1354,140 @@ def opt_cases(inp=None):
     return cases
 
 
+PAD_PREFIX = "pad::"
+
+# 패딩용 입력. 값이 자리 번호라 **어디서 온 값인지 답만 보고 알 수 있다** —
+# 거울인지 되풀이인지 가장자리인지가 값에 그대로 드러난다.
+_PAD_1D = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+_PAD_2D = np.arange(12, dtype=np.float32).reshape(1, 1, 3, 4)
+_PAD_3D = np.arange(24, dtype=np.float32).reshape(1, 1, 2, 3, 4)
+
+_PAD_MODES = ("constant", "reflect", "replicate", "circular")
+
+
+def pad_cases(inp=None):
+    """패딩 — **네 가지 모드와 층 열다섯 개.**
+
+    지금까지 `F.pad` 는 상수만 했다. 나머지 셋(`reflect`·`replicate`·`circular`)이
+    없으면 그 위에 얹힌 층 열다섯 개가 통째로 없는 것이고, 그것이 `nn` 의 빈자리
+    여든넷 중 가장 큰 덩어리였다.
+
+    ## 값이 자리 번호다
+
+    입력을 `arange` 로 두면 답만 보고 **어디서 온 값인지** 알 수 있다. 3 칸짜리
+    `[0,1,2]` 를 앞뒤로 늘리면 모드마다 다음이 나온다(진짜 torch 에 물어 확인):
+
+        constant   9 9 [0 1 2] 9      ← 채운다
+        reflect    2 1 [0 1 2] 1      ← 가장자리를 거울로, 가장자리는 안 겹친다
+        replicate  0 0 [0 1 2] 2      ← 가장자리를 늘인다
+        circular   1 2 [0 1 2] 0      ← 반대편에서 가져온다
+
+    구현이 갈릴 자리는 거울의 기준점(0 을 겹치는가)과 감는 방향인데, 값에 그대로
+    나오므로 이 네 줄이 그 둘을 다 붙잡는다.
+
+    ## 짝의 개수와 랭크가 맞물린다
+
+    `F.pad(4차원, (1,1), mode='reflect')` 는 **거절이다** — torch 가
+    `NotImplementedError` 를 낸다. 짝이 하나면 2·3 차원, 둘이면 3·4 차원, 셋이면
+    4·5 차원이라야 한다. 아무 랭크나 받으면 축을 잘못 잡고도 통과한다.
+
+    ## `reflect` 만 크기를 따진다
+
+    거울로 접으려면 접을 것이 있어야 하므로 패딩이 그 축의 크기보다 작아야 한다.
+    `replicate` 는 다섯 칸을 늘려도 된다 — 늘일 값이 늘 있기 때문이다.
+    """
+    cases = []
+    shapes = (("1d", _PAD_1D, (2, 1)), ("2d", _PAD_2D, (1, 1, 1, 1)),
+              ("3d", _PAD_3D, (1, 1, 1, 1, 1, 1)))
+    for tag, arr, pads in shapes:
+        for mode in _PAD_MODES:
+            def run(L, a=arr, p=pads, m=mode):
+                kw = {"value": 9.0} if m == "constant" else {}
+                return L.nn.functional.pad(L.tensor(a), p, mode=m, **kw)
+            cases.append((PAD_PREFIX + f"{tag}::{mode}", run))
+
+            def grad(L, a=arr, p=pads, m=mode):
+                x = L.tensor(a, requires_grad=True)
+                out = L.nn.functional.pad(x, p, mode=m)
+                (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+                return _grad_of(x, f"pad {m}")
+            cases.append((PAD_PREFIX + f"grad::{tag}::{mode}", grad))
+
+    # 비대칭 — 앞뒤가 다른 자리에서 축을 뒤집어 잡으면 여기서 드러난다.
+    cases += [
+        (PAD_PREFIX + "비대칭::reflect",
+         lambda L: L.nn.functional.pad(L.tensor(_PAD_2D), (1, 2, 0, 1), mode="reflect")),
+        (PAD_PREFIX + "비대칭::circular",
+         lambda L: L.nn.functional.pad(L.tensor(_PAD_2D), (2, 1, 1, 0), mode="circular")),
+        # `replicate` 는 크기를 안 따진다 — 늘일 값이 늘 있다.
+        (PAD_PREFIX + "replicate(크게)",
+         lambda L: L.nn.functional.pad(L.tensor(_PAD_1D), (5, 0), mode="replicate")),
+        # 배치 없는 입력도 받는다.
+        (PAD_PREFIX + "2차원 입력::reflect",
+         lambda L: L.nn.functional.pad(
+             L.tensor(np.arange(6, dtype=np.float32).reshape(2, 3)), (1, 1),
+             mode="reflect")),
+    ]
+
+    # ── 층 열다섯 개 ────────────────────────────────────────────────────
+    layers = (
+        ("ReflectionPad1d", 2, _PAD_1D), ("ReflectionPad2d", 1, _PAD_2D),
+        ("ReflectionPad2d(비대칭)", (1, 2, 0, 1), _PAD_2D),
+        ("ReflectionPad3d", 1, _PAD_3D),
+        ("ReplicationPad1d", 2, _PAD_1D), ("ReplicationPad2d", 1, _PAD_2D),
+        ("ReplicationPad3d", 1, _PAD_3D),
+        ("ZeroPad1d", 2, _PAD_1D), ("ZeroPad2d", 1, _PAD_2D),
+        ("ZeroPad3d", 1, _PAD_3D),
+        ("CircularPad1d", 2, _PAD_1D), ("CircularPad2d", 1, _PAD_2D),
+        ("CircularPad3d", 1, _PAD_3D),
+    )
+    for name, arg, arr in layers:
+        cls = name.split("(")[0]
+
+        def run(L, c=cls, a=arg, t=arr):
+            return getattr(L.nn, c)(a)(L.tensor(t))
+        cases.append((PAD_PREFIX + f"층::{name}", run))
+        cases.append((PAD_PREFIX + f"repr::{name}",
+                      lambda L, c=cls, a=arg: repr(getattr(L.nn, c)(a))))
+
+    for name, arg, arr in (("ConstantPad1d", 2, _PAD_1D), ("ConstantPad2d", 1, _PAD_2D),
+                           ("ConstantPad3d", 1, _PAD_3D)):
+        cases.append((PAD_PREFIX + f"층::{name}",
+                      lambda L, c=name, a=arg, t=arr:
+                      getattr(L.nn, c)(a, 7.0)(L.tensor(t))))
+        # **`ConstantPad` 만 이름을 붙여 찍는다** — 나머지는 짝만 찍는다.
+        cases.append((PAD_PREFIX + f"repr::{name}",
+                      lambda L, c=name, a=arg: repr(getattr(L.nn, c)(a, 7.0))))
+
+    # 층에도 기울기가 흘러야 한다 — 함수만 이어 놓고 층을 안 이으면 여기서 끊긴다.
+    def layer_grad(L):
+        x = L.tensor(_PAD_2D, requires_grad=True)
+        out = L.nn.ReflectionPad2d(1)(x)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "ReflectionPad2d")
+
+    cases.append((PAD_PREFIX + "grad::층::ReflectionPad2d", layer_grad))
+
+    # ── 거절 ────────────────────────────────────────────────────────────
+    def refuses(L, fn, what):
+        try:
+            fn(L)
+            return "예외가 안 났다"
+        except Exception as exc:                                    # noqa: BLE001
+            return f"{type(exc).__name__}"
+
+    bad = (
+        ("reflect(크기 초과)",
+         lambda L: L.nn.functional.pad(L.tensor(_PAD_1D), (3, 0), mode="reflect")),
+        ("짝 개수가 랭크와 안 맞음",
+         lambda L: L.nn.functional.pad(L.tensor(_PAD_2D), (1, 1), mode="reflect")),
+    )
+    for name, fn in bad:
+        cases.append((PAD_PREFIX + f"거절::{name}",
+                      lambda L, f=fn, n=name: refuses(L, f, n)))
+    return cases
+
+
 NORM_PREFIX = "norm::"
 
 
@@ -3555,6 +3689,7 @@ def golden_cases(inp=None):
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
+            + pad_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
