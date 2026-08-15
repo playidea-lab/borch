@@ -235,6 +235,14 @@ class Tensor:
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(self, *a, **k)
 
+        # **기울기가 켜진 잎은 제자리로 못 고친다.** torch 가 그 자리에서 던지고
+        # 골든이 그것을 굳혔다 — 흘려보내면 역전파가 이미 지난 값을 보게 된다.
+        if name.endswith("_") and not name.endswith("__") and \
+                bool(self._h.requiresGrad) and not self._h.parents.length:
+            raise RuntimeError(
+                "a leaf Variable that requires grad is being used in an "
+                "in-place operation.")
+
         js_name = camel(name)
         if name in _BINARY_ONLY:
             # borch.ts 는 단항만 표에서 메서드로 만든다. 이항은 `binary(이름, 상대)` 다.
@@ -298,7 +306,13 @@ class Tensor:
                 axis += 1
             else:
                 n = out.shape[axis]
-                out = wrap(out._h.select(axis, k + n if k < 0 else k))
+                at = k + n if k < 0 else k
+                if not 0 <= at < n:
+                    # torch 는 여기서 `IndexError` 다 — 종류도 API 이므로 맞춘다.
+                    raise IndexError(
+                        f"index {k} is out of bounds for dimension {axis} "
+                        f"with size {n}")
+                out = wrap(out._h.select(axis, at))
         return out
 
     def __iter__(self):
@@ -470,6 +484,8 @@ def handle(x):
 
 def tensor(data, dtype=None, requires_grad=False):
     """`torch.tensor` 자리. numpy 배열·중첩 리스트·수를 받는다."""
+    from pyodide.ffi import JsException
+
     arr = _np.asarray(data)
     if dtype is not None:
         # `torch.float32` 로 보이는 물건이 와도 borch.ts 에는 `float32` 로 넘긴다.
@@ -481,4 +497,10 @@ def tensor(data, dtype=None, requires_grad=False):
     else:
         name = "float32"
     flat = _js.Float32Array.new(_to_js(arr.ravel().astype(_np.float32)))
-    return Tensor(_ts.Tensor.from_(flat, _js_list(arr.shape), requires_grad, name))
+    try:
+        return Tensor(
+            _ts.Tensor.from_(flat, _js_list(arr.shape), requires_grad, name))
+    except JsException as exc:
+        # 정수·참거짓에 기울기를 켜는 것은 torch 도 거절한다. 종류를 옮겨 준다 —
+        # `except RuntimeError` 로 잡던 코드가 안 잡히면 안 된다.
+        raise translate(exc) from None

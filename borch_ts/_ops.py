@@ -12,6 +12,7 @@
 """
 
 import js as _js
+from pyodide.ffi import to_js as _to_js
 
 from ._base import Tensor, _js_list, guarded, handle, settle, wrap
 
@@ -339,6 +340,12 @@ def einsum(spec, *operands):
 def as_tensor(data, dtype=None):
     from ._base import tensor as _t
     return data if isinstance(data, Tensor) else _t(data, dtype)
+
+
+def quantile(x, q, dim=None, **kw):
+    """`q` 는 수 하나일 수도 목록일 수도 있다 — borch.ts 는 늘 목록을 받는다."""
+    qs = [float(v) for v in ([q] if isinstance(q, (int, float)) else q)]
+    return guarded(handle(x).quantile, _to_js(qs))
 
 
 def squeeze(x, dim=None, **kw):
