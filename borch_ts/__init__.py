@@ -61,6 +61,14 @@ from ._ops import (                                      # noqa: E402,F401
     quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
     sum, swapdims, transpose, where, zeros,
 )
+from ._ops import (                                      # noqa: E402,F401
+    Generator, manual_seed, randint, randperm,
+)
+from ._data import (                                     # noqa: E402,F401
+    ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
+    TensorDataset, WeightedRandomSampler, backend, cache_get, cache_put, cuda,
+    decode_cifar10, fetch_cached, load, random_split, save, utils,
+)
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 

@@ -913,17 +913,20 @@ def _as_expected(fn):
 def _rank_ceiling_cases(ranks, inp):
     """랭크 7 이상 — **되는 것과 안 되는 것이 갈리는 구간.**
 
-    재보니 TF.js 는 랭크 7 부터 `GPU for rank 7 is not yet supported` 를 던진다.
-    다만 전부가 아니라 일부다: 원소별·permute·reshape 는 그대로 돌고, **축을 따라
-    줄이는 것**과 `fill` 이 없다. 그래서 "랭크 7 은 된다"도 "안 된다"도 둘 다 거짓이고,
-    한 줄로 못 적는 것을 한 줄로 적으면 그게 다음 사람이 믿을 거짓말이 된다.
+    **이 표는 한 번 갈아엎었다.** 원래는 TF.js 의 천장을 못 박는 자리였다 — 재보니
+    랭크 7 부터 `GPU for rank 7 is not yet supported` 를 던지는데 전부가 아니라
+    일부여서(원소별·permute·reshape 는 돌고 축 축약과 `fill` 이 없다), "랭크 7 은
+    된다"도 "안 된다"도 둘 다 거짓이었다. 그래서 되는 쪽은 값으로, 안 되는 쪽은
+    `_as_expected` 로 거절 자체를 굳혔다.
 
-    되는 쪽은 값으로 굳힌다 — torch 와 같은 값이 나오는 것이 사실이기 때문이다.
-    안 되는 쪽은 `_as_expected` 로 감싸 거절 자체를 굳힌다.
+    TF.js 를 걷어내면서 그 천장이 사라졌다. 손으로 쓴 WGSL 에는 랭크 한계가 없고,
+    거절하던 일곱 자리가 **전부 값을 낸다.** 그래서 전부 값으로 다시 적었다 —
+    `_as_expected` 의 주석이 미리 적어둔 그대로다: "TF.js 가 나중에 고랭크 커널을
+    채워도 갈린다. 그때는 한계를 **의도적으로** 다시 적으라는 뜻이지 저절로 넓어지면
+    안 된다."
 
-    **가장 중요한 사실**: 잰 범위에서 자매는 랭크 7·8 에서 **틀린 값을 낸 적이 없다.**
-    되거나 던지거나 둘 중 하나였다. 랭크 5·6 의 `pad` 와 정반대다 — 거기서는 모양만
-    맞고 값이 깨졌고 아무도 몰랐다. 이 대비가 이 표를 세운 이유다.
+    **거절이 값으로 바뀌는 것은 공짜가 아니다.** 안 던진다는 것과 맞는 값이라는 것은
+    다른 말이고, 예전 표는 앞의 것만 물을 수 있었다. 이제 진짜 torch 의 값과 맞춘다.
     """
     cases = []
     for r in ranks:
@@ -952,23 +955,23 @@ def _rank_ceiling_cases(ranks, inp):
             (x * x + x).sum().backward()
             return x.grad
 
-        refused = (
-            ("합(축)", lambda L, a=v, ax=axis: L.tensor(a).sum(dim=ax)),
-            ("F.pad(값)",
+        # TF.js 가 거절하던 셋. 지금은 값을 낸다.
+        cases += [
+            (WEBGPU_PREFIX + f"{tag} 합(축)",
+             lambda L, a=v, ax=axis: L.tensor(a).sum(dim=ax)),
+            (WEBGPU_PREFIX + f"F.pad({tag}, 값)",
              lambda L, a=v: L.nn.functional.pad(L.tensor(a), (2, 1, 1, 0), value=-1.5)),
-            ("기울기", elemwise_grad),
-        )
-        for what, fn in refused:
-            cases.append((WEBGPU_PREFIX + f"{tag} {what}=거절", _as_expected(fn)))
+            (WEBGPU_PREFIX + f"grad::{tag} 원소별", elemwise_grad),
+        ]
 
-    # 경계가 **연산 이름에도, 입력 랭크에도** 깔끔하게 안 걸린다는 증거다.
+    # **여기 적힌 이력을 지우지 않는다.** TF.js 시절 경계는 연산 이름에도 입력 랭크에도
+    # 깔끔하게 안 걸렸다 — 랭크 7 은 순방향도 기울기도 되고 랭크 8 은 값은 나오는데
+    # 기울기가 없었다. 그래서 넷을 따로 적었고, 그 자리가 지금은 넷 다 값을 낸다.
     #
-    # 처음에는 "랭크 8 을 unbind 하면 결과가 랭크 7 이라 거절될 것"이라고 적었다.
-    # 물어보니 순방향은 통과했다 — 앞서 본 실패는 순방향이 아니라 **기울기**의 것이었고,
-    # 나는 실패 이름에 붙은 `grad::` 를 안 읽고 원인을 지어냈다. 그래서 넷을 따로 적는다:
-    # 랭크 7 은 순방향도 기울기도 되고, 랭크 8 은 값은 나오는데 기울기가 없다.
-    #
-    # 이런 자리를 "고랭크는 안 된다" 한 줄로 덮으면 셋은 맞고 하나는 틀린 문서가 된다.
+    # 처음에는 "랭크 8 을 unbind 하면 결과가 랭크 7 이라 거절될 것"이라고 적었다가
+    # 물어보니 순방향이 통과했다. 앞서 본 실패는 순방향이 아니라 **기울기**의 것이었고,
+    # 나는 실패 이름에 붙은 `grad::` 를 안 읽고 원인을 지어냈다. 짐작으로 경계를 적으면
+    # 그 짐작이 문서가 된다는 것이 이 네 줄이 남은 이유다.
     v7 = inp["rank7_unbind"]
     v8 = inp["rank8_unbind"]
 
@@ -984,7 +987,7 @@ def _rank_ceiling_cases(ranks, inp):
         (WEBGPU_PREFIX + "랭크7 unbind(순방향)", lambda L: L.unbind(L.tensor(v7), 0)[1]),
         (WEBGPU_PREFIX + "랭크8 unbind(순방향)", lambda L: L.unbind(L.tensor(v8), 0)[1]),
         (WEBGPU_PREFIX + "grad::랭크7 unbind", unbind_grad(v7)),
-        (WEBGPU_PREFIX + "grad::랭크8 unbind=거절", _as_expected(unbind_grad(v8))),
+        (WEBGPU_PREFIX + "grad::랭크8 unbind", unbind_grad(v8)),
     ]
     return cases
 

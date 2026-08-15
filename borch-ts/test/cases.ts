@@ -295,37 +295,18 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     ];
     for (const [name, fn] of table) out.set(`webgpu::${name}`, fn);
 
-    // 랭크 6 은 값으로 굳혔고, 7·8 은 자매가 거절하던 자리라 "문서대로 굴었는가" 로
-    // 굳혔다. 우리는 되므로 답이 "기대대로" 다.
-    const asExpected = (name: string, fn: () => Tensor) => {
-      out.set(`webgpu::${name}`, () => {
-        try {
-          fn();
-        } catch (err) {
-          return `뜻밖의 거절 <${err instanceof Error ? err.constructor.name : "?"}>`;
-        }
-        return "기대대로";
-      });
-    };
-    if (r === 6) {
-      out.set(`webgpu::${tag} 합(축)`, () => v().sumDim(axis));
-      out.set(`webgpu::F.pad(${tag}, 값)`,
-        () => v().pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
-      out.set(`webgpu::grad::${tag} 원소별`, () => {
-        const x = v(true);
-        x.mul(x).add(x).sum().backward();
-        return gradOf(x, `${tag} 원소별`);
-      });
-    } else {
-      asExpected(`${tag} 합(축)=거절`, () => v().sumDim(axis));
-      asExpected(`${tag} F.pad(값)=거절`,
-        () => v().pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
-      asExpected(`${tag} 기울기=거절`, () => {
-        const x = v(true);
-        x.mul(x).add(x).sum().backward();
-        return gradOf(x, `${tag} 기울기`);
-      });
-    }
+    // **셋 다 값으로 묻는다 — 랭크 6 이든 8 이든.** 예전에는 7·8 만 "거절하는 것이
+    // 정답" 으로 굳혀 두었는데, 그것은 TF.js 의 천장이지 이 구현의 것이 아니었다.
+    // 그쪽이 사라지면서 물어볼 수 있는 것이 "안 던졌는가" 에서 "맞는 값인가" 로
+    // 올라갔다. 뒤가 훨씬 센 질문이다.
+    out.set(`webgpu::${tag} 합(축)`, () => v().sumDim(axis));
+    out.set(`webgpu::F.pad(${tag}, 값)`,
+      () => v().pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
+    out.set(`webgpu::grad::${tag} 원소별`, () => {
+      const x = v(true);
+      x.mul(x).add(x).sum().backward();
+      return gradOf(x, `${tag} 원소별`);
+    });
 
     if (r === 6) {
       for (const kind of ["narrow", "unbind", "split"] as const) {
@@ -341,8 +322,9 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     }
   }
 
-  // 랭크 7 은 순방향도 기울기도 되고, 랭크 8 은 자매에서 값만 나오고 기울기가 없었다.
-  // 경계가 연산 이름에도 입력 랭크에도 깔끔하게 안 걸린다는 증거로 넷을 따로 둔다.
+  // 넷을 따로 두는 이유는 이력이다. 자매에서 랭크 7 은 순방향도 기울기도 됐고 랭크 8 은
+  // 값만 나오고 기울기가 없었다 — 경계가 연산 이름에도 입력 랭크에도 안 걸린다는 증거였다.
+  // 지금은 넷 다 값을 내지만, 짐작으로 경계를 적으면 그 짐작이 문서가 된다는 자리로 남긴다.
   for (const r of [7, 8]) {
     const key = `rank${r}_unbind`;
     out.set(`webgpu::랭크${r} unbind(순방향)`,
@@ -353,15 +335,10 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     seeded(piece(x.unbind(0), 1)).backward();
     return gradOf(x, "랭크7 unbind");
   });
-  out.set("webgpu::grad::랭크8 unbind=거절", () => {
-    try {
-      const x = inp.get("rank8_unbind", true);
-      seeded(piece(x.unbind(0), 1)).backward();
-      gradOf(x, "랭크8 unbind");
-    } catch (err) {
-      return `뜻밖의 거절 <${err instanceof Error ? err.constructor.name : "?"}>`;
-    }
-    return "기대대로";
+  out.set("webgpu::grad::랭크8 unbind", () => {
+    const x = inp.get("rank8_unbind", true);
+    seeded(piece(x.unbind(0), 1)).backward();
+    return gradOf(x, "랭크8 unbind");
   });
 
   // 랭크 5 는 자매가 `tf.pad` 로 조용히 값을 깨뜨리던 자리다. 우리 것도 물어둔다.

@@ -11,6 +11,8 @@
 이름 규칙 하나만 다르다. 파이썬은 `masked_select`, JS 는 `maskedSelect` 다.
 """
 
+import numpy as _np
+
 import js as _js
 from pyodide.ffi import to_js as _to_js
 
@@ -239,8 +241,6 @@ def __getattr__(name):
     """
     if name.startswith("_"):
         raise AttributeError(name)
-    if name == "backend":
-        return _ts.Device.adapterInfo
     # dtype 이름들. `bool` 을 모듈 전역에 두면 파이썬 내장을 가리므로 여기서 준다.
     if name in ("bool", "float32", "int64"):
         from ._base import _DType
@@ -369,27 +369,70 @@ def linspace(start, end, count, **kw):
     return wrap(_ts.Tensor.linspace(start, end, count))
 
 
+# **난수는 한 흐름에서 나온다.** 처음에는 부를 때마다 `default_rng(0)` 을 새로
+# 만들었다. 골든이 난수를 오류 케이스에서만 써서(던지는지만 본다) 값이 늘 같아도
+# 안 걸렸는데, 그 상태로는 셔플하는 `DataLoader` 가 **매 에폭 같은 순서**를 낸다.
+# 부르는 쪽에서 보면 셔플을 켰는데 안 섞이는 것이고, 아무 예외도 안 난다.
+_rng = _np.random.default_rng(0)
+
+
+def manual_seed(seed):
+    """씨앗을 다시 심는다. torch 와 같은 이름·같은 뜻이다."""
+    global _rng
+    _rng = _np.random.default_rng(seed)
+    return _rng
+
+
+class Generator:
+    """`random_split(..., generator=g)` 처럼 흐름을 따로 두고 싶을 때."""
+
+    def __init__(self, device=None):
+        self.seed = 0
+
+    def manual_seed(self, seed):
+        self.seed = seed
+        return self
+
+    def rng(self):
+        return _np.random.default_rng(self.seed)
+
+
+def _shaped(shape):
+    return shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
+
+
 def randn(*shape, **kw):
     """정규분포 난수. **borch.ts 에는 없어서 여기서 만든다.**
 
     골든에서 이것을 쓰는 자리는 오류 케이스뿐이고, 거기서는 값을 안 보고 **던지는지**만
-    본다(`L.randn(3, 4) @ L.randn(3, 2)`). 그래서 씨앗을 못 박은 재현 가능한 난수면
-    충분하다 — 값을 묻는 케이스가 생기면 그때는 borch.ts 쪽에 제대로 넣어야 한다.
+    본다(`L.randn(3, 4) @ L.randn(3, 2)`). 값을 묻는 케이스가 생기면 그때는 borch.ts
+    쪽에 제대로 넣어야 한다 — 여기 있는 것은 CPU 를 한 번 거친다.
     """
-    import numpy as _np
     from ._base import tensor as _t
 
-    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
-    return _t(_np.random.default_rng(0).standard_normal(tuple(shape)).astype("float32"),
+    return _t(_rng.standard_normal(tuple(_shaped(shape))).astype("float32"),
               requires_grad=kw.get("requires_grad", False))
 
 
 def rand(*shape, **kw):
-    import numpy as _np
     from ._base import tensor as _t
 
-    shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (list, tuple)) else shape
-    return _t(_np.random.default_rng(0).random(tuple(shape)).astype("float32"))
+    return _t(_rng.random(tuple(_shaped(shape))).astype("float32"),
+              requires_grad=kw.get("requires_grad", False))
+
+
+def randint(low, high=None, size=(), **kw):
+    from ._base import tensor as _t
+
+    if high is None:
+        low, high = 0, low
+    return _t(_rng.integers(low, high, tuple(size)).astype("int64"))
+
+
+def randperm(n, **kw):
+    from ._base import tensor as _t
+
+    return _t(_rng.permutation(n).astype("int64"))
 
 
 def einsum(spec, *operands):

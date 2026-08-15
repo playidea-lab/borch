@@ -40,7 +40,14 @@ export interface Failure {
 export interface Report {
   /** 골든이 들고 있는 전체 케이스 수. */
   total: number;
-  /** 우리가 TS 로 쓴 케이스 수. */
+  /**
+   * 우리가 TS 로 썼고 **골든에도 있는** 케이스 수.
+   *
+   * 예전에는 표의 크기였다. 그러면 골든에 없는 이름 일곱을 들고 있으면서 골든의
+   * 다른 일곱을 안 쓴 상태가 **"859 중 859, 0건 남음"** 으로 나온다 — 개수가 같아서
+   * 맞물린다. 실제로 그 상태를 한 번 통과로 읽었다. 세는 것이 물어본 것과 다르면
+   * 그 계측은 안 세느니만 못하다.
+   */
   registered: number;
   passed: number;
   failed: Failure[];
@@ -126,7 +133,7 @@ export async function run(url: string): Promise<Report> {
   const table = registered(new Inputs(doc.inputs));
   const report: Report = {
     total: Object.keys(doc.cases).length,
-    registered: table.size,
+    registered: 0,                  // 아래 고리에서 실제로 물어본 것만 센다
     passed: 0,
     failed: [],
     unknown: [],
@@ -142,6 +149,7 @@ export async function run(url: string): Promise<Report> {
       continue;
     }
     report.asked.push(name);
+    report.registered += 1;
     let why: string | null;
     try {
       const result = await body();
