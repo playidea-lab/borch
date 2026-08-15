@@ -2261,11 +2261,43 @@ export class Tensor implements Node<Tensor> {
     }
   }
 
-  /** 유사역행렬. 값만 낸다 — 역방향 유도가 까다롭고 틀리면 조용히 틀린다. */
+  /**
+   * 유사역행렬. **기울기가 있다** — 항이 셋이다.
+   *
+   *     Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)
+   *
+   * 뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다
+   * 0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을
+   * 빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다.
+   */
   async pinverse(): Promise<Tensor> {
     const v = await this.asBatch(false);
-    const outs = v.mats.map((a) => LA.pinverse(a, v.rows, v.cols));
-    return Tensor.fromBatch(outs, [...v.lead, v.cols, v.rows]);
+    const { rows: m, cols: n } = v;
+    const ps = v.mats.map((a) => LA.pinverse(a, m, n));
+    const out = Tensor.fromBatch(ps, [...v.lead, n, m]);
+    return this.linalgNode(out, (g) =>
+      Tensor.perBatch(g, v.batch, [n, m], this.shape, (gb, b) => {
+        const a = v.mats[b]!;
+        const p = ps[b]!;
+        const pt = Tensor.fromMat(LA.transpose(p, n, m), [m, n]);
+        const eyeA = LA.matmul(a, p, m, n, m);
+        const eyeB = LA.matmul(p, a, n, m, n);
+        const c2 = new Float64Array(m * m);
+        for (let i = 0; i < m * m; i++) c2[i] = -(eyeA[i] ?? 0);
+        for (let i = 0; i < m; i++) c2[i * m + i] = (c2[i * m + i] ?? 0) + 1;
+        const c4 = new Float64Array(n * n);
+        for (let i = 0; i < n * n; i++) c4[i] = -(eyeB[i] ?? 0);
+        for (let i = 0; i < n; i++) c4[i * n + i] = (c4[i * n + i] ?? 0) + 1;
+        const ppt = Tensor.fromMat(
+          LA.matmul(p, LA.transpose(p, n, m), n, m, n), [n, n]);
+        const ptp = Tensor.fromMat(
+          LA.matmul(LA.transpose(p, n, m), p, m, n, m), [m, m]);
+        void b;
+        const gt = gb.transpose();
+        return pt.mm(gb).mm(pt).neg()
+          .add(Tensor.fromMat(c2, [m, m]).mm(gt).mm(ppt))
+          .add(ptp.mm(gt).mm(Tensor.fromMat(c4, [n, n])));
+      }), "PinverseBackward0");
   }
 
   /**
@@ -2381,10 +2413,15 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * QR 분해. 값만 낸다.
+   * QR 분해. **`reduced` 에는 기울기가 있다.**
    *
-   * `reduced`(기본)는 `Q` 를 `rows×k` 로 자르고, `complete` 는 `rows×rows` 를 그대로
-   * 준다. 하우스홀더가 이미 완전한 `Q` 를 만들므로 자르는 쪽이 파생이다.
+   *     N = Qᵀ·Q̄ − R̄·Rᵀ
+   *     Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ
+   *
+   * 아래 삼각만 남기는 자리가 이 유도의 전부다 — `QᵀQ = I` 를 미분하면 `Qᵀ·dQ` 가
+   * 반대칭이 되고, 위쪽은 아래쪽의 거울이라 따로 셀 것이 없다.
+   *
+   * `complete` 는 `Q` 에 남는 열이 있어 유도가 다르다. 그쪽은 값만 낸다.
    */
   async qr(mode: "reduced" | "complete" = "reduced"): Promise<{ q: Tensor; r: Tensor }> {
     const v = await this.asBatch(false);
@@ -2408,35 +2445,66 @@ export class Tensor implements Node<Tensor> {
     }
     const qShape = mode === "complete" ? [rows, rows] : [rows, k];
     const rShape = mode === "complete" ? [rows, cols] : [k, cols];
+    const qOut = Tensor.fromBatch(qs, [...v.lead, ...qShape]);
+    const rOut = Tensor.fromBatch(rs, [...v.lead, ...rShape]);
+    if (mode === "complete" || rows < cols) return { q: qOut, r: rOut };
+
+    const zeroQ = Tensor.zeros(qShape);
+    const zeroR = Tensor.zeros(rShape);
+    const back = (gq: Tensor, gr: Tensor, b: number): Tensor => {
+      const q = Tensor.fromMat(qs[b]!, qShape);
+      const rt = Tensor.fromMat(LA.transpose(rs[b]!, k, cols), [cols, k]);
+      const rInvT = Tensor.fromMat(
+        LA.transpose(LA.inverse(rs[b]!, k), k, k), [k, k]);
+      const n = q.transpose().mm(gq).sub(gr.mm(rt));
+      const inner = n.sub(n.transpose()).tril(-1).sub(n);
+      return gq.add(q.mm(inner)).mm(rInvT);
+    };
     return {
-      q: Tensor.fromBatch(qs, [...v.lead, ...qShape]),
-      r: Tensor.fromBatch(rs, [...v.lead, ...rShape]),
+      q: this.linalgNode(qOut, (g) =>
+        Tensor.perBatch(g, v.batch, qShape, this.shape,
+          (gb, b) => back(gb, zeroR, b)), "QrBackward0"),
+      r: this.linalgNode(rOut, (g) =>
+        Tensor.perBatch(g, v.batch, rShape, this.shape,
+          (gb, b) => back(zeroQ, gb, b)), "QrBackward0"),
     };
   }
 
   /**
-   * 특이값 분해. 값만 낸다.
+   * 특이값 분해.
+   *
+   * **특잇값에는 기울기가 있고 `U`·`Vh` 에는 없다.** `dS = diag(Uᵀ·dA·V)` 라 특잇값
+   * 쪽은 `Ā = U·diag(Ḡ)·Vᵀ` 한 줄이고 겹침 문제도 없다. 벡터 쪽은 `1/(sᵢ²−sⱼ²)` 가
+   * 들어가 특잇값이 겹치면 터지는데, 그 자리는 안 넣었다.
    *
    * `fullMatrices`(기본 참)는 `U` 를 `rows×rows` 로 채운다 — torch 의 기본값이다.
    * 채우는 방향은 남는 차원이 둘 이상이면 유일하지 않다(`completeBasis` 참고).
+   * **역방향에 쓰는 것은 채우기 전의 축소본이다.**
    */
   async svd(fullMatrices = true): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
     const v = await this.asBatch(false);
     const { rows, cols } = v;
     const k = Math.min(rows, cols);
     const us: LA.Mat[] = [];
+    const thin: LA.Mat[] = [];
     const ss: LA.Mat[] = [];
     const vts: LA.Mat[] = [];
     for (const a of v.mats) {
       const { u, s, vt } = LA.svd(a, rows, cols);
+      thin.push(u);
       us.push(fullMatrices && rows > k ? LA.completeBasis(u, rows, k) : u);
       ss.push(s);
       vts.push(vt);
     }
     const uCols = fullMatrices && rows > k ? rows : k;
+    const sOut = this.linalgNode(Tensor.fromBatch(ss, [...v.lead, k]), (g) =>
+      Tensor.perBatch(g, v.batch, [k], this.shape, (gb, b) =>
+        Tensor.fromMat(thin[b]!, [rows, k])
+          .mm(gb.diagflat())
+          .mm(Tensor.fromMat(vts[b]!, [k, cols]))), "SvdBackward0");
     return {
       u: Tensor.fromBatch(us, [...v.lead, rows, uCols]),
-      s: Tensor.fromBatch(ss, [...v.lead, k]),
+      s: sOut,
       vt: Tensor.fromBatch(vts, [...v.lead, k, cols]),
     };
   }
@@ -2452,14 +2520,33 @@ export class Tensor implements Node<Tensor> {
     const n = v.rows;
     const ws: LA.Mat[] = [];
     const vs: LA.Mat[] = [];
+    const fs: LA.Mat[] = [];
     for (const a of v.mats) {
       const { values, vectors } = LA.eigh(LA.mirror(a, n, uplo === "U"), n);
       ws.push(values);
       vs.push(vectors);
+      fs.push(LA.eighGap(values, n));
     }
+    const half = Tensor.full([], 0.5);
     return {
-      values: Tensor.fromBatch(ws, [...v.lead, n]),
-      vectors: Tensor.fromBatch(vs, [...v.lead, n, n]),
+      // 고윳값: `Ā = V·diag(Ḡ)·Vᵀ`. 한 줄이고 겹침 문제도 없다.
+      values: this.linalgNode(Tensor.fromBatch(ws, [...v.lead, n]), (g) =>
+        Tensor.perBatch(g, v.batch, [n], this.shape, (gb, b) => {
+          const vec = Tensor.fromMat(vs[b]!, [n, n]);
+          return vec.mm(gb.diagflat()).mm(vec.transpose());
+        }), "EighBackward0"),
+      // 고유벡터: `Ā = sym(V·(F∘(Vᵀ·Ḡ))·Vᵀ)`.
+      //
+      // **대칭화가 빠지면 안 된다.** `A` 가 대칭이라 위·아래 삼각이 같은 자유도를
+      // 나눠 갖는데, 날 식은 그것을 한쪽에 몰아준다. 대각은 맞고 비대각만 갈려서
+      // 값 대조 없이는 안 보인다 — 실측으로 골랐다.
+      vectors: this.linalgNode(Tensor.fromBatch(vs, [...v.lead, n, n]), (g) =>
+        Tensor.perBatch(g, v.batch, [n, n], this.shape, (gb, b) => {
+          const vec = Tensor.fromMat(vs[b]!, [n, n]);
+          const f = Tensor.fromMat(fs[b]!, [n, n]);
+          const raw = vec.mm(f.mul(vec.transpose().mm(gb))).mm(vec.transpose());
+          return raw.add(raw.transpose()).binary("mul", half);
+        }), "EighBackward0"),
     };
   }
 
@@ -2524,11 +2611,24 @@ export class Tensor implements Node<Tensor> {
       LA.solveTriangular(v.mats[0]!, rhs, n, width, upper, unitriangular), b.shape);
   }
 
-  /** 행렬 지수 `e^A`. 값만 낸다. */
+  /**
+   * 행렬 지수 `e^A`. **기울기가 있다.**
+   *
+   * 역방향은 `linalg.ts` 의 `matrixExpAdjointMap` 이 순방향에서 굳혀 둔 표를 쓴다 —
+   * 왜 표인지는 거기 적었다(짧게: `Ḡ` 가 GPU 에 있고 `expm` 은 CPU 다).
+   * **기울기가 필요할 때만 만든다.** 표 하나에 `expm` 이 `n²` 번이라 공짜가 아니다.
+   */
   async matrixExp(): Promise<Tensor> {
     const v = await this.asBatch();
-    return Tensor.fromBatch(
-      v.mats.map((a) => LA.matrixExp(a, v.rows)), this.shape);
+    const n = v.rows;
+    const out = Tensor.fromBatch(
+      v.mats.map((a) => LA.matrixExp(a, n)), this.shape);
+    if (!this.requiresGrad) return out;
+    const maps = v.mats.map((a) => LA.matrixExpAdjointMap(a, n));
+    return this.linalgNode(out, (g) =>
+      Tensor.perBatch(g, v.batch, [n, n], this.shape, (gb, b) =>
+        Tensor.fromMat(maps[b]!, [n * n, n * n])
+          .mm(gb.reshape([n * n, 1])).reshape([n, n])), "MatrixExpBackward0");
   }
 
   /** 마지막 축을 벡터로 보고 내적. */

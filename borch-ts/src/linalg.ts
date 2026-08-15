@@ -553,6 +553,65 @@ export function matrixExp(a: Mat, n: number): Mat {
   return result;
 }
 
+/**
+ * `e^A` 의 역방향을 **행렬 하나로 굳힌다.**
+ *
+ * 프레셰 도함수에는 이런 항등식이 있다 — `expm([[Aᵀ, E],[0, Aᵀ]])` 의 오른쪽 위
+ * 블록이 `E` 방향의 도함수다. 근사가 아니라 항등식이다.
+ *
+ * **그런데 여기서는 그 길로 못 간다.** 역방향에 들어오는 `Ḡ` 는 GPU 에 있고, 이
+ * 파일은 CPU 다 — 역방향 안에서는 GPU 를 기다릴 수가 없다. 그래서 순방향에서
+ * `Ḡ` 가 **선형으로** 들어간다는 사실을 쓴다: 자리 하나만 1 인 행렬 `E_k` 마다 한 번씩
+ * 구해서 `n²×n²` 짜리 표를 만들어 두면, 역방향은 행렬곱 한 번으로 끝난다.
+ *
+ * 값은 정확하다(각 열이 진짜 도함수다 — 차분이 아니다). 대가는 순방향에서 `2n×2n`
+ * 짜리 `expm` 을 `n²` 번 부르는 것인데, 여기서 미는 크기에서는 그게 싸다.
+ */
+export function matrixExpAdjointMap(a: Mat, n: number): Mat {
+  const at = transpose(a, n, n);
+  const size = n * n;
+  const wide = 2 * n;
+  const map = new Float64Array(size * size);
+  const block = new Float64Array(wide * wide);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      block[i * wide + j] = at[i * n + j] ?? 0;
+      block[(n + i) * wide + (n + j)] = at[i * n + j] ?? 0;
+    }
+  }
+  for (let k = 0; k < size; k++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) block[i * wide + n + j] = 0;
+    }
+    block[Math.floor(k / n) * wide + n + (k % n)] = 1;
+    const e = matrixExp(block, wide);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        map[(i * n + j) * size + k] = e[i * wide + n + j] ?? 0;
+      }
+    }
+  }
+  return map;
+}
+
+/**
+ * `eigh` 의 고유벡터 역방향에 들어가는 `F_ij = 1/(λⱼ − λᵢ)`.
+ *
+ * **고윳값이 겹치면 터진다.** torch 도 같이 터지므로 흉내가 아니라 같은 한계다.
+ * 대각은 자기 자신과의 차라 나눗셈이 아니라 정의상 0 이다.
+ */
+export function eighGap(values: Float64Array, n: number): Mat {
+  const f = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const gap = (values[j] ?? 0) - (values[i] ?? 0);
+      f[i * n + j] = gap === 0 ? 0 : 1 / gap;
+    }
+  }
+  return f;
+}
+
 /** `lu_factor` 가 낸 것으로 `A x = b` 를 푼다. */
 export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
   const n = f.rows;

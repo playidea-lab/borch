@@ -3212,25 +3212,100 @@ def matrix_power(t, n):
     return out
 
 
+# ---- 분해의 기울기
+#
+# 오래 안 넣었다. 이유가 있었다 — 유도가 까다롭고 틀리면 **조용히** 틀린다. 값은
+# 맞고 학습만 미묘하게 갈리는 종류라, 없는 것을 시끄럽게 두는 편이 나았다.
+#
+# 이제 넣는다. 바뀐 것은 유도가 쉬워진 것이 아니라 **대조할 것이 생긴 것**이다.
+# 골든이 진짜 torch 의 수를 자리마다 들고 있어서, 틀리면 조용히가 아니라 크게 틀린다.
+
 def qr(t, mode="reduced"):
-    """QR 분해. **값만 준다** — 기울기는 안 넣었다(위 주석 참고)."""
+    """QR 분해. **기울기가 있다.**
+
+        N = Qᵀ·Q̄ − R̄·Rᵀ
+        Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ
+
+    아래 삼각만 남기는 자리가 이 유도의 전부다. `QᵀQ = I` 를 미분하면 `C = Qᵀ·dQ` 가
+    **반대칭**이 되고, `dR·R⁻¹` 이 위삼각이라는 것과 겹치면 `C` 의 자유도가 아래
+    삼각에만 남는다. 위쪽은 그 거울이라 따로 셀 것이 없다.
+
+    **`R⁻ᵀ` 를 `R⁻¹` 로 잘못 풀면 여기서 조용히 틀린다.** 실제로 그렇게 틀렸고, 후보
+    여덟 개가 전부 안 맞아서 유도를 의심했는데 유도가 아니라 전치가 문제였다.
+    `X·R⁻ᵀ` 는 `solve(R, Xᵀ)ᵀ` 이지 `solve(Rᵀ, Xᵀ)ᵀ` 가 아니다.
+    """
     t = _mat(t, "qr", square=False)
     q, r = _np.linalg.qr(t.data, mode=mode)
-    return _QR(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
+    if mode != "reduced" or t.data.shape[-2] < t.data.shape[-1]:
+        # 완전본은 `Q` 에 남는 열이 있고 그쪽으로는 정보가 안 흐른다 — 유도가 다르다.
+        return _QR(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
+
+    def back_from(gq, gr):
+        n = _T(q) @ gq - gr @ _T(r)
+        inner = _np.tril(n - _T(n), -1) - n
+        return _T(_np.linalg.solve(r, _T(gq + q @ inner)))
+
+    qt = t._make(_np.ascontiguousarray(q), (t,),
+                 lambda g: (back_from(_np.asarray(g), _np.zeros_like(r)),),
+                 "QrBackward0")
+    rt = t._make(_np.ascontiguousarray(r), (t,),
+                 lambda g: (back_from(_np.zeros_like(q), _np.asarray(g)),),
+                 "QrBackward0")
+    return _QR(qt, rt)
+
+
+def _svd_raw(data, full_matrices):
+    u, s, vh = _np.linalg.svd(data, full_matrices=full_matrices)
+    return _np.ascontiguousarray(u), s, _np.ascontiguousarray(vh)
 
 
 def svd(t, full_matrices=True):
-    """특잇값 분해. **값만 준다.** torch 와 같이 (U, S, Vh) 순서로 돌려준다."""
+    """특잇값 분해. torch 와 같이 (U, S, Vh) 순서로 돌려준다.
+
+    **특잇값에는 기울기가 있고 `U`·`Vh` 에는 없다.** `dS = diag(Uᵀ dA V)` 라 특잇값
+    쪽은 한 줄이고 겹침 문제도 없다. 벡터 쪽은 `1/(sᵢ²−sⱼ²)` 가 들어가서 특잇값이
+    겹치면 터지는데, 그 자리는 안 넣었다 — 없는 것이 시끄러운 편이 낫다.
+    """
     t = _mat(t, "svd", square=False)
-    u, s, vh = _np.linalg.svd(t.data, full_matrices=full_matrices)
-    return _SVD(Tensor(_np.ascontiguousarray(u)), Tensor(s),
-                Tensor(_np.ascontiguousarray(vh)))
+    u, s, vh = _svd_raw(t.data, full_matrices)
+    k = s.shape[-1]
+    u_thin, vh_thin = u[..., :, :k], vh[..., :k, :]
+
+    def back(g):
+        gg = _np.asarray(g)
+        idx = _np.arange(k)
+        mid = _np.zeros(gg.shape + (k,), dtype=u.dtype)
+        mid[..., idx, idx] = gg
+        return (u_thin @ mid @ vh_thin,)
+
+    return _SVD(Tensor(u), t._make(s, (t,), back, "SvdBackward0"), Tensor(vh))
 
 
 def pinverse(t, rcond=1e-15):
-    """유사역행렬. **값만 준다.**"""
+    """유사역행렬. **기울기가 있다** — 항이 셋이다.
+
+        Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)
+
+    **뒤의 두 항은 정사각 정칙에서 0 이 된다** — 그때는 `I − AP` 와 `I − PA` 가 둘 다
+    0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을
+    빠뜨려도 **정사각에서는 맞고 직사각에서만 틀린다.** 실제로 그렇게 틀렸고, 정사각
+    케이스는 그동안 통과하고 있었다 — 골든이 직사각으로도 묻는 이유가 그것이다.
+    """
     t = _mat(t, "pinverse", square=False)
-    return Tensor(_np.linalg.pinv(t.data, rcond=rcond))
+    p = _np.linalg.pinv(t.data, rcond=rcond)
+    m, n = t.data.shape[-2], t.data.shape[-1]
+    eye_m = _np.eye(m, dtype=p.dtype)
+    eye_n = _np.eye(n, dtype=p.dtype)
+
+    def back(g):
+        gg = _np.asarray(g)
+        pt = _T(p)
+        left = -(pt @ gg @ pt)
+        mid = (eye_m - t.data @ p) @ _T(gg) @ p @ pt
+        right = pt @ p @ _T(gg) @ (eye_n - p @ t.data)
+        return (left + mid + right,)
+
+    return t._make(p, (t,), back, "PinverseBackward0")
 
 
 def matrix_rank(t, tol=None):
@@ -3239,15 +3314,44 @@ def matrix_rank(t, tol=None):
 
 
 def eigh(t, UPLO="L"):
-    """대칭 행렬의 고윳값·고유벡터. **값만 준다.**
+    """대칭 행렬의 고윳값·고유벡터. **둘 다 기울기가 있다.**
 
     **한쪽 삼각만 읽는다.** 기본은 아래쪽이라 `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의
     답이 같다(진짜 torch 에 물어서 확인했다). 대칭을 주는 한 안 드러나는 규약이라,
     행렬 전체를 보는 구현과 여기서 조용히 갈린다.
+
+    고윳값 쪽은 `Ā = V·diag(ḡ)·Vᵀ` 로 한 줄이다. 고유벡터 쪽은
+    `Ā = V·(F ∘ (Vᵀ·Ḡ))·Vᵀ` 이고 `F_ij = 1/(λⱼ − λᵢ)` 다 — **고윳값이 겹치면 터진다.**
+    torch 도 같이 터지므로 흉내가 아니라 같은 한계다.
     """
     t = _mat(t, "eigh")
     w, v = _np.linalg.eigh(t.data, UPLO=UPLO)
-    return _Eigh(Tensor(w), Tensor(_np.ascontiguousarray(v)))
+    v = _np.ascontiguousarray(v)
+    vt = _T(v)
+
+    def back_values(g):
+        gg = _np.asarray(g)
+        idx = _np.arange(w.shape[-1])
+        mid = _np.zeros(gg.shape + (w.shape[-1],), dtype=v.dtype)
+        mid[..., idx, idx] = gg
+        return (v @ mid @ vt,)
+
+    def back_vectors(g):
+        gg = _np.asarray(g)
+        gap = w[..., None, :] - w[..., :, None]
+        idx = _np.arange(w.shape[-1])
+        # 대각은 0 으로 둔다 — 자기 자신과의 차라 나눗셈이 아니라 정의상 안 흐른다.
+        with _np.errstate(divide="ignore", invalid="ignore"):
+            f = _np.where(gap == 0, 0.0, 1.0 / _np.where(gap == 0, 1.0, gap))
+        f[..., idx, idx] = 0.0
+        raw = v @ (f * (vt @ gg)) @ vt
+        # **대칭화가 빠지면 안 된다.** `A` 가 대칭이라 위·아래 삼각이 같은 자유도를
+        # 나눠 갖는데, 날 식은 그것을 한쪽에 몰아준다. 대각은 맞고 비대각만 갈려서
+        # 값 대조 없이는 안 보인다 — 실측으로 골랐다.
+        return ((raw + _T(raw)) * 0.5,)
+
+    return _Eigh(t._make(w, (t,), back_values, "EighBackward0"),
+                 t._make(v, (t,), back_vectors, "EighBackward0"))
 
 
 def lstsq(a, b):
@@ -3516,17 +3620,8 @@ _EXP_SMALL = 0.5
 _EXP_TERMS = 18
 
 
-def matrix_exp(t):
-    """행렬 지수 `e^A`. **스케일링과 제곱으로 간다.**
-
-    테일러만으로는 큰 행렬에서 안 모인다 — `A*5` 의 답이 4.8e+10 인데, 그 자리에서는
-    항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤
-    `s` 번 제곱하면 같은 답이 안전하게 나온다(`e^A = (e^{A/2^s})^{2^s}`).
-
-    **값만 준다.** torch 는 미분하는데 우리는 안 한다.
-    """
-    x = _mat(t, "matrix_exp")
-    a = x.data.astype(_np.float64)
+def _expm_raw(a):
+    """스케일링·제곱 + 테일러. 배정도로 센다."""
     n = a.shape[-1]
     norm = _np.abs(a).sum(axis=-2).max() if a.size else 0.0
     squarings = max(0, int(_np.ceil(_np.log2(norm / _EXP_SMALL)))) if norm > _EXP_SMALL \
@@ -3539,7 +3634,38 @@ def matrix_exp(t):
         out = out + term
     for _ in range(squarings):
         out = out @ out
-    return Tensor(out.astype(x.data.dtype))
+    return out
+
+
+def matrix_exp(t):
+    """행렬 지수 `e^A`. **스케일링과 제곱으로 간다.**
+
+    테일러만으로는 큰 행렬에서 안 모인다 — `A*5` 의 답이 4.8e+10 인데, 그 자리에서는
+    항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤
+    `s` 번 제곱하면 같은 답이 안전하게 나온다(`e^A = (e^{A/2^s})^{2^s}`).
+
+    **기울기는 자기 자신으로 구한다.** `e^A` 의 프레셰 도함수에는 이런 항등식이 있다:
+
+        expm([[Aᵀ, Ḡ], [0, Aᵀ]]) 의 오른쪽 위 블록 = Ā
+
+    근사가 아니라 항등식이다. 그래서 순방향에 쓴 급수를 **그대로 다시 부르면**
+    기울기가 따라온다 — 미분식을 새로 유도해 적을 자리가 없다. 그것이 이 방법을
+    고른 이유다. 유도한 식은 틀릴 수 있고 틀리면 조용하다.
+    """
+    x = _mat(t, "matrix_exp")
+    a = x.data.astype(_np.float64)
+    n = a.shape[-1]
+
+    def back(g):
+        gg = _np.asarray(g, dtype=_np.float64)
+        at = _T(a)
+        block = _np.zeros(a.shape[:-2] + (2 * n, 2 * n), dtype=_np.float64)
+        block[..., :n, :n] = at
+        block[..., :n, n:] = gg
+        block[..., n:, n:] = at
+        return (_expm_raw(block)[..., :n, n:].astype(x.data.dtype),)
+
+    return t._make(_expm_raw(a).astype(x.data.dtype), (t,), back, "MatrixExpBackward0")
 
 
 class _Linalg(_Namespace):

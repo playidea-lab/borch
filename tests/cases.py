@@ -2868,6 +2868,91 @@ def linalg_name_cases(inp=None):
     return cases
 
 
+def linalg_grad_cases(inp=None):
+    """**분해의 기울기.** torch 는 이것들을 전부 미분하는데 우리는 값만 냈다.
+
+    오래 안 넣은 이유가 있었다 — 유도가 까다롭고 틀리면 조용히 틀린다. 값은 맞고
+    학습만 미묘하게 갈리는 종류다. 그래서 골든이 있는 것이고, 여기서는 골든이
+    바로 그 일을 한다: **진짜 torch 가 낸 수와 자리마다 맞춘다.**
+
+    ## 안전한 둘과 미묘한 셋
+
+    특잇값과 고윳값은 각각 `U diag(ḡ) Vᵀ` 와 `V diag(ḡ) Vᵀ` 로 끝난다 — 겹침 문제가
+    없고 유도가 한 줄이다.
+
+    나머지 셋은 다르다. **고유벡터**는 `1/(λᵢ-λⱼ)` 가 들어가서 고윳값이 겹치면
+    터진다(torch 도 같이 터진다 — 흉내가 아니라 같은 한계다). **QR** 은 아래삼각을
+    거울로 접는 자리의 규약이 갈리기 쉽고, **유사역행렬**은 항이 셋이라 하나를
+    빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다. 그래서 셋 다 **직사각으로도**
+    묻는다.
+
+    ## 행렬 지수는 자기 자신으로 미분한다
+
+    `e^A` 의 프레셰 도함수는 블록 행렬 하나로 나온다 — `expm([[Aᵀ, Ḡ],[0, Aᵀ]])` 의
+    오른쪽 위가 답이다. 근사가 아니라 항등식이라, 순방향에 쓴 급수를 그대로 다시
+    쓰면 기울기가 따라온다.
+    """
+    mat, rect, sym3 = _LA_MAT, _LA_RECT, _LA_SYM3
+    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
+
+    grads = (
+        # 안전한 둘.
+        ("svdvals", lambda L, x: L.linalg.svdvals(x), mat),
+        ("svd/S", lambda L, x: L.linalg.svd(x)[1], mat),
+        ("svd/S(직사각)",
+         lambda L, x: L.linalg.svd(x, full_matrices=False)[1], rect),
+        ("eigvalsh", lambda L, x: L.linalg.eigvalsh(x), sym),
+        ("eigh/값", lambda L, x: L.linalg.eigh(x)[0], sym),
+        ("eigh/값(3x3)", lambda L, x: L.linalg.eigh(x)[0], sym3),
+        # 미묘한 셋.
+        #
+        # **고유벡터는 제곱해서 묻는다.** 열 부호를 뒤집어도 같은 고유분해라 어느
+        # 쪽을 고를지는 구현이 정하고, 야코비 회전과 LAPACK 이 실제로 다르게 고른다.
+        # 값 케이스는 절댓값으로 물어서 그 차이를 덮고 있었는데, 기울기는 부호에
+        # 민감해서 그대로 드러났다(2×2 에서 정확히 부호만 뒤집혀 나왔다).
+        #
+        # `V∘V` 는 부호를 뒤집어도 그대로다. 그래서 이 손실의 기울기는 **부호 규약과
+        # 무관하게 정해진다** — 양쪽이 같은 답을 낼 수 있는 질문으로 바꾼 것이지,
+        # 어려워서 피한 것이 아니다. dropout 을 성질로 물은 것과 같은 자리다.
+        ("eigh/벡터²", lambda L, x: L.linalg.eigh(x)[1] ** 2, sym),
+        ("eigh/벡터²(3x3)", lambda L, x: L.linalg.eigh(x)[1] ** 2, sym3),
+        ("qr/R", lambda L, x: L.linalg.qr(x)[1], mat),
+        ("qr/Q", lambda L, x: L.linalg.qr(x)[0], mat),
+        ("qr/R(직사각)", lambda L, x: L.linalg.qr(x)[1], rect),
+        ("qr/Q(직사각)", lambda L, x: L.linalg.qr(x)[0], rect),
+        ("pinv", lambda L, x: L.linalg.pinv(x), mat),
+        # **직사각이 진짜 시험이다.** 정사각에서는 빠뜨린 항이 0 이 되어 안 드러난다.
+        ("pinv(직사각)", lambda L, x: L.linalg.pinv(x), rect),
+        ("pinv(3x3)", lambda L, x: L.linalg.pinv(x), sym3),
+        # 자기 자신으로 미분하는 것.
+        ("matrix_exp", lambda L, x: L.linalg.matrix_exp(x), mat),
+        ("matrix_exp(3x3)", lambda L, x: L.linalg.matrix_exp(x), sym3),
+        ("matrix_exp(작은 값)", lambda L, x: L.linalg.matrix_exp(x), mat * 0.1),
+    )
+    cases = []
+    for name, fn, arr in grads:
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            if out.shape:
+                out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(x, n)
+        cases.append((LINALG_PREFIX + f"grad2::{name}", run))
+
+    # 값과 기울기를 **한 번에** 묻는 자리 하나. 분해를 쓰고 그 위에 손실을 얹는
+    # 모양이 실제 코드가 하는 일이고, 조각으로 물으면 이어 붙는지를 못 본다.
+    def chained(L):
+        x = L.tensor(mat, requires_grad=True)
+        s = L.linalg.svdvals(x)
+        loss = (s * s).sum() + L.linalg.matrix_norm(x, ord="nuc")
+        loss.backward()
+        return _grad_of(x, "svdvals→노름")
+
+    cases.append((LINALG_PREFIX + "grad2::이어 붙이기", chained))
+    return cases
+
+
 INPLACE_PREFIX = "inplace::"
 
 _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh_",
@@ -3468,7 +3553,7 @@ def golden_cases(inp=None):
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
-            + ndim_cases(inp) + flow_cases(inp)
+            + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)

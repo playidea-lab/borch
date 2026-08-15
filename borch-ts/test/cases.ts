@@ -2232,6 +2232,65 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["-2", -2], ["1", 1], ["inf", Infinity]] as const) {
     out.set(`linalg::name2::cond(p=${tag})`, async () => mat().cond(pv));
   }
+  addLinalgGrads(out);
+}
+
+/**
+ * 분해의 기울기.
+ *
+ * 오래 안 넣었다 — 유도가 까다롭고 틀리면 조용히 틀린다. 바뀐 것은 유도가 쉬워진
+ * 것이 아니라 **대조할 것이 생긴 것**이다. 골든이 진짜 torch 의 수를 자리마다 들고
+ * 있어서, 틀리면 조용히가 아니라 크게 틀린다.
+ */
+function addLinalgGrads(out: Map<string, Case>): void {
+  const MAT = [4, 1, 2, 3];
+  const SYM = [4, 1, 1, 3];
+  const src: Record<string, [readonly number[], readonly number[]]> = {
+    mat: [MAT, [2, 2]],
+    sym: [SYM, [2, 2]],
+    sym3: [LA_SYM3, [3, 3]],
+    rect: [LA_RECT, [3, 2]],
+    small: [MAT.map((v) => v * 0.1), [2, 2]],
+  };
+  const grads: [string, string, (x: Tensor) => Promise<Tensor>][] = [
+    ["svdvals", "mat", async (x) => x.svdvals()],
+    ["svd/S", "mat", async (x) => (await x.svd()).s],
+    ["svd/S(직사각)", "rect", async (x) => (await x.svd(false)).s],
+    ["eigvalsh", "sym", async (x) => x.eigvalsh()],
+    ["eigh/값", "sym", async (x) => (await x.eigh()).values],
+    ["eigh/값(3x3)", "sym3", async (x) => (await x.eigh()).values],
+    // 고유벡터는 **제곱해서** 묻는다 — 열 부호는 구현이 정하고 야코비와 LAPACK 이
+    // 다르게 고른다. `V∘V` 는 그것과 무관하다. 파이썬 쪽 주석에 이유를 적었다.
+    ["eigh/벡터²", "sym", async (x) => (await x.eigh()).vectors.square()],
+    ["eigh/벡터²(3x3)", "sym3", async (x) => (await x.eigh()).vectors.square()],
+    ["qr/R", "mat", async (x) => (await x.qr()).r],
+    ["qr/Q", "mat", async (x) => (await x.qr()).q],
+    ["qr/R(직사각)", "rect", async (x) => (await x.qr()).r],
+    ["qr/Q(직사각)", "rect", async (x) => (await x.qr()).q],
+    ["pinv", "mat", async (x) => x.pinverse()],
+    // **직사각이 진짜 시험이다.** 정사각에서는 빠뜨린 항이 0 이 되어 안 드러난다.
+    ["pinv(직사각)", "rect", async (x) => x.pinverse()],
+    ["pinv(3x3)", "sym3", async (x) => x.pinverse()],
+    ["matrix_exp", "mat", async (x) => x.matrixExp()],
+    ["matrix_exp(3x3)", "sym3", async (x) => x.matrixExp()],
+    ["matrix_exp(작은 값)", "small", async (x) => x.matrixExp()],
+  ];
+  for (const [name, key, fn] of grads) {
+    out.set(`linalg::grad2::${name}`, async () => {
+      const [data, shape] = src[key]!;
+      const x = Tensor.from(data, shape, true);
+      seeded(await fn(x)).backward();
+      return gradOf(x, name);
+    });
+  }
+
+  out.set("linalg::grad2::이어 붙이기", async () => {
+    const x = Tensor.from(MAT, [2, 2], true);
+    const s = await x.svdvals();
+    const loss = s.mul(s).sum().add(await x.matrixNorm("nuc"));
+    loss.backward();
+    return gradOf(x, "svdvals→노름");
+  });
 }
 
 /** `tests/cases.py` 의 inplace_cases 가 쓰는 입력. */
