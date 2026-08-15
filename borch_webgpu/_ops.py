@@ -82,6 +82,13 @@ _SIGNATURE = {
     "softplus": ("beta", "threshold"),
     "softmin": ("dim",),
     "glu": ("dim",),
+    # 정규화·전치 합성곱. borch.ts 쪽 인자 순서다.
+    "group_norm": ("num_groups", "eps"),
+    "instance_norm": ("eps",),
+    "rms_norm": ("normalized_shape", "eps"),
+    "conv_transpose1d": ("weight", "bias", "stride", "padding"),
+    "conv_transpose2d": ("weight", "bias", "stride", "padding"),
+    "conv_transpose3d": ("weight", "bias", "stride", "padding"),
     "flip": ("dims",),
     "roll": ("shifts", "dims"),
     "norm": ("p", "dim", "keepdim"),

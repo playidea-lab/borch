@@ -28,6 +28,11 @@ class _Functional:
         from . import _ops
         if name == "embedding":
             return embedding
+        # **이름이나 인자가 borch.ts 와 다른 것들.** 규칙으로 못 넘긴다:
+        # `rms_norm` 은 torch 가 모양을 받고 저쪽은 축 개수를 받으며,
+        # `conv_transpose2d` 는 저쪽에 차원별 이름이 없고 `convTransposeND` 하나다.
+        if name in _HAND_WRITTEN:
+            return _HAND_WRITTEN[name]
         if name in ("pad", "clamp", "flip", "pow", "split", "chunk",
                     "layer_norm", "where", "squeeze", "repeat_interleave"):
             fn = getattr(_ops, name)
@@ -45,6 +50,28 @@ class _Functional:
 
         call.__name__ = name
         return call
+
+
+def _rms_norm(x, normalized_shape, weight=None, eps=None):
+    """torch 는 **모양**을 받고 borch.ts 는 **축 개수**를 받는다."""
+    dims = len(normalized_shape) if isinstance(normalized_shape, (list, tuple)) else 1
+    out = wrap(handle(x).rmsNorm(dims) if eps is None
+               else handle(x).rmsNorm(dims, eps))
+    return out if weight is None else out * weight
+
+
+def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
+    """차원별 이름이 저쪽엔 없다 — `convTransposeND` 하나가 전부를 한다."""
+    return wrap(handle(x).convTransposeND(
+        handle(weight), handle(bias) if bias is not None else None, stride, padding))
+
+
+_HAND_WRITTEN = {
+    "rms_norm": _rms_norm,
+    "conv_transpose1d": _conv_transpose,
+    "conv_transpose2d": _conv_transpose,
+    "conv_transpose3d": _conv_transpose,
+}
 
 
 functional = _Functional()
@@ -182,7 +209,12 @@ class Module:
             for key, v in values.items():
                 head, _, rest = key.partition(".")
                 if not rest and isinstance(own.get(head), Tensor):
-                    own[head]._h.copyFrom(handle(v))
+                    # **`no_grad` 안에서 옮긴다.** 파라미터는 기울기를 받는 잎이고,
+                    # 잎을 제자리에서 고치는 것은 거절된다(torch 도 그렇다). borch.ts
+                    # 쪽 `loadStateDict` 는 이미 감싸는데 이 갈래만 안 감싸고 있었다.
+                    from ._ops import no_grad
+                    with no_grad():
+                        own[head]._h.copyFrom(handle(v))
                     continue
                 groups.setdefault(head, {})[rest] = v
             for head, sub in groups.items():
@@ -756,6 +788,92 @@ class PReLU(Module):
 
     def forward(self, x):
         return wrap(handle(x).prelu(handle(self.weight)))
+
+
+class GroupNorm(Module):
+    """채널을 그룹으로 묶어 정규화. 가중치가 붙으므로 `_Wrap` 이 아니라 `Module` 이다."""
+
+    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
+        super().__init__()
+        import numpy as _np
+
+        self.num_groups, self.eps = num_groups, eps
+        if affine:
+            self.weight = Parameter(_np.ones(num_channels, dtype=_np.float32))
+            self.bias = Parameter(_np.zeros(num_channels, dtype=_np.float32))
+
+    def forward(self, x):
+        h = handle(x)
+        out = h.groupNorm(self.num_groups, self.eps)
+        if getattr(self, "weight", None) is None:
+            return wrap(out)
+        shape = [1, int(handle(self.weight).size)] + [1] * (len(h.shape) - 2)
+        return (wrap(out) * self.weight.reshape(*shape)) + self.bias.reshape(*shape)
+
+
+def _instance_norm_layer(eps=1e-5):
+    return _Wrap(lambda x: wrap(handle(x).instanceNorm(eps)))
+
+
+InstanceNorm1d = InstanceNorm2d = InstanceNorm3d = (
+    lambda num_features=0, eps=1e-5, **kw: _instance_norm_layer(eps))
+
+
+class RMSNorm(Module):
+    """**평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다."""
+
+    def __init__(self, normalized_shape, eps=None, elementwise_affine=True):
+        super().__init__()
+        import numpy as _np
+
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.dims = len(normalized_shape)
+        if elementwise_affine:
+            self.weight = Parameter(_np.ones(normalized_shape, dtype=_np.float32))
+
+    def forward(self, x):
+        out = wrap(handle(x).rmsNorm(self.dims))
+        return out if getattr(self, "weight", None) is None else out * self.weight
+
+
+class _ConvTransposeND(Module):
+    """전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `Conv2d` 와 뒤집혀 있다."""
+
+    nd = 2
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 bias=True):
+        super().__init__()
+        import numpy as _np
+
+        self.stride, self.padding = stride, padding
+        nd = type(self).nd
+        shape = (in_channels, out_channels) + (kernel_size,) * nd
+        bound = 1.0 / (out_channels * kernel_size ** nd) ** 0.5
+        rng = _np.random.default_rng(0)
+        self.weight = Parameter(rng.uniform(-bound, bound, shape).astype(_np.float32))
+        if bias:
+            self.bias = Parameter(
+                rng.uniform(-bound, bound, out_channels).astype(_np.float32))
+
+    def forward(self, x):
+        b = getattr(self, "bias", None)
+        return wrap(handle(x).convTransposeND(
+            handle(self.weight), handle(b) if b is not None else None,
+            self.stride, self.padding))
+
+
+class ConvTranspose1d(_ConvTransposeND):
+    nd = 1
+
+
+class ConvTranspose2d(_ConvTransposeND):
+    nd = 2
+
+
+class ConvTranspose3d(_ConvTransposeND):
+    nd = 3
 
 
 def LayerNorm(shape, eps=1e-5):

@@ -116,6 +116,16 @@ def golden_inputs():
     kinks = np.array([-6., -3., -1., -0.5, -1e-3, 0., 1e-3, 0.5, 1., 3., 6.],
                      dtype=np.float32)
 
+    # 전치 합성곱의 가중치. **`conv2d` 와 축 순서가 다르다** — `(입력, 출력, …)` 이다.
+    # 그 순서를 뒤집으면 모양은 맞는데 값이 통째로 달라지고, 그것이 이 층에서 가장
+    # 흔한 실수다. 입력 채널은 각각 `nd_seq`(3)·`img`(3)·`nd_vol`(2) 에 맞춘다.
+    tc = np.random.default_rng(53)
+    tw1 = (tc.standard_normal((3, 4, 3)) * 0.3).astype(np.float32)
+    tw2 = (tc.standard_normal((3, 4, 3, 3)) * 0.3).astype(np.float32)
+    tw3 = (tc.standard_normal((2, 3, 3, 3, 3)) * 0.3).astype(np.float32)
+    tb = (tc.standard_normal(4) * 0.1).astype(np.float32)
+    tb3 = (tc.standard_normal(3) * 0.1).astype(np.float32)
+
     vis = np.random.default_rng(31)
     vis_u8 = vis.integers(0, 256, (5, 4, 3), dtype=np.uint8)
     vis_f = vis.random((5, 4, 3)).astype(np.float32)
@@ -135,7 +145,8 @@ def golden_inputs():
             "mha_in_w": mha[0], "mha_in_b": mha[1],
             "mha_out_w": mha[2], "mha_out_b": mha[3],
             "vis_u8": vis_u8, "vis_f": vis_f, "vis_gray": vis_gray,
-            "kinks": kinks}
+            "kinks": kinks,
+            "tw1": tw1, "tw2": tw2, "tw3": tw3, "tb": tb, "tb3": tb3}
 
 
 def wide_cases(inp=None):
@@ -696,6 +707,101 @@ def act_cases(inp=None):
     cases.append((ACT_PREFIX + "nn.PReLU", lambda L: L.nn.PReLU()(L.tensor(k))))
     cases.append((ACT_PREFIX + "nn.PReLU/파라미터 이름",
                   lambda L: " ".join(n for n, _ in L.nn.PReLU().named_parameters())))
+    return cases
+
+
+NORM_PREFIX = "norm::"
+
+
+def norm_cases(inp=None):
+    """정규화 세 가지와 전치 합성곱. **모양이 맞아도 값이 틀리는 자리들이다.**
+
+    ## 정규화 — 무엇을 묶어 평균 내는가
+
+    `LayerNorm`·`GroupNorm`·`InstanceNorm`·`BatchNorm` 은 식이 같고 **묶는 축만**
+    다르다. 축을 잘못 고르면 모양은 그대로이고 값만 갈리는데, 학습은 그래도 돌아서
+    한참 뒤에야 이상하다는 것을 안다.
+
+    그래서 같은 입력에 `GroupNorm(1)`·`GroupNorm(3)`·`InstanceNorm2d` 를 나란히
+    묻는다. 셋은 서로의 특수한 경우다 — 묶는 규칙이 틀리면 셋 중 둘이 같아진다.
+
+    ## 전치 합성곱 — 가중치 축이 뒤집혀 있다
+
+    `conv2d` 의 가중치는 `(출력, 입력, kh, kw)` 인데 `conv_transpose2d` 는
+    `(입력, 출력, kh, kw)` 다. 뒤집어 놓아도 정사각 커널이면 **모양이 그대로 맞는다** —
+    값으로만 갈린다. 이 층에서 가장 흔한 실수이고 그래서 값으로 묻는다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    img, seq, vol = inp["img"], inp["nd_seq"], inp["nd_vol"]
+    tw1, tw2, tw3, tb, tb3 = (inp["tw1"], inp["tw2"], inp["tw3"], inp["tb"], inp["tb3"])
+    cases = []
+
+    def add(name, fn, arr):
+        cases.append((NORM_PREFIX + name, lambda L, f=fn, a=arr: f(L, L.tensor(a))))
+
+        def grad(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(x, n)
+        cases.append((NORM_PREFIX + f"grad::{name}", grad))
+
+    # ── GroupNorm. 그룹 수가 1 이면 LayerNorm, 채널 수면 InstanceNorm 이다. ──
+    add("F.group_norm(1)", lambda L, x: L.nn.functional.group_norm(x, 1), img)
+    add("F.group_norm(3)", lambda L, x: L.nn.functional.group_norm(x, 3), img)
+    cases.append((NORM_PREFIX + "nn.GroupNorm(1,3)",
+                  lambda L: L.nn.GroupNorm(1, 3)(L.tensor(img))))
+    cases.append((NORM_PREFIX + "nn.GroupNorm(3,3)",
+                  lambda L: L.nn.GroupNorm(3, 3)(L.tensor(img))))
+    # **가중치가 붙으면 파라미터가 잡혀야 한다.** 이름이 곧 state_dict 열쇠다.
+    cases.append((NORM_PREFIX + "nn.GroupNorm/파라미터 이름",
+                  lambda L: " ".join(n for n, _ in L.nn.GroupNorm(3, 3).named_parameters())))
+
+    # ── InstanceNorm. 표본마다·채널마다 따로 정규화한다. ────────────────────
+    add("F.instance_norm", lambda L, x: L.nn.functional.instance_norm(x), img)
+    for nd, arr in (("1d", seq), ("2d", img), ("3d", vol)):
+        chan = arr.shape[1]
+        cases.append((NORM_PREFIX + f"nn.InstanceNorm{nd}",
+                      lambda L, n=nd, c=chan, a=arr:
+                      getattr(L.nn, f"InstanceNorm{n}")(c)(L.tensor(a))))
+
+    # ── RMSNorm. 평균을 안 뺀다 — 그것이 LayerNorm 과의 유일한 차이다. ──────
+    add("F.rms_norm", lambda L, x: L.nn.functional.rms_norm(x, (4,)), img)
+    cases.append((NORM_PREFIX + "nn.RMSNorm",
+                  lambda L: L.nn.RMSNorm(4)(L.tensor(img))))
+
+    # ── 전치 합성곱. ───────────────────────────────────────────────────────
+    add("F.conv_transpose1d",
+        lambda L, x: L.nn.functional.conv_transpose1d(x, L.tensor(tw1)), seq)
+    add("F.conv_transpose2d",
+        lambda L, x: L.nn.functional.conv_transpose2d(x, L.tensor(tw2)), img)
+    add("F.conv_transpose2d(스트라이드2)",
+        lambda L, x: L.nn.functional.conv_transpose2d(x, L.tensor(tw2), stride=2), img)
+    add("F.conv_transpose2d(패딩1)",
+        lambda L, x: L.nn.functional.conv_transpose2d(x, L.tensor(tw2), padding=1), img)
+    add("F.conv_transpose2d(편향)",
+        lambda L, x: L.nn.functional.conv_transpose2d(x, L.tensor(tw2), L.tensor(tb)),
+        img)
+    add("F.conv_transpose3d",
+        lambda L, x: L.nn.functional.conv_transpose3d(x, L.tensor(tw3)), vol)
+
+    # 가중치 쪽 기울기도 본다. **입력 쪽만 보면 축이 뒤집힌 것을 놓친다.**
+    def weight_grad(L):
+        w = L.tensor(tw2, requires_grad=True)
+        out = L.nn.functional.conv_transpose2d(L.tensor(img), w)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(w, "conv_transpose2d 가중치")
+
+    cases.append((NORM_PREFIX + "grad::conv_transpose2d/가중치", weight_grad))
+
+    for nd, arr, w, b in (("1d", seq, tw1, tb), ("2d", img, tw2, tb),
+                          ("3d", vol, tw3, tb3)):
+        def run(L, n=nd, a=arr, ww=w, bb=b):
+            layer = getattr(L.nn, f"ConvTranspose{n}")(
+                ww.shape[0], ww.shape[1], ww.shape[2])
+            layer.load_state_dict({"weight": L.tensor(ww), "bias": L.tensor(bb)})
+            return layer(L.tensor(a))
+        cases.append((NORM_PREFIX + f"nn.ConvTranspose{nd}", run))
     return cases
 
 
@@ -2357,7 +2463,7 @@ def golden_cases(inp=None):
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
-            + container_cases(inp) + act_cases(inp)
+            + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

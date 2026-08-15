@@ -13,12 +13,13 @@ from ._base import (
 )
 from ._ops import (
     _Namespace, _gelu, _pool_all, _rng, adaptive_avg_pool2d, avg_pool2d, celu, conv1d,
-    conv2d, conv3d, cosine_similarity, dropout, elu, embedding, gelu, glu, hardshrink,
-    hardsigmoid, hardswish, hardtanh, interpolate, l1_loss, layer_norm, leaky_relu,
-    log_softmax, logsigmoid, max_pool1d, max_pool2d, max_pool3d, mish, nll_loss,
-    no_grad, norm, normalize, pad, prelu, relu, relu6, selu, sigmoid, silu,
-    smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign, stack, tanh,
-    tanhshrink, zeros,
+    conv2d, conv3d, conv_transpose1d, conv_transpose2d, conv_transpose3d,
+    cosine_similarity, dropout, elu, embedding, gelu, glu, group_norm, hardshrink,
+    hardsigmoid, hardswish, hardtanh, instance_norm, interpolate, l1_loss, layer_norm,
+    leaky_relu, log_softmax, logsigmoid, max_pool1d, max_pool2d, max_pool3d, mish,
+    nll_loss, no_grad, norm, normalize, pad, prelu, relu, relu6, rms_norm, selu,
+    sigmoid, silu, smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign,
+    stack, tanh, tanhshrink, zeros,
 )
 # **`threshold` 만 이름을 바꿔 들여온다.** `Threshold` 층이 `self.threshold` 라는
 # 속성을 갖는데(torch 가 그 이름을 쓴다), 그러면 `forward` 안에서 같은 이름이 함수와
@@ -1144,6 +1145,112 @@ class PReLU(Module):
         return prelu(x, self.weight)
 
 
+class GroupNorm(Module):
+    """채널을 그룹으로 묶어 정규화. **배치가 작을 때 BatchNorm 대신 쓴다.**
+
+    BatchNorm 은 배치 통계를 쓰므로 배치가 1~2 면 통계가 못 미덥다. 이쪽은 표본
+    하나 안에서 묶으므로 배치 크기와 무관하다.
+    """
+
+    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
+        super().__init__()
+        self.num_groups, self.num_channels, self.eps = num_groups, num_channels, eps
+        if affine:
+            self.weight = Parameter(_np.ones(num_channels, dtype=_DEFAULT_DTYPE))
+            self.bias = Parameter(_np.zeros(num_channels, dtype=_DEFAULT_DTYPE))
+        else:
+            self.weight = self.bias = None
+
+    def forward(self, x):
+        return group_norm(x, self.num_groups, self.weight, self.bias, self.eps)
+
+
+class _InstanceNorm(Module):
+    """표본마다·채널마다 따로. **기본이 `affine=False` 다** — torch 가 그렇다.
+
+    `BatchNorm` 과 반대라 헷갈리는 자리이고, 기본값을 뒤집으면 파라미터가 있는 층과
+    없는 층이 바뀌어서 `state_dict` 열쇠가 통째로 갈린다.
+    """
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=False,
+                 track_running_stats=False):
+        super().__init__()
+        self.num_features, self.eps = num_features, eps
+        if affine:
+            self.weight = Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
+            self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+        else:
+            self.weight = self.bias = None
+
+    def forward(self, x):
+        return instance_norm(x, self.weight, self.bias, self.eps)
+
+
+class InstanceNorm1d(_InstanceNorm):
+    pass
+
+
+class InstanceNorm2d(_InstanceNorm):
+    pass
+
+
+class InstanceNorm3d(_InstanceNorm):
+    pass
+
+
+class RMSNorm(Module):
+    """**평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다."""
+
+    def __init__(self, normalized_shape, eps=None, elementwise_affine=True):
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.weight = (Parameter(_np.ones(self.normalized_shape, dtype=_DEFAULT_DTYPE))
+                       if elementwise_affine else None)
+
+    def forward(self, x):
+        return rms_norm(x, self.normalized_shape, self.weight, self.eps)
+
+
+class _ConvTransposeND(Module):
+    """전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `Conv2d` 와 뒤집혀 있다.
+
+    정사각 커널이면 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다. `state_dict` 열쇠는
+    `weight`·`bias` 로 `Conv2d` 와 같으므로, 모양만 보고 넣으면 조용히 틀린다.
+    """
+
+    nd = 2
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 bias=True):
+        super().__init__()
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        shape = (in_channels, out_channels) + (kernel_size,) * type(self).nd
+        bound = 1.0 / _math.sqrt(out_channels * kernel_size ** type(self).nd)
+        self.weight = Parameter(_rng.uniform(-bound, bound, shape).astype(_DEFAULT_DTYPE))
+        self.bias = (Parameter(_rng.uniform(-bound, bound, out_channels)
+                               .astype(_DEFAULT_DTYPE)) if bias else None)
+
+    def forward(self, x):
+        fn = {1: conv_transpose1d, 2: conv_transpose2d, 3: conv_transpose3d}[type(self).nd]
+        return fn(x, self.weight, self.bias, self.stride, self.padding)
+
+
+class ConvTranspose1d(_ConvTransposeND):
+    nd = 1
+
+
+class ConvTranspose2d(_ConvTransposeND):
+    nd = 2
+
+
+class ConvTranspose3d(_ConvTransposeND):
+    nd = 3
+
+
 class Softmax(Module):
     def __init__(self, dim=-1):
         super().__init__()
@@ -1356,7 +1463,9 @@ nn.ParameterList = ParameterList
 nn.ParameterDict = ParameterDict
 for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid,
              Mish, PReLU, ReLU6, SELU, Softmin, Softplus, Softshrink, Softsign,
-             Tanhshrink, Threshold):
+             Tanhshrink, Threshold,
+             ConvTranspose1d, ConvTranspose2d, ConvTranspose3d, GroupNorm,
+             InstanceNorm1d, InstanceNorm2d, InstanceNorm3d, RMSNorm):
     setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
@@ -1397,6 +1506,12 @@ class _Functional(_Namespace):
     softmin = staticmethod(softmin)
     glu = staticmethod(glu)
     prelu = staticmethod(prelu)
+    group_norm = staticmethod(group_norm)
+    instance_norm = staticmethod(instance_norm)
+    rms_norm = staticmethod(rms_norm)
+    conv_transpose1d = staticmethod(conv_transpose1d)
+    conv_transpose2d = staticmethod(conv_transpose2d)
+    conv_transpose3d = staticmethod(conv_transpose3d)
     one_hot = staticmethod(one_hot)
     dropout = staticmethod(dropout)
     avg_pool2d = staticmethod(avg_pool2d)

@@ -620,6 +620,114 @@ export class PReLU extends Module {
   }
 }
 
+/**
+ * 채널을 그룹으로 묶어 정규화. **배치가 작을 때 BatchNorm 대신 쓴다.**
+ *
+ * BatchNorm 은 배치 통계를 쓰므로 배치가 1~2 면 통계가 못 미덥다. 이쪽은 표본 하나
+ * 안에서 묶으므로 배치 크기와 무관하다.
+ */
+export class GroupNorm extends Module {
+  readonly weight: Tensor;
+  readonly bias: Tensor;
+
+  constructor(
+    private readonly numGroups: number,
+    numChannels: number,
+    private readonly eps = 1e-5,
+  ) {
+    super();
+    this.weight = Tensor.full([numChannels], 1);
+    this.bias = Tensor.full([numChannels], 0);
+    this.claim(this.weight, this.bias);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { weight: this.weight, bias: this.bias };
+  }
+
+  override forward(x: Tensor): Tensor {
+    const shape = [1, this.weight.size, ...new Array<number>(x.shape.length - 2).fill(1)];
+    return x.groupNorm(this.numGroups, this.eps)
+      .mul(this.weight.reshape(shape)).add(this.bias.reshape(shape));
+  }
+}
+
+/**
+ * 표본마다·채널마다 따로. **기본이 파라미터 없음이다** — torch 가 그렇다.
+ *
+ * `BatchNorm` 과 반대라 헷갈리는 자리이고, 기본을 뒤집으면 `stateDict` 열쇠가
+ * 통째로 갈린다.
+ */
+export class InstanceNormND extends Module {
+  constructor(private readonly eps = 1e-5) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.instanceNorm(this.eps);
+  }
+}
+
+/** **평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다. */
+export class RMSNorm extends Module {
+  readonly weight: Tensor;
+
+  constructor(private readonly normalizedShape: number | readonly number[]) {
+    super();
+    const dims = typeof normalizedShape === "number"
+      ? [normalizedShape] : [...normalizedShape];
+    this.weight = Tensor.full(dims, 1);
+    this.claim(this.weight);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { weight: this.weight };
+  }
+
+  override forward(x: Tensor): Tensor {
+    const dims = typeof this.normalizedShape === "number"
+      ? 1 : this.normalizedShape.length;
+    return x.rmsNorm(dims).mul(this.weight);
+  }
+}
+
+/**
+ * 전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `ConvND` 와 뒤집혀 있다.
+ *
+ * 정사각 커널이면 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다. `stateDict` 열쇠는
+ * `weight`·`bias` 로 같으므로, 모양만 보고 넣으면 조용히 틀린다.
+ */
+export class ConvTransposeND extends Module {
+  readonly weight: Tensor;
+  readonly bias: Tensor | null;
+
+  constructor(
+    inC: number,
+    outC: number,
+    kernel: number,
+    spatial: number,
+    private readonly stride = 1,
+    private readonly padding = 0,
+    bias = true,
+  ) {
+    super();
+    const bound = 1 / Math.sqrt(Math.max(1, outC * kernel ** spatial));
+    this.weight = uniform([inC, outC, ...new Array<number>(spatial).fill(kernel)], bound);
+    this.bias = bias ? uniform([outC], bound) : null;
+    this.claim(...(this.bias ? [this.weight, this.bias] : [this.weight]));
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return this.bias
+      ? { weight: this.weight, bias: this.bias }
+      : { weight: this.weight };
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.convTransposeND(this.weight, this.bias, this.stride, this.padding);
+  }
+}
+
 export class MaxPool2d extends Module {
   constructor(private readonly kernel = 2) {
     super();

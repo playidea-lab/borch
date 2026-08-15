@@ -267,6 +267,167 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     return x._make(out if bias is None else out + bias.data.reshape(1, -1, 1, 1), parents, back)
 
 
+def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
+    """전치 합성곱 — **`conv2d` 가 입력 쪽으로 흘리는 것과 같은 계산이다.**
+
+    새 커널을 안 쓴다. `conv2d` 의 역방향이 이미 `col2im` 으로 그 일을 하고 있고,
+    같은 계산을 두 벌 두면 한쪽만 고쳐진 채 갈리는 날이 온다.
+
+    **가중치 축이 `conv2d` 와 뒤집혀 있다** — `(입력, 출력, kh, kw)` 다. 정사각
+    커널이면 뒤집어 놓아도 모양이 맞으므로 값으로만 갈린다. 이 층에서 가장 흔한 실수다.
+    """
+    x, weight = _wrap(x), _wrap(weight)
+    N, C, H, W = x.data.shape
+    C2, F, KH, KW = weight.data.shape
+    if C != C2:
+        raise RuntimeError(f"채널이 안 맞습니다: 입력 {C}, 필터 {C2}")
+    sh, sw = _pair(stride)
+    ph, pw = _pair(padding)
+    OH = (H - 1) * sh + KH
+    OW = (W - 1) * sw + KW
+
+    # 출력 자리마다 입력 한 칸을 커널만큼 흩뿌린다. `col2im` 이 정확히 그 모양이다 —
+    # 입력을 `(N·H·W, C)` 로 펴고 가중치와 곱해 `(N·H·W, F·KH·KW)` 로 만든 뒤 접는다.
+    cols = x.data.transpose(0, 2, 3, 1).reshape(N * H * W, C)
+    w2 = weight.data.reshape(C, F * KH * KW)
+    spread = cols @ w2
+    out = _col2im(spread, (N, F, OH, OW), KH, KW, (sh, sw), H, W)
+
+    def back(g):
+        g = _np.asarray(g)
+        gcols, _, _ = _im2col(g, KH, KW, (sh, sw))          # (N·H·W, F·KH·KW)
+        gx = (gcols @ w2.T).reshape(N, H, W, C).transpose(0, 3, 1, 2)
+        gw = (cols.T @ gcols).reshape(weight.data.shape)
+        got = (gx, gw)
+        return got if bias is None else got + (g.sum(axis=(0, 2, 3)),)
+
+    if ph or pw:
+        # 채움은 **출력에서 잘라낸다** — 보통 합성곱과 반대 방향이다.
+        out = out[:, :, ph:OH - ph, pw:OW - pw]
+
+        def back(g, _inner=back, _ph=ph, _pw=pw, _oh=OH, _ow=OW):   # noqa: F811
+            full = _np.zeros((N, F, _oh, _ow), dtype=_np.asarray(g).dtype)
+            full[:, :, _ph:_oh - _ph, _pw:_ow - _pw] = g
+            return _inner(full)
+
+    if bias is not None:
+        out = out + bias.data.reshape(1, -1, 1, 1)
+    parents = (x, weight) if bias is None else (x, weight, bias)
+    return x._make(out, parents, back, "ConvTranspose2DBackward0")
+
+
+def conv_transpose1d(x, weight, bias=None, stride=1, padding=0):
+    """`conv_transpose2d` 에 높이 1 을 끼워 넣는다 — `conv1d` 와 같은 방식이다."""
+    x, weight = _wrap(x), _wrap(weight)
+    n, c, length = x.data.shape
+    c2, f, k = weight.data.shape
+    out = conv_transpose2d(x.reshape(n, c, 1, length), weight.reshape(c2, f, 1, k),
+                           bias, (1, stride), (0, padding))
+    shape = out.data.shape
+    return out.reshape(shape[0], shape[1], shape[3])
+
+
+def conv_transpose3d(x, weight, bias=None, stride=1, padding=0):
+    """깊이마다 2차원 전치 합성곱을 돌려 **겹치는 자리에 더한다.**
+
+    `conv3d` 와 같은 방식이다 — 3차원 커널을 따로 쓰지 않으므로 새로 쓸 미분식이 없다.
+    """
+    x, weight = _wrap(x), _wrap(weight)
+    n, c, d, h, w = x.data.shape
+    c2, f, kd, kh, kw = weight.data.shape
+    if c != c2:
+        raise RuntimeError(f"채널이 안 맞습니다: 입력 {c}, 필터 {c2}")
+    sd, sh, sw = (stride,) * 3 if isinstance(stride, int) else tuple(stride)
+    pd, ph, pw = (padding,) * 3 if isinstance(padding, int) else tuple(padding)
+    out_d = (d - 1) * sd + kd
+
+    # 깊이별 결과를 목록에 모았다가 한 번에 쌓는다. 자리마다 여러 입력 깊이가
+    # 겹치므로 **더해야 한다** — 덮어쓰면 마지막 것만 남는다.
+    slabs = [None] * out_d
+    for od in range(d):
+        for i in range(kd):
+            plane = x[_slice_at(2, od, od + 1)].reshape(n, c, h, w)
+            slab = weight[_slice_at(2, i, i + 1)].reshape(c2, f, kh, kw)
+            part = conv_transpose2d(plane, slab, None, (sh, sw), (ph, pw))
+            at = od * sd + i
+            slabs[at] = part if slabs[at] is None else slabs[at] + part
+    shape = slabs[0].data.shape
+    out = cat([s.reshape(shape[0], shape[1], 1, shape[2], shape[3]) for s in slabs], 2)
+    if pd:
+        out = out[_slice_at(2, pd, out_d - pd)]
+    if bias is not None:
+        out = out + bias.reshape(1, -1, 1, 1, 1)
+    return out
+
+
+def _norm_flat(x, groups, eps, center=True):
+    """정규화 셋이 나눠 쓰는 몸통. **묶는 구간을 한 축으로 눕혀서 받는다.**
+
+    `mean(dim=…)` 이 축을 하나만 받으므로, 부르는 쪽이 `(그룹 수, 그 안의 원소 수)`
+    모양으로 눕혀 주고 여기서는 마지막 축만 접는다. 축 목록을 받게 만들면 축약 쪽
+    표면이 늘고, 그 표면은 정규화 말고는 아무도 안 쓴다.
+
+    `center=False` 면 평균을 안 뺀다 — 그것이 `RMSNorm` 과 `LayerNorm` 의 유일한
+    차이다. 따로 쓰면 두 벌이 되고, 두 벌이면 한쪽만 고쳐지는 날이 온다.
+    """
+    centered = x - x.mean(dim=-1, keepdim=True) if center else x
+    var = (centered * centered).mean(dim=-1, keepdim=True)
+    return centered / (var + eps).sqrt()
+
+
+def _channel_shape(x, size):
+    """채널 축(1번)에 맞춰 편다. `(1, C, 1, …)` 이라야 브로드캐스팅이 맞는다."""
+    shape = [1] * len(x.data.shape)
+    shape[1] = size
+    return tuple(shape)
+
+
+def group_norm(x, num_groups, weight=None, bias=None, eps=1e-5):
+    """채널을 그룹으로 묶어 정규화. **그룹 수가 경계를 정한다.**
+
+    `num_groups=1` 이면 채널 전체가 한 묶음이라 `LayerNorm` 과 같고, 채널 수와 같으면
+    채널마다 따로라 `InstanceNorm` 과 같다. 셋은 서로의 특수한 경우이고, 묶는 규칙이
+    틀리면 셋 중 둘이 같아진다 — 그래서 골든이 셋을 나란히 묻는다.
+    """
+    x = _wrap(x)
+    shape = x.data.shape
+    n, c = shape[0], shape[1]
+    if c % num_groups:
+        raise RuntimeError(f"채널 {c} 를 {num_groups} 그룹으로 못 나눕니다")
+    inner = (c // num_groups) * int(_np.prod(shape[2:], dtype=int))
+    out = _norm_flat(x.reshape(n, num_groups, inner), num_groups, eps).reshape(*shape)
+    if weight is not None:
+        out = out * _wrap(weight).reshape(*_channel_shape(x, c))
+    if bias is not None:
+        out = out + _wrap(bias).reshape(*_channel_shape(x, c))
+    return out
+
+
+def instance_norm(x, weight=None, bias=None, eps=1e-5):
+    """표본마다·채널마다 따로. `group_norm` 에 그룹 수를 채널 수로 준 것이다."""
+    x = _wrap(x)
+    return group_norm(x, x.data.shape[1], weight, bias, eps)
+
+
+def rms_norm(x, normalized_shape, weight=None, eps=None):
+    """**평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다.
+
+    **기본 eps 가 `1e-5` 가 아니다.** torch 는 안 주면 그 dtype 의 기계 엡실론을
+    쓰는데(float32 에서 1.19e-07), 다른 정규화 층들이 전부 `1e-5` 라 무심코 맞춰
+    적었다. 순방향은 허용 오차 안에 들어와 통과했고 **기울기에서만 최대차 2.26e-02**
+    로 갈렸다 — 분산이 작은 자리에서 증폭되기 때문이다.
+    """
+    x = _wrap(x)
+    if eps is None:
+        eps = float(_np.finfo(_np.float32).eps)
+    shape = x.data.shape
+    k = len(normalized_shape) if isinstance(normalized_shape, (list, tuple)) else 1
+    lead = int(_np.prod(shape[:len(shape) - k], dtype=int))
+    inner = int(_np.prod(shape[len(shape) - k:], dtype=int))
+    out = _norm_flat(x.reshape(lead, inner), lead, eps, center=False).reshape(*shape)
+    return out if weight is None else out * _wrap(weight)
+
+
 def conv1d(x, weight, bias=None, stride=1, padding=0):
     """1차원 합성곱. **`conv2d` 에 높이 1 을 끼워 넣어 짠다.**
 

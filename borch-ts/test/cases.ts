@@ -460,6 +460,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addTrain(out, inputs);
   addContainer(out, inputs);
   addAct(out, inputs);
+  addNorm(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -950,6 +951,72 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
   out.set("act::nn.PReLU", () => new nn.PReLU().call(inp.get("kinks")));
   out.set("act::nn.PReLU/파라미터 이름",
     () => Object.keys(new nn.PReLU().namedParameters()).join(" "));
+}
+
+/**
+ * 정규화 셋과 전치 합성곱. **모양이 맞아도 값이 틀리는 자리들이다.**
+ *
+ * 정규화 넷은 식이 같고 묶는 축만 다르다 — 축을 잘못 고르면 모양은 그대로이고 값만
+ * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
+ * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
+ */
+function addNorm(out: Map<string, Case>, inp: Inputs): void {
+  const add = (name: string, fn: (x: Tensor) => Tensor, key: string): void => {
+    out.set(`norm::${name}`, () => fn(inp.get(key)));
+    out.set(`norm::grad::${name}`, () => {
+      const x = inp.get(key, true);
+      seeded(fn(x)).backward();
+      return gradOf(x, name);
+    });
+  };
+
+  add("F.group_norm(1)", (x) => x.groupNorm(1), "img");
+  add("F.group_norm(3)", (x) => x.groupNorm(3), "img");
+  const gn = (groups: number): nn.Module => new nn.GroupNorm(groups, 3);
+  out.set("norm::nn.GroupNorm(1,3)", () => gn(1).call(inp.get("img")));
+  out.set("norm::nn.GroupNorm(3,3)", () => gn(3).call(inp.get("img")));
+  out.set("norm::nn.GroupNorm/파라미터 이름",
+    () => Object.keys(gn(3).namedParameters()).join(" "));
+
+  add("F.instance_norm", (x) => x.instanceNorm(), "img");
+  for (const [nd, key] of [["1d", "nd_seq"], ["2d", "img"], ["3d", "nd_vol"]] as const) {
+    out.set(`norm::nn.InstanceNorm${nd}`,
+      () => new nn.InstanceNormND().call(inp.get(key)));
+  }
+
+  add("F.rms_norm", (x) => x.rmsNorm(1), "img");
+  out.set("norm::nn.RMSNorm", () => new nn.RMSNorm(4).call(inp.get("img")));
+
+  add("F.conv_transpose1d", (x) => x.convTransposeND(inp.get("tw1")), "nd_seq");
+  add("F.conv_transpose2d", (x) => x.convTransposeND(inp.get("tw2")), "img");
+  add("F.conv_transpose2d(스트라이드2)",
+    (x) => x.convTransposeND(inp.get("tw2"), null, 2), "img");
+  add("F.conv_transpose2d(패딩1)",
+    (x) => x.convTransposeND(inp.get("tw2"), null, 1, 1), "img");
+  add("F.conv_transpose2d(편향)",
+    (x) => x.convTransposeND(inp.get("tw2"), inp.get("tb")), "img");
+  add("F.conv_transpose3d", (x) => x.convTransposeND(inp.get("tw3")), "nd_vol");
+
+  // **가중치 쪽 기울기도 본다.** 입력 쪽만 보면 축이 뒤집힌 것을 놓친다.
+  out.set("norm::grad::conv_transpose2d/가중치", () => {
+    const w = inp.get("tw2", true);
+    seeded(inp.get("img").convTransposeND(w)).backward();
+    return gradOf(w, "conv_transpose2d 가중치");
+  });
+
+  for (const [nd, key, wk, bk, spatial] of [
+    ["1d", "nd_seq", "tw1", "tb", 1],
+    ["2d", "img", "tw2", "tb", 2],
+    ["3d", "nd_vol", "tw3", "tb3", 3],
+  ] as const) {
+    out.set(`norm::nn.ConvTranspose${nd}`, () => {
+      const w = inp.get(wk);
+      const layer = new nn.ConvTransposeND(
+        w.shape[0] ?? 1, w.shape[1] ?? 1, w.shape[2] ?? 1, spatial);
+      layer.loadStateDict({ weight: w, bias: inp.get(bk) });
+      return layer.call(inp.get(key));
+    });
+  }
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

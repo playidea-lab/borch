@@ -1786,6 +1786,47 @@ export class Tensor implements Node<Tensor> {
     return this.layerNorm(dim, eps);
   }
 
+  /**
+   * 채널을 그룹으로 묶어 정규화.
+   *
+   * `layerNorm` 과 **접는 구간만** 다르다. 그룹 수가 1 이면 채널 전체가 한 묶음이라
+   * LayerNorm 이고, 채널 수와 같으면 채널마다 따로라 InstanceNorm 이다 — 셋은 서로의
+   * 특수한 경우이고 묶는 규칙이 틀리면 셋 중 둘이 같아진다.
+   *
+   * 묶는 구간을 마지막 축 하나로 눕혀 놓고 접는다. 그러면 `layerNorm` 의 식을 그대로
+   * 쓰므로 정규화 식이 한 군데에만 있다.
+   */
+  groupNorm(numGroups: number, eps = 1e-5): Tensor {
+    const N = this.shape[0] ?? 1;
+    const C = this.shape[1] ?? 1;
+    if (C % numGroups !== 0) {
+      throw new Error(`채널 ${C} 를 ${numGroups} 그룹으로 못 나눈다`);
+    }
+    const inner = this.size / (N * numGroups);
+    return this.reshape([N, numGroups, inner]).layerNorm(-1, eps).reshape(this.shape);
+  }
+
+  /** 표본마다·채널마다 따로. 그룹 수를 채널 수로 준 `groupNorm` 이다. */
+  instanceNorm(eps = 1e-5): Tensor {
+    return this.groupNorm(this.shape[1] ?? 1, eps);
+  }
+
+  /**
+   * **평균을 안 뺀다.** 그것이 `layerNorm` 과의 유일한 차이다.
+   *
+   * 기본 eps 가 `1e-5` 가 아니라 f32 의 기계 엡실론이다 — torch 가 그렇다. 다른
+   * 정규화 층에 맞춰 `1e-5` 로 적었더니 순방향은 허용 오차 안이고 **기울기만**
+   * 최대차 2.26e-02 로 갈렸다. 분산이 작은 자리에서 증폭된다.
+   */
+  rmsNorm(dims = 1, eps = 1.1920928955078125e-7): Tensor {
+    const rank = this.shape.length;
+    const lead = this.shape.slice(0, rank - dims).reduce((a, b) => a * b, 1);
+    const flat = this.reshape([lead, this.size / lead]);
+    const v = flat.square().mean(-1, true);
+    const out = flat.div(v.binary("add", Tensor.full([], eps)).sqrt());
+    return out.reshape(this.shape);
+  }
+
   /** `x @ Wᵀ`. torch 의 `F.linear` 는 가중치를 (출력, 입력) 으로 받는다. */
   linear(weight: Tensor): Tensor {
     return this.mm(weight.transpose());
@@ -2540,6 +2581,107 @@ export class Tensor implements Node<Tensor> {
       },
       "ConvolutionBackward0",
     );
+  }
+
+  /**
+   * 차원 수에 상관없는 전치 합성곱.
+   *
+   * **새 커널이 없다.** 전치 합성곱의 순방향은 보통 합성곱이 입력 쪽으로 흘리는
+   * 것과 같은 계산이라 `convNDGradInputTiled` 를 그대로 쓴다. 역방향도 마찬가지로
+   * 뒤집힌다 — 입력 쪽 기울기가 보통 합성곱의 순방향이고, 가중치 쪽은 같은 커널에
+   * 두 인자를 바꿔 넣은 것이다. 같은 계산을 두 벌 두면 한쪽만 고쳐지는 날이 온다.
+   *
+   * **가중치 축이 `convND` 와 뒤집혀 있다** — `(입력, 출력, …)` 다. 정사각 커널이면
+   * 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다.
+   */
+  convTransposeND(
+    weight: Tensor,
+    bias: Tensor | null = null,
+    stride: number | readonly number[] = 1,
+    padding: number | readonly number[] = 0,
+  ): Tensor {
+    const spatial = this.shape.length - 2;
+    if (spatial < 1 || weight.shape.length !== this.shape.length) {
+      throw new Error(
+        `convTranspose: 모양이 안 맞는다: [${this.shape}] × [${weight.shape}]`);
+    }
+    const spread = (v: number | readonly number[]): number[] =>
+      typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
+    const st = spread(stride);
+    const pd = spread(padding);
+    const Cin = this.shape[1] ?? 1;
+    const Cout = weight.shape[1] ?? 1;
+    if ((weight.shape[0] ?? 1) !== Cin) {
+      throw new RuntimeError(
+        `Given transposed=1, weight of size [${weight.shape}], expected input` +
+          `[${this.shape}] to have ${weight.shape[0]} channels, but got ${Cin} channels instead`,
+      );
+    }
+    const kernel = weight.shape.slice(2);
+    const ourDims = this.shape.slice(2);
+    // 보통 합성곱의 눈으로 본다: 우리 입력이 그쪽의 **출력**이고, 우리 출력이
+    // 그쪽의 입력이다. 그래서 O 와 C 가 뒤바뀐 자리에 들어간다.
+    const outDims = ourDims.map((d, i) =>
+      (d - 1) * (st[i] ?? 1) + (kernel[i] ?? 1) - 2 * (pd[i] ?? 0));
+    const s: ConvNDShape = {
+      N: this.shape[0] ?? 1, C: Cout, O: Cin,
+      inDims: outDims, kernel, stride: st, pad: pd, outDims: ourDims,
+    };
+    const key = convNDKey(s);
+    const outShape = [s.N, Cout, ...outDims];
+    const out = dev().alloc(outShape.reduce((a, b) => a * b, 1));
+    dev().run(
+      dev().pipeline(`cnxt:${key}`, () => convNDGradInputTiled(s)),
+      [this.buffer, weight.buffer, out],
+      convGradInputGrid(s),
+    );
+    let result = Tensor.make(
+      out,
+      outShape,
+      [this, weight],
+      (g) => {
+        const parts: (Tensor | null)[] = [];
+        if (this.requiresGrad) {
+          // 우리 입력 쪽 기울기는 **보통 합성곱의 순방향**이다.
+          const gi = dev().alloc(this.size);
+          dev().run(
+            dev().pipeline(`cnt:${key}:n`, () => convNDForwardTiled(s, false)),
+            [g.buffer, weight.buffer, gi],
+            convTiledGrid(s),
+          );
+          parts.push(new Tensor(gi, this.shape));
+        } else parts.push(null);
+        if (weight.requiresGrad) {
+          const splits = convGradWeightSplit(s);
+          const parted = dev().alloc(weight.size * splits);
+          // 두 인자를 바꿔 넣는다 — 그쪽의 "입력" 이 우리 기울기이고 그쪽의
+          // "출력 기울기" 가 우리 입력이다.
+          dev().run(
+            dev().pipeline(`cnwt:${key}`, () => convNDGradWeightTiled(s)),
+            [g.buffer, this.buffer, parted],
+            convGradWeightGrid(s),
+          );
+          let gw = parted;
+          if (splits > 1) {
+            gw = dev().alloc(weight.size);
+            dev().run1d(
+              dev().pipeline(`ss:${weight.size}:${splits}`,
+                () => sumSplits(weight.size, splits)),
+              [parted, gw],
+              weight.size,
+            );
+          }
+          parts.push(new Tensor(gw, weight.shape));
+        } else parts.push(null);
+        return parts;
+      },
+      "ConvTransposeBackward0",
+    );
+    if (bias) {
+      const shape = [1, Cout, ...new Array<number>(spatial).fill(1)];
+      result = result.add(bias.reshape(shape));
+    }
+    return result;
   }
 
   /** 차원 수에 상관없는 풀링. */
