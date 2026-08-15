@@ -261,6 +261,9 @@ def __getattr__(name):
     if name in ("bool", "float32", "int64"):
         from ._base import _DType
         return _DType(name)
+    # `max`·`min` 도 같은 이유로 여기서 준다 — 위에 적은 그대로다.
+    if name in _EXTREME:
+        return _EXTREME[name]
     js_name = camel(name)
 
     if name in _BINARY_ONLY:
@@ -485,8 +488,66 @@ def quantile(x, q, dim=None, **kw):
     return wrap(out._h.reshape(_js_list([]))) if one else out
 
 
-def flatten(x, start_dim=1, end_dim=-1, **kw):
-    """축을 접는다. **borch.ts 에는 없어서 `reshape` 로 만든다** — 정의 그대로다."""
+def numel(x, **kw):
+    """원소 수. borch.ts 에서는 `size` 라는 **속성**이라 이름도 꼴도 다르다."""
+    return int(handle(x).size)
+
+
+def _reduce_all(name):
+    """축을 **안 준** 축약. torch 는 평평하게 편 뒤 하나를 낸다.
+
+    borch.ts 쪽은 축이 기본값 0 이라 그대로 넘기면 **열마다 하나씩** 나온다. 모양이
+    달라서 값 대조에서 걸리기는 하지만, 걸리기 전까지는 "되는데 좀 이상한" 상태다.
+    """
+    def call(x, dim=None, keepdim=False, **kw):
+        dim = kw.get("dim", dim)
+        h = handle(x)
+        if dim is None:
+            h = h.reshape(_js_list([int(h.size)]))
+            return guarded(getattr(h, camel(name)), 0)
+        return guarded(getattr(h, camel(name)), dim, bool(kw.get("keepdim", keepdim)))
+    call.__name__ = name
+    return call
+
+
+argmax = _reduce_all("argmax")
+argmin = _reduce_all("argmin")
+
+
+def _extreme(name):
+    """`max`·`min`. **축을 주면 짝을, 안 주면 스칼라 하나를 낸다** — torch 가 그렇다.
+
+    두 꼴이 한 이름에 붙어 있는 것이 헷갈리는 자리인데, 그것이 torch 의 계약이므로
+    여기서 정리하면 안 된다. 정리하면 교재 코드가 안 돈다.
+    """
+    def call(x, dim=None, keepdim=False, **kw):
+        dim = kw.get("dim", dim)
+        h = handle(x)
+        if dim is None:
+            h = h.reshape(_js_list([int(h.size)]))
+            return guarded(getattr(h, name), 0)
+        return guarded(getattr(h, name), dim, bool(kw.get("keepdim", keepdim)))
+    call.__name__ = name
+    return call
+
+
+# **모듈 전역에 `max`·`min` 을 두면 안 된다.** 이 파일 안에서 파이썬 내장을 가리고,
+# 그러면 `max(a, b)` 로 크기를 재던 자리가 텐서 함수를 부른다 — 증상은 GPU 버퍼
+# 할당이 통째로 죽는 것이었고(`createBuffer` 실패 128 건), 원인에서 아주 멀다.
+# `bool` 에서 같은 것을 겪고 그 자리에 적어 두었는데도 다시 밟았다.
+#
+# 아래 `__getattr__` 이 이 이름들을 내준다. 밖에서는 `L.max(x)` 로 보이고 안에서는
+# 내장이 그대로 산다.
+_EXTREME = {"max": _extreme("max"), "min": _extreme("min")}
+
+
+def flatten(x, start_dim=0, end_dim=-1, **kw):
+    """축을 접는다. **borch.ts 에는 없어서 `reshape` 로 만든다** — 정의 그대로다.
+
+    **기본이 `start_dim=0` 이다.** `nn.Flatten` 층은 배치를 남기느라 1 부터 접지만
+    `torch.flatten` 함수는 0 부터다. 층의 기본값을 함수에 옮겨 적었더니 `flatten(x)`
+    가 배치를 남겨서 모양이 달랐다.
+    """
     h = handle(x)
     shape = [int(n) for n in h.shape]
     rank = len(shape)

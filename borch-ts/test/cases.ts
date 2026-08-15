@@ -464,6 +464,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
+  addModFn(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1222,6 +1223,46 @@ function addSdpa(out: Map<string, Case>, inp: Inputs): void {
     const k = q.mul(Tensor.full([], 0.5)).add(Tensor.full([], 0.1));
     const v = q.flip(0);
     return nn.scaledDotProductAttention(q, k, v);
+  });
+}
+
+/**
+ * 파이썬 쪽에서 `torch.sum(x)` 처럼 **모듈 함수로** 부르는 꼴.
+ *
+ * TypeScript 에는 그런 두 번째 이름이 없다 — 여기서는 메서드가 유일한 부르는 법이고,
+ * 자유 함수를 따로 두면 표면만 는다. 그래서 이 케이스들은 **같은 답을 메서드로**
+ * 낸다. 골든이 묻는 것은 값이고, 부르는 문법은 언어마다 다를 수 있다.
+ */
+function addModFn(out: Map<string, Case>, inp: Inputs): void {
+  const m = (): Tensor => inp.get("x2");
+  const table: [string, () => Tensor][] = [
+    ["sum", () => m().sum()],
+    ["sum(dim)", () => m().sumDim(1)],
+    ["mean", () => m().mean()],
+    ["mean(dim)", () => m().mean(0)],
+    ["std", () => m().std()],
+    ["var", () => m().variance()],
+    ["numel", () => Tensor.from([m().size], [])],
+    // `flat` 은 바깥에 안 열려 있다 — `reshape` 로 같은 것을 한다.
+    ["argmax", () => m().reshape([m().size]).argmax(0)],
+    ["argmin(dim)", () => m().argmin(1)],
+    ["clone", () => m().clone()],
+    ["detach", () => m().detach()],
+    ["flatten", () => m().reshape([m().size])],
+    ["permute", () => m().permute([1, 0])],
+    ["transpose", () => m().transpose()],
+    ["squeeze", () => inp.get("x1").reshape([1, 6, 1]).squeeze(2).squeeze(0)],
+    // `max` 는 축을 주면 **짝**을 낸다. 값 쪽을 꺼낸다.
+    ["max", () => m().reshape([m().size]).max(0).values],
+    ["max(dim)/값", () => m().max(1).values],
+    ["min(dim)/번호", () => m().min(1).indices],
+  ];
+  for (const [name, fn] of table) out.set(`modfn::${name}`, fn);
+
+  out.set("modfn::relu_(원본이 바뀐다)", () => {
+    const t = inp.get("x1").clone();
+    t.inplaceUnary("relu");
+    return t;
   });
 }
 

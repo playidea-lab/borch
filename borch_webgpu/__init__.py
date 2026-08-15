@@ -6,7 +6,7 @@
 
 전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
 원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **2,827 줄**이다 — borch.ts 에 그것이 이미 다
+다시 구현해야 했기 때문이다. 이쪽은 **2,977 줄**이다 — borch.ts 에 그것이 이미 다
 있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
 
 `_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
@@ -64,9 +64,10 @@ from ._base import Tensor, tensor                        # noqa: E402,F401
 # `linalg`·`einsum` 처럼 첫 인자가 텐서가 아닌 것들이 그쪽으로 새면 안 된다 —
 # 실제로 `linalg` 가 함수로 잡혀서 `linalg.cholesky` 가 통째로 실패했다.
 from ._ops import (                                      # noqa: E402,F401
-    aminmax, arange, as_tensor, cat, chunk, clamp, clip, einsum, eye, flatten,
-    flip,
-    full, linalg, linspace, matrix_power, memory, no_grad, norm, ones, pow,
+    aminmax, arange, argmax, argmin, as_tensor, cat, chunk, clamp, clip, einsum, eye,
+    flatten, flip,
+    full, linalg, linspace, matrix_power, memory, no_grad, norm, numel,
+    ones, pow,
     quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
     sum, swapdims, transpose, where, zeros,
 )

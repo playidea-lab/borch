@@ -710,6 +710,60 @@ def act_cases(inp=None):
     return cases
 
 
+MODFN_PREFIX = "modfn::"
+
+
+def module_function_cases(inp=None):
+    """`torch.sum(x)` 처럼 **모듈 함수로 부르는 꼴.**
+
+    torch 는 거의 모든 것을 두 이름으로 준다 — `x.sum()` 과 `torch.sum(x)`. 이 표는
+    오래 메서드 꼴로만 물었고, 그래서 모듈 함수가 통째로 빠져 있는 것을 못 봤다.
+    `reduce::sum(dim)` 케이스를 쓰다가 `module 'borch' has no attribute 'sum'` 로
+    걸렸고, 그때 세어 보니 그런 이름이 **쉰 개**였다.
+
+    여기서 묻는 것은 값이 맞는가가 아니라 — 그건 메서드 쪽 케이스가 이미 묻는다 —
+    **그 이름이 그 자리에 있는가**다. 그래서 한 줄씩 값으로 확인한다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    x2, x1 = inp["x2"], inp["x1"]
+    cases = []
+
+    def add(name, fn):
+        cases.append((MODFN_PREFIX + name, fn))
+
+    add("sum", lambda L: L.sum(L.tensor(x2)))
+    add("sum(dim)", lambda L: L.sum(L.tensor(x2), dim=1))
+    add("mean", lambda L: L.mean(L.tensor(x2)))
+    add("mean(dim)", lambda L: L.mean(L.tensor(x2), dim=0))
+    add("std", lambda L: L.std(L.tensor(x2)))
+    add("var", lambda L: L.var(L.tensor(x2)))
+    add("numel", lambda L: L.tensor(np.int64(L.numel(L.tensor(x2)))))
+    add("argmax", lambda L: L.argmax(L.tensor(x2)))
+    add("argmin(dim)", lambda L: L.argmin(L.tensor(x2), dim=1))
+    add("clone", lambda L: L.clone(L.tensor(x2)))
+    add("detach", lambda L: L.detach(L.tensor(x2)))
+    add("flatten", lambda L: L.flatten(L.tensor(x2)))
+    # **모듈 꼴은 축을 튜플로 받는다.** 메서드는 흩어서도 받는데 여기는 아니다 —
+    # `torch.permute(x, 1, 0)` 은 `TypeError` 다.
+    add("permute", lambda L: L.permute(L.tensor(x2), (1, 0)))
+    add("transpose", lambda L: L.transpose(L.tensor(x2), 0, 1))
+    add("squeeze", lambda L: L.squeeze(L.tensor(x1).reshape(1, 6, 1)))
+
+    # **`max`·`min` 은 축을 주면 짝을 낸다.** 자리로 꺼내면 양쪽 이름이 달라도 통한다.
+    add("max", lambda L: L.max(L.tensor(x2)))
+    add("max(dim)/값", lambda L: L.max(L.tensor(x2), dim=1)[0])
+    add("min(dim)/번호", lambda L: L.min(L.tensor(x2), dim=1)[1])
+
+    # 제자리 연산도 모듈 이름이 있다. **원본이 바뀌는지**를 본다.
+    def inplace(L):
+        t = L.tensor(x1.copy())
+        L.relu_(t)
+        return t
+
+    add("relu_(원본이 바뀐다)", inplace)
+    return cases
+
+
 SDPA_PREFIX = "sdpa::"
 
 
@@ -2741,6 +2795,7 @@ def golden_cases(inp=None):
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
+            + module_function_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

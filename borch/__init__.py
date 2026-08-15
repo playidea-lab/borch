@@ -156,6 +156,39 @@ def _where_method(self, condition, other):
 Tensor.where = _where_method
 
 
+# ── 메서드를 **모듈 함수로도** 낸다. `_AS_METHOD` 의 정확히 반대 방향이다. ──────
+#
+# torch 는 거의 모든 것을 두 이름으로 준다 — `x.sum()` 과 `torch.sum(x)`. 여기는 한쪽만
+# 있었고, 그래서 `torch.sum(x, dim=1)` 이 `AttributeError` 로 멈췄다. 골든이 그것을
+# 잡은 것도 아니다 — 케이스를 쓰다가 걸렸고, 표에 그 꼴이 하나도 없었기 때문이다.
+#
+# 목록을 손으로 안 적는다. **torch 가 모듈 함수로도 주는 것**과 우리가 메서드로 가진
+# 것의 교집합이 곧 답이고, 그것을 기계가 낸다. 손으로 적으면 다음에 메서드를 하나
+# 늘릴 때 이쪽을 빼먹는다.
+def _as_function(name):
+    """메서드를 첫 인자로 받는 함수로 감싼다."""
+    def call(t, *args, **kwargs):
+        return getattr(_wrap_tensor(t), name)(*args, **kwargs)
+    call.__name__ = name
+    call.__doc__ = f"`x.{name}(...)` 과 같다. torch 는 둘 다 준다."
+    return call
+
+
+def _wrap_tensor(t):
+    return t if isinstance(t, Tensor) else tensor(t)
+
+
+for _name in dir(Tensor):
+    if _name.startswith("_") or _name in globals():
+        continue
+    if callable(getattr(Tensor, _name, None)):
+        globals()[_name] = _as_function(_name)
+
+# **여기가 파일의 끝 가까이여야 한다.** 위 고리가 `sum`·`min`·`max`·`all`·`any` 를
+# 모듈 전역에 놓는데, 그 이름들은 파이썬 내장이기도 하다. 이 아래에서 내장으로
+# 부르는 코드가 있으면 조용히 다른 것이 불린다 — 결속에서 `bool` 로 한 번 겪었다.
+
+
 # ================================================================ install
 
 def install(name="torch", modules=None):
