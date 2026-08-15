@@ -20,7 +20,8 @@ build-backend = "hatchling.build"
 #
 # `borch_vision` 도 넣는다. 안 넣으면 휠로 설치한 사람에게는 **모듈이 아예
 # 없다** — 저장소에서는 되고 설치본에서는 안 되는, 아무도 안 보다가 사용자만 만나는 종류다.
-# `borch_webgpu` 는 여기 없다. 브라우저 전용이고 TF.js 를 페이지가 싣는다.
+# `borch_webgpu` 는 여기 없다. 브라우저 전용이고, 그 밑에 깔리는 borch.ts 는
+# 페이지가 ES 모듈로 싣는다(npm 쪽 `borch`).
 packages = ["borch"]
 only-include = ["borch", "borch_vision.py"]
 
