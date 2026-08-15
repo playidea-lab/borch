@@ -24,6 +24,7 @@ import { einsum } from "../src/einsum.js";
 import * as nn from "../src/nn.js";
 import * as optim from "../src/optim.js";
 import * as vision from "../src/vision.js";
+import { LinAlgError } from "../src/errors.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
@@ -1999,6 +2000,152 @@ function addLinalg(out: Map<string, Case>): void {
       const leaf = which === 0 ? a : b;
       return gradOf(leaf, `solve/${tag}`);
     });
+  }
+  addLinalgStruct(out);
+}
+
+/** `tests/cases.py` 의 `linalg_struct_cases` 가 쓰는 입력. 손으로 적은 것 그대로. */
+const LA_BATCH = [4, 1, 2, 3, 2, 0, 1, 5, 3, -1, 1, 2];
+const LA_BATCH_SYM = [4, 1, 1, 3, 9, 2, 2, 5, 2, 0.5, 0.5, 1];
+const LA_BATCH_VEC = [1, 2, 3, 1, 0, 4];
+const LA_BATCH_RHS = [1, 0, 2, 1, 0, 3, 1, 1, 2, 2, 0, 1];
+const LA_RECT = [1, 2, 3, 4, 5, 7];
+const LA_SYM3 = [4, 1, 0, 1, 3, 1, 0, 1, 2];
+const LA_PIVOT = [1, 2, 3, 4];
+const LA_SINGULAR = [1, 2, 2, 4];
+
+/**
+ * `linalg` 의 구조 — 배치·직사각·`_ex`·LU.
+ *
+ * 앞의 `addLinalg` 는 2×2 한 장만 묻는다. torch 의 `linalg` 는 전부 배치이고
+ * `qr`·`svd`·`pinv` 는 직사각도 받는다. 한 장만 묻는 골든은 그 둘을 못 본다.
+ */
+function addLinalgStruct(out: Map<string, Case>): void {
+  const bat = (g = false) => Tensor.from(LA_BATCH, [3, 2, 2], g);
+  const sym = (g = false) => Tensor.from(LA_BATCH_SYM, [3, 2, 2], g);
+  const vecB = (g = false) => Tensor.from(LA_BATCH_VEC, [3, 2], g);
+  const rhsB = (g = false) => Tensor.from(LA_BATCH_RHS, [3, 2, 2], g);
+  const rect = () => Tensor.from(LA_RECT, [3, 2]);
+  const sym3 = (g = false) => Tensor.from(LA_SYM3, [3, 3], g);
+  const mat2 = () => Tensor.from([4, 1, 2, 3], [2, 2]);
+
+  const value: [string, () => Promise<Tensor>][] = [
+    // ── 배치 ──────────────────────────────────────────────────────────
+    ["batch::det", async () => bat().det()],
+    ["batch::inv", async () => bat().inverse()],
+    ["batch::solve(벡터)", async () => bat().solve(vecB())],
+    ["batch::solve(행렬)", async () => bat().solve(rhsB())],
+    ["batch::cholesky", async () => sym().cholesky()],
+    ["batch::slogdet/부호", async () => (await bat().slogdet()).sign],
+    ["batch::slogdet/로그", async () => (await bat().slogdet()).logabs],
+    ["batch::matrix_rank", async () => bat().matrixRank()],
+    ["batch::matrix_power", async () => bat().matrixPower(3)],
+    ["batch::qr/R", async () => (await bat().qr()).r],
+    ["batch::svd/S", async () => (await bat().svd()).s],
+    ["batch::eigh/값", async () => (await sym().eigh()).values],
+    ["batch::pinv", async () => bat().pinverse()],
+    ["batch::logdet", async () => sym().logdet()],
+    // 3×3 — 2×2 는 야코비 회전이 한 번뿐이라 쓸어담기 반복을 안 지난다.
+    ["3x3::eigh/값", async () => (await sym3().eigh()).values],
+    ["3x3::svd/S", async () => (await sym3().svd()).s],
+    ["3x3::det", async () => sym3().det()],
+    ["3x3::inv", async () => sym3().inverse()],
+
+    // ── 직사각 ────────────────────────────────────────────────────────
+    ["rect::qr/R", async () => (await rect().qr()).r],
+    ["rect::qr/|Q|", async () => (await rect().qr()).q.abs()],
+    ["rect::qr(complete)/|Q|", async () => (await rect().qr("complete")).q.abs()],
+    ["rect::svd/S", async () => (await rect().svd()).s],
+    ["rect::svd/|U|", async () => (await rect().svd()).u.abs()],
+    ["rect::svd(축소)/|U|", async () => (await rect().svd(false)).u.abs()],
+    ["rect::pinv", async () => rect().pinverse()],
+    ["rect::matrix_rank", async () => rect().matrixRank()],
+    ["rect::lstsq", async () => rect().lstsq(Tensor.from([1, 2, 3], [3]))],
+
+    // ── 이름으로 묻기 ─────────────────────────────────────────────────
+    // 파이썬 쪽은 `.logabsdet`·`.Q`·`.eigenvalues` 로 묻는다. 여기서는 JS 이름이
+    // 그 자리를 채우고, 결속이 둘을 잇는다.
+    ["name::slogdet.sign", async () => (await bat().slogdet()).sign],
+    ["name::slogdet.logabsdet", async () => (await bat().slogdet()).logabs],
+    ["name::qr.R", async () => (await rect().qr()).r],
+    ["name::qr.|Q|", async () => (await rect().qr()).q.abs()],
+    ["name::svd.S", async () => (await rect().svd()).s],
+    ["name::svd.|Vh|", async () => (await rect().svd()).vt.abs()],
+    ["name::eigh.eigenvalues", async () => (await sym3().eigh()).values],
+    ["name::eigh.|eigenvectors|", async () => (await sym3().eigh()).vectors.abs()],
+
+    // ── `_ex` — 던지는 대신 info 를 준다 ──────────────────────────────
+    ["ex::inv_ex/값", async () => (await mat2().invEx()).inverse],
+    ["ex::inv_ex/info", async () => (await mat2().invEx()).info],
+    ["ex::inv_ex(특이)/info",
+      async () => (await Tensor.from(LA_SINGULAR, [2, 2]).invEx()).info],
+    ["ex::cholesky_ex/L",
+      async () => (await Tensor.from([4, 1, 1, 3], [2, 2]).choleskyEx()).L],
+    ["ex::cholesky_ex(비양정)/info",
+      async () => (await Tensor.from(LA_SINGULAR, [2, 2]).choleskyEx()).info],
+    ["ex::solve_ex/값",
+      async () => (await mat2().solveEx(Tensor.from([1, 2], [2]))).result],
+    ["ex::solve_ex/info",
+      async () => (await mat2().solveEx(Tensor.from([1, 2], [2]))).info],
+  ];
+  for (const [name, fn] of value) out.set(`linalg::${name}`, fn);
+
+  // ── LU ──────────────────────────────────────────────────────────────
+  for (const [tag, src] of [["교환없음", [4, 1, 2, 3]], ["교환", LA_PIVOT]] as const) {
+    const a = () => Tensor.from(src as readonly number[], [2, 2]);
+    out.set(`linalg::lu::lu_factor/${tag}/LU`, async () => (await a().luFactor()).LU);
+    out.set(`linalg::lu::lu_factor/${tag}/pivots`,
+      async () => (await a().luFactor()).pivots);
+    out.set(`linalg::lu::lu/${tag}/P`, async () => (await a().lu()).P);
+    out.set(`linalg::lu::lu/${tag}/L`, async () => (await a().lu()).L);
+    out.set(`linalg::lu::lu/${tag}/U`, async () => (await a().lu()).U);
+  }
+  out.set("linalg::lu::lu_solve(교환)", async () => {
+    const f = await Tensor.from(LA_PIVOT, [2, 2]).luFactor();
+    return f.LU.luSolve(f.pivots, Tensor.from([1, 2], [2, 1]));
+  });
+
+  out.set("linalg::ex::inv(특이)가 던지는 것", async () => {
+    try {
+      await Tensor.from(LA_SINGULAR, [2, 2]).inverse();
+    } catch (e) {
+      return e instanceof LinAlgError
+        ? "LinAlgError 로 잡힌다"
+        : `다른 것이 났다: ${(e as Error).name}`;
+    }
+    return "예외가 안 났다";
+  });
+
+  // ── 배치의 기울기 ───────────────────────────────────────────────────
+  // **값이 맞는데 기울기가 안 맞는 자리가 여기다.** 역방향 상수가 배치마다 다른데
+  // 한 장 것을 돌려 쓰면 첫 장만 맞고 나머지가 조용히 틀린다.
+  const grads: [string, (g: boolean) => Tensor, (x: Tensor) => Promise<Tensor>][] = [
+    ["det", bat, async (x) => x.det()],
+    ["logdet", sym, async (x) => x.logdet()],
+    ["slogdet", bat, async (x) => (await x.slogdet()).logabs],
+    ["inv", bat, async (x) => x.inverse()],
+    ["cholesky", sym, async (x) => x.cholesky()],
+    ["matrix_power", bat, async (x) => x.matrixPower(3)],
+    ["3x3/inv", sym3, async (x) => x.inverse()],
+    ["3x3/cholesky", sym3, async (x) => x.cholesky()],
+  ];
+  for (const [name, src, fn] of grads) {
+    out.set(`linalg::batch::grad::${name}`, async () => {
+      const x = src(true);
+      seeded(await fn(x)).backward();
+      return gradOf(x, name);
+    });
+  }
+
+  for (const [tag, rhs] of [["벡터", vecB], ["행렬", rhsB]] as const) {
+    for (const [which, who] of ["a", "b"].entries()) {
+      out.set(`linalg::batch::grad::solve(${tag})/${who}`, async () => {
+        const a = bat(true);
+        const b = rhs(true);
+        seeded(await a.solve(b)).backward();
+        return gradOf(which === 0 ? a : b, `batch solve ${tag}/${who}`);
+      });
+    }
   }
 }
 

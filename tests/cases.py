@@ -2507,6 +2507,223 @@ def linalg_cases(inp=None):
     return cases
 
 
+# 배치·직사각용 입력. **손으로 적는다** — 난수는 특이행렬도 행 교환도 안 만들고,
+# 여기서 재려는 것이 바로 그 두 자리다.
+_LA_BATCH = np.array([[[4., 1.], [2., 3.]],
+                      [[2., 0.], [1., 5.]],
+                      [[3., -1.], [1., 2.]]], dtype=np.float32)
+_LA_BATCH_SYM = np.array([[[4., 1.], [1., 3.]],
+                          [[9., 2.], [2., 5.]],
+                          [[2., 0.5], [0.5, 1.]]], dtype=np.float32)
+_LA_BATCH_VEC = np.array([[1., 2.], [3., 1.], [0., 4.]], dtype=np.float32)
+_LA_BATCH_RHS = np.array([[[1., 0.], [2., 1.]],
+                          [[0., 3.], [1., 1.]],
+                          [[2., 2.], [0., 1.]]], dtype=np.float32)
+_LA_RECT = np.array([[1., 2.], [3., 4.], [5., 7.]], dtype=np.float32)
+_LA_SYM3 = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]], dtype=np.float32)
+# 첫 원소가 두 번째 행보다 작다 → 부분 피벗이 행을 바꾼다. 안 바꾸는 행렬만 물으면
+# pivots 가 항등이라 **1 부터 세는지 0 부터 세는지 구분이 안 된다.**
+_LA_PIVOT = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+_LA_SINGULAR = np.array([[1., 2.], [2., 4.]], dtype=np.float32)
+
+
+def linalg_struct_cases(inp=None):
+    """`linalg` 의 **구조** — 배치·직사각·이름·`_ex`·LU.
+
+    앞의 `linalg_cases` 는 2 차원 정사각 하나만 묻는다. 그런데 torch 의 `linalg` 는
+    **전부 배치**다: `det((3,2,2))` 이 `(3,)` 을 내고 `inv`·`solve`·`cholesky`·
+    `slogdet`·`matrix_rank` 가 다 그렇다. 한 장만 묻는 골든은 배치를 못 본다.
+
+    ## 이름으로도 물어야 한다
+
+    torch 는 이 결과들을 이름 붙은 튜플로 준다 — `slogdet(A).logabsdet`,
+    `qr(A).Q`, `lu_factor(A).pivots`, `inv_ex(A).info`. 자리로만 맞춰 놓으면 값이
+    맞는데도 교재 코드가 속성 접근에서 멈춘다. `lstsq` 가 `.solution` 으로 이미
+    같은 자리를 겪었다.
+
+    ## `_ex` 는 안 던지는 쪽이다
+
+    `inv` 는 특이행렬에서 `LinAlgError` 를 던지고 `inv_ex` 는 `info` 에 0 이 아닌
+    수를 담아 조용히 돌아온다. **둘 다 있어야 한다** — 던지는 쪽이 없으면 특이행렬이
+    NaN 으로 새고, 안 던지는 쪽이 없으면 배치에서 한 장이 특이일 때 전부가 죽는다.
+
+    ## 피벗은 1 부터 센다
+
+    `lu_factor` 의 `pivots` 가 LAPACK 규약이라 **1 부터 시작한다.** 교환이 없는
+    행렬에서는 `[1, 2]` 이지 `[0, 1]` 이 아니다. 이것을 0 부터 세면 `lu_solve` 가
+    조용히 다른 답을 낸다 — 그래서 행을 실제로 바꾸는 행렬로도 묻는다.
+    """
+    bat, sym, vec = _LA_BATCH, _LA_BATCH_SYM, _LA_BATCH_VEC
+    rhs, rect, sym3 = _LA_BATCH_RHS, _LA_RECT, _LA_SYM3
+
+    cases = [
+        # ── 배치 ────────────────────────────────────────────────────────
+        (LINALG_PREFIX + "batch::det", lambda L: L.linalg.det(L.tensor(bat))),
+        (LINALG_PREFIX + "batch::inv", lambda L: L.linalg.inv(L.tensor(bat))),
+        (LINALG_PREFIX + "batch::solve(벡터)",
+         lambda L: L.linalg.solve(L.tensor(bat), L.tensor(vec))),
+        (LINALG_PREFIX + "batch::solve(행렬)",
+         lambda L: L.linalg.solve(L.tensor(bat), L.tensor(rhs))),
+        (LINALG_PREFIX + "batch::cholesky",
+         lambda L: L.linalg.cholesky(L.tensor(sym))),
+        (LINALG_PREFIX + "batch::slogdet/부호",
+         lambda L: L.linalg.slogdet(L.tensor(bat))[0]),
+        (LINALG_PREFIX + "batch::slogdet/로그",
+         lambda L: L.linalg.slogdet(L.tensor(bat))[1]),
+        (LINALG_PREFIX + "batch::matrix_rank",
+         lambda L: L.linalg.matrix_rank(L.tensor(bat))),
+        (LINALG_PREFIX + "batch::matrix_power",
+         lambda L: L.linalg.matrix_power(L.tensor(bat), 3)),
+        (LINALG_PREFIX + "batch::qr/R", lambda L: L.linalg.qr(L.tensor(bat))[1]),
+        (LINALG_PREFIX + "batch::svd/S", lambda L: L.linalg.svd(L.tensor(bat))[1]),
+        (LINALG_PREFIX + "batch::eigh/값",
+         lambda L: L.linalg.eigh(L.tensor(sym))[0]),
+        (LINALG_PREFIX + "batch::pinv", lambda L: L.linalg.pinv(L.tensor(bat))),
+        (LINALG_PREFIX + "batch::logdet", lambda L: L.logdet(L.tensor(sym))),
+        # 3×3 도 묻는다 — 2×2 는 야코비 회전이 한 번뿐이라 쓸어담기 반복을 안 지난다.
+        (LINALG_PREFIX + "3x3::eigh/값", lambda L: L.linalg.eigh(L.tensor(sym3))[0]),
+        (LINALG_PREFIX + "3x3::svd/S", lambda L: L.linalg.svd(L.tensor(sym3))[1]),
+        (LINALG_PREFIX + "3x3::det", lambda L: L.linalg.det(L.tensor(sym3))),
+        (LINALG_PREFIX + "3x3::inv", lambda L: L.linalg.inv(L.tensor(sym3))),
+
+        # ── 직사각 ──────────────────────────────────────────────────────
+        # 정사각만 되면 `qr`·`svd`·`pinv` 는 쓸 자리의 절반을 못 받는다 —
+        # 최소제곱이 바로 그 절반이다.
+        (LINALG_PREFIX + "rect::qr/R", lambda L: L.linalg.qr(L.tensor(rect))[1]),
+        (LINALG_PREFIX + "rect::qr/|Q|",
+         lambda L: L.linalg.qr(L.tensor(rect))[0].abs()),
+        (LINALG_PREFIX + "rect::qr(complete)/|Q|",
+         lambda L: L.linalg.qr(L.tensor(rect), mode="complete")[0].abs()),
+        (LINALG_PREFIX + "rect::svd/S", lambda L: L.linalg.svd(L.tensor(rect))[1]),
+        (LINALG_PREFIX + "rect::svd/|U|",
+         lambda L: L.linalg.svd(L.tensor(rect))[0].abs()),
+        (LINALG_PREFIX + "rect::svd(축소)/|U|",
+         lambda L: L.linalg.svd(L.tensor(rect), full_matrices=False)[0].abs()),
+        (LINALG_PREFIX + "rect::pinv", lambda L: L.linalg.pinv(L.tensor(rect))),
+        (LINALG_PREFIX + "rect::matrix_rank",
+         lambda L: L.linalg.matrix_rank(L.tensor(rect))),
+        (LINALG_PREFIX + "rect::lstsq",
+         lambda L: L.linalg.lstsq(L.tensor(rect),
+                                  L.tensor(np.array([1., 2., 3.], dtype=np.float32))
+                                  ).solution),
+    ]
+
+    # ── 이름으로 묻기 ───────────────────────────────────────────────────
+    named = (
+        ("slogdet.sign", lambda L: L.linalg.slogdet(L.tensor(bat)).sign),
+        ("slogdet.logabsdet", lambda L: L.linalg.slogdet(L.tensor(bat)).logabsdet),
+        ("qr.R", lambda L: L.linalg.qr(L.tensor(rect)).R),
+        ("qr.|Q|", lambda L: L.linalg.qr(L.tensor(rect)).Q.abs()),
+        ("svd.S", lambda L: L.linalg.svd(L.tensor(rect)).S),
+        ("svd.|Vh|", lambda L: L.linalg.svd(L.tensor(rect)).Vh.abs()),
+        ("eigh.eigenvalues", lambda L: L.linalg.eigh(L.tensor(sym3)).eigenvalues),
+        ("eigh.|eigenvectors|",
+         lambda L: L.linalg.eigh(L.tensor(sym3)).eigenvectors.abs()),
+    )
+    cases += [(LINALG_PREFIX + f"name::{n}", f) for n, f in named]
+
+    # ── `_ex` — 던지는 대신 info 를 준다 ────────────────────────────────
+    mat2 = np.array([[4., 1.], [2., 3.]], dtype=np.float32)
+    ex = (
+        ("inv_ex/값", lambda L: L.linalg.inv_ex(L.tensor(mat2)).inverse),
+        ("inv_ex/info", lambda L: L.linalg.inv_ex(L.tensor(mat2)).info),
+        ("inv_ex(특이)/info",
+         lambda L: L.linalg.inv_ex(L.tensor(_LA_SINGULAR)).info),
+        ("cholesky_ex/L",
+         lambda L: L.linalg.cholesky_ex(L.tensor(_LA_BATCH_SYM[0])).L),
+        ("cholesky_ex(비양정)/info",
+         lambda L: L.linalg.cholesky_ex(L.tensor(_LA_SINGULAR)).info),
+        ("solve_ex/값",
+         lambda L: L.linalg.solve_ex(L.tensor(mat2),
+                                     L.tensor(np.array([1., 2.], dtype=np.float32))
+                                     ).result),
+        ("solve_ex/info",
+         lambda L: L.linalg.solve_ex(L.tensor(mat2),
+                                     L.tensor(np.array([1., 2.], dtype=np.float32))
+                                     ).info),
+    )
+    cases += [(LINALG_PREFIX + f"ex::{n}", f) for n, f in ex]
+
+    def catches(L):
+        """**`except torch.linalg.LinAlgError` 가 잡는가.**
+
+        예외의 클래스 이름은 양쪽이 다를 수 있다(진짜 torch 는 `_LinAlgError` 다).
+        이름을 맞추라고 하면 남의 사정을 재는 것이므로, 사용자가 실제로 쓰는 것 —
+        그 이름으로 잡히는지 — 를 묻는다.
+        """
+        try:
+            L.linalg.inv(L.tensor(_LA_SINGULAR))
+        except L.linalg.LinAlgError:
+            return "LinAlgError 로 잡힌다"
+        except Exception as exc:                                    # noqa: BLE001
+            return f"다른 것이 났다: {type(exc).__name__}"
+        return "예외가 안 났다"
+
+    cases.append((LINALG_PREFIX + "ex::inv(특이)가 던지는 것", catches))
+
+    # ── LU — 이미 안에서 구하던 것을 밖으로 ─────────────────────────────
+    lu_inputs = (("교환없음", mat2), ("교환", _LA_PIVOT))
+    for tag, arr in lu_inputs:
+        cases += [
+            (LINALG_PREFIX + f"lu::lu_factor/{tag}/LU",
+             lambda L, a=arr: L.linalg.lu_factor(L.tensor(a)).LU),
+            (LINALG_PREFIX + f"lu::lu_factor/{tag}/pivots",
+             lambda L, a=arr: L.linalg.lu_factor(L.tensor(a)).pivots),
+            (LINALG_PREFIX + f"lu::lu/{tag}/P",
+             lambda L, a=arr: L.linalg.lu(L.tensor(a)).P),
+            (LINALG_PREFIX + f"lu::lu/{tag}/L",
+             lambda L, a=arr: L.linalg.lu(L.tensor(a)).L),
+            (LINALG_PREFIX + f"lu::lu/{tag}/U",
+             lambda L, a=arr: L.linalg.lu(L.tensor(a)).U),
+        ]
+
+    def lu_solve(L):
+        a = L.tensor(_LA_PIVOT)
+        f = L.linalg.lu_factor(a)
+        return L.linalg.lu_solve(f.LU, f.pivots,
+                                 L.tensor(np.array([[1.], [2.]], dtype=np.float32)))
+
+    cases.append((LINALG_PREFIX + "lu::lu_solve(교환)", lu_solve))
+
+    # ── 배치의 기울기 ───────────────────────────────────────────────────
+    # **값이 맞는데 기울기가 안 맞는 자리가 여기다.** 역방향 식이 `.T` 로 적혀 있으면
+    # 2 차원에서는 맞고 배치에서는 축을 통째로 뒤집어 조용히 틀린다.
+    bgrads = (
+        ("det", lambda L, x: L.linalg.det(x), bat),
+        ("logdet", lambda L, x: L.logdet(x), sym),
+        ("slogdet", lambda L, x: L.linalg.slogdet(x)[1], bat),
+        ("inv", lambda L, x: L.linalg.inv(x), bat),
+        ("cholesky", lambda L, x: L.linalg.cholesky(x), sym),
+        ("matrix_power", lambda L, x: L.linalg.matrix_power(x, 3), bat),
+        ("3x3/inv", lambda L, x: L.linalg.inv(x), sym3),
+        ("3x3/cholesky", lambda L, x: L.linalg.cholesky(x), sym3),
+    )
+    for name, fn, arr in bgrads:
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            if out.shape:
+                out = out * L.arange(out.numel()).reshape(out.shape).float()
+            out.sum().backward()
+            return _grad_of(x, n)
+        cases.append((LINALG_PREFIX + f"batch::grad::{name}", run))
+
+    def batch_solve_grad(which, rhs_arr, tag):
+        def run(L, w=which, r=rhs_arr, g=tag):
+            a = L.tensor(bat, requires_grad=True)
+            b = L.tensor(r, requires_grad=True)
+            out = L.linalg.solve(a, b)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(a if w == "a" else b, f"batch solve {g}/{w}")
+        return run
+
+    for tag, arr in (("벡터", vec), ("행렬", rhs)):
+        for who in ("a", "b"):
+            cases.append((LINALG_PREFIX + f"batch::grad::solve({tag})/{who}",
+                          batch_solve_grad(who, arr, tag)))
+    return cases
+
+
 INPLACE_PREFIX = "inplace::"
 
 _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh_",
@@ -3106,7 +3323,8 @@ def golden_cases(inp=None):
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
-            + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
+            + linalg_cases(inp) + linalg_struct_cases(inp)
+            + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)

@@ -367,6 +367,16 @@ class IndexError_(IndexError):
     pass
 
 
+class LinAlgError(RuntimeError):
+    """torch 의 `linalg.LinAlgError`.
+
+    **이름이 하는 일이 있다.** 특이행렬을 만날 수 있는 코드는 `except
+    linalg.LinAlgError` 로 감싸는 것이 보통인데, 그냥 `RuntimeError` 로 올리면 그
+    감싸기를 지나쳐 프로그램이 죽는다. borch.ts 쪽에 같은 이름의 클래스가 있고
+    `translate` 가 둘을 잇는다 — 예외의 종류도 API 다.
+    """
+
+
 def translate(exc):
     """JS 쪽 예외를 **torch 가 내는 종류**로 옮긴다.
 
@@ -378,6 +388,10 @@ def translate(exc):
     통하게 하려고 그렇게 쓴 것이다.
     """
     text = str(exc)
+    # 선형대수가 답을 못 내는 것은 **따로 잡힌다.** 아래의 어림짐작(문구에 index 가
+    # 있으면 IndexError)에 맡기면 안 되는 자리라 앞에서 가른다.
+    if text.startswith("LinAlgError: "):
+        return LinAlgError(text[len("LinAlgError: "):])
     # **앞머리만 벗긴다.** `replace` 로 첫 번째 `Error: ` 를 지웠더니 `RuntimeError:
     # shape …` 이 `Runtimeshape …` 이 되어 문구가 망가졌다 — 검색이 통하라고 원문을
     # 담아 둔 것을 우리가 부순 셈이다.
@@ -448,8 +462,25 @@ def settle(out):
             not callable(out) and hasattr(out, "toString"):
         keys = [str(k) for k in _js.Object.keys(out)]
         if keys and all(not k.isdigit() for k in keys):
-            return _Fields({k: getattr(out, k) for k in keys})
+            return _Fields({k: getattr(out, k) for k in keys},
+                           _TORCH_FIELDS.get(tuple(keys)))
     return out
+
+
+# borch.ts 의 자리 이름 → **torch 의 이름.**
+#
+# torch 는 이것들을 이름으로도 물을 수 있게 준다 — `slogdet(A).logabsdet`,
+# `qr(A).Q`, `eigh(A).eigenvalues`. 자리로만 맞춰 두면 값이 맞는데도 교재 코드가
+# 속성 접근에서 멈춘다. `lstsq` 가 `.solution` 으로 그 자리를 이미 겪었다.
+#
+# **낱개 이름이 아니라 자리 묶음으로 건다.** `values` 는 `eigh` 에서 고윳값이지만
+# `sort`·`topk` 에서는 그냥 값이라, 이름 하나만 보고 바꾸면 엉뚱한 것까지 바뀐다.
+_TORCH_FIELDS = {
+    ("sign", "logabs"): {"logabs": "logabsdet"},
+    ("q", "r"): {"q": "Q", "r": "R"},
+    ("u", "s", "vt"): {"u": "U", "s": "S", "vt": "Vh"},
+    ("values", "vectors"): {"values": "eigenvalues", "vectors": "eigenvectors"},
+}
 
 
 class _Fields:
@@ -457,10 +488,15 @@ class _Fields:
 
     __slots__ = ("_d", "_order")
 
-    def __init__(self, d):
+    def __init__(self, d, alias=None):
+        # **자리 순서는 JS 쪽 이름으로 둔다.** 별명을 순서에 넣으면 `[0]`·`[1]` 이
+        # 밀린다 — 이름을 얹으려다 자리를 어긋내는 것이 된다.
         self._order = list(d)
-        object.__setattr__(self, "_d", {
-            k: (wrap(v) if _js.borch.isTensor(v) else v) for k, v in d.items()})
+        vals = {k: (wrap(v) if _js.borch.isTensor(v) else v) for k, v in d.items()}
+        for js_name, torch_name in (alias or {}).items():
+            if js_name in vals:
+                vals[torch_name] = vals[js_name]
+        object.__setattr__(self, "_d", vals)
 
     def __getattr__(self, name):
         try:

@@ -9,7 +9,15 @@
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device } from "./device.js";
 import { byRank, type DType, promote, rankOf } from "./dtype.js";
-import { IndexError, RuntimeError, TORCH } from "./errors.js";
+import { IndexError, LinAlgError, RuntimeError, TORCH } from "./errors.js";
+
+/**
+ * `_ex` 계열이 상한 행렬에 담는 값.
+ *
+ * LAPACK 은 몇 번째 주피벗이 0 인지를 담는다. 여기서는 "상했다" 만 말하되 자릿수는
+ * 맞춘다 — 진짜 torch 에 2×2 특이행렬을 주니 2 였다.
+ */
+const SINGULAR_INFO = 2;
 import * as LA from "./linalg.js";
 import { formatSize, formatTensor } from "./repr.js";
 import {
@@ -302,6 +310,13 @@ export class Tensor implements Node<Tensor> {
       dev().keep(buf);
       scalarCache.set(value, buf);
       return new Tensor(buf, shape);
+    }
+    // **무한대와 NaN 은 셰이더로 못 굽는다.** WGSL 은 컴파일 시점에 계산되는 값이
+    // inf 나 NaN 이 되는 것을 금지한다 — 리터럴도, `bitcast<f32>(0x7f800000u)` 도
+    // 똑같이 `value inf cannot be represented as 'f32'` 로 거절당한다(실측). 그래서
+    // 이쪽만 CPU 에서 채워 올린다. 업로드 한 번이라 커널보다 오히려 짧다.
+    if (!Number.isFinite(value)) {
+      return new Tensor(dev().upload(new Float32Array(n).fill(value)), shape);
     }
     const out = dev().alloc(n);
     dev().run1d(
@@ -1402,9 +1417,23 @@ export class Tensor implements Node<Tensor> {
   /** 정수 거듭제곱. 지금은 곱셈을 되풀이한다 — 지수가 작을 때만 쓸 것이다. */
   matrixPower(k: number): Tensor {
     if (k < 1) throw new Error(`matrix_power 는 아직 1 이상만이다: ${k}`);
-    let out: Tensor = this;
-    for (let i = 1; i < k; i++) out = out.mm(this);
-    return out;
+    // **곱셈을 이어 붙인다** — 그러면 역방향이 저절로 따라온다. 분해로 짜면 미분식을
+    // 새로 써야 하고, 그건 틀릴 자리를 하나 더 만드는 것이다.
+    //
+    // 배치는 3 차원으로 접었다가 편다. `mm` 이 2 차원 전용이고 `bmm` 이 3 차원
+    // 전용이라, `(2,3,4,4)` 같은 것은 둘 다 못 받는다 — 접으면 둘 다 필요 없다.
+    const rank = this.shape.length;
+    if (rank <= 2) {
+      let out: Tensor = this;
+      for (let i = 1; i < k; i++) out = out.mm(this);
+      return out;
+    }
+    const n = this.shape[rank - 1] ?? 0;
+    const batch = this.shape.slice(0, rank - 2).reduce((a, b) => a * b, 1);
+    const flat = this.reshape([batch, n, n]);
+    let out: Tensor = flat;
+    for (let i = 1; i < k; i++) out = out.bmm(flat);
+    return out.reshape(this.shape);
   }
 
   /** 조건 자리마다 이쪽 아니면 저쪽. torch 의 메서드 형태는 `x.where(조건, 다른쪽)` 이다. */
@@ -2062,19 +2091,39 @@ export class Tensor implements Node<Tensor> {
   // ── 선형대수 ──────────────────────────────────────────────────────────
 
   /**
-   * CPU 로 읽어 와 정사각 행렬로 본다. 선형대수가 전부 여기를 지난다.
+   * CPU 로 읽어 와 **행렬 묶음**으로 본다. 선형대수가 전부 여기를 지난다.
    *
    * **왕복이 생긴다.** 그래도 그렇게 하는 이유는 `src/linalg.ts` 에 적었다 —
    * 분해는 순차적이라 GPU 로 펼 자리가 거의 없고, 여기서 미는 크기에서는 커널을
    * 띄우는 값이 계산보다 비싸다.
+   *
+   * **마지막 두 축만 행렬이고 앞은 전부 배치다.** torch 의 `linalg` 가 그 규칙이라
+   * `det((3,2,2))` 이 `(3,)` 을 낸다. 전에는 2 차원 정사각 하나만 받았는데, 그건
+   * 흉내가 아니라 없는 것이었다 — 배치는 실제 코드가 늘 쓰는 모양이다.
    */
-  private async asSquare(): Promise<{ a: LA.Mat; n: number }> {
-    if (this.shape.length !== 2 || this.shape[0] !== this.shape[1]) {
+  private async asBatch(square = true): Promise<{
+    mats: LA.Mat[]; rows: number; cols: number; batch: number; lead: number[];
+  }> {
+    const rank = this.shape.length;
+    if (rank < 2) {
+      throw new RuntimeError(
+        `linalg: 2차원 이상이어야 한다 — 지금은 [${this.shape}] 다`,
+      );
+    }
+    const rows = this.shape[rank - 2] ?? 0;
+    const cols = this.shape[rank - 1] ?? 0;
+    if (square && rows !== cols) {
       throw new RuntimeError(
         `linalg: 정사각 행렬이어야 한다 — 지금은 [${this.shape}] 다`,
       );
     }
-    return { a: LA.fromF32(await this.toArray()), n: this.shape[0] ?? 0 };
+    const lead = [...this.shape.slice(0, rank - 2)];
+    const batch = lead.reduce((a, b) => a * b, 1);
+    const flat = LA.fromF32(await this.toArray());
+    const size = rows * cols;
+    const mats: LA.Mat[] = [];
+    for (let b = 0; b < batch; b++) mats.push(flat.slice(b * size, (b + 1) * size));
+    return { mats, rows, cols, batch, lead };
   }
 
   /** CPU 에서 만든 값을 다시 GPU 로. */
@@ -2082,53 +2131,123 @@ export class Tensor implements Node<Tensor> {
     return Tensor.from(LA.toF32(a), shape);
   }
 
+  /** 배치별로 나온 것들을 한 텐서로 잇는다. */
+  private static fromBatch(mats: readonly LA.Mat[], shape: readonly number[]): Tensor {
+    const total = shape.reduce((a, b) => a * b, 1);
+    const out = new Float32Array(total);
+    let off = 0;
+    for (const m of mats) {
+      out.set(LA.toF32(m), off);
+      off += m.length;
+    }
+    return Tensor.from(out, shape);
+  }
+
+  /**
+   * 배치마다 **다른 상수**를 쓰는 역방향.
+   *
+   * 값이 배치별로 나왔으니 역방향의 상수(역행렬·`L`·`L⁻¹`)도 배치별로 다르다. `g` 를
+   * 배치 축 하나로 편 뒤 한 장씩 돌리고 다시 쌓는다. 배치가 하나면 그냥 넘긴다 —
+   * 그쪽이 흔하고, 쌓기를 한 번 덜 하는 만큼 빠르다.
+   */
+  private static perBatch(
+    g: Tensor,
+    batch: number,
+    gItemShape: readonly number[],
+    outShape: readonly number[],
+    fn: (gb: Tensor, b: number) => Tensor,
+  ): Tensor {
+    if (batch === 1) return fn(g.reshape(gItemShape), 0).reshape(outShape);
+    const g2 = g.reshape([batch, ...gItemShape]);
+    const parts: Tensor[] = [];
+    for (let b = 0; b < batch; b++) parts.push(fn(g2.select(0, b), b));
+    return Tensor.stack(parts, 0).reshape(outShape);
+  }
+
+  /** 배치별 역행렬. 특이행렬이면 조용히 NaN 을 내지 않고 던진다. */
+  private static invAll(mats: readonly LA.Mat[], n: number, what: string): LA.Mat[] {
+    return mats.map((a) => {
+      if (LA.lu(a, n).singular) {
+        throw new LinAlgError(
+          `linalg.${what}: 특이행렬이다 — 역행렬이 없다`,
+        );
+      }
+      return LA.inverse(a, n);
+    });
+  }
+
   /** 행렬식. 역방향은 `det·A⁻ᵀ` 다. */
   async det(): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    const f = LA.lu(a, n);
-    const value = LA.det(f);
-    const invT = LA.transpose(LA.inverse(a, n), n, n);
-    return this.linalgNode(Tensor.from([value], []), (g) =>
-      Tensor.fromMat(invT, [n, n]).mul(g.mul(Tensor.from([value], []))), "DetBackward0");
+    const v = await this.asBatch();
+    const vals = v.mats.map((a) => LA.det(LA.lu(a, v.rows)));
+    const invTs = Tensor.invAll(v.mats, v.rows, "det")
+      .map((m) => LA.transpose(m, v.rows, v.rows));
+    return this.linalgNode(Tensor.from(vals, v.lead), (g) =>
+      Tensor.perBatch(g, v.batch, [], this.shape, (gb, b) =>
+        Tensor.fromMat(invTs[b]!, [v.rows, v.rows])
+          .mul(gb.mul(Tensor.from([vals[b]!], [])))), "DetBackward0");
   }
 
   /** `log|det|`. 역방향은 `A⁻ᵀ` — 행렬식이 곱해지지 않아 더 안정적이다. */
   async logdet(): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    const { logabs } = LA.slogdet(LA.lu(a, n));
-    const invT = LA.transpose(LA.inverse(a, n), n, n);
-    return this.linalgNode(Tensor.from([logabs], []), (g) =>
-      Tensor.fromMat(invT, [n, n]).mul(g), "LogdetBackward0");
+    const v = await this.asBatch();
+    const vals = v.mats.map((a) => {
+      const { sign, logabs } = LA.slogdet(LA.lu(a, v.rows));
+      return sign > 0 ? logabs : NaN;
+    });
+    const invTs = Tensor.invAll(v.mats, v.rows, "logdet")
+      .map((m) => LA.transpose(m, v.rows, v.rows));
+    return this.linalgNode(Tensor.from(vals, v.lead), (g) =>
+      Tensor.perBatch(g, v.batch, [], this.shape, (gb, b) =>
+        Tensor.fromMat(invTs[b]!, [v.rows, v.rows]).mul(gb)), "LogdetBackward0");
   }
 
   /** 부호와 로그 절댓값을 따로. 행렬식이 아주 작아도 자릿수가 안 날아간다. */
   async slogdet(): Promise<{ sign: Tensor; logabs: Tensor }> {
-    const { a, n } = await this.asSquare();
-    const { sign, logabs } = LA.slogdet(LA.lu(a, n));
-    const invT = LA.transpose(LA.inverse(a, n), n, n);
+    const v = await this.asBatch();
+    const parts = v.mats.map((a) => LA.slogdet(LA.lu(a, v.rows)));
+    const invTs = Tensor.invAll(v.mats, v.rows, "slogdet")
+      .map((m) => LA.transpose(m, v.rows, v.rows));
     return {
       // 부호는 계단이라 안 흐른다.
-      sign: Tensor.from([sign], []),
-      logabs: this.linalgNode(Tensor.from([logabs], []), (g) =>
-        Tensor.fromMat(invT, [n, n]).mul(g), "SlogdetBackward0"),
+      sign: Tensor.from(parts.map((p) => p.sign), v.lead),
+      logabs: this.linalgNode(Tensor.from(parts.map((p) => p.logabs), v.lead), (g) =>
+        Tensor.perBatch(g, v.batch, [], this.shape, (gb, b) =>
+          Tensor.fromMat(invTs[b]!, [v.rows, v.rows]).mul(gb)), "SlogdetBackward0"),
     };
   }
 
   /** 역행렬. 역방향은 `-A⁻ᵀ·Ḡ·A⁻ᵀ` 다. */
   async inverse(): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    const inv = LA.inverse(a, n);
-    const invT = LA.transpose(inv, n, n);
-    return this.linalgNode(Tensor.fromMat(inv, [n, n]), (g) => {
-      const t = Tensor.fromMat(invT, [n, n]);
-      return t.mm(g).mm(t).neg();
-    }, "InverseBackward0");
+    const v = await this.asBatch();
+    const invs = Tensor.invAll(v.mats, v.rows, "inv");
+    const n = v.rows;
+    return this.linalgNode(Tensor.fromBatch(invs, this.shape), (g) =>
+      Tensor.perBatch(g, v.batch, [n, n], this.shape, (gb, b) => {
+        const t = Tensor.fromMat(LA.transpose(invs[b]!, n, n), [n, n]);
+        return t.mm(gb).mm(t).neg();
+      }), "InverseBackward0");
+  }
+
+  /** `inv` 와 같은데 **안 던진다** — 대신 `info` 에 0 이 아닌 수를 담는다. */
+  async invEx(): Promise<{ inverse: Tensor; info: Tensor }> {
+    const v = await this.asBatch();
+    try {
+      return { inverse: await this.inverse(), info: Tensor.zeros(v.lead) };
+    } catch (e) {
+      if (!(e instanceof LinAlgError)) throw e;
+      return {
+        inverse: Tensor.full(this.shape, Infinity),
+        info: Tensor.full(v.lead, SINGULAR_INFO),
+      };
+    }
   }
 
   /** 유사역행렬. 값만 낸다 — 역방향 유도가 까다롭고 틀리면 조용히 틀린다. */
   async pinverse(): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    return Tensor.fromMat(LA.pinverse(a, n), [n, n]);
+    const v = await this.asBatch(false);
+    const outs = v.mats.map((a) => LA.pinverse(a, v.rows, v.cols));
+    return Tensor.fromBatch(outs, [...v.lead, v.cols, v.rows]);
   }
 
   /**
@@ -2140,88 +2259,241 @@ export class Tensor implements Node<Tensor> {
    * GPU 를 기다릴 수가 없으므로 그 값이 미리 있어야 한다.
    */
   async cholesky(): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    const l = LA.cholesky(a, n);
-    const linv = LA.inverse(l, n);
-    const lt = Tensor.fromMat(LA.transpose(l, n, n), [n, n]);
-    const linvT = Tensor.fromMat(LA.transpose(linv, n, n), [n, n]);
-    const linvC = Tensor.fromMat(linv, [n, n]);
+    const v = await this.asBatch();
+    const n = v.rows;
+    const ls = v.mats.map((a) => {
+      try {
+        return LA.cholesky(a, n);
+      } catch {
+        throw new LinAlgError(
+          "linalg.cholesky: 대칭 양정부호가 아니다 (주소행렬식이 0 이하다)",
+        );
+      }
+    });
+    const linvs = ls.map((l) => LA.inverse(l, n));
     const eye = Tensor.eye(n);
-    return this.linalgNode(Tensor.fromMat(l, [n, n]), (g) => {
-      const m = lt.mm(g);
-      // Φ — 아래 삼각을 남기고 대각만 반으로.
-      const p = m.tril().sub(m.mul(eye).binary("mul", Tensor.full([], 0.5)));
-      const abar = linvT.mm(p).mm(linvC);
-      // A 가 대칭이라 위·아래 삼각이 같은 자유도를 나눠 갖는다 — 대칭화가 그 몫이다.
-      return abar.add(abar.transpose()).binary("mul", Tensor.full([], 0.5));
-    }, "CholeskyBackward0");
+    const half = Tensor.full([], 0.5);
+    return this.linalgNode(Tensor.fromBatch(ls, this.shape), (g) =>
+      Tensor.perBatch(g, v.batch, [n, n], this.shape, (gb, b) => {
+        const lt = Tensor.fromMat(LA.transpose(ls[b]!, n, n), [n, n]);
+        const linvT = Tensor.fromMat(LA.transpose(linvs[b]!, n, n), [n, n]);
+        const linvC = Tensor.fromMat(linvs[b]!, [n, n]);
+        const m = lt.mm(gb);
+        // Φ — 아래 삼각을 남기고 대각만 반으로.
+        const p = m.tril().sub(m.mul(eye).binary("mul", half));
+        const abar = linvT.mm(p).mm(linvC);
+        // A 가 대칭이라 위·아래 삼각이 같은 자유도를 나눠 갖는다 — 대칭화가 그 몫이다.
+        return abar.add(abar.transpose()).binary("mul", half);
+      }), "CholeskyBackward0");
   }
 
-  /** `A x = b`. 역방향은 `b` 로는 `A⁻ᵀ·Ḡ`, `A` 로는 `-A⁻ᵀ·Ḡ·xᵀ` 다. */
+  /** `cholesky` 의 안 던지는 쪽. */
+  async choleskyEx(): Promise<{ L: Tensor; info: Tensor }> {
+    const v = await this.asBatch();
+    try {
+      return { L: await this.cholesky(), info: Tensor.zeros(v.lead) };
+    } catch (e) {
+      if (!(e instanceof LinAlgError)) throw e;
+      return {
+        L: Tensor.full(this.shape, NaN),
+        info: Tensor.full(v.lead, SINGULAR_INFO),
+      };
+    }
+  }
+
+  /**
+   * `A x = b`. 역방향은 `b` 로는 `A⁻ᵀ·Ḡ`, `A` 로는 `-A⁻ᵀ·Ḡ·xᵀ` 다.
+   *
+   * `b` 가 `A` 보다 축이 하나 적으면 **벡터 묶음**으로 본다 — torch 의 규칙이다.
+   * 역방향의 바깥곱이 그 구분에 걸린다.
+   */
   async solve(b: Tensor): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    const cols = b.shape.length === 1 ? 1 : (b.shape[1] ?? 1);
-    const rhs = LA.fromF32(await b.toArray());
-    const x = LA.solve(LA.lu(a, n), rhs, cols);
-    const invT = LA.transpose(LA.inverse(a, n), n, n);
-    const out = Tensor.fromMat(x, b.shape);
+    const v = await this.asBatch();
+    const n = v.rows;
+    const vector = b.shape.length === this.shape.length - 1;
+    const cols = vector ? 1 : (b.shape[b.shape.length - 1] ?? 1);
+    const rhsFlat = LA.fromF32(await b.toArray());
+    const invTs = Tensor.invAll(v.mats, n, "solve")
+      .map((m) => LA.transpose(m, n, n));
+    const size = n * cols;
+    const xs: LA.Mat[] = [];
+    for (let i = 0; i < v.batch; i++) {
+      xs.push(LA.luSolveFactored(
+        LA.luFactor(v.mats[i]!, n, n), rhsFlat.slice(i * size, (i + 1) * size), cols));
+    }
+    const out = Tensor.fromBatch(xs, b.shape);
     const shape = this.shape;
+    const gShape = vector ? [n] : [n, cols];
     return Tensor.make(
       out.buffer,
       b.shape,
       [this, b],
       (g) => {
-        const at = Tensor.fromMat(invT, [n, n]);
-        const gb = at.mm(g.reshape([n, cols]));
-        const ga = gb.mm(Tensor.fromMat(x, [n, cols]).transpose()).neg();
+        const gbs: Tensor[] = [];
+        const ga = Tensor.perBatch(g, v.batch, gShape, shape, (gi, i) => {
+          const at = Tensor.fromMat(invTs[i]!, [n, n]);
+          const gb = at.mm(gi.reshape([n, cols]));
+          gbs.push(gb.reshape(gShape));
+          return gb.mm(Tensor.fromMat(xs[i]!, [n, cols]).transpose()).neg();
+        });
+        const gb = v.batch === 1
+          ? gbs[0]!.reshape(b.shape)
+          : Tensor.stack(gbs, 0).reshape(b.shape);
         return [
-          this.requiresGrad ? ga.reshape(shape) : null,
-          b.requiresGrad ? gb.reshape(b.shape) : null,
+          this.requiresGrad ? ga : null,
+          b.requiresGrad ? gb : null,
         ];
       },
       "SolveBackward0",
     );
   }
 
-  /** QR 분해. 값만 낸다. */
-  async qr(): Promise<{ q: Tensor; r: Tensor }> {
-    const { a, n } = await this.asSquare();
-    const { q, r } = LA.qr(a, n, n);
-    return { q: Tensor.fromMat(q, [n, n]), r: Tensor.fromMat(r, [n, n]) };
+  /** `solve` 의 안 던지는 쪽. */
+  async solveEx(b: Tensor): Promise<{ result: Tensor; info: Tensor }> {
+    const v = await this.asBatch();
+    try {
+      return { result: await this.solve(b), info: Tensor.zeros(v.lead) };
+    } catch (e) {
+      if (!(e instanceof LinAlgError)) throw e;
+      return {
+        result: Tensor.full(b.shape, Infinity),
+        info: Tensor.full(v.lead, SINGULAR_INFO),
+      };
+    }
   }
 
-  /** 특이값 분해. 값만 낸다. */
-  async svd(): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
-    const { a, n } = await this.asSquare();
-    const { u, s, vt } = LA.svd(a, n);
+  /**
+   * QR 분해. 값만 낸다.
+   *
+   * `reduced`(기본)는 `Q` 를 `rows×k` 로 자르고, `complete` 는 `rows×rows` 를 그대로
+   * 준다. 하우스홀더가 이미 완전한 `Q` 를 만들므로 자르는 쪽이 파생이다.
+   */
+  async qr(mode: "reduced" | "complete" = "reduced"): Promise<{ q: Tensor; r: Tensor }> {
+    const v = await this.asBatch(false);
+    const { rows, cols } = v;
+    const k = Math.min(rows, cols);
+    const qs: LA.Mat[] = [];
+    const rs: LA.Mat[] = [];
+    for (const a of v.mats) {
+      const { q, r } = LA.qr(a, rows, cols);
+      if (mode === "complete") {
+        qs.push(q);
+        rs.push(r);
+        continue;
+      }
+      const qCut = new Float64Array(rows * k);
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < k; j++) qCut[i * k + j] = q[i * rows + j] ?? 0;
+      }
+      qs.push(qCut);
+      rs.push(r.slice(0, k * cols));
+    }
+    const qShape = mode === "complete" ? [rows, rows] : [rows, k];
+    const rShape = mode === "complete" ? [rows, cols] : [k, cols];
     return {
-      u: Tensor.fromMat(u, [n, n]),
-      s: Tensor.from(LA.toF32(s), [n]),
-      vt: Tensor.fromMat(vt, [n, n]),
+      q: Tensor.fromBatch(qs, [...v.lead, ...qShape]),
+      r: Tensor.fromBatch(rs, [...v.lead, ...rShape]),
+    };
+  }
+
+  /**
+   * 특이값 분해. 값만 낸다.
+   *
+   * `fullMatrices`(기본 참)는 `U` 를 `rows×rows` 로 채운다 — torch 의 기본값이다.
+   * 채우는 방향은 남는 차원이 둘 이상이면 유일하지 않다(`completeBasis` 참고).
+   */
+  async svd(fullMatrices = true): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
+    const v = await this.asBatch(false);
+    const { rows, cols } = v;
+    const k = Math.min(rows, cols);
+    const us: LA.Mat[] = [];
+    const ss: LA.Mat[] = [];
+    const vts: LA.Mat[] = [];
+    for (const a of v.mats) {
+      const { u, s, vt } = LA.svd(a, rows, cols);
+      us.push(fullMatrices && rows > k ? LA.completeBasis(u, rows, k) : u);
+      ss.push(s);
+      vts.push(vt);
+    }
+    const uCols = fullMatrices && rows > k ? rows : k;
+    return {
+      u: Tensor.fromBatch(us, [...v.lead, rows, uCols]),
+      s: Tensor.fromBatch(ss, [...v.lead, k]),
+      vt: Tensor.fromBatch(vts, [...v.lead, k, cols]),
     };
   }
 
   /** 대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다. */
   async eigh(): Promise<{ values: Tensor; vectors: Tensor }> {
-    const { a, n } = await this.asSquare();
-    const { values, vectors } = LA.eigh(a, n);
+    const v = await this.asBatch();
+    const n = v.rows;
+    const ws: LA.Mat[] = [];
+    const vs: LA.Mat[] = [];
+    for (const a of v.mats) {
+      const { values, vectors } = LA.eigh(a, n);
+      ws.push(values);
+      vs.push(vectors);
+    }
     return {
-      values: Tensor.from(LA.toF32(values), [n]),
-      vectors: Tensor.fromMat(vectors, [n, n]),
+      values: Tensor.fromBatch(ws, [...v.lead, n]),
+      vectors: Tensor.fromBatch(vs, [...v.lead, n, n]),
     };
   }
 
   async matrixRank(): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    return Tensor.from([LA.matrixRank(a, n)], []);
+    const v = await this.asBatch(false);
+    return Tensor.from(v.mats.map((a) => LA.matrixRank(a, v.rows, v.cols)), v.lead);
   }
 
   /** 최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다. */
   async lstsq(b: Tensor): Promise<Tensor> {
-    const { a, n } = await this.asSquare();
-    const cols = b.shape.length === 1 ? 1 : (b.shape[1] ?? 1);
+    const v = await this.asBatch(false);
+    if (v.batch !== 1) throw new RuntimeError("lstsq: 배치는 아직 없다");
+    const { rows, cols } = v;
+    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const rhs = LA.fromF32(await b.toArray());
-    return Tensor.fromMat(LA.matmul(LA.pinverse(a, n), rhs, n, n, cols), b.shape);
+    const sol = LA.matmul(
+      LA.pinverse(v.mats[0]!, rows, cols), rhs, cols, rows, width);
+    return Tensor.fromMat(sol, b.shape.length === 1 ? [cols] : [cols, width]);
+  }
+
+  /** 한 장에 겹쳐 담은 `L`·`U` 와 **1 부터 세는** 교환표. */
+  async luFactor(): Promise<{ LU: Tensor; pivots: Tensor }> {
+    const v = await this.asBatch(false);
+    const k = Math.min(v.rows, v.cols);
+    const packed = v.mats.map((a) => LA.luFactor(a, v.rows, v.cols));
+    const pivots = new Float32Array(v.batch * k);
+    packed.forEach((f, b) => pivots.set(Float32Array.from(f.piv), b * k));
+    return {
+      LU: Tensor.fromBatch(packed.map((f) => f.lu), this.shape),
+      pivots: Tensor.from(pivots, [...v.lead, k]),
+    };
+  }
+
+  /** `P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다. */
+  async lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+    const v = await this.asBatch(false);
+    const { rows, cols } = v;
+    const k = Math.min(rows, cols);
+    const parts = v.mats.map((a) => LA.luExpand(LA.luFactor(a, rows, cols)));
+    return {
+      P: Tensor.fromBatch(parts.map((p) => p.p), [...v.lead, rows, rows]),
+      L: Tensor.fromBatch(parts.map((p) => p.l), [...v.lead, rows, k]),
+      U: Tensor.fromBatch(parts.map((p) => p.u), [...v.lead, k, cols]),
+    };
+  }
+
+  /** `luFactor` 가 낸 것으로 `A x = b` 를 푼다. */
+  async luSolve(pivots: Tensor, b: Tensor): Promise<Tensor> {
+    const v = await this.asBatch();
+    if (v.batch !== 1) throw new RuntimeError("lu_solve: 배치는 아직 없다");
+    const n = v.rows;
+    const piv = Int32Array.from(await pivots.toArray());
+    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
+    const rhs = LA.fromF32(await b.toArray());
+    const x = LA.luSolveFactored(
+      { lu: v.mats[0]!, piv, rows: n, cols: n }, rhs, width);
+    return Tensor.fromMat(x, b.shape);
   }
 
   /** 값은 CPU 에서 이미 나왔고, 여기서는 그래프만 잇는다. */

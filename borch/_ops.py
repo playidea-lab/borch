@@ -2910,83 +2910,291 @@ class _Namespace:
 # 유도가 까다롭고(특히 특잇값이 겹칠 때) 틀리면 조용히 틀린다. `backward()` 가 거절하므로
 # 없다는 것이 시끄럽게 드러난다.
 
-def _mat(t, what):
+class LinAlgError(RuntimeError):
+    """torch 의 `linalg.LinAlgError`.
+
+    **이름이 하는 일이 있다.** 특이행렬을 만난 코드가 `except linalg.LinAlgError` 로
+    감싸는데, 우리가 다른 것을 던지면 그 감싸기를 지나쳐 프로그램이 죽는다.
+    numpy 는 `ValueError` 밑에 두지만 torch 는 `RuntimeError` 밑이라 이쪽을 따른다.
+    """
+
+
+def _named(kind, *fields):
+    """이름 붙은 결과를 만든다.
+
+    **torch 의 linalg 는 자리로도 이름으로도 물을 수 있다** — `slogdet(A)[1]` 과
+    `slogdet(A).logabsdet` 이 같은 것이다. 자리만 맞춰 두면 값이 맞는데도 교재
+    코드가 속성 접근에서 멈춘다. `lstsq` 가 `.solution` 으로 그 자리를 이미 겪었고,
+    그때 클래스를 손으로 하나 적었다 — 그것을 여덟 번 더 적는 대신 여기서 찍는다.
+    """
+    class _R:
+        __slots__ = fields
+
+        def __init__(self, *vals):
+            for f, v in zip(fields, vals):
+                setattr(self, f, v)
+
+        def __iter__(self):
+            for f in fields:
+                yield getattr(self, f)
+
+        def __len__(self):
+            return len(fields)
+
+        def __getitem__(self, i):
+            return getattr(self, fields[i])
+
+        def __repr__(self):
+            inner = ", ".join(f"{f}={getattr(self, f)!r}" for f in fields)
+            return f"torch.return_types.{kind}(\n{inner})"
+
+    _R.__name__ = _R.__qualname__ = kind
+    return _R
+
+
+_Slogdet = _named("slogdet", "sign", "logabsdet")
+_QR = _named("linalg_qr", "Q", "R")
+_SVD = _named("linalg_svd", "U", "S", "Vh")
+_Eigh = _named("linalg_eigh", "eigenvalues", "eigenvectors")
+_Lstsq = _named("linalg_lstsq", "solution", "residuals", "rank", "singular_values")
+_LuFactor = _named("linalg_lu_factor", "LU", "pivots")
+_Lu = _named("linalg_lu", "P", "L", "U")
+_InvEx = _named("linalg_inv_ex", "inverse", "info")
+_CholeskyEx = _named("linalg_cholesky_ex", "L", "info")
+_SolveEx = _named("linalg_solve_ex", "result", "info")
+
+
+# ---- 배치
+#
+# **torch 의 `linalg` 는 전부 배치다.** `det((3,2,2))` 이 `(3,)` 을 내고 `inv`·`solve`·
+# `cholesky`·`slogdet`·`matrix_rank` 가 다 그렇다. 앞의 `_mat` 은 2 차원이 아니면
+# 거절했는데, 그건 흉내가 아니라 없는 것이었다 — 배치는 실제 코드가 늘 쓰는 모양이다.
+#
+# numpy 의 `linalg` 도 마지막 두 축을 행렬로 보고 앞을 배치로 돈다. 그래서 순방향은
+# 거의 그대로 열리고, **손이 가는 곳은 역방향이다.** 전치를 `.T` 로 적으면 2 차원에서만
+# 맞고 배치에서는 축을 통째로 뒤집어 조용히 틀린다. 아래는 전부 `_T` 를 쓴다.
+
+def _T(a):
+    """마지막 두 축만 바꾼다. 배치 축은 그대로 둔다."""
+    return _np.swapaxes(a, -1, -2)
+
+
+def _mat(t, what, square=True):
     t = _wrap(t)
-    if t.data.ndim != 2:
-        _unsupported(f"{what}(2차원이 아닌 것)")
+    if t.data.ndim < 2:
+        _unsupported(f"{what}(2차원 미만)")
+    if square and t.data.shape[-1] != t.data.shape[-2]:
+        _unsupported(f"{what}(정사각이 아닌 것)")
     return t
 
+
+def _guard(what, fn, *args, **kw):
+    """numpy 가 특이행렬에서 던지는 것을 우리 이름으로 바꿔 단다."""
+    try:
+        return fn(*args, **kw)
+    except _np.linalg.LinAlgError as exc:
+        raise LinAlgError(f"linalg.{what}: {exc}") from None
+
+
+def _is_singular(data):
+    """특이한가 — **판정을 우리가 한다.**
+
+    numpy 에 맡기면 답이 numpy 가 **무엇으로 빌드됐는지**에 달린다. 같은 입력
+    `[[1,2],[2,4]]` 에 네이티브 numpy 는 `LinAlgError` 를 던지고 Pyodide 안의
+    numpy 는 조용히 지나갔다 — `inv` 도 `cholesky` 도 그랬다(실측). 그러면 "특이
+    행렬에서 무엇이 나는가" 가 **사용자의 브라우저에 달린다.** 그건 라이브러리가
+    정할 일이지 밑에 깔린 LAPACK 이 정할 일이 아니다.
+
+    부분 피벗 LU 의 대각에 정확히 0 이 있으면 특이다 — LAPACK 이 쓰는 것과 같은
+    기준이고, 셈이 우리 것이라 어디서 돌든 같은 답이 나온다.
+    """
+    packed, _ = _lu_pack(data)
+    k = min(packed.shape[-2], packed.shape[-1])
+    idx = _np.arange(k)
+    return bool(_np.any(packed[..., idx, idx] == 0))
+
+
+def _reject_singular(data, what):
+    if _is_singular(data):
+        raise LinAlgError(
+            f"linalg.{what}: 특이행렬이다 — 역행렬이 없다 (The diagonal element of "
+            "the factorization is zero)")
+
+
+def _cholesky_checked(data, what):
+    """콜레스키. **양정부호 확인도 우리가 한다** — 위와 같은 이유다."""
+    try:
+        low = _np.linalg.cholesky(data)
+    except _np.linalg.LinAlgError:
+        low = None
+    if low is None or not _np.all(low[..., _np.arange(low.shape[-1]),
+                                      _np.arange(low.shape[-1])] > 0):
+        raise LinAlgError(
+            f"linalg.{what}: 대칭 양정부호가 아니다 (matrix is not positive definite)")
+    return low
+
+
+# **역행렬은 역방향에서 구한다.** 앞의 판에서는 순방향에서 미리 구했는데, 그러면
+# `det(특이행렬)` 이 0 을 못 내고 던진다 — torch 는 멀쩡히 0 을 낸다. 미분할 수 없는
+# 것은 미분할 때 말하면 되고, 값을 묻는 사람까지 막을 이유가 없다.
 
 def det(t):
     t = _mat(t, "det")
     out = _np.linalg.det(t.data)
-    inv_t = _np.linalg.inv(t.data).T
-    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,),
-                   lambda g: (_np.asarray(g) * out * inv_t,), "DetBackward0")
+
+    def back(g):
+        inv_t = _T(_guard("det", _np.linalg.inv, t.data))
+        # 행렬식은 배치마다 스칼라다 — 행렬에 곱하려면 축 둘을 세워 줘야 한다.
+        return ((_np.asarray(g) * out)[..., None, None] * inv_t,)
+
+    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,), back, "DetBackward0")
 
 
 def logdet(t):
     t = _mat(t, "logdet")
     sign, logabs = _np.linalg.slogdet(t.data)
     out = _np.where(sign > 0, logabs, _np.nan)
-    inv_t = _np.linalg.inv(t.data).T
     return t._make(_np.asarray(out, dtype=t.data.dtype), (t,),
-                   lambda g: (_np.asarray(g) * inv_t,), "LogdetBackward0")
+                   lambda g: (_np.asarray(g)[..., None, None]
+                              * _T(_guard("logdet", _np.linalg.inv, t.data)),),
+                   "LogdetBackward0")
 
 
 def slogdet(t):
     t = _mat(t, "slogdet")
     sign, logabs = _np.linalg.slogdet(t.data)
-    inv_t = _np.linalg.inv(t.data).T
-    return _MinMax(Tensor(_np.asarray(sign, dtype=t.data.dtype)),
-                   t._make(_np.asarray(logabs, dtype=t.data.dtype), (t,),
-                           lambda g: (_np.asarray(g) * inv_t,), "SlogdetBackward0"))
+    return _Slogdet(Tensor(_np.asarray(sign, dtype=t.data.dtype)),
+                    t._make(_np.asarray(logabs, dtype=t.data.dtype), (t,),
+                            lambda g: (_np.asarray(g)[..., None, None]
+                                       * _T(_guard("slogdet", _np.linalg.inv, t.data)),),
+                            "SlogdetBackward0"))
 
 
 def inverse(t):
-    """역행렬. 기울기는 `-A^-T G A^-T` 다."""
+    """역행렬. 기울기는 `-A⁻ᵀ G A⁻ᵀ` 다."""
     t = _mat(t, "inverse")
-    out = _np.linalg.inv(t.data)
+    _reject_singular(t.data, "inv")
+    out = _guard("inv", _np.linalg.inv, t.data)
+    out_t = _T(out)
     return t._make(out, (t,),
-                   lambda g: (-out.T @ _np.asarray(g) @ out.T,), "InverseBackward0")
+                   lambda g: (-(out_t @ _np.asarray(g) @ out_t),), "InverseBackward0")
+
+
+def inv_ex(t, check_errors=False):
+    """`inv` 와 같은데 **안 던진다** — 대신 `info` 에 0 이 아닌 수를 담는다.
+
+    배치에서 이 구분이 살아난다. 스무 장 중 한 장이 특이일 때 던지는 쪽은 전부를
+    죽이고, 이쪽은 어느 장이 상했는지를 `info` 로 알려 준다.
+    """
+    t = _mat(t, "inv_ex")
+    try:
+        _reject_singular(t.data, "inv_ex")
+        out = _np.linalg.inv(t.data)
+        info = _np.zeros(t.data.shape[:-2], dtype=_np.int32)
+    except LinAlgError:
+        if check_errors:
+            raise
+        out = _np.full_like(t.data, _np.inf)
+        # LAPACK 은 몇 번째 주피벗이 0 인지를 담는다. 여기서는 "상했다" 만 말한다.
+        info = _np.full(t.data.shape[:-2], _SINGULAR_INFO, dtype=_np.int32)
+        return _InvEx(Tensor(out), Tensor(info))
+    return _InvEx(t._make(out, (t,),
+                          lambda g: (-(_T(out) @ _np.asarray(g) @ _T(out)),),
+                          "InverseBackward0"), Tensor(info))
+
+
+# LAPACK 이 특이행렬에서 담는 값과 자릿수를 맞춘다. 실측: 2×2 특이행렬에 2 였다.
+_SINGULAR_INFO = 2
 
 
 def solve(a, b):
-    """`A x = b` 를 푼다. 역행렬을 만들어 곱하는 것보다 정확하고 빠르다."""
+    """`A x = b` 를 푼다. 역행렬을 만들어 곱하는 것보다 정확하고 빠르다.
+
+    `b` 가 `A` 보다 축이 하나 적으면 **벡터 묶음**으로 본다. 역방향의 바깥곱이 그
+    구분에 걸린다.
+
+    **numpy 에 맡기면 안 되는 자리다.** numpy 2.0 이 규칙을 바꿔서, 이제 `b` 가
+    1 차원일 때만 벡터 묶음으로 본다 — `A(3,2,2)` 에 `b(3,2)` 를 주면 행렬로 읽고
+    차원이 안 맞다고 던진다. torch 는 옛 규칙 그대로다. 그래서 축을 여기서 세운다.
+    """
     a = _mat(a, "solve")
+    _reject_singular(a.data, "solve")
     bt = _wrap(b)
-    x = _np.linalg.solve(a.data, bt.data)
-    inv_t = _np.linalg.inv(a.data).T
+    vector = bt.data.ndim == a.data.ndim - 1
+    rhs = bt.data[..., None] if vector else bt.data
+    x = _guard("solve", _np.linalg.solve, a.data, rhs)
+    if vector:
+        x = x[..., 0]
+    inv_t = _T(_guard("solve", _np.linalg.inv, a.data))
 
     def back(g):
         gg = _np.asarray(g)
-        gb = inv_t @ gg
-        # x 가 벡터면 바깥곱이 되도록 축을 세워준다.
-        ga = -(_np.outer(gb, x) if x.ndim == 1 else gb @ x.T)
+        if vector:
+            gb = (inv_t @ gg[..., None])[..., 0]
+            ga = -(gb[..., :, None] * x[..., None, :])
+        else:
+            gb = inv_t @ gg
+            ga = -(gb @ _T(x))
         return (ga, gb)
 
     return a._make(x, (a, bt), back, "SolveBackward0")
+
+
+def solve_ex(a, b, check_errors=False):
+    """`solve` 의 안 던지는 쪽."""
+    a = _mat(a, "solve_ex")
+    try:
+        out = solve(a, b)
+    except LinAlgError:
+        if check_errors:
+            raise
+        bt = _wrap(b)
+        return _SolveEx(Tensor(_np.full_like(bt.data, _np.inf)),
+                        Tensor(_np.full(a.data.shape[:-2], _SINGULAR_INFO,
+                                        dtype=_np.int32)))
+    return _SolveEx(out, Tensor(_np.zeros(a.data.shape[:-2], dtype=_np.int32)))
+
+
+def _cholesky_raw(data, upper):
+    low = _np.linalg.cholesky(data.astype(_np.float64))
+    return _T(low) if upper else low
 
 
 def cholesky(t, upper=False):
     """`A = L Lᵀ` 의 아래삼각 `L`. **기울기가 있다** — Murray 알고리즘을 유도해
     torch 와 대조했고 최대차가 2.8e-17 이었다."""
     t = _mat(t, "cholesky")
-    low = _np.linalg.cholesky(t.data.astype(_np.float64))
+    low = _cholesky_checked(t.data.astype(_np.float64), "cholesky")
+    idx = _np.arange(low.shape[-1])
 
     def back(g):
         gg = _np.asarray(g, dtype=_np.float64)
         if upper:
-            gg = gg.T
-        bar = low.T @ gg
-        half = _np.tril(bar)
-        half[_np.diag_indices_from(half)] *= 0.5
+            gg = _T(gg)
+        bar = _T(low) @ gg
+        half = _np.tril(bar).copy()
+        # 대각만 반으로. 배치에서는 `diag_indices_from` 이 축을 잘못 잡는다.
+        half[..., idx, idx] *= 0.5
         low_inv = _np.linalg.inv(low)
-        sym = low_inv.T @ half @ low_inv
-        return (((sym + sym.T) * 0.5).astype(t.data.dtype),)
+        sym = _T(low_inv) @ half @ low_inv
+        return (((sym + _T(sym)) * 0.5).astype(t.data.dtype),)
 
-    out = (low.T if upper else low).astype(t.data.dtype)
+    out = (_T(low) if upper else low).astype(t.data.dtype)
     return t._make(out, (t,), back, "CholeskyBackward0")
+
+
+def cholesky_ex(t, upper=False, check_errors=False):
+    """`cholesky` 의 안 던지는 쪽. 양정부호가 아니면 `info` 가 0 이 아니다."""
+    t = _mat(t, "cholesky_ex")
+    try:
+        out = cholesky(t, upper=upper)
+    except LinAlgError:
+        if check_errors:
+            raise
+        return _CholeskyEx(Tensor(_np.full_like(t.data, _np.nan)),
+                           Tensor(_np.full(t.data.shape[:-2], _SINGULAR_INFO,
+                                           dtype=_np.int32)))
+    return _CholeskyEx(out, Tensor(_np.zeros(t.data.shape[:-2], dtype=_np.int32)))
 
 
 def matrix_power(t, n):
@@ -2996,7 +3204,8 @@ def matrix_power(t, n):
     if n < 0:
         return matrix_power(inverse(t), -n)
     if n == 0:
-        return Tensor(_np.eye(t.data.shape[0], dtype=t.data.dtype))
+        eye = _np.eye(t.data.shape[-1], dtype=t.data.dtype)
+        return Tensor(_np.broadcast_to(eye, t.data.shape).copy())
     out = t
     for _ in range(n - 1):
         out = out @ t
@@ -3005,40 +3214,27 @@ def matrix_power(t, n):
 
 def qr(t, mode="reduced"):
     """QR 분해. **값만 준다** — 기울기는 안 넣었다(위 주석 참고)."""
-    t = _mat(t, "qr")
+    t = _mat(t, "qr", square=False)
     q, r = _np.linalg.qr(t.data, mode=mode)
-    return _MinMax(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
+    return _QR(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
 
 
 def svd(t, full_matrices=True):
     """특잇값 분해. **값만 준다.** torch 와 같이 (U, S, Vh) 순서로 돌려준다."""
-    t = _mat(t, "svd")
+    t = _mat(t, "svd", square=False)
     u, s, vh = _np.linalg.svd(t.data, full_matrices=full_matrices)
     return _SVD(Tensor(_np.ascontiguousarray(u)), Tensor(s),
                 Tensor(_np.ascontiguousarray(vh)))
 
 
-class _SVD:
-    """torch 의 `linalg.svd` 가 돌려주는 (U, S, Vh)."""
-
-    def __init__(self, U, S, Vh):
-        self.U, self.S, self.Vh = U, S, Vh
-
-    def __iter__(self):
-        yield from (self.U, self.S, self.Vh)
-
-    def __getitem__(self, i):
-        return (self.U, self.S, self.Vh)[i]
-
-
 def pinverse(t, rcond=1e-15):
     """유사역행렬. **값만 준다.**"""
-    t = _mat(t, "pinverse")
+    t = _mat(t, "pinverse", square=False)
     return Tensor(_np.linalg.pinv(t.data, rcond=rcond))
 
 
 def matrix_rank(t, tol=None):
-    t = _mat(t, "matrix_rank")
+    t = _mat(t, "matrix_rank", square=False)
     return Tensor(_np.asarray(_np.linalg.matrix_rank(t.data, tol=tol), dtype=_np.int64))
 
 
@@ -3046,45 +3242,127 @@ def eigh(t):
     """대칭 행렬의 고윳값·고유벡터. **값만 준다.**"""
     t = _mat(t, "eigh")
     w, v = _np.linalg.eigh(t.data)
-    return _MinMax(Tensor(w), Tensor(_np.ascontiguousarray(v)))
-
-
-class _Lstsq:
-    """torch 의 `linalg.lstsq` 가 돌려주는 것 — 해만이 아니다.
-
-    `.solution` 으로 물어야 한다. 그냥 텐서를 돌려주면 torch 코드가 `.solution` 에서
-    멈추고, 그건 "값이 맞는데 안 통하는" 자리가 된다.
-    """
-
-    def __init__(self, solution, residuals, rank, singular_values):
-        self.solution = solution
-        self.residuals = residuals
-        self.rank = rank
-        self.singular_values = singular_values
-
-    def __iter__(self):
-        yield from (self.solution, self.residuals, self.rank, self.singular_values)
-
-    def __getitem__(self, i):
-        return (self.solution, self.residuals, self.rank, self.singular_values)[i]
+    return _Eigh(Tensor(w), Tensor(_np.ascontiguousarray(v)))
 
 
 def lstsq(a, b):
-    """최소제곱 해. **값만 준다.**"""
-    a, bt = _mat(a, "lstsq"), _wrap(b)
+    """최소제곱 해. **값만 준다.**
+
+    `.solution` 으로 물어야 한다 — torch 는 해 말고 잔차·랭크·특잇값도 같이 준다.
+    그냥 텐서를 돌려주면 torch 코드가 `.solution` 에서 멈추고, 그건 "값이 맞는데
+    안 통하는" 자리가 된다.
+    """
+    a, bt = _mat(a, "lstsq", square=False), _wrap(b)
+    if a.data.ndim != 2:
+        _unsupported("lstsq(배치)")
     sol, res, rank, sv = _np.linalg.lstsq(a.data, bt.data, rcond=None)
     return _Lstsq(Tensor(_np.ascontiguousarray(sol)), Tensor(_np.asarray(res)),
                   Tensor(_np.asarray(rank, dtype=_np.int64)), Tensor(_np.asarray(sv)))
 
 
+# ---- LU
+#
+# LU 분해는 이미 `det`·`inv`·`solve` 밑에서 돌고 있었다. 밖으로 안 낸 것뿐이다.
+#
+# **피벗은 1 부터 센다.** LAPACK 규약이고 torch 가 그대로 물려받았다 — 교환이 없는
+# 2×2 에서 `pivots` 가 `[1, 2]` 이지 `[0, 1]` 이 아니다. 0 부터 세면 `lu_solve` 가
+# 아무 소리 없이 다른 답을 낸다. 실측해서 맞췄다.
+
+def _lu_pack(data):
+    """부분 피벗 LU. `LU` 한 장과 **1 부터 세는** 교환표를 준다."""
+    a = data.astype(_np.float64).copy()
+    n, m = a.shape[-2], a.shape[-1]
+    k = min(n, m)
+    flat = a.reshape(-1, n, m)
+    piv = _np.zeros((flat.shape[0], k), dtype=_np.int32)
+    for b in range(flat.shape[0]):
+        mat = flat[b]
+        for col in range(k):
+            best = col + int(_np.argmax(_np.abs(mat[col:, col])))
+            piv[b, col] = best + 1                      # ← LAPACK 은 1 부터 센다
+            if best != col:
+                mat[[col, best]] = mat[[best, col]]
+            pivot = mat[col, col]
+            if pivot == 0:
+                continue
+            mat[col + 1:, col] /= pivot
+            mat[col + 1:, col + 1:] -= _np.outer(mat[col + 1:, col], mat[col, col + 1:])
+    return flat.reshape(a.shape), piv.reshape(data.shape[:-2] + (k,))
+
+
+def lu_factor(t):
+    """`LU` 한 장에 겹쳐 담은 분해와 교환표. 값만 준다."""
+    t = _mat(t, "lu_factor", square=False)
+    lu_data, piv = _lu_pack(t.data)
+    return _LuFactor(Tensor(lu_data.astype(t.data.dtype)), Tensor(piv))
+
+
+def lu(t, pivot=True):
+    """`P L U` 셋으로 펴서 준다. 겹쳐 담은 것보다 읽기 쉽다."""
+    t = _mat(t, "lu", square=False)
+    if not pivot:
+        _unsupported("lu(pivot=False)")
+    lu_data, piv = _lu_pack(t.data)
+    n, m = lu_data.shape[-2], lu_data.shape[-1]
+    k = min(n, m)
+    flat_lu = lu_data.reshape(-1, n, m)
+    flat_piv = piv.reshape(-1, k)
+    diag = _np.arange(k)
+    ps, ls, us = [], [], []
+    for b in range(flat_lu.shape[0]):
+        low = _np.tril(flat_lu[b][:, :k], -1).copy()
+        low[diag, diag] = 1.0
+        ls.append(low)
+        us.append(_np.triu(flat_lu[b])[:k, :])
+        # 교환을 되짚어 순열 행렬을 세운다. `piv` 는 1 부터 세므로 하나 뺀다.
+        order = _np.arange(n)
+        for col in range(k):
+            src = int(flat_piv[b, col]) - 1
+            if src != col:
+                order[[col, src]] = order[[src, col]]
+        perm = _np.zeros((n, n), dtype=_np.float64)
+        perm[order, _np.arange(n)] = 1.0
+        ps.append(perm)
+
+    def pack(arrs, shape):
+        return Tensor(_np.asarray(arrs).reshape(shape).astype(t.data.dtype))
+
+    lead = t.data.shape[:-2]
+    return _Lu(pack(ps, lead + (n, n)), pack(ls, lead + (n, k)),
+               pack(us, lead + (k, m)))
+
+
+def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
+    """`lu_factor` 가 낸 것으로 `A x = b` 를 푼다."""
+    lu_t, piv_t, bt = _wrap(lu_data), _wrap(pivots), _wrap(b)
+    if not left or adjoint:
+        _unsupported("lu_solve(left=False 또는 adjoint=True)")
+    n = lu_t.data.shape[-1]
+    low = _np.tril(lu_t.data.astype(_np.float64), -1) + _np.eye(n)
+    up = _np.triu(lu_t.data.astype(_np.float64))
+    rhs = bt.data.astype(_np.float64).copy()
+    order = _np.arange(n)
+    for col in range(piv_t.data.shape[-1]):
+        src = int(_np.asarray(piv_t.data).reshape(-1)[col]) - 1
+        if src != col:
+            order[[col, src]] = order[[src, col]]
+    rhs = rhs[order]
+    y = _np.linalg.solve(low, rhs)
+    return Tensor(_np.linalg.solve(up, y).astype(bt.data.dtype))
+
+
 class _Linalg(_Namespace):
     """`torch.linalg` 자리. 같은 구현을 가리키므로 갈릴 자리가 없다."""
 
+    LinAlgError = LinAlgError
     det = staticmethod(det)
     slogdet = staticmethod(slogdet)
     inv = staticmethod(inverse)
+    inv_ex = staticmethod(inv_ex)
     solve = staticmethod(solve)
+    solve_ex = staticmethod(solve_ex)
     cholesky = staticmethod(cholesky)
+    cholesky_ex = staticmethod(cholesky_ex)
     matrix_power = staticmethod(matrix_power)
     qr = staticmethod(qr)
     svd = staticmethod(svd)
@@ -3092,6 +3370,9 @@ class _Linalg(_Namespace):
     matrix_rank = staticmethod(matrix_rank)
     eigh = staticmethod(eigh)
     lstsq = staticmethod(lstsq)
+    lu = staticmethod(lu)
+    lu_factor = staticmethod(lu_factor)
+    lu_solve = staticmethod(lu_solve)
     norm = staticmethod(norm)
 
 

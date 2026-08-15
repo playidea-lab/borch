@@ -470,8 +470,25 @@ export type BinaryName = keyof typeof BINARY & string;
  */
 const DERIVED: Record<string, UnarySpec> = {};
 
-/** WGSL 의 f32 리터럴. 정수처럼 보이는 값도 소수점을 달아야 형이 안 갈린다. */
+/**
+ * WGSL 의 f32 리터럴. 정수처럼 보이는 값도 소수점을 달아야 형이 안 갈린다.
+ *
+ * **무한대와 NaN 은 셰이더에 구울 수가 없다.** WGSL 은 컴파일 시점에 계산되는 값이
+ * inf 나 NaN 이 되는 것을 금지한다 — 리터럴도, `bitcast<f32>(0x7f800000u)` 로 에둘러도
+ * 똑같이 거절당한다(둘 다 실측). 그전에는 `String(Infinity)` 가 `Infinity` 라는
+ * **글자**를 셰이더에 심어서 `unresolved value 'Infinity'` 로 멈췄다 — 값 하나
+ * 채우려다 파이프라인 전체가 죽었고, 그 자리가 `Tensor.full(shape, Infinity)` 였다.
+ *
+ * 그쪽은 CPU 에서 채워 올리는 길로 갔다. 여기서는 **시끄럽게 거절한다** — 못 굽는
+ * 것을 조용히 근사하면 셰이더는 도는데 답이 다른 상태가 된다.
+ */
 export function f32lit(v: number): string {
+  if (!Number.isFinite(v)) {
+    throw new Error(
+      `WGSL 은 상수 ${v} 를 f32 로 못 적는다 — 무한대·NaN 은 컴파일 시점에 금지된다.\n` +
+      "  CPU 에서 채워 올려라(`Tensor.full` 이 그 길로 간다).",
+    );
+  }
   return Number.isInteger(v) ? `${v}.0` : String(v);
 }
 
@@ -899,7 +916,7 @@ export function padAxis(
 ): string {
   const outSize = before + size + after;
   const n = outer * outSize * inner;
-  const literal = Number.isInteger(value) ? value.toFixed(1) : String(value);
+  const literal = f32lit(value);
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -2362,7 +2379,7 @@ export function fill(n: number, value: number): string {
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
-  Out[gid] = ${Number.isInteger(value) ? value.toFixed(1) : String(value)};
+  Out[gid] = ${f32lit(value)};
 }`;
 }
 

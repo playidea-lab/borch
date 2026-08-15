@@ -293,58 +293,214 @@ const JACOBI_SWEEPS = 60;
 const JACOBI_TOL = 1e-30;
 
 /**
- * 정사각 행렬의 특이값 분해.
+ * 특이값 분해. **직사각도 받는다.**
  *
  * `AᵀA` 의 고유분해에서 얻는다 — 작은 행렬에서 통하는 가장 짧은 길이다. 특이값을
  * **내림차순**으로 준다(torch 와 같다). 큰 행렬이나 조건수가 나쁜 행렬에서는
  * 이 방법이 자릿수를 잃는데, 여기서 미는 크기가 아니다.
+ *
+ * `u` 는 **축소본**이다 — `rows × k` (`k = min(rows, cols)`). torch 의 기본값인
+ * `full_matrices=True` 는 `rows × rows` 를 요구하므로 남는 열을 `completeBasis` 가
+ * 채운다. 그 둘을 나눠 둔 이유는 축소본이 늘 유일하고, 채운 쪽은 남는 차원이
+ * 둘 이상이면 **유일하지 않기** 때문이다.
  */
-export function svd(a: Mat, n: number): { u: Mat; s: Float64Array; vt: Mat } {
-  const at = transpose(a, n, n);
-  const ata = matmul(at, a, n, n, n);
-  const { values, vectors } = eigh(ata, n);
+export function svd(
+  a: Mat, rows: number, cols = rows,
+): { u: Mat; s: Float64Array; vt: Mat } {
+  const k = Math.min(rows, cols);
+  const at = transpose(a, rows, cols);
+  const ata = matmul(at, a, cols, rows, cols);
+  const { values, vectors } = eigh(ata, cols);
   // eigh 는 오름차순이라 뒤집는다.
-  const s = new Float64Array(n);
-  const v = new Float64Array(n * n);
-  for (let k = 0; k < n; k++) {
-    const from = n - 1 - k;
-    s[k] = Math.sqrt(Math.max(0, values[from] ?? 0));
-    for (let i = 0; i < n; i++) v[i * n + k] = vectors[i * n + from] ?? 0;
+  const s = new Float64Array(k);
+  const v = new Float64Array(cols * k);
+  for (let j = 0; j < k; j++) {
+    const from = cols - 1 - j;
+    s[j] = Math.sqrt(Math.max(0, values[from] ?? 0));
+    for (let i = 0; i < cols; i++) v[i * k + j] = vectors[i * cols + from] ?? 0;
   }
-  const av = matmul(a, v, n, n, n);
-  const u = new Float64Array(n * n);
-  for (let k = 0; k < n; k++) {
-    const sk = s[k] ?? 0;
-    for (let i = 0; i < n; i++) {
-      u[i * n + k] = sk > SVD_ZERO ? (av[i * n + k] ?? 0) / sk : 0;
+  const av = matmul(a, v, rows, cols, k);
+  const u = new Float64Array(rows * k);
+  for (let j = 0; j < k; j++) {
+    const sj = s[j] ?? 0;
+    for (let i = 0; i < rows; i++) {
+      u[i * k + j] = sj > SVD_ZERO ? (av[i * k + j] ?? 0) / sj : 0;
     }
   }
-  return { u, s, vt: transpose(v, n, n) };
+  return { u, s, vt: transpose(v, cols, k) };
 }
 
 const SVD_ZERO = 1e-12;
 
-/** 무어-펜로즈 유사역행렬. 특이값이 0 에 가까운 방향은 버린다. */
-export function pinverse(a: Mat, n: number): Mat {
-  const { u, s, vt } = svd(a, n);
-  const smax = s[0] ?? 0;
-  const tol = smax * n * Number.EPSILON;
-  const inv = new Float64Array(n * n);
-  for (let k = 0; k < n; k++) {
-    const sk = s[k] ?? 0;
-    if (sk > tol) inv[k * n + k] = 1 / sk;
+/**
+ * `rows × k` 인 정규직교 열들을 `rows × rows` 로 채운다.
+ *
+ * 이미 있는 열에 직교하는 방향을 그람-슈미트로 찾는다. **남는 차원이 둘 이상이면
+ * 답이 유일하지 않다** — 그 부분공간 안에서 어떻게 돌려도 같은 분해다. 골든이
+ * 절댓값으로 묻고 남는 차원이 하나인 자리만 재는 이유가 그것이다.
+ */
+export function completeBasis(u: Mat, rows: number, k: number): Mat {
+  const out = new Float64Array(rows * rows);
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < k; j++) out[i * rows + j] = u[i * k + j] ?? 0;
   }
-  const v = transpose(vt, n, n);
-  return matmul(matmul(v, inv, n, n, n), transpose(u, n, n), n, n, n);
+  let filled = k;
+  for (let seed = 0; seed < rows && filled < rows; seed++) {
+    const v = new Float64Array(rows);
+    v[seed] = 1;
+    for (let j = 0; j < filled; j++) {
+      let dot = 0;
+      for (let i = 0; i < rows; i++) dot += (v[i] ?? 0) * (out[i * rows + j] ?? 0);
+      for (let i = 0; i < rows; i++) {
+        v[i] = (v[i] ?? 0) - dot * (out[i * rows + j] ?? 0);
+      }
+    }
+    let norm = 0;
+    for (let i = 0; i < rows; i++) norm += (v[i] ?? 0) ** 2;
+    norm = Math.sqrt(norm);
+    if (norm < SVD_ZERO) continue;
+    for (let i = 0; i < rows; i++) out[i * rows + filled] = (v[i] ?? 0) / norm;
+    filled += 1;
+  }
+  return out;
+}
+
+/** 무어-펜로즈 유사역행렬. 특이값이 0 에 가까운 방향은 버린다. */
+export function pinverse(a: Mat, rows: number, cols = rows): Mat {
+  const k = Math.min(rows, cols);
+  const { u, s, vt } = svd(a, rows, cols);
+  const tol = (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
+  const inv = new Float64Array(k * k);
+  for (let j = 0; j < k; j++) {
+    const sj = s[j] ?? 0;
+    if (sj > tol) inv[j * k + j] = 1 / sj;
+  }
+  const v = transpose(vt, k, cols);
+  return matmul(matmul(v, inv, cols, k, k), transpose(u, rows, k), cols, k, rows);
 }
 
 /** 0 이 아닌 특이값의 개수. 무엇을 0 으로 볼지는 가장 큰 특이값에 맞춘다. */
-export function matrixRank(a: Mat, n: number): number {
-  const { s } = svd(a, n);
-  const tol = (s[0] ?? 0) * n * Number.EPSILON;
+export function matrixRank(a: Mat, rows: number, cols = rows): number {
+  const k = Math.min(rows, cols);
+  const { s } = svd(a, rows, cols);
+  const tol = (s[0] ?? 0) * Math.max(rows, cols) * Number.EPSILON;
   let rank = 0;
-  for (let k = 0; k < n; k++) if ((s[k] ?? 0) > tol) rank += 1;
+  for (let j = 0; j < k; j++) if ((s[j] ?? 0) > tol) rank += 1;
   return rank;
+}
+
+/**
+ * `lu_factor` 가 내는 것 — 한 장에 겹쳐 담은 `L`·`U` 와 교환표.
+ *
+ * **교환표는 1 부터 센다.** LAPACK 규약이고 torch 가 그대로 물려받았다. 교환이
+ * 없는 2×2 에서 `[1, 2]` 이지 `[0, 1]` 이 아니다 — 0 부터 세면 `luSolveFactored`
+ * 가 아무 소리 없이 다른 답을 낸다. 진짜 torch 에 물어서 맞췄다.
+ */
+export interface LuPacked {
+  readonly lu: Mat;
+  readonly piv: Int32Array;
+  readonly rows: number;
+  readonly cols: number;
+}
+
+export function luFactor(a: Mat, rows: number, cols: number): LuPacked {
+  const m = Float64Array.from(a);
+  const k = Math.min(rows, cols);
+  const piv = new Int32Array(k);
+  for (let col = 0; col < k; col++) {
+    let best = col;
+    let bestAbs = Math.abs(m[col * cols + col] ?? 0);
+    for (let i = col + 1; i < rows; i++) {
+      const v = Math.abs(m[i * cols + col] ?? 0);
+      if (v > bestAbs) { bestAbs = v; best = i; }
+    }
+    piv[col] = best + 1;
+    if (best !== col) {
+      for (let j = 0; j < cols; j++) {
+        const t = m[col * cols + j] ?? 0;
+        m[col * cols + j] = m[best * cols + j] ?? 0;
+        m[best * cols + j] = t;
+      }
+    }
+    const pivot = m[col * cols + col] ?? 0;
+    if (pivot === 0) continue;
+    for (let i = col + 1; i < rows; i++) {
+      const f = (m[i * cols + col] ?? 0) / pivot;
+      m[i * cols + col] = f;
+      for (let j = col + 1; j < cols; j++) {
+        m[i * cols + j] = (m[i * cols + j] ?? 0) - f * (m[col * cols + j] ?? 0);
+      }
+    }
+  }
+  return { lu: m, piv, rows, cols };
+}
+
+/** 겹쳐 담은 것을 `P`·`L`·`U` 셋으로 편다. */
+export function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat } {
+  const { rows, cols, lu: packed, piv } = f;
+  const k = Math.min(rows, cols);
+  const l = new Float64Array(rows * k);
+  const u = new Float64Array(k * cols);
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < k; j++) {
+      l[i * k + j] = i === j ? 1 : (i > j ? (packed[i * cols + j] ?? 0) : 0);
+    }
+  }
+  for (let i = 0; i < k; i++) {
+    for (let j = 0; j < cols; j++) u[i * cols + j] = i <= j ? (packed[i * cols + j] ?? 0) : 0;
+  }
+  // 교환을 되짚어 순열 행렬을 세운다. `A = P L U` 이므로 `P` 는 교환의 **역**이다.
+  const order = new Int32Array(rows);
+  for (let i = 0; i < rows; i++) order[i] = i;
+  for (let col = 0; col < k; col++) {
+    const src = (piv[col] ?? col + 1) - 1;
+    if (src !== col) {
+      const t = order[col] ?? 0;
+      order[col] = order[src] ?? 0;
+      order[src] = t;
+    }
+  }
+  const p = new Float64Array(rows * rows);
+  for (let i = 0; i < rows; i++) p[(order[i] ?? i) * rows + i] = 1;
+  return { p, l, u };
+}
+
+/** `lu_factor` 가 낸 것으로 `A x = b` 를 푼다. */
+export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
+  const n = f.rows;
+  const x = new Float64Array(n * m);
+  for (let i = 0; i < n * m; i++) x[i] = b[i] ?? 0;
+  // 순방향에서 한 교환을 오른쪽에도 같은 순서로 적용한다.
+  for (let col = 0; col < f.piv.length; col++) {
+    const src = (f.piv[col] ?? col + 1) - 1;
+    if (src === col) continue;
+    for (let j = 0; j < m; j++) {
+      const t = x[col * m + j] ?? 0;
+      x[col * m + j] = x[src * m + j] ?? 0;
+      x[src * m + j] = t;
+    }
+  }
+  for (let i = 1; i < n; i++) {
+    for (let k = 0; k < i; k++) {
+      const f2 = f.lu[i * f.cols + k] ?? 0;
+      if (f2 === 0) continue;
+      for (let j = 0; j < m; j++) {
+        x[i * m + j] = (x[i * m + j] ?? 0) - f2 * (x[k * m + j] ?? 0);
+      }
+    }
+  }
+  for (let i = n - 1; i >= 0; i--) {
+    for (let k = i + 1; k < n; k++) {
+      const f2 = f.lu[i * f.cols + k] ?? 0;
+      if (f2 === 0) continue;
+      for (let j = 0; j < m; j++) {
+        x[i * m + j] = (x[i * m + j] ?? 0) - f2 * (x[k * m + j] ?? 0);
+      }
+    }
+    const d = f.lu[i * f.cols + i] ?? 1;
+    for (let j = 0; j < m; j++) x[i * m + j] = (x[i * m + j] ?? 0) / d;
+  }
+  return x;
 }
 
 /**

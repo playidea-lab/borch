@@ -158,6 +158,10 @@ export async function run(url: string): Promise<Report> {
     }
     report.asked.push(name);
     report.registered += 1;
+    // **시작을 먼저 적는다.** 케이스마다 try/catch 를 하므로 예외는 보고서에 실린다.
+    // 안 실리는 것은 영영 안 끝나는 케이스이고, 그때 화면에는 아무것도 안 남는다 —
+    // 이 줄이 있으면 마지막으로 찍힌 이름이 범인이다. `run.py --verbose` 로 본다.
+    console.debug(`[골든] ${name}`);
     let why: string | null;
     try {
       const result = await body();

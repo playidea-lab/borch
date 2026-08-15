@@ -36,6 +36,17 @@ export class IndexError extends Error {
   override readonly name = "IndexError";
 }
 
+/**
+ * 선형대수가 답을 못 내는 것 — 특이행렬, 양정부호가 아닌 콜레스키.
+ *
+ * **이름이 하는 일이 있다.** 특이행렬을 만날 수 있는 코드는 `except LinAlgError` 로
+ * 감싸는 것이 보통인데, 우리가 그냥 `RuntimeError` 를 던지면 그 감싸기를 지나쳐
+ * 프로그램이 죽는다. `IndexError` 를 따로 둔 것과 같은 이유다 — **예외의 종류도 API 다.**
+ */
+export class LinAlgError extends Error {
+  override readonly name = "LinAlgError";
+}
+
 /** torch 가 내는 문구. 검색이 통하라고 원문 그대로 둔다. */
 export const TORCH = {
   matmulShape: "shapes cannot be multiplied",

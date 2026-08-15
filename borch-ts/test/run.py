@@ -24,7 +24,11 @@ from launch import launch, warn_if_software
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = "/borch-ts/test/index.html"
-TIMEOUT_MS = 120_000
+# **넉넉히 준다.** 전에는 120 초였는데, 표가 커지고 헤드리스가 소프트웨어 어댑터로
+# 내려가면 그 안에 못 끝난다. 그때 나오는 화면은 "멈췄다" 와 구별이 안 돼서 실제로
+# 한 번 없는 결함을 쫓았다 — 마지막 케이스 이름까지 찍어 놓고도 그랬다.
+# 시간이 모자란 것과 안 끝나는 것은 다른 일이므로, 예산은 의심의 여지가 없게 둔다.
+TIMEOUT_MS = 600_000
 
 
 class _Quiet(http.server.SimpleHTTPRequestHandler):
@@ -51,11 +55,32 @@ class _ReportMissing(_Quiet):
         super().send_error(code, message, explain)
 
 
-def run(headed=False):
+_STARTED = "[골든] "
+
+
+def run(headed=False, verbose=False):
+    """`verbose` 면 콘솔을 전부 찍는다.
+
+    **조용한 멈춤을 붙잡는다.** 러너가 케이스마다 try/catch 를 하므로 예외는 보고서에
+    실려 나온다. 안 실리는 것은 **영영 안 끝나는** 케이스이고, 그때는 보고서 자체가
+    안 만들어져 화면에 아무것도 안 남은 채 시간만 간다.
+
+    그래서 러너가 케이스를 시작할 때마다 찍는 줄을 여기서 붙잡아 두었다가, 시간이
+    다 되면 **마지막으로 시작한 이름**을 말한다 — 그게 범인이다. 터미널 스크롤백에
+    기대면 1,199 줄에 묻히고, 실제로 한 번 묻혔다.
+    """
     from playwright.sync_api import sync_playwright
 
     port, stop = serve(ROOT)
     url = f"http://127.0.0.1:{port}{PAGE}"
+    last = []
+
+    def on_console(m):
+        if m.text.startswith(_STARTED):
+            last.append(m.text[len(_STARTED):])
+        if verbose or m.type == "error":
+            print(f"  [브라우저] {m.text}")
+
     try:
         with sync_playwright() as p:
             # 헤드리스 Chromium 은 기본으로 WebGPU 어댑터를 안 준다 — 요청하면
@@ -66,16 +91,22 @@ def run(headed=False):
             page = browser.new_page()
             page.set_default_timeout(0)
             # 셰이더 컴파일 오류는 콘솔로만 나온다. 삼키면 원인을 못 찾는다.
-            page.on("console", lambda m: print(f"  [브라우저] {m.text}")
-                    if m.type == "error" else None)
+            page.on("console", on_console)
             page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
             # 설명 안 된 404 는 덮어두면 안 된다 — 이 저장소의 러너가 한 번
             # 404 HTML 을 파이썬 파일로 받아 엉뚱한 자리에서 터진 적이 있다.
             page.on("response", lambda r: print(f"  [404] {r.url}")
                     if r.status == 404 else None)
             page.goto(url)
-            page.wait_for_function("window.__borchReport !== undefined",
-                                   timeout=TIMEOUT_MS)
+            try:
+                page.wait_for_function("window.__borchReport !== undefined",
+                                       timeout=TIMEOUT_MS)
+            except Exception:
+                where = last[-1] if last else "(한 건도 시작 못 했다)"
+                print(f"보고서가 안 나왔다. 마지막으로 시작한 케이스: {where}\n"
+                      f"  {len(last)}건을 시작했다 — 그 케이스가 안 끝난 것이다.",
+                      file=sys.stderr)
+                raise
             report = page.evaluate("window.__borchReport")
             browser.close()
     finally:
@@ -90,7 +121,7 @@ def main(argv):
         print(f"방출물이 없다: {dist}\n  먼저: npm run build:ts", file=sys.stderr)
         return 2
 
-    report = run(headed="--headed" in argv)
+    report = run(headed="--headed" in argv, verbose="--verbose" in argv)
     if "error" in report:
         print(f"돌지 못했다: {report['error']}", file=sys.stderr)
         return 1

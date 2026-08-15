@@ -17,7 +17,9 @@ import numpy as _np
 import js as _js
 from pyodide.ffi import to_js as _to_js
 
-from ._base import Tensor, _js_list, _Size, guarded, handle, settle, wrap
+from ._base import (
+    LinAlgError as _LinAlgError, Tensor, _js_list, _Size, guarded, handle, settle, wrap,
+)
 
 _ts = _js.borch
 
@@ -83,6 +85,10 @@ _SIGNATURE = {
     "softplus": ("beta", "threshold"),
     "softmin": ("dim",),
     "glu": ("dim",),
+    # 분해의 갈래. **버리면 예외가 아니라 조용히 다른 답이 나온다** —
+    # `qr(mode="complete")` 가 축소본을, `svd(full_matrices=False)` 가 완전본을 낸다.
+    "qr": ("mode",),
+    "svd": ("full_matrices",),
     # 정규화·전치 합성곱. borch.ts 쪽 인자 순서다.
     "group_norm": ("num_groups", "eps"),
     "instance_norm": ("eps",),
@@ -1284,6 +1290,10 @@ class _MinMax:
 # **`torch.linalg` 는 이름 공간이다.** 대부분 텐서 메서드로 있고, 값에 따라 크기가
 # 정해지는 것들(`cholesky`·`svd`·`eigh`)은 비동기라 `settle` 이 기다린다.
 class _Linalg:
+    # 특이행렬을 만나는 코드가 `except linalg.LinAlgError` 로 감싼다. 여기 없으면
+    # 그 감싸기가 이름을 못 찾고 프로그램이 죽는다 — 값보다 먼저 필요한 것이다.
+    LinAlgError = _LinAlgError
+
     def lstsq(self, a, b):
         """torch 는 `.solution` 이 든 물건을 준다 — borch.ts 는 답을 바로 준다."""
         from ._base import _Fields
@@ -1297,13 +1307,19 @@ class _Linalg:
         return matrix_power(a, n)
 
     def __getattr__(self, name):
-        js_name = camel({"inv": "inverse", "matrix_rank": "matrixRank"}.get(name, name))
+        # torch 가 줄여 부르는 것들. `pinv` 는 오래 비어 있었는데 골든이 늘 긴 이름
+        # (`L.pinverse`)으로만 물어서 안 드러났다 — 부르는 철자가 하나 늘자 나왔다.
+        js_name = camel({"inv": "inverse", "pinv": "pinverse",
+                         "matrix_rank": "matrixRank"}.get(name, name))
 
         def call(x, *args, **kw):
             fn = getattr(handle(x), js_name, None)
             if fn is None:
                 raise AttributeError(f"borch.ts 에 `{js_name}` 이 없다 (linalg.{name})")
-            return guarded(fn, *[_arg(a) for a in args])
+            # **이름 붙은 인자를 버리면 안 된다.** `qr(mode="complete")` 와
+            # `svd(full_matrices=False)` 가 그 자리인데, 버리면 예외가 아니라
+            # **기본값으로 조용히 다른 답**이 나온다 — 값 대조만이 잡을 수 있는 종류다.
+            return guarded(fn, *positional(name, args, kw))
 
         call.__name__ = name
         return call
