@@ -467,6 +467,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addLazy(out);
   addShuffle(out);
   addMisc(out);
+  addCell(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -974,6 +975,93 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
  * 갈리는데, 학습은 그래도 돌아서 한참 뒤에야 안다. 전치 합성곱은 가중치 축이
  * `(입력, 출력, …)` 로 뒤집혀 있어서, 정사각 커널이면 뒤집어도 모양이 맞는다.
  */
+/**
+ * RNN 셀 셋 — 되풀이의 한 걸음.
+ *
+ * 게이트 순서가 값의 전부라 가중치를 못 박고 값을 묻는다. 자세한 것은
+ * `tests/cases.py` 의 `cell_cases` 에 적었다.
+ */
+function addCell(out: Map<string, Case>): void {
+  const x = () => Tensor.from([1, 2], [1, 2]);
+  const h = () => Tensor.from([0.5, 0.5], [1, 2]);
+  const c0 = () => Tensor.from([0.2, 0.3], [1, 2]);
+  const eye = [1, 0, 0, 1];
+
+  const load = (cell: nn.RNNCellBase, gates: number) => {
+    const rep = (scale: number) => {
+      const got: number[] = [];
+      for (let g = 0; g < gates; g++) for (const v of eye) got.push(v * scale);
+      return Tensor.from(got, [gates * 2, 2]);
+    };
+    cell.loadStateDict({
+      weight_ih: rep(1), weight_hh: rep(0.5),
+      bias_ih: Tensor.zeros([gates * 2]), bias_hh: Tensor.zeros([gates * 2]),
+    });
+    return cell;
+  };
+
+  out.set("cell::RNNCell",
+    () => (load(new nn.RNNCell(2, 2), 1) as nn.RNNCell).step(x(), h()));
+  out.set("cell::RNNCell(relu)",
+    () => (load(new nn.RNNCell(2, 2, true, "relu"), 1) as nn.RNNCell)
+      .step(x(), h()));
+  out.set("cell::RNNCell(상태 없이)",
+    () => (load(new nn.RNNCell(2, 2), 1) as nn.RNNCell).step(x()));
+  out.set("cell::GRUCell",
+    () => (load(new nn.GRUCell(2, 2), 3) as nn.GRUCell).step(x(), h()));
+  out.set("cell::LSTMCell/h",
+    () => (load(new nn.LSTMCell(2, 2), 4) as nn.LSTMCell)
+      .step(x(), [h(), c0()])[0]);
+  out.set("cell::LSTMCell/c",
+    () => (load(new nn.LSTMCell(2, 2), 4) as nn.LSTMCell)
+      .step(x(), [h(), c0()])[1]);
+  out.set("cell::LSTMCell(상태 없이)",
+    () => (load(new nn.LSTMCell(2, 2), 4) as nn.LSTMCell).step(x())[0]);
+
+  out.set("cell::state_dict 열쇠",
+    async () => Object.keys(new nn.RNNCell(3, 2).stateDict()).join(","));
+  out.set("cell::state_dict 열쇠(bias 없이)",
+    async () => Object.keys(new nn.RNNCell(3, 2, false).stateDict()).join(","));
+
+  for (const [name, make] of [
+    ["RNNCell", () => new nn.RNNCell(3, 2)],
+    ["GRUCell", () => new nn.GRUCell(3, 2)],
+    ["LSTMCell", () => new nn.LSTMCell(3, 2)],
+  ] as const) {
+    out.set(`cell::repr::${name}`, async () => make().describe());
+  }
+  out.set("cell::repr::RNNCell(relu)",
+    async () => new nn.RNNCell(3, 2, true, "relu").describe());
+  out.set("cell::repr::RNNCell(bias 없이)",
+    async () => new nn.RNNCell(3, 2, false).describe());
+
+  for (const [name, make] of [
+    ["RNNCell", () => new nn.RNNCell(3, 2)],
+    ["GRUCell", () => new nn.GRUCell(3, 2)],
+    ["LSTMCell", () => new nn.LSTMCell(3, 2)],
+  ] as const) {
+    out.set(`cell::모양::${name}`,
+      async () => `(${make().weightIh.shape.join(", ")})`);
+  }
+
+  const grads: [string, number, (c: nn.RNNCellBase, x: Tensor) => Tensor][] = [
+    ["RNNCell", 1, (c, xi) => (c as nn.RNNCell).step(xi, h())],
+    ["GRUCell", 3, (c, xi) => (c as nn.GRUCell).step(xi, h())],
+    ["LSTMCell", 4, (c, xi) => (c as nn.LSTMCell).step(xi, [h(), c0()])[0]],
+  ];
+  for (const [name, gates, run] of grads) {
+    out.set(`cell::grad::${name}`, () => {
+      const make = name === "GRUCell"
+        ? new nn.GRUCell(2, 2)
+        : name === "LSTMCell" ? new nn.LSTMCell(2, 2) : new nn.RNNCell(2, 2);
+      const cell = load(make, gates);
+      const inp = Tensor.from([1, 2], [1, 2], true);
+      seeded(run(cell, inp)).backward();
+      return gradOf(inp, name);
+    });
+  }
+}
+
 /**
  * 남은 층 아홉 — 창을 펴는 둘과 나머지.
  *

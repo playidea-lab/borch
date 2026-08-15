@@ -838,6 +838,46 @@ def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
 
 
+# ── 되풀이의 한 걸음 ────────────────────────────────────────────────────
+#
+# **`call` 이 아니라 `step` 으로 간다.** 저쪽 `Module.call(x)` 은 인자 하나짜리라
+# 상태를 못 받는다. `LSTMCell` 은 상태가 짝이고 답도 짝이라 그 자리도 여기서 푼다.
+
+class _Cell(Module):
+    _pairs = False
+
+    def __call__(self, x, hx=None):
+        if not self._pairs:
+            args = (handle(x),) if hx is None else (handle(x), handle(hx))
+            return wrap(guarded(self._m.step, *args))
+        if hx is None:
+            got = settle(self._m.step(handle(x)))
+        else:
+            # **`_js_list` 는 정수 목록 전용이다** — 텐서를 넣으면 `int()` 에서 멈춘다.
+            # 짝은 `Array.of` 로 만든다.
+            got = settle(self._m.step(
+                handle(x), _js.Array.of(handle(hx[0]), handle(hx[1]))))
+        return (got[0], got[1])
+
+
+def _cell(name, pairs=False):
+    def make(input_size, hidden_size, bias=True, **kw):
+        args = [input_size, hidden_size, bias]
+        if name == "RNNCell":
+            args.append(kw.get("nonlinearity", "tanh"))
+        made = _Cell(getattr(_ts.nn, name).new(*args))
+        object.__setattr__(made, "_pairs", pairs)
+        return made
+
+    make.__name__ = name
+    return make
+
+
+RNNCell = _cell("RNNCell")
+GRUCell = _cell("GRUCell")
+LSTMCell = _cell("LSTMCell", pairs=True)
+
+
 # ── 나머지 층 ───────────────────────────────────────────────────────────
 #
 # **인자가 둘 이상인 층은 `_layer` 로 못 간다.** 감싼 쪽의 `__call__` 이 저쪽

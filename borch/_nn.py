@@ -772,6 +772,121 @@ class GRU(_RNNBase):
 
 
 
+class RNNCellBase(Module):
+    """되풀이의 **한 걸음.** 시간 루프를 손으로 적고 싶은 코드가 이것을 부른다.
+
+    **이름이 층 쪽과 다르다.** 층은 `weight_ih_l0` 처럼 층 번호를 붙이고 셀은
+    `weight_ih` 다 — 셀에는 층이 없기 때문이다. `state_dict` 열쇠가 그 이름이므로
+    틀리면 체크포인트가 안 맞는다.
+
+    게이트 수만 다르고 나머지는 같다. 한 걸음 식은 `_RNNBase` 쪽 것을 그대로 쓴다 —
+    두 벌로 적으면 게이트 순서가 갈리는 날이 오고, 그때 모양은 같고 값만 틀린다.
+    """
+
+    gates = 1
+
+    def __init__(self, input_size, hidden_size, bias=True):
+        super().__init__()
+        self.input_size, self.hidden_size = input_size, hidden_size
+        self.has_bias = bias
+        bound = 1.0 / _math.sqrt(hidden_size)
+        g = self.gates
+        self.weight_ih = Parameter(_rng.uniform(
+            -bound, bound, (g * hidden_size, input_size)).astype(_DEFAULT_DTYPE))
+        self.weight_hh = Parameter(_rng.uniform(
+            -bound, bound, (g * hidden_size, hidden_size)).astype(_DEFAULT_DTYPE))
+        if bias:
+            self.bias_ih = Parameter(
+                _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE))
+            self.bias_hh = Parameter(
+                _rng.uniform(-bound, bound, g * hidden_size).astype(_DEFAULT_DTYPE))
+
+    def _pre(self, x):
+        out = x @ self.weight_ih.transpose(0, 1)
+        return out + self.bias_ih if self.has_bias else out
+
+    def _zeros(self, x):
+        return zeros(x.data.shape[0], self.hidden_size)
+
+    def __repr__(self):
+        tail = "" if self.has_bias else ", bias=False"
+        return f"{type(self).__name__}({self.input_size}, {self.hidden_size}{tail})"
+
+
+class RNNCell(RNNCellBase):
+    gates = 1
+
+    def __init__(self, input_size, hidden_size, bias=True, nonlinearity="tanh"):
+        if nonlinearity not in ("tanh", "relu"):
+            raise ValueError("nonlinearity 는 'tanh' 나 'relu' 여야 합니다.")
+        self.nonlinearity = nonlinearity
+        super().__init__(input_size, hidden_size, bias)
+
+    def forward(self, x, hx=None):
+        h = self._zeros(x) if hx is None else hx
+        z = self._pre(x) + h @ self.weight_hh.transpose(0, 1)
+        if self.has_bias:
+            z = z + self.bias_hh
+        return (tanh if self.nonlinearity == "tanh" else relu)(z)
+
+    def __repr__(self):
+        parts = f"{self.input_size}, {self.hidden_size}"
+        if not self.has_bias:
+            parts += ", bias=False"
+        if self.nonlinearity != "tanh":
+            parts += f", nonlinearity={self.nonlinearity}"
+        return f"RNNCell({parts})"
+
+
+class GRUCell(RNNCellBase):
+    """게이트 셋. **`weight_ih` 안의 순서가 `r, z, n` 이다** — 바꾸면 값만 갈린다."""
+
+    gates = 3
+
+    def forward(self, x, hx=None):
+        h = self._zeros(x) if hx is None else hx
+        H = self.hidden_size
+        pre = self._pre(x)
+        hh = h @ self.weight_hh.transpose(0, 1)
+        if self.has_bias:
+            hh = hh + self.bias_hh
+        r = sigmoid(pre[:, 0:H] + hh[:, 0:H])
+        z = sigmoid(pre[:, H:2 * H] + hh[:, H:2 * H])
+        n = tanh(pre[:, 2 * H:3 * H] + r * hh[:, 2 * H:3 * H])
+        return (1 - z) * n + z * h
+
+
+class LSTMCell(RNNCellBase):
+    """게이트 넷. **혼자 둘을 돌려준다** — `(h, c)` 다.
+
+    셋을 한 모양으로 두면 기억 칸이 사라지고, 그러면 값은 나오는데 학습이 안 된다.
+    `weight_ih` 안의 순서는 `i, f, g, o` 다.
+    """
+
+    gates = 4
+
+    def forward(self, x, hx=None):
+        h, c = (self._zeros(x), self._zeros(x)) if hx is None else hx
+        H = self.hidden_size
+        z = self._pre(x) + h @ self.weight_hh.transpose(0, 1)
+        if self.has_bias:
+            z = z + self.bias_hh
+        i = sigmoid(z[:, 0:H])
+        f = sigmoid(z[:, H:2 * H])
+        g = tanh(z[:, 2 * H:3 * H])
+        o = sigmoid(z[:, 3 * H:4 * H])
+        c = f * c + i * g
+        return o * tanh(c), c
+
+
+nn.RNNCellBase = RNNCellBase
+nn.RNNCell = RNNCell
+nn.GRUCell = GRUCell
+nn.LSTMCell = LSTMCell
+# `RNNBase` 는 `RNN`·`LSTM`·`GRU` 의 부모다. torch 에서도 직접 못 만든다(ValueError).
+nn.RNNBase = _RNNBase
+
+
 class MultiheadAttention(Module):
     """45일차에 짠 어텐션을 여러 관점으로 나눈 것.
 

@@ -832,6 +832,134 @@ export class Flatten extends Module {
   }
 }
 
+// ── 되풀이의 한 걸음 ────────────────────────────────────────────────────
+//
+// **이름이 층 쪽과 다르다.** 층은 `weight_ih_l0` 처럼 층 번호를 붙이고 셀은
+// `weight_ih` 다 — 셀에는 층이 없다. `stateDict` 열쇠가 그 이름이므로 틀리면
+// 체크포인트가 안 맞는다.
+//
+// 게이트 순서는 `Recurrent` 와 같은 것을 쓴다 — GRU 는 `r, z, n`, LSTM 은
+// `i, f, g, o` 다. 두 벌로 적으면 갈리는 날이 오고 그때 값만 조용히 틀린다.
+
+export class RNNCellBase extends Module {
+  readonly weightIh: Tensor;
+  readonly weightHh: Tensor;
+  readonly biasIh: Tensor | null;
+  readonly biasHh: Tensor | null;
+
+  constructor(readonly inputSize: number, readonly hidden: number,
+              gates: number, readonly hasBias = true) {
+    super();
+    const rows = hidden * gates;
+    const bound = 1 / Math.sqrt(Math.max(1, hidden));
+    this.weightIh = uniform([rows, inputSize], bound);
+    this.weightHh = uniform([rows, hidden], bound);
+    this.biasIh = hasBias ? uniform([rows], bound) : null;
+    this.biasHh = hasBias ? uniform([rows], bound) : null;
+    this.claim(this.weightIh, this.weightHh);
+    if (this.biasIh && this.biasHh) this.claim(this.biasIh, this.biasHh);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    const out: Record<string, Tensor> = {
+      weight_ih: this.weightIh, weight_hh: this.weightHh,
+    };
+    if (this.biasIh && this.biasHh) {
+      out["bias_ih"] = this.biasIh;
+      out["bias_hh"] = this.biasHh;
+    }
+    return out;
+  }
+
+  protected gi(x: Tensor): Tensor {
+    const out = x.linear(this.weightIh);
+    return this.biasIh ? out.add(this.biasIh) : out;
+  }
+
+  protected gh(h: Tensor): Tensor {
+    const out = h.linear(this.weightHh);
+    return this.biasHh ? out.add(this.biasHh) : out;
+  }
+
+  protected zeros(x: Tensor): Tensor {
+    return Tensor.zeros([x.shape[0] ?? 1, this.hidden]);
+  }
+
+  override forward(x: Tensor): Tensor { return x; }
+}
+
+export class RNNCell extends RNNCellBase {
+  constructor(inputSize: number, hidden: number, hasBias = true,
+              readonly nonlinearity: "tanh" | "relu" = "tanh") {
+    super(inputSize, hidden, 1, hasBias);
+  }
+
+  step(x: Tensor, hx: Tensor | null = null): Tensor {
+    const h = hx ?? this.zeros(x);
+    return this.gi(x).add(this.gh(h)).unary(this.nonlinearity);
+  }
+
+  override forward(x: Tensor): Tensor { return this.step(x); }
+
+  describe(): string {
+    let parts = `${this.inputSize}, ${this.hidden}`;
+    if (!this.hasBias) parts += ", bias=False";
+    if (this.nonlinearity !== "tanh") parts += `, nonlinearity=${this.nonlinearity}`;
+    return `RNNCell(${parts})`;
+  }
+}
+
+export class GRUCell extends RNNCellBase {
+  constructor(inputSize: number, hidden: number, hasBias = true) {
+    super(inputSize, hidden, 3, hasBias);
+  }
+
+  step(x: Tensor, hx: Tensor | null = null): Tensor {
+    const h = hx ?? this.zeros(x);
+    const H = this.hidden;
+    const gi = this.gi(x);
+    const gh = this.gh(h);
+    const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
+    const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
+    const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
+    return Tensor.full([], 1).sub(z).mul(n).add(z.mul(h));
+  }
+
+  override forward(x: Tensor): Tensor { return this.step(x); }
+
+  describe(): string {
+    return `GRUCell(${this.inputSize}, ${this.hidden}` +
+      `${this.hasBias ? "" : ", bias=False"})`;
+  }
+}
+
+/** **혼자 둘을 돌려준다** — `(h, c)` 다. 셋을 한 모양으로 두면 기억 칸이 사라진다. */
+export class LSTMCell extends RNNCellBase {
+  constructor(inputSize: number, hidden: number, hasBias = true) {
+    super(inputSize, hidden, 4, hasBias);
+  }
+
+  step(x: Tensor, hx: readonly [Tensor, Tensor] | null = null):
+      [Tensor, Tensor] {
+    const [h, c] = hx ?? [this.zeros(x), this.zeros(x)];
+    const H = this.hidden;
+    const g = this.gi(x).add(this.gh(h));
+    const i = slice(g, 0, H).unary("sigmoid");
+    const f = slice(g, 1, H).unary("sigmoid");
+    const gg = slice(g, 2, H).unary("tanh");
+    const o = slice(g, 3, H).unary("sigmoid");
+    const cell = f.mul(c).add(i.mul(gg));
+    return [o.mul(cell.unary("tanh")), cell];
+  }
+
+  override forward(x: Tensor): Tensor { return this.step(x)[0]; }
+
+  describe(): string {
+    return `LSTMCell(${this.inputSize}, ${this.hidden}` +
+      `${this.hasBias ? "" : ", bias=False"})`;
+  }
+}
+
 // ── 나머지 층 ───────────────────────────────────────────────────────────
 
 export class Unfold extends Module {

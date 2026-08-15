@@ -1354,6 +1354,122 @@ def opt_cases(inp=None):
     return cases
 
 
+CELL_PREFIX = "cell::"
+
+
+def cell_cases(inp=None):
+    """RNN 셀 셋 — 되풀이의 **한 걸음**.
+
+    `RNN`·`LSTM`·`GRU` 는 시간 축을 통째로 받는다. 셀은 한 걸음만 떼는 것이라, 시간
+    루프를 손으로 적고 싶은 코드(스케줄링·강제 교사·빔서치)가 이 이름을 부른다.
+
+    ## 이름이 층 쪽과 다르다
+
+    층은 `weight_ih_l0` 처럼 층 번호를 붙이고 셀은 `weight_ih` 다 — 셀에는 층이
+    없기 때문이다. `state_dict` 열쇠가 그 이름이므로 **틀리면 체크포인트가 안 맞는다.**
+
+    ## `LSTMCell` 만 둘을 돌려준다
+
+    `(h, c)` 다. `RNNCell`·`GRUCell` 은 `h` 하나다 — 셋을 한 모양으로 두면 LSTM 의
+    기억 칸이 사라지고, 그러면 값은 나오는데 학습이 안 된다.
+
+    ## 게이트 순서가 값의 전부다
+
+    `weight_ih` 가 `(3H, in)`·`(4H, in)` 인데 그 안의 순서가 규약이다 — GRU 는
+    `r, z, n` 이고 LSTM 은 `i, f, g, o` 다. 순서를 바꾸면 모양이 같고 값만 갈린다.
+    가중치를 못 박고 값을 묻는 이유가 그것이다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((CELL_PREFIX + name, fn))
+
+    x = np.array([[1., 2.]], dtype=np.float32)
+    h = np.array([[0.5, 0.5]], dtype=np.float32)
+    c0 = np.array([[0.2, 0.3]], dtype=np.float32)
+    eye = np.eye(2, dtype=np.float32)
+
+    def weights(L, gates, scale=0.5):
+        return {
+            "weight_ih": L.tensor(np.tile(eye, (gates, 1))),
+            "weight_hh": L.tensor(np.tile(eye, (gates, 1)) * scale),
+            "bias_ih": L.tensor(np.zeros(gates * 2, dtype=np.float32)),
+            "bias_hh": L.tensor(np.zeros(gates * 2, dtype=np.float32)),
+        }
+
+    def rnn_cell(L, nonlinearity="tanh"):
+        cell = L.nn.RNNCell(2, 2, nonlinearity=nonlinearity)
+        cell.load_state_dict(weights(L, 1))
+        return cell(L.tensor(x), L.tensor(h))
+
+    add("RNNCell", lambda L: rnn_cell(L))
+    add("RNNCell(relu)", lambda L: rnn_cell(L, "relu"))
+
+    def rnn_cell_no_hidden(L):
+        """**숨은 상태를 안 주면 0 에서 시작한다.** 첫 걸음이 그 모양이다."""
+        cell = L.nn.RNNCell(2, 2)
+        cell.load_state_dict(weights(L, 1))
+        return cell(L.tensor(x))
+
+    add("RNNCell(상태 없이)", rnn_cell_no_hidden)
+
+    def gru_cell(L):
+        cell = L.nn.GRUCell(2, 2)
+        cell.load_state_dict(weights(L, 3))
+        return cell(L.tensor(x), L.tensor(h))
+
+    add("GRUCell", gru_cell)
+
+    def lstm_cell(L, which):
+        cell = L.nn.LSTMCell(2, 2)
+        cell.load_state_dict(weights(L, 4))
+        out = cell(L.tensor(x), (L.tensor(h), L.tensor(c0)))
+        return out[0] if which == "h" else out[1]
+
+    add("LSTMCell/h", lambda L: lstm_cell(L, "h"))
+    add("LSTMCell/c", lambda L: lstm_cell(L, "c"))
+
+    def lstm_cell_no_state(L):
+        cell = L.nn.LSTMCell(2, 2)
+        cell.load_state_dict(weights(L, 4))
+        return cell(L.tensor(x))[0]
+
+    add("LSTMCell(상태 없이)", lstm_cell_no_state)
+
+    # ── 이름과 글자 ─────────────────────────────────────────────────────
+    add("state_dict 열쇠",
+        lambda L: ",".join(L.nn.RNNCell(3, 2).state_dict()))
+    add("state_dict 열쇠(bias 없이)",
+        lambda L: ",".join(L.nn.RNNCell(3, 2, bias=False).state_dict()))
+    for name in ("RNNCell", "GRUCell", "LSTMCell"):
+        add(f"repr::{name}", lambda L, c=name: repr(getattr(L.nn, c)(3, 2)))
+    add("repr::RNNCell(relu)",
+        lambda L: repr(L.nn.RNNCell(3, 2, nonlinearity="relu")))
+    add("repr::RNNCell(bias 없이)",
+        lambda L: repr(L.nn.RNNCell(3, 2, bias=False)))
+    for name, gates in (("RNNCell", 1), ("GRUCell", 3), ("LSTMCell", 4)):
+        add(f"모양::{name}",
+            lambda L, c=name: str(tuple(getattr(L.nn, c)(3, 2).weight_ih.shape)))
+
+    # ── 기울기 ──────────────────────────────────────────────────────────
+    def cell_grad(L, name, gates):
+        # **상태의 모양이 셀마다 다르다.** `LSTMCell` 만 `(h, c)` 짝을 받고 나머지는
+        # `h` 하나다 — 하나로 뭉뚱그리면 torch 가 그 자리에서 거절한다.
+        cell = getattr(L.nn, name)(2, 2)
+        cell.load_state_dict(weights(L, gates))
+        inp = L.tensor(x, requires_grad=True)
+        state = ((L.tensor(h), L.tensor(c0)) if name == "LSTMCell"
+                 else L.tensor(h))
+        out = cell(inp, state)
+        out = out[0] if name == "LSTMCell" else out
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(inp, name)
+
+    for name, gates in (("RNNCell", 1), ("GRUCell", 3), ("LSTMCell", 4)):
+        add(f"grad::{name}", lambda L, c=name, g=gates: cell_grad(L, c, g))
+    return cases
+
+
 MISC_PREFIX = "misc::"
 
 
@@ -4437,7 +4553,7 @@ def golden_cases(inp=None):
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
-            + shuffle_cases(inp) + misc_cases(inp)
+            + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
