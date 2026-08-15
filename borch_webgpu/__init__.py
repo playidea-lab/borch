@@ -6,7 +6,7 @@
 
 전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
 원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **2,977 줄**이다 — borch.ts 에 그것이 이미 다
+다시 구현해야 했기 때문이다. 이쪽은 **3,210 줄**이다 — borch.ts 에 그것이 이미 다
 있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
 
 `_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
@@ -70,6 +70,11 @@ from ._ops import (                                      # noqa: E402,F401
     ones, pow,
     quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
     sum, swapdims, transpose, where, zeros,
+    # torch 가 두 번째 이름으로 주는 것들 — 조합에 이름만 붙인다.
+    add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,
+    column_stack, concat, concatenate, div, divide, dstack, floor_divide, fmod,
+    hstack, moveaxis, mul, multiply, remainder, row_stack, rsub, sub, subtract, t,
+    true_divide, vstack,
 )
 from ._ops import (                                      # noqa: E402,F401
     Generator, manual_seed, randint, randperm,

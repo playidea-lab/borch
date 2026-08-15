@@ -1265,6 +1265,59 @@ function addModFn(out: Map<string, Case>, inp: Inputs): void {
     t.inplaceUnary("relu");
     return t;
   });
+
+  // ── 파이썬 쪽에서 `torch.add(a, b)` 처럼 부르는 **두 번째 이름들.** ────────
+  //
+  // TypeScript 에는 그 두 번째 이름이 없다 — 메서드가 유일한 부르는 법이고, 자유
+  // 함수를 나란히 두면 표면만 는다. 여기서는 **같은 답을 메서드로** 낸다.
+  const a2 = (): Tensor => inp.get("x2");
+  const b2 = (): Tensor => a2().mul(Tensor.full([], 0.5)).add(Tensor.full([], 1));
+  const line = (): Tensor => inp.get("x1").narrow(0, 0, 4);
+  const neg = (): Tensor => Tensor.from([-5, -3, 3, 5], [1, 4]);
+  const three = (): Tensor => Tensor.full([], 3);
+
+  const aliases: [string, () => Tensor][] = [
+    ["add", () => a2().add(b2())],
+    ["add(alpha)", () => a2().add(b2().mul(Tensor.full([], 2)))],
+    ["sub", () => a2().sub(b2())],
+    ["mul", () => a2().mul(b2())],
+    ["div", () => a2().div(b2())],
+    ["div(floor)", () => a2().div(b2()).unary("floor")],
+    ["rsub", () => b2().sub(a2())],
+    // **`remainder` 와 `fmod` 는 음수에서 갈린다** — 부호가 반대쪽을 따른다.
+    ["remainder(음수)", () => neg().sub(neg().div(three()).unary("floor").mul(three()))],
+    ["fmod(음수)", () => neg().sub(neg().div(three()).unary("trunc").mul(three()))],
+    ["floor_divide(음수)", () => neg().div(three()).unary("floor")],
+    ["greater", () => a2().binary("gt", b2())],
+    ["greater_equal", () => a2().binary("ge", b2())],
+    ["less", () => a2().binary("lt", b2())],
+    ["less_equal", () => a2().binary("le", b2())],
+    ["not_equal", () => a2().binary("ne", b2())],
+    ["hstack(1차원)", () => Tensor.cat([line(), line()], 0)],
+    ["hstack(2차원)", () => Tensor.cat([a2(), b2()], 1)],
+    ["vstack(1차원)", () => Tensor.cat([line().reshape([1, 4]), line().reshape([1, 4])], 0)],
+    ["column_stack(1차원)",
+      () => Tensor.cat([line().reshape([4, 1]), line().reshape([4, 1])], 1)],
+    // **`dstack` 은 뒤에 축을 붙인다** — 앞이 아니다.
+    ["dstack", () => Tensor.cat([a2().reshape([3, 4, 1]), b2().reshape([3, 4, 1])], 2)],
+    ["concat", () => Tensor.cat([a2(), b2()], 0)],
+    ["t(2차원)", () => a2().transpose()],
+    ["t(1차원은 그대로)", () => line()],
+    ["adjoint", () => a2().transpose()],
+    ["moveaxis", () => a2().movedim(0, 1)],
+    ["broadcast_to", () => line().reshape([1, 4]).expand(3, 4)],
+    ["broadcast_tensors", () => line().reshape([1, 4]).expand(3, 4)],
+  ];
+  for (const [name, fn] of aliases) out.set(`modfn::${name}`, fn);
+
+  // 대각선에 블록을 늘어놓고 나머지는 0.
+  out.set("modfn::block_diag", () => {
+    const a = a2();
+    const b = b2().narrow(0, 0, 1);
+    const top = Tensor.cat([a, Tensor.zeros([3, 4])], 1);
+    const bottom = Tensor.cat([Tensor.zeros([1, 4]), b], 1);
+    return Tensor.cat([top, bottom], 0);
+  });
 }
 
 /**

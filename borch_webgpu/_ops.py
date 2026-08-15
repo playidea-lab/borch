@@ -11,12 +11,13 @@
 이름 규칙 하나만 다르다. 파이썬은 `masked_select`, JS 는 `maskedSelect` 다.
 """
 
+import builtins                    # `max`·`sum` 을 이름 가림 없이 부르려고
 import numpy as _np
 
 import js as _js
 from pyodide.ffi import to_js as _to_js
 
-from ._base import Tensor, _js_list, guarded, handle, settle, wrap
+from ._base import Tensor, _js_list, _Size, guarded, handle, settle, wrap
 
 _ts = _js.borch
 
@@ -264,6 +265,9 @@ def __getattr__(name):
     # `max`·`min` 도 같은 이유로 여기서 준다 — 위에 적은 그대로다.
     if name in _EXTREME:
         return _EXTREME[name]
+    # 비교의 다른 이름들 — 표에 있는 이름으로 넘긴다.
+    if name in _COMPARE_ALIAS:
+        return __getattr__(_COMPARE_ALIAS[name])
     js_name = camel(name)
 
     if name in _BINARY_ONLY:
@@ -629,6 +633,187 @@ def transpose(x, dim0=None, dim1=None, **kw):
 
 def swapdims(x, dim0=None, dim1=None, **kw):
     return transpose(x, dim0, dim1, **kw)
+
+
+# ── torch 가 **두 번째 이름**으로 주는 것들 ─────────────────────────────────
+#
+# 전부 이미 있는 것의 조합이다. borch.ts 쪽에 이름을 늘리지 않는다 — 계산이 늘어나는
+# 것이 아니라 파이썬 코드가 부르는 철자가 늘어나는 것이라, 파이썬 쪽 일이다.
+
+def add(a, b, alpha=1, **kw):
+    """`a + alpha·b`. **`alpha` 가 연산자에 없어서** 별칭이 아니라 함수다."""
+    alpha = kw.get("alpha", alpha)
+    return wrap(a) + (b if alpha == 1 else wrap(b) * alpha)
+
+
+def sub(a, b, alpha=1, **kw):
+    alpha = kw.get("alpha", alpha)
+    return wrap(a) - (b if alpha == 1 else wrap(b) * alpha)
+
+
+def mul(a, b, **kw):
+    return wrap(a) * b
+
+
+def div(a, b, rounding_mode=None, **kw):
+    mode = kw.get("rounding_mode", rounding_mode)
+    out = wrap(a) / b
+    if mode is None:
+        return out
+    if mode == "floor":
+        return wrap(guarded(handle(out).unary, "floor"))
+    if mode == "trunc":
+        return wrap(guarded(handle(out).unary, "trunc"))
+    raise RuntimeError(f"rounding_mode 는 None·'floor'·'trunc' 뿐이다: {mode!r}")
+
+
+def floor_divide(a, b, **kw):
+    return div(a, b, rounding_mode="floor")
+
+
+def remainder(a, b, **kw):
+    """**부호가 나누는 쪽을 따른다.** `fmod` 와 갈리는 자리가 그것이다."""
+    a, b = wrap(a), wrap(b)
+    return a - wrap(guarded(handle(a / b).unary, "floor")) * b
+
+
+def fmod(a, b, **kw):
+    """**부호가 나뉘는 쪽을 따른다.** C 의 규칙이고 `remainder` 와 반대다."""
+    a, b = wrap(a), wrap(b)
+    return a - wrap(guarded(handle(a / b).unary, "trunc")) * b
+
+
+def rsub(a, b, alpha=1, **kw):
+    return sub(b, a, alpha)
+
+
+def t(x, **kw):
+    """2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다."""
+    h = handle(x)
+    return wrap(h) if len(h.shape) < 2 else transpose(x, 0, 1)
+
+
+def adjoint(x, **kw):
+    return transpose(x, -2, -1)
+
+
+def moveaxis(x, source, destination, **kw):
+    return wrap(guarded(handle(x).movedim, source, destination))
+
+
+def broadcast_to(x, shape, **kw):
+    """borch.ts 쪽 이름은 `expand` 다 — 축을 **흩어서** 받는다."""
+    return wrap(guarded(handle(x).expand, *[int(n) for n in shape]))
+
+
+def _broadcast_shape(shapes):
+    """오른쪽 맞춤으로 축마다 큰 쪽을 고른다 — numpy 와 같은 규칙이다."""
+    rank = builtins.max(len(s) for s in shapes)
+    out = []
+    for i in range(rank):
+        size = 1
+        for s in shapes:
+            got = s[i - rank + len(s)] if i - rank + len(s) >= 0 else 1
+            if got != 1:
+                size = got
+        out.append(size)
+    return tuple(out)
+
+
+def broadcast_shapes(*shapes):
+    return _Size(_broadcast_shape([tuple(s) for s in shapes]))
+
+
+def broadcast_tensors(*tensors):
+    shape = _broadcast_shape([tuple(int(n) for n in handle(v).shape) for v in tensors])
+    return tuple(broadcast_to(v, shape) for v in tensors)
+
+
+def hstack(tensors, **kw):
+    """1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다."""
+    ts = list(tensors)
+    dim = 0 if len(handle(ts[0]).shape) == 1 else 1
+    return cat(ts, dim)
+
+
+def _lift(x, rank):
+    """모자란 앞축을 1 로 채운다. `atleast_2d`·`atleast_3d` 가 하는 일이다."""
+    h = handle(x)
+    shape = [int(n) for n in h.shape]
+    if len(shape) >= rank:
+        return wrap(h)
+    return wrap(guarded(h.reshape, _js_list([1] * (rank - len(shape)) + shape)))
+
+
+def vstack(tensors, **kw):
+    return cat([_lift(v, 2) for v in tensors], 0)
+
+
+def _atleast3(x):
+    """torch 의 `atleast_3d`. **뒤에 축을 붙인다** — 앞이 아니다.
+
+    1 차원 `(n,)` 은 `(1, n, 1)` 이 되고 2 차원 `(m, n)` 은 `(m, n, 1)` 이다. 앞에만
+    채우면 `(1, 3, 4)` 가 되어 `dstack` 이 세 번째 축이 아니라 마지막 축으로 붙는다 —
+    모양이 `(1, 3, 8)` 로 나와서 걸렸다.
+    """
+    h = handle(x)
+    shape = [int(n) for n in h.shape]
+    if len(shape) >= 3:
+        return wrap(h)
+    if len(shape) == 2:
+        shape = shape + [1]
+    elif len(shape) == 1:
+        shape = [1] + shape + [1]
+    else:
+        shape = [1, 1, 1]
+    return wrap(guarded(h.reshape, _js_list(shape)))
+
+
+def dstack(tensors, **kw):
+    return cat([_atleast3(v) for v in tensors], 2)
+
+
+def column_stack(tensors, **kw):
+    """1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다."""
+    ts = []
+    for v in tensors:
+        h = handle(v)
+        shape = [int(n) for n in h.shape]
+        ts.append(wrap(guarded(h.reshape, _js_list([shape[0], 1])))
+                  if len(shape) == 1 else wrap(h))
+    return cat(ts, 1)
+
+
+def block_diag(*tensors):
+    """대각선에 블록을 늘어놓고 나머지는 0."""
+    ts = [_lift(v, 2) for v in tensors]
+    widths = [int(handle(v).shape[1]) for v in ts]
+    total = builtins.sum(widths)
+    lines, at = [], 0
+    for v, w in zip(ts, widths):
+        h = int(handle(v).shape[0])
+        pieces = []
+        if at:
+            pieces.append(zeros(h, at))
+        pieces.append(v)
+        if total - at - w:
+            pieces.append(zeros(h, total - at - w))
+        lines.append(cat(pieces, 1) if len(pieces) > 1 else v)
+        at += w
+    return cat(lines, 0) if len(lines) > 1 else lines[0]
+
+
+row_stack = vstack
+multiply = mul
+divide = div
+subtract = sub
+true_divide = div
+concat = cat
+concatenate = cat
+
+# 비교의 다른 이름들. 표에 있는 이름으로 넘긴다.
+_COMPARE_ALIAS = {"greater": "gt", "greater_equal": "ge",
+                  "less": "lt", "less_equal": "le", "not_equal": "ne"}
 
 
 def where(cond, a, b):

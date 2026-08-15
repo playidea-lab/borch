@@ -9,7 +9,7 @@ from ._tensor import (
     Tensor, _MinMax, _grad_mode, _unbroadcast,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _math, _np, _resolve, _unsupported, dtype,
+    _DEFAULT_DTYPE, _math, _np, _resolve, _unsupported, Size, dtype,
 )
 
 # ---------------------------------------------------------------- 만들기
@@ -1082,6 +1082,158 @@ def expand(t, *sizes):
 
 def expand_as(t, other):
     return expand(t, *_wrap(other).data.shape)
+
+
+# ── torch 가 **두 번째 이름**으로 주는 것들 ─────────────────────────────────
+#
+# `a + b` 는 되는데 `torch.add(a, b)` 가 없었다. 교재는 둘 다 쓰고, 없는 쪽을 만난
+# 코드는 거기서 멈춘다. 연산자가 이미 하는 일이라 새로 계산할 것은 없고 **이름만**
+# 필요하다 — 그런데 이름이 없으면 그 코드는 안 돈다.
+#
+# `alpha`·`rounding_mode` 처럼 연산자에 없는 인자가 붙는 자리가 있어서 그냥 별칭으로
+# 못 두고 한 겹 감싼다.
+
+def add(a, b, alpha=1):
+    """`a + alpha·b`. **`alpha` 가 연산자에는 없다** — 그래서 별칭이 아니라 함수다."""
+    return _wrap(a) + (b if alpha == 1 else _wrap(b) * alpha)
+
+
+def sub(a, b, alpha=1):
+    return _wrap(a) - (b if alpha == 1 else _wrap(b) * alpha)
+
+
+def mul(a, b):
+    return _wrap(a) * b
+
+
+def div(a, b, rounding_mode=None):
+    """`rounding_mode` 는 셋이다 — 없으면 참나눗셈, `'floor'`·`'trunc'` 는 정수 쪽."""
+    out = _wrap(a) / b
+    if rounding_mode is None:
+        return out
+    if rounding_mode == "floor":
+        return out.floor()
+    if rounding_mode == "trunc":
+        return out.trunc()
+    raise RuntimeError(f"rounding_mode 는 None·'floor'·'trunc' 뿐입니다: {rounding_mode!r}")
+
+
+def floor_divide(a, b):
+    return div(a, b, rounding_mode="floor")
+
+
+def remainder(a, b):
+    """**부호가 나누는 쪽을 따른다.** `fmod` 와 갈리는 자리가 그것이다."""
+    return _wrap(a) % b
+
+
+def fmod(a, b):
+    """**부호가 나뉘는 쪽을 따른다.** C 의 `fmod` 규칙이고 `remainder` 와 반대다."""
+    a, b = _wrap(a), _wrap(b)
+    return a - (a / b).trunc() * b
+
+
+def rsub(a, b, alpha=1):
+    return sub(b, a, alpha)
+
+
+multiply = mul
+divide = div
+subtract = sub
+true_divide = div
+
+greater = gt
+greater_equal = ge
+less = lt
+less_equal = le
+not_equal = ne
+
+
+def t(x):
+    """2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다."""
+    x = _wrap(x)
+    return x if len(x.data.shape) < 2 else x.transpose(0, 1)
+
+
+def adjoint(x):
+    """마지막 두 축을 바꾼다. 실수만 있으므로 켤레는 항등이다."""
+    return _wrap(x).transpose(-2, -1)
+
+
+def moveaxis(t, source, destination):
+    """`movedim` 의 다른 이름. **별칭으로 못 둔다** — `movedim` 이 이 아래에 있다."""
+    return movedim(t, source, destination)
+
+
+concat = cat
+concatenate = cat
+
+
+def broadcast_to(x, shape):
+    return expand(_wrap(x), *shape)
+
+
+def broadcast_tensors(*tensors):
+    """전부를 공통 모양으로 늘린다. 모양 계산은 numpy 에 맡긴다."""
+    ts = [_wrap(v) for v in tensors]
+    shape = _np.broadcast_shapes(*[v.data.shape for v in ts])
+    return tuple(broadcast_to(v, shape) for v in ts)
+
+
+def broadcast_shapes(*shapes):
+    return Size(_np.broadcast_shapes(*shapes))
+
+
+def _stack_along(items, dim, lift):
+    """쌓기 넷이 나눠 쓰는 몸통. **어느 축으로 붙이고 몇 차원으로 올리느냐**만 다르다."""
+    ts = [lift(_wrap(v)) for v in items]
+    return cat(ts, dim)
+
+
+def hstack(tensors):
+    """1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다 — torch 가 그렇게 가른다."""
+    ts = [_wrap(v) for v in tensors]
+    dim = 0 if len(ts[0].data.shape) == 1 else 1
+    return cat(ts, dim)
+
+
+def vstack(tensors):
+    return _stack_along(tensors, 0, atleast_2d)
+
+
+def dstack(tensors):
+    return _stack_along(tensors, 2, atleast_3d)
+
+
+def column_stack(tensors):
+    """1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다."""
+    ts = []
+    for v in tensors:
+        v = _wrap(v)
+        ts.append(v.reshape(v.data.shape[0], 1) if len(v.data.shape) == 1 else v)
+    return cat(ts, 1)
+
+
+row_stack = vstack
+
+
+def block_diag(*tensors):
+    """대각선에 블록을 늘어놓고 나머지는 0. **0 으로 메우므로 그쪽에는 기울기가 없다.**"""
+    ts = [atleast_2d(_wrap(v)) for v in tensors]
+    rows = sum(v.data.shape[0] for v in ts)
+    cols = sum(v.data.shape[1] for v in ts)
+    lines, at = [], 0
+    for v in ts:
+        h, w = v.data.shape
+        pieces = []
+        if at:
+            pieces.append(zeros(h, at))
+        pieces.append(v)
+        if cols - at - w:
+            pieces.append(zeros(h, cols - at - w))
+        lines.append(cat(pieces, 1) if len(pieces) > 1 else v)
+        at += w
+    return cat(lines, 0) if len(lines) > 1 else lines[0]
 
 
 def repeat(t, *reps):

@@ -832,6 +832,52 @@ def module_function_cases(inp=None):
         return t
 
     add("relu_(원본이 바뀐다)", inplace)
+
+    # ── torch 가 **두 번째 이름**으로 주는 것들. ────────────────────────────
+    #
+    # `a + b` 는 되는데 `torch.add(a, b)` 가 없었다. 계산이 아니라 이름이 없어서
+    # 안 도는 자리이고, 그런 자리는 값 대조로만 있는지 없는지가 드러난다.
+    a2 = x2
+    b2 = (x2 * 0.5 + 1.0).astype(np.float32)
+    add("add", lambda L: L.add(L.tensor(a2), L.tensor(b2)))
+    # **`alpha` 는 연산자에 없다** — 별칭으로 두면 이 자리가 조용히 빠진다.
+    add("add(alpha)", lambda L: L.add(L.tensor(a2), L.tensor(b2), alpha=2.0))
+    add("sub", lambda L: L.sub(L.tensor(a2), L.tensor(b2)))
+    add("mul", lambda L: L.mul(L.tensor(a2), L.tensor(b2)))
+    add("div", lambda L: L.div(L.tensor(a2), L.tensor(b2)))
+    add("div(floor)",
+        lambda L: L.div(L.tensor(a2), L.tensor(b2), rounding_mode="floor"))
+    add("rsub", lambda L: L.rsub(L.tensor(a2), L.tensor(b2)))
+    # **`remainder` 와 `fmod` 는 음수에서 갈린다** — 부호가 반대쪽을 따른다.
+    neg = np.array([[-5., -3., 3., 5.]], dtype=np.float32)
+    add("remainder(음수)",
+        lambda L: L.remainder(L.tensor(neg), L.tensor(np.float32(3.0))))
+    add("fmod(음수)", lambda L: L.fmod(L.tensor(neg), L.tensor(np.float32(3.0))))
+    add("floor_divide(음수)",
+        lambda L: L.floor_divide(L.tensor(neg), L.tensor(np.float32(3.0))))
+
+    for name in ("greater", "greater_equal", "less", "less_equal", "not_equal"):
+        add(name, lambda L, n=name: getattr(L, n)(L.tensor(a2), L.tensor(b2)))
+
+    # 쌓기 넷. **1 차원과 2 차원에서 규칙이 갈린다.**
+    line = x1[:4]
+    add("hstack(1차원)", lambda L: L.hstack([L.tensor(line), L.tensor(line)]))
+    add("hstack(2차원)", lambda L: L.hstack([L.tensor(a2), L.tensor(b2)]))
+    add("vstack(1차원)", lambda L: L.vstack([L.tensor(line), L.tensor(line)]))
+    add("column_stack(1차원)",
+        lambda L: L.column_stack([L.tensor(line), L.tensor(line)]))
+    add("dstack", lambda L: L.dstack([L.tensor(a2), L.tensor(b2)]))
+    add("concat", lambda L: L.concat([L.tensor(a2), L.tensor(b2)], 0))
+    add("block_diag", lambda L: L.block_diag(L.tensor(a2), L.tensor(b2[:1])))
+
+    add("t(2차원)", lambda L: L.t(L.tensor(a2)))
+    add("t(1차원은 그대로)", lambda L: L.t(L.tensor(line)))
+    add("adjoint", lambda L: L.adjoint(L.tensor(a2)))
+    add("moveaxis", lambda L: L.moveaxis(L.tensor(a2), 0, 1))
+    add("broadcast_to", lambda L: L.broadcast_to(L.tensor(line).reshape(1, 4), (3, 4)))
+    add("broadcast_tensors",
+        lambda L: L.broadcast_tensors(L.tensor(line).reshape(1, 4),
+                                      L.tensor(x1[:3]).reshape(3, 1))[0])
     return cases
 
 

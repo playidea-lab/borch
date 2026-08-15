@@ -72,6 +72,11 @@ from ._ops import (
     split, sqrt, square, stack, svd, swapaxes, swapdims, tan, tanh, tensor, tile, topk,
     trace, tril, triu, trunc, unbind, unflatten, unfold, unique, unsqueeze, vsplit,
     where, xlogy, zeros, zeros_like,
+    # torch 가 두 번째 이름으로 주는 것들 — 연산자가 하는 일에 이름만 붙인다.
+    add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,
+    column_stack, concat, concatenate, div, divide, dstack, floor_divide, fmod,
+    greater, greater_equal, hstack, less, less_equal, moveaxis, mul, multiply,
+    not_equal, remainder, row_stack, rsub, sub, subtract, t, true_divide, vstack,
 )
 from ._nn import (
     AdaptiveAvgPool2d, AvgPool2d, BCELoss, BCEWithLogitsLoss, BatchNorm1d, BatchNorm2d,
@@ -154,6 +159,20 @@ def _where_method(self, condition, other):
 
 
 Tensor.where = _where_method
+
+
+# ── `nn.functional` 에 있는 것 중 **torch 가 최상위에도 두는 것들.** ──────────
+#
+# torch 는 층 관련 함수를 대개 `F.` 아래에만 두는데, 일부는 `torch.` 에도 둔다.
+# 어느 쪽인지는 규칙이 아니라 그쪽의 이력이라 **물어봐서 알아야 한다** —
+# `tests/torch_gap.py` 가 그 목록을 낸다.
+#
+# 물건은 이미 다 있고 이름만 없었다. 이름이 없으면 그 코드는 안 돈다.
+for _name in ("conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
+              "group_norm", "instance_norm", "rms_norm",
+              "celu", "selu", "prelu", "hardshrink", "threshold",
+              "avg_pool1d", "adaptive_avg_pool1d", "adaptive_max_pool1d"):
+    globals()[_name] = getattr(nn.functional, _name)
 
 
 # ── 메서드를 **모듈 함수로도** 낸다. `_AS_METHOD` 의 정확히 반대 방향이다. ──────
