@@ -67,43 +67,6 @@ from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 # 보이는 이름은 torch 의 것이다 — 골든이 `torch.float32` 를 답으로 굳혔다.
 from ._base import _DType                                # noqa: E402
 
-def install(name="torch", modules=None):
-    """`import <name>` 이 이것을 집게 한다. **`borch` 로도 심을 수 있다.**
-
-        import borch_ts
-        borch_ts.install("borch")        # 이 줄 아래로는
-        import borch as torch            # 코어가 아니라 이쪽이 온다
-
-    ## 왜 자동이 아닌가
-
-    `borch` 는 numpy 코어의 이름이다. 브라우저에서 그것을 말없이 이쪽으로 바꾸면
-    **같은 코드가 다른 것을 뜻하게 되고 아무도 안 알려준다.** 둘은 일부러 다른
-    자리가 있다 — 이쪽은 float64 가 없고(WebGPU 셰이더에 배정도가 없다) 뷰를 통한
-    제자리 전파를 거절한다. 골든이 그 갈림을 케이스로 붙잡고 있는데, 이름이 조용히
-    바뀌면 그 케이스들이 무엇을 지키는지가 사라진다.
-
-    그래서 한 줄로 **고르게** 한다. 고르고 나면 그 아래 코드는 손댈 것이 없다.
-
-    코어의 `install()` 과 같은 모양이고 같은 이유다 — 하위 모듈 경로(`torch.nn`,
-    `torch.optim.lr_scheduler`)를 손으로 적으면 어긋난다. 코어는 실제로 어긋나서
-    `from torch.optim.lr_scheduler import StepLR` 이 교재 본문에서 멈춘 적이 있다.
-    """
-    import sys
-
-    modules = sys.modules if modules is None else modules
-    modules[name] = sys.modules[__name__]
-    registered = [name]
-    for path, mod in (("nn", nn), ("optim", optim),
-                      ("nn.functional", nn.functional),
-                      ("nn.utils", nn.utils), ("nn.utils.rnn", nn.utils.rnn),
-                      ("optim.lr_scheduler", optim.lr_scheduler),
-                      ("linalg", linalg)):
-        full = f"{name}.{path}"
-        modules[full] = mod
-        registered.append(full)
-    return registered
-
-
 float32 = _DType("float32")
 int64 = _DType("int64")
 # **`bool` 은 모듈 전역에 두지 않는다.** 파이썬 내장을 가려서 `isinstance(x, bool)` 이
