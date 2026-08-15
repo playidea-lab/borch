@@ -89,6 +89,13 @@ _SIGNATURE = {
     # `qr(mode="complete")` 가 축소본을, `svd(full_matrices=False)` 가 완전본을 낸다.
     "qr": ("mode",),
     "svd": ("full_matrices",),
+    # 조합층의 이름 붙은 인자들.
+    "vector_norm": ("ord", "dim"),
+    "matrix_norm": ("ord",),
+    "vander": ("N",),
+    "vecdot": ("other", "dim"),
+    "eigvalsh": ("UPLO",),
+    "solve_triangular": ("b", "upper", "left", "unitriangular"),
     # 정규화·전치 합성곱. borch.ts 쪽 인자 순서다.
     "group_norm": ("num_groups", "eps"),
     "instance_norm": ("eps",),
@@ -1306,11 +1313,38 @@ class _Linalg:
     def matrix_power(self, a, n):
         return matrix_power(a, n)
 
+    def multi_dot(self, mats):
+        """**첫 인자가 텐서가 아니라 목록이다** — 아래의 일반 길로 못 간다.
+
+        묶는 순서는 값을 안 바꾼다(곱셈이 결합적이라). 바뀌는 것은 셈의 개수뿐이라
+        여기서는 순서대로 곱한다.
+        """
+        out = wrap(mats[0])
+        for m in mats[1:]:
+            out = wrap(guarded(handle(out).mm, handle(m)))
+        return out
+
+    def diagonal(self, a, offset=0, dim1=-2, dim2=-1):
+        """**`torch.diagonal` 과 기본 축이 다르다.**
+
+        이쪽은 마지막 두 축이고 저쪽은 앞의 두 축이다. 일반 길로 보내면 borch.ts 의
+        기본값(`0, 1`)이 쓰여서 3 차원에서 조용히 다른 모양이 나온다.
+        """
+        return wrap(guarded(handle(a).diagonal, offset, dim1, dim2))
+
+    def tensorsolve(self, a, b, dims=None):
+        if dims is not None:
+            raise RuntimeError("tensorsolve(dims) 는 아직 없다")
+        return wrap(guarded(handle(a).tensorSolve, handle(b)))
+
+    def tensorinv(self, a, ind=2):
+        return wrap(guarded(handle(a).tensorInv, ind))
+
     def __getattr__(self, name):
         # torch 가 줄여 부르는 것들. `pinv` 는 오래 비어 있었는데 골든이 늘 긴 이름
         # (`L.pinverse`)으로만 물어서 안 드러났다 — 부르는 철자가 하나 늘자 나왔다.
         js_name = camel({"inv": "inverse", "pinv": "pinverse",
-                         "matrix_rank": "matrixRank"}.get(name, name))
+                         "matmul": "mm", "matrix_rank": "matrixRank"}.get(name, name))
 
         def call(x, *args, **kw):
             fn = getattr(handle(x), js_name, None)

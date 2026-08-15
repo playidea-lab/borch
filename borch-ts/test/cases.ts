@@ -2147,6 +2147,91 @@ function addLinalgStruct(out: Map<string, Case>): void {
       });
     }
   }
+  addLinalgNames(out);
+}
+
+/**
+ * `linalg` 의 조합층 — 있는 것에 이름을 붙이는 자리와, 갈래가 있는 노름.
+ *
+ * 계산이 새로 필요한 것은 `matrixExp` 하나뿐이다. 나머지는 조합인데, **조합이
+ * 자명하지 않은 자리**가 셋 있다: 노름의 갈래, `diagonal` 의 축, `eigh` 가 한쪽
+ * 삼각만 읽는다는 것. 셋 다 파이썬 쪽 주석에 이유를 적었다.
+ */
+function addLinalgNames(out: Map<string, Case>): void {
+  const mat = () => Tensor.from([4, 1, 2, 3], [2, 2]);
+  const sym = () => Tensor.from([4, 1, 1, 3], [2, 2]);
+  const sym3 = () => Tensor.from(LA_SYM3, [3, 3]);
+  const rect = () => Tensor.from(LA_RECT, [3, 2]);
+  const vec3 = () => Tensor.from([3, -4, 0], [3]);
+  const upper = () => Tensor.from([2, 1, 0, 3], [2, 2]);
+  const cube = () => Tensor.arange(24).reshape([2, 3, 4]);
+  // 위쪽에 99 를 넣어도 답이 안 바뀌어야 한다 — 아래 삼각만 읽는지 묻는 자리.
+  const skew = () => Tensor.from([4, 99, 1, 3], [2, 2]);
+
+  const value: [string, () => Promise<Tensor>][] = [
+    ["name2::matmul", async () => mat().mm(mat())],
+    ["name2::vecdot", async () => mat().vecdot(mat())],
+    ["name2::cross", async () => Tensor.from([1, 2, 3], [3])
+      .cross(Tensor.from([4, 5, 6], [3]))],
+    ["name2::svdvals", async () => mat().svdvals()],
+    ["name2::svdvals(직사각)", async () => rect().svdvals()],
+    ["name2::eigvalsh", async () => sym().eigvalsh()],
+    ["name2::eigvalsh(3x3)", async () => sym3().eigvalsh()],
+    ["name2::eigvalsh(아래삼각만)", async () => skew().eigvalsh()],
+    ["name2::eigh(아래삼각만)/값", async () => (await skew().eigh()).values],
+
+    ["name2::linalg.diagonal", async () => cube().diagonal(0, -2, -1)],
+    ["name2::torch.diagonal(다른 축)", async () => cube().diagonal(0, 0, 1)],
+    ["name2::linalg.diagonal(offset)", async () => mat().diagonal(1, -2, -1)],
+
+    ["name2::vector_norm", async () => vec3().vectorNorm()],
+    ["name2::vector_norm(행렬을 통째로)", async () => mat().vectorNorm()],
+    ["name2::vector_norm(dim)", async () => mat().vectorNorm(2, 1)],
+
+    ["name2::multi_dot", async () => mat().mm(mat()).mm(mat())],
+    ["name2::multi_dot(둘)", async () => mat().mm(mat())],
+    ["name2::vander", async () => Tensor.from([1, 2, 3], [3]).vander()],
+    ["name2::vander(N)", async () => Tensor.from([2, 3], [2]).vander(4)],
+    ["name2::solve_triangular(위)",
+      async () => upper().solveTriangular(Tensor.from([1, 3], [2, 1]), true)],
+    ["name2::solve_triangular(아래)",
+      async () => Tensor.from([2, 0, 1, 3], [2, 2])
+        .solveTriangular(Tensor.from([1, 2], [2, 1]), false)],
+    ["name2::solve_triangular(단위대각)",
+      async () => upper().solveTriangular(Tensor.from([1, 3], [2, 1]), true, true, true)],
+    ["name2::tensorsolve", async () => Tensor.eye(4).reshape([2, 2, 2, 2])
+      .tensorSolve(Tensor.from([1, 2, 3, 4], [2, 2]))],
+    ["name2::tensorinv", async () => Tensor.eye(4).reshape([2, 2, 2, 2]).tensorInv(2)],
+
+    ["name2::matrix_exp(멱영)",
+      async () => Tensor.from([0, 1, 0, 0], [2, 2]).matrixExp()],
+    ["name2::matrix_exp", async () => mat().matrixExp()],
+    ["name2::matrix_exp(큰 값)",
+      async () => Tensor.from([20, 5, 10, 15], [2, 2]).matrixExp()],
+    ["name2::matrix_exp(3x3)", async () => sym3().matrixExp()],
+    ["name2::matrix_exp(배치)",
+      async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixExp()],
+    ["name2::torch.matrix_exp", async () => mat().matrixExp()],
+  ];
+  for (const [name, fn] of value) out.set(`linalg::${name}`, fn);
+
+  for (const [tag, ordv] of [["1", 1], ["inf", Infinity], ["-inf", -Infinity],
+    ["0", 0], ["3", 3]] as const) {
+    out.set(`linalg::name2::vector_norm(ord=${tag})`,
+      async () => vec3().vectorNorm(ordv));
+  }
+  for (const [tag, ordv] of [["fro", "fro"], ["nuc", "nuc"], ["2", 2], ["-2", -2],
+    ["1", 1], ["-1", -1], ["inf", Infinity]] as const) {
+    out.set(`linalg::name2::matrix_norm(ord=${tag})`,
+      async () => mat().matrixNorm(ordv));
+  }
+  out.set("linalg::name2::matrix_norm(기본)", async () => mat().matrixNorm());
+  out.set("linalg::name2::matrix_norm(배치)",
+    async () => Tensor.from(LA_BATCH, [3, 2, 2]).matrixNorm());
+  for (const [tag, pv] of [["기본", null], ["fro", "fro"], ["nuc", "nuc"], ["2", 2],
+    ["-2", -2], ["1", 1], ["inf", Infinity]] as const) {
+    out.set(`linalg::name2::cond(p=${tag})`, async () => mat().cond(pv));
+  }
 }
 
 /** `tests/cases.py` 의 inplace_cases 가 쓰는 입력. */

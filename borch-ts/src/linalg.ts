@@ -230,6 +230,26 @@ export function qr(a: Mat, n: number, m: number): { q: Mat; r: Mat } {
 }
 
 /**
+ * 한쪽 삼각만 남기고 나머지를 거울로 채운다.
+ *
+ * **`eigh` 는 대칭이 아닌 것도 받는다.** torch 는 기본으로 아래 삼각만 읽고 위쪽은
+ * 무시한다 — `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의 답이 같다(진짜 torch 에 물었다).
+ * 야코비는 행렬 전체를 보므로, 여기서 먼저 거울을 만들어 주지 않으면 대칭이 아닌
+ * 입력에서 조용히 갈린다. **대칭을 주는 한 안 드러나는 차이다.**
+ */
+export function mirror(a: Mat, n: number, upper: boolean): Mat {
+  const out = Float64Array.from(a);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < i; j++) {
+      const keep = upper ? (a[j * n + i] ?? 0) : (a[i * n + j] ?? 0);
+      out[i * n + j] = keep;
+      out[j * n + i] = keep;
+    }
+  }
+  return out;
+}
+
+/**
  * 대칭 행렬의 고윳값·고유벡터 — 야코비 회전.
  *
  * 고윳값을 **오름차순**으로 준다. torch 의 `linalg.eigh` 가 그렇다.
@@ -463,6 +483,74 @@ export function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat } {
   const p = new Float64Array(rows * rows);
   for (let i = 0; i < rows; i++) p[(order[i] ?? i) * rows + i] = 1;
   return { p, l, u };
+}
+
+/** 삼각행렬이라는 것을 **알고** 푼다. 앞으로나 뒤로 한 번이면 끝난다. */
+export function solveTriangular(
+  a: Mat, b: Mat, n: number, m: number,
+  upper: boolean, unit: boolean,
+): Mat {
+  const x = new Float64Array(n * m);
+  for (let i = 0; i < n * m; i++) x[i] = b[i] ?? 0;
+  const order = upper
+    ? Array.from({ length: n }, (_, i) => n - 1 - i)
+    : Array.from({ length: n }, (_, i) => i);
+  for (const i of order) {
+    for (let k = 0; k < n; k++) {
+      if (upper ? k <= i : k >= i) continue;
+      const c = a[i * n + k] ?? 0;
+      if (c === 0) continue;
+      for (let j = 0; j < m; j++) {
+        x[i * m + j] = (x[i * m + j] ?? 0) - c * (x[k * m + j] ?? 0);
+      }
+    }
+    // **`unit` 이면 대각을 안 본다** — 1 로 친다. 안 지키면 값이 조용히 달라진다.
+    const d = unit ? 1 : (a[i * n + i] ?? 1);
+    for (let j = 0; j < m; j++) x[i * m + j] = (x[i * m + j] ?? 0) / d;
+  }
+  return x;
+}
+
+/** 스케일링·제곱에서 무엇을 "작다" 로 볼지. 1-노름이 이 아래면 테일러가 빨리 모인다. */
+const EXP_SMALL = 0.5;
+/** 그 조건에서 필요한 항의 개수. `0.5^18/18!` 은 배정도의 바닥보다 한참 아래다. */
+const EXP_TERMS = 18;
+
+/**
+ * 행렬 지수 `e^A` — **스케일링과 제곱.**
+ *
+ * 테일러만으로는 큰 행렬에서 안 모인다. `A*5` 의 답이 4.8e+10 인데 그 자리에서는
+ * 항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤
+ * `s` 번 제곱하면 같은 답이 안전하게 나온다 — `e^A = (e^{A/2^s})^{2^s}` 다.
+ */
+export function matrixExp(a: Mat, n: number): Mat {
+  let norm = 0;
+  for (let j = 0; j < n; j++) {
+    let col = 0;
+    for (let i = 0; i < n; i++) col += Math.abs(a[i * n + j] ?? 0);
+    norm = Math.max(norm, col);
+  }
+  const squarings = norm > EXP_SMALL
+    ? Math.max(0, Math.ceil(Math.log2(norm / EXP_SMALL)))
+    : 0;
+  const scale = 2 ** squarings;
+  const scaled = new Float64Array(n * n);
+  for (let i = 0; i < n * n; i++) scaled[i] = (a[i] ?? 0) / scale;
+  let term: Mat = new Float64Array(n * n);
+  const out = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) {
+    term[i * n + i] = 1;
+    out[i * n + i] = 1;
+  }
+  for (let k = 1; k <= EXP_TERMS; k++) {
+    const next = matmul(term, scaled, n, n, n);
+    for (let i = 0; i < n * n; i++) next[i] = (next[i] ?? 0) / k;
+    term = next;
+    for (let i = 0; i < n * n; i++) out[i] = (out[i] ?? 0) + (term[i] ?? 0);
+  }
+  let result: Mat = out;
+  for (let s = 0; s < squarings; s++) result = matmul(result, result, n, n, n);
+  return result;
 }
 
 /** `lu_factor` 가 낸 것으로 `A x = b` 를 푼다. */

@@ -3238,10 +3238,15 @@ def matrix_rank(t, tol=None):
     return Tensor(_np.asarray(_np.linalg.matrix_rank(t.data, tol=tol), dtype=_np.int64))
 
 
-def eigh(t):
-    """대칭 행렬의 고윳값·고유벡터. **값만 준다.**"""
+def eigh(t, UPLO="L"):
+    """대칭 행렬의 고윳값·고유벡터. **값만 준다.**
+
+    **한쪽 삼각만 읽는다.** 기본은 아래쪽이라 `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의
+    답이 같다(진짜 torch 에 물어서 확인했다). 대칭을 주는 한 안 드러나는 규약이라,
+    행렬 전체를 보는 구현과 여기서 조용히 갈린다.
+    """
     t = _mat(t, "eigh")
-    w, v = _np.linalg.eigh(t.data)
+    w, v = _np.linalg.eigh(t.data, UPLO=UPLO)
     return _Eigh(Tensor(w), Tensor(_np.ascontiguousarray(v)))
 
 
@@ -3351,6 +3356,192 @@ def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
     return Tensor(_np.linalg.solve(up, y).astype(bt.data.dtype))
 
 
+# ---- 조합층
+#
+# 대부분 이미 있는 것에 이름을 붙이는 자리다. 계산이 새로 필요한 것은 `matrix_exp`
+# 하나뿐인데, 그 하나가 닫힌 식이 없다.
+
+def matmul(a, b):
+    return _wrap(a) @ _wrap(b)
+
+
+def vecdot(a, b, dim=-1):
+    return (_wrap(a) * _wrap(b)).sum(dim=dim)
+
+
+def diagonal_linalg(t, offset=0, dim1=-2, dim2=-1):
+    """**`torch.diagonal` 과 기본 축이 다르다.**
+
+    이쪽은 마지막 두 축(`-2, -1`)을 보고 저쪽은 앞의 두 축(`0, 1`)을 본다. 3 차원을
+    주면 `(2,3,4)` 가 각각 `(2,3)` 과 `(4,2)` 로 갈린다 — 이름이 비슷해 같은 것으로
+    읽기 쉬운데 모양부터 다르다. 그래서 기본값을 손으로 적어 둔다.
+    """
+    return diagonal(t, offset=offset, dim1=dim1, dim2=dim2)
+
+
+def svdvals(t):
+    """특잇값만. `svd` 의 가운데다."""
+    return svd(t, full_matrices=False).S
+
+
+def eigvalsh(t, UPLO="L"):
+    """대칭 행렬의 고윳값만."""
+    return eigh(t, UPLO=UPLO).eigenvalues
+
+
+def vector_norm(t, ord=2, dim=None, keepdim=False):
+    """벡터로 보고 재는 노름. **행렬을 줘도 통째로 편다** — 그것이 `matrix_norm` 과
+    갈리는 자리다.
+
+    `ord=0` 은 0 이 아닌 것의 개수이고, `±inf` 는 절댓값의 최대·최소다 — 거듭제곱
+    식에 넣으면 안 되는 갈래라 따로 적는다.
+    """
+    x = _wrap(t).abs()
+    if dim is None and x.data.ndim > 1:
+        x = x.reshape(-1)
+    if ord == _np.inf:
+        return amax(x, dim=dim, keepdim=keepdim)
+    if ord == -_np.inf:
+        return amin(x, dim=dim, keepdim=keepdim)
+    if ord == 0:
+        return (x != 0).float().sum(dim=dim, keepdim=keepdim)
+    if ord == 1:
+        return x.sum(dim=dim, keepdim=keepdim)
+    if ord == 2:
+        return (x * x).sum(dim=dim, keepdim=keepdim) ** 0.5
+    return (x ** ord).sum(dim=dim, keepdim=keepdim) ** (1.0 / ord)
+
+
+# 특잇값이 필요한 갈래. 나머지는 행·열의 절댓값 합으로 끝난다.
+_SPECTRAL = ("nuc", 2, -2)
+
+
+def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
+    """행렬로 보고 재는 노름. **갈래마다 다른 수다.**
+
+    기본은 프로베니우스이고, `2` 는 최대 특잇값, `nuc` 는 특잇값의 합, `1` 은 열
+    절댓값 합의 최대, `inf` 는 행 쪽이다. rank 1 행렬을 주면 앞의 셋이 우연히 같아져
+    구분이 안 되므로 골든은 rank 2 로 묻는다.
+    """
+    x = _wrap(t)
+    if dim != (-2, -1):
+        x = x.movedim(dim[0], -2).movedim(dim[1], -1)
+    if ord in _SPECTRAL:
+        s = svdvals(x)
+        if ord == "nuc":
+            return s.sum(dim=-1, keepdim=keepdim)
+        return (amax if ord == 2 else amin)(s, dim=-1, keepdim=keepdim)
+    if ord == "fro":
+        return (x * x).sum(dim=(-2, -1), keepdim=keepdim) ** 0.5
+    # 1 은 열 방향(행을 더한다), inf 는 행 방향(열을 더한다). 부호는 최대·최소를 가른다.
+    #
+    # **`abs(ord)` 라고 쓰면 안 된다.** 이 모듈에 `abs` 가 있어서 파이썬 내장을 가리고,
+    # 정수를 텐서로 알고 `'int' object has no attribute 'abs'` 로 멈춘다. 이 저장소가
+    # 같은 함정을 `bool`·`max`·`min` 에서 이미 세 번 밟았다 — 네 번째다.
+    axis = -2 if ord in (1, -1) else -1
+    sums = x.abs().sum(dim=axis, keepdim=True)
+    pick = amax if ord > 0 else amin
+    out = pick(sums, dim=-1 if axis == -2 else -2, keepdim=True)
+    return out if keepdim else out.reshape(out.shape[:-2])
+
+
+def cond(t, p=None):
+    """조건수. 기본은 `‖A‖₂·‖A⁻¹‖₂` 이고 그것은 특잇값의 비다."""
+    x = _mat(t, "cond")
+    if p is None or p == 2:
+        s = svdvals(x)
+        return amax(s, dim=-1) / amin(s, dim=-1)
+    if p == -2:
+        s = svdvals(x)
+        return amin(s, dim=-1) / amax(s, dim=-1)
+    return matrix_norm(x, ord=p) * matrix_norm(inverse(x), ord=p)
+
+
+def multi_dot(mats):
+    """행렬 여럿을 이어 곱한다. **묶는 순서가 값을 안 바꾼다** — 곱셈이 결합적이라
+    그렇다. 바뀌는 것은 셈의 개수뿐이라, 여기서는 순서대로 곱한다."""
+    out = _wrap(mats[0])
+    for m in mats[1:]:
+        out = out @ _wrap(m)
+    return out
+
+
+def vander(x, N=None):
+    """반데르몽드 행렬. 열이 **커지는 차수**다 — numpy 의 기본과 반대라 뒤집는다."""
+    v = _wrap(x)
+    n = v.data.shape[-1] if N is None else N
+    cols = [v ** k for k in range(n)]
+    return stack(cols, dim=-1)
+
+
+def solve_triangular(a, b, upper, left=True, unitriangular=False):
+    """삼각행렬이라는 것을 **알고 푼다.** 앞으로·뒤로 한 번씩이면 끝난다.
+
+    `unitriangular` 는 **대각을 안 보고 1 로 친다** — 안 지키면 값이 조용히 달라지는
+    갈래다. `left=False` 는 `X A = B` 를 푸는 것이라 양쪽을 전치해 같은 길로 보낸다.
+    """
+    at, bt = _mat(a, "solve_triangular"), _wrap(b)
+    tri = _np.triu(at.data) if upper else _np.tril(at.data)
+    if unitriangular:
+        idx = _np.arange(tri.shape[-1])
+        tri = tri.copy()
+        tri[..., idx, idx] = 1.0
+    if not left:
+        x = _np.linalg.solve(_T(tri), _T(bt.data))
+        return Tensor(_T(x))
+    return Tensor(_np.linalg.solve(tri, bt.data))
+
+
+def tensorsolve(a, b, dims=None):
+    """텐서를 행렬로 접어 풀고 다시 편다."""
+    at, bt = _wrap(a), _wrap(b)
+    if dims is not None:
+        _unsupported("tensorsolve(dims)")
+    n = bt.data.size
+    out = _np.linalg.solve(at.data.reshape(n, -1), bt.data.reshape(n))
+    return Tensor(out.reshape(at.data.shape[bt.data.ndim:]))
+
+
+def tensorinv(a, ind=2):
+    at = _wrap(a)
+    lead = at.data.shape[:ind]
+    n = int(_np.prod(lead))
+    out = _np.linalg.inv(at.data.reshape(n, -1))
+    return Tensor(out.reshape(at.data.shape[ind:] + lead))
+
+
+# 스케일링·제곱에서 무엇을 "작다" 로 볼지. 1-노름이 이 아래면 테일러가 빨리 모인다.
+_EXP_SMALL = 0.5
+# 그 조건에서 필요한 항의 개수. 0.5^18/18! 은 배정도의 바닥보다 한참 아래다.
+_EXP_TERMS = 18
+
+
+def matrix_exp(t):
+    """행렬 지수 `e^A`. **스케일링과 제곱으로 간다.**
+
+    테일러만으로는 큰 행렬에서 안 모인다 — `A*5` 의 답이 4.8e+10 인데, 그 자리에서는
+    항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤
+    `s` 번 제곱하면 같은 답이 안전하게 나온다(`e^A = (e^{A/2^s})^{2^s}`).
+
+    **값만 준다.** torch 는 미분하는데 우리는 안 한다.
+    """
+    x = _mat(t, "matrix_exp")
+    a = x.data.astype(_np.float64)
+    n = a.shape[-1]
+    norm = _np.abs(a).sum(axis=-2).max() if a.size else 0.0
+    squarings = max(0, int(_np.ceil(_np.log2(norm / _EXP_SMALL)))) if norm > _EXP_SMALL \
+        else 0
+    scaled = a / (2.0 ** squarings)
+    eye = _np.broadcast_to(_np.eye(n), a.shape).copy()
+    term, out = eye.copy(), eye.copy()
+    for k in range(1, _EXP_TERMS + 1):
+        term = term @ scaled / k
+        out = out + term
+    for _ in range(squarings):
+        out = out @ out
+    return Tensor(out.astype(x.data.dtype))
+
+
 class _Linalg(_Namespace):
     """`torch.linalg` 자리. 같은 구현을 가리키므로 갈릴 자리가 없다."""
 
@@ -3374,6 +3565,22 @@ class _Linalg(_Namespace):
     lu_factor = staticmethod(lu_factor)
     lu_solve = staticmethod(lu_solve)
     norm = staticmethod(norm)
+    # 조합층.
+    matmul = staticmethod(matmul)
+    vecdot = staticmethod(vecdot)
+    cross = staticmethod(cross)
+    diagonal = staticmethod(diagonal_linalg)
+    svdvals = staticmethod(svdvals)
+    eigvalsh = staticmethod(eigvalsh)
+    vector_norm = staticmethod(vector_norm)
+    matrix_norm = staticmethod(matrix_norm)
+    cond = staticmethod(cond)
+    multi_dot = staticmethod(multi_dot)
+    vander = staticmethod(vander)
+    solve_triangular = staticmethod(solve_triangular)
+    tensorsolve = staticmethod(tensorsolve)
+    tensorinv = staticmethod(tensorinv)
+    matrix_exp = staticmethod(matrix_exp)
 
 
 linalg = _Linalg()

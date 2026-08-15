@@ -947,25 +947,43 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, offset, outShape, "SelectBackward0");
   }
 
-  /** 2차원의 대각선. `offset` 이 양수면 위쪽, 음수면 아래쪽 대각선이다. */
-  diagonal(offset = 0): Tensor {
-    if (this.shape.length !== 2) {
-      throw new Error(`diagonal 은 아직 2차원만이다: [${this.shape}]`);
+  /**
+   * 대각선. `offset` 이 양수면 위쪽, 음수면 아래쪽 대각선이다.
+   *
+   * **어느 두 축을 볼지가 갈린다.** `torch.diagonal` 은 앞의 두 축(`0, 1`)이고
+   * `torch.linalg.diagonal` 은 마지막 두 축(`-2, -1`)이다 — 3 차원을 주면 `(2,3,4)`
+   * 가 각각 `(4,2)` 와 `(2,3)` 으로 갈린다. 이름이 비슷해 같은 것으로 읽기 쉬운데
+   * 모양부터 다르다. 그래서 축을 인자로 받는다.
+   *
+   * **뽑은 축은 뒤로 간다.** 남은 축이 앞이고 대각선이 마지막이다 — torch 가 그렇다.
+   */
+  diagonal(offset = 0, dim1 = 0, dim2 = 1): Tensor {
+    const rank = this.shape.length;
+    if (rank < 2) {
+      throw new Error(`diagonal 은 2차원 이상이다: [${this.shape}]`);
     }
-    const rows = this.shape[0] ?? 0;
-    const cols = this.shape[1] ?? 0;
+    const a1 = dim1 < 0 ? dim1 + rank : dim1;
+    const a2 = dim2 < 0 ? dim2 + rank : dim2;
+    const rows = this.shape[a1] ?? 0;
+    const cols = this.shape[a2] ?? 0;
     const own = this.strides();
-    const rowStride = own[0] ?? 1;
-    const colStride = own[1] ?? 1;
+    const rowStride = own[a1] ?? 1;
+    const colStride = own[a2] ?? 1;
     const start = offset >= 0 ? offset * colStride : -offset * rowStride;
     const length = offset >= 0
       ? Math.max(0, Math.min(rows, cols - offset))
       : Math.max(0, Math.min(rows + offset, cols));
+    const rest = [...Array(rank).keys()].filter((i) => i !== a1 && i !== a2);
+    const rules: AxisRule[] = rest.map((i) => ({
+      size: this.shape[i] ?? 1, stride: own[i] ?? 1, kind: "lin" as const,
+      wrap: this.shape[i] ?? 1,
+    }));
     // 한 걸음에 행과 열이 같이 하나씩 간다 — 그래서 걸음이 둘의 합이다.
-    const rules: AxisRule[] = [
-      { size: length, stride: rowStride + colStride, kind: "lin", wrap: length },
-    ];
-    return this.viewAs(rules, start, [length], "DiagonalBackward0");
+    rules.push({
+      size: length, stride: rowStride + colStride, kind: "lin", wrap: length,
+    });
+    const outShape = [...rest.map((i) => this.shape[i] ?? 1), length];
+    return this.viewAs(rules, start, outShape, "DiagonalBackward0");
   }
 
   /** 벡터를 대각선에 놓은 정사각 행렬. */
@@ -2423,14 +2441,19 @@ export class Tensor implements Node<Tensor> {
     };
   }
 
-  /** 대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다. */
-  async eigh(): Promise<{ values: Tensor; vectors: Tensor }> {
+  /**
+   * 대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다.
+   *
+   * **한쪽 삼각만 읽는다** — 기본은 아래쪽이다. 야코비는 행렬 전체를 보므로 먼저
+   * 거울을 만들어 넘긴다. 자세한 것은 `linalg.ts` 의 `mirror` 에 적었다.
+   */
+  async eigh(uplo: "L" | "U" = "L"): Promise<{ values: Tensor; vectors: Tensor }> {
     const v = await this.asBatch();
     const n = v.rows;
     const ws: LA.Mat[] = [];
     const vs: LA.Mat[] = [];
     for (const a of v.mats) {
-      const { values, vectors } = LA.eigh(a, n);
+      const { values, vectors } = LA.eigh(LA.mirror(a, n, uplo === "U"), n);
       ws.push(values);
       vs.push(vectors);
     }
@@ -2438,6 +2461,135 @@ export class Tensor implements Node<Tensor> {
       values: Tensor.fromBatch(ws, [...v.lead, n]),
       vectors: Tensor.fromBatch(vs, [...v.lead, n, n]),
     };
+  }
+
+  /** 특잇값만. `svd` 의 가운데다. */
+  async svdvals(): Promise<Tensor> {
+    return (await this.svd(false)).s;
+  }
+
+  /** 대칭 행렬의 고윳값만. */
+  async eigvalsh(uplo: "L" | "U" = "L"): Promise<Tensor> {
+    return (await this.eigh(uplo)).values;
+  }
+
+  /**
+   * 행렬로 보고 재는 노름. **갈래마다 다른 수다.**
+   *
+   * 기본은 프로베니우스, `2` 는 최대 특잇값, `nuc` 는 특잇값의 합, `1` 은 열 절댓값
+   * 합의 최대, `inf` 는 행 쪽이다. 특잇값이 필요한 셋만 CPU 를 왕복한다.
+   */
+  async matrixNorm(ord: number | string = "fro"): Promise<Tensor> {
+    if (ord === "nuc" || ord === 2 || ord === -2) {
+      const s = await this.svdvals();
+      if (ord === "nuc") return s.sumDim(-1, false);
+      return ord === 2 ? s.amax(-1, false) : s.amin(-1, false);
+    }
+    if (ord === "fro") return this.square().sumDim(-1, false).sumDim(-1, false).sqrt();
+    // 1 은 열 방향(행을 더한다), inf 는 행 방향(열을 더한다).
+    const axis = ord === 1 || ord === -1 ? -2 : -1;
+    const sums = this.abs().sumDim(axis, false);
+    return (ord as number) > 0 ? sums.amax(-1, false) : sums.amin(-1, false);
+  }
+
+  /** 조건수. 기본은 특잇값의 비다. */
+  async cond(p: number | string | null = null): Promise<Tensor> {
+    if (p === null || p === 2 || p === -2) {
+      const s = await this.svdvals();
+      const hi = s.amax(-1, false);
+      const lo = s.amin(-1, false);
+      return p === -2 ? lo.div(hi) : hi.div(lo);
+    }
+    const inv = await this.inverse();
+    return (await this.matrixNorm(p)).mul(await inv.matrixNorm(p));
+  }
+
+  /** 삼각행렬이라는 것을 알고 푼다. */
+  async solveTriangular(
+    b: Tensor, upper: boolean, left = true, unitriangular = false,
+  ): Promise<Tensor> {
+    const v = await this.asBatch();
+    if (v.batch !== 1) throw new RuntimeError("solve_triangular: 배치는 아직 없다");
+    const n = v.rows;
+    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
+    const rhs = LA.fromF32(await b.toArray());
+    if (!left) {
+      // `X A = B` 는 양쪽을 전치하면 같은 길로 간다.
+      const at = LA.transpose(v.mats[0]!, n, n);
+      const bt = LA.transpose(rhs, width, n);
+      const x = LA.solveTriangular(at, bt, n, width, !upper, unitriangular);
+      return Tensor.fromMat(LA.transpose(x, n, width), b.shape);
+    }
+    return Tensor.fromMat(
+      LA.solveTriangular(v.mats[0]!, rhs, n, width, upper, unitriangular), b.shape);
+  }
+
+  /** 행렬 지수 `e^A`. 값만 낸다. */
+  async matrixExp(): Promise<Tensor> {
+    const v = await this.asBatch();
+    return Tensor.fromBatch(
+      v.mats.map((a) => LA.matrixExp(a, v.rows)), this.shape);
+  }
+
+  /** 마지막 축을 벡터로 보고 내적. */
+  vecdot(other: Tensor, dim = -1): Tensor {
+    return this.mul(other).sumDim(dim, false);
+  }
+
+  /** 3 차원 벡터의 외적. 축을 셋으로 갈라 조합한다. */
+  cross(other: Tensor, dim = -1): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const at = (t: Tensor, i: number) => t.narrow(axis, i, 1);
+    return Tensor.cat([
+      at(this, 1).mul(at(other, 2)).sub(at(this, 2).mul(at(other, 1))),
+      at(this, 2).mul(at(other, 0)).sub(at(this, 0).mul(at(other, 2))),
+      at(this, 0).mul(at(other, 1)).sub(at(this, 1).mul(at(other, 0))),
+    ], axis);
+  }
+
+  /**
+   * 벡터로 보고 재는 노름. **행렬을 줘도 통째로 편다** — `matrixNorm` 과 갈리는 자리다.
+   *
+   * `ord=0` 은 0 이 아닌 것의 개수, `±Infinity` 는 절댓값의 최대·최소다. 거듭제곱
+   * 식에 넣으면 안 되는 갈래라 따로 적는다.
+   */
+  vectorNorm(ord = 2, dim?: number): Tensor {
+    const flat = dim === undefined && this.shape.length > 1
+      ? this.reshape([this.size])
+      : this;
+    const x = flat.abs();
+    if (ord === Infinity) return x.amax(dim, false);
+    if (ord === -Infinity) return x.amin(dim, false);
+    if (ord === 0) return x.binary("ne", Tensor.full([], 0)).sumDim(dim ?? 0, false);
+    if (ord === 1) return dim === undefined ? x.sum() : x.sumDim(dim, false);
+    const powed = ord === 2 ? x.square() : x.powScalar(ord);
+    const total = dim === undefined ? powed.sum() : powed.sumDim(dim, false);
+    return ord === 2 ? total.sqrt() : total.powScalar(1 / ord);
+  }
+
+  /** 반데르몽드 행렬. 열이 **커지는 차수**다. */
+  vander(N?: number): Tensor {
+    const n = N ?? this.size;
+    const cols: Tensor[] = [];
+    for (let k = 0; k < n; k++) cols.push(this.powScalar(k));
+    return Tensor.stack(cols, 1);
+  }
+
+  /** 텐서를 행렬로 접어 풀고 다시 편다. */
+  async tensorSolve(b: Tensor): Promise<Tensor> {
+    const n = b.size;
+    const folded = this.reshape([n, this.size / n]);
+    const x = await folded.solve(b.reshape([n]));
+    return x.reshape(this.shape.slice(b.shape.length));
+  }
+
+  /** 텐서를 행렬로 접어 뒤집고 축 순서를 돌려준다. */
+  async tensorInv(ind = 2): Promise<Tensor> {
+    const lead = this.shape.slice(0, ind);
+    const n = lead.reduce((a, b) => a * b, 1);
+    const inv = await this.reshape([n, this.size / n]).inverse();
+    return inv.reshape([...this.shape.slice(ind), ...lead]);
   }
 
   async matrixRank(): Promise<Tensor> {

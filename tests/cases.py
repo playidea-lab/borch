@@ -2724,6 +2724,150 @@ def linalg_struct_cases(inp=None):
     return cases
 
 
+_LA_MAT = np.array([[4., 1.], [2., 3.]], dtype=np.float32)
+_LA_VEC3 = np.array([3., -4., 0.], dtype=np.float32)
+_LA_UPPER = np.array([[2., 1.], [0., 3.]], dtype=np.float32)
+_LA_CUBE = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+
+
+def linalg_name_cases(inp=None):
+    """`linalg` 의 **조합층** — 있는 것에 이름을 붙이는 자리와, 갈래가 있는 노름.
+
+    앞의 둘이 구조였다면 이쪽은 표면이다. 대부분 이미 있는 것의 조합이라 계산이
+    새로 필요한 것은 `matrix_exp` 하나뿐이다. 그래도 **조합이 자명하지 않은 자리**가
+    셋 있다.
+
+    ## 노름은 갈래가 값을 바꾼다
+
+    `matrix_norm` 의 기본은 프로베니우스인데 `ord=2` 는 최대 특잇값, `nuc` 는 특잇값의
+    합, `1` 은 열 절댓값 합의 최대, `inf` 는 행 쪽이다 — **전부 다른 수**다. 골든이
+    rank 2 인 행렬로 묻는 이유가 그것이다. rank 1 을 주면 프로베니우스·2·핵 노름이
+    우연히 같아져서 셋을 구분 못 한다.
+
+    ## `linalg.diagonal` 은 `torch.diagonal` 과 **기본 축이 다르다**
+
+    `linalg` 쪽은 마지막 두 축을 보고(`dim1=-2, dim2=-1`) `torch` 쪽은 앞의 두 축을
+    본다. 3 차원을 주면 `(2,3,4)` 가 각각 `(2,3)` 과 `(4,2)` 로 갈린다 — 이름이 비슷해
+    같은 것으로 읽기 쉬운데 모양부터 다르다.
+
+    ## `eigh` 는 **아래 삼각만 읽는다**
+
+    `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의 답이 같다(실측). 대칭이 아닌 것을 주면
+    위쪽은 무시하고 아래쪽을 거울로 삼는다. 행렬 전체를 보는 구현은 여기서 갈리는데,
+    **대칭을 주는 한 안 드러난다** — 그래서 일부러 안 대칭인 것을 묻는다.
+    """
+    mat, rect, sym3 = _LA_MAT, _LA_RECT, _LA_SYM3
+    vec3, upper, cube = _LA_VEC3, _LA_UPPER, _LA_CUBE
+    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
+    skew = np.array([[4., 99.], [1., 3.]], dtype=np.float32)   # 아래 삼각만 읽어야
+
+    cases = [
+        # ── 이미 있는 것에 이름 붙이기 ──────────────────────────────────
+        (LINALG_PREFIX + "name2::matmul",
+         lambda L: L.linalg.matmul(L.tensor(mat), L.tensor(mat))),
+        (LINALG_PREFIX + "name2::vecdot",
+         lambda L: L.linalg.vecdot(L.tensor(mat), L.tensor(mat))),
+        (LINALG_PREFIX + "name2::cross",
+         lambda L: L.linalg.cross(L.tensor(np.array([1., 2., 3.], dtype=np.float32)),
+                                  L.tensor(np.array([4., 5., 6.], dtype=np.float32)))),
+        (LINALG_PREFIX + "name2::svdvals",
+         lambda L: L.linalg.svdvals(L.tensor(mat))),
+        (LINALG_PREFIX + "name2::svdvals(직사각)",
+         lambda L: L.linalg.svdvals(L.tensor(rect))),
+        (LINALG_PREFIX + "name2::eigvalsh",
+         lambda L: L.linalg.eigvalsh(L.tensor(sym))),
+        (LINALG_PREFIX + "name2::eigvalsh(3x3)",
+         lambda L: L.linalg.eigvalsh(L.tensor(sym3))),
+        # **아래 삼각만 읽는가.** 위쪽에 99 를 넣어도 답이 안 바뀌어야 한다.
+        (LINALG_PREFIX + "name2::eigvalsh(아래삼각만)",
+         lambda L: L.linalg.eigvalsh(L.tensor(skew))),
+        (LINALG_PREFIX + "name2::eigh(아래삼각만)/값",
+         lambda L: L.linalg.eigh(L.tensor(skew))[0]),
+
+        # ── 축이 갈리는 자리 ────────────────────────────────────────────
+        (LINALG_PREFIX + "name2::linalg.diagonal",
+         lambda L: L.linalg.diagonal(L.tensor(cube))),
+        (LINALG_PREFIX + "name2::torch.diagonal(다른 축)",
+         lambda L: L.diagonal(L.tensor(cube))),
+        (LINALG_PREFIX + "name2::linalg.diagonal(offset)",
+         lambda L: L.linalg.diagonal(L.tensor(mat), offset=1)),
+
+        # ── 노름의 갈래 ────────────────────────────────────────────────
+        (LINALG_PREFIX + "name2::vector_norm",
+         lambda L: L.linalg.vector_norm(L.tensor(vec3))),
+        (LINALG_PREFIX + "name2::vector_norm(행렬을 통째로)",
+         lambda L: L.linalg.vector_norm(L.tensor(mat))),
+        (LINALG_PREFIX + "name2::vector_norm(dim)",
+         lambda L: L.linalg.vector_norm(L.tensor(mat), dim=1)),
+    ]
+    for tag, ordv in (("1", 1), ("inf", float("inf")), ("-inf", float("-inf")),
+                      ("0", 0), ("3", 3)):
+        cases.append((LINALG_PREFIX + f"name2::vector_norm(ord={tag})",
+                      lambda L, o=ordv: L.linalg.vector_norm(L.tensor(vec3), ord=o)))
+    for tag, ordv in (("fro", "fro"), ("nuc", "nuc"), ("2", 2), ("-2", -2),
+                      ("1", 1), ("-1", -1), ("inf", float("inf"))):
+        cases.append((LINALG_PREFIX + f"name2::matrix_norm(ord={tag})",
+                      lambda L, o=ordv: L.linalg.matrix_norm(L.tensor(mat), ord=o)))
+    cases.append((LINALG_PREFIX + "name2::matrix_norm(기본)",
+                  lambda L: L.linalg.matrix_norm(L.tensor(mat))))
+    cases.append((LINALG_PREFIX + "name2::matrix_norm(배치)",
+                  lambda L: L.linalg.matrix_norm(L.tensor(_LA_BATCH))))
+    for tag, pv in (("기본", None), ("fro", "fro"), ("nuc", "nuc"), ("2", 2),
+                    ("-2", -2), ("1", 1), ("inf", float("inf"))):
+        cases.append((LINALG_PREFIX + f"name2::cond(p={tag})",
+                      lambda L, p=pv: L.linalg.cond(L.tensor(mat), p)))
+
+    cases += [
+        # ── 조합이 한 줄이 아닌 것들 ────────────────────────────────────
+        (LINALG_PREFIX + "name2::multi_dot",
+         lambda L: L.linalg.multi_dot([L.tensor(mat), L.tensor(mat), L.tensor(mat)])),
+        (LINALG_PREFIX + "name2::multi_dot(둘)",
+         lambda L: L.linalg.multi_dot([L.tensor(mat), L.tensor(mat)])),
+        (LINALG_PREFIX + "name2::vander",
+         lambda L: L.linalg.vander(L.tensor(np.array([1., 2., 3.], dtype=np.float32)))),
+        (LINALG_PREFIX + "name2::vander(N)",
+         lambda L: L.linalg.vander(L.tensor(np.array([2., 3.], dtype=np.float32)), N=4)),
+        (LINALG_PREFIX + "name2::solve_triangular(위)",
+         lambda L: L.linalg.solve_triangular(
+             L.tensor(upper), L.tensor(np.array([[1.], [3.]], dtype=np.float32)),
+             upper=True)),
+        (LINALG_PREFIX + "name2::solve_triangular(아래)",
+         lambda L: L.linalg.solve_triangular(
+             L.tensor(np.array([[2., 0.], [1., 3.]], dtype=np.float32)),
+             L.tensor(np.array([[1.], [2.]], dtype=np.float32)), upper=False)),
+        # **대각을 안 본다.** 안 지키면 값이 조용히 달라지는 갈래다.
+        (LINALG_PREFIX + "name2::solve_triangular(단위대각)",
+         lambda L: L.linalg.solve_triangular(
+             L.tensor(upper), L.tensor(np.array([[1.], [3.]], dtype=np.float32)),
+             upper=True, unitriangular=True)),
+        (LINALG_PREFIX + "name2::tensorsolve",
+         lambda L: L.linalg.tensorsolve(
+             L.tensor(np.eye(4, dtype=np.float32).reshape(2, 2, 2, 2)),
+             L.tensor(np.array([[1., 2.], [3., 4.]], dtype=np.float32)))),
+        (LINALG_PREFIX + "name2::tensorinv",
+         lambda L: L.linalg.tensorinv(
+             L.tensor(np.eye(4, dtype=np.float32).reshape(2, 2, 2, 2)), ind=2)),
+
+        # ── 닫힌 식이 없는 것 하나 ──────────────────────────────────────
+        # **스케일링과 제곱이 필요하다.** 테일러만으로는 큰 행렬에서 안 모인다 —
+        # `A*5` 의 답이 4.8e+10 이라 항이 커지는 쪽이 먼저 넘친다.
+        (LINALG_PREFIX + "name2::matrix_exp(멱영)",
+         lambda L: L.linalg.matrix_exp(
+             L.tensor(np.array([[0., 1.], [0., 0.]], dtype=np.float32)))),
+        (LINALG_PREFIX + "name2::matrix_exp",
+         lambda L: L.linalg.matrix_exp(L.tensor(mat))),
+        (LINALG_PREFIX + "name2::matrix_exp(큰 값)",
+         lambda L: L.linalg.matrix_exp(L.tensor(mat * 5))),
+        (LINALG_PREFIX + "name2::matrix_exp(3x3)",
+         lambda L: L.linalg.matrix_exp(L.tensor(sym3))),
+        (LINALG_PREFIX + "name2::matrix_exp(배치)",
+         lambda L: L.linalg.matrix_exp(L.tensor(_LA_BATCH))),
+        (LINALG_PREFIX + "name2::torch.matrix_exp",
+         lambda L: L.matrix_exp(L.tensor(mat))),
+    ]
+    return cases
+
+
 INPLACE_PREFIX = "inplace::"
 
 _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh_",
@@ -3323,7 +3467,7 @@ def golden_cases(inp=None):
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
-            + linalg_cases(inp) + linalg_struct_cases(inp)
+            + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
