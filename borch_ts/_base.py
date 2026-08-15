@@ -248,8 +248,42 @@ class Tensor:
     __lt__, __le__ = _op("lt"), _op("le")
     __gt__, __ge__ = _op("gt"), _op("ge")
 
+    __mod__ = _op("remainder")
+    __matmul__ = _op("matmul")
+
     def __neg__(self):
         return wrap(self._h.neg())
+
+    def __getitem__(self, key):
+        """`x[0]` · `x[1:3]` · `x[:, 1]`. torch 코드가 가장 자주 하는 일이다."""
+        keys = key if isinstance(key, tuple) else (key,)
+        out, axis = self, 0
+        for k in keys:
+            if isinstance(k, slice):
+                start = 0 if k.start is None else k.start
+                stop = out.shape[axis] if k.stop is None else k.stop
+                out = wrap(out._h.narrow(axis, start, stop - start))
+                axis += 1
+            elif isinstance(k, Tensor):
+                out = wrap(out._h.indexSelect(axis, k._h))
+                axis += 1
+            else:
+                n = out.shape[axis]
+                out = wrap(out._h.select(axis, k + n if k < 0 else k))
+        return out
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def __bool__(self):
+        return bool(_read(self._h)[0])
+
+    def __float__(self):
+        return self.item()
+
+    def __hash__(self):
+        return id(self)
 
     del _op, _rop
 
@@ -277,6 +311,27 @@ def translate(exc):
     return kind(text.replace("Error: ", "", 1))
 
 
+class _Pair:
+    """`values` 와 `indices` 를 함께 주는 것들 — `sort`·`topk`·`median`·`max(dim)`.
+
+    borch.ts 는 평범한 JS 객체를 준다. 그대로 흘리면 `.values` 가 JS 프록시라
+    `.numpy()` 가 없고, 실패는 `AttributeError: numpy` 로 한 칸 밀려서 나온다.
+    """
+
+    __slots__ = ("values", "indices")
+
+    def __init__(self, obj):
+        self.values = wrap(obj.values)
+        self.indices = wrap(obj.indices)
+
+    def __iter__(self):
+        yield self.values
+        yield self.indices
+
+    def __getitem__(self, i):
+        return (self.values, self.indices)[i]
+
+
 def settle(out):
     """돌려받은 것을 파이썬이 쓸 모양으로 만든다.
 
@@ -295,7 +350,14 @@ def settle(out):
             out = _run_sync(out)
     except JsException as exc:
         raise translate(exc) from None
-    return wrap(out) if _js.borch.isTensor(out) else out
+    if _js.borch.isTensor(out):
+        return wrap(out)
+    # `{values, indices}` 쌍과 텐서 배열은 그대로 흘리면 프록시가 파이썬에 남는다.
+    if hasattr(out, "values") and hasattr(out, "indices"):
+        return _Pair(out)
+    if _js.Array.isArray(out):
+        return [wrap(x) if _js.borch.isTensor(x) else x for x in out]
+    return out
 
 
 def guarded(fn, *args):

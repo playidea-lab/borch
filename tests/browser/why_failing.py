@@ -48,6 +48,8 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--lib", default="borch_ts")
     ap.add_argument("--headed", action="store_true")
+    ap.add_argument("--samples", type=int, default=0,
+                    help="사유마다 본보기를 몇 줄 보여줄지")
     args = ap.parse_args(argv)
 
     result, _ = runner.run(args.lib, args.headed)
@@ -59,10 +61,18 @@ def main(argv):
     total = result["total"]
     print(f"{args.lib} — {total - len(bad)}/{total} 통과, {len(bad)} 실패\n")
 
-    seen = collections.Counter(bucket(w) for w in bad)
+    groups = collections.defaultdict(list)
+    for why in bad:
+        groups[bucket(why)].append(why)
+
     print("실패 사유별:")
-    for label, n in seen.most_common():
-        print(f"  {n:4d}  {label}")
+    for label, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        print(f"  {len(items):4d}  {label}")
+        # **본보기를 몇 개 보여준다.** 종류만 세면 "RuntimeError 84 건" 에서 멈추고,
+        # 그 84 건이 한 가지 원인인지 여덟 가지인지를 모른다.
+        if args.samples:
+            for one in items[:args.samples]:
+                print(f"          {one[:150]}")
     return 0
 
 

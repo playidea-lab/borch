@@ -32,7 +32,13 @@ _RENAME = {
     "fix": "trunc",
     "swapdims": "transpose",
     "interpolate": "upsample",
-    "as_tensor": "from_",
+    # 연산 표의 이름이 파이썬과 같은 것들. `camel` 을 씌우면 오히려 없는 이름이 된다.
+    "logical_not": "logical_not",
+    "logical_and": "logical_and",
+    "logical_or": "logical_or",
+    "logical_xor": "logical_xor",
+    "matmul": "mm",
+    "var": "variance",
 }
 
 # **이름 붙은 인자를 자리로 바꾼다.**
@@ -101,11 +107,16 @@ _SIGNATURE = {
 
 
 def camel(name):
-    """`masked_select` → `maskedSelect`. 밑줄 뒤 첫 글자를 올린다."""
+    """`masked_select` → `maskedSelect`. 밑줄 뒤 첫 글자를 올린다.
+
+    **끝의 밑줄은 살린다.** `zero_` 는 제자리 연산이라는 뜻이고 borch.ts 도 같은
+    이름을 쓴다 — 그냥 나누면 `zero` 가 되어 없는 이름이 된다.
+    """
     if name in _RENAME:
         return _RENAME[name]
-    head, *rest = name.split("_")
-    return head + "".join(p[:1].upper() + p[1:] for p in rest)
+    tail = "_" if name.endswith("_") and not name.endswith("__") else ""
+    head, *rest = name.rstrip("_").split("_")
+    return head + "".join(p[:1].upper() + p[1:] for p in rest) + tail
 
 
 def _arg(a):
@@ -162,6 +173,10 @@ def __getattr__(name):
     """
     if name.startswith("_"):
         raise AttributeError(name)
+    # dtype 이름들. `bool` 을 모듈 전역에 두면 파이썬 내장을 가리므로 여기서 준다.
+    if name in ("bool", "float32", "int64"):
+        from ._base import _DType
+        return _DType(name)
     js_name = camel(name)
 
     if name in _BINARY_ONLY:

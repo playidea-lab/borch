@@ -51,8 +51,12 @@ if getattr(_js, "borch", None) is None:                 # pragma: no cover
         "  전역에 두어야 한다. 조용히 다른 것으로 돌지 않으려고 여기서 멈춘다.")
 
 from ._base import Tensor, tensor                        # noqa: E402,F401
+# **이름 붙은 것을 먼저 들여온다.** 모듈의 `__getattr__` 은 여기 없는 이름만 받으므로,
+# `linalg`·`einsum` 처럼 첫 인자가 텐서가 아닌 것들이 그쪽으로 새면 안 된다 —
+# 실제로 `linalg` 가 함수로 잡혀서 `linalg.cholesky` 가 통째로 실패했다.
 from ._ops import (                                      # noqa: E402,F401
-    arange, cat, eye, full, ones, stack, zeros,
+    arange, as_tensor, cat, einsum, eye, full, linalg, linspace, ones,
+    stack, zeros,
 )
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
@@ -63,5 +67,8 @@ from ._base import _DType                                # noqa: E402
 
 float32 = _DType("float32")
 int64 = _DType("int64")
-bool = _DType("bool")                                    # noqa: A001
+# **`bool` 은 모듈 전역에 두지 않는다.** 파이썬 내장을 가려서 `isinstance(x, bool)` 이
+# 깨지고, 그 자리가 `_DType` 의 `__repr__` 로 새어 나왔다. 골든은 `L.bool` 로 부르므로
+# 모듈의 `__getattr__` 이 그 이름만 골라 준다 — `_ops.__getattr__` 이 그 일을 한다.
+bool_ = _DType("bool")
 
