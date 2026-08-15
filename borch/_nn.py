@@ -12,7 +12,8 @@ from ._base import (
     _DEFAULT_DTYPE, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _rng, adaptive_avg_pool2d, avg_pool2d, celu, conv1d,
+    _Namespace, _gelu, _pool_all, _rng, _wrap, adaptive_avg_pool2d, avg_pool2d, celu,
+    conv1d,
     conv2d, conv3d, conv_transpose1d, conv_transpose2d, conv_transpose3d,
     cosine_similarity, dropout, elu, embedding, gelu, glu, group_norm, hardshrink,
     hardsigmoid, hardswish, hardtanh, instance_norm, interpolate, l1_loss, layer_norm,
@@ -21,6 +22,12 @@ from ._ops import (
     sigmoid, silu, smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign,
     stack, tanh, tanhshrink, zeros,
 )
+# **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
+# `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
+# 돌면서 `_ops` 의 **두 번째 사본**을 만들었고, `Tensor` 클래스가 둘이 되어
+# `isinstance` 가 어긋났다. 값이 object 배열로 나왔는데 그 케이스만 따로 돌리면
+# 통과해서 원인이 한참 멀어 보였다 — 늦은 임포트는 이 저장소에서 그 값을 한다.
+#
 # **`threshold` 만 이름을 바꿔 들여온다.** `Threshold` 층이 `self.threshold` 라는
 # 속성을 갖는데(torch 가 그 이름을 쓴다), 그러면 `forward` 안에서 같은 이름이 함수와
 # 속성 둘을 가리키게 된다. 이름을 갈라 두면 그 자리가 아예 안 생긴다.
@@ -806,6 +813,34 @@ class MultiheadAttention(Module):
         return f"MultiheadAttention(embed_dim={self.embed_dim}, num_heads={self.num_heads})"
 
 
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+                                 is_causal=False, scale=None):
+    """어텐션의 알맹이. **`MultiheadAttention` 이 안에서 하던 계산을 이름으로 낸다.**
+
+    층은 있는데 이 함수가 없었다. 층을 안 쓰고 어텐션을 손으로 짜는 코드가 이 이름을
+    부르고, 요즘 트랜스포머 코드의 기본형이 그것이다.
+
+    **가림막은 곱하는 것이 아니라 더하는 것이다.** `-inf` 를 더해 softmax 가 0 을
+    내게 하는 것이지 0 을 곱하는 것이 아니다 — 곱하면 softmax 가 이미 정규화한 뒤라
+    남은 자리가 1 로 안 돌아간다.
+    """
+    query, key, value = _wrap(query), _wrap(key), _wrap(value)
+    dim = query.data.shape[-1]
+    factor = (1.0 / _math.sqrt(dim)) if scale is None else scale
+    scores = (query @ key.transpose(-2, -1)) * factor
+    if is_causal:
+        # 위 삼각을 막는다. 가림막을 같이 주면 torch 는 둘 다 적용한다.
+        length = query.data.shape[-2]
+        upper = _np.triu(_np.ones((length, key.data.shape[-2]), dtype=bool), k=1)
+        scores = scores.masked_fill(Tensor(upper), float("-inf"))
+    if attn_mask is not None:
+        scores = _apply_mask(scores, attn_mask)
+    weights = softmax(scores, dim=-1)
+    if dropout_p:
+        weights = dropout(weights, dropout_p, training=True)
+    return weights @ value
+
+
 def _split_heads(t, B, T, heads, head_dim):
     return t.reshape(B, T, heads, head_dim).transpose(1, 2)      # (B, heads, T, head_dim)
 
@@ -1509,6 +1544,7 @@ class _Functional(_Namespace):
     group_norm = staticmethod(group_norm)
     instance_norm = staticmethod(instance_norm)
     rms_norm = staticmethod(rms_norm)
+    scaled_dot_product_attention = staticmethod(scaled_dot_product_attention)
     conv_transpose1d = staticmethod(conv_transpose1d)
     conv_transpose2d = staticmethod(conv_transpose2d)
     conv_transpose3d = staticmethod(conv_transpose3d)

@@ -744,6 +744,58 @@ export class Dropout extends Module {
   }
 }
 
+/**
+ * 어텐션의 알맹이. **`MultiheadAttention` 이 안에서 하던 계산을 이름으로 낸다.**
+ *
+ * 층은 있는데 이 함수가 없었다. 층을 안 쓰고 어텐션을 손으로 짜는 코드가 이 이름을
+ * 부르고, 요즘 트랜스포머 코드의 기본형이 그것이다.
+ *
+ * **가림막은 곱하는 것이 아니라 더하는 것이다.** 큰 음수를 더해 softmax 가 0 을
+ * 내게 하는 것이지 0 을 곱하는 것이 아니다 — 곱하면 softmax 가 이미 정규화한 뒤라
+ * 남은 자리가 1 로 안 돌아간다.
+ *
+ * 배치 축이 있으면 표본마다 따로 돈다. `mm` 이 2 차원끼리라 그렇고, 묶음 행렬곱이
+ * 생기면 그때 여기를 고치면 된다.
+ */
+export function scaledDotProductAttention(
+  query: Tensor,
+  key: Tensor,
+  value: Tensor,
+  attnMask: Tensor | null = null,
+  isCausal = false,
+): Tensor {
+  const rank = query.shape.length;
+  const dim = query.shape[rank - 1] ?? 1;
+  const len = query.shape[rank - 2] ?? 1;
+  const keyLen = key.shape[key.shape.length - 2] ?? 1;
+  const scale = Tensor.full([], 1 / Math.sqrt(dim));
+
+  // 위 삼각을 막는 가림막. 0 과 큰 음수로 만들어 **더한다.**
+  let causal: Tensor | null = null;
+  if (isCausal) {
+    const rows: number[] = [];
+    for (let i = 0; i < len; i++) {
+      for (let j = 0; j < keyLen; j++) rows.push(j > i ? -1e30 : 0);
+    }
+    causal = Tensor.from(rows, [len, keyLen]);
+  }
+
+  const one = (q: Tensor, k: Tensor, v: Tensor): Tensor => {
+    let scores = q.mm(k.transpose()).binary("mul", scale);
+    if (causal) scores = scores.add(causal);
+    if (attnMask) scores = scores.add(attnMask);
+    return scores.softmax(-1).mm(v);
+  };
+
+  if (rank === 2) return one(query, key, value);
+  const batch = query.shape[0] ?? 1;
+  const outs: Tensor[] = [];
+  for (let b = 0; b < batch; b++) {
+    outs.push(one(query.select(0, b), key.select(0, b), value.select(0, b)));
+  }
+  return Tensor.stack(outs, 0);
+}
+
 export class MaxPool2d extends Module {
   constructor(private readonly kernel = 2) {
     super();

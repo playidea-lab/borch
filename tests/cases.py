@@ -710,6 +710,66 @@ def act_cases(inp=None):
     return cases
 
 
+SDPA_PREFIX = "sdpa::"
+
+
+def sdpa_cases(inp=None):
+    """`scaled_dot_product_attention`. **요즘 트랜스포머 코드가 직접 부르는 이름이다.**
+
+    `MultiheadAttention` 은 이미 있는데 그 밑의 함수가 없었다. 층을 안 쓰고 어텐션을
+    손으로 짜는 코드가 늘었고, 그런 코드는 이 이름을 부른다.
+
+    묻는 것은 넷이다 — 맨 것, 더하는 가림막, 인과 가림막, 그리고 셋 다의 기울기.
+    **가림막이 곱셈이 아니라 덧셈이라는 것**이 가장 흔한 오해다. `-inf` 를 더해
+    softmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니다 — 곱하면 softmax 가
+    이미 정규화한 뒤라 나머지가 1 로 안 돌아간다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    a = inp["attn_x"]                                  # (2, 5, 4)
+    # 더하는 가림막. 0 은 통과, 큰 음수는 막는다.
+    add_mask = np.zeros((5, 5), dtype=np.float32)
+    add_mask[:, 3:] = -1e9
+    cases = []
+
+    def add(name, fn):
+        cases.append((SDPA_PREFIX + name, lambda L, f=fn: f(L)))
+
+        def grad(L, f=fn, n=name):
+            q = L.tensor(a, requires_grad=True)
+            out = f(L, q)
+            (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+            return _grad_of(q, n)
+        cases.append((SDPA_PREFIX + f"grad::{name}", grad))
+
+    def plain(L, q=None):
+        x = L.tensor(a) if q is None else q
+        return L.nn.functional.scaled_dot_product_attention(x, x, x)
+
+    def masked(L, q=None):
+        x = L.tensor(a) if q is None else q
+        return L.nn.functional.scaled_dot_product_attention(
+            x, x, x, attn_mask=L.tensor(add_mask))
+
+    def causal(L, q=None):
+        x = L.tensor(a) if q is None else q
+        return L.nn.functional.scaled_dot_product_attention(x, x, x, is_causal=True)
+
+    add("맨 것", plain)
+    add("더하는 가림막", masked)
+    add("인과", causal)
+
+    # **q·k·v 가 다른 자리도 본다.** 셋을 같은 것으로만 주면 세 인자를 뒤바꿔 써도
+    # 값이 같아서 안 걸린다.
+    def three(L):
+        q = L.tensor(a)
+        k = L.tensor(a * 0.5 + 0.1)
+        v = L.tensor(a[::-1].copy())
+        return L.nn.functional.scaled_dot_product_attention(q, k, v)
+
+    cases.append((SDPA_PREFIX + "q·k·v 가 다를 때", three))
+    return cases
+
+
 DROPOUT_PREFIX = "dropout::"
 
 
@@ -2680,7 +2740,7 @@ def golden_cases(inp=None):
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
-            + opt_cases(inp) + dropout_cases(inp)
+            + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

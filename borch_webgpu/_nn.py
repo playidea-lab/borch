@@ -66,7 +66,16 @@ def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
         handle(weight), handle(bias) if bias is not None else None, stride, padding))
 
 
+def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
+          scale=None):
+    """borch.ts 쪽은 자유 함수라 텐서 메서드로 안 간다."""
+    return wrap(_js.borch.nn.scaledDotProductAttention(
+        handle(query), handle(key), handle(value),
+        handle(attn_mask) if attn_mask is not None else None, bool(is_causal)))
+
+
 _HAND_WRITTEN = {
+    "scaled_dot_product_attention": _sdpa,
     "rms_norm": _rms_norm,
     "conv_transpose1d": _conv_transpose,
     "conv_transpose2d": _conv_transpose,

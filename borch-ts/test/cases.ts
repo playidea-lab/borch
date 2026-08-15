@@ -463,6 +463,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNorm(out, inputs);
   addOpt(out, inputs);
   addDropout(out, inputs);
+  addSdpa(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1183,6 +1184,44 @@ function addDropout(out: Map<string, Case>, inp: Inputs): void {
       if (((a[i] ?? 0) === 0) !== ((b[i] ?? 0) === 0)) return "다르다";
     }
     return "두 번이 같다";
+  });
+}
+
+/**
+ * `scaledDotProductAttention`. **요즘 트랜스포머 코드가 직접 부르는 이름이다.**
+ *
+ * 가림막이 곱셈이 아니라 덧셈이라는 것이 가장 흔한 오해다 — 큰 음수를 더해 softmax
+ * 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니다.
+ */
+function addSdpa(out: Map<string, Case>, inp: Inputs): void {
+  const mask = (): Tensor => {
+    const rows: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 5; j++) rows.push(j >= 3 ? -1e9 : 0);
+    }
+    return Tensor.from(rows, [5, 5]);
+  };
+
+  const shapes: [string, (x: Tensor) => Tensor][] = [
+    ["맨 것", (x) => nn.scaledDotProductAttention(x, x, x)],
+    ["더하는 가림막", (x) => nn.scaledDotProductAttention(x, x, x, mask())],
+    ["인과", (x) => nn.scaledDotProductAttention(x, x, x, null, true)],
+  ];
+  for (const [name, fn] of shapes) {
+    out.set(`sdpa::${name}`, () => fn(inp.get("attn_x")));
+    out.set(`sdpa::grad::${name}`, () => {
+      const q = inp.get("attn_x", true);
+      seeded(fn(q)).backward();
+      return gradOf(q, name);
+    });
+  }
+
+  // **셋을 같은 것으로만 주면 인자를 뒤바꿔 써도 값이 같아서 안 걸린다.**
+  out.set("sdpa::q·k·v 가 다를 때", () => {
+    const q = inp.get("attn_x");
+    const k = q.mul(Tensor.full([], 0.5)).add(Tensor.full([], 0.1));
+    const v = q.flip(0);
+    return nn.scaledDotProductAttention(q, k, v);
   });
 }
 

@@ -93,8 +93,10 @@ from ._optim import (
     _Scheduler, optim,
 )
 from ._data import (
-    ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
-    TensorDataset, WeightedRandomSampler, _Utils, _UtilsData, random_split, utils,
+    BatchSampler, ChainDataset, ConcatDataset, DataLoader, Dataset, IterableDataset,
+    RandomSampler, Sampler, SequentialSampler, StackDataset, Subset,
+    SubsetRandomSampler, TensorDataset, WeightedRandomSampler, _Utils, _UtilsData,
+    default_collate, random_split, utils,
 )
 from ._rnn import (
     _NnUtils, _NnUtilsRnn, pad_sequence,
