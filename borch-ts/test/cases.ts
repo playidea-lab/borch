@@ -461,6 +461,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addContainer(out, inputs);
   addAct(out, inputs);
   addNorm(out, inputs);
+  addOpt(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1017,6 +1018,97 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
       return layer.call(inp.get(key));
     });
   }
+}
+
+/**
+ * 옵티마이저 다섯과 스케줄러 여덟. **여러 스텝 뒤를 묻는다.**
+ *
+ * 옵티마이저는 상태를 쌓으므로 첫 스텝에서는 서로 비슷하게 군다. 한 스텝만 재면
+ * 다섯 개를 전부 SGD 로 구현해도 통과한다.
+ *
+ * 스케줄러가 하는 일은 학습률의 **수열**이라 그 수열을 통째로 굳힌다. 마지막 값만
+ * 보면 가는 길이 달라도 통과하고, 실제로 `LinearLR` 과 `ConstantLR` 은 끝에서 만난다.
+ */
+function addOpt(out: Map<string, Case>, inp: Inputs): void {
+  const model = (): nn.Sequential => {
+    const m = new nn.Sequential([
+      new nn.Linear(6, 8), new nn.ReLU(), new nn.Linear(8, 3),
+    ]);
+    m.loadStateDict({
+      "0.weight": inp.get("w0"), "0.bias": inp.get("b0"),
+      "2.weight": inp.get("w1"), "2.bias": inp.get("b1"),
+    });
+    return m;
+  };
+
+  const trained = (make: (ps: Tensor[]) => optim.Optimizer): nn.Sequential => {
+    const m = model();
+    const opt = make(m.parameters());
+    const crit = new nn.CrossEntropyLoss();
+    for (let i = 0; i < 5; i++) {
+      opt.zeroGrad();
+      crit.forward(m.forward(inp.get("train_x")), inp.get("train_y")).backward();
+      opt.step();
+    }
+    return m;
+  };
+
+  const kinds: [string, (ps: Tensor[]) => optim.Optimizer][] = [
+    ["Adagrad", (ps) => new optim.Adagrad(ps, 0.1)],
+    ["Adadelta", (ps) => new optim.Adadelta(ps, 0.5)],
+    ["Adamax", (ps) => new optim.Adamax(ps, 0.05)],
+    ["NAdam", (ps) => new optim.NAdam(ps, 0.05)],
+    ["RAdam", (ps) => new optim.RAdam(ps, 0.05)],
+  ];
+  for (const [name, make] of kinds) {
+    out.set(`opt::${name}/0.weight`, () => {
+      const w = trained(make).namedParameters()["0.weight"];
+      if (!w) throw new Error("0.weight 가 없다");
+      return w;
+    });
+    out.set(`opt::${name}/손실`, () => new nn.CrossEntropyLoss()
+      .forward(trained(make).forward(inp.get("train_x")), inp.get("train_y")));
+  }
+
+  /** 학습률의 자취. **옵티마이저를 실제로 밟는다** — 순서가 값을 정한다. */
+  const trace = (
+    make: (o: optim.Optimizer) => { step: () => void },
+    steps: number,
+  ): Tensor => {
+    const opt = new optim.SGD(model().parameters(), 0.2);
+    const sch = make(opt);
+    const seen: number[] = [];
+    for (let i = 0; i < steps; i++) {
+      seen.push(opt.paramGroups[0]?.lr ?? 0);
+      opt.step();
+      sch.step();
+    }
+    return Tensor.from(seen, [steps]);
+  };
+
+  out.set("opt::ConstantLR/자취",
+    () => trace((o) => new optim.ConstantLR(o, 0.5, 3).start(), 8));
+  out.set("opt::LinearLR/자취",
+    () => trace((o) => new optim.LinearLR(o, 0.5, 1.0, 4).start(), 8));
+  out.set("opt::PolynomialLR/자취",
+    () => trace((o) => new optim.PolynomialLR(o, 5, 2.0).start(), 8));
+  out.set("opt::MultiplicativeLR/자취",
+    () => trace((o) => new optim.MultiplicativeLR(o, () => 0.9).start(), 6));
+  out.set("opt::CosineAnnealingWarmRestarts/자취",
+    () => trace((o) => new optim.CosineAnnealingWarmRestarts(o, 3, 2).start(), 10));
+  out.set("opt::OneCycleLR/자취",
+    () => trace((o) => new optim.OneCycleLR(o, 0.4, 10).start(), 10));
+
+  out.set("opt::SequentialLR/자취", () => trace((o) => {
+    const a = new optim.ConstantLR(o, 0.25, 3).start();
+    const b = new optim.ExponentialLR(o, 0.8).start();
+    return new optim.SequentialLR(o, [a, b], [3]);
+  }, 8));
+  out.set("opt::ChainedScheduler/자취", () => trace((o) => {
+    const a = new optim.ConstantLR(o, 0.5, 2).start();
+    const b = new optim.ExponentialLR(o, 0.9).start();
+    return new optim.ChainedScheduler([a, b]);
+  }, 6));
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

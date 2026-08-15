@@ -20,6 +20,8 @@ import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
 export interface ParamGroup {
   lr: number;
+  /** 스케줄러가 기준으로 삼는 값. 처음 스케줄러가 한 번만 찍는다. */
+  initialLr?: number;
 }
 
 export abstract class Optimizer {
@@ -160,24 +162,251 @@ export class RMSprop extends Optimizer {
 }
 
 /**
+ * 상태를 텐서로 들고 **텐서 연산으로** 갱신하는 옵티마이저의 밑동.
+ *
+ * `SGD`·`Adam`·`RMSprop` 은 전용 WGSL 커널을 쓴다 — 세 개가 학습 루프의 거의 전부라
+ * 융합할 값어치가 있었다. 나머지는 그렇지 않으므로 있는 연산으로 조립한다. 맞는
+ * 것이 먼저이고, 커널로 굽는 것은 **재보고** 필요할 때 할 일이다.
+ *
+ * 갱신한 값은 `copyFrom` 으로 **제자리에 되쓴다.** 새 텐서로 갈아끼우면 모델이 든
+ * 손잡이와 옵티마이저가 든 손잡이가 갈려서 학습은 도는데 파라미터가 안 움직인다.
+ */
+abstract class Composed extends Optimizer {
+  protected state(shapes: Tensor[]): Tensor[] {
+    return shapes.map((p) => keepAlive(Tensor.zeros(p.shape)));
+  }
+
+  protected at(bank: Tensor[], index: number, what: string): Tensor {
+    const got = bank[index];
+    if (!got) throw new Error(`${what}: 파라미터 ${index} 의 상태가 없다`);
+    return got;
+  }
+
+  /** 상수 하나를 텐서로. 스칼라와의 연산은 브로드캐스팅으로 붙는다. */
+  protected k(v: number): Tensor {
+    return Tensor.full([], v);
+  }
+}
+
+/** 기울기 제곱을 **계속 더한다** — 줄기만 하고 안 는다. */
+export class Adagrad extends Composed {
+  private readonly sums: Tensor[];
+  private stepCount = 0;
+
+  constructor(params: Tensor[], lr = 0.01, private readonly lrDecay = 0,
+              private readonly eps = 1e-10) {
+    super(params, lr);
+    this.sums = this.state(params);
+  }
+
+  override step(): void {
+    this.stepCount += 1;
+    super.step();
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const sum = this.at(this.sums, index, "Adagrad");
+    sum.copyFrom(sum.add(grad.square()));
+    const lr = this.lr / (1 + (this.stepCount - 1) * this.lrDecay);
+    param.copyFrom(param.sub(grad.mul(this.k(lr)).div(sum.sqrt().add(this.k(this.eps)))));
+  }
+}
+
+/** **학습률이 거의 안 쓰인다.** 보폭을 갱신량의 이력에서 스스로 만든다. */
+export class Adadelta extends Composed {
+  private readonly squares: Tensor[];
+  private readonly deltas: Tensor[];
+
+  constructor(params: Tensor[], lr = 1.0, private readonly rho = 0.9,
+              private readonly eps = 1e-6) {
+    super(params, lr);
+    this.squares = this.state(params);
+    this.deltas = this.state(params);
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const sq = this.at(this.squares, index, "Adadelta");
+    const acc = this.at(this.deltas, index, "Adadelta");
+    const rho = this.k(this.rho);
+    const keep = this.k(1 - this.rho);
+    const eps = this.k(this.eps);
+    sq.copyFrom(sq.mul(rho).add(grad.square().mul(keep)));
+    const delta = acc.add(eps).sqrt().div(sq.add(eps).sqrt()).mul(grad);
+    acc.copyFrom(acc.mul(rho).add(delta.square().mul(keep)));
+    param.copyFrom(param.sub(delta.mul(this.k(this.lr))));
+  }
+}
+
+/** Adam 의 2차 모멘트를 **제곱평균 대신 최댓값**으로 둔 것. */
+export class Adamax extends Composed {
+  private readonly first: Tensor[];
+  private readonly inf: Tensor[];
+  private stepCount = 0;
+
+  constructor(params: Tensor[], lr = 2e-3, private readonly beta1 = 0.9,
+              private readonly beta2 = 0.999, private readonly eps = 1e-8) {
+    super(params, lr);
+    this.first = this.state(params);
+    this.inf = this.state(params);
+  }
+
+  override step(): void {
+    this.stepCount += 1;
+    super.step();
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const m = this.at(this.first, index, "Adamax");
+    const u = this.at(this.inf, index, "Adamax");
+    m.copyFrom(m.mul(this.k(this.beta1)).add(grad.mul(this.k(1 - this.beta1))));
+    u.copyFrom(u.mul(this.k(this.beta2)).binary("maximum", grad.abs().add(this.k(this.eps))));
+    const bias = 1 - this.beta1 ** this.stepCount;
+    param.copyFrom(param.sub(m.div(u).mul(this.k(this.lr / bias))));
+  }
+}
+
+/**
+ * Adam 에 네스테로프의 앞보기를 붙인 것.
+ *
+ * **모멘텀 계수가 스텝마다 바뀌고, 그 수열의 누적곱을 들고 다녀야 한다.** 상수로
+ * 두면 초반 몇 스텝이 조용히 갈린다.
+ */
+export class NAdam extends Composed {
+  private readonly first: Tensor[];
+  private readonly second: Tensor[];
+  private muProduct = 1;
+  private stepCount = 0;
+
+  constructor(params: Tensor[], lr = 2e-3, private readonly beta1 = 0.9,
+              private readonly beta2 = 0.999, private readonly eps = 1e-8,
+              private readonly momentumDecay = 4e-3) {
+    super(params, lr);
+    this.first = this.state(params);
+    this.second = this.state(params);
+  }
+
+  override step(): void {
+    this.stepCount += 1;
+    const t = this.stepCount;
+    this.mu = this.beta1 * (1 - 0.5 * 0.96 ** (t * this.momentumDecay));
+    this.muNext = this.beta1 * (1 - 0.5 * 0.96 ** ((t + 1) * this.momentumDecay));
+    // 누적곱은 파라미터마다가 아니라 스텝마다 한 번 는다.
+    this.muProduct *= this.mu;
+    super.step();
+  }
+
+  private mu = 0;
+  private muNext = 0;
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const m = this.at(this.first, index, "NAdam");
+    const v = this.at(this.second, index, "NAdam");
+    m.copyFrom(m.mul(this.k(this.beta1)).add(grad.mul(this.k(1 - this.beta1))));
+    v.copyFrom(v.mul(this.k(this.beta2)).add(grad.square().mul(this.k(1 - this.beta2))));
+    const denom = v.div(this.k(1 - this.beta2 ** this.stepCount)).sqrt()
+      .add(this.k(this.eps));
+    const a = grad.div(denom).mul(this.k(this.lr * (1 - this.mu) / (1 - this.muProduct)));
+    const b = m.div(denom).mul(
+      this.k(this.lr * this.muNext / (1 - this.muProduct * this.muNext)));
+    param.copyFrom(param.sub(a).sub(b));
+  }
+}
+
+/**
+ * Adam 인데 **초반에는 적응 보폭을 안 쓴다.**
+ *
+ * 2차 모멘트의 표본이 적을 때 분산이 커서 초반이 튀는 것이 Adam 의 알려진 성질이고,
+ * 이쪽은 그 구간을 SGD 처럼 지나간다. 경계(`rho > 5`)를 빼면 값이 Adam 과 같아진다.
+ */
+export class RAdam extends Composed {
+  private readonly first: Tensor[];
+  private readonly second: Tensor[];
+  private stepCount = 0;
+
+  constructor(params: Tensor[], lr = 1e-3, private readonly beta1 = 0.9,
+              private readonly beta2 = 0.999, private readonly eps = 1e-8) {
+    super(params, lr);
+    this.first = this.state(params);
+    this.second = this.state(params);
+  }
+
+  override step(): void {
+    this.stepCount += 1;
+    super.step();
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const m = this.at(this.first, index, "RAdam");
+    const v = this.at(this.second, index, "RAdam");
+    const t = this.stepCount;
+    m.copyFrom(m.mul(this.k(this.beta1)).add(grad.mul(this.k(1 - this.beta1))));
+    v.copyFrom(v.mul(this.k(this.beta2)).add(grad.square().mul(this.k(1 - this.beta2))));
+    const mh = m.div(this.k(1 - this.beta1 ** t));
+    const rhoInf = 2 / (1 - this.beta2) - 1;
+    const rho = rhoInf - (2 * t * this.beta2 ** t) / (1 - this.beta2 ** t);
+    if (rho > 5) {
+      const rect = Math.sqrt(
+        ((rho - 4) * (rho - 2) * rhoInf) / ((rhoInf - 4) * (rhoInf - 2) * rho));
+      const denom = v.div(this.k(1 - this.beta2 ** t)).sqrt().add(this.k(this.eps));
+      param.copyFrom(param.sub(mh.mul(this.k(this.lr * rect)).div(denom)));
+    } else {
+      param.copyFrom(param.sub(mh.mul(this.k(this.lr))));
+    }
+  }
+}
+
+/**
  * 학습률 스케줄.
  *
  * **실수 연산뿐이라 torch 와 값이 그대로 같아야 한다** — 근사가 낄 자리가 없다.
  * 그래서 골든이 한 값이 아니라 **궤적 전체**를 굳혔고, 코어가 그렇게 하다가 `StepLR`
  * 의 차이를 잡았다.
+ *
+ * **기준은 `initialLr` 이지 세울 때의 lr 이 아니다.** 옵티마이저에 한 번만 찍히고,
+ * 나중에 세워지는 스케줄러들도 같은 기준을 본다. 혼자 쓰면 둘이 같아서 안 걸리는데,
+ * 이어 붙이면 두 번째 것이 첫 번째가 이미 깎아 둔 값을 기준으로 잡는다.
  */
 export abstract class LRScheduler {
   protected epoch = 0;
-  protected readonly base: number;
+  readonly base: number;
 
   constructor(protected readonly opt: Optimizer) {
-    this.base = opt.paramGroups[0]?.lr ?? 0;
+    const group = opt.paramGroups[0];
+    if (group && group.initialLr === undefined) group.initialLr = group.lr;
+    this.base = group?.initialLr ?? 0;
+  }
+
+  /**
+   * **0 번째 에폭을 적용한다.** torch 는 이것을 생성자에서 하는데 여기서는 못 한다 —
+   * TypeScript 의 하위 클래스 필드가 `super()` 가 끝난 **뒤에** 채워지므로, 생성자
+   * 안에서 `compute` 를 부르면 `factor` 같은 것이 아직 `undefined` 다.
+   *
+   * 그래서 세운 직후 한 번 부른다. `ConstantLR` 처럼 0 번째부터 값을 바꾸는 것은
+   * 이것이 없으면 첫 항이 통째로 갈린다 — 실제로 최대차 2.0e-01 이었다.
+   */
+  start(): this {
+    this.epoch = 0;
+    const group = this.opt.paramGroups[0];
+    if (group) group.lr = this.compute(0);
+    return this;
   }
 
   step(): void {
     this.epoch += 1;
     const group = this.opt.paramGroups[0];
     if (group) group.lr = this.compute(this.epoch);
+  }
+
+  /** 지금 학습률. 재귀식 스케줄러가 자기 앞의 값을 읽는 자리다. */
+  protected get current(): number {
+    return this.opt.paramGroups[0]?.lr ?? 0;
+  }
+
+  /** `SequentialLR` 이 넘어갈 때 처음부터 다시 밟게 한다. */
+  restart(): void {
+    const group = this.opt.paramGroups[0];
+    if (group) group.lr = this.base;
+    this.start();
   }
 
   protected abstract compute(epoch: number): number;
@@ -206,13 +435,178 @@ export class MultiStepLR extends LRScheduler {
   }
 }
 
+/**
+ * **재귀식이다** — 지금 학습률에 곱한다. 원래 학습률에서 다시 세지 않는다.
+ *
+ * 혼자 쓰면 두 방식이 같은 수열을 낸다. 갈리는 것은 다른 스케줄러가 같은 lr 을 함께
+ * 만질 때다 — `ChainedScheduler` 로 겹치면 재귀식은 서로의 결과 위에 쌓이고 닫힌
+ * 식은 남이 한 일을 덮어쓴다.
+ */
 export class ExponentialLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly gamma: number) {
     super(opt);
   }
 
   protected override compute(epoch: number): number {
-    return this.base * this.gamma ** epoch;
+    return epoch === 0 ? this.current : this.current * this.gamma;
+  }
+}
+
+/** `totalIters` 까지 **깎아 두었다가 원래대로 돌아온다.** 워밍업의 가장 단순한 꼴. */
+export class ConstantLR extends LRScheduler {
+  constructor(opt: Optimizer, private readonly factor = 1 / 3,
+              private readonly totalIters = 5) {
+    super(opt);
+  }
+
+  protected override compute(epoch: number): number {
+    if (epoch === 0) return this.current * this.factor;
+    if (epoch !== this.totalIters) return this.current;
+    return this.current / this.factor;
+  }
+}
+
+/**
+ * 시작 배율에서 끝 배율까지 **직선으로** 옮겨간다.
+ *
+ * `ConstantLR` 과 끝에서 만난다 — `totalIters` 를 지나면 둘 다 원래 학습률이다.
+ * 마지막 값만 보면 둘을 못 가르므로 골든이 자취를 통째로 묻는다.
+ */
+export class LinearLR extends LRScheduler {
+  constructor(opt: Optimizer, private readonly startFactor = 1 / 3,
+              private readonly endFactor = 1.0, private readonly totalIters = 5) {
+    super(opt);
+  }
+
+  protected override compute(epoch: number): number {
+    const t = Math.min(epoch, this.totalIters);
+    const scale = this.startFactor
+      + (this.endFactor - this.startFactor) * (this.totalIters ? t / this.totalIters : 1);
+    return this.base * scale;
+  }
+}
+
+/** `(1 − t/T)^power` 로 내린다. `power=1` 이면 직선이다. */
+export class PolynomialLR extends LRScheduler {
+  constructor(opt: Optimizer, private readonly totalIters = 5,
+              private readonly power = 1.0) {
+    super(opt);
+  }
+
+  protected override compute(epoch: number): number {
+    if (epoch === 0 || epoch > this.totalIters) return this.current;
+    const decay = ((1 - epoch / this.totalIters)
+      / (1 - (epoch - 1) / this.totalIters)) ** this.power;
+    return this.current * decay;
+  }
+}
+
+/** **곱해 나간다** — 기준이 원래 학습률이 아니라 지금 학습률이다. */
+export class MultiplicativeLR extends LRScheduler {
+  constructor(opt: Optimizer, private readonly fn: (epoch: number) => number) {
+    super(opt);
+  }
+
+  protected override compute(epoch: number): number {
+    return epoch === 0 ? this.base : this.current * this.fn(epoch);
+  }
+}
+
+/** 코사인으로 내리다가 **처음으로 되돌린다.** 주기가 `tMult` 배씩 길어진다. */
+export class CosineAnnealingWarmRestarts extends LRScheduler {
+  private tI: number;
+  private tCur = -1;
+
+  constructor(opt: Optimizer, t0: number,
+              private readonly tMult = 1, private readonly etaMin = 0) {
+    super(opt);
+    this.tI = t0;
+  }
+
+  protected override compute(): number {
+    this.tCur += 1;
+    while (this.tCur >= this.tI) {
+      this.tCur -= this.tI;
+      this.tI *= this.tMult;
+    }
+    return this.etaMin + (this.base - this.etaMin)
+      * (1 + Math.cos((Math.PI * this.tCur) / this.tI)) / 2;
+  }
+}
+
+/**
+ * 올렸다가 내린다. **현대 학습 레시피의 기본값에 가깝다.**
+ *
+ * 초기 학습률은 `maxLr/divFactor` 이고 끝은 그것을 다시 나눈 값이라, **옵티마이저에
+ * 준 학습률이 아예 안 쓰인다** — 세우는 순간 덮어쓴다.
+ */
+export class OneCycleLR extends LRScheduler {
+  private readonly initial: number;
+  private readonly minLr: number;
+  private readonly up: number;
+  private readonly down: number;
+
+  constructor(opt: Optimizer, private readonly maxLr: number,
+              private readonly totalSteps: number, pctStart = 0.3,
+              divFactor = 25, finalDivFactor = 1e4) {
+    super(opt);
+    this.initial = maxLr / divFactor;
+    this.minLr = this.initial / finalDivFactor;
+    // torch 의 셈 그대로 — `pctStart × totalSteps − 1` 이지
+    // `pctStart × (totalSteps − 1)` 이 아니다.
+    this.up = pctStart * totalSteps - 1;
+    this.down = totalSteps - this.up - 1;
+  }
+
+  protected override compute(epoch: number): number {
+    const t = Math.min(epoch, this.totalSteps - 1);
+    const rising = t <= this.up;
+    const frac = rising
+      ? (this.up ? t / this.up : 1)
+      : (t - this.up) / Math.max(1e-12, this.down);
+    const lo = rising ? this.initial : this.maxLr;
+    const hi = rising ? this.maxLr : this.minLr;
+    return lo + (hi - lo) * (1 - Math.cos(Math.PI * frac)) / 2;
+  }
+}
+
+/** 스케줄러를 **이어 붙인다.** 이정표에 닿으면 다음 것으로 넘어간다. */
+export class SequentialLR {
+  private epoch = 0;
+
+  constructor(
+    readonly opt: Optimizer,
+    private readonly schedulers: LRScheduler[],
+    private readonly milestones: readonly number[],
+  ) {
+    const first = this.schedulers[0];
+    if (first) first.restart();
+  }
+
+  step(): void {
+    this.epoch += 1;
+    const idx = this.milestones.filter((m) => m <= this.epoch).length;
+    const sch = this.schedulers[Math.min(idx, this.schedulers.length - 1)];
+    if (!sch) return;
+    if (idx > 0 && this.milestones[idx - 1] === this.epoch) sch.restart();
+    else sch.step();
+  }
+
+  getLastLr(): number[] {
+    return this.opt.paramGroups.map((g) => g.lr);
+  }
+}
+
+/** 여럿을 **동시에** 건다. 각자의 배율이 곱해진다. */
+export class ChainedScheduler {
+  constructor(private readonly schedulers: LRScheduler[]) {}
+
+  step(): void {
+    for (const s of this.schedulers) s.step();
+  }
+
+  getLastLr(): number[] {
+    return [];
   }
 }
 

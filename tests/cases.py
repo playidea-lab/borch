@@ -710,6 +710,136 @@ def act_cases(inp=None):
     return cases
 
 
+OPT_PREFIX = "opt::"
+
+# `(이름, 인자)`. **하나씩은 안 된다** — 옵티마이저는 상태를 쌓으므로 첫 스텝에서는
+# 대부분 서로 비슷하게 굴고, 갈리는 것은 그 뒤다.
+_OPTIMIZERS = [
+    ("Adagrad", {"lr": 0.1}),
+    ("Adadelta", {"lr": 0.5}),
+    ("Adamax", {"lr": 0.05}),
+    ("NAdam", {"lr": 0.05}),
+    ("RAdam", {"lr": 0.05}),
+]
+
+# `(이름, 만드는 인자, 몇 번 밟을까)`. 학습률의 **자취**를 묻는다.
+_SCHEDULERS = [
+    ("ConstantLR", {"factor": 0.5, "total_iters": 3}, 8),
+    ("LinearLR", {"start_factor": 0.5, "end_factor": 1.0, "total_iters": 4}, 8),
+    ("PolynomialLR", {"total_iters": 5, "power": 2.0}, 8),
+    ("MultiplicativeLR", {}, 6),
+    ("CosineAnnealingWarmRestarts", {"T_0": 3, "T_mult": 2}, 10),
+    ("OneCycleLR", {"max_lr": 0.4, "total_steps": 10}, 10),
+]
+
+
+def opt_cases(inp=None):
+    """옵티마이저 다섯과 스케줄러 여섯. **여러 스텝 뒤를 묻는다.**
+
+    ## 왜 한 스텝으로는 안 되는가
+
+    옵티마이저는 상태를 쌓는다. 첫 스텝에서 `Adam` 과 `NAdam` 과 `RAdam` 은 거의
+    같은 값을 내고, `Adagrad` 와 `SGD` 도 학습률만 다른 정도다. 갈리는 것은 그
+    누적이 자리를 잡은 뒤이므로, 한 스텝만 재면 다섯 개를 전부 `SGD` 로 구현해도
+    통과한다.
+
+    ## 스케줄러는 자취로 묻는다
+
+    스케줄러가 하는 일은 **학습률의 수열**을 만드는 것이라, 그 수열을 통째로 답으로
+    굳힌다. 마지막 값만 보면 가는 길이 달라도 통과하고, 실제로 `LinearLR` 과
+    `ConstantLR` 은 끝에서 만난다 — `total_iters` 를 지나면 둘 다 원래 학습률이다.
+
+    `MultiplicativeLR` 은 람다를 받는데, 골든이 담는 것은 답이지 함수가 아니므로
+    부르는 쪽에서 같은 식을 쓴다(0.9 를 곱한다).
+    """
+    inp = golden_inputs() if inp is None else inp
+    xin, yin = inp["train_x"], inp["train_y"]
+    weights = {"0.weight": inp["w0"], "0.bias": inp["b0"],
+               "2.weight": inp["w1"], "2.bias": inp["b1"]}
+    cases = []
+
+    def model_of(L):
+        m = L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(), L.nn.Linear(8, 3))
+        m.load_state_dict({k: L.tensor(v) for k, v in weights.items()})
+        return m
+
+    def trained(L, name, args):
+        m = model_of(L)
+        opt = getattr(L.optim, name)(m.parameters(), **args)
+        crit = L.nn.CrossEntropyLoss()
+        x, y = L.tensor(xin), L.tensor(yin)
+        for _ in range(5):
+            opt.zero_grad()
+            crit(m(x), y).backward()
+            opt.step()
+        return m
+
+    for name, args in _OPTIMIZERS:
+        cases.append((OPT_PREFIX + f"{name}/0.weight",
+                      lambda L, n=name, a=args:
+                      dict(trained(L, n, a).named_parameters())["0.weight"]))
+        cases.append((OPT_PREFIX + f"{name}/손실",
+                      lambda L, n=name, a=args: L.nn.CrossEntropyLoss()(
+                          trained(L, n, a)(L.tensor(xin)), L.tensor(yin))))
+
+    def lr_trace(L, name, args, steps):
+        """학습률의 자취. **옵티마이저를 실제로 밟는다** — 순서가 값을 정한다."""
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        if name == "MultiplicativeLR":
+            sch = L.optim.lr_scheduler.MultiplicativeLR(opt, lambda epoch: 0.9)
+        else:
+            sch = getattr(L.optim.lr_scheduler, name)(opt, **args)
+        seen = []
+        for _ in range(steps):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            sch.step()
+        # **라이브러리의 텐서로 돌려준다.** 하네스가 값을 받을 때 `detach` 를 부르고,
+        # 맨 numpy 배열은 그것을 모른다. 수로 비교되므로 허용 오차도 그대로 적용된다.
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    for name, args, steps in _SCHEDULERS:
+        cases.append((OPT_PREFIX + f"{name}/자취",
+                      lambda L, n=name, a=args, s=steps: lr_trace(L, n, a, s)))
+
+    # **이어 붙이는 둘.** 스케줄러를 조합하는 자리이고, 조합이 틀리면 개별 스케줄러가
+    # 전부 맞아도 값이 갈린다.
+    def sequential(L):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        a = L.optim.lr_scheduler.ConstantLR(opt, factor=0.25, total_iters=3)
+        b = L.optim.lr_scheduler.ExponentialLR(opt, gamma=0.8)
+        sch = L.optim.lr_scheduler.SequentialLR(opt, [a, b], milestones=[3])
+        seen = []
+        for _ in range(8):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            sch.step()
+        # **라이브러리의 텐서로 돌려준다.** 하네스가 값을 받을 때 `detach` 를 부르고,
+        # 맨 numpy 배열은 그것을 모른다. 수로 비교되므로 허용 오차도 그대로 적용된다.
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    def chained(L):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        a = L.optim.lr_scheduler.ConstantLR(opt, factor=0.5, total_iters=2)
+        b = L.optim.lr_scheduler.ExponentialLR(opt, gamma=0.9)
+        sch = L.optim.lr_scheduler.ChainedScheduler([a, b])
+        seen = []
+        for _ in range(6):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            sch.step()
+        # **라이브러리의 텐서로 돌려준다.** 하네스가 값을 받을 때 `detach` 를 부르고,
+        # 맨 numpy 배열은 그것을 모른다. 수로 비교되므로 허용 오차도 그대로 적용된다.
+        return L.tensor(np.array(seen, dtype=np.float32))
+
+    cases.append((OPT_PREFIX + "SequentialLR/자취", sequential))
+    cases.append((OPT_PREFIX + "ChainedScheduler/자취", chained))
+    return cases
+
+
 NORM_PREFIX = "norm::"
 
 
@@ -2464,7 +2594,7 @@ def golden_cases(inp=None):
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + ndim_cases(inp) + flow_cases(inp)
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
-            + webgpu_cases(inp) + edge_cases(inp))
+            + opt_cases(inp) + webgpu_cases(inp) + edge_cases(inp))
 
 
 _DTYPES = ["float32", "int64", "bool"]

@@ -86,8 +86,11 @@ from ._nn import (
     _nn_unsupported, _split_heads, nn, one_hot,
 )
 from ._optim import (
-    Adam, AdamW, CosineAnnealingLR, ExponentialLR, LambdaLR, MultiStepLR, Optimizer,
-    RMSprop, ReduceLROnPlateau, SGD, StepLR, _LRScheduler, _Optim, _Scheduler, optim,
+    Adadelta, Adagrad, Adam, AdamW, Adamax, ChainedScheduler, ConstantLR,
+    CosineAnnealingLR, CosineAnnealingWarmRestarts, ExponentialLR, LambdaLR, LinearLR,
+    MultiStepLR, MultiplicativeLR, NAdam, OneCycleLR, Optimizer, PolynomialLR, RAdam,
+    RMSprop, ReduceLROnPlateau, SGD, SequentialLR, StepLR, _LRScheduler, _Optim,
+    _Scheduler, optim,
 )
 from ._data import (
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,

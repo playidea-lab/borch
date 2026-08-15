@@ -74,6 +74,28 @@ def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
                                       weight_decay))
 
 
+def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0, eps=1e-10):
+    return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, eps))
+
+
+def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):
+    return _Opt(_ts.optim.Adadelta.new(_params(params), lr, rho, eps))
+
+
+def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+    return _Opt(_ts.optim.Adamax.new(_params(params), lr, betas[0], betas[1], eps))
+
+
+def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
+          momentum_decay=4e-3):
+    return _Opt(_ts.optim.NAdam.new(_params(params), lr, betas[0], betas[1], eps,
+                                    momentum_decay))
+
+
+def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+    return _Opt(_ts.optim.RAdam.new(_params(params), lr, betas[0], betas[1], eps))
+
+
 class _Sched:
     # `_keep` 은 JS 로 넘긴 파이썬 함수의 프록시를 붙잡아 둔다. 안 잡으면 호출이
     # 끝나는 순간 파괴되고, 스케줄러가 **나중에** 부를 때 "borrowed proxy was
@@ -101,6 +123,13 @@ _SCHED_ARGS = {
     "LambdaLR": ("lr_lambda",),
     # borch.ts 에는 `mode` 가 없다 — `rel` 하나뿐이라 자리도 없다.
     "ReduceLROnPlateau": ("factor", "patience", "threshold"),
+    "ConstantLR": ("factor", "total_iters"),
+    "LinearLR": ("start_factor", "end_factor", "total_iters"),
+    "PolynomialLR": ("total_iters", "power"),
+    "MultiplicativeLR": ("lr_lambda",),
+    "CosineAnnealingWarmRestarts": ("T_0", "T_mult", "eta_min"),
+    "OneCycleLR": ("max_lr", "total_steps", "pct_start", "div_factor",
+                   "final_div_factor"),
 }
 
 
@@ -125,7 +154,14 @@ def _sched(js_name):
                 ready.append(keep)
             else:
                 ready.append(_arg(a))
-        return _Sched(getattr(_ts.optim, js_name).new(opt._o, *ready), keep)
+        s = getattr(_ts.optim, js_name).new(opt._o, *ready)
+        # **세운 직후 0 번째 에폭을 적용한다.** torch 는 생성자가 하는 일인데
+        # TypeScript 쪽은 하위 클래스 필드가 `super()` 뒤에 채워져서 거기서 못 한다.
+        # `ReduceLROnPlateau` 만 이 계보 밖이라 그 자리가 없다 — 값을 받아 판단하는
+        # 것이라 에폭이라는 개념 자체가 없다.
+        if hasattr(s, "start"):
+            s.start()
+        return _Sched(s, keep)
     return make
 
 
@@ -137,6 +173,31 @@ class _LRScheduler:
     CosineAnnealingLR = staticmethod(_sched("CosineAnnealingLR"))
     LambdaLR = staticmethod(_sched("LambdaLR"))
     ReduceLROnPlateau = staticmethod(_sched("ReduceLROnPlateau"))
+    ConstantLR = staticmethod(_sched("ConstantLR"))
+    LinearLR = staticmethod(_sched("LinearLR"))
+    PolynomialLR = staticmethod(_sched("PolynomialLR"))
+    MultiplicativeLR = staticmethod(_sched("MultiplicativeLR"))
+    CosineAnnealingWarmRestarts = staticmethod(_sched("CosineAnnealingWarmRestarts"))
+    OneCycleLR = staticmethod(_sched("OneCycleLR"))
+    LRScheduler = _Sched
+
+    @staticmethod
+    def SequentialLR(optimizer, schedulers, milestones, last_epoch=-1):
+        """스케줄러 목록과 이정표를 JS 배열로 넘긴다.
+
+        **`Array.new` 를 쓰면 안 된다.** 인자가 수 하나면 `Array(3)` 이 되어 `[3]` 이
+        아니라 **길이 3 짜리 빈 배열**이 나온다. 이정표가 보통 하나라 정확히 그 자리에
+        걸렸고, 증상은 이정표를 지나도 학습률이 안 바뀌는 것이었다 — 이 저장소가 같은
+        함정에 두 번째로 빠진 자리다.
+        """
+        return _Sched(_ts.optim.SequentialLR.new(
+            optimizer._o, _js.Array.of(*[s._s for s in schedulers]),
+            _js.Array.of(*[int(m) for m in milestones])))
+
+    @staticmethod
+    def ChainedScheduler(schedulers, optimizer=None):
+        return _Sched(_ts.optim.ChainedScheduler.new(
+            _js.Array.of(*[s._s for s in schedulers])))
 
 
 lr_scheduler = _LRScheduler()

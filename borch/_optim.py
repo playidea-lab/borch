@@ -162,12 +162,191 @@ class RMSprop(Optimizer):
 
 
 
+class Adagrad(Optimizer):
+    """기울기 제곱을 **계속 더한다** — 줄기만 하고 안 는다.
+
+    `RMSprop` 은 같은 자리에 지수이동평균을 두어 옛것을 잊는데, 이쪽은 안 잊는다.
+    그래서 오래 돌리면 보폭이 0 으로 수렴한다 — 그것이 이 옵티마이저의 성질이고
+    결함이 아니다.
+    """
+
+    def __init__(self, params, lr=0.01, lr_decay=0.0, weight_decay=0.0, eps=1e-10):
+        super().__init__(params, dict(lr=lr, lr_decay=lr_decay,
+                                      weight_decay=weight_decay, eps=eps))
+
+    def step(self):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("sum", _np.zeros_like(p.data))
+                st["step"] += 1
+                g = p.grad.data
+                if group["weight_decay"]:
+                    g = g + group["weight_decay"] * p.data
+                st["sum"] = st["sum"] + g * g
+                lr = group["lr"] / (1 + (st["step"] - 1) * group["lr_decay"])
+                p._array = p.data - lr * g / (_np.sqrt(st["sum"]) + group["eps"])
+
+
+class Adadelta(Optimizer):
+    """**학습률이 거의 안 쓰인다.** 보폭을 갱신량의 이력에서 스스로 만든다.
+
+    그래서 기본 `lr` 이 1.0 이다 — 다른 옵티마이저와 같은 값을 주면 엉뚱하게 크다.
+    """
+
+    def __init__(self, params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, rho=rho, eps=eps,
+                                      weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            rho, eps = group["rho"], group["eps"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("square_avg", _np.zeros_like(p.data))
+                st.setdefault("acc_delta", _np.zeros_like(p.data))
+                g = p.grad.data
+                if group["weight_decay"]:
+                    g = g + group["weight_decay"] * p.data
+                st["square_avg"] = rho * st["square_avg"] + (1 - rho) * g * g
+                delta = (_np.sqrt(st["acc_delta"] + eps)
+                         / _np.sqrt(st["square_avg"] + eps)) * g
+                st["acc_delta"] = rho * st["acc_delta"] + (1 - rho) * delta * delta
+                p._array = p.data - group["lr"] * delta
+
+
+class Adamax(Optimizer):
+    """Adam 의 2차 모멘트를 **제곱평균 대신 최댓값**으로 둔 것. 무한 노름 판이다."""
+
+    def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
+                                      weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            b1, b2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("exp_avg", _np.zeros_like(p.data))
+                st.setdefault("exp_inf", _np.zeros_like(p.data))
+                st["step"] += 1
+                g = p.grad.data
+                if group["weight_decay"]:
+                    g = g + group["weight_decay"] * p.data
+                st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
+                st["exp_inf"] = _np.maximum(b2 * st["exp_inf"],
+                                            _np.abs(g) + group["eps"])
+                bias = 1 - b1 ** st["step"]
+                p._array = p.data - (group["lr"] / bias) * st["exp_avg"] / st["exp_inf"]
+
+
+class NAdam(Optimizer):
+    """Adam 에 네스테로프의 앞보기를 붙인 것.
+
+    **모멘텀 계수가 스텝마다 바뀐다** — `momentum_decay` 로 서서히 커지는 수열이고,
+    그 수열의 **누적곱**을 들고 다녀야 한다. 상수로 두면 초반 몇 스텝이 조용히 갈린다.
+    """
+
+    def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8,
+                 weight_decay=0.0, momentum_decay=4e-3):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
+                                      weight_decay=weight_decay,
+                                      momentum_decay=momentum_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            b1, b2 = group["betas"]
+            psi = group["momentum_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("mu_product", 1.0)
+                st.setdefault("exp_avg", _np.zeros_like(p.data))
+                st.setdefault("exp_avg_sq", _np.zeros_like(p.data))
+                st["step"] += 1
+                t = st["step"]
+                g = p.grad.data
+                if group["weight_decay"]:
+                    g = g + group["weight_decay"] * p.data
+                mu = b1 * (1 - 0.5 * 0.96 ** (t * psi))
+                mu_next = b1 * (1 - 0.5 * 0.96 ** ((t + 1) * psi))
+                st["mu_product"] = st["mu_product"] * mu
+                st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
+                st["exp_avg_sq"] = b2 * st["exp_avg_sq"] + (1 - b2) * g * g
+                denom = _np.sqrt(st["exp_avg_sq"] / (1 - b2 ** t)) + group["eps"]
+                new = p.data - group["lr"] * (1 - mu) / (1 - st["mu_product"]) * g / denom
+                new = new - group["lr"] * mu_next / (
+                    1 - st["mu_product"] * mu_next) * st["exp_avg"] / denom
+                p._array = new
+
+
+class RAdam(Optimizer):
+    """Adam 인데 초반에는 **적응 보폭을 안 쓴다.**
+
+    2차 모멘트의 표본이 적을 때 분산이 커서 초반 몇 스텝이 튀는 것이 Adam 의 알려진
+    성질이고, 이쪽은 그 구간을 SGD 처럼 지나간다. 경계(`rho > 5`)를 빠뜨리면 값이
+    Adam 과 같아지므로 골든이 다섯 스텝을 밟는다.
+    """
+
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
+                                      weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            b1, b2 = group["betas"]
+            rho_inf = 2.0 / (1 - b2) - 1
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("exp_avg", _np.zeros_like(p.data))
+                st.setdefault("exp_avg_sq", _np.zeros_like(p.data))
+                st["step"] += 1
+                t = st["step"]
+                g = p.grad.data
+                if group["weight_decay"]:
+                    g = g + group["weight_decay"] * p.data
+                st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
+                st["exp_avg_sq"] = b2 * st["exp_avg_sq"] + (1 - b2) * g * g
+                mh = st["exp_avg"] / (1 - b1 ** t)
+                rho = rho_inf - 2 * t * b2 ** t / (1 - b2 ** t)
+                if rho > 5.0:
+                    rect = _math.sqrt(((rho - 4) * (rho - 2) * rho_inf)
+                                      / ((rho_inf - 4) * (rho_inf - 2) * rho))
+                    denom = _np.sqrt(st["exp_avg_sq"] / (1 - b2 ** t)) + group["eps"]
+                    p._array = p.data - group["lr"] * mh * rect / denom
+                else:
+                    # 적응 보폭을 안 쓴다 — 여기가 SGD 처럼 도는 구간이다.
+                    p._array = p.data - group["lr"] * mh
+
+
 class _Scheduler:
     """스케줄러는 `optimizer.param_groups` 의 lr 을 고친다. 에폭마다 한 번 부른다."""
 
     def __init__(self, optimizer, last_epoch=-1):
         self.optimizer = optimizer
-        self.base_lrs = [g["lr"] for g in optimizer.param_groups]
+        # **기준은 `initial_lr` 이지 지금 lr 이 아니다.** 옵티마이저에 한 번만 찍히고
+        # (`setdefault`), 그 뒤에 세워지는 스케줄러들도 **같은** 기준을 본다.
+        #
+        # 처음에는 세울 때의 lr 을 기준으로 삼았다. 혼자 쓰면 둘이 같아서 안 걸리는데,
+        # 스케줄러를 이어 붙이면 두 번째 것이 첫 번째가 이미 깎아 둔 값을 기준으로
+        # 잡는다 — `SequentialLR` 이 이정표에서 0.2 로 돌아가야 하는 자리에서 0.05 로
+        # 이어졌고, 최대차 1.5e-01 이었다.
+        for group in optimizer.param_groups:
+            group.setdefault("initial_lr", group["lr"])
+        self.base_lrs = [g["initial_lr"] for g in optimizer.param_groups]
         self.last_epoch = last_epoch
         self.step()
 
@@ -206,12 +385,21 @@ class MultiStepLR(_Scheduler):
 
 
 class ExponentialLR(_Scheduler):
+    """**재귀식이다** — 지금 학습률에 곱한다. 원래 학습률에서 다시 세지 않는다.
+
+    혼자 쓰면 두 방식이 같은 수열을 낸다. 갈리는 것은 **다른 스케줄러가 같은 lr 을
+    함께 만질 때**다 — `ChainedScheduler` 로 둘을 겹치면 재귀식은 서로의 결과 위에
+    쌓이고 닫힌 식은 남이 한 일을 덮어쓴다. torch 가 재귀식이고, 그래서 여기도 그렇다.
+    """
+
     def __init__(self, optimizer, gamma, last_epoch=-1):
         self.gamma = gamma
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        return [base * self.gamma ** self.last_epoch for base in self.base_lrs]
+        if self.last_epoch == 0:
+            return [g["lr"] for g in self.optimizer.param_groups]
+        return [g["lr"] * self.gamma for g in self.optimizer.param_groups]
 
 
 class CosineAnnealingLR(_Scheduler):
@@ -234,6 +422,187 @@ class LambdaLR(_Scheduler):
 
     def get_lr(self):
         return [base * self.lr_lambda(self.last_epoch) for base in self.base_lrs]
+
+
+class ConstantLR(_Scheduler):
+    """`total_iters` 까지 **깎아 두었다가 원래대로 돌아온다.** 워밍업의 가장 단순한 꼴."""
+
+    def __init__(self, optimizer, factor=1.0 / 3, total_iters=5, last_epoch=-1):
+        self.factor, self.total_iters = factor, total_iters
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        # 재귀식. 깎는 것도 되돌리는 것도 **그 순간 한 번씩만** 한다.
+        groups = self.optimizer.param_groups
+        if self.last_epoch == 0:
+            return [g["lr"] * self.factor for g in groups]
+        if self.last_epoch != self.total_iters:
+            return [g["lr"] for g in groups]
+        return [g["lr"] / self.factor for g in groups]
+
+
+class LinearLR(_Scheduler):
+    """시작 배율에서 끝 배율까지 **직선으로** 옮겨간다.
+
+    `ConstantLR` 과 끝에서 만난다 — `total_iters` 를 지나면 둘 다 원래 학습률이다.
+    그래서 마지막 값만 보면 둘을 못 가르고, 골든이 자취를 통째로 묻는다.
+    """
+
+    def __init__(self, optimizer, start_factor=1.0 / 3, end_factor=1.0,
+                 total_iters=5, last_epoch=-1):
+        self.start_factor, self.end_factor = start_factor, end_factor
+        self.total_iters = total_iters
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        t = min(self.last_epoch, self.total_iters)
+        scale = self.start_factor + (self.end_factor - self.start_factor) * (
+            t / self.total_iters if self.total_iters else 1.0)
+        return [base * scale for base in self.base_lrs]
+
+
+class PolynomialLR(_Scheduler):
+    """`(1 - t/T)^power` 로 내린다. `power=1` 이면 직선이다."""
+
+    def __init__(self, optimizer, total_iters=5, power=1.0, last_epoch=-1):
+        self.total_iters, self.power = total_iters, power
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        groups = self.optimizer.param_groups
+        if self.last_epoch == 0 or self.last_epoch > self.total_iters:
+            return [g["lr"] for g in groups]
+        # 재귀식이라 **한 스텝의 비율**을 곱한다. `t == total_iters` 에서 0 이 된다.
+        decay = ((1.0 - self.last_epoch / self.total_iters)
+                 / (1.0 - (self.last_epoch - 1) / self.total_iters)) ** self.power
+        return [g["lr"] * decay for g in groups]
+
+
+class MultiplicativeLR(_Scheduler):
+    """**곱해 나간다** — `LambdaLR` 처럼 배율을 받지만 기준이 원래 학습률이 아니라
+    지금 학습률이다. 그 차이 때문에 같은 람다를 줘도 결과가 다르다."""
+
+    def __init__(self, optimizer, lr_lambda, last_epoch=-1):
+        self.lr_lambda = lr_lambda
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        if self.last_epoch == 0:
+            return list(self.base_lrs)
+        return [g["lr"] * self.lr_lambda(self.last_epoch)
+                for g in self.optimizer.param_groups]
+
+
+class CosineAnnealingWarmRestarts(_Scheduler):
+    """코사인으로 내리다가 **처음으로 되돌린다.** 주기가 `T_mult` 배씩 길어진다."""
+
+    def __init__(self, optimizer, T_0, T_mult=1, eta_min=0.0, last_epoch=-1):
+        self.T_0, self.T_mult, self.eta_min = T_0, T_mult, eta_min
+        self.T_i, self.T_cur = T_0, last_epoch
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [self.eta_min + (base - self.eta_min)
+                * (1 + _math.cos(_math.pi * self.T_cur / self.T_i)) / 2
+                for base in self.base_lrs]
+
+    def step(self):
+        self.last_epoch += 1
+        self.T_cur = self.T_cur + 1
+        # 주기를 다 쓰면 되돌리고 다음 주기를 늘린다.
+        while self.T_cur >= self.T_i:
+            self.T_cur -= self.T_i
+            self.T_i *= self.T_mult
+        for group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+            group["lr"] = lr
+
+
+class OneCycleLR(_Scheduler):
+    """올렸다가 내린다. **현대 학습 레시피의 기본값에 가깝다.**
+
+    torch 의 기본은 코사인 모양이고 올라가는 구간이 전체의 30% 다. 초기 학습률은
+    `max_lr/div_factor` 이고 끝은 `초기/final_div_factor` 라, **옵티마이저에 준
+    학습률이 아예 안 쓰인다** — 세우는 순간 덮어쓴다.
+    """
+
+    def __init__(self, optimizer, max_lr, total_steps, pct_start=0.3,
+                 div_factor=25.0, final_div_factor=1e4, last_epoch=-1):
+        self.max_lr, self.total_steps, self.pct_start = max_lr, total_steps, pct_start
+        self.initial_lr = max_lr / div_factor
+        self.min_lr = self.initial_lr / final_div_factor
+        # **torch 의 셈을 그대로 쓴다.** `pct_start × total_steps − 1` 이지
+        # `pct_start × (total_steps − 1)` 이 아니다 — 뒤엣것으로 적었더니 정점이
+        # 반 스텝쯤 밀려 최대차 7.6e-02 가 났다.
+        self.up = float(pct_start * total_steps) - 1
+        self.down = total_steps - self.up - 1
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        t = min(self.last_epoch, self.total_steps - 1)
+        if t <= self.up:
+            frac = t / self.up if self.up else 1.0
+            lo, hi = self.initial_lr, self.max_lr
+        else:
+            frac = (t - self.up) / max(1e-12, self.down)
+            lo, hi = self.max_lr, self.min_lr
+        # 코사인 보간 — 양 끝에서 기울기가 0 이다.
+        scale = (1 - _math.cos(_math.pi * frac)) / 2
+        return [lo + (hi - lo) * scale for _ in self.base_lrs]
+
+
+class SequentialLR:
+    """스케줄러를 **이어 붙인다.** 이정표에 닿으면 다음 것으로 넘어간다.
+
+    `_Scheduler` 를 안 물려받는다 — 자기 `get_lr` 이 없고 남의 것을 골라 부르는
+    일이라, 물려받으면 생성자가 `step()` 을 한 번 부르며 순서가 어긋난다.
+    """
+
+    def __init__(self, optimizer, schedulers, milestones, last_epoch=-1):
+        self.optimizer = optimizer
+        self.schedulers = list(schedulers)
+        self.milestones = list(milestones)
+        self.last_epoch = 0
+        # **세우는 순간 첫 스케줄러의 값으로 되돌린다.** 각 스케줄러가 만들어질 때
+        # 한 번씩 lr 을 고쳐 놓았으므로, 그대로 두면 마지막 것의 값에서 시작한다.
+        for group, base in zip(optimizer.param_groups, self.schedulers[0].base_lrs):
+            group["lr"] = base
+        self.schedulers[0].last_epoch = -1
+        self.schedulers[0].step()
+
+    def _which(self):
+        idx = sum(1 for m in self.milestones if m <= self.last_epoch)
+        return idx, (self.milestones[idx - 1] if idx else 0)
+
+    def step(self):
+        self.last_epoch += 1
+        idx, start = self._which()
+        sch = self.schedulers[min(idx, len(self.schedulers) - 1)]
+        if self.last_epoch == start:
+            # **넘어가는 순간 기준 학습률로 되돌리고** 새 스케줄러를 처음부터 밟는다.
+            # 앞 스케줄러가 깎아 둔 값에서 이어지지 않는다 — torch 가 그 자리에서
+            # 닫힌 식을 쓰기 때문이고, 닫힌 식의 기준은 `initial_lr` 이다.
+            for group, base in zip(self.optimizer.param_groups, sch.base_lrs):
+                group["lr"] = base
+            sch.last_epoch = -1
+        sch.step()
+
+    def get_last_lr(self):
+        return [g["lr"] for g in self.optimizer.param_groups]
+
+
+class ChainedScheduler:
+    """여럿을 **동시에** 건다. 각자의 배율이 곱해진다."""
+
+    def __init__(self, schedulers):
+        self.schedulers = list(schedulers)
+        self.optimizer = self.schedulers[0].optimizer
+
+    def step(self):
+        for sch in self.schedulers:
+            sch.step()
+
+    def get_last_lr(self):
+        return [g["lr"] for g in self.optimizer.param_groups]
 
 
 class ReduceLROnPlateau:
@@ -277,6 +646,17 @@ class _LRScheduler(_Namespace):
     CosineAnnealingLR = CosineAnnealingLR
     LambdaLR = LambdaLR
     ReduceLROnPlateau = ReduceLROnPlateau
+    ConstantLR = ConstantLR
+    LinearLR = LinearLR
+    PolynomialLR = PolynomialLR
+    MultiplicativeLR = MultiplicativeLR
+    CosineAnnealingWarmRestarts = CosineAnnealingWarmRestarts
+    OneCycleLR = OneCycleLR
+    SequentialLR = SequentialLR
+    ChainedScheduler = ChainedScheduler
+    # torch 가 기반 클래스를 이 이름으로 내놓는다. 상속해서 자기 스케줄러를 만드는
+    # 코드가 이것을 부른다.
+    LRScheduler = _Scheduler
 
 
 class _Optim(_Namespace):
@@ -284,6 +664,11 @@ class _Optim(_Namespace):
     Adam = Adam
     AdamW = AdamW
     RMSprop = RMSprop
+    Adagrad = Adagrad
+    Adadelta = Adadelta
+    Adamax = Adamax
+    NAdam = NAdam
+    RAdam = RAdam
     Optimizer = Optimizer
     lr_scheduler = _LRScheduler()
 
