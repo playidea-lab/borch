@@ -367,6 +367,21 @@ def quantile(x, q, dim=None, **kw):
     return wrap(out._h.reshape(_js_list([]))) if one else out
 
 
+def flatten(x, start_dim=1, end_dim=-1, **kw):
+    """축을 접는다. **borch.ts 에는 없어서 `reshape` 로 만든다** — 정의 그대로다."""
+    h = handle(x)
+    shape = [int(n) for n in h.shape]
+    rank = len(shape)
+    a = kw.get("start_dim", start_dim)
+    b = kw.get("end_dim", end_dim)
+    a = a + rank if a < 0 else a
+    b = b + rank if b < 0 else b
+    merged = 1
+    for n in shape[a:b + 1]:
+        merged *= n
+    return guarded(h.reshape, _js_list(shape[:a] + [merged] + shape[b + 1:]))
+
+
 def squeeze(x, dim=None, **kw):
     """`dim` 이 없으면 torch 는 **길이 1 인 축을 전부** 없앤다. borch.ts 는 하나씩이다."""
     h = handle(x)

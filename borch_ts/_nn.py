@@ -26,6 +26,8 @@ class _Functional:
     def __getattr__(self, name):
         # 모듈 쪽에 손으로 쓴 것은 여기서도 같은 것을 쓴다 — `F.pad` 가 그 예다.
         from . import _ops
+        if name == "embedding":
+            return embedding
         if name in ("pad", "clamp", "flip", "pow", "split", "chunk",
                     "layer_norm", "where", "squeeze", "repeat_interleave"):
             fn = getattr(_ops, name)
@@ -46,6 +48,39 @@ class _Functional:
 
 
 functional = _Functional()
+
+
+def embedding(idx, table):
+    """`F.embedding(번호, 표)` — 표에서 번호대로 행을 고른다.
+
+    **정의 그대로다.** `index_select` 가 하는 일과 같고, 기울기도 그쪽이 이미 안다 —
+    같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이
+    아니라 있는 것에 이름을 붙이는 것이므로 값이 갈릴 자리가 없다.
+    """
+    flat = handle(idx).reshape(_js.Array.of(int(handle(idx).size)))
+    picked = handle(table).indexSelect(0, flat)
+    shape = [int(n) for n in handle(idx).shape] + [int(handle(table).shape[1])]
+    return wrap(picked.reshape(_js.Array.from_(shape)))
+
+
+class Transformer:
+    """torch 의 `nn.Transformer` 는 여기 없다. **마스크 만드는 자리 하나만** 있다.
+
+    `generate_square_subsequent_mask` 는 층이 아니라 정의가 정해진 함수다 — 위쪽
+    삼각을 `-inf` 로, 나머지를 0 으로. 값이 실수라는 것이 요점이고, 참·거짓으로
+    뭉뚱그리면 어텐션 안에서 갈린다(골든 케이스 이름이 그렇게 적혀 있다).
+
+    나머지(인코더·디코더)는 없다. 없는 것을 흉내 내지 않는다.
+    """
+
+    @staticmethod
+    def generate_square_subsequent_mask(n):
+        import numpy as _np
+        from ._base import tensor as _t
+
+        m = _np.zeros((n, n), dtype=_np.float32)
+        m[_np.triu_indices(n, 1)] = -_np.inf
+        return _t(m)
 
 
 class _Rnn:
@@ -114,7 +149,14 @@ class Module:
         return self
 
     def __getattr__(self, name):
-        """`bn.weight` 처럼 층이 들고 있는 것을 그대로 넘긴다."""
+        """`bn.weight` 처럼 층이 들고 있는 것을 그대로 넘긴다.
+
+        **`_m` 을 여기서 다시 물으면 안 된다.** `_Wrap` 처럼 `_m` 이 없는 하위 클래스가
+        오면 `__getattr__` 이 자기 자신을 부르고 무한 재귀가 된다 — 실패는 CNN 학습
+        케이스에서 `RecursionError` 로 나왔고, 원인에서 한참 떨어진 자리다.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
         got = getattr(self._m, camel(name), None)
         if got is None:
             raise AttributeError(f"borch.ts 층에 `{name}` 이 없다")
@@ -127,17 +169,25 @@ def _layer(js_name, *args):
     return Module(getattr(_ts.nn, js_name).new(*args))
 
 
-class _Wrap(Module):
+class _Wrap:
     """borch.ts 에 층으로는 없고 **텐서 메서드로는 있는** 것들.
 
     `nn.Softmax(dim)` 은 `x.softmax(dim)` 이다. 없는 것을 근사하는 것이 아니라
     있는 것에 torch 의 이름을 붙이는 것이므로, 값은 같은 자리에서 나온다.
+
+    **`Module` 을 상속하지 않는다.** 상속했더니 `_m` 이 없는데 `Module` 의 메서드가
+    그것을 찾았고, `__getattr__` 이 다시 자기를 불러 무한 재귀가 됐다 — CNN 학습
+    케이스에서 `RecursionError` 로 나왔고 원인에서 한참 떨어진 자리였다.
+    파라미터가 없는 층이라 `Module` 에서 물려받을 것도 없다.
     """
 
     __slots__ = ("_fn",)
 
     def __init__(self, fn):
         self._fn = fn
+
+    def forward(self, *args):
+        return self(*args)
 
     def __call__(self, *args):
         return self._fn(*args)
@@ -158,11 +208,74 @@ class _Wrap(Module):
         return self
 
 
+class _Sequential:
+    """**파이썬 쪽에서 엮는다.**
+
+    borch.ts 의 `Sequential` 에 넘기려면 층마다 JS 쪽 물건이 있어야 하는데,
+    `Softmax`·`Flatten` 같은 것은 텐서 메서드를 감싼 파이썬 층이라 그것이 없다.
+    JS 에 `Lambda` 같은 자리를 만들어 넣을 수도 있지만, 그러면 파라미터가 없는
+    층 때문에 커널 쪽 표면이 는다. 엮는 일은 파이썬이 해도 값이 같다.
+
+    이름 규칙은 borch.ts 와 맞춘다 — `0.weight` 처럼 자리 번호가 앞에 붙고,
+    골든이 그 이름으로 가중치를 넣고 꺼낸다.
+    """
+
+    __slots__ = ("layers",)
+
+    def __init__(self, layers):
+        self.layers = layers
+
+    def __call__(self, x):
+        for m in self.layers:
+            x = m(x)
+        return x
+
+    def forward(self, x):
+        return self(x)
+
+    def parameters(self):
+        return [p for m in self.layers for p in _params_of(m)]
+
+    def state_dict(self):
+        out = {}
+        for i, m in enumerate(self.layers):
+            for k, v in _state_of(m).items():
+                out[f"{i}.{k}"] = v
+        return out
+
+    def named_parameters(self):
+        return list(self.state_dict().items())
+
+    def load_state_dict(self, values, strict=True):
+        groups = {}
+        for key, v in values.items():
+            head, _, rest = key.partition(".")
+            groups.setdefault(int(head), {})[rest] = v
+        for i, sub in groups.items():
+            self.layers[i].load_state_dict(sub, strict)
+
+    def train(self, mode=True):
+        for m in self.layers:
+            m.train(mode)
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+
+def _params_of(m):
+    return m.parameters() if hasattr(m, "parameters") else []
+
+
+def _state_of(m):
+    return m.state_dict() if hasattr(m, "state_dict") else {}
+
+
 def Sequential(*layers):
     flat = []
     for l in layers:
         flat.extend(l if isinstance(l, (list, tuple)) else [l])
-    return Module(_ts.nn.Sequential.new(*[m._m for m in flat]))
+    return _Sequential(flat)
 
 
 def Linear(inf, outf, bias=True):
@@ -204,8 +317,9 @@ def MaxPool3d(k=2, stride=None):
     return _Wrap(lambda x: wrap(handle(x).maxPool3d(k, stride)))
 
 
-def Flatten(start=1):
-    return _Wrap(lambda x: wrap(handle(x).flatten(start)))
+def Flatten(start_dim=1, end_dim=-1):
+    from ._ops import flatten
+    return _Wrap(lambda x: flatten(x, start_dim, end_dim))
 
 
 def Identity():
@@ -316,12 +430,17 @@ class _Attention(Module):
     """torch 의 어텐션은 `(질의, 키, 값)` 셋을 받고 `(출력, 가중치)` 를 준다."""
 
     def __call__(self, q, k=None, v=None, attn_mask=None, **kw):
-        got = self._m.call(handle(q), handle(k if k is not None else q),
-                           handle(v if v is not None else q),
-                           handle(attn_mask) if attn_mask is not None else None)
-        if _ts.isTensor(got):
-            return wrap(got), None
-        return wrap(got.output), wrap(got.weights)
+        """**`attend` 를 부른다 — `forward` 는 마스크를 버린다.**
+
+        borch.ts 의 `forward(x)` 는 마스크 자리에 `null` 을 넣는다. `call` 로 가면
+        마스크가 조용히 사라지고, 값만 조금 다른 답이 나온다(최대차 1.6e-01) —
+        자기 자신을 보는 자리까지 섞이니 그럴듯하게 틀린 값이다.
+
+        셋을 따로 받는 것도 torch 의 모양일 뿐, 이쪽은 자기 주의(self-attention)라
+        하나만 쓴다. 골든이 `mod(x, x, x)` 로 부르므로 셋이 같다.
+        """
+        mask = handle(attn_mask) if attn_mask is not None else None
+        return wrap(self._m.attend(handle(q), mask)), None
 
 
 def MultiheadAttention(embed, heads, batch_first=False):

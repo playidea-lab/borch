@@ -55,7 +55,8 @@ from ._base import Tensor, tensor                        # noqa: E402,F401
 # `linalg`·`einsum` 처럼 첫 인자가 텐서가 아닌 것들이 그쪽으로 새면 안 된다 —
 # 실제로 `linalg` 가 함수로 잡혀서 `linalg.cholesky` 가 통째로 실패했다.
 from ._ops import (                                      # noqa: E402,F401
-    aminmax, arange, as_tensor, cat, chunk, clamp, clip, einsum, eye, flip,
+    aminmax, arange, as_tensor, cat, chunk, clamp, clip, einsum, eye, flatten,
+    flip,
     full, linalg, linspace, matrix_power, no_grad, ones, pow, quantile, rand,
     randn, repeat_interleave, split, squeeze, stack, where, zeros,
 )

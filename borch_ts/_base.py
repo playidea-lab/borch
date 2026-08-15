@@ -230,7 +230,7 @@ class Tensor:
         # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
         if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
-                    "pow", "squeeze", "repeat_interleave"):
+                    "pow", "squeeze", "repeat_interleave", "flatten"):
             from . import _ops
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(self, *a, **k)
@@ -279,7 +279,12 @@ class Tensor:
     __sub__, __rsub__ = _op("sub"), _rop("sub")
     __mul__, __rmul__ = _op("mul"), _rop("mul")
     __truediv__, __rtruediv__ = _op("div"), _rop("div")
-    __pow__ = _op("pow")
+    def __pow__(self, other):
+        """**정수 지수는 곱셈으로 푼다.** WGSL 의 `pow` 는 `exp2(y·log2(x))` 라 밑이
+        음수면 답이 없고, 짝수 지수의 순방향만 우연히 맞고 기울기가 nan 이 된다 —
+        `borch.ts` 의 `powScalar` 가 그 자리를 위해 있다."""
+        from ._ops import pow as _pow
+        return _pow(self, other)
     __eq__, __ne__ = _op("eq"), _op("ne")
     __lt__, __le__ = _op("lt"), _op("le")
     __gt__, __ge__ = _op("gt"), _op("ge")

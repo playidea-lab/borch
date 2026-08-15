@@ -99,7 +99,8 @@ _SCHED_ARGS = {
     "ExponentialLR": ("gamma",),
     "CosineAnnealingLR": ("T_max", "eta_min"),
     "LambdaLR": ("lr_lambda",),
-    "ReduceLROnPlateau": ("mode", "factor", "patience"),
+    # borch.ts 에는 `mode` 가 없다 — `rel` 하나뿐이라 자리도 없다.
+    "ReduceLROnPlateau": ("factor", "patience", "threshold"),
 }
 
 
