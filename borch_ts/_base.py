@@ -307,8 +307,15 @@ def translate(exc):
     통하게 하려고 그렇게 쓴 것이다.
     """
     text = str(exc)
+    # **앞머리만 벗긴다.** `replace` 로 첫 번째 `Error: ` 를 지웠더니 `RuntimeError:
+    # shape …` 이 `Runtimeshape …` 이 되어 문구가 망가졌다 — 검색이 통하라고 원문을
+    # 담아 둔 것을 우리가 부순 셈이다.
+    for head in ("RuntimeError: ", "IndexError: ", "Error: "):
+        if text.startswith(head):
+            text = text[len(head):]
+            break
     kind = IndexError if ("index" in text.lower() or "색인" in text) else RuntimeError
-    return kind(text.replace("Error: ", "", 1))
+    return kind(text)
 
 
 class _Pair:
@@ -330,6 +337,12 @@ class _Pair:
 
     def __getitem__(self, i):
         return (self.values, self.indices)[i]
+
+    def __getattr__(self, name):
+        """**값 쪽으로 넘긴다.** torch 의 `median()` 은 dim 없이 부르면 값 하나를
+        주는데 borch.ts 는 늘 쌍을 준다 — 그 자리에서 `.numpy()` 나 `.shape` 를
+        물으면 값을 묻는 것이다."""
+        return getattr(self.values, name)
 
 
 def settle(out):
@@ -374,10 +387,18 @@ def wrap(x):
     """JS 텐서든 파이썬 수든 우리 `Tensor` 로."""
     if isinstance(x, Tensor):
         return x
+    # **파이썬 수의 형이 승격 규칙에 들어간다.** `int64 + 2` 는 int64 이고
+    # `int64 + 2.0` 은 float32 다. 전부 float32 스칼라로 만들었더니 승격이 다 float32 로
+    # 무너졌다 — 값은 맞는데 형 이름만 갈리는 자리라 값 대조로는 안 보인다.
     if isinstance(x, bool):
-        return Tensor(_ts.Tensor.full(_js_list([]), 1.0 if x else 0.0))
-    if isinstance(x, (int, float)):
-        return Tensor(_ts.Tensor.full(_js_list([]), float(x)))
+        return Tensor(_ts.Tensor.from_(
+            _js.Float32Array.new(_to_js([1.0 if x else 0.0])),
+            _js_list([]), False, "bool"))
+    if isinstance(x, int):
+        return Tensor(_ts.Tensor.from_(
+            _js.Float32Array.new(_to_js([float(x)])), _js_list([]), False, "int64"))
+    if isinstance(x, float):
+        return Tensor(_ts.Tensor.full(_js_list([]), x))
     return Tensor(x)
 
 

@@ -41,6 +41,22 @@ class _Functional:
 functional = _Functional()
 
 
+class _Rnn:
+    """`nn.utils.rnn`. 지금 여기 있는 것은 `pad_sequence` 하나다."""
+
+    @staticmethod
+    def pad_sequence(parts, batch_first=False, padding_value=0.0):
+        return wrap(_ts.Tensor.padSequence(
+            _js.Array.new(*[handle(p) for p in parts]), batch_first, padding_value))
+
+
+class _Utils:
+    rnn = _Rnn()
+
+
+utils = _Utils()
+
+
 class Module:
     """borch.ts 의 층 하나를 감싼다.
 
@@ -60,7 +76,8 @@ class Module:
         return self(*args)
 
     def parameters(self):
-        return [wrap(p) for p in self._m.parameters()]
+        # JS 배열은 파이썬에서 바로 못 돈다 — `to_py` 로 목록을 받아야 한다.
+        return [wrap(p) for p in self._m.parameters().to_py()]
 
     def state_dict(self):
         got = self._m.stateDict()

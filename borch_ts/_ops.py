@@ -103,6 +103,13 @@ _SIGNATURE = {
     "one_hot": ("num_classes",),
     "smooth_l1_loss": ("target", "beta"),
     "interpolate": ("scale_factor",),
+    "max": ("dim", "keepdim"),
+    "min": ("dim", "keepdim"),
+    "aminmax": ("dim",),
+    "quantile": ("q", "dim"),
+    "index_fill": ("dim", "index", "value"),
+    "scatter": ("dim", "index", "src"),
+    "cumulative_trapezoid": ("dim",),
 }
 
 
@@ -199,15 +206,26 @@ def __getattr__(name):
 
 # ── 첫 인자가 텐서가 아닌 것들. 여기만 손으로 적는다. ────────────────────
 
-def arange(*args):
-    """`arange(n)` · `arange(a, b)` · `arange(a, b, step)`."""
+def arange(*args, **kw):
+    """`arange(n)` · `arange(a, b)` · `arange(a, b, step)`.
+
+    **borch.ts 의 `arange` 는 개수 하나만 받는다.** 셋을 넘겼더니 첫 인자 0 이 개수로
+    읽혀 빈 텐서가 나왔고, 그 빈 텐서를 `reshape` 하는 자리에서 90 건이 무너졌다 —
+    실패 문구는 `shape '[3,3]' is invalid for input of size 0` 이었고, 원인에서
+    두 칸 떨어진 자리다. 나머지 두 꼴은 여기서 만든다.
+    """
     if len(args) == 1:
         start, stop, step = 0, args[0], 1
     elif len(args) == 2:
         (start, stop), step = args, 1
     else:
         start, stop, step = args
-    return wrap(_ts.Tensor.arange(start, stop, step))
+    n = max(0, -(-int(stop - start) // int(step)) if step else 0)
+    out = _ts.Tensor.arange(n)
+    if start or step != 1:
+        out = out.binary("mul", _ts.Tensor.full(_js_list([]), float(step)))
+        out = out.binary("add", _ts.Tensor.full(_js_list([]), float(start)))
+    return wrap(out)
 
 
 def _shape_of(shape):
