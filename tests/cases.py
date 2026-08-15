@@ -898,7 +898,10 @@ def _as_expected(fn):
     적으라는 뜻이지, 저절로 넓어지면 안 된다.
     """
     def run(L):
-        must_reject = hasattr(L, "backend")      # golden.check 와 같은 판별이다
+        # **브라우저에서 도는 구현은 거절하는 쪽이다.** 자매는 TF.js 텐서가 불변이라,
+        # borch.ts 는 GPU 버퍼를 뷰로 나눠 갖지 않아서 — 이유가 다르고 결론이 같다.
+        # 처음에는 `hasattr(L, "backend")` 하나로 갈랐는데 그것은 자매만 가리켰다.
+        must_reject = hasattr(L, "backend") or getattr(L, "__name__", "") == "borch_ts"
         try:
             fn(L)
         except Exception as exc:                                # noqa: BLE001

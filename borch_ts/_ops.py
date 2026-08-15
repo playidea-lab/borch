@@ -341,6 +341,41 @@ def as_tensor(data, dtype=None):
     return data if isinstance(data, Tensor) else _t(data, dtype)
 
 
+def squeeze(x, dim=None, **kw):
+    """`dim` 이 없으면 torch 는 **길이 1 인 축을 전부** 없앤다. borch.ts 는 하나씩이다."""
+    h = handle(x)
+    dim = kw.get("dim", dim)
+    if dim is not None:
+        return guarded(h.squeeze, dim)
+    keep = [int(n) for n in h.shape if int(n) != 1]
+    return guarded(h.reshape, _js_list(keep))
+
+
+def where(cond, a, b):
+    """torch 는 `where(조건, 참, 거짓)`, borch.ts 는 `참.where(조건, 거짓)` 이다.
+    자리를 바꾸지 않으면 참·거짓이 뒤집힌 값이 나온다 — 값 대조로만 보인다."""
+    return guarded(handle(a).where, handle(cond), handle(b))
+
+
+def layer_norm(x, shape=None, weight=None, bias=None, eps=1e-5, **kw):
+    """torch 는 **정규화할 모양**을 받고 borch.ts 는 축을 받는다.
+
+    `(마지막 축의 길이,)` 처럼 뒤에서부터 세는 것이 torch 의 규칙이므로, 받은 모양의
+    길이만큼 뒤에서 센 축이 시작점이다. 그대로 넘기면 축 4 를 랭크 2 에 물어보게 된다.
+    """
+    dim = -len(shape) if isinstance(shape, (list, tuple)) and shape else -1
+    return guarded(handle(x).layerNorm, dim, kw.get("eps", eps))
+
+
+def repeat_interleave(x, repeats, dim=None, **kw):
+    """`dim` 이 없으면 torch 는 **평평하게 편 뒤** 되풀이한다."""
+    h = handle(x)
+    if dim is None:
+        h = h.reshape(_js_list([int(h.size)]))
+        dim = 0
+    return guarded(h.repeatInterleave, repeats, dim)
+
+
 def flip(x, dims=None, **kw):
     """torch 는 축 **목록**을 받고 borch.ts 는 하나씩 받는다. 차례로 뒤집는다."""
     dims = kw.get("dims", dims)

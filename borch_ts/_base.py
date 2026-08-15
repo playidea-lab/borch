@@ -31,6 +31,11 @@ def _read(handle):
     return _np.asarray(_run_sync(handle.toArray()), dtype=_np.float32)
 
 
+def int64_name():
+    """색인 텐서의 형. 이름을 한 곳에서만 적는다."""
+    return _DType("int64")
+
+
 def _core_repr(shim):
     """코어의 `_tensor_repr` 을 빌려온다. 브라우저에서는 `/work` 아래에 있다."""
     global _REPR
@@ -166,6 +171,17 @@ class Tensor:
     def float(self):
         return self.to("float32")
 
+    def double(self):
+        """**없다.** WebGPU 의 셰이더에 배정도가 없다.
+
+        자매(`borch_webgpu`)가 TF.js 때문에 거절하는 것과 같은 자리다 — 이유가 다를
+        뿐 결론이 같고, 골든이 그 거절을 답으로 굳혔다. 조용히 float32 로 돌려주면
+        "배정도로 계산했다" 고 믿는 코드가 생긴다.
+        """
+        raise RuntimeError(
+            "Only Tensors of floating point dtype float32 are supported — "
+            "float64 는 WebGPU 셰이더에 없다")
+
     def long(self):
         return self.to("int64")
 
@@ -213,7 +229,8 @@ class Tensor:
 
         # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
-        if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip", "pow"):
+        if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
+                    "pow", "squeeze", "repeat_interleave"):
             from . import _ops
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(self, *a, **k)
@@ -274,8 +291,10 @@ class Tensor:
                 stop = out.shape[axis] if k.stop is None else k.stop
                 out = wrap(out._h.narrow(axis, start, stop - start))
                 axis += 1
-            elif isinstance(k, Tensor):
-                out = wrap(out._h.indexSelect(axis, k._h))
+            elif isinstance(k, (Tensor, list, tuple)):
+                # `x[[2, 0]]` — 번호 목록으로 고르는 자리. torch 코드가 흔히 쓴다.
+                idx = k if isinstance(k, Tensor) else tensor(list(k), int64_name())
+                out = wrap(out._h.indexSelect(axis, idx._h))
                 axis += 1
             else:
                 n = out.shape[axis]

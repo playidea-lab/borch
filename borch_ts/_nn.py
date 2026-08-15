@@ -26,7 +26,8 @@ class _Functional:
     def __getattr__(self, name):
         # 모듈 쪽에 손으로 쓴 것은 여기서도 같은 것을 쓴다 — `F.pad` 가 그 예다.
         from . import _ops
-        if name in ("pad", "clamp", "flip", "pow", "split", "chunk"):
+        if name in ("pad", "clamp", "flip", "pow", "split", "chunk",
+                    "layer_norm", "where", "squeeze", "repeat_interleave"):
             fn = getattr(_ops, name)
             return lambda *a, **k: fn(*a, **k)
 
@@ -88,6 +89,14 @@ class Module:
     def state_dict(self):
         got = self._m.stateDict()
         return {str(k): wrap(getattr(got, k)) for k in _js.Object.keys(got)}
+
+    def named_parameters(self):
+        """`(이름, 텐서)` 짝. torch 코드가 `dict(...)` 로 받아 이름으로 꺼낸다.
+
+        `state_dict` 와 같은 이름 규칙을 쓴다 — `0.weight` 처럼 자리 번호가 앞에
+        붙는다. 실제로 그 이름으로 꺼내는 케이스가 있어서 규칙이 맞아야 한다.
+        """
+        return list(self.state_dict().items())
 
     def load_state_dict(self, values, strict=True):
         from pyodide.ffi import to_js
