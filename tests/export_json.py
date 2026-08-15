@@ -56,9 +56,20 @@ def _value(arr):
                 "values": [int(v) for v in flat]}
     # 실수는 **float64 로 적는다.** float32 로 반올림해 적으면 읽는 쪽이 우리보다
     # 정확할 때 그 차이가 우리 반올림 탓인지 구현 탓인지 못 가른다.
+    # **유한하지 않은 값은 종류까지 적는다.** JSON 에 `nan`·`Infinity` 를 그대로
+    # 적으면 엄밀한 파서가 거절하므로 자리를 따로 남기는데, 오래 자리 번호만 적고
+    # 종류를 안 적었다 — 읽는 쪽이 전부 `nan` 으로 되살리므로 `inf` 와 `nan` 이
+    # 같아졌다. 답에 무한대가 없는 동안은 안 걸렸고, `fmax` 케이스가 처음으로
+    # 무한대를 답에 담으면서 드러났다(최대차 0 인데 실패로 나왔다).
+    def kind_of(v):
+        if np.isnan(v):
+            return "nan"
+        return "inf" if v > 0 else "-inf"
+
     return {"kind": "float", "shape": list(arr.shape),
             "values": [None if not np.isfinite(v) else float(v) for v in flat],
-            "nonfinite": [i for i, v in enumerate(flat) if not np.isfinite(v)]}
+            "nonfinite": [[i, kind_of(v)] for i, v in enumerate(flat)
+                          if not np.isfinite(v)]}
 
 
 def export(npz_path=None, out_path=DEFAULT_OUT):

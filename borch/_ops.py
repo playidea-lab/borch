@@ -1217,6 +1217,181 @@ def column_stack(tensors):
 row_stack = vstack
 
 
+# ── 이름만이 아니라 **계산이 없던** 것들 ───────────────────────────────────
+
+def empty_like(t, **kw):
+    """모양만 빌린다. 값은 정하지 않는다 — torch 도 그렇다."""
+    return zeros(*_wrap(t).data.shape)
+
+
+def rand_like(t, **kw):
+    return rand(*_wrap(t).data.shape)
+
+
+def randn_like(t, **kw):
+    return randn(*_wrap(t).data.shape)
+
+
+def randint_like(t, low, high=None, **kw):
+    if high is None:
+        low, high = 0, low
+    return randint(low, high, _wrap(t).data.shape)
+
+
+def scalar_tensor(value, **kw):
+    return tensor(_np.asarray(value, dtype=_DEFAULT_DTYPE))
+
+
+def logspace(start, end, steps, base=10.0, **kw):
+    """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
+    return tensor((base ** _np.linspace(start, end, steps)).astype(_DEFAULT_DTYPE))
+
+
+def meshgrid(*tensors, indexing="ij"):
+    """격자를 만든다. **`indexing` 을 안 주면 torch 가 경고하고 `ij` 로 간다.**
+
+    `xy` 는 앞의 두 축이 뒤바뀐 것이라, 규칙을 하나로 뭉뚱그리면 2 차원에서만
+    우연히 맞는다.
+    """
+    ts = [_wrap(v) for v in tensors]
+    if indexing not in ("ij", "xy"):
+        raise RuntimeError(f"indexing 은 'ij' 나 'xy' 다: {indexing!r}")
+    order = list(range(len(ts)))
+    if indexing == "xy" and len(ts) >= 2:
+        order[0], order[1] = order[1], order[0]
+    sizes = [ts[i].data.shape[0] for i in order]
+    out = []
+    for place, i in enumerate(order):
+        shape = [1] * len(ts)
+        shape[place] = sizes[place]
+        out.append(expand(ts[i].reshape(*shape), *sizes))
+    if indexing == "xy" and len(ts) >= 2:
+        out[0], out[1] = out[1], out[0]
+    return tuple(out)
+
+
+def lerp(start, end, weight):
+    """`start + weight·(end − start)`. 두 점 사이를 고르게 잇는다."""
+    start, end = _wrap(start), _wrap(end)
+    return start + (end - start) * weight
+
+
+def nan_to_num(t, nan=0.0, posinf=None, neginf=None):
+    """NaN 과 무한대를 유한한 수로 바꾼다. **안 주면 그 dtype 의 끝값이다.**"""
+    t = _wrap(t)
+    d = t.data
+    hi = _np.finfo(d.dtype).max if posinf is None else posinf
+    lo = _np.finfo(d.dtype).min if neginf is None else neginf
+    fixed = _np.nan_to_num(d, nan=nan, posinf=hi, neginf=lo)
+    keep = _np.isfinite(d)
+    return t._make(fixed.astype(d.dtype), (t,), lambda g: (g * keep,),
+                   "NanToNumBackward0")
+
+
+def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
+    a, b = _wrap(a), _wrap(b)
+    return Tensor(_np.isclose(a.data, b.data, rtol=rtol, atol=atol,
+                              equal_nan=equal_nan))
+
+
+def isreal(t):
+    """실수만 있으므로 전부 참이다. **거짓말이 아니라 사실이다** — 복소수가 없다."""
+    return Tensor(_np.ones(_wrap(t).data.shape, dtype=bool))
+
+
+def isposinf(t):
+    return Tensor(_np.isposinf(_wrap(t).data))
+
+
+def isneginf(t):
+    return Tensor(_np.isneginf(_wrap(t).data))
+
+
+def isin(elements, test_elements, **kw):
+    return Tensor(_np.isin(_wrap(elements).data, _wrap(test_elements).data))
+
+
+def _nan_extreme(name, pick):
+    """`fmax`·`fmin`. **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다."""
+    def call(a, b):
+        a, b = _wrap(a), _wrap(b)
+        out = pick(a.data, b.data)
+        take_a = out == a.data
+
+        def back(g):
+            g = _np.asarray(g)
+            return (g * take_a, g * ~take_a)
+
+        return a._make(out, (a, b), back, f"{name.capitalize()}Backward0")
+    call.__name__ = name
+    return call
+
+
+fmax = _nan_extreme("fmax", _np.fmax)
+fmin = _nan_extreme("fmin", _np.fmin)
+
+
+def float_power(a, b):
+    """실수 지수. torch 는 배정도로 세지만 여기는 float32 뿐이다."""
+    return _wrap(a) ** b
+
+
+def logical_xor(a, b):
+    return Tensor(_np.logical_xor(_wrap(a).data != 0, _wrap(b).data != 0))
+
+
+def var_mean(t, dim=None, keepdim=False, **kw):
+    """**둘을 한 번에 준다.** 하나만 물으면 다른 하나가 틀려도 안 걸린다.
+
+    **이름으로 넘긴다.** `var` 의 자리 순서가 `(dim, unbiased, keepdim)` 이라 자리로
+    주면 `keepdim` 이 `unbiased` 자리에 들어간다 — 그러면 ddof 가 1 에서 0 으로
+    바뀌어 값이 12/11 배 어긋난다. 실제로 그렇게 걸렸다.
+    """
+    t = _wrap(t)
+    return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
+
+
+def std_mean(t, dim=None, keepdim=False, **kw):
+    t = _wrap(t)
+    return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
+
+
+def inner(a, b):
+    """마지막 축끼리의 안쪽 곱. 1 차원이면 점곱이다."""
+    a, b = _wrap(a), _wrap(b)
+    return a @ b.transpose(-2, -1) if len(a.data.shape) > 1 else (a * b).sum()
+
+
+def vdot(a, b):
+    return (_wrap(a) * _wrap(b)).sum()
+
+
+def kron(a, b):
+    """크로네커 곱. 한쪽을 늘려 곱하고 다시 접는다 — 새 커널이 필요 없다."""
+    a, b = _wrap(a), _wrap(b)
+    ash, bsh = a.data.shape, b.data.shape
+    if len(ash) != 1 or len(bsh) != 1:
+        _unsupported("kron(1 차원이 아닌 것)")
+    out = a.reshape(ash[0], 1) * b.reshape(1, bsh[0])
+    return out.reshape(ash[0] * bsh[0])
+
+
+def cross(a, b, dim=-1):
+    """외적. 축의 길이가 3 이어야 한다."""
+    a, b = _wrap(a), _wrap(b)
+    rank = len(a.data.shape)
+    axis = dim + rank if dim < 0 else dim
+    if a.data.shape[axis] != 3:
+        raise RuntimeError(f"cross 는 축 {dim} 의 길이가 3 이어야 합니다")
+
+    def part(t, i):
+        return narrow(t, axis, i, 1)
+
+    return cat([part(a, 1) * part(b, 2) - part(a, 2) * part(b, 1),
+                part(a, 2) * part(b, 0) - part(a, 0) * part(b, 2),
+                part(a, 0) * part(b, 1) - part(a, 1) * part(b, 0)], axis)
+
+
 def block_diag(*tensors):
     """대각선에 블록을 늘어놓고 나머지는 0. **0 으로 메우므로 그쪽에는 기울기가 없다.**"""
     ts = [atleast_2d(_wrap(v)) for v in tensors]

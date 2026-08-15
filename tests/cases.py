@@ -710,6 +710,86 @@ def act_cases(inp=None):
     return cases
 
 
+NEWFN_PREFIX = "newfn::"
+
+
+def new_function_cases(inp=None):
+    """torch 에 있고 여기 없던 **진짜 새 기능** 한 묶음.
+
+    앞선 두 묶음은 이름만 없던 것들이었다 — 연산자가 이미 하는 일에 철자를 붙였다.
+    여기는 계산 자체가 없던 자리다.
+
+    고른 기준은 **교재가 부르는가**다. `torch.igammac` 이 없어서 멈추는 코드보다
+    `torch.meshgrid` 나 `torch.randn_like` 가 없어서 멈추는 코드가 훨씬 많다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    x1, x2 = inp["x1"], inp["x2"]
+    pos = inp["xp"]
+    withnan = np.array([1., np.nan, -np.inf, np.inf, 3.], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((NEWFN_PREFIX + name, fn))
+
+    # ── `*_like` — 모양만 빌린다. **값이 아니라 모양을 답으로 굳힌다.** ──────
+    #
+    # 난수 계열은 값이 같을 수 없으므로 모양을 문자열로 낸다. `zeros_like` 처럼
+    # 값이 정해진 것은 값으로 묻는다.
+    for name in ("empty_like", "rand_like", "randn_like"):
+        add(f"{name}/모양",
+            lambda L, n=name: " ".join(str(int(v)) for v in
+                                       getattr(L, n)(L.tensor(x2)).shape))
+    add("randint_like/모양",
+        lambda L: " ".join(str(int(v)) for v in L.randint_like(L.tensor(x2), 5).shape))
+
+    add("logspace", lambda L: L.logspace(0.0, 2.0, 5))
+    add("scalar_tensor", lambda L: L.scalar_tensor(2.5))
+
+    # ── meshgrid. **`indexing` 을 안 주면 torch 가 경고하고 `ij` 로 간다.** ──
+    add("meshgrid/0", lambda L: L.meshgrid(L.tensor(x1[:3]), L.tensor(x1[:2]),
+                                           indexing="ij")[0])
+    add("meshgrid/1", lambda L: L.meshgrid(L.tensor(x1[:3]), L.tensor(x1[:2]),
+                                           indexing="ij")[1])
+    add("meshgrid(xy)", lambda L: L.meshgrid(L.tensor(x1[:3]), L.tensor(x1[:2]),
+                                             indexing="xy")[0])
+
+    # ── 원소별. ────────────────────────────────────────────────────────────
+    add("lerp", lambda L: L.lerp(L.tensor(x1), L.tensor(x1 * 2), 0.25))
+    add("nan_to_num", lambda L: L.nan_to_num(L.tensor(withnan)))
+    add("nan_to_num(값 지정)",
+        lambda L: L.nan_to_num(L.tensor(withnan), nan=0.5, posinf=9.0, neginf=-9.0))
+    add("isclose", lambda L: L.isclose(L.tensor(x1), L.tensor(x1 + 1e-9)))
+    add("isreal", lambda L: L.isreal(L.tensor(withnan)))
+    add("isposinf", lambda L: L.isposinf(L.tensor(withnan)))
+    add("isneginf", lambda L: L.isneginf(L.tensor(withnan)))
+    # **`fmax`·`fmin` 은 NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다.
+    add("fmax(NaN 건너뜀)",
+        lambda L: L.fmax(L.tensor(withnan), L.tensor(np.zeros(5, dtype=np.float32))))
+    add("fmin(NaN 건너뜀)",
+        lambda L: L.fmin(L.tensor(withnan), L.tensor(np.zeros(5, dtype=np.float32))))
+    add("float_power", lambda L: L.float_power(L.tensor(pos), 2.0))
+    add("logical_xor",
+        lambda L: L.logical_xor(L.tensor(np.array([1., 0., 1., 0.], dtype=np.float32)),
+                                L.tensor(np.array([1., 1., 0., 0.], dtype=np.float32))))
+
+    # `isin` — 원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다.
+    add("isin", lambda L: L.isin(L.tensor(np.array([1., 2., 3., 4.], dtype=np.float32)),
+                                 L.tensor(np.array([2., 4.], dtype=np.float32))))
+
+    # ── 짝을 내는 축약. **하나만 물으면 다른 하나가 틀려도 통과한다.** ───────
+    add("var_mean/분산", lambda L: L.var_mean(L.tensor(x2))[0])
+    add("var_mean/평균", lambda L: L.var_mean(L.tensor(x2))[1])
+    add("std_mean/표준편차", lambda L: L.std_mean(L.tensor(x2))[0])
+
+    # ── 곱셈 계열. ─────────────────────────────────────────────────────────
+    add("inner", lambda L: L.inner(L.tensor(x2), L.tensor(x2)))
+    add("vdot", lambda L: L.vdot(L.tensor(x1), L.tensor(x1)))
+    add("kron", lambda L: L.kron(L.tensor(x1[:2]), L.tensor(x1[2:4])))
+    add("cross", lambda L: L.cross(L.tensor(x1[:3].reshape(1, 3)),
+                                   L.tensor(x1[3:6].reshape(1, 3)), dim=1))
+    return cases
+
+
 POOL_PREFIX = "pool::"
 
 
@@ -2913,6 +2993,7 @@ def golden_cases(inp=None):
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
+            + new_function_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

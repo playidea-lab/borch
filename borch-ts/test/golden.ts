@@ -20,7 +20,8 @@ interface GoldenValue {
   kind: "float" | "int" | "bool" | "string";
   shape?: number[];
   values?: (number | boolean | null)[];
-  nonfinite?: number[];
+  /** `[자리, 종류]` 짝. 옛 파일은 자리 번호만 담고 있어 둘 다 받는다. */
+  nonfinite?: (number | [number, string])[];
   value?: string;
 }
 
@@ -97,15 +98,22 @@ function compare(
     // 모양이 다른데 원소 수만 같은 것은 **조용히 틀리는 쪽**이다. 값을 보기 전에 잡는다.
     return `모양이 다르다: 우리 ${describe(gotShape)}, 골든 ${describe(shape)}`;
   }
-  const nonfinite = new Set(want.nonfinite ?? []);
+  // **종류까지 온다.** 오래 자리 번호만 실려서 여기가 "유한하지 않다" 까지만
+  // 견줬고, 그러면 `NaN` 과 `+inf` 와 `-inf` 가 서로 통과한다. 답에 무한대가 있는
+  // 케이스가 생기면서 그 구멍이 드러났다.
+  const nonfinite = new Map<number, string>(
+    (want.nonfinite ?? []).map((e) =>
+      Array.isArray(e) ? [e[0] as number, e[1] as string] : [e as number, "?"]),
+  );
   for (let i = 0; i < values.length; i++) {
     const raw = values[i];
     if (raw === undefined) return `[${i}] 골든에 값이 비어 있다 — 파일이 깨졌다`;
-    // 비유한값은 JSON 에 null 로 적히고 자리만 따로 온다. NaN 인지 ±inf 인지는
-    // JSON 이 구분해 담지 못하므로, 여기서는 "유한하지 않다"까지만 견준다.
     if (nonfinite.has(i) || raw === null) {
       const g = got[i] ?? Number.NaN;
       if (Number.isFinite(g)) return `[${i}] 유한하지 않아야 하는데 ${g} 다`;
+      const kind = nonfinite.get(i) ?? "?";
+      const mine = Number.isNaN(g) ? "nan" : (g > 0 ? "inf" : "-inf");
+      if (kind !== "?" && kind !== mine) return `[${i}] ${mine} 인데 ${kind} 여야 한다`;
       continue;
     }
     const want1 = typeof raw === "boolean" ? (raw ? 1 : 0) : raw;

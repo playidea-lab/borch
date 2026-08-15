@@ -803,6 +803,184 @@ def block_diag(*tensors):
     return cat(lines, 0) if len(lines) > 1 else lines[0]
 
 
+# ── 계산 자체가 없던 것들. 전부 있는 연산의 조합이다. ───────────────────────
+
+def _shape_list(x):
+    return [int(n) for n in handle(x).shape]
+
+
+def empty_like(t, **kw):
+    return zeros(*_shape_list(t))
+
+
+def rand_like(t, **kw):
+    return rand(*_shape_list(t))
+
+
+def randn_like(t, **kw):
+    return randn(*_shape_list(t))
+
+
+def randint_like(t, low, high=None, **kw):
+    if high is None:
+        low, high = 0, low
+    return randint(low, high, tuple(_shape_list(t)))
+
+
+def scalar_tensor(value, **kw):
+    return full([], float(value))
+
+
+def logspace(start, end, steps, base=10.0, **kw):
+    """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
+    return pow(full([], float(base)), linspace(start, end, steps))
+
+
+def meshgrid(*tensors, indexing="ij"):
+    """격자. **`xy` 는 앞의 두 축이 뒤바뀐 것**이라 한 규칙으로 못 덮는다."""
+    ts = list(tensors)
+    if indexing not in ("ij", "xy"):
+        raise RuntimeError(f"indexing 은 'ij' 나 'xy' 다: {indexing!r}")
+    order = list(range(len(ts)))
+    if indexing == "xy" and len(ts) >= 2:
+        order[0], order[1] = order[1], order[0]
+    sizes = [_shape_list(ts[i])[0] for i in order]
+    out = []
+    for place, i in enumerate(order):
+        shape = [1] * len(ts)
+        shape[place] = sizes[place]
+        lifted = wrap(guarded(handle(ts[i]).reshape, _js_list(shape)))
+        out.append(broadcast_to(lifted, sizes))
+    if indexing == "xy" and len(ts) >= 2:
+        out[0], out[1] = out[1], out[0]
+    return tuple(out)
+
+
+def lerp(start, end, weight, **kw):
+    start, end = wrap(start), wrap(end)
+    return start + (end - start) * weight
+
+
+def _unary(x, name):
+    return wrap(guarded(handle(x).unary, name))
+
+
+def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
+    """NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다.**"""
+    t = wrap(t)
+    hi = 3.4028234663852886e38 if posinf is None else posinf
+    lo = -3.4028234663852886e38 if neginf is None else neginf
+    # **`where` 는 첫 인자에서 모양을 가져온다.** 스칼라를 거기 넣으면 결과가
+    # 스칼라가 된다 — 채울 값도 같은 모양으로 펴 놓고 넘긴다.
+    shape = _shape_list(t)
+
+    def spread(v):
+        return zeros(*shape) + float(v)
+
+    out = where(_unary(t, "isnan"), spread(nan), t)
+    out = where(isposinf(t), spread(hi), out)
+    return where(isneginf(t), spread(lo), out)
+
+
+def isposinf(t, **kw):
+    t = wrap(t)
+    return _unary(t, "isinf") * (t > full([], 0.0))
+
+
+def isneginf(t, **kw):
+    t = wrap(t)
+    return _unary(t, "isinf") * (t < full([], 0.0))
+
+
+def isreal(t, **kw):
+    """실수만 있으므로 전부 참이다. **거짓말이 아니라 사실이다.**"""
+    return ones(*_shape_list(t)) > full([], 0.0)
+
+
+def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kw):
+    a, b = wrap(a), wrap(b)
+    return _unary(a - b, "abs") <= (wrap(_unary(b, "abs")) * rtol + atol)
+
+
+def isin(elements, test_elements, **kw):
+    """원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다."""
+    e, t = wrap(elements), wrap(test_elements)
+    n = int(handle(e).size)
+    m = int(handle(t).size)
+    grid = (wrap(guarded(handle(e).reshape, _js_list([n, 1])))
+            == wrap(guarded(handle(t).reshape, _js_list([1, m]))))
+    hit = wrap(guarded(handle(grid).to, "float32")).sum(dim=1)
+    return (hit > full([], 0.0)).reshape(*_shape_list(e))
+
+
+def _nan_extreme(name, better):
+    """`fmax`·`fmin` 은 **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다."""
+    def call(a, b, **kw):
+        a, b = wrap(a), wrap(b)
+        picked = wrap(guarded(handle(a).binary, better, handle(b)))
+        out = where(_unary(a, "isnan"), b, picked)
+        return where(_unary(b, "isnan"), a, out)
+    call.__name__ = name
+    return call
+
+
+fmax = _nan_extreme("fmax", "maximum")
+fmin = _nan_extreme("fmin", "minimum")
+
+
+def float_power(a, b, **kw):
+    return wrap(a) ** b
+
+
+def logical_xor(a, b, **kw):
+    """borch.ts 의 이항 표에 없다 — **다름**으로 만든다."""
+    a, b = wrap(a), wrap(b)
+    return (a != full([], 0.0)) != (b != full([], 0.0))
+
+
+def var_mean(t, dim=None, keepdim=False, **kw):
+    """**둘을 한 번에 준다.** 하나만 물으면 다른 하나가 틀려도 안 걸린다."""
+    t = wrap(t)
+    return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
+
+
+def std_mean(t, dim=None, keepdim=False, **kw):
+    t = wrap(t)
+    return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
+
+
+def inner(a, b, **kw):
+    a, b = wrap(a), wrap(b)
+    if len(_shape_list(a)) > 1:
+        return a @ transpose(b, -2, -1)
+    return (a * b).sum()
+
+
+def vdot(a, b, **kw):
+    return (wrap(a) * wrap(b)).sum()
+
+
+def kron(a, b, **kw):
+    a, b = wrap(a), wrap(b)
+    n, m = _shape_list(a)[0], _shape_list(b)[0]
+    out = (wrap(guarded(handle(a).reshape, _js_list([n, 1])))
+           * wrap(guarded(handle(b).reshape, _js_list([1, m]))))
+    return wrap(guarded(handle(out).reshape, _js_list([n * m])))
+
+
+def cross(a, b, dim=-1, **kw):
+    a, b = wrap(a), wrap(b)
+    rank = len(_shape_list(a))
+    axis = dim + rank if dim < 0 else dim
+
+    def part(t, i):
+        return wrap(guarded(handle(t).narrow, axis, i, 1))
+
+    return cat([part(a, 1) * part(b, 2) - part(a, 2) * part(b, 1),
+                part(a, 2) * part(b, 0) - part(a, 0) * part(b, 2),
+                part(a, 0) * part(b, 1) - part(a, 1) * part(b, 0)], axis)
+
+
 row_stack = vstack
 multiply = mul
 divide = div

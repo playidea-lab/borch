@@ -466,6 +466,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addSdpa(out, inputs);
   addModFn(out, inputs);
   addPool(out, inputs);
+  addNewFn(out, inputs);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -1365,6 +1366,103 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
   add("F.lp_pool2d(p=2)", (x) => x.lpPool(2, 2), "img");
   add("F.lp_pool2d(p=1)", (x) => x.lpPool(1, 2), "img");
   out.set("pool::nn.LPPool2d", () => inp.get("img").lpPool(2, 2));
+}
+
+/**
+ * 파이썬 쪽에 새로 생긴 함수들. **여기서는 조합으로 같은 답을 낸다.**
+ *
+ * borch.ts 에 이름을 늘리지 않는다 — 계산이 느는 것이 아니라 파이썬이 부를 철자가
+ * 느는 것이고, 그것은 파이썬 쪽 일이다.
+ */
+function addNewFn(out: Map<string, Case>, inp: Inputs): void {
+  const x1 = (): Tensor => inp.get("x1");
+  const x2 = (): Tensor => inp.get("x2");
+  const withnan = (): Tensor =>
+    Tensor.from([1, Number.NaN, -Infinity, Infinity, 3], [5]);
+  const zeros5 = (): Tensor => Tensor.zeros([5]);
+
+  // 난수 계열은 값이 같을 수 없다 — **모양을 답으로 굳힌다.**
+  for (const name of ["empty_like", "rand_like", "randn_like"]) {
+    out.set(`newfn::${name}/모양`, () => x2().shape.join(" "));
+  }
+  out.set("newfn::randint_like/모양", () => x2().shape.join(" "));
+
+  const table: [string, () => Tensor][] = [
+    ["logspace", () => Tensor.full([], 10).binary("pow", Tensor.linspace(0, 2, 5))],
+    ["scalar_tensor", () => Tensor.full([], 2.5)],
+    // `xy` 는 앞의 두 축이 뒤바뀐 것이라 한 규칙으로 못 덮는다.
+    ["meshgrid/0", () => x1().narrow(0, 0, 3).reshape([3, 1]).expand(3, 2)],
+    ["meshgrid/1", () => x1().narrow(0, 0, 2).reshape([1, 2]).expand(3, 2)],
+    ["meshgrid(xy)", () => x1().narrow(0, 0, 3).reshape([1, 3]).expand(2, 3)],
+    ["lerp", () => x1().add(x1().mul(Tensor.full([], 2)).sub(x1())
+      .mul(Tensor.full([], 0.25)))],
+    ["nan_to_num", () => nanFix(withnan(), 0, 3.4028234663852886e38,
+      -3.4028234663852886e38)],
+    ["nan_to_num(값 지정)", () => nanFix(withnan(), 0.5, 9, -9)],
+    ["isclose", () => x1().sub(x1()).abs()
+      .binary("le", x1().abs().mul(Tensor.full([], 1e-5)).add(Tensor.full([], 1e-8)))],
+    // 실수만 있으므로 전부 참이다 — 거짓말이 아니라 사실이다.
+    ["isreal", () => Tensor.ones([5]).binary("gt", Tensor.full([], 0))],
+    ["isposinf", () => withnan().unary("isinf")
+      .mul(withnan().binary("gt", Tensor.full([], 0)).to("float32"))
+      .binary("gt", Tensor.full([], 0))],
+    ["isneginf", () => withnan().unary("isinf")
+      .mul(withnan().binary("lt", Tensor.full([], 0)).to("float32"))
+      .binary("gt", Tensor.full([], 0))],
+    // **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다.
+    ["fmax(NaN 건너뜀)", () => nanSkip(withnan(), zeros5(), "maximum")],
+    ["fmin(NaN 건너뜀)", () => nanSkip(withnan(), zeros5(), "minimum")],
+    ["float_power", () => inp.get("xp").powScalar(2)],
+    ["logical_xor", () => {
+      const a = Tensor.from([1, 0, 1, 0], [4]).binary("ne", Tensor.full([], 0));
+      const b = Tensor.from([1, 1, 0, 0], [4]).binary("ne", Tensor.full([], 0));
+      return a.binary("ne", b);
+    }],
+    ["isin", () => {
+      const e = Tensor.from([1, 2, 3, 4], [4]).reshape([4, 1]);
+      const t = Tensor.from([2, 4], [2]).reshape([1, 2]);
+      return e.binary("eq", t).to("float32").sumDim(1)
+        .binary("gt", Tensor.full([], 0)).reshape([4]);
+    }],
+    ["var_mean/분산", () => x2().variance()],
+    ["var_mean/평균", () => x2().mean()],
+    ["std_mean/표준편차", () => x2().std()],
+    ["inner", () => x2().mm(x2().transpose())],
+    ["vdot", () => x1().mul(x1()).sum()],
+    ["kron", () => x1().narrow(0, 0, 2).reshape([2, 1])
+      .mul(x1().narrow(0, 2, 2).reshape([1, 2])).reshape([4])],
+    ["cross", () => crossOf(x1().narrow(0, 0, 3).reshape([1, 3]),
+      x1().narrow(0, 3, 3).reshape([1, 3]))],
+  ];
+  for (const [name, fn] of table) out.set(`newfn::${name}`, fn);
+}
+
+/** NaN·무한대를 유한한 수로. 채울 값도 **같은 모양으로 펴서** 넘긴다. */
+function nanFix(t: Tensor, nan: number, hi: number, lo: number): Tensor {
+  const like = (v: number): Tensor => Tensor.zeros(t.shape).add(Tensor.full([], v));
+  const isInf = t.unary("isinf");
+  const pos = isInf.mul(t.binary("gt", Tensor.full([], 0)).to("float32"))
+    .binary("gt", Tensor.full([], 0));
+  const negInf = isInf.mul(t.binary("lt", Tensor.full([], 0)).to("float32"))
+    .binary("gt", Tensor.full([], 0));
+  let outv = like(nan).where(t.unary("isnan"), t);
+  outv = like(hi).where(pos, outv);
+  return like(lo).where(negInf, outv);
+}
+
+function nanSkip(a: Tensor, b: Tensor, kind: "maximum" | "minimum"): Tensor {
+  const picked = a.binary(kind, b);
+  const first = b.where(a.unary("isnan"), picked);
+  return a.where(b.unary("isnan"), first);
+}
+
+function crossOf(a: Tensor, b: Tensor): Tensor {
+  const p = (t: Tensor, i: number): Tensor => t.narrow(1, i, 1);
+  return Tensor.cat([
+    p(a, 1).mul(p(b, 2)).sub(p(a, 2).mul(p(b, 1))),
+    p(a, 2).mul(p(b, 0)).sub(p(a, 0).mul(p(b, 2))),
+    p(a, 0).mul(p(b, 1)).sub(p(a, 1).mul(p(b, 0))),
+  ], 1);
 }
 
 function addTrain(out: Map<string, Case>, inp: Inputs): void {

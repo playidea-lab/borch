@@ -49,8 +49,10 @@ def _restore(entry):
         return entry["value"]
     values = list(entry["values"])
     if entry["kind"] == "float":
-        for i in entry["nonfinite"]:
-            values[i] = float("nan")            # None 으로 적어둔 자리를 되살린다
+        # **종류까지 되살린다.** 전부 `nan` 으로 되돌리던 때에는 `inf` 가 `nan` 이
+        # 되어, 답에 무한대가 있는 케이스가 "최대차 0 인데 실패" 로 나왔다.
+        for i, kind in entry["nonfinite"]:
+            values[i] = float(kind)
         arr = np.asarray(values, dtype=np.float64)
     elif entry["kind"] == "int":
         arr = np.asarray(values, dtype=np.int64)
@@ -112,19 +114,22 @@ def test_stale_json_is_detectable(doc):
 
 
 def test_nonfinite_survives_the_round_trip():
-    """`nan` 은 JSON 에 그대로 못 적는다. 자리를 따로 적고 되살린다.
+    """`nan` 과 무한대는 JSON 에 그대로 못 적는다. 자리와 **종류**를 따로 적는다.
 
-    **기대값 쪽에는 `nan` 이 없다** — 세어보니 798건 중 0건이다. `nanmean` 같은
-    케이스는 `nan` 이 입력에만 있고 답은 유한하다. 그래서 이 검사를 "케이스 중에
-    `nan` 이 있다"로 두면 영원히 실패한다(실제로 그렇게 썼다가 걸렸다).
-    묻는 것은 **왕복이 도는가**이므로 직접 넣어보고 확인한다.
+    오래 자리 번호만 적었고, 읽는 쪽이 전부 `nan` 으로 되살렸다. 그때는 답에
+    무한대가 없어서 안 걸렸는데(`nanmean` 류는 `nan` 이 입력에만 있고 답은 유한하다),
+    `fmax` 케이스가 처음으로 무한대를 답에 담으면서 드러났다 — **최대차 0 인데
+    실패**로 나왔다. `inf` 와 `nan` 을 같은 것으로 되살리고 있었기 때문이다.
+
+    묻는 것은 **왕복이 종류까지 도는가**다.
     """
     arr = np.array([1.0, np.nan, np.inf, -np.inf, 2.0], dtype=np.float32)
     entry = exporter._value(arr)
-    assert entry["nonfinite"] == [1, 2, 3]
+    assert entry["nonfinite"] == [[1, "nan"], [2, "inf"], [3, "-inf"]]
     back = _restore(entry)
     assert back[0] == 1.0 and back[4] == 2.0
-    assert np.isnan(back[1]) and np.isnan(back[2]) and np.isnan(back[3])
+    assert np.isnan(back[1])
+    assert back[2] == np.inf and back[3] == -np.inf
 
 
 def test_inputs_carry_their_nan():
