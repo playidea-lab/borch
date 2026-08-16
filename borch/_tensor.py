@@ -223,6 +223,18 @@ class Tensor:
                     "grad can be implicitly created only for scalar outputs"))
             gradient = _np.ones_like(self.data)
 
+        seed = _np.asarray(gradient, dtype=self.data.dtype)
+        if seed.shape != self.data.shape:
+            # **모양을 여기서 본다.** 안 보면 numpy 가 나중에 브로드캐스팅을 시도하고,
+            # 맞으면 조용히 틀린 기울기가 나오고 안 맞으면 `ValueError` 가 원인에서
+            # 먼 자리에서 뜬다. torch 는 여기서 `RuntimeError` 로 멈춘다 — 실측했다.
+            raise RuntimeError(_like_torch(
+                f"gradient 의 모양 {tuple(seed.shape)} 이 값의 모양 "
+                f"{tuple(self.data.shape)} 과 다릅니다.",
+                f"Mismatch in shape: grad_output[0] has a shape of "
+                f"torch.Size({list(seed.shape)}) and output[0] has a shape of "
+                f"torch.Size({list(self.data.shape)})."))
+
         # 위상 정렬 — 뒤에서 앞으로 한 번씩만 지나간다
         order, seen = [], set()
 
@@ -236,7 +248,7 @@ class Tensor:
 
         visit(self)
 
-        grads = {id(self): _np.asarray(gradient, dtype=self.data.dtype)}
+        grads = {id(self): seed}
         for t in reversed(order):
             g = grads.get(id(t))
             if g is None:

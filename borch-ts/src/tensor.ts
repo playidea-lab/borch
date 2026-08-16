@@ -5954,6 +5954,16 @@ export class Tensor implements Node<Tensor> {
    * @param retainGraph 그래프를 남겨 다시 흘릴 수 있게 한다.
    */
   backward(gradient?: Tensor, retainGraph = false): void {
+    // **이 검사가 맨 앞이다.** torch 를 재보니 비스칼라이면서 requiresGrad 가 아닌
+    // 텐서는 "스칼라가 아니다" 가 아니라 이쪽으로 거절한다 — 스칼라 여부보다 먼저
+    // 본다. 코어(numpy)는 처음부터 그 차례였고 여기만 반대였다. 셋이 같은 자리에서
+    // 다른 문구를 내면 옮겨 적은 코드가 어느 쪽을 잡아야 할지 모른다.
+    if (!this.requiresGrad) {
+      throw new RuntimeError(
+        `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: ` +
+          "no_grad 안이었거나 흐름을 끊는 연산을 지났다.",
+      );
+    }
     let seed: Tensor;
     if (gradient === undefined) {
       if (this.size !== 1) {
@@ -5974,12 +5984,6 @@ export class Tensor implements Node<Tensor> {
       // **그래프를 끊어서 넣는다.** torch 의 기본이 `create_graph=False` 이고 이
       // 테이프는 이중 미분을 안 한다 — 안 끊으면 잎의 `grad` 가 그래프를 물고 남는다.
       seed = gradient.detach();
-    }
-    if (!this.requiresGrad) {
-      throw new RuntimeError(
-        `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: ` +
-          "no_grad 안이었거나 흐름을 끊는 연산을 지났다.",
-      );
     }
     tapeBackward<Tensor>(this, seed, (a, b) => a.add(b), {
       retainGraph,

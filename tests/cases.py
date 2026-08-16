@@ -651,6 +651,38 @@ def grad_cases(inp=None):
     # 스칼라에 씨앗을 주는 것도 torch 가 받는다 — 값이 그만큼 배가 된다.
     seeded_backward("scalar", lambda L, x: (x * x).sum(), x1, ())
 
+    # ── 거절하는 자리 — **셋이 같은 문구로** ──────────────────────────────
+    #
+    # `_as_expected` 와 다르다. 저쪽은 브라우저가 **일부러** torch 와 다른 자리이고,
+    # 이쪽은 셋 다 torch 와 같아야 하는 자리다. 값을 굳힐 수 없으니 문구의 조각을
+    # 굳힌다 — 통과해 버리면 "안 던졌다" 가 답이 되어 갈린다.
+    def refuses(name, fragment, fn):
+        def run(L, f=fn, frag=fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+        cases.append((f"grad::거절::{name}", run))
+
+    # **차례가 있다.** 비스칼라이면서 requires_grad 가 아니면 torch 는 "스칼라가
+    # 아니다" 가 아니라 이쪽으로 거절한다 — 실측한 값이다. borch.ts 만 반대 차례였고
+    # 골든이 그 조합을 안 물어서 안 보였다.
+    refuses("requires_grad 를 먼저 본다",
+            "does not require grad",
+            lambda L: L.tensor(x1).backward())
+    refuses("씨앗 없는 비스칼라",
+            "grad can be implicitly created only for scalar outputs",
+            lambda L: L.tensor(x1, requires_grad=True).backward())
+    # 어긋난 씨앗을 브로드캐스팅으로 맞춰 주면 안 된다. 맞춰 주면 값이 그럴듯한 채로
+    # 틀린 기울기가 나오고, 그것은 학습이 안 되는 것으로만 드러난다. 코어는 여기를
+    # 안 보고 있어서 numpy 의 `ValueError` 가 원인에서 먼 자리에 떴다.
+    def bad_seed(L):
+        y = L.tensor(x1, requires_grad=True) * 2
+        y.backward(L.tensor(np.ones(7, dtype=np.float32)))
+
+    refuses("씨앗 모양이 어긋남", "Mismatch in shape", bad_seed)
+
     return cases
 
 
