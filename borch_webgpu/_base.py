@@ -15,6 +15,13 @@ def _js_list(seq):
     return _to_js(list(int(n) for n in seq))
 
 
+def _js_floats(seq):
+    """`_js_list` 의 실수판. **정수로 깎으면 안 되는 자리**가 있다 — 분수 풀링의
+    표본은 0..1 사이라 `int()` 를 지나면 전부 0 이 되고, 그 0 은 예외가 아니라
+    **답이 있는 창 자리**라 조용히 다른 층이 된다."""
+    return _to_js(list(float(v) for v in seq))
+
+
 def _read(handle):
     """GPU 에서 값을 가져온다 — **`await` 없이.**
 

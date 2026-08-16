@@ -40,6 +40,8 @@ from ._ops import (
     adaptive_max_pool3d_with_indices, max_pool1d_with_indices,
     max_pool2d_with_indices, max_pool3d_with_indices,
     max_unpool1d, max_unpool2d, max_unpool3d,
+    fractional_max_pool2d, fractional_max_pool2d_with_indices,
+    fractional_max_pool3d, fractional_max_pool3d_with_indices,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -1540,6 +1542,48 @@ class LPPool3d(LPPool1d):
         return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride)
 
 
+class _FractionalMaxPoolND(Module):
+    """창 자리를 무작위로 흔드는 최대 풀링.
+
+    고정 창은 격자가 늘 같은 자리에 놓여서 그 격자에 맞는 무늬만 잘 본다. 여기서는
+    창 시작이 표본에 따라 흔들려서, 같은 층을 여러 번 지나면 다른 격자를 본다 —
+    학습에서 규제로 쓰인다.
+
+    **`repr` 이 비어 있다.** torch 의 `extra_repr` 가 아무것도 안 내서 `()` 로만
+    찍힌다(재봤다). 흉내가 아니라 그쪽이 그렇다.
+    """
+
+    fn = None
+    dim = 0
+
+    def __init__(self, kernel_size, output_size=None, output_ratio=None,
+                 return_indices=False, _random_samples=None):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.output_size = output_size
+        self.output_ratio = output_ratio
+        self.return_indices = return_indices
+        self._random_samples = _random_samples
+
+    def forward(self, x):
+        return type(self).fn(x, self.kernel_size, self.output_size,
+                             self.output_ratio, self.return_indices,
+                             self._random_samples)
+
+    def __repr__(self):
+        return f"FractionalMaxPool{type(self).dim}d()"
+
+
+class FractionalMaxPool2d(_FractionalMaxPoolND):
+    fn = staticmethod(fractional_max_pool2d)
+    dim = 2
+
+
+class FractionalMaxPool3d(_FractionalMaxPoolND):
+    fn = staticmethod(fractional_max_pool3d)
+    dim = 3
+
+
 class AdaptiveAvgPool2d(_PoolND):
     """**출력 크기가 1 이 아니어도 된다.**
 
@@ -2285,7 +2329,8 @@ for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid
              AvgPool1d, AvgPool3d, AdaptiveAvgPool1d, AdaptiveAvgPool3d,
              AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d,
              LPPool1d, LPPool2d, LPPool3d,
-             MaxUnpool1d, MaxUnpool2d, MaxUnpool3d):
+             MaxUnpool1d, MaxUnpool2d, MaxUnpool3d,
+             FractionalMaxPool2d, FractionalMaxPool3d):
     setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
@@ -2385,6 +2430,10 @@ class _Functional(_Namespace):
     max_unpool1d = staticmethod(max_unpool1d)
     max_unpool2d = staticmethod(max_unpool2d)
     max_unpool3d = staticmethod(max_unpool3d)
+    fractional_max_pool2d = staticmethod(fractional_max_pool2d)
+    fractional_max_pool3d = staticmethod(fractional_max_pool3d)
+    fractional_max_pool2d_with_indices = staticmethod(fractional_max_pool2d_with_indices)
+    fractional_max_pool3d_with_indices = staticmethod(fractional_max_pool3d_with_indices)
     conv_transpose1d = staticmethod(conv_transpose1d)
     conv_transpose2d = staticmethod(conv_transpose2d)
     conv_transpose3d = staticmethod(conv_transpose3d)

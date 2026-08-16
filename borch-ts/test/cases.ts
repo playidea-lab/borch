@@ -1138,6 +1138,47 @@ function addUnpool(out: Map<string, Case>): void {
   const small = () => grid([1, 1, 4, 4, 4]).div(Tensor.full([], 8));
   out.set("unpool::lp_pool3d", () => small().lpPool(2, 2));
   out.set("unpool::lp_pool3d(p=1)", () => small().lpPool(1, 2));
+
+  // ── 분수 최대 풀링 ─────────────────────────────────────────────────────
+  //
+  // **7→3 으로 묻는다.** 6→3 은 α 가 정수라 표본이 아무 일도 안 하고, 그러면
+  // 무작위 부분이 통째로 안 보인다. 축마다 다른 표본을 주는 케이스도 하나 둔다 —
+  // ATen 이 2차원판과 3차원판에서 표본을 **다른 순서로** 읽기 때문이다.
+  const frac = () => grid([1, 1, 7, 7]);
+  const frac3 = () => grid([1, 1, 7, 7, 7]);
+  const planes7 = () => grid([2, 2, 7, 7]);
+
+  // 이름의 철자는 **파이썬이 찍은 것**이다 — JS 의 `${0.0}` 은 "0" 이고 파이썬은
+  // "0.0" 이라, 수를 그대로 끼우면 이름이 갈린다. 러너가 그것을 세서 알려줬다.
+  for (const [label, u] of [["0.0", 0], ["0.25", 0.25], ["0.5", 0.5],
+    ["0.75", 0.75], ["0.99", 0.99]] as const) {
+    out.set(`unpool::분수::값(u=${label})`,
+      () => frac().fractionalMaxPool(2, [3, 3], [[u, u]]).values);
+    out.set(`unpool::분수::자리(u=${label})`,
+      () => frac().fractionalMaxPool(2, [3, 3], [[u, u]]).indices);
+  }
+  out.set("unpool::분수::축마다 다른 표본",
+    () => frac().fractionalMaxPool(2, [3, 3], [[0.0, 0.75]]).indices);
+  out.set("unpool::분수::평면마다 다른 표본",
+    () => planes7().fractionalMaxPool(
+      2, [3, 3], [[0.0, 0.0], [0.3, 0.7], [0.9, 0.1], [0.5, 0.5]]).values);
+  out.set("unpool::분수::평면마다 다른 표본 자리",
+    () => planes7().fractionalMaxPool(
+      2, [3, 3], [[0.0, 0.0], [0.3, 0.7], [0.9, 0.1], [0.5, 0.5]]).indices);
+  out.set("unpool::분수::output_ratio",
+    () => frac().fractionalMaxPool(2, [3, 3], [[0, 0]]).values);
+  out.set("unpool::분수::겹치는 창",
+    () => frac().fractionalMaxPool(3, [3, 3], [[0, 0]]).indices);
+  out.set("unpool::분수::3차원 값",
+    () => frac3().fractionalMaxPool(2, [3, 3, 3], [[0.2, 0.0, 0.25]]).values);
+  out.set("unpool::분수::3차원 자리",
+    () => frac3().fractionalMaxPool(2, [3, 3, 3], [[0.2, 0.0, 0.25]]).indices);
+  out.set("unpool::분수::grad", () => {
+    const x = grid([1, 1, 7, 7]);
+    x.requiresGrad = true;
+    x.fractionalMaxPool(2, [3, 3], [[0.25, 0.75]]).values.sum().backward();
+    return gradOf(x, "fractionalMaxPool");
+  });
 }
 
 /**

@@ -3892,6 +3892,75 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * 창 시작 자리들. **ATen 의 `generate_intervals` 그대로다.**
+   *
+   * `α = (입력 - 창) / (출력 - 1)` 에 `floor((i+u)·α) - floor(u·α)`. 마지막 창만
+   * 오른쪽 끝에 붙여서 입력의 마지막 칸이 반드시 덮이게 한다.
+   *
+   * 나누어떨어지면 `α` 가 정수라 `u` 가 아무 일도 안 한다 — 6→3 으로 물으면 무작위
+   * 부분이 통째로 안 보인다.
+   */
+  private static fractionalStarts(
+    nIn: number, k: number, nOut: number, u: number,
+  ): number[] {
+    if (nOut <= 1) return [0];
+    const alpha = (nIn - k) / (nOut - 1);
+    const seq: number[] = [];
+    for (let i = 0; i < nOut - 1; i++) {
+      seq.push(Math.trunc((i + u) * alpha) - Math.trunc(u * alpha));
+    }
+    seq.push(nIn - k);
+    return seq;
+  }
+
+  /**
+   * 창 자리를 표본이 흔드는 최대 풀링.
+   *
+   * **표본은 평면마다 다르다** — torch 의 `_random_samples` 가 `(N, C, 축)` 이라
+   * 창이 평면마다 갈린다. 그래서 평면 수만큼 돈다. 비싼 대신 torch 와 같다.
+   *
+   * **축 순서가 차원마다 다르다.** ATen 의 2차원판은 표본을 (너비, 높이) 로 읽고
+   * 3차원판은 (깊이, 높이, 너비) 로 읽는다 — 두 함수가 서로 어긋나 있고, 여기서
+   * 흉내내는 것은 그 어긋남이다.
+   *
+   * @param samples 평면마다의 표본. `samples[plane][i]` 이고 `i` 는 위 순서다.
+   */
+  fractionalMaxPool(
+    kernel: number,
+    outDims: readonly number[],
+    samples: readonly (readonly number[])[],
+  ): { values: Tensor; indices: Tensor } {
+    const spatial = this.shape.length - 2;
+    const N = this.shape[0] ?? 1;
+    const C = this.shape[1] ?? 1;
+    const order = spatial === 3
+      ? [0, 1, 2]
+      : Array.from({ length: spatial }, (_, k) => spatial - 1 - k);
+    const values: Tensor[] = [];
+    const indices: Tensor[] = [];
+    for (let p = 0; p < N * C; p++) {
+      const plane = this.narrow(0, Math.floor(p / C), 1)
+        .narrow(1, p % C, 1);
+      const axes: [number, number][][] = [];
+      for (let k = 0; k < spatial; k++) {
+        const u = samples[p]?.[order[k] ?? k] ?? 0;
+        const starts = Tensor.fractionalStarts(
+          this.shape[2 + k] ?? 1, kernel, outDims[k] ?? 1, u,
+        );
+        axes.push(starts.map((s) => [s, s + kernel] as [number, number]));
+      }
+      const got = plane.maxWithIndex(axes);
+      values.push(got.values);
+      indices.push(got.indices);
+    }
+    const outShape = [N, C, ...outDims];
+    return {
+      values: Tensor.cat(values, 0).reshape(outShape),
+      indices: Tensor.cat(indices, 0).reshape(outShape),
+    };
+  }
+
+  /**
    * 자리표가 가리키는 칸에 값을 놓고 나머지는 0 으로 둔다.
    *
    * 풀링이 버린 자투리는 되살릴 수 없어서 출력 크기를 밖에서 정한다. 기본은

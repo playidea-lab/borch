@@ -12,10 +12,17 @@
 만든다 — 없는 것을 근사하는 것이 아니라, 있는 것에 이름을 붙이는 것이다.
 """
 
-import js as _js
+import numpy as _np
 
-from ._base import Tensor, _js_list, guarded, handle, settle, wrap
+import js as _js
+from pyodide.ffi import to_js as _to_js
+
+from ._base import Tensor, _js_floats, _js_list, guarded, handle, settle, wrap
 from ._ops import _arg, camel, positional
+# **모듈째 든다.** `manual_seed` 가 `_ops._rng` 를 **새 생성기로 갈아끼우므로**,
+# 이름으로 들여오면 그 갈아끼움이 여기까지 안 온다 — 씨앗을 심어도 이 층만 안 바뀐다.
+# 같은 갈래로 한 번 당한 자리다.
+from . import _ops as _ops_mod
 
 _ts = _js.borch
 
@@ -95,6 +102,51 @@ def _unpool(x, indices, kernel_size, stride=None, padding=0, output_size=None):
     return wrap(handle(x).maxUnpool(
         handle(indices), kernel_size, stride, padding,
         _js_list(list(output_size)) if output_size is not None else None))
+
+
+def _fractional(spatial):
+    """창 자리를 표본이 흔드는 최대 풀링.
+
+    **표본을 파이썬에서 만든다.** 창 자리는 CPU 에서 정해야 셰이더에 구울 수 있고,
+    borch.ts 쪽에서 GPU 난수를 읽어 오려면 기다려야 한다. numpy 가 이미 여기 있으므로
+    이쪽에서 뽑아 넘긴다 — `manual_seed` 도 그 난수를 잡는다.
+    """
+    def call(x, kernel_size, output_size=None, output_ratio=None,
+             return_indices=False, _random_samples=None, **kw):
+        h = handle(x)
+        shape = [int(n) for n in h.shape]
+        if (output_size is None) == (output_ratio is None):
+            raise ValueError(
+                "fractional_max_pool 은 output_size 나 output_ratio 중 하나만 받습니다.")
+        if output_size is not None:
+            sizes = ([output_size] * spatial if isinstance(output_size, int)
+                     else list(output_size))
+        else:
+            ratios = ([output_ratio] * spatial if isinstance(output_ratio, float)
+                      else list(output_ratio))
+            sizes = [int(shape[2 + k] * ratios[k]) for k in range(spatial)]
+
+        n, c = shape[0], shape[1]
+        if _random_samples is None:
+            samples = _ops_mod._rng.random((n, c, spatial))
+        else:
+            samples = _np.asarray(_random_samples.numpy()).reshape(n, c, spatial)
+        flat = [[float(v) for v in samples[i, j]] for i in range(n) for j in range(c)]
+        got = h.fractionalMaxPool(
+            kernel_size, _js_list(sizes),
+            _to_js([_js_floats(row) for row in flat]))
+        out, idx = wrap(got.values), wrap(got.indices)
+        return (out, idx) if return_indices else out
+    return call
+
+
+def _fractional_indices(spatial):
+    fn = _fractional(spatial)
+
+    def call(x, kernel_size, output_size=None, output_ratio=None,
+             _random_samples=None, **kw):
+        return fn(x, kernel_size, output_size, output_ratio, True, _random_samples)
+    return call
 
 
 def _lp_pool(x, norm_type, kernel_size, stride=None, **kw):
@@ -276,6 +328,10 @@ _HAND_WRITTEN = {
     "max_pool1d": _pool_fn("max", False),
     "max_pool2d": _pool_fn("max", False),
     "max_pool3d": _pool_fn("max", False),
+    "fractional_max_pool2d": _fractional(2),
+    "fractional_max_pool3d": _fractional(3),
+    "fractional_max_pool2d_with_indices": _fractional_indices(2),
+    "fractional_max_pool3d_with_indices": _fractional_indices(3),
     "rms_norm": _rms_norm,
     "conv_transpose1d": _conv_transpose,
     "conv_transpose2d": _conv_transpose,
@@ -1116,6 +1172,28 @@ def _unpool_layer(dim):
 MaxUnpool1d = _unpool_layer(1)
 MaxUnpool2d = _unpool_layer(2)
 MaxUnpool3d = _unpool_layer(3)
+
+
+class _FractionalMaxPool(_Wrap):
+    """**`repr` 이 비어 있다** — torch 의 `extra_repr` 가 아무것도 안 낸다(재봤다)."""
+
+    def __init__(self, dim, kernel_size, output_size=None, output_ratio=None,
+                 return_indices=False, _random_samples=None):
+        fn = _fractional(dim)
+        super().__init__(lambda x: fn(x, kernel_size, output_size, output_ratio,
+                                      return_indices, _random_samples))
+        self.dim = dim
+
+    def __repr__(self):
+        return f"FractionalMaxPool{self.dim}d()"
+
+
+def FractionalMaxPool2d(*args, **kw):
+    return _FractionalMaxPool(2, *args, **kw)
+
+
+def FractionalMaxPool3d(*args, **kw):
+    return _FractionalMaxPool(3, *args, **kw)
 
 
 def Flatten(start_dim=1, end_dim=-1):

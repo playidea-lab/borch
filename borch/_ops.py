@@ -630,6 +630,97 @@ def _unpool(x, indices, kernel_size, stride, padding, output_size, spatial):
     return x._make(filled.reshape(out_shape), (x,), back, "MaxUnpoolBackward0")
 
 
+def _fractional_intervals(n_in, k, n_out, u):
+    """창의 시작 자리들. **ATen 의 `generate_intervals` 그대로다** (재봤다).
+
+    `α = (입력 - 창) / (출력 - 1)` 로 잡고 `floor((i+u)·α) - floor(u·α)` 를 쓴다.
+    마지막 창만 오른쪽 끝에 붙인다 — 그래야 입력의 마지막 칸이 반드시 덮인다.
+
+    `u` 가 창 자리를 흔드는 값이고, 그래서 이 풀링이 "분수" 다. 나누어떨어지면
+    `α` 가 정수라 `u` 가 무엇이든 같은 답이 나온다 — **6→3 으로 물으면 무작위
+    부분이 통째로 안 보인다.** 골든은 7→3 으로 묻는다.
+    """
+    if n_out <= 1:
+        return [0]
+    alpha = (n_in - k) / (n_out - 1)
+    seq = [int((i + u) * alpha) - int(u * alpha) for i in range(n_out - 1)]
+    return seq + [n_in - k]
+
+
+def _fractional_pool(x, kernel_size, output_size, output_ratio, samples, spatial):
+    """분수 최대 풀링. 창 자리가 평면마다 다를 수 있어서 평면마다 따로 접는다.
+
+    **비싸다** — 평면 수만큼 도는데, torch 의 표본이 `(N, C, 축)` 이라 평면마다
+    창이 갈릴 수 있기 때문이다. 자주 쓰는 층이 아니라 그대로 둔다. 값을 아끼려고
+    표본을 하나로 뭉치면 그 순간 torch 와 다른 층이 된다.
+    """
+    x = _wrap(x)
+    shape = x.data.shape
+    if (output_size is None) == (output_ratio is None):
+        raise ValueError(
+            "fractional_max_pool 은 output_size 나 output_ratio 중 하나만 받습니다.")
+    ks = _spread(kernel_size, spatial)
+    if output_size is not None:
+        sizes = _spread(output_size, spatial)
+    else:
+        ratios = _spread(output_ratio, spatial) if not isinstance(output_ratio, float) \
+            else [output_ratio] * spatial
+        sizes = [int(shape[2 + k] * ratios[k]) for k in range(spatial)]
+
+    n, c = shape[0], shape[1]
+    if samples is None:
+        samples = _rng.random((n, c, spatial))
+    else:
+        samples = _np.asarray(samples.data if isinstance(samples, Tensor) else samples)
+
+    values, positions = [], []
+    for i in range(n):
+        for j in range(c):
+            plane = x[i:i + 1, j:j + 1]
+            # **2차원은 표본을 뒤집어 읽는다.** ATen 의 2차원판은 `[0]` 을 너비,
+            # `[1]` 을 높이로 읽고, 3차원판은 `[0]`·`[1]`·`[2]` 를 깊이·높이·너비로
+            # 읽는다 — 두 함수가 서로 어긋나 있다. 여기서 흉내내는 것은 그 어긋남
+            # 자체다. 축마다 다른 표본을 줘야만 드러나고, 나누어떨어지는 크기로
+            # 물으면 (α 가 정수라) 표본이 무엇이든 답이 같아 또 안 보인다.
+            order = list(range(spatial)) if spatial == 3 else list(reversed(range(spatial)))
+            axes = [_fractional_intervals(shape[2 + k], ks[k], sizes[k],
+                                          float(samples[i, j, order[k]]))
+                    for k in range(spatial)]
+            windows = [[(s, s + ks[k]) for s in axes[k]] for k in range(spatial)]
+            got, pos = _max_with_index(plane, windows)
+            values.append(got)
+            positions.append(pos)
+    out = cat(values, 0).reshape(n, c, *sizes)
+    idx = _np.concatenate(positions, 0).reshape(n, c, *sizes)
+    return out, Tensor(idx)
+
+
+def fractional_max_pool2d(x, kernel_size, output_size=None, output_ratio=None,
+                          return_indices=False, _random_samples=None):
+    out, idx = _fractional_pool(x, kernel_size, output_size, output_ratio,
+                                _random_samples, 2)
+    return (out, idx) if return_indices else out
+
+
+def fractional_max_pool3d(x, kernel_size, output_size=None, output_ratio=None,
+                          return_indices=False, _random_samples=None):
+    out, idx = _fractional_pool(x, kernel_size, output_size, output_ratio,
+                                _random_samples, 3)
+    return (out, idx) if return_indices else out
+
+
+def fractional_max_pool2d_with_indices(x, kernel_size, output_size=None,
+                                       output_ratio=None, _random_samples=None, **_):
+    return _fractional_pool(x, kernel_size, output_size, output_ratio,
+                            _random_samples, 2)
+
+
+def fractional_max_pool3d_with_indices(x, kernel_size, output_size=None,
+                                       output_ratio=None, _random_samples=None, **_):
+    return _fractional_pool(x, kernel_size, output_size, output_ratio,
+                            _random_samples, 3)
+
+
 def max_unpool1d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
     return _unpool(x, indices, kernel_size, stride, padding, output_size, 1)
 

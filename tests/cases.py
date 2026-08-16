@@ -1506,6 +1506,103 @@ def unpool_cases(inp=None):
     add("lp_pool3d", lambda L: F(L).lp_pool3d(L.tensor(small), 2, 2))
     add("lp_pool3d(p=1)", lambda L: F(L).lp_pool3d(L.tensor(small), 1, 2))
     add("층::LPPool3d", lambda L: L.nn.LPPool3d(2, 2)(L.tensor(small)))
+
+    # ── 분수 최대 풀링 ──────────────────────────────────────────────────
+    #
+    # 창의 시작 자리를 표본이 흔든다. 케이스 모양에 함정이 둘 있고 **둘 다 밟았다.**
+    #
+    # 1. **나누어떨어지면 표본이 아무 일도 안 한다.** 6→3 창 2 면 α 가 정확히 2 라
+    #    무엇을 넣어도 같은 답이 나온다 — 무작위 부분이 통째로 안 보이는 모양이다.
+    #    그래서 7→3 으로 묻는다.
+    # 2. **두 축에 같은 표본을 주면 축 순서가 안 보인다.** ATen 은 2차원판에서
+    #    표본을 (너비, 높이) 로 읽고 3차원판에서는 (깊이, 높이, 너비) 로 읽는다 —
+    #    두 함수가 서로 어긋나 있다. 축마다 다른 표본을 줘야만 드러난다.
+    frac = np.arange(49, dtype=np.float32).reshape(1, 1, 7, 7)
+    frac3 = np.arange(343, dtype=np.float32).reshape(1, 1, 7, 7, 7)
+    planes2 = np.arange(2 * 2 * 7 * 7, dtype=np.float32).reshape(2, 2, 7, 7)
+
+    def frac2(L, samples, src=None, **kw):
+        return F(L).fractional_max_pool2d(
+            L.tensor(frac if src is None else src), 2,
+            return_indices=True, _random_samples=L.tensor(samples), **kw)
+
+    for u in (0.0, 0.25, 0.5, 0.75, 0.99):
+        s = np.array([[[u, u]]], dtype=np.float32)
+        add(f"분수::값(u={u})",
+            lambda L, s=s: frac2(L, s, output_size=(3, 3))[0])
+        add(f"분수::자리(u={u})",
+            lambda L, s=s: frac2(L, s, output_size=(3, 3))[1])
+
+    # **축마다 다른 표본** — 순서를 뒤집으면 여기서만 갈린다.
+    axis_split = np.array([[[0.0, 0.75]]], dtype=np.float32)
+    add("분수::축마다 다른 표본",
+        lambda L: frac2(L, axis_split, output_size=(3, 3))[1])
+
+    # 평면마다 다른 표본 — 표본이 `(N, C, 축)` 이라 창이 평면마다 갈린다.
+    per_plane = np.array([[[0.0, 0.0], [0.3, 0.7]],
+                          [[0.9, 0.1], [0.5, 0.5]]], dtype=np.float32)
+    add("분수::평면마다 다른 표본",
+        lambda L: frac2(L, per_plane, src=planes2, output_size=(3, 3))[0])
+    add("분수::평면마다 다른 표본 자리",
+        lambda L: frac2(L, per_plane, src=planes2, output_size=(3, 3))[1])
+
+    zero2 = np.zeros((1, 1, 2), dtype=np.float32)
+    add("분수::output_ratio",
+        lambda L: frac2(L, zero2, output_ratio=(0.5, 0.5))[0])
+
+    def frac_overlap(L):
+        """창 3 에 출력 3 이면 창이 겹친다 — 겹쳐도 같은 규칙이다."""
+        return F(L).fractional_max_pool2d(
+            L.tensor(frac), 3, output_size=(3, 3), return_indices=True,
+            _random_samples=L.tensor(zero2))[1]
+
+    add("분수::겹치는 창", frac_overlap)
+
+    # 3차원 — 세 축이 서로 다른 답을 내는 표본이라야 순서를 가른다.
+    s3 = np.array([[[0.2, 0.0, 0.25]]], dtype=np.float32)
+    for which, label in ((0, "값"), (1, "자리")):
+        add(f"분수::3차원 {label}",
+            lambda L, w=which: F(L).fractional_max_pool3d(
+                L.tensor(frac3), 2, output_size=(3, 3, 3), return_indices=True,
+                _random_samples=L.tensor(s3))[w])
+
+    add("분수::이름이 둘인 같은 계산",
+        lambda L: F(L).fractional_max_pool2d_with_indices(
+            L.tensor(frac), 2, output_size=(3, 3),
+            _random_samples=L.tensor(axis_split))[0])
+
+    def frac_grad(L):
+        x = L.tensor(frac, requires_grad=True)
+        s = L.tensor(np.array([[[0.25, 0.75]]], dtype=np.float32))
+        F(L).fractional_max_pool2d(x, 2, output_size=(3, 3),
+                                   _random_samples=s).sum().backward()
+        return x.grad
+
+    add("분수::grad", frac_grad)
+
+    def frac_layer(L):
+        layer = L.nn.FractionalMaxPool2d(2, output_size=(3, 3),
+                                         _random_samples=L.tensor(axis_split))
+        return layer(L.tensor(frac))
+
+    add("층::FractionalMaxPool2d", frac_layer)
+    # **`repr` 이 비어 있다** — torch 의 `extra_repr` 가 아무것도 안 낸다.
+    add("층::repr::FractionalMaxPool2d",
+        lambda L: repr(L.nn.FractionalMaxPool2d(2, output_size=(3, 3))))
+    add("층::repr::FractionalMaxPool3d",
+        lambda L: repr(L.nn.FractionalMaxPool3d(2, output_size=(3, 3, 3))))
+
+    def frac_random_shape(L):
+        """표본을 안 주면 무작위다 — **값은 못 묻고 모양과 범위를 묻는다.**
+
+        어느 칸이 이기든 그 값은 제 창 안에 있고, 창은 반드시 입력 안이다. 그래서
+        "모양이 맞고 값이 전부 입력에 있던 수" 는 무작위와 상관없이 참이어야 한다.
+        """
+        out = L.nn.FractionalMaxPool2d(2, output_size=(3, 3))(L.tensor(frac))
+        inside = ((out >= 0).float() * (out <= 48).float()).sum()
+        return f"{tuple(out.shape)} 안에 있는 것={int(inside.item())}"
+
+    add("분수::표본 없이(모양과 범위)", frac_random_shape)
     return cases
 
 
