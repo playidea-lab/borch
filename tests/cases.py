@@ -8,6 +8,7 @@
 그때 갈린 쪽이 어느 쪽인지 아무도 모른다.
 """
 
+import collections
 import hashlib
 
 import numpy as np
@@ -1351,6 +1352,58 @@ def opt_cases(inp=None):
 
     cases.append((OPT_PREFIX + "SequentialLR/자취", sequential))
     cases.append((OPT_PREFIX + "ChainedScheduler/자취", chained))
+    return cases
+
+
+DATACONV_PREFIX = "dataconv::"
+
+
+def default_convert_cases(inp=None):
+    """`utils.data.default_convert` — **바뀌는 것과 안 바뀌는 것**.
+
+    `default_collate` 의 짝이고 이름도 비슷한데 규칙이 다르다. 함정이 둘이고, 둘 다
+    값으로 물어서는 안 보인다.
+
+    - **튜플이 리스트가 된다.** torch 자신이 남긴 하위 호환이다. 값만 보면 원소가
+      같으니 통과하고, 그 뒤에 `a, b = ...` 로 푸는 코드도 리스트에서 똑같이 돌아서
+      한참 뒤에야 갈린다.
+    - **파이썬 수는 안 바뀐다.** `3` 은 `3` 으로 나온다. 이름이 비슷한
+      `default_collate` 는 수를 텐서로 접으므로, 같을 것 같은데 아니다.
+
+    그래서 값이 아니라 **무엇이 되어 나왔는가**를 답으로 굳힌다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((DATACONV_PREFIX + name, fn))
+
+    Point = collections.namedtuple("Point", "x y")
+    one = np.array([1., 2.], dtype=np.float32)
+    two = np.array([3., 4.], dtype=np.float32)
+
+    def kinds(L):
+        conv = L.utils.data.default_convert
+        got = (conv(one), conv((one, two)), conv([one]), conv({"a": one}),
+               conv(Point(one, two)), conv(3), conv(2.5), conv("안녕"),
+               conv(L.tensor(one)))
+        return " ".join(type(g).__name__ for g in got)
+
+    add("무엇이 되어 나오는가", kinds)
+
+    def values(L):
+        """값도 옮겨져야 한다 — 껍데기만 바꾸고 숫자를 흘리면 위 케이스는 통과한다."""
+        conv = L.utils.data.default_convert
+        pair = conv((one, two))
+        inside = conv({"a": one})["a"]
+        return L.stack([pair[0], pair[1], inside])
+
+    add("값이 그대로 온다", values)
+
+    def worker(L):
+        """**주 프로세스에서는 `None`.** 여기는 일꾼이 없으므로 언제나 그렇다."""
+        return str(L.utils.data.get_worker_info())
+
+    add("get_worker_info", worker)
     return cases
 
 
@@ -4747,7 +4800,7 @@ def golden_cases(inp=None):
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
             + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
-            + method_name_cases(inp)
+            + method_name_cases(inp) + default_convert_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

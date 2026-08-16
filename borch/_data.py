@@ -8,7 +8,7 @@ from ._tensor import (
     Tensor,
 )
 from ._ops import (
-    _Namespace, _rng, _wrap, stack,
+    _Namespace, _rng, _wrap, as_tensor, stack,
 )
 from ._base import (
     _np,
@@ -275,6 +275,56 @@ def default_collate(batch):
     return stack([_wrap(b) for b in batch])
 
 
+def default_convert(data):
+    """numpy 를 텐서로 바꾸고 **나머지는 손대지 않는다.** `default_collate` 의 짝이다.
+
+    접기 전에 원소 하나를 텐서로 만드는 자리다. 자기 `collate_fn` 을 쓰는 코드가
+    맨 앞에서 이것을 부르고 나머지를 직접 접는다.
+
+    함정이 둘이다. 둘 다 torch 를 실제로 돌려 확인했다(`tests/probe_data.py`).
+
+    - **튜플이 리스트가 된다.** `(a, b)` 를 넣으면 `[텐서, 텐서]` 가 나온다 —
+      torch 자신이 남긴 하위 호환이다. 네임드튜플만 제 자리를 지킨다.
+    - **파이썬 수는 안 바뀐다.** `3` 은 `3` 으로 나온다. `default_collate` 는 수를
+      텐서로 접지만 이쪽은 안 그런다 — 이름이 비슷해서 같을 것 같은데 아니다.
+    """
+    if isinstance(data, Tensor):
+        return data
+    if isinstance(data, (_np.ndarray, _np.generic)):
+        return as_tensor(data)
+    if isinstance(data, dict):
+        made = {k: default_convert(v) for k, v in data.items()}
+        try:
+            return type(data)(made)
+        except TypeError:                  # 생성자가 딕트를 안 받는 것들
+            return made
+    if isinstance(data, tuple):
+        if hasattr(data, "_fields"):       # 네임드튜플은 자리 이름이 있다
+            return type(data)(*(default_convert(d) for d in data))
+        return [default_convert(d) for d in data]
+    if isinstance(data, list):
+        made = [default_convert(d) for d in data]
+        try:
+            return type(data)(made)
+        except TypeError:
+            return made
+    return data
+
+
+def get_worker_info():
+    """**언제나 `None` 이다** — 여기에 일꾼 프로세스가 없다.
+
+    torch 에서도 주 프로세스에서는 `None` 이고, `num_workers>0` 으로 띄운 일꾼 안에서만
+    정보를 준다. 이쪽의 `DataLoader` 는 `num_workers` 를 받되 한 프로세스에서 돈다 —
+    브라우저에는 fork 가 없고, 코어도 그쪽과 같은 답을 내야 한다.
+
+    그래서 이 답은 흉내가 아니라 사실이다: 여기는 일꾼이 아니다. `IterableDataset` 이
+    이것을 물어 조각을 나누는 코드는 `None` 자리에서 "혼자 다 한다" 로 갈라지고, 그
+    갈래가 정확히 여기서 맞는 갈래다.
+    """
+    return None
+
+
 class _UtilsData(_Namespace):
     Dataset = Dataset
     TensorDataset = TensorDataset
@@ -291,6 +341,8 @@ class _UtilsData(_Namespace):
     ChainDataset = ChainDataset
     StackDataset = StackDataset
     default_collate = staticmethod(default_collate)
+    default_convert = staticmethod(default_convert)
+    get_worker_info = staticmethod(get_worker_info)
     random_split = staticmethod(random_split)
 
 

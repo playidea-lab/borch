@@ -166,6 +166,41 @@ class DataLoader:
                      for col in zip(*batch))
 
 
+def default_convert(data):
+    """numpy 를 텐서로 바꾸고 **나머지는 손대지 않는다.**
+
+    코어와 같은 규칙이다. 함정 둘도 같다 — **튜플이 리스트가 되고**(torch 자신의 하위
+    호환이다), **파이썬 수는 안 바뀐다.** 둘 다 진짜 torch 를 돌려 확인했다.
+    """
+    if isinstance(data, Tensor):
+        return data
+    if isinstance(data, (_np.ndarray, _np.generic)):
+        return tensor(data)
+    if isinstance(data, dict):
+        made = {k: default_convert(v) for k, v in data.items()}
+        try:
+            return type(data)(made)
+        except TypeError:                  # 생성자가 딕트를 안 받는 것들
+            return made
+    if isinstance(data, tuple):
+        if hasattr(data, "_fields"):       # 네임드튜플은 자리 이름이 있다
+            return type(data)(*(default_convert(d) for d in data))
+        return [default_convert(d) for d in data]
+    if isinstance(data, list):
+        made = [default_convert(d) for d in data]
+        try:
+            return type(data)(made)
+        except TypeError:
+            return made
+    return data
+
+
+def get_worker_info():
+    """**언제나 `None`** — 브라우저에는 일꾼 프로세스가 없다. torch 도 주 프로세스에서는
+    `None` 이므로, 이것은 흉내가 아니라 사실이다."""
+    return None
+
+
 # `torch.utils.data` 와 `torch.nn.utils` 는 **다른 `utils`** 다. 이름이 같아서
 # 한쪽이 다른 쪽을 덮으면 `nn.utils.rnn.pad_sequence` 나 `utils.data.DataLoader`
 # 중 하나가 조용히 사라진다. 여기 것은 최상위 쪽이고, `nn` 쪽은 `_nn.py` 에 있다.
@@ -178,6 +213,8 @@ class _UtilsData:
     RandomSampler = RandomSampler
     SequentialSampler = SequentialSampler
     WeightedRandomSampler = WeightedRandomSampler
+    default_convert = staticmethod(default_convert)
+    get_worker_info = staticmethod(get_worker_info)
     random_split = staticmethod(random_split)
 
 
