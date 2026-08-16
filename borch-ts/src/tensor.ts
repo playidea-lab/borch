@@ -1142,7 +1142,8 @@ export class Tensor implements Node<Tensor> {
       [this.buffer, out],
       M * N,
     );
-    return Tensor.make(out, [N, M], [this], (g) => [g.transpose()], "TBackward0");
+    return Tensor.make(out, [N, M], [this], (g) => [g.transpose()], "TBackward0",
+      this.dtype);
   }
 
   // ── 축약 ──────────────────────────────────────────────────────────────
@@ -1236,6 +1237,7 @@ export class Tensor implements Node<Tensor> {
       [this],
       (g) => [new Tensor(g.buffer, this.shape)],
       "ViewBackward0",
+      this.dtype,
     );
   }
 
@@ -1446,6 +1448,7 @@ export class Tensor implements Node<Tensor> {
       [this],
       (g) => [new Tensor(g.buffer, shape)],
       "SqueezeBackward0",
+      this.dtype,
     );
   }
 
@@ -1492,6 +1495,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, inShape)];
       },
       gradName,
+      this.dtype,
     );
   }
 
@@ -1530,6 +1534,7 @@ export class Tensor implements Node<Tensor> {
       [this],
       (g) => [new Tensor(g.buffer, from)],
       "ViewBackward0",
+      this.dtype,
     );
   }
 
@@ -1711,6 +1716,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, shape)];
       },
       "DiagflatBackward0",
+      this.dtype,
     );
   }
 
@@ -2015,6 +2021,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, shape)];
       },
       lower ? "TrilBackward0" : "TriuBackward0",
+      this.dtype,
     );
   }
 
@@ -2113,6 +2120,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, shape)];
       },
       "GatherBackward0",
+      this.dtype,
     );
   }
 
@@ -2126,6 +2134,13 @@ export class Tensor implements Node<Tensor> {
     const count = index.size;
     const outShape = this.shape.map((s, d) => (d === axis ? count : s));
     const n = outer * count * inner;
+    // **하나도 안 고르는 것이 정상이다.** `masked_select` 로 아무것도 안 걸리면
+    // 여기 개수가 0 인데, 셰이더는 그 수로 나누므로 WGSL 이 "0 으로 나눈다" 며 통째로
+    // 거절한다. 그러면 **이 케이스는 통과하고 다음 케이스가 대신 틀린다** — 명령
+    // 버퍼가 같이 무효가 되기 때문이다. 그 앞에서 빈 텐서로 끝낸다.
+    if (n === 0) {
+      return new Tensor(dev().alloc(0), outShape, { dtype: this.dtype });
+    }
     const key = `${outer}:${axisSize}:${inner}:${count}`;
     const out = dev().alloc(n);
     dev().run1d(
@@ -2151,6 +2166,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, shape)];
       },
       "IndexSelectBackward0",
+      this.dtype,
     );
   }
 
@@ -2410,6 +2426,7 @@ export class Tensor implements Node<Tensor> {
       // 덧댄 자리는 입력에서 온 것이 아니다 — 가운데만 돌려준다.
       (g) => [g.narrow(axis, before, size)],
       "ConstantPadNdBackward0",
+      this.dtype,
     );
   }
 
@@ -4689,6 +4706,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, inShape)];
       },
       "SortBackward0",
+      this.dtype,
     );
   }
 
@@ -4756,6 +4774,7 @@ export class Tensor implements Node<Tensor> {
       [this, src],
       (g) => [g.mul(keep), g.gather(axis, index)],
       "ScatterBackward0",
+      this.dtype,
     );
   }
 
@@ -4816,6 +4835,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, mine)];
       },
       "AsStridedBackward0",
+      this.dtype,
     );
   }
 
@@ -4849,6 +4869,7 @@ export class Tensor implements Node<Tensor> {
         g.gatherSpots(spots, srcShape),
       ],
       gradName,
+      this.dtype,
     );
   }
 
@@ -4936,7 +4957,9 @@ export class Tensor implements Node<Tensor> {
     const shape = this.shape.slice(0, -1);
     for (const at of [d1, d2].sort((a, b) => a - b)) shape.splice(at, 0, n);
     const { spots } = diagonalSpots(shape, offset, d1, d2);
-    return Tensor.zeros(shape).scatterSpots(
+    // **바탕의 형이 결과의 형이다.** `zeros` 는 float32 라 그냥 두면 int64 를 넣어도
+    // float32 가 나온다 — 값은 맞고 이름만 갈리는 자리다.
+    return Tensor.zeros(shape).to(this.dtype).scatterSpots(
       Tensor.spotsTensor(spots), this.reshape([spots.length]), false,
       "DiagEmbedBackward0",
     );
@@ -4993,7 +5016,7 @@ export class Tensor implements Node<Tensor> {
       [this.buffer, spots.buffer, src.buffer, out],
       n,
     );
-    return new Tensor(out, this.shape);
+    return new Tensor(out, this.shape, { dtype: this.dtype });
   }
 
   /** `scatter` 와 같은 자리지만 **덮어쓰는 대신 합친다.** */
@@ -5093,6 +5116,7 @@ export class Tensor implements Node<Tensor> {
         return [g.mul(keep), new Tensor(gi, srcShape)];
       },
       "MaskedScatterBackward0",
+      this.dtype,
     );
   }
 
@@ -5278,6 +5302,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, shape)];
       },
       "MaxPoolWithIndicesBackward0",
+      this.dtype,
     );
     return { values, indices };
   }

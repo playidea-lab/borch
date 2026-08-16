@@ -1749,7 +1749,13 @@ def split(x, size, dim=0):
 
 
 def chunk(x, chunks, dim=0):
-    return [wrap(t) for t in handle(x).split(dim, chunks)]
+    """**`split` 이 아니다.** 그쪽은 나눠떨어져야 하고 `chunk` 는 아니다 —
+    torch 는 3 을 2 로 쪼개면 2·1 을 주고, 2 를 5 로 쪼개면 **조각이 둘**이다(실측).
+
+    borch.ts 에 `chunk` 가 제대로 있는데 여기서 `split` 으로 넘기고 있었다. 나눠
+    떨어지는 크기로만 재면 두 함수가 같아 보인다.
+    """
+    return [wrap(t) for t in handle(x).chunk(chunks, dim)]
 
 
 def clamp(x, min=None, max=None):                        # noqa: A002

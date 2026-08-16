@@ -6699,6 +6699,68 @@ def dtype_cases(inp=None):
                     lambda L, x=a, v=value, o=op: outcome(
                         lambda: eval(f"p {o} s", {},                 # noqa: S307
                                      {"p": _dtype_tensor(L, x), "s": v}))))
+
+    # ── 자리만 옮기는 것은 **형을 지킨다** ──────────────────────────────
+    #
+    # 이 표가 없어서 결함이 하나 살아 있었다. 자매의 데이터셋이 `int64` 라벨에서 한
+    # 표본을 꺼내니 `float32` 가 나왔는데, **값이 맞아서** 골든 어디에도 안 걸렸다 —
+    # 모양 연산 뒤의 형을 묻는 케이스가 하나도 없었기 때문이다.
+    #
+    # 경계는 **값을 만드는가**다. 자리만 옮기는 것(고르기·자르기·이어붙이기·
+    # 갈아끼우기)은 원래 형이 그대로 나오고, 셈을 하는 것은 승격 규칙을 따른다.
+    # 축약(`sum`·`amax`·`cumsum`)은 torch 에서도 형을 지키지만 **여기 표에 없다** —
+    # `bool` 의 합은 `int64` 라 규칙이 하나 더 있고, 그것은 따로 잴 자리다.
+    ints = np.arange(12, dtype=np.int64).reshape(3, 4)
+    flags = (ints % 2 == 0)
+    pick = np.array([0, 2], dtype=np.int64)
+    spread = np.array([[0, 1, 0, 1], [1, 0, 1, 0], [0, 0, 1, 1]], dtype=np.int64)
+    moves = (
+        ("reshape", lambda L, t: t.reshape(4, 3)),
+        ("ravel", lambda L, t: t.ravel()),
+        ("squeeze", lambda L, t: t.reshape(1, 12).squeeze(0)),
+        ("unsqueeze", lambda L, t: t.unsqueeze(0)),
+        ("transpose", lambda L, t: t.transpose(0, 1)),
+        ("t", lambda L, t: t.t()),
+        ("permute", lambda L, t: t.permute(1, 0)),
+        ("flip", lambda L, t: t.flip(0)),
+        ("select", lambda L, t: t.select(0, 1)),
+        ("narrow", lambda L, t: t.narrow(1, 1, 2)),
+        ("diagonal", lambda L, t: t.diagonal()),
+        ("chunk[0]", lambda L, t: t.chunk(2, 0)[0]),
+        ("unbind[0]", lambda L, t: t.unbind(0)[0]),
+        ("tensor_split[0]", lambda L, t: t.tensor_split(3, 1)[0]),
+        ("index_select", lambda L, t: t.index_select(0, L.tensor(pick))),
+        ("gather", lambda L, t: t.gather(1, L.tensor(spread))),
+        ("take", lambda L, t: t.take(L.tensor(pick))),
+        ("masked_select", lambda L, t: t.masked_select(t > 5)),
+        ("cat", lambda L, t: L.cat([t, t], 0)),
+        ("stack", lambda L, t: L.stack([t, t], 0)),
+        ("repeat", lambda L, t: t.repeat(2, 1)),
+        ("roll", lambda L, t: t.roll(1, 0)),
+        ("tril", lambda L, t: t.tril()),
+        ("triu", lambda L, t: t.triu()),
+        ("pad", lambda L, t: F(L).pad(t, (1, 1))),
+        ("as_strided", lambda L, t: L.as_strided(t, (2, 2), (1, 2))),
+        ("diag_embed", lambda L, t: L.diag_embed(t)),
+        ("slice_scatter",
+         lambda L, t: L.slice_scatter(t, L.zeros(3, 2).long(), 1, 0, 2)),
+        ("select_scatter",
+         lambda L, t: L.select_scatter(t, L.zeros(4).long(), 0, 1)),
+        ("scatter", lambda L, t: t.scatter(1, L.tensor(spread), t)),
+        ("sort[0]", lambda L, t: t.sort(1)[0]),
+    )
+    for name, fn in moves:
+        # **정수와 참거짓 둘 다 묻는다.** 하나만 물으면 "float32 로 떨어뜨리는" 결함이
+        # 나머지 하나에서만 살아남을 수 있다.
+        cases.append((f"dtype::자리만::{name}(int64)",
+                      lambda L, f=fn: outcome(lambda: f(L, L.tensor(ints)))))
+        cases.append((f"dtype::자리만::{name}(bool)",
+                      lambda L, f=fn: outcome(lambda: f(L, L.tensor(flags)))))
+    # **`topk` 는 정수만 묻는다.** 참거짓에서는 torch 가 거절하는데 우리와 **예외
+    # 종류**가 다르고(RuntimeError vs TypeError), 그것은 형 보존이 아니라 거절 문구의
+    # 이야기다. 한 표에 두 질문을 섞으면 어느 쪽이 빨간지 못 읽는다.
+    cases.append(("dtype::자리만::topk[0](int64)",
+                  lambda L: outcome(lambda: L.tensor(ints).topk(2, 1)[0])))
     return cases
 
 
