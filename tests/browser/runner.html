@@ -119,13 +119,30 @@ _spec.loader.exec_module(g)
 LIB = ${JSON.stringify(lib)}
 lib = g.load_borch() if LIB == "borch" else importlib.import_module(LIB)
 
-bad, total = g.check(lib, "/work/tests/golden.npz")
-json.dumps({"lib": LIB, "total": total, "bad": bad})
+# **케이스마다 GPU 검증 오류 수를 잰다.** WebGPU 는 그것을 예외로 안 던지고 명령
+# 버퍼를 조용히 버리므로, 안 재면 **범인은 통과하고 뒤에 줄 선 케이스가 대신
+# 빨개진다.** 세 번 그렇게 겪었다. 코어(numpy)에는 잴 것이 없다.
+faults = None
+if LIB != "borch":
+    import js
+    # **Device.faults 는 인스턴스 것이다** — adapterInfo 와 달리 static 이 아니라서
+    # 지금 붙은 장치를 device() 로 잡아야 한다.
+    #
+    # **이 안에는 백틱을 쓰지 마라.** 이 파이썬은 JS 템플릿 문자열 안에 있어서
+    # 백틱 하나가 문자열을 닫고, 그러면 스크립트가 통째로 파싱에서 죽는다 —
+    # 증상은 콘솔 오류가 아니라 GOLDEN_RESULT 가 undefined 인 것이고, 드라이버는
+    # 그것을 "결과가 없다" 로 본다. 원인에서 아주 먼 자리다.
+    faults = lambda: int(js.borch.device().faults.count)         # noqa: E731
+
+bad, total = g.check(lib, "/work/tests/golden.npz", faults=faults)
+json.dumps({"lib": LIB, "total": total, "bad": bad,
+            "faults": faults() if faults else 0})
 `;
   const result = JSON.parse(await py.runPythonAsync(code));
   const ok = result.bad.length === 0;
   say(`\n골든 대조 — 케이스 ${result.total}개`);
   say(`  일치 ${result.total - result.bad.length}/${result.total}`);
+  if (result.faults) say(`  GPU 검증 오류 ${result.faults}건 — 위의 초록은 그만큼 못 믿는다`);
   for (const why of result.bad) say(`  ✗ ${why}`);
   window.GOLDEN_RESULT = { ...result, ok, backend };
 }

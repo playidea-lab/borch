@@ -1207,6 +1207,85 @@ def shape_index_cases(inp=None):
     return cases
 
 
+CACHE_PREFIX = "cache::"
+
+
+def scalar_cache_cases(inp=None):
+    """**크기 1 짜리 파라미터가 전역 상수를 더럽히지 않는가.**
+
+    ## 왜 이 자리가 있는가
+
+    자매(borch.ts)는 `Tensor.full` 이 원소 하나짜리를 **값으로 캐시한다.** 같은 값을
+    두 번 물으면 같은 버퍼가 나오고, `zeros`·`ones` 도 그 문을 지난다. 빠르지만 —
+    **제자리로 고칠 것이 그 버퍼를 물려받으면 전역 상수가 통째로 바뀐다.**
+
+    옵티마이저 상태에서 실제로 그렇게 났고(자매 세션이 잡았다), 층 쪽에도 같은 문이
+    있다: `nn.PReLU()` 의 기본 가중치는 크기 1 의 `0.25` 이고, `BatchNorm(1)` 의 이동
+    통계는 크기 1 의 `0`·`1` 이다. 셋 다 학습이 **제자리로** 고치는 것들이다.
+
+    ## 케이스가 실제로 그 자리를 밟게 하려면
+
+    파라미터 값만 보면 오염돼도 그 자리는 맞게 나온다 — 고쳐 쓴 값이 곧 답이니까.
+    **한 스텝 밟은 뒤에 새로 만든 상수**를 봐야 한다. 그래서 순서가 이렇다:
+
+    1. 크기 1 파라미터를 만든다 (여기서 캐시된 버퍼를 물려받는다)
+    2. 한 스텝 학습시킨다 (제자리로 고친다 — 오염이 있다면 여기서 난다)
+    3. **그 뒤에** `zeros`·`ones`·`full(0.25)` 를 새로 만들어 값을 본다
+
+    3번이 없으면 이 케이스는 초록인 채로 아무것도 안 잰다. 옵티마이저 쪽 케이스를
+    두 번 고쳐 쓴 이유가 정확히 이것이었다.
+
+    torch 에는 이런 캐시가 없으므로 답은 언제나 깨끗한 상수다 — 그것이 기대값이다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((CACHE_PREFIX + name, fn))
+
+    def fresh(L):
+        """**새로** 만든 전역 상수 셋. 오염됐으면 여기서 다른 값이 나온다."""
+        return L.cat([L.zeros(1), L.ones(1), L.full((1,), 0.25)])
+
+    def prelu_then_constants(L):
+        m = L.nn.PReLU()
+        opt = L.optim.SGD(m.parameters(), lr=0.5)
+        opt.zero_grad()
+        # **음수 자리가 있어야 기울기가 흐른다** — PReLU 의 가중치는 음수 쪽에만 붙는다.
+        m(L.tensor(np.array([[-2.0, 1.0]], dtype=np.float32))).sum().backward()
+        opt.step()
+        return fresh(L)
+
+    add("PReLU 한 스텝 뒤의 상수", prelu_then_constants)
+    # 파라미터 자체도 굳힌다 — 학습이 정말 움직였는지가 여기서만 보인다. 안 움직였으면
+    # 위의 케이스는 밟지도 않은 자리를 통과시킨 것이다.
+    add("PReLU 가 실제로 움직였다", lambda L: _prelu_stepped(L))
+
+    def batchnorm_then_constants(L):
+        bn = L.nn.BatchNorm1d(1)
+        bn(L.tensor(np.array([[1.0], [3.0]], dtype=np.float32)))
+        return fresh(L)
+
+    add("BatchNorm(1) 한 번 지난 뒤의 상수", batchnorm_then_constants)
+    add("BatchNorm(1) 의 이동 통계가 움직였다",
+        lambda L: _batchnorm_stats(L))
+    return cases
+
+
+def _prelu_stepped(L):
+    m = L.nn.PReLU()
+    opt = L.optim.SGD(m.parameters(), lr=0.5)
+    opt.zero_grad()
+    m(L.tensor(np.array([[-2.0, 1.0]], dtype=np.float32))).sum().backward()
+    opt.step()
+    return list(m.parameters())[0]
+
+
+def _batchnorm_stats(L):
+    bn = L.nn.BatchNorm1d(1)
+    bn(L.tensor(np.array([[1.0], [3.0]], dtype=np.float32)))
+    return L.cat([bn.running_mean, bn.running_var])
+
+
 BLEND_PREFIX = "blend::"
 
 
@@ -6649,6 +6728,7 @@ def golden_cases(inp=None):
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
+            + scalar_cache_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

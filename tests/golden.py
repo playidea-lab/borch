@@ -74,8 +74,19 @@ def dump(path=DEFAULT_PATH):
     return len(cases), path
 
 
-def check(lib, path=DEFAULT_PATH):
-    """2단계 — 골든과 대조한다. (갈린 곳 목록, 케이스 수)."""
+def check(lib, path=DEFAULT_PATH, faults=None):
+    """2단계 — 골든과 대조한다. (갈린 곳 목록, 케이스 수).
+
+    `faults` 는 **지금까지 난 GPU 검증 오류 수**를 돌려주는 함수다(안 주면 안 본다).
+
+    WebGPU 의 검증 오류는 예외가 아니다. 무효한 명령 버퍼는 조용히 아무것도 안 하고,
+    그래서 **범인은 통과하고 뒤에 줄 선 케이스가 대신 빨개진다.** 세 번 겪었다 —
+    `as_strided_` 의 초과 복사, 옵티마이저 상태의 버퍼 공유, 그리고 아무것도 안 고르는
+    `index_select` 가 0 으로 나누는 셰이더를 굽던 자리.
+
+    케이스마다 수를 재면 **그 자리를 이름으로 짚을 수 있다.** 셋 다 원인에서 한두 칸
+    떨어진 자리를 보며 시작했고, 그 거리가 이 검사의 값어치다.
+    """
     z = np.load(path, allow_pickle=False)
     inp = cases_mod.golden_inputs()
     cases = cases_mod.golden_cases(inp)
@@ -97,6 +108,7 @@ def check(lib, path=DEFAULT_PATH):
     # 코어가 일부러 거절하는 것을 코어에게 물으면 그건 검사가 아니라 오답이다.
     is_webgpu = hasattr(lib, "backend")
     bad, skipped = [], 0
+    seen_faults = faults() if faults else 0
     for name, fn in cases:
         if name.startswith(cases_mod.WEBGPU_PREFIX) and not is_webgpu:
             skipped += 1
@@ -108,6 +120,15 @@ def check(lib, path=DEFAULT_PATH):
         except Exception as exc:                                    # noqa: BLE001
             bad.append(f"{name}: {type(exc).__name__} — {str(exc).splitlines()[0][:60]}")
             continue
+        finally:
+            # **값이 맞아도 검증 오류를 냈으면 빨갛다.** 이 케이스는 통과할 수 있어도
+            # 명령 버퍼가 무효가 된 채 다음으로 넘어간다.
+            if faults:
+                now = faults()
+                if now > seen_faults:
+                    bad.append(f"{name}: GPU 검증 오류 {now - seen_faults}건 "
+                               f"(값과 무관하게 여기서 났다)")
+                    seen_faults = now
         if want.dtype.kind == "U" or got.dtype.kind == "U":
             if str(want) != str(got):
                 bad.append(f"{name}: {want} 여야 하는데 {got}")

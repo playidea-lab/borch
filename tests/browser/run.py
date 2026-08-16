@@ -142,6 +142,10 @@ def main():
         return 1
     print(f"브라우저 골든 대조 ({result.get('lib', args.lib)}) — 케이스 {total}개")
     print(f"  일치 {total - len(bad)}/{total}")
+    # **검증 오류는 예외로 안 온다.** 하나라도 났으면 위의 초록이 그만큼 못 미덥다 —
+    # 무효한 명령 버퍼는 조용히 아무것도 안 하고 벽시계만 돈다.
+    if result.get("faults"):
+        print(f"  GPU 검증 오류 {result['faults']}건")
     if bad:
         print("\n갈린 곳:")
         for why in bad:

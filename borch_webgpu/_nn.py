@@ -626,7 +626,23 @@ class Module:
 
     def parameters(self):
         if self._m is None:
-            return [p for _, m in self._children() for p in _params_of(m)]
+            out = []
+            for _, m in self._children():
+                # **속성에 바로 붙은 파라미터도 파라미터다.**
+                #
+                # `state_dict` 는 이 갈래를 처음부터 갖고 있었는데 여기만 없었다. 그래서
+                # `PReLU`·`GroupNorm` 처럼 **자식 층이 아니라 텐서를 속성으로 가진**
+                # 것들이 파라미터를 하나도 안 내놨다. `_params_of` 가 `hasattr(t,
+                # "parameters")` 로 묻는데 텐서에는 그런 것이 없어서 조용히 빈 목록이
+                # 된다 — 예외도 경고도 없고 **학습만 안 된다.** 이 파일 아래쪽
+                # "컨테이너" 주석이 경고하는 바로 그 모양인데, 그 자리를 자기가 밟고
+                # 있었다.
+                if isinstance(m, Tensor):
+                    if bool(m._h.requiresGrad):
+                        out.append(m)
+                    continue
+                out.extend(_params_of(m))
+            return out
         # JS 배열은 파이썬에서 바로 못 돈다 — `to_py` 로 목록을 받아야 한다.
         return [wrap(p) for p in self._m.parameters().to_py()]
 
