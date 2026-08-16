@@ -2266,6 +2266,20 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   };
   out.set("opt::Adafactor/2차원", matrixWalk([3, 4]));
   out.set("opt::Adafactor/3차원", matrixWalk([2, 3, 4]));
+
+  // **오르내림을 다르게, 주기를 여러 번.** 같은 폭에 한 주기만 밟으면 `stepSizeDown`
+  // 도 `triangular2` 도 있는지 안 보인다.
+  out.set("opt::CyclicLR/자취",
+    () => trace((o) => new optim.CyclicLR(o, 0.01, 0.1, 3).start(), 14));
+  out.set("opt::CyclicLR(위아래 다름)/자취",
+    () => trace((o) => new optim.CyclicLR(o, 0.01, 0.1, 2, 4).start(), 14));
+  out.set("opt::CyclicLR(triangular2)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "triangular2").start(), 14));
+  // **`exp_range` 의 기준은 주기가 아니라 걸음이다.**
+  out.set("opt::CyclicLR(exp_range)/자취",
+    () => trace((o) => new optim.CyclicLR(
+      o, 0.01, 0.1, 3, null, "exp_range", 0.9).start(), 14));
 }
 
 /**

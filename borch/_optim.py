@@ -807,6 +807,66 @@ class OneCycleLR(_Scheduler):
         return [lo + (hi - lo) * scale for _ in self.base_lrs]
 
 
+class CyclicLR(_Scheduler):
+    """학습률을 **오르내리게** 한다. 안장점을 빠져나오라고 일부러 흔드는 방식이다.
+
+    `step_size_up` 만큼 올라갔다가 `step_size_down` 만큼 내려온다. 안 주면 올라간
+    만큼 내려온다 — **오르내림이 같으면 그 인자가 있는지도 안 보인다.**
+
+    `mode` 셋:
+      `triangular`  — 봉우리 높이가 늘 같다
+      `triangular2` — 한 주기마다 높이가 절반이 된다
+      `exp_range`   — 높이에 `gamma^걸음` 을 곱한다 (주기가 아니라 **걸음**이다)
+
+    마지막 것의 기준이 걸음이라는 게 갈리는 자리다. `scale_mode` 가 `cycle` 이면
+    주기 번호를 넣고 `iterations` 면 걸음 수를 넣는데, `exp_range` 만 후자다.
+    """
+
+    def __init__(self, optimizer, base_lr, max_lr, step_size_up=2000,
+                 step_size_down=None, mode="triangular", gamma=1.0,
+                 scale_fn=None, scale_mode="cycle", cycle_momentum=True,
+                 base_momentum=0.8, max_momentum=0.9, last_epoch=-1):
+        self.base_lr, self.max_lr = base_lr, max_lr
+        self.up = step_size_up
+        self.down = step_size_up if step_size_down is None else step_size_down
+        self.mode, self.gamma = mode, gamma
+        self.cycle_momentum = cycle_momentum
+        self.base_momentum, self.max_momentum = base_momentum, max_momentum
+        if scale_fn is None:
+            if mode == "triangular":
+                scale_fn, scale_mode = (lambda _c: 1.0), "cycle"
+            elif mode == "triangular2":
+                scale_fn, scale_mode = (lambda c: 1 / (2.0 ** (c - 1))), "cycle"
+            elif mode == "exp_range":
+                scale_fn, scale_mode = (lambda i: gamma ** i), "iterations"
+            else:
+                raise ValueError(f"CyclicLR: 모르는 mode {mode!r}")
+        self.scale_fn, self.scale_mode = scale_fn, scale_mode
+        super().__init__(optimizer, last_epoch)
+
+    def _shape(self):
+        total = self.up + self.down
+        ratio = self.up / total
+        cycle = _math.floor(1 + self.last_epoch / total)
+        x = 1 + self.last_epoch / total - cycle
+        # 올라가는 구간과 내려오는 구간의 기울기가 다르다 — 위 함정이 이것이다.
+        rise = x / ratio if x <= ratio else (x - 1) / (ratio - 1)
+        scale = self.scale_fn(cycle if self.scale_mode == "cycle"
+                              else self.last_epoch)
+        return rise * scale
+
+    def get_lr(self):
+        height = (self.max_lr - self.base_lr) * self._shape()
+        lr = self.base_lr + height
+        if self.cycle_momentum:
+            # **모멘텀은 반대로 간다** — 학습률이 높을 때 낮다.
+            span = (self.max_momentum - self.base_momentum) * self._shape()
+            for group in self.optimizer.param_groups:
+                if "momentum" in group:
+                    group["momentum"] = self.max_momentum - span
+        return [lr for _ in self.optimizer.param_groups]
+
+
 class SequentialLR:
     """스케줄러를 **이어 붙인다.** 이정표에 닿으면 다음 것으로 넘어간다.
 
@@ -909,6 +969,7 @@ class _LRScheduler(_Namespace):
     MultiplicativeLR = MultiplicativeLR
     CosineAnnealingWarmRestarts = CosineAnnealingWarmRestarts
     OneCycleLR = OneCycleLR
+    CyclicLR = CyclicLR
     SequentialLR = SequentialLR
     ChainedScheduler = ChainedScheduler
     # torch 가 기반 클래스를 이 이름으로 내놓는다. 상속해서 자기 스케줄러를 만드는

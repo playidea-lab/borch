@@ -4024,6 +4024,10 @@ _Lu = _named("linalg_lu", "P", "L", "U")
 _InvEx = _named("linalg_inv_ex", "inverse", "info")
 _CholeskyEx = _named("linalg_cholesky_ex", "L", "info")
 _SolveEx = _named("linalg_solve_ex", "result", "info")
+_LuFactorEx = _named("linalg_lu_factor_ex", "LU", "pivots", "info")
+_LdlFactor = _named("linalg_ldl_factor", "LD", "pivots")
+_LdlFactorEx = _named("linalg_ldl_factor_ex", "LD", "pivots", "info")
+_Geqrf = _named("geqrf", "a", "tau")
 
 
 # ---- 배치
@@ -4468,6 +4472,156 @@ def lu_factor(t):
     return _LuFactor(Tensor(lu_data.astype(t.data.dtype)), Tensor(piv))
 
 
+def lu_factor_ex(t, pivot=True, check_errors=False):
+    """`lu_factor` 에 **`info` 를 하나 더 붙인 것.** 던지는 대신 번호로 알린다.
+
+    0 이면 잘 됐고, `k` 면 `k` 번째 피벗이 0 이라 특이행렬이다(1 부터 센다). 실측:
+    `[[1,2],[2,4]]` 이 2 를 낸다. 던지는 판(`lu_factor`)과 갈라 둔 이유는 배치로 풀
+    때 한 장이 나빠도 나머지를 이어 가려는 것이다.
+    """
+    t = _mat(t, "lu_factor_ex", square=False)
+    if not pivot:
+        _unsupported("lu_factor_ex(pivot=False)")
+    lu_data, piv = _lu_pack(t.data)
+    n, m = lu_data.shape[-2], lu_data.shape[-1]
+    k = min(n, m)
+    flat = lu_data.reshape(-1, n, m)
+    info = _np.zeros(flat.shape[0], dtype=_np.int32)
+    for b in range(flat.shape[0]):
+        zero = _np.flatnonzero(_np.diagonal(flat[b])[:k] == 0)
+        info[b] = 0 if zero.size == 0 else int(zero[0]) + 1
+    shape = t.data.shape[:-2]
+    return _LuFactorEx(Tensor(lu_data.astype(t.data.dtype)), Tensor(piv),
+                       Tensor(info.reshape(shape) if shape else info[0]))
+
+
+def _ldl_pack(data):
+    """대칭 행렬의 `L D Lᵀ`. **피벗을 안 한다.**
+
+    torch 는 LAPACK 의 Bunch-Kaufman 을 쓰고 그것은 필요하면 자리를 바꾼다. 여기서는
+    양의 정부호처럼 바꿀 일이 없는 자리만 다루고, 대각이 0 에 가까우면 **시끄럽게
+    거절한다** — 조용히 이어 가면 자리를 안 바꾼 것과 바꾼 것이 다른 답을 내는데
+    둘 다 그럴듯하다.
+
+    답은 torch 와 같은 모양으로 **한 장에 겹쳐 담는다** — 대각이 `D`, 그 아래가 `L`.
+    """
+    a = data.astype(_np.float64)
+    n = a.shape[-1]
+    flat = a.reshape(-1, n, n).copy()
+    out = _np.zeros_like(flat)
+    for b in range(flat.shape[0]):
+        mat, ld = flat[b], out[b]
+        for j in range(n):
+            d = mat[j, j] - sum(ld[j, k] ** 2 * ld[k, k] for k in range(j))
+            # **`abs` 는 이 파일에서 텐서 함수다** — 모듈 전역이 내장을 가린다.
+            # 그 자리를 여기서 또 밟았고, `_np.abs` 로 부르는 것이 이 파일의 규칙이다.
+            if _np.abs(d) < 1e-12:
+                _unsupported("ldl_factor — 피벗이 필요한 대칭 행렬 (부정부호)")
+            ld[j, j] = d
+            for i in range(j + 1, n):
+                s = sum(ld[i, k] * ld[k, k] * ld[j, k] for k in range(j))
+                ld[i, j] = (mat[i, j] - s) / d
+    # 교환표는 1 부터 센 항등이다 — 자리를 안 바꿨으므로.
+    piv = _np.tile(_np.arange(1, n + 1, dtype=_np.int32), flat.shape[0], )
+    return out.reshape(a.shape), piv.reshape(data.shape[:-2] + (n,))
+
+
+def ldl_factor(t, hermitian=False):
+    """대칭 행렬을 `L D Lᵀ` 로. 한 장에 겹쳐 담은 `LD` 와 교환표를 준다."""
+    t = _mat(t, "ldl_factor")
+    ld, piv = _ldl_pack(t.data)
+    return _LdlFactor(Tensor(ld.astype(t.data.dtype)), Tensor(piv))
+
+
+def ldl_factor_ex(t, hermitian=False, check_errors=False):
+    """`ldl_factor` 에 `info` 를 붙인 것. 여기서는 늘 0 이다 — 나쁜 자리는 거절한다."""
+    t = _mat(t, "ldl_factor_ex")
+    ld, piv = _ldl_pack(t.data)
+    shape = t.data.shape[:-2]
+    zero = _np.zeros(shape, dtype=_np.int32) if shape else _np.int32(0)
+    return _LdlFactorEx(Tensor(ld.astype(t.data.dtype)), Tensor(piv), Tensor(zero))
+
+
+def ldl_solve(ld, pivots, b, hermitian=False):
+    """`ldl_factor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다."""
+    ld = _mat(ld, "ldl_solve")
+    packed = _np.asarray(ld.data, dtype=_np.float64)
+    rhs = _np.asarray(_wrap(b).data, dtype=_np.float64)
+    n = packed.shape[-1]
+    flat_ld = packed.reshape(-1, n, n)
+    single = rhs.ndim == 2
+    flat_b = rhs.reshape(-1, n, rhs.shape[-1]) if single else rhs.reshape(-1, n, rhs.shape[-1])
+    outs = []
+    for i in range(flat_ld.shape[0]):
+        low = _np.tril(flat_ld[i], -1) + _np.eye(n)
+        diag = _np.diagonal(flat_ld[i]).copy()
+        y = _np.linalg.solve(low, flat_b[i])
+        outs.append(_np.linalg.solve(low.T, y / diag[:, None]))
+    got = _np.stack(outs).reshape(rhs.shape)
+    return Tensor(got.astype(_wrap(b).data.dtype))
+
+
+def geqrf(t):
+    """QR 을 **반사자 꼴로** 낸다. `householder_product` 가 그것으로 `Q` 를 세운다.
+
+    LAPACK 의 두 단계를 그대로 흉내낸다 — `geqrf` 가 반사자를 담고, 그것을 `Q` 로
+    펴는 것은 따로다. `Q` 를 안 만들고 곱하기만 하는 코드가 있어서 갈라 둔 것이다.
+    """
+    t = _mat(t, "geqrf", square=False)
+    a = _np.asarray(t.data, dtype=_np.float64)
+    m, n = a.shape[-2], a.shape[-1]
+    flat = a.reshape(-1, m, n).copy()
+    taus = _np.zeros((flat.shape[0], min(m, n)))
+    for b in range(flat.shape[0]):
+        mat = flat[b]
+        for j in range(min(m, n)):
+            x = mat[j:, j].copy()
+            # **대각 아래가 전부 0 이면 반사를 안 한다** — LAPACK 의 `dlarfg` 가
+            # 그 자리에서 `tau = 0` 을 놓고 값을 그대로 둔다. 정사각의 마지막 열이
+            # 늘 그 자리인데, 거기서 부호를 뒤집었더니 `Q` 의 마지막 열이 통째로
+            # 반대가 됐다. 직사각으로만 물으면 그 열이 안 나와서 안 보인다.
+            if _np.linalg.norm(x[1:]) == 0:
+                continue
+            norm = _np.linalg.norm(x)
+            alpha = x[0]
+            beta = -_np.sign(alpha) * norm if alpha != 0 else -norm
+            tau = (beta - alpha) / beta
+            v = x / (alpha - beta)
+            v[0] = 1.0
+            mat[j:, j:] -= tau * _np.outer(v, v @ mat[j:, j:])
+            mat[j, j] = beta
+            mat[j + 1:, j] = v[1:]
+            taus[b, j] = tau
+    return _Geqrf(Tensor(flat.reshape(a.shape).astype(t.data.dtype)),
+                  Tensor(taus.reshape(a.shape[:-2] + (min(m, n),)).astype(t.data.dtype)))
+
+
+def householder_product(t, tau):
+    """반사자들을 곱해 `Q` 를 세운다. `geqrf` 의 짝이다.
+
+    `H_i = I − τ_i v_i v_iᵀ` 를 차례로 곱한다. `v_i` 는 대각이 1 이고 그 아래가
+    `A[i+1:, i]` 다 — 대각의 1 은 **저장 안 하는 약속**이라, 그 자리를 읽어 쓰면
+    분해가 담아 둔 `R` 을 반사자로 착각한다.
+    """
+    t = _mat(t, "householder_product", square=False)
+    a = _np.asarray(t.data, dtype=_np.float64)
+    taus = _np.asarray(_wrap(tau).data, dtype=_np.float64)
+    m, n = a.shape[-2], a.shape[-1]
+    flat = a.reshape(-1, m, n)
+    flat_tau = taus.reshape(-1, taus.shape[-1])
+    outs = []
+    for b in range(flat.shape[0]):
+        q = _np.eye(m)
+        for j in range(flat_tau.shape[1] - 1, -1, -1):
+            v = _np.zeros(m)
+            v[j] = 1.0
+            v[j + 1:] = flat[b][j + 1:, j]
+            q -= flat_tau[b, j] * _np.outer(v, v @ q)
+        outs.append(q[:, :n])
+    got = _np.stack(outs).reshape(a.shape[:-2] + (m, n))
+    return Tensor(got.astype(t.data.dtype))
+
+
 def lu(t, pivot=True):
     """`P L U` 셋으로 펴서 준다. 겹쳐 담은 것보다 읽기 쉽다."""
     t = _mat(t, "lu", square=False)
@@ -4751,7 +4905,12 @@ class _Linalg(_Namespace):
     lstsq = staticmethod(lstsq)
     lu = staticmethod(lu)
     lu_factor = staticmethod(lu_factor)
+    lu_factor_ex = staticmethod(lu_factor_ex)
     lu_solve = staticmethod(lu_solve)
+    ldl_factor = staticmethod(ldl_factor)
+    ldl_factor_ex = staticmethod(ldl_factor_ex)
+    ldl_solve = staticmethod(ldl_solve)
+    householder_product = staticmethod(householder_product)
     norm = staticmethod(norm)
     # 조합층.
     matmul = staticmethod(matmul)

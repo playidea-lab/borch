@@ -288,6 +288,8 @@ _SCHED_ARGS = {
     "CosineAnnealingWarmRestarts": ("T_0", "T_mult", "eta_min"),
     "OneCycleLR": ("max_lr", "total_steps", "pct_start", "div_factor",
                    "final_div_factor"),
+    "CyclicLR": ("base_lr", "max_lr", "step_size_up", "step_size_down", "mode",
+                 "gamma"),
 }
 
 
@@ -337,6 +339,7 @@ class _LRScheduler:
     MultiplicativeLR = staticmethod(_sched("MultiplicativeLR"))
     CosineAnnealingWarmRestarts = staticmethod(_sched("CosineAnnealingWarmRestarts"))
     OneCycleLR = staticmethod(_sched("OneCycleLR"))
+    CyclicLR = staticmethod(_sched("CyclicLR"))
     LRScheduler = _Sched
 
     @staticmethod

@@ -1250,6 +1250,16 @@ _SCHEDULERS = [
     ("MultiplicativeLR", {}, 6),
     ("CosineAnnealingWarmRestarts", {"T_0": 3, "T_mult": 2}, 10),
     ("OneCycleLR", {"max_lr": 0.4, "total_steps": 10}, 10),
+    ("CyclicLR", {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3}, 14),
+    # **오르내림을 다르게 준다** — 같으면 `step_size_down` 이 있는지도 안 보인다.
+    ("CyclicLR(위아래 다름)", {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 2,
+                          "step_size_down": 4}, 14),
+    # 두 번째 주기부터 봉우리가 절반이 된다 — 한 주기만 밟으면 안 갈린다.
+    ("CyclicLR(triangular2)", {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
+                               "mode": "triangular2"}, 14),
+    # **`exp_range` 의 기준은 주기가 아니라 걸음이다.** 그 하나가 갈리는 자리다.
+    ("CyclicLR(exp_range)", {"base_lr": 0.01, "max_lr": 0.1, "step_size_up": 3,
+                             "mode": "exp_range", "gamma": 0.9}, 14),
 ]
 
 
@@ -1306,10 +1316,12 @@ def opt_cases(inp=None):
         """학습률의 자취. **옵티마이저를 실제로 밟는다** — 순서가 값을 정한다."""
         m = model_of(L)
         opt = L.optim.SGD(m.parameters(), lr=0.2)
-        if name == "MultiplicativeLR":
+        # 이름에 괄호로 갈래를 적어 두었다 — 클래스 이름은 그 앞까지다.
+        kind = name.split("(")[0]
+        if kind == "MultiplicativeLR":
             sch = L.optim.lr_scheduler.MultiplicativeLR(opt, lambda epoch: 0.9)
         else:
-            sch = getattr(L.optim.lr_scheduler, name)(opt, **args)
+            sch = getattr(L.optim.lr_scheduler, kind)(opt, **args)
         seen = []
         for _ in range(steps):
             seen.append(round(float(opt.param_groups[0]["lr"]), 6))
@@ -4888,6 +4900,59 @@ def linalg_struct_cases(inp=None):
                                  L.tensor(np.array([[1.], [2.]], dtype=np.float32)))
 
     cases.append((LINALG_PREFIX + "lu::lu_solve(교환)", lu_solve))
+
+    # ── `_ex`·LDL·반사자 ────────────────────────────────────────────────
+    #
+    # `lu_factor_ex` 는 던지는 대신 **`info` 로 알린다.** 0 이면 잘 됐고, `k` 면
+    # `k` 번째 피벗이 0 이다(1 부터 센다). 특이행렬로도 물어야 그 수가 드러난다.
+    lin4 = np.array([[2.0, 1.0, 0.5, -1.0], [1.0, 3.0, -0.5, 0.25],
+                     [0.5, -0.5, 2.5, 0.75], [-1.0, 0.25, 0.75, 4.0]],
+                    dtype=np.float32)
+    singular2 = np.array([[1.0, 2.0], [2.0, 4.0]], dtype=np.float32)
+    rect53 = (np.arange(15, dtype=np.float32).reshape(5, 3) / 4 - 1.5
+              + np.eye(5, 3, dtype=np.float32) * 3)
+
+    for tag, arr in (("정사각", _LA_PIVOT), ("직사각", rect53)):
+        for field in ("LU", "pivots", "info"):
+            cases.append((
+                LINALG_PREFIX + f"ex::lu_factor_ex/{tag}/{field}",
+                lambda L, a=arr, f=field: getattr(
+                    L.linalg.lu_factor_ex(L.tensor(a)), f)))
+    cases.append((LINALG_PREFIX + "ex::lu_factor_ex/특이행렬 info",
+                  lambda L: L.linalg.lu_factor_ex(L.tensor(singular2)).info))
+
+    # LDL 은 **대칭**에만 뜻이 있다. `lin4` 는 대칭으로 지었다.
+    for field in ("LD", "pivots"):
+        cases.append((LINALG_PREFIX + f"ex::ldl_factor/{field}",
+                      lambda L, f=field: getattr(
+                          L.linalg.ldl_factor(L.tensor(lin4)), f)))
+    cases.append((LINALG_PREFIX + "ex::ldl_factor_ex/info",
+                  lambda L: L.linalg.ldl_factor_ex(L.tensor(lin4)).info))
+
+    def ldl_solve(L):
+        f = L.linalg.ldl_factor(L.tensor(lin4))
+        b = np.array([[1.0, -2.0], [0.5, 0.25], [-1.5, 3.0], [2.0, 0.5]],
+                     dtype=np.float32)
+        return L.linalg.ldl_solve(f.LD, f.pivots, L.tensor(b))
+
+    cases.append((LINALG_PREFIX + "ex::ldl_solve", ldl_solve))
+
+    # **반사자 꼴 QR.** `geqrf` 가 담고 `householder_product` 가 `Q` 로 편다.
+    #
+    # **정사각으로도 물어야 한다.** LAPACK 은 대각 아래가 전부 0 이면 반사를 안 하고
+    # (`tau = 0`) 값을 그대로 두는데, 정사각의 마지막 열이 늘 그 자리다. 직사각으로만
+    # 물으면 그 열이 안 나와서, 거기서 부호를 뒤집어도 안 걸린다 — 실제로 그랬다.
+    for tag, arr in (("정사각", lin4), ("직사각", rect53)):
+        cases.append((LINALG_PREFIX + f"ex::geqrf/{tag}/a",
+                      lambda L, a=arr: L.geqrf(L.tensor(a))[0]))
+        cases.append((LINALG_PREFIX + f"ex::geqrf/{tag}/tau",
+                      lambda L, a=arr: L.geqrf(L.tensor(a))[1]))
+
+        def product(L, a=arr):
+            got = L.geqrf(L.tensor(a))
+            return L.linalg.householder_product(got[0], got[1])
+
+        cases.append((LINALG_PREFIX + f"ex::householder_product/{tag}", product))
 
     # ── 배치의 기울기 ───────────────────────────────────────────────────
     # **값이 맞는데 기울기가 안 맞는 자리가 여기다.** 역방향 식이 `.T` 로 적혀 있으면

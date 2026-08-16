@@ -733,6 +733,44 @@ export class OneCycleLR extends LRScheduler {
   }
 }
 
+/**
+ * 학습률을 **오르내리게** 한다. 안장점을 빠져나오라고 일부러 흔드는 방식이다.
+ *
+ * `stepSizeUp` 만큼 올라갔다가 `stepSizeDown` 만큼 내려온다. 안 주면 올라간 만큼
+ * 내려온다 — **오르내림이 같으면 그 인자가 있는지도 안 보인다.**
+ *
+ * `mode` 셋 중 `expRange` 만 기준이 **주기가 아니라 걸음**이다. 거기가 갈리는 자리다.
+ */
+export class CyclicLR extends LRScheduler {
+  private readonly down: number;
+
+  constructor(
+    opt: Optimizer,
+    private readonly baseLr: number,
+    private readonly maxLr: number,
+    private readonly up = 2000,
+    stepSizeDown: number | null = null,
+    private readonly mode: "triangular" | "triangular2" | "exp_range" = "triangular",
+    private readonly gamma = 1.0,
+  ) {
+    super(opt);
+    this.down = stepSizeDown ?? this.up;
+  }
+
+  protected override compute(epoch: number): number {
+    const total = this.up + this.down;
+    const ratio = this.up / total;
+    const cycle = Math.floor(1 + epoch / total);
+    const x = 1 + epoch / total - cycle;
+    // 올라가는 구간과 내려오는 구간의 기울기가 다르다.
+    const rise = x <= ratio ? x / ratio : (x - 1) / (ratio - 1);
+    const scale = this.mode === "triangular2"
+      ? 1 / 2 ** (cycle - 1)
+      : this.mode === "exp_range" ? this.gamma ** epoch : 1;
+    return this.baseLr + (this.maxLr - this.baseLr) * rise * scale;
+  }
+}
+
 /** 스케줄러를 **이어 붙인다.** 이정표에 닿으면 다음 것으로 넘어간다. */
 export class SequentialLR {
   private epoch = 0;

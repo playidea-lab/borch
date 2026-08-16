@@ -41,7 +41,7 @@ Pyodide 의 `run_sync` 가 그 자리를 메운다(JSPI 위에 선다). 실측�
 
 ## 지금 어디까지인가
 
-골든 **1773 건 전부**를 지난다. 코어(numpy)는 그중 1720 건을 보는데, 나머지 53 건은
+골든 **1794 건 전부**를 지난다. 코어(numpy)는 그중 1741 건을 보는데, 나머지 53 건은
 코어가 일부러 거절하는 것들(1·3 차원 합성곱, 랭크 7·8)이라 안 묻는다.
 
 경계는 골든이 붙잡는다. 없는 것을 근사해서 초록을 만들지 않는다.
@@ -84,6 +84,8 @@ from ._ops import (                                      # noqa: E402,F401
     searchsorted, take, take_along_dim,
     # 수치 계열. `lgamma`·`digamma`·`erfinv` 는 WGSL 쪽에 있어 `__getattr__` 이 넘긴다.
     cdist, corrcoef, cov, cumulative_trapezoid, tensordot, trapezoid,
+    # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
+    geqrf,
 )
 from ._ops import (                                      # noqa: E402,F401
     Generator, manual_seed, randint, randperm,

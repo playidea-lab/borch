@@ -3390,6 +3390,185 @@ export class Tensor implements Node<Tensor> {
     };
   }
 
+  /**
+   * `luFactor` 에 **`info` 를 하나 더.** 던지는 대신 번호로 알린다 — 0 이면 잘 됐고,
+   * `k` 면 `k` 번째 피벗이 0 이라 특이행렬이다(1 부터 센다).
+   */
+  async luFactorEx(): Promise<{ LU: Tensor; pivots: Tensor; info: Tensor }> {
+    const v = await this.asBatch(false);
+    const k = Math.min(v.rows, v.cols);
+    const got = await this.luFactor();
+    const packed = v.mats.map((a) => LA.luFactor(a, v.rows, v.cols));
+    const info = new Float32Array(v.batch);
+    packed.forEach((f, b) => {
+      for (let i = 0; i < k; i++) {
+        if (f.lu[i * v.cols + i] === 0) { info[b] = i + 1; break; }
+      }
+    });
+    return {
+      LU: got.LU,
+      pivots: got.pivots,
+      info: Tensor.from(info, v.lead, false, "int64"),
+    };
+  }
+
+  /**
+   * 대칭 행렬을 `L D Lᵀ` 로. **피벗을 안 한다.**
+   *
+   * torch 는 LAPACK 의 Bunch-Kaufman 을 쓰고 그것은 필요하면 자리를 바꾼다. 여기서는
+   * 바꿀 일이 없는 자리(양의 정부호 같은 것)만 다루고, 대각이 0 에 가까우면 시끄럽게
+   * 거절한다 — 조용히 이어 가면 바꾼 것과 안 바꾼 것이 다른 답을 내는데 둘 다
+   * 그럴듯하다.
+   *
+   * 답은 torch 와 같은 모양으로 **한 장에 겹쳐 담는다** — 대각이 `D`, 그 아래가 `L`.
+   */
+  async ldlFactor(): Promise<{ LD: Tensor; pivots: Tensor }> {
+    const v = await this.asBatch();
+    const n = v.rows;
+    const outs = v.mats.map((mat) => {
+      const ld = new Float64Array(n * n);
+      for (let j = 0; j < n; j++) {
+        let d = mat[j * n + j] ?? 0;
+        for (let k = 0; k < j; k++) {
+          d -= (ld[j * n + k] ?? 0) ** 2 * (ld[k * n + k] ?? 0);
+        }
+        if (Math.abs(d) < 1e-12) {
+          throw new RuntimeError("ldl_factor — 피벗이 필요한 대칭 행렬 (부정부호)");
+        }
+        ld[j * n + j] = d;
+        for (let i = j + 1; i < n; i++) {
+          let s = 0;
+          for (let k = 0; k < j; k++) {
+            s += (ld[i * n + k] ?? 0) * (ld[k * n + k] ?? 0) * (ld[j * n + k] ?? 0);
+          }
+          ld[i * n + j] = ((mat[i * n + j] ?? 0) - s) / d;
+        }
+      }
+      return ld;
+    });
+    // 교환표는 1 부터 센 항등이다 — 자리를 안 바꿨으므로.
+    const piv = new Float32Array(v.batch * n);
+    for (let b = 0; b < v.batch; b++) {
+      for (let i = 0; i < n; i++) piv[b * n + i] = i + 1;
+    }
+    return {
+      LD: Tensor.fromBatch(outs, this.shape),
+      pivots: Tensor.from(piv, [...v.lead, n], false, "int64"),
+    };
+  }
+
+  /** `ldlFactor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다. */
+  async ldlSolve(b: Tensor): Promise<Tensor> {
+    const v = await this.asBatch();
+    const n = v.rows;
+    if (v.batch !== 1) throw new RuntimeError("ldl_solve: 배치는 아직 없다");
+    const ld = v.mats[0];
+    if (!ld) throw new RuntimeError("ldl_solve: 분해가 비었다");
+    const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
+    const rhs = LA.fromF32(await b.toArray());
+    const out = new Float64Array(n * width);
+    for (let c = 0; c < width; c++) {
+      const y = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        let s = rhs[i * width + c] ?? 0;
+        for (let k = 0; k < i; k++) s -= (ld[i * n + k] ?? 0) * (y[k] ?? 0);
+        y[i] = s;
+      }
+      for (let i = 0; i < n; i++) y[i] = (y[i] ?? 0) / (ld[i * n + i] ?? 1);
+      for (let i = n - 1; i >= 0; i--) {
+        let s = y[i] ?? 0;
+        for (let k = i + 1; k < n; k++) {
+          s -= (ld[k * n + i] ?? 0) * (out[k * width + c] ?? 0);
+        }
+        out[i * width + c] = s;
+      }
+    }
+    return Tensor.fromMat(out, b.shape);
+  }
+
+  /**
+   * QR 을 **반사자 꼴로** 낸다. `householderProduct` 가 그것으로 `Q` 를 세운다.
+   *
+   * **대각 아래가 전부 0 이면 반사를 안 한다** — LAPACK 의 `dlarfg` 가 그 자리에서
+   * `tau = 0` 을 놓고 값을 그대로 둔다. 정사각의 마지막 열이 늘 그 자리다.
+   */
+  async geqrf(): Promise<{ a: Tensor; tau: Tensor }> {
+    const v = await this.asBatch(false);
+    const { rows: m, cols: n } = v;
+    const k = Math.min(m, n);
+    const taus = new Float32Array(v.batch * k);
+    const outs = v.mats.map((src, b) => {
+      const mat = Float64Array.from(src);
+      for (let j = 0; j < k; j++) {
+        let tail = 0;
+        for (let i = j + 1; i < m; i++) tail += (mat[i * n + j] ?? 0) ** 2;
+        if (tail === 0) continue;
+        const alpha = mat[j * n + j] ?? 0;
+        const norm = Math.sqrt(alpha * alpha + tail);
+        const beta = alpha !== 0 ? -Math.sign(alpha) * norm : -norm;
+        const tau = (beta - alpha) / beta;
+        const w = new Float64Array(m - j);
+        w[0] = 1;
+        for (let i = 1; i < m - j; i++) {
+          w[i] = (mat[(j + i) * n + j] ?? 0) / (alpha - beta);
+        }
+        for (let c = j; c < n; c++) {
+          let dot = 0;
+          for (let i = 0; i < m - j; i++) dot += (w[i] ?? 0) * (mat[(j + i) * n + c] ?? 0);
+          for (let i = 0; i < m - j; i++) {
+            mat[(j + i) * n + c] = (mat[(j + i) * n + c] ?? 0) - tau * (w[i] ?? 0) * dot;
+          }
+        }
+        mat[j * n + j] = beta;
+        for (let i = 1; i < m - j; i++) mat[(j + i) * n + j] = w[i] ?? 0;
+        taus[b * k + j] = tau;
+      }
+      return mat;
+    });
+    return {
+      a: Tensor.fromBatch(outs, this.shape),
+      tau: Tensor.from(taus, [...v.lead, k]),
+    };
+  }
+
+  /**
+   * 반사자들을 곱해 `Q` 를 세운다. `geqrf` 의 짝이다.
+   *
+   * `v_i` 는 대각이 1 이고 그 아래가 `A[i+1:, i]` 다 — 대각의 1 은 **저장 안 하는
+   * 약속**이라, 그 자리를 읽어 쓰면 분해가 담아 둔 `R` 을 반사자로 착각한다.
+   */
+  async householderProduct(tau: Tensor): Promise<Tensor> {
+    const v = await this.asBatch(false);
+    const { rows: m, cols: n } = v;
+    const taus = await tau.toArray();
+    const k = tau.shape[tau.shape.length - 1] ?? 0;
+    const outs = v.mats.map((mat, b) => {
+      const q = new Float64Array(m * m);
+      for (let i = 0; i < m; i++) q[i * m + i] = 1;
+      for (let j = k - 1; j >= 0; j--) {
+        const t = taus[b * k + j] ?? 0;
+        if (t === 0) continue;
+        const w = new Float64Array(m);
+        w[j] = 1;
+        for (let i = j + 1; i < m; i++) w[i] = mat[i * n + j] ?? 0;
+        for (let c = 0; c < m; c++) {
+          let dot = 0;
+          for (let i = 0; i < m; i++) dot += (w[i] ?? 0) * (q[i * m + c] ?? 0);
+          for (let i = 0; i < m; i++) {
+            q[i * m + c] = (q[i * m + c] ?? 0) - t * (w[i] ?? 0) * dot;
+          }
+        }
+      }
+      // torch 는 입력의 열 수만큼만 낸다.
+      const cut = new Float64Array(m * n);
+      for (let i = 0; i < m; i++) {
+        for (let c = 0; c < n; c++) cut[i * n + c] = q[i * m + c] ?? 0;
+      }
+      return cut;
+    });
+    return Tensor.fromBatch(outs, this.shape);
+  }
+
   /** `P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다. */
   async lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
     const v = await this.asBatch(false);

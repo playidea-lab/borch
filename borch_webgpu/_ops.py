@@ -1051,6 +1051,11 @@ def cov(t, correction=1, **kw):
     return (centered @ transpose(centered, 0, 1)) * (1.0 / builtins.max(1, n - correction))
 
 
+def geqrf(t, **kw):
+    """반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다."""
+    return guarded(handle(t).geqrf)
+
+
 def corrcoef(t, **kw):
     """공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다."""
     c = cov(t)
@@ -1367,6 +1372,34 @@ class _Linalg:
 
     def tensorinv(self, a, ind=2):
         return wrap(guarded(handle(a).tensorInv, ind))
+
+    # ── `_ex`·LDL·반사자 ────────────────────────────────────────────────
+    #
+    # 일반 길로 못 간다 — 인자가 텐서 여럿이거나(`ldl_solve`) 이름 붙은 자리를 여럿
+    # 돌려준다. 자리 이름은 `guarded` 가 붙여 준다.
+
+    def lu_factor_ex(self, a, pivot=True, check_errors=False):
+        return guarded(handle(a).luFactorEx)
+
+    def ldl_factor(self, a, hermitian=False):
+        return guarded(handle(a).ldlFactor)
+
+    def ldl_factor_ex(self, a, hermitian=False, check_errors=False):
+        """`ldl_factor` 에 `info` 를 붙인 것. 여기서는 늘 0 이다 — 나쁜 자리는 거절한다."""
+        from ._base import _Fields, tensor as _tensor
+        got = guarded(handle(a).ldlFactor)
+        zero = _tensor(_np.zeros((), dtype=_np.float32))
+        out = _Fields.__new__(_Fields)
+        object.__setattr__(out, "_order", ["LD", "pivots", "info"])
+        object.__setattr__(out, "_d", {"LD": got.LD, "pivots": got.pivots,
+                                       "info": zero})
+        return out
+
+    def ldl_solve(self, ld, pivots, b, hermitian=False):
+        return wrap(guarded(handle(ld).ldlSolve, handle(b)))
+
+    def householder_product(self, a, tau):
+        return wrap(guarded(handle(a).householderProduct, handle(tau)))
 
     def __getattr__(self, name):
         # torch 가 줄여 부르는 것들. `pinv` 는 오래 비어 있었는데 골든이 늘 긴 이름

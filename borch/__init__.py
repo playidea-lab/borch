@@ -88,6 +88,8 @@ from ._ops import (
     # 수치 계열. 뒤의 셋은 급수로 센다.
     cdist, corrcoef, cov, cumulative_trapezoid, digamma, erfinv, lgamma,
     tensordot, trapezoid,
+    # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
+    geqrf,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #
@@ -115,7 +117,7 @@ from ._optim import (
     MultiStepLR, MultiplicativeLR, NAdam, OneCycleLR, Optimizer, PolynomialLR, RAdam,
     RMSprop, ReduceLROnPlateau, SGD, SequentialLR, StepLR, _LRScheduler, _Optim,
     _Scheduler, optim,
-    ASGD, Adafactor, LBFGS, Rprop,
+    ASGD, Adafactor, LBFGS, Rprop, CyclicLR,
 )
 from ._data import (
     BatchSampler, ChainDataset, ConcatDataset, DataLoader, Dataset, IterableDataset,
