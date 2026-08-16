@@ -129,6 +129,12 @@ from ._ops import (
     # addmm 계열. **제자리 판은 안 낸다** — torch 가 그것들을 메서드로만 두기
     # 때문이다. `addmv_` 하나만 예외라 그것만 있다(실측).
     addbmm, addcdiv, addcmul, addmm, addmv, addmv_, addr, baddbmm, sspaddmm,
+    # 최상위 선형대수. **`linalg` 쪽과 이름이 겹치는 둘은 자리를 옮겨 준다** —
+    # `lu` 는 그쪽이 `P·L·U` 셋을 펴 주고 이쪽은 겹쳐 담은 한 판을 주며,
+    # `lu_solve` 는 이쪽이 오른쪽 변을 먼저 받는다.
+    cholesky_inverse, cholesky_solve, lobpcg, lu_top as lu,
+    lu_solve_top as lu_solve, lu_unpack, orgqr, ormqr, pca_lowrank,
+    svd_lowrank, triangular_solve,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #

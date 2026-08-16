@@ -6,7 +6,7 @@
 
 전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
 원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **5,022 줄**이다 — borch.ts 에 그것이 이미 다
+다시 구현해야 했기 때문이다. 이쪽은 **5,314 줄**이다 — borch.ts 에 그것이 이미 다
 있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
 
 `_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
@@ -96,6 +96,9 @@ from ._ops import (                                      # noqa: E402,F401
     unique_consecutive, unravel_index, vander,
     # **희소 전용이라 없다.** 이름은 두고 그 자리에서 멈춘다.
     sspaddmm,
+    # 최상위 선형대수. **`linalg` 쪽과 이름이 겹치는 셋만 손으로 적혀 있다** —
+    # 나머지는 `__getattr__` 이 첫 인자의 메서드로 넘긴다.
+    lu, lu_solve, lu_unpack,
     # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,

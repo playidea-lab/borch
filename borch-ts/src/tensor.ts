@@ -4399,6 +4399,232 @@ export class Tensor implements Node<Tensor> {
     return Tensor.fromMat(x, b.shape);
   }
 
+  // ── 최상위 선형대수 ───────────────────────────────────────────────────
+  //
+  // **`linalg` 쪽과 인자 순서가 다르다.** torch 가 옛 이름들을 최상위에 남겨 뒀는데
+  // 그것들은 대개 **오른쪽 변을 먼저** 받는다. 같은 계산이므로 계산은 한 벌만 두고
+  // 자리만 옮긴다 — 그 옮김이 맞는지는 값으로만 확인된다.
+
+  /**
+   * 인수를 **아래 삼각으로** 세운다. `A = L Lᵀ` 가 되도록.
+   *
+   * 조립으로 둔다 — `tril`·`transpose` 를 지나면 **인수 쪽으로도 기울기가 흐른다.**
+   * 값만 잘라 쓰면 역방향이 `b` 로만 가는데 torch 는 인수로도 흘린다(실측).
+   */
+  private static asLower(factor: Tensor, upper: boolean): Tensor {
+    return upper ? factor.triu().transpose() : factor.tril();
+  }
+
+  /**
+   * `A x = b` 를 **촐레스키 인수로** 푼다. `A = L Lᵀ` (또는 `Uᵀ U`).
+   *
+   * `A` 를 다시 세워 `solve` 로 보낸다. 삼각 대입 두 번이 더 싸지만, 그 길로 적으면
+   * 역방향을 손으로 써야 하고 **인수 쪽 기울기가 조용히 빠진다.**
+   */
+  async choleskySolve(factor: Tensor, upper = false): Promise<Tensor> {
+    const low = Tensor.asLower(factor, upper);
+    return low.mm(low.transpose()).solve(this);
+  }
+
+  /** 촐레스키 인수에서 **원래 행렬의 역행렬**을 낸다. 인수의 역이 아니다. */
+  async choleskyInverse(upper = false): Promise<Tensor> {
+    const low = Tensor.asLower(this, upper);
+    return low.mm(low.transpose()).inverse();
+  }
+
+  /**
+   * **둘을 준다** — 해와, 넘긴 계수 행렬의 **사본**(실측).
+   *
+   * `solveTriangular` 와 같은 계산인데 인자 순서가 뒤집혀 있고 **기본 `upper` 가
+   * 참이다.** 그 둘을 놓치면 다른 삼각을 풀고도 값이 그럴듯하게 나온다.
+   */
+  async triangularSolve(
+    a: Tensor,
+    upper = true,
+    transpose = false,
+    unitriangular = false,
+  ): Promise<{ solution: Tensor; cloned_coefficient: Tensor }> {
+    let tri = upper ? a.triu() : a.tril();
+    if (unitriangular) {
+      // **대각을 안 보고 1 로 친다.** 그대로 두면 조용히 다른 답이 나온다.
+      const n = a.shape[a.shape.length - 1] ?? 0;
+      const off = upper ? tri.triu(1) : tri.tril(-1);
+      tri = off.add(Tensor.eye(n));
+    }
+    if (transpose) tri = tri.transpose();
+    return { solution: await tri.solve(this), cloned_coefficient: a.add(Tensor.full([], 0)) };
+  }
+
+  /**
+   * `(LU, pivots)`. **`lu()` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로 펴 주고
+   * 이쪽은 **겹쳐 담은 한 판과 교환 목록**이다(실측).
+   *
+   * `getInfos` 면 셋째로 정보 코드가 붙는다. 우리는 늘 0 이다 — 특이 행렬을 만나면
+   * 그 자리에서 던지지 조용히 코드로 알리지 않는다.
+   */
+  async luTop(pivot = true, getInfos = false): Promise<{
+    LU: Tensor; pivots: Tensor; info?: Tensor;
+  }> {
+    if (!pivot) throw new RuntimeError("lu(pivot=false) 는 없다");
+    const got = await this.luFactor();
+    return getInfos ? { ...got, info: Tensor.zeros([]) } : got;
+  }
+
+  /** **`luSolve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다. */
+  async luSolveTop(luData: Tensor, pivots: Tensor): Promise<Tensor> {
+    return luData.luSolve(pivots, this);
+  }
+
+  /**
+   * 겹쳐 담은 한 판을 `P·L·U` 로 편다.
+   *
+   * **끄면 `null` 이 아니라 빈 텐서가 온다**(실측: 모양이 `[0]` 이다). `null` 로 두면
+   * 받는 쪽이 그것으로 갈라 쓰게 되고, 그것은 torch 코드가 아니다.
+   */
+  async luUnpack(
+    pivots: Tensor,
+    unpackData = true,
+    unpackPivots = true,
+  ): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
+    const empty = Tensor.from(new Float32Array(0), [0]);
+    if (!unpackData && !unpackPivots) return { P: empty, L: empty, U: empty };
+    const v = await this.asBatch(false);
+    const { rows, cols } = v;
+    const piv = Int32Array.from(await pivots.toArray());
+    const k = Math.min(rows, cols);
+    const parts = v.mats.map((lu) => LA.luExpand({ lu, piv, rows, cols }));
+    return {
+      P: unpackPivots
+        ? Tensor.fromBatch(parts.map((p) => p.p), [...v.lead, rows, rows])
+        : empty,
+      L: unpackData
+        ? Tensor.fromBatch(parts.map((p) => p.l), [...v.lead, rows, k])
+        : empty,
+      U: unpackData
+        ? Tensor.fromBatch(parts.map((p) => p.u), [...v.lead, k, cols])
+        : empty,
+    };
+  }
+
+  /** `householderProduct` 의 다른 이름. torch 가 둘을 준다. */
+  async orgqr(tau: Tensor): Promise<Tensor> {
+    return this.householderProduct(tau);
+  }
+
+  /**
+   * **Q 를 안 세우고** `C` 에 곱한다 — 여기서는 세워서 곱한다. 값이 같고 이 크기에서
+   * 아끼는 것이 없다.
+   *
+   * **`orgqr` 과 다른 Q 다.** 그쪽은 `m×k` 로 **자른** Q 를 주는데, 이쪽은 자르지
+   * 않은 `m×m` 을 쓴다 — 반사자들은 `Rᵐ` 위의 사상이고, 자르면 그 사상의 일부만
+   * 곱하게 된다. 세로로 긴 행렬에서 답이 통째로 갈린다(실측). 정사각으로만 재면
+   * 둘이 같아서 안 보인다.
+   */
+  async ormqr(
+    tau: Tensor,
+    other: Tensor,
+    left = true,
+    transpose = false,
+  ): Promise<Tensor> {
+    const v = await this.asBatch(false);
+    const { rows: m, cols: n } = v;
+    const taus = await tau.toArray();
+    const k = tau.shape[tau.shape.length - 1] ?? 0;
+    const mat = v.mats[0]!;
+    const q = new Float64Array(m * m);
+    for (let i = 0; i < m; i++) q[i * m + i] = 1;
+    for (let j = k - 1; j >= 0; j--) {
+      const t = taus[j] ?? 0;
+      if (t === 0) continue;
+      const w = new Float64Array(m);
+      w[j] = 1;
+      for (let i = j + 1; i < m; i++) w[i] = mat[i * n + j] ?? 0;
+      for (let c = 0; c < m; c++) {
+        let dot = 0;
+        for (let i = 0; i < m; i++) dot += (w[i] ?? 0) * (q[i * m + c] ?? 0);
+        for (let i = 0; i < m; i++) {
+          q[i * m + c] = (q[i * m + c] ?? 0) - t * (w[i] ?? 0) * dot;
+        }
+      }
+    }
+    const qm = transpose ? LA.transpose(q, m, m) : q;
+    const c = LA.fromF32(await other.toArray());
+    const [cr, cc] = other.shape.length === 1
+      ? [other.shape[0] ?? 0, 1]
+      : [other.shape[0] ?? 0, other.shape[1] ?? 0];
+    const out = left
+      ? LA.matmul(qm, c, m, m, cc)
+      : LA.matmul(c, qm, cr, m, m);
+    return Tensor.fromMat(out, left ? [m, cc] : [cr, m]);
+  }
+
+  /**
+   * 대칭 행렬의 **끝쪽 고유쌍 `k` 개.**
+   *
+   * **torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게
+   * 얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이
+   * 정확해로 7e-6 안까지 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 허용 오차
+   * 한참 아래다. 값은 같고 비용만 다르다.
+   *
+   * **`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).
+   */
+  async lobpcg(k = 1, largest = true): Promise<{
+    eigenvalues: Tensor; eigenvectors: Tensor;
+  }> {
+    const { values, vectors } = await this.eigh();
+    const n = values.shape[values.shape.length - 1] ?? 0;
+    const picks: number[] = [];
+    for (let i = 0; i < k; i++) picks.push(largest ? n - 1 - i : i);
+    const idx = Tensor.from(picks, [picks.length]);
+    return {
+      eigenvalues: values.indexSelect(0, idx),
+      eigenvectors: vectors.indexSelect(1, idx),
+    };
+  }
+
+  /**
+   * 무작위 사영으로 얻는 **저계수 SVD.** `(U, S, V)` 이고 **V 는 전치가 아니다.**
+   *
+   * **정확히 저계수인 입력에서만 답이 안 흔들린다.** torch 는 무작위 행렬로 사영하는데,
+   * 계수가 `q` 를 넘으면 씨앗에 따라 특이값이 0.5 씩 움직인다(실측). 계수가 `q` 이하면
+   * 씨앗을 바꿔도 7e-7 안이다 — 물을 수 있는 자리는 그쪽뿐이다.
+   *
+   * 우리는 사영을 안 한다. 전체 SVD 를 구해 앞의 `q` 개를 자른다 — 정확히 저계수인
+   * 자리에서는 같은 답이고, 넘치는 자리에서는 **torch 보다 정확한** 답이다.
+   */
+  async svdLowrank(q = 6, niter = 2, M: Tensor | null = null): Promise<{
+    U: Tensor; S: Tensor; V: Tensor;
+  }> {
+    void niter;
+    const src = M === null ? this : this.sub(M);
+    const { u, s, vt } = await src.svd(false);
+    const cut = Math.min(q, s.shape[0] ?? 0);
+    const take = Tensor.from(
+      Array.from({ length: cut }, (_, i) => i), [cut]);
+    return {
+      U: u.indexSelect(1, take),
+      S: s.indexSelect(0, take),
+      V: vt.indexSelect(0, take).transpose(),
+    };
+  }
+
+  /**
+   * 저계수 PCA. **`center=false` 면 `svdLowrank` 와 같은 것이다**(실측).
+   *
+   * 가운데 맞추기가 이 함수와 저쪽의 차이 전부다. 참으로만 재면 그 갈래가 안 보인다.
+   */
+  async pcaLowrank(q?: number, center = true, niter = 2): Promise<{
+    U: Tensor; S: Tensor; V: Tensor;
+  }> {
+    const rows = this.shape[0] ?? 0;
+    const cols = this.shape[1] ?? 0;
+    const want = q ?? Math.min(6, rows, cols);
+    const src = center
+      ? this.sub(this.sumDim(0, true).div(Tensor.full([], rows)))
+      : this;
+    return src.svdLowrank(want, niter);
+  }
+
   /** 값은 CPU 에서 이미 나왔고, 여기서는 그래프만 잇는다. */
   private linalgNode(
     value: Tensor,

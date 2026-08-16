@@ -306,7 +306,10 @@ class Tensor:
                     "index_put", "index_put_", "tensor_split",
                     "split_with_sizes", "unique_consecutive",
                     # 희소 전용이라 거절만 한다 — borch.ts 에는 이름이 없다.
-                    "sspaddmm"):
+                    "sspaddmm",
+                    # **`linalg` 쪽과 이름이 겹치는 둘.** 그냥 넘기면 `luSolve` 가
+                    # 잡혀서 인자 순서가 뒤집힌 채 다른 답이 나온다.
+                    "lu", "lu_solve"):
             from . import _ops
             # **`max`·`min` 은 모듈 전역에 없다.** 그 이름을 `_ops` 에 두면 그 파일
             # 안에서 파이썬 내장을 가리고, `max(a, b)` 로 크기를 재던 자리가 텐서

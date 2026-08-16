@@ -1271,6 +1271,157 @@ def shape_index_cases(inp=None):
     return cases
 
 
+TOPLIN_PREFIX = "toplin::"
+
+
+def top_linalg_cases(inp=None):
+    """최상위 선형대수. `linalg` 쪽과 **같은 계산인데 부르는 법이 다른** 것들.
+
+    ## 인자 순서가 뒤집혀 있다
+
+    torch 는 옛 이름들을 최상위에 남겨 뒀고, 그것들은 대개 **오른쪽 변을 먼저** 받는다
+    — `lu_solve(b, LU, piv)` 대 `linalg.lu_solve(LU, piv, b)`. `triangular_solve` 도
+    `b` 가 먼저이고 **기본 `upper` 가 참이다**(`linalg` 쪽은 필수 인자다). 자리를
+    잘못 옮기면 다른 삼각을 풀고도 값이 그럴듯하게 나온다.
+
+    ## 무엇을 물어야 갈리는가
+
+    - **`orgqr` 과 `ormqr` 은 다른 Q 를 쓴다.** 앞은 `m×k` 로 자른 Q 이고 뒤는 자르지
+      않은 `m×m` 이다 — 반사자가 `Rᵐ` 위의 사상이라 그렇다. **세로로 긴 행렬**로
+      물어야 보인다. 정사각으로 재면 둘이 같다(실측으로 걸렸다).
+    - **`unitriangular` 은 대각을 안 보고 1 로 친다.** 대각이 1 인 행렬로 재면 그
+      깃발이 아무 일도 안 한다.
+    - **`lu_unpack` 은 끄면 빈 텐서를 준다** — `None` 이 아니다(실측). 모양을 물어야
+      드러난다.
+    - **`lobpcg` 의 `largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은
+      것부터다(실측). `k=1` 로만 재면 순서가 없다.
+    - **`svd_lowrank` 는 정확히 저계수인 입력에서만 답이 굳는다.** torch 는 무작위로
+      사영하는데, 계수가 `q` 를 넘으면 씨앗에 따라 특이값이 0.5 씩 움직인다(실측:
+      씨앗 둘의 차가 0.54). 계수가 `q` 이하면 7e-7 안이다 — 골든이 물을 수 있는
+      자리는 그쪽뿐이라, 입력을 `(8,3)@(3,5)` 로 **정확히 계수 3** 으로 만든다.
+    - **`pca_lowrank(center=False)` 는 `svd_lowrank` 와 같은 것이다**(실측). 가운데
+      맞추기가 차이 전부라 참으로만 재면 그 갈래가 안 보인다.
+
+    ## 고유벡터는 안 묻는다
+
+    부호가 임의다 — 같은 고유쌍인데 `-v` 가 나올 수 있고, 그것은 갈림이 아니다.
+    고윳값만 굳힌다.
+    """
+    spd = np.array([[4.0, 2.0, 1.0], [2.0, 5.0, 3.0], [1.0, 3.0, 6.0]],
+                   dtype=np.float32)
+    gen = np.array([[4.0, 3.0, 2.0], [1.0, 5.0, 3.0], [2.0, 1.0, 6.0]],
+                   dtype=np.float32)
+    # **대각이 1 이 아니다** — `unitriangular` 이 실제로 무엇을 하는지 보려면 그래야 한다.
+    tri = np.array([[2.0, 0.0, 0.0], [1.0, 3.0, 0.0], [4.0, 2.0, 5.0]],
+                   dtype=np.float32)
+    rhs = np.array([[1.0, 2.0], [3.0, 1.0], [2.0, 4.0]], dtype=np.float32)
+    # **세로로 길다** — `orgqr` 과 `ormqr` 이 여기서만 갈린다.
+    tall = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
+    side = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=np.float32)
+    weight = np.array([[1.0, 2.0], [0.5, 3.0], [2.0, 1.0]], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((TOPLIN_PREFIX + name, fn))
+
+    def chol(L, upper):
+        low = L.linalg.cholesky(L.tensor(spd))
+        return low.transpose(0, 1) if upper else low
+
+    # ── 촐레스키 ────────────────────────────────────────────────────────
+    for upper in (False, True):
+        add(f"cholesky_solve(upper={upper})",
+            lambda L, u=upper: L.cholesky_solve(L.tensor(rhs), chol(L, u),
+                                                upper=u))
+        add(f"cholesky_inverse(upper={upper})",
+            lambda L, u=upper: L.cholesky_inverse(chol(L, u), upper=u))
+
+    def cholesky_solve_grad(L):
+        """**인수 쪽으로도 흘러야 한다.** `b` 로만 흘리면 순방향은 맞고 여기서 갈린다."""
+        x = L.tensor(spd.copy(), requires_grad=True)
+        out = L.cholesky_solve(L.tensor(rhs), L.linalg.cholesky(x))
+        (out * L.tensor(weight)).sum().backward()
+        return _grad_of(x, "cholesky_solve")
+
+    cases.append((TOPLIN_PREFIX + "grad::cholesky_solve", cholesky_solve_grad))
+
+    # ── 삼각 ────────────────────────────────────────────────────────────
+    for upper in (False, True):
+        for trans in (False, True):
+            for unit in (False, True):
+                add(f"triangular_solve(u={upper},t={trans},unit={unit})",
+                    lambda L, u=upper, t=trans, n=unit: L.triangular_solve(
+                        L.tensor(rhs), L.tensor(tri), upper=u, transpose=t,
+                        unitriangular=n).solution)
+    # **둘째 자리는 계수의 사본이다** — 쓸모가 없어 보여도 torch 가 그렇게 준다.
+    add("triangular_solve(둘째 자리)",
+        lambda L: L.triangular_solve(L.tensor(rhs), L.tensor(tri),
+                                     upper=False).cloned_coefficient)
+
+    def triangular_solve_grad(L):
+        x = L.tensor(spd.copy(), requires_grad=True)
+        out = L.triangular_solve(L.tensor(rhs), L.tril(x),
+                                 upper=False).solution
+        (out * L.tensor(weight)).sum().backward()
+        return _grad_of(x, "triangular_solve")
+
+    cases.append((TOPLIN_PREFIX + "grad::triangular_solve",
+                  triangular_solve_grad))
+
+    # ── LU ──────────────────────────────────────────────────────────────
+    add("lu 의 LU", lambda L: L.lu(L.tensor(gen))[0])
+    add("lu 의 pivots", lambda L: L.lu(L.tensor(gen))[1])
+    add("lu(get_infos=True) 의 info",
+        lambda L: L.lu(L.tensor(gen), True, True)[2])
+    add("lu_solve", lambda L: L.lu_solve(L.tensor(rhs), *L.lu(L.tensor(gen))))
+    for data_flag in (True, False):
+        for piv_flag in (True, False):
+            for slot, name in enumerate(("P", "L", "U")):
+                add(f"lu_unpack(data={data_flag}, piv={piv_flag}) 의 {name}",
+                    lambda L, d=data_flag, p=piv_flag, s=slot: L.lu_unpack(
+                        *L.lu(L.tensor(gen)), unpack_data=d,
+                        unpack_pivots=p)[s])
+                # **끄면 빈 텐서다.** 모양을 안 물으면 그것이 안 드러난다.
+                add(f"lu_unpack(data={data_flag}, piv={piv_flag}) 의 {name} 모양",
+                    lambda L, d=data_flag, p=piv_flag, s=slot: str(tuple(
+                        L.lu_unpack(*L.lu(L.tensor(gen)), unpack_data=d,
+                                    unpack_pivots=p)[s].shape)))
+
+    # ── 반사자 ──────────────────────────────────────────────────────────
+    add("orgqr", lambda L: L.orgqr(*L.geqrf(L.tensor(tall))))
+    add("orgqr 은 자른 Q 다 (linalg.qr 의 Q 와 같다)",
+        lambda L: L.linalg.qr(L.tensor(tall))[0])
+    for left in (True, False):
+        for trans in (True, False):
+            add(f"ormqr(left={left}, transpose={trans})",
+                lambda L, lf=left, tr=trans: L.ormqr(
+                    *L.geqrf(L.tensor(tall)),
+                    L.tensor(side if lf else side.T), lf, tr))
+
+    # ── 고유쌍·저계수 ────────────────────────────────────────────────────
+    rng = np.random.default_rng(0)
+    basis, _ = np.linalg.qr(rng.standard_normal((10, 10)))
+    spread = np.array([8.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.5, 1.0, 0.5, 0.2])
+    big = (basis @ np.diag(spread) @ basis.T).astype(np.float32)
+    big = ((big + big.T) / 2).astype(np.float32)
+    for k in (1, 2, 3):
+        for largest in (True, False):
+            add(f"lobpcg(k={k}, largest={largest}) 고윳값",
+                lambda L, kk=k, lg=largest: L.lobpcg(L.tensor(big), k=kk,
+                                                     largest=lg)[0])
+    # **정확히 계수 3 이다** — 넘치면 torch 가 씨앗에 흔들려 굳힐 수가 없다.
+    low = (rng.standard_normal((8, 3))
+           @ rng.standard_normal((3, 5))).astype(np.float32)
+    add("svd_lowrank 의 S", lambda L: L.svd_lowrank(L.tensor(low), q=3)[1])
+    add("svd_lowrank 의 모양",
+        lambda L: " ".join(str(tuple(t.shape))
+                           for t in L.svd_lowrank(L.tensor(low), q=3)))
+    add("pca_lowrank 의 S", lambda L: L.pca_lowrank(L.tensor(low), q=3)[1])
+    add("pca_lowrank(center=False) 의 S",
+        lambda L: L.pca_lowrank(L.tensor(low), q=3, center=False)[1])
+    return cases
+
+
 CACHE_PREFIX = "cache::"
 
 
@@ -6792,7 +6943,7 @@ def golden_cases(inp=None):
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
-            + scalar_cache_cases(inp)
+            + scalar_cache_cases(inp) + top_linalg_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

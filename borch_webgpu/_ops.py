@@ -204,6 +204,15 @@ _SIGNATURE = {
     "addcmul_": ("tensor1", "tensor2", "value"),
     "addcdiv": ("tensor1", "tensor2", "value"),
     "addcdiv_": ("tensor1", "tensor2", "value"),
+    # 최상위 선형대수. borch.ts 쪽 인자 순서다.
+    "cholesky_solve": ("input2", "upper"),
+    "cholesky_inverse": ("upper",),
+    "triangular_solve": ("A", "upper", "transpose", "unitriangular"),
+    "orgqr": ("input2",),
+    "ormqr": ("tau", "other", "left", "transpose"),
+    "lobpcg": ("k", "largest"),
+    "svd_lowrank": ("q", "niter", "M"),
+    "pca_lowrank": ("q", "center", "niter"),
 }
 
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
@@ -1344,6 +1353,32 @@ def chain_matmul(*matrices, **kw):
     mats = (list(matrices[0]) if len(matrices) == 1
             and isinstance(matrices[0], (list, tuple)) else list(matrices))
     return wrap(_ts.Tensor.chainMatmul(*[handle(m) for m in mats]))
+
+
+# ── 최상위 선형대수 ─────────────────────────────────────────────────────────
+#
+# 손으로 적는 것은 **`linalg` 쪽과 이름이 겹치는 둘**이다. `camel` 이 `lu` 를
+# `lu` 로, `lu_solve` 를 `luSolve` 로 넘기는데 borch.ts 의 그 이름들은 `linalg` 쪽
+# 것이라 다른 답을 낸다 — 최상위는 `luTop`·`luSolveTop` 이다.
+
+def lu(a, pivot=True, get_infos=False, **kw):
+    """`(LU, pivots)`. **`linalg.lu` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로
+    펴 주고 이쪽은 겹쳐 담은 한 판과 교환 목록이다(실측)."""
+    got = guarded(handle(a).luTop, pivot, get_infos)
+    return tuple(got) if get_infos else (got.LU, got.pivots)
+
+
+def lu_solve(b, lu_data, lu_pivots, **kw):
+    """**`linalg.lu_solve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다."""
+    return wrap(guarded(handle(b).luSolveTop, handle(lu_data),
+                        handle(lu_pivots)))
+
+
+def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True, **kw):
+    """**끄면 `None` 이 아니라 빈 텐서가 온다**(실측: 모양이 `(0,)` 이다)."""
+    got = guarded(handle(lu_data).luUnpack, handle(lu_pivots), unpack_data,
+                  unpack_pivots)
+    return (got.P, got.L, got.U)
 
 
 def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):

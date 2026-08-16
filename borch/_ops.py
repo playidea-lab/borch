@@ -4284,6 +4284,13 @@ _LdlFactor = _named("linalg_ldl_factor", "LD", "pivots")
 _LdlFactorEx = _named("linalg_ldl_factor_ex", "LD", "pivots", "info")
 _Geqrf = _named("geqrf", "a", "tau")
 _Frexp = _named("frexp", "mantissa", "exponent")
+# 최상위 선형대수의 답들. **`triangular_solve` 는 둘을 주는데 둘째가 계수 행렬의
+# 사본이다**(실측) — 쓸모가 없어 보이지만 torch 가 그렇게 주므로 자리를 맞춘다.
+_TriangularSolve = _named("triangular_solve", "solution", "cloned_coefficient")
+_LuInfos = _named("lu", "LU", "pivots", "info")
+_LuUnpack = _named("lu_unpack", "P", "L", "U")
+_Lobpcg = _named("lobpcg", "eigenvalues", "eigenvectors")
+_SvdLowrank = _named("svd_lowrank", "U", "S", "V")
 
 
 # ---- 배치
@@ -6293,6 +6300,220 @@ def addcdiv_(input, tensor1, tensor2, value=1):
                           "addcdiv_")
 
 
+# ── 최상위 선형대수 ─────────────────────────────────────────────────────────
+#
+# **`linalg` 쪽과 인자 순서가 다르다.** torch 는 옛 이름들을 최상위에 남겨 뒀는데,
+# 그것들은 대개 **오른쪽 변을 먼저** 받는다 — `lu_solve(b, LU, piv)` 대 `linalg.
+# lu_solve(LU, piv, b)`. 같은 계산인데 부르는 법만 다른 것이라, 계산은 한 벌만 두고
+# 자리만 옮긴다. 그 옮김이 맞는지는 값으로만 확인된다.
+
+def _mT(t):
+    """마지막 두 축을 맞바꾼다.
+
+    **`transpose` 는 이 파일에서 모듈 함수가 아니라 메서드다.** 게다가
+    `triangular_solve` 의 셋째 인자 이름이 `transpose` 라 그 안에서는 그 이름이
+    인자에 가려지기도 한다. 짧은 이름 하나로 두 자리를 다 피한다.
+    """
+    return _wrap(t).transpose(-2, -1)
+
+
+def _as_lower(factor, upper):
+    """인수를 **아래 삼각으로** 세운다. `A = L Lᵀ` 가 되도록.
+
+    조립으로 둔다 — `tril`·`transpose` 를 지나면 **인수 쪽으로도 기울기가 흐른다.**
+    numpy 로 곧장 잘라 쓰면 값은 맞고 역방향이 `b` 로만 가는데, torch 는 인수로도
+    흘린다(실측). 그 갈림은 인수를 미분 대상으로 두지 않으면 안 보인다.
+    """
+    return _mT(triu(factor)) if upper else tril(factor)
+
+
+def cholesky_solve(b, factor, upper=False):
+    """`A x = b` 를 **촐레스키 인수로** 푼다. `A = L Lᵀ` (또는 `Uᵀ U`).
+
+    `A` 를 다시 세워 `solve` 로 보낸다. 삼각 대입 두 번이 더 싸지만, 그 길로 적으면
+    역방향을 손으로 써야 하고 **인수 쪽 기울기가 조용히 빠진다** — 이 크기에서 아끼는
+    것보다 그 위험이 크다.
+    """
+    low = _as_lower(_wrap(factor), upper)
+    return solve(matmul(low, _mT(low)), _wrap(b))
+
+
+def cholesky_inverse(factor, upper=False):
+    """촐레스키 인수에서 **원래 행렬의 역행렬**을 낸다. 인수의 역이 아니다."""
+    low = _as_lower(_wrap(factor), upper)
+    return inverse(matmul(low, _mT(low)))
+
+
+def triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
+    """**둘을 준다** — 해와, 넘긴 계수 행렬의 **사본**(실측).
+
+    `linalg.solve_triangular` 와 같은 계산인데 인자 순서가 뒤집혀 있고 **기본
+    `upper` 가 참이다.** 그 둘을 놓치면 다른 삼각을 풀고도 값이 그럴듯하게 나온다.
+
+    셋째 인자 이름이 `transpose` 라 이 함수 안에서는 모듈의 `transpose` 가 가려진다.
+    `_mT` 별칭이 그 자리를 메운다.
+    """
+    b, a = _wrap(b), _wrap(a)
+    tri = triu(a) if upper else tril(a)
+    if unitriangular:
+        # **대각을 안 보고 1 로 친다.** 대각을 그대로 두면 조용히 다른 답이 나온다.
+        n = tri.data.shape[-1]
+        off = triu(tri, 1) if upper else tril(tri, -1)
+        tri = off + Tensor(_np.eye(n, dtype=tri.data.dtype))
+    if transpose:
+        tri = _mT(tri)
+    return _TriangularSolve(solve(tri, b), Tensor(_np.array(a.data, copy=True)))
+
+
+def lu_solve_top(b, lu_data, pivots):
+    """**`linalg.lu_solve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다."""
+    return lu_solve(lu_data, pivots, b)
+
+
+def lu_top(a, pivot=True, get_infos=False):
+    """`(LU, pivots)`. **`linalg.lu` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로
+    펴 주고 이쪽은 **겹쳐 담은 한 판과 교환 목록**이다(실측).
+
+    `get_infos=True` 면 셋째로 정보 코드가 붙는다. 우리는 늘 0 이다 — 특이 행렬을
+    만나면 그 자리에서 던지지 조용히 코드로 알리지 않는다.
+    """
+    if not pivot:
+        _unsupported("lu(pivot=False)")
+    data, piv = lu_factor(a)
+    if get_infos:
+        return _LuInfos(data, piv, Tensor(_np.zeros((), dtype=_np.int32)))
+    return _LuFactor(data, piv)
+
+
+def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True):
+    """겹쳐 담은 한 판을 `P·L·U` 로 편다.
+
+    **끄면 `None` 이 아니라 빈 텐서가 온다**(실측: 모양이 `(0,)` 이다). `None` 으로
+    두면 받는 쪽이 `if p is None` 으로 갈라 쓰게 되고, 그것은 torch 코드가 아니다.
+    """
+    lu_data, lu_pivots = _wrap(lu_data), _wrap(lu_pivots)
+    empty = Tensor(_np.zeros(0, dtype=lu_data.data.dtype))
+    if not unpack_data and not unpack_pivots:
+        return _LuUnpack(empty, empty, empty)
+    n, m = lu_data.data.shape[-2], lu_data.data.shape[-1]
+    k = min(n, m)
+    data = _np.asarray(lu_data.data, dtype=_np.float64)
+    low = _np.tril(data[:, :k], -1).copy()
+    low[_np.arange(k), _np.arange(k)] = 1.0
+    up = _np.triu(data)[:k, :]
+    order = _np.arange(n)
+    flat = _np.asarray(lu_pivots.data).reshape(-1)
+    for col in range(min(k, flat.shape[0])):
+        src = int(flat[col]) - 1
+        if src != col:
+            order[[col, src]] = order[[src, col]]
+    perm = _np.zeros((n, n))
+    perm[order, _np.arange(n)] = 1.0
+    kind = lu_data.data.dtype
+    return _LuUnpack(
+        Tensor(perm.astype(kind)) if unpack_pivots else empty,
+        Tensor(low.astype(kind)) if unpack_data else empty,
+        Tensor(up.astype(kind)) if unpack_data else empty)
+
+
+def orgqr(a, tau):
+    """`geqrf` 가 담아 둔 반사자들을 곱해 **Q 를 세운다.**
+    `linalg.householder_product` 와 같은 것이고 torch 가 이름을 둘 준다."""
+    return householder_product(a, tau)
+
+
+def ormqr(a, tau, other, left=True, transpose=False):
+    """**Q 를 안 세우고** `C` 에 곱한다. 큰 행렬에서 그것이 요점인데, 여기서는 세워서
+    곱한다 — 값이 같고, 이 크기에서 아끼는 것이 없다.
+
+    **`orgqr` 과 다른 Q 다.** 그쪽은 `m×k` 로 **자른** Q 를 주는데(`linalg.qr` 의 Q
+    와 같다), 이쪽은 자르지 않은 `m×m` 을 쓴다 — 반사자들은 `Rᵐ` 위의 사상이고,
+    자르면 그 사상의 일부만 곱하게 된다. 실측으로 걸렸다: 세로로 긴 행렬에서 답이
+    통째로 달랐다. 정사각으로만 재면 둘이 같아서 안 보인다.
+
+    `left` 는 어느 쪽에서 곱하는가이고 `transpose` 는 `Qᵀ` 를 쓰는가다.
+    """
+    q = _full_q(a, tau)
+    if transpose:
+        q = q.T
+    c = _np.asarray(_wrap(other).data, dtype=_np.float64)
+    out = (q @ c) if left else (c @ q)
+    return Tensor(out.astype(_wrap(other).data.dtype))
+
+
+def _full_q(a, tau):
+    """반사자들을 곱해 **자르지 않은 `m×m`** Q 를 세운다.
+
+    `householder_product` 와 같은 고리인데 마지막에 열을 안 자른다. 그 한 줄이
+    `orgqr` 과 `ormqr` 의 차이 전부다.
+    """
+    mat = _np.asarray(_wrap(a).data, dtype=_np.float64)
+    taus = _np.asarray(_wrap(tau).data, dtype=_np.float64).reshape(-1)
+    m = mat.shape[-2]
+    q = _np.eye(m)
+    for j in range(taus.shape[0] - 1, -1, -1):
+        v = _np.zeros(m)
+        v[j] = 1.0
+        v[j + 1:] = mat[j + 1:, j]
+        q = q - taus[j] * _np.outer(v, v @ q)
+    return q
+
+
+def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
+           largest=True, method=None, tracker=None, ortho_iparams=None,
+           ortho_fparams=None, ortho_bparams=None):
+    """대칭 행렬의 **끝쪽 고유쌍 `k` 개.**
+
+    **torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게
+    얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이
+    정확해로 **7e-6 안까지** 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 이 저장소의
+    허용 오차 한참 아래다. 그래서 값은 같고 비용만 다르다.
+
+    **`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).
+    """
+    if B is not None or X is not None:
+        _unsupported("lobpcg(B= 또는 X=) — 일반화 고유값 문제")
+    vals, vecs = eigh(_wrap(a))
+    order = slice(None, None, -1) if largest else slice(None)
+    idx = _np.arange(vals.data.shape[-1])[order][:k]
+    return _Lobpcg(Tensor(_np.asarray(vals.data)[idx]),
+                   Tensor(_np.asarray(vecs.data)[:, idx]))
+
+
+def svd_lowrank(a, q=6, niter=2, M=None):
+    """무작위 사영으로 얻는 **저계수 SVD.** `(U, S, V)` 이고 **V 는 전치가 아니다.**
+
+    **정확히 저계수인 입력에서만 답이 안 흔들린다.** torch 는 무작위 행렬로 사영하는데,
+    계수가 `q` 를 넘으면 씨앗에 따라 특이값이 0.5 씩 움직인다(실측). 계수가 `q` 이하면
+    씨앗을 바꿔도 7e-7 안이다 — 골든이 물을 수 있는 자리는 그쪽뿐이다.
+
+    우리는 사영을 안 한다. 전체 SVD 를 구해 앞의 `q` 개를 자른다 — 정확히 저계수인
+    자리에서는 같은 답이고, 넘치는 자리에서는 **torch 보다 정확한** 답이다.
+    """
+    a = _wrap(a)
+    data = _np.asarray(a.data, dtype=_np.float64)
+    if M is not None:
+        data = data - _np.asarray(_wrap(M).data, dtype=_np.float64)
+    u, s, vh = _np.linalg.svd(data, full_matrices=False)
+    kind = a.data.dtype
+    return _SvdLowrank(Tensor(u[:, :q].astype(kind)), Tensor(s[:q].astype(kind)),
+                       Tensor(vh[:q].T.astype(kind)))
+
+
+def pca_lowrank(a, q=None, center=True, niter=2):
+    """저계수 PCA. **`center=False` 면 `svd_lowrank` 와 같은 것이다**(실측).
+
+    가운데 맞추기가 이 함수와 저쪽의 차이 전부다. 참으로만 재면 그 갈래가 안 보인다.
+    """
+    a = _wrap(a)
+    data = _np.asarray(a.data, dtype=_np.float64)
+    if q is None:
+        q = min(6, *data.shape)
+    if center:
+        data = data - data.mean(axis=0, keepdims=True)
+    return svd_lowrank(Tensor(data.astype(a.data.dtype)), q, niter)
+
+
 # ================================================================ 이름 잇기
 #
 # **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
@@ -6344,6 +6565,9 @@ _AS_METHOD = (
     "addmm", "addmm_", "addbmm", "addbmm_", "baddbmm", "baddbmm_",
     "addmv", "addmv_", "addr", "addr_", "addcmul", "addcmul_",
     "addcdiv", "addcdiv_", "sspaddmm",
+    # 최상위 선형대수. `lu_unpack`·`lobpcg`·`pca_lowrank`·`svd_lowrank` 는 여기
+    # 없다 — torch 가 그 넷은 최상위에만 둔다(실측).
+    "cholesky_solve", "cholesky_inverse", "triangular_solve", "orgqr", "ormqr",
 )
 
 
@@ -6361,5 +6585,14 @@ def _as_method(name):
 for _nm in _AS_METHOD:
     if not hasattr(Tensor, _nm):
         setattr(Tensor, _nm, _as_method(_nm))
+
+# **`lu`·`lu_solve` 는 이름이 둘씩이다.** 이 파일의 그 이름들은 `linalg` 쪽 것이고
+# (`lu` 는 `P·L·U` 셋을 펴 주고, `lu_solve` 는 인수를 먼저 받는다), 메서드는
+# **최상위 쪽**이어야 한다. `_AS_METHOD` 는 이름이 하나일 때만 쓸 수 있으므로
+# 이 둘만 손으로 건다 — 그냥 목록에 넣으면 메서드가 다른 함수를 부른다.
+Tensor.lu = _as_method("lu_top")
+Tensor.lu.__name__ = "lu"
+Tensor.lu_solve = _as_method("lu_solve_top")
+Tensor.lu_solve.__name__ = "lu_solve"
 
 
