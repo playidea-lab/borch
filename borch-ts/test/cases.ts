@@ -1214,6 +1214,42 @@ function addUnpool(out: Map<string, Case>): void {
     nn.ctcLoss(x.logSoftmax(2), tgt, inLen, tgtLen, 0, "sum").backward();
     return gradOf(x, "ctcLoss");
   });
+
+  // ── AdaptiveLogSoftmaxWithLoss ─────────────────────────────────────────
+  //
+  // 가중치는 **난수가 아니다.** 파이썬 쪽 케이스와 같은 값을 여기서도 적어야 하는데
+  // 난수 생성기는 언어를 못 건넌다. 세는 값이라 양쪽이 같은 것을 만든다.
+  const asmW = (shape: number[]) => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    return Tensor.from(Array.from({ length: n }, (_, i) => i / n - 0.5), shape);
+  };
+  const asmX = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i / 10 - 1), [6, 4]);
+  const asmY = () => Tensor.from([0, 1, 5, 7, 10, 11], [6], false, "int64");
+
+  const asm = () => {
+    const m = new nn.AdaptiveLogSoftmaxWithLoss(4, 12, [3, 7], 2.0);
+    m.loadStateDict({
+      "head.weight": asmW([5, 4]),
+      "tail.0.0.weight": asmW([2, 4]),
+      "tail.0.1.weight": asmW([4, 2]),
+      "tail.1.0.weight": asmW([1, 4]),
+      "tail.1.1.weight": asmW([5, 1]),
+    });
+    return m;
+  };
+
+  out.set("unpool::적응형softmax::log_prob", () => asm().logProb(asmX()));
+  // **행마다 확률의 합이 1** — 뭉치를 고른 확률을 안 더하면 여기서 깨진다.
+  out.set("unpool::적응형softmax::행 합이 1",
+    () => asm().logProb(asmX()).exp().sumDim(1, false));
+  out.set("unpool::적응형softmax::output",
+    () => asm().run(asmX(), asmY()).output);
+  out.set("unpool::적응형softmax::loss",
+    () => asm().run(asmX(), asmY()).loss);
+  out.set("unpool::적응형softmax::predict", () => asm().predict(asmX()));
+  out.set("unpool::층::repr::AdaptiveLogSoftmaxWithLoss",
+    async () => asm().describe());
 }
 
 /**

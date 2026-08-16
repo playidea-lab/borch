@@ -23,7 +23,7 @@ from ._ops import (
     leaky_relu, log_softmax, logsigmoid, max_pool1d, max_pool2d, max_pool3d, mish,
     nll_loss, no_grad, norm, normalize, pad, prelu, relu, relu6, rms_norm, selu,
     sigmoid, silu, smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign,
-    stack, tanh, tanhshrink, zeros,
+    cat, stack, tanh, tanhshrink, zeros,
     # 손실과 거리.
     cosine_embedding_loss, gaussian_nll_loss, hinge_embedding_loss, huber_loss,
     kl_div, margin_ranking_loss, multi_margin_loss, multilabel_margin_loss,
@@ -179,7 +179,15 @@ class Module:
         return self.forward(*a, **k)
 
     def __repr__(self):
-        inner = "\n".join(f"  ({n}): {m}" for n, m in self._modules.items())
+        # **자식이 여러 줄이면 그 줄들도 들여쓴다.** 한 줄만 들여썼더니 컨테이너가
+        # 컨테이너를 담을 때(`ModuleList` 안의 `Sequential`) 안쪽이 왼쪽 끝에 붙어
+        # torch 와 글자가 갈렸다 — 값은 멀쩡하고 그림만 틀리는 종류다.
+        parts = []
+        for name, mod in self._modules.items():
+            head, *rest = repr(mod).splitlines()
+            parts.append(f"  ({name}): {head}")
+            parts.extend(f"  {line}" for line in rest)
+        inner = "\n".join(parts)
         return f"{type(self).__name__}(\n{inner}\n)" if inner else f"{type(self).__name__}()"
 
 
@@ -189,7 +197,10 @@ class Linear(Module):
         self.in_features = in_features
         self.out_features = out_features
         # 진짜 torch 와 같은 초기화 (Kaiming uniform 계열): U(-1/√fan_in, 1/√fan_in)
-        bound = 1.0 / _math.sqrt(in_features)
+        # **입력이 0 일 수 있다.** `AdaptiveLogSoftmaxWithLoss` 의 꼬리 차원이
+        # `in_features // div_value**(i+1)` 이라 0 으로 떨어진다 — torch 는 빈 텐서를
+        # 만들고 "초기화할 것이 없다" 며 넘어간다. 여기서는 √0 으로 나눠 멈췄다.
+        bound = 1.0 / _math.sqrt(in_features) if in_features else 0.0
         self.weight = Parameter(_rng.uniform(-bound, bound, (out_features, in_features)).astype(_DEFAULT_DTYPE))
         self.bias = Parameter(_rng.uniform(-bound, bound, (out_features,)).astype(_DEFAULT_DTYPE)) if bias else None
 
@@ -1543,6 +1554,74 @@ class LPPool3d(LPPool1d):
         return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride)
 
 
+ASMoutput = _collections.namedtuple("ASMoutput", ["output", "loss"])
+
+
+class AdaptiveLogSoftmaxWithLoss(Module):
+    """글자가 아주 많을 때의 softmax. **자주 나오는 것을 싸게 낸다.**
+
+    어휘가 수십만이면 마지막 선형층 하나가 모델보다 크다. 여기서는 글자를 빈도순으로
+    묶어 두고, 앞쪽 뭉치(`shortlist`)는 머리에서 바로 내고 뒤쪽 뭉치들은 **머리에서
+    그 뭉치를 고른 확률 × 뭉치 안의 확률**로 낸다. 뒤쪽일수록 중간 차원을 `div_value`
+    로 나눠 좁힌다 — 드물게 나오는 글자에 자리를 덜 쓴다.
+
+    ## 재보고 적은 것들
+
+    - **기본값이 `div_value=4.0`·`head_bias=False`** 다. 2.0 으로 알고 물으면 꼬리
+      층의 모양이 통째로 달라진다(`tests/probe_asm.py`).
+    - 중간 차원은 `in_features // div_value**(i+1)` 이고 **0 이 될 수 있다.**
+      torch 도 그 자리에서 빈 층을 만든다 — 막지 않는다.
+    - `forward` 는 이름 붙은 튜플 `(output, loss)` 를 낸다. `output` 은 정답 자리의
+      로그확률이고 `loss` 는 그것의 평균에 음수를 붙인 것이다.
+    """
+
+    def __init__(self, in_features, n_classes, cutoffs, div_value=4.0,
+                 head_bias=False):
+        super().__init__()
+        cutoffs = list(cutoffs)
+        self.in_features = in_features
+        self.n_classes = n_classes
+        self.cutoffs = cutoffs + [n_classes]
+        self.div_value = div_value
+        self.head_bias = head_bias
+        self.shortlist_size = self.cutoffs[0]
+        self.n_clusters = len(self.cutoffs) - 1
+        self.head_size = self.shortlist_size + self.n_clusters
+
+        self.head = Linear(in_features, self.head_size, bias=head_bias)
+        tail = []
+        for i in range(self.n_clusters):
+            hidden = int(in_features // (div_value ** (i + 1)))
+            out = self.cutoffs[i + 1] - self.cutoffs[i]
+            tail.append(Sequential(Linear(in_features, hidden, bias=False),
+                                   Linear(hidden, out, bias=False)))
+        self.tail = ModuleList(tail)
+
+    def log_prob(self, x):
+        """모든 글자의 로그확률 `(N, n_classes)`.
+
+        뒤쪽 뭉치의 확률에 **머리가 그 뭉치를 고른 로그확률을 더한다** — 곱셈이
+        로그에서 덧셈이고, 그래서 행 전체의 합이 1 로 남는다.
+        """
+        head = log_softmax(self.head(x), dim=1)
+        parts = [head[:, :self.shortlist_size]]
+        for i in range(self.n_clusters):
+            inside = log_softmax(self.tail[i](x), dim=1)
+            picked = head[:, self.shortlist_size + i:self.shortlist_size + i + 1]
+            parts.append(inside + picked)
+        return cat(parts, 1)
+
+    def forward(self, x, target):
+        lp = self.log_prob(x)
+        idx = _np.asarray(target.data if isinstance(target, Tensor) else target)
+        picked = lp.gather(1, Tensor(idx.reshape(-1, 1).astype(_np.int64)))
+        out = picked.reshape(-1)
+        return ASMoutput(out, -out.mean())
+
+    def predict(self, x):
+        return self.log_prob(x).argmax(dim=1)
+
+
 class CTCLoss(Module):
     """소리와 글자를 **자리를 맞추지 않고** 잇는 손실.
 
@@ -2353,7 +2432,8 @@ for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid
              AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d,
              LPPool1d, LPPool2d, LPPool3d,
              MaxUnpool1d, MaxUnpool2d, MaxUnpool3d,
-             FractionalMaxPool2d, FractionalMaxPool3d, CTCLoss):
+             FractionalMaxPool2d, FractionalMaxPool3d, CTCLoss,
+             AdaptiveLogSoftmaxWithLoss):
     setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss

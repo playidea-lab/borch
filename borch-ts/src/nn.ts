@@ -103,6 +103,29 @@ export abstract class Module {
     return out;
   }
 
+  /**
+   * `print(model)` 이 찍는 글자. torch 의 `__repr__` 과 같은 모양이다.
+   *
+   * **자식의 여러 줄도 다시 들여쓴다.** 컨테이너가 컨테이너를 담을 때
+   * (`ModuleList` 안의 `Sequential`) 안쪽이 왼쪽 끝에 붙으면 torch 와 그림이 갈린다 —
+   * 값은 멀쩡하고 글자만 틀리는 종류라 눈으로만 잡힌다.
+   *
+   * 이름이나 인자를 찍고 싶은 층은 이것을 덮어쓴다.
+   */
+  describe(): string {
+    const kids = Object.entries(this.namedChildren());
+    const name = this.constructor.name;
+    if (!kids.length) return `${name}()`;
+    const lines = [`${name}(`];
+    for (const [key, child] of kids) {
+      const [first, ...rest] = child.describe().split("\n");
+      lines.push(`  (${key}): ${first}`);
+      for (const line of rest) lines.push(`  ${line}`);
+    }
+    lines.push(")");
+    return lines.join("\n");
+  }
+
   /** `0.weight` 처럼 자리 이름을 앞에 붙인 이름표. */
   namedParameters(prefix = ""): Record<string, Tensor> {
     const out: Record<string, Tensor> = {};
@@ -381,24 +404,30 @@ export class ParameterDict extends Module {
 /** `y = x·Wᵀ + b`. 가중치는 `(출력, 입력)` 이다 — torch 와 같다. */
 export class Linear extends Module {
   readonly weight: Tensor;
-  readonly bias: Tensor;
+  /** **없을 수 있다.** `AdaptiveLogSoftmaxWithLoss` 의 꼬리 층이 치우침을 안 쓴다. */
+  readonly bias: Tensor | null;
 
-  constructor(inFeatures: number, outFeatures: number) {
+  constructor(inFeatures: number, outFeatures: number, bias = true) {
     super();
     // 골든은 가중치를 밖에서 넣는다. 여기 초기값이 무엇이든 덮어쓰이지만,
     // 안 넣고 쓰는 경우를 위해 0 이 아닌 값을 둔다.
     const bound = 1 / Math.sqrt(Math.max(1, inFeatures));
     this.weight = uniform([outFeatures, inFeatures], bound);
-    this.bias = uniform([outFeatures], bound);
-    this.claim(this.weight, this.bias);
+    this.bias = bias ? uniform([outFeatures], bound) : null;
+    this.claim(this.weight);
+    if (this.bias) this.claim(this.bias);
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return { weight: this.weight, bias: this.bias };
+    // **치우침이 없으면 열쇠도 없다.** 있는 척하면 `state_dict` 가 남의 것과 안 맞는다.
+    return this.bias
+      ? { weight: this.weight, bias: this.bias }
+      : { weight: this.weight };
   }
 
   override forward(x: Tensor): Tensor {
-    return x.linear(this.weight).add(this.bias);
+    const out = x.linear(this.weight);
+    return this.bias ? out.add(this.bias) : out;
   }
 
   /**
@@ -407,9 +436,10 @@ export class Linear extends Module {
    * **게으른 층이 굳으면 이 글자가 답이 된다** — 그 물건은 그때부터 `Linear` 이고,
    * 사용자가 `print(model)` 로 보는 것이 이것이다.
    */
-  describe(): string {
+  override describe(): string {
     const [out, inF] = [this.weight.shape[0] ?? 0, this.weight.shape[1] ?? 0];
-    return `Linear(in_features=${inF}, out_features=${out}, bias=True)`;
+    return `Linear(in_features=${inF}, out_features=${out}, `
+      + `bias=${this.bias ? "True" : "False"})`;
   }
 }
 
@@ -901,7 +931,7 @@ export class RNNCell extends RNNCellBase {
 
   override forward(x: Tensor): Tensor { return this.step(x); }
 
-  describe(): string {
+  override describe(): string {
     let parts = `${this.inputSize}, ${this.hidden}`;
     if (!this.hasBias) parts += ", bias=False";
     if (this.nonlinearity !== "tanh") parts += `, nonlinearity=${this.nonlinearity}`;
@@ -927,7 +957,7 @@ export class GRUCell extends RNNCellBase {
 
   override forward(x: Tensor): Tensor { return this.step(x); }
 
-  describe(): string {
+  override describe(): string {
     return `GRUCell(${this.inputSize}, ${this.hidden}` +
       `${this.hasBias ? "" : ", bias=False"})`;
   }
@@ -954,7 +984,7 @@ export class LSTMCell extends RNNCellBase {
 
   override forward(x: Tensor): Tensor { return this.step(x)[0]; }
 
-  describe(): string {
+  override describe(): string {
     return `LSTMCell(${this.inputSize}, ${this.hidden}` +
       `${this.hasBias ? "" : ", bias=False"})`;
   }
@@ -970,7 +1000,7 @@ export class Unfold extends Module {
     return x.unfoldIm2col(this.kernel, this.dilation, this.padding, this.stride);
   }
 
-  describe(): string {
+  override describe(): string {
     return `Unfold(kernel_size=${this.kernel}, dilation=${this.dilation}, ` +
       `padding=${this.padding}, stride=${this.stride})`;
   }
@@ -986,7 +1016,7 @@ export class Fold extends Module {
       this.stride);
   }
 
-  describe(): string {
+  override describe(): string {
     return `Fold(output_size=(${this.outputSize.join(", ")}), ` +
       `kernel_size=${this.kernel}, dilation=${this.dilation}, ` +
       `padding=${this.padding}, stride=${this.stride})`;
@@ -1016,7 +1046,7 @@ export class Bilinear extends Module {
     return x1.bilinear(x2, this.weight, this.bias);
   }
 
-  describe(): string {
+  override describe(): string {
     return `Bilinear(in1_features=${this.in1}, in2_features=${this.in2}, ` +
       `out_features=${this.out}, bias=True)`;
   }
@@ -1030,7 +1060,7 @@ export class LocalResponseNorm extends Module {
     return x.localResponseNorm(this.size, this.alpha, this.beta, this.k);
   }
 
-  describe(): string {
+  override describe(): string {
     // **파이썬 꼴로 찍는다.** `k=1` 이 아니라 `k=1.0` 이다 — JS 는 정수처럼 보이는
     // 실수에서 소수점을 지우고, 골든은 글자를 굳혔다.
     const py = (v: number) => (Number.isInteger(v) ? `${v}.0` : String(v));
@@ -1042,7 +1072,7 @@ export class LocalResponseNorm extends Module {
 /** `(N, C, H, W)` 의 **채널 방향** softmax. `softmax(dim=1)` 과 같다. */
 export class Softmax2d extends Module {
   override forward(x: Tensor): Tensor { return x.softmax(1); }
-  describe(): string { return "Softmax2d()"; }
+  override describe(): string { return "Softmax2d()"; }
 }
 
 export class RReLU extends Module {
@@ -1052,7 +1082,7 @@ export class RReLU extends Module {
     return x.rrelu(this.lower, this.upper, this.training);
   }
 
-  describe(): string {
+  override describe(): string {
     return `RReLU(lower=${this.lower}, upper=${this.upper})`;
   }
 }
@@ -1074,7 +1104,7 @@ class UpsamplingBase extends Module {
     return x.interpolateBilinear(h, w, true);
   }
 
-  describe(): string {
+  override describe(): string {
     return `${this.label}(scale_factor=${this.scale.toFixed(1)}, ` +
       `mode='${this.mode}')`;
   }
@@ -1136,7 +1166,7 @@ export class EmbeddingBag extends Module {
     return picked.mean(dim, false);
   }
 
-  describe(): string {
+  override describe(): string {
     return `EmbeddingBag(${this.num}, ${this.dim}, mode='${this.mode}')`;
   }
 }
@@ -1148,19 +1178,19 @@ export class EmbeddingBag extends Module {
 export class PixelShuffle extends Module {
   constructor(readonly factor: number) { super(); }
   override forward(x: Tensor): Tensor { return x.pixelShuffle(this.factor); }
-  describe(): string { return `PixelShuffle(upscale_factor=${this.factor})`; }
+  override describe(): string { return `PixelShuffle(upscale_factor=${this.factor})`; }
 }
 
 export class PixelUnshuffle extends Module {
   constructor(readonly factor: number) { super(); }
   override forward(x: Tensor): Tensor { return x.pixelUnshuffle(this.factor); }
-  describe(): string { return `PixelUnshuffle(downscale_factor=${this.factor})`; }
+  override describe(): string { return `PixelUnshuffle(downscale_factor=${this.factor})`; }
 }
 
 export class ChannelShuffle extends Module {
   constructor(readonly groups: number) { super(); }
   override forward(x: Tensor): Tensor { return x.channelShuffle(this.groups); }
-  describe(): string { return `ChannelShuffle(groups=${this.groups})`; }
+  override describe(): string { return `ChannelShuffle(groups=${this.groups})`; }
 }
 
 /** 채널째 떨구는 것들의 뿌리. **`inplace` 까지 찍는다** — torch 가 그렇다. */
@@ -1178,7 +1208,7 @@ class FeatureDropoutBase extends Module {
       : x.featureDropout(this.p, this.training);
   }
 
-  describe(): string {
+  override describe(): string {
     return `${this.label}(p=${this.p}, inplace=False)`;
   }
 }
@@ -1238,7 +1268,7 @@ export class LazyModule extends Module {
     return this.built.forward(x);
   }
 
-  describe(): string {
+  override describe(): string {
     return this.label;
   }
 }
@@ -1327,6 +1357,97 @@ export class LazyInstanceNorm3d extends LazyNormBase {
 //
 // **torch 는 손실 층을 인자 없이 찍는다** — `HuberLoss(delta=0.5)` 도 `HuberLoss()`
 // 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
+
+/**
+ * 어휘가 아주 클 때의 softmax. **자주 나오는 글자를 싸게 낸다.**
+ *
+ * 글자를 빈도순으로 묶어, 앞쪽 뭉치는 머리에서 바로 내고 뒤쪽 뭉치는 **머리가 그
+ * 뭉치를 고른 확률 × 뭉치 안의 확률**로 낸다. 뒤쪽일수록 중간 차원을 `divValue` 로
+ * 나눠 좁힌다 — 드문 글자에 자리를 덜 쓴다.
+ *
+ * **기본값이 `divValue=4`·`headBias=false`** 다(재봤다: `tests/probe_asm.py`).
+ * 중간 차원은 `inFeatures / divValue**(i+1)` 을 내림한 것이고 **0 이 될 수 있다** —
+ * torch 도 거기서 빈 층을 만들고 넘어가므로 막지 않는다.
+ */
+export class AdaptiveLogSoftmaxWithLoss extends Module {
+  readonly cutoffs: number[];
+  readonly shortlistSize: number;
+  readonly nClusters: number;
+  readonly headSize: number;
+  readonly head: Linear;
+  readonly tail: ModuleList;
+
+  constructor(
+    readonly inFeatures: number,
+    readonly nClasses: number,
+    cutoffs: readonly number[],
+    readonly divValue = 4.0,
+    readonly headBias = false,
+  ) {
+    super();
+    this.cutoffs = [...cutoffs, nClasses];
+    this.shortlistSize = this.cutoffs[0] ?? 0;
+    this.nClusters = this.cutoffs.length - 1;
+    this.headSize = this.shortlistSize + this.nClusters;
+    this.head = new Linear(inFeatures, this.headSize, headBias);
+    const tail: Module[] = [];
+    for (let i = 0; i < this.nClusters; i++) {
+      const hidden = Math.floor(inFeatures / divValue ** (i + 1));
+      const out = (this.cutoffs[i + 1] ?? 0) - (this.cutoffs[i] ?? 0);
+      tail.push(new Sequential(
+        new Linear(inFeatures, hidden, false),
+        new Linear(hidden, out, false),
+      ));
+    }
+    this.tail = new ModuleList(tail);
+  }
+
+  override namedChildren(): Record<string, Module> {
+    return { head: this.head, tail: this.tail };
+  }
+
+  override children(): Module[] {
+    return [this.head, this.tail];
+  }
+
+  /**
+   * 모든 글자의 로그확률 `(N, nClasses)`.
+   *
+   * 뭉치 안의 확률에 **머리가 그 뭉치를 고른 로그확률을 더한다** — 곱셈이 로그에서
+   * 덧셈이고, 그래서 행 전체의 합이 1 로 남는다.
+   */
+  logProb(x: Tensor): Tensor {
+    const head = this.head.call(x).logSoftmax(1);
+    const parts: Tensor[] = [head.narrow(1, 0, this.shortlistSize)];
+    for (let i = 0; i < this.nClusters; i++) {
+      const cluster = this.tail.at(i);
+      if (!cluster) continue;
+      const inside = cluster.call(x).logSoftmax(1);
+      const picked = head.narrow(1, this.shortlistSize + i, 1);
+      parts.push(inside.add(picked));
+    }
+    return Tensor.cat(parts, 1);
+  }
+
+  /** `{ output, loss }` — 정답 자리의 로그확률과 그 평균의 음수. */
+  run(x: Tensor, target: Tensor): { output: Tensor; loss: Tensor } {
+    const lp = this.logProb(x);
+    const rows = target.reshape([target.size, 1]);
+    const output = lp.gather(1, rows).reshape([target.size]);
+    return { output, loss: output.mean().neg() };
+  }
+
+  /** **정답도 받는 층이다.** 지나가려 하면 여기서 멈춘다 — `run(x, target)` 이 그 자리다. */
+  override forward(): Tensor {
+    throw new Error(
+      "AdaptiveLogSoftmaxWithLoss 는 정답도 받는다 — `run(x, target)` 을 써라",
+    );
+  }
+
+  predict(x: Tensor): Tensor {
+    return this.logProb(x).argmax(1);
+  }
+}
 
 /**
  * 소리와 글자를 **자리를 맞추지 않고** 잇는 손실.
@@ -1691,7 +1812,7 @@ export class PadNd extends Module {
    * 그렇고 골든이 글자를 굳혔으므로 그 차이가 답의 일부다. 값도 파이썬 꼴이라
    * 정수여도 소수점을 단다(`value=7.0`).
    */
-  describe(): string {
+  override describe(): string {
     const pairs = `(${this.padding.join(", ")})`;
     if (!this.label.startsWith("ConstantPad")) return `${this.label}(${pairs})`;
     const v = Number.isInteger(this.value) ? `${this.value}.0` : String(this.value);

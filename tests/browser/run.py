@@ -32,7 +32,10 @@ _vspec = importlib.util.spec_from_file_location(
 vendor = importlib.util.module_from_spec(_vspec)
 _vspec.loader.exec_module(vendor)
 GOLDEN = ROOT / "tests" / "golden.npz"
-TIMEOUT_MS = 180_000          # Pyodide + numpy 내려받기가 첫 실행에서 느리다
+# Pyodide + numpy 내려받기가 첫 실행에서 느리고, 케이스가 늘수록 본 계산도 는다.
+# **시간이 모자란 것과 안 끝나는 것은 다른 일이다** — 짧게 잡아 두면 느린 것을
+# 멈춘 것으로 읽고 없는 결함을 쫓게 된다. 자매 러너가 같은 이유로 600 초다.
+TIMEOUT_MS = 600_000
 
 
 class _Quiet(http.server.SimpleHTTPRequestHandler):

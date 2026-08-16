@@ -1695,6 +1695,87 @@ def unpool_cases(inp=None):
     add("층::repr::CTCLoss", lambda L: repr(L.nn.CTCLoss()))
     add("층::repr::CTCLoss(인자 있음)",
         lambda L: repr(L.nn.CTCLoss(blank=2, reduction="sum", zero_infinity=True)))
+
+    # ── AdaptiveLogSoftmaxWithLoss ─────────────────────────────────────
+    #
+    # 어휘가 클 때의 softmax. 자주 나오는 글자는 머리에서 바로 내고, 드문 것은
+    # 뭉치를 고른 확률에 뭉치 안의 확률을 **곱해서**(로그에서는 더해서) 낸다.
+    #
+    # 기본값이 함정이다 — `div_value=4.0`·`head_bias=False`. 2.0 으로 알고 물으면
+    # 꼬리 층의 모양이 통째로 달라진다. 중간 차원이 **0 으로 떨어지는 것도** 정상이라
+    # 골든이 그 모양까지 묻는다.
+    asm_N, asm_D, asm_C = 6, 4, 12
+    asm_x = (np.arange(asm_N * asm_D, dtype=np.float32).reshape(asm_N, asm_D) / 10) - 1
+    asm_y = np.array([0, 1, 5, 7, 10, 11], dtype=np.int64)
+    def asm_w(shape):
+        """**난수가 아니다.** 이 가중치는 TypeScript 쪽 케이스에도 똑같이 적어야 하는데
+        난수 생성기는 언어를 못 건넌다. 셀 수 있는 값이라 양쪽이 같은 것을 적는다."""
+        n = int(np.prod(shape))
+        return ((np.arange(n, dtype=np.float32) / n) - 0.5).reshape(shape)
+
+    asm_weights = {
+        "head.weight": asm_w((5, 4)),
+        "tail.0.0.weight": asm_w((2, 4)),
+        "tail.0.1.weight": asm_w((4, 2)),
+        "tail.1.0.weight": asm_w((1, 4)),
+        "tail.1.1.weight": asm_w((5, 1)),
+    }
+
+    def asm(L, **kw):
+        """**가중치를 심는다** — 초기화가 갈리면 값 대조가 대조가 아니다."""
+        model = L.nn.AdaptiveLogSoftmaxWithLoss(asm_D, asm_C, [3, 7],
+                                                div_value=2.0, **kw)
+        model.load_state_dict({k: L.tensor(v) for k, v in asm_weights.items()})
+        return model
+
+    add("적응형softmax::log_prob", lambda L: asm(L).log_prob(L.tensor(asm_x)))
+    # **행마다 확률의 합이 1 이어야 한다** — 뭉치를 고른 확률을 안 더하면 여기서 깨진다.
+    add("적응형softmax::행 합이 1",
+        lambda L: asm(L).log_prob(L.tensor(asm_x)).exp().sum(dim=1))
+    add("적응형softmax::output",
+        lambda L: asm(L)(L.tensor(asm_x), L.tensor(asm_y)).output)
+    add("적응형softmax::loss",
+        lambda L: asm(L)(L.tensor(asm_x), L.tensor(asm_y)).loss)
+    add("적응형softmax::predict",
+        lambda L: asm(L).predict(L.tensor(asm_x)))
+
+    def asm_output_is_gathered(L):
+        """`output` 은 `log_prob` 에서 정답 자리를 고른 것과 같아야 한다.
+
+        torch 는 필요한 뭉치만 골라 더 싸게 내는데, 두 길이 갈리면 학습만 조금씩
+        어긋난다. 값으로 묶어 둔다.
+        """
+        model = asm(L)
+        x = L.tensor(asm_x)
+        lp = model.log_prob(x)
+        picked = lp.gather(1, L.tensor(asm_y.reshape(-1, 1)))
+        return model(x, L.tensor(asm_y)).output - picked.reshape(-1)
+
+    add("적응형softmax::output 은 고른 것과 같다", asm_output_is_gathered)
+
+    def asm_grad(L):
+        x = L.tensor(asm_x, requires_grad=True)
+        asm(L)(x, L.tensor(asm_y)).loss.backward()
+        return x.grad
+
+    add("적응형softmax::grad", asm_grad)
+
+    def asm_shapes(L, **kw):
+        """**기본값 `div_value=4.0`** 에서는 꼬리 차원이 0 으로도 떨어진다.
+
+        torch 는 그 자리에서 빈 층을 만들고 넘어간다. 막지 않는 것이 흉내다 —
+        코어는 √0 으로 나누다 멈춘 적이 있다.
+        """
+        model = L.nn.AdaptiveLogSoftmaxWithLoss(asm_D, asm_C, [3, 7], **kw)
+        sd = model.state_dict()
+        return " ".join(f"{k}{tuple(sd[k].shape)}" for k in sorted(sd))
+
+    add("적응형softmax::기본값의 모양", asm_shapes)
+    add("적응형softmax::div_value=2 의 모양",
+        lambda L: asm_shapes(L, div_value=2.0))
+    add("적응형softmax::head_bias 의 열쇠",
+        lambda L: asm_shapes(L, head_bias=True))
+    add("층::repr::AdaptiveLogSoftmaxWithLoss", lambda L: repr(asm(L)))
     return cases
 
 

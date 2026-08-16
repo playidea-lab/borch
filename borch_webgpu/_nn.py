@@ -12,6 +12,8 @@
 만든다 — 없는 것을 근사하는 것이 아니라, 있는 것에 이름을 붙이는 것이다.
 """
 
+import collections as _collections
+
 import numpy as _np
 
 import js as _js
@@ -947,6 +949,31 @@ def Sequential(*layers):
 
 def Linear(inf, outf, bias=True):
     return _layer("Linear", inf, outf, bias)
+
+
+ASMoutput = _collections.namedtuple("ASMoutput", ["output", "loss"])
+
+
+class _AdaptiveLogSoftmax(Module):
+    """`forward` 가 정답도 받고 **답을 둘 낸다** — 정답 자리의 로그확률과 손실.
+
+    borch.ts 쪽은 `forward` 를 막고 `run(x, target)` 을 둔다. 다른 층과 모양이 달라서
+    그냥 지나가면 안 되는 것을 그 자리에서 알리려는 것이다.
+    """
+
+    def __call__(self, x, target):
+        got = self._m.run(handle(x), handle(target))
+        return ASMoutput(wrap(got.output), wrap(got.loss))
+
+    def forward(self, x, target):
+        return self(x, target)
+
+
+def AdaptiveLogSoftmaxWithLoss(in_features, n_classes, cutoffs, div_value=4.0,
+                               head_bias=False):
+    return _AdaptiveLogSoftmax(_ts.nn.AdaptiveLogSoftmaxWithLoss.new(
+        in_features, n_classes, _js_list(list(cutoffs)),
+        float(div_value), bool(head_bias)))
 
 
 def Conv1d(cin, cout, k, stride=1, padding=0, bias=True):
