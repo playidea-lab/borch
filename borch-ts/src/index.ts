@@ -76,6 +76,9 @@ export type { Availability, DeviceKind, InitOptions } from "./device.js";
 // `nn.manualSeed` 로도 같은 것이 나온다(옛 이름을 안 깬다).
 export { manualSeed } from "./random.js";
 export { einsum } from "./einsum.js";
+// 대괄호 자리. `x[1:3]` 은 파이썬에서도 `x[slice(1, 3)]` 으로 풀리므로 같은 이름이다.
+export { slice } from "./indexing.js";
+export type { Slice } from "./indexing.js";
 // 체크포인트. **형식은 safetensors 다** — 파이썬 `borch`·numpy·HF 도구가 같은 파일을
 // 읽는다. torch 의 `save`/`load` 는 pickle 이라 옮길 수도 옮겨서도 안 된다.
 export {

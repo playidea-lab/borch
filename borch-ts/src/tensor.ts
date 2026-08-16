@@ -8,6 +8,7 @@
 
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
+import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
 import { gauss, uniform } from "./random.js";
 import { byRank, type DType, promote, rankOf } from "./dtype.js";
 import {
@@ -221,6 +222,27 @@ const MAX_UNROLLED_POWER = 8;
  * 이유다. 값이 조용히 반올림되면 라벨이 뒤섞이고 아무도 못 본다.
  */
 const EXACT_INT_LIMIT = 16_777_216;
+
+/** `at()` 의 축 하나에 넣을 수 있는 것. 문법은 `indexing.ts` 에 적혀 있다. */
+export type AtIndex = number | null | Slice | Tensor | readonly number[];
+
+/** 계획 하나를 실제 연산으로. **여기서 값을 만들지 않는다** — 있는 문으로 보낸다. */
+function applyPlan(t: Tensor, axis: number, plan: AxisPlan): Tensor {
+  switch (plan.kind) {
+    case "whole":
+      return t;
+    case "int":
+      return t.select(axis, plan.at);
+    case "range":
+      return t.narrow(axis, plan.start, plan.length);
+    case "picks":
+      // 걸음이 있는 슬라이스와 번호표가 여기서 만난다 — 둘 다 "이 자리들" 이다.
+      return t.indexSelect(
+        axis,
+        Tensor.from(plan.indices, [plan.indices.length], { dtype: "int64" }),
+      );
+  }
+}
 
 /**
  * 값 하나짜리 상수 텐서를 값으로 캐시한다.
@@ -1476,6 +1498,16 @@ export class Tensor implements Node<Tensor> {
     gradName: string,
   ): Tensor {
     const n = outShape.reduce((a, b) => a * b, 1);
+    // **빈 것도 답이다.** `x[5:99]` 처럼 범위 밖을 자르면 원소가 0 개인데, 셰이더는
+    // 그 수로 나누므로 WGSL 이 "0 으로 나눈다" 며 통째로 거절한다. 그러면 명령 버퍼가
+    // 같이 무효가 되어 **이 자리는 통과하고 뒤에 줄 선 것이 대신 틀린다** — 실제로
+    // 그 다음 검사(`randn`)가 전부 0 을 받아서 드러났다.
+    //
+    // `indexSelect` 가 같은 갈래를 이미 막고 있다. 여기만 안 막혀 있었다 — 자르기로
+    // 빈 것을 만드는 길이 그때는 없었기 때문이다.
+    if (n === 0) {
+      return new Tensor(dev().alloc(0), outShape, { dtype: this.dtype });
+    }
     const key = ruleKey(rules, offset);
     const out = dev().alloc(n);
     dev().run1d(dev().pipeline(`gt:${key}`, () => gather(rules, offset)), [this.buffer, out], n);
@@ -2122,6 +2154,62 @@ export class Tensor implements Node<Tensor> {
       "GatherBackward0",
       this.dtype,
     );
+  }
+
+  /**
+   * 대괄호 자리. `x[...]` 를 옮겨 적는 문 하나다 — 문법과 이유는 `indexing.ts`.
+   *
+   * ```ts
+   * x.at(0)                     // x[0]           축이 사라진다
+   * x.at([null, 1])             // x[:, 1]        null 이 파이썬의 `:` 다
+   * x.at(slice(1, 3))           // x[1:3]         축이 남는다
+   * x.at([0, slice(1, 3)])      // x[0, 1:3]
+   * x.at(slice(null, null, 2))  // x[::2]
+   * x.at([[0, 2]])              // x[[0, 2]]      대괄호 둘 — numpy 와 같은 모양
+   * x.at(idx)                   // x[idx]         int64 텐서
+   * ```
+   *
+   * **맨 바깥 배열은 언제나 축 목록이다.** 적게 주면 남은 축은 통째로 온다.
+   *
+   * ## 값은 여기서 안 만든다
+   *
+   * 전부 있는 메서드로 넘긴다 — 정수는 `select`, 이어진 구간은 `narrow`, 걸음이
+   * 있거나 번호표면 `indexSelect`. 새 커널이 없으므로 **골든이 이미 그 값들을
+   * 지키고 있다.** 이 메서드가 지는 책임은 값이 아니라 **어느 문으로 보내는가**다.
+   *
+   * ## 참·거짓 마스크는 안 받는다
+   *
+   * `x[mask]` 는 `await x.maskedSelect(mask)` 로 남는다. 결과의 길이가 **값에 달려
+   * 있어서** GPU 에서 한 번 읽어야 알 수 있고, 그것 하나 때문에 `at()` 을 비동기로
+   * 만들면 나머지 모든 쓰임이 이유 없이 `await` 를 달게 된다. `unique`·`nonzero`·
+   * `bincount` 가 비동기인 것과 같은 이유이고, 같은 자리에 두는 편이 낫다.
+   */
+  at(index: AtIndex | readonly AtIndex[]): Tensor {
+    const list: readonly AtIndex[] = Array.isArray(index)
+      && !isSlice(index) && !(index instanceof Tensor)
+      ? index as readonly AtIndex[]
+      : [index as AtIndex];
+    if (list.length > this.shape.length) {
+      throw new RuntimeError(
+        `too many indices for tensor of dimension ${this.shape.length}: ` +
+          `${list.length} 개를 줬다`,
+      );
+    }
+    let out: Tensor = this;
+    // **축 번호가 밀린다.** 정수 인덱스는 축을 없애므로, 그 뒤의 인덱스는 원래
+    // 자리보다 한 칸 앞을 가리킨다. 그래서 살아남은 축만 세는 자리를 따로 든다.
+    let axis = 0;
+    for (const [given, one] of list.entries()) {
+      if (one instanceof Tensor) {
+        out = out.indexSelect(axis, one);
+        axis += 1;
+        continue;
+      }
+      const plan = planAxis(one, out.shape[axis] ?? 0, given);
+      out = applyPlan(out, axis, plan);
+      if (plan.kind !== "int") axis += 1;
+    }
+    return out;
   }
 
   /** 축 하나를 색인 **벡터**가 고른다. `gather` 와 달리 색인이 자리마다 다르지 않다. */

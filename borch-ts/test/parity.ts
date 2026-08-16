@@ -8,7 +8,7 @@
  */
 
 import {
-  device, init, keepAlive, manualSeed, nn, noGrad, optim, scope, Tensor,
+  device, init, keepAlive, manualSeed, nn, noGrad, optim, scope, slice, Tensor,
 } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -274,6 +274,62 @@ export async function report(): Promise<string> {
   held.backward(Tensor.from([1], [1]), true);
   want("둘째 자리가 retainGraph 다 — 두 번 흘리면 두 배",
     (await twice.grad!.item()) === 8, `${await twice.grad!.item()}`);
+
+  // ── 대괄호 자리 ───────────────────────────────────────────────────────
+  //
+  // **`at()` 은 값을 안 만든다.** 전부 `select`·`narrow`·`indexSelect` 로 넘기고,
+  // 그 셋은 골든이 이미 진짜 torch 와 대조하고 있다. 그러니 여기서 물을 것은
+  // **`at()` 이 위임한 것과 같은 답을 내는가** 하나다 — 그러면 값은 골든에 얹힌다.
+  //
+  // 값을 손으로 적어 두고 비교하면 그 손이 틀렸을 때 검사가 같이 틀린다.
+  const cube = keepAlive(Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]));
+
+  const agrees = async (
+    name: string, got: Tensor, expected: Tensor,
+  ): Promise<void> => {
+    const shapeOk = got.shape.join(",") === expected.shape.join(",");
+    want(name, shapeOk && same(await got.toArray(), await expected.toArray()),
+      shapeOk ? "" : `모양 [${got.shape}] vs [${expected.shape}]`);
+  };
+
+  await agrees("at(0) 은 select 다", cube.at(0), cube.select(0, 0));
+  await agrees("at(-1) 은 뒤에서 센다", cube.at(-1), cube.select(0, 1));
+  await agrees("at([null, 1]) 은 둘째 축의 select 다",
+    cube.at([null, 1]), cube.select(1, 1));
+  await agrees("at(slice(1, 3)) 은 narrow 다",
+    cube.at(slice(1, 3)), cube.narrow(0, 1, 1));
+  await agrees("열린 슬라이스가 끝까지 간다",
+    cube.at([null, slice(1)]), cube.narrow(1, 1, 2));
+  await agrees("걸음 있는 슬라이스는 indexSelect 로 간다",
+    cube.at([null, null, slice(null, null, 2)]),
+    cube.indexSelect(2, Tensor.from([0, 2], [2], { dtype: "int64" })));
+  await agrees("번호표는 대괄호 둘이다",
+    cube.at([[1, 0]]),
+    cube.indexSelect(0, Tensor.from([1, 0], [2], { dtype: "int64" })));
+  await agrees("텐서 번호표도 받는다",
+    cube.at(Tensor.from([1], [1], { dtype: "int64" })),
+    cube.indexSelect(0, Tensor.from([1], [1], { dtype: "int64" })));
+
+  // **축 번호가 밀린다.** 정수는 축을 없애므로 둘째 인덱스는 원래 축 1 을 가리키는데,
+  // 그때 남은 텐서에서는 그것이 축 0 이다. 이 자리를 안 세면 조용히 다른 축을 자른다.
+  await agrees("정수 뒤의 인덱스가 원래 축을 가리킨다",
+    cube.at([0, slice(1, 3)]), cube.select(0, 0).narrow(0, 1, 2));
+  await agrees("정수 둘이 이어져도 밀림이 맞다",
+    cube.at([1, 2]), cube.select(0, 1).select(0, 2));
+  want("적게 주면 남은 축은 통째로",
+    cube.at(0).shape.join(",") === "3,4", cube.at(0).shape.join(","));
+
+  // 빈 것도 답이다 — 파이썬이 `x[5:99]` 를 빈 것으로 준다.
+  want("범위를 넘는 슬라이스는 빈 것이 된다",
+    cube.at(slice(5, 99)).shape.join(",") === "0,3,4",
+    cube.at(slice(5, 99)).shape.join(","));
+
+  wantThrow("범위를 넘는 정수는 거절한다", "out of bounds", () => cube.at(9));
+  wantThrow("축보다 많은 인덱스를 거절한다", "too many indices",
+    () => cube.at([0, 0, 0, 0]));
+  wantThrow("음수 걸음은 flip 을 가리킨다", "flip()",
+    () => slice(0, 3, -1));
 
   // ── 3. 난수 팩토리 ────────────────────────────────────────────────────
   const N = 4096;
