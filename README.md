@@ -451,6 +451,37 @@ Tensor.randperm(64);
 t.randnLike();
 ```
 
+### 데이터 먹이기
+
+`torch.utils.data` 자리다. **배치는 GPU 텐서라 `scope()` 안에서 받아야 한다** —
+적재기가 대신 감쌀 수 없다. 텐서가 구역 밖으로 나가는 것이 목적이기 때문이다.
+
+```ts
+const set = new data.TensorDataset(images, labels);
+const [train, valid] = data.randomSplit(set, [800, 200]);
+const loader = new data.DataLoader(train, { batchSize: 32, shuffle: true });
+
+for (let epoch = 0; epoch < 10; epoch++) {
+  for (const [x, y] of loader) {           // 동기 반복자다
+    await scope(async () => {
+      opt.zeroGrad();
+      const loss = crit.call(model.call(x), y);
+      loss.backward();
+      opt.step();
+    });
+  }
+}
+loader.length;    // 표본 수가 아니라 **배치 수**. torch 와 같다
+```
+
+섞기는 `manualSeed` 를 따른다 — torch 는 적재기에 별도 generator 를 두는데 여기서는
+호스트 줄기 하나를 쓴다. 씨앗 하나가 층 초기화·dropout·텐서 팩토리에 이어 배치
+순서까지 되돌린다. 에폭마다 다시 섞는 것은 torch 와 같다.
+
+**`sampler` 와 `num_workers` 는 없다.** 앞은 지금 받쳐 줄 것이 없어서이고(이름만
+놓으면 넣은 것이 조용히 무시된다), 뒤는 워커로 GPU 손잡이가 안 건너가서다. 있는
+것은 `shuffle`·`dropLast`·`Subset`·`randomSplit`·`ConcatDataset` 이다.
+
 ### 저장하고 이어서 하기
 
 **형식은 safetensors 다.** torch 의 `save`/`load` 는 pickle 이라 브라우저로 옮길 수도

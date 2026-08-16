@@ -101,6 +101,8 @@ export type { DType } from "./dtype.js";
 
 // 이름 공간을 나눠 둔다 — `nn` 과 `vision` 둘 다 `manualSeed` 를 갖고 있고,
 // torch 도 `torch.nn` · `torch.optim` 으로 갈라 부른다.
+// `torch.utils.data` 자리. 이름 공간을 나눠 두는 것은 `nn`·`optim` 과 같은 이유다.
+export * as data from "./data.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";

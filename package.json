@@ -28,6 +28,7 @@
     "device:ts": "uv run --with playwright python borch-ts/test/device.py",
     "parity:ts": "uv run --with playwright python borch-ts/test/parity.py",
     "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",
+    "data:ts": "uv run --with playwright python borch-ts/test/data.py",
     "prepublishOnly": "npm run build:ts"
   },
   "//": [
