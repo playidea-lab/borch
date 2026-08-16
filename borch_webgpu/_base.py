@@ -15,6 +15,13 @@ def _js_list(seq):
     return _to_js(list(int(n) for n in seq))
 
 
+def camel_name(name):
+    """`requires_grad` → `requiresGrad`. `_ops.camel` 과 같은 규칙인데 여기서 쓰려면
+    그쪽을 들여와야 하고 그것이 순환이라, 이 한 줄만 따로 둔다."""
+    head, *rest = name.split("_")
+    return head + "".join(p[:1].upper() + p[1:] for p in rest)
+
+
 def _js_floats(seq):
     """`_js_list` 의 실수판. **정수로 깎으면 안 되는 자리**가 있다 — 분수 풀링의
     표본은 0..1 사이라 `int()` 를 지나면 전부 0 이 되고, 그 0 은 예외가 아니라
@@ -110,6 +117,19 @@ class Tensor:
 
     def __init__(self, handle):
         self._h = handle
+
+    def __setattr__(self, name, value):
+        """**속성은 저쪽 텐서에 쓴다.** `p.grad = g` 가 torch 코드의 예사로운 줄이다.
+
+        `__slots__` 이 `_h` 하나뿐이라 다른 이름은 그냥 `AttributeError` 였다.
+        읽기(`__getattr__`)는 저쪽으로 넘기면서 쓰기는 안 넘겼던 자리다 — 옵티마이저를
+        손으로 먹이는 코드가 그 첫 줄에서 멈춘다.
+        """
+        if name == "_h":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._h, camel_name(name),
+                handle(value) if isinstance(value, Tensor) else value)
 
     # ── 하네스가 요구하는 둘 ──────────────────────────────────────────────
     #

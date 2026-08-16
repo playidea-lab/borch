@@ -1235,6 +1235,11 @@ _OPTIMIZERS = [
     ("Adamax", {"lr": 0.05}),
     ("NAdam", {"lr": 0.05}),
     ("RAdam", {"lr": 0.05}),
+    ("ASGD", {"lr": 0.05}),
+    ("Rprop", {"lr": 0.05}),
+    # **2 차원 가중치라야 Adafactor 의 요점이 돈다** — 여기 모델의 `0.weight` 가
+    # (8, 6) 이라 행·열로 쪼개는 길을 지난다. 1 차원만 물으면 그 길이 통째로 안 돈다.
+    ("Adafactor", {"lr": 0.05}),
 ]
 
 # `(이름, 만드는 인자, 몇 번 밟을까)`. 학습률의 **자취**를 묻는다.
@@ -1352,6 +1357,98 @@ def opt_cases(inp=None):
 
     cases.append((OPT_PREFIX + "SequentialLR/자취", sequential))
     cases.append((OPT_PREFIX + "ChainedScheduler/자취", chained))
+
+    # ── 갈래를 좁혀 묻는 자리 ────────────────────────────────────────────
+    #
+    # 위의 모델 학습은 옵티마이저가 **대충 맞으면** 지난다. 갈래를 정하는 인자들은
+    # 파라미터 하나에 기울기를 손으로 먹여야 드러난다.
+    start = np.array([1.0, -2.0, 0.5], dtype=np.float32)
+
+    def walk(L, name, grads, **args):
+        p = L.tensor(start.copy(), requires_grad=True)
+        opt = getattr(L.optim, name)([p], **args)
+        seen = []
+        for g in grads:
+            opt.zero_grad()
+            p.grad = L.tensor(g)
+            opt.step()
+            # **세 구현이 다 아는 길로 읽는다** — 하네스의 `to_numpy` 와 같은 길이다.
+            # `p.data` 는 결속에서 저쪽 속성으로 새어 모양이 어긋난다.
+            seen.append(np.asarray(p.detach().numpy(), dtype=np.float32).copy())
+        return L.tensor(np.stack(seen))
+
+    ramp = [np.array([0.1, -0.3, 0.2], dtype=np.float32) * (i + 1)
+            for i in range(4)]
+    # **부호가 뒤집히는 기울기.** Rprop 의 `etas` 와 "뒤집힌 칸은 안 간다" 규칙이
+    # 여기서만 보인다 — 부호가 그대로면 폭이 커지기만 해서 한쪽 갈래만 돈다.
+    flip = [np.array([0.1, -0.3, 0.2], dtype=np.float32),
+            np.array([-0.1, -0.3, 0.2], dtype=np.float32),
+            np.array([-0.2, -0.3, 0.2], dtype=np.float32),
+            np.array([-0.2, 0.3, 0.2], dtype=np.float32)]
+
+    narrow = [
+        ("ASGD/기본값", "ASGD", ramp, {}),
+        ("ASGD/lambd", "ASGD", ramp, {"lr": 0.1, "lambd": 0.01}),
+        ("ASGD/alpha", "ASGD", ramp, {"lr": 0.1, "alpha": 0.5}),
+        # **`t0` 을 낮춰야 평균이 실제로 돈다** — 기본값 100만에서 `mu` 는 늘 1 이고
+        # `ax` 는 파라미터의 사본이다. 평균 갈래가 통째로 안 돌아간다.
+        ("ASGD/t0(평균이 도는 자리)", "ASGD", ramp, {"lr": 0.1, "t0": 2}),
+        ("ASGD/weight_decay", "ASGD", ramp, {"lr": 0.1, "weight_decay": 0.1}),
+        ("Rprop/기본값", "Rprop", ramp, {}),
+        ("Rprop/부호 바뀜", "Rprop", flip, {"lr": 0.1}),
+        ("Rprop/etas", "Rprop", flip, {"lr": 0.1, "etas": (0.4, 1.5)}),
+        ("Rprop/step_sizes 상한", "Rprop", ramp,
+         {"lr": 0.1, "step_sizes": (1e-6, 0.11)}),
+        ("Adafactor/기본값", "Adafactor", ramp, {}),
+        ("Adafactor/weight_decay", "Adafactor", ramp,
+         {"lr": 0.1, "weight_decay": 0.1}),
+        ("Adafactor/d", "Adafactor", ramp, {"lr": 0.1, "d": 2.0}),
+    ]
+    for label, name, grads, args in narrow:
+        cases.append((OPT_PREFIX + label,
+                      lambda L, n=name, g=grads, a=args: walk(L, n, g, **a)))
+
+    def adafactor_matrix(L, shape, **args):
+        """**2 차원부터 행·열로 쪼갠다.** 1 차원은 상태 열쇠부터 다르다(`variance` 대
+        `row_var`·`col_var`) — 이 최적화의 요점이 거기 있어서, 벡터로만 물으면 그 길이
+        한 번도 안 돌아간다."""
+        n = int(np.prod(shape))
+        p = L.tensor((np.arange(n, dtype=np.float32).reshape(shape) / 4 - 0.5),
+                     requires_grad=True)
+        opt = L.optim.Adafactor([p], lr=0.1, **args)
+        base = np.arange(n, dtype=np.float32).reshape(shape) / 8 - 0.2
+        for i in range(3):
+            opt.zero_grad()
+            p.grad = L.tensor(base * (i + 1))
+            opt.step()
+        return p
+
+    cases.append((OPT_PREFIX + "Adafactor/2차원",
+                  lambda L: adafactor_matrix(L, (3, 4))))
+    cases.append((OPT_PREFIX + "Adafactor/3차원",
+                  lambda L: adafactor_matrix(L, (2, 3, 4))))
+
+    def lbfgs(L, steps=3, **args):
+        """**`step` 이 닫힘을 받는다** — 한 걸음 안에서 손실을 여러 번 다시 잰다.
+
+        그 모양이 다른 옵티마이저와 달라서, 학습 루프를 그대로 쓰면 아무것도 안 한다.
+        """
+        p = L.tensor(start.copy(), requires_grad=True)
+        opt = L.optim.LBFGS([p], **args)
+        seen = []
+        for i in range(steps):
+            def closure(pp=p, k=i):
+                pp.grad = L.tensor(np.array([0.1, -0.3, 0.2], dtype=np.float32))
+                return (pp * pp).sum()
+            opt.step(closure)
+            seen.append(np.asarray(p.detach().numpy(), dtype=np.float32).copy())
+        return L.tensor(np.stack(seen))
+
+    cases.append((OPT_PREFIX + "LBFGS/기본값", lambda L: lbfgs(L, lr=0.1)))
+    cases.append((OPT_PREFIX + "LBFGS/max_iter",
+                  lambda L: lbfgs(L, lr=0.1, max_iter=3)))
+    cases.append((OPT_PREFIX + "LBFGS/history_size",
+                  lambda L: lbfgs(L, lr=0.5, max_iter=5, history_size=2)))
     return cases
 
 

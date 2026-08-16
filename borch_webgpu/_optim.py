@@ -4,9 +4,11 @@
 JS 쪽이 그것을 모른다.
 """
 
+import numpy as _np
+
 import js as _js
 
-from ._base import handle
+from ._base import handle, tensor, wrap
 
 _ts = _js.borch
 
@@ -94,6 +96,162 @@ def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
 
 def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
     return _Opt(_ts.optim.RAdam.new(_params(params), lr, betas[0], betas[1], eps))
+
+
+def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0):
+    return _Opt(_ts.optim.ASGD.new(_params(params), lr, lambd, alpha, t0,
+                                   weight_decay))
+
+
+def Rprop(params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50)):
+    return _Opt(_ts.optim.Rprop.new(_params(params), lr, etas[0], etas[1],
+                                    step_sizes[0], step_sizes[1]))
+
+
+def Adafactor(params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3), d=1.0,
+              weight_decay=0.0):
+    return _Opt(_ts.optim.Adafactor.new(_params(params), lr, beta2_decay,
+                                        eps[0], eps[1], d, weight_decay))
+
+
+class LBFGS:
+    """준뉴턴법. **`step` 이 닫힘(closure)을 받는다** — 한 걸음 안에서 손실을 여러 번
+    다시 재기 때문이다.
+
+    ## 왜 여기에 있고 borch.ts 에 없는가
+
+    이 알고리즘은 **제어 흐름이 값에 달려 있다** — `ys > 1e-10` 이냐, 기울기가 문턱
+    아래냐, 손실이 더 안 줄었냐로 갈린다. borch.ts 는 동기 읽기가 없어서 GPU 위의
+    수를 그 자리에서 못 본다. 여기는 `run_sync` 가 있으므로 이쪽이 그 자리다.
+
+    파라미터는 GPU 에 그대로 두고 **평평한 기울기 벡터만** 오간다. LBFGS 는 원래
+    작은 문제에 쓰는 것이라 그 값이 남는다.
+
+    **코어에 같은 알고리즘이 한 벌 더 있다.** 두 꾸러미가 서로를 안 들여오기로 한
+    구조라 그렇고, 골든이 같은 세 케이스를 양쪽에 물어 갈리면 잡는다.
+
+    직선 탐색은 아직 없다 — `line_search_fn` 을 주면 시끄럽게 거절한다.
+    """
+
+    def __init__(self, params, lr=1.0, max_iter=20, max_eval=None,
+                 tolerance_grad=1e-7, tolerance_change=1e-9, history_size=100,
+                 line_search_fn=None):
+        got = params.to_py() if hasattr(params, "to_py") else list(params)
+        self._ps = [wrap(handle(p)) for p in got]
+        if max_eval is None:
+            max_eval = max_iter * 5 // 4
+        self.param_groups = [dict(
+            lr=lr, max_iter=max_iter, max_eval=max_eval,
+            tolerance_grad=tolerance_grad, tolerance_change=tolerance_change,
+            history_size=history_size, line_search_fn=line_search_fn)]
+        self._state = {}
+
+    def zero_grad(self, set_to_none=True):
+        for p in self._ps:
+            p.grad = None
+
+    def _flat_grad(self):
+        parts = []
+        for p in self._ps:
+            g = p.grad
+            parts.append(_np.zeros(int(handle(p).size), dtype=_np.float32)
+                         if g is None else
+                         _np.asarray(g.numpy(), dtype=_np.float32).reshape(-1))
+        return _np.concatenate(parts)
+
+    def _add_step(self, size, direction):
+        from ._ops import no_grad as _no_grad
+        at = 0
+        # **`no_grad` 안에서 고친다.** 파라미터는 기울기가 켜진 잎이고, 그것을 제자리로
+        # 고치는 것은 밖에서는 거절된다 — 옵티마이저만 해도 되는 일이라 그 자리를 연다.
+        with _no_grad():
+            for p in self._ps:
+                h = handle(p)
+                n = int(h.size)
+                shape = [int(v) for v in h.shape]
+                moved = (_np.asarray(p.numpy(), dtype=_np.float32).reshape(-1)
+                         + size * direction[at:at + n])
+                h.copyFrom(handle(tensor(moved.reshape(shape))))
+                at += n
+
+    def step(self, closure):
+        group = self.param_groups[0]
+        if group["line_search_fn"] is not None:
+            raise RuntimeError(
+                f"LBFGS(line_search_fn={group['line_search_fn']!r}) 은(는) 아직 여기 없다.")
+        lr, max_iter = group["lr"], group["max_iter"]
+        max_eval = group["max_eval"]
+        tol_grad, tol_change = group["tolerance_grad"], group["tolerance_change"]
+        history = group["history_size"]
+        st = self._state
+        st.setdefault("n_iter", 0)
+
+        orig = closure()
+        loss = float(orig.item() if hasattr(orig, "item") else orig)
+        evals = 1
+        flat = self._flat_grad()
+        if _np.abs(flat).max() <= tol_grad:
+            return orig
+
+        d, t = st.get("d"), st.get("t")
+        old_dirs = st.get("old_dirs", [])
+        old_stps = st.get("old_stps", [])
+        ro = st.get("ro", [])
+        h_diag = st.get("h_diag", 1.0)
+        prev_flat, prev_loss = st.get("prev_flat"), st.get("prev_loss")
+
+        n_iter = 0
+        while n_iter < max_iter:
+            n_iter += 1
+            st["n_iter"] += 1
+            if st["n_iter"] == 1:
+                d = -flat
+                old_dirs, old_stps, ro, h_diag = [], [], [], 1.0
+            else:
+                y = flat - prev_flat
+                s = d * t
+                ys = float(y @ s)
+                if ys > 1e-10:
+                    if len(old_dirs) == history:
+                        old_dirs.pop(0), old_stps.pop(0), ro.pop(0)
+                    old_dirs.append(y)
+                    old_stps.append(s)
+                    ro.append(1.0 / ys)
+                    h_diag = ys / float(y @ y)
+                al = [0.0] * len(old_dirs)
+                q = -flat
+                for i in range(len(old_dirs) - 1, -1, -1):
+                    al[i] = float(old_stps[i] @ q) * ro[i]
+                    q = q - al[i] * old_dirs[i]
+                r = q * h_diag
+                for i in range(len(old_dirs)):
+                    be = float(old_dirs[i] @ r) * ro[i]
+                    r = r + old_stps[i] * (al[i] - be)
+                d = r
+
+            prev_flat, prev_loss = flat.copy(), loss
+            t = min(1.0, 1.0 / _np.abs(flat).sum()) * lr if st["n_iter"] == 1 else lr
+            if float(flat @ d) > -tol_change:
+                break
+
+            self._add_step(t, d)
+            if n_iter != max_iter:
+                got = closure()
+                loss = float(got.item() if hasattr(got, "item") else got)
+                flat = self._flat_grad()
+                evals += 1
+                if _np.abs(flat).max() <= tol_grad:
+                    break
+            if n_iter == max_iter or evals >= max_eval:
+                break
+            if _np.abs(d * t).max() <= tol_change:
+                break
+            if abs(loss - prev_loss) < tol_change:
+                break
+
+        st.update(d=d, t=t, old_dirs=old_dirs, old_stps=old_stps, ro=ro,
+                  h_diag=h_diag, prev_flat=prev_flat, prev_loss=prev_loss)
+        return orig
 
 
 class _Sched:

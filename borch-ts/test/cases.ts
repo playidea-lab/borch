@@ -2137,6 +2137,10 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     ["Adamax", (ps) => new optim.Adamax(ps, 0.05)],
     ["NAdam", (ps) => new optim.NAdam(ps, 0.05)],
     ["RAdam", (ps) => new optim.RAdam(ps, 0.05)],
+    ["ASGD", (ps) => new optim.ASGD(ps, 0.05)],
+    ["Rprop", (ps) => new optim.Rprop(ps, 0.05)],
+    // **2 차원 가중치라야 Adafactor 의 요점이 돈다** — 여기 `0.weight` 가 (8, 6) 이다.
+    ["Adafactor", (ps) => new optim.Adafactor(ps, 0.05)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {
@@ -2187,6 +2191,81 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     const b = new optim.ExponentialLR(o, 0.9).start();
     return new optim.ChainedScheduler([a, b]);
   }, 6));
+
+  // ── 갈래를 좁혀 묻는 자리 ────────────────────────────────────────────────
+  //
+  // 위의 모델 학습은 옵티마이저가 **대충 맞으면** 지난다. 갈래를 정하는 인자들은
+  // 파라미터 하나에 기울기를 손으로 먹여야 드러난다.
+  const start = () => Tensor.from([1, -2, 0.5], [3], true);
+  const ramp = (i: number) => Tensor.from(
+    [0.1 * (i + 1), -0.3 * (i + 1), 0.2 * (i + 1)], [3]);
+  // **부호가 뒤집히는 기울기.** Rprop 의 `etas` 와 "뒤집힌 칸은 안 간다" 규칙이
+  // 여기서만 보인다.
+  const flipGrads = [[0.1, -0.3, 0.2], [-0.1, -0.3, 0.2],
+    [-0.2, -0.3, 0.2], [-0.2, 0.3, 0.2]];
+
+  const walk = (
+    make: (ps: Tensor[]) => optim.Optimizer,
+    grads: (i: number) => Tensor,
+    steps = 4,
+  ) => () => {
+    const p = start();
+    const opt = make([p]);
+    const seen: Tensor[] = [];
+    for (let i = 0; i < steps; i++) {
+      opt.zeroGrad();
+      p.grad = grads(i);
+      opt.step();
+      // **여기서 값을 베껴야 한다.** `reshape` 는 버퍼를 그대로 물려주므로 그냥
+      // 담으면 네 줄이 전부 같은 자리를 가리키고, `cat` 이 나중에 읽을 때는 마지막
+      // 값만 넷 나온다 — 자취가 아니라 한 점이 된다. 0 을 더해 새 버퍼로 옮긴다.
+      seen.push(p.reshape([1, 3]).detach().add(Tensor.full([], 0)));
+    }
+    return Tensor.cat(seen, 0);
+  };
+  const flip = (i: number) => Tensor.from(flipGrads[i] ?? [0, 0, 0], [3]);
+
+  out.set("opt::ASGD/기본값", walk((ps) => new optim.ASGD(ps), ramp));
+  out.set("opt::ASGD/lambd",
+    walk((ps) => new optim.ASGD(ps, 0.1, 0.01), ramp));
+  out.set("opt::ASGD/alpha",
+    walk((ps) => new optim.ASGD(ps, 0.1, 1e-4, 0.5), ramp));
+  // **`t0` 을 낮춰야 평균이 실제로 돈다** — 기본값 100만에서 `mu` 는 늘 1 이다.
+  out.set("opt::ASGD/t0(평균이 도는 자리)",
+    walk((ps) => new optim.ASGD(ps, 0.1, 1e-4, 0.75, 2), ramp));
+  out.set("opt::ASGD/weight_decay",
+    walk((ps) => new optim.ASGD(ps, 0.1, 1e-4, 0.75, 1e6, 0.1), ramp));
+
+  out.set("opt::Rprop/기본값", walk((ps) => new optim.Rprop(ps), ramp));
+  out.set("opt::Rprop/부호 바뀜",
+    walk((ps) => new optim.Rprop(ps, 0.1), flip));
+  out.set("opt::Rprop/etas",
+    walk((ps) => new optim.Rprop(ps, 0.1, 0.4, 1.5), flip));
+  out.set("opt::Rprop/step_sizes 상한",
+    walk((ps) => new optim.Rprop(ps, 0.1, 0.5, 1.2, 1e-6, 0.11), ramp));
+
+  out.set("opt::Adafactor/기본값", walk((ps) => new optim.Adafactor(ps), ramp));
+  out.set("opt::Adafactor/weight_decay",
+    walk((ps) => new optim.Adafactor(ps, 0.1, -0.8, null, 1e-3, 1.0, 0.1), ramp));
+  out.set("opt::Adafactor/d",
+    walk((ps) => new optim.Adafactor(ps, 0.1, -0.8, null, 1e-3, 2.0), ramp));
+
+  // **2 차원부터 행·열로 쪼갠다** — 벡터로만 물으면 그 길이 한 번도 안 돌아간다.
+  const matrixWalk = (shape: number[]) => () => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    const p = Tensor.from(
+      Array.from({ length: n }, (_, i) => i / 4 - 0.5), shape, true);
+    const opt = new optim.Adafactor([p], 0.1);
+    for (let i = 0; i < 3; i++) {
+      opt.zeroGrad();
+      p.grad = Tensor.from(
+        Array.from({ length: n }, (_, k) => (k / 8 - 0.2) * (i + 1)), shape);
+      opt.step();
+    }
+    return p;
+  };
+  out.set("opt::Adafactor/2차원", matrixWalk([3, 4]));
+  out.set("opt::Adafactor/3차원", matrixWalk([2, 3, 4]));
 }
 
 /**

@@ -115,6 +115,7 @@ from ._optim import (
     MultiStepLR, MultiplicativeLR, NAdam, OneCycleLR, Optimizer, PolynomialLR, RAdam,
     RMSprop, ReduceLROnPlateau, SGD, SequentialLR, StepLR, _LRScheduler, _Optim,
     _Scheduler, optim,
+    ASGD, Adafactor, LBFGS, Rprop,
 )
 from ._data import (
     BatchSampler, ChainDataset, ConcatDataset, DataLoader, Dataset, IterableDataset,

@@ -356,6 +356,169 @@ export class RAdam extends Composed {
 }
 
 /**
+ * 평균 내는 SGD. **걸음마다 학습률이 스스로 줄고**, 어느 시점부터 파라미터를 평균낸다.
+ *
+ * `eta` 는 `lr / (1 + lambd·lr·step)^alpha` 로 줄고 `mu` 가 평균의 무게다. 기본 `t0`
+ * 이 100만이라 보통 학습에서는 `mu` 가 늘 1 이고 `ax` 는 파라미터의 사본이다 —
+ * 평균 갈래는 `t0` 을 낮춰야 실제로 돈다.
+ *
+ * **감쇠가 곱셈이다.** `param *= (1 − lambd·eta)` 를 먼저 하고 그다음 기울기를 뺀다.
+ */
+export class ASGD extends Composed {
+  private readonly ax: Tensor[];
+  private eta: number;
+  private mu = 1;
+  private stepCount = 0;
+
+  constructor(params: Tensor[], lr = 1e-2, private readonly lambd = 1e-4,
+              private readonly alpha = 0.75, private readonly t0 = 1e6,
+              private readonly weightDecay = 0) {
+    super(params, lr);
+    this.ax = this.state(params);
+    this.eta = lr;
+  }
+
+  override step(): void {
+    this.stepCount += 1;
+    super.step();
+    this.eta = this.lr / (1 + this.lambd * this.lr * this.stepCount) ** this.alpha;
+    this.mu = 1 / Math.max(1, this.stepCount - this.t0);
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const ax = this.at(this.ax, index, "ASGD");
+    const eta = this.eta;
+    const mu = this.mu;
+    const g = this.weightDecay
+      ? grad.add(param.mul(this.k(this.weightDecay))) : grad;
+    param.copyFrom(param.mul(this.k(1 - this.lambd * eta)).sub(g.mul(this.k(eta))));
+    // `mu` 가 1 이면 평균이 아니라 **사본**이다 — 더하면 두 배가 된다.
+    ax.copyFrom(mu === 1 ? param : ax.add(param.sub(ax).mul(this.k(mu))));
+  }
+}
+
+/**
+ * 기울기의 **부호만** 본다. 크기는 안 쓰고 걸음 폭을 칸마다 따로 키우고 줄인다.
+ *
+ * 부호가 그대로면 폭에 `etaPlus` 를 곱하고, 뒤집히면 `etaMinus` 를 곱한다.
+ * **뒤집힌 칸은 그 걸음을 아예 안 간다** — 기울기를 0 으로 만들어 두고, 그래서 다음
+ * 걸음의 "이전 기울기" 도 0 이 된다. 그 둘이 없으면 부호가 안 바뀌는 입력으로는
+ * 영원히 안 걸리는 차이가 생긴다.
+ */
+export class Rprop extends Composed {
+  private readonly prev: Tensor[];
+  private readonly stepSize: Tensor[];
+
+  constructor(params: Tensor[], lr = 1e-2, private readonly etaMinus = 0.5,
+              private readonly etaPlus = 1.2, private readonly sizeMin = 1e-6,
+              private readonly sizeMax = 50) {
+    super(params, lr);
+    this.prev = this.state(params);
+    this.stepSize = params.map((p) => keepAlive(Tensor.full(p.shape, lr)));
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    const prev = this.at(this.prev, index, "Rprop");
+    const size = this.at(this.stepSize, index, "Rprop");
+    const sign = grad.mul(prev).sign();
+    // **참·거짓 표를 실수로 되돌린다.** 비교는 bool 을 내고 borch.ts 는 bool 로 셈하는
+    // 것을 거절한다 — 값이 0/1 이라 그냥 될 것 같지만 그 거절이 맞다.
+    const rising = sign.binary("gt", this.k(0)).to("float32");
+    const falling = sign.binary("lt", this.k(0)).to("float32");
+    // 부호가 0 이면 1 을 곱한다 — 첫 걸음과, 앞서 뒤집혀 0 으로 만든 칸이 그렇다.
+    const factor = this.k(1)
+      .add(rising.mul(this.k(this.etaPlus - 1)))
+      .add(falling.mul(this.k(this.etaMinus - 1)));
+    size.copyFrom(size.mul(factor).clamp(this.sizeMin, this.sizeMax));
+    const kept = grad.mul(this.k(1).sub(falling));
+    param.copyFrom(param.sub(kept.sign().mul(size)));
+    prev.copyFrom(kept);
+  }
+}
+
+/**
+ * Adam 인데 2차 모멘트를 **행과 열로 쪼개 든다.**
+ *
+ * Adam 은 파라미터마다 분산을 하나씩 들어 기억이 가중치만큼 든다. 여기서는 행 평균과
+ * 열 평균만 들고 그 바깥곱으로 되살린다 — `(R, C)` 자리에 `R + C` 만 쓴다.
+ *
+ * **1 차원 파라미터는 안 쪼갠다** — 쪼갤 축이 하나뿐이라 그냥 분산을 든다. 벡터로만
+ * 물으면 이 최적화의 요점이 통째로 안 돌아간다.
+ */
+export class Adafactor extends Composed {
+  private readonly rowVar: (Tensor | null)[] = [];
+  private readonly colVar: (Tensor | null)[] = [];
+  private readonly variance: (Tensor | null)[] = [];
+  private stepCount = 0;
+
+  constructor(params: Tensor[], lr = 1e-2, private readonly beta2Decay = -0.8,
+              private readonly eps1: number | null = null,
+              private readonly eps2 = 1e-3, private readonly d = 1.0,
+              private readonly weightDecay = 0) {
+    super(params, lr);
+    for (const p of params) {
+      const rank = p.shape.length;
+      if (rank > 1) {
+        const rows = [...p.shape.slice(0, -1), 1];
+        const cols = [...p.shape.slice(0, -2), 1, p.shape[rank - 1] ?? 1];
+        this.rowVar.push(keepAlive(Tensor.zeros(rows)));
+        this.colVar.push(keepAlive(Tensor.zeros(cols)));
+        this.variance.push(null);
+      } else {
+        this.rowVar.push(null);
+        this.colVar.push(null);
+        this.variance.push(keepAlive(Tensor.zeros(p.shape)));
+      }
+    }
+  }
+
+  override step(): void {
+    this.stepCount += 1;
+    super.step();
+  }
+
+  protected override update(index: number, param: Tensor, grad: Tensor): void {
+    // f32 의 기계 입실론. torch 는 dtype 에서 가져오고 여기는 float32 하나뿐이다.
+    const one = this.eps1 ?? 1.1920928955078125e-7;
+    const step = this.stepCount;
+    const blend = this.k(step ** this.beta2Decay);
+    const rho = Math.min(this.lr, 1 / Math.sqrt(step));
+    // **`alpha` 와 `denom` 을 수로 못 뺀다** — WebGPU 에 동기 읽기가 없어서 GPU 위의
+    // 값을 여기서 읽으면 기다려야 한다. 스칼라 **텐서**로 남겨 곱한다. 코어는 numpy 라
+    // 수로 계산하지만 식은 같다.
+    const norm = param.square().sum().sqrt();
+    const alpha = norm.div(this.k(Math.sqrt(param.size)))
+      .binary("maximum", this.k(this.eps2)).mul(this.k(rho));
+    if (this.weightDecay) {
+      param.copyFrom(param.mul(this.k(1 - this.lr * this.weightDecay)));
+    }
+    const rank = grad.shape.length;
+    let variance: Tensor;
+    if (rank > 1) {
+      const row = this.rowVar[index];
+      const col = this.colVar[index];
+      if (!row || !col) throw new Error("Adafactor: 행·열 상태가 없다");
+      const sq = grad.square();
+      row.copyFrom(row.add(sq.mean(rank - 1, true).sub(row).mul(blend)));
+      col.copyFrom(col.add(sq.mean(rank - 2, true).sub(col).mul(blend)));
+      // `(…, R, 1) × (…, 1, C)` 는 바깥곱이다 — 브로드캐스팅이 그대로 해 준다.
+      const outer = row.mul(col);
+      variance = outer.div(row.mean(rank - 2, true).binary("maximum", this.k(one)));
+    } else {
+      const v = this.variance[index];
+      if (!v) throw new Error("Adafactor: 분산 상태가 없다");
+      v.copyFrom(v.add(grad.square().sub(v).mul(blend)));
+      variance = v;
+    }
+    const update = grad.div(variance.binary("maximum", this.k(one * one)).sqrt());
+    const scale = update.square().sum().sqrt();
+    const denom = scale.div(this.k(Math.sqrt(update.size) * this.d))
+      .binary("maximum", this.k(1));
+    param.copyFrom(param.sub(update.mul(alpha.div(denom))));
+  }
+}
+
+/**
  * 학습률 스케줄.
  *
  * **실수 연산뿐이라 torch 와 값이 그대로 같아야 한다** — 근사가 낄 자리가 없다.

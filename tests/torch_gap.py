@@ -305,6 +305,11 @@ SKIPPED = {
     "saddmm": "희소 행렬곱 — 커리큘럼 밖",
     "sspaddmm": "희소 행렬곱 — 커리큘럼 밖",
     "segment_reduce": "희소·불규칙 묶음용 — 커리큘럼 밖",
+    # **torch 자신이 촘촘한 기울기를 거절한다** — 실측한 문구가
+    # "SparseAdam does not support dense gradients, please consider Adam instead" 다.
+    # 여기 희소 텐서가 없으므로 이 옵티마이저가 받을 수 있는 입력이 하나도 없다.
+    # 만들어 두면 언제나 거절만 하는 물건이 되고, 그것은 있다고 세는 것보다 나쁘다.
+    "SparseAdam": "희소 기울기 전용 — 촘촘한 기울기는 torch 도 거절한다",
 
     # 복소수. 우리 dtype 은 float32·int64·bool 셋이다.
     "complex": "복소수 dtype 이 없다",

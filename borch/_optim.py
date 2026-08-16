@@ -8,7 +8,7 @@ from ._tensor import (
     Tensor,
 )
 from ._ops import (
-    _Namespace,
+    _Namespace, _unsupported,
 )
 from ._base import (
     _math, _np,
@@ -330,6 +330,263 @@ class RAdam(Optimizer):
                 else:
                     # 적응 보폭을 안 쓴다 — 여기가 SGD 처럼 도는 구간이다.
                     p._array = p.data - group["lr"] * mh
+
+
+class ASGD(Optimizer):
+    """평균 내는 SGD. **걸음마다 학습률이 줄고**, 어느 시점부터 파라미터를 평균낸다.
+
+    `eta` 는 `lr / (1 + lambd·lr·step)^alpha` 로 스스로 줄고, `mu` 가 평균의 무게다.
+    기본 `t0` 이 100만이라 보통 학습에서는 `mu` 가 1 이고 `ax` 가 그냥 파라미터의
+    사본이다 — 평균이 실제로 도는 것은 `t0` 을 낮춰야 보인다.
+
+    **감쇠가 곱셈이다.** `param *= (1 - lambd·eta)` 를 먼저 하고 그다음에 기울기를
+    뺀다. 기울기에 더하는 꼴(`weight_decay`)과 다른 자리이고, 둘 다 있으면 둘 다 건다.
+    """
+
+    def __init__(self, params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6,
+                 weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, lambd=lambd, alpha=alpha, t0=t0,
+                                      weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            lr, lambd = group["lr"], group["lambd"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("eta", lr)
+                st.setdefault("mu", 1.0)
+                st.setdefault("ax", _np.zeros_like(p.data))
+                st["step"] += 1
+                g = p.grad.data
+                if group["weight_decay"]:
+                    g = g + group["weight_decay"] * p.data
+                eta, mu = st["eta"], st["mu"]
+                p._array = p.data * (1 - lambd * eta) - eta * g
+                # `mu` 가 1 이면 평균이 아니라 **사본**이다 — 더하면 두 배가 된다.
+                st["ax"] = (p.data.copy() if mu == 1
+                            else st["ax"] + (p.data - st["ax"]) * mu)
+                step = st["step"]
+                st["eta"] = lr / ((1 + lambd * lr * step) ** group["alpha"])
+                st["mu"] = 1.0 / max(1.0, step - group["t0"])
+
+
+class Rprop(Optimizer):
+    """기울기의 **부호만** 본다. 크기는 안 쓰고 걸음 폭을 칸마다 따로 키우고 줄인다.
+
+    부호가 그대로면 폭을 `etas[1]` 배로 키우고, 뒤집히면 `etas[0]` 배로 줄인다.
+    **뒤집힌 칸은 그 걸음을 아예 안 간다** — 기울기를 0 으로 만들어 두고, 그래서 다음
+    걸음의 "이전 기울기" 도 0 이 된다. 그 두 줄이 없으면 값이 그럴듯하게 다르고,
+    부호가 안 바뀌는 입력으로는 영원히 안 걸린다.
+    """
+
+    def __init__(self, params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50)):
+        super().__init__(params, dict(lr=lr, etas=etas, step_sizes=step_sizes))
+
+    def step(self):
+        for group in self.param_groups:
+            eta_minus, eta_plus = group["etas"]
+            low, high = group["step_sizes"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st.setdefault("prev", _np.zeros_like(p.data))
+                st.setdefault("step_size", _np.full_like(p.data, group["lr"]))
+                st["step"] += 1
+                g = _np.array(p.grad.data, copy=True)
+                sign = _np.sign(g * st["prev"])
+                factor = _np.where(sign > 0, eta_plus,
+                                   _np.where(sign < 0, eta_minus, 1.0))
+                st["step_size"] = _np.clip(st["step_size"] * factor, low, high)
+                g[sign < 0] = 0.0
+                p._array = p.data - _np.sign(g) * st["step_size"]
+                st["prev"] = g
+
+
+class Adafactor(Optimizer):
+    """Adam 인데 2차 모멘트를 **행과 열로 쪼개 든다.**
+
+    Adam 은 파라미터마다 분산을 하나씩 들어서 기억이 가중치만큼 든다. 여기서는
+    행 평균과 열 평균만 들고 그 바깥곱으로 되살린다 — `(R, C)` 자리에 `R + C` 만
+    쓴다. 큰 언어모델을 메모리에 얹으려고 나온 방법이다.
+
+    **1 차원 파라미터는 안 쪼갠다** — 쪼갤 축이 하나뿐이라 그냥 분산을 든다. 상태
+    열쇠부터 갈린다(`variance` 대 `row_var`·`col_var`). 1 차원으로만 물으면 이
+    최적화의 요점이 통째로 안 돌아간다.
+    """
+
+    def __init__(self, params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3),
+                 d=1.0, weight_decay=0.0):
+        super().__init__(params, dict(lr=lr, beta2_decay=beta2_decay, eps=eps,
+                                      d=d, weight_decay=weight_decay))
+
+    def step(self):
+        for group in self.param_groups:
+            lr, d = group["lr"], group["d"]
+            eps1, eps2 = group["eps"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad.data
+                one = eps1 if eps1 is not None else _np.finfo(p.data.dtype).eps
+                st = self._state(p)
+                st.setdefault("step", 0)
+                st["step"] += 1
+                step = float(st["step"])
+                blend = step ** group["beta2_decay"]
+                rho = min(lr, 1.0 / _math.sqrt(step))
+                alpha = max(eps2, _np.linalg.norm(p.data.reshape(-1))
+                            / _math.sqrt(p.data.size)) * rho
+                if group["weight_decay"]:
+                    p._array = p.data * (1 - lr * group["weight_decay"])
+
+                if g.ndim > 1:
+                    st.setdefault("row_var", _np.zeros(g.shape[:-1] + (1,),
+                                                       dtype=g.dtype))
+                    st.setdefault("col_var", _np.zeros(g.shape[:-2] + (1, g.shape[-1]),
+                                                       dtype=g.dtype))
+                    row_mean = (g * g).mean(axis=-1, keepdims=True)
+                    col_mean = (g * g).mean(axis=-2, keepdims=True)
+                    st["row_var"] += (row_mean - st["row_var"]) * blend
+                    st["col_var"] += (col_mean - st["col_var"]) * blend
+                    var = st["row_var"] @ st["col_var"]
+                    var = var / _np.maximum(st["row_var"].mean(axis=-2, keepdims=True),
+                                            one)
+                else:
+                    st.setdefault("variance", _np.zeros_like(g))
+                    st["variance"] += (g * g - st["variance"]) * blend
+                    var = st["variance"].copy()
+
+                update = g / _np.sqrt(_np.maximum(var, one * one))
+                denom = max(1.0, _np.linalg.norm(update.reshape(-1))
+                            / (_math.sqrt(update.size) * d))
+                p._array = p.data - (alpha / denom) * update
+
+
+class LBFGS(Optimizer):
+    """준뉴턴법. **`step` 이 닫힘(closure)을 받는다** — 한 번 부르는 동안 손실을
+    여러 번 다시 재기 때문이다.
+
+    다른 옵티마이저는 기울기 한 벌로 한 걸음을 가는데, 이쪽은 안에서 `max_iter` 번
+    돌면서 매번 손실과 기울기를 다시 묻는다. 그래서 학습 루프의 모양이 다르고,
+    닫힘을 안 주면 아무것도 못 한다.
+
+    **직선 탐색은 아직 없다.** `line_search_fn="strong_wolfe"` 는 시끄럽게 거절한다 —
+    조용히 고정 보폭으로 가면 수렴이 다르게 나오고, 그 차이는 값이 아니라 곡선에서만
+    보인다.
+    """
+
+    def __init__(self, params, lr=1.0, max_iter=20, max_eval=None,
+                 tolerance_grad=1e-7, tolerance_change=1e-9, history_size=100,
+                 line_search_fn=None):
+        if max_eval is None:
+            max_eval = max_iter * 5 // 4
+        super().__init__(params, dict(
+            lr=lr, max_iter=max_iter, max_eval=max_eval,
+            tolerance_grad=tolerance_grad, tolerance_change=tolerance_change,
+            history_size=history_size, line_search_fn=line_search_fn))
+        if len(self.param_groups) != 1:
+            raise ValueError("LBFGS 는 파라미터 묶음 하나만 받습니다.")
+        self._global = {}
+
+    def _flat_grad(self):
+        return _np.concatenate([
+            (_np.zeros(p.data.size, dtype=p.data.dtype) if p.grad is None
+             else p.grad.data.reshape(-1)) for p in self.params])
+
+    def _add_step(self, size, direction):
+        at = 0
+        for p in self.params:
+            n = p.data.size
+            p._array = p.data + size * direction[at:at + n].reshape(p.data.shape)
+            at += n
+
+    def step(self, closure):                                    # noqa: D102
+        group = self.param_groups[0]
+        if group["line_search_fn"] is not None:
+            _unsupported(f"LBFGS(line_search_fn={group['line_search_fn']!r})")
+        lr = group["lr"]
+        max_iter, max_eval = group["max_iter"], group["max_eval"]
+        tol_grad, tol_change = group["tolerance_grad"], group["tolerance_change"]
+        history = group["history_size"]
+        st = self._global
+        st.setdefault("n_iter", 0)
+
+        orig = closure()
+        loss = float(orig)
+        evals = 1
+        flat = self._flat_grad()
+        if _np.abs(flat).max() <= tol_grad:
+            return orig
+
+        d = st.get("d")
+        t = st.get("t")
+        old_dirs = st.get("old_dirs", [])
+        old_stps = st.get("old_stps", [])
+        ro = st.get("ro", [])
+        h_diag = st.get("h_diag", 1.0)
+        prev_flat = st.get("prev_flat")
+        prev_loss = st.get("prev_loss")
+
+        n_iter = 0
+        while n_iter < max_iter:
+            n_iter += 1
+            st["n_iter"] += 1
+            if st["n_iter"] == 1:
+                d = -flat
+                old_dirs, old_stps, ro, h_diag = [], [], [], 1.0
+            else:
+                y = flat - prev_flat
+                s = d * t
+                ys = float(y @ s)
+                if ys > 1e-10:
+                    if len(old_dirs) == history:
+                        old_dirs.pop(0), old_stps.pop(0), ro.pop(0)
+                    old_dirs.append(y)
+                    old_stps.append(s)
+                    ro.append(1.0 / ys)
+                    h_diag = ys / float(y @ y)
+                # 두 겹 되돌이 — 헤세 역행렬을 안 만들고 방향만 낸다.
+                al = [0.0] * len(old_dirs)
+                q = -flat
+                for i in range(len(old_dirs) - 1, -1, -1):
+                    al[i] = float(old_stps[i] @ q) * ro[i]
+                    q = q - al[i] * old_dirs[i]
+                r = q * h_diag
+                for i in range(len(old_dirs)):
+                    be = float(old_dirs[i] @ r) * ro[i]
+                    r = r + old_stps[i] * (al[i] - be)
+                d = r
+
+            prev_flat = flat.copy()
+            prev_loss = loss
+            t = min(1.0, 1.0 / _np.abs(flat).sum()) * lr if st["n_iter"] == 1 else lr
+            gtd = float(flat @ d)
+            if gtd > -tol_change:
+                break
+
+            self._add_step(t, d)
+            if n_iter != max_iter:
+                # 마지막 되돌이에서는 다시 안 잰다 — torch 도 그렇다.
+                loss = float(closure())
+                flat = self._flat_grad()
+                evals += 1
+                if _np.abs(flat).max() <= tol_grad:
+                    break
+            if n_iter == max_iter or evals >= max_eval:
+                break
+            if _np.abs(d * t).max() <= tol_change:
+                break
+            if abs(loss - prev_loss) < tol_change:
+                break
+
+        st.update(d=d, t=t, old_dirs=old_dirs, old_stps=old_stps, ro=ro,
+                  h_diag=h_diag, prev_flat=prev_flat, prev_loss=prev_loss)
+        return orig
 
 
 class _Scheduler:
@@ -669,6 +926,10 @@ class _Optim(_Namespace):
     Adamax = Adamax
     NAdam = NAdam
     RAdam = RAdam
+    ASGD = ASGD
+    Rprop = Rprop
+    Adafactor = Adafactor
+    LBFGS = LBFGS
     Optimizer = Optimizer
     lr_scheduler = _LRScheduler()
 
