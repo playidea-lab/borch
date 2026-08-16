@@ -126,6 +126,9 @@ from ._ops import (
     put, renorm, scatter_reduce,
     cartesian_prod, chain_matmul, combinations, ger, mv, tril_indices,
     triu_indices, vander,
+    # addmm 계열. **제자리 판은 안 낸다** — torch 가 그것들을 메서드로만 두기
+    # 때문이다. `addmv_` 하나만 예외라 그것만 있다(실측).
+    addbmm, addcdiv, addcmul, addmm, addmv, addmv_, addr, baddbmm, sspaddmm,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #

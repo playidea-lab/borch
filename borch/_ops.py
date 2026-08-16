@@ -6172,6 +6172,127 @@ def mv(mat, vec):
     return matmul(_wrap(mat), _wrap(vec))
 
 
+# ── addmm 계열 ──────────────────────────────────────────────────────────────
+#
+# 여덟이 전부 한 꼴이다 — `β·input + α·(무슨 곱)`. 다른 것은 **곱이 무엇인가**뿐이라
+# 그 하나만 넘긴다.
+#
+# **`beta` 가 0 이면 `input` 을 아예 안 본다.** `0 · input` 이 아니다 — torch 는 그
+# 자리에서 `input` 을 읽지도 않아서, NaN 을 넣어도 결과가 멀쩡하고 기울기도 0 이다
+# (실측). `0 * input` 으로 적으면 NaN 이 번지고, 그 차이는 평범한 입력으로는 절대
+# 안 보인다.
+
+def _blend(base, product, beta, alpha):
+    """`β·base + α·product`.
+
+    **`β == 0` 은 값만 안 보고 그래프에는 남는다.** 둘 다여야 한다 —
+
+    - `base * 0` 으로 적으면 NaN 을 넣었을 때 결과가 NaN 이 된다. torch 는 멀쩡하다.
+    - 그렇다고 그래프에서 빼면 `base.grad` 가 0 이 아니라 **없다.** torch 는 0 을 준다
+      (실측). 빼 두면 `backward()` 가 "requires_grad 가 아니다" 로 멈춘다.
+
+    두 요구가 반대 방향이라 한쪽만 맞추기 쉽고, 평범한 입력으로는 **어느 쪽도** 안
+    보인다 — NaN 을 넣어야 첫째가, 기울기를 물어야 둘째가 드러난다.
+    """
+    scaled = product if alpha == 1 else product * alpha
+    if beta != 0:
+        return (base if beta == 1 else base * beta) + scaled
+    return scaled._make(scaled.data, (scaled, base),
+                        lambda g: (g, _np.zeros_like(base.data)),
+                        "AddmmBackward0")
+
+
+def addmm(input, mat1, mat2, beta=1, alpha=1):
+    """`β·input + α·(mat1 @ mat2)`. `input` 은 결과 모양으로 퍼진다(실측)."""
+    return _blend(_wrap(input), matmul(_wrap(mat1), _wrap(mat2)), beta, alpha)
+
+
+def addbmm(input, batch1, batch2, beta=1, alpha=1):
+    """**배치를 합친다** — 곱한 뒤 배치 축을 더해 2차원을 낸다.
+
+    `baddbmm` 과 이름이 한 글자 다르고 결과 차수가 다르다. 배치가 1 이면 둘이 같아
+    보이므로 케이스는 배치를 둘 이상으로 둔다.
+    """
+    product = matmul(_wrap(batch1), _wrap(batch2)).sum(0)
+    return _blend(_wrap(input), product, beta, alpha)
+
+
+def baddbmm(input, batch1, batch2, beta=1, alpha=1):
+    """**배치를 지킨다.** `addbmm` 과 여기서 갈린다."""
+    return _blend(_wrap(input), matmul(_wrap(batch1), _wrap(batch2)),
+                  beta, alpha)
+
+
+def addmv(input, mat, vec, beta=1, alpha=1):
+    """`β·input + α·(mat @ vec)`. 결과가 1차원이다."""
+    return _blend(_wrap(input), mv(_wrap(mat), _wrap(vec)), beta, alpha)
+
+
+def addr(input, vec1, vec2, beta=1, alpha=1):
+    """`β·input + α·(vec1 ⊗ vec2)`. 바깥곱이라 결과가 2차원이다."""
+    return _blend(_wrap(input), outer(_wrap(vec1), _wrap(vec2)), beta, alpha)
+
+
+def addcmul(input, tensor1, tensor2, value=1):
+    """`input + value·(t1 · t2)`. **`beta` 가 없다** — `input` 의 계수는 늘 1 이다."""
+    return _blend(_wrap(input), _wrap(tensor1) * _wrap(tensor2), 1, value)
+
+
+def addcdiv(input, tensor1, tensor2, value=1):
+    """`input + value·(t1 / t2)`. 옵티마이저가 갱신을 적을 때 쓰는 꼴이다."""
+    return _blend(_wrap(input), _wrap(tensor1) / _wrap(tensor2), 1, value)
+
+
+def sspaddmm(input, mat1, mat2, beta=1, alpha=1):
+    """**희소 텐서 전용이라 없다.**
+
+    torch 의 이것은 희소 COO 를 받아 희소를 낸다(실측: `to_sparse()` 를 안 거치면
+    거절한다). 여기에는 희소 배치가 없고, 조밀 텐서로 흉내 내면 **모양은 맞고 저장
+    방식이 다른** 것을 주게 된다 — 그것을 배운 사람은 희소가 무엇인지 잘못 안다.
+    """
+    _unsupported("torch.sspaddmm — 희소(sparse) 텐서 배치가 없습니다")
+
+
+def addmm_(input, mat1, mat2, beta=1, alpha=1):
+    input = _wrap(input)
+    return input._inplace(lambda: addmm(input, mat1, mat2, beta, alpha),
+                          "addmm_")
+
+
+def addbmm_(input, batch1, batch2, beta=1, alpha=1):
+    input = _wrap(input)
+    return input._inplace(lambda: addbmm(input, batch1, batch2, beta, alpha),
+                          "addbmm_")
+
+
+def baddbmm_(input, batch1, batch2, beta=1, alpha=1):
+    input = _wrap(input)
+    return input._inplace(lambda: baddbmm(input, batch1, batch2, beta, alpha),
+                          "baddbmm_")
+
+
+def addmv_(input, mat, vec, beta=1, alpha=1):
+    input = _wrap(input)
+    return input._inplace(lambda: addmv(input, mat, vec, beta, alpha), "addmv_")
+
+
+def addr_(input, vec1, vec2, beta=1, alpha=1):
+    input = _wrap(input)
+    return input._inplace(lambda: addr(input, vec1, vec2, beta, alpha), "addr_")
+
+
+def addcmul_(input, tensor1, tensor2, value=1):
+    input = _wrap(input)
+    return input._inplace(lambda: addcmul(input, tensor1, tensor2, value),
+                          "addcmul_")
+
+
+def addcdiv_(input, tensor1, tensor2, value=1):
+    input = _wrap(input)
+    return input._inplace(lambda: addcdiv(input, tensor1, tensor2, value),
+                          "addcdiv_")
+
+
 # ================================================================ 이름 잇기
 #
 # **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
@@ -6217,6 +6338,12 @@ _AS_METHOD = (
     "tensor_split", "unique_consecutive",
     "index_put", "index_put_", "index_reduce", "masked_scatter",
     "masked_scatter_", "put", "renorm", "scatter_reduce", "ger", "mv",
+    # addmm 계열. **제자리 판은 torch 에서 메서드로만 있다** — `torch.addmm_` 이라는
+    # 최상위 이름은 없다(실측). 그래서 여기에는 있고 `borch/__init__.py` 에는 없다.
+    # 예외가 `addmv_` 하나인데 그것만 torch 가 최상위에도 둔다.
+    "addmm", "addmm_", "addbmm", "addbmm_", "baddbmm", "baddbmm_",
+    "addmv", "addmv_", "addr", "addr_", "addcmul", "addcmul_",
+    "addcdiv", "addcdiv_", "sspaddmm",
 )
 
 

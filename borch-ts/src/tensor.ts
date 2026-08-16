@@ -3223,6 +3223,106 @@ export class Tensor implements Node<Tensor> {
     return Tensor.stack(parts, 0);
   }
 
+  // ── addmm 계열 ────────────────────────────────────────────────────────
+  //
+  // 여덟이 전부 `β·this + α·(무슨 곱)` 한 꼴이다. 다른 것은 **곱이 무엇인가**뿐이라
+  // 그 하나만 넘긴다.
+
+  /**
+   * `β·this + α·product`.
+   *
+   * **`β == 0` 은 값만 안 보고 그래프에는 남는다.** 둘 다여야 한다 —
+   *
+   * - `this.mul(0)` 으로 적으면 NaN 을 넣었을 때 결과가 NaN 이 된다. torch 는 멀쩡하다.
+   * - 그렇다고 그래프에서 빼면 기울기가 0 이 아니라 **없다.** torch 는 0 을 준다(실측).
+   *
+   * 두 요구가 반대 방향이고, 평범한 입력으로는 **어느 쪽도** 안 보인다 — NaN 을 넣어야
+   * 첫째가, 기울기를 물어야 둘째가 드러난다.
+   */
+  private blend(product: Tensor, beta: number, alpha: number): Tensor {
+    const scaled = alpha === 1 ? product : product.mul(Tensor.full([], alpha));
+    if (beta !== 0) {
+      const kept = beta === 1 ? this : this.mul(Tensor.full([], beta));
+      return kept.add(scaled);
+    }
+    const mine = this.shape;
+    return Tensor.make(
+      scaled.buffer,
+      scaled.shape,
+      [scaled, this],
+      (g) => [g, Tensor.zeros(mine)],
+      "AddmmBackward0",
+    );
+  }
+
+  /** `β·this + α·(mat1 @ mat2)`. `this` 는 결과 모양으로 퍼진다. */
+  addmm(mat1: Tensor, mat2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.blend(mat1.mm(mat2), beta, alpha);
+  }
+
+  /**
+   * **배치를 합친다** — 곱한 뒤 배치 축을 더해 2차원을 낸다.
+   *
+   * `baddbmm` 과 이름이 한 글자 다르고 결과 차수가 다르다. 배치가 1 이면 둘이 같아
+   * 보이므로 케이스는 배치를 둘 이상으로 둔다.
+   */
+  addbmm(batch1: Tensor, batch2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.blend(batch1.bmm(batch2).sumDim(0), beta, alpha);
+  }
+
+  /** **배치를 지킨다.** `addbmm` 과 여기서 갈린다. */
+  baddbmm(batch1: Tensor, batch2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.blend(batch1.bmm(batch2), beta, alpha);
+  }
+
+  /** `β·this + α·(mat @ vec)`. 결과가 1차원이다. */
+  addmv(mat: Tensor, vec: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.blend(mat.mv(vec), beta, alpha);
+  }
+
+  /** `β·this + α·(vec1 ⊗ vec2)`. 바깥곱이라 결과가 2차원이다. */
+  addr(vec1: Tensor, vec2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.blend(vec1.outer(vec2), beta, alpha);
+  }
+
+  /** `this + value·(t1 · t2)`. **`beta` 가 없다** — `this` 의 계수는 늘 1 이다. */
+  addcmul(tensor1: Tensor, tensor2: Tensor, value = 1): Tensor {
+    return this.blend(tensor1.mul(tensor2), 1, value);
+  }
+
+  /** `this + value·(t1 / t2)`. 옵티마이저가 갱신을 적을 때 쓰는 꼴이다. */
+  addcdiv(tensor1: Tensor, tensor2: Tensor, value = 1): Tensor {
+    return this.blend(tensor1.div(tensor2), 1, value);
+  }
+
+  addmm_(mat1: Tensor, mat2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.mutate(() => this.addmm(mat1, mat2, beta, alpha));
+  }
+
+  addbmm_(batch1: Tensor, batch2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.mutate(() => this.addbmm(batch1, batch2, beta, alpha));
+  }
+
+  baddbmm_(batch1: Tensor, batch2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.mutate(() => this.baddbmm(batch1, batch2, beta, alpha));
+  }
+
+  addmv_(mat: Tensor, vec: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.mutate(() => this.addmv(mat, vec, beta, alpha));
+  }
+
+  addr_(vec1: Tensor, vec2: Tensor, beta = 1, alpha = 1): Tensor {
+    return this.mutate(() => this.addr(vec1, vec2, beta, alpha));
+  }
+
+  addcmul_(tensor1: Tensor, tensor2: Tensor, value = 1): Tensor {
+    return this.mutate(() => this.addcmul(tensor1, tensor2, value));
+  }
+
+  addcdiv_(tensor1: Tensor, tensor2: Tensor, value = 1): Tensor {
+    return this.mutate(() => this.addcdiv(tensor1, tensor2, value));
+  }
+
   /**
    * 나머지. **torch 의 `fmod` 는 피제수의 부호를 따른다** — 파이썬의 `%` 와 다르다.
    *

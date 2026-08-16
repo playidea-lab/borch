@@ -188,6 +188,22 @@ _SIGNATURE = {
     "scatter_reduce": ("dim", "index", "src", "reduce", "include_self"),
     "put": ("index", "source", "accumulate"),
     "renorm": ("p", "dim", "maxnorm"),
+    # addmm 계열. torch 에서 `beta`·`alpha`·`value` 는 **이름으로만** 받는 자리라
+    # (`*` 뒤에 있다) 케이스가 늘 이름으로 부른다.
+    "addmm": ("mat1", "mat2", "beta", "alpha"),
+    "addmm_": ("mat1", "mat2", "beta", "alpha"),
+    "addbmm": ("batch1", "batch2", "beta", "alpha"),
+    "addbmm_": ("batch1", "batch2", "beta", "alpha"),
+    "baddbmm": ("batch1", "batch2", "beta", "alpha"),
+    "baddbmm_": ("batch1", "batch2", "beta", "alpha"),
+    "addmv": ("mat", "vec", "beta", "alpha"),
+    "addmv_": ("mat", "vec", "beta", "alpha"),
+    "addr": ("vec1", "vec2", "beta", "alpha"),
+    "addr_": ("vec1", "vec2", "beta", "alpha"),
+    "addcmul": ("tensor1", "tensor2", "value"),
+    "addcmul_": ("tensor1", "tensor2", "value"),
+    "addcdiv": ("tensor1", "tensor2", "value"),
+    "addcdiv_": ("tensor1", "tensor2", "value"),
 }
 
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
@@ -1328,6 +1344,14 @@ def chain_matmul(*matrices, **kw):
     mats = (list(matrices[0]) if len(matrices) == 1
             and isinstance(matrices[0], (list, tuple)) else list(matrices))
     return wrap(_ts.Tensor.chainMatmul(*[handle(m) for m in mats]))
+
+
+def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
+    """**희소 텐서 전용이라 없다.** 코어와 같은 자리, 같은 이유로 거절한다 —
+    조밀 텐서로 흉내 내면 모양은 맞고 저장 방식이 다른 것을 주게 된다."""
+    raise RuntimeError(
+        "torch.sspaddmm — 희소(sparse) 텐서 배치가 없습니다. "
+        "자기 컴퓨터에서 진짜 PyTorch 를 쓰세요.")
 
 
 def fill(x, value, **kw):

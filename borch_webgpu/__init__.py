@@ -94,6 +94,8 @@ from ._ops import (                                      # noqa: E402,F401
     cartesian_prod, chain_matmul, combinations, index_put, index_put_,
     split_with_sizes, tensor_split, tril_indices, triu_indices,
     unique_consecutive, unravel_index, vander,
+    # **희소 전용이라 없다.** 이름은 두고 그 자리에서 멈춘다.
+    sspaddmm,
     # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,

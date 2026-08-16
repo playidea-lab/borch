@@ -991,6 +991,20 @@ def test_unsupported_raises_loudly(call):
         call()
 
 
+def test_sspaddmm_refuses_because_there_is_no_sparse():
+    """**희소 텐서가 없어서 거절한다.**
+
+    위 목록에 안 넣는다 — 그쪽은 "브라우저에 존재할 수 없는 것" 만 담는 자리이고,
+    희소는 존재할 수 있다. 언젠가 희소 배치가 생기면 이 검사가 그때 빨개져서
+    `sspaddmm` 을 진짜로 구현하라고 말할 것이다.
+
+    조밀 텐서로 흉내 내면 **모양은 맞고 저장 방식이 다른** 것을 주게 되고, 그것을
+    배운 사람은 희소가 무엇인지 잘못 안다.
+    """
+    with pytest.raises(bt.BrowserTorchError):
+        bt.sspaddmm(bt.zeros(2, 4), bt.zeros(2, 3), bt.zeros(3, 4))
+
+
 def test_cuda_reports_unavailable():
     assert bt.cuda.is_available() is False
 

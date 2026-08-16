@@ -1207,6 +1207,169 @@ def shape_index_cases(inp=None):
     return cases
 
 
+BLEND_PREFIX = "blend::"
+
+
+def blend_cases(inp=None):
+    """addmm 계열. 여덟이 전부 `β·input + α·(무슨 곱)` 한 꼴이다.
+
+    ## `beta=0` 이 이 묶음의 요점이다
+
+    **값은 안 보고 그래프에는 남는다.** 둘 다여야 하고 요구가 반대 방향이다 —
+
+    - `input * 0` 으로 적으면 NaN 을 넣었을 때 결과가 NaN 이 된다. torch 는 멀쩡하다.
+    - 그렇다고 그래프에서 빼면 `input.grad` 가 0 이 아니라 **없다.** torch 는 0 을
+      준다(실측). 빼 두면 `backward()` 가 "requires_grad 가 아니다" 로 멈춘다.
+
+    평범한 입력으로는 **어느 쪽도** 안 보인다 — NaN 을 넣어야 첫째가, 기울기를 물어야
+    둘째가 드러난다. 그래서 둘 다 묻는다.
+
+    ## 나머지가 갈리는 자리
+
+    - **`beta` 와 `alpha` 를 둘 다 1 이 아니게** 해야 어느 쪽이 어디에 곱해지는지가
+      드러난다. 둘 다 1 이면 자리를 바꿔 적어도 같은 답이다.
+    - **배치를 둘 이상**으로 둬야 `addbmm`(합친다)과 `baddbmm`(지킨다)이 갈린다.
+      배치가 1 이면 두 함수가 같아 보인다.
+    - **`input` 이 결과보다 작아야** 퍼지는 것이 보인다. torch 는 `(4,)` 도 스칼라도
+      받는다(실측).
+    - `addcmul`·`addcdiv` 에는 **`beta` 가 없다** — `input` 의 계수가 늘 1 이다.
+      `value` 만 있고, 그것은 곱 쪽에 붙는다.
+    """
+    m1 = np.arange(6, dtype=np.float32).reshape(2, 3)
+    m2 = np.arange(12, dtype=np.float32).reshape(3, 4)
+    base = np.full((2, 4), 10.0, dtype=np.float32)
+    b1 = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    b2 = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    deep = np.full((2, 2, 4), 10.0, dtype=np.float32)
+    vec = np.array([1.0, 0.0, 2.0], dtype=np.float32)
+    v1 = np.array([1.0, 2.0], dtype=np.float32)
+    v2 = np.array([3.0, 4.0, 5.0], dtype=np.float32)
+    t0 = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    t1 = np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32)
+    t2 = np.array([[5.0, 2.0], [2.0, 4.0]], dtype=np.float32)
+    # **고르지 않은 무게.** 전부 1 이면 자리마다 다른 몫이 상쇄되어 안 보인다.
+    weight = np.array([[1.0, 2.0, 0.5, 3.0], [2.0, 0.5, 1.5, 1.0]],
+                      dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((BLEND_PREFIX + name, fn))
+
+    def grad(name, fn, src=base, w=weight):
+        def run(L, f=fn, s=src, ww=w, n=name):
+            x = L.tensor(np.asarray(s, dtype=np.float32).copy(),
+                         requires_grad=True)
+            out = f(L, x)
+            (out * L.tensor(np.asarray(ww, dtype=np.float32).reshape(
+                tuple(out.shape)))).sum().backward()
+            return _grad_of(x, n)
+
+        cases.append((BLEND_PREFIX + f"grad::{name}", run))
+
+    # ── addmm ───────────────────────────────────────────────────────────
+    for beta, alpha in ((1, 1), (2, 3), (0, 1), (1, 0), (-1, 0.5)):
+        add(f"addmm(beta={beta}, alpha={alpha})",
+            lambda L, b=beta, a=alpha: L.addmm(L.tensor(base), L.tensor(m1),
+                                               L.tensor(m2), beta=b, alpha=a))
+    # **NaN 을 넣어야 `input * 0` 으로 적은 것이 드러난다.**
+    nan_base = np.full((2, 4), np.nan, dtype=np.float32)
+    add("addmm(beta=0, input=NaN)",
+        lambda L: L.addmm(L.tensor(nan_base), L.tensor(m1), L.tensor(m2),
+                          beta=0))
+    add("addmm(input 이 (4,))",
+        lambda L: L.addmm(L.ones(4), L.tensor(m1), L.tensor(m2)))
+    add("addmm(input 이 스칼라)",
+        lambda L: L.addmm(L.ones(()), L.tensor(m1), L.tensor(m2)))
+    grad("addmm(beta=2, alpha=3)",
+         lambda L, x: L.addmm(x, L.tensor(m1), L.tensor(m2), beta=2, alpha=3))
+    # **기울기를 물어야 그래프에서 뺀 것이 드러난다.** 빼 두면 여기서 멈춘다.
+    grad("addmm(beta=0)",
+         lambda L, x: L.addmm(x, L.tensor(m1), L.tensor(m2), beta=0))
+    grad("addmm(퍼지는 input)",
+         lambda L, x: L.addmm(x, L.tensor(m1), L.tensor(m2)),
+         src=np.ones(4, dtype=np.float32))
+    grad("addmm(mat1)",
+         lambda L, x: L.addmm(L.tensor(base), x, L.tensor(m2), alpha=3), m1)
+
+    # ── addbmm · baddbmm ────────────────────────────────────────────────
+    for beta, alpha in ((1, 1), (2, 3), (0, 1)):
+        add(f"addbmm(beta={beta}, alpha={alpha})",
+            lambda L, b=beta, a=alpha: L.addbmm(L.tensor(base), L.tensor(b1),
+                                                L.tensor(b2), beta=b, alpha=a))
+        add(f"baddbmm(beta={beta}, alpha={alpha})",
+            lambda L, b=beta, a=alpha: L.baddbmm(L.tensor(deep), L.tensor(b1),
+                                                 L.tensor(b2), beta=b, alpha=a))
+    add("baddbmm(input 이 (2,4))",
+        lambda L: L.baddbmm(L.tensor(base), L.tensor(b1), L.tensor(b2)))
+    grad("addbmm", lambda L, x: L.addbmm(x, L.tensor(b1), L.tensor(b2)))
+    grad("addbmm(batch1)",
+         lambda L, x: L.addbmm(L.tensor(base), x, L.tensor(b2), alpha=2), b1)
+    grad("baddbmm", lambda L, x: L.baddbmm(x, L.tensor(b1), L.tensor(b2)),
+         src=deep,
+         w=np.arange(1, 17, dtype=np.float32).reshape(2, 2, 4))
+
+    # ── addmv · addr ────────────────────────────────────────────────────
+    for beta, alpha in ((1, 1), (2, 3), (0, 1)):
+        add(f"addmv(beta={beta}, alpha={alpha})",
+            lambda L, b=beta, a=alpha: L.addmv(L.ones(2), L.tensor(m1),
+                                               L.tensor(vec), beta=b, alpha=a))
+        add(f"addr(beta={beta}, alpha={alpha})",
+            lambda L, b=beta, a=alpha: L.addr(L.ones(2, 3), L.tensor(v1),
+                                              L.tensor(v2), beta=b, alpha=a))
+    grad("addmv(mat)",
+         lambda L, x: L.addmv(L.ones(2), x, L.tensor(vec), alpha=2), m1,
+         w=np.array([1.0, 2.0], dtype=np.float32))
+    grad("addr(vec1)",
+         lambda L, x: L.addr(L.ones(2, 3), x, L.tensor(v2), alpha=2), v1,
+         w=np.arange(1, 7, dtype=np.float32).reshape(2, 3))
+
+    # ── addcmul · addcdiv ───────────────────────────────────────────────
+    for value in (1, 2, -1, 0):
+        add(f"addcmul(value={value})",
+            lambda L, v=value: L.addcmul(L.tensor(t0), L.tensor(t1),
+                                         L.tensor(t2), value=v))
+        add(f"addcdiv(value={value})",
+            lambda L, v=value: L.addcdiv(L.tensor(t0), L.tensor(t1),
+                                         L.tensor(t2), value=v))
+    add("addcmul(브로드캐스트)",
+        lambda L: L.addcmul(L.tensor(t0),
+                            L.tensor(np.array([1.0, 10.0], dtype=np.float32)),
+                            L.tensor(t2)))
+    grad("addcdiv",
+         lambda L, x: L.addcdiv(x, L.tensor(t1), L.tensor(t2), value=2),
+         src=t0, w=np.array([[1.0, 2.0], [0.5, 3.0]], dtype=np.float32))
+
+    # ── 제자리 ──────────────────────────────────────────────────────────
+    #
+    # **메서드로만 있다** — `torch.addmm_` 이라는 최상위 이름이 없다(실측).
+    # 예외가 `addmv_` 하나인데, 그것도 메서드 꼴로 함께 묻는다.
+    inplace = (
+        ("addmm_", base, lambda L, t: t.addmm_(L.tensor(m1), L.tensor(m2))),
+        ("addbmm_", base, lambda L, t: t.addbmm_(L.tensor(b1), L.tensor(b2))),
+        ("baddbmm_", deep, lambda L, t: t.baddbmm_(L.tensor(b1), L.tensor(b2))),
+        ("addmv_", np.ones(2, dtype=np.float32),
+         lambda L, t: t.addmv_(L.tensor(m1), L.tensor(vec))),
+        ("addr_", np.ones((2, 3), dtype=np.float32),
+         lambda L, t: t.addr_(L.tensor(v1), L.tensor(v2))),
+        ("addcmul_", t0, lambda L, t: t.addcmul_(L.tensor(t1), L.tensor(t2))),
+        ("addcdiv_", t0, lambda L, t: t.addcdiv_(L.tensor(t1), L.tensor(t2))),
+    )
+    for name, src, run in inplace:
+        def value(L, s=src, r=run):
+            x = L.tensor(np.asarray(s, dtype=np.float32).copy())
+            r(L, x)
+            return x
+
+        add(f"제자리::{name}", value)
+
+        def is_self(L, s=src, r=run):
+            x = L.tensor(np.asarray(s, dtype=np.float32).copy())
+            return str(r(L, x) is x)
+
+        add(f"제자리::{name}(같은 텐서)", is_self)
+    return cases
+
+
 INDEX_PREFIX = "index::"
 
 
@@ -6485,7 +6648,7 @@ def golden_cases(inp=None):
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
-            + bit_cases(inp) + shape_index_cases(inp)
+            + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 
