@@ -1885,6 +1885,39 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * 0..1 사이 난수. `rrelu`·`gumbelSoftmax` 가 쓴다.
+   *
+   * `manualSeed` 가 잡는 그 씨앗을 쓴다 — 같은 씨앗에 같은 뽑기가 나와야 재현이 된다.
+   */
+  static uniform(shape: readonly number[], lower = 0, upper = 1): Tensor {
+    const n = numel(shape);
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`uni:${n}:${lower}:${upper}:${Tensor.dropoutSeed}`,
+        () => uniformFill(n, lower, upper, Tensor.dropoutSeed)),
+      [out],
+      n,
+    );
+    Tensor.dropoutSeed = (Tensor.dropoutSeed + 1) >>> 0;
+    return new Tensor(out, shape);
+  }
+
+  /**
+   * 축 하나에서 가장 큰 자리만 1 인 표.
+   *
+   * **동점을 `eq` 로 가르면 안 된다** — 같은 값이 둘이면 1 이 둘 나오고, 그러면
+   * `gumbelSoftmax(hard=true)` 의 답이 one-hot 이 아니게 된다. 난수에서는 거의 안
+   * 일어나지만 "거의" 는 보장이 아니다. 번호를 골라 그 자리에만 놓는다.
+   */
+  oneHotAlong(indices: Tensor, dim: number): Tensor {
+    const shape = [...this.shape];
+    shape[dim] = 1;
+    // 번호를 자리로 펴는 일은 이미 `scatter` 가 한다 — 0 판 위에 1 을 놓는다.
+    return Tensor.zeros(this.shape)
+      .scatterSet(dim, indices.reshape(shape), Tensor.ones(shape));
+  }
+
+  /**
    * 음수 쪽 기울기를 뽑아 쓴다.
    *
    * **평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.

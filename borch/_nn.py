@@ -46,6 +46,8 @@ from ._ops import (
     # 제자리 활성과 `interpolate` 의 옛 이름들.
     celu_, elu_, hardtanh_, leaky_relu_, relu_, rrelu_, selu_, threshold_,
     upsample, upsample_bilinear, upsample_nearest,
+    # 층이 얹혀 있는 함수들. 식을 한 벌만 둔다.
+    batch_norm, embedding_bag, gumbel_softmax,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -598,37 +600,18 @@ class BatchNorm2d(Module):
         self.register_buffer("num_batches_tracked", 0)
 
     def forward(self, x):
-        # **랭크를 안 따진다.** 채널 축만 남기고 나머지를 전부 줄이므로 (N,C,H,W) 도
-        # (N,C,D,H,W) 도 같은 코드로 돈다 — `BatchNorm3d` 가 이것을 그대로 물려받는다.
-        rank = x.data.ndim
-        shape = (1, -1) + (1,) * (rank - 2)
-        reduced = tuple(i for i in range(rank) if i != 1)
+        # **계산은 `F.batch_norm` 이 한다.** 층과 함수가 각자 적으면 언젠가 갈리고,
+        # 갈리는 자리가 running 통계라 학습은 멀쩡하고 평가만 틀린다.
+        #
+        # 랭크를 안 따진다 — 채널 축만 남기고 나머지를 전부 줄이므로 (N,C,H,W) 도
+        # (N,C,D,H,W) 도 같은 코드로 돈다. `BatchNorm3d` 가 그대로 물려받는다.
+        out = batch_norm(x, self.running_mean, self.running_var,
+                         self.weight, self.bias, self.training,
+                         self.momentum, self.eps)
         if self.training:
-            # 평균·분산을 **그래프 안에서** 계산해야 한다. numpy 로 빼서 상수처럼 쓰면
-            # x → mean → y 로 흐르는 길이 끊겨 기울기가 틀리고, weight 에는 아예 안 간다.
-            # (BatchNorm 순방향만 대조하고 역방향은 안 봤던 탓에 오래 남아 있었다.)
-            mean = x.mean(dim=0)
-            for _ in range(rank - 2):
-                mean = mean.mean(dim=1)                           # (C,)
-            centered = x - mean.reshape(shape)
-            var = (centered * centered).mean(dim=0)
-            for _ in range(rank - 2):
-                var = var.mean(dim=1)
-
-            # 진짜 torch 는 두 곳에서 다른 분산을 쓴다 — 정규화는 편향(ddof=0),
-            # running_var 갱신은 비편향(ddof=1). 둘 다 편향으로 두면 값이 2.6% 어긋난다.
             with no_grad():
-                unbiased = x.data.var(axis=reduced, ddof=1)
-                self.running_mean = ((1 - self.momentum) * self.running_mean
-                                     + self.momentum * mean.data)
-                self.running_var = ((1 - self.momentum) * self.running_var
-                                    + self.momentum * unbiased)
                 self.num_batches_tracked = self.num_batches_tracked + 1
-            normed = centered / (var.reshape(shape) + self.eps) ** 0.5
-        else:
-            normed = ((x - Tensor(self.running_mean.reshape(shape)))
-                      / Tensor(_np.sqrt(self.running_var + self.eps).reshape(shape)))
-        return normed * self.weight.reshape(shape) + self.bias.reshape(shape)
+        return out
 
 
 
@@ -2021,21 +2004,10 @@ class EmbeddingBag(Module):
         self.weight = Parameter(
             _rng.standard_normal((num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE))
 
-    def forward(self, idx, offsets=None):
-        picked = embedding(idx, self.weight)
-        if offsets is None:
-            return self._squash(picked, dim=1)
-        bounds = [int(v) for v in _wrap(offsets).data] + [int(_wrap(idx).data.size)]
-        parts = [self._squash(picked[bounds[i]:bounds[i + 1]], dim=0)
-                 for i in range(len(bounds) - 1)]
-        return stack(parts, dim=0)
-
-    def _squash(self, picked, dim):
-        if self.mode == "sum":
-            return picked.sum(dim=dim)
-        if self.mode == "max":
-            return amax(picked, dim=dim)
-        return picked.mean(dim=dim)
+    def forward(self, idx, offsets=None, per_sample_weights=None):
+        # 계산은 `F.embedding_bag` 이 한다 — 층과 함수를 두 벌로 두지 않는다.
+        return embedding_bag(idx, self.weight, offsets, self.mode,
+                             per_sample_weights)
 
     def __repr__(self):
         return (f"EmbeddingBag({self.num_embeddings}, {self.embedding_dim}, "
@@ -2546,6 +2518,9 @@ class _Functional(_Namespace):
     rrelu_ = staticmethod(rrelu_)
     selu_ = staticmethod(selu_)
     threshold_ = staticmethod(threshold_)
+    batch_norm = staticmethod(batch_norm)
+    embedding_bag = staticmethod(embedding_bag)
+    gumbel_softmax = staticmethod(gumbel_softmax)
     upsample = staticmethod(upsample)
     upsample_bilinear = staticmethod(upsample_bilinear)
     upsample_nearest = staticmethod(upsample_nearest)

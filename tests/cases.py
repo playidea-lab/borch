@@ -1481,6 +1481,125 @@ def functional_name_cases(inp=None):
         lambda L: L.max(L.tensor(grid2), L.tensor(other2)))
     add("min::칸마다",
         lambda L: L.min(L.tensor(grid2), L.tensor(other2)))
+
+    # ── batch_norm ─────────────────────────────────────────────────────
+    #
+    # 층의 함수 꼴. **학습이면 running 통계를 제자리에서 고친다** — 넘긴 텐서가
+    # 갱신되어 돌아온다. 새것을 돌려주는 구현은 출력 케이스를 전부 지나고 평가
+    # 모드의 값만 틀리므로, 갱신된 통계 자체를 답으로 굳힌다.
+    bn_x = (np.arange(24, dtype=np.float32).reshape(2, 3, 4) / 10) - 1
+    bn_rm = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    bn_rv = np.array([1.0, 2.0, 0.5], dtype=np.float32)
+    bn_w = np.array([1.5, 0.5, 2.0], dtype=np.float32)
+    bn_b = np.array([0.1, -0.1, 0.2], dtype=np.float32)
+
+    def bn(L, **kw):
+        return F(L).batch_norm(
+            L.tensor(bn_x), L.tensor(bn_rm.copy()), L.tensor(bn_rv.copy()),
+            L.tensor(bn_w), L.tensor(bn_b), **kw)
+
+    add("batch_norm::평가", lambda L: bn(L, training=False))
+    add("batch_norm::eps=0.1", lambda L: bn(L, training=False, eps=0.1))
+    add("batch_norm::학습", lambda L: bn(L, training=True))
+    add("batch_norm::가중치 없이",
+        lambda L: F(L).batch_norm(L.tensor(bn_x), L.tensor(bn_rm.copy()),
+                                  L.tensor(bn_rv.copy()), training=False))
+    # 통계를 안 줘도 학습 모드는 이번 배치로 센다.
+    add("batch_norm::통계 없이 학습",
+        lambda L: F(L).batch_norm(L.tensor(bn_x), None, None, L.tensor(bn_w),
+                                  L.tensor(bn_b), training=True))
+
+    def bn_updates(L, momentum=0.1):
+        """**갱신된 통계가 답이다.** 정규화는 편향 분산, 갱신은 비편향 분산을 쓴다 —
+        둘 다 편향으로 두면 여기서만 2.6% 어긋난다."""
+        rm, rv = L.tensor(bn_rm.copy()), L.tensor(bn_rv.copy())
+        F(L).batch_norm(L.tensor(bn_x), rm, rv, training=True, momentum=momentum)
+        return L.cat([rm, rv])
+
+    add("batch_norm::갱신된 통계", bn_updates)
+    add("batch_norm::갱신된 통계(momentum=0.5)",
+        lambda L: bn_updates(L, 0.5))
+
+    def bn_layer_matches(L):
+        """**층과 함수가 같은 답이어야 한다** — 두 벌로 두면 언젠가 갈린다."""
+        img = np.arange(2 * 3 * 2 * 2, dtype=np.float32).reshape(2, 3, 2, 2) / 10
+        layer = L.nn.BatchNorm2d(3)
+        layer.eval()
+        got = layer(L.tensor(img))
+        same = F(L).batch_norm(
+            L.tensor(img), layer.running_mean, layer.running_var,
+            layer.weight, layer.bias, training=False, eps=1e-5)
+        return got - same
+
+    add("batch_norm::층과 같은 답", bn_layer_matches)
+
+    def bn_grad(L):
+        x = L.tensor(bn_x, requires_grad=True)
+        F(L).batch_norm(x, L.tensor(bn_rm.copy()), L.tensor(bn_rv.copy()),
+                        L.tensor(bn_w), L.tensor(bn_b), training=True).sum().backward()
+        return x.grad
+
+    add("batch_norm::grad", bn_grad)
+
+    # ── embedding_bag ──────────────────────────────────────────────────
+    eb_table = np.arange(20, dtype=np.float32).reshape(5, 4) / 10
+    eb_idx = np.array([[0, 2], [1, 4]], dtype=np.int64)
+    for mode in ("mean", "sum", "max"):
+        add(f"embedding_bag::{mode}",
+            lambda L, m=mode: F(L).embedding_bag(
+                L.tensor(eb_idx), L.tensor(eb_table), mode=m))
+    # **1 차원 번호 줄 + `offsets`** — 가방 길이가 제각각인 자리다.
+    add("embedding_bag::offsets",
+        lambda L: F(L).embedding_bag(
+            L.tensor(np.array([0, 2, 1, 4, 3], dtype=np.int64)),
+            L.tensor(eb_table), L.tensor(np.array([0, 2], dtype=np.int64)),
+            mode="sum"))
+    add("embedding_bag::per_sample_weights",
+        lambda L: F(L).embedding_bag(
+            L.tensor(eb_idx), L.tensor(eb_table), mode="sum",
+            per_sample_weights=L.tensor(
+                np.array([[1.0, 2.0], [0.5, 0.5]], dtype=np.float32))))
+
+    def eb_grad(L):
+        table = L.tensor(eb_table, requires_grad=True)
+        F(L).embedding_bag(L.tensor(eb_idx), table, mode="sum").sum().backward()
+        return table.grad
+
+    add("embedding_bag::grad", eb_grad)
+
+    # ── gumbel_softmax ─────────────────────────────────────────────────
+    #
+    # 무작위라 값을 못 묻는다. **성질을 묻는다** — 행의 합이 1 이고, `hard` 는 0/1
+    # 뿐이며 여전히 합이 1 이다. 그것들은 어떤 뽑기에서도 참이어야 한다.
+    gs_logits = np.array([[1.0, 2.0, 0.5], [0.0, -1.0, 3.0]], dtype=np.float32)
+
+    def gs_soft(L):
+        out = F(L).gumbel_softmax(L.tensor(gs_logits))
+        rows = out.sum(dim=1)
+        return f"{tuple(out.shape)} 합={[round(float(v), 4) for v in rows.tolist()]}"
+
+    add("gumbel_softmax::행 합이 1", gs_soft)
+
+    def gs_hard(L):
+        out = F(L).gumbel_softmax(L.tensor(gs_logits), hard=True)
+        vals = sorted({round(float(v), 6) for v in out.reshape(-1).tolist()})
+        return f"값={vals} 합={[round(float(v), 4) for v in out.sum(dim=1).tolist()]}"
+
+    add("gumbel_softmax::hard 는 0/1", gs_hard)
+
+    def gs_grad(L):
+        """**`hard` 여도 기울기가 흐른다** — 값은 0/1 이고 미분은 부드러운 쪽 것이다.
+
+        그 갈라 둠이 이 함수의 요점이라, 기울기가 아예 안 오는 구현은 여기서만 걸린다.
+        골고루 더하면 softmax 의 성질 때문에 0 이 나오므로 **한쪽에 무게를 준다.**
+        """
+        x = L.tensor(gs_logits, requires_grad=True)
+        weights = L.tensor(np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                                    dtype=np.float32))
+        (F(L).gumbel_softmax(x, hard=True) * weights).sum().backward()
+        return "기울기 있음" if x.grad is not None else "기울기가 안 왔다"
+
+    add("gumbel_softmax::hard 에도 기울기가 흐른다", gs_grad)
     return cases
 
 

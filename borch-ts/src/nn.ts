@@ -1133,12 +1133,8 @@ export class EmbeddingBag extends Module {
   }
 
   override forward(idx: Tensor): Tensor {
-    const bags = idx.shape[0] ?? 1;
-    const each = idx.shape[1] ?? 1;
-    const picked = this.weight
-      .indexSelect(0, idx.reshape([bags * each]))
-      .reshape([bags, each, this.dim]);
-    return this.squash(picked, 1);
+    // 계산은 `embeddingBag` 이 한다 — 층과 함수를 두 벌로 두지 않는다.
+    return embeddingBag(idx, this.weight, null, this.mode);
   }
 
   /**
@@ -1148,22 +1144,7 @@ export class EmbeddingBag extends Module {
    * 가방만 되고, 실제로 쓰는 쪽(장바구니·문장)은 길이가 다르다.
    */
   callOffsets(idx: Tensor, offsets: readonly number[]): Tensor {
-    const total = idx.size;
-    const bounds = [...offsets, total];
-    const parts: Tensor[] = [];
-    for (let b = 0; b + 1 < bounds.length; b++) {
-      const from = bounds[b] ?? 0;
-      const len = (bounds[b + 1] ?? total) - from;
-      const picked = this.weight.indexSelect(0, idx.narrow(0, from, len));
-      parts.push(this.squash(picked, 0));
-    }
-    return Tensor.stack(parts, 0);
-  }
-
-  private squash(picked: Tensor, dim: number): Tensor {
-    if (this.mode === "sum") return picked.sumDim(dim, false);
-    if (this.mode === "max") return picked.amax(dim, false);
-    return picked.mean(dim, false);
+    return embeddingBag(idx, this.weight, offsets, this.mode);
   }
 
   override describe(): string {
@@ -1895,6 +1876,134 @@ export class ConstantPad3d extends PadNd {
  * 접는 축이 배치와 공간 전부이고 채널만 남는다 — 공간 축이 몇 개든 규칙이 같아서
  * 차원마다 클래스를 세울 이유가 없다.
  */
+/**
+ * `BatchNormND` 의 함수 꼴. **층이 이것을 부른다** — 식을 한 벌만 둔다.
+ *
+ * **학습이면 이동 통계를 제자리에서 고친다.** torch 가 그렇고, 넘긴 텐서가 갱신되어
+ * 돌아온다. 새것을 돌려주면 부르는 쪽의 버퍼가 안 움직여서 학습은 도는데 평가 모드의
+ * 값만 틀린다.
+ *
+ * **분산을 두 가지로 쓴다.** 정규화는 편향추정, 이동 통계 갱신은 불편추정이다.
+ * 하나로 합치면 평가 모드에서만 갈린다.
+ */
+export function batchNorm(
+  x: Tensor,
+  runningMean: Tensor | null,
+  runningVar: Tensor | null,
+  weight: Tensor | null,
+  bias: Tensor | null,
+  training = false,
+  momentum = 0.1,
+  eps = 1e-5,
+): Tensor {
+  const channels = x.shape[1] ?? 1;
+  const spatial = x.shape.length - 2;
+  const shape = [1, channels, ...new Array<number>(spatial).fill(1)];
+  const w = weight ?? Tensor.ones([channels]);
+  const b = bias ?? Tensor.zeros([channels]);
+  if (!training) {
+    if (!runningMean || !runningVar) {
+      throw new Error("batchNorm: 평가 모드에는 이동 통계가 있어야 한다");
+    }
+    const centered = x.sub(runningMean.reshape(shape));
+    const scaled = centered.div(
+      runningVar.reshape(shape).binary("add", Tensor.full([], eps)).sqrt());
+    return scaled.mul(w.reshape(shape)).add(b.reshape(shape));
+  }
+  // **융합 커널로 간다.** 조립판은 층 하나에 dispatch 스무 개가 넘었고, ResNet 한
+  // 스텝의 1,636 개 중 태반이 거기서 나왔다(실측).
+  const { out, mean, variance } = x.batchNormFused(w, b, eps);
+  if (runningMean && runningVar) {
+    // 둘을 커널 하나로 갱신한다. 조립판은 층마다 여덟 dispatch 였고 층이 스무 개다.
+    const count = x.size / channels;
+    const unbias = count / (count - 1);
+    const d = device();
+    d.run1d(
+      d.pipeline(`rs:${channels}:${momentum}:${unbias}`,
+        () => runningStats(channels, momentum, unbias)),
+      [runningMean.buffer, runningVar.buffer, mean.buffer, variance.buffer],
+      channels,
+    );
+  }
+  return out;
+}
+
+/**
+ * 가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.
+ *
+ * `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.
+ * `perSampleWeights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.
+ */
+export function embeddingBag(
+  idx: Tensor,
+  weight: Tensor,
+  offsets: readonly number[] | null = null,
+  mode: "sum" | "mean" | "max" = "mean",
+  perSampleWeights: Tensor | null = null,
+): Tensor {
+  const dim = weight.shape[1] ?? 1;
+  const squash = (picked: Tensor, d: number) => {
+    if (mode === "sum") return picked.sumDim(d, false);
+    if (mode === "max") return picked.amax(d, false);
+    return picked.mean(d, false);
+  };
+  if (offsets === null) {
+    const bags = idx.shape[0] ?? 1;
+    const each = idx.shape[1] ?? 1;
+    let picked = weight.indexSelect(0, idx.reshape([bags * each]))
+      .reshape([bags, each, dim]);
+    if (perSampleWeights) {
+      picked = picked.mul(perSampleWeights.reshape([bags, each, 1]));
+    }
+    return squash(picked, 1);
+  }
+  const bounds = [...offsets, idx.size];
+  const parts: Tensor[] = [];
+  for (let b = 0; b + 1 < bounds.length; b++) {
+    const from = bounds[b] ?? 0;
+    const len = (bounds[b + 1] ?? idx.size) - from;
+    let picked = weight.indexSelect(0, idx.narrow(0, from, len));
+    if (perSampleWeights) {
+      picked = picked.mul(perSampleWeights.narrow(0, from, len).reshape([len, 1]));
+    }
+    parts.push(squash(picked, 0));
+  }
+  return Tensor.stack(parts, 0);
+}
+
+/**
+ * 무작위로 하나를 고르되 **미분이 흐르게** 고른다.
+ *
+ * 범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로
+ * 부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.
+ *
+ * `hard=true` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —
+ * `hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.
+ * 그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다.
+ *
+ * @param noise 이미 뽑아 둔 Gumbel 잡음. 안 주면 여기서 뽑는다 — 골든은 값을 못
+ *   묻고 성질만 묻지만, 부르는 쪽이 정해진 잡음으로 재현하고 싶을 때가 있다.
+ */
+export function gumbelSoftmax(
+  logits: Tensor,
+  tau = 1.0,
+  hard = false,
+  dim = -1,
+  noise: Tensor | null = null,
+): Tensor {
+  const axis = dim < 0 ? dim + logits.shape.length : dim;
+  // Gumbel 잡음 — `-log(-log(u))`. 균등난수 하나에서 만든다.
+  const eps = 1e-10;
+  const g = noise ?? Tensor.uniform(logits.shape)
+    .binary("add", Tensor.full([], eps)).log().neg()
+    .binary("add", Tensor.full([], eps)).log().neg();
+  const soft = logits.add(g).div(Tensor.full([], tau)).softmax(axis);
+  if (!hard) return soft;
+  const picked = soft.max(axis);
+  const onehot = soft.oneHotAlong(picked.indices, axis);
+  return onehot.sub(soft.detach()).add(soft);
+}
+
 export class BatchNormND extends Module {
   readonly weight: Tensor;
   readonly bias: Tensor;
@@ -1902,7 +2011,7 @@ export class BatchNormND extends Module {
   readonly runningVar: Tensor;
 
   constructor(
-    private readonly channels: number,
+    readonly channels: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
   ) {
@@ -1944,36 +2053,10 @@ export class BatchNormND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    const spatial = x.shape.length - 2;
-    // 채널만 남기고 나머지를 1 로. 공간 축이 몇 개든 이 한 줄이 맞춰 준다.
-    const shape = [1, this.channels, ...new Array<number>(spatial).fill(1)];
-    const w = this.weight.reshape(shape);
-    const b = this.bias.reshape(shape);
-    if (!this.training) {
-      const centered = x.sub(this.runningMean.reshape(shape));
-      const scaled = centered.div(
-        this.runningVar.reshape(shape).binary("add", Tensor.full([], this.eps)).sqrt());
-      return scaled.mul(w).add(b);
-    }
-    const count = x.size / this.channels;
-    void w;
-    void b;
-    // **융합 커널로 간다.** 조립판은 층 하나에 dispatch 스무 개가 넘었고, ResNet 한
-    // 스텝의 1,636 개 중 태반이 거기서 나왔다(실측).
-    const { out, mean, variance } = x.batchNormFused(this.weight, this.bias, this.eps);
-    // 이동 통계에는 **불편추정**이 들어간다 — torch 가 그렇다. 정규화에 쓰는 것은
-    // 편향추정이라 둘이 다르고, 하나로 합치면 평가 모드에서만 갈린다.
-    //
-    // 둘을 커널 하나로 갱신한다. 조립판은 층마다 여덟 dispatch 였고 층이 스무 개다.
-    const unbias = count / (count - 1);
-    const d = device();
-    d.run1d(
-      d.pipeline(`rs:${this.channels}:${this.momentum}:${unbias}`,
-        () => runningStats(this.channels, this.momentum, unbias)),
-      [this.runningMean.buffer, this.runningVar.buffer, mean.buffer, variance.buffer],
-      this.channels,
-    );
-    return out;
+    // **계산은 `batchNorm` 이 한다.** 층과 함수가 각자 적으면 언젠가 갈리고,
+    // 갈리는 자리가 이동 통계라 학습은 멀쩡하고 평가만 틀린다.
+    return batchNorm(x, this.runningMean, this.runningVar, this.weight,
+      this.bias, this.training, this.momentum, this.eps);
   }
 }
 

@@ -4820,6 +4820,103 @@ for _nm in _FUNCTIONAL_INPLACE:
     globals()[_nm + "_"] = _make_functional_inplace(_nm)
 
 
+def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
+               training=False, momentum=0.1, eps=1e-5):
+    """`BatchNorm*d` 의 함수 꼴. **층이 이것을 부른다** — 식을 한 벌만 둔다.
+
+    **`training` 이면 running 통계를 제자리에서 고친다.** torch 가 그렇다 — 넘긴
+    텐서가 갱신되어 돌아온다. 새것을 돌려주면 부르는 쪽의 버퍼가 안 움직이고,
+    학습은 도는데 평가 모드의 값만 틀린다.
+
+    **분산을 두 가지로 쓴다.** 정규화는 편향(ddof=0), `running_var` 갱신은
+    비편향(ddof=1) 이다. 둘 다 편향으로 두면 값이 2.6% 어긋난다 — 이 저장소가
+    오래 겪은 자리이고 그래서 여기 적어 둔다.
+    """
+    x = _wrap(x)
+    rank = x.data.ndim
+    shape = (1, -1) + (1,) * (rank - 2)
+    reduced = tuple(i for i in range(rank) if i != 1)
+
+    def _raw(v):
+        return v.data if isinstance(v, Tensor) else v
+
+    if training:
+        # 평균·분산을 **그래프 안에서** 낸다. numpy 로 빼서 상수처럼 쓰면 x → mean → y
+        # 로 흐르는 길이 끊겨 기울기가 틀리고, weight 에는 아예 안 간다.
+        mean = x.mean(dim=0)
+        for _ in range(rank - 2):
+            mean = mean.mean(dim=1)
+        centered = x - mean.reshape(shape)
+        var = (centered * centered).mean(dim=0)
+        for _ in range(rank - 2):
+            var = var.mean(dim=1)
+        if running_mean is not None:
+            with no_grad():
+                unbiased = x.data.var(axis=reduced, ddof=1)
+                _raw(running_mean)[...] = ((1 - momentum) * _raw(running_mean)
+                                           + momentum * mean.data)
+                _raw(running_var)[...] = ((1 - momentum) * _raw(running_var)
+                                          + momentum * unbiased)
+        normed = centered / (var.reshape(shape) + eps) ** 0.5
+    else:
+        rm = _np.asarray(_raw(running_mean)).reshape(shape)
+        rv = _np.sqrt(_np.asarray(_raw(running_var)) + eps).reshape(shape)
+        normed = (x - Tensor(rm)) / Tensor(rv)
+    if weight is not None:
+        normed = normed * _wrap(weight).reshape(shape)
+    if bias is not None:
+        normed = normed + _wrap(bias).reshape(shape)
+    return normed
+
+
+def embedding_bag(idx, weight, offsets=None, mode="mean", per_sample_weights=None,
+                  **_):
+    """가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.
+
+    `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.
+    `per_sample_weights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.
+    """
+    picked = embedding(idx, weight)
+    if per_sample_weights is not None:
+        picked = picked * _wrap(per_sample_weights).reshape(
+            *_wrap(per_sample_weights).data.shape, 1)
+
+    def squash(part, dim):
+        if mode == "sum":
+            return part.sum(dim=dim)
+        if mode == "max":
+            return amax(part, dim=dim)
+        return part.mean(dim=dim)
+
+    if offsets is None:
+        return squash(picked, dim=1)
+    bounds = [int(v) for v in _wrap(offsets).data] + [int(_wrap(idx).data.size)]
+    return stack([squash(picked[bounds[i]:bounds[i + 1]], dim=0)
+                  for i in range(len(bounds) - 1)], dim=0)
+
+
+def gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
+    """무작위로 하나를 고르되 **미분이 흐르게** 고른다.
+
+    범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로
+    부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.
+
+    `hard=True` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —
+    `hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.
+    그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다.
+    """
+    logits = _wrap(logits)
+    u = _rng.random(logits.data.shape).astype(logits.data.dtype)
+    gumbel = -_np.log(-_np.log(u + eps) + eps)
+    soft = softmax((logits + Tensor(gumbel)) / tau, dim=dim)
+    if not hard:
+        return soft
+    at = _np.argmax(soft.data, axis=dim)
+    onehot = _np.zeros_like(soft.data)
+    _np.put_along_axis(onehot, _np.expand_dims(at, dim), 1.0, axis=dim)
+    return Tensor(onehot) - soft.detach() + soft
+
+
 def upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None):
     """`interpolate` 의 옛 이름. torch 가 폐기 경고를 내면서도 계속 받는다."""
     return interpolate(x, size, scale_factor, mode, align_corners)

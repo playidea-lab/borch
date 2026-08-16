@@ -1268,6 +1268,63 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("fname::min::축 하나의 값", () => grid2().min(0).values);
   out.set("fname::max::칸마다", () => grid2().binary("maximum", other2()));
   out.set("fname::min::칸마다", () => grid2().binary("minimum", other2()));
+
+  // ── batch_norm ─────────────────────────────────────────────────────────
+  //
+  // **학습이면 이동 통계를 제자리에서 고친다.** 새것을 돌려주는 구현은 출력 케이스를
+  // 전부 지나고 평가 모드의 값만 틀리므로, 갱신된 통계 자체를 답으로 굳힌다.
+  const bnX = () => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i / 10 - 1), [2, 3, 4]);
+  const bnRm = () => Tensor.from([0.1, 0.2, 0.3], [3]);
+  const bnRv = () => Tensor.from([1.0, 2.0, 0.5], [3]);
+  const bnW = () => Tensor.from([1.5, 0.5, 2.0], [3]);
+  const bnB = () => Tensor.from([0.1, -0.1, 0.2], [3]);
+
+  out.set("fname::batch_norm::평가",
+    () => nn.batchNorm(bnX(), bnRm(), bnRv(), bnW(), bnB(), false));
+  out.set("fname::batch_norm::eps=0.1",
+    () => nn.batchNorm(bnX(), bnRm(), bnRv(), bnW(), bnB(), false, 0.1, 0.1));
+  out.set("fname::batch_norm::학습",
+    () => nn.batchNorm(bnX(), bnRm(), bnRv(), bnW(), bnB(), true));
+  out.set("fname::batch_norm::가중치 없이",
+    () => nn.batchNorm(bnX(), bnRm(), bnRv(), null, null, false));
+  out.set("fname::batch_norm::통계 없이 학습",
+    () => nn.batchNorm(bnX(), null, null, bnW(), bnB(), true));
+  const bnUpdate = (momentum: number) => () => {
+    const rm = bnRm();
+    const rv = bnRv();
+    nn.batchNorm(bnX(), rm, rv, null, null, true, momentum);
+    return Tensor.cat([rm, rv], 0);
+  };
+  out.set("fname::batch_norm::갱신된 통계", bnUpdate(0.1));
+  out.set("fname::batch_norm::갱신된 통계(momentum=0.5)", bnUpdate(0.5));
+  out.set("fname::batch_norm::grad", () => {
+    const x = bnX();
+    x.requiresGrad = true;
+    nn.batchNorm(x, bnRm(), bnRv(), bnW(), bnB(), true).sum().backward();
+    return gradOf(x, "batchNorm");
+  });
+
+  // ── embedding_bag ──────────────────────────────────────────────────────
+  const ebTable = () => Tensor.from(
+    Array.from({ length: 20 }, (_, i) => i / 10), [5, 4]);
+  const ebIdx = () => Tensor.from([0, 2, 1, 4], [2, 2], false, "int64");
+  for (const mode of ["mean", "sum", "max"] as const) {
+    out.set(`fname::embedding_bag::${mode}`,
+      () => nn.embeddingBag(ebIdx(), ebTable(), null, mode));
+  }
+  out.set("fname::embedding_bag::offsets",
+    () => nn.embeddingBag(
+      Tensor.from([0, 2, 1, 4, 3], [5], false, "int64"), ebTable(), [0, 2], "sum"));
+  out.set("fname::embedding_bag::per_sample_weights",
+    () => nn.embeddingBag(ebIdx(), ebTable(), null, "sum",
+      Tensor.from([1, 2, 0.5, 0.5], [2, 2])));
+  out.set("fname::embedding_bag::grad", () => {
+    const table = ebTable();
+    table.requiresGrad = true;
+    nn.embeddingBag(ebIdx(), table, null, "sum").sum().backward();
+    return gradOf(table, "embeddingBag");
+  });
 }
 
 /**

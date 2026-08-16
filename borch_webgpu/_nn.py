@@ -336,6 +336,35 @@ def _upsample_bilinear(x, size=None, scale_factor=None):
     return _interpolate(x, size, scale_factor, "bilinear", True)
 
 
+def _batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
+                training=False, momentum=0.1, eps=1e-5, **kw):
+    """층의 함수 꼴. **학습이면 이동 통계를 제자리에서 고친다** — torch 가 그렇다."""
+    return wrap(_ts.nn.batchNorm(
+        handle(x),
+        handle(running_mean) if running_mean is not None else None,
+        handle(running_var) if running_var is not None else None,
+        handle(weight) if weight is not None else None,
+        handle(bias) if bias is not None else None,
+        bool(training), float(momentum), float(eps)))
+
+
+def _embedding_bag(idx, weight, offsets=None, mode="mean",
+                   per_sample_weights=None, **kw):
+    return wrap(_ts.nn.embeddingBag(
+        handle(idx), handle(weight),
+        _js_list([int(v) for v in _np.asarray(
+            offsets.numpy() if isinstance(offsets, Tensor) else offsets
+        ).reshape(-1)]) if offsets is not None else None,
+        mode,
+        handle(per_sample_weights) if per_sample_weights is not None else None))
+
+
+def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1, **kw):
+    """**무작위지만 미분이 흐른다.** `hard` 여도 기울기는 부드러운 쪽 것을 쓴다."""
+    return wrap(_ts.nn.gumbelSoftmax(handle(logits), float(tau), bool(hard),
+                                     int(dim), None))
+
+
 def _functional_inplace(name):
     """`F.relu_(x)` — **계산은 밑줄 없는 쪽이 하고** 결과를 이 버퍼로 옮긴다.
 
@@ -358,6 +387,9 @@ def _bilinear(x1, x2, weight, bias=None):
 
 _HAND_WRITTEN = {
     "interpolate": _interpolate,
+    "batch_norm": _batch_norm,
+    "embedding_bag": _embedding_bag,
+    "gumbel_softmax": _gumbel_softmax,
     "upsample": _upsample,
     "upsample_nearest": _upsample_nearest,
     "upsample_bilinear": _upsample_bilinear,
