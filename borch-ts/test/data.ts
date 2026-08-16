@@ -72,9 +72,14 @@ export async function report(): Promise<string> {
       && item[1]!.shape.length === 0,
     `${item[0]!.shape} / ${item[1]!.shape}`);
   want("표본의 값이 맞다", (await item[0]!.toArray())[0] === 30);
-  // **모양·색인 연산이 이름표를 잃는다**(`tensor.ts` 의 `Tensor.make` 기본값이
-  // float32 다). 데이터셋이 라벨의 형을 지키는 것은 이 파일의 계약이라 여기서 다시
-  // 붙인다 — 세 길 전부에서 확인한다.
+  // **이 검사가 결함 하나를 꺼냈다.** 모양·색인 연산이 형 이름표를 잃고 있었다 —
+  // `select`·`narrow`·`indexSelect` 가 `Tensor.make` 를 dtype 없이 불렀고 그 기본값이
+  // float32 였다. int64 라벨에서 표본을 꺼내면 float32 로 붙어 나왔고, 값은 맞고
+  // 이름만 갈리는 종류라 눈으로만 잡힌다.
+  //
+  // 밑동에서 고쳐졌으므로 여기 있던 되붙이기(`keepLabel`)는 지웠다. **검사는 남긴다** —
+  // 계약을 쥐는 것이 방어 코드가 아니라 이 세 줄이어야 한다. 밑이 되돌아가면 여기가
+  // 빨개진다.
   want("표본이 dtype 이름표를 지킨다", item[1]!.dtype === "int64", item[1]!.dtype);
   want("이어진 배치도 이름표를 지킨다",
     set.gather([0, 1, 2])[1]!.dtype === "int64", set.gather([0, 1, 2])[1]!.dtype);

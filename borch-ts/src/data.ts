@@ -28,9 +28,12 @@
  *     const loss = crit.call(model.call(x), y);
  *     loss.backward();
  *     opt.step();
- *   }, () => []);           // x·y 는 이 구역 밖에서 만들어졌다
+ *   });
  * }
  * ```
+ *
+ * `x` 와 `y` 는 구역 **밖에서** 만들어졌으므로 살려 둘 것으로 표시할 필요가 없다.
+ * 구역이 놓는 것은 그 안에서 만든 중간 버퍼다.
  *
  * **섞기가 `manualSeed` 를 따른다.** torch 는 DataLoader 에 별도 generator 를 두는데
  * 여기서는 호스트 줄기 하나를 쓴다(`random.ts`) — 씨앗 하나가 층 초기화·dropout·
@@ -81,7 +84,7 @@ export class TensorDataset implements Dataset {
   }
 
   get(index: number): readonly Tensor[] {
-    return this.tensors.map((t) => keepLabel(t, t.select(0, index)));
+    return this.tensors.map((t) => t.select(0, index));
   }
 
   gather(indices: readonly number[]): readonly Tensor[] {
@@ -90,10 +93,10 @@ export class TensorDataset implements Dataset {
     const first = indices[0] ?? 0;
     const contiguous = indices.every((v, i) => v === first + i);
     if (contiguous) {
-      return this.tensors.map((t) => keepLabel(t, t.narrow(0, first, indices.length)));
+      return this.tensors.map((t) => t.narrow(0, first, indices.length));
     }
     const picks = Tensor.from(indices, [indices.length], { dtype: "int64" });
-    return this.tensors.map((t) => keepLabel(t, t.indexSelect(0, picks)));
+    return this.tensors.map((t) => t.indexSelect(0, picks));
   }
 }
 
@@ -285,22 +288,6 @@ function stackItems(items: readonly (readonly Tensor[])[]): readonly Tensor[] {
   }
   return Array.from({ length: width }, (_, slot) =>
     Tensor.stack(items.map((item) => item[slot] as Tensor), 0));
-}
-
-/**
- * 잘라 낸 조각에 원본의 형 이름표를 도로 붙인다.
- *
- * **모양·색인 연산이 이름표를 잃는다.** `select`·`narrow`·`indexSelect` 가 전부
- * `Tensor.make` 를 dtype 없이 부르고, 그 기본값이 `float32` 다(`tensor.ts`). 그래서
- * int64 라벨 텐서에서 한 표본을 꺼내면 float32 로 붙어 나온다 — 값은 맞고 이름만
- * 갈리는 종류라 눈으로만 잡힌다.
- *
- * 밑의 결함은 `tensor.ts` 의 것이고 거기서 고쳐야 한다. 다만 **데이터셋이 라벨의
- * 형을 지키는 것은 이 파일의 계약**이므로 여기서 무너뜨리지는 않는다. 그쪽이
- * 고쳐지면 이 함수는 그냥 무해한 통과가 된다.
- */
-function keepLabel(source: Tensor, piece: Tensor): Tensor {
-  return piece.dtype === source.dtype ? piece : piece.to(source.dtype);
 }
 
 /** `0..n-1` 을 섞은 번호. Fisher–Yates, 호스트 줄기(`manualSeed` 를 따른다). */
