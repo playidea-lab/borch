@@ -552,7 +552,16 @@ class Tensor:
                 "`with torch.no_grad():` 안에서 하거나 제자리가 아닌 연산을 쓰세요.",
                 "a leaf Variable that requires grad is being used in an in-place operation"))
         out = fn()
-        self.data[...] = out.data if isinstance(out, Tensor) else out
+        got = out.data if isinstance(out, Tensor) else _np.asarray(out)
+        # **모양이 바뀌는 제자리 연산이 있다.** `transpose_`·`squeeze_`·`unsqueeze_` 는
+        # 값이 아니라 보는 틀을 고친다. 값만 되쓰면 3×2 를 2×3 자리에 넣으라는 말이
+        # 되어 터지고, 정사각으로만 물으면 **모양이 안 바뀐 채 통과한다** — 실제로
+        # 2×2 케이스가 이것을 못 봤다. 그 자리에서는 배열을 갈아 끼운다. numpy 의
+        # 전치·차원 넣기는 뷰라서 버퍼는 그대로 공유하고 틀만 바뀐다.
+        if got.shape != self.data.shape:
+            self._array = got                  # `.data` 는 일부러 ndarray 를 거절한다
+            return self
+        self.data[...] = got
         return self
 
     def add_(self, other, alpha=1):

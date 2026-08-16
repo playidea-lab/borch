@@ -3045,6 +3045,48 @@ function addInplace(out: Map<string, Case>): void {
     noGrad(() => x.add_(1));
     return x;
   });
+
+  // ── 인자를 받는 제자리 연산 ─────────────────────────────────────────────
+  //
+  // **모양이 바뀌는 것들이 여기 있다.** `transpose_`·`squeeze_`·`unsqueeze_` 는 값이
+  // 아니라 보는 틀을 고친다. 파이썬 쪽은 이것을 2×2 로 물어서 **모양이 안 바뀐 채
+  // 통과했다** — 정사각에서는 틀이 그대로여도 답이 같기 때문이다. 그래서 여기서도
+  // 직사각으로 묻는다.
+  const square = () => Tensor.from([1, 2, 3, 4], [2, 2]);
+  const rect = () => Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+
+  out.set("method2::제자리::인자를 받는 것", () => {
+    const x = square();
+    x.transpose_();
+    const y = square();
+    y.tril_();
+    const z = square();
+    z.cumsum_(1);
+    return Tensor.cat([x.reshape([4]), y.reshape([4]), z.reshape([4])]);
+  });
+
+  out.set("method2::제자리::모양이 바뀐다", async () => {
+    const x = rect();
+    x.transpose_();
+    const y = rect();
+    y.unsqueeze_(0);
+    const z = rect().reshape([1, 2, 3]);
+    z.squeeze_(0);
+    return [x, y, z].map((t) => `(${t.shape.join(", ")})`).join(" ");
+  });
+
+  out.set("method2::제자리::transpose_ 의 값", () => {
+    const x = rect();
+    x.transpose_();
+    return x;
+  });
+
+  // 답의 철자는 파이썬의 `str(True)` 다 — 골든을 굳힌 쪽이 파이썬이라 "true" 로는
+  // 안 맞는다. 같은 질문에 같은 철자로 답해야 대조가 대조다.
+  out.set("method2::제자리::같은 텐서인가", async () => {
+    const x = Tensor.from([0.25, 0.5, 0.75, -0.5], [2, 2]);
+    return `같은 것=${x.inplaceUnary("abs") === x ? "True" : "False"}`;
+  });
 }
 
 /**

@@ -36,6 +36,7 @@ _RENAME = {
     "arctanh": "atanh",
     "clip": "clamp",
     "fix": "trunc",
+    "negative": "neg",
     "swapdims": "transpose",
     "interpolate": "upsample",
     # 연산 표의 이름이 파이썬과 같은 것들. `camel` 을 씌우면 오히려 없는 이름이 된다.
@@ -169,11 +170,16 @@ def camel(name):
 
     **끝의 밑줄은 살린다.** `zero_` 는 제자리 연산이라는 뜻이고 borch.ts 도 같은
     이름을 쓴다 — 그냥 나누면 `zero` 가 되어 없는 이름이 된다.
+
+    **별칭은 밑줄을 뗀 뒤에 찾는다.** `absolute` 는 표에 있는데 `absolute_` 는 없어서
+    별칭이 안 걸리고 `absolute_` 가 그대로 나갔다 — borch.ts 에는 `abs_` 만 있으므로
+    없는 이름이 된다. 제자리 판은 별칭도 같이 따라가야 한다.
     """
-    if name in _RENAME:
-        return _RENAME[name]
     tail = "_" if name.endswith("_") and not name.endswith("__") else ""
-    head, *rest = name.rstrip("_").split("_")
+    bare = name[:-1] if tail else name
+    if bare in _RENAME:
+        return _RENAME[bare] + tail
+    head, *rest = bare.split("_")
     return head + "".join(p[:1].upper() + p[1:] for p in rest) + tail
 
 

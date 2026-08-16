@@ -1354,6 +1354,199 @@ def opt_cases(inp=None):
     return cases
 
 
+METHOD2_PREFIX = "method2::"
+
+
+def method_name_cases(inp=None):
+    """**같은 계산에 이름이 둘이다** — `torch.add(x, y)` 와 `x.add(y)`.
+
+    이 저장소는 한 방향 고리만 갖고 있었다: 텐서 메서드를 훑어 모듈 함수를 만드는
+    것. 반대 방향이 없어서 **계산은 다 해 놓고 이름이 한쪽에서만 닿았다** —
+    `borch.matrix_exp(x)` 는 되고 `x.matrix_exp()` 는 안 됐다. 교재 코드에서
+    `x.add(y)` 는 아주 흔한 꼴이고, 그때 나는 것은 `AttributeError` 다.
+
+    ## 제자리 연산도 같은 이야기다
+
+    `abs` 가 있는데 `abs_` 만 없는 자리가 마흔일곱이었다. 계산은 밑줄 없는 쪽이
+    하고 여기서는 **제 버퍼에 되쓰는 것**만 한다 — 같은 식을 두 벌로 두면 갈린다.
+
+    ## 여기서는 **둘이 같은 답인지**를 묻는다
+
+    이름이 닿는지만 보면 껍데기만 있는 메서드도 통과한다. 값을 물어야 그 이름이
+    진짜 그 계산에 닿았는지가 드러난다. 이름 목록이 진짜 torch 의 것인지는
+    `tests/test_tensor_api.py` 가 따로 본다 — 없는 이름을 만들면 그것에 기대어 짠
+    코드가 진짜 torch 에서 안 돈다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((METHOD2_PREFIX + name, fn))
+
+    a = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+    b = np.array([[0.5, 1.5], [2.5, 3.5]], dtype=np.float32)
+    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
+    neg = np.array([[-1., 2.], [-3., 0.5]], dtype=np.float32)
+
+    # ── 메서드로 부른 답 ────────────────────────────────────────────────
+    pairs = (
+        ("add", lambda L, x: x.add(L.tensor(b))),
+        ("sub", lambda L, x: x.sub(L.tensor(b))),
+        ("mul", lambda L, x: x.mul(L.tensor(b))),
+        ("div", lambda L, x: x.div(L.tensor(b))),
+        ("multiply", lambda L, x: x.multiply(L.tensor(b))),
+        ("true_divide", lambda L, x: x.true_divide(L.tensor(b))),
+        ("floor_divide", lambda L, x: x.floor_divide(L.tensor(b))),
+        ("remainder", lambda L, x: x.remainder(L.tensor(b))),
+        ("fmod", lambda L, x: x.fmod(2.0)),
+        ("lerp", lambda L, x: x.lerp(L.tensor(b), 0.5)),
+        ("greater", lambda L, x: x.greater(L.tensor(b))),
+        ("less_equal", lambda L, x: x.less_equal(L.tensor(b))),
+        ("logical_and", lambda L, x: x.logical_and(L.tensor(b))),
+        ("logical_not", lambda L, x: x.logical_not()),
+        ("isclose", lambda L, x: x.isclose(L.tensor(b))),
+        ("nan_to_num", lambda L, x: x.nan_to_num()),
+        ("fmax", lambda L, x: x.fmax(L.tensor(b))),
+        ("inner", lambda L, x: x.inner(L.tensor(b))),
+        # kron 은 축소판이 1 차원만 한다 — 아래에서 따로 묻는다.
+        ("count_nonzero", lambda L, x: x.count_nonzero()),
+        ("adjoint", lambda L, x: x.adjoint()),
+        ("moveaxis", lambda L, x: x.moveaxis(0, 1)),
+        ("t", lambda L, x: x.t()),
+        ("det", lambda L, x: x.det()),
+        ("inverse", lambda L, x: x.inverse()),
+        ("matrix_exp", lambda L, x: x.matrix_exp()),
+        ("matrix_power", lambda L, x: x.matrix_power(2)),
+        ("pinverse", lambda L, x: x.pinverse()),
+        ("qr", lambda L, x: x.qr()[1]),
+        ("svd", lambda L, x: x.svd()[1]),
+        ("lgamma", lambda L, x: x.lgamma()),
+        ("digamma", lambda L, x: x.digamma()),
+        ("log_softmax", lambda L, x: x.log_softmax(1)),
+        ("hardshrink", lambda L, x: x.hardshrink()),
+    )
+    for name, fn in pairs:
+        src = sym if name in ("cholesky",) else a
+        add(name, lambda L, f=fn, s=src: f(L, L.tensor(s)))
+
+    add("cholesky", lambda L: L.tensor(sym).cholesky())
+    add("slogdet", lambda L: L.tensor(a).slogdet()[1])
+    add("logdet", lambda L: L.tensor(sym).logdet())
+    add("corrcoef", lambda L: L.tensor(a).corrcoef())
+    add("cov", lambda L: L.tensor(a).cov())
+    add("cross",
+        lambda L: L.tensor(np.array([1., 2., 3.], dtype=np.float32)).cross(
+            L.tensor(np.array([4., 5., 6.], dtype=np.float32))))
+    add("vdot",
+        lambda L: L.tensor(np.array([1., 2., 3.], dtype=np.float32)).vdot(
+            L.tensor(np.array([4., 5., 6.], dtype=np.float32))))
+    add("kron",
+        lambda L: L.tensor(np.array([1., 2., 3.], dtype=np.float32)).kron(
+            L.tensor(np.array([4., 5.], dtype=np.float32))))
+    add("broadcast_to",
+        lambda L: L.tensor(np.array([1., 2.], dtype=np.float32)).broadcast_to((3, 2)))
+    add("prelu",
+        lambda L: L.tensor(neg).prelu(
+            L.tensor(np.array([0.25], dtype=np.float32))))
+
+    # **함수로 부른 것과 같아야 한다.** 이름만 닿고 다른 계산이면 여기서 갈린다.
+    def same_as_function(L):
+        x, y = L.tensor(a), L.tensor(b)
+        checks = (x.add(y) - L.add(x, y), x.mul(y) - L.mul(x, y),
+                  x.det().reshape(1) - L.det(x).reshape(1),
+                  (x.matrix_exp() - L.matrix_exp(x)).reshape(-1))
+        return L.cat([c.reshape(-1) for c in checks])
+
+    add("함수와 같은 답", same_as_function)
+
+    # ── 제자리 연산 ─────────────────────────────────────────────────────
+    # **케이스마다 배열을 새로 만든다.** 코어의 `tensor(ndarray)` 는 그 버퍼를 **공유**하고
+    # (torch 로 치면 `from_numpy` 쪽), torch 의 `tensor()` 는 복사한다. 여기 쓰는 배열을
+    # 밖에 한 벌 두었더니 첫 제자리 연산이 그것을 고쳐서, 뒤 케이스들이 torch 가 본 것과
+    # **다른 입력**을 받았다 — 열세 건이 한꺼번에 갈렸는데 원인은 제자리 연산이 아니었다.
+    def _small():
+        return np.array([[0.25, 0.5], [0.75, -0.5]], dtype=np.float32)
+
+    def _square():
+        return np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+
+    inplace = ("absolute", "acosh", "arctan", "arctanh", "asinh", "atanh",
+               "deg2rad", "erfc", "exp2", "fix", "negative", "rad2deg",
+               "sgn", "sinc", "logit")
+    for name in inplace:
+
+        def run(L, n=name):
+            # acosh 는 1 이상, logit 은 0..1 안에서만 답이 있다 — 밖은 양쪽 다 NaN 이고
+            # NaN 은 서로 같다고 못 하므로 물어봐야 아무것도 안 드러난다.
+            s = _small()
+            if n == "acosh":
+                s = np.abs(s) + 1.0
+            elif n == "logit":
+                s = np.abs(s) * 0.8 + 0.1
+            x = L.tensor(s)
+            getattr(x, n + "_")()
+            return x
+
+        add(f"제자리::{name}_", run)
+
+    def inplace_args(L):
+        """인자를 받는 제자리 연산 — 자리 수만 다르고 나머지는 같다."""
+        x = L.tensor(_square())
+        x.transpose_(0, 1)
+        y = L.tensor(_square())
+        y.tril_()
+        z = L.tensor(_square())
+        z.cumsum_(1)
+        return L.cat([x.reshape(-1), y.reshape(-1), z.reshape(-1)])
+
+    add("제자리::인자를 받는 것", inplace_args)
+
+    def _rect():
+        return np.array([[1., 2., 3.], [4., 5., 6.]], dtype=np.float32)
+
+    def inplace_changes_shape(L):
+        """**모양을 바꾸는 제자리 연산이 있다** — 값이 아니라 보는 틀을 고친다.
+
+        이것을 정사각으로 물으면 **모양이 안 바뀌어도 통과한다.** 실제로 2×2 로
+        물었을 때 `transpose_` 가 아무 일도 안 하고 초록이었다. 여기서는 직사각을
+        주고 모양 자체를 답으로 낸다 — 값이 아니라 그 틀이 물음이기 때문이다.
+        """
+        x = L.tensor(_rect())
+        x.transpose_(0, 1)
+        y = L.tensor(_rect())
+        y.unsqueeze_(0)
+        z = L.tensor(_rect()).reshape(1, 2, 3)
+        z.squeeze_(0)
+        return " ".join(str(tuple(t.shape)) for t in (x, y, z))
+
+    add("제자리::모양이 바뀐다", inplace_changes_shape)
+
+    def inplace_transpose_values(L):
+        """모양뿐 아니라 **값도 옮겨 앉아야** 한다."""
+        x = L.tensor(_rect())
+        x.transpose_(0, 1)
+        return x
+
+    add("제자리::transpose_ 의 값", inplace_transpose_values)
+
+    def inplace_is_same_object(L):
+        """**제자리는 같은 텐서를 고친다.** 새것을 돌려주면 뜻이 없다."""
+        x = L.tensor(_small())
+        return "같은 것=" + str(x.absolute_() is x)
+
+    add("제자리::같은 텐서인가", inplace_is_same_object)
+
+    def inplace_refuses_leaf(L):
+        x = L.tensor(_small(), requires_grad=True)
+        try:
+            x.absolute_()
+            return "예외가 안 났다"
+        except Exception as exc:                                    # noqa: BLE001
+            return type(exc).__name__
+
+    add("제자리::기울기 켜진 잎은 거절", inplace_refuses_leaf)
+    return cases
+
+
 CELL_PREFIX = "cell::"
 
 
@@ -4554,6 +4747,7 @@ def golden_cases(inp=None):
             + container_cases(inp) + act_cases(inp) + norm_cases(inp)
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
             + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
+            + method_name_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

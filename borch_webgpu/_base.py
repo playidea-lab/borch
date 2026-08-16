@@ -229,29 +229,55 @@ class Tensor:
 
         # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
-        if name in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
+        #
+        # **제자리 판도 여기로 온다.** `transpose_` 를 borch.ts 로 그냥 넘기면 저쪽
+        # `transpose_()` 는 축을 안 받아서 `transpose_(0, 1)` 이 멈춘다 — 축을 푸는
+        # 일이 이 파일에 있으므로 밑줄 있는 쪽도 같은 자리를 지나야 한다.
+        inplace = name.endswith("_") and not name.endswith("__")
+        bare = name[:-1] if inplace else name
+        if bare in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
                     "pow", "squeeze", "repeat_interleave", "flatten",
-                    "sum", "norm", "transpose", "swapdims",
+                    "sum", "norm", "transpose", "swapdims", "remainder",
                     # 색인으로 쓰는 쪽 — 이름과 인자가 borch.ts 와 다르다.
                     "scatter", "scatter_add", "index_add", "index_copy",
-                    "index_fill", "take", "take_along_dim"):
+                    "index_fill", "take", "take_along_dim",
+                    # **모듈에만 있고 borch.ts 에는 없는 이름들.** 여기 있는 것은 전부
+                    # 이미 있는 계산의 조합이라 borch.ts 쪽에 이름을 안 늘렸는데,
+                    # 그러다 보니 `borch.t(x)` 는 되고 `x.t()` 는 안 되는 한쪽 고리만
+                    # 남았다. torch 는 둘 다 주고 교재 코드는 메서드 꼴을 더 쓴다.
+                    #
+                    # 이 목록은 스스로 검사된다 — 이름마다 골든 케이스가 있고, 골든은
+                    # **진짜 torch 를 돌려** 굳혔으므로 torch 에 없는 이름은 애초에
+                    # 굳히는 자리에서 멈춘다.
+                    "multiply", "true_divide", "floor_divide", "lerp",
+                    "greater", "less_equal", "isclose", "nan_to_num", "fmax",
+                    "inner", "adjoint", "moveaxis", "t", "corrcoef", "cov",
+                    "vdot", "kron", "broadcast_to"):
             from . import _ops
-            fn = getattr(_ops, name)
-            return lambda *a, **k: fn(self, *a, **k)
+            fn = getattr(_ops, bare)
+            if not inplace:
+                return lambda *a, **k: fn(self, *a, **k)
+            self._refuse_inplace_on_leaf(name)
+            return lambda *a, **k: self._write_back(fn(self, *a, **k))
 
         # **기울기가 켜진 잎은 제자리로 못 고친다.** torch 가 그 자리에서 던지고
         # 골든이 그것을 굳혔다 — 흘려보내면 역전파가 이미 지난 값을 보게 된다.
         # **`no_grad` 안에서는 된다.** torch 도 그렇다 — 기울기를 안 만드는 동안에는
         # 잎을 고쳐도 역전파가 볼 것이 없다. 그 조건을 빼먹었더니 옵티마이저가
         # 파라미터를 갱신하는 정상 경로까지 막혔다.
-        if name.endswith("_") and not name.endswith("__") and \
-                _ts.gradMode.enabled and \
-                bool(self._h.requiresGrad) and not self._h.parents.length:
-            raise RuntimeError(
-                "a leaf Variable that requires grad is being used in an "
-                "in-place operation.")
+        if inplace:
+            self._refuse_inplace_on_leaf(name)
 
         js_name = camel(name)
+
+        # **borch.ts 에 제자리 판이 없는 이름들.** 저쪽은 단항 표에서만 `abs_` 꼴을
+        # 자동으로 만들고, 이항(`eq_`)은 거기 없다. 그 자리에서는 **계산을 밑줄 없는
+        # 쪽이 하고** 결과를 이 버퍼로 옮긴다 — 코어의 `_inplace` 와 같은 자리, 같은
+        # 이유다. 식을 두 벌로 두면 언젠가 갈리고, 값이 그럴듯해서 안 보인다.
+        if inplace and getattr(self._h, js_name, None) is None:
+            return lambda *a, **k: self._write_back(
+                getattr(self, bare)(*a, **k))
+
         if name in _BINARY_ONLY:
             # borch.ts 는 단항만 표에서 메서드로 만든다. 이항은 `binary(이름, 상대)` 다.
             return lambda other, *_: guarded(self._h.binary, js_name, handle(other))
@@ -265,10 +291,38 @@ class Tensor:
         def call(*args, **kw):
             laid = positional(name, args, kw)
             refuse_if_nullary(js_name, got, len(laid))
-            return guarded(got, *laid)
+            out = guarded(got, *laid)
+            # **제자리 연산은 자기 자신을 돌려줘야 한다.** borch.ts 의 `abs_` 는 같은
+            # 손잡이를 돌려주지만 `guarded` 가 그것을 **새 파이썬 텐서로 감싸므로**,
+            # `x.absolute_() is x` 가 거짓이 된다. 그러면 `x.mul_(2).add_(1)` 처럼
+            # 이어 부르는 코드가 원본이 아닌 사본을 고치기 시작한다.
+            return self if inplace else out
 
         call.__name__ = name
         return call
+
+    def _refuse_inplace_on_leaf(self, _name):
+        """**기울기가 켜진 잎은 제자리로 못 고친다.** torch 가 그 자리에서 던지고
+        골든이 그것을 굳혔다 — 흘려보내면 역전파가 이미 지난 값을 보게 된다.
+
+        **`no_grad` 안에서는 된다.** torch 도 그렇다 — 기울기를 안 만드는 동안에는
+        잎을 고쳐도 역전파가 볼 것이 없다. 그 조건을 빼먹었더니 옵티마이저가
+        파라미터를 갱신하는 정상 경로까지 막혔다.
+        """
+        if (_ts.gradMode.enabled and bool(self._h.requiresGrad)
+                and not self._h.parents.length):
+            raise RuntimeError(
+                "a leaf Variable that requires grad is being used in an "
+                "in-place operation.")
+
+    def _write_back(self, out):
+        """계산한 값을 이 버퍼로 옮기고 **같은 텐서**를 돌려준다.
+
+        borch.ts 의 `copyFrom` 은 모양이 달라지면 그것도 따라간다 — `transpose_` 는
+        칸 수는 그대로 두고 보는 틀을 바꾼다.
+        """
+        self._h.copyFrom(handle(out))
+        return self
 
     # 연산자. `x + y` 는 `x.add(y)` 이고, 상대가 수여도 받는다.
     def _op(js_name):                                        # noqa: N805

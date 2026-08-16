@@ -1095,20 +1095,52 @@ _INPLACE_UNARY = ("abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh", "sig
                   "square", "trunc", "frac", "neg", "rsqrt", "log2", "log10",
                   "expm1", "log1p", "acos", "asin", "atan", "sinh", "cosh")
 
+# **밑줄 없는 짝을 이미 가진 것들.** 계산은 그쪽이 하고 여기서는 되쓰기만 한다.
+#
+# 손으로 마흔일곱 벌을 적으면 마흔일곱 자리가 어긋날 수 있는데, 실제로 다른 것은
+# 인자 개수뿐이다. `torch.Tensor` 에 그 이름이 정말 있는지는 `tests/test_tensor_api.py`
+# 가 진짜 torch 에 물어 확인한다 — 없는 이름을 만들면 우리에게만 도는 코드가 된다.
+_INPLACE_MORE = (
+    "absolute", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan",
+    "arctanh", "asinh", "atanh", "deg2rad", "erfc", "exp2", "fix", "logit",
+    "negative", "rad2deg", "sgn", "sinc",
+)
+# 인자를 하나 더 받는 것들. 자리 수만 다르고 나머지는 같다.
+_INPLACE_BINARY = (
+    "atan2", "copysign", "eq", "ge", "gt", "heaviside", "hypot", "le", "lt",
+    "ne", "xlogy",
+)
+# 축이나 번호를 받는 것들.
+_INPLACE_ARGS = (
+    "cumprod", "cumsum", "index_add", "index_copy", "index_fill", "ldexp",
+    "masked_fill", "scatter", "scatter_add", "squeeze", "swapaxes", "swapdims",
+    "transpose", "tril", "triu", "unsqueeze",
+)
 
-def _make_inplace(name):
-    fn = globals()[name]
 
-    def method(self):
-        return self._inplace(lambda: fn(self), name + "_")
+def _make_inplace(name, arity="nullary"):
+    # **모듈 함수일 수도, 메서드로만 있을 수도 있다.** `cumsum`·`squeeze` 처럼 텐서
+    # 쪽에만 있는 것이 있어서, 모듈에서 못 찾으면 메서드를 부른다. 어느 쪽이든
+    # 계산은 그것이 하고 여기서는 되쓰기만 한다 — 두 벌로 적으면 언젠가 갈린다.
+    fn = globals().get(name)
+    if fn is None:
+        def fn(t, *a, **k):
+            return getattr(t, name)(*a, **k)
+
+    if arity == "nullary":
+        def method(self):
+            return self._inplace(lambda: fn(self), name + "_")
+    else:
+        def method(self, *args, **kw):
+            return self._inplace(lambda: fn(self, *args, **kw), name + "_")
 
     method.__name__ = name + "_"
     method.__doc__ = f"`{name}` 을 제자리에서. 산수는 `{name}` 이 하고 여기서는 되쓰기만 한다."
     return method
 
 
-for _nm in _INPLACE_UNARY:
-    setattr(Tensor, _nm + "_", _make_inplace(_nm))
+# **거는 자리는 이 파일 끝이다.** 여기서 걸면 아래에 정의되는 함수들을 아직 못 본다 —
+# `add` 하나로 `KeyError` 가 났다.
 
 
 # ---- 모양 바꾸기의 나머지
@@ -4347,5 +4379,56 @@ class _Cuda(_Namespace):
 
 
 cuda = _Cuda()
+
+
+# ================================================================ 이름 잇기
+#
+# **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
+# 돌면 아직 정의 안 된 것을 못 본다 — `add` 하나에서 `KeyError` 로 멈췄다.
+
+for _nm in _INPLACE_UNARY + _INPLACE_MORE:
+    setattr(Tensor, _nm + "_", _make_inplace(_nm))
+for _nm in _INPLACE_BINARY + _INPLACE_ARGS:
+    setattr(Tensor, _nm + "_", _make_inplace(_nm, "args"))
+
+
+# ---- 모듈 함수를 **메서드로도** 낸다
+#
+# torch 는 같은 것을 둘 다 준다 — `torch.add(x, y)` 와 `x.add(y)`. `borch/__init__.py`
+# 에 그 반대 방향 고리가 있는데(메서드 → 모듈 함수), **이쪽 방향이 없었다.** 그래서
+# 계산은 다 해 놓고 이름이 한쪽에서만 닿았다 — `borch.matrix_exp(x)` 는 되고
+# `x.matrix_exp()` 는 안 됐다. `x.add(y)` 는 torch 코드에서 아주 흔한 꼴이다.
+#
+# **아무 이름이나 걸면 안 된다.** 모듈에 있는 것을 전부 메서드로 만들면 torch 에 없는
+# 메서드가 생기고, 그러면 우리에게서만 도는 코드를 쓰게 된다. 그래서 목록을 적고,
+# 그 목록이 진짜 torch 의 메서드인지는 `tests/test_tensor_api.py` 가 확인한다.
+_AS_METHOD = (
+    "add", "sub", "mul", "div", "subtract", "multiply", "divide", "true_divide",
+    "floor_divide", "remainder", "fmod", "float_power", "lerp",
+    "greater", "greater_equal", "less", "less_equal", "not_equal",
+    "logical_and", "logical_or", "logical_not", "logical_xor",
+    "isclose", "isneginf", "isposinf", "isreal", "nan_to_num",
+    "fmax", "fmin", "cross", "inner", "kron", "vdot", "count_nonzero",
+    "corrcoef", "cov", "adjoint", "broadcast_to", "moveaxis", "t",
+    "det", "logdet", "slogdet", "inverse", "pinverse", "matrix_exp",
+    "matrix_power", "cholesky", "qr", "svd",
+    "digamma", "erfinv", "lgamma", "hardshrink", "prelu", "log_softmax",
+)
+
+
+def _as_method(name):
+    fn = globals()[name]
+
+    def method(self, *args, **kw):
+        return fn(self, *args, **kw)
+
+    method.__name__ = name
+    method.__doc__ = f"`torch.{name}(x, ...)` 과 같다. torch 는 둘 다 준다."
+    return method
+
+
+for _nm in _AS_METHOD:
+    if not hasattr(Tensor, _nm):
+        setattr(Tensor, _nm, _as_method(_nm))
 
 

@@ -320,7 +320,14 @@ function padShape(shape: readonly number[], rank: number): number[] {
 }
 
 export class Tensor implements Node<Tensor> {
-  readonly shape: readonly number[];
+  /**
+   * **`readonly` 가 아니다** — `mutate` 하나가 고친다.
+   *
+   * 모양을 바꾸는 제자리 연산이 있다(`transpose_`·`squeeze_`·`unsqueeze_`). 그것들은
+   * 값이 아니라 보는 틀을 고치므로, 자리를 그대로 두고 모양만 갈아 끼워야 한다.
+   * 그 한 자리 말고는 아무 데서도 안 바뀐다.
+   */
+  shape: readonly number[];
   readonly size: number;
   readonly buffer: GPUBuffer;
   requiresGrad: boolean;
@@ -915,12 +922,32 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 같은 버퍼를 다른 모양으로 본다. 원소 순서가 안 바뀌므로 커널이 필요 없다. */
-  reshape(shape: readonly number[]): Tensor {
+  /**
+   * 같은 버퍼를 다른 모양으로 본다. 원소 순서가 안 바뀌므로 커널이 필요 없다.
+   *
+   * **`-1` 은 "나머지" 다.** torch 코드가 `x.reshape(-1)`·`x.view(n, -1)` 로 늘 쓰는
+   * 꼴인데 여기 없었다 — 곱해서 크기를 맞추는 검사에 걸려 `shape '[-1]' is invalid`
+   * 로 멈췄다. 한 자리에만 쓸 수 있고, 나머지로 나누어떨어져야 한다.
+   */
+  reshape(want: readonly number[]): Tensor {
+    const hole = want.indexOf(-1);
+    let shape = want;
+    if (hole >= 0) {
+      if (want.indexOf(-1, hole + 1) >= 0) {
+        throw new RuntimeError("only one dimension can be inferred");
+      }
+      const rest = want.reduce((a, b) => (b === -1 ? a : a * b), 1);
+      if (rest <= 0 || this.size % rest !== 0) {
+        throw new RuntimeError(
+          `shape '[${want}]' ${TORCH.reshapeSize} ${this.size}`,
+        );
+      }
+      shape = [...want.slice(0, hole), this.size / rest, ...want.slice(hole + 1)];
+    }
     const n = shape.reduce((a, b) => a * b, 1);
     if (n !== this.size) {
       throw new RuntimeError(
-        `shape '[${shape}]' ${TORCH.reshapeSize} ${this.size}`,
+        `shape '[${want}]' ${TORCH.reshapeSize} ${this.size}`,
       );
     }
     const from = this.shape;
@@ -3381,7 +3408,21 @@ export class Tensor implements Node<Tensor> {
       );
     }
     const result = compute();
-    dev().copyInto(this.buffer, result.buffer, this.size);
+    // **결과가 같은 버퍼일 수 있다.** `squeeze`·`unsqueeze` 는 값을 안 옮기고 틀만
+    // 바꾸므로 `reshape` 처럼 버퍼를 그대로 물려준다. 그 자리에 복사를 걸면 WebGPU 가
+    // "원본과 사본이 같은 버퍼" 라며 명령 버퍼째 무효로 만들고, 그러면 **그 뒤에 줄
+    // 서 있던 케이스가 대신 틀린다** — 실제로 다음 케이스가 엉뚱한 값으로 실패했다.
+    if (result.buffer !== this.buffer) {
+      dev().copyInto(this.buffer, result.buffer, this.size);
+    }
+    // **모양이 바뀌는 것들이 있다.** `transpose_` 는 칸 수는 그대로 두고 틀을 바꾸고,
+    // `squeeze_`·`unsqueeze_` 는 축만 넣고 뺀다. 값만 옮기고 모양을 그대로 두면
+    // **정사각으로 물었을 때만 통과한다** — 코어에서 실제로 2×2 케이스가 그것을
+    // 놓쳤다. 칸 수는 안 변하므로 `size` 는 그대로다.
+    if (result.shape.length !== this.shape.length
+      || result.shape.some((n, i) => n !== this.shape[i])) {
+      this.shape = [...result.shape];
+    }
     return this;
   }
 
@@ -3446,6 +3487,37 @@ export class Tensor implements Node<Tensor> {
   /** 표의 단항을 제자리로. `abs_` 같은 이름들이 이리로 온다. */
   inplaceUnary(name: string): Tensor {
     return this.mutate(() => this.unary(name));
+  }
+
+  // 인자를 받는 제자리 연산. 표로 못 도는 것들이라 하나씩 적되, **계산은 밑줄 없는
+  // 쪽이 한다** — 같은 식을 두 벌로 두면 언젠가 갈리고 값이 그럴듯해서 안 보인다.
+
+  transpose_(): Tensor {
+    return this.mutate(() => this.transpose());
+  }
+
+  squeeze_(dim: number): Tensor {
+    return this.mutate(() => this.squeeze(dim));
+  }
+
+  unsqueeze_(dim: number): Tensor {
+    return this.mutate(() => this.unsqueeze(dim));
+  }
+
+  tril_(diagonal = 0): Tensor {
+    return this.mutate(() => this.tril(diagonal));
+  }
+
+  triu_(diagonal = 0): Tensor {
+    return this.mutate(() => this.triu(diagonal));
+  }
+
+  cumsum_(dim = 0): Tensor {
+    return this.mutate(() => this.cumsum(dim));
+  }
+
+  cumprod_(dim = 0): Tensor {
+    return this.mutate(() => this.cumprod(dim));
   }
 
   /** 같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다. */
