@@ -301,6 +301,14 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
     """
     h = handle(x)
     if mode == "nearest":
+        # **`size` 를 받아만 놓고 안 쓰던 자리다** — 저쪽 `upsample` 은 배수만 받는다.
+        # `mode` 를 흘린 것과 같은 갈래이고, 같은 모양으로 조용히 다른 값이 됐다.
+        if size is not None:
+            oh, ow = (size, size) if isinstance(size, int) else tuple(size)
+            ih, iw = int(h.shape[2]), int(h.shape[3])
+            if oh % ih or ow % iw or oh // ih != ow // iw:
+                raise RuntimeError("interpolate(size=) — 배수가 아닌 최근접 확대")
+            scale_factor = oh // ih
         return wrap(guarded(h.upsample, scale_factor))
     if mode != "bilinear":
         raise RuntimeError(f"interpolate(mode={mode!r}) — 최근접과 겹선형만 있습니다")
@@ -312,6 +320,36 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
     return wrap(guarded(h.interpolateBilinear, oh, ow, bool(align_corners)))
 
 
+def _upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None,
+              **kw):
+    """`interpolate` 의 옛 이름. torch 가 폐기 경고를 내면서도 계속 받는다."""
+    return _interpolate(x, size, scale_factor, mode, align_corners)
+
+
+def _upsample_nearest(x, size=None, scale_factor=None):
+    return _interpolate(x, size, scale_factor, "nearest")
+
+
+def _upsample_bilinear(x, size=None, scale_factor=None):
+    """**`align_corners=True` 다.** `interpolate(mode='bilinear')` 의 기본값은 거짓이라,
+    이름만 보고 별명으로 두면 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다."""
+    return _interpolate(x, size, scale_factor, "bilinear", True)
+
+
+def _functional_inplace(name):
+    """`F.relu_(x)` — **계산은 밑줄 없는 쪽이 하고** 결과를 이 버퍼로 옮긴다.
+
+    코어와 같은 자리, 같은 이유다. 식을 두 벌로 두면 언젠가 갈리고 값이 그럴듯해서
+    안 보인다. 기울기가 켜진 잎은 torch 처럼 거절한다.
+    """
+    def call(x, *args, **kw):
+        x._refuse_inplace_on_leaf(name + "_")
+        return x._write_back(getattr(functional, name)(x, *args, **kw))
+
+    call.__name__ = name + "_"
+    return call
+
+
 def _bilinear(x1, x2, weight, bias=None):
     """가중치를 밖에서 받는 꼴. 층 쪽과 같은 텐서 메서드로 간다."""
     return wrap(guarded(handle(x1).bilinear, handle(x2), handle(weight),
@@ -320,6 +358,12 @@ def _bilinear(x1, x2, weight, bias=None):
 
 _HAND_WRITTEN = {
     "interpolate": _interpolate,
+    "upsample": _upsample,
+    "upsample_nearest": _upsample_nearest,
+    "upsample_bilinear": _upsample_bilinear,
+    **{n + "_": _functional_inplace(n) for n in
+       ("relu", "celu", "elu", "selu", "hardtanh", "leaky_relu", "threshold",
+        "rrelu")},
     "bilinear": _bilinear,
     "dropout1d": _dropout1d,
     "alpha_dropout": _alpha_dropout(False),

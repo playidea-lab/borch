@@ -1250,6 +1250,24 @@ function addUnpool(out: Map<string, Case>): void {
   out.set("unpool::적응형softmax::predict", () => asm().predict(asmX()));
   out.set("unpool::층::repr::AdaptiveLogSoftmaxWithLoss",
     async () => asm().describe());
+
+  // ── `max`·`min` 의 세 얼굴 ──────────────────────────────────────────────
+  //
+  // torch 는 인자에 따라 다른 것을 낸다: 전부의 최댓값 하나 · `(값, 번호)` 짝 ·
+  // 칸마다의 최댓값. borch.ts 는 셋을 **다른 이름**으로 갖고 있어서(`amax`·`max`·
+  // `binary("maximum")`) 여기서는 갈릴 자리가 없지만, 파이썬 쪽이 한 이름으로
+  // 받으므로 그 세 답을 여기서도 굳혀 둔다.
+  const grid2 = () => Tensor.from([3, 1, 4, 1, 5, 9], [2, 3]);
+  const other2 = () => Tensor.from([2, 2, 2, 7, 0, 7], [2, 3]);
+  out.set("fname::max::전부", () => grid2().amax());
+  out.set("fname::min::전부", () => grid2().amin());
+  out.set("fname::max::전부(모양)",
+    async () => `(${grid2().amax().shape.join(", ")})`);
+  out.set("fname::max::축 하나의 값", () => grid2().max(1).values);
+  out.set("fname::max::축 하나의 번호", () => grid2().max(1).indices);
+  out.set("fname::min::축 하나의 값", () => grid2().min(0).values);
+  out.set("fname::max::칸마다", () => grid2().binary("maximum", other2()));
+  out.set("fname::min::칸마다", () => grid2().binary("minimum", other2()));
 }
 
 /**

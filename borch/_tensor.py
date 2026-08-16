@@ -650,10 +650,31 @@ class Tensor:
         out = self._make(values, (self,), back)
         return _MinMax(out, Tensor(idx))
 
+    def _elementwise_extreme(self, other, pick, name):
+        """**동점이면 반씩 나눈다.** torch 가 그렇다 — `maximum(2, 2)` 의 기울기는
+        양쪽 다 0.5 다. `_ops.maximum` 과 같은 규칙이고, 여기서 다시 적는 이유는
+        `_tensor.py` 가 `_ops` 를 못 들여오기 때문이다(순환)."""
+        other = other if isinstance(other, Tensor) else Tensor(_np.asarray(other))
+        tie = self.data == other.data
+        left = _np.where(tie, 0.5, (self.data > other.data).astype(self.data.dtype))
+        if name == "MinimumBackward0":
+            left = 1.0 - left
+        return self._make(pick(self.data, other.data), (self, other),
+                          lambda g: (g * left, g * (1.0 - left)), name)
+
+    # **한 이름에 셋이 들어 있다.** torch 의 `max` 는 인자에 따라 다른 것을 낸다:
+    # 인자가 없으면 전부의 최댓값 하나, 축이면 `(값, 번호)` 쌍, **텐서면 칸마다의
+    # 최댓값**이다. 마지막 갈래가 없어서 `torch.max(a, b)` 가 축인 줄 알고
+    # `'Tensor' object cannot be interpreted as an integer` 로 멈췄다.
+
     def max(self, dim=None, keepdim=False):
+        if isinstance(dim, Tensor):
+            return self._elementwise_extreme(dim, _np.maximum, "MaximumBackward0")
         return self._argreduce(_np.max, _np.argmax, dim, keepdim)
 
     def min(self, dim=None, keepdim=False):
+        if isinstance(dim, Tensor):
+            return self._elementwise_extreme(dim, _np.minimum, "MinimumBackward0")
         return self._argreduce(_np.min, _np.argmin, dim, keepdim)
 
     def argmax(self, dim=None):

@@ -1355,6 +1355,135 @@ def opt_cases(inp=None):
     return cases
 
 
+FNAME_PREFIX = "fname::"
+
+
+def functional_name_cases(inp=None):
+    """`nn.functional` 의 남은 이름들 — **제자리 활성**과 `interpolate` 의 옛 이름.
+
+    ## 제자리 활성
+
+    `F.relu_(x)` 는 `x` 를 제 버퍼에서 고친다. 학습 루프가 중간 텐서를 안 만들려고
+    쓰는 자리다. 계산은 밑줄 없는 쪽이 하고 여기서는 되쓰기만 하므로, 물어야 할 것이
+    셋이다 — **값이 같은가**, **같은 텐서를 돌려주는가**, **기울기 켜진 잎을 거절하는가**.
+    가운데 것을 안 물으면 새 텐서를 돌려주는 구현이 값 케이스를 전부 지난다.
+
+    ## `upsample` 세 이름
+
+    torch 가 폐기 경고를 내면서도 계속 받는다. **`upsample_bilinear` 만
+    `align_corners=True`** 이고 `interpolate(mode='bilinear')` 의 기본값은 거짓이다 —
+    이름만 보고 별명으로 두면 가장자리가 어긋나는데 안쪽은 비슷해서 눈으로는 안 갈린다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((FNAME_PREFIX + name, fn))
+
+    def F(L):
+        return L.nn.functional
+
+    line = np.array([[-2.0, -0.5, 0.0, 0.5, 2.0]], dtype=np.float32)
+
+    inplace = (
+        ("relu_", lambda f, t: f.relu_(t)),
+        ("celu_", lambda f, t: f.celu_(t)),
+        ("celu_(alpha=0.5)", lambda f, t: f.celu_(t, 0.5)),
+        ("elu_", lambda f, t: f.elu_(t)),
+        ("selu_", lambda f, t: f.selu_(t)),
+        ("hardtanh_", lambda f, t: f.hardtanh_(t)),
+        ("hardtanh_(-1,1)", lambda f, t: f.hardtanh_(t, -1.0, 1.0)),
+        ("leaky_relu_", lambda f, t: f.leaky_relu_(t)),
+        ("leaky_relu_(0.3)", lambda f, t: f.leaky_relu_(t, 0.3)),
+        ("threshold_", lambda f, t: f.threshold_(t, 0.5, -1.0)),
+        # 무작위가 끼는 것은 **평가 모드**에서만 답이 정해진다.
+        ("rrelu_(평가)", lambda f, t: f.rrelu_(t, 0.1, 0.3, False)),
+    )
+    for name, run in inplace:
+        def value(L, r=run):
+            x = L.tensor(line.copy())
+            r(F(L), x)
+            return x
+
+        add(f"제자리::{name}", value)
+
+    def same_tensor(L):
+        """**같은 텐서를 돌려줘야 한다** — 새것을 내면 위 값 케이스는 전부 지난다."""
+        x = L.tensor(line.copy())
+        got = [F(L).relu_(x) is x, F(L).elu_(x) is x, F(L).selu_(x) is x]
+        return " ".join(str(v) for v in got)
+
+    add("제자리::같은 텐서인가", same_tensor)
+
+    def refuses_leaf(L):
+        x = L.tensor(line.copy(), requires_grad=True)
+        try:
+            F(L).relu_(x)
+            return "예외가 안 났다"
+        except Exception as exc:                                    # noqa: BLE001
+            return type(exc).__name__
+
+    add("제자리::기울기 켜진 잎은 거절", refuses_leaf)
+
+    def same_as_plain(L):
+        """제자리와 제자리 아닌 것이 **같은 답**이어야 한다. 두 벌이면 갈린다."""
+        x = L.tensor(line.copy())
+        F(L).leaky_relu_(x, 0.3)
+        return x - F(L).leaky_relu(L.tensor(line.copy()), 0.3)
+
+    add("제자리::제자리 아닌 것과 같다", same_as_plain)
+
+    img = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+    add("upsample(scale)",
+        lambda L: F(L).upsample(L.tensor(img), scale_factor=2))
+    add("upsample_nearest",
+        lambda L: F(L).upsample_nearest(L.tensor(img), scale_factor=2))
+    # **여기만 `align_corners=True`** 다.
+    add("upsample_bilinear",
+        lambda L: F(L).upsample_bilinear(L.tensor(img), scale_factor=2))
+    add("upsample(size, bilinear)",
+        lambda L: F(L).upsample(L.tensor(img), size=(8, 8), mode="bilinear"))
+    add("upsample_bilinear(size=6)",
+        lambda L: F(L).upsample_bilinear(L.tensor(img), size=(6, 6)))
+
+    def upsample_corners_differ(L):
+        """`upsample_bilinear` 과 `interpolate(bilinear)` 은 **같으면 안 된다.**
+
+        전자는 `align_corners=True`, 후자의 기본값은 거짓이다. 별명으로 두면 여기서만
+        드러난다 — 값 케이스는 각각 제 답을 내므로 통과한다.
+        """
+        x = L.tensor(img)
+        a = F(L).upsample_bilinear(x, scale_factor=2)
+        b = F(L).interpolate(x, scale_factor=2, mode="bilinear")
+        return float((a - b).abs().sum().item()) > 1e-6
+
+    add("upsample_bilinear 은 별명이 아니다",
+        lambda L: str(upsample_corners_differ(L)))
+
+    # ── `max`·`min` 의 세 얼굴 ──────────────────────────────────────────
+    #
+    # torch 는 인자에 따라 **다른 것을 낸다**: `max(x)` 는 전부의 최댓값 하나,
+    # `max(x, dim)` 은 `(값, 번호)` 쌍, `max(x, other)` 는 칸마다의 최댓값.
+    #
+    # 이 세 갈래를 안 물었더니 결속에서 `x.max()` 가 **축 0 만 줄인 쌍**을 냈다 —
+    # 저쪽의 `max(dim=0)` 으로 그냥 넘어갔기 때문이다. 스칼라로 바꿀 때만 시끄럽고,
+    # 비교에 쓰면 칸마다 비교가 되어 조용히 다른 답이다.
+    grid2 = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]], dtype=np.float32)
+    other2 = np.array([[2.0, 2.0, 2.0], [7.0, 0.0, 7.0]], dtype=np.float32)
+
+    add("max::전부", lambda L: L.tensor(grid2).max())
+    add("min::전부", lambda L: L.tensor(grid2).min())
+    add("max::전부(모양)", lambda L: str(tuple(L.tensor(grid2).max().shape)))
+    add("max::축 하나의 값", lambda L: L.tensor(grid2).max(dim=1).values)
+    add("max::축 하나의 번호",
+        lambda L: L.tensor(grid2).max(dim=1).indices.float())
+    add("min::축 하나의 값", lambda L: L.tensor(grid2).min(dim=0).values)
+    add("max::칸마다",
+        lambda L: L.max(L.tensor(grid2), L.tensor(other2)))
+    add("min::칸마다",
+        lambda L: L.min(L.tensor(grid2), L.tensor(other2)))
+    return cases
+
+
 UNPOOL_PREFIX = "unpool::"
 
 
@@ -5225,7 +5354,7 @@ def golden_cases(inp=None):
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
             + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
             + method_name_cases(inp) + default_convert_cases(inp)
-            + unpool_cases(inp)
+            + unpool_cases(inp) + functional_name_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

@@ -547,17 +547,33 @@ argmin = _reduce_all("argmin")
 
 
 def _extreme(name):
-    """`max`·`min`. **축을 주면 짝을, 안 주면 스칼라 하나를 낸다** — torch 가 그렇다.
+    """`max`·`min` 의 **세 얼굴.** torch 는 인자에 따라 다른 것을 낸다.
 
-    두 꼴이 한 이름에 붙어 있는 것이 헷갈리는 자리인데, 그것이 torch 의 계약이므로
+    - `max(x)` → 전부의 최댓값 **하나** (짝이 아니다)
+    - `max(x, dim)` → `(값, 번호)` 짝
+    - `max(x, other)` → **칸마다**의 최댓값
+
+    셋이 한 이름에 붙어 있는 것이 헷갈리는 자리인데, 그것이 torch 의 계약이므로
     여기서 정리하면 안 된다. 정리하면 교재 코드가 안 돈다.
+
+    세 번째 갈래가 없었고, 첫 번째는 짝을 냈다. 골든이 세 갈래를 따로 묻고서야
+    드러났다 — `x.max()` 를 스칼라로 바꿀 때만 시끄럽고, 비교에 쓰면 칸마다 비교가
+    되어 조용히 다른 답이다.
     """
-    def call(x, dim=None, keepdim=False, **kw):
+    pair = {"max": "amax", "min": "amin"}[name]
+    elementwise = {"max": "maximum", "min": "minimum"}[name]
+
+    def call(x, dim=None, keepdim=False, other=None, **kw):
         dim = kw.get("dim", dim)
+        other = kw.get("other", other)
+        if isinstance(dim, Tensor):                # `max(x, other)` 꼴
+            dim, other = None, dim
         h = handle(x)
+        if other is not None:
+            return wrap(guarded(h.binary, elementwise, handle(other)))
         if dim is None:
-            h = h.reshape(_js_list([int(h.size)]))
-            return guarded(getattr(h, name), 0)
+            return wrap(guarded(getattr(h, pair)))
+        # 축 하나면 짝이다. `guarded` 가 이미 자리에 이름을 붙여 주므로 다시 안 묶는다.
         return guarded(getattr(h, name), dim, bool(kw.get("keepdim", keepdim)))
     call.__name__ = name
     return call

@@ -232,7 +232,9 @@ class Tensor:
         `'function' object has no attribute 'detach'` 로 나왔다. 값을 돌려줄 자리에
         함수를 돌려주면 그 다음 줄에서야 터지고, 그러면 원인이 한 칸 밀린다.
         """
-        from ._ops import _BINARY_ONLY, camel, positional, refuse_if_nullary
+        from ._ops import (
+            _BINARY_ONLY, _EXTREME, camel, positional, refuse_if_nullary,
+        )
 
         # 모듈 쪽에 손으로 쓴 것들은 메서드로도 같은 것을 써야 한다 — 인자 순서가
         # 뒤집혔거나(`split`) 한쪽만 올 수 있는(`clamp`) 자리들이다.
@@ -245,6 +247,10 @@ class Tensor:
         if bare in ("clamp", "clip", "split", "chunk", "aminmax", "flip",
                     "pow", "squeeze", "repeat_interleave", "flatten",
                     "sum", "norm", "transpose", "swapdims", "remainder",
+                    # `max`·`min` 은 인자에 따라 셋으로 갈린다 — 저쪽은 가운데
+                    # 하나뿐이고 기본 축이 0 이라, 그냥 넘기면 `x.max()` 가 전체
+                    # 최댓값 대신 축 0 을 줄인 쌍을 낸다.
+                    "max", "min",
                     # 색인으로 쓰는 쪽 — 이름과 인자가 borch.ts 와 다르다.
                     "scatter", "scatter_add", "index_add", "index_copy",
                     "index_fill", "take", "take_along_dim",
@@ -261,7 +267,10 @@ class Tensor:
                     "inner", "adjoint", "moveaxis", "t", "corrcoef", "cov",
                     "vdot", "kron", "broadcast_to"):
             from . import _ops
-            fn = getattr(_ops, bare)
+            # **`max`·`min` 은 모듈 전역에 없다.** 그 이름을 `_ops` 에 두면 그 파일
+            # 안에서 파이썬 내장을 가리고, `max(a, b)` 로 크기를 재던 자리가 텐서
+            # 함수를 부른다 — 증상이 GPU 버퍼 할당 실패라 원인에서 아주 멀다.
+            fn = _EXTREME[bare] if bare in _EXTREME else getattr(_ops, bare)
             if not inplace:
                 return lambda *a, **k: fn(self, *a, **k)
             self._refuse_inplace_on_leaf(name)

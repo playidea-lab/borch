@@ -4791,6 +4791,50 @@ class _Cuda(_Namespace):
 cuda = _Cuda()
 
 
+# ── 제자리 활성과 `upsample` 별칭 ────────────────────────────────────────────
+#
+# torch 의 `F.relu_(x)` 는 `x` 를 **제 버퍼에서** 고친다. 학습 루프에서 중간 텐서를
+# 안 만들려고 쓰는 자리이고, 교재 코드에서는 `nn.ReLU(inplace=True)` 와 짝이다.
+#
+# **계산은 밑줄 없는 쪽이 한다.** 여기서는 그 결과를 제 버퍼에 되쓰기만 한다 —
+# 같은 식을 두 벌로 두면 언젠가 갈리고, 값이 그럴듯해서 안 보인다.
+
+_FUNCTIONAL_INPLACE = ("relu", "celu", "elu", "selu", "hardtanh", "leaky_relu",
+                       "threshold", "rrelu")
+
+
+def _make_functional_inplace(name):
+    fn = globals()[name]
+
+    def call(x, *args, **kw):
+        x = _wrap(x)
+        return x._inplace(lambda: fn(x, *args, **kw), name + "_")
+
+    call.__name__ = name + "_"
+    call.__doc__ = (f"`F.{name}` 을 제자리로. 계산은 그쪽이 하고 여기서는 제 버퍼에 "
+                    "되쓴다. 기울기가 켜진 잎은 torch 처럼 거절한다.")
+    return call
+
+
+for _nm in _FUNCTIONAL_INPLACE:
+    globals()[_nm + "_"] = _make_functional_inplace(_nm)
+
+
+def upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None):
+    """`interpolate` 의 옛 이름. torch 가 폐기 경고를 내면서도 계속 받는다."""
+    return interpolate(x, size, scale_factor, mode, align_corners)
+
+
+def upsample_nearest(x, size=None, scale_factor=None):
+    return interpolate(x, size, scale_factor, mode="nearest")
+
+
+def upsample_bilinear(x, size=None, scale_factor=None):
+    """**`align_corners=True` 다.** `interpolate(mode='bilinear')` 의 기본값은 거짓이라,
+    이름만 보고 별명으로 두면 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다."""
+    return interpolate(x, size, scale_factor, mode="bilinear", align_corners=True)
+
+
 # ================================================================ 이름 잇기
 #
 # **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서

@@ -43,6 +43,9 @@ from ._ops import (
     fractional_max_pool2d, fractional_max_pool2d_with_indices,
     fractional_max_pool3d, fractional_max_pool3d_with_indices,
     ctc_loss,
+    # 제자리 활성과 `interpolate` 의 옛 이름들.
+    celu_, elu_, hardtanh_, leaky_relu_, relu_, rrelu_, selu_, threshold_,
+    upsample, upsample_bilinear, upsample_nearest,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -2534,6 +2537,18 @@ class _Functional(_Namespace):
     max_unpool2d = staticmethod(max_unpool2d)
     max_unpool3d = staticmethod(max_unpool3d)
     ctc_loss = staticmethod(ctc_loss)
+    # 제자리 활성. 계산은 밑줄 없는 쪽이 하고 여기서는 제 버퍼에 되쓴다.
+    celu_ = staticmethod(celu_)
+    elu_ = staticmethod(elu_)
+    hardtanh_ = staticmethod(hardtanh_)
+    leaky_relu_ = staticmethod(leaky_relu_)
+    relu_ = staticmethod(relu_)
+    rrelu_ = staticmethod(rrelu_)
+    selu_ = staticmethod(selu_)
+    threshold_ = staticmethod(threshold_)
+    upsample = staticmethod(upsample)
+    upsample_bilinear = staticmethod(upsample_bilinear)
+    upsample_nearest = staticmethod(upsample_nearest)
     fractional_max_pool2d = staticmethod(fractional_max_pool2d)
     fractional_max_pool3d = staticmethod(fractional_max_pool3d)
     fractional_max_pool2d_with_indices = staticmethod(fractional_max_pool2d_with_indices)
