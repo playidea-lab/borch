@@ -1479,10 +1479,16 @@ def opt_cases(inp=None):
         덮어써서 표가 안 난다 — 처음에 그렇게 적었고 안 걸렸다. 여러 걸음을 밟아
         상태가 실제로 움직인 뒤에 묻는다. 상수도 하나만 보면 안 된다: 상태 은행은
         0 에서 시작하므로 **0 과 1 이 먼저 더럽혀진다.**
+
+        **옵티마이저를 골고루 밟아야 한다.** `SGD`·`Adam`·`RMSprop` 은 전용 커널을
+        써서 나머지와 다른 밑동에 있다 — 처음에 공통 밑동만 고쳤더니 그 셋이 안 닿은
+        채로 남았고, 그 셋을 안 물었으면 고친 줄 알고 넘어갔다.
         """
         seen = []
         for name, kw in (("Rprop", {"lr": 0.05}), ("Adafactor", {"lr": 0.05}),
-                         ("ASGD", {"lr": 0.05}), ("Adagrad", {"lr": 0.05})):
+                         ("ASGD", {"lr": 0.05}), ("Adagrad", {"lr": 0.05}),
+                         ("SGD", {"lr": 0.05, "momentum": 0.9}),
+                         ("Adam", {"lr": 0.05}), ("RMSprop", {"lr": 0.05})):
             p = L.tensor(np.array([0.5], dtype=np.float32), requires_grad=True)
             opt = getattr(L.optim, name)([p], **kw)
             for i in range(3):
