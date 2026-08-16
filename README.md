@@ -451,6 +451,42 @@ Tensor.randperm(64);
 t.randnLike();
 ```
 
+### 저장하고 이어서 하기
+
+**형식은 safetensors 다.** torch 의 `save`/`load` 는 pickle 이라 브라우저로 옮길 수도
+옮겨서도 안 된다. 대신 이쪽을 들면 **파이썬 `borch`·numpy·HF 도구가 같은 파일을
+읽는다** — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 그것으로 열린다.
+
+```ts
+import { save, load, prefixed, unprefixed, numbersToMeta, metaToNumbers } from "borch";
+
+const state = opt.stateDict();
+const bytes = await save(
+  { ...prefixed("model", model.stateDict()), ...prefixed("opt", state.tensors) },
+  { ...numbersToMeta("opt", state.numbers),
+    ...numbersToMeta("sched", sched.stateDict()) },
+);
+// bytes 는 Uint8Array — IndexedDB 에 넣든 파일로 내리든 쓰는 쪽 몫이다
+```
+
+되돌릴 때는 **모델·옵티마이저·스케줄러를 같은 인자로 다시 세운 뒤** 얹는다.
+
+```ts
+const read = load(bytes);
+model.loadStateDict(unprefixed("model", read.tensors));
+opt.loadStateDict({ tensors: unprefixed("opt", read.tensors),
+                    numbers: metaToNumbers("opt", read.metadata) });
+sched.loadStateDict(metaToNumbers("sched", read.metadata));
+```
+
+**가중치만 되돌리면 안 된다.** 모멘텀·스텝 계수기·스케줄러의 에폭이 같이 가야 재개한
+다음 스텝이 안 끊고 돌린 것과 같은 수를 낸다. `npm run serialize:ts` 가 그것을 비트
+단위로 확인한다 — 열 스텝을 통으로 돌린 궤적과 다섯에서 끊었다 이은 궤적이 정확히
+같아야 통과하고, 같은 러너가 그 파일을 **numpy 로만** 다시 뜯어 본다.
+
+값은 언제나 float32 로 나간다. borch 의 `int64`·`bool` 은 이름표라 머리의
+`__metadata__` 에 실린다 — 4 바이트짜리 몸에 `I64` 라고 적으면 남의 리더가 깨진다.
+
 ### 어디서 도는가
 
 WebGPU 가 필요하다. **없으면 폴백하지 않고 거절한다.** 여기 있던 TF.js 판은 WebGPU 를

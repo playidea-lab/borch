@@ -27,6 +27,14 @@ const RANK: Readonly<Record<DType, number>> = { bool: 0, int64: 1, float32: 2 };
 
 const BY_RANK: readonly DType[] = ["bool", "int64", "float32"];
 
+/**
+ * 형 이름 전부. **밖에서 들어온 문자열이 형인지 가리는 자리**가 이것을 쓴다 —
+ * 체크포인트 머리에 적힌 이름표는 남이 쓴 글자이므로 믿고 넘기면 안 된다.
+ *
+ * `BY_RANK` 를 그대로 내보낸다. 목록을 두 벌 두면 형이 하나 늘 때 한쪽만 는다.
+ */
+export const DTYPES: readonly DType[] = BY_RANK;
+
 export function dtypeName(d: DType): string {
   return `torch.${d}`;
 }

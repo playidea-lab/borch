@@ -16,6 +16,7 @@
  */
 
 import { adamStep, rmspropStep, sgdStep } from "./kernels.js";
+import { RuntimeError } from "./errors.js";
 import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
 /**
@@ -173,6 +174,84 @@ export abstract class Optimizer {
     });
   }
 
+  /**
+   * 이 옵티마이저가 든 스칼라. 하위 클래스가 덮어쓴다.
+   *
+   * **은행은 여기 안 들어간다** — 밑동이 이미 들고 있으므로 `stateDict` 가 알아서
+   * 담는다. 여기 적을 것은 `stepCount` 처럼 텐서가 아닌 것들이고, 빠뜨리면 재개했을
+   * 때 **편향 보정이 처음부터 다시 시작한다.** 값이 조금씩 다르게 나오는데 어디서
+   * 갈렸는지 가리키는 것이 없는 종류다.
+   */
+  protected counters(): Record<string, number> {
+    return {};
+  }
+
+  /** 위의 되돌림. 덮어쓴 쪽이 자기 것만 꺼내 간다. */
+  protected loadCounters(_values: Record<string, number>): void {
+    /* 스칼라가 없는 옵티마이저는 할 일이 없다 */
+  }
+
+  /**
+   * 학습을 이어서 하려면 있어야 하는 전부.
+   *
+   * **모멘텀만으로는 부족하다.** 그룹의 학습률(스케줄러가 이미 깎아 놓았을 수 있다)과
+   * 스텝 계수기가 같이 가야 재개한 다음 스텝이 안 끊고 돌린 것과 같은 수를 낸다.
+   *
+   * 텐서와 수를 갈라 준다 — safetensors 의 몸에는 텐서가, 머리에는 수가 실린다
+   * (`serialize.ts`).
+   */
+  stateDict(): { tensors: Record<string, Tensor>; numbers: Record<string, number> } {
+    const tensors: Record<string, Tensor> = {};
+    for (const [b, bank] of this.banks.entries()) {
+      for (const [i, slot] of bank.slots.entries()) tensors[`bank${b}.${i}`] = slot;
+    }
+    const numbers: Record<string, number> = { ...this.counters() };
+    for (const [g, group] of this.paramGroups.entries()) {
+      numbers[`group${g}.lr`] = group.lr;
+      if (group.initialLr !== undefined) numbers[`group${g}.initialLr`] = group.initialLr;
+      if (group.weightDecay !== undefined) {
+        numbers[`group${g}.weightDecay`] = group.weightDecay;
+      }
+    }
+    return { tensors, numbers };
+  }
+
+  /**
+   * `stateDict()` 가 준 것을 되돌린다. **옵티마이저를 같은 인자로 다시 세운 뒤** 부른다.
+   *
+   * 은행의 자리가 없거나 크기가 다르면 던진다. 파라미터가 늘거나 준 모델에 옛
+   * 체크포인트를 얹으면 값이 한 칸씩 밀린 채로 학습이 돌 수 있고, 그것은 예외보다
+   * 훨씬 나쁘다.
+   */
+  loadStateDict(state: {
+    tensors: Record<string, Tensor>;
+    numbers: Record<string, number>;
+  }): void {
+    noGrad(() => {
+      for (const [b, bank] of this.banks.entries()) {
+        for (const [i, slot] of bank.slots.entries()) {
+          const saved = state.tensors[`bank${b}.${i}`];
+          if (!saved) throw new RuntimeError(`체크포인트에 bank${b}.${i} 가 없다`);
+          if (saved.size !== slot.size) {
+            throw new RuntimeError(
+              `bank${b}.${i} 의 크기가 다르다: 저장 ${saved.size}, 지금 ${slot.size}`,
+            );
+          }
+          slot.copyFrom(saved);
+        }
+      }
+    });
+    for (const [g, group] of this.paramGroups.entries()) {
+      const lr = state.numbers[`group${g}.lr`];
+      if (lr !== undefined) group.lr = lr;
+      const initial = state.numbers[`group${g}.initialLr`];
+      if (initial !== undefined) group.initialLr = initial;
+      const decay = state.numbers[`group${g}.weightDecay`];
+      if (decay !== undefined) group.weightDecay = decay;
+    }
+    this.loadCounters(state.numbers);
+  }
+
   protected abstract update(index: number, param: Tensor, grad: Tensor): void;
 }
 
@@ -237,6 +316,14 @@ export class Adam extends Optimizer {
     // 편향 보정이 스텝 수에 걸리므로 파라미터마다가 아니라 한 번만 센다.
     this.stepCount += 1;
     super.step();
+  }
+
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -329,6 +416,14 @@ export class Adagrad extends Composed {
     super.step();
   }
 
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
+  }
+
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const sum = this.at(this.sums, index, "Adagrad");
     sum.copyFrom(sum.add(grad.square()));
@@ -380,6 +475,14 @@ export class Adamax extends Composed {
     super.step();
   }
 
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
+  }
+
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const m = this.at(this.first, index, "Adamax");
     const u = this.at(this.inf, index, "Adamax");
@@ -423,6 +526,17 @@ export class NAdam extends Composed {
   private mu = 0;
   private muNext = 0;
 
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount, muProduct: this.muProduct, mu: this.mu, muNext: this.muNext };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
+    if (v.muProduct !== undefined) this.muProduct = v.muProduct;
+    if (v.mu !== undefined) this.mu = v.mu;
+    if (v.muNext !== undefined) this.muNext = v.muNext;
+  }
+
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const m = this.at(this.first, index, "NAdam");
     const v = this.at(this.second, index, "NAdam");
@@ -458,6 +572,14 @@ export class RAdam extends Composed {
   override step(): void {
     this.stepCount += 1;
     super.step();
+  }
+
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -508,6 +630,16 @@ export class ASGD extends Composed {
     super.step();
     this.eta = this.lr / (1 + this.lambd * this.lr * this.stepCount) ** this.alpha;
     this.mu = 1 / Math.max(1, this.stepCount - this.t0);
+  }
+
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount, eta: this.eta, mu: this.mu };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
+    if (v.eta !== undefined) this.eta = v.eta;
+    if (v.mu !== undefined) this.mu = v.mu;
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -616,6 +748,14 @@ export class Adafactor extends Composed {
   override step(): void {
     this.stepCount += 1;
     super.step();
+  }
+
+  protected override counters(): Record<string, number> {
+    return { stepCount: this.stepCount };
+  }
+
+  protected override loadCounters(v: Record<string, number>): void {
+    if (v.stepCount !== undefined) this.stepCount = v.stepCount;
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -730,6 +870,31 @@ export abstract class LRScheduler {
   restart(): void {
     this.apply(this.base);
     this.start();
+  }
+
+  /**
+   * 재개하려면 있어야 하는 것 — **몇 번째 에폭인가와 기준값들.**
+   *
+   * 옵티마이저의 `lr` 만 되돌리면 안 된다. 스케줄러는 `epoch` 에서 값을 다시 계산하는
+   * 물건이라, 그것을 0 으로 두고 이으면 **다음 `step()` 이 학습률을 처음 값으로
+   * 되돌려 놓는다** — 옵티마이저 쪽은 멀쩡히 복원됐는데 한 스텝 만에 지워진다.
+   *
+   * 기준값도 같이 간다. `initialLr` 은 옵티마이저에서 오지만 그것은 **처음 세운
+   * 스케줄러가 찍은 값**이고, 이어 붙인 스케줄러들은 자기가 본 기준을 따로 든다.
+   */
+  stateDict(): Record<string, number> {
+    const out: Record<string, number> = { epoch: this.epoch };
+    for (const [i, base] of this.bases.entries()) out[`base${i}`] = base;
+    return out;
+  }
+
+  /** `stateDict()` 의 되돌림. 학습률은 안 건드린다 — 옵티마이저 쪽이 든다. */
+  loadStateDict(values: Record<string, number>): void {
+    if (values.epoch !== undefined) this.epoch = values.epoch;
+    for (const i of this.bases.keys()) {
+      const base = values[`base${i}`];
+      if (base !== undefined) this.bases[i] = base;
+    }
   }
 
   protected abstract compute(epoch: number): number;
@@ -1015,6 +1180,22 @@ export class ReduceLROnPlateau {
     private readonly patience = 10,
     private readonly threshold = 1e-4,
   ) {}
+
+  /**
+   * 재개에 필요한 둘. **`best` 가 무한대에서 시작한다** — 그래서 이 수들을 머리에
+   * 실을 때 `JSON.stringify` 대신 무한대를 따로 적는 자리가 필요했다
+   * (`serialize.ts` 의 `numbersToMeta`).
+   *
+   * 안 되돌리면 재개 직후 어떤 값이 와도 "처음이라 최고" 가 되어 참을성이 초기화된다.
+   */
+  stateDict(): Record<string, number> {
+    return { best: this.best, bad: this.bad };
+  }
+
+  loadStateDict(values: Record<string, number>): void {
+    if (values.best !== undefined) this.best = values.best;
+    if (values.bad !== undefined) this.bad = values.bad;
+  }
 
   step(metric: number): void {
     // torch 의 기본은 `rel` 모드다 — 상대적으로 이만큼은 좋아져야 나아진 것으로 센다.

@@ -27,6 +27,7 @@
     "example:ts": "uv run --with playwright python borch-ts/test/readme.py",
     "device:ts": "uv run --with playwright python borch-ts/test/device.py",
     "parity:ts": "uv run --with playwright python borch-ts/test/parity.py",
+    "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",
     "prepublishOnly": "npm run build:ts"
   },
   "//": [
