@@ -15,6 +15,18 @@ def _js_list(seq):
     return _to_js(list(int(n) for n in seq))
 
 
+def _js_options(**kw):
+    """파이썬 딕셔너리 → **JS 평범한 객체**.
+
+    `to_js` 는 딕셔너리를 기본으로 `Map` 으로 옮기는데, borch.ts 의 옵션 인자는
+    `options.requiresGrad` 처럼 속성으로 읽으므로 `Map` 이 오면 **전부 `undefined` 다.**
+    예외는 안 나고 기본값이 조용히 쓰인다 — 위치 인자가 옵션 객체로 바뀔 때 이 결속이
+    정확히 그렇게 끊겼고, 브라우저 골든의 `edge::grad::*` 열다섯 건이 "기울기를 안
+    켰다" 로 그것을 잡았다. TS 러너는 이 경로를 안 지난다.
+    """
+    return _to_js(kw, dict_converter=_js.Object.fromEntries)
+
+
 def camel_name(name):
     """`requires_grad` → `requiresGrad`. `_ops.camel` 과 같은 규칙인데 여기서 쓰려면
     그쪽을 들여와야 하고 그것이 순환이라, 이 한 줄만 따로 둔다."""
@@ -629,10 +641,11 @@ def wrap(x):
     if isinstance(x, bool):
         return Tensor(_ts.Tensor.from_(
             _js.Float32Array.new(_to_js([1.0 if x else 0.0])),
-            _js_list([]), False, "bool"))
+            _js_list([]), _js_options(dtype="bool")))
     if isinstance(x, int):
         return Tensor(_ts.Tensor.from_(
-            _js.Float32Array.new(_to_js([float(x)])), _js_list([]), False, "int64"))
+            _js.Float32Array.new(_to_js([float(x)])),
+            _js_list([]), _js_options(dtype="int64")))
     if isinstance(x, float):
         return Tensor(_ts.Tensor.full(_js_list([]), x))
     return Tensor(x)
@@ -659,8 +672,9 @@ def tensor(data, dtype=None, requires_grad=False):
         name = "float32"
     flat = _js.Float32Array.new(_to_js(arr.ravel().astype(_np.float32)))
     try:
-        return Tensor(
-            _ts.Tensor.from_(flat, _js_list(arr.shape), requires_grad, name))
+        return Tensor(_ts.Tensor.from_(
+            flat, _js_list(arr.shape),
+            _js_options(requiresGrad=bool(requires_grad), dtype=name)))
     except JsException as exc:
         # 정수·참거짓에 기울기를 켜는 것은 torch 도 거절한다. 종류를 옮겨 준다 —
         # `except RuntimeError` 로 잡던 코드가 안 잡히면 안 된다.
