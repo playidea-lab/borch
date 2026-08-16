@@ -1600,6 +1600,106 @@ def functional_name_cases(inp=None):
         return "기울기 있음" if x.grad is not None else "기울기가 안 왔다"
 
     add("gumbel_softmax::hard 에도 기울기가 흐른다", gs_grad)
+
+    # ── 공간 변환기 ────────────────────────────────────────────────────
+    #
+    # `affine_grid` 가 "출력의 이 칸은 입력의 어디를 보는가" 를 적고 `grid_sample` 이
+    # 그 자리에서 값을 떠 온다. 사이의 `theta` 가 학습되는 것이 요점이라, 사슬 전체로
+    # 기울기가 가는지를 물어야 한다.
+    #
+    # ## 케이스 모양 함정 둘
+    #
+    # 1. **정사각으로만 물으면 `(x, y)` 순서를 못 본다.** 격자의 마지막 축은 `(x, y)`
+    #    인데 모양은 `(H, W)` 라 뒤집혀 있다. 3×3 에서는 뒤집어 적어도 답이 같다.
+    # 2. **기울기는 칸 안쪽에서 물어야 한다.** 90° 회전은 격자가 칸 경계에 정확히
+    #    떨어지는데, 거기서는 `floor` 가 6e-8 차이에 뒤집혀 기울기가 통째로 달라진다
+    #    (실측: `tests/probe_grid5.py`). 값은 그 자리에서도 안정하다 — 무게가 0 이라
+    #    어느 쪽 모서리를 골라도 같은 값이 나온다. 그래서 **값은 회전으로, 기울기는
+    #    비스듬한 `theta` 로** 묻는다. 경계에서 답이 갈리는 것은 결함이 아니라 그
+    #    자리에 답이 없는 것이다.
+    eye3 = np.array([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]], dtype=np.float32)
+    shift3 = np.array([[[1.0, 0.0, 0.5], [0.0, 1.0, -0.5]]], dtype=np.float32)
+    flip3 = np.array([[[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]], dtype=np.float32)
+    rot3 = np.array([[[0.0, -1.0, 0.0], [1.0, 0.0, 0.0]]], dtype=np.float32)
+    tilt3 = np.array([[[0.8, 0.2, 0.05], [-0.15, 0.9, -0.1]]], dtype=np.float32)
+    img3 = np.arange(9, dtype=np.float32).reshape(1, 1, 3, 3)
+    rect24 = np.arange(8, dtype=np.float32).reshape(1, 1, 2, 4)
+
+    for name, th, size in (("항등", eye3, (1, 1, 3, 3)),
+                           ("이동", shift3, (1, 1, 2, 2)),
+                           ("뒤집기", flip3, (1, 1, 3, 3)),
+                           ("회전", rot3, (1, 1, 3, 3)),
+                           ("직사각 2x4", eye3, (1, 1, 2, 4))):
+        for ac in (False, True):
+            add(f"affine_grid::{name}(align={ac})",
+                lambda L, t=th, s=size, a=ac: F(L).affine_grid(
+                    L.tensor(t), s, align_corners=a))
+
+    for ac in (False, True):
+        for mode in ("bilinear", "nearest"):
+            add(f"grid_sample::항등({mode}, align={ac})",
+                lambda L, m=mode, a=ac: F(L).grid_sample(
+                    L.tensor(img3),
+                    F(L).affine_grid(L.tensor(eye3), (1, 1, 3, 3), align_corners=a),
+                    mode=m, align_corners=a))
+        add(f"grid_sample::뒤집기(align={ac})",
+            lambda L, a=ac: F(L).grid_sample(
+                L.tensor(img3),
+                F(L).affine_grid(L.tensor(flip3), (1, 1, 3, 3), align_corners=a),
+                align_corners=a))
+
+    # 범위 밖을 가리키는 격자 — 세 가지 채우기가 여기서만 갈린다.
+    out_grid = np.array([[[[-2.0, -2.0], [2.0, 2.0]],
+                          [[0.0, 0.0], [-1.0, 1.0]]]], dtype=np.float32)
+    for pad in ("zeros", "border", "reflection"):
+        for ac in (False, True):
+            add(f"grid_sample::padding={pad}(align={ac})",
+                lambda L, p=pad, a=ac: F(L).grid_sample(
+                    L.tensor(img3), L.tensor(out_grid), padding_mode=p,
+                    align_corners=a))
+
+    # 반 칸 어긋난 자리 — 겹선형이 실제로 섞는지는 여기서만 보인다.
+    half_grid = np.array([[[[0.25, -0.3], [-0.6, 0.4]]]], dtype=np.float32)
+    add("grid_sample::반 칸",
+        lambda L: F(L).grid_sample(L.tensor(img3), L.tensor(half_grid),
+                                   align_corners=False))
+    add("grid_sample::직사각 입력",
+        lambda L: F(L).grid_sample(L.tensor(rect24), L.tensor(half_grid),
+                                   align_corners=False))
+
+    planes33 = np.arange(2 * 2 * 3 * 3, dtype=np.float32).reshape(2, 2, 3, 3)
+    add("grid_sample::여러 평면",
+        lambda L: F(L).grid_sample(
+            L.tensor(planes33), L.tensor(np.tile(out_grid, (2, 1, 1, 1))),
+            align_corners=False))
+
+    def grid_grad_input(L):
+        x = L.tensor(img3, requires_grad=True)
+        F(L).grid_sample(x, L.tensor(half_grid), align_corners=False).sum().backward()
+        return x.grad
+
+    add("grid_sample::grad(입력)", grid_grad_input)
+
+    def grid_grad_grid(L):
+        g = L.tensor(half_grid, requires_grad=True)
+        F(L).grid_sample(L.tensor(img3), g, align_corners=False).sum().backward()
+        return g.grad
+
+    add("grid_sample::grad(격자)", grid_grad_grid)
+
+    def grid_grad_theta(L):
+        """**사슬 전체.** 공간 변환기가 `theta` 를 배우는 길이 이것이다.
+
+        비스듬한 `theta` 를 쓴다 — 회전은 격자가 칸 경계에 떨어져 답이 불안정하다.
+        """
+        t = L.tensor(tilt3, requires_grad=True)
+        F(L).grid_sample(
+            L.tensor(img3),
+            F(L).affine_grid(t, (1, 1, 3, 3), align_corners=False),
+            align_corners=False).sum().backward()
+        return t.grad
+
+    add("grid_sample::grad(theta 까지)", grid_grad_theta)
     return cases
 
 

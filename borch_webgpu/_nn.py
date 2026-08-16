@@ -336,6 +336,17 @@ def _upsample_bilinear(x, size=None, scale_factor=None):
     return _interpolate(x, size, scale_factor, "bilinear", True)
 
 
+def _affine_grid(theta, size, align_corners=False, **kw):
+    return wrap(_ts.nn.affineGrid(handle(theta), _js_list(list(size)),
+                                  bool(align_corners)))
+
+
+def _grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
+                 align_corners=False, **kw):
+    return wrap(_ts.nn.gridSample(handle(x), handle(grid), mode, padding_mode,
+                                  bool(align_corners)))
+
+
 def _batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
                 training=False, momentum=0.1, eps=1e-5, **kw):
     """층의 함수 꼴. **학습이면 이동 통계를 제자리에서 고친다** — torch 가 그렇다."""
@@ -387,6 +398,8 @@ def _bilinear(x1, x2, weight, bias=None):
 
 _HAND_WRITTEN = {
     "interpolate": _interpolate,
+    "affine_grid": _affine_grid,
+    "grid_sample": _grid_sample,
     "batch_norm": _batch_norm,
     "embedding_bag": _embedding_bag,
     "gumbel_softmax": _gumbel_softmax,

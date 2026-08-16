@@ -48,6 +48,8 @@ from ._ops import (
     upsample, upsample_bilinear, upsample_nearest,
     # 층이 얹혀 있는 함수들. 식을 한 벌만 둔다.
     batch_norm, embedding_bag, gumbel_softmax,
+    # 공간 변환기의 짝.
+    affine_grid, grid_sample,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -2518,6 +2520,8 @@ class _Functional(_Namespace):
     rrelu_ = staticmethod(rrelu_)
     selu_ = staticmethod(selu_)
     threshold_ = staticmethod(threshold_)
+    affine_grid = staticmethod(affine_grid)
+    grid_sample = staticmethod(grid_sample)
     batch_norm = staticmethod(batch_norm)
     embedding_bag = staticmethod(embedding_bag)
     gumbel_softmax = staticmethod(gumbel_softmax)

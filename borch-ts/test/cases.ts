@@ -1325,6 +1325,84 @@ function addUnpool(out: Map<string, Case>): void {
     nn.embeddingBag(ebIdx(), table, null, "sum").sum().backward();
     return gradOf(table, "embeddingBag");
   });
+
+  // ── 공간 변환기 ────────────────────────────────────────────────────────
+  //
+  // 함정 둘은 파이썬 쪽에 길게 적었다. 짧게: 정사각으로만 물으면 격자의 `(x, y)`
+  // 순서를 못 보고, **기울기는 칸 안쪽에서 물어야 한다** — 90° 회전은 격자가 칸
+  // 경계에 정확히 떨어져 `floor` 가 6e-8 차이에 뒤집힌다.
+  const th = (v: number[]) => Tensor.from(v, [1, 2, 3]);
+  const eye3 = () => th([1, 0, 0, 0, 1, 0]);
+  const shift3 = () => th([1, 0, 0.5, 0, 1, -0.5]);
+  const flip3 = () => th([-1, 0, 0, 0, -1, 0]);
+  const rot3 = () => th([0, -1, 0, 1, 0, 0]);
+  const tilt3 = () => th([0.8, 0.2, 0.05, -0.15, 0.9, -0.1]);
+  const img3 = () => grid([1, 1, 3, 3]);
+  const rect24 = () => grid([1, 1, 2, 4]);
+
+  const gridCases: [string, () => Tensor, number[]][] = [
+    ["항등", eye3, [1, 1, 3, 3]],
+    ["이동", shift3, [1, 1, 2, 2]],
+    ["뒤집기", flip3, [1, 1, 3, 3]],
+    ["회전", rot3, [1, 1, 3, 3]],
+    ["직사각 2x4", eye3, [1, 1, 2, 4]],
+  ];
+  for (const [name, make, size] of gridCases) {
+    for (const ac of [false, true]) {
+      out.set(`fname::affine_grid::${name}(align=${ac ? "True" : "False"})`,
+        () => nn.affineGrid(make(), size, ac));
+    }
+  }
+
+  for (const ac of [false, true]) {
+    const tag = ac ? "True" : "False";
+    for (const mode of ["bilinear", "nearest"] as const) {
+      out.set(`fname::grid_sample::항등(${mode}, align=${tag})`,
+        () => nn.gridSample(img3(), nn.affineGrid(eye3(), [1, 1, 3, 3], ac),
+          mode, "zeros", ac));
+    }
+    out.set(`fname::grid_sample::뒤집기(align=${tag})`,
+      () => nn.gridSample(img3(), nn.affineGrid(flip3(), [1, 1, 3, 3], ac),
+        "bilinear", "zeros", ac));
+  }
+
+  const outGrid = () => Tensor.from([-2, -2, 2, 2, 0, 0, -1, 1], [1, 2, 2, 2]);
+  for (const pad of ["zeros", "border", "reflection"] as const) {
+    for (const ac of [false, true]) {
+      out.set(`fname::grid_sample::padding=${pad}(align=${ac ? "True" : "False"})`,
+        () => nn.gridSample(img3(), outGrid(), "bilinear", pad, ac));
+    }
+  }
+
+  const halfGrid = () => Tensor.from([0.25, -0.3, -0.6, 0.4], [1, 1, 2, 2]);
+  out.set("fname::grid_sample::반 칸",
+    () => nn.gridSample(img3(), halfGrid(), "bilinear", "zeros", false));
+  out.set("fname::grid_sample::직사각 입력",
+    () => nn.gridSample(rect24(), halfGrid(), "bilinear", "zeros", false));
+  out.set("fname::grid_sample::여러 평면", () => {
+    const g = Tensor.cat([outGrid(), outGrid()], 0);
+    return nn.gridSample(grid([2, 2, 3, 3]), g, "bilinear", "zeros", false);
+  });
+
+  out.set("fname::grid_sample::grad(입력)", () => {
+    const x = img3();
+    x.requiresGrad = true;
+    nn.gridSample(x, halfGrid(), "bilinear", "zeros", false).sum().backward();
+    return gradOf(x, "gridSample");
+  });
+  out.set("fname::grid_sample::grad(격자)", () => {
+    const g = halfGrid();
+    g.requiresGrad = true;
+    nn.gridSample(img3(), g, "bilinear", "zeros", false).sum().backward();
+    return gradOf(g, "gridSample");
+  });
+  out.set("fname::grid_sample::grad(theta 까지)", () => {
+    const t = tilt3();
+    t.requiresGrad = true;
+    nn.gridSample(img3(), nn.affineGrid(t, [1, 1, 3, 3], false),
+      "bilinear", "zeros", false).sum().backward();
+    return gradOf(t, "affineGrid");
+  });
 }
 
 /**

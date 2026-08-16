@@ -4820,6 +4820,124 @@ for _nm in _FUNCTIONAL_INPLACE:
     globals()[_nm + "_"] = _make_functional_inplace(_nm)
 
 
+# ── 공간 변환기 ────────────────────────────────────────────────────────────
+#
+# `affine_grid` 가 "출력의 이 칸은 입력의 어디를 보는가" 를 적은 격자를 만들고,
+# `grid_sample` 이 그 자리에서 값을 떠 온다. 둘이 짝이고, 사이에 놓인 `theta` 가
+# 학습된다 — 모델이 스스로 자르고 돌리고 확대하는 법을 배우는 구조다.
+#
+# **격자 좌표를 미분 가능한 텐서로 둔다.** 그러면 입력 쪽 기울기와 격자(따라서
+# `theta`) 쪽 기울기가 둘 다 저절로 나온다. 자리 번호(내림한 정수)만 상수다 —
+# torch 도 거기서는 안 흘린다.
+
+def _grid_base(n, align_corners):
+    """`[-1, 1]` 위의 표본 자리. **`align_corners` 가 이것을 바꾼다.**
+
+    참이면 양 끝을 못 박고(`-1`, `1`) 그 사이를 고르게 나눈다. 거짓이면 칸의
+    **가운데**를 잡는다(`(2i+1)/n − 1`) — 끝 칸의 절반이 밖으로 나간다.
+    `interpolate` 와 같은 갈림이고, 값이 안쪽에서는 비슷해 눈으로는 안 갈린다.
+    """
+    if align_corners:
+        return (_np.linspace(-1.0, 1.0, n, dtype=_np.float32) if n > 1
+                else _np.zeros(1, dtype=_np.float32))
+    return ((2 * _np.arange(n, dtype=_np.float32) + 1) / n - 1).astype(_np.float32)
+
+
+def affine_grid(theta, size, align_corners=False):
+    """`theta` 가 그리는 표본 격자. `(N, 2, 3)` 을 받아 `(N, H, W, 2)` 를 낸다.
+
+    마지막 축은 **`(x, y)` 순서다** — 모양의 `(H, W)` 와 뒤집혀 있다. 뒤집어 적으면
+    가로세로가 같은 정사각 입력에서는 답이 같아서 안 보이고, 직사각에서 드러난다.
+    """
+    theta = _wrap(theta)
+    n, _, h, w = tuple(int(v) for v in size)
+    xs = _grid_base(w, align_corners)
+    ys = _grid_base(h, align_corners)
+    # 균질좌표 `(x, y, 1)` — 이동까지 한 번의 곱으로 끝낸다.
+    base = _np.stack([_np.broadcast_to(xs[None, :], (h, w)),
+                      _np.broadcast_to(ys[:, None], (h, w)),
+                      _np.ones((h, w), dtype=_np.float32)], axis=-1)
+    flat = Tensor(base.reshape(h * w, 3).astype(_np.float32))
+    out = matmul(flat, theta.transpose(-2, -1))      # (N, H·W, 2)
+    return out.reshape(n, h, w, 2)
+
+
+def _grid_denorm(g, n, align_corners):
+    """`[-1, 1]` 을 입력의 칸 번호로 되돌린다. `_grid_base` 의 반대다."""
+    if align_corners:
+        return (g + 1.0) * ((n - 1) / 2.0)
+    return ((g + 1.0) * n - 1.0) * 0.5
+
+
+def _grid_reflect(v, n, align_corners):
+    """범위 밖을 **되접는다.** 되접는 구간이 `align_corners` 로 갈린다.
+
+    참이면 `[0, n−1]`, 거짓이면 `[−0.5, n−0.5]` 다(실측). 되접은 뒤 한 번 더 자른다 —
+    거짓 쪽 구간이 실제 칸 밖까지 걸쳐 있기 때문이다.
+    """
+    lo, hi = (0.0, n - 1.0) if align_corners else (-0.5, n - 0.5)
+    if hi <= lo:
+        return v * 0.0 + lo
+    span = 2.0 * (hi - lo)
+    t = remainder(v - lo, span)
+    return clamp(minimum(t, span - t) + lo, 0.0, n - 1.0)
+
+
+def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
+                align_corners=False):
+    """격자가 가리키는 자리에서 값을 떠 온다. `affine_grid` 의 짝이다.
+
+    **자리 번호는 상수, 무게는 텐서다.** 내림한 정수는 미분이 없고 그 나머지가
+    무게가 되므로, 무게만 그래프에 두면 입력과 격자 양쪽으로 기울기가 흐른다 —
+    공간 변환기가 `theta` 를 배우는 길이 그것이다.
+    """
+    x, grid = _wrap(x), _wrap(grid)
+    n, c, h, w = x.data.shape
+    oh, ow = grid.data.shape[1], grid.data.shape[2]
+    gx = grid[:, :, :, 0]
+    gy = grid[:, :, :, 1]
+    sx = _grid_denorm(gx, w, align_corners)
+    sy = _grid_denorm(gy, h, align_corners)
+    if padding_mode == "border":
+        sx, sy = clamp(sx, 0.0, w - 1.0), clamp(sy, 0.0, h - 1.0)
+    elif padding_mode == "reflection":
+        sx = _grid_reflect(sx, w, align_corners)
+        sy = _grid_reflect(sy, h, align_corners)
+    elif padding_mode != "zeros":
+        _unsupported(f"grid_sample(padding_mode={padding_mode!r})")
+
+    flat = x.reshape(-1)
+    batch = _np.arange(n).reshape(n, 1, 1, 1)
+    chan = _np.arange(c).reshape(1, c, 1, 1)
+
+    def pick(iy, ix):
+        """한 모서리를 떠 온다. **범위 밖은 0 으로 두되 번호는 잘라서 넘긴다** —
+        안 자르면 엉뚱한 자리를 읽는다."""
+        inside = ((ix >= 0) & (ix < w) & (iy >= 0) & (iy < h))
+        cy = _np.clip(iy, 0, h - 1)
+        cx = _np.clip(ix, 0, w - 1)
+        idx = (((batch * c + chan) * h + cy[:, None]) * w + cx[:, None])
+        got = take(flat, Tensor(idx.reshape(-1).astype(_np.int64)))
+        got = got.reshape(n, c, oh, ow)
+        return got * Tensor(inside[:, None].astype(x.data.dtype))
+
+    if mode == "nearest":
+        # torch 는 반올림한다. 값만 나오고 무게가 없으므로 격자로는 안 흐른다.
+        return pick(_np.rint(sy.data).astype(int), _np.rint(sx.data).astype(int))
+    if mode != "bilinear":
+        _unsupported(f"grid_sample(mode={mode!r}) — 겹선형과 최근접만 있습니다")
+
+    x0 = _np.floor(sx.data).astype(int)
+    y0 = _np.floor(sy.data).astype(int)
+    wx = (sx - Tensor(x0.astype(x.data.dtype))).reshape(n, 1, oh, ow)
+    wy = (sy - Tensor(y0.astype(x.data.dtype))).reshape(n, 1, oh, ow)
+    one = 1.0
+    return (pick(y0, x0) * (one - wy) * (one - wx)
+            + pick(y0, x0 + 1) * (one - wy) * wx
+            + pick(y0 + 1, x0) * wy * (one - wx)
+            + pick(y0 + 1, x0 + 1) * wy * wx)
+
+
 def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
                training=False, momentum=0.1, eps=1e-5):
     """`BatchNorm*d` 의 함수 꼴. **층이 이것을 부른다** — 식을 한 벌만 둔다.

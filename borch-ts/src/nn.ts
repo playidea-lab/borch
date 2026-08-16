@@ -1876,6 +1876,149 @@ export class ConstantPad3d extends PadNd {
  * 접는 축이 배치와 공간 전부이고 채널만 남는다 — 공간 축이 몇 개든 규칙이 같아서
  * 차원마다 클래스를 세울 이유가 없다.
  */
+// ── 공간 변환기 ──────────────────────────────────────────────────────────
+//
+// `affineGrid` 가 "출력의 이 칸은 입력의 어디를 보는가" 를 적은 격자를 만들고,
+// `gridSample` 이 그 자리에서 값을 떠 온다. 사이의 `theta` 가 학습된다.
+//
+// **새 커널을 안 쓴다.** 자리 번호도 텐서로 둘 수 있어서(`floor` 한 값을
+// `indexSelect` 의 번호로 넘긴다) 있는 연산만으로 짜인다. 작은 커널이 여럿 도는
+// 대신 입력과 격자 양쪽 기울기가 저절로 따라온다 — 흩뿌리는 역방향을 손으로 적으면
+// 스레드끼리 같은 칸에 쓰게 되고, 그 답은 실행마다 달라질 수 있다.
+
+/** `[-1, 1]` 위의 표본 자리. `alignCorners` 가 끝을 못 박느냐 칸 가운데를 잡느냐를 가른다. */
+function gridBase(n: number, alignCorners: boolean): number[] {
+  if (alignCorners) {
+    if (n <= 1) return [0];
+    return Array.from({ length: n }, (_, i) => -1 + (2 * i) / (n - 1));
+  }
+  return Array.from({ length: n }, (_, i) => (2 * i + 1) / n - 1);
+}
+
+/**
+ * `theta` 가 그리는 표본 격자. `(N, 2, 3)` → `(N, H, W, 2)`.
+ *
+ * 마지막 축은 **`(x, y)` 순서다** — 모양의 `(H, W)` 와 뒤집혀 있다. 정사각에서는
+ * 뒤집어 적어도 답이 같아서 직사각으로 물어야 드러난다.
+ */
+export function affineGrid(
+  theta: Tensor,
+  size: readonly number[],
+  alignCorners = false,
+): Tensor {
+  const n = size[0] ?? 1;
+  const h = size[2] ?? 1;
+  const w = size[3] ?? 1;
+  const xs = gridBase(w, alignCorners);
+  const ys = gridBase(h, alignCorners);
+  // 균질좌표 `(x, y, 1)` — 이동까지 한 번의 곱으로 끝낸다.
+  const flat: number[] = [];
+  for (let i = 0; i < h; i++) {
+    for (let j = 0; j < w; j++) flat.push(xs[j] ?? 0, ys[i] ?? 0, 1);
+  }
+  // 배치마다 같은 격자에 제 `theta` 를 곱한다. `bmm` 이 3 차원끼리라 배치를 맞춰 편다.
+  const base = Tensor.from(flat, [h * w, 3]);
+  const parts: Tensor[] = [];
+  for (let b = 0; b < n; b++) {
+    parts.push(base.mm(theta.select(0, b).permute([1, 0])));
+  }
+  return Tensor.stack(parts, 0).reshape([n, h, w, 2]);
+}
+
+/** `[-1, 1]` 을 입력의 칸 번호로. `gridBase` 의 반대다. */
+function gridDenorm(g: Tensor, n: number, alignCorners: boolean): Tensor {
+  if (alignCorners) return g.add(Tensor.full([], 1)).mul(Tensor.full([], (n - 1) / 2));
+  return g.add(Tensor.full([], 1)).mul(Tensor.full([], n)).sub(Tensor.full([], 1))
+    .mul(Tensor.full([], 0.5));
+}
+
+/**
+ * 범위 밖을 **되접는다.** 되접는 구간이 `alignCorners` 로 갈린다 —
+ * 참이면 `[0, n−1]`, 거짓이면 `[−0.5, n−0.5]` 다(실측). 되접은 뒤 한 번 더 자른다.
+ */
+function gridReflect(v: Tensor, n: number, alignCorners: boolean): Tensor {
+  const lo = alignCorners ? 0 : -0.5;
+  const hi = alignCorners ? n - 1 : n - 0.5;
+  if (hi <= lo) return v.mul(Tensor.full([], 0)).add(Tensor.full([], lo));
+  const span = 2 * (hi - lo);
+  const t = v.sub(Tensor.full([], lo)).remainder(span);
+  const folded = t.binary("minimum", Tensor.full([], span).sub(t));
+  return folded.add(Tensor.full([], lo)).clamp(0, n - 1);
+}
+
+/**
+ * 격자가 가리키는 자리에서 값을 떠 온다. `affineGrid` 의 짝이다.
+ *
+ * **자리 번호는 상수, 무게는 텐서다.** 내림한 정수는 미분이 없고 그 나머지가 무게가
+ * 되므로, 무게만 그래프에 두면 입력과 격자 양쪽으로 기울기가 흐른다.
+ */
+export function gridSample(
+  x: Tensor,
+  grid: Tensor,
+  mode: "bilinear" | "nearest" = "bilinear",
+  paddingMode: "zeros" | "border" | "reflection" = "zeros",
+  alignCorners = false,
+): Tensor {
+  const N = x.shape[0] ?? 1;
+  const C = x.shape[1] ?? 1;
+  const H = x.shape[2] ?? 1;
+  const W = x.shape[3] ?? 1;
+  const OH = grid.shape[1] ?? 1;
+  const OW = grid.shape[2] ?? 1;
+  const cells = OH * OW;
+
+  const g2 = grid.reshape([N, cells, 2]);
+  let sx = gridDenorm(g2.narrow(2, 0, 1).reshape([N, cells]), W, alignCorners);
+  let sy = gridDenorm(g2.narrow(2, 1, 1).reshape([N, cells]), H, alignCorners);
+  if (paddingMode === "border") {
+    sx = sx.clamp(0, W - 1);
+    sy = sy.clamp(0, H - 1);
+  } else if (paddingMode === "reflection") {
+    sx = gridReflect(sx, W, alignCorners);
+    sy = gridReflect(sy, H, alignCorners);
+  }
+
+  // 평면마다의 시작 번호. `(N, C)` 를 미리 펴 두면 모서리마다 더하기만 하면 된다.
+  const planeStart: number[] = [];
+  for (let n = 0; n < N; n++) {
+    for (let c = 0; c < C; c++) planeStart.push((n * C + c) * H * W);
+  }
+  const starts = Tensor.from(planeStart, [N, C, 1]);
+  const source = x.reshape([x.size]);
+
+  /** 모서리 하나를 떠 온다. **범위 밖은 0 이되 번호는 잘라서 넘긴다.** */
+  const pick = (iy: Tensor, ix: Tensor): Tensor => {
+    const inside = iy.binary("ge", Tensor.full([], 0))
+      .mul(iy.binary("lt", Tensor.full([], H)))
+      .mul(ix.binary("ge", Tensor.full([], 0)))
+      .mul(ix.binary("lt", Tensor.full([], W)));
+    const cy = iy.clamp(0, H - 1);
+    const cx = ix.clamp(0, W - 1);
+    const offset = cy.mul(Tensor.full([], W)).add(cx).reshape([N, 1, cells]);
+    const flat = starts.add(offset).reshape([N * C * cells]);
+    const got = source.indexSelect(0, flat).reshape([N, C, cells]);
+    return got.mul(inside.reshape([N, 1, cells]));
+  };
+
+  const shaped = (t: Tensor) => t.reshape([N, C, OH, OW]);
+  if (mode === "nearest") {
+    // torch 는 반올림한다. 무게가 없으므로 격자로는 기울기가 안 간다.
+    return shaped(pick(sy.round(), sx.round()));
+  }
+  const x0 = sx.floor();
+  const y0 = sy.floor();
+  const wx = sx.sub(x0).reshape([N, 1, cells]);
+  const wy = sy.sub(y0).reshape([N, 1, cells]);
+  const one = Tensor.full([], 1);
+  const x1 = x0.add(one);
+  const y1 = y0.add(one);
+  const out = pick(y0, x0).mul(one.sub(wy)).mul(one.sub(wx))
+    .add(pick(y0, x1).mul(one.sub(wy)).mul(wx))
+    .add(pick(y1, x0).mul(wy).mul(one.sub(wx)))
+    .add(pick(y1, x1).mul(wy).mul(wx));
+  return shaped(out);
+}
+
 /**
  * `BatchNormND` 의 함수 꼴. **층이 이것을 부른다** — 식을 한 벌만 둔다.
  *
