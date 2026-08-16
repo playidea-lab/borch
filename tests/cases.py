@@ -1700,6 +1700,98 @@ def functional_name_cases(inp=None):
         return t.grad
 
     add("grid_sample::grad(theta 까지)", grid_grad_theta)
+
+    # ── multi_head_attention_forward ───────────────────────────────────
+    #
+    # `MultiheadAttention` 이 안에서 하는 계산을 이름으로 낸 것. torch 의 그 층도
+    # 이 함수를 부른다.
+    #
+    # **입력이 `(L, N, E)` 다 — 길이가 앞이다.** 층은 `batch_first` 를 받지만 이
+    # 함수는 늘 길이가 앞이라, 배치를 앞에 두고 부르면 조용히 다른 축을 섞는다.
+    # 그래서 `L != N` 인 모양으로 묻는다 — 같으면 축을 바꿔도 안 걸린다.
+    mha_L, mha_N, mha_E, mha_H, mha_S = 3, 2, 4, 2, 3
+
+    def mha_w(shape, spin=0.0):
+        """**난수가 아니다.** TypeScript 쪽 케이스에도 같은 값을 적어야 하는데 난수
+        생성기는 언어를 못 건넌다. 세는 값이라 양쪽이 같은 것을 만든다."""
+        n = int(np.prod(shape))
+        return (np.sin(np.arange(n, dtype=np.float64) + spin) * 0.5
+                ).astype(np.float32).reshape(shape)
+
+    mha_q = mha_w((mha_L, mha_N, mha_E), 0.0)
+    mha_k = mha_w((mha_S, mha_N, mha_E), 0.7)
+    mha_v = mha_w((mha_S, mha_N, mha_E), 1.3)
+    mha_inw = mha_w((3 * mha_E, mha_E), 2.1)
+    mha_inb = mha_w((3 * mha_E,), 0.4)
+    mha_ow = mha_w((mha_E, mha_E), 1.9)
+    mha_ob = mha_w((mha_E,), 2.6)
+
+    def mha(L, **kw):
+        return F(L).multi_head_attention_forward(
+            L.tensor(mha_q), L.tensor(mha_k), L.tensor(mha_v), mha_E, mha_H,
+            L.tensor(mha_inw), L.tensor(mha_inb), None, None, False, 0.0,
+            L.tensor(mha_ow), L.tensor(mha_ob), True, **kw)
+
+    add("mha::출력", lambda L: mha(L)[0])
+    add("mha::가중치(머리 평균)", lambda L: mha(L)[1])
+    # **머리마다** 돌려주는 갈래 — 평균만 물으면 머리를 섞어도 안 보인다.
+    add("mha::가중치(머리마다)",
+        lambda L: mha(L, average_attn_weights=False)[1])
+    add("mha::need_weights=False",
+        lambda L: mha(L, need_weights=False)[0])
+    add("mha::가중치가 None 인가",
+        lambda L: str(mha(L, need_weights=False)[1] is None))
+
+    causal = np.triu(np.ones((mha_L, mha_S), dtype=bool), k=1)
+    add("mha::불리언 가림막",
+        lambda L: mha(L, attn_mask=L.tensor(causal))[0])
+    # **실수 가림막은 더하는 것이다** — 0 이 아니면 가림으로 뭉뚱그리면 인과 마스크만
+    # 우연히 맞는다.
+    add("mha::실수 가림막",
+        lambda L: mha(L, attn_mask=L.tensor(
+            np.where(causal, -np.inf, 0.0).astype(np.float32)))[0])
+    pad_mask = np.array([[False, False, True], [False, True, True]])
+    add("mha::key_padding_mask",
+        lambda L: mha(L, key_padding_mask=L.tensor(pad_mask))[0])
+    add("mha::key_padding_mask 가중치",
+        lambda L: mha(L, key_padding_mask=L.tensor(pad_mask))[1])
+    add("mha::is_causal",
+        lambda L: mha(L, attn_mask=L.tensor(causal))[0])
+
+    def mha_layer_matches(L):
+        """**층과 함수가 같은 답이어야 한다.** 층이 이 함수를 부르는지가 여기서 보인다."""
+        layer = L.nn.MultiheadAttention(mha_E, mha_H)
+        layer.load_state_dict({
+            "in_proj_weight": L.tensor(mha_inw), "in_proj_bias": L.tensor(mha_inb),
+            "out_proj.weight": L.tensor(mha_ow), "out_proj.bias": L.tensor(mha_ob)})
+        got = layer(L.tensor(mha_q), L.tensor(mha_k), L.tensor(mha_v))[0]
+        return got - mha(L)[0]
+
+    add("mha::층과 같은 답", mha_layer_matches)
+
+    def mha_grad(L):
+        q = L.tensor(mha_q, requires_grad=True)
+        F(L).multi_head_attention_forward(
+            q, L.tensor(mha_k), L.tensor(mha_v), mha_E, mha_H,
+            L.tensor(mha_inw), L.tensor(mha_inb), None, None, False, 0.0,
+            L.tensor(mha_ow), L.tensor(mha_ob))[0].sum().backward()
+        return q.grad
+
+    add("mha::grad(query)", mha_grad)
+
+    def mha_refuses(L):
+        """**안 하는 갈래는 시끄럽게 거절한다** — 조용히 무시하면 값이 그럴듯하게 다르다."""
+        try:
+            F(L).multi_head_attention_forward(
+                L.tensor(mha_q), L.tensor(mha_k), L.tensor(mha_v), mha_E, mha_H,
+                L.tensor(mha_inw), L.tensor(mha_inb),
+                L.tensor(np.zeros((1, 1, mha_E), dtype=np.float32)), None,
+                False, 0.0, L.tensor(mha_ow), L.tensor(mha_ob))
+            return "통과했다"
+        except Exception:                                           # noqa: BLE001
+            return "거절"
+
+    add("mha::bias_k 는 거절", mha_refuses)
     return cases
 
 

@@ -1403,6 +1403,60 @@ function addUnpool(out: Map<string, Case>): void {
       "bilinear", "zeros", false).sum().backward();
     return gradOf(t, "affineGrid");
   });
+
+  // ── multi_head_attention_forward ───────────────────────────────────────
+  //
+  // **입력이 `(L, N, E)` — 길이가 앞이다.** 파이썬 쪽과 같은 수를 써야 하므로
+  // 가중치는 골든이 들고 온 것을 쓴다(`inputs` 에 있다).
+  //
+  // 여기서는 가림막이 **더하는 실수**뿐이다. 참·거짓을 실수로 바꾸는 일은 torch 의
+  // 계약을 흉내내는 파이썬 결속이 한다 — 라이브러리 자신은 한 가지만 받는다.
+  // 가중치는 **난수가 아니다** — 세는 값이라 파이썬 쪽과 같은 것을 만든다.
+  const mhaW = (shape: number[], spin: number, grad = false) => {
+    const n = shape.reduce((a, b) => a * b, 1);
+    return Tensor.from(
+      Array.from({ length: n }, (_, i) => Math.sin(i + spin) * 0.5), shape,
+      grad);
+  };
+  const mhaQ = (grad = false) => mhaW([3, 2, 4], 0.0, grad);
+  const mhaK = () => mhaW([3, 2, 4], 0.7);
+  const mhaV = () => mhaW([3, 2, 4], 1.3);
+  const mhaInW = () => mhaW([12, 4], 2.1);
+  const mhaInB = () => mhaW([12], 0.4);
+  const mhaOutW = () => mhaW([4, 4], 1.9);
+  const mhaOutB = () => mhaW([4], 2.6);
+  const runMha = (opts: {
+    mask?: Tensor | null;
+    pad?: Tensor | null;
+    average?: boolean;
+  } = {}) => nn.multiHeadAttentionForward(
+    mhaQ(), mhaK(), mhaV(), 2, mhaInW(), mhaInB(), mhaOutW(), mhaOutB(),
+    opts.mask ?? null, opts.pad ?? null, opts.average ?? true);
+
+  out.set("fname::mha::출력", () => runMha().output);
+  out.set("fname::mha::가중치(머리 평균)", () => runMha().weights);
+  out.set("fname::mha::가중치(머리마다)",
+    () => runMha({ average: false }).weights);
+  // 인과 가림막 — 위 삼각을 -inf 로. 참·거짓이 아니라 더하는 실수다.
+  const causalAdd = () => Tensor.from(
+    [0, -Infinity, -Infinity, 0, 0, -Infinity, 0, 0, 0], [3, 3]);
+  out.set("fname::mha::실수 가림막",
+    () => runMha({ mask: causalAdd() }).output);
+  out.set("fname::mha::불리언 가림막",
+    () => runMha({ mask: causalAdd() }).output);
+  out.set("fname::mha::is_causal",
+    () => runMha({ mask: causalAdd() }).output);
+  const padAdd = () => Tensor.from([0, 0, -Infinity, 0, -Infinity, -Infinity], [2, 3]);
+  out.set("fname::mha::key_padding_mask",
+    () => runMha({ pad: padAdd() }).output);
+  out.set("fname::mha::key_padding_mask 가중치",
+    () => runMha({ pad: padAdd() }).weights);
+  out.set("fname::mha::grad(query)", () => {
+    const q = mhaQ(true);
+    nn.multiHeadAttentionForward(q, mhaK(), mhaV(), 2, mhaInW(), mhaInB(),
+      mhaOutW(), mhaOutB()).output.sum().backward();
+    return gradOf(q, "multiHeadAttentionForward");
+  });
 }
 
 /**

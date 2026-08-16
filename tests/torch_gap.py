@@ -394,6 +394,7 @@ SKIPPED = {
     # 아직 안 굳은 것.
     "LinearCrossEntropyLoss": "torch 에 갓 들어온 것 — 굳으면 본다",
     "LinearCrossEntropyOptions": "위와 같다",
+    "linear_cross_entropy": "위 층의 함수 짝 — 같이 굳으면 같이 본다",
     "Muon": "torch 에 갓 들어온 옵티마이저 — 굳으면 본다",
     "grouped_mm": "fp8·묶음 GEMM — 그 하드웨어가 없다",
     "scaled_grouped_mm": "fp8·묶음 GEMM — 그 하드웨어가 없다",

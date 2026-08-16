@@ -2300,6 +2300,82 @@ function slice(g: Tensor, k: number, H: number): Tensor {
  * 입력은 `(배치, 길이, 특징)` 이다(`batch_first=True`). 마스크는 **실수**다 —
  * 0 과 -inf 이고, "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
  */
+/**
+ * 어텐션의 함수 꼴. 가중치를 밖에서 받는다.
+ *
+ * **입력이 `(L, N, E)` 다 — 길이가 앞이다.** torch 의 같은 이름이 그렇고, 배치를
+ * 앞에 두고 부르면 조용히 다른 축을 섞는다.
+ *
+ * **가림막은 더하는 실수다.** 참·거짓 표를 여기서 안 받는다 — `-inf` 를 더해
+ * softmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니고, 곱하면 이미 정규화한
+ * 뒤라 남은 자리가 1 로 안 돌아간다. 참·거짓을 실수로 바꾸는 일은 torch 의 계약을
+ * 흉내내는 자리(파이썬 결속)에서 한다.
+ *
+ * @returns 출력 `(L, N, E)` 과 가중치. `averageWeights` 면 `(N, L, S)`, 아니면
+ *   머리마다 `(N, H, L, S)` 다.
+ */
+export function multiHeadAttentionForward(
+  query: Tensor,
+  key: Tensor,
+  value: Tensor,
+  numHeads: number,
+  inWeight: Tensor,
+  inBias: Tensor | null,
+  outWeight: Tensor,
+  outBias: Tensor | null,
+  attnMask: Tensor | null = null,
+  keyPaddingMask: Tensor | null = null,
+  averageWeights = true,
+): { output: Tensor; weights: Tensor } {
+  const L = query.shape[0] ?? 1;
+  const N = query.shape[1] ?? 1;
+  const E = query.shape[2] ?? 1;
+  const S = key.shape[0] ?? 1;
+  const head = E / numHeads;
+  const scale = Tensor.full([], 1 / Math.sqrt(head));
+
+  /** 길이를 앞에 둔 것을 배치 앞으로 돌리고 투영한다. */
+  const project = (t: Tensor, len: number, slot: number): Tensor => {
+    const flat = t.permute([1, 0, 2]).reshape([N * len, E]);
+    const w = inWeight.narrow(0, slot * E, E);
+    const out = flat.linear(w);
+    return (inBias ? out.add(inBias.narrow(0, slot * E, E)) : out)
+      .reshape([N, len, E]);
+  };
+  const q = project(query, L, 0);
+  const k = project(key, S, 1);
+  const v = project(value, S, 2);
+
+  const rows: Tensor[] = [];
+  const allWeights: Tensor[] = [];
+  for (let n = 0; n < N; n++) {
+    const perHead: Tensor[] = [];
+    const perHeadWeights: Tensor[] = [];
+    const pad = keyPaddingMask ? keyPaddingMask.select(0, n).reshape([1, S]) : null;
+    for (let h = 0; h < numHeads; h++) {
+      const cut = (t: Tensor, len: number) =>
+        t.select(0, n).narrow(1, h * head, head).reshape([len, head]);
+      let scores = cut(q, L).mm(cut(k, S).transpose()).binary("mul", scale);
+      if (attnMask) scores = scores.add(attnMask);
+      if (pad) scores = scores.add(pad);
+      const w = scores.softmax(1);
+      perHeadWeights.push(w.reshape([1, L, S]));
+      perHead.push(w.mm(cut(v, S)));
+    }
+    rows.push(Tensor.cat(perHead, 1));                 // (L, E)
+    allWeights.push(Tensor.cat(perHeadWeights, 0).reshape([1, numHeads, L, S]));
+  }
+  const merged = Tensor.stack(rows, 0).reshape([N * L, E]);
+  const projected = merged.linear(outWeight);
+  const out = (outBias ? projected.add(outBias) : projected)
+    .reshape([N, L, E]).permute([1, 0, 2]);
+  const weights = Tensor.cat(allWeights, 0);           // (N, H, L, S)
+  return {
+    output: out,
+    weights: averageWeights ? weights.mean(1, false) : weights,
+  };
+}
+
 export class MultiheadAttention extends Module {
   readonly inWeight: Tensor;
   readonly inBias: Tensor;

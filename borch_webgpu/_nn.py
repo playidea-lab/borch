@@ -19,7 +19,9 @@ import numpy as _np
 import js as _js
 from pyodide.ffi import to_js as _to_js
 
-from ._base import Tensor, _js_floats, _js_list, guarded, handle, settle, wrap
+from ._base import (
+    Tensor, _js_floats, _js_list, guarded, handle, settle, tensor, wrap,
+)
 from ._ops import _arg, camel, positional
 # **모듈째 든다.** `manual_seed` 가 `_ops._rng` 를 **새 생성기로 갈아끼우므로**,
 # 이름으로 들여오면 그 갈아끼움이 여기까지 안 온다 — 씨앗을 심어도 이 층만 안 바뀐다.
@@ -336,6 +338,58 @@ def _upsample_bilinear(x, size=None, scale_factor=None):
     return _interpolate(x, size, scale_factor, "bilinear", True)
 
 
+def _additive_mask(mask, like_shape=None):
+    """참·거짓 표를 **더하는 실수**로 바꾼다.
+
+    torch 는 두 가지를 받는다 — 참인 자리를 가리는 불리언과, 점수에 그냥 더하는 실수.
+    borch.ts 쪽은 더하는 것만 받으므로 여기서 맞춘다. **0 을 곱하는 것이 아니다** —
+    softmax 가 이미 정규화한 뒤라 곱하면 남은 자리가 1 로 안 돌아간다.
+    """
+    if mask is None:
+        return None
+    raw = _np.asarray(mask.numpy() if isinstance(mask, Tensor) else mask)
+    if raw.dtype == bool or raw.dtype.kind == "b":
+        raw = _np.where(raw, -_np.inf, 0.0)
+    got = raw.astype(_np.float32)
+    if like_shape is not None:
+        got = got.reshape(like_shape)
+    return handle(tensor(got))
+
+
+def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
+                 in_proj_weight, in_proj_bias, bias_k=None, bias_v=None,
+                 add_zero_attn=False, dropout_p=0.0, out_proj_weight=None,
+                 out_proj_bias=None, training=True, key_padding_mask=None,
+                 need_weights=True, attn_mask=None, use_separate_proj_weight=False,
+                 q_proj_weight=None, k_proj_weight=None, v_proj_weight=None,
+                 static_k=None, static_v=None, average_attn_weights=True,
+                 is_causal=False, **kw):
+    """`MultiheadAttention` 이 안에서 하는 계산. **안 하는 갈래는 시끄럽게 거절한다.**"""
+    for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
+                        ("static_k", static_k), ("static_v", static_v)):
+        if given is not None:
+            raise RuntimeError(
+                f"multi_head_attention_forward({name}=…) 은(는) 아직 여기 없다.")
+    if add_zero_attn or use_separate_proj_weight:
+        raise RuntimeError(
+            "multi_head_attention_forward 의 그 갈래는 아직 여기 없다.")
+    n, s = int(handle(query).shape[1]), int(handle(key).shape[0])
+    length = int(handle(query).shape[0])
+    if is_causal and attn_mask is None:
+        attn_mask = _np.triu(_np.ones((length, s), dtype=bool), k=1)
+    got = _ts.nn.multiHeadAttentionForward(
+        handle(query), handle(key), handle(value), int(num_heads),
+        handle(in_proj_weight),
+        handle(in_proj_bias) if in_proj_bias is not None else None,
+        handle(out_proj_weight),
+        handle(out_proj_bias) if out_proj_bias is not None else None,
+        _additive_mask(attn_mask),
+        _additive_mask(key_padding_mask, (n, s)),
+        bool(average_attn_weights))
+    out = wrap(got.output)
+    return (out, None) if not need_weights else (out, wrap(got.weights))
+
+
 def _affine_grid(theta, size, align_corners=False, **kw):
     return wrap(_ts.nn.affineGrid(handle(theta), _js_list(list(size)),
                                   bool(align_corners)))
@@ -398,6 +452,7 @@ def _bilinear(x1, x2, weight, bias=None):
 
 _HAND_WRITTEN = {
     "interpolate": _interpolate,
+    "multi_head_attention_forward": _mha_forward,
     "affine_grid": _affine_grid,
     "grid_sample": _grid_sample,
     "batch_norm": _batch_norm,
@@ -1663,21 +1718,37 @@ RNN, LSTM, GRU = _recurrent("RNN"), _recurrent("LSTM"), _recurrent("GRU")
 
 
 class _Attention(Module):
-    """torch 의 어텐션은 `(질의, 키, 값)` 셋을 받고 `(출력, 가중치)` 를 준다."""
+    """torch 의 어텐션은 `(질의, 키, 값)` 셋을 받고 `(출력, 가중치)` 를 준다.
 
-    def __call__(self, q, k=None, v=None, attn_mask=None, **kw):
-        """**`attend` 를 부른다 — `forward` 는 마스크를 버린다.**
+    **계산은 `multi_head_attention_forward` 가 한다.** 전에는 borch.ts 의 `attend` 를
+    불렀는데, 그쪽은 자기 주의(self-attention) 전용이고 배치가 앞이라 셋을 따로 준
+    자리에서 답이 갈렸다 — 골든의 "층과 같은 답" 케이스가 최대차 1.26e-01 로 잡았다.
+    """
 
-        borch.ts 의 `forward(x)` 는 마스크 자리에 `null` 을 넣는다. `call` 로 가면
-        마스크가 조용히 사라지고, 값만 조금 다른 답이 나온다(최대차 1.6e-01) —
-        자기 자신을 보는 자리까지 섞이니 그럴듯하게 틀린 값이다.
+    def __init__(self, module, heads, batch_first=False):
+        super().__init__(module)
+        object.__setattr__(self, "_heads", heads)
+        object.__setattr__(self, "_batch_first", batch_first)
 
-        셋을 따로 받는 것도 torch 의 모양일 뿐, 이쪽은 자기 주의(self-attention)라
-        하나만 쓴다. 골든이 `mod(x, x, x)` 로 부르므로 셋이 같다.
-        """
-        mask = handle(attn_mask) if attn_mask is not None else None
-        return wrap(self._m.attend(handle(q), mask)), None
+    def __call__(self, q, k=None, v=None, attn_mask=None, need_weights=True,
+                 key_padding_mask=None, average_attn_weights=True, **kw):
+        from ._ops import transpose as _t
+        k = q if k is None else k
+        v = q if v is None else v
+        # **함수 꼴은 길이가 앞이다.** `batch_first` 면 여기서 뒤집어 넘긴다.
+        if self._batch_first:
+            q, k, v = (_t(t, 0, 1) for t in (q, k, v))
+        out, weights = _mha_forward(
+            q, k, v, None, self._heads,
+            wrap(self._m.inWeight), wrap(self._m.inBias),
+            out_proj_weight=wrap(self._m.outWeight),
+            out_proj_bias=wrap(self._m.outBias),
+            attn_mask=attn_mask, need_weights=need_weights,
+            key_padding_mask=key_padding_mask,
+            average_attn_weights=average_attn_weights)
+        return (_t(out, 0, 1) if self._batch_first else out), weights
 
 
 def MultiheadAttention(embed, heads, batch_first=False):
-    return _Attention(_ts.nn.MultiheadAttention.new(embed, heads))
+    return _Attention(_ts.nn.MultiheadAttention.new(embed, heads), heads,
+                      batch_first)

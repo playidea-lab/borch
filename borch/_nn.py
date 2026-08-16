@@ -925,37 +925,23 @@ class MultiheadAttention(Module):
         self.in_proj_bias = Parameter(_np.zeros(3 * embed_dim, dtype=_DEFAULT_DTYPE)) if bias else None
         self.out_proj = Linear(embed_dim, embed_dim, bias=bias)
 
-    def forward(self, query, key=None, value=None, attn_mask=None, need_weights=True):
+    def forward(self, query, key=None, value=None, attn_mask=None, need_weights=True,
+                key_padding_mask=None, average_attn_weights=True):
         key = query if key is None else key
         value = query if value is None else value
-        if not self.batch_first:
+        # **함수 꼴은 길이가 앞이다.** `batch_first` 면 여기서 뒤집어 넘긴다 —
+        # 계산은 `multi_head_attention_forward` 한 벌만 둔다.
+        if self.batch_first:
             query, key, value = (t.transpose(0, 1) for t in (query, key, value))
-
-        B, T, E = query.data.shape
-        S = key.data.shape[1]
-        w, b = self.in_proj_weight, self.in_proj_bias
-
-        def project(t, index, length):
-            piece = w[index * E:(index + 1) * E]
-            out = t @ piece.transpose(0, 1)
-            return out + b[index * E:(index + 1) * E] if b is not None else out
-
-        q = _split_heads(project(query, 0, T), B, T, self.num_heads, self.head_dim)
-        k = _split_heads(project(key, 1, S), B, S, self.num_heads, self.head_dim)
-        v = _split_heads(project(value, 2, S), B, S, self.num_heads, self.head_dim)
-
-        scores = (q @ k.transpose(-2, -1)) / _math.sqrt(self.head_dim)
-        if attn_mask is not None:
-            scores = _apply_mask(scores, attn_mask)
-        weights = softmax(scores, dim=-1)
-
-        merged = (weights @ v).transpose(1, 2).reshape(B, T, E)
-        out = self.out_proj(merged)
-        if not self.batch_first:
+        out, weights = multi_head_attention_forward(
+            query, key, value, self.embed_dim, self.num_heads,
+            self.in_proj_weight, self.in_proj_bias, None, None, False, 0.0,
+            self.out_proj.weight, self.out_proj.bias, self.training,
+            key_padding_mask=key_padding_mask, need_weights=need_weights,
+            attn_mask=attn_mask, average_attn_weights=average_attn_weights)
+        if self.batch_first:
             out = out.transpose(0, 1)
-        if not need_weights:
-            return out, None
-        return out, weights.mean(dim=1)          # torch 는 헤드 평균을 돌려준다
+        return out, weights
 
     def __repr__(self):
         return f"MultiheadAttention(embed_dim={self.embed_dim}, num_heads={self.num_heads})"
@@ -987,6 +973,78 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     if dropout_p:
         weights = dropout(weights, dropout_p, training=True)
     return weights @ value
+
+
+def multi_head_attention_forward(
+        query, key, value, embed_dim_to_check, num_heads,
+        in_proj_weight, in_proj_bias, bias_k, bias_v, add_zero_attn,
+        dropout_p, out_proj_weight, out_proj_bias, training=True,
+        key_padding_mask=None, need_weights=True, attn_mask=None,
+        use_separate_proj_weight=False, q_proj_weight=None, k_proj_weight=None,
+        v_proj_weight=None, static_k=None, static_v=None,
+        average_attn_weights=True, is_causal=False):
+    """`MultiheadAttention` 이 안에서 하는 계산을 이름으로 낸다. **층이 이것을 부른다.**
+
+    **입력이 `(L, N, E)` 다** — 길이가 앞이다. 층은 `batch_first` 를 받지만 이 함수는
+    torch 에서도 늘 길이가 앞이라, 배치를 앞에 두고 부르면 조용히 다른 축을 섞는다.
+
+    가중치를 밖에서 받으므로 층을 안 쓰고 어텐션을 손으로 조립하는 코드가 이 이름을
+    부른다 — torch 의 `MultiheadAttention` 자신도 이것을 부른다.
+
+    **안 하는 것은 시끄럽게 거절한다.** `bias_k`·`add_zero_attn`·`static_k` 처럼
+    드물게 쓰는 갈래를 조용히 무시하면 값이 그럴듯하게 다르다.
+    """
+    for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
+                        ("static_k", static_k), ("static_v", static_v)):
+        if given is not None:
+            _unsupported(f"multi_head_attention_forward({name}=…)")
+    if add_zero_attn:
+        _unsupported("multi_head_attention_forward(add_zero_attn=True)")
+    if use_separate_proj_weight:
+        _unsupported("multi_head_attention_forward(use_separate_proj_weight=True)")
+
+    query, key, value = _wrap(query), _wrap(key), _wrap(value)
+    # 안에서는 배치를 앞에 두고 센다. 들어올 때와 나갈 때만 뒤집는다.
+    query, key, value = (t.transpose(0, 1) for t in (query, key, value))
+    B, T, E = query.data.shape
+    S = key.data.shape[1]
+    if embed_dim_to_check is not None and int(embed_dim_to_check) != E:
+        raise AssertionError(
+            f"was expecting embedding dimension of {embed_dim_to_check}, but got {E}")
+    head_dim = E // num_heads
+
+    w, b = _wrap(in_proj_weight), None if in_proj_bias is None else _wrap(in_proj_bias)
+
+    def project(t, index):
+        piece = w[index * E:(index + 1) * E]
+        out = t @ piece.transpose(0, 1)
+        return out + b[index * E:(index + 1) * E] if b is not None else out
+
+    q = _split_heads(project(query, 0), B, T, num_heads, head_dim)
+    k = _split_heads(project(key, 1), B, S, num_heads, head_dim)
+    v = _split_heads(project(value, 2), B, S, num_heads, head_dim)
+
+    scores = (q @ k.transpose(-2, -1)) / _math.sqrt(head_dim)
+    if is_causal and attn_mask is None:
+        attn_mask = _np.triu(_np.ones((T, S), dtype=bool), k=1)
+    if attn_mask is not None:
+        scores = _apply_mask(scores, attn_mask)
+    if key_padding_mask is not None:
+        # `(N, S)` 를 `(N, 1, 1, S)` 로 펴 머리마다 같은 자리를 가린다.
+        pad = _wrap(key_padding_mask)
+        scores = _apply_mask(scores, pad.reshape(B, 1, 1, S))
+    weights = softmax(scores, dim=-1)
+    if training and dropout_p:
+        weights = dropout(weights, dropout_p, True)
+
+    merged = (weights @ v).transpose(1, 2).reshape(B, T, E)
+    out = merged @ _wrap(out_proj_weight).transpose(0, 1)
+    if out_proj_bias is not None:
+        out = out + _wrap(out_proj_bias)
+    out = out.transpose(0, 1)                       # 다시 길이가 앞으로
+    if not need_weights:
+        return out, None
+    return out, (weights.mean(dim=1) if average_attn_weights else weights)
 
 
 def _split_heads(t, B, T, heads, head_dim):
@@ -2520,6 +2578,7 @@ class _Functional(_Namespace):
     rrelu_ = staticmethod(rrelu_)
     selu_ = staticmethod(selu_)
     threshold_ = staticmethod(threshold_)
+    multi_head_attention_forward = staticmethod(multi_head_attention_forward)
     affine_grid = staticmethod(affine_grid)
     grid_sample = staticmethod(grid_sample)
     batch_norm = staticmethod(batch_norm)
