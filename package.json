@@ -25,6 +25,8 @@
     "check:ts": "tsc -p borch-ts/tsconfig.json --noEmit",
     "golden:ts": "uv run --with playwright python borch-ts/test/run.py",
     "example:ts": "uv run --with playwright python borch-ts/test/readme.py",
+    "device:ts": "uv run --with playwright python borch-ts/test/device.py",
+    "parity:ts": "uv run --with playwright python borch-ts/test/parity.py",
     "prepublishOnly": "npm run build:ts"
   },
   "//": [

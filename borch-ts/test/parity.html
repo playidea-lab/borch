@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>torch 배선</title>
+<body>
+  <pre id="out">도는 중…</pre>
+  <script type="module">
+    import { Device } from "../dist/src/device.js";
+    import { report } from "../dist/test/parity.js";
+
+    const out = document.getElementById("out");
+    try {
+      const text = await report();
+      window.__borchParity = { text, adapter: Device.adapterInfo };
+      out.textContent = text;
+    } catch (err) {
+      // 터지는 것도 결과다 — 조용히 넘기면 러너가 영원히 기다린다.
+      window.__borchParity = { error: String(err && err.stack ? err.stack : err) };
+      out.textContent = `배선 점검이 터졌다: ${err && err.stack ? err.stack : err}`;
+    }
+  </script>
+</body>

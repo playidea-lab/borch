@@ -160,7 +160,7 @@ export async function trainEval(
       d.beginScope();
       try {
         const x = Tensor.from(bx, [batch, 3, SIDE, SIDE]);
-        const y = Tensor.from(by, [batch], false, "int64");
+        const y = Tensor.from(by, [batch], { dtype: "int64" });
         opt.zeroGrad();
         const loss = crit.forward(model.forward(x), y);
         loss.backward();

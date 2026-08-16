@@ -68,6 +68,9 @@ export const TORCH = {
   // torch 는 "a Tensor with 3 elements cannot be converted to Scalar" 라고 낸다.
   // 골든이 찾는 조각은 뒤쪽이므로 개수는 자리마다 채워 넣는다.
   itemScalar: "cannot be converted to Scalar",
+  // torch 는 "... but found at least two devices, cuda:0 and cpu!" 로 이어 붙인다.
+  // 장치 이름은 자리마다 다르므로 앞머리만 여기 둔다.
+  crossDevice: "Expected all tensors to be on the same device",
   secondBackward:
     "Trying to backward through the graph a second time (or directly access " +
     "saved tensors after they have already been freed)",

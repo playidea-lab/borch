@@ -7,7 +7,8 @@
  */
 
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
-import { Device } from "./device.js";
+import { Device, type DeviceKind, type InitOptions } from "./device.js";
+import { gauss, uniform } from "./random.js";
 import { byRank, type DType, promote, rankOf } from "./dtype.js";
 import {
   IndexError, LinAlgError, NotImplementedError, RuntimeError, TORCH,
@@ -208,6 +209,14 @@ const deviceHolder: { current: Device | null } = { current: null };
 const MAX_UNROLLED_POWER = 8;
 
 /**
+ * float32 가 정수를 빠짐없이 셀 수 있는 한계(2^24).
+ *
+ * 이 위에서는 인접한 정수 둘이 같은 부동소수로 접힌다 — `randint` 가 거기서 멈추는
+ * 이유다. 값이 조용히 반올림되면 라벨이 뒤섞이고 아무도 못 본다.
+ */
+const EXACT_INT_LIMIT = 16_777_216;
+
+/**
  * 값 하나짜리 상수 텐서를 값으로 캐시한다.
  *
  * 학습 루프는 같은 상수를 매 스텝 다시 만든다 — 학습률, eps, 0.5, 게이트 수. 버퍼가
@@ -218,9 +227,25 @@ const MAX_UNROLLED_POWER = 8;
  */
 const scalarCache = new Map<number, GPUBuffer>();
 
-export async function init(): Promise<Device> {
-  if (!deviceHolder.current) deviceHolder.current = await Device.create();
+/**
+ * WebGPU 어댑터를 잡는다. 두 번째부터는 이미 잡은 것을 돌려준다.
+ *
+ * **`options` 는 첫 부름에서만 듣는다.** 장치는 하나이고 이미 만들어진 뒤에는 고를
+ * 것이 없다 — 조용히 무시하느니 여기 적어 둔다.
+ */
+export async function init(options: InitOptions = {}): Promise<Device> {
+  if (!deviceHolder.current) deviceHolder.current = await Device.create(options);
   return deviceHolder.current;
+}
+
+/**
+ * 지금 붙어 있는 장치, 안 붙었으면 `null`. `torch.accelerator` 자리다.
+ *
+ * **`dev()` 와 달리 안 던진다** — 붙었는지 묻는 것이 목적이라 그 물음 자체가 실패하면
+ * 안 된다.
+ */
+export function currentDevice(): DeviceKind | null {
+  return deviceHolder.current ? "webgpu" : null;
 }
 
 function dev(): Device {
@@ -355,7 +380,13 @@ export class Tensor implements Node<Tensor> {
    */
   shape: readonly number[];
   readonly size: number;
-  readonly buffer: GPUBuffer;
+  /**
+   * 값이 GPU 에 있으면 그 버퍼, 호스트에 있으면 `null`. **직접 읽지 마라** — 밖에서
+   * 보는 자리는 `buffer` 게터이고 그쪽이 장치를 확인한다.
+   */
+  private readonly gpu: GPUBuffer | null;
+  /** 값이 호스트에 있으면 그 배열, GPU 에 있으면 `null`. */
+  private readonly host: Float32Array | null;
   requiresGrad: boolean;
   grad: Tensor | null = null;
   freed = false;
@@ -372,7 +403,7 @@ export class Tensor implements Node<Tensor> {
   gradName: string;
 
   constructor(
-    buffer: GPUBuffer,
+    storage: GPUBuffer | Float32Array,
     shape: readonly number[],
     options: {
       requiresGrad?: boolean;
@@ -382,7 +413,11 @@ export class Tensor implements Node<Tensor> {
       dtype?: DType;
     } = {},
   ) {
-    this.buffer = buffer;
+    // 저장소 둘을 한 자리로 받는다. 안쪽 47 군데가 버퍼를 넘기고 있고 그 자리를
+    // 전부 고치는 것보다 여기서 갈라 두는 편이 낫다 — 갈림이 한 곳에 남는다.
+    const onHost = storage instanceof Float32Array;
+    this.gpu = onHost ? null : storage;
+    this.host = onHost ? storage : null;
     this.shape = [...shape];
     this.size = numel(this.shape);
     this.parents = options.parents ?? [];
@@ -394,6 +429,39 @@ export class Tensor implements Node<Tensor> {
     this.requiresGrad = options.requiresGrad ?? inherited;
     this.backwardFn =
       this.requiresGrad && options.backwardFn ? options.backwardFn : null;
+  }
+
+  /**
+   * 값이 든 GPU 버퍼. **연산이 값에 닿는 유일한 문이다.**
+   *
+   * 이 게터가 곧 장치 검사다. 연산 진입점은 176 군데이고 거기에 하나씩 가드를 다는
+   * 것은 될 일이 아니지만, 그 전부가 결국 여기를 지난다 — 저장소 안 75 곳, 옵티마이저
+   * 6 곳, `nn` 1 곳. 그래서 호스트에 있는 텐서를 연산에 넣으면 어느 연산이든 여기서
+   * 멈추고, 문구는 torch 와 같은 것이 나온다.
+   *
+   * **어느 연산이었는지는 안 적힌다.** 그것을 적으려면 176 곳을 고쳐야 하고, 스택
+   * 추적이 이미 그 자리를 가리킨다.
+   */
+  get buffer(): GPUBuffer {
+    if (this.gpu === null) {
+      throw new RuntimeError(
+        `${TORCH.crossDevice}, but found at least two devices, webgpu and cpu! ` +
+          "호스트에 있는 텐서는 연산에 못 쓴다 — `webgpu()` 로 올려라.",
+      );
+    }
+    return this.gpu;
+  }
+
+  /**
+   * 값이 어디에 있는가. torch 의 `t.device` 자리다.
+   *
+   * **`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다.** borch 에 CPU 커널은
+   * 없다 — `cpu()` 로 내린 텐서는 읽고(`toArray`·`item`·`repr`) 다시 올릴 수 있을
+   * 뿐이고, 연산에 넣으면 위의 게터가 torch 와 같은 문구로 멈춘다. 부분 구현이지만
+   * 실패가 조용하지 않다.
+   */
+  get device(): DeviceKind {
+    return this.gpu === null ? "cpu" : "webgpu";
   }
 
   /**
@@ -418,12 +486,21 @@ export class Tensor implements Node<Tensor> {
 
   // ── 만들기 ────────────────────────────────────────────────────────────
 
+  /**
+   * @param options 위치 인자가 아니라 이름으로 받는다. 넷째 자리에 `device` 가 붙을
+   *   참이었는데, `from(data, shape, false, "int64", "cpu")` 는 읽는 사람이 셋째와
+   *   넷째를 세어야 하는 줄이다. npm 에 아직 안 나간 지금이 고칠 수 있는 때다.
+   */
   static from(
     data: ArrayLike<number>,
     shape?: readonly number[],
-    requiresGrad = false,
-    dtype: DType = "float32",
+    options: {
+      requiresGrad?: boolean;
+      dtype?: DType;
+      device?: DeviceKind;
+    } = {},
   ): Tensor {
+    const { requiresGrad = false, dtype = "float32", device = "webgpu" } = options;
     const flat = data instanceof Float32Array ? data : Float32Array.from(data);
     const shp = shape ?? [flat.length];
     if (numel(shp) !== flat.length) {
@@ -436,6 +513,9 @@ export class Tensor implements Node<Tensor> {
         "Only Tensors of floating point and complex dtype can require gradients",
       );
     }
+    // 호스트에 두라면 사본을 든다. 넘겨받은 배열을 그대로 쥐면 부른 쪽이 그것을
+    // 고칠 때 텐서 값이 같이 바뀐다 — GPU 쪽은 `upload` 가 복사하므로 그 자리가 없다.
+    if (device === "cpu") return new Tensor(flat.slice(), shp, { requiresGrad, dtype });
     return new Tensor(dev().upload(flat), shp, { requiresGrad, dtype });
   }
 
@@ -467,6 +547,29 @@ export class Tensor implements Node<Tensor> {
       n,
     );
     return new Tensor(out, shape);
+  }
+
+  /**
+   * 값으로 채우되 **캐시를 안 탄다 — 자기 버퍼를 갖는다.**
+   *
+   * **제자리로 고쳐질 것은 반드시 이쪽이어야 한다.** `full` 은 원소 하나짜리를 값으로
+   * 캐시하므로 `zeros([1])` 을 두 번 부르면 **같은 버퍼**가 온다. 그 자체는 맞다 —
+   * 상수는 읽기만 하니까. 문제는 상수가 아닌 것이 그 문을 지날 때다:
+   *
+   * - `Adam` 의 m·v 가 크기 1 파라미터에서 같은 버퍼가 되어, WebGPU 가 "writable
+   *   storage buffer aliasing" 으로 **명령 버퍼째** 무효로 만든다
+   * - `SGD` 의 모멘텀 버퍼가 프로그램 전체가 쓰는 0 상수를 덮어쓴다
+   * - `nn.PReLU()` 는 기본이 파라미터 하나라 가중치가 곧 전역 0.25 상수이고,
+   *   옵티마이저가 학습 중에 그것을 고친다
+   * - `BatchNorm(1)` 의 이동 통계가 전역 0·1 상수를 덮어쓴다
+   *
+   * 앞의 하나만 예외로 터지고 나머지는 **조용히 틀린다.** 그래서 파라미터·옵티마이저
+   * 상태·이동 통계는 값이 무엇이든 여기로 온다.
+   */
+  static owned(shape: readonly number[], value = 0): Tensor {
+    const data = new Float32Array(numel(shape));
+    if (value !== 0) data.fill(value);
+    return new Tensor(dev().upload(data), shape);
   }
 
   static zeros(shape: readonly number[]): Tensor {
@@ -561,12 +664,77 @@ export class Tensor implements Node<Tensor> {
     });
   }
 
+  /**
+   * `[0, 1)` 균등분포. `torch.rand` 자리다.
+   *
+   * **호스트에서 만들어 한 번에 올린다.** GPU 난수 커널은 씨앗을 스레드마다 갈라야
+   * 하고 그러면 같은 씨앗에 같은 결과라는 약속을 커널 배치까지 걸고 지켜야 한다 —
+   * 초기화와 표본은 스텝마다 도는 일이 아니므로 그 값을 치를 자리가 아니다.
+   */
+  static rand(shape: readonly number[]): Tensor {
+    const data = new Float32Array(numel(shape));
+    for (let i = 0; i < data.length; i++) data[i] = uniform();
+    return Tensor.from(data, shape);
+  }
+
+  /** 표준정규분포. `torch.randn` 자리다. */
+  static randn(shape: readonly number[]): Tensor {
+    const data = new Float32Array(numel(shape));
+    for (let i = 0; i < data.length; i++) data[i] = gauss();
+    return Tensor.from(data, shape);
+  }
+
+  /**
+   * `[low, high)` 의 정수. **위끝은 안 들어간다** — torch 와 같다.
+   *
+   * 형은 `int64` 로 붙지만 값은 float32 버퍼에 있다(`dtype.ts`). 2^24 를 넘는
+   * 정수는 그 안에서 이미 못 세므로 거기서 멈춘다 — 조용히 반올림되느니 낫다.
+   */
+  static randint(low: number, high: number, shape: readonly number[]): Tensor {
+    if (!(high > low)) {
+      throw new RuntimeError(`random_ expects 'from' to be less than 'to', but got from=${low} >= to=${high}`);
+    }
+    if (Math.max(Math.abs(low), Math.abs(high)) > EXACT_INT_LIMIT) {
+      throw new RuntimeError(
+        `randint 의 범위가 float32 로 셀 수 있는 한계(${EXACT_INT_LIMIT})를 넘는다 — ` +
+          "값이 조용히 반올림된다.",
+      );
+    }
+    const span = high - low;
+    const data = new Float32Array(numel(shape));
+    for (let i = 0; i < data.length; i++) data[i] = low + Math.floor(uniform() * span);
+    return Tensor.from(data, shape, { dtype: "int64" });
+  }
+
+  /** `0..n-1` 을 섞은 것. `torch.randperm` 자리다. Fisher–Yates. */
+  static randperm(n: number): Tensor {
+    const data = new Float32Array(n);
+    for (let i = 0; i < n; i++) data[i] = i;
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(uniform() * (i + 1));
+      const tmp = data[i] as number;
+      data[i] = data[j] as number;
+      data[j] = tmp;
+    }
+    return Tensor.from(data, [n], { dtype: "int64" });
+  }
+
   zerosLike(): Tensor {
     return Tensor.zeros(this.shape);
   }
 
   onesLike(): Tensor {
     return Tensor.ones(this.shape);
+  }
+
+  /** `torch.rand_like`. 모양만 빌린다 — 값도 형도 안 물려받는다. */
+  randLike(): Tensor {
+    return Tensor.rand(this.shape);
+  }
+
+  /** `torch.randn_like`. */
+  randnLike(): Tensor {
+    return Tensor.randn(this.shape);
   }
 
   // ── 원소별 ────────────────────────────────────────────────────────────
@@ -2863,7 +3031,7 @@ export class Tensor implements Node<Tensor> {
       }
       rows.push(...coord);
     }
-    return Tensor.from(rows, [count, rank], false, "int64");
+    return Tensor.from(rows, [count, rank], { dtype: "int64" });
   }
 
   /** `nonzero` 와 같다 — torch 가 이름을 둘 다 갖는다. */
@@ -2875,7 +3043,7 @@ export class Tensor implements Node<Tensor> {
   async unique(): Promise<Tensor> {
     const values = Array.from(await this.toArray());
     const seen = [...new Set(values)].sort((a, b) => a - b);
-    return Tensor.from(seen, [seen.length], false, this.dtype);
+    return Tensor.from(seen, [seen.length], { dtype: this.dtype });
   }
 
   /** 정수 값마다 몇 번 나왔는가. 길이는 가장 큰 값이 정한다. */
@@ -2885,7 +3053,7 @@ export class Tensor implements Node<Tensor> {
     for (const v of values) top = Math.max(top, Math.trunc(v));
     const counts = new Float32Array(top + 1);
     for (const v of values) counts[Math.trunc(v)] = (counts[Math.trunc(v)] ?? 0) + 1;
-    return Tensor.from(counts, [counts.length], false, "int64");
+    return Tensor.from(counts, [counts.length], { dtype: "int64" });
   }
 
   /**
@@ -4268,12 +4436,11 @@ export class Tensor implements Node<Tensor> {
     for (const lab of labels) ext.push(lab, blank);
     const u = ext.length;
 
-    const idx = Tensor.from(ext, [u], false, "int64");
+    const idx = Tensor.from(ext, [u], { dtype: "int64" });
     const skip = Tensor.from(
       ext.map((_, s) =>
         (s >= 2 && ext[s] !== blank && ext[s] !== ext[s - 2]) ? 0 : Tensor.CTC_NEG),
-      [u],
-    );
+      [u]);
     const emit = lp.indexSelect(1, idx);          // (T, U)
 
     const head = Math.min(2, u);
@@ -4878,9 +5045,40 @@ export class Tensor implements Node<Tensor> {
     });
   }
 
+  // ── 장치 옮기기 ───────────────────────────────────────────────────────
+
+  /**
+   * 값을 호스트로 내린다. torch 의 `t.cpu()` 자리이고 **비동기다** — GPU 메모리를
+   * 되가져오는 왕복이라 피할 길이 없다.
+   *
+   * **그래프를 끊는다.** torch 의 `.cpu()` 는 미분되지만 여기서는 그럴 수가 없다 —
+   * 호스트에 커널이 없으므로 역방향이 지나갈 길이 없다. 이어 붙여 두고 조용히 0 을
+   * 흘리느니 끊는다.
+   */
+  async cpu(): Promise<Tensor> {
+    if (this.gpu === null) return this;
+    return new Tensor(await dev().read(this.gpu, this.size), this.shape, {
+      dtype: this.dtype,
+    });
+  }
+
+  /**
+   * 값을 GPU 로 올린다. torch 의 `t.cuda()` 자리다.
+   *
+   * **`cpu()` 와 달리 동기다.** 올리는 것은 큐에 쓰기 하나여서 기다릴 것이 없다 —
+   * 짝이 안 맞아 보이지만, 없는 왕복을 만들어 대칭을 꾸미는 것보다 낫다.
+   */
+  webgpu(): Tensor {
+    if (this.host === null) return this;
+    return new Tensor(dev().upload(this.host), this.shape, { dtype: this.dtype });
+  }
+
   // ── 읽기 ──────────────────────────────────────────────────────────────
 
   async toArray(): Promise<Float32Array> {
+    // 이미 호스트에 있으면 왕복이 없다. **사본을 준다** — 안쪽 저장을 그대로 내보내면
+    // 받은 쪽이 그것을 고칠 때 텐서 값이 같이 바뀐다.
+    if (this.host !== null) return this.host.slice();
     return dev().read(this.buffer, this.size);
   }
 
@@ -5122,6 +5320,10 @@ export async function scope<T>(
 
 /** 구역이 닫혀도 살려 둔다. 파라미터와 옵티마이저 상태가 쓴다. */
 export function keepAlive(t: Tensor): Tensor {
+  // 호스트에 있는 것은 살릴 것이 없다 — 구역은 GPU 버퍼만 놓고, `Float32Array` 는
+  // 자바스크립트의 쓰레기 수집이 알아서 가져간다. `keepAlive(await t.cpu())` 는
+  // 자연스러운 줄이므로 여기서 거절하면 안 된다.
+  if (t.device === "cpu") return t;
   dev().keep(t.buffer);
   return t;
 }

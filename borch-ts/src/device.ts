@@ -22,6 +22,83 @@ const BYTES_PER_F32 = 4;
 /** 검증 오류를 몇 건까지 찍을 것인가. 첫 건이 원인이고 나머지는 그 여파다. */
 const MAX_REPORTED_ERRORS = 3;
 
+/**
+ * 텐서가 어디에 있는가.
+ *
+ * torch 의 `'cuda'`·`'cpu'` 자리다. **인덱스가 없다** — WebGPU 는 어댑터를 열거하는
+ * 방법을 주지 않으므로 `'webgpu:1'` 이 가리킬 대상이 아예 없다. 문자열로 충분하다.
+ */
+export type DeviceKind = "webgpu" | "cpu";
+
+/** 어댑터를 어떻게 고를 것인가. torch 의 `CUDA_VISIBLE_DEVICES` 자리다. */
+export interface InitOptions {
+  /**
+   * 기본값이 `"high-performance"` 인 것은 이것이 **재는 라이브러리**이기 때문이다.
+   * 브라우저 기본값은 노트북에서 통합 GPU 를 고를 수 있고, 그러면 같은 코드가 같은
+   * 기계에서 다른 수를 낸다 — 무엇을 쟀는지 모르는 수가 나온다.
+   */
+  powerPreference?: GPUPowerPreference;
+  /** 소프트웨어 어댑터를 강제한다. 폴백 경로 자체를 시험할 때 쓴다. */
+  forceFallbackAdapter?: boolean;
+}
+
+/**
+ * WebGPU 를 쓸 수 있는가. **예외가 아니라 값으로 답한다.**
+ *
+ * `why` 가 값어치다 — `no-api`(브라우저가 낡았거나 안전한 문맥이 아니다)와
+ * `no-adapter`(드라이버 차단 목록·가상 머신·GPU 없는 헤드리스)는 쓰는 사람이 할 수
+ * 있는 일이 전혀 다른데, 예외 하나로 뭉치면 그 갈림이 사라진다.
+ */
+export type Availability =
+  | { ok: true; adapter: string }
+  | { ok: false; why: "no-api" | "no-adapter"; message: string };
+
+const NO_API =
+  "WebGPU 가 없다. Chrome/Edge 113+ 또는 Safari 18+ 가 필요하고, " +
+  "리눅스에서는 플래그가 필요할 수 있다. https 또는 localhost 여야 한다.";
+
+const NO_ADAPTER =
+  "WebGPU 어댑터를 못 얻었다 — 드라이버 차단 목록, 가상 머신, 또는 GPU 가 없는 " +
+  "헤드리스 환경일 수 있다.";
+
+/** 어느 어댑터인지 한 줄로. 빈 칸은 뺀다 — 브라우저가 대부분을 가린다. */
+function describe(adapter: GPUAdapter): string {
+  const info: Partial<GPUAdapterInfo> = adapter.info ?? {};
+  return [info.vendor, info.architecture, info.device, info.description]
+    .filter(Boolean).join(" / ") || "(알 수 없음)";
+}
+
+function askAdapter(options: InitOptions): Promise<GPUAdapter | null> {
+  return navigator.gpu.requestAdapter({
+    powerPreference: options.powerPreference ?? "high-performance",
+    forceFallbackAdapter: options.forceFallbackAdapter ?? false,
+  });
+}
+
+/**
+ * 붙어 보지 않고 붙을 수 있는지만 묻는다. 장치는 안 만든다.
+ *
+ * **`init()` 을 대신하지 않는다** — 여기를 지나도 `requestDevice` 가 거절할 수 있고
+ * 그것은 여전히 `init()` 에서 예외로 온다. 이 함수가 답하는 것은 "어댑터가 있는가"
+ * 까지이고, 실제로 막히는 자리가 대부분 그 앞이라 그것만으로 값이 있다.
+ */
+export async function probe(options: InitOptions = {}): Promise<Availability> {
+  if (!("gpu" in navigator)) return { ok: false, why: "no-api", message: NO_API };
+  const adapter = await askAdapter(options);
+  if (!adapter) return { ok: false, why: "no-adapter", message: NO_ADAPTER };
+  return { ok: true, adapter: describe(adapter) };
+}
+
+/**
+ * WebGPU 를 쓸 수 있는가만 묻는다. `torch.cuda.is_available()` 자리다.
+ *
+ * **torch 와 달리 비동기다** — 어댑터를 얻는 것이 비동기라 피할 길이 없다. 왜 안
+ * 되는지가 필요하면 `probe()` 를 써라.
+ */
+export async function isAvailable(options: InitOptions = {}): Promise<boolean> {
+  return (await probe(options)).ok;
+}
+
 /** 오류 메시지가 가리키는 줄을 찾을 수 있게 셰이더에 번호를 붙인다. */
 function numbered(code: string): string {
   return code
@@ -57,22 +134,14 @@ export class Device {
     this.limits = device.limits;
   }
 
-  static async create(): Promise<Device> {
-    const gpu = navigator.gpu;
-    if (!gpu) {
-      throw new Error(
-        "WebGPU 가 없다. Chrome/Edge 113+ 또는 Safari 18+ 가 필요하고, " +
-          "리눅스에서는 플래그가 필요할 수 있다.",
-      );
-    }
-    const adapter = await gpu.requestAdapter();
-    if (!adapter) throw new Error("WebGPU 어댑터를 못 얻었다.");
+  static async create(options: InitOptions = {}): Promise<Device> {
+    if (!("gpu" in navigator)) throw new Error(NO_API);
+    const adapter = await askAdapter(options);
+    if (!adapter) throw new Error(NO_ADAPTER);
     // **어느 장치인지 알아야 잰 수가 뜻을 갖는다.** 헤드리스 브라우저는 진짜 GPU 대신
     // 소프트웨어 어댑터를 주는 일이 있고, 그것도 어댑터라 예외가 안 난다 — 그러면
     // 벽시계는 멀쩡히 돌고 "느리다" 는 결론만 남는다. 재는 쪽이 이것을 봐야 한다.
-    const info: Partial<GPUAdapterInfo> = adapter.info ?? {};
-    Device.adapterInfo = [info.vendor, info.architecture, info.device,
-      info.description].filter(Boolean).join(" / ") || "(알 수 없음)";
+    Device.adapterInfo = describe(adapter);
     // 기본 한계를 그대로 쓰지 않고 어댑터가 주는 최대치를 요청한다. 기본
     // maxStorageBufferBindingSize 는 128MB 이고, 그 위에서 조용히 틀린 답이 나온다.
     const want: Record<string, number> = {
@@ -91,7 +160,8 @@ export class Device {
     // **세어서 밖으로 내보낸다.** 찍기만 하면 재는 쪽이 그것을 못 본다 — ResNet 벤치가
     // 무효한 명령 버퍼를 안고도 ms/step 을 냈고, 그 수는 측정이 아니라 학습이 안 되는
     // 상태의 벽시계였다. 재는 쪽이 이 수를 보고 결과를 거절할 수 있어야 한다.
-    const seen = { count: 0, first: "" };
+    const made = new Device(device);
+    const seen = made.faults;
     device.addEventListener("uncapturederror", (event) => {
       seen.count += 1;
       const err = (event as GPUUncapturedErrorEvent).error;
@@ -107,15 +177,29 @@ export class Device {
     });
     device.lost
       .then((info) => {
-        // 장치 소실은 조용히 오면 안 된다 — 이후 모든 결과가 의미 없어진다.
+        // **찍기만 하면 안 된다.** 장치를 잃으면 그 뒤의 모든 텐서와 모든 수가 뜻을
+        // 잃는데, 로그는 재는 쪽이 읽지 않는다 — `faults` 를 밖으로 내보낸 것과 같은
+        // 이유로 이것도 물어볼 수 있는 상태여야 한다. 그래야 벤치가 결과를 거절한다.
+        made.lost = { reason: String(info.reason), message: info.message };
         console.error(`[borch.ts] WebGPU 장치를 잃었다: ${info.reason} — ${info.message}`);
       })
       .catch(() => {
         /* lost 는 거절되지 않지만, 거절되더라도 여기서 더 할 일이 없다 */
       });
-    const made = new Device(device);
-    made.faults = seen;
     return made;
+  }
+
+  /**
+   * 장치를 잃었으면 그 사연, 아니면 `null`.
+   *
+   * torch 에 대응물이 없다 — CUDA 문맥은 프로세스와 함께 산다. 브라우저에서는 다른
+   * 탭이나 드라이버 사정으로 남이 우리 장치를 회수할 수 있고, 그때 예외는 안 난다.
+   */
+  lost: { reason: string; message: string } | null = null;
+
+  /** 아직 쓸 수 있는가. 긴 학습 루프가 스텝마다 볼 자리다. */
+  get alive(): boolean {
+    return this.lost === null;
   }
 
   /**
@@ -475,6 +559,19 @@ export class Device {
     this.device.queue.submit([this.encoder.finish()]);
     this.encoder = null;
     this.submits += 1;
+  }
+
+  /**
+   * 보낸 일이 **실제로 끝날 때까지** 기다린다. `torch.cuda.synchronize()` 자리다.
+   *
+   * `flush()` 는 큐에 넣기만 하고 돌아온다 — 그것으로 시간을 재면 GPU 가 일하는 동안
+   * 벽시계는 이미 멈춰 있다. 지금까지 이 저장소가 완료를 강제한 방법은 값을 하나
+   * 읽는 것(`item()`)이었는데, 그러면 **readback 왕복이 측정에 섞인다.** 재는 것이
+   * 커널인지 버스인지가 흐려지는 자리이고, 그것을 가르는 것이 이 함수다.
+   */
+  async synchronize(): Promise<void> {
+    this.flush();
+    await this.device.queue.onSubmittedWorkDone();
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {

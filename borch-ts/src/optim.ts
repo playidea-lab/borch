@@ -18,10 +18,37 @@
 import { adamStep, rmspropStep, sgdStep } from "./kernels.js";
 import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
+/**
+ * 파라미터 묶음 하나와 거기 걸린 하이퍼파라미터.
+ *
+ * **전에는 `params` 가 없었다.** 이름은 torch 의 `param_groups` 인데 언제나
+ * `[{ lr }]` 하나였고 스케줄러가 전부 `[0]` 만 봤다 — 층별 학습률도, bias·norm 에
+ * weight decay 를 빼는 것도 안 되는데 이름은 된다고 말하고 있었다. 모양만 torch 인
+ * 것이 없는 것보다 나쁘다: 쓰는 사람이 `paramGroups.push(...)` 를 쓰면 조용히
+ * 무시됐다.
+ */
 export interface ParamGroup {
+  /** 이 그룹이 밟는 파라미터. */
+  params: Tensor[];
   lr: number;
   /** 스케줄러가 기준으로 삼는 값. 처음 스케줄러가 한 번만 찍는다. */
   initialLr?: number;
+  /** 이 그룹만 다른 값을 쓸 때. 없으면 옵티마이저를 세울 때 준 값이다. */
+  weightDecay?: number;
+}
+
+/** 그룹을 만들 때 넣는 것. `lr` 을 비우면 옵티마이저의 기본값을 쓴다. */
+export interface ParamGroupInit {
+  params: readonly Tensor[];
+  lr?: number;
+  weightDecay?: number;
+}
+
+/** 옵티마이저 생성자가 받는 것 — 텐서 목록이거나 그룹 목록이다. */
+export type ParamsArg = readonly Tensor[] | readonly ParamGroupInit[];
+
+function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
+  return arg.length > 0 && !(arg[0] instanceof Tensor);
 }
 
 /**
@@ -47,14 +74,83 @@ function ownedBuffer(shape: readonly number[], value = 0): Tensor {
 
 export abstract class Optimizer {
   /** torch 와 같은 모양 — 스케줄러가 여기 `lr` 을 고친다. */
-  readonly paramGroups: ParamGroup[];
+  readonly paramGroups: ParamGroup[] = [];
 
-  constructor(protected readonly params: Tensor[], lr: number) {
-    this.paramGroups = [{ lr }];
+  /** 모든 그룹의 파라미터를 이어 붙인 것. 상태 은행이 이 자리로 색인된다. */
+  protected readonly params: Tensor[] = [];
+
+  /** 파라미터 자리 → 그룹 번호. */
+  private readonly groupOf: number[] = [];
+
+  /** `step` 이 도는 동안 지금 밟고 있는 그룹. `lr` 이 이것을 본다. */
+  private currentGroup = 0;
+
+  /** `state()` 가 만든 은행들. 그룹이 늘면 여기 전부에 자리를 더한다. */
+  private readonly banks: Tensor[][] = [];
+
+  constructor(params: ParamsArg, private readonly defaultLr: number) {
+    const groups: readonly ParamGroupInit[] = isGroups(params)
+      ? params
+      : [{ params: params as readonly Tensor[] }];
+    for (const g of groups) this.attach(g);
   }
 
+  /** 그룹 하나를 붙이고 평평한 목록에 이어 붙인다. */
+  private attach(init: ParamGroupInit): ParamGroup {
+    const index = this.paramGroups.length;
+    const group: ParamGroup = {
+      params: [...init.params],
+      lr: init.lr ?? this.defaultLr,
+      ...(init.weightDecay === undefined ? {} : { weightDecay: init.weightDecay }),
+    };
+    this.paramGroups.push(group);
+    for (const p of group.params) {
+      this.params.push(p);
+      this.groupOf.push(index);
+    }
+    return group;
+  }
+
+  /**
+   * 그룹을 나중에 더한다. `torch.optim.Optimizer.add_param_group` 자리다.
+   *
+   * **상태 은행도 같이 늘린다.** 안 늘리면 다음 스텝에서 "파라미터 N 의 상태가
+   * 없다" 로 터진다 — 은행이 평평한 파라미터 자리로 색인되기 때문이다.
+   *
+   * 이미 세워 둔 스케줄러는 이 그룹의 기준값을 모른다. torch 도 같은 자리에서
+   * `initial_lr` 을 요구한다 — 스케줄러를 먼저 세웠다면 다시 세워라.
+   */
+  addParamGroup(init: ParamGroupInit): void {
+    const group = this.attach(init);
+    for (const bank of this.banks) {
+      for (const p of group.params) bank.push(keepAlive(Tensor.owned(p.shape)));
+    }
+  }
+
+  /**
+   * 상태 은행 하나. **여기를 지나야 그룹이 늘 때 같이 는다.**
+   *
+   * 옛날에는 옵티마이저마다 `params.map(...)` 으로 직접 만들었고, 그러면 나중에
+   * 더해진 파라미터의 자리가 비어 있게 된다.
+   */
+  protected state(shapes: readonly Tensor[]): Tensor[] {
+    // **`Tensor.zeros` 를 쓰면 안 된다.** 원소 하나짜리는 값으로 캐시되어 있어 같은
+    // 버퍼가 오고, 옵티마이저는 상태에 **쓴다** — `Adam` 의 m·v 가 겹쳐 명령 버퍼가
+    // 통째로 무효가 되고 `SGD` 의 모멘텀은 전역 0 상수를 덮어쓴다. `owned` 는 자기
+    // 버퍼를 준다(`tensor.ts`).
+    const bank = shapes.map((p) => keepAlive(Tensor.owned(p.shape)));
+    this.banks.push(bank);
+    return bank;
+  }
+
+  /** 지금 밟고 있는 그룹의 학습률. */
   protected get lr(): number {
-    return this.paramGroups[0]?.lr ?? 0;
+    return this.paramGroups[this.currentGroup]?.lr ?? this.defaultLr;
+  }
+
+  /** 지금 그룹이 따로 정한 값, 없으면 옵티마이저의 기본값. */
+  protected grouped(fallback: number): number {
+    return this.paramGroups[this.currentGroup]?.weightDecay ?? fallback;
   }
 
   /** 기울기를 비운다. **`null` 로 되돌린다** — 0 으로 채우면 잎 판정이 흐려진다. */
@@ -67,8 +163,11 @@ export abstract class Optimizer {
       for (const [i, p] of this.params.entries()) {
         const g = p.grad;
         if (!g) continue;
+        // 어느 그룹의 파라미터인지 먼저 정해야 `this.lr` 이 맞는 값을 준다.
+        this.currentGroup = this.groupOf[i] ?? 0;
         this.update(i, p, g);
       }
+      this.currentGroup = 0;
     });
   }
 
@@ -79,7 +178,7 @@ export class SGD extends Optimizer {
   private readonly buffers: Tensor[];
 
   constructor(
-    params: Tensor[],
+    params: ParamsArg,
     lr: number,
     private readonly momentum = 0,
     private readonly weightDecay = 0,
@@ -91,7 +190,7 @@ export class SGD extends Optimizer {
     // 0 에서 시작해도 torch 와 값이 같다: 첫 스텝의 `0·momentum + grad` 가 torch 의
     // `buf = grad.clone()` 과 같은 수다.
     this.buffers = momentum === 0 ? []
-      : params.map((p) => ownedBuffer(p.shape));
+      : this.state(this.params);
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -103,9 +202,12 @@ export class SGD extends Optimizer {
       if (!buf) throw new Error(`SGD: 파라미터 ${index} 의 버퍼가 없다`);
       buffers.push(buf.buffer);
     }
+    // **그룹이 따로 정했으면 그것을 쓴다.** bias·norm 을 weight decay 에서 빼는 것이
+    // 이 자리의 대표 용도다 — 그것 하나 때문에 그룹이 필요하다.
+    const decay = this.grouped(this.weightDecay);
     d.run1d(
-      d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}:${this.weightDecay}`,
-        () => sgdStep(n, this.lr, this.momentum, this.weightDecay)),
+      d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}:${decay}`,
+        () => sgdStep(n, this.lr, this.momentum, decay)),
       buffers,
       n,
     );
@@ -118,18 +220,15 @@ export class Adam extends Optimizer {
   private stepCount = 0;
 
   constructor(
-    params: Tensor[],
+    params: ParamsArg,
     lr: number,
     private readonly beta1 = 0.9,
     private readonly beta2 = 0.999,
     private readonly eps = 1e-8,
   ) {
     super(params, lr);
-    // **둘이 같은 버퍼가 되면 안 된다.** 캐시를 타면 크기 1 파라미터에서 `m` 과 `v`
-    // 가 같은 자리를 가리키고, WebGPU 가 "writable storage buffer aliasing" 으로
-    // 명령 버퍼째 거절한다 — 이쪽은 조용하지 않고 시끄럽게 죽는 갈래다(실측).
-    this.first = params.map((p) => ownedBuffer(p.shape));
-    this.second = params.map((p) => ownedBuffer(p.shape));
+    this.first = this.state(this.params);
+    this.second = this.state(this.params);
   }
 
   override step(): void {
@@ -162,13 +261,13 @@ export class RMSprop extends Optimizer {
   private readonly squares: Tensor[];
 
   constructor(
-    params: Tensor[],
+    params: ParamsArg,
     lr: number,
     private readonly alpha = 0.99,
     private readonly eps = 1e-8,
   ) {
     super(params, lr);
-    this.squares = params.map((p) => ownedBuffer(p.shape));
+    this.squares = this.state(this.params);
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -197,9 +296,8 @@ export class RMSprop extends Optimizer {
  */
 
 abstract class Composed extends Optimizer {
-  protected state(shapes: Tensor[]): Tensor[] {
-    return shapes.map((p) => ownedBuffer(p.shape));
-  }
+  // `state()` 는 밑동으로 올라갔다 — `SGD`·`Adam`·`RMSprop` 도 은행을 등록해야
+  // `addParamGroup` 이 그것들을 같이 늘린다.
 
   protected at(bank: Tensor[], index: number, what: string): Tensor {
     const got = bank[index];
@@ -218,10 +316,10 @@ export class Adagrad extends Composed {
   private readonly sums: Tensor[];
   private stepCount = 0;
 
-  constructor(params: Tensor[], lr = 0.01, private readonly lrDecay = 0,
+  constructor(params: ParamsArg, lr = 0.01, private readonly lrDecay = 0,
               private readonly eps = 1e-10) {
     super(params, lr);
-    this.sums = this.state(params);
+    this.sums = this.state(this.params);
   }
 
   override step(): void {
@@ -242,11 +340,11 @@ export class Adadelta extends Composed {
   private readonly squares: Tensor[];
   private readonly deltas: Tensor[];
 
-  constructor(params: Tensor[], lr = 1.0, private readonly rho = 0.9,
+  constructor(params: ParamsArg, lr = 1.0, private readonly rho = 0.9,
               private readonly eps = 1e-6) {
     super(params, lr);
-    this.squares = this.state(params);
-    this.deltas = this.state(params);
+    this.squares = this.state(this.params);
+    this.deltas = this.state(this.params);
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -268,11 +366,11 @@ export class Adamax extends Composed {
   private readonly inf: Tensor[];
   private stepCount = 0;
 
-  constructor(params: Tensor[], lr = 2e-3, private readonly beta1 = 0.9,
+  constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8) {
     super(params, lr);
-    this.first = this.state(params);
-    this.inf = this.state(params);
+    this.first = this.state(this.params);
+    this.inf = this.state(this.params);
   }
 
   override step(): void {
@@ -302,12 +400,12 @@ export class NAdam extends Composed {
   private muProduct = 1;
   private stepCount = 0;
 
-  constructor(params: Tensor[], lr = 2e-3, private readonly beta1 = 0.9,
+  constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8,
               private readonly momentumDecay = 4e-3) {
     super(params, lr);
-    this.first = this.state(params);
-    this.second = this.state(params);
+    this.first = this.state(this.params);
+    this.second = this.state(this.params);
   }
 
   override step(): void {
@@ -348,11 +446,11 @@ export class RAdam extends Composed {
   private readonly second: Tensor[];
   private stepCount = 0;
 
-  constructor(params: Tensor[], lr = 1e-3, private readonly beta1 = 0.9,
+  constructor(params: ParamsArg, lr = 1e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8) {
     super(params, lr);
-    this.first = this.state(params);
-    this.second = this.state(params);
+    this.first = this.state(this.params);
+    this.second = this.state(this.params);
   }
 
   override step(): void {
@@ -558,12 +656,34 @@ export class Adafactor extends Composed {
  */
 export abstract class LRScheduler {
   protected epoch = 0;
+  /** 그룹마다의 기준값. 하위 클래스가 세는 `base` 는 첫 그룹의 것이다. */
+  private readonly bases: number[];
   readonly base: number;
 
   constructor(protected readonly opt: Optimizer) {
-    const group = opt.paramGroups[0];
-    if (group && group.initialLr === undefined) group.initialLr = group.lr;
-    this.base = group?.initialLr ?? 0;
+    this.bases = opt.paramGroups.map((g) => {
+      if (g.initialLr === undefined) g.initialLr = g.lr;
+      return g.initialLr;
+    });
+    this.base = this.bases[0] ?? 0;
+  }
+
+  /**
+   * 계산한 값을 **모든 그룹에** 적용한다.
+   *
+   * 그룹마다 기준이 다르면 그 비율을 지킨다 — torch 가 `base_lrs` 를 그룹마다 들고
+   * 각자에게서 다시 계산하는 것과 같은 결과다. `compute` 는 첫 그룹의 기준으로 한
+   * 값만 내므로 여기서 비율을 곱한다.
+   *
+   * **그룹이 하나면 비율이 1 이라 옛 동작과 한 비트도 안 다르다.** 궤적을 통째로
+   * 굳혀 둔 골든이 그것을 본다.
+   */
+  private apply(value: number): void {
+    const first = this.bases[0] ?? 0;
+    for (const [i, group] of this.opt.paramGroups.entries()) {
+      const mine = this.bases[i] ?? first;
+      group.lr = first === 0 ? value : value * (mine / first);
+    }
   }
 
   /**
@@ -576,15 +696,13 @@ export abstract class LRScheduler {
    */
   start(): this {
     this.epoch = 0;
-    const group = this.opt.paramGroups[0];
-    if (group) group.lr = this.compute(0);
+    this.apply(this.compute(0));
     return this;
   }
 
   step(): void {
     this.epoch += 1;
-    const group = this.opt.paramGroups[0];
-    if (group) group.lr = this.compute(this.epoch);
+    this.apply(this.compute(this.epoch));
   }
 
   /** 지금 학습률. 재귀식 스케줄러가 자기 앞의 값을 읽는 자리다. */
@@ -594,8 +712,7 @@ export abstract class LRScheduler {
 
   /** `SequentialLR` 이 넘어갈 때 처음부터 다시 밟게 한다. */
   restart(): void {
-    const group = this.opt.paramGroups[0];
-    if (group) group.lr = this.base;
+    this.apply(this.base);
     this.start();
   }
 
@@ -886,8 +1003,10 @@ export class ReduceLROnPlateau {
     if (this.best === Infinity) this.best = metric;
     this.bad += 1;
     if (this.bad > this.patience) {
-      const group = this.opt.paramGroups[0];
-      if (group) group.lr *= this.factor;
+      // **그룹 전부를 깎는다.** 이쪽은 `LRScheduler` 를 안 물려받아서(기준값이 아니라
+      // 지금 값에 곱한다) 위의 `apply` 를 못 쓴다. 한 그룹만 깎으면 나머지가 그대로
+      // 남아 층별 학습률이 스케줄을 지날수록 어긋난다.
+      for (const group of this.opt.paramGroups) group.lr *= this.factor;
       this.bad = 0;
     }
   }

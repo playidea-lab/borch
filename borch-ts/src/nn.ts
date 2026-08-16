@@ -15,6 +15,7 @@
  */
 
 import { runningStats } from "./kernels.js";
+import { onSeed, uniformArray } from "./random.js";
 import {
   device, keepAlive, noGrad, type PadMode, type Reduction, Tensor,
 } from "./tensor.js";
@@ -33,32 +34,22 @@ import {
  * **난수기는 torch 와 다르다.** 같을 수가 없고, 같은 척해서도 안 된다. 골든은 초기값을
  * 안 묻고 가중치를 늘 밖에서 넣으므로 여기서 갈릴 것이 없다.
  */
-const initRng = { state: 0x9e3779b9 };
+// **난수기는 `random.ts` 로 옮겼다.** 층 초기화와 `Tensor.randn` 이 같은 줄기를
+// 써야 씨앗 하나가 전부를 되돌린다. 여기 갇혀 있으면 `tensor.ts` 가 못 부른다 —
+// 부르면 순환이다.
+//
+// **dropout 도 같이 되돌린다.** 그쪽은 부를 때마다 오르는 계수기를 따로 들고 있어서,
+// 안 건드리면 씨앗을 심어도 마스크가 매번 달라진다 — "같은 씨앗에 같은 결과" 를
+// 기대하는 사람이 가장 먼저 확인하는 자리가 층 초기화와 dropout 이다. 코어도 같은
+// 갈래의 결함을 갖고 있었고 같은 케이스가 둘 다 잡았다.
+onSeed(() => { Tensor.dropoutSeed = 1; });
 
-export function manualSeed(seed: number): void {
-  initRng.state = (seed >>> 0) || 1;
-  // **dropout 도 같이 되돌린다.** 그쪽은 부를 때마다 오르는 계수기를 따로 들고
-  // 있어서, 여기서 안 건드리면 씨앗을 심어도 마스크가 매번 달라진다 — "같은 씨앗에
-  // 같은 결과" 를 기대하는 사람이 가장 먼저 확인하는 자리가 층 초기화와 dropout 이다.
-  // 코어도 같은 갈래의 결함을 갖고 있었고 같은 케이스가 둘 다 잡았다.
-  Tensor.dropoutSeed = 1;
-}
-
-function nextUniform(): number {
-  let x = initRng.state;
-  x ^= x << 13; x >>>= 0;
-  x ^= x >> 17;
-  x ^= x << 5; x >>>= 0;
-  initRng.state = x;
-  return x / 0x100000000;
-}
+export { manualSeed } from "./random.js";
 
 /** `[-bound, bound]` 균등분포로 채운 텐서. */
 function uniform(shape: readonly number[], bound: number): Tensor {
   const n = shape.reduce((a, b) => a * b, 1);
-  const data = new Float32Array(n);
-  for (let i = 0; i < n; i++) data[i] = (nextUniform() * 2 - 1) * bound;
-  return Tensor.from(data, shape);
+  return Tensor.from(uniformArray(n, bound), shape);
 }
 
 /** 들어오는 갈래 수. 가중치의 첫 축을 뺀 나머지의 곱이다. */
@@ -78,28 +69,58 @@ export abstract class Module {
     return this.forward(x);
   }
 
-  /** 이 층이 직접 가진 파라미터. 자식은 `children` 이 준다. */
+  /**
+   * 이 층이 직접 가진 파라미터. 자식은 `children` 이 준다.
+   *
+   * **기본이 자기 필드를 훑는 것이다.** 전에는 `{}` 를 돌려주고 층마다 덮어쓰게
+   * 했는데, 그러면 밖에서 층을 만드는 사람이 덮어쓰기를 잊는 순간 그 파라미터가
+   * `parameters()` 에 안 나오고 — **예외 없이** 학습만 안 된다. 손실이 안 내려가는데
+   * 어디가 원인인지 가리키는 것이 아무것도 없는 종류다.
+   *
+   * 주석에 "TypeScript 에는 속성을 훑어 층을 알아보는 자리가 없다" 고 적혀 있었는데
+   * 그것은 사실이 아니었다. `Object.entries(this)` 가 인스턴스 필드를 준다 —
+   * torch 의 `__setattr__` 이 하는 일과 같은 자리다.
+   *
+   * **`requiresGrad` 가 표식이다.** 필드에 있는 텐서를 전부 파라미터로 세면 상수나
+   * 마스크까지 옵티마이저가 밟는다. torch 에서 `nn.Parameter` 가 하는 구분을 여기서는
+   * 이 깃발이 한다 — 층은 `claim()` 으로 세우고, 그것이 곧 "이건 파라미터다" 다.
+   */
   ownParameters(): Record<string, Tensor> {
-    return {};
+    const out: Record<string, Tensor> = {};
+    for (const [name, value] of Object.entries(this)) {
+      if (value instanceof Tensor && value.requiresGrad) out[name] = value;
+    }
+    return out;
   }
 
   children(): Module[] {
-    return [];
+    return Object.values(this.namedChildren());
   }
 
   /**
-   * 자식을 **이름과 함께** 준다. 기본은 자리 번호다 — `Sequential` 이 그 모양이다.
+   * 자식을 **이름과 함께** 준다. 기본은 **필드 이름**이다 — torch 와 같다.
    *
-   * 이것이 없을 때는 `namedParameters` 가 자식을 번호로만 불렀고, 그러면
-   * `fc1.weight` 같은 이름을 낼 수가 없었다. torch 는 속성 이름을 쓰는데
-   * TypeScript 에는 속성을 훑어 층을 알아보는 자리가 없으므로, 이름을 붙이고
-   * 싶은 층이 여기를 덮어쓴다.
+   * ```ts
+   * class Net extends nn.Module {
+   *   fc1 = new nn.Linear(4, 8);      // → "fc1.weight", "fc1.bias"
+   *   fc2 = new nn.Linear(8, 2);
+   *   forward(x) { return this.fc2.call(this.fc1.call(x)); }
+   * }
+   * ```
+   *
+   * **배열은 안 훑는다.** `layers = [a, b]` 는 자식이 아니다 — torch 도 파이썬 list 를
+   * 등록하지 않고 `nn.ModuleList` 를 요구한다. 배열을 훑으면 "층이 아닌 배열" 과
+   * 구분할 방법이 없고, 그 구분이 없으면 `state_dict` 열쇠가 조용히 바뀐다.
+   *
+   * 자리 번호로 부르고 싶은 컨테이너(`Sequential`·`ModuleList`)는 여기를 덮어쓴다.
    *
    * **`state_dict` 의 열쇠가 이 이름이다.** 갈리면 남의 체크포인트를 못 읽는다.
    */
   namedChildren(): Record<string, Module> {
     const out: Record<string, Module> = {};
-    for (const [i, child] of this.children().entries()) out[String(i)] = child;
+    for (const [name, value] of Object.entries(this)) {
+      if (value instanceof Module) out[name] = value;
+    }
     return out;
   }
 
@@ -211,6 +232,19 @@ export class Sequential extends Module {
     return this.layers;
   }
 
+  /**
+   * **자리 번호로 부른다** — `0.weight`. torch 의 `Sequential` 이 그 모양이고
+   * 골든이 그 이름으로 가중치를 넣는다.
+   *
+   * 기본 구현은 필드 이름을 쓰는데 우리 층은 배열(`layers`) 안에 있어 거기 안 걸린다.
+   * 그러면 `state_dict` 가 통째로 비므로 여기를 덮어써야 한다.
+   */
+  override namedChildren(): Record<string, Module> {
+    const out: Record<string, Module> = {};
+    for (const [i, child] of this.layers.entries()) out[String(i)] = child;
+    return out;
+  }
+
   override forward(x: Tensor): Tensor {
     let cur = x;
     // 안에서도 `call` 로 지난다 — 권하는 길을 라이브러리 자신이 안 가면 그 권함은
@@ -237,6 +271,13 @@ export class ModuleList extends Module {
 
   override children(): Module[] {
     return this.items;
+  }
+
+  /** 자리 번호로 부른다. `Sequential` 과 같은 이유다 — 층이 배열 안에 있다. */
+  override namedChildren(): Record<string, Module> {
+    const out: Record<string, Module> = {};
+    for (const [i, child] of this.items.entries()) out[String(i)] = child;
+    return out;
   }
 
   /** **부르는 층이 아니다.** 지나가려 하면 여기서 멈춘다 — torch 도 그렇다. */
@@ -655,7 +696,7 @@ export class PReLU extends Module {
 
   constructor(numParameters = 1, init = 0.25) {
     super();
-    this.weight = Tensor.full([numParameters], init);
+    this.weight = Tensor.owned([numParameters], init);
     this.claim(this.weight);
   }
 
@@ -684,8 +725,8 @@ export class GroupNorm extends Module {
     private readonly eps = 1e-5,
   ) {
     super();
-    this.weight = Tensor.full([numChannels], 1);
-    this.bias = Tensor.full([numChannels], 0);
+    this.weight = Tensor.owned([numChannels], 1);
+    this.bias = Tensor.owned([numChannels], 0);
     this.claim(this.weight, this.bias);
   }
 
@@ -724,7 +765,7 @@ export class RMSNorm extends Module {
     super();
     const dims = typeof normalizedShape === "number"
       ? [normalizedShape] : [...normalizedShape];
-    this.weight = Tensor.full(dims, 1);
+    this.weight = Tensor.owned(dims, 1);
     this.claim(this.weight);
   }
 
@@ -2159,11 +2200,11 @@ export class BatchNormND extends Module {
     private readonly momentum = 0.1,
   ) {
     super();
-    this.weight = Tensor.ones([channels]);
-    this.bias = Tensor.zeros([channels]);
+    this.weight = Tensor.owned([channels], 1);
+    this.bias = Tensor.owned([channels], 0);
     this.claim(this.weight, this.bias);
-    this.runningMean = Tensor.zeros([channels]);
-    this.runningVar = Tensor.ones([channels]);
+    this.runningMean = Tensor.owned([channels], 0);
+    this.runningVar = Tensor.owned([channels], 1);
     // 이동 통계는 기울기를 안 받지만 **구역이 닫혀도 살아야 한다.**
     keepAlive(this.runningMean);
     keepAlive(this.runningVar);
@@ -2387,9 +2428,9 @@ export class MultiheadAttention extends Module {
     const bound = 1 / Math.sqrt(Math.max(1, embed));
     this.inWeight = uniform([3 * embed, embed], bound);
     // torch 의 어텐션은 편향을 0 에서 시작한다 — 여기는 대칭이 안 깨질 자리가 아니다.
-    this.inBias = Tensor.zeros([3 * embed]);
+    this.inBias = Tensor.owned([3 * embed], 0);
     this.outWeight = uniform([embed, embed], bound);
-    this.outBias = Tensor.zeros([embed]);
+    this.outBias = Tensor.owned([embed], 0);
     this.claim(this.inWeight, this.inBias, this.outWeight, this.outBias);
   }
 

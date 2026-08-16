@@ -27,7 +27,7 @@ export async function report(): Promise<string> {
   for (let i = 0; i < labels.length; i++) labels[i] = i % 10;
 
   const x = keepAlive(Tensor.from(pixels, [32, 784]));
-  const y = keepAlive(Tensor.from(labels, [32], false, "int64"));
+  const y = keepAlive(Tensor.from(labels, [32], { dtype: "int64" }));
 
   const seen: number[] = [];
   for (let i = 0; i < 3; i++) {

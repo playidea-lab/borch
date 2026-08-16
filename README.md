@@ -310,7 +310,7 @@ const opt = new optim.SGD(model.parameters(), 0.05, 0.9);
 const crit = new nn.CrossEntropyLoss();
 
 const x = keepAlive(Tensor.from(pixels, [32, 784]));
-const y = keepAlive(Tensor.from(labels, [32], false, "int64"));
+const y = keepAlive(Tensor.from(labels, [32], { dtype: "int64" }));
 
 for (let i = 0; i < steps; i++) {
   await scope(async () => {                     // 한 스텝의 중간 버퍼를 놓는다
@@ -349,7 +349,7 @@ WebGPU 에 동기 읽기가 없는데도 **`await` 이 안 나온다.** Pyodide 
 borch.ts 자신은 1660 건에 TS 본문을 써 두었다 — 나머지는 파이썬 표면을 묻는
 것들이라(같은 계산에 이름이 둘인가 같은) TS 쪽에 물을 자리가 없다.
 
-### torch 와 갈리는 네 자리
+### torch 와 갈리는 다섯 자리
 
 첫 열 줄에서 전부 만나므로 미리 적는다.
 
@@ -359,9 +359,97 @@ borch.ts 자신은 1660 건에 TS 본문을 써 두었다 — 나머지는 파�
 | `await loss.item()` | GPU 메모리를 도로 가져온다. 순방향·역방향은 동기다 |
 | `scope()` 로 감싼다 | JS 의 쓰레기 수집이 GPU 메모리를 제때 안 놓는다. 한 스텝이 중간 버퍼를 수천 개 만든다 |
 | `model.call(x)` | JS 는 객체를 그냥 못 부른다 |
+| `'cpu'` 로는 연산이 안 된다 | 값을 내려두는 자리이지 커널이 있는 장치가 아니다 (아래 절) |
 
 `scope()` 는 torch 에 없다 — TF.js 의 `tidy` 와 같은 자리이고 이유도 같다. 파라미터처럼
 살아남아야 하는 것은 `keepAlive` 로 표시한다 — **안 감싸면 몇 스텝 만에 장치가 찬다.**
+
+### 장치를 다루는 자리
+
+`torch.cuda.is_available()` 자리는 이렇다. **비동기다** — 어댑터를 얻는 것이 비동기라
+피할 길이 없다.
+
+```ts
+import { init, isAvailable, probe, currentDevice, Tensor } from "borch";
+
+if (!(await isAvailable())) { /* 이 브라우저에서는 못 쓴다 */ }
+
+const p = await probe();          // 왜 안 되는지까지 필요하면
+if (!p.ok) console.log(p.why);    // 'no-api' | 'no-adapter'
+
+await init({ powerPreference: "high-performance" });   // 기본값이 이것이다
+currentDevice();                  // 'webgpu' — 안 붙었으면 null
+```
+
+`why` 를 가르는 것이 요점이다. `no-api` 는 브라우저가 낡았거나 https 가 아닌 것이고
+`no-adapter` 는 드라이버 차단 목록·가상 머신·GPU 없는 헤드리스다 — 쓰는 사람이 할 수
+있는 일이 서로 다른데 예외 하나로 뭉치면 그 갈림이 사라진다.
+
+텐서가 어디 있는지는 `t.device` 가 답하고, `await t.cpu()` 로 내리고 `t.webgpu()` 로
+올린다. **`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다** — borch 에 CPU 커널은
+없다. 내려온 텐서는 읽을 수는 있어도(`toArray`·`item`·`repr`) 연산에 넣으면 torch 와
+같은 문구로 멈춘다.
+
+```ts
+const g = Tensor.from([1, 2, 3, 4], [2, 2]);   // 'webgpu'
+const c = await g.cpu();                        // 'cpu'
+await c.item();                                 // 된다 — 읽기다
+c.sum();                                        // RuntimeError:
+                                                // Expected all tensors to be on
+                                                // the same device, ...
+c.webgpu().sum();                               // 다시 된다
+```
+
+내리는 것만 비동기인 것은 그쪽만 왕복이기 때문이다. 올리는 것은 큐에 쓰기 하나다.
+
+`torch.cuda.synchronize()` 자리는 `await device().synchronize()` 다. 지금까지 완료를
+강제하는 방법은 값을 하나 읽는 것이었는데 그러면 **readback 왕복이 측정에 섞인다.**
+
+### 층을 직접 만들 때
+
+**필드에 두면 등록된다.** torch 가 `__setattr__` 로 하는 일과 같은 자리다.
+
+```ts
+class Net extends nn.Module {
+  fc1 = new nn.Linear(4, 8);
+  fc2 = new nn.Linear(8, 2);
+  override forward(x: Tensor): Tensor {
+    return this.fc2.call(this.fc1.call(x).relu());
+  }
+}
+new Net().parameters();       // 넷 다 나온다
+new Net().namedParameters();  // fc1.weight, fc1.bias, fc2.weight, fc2.bias
+```
+
+텐서를 직접 파라미터로 둘 때는 `claim()` 으로 세운다 — torch 의 `nn.Parameter` 자리다.
+안 세운 텐서 필드는 상수로 보고 옵티마이저가 안 밟는다. **배열은 안 훑는다**(torch 도
+파이썬 list 를 등록하지 않는다) — `nn.ModuleList` 를 쓴다.
+
+### 파라미터 그룹
+
+```ts
+const opt = new optim.SGD([
+  { params: backbone.parameters(), lr: 1e-3 },
+  { params: head.parameters(),     lr: 1e-2, weightDecay: 0 },
+], 1e-3);
+opt.addParamGroup({ params: extra.parameters(), lr: 5e-4 });
+```
+
+스케줄러는 그룹 전부를 몰고 그룹 사이 비율을 지킨다 — torch 가 `base_lrs` 를 그룹마다
+드는 것과 같은 결과다.
+
+### 난수
+
+`manualSeed` 하나가 텐서 팩토리·층 초기화·dropout 을 같이 되돌린다.
+
+```ts
+manualSeed(42);
+Tensor.randn([2, 3]);           // 표준정규
+Tensor.rand([4]);               // [0, 1)
+Tensor.randint(0, 10, [8]);     // [low, high) 정수, int64
+Tensor.randperm(64);
+t.randnLike();
+```
 
 ### 어디서 도는가
 

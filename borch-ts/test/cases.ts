@@ -58,7 +58,7 @@ export class Inputs {
     if (!entry?.values) throw new Error(`골든에 입력 '${name}' 이 없다`);
     const flat = entry.values.map((v) =>
       typeof v === "boolean" ? (v ? 1 : 0) : (v ?? Number.NaN));
-    return Tensor.from(flat, entry.shape ?? [flat.length], requiresGrad);
+    return Tensor.from(flat, entry.shape ?? [flat.length], { requiresGrad });
   }
 
   /** 텐서로 안 만들고 값만. 이미지처럼 GPU 에 안 올리는 것이 쓴다. */
@@ -226,9 +226,9 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["argsort", () => x1().argsort(0)],
     ["bmm", () => x2().reshape([1, 3, 4]).bmm(x2().transpose().reshape([1, 4, 3]))],
     ["einsum", () => einsum("ij,kj->ik", x2(), x2())],
-    ["F.one_hot", () => Tensor.from([0, 2], [2], false, "int64").oneHot(3)],
+    ["F.one_hot", () => Tensor.from([0, 2], [2], { dtype: "int64" }).oneHot(3)],
     ["F.nll_loss",
-      () => x2().logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], false, "int64"))],
+      () => x2().logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], { dtype: "int64" }))],
     // 길이가 다른 것을 한 배치에 담는 자리. 교재 ch05 가 이 경로를 그대로 쓴다.
     ["pad_sequence", () => Tensor.padSequence(ragged())],
     ["pad_sequence(batch_first)", () => Tensor.padSequence(ragged(), true)],
@@ -243,7 +243,7 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
   out.set("masked_select",
     async () => x1().maskedSelect(x1().binary("gt", Tensor.full([], 0))));
   out.set("bincount",
-    async () => Tensor.from([0, 1, 1, 3], [4], false, "int64").bincount());
+    async () => Tensor.from([0, 1, 1, 3], [4], { dtype: "int64" }).bincount());
 
   /** `x2[:3, :3]` — 골든이 그 자리만 쓰는 케이스들이 있다. */
   function square3(): Tensor {
@@ -360,7 +360,7 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
 
 /** 길이 3·1·2 짜리 셋. 채운 자리가 어디인지 눈으로 보이는 최소 크기다. */
 function ragged(grad = false): Tensor[] {
-  return [[1, 2, 3], [4], [5, 6]].map((v) => Tensor.from(v, [v.length], grad));
+  return [[1, 2, 3], [4], [5, 6]].map((v) => Tensor.from(v, [v.length], { requiresGrad: grad }));
 }
 
 /** `x > 0` 을 0/1 로. `logical_*` 케이스가 그 형태를 쓴다. */
@@ -401,7 +401,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   for (const [name, op] of Object.entries(MATH_UNARY)) {
     out.set(`math::${name}`, () => Tensor.from(pick(name)).unary(op));
     out.set(`math::grad::${name}`, () => {
-      const x = Tensor.from(pick(name), undefined, true);
+      const x = Tensor.from(pick(name), undefined, { requiresGrad: true });
       x.unary(op).mul(w()).sum().backward();
       return gradOf(x, name);
     });
@@ -413,8 +413,8 @@ export function cases(inputs: Inputs): Map<string, Case> {
     for (const [who, tag] of ["a", "b"].entries()) {
       out.set(`math::grad::${name}/${tag}`, () => {
         const leaves = [
-          Tensor.from(plain, undefined, true),
-          Tensor.from(other, undefined, true),
+          Tensor.from(plain, undefined, { requiresGrad: true }),
+          Tensor.from(other, undefined, { requiresGrad: true }),
         ] as const;
         leaves[0].binary(name, leaves[1]).mul(w()).sum().backward();
         const leaf = leaves[who];
@@ -427,7 +427,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   for (const name of [...STEPS, "sgn"]) {
     const op = name === "fix" ? "trunc" : name;
     out.set(`math::grad::${name}(0이어야)`, () => {
-      const x = Tensor.from(plain, undefined, true);
+      const x = Tensor.from(plain, undefined, { requiresGrad: true });
       x.unary(op).mul(w()).sum().backward();
       return gradOf(x, name);
     });
@@ -506,7 +506,7 @@ function addEdge(out: Map<string, Case>): void {
   const grad = (name: string, src: readonly number[],
                 fn: (x: Tensor) => Tensor): void => {
     set(`grad::${name}`, () => {
-      const x = Tensor.from([...src], [src.length], true);
+      const x = Tensor.from([...src], [src.length], { requiresGrad: true });
       seed(fn(x)).sum().backward();
       return gradOf(x, name);
     });
@@ -544,8 +544,8 @@ function addEdge(out: Map<string, Case>): void {
     for (const op of ["maximum", "minimum"]) {
       set(`grad::${op}(동점)/${tag}`, () => {
         const leaves = [
-          Tensor.from([...ta], [ta.length], true),
-          Tensor.from([...tb], [tb.length], true),
+          Tensor.from([...ta], [ta.length], { requiresGrad: true }),
+          Tensor.from([...tb], [tb.length], { requiresGrad: true }),
         ] as const;
         seed(leaves[0].binary(op, leaves[1])).sum().backward();
         const leaf = leaves[who];
@@ -559,7 +559,7 @@ function addEdge(out: Map<string, Case>): void {
   set("max(동점).indices", () => Tensor.from([...dup]).max(0).indices);
   set("min(동점).indices", () => Tensor.from([...dup]).neg().min(0).indices);
   set("grad::max(동점)", () => {
-    const x = Tensor.from([...dup], [dup.length], true);
+    const x = Tensor.from([...dup], [dup.length], { requiresGrad: true });
     seed(x.max(0).values.reshape([1])).sum().backward();
     return gradOf(x, "max(동점)");
   });
@@ -573,7 +573,7 @@ function addEdge(out: Map<string, Case>): void {
   const tied = [1, 1, 2, 0, 1, 0, 2, 2, 3, 3, 0, 1, 0, 3, 1, 1];
   set("max_pool2d(동점)", () => Tensor.from([...tied], [1, 1, 4, 4]).maxPool2d(2));
   set("grad::max_pool2d(동점)", () => {
-    const x = Tensor.from([...tied], [1, 1, 4, 4], true);
+    const x = Tensor.from([...tied], [1, 1, 4, 4], { requiresGrad: true });
     seed(x.maxPool2d(2)).sum().backward();
     return gradOf(x, "max_pool2d(동점)");
   });
@@ -1056,7 +1056,7 @@ function addCell(out: Map<string, Case>): void {
         ? new nn.GRUCell(2, 2)
         : name === "LSTMCell" ? new nn.LSTMCell(2, 2) : new nn.RNNCell(2, 2);
       const cell = load(make, gates);
-      const inp = Tensor.from([1, 2], [1, 2], true);
+      const inp = Tensor.from([1, 2], [1, 2], { requiresGrad: true });
       seeded(run(cell, inp)).backward();
       return gradOf(inp, name);
     });
@@ -1077,8 +1077,7 @@ function addUnpool(out: Map<string, Case>): void {
   const grid = (shape: number[]) =>
     Tensor.from(
       Array.from({ length: shape.reduce((a, b) => a * b, 1) }, (_, i) => i),
-      shape,
-    );
+      shape);
   const plane = () => grid([1, 1, 4, 4]);
   const planes = () => grid([2, 2, 4, 4]);
   const line = () => grid([1, 1, 8]);
@@ -1225,7 +1224,7 @@ function addUnpool(out: Map<string, Case>): void {
   };
   const asmX = () => Tensor.from(
     Array.from({ length: 24 }, (_, i) => i / 10 - 1), [6, 4]);
-  const asmY = () => Tensor.from([0, 1, 5, 7, 10, 11], [6], false, "int64");
+  const asmY = () => Tensor.from([0, 1, 5, 7, 10, 11], [6], { dtype: "int64" });
 
   const asm = () => {
     const m = new nn.AdaptiveLogSoftmaxWithLoss(4, 12, [3, 7], 2.0);
@@ -1516,7 +1515,7 @@ function addMisc(out: Map<string, Case>): void {
 
   out.set("misc::grad::unfold", () => {
     const x = Tensor.from(Array.from({ length: 16 }, (_, i) => i),
-      [1, 1, 4, 4], true);
+      [1, 1, 4, 4], { requiresGrad: true });
     seeded(x.unfoldIm2col(2)).backward();
     return gradOf(x, "unfold");
   });
@@ -1594,7 +1593,7 @@ function addShuffle(out: Map<string, Case>): void {
 
   out.set("shuffle::grad::pixel_shuffle", () => {
     const x = Tensor.from(Array.from({ length: 32 }, (_, i) => i),
-      [1, 8, 2, 2], true);
+      [1, 8, 2, 2], { requiresGrad: true });
     seeded(x.pixelShuffle(2)).backward();
     return gradOf(x, "pixel_shuffle");
   });
@@ -1785,17 +1784,17 @@ function addLazy(out: Map<string, Case>): void {
 function addLoss(out: Map<string, Case>): void {
   const X = [0.5, -1.0, 2.0, 1.5, 0.25, -0.5];
   const Y = [1.0, 0.0, -1.0, 0.5, 1.0, 0.25];
-  const x = (g = false) => Tensor.from(X, [2, 3], g);
+  const x = (g = false) => Tensor.from(X, [2, 3], { requiresGrad: g });
   const y = () => Tensor.from(Y, [2, 3]);
   const sgn = () => Tensor.from(Y.map(Math.sign), [2, 3]);
   const counts = () => Tensor.from([1, 2, 0, 3, 0.5, 1], [2, 3]);
   const variance = () => Tensor.from([1, 0.5, 2, 0.25, 1.5, 1], [2, 3]);
   const positive = (g = false) => Tensor.from(X.map(Math.abs).map((v) => v + 0.5),
-    [2, 3], g);
-  const a = (g = false) => Tensor.from([1, 2, 0.5, -1], [2, 2], g);
+    [2, 3], { requiresGrad: g });
+  const a = (g = false) => Tensor.from([1, 2, 0.5, -1], [2, 2], { requiresGrad: g });
   const b = () => Tensor.from([0.5, 1.5, 1, -0.5], [2, 2]);
   const sign2 = () => Tensor.from([1, -1], [2]);
-  const anc = (g = false) => Tensor.from([1, 0, 0, 1], [2, 2], g);
+  const anc = (g = false) => Tensor.from([1, 0, 0, 1], [2, 2], { requiresGrad: g });
   const pos = () => Tensor.from([2, 0.5, 1.5, 1], [2, 2]);
   const neg = () => Tensor.from([1.1, 0.1, 0.2, 0.9], [2, 2]);
   const hinge = () => Tensor.from([0.5, 1.5, 2, 0.25], [2, 2]);
@@ -1969,9 +1968,9 @@ function addLoss(out: Map<string, Case>): void {
  */
 function addPad(out: Map<string, Case>): void {
   const seq = (n: number) => Array.from({ length: n }, (_, i) => i);
-  const p1 = (g = false) => Tensor.from(seq(6), [1, 2, 3], g);
-  const p2 = (g = false) => Tensor.from(seq(12), [1, 1, 3, 4], g);
-  const p3 = (g = false) => Tensor.from(seq(24), [1, 1, 2, 3, 4], g);
+  const p1 = (g = false) => Tensor.from(seq(6), [1, 2, 3], { requiresGrad: g });
+  const p2 = (g = false) => Tensor.from(seq(12), [1, 1, 3, 4], { requiresGrad: g });
+  const p3 = (g = false) => Tensor.from(seq(24), [1, 1, 2, 3, 4], { requiresGrad: g });
   const shapes: [string, (g?: boolean) => Tensor, number[]][] = [
     ["1d", p1, [2, 1]],
     ["2d", p2, [1, 1, 1, 1]],
@@ -2854,7 +2853,7 @@ function addTrain(out: Map<string, Case>, inp: Inputs): void {
   // 스케줄은 실수 연산뿐이라 값이 그대로 같아야 한다. **한 값이 아니라 궤적 전체**를
   // 본다 — 코어가 그렇게 하다가 StepLR 의 차이를 잡았다.
   const trajectory = (make: (o: optim.Optimizer) => optim.LRScheduler): Tensor => {
-    const p = Tensor.from([1.0], [1], true);
+    const p = Tensor.from([1.0], [1], { requiresGrad: true });
     const opt = new optim.SGD([p], 1.0);
     const sch = make(opt);
     const seen = [opt.paramGroups[0]?.lr ?? 0];
@@ -2877,7 +2876,7 @@ function addTrain(out: Map<string, Case>, inp: Inputs): void {
   }
 
   out.set("sched::ReduceLROnPlateau", () => {
-    const p = Tensor.from([1.0], [1], true);
+    const p = Tensor.from([1.0], [1], { requiresGrad: true });
     const opt = new optim.SGD([p], 1.0);
     const sch = new optim.ReduceLROnPlateau(opt, 0.5, 1);
     const seen: number[] = [];
@@ -2898,7 +2897,7 @@ function addTrain(out: Map<string, Case>, inp: Inputs): void {
  */
 function addNdim(out: Map<string, Case>, inp: Inputs): void {
   const flat = () => Tensor.from([0, 1, 2, 3, 4, 5, 6, 7], [2, 4]);
-  const mask = () => Tensor.from([1, 0, 1, 0, 1, 0, 1, 0], [2, 4], false, "bool");
+  const mask = () => Tensor.from([1, 0, 1, 0, 1, 0, 1, 0], [2, 4], { dtype: "bool" });
 
   // 1·3차원 계열. 입력이 골든에 실리고 나서 열린 자리다.
   const nd = (name: string, g = false) => inp.get(name, g);
@@ -2946,7 +2945,7 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   out.set("ndim::torch.masked_fill", () => flat().maskedFill(mask(), -1.0));
   out.set("ndim::x.masked_fill", () => flat().maskedFill(mask(), -1.0));
   out.set("ndim::x.index_select",
-    () => flat().indexSelect(0, Tensor.from([1, 0], [2], false, "int64")));
+    () => flat().indexSelect(0, Tensor.from([1, 0], [2], { dtype: "int64" })));
   out.set("ndim::x.masked_select", async () => flat().maskedSelect(mask()));
   out.set("ndim::x.repeat_interleave",
     () => flat().ravel().repeatInterleave(2));
@@ -3007,8 +3006,8 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   }
 
   out.set("webgpu::grad::pad_sequence", () => {
-    const a = Tensor.from([1, 2, 3, 4], [2, 2], true);
-    const b = Tensor.from([5, 6], [1, 2], true);
+    const a = Tensor.from([1, 2, 3, 4], [2, 2], { requiresGrad: true });
+    const b = Tensor.from([5, 6], [1, 2], { requiresGrad: true });
     seeded(Tensor.padSequence([a, b])).backward();
     return gradOf(a, "pad_sequence");
   });
@@ -3028,7 +3027,7 @@ const OP_NAME: Readonly<Record<typeof BIN_OPS[number], string>> = {
  */
 function addDType(out: Map<string, Case>): void {
   const make = (d: DType) =>
-    Tensor.from(d === "bool" ? [1, 0] : [1, 2], [2], false, d);
+    Tensor.from(d === "bool" ? [1, 0] : [1, 2], [2], { dtype: d });
 
   const verdictOf = (fn: () => Tensor): string => {
     try {
@@ -3063,7 +3062,7 @@ function addDType(out: Map<string, Case>): void {
         out.set(`dtype::${a} ${op} ${label}`, () =>
           verdictOf(() =>
             make(a).binary(OP_NAME[op] ?? "add",
-              Tensor.from([value], [], false, kind))));
+              Tensor.from([value], [], { dtype: kind }))));
       }
     }
   }
@@ -3077,7 +3076,7 @@ function addDType(out: Map<string, Case>): void {
  */
 function addRepr(out: Map<string, Case>): void {
   const t = (v: number[], shape?: number[], grad = false, d: DType = "float32") =>
-    Tensor.from(v, shape ?? [v.length], grad, d);
+    Tensor.from(v, shape ?? [v.length], { requiresGrad: grad, dtype: d });
 
   const cases: [string, () => Promise<string> | string][] = [
     ["스칼라", async () => t([3.14], []).repr()],
@@ -3109,9 +3108,9 @@ function addRepr(out: Map<string, Case>): void {
  * 없는 것을 시끄럽게 둔다.
  */
 function addLinalg(out: Map<string, Case>): void {
-  const mat = (g = false) => Tensor.from([4, 1, 2, 3], [2, 2], g);
-  const sym = (g = false) => Tensor.from([4, 1, 1, 3], [2, 2], g); // 대칭 양정부호
-  const vec = (g = false) => Tensor.from([1, 2], [2], g);
+  const mat = (g = false) => Tensor.from([4, 1, 2, 3], [2, 2], { requiresGrad: g });
+  const sym = (g = false) => Tensor.from([4, 1, 1, 3], [2, 2], { requiresGrad: g }); // 대칭 양정부호
+  const vec = (g = false) => Tensor.from([1, 2], [2], { requiresGrad: g });
 
   const value: [string, () => Promise<Tensor>][] = [
     ["det", async () => mat().det()],
@@ -3184,12 +3183,12 @@ const LA_SINGULAR = [1, 2, 2, 4];
  * `qr`·`svd`·`pinv` 는 직사각도 받는다. 한 장만 묻는 골든은 그 둘을 못 본다.
  */
 function addLinalgStruct(out: Map<string, Case>): void {
-  const bat = (g = false) => Tensor.from(LA_BATCH, [3, 2, 2], g);
-  const sym = (g = false) => Tensor.from(LA_BATCH_SYM, [3, 2, 2], g);
-  const vecB = (g = false) => Tensor.from(LA_BATCH_VEC, [3, 2], g);
-  const rhsB = (g = false) => Tensor.from(LA_BATCH_RHS, [3, 2, 2], g);
+  const bat = (g = false) => Tensor.from(LA_BATCH, [3, 2, 2], { requiresGrad: g });
+  const sym = (g = false) => Tensor.from(LA_BATCH_SYM, [3, 2, 2], { requiresGrad: g });
+  const vecB = (g = false) => Tensor.from(LA_BATCH_VEC, [3, 2], { requiresGrad: g });
+  const rhsB = (g = false) => Tensor.from(LA_BATCH_RHS, [3, 2, 2], { requiresGrad: g });
   const rect = () => Tensor.from(LA_RECT, [3, 2]);
-  const sym3 = (g = false) => Tensor.from(LA_SYM3, [3, 3], g);
+  const sym3 = (g = false) => Tensor.from(LA_SYM3, [3, 3], { requiresGrad: g });
   const mat2 = () => Tensor.from([4, 1, 2, 3], [2, 2]);
 
   const value: [string, () => Promise<Tensor>][] = [
@@ -3441,14 +3440,14 @@ function addLinalgGrads(out: Map<string, Case>): void {
   for (const [name, key, fn] of grads) {
     out.set(`linalg::grad2::${name}`, async () => {
       const [data, shape] = src[key]!;
-      const x = Tensor.from(data, shape, true);
+      const x = Tensor.from(data, shape, { requiresGrad: true });
       seeded(await fn(x)).backward();
       return gradOf(x, name);
     });
   }
 
   out.set("linalg::grad2::이어 붙이기", async () => {
-    const x = Tensor.from(MAT, [2, 2], true);
+    const x = Tensor.from(MAT, [2, 2], { requiresGrad: true });
     const s = await x.svdvals();
     const loss = s.mul(s).sum().add(await x.matrixNorm("nuc"));
     loss.backward();
@@ -3520,7 +3519,7 @@ function addInplace(out: Map<string, Case>): void {
 
   // 기울기가 켜진 잎은 셋 다 거절한다.
   out.set("inplace::잎 제자리 수정=거절", () => {
-    const x = Tensor.from(IP_PLAIN, [4], true);
+    const x = Tensor.from(IP_PLAIN, [4], { requiresGrad: true });
     try {
       x.add_(1);
     } catch {
@@ -3531,7 +3530,7 @@ function addInplace(out: Map<string, Case>): void {
 
   // `no_grad` 안에서는 잎도 고칠 수 있다 — 옵티마이저가 실제로 그렇게 한다.
   out.set("inplace::no_grad 안에서는 된다", () => {
-    const x = Tensor.from(IP_PLAIN, [4], true);
+    const x = Tensor.from(IP_PLAIN, [4], { requiresGrad: true });
     noGrad(() => x.add_(1));
     return x;
   });
@@ -3628,11 +3627,11 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   one("leaky_relu", x1, (x) => x.leakyRelu(0.1));
   one("pow2", x1, (x) => x.powScalar(2));
 
-  const mat = (g = false) => Tensor.from([1, 2, 3, 4, 5, 6, 7, 8, 9], [3, 3], g);
-  const vec = (g = false) => Tensor.from([1, 2, 3, 4], [4], g);
+  const mat = (g = false) => Tensor.from([1, 2, 3, 4, 5, 6, 7, 8, 9], [3, 3], { requiresGrad: g });
+  const vec = (g = false) => Tensor.from([1, 2, 3, 4], [4], { requiresGrad: g });
   // 0 이 섞인 입력. 흔한 유도(out/x)는 여기서 나눗셈이 터져 조용히 NaN 을 흘린다.
-  const zeroed = (g = false) => Tensor.from([2, 0, 3, 4], [4], g);
-  const short = (g = false) => Tensor.from([1, 5, 2], [3], g);
+  const zeroed = (g = false) => Tensor.from([2, 0, 3, 4], [4], { requiresGrad: g });
+  const short = (g = false) => Tensor.from([1, 5, 2], [3], { requiresGrad: g });
 
   weighted("tril", () => [mat(true)], (x) => x.tril());
   weighted("triu(k=1)", () => [mat(true)], (x) => x.triu(1));
@@ -3821,7 +3820,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   // 0 으로 준다. `x1` 은 무작위 정규분포라 0 이 없어서 골든이 이 자리를 안 보고
   // 있었고, 이 라이브러리가 거기서 1 을 흘리고 있었다.
   weighted("relu(0에서)",
-    () => [Tensor.from([-1, 0, 1, 0], [4], true)], (x) => x.unary("relu"));
+    () => [Tensor.from([-1, 0, 1, 0], [4], { requiresGrad: true })], (x) => x.unary("relu"));
 
   weighted("median()", () => [vec(true)], (x) => x.median().values);
   weighted("median(dim)", () => [mat(true)], (x) => x.median(1).values);
@@ -3840,9 +3839,9 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   weighted("einsum(ij->i)", () => [mat(true)], (x) => einsum("ij->i", x));
   weighted("fmod(%)", () => [vec(true)], (x) => x.fmod(2));
   one("nll_loss", x2,
-    (x) => x.logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], false, "int64")));
+    (x) => x.logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], { dtype: "int64" })));
   one("cross_entropy", x2,
-    (x) => x.crossEntropy(Tensor.from([0, 1, 2], [3], false, "int64")));
+    (x) => x.crossEntropy(Tensor.from([0, 1, 2], [3], { dtype: "int64" })));
 
   // 자매만 거절하는 자리. 우리는 배정도가 없지만 **형을 바꾸는 것 자체는 되고**,
   // float32 로 되돌아오는 것이라 torch 처럼 성공이 정답이다.
@@ -3857,7 +3856,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     return "기대대로";
   });
 
-  const mat2 = () => Tensor.from([2, 0, 1, 1, 3, 2, 0, 1, 4], [3, 3], true);
+  const mat2 = () => Tensor.from([2, 0, 1, 1, 3, 2, 0, 1, 4], [3, 3], { requiresGrad: true });
   for (const [which, tag] of ["a", "b"].entries()) {
     out.set(`grad::einsum(ij,jk->ik)/${tag}`, () => {
       const leaves = [mat(true), mat2()];
@@ -3871,8 +3870,8 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     });
     out.set(`grad::pad_sequence/${tag}`, () => {
       const leaves = [
-        Tensor.from([1, 2, 3, 4], [4], true),
-        Tensor.from([1, 5, 2], [3], true),
+        Tensor.from([1, 2, 3, 4], [4], { requiresGrad: true }),
+        Tensor.from([1, 5, 2], [3], { requiresGrad: true }),
       ];
       const a = leaves[0];
       const b = leaves[1];
@@ -3924,7 +3923,7 @@ function addError(out: Map<string, Case>): void {
       () => Tensor.zeros([2, 3]).reshape([4, 2]),
       "is invalid for input of size"],
     ["스칼라 아닌 backward",
-      () => Tensor.from([0, 0, 0], [3], true).backward(),
+      () => Tensor.from([0, 0, 0], [3], { requiresGrad: true }).backward(),
       "grad can be implicitly created only for scalar outputs"],
     ["requires_grad 없이 backward",
       () => Tensor.zeros([3]).sum().backward(),
@@ -3933,7 +3932,7 @@ function addError(out: Map<string, Case>): void {
       () => Tensor.zeros([3]).item(),
       "cannot be converted to Scalar"],
     ["backward 두 번", () => {
-      const x = Tensor.from([1.0, 2.0], [2], true);
+      const x = Tensor.from([1.0, 2.0], [2], { requiresGrad: true });
       const y = x.mul(Tensor.full([], 2)).sum();
       y.backward();
       y.backward();
@@ -3946,12 +3945,12 @@ function addError(out: Map<string, Case>): void {
       () => Tensor.zeros([1, 3, 8, 8]).conv2d(Tensor.zeros([4, 1, 3, 3])),
       null],
     ["leaf 제자리 수정", () => {
-      const x = Tensor.from([1, 2, 3], [3], true);
+      const x = Tensor.from([1, 2, 3], [3], { requiresGrad: true });
       x.add_(1);
     }, null],
     ["인덱스 범위 초과", () => Tensor.zeros([3]).select(0, 5), "out of bounds"],
     ["정수 텐서에 requires_grad",
-      () => Tensor.from([1, 2, 3], [3], true, "int64"), null],
+      () => Tensor.from([1, 2, 3], [3], { requiresGrad: true, dtype: "int64" }), null],
   ];
   for (const [name, fn, phrase] of cases) {
     out.set(`error::${name}`, () => raised(fn, phrase));
@@ -3975,10 +3974,10 @@ const F_MASK = [1, 0, 1, 0];
  * 참이라고 말해놓고 `.grad` 를 비워둔 적이 있고, 그 검사만 있었으면 통과했다.
  */
 function addFlow(out: Map<string, Case>): void {
-  const vec = () => Tensor.from(F_VEC, [4], true);
-  const mat = () => Tensor.from(F_MAT, [3, 3], true);
-  const pair = () => Tensor.from(F_PAIR, [2, 3], true);
-  const sym = () => Tensor.from(F_SYM, [2, 2], true);
+  const vec = () => Tensor.from(F_VEC, [4], { requiresGrad: true });
+  const mat = () => Tensor.from(F_MAT, [3, 3], { requiresGrad: true });
+  const pair = () => Tensor.from(F_PAIR, [2, 3], { requiresGrad: true });
+  const sym = () => Tensor.from(F_SYM, [2, 2], { requiresGrad: true });
   const idx1 = () => Tensor.from([1, 0], [2]);
   const idx2 = () => Tensor.from([0, 2, 1, 0], [2, 2]);
   const mask = () => Tensor.from(F_MASK, [4]);
@@ -4117,7 +4116,7 @@ function addReduce(out: Map<string, Case>): void {
     out.set(`reduce::${name}`, () => fn(Tensor.from(src, shape)));
     if (!withGrad) return;
     out.set(`reduce::grad::${name}`, () => {
-      const x = Tensor.from(src, shape, true);
+      const x = Tensor.from(src, shape, { requiresGrad: true });
       seeded(fn(x)).backward();
       return gradOf(x, name);
     });
@@ -4172,16 +4171,16 @@ const COL = [0.0, 3.0]; // mat[:, :1] — (2, 1)
 
 function addShape(out: Map<string, Case>): void {
   /** 이 표에서 쓰는 (2,3) 짜리. 매번 새로 올려야 케이스끼리 상태를 안 나눈다. */
-  const m = (grad = false) => Tensor.from(seq(6), [2, 3], grad);
-  const sq = (grad = false) => Tensor.from(SQUARE, [3, 3], grad);
-  const line = (grad = false) => Tensor.from(LINE, [5], grad);
-  const col = (grad = false) => Tensor.from(COL, [2, 1], grad);
-  const pair = (grad = false) => Tensor.from([1.0, 2.0], [2], grad);
+  const m = (grad = false) => Tensor.from(seq(6), [2, 3], { requiresGrad: grad });
+  const sq = (grad = false) => Tensor.from(SQUARE, [3, 3], { requiresGrad: grad });
+  const line = (grad = false) => Tensor.from(LINE, [5], { requiresGrad: grad });
+  const col = (grad = false) => Tensor.from(COL, [2, 1], { requiresGrad: grad });
+  const pair = (grad = false) => Tensor.from([1.0, 2.0], [2], { requiresGrad: grad });
   // **랭크 3.** 축을 바꾸는 것을 2차원으로만 물으면 `(0,1)` 밖의 자리를 못 본다 —
   // 2차원에서는 어느 두 축을 골라도 답이 하나뿐이라 축 인자를 버리는 구현도 통과한다.
   // 여기서는 `permute` 로 적는다. borch.ts 의 `transpose()` 는 2차원 전용이고 축을
   // 안 받는다 — 파이썬 쪽이 두 축을 받아 이 순서를 만들어 넘긴다.
-  const cube = (grad = false) => Tensor.from(seq(24), [2, 3, 4], grad);
+  const cube = (grad = false) => Tensor.from(seq(24), [2, 3, 4], { requiresGrad: grad });
 
   const value: [string, () => Tensor][] = [
     ["expand", () => col().expand(2, 3)],
@@ -4271,7 +4270,7 @@ const M_MASK = [1, 0, 1, 0]; // bool 을 0/1 로
  * 세므로 여기 없는 것이 그 수에 잡힌다.
  */
 function addMethod(out: Map<string, Case>): void {
-  const vec = (grad = false) => Tensor.from(M_VEC, [4], grad);
+  const vec = (grad = false) => Tensor.from(M_VEC, [4], { requiresGrad: grad });
   const other = () => Tensor.from(M_OTHER, [4]);
   const mat = () => Tensor.from(M_MAT, [3, 3]);
 

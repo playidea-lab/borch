@@ -12,7 +12,7 @@
  * const crit = new nn.CrossEntropyLoss();
  *
  * const x = keepAlive(Tensor.from(pixels, [32, 784]));
- * const y = keepAlive(Tensor.from(labels, [32], false, "int64"));
+ * const y = keepAlive(Tensor.from(labels, [32], { dtype: "int64" }));
  *
  * for (let i = 0; i < steps; i++) {
  *   await scope(async () => {                    // 한 스텝의 중간 버퍼를 놓는다
@@ -34,7 +34,16 @@
  * ## torch 와 갈리는 자리 — 미리 적는다
  *
  * **`await init()` 을 먼저 불러야 한다.** WebGPU 어댑터를 잡는 것이 비동기라 피할
- * 길이 없다. 안 부르고 텐서를 만들면 그 자리에서 문구와 함께 멈춘다.
+ * 길이 없다. 안 부르고 텐서를 만들면 그 자리에서 문구와 함께 멈춘다. `torch.cuda.
+ * is_available()` 자리는 `await isAvailable()` 이고, 왜 안 되는지까지 알아야 하면
+ * `await probe()` 가 `'no-api'`(브라우저가 낡음)와 `'no-adapter'`(드라이버 차단·
+ * 헤드리스)를 갈라 준다.
+ *
+ * **`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다.** `await t.cpu()` 로 값을
+ * 호스트로 내리고 `t.webgpu()` 로 올린다. 내려온 텐서는 읽을 수는 있어도(`toArray`·
+ * `item`·`repr`) 연산에는 못 쓴다 — borch 에 CPU 커널이 없다. 넣으면 torch 와 같은
+ * 문구("Expected all tensors to be on the same device")로 멈춘다. `t.device` 가
+ * 지금 어디인지 답한다.
  *
  * **값을 읽는 것이 비동기다.** `await t.item()`, `await t.toArray()`. GPU 메모리를
  * 다시 가져오는 일이라 그렇다. 순방향·역방향은 동기다.
@@ -50,6 +59,7 @@
  */
 
 export {
+  currentDevice,
   device,
   init,
   keepAlive,
@@ -60,7 +70,11 @@ export {
 
 import { Tensor as TensorClass } from "./tensor.js";
 
-export { Device } from "./device.js";
+export { Device, isAvailable, probe } from "./device.js";
+export type { Availability, DeviceKind, InitOptions } from "./device.js";
+// `torch.manual_seed` 자리 — 층 초기화·dropout·`Tensor.randn` 이 한 씨앗에 걸린다.
+// `nn.manualSeed` 로도 같은 것이 나온다(옛 이름을 안 깬다).
+export { manualSeed } from "./random.js";
 export { einsum } from "./einsum.js";
 // **밖에서 여닫을 수 있어야 한다.** `noGrad(fn)` 은 함수를 받는 모양이라 파이썬의
 // `with` 로 옮길 수가 없다 — 결속이 스위치를 직접 쥔다.

@@ -127,7 +127,7 @@ export async function runStep(
   const labels = new Float32Array(batch);
   for (let i = 0; i < batch; i++) labels[i] = Math.floor(next() * 10);
   const x = keepAlive(Tensor.from(pixels, [batch, 3, 32, 32]));
-  const y = keepAlive(Tensor.from(labels, [batch], false, "int64"));
+  const y = keepAlive(Tensor.from(labels, [batch], { dtype: "int64" }));
 
   const model = new ResNet18();
   const params = model.parameters();
@@ -317,7 +317,7 @@ export async function dumpPieces(): Promise<Record<string, {
     const n = shape.reduce((a, b) => a * b, 1);
     const data = new Float32Array(n);
     for (let i = 0; i < n; i++) data[i] = Math.sin(i * 0.31) * 0.7;
-    const x = keepAlive(Tensor.from(data, shape, true));
+    const x = keepAlive(Tensor.from(data, shape, { requiresGrad: true }));
     const y = mod.forward(x);
     // **자리마다 다른 가중치.** 전부 1 이면 보정항이 상쇄되어 아무것도 안 묻는다.
     const w = new Float32Array(y.size);
@@ -375,8 +375,8 @@ export async function dumpForComparison(batch = 2): Promise<{
   const labels = new Float32Array(batch);
   for (let i = 0; i < batch; i++) labels[i] = i % 10;
 
-  const x = keepAlive(Tensor.from(pixels, [batch, 3, 32, 32], true));
-  const y = keepAlive(Tensor.from(labels, [batch], false, "int64"));
+  const x = keepAlive(Tensor.from(pixels, [batch, 3, 32, 32], { requiresGrad: true }));
+  const y = keepAlive(Tensor.from(labels, [batch], { dtype: "int64" }));
   const out = model.forward(x);
   const loss = new nn.CrossEntropyLoss().forward(out, y);
   loss.backward();
