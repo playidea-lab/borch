@@ -44,8 +44,19 @@ _RENAME = {
     "logical_and": "logical_and",
     "logical_or": "logical_or",
     "logical_xor": "logical_xor",
+    # 비트 연산도 표의 이름이 파이썬과 같다. `camel` 을 씌우면 `bitwiseAnd` 라는
+    # 없는 이름이 된다.
+    "bitwise_and": "bitwise_and",
+    "bitwise_or": "bitwise_or",
+    "bitwise_xor": "bitwise_xor",
+    "bitwise_not": "bitwise_not",
+    "bitwise_left_shift": "bitwise_left_shift",
+    "bitwise_right_shift": "bitwise_right_shift",
     "matmul": "mm",
     "var": "variance",
+    # **`fill` 은 여기 없다.** 별칭은 밑줄을 뗀 뒤에 찾으므로 여기 적으면 `fill_` 까지
+    # 따라와 `fillWith_` 라는 없는 이름이 된다 — `fill_` 은 제자리라 다른 문이다.
+    "arctan2": "atan2",
 }
 
 # **이름 붙은 인자를 자리로 바꾼다.**
@@ -73,6 +84,11 @@ _SIGNATURE = {
     "log_softmax": ("dim",),
     "cumsum": ("dim",),
     "cumprod": ("dim",),
+    "logcumsumexp": ("dim",),
+    "mvlgamma": ("p",),
+    "clamp_max": ("max",),
+    "clamp_min": ("min",),
+    "fill": ("value",),
     "sort": ("dim", "descending"),
     "topk": ("k", "dim", "largest"),
     "squeeze": ("dim",),
@@ -267,6 +283,9 @@ _BINARY_ONLY = frozenset((
     "logaddexp2", "xlogy", "heaviside", "ldexp", "pow",
     "eq", "ne", "lt", "le", "gt", "ge",
     "logical_and", "logical_or", "logical_xor",
+    "bitwise_and", "bitwise_or", "bitwise_xor",
+    "bitwise_left_shift", "bitwise_right_shift", "gcd", "lcm", "nextafter",
+    "arctan2",
 ))
 
 
@@ -287,6 +306,16 @@ def __getattr__(name):
     # 비교의 다른 이름들 — 표에 있는 이름으로 넘긴다.
     if name in _COMPARE_ALIAS:
         return __getattr__(_COMPARE_ALIAS[name])
+    # **제자리 판은 파이썬 텐서의 문을 지나야 한다.** 여기서 곧장 JS 손잡이로 가면
+    # 두 가지가 어긋난다 — borch.ts 에 제자리 판이 없는 이름(`gcd_`·`clampMax_`)에서
+    # 멈추고, 있는 이름도 **새 파이썬 텐서**를 돌려줘서 `torch.detach_(y) is y` 가
+    # 거짓이 된다. 그 두 일을 하는 곳이 `Tensor.__getattr__` 이므로 그리로 넘긴다.
+    if name.endswith("_") and not name.endswith("__"):
+        def call(x, *args, **kw):
+            return getattr(wrap(x), name)(*args, **kw)
+        call.__name__ = name
+        return call
+
     js_name = camel(name)
 
     if name in _BINARY_ONLY:
@@ -607,6 +636,32 @@ def iinfo(dt):
 
 def linspace(start, end, count, **kw):
     return wrap(_ts.Tensor.linspace(start, end, count))
+
+
+# ── 창 함수 ─────────────────────────────────────────────────────────────────
+#
+# 텐서를 받지 않고 **개수를 받는다** — 첫 인자의 메서드로 넘기는 길이 안 통하므로
+# 여기 손으로 적는다. borch.ts 쪽이 CPU 에서 만들고, `periodic` 의 규약도 저쪽에 있다.
+
+def bartlett_window(n, periodic=True, **kw):
+    return wrap(_ts.Tensor.bartlettWindow(n, periodic))
+
+
+def hann_window(n, periodic=True, **kw):
+    return wrap(_ts.Tensor.hannWindow(n, periodic))
+
+
+def hamming_window(n, periodic=True, alpha=0.54, beta=0.46, **kw):
+    return wrap(_ts.Tensor.hammingWindow(n, periodic, alpha, beta))
+
+
+def blackman_window(n, periodic=True, **kw):
+    return wrap(_ts.Tensor.blackmanWindow(n, periodic))
+
+
+def kaiser_window(n, periodic=True, beta=12.0, **kw):
+    """**`beta` 는 자리 인자다** — torch 가 `kaiser_window(n, periodic, beta)` 로 받는다."""
+    return wrap(_ts.Tensor.kaiserWindow(n, periodic, beta))
 
 
 # **난수는 한 흐름에서 나온다.** 처음에는 부를 때마다 `default_rng(0)` 을 새로
@@ -1179,6 +1234,27 @@ def logical_xor(a, b, **kw):
     """borch.ts 의 이항 표에 없다 — **다름**으로 만든다."""
     a, b = wrap(a), wrap(b)
     return (a != full([], 0.0)) != (b != full([], 0.0))
+
+
+def fill(x, value, **kw):
+    """**제자리가 아니다.** `fill_` 과 이름이 한 글자 다르고 하는 일이 다르다 —
+    이쪽은 새 텐서를 내고 원본은 그대로다(실측).
+
+    별칭 표로 넘기면 `fill_` 까지 같은 이름으로 끌려가므로 여기 손으로 적는다.
+    """
+    return wrap(guarded(handle(x).fillWith, float(value)))
+
+
+def bitwise_not(x, **kw):
+    """**참거짓이면 논리 부정이다.** 정수면 `~x` 라 `~1 == -2` 인데, 참에 그것을
+    적용하면 torch 는 거짓을 준다(실측) — 두 갈래가 값에서 아예 다르다.
+
+    이항 쪽(`and`·`or`·`xor`)은 갈래가 필요 없다. 0/1 에서 비트 셈과 논리 셈이 같은
+    답을 내고, 형도 `bool` 끼리면 `bool` 로 남는다. 부정만 다르다.
+    """
+    x = wrap(x)
+    return _unary(x, "logical_not" if str(handle(x).dtype) == "bool"
+                  else "bitwise_not")
 
 
 def var_mean(t, dim=None, keepdim=False, **kw):

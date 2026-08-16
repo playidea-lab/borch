@@ -285,7 +285,9 @@ class Tensor:
                     "multiply", "true_divide", "floor_divide", "lerp",
                     "greater", "less_equal", "isclose", "nan_to_num", "fmax",
                     "inner", "adjoint", "moveaxis", "t", "corrcoef", "cov",
-                    "vdot", "kron", "broadcast_to"):
+                    "vdot", "kron", "broadcast_to",
+                    # 참거짓이면 논리 부정으로 갈라야 한다 — 그 갈림이 `_ops` 에 있다.
+                    "bitwise_not"):
             from . import _ops
             # **`max`·`min` 은 모듈 전역에 없다.** 그 이름을 `_ops` 에 두면 그 파일
             # 안에서 파이썬 내장을 가리고, `max(a, b)` 로 크기를 재던 자리가 텐서
@@ -301,7 +303,9 @@ class Tensor:
         # **`no_grad` 안에서는 된다.** torch 도 그렇다 — 기울기를 안 만드는 동안에는
         # 잎을 고쳐도 역전파가 볼 것이 없다. 그 조건을 빼먹었더니 옵티마이저가
         # 파라미터를 갱신하는 정상 경로까지 막혔다.
-        if inplace:
+        # **`detach_` 는 예외다.** 값을 안 건드리고 그래프만 끊으므로 역전파가 이미
+        # 지난 값을 볼 일이 없다 — torch 도 잎에서 허용한다.
+        if inplace and bare != "detach":
             self._refuse_inplace_on_leaf(name)
 
         js_name = camel(name)

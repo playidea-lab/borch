@@ -4283,6 +4283,7 @@ _LuFactorEx = _named("linalg_lu_factor_ex", "LU", "pivots", "info")
 _LdlFactor = _named("linalg_ldl_factor", "LD", "pivots")
 _LdlFactorEx = _named("linalg_ldl_factor_ex", "LD", "pivots", "info")
 _Geqrf = _named("geqrf", "a", "tau")
+_Frexp = _named("frexp", "mantissa", "exponent")
 
 
 # ---- 배치
@@ -5464,6 +5465,198 @@ def upsample_bilinear(x, size=None, scale_factor=None):
     return interpolate(x, size, scale_factor, mode="bilinear", align_corners=True)
 
 
+# ── 비트 연산과 정수 수학 ───────────────────────────────────────────────────
+#
+# **`bool` 에서는 논리 연산이 된다.** torch 가 dtype 을 보고 가른다 —
+# `bitwise_and(참거짓)` 은 `logical_and` 이고 `bitwise_not(참거짓)` 은 `logical_not` 이다.
+# 정수로만 물으면 그 갈래가 통째로 안 돌아간다.
+#
+# 기울기는 없다. 비트는 계단이라 흘릴 것이 없고, torch 도 정수 dtype 에는 기울기를
+# 안 만든다.
+
+def _bitwise(name, op, bool_op=None):
+    def call(a, b):
+        a, b = _wrap(a), _wrap(b)
+        if a.data.dtype.kind == "b" and bool_op is not None:
+            return Tensor(bool_op(a.data, b.data))
+        return Tensor(op(a.data.astype(_np.int64), b.data.astype(_np.int64)))
+    call.__name__ = name
+    return call
+
+
+bitwise_and = _bitwise("bitwise_and", _np.bitwise_and, _np.logical_and)
+bitwise_or = _bitwise("bitwise_or", _np.bitwise_or, _np.logical_or)
+bitwise_xor = _bitwise("bitwise_xor", _np.bitwise_xor, _np.logical_xor)
+bitwise_left_shift = _bitwise("bitwise_left_shift", _np.left_shift)
+bitwise_right_shift = _bitwise("bitwise_right_shift", _np.right_shift)
+
+
+def bitwise_not(x):
+    x = _wrap(x)
+    if x.data.dtype.kind == "b":
+        return Tensor(_np.logical_not(x.data))
+    return Tensor(_np.bitwise_not(x.data.astype(_np.int64)))
+
+
+def gcd(a, b):
+    a, b = _wrap(a), _wrap(b)
+    return Tensor(_np.gcd(a.data.astype(_np.int64), b.data.astype(_np.int64)))
+
+
+def lcm(a, b):
+    a, b = _wrap(a), _wrap(b)
+    return Tensor(_np.lcm(a.data.astype(_np.int64), b.data.astype(_np.int64)))
+
+
+def gcd_(a, b):
+    a = _wrap(a)
+    return a._inplace(lambda: gcd(a, b), "gcd_")
+
+
+def lcm_(a, b):
+    a = _wrap(a)
+    return a._inplace(lambda: lcm(a, b), "lcm_")
+
+
+def nextafter(a, b):
+    """`a` 에서 `b` 쪽으로 **표현 가능한 다음 수.** 한 ulp 만큼만 움직인다."""
+    a, b = _wrap(a), _wrap(b)
+    return a._make(_np.nextafter(a.data, b.data), (a,), lambda g: (g,),
+                   "NextafterBackward0")
+
+
+def frexp(x):
+    """`x = 가수 × 2^지수`. **지수는 int32 다** — torch 가 그렇다(실측)."""
+    x = _wrap(x)
+    mantissa, exponent = _np.frexp(x.data)
+    return _Frexp(Tensor(mantissa.astype(x.data.dtype)),
+                  Tensor(exponent.astype(_np.int32)))
+
+
+def logcumsumexp(x, dim):
+    """누적 `logsumexp`. **넘치지 않게** 센다 — 큰 값을 빼고 더한 뒤 되돌린다."""
+    x = _wrap(x)
+    data = x.data
+    big = _np.max(data, axis=dim, keepdims=True)
+    shifted = _np.exp(data - big)
+    total = _np.cumsum(shifted, axis=dim)
+    out = _np.log(total) + big
+    soft = shifted / total          # 각 자리가 누적합에서 차지하는 몫
+
+    def back(g):
+        # 뒤에서부터 쌓인다 — 자리 `i` 는 `i` 이후의 모든 누적항에 들어간다.
+        gg = _np.asarray(g)
+        flipped = _np.flip(_np.cumsum(_np.flip(gg / total, axis=dim), axis=dim),
+                           axis=dim)
+        return (flipped * shifted,)
+
+    del soft
+    return x._make(out, (x,), back, "LogcumsumexpBackward0")
+
+
+def clamp_max(x, value):
+    return clamp(x, None, value)
+
+
+def clamp_min(x, value):
+    return clamp(x, value, None)
+
+
+def clamp_max_(x, value):
+    x = _wrap(x)
+    return x._inplace(lambda: clamp(x, None, value), "clamp_max_")
+
+
+def clamp_min_(x, value):
+    x = _wrap(x)
+    return x._inplace(lambda: clamp(x, value, None), "clamp_min_")
+
+
+def arctan2(a, b):
+    return atan2(a, b)
+
+
+def fill(x, value):
+    """**제자리가 아니다.** `fill_` 과 이름이 한 글자 다르고 하는 일이 다르다 —
+    이쪽은 새 텐서를 내고 원본은 그대로다(실측)."""
+    x = _wrap(x)
+    return Tensor(_np.full_like(x.data, value))
+
+
+def detach_(x):
+    """**같은 텐서**에서 그래프를 끊는다. `detach()` 는 새것을 내고 이쪽은 제자리다."""
+    x = _wrap(x)
+    x.requires_grad = False
+    x._parents = ()
+    x._backward = None
+    return x
+
+
+def i0(x):
+    """0 차 변형 베셀 함수. `kaiser_window` 가 이것 위에 선다."""
+    x = _wrap(x)
+    return Tensor(_np.i0(x.data).astype(x.data.dtype))
+
+
+def i0_(x):
+    x = _wrap(x)
+    return x._inplace(lambda: i0(x), "i0_")
+
+
+def mvlgamma(x, p):
+    """다변량 로그감마. `log Γ_p(x) = p(p−1)/4 · log π + Σ log Γ(x + (1−i)/2)`."""
+    x = _wrap(x)
+    out = _np.full_like(x.data, p * (p - 1) / 4.0 * _math.log(_math.pi))
+    for i in range(1, p + 1):
+        out = out + _np.asarray(lgamma(x + (1 - i) / 2.0).data)
+    return Tensor(out.astype(x.data.dtype))
+
+
+# ── 창 함수 ─────────────────────────────────────────────────────────────────
+#
+# **`periodic` 이 기본이고 그것이 길이를 하나 늘린다.** torch 는 참이면 `N+1` 짜리
+# 대칭 창을 만들어 마지막을 버린다(실측: `hann_window(5)` 가 대칭 6 의 앞 다섯과
+# 정확히 같다). 거짓으로만 물으면 그 규칙이 안 드러난다.
+
+def _window(n, periodic, shape):
+    if n <= 0:
+        return Tensor(_np.zeros(0, dtype=_DEFAULT_DTYPE))
+    if n == 1:
+        return Tensor(_np.ones(1, dtype=_DEFAULT_DTYPE))
+    total = n + 1 if periodic else n
+    k = _np.arange(total, dtype=_np.float64)
+    return Tensor(shape(k, total)[:n].astype(_DEFAULT_DTYPE))
+
+
+def bartlett_window(window_length, periodic=True, **kw):
+    return _window(window_length, periodic,
+                   lambda k, n: 1.0 - _np.abs(2.0 * k / (n - 1) - 1.0))
+
+
+def hann_window(window_length, periodic=True, **kw):
+    return _window(window_length, periodic,
+                   lambda k, n: 0.5 - 0.5 * _np.cos(2 * _np.pi * k / (n - 1)))
+
+
+def hamming_window(window_length, periodic=True, alpha=0.54, beta=0.46, **kw):
+    return _window(window_length, periodic,
+                   lambda k, n: alpha - beta * _np.cos(2 * _np.pi * k / (n - 1)))
+
+
+def blackman_window(window_length, periodic=True, **kw):
+    def shape(k, n):
+        t = 2 * _np.pi * k / (n - 1)
+        return 0.42 - 0.5 * _np.cos(t) + 0.08 * _np.cos(2 * t)
+    return _window(window_length, periodic, shape)
+
+
+def kaiser_window(window_length, periodic=True, beta=12.0, **kw):
+    def shape(k, n):
+        half = (n - 1) / 2.0
+        return _np.i0(beta * _np.sqrt(1.0 - ((k - half) / half) ** 2)) / _np.i0(beta)
+    return _window(window_length, periodic, shape)
+
+
 # ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
 #
 # torch 는 `nn.functional` 의 것을 최상위에도 두는데, **서명이 같지 않다.** 최상위
@@ -5566,6 +5759,11 @@ _AS_METHOD = (
     "det", "logdet", "slogdet", "inverse", "pinverse", "matrix_exp",
     "matrix_power", "cholesky", "qr", "svd",
     "digamma", "erfinv", "lgamma", "hardshrink", "prelu", "log_softmax",
+    "bitwise_and", "bitwise_or", "bitwise_xor", "bitwise_not",
+    "bitwise_left_shift", "bitwise_right_shift", "gcd", "lcm",
+    "nextafter", "frexp", "logcumsumexp", "mvlgamma", "i0",
+    # `fill` 은 여기 없다 — torch 는 최상위에만 두고 메서드로는 `fill_` 만 준다.
+    "clamp_max", "clamp_min", "detach_",
 )
 
 

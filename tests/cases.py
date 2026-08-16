@@ -763,6 +763,161 @@ def numeric_cases(inp=None):
     return cases
 
 
+BIT_PREFIX = "bit::"
+
+
+def bit_cases(inp=None):
+    """비트·정수 수학·창 함수.
+
+    ## 음수가 이 묶음의 전부다
+
+    비트 연산을 양수로만 물으면 세 벌의 구현이 전부 통과하고도 서로 다를 수 있다.
+
+    - **오른쪽 시프트는 산술이다.** `-3 >> 5` 가 `-1` 이지 큰 양수가 아니다(실측).
+      논리 시프트로 적으면 음수에서만 갈린다.
+    - **`gcd` 는 늘 0 이상이다.** `gcd(-3, 5)` 가 `1` 이다 — 부호를 안 버리면 음수가
+      나온다.
+    - **0 이 섞여야 한다.** `lcm(0, 7)` 은 0 이고, 그 자리를 안 물으면 `|a·b|/gcd` 가
+      0 으로 나누는 것을 아무도 못 본다.
+    - **참거짓은 다른 계산이다.** `~True` 는 `-2` 가 아니라 `False` 다. 정수로만
+      물으면 이 갈래가 통째로 안 돌아간다.
+
+    ## 창 함수는 `periodic` 이 요점이다
+
+    기본값이 참이고, 그것이 **길이를 하나 늘린다** — `N+1` 짜리 대칭 창을 만들어
+    마지막을 버린다(실측). 거짓으로만 재면 두 갈래가 같은 함수처럼 보인다.
+    `n == 1` 도 따로 묻는다. 나누는 자리가 0 이 되는 유일한 크기다.
+
+    ## `frexp` 와 `fill` 이 여기 있는 이유
+
+    `frexp` 는 지수를 **int32** 로 내고(실측), `fill` 은 이름이 한 글자 다른 `fill_`
+    과 달리 **제자리가 아니다**. 둘 다 값만 보면 그럴듯해서, 원본이 그대로인지·형이
+    무엇인지를 따로 물어야 드러난다.
+    """
+    ints = np.array([12, 10, -3, 0], dtype=np.int64)
+    rhs = np.array([10, 3, 5, 7], dtype=np.int64)
+    flags = np.array([True, True, False, False])
+    reals = np.array([-2.5, 0.5, 1.5, 3.0], dtype=np.float32)
+    grid = np.array([[1.0, 2.0, -1.0], [3.0, 4.0, 0.5]], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((BIT_PREFIX + name, fn))
+
+    for name in ("bitwise_and", "bitwise_or", "bitwise_xor",
+                 "bitwise_left_shift", "bitwise_right_shift", "gcd", "lcm"):
+        add(name, lambda L, n=name: getattr(L, n)(L.tensor(ints), L.tensor(rhs)))
+        add(f"메서드::{name}",
+            lambda L, n=name: getattr(L.tensor(ints), n)(L.tensor(rhs)))
+
+    add("bitwise_not", lambda L: L.bitwise_not(L.tensor(ints)))
+    # 참거짓 갈래. 여기서만 논리 연산으로 돈다.
+    add("bitwise_and(참거짓)",
+        lambda L: L.bitwise_and(L.tensor(flags), L.tensor(~flags)))
+    add("bitwise_or(참거짓)",
+        lambda L: L.bitwise_or(L.tensor(flags), L.tensor(~flags)))
+    add("bitwise_not(참거짓)", lambda L: L.bitwise_not(L.tensor(flags)))
+
+    # 제자리 판. **같은 텐서를 돌려줘야** 이어 부르는 코드가 원본을 고친다.
+    for name in ("gcd_", "lcm_"):
+        def run(L, n=name):
+            x = L.tensor(ints.copy())
+            getattr(L, n)(x, L.tensor(rhs))
+            return x
+
+        add(f"제자리::{name}", run)
+
+        def is_self(L, n=name):
+            x = L.tensor(ints.copy())
+            return str(getattr(L, n)(x, L.tensor(rhs)) is x)
+
+        add(f"제자리::{name}(같은 텐서)", is_self)
+
+    for name, arg in (("clamp_max", 1.0), ("clamp_min", 0.0)):
+        add(name, lambda L, n=name, a=arg: getattr(L, n)(L.tensor(reals), a))
+
+        def run(L, n=f"{name}_", a=arg):
+            x = L.tensor(reals.copy())
+            getattr(L, n)(x, a)
+            return x
+
+        add(f"제자리::{name}_", run)
+
+    add("arctan2",
+        lambda L: L.arctan2(L.tensor(reals), L.tensor(reals + 1.0)))
+    add("i0", lambda L: L.i0(L.tensor(reals)))
+    # 큰 쪽 갈래. 급수가 3.75 에서 바뀌므로 그 너머를 따로 묻는다.
+    add("i0(큰 값)",
+        lambda L: L.i0(L.tensor(np.array([4.0, 8.0, 12.0], dtype=np.float32))))
+    for p in (2, 3):
+        add(f"mvlgamma(p={p})",
+            lambda L, q=p: L.mvlgamma(
+                L.tensor(np.array([2.0, 3.0, 4.5], dtype=np.float32)), q))
+
+    m, e = "가수", "지수"
+    add(f"frexp({m})",
+        lambda L: L.frexp(L.tensor(np.array([1.0, 0.5, 8.0, -3.0],
+                                            dtype=np.float32)))[0])
+    add(f"frexp({e})",
+        lambda L: L.frexp(L.tensor(np.array([1.0, 0.5, 8.0, -3.0],
+                                            dtype=np.float32)))[1])
+
+    add("nextafter",
+        lambda L: L.nextafter(L.tensor(np.array([1.0, 2.0], dtype=np.float32)),
+                              L.tensor(np.array([2.0, 1.0], dtype=np.float32))))
+
+    # **축을 가로로도 세로로도 묻는다.** 정사각이 아닌 것으로 물어야 축이 바뀌었을 때
+    # 모양에서 먼저 걸린다.
+    for dim in (0, 1):
+        add(f"logcumsumexp(dim={dim})",
+            lambda L, d=dim: L.logcumsumexp(L.tensor(grid), d))
+
+    def logcumsumexp_grad(L):
+        x = L.tensor(grid, requires_grad=True)
+        out = L.logcumsumexp(x, 1)
+        # **고르지 않은 무게로 센다.** 전부 1 이면 누적의 순서가 상쇄되어
+        # 뒤에서부터 쌓이는 규칙이 안 드러난다.
+        (out * L.tensor(np.array([[1.0, 2.0, 0.5], [0.5, 3.0, 1.5]],
+                                 dtype=np.float32))).sum().backward()
+        return _grad_of(x, "logcumsumexp")
+
+    cases.append((BIT_PREFIX + "grad::logcumsumexp", logcumsumexp_grad))
+
+    add("fill", lambda L: L.fill(L.tensor(reals), 7.0))
+
+    def fill_leaves_source(L):
+        """**`fill` 은 제자리가 아니다.** 원본을 돌려주므로, 제자리로 잘못 짓면
+        7 로 채워진 것이 나온다."""
+        x = L.tensor(reals.copy())
+        L.fill(x, 7.0)
+        return x
+
+    add("fill(원본은 그대로)", fill_leaves_source)
+
+    def detach_in_place(L):
+        """**같은 텐서**에서 그래프를 끊는다. `detach()` 로 잘못 지으면 `is` 가
+        거짓이 되고, 원본은 여전히 위쪽에 붙어 있어 역전파가 계속 흐른다."""
+        x = L.tensor(reals, requires_grad=True)
+        y = x * 2
+        z = L.detach_(y)
+        return f"{z is y} {bool(y.requires_grad)}"
+
+    add("detach_", detach_in_place)
+
+    windows = ("bartlett_window", "blackman_window", "hamming_window",
+               "hann_window", "kaiser_window")
+    for name in windows:
+        for periodic in (True, False):
+            add(f"{name}(6, periodic={periodic})",
+                lambda L, n=name, p=periodic: getattr(L, n)(6, p))
+        # 나누는 자리가 0 이 되는 유일한 크기.
+        add(f"{name}(1)", lambda L, n=name: getattr(L, n)(1))
+    add("hamming_window(alpha, beta)",
+        lambda L: L.hamming_window(6, True, 0.5, 0.5))
+    add("kaiser_window(beta=8)", lambda L: L.kaiser_window(6, True, 8.0))
+    return cases
+
+
 INDEX_PREFIX = "index::"
 
 
@@ -6041,6 +6196,7 @@ def golden_cases(inp=None):
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
+            + bit_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

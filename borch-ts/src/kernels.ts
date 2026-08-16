@@ -156,6 +156,29 @@ fn erfinv_(x: f32) -> f32 {
 }`;
 
 /**
+ * 0 차 변형 베셀 함수 `I₀`. Abramowitz & Stegun 9.8.1·9.8.2 의 표를 그대로 쓴다.
+ *
+ * **|x| 를 3.75 에서 가른다** — 작은 쪽은 `t = x/3.75` 의 짝수 급수, 큰 쪽은
+ * `exp(|x|)/√|x|` 를 앞에 두고 `3.75/|x|` 의 급수를 곱한다. 한쪽 식만 적으면 다른
+ * 구간에서 통째로 어긋나는데, 작은 값으로만 물으면 그것이 안 보인다.
+ */
+const I0_PRELUDE = `
+fn i0_(x: f32) -> f32 {
+  let a = abs(x);
+  if (a < 3.75) {
+    let t = x / 3.75;
+    let z = t * t;
+    return 1.0 + z * (3.5156229 + z * (3.0899424 + z * (1.2067492
+      + z * (0.2659732 + z * (0.0360768 + z * 0.0045813)))));
+  }
+  let t = 3.75 / a;
+  let poly = 0.39894228 + t * (0.01328592 + t * (0.00225319 + t * (-0.00157565
+    + t * (0.00916281 + t * (-0.02057706 + t * (0.02635537
+    + t * (-0.01647633 + t * 0.00392377)))))));
+  return exp(a) / sqrt(a) * poly;
+}`;
+
+/**
  * 도함수가 없는 것(`sign`·`floor` 같은 계단)은 `bwd: "0.0"` 이다.
  *
  * **그래프를 끊지 않는다.** torch 는 0 을 흘리고, 거절과 0 은 다르다 — 자매에서
@@ -237,6 +260,24 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
     bwd: "0.0",
   },
   logical_not: { fwd: "select(0.0, 1.0, x == 0.0)", bwd: "0.0" },
+  // 값은 정수다. 이항 비트 연산과 같은 자리 — `f32` 로 담고 `i32` 로 센다.
+  // **참거짓이면 논리 부정이다**(`~true` 는 `-2` 가 아니라 `false`). 그 갈림은 dtype 을
+  // 아는 파이썬 결속이 하고, 여기는 정수만 본다.
+  bitwise_not: { fwd: "f32(~i32(x))", bwd: "0.0" },
+  /**
+   * 0 차 변형 베셀 함수. `kaiser_window` 가 이것 위에 선다.
+   *
+   * **기울기는 안 흘린다.** 참값은 `i1(x)` 인데 코어(numpy)의 `i0` 도 그래프를 끊고
+   * 있어서 양쪽을 맞춘 것이다 — 한쪽만 미분되면 골든이 갈린다.
+   */
+  i0: { fwd: "i0_(x)", bwd: "0.0", prelude: I0_PRELUDE },
+  /**
+   * `frexp` 의 두 얼굴. WGSL 내장이 구조체를 내므로 자리별로 한 번씩 굽는다.
+   *
+   * torch 는 지수를 int32 로 내는데 여기 저장은 f32 하나뿐이라 값으로만 맞춘다.
+   */
+  frexpMantissa: { fwd: "frexp(x).fract", bwd: "0.0" },
+  frexpExponent: { fwd: "f32(frexp(x).exp)", bwd: "0.0" },
   /**
    * torch 의 기본 `gelu` — 근사형이 아니라 **정확형**이다.
    *
@@ -420,6 +461,69 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
   },
   logical_or: {
     fwd: "select(0.0, 1.0, x != 0.0 || y != 0.0)", da: "0.0", db: "0.0",
+  },
+  // ── 비트 ────────────────────────────────────────────────────────────────
+  //
+  // 저장은 f32 하나지만 값은 정수다. `i32` 로 바꿔 셈하고 되돌린다 — f32 는 2^24
+  // 까지 정수를 정확히 담으므로 그 범위에서 답이 맞다.
+  //
+  // **오른쪽 시프트는 산술이다.** WGSL 의 `i32 >>` 가 부호를 늘리므로 `-3 >> 5` 가
+  // `-1` 이 된다 — torch 도 그렇다(실측). `u32` 로 바꿔 논리 시프트를 하면 음수에서
+  // 통째로 다른 답이 나오는데, 양수로만 물으면 그 차이가 안 보인다.
+  //
+  // 참거짓에서 torch 는 논리 연산으로 가른다. 그 갈림은 dtype 을 아는 쪽(파이썬
+  // 결속)이 하고, 여기서는 정수 셈만 한다.
+  bitwise_and: { fwd: "f32(i32(x) & i32(y))", da: "0.0", db: "0.0" },
+  bitwise_or: { fwd: "f32(i32(x) | i32(y))", da: "0.0", db: "0.0" },
+  bitwise_xor: { fwd: "f32(i32(x) ^ i32(y))", da: "0.0", db: "0.0" },
+  bitwise_left_shift: { fwd: "f32(i32(x) << u32(i32(y)))", da: "0.0", db: "0.0" },
+  bitwise_right_shift: { fwd: "f32(i32(x) >> u32(i32(y)))", da: "0.0", db: "0.0" },
+  // 유클리드 호제법. 부호는 버린다 — torch 의 gcd 는 늘 0 이상이다.
+  gcd: {
+    fwd: "gcd_(x, y)", da: "0.0", db: "0.0",
+    prelude: `
+fn gcd_(xa: f32, yb: f32) -> f32 {
+  var a = abs(i32(xa));
+  var b = abs(i32(yb));
+  while (b != 0) { let t = a % b; a = b; b = t; }
+  return f32(a);
+}`,
+  },
+  // `|a·b| / gcd`. **gcd 가 0 이면 0 이다** — torch 도 그렇다(0 과 7 의 lcm 이 0).
+  lcm: {
+    fwd: "lcm_(x, y)", da: "0.0", db: "0.0",
+    prelude: `
+fn lcm_(xa: f32, yb: f32) -> f32 {
+  var a = abs(i32(xa));
+  var b = abs(i32(yb));
+  let p = a * b;
+  while (b != 0) { let t = a % b; a = b; b = t; }
+  if (a == 0) { return 0.0; }
+  return f32(p / a);
+}`,
+  },
+  /**
+   * `a` 에서 `b` 쪽으로 **표현 가능한 다음 수.** 한 ulp 만 움직인다.
+   *
+   * 부호가 있는 정수로 읽으면 f32 는 크기 순으로 늘어선다 — 양수는 비트가 커질수록
+   * 크고, 음수는 비트가 커질수록 **0 에서 멀다**. 그래서 방향 판정이 `b > a` 만으로는
+   * 안 되고 `a` 의 부호와 맞물린다. 양수로만 물으면 그 얽힘이 안 보인다.
+   *
+   * `a == 0` 은 따로 둔다 — 0 의 비트에 1 을 더하면 부호가 아니라 크기가 붙으므로
+   * 음의 방향을 놓친다.
+   */
+  nextafter: {
+    fwd: "nextafter_(x, y)", da: "1.0", db: "0.0",
+    prelude: `
+fn nextafter_(a: f32, b: f32) -> f32 {
+  if (a == b) { return b; }
+  if (a == 0.0) {
+    return select(bitcast<f32>(0x80000001u), bitcast<f32>(1u), b > 0.0);
+  }
+  var i = bitcast<i32>(a);
+  if ((b > a) == (a > 0.0)) { i = i + 1; } else { i = i - 1; }
+  return bitcast<f32>(i);
+}`,
   },
 };
 

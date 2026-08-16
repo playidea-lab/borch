@@ -109,6 +109,14 @@ from ._ops import (
     can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     set_default_dtype, typename,
+    # 비트 연산과 정수 수학. `bool` 에서는 논리 연산이 된다 — torch 가 dtype 을 본다.
+    bitwise_and, bitwise_left_shift, bitwise_not, bitwise_or,
+    bitwise_right_shift, bitwise_xor, gcd, gcd_, lcm, lcm_,
+    arctan2, clamp_max, clamp_max_, clamp_min, clamp_min_, detach_, fill,
+    frexp, i0, i0_, logcumsumexp, mvlgamma, nextafter,
+    # 창 함수. `periodic` 이 기본이고 그것이 길이를 하나 늘린다.
+    bartlett_window, blackman_window, hamming_window, hann_window,
+    kaiser_window,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #

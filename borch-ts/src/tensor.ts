@@ -297,6 +297,26 @@ function interpolate(sorted: readonly number[], q: number): number {
   return a + (b - a) * (pos - low);
 }
 
+/**
+ * 0 차 변형 베셀 함수. `kaiserWindow` 를 CPU 에서 만들므로 여기에도 한 벌 필요하다.
+ *
+ * 셰이더의 `i0_` 과 **같은 표**(Abramowitz & Stegun 9.8.1·9.8.2)를 쓴다. 두 벌을
+ * 다르게 적으면 어느 쪽이 맞는지를 골든이 못 가른다.
+ */
+function besselI0(x: number): number {
+  const a = Math.abs(x);
+  if (a < 3.75) {
+    const z = (x / 3.75) * (x / 3.75);
+    return 1 + z * (3.5156229 + z * (3.0899424 + z * (1.2067492
+      + z * (0.2659732 + z * (0.0360768 + z * 0.0045813)))));
+  }
+  const t = 3.75 / a;
+  const poly = 0.39894228 + t * (0.01328592 + t * (0.00225319 + t * (-0.00157565
+    + t * (0.00916281 + t * (-0.02057706 + t * (0.02635537
+    + t * (-0.01647633 + t * 0.00392377)))))));
+  return (Math.exp(a) / Math.sqrt(a)) * poly;
+}
+
 /** 비교와 논리 연산은 입력이 무엇이든 참·거짓을 낸다. */
 const BOOL_RESULT = new Set([
   "eq", "ne", "lt", "le", "gt", "ge", "logical_and", "logical_or",
@@ -343,9 +363,13 @@ export class Tensor implements Node<Tensor> {
    * **이름표다.** 값은 언제나 float32 버퍼에 있다 — 자세한 사정은 `src/dtype.ts`.
    */
   readonly dtype: DType;
-  readonly parents: readonly Tensor[];
-  readonly backwardFn: ((grad: Tensor) => readonly (Tensor | null)[]) | null;
-  readonly gradName: string;
+  /**
+   * 그래프의 위쪽. **`detach_` 만 이것을 바꾼다** — 그래서 `readonly` 가 아니다.
+   * 다른 자리에서 고치면 이미 만든 마디의 역방향이 조용히 달라진다.
+   */
+  parents: readonly Tensor[];
+  backwardFn: ((grad: Tensor) => readonly (Tensor | null)[]) | null;
+  gradName: string;
 
   constructor(
     buffer: GPUBuffer,
@@ -478,6 +502,63 @@ export class Tensor implements Node<Tensor> {
     for (let i = 0; i < count; i++) data[i] = start + step * i;
     if (count > 1) data[count - 1] = end;
     return Tensor.from(data, [count]);
+  }
+
+  /**
+   * 창 함수 다섯의 공통 뼈대. **CPU 에서 만들어 올린다** — `eye` 와 같은 이유다.
+   *
+   * **`periodic` 이 기본이고 그것이 길이를 하나 늘린다.** 참이면 `N+1` 짜리 대칭
+   * 창을 만들어 마지막을 버린다(실측: `hannWindow(5)` 가 대칭 6 의 앞 다섯과 정확히
+   * 같다). 거짓으로만 물으면 그 규칙이 안 드러난다.
+   *
+   * `n === 1` 은 따로 둔다 — 나누는 자리(`total - 1`)가 0 이 된다.
+   */
+  private static window(
+    n: number,
+    periodic: boolean,
+    at: (k: number, total: number) => number,
+  ): Tensor {
+    if (n <= 0) return Tensor.from(new Float32Array(0), [0]);
+    if (n === 1) return Tensor.from(new Float32Array([1]), [1]);
+    const total = periodic ? n + 1 : n;
+    const data = new Float32Array(n);
+    for (let k = 0; k < n; k++) data[k] = at(k, total);
+    return Tensor.from(data, [n]);
+  }
+
+  /** 삼각창. 가운데가 1 이고 양끝이 0 이다. */
+  static bartlettWindow(n: number, periodic = true): Tensor {
+    return Tensor.window(n, periodic, (k, total) =>
+      1 - Math.abs((2 * k) / (total - 1) - 1));
+  }
+
+  static hannWindow(n: number, periodic = true): Tensor {
+    return Tensor.window(n, periodic, (k, total) =>
+      0.5 - 0.5 * Math.cos((2 * Math.PI * k) / (total - 1)));
+  }
+
+  /** `alpha - beta·cos`. torch 의 기본은 0.54/0.46 이다. */
+  static hammingWindow(
+    n: number, periodic = true, alpha = 0.54, beta = 0.46,
+  ): Tensor {
+    return Tensor.window(n, periodic, (k, total) =>
+      alpha - beta * Math.cos((2 * Math.PI * k) / (total - 1)));
+  }
+
+  static blackmanWindow(n: number, periodic = true): Tensor {
+    return Tensor.window(n, periodic, (k, total) => {
+      const t = (2 * Math.PI * k) / (total - 1);
+      return 0.42 - 0.5 * Math.cos(t) + 0.08 * Math.cos(2 * t);
+    });
+  }
+
+  /** `I₀(β√(1-((k-h)/h)²)) / I₀(β)`. torch 의 기본 `beta` 는 12.0 이다. */
+  static kaiserWindow(n: number, periodic = true, beta = 12.0): Tensor {
+    return Tensor.window(n, periodic, (k, total) => {
+      const half = (total - 1) / 2;
+      const r = (k - half) / half;
+      return besselI0(beta * Math.sqrt(Math.max(0, 1 - r * r))) / besselI0(beta);
+    });
   }
 
   zerosLike(): Tensor {
@@ -757,6 +838,19 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * **같은 텐서**에서 그래프를 끊는다. torch 의 `detach_` 다.
+   *
+   * `detach()` 는 새것을 내므로 원본은 여전히 위쪽에 붙어 있다 — 그 둘을 같은 것으로
+   * 보면 `y.detach_()` 뒤에도 `y` 를 지나 역전파가 계속 흐른다.
+   */
+  detach_(): Tensor {
+    this.requiresGrad = false;
+    this.parents = [];
+    this.backwardFn = null;
+    return this;
+  }
+
+  /**
    * `log(Σ exp(x))`. **최대값을 빼고 계산한다** — 그냥 쓰면 x 가 89 를 넘는 순간
    * float32 의 exp 가 inf 가 되고 그 뒤가 전부 inf 다.
    *
@@ -772,6 +866,47 @@ export class Tensor implements Node<Tensor> {
     const logged = summed.log().add(m);
     if (dim === undefined || keepdim) return logged;
     return logged.squeeze(dim);
+  }
+
+  /**
+   * 누적 `logsumexp`. **넘치지 않게** 센다 — 축의 최대값을 빼고 더한 뒤 되돌린다.
+   *
+   * `logsumexp` 와 같은 자리로 조립한다. 최대값을 떼 두었으므로 역방향은 조립에서
+   * 그대로 나오고, 손으로 쓴 미분식이 하나 줄었다.
+   */
+  logcumsumexp(dim: number): Tensor {
+    const big = this.amax(dim, true).detach();
+    return this.sub(big).exp().cumsum(dim).log().add(big);
+  }
+
+  /**
+   * 다변량 로그감마. `log Γ_p(x) = p(p−1)/4 · log π + Σᵢ log Γ(x + (1−i)/2)`.
+   *
+   * `p` 가 1 이면 `lgamma` 와 같다 — 그 값으로만 물으면 합이 도는지 안 보인다.
+   */
+  mvlgamma(p: number): Tensor {
+    let out = this.lgamma();
+    for (let i = 2; i <= p; i++) {
+      out = out.add(this.add(Tensor.full([], (1 - i) / 2)).lgamma());
+    }
+    return out.add(Tensor.full([], (p * (p - 1) / 4) * Math.log(Math.PI)));
+  }
+
+  /**
+   * 가수와 지수. `x = 가수 × 2^지수` 이고 가수는 [0.5, 1) 이다.
+   *
+   * torch 는 지수를 int32 로 내는데 여기 저장은 f32 하나뿐이라 값으로만 맞춘다.
+   */
+  frexp(): { mantissa: Tensor; exponent: Tensor } {
+    return { mantissa: this.frexpMantissa(), exponent: this.frexpExponent() };
+  }
+
+  /**
+   * 같은 꼴을 한 값으로 채운 **새** 텐서. **제자리가 아니다** — torch 의 `fill` 이
+   * 그렇고, 이름이 한 글자 다른 `fill_` 과 하는 일이 다르다(실측).
+   */
+  fillWith(value: number): Tensor {
+    return Tensor.full(this.shape, value);
   }
 
   /** `‖x - y‖₂`. 조립이라 역방향이 저절로 따라온다. */
@@ -4955,6 +5090,11 @@ export interface Tensor {
   selu(): Tensor;
   softsign(): Tensor;
   tanhshrink(): Tensor;
+  bitwise_not(): Tensor;
+  i0(): Tensor;
+  i0_(): Tensor;
+  frexpMantissa(): Tensor;
+  frexpExponent(): Tensor;
 }
 
 export { noGrad } from "./autograd.js";

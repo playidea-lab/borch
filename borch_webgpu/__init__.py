@@ -86,6 +86,10 @@ from ._ops import (                                      # noqa: E402,F401
     cdist, corrcoef, cov, cumulative_trapezoid, tensordot, trapezoid,
     # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
     geqrf,
+    # 창 함수. 텐서가 아니라 **개수**를 받으므로 `__getattr__` 이 못 넘긴다.
+    bartlett_window, blackman_window, hamming_window, hann_window, kaiser_window,
+    # 참거짓과 정수에서 하는 일이 다른 것, 그리고 제자리가 아닌 `fill`.
+    bitwise_not, fill,
     # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,
