@@ -489,7 +489,13 @@ export function f32lit(v: number): string {
       "  CPU 에서 채워 올려라(`Tensor.full` 이 그 길로 간다).",
     );
   }
-  return Number.isInteger(v) ? `${v}.0` : String(v);
+  // **지수 표기에는 소수점을 안 붙인다.** `String(-1e30)` 은 `-1e+30` 인데
+  // `Number.isInteger` 가 참이라 `.0` 을 덧댔고, `-1e+30.0` 은 WGSL 이 파싱에서
+  // 거절한다 — 값 하나 채우려다 파이프라인이 통째로 죽었다. 지수 표기는 그 자체로
+  // 이미 부동소수 리터럴이다.
+  const text = String(v);
+  if (text.includes("e") || text.includes("E") || text.includes(".")) return text;
+  return `${text}.0`;
 }
 
 /** 상수를 구운 단항 연산을 등록하고 그 이름을 준다. 이미 있으면 다시 안 만든다. */

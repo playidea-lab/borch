@@ -1179,6 +1179,41 @@ function addUnpool(out: Map<string, Case>): void {
     x.fractionalMaxPool(2, [3, 3], [[0.25, 0.75]]).values.sum().backward();
     return gradOf(x, "fractionalMaxPool");
   });
+
+  // ── CTC ────────────────────────────────────────────────────────────────
+  //
+  // `reduction="mean"` 은 표본마다 **제 표적 길이로 나눈 뒤** 평균한다. 길이가 다
+  // 같으면 그냥 평균과 답이 같아 그 나눗셈이 안 보이므로, 2 와 1 로 어긋나게 준다.
+  const T = 5, NB = 2, CC = 4;
+  const logits = () => Tensor.from(
+    Array.from({ length: T * NB * CC }, (_, i) => i / 10), [T, NB, CC]);
+  const lp = () => logits().logSoftmax(2);
+  const tgt = [[1, 2], [3, 0]];
+  const inLen = [5, 5];
+  const tgtLen = [2, 1];
+
+  for (const red of ["mean", "sum", "none"] as const) {
+    out.set(`unpool::ctc::reduction=${red}`,
+      () => nn.ctcLoss(lp(), tgt, inLen, tgtLen, 0, red));
+  }
+  out.set("unpool::ctc::blank=3",
+    () => nn.ctcLoss(lp(), [[1, 2], [0, 0]], inLen, tgtLen, 3, "none"));
+  out.set("unpool::ctc::입력 길이가 다를 때",
+    () => nn.ctcLoss(lp(), tgt, [5, 3], tgtLen, 0, "none"));
+  out.set("unpool::ctc::반복 글자",
+    () => nn.ctcLoss(lp(), [[1, 1], [1, 1]], inLen, [2, 2], 0, "none"));
+  const tooLong = [[1, 2, 3, 1, 2, 3], [1, 2, 3, 1, 2, 3]];
+  out.set("unpool::ctc::표적이 입력보다 길 때",
+    () => nn.ctcLoss(lp(), tooLong, [2, 2], [6, 6], 0, "none"));
+  out.set("unpool::ctc::zero_infinity",
+    () => nn.ctcLoss(lp(), tooLong, [2, 2], [6, 6], 0, "none", true));
+
+  out.set("unpool::ctc::grad(로짓까지)", () => {
+    const x = logits();
+    x.requiresGrad = true;
+    nn.ctcLoss(x.logSoftmax(2), tgt, inLen, tgtLen, 0, "sum").backward();
+    return gradOf(x, "ctcLoss");
+  });
 }
 
 /**

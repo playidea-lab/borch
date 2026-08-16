@@ -3891,6 +3891,64 @@ export class Tensor implements Node<Tensor> {
     return this.maxWithIndex(this.adaptiveWindows(outSize));
   }
 
+  // ── CTC ────────────────────────────────────────────────────────────────
+  //
+  // 소리와 글자를 **자리를 맞추지 않고** 잇는 손실. 가능한 정렬을 전부 더하는데 그
+  // 수가 지수라, 표적 사이에 공백을 끼운 상태열을 두고 앞으로 훑어 접는다.
+  //
+  // `u` 축은 한 번에 민다. 시간만 돌므로 그래프가 `T` 에 비례한다 — 진짜 음성 길이
+  // (수백 프레임)에서는 느리고, 정확한 쪽을 골랐다.
+
+  /** 로그 확률의 "없음". `-Infinity` 는 logsumexp 에서 NaN 이 되므로 큰 음수를 쓴다. */
+  private static readonly CTC_NEG = -1e30;
+
+  private static ctcGap(n: number): Tensor {
+    return Tensor.full([n], Tensor.CTC_NEG);
+  }
+
+  /**
+   * 표본 하나의 `-log P(표적 | 소리)`.
+   *
+   * @param lp `(T, C)` 로그 확률.
+   * @param labels 표적 글자들.
+   */
+  static ctcOne(
+    lp: Tensor, labels: readonly number[], nTime: number, blank: number,
+  ): Tensor {
+    // `[l1, l2]` → `[_, l1, _, l2, _]`. **같은 글자가 이어지면 사이에 공백이 반드시
+    // 있어야 한다** — 없으면 두 글자가 한 글자로 접힌다. 그 규칙이 `skip` 이다.
+    const ext: number[] = [blank];
+    for (const lab of labels) ext.push(lab, blank);
+    const u = ext.length;
+
+    const idx = Tensor.from(ext, [u], false, "int64");
+    const skip = Tensor.from(
+      ext.map((_, s) =>
+        (s >= 2 && ext[s] !== blank && ext[s] !== ext[s - 2]) ? 0 : Tensor.CTC_NEG),
+      [u],
+    );
+    const emit = lp.indexSelect(1, idx);          // (T, U)
+
+    const head = Math.min(2, u);
+    let alpha = emit.narrow(0, 0, 1).reshape([emit.shape[1] ?? u]).narrow(0, 0, head);
+    if (u > head) alpha = Tensor.cat([alpha, Tensor.ctcGap(u - head)], 0);
+
+    for (let t = 1; t < nTime; t++) {
+      const same = alpha;
+      const one = u > 1
+        ? Tensor.cat([Tensor.ctcGap(1), alpha.narrow(0, 0, u - 1)], 0)
+        : Tensor.ctcGap(1);
+      const shifted = u > 2
+        ? Tensor.cat([Tensor.ctcGap(2), alpha.narrow(0, 0, u - 2)], 0)
+        : Tensor.ctcGap(u);
+      const two = shifted.add(skip);
+      const step = emit.narrow(0, t, 1).reshape([u]);
+      alpha = Tensor.stack([same, one, two], 0).logsumexp(0).add(step);
+    }
+    const tail = u >= 2 ? alpha.narrow(0, u - 2, 2) : alpha;
+    return tail.logsumexp(0).neg();
+  }
+
   /**
    * 창 시작 자리들. **ATen 의 `generate_intervals` 그대로다.**
    *

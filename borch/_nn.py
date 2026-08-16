@@ -42,6 +42,7 @@ from ._ops import (
     max_unpool1d, max_unpool2d, max_unpool3d,
     fractional_max_pool2d, fractional_max_pool2d_with_indices,
     fractional_max_pool3d, fractional_max_pool3d_with_indices,
+    ctc_loss,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -1542,6 +1543,28 @@ class LPPool3d(LPPool1d):
         return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride)
 
 
+class CTCLoss(Module):
+    """소리와 글자를 **자리를 맞추지 않고** 잇는 손실.
+
+    `forward` 가 인자를 넷 받는다 — 로그확률, 표적, 입력 길이, 표적 길이. 길이가
+    표본마다 다르고 그것이 이 손실의 요점이라, 다른 손실처럼 둘로는 못 받는다.
+
+    **`repr` 이 비어 있다.** torch 의 `extra_repr` 가 아무것도 안 낸다(재봤다).
+    """
+
+    def __init__(self, blank=0, reduction="mean", zero_infinity=False):
+        super().__init__()
+        self.blank, self.reduction = blank, reduction
+        self.zero_infinity = zero_infinity
+
+    def forward(self, log_probs, targets, input_lengths, target_lengths):
+        return ctc_loss(log_probs, targets, input_lengths, target_lengths,
+                        self.blank, self.reduction, self.zero_infinity)
+
+    def __repr__(self):
+        return "CTCLoss()"
+
+
 class _FractionalMaxPoolND(Module):
     """창 자리를 무작위로 흔드는 최대 풀링.
 
@@ -2330,7 +2353,7 @@ for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid
              AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d,
              LPPool1d, LPPool2d, LPPool3d,
              MaxUnpool1d, MaxUnpool2d, MaxUnpool3d,
-             FractionalMaxPool2d, FractionalMaxPool3d):
+             FractionalMaxPool2d, FractionalMaxPool3d, CTCLoss):
     setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
@@ -2430,6 +2453,7 @@ class _Functional(_Namespace):
     max_unpool1d = staticmethod(max_unpool1d)
     max_unpool2d = staticmethod(max_unpool2d)
     max_unpool3d = staticmethod(max_unpool3d)
+    ctc_loss = staticmethod(ctc_loss)
     fractional_max_pool2d = staticmethod(fractional_max_pool2d)
     fractional_max_pool3d = staticmethod(fractional_max_pool3d)
     fractional_max_pool2d_with_indices = staticmethod(fractional_max_pool2d_with_indices)

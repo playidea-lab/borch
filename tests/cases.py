@@ -1603,6 +1603,98 @@ def unpool_cases(inp=None):
         return f"{tuple(out.shape)} 안에 있는 것={int(inside.item())}"
 
     add("분수::표본 없이(모양과 범위)", frac_random_shape)
+
+    # ── CTC ────────────────────────────────────────────────────────────
+    #
+    # 소리와 글자를 자리를 맞추지 않고 잇는 손실. 가능한 정렬을 전부 더한다.
+    #
+    # `reduction="mean"` 이 예사롭지 않다 — 표본마다 **제 표적 길이로 나눈 뒤**
+    # 평균한다. 표적 길이가 다 같은 케이스로 물으면 그냥 평균과 답이 같아서 그
+    # 나눗셈이 안 보인다. 그래서 길이를 2 와 1 로 어긋나게 준다.
+    ctc_T, ctc_N, ctc_C = 5, 2, 4
+    ctc_logits = (np.arange(ctc_T * ctc_N * ctc_C, dtype=np.float32)
+                  .reshape(ctc_T, ctc_N, ctc_C) / 10)
+    ctc_targets = np.array([[1, 2], [3, 0]], dtype=np.int64)
+    ctc_in = np.array([5, 5], dtype=np.int64)
+    ctc_tgt = np.array([2, 1], dtype=np.int64)
+
+    def logp(L, grad=False):
+        return F(L).log_softmax(L.tensor(ctc_logits, requires_grad=grad), dim=2)
+
+    def ctc(L, targets=None, il=None, tl=None, **kw):
+        return F(L).ctc_loss(
+            logp(L),
+            L.tensor(ctc_targets if targets is None else targets),
+            L.tensor(ctc_in if il is None else il),
+            L.tensor(ctc_tgt if tl is None else tl), **kw)
+
+    for red in ("mean", "sum", "none"):
+        add(f"ctc::reduction={red}", lambda L, r=red: ctc(L, reduction=r))
+
+    # 표적은 `(N, S)` 로도 오고 이어붙인 1차원으로도 온다 — torch 가 둘 다 받는다.
+    add("ctc::1차원 표적",
+        lambda L: ctc(L, targets=np.array([1, 2, 3], dtype=np.int64),
+                      reduction="none"))
+    # 공백이 0 이 아닐 수도 있다.
+    add("ctc::blank=3",
+        lambda L: ctc(L, targets=np.array([[1, 2], [0, 0]], dtype=np.int64),
+                      blank=3, reduction="none"))
+    add("ctc::입력 길이가 다를 때",
+        lambda L: ctc(L, il=np.array([5, 3], dtype=np.int64), reduction="none"))
+    # **같은 글자가 이어지면 사이에 공백이 반드시 든다** — 안 그러면 한 글자로 접힌다.
+    add("ctc::반복 글자",
+        lambda L: ctc(L, targets=np.array([[1, 1], [1, 1]], dtype=np.int64),
+                      tl=np.array([2, 2], dtype=np.int64), reduction="none"))
+
+    long_target = np.array([[1, 2, 3, 1, 2, 3], [1, 2, 3, 1, 2, 3]], dtype=np.int64)
+    short_in = np.array([2, 2], dtype=np.int64)
+    six = np.array([6, 6], dtype=np.int64)
+    # 정렬이 하나도 없으면 확률이 0 이고 손실이 `inf` 다. 문턱값이 아니라 실제 조건이다.
+    add("ctc::표적이 입력보다 길 때",
+        lambda L: ctc(L, targets=long_target, il=short_in, tl=six, reduction="none"))
+    add("ctc::zero_infinity",
+        lambda L: ctc(L, targets=long_target, il=short_in, tl=six,
+                      reduction="none", zero_infinity=True))
+
+    def ctc_grad_logits(L):
+        """로짓까지 흘린 기울기 — 진짜 코드가 하는 모양이다."""
+        x = L.tensor(ctc_logits, requires_grad=True)
+        F(L).ctc_loss(F(L).log_softmax(x, dim=2), L.tensor(ctc_targets),
+                      L.tensor(ctc_in), L.tensor(ctc_tgt),
+                      reduction="sum").backward()
+        return x.grad
+
+    add("ctc::grad(로짓까지)", ctc_grad_logits)
+
+    def ctc_grad_logp(L):
+        """**`log_probs` 를 바로 잎으로 둔 자리.**
+
+        여기서 torch 는 참도함수가 아닌 값을 낸다 — 유한차분은 `-γ` 인데 torch 는
+        `exp(log_probs) - γ` 다. 위 케이스는 `log_softmax` 를 지나므로 둘이 같은
+        답이 되어 **그 차이를 못 본다.** 이 케이스만 그것을 본다.
+        """
+        base = np.log(np.exp(ctc_logits)
+                      / np.exp(ctc_logits).sum(axis=2, keepdims=True))
+        x = L.tensor(base.astype(np.float32), requires_grad=True)
+        F(L).ctc_loss(x, L.tensor(ctc_targets), L.tensor(ctc_in),
+                      L.tensor(ctc_tgt), reduction="sum").backward()
+        return x.grad
+
+    add("ctc::grad(log_probs 까지)", ctc_grad_logp)
+
+    def ctc_layer(L):
+        layer = L.nn.CTCLoss()
+        return layer(logp(L), L.tensor(ctc_targets), L.tensor(ctc_in),
+                     L.tensor(ctc_tgt))
+
+    add("층::CTCLoss", ctc_layer)
+    add("층::CTCLoss(blank=3, sum)",
+        lambda L: L.nn.CTCLoss(blank=3, reduction="sum")(
+            logp(L), L.tensor(np.array([[1, 2], [0, 0]], dtype=np.int64)),
+            L.tensor(ctc_in), L.tensor(ctc_tgt)))
+    add("층::repr::CTCLoss", lambda L: repr(L.nn.CTCLoss()))
+    add("층::repr::CTCLoss(인자 있음)",
+        lambda L: repr(L.nn.CTCLoss(blank=2, reduction="sum", zero_infinity=True)))
     return cases
 
 

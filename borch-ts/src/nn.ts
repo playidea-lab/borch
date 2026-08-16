@@ -1328,6 +1328,87 @@ export class LazyInstanceNorm3d extends LazyNormBase {
 // **torch 는 손실 층을 인자 없이 찍는다** — `HuberLoss(delta=0.5)` 도 `HuberLoss()`
 // 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
 
+/**
+ * 소리와 글자를 **자리를 맞추지 않고** 잇는 손실.
+ *
+ * `logProbs` 는 `(T, N, C)` — **시간이 앞이다.** 표본마다 길이가 다르고 그것이 이
+ * 손실의 요점이라, 길이 두 벌을 함께 받는다.
+ *
+ * ## 값이 0 이고 기울기만 있는 항을 하나 더한다
+ *
+ * torch 가 `logProbs` 로 흘리는 기울기는 참도함수가 아니다 — 유한차분은 `-γ` 인데
+ * torch 는 `exp(logProbs) - γ` 를 낸다(실측: `tests/probe_ctc3.py`). 쓰는 자리에서는
+ * 앞에 `logSoftmax` 가 있어서 둘이 같은 답이 되지만(그 역방향의 고정점이다),
+ * `logProbs` 를 바로 잎으로 두면 수가 갈린다. 맞추되 **왜 맞추는지**를 적는다.
+ *
+ * @param reduction `"mean"` 은 표본마다 **제 표적 길이로 나눈 뒤** 평균한다 —
+ *   그냥 평균이 아니다.
+ */
+export function ctcLoss(
+  logProbs: Tensor,
+  targets: readonly (readonly number[])[],
+  inputLengths: readonly number[],
+  targetLengths: readonly number[],
+  blank = 0,
+  reduction: Reduction = "mean",
+  zeroInfinity = false,
+): Tensor {
+  const parts: Tensor[] = [];
+  const divisors: number[] = [];
+  for (let i = 0; i < targets.length; i++) {
+    const labels = (targets[i] ?? []).slice(0, targetLengths[i] ?? 0);
+    const nTime = inputLengths[i] ?? 0;
+    // 붙어 있는 같은 글자마다 공백 한 칸이 더 든다. 그보다 짧으면 정렬이 하나도
+    // 없어서 확률이 0 이고 손실이 무한이다 — 문턱값이 아니라 실제 조건이다.
+    let needs = labels.length;
+    for (let k = 1; k < labels.length; k++) if (labels[k] === labels[k - 1]) needs++;
+    divisors.push(Math.max(labels.length, 1));
+    if (nTime < needs) {
+      parts.push(Tensor.full([1], zeroInfinity ? 0 : Infinity));
+      continue;
+    }
+    const plane = logProbs.narrow(1, i, 1)
+      .reshape([logProbs.shape[0] ?? 1, logProbs.shape[2] ?? 1]);
+    const one = Tensor.ctcOne(plane, labels, nTime, blank);
+    const bias = plane.narrow(0, 0, nTime).exp().sum();
+    parts.push(one.add(bias.sub(bias.detach())).reshape([1]));
+  }
+  const per = Tensor.cat(parts, 0);
+  if (reduction === "none") return per;
+  if (reduction === "sum") return per.sum();
+  return per.div(Tensor.from(divisors, [divisors.length])).mean();
+}
+
+export class CTCLoss {
+  constructor(
+    readonly blank = 0,
+    readonly reduction: Reduction = "mean",
+    readonly zeroInfinity = false,
+  ) {}
+
+  forward(
+    logProbs: Tensor,
+    targets: readonly (readonly number[])[],
+    inputLengths: readonly number[],
+    targetLengths: readonly number[],
+  ): Tensor {
+    return ctcLoss(logProbs, targets, inputLengths, targetLengths,
+      this.blank, this.reduction, this.zeroInfinity);
+  }
+
+  call(
+    logProbs: Tensor,
+    targets: readonly (readonly number[])[],
+    inputLengths: readonly number[],
+    targetLengths: readonly number[],
+  ): Tensor {
+    return this.forward(logProbs, targets, inputLengths, targetLengths);
+  }
+
+  /** torch 의 `extra_repr` 가 아무것도 안 낸다 — 그래서 비어 있다. */
+  describe(): string { return "CTCLoss()"; }
+}
+
 export class HuberLoss {
   constructor(readonly delta = 1.0, readonly reduction: Reduction = "mean") {
   }

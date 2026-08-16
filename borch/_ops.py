@@ -630,6 +630,147 @@ def _unpool(x, indices, kernel_size, stride, padding, output_size, spatial):
     return x._make(filled.reshape(out_shape), (x,), back, "MaxUnpoolBackward0")
 
 
+# ── CTC ────────────────────────────────────────────────────────────────────
+#
+# 소리와 글자를 **자리를 맞추지 않고** 잇는 손실이다. 음성 인식에서 "이 5 프레임이
+# 어느 글자에 해당하는가" 를 사람이 안 적어도 되게 해 준다 — 가능한 정렬을 전부
+# 더해서 확률을 낸다.
+#
+# 더할 정렬의 수가 지수라 앞으로 훑기(forward algorithm)로 접는다. 표적 사이에
+# **공백을 끼운 확장 표적**을 만들고(`[_ , l1, _, l2, …, _]`), 한 시각에 상태 하나를
+# 잡아 앞 셋에서만 올 수 있게 한다.
+
+_CTC_NEG = -1e30       # 로그 확률의 "없음". `-inf` 는 logsumexp 에서 NaN 이 된다
+
+
+def _ctc_extended(labels, blank):
+    """`[l1, l2]` → `[_, l1, _, l2, _]`. 공백을 사이사이에 끼운다.
+
+    **같은 글자가 이어지면 사이에 공백이 반드시 있어야 한다** — 없으면 두 글자가
+    한 글자로 접힌다. 그 규칙이 아래 `_ctc_skip` 이다.
+    """
+    ext = [blank]
+    for lab in labels:
+        ext.append(int(lab))
+        ext.append(blank)
+    return ext
+
+
+def _ctc_skip(ext, blank):
+    """`s-2` 에서 건너뛰어 올 수 있는 자리인가. 공백이 아니고 두 칸 앞과 달라야 한다."""
+    return [0.0 if (u >= 2 and ext[u] != blank and ext[u] != ext[u - 2])
+            else _CTC_NEG for u in range(len(ext))]
+
+
+def _ctc_needs(labels):
+    """이 표적을 내려면 시간이 **최소 몇 칸** 있어야 하는가.
+
+    글자 수에, 붙어 있는 같은 글자 쌍마다 공백 한 칸을 더한다. 이보다 짧으면 어떤
+    정렬도 없어서 확률이 0 이고 손실이 `inf` 다 — torch 가 그 자리에서 `inf` 를 낸다.
+    문턱값으로 어림잡지 않고 이 조건을 그대로 본다.
+    """
+    return len(labels) + sum(1 for a, b in zip(labels, labels[1:]) if a == b)
+
+
+def _ctc_targets(targets, target_lengths):
+    """`(N, S)` 로 와도 되고 이어붙인 1차원으로 와도 된다. torch 가 둘 다 받는다."""
+    data = _np.asarray(targets.data if isinstance(targets, Tensor) else targets)
+    lengths = [int(n) for n in _np.asarray(
+        target_lengths.data if isinstance(target_lengths, Tensor) else target_lengths
+    ).reshape(-1)]
+    if data.ndim == 1:
+        out, at = [], 0
+        for n in lengths:
+            out.append([int(v) for v in data[at:at + n]])
+            at += n
+        return out
+    return [[int(v) for v in data[i, :n]] for i, n in enumerate(lengths)]
+
+
+def _ctc_one(lp, labels, n_time, blank):
+    """표본 하나의 `-log P(표적 | 소리)`.
+
+    **우리 연산으로 접는다** — 기울기를 손으로 안 적는다. CTC 의 역방향은 뒤로 훑기를
+    한 번 더 도는 유명한 식인데, 그것을 따로 적으면 순방향과 갈릴 자리가 하나 는다.
+
+    `u` 축은 한 번에 민다. 시간만 파이썬으로 돌므로 그래프가 `T` 에 비례한다 — 진짜
+    음성 인식 길이(수백 프레임)에서는 느리다. 정확한 쪽을 골랐다.
+    """
+    ext = _ctc_extended(labels, blank)
+    u = len(ext)
+    idx = Tensor(_np.array(ext, dtype=_np.int64))
+    skip = Tensor(_np.array(_ctc_skip(ext, blank), dtype=_np.float32))
+    gap = lambda n: Tensor(_np.full(n, _CTC_NEG, dtype=_np.float32))   # noqa: E731
+
+    emit = index_select(lp, 1, idx)                 # (T, U) — 자리마다의 방출 로그확률
+    head = min(2, u)
+    alpha = emit[0][:head]
+    if u > head:
+        alpha = cat([alpha, gap(u - head)], 0)
+
+    for t in range(1, n_time):
+        same = alpha
+        one = cat([gap(1), alpha[:u - 1]], 0) if u > 1 else gap(1)
+        two = (cat([gap(2), alpha[:u - 2]], 0) if u > 2 else gap(u)) + skip
+        alpha = logsumexp(stack([same, one, two], 0), dim=0) + emit[t]
+
+    tail = alpha[u - 2:] if u >= 2 else alpha
+    return -logsumexp(tail, dim=0)
+
+
+def _ctc_torch_bias(lp, i, n_time):
+    """**값이 0 이고 기울기만 `exp(log_probs)` 인 항.** torch 를 따라가는 자리다.
+
+    torch 의 `ctc_loss` 가 `log_probs` 로 흘리는 기울기는 참도함수가 아니다. 재봤다
+    (`tests/probe_ctc3.py`): 유한차분은 `-γ` 인데 torch 는 `exp(log_probs) - γ` 를
+    낸다. 차이가 정확히 `exp(log_probs)` 이고, `t < input_length` 안에서만 붙는다.
+
+    **그런데 쓰는 자리에서는 둘이 같은 답이다.** CTC 앞에는 언제나 `log_softmax` 가
+    있고, 그 역방향이 `g - softmax·Σg` 이기 때문이다. `g = -γ` 면 `Σg = -1` 이라
+    `softmax - γ` 가 되고, `g = softmax - γ` 면 `Σg = 0` 이라 역시 `softmax - γ` 다.
+    torch 가 고른 꼴은 그 변환의 고정점이다.
+
+    그래도 여기서 맞춘다. 이 저장소의 주장은 "임포트만 바꿔 돌린다" 이고, `log_softmax`
+    를 안 끼고 `log_probs` 를 바로 잎으로 두는 코드가 있으면 거기서 수가 갈린다.
+    맞추되 **왜 맞추는지**를 적어 둔다 — 이 항은 손실의 도함수가 아니다.
+    """
+    window = lp[:n_time, i, :]
+    bias = exp(window).sum()
+    return bias - bias.detach()
+
+
+def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
+             reduction="mean", zero_infinity=False):
+    """`log_probs` 는 `(T, N, C)` 다 — **시간이 앞이다.** torch 가 그렇다.
+
+    `reduction="mean"` 이 예사롭지 않다: 표본마다 **제 표적 길이로 나눈 뒤** 평균한다.
+    그냥 평균이 아니라서, 표적 길이가 다 같은 케이스로 물으면 그 차이가 안 보인다.
+    """
+    lp = _wrap(log_probs)
+    labels = _ctc_targets(targets, target_lengths)
+    times = [int(n) for n in _np.asarray(
+        input_lengths.data if isinstance(input_lengths, Tensor) else input_lengths
+    ).reshape(-1)]
+
+    losses = []
+    for i, labs in enumerate(labels):
+        if times[i] < _ctc_needs(labs):
+            # 정렬이 하나도 없다 — 확률 0, 손실 `inf`. `zero_infinity` 는 그것을
+            # 0 으로 바꾼다(기울기도 안 흐른다).
+            losses.append(_wrap(0.0 if zero_infinity else _np.float32("inf")))
+            continue
+        one = _ctc_one(lp[:, i, :], labs, times[i], blank)
+        losses.append(one + _ctc_torch_bias(lp, i, times[i]))
+
+    per = stack(losses, 0)
+    if reduction == "none":
+        return per
+    if reduction == "sum":
+        return per.sum()
+    lens = Tensor(_np.array([max(len(l), 1) for l in labels], dtype=_np.float32))
+    return (per / lens).mean()
+
+
 def _fractional_intervals(n_in, k, n_out, u):
     """창의 시작 자리들. **ATen 의 `generate_intervals` 그대로다** (재봤다).
 

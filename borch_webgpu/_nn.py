@@ -149,6 +149,31 @@ def _fractional_indices(spatial):
     return call
 
 
+def _ints(v):
+    """텐서로 와도 되고 목록으로 와도 된다. 파이썬 정수 목록으로 편다."""
+    if isinstance(v, Tensor):
+        return [int(round(x)) for x in _np.asarray(v.numpy()).reshape(-1)]
+    return [int(x) for x in _np.asarray(v).reshape(-1)]
+
+
+def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
+              reduction="mean", zero_infinity=False):
+    """표적은 `(N, S)` 로도 오고 이어붙인 1차원으로도 온다 — torch 가 둘 다 받는다."""
+    lens = _ints(target_lengths)
+    flat = _np.asarray(targets.numpy() if isinstance(targets, Tensor) else targets)
+    if flat.ndim == 1:
+        rows, at = [], 0
+        for n in lens:
+            rows.append([int(round(v)) for v in flat[at:at + n]])
+            at += n
+    else:
+        rows = [[int(round(v)) for v in flat[i]] for i in range(len(lens))]
+    return wrap(_ts.nn.ctcLoss(
+        handle(log_probs), _to_js([_js_list(r) for r in rows]),
+        _js_list(_ints(input_lengths)), _js_list(lens),
+        int(blank), reduction, bool(zero_infinity)))
+
+
 def _lp_pool(x, norm_type, kernel_size, stride=None, **kw):
     return wrap(handle(x).lpPool(norm_type, kernel_size, stride))
 
@@ -328,6 +353,7 @@ _HAND_WRITTEN = {
     "max_pool1d": _pool_fn("max", False),
     "max_pool2d": _pool_fn("max", False),
     "max_pool3d": _pool_fn("max", False),
+    "ctc_loss": _ctc_loss,
     "fractional_max_pool2d": _fractional(2),
     "fractional_max_pool3d": _fractional(3),
     "fractional_max_pool2d_with_indices": _fractional_indices(2),
@@ -1186,6 +1212,21 @@ class _FractionalMaxPool(_Wrap):
 
     def __repr__(self):
         return f"FractionalMaxPool{self.dim}d()"
+
+
+class _CTCLoss(_Wrap):
+    """`forward` 가 인자를 넷 받는다 — 로그확률, 표적, 두 길이."""
+
+    def __init__(self, blank=0, reduction="mean", zero_infinity=False):
+        super().__init__(lambda lp, t, il, tl: _ctc_loss(
+            lp, t, il, tl, blank, reduction, zero_infinity))
+
+    def __repr__(self):
+        return "CTCLoss()"
+
+
+def CTCLoss(*args, **kw):
+    return _CTCLoss(*args, **kw)
 
 
 def FractionalMaxPool2d(*args, **kw):
