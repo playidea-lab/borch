@@ -171,9 +171,28 @@ export class RMSprop extends Optimizer {
  * 갱신한 값은 `copyFrom` 으로 **제자리에 되쓴다.** 새 텐서로 갈아끼우면 모델이 든
  * 손잡이와 옵티마이저가 든 손잡이가 갈려서 학습은 도는데 파라미터가 안 움직인다.
  */
+/**
+ * **제자리로 고칠 버퍼는 자기 것이어야 한다.**
+ *
+ * `Tensor.full` 은 원소가 하나면 **값으로 캐시한 버퍼를 돌려준다**(`scalarCache`).
+ * 학습 루프에서 `x * 0.5` 가 매 스텝 같은 상수를 만드는 것을 막으려는 것이고 거기서는
+ * 옳다 — 아무도 그 버퍼에 안 쓰기 때문이다.
+ *
+ * 옵티마이저 상태는 다르다. `copyFrom` 으로 제자리에 쓰므로, 크기 1 파라미터에서는
+ * **프로그램 전체가 공유하는 그 상수를 덮어쓴다.** 예외도 경고도 없고, 그때부터
+ * `Tensor.full([], lr)` 이 다른 값을 낸다 — 원인에서 아주 먼 자리에서 틀리기 시작한다.
+ *
+ * `Tensor.zeros`·`ones` 도 `full` 을 지나므로 같은 자리다. 그래서 상태를 만드는 길을
+ * 하나로 모으고, 여기서만 캐시를 안 탄다.
+ */
+function ownedBuffer(shape: readonly number[], value = 0): Tensor {
+  const n = shape.reduce((a, b) => a * b, 1);
+  return keepAlive(Tensor.from(new Float32Array(n).fill(value), shape));
+}
+
 abstract class Composed extends Optimizer {
   protected state(shapes: Tensor[]): Tensor[] {
-    return shapes.map((p) => keepAlive(Tensor.zeros(p.shape)));
+    return shapes.map((p) => ownedBuffer(p.shape));
   }
 
   protected at(bank: Tensor[], index: number, what: string): Tensor {
@@ -414,7 +433,7 @@ export class Rprop extends Composed {
               private readonly sizeMax = 50) {
     super(params, lr);
     this.prev = this.state(params);
-    this.stepSize = params.map((p) => keepAlive(Tensor.full(p.shape, lr)));
+    this.stepSize = params.map((p) => ownedBuffer(p.shape, lr));
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -461,13 +480,15 @@ export class Adafactor extends Composed {
       if (rank > 1) {
         const rows = [...p.shape.slice(0, -1), 1];
         const cols = [...p.shape.slice(0, -2), 1, p.shape[rank - 1] ?? 1];
-        this.rowVar.push(keepAlive(Tensor.zeros(rows)));
-        this.colVar.push(keepAlive(Tensor.zeros(cols)));
+        // 행·열 은행은 파라미터 모양이 아니라 **접은 모양**이라 `state()` 를 못 쓴다.
+        // 캐시를 피하는 것은 같은 이유다 — `(1, 1)` 이면 원소가 하나다.
+        this.rowVar.push(ownedBuffer(rows));
+        this.colVar.push(ownedBuffer(cols));
         this.variance.push(null);
       } else {
         this.rowVar.push(null);
         this.colVar.push(null);
-        this.variance.push(keepAlive(Tensor.zeros(p.shape)));
+        this.variance.push(ownedBuffer(p.shape));
       }
     }
   }

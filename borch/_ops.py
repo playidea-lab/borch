@@ -11,6 +11,10 @@ from ._tensor import (
 from ._base import (
     _DEFAULT_DTYPE, _math, _np, _resolve, _unsupported, Size, dtype,
 )
+# **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
+# 그 이름을 쓰는 함수와 부딪힌다 — `bool` 을 그렇게 가려서 한 번 겪었다.
+from ._base import bool_ as _bool_dtype, float32 as _float32
+from ._base import float64 as _float64, int64 as _int64
 
 # ---------------------------------------------------------------- 만들기
 
@@ -107,7 +111,44 @@ def manual_seed(seed):
     쪽은 붙잡아 간 자리를 전부 찾아 고쳐야 하고, 그 목록은 늘어난다.
     """
     _rng.bit_generator.state = _np.random.default_rng(seed).bit_generator.state
+    _LAST_SEED[0] = int(seed)
     return seed
+
+
+# 마지막으로 심은 씨앗. `initial_seed` 가 이것을 답한다.
+_LAST_SEED = [0]
+
+
+def initial_seed():
+    """마지막으로 심은 씨앗. `manual_seed` 를 안 불렀으면 0 이다 — 우리 생성기가
+    그 씨앗으로 시작하므로 사실이다."""
+    return _LAST_SEED[0]
+
+
+def seed():
+    """씨앗을 **아무거나** 새로 심고 그것을 답한다. torch 도 그렇게 한다."""
+    got = int(_np.random.SeedSequence().entropy % (2 ** 63))
+    manual_seed(got)
+    return got
+
+
+def get_rng_state():
+    """생성기의 상태를 통째로 담아 준다. **텐서가 아니라 우리 상태 그대로다.**
+
+    torch 는 바이트를 담은 `uint8` 텐서를 준다. 그 바이트 배치는 torch 의 Mersenne
+    Twister 내부라 흉내낼 것이 없고, 흉내내면 **남의 상태를 우리 것으로 읽는** 일이
+    생긴다. 여기서는 우리 생성기의 상태를 그대로 담고, `set_rng_state` 가 그것만
+    받는다 — 오가는 짝이 맞으므로 이어서 학습하기가 뜻대로 된다.
+    """
+    return dict(_rng.bit_generator.state)
+
+
+def set_rng_state(state):
+    """`get_rng_state` 가 준 것을 되돌린다. 그 짝 말고는 안 받는다."""
+    if not isinstance(state, dict):
+        _unsupported("set_rng_state — `get_rng_state` 가 준 것만 받습니다")
+    _rng.bit_generator.state = state
+    return None
 
 
 def randn(*shape, requires_grad=False):
@@ -550,7 +591,12 @@ def max_pool3d(x, kernel_size, stride=None, return_indices=False):
 # torch 는 같은 계산에 이름을 둘 준다: `max_pool2d(..., return_indices=True)` 와
 # `max_pool2d_with_indices(...)`. 값은 하나가 내고 나머지는 이름만 얹는다.
 
-def max_pool1d_with_indices(x, kernel_size, stride=None, **_):
+def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+                            ceil_mode=False, **_):
+    """**torch 최상위에도 이 이름이 있다.** 그쪽은 자리로만 받으므로 나머지 셋까지
+    자리를 열어 두고, 기본값이 아니면 시끄럽게 거절한다."""
+    if padding or dilation != 1 or ceil_mode:
+        _unsupported("max_pool1d_with_indices(padding·dilation·ceil_mode)")
     x = _wrap(x)
     windows = _fixed_windows(x.data.shape[2], kernel_size, stride or kernel_size)
     out, pos = _max_with_index(x, [windows])
@@ -3953,6 +3999,215 @@ class no_grad:
         return wrapper
 
 
+class enable_grad:                                       # noqa: N801
+    """`no_grad` 안에서 **다시 켠다.** 중첩이 되어야 하므로 이전 값을 되돌린다."""
+
+    def __enter__(self):
+        self._prev = _grad_mode.enabled
+        _grad_mode.enabled = True
+        return self
+
+    def __exit__(self, *exc):
+        _grad_mode.enabled = self._prev
+        return False
+
+    def __call__(self, fn):
+        def wrapper(*a, **k):
+            with enable_grad():
+                return fn(*a, **k)
+        return wrapper
+
+
+class set_grad_enabled:                                  # noqa: N801
+    """켤지 끌지를 **값으로** 받는다. `with` 로도 쓰고 그냥 불러도 된다."""
+
+    def __init__(self, mode):
+        self._prev = _grad_mode.enabled
+        _grad_mode.enabled = bool(mode)
+        self._mode = bool(mode)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        _grad_mode.enabled = self._prev
+        return False
+
+    def __call__(self, fn):
+        def wrapper(*a, **k):
+            with set_grad_enabled(self._mode):
+                return fn(*a, **k)
+        return wrapper
+
+
+def is_grad_enabled():
+    return bool(_grad_mode.enabled)
+
+
+class inference_mode:                                    # noqa: N801
+    """**여기서는 `no_grad` 와 같다.**
+
+    진짜 torch 에서 이것은 더 세다 — 안에서 만든 텐서에 표를 붙여 나중에 autograd
+    에 못 들어가게 막는다. 그 표를 흉내내면 "왜 이 텐서를 못 쓰나" 하는 오류를
+    우리가 만들어 내는 셈이라, 여기서는 기울기만 끈다. `is_inference` 가 늘 거짓인
+    이유가 그것이다 — 그 표를 안 붙이므로 없다고 말하는 것이 사실이다.
+    """
+
+    def __init__(self, mode=True):
+        self._mode = bool(mode)
+        self._prev = None
+
+    def __enter__(self):
+        self._prev = _grad_mode.enabled
+        if self._mode:
+            _grad_mode.enabled = False
+        return self
+
+    def __exit__(self, *exc):
+        _grad_mode.enabled = self._prev
+        return False
+
+    def __call__(self, fn):
+        def wrapper(*a, **k):
+            with inference_mode(self._mode):
+                return fn(*a, **k)
+        return wrapper
+
+
+def is_inference(t):
+    """**늘 거짓이다.** 위에 적은 대로 그 표를 안 붙이므로 없다고 말한다."""
+    return False
+
+
+def is_inference_mode_enabled():
+    return False
+
+
+# ── 살펴보기 ────────────────────────────────────────────────────────────────
+#
+# 값을 안 바꾸고 **묻기만 하는** 것들. 교재 코드가 분기에 쓰는 자리라, 없으면
+# 계산이 다 맞아도 그 줄에서 멈춘다.
+
+def is_tensor(x):
+    return isinstance(x, Tensor)
+
+
+def is_storage(x):
+    """**늘 거짓이다.** 저장(Storage) 이라는 층을 우리는 안 둔다 — numpy 배열이
+    그 자리이고, 그것을 Storage 라고 부르면 없는 API 를 있다고 말하는 것이 된다."""
+    return False
+
+
+def is_floating_point(x):
+    return _wrap(x).data.dtype.kind == "f"
+
+
+def is_signed(x):
+    return _wrap(x).data.dtype.kind in "fi"
+
+
+def is_nonzero(x):
+    """**원소가 하나여야 한다.** torch 는 아니면 던진다 — 여러 개일 때 무엇이 참인지가
+    정해져 있지 않기 때문이다."""
+    data = _wrap(x).data
+    if data.size != 1:
+        raise RuntimeError(
+            f"Boolean value of Tensor with {data.size} elements is ambiguous")
+    return bool(data.reshape(-1)[0] != 0)
+
+
+def is_same_size(a, b):
+    return tuple(_wrap(a).data.shape) == tuple(_wrap(b).data.shape)
+
+
+def is_distributed(x):
+    """**늘 거짓이다.** 탭 하나 안이라 나눌 자리가 없다."""
+    return False
+
+
+def typename(x):
+    """`torch.FloatTensor` 처럼 옛 이름을 낸다. 텐서가 아니면 파이썬 형 이름이다."""
+    if not isinstance(x, Tensor):
+        return type(x).__name__
+    kinds = {"float32": "FloatTensor", "float64": "DoubleTensor",
+             "int64": "LongTensor", "bool": "BoolTensor"}
+    return "torch." + kinds.get(str(x.data.dtype), "FloatTensor")
+
+
+_PROMOTE_ORDER = ("bool", "int64", "float32", "float64")
+
+
+def promote_types(a, b):
+    """둘을 담을 수 있는 형. **순서가 정해져 있다** — bool < int64 < float32 < float64."""
+    names = [getattr(t, "name", str(t)) for t in (a, b)]
+    best = max(names, key=lambda n: _PROMOTE_ORDER.index(n)
+               if n in _PROMOTE_ORDER else 0)
+    return {"bool": _bool_dtype, "int64": _int64, "float32": _float32,
+            "float64": _float64}[best]
+
+
+def can_cast(from_type, to_type):
+    """**한 방향만 참이다.** 좁아지는 쪽(실수 → 정수)은 거짓이다 — 값이 깎이므로."""
+    names = [getattr(t, "name", str(t)) for t in (from_type, to_type)]
+    if any(n not in _PROMOTE_ORDER for n in names):
+        return False
+    return _PROMOTE_ORDER.index(names[0]) <= _PROMOTE_ORDER.index(names[1])
+
+
+def get_default_dtype():
+    return _float32
+
+
+def set_default_dtype(dt):
+    """**받되 바꾸지 않는다.** 우리 저장은 float32 하나이고, 바꾼 척하면 그다음에
+    만드는 텐서가 말과 다른 형으로 나온다. float32 를 주면 조용히 넘어가고 그 밖은
+    시끄럽게 거절한다 — 아무 말 없이 무시하는 것이 제일 나쁘다."""
+    if getattr(dt, "name", str(dt)) != "float32":
+        _unsupported(f"set_default_dtype({dt}) — 저장이 float32 하나입니다")
+    return None
+
+
+class _FInfo:
+    """`torch.finfo` 가 주는 것. numpy 가 이미 아는 수를 이름만 바꿔 낸다."""
+
+    def __init__(self, dt):
+        info = _np.finfo(getattr(dt, "np", _np.float32))
+        self.eps = float(info.eps)
+        self.max = float(info.max)
+        self.min = float(info.min)
+        self.tiny = float(info.tiny)
+        self.smallest_normal = float(info.tiny)
+        self.resolution = float(info.resolution)
+        self.bits = int(info.bits)
+        self.dtype = getattr(dt, "name", "float32")
+
+    def __repr__(self):
+        return (f"finfo(resolution={self.resolution}, min={self.min}, "
+                f"max={self.max}, eps={self.eps}, "
+                f"smallest_normal={self.smallest_normal}, tiny={self.tiny}, "
+                f"dtype={self.dtype})")
+
+
+class _IInfo:
+    def __init__(self, dt):
+        info = _np.iinfo(getattr(dt, "np", _np.int64))
+        self.max = int(info.max)
+        self.min = int(info.min)
+        self.bits = int(info.bits)
+        self.dtype = getattr(dt, "name", "int64")
+
+    def __repr__(self):
+        return (f"iinfo(min={self.min}, max={self.max}, dtype={self.dtype})")
+
+
+def finfo(dt=None):
+    return _FInfo(_float32 if dt is None else dt)
+
+
+def iinfo(dt):
+    return _IInfo(dt)
+
+
 class _Namespace:
     """torch 의 하위 모듈 자리(`torch.nn`, `torch.optim.lr_scheduler` …).
 
@@ -5207,6 +5462,76 @@ def upsample_bilinear(x, size=None, scale_factor=None):
     """**`align_corners=True` 다.** `interpolate(mode='bilinear')` 의 기본값은 거짓이라,
     이름만 보고 별명으로 두면 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다."""
     return interpolate(x, size, scale_factor, mode="bilinear", align_corners=True)
+
+
+# ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
+#
+# torch 는 `nn.functional` 의 것을 최상위에도 두는데, **서명이 같지 않다.** 최상위
+# 쪽은 날 ATen 연산이라 인자 순서가 다르고 열거형이 정수다. 같은 계산인데 부르는
+# 법이 다른 것이라, 계산은 한 벌만 두고 여기서 자리만 옮긴다.
+
+def nan_to_num_(x, nan=0.0, posinf=None, neginf=None):
+    x = _wrap(x)
+    return x._inplace(lambda: nan_to_num(x, nan, posinf, neginf), "nan_to_num_")
+
+
+def dropout_(x, p=0.5, train=True):
+    x = _wrap(x)
+    return x._inplace(lambda: dropout(x, p, train), "dropout_")
+
+
+def feature_dropout(x, p=0.5, train=True):
+    """**채널째 떨군다** — `F.dropout2d` 와 같은 계산이다(실측). 최상위에만 있는 이름이다."""
+    return dropout2d(x, p, train)
+
+
+def feature_dropout_(x, p=0.5, train=True):
+    x = _wrap(x)
+    return x._inplace(lambda: dropout2d(x, p, train), "feature_dropout_")
+
+
+def alpha_dropout_(x, p=0.5, train=True):
+    x = _wrap(x)
+    return x._inplace(lambda: alpha_dropout(x, p, train), "alpha_dropout_")
+
+
+def feature_alpha_dropout_(x, p=0.5, train=True):
+    x = _wrap(x)
+    return x._inplace(lambda: feature_alpha_dropout(x, p, train),
+                      "feature_alpha_dropout_")
+
+
+def batch_norm_aten(x, weight, bias, running_mean, running_var, training,
+                    momentum, eps, cudnn_enabled=False):
+    """**`F.batch_norm` 과 인자 순서가 다르다.** 여기서는 가중치가 통계보다 **앞**이다.
+
+    같은 계산인데 자리가 뒤바뀐 것이라, 그대로 넘기면 가중치를 평균으로 쓴다 —
+    예외가 아니라 그럴듯하게 다른 값이다.
+    """
+    return batch_norm(x, running_mean, running_var, weight, bias, training,
+                      momentum, eps)
+
+
+def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
+                 align_corners=False):
+    """**열거형이 정수다.** 0·1 이 `bilinear`·`nearest` 이고, 채우기는 0·1·2 가
+    `zeros`·`border`·`reflection` 이다. 이름으로 받는 쪽은 `F.grid_sample` 이다."""
+    modes = ("bilinear", "nearest", "bicubic")
+    pads = ("zeros", "border", "reflection")
+    return grid_sample(x, grid, modes[int(interpolation_mode)],
+                       pads[int(padding_mode)], align_corners)
+
+
+def ctc_loss_aten(log_probs, targets, input_lengths, target_lengths, blank=0,
+                  reduction=1, zero_infinity=False):
+    """**`reduction` 이 정수다** — 0·1·2 가 `none`·`mean`·`sum` 이다.
+
+    이름으로 받는 쪽은 `F.ctc_loss` 이고, 그쪽 기본값은 `"mean"` 이다. 여기 기본값
+    `1` 이 그것과 같은 자리를 가리킨다.
+    """
+    kinds = ("none", "mean", "sum")
+    return ctc_loss(log_probs, targets, input_lengths, target_lengths, blank,
+                    kinds[int(reduction)], zero_infinity)
 
 
 # ================================================================ 이름 잇기

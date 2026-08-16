@@ -6,7 +6,7 @@
 
 전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
 원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **4,701 줄**이다 — borch.ts 에 그것이 이미 다
+다시 구현해야 했기 때문이다. 이쪽은 **5,022 줄**이다 — borch.ts 에 그것이 이미 다
 있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
 
 `_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
@@ -41,7 +41,7 @@ Pyodide 의 `run_sync` 가 그 자리를 메운다(JSPI 위에 선다). 실측�
 
 ## 지금 어디까지인가
 
-골든 **1794 건 전부**를 지난다. 코어(numpy)는 그중 1741 건을 보는데, 나머지 53 건은
+골든 **1830 건 전부**를 지난다. 코어(numpy)는 그중 1777 건을 보는데, 나머지 53 건은
 코어가 일부러 거절하는 것들(1·3 차원 합성곱, 랭크 7·8)이라 안 묻는다.
 
 경계는 골든이 붙잡는다. 없는 것을 근사해서 초록을 만들지 않는다.
@@ -86,6 +86,19 @@ from ._ops import (                                      # noqa: E402,F401
     cdist, corrcoef, cov, cumulative_trapezoid, tensordot, trapezoid,
     # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
     geqrf,
+    # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
+    alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
+    feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,
+    nan_to_num_,
+    # 기울기 모드.
+    enable_grad, inference_mode, is_grad_enabled, is_inference,
+    is_inference_mode_enabled, set_grad_enabled,
+    # 난수 상태.
+    get_rng_state, initial_seed, seed, set_rng_state,
+    # 살펴보기.
+    can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
+    is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
+    set_default_dtype, typename,
 )
 from ._ops import (                                      # noqa: E402,F401
     Generator, manual_seed, randint, randperm,

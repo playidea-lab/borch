@@ -90,6 +90,25 @@ from ._ops import (
     tensordot, trapezoid,
     # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
     geqrf,
+    # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
+    alpha_dropout_, dropout_, feature_alpha_dropout_, feature_dropout,
+    feature_dropout_, grid_sampler, nan_to_num_,
+    # `F` 와 **같은 계산**인 최상위 이름들 (실측해서 확인했다).
+    alpha_dropout, bilinear, celu_, channel_shuffle, embedding_bag,
+    feature_alpha_dropout, max_pool1d_with_indices, pixel_shuffle,
+    pixel_unshuffle, rrelu, rrelu_, selu_, threshold_,
+    # **서명이 다른 둘.** 최상위는 날 ATen 이라 인자 순서와 열거형이 다르다 —
+    # `_aten` 판이 그 자리를 맡고, `F` 쪽은 이름 그대로 남는다.
+    batch_norm_aten as batch_norm, ctc_loss_aten as ctc_loss,
+    # 기울기 모드.
+    enable_grad, inference_mode, is_grad_enabled, is_inference,
+    is_inference_mode_enabled, set_grad_enabled,
+    # 난수 상태.
+    get_rng_state, initial_seed, seed, set_rng_state,
+    # 살펴보기.
+    can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
+    is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
+    set_default_dtype, typename,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #

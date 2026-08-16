@@ -1461,6 +1461,42 @@ def opt_cases(inp=None):
                   lambda L: lbfgs(L, lr=0.1, max_iter=3)))
     cases.append((OPT_PREFIX + "LBFGS/history_size",
                   lambda L: lbfgs(L, lr=0.5, max_iter=5, history_size=2)))
+
+    def scalar_param_keeps_constants(L):
+        """**원소가 하나인 파라미터를 학습해도 상수가 안 변해야 한다.**
+
+        GPU 판은 원소 하나짜리 텐서를 **값으로 캐시해** 돌려준다 — 학습 루프에서
+        `x * 0.05` 가 매 스텝 같은 상수를 만드는 것을 막으려는 것이고, 아무도 그
+        버퍼에 안 쓰는 한 옳다. 옵티마이저 상태는 그 버퍼에 **제자리로 쓴다.**
+        크기 1 파라미터에서 그 둘이 만나면 프로그램 전체가 공유하는 상수가 조용히
+        덮어써진다 — 예외도 경고도 없고, 그때부터 아주 먼 자리에서 값이 틀린다.
+
+        그래서 학습을 시킨 **뒤에** 같은 상수로 곱해 본다. 진짜 torch 에는 그런 캐시가
+        없으니 답이 자명하고, 그 자명한 답이 이 결함을 잡는다. 가중치를 밖에서 넣는
+        보통의 옵티마이저 케이스는 상태 은행을 안 지나가서 이것을 못 본다.
+
+        **한 걸음으로는 못 잡는다.** Rprop 의 첫 걸음은 폭을 안 바꾸므로 같은 값을
+        덮어써서 표가 안 난다 — 처음에 그렇게 적었고 안 걸렸다. 여러 걸음을 밟아
+        상태가 실제로 움직인 뒤에 묻는다. 상수도 하나만 보면 안 된다: 상태 은행은
+        0 에서 시작하므로 **0 과 1 이 먼저 더럽혀진다.**
+        """
+        seen = []
+        for name, kw in (("Rprop", {"lr": 0.05}), ("Adafactor", {"lr": 0.05}),
+                         ("ASGD", {"lr": 0.05}), ("Adagrad", {"lr": 0.05})):
+            p = L.tensor(np.array([0.5], dtype=np.float32), requires_grad=True)
+            opt = getattr(L.optim, name)([p], **kw)
+            for i in range(3):
+                opt.zero_grad()
+                p.grad = L.tensor(np.array([0.1 * (i + 1)], dtype=np.float32))
+                opt.step()
+        # 학습 뒤에 그 상수들이 아직 그 값인가.
+        probe = L.tensor(np.array([1.0, 2.0], dtype=np.float32))
+        for k in (0.0, 1.0, 0.05):
+            seen.append(probe * k)
+        return L.cat(seen)
+
+    cases.append((OPT_PREFIX + "크기 1 파라미터가 상수를 안 더럽힌다",
+                  scalar_param_keeps_constants))
     return cases
 
 
@@ -1901,6 +1937,173 @@ def functional_name_cases(inp=None):
             return "거절"
 
     add("mha::bias_k 는 거절", mha_refuses)
+    return cases
+
+
+TOP_PREFIX = "top::"
+
+
+def top_level_cases(inp=None):
+    """torch **최상위**에만 있는 이름들과, 살펴보는 것들.
+
+    ## 최상위는 `F` 와 서명이 같지 않다
+
+    torch 는 `nn.functional` 의 것을 최상위에도 두는데, 그쪽은 날 ATen 연산이라
+    **인자 순서가 다르고 열거형이 정수다.**
+
+    - `torch.batch_norm` 은 가중치가 이동 통계보다 **앞**이다. 그대로 넘기면
+      가중치를 평균으로 쓴다 — 예외가 아니라 그럴듯하게 다른 값이다.
+    - `torch.grid_sampler` 는 `mode` 가 0·1, 채우기가 0·1·2 다.
+    - `torch.ctc_loss` 는 `reduction` 이 0·1·2 이고 **기본이 1(mean)** 이다.
+
+    같은 계산인데 부르는 법이 다른 것이라, 계산은 한 벌만 두고 자리만 옮긴다.
+    그 옮김이 맞는지는 값으로만 확인된다.
+
+    ## 살펴보는 것들은 값이 아니라 판정이다
+
+    `is_floating_point`·`can_cast`·`typename` 은 교재 코드가 **분기에 쓰는** 자리다.
+    없으면 계산이 다 맞아도 그 줄에서 멈추고, 틀리면 다른 가지로 간다.
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((TOP_PREFIX + name, fn))
+
+    holes = np.array([[-1.0, 0.5, np.nan], [0.25, np.inf, 1.0]], dtype=np.float32)
+    img = np.arange(24, dtype=np.float32).reshape(1, 2, 3, 4)
+    plain = np.array([[-1.0, 0.5, 2.0], [0.25, -3.0, 1.0]], dtype=np.float32)
+
+    # ── 최상위 전용 제자리들 ────────────────────────────────────────────
+    inplace = (("nan_to_num_", holes, ()),
+               ("dropout_", img, (0.0, True)),
+               ("feature_dropout_", img, (0.0, True)),
+               ("alpha_dropout_", img, (0.0, False)),
+               ("feature_alpha_dropout_", img, (0.0, False)))
+    for name, src, args in inplace:
+        def run(L, n=name, s=src, a=args):
+            x = L.tensor(s.copy())
+            getattr(L, n)(x, *a)
+            return x
+
+        add(f"제자리::{name}", run)
+
+        def is_self(L, n=name, s=src, a=args):
+            x = L.tensor(s.copy())
+            return str(getattr(L, n)(x, *a) is x)
+
+        add(f"제자리::{name}(같은 텐서)", is_self)
+
+    # `feature_dropout` 은 **채널째** 떨군다 — `dropout2d` 와 같은 계산이다.
+    add("feature_dropout(p=0)",
+        lambda L: L.feature_dropout(L.tensor(img), 0.0, True))
+
+    # ── 날 ATen 서명 ────────────────────────────────────────────────────
+    bn_y = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    add("batch_norm(최상위 서명)",
+        lambda L: L.batch_norm(
+            L.tensor(bn_y), L.tensor(np.array([1.5, 0.5], dtype=np.float32)),
+            L.tensor(np.array([0.1, -0.1], dtype=np.float32)),
+            L.tensor(np.array([0.2, 0.3], dtype=np.float32)),
+            L.tensor(np.array([1.0, 2.0], dtype=np.float32)),
+            False, 0.1, 1e-5, False))
+
+    line = np.arange(8, dtype=np.float32).reshape(1, 1, 8)
+    add("max_pool1d_with_indices(값)",
+        lambda L: L.max_pool1d_with_indices(L.tensor(line), 2, 2, 0, 1, False)[0])
+    add("max_pool1d_with_indices(자리)",
+        lambda L: L.max_pool1d_with_indices(L.tensor(line), 2, 2, 0, 1, False)[1])
+
+    eye = np.array([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]], dtype=np.float32)
+    quad = np.arange(4, dtype=np.float32).reshape(1, 1, 2, 2)
+    for pad, tag in ((0, "zeros"), (1, "border")):
+        add(f"grid_sampler(정수 열거형, {tag})",
+            lambda L, p=pad: L.grid_sampler(
+                L.tensor(quad),
+                L.nn.functional.affine_grid(L.tensor(eye), (1, 1, 2, 2),
+                                            align_corners=False),
+                0, p, False))
+
+    ctc_lp = np.arange(20, dtype=np.float32).reshape(5, 1, 4)
+    for red, tag in ((0, "none"), (1, "mean"), (2, "sum")):
+        add(f"ctc_loss(정수 reduction={tag})",
+            lambda L, r=red: L.ctc_loss(
+                L.nn.functional.log_softmax(L.tensor(ctc_lp), dim=2),
+                L.tensor(np.array([[1, 2]], dtype=np.int64)),
+                L.tensor(np.array([5], dtype=np.int64)),
+                L.tensor(np.array([2], dtype=np.int64)), 0, r, False))
+
+    # ── 기울기 모드 ─────────────────────────────────────────────────────
+    def grad_modes(L):
+        """**중첩이 되어야 한다** — `no_grad` 안에서 `enable_grad` 가 다시 켠다.
+        나갈 때 원래 값으로 돌아가는지도 여기서만 보인다."""
+        seen = [L.is_grad_enabled()]
+        with L.no_grad():
+            seen.append(L.is_grad_enabled())
+            with L.enable_grad():
+                seen.append(L.is_grad_enabled())
+            seen.append(L.is_grad_enabled())
+        with L.set_grad_enabled(False):
+            seen.append(L.is_grad_enabled())
+        seen.append(L.is_grad_enabled())
+        return " ".join(str(v) for v in seen)
+
+    add("기울기 모드::중첩", grad_modes)
+    add("기울기 모드::is_inference_mode_enabled",
+        lambda L: str(L.is_inference_mode_enabled()))
+
+    def inference(L):
+        with L.inference_mode():
+            return str(L.is_grad_enabled())
+
+    add("기울기 모드::inference_mode 안", inference)
+
+    # ── 살펴보기 ───────────────────────────────────────────────────────
+    ints = np.array([1, 2], dtype=np.int64)
+    checks = (
+        ("is_tensor", lambda L: (L.is_tensor(L.tensor(plain)), L.is_tensor(3))),
+        ("is_floating_point", lambda L: (L.is_floating_point(L.tensor(plain)),
+                                         L.is_floating_point(L.tensor(ints)))),
+        ("is_nonzero", lambda L: (L.is_nonzero(L.tensor(np.float32(3))),
+                                  L.is_nonzero(L.tensor(np.float32(0))))),
+        ("is_same_size", lambda L: (L.is_same_size(L.tensor(plain),
+                                                   L.tensor(plain)),
+                                    L.is_same_size(L.tensor(plain),
+                                                   L.tensor(img)))),
+        ("is_signed", lambda L: (L.is_signed(L.tensor(plain)),)),
+        ("is_storage", lambda L: (L.is_storage(L.tensor(plain)),)),
+        # **한 방향만 참이다** — 좁아지는 쪽은 거짓이다.
+        ("can_cast", lambda L: (L.can_cast(L.int64, L.float32),
+                                L.can_cast(L.float32, L.int64))),
+    )
+    for name, fn in checks:
+        add(f"살펴보기::{name}", lambda L, f=fn: " ".join(str(v) for v in f(L)))
+
+    add("살펴보기::typename",
+        lambda L: f"{L.typename(L.tensor(plain))} {L.typename(3)}")
+    add("살펴보기::promote_types",
+        lambda L: str(L.promote_types(L.int64, L.float32)))
+    add("살펴보기::get_default_dtype", lambda L: str(L.get_default_dtype()))
+    add("살펴보기::finfo",
+        lambda L: (f"{L.finfo(L.float32).eps:.9g} {L.finfo(L.float32).max:.9g} "
+                   f"{L.finfo(L.float32).bits}"))
+    add("살펴보기::iinfo",
+        lambda L: f"{L.iinfo(L.int64).max} {L.iinfo(L.int64).min}")
+
+    def rng_round_trip(L):
+        """**상태를 되돌리면 같은 수가 나와야 한다.** 그 왕복이 이어서 학습하기다.
+
+        torch 는 상태를 바이트 텐서로 주고 우리는 우리 생성기의 상태를 준다 —
+        모양이 다르므로 **값이 아니라 왕복이 되는가**를 묻는다. 답할 수 없는 질문을
+        표에 넣으면 그 표가 무엇을 통과했는지 못 말한다.
+        """
+        L.manual_seed(7)
+        state = L.get_rng_state()
+        first = L.randn(3)
+        L.set_rng_state(state)
+        second = L.randn(3)
+        return f"왕복={bool(L.allclose(first, second))} 씨앗={L.initial_seed()}"
+
+    add("난수::상태 왕복", rng_round_trip)
     return cases
 
 
@@ -5828,6 +6031,7 @@ def golden_cases(inp=None):
             + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
             + method_name_cases(inp) + default_convert_cases(inp)
             + unpool_cases(inp) + functional_name_cases(inp)
+            + top_level_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

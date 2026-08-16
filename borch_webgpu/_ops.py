@@ -407,6 +407,204 @@ class no_grad:                                           # noqa: N801
         return False
 
 
+class enable_grad:                                       # noqa: N801
+    """`no_grad` 안에서 **다시 켠다.** 중첩이 되어야 하므로 이전 값을 되돌린다."""
+
+    def __enter__(self):
+        self._prev = bool(_ts.gradMode.enabled)
+        _ts.gradMode.enabled = True
+        return self
+
+    def __exit__(self, *exc):
+        _ts.gradMode.enabled = self._prev
+        return False
+
+
+class set_grad_enabled:                                  # noqa: N801
+    """켤지 끌지를 값으로 받는다. 부르는 순간 바뀌고, `with` 를 나가면 되돌아온다."""
+
+    def __init__(self, mode):
+        self._prev = bool(_ts.gradMode.enabled)
+        _ts.gradMode.enabled = bool(mode)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        _ts.gradMode.enabled = self._prev
+        return False
+
+
+def is_grad_enabled():
+    return bool(_ts.gradMode.enabled)
+
+
+class inference_mode:                                    # noqa: N801
+    """**여기서는 `no_grad` 와 같다.** 진짜 torch 는 안에서 만든 텐서에 표를 붙이는데,
+    그 표를 흉내내면 "왜 이 텐서를 못 쓰나" 하는 오류를 우리가 만들어 내는 셈이다."""
+
+    def __init__(self, mode=True):
+        self._mode = bool(mode)
+        self._prev = None
+
+    def __enter__(self):
+        self._prev = bool(_ts.gradMode.enabled)
+        if self._mode:
+            _ts.gradMode.enabled = False
+        return self
+
+    def __exit__(self, *exc):
+        _ts.gradMode.enabled = self._prev
+        return False
+
+
+def is_inference(t):
+    """**늘 거짓이다** — 그 표를 안 붙이므로 없다고 말하는 것이 사실이다."""
+    return False
+
+
+def is_inference_mode_enabled():
+    return False
+
+
+# ── 난수 상태 ───────────────────────────────────────────────────────────────
+
+_LAST_SEED = [0]
+
+
+def initial_seed():
+    return _LAST_SEED[0]
+
+
+def seed():
+    got = int(_np.random.SeedSequence().entropy % (2 ** 63))
+    manual_seed(got)
+    return got
+
+
+def get_rng_state():
+    """**두 생성기의 상태를 함께 담는다.** numpy 쪽은 `randn`·`randperm` 이 쓰고
+    borch.ts 쪽 씨앗은 층 초기화와 dropout 이 쓴다 — 하나만 담으면 되돌려도
+    나머지가 안 돌아간다."""
+    return {"numpy": dict(_rng.bit_generator.state),
+            "ts": int(_ts.Tensor.dropoutSeed)}
+
+
+def set_rng_state(state):
+    if not isinstance(state, dict) or "numpy" not in state:
+        raise RuntimeError("set_rng_state — `get_rng_state` 가 준 것만 받습니다")
+    _rng.bit_generator.state = state["numpy"]
+    _ts.Tensor.dropoutSeed = state["ts"]
+    return None
+
+
+# ── 살펴보기 ────────────────────────────────────────────────────────────────
+
+def is_tensor(x):
+    return isinstance(x, Tensor)
+
+
+def is_storage(x):
+    """**늘 거짓이다.** 저장(Storage) 이라는 층을 우리는 안 둔다."""
+    return False
+
+
+def is_floating_point(x):
+    return str(handle(x).dtype) == "float32"
+
+
+def is_signed(x):
+    return str(handle(x).dtype) in ("float32", "int64")
+
+
+def is_nonzero(x):
+    h = handle(x)
+    if int(h.size) != 1:
+        raise RuntimeError(
+            f"Boolean value of Tensor with {int(h.size)} elements is ambiguous")
+    return bool(float(_np.asarray(x.numpy()).reshape(-1)[0]) != 0)
+
+
+def is_same_size(a, b):
+    return ([int(v) for v in handle(a).shape] == [int(v) for v in handle(b).shape])
+
+
+def is_distributed(x):
+    return False
+
+
+def typename(x):
+    if not isinstance(x, Tensor):
+        return type(x).__name__
+    kinds = {"float32": "FloatTensor", "int64": "LongTensor", "bool": "BoolTensor"}
+    return "torch." + kinds.get(str(handle(x).dtype), "FloatTensor")
+
+
+_PROMOTE_ORDER = ("bool", "int64", "float32")
+
+
+def _dtype_name(t):
+    return getattr(t, "name", str(t)).replace("torch.", "")
+
+
+def promote_types(a, b):
+    from . import _base
+    names = [_dtype_name(t) for t in (a, b)]
+    best = max(names, key=lambda n: _PROMOTE_ORDER.index(n)
+               if n in _PROMOTE_ORDER else 0)
+    return _base._DType(best)
+
+
+def can_cast(from_type, to_type):
+    """**한 방향만 참이다.** 좁아지는 쪽(실수 → 정수)은 거짓이다."""
+    names = [_dtype_name(t) for t in (from_type, to_type)]
+    if any(n not in _PROMOTE_ORDER for n in names):
+        return False
+    return _PROMOTE_ORDER.index(names[0]) <= _PROMOTE_ORDER.index(names[1])
+
+
+def get_default_dtype():
+    from . import _base
+    return _base._DType("float32")
+
+
+def set_default_dtype(dt):
+    """받되 바꾸지 않는다 — 저장이 float32 하나다. 그 밖은 시끄럽게 거절한다."""
+    if _dtype_name(dt) != "float32":
+        raise RuntimeError(f"set_default_dtype({dt}) — 저장이 float32 하나입니다")
+    return None
+
+
+class _FInfo:
+    def __init__(self, dt):
+        info = _np.finfo(_np.float32)
+        self.eps = float(info.eps)
+        self.max = float(info.max)
+        self.min = float(info.min)
+        self.tiny = float(info.tiny)
+        self.smallest_normal = float(info.tiny)
+        self.resolution = float(info.resolution)
+        self.bits = int(info.bits)
+        self.dtype = _dtype_name(dt)
+
+
+class _IInfo:
+    def __init__(self, dt):
+        info = _np.iinfo(_np.int64)
+        self.max = int(info.max)
+        self.min = int(info.min)
+        self.bits = int(info.bits)
+        self.dtype = _dtype_name(dt)
+
+
+def finfo(dt=None):
+    return _FInfo(dt if dt is not None else "float32")
+
+
+def iinfo(dt):
+    return _IInfo(dt)
+
+
 def linspace(start, end, count, **kw):
     return wrap(_ts.Tensor.linspace(start, end, count))
 
@@ -431,6 +629,7 @@ def manual_seed(seed):
     global _rng
     _rng = _np.random.default_rng(seed)
     _ts.nn.manualSeed(int(seed))
+    _LAST_SEED[0] = int(seed)
     return _rng
 
 
@@ -1049,6 +1248,77 @@ def cov(t, correction=1, **kw):
     n = shape[1]
     centered = t - t.mean(dim=1, keepdim=True)
     return (centered @ transpose(centered, 0, 1)) * (1.0 / builtins.max(1, n - correction))
+
+
+# ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
+#
+# 최상위 쪽은 날 ATen 이라 **인자 순서가 다르고 열거형이 정수다.** 같은 계산인데
+# 부르는 법이 다른 것이라, 계산은 `nn.functional` 한 벌만 두고 여기서 자리만 옮긴다.
+
+def _inplace_from(name, fn_name=None):
+    def call(x, *args, **kw):
+        from . import _nn
+        x._refuse_inplace_on_leaf(name)
+        got = getattr(_nn.functional, fn_name or name.rstrip("_"))(x, *args, **kw)
+        return x._write_back(got)
+    call.__name__ = name
+    return call
+
+
+def nan_to_num_(x, *args, **kw):
+    """**`nan_to_num` 은 `F` 가 아니라 모듈 쪽에 있다.** 이름만 보고 `F` 에서 찾으면
+    없다고 멈춘다 — 최상위 이름이 전부 `F` 에도 있는 것은 아니다."""
+    x._refuse_inplace_on_leaf("nan_to_num_")
+    return x._write_back(nan_to_num(x, *args, **kw))
+
+
+dropout_ = _inplace_from("dropout_")
+alpha_dropout_ = _inplace_from("alpha_dropout_")
+feature_alpha_dropout_ = _inplace_from("feature_alpha_dropout_")
+feature_dropout_ = _inplace_from("feature_dropout_", "dropout2d")
+
+
+def feature_dropout(x, p=0.5, train=True):
+    """**채널째 떨군다** — `F.dropout2d` 와 같은 계산이다(실측)."""
+    from . import _nn
+    return _nn.functional.dropout2d(x, p, train)
+
+
+def batch_norm(x, weight, bias, running_mean, running_var, training=False,
+               momentum=0.1, eps=1e-5, cudnn_enabled=False):
+    """**`F.batch_norm` 과 인자 순서가 다르다** — 여기서는 가중치가 통계보다 앞이다."""
+    from . import _nn
+    return _nn.functional.batch_norm(x, running_mean, running_var, weight, bias,
+                                     training, momentum, eps)
+
+
+def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
+                 align_corners=False):
+    """**열거형이 정수다.** 0·1 이 `bilinear`·`nearest`, 채우기는 0·1·2 다."""
+    from . import _nn
+    modes = ("bilinear", "nearest", "bicubic")
+    pads = ("zeros", "border", "reflection")
+    return _nn.functional.grid_sample(x, grid, modes[int(interpolation_mode)],
+                                      pads[int(padding_mode)], align_corners)
+
+
+def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+                            ceil_mode=False, **kw):
+    from . import _nn
+    if padding or dilation != 1 or ceil_mode:
+        raise RuntimeError(
+            "max_pool1d_with_indices(padding·dilation·ceil_mode) 은 아직 없다.")
+    return _nn.functional.max_pool1d_with_indices(x, kernel_size, stride)
+
+
+def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
+             reduction=1, zero_infinity=False):
+    """**`reduction` 이 정수다** — 0·1·2 가 `none`·`mean`·`sum` 이다."""
+    from . import _nn
+    kinds = ("none", "mean", "sum")
+    return _nn.functional.ctc_loss(log_probs, targets, input_lengths,
+                                   target_lengths, blank, kinds[int(reduction)],
+                                   zero_infinity)
 
 
 def geqrf(t, **kw):
