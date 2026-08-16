@@ -18,7 +18,7 @@
 const rng = { state: 0x9e3779b9 };
 
 /** 씨앗을 심을 때 같이 되돌려야 하는 것들. dropout 계수기가 첫 등록자다. */
-const resets: (() => void)[] = [];
+const resets: ((seed: number) => void)[] = [];
 
 /**
  * 씨앗을 심고 등록된 것들을 되돌린다.
@@ -27,12 +27,20 @@ const resets: (() => void)[] = [];
  * 이 난수를 죽이는 것은 아무도 예상하지 않는다.
  */
 export function manualSeed(value: number): void {
-  rng.state = (value >>> 0) || 1;
-  for (const reset of resets) reset();
+  const seed = (value >>> 0) || 1;
+  rng.state = seed;
+  for (const reset of resets) reset(seed);
 }
 
-/** 씨앗을 심을 때 같이 되돌릴 것을 등록한다. */
-export function onSeed(reset: () => void): void {
+/**
+ * 씨앗을 심을 때 같이 되돌릴 것을 등록한다. **씨앗 값을 받는다.**
+ *
+ * 처음에는 인자 없이 불렀고 dropout 계수기는 늘 1 로 되돌아갔다. 같은 씨앗에 같은
+ * 결과라는 약속은 지켜지지만 **다른 씨앗에 다른 결과가 안 나온다** — 씨앗을 다섯 개
+ * 돌려 분산을 재는 사람은 dropout 마스크가 다섯 번 다 같은 줄 모르고, 가중치
+ * 초기화만 흔들린 수를 실험 분산으로 읽는다.
+ */
+export function onSeed(reset: (seed: number) => void): void {
   resets.push(reset);
 }
 

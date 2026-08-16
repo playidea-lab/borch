@@ -665,11 +665,15 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `[0, 1)` 균등분포. `torch.rand` 자리다.
+   * `[0, 1)` 균등분포. `torch.rand` 자리이고 **쓰는 사람이 쓸 문은 이쪽이다.**
    *
-   * **호스트에서 만들어 한 번에 올린다.** GPU 난수 커널은 씨앗을 스레드마다 갈라야
-   * 하고 그러면 같은 씨앗에 같은 결과라는 약속을 커널 배치까지 걸고 지켜야 한다 —
-   * 초기화와 표본은 스텝마다 도는 일이 아니므로 그 값을 치를 자리가 아니다.
+   * **호스트에서 만들어 한 번에 올린다.** 그래야 `randn`·`randint`·`randperm` 과 같은
+   * 줄기에서 나오고 `manualSeed` 하나가 넷을 함께 되돌린다.
+   *
+   * 난수가 나오는 문이 하나 더 있다 — `Tensor.uniform` 은 GPU 커널이고 dropout
+   * 계수기를 쓴다. 그쪽은 **활성값만 한 표본을 스텝마다 뽑는 자리**(dropout·`rrelu`·
+   * gumbel)의 것이라 업로드를 피하려고 따로 있다. 둘 다 `manualSeed` 가 되돌리지만
+   * **같은 줄기는 아니다.**
    */
   static rand(shape: readonly number[]): Tensor {
     const data = new Float32Array(numel(shape));
@@ -3711,7 +3715,7 @@ export class Tensor implements Node<Tensor> {
     return {
       LU: got.LU,
       pivots: got.pivots,
-      info: Tensor.from(info, v.lead, false, "int64"),
+      info: Tensor.from(info, v.lead, { dtype: "int64" }),
     };
   }
 
@@ -3756,7 +3760,7 @@ export class Tensor implements Node<Tensor> {
     }
     return {
       LD: Tensor.fromBatch(outs, this.shape),
-      pivots: Tensor.from(piv, [...v.lead, n], false, "int64"),
+      pivots: Tensor.from(piv, [...v.lead, n], { dtype: "int64" }),
     };
   }
 

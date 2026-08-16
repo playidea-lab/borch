@@ -163,11 +163,66 @@ export async function report(): Promise<string> {
   // ── 제자리로 고쳐지는 것은 자기 버퍼를 가져야 한다 ────────────────────
   // 위의 `addParamGroup` 검사가 이것을 잡았다. `Tensor.zeros([1])` 은 값으로 캐시된
   // **전역 상수**를 돌려주는데, 옵티마이저와 이동 통계는 거기에 쓴다.
-  const scalar = mk();
-  scalar.grad = Tensor.from([1], [1]);
-  new optim.Adam([scalar], 0.1).step();
-  want("Adam 이 원소 하나짜리 파라미터에서 돈다", (await scalar.item()) !== 1,
-    `${await scalar.item()}`);
+  // **옵티마이저 전부를 건다.** 이 결함은 한 클래스의 실수가 아니라 `Tensor.zeros`·
+  // `Tensor.full` 로 상태를 만드는 습관 전체에 걸린 것이라, 새 옵티마이저가 붙을
+  // 때마다 다시 들어온다 — 실제로 `Rprop` 이 그렇게 들어왔다.
+  const makers: [string, (p: Tensor) => optim.Optimizer][] = [
+    ["SGD(momentum)", (p) => new optim.SGD([p], 0.1, 0.9)],
+    ["Adam", (p) => new optim.Adam([p], 0.1)],
+    ["RMSprop", (p) => new optim.RMSprop([p], 0.1)],
+    ["Adagrad", (p) => new optim.Adagrad([p], 0.1)],
+    ["Adadelta", (p) => new optim.Adadelta([p], 0.1)],
+    ["Adamax", (p) => new optim.Adamax([p], 0.1)],
+    ["NAdam", (p) => new optim.NAdam([p], 0.1)],
+    ["RAdam", (p) => new optim.RAdam([p], 0.1)],
+    ["ASGD", (p) => new optim.ASGD([p], 0.1)],
+    ["Rprop", (p) => new optim.Rprop([p], 0.1)],
+    ["Adafactor", (p) => new optim.Adafactor([p], 0.1)],
+  ];
+  const before = device().faults.count;
+  const moved: string[] = [];
+  const stuck: string[] = [];
+  for (const [label, make] of makers) {
+    const p = mk();
+    const o = make(p);
+    // **두 번 밟는다.** 상태가 살아 있어야 하고, 첫 스텝이 상태를 망가뜨리면 둘째에서
+    // 드러난다.
+    for (let i = 0; i < 2; i++) {
+      p.grad = Tensor.from([1], [1]);
+      o.step();
+    }
+    ((await p.item()) !== 1 ? moved : stuck).push(label);
+  }
+  want("옵티마이저 전부가 원소 하나짜리 파라미터에서 돈다",
+    stuck.length === 0, stuck.length ? `안 움직인 것: ${stuck.join(", ")}` : `${moved.length} 개`);
+  want("그 사이 검증 오류가 안 났다", device().faults.count === before,
+    device().faults.first);
+
+  // 상태가 캐시를 탔으면 여기가 바뀐다. `0.1` 은 위에서 학습률로 쓴 값이다.
+  //
+  // **허용 오차가 필요하다.** 0.1 은 float32 로 정확히 안 떨어져서 읽어 오면
+  // 0.10000000149… 다. 처음에 1e-9 로 물었다가 그 반올림에 걸렸다 — 오염이 아니라
+  // 표현의 문제였고, 검사가 스스로 거짓 경보를 낸 자리다.
+  const canary = [
+    await Tensor.full([1], 0).item(),
+    await Tensor.full([1], 1).item(),
+    await Tensor.full([1], 0.1).item(),
+  ];
+  want("전역 0·1·0.1 상수가 안 더럽혀졌다",
+    canary[0] === 0 && canary[1] === 1 && near(canary[2] ?? NaN, 0.1, 1e-6),
+    canary.join(" / "));
+
+  // 파라미터 모양이 아닌 상태를 드는 옵티마이저도 그룹이 늘어야 한다.
+  const af1 = mk();
+  const af2 = Tensor.from([1, 2, 3, 4], [2, 2], { requiresGrad: true });
+  keepAlive(af2);
+  const af = new optim.Adafactor([af1], 0.1);
+  af.addParamGroup({ params: [af2], lr: 0.1 });
+  af1.grad = Tensor.from([1], [1]);
+  af2.grad = Tensor.from([1, 1, 1, 1], [2, 2]);
+  af.step();
+  want("Adafactor 가 addParamGroup 뒤에도 돈다",
+    (await af1.item()) !== 1 && (await af2.toArray())[0] !== 1);
 
   const p1 = new nn.PReLU();
   const p2 = new nn.PReLU();
@@ -223,6 +278,18 @@ export async function report(): Promise<string> {
   manualSeed(0);
   const z = await Tensor.rand([4]).toArray();
   want("manualSeed(0) 이 난수를 죽이지 않는다", new Set(z).size > 1);
+
+  // **다른 씨앗은 다른 결과를 내야 한다.** 같은 씨앗에 같은 결과만 지키면 절반이다 —
+  // dropout 계수기를 늘 1 로 되돌리던 동안 씨앗을 다섯 개 돌려도 마스크는 다섯 번 다
+  // 같았고, 그러면 실험 분산이 가중치 초기화 하나에서만 나온다.
+  const gpuDraw = async (seed: number): Promise<Float32Array> => {
+    manualSeed(seed);
+    return Tensor.uniform([16]).toArray();      // GPU 줄기 — dropout 계수기를 쓴다
+  };
+  want("다른 씨앗이면 GPU 줄기도 달라진다",
+    !same(await gpuDraw(1), await gpuDraw(2)));
+  want("같은 씨앗이면 GPU 줄기가 같다",
+    same(await gpuDraw(7), await gpuDraw(7)));
 
   // **검증 오류가 하나라도 났으면 위의 초록은 못 믿는다.** WebGPU 는 무효한 명령
   // 버퍼를 조용히 버리므로, 값이 안 바뀐 것을 "통과" 로 읽는 검사가 생길 수 있다.
