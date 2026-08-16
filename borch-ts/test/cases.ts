@@ -477,6 +477,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addNewFn(out, inputs);
   addIndex(out, inputs);
   addNumeric(out, inputs);
+  addRecent(out);
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
@@ -2686,6 +2687,255 @@ function addIndex(out: Map<string, Case>, inp: Inputs): void {
   out.set("index::searchsorted", () => counted(false));
   out.set("index::searchsorted(right)", () => counted(true));
   out.set("index::bucketize", () => counted(false));
+}
+
+/**
+ * 최근에 늘어난 이름들 중 **TS 쪽에서 실제로 부를 것들.**
+ *
+ * ## 왜 전부가 아닌가
+ *
+ * 파이썬 골든이 2,173 건인데 여기 본문이 있는 것은 그 일부다. 남는 수가 크게
+ * 벌어졌는데(500건 넘게), 그것을 전부 옮기는 것은 **같은 질문을 두 번 하는 일**이다 —
+ * 결속 러너가 이미 그 케이스들에서 borch.ts 커널을 지나므로 **값은 검증되고 있고**,
+ * 실제로 이번 묶음들의 셰이더 오류와 `mutate` 초과 복사를 잡은 것도 결속 러너였다.
+ *
+ * TS 케이스가 **추가로** 증명하는 것은 값이 아니라 **이 쪽 표면**이다 — `asStrided`
+ * 라는 이름이 그 자리에 있고 인자 순서가 그러한가. 그것은 값어치가 있지만 500 건에
+ * 걸릴 값어치는 아니고, 남는 것 중 상당수는 `borch.i0` 같은 **파이썬 이름 별칭**을
+ * 묻는 케이스라 옮기면 정말로 같은 질문이 두 번이 된다.
+ *
+ * 그래서 골랐다. 기준은 **TS 로 코드를 쓰는 사람이 이 이름을 부르는가**다.
+ *
+ * ## 입력이 문자 그대로인 것만
+ *
+ * 파이썬 쪽 케이스 몇은 입력을 `numpy.random.default_rng(0)` 로 만든다. 그 수열은
+ * 여기서 못 만들므로 그 케이스는 **안 옮긴다** — 비슷한 값으로 채우면 이름은 등록되고
+ * 답은 갈리는데, 그것은 결함을 알리는 것이 아니라 **없는 결함을 만드는 것**이다.
+ */
+function addRecent(out: Map<string, Case>): void {
+  // ── 비트·정수 (`bit::`) ─────────────────────────────────────────────
+  //
+  // 음수와 0 이 함께 있어야 한다 — 오른쪽 시프트가 산술인지, `gcd` 가 부호를 버리는지,
+  // `lcm(0, 7)` 이 0 으로 안 나누는지가 전부 여기 달렸다.
+  const ints = (): Tensor => Tensor.from([12, 10, -3, 0], [4], { dtype: "int64" });
+  const rhs = (): Tensor => Tensor.from([10, 3, 5, 7], [4], { dtype: "int64" });
+  for (const name of ["bitwise_and", "bitwise_or", "bitwise_xor",
+    "bitwise_left_shift", "bitwise_right_shift", "gcd", "lcm"]) {
+    out.set(`bit::${name}`, () => ints().binary(name, rhs()));
+  }
+
+  const reals = (): Tensor => Tensor.from([-2.5, 0.5, 1.5, 3.0], [4]);
+  out.set("bit::i0", () => reals().i0());
+  // 급수가 3.75 에서 갈린다 — 그 너머를 따로 묻는다.
+  out.set("bit::i0(큰 값)", () => Tensor.from([4.0, 8.0, 12.0], [3]).i0());
+  out.set("bit::nextafter", () =>
+    Tensor.from([1.0, 2.0], [2]).binary("nextafter", Tensor.from([2.0, 1.0], [2])));
+  const frexpIn = (): Tensor => Tensor.from([1.0, 0.5, 8.0, -3.0], [4]);
+  out.set("bit::frexp(가수)", () => frexpIn().frexp().mantissa);
+  out.set("bit::frexp(지수)", () => frexpIn().frexp().exponent);
+  const gam3 = (): Tensor => Tensor.from([2.0, 3.0, 4.5], [3]);
+  out.set("bit::mvlgamma(p=2)", () => gam3().mvlgamma(2));
+  out.set("bit::mvlgamma(p=3)", () => gam3().mvlgamma(3));
+
+  // **축을 가로로도 세로로도 묻는다** — 정사각이 아닌 것으로 물어야 축이 바뀌면
+  // 모양에서 먼저 걸린다.
+  const grid23 = (): Tensor => Tensor.from([1.0, 2.0, -1.0, 3.0, 4.0, 0.5], [2, 3]);
+  for (const dim of [0, 1]) {
+    out.set(`bit::logcumsumexp(dim=${dim})`, () => grid23().logcumsumexp(dim));
+  }
+
+  // 창 함수. **`periodic` 이 기본이고 그것이 길이를 하나 늘린다.**
+  const windows: [string, (n: number, p: boolean) => Tensor][] = [
+    ["bartlett_window", (n, p) => Tensor.bartlettWindow(n, p)],
+    ["blackman_window", (n, p) => Tensor.blackmanWindow(n, p)],
+    ["hamming_window", (n, p) => Tensor.hammingWindow(n, p)],
+    ["hann_window", (n, p) => Tensor.hannWindow(n, p)],
+    ["kaiser_window", (n, p) => Tensor.kaiserWindow(n, p)],
+  ];
+  for (const [name, make] of windows) {
+    for (const periodic of [true, false]) {
+      out.set(`bit::${name}(6, periodic=${periodic ? "True" : "False"})`,
+        () => make(6, periodic));
+    }
+    // 나누는 자리가 0 이 되는 유일한 크기.
+    out.set(`bit::${name}(1)`, () => make(1, true));
+  }
+  out.set("bit::hamming_window(alpha, beta)",
+    () => Tensor.hammingWindow(6, true, 0.5, 0.5));
+  out.set("bit::kaiser_window(beta=8)", () => Tensor.kaiserWindow(6, true, 8.0));
+
+  // ── 모양·색인 (`spot::`) ────────────────────────────────────────────
+  const grid = (): Tensor => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => i), [3, 4]);
+  const line = (): Tensor => Tensor.from(
+    Array.from({ length: 10 }, (_, i) => i), [10]);
+
+  out.set("spot::as_strided", () => grid().asStrided([2, 2], [1, 2]));
+  out.set("spot::as_strided(offset)", () => grid().asStrided([2, 2], [1, 2], 3));
+  // **겹치는 걸음.** 안 겹치면 한 칸을 두 번 읽는 자리가 없다.
+  out.set("spot::as_strided(겹침)", () => grid().asStrided([3, 3], [1, 1]));
+  out.set("spot::as_strided_scatter",
+    () => grid().asStridedScatter(Tensor.zeros([2, 2]), [2, 2], [1, 2], 3));
+
+  out.set("spot::select_scatter",
+    () => grid().selectScatter(Tensor.zeros([4]), 0, 1));
+  out.set("spot::slice_scatter",
+    () => grid().sliceScatter(Tensor.zeros([3, 2]), 1, 1, 3));
+  // **`step` 이 1 이 아니어야** 건너뛰는 자리를 안 건드리는지 드러난다.
+  out.set("spot::slice_scatter(step=2)",
+    () => grid().sliceScatter(Tensor.zeros([3, 2]), 1, 0, 4, 2));
+  // 길이가 offset 을 따라 변한다 — (3,4) 에서 0·1 은 셋이고 -1 은 둘이다.
+  for (const [offset, k] of [[-1, 2], [0, 3], [1, 3]] as const) {
+    out.set(`spot::diagonal_scatter(offset=${offset})`,
+      () => grid().diagonalScatter(Tensor.zeros([k]), offset));
+  }
+  // **배치 축이 있어야** 대각선 축이 맨 뒤로 가는 규약이 드러난다.
+  out.set("spot::diag_embed(2차)", () => grid().diagEmbed());
+
+  // **나머지를 앞에서부터 나눠 갖는다** — 10 을 4 로 쪼개면 3·3·2·2 다.
+  for (const k of [3, 4, 5]) {
+    out.set(`spot::tensor_split(${k})`, () => Tensor.cat(line().tensorSplit(k), 0));
+    // 이어 붙이면 어떻게 나눴는지가 사라진다. 조각 크기 자체를 묻는다.
+    out.set(`spot::tensor_split(${k}, 조각 크기)`,
+      () => Tensor.from(line().tensorSplit(k).map((p) => p.shape[0] ?? 0), [k]));
+  }
+  out.set("spot::split_with_sizes",
+    () => line().splitWithSizes([2, 3, 5])[1] ?? Tensor.zeros([0]));
+
+  const mask = (): Tensor => Tensor.from(
+    [1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0], [3, 4], { dtype: "bool" });
+  const feed = (): Tensor => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => 100 + i), [12]);
+  out.set("spot::masked_scatter", () => grid().maskedScatter(mask(), feed()));
+
+  // **번호가 겹친다** — 0 이 두 번 나온다. 여기서만 두 갈래가 갈린다.
+  const flatIdx = (): Tensor => Tensor.from([0, 0, 5], [3]);
+  const flatVal = (): Tensor => Tensor.from([-1.0, -2.0, -3.0], [3]);
+  for (const acc of [false, true]) {
+    out.set(`spot::put(accumulate=${acc ? "True" : "False"})`,
+      () => grid().put(flatIdx(), flatVal(), acc));
+    out.set(`spot::index_put(accumulate=${acc ? "True" : "False"})`,
+      () => grid().indexPut(
+        [Tensor.from([0, 1, 0], [3]), Tensor.from([1, 2, 1], [3])],
+        Tensor.from([10.0, 20.0, 30.0], [3]), acc));
+  }
+
+  // **밑판이 2.5 다.** 1 이면 곱하기에서 항등원이라 `include_self` 가 안 보인다.
+  const base34 = (): Tensor => Tensor.zeros([3, 4]).add(Tensor.full([], 2.5));
+  const dup34 = (): Tensor =>
+    Tensor.from([0, 0, 1, 2, 1, 1, 2, 3, 2, 2, 3, 0], [3, 4]);
+  for (const reduce of ["sum", "prod", "amax", "amin", "mean"]) {
+    for (const self of [true, false]) {
+      out.set(`spot::scatter_reduce(${reduce}, include_self=${self ? "True" : "False"})`,
+        () => base34().scatterReduce(1, dup34(), grid(), reduce, self));
+    }
+  }
+
+  // 첫 줄은 이미 작아서 **안 건드려야** 한다. 나머지 둘은 깎인다.
+  const tall32 = (): Tensor => Tensor.from([3, 4, 6, 8, 30, 40], [3, 2]);
+  for (const p of [1, 2, 3]) {
+    out.set(`spot::renorm(p=${p})`, () => tall32().renorm(p, 0, 5.0));
+  }
+  out.set("spot::renorm(dim=1)", () => tall32().renorm(2, 1, 5.0));
+
+  // **음수가 섞인 입력이다.** 거듭제곱으로 짜면 WGSL 의 `pow` 가 여기서 NaN 이 된다.
+  const trio = (): Tensor => Tensor.from([1.0, -2.0, 3.0], [3]);
+  out.set("spot::vander", () => Tensor.vander(trio()));
+  out.set("spot::vander(N=2)", () => Tensor.vander(trio(), 2));
+  out.set("spot::vander(increasing)", () => Tensor.vander(trio(), undefined, true));
+  out.set("spot::vander(N=5)", () => Tensor.vander(trio(), 5));
+  for (const offset of [-1, 0, 1]) {
+    out.set(`spot::tril_indices(offset=${offset})`,
+      () => Tensor.trilIndices(3, 4, offset));
+    out.set(`spot::triu_indices(offset=${offset})`,
+      () => Tensor.triuIndices(3, 4, offset));
+  }
+  out.set("spot::ger", () => trio().ger(Tensor.from([4.0, 5.0], [2])));
+  out.set("spot::mv", () => grid().mv(Tensor.from([1, 0, 0, 2], [4])));
+
+  // ── addmm 계열 (`blend::`) ──────────────────────────────────────────
+  //
+  // **`beta=0` 은 값만 안 보고 그래프에는 남는다.** 여기서는 값만 묻는다 — 기울기
+  // 쪽은 파이썬 케이스가 갖고 있다.
+  const m1 = (): Tensor => Tensor.from(
+    Array.from({ length: 6 }, (_, i) => i), [2, 3]);
+  const m2 = (): Tensor => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => i), [3, 4]);
+  const base24 = (): Tensor => Tensor.zeros([2, 4]).add(Tensor.full([], 10));
+  const b1 = (): Tensor => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => i), [2, 2, 3]);
+  const b2 = (): Tensor => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]);
+  const deep = (): Tensor => Tensor.zeros([2, 2, 4]).add(Tensor.full([], 10));
+  for (const [beta, alpha] of [[1, 1], [2, 3], [0, 1], [1, 0], [-1, 0.5]] as const) {
+    out.set(`blend::addmm(beta=${beta}, alpha=${alpha})`,
+      () => base24().addmm(m1(), m2(), beta, alpha));
+  }
+  // **NaN 을 넣어야** `input * 0` 으로 적은 것이 드러난다.
+  out.set("blend::addmm(beta=0, input=NaN)", () =>
+    Tensor.zeros([2, 4]).add(Tensor.full([], Number.NaN)).addmm(m1(), m2(), 0));
+  // **배치가 둘 이상이어야** 합치는 쪽과 지키는 쪽이 갈린다.
+  for (const [beta, alpha] of [[1, 1], [2, 3], [0, 1]] as const) {
+    out.set(`blend::addbmm(beta=${beta}, alpha=${alpha})`,
+      () => base24().addbmm(b1(), b2(), beta, alpha));
+    out.set(`blend::baddbmm(beta=${beta}, alpha=${alpha})`,
+      () => deep().baddbmm(b1(), b2(), beta, alpha));
+  }
+  const t0 = (): Tensor => Tensor.from([1, 2, 3, 4], [2, 2]);
+  const t1 = (): Tensor => Tensor.from([2, 3, 4, 5], [2, 2]);
+  const t2 = (): Tensor => Tensor.from([5, 2, 2, 4], [2, 2]);
+  for (const value of [1, 2, -1, 0]) {
+    out.set(`blend::addcmul(value=${value})`, () => t0().addcmul(t1(), t2(), value));
+    out.set(`blend::addcdiv(value=${value})`, () => t0().addcdiv(t1(), t2(), value));
+  }
+
+  // ── 최상위 선형대수 (`toplin::`) ────────────────────────────────────
+  //
+  // **인자 순서가 `linalg` 쪽과 뒤집혀 있다.** 그 자리를 TS 에서도 물어 둔다.
+  const spd = (): Tensor => Tensor.from([4, 2, 1, 2, 5, 3, 1, 3, 6], [3, 3]);
+  const tri = (): Tensor => Tensor.from([2, 0, 0, 1, 3, 0, 4, 2, 5], [3, 3]);
+  const rhs32 = (): Tensor => Tensor.from([1, 2, 3, 1, 2, 4], [3, 2]);
+  for (const upper of [false, true]) {
+    out.set(`toplin::cholesky_solve(upper=${upper ? "True" : "False"})`, async () => {
+      const low = await spd().cholesky();
+      return rhs32().choleskySolve(upper ? low.transpose() : low, upper);
+    });
+    out.set(`toplin::cholesky_inverse(upper=${upper ? "True" : "False"})`,
+      async () => {
+        const low = await spd().cholesky();
+        return (upper ? low.transpose() : low).choleskyInverse(upper);
+      });
+  }
+  for (const upper of [false, true]) {
+    for (const trans of [false, true]) {
+      for (const unit of [false, true]) {
+        out.set(
+          `toplin::triangular_solve(u=${upper ? "True" : "False"},` +
+          `t=${trans ? "True" : "False"},unit=${unit ? "True" : "False"})`,
+          async () => (await rhs32().triangularSolve(tri(), upper, trans, unit))
+            .solution);
+      }
+    }
+  }
+  // **`orgqr` 은 자른 Q 이고 `ormqr` 은 자르지 않은 Q 를 쓴다.** 세로로 긴 것으로
+  // 물어야 그 갈림이 보인다 — 정사각으로 재면 둘이 같다.
+  const tall = (): Tensor => Tensor.from([1, 2, 3, 4, 5, 6], [3, 2]);
+  const side = (): Tensor => Tensor.from([1, 0, 0, 1, 1, 1], [3, 2]);
+  out.set("toplin::orgqr", async () => {
+    const { a, tau } = await tall().geqrf();
+    return a.orgqr(tau);
+  });
+  for (const left of [true, false]) {
+    for (const trans of [true, false]) {
+      out.set(
+        `toplin::ormqr(left=${left ? "True" : "False"}, ` +
+        `transpose=${trans ? "True" : "False"})`,
+        async () => {
+          const { a, tau } = await tall().geqrf();
+          return a.ormqr(tau, left ? side() : side().transpose(), left, trans);
+        });
+    }
+  }
 }
 
 /**
