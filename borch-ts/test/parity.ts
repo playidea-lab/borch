@@ -22,6 +22,18 @@ function near(a: number, b: number, tol: number): boolean {
   return Math.abs(a - b) <= tol;
 }
 
+/** 던져야 하는 자리. **안 던지는 것이 실패다** — 조용히 지나가면 값이 틀린다. */
+function wantThrow(name: string, fragment: string, body: () => unknown): void {
+  try {
+    body();
+    want(name, false, "안 던졌다");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    want(name, message.includes(fragment),
+      message.includes(fragment) ? "" : `문구가 다르다: ${message}`);
+  }
+}
+
 function same(a: Float32Array, b: Float32Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
@@ -236,6 +248,32 @@ export async function report(): Promise<string> {
   noGrad(() => { bn.runningVar.fill_(5); });
   want("BatchNorm(1) 의 이동 통계가 전역 1 상수와 안 겹친다",
     (await Tensor.ones([1]).item()) === 1, `${await Tensor.ones([1]).item()}`);
+
+  // ── 씨앗을 직접 주는 역방향 ───────────────────────────────────────────
+  // 값이 맞는지는 골든이 진짜 torch 와 대조한다(`grad::vjp::*`, 결속 러너가 borch.ts 를
+  // 지난다). 여기서 묻는 것은 **TS 표면**이다 — 인자 차례와 거절 문구.
+  const leaf = keepAlive(Tensor.from([1, 2, 3], [3], { requiresGrad: true }));
+  const out = leaf.mul(leaf);
+  out.backward(Tensor.from([1, 10, 100], [3]));
+  // d(x²)/dx · v = 2x·v = [2, 40, 600]
+  want("씨앗을 준 역방향이 야코비안-벡터 곱을 낸다",
+    same(await leaf.grad!.toArray(), Float32Array.from([2, 40, 600])),
+    `${Array.from(await leaf.grad!.toArray()).join(",")}`);
+
+  wantThrow("씨앗 없이 비스칼라는 거절한다",
+    "grad can be implicitly created only for scalar outputs",
+    () => Tensor.from([1, 2], [2], { requiresGrad: true }).backward());
+  wantThrow("모양이 어긋난 씨앗을 거절한다", "Mismatch in shape",
+    () => Tensor.from([1, 2], [2], { requiresGrad: true })
+      .backward(Tensor.from([1, 2, 3], [3])));
+
+  // 둘째 자리가 `retainGraph` 다 — torch 의 인자 차례와 같다.
+  const twice = keepAlive(Tensor.from([2], [1], { requiresGrad: true }));
+  const held = twice.mul(twice);
+  held.backward(Tensor.from([1], [1]), true);
+  held.backward(Tensor.from([1], [1]), true);
+  want("둘째 자리가 retainGraph 다 — 두 번 흘리면 두 배",
+    (await twice.grad!.item()) === 8, `${await twice.grad!.item()}`);
 
   // ── 3. 난수 팩토리 ────────────────────────────────────────────────────
   const N = 4096;

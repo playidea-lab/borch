@@ -619,6 +619,38 @@ def grad_cases(inp=None):
     for which in ("x", "weight"):
         bn_grad_weighted(which)
 
+    # ── 씨앗을 직접 주는 역방향 (야코비안-벡터 곱) ────────────────────────
+    #
+    # `y.backward(v)` 는 `(∂y/∂x)ᵀ v` 를 준다. 위의 케이스들은 전부 `.sum()` 으로
+    # 접고 부르는데, 그것은 **v 가 전부 1 인 특수한 경우**다.
+    #
+    # **씨앗을 균일하게 두면 이 케이스가 아무것도 안 잰다.** `backward(ones)` 는
+    # `sum().backward()` 와 같은 답이라, 씨앗을 통째로 무시하는 구현도 통과한다.
+    # 그래서 여기서는 자리마다 다른 값을 준다.
+    #
+    # borch.ts 만 이것을 못 받고 있었다 — 첫 인자가 `retain_graph` 였다. 코어는
+    # 처음부터 받았고 골든이 안 물어서 그 갈림이 안 보였다.
+    def seeded_backward(name, fn, arr, shape_of, which="x", arr2=None):
+        def run(L, f=fn, a=arr, s=shape_of, w=which, b=arr2, n=name):
+            x = L.tensor(a, requires_grad=True)
+            args = [x] if b is None else [x, L.tensor(b, requires_grad=True)]
+            y = f(L, *args)
+            # 1, 2, 3 … 을 출력 모양으로 놓는다. 대칭이 없어야 씨앗이 실제로 쓰인다.
+            seed = np.arange(1, int(np.prod(s)) + 1, dtype=np.float32).reshape(s)
+            y.backward(L.tensor(seed))
+            return _grad_of(args[0] if w == "x" else args[1], n)
+        cases.append((f"grad::vjp::{name}", run))
+
+    seeded_backward("exp", lambda L, x: L.exp(x), x1, (6,))
+    seeded_backward("square", lambda L, x: x * x, x1, (6,))
+    seeded_backward("mul/a", lambda L, a, b: a * b, x1, (6,), "x", x1)
+    seeded_backward("mul/b", lambda L, a, b: a * b, x1, (6,), "b", x1)
+    # 출력 모양이 입력과 다른 자리. 씨앗의 모양을 출력에서 가져오는지가 여기서 갈린다.
+    seeded_backward("matmul", lambda L, x: L.matmul(x, x.t()), x2, (3, 3))
+    seeded_backward("reshape", lambda L, x: x.reshape(2, 3), x1, (2, 3))
+    # 스칼라에 씨앗을 주는 것도 torch 가 받는다 — 값이 그만큼 배가 된다.
+    seeded_backward("scalar", lambda L, x: (x * x).sum(), x1, ())
+
     return cases
 
 

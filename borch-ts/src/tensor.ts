@@ -5937,12 +5937,43 @@ export class Tensor implements Node<Tensor> {
    * @param retainGraph 참이면 그래프를 놓지 않는다. torch 와 같이 **기본은 놓는 것**이다 —
    *   중간 값들이 메모리를 붙들고 있어서, 안 놓으면 학습 루프에서 계속 쌓인다.
    */
-  backward(retainGraph = false): void {
-    if (this.size !== 1) {
-      throw new RuntimeError(
-        `${TORCH.nonScalarBackward}: 지금 모양은 [${this.shape}] 다 — ` +
-          ".sum() 을 먼저 불러라.",
-      );
+  /**
+   * 기울기를 흘린다.
+   *
+   * **인자 차례가 torch 와 같다** — `backward(gradient, retainGraph)`. 전에는 첫
+   * 자리가 `retainGraph` 였고, 그래서 `y.backward(onesLike(y))` 를 옮겨 적을 수가
+   * 없었다. 야코비안-벡터 곱을 부르는 흔한 줄인데다, **코어(numpy)는 처음부터 받고
+   * 있었다** — 셋 중 이쪽만 못 받았다.
+   *
+   * 첫 자리를 바꿔도 깨지는 호출부가 없었다. 저장소 어디에서도 `backward` 에 인자를
+   * 넘기지 않고 있었는데, 넘길 수 있는 것이 `retainGraph` 뿐이라 아무도 안 쓴 것이다.
+   *
+   * @param gradient 씨앗. 안 주면 스칼라에만 1 이 놓인다. 주면 **모양이 같아야
+   *   한다** — 브로드캐스팅으로 맞춰 주지 않는다. 어긋난 씨앗은 값이 그럴듯한 채로
+   *   틀린 기울기를 내고, 그것은 학습이 안 되는 것으로만 드러난다.
+   * @param retainGraph 그래프를 남겨 다시 흘릴 수 있게 한다.
+   */
+  backward(gradient?: Tensor, retainGraph = false): void {
+    let seed: Tensor;
+    if (gradient === undefined) {
+      if (this.size !== 1) {
+        throw new RuntimeError(
+          `${TORCH.nonScalarBackward}: 지금 모양은 [${this.shape}] 다 — ` +
+            "기울기를 넘기거나 .sum() 을 먼저 불러라.",
+        );
+      }
+      seed = Tensor.full([], 1);
+    } else {
+      if (gradient.shape.length !== this.shape.length
+        || gradient.shape.some((n, i) => n !== this.shape[i])) {
+        throw new RuntimeError(
+          `${TORCH.gradShape}: grad_output[0] has a shape of [${gradient.shape}] ` +
+            `and output[0] has a shape of [${this.shape}].`,
+        );
+      }
+      // **그래프를 끊어서 넣는다.** torch 의 기본이 `create_graph=False` 이고 이
+      // 테이프는 이중 미분을 안 한다 — 안 끊으면 잎의 `grad` 가 그래프를 물고 남는다.
+      seed = gradient.detach();
     }
     if (!this.requiresGrad) {
       throw new RuntimeError(
@@ -5950,11 +5981,12 @@ export class Tensor implements Node<Tensor> {
           "no_grad 안이었거나 흐름을 끊는 연산을 지났다.",
       );
     }
-    tapeBackward<Tensor>(this, Tensor.full([], 1), (a, b) => a.add(b), {
+    tapeBackward<Tensor>(this, seed, (a, b) => a.add(b), {
       retainGraph,
       onSecondPass: () => {
         throw new RuntimeError(
-          `${TORCH.secondBackward}. 다시 흘리려면 backward(true) 로 그래프를 남겨라.`,
+          `${TORCH.secondBackward}. 다시 흘리려면 ` +
+            "backward(undefined, true) 로 그래프를 남겨라.",
         );
       },
     });

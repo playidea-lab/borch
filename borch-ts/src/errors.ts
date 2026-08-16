@@ -71,6 +71,8 @@ export const TORCH = {
   // torch 는 "... but found at least two devices, cuda:0 and cpu!" 로 이어 붙인다.
   // 장치 이름은 자리마다 다르므로 앞머리만 여기 둔다.
   crossDevice: "Expected all tensors to be on the same device",
+  // 비스칼라 역방향에 어긋난 씨앗을 넘겼을 때. torch 는 뒤에 두 모양을 이어 붙인다.
+  gradShape: "Mismatch in shape",
   secondBackward:
     "Trying to backward through the graph a second time (or directly access " +
     "saved tensors after they have already been freed)",
