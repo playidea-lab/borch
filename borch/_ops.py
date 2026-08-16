@@ -5727,6 +5727,451 @@ def ctc_loss_aten(log_probs, targets, input_lengths, target_lengths, blank=0,
                     kinds[int(reduction)], zero_infinity)
 
 
+# ── 모양·색인 ───────────────────────────────────────────────────────────────
+#
+# **`as_strided` 는 torch 에서 뷰다.** 우리는 사본을 낸다.
+#
+# torch 는 저장소 하나를 여러 틀로 보는 구조라 `as_strided` 결과에 쓰면 원본이 바뀐다.
+# borch.ts 의 텐서는 GPU 버퍼를 **하나씩 가지므로** 그 뷰가 표현이 안 되고, 여기서만
+# 진짜 뷰를 내면 세 구현이 갈린다 — 값으로는 안 보이고 **쓸 때만** 보이는 갈림이라
+# 제일 나쁜 종류다. 셋 다 사본으로 맞춘다.
+#
+# 읽기만 하는 쓰임(창 내기, 대각선 훑기)은 그대로 돌고, 뷰에 쓰는 코드는 torch 에서도
+# 드물다. 대신 `as_strided_scatter` 가 "그 자리에 써 넣기" 를 제대로 한다.
+
+def _strided_flat(size, stride, offset):
+    """걸음이 가리키는 **평평한 번호표**를 만든다. 모양은 `size` 다."""
+    size = tuple(int(s) for s in size)
+    stride = tuple(int(s) for s in stride)
+    flat = _np.full(size, int(offset), dtype=_np.int64)
+    for axis, step in enumerate(stride):
+        shape = [1] * len(size)
+        shape[axis] = size[axis]
+        flat = flat + _np.arange(size[axis], dtype=_np.int64).reshape(shape) * step
+    return flat
+
+
+def as_strided(t, size, stride, storage_offset=0):
+    """평평한 저장소를 **다른 걸음으로** 읽는다. 겹쳐도 되고 건너뛰어도 된다."""
+    t = _wrap(t)
+    flat = _strided_flat(size, stride, storage_offset)
+    out = t.data.reshape(-1)[flat]
+
+    def back(g):
+        # 겹치는 자리로는 **쌓인다** — 한 칸을 두 번 읽었으면 기울기도 두 번 온다.
+        acc = _np.zeros(t.data.size, dtype=_np.asarray(g).dtype)
+        _np.add.at(acc, flat.reshape(-1), _np.asarray(g).reshape(-1))
+        return (acc.reshape(t.data.shape),)
+
+    return t._make(out, (t,), back, "AsStridedBackward0")
+
+
+def as_strided_(t, size, stride, storage_offset=0):
+    t = _wrap(t)
+    return t._inplace(lambda: as_strided(t, size, stride, storage_offset),
+                      "as_strided_")
+
+
+def _marks(shape):
+    """`shape` 짜리 판의 **평평한 번호표.** 어느 칸이 저장소 어디인가를 담는다."""
+    return _np.arange(int(_np.prod(shape)) if shape else 1,
+                      dtype=_np.int64).reshape(shape)
+
+
+def _scatter_into(t, src, spots, name):
+    """`t` 의 사본에서 `spots` 가 가리키는 **평평한 자리**에 `src` 를 넣는다.
+
+    `select_scatter`·`slice_scatter`·`diagonal_scatter`·`as_strided_scatter` 가
+    전부 이 꼴이고, 다른 것은 **어느 자리인가**뿐이다.
+
+    **쓰기와 되읽기가 같은 번호표를 쓴다.** 자리를 두 벌로 적으면 순방향은 맞는데
+    기울기만 어긋나는 자리가 생기고, 그 어긋남은 값이 그럴듯해서 안 보인다 —
+    대각선처럼 축 순서가 뒤집히는 자리가 특히 그렇다.
+    """
+    t, src = _wrap(t), _wrap(src)
+    flat = _np.asarray(spots).reshape(-1)
+    out = t.data.copy().reshape(-1)
+    out[flat] = _np.broadcast_to(_np.asarray(src.data),
+                                 _np.asarray(spots).shape).reshape(-1)
+    out = out.reshape(t.data.shape)
+
+    def back(g):
+        g = _np.asarray(g)
+        keep = _np.ones(t.data.size, dtype=g.dtype)
+        keep[flat] = 0.0
+        into = g.reshape(-1)[flat].reshape(_np.asarray(spots).shape)
+        return (g * keep.reshape(t.data.shape),
+                into.reshape(src.data.shape))
+
+    return t._make(out, (t, src), back, name)
+
+
+def as_strided_scatter(t, src, size, stride, storage_offset=0):
+    """`as_strided` 가 보던 자리에 **써 넣은 사본**을 낸다."""
+    return _scatter_into(t, src, _strided_flat(size, stride, storage_offset),
+                         "AsStridedScatterBackward0")
+
+
+def select_scatter(t, src, dim, index):
+    """`select` 가 꺼내던 한 장을 **갈아끼운 사본.**"""
+    spots = _marks(_wrap(t).data.shape)[(slice(None),) * dim + (int(index),)]
+    return _scatter_into(t, src, spots, "SelectScatterBackward0")
+
+
+def slice_scatter(t, src, dim=0, start=None, end=None, step=1):
+    """`x[..., start:end:step]` 자리를 **갈아끼운 사본.** `step` 이 요점이다 —
+    1 로만 재면 건너뛰는 자리를 아무도 안 본다."""
+    spots = _marks(_wrap(t).data.shape)[
+        (slice(None),) * dim + (slice(start, end, step),)]
+    return _scatter_into(t, src, spots, "SliceScatterBackward0")
+
+
+def diagonal_scatter(t, src, offset=0, dim1=0, dim2=1):
+    """대각선 자리를 **갈아끼운 사본.** `offset` 이 0 이 아니면 자리가 밀린다.
+
+    자리를 `_np.diagonal` 로 뽑는다 — 그쪽이 **대각선 축을 맨 뒤로 보내는** 규약을
+    갖고 있고 torch 도 같다. 손으로 색인을 짜면 배치 축이 있을 때 순서가 갈린다.
+    """
+    spots = _np.diagonal(_marks(_wrap(t).data.shape), offset=offset,
+                         axis1=dim1, axis2=dim2)
+    return _scatter_into(t, src, spots, "DiagonalScatterBackward0")
+
+
+def diag_embed(t, offset=0, dim1=-2, dim2=-1):
+    """마지막 축을 **대각선으로 펴서** 축을 하나 늘린다. `diagonal` 의 반대다."""
+    t = _wrap(t)
+    # `abs` 는 이 파일에서 **텐서 함수**다 — 파이썬 내장이 가려져 있다. `_np.abs` 가
+    # 이 파일의 규칙이고, 그것을 잊으면 `'int' object has no attribute 'abs'` 로 온다.
+    n = t.data.shape[-1] + int(_np.abs(offset))
+    rank = t.data.ndim + 1
+    d1, d2 = dim1 % rank, dim2 % rank
+    shape = list(t.data.shape[:-1])
+    for at in sorted((d1, d2)):
+        shape.insert(at, n)
+    out = _np.zeros(tuple(shape), dtype=t.data.dtype)
+    spots = _np.diagonal(_marks(out.shape), offset=offset, axis1=d1, axis2=d2)
+    out.reshape(-1)[_np.asarray(spots).reshape(-1)] = t.data.reshape(-1)
+
+    def back(g):
+        g = _np.asarray(g)
+        return (g.reshape(-1)[_np.asarray(spots).reshape(-1)]
+                .reshape(t.data.shape),)
+
+    return t._make(out, (t,), back, "DiagEmbedBackward0")
+
+
+def tensor_split(t, indices_or_sections, dim=0):
+    """**나머지를 앞에서부터 나눠 갖는다.** 10 을 4 로 쪼개면 3·3·2·2 다(실측).
+
+    `chunk` 와 다르다 — 그쪽은 앞을 크게 채우고 마지막이 남는 것을 받는다. 나눠
+    떨어지는 크기로만 재면 두 함수가 같아 보인다.
+    """
+    t = _wrap(t)
+    if isinstance(indices_or_sections, (list, tuple)):
+        return tuple(_wrap(p) for p in
+                     _split_at(t, list(indices_or_sections), dim))
+    k = int(indices_or_sections)
+    n = t.data.shape[dim]
+    base, extra = divmod(n, k)
+    cuts, at = [], 0
+    for i in range(k - 1):
+        at += base + (1 if i < extra else 0)
+        cuts.append(at)
+    return tuple(_wrap(p) for p in _split_at(t, cuts, dim))
+
+
+def _split_at(t, cuts, dim):
+    """자르는 **자리 목록**으로 쪼갠다. 각 조각이 기울기를 제 자리로 되돌린다."""
+    out, prev = [], 0
+    for stop in list(cuts) + [t.data.shape[dim]]:
+        out.append(narrow(t, dim, prev, max(0, stop - prev)))
+        prev = stop
+    return out
+
+
+def split_with_sizes(t, split_sizes, dim=0):
+    """조각 **크기 목록**으로 쪼갠다. `split` 이 목록을 받는 꼴과 같은 것이다."""
+    t = _wrap(t)
+    cuts, at = [], 0
+    for s in list(split_sizes)[:-1]:
+        at += int(s)
+        cuts.append(at)
+    return tuple(_split_at(t, cuts, dim))
+
+
+def unravel_index(indices, shape):
+    """평평한 번호를 축별 번호로 푼다. **축마다 텐서 하나씩, 묶음으로 낸다**(실측)."""
+    idx = _as_index(indices)
+    return tuple(Tensor(part.astype(_np.int64))
+                 for part in _np.unravel_index(idx, tuple(int(s) for s in shape)))
+
+
+def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None):
+    """**이어진** 중복만 줄인다. `unique` 와 달리 정렬하지 않는다 — `[1,1,2,2,1]`
+    이 `[1,2,1]` 이 된다(실측). 정렬된 입력으로만 재면 둘이 같아 보인다."""
+    t = _wrap(t)
+    data = t.data
+    if dim is None:
+        flat = data.reshape(-1)
+        keep = _np.ones(flat.shape[0], dtype=bool)
+        keep[1:] = flat[1:] != flat[:-1]
+    else:
+        moved = _np.moveaxis(data, dim, 0)
+        rows = moved.reshape(moved.shape[0], -1)
+        keep = _np.ones(rows.shape[0], dtype=bool)
+        keep[1:] = _np.any(rows[1:] != rows[:-1], axis=1)
+    starts = _np.flatnonzero(keep)
+    groups = _np.cumsum(keep) - 1
+    values = (Tensor(flat[keep]) if dim is None
+              else Tensor(_np.moveaxis(_np.moveaxis(data, dim, 0)[keep], 0, dim)))
+    if not return_inverse and not return_counts:
+        return values
+    out = [values]
+    if return_inverse:
+        shape = data.shape if dim is None else (data.shape[dim],)
+        out.append(Tensor(groups.reshape(shape).astype(_np.int64)))
+    if return_counts:
+        edges = _np.append(starts, keep.shape[0])
+        out.append(Tensor(_np.diff(edges).astype(_np.int64)))
+    return tuple(out)
+
+
+def masked_scatter(t, mask, source):
+    """가면이 참인 자리에 `source` 를 **평평한 차례대로** 채운다.
+
+    자리마다 어느 값이 오는지가 요점이다 — 참인 자리 수만큼 앞에서부터 가져온다.
+    모양이 맞는 원천으로만 재면 그 차례가 안 드러난다.
+    """
+    t, source = _wrap(t), _wrap(source)
+    m = _np.broadcast_to(_np.asarray(mask.data if isinstance(mask, Tensor)
+                                     else mask).astype(bool), t.data.shape)
+    out = t.data.copy()
+    out[m] = _np.asarray(source.data).reshape(-1)[:int(m.sum())]
+
+    def back(g):
+        g = _np.asarray(g)
+        into = _np.zeros(source.data.size, dtype=g.dtype)
+        into[:int(m.sum())] = g[m]
+        return (g * (~m), into.reshape(source.data.shape))
+
+    return t._make(out, (t, source), back, "MaskedScatterBackward0")
+
+
+def masked_scatter_(t, mask, source):
+    t = _wrap(t)
+    return t._inplace(lambda: masked_scatter(t, mask, source), "masked_scatter_")
+
+
+def index_put(t, indices, values, accumulate=False):
+    """축마다 번호 텐서를 하나씩 받아 그 자리에 넣는다.
+
+    **번호가 겹칠 때 갈린다** — `accumulate` 면 쌓이고, 아니면 마지막에 쓴 것이
+    남는다. 안 겹치는 번호로 재면 두 갈래가 같은 답을 낸다.
+    """
+    t, values = _wrap(t), _wrap(values)
+    where = tuple(_as_index(i) for i in indices)
+    out = t.data.copy()
+    if accumulate:
+        _np.add.at(out, where, _np.asarray(values.data))
+    else:
+        out[where] = _np.asarray(values.data)
+
+    def back(g):
+        g = _np.asarray(g)
+        into = g[where]
+        if accumulate:
+            return (g, into)
+        keep = _np.ones(t.data.shape, dtype=g.dtype)
+        keep[where] = 0.0
+        return (g * keep, into)
+
+    return t._make(out, (t, values), back, "IndexPutBackward0")
+
+
+def index_put_(t, indices, values, accumulate=False):
+    t = _wrap(t)
+    return t._inplace(lambda: index_put(t, indices, values, accumulate),
+                      "index_put_")
+
+
+def put(t, index, source, accumulate=False):
+    """**평평하게 펴서** 번호대로 넣는다 — 축이라는 개념이 없다. `take` 의 반대다."""
+    t, source = _wrap(t), _wrap(source)
+    idx = _as_index(index).reshape(-1)
+    out = t.data.copy().reshape(-1)
+    if accumulate:
+        _np.add.at(out, idx, _np.asarray(source.data).reshape(-1))
+    else:
+        out[idx] = _np.asarray(source.data).reshape(-1)
+    out = out.reshape(t.data.shape)
+
+    def back(g):
+        g = _np.asarray(g)
+        into = g.reshape(-1)[idx].reshape(source.data.shape)
+        if accumulate:
+            return (g, into)
+        keep = _np.ones(t.data.size, dtype=g.dtype)
+        keep[idx] = 0.0
+        return (g * keep.reshape(t.data.shape), into)
+
+    return t._make(out, (t, source), back, "PutBackward0")
+
+
+# 줄이며 넣는 것들의 셈법. `include_self` 가 **원래 값을 첫 항으로 넣는가**다.
+_REDUCE_OPS = {
+    "sum": (0.0, _np.add),
+    "prod": (1.0, _np.multiply),
+    "amax": (-_np.inf, _np.maximum),
+    "amin": (_np.inf, _np.minimum),
+}
+
+
+def _reduce_into(out, where, values, reduce, include_self):
+    """`out[where]` 에 `values` 를 `reduce` 로 합친다. 자리가 겹치면 쌓인다."""
+    if reduce == "mean":
+        total = _np.zeros(out.shape, dtype=out.dtype)
+        count = _np.zeros(out.shape, dtype=out.dtype)
+        _np.add.at(total, where, values)
+        _np.add.at(count, where, _np.ones_like(values))
+        touched = count > 0
+        if include_self:
+            total = total + out
+            count = count + 1.0
+        # **안 닿은 자리는 그대로다.** 0 으로 나누지 않도록 그 자리를 갈라 둔다.
+        merged = _np.where(touched, total / _np.where(count == 0, 1.0, count), out)
+        out[...] = merged
+        return
+    start, op = _REDUCE_OPS[reduce]
+    acc = _np.full(out.shape, start, dtype=out.dtype)
+    op.at(acc, where, values)
+    touched = _np.zeros(out.shape, dtype=bool)
+    _np.logical_or.at(touched, where, True)
+    if include_self:
+        acc = op(acc, out)
+    out[...] = _np.where(touched, acc, out)
+
+
+def index_reduce(t, dim, index, source, reduce, include_self=True):
+    """번호가 가리키는 **줄**을 합친다. `include_self` 가 원래 값을 첫 항으로 넣는다.
+
+    **더하기·곱하기로만 재면 그 깃발이 안 보인다** — 1 로 채운 판에 곱하기를 하면
+    켜나 끄나 같은 답이다(실측). 평균과 최소가 그 갈림을 보여 준다.
+    """
+    t, source = _wrap(t), _wrap(source)
+    out = t.data.copy()
+    where = (slice(None),) * dim + (_as_index(index),)
+    _reduce_into(out, where, _np.asarray(source.data), reduce, include_self)
+    return Tensor(out)
+
+
+def scatter_reduce(t, dim, index, src, reduce, include_self=True):
+    """`scatter` 와 같은 자리지만 **덮어쓰는 대신 합친다.**
+
+    `sum`·`prod`·`amax`·`amin`·`mean` 이고, `mean` 은 `include_self` 면 원래 값도
+    한 항으로 세어 나눈다(실측).
+    """
+    t, src = _wrap(t), _wrap(src)
+    idx = _as_index(index)
+    out = t.data.copy()
+    grid = _np.indices(idx.shape)
+    where = list(grid)
+    where[dim] = idx
+    _reduce_into(out, tuple(where), _np.asarray(src.data), reduce, include_self)
+    return Tensor(out)
+
+
+def renorm(t, p, dim, maxnorm):
+    """`dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.
+
+    이미 작은 조각은 **안 건드린다** — 전부 크게 만들면 그 조건이 안 드러난다.
+
+    **배율이 상수가 아니다.** `x` 가 배율 안에도 들어 있어서, 기울기를 `g·s` 로만
+    적으면 순방향은 맞고 역방향만 틀린다 — 값이 그럴듯해서 안 보이는 자리다.
+    깎인 조각에서만 갈리므로, 전부 작은 입력으로 재면 그것도 안 드러난다.
+    """
+    t = _wrap(t)
+    x = t.data
+    axes = tuple(a for a in range(x.ndim) if a != (dim % x.ndim))
+    norms = _np.sum(_np.abs(x) ** p, axis=axes, keepdims=True) ** (1.0 / p)
+    # torch 는 0 으로 나누지 않으려고 아주 작은 수를 더한다.
+    cut = norms > maxnorm
+    scale = _np.where(cut, maxnorm / (norms + 1e-7), 1.0)
+
+    def back(g):
+        g = _np.asarray(g)
+        # `∂n/∂x = n^(1-p)·|x|^(p-1)·sign(x)`, `∂s/∂x = -M/(n+ε)²·∂n/∂x`.
+        dn = norms ** (1.0 - p) * _np.abs(x) ** (p - 1) * _np.sign(x)
+        ds = _np.where(cut, -maxnorm / (norms + 1e-7) ** 2 * dn, 0.0)
+        dot = _np.sum(g * x, axis=axes, keepdims=True)
+        return (g * scale + dot * ds,)
+
+    return t._make(x * scale, (t,), back, "RenormBackward0")
+
+
+def cartesian_prod(*tensors):
+    """모든 짝. **하나만 주면 그냥 그것이다**(실측) — 1차원으로 남는다."""
+    arrays = [_wrap(a).data.reshape(-1) for a in tensors]
+    if len(arrays) == 1:
+        return Tensor(arrays[0].copy())
+    mesh = _np.meshgrid(*arrays, indexing="ij")
+    return Tensor(_np.stack([m.reshape(-1) for m in mesh], axis=1))
+
+
+def combinations(t, r=2, with_replacement=False):
+    """`r` 개씩 고른 조합. **순서는 없고**, 중복 허용이 따로 있다."""
+    from itertools import combinations as _comb, combinations_with_replacement
+
+    flat = _wrap(t).data.reshape(-1)
+    pick = combinations_with_replacement if with_replacement else _comb
+    rows = [list(c) for c in pick(range(flat.shape[0]), r)]
+    if not rows:
+        return Tensor(_np.zeros((0, r), dtype=flat.dtype))
+    return Tensor(flat[_np.asarray(rows, dtype=_np.int64)])
+
+
+def tril_indices(row, col, offset=0):
+    """아래 삼각의 자리들. **`(2, 개수)` 짜리 int64 표다**(실측) — 자리 쌍이 아니라
+    행 줄과 열 줄로 나뉘어 온다."""
+    r, c = _np.tril_indices(int(row), int(offset), int(col))
+    return Tensor(_np.stack([r, c]).astype(_np.int64))
+
+
+def triu_indices(row, col, offset=0):
+    r, c = _np.triu_indices(int(row), int(offset), int(col))
+    return Tensor(_np.stack([r, c]).astype(_np.int64))
+
+
+def vander(x, N=None, increasing=False):
+    """판데르몬드 행렬. **기본은 차수가 줄어드는 쪽이다** — 마지막 열이 1 이다(실측)."""
+    x = _wrap(x)
+    n = x.data.shape[0] if N is None else int(N)
+    powers = _np.arange(n, dtype=_np.float64)
+    if not increasing:
+        powers = powers[::-1]
+    out = x.data.reshape(-1, 1).astype(_np.float64) ** powers.reshape(1, -1)
+    return Tensor(out.astype(x.data.dtype))
+
+
+def chain_matmul(*matrices):
+    """여러 행렬을 잇달아 곱한다. `linalg.multi_dot` 이 같은 것을 목록으로 받는다."""
+    mats = list(matrices[0]) if len(matrices) == 1 and \
+        isinstance(matrices[0], (list, tuple)) else list(matrices)
+    out = _wrap(mats[0])
+    for m in mats[1:]:
+        out = matmul(out, _wrap(m))
+    return out
+
+
+def ger(a, b):
+    """바깥곱의 옛 이름. `outer` 와 같은 것이다."""
+    return outer(a, b)
+
+
+def mv(mat, vec):
+    """행렬 × 벡터. `matmul` 이 하는 일이지만 torch 는 이름을 따로 준다."""
+    return matmul(_wrap(mat), _wrap(vec))
+
+
 # ================================================================ 이름 잇기
 #
 # **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
@@ -5764,6 +6209,14 @@ _AS_METHOD = (
     "nextafter", "frexp", "logcumsumexp", "mvlgamma", "i0",
     # `fill` 은 여기 없다 — torch 는 최상위에만 두고 메서드로는 `fill_` 만 준다.
     "clamp_max", "clamp_min", "detach_",
+    # 모양·색인. `unravel_index`·`cartesian_prod`·`combinations`·`tril_indices`
+    # ·`triu_indices`·`vander`·`chain_matmul` 은 여기 없다 — torch 가 그것들은
+    # 최상위에만 두기 때문이다.
+    "as_strided", "as_strided_", "as_strided_scatter", "diag_embed",
+    "diagonal_scatter", "select_scatter", "slice_scatter", "split_with_sizes",
+    "tensor_split", "unique_consecutive",
+    "index_put", "index_put_", "index_reduce", "masked_scatter",
+    "masked_scatter_", "put", "renorm", "scatter_reduce", "ger", "mv",
 )
 
 

@@ -918,6 +918,295 @@ def bit_cases(inp=None):
     return cases
 
 
+SPOT_PREFIX = "spot::"
+
+
+def shape_index_cases(inp=None):
+    """모양·색인. 저장소의 **어느 칸을 볼 것인가**를 묻는 이름들.
+
+    ## `as_strided` 는 torch 에서 뷰이고 우리는 사본이다
+
+    torch 는 저장소 하나를 여러 틀로 보므로 그 결과에 쓰면 원본이 바뀐다. borch.ts 의
+    텐서는 GPU 버퍼를 하나씩 가져서 그 뷰가 표현이 안 되고, 코어만 진짜 뷰를 내면 세
+    구현이 갈린다 — **값으로는 안 보이고 쓸 때만 보이는** 갈림이라 제일 나쁘다. 셋 다
+    사본으로 맞췄고, 그래서 여기 케이스는 **읽기만** 묻는다. 쓰는 쪽은
+    `as_strided_scatter` 가 맡는다.
+
+    ## 무엇을 물어야 갈리는가
+
+    - **겹치는 걸음**을 물어야 기울기가 쌓이는지 보인다. 안 겹치는 걸음으로만 재면
+      한 칸에 한 번씩 오므로 쌓기를 빼먹어도 통과한다.
+    - **`step`** 이 1 이 아니어야 `slice_scatter` 가 건너뛰는 자리를 안 건드리는지
+      드러난다.
+    - **`offset`** 이 0 이 아니어야 `diagonal_scatter`·`diag_embed` 의 밀림이 보인다.
+    - **배치 축**이 있어야 대각선이 맨 뒤로 가는 규약이 드러난다. 2차원으로만 재면
+      남는 축이 없어 순서를 못 묻는다.
+    - **나눠떨어지지 않는 크기**여야 `tensor_split` 이 나머지를 앞에서부터 나눠 갖는
+      것이 보인다. 떨어지는 크기로 재면 `chunk` 와 같은 함수처럼 보인다.
+    - **겹치는 번호**여야 `index_put`·`put` 의 `accumulate` 두 갈래가 갈린다.
+    - **항등원이 아닌 밑판**이어야 `include_self` 가 보인다. 1 로 채운 판에 곱하기를
+      하면 켜나 끄나 같은 답이다(실측).
+    - **이미 작은 조각**이 섞여야 `renorm` 이 안 건드리는 조건이 드러난다. 그리고
+      **깎인 조각의 기울기**를 물어야 배율 안에 `x` 가 들어 있다는 것이 보인다 —
+      순방향만으로는 `g·s` 로 적은 틀린 역방향이 통과한다.
+    """
+    grid = np.arange(12, dtype=np.float32).reshape(3, 4)
+    line = np.arange(10, dtype=np.float32)
+    trio = np.array([1.0, -2.0, 3.0], dtype=np.float32)
+    duo = np.array([4.0, 5.0], dtype=np.float32)
+    # **고르지 않은 무게.** 전부 1 이면 자리마다 다른 몫이 상쇄되어 안 보인다.
+    weight = np.array([[1.0, 2.0, 0.5, 3.0], [2.0, 0.5, 1.5, 1.0],
+                       [0.25, 3.0, 2.0, 0.75]], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((SPOT_PREFIX + name, fn))
+
+    def grad(name, fn, w=weight):
+        def run(L, f=fn, n=name):
+            x = L.tensor(grid.copy(), requires_grad=True)
+            out = f(L, x)
+            (out * L.tensor(np.asarray(w, dtype=np.float32).reshape(
+                tuple(out.shape)))).sum().backward()
+            return _grad_of(x, n)
+
+        cases.append((SPOT_PREFIX + f"grad::{name}", run))
+
+    # ── 걸음 ────────────────────────────────────────────────────────────
+    add("as_strided", lambda L: L.as_strided(L.tensor(grid), (2, 2), (1, 2)))
+    add("as_strided(offset)",
+        lambda L: L.as_strided(L.tensor(grid), (2, 2), (1, 2), 3))
+    add("as_strided(겹침)",
+        lambda L: L.as_strided(L.tensor(grid), (3, 3), (1, 1)))
+    grad("as_strided", lambda L, x: L.as_strided(x, (3, 4), (1, 3)))
+    # 겹치는 걸음의 기울기 — 한 칸으로 여러 번 온다.
+    grad("as_strided(겹침)", lambda L, x: L.as_strided(x, (3, 3), (1, 1)),
+         np.arange(1, 10, dtype=np.float32).reshape(3, 3))
+
+    def as_strided_in_place(L):
+        """**모양까지 따라가야 한다.** 값만 옮기면 정사각으로 물었을 때만 통과한다."""
+        x = L.tensor(grid.copy())
+        got = L.as_strided_(x, (2, 3), (1, 2))
+        return f"{got is x} {tuple(x.shape)}"
+
+    add("제자리::as_strided_", as_strided_in_place)
+
+    add("as_strided_scatter",
+        lambda L: L.as_strided_scatter(L.tensor(grid), L.zeros(2, 2),
+                                       (2, 2), (1, 2), 3))
+
+    # ── 갈아끼우기 ──────────────────────────────────────────────────────
+    add("select_scatter",
+        lambda L: L.select_scatter(L.tensor(grid), L.zeros(4), 0, 1))
+    add("slice_scatter",
+        lambda L: L.slice_scatter(L.tensor(grid), L.zeros(3, 2), 1, 1, 3))
+    add("slice_scatter(step=2)",
+        lambda L: L.slice_scatter(L.tensor(grid), L.zeros(3, 2), 1, 0, 4, 2))
+    # **길이가 offset 을 따라 변한다.** (3,4) 에서 0·1 은 세 칸이고 -1 은 두 칸이다 —
+    # 셋 다 세 칸으로 주면 torch 가 그 자리에서 거절한다.
+    for off, k in ((-1, 2), (0, 3), (1, 3)):
+        add(f"diagonal_scatter(offset={off})",
+            lambda L, o=off, n=k: L.diagonal_scatter(L.tensor(grid),
+                                                     L.zeros(n), o))
+    grad("select_scatter", lambda L, x: L.select_scatter(x, L.zeros(4), 0, 1))
+    grad("slice_scatter",
+         lambda L, x: L.slice_scatter(x, L.zeros(3, 2), 1, 0, 4, 2))
+    grad("diagonal_scatter",
+         lambda L, x: L.diagonal_scatter(x, L.zeros(3), 1))
+
+    def scatter_src_grad(name, fn, src, w=weight):
+        """넣은 값 쪽 기울기. **넣은 자리로만** 흘러야 한다."""
+        def run(L, f=fn, s=src, n=name):
+            v = L.tensor(np.asarray(s, dtype=np.float32), requires_grad=True)
+            out = f(L, L.tensor(grid), v)
+            (out * L.tensor(np.asarray(w, dtype=np.float32).reshape(
+                tuple(out.shape)))).sum().backward()
+            return _grad_of(v, n)
+
+        cases.append((SPOT_PREFIX + f"grad(넣는 값)::{name}", run))
+
+    scatter_src_grad("select_scatter",
+                     lambda L, t, v: L.select_scatter(t, v, 0, 1), np.ones(4))
+    scatter_src_grad("diagonal_scatter",
+                     lambda L, t, v: L.diagonal_scatter(t, v, 1), np.ones(3))
+    scatter_src_grad("as_strided_scatter",
+                     lambda L, t, v: L.as_strided_scatter(t, v, (2, 2),
+                                                          (1, 2), 3),
+                     np.ones((2, 2)))
+
+    # ── diag_embed ─────────────────────────────────────────────────────
+    for off in (-1, 0, 1):
+        add(f"diag_embed(1차, offset={off})",
+            lambda L, o=off: L.diag_embed(L.tensor(trio), o))
+    # **배치 축이 있어야** 대각선 축이 맨 뒤로 가는 규약이 드러난다.
+    add("diag_embed(2차)", lambda L: L.diag_embed(L.tensor(grid)))
+    add("diag_embed(dim1=0, dim2=1)",
+        lambda L: L.diag_embed(L.tensor(grid), 0, 0, 1))
+    grad("diag_embed", lambda L, x: L.diag_embed(x),
+         np.arange(1, 49, dtype=np.float32).reshape(3, 4, 4))
+
+    # ── 쪼개기 ──────────────────────────────────────────────────────────
+    for k in (3, 4, 5):
+        # 10 을 4 로 쪼개면 3·3·2·2 다 — 나머지를 **앞에서부터** 나눠 갖는다.
+        add(f"tensor_split({k})",
+            lambda L, n=k: L.cat(list(L.tensor_split(L.tensor(line), n))))
+        # **조각 크기 자체를 묻는다.** 이어 붙이면 나머지를 어떻게 나눴는지가
+        # 사라진다 — 3·3·2·2 든 2·2·3·3 이든 이어 붙인 값은 같다.
+        add(f"tensor_split({k}, 조각 크기)",
+            lambda L, n=k: L.tensor(np.asarray(
+                [float(p.shape[0]) for p in L.tensor_split(L.tensor(line), n)],
+                dtype=np.float32)))
+    add("tensor_split(자리 목록)",
+        lambda L: L.cat(list(L.tensor_split(L.tensor(line), (2, 5)))))
+    add("tensor_split(dim=1)",
+        lambda L: L.tensor_split(L.tensor(grid), 3, dim=1)[1])
+    add("split_with_sizes",
+        lambda L: L.split_with_sizes(L.tensor(line), [2, 3, 5])[1])
+    # (3,4) 를 3 으로 쪼개면 2·1·1 이라 가운데 조각이 (3,1) 이다.
+    grad("tensor_split", lambda L, x: L.tensor_split(x, 3, dim=1)[1],
+         np.array([[1.0], [3.0], [5.0]], dtype=np.float32))
+
+    # ── 번호 풀기·이어진 중복 ────────────────────────────────────────────
+    add("unravel_index",
+        lambda L: L.cat(L.unravel_index(
+            L.tensor(np.array([0, 5, 11], dtype=np.int64)), (3, 4))))
+    runs = np.array([1, 1, 2, 2, 2, 1, 3], dtype=np.int64)
+    add("unique_consecutive",
+        lambda L: L.unique_consecutive(L.tensor(runs)))
+    add("unique_consecutive(inverse)",
+        lambda L: L.unique_consecutive(L.tensor(runs), return_inverse=True)[1])
+    add("unique_consecutive(counts)",
+        lambda L: L.unique_consecutive(L.tensor(runs), return_counts=True)[1])
+    rows = np.array([[1, 1], [1, 1], [1, 2], [3, 3]], dtype=np.int64)
+    add("unique_consecutive(dim=0)",
+        lambda L: L.unique_consecutive(L.tensor(rows), dim=0))
+    add("unique_consecutive(dim=0, counts)",
+        lambda L: L.unique_consecutive(L.tensor(rows), return_counts=True,
+                                       dim=0)[1])
+
+    # ── 가면·평평한 넣기 ────────────────────────────────────────────────
+    mask = np.array([[True, False, True, False],
+                     [False, True, False, True],
+                     [True, True, False, False]])
+    feed = np.arange(100, 112, dtype=np.float32)
+    add("masked_scatter",
+        lambda L: L.masked_scatter(L.tensor(grid), L.tensor(mask),
+                                   L.tensor(feed)))
+    grad("masked_scatter",
+         lambda L, x: L.masked_scatter(x, L.tensor(mask), L.tensor(feed)))
+    scatter_src_grad("masked_scatter",
+                     lambda L, t, v: L.masked_scatter(t, L.tensor(mask), v),
+                     feed)
+
+    def masked_scatter_in_place(L):
+        """**메서드로만 있다** — `torch.masked_scatter_` 라는 최상위 이름은 없다."""
+        x = L.tensor(grid.copy())
+        got = x.masked_scatter_(L.tensor(mask), L.tensor(feed))
+        return f"{got is x} {float(x[0, 0].item())}"
+
+    add("제자리::masked_scatter_", masked_scatter_in_place)
+
+    # **번호가 겹친다** — 0 이 두 번 나온다. 여기서만 두 갈래가 갈린다.
+    flat_idx = np.array([0, 0, 5], dtype=np.int64)
+    flat_val = np.array([-1.0, -2.0, -3.0], dtype=np.float32)
+    for acc in (False, True):
+        add(f"put(accumulate={acc})",
+            lambda L, a=acc: L.put(L.tensor(grid), L.tensor(flat_idx),
+                                   L.tensor(flat_val), a))
+    grad("put", lambda L, x: L.put(x, L.tensor(flat_idx), L.tensor(flat_val)))
+
+    rowsi = np.array([0, 1, 0], dtype=np.int64)
+    colsi = np.array([1, 2, 1], dtype=np.int64)
+    vals = np.array([10.0, 20.0, 30.0], dtype=np.float32)
+    for acc in (False, True):
+        add(f"index_put(accumulate={acc})",
+            lambda L, a=acc: L.index_put(
+                L.tensor(grid), (L.tensor(rowsi), L.tensor(colsi)),
+                L.tensor(vals), a))
+    grad("index_put",
+         lambda L, x: L.index_put(x, (L.tensor(rowsi), L.tensor(colsi)),
+                                  L.tensor(vals)))
+
+    def index_put_in_place(L):
+        x = L.tensor(grid.copy())
+        got = L.index_put_(x, (L.tensor(rowsi), L.tensor(colsi)), L.tensor(vals))
+        return f"{got is x} {float(x[0, 1].item())}"
+
+    add("제자리::index_put_", index_put_in_place)
+
+    # ── 줄이며 넣기 ─────────────────────────────────────────────────────
+    #
+    # **밑판이 2.5 다.** 1 이면 곱하기에서 항등원이라 `include_self` 가 안 보이고,
+    # 0 이면 더하기에서 같은 일이 난다.
+    base = np.full((3, 4), 2.5, dtype=np.float32)
+    lines = np.array([0, 0, 2], dtype=np.int64)
+    # `index_reduce` 에 `sum` 은 없다 — 그 자리는 `index_add` 다(실측).
+    for red in ("prod", "mean", "amax", "amin"):
+        for inc in (True, False):
+            add(f"index_reduce({red}, include_self={inc})",
+                lambda L, r=red, s=inc: L.index_reduce(
+                    L.tensor(base), 0, L.tensor(lines), L.tensor(grid), r,
+                    include_self=s))
+    dup = np.array([[0, 0, 1, 2], [1, 1, 2, 3], [2, 2, 3, 0]], dtype=np.int64)
+    for red in ("sum", "prod", "amax", "amin", "mean"):
+        for inc in (True, False):
+            add(f"scatter_reduce({red}, include_self={inc})",
+                lambda L, r=red, s=inc: L.scatter_reduce(
+                    L.tensor(base), 1, L.tensor(dup), L.tensor(grid), r,
+                    include_self=s))
+
+    # ── renorm ─────────────────────────────────────────────────────────
+    #
+    # 첫 줄은 이미 작아서 **안 건드려야** 한다. 나머지 둘은 깎인다.
+    tall = np.array([[3.0, 4.0], [6.0, 8.0], [30.0, 40.0]], dtype=np.float32)
+    for p in (1, 2, 3):
+        add(f"renorm(p={p})",
+            lambda L, q=p: L.renorm(L.tensor(tall), q, 0, 5.0))
+    add("renorm(dim=1)", lambda L: L.renorm(L.tensor(tall), 2, 1, 5.0))
+    # **깎인 줄의 기울기.** 배율 안에 x 가 있어서 `g·s` 로 적으면 여기서 갈린다.
+    grad("renorm", lambda L, x: L.renorm(x, 2, 0, 5.0))
+
+    # ── 조합·만들기 ─────────────────────────────────────────────────────
+    add("cartesian_prod(둘)",
+        lambda L: L.cartesian_prod(L.tensor(trio), L.tensor(duo)))
+    add("cartesian_prod(하나)", lambda L: L.cartesian_prod(L.tensor(trio)))
+    add("cartesian_prod(셋)",
+        lambda L: L.cartesian_prod(L.tensor(trio), L.tensor(duo),
+                                   L.tensor(duo)))
+    for r in (1, 2, 3):
+        add(f"combinations(r={r})",
+            lambda L, k=r: L.combinations(L.tensor(trio), k))
+    add("combinations(중복 허용)",
+        lambda L: L.combinations(L.tensor(trio), 2, True))
+    for off in (-1, 0, 1):
+        add(f"tril_indices(offset={off})",
+            lambda L, o=off: L.tril_indices(3, 4, o))
+        add(f"triu_indices(offset={off})",
+            lambda L, o=off: L.triu_indices(3, 4, o))
+    # **음수가 섞인 입력이다.** WGSL 의 `pow` 는 밑이 음수면 답이 없어서, 거듭제곱으로
+    # 짜면 여기서 NaN 이 된다 — 양수로만 재면 그 갈래가 안 보인다.
+    add("vander", lambda L: L.vander(L.tensor(trio)))
+    add("vander(N=2)", lambda L: L.vander(L.tensor(trio), 2))
+    add("vander(increasing)", lambda L: L.vander(L.tensor(trio), None, True))
+    add("vander(N=5)", lambda L: L.vander(L.tensor(trio), 5))
+
+    # ── 행렬 ────────────────────────────────────────────────────────────
+    m1 = np.arange(6, dtype=np.float32).reshape(2, 3)
+    m2 = np.arange(12, dtype=np.float32).reshape(3, 4)
+    m3 = np.arange(8, dtype=np.float32).reshape(4, 2)
+    add("chain_matmul",
+        lambda L: L.chain_matmul(L.tensor(m1), L.tensor(m2), L.tensor(m3)))
+    add("ger", lambda L: L.ger(L.tensor(trio), L.tensor(duo)))
+    add("mv", lambda L: L.mv(L.tensor(grid),
+                             L.tensor(np.array([1., 0., 0., 2.],
+                                               dtype=np.float32))))
+    # `mv` 는 1차원이 낀 행렬곱이다 — 그 역방향이 코어에서 축 하나를 놓치고 있었다.
+    grad("mv", lambda L, x: L.mv(x, L.tensor(
+        np.array([1., 0., 0., 2.], dtype=np.float32))),
+        np.array([1.0, 2.0, 0.5], dtype=np.float32))
+    return cases
+
+
 INDEX_PREFIX = "index::"
 
 
@@ -6196,7 +6485,7 @@ def golden_cases(inp=None):
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
-            + bit_cases(inp)
+            + bit_cases(inp) + shape_index_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

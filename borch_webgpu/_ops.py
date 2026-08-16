@@ -169,6 +169,25 @@ _SIGNATURE = {
     "sub_": ("other", "alpha"),
     "add": ("other", "alpha"),
     "sub": ("other", "alpha"),
+    # 모양·색인. borch.ts 쪽 인자 순서이고, torch 의 이름을 그 자리에 놓는다.
+    "as_strided": ("size", "stride", "storage_offset"),
+    "as_strided_": ("size", "stride", "storage_offset"),
+    "as_strided_scatter": ("src", "size", "stride", "storage_offset"),
+    "select_scatter": ("src", "dim", "index"),
+    "slice_scatter": ("src", "dim", "start", "end", "step"),
+    "diagonal_scatter": ("src", "offset", "dim1", "dim2"),
+    "diag_embed": ("offset", "dim1", "dim2"),
+    "tensor_split": ("indices_or_sections", "dim"),
+    "split_with_sizes": ("split_sizes", "dim"),
+    "unique_consecutive": ("return_inverse", "return_counts", "dim"),
+    "masked_scatter": ("mask", "source"),
+    "masked_scatter_": ("mask", "source"),
+    "index_put": ("indices", "values", "accumulate"),
+    "index_put_": ("indices", "values", "accumulate"),
+    "index_reduce": ("dim", "index", "source", "reduce", "include_self"),
+    "scatter_reduce": ("dim", "index", "src", "reduce", "include_self"),
+    "put": ("index", "source", "accumulate"),
+    "renorm": ("p", "dim", "maxnorm"),
 }
 
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
@@ -1234,6 +1253,81 @@ def logical_xor(a, b, **kw):
     """borch.ts 의 이항 표에 없다 — **다름**으로 만든다."""
     a, b = wrap(a), wrap(b)
     return (a != full([], 0.0)) != (b != full([], 0.0))
+
+
+# ── 모양·색인 ───────────────────────────────────────────────────────────────
+#
+# 손으로 적는 것은 세 종류다 — **텐서를 안 받는 것**(삼각 자리표), **텐서 목록을
+# 받는 것**(`index_put` 의 색인들, `cartesian_prod`), 그리고 **묶음으로 답하는
+# 것**(쪼개기·`unravel_index`). 나머지는 `__getattr__` 이 그냥 넘긴다.
+#
+# 텐서 목록이 왜 따로인가: `_arg` 는 목록을 `_js_list` 로 보내는데 그쪽이 `int()` 를
+# 씌운다. 텐서가 담긴 목록이 거기 들어가면 정수 변환에서 멈춘다.
+
+def _js_tensors(seq):
+    return _js.Array.from_([handle(t) for t in seq])
+
+
+def index_put(t, indices, values, accumulate=False, **kw):
+    return wrap(guarded(handle(t).indexPut, _js_tensors(indices),
+                        handle(values), accumulate))
+
+
+def index_put_(t, indices, values, accumulate=False, **kw):
+    t = wrap(t)
+    guarded(handle(t).indexPut_, _js_tensors(indices), handle(values),
+            accumulate)
+    return t
+
+
+def unravel_index(indices, shape, **kw):
+    """**축마다 텐서 하나씩, 묶음으로 낸다**(실측)."""
+    got = guarded(handle(indices).unravelIndex, _js_list(shape))
+    return tuple(wrap(p) for p in got)
+
+
+def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None,
+                       **kw):
+    """**이어진** 중복만 줄인다. 길이가 값에 달려 borch.ts 쪽이 비동기다 —
+    `settle` 이 그 약속을 여기서 기다린다."""
+    got = guarded(handle(t).uniqueConsecutive, return_inverse, return_counts,
+                  dim)
+    return tuple(got) if isinstance(got, list) else got
+
+
+def tensor_split(t, indices_or_sections, dim=0, **kw):
+    return tuple(guarded(handle(t).tensorSplit, _arg(indices_or_sections), dim))
+
+
+def split_with_sizes(t, split_sizes, dim=0, **kw):
+    return tuple(guarded(handle(t).splitWithSizes, _js_list(split_sizes), dim))
+
+
+def tril_indices(row, col, offset=0, **kw):
+    """**`(2, 개수)` 짜리 표다** — 자리 쌍이 아니라 행 줄과 열 줄로 나뉘어 온다."""
+    return wrap(_ts.Tensor.trilIndices(row, col, offset))
+
+
+def triu_indices(row, col, offset=0, **kw):
+    return wrap(_ts.Tensor.triuIndices(row, col, offset))
+
+
+def vander(x, N=None, increasing=False, **kw):
+    return wrap(_ts.Tensor.vander(handle(x), N, increasing))
+
+
+def cartesian_prod(*tensors, **kw):
+    return wrap(_ts.Tensor.cartesianProd(*[handle(t) for t in tensors]))
+
+
+def combinations(t, r=2, with_replacement=False, **kw):
+    return wrap(_ts.Tensor.combinations(handle(t), r, with_replacement))
+
+
+def chain_matmul(*matrices, **kw):
+    mats = (list(matrices[0]) if len(matrices) == 1
+            and isinstance(matrices[0], (list, tuple)) else list(matrices))
+    return wrap(_ts.Tensor.chainMatmul(*[handle(m) for m in mats]))
 
 
 def fill(x, value, **kw):

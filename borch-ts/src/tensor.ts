@@ -156,12 +156,18 @@ import {
   expandDim,
   extremeBackward,
   fill,
+  flatGather,
+  flatGatherBackward,
+  flatReduceInto,
+  flatScatterInto,
   gather,
   gatherBackward,
   gatherIndex,
   gatherIndexBackward,
   indexSelect,
   indexSelectBackward,
+  maskedScatterKernel,
+  maskedScatterSourceBackward,
   matmul,
   padAxis,
   poolMaxIndexBackward,
@@ -342,6 +348,150 @@ function besselI0(x: number): number {
   return (Math.exp(a) / Math.sqrt(a)) * poly;
 }
 
+/**
+ * ── 번호표 만들기 ──────────────────────────────────────────────────────────
+ *
+ * 모양만으로 정해지는 자리들을 **평평한 번호**로 뽑는다. 코어(numpy)는 같은 것을
+ * `np.arange(size).reshape(shape)[...]` 로 만드는데, 여기에는 그런 뷰가 없어서 색인
+ * 셈을 손으로 적는다. **두 벌이 되었으므로 골든이 심판이다** — 진짜 torch 를 세 번째
+ * 답으로 두고 셋을 맞춘다.
+ */
+
+/** 행 우선 걸음. 축마다 한 칸 갈 때 평평한 번호가 얼마나 뛰는가. */
+function rowStrides(shape: readonly number[]): number[] {
+  const out = new Array<number>(shape.length).fill(1);
+  for (let i = shape.length - 2; i >= 0; i--) {
+    out[i] = out[i + 1]! * (shape[i + 1] ?? 1);
+  }
+  return out;
+}
+
+/** `shape` 위를 행 우선으로 훑으며 좌표마다 `at` 을 부른다. */
+function eachCoord(
+  shape: readonly number[],
+  at: (coord: readonly number[], i: number) => void,
+): void {
+  const n = shape.reduce((a, b) => a * b, 1);
+  const coord = new Array<number>(shape.length).fill(0);
+  for (let i = 0; i < n; i++) {
+    at(coord, i);
+    for (let d = shape.length - 1; d >= 0; d--) {
+      coord[d] = coord[d]! + 1;
+      if (coord[d]! < shape[d]!) break;
+      coord[d] = 0;
+    }
+  }
+}
+
+/** 걸음이 가리키는 자리들. 겹쳐도 되고 건너뛰어도 된다. */
+function stridedSpots(
+  size: readonly number[],
+  stride: readonly number[],
+  offset: number,
+): Float32Array {
+  const spots = new Float32Array(size.reduce((a, b) => a * b, 1));
+  eachCoord(size, (c, i) => {
+    let p = offset;
+    for (let d = 0; d < size.length; d++) p += c[d]! * (stride[d] ?? 0);
+    spots[i] = p;
+  });
+  return spots;
+}
+
+/** `x[..., start:stop:step, ...]` 의 자리들. */
+function sliceSpots(
+  shape: readonly number[],
+  dim: number,
+  start: number,
+  stop: number,
+  step: number,
+): { spots: Float32Array; shape: number[] } {
+  const st = rowStrides(shape);
+  const count = Math.max(0, Math.ceil((stop - start) / step));
+  const out = shape.map((s, d) => (d === dim ? count : s));
+  const spots = new Float32Array(out.reduce((a, b) => a * b, 1));
+  eachCoord(out, (c, i) => {
+    let p = 0;
+    for (let d = 0; d < shape.length; d++) {
+      p += (d === dim ? start + c[d]! * step : c[d]!) * st[d]!;
+    }
+    spots[i] = p;
+  });
+  return { spots, shape: out };
+}
+
+/** `select(dim, index)` 의 자리들. 그 축은 결과에서 사라진다. */
+function selectSpots(
+  shape: readonly number[],
+  dim: number,
+  index: number,
+): { spots: Float32Array; shape: number[] } {
+  const st = rowStrides(shape);
+  const out = shape.filter((_, d) => d !== dim);
+  const spots = new Float32Array(out.reduce((a, b) => a * b, 1));
+  eachCoord(out, (c, i) => {
+    let p = index * st[dim]!;
+    let k = 0;
+    for (let d = 0; d < shape.length; d++) {
+      if (d !== dim) p += c[k++]! * st[d]!;
+    }
+    spots[i] = p;
+  });
+  return { spots, shape: out };
+}
+
+/**
+ * 대각선의 자리들. **그 축이 맨 뒤로 간다** — torch 도 numpy 도 그렇다.
+ *
+ * 배치 축이 있을 때 이 규약을 놓치면 값은 다 맞는데 순서만 갈린다. 2차원으로만 재면
+ * 남는 축이 없어서 안 드러난다.
+ */
+function diagonalSpots(
+  shape: readonly number[],
+  offset: number,
+  dim1: number,
+  dim2: number,
+): { spots: Float32Array; shape: number[] } {
+  const st = rowStrides(shape);
+  const n1 = shape[dim1] ?? 0;
+  const n2 = shape[dim2] ?? 0;
+  const k = offset >= 0
+    ? Math.max(0, Math.min(n1, n2 - offset))
+    : Math.max(0, Math.min(n1 + offset, n2));
+  const r0 = offset >= 0 ? 0 : -offset;
+  const c0 = offset >= 0 ? offset : 0;
+  const rest: number[] = [];
+  for (let d = 0; d < shape.length; d++) {
+    if (d !== dim1 && d !== dim2) rest.push(d);
+  }
+  const out = rest.map((d) => shape[d]!).concat([k]);
+  const spots = new Float32Array(out.reduce((a, b) => a * b, 1));
+  eachCoord(out, (c, i) => {
+    let p = 0;
+    for (let j = 0; j < rest.length; j++) p += c[j]! * st[rest[j]!]!;
+    const j = c[rest.length]!;
+    spots[i] = p + (r0 + j) * st[dim1]! + (c0 + j) * st[dim2]!;
+  });
+  return { spots, shape: out };
+}
+
+/** `dim` 축의 `at` 번째 줄이 차지하는 자리들. `uniqueConsecutive` 가 쓴다. */
+function rowSpots(
+  shape: readonly number[],
+  dim: number,
+  at: number,
+  st: readonly number[],
+): number[] {
+  const out: number[] = [];
+  eachCoord(shape.filter((_, d) => d !== dim), (c) => {
+    let p = at * st[dim]!;
+    let k = 0;
+    for (let d = 0; d < shape.length; d++) if (d !== dim) p += c[k++]! * st[d]!;
+    out.push(p);
+  });
+  return out;
+}
+
 /** 비교와 논리 연산은 입력이 무엇이든 참·거짓을 낸다. */
 const BOOL_RESULT = new Set([
   "eq", "ne", "lt", "le", "gt", "ge", "logical_and", "logical_or",
@@ -379,7 +529,13 @@ export class Tensor implements Node<Tensor> {
    * 그 한 자리 말고는 아무 데서도 안 바뀐다.
    */
   shape: readonly number[];
-  readonly size: number;
+  /**
+   * **`readonly` 가 아니다** — `shape` 와 같은 이유이고, 같은 한 자리만 고친다.
+   *
+   * `as_strided_` 는 칸 수까지 바꾼다. 다른 제자리 연산들은 틀만 바꿔서 오랫동안
+   * "칸 수는 안 변한다" 가 참이었는데, 그것이 참이 아닌 이름이 하나 생겼다.
+   */
+  size: number;
   /**
    * 값이 GPU 에 있으면 그 버퍼, 호스트에 있으면 `null`. **직접 읽지 마라** — 밖에서
    * 보는 자리는 `buffer` 게터이고 그쪽이 장치를 확인한다.
@@ -721,6 +877,110 @@ export class Tensor implements Node<Tensor> {
       data[j] = tmp;
     }
     return Tensor.from(data, [n], { dtype: "int64" });
+  }
+
+  /**
+   * 아래·위 삼각의 자리들. **`(2, 개수)` 짜리 표다**(실측) — 자리 쌍이 아니라 행 줄과
+   * 열 줄로 나뉘어 온다. 쌍의 목록으로 읽으면 모양부터 다르다.
+   */
+  private static triangleIndices(
+    row: number,
+    col: number,
+    offset: number,
+    lower: boolean,
+  ): Tensor {
+    const rows: number[] = [];
+    const cols: number[] = [];
+    for (let r = 0; r < row; r++) {
+      for (let c = 0; c < col; c++) {
+        if (lower ? c - r <= offset : c - r >= offset) {
+          rows.push(r);
+          cols.push(c);
+        }
+      }
+    }
+    return Tensor.from(rows.concat(cols), [2, rows.length], { dtype: "int64" });
+  }
+
+  static trilIndices(row: number, col: number, offset = 0): Tensor {
+    return Tensor.triangleIndices(row, col, offset, true);
+  }
+
+  static triuIndices(row: number, col: number, offset = 0): Tensor {
+    return Tensor.triangleIndices(row, col, offset, false);
+  }
+
+  /**
+   * 모든 짝. **하나만 주면 그냥 그것이다**(실측) — 1차원으로 남는다.
+   *
+   * 값을 안 읽는다. 어느 칸이 어디로 가는지는 **개수만으로** 정해지므로 번호표로
+   * 뽑아 모은다 — 읽었으면 이것도 비동기가 됐다.
+   */
+  static cartesianProd(...tensors: readonly Tensor[]): Tensor {
+    if (tensors.length === 1) return tensors[0]!.reshape([tensors[0]!.size]);
+    const sizes = tensors.map((t) => t.size);
+    const total = sizes.reduce((a, b) => a * b, 1);
+    const columns = tensors.map((t, d) => {
+      const after = sizes.slice(d + 1).reduce((a, b) => a * b, 1);
+      const spots = new Float32Array(total);
+      for (let i = 0; i < total; i++) {
+        spots[i] = Math.floor(i / after) % sizes[d]!;
+      }
+      return t.reshape([t.size]).gatherSpots(Tensor.spotsTensor(spots), [total]);
+    });
+    return Tensor.stack(columns, 1);
+  }
+
+  /** `r` 개씩 고른 조합. **순서는 없고**, 중복 허용이 따로 있다. */
+  static combinations(t: Tensor, r = 2, withReplacement = false): Tensor {
+    const n = t.size;
+    const rows: number[][] = [];
+    const walk = (start: number, picked: number[]): void => {
+      if (picked.length === r) {
+        rows.push([...picked]);
+        return;
+      }
+      for (let i = start; i < n; i++) {
+        picked.push(i);
+        walk(withReplacement ? i : i + 1, picked);
+        picked.pop();
+      }
+    };
+    walk(0, []);
+    if (rows.length === 0) return Tensor.zeros([0, r]);
+    const spots = new Float32Array(rows.length * r);
+    rows.forEach((row, i) => row.forEach((v, j) => {
+      spots[i * r + j] = v;
+    }));
+    return t.reshape([n]).gatherSpots(Tensor.spotsTensor(spots),
+      [rows.length, r]);
+  }
+
+  /**
+   * 판데르몬드 행렬. **기본은 차수가 줄어드는 쪽이다** — 마지막 열이 1 이다(실측).
+   *
+   * 거듭제곱을 `pow` 로 짜지 않는다. WGSL 의 `pow` 는 `exp2(y·log2(x))` 라 **밑이
+   * 음수면 답이 없고**, 판데르몬드는 음수 입력이 예사다. 누적곱으로 세면 정확하다.
+   */
+  static vander(x: Tensor, N?: number, increasing = false): Tensor {
+    const n = x.size;
+    const cols = N === undefined ? n : N;
+    if (cols === 0) return Tensor.zeros([n, 0]);
+    // 첫 열은 1, 나머지는 x — 그 줄을 누적곱하면 0..N-1 차가 차례로 나온다.
+    const spots = new Float32Array(n * cols);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < cols; j++) spots[i * cols + j] = i;
+    }
+    const spread = x.reshape([n]).gatherSpots(Tensor.spotsTensor(spots),
+      [n, cols]);
+    const head = new Float32Array(n * cols).fill(1);
+    for (let i = 0; i < n; i++) {
+      for (let j = 1; j < cols; j++) head[i * cols + j] = 0;
+    }
+    const isFirst = Tensor.from(head, [n, cols]);
+    const base = isFirst.add(Tensor.full([], 1).sub(isFirst).mul(spread));
+    const up = base.cumprod(1);
+    return increasing ? up : up.flip(1);
   }
 
   zerosLike(): Tensor {
@@ -1564,6 +1824,56 @@ export class Tensor implements Node<Tensor> {
       }));
       const outShape = this.shape.map((size, d) => (d === axis ? each : size));
       out.push(this.viewAs(rules, k * each * (own[axis] ?? 1), outShape, "SliceBackward0"));
+    }
+    return out;
+  }
+
+  /**
+   * **나머지를 앞에서부터 나눠 갖는다.** 10 을 4 로 쪼개면 3·3·2·2 다(실측).
+   *
+   * `chunk` 와 다르다 — 그쪽은 앞을 크게 채우고 마지막이 남는 것을 받는다. 나눠
+   * 떨어지는 크기로만 재면 두 함수가 같아 보인다.
+   */
+  tensorSplit(sections: number | readonly number[], dim = 0): Tensor[] {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const len = this.shape[axis] ?? 0;
+    if (Array.isArray(sections)) {
+      return this.splitAt(sections as readonly number[], axis);
+    }
+    const k = sections as number;
+    const base = Math.floor(len / k);
+    const extra = len % k;
+    const cuts: number[] = [];
+    let at = 0;
+    for (let i = 0; i < k - 1; i++) {
+      at += base + (i < extra ? 1 : 0);
+      cuts.push(at);
+    }
+    return this.splitAt(cuts, axis);
+  }
+
+  /** 조각 **크기 목록**으로 쪼갠다. `tensorSplit` 은 자르는 **자리**를 받는다. */
+  splitWithSizes(sizes: readonly number[], dim = 0): Tensor[] {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const cuts: number[] = [];
+    let at = 0;
+    for (let i = 0; i < sizes.length - 1; i++) {
+      at += sizes[i]!;
+      cuts.push(at);
+    }
+    return this.splitAt(cuts, axis);
+  }
+
+  /** 자르는 **자리 목록**으로 쪼갠다. 두 쪼개기가 같은 밑동을 쓴다. */
+  private splitAt(cuts: readonly number[], axis: number): Tensor[] {
+    const len = this.shape[axis] ?? 0;
+    const out: Tensor[] = [];
+    let prev = 0;
+    for (const stop of [...cuts, len]) {
+      out.push(this.narrow(axis, prev, Math.max(0, stop - prev)));
+      prev = stop;
     }
     return out;
   }
@@ -3050,6 +3360,76 @@ export class Tensor implements Node<Tensor> {
     return Tensor.from(seen, [seen.length], { dtype: this.dtype });
   }
 
+  /**
+   * **이어진** 중복만 줄인다. `unique` 와 달리 정렬하지 않는다 — `[1,1,2,2,1]` 이
+   * `[1,2,1]` 이 된다(실측). 정렬된 입력으로만 재면 둘이 같아 보인다.
+   *
+   * 결과의 **길이가 값에 달렸으므로** 여기서 한 번 읽는다. `unique`·`bincount` 와
+   * 같은 자리이고, 그래서 이 셋만 비동기다.
+   */
+  async uniqueConsecutive(
+    returnInverse = false,
+    returnCounts = false,
+    dim?: number,
+  ): Promise<Tensor | Tensor[]> {
+    const values = Array.from(await this.toArray());
+    const rank = this.shape.length;
+    const axis = dim === undefined ? null : (dim < 0 ? dim + rank : dim);
+    const rows = axis === null ? values.length : (this.shape[axis] ?? 0);
+    const width = axis === null ? 1 : values.length / Math.max(1, rows);
+    const st = rowStrides(this.shape);
+    // 축을 앞으로 눕혀 줄 단위로 본다 — 축이 없으면 칸 하나가 곧 한 줄이다.
+    const row = (r: number): number[] => {
+      if (axis === null) return [values[r] ?? 0];
+      const out: number[] = [];
+      eachCoord(this.shape.filter((_, d) => d !== axis), (c) => {
+        let p = r * st[axis]!;
+        let k = 0;
+        for (let d = 0; d < rank; d++) if (d !== axis) p += c[k++]! * st[d]!;
+        out.push(values[p] ?? 0);
+      });
+      return out;
+    };
+    const keptRows: number[] = [];
+    const inverse: number[] = [];
+    const counts: number[] = [];
+    let prev: number[] | null = null;
+    for (let r = 0; r < rows; r++) {
+      const cur = row(r);
+      const same = prev !== null && cur.every((v, i) => v === prev![i]);
+      if (!same) {
+        keptRows.push(r);
+        counts.push(0);
+      }
+      counts[counts.length - 1] = (counts[counts.length - 1] ?? 0) + 1;
+      inverse.push(keptRows.length - 1);
+      prev = cur;
+    }
+    let out: Tensor;
+    if (axis === null) {
+      out = Tensor.from(keptRows.map((r) => values[r] ?? 0), [keptRows.length],
+        { dtype: this.dtype });
+    } else {
+      const spots = new Float32Array(keptRows.length * width);
+      let at = 0;
+      for (const r of keptRows) for (const v of rowSpots(this.shape, axis, r, st)) {
+        spots[at++] = v;
+      }
+      const shape = this.shape.map((s, d) => (d === axis ? keptRows.length : s));
+      out = this.gatherSpots(Tensor.spotsTensor(spots), shape);
+    }
+    if (!returnInverse && !returnCounts) return out;
+    const extra: Tensor[] = [out];
+    if (returnInverse) {
+      extra.push(Tensor.from(inverse,
+        axis === null ? [...this.shape] : [rows], { dtype: "int64" }));
+    }
+    if (returnCounts) {
+      extra.push(Tensor.from(counts, [counts.length], { dtype: "int64" }));
+    }
+    return extra;
+  }
+
   /** 정수 값마다 몇 번 나왔는가. 길이는 가장 큰 값이 정한다. */
   async bincount(): Promise<Tensor> {
     const values = await this.toArray();
@@ -3937,9 +4317,19 @@ export class Tensor implements Node<Tensor> {
     // 바꾸므로 `reshape` 처럼 버퍼를 그대로 물려준다. 그 자리에 복사를 걸면 WebGPU 가
     // "원본과 사본이 같은 버퍼" 라며 명령 버퍼째 무효로 만들고, 그러면 **그 뒤에 줄
     // 서 있던 케이스가 대신 틀린다** — 실제로 다음 케이스가 엉뚱한 값으로 실패했다.
-    if (result.buffer !== this.buffer) {
-      dev().copyInto(this.buffer, result.buffer, this.size);
+    // **칸 수가 줄 수 있다.** `as_strided_` 는 틀만이 아니라 크기까지 바꾼다. 원래
+    // 크기로 복사하면 WebGPU 가 "원본 버퍼보다 크게 읽는다" 며 **명령 버퍼째** 무효로
+    // 만들고, 그러면 이 케이스는 통과하고 **그 뒤에 줄 서 있던 케이스가 대신 틀린다** —
+    // 실제로 다음 케이스가 엉뚱한 값으로 실패했다.
+    if (result.size > this.size) {
+      throw new RuntimeError(
+        "제자리 연산이 칸 수를 늘릴 수는 없다 — 버퍼가 그만큼이 아니다.",
+      );
     }
+    if (result.buffer !== this.buffer) {
+      dev().copyInto(this.buffer, result.buffer, result.size);
+    }
+    this.size = result.size;
     // **모양이 바뀌는 것들이 있다.** `transpose_` 는 칸 수는 그대로 두고 틀을 바꾸고,
     // `squeeze_`·`unsqueeze_` 는 축만 넣고 뺀다. 값만 옮기고 모양을 그대로 두면
     // **정사각으로 물었을 때만 통과한다** — 코어에서 실제로 2×2 케이스가 그것을
@@ -4284,6 +4674,402 @@ export class Tensor implements Node<Tensor> {
       this.size,
     );
     return new Tensor(mask, this.shape);
+  }
+
+  // ── 번호표로 읽고 쓰기 ────────────────────────────────────────────────
+  //
+  // `as_strided`·`select_scatter`·`slice_scatter`·`diagonal_scatter`·`put`·
+  // `index_put` 이 전부 이 두 문(`gatherSpots`·`scatterSpots`)을 지난다.
+
+  /** 번호표를 GPU 로 올린다. 모양만으로 정해지는 자리라 기울기를 안 낸다. */
+  private static spotsTensor(spots: Float32Array): Tensor {
+    return Tensor.from(spots, [spots.length]);
+  }
+
+  /**
+   * 번호표가 가리키는 칸을 읽어 `shape` 로 낸다.
+   *
+   * **겹치는 번호로는 기울기가 쌓인다** — 한 칸을 두 번 읽었으면 두 번 온다. 안
+   * 겹치는 걸음으로만 재면 그 쌓임이 안 보인다.
+   */
+  gatherSpots(spots: Tensor, shape: readonly number[]): Tensor {
+    const n = spots.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`fg:${n}`, () => flatGather(n)),
+      [this.buffer, spots.buffer, out],
+      n,
+    );
+    const mine = this.shape;
+    const size = this.size;
+    return Tensor.make(
+      out,
+      shape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(size);
+        dev().run1d(
+          dev().pipeline(`fgb:${size}:${n}`, () => flatGatherBackward(size, n)),
+          [spots.buffer, g.buffer, gi],
+          size,
+        );
+        return [new Tensor(gi, mine)];
+      },
+      "AsStridedBackward0",
+    );
+  }
+
+  /** 번호표 자리에 `src` 를 써 넣은 **사본.** */
+  scatterSpots(
+    spots: Tensor,
+    src: Tensor,
+    accumulate = false,
+    gradName = "SliceScatterBackward0",
+  ): Tensor {
+    const n = this.size;
+    const count = spots.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(
+        `fs:${n}:${count}:${accumulate}`,
+        () => flatScatterInto(n, count, accumulate),
+      ),
+      [this.buffer, spots.buffer, src.buffer, out],
+      n,
+    );
+    const mine = this.shape;
+    const srcShape = src.shape;
+    return Tensor.make(
+      out,
+      mine,
+      [this, src],
+      // **쌓는 쪽은 원본이 안 끊긴다.** 덮어쓰는 쪽만 그 자리로 0 이 간다.
+      (g) => [
+        accumulate ? g : g.mul(Tensor.ones(mine).zeroAtSpots(spots)),
+        g.gatherSpots(spots, srcShape),
+      ],
+      gradName,
+    );
+  }
+
+  /** 번호표 자리만 0 인 표. 덮어쓴 자리로는 기울기가 안 간다. */
+  private zeroAtSpots(spots: Tensor): Tensor {
+    const n = this.size;
+    const count = spots.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(
+        `fs:${n}:${count}:false`,
+        () => flatScatterInto(n, count, false),
+      ),
+      [this.buffer, spots.buffer, Tensor.zeros([count]).buffer, out],
+      n,
+    );
+    return new Tensor(out, this.shape);
+  }
+
+  /** 평평한 저장소를 **다른 걸음으로** 읽는다. torch 는 뷰지만 여기서는 사본이다. */
+  asStrided(
+    size: readonly number[],
+    stride: readonly number[],
+    storageOffset = 0,
+  ): Tensor {
+    const spots = stridedSpots(size, stride, storageOffset);
+    return this.gatherSpots(Tensor.spotsTensor(spots), [...size]);
+  }
+
+  asStridedScatter(
+    src: Tensor,
+    size: readonly number[],
+    stride: readonly number[],
+    storageOffset = 0,
+  ): Tensor {
+    const spots = stridedSpots(size, stride, storageOffset);
+    return this.scatterSpots(Tensor.spotsTensor(spots), src, false,
+      "AsStridedScatterBackward0");
+  }
+
+  /** `select` 가 꺼내던 한 장을 **갈아끼운 사본.** */
+  selectScatter(src: Tensor, dim: number, index: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const at = index < 0 ? index + (this.shape[axis] ?? 0) : index;
+    const { spots } = selectSpots(this.shape, axis, at);
+    return this.scatterSpots(Tensor.spotsTensor(spots), src, false,
+      "SelectScatterBackward0");
+  }
+
+  /** `x[..., start:end:step]` 자리를 **갈아끼운 사본.** */
+  sliceScatter(
+    src: Tensor,
+    dim = 0,
+    start?: number,
+    end?: number,
+    step = 1,
+  ): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const len = this.shape[axis] ?? 0;
+    const from = start === undefined || start === null ? 0 : start;
+    const to = end === undefined || end === null ? len : Math.min(end, len);
+    const { spots } = sliceSpots(this.shape, axis, from, to, step);
+    return this.scatterSpots(Tensor.spotsTensor(spots), src, false,
+      "SliceScatterBackward0");
+  }
+
+  /** 대각선 자리를 **갈아끼운 사본.** */
+  diagonalScatter(src: Tensor, offset = 0, dim1 = 0, dim2 = 1): Tensor {
+    const rank = this.shape.length;
+    const d1 = dim1 < 0 ? dim1 + rank : dim1;
+    const d2 = dim2 < 0 ? dim2 + rank : dim2;
+    const { spots } = diagonalSpots(this.shape, offset, d1, d2);
+    return this.scatterSpots(Tensor.spotsTensor(spots), src, false,
+      "DiagonalScatterBackward0");
+  }
+
+  /** 마지막 축을 **대각선으로 펴서** 축을 하나 늘린다. `diagonal` 의 반대다. */
+  diagEmbed(offset = 0, dim1 = -2, dim2 = -1): Tensor {
+    const n = (this.shape[this.shape.length - 1] ?? 0) + Math.abs(offset);
+    const rank = this.shape.length + 1;
+    const d1 = dim1 < 0 ? dim1 + rank : dim1;
+    const d2 = dim2 < 0 ? dim2 + rank : dim2;
+    const shape = this.shape.slice(0, -1);
+    for (const at of [d1, d2].sort((a, b) => a - b)) shape.splice(at, 0, n);
+    const { spots } = diagonalSpots(shape, offset, d1, d2);
+    return Tensor.zeros(shape).scatterSpots(
+      Tensor.spotsTensor(spots), this.reshape([spots.length]), false,
+      "DiagEmbedBackward0",
+    );
+  }
+
+  /**
+   * **평평하게 펴서** 번호대로 넣는다 — 축이라는 개념이 없다. `take` 의 반대다.
+   *
+   * 번호가 값으로 오므로 CPU 가 만드는 번호표와 같은 문을 그대로 쓴다.
+   */
+  put(index: Tensor, source: Tensor, accumulate = false): Tensor {
+    return this.scatterSpots(index.reshape([index.size]),
+      source.reshape([source.size]), accumulate, "PutBackward0")
+      .reshape(this.shape);
+  }
+
+  /**
+   * 축마다 번호 텐서를 하나씩 받아 그 자리에 넣는다.
+   *
+   * 축별 번호를 **평평한 번호 하나로 접는다** — 그러면 `put` 과 같은 문이 된다.
+   * 접는 셈이 텐서 산술이라 커널이 안 늘어난다.
+   */
+  indexPut(
+    indices: readonly Tensor[],
+    values: Tensor,
+    accumulate = false,
+  ): Tensor {
+    const st = rowStrides(this.shape);
+    let flat: Tensor | null = null;
+    indices.forEach((idx, d) => {
+      const part = idx.mul(Tensor.full([], st[d] ?? 1));
+      flat = flat === null ? part : flat.add(part);
+    });
+    const spots = flat ?? Tensor.zeros([0]);
+    return this.scatterSpots(spots.reshape([spots.size]),
+      values.reshape([values.size]), accumulate, "IndexPutBackward0");
+  }
+
+  /** 번호표 자리에 **합치며** 넣는다. `scatter_reduce`·`index_reduce` 의 밑동이다. */
+  private reduceSpots(
+    spots: Tensor,
+    src: Tensor,
+    reduce: string,
+    includeSelf: boolean,
+  ): Tensor {
+    const n = this.size;
+    const count = spots.size;
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(
+        `fr:${n}:${count}:${reduce}:${includeSelf}`,
+        () => flatReduceInto(n, count, reduce, includeSelf),
+      ),
+      [this.buffer, spots.buffer, src.buffer, out],
+      n,
+    );
+    return new Tensor(out, this.shape);
+  }
+
+  /** `scatter` 와 같은 자리지만 **덮어쓰는 대신 합친다.** */
+  scatterReduce(
+    dim: number,
+    index: Tensor,
+    src: Tensor,
+    reduce: string,
+    includeSelf = true,
+  ): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const st = rowStrides(this.shape);
+    // 번호는 축 하나 몫이고 나머지 좌표는 제자리다 — 그 자리표를 더해 평평하게 만든다.
+    const rest = new Float32Array(index.size);
+    eachCoord(index.shape, (c, i) => {
+      let p = 0;
+      for (let d = 0; d < index.shape.length; d++) {
+        if (d !== axis) p += c[d]! * st[d]!;
+      }
+      rest[i] = p;
+    });
+    const spots = index.mul(Tensor.full([], st[axis] ?? 1))
+      .reshape([index.size])
+      .add(Tensor.spotsTensor(rest));
+    return this.reduceSpots(spots, src.reshape([src.size]), reduce, includeSelf);
+  }
+
+  /** 번호가 가리키는 **줄**을 합친다. `scatterReduce` 와 달리 번호가 줄 단위다. */
+  indexReduce(
+    dim: number,
+    index: Tensor,
+    source: Tensor,
+    reduce: string,
+    includeSelf = true,
+  ): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const st = rowStrides(this.shape);
+    const shape = source.shape;
+    const rest = new Float32Array(source.size);
+    const which = new Float32Array(source.size);
+    eachCoord(shape, (c, i) => {
+      let p = 0;
+      for (let d = 0; d < shape.length; d++) {
+        if (d !== axis) p += c[d]! * st[d]!;
+      }
+      rest[i] = p;
+      which[i] = c[axis]!;
+    });
+    // 줄 번호를 자리마다 펴서 더한다 — 그러면 `scatterReduce` 와 같은 번호표가 된다.
+    const picked = index.reshape([index.size])
+      .gatherSpots(Tensor.spotsTensor(which), [source.size])
+      .mul(Tensor.full([], st[axis] ?? 1));
+    return this.reduceSpots(picked.add(Tensor.spotsTensor(rest)),
+      source.reshape([source.size]), reduce, includeSelf);
+  }
+
+  /**
+   * 가면이 참인 자리에 `source` 를 **평평한 차례대로** 채운다.
+   *
+   * 어느 값이 어디로 가는지가 가면의 **값**에 달렸는데도 결과 모양은 정해져 있다 —
+   * 그래서 값을 읽어 오지 않고 자리마다 "앞에 참이 몇이었나" 를 세는 커널로 푼다.
+   */
+  maskedScatter(mask: Tensor, source: Tensor): Tensor {
+    const n = this.size;
+    const wide = mask.size === n ? mask : mask.add(Tensor.zeros(this.shape));
+    const flat = source.reshape([source.size]);
+    const out = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`ms:${n}`, () => maskedScatterKernel(n)),
+      [this.buffer, wide.buffer, flat.buffer, out],
+      n,
+    );
+    const mine = this.shape;
+    const srcShape = source.shape;
+    const count = source.size;
+    return Tensor.make(
+      out,
+      mine,
+      [this, source],
+      (g) => {
+        const gi = dev().alloc(count);
+        dev().run1d(
+          dev().pipeline(
+            `msb:${count}:${n}`,
+            () => maskedScatterSourceBackward(count, n),
+          ),
+          [wide.buffer, g.buffer, gi],
+          count,
+        );
+        // 가면이 참인 자리는 원본과 끊긴다 — 거짓인 자리만 흘려보낸다.
+        //
+        // **형을 먼저 실수로 돌린다.** 가면은 `bool` 이고 뺄셈은 `bool` 을 거절한다 —
+        // torch 도 그렇다. 값이 0/1 이라 셈은 되는데 그 앞에서 막힌다.
+        const keep = Tensor.full([], 1).sub(wide.to("float32"));
+        return [g.mul(keep), new Tensor(gi, srcShape)];
+      },
+      "MaskedScatterBackward0",
+    );
+  }
+
+  /**
+   * `dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.
+   *
+   * 조립으로 둔다 — **배율 안에 `x` 가 들어 있어서** 역방향이 `g·s` 가 아니다.
+   * 손으로 적으면 순방향만 맞고 기울기가 조용히 틀린다(코어에서 그렇게 한 번 틀렸다).
+   */
+  renorm(p: number, dim: number, maxnorm: number): Tensor {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    // 재는 축을 앞으로 보내고 나머지를 한 줄로 눕히면 축약이 한 번으로 끝난다.
+    const keep = this.shape[axis] ?? 1;
+    const moved = this.movedim(axis, 0).reshape([keep, -1]);
+    const norms = moved.abs().powScalar(p).sumDim(1, true).powScalar(1 / p);
+    // `gt` 는 표에만 있는 이름이라 메서드가 아니다 — `binary` 로 부른다.
+    const scale = norms.binary("gt", Tensor.full([], maxnorm))
+      .mul(Tensor.full([], maxnorm).div(norms.add(Tensor.full([], 1e-7)))
+        .sub(Tensor.full([], 1)))
+      .add(Tensor.full([], 1));
+    const restored: number[] = [keep];
+    for (let d = 0; d < rank; d++) if (d !== axis) restored.push(this.shape[d]!);
+    return moved.mul(scale).reshape(restored).movedim(0, axis);
+  }
+
+  /**
+   * 평평한 번호를 축별 번호로 푼다. **축마다 텐서 하나씩, 묶음으로 낸다**(실측).
+   *
+   * 셈이 나눗셈과 나머지뿐이라 값을 안 읽는다.
+   */
+  unravelIndex(shape: readonly number[]): Tensor[] {
+    const st = rowStrides(shape);
+    return shape.map((size, d) => this
+      .div(Tensor.full([], st[d] ?? 1)).unary("floor")
+      .remainder(size));
+  }
+
+  /** 여러 행렬을 잇달아 곱한다. `multiDot` 이 같은 것을 목록으로 받는다. */
+  static chainMatmul(...matrices: readonly Tensor[]): Tensor {
+    let out = matrices[0]!;
+    for (let i = 1; i < matrices.length; i++) out = out.mm(matrices[i]!);
+    return out;
+  }
+
+  /** 바깥곱의 옛 이름. `outer` 와 같은 것이다. */
+  ger(other: Tensor): Tensor {
+    return this.outer(other);
+  }
+
+  /**
+   * 행렬 × 벡터. `mm` 이 하는 일이지만 torch 는 이름을 따로 준다.
+   *
+   * 벡터를 열 하나로 세웠다가 그 축을 도로 지운다 — 결과가 1차원이어야 한다.
+   */
+  mv(vec: Tensor): Tensor {
+    return this.mm(vec.reshape([vec.size, 1])).reshape([this.shape[0] ?? 0]);
+  }
+
+  asStrided_(
+    size: readonly number[],
+    stride: readonly number[],
+    storageOffset = 0,
+  ): Tensor {
+    return this.mutate(() => this.asStrided(size, stride, storageOffset));
+  }
+
+  maskedScatter_(mask: Tensor, source: Tensor): Tensor {
+    return this.mutate(() => this.maskedScatter(mask, source));
+  }
+
+  indexPut_(
+    indices: readonly Tensor[],
+    values: Tensor,
+    accumulate = false,
+  ): Tensor {
+    return this.mutate(() => this.indexPut(indices, values, accumulate));
   }
 
   // ── 합성곱·풀링 ───────────────────────────────────────────────────────

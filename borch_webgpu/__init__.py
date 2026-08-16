@@ -90,6 +90,10 @@ from ._ops import (                                      # noqa: E402,F401
     bartlett_window, blackman_window, hamming_window, hann_window, kaiser_window,
     # 참거짓과 정수에서 하는 일이 다른 것, 그리고 제자리가 아닌 `fill`.
     bitwise_not, fill,
+    # 모양·색인. **`as_strided` 는 torch 에서 뷰지만 우리는 사본이다.**
+    cartesian_prod, chain_matmul, combinations, index_put, index_put_,
+    split_with_sizes, tensor_split, tril_indices, triu_indices,
+    unique_consecutive, unravel_index, vander,
     # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,

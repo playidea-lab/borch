@@ -1357,6 +1357,186 @@ ${flatId(n)}
 }
 
 /**
+ * ── 평평한 번호표로 읽고 쓰기 ──────────────────────────────────────────────
+ *
+ * `as_strided`·`select_scatter`·`slice_scatter`·`diagonal_scatter`·`put`·
+ * `index_put` 이 전부 **한 가지 일**이다 — 저장소의 어느 칸들을 볼 것인가만 다르다.
+ * 그 "어느 칸"을 번호표 하나로 뽑아 두면 커널은 셋이면 된다.
+ *
+ * 번호표는 두 곳에서 온다. 모양만으로 정해지는 것(걸음·조각·대각선)은 CPU 가 만들어
+ * 올리고, 값에 달린 것(`index_put` 의 색인 텐서)은 GPU 에서 셈해서 온다. **커널은
+ * 그 둘을 구별하지 않는다** — 어느 쪽이든 버퍼에 담긴 번호일 뿐이다.
+ */
+
+/** 번호표가 가리키는 칸을 읽는다. */
+export function flatGather(n: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> I: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  Out[gid] = A[u32(I[gid])];
+}`;
+}
+
+/**
+ * 그 역방향. **겹치는 자리로는 쌓인다** — 한 칸을 두 번 읽었으면 기울기도 두 번 온다.
+ *
+ * 원자 덧셈 대신 **읽는 쪽에서 센다**. 이 파일의 `gatherIndexBackward` 와 같은 수법이고,
+ * 겹치는 번호에서 경쟁이 아예 안 생긴다.
+ */
+export function flatGatherBackward(n: number, count: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> I: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  var acc = 0.0;
+  for (var t = 0u; t < ${count}u; t = t + 1u) {
+    if (u32(I[t]) == gid) { acc = acc + G[t]; }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * 사본의 번호표 자리에 써 넣는다.
+ *
+ * **겹치는 번호에서 갈린다** — 쌓으면 더하고, 아니면 **뒤에 쓴 것이 남는다**. 두
+ * 갈래를 안 겹치는 번호로만 재면 같은 함수처럼 보인다.
+ */
+export function flatScatterInto(
+  n: number,
+  count: number,
+  accumulate: boolean,
+): string {
+  const body = accumulate ? "v = v + S[t];" : "v = S[t];";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> I: array<f32>;
+@group(0) @binding(2) var<storage, read> S: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  var v = A[gid];
+  for (var t = 0u; t < ${count}u; t = t + 1u) {
+    if (u32(I[t]) == gid) { ${body} }
+  }
+  Out[gid] = v;
+}`;
+}
+
+/** 합치는 규칙 다섯. `mean` 만 개수를 따로 세므로 여기서 갈라 둔다. */
+export const REDUCE_START: Readonly<Record<string, string>> = {
+  sum: "0.0",
+  prod: "1.0",
+  // **f32 의 최대값을 그대로 적으면 WGSL 이 거절한다.** `3.4028235e38` 은 십진으로
+  // 반올림된 값이라 진짜 최대(3.40282347e38)보다 크고, 파서가 "f32 로 표현할 수
+  // 없다" 며 셰이더를 통째로 버린다. 한 자리 아래로 적는다.
+  amax: "-3.4028234e38",
+  amin: "3.4028234e38",
+  mean: "0.0",
+};
+
+/**
+ * 번호표 자리에 **합치며** 써 넣는다. `scatter_reduce`·`index_reduce` 의 밑동이다.
+ *
+ * **`includeSelf` 는 원래 값을 첫 항으로 넣는가**다. 항등원으로 채운 판에 곱하기를
+ * 하면 켜나 끄나 같은 답이라(실측), 그 자리로만 재면 이 깃발이 안 보인다.
+ *
+ * 안 닿은 칸은 **그대로 둔다** — 시작값(`prod` 의 1, `amax` 의 -inf)을 흘리면 조용히
+ * 다른 판이 된다.
+ */
+export function flatReduceInto(
+  n: number,
+  count: number,
+  reduce: string,
+  includeSelf: boolean,
+): string {
+  const start = REDUCE_START[reduce] ?? "0.0";
+  const step = {
+    sum: "acc = acc + S[t];",
+    mean: "acc = acc + S[t];",
+    prod: "acc = acc * S[t];",
+    amax: "acc = max(acc, S[t]);",
+    amin: "acc = min(acc, S[t]);",
+  }[reduce] ?? "acc = acc + S[t];";
+  const fold = {
+    sum: "acc = acc + A[gid];",
+    mean: "acc = acc + A[gid]; hits = hits + 1.0;",
+    prod: "acc = acc * A[gid];",
+    amax: "acc = max(acc, A[gid]);",
+    amin: "acc = min(acc, A[gid]);",
+  }[reduce] ?? "acc = acc + A[gid];";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> I: array<f32>;
+@group(0) @binding(2) var<storage, read> S: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  var acc = ${start};
+  var hits = 0.0;
+  for (var t = 0u; t < ${count}u; t = t + 1u) {
+    if (u32(I[t]) == gid) { ${step} hits = hits + 1.0; }
+  }
+  if (hits == 0.0) { Out[gid] = A[gid]; return; }
+  ${includeSelf ? fold : ""}
+  Out[gid] = ${reduce === "mean" ? "acc / hits" : "acc"};
+}`;
+}
+
+/**
+ * 가면이 참인 자리에 원천을 **평평한 차례대로** 채운다.
+ *
+ * 자리마다 원천의 몇 번째가 오는지는 **그 앞에 참이 몇 개 있었는가**로 정해진다.
+ * 그 개수를 자리마다 세므로 값 읽기가 필요 없다 — 읽었으면 이 연산이 비동기가 되고,
+ * 그러면 부르는 쪽 코드가 전부 `await` 를 달아야 한다.
+ */
+export function maskedScatterKernel(n: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> M: array<f32>;
+@group(0) @binding(2) var<storage, read> S: array<f32>;
+@group(0) @binding(3) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  if (M[gid] == 0.0) { Out[gid] = A[gid]; return; }
+  var rank = 0u;
+  for (var t = 0u; t < gid; t = t + 1u) {
+    if (M[t] != 0.0) { rank = rank + 1u; }
+  }
+  Out[gid] = S[rank];
+}`;
+}
+
+/** `masked_scatter` 의 원천 쪽 역방향. 안 쓰인 칸으로는 0 이 간다. */
+export function maskedScatterSourceBackward(n: number, count: number): string {
+  return `
+@group(0) @binding(0) var<storage, read> M: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  var rank = 0u;
+  for (var t = 0u; t < ${count}u; t = t + 1u) {
+    if (M[t] == 0.0) { continue; }
+    if (rank == gid) { Out[gid] = G[t]; return; }
+    rank = rank + 1u;
+  }
+  Out[gid] = 0.0;
+}`;
+}
+
+/**
  * `gather(dim, index)` — 축 하나를 색인 텐서가 가리키는 대로 고른다.
  *
  * 색인이 float32 에 담겨 온다. dtype 이 하나뿐이라 그런데, 정수 값이 float32 에

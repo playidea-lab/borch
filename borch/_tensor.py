@@ -404,9 +404,29 @@ class Tensor:
                 f"행렬곱의 모양이 안 맞습니다 ({a} @ {b}) — "
                 f"앞의 열({self.data.shape[-1]})과 뒤의 행({o.data.shape[-2]})이 같아야 합니다.",
                 f"mat1 and mat2 shapes cannot be multiplied ({a} and {b})"))
+        def back(g):
+            """**1차원은 자리를 하나 빌려 쓴다.**
+
+            numpy 는 앞이 1차원이면 `(1, n)` 으로, 뒤가 1차원이면 `(n, 1)` 로 늘려
+            곱하고 **그 빌린 축을 결과에서 지운다.** 역방향에서는 그 축을 도로 끼워야
+            전치가 성립한다 — 안 끼우면 `swapaxes(v, -1, -2)` 가 1차원에서 그대로
+            멈춘다(`axis -2 is out of bounds`). 2차원끼리로만 재면 안 드러나는 자리라
+            `mv` 를 넣으면서 처음 밟았다.
+            """
+            g = _np.asarray(g)
+            a, b = self.data, o.data
+            aa = a.reshape((1,) + a.shape) if a.ndim == 1 else a
+            bb = b.reshape(b.shape + (1,)) if b.ndim == 1 else b
+            lead = _np.broadcast_shapes(aa.shape[:-2], bb.shape[:-2])
+            gg = g.reshape(lead + (aa.shape[-2], bb.shape[-1]))
+            da = gg @ _np.swapaxes(bb, -1, -2)
+            db = _np.swapaxes(aa, -1, -2) @ gg
+            # 배치가 한쪽으로만 퍼진 자리는 크기가 안 맞는다 — 그때는 그대로 둔다.
+            return (da.reshape(a.shape) if da.size == a.size else da,
+                    db.reshape(b.shape) if db.size == b.size else db)
+
         return self._make(
-            self.data @ o.data, (self, o),
-            lambda g: (g @ _np.swapaxes(o.data, -1, -2), _np.swapaxes(self.data, -1, -2) @ g),
+            self.data @ o.data, (self, o), back,
             "MmBackward0" if self.data.ndim == 2 else "BmmBackward0",
         )
 

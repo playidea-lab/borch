@@ -117,6 +117,15 @@ from ._ops import (
     # 창 함수. `periodic` 이 기본이고 그것이 길이를 하나 늘린다.
     bartlett_window, blackman_window, hamming_window, hann_window,
     kaiser_window,
+    # 모양·색인. **`as_strided` 는 torch 에서 뷰지만 우리는 사본이다** — 자세한
+    # 사정은 `_ops.py` 의 그 자리에 적었다.
+    as_strided, as_strided_, as_strided_scatter, diag_embed, diagonal_scatter,
+    select_scatter, slice_scatter, split_with_sizes, tensor_split,
+    unique_consecutive, unravel_index,
+    index_put, index_put_, index_reduce, masked_scatter, masked_scatter_,
+    put, renorm, scatter_reduce,
+    cartesian_prod, chain_matmul, combinations, ger, mv, tril_indices,
+    triu_indices, vander,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #
