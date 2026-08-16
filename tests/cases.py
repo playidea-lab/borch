@@ -1355,6 +1355,160 @@ def opt_cases(inp=None):
     return cases
 
 
+UNPOOL_PREFIX = "unpool::"
+
+
+def unpool_cases(inp=None):
+    """이긴 자리를 함께 내는 풀링과, 그 자리로 되돌리는 짝.
+
+    ## 왜 자리표가 따로 필요한가
+
+    최대 풀링은 창마다 하나만 남기고 나머지를 버린다. 값만 보면 **어느 칸이 이겼는지가
+    없다** — 그래서 `MaxUnpool` 은 값만으로는 못 돌아간다. torch 는 풀링에게 자리표를
+    같이 내게 하고(`return_indices=True`) 그것을 되돌리기에 넘긴다. 자동 부호기에서
+    흔한 짝이다.
+
+    ## 자리 번호의 규약
+
+    **평면 안의 평평한 번호**다 — 2차원이면 `h*W + w`, 배치와 채널마다 0 부터 다시
+    센다. 재봤다(`tests/probe_pool.py`). 이것을 전체 텐서 기준으로 착각하면 배치가
+    하나일 때만 맞는다.
+
+    ## 여기서 묻는 것
+
+    자리표는 값이 아니라 **정수 표**라, 값 대조로는 근처만 맞아도 통과할 수가 없다 —
+    한 칸만 어긋나도 정수가 달라진다. 그래서 자리표 자체를 답으로 굳힌다.
+
+    같은 값이 둘일 때 누가 이기는가도 여기 있다. torch 는 평평한 번호가 작은 쪽,
+    즉 **행 우선으로 먼저 나오는 자리**를 고른다. 축을 앞에서부터 접으면 열 우선
+    첫째가 나오는데 **값은 같으므로 아무 값 케이스에도 안 걸린다.**
+    """
+    cases = []
+
+    def add(name, fn):
+        cases.append((UNPOOL_PREFIX + name, fn))
+
+    def F(L):
+        return L.nn.functional
+
+    def grid(*shape):
+        return np.arange(int(np.prod(shape)), dtype=np.float32).reshape(shape)
+
+    plane = grid(1, 1, 4, 4)
+    planes = grid(2, 2, 4, 4)
+    line = grid(1, 1, 8)
+    cube = grid(1, 1, 4, 4, 4)
+    odd = grid(1, 1, 3, 3)
+
+    # ── 자리표 ──────────────────────────────────────────────────────────
+    pools = (
+        ("max_pool1d", line, lambda L, x: F(L).max_pool1d(x, 2, return_indices=True)),
+        ("max_pool2d", plane, lambda L, x: F(L).max_pool2d(x, 2, return_indices=True)),
+        ("max_pool2d(stride=1)", plane,
+         lambda L, x: F(L).max_pool2d(x, 2, stride=1, return_indices=True)),
+        ("여러 평면", planes,
+         lambda L, x: F(L).max_pool2d(x, 2, return_indices=True)),
+        ("max_pool3d", cube, lambda L, x: F(L).max_pool3d(x, 2, return_indices=True)),
+        ("적응형", plane,
+         lambda L, x: F(L).adaptive_max_pool2d(x, 2, return_indices=True)),
+        # **나누어떨어지지 않는 적응형** — 창 크기가 자리마다 다르다.
+        ("적응형(3→2)", odd,
+         lambda L, x: F(L).adaptive_max_pool2d(x, 2, return_indices=True)),
+        ("적응형 1차원", line,
+         lambda L, x: F(L).adaptive_max_pool1d(x, 4, return_indices=True)),
+        ("적응형 3차원", cube,
+         lambda L, x: F(L).adaptive_max_pool3d(x, 2, return_indices=True)),
+    )
+    for name, src, call in pools:
+        add(f"자리::{name}",
+            lambda L, s=src, c=call: c(L, L.tensor(s))[1])
+        add(f"값::{name}",
+            lambda L, s=src, c=call: c(L, L.tensor(s))[0])
+
+    # **이름이 둘인 같은 계산.** `return_indices=True` 와 `*_with_indices` 다.
+    def two_names(L):
+        x = L.tensor(plane)
+        a = F(L).max_pool2d(x, 2, return_indices=True)
+        b = F(L).max_pool2d_with_indices(x, 2)
+        c = F(L).adaptive_max_pool2d_with_indices(x, 2)
+        return L.cat([a[0].reshape(-1), b[0].reshape(-1), c[0].reshape(-1),
+                      a[1].reshape(-1).float(), b[1].reshape(-1).float()])
+
+    add("이름이 둘인 같은 계산", two_names)
+
+    # **자리를 켜도 값은 그대로여야 한다.** 두 경로가 갈리면 여기서만 보인다.
+    def same_value(L):
+        x = L.tensor(plane)
+        return F(L).max_pool2d(x, 2) - F(L).max_pool2d(x, 2, return_indices=True)[0]
+
+    add("자리를 켜도 값은 같다", same_value)
+
+    # ── 되돌리기 ────────────────────────────────────────────────────────
+    def unpool(L, src, dim, **kw):
+        pool = getattr(F(L), f"max_pool{dim}d")
+        out, idx = pool(L.tensor(src), 2, return_indices=True)
+        return getattr(F(L), f"max_unpool{dim}d")(out, idx, 2, **kw)
+
+    add("되돌리기::1차원", lambda L: unpool(L, line, 1))
+    add("되돌리기::2차원", lambda L: unpool(L, plane, 2))
+    add("되돌리기::3차원", lambda L: unpool(L, cube, 3))
+    add("되돌리기::여러 평면", lambda L: unpool(L, planes, 2))
+    # 풀링이 버린 자투리는 되살릴 수 없어서 torch 가 크기를 직접 주는 길을 연다.
+    add("되돌리기::output_size",
+        lambda L: unpool(L, plane, 2, output_size=(5, 5)))
+
+    def unpool_stride(L):
+        """창이 겹치면 되돌린 자리도 겹친다 — 나중 것이 이긴다(더하기가 아니다)."""
+        x = L.tensor(plane)
+        out, idx = F(L).max_pool2d(x, 2, stride=1, return_indices=True)
+        return F(L).max_unpool2d(out, idx, 2, stride=1)
+
+    add("되돌리기::겹치는 창", unpool_stride)
+
+    # ── 층 ─────────────────────────────────────────────────────────────
+    def layer_pair(L):
+        pool = L.nn.MaxPool2d(2, return_indices=True)
+        unpool_layer = L.nn.MaxUnpool2d(2)
+        out, idx = pool(L.tensor(plane))
+        return unpool_layer(out, idx)
+
+    add("층::MaxPool2d → MaxUnpool2d", layer_pair)
+
+    def layer_adaptive(L):
+        pool = L.nn.AdaptiveMaxPool2d(2, return_indices=True)
+        return pool(L.tensor(plane))[1]
+
+    add("층::AdaptiveMaxPool2d 자리", layer_adaptive)
+
+    for dim in (1, 2, 3):
+        add(f"층::repr::MaxUnpool{dim}d",
+            lambda L, d=dim: repr(getattr(L.nn, f"MaxUnpool{d}d")(2)))
+
+    # ── 기울기 ──────────────────────────────────────────────────────────
+    def grad_pool(L):
+        x = L.tensor(plane, requires_grad=True)
+        out, _ = F(L).max_pool2d(x, 2, return_indices=True)
+        (out * 2).sum().backward()
+        return x.grad
+
+    add("grad::자리 판의 풀링", grad_pool)
+
+    def grad_unpool(L):
+        pooled = L.tensor(grid(1, 1, 2, 2), requires_grad=True)
+        _, idx = F(L).max_pool2d(L.tensor(plane), 2, return_indices=True)
+        F(L).max_unpool2d(pooled, idx, 2).sum().backward()
+        return pooled.grad
+
+    add("grad::되돌리기", grad_unpool)
+
+    # ── LPPool3d ───────────────────────────────────────────────────────
+    small = grid(1, 1, 4, 4, 4) / 8
+    add("lp_pool3d", lambda L: F(L).lp_pool3d(L.tensor(small), 2, 2))
+    add("lp_pool3d(p=1)", lambda L: F(L).lp_pool3d(L.tensor(small), 1, 2))
+    add("층::LPPool3d", lambda L: L.nn.LPPool3d(2, 2)(L.tensor(small)))
+    return cases
+
+
 DATACONV_PREFIX = "dataconv::"
 
 
@@ -4801,6 +4955,7 @@ def golden_cases(inp=None):
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
             + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
             + method_name_cases(inp) + default_convert_cases(inp)
+            + unpool_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)

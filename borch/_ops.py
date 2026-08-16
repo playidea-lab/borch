@@ -499,8 +499,10 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
     return out
 
 
-def max_pool1d(x, kernel_size, stride=None):
+def max_pool1d(x, kernel_size, stride=None, return_indices=False):
     """`max_pool2d` 에 높이 1 을 끼워 넣는다. 높이가 1 이고 창도 1 이라 그 축은 안 움직인다."""
+    if return_indices:
+        return max_pool1d_with_indices(x, kernel_size, stride)
     x = _wrap(x)
     n, c, length = x.data.shape
     stride = stride or kernel_size
@@ -523,8 +525,10 @@ def _pool_1d_over_last(x, kernel_size, stride):
     return cat(parts, 3)
 
 
-def max_pool3d(x, kernel_size, stride=None):
+def max_pool3d(x, kernel_size, stride=None, return_indices=False):
     """깊이 방향은 잘라서 최댓값을 겹쳐 취하고, 나머지는 `max_pool2d` 가 한다."""
+    if return_indices:
+        return max_pool3d_with_indices(x, kernel_size, stride)
     x = _wrap(x)
     stride = stride or kernel_size
     n, c, d, h, w = x.data.shape
@@ -539,6 +543,103 @@ def max_pool3d(x, kernel_size, stride=None):
         shape = acc.data.shape
         slabs.append(acc.reshape(shape[0], shape[1], 1, shape[2], shape[3]))
     return cat(slabs, 2)
+
+
+# ── 이긴 자리를 함께 내는 판 ─────────────────────────────────────────────────
+#
+# torch 는 같은 계산에 이름을 둘 준다: `max_pool2d(..., return_indices=True)` 와
+# `max_pool2d_with_indices(...)`. 값은 하나가 내고 나머지는 이름만 얹는다.
+
+def max_pool1d_with_indices(x, kernel_size, stride=None, **_):
+    x = _wrap(x)
+    windows = _fixed_windows(x.data.shape[2], kernel_size, stride or kernel_size)
+    out, pos = _max_with_index(x, [windows])
+    return out, Tensor(pos)
+
+
+def max_pool2d_with_indices(x, kernel_size, stride=None, **_):
+    x = _wrap(x)
+    out, pos = _max_with_index(
+        x, _fixed_window_axes(x.data.shape, kernel_size, stride))
+    return out, Tensor(pos)
+
+
+def max_pool3d_with_indices(x, kernel_size, stride=None, **_):
+    x = _wrap(x)
+    out, pos = _max_with_index(
+        x, _fixed_window_axes(x.data.shape, kernel_size, stride))
+    return out, Tensor(pos)
+
+
+def adaptive_max_pool1d_with_indices(x, output_size, **_):
+    return _adaptive_with_indices(x, _spread(output_size, 1))
+
+
+def adaptive_max_pool2d_with_indices(x, output_size, **_):
+    return _adaptive_with_indices(x, _pair(output_size))
+
+
+def adaptive_max_pool3d_with_indices(x, output_size, **_):
+    return _adaptive_with_indices(x, _spread(output_size, 3))
+
+
+def _adaptive_with_indices(x, sizes):
+    x = _wrap(x)
+    shape = x.data.shape
+    axes = [_adaptive_windows(shape[2 + k], sizes[k]) for k in range(len(sizes))]
+    out, pos = _max_with_index(x, axes)
+    return out, Tensor(pos)
+
+
+def _unpool(x, indices, kernel_size, stride, padding, output_size, spatial):
+    """`max_pool` 이 고른 자리로 값을 **되돌려 놓는다.** 나머지는 0 이다.
+
+    자리표는 풀링이 낸 그 번호이고, 평면 안의 평평한 번호다. 그래서 이 함수는
+    자리를 새로 계산하지 않는다 — 계산하면 그 계산이 풀링과 갈릴 수 있고, 값이
+    0 이 아닌 자리가 조금 옮겨 앉은 그림은 눈으로 안 보인다.
+
+    기본 출력 크기는 `(n-1)·stride - 2·padding + kernel`. 풀링이 버린 자투리는
+    되살릴 수 없으므로 torch 는 `output_size` 로 직접 주는 길도 연다.
+    """
+    x = _wrap(x)
+    shape = x.data.shape
+    ks = _spread(kernel_size, spatial)
+    st = _spread(stride if stride is not None else kernel_size, spatial)
+    pd = _spread(padding, spatial)
+    if output_size is None:
+        out_spatial = tuple((shape[2 + k] - 1) * st[k] - 2 * pd[k] + ks[k]
+                            for k in range(spatial))
+    else:
+        got = tuple(output_size)
+        out_spatial = got[-spatial:]        # torch 는 전체 모양도 받는다
+    plane = int(_np.prod(out_spatial))
+
+    pos = _np.asarray(indices.data if isinstance(indices, Tensor) else indices)
+    base = (_np.arange(shape[0] * shape[1]) * plane).reshape(shape[0], shape[1],
+                                                             *([1] * spatial))
+    flat = (base + pos).reshape(-1)
+    out_shape = (shape[0], shape[1]) + tuple(out_spatial)
+
+    filled = _np.zeros(shape[0] * shape[1] * plane, dtype=x.data.dtype)
+    filled[flat] = x.data.reshape(-1)
+
+    def back(g):
+        # 값이 간 자리에서 그대로 받아 온다 — 채우기의 반대다.
+        return (_np.asarray(g).reshape(-1)[flat].reshape(shape),)
+
+    return x._make(filled.reshape(out_shape), (x,), back, "MaxUnpoolBackward0")
+
+
+def max_unpool1d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
+    return _unpool(x, indices, kernel_size, stride, padding, output_size, 1)
+
+
+def max_unpool2d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
+    return _unpool(x, indices, kernel_size, stride, padding, output_size, 2)
+
+
+def max_unpool3d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
+    return _unpool(x, indices, kernel_size, stride, padding, output_size, 3)
 
 
 def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None):
@@ -671,6 +772,20 @@ def _adaptive(x, output_size, kind):
     return out
 
 
+def _fixed_windows(n_in, size, step):
+    """고정 창의 목록. **한 자리에만 적는다** — 값과 자리가 다른 창을 보면 갈린다."""
+    return [(s, s + size) for s in range(0, n_in - size + 1, step)]
+
+
+def _fixed_window_axes(shape, kernel_size, stride):
+    """축마다의 창 목록. `_fixed` 와 자리 계산이 같은 것을 쓴다."""
+    spatial = len(shape) - 2
+    kernels = _spread(kernel_size, spatial)
+    strides = _spread(stride if stride is not None else kernel_size, spatial)
+    return [_fixed_windows(shape[2 + k], kernels[k], strides[k])
+            for k in range(spatial)]
+
+
 def _fixed(x, kernel_size, stride, kind):
     """고정 창. 적응형과 같은 기계에 창 목록만 다르게 준다."""
     x = _wrap(x)
@@ -680,11 +795,58 @@ def _fixed(x, kernel_size, stride, kind):
     out = x
     for k in range(spatial):
         axis = 2 + k
-        n_in = out.data.shape[axis]
-        step, size = strides[k], kernels[k]
-        windows = [(s, s + size) for s in range(0, n_in - size + 1, step)]
+        windows = _fixed_windows(out.data.shape[axis], kernels[k], strides[k])
         out = _fold_axis(out, axis, windows, kind)
     return out
+
+
+def _max_with_index(x, window_axes):
+    """최댓값과 **이긴 자리**를 함께 낸다.
+
+    자리는 torch 의 규약대로 **평면 안의 평평한 번호**다 — 2차원이면 `h*W + w`,
+    3차원이면 `(d*H + h)*W + w`. 배치와 채널마다 0 부터 다시 센다(재봤다:
+    `tests/probe_pool.py`). `MaxUnpool` 이 이 번호를 그대로 되돌린다.
+
+    **축을 뒤에서부터 접는다.** 같은 값이 둘이면 torch 는 평평한 번호가 작은 쪽,
+    즉 행 우선으로 먼저 나오는 자리를 고른다. 앞 축부터 접으면 "열마다 먼저인 행"
+    을 고른 뒤 "행 중 먼저인 열" 을 골라서 **열 우선 첫째**가 되고, 값이 같으므로
+    아무 검사에도 안 걸린 채 자리만 달라진다. 뒤에서부터 접으면 행 안의 첫 열을
+    먼저 정하고 그다음 첫 행을 정해서 행 우선 첫째가 된다.
+
+    값도 여기서 같이 낸다. 값을 다른 경로로 구하면 "자리는 A 인데 값은 B" 가 될 수
+    있고, 그것은 둘 다 그럴듯해서 안 보인다.
+    """
+    x = _wrap(x)
+    data = x.data
+    shape = data.shape
+    spatial = shape[2:]
+    plane = int(_np.prod(spatial)) if spatial else 1
+
+    val = data
+    pos = _np.broadcast_to(_np.arange(plane).reshape(spatial), shape)
+    for k in reversed(range(len(window_axes))):
+        axis = 2 + k
+        vparts, pparts = [], []
+        for start, end in window_axes[k]:
+            cut = (slice(None),) * axis + (slice(start, end),)
+            vs, ps = val[cut], pos[cut]
+            j = vs.argmax(axis=axis)[(slice(None),) * axis + (None,)]
+            vparts.append(_np.take_along_axis(vs, j, axis))
+            pparts.append(_np.take_along_axis(ps, j, axis))
+        val = _np.concatenate(vparts, axis)
+        pos = _np.concatenate(pparts, axis)
+
+    # 기울기는 이긴 자리로만 간다. 자리표를 전체 평평한 번호로 올려 한 번에 흩뿌린다.
+    base = (_np.arange(shape[0] * shape[1]) * plane).reshape(shape[0], shape[1],
+                                                             *([1] * len(spatial)))
+    flat = (base + pos).reshape(-1)
+
+    def back(g):
+        gx = _np.zeros(data.size, dtype=_np.asarray(g).dtype)
+        _np.add.at(gx, flat, _np.asarray(g).reshape(-1))
+        return (gx.reshape(shape),)
+
+    return x._make(val, (x,), back, "MaxPoolWithIndicesBackward0"), pos
 
 
 def adaptive_avg_pool2d(x, output_size):
@@ -704,15 +866,21 @@ def adaptive_avg_pool3d(x, output_size):
     return _adaptive(x, _spread(output_size, 3), "avg")
 
 
-def adaptive_max_pool1d(x, output_size):
+def adaptive_max_pool1d(x, output_size, return_indices=False):
+    if return_indices:
+        return adaptive_max_pool1d_with_indices(x, output_size)
     return _adaptive(x, _spread(output_size, 1), "max")
 
 
-def adaptive_max_pool2d(x, output_size):
+def adaptive_max_pool2d(x, output_size, return_indices=False):
+    if return_indices:
+        return adaptive_max_pool2d_with_indices(x, output_size)
     return _adaptive(x, _pair(output_size), "max")
 
 
-def adaptive_max_pool3d(x, output_size):
+def adaptive_max_pool3d(x, output_size, return_indices=False):
+    if return_indices:
+        return adaptive_max_pool3d_with_indices(x, output_size)
     return _adaptive(x, _spread(output_size, 3), "max")
 
 
@@ -743,7 +911,17 @@ def lp_pool1d(x, norm_type, kernel_size, stride=None):
     return ((out.sign() * relu(out.abs())) * k) ** (1.0 / norm_type)
 
 
-def max_pool2d(x, kernel_size, stride=None):
+def lp_pool3d(x, norm_type, kernel_size, stride=None):
+    """1·2 차원과 같은 조립이다. 창 칸 수만 세 축의 곱이 된다."""
+    x = _wrap(x)
+    kd, kh, kw = _spread(kernel_size, 3)
+    out = avg_pool3d(x ** norm_type, kernel_size, stride)
+    return ((out.sign() * relu(out.abs())) * (kd * kh * kw)) ** (1.0 / norm_type)
+
+
+def max_pool2d(x, kernel_size, stride=None, return_indices=False):
+    if return_indices:
+        return max_pool2d_with_indices(x, kernel_size, stride)
     stride = stride or kernel_size
     xd = x.data
     N, C, H, W = xd.shape

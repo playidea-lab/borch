@@ -1942,6 +1942,170 @@ export function poolNDBackwardNeedsInput(kind: "max" | "avg"): boolean {
 }
 
 /**
+ * 창 목록 — 축마다 각 출력 칸이 덮는 구간.
+ *
+ * 고정 창과 적응형을 **같은 모양으로** 넘기려고 만든 자리다. 고정은 `start = o·stride`
+ * 에 길이가 일정하고, 적응형은 `floor(o·n/want)` 부터 `ceil((o+1)·n/want)` 까지라
+ * 길이가 자리마다 다르다. 규칙을 셰이더 안에 둘로 적으면 한쪽만 고치는 날이 온다.
+ */
+export interface PoolWindows {
+  readonly NC: number;
+  readonly inDims: readonly number[];
+  /** 축마다 `[시작, 끝)` 의 목록. 길이가 그 축의 출력 크기다. */
+  readonly axes: readonly (readonly (readonly [number, number])[])[];
+}
+
+export function poolWindowsKey(p: PoolWindows): string {
+  return [p.NC, p.inDims, p.axes.map((a) => a.map((w) => w.join(":")).join(","))]
+    .join("|");
+}
+
+/**
+ * 최댓값과 **이긴 자리**를 한 번에 낸다.
+ *
+ * 자리는 torch 의 규약대로 **평면 안의 평평한 번호**다 — 배치·채널마다 0 부터 다시
+ * 센다. `maxUnpool` 이 이 번호를 그대로 되돌린다.
+ *
+ * **값을 여기서 같이 낸다.** 값을 다른 커널에서 구하면 "자리는 A 인데 값은 B" 인
+ * 상태가 만들어질 수 있고, 둘 다 그럴듯해서 아무 눈에도 안 띈다.
+ *
+ * 동점이면 **먼저 나온 자리**가 이긴다 — torch 가 그렇다. 창을 도는 순서가 평평한
+ * 번호가 커지는 순서이고 비교가 `>` 라서, 첫 최댓값이 그대로 남는다.
+ */
+export function poolMaxWithIndex(p: PoolWindows): string {
+  const inSpace = p.inDims.reduce((a, b) => a * b, 1);
+  const outDims = p.axes.map((a) => a.length);
+  const outSpace = outDims.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(p.inDims);
+  const outStride = suffixStrides(outDims);
+  const n = p.NC * outSpace;
+
+  // 창 표를 셰이더에 상수로 굽는다. 출력 칸 수가 작아서 값이 싸고, 자리마다 길이가
+  // 다른 적응형도 같은 모양으로 실린다.
+  const tables = p.axes.map((axis, d) => {
+    const starts = axis.map((w) => `${w[0]}u`).join(", ");
+    const ends = axis.map((w) => `${w[1]}u`).join(", ");
+    return `var<private> S${d}: array<u32, ${axis.length}> = `
+      + `array<u32, ${axis.length}>(${starts});\n`
+      + `var<private> E${d}: array<u32, ${axis.length}> = `
+      + `array<u32, ${axis.length}>(${ends});`;
+  }).join("\n");
+
+  const decode = outDims.map((size, d) =>
+    `  let o${d} = (r / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n");
+  const open: string[] = [];
+  const close: string[] = [];
+  const terms: string[] = [];
+  for (let d = 0; d < p.axes.length; d++) {
+    open.push(`  for (var k${d} = S${d}[o${d}]; k${d} < E${d}[o${d}]; k${d} = k${d} + 1u) {`);
+    close.push("  }");
+    terms.push(`k${d} * ${inStride[d] ?? 1}u`);
+  }
+  const first = p.axes.map((_, d) => `S${d}[o${d}] * ${inStride[d] ?? 1}u`).join(" + ");
+
+  return `
+${tables}
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Idx: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${outSpace}u;
+  let r = gid % ${outSpace}u;
+${decode}
+  var bestOff = ${first};
+  var best = X[plane * ${inSpace}u + bestOff];
+${open.join("\n")}
+    let off = ${terms.join(" + ")};
+    let v = X[plane * ${inSpace}u + off];
+    if (v > best) { best = v; bestOff = off; }
+${close.join("\n")}
+  Out[gid] = best;
+  Idx[gid] = f32(bestOff);
+}`;
+}
+
+/**
+ * 자리표를 따라 기울기를 되돌린다. 이긴 자리로만 간다.
+ *
+ * 순방향이 이미 자리를 정해 두었으므로 여기서 다시 고르지 않는다 — 다시 고르면 그
+ * 고르기가 순방향과 갈릴 수 있고, 동점이 있을 때 정확히 그렇게 된다.
+ *
+ * 입력 자리마다 **자기를 가리키는 출력 칸을 찾아 더한다.** 흩뿌리기가 아니라 모으기라
+ * 스레드끼리 같은 칸에 안 쓴다 — 창이 겹치면 한 입력이 여러 출력에게 이길 수 있다.
+ */
+export function poolMaxIndexBackward(p: PoolWindows): string {
+  const inSpace = p.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = p.axes.map((a) => a.length).reduce((a, b) => a * b, 1);
+  const n = p.NC * inSpace;
+  return `
+@group(0) @binding(0) var<storage, read> Idx: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${inSpace}u;
+  let r = gid % ${inSpace}u;
+  var acc = 0.0;
+  for (var o = 0u; o < ${outSpace}u; o = o + 1u) {
+    let at = plane * ${outSpace}u + o;
+    if (u32(Idx[at]) == r) { acc = acc + G[at]; }
+  }
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * 자리표가 가리키는 칸에 값을 놓는다. 나머지는 0 — `MaxUnpool` 이다.
+ *
+ * **모으기로 쓴다.** 흩뿌리면 겹치는 자리에서 스레드 순서가 답을 정하는데, 그것은
+ * 실행마다 달라질 수 있는 답이라 대조가 안 된다. 출력 칸마다 자기를 가리키는 입력을
+ * 찾아 오면 순서가 정해진다 — 여럿이면 **마지막 것**이 남고, torch 의 흩뿌리기와
+ * 같은 답이다.
+ */
+export function unpoolFromIndex(
+  NC: number, inSpace: number, outSpace: number,
+): string {
+  const n = NC * outSpace;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read> Idx: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${outSpace}u;
+  let r = gid % ${outSpace}u;
+  var got = 0.0;
+  for (var i = 0u; i < ${inSpace}u; i = i + 1u) {
+    let at = plane * ${inSpace}u + i;
+    if (u32(Idx[at]) == r) { got = X[at]; }
+  }
+  Out[gid] = got;
+}`;
+}
+
+/** `MaxUnpool` 의 역방향 — 값이 간 자리에서 그대로 받아 온다. 채우기의 반대다. */
+export function unpoolFromIndexBackward(
+  NC: number, inSpace: number, outSpace: number,
+): string {
+  const n = NC * inSpace;
+  return `
+@group(0) @binding(0) var<storage, read> Idx: array<f32>;
+@group(0) @binding(1) var<storage, read> G: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${inSpace}u;
+  let r = gid % ${inSpace}u;
+  Out[gid] = G[plane * ${outSpace}u + u32(Idx[plane * ${inSpace}u + r])];
+}`;
+}
+
+/**
  * 최근접 이웃 확대. 각 출력 자리가 자기를 낳은 입력 자리를 그대로 읽는다.
  *
  * 역방향은 자기를 읽어 간 출력들을 모으는 것이고, 배율이 정수라 그 개수가 일정하다.

@@ -163,11 +163,15 @@ import {
   indexSelectBackward,
   matmul,
   padAxis,
+  poolMaxIndexBackward,
+  poolMaxWithIndex,
   poolNDBackward,
   poolNDBackwardNeedsInput,
   poolNDForward,
   poolNDKey,
   type PoolNDShape,
+  type PoolWindows,
+  poolWindowsKey,
   prodBackward,
   reduceBroadcast,
   reduceDim,
@@ -184,6 +188,8 @@ import {
   unaryBackward,
   unaryForward,
   unaryWith,
+  unpoolFromIndex,
+  unpoolFromIndexBackward,
   upsampleNearest,
   upsampleNearestBackward,
   whereBackward,
@@ -3798,6 +3804,140 @@ export class Tensor implements Node<Tensor> {
 
   maxPool3d(kernel = 2, stride?: number): Tensor {
     return this.poolND("max", kernel, stride);
+  }
+
+  // ── 이긴 자리를 함께 내는 풀링 ─────────────────────────────────────────
+  //
+  // 최대 풀링은 창마다 하나만 남기고 나머지를 버린다. **값 안에 "어느 칸이 이겼는가"
+  // 가 없어서** `maxUnpool` 은 값만으로는 못 돌아간다. torch 는 풀링에게 자리표를
+  // 같이 내게 하고 그것을 되돌리기에 넘긴다 — 자동 부호기에서 흔한 짝이다.
+
+  /** 고정 창의 창 목록. 축마다 `[시작, 끝)`. */
+  private fixedWindows(kernel: number, stride?: number): [number, number][][] {
+    const step = stride ?? kernel;
+    return this.shape.slice(2).map((n) => {
+      const out: [number, number][] = [];
+      for (let s = 0; s + kernel <= n; s += step) out.push([s, s + kernel]);
+      return out;
+    });
+  }
+
+  /** 적응형의 창 목록. 시작은 내림, 끝은 올림 — 자리마다 길이가 다르다. */
+  private adaptiveWindows(outSize: number | readonly number[]): [number, number][][] {
+    const spatial = this.shape.length - 2;
+    const sizes = typeof outSize === "number"
+      ? new Array<number>(spatial).fill(outSize)
+      : [...outSize];
+    return this.shape.slice(2).map((n, k) => {
+      const want = sizes[k] ?? 1;
+      const out: [number, number][] = [];
+      for (let i = 0; i < want; i++) {
+        out.push([Math.floor((i * n) / want), Math.ceil(((i + 1) * n) / want)]);
+      }
+      return out;
+    });
+  }
+
+  private maxWithIndex(axes: [number, number][][]): {
+    values: Tensor;
+    indices: Tensor;
+  } {
+    const NC = (this.shape[0] ?? 1) * (this.shape[1] ?? 1);
+    const inDims = this.shape.slice(2);
+    const p: PoolWindows = { NC, inDims, axes };
+    const outDims = axes.map((a) => a.length);
+    const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...outDims];
+    const n = outShape.reduce((a, b) => a * b, 1);
+    const key = poolWindowsKey(p);
+    const out = dev().alloc(n);
+    const idx = dev().alloc(n);
+    dev().run1d(
+      dev().pipeline(`pmi:${key}`, () => poolMaxWithIndex(p)),
+      [this.buffer, out, idx],
+      n,
+    );
+    const indices = new Tensor(idx, outShape, { dtype: "int64" });
+    const shape = this.shape;
+    const size = this.size;
+    const values = Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(size);
+        dev().run1d(
+          dev().pipeline(`pmib:${key}`, () => poolMaxIndexBackward(p)),
+          [idx, g.buffer, gi],
+          size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      "MaxPoolWithIndicesBackward0",
+    );
+    return { values, indices };
+  }
+
+  maxPoolWithIndices(kernel = 2, stride?: number): {
+    values: Tensor;
+    indices: Tensor;
+  } {
+    return this.maxWithIndex(this.fixedWindows(kernel, stride));
+  }
+
+  adaptiveMaxPoolWithIndices(outSize: number | readonly number[]): {
+    values: Tensor;
+    indices: Tensor;
+  } {
+    return this.maxWithIndex(this.adaptiveWindows(outSize));
+  }
+
+  /**
+   * 자리표가 가리키는 칸에 값을 놓고 나머지는 0 으로 둔다.
+   *
+   * 풀링이 버린 자투리는 되살릴 수 없어서 출력 크기를 밖에서 정한다. 기본은
+   * `(n-1)·stride - 2·padding + kernel` 이고, `outSize` 로 직접 줄 수도 있다.
+   */
+  maxUnpool(
+    indices: Tensor,
+    kernel: number,
+    stride?: number,
+    padding = 0,
+    outSize?: readonly number[],
+  ): Tensor {
+    const step = stride ?? kernel;
+    const inDims = this.shape.slice(2);
+    const outDims = outSize
+      ? [...outSize].slice(-inDims.length)
+      : inDims.map((d) => (d - 1) * step - 2 * padding + kernel);
+    const NC = (this.shape[0] ?? 1) * (this.shape[1] ?? 1);
+    const inSpace = inDims.reduce((a, b) => a * b, 1);
+    const outSpace = outDims.reduce((a, b) => a * b, 1);
+    const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...outDims];
+    const key = `${NC}:${inSpace}:${outSpace}`;
+    const out = dev().alloc(NC * outSpace);
+    dev().run1d(
+      dev().pipeline(`unp:${key}`, () => unpoolFromIndex(NC, inSpace, outSpace)),
+      [this.buffer, indices.buffer, out],
+      NC * outSpace,
+    );
+    const shape = this.shape;
+    const size = this.size;
+    return Tensor.make(
+      out,
+      outShape,
+      [this],
+      (g) => {
+        const gi = dev().alloc(size);
+        dev().run1d(
+          dev().pipeline(`unpb:${key}`,
+            () => unpoolFromIndexBackward(NC, inSpace, outSpace)),
+          [indices.buffer, g.buffer, gi],
+          size,
+        );
+        return [new Tensor(gi, shape)];
+      },
+      "MaxUnpoolBackward0",
+    );
   }
 
   /**

@@ -68,12 +68,33 @@ def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
 
 def _pool_fn(kind, adaptive):
     """풀링 하나. **차원별 이름이 저쪽엔 없다** — `poolND` 하나가 전부를 한다."""
-    def call(x, size, stride=None, **kw):
+    def call(x, size, stride=None, return_indices=False, **kw):
         h = handle(x)
+        if return_indices:
+            return _pool_with_indices(x, size, stride, adaptive)
         if adaptive:
             return wrap(h.adaptivePool(kind, size))
         return wrap(h.poolND(kind, size, stride if stride is not None else size))
     return call
+
+
+def _pool_with_indices(x, size, stride=None, adaptive=False, **kw):
+    """값과 **이긴 자리**를 함께 낸다. 자리는 평면 안의 평평한 번호다.
+
+    저쪽은 `{values, indices}` 를 돌려주므로 이름으로 꺼내 튜플로 바꾼다 — torch 가
+    튜플을 주고 교재 코드가 `out, idx = ...` 로 푼다.
+    """
+    h = handle(x)
+    got = (h.adaptiveMaxPoolWithIndices(size) if adaptive
+           else h.maxPoolWithIndices(size, stride if stride is not None else size))
+    return wrap(got.values), wrap(got.indices)
+
+
+def _unpool(x, indices, kernel_size, stride=None, padding=0, output_size=None):
+    """자리표가 가리키는 칸으로 값을 되돌린다. 나머지는 0 이다."""
+    return wrap(handle(x).maxUnpool(
+        handle(indices), kernel_size, stride, padding,
+        _js_list(list(output_size)) if output_size is not None else None))
 
 
 def _lp_pool(x, norm_type, kernel_size, stride=None, **kw):
@@ -235,6 +256,26 @@ _HAND_WRITTEN = {
     "adaptive_max_pool3d": _pool_fn("max", True),
     "lp_pool1d": _lp_pool,
     "lp_pool2d": _lp_pool,
+    "lp_pool3d": _lp_pool,
+    # 이긴 자리를 함께 내는 판. torch 는 같은 계산에 이름을 둘 준다 —
+    # `return_indices=True` 와 `*_with_indices` 다.
+    "max_pool1d_with_indices": _pool_with_indices,
+    "max_pool2d_with_indices": _pool_with_indices,
+    "max_pool3d_with_indices": _pool_with_indices,
+    "adaptive_max_pool1d_with_indices": lambda x, s, **k: _pool_with_indices(
+        x, s, adaptive=True),
+    "adaptive_max_pool2d_with_indices": lambda x, s, **k: _pool_with_indices(
+        x, s, adaptive=True),
+    "adaptive_max_pool3d_with_indices": lambda x, s, **k: _pool_with_indices(
+        x, s, adaptive=True),
+    "max_unpool1d": _unpool,
+    "max_unpool2d": _unpool,
+    "max_unpool3d": _unpool,
+    # `max_pool*d` 는 `return_indices` 를 받아야 해서 일반 길로 못 간다 — 일반 길은
+    # 인자를 저쪽 메서드에 그대로 넘기고, 저쪽 `maxPool2d` 는 그 이름을 모른다.
+    "max_pool1d": _pool_fn("max", False),
+    "max_pool2d": _pool_fn("max", False),
+    "max_pool3d": _pool_fn("max", False),
     "rms_norm": _rms_norm,
     "conv_transpose1d": _conv_transpose,
     "conv_transpose2d": _conv_transpose,
@@ -1025,16 +1066,56 @@ def ReLU():
     return _layer("ReLU")
 
 
-def MaxPool2d(k=2, stride=None):
-    return _Wrap(lambda x: wrap(handle(x).maxPool2d(k, stride)))
+def _max_pool_layer(js_name):
+    """`return_indices` 를 켜면 답이 둘이 된다 — 값과 이긴 자리."""
+    def make(k=2, stride=None, return_indices=False):
+        if return_indices:
+            return _Wrap(lambda x: _pool_with_indices(x, k, stride))
+        return _Wrap(lambda x: wrap(getattr(handle(x), js_name)(k, stride)))
+    return make
 
 
-def MaxPool1d(k=2, stride=None):
-    return _Wrap(lambda x: wrap(handle(x).maxPool1d(k, stride)))
+MaxPool1d = _max_pool_layer("maxPool1d")
+MaxPool2d = _max_pool_layer("maxPool2d")
+MaxPool3d = _max_pool_layer("maxPool3d")
 
 
-def MaxPool3d(k=2, stride=None):
-    return _Wrap(lambda x: wrap(handle(x).maxPool3d(k, stride)))
+def _spread(v, n):
+    """수 하나면 축마다 같은 값으로, 목록이면 그대로. 코어의 같은 이름과 같은 규칙이다."""
+    return (v,) * n if isinstance(v, int) else tuple(v)
+
+
+class _MaxUnpool(_Wrap):
+    """`MaxPool` 이 고른 자리로 값을 되돌린다.
+
+    **`forward` 가 인자를 둘 받는다** — 값과 자리표. 다른 층과 모양이 달라 `Sequential`
+    에 그냥 못 넣는데 torch 도 같다. 자리표는 값과 함께 흘러야 하고, 층 안에 숨기면
+    같은 층을 두 번 쓸 때 남의 자리표를 쓰게 된다.
+    """
+
+    def __init__(self, dim, kernel_size, stride=None, padding=0):
+        super().__init__(lambda x, indices, output_size=None: _unpool(
+            x, indices, kernel_size, stride, padding, output_size))
+        self.dim = dim
+        # **축마다 펴서 든다** — torch 가 그렇게 들고 `repr` 에 그 튜플이 그대로 나온다.
+        self.kernel_size = _spread(kernel_size, dim)
+        self.stride = _spread(kernel_size if stride is None else stride, dim)
+        self.padding = _spread(padding, dim)
+
+    def __repr__(self):
+        return (f"MaxUnpool{self.dim}d(kernel_size={self.kernel_size}, "
+                f"stride={self.stride}, padding={self.padding})")
+
+
+def _unpool_layer(dim):
+    def make(kernel_size, stride=None, padding=0):
+        return _MaxUnpool(dim, kernel_size, stride, padding)
+    return make
+
+
+MaxUnpool1d = _unpool_layer(1)
+MaxUnpool2d = _unpool_layer(2)
+MaxUnpool3d = _unpool_layer(3)
 
 
 def Flatten(start_dim=1, end_dim=-1):
@@ -1047,10 +1128,10 @@ def Identity():
 
 
 def _pool_layer(kind, adaptive):
-    def make(size, stride=None):
+    def make(size, stride=None, return_indices=False):
         n = size[0] if isinstance(size, (list, tuple)) else size
         fn = _pool_fn(kind, adaptive)
-        return _Wrap(lambda x: fn(x, n, stride))
+        return _Wrap(lambda x: fn(x, n, stride, return_indices=return_indices))
     return make
 
 
@@ -1068,7 +1149,7 @@ def LPPool1d(norm_type, kernel_size, stride=None):
     return _Wrap(lambda x: _lp_pool(x, norm_type, kernel_size, stride))
 
 
-LPPool2d = LPPool1d
+LPPool2d = LPPool3d = LPPool1d
 
 
 def AvgPool2d(k=2, stride=None):

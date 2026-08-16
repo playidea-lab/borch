@@ -12,10 +12,10 @@ from ._base import (
     _DEFAULT_DTYPE, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _rng, _wrap, adaptive_avg_pool1d,
+    _Namespace, _gelu, _pool_all, _rng, _spread, _wrap, adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
-    celu, lp_pool1d, lp_pool2d,
+    celu, lp_pool1d, lp_pool2d, lp_pool3d,
     conv1d,
     conv2d, conv3d, conv_transpose1d, conv_transpose2d, conv_transpose3d,
     cosine_similarity, dropout, elu, embedding, gelu, glu, group_norm, hardshrink,
@@ -35,6 +35,11 @@ from ._ops import (
     # 창 펴기와 나머지. **`unfold_im2col` 은 이름이 갈려 있다** — `Tensor.unfold` 와
     # 하는 일이 달라서 모듈 자리를 나눠 쓸 수가 없다(그쪽 주석 참고).
     amax, bilinear, fold, local_response_norm, rrelu, unfold_im2col,
+    # 이긴 자리를 함께 내는 풀링과, 그 자리로 되돌리는 짝.
+    adaptive_max_pool1d_with_indices, adaptive_max_pool2d_with_indices,
+    adaptive_max_pool3d_with_indices, max_pool1d_with_indices,
+    max_pool2d_with_indices, max_pool3d_with_indices,
+    max_unpool1d, max_unpool2d, max_unpool3d,
 )
 # **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
 # `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
@@ -506,12 +511,20 @@ class Conv2d(Module):
 
 
 class MaxPool2d(Module):
-    def __init__(self, kernel_size, stride=None):
+    """**`return_indices` 를 켜면 답이 둘이 된다** — 값과 이긴 자리.
+
+    `MaxUnpool2d` 에 그 자리표를 넘겨 되돌린다. 자동 부호기(autoencoder)에서 흔한
+    짝이고, 자리표 없이는 되돌릴 수가 없다 — 어느 칸이 이겼는지가 값 안에 없다.
+    """
+
+    def __init__(self, kernel_size, stride=None, return_indices=False):
         super().__init__()
         self.kernel_size, self.stride = kernel_size, stride
+        self.return_indices = return_indices
 
     def forward(self, x):
-        return max_pool2d(x, self.kernel_size, self.stride)
+        return max_pool2d(x, self.kernel_size, self.stride,
+                          return_indices=self.return_indices)
 
 
 class Embedding(Module):
@@ -1483,19 +1496,29 @@ class AdaptiveAvgPool3d(_PoolND):
     adaptive = True
 
 
-class AdaptiveMaxPool1d(_PoolND):
+class _AdaptiveMaxPoolND(_PoolND):
+    """적응형 최대 풀링. **`return_indices` 를 받는다** — 평균 쪽에는 없는 인자다."""
+
+    adaptive = True
+
+    def __init__(self, size, return_indices=False):
+        super().__init__(size)
+        self.return_indices = return_indices
+
+    def forward(self, x):
+        return type(self).fn(x, self.size, return_indices=self.return_indices)
+
+
+class AdaptiveMaxPool1d(_AdaptiveMaxPoolND):
     fn = staticmethod(adaptive_max_pool1d)
-    adaptive = True
 
 
-class AdaptiveMaxPool2d(_PoolND):
+class AdaptiveMaxPool2d(_AdaptiveMaxPoolND):
     fn = staticmethod(adaptive_max_pool2d)
-    adaptive = True
 
 
-class AdaptiveMaxPool3d(_PoolND):
+class AdaptiveMaxPool3d(_AdaptiveMaxPoolND):
     fn = staticmethod(adaptive_max_pool3d)
-    adaptive = True
 
 
 class LPPool1d(Module):
@@ -1510,6 +1533,11 @@ class LPPool1d(Module):
 class LPPool2d(LPPool1d):
     def forward(self, x):
         return lp_pool2d(x, self.norm_type, self.kernel_size, self.stride)
+
+
+class LPPool3d(LPPool1d):
+    def forward(self, x):
+        return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride)
 
 
 class AdaptiveAvgPool2d(_PoolND):
@@ -1631,27 +1659,75 @@ class Conv3d(Module):
 
 
 class MaxPool1d(Module):
-    def __init__(self, kernel_size, stride=None):
+    def __init__(self, kernel_size, stride=None, return_indices=False):
         super().__init__()
         self.kernel_size, self.stride = kernel_size, stride
+        self.return_indices = return_indices
 
     def forward(self, x):
-        return max_pool1d(x, self.kernel_size, self.stride)
+        return max_pool1d(x, self.kernel_size, self.stride,
+                          return_indices=self.return_indices)
 
     def __repr__(self):
         return f"MaxPool1d(kernel_size={self.kernel_size}, stride={self.stride})"
 
 
 class MaxPool3d(Module):
-    def __init__(self, kernel_size, stride=None):
+    def __init__(self, kernel_size, stride=None, return_indices=False):
         super().__init__()
         self.kernel_size, self.stride = kernel_size, stride
+        self.return_indices = return_indices
 
     def forward(self, x):
-        return max_pool3d(x, self.kernel_size, self.stride)
+        return max_pool3d(x, self.kernel_size, self.stride,
+                          return_indices=self.return_indices)
 
     def __repr__(self):
         return f"MaxPool3d(kernel_size={self.kernel_size}, stride={self.stride})"
+
+
+class _MaxUnpoolND(Module):
+    """`MaxPool` 이 고른 자리로 값을 되돌린다. 차원마다 함수만 다르다.
+
+    **`forward` 가 인자를 둘 받는다.** 다른 층과 다른 모양이라 `Sequential` 에 그냥
+    못 넣는데, torch 도 같다 — 자리표는 값과 함께 흘러야 하고 그것을 층 안에 숨기면
+    같은 층을 두 번 쓸 때 남의 자리표를 쓰게 된다.
+    """
+
+    fn = None
+    dim = 0
+
+    def __init__(self, kernel_size, stride=None, padding=0):
+        super().__init__()
+        # **축마다 펴서 든다.** torch 가 그렇게 들고, `repr` 에 그 튜플이 그대로
+        # 나온다 — 수 하나로 들고 있으면 `kernel_size=2` 로 찍혀 갈린다.
+        n = type(self).dim
+        self.kernel_size = tuple(_spread(kernel_size, n))
+        self.stride = tuple(_spread(kernel_size if stride is None else stride, n))
+        self.padding = tuple(_spread(padding, n))
+
+    def forward(self, x, indices, output_size=None):
+        return type(self).fn(x, indices, self.kernel_size, self.stride,
+                             self.padding, output_size)
+
+    def __repr__(self):
+        return (f"MaxUnpool{type(self).dim}d(kernel_size={self.kernel_size}, "
+                f"stride={self.stride}, padding={self.padding})")
+
+
+class MaxUnpool1d(_MaxUnpoolND):
+    fn = staticmethod(max_unpool1d)
+    dim = 1
+
+
+class MaxUnpool2d(_MaxUnpoolND):
+    fn = staticmethod(max_unpool2d)
+    dim = 2
+
+
+class MaxUnpool3d(_MaxUnpoolND):
+    fn = staticmethod(max_unpool3d)
+    dim = 3
 
 
 class BatchNorm3d(BatchNorm2d):
@@ -2208,7 +2284,8 @@ for _cls in (CELU, GLU, Hardshrink, Hardsigmoid, Hardswish, Hardtanh, LogSigmoid
              InstanceNorm1d, InstanceNorm2d, InstanceNorm3d, RMSNorm,
              AvgPool1d, AvgPool3d, AdaptiveAvgPool1d, AdaptiveAvgPool3d,
              AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d,
-             LPPool1d, LPPool2d):
+             LPPool1d, LPPool2d, LPPool3d,
+             MaxUnpool1d, MaxUnpool2d, MaxUnpool3d):
     setattr(nn, _cls.__name__, _cls)
 nn.MSELoss = MSELoss
 nn.BCELoss = BCELoss
@@ -2297,6 +2374,17 @@ class _Functional(_Namespace):
     adaptive_max_pool3d = staticmethod(adaptive_max_pool3d)
     lp_pool1d = staticmethod(lp_pool1d)
     lp_pool2d = staticmethod(lp_pool2d)
+    lp_pool3d = staticmethod(lp_pool3d)
+    # 이긴 자리를 함께 내는 판과, 그 자리로 되돌리는 짝.
+    adaptive_max_pool1d_with_indices = staticmethod(adaptive_max_pool1d_with_indices)
+    adaptive_max_pool2d_with_indices = staticmethod(adaptive_max_pool2d_with_indices)
+    adaptive_max_pool3d_with_indices = staticmethod(adaptive_max_pool3d_with_indices)
+    max_pool1d_with_indices = staticmethod(max_pool1d_with_indices)
+    max_pool2d_with_indices = staticmethod(max_pool2d_with_indices)
+    max_pool3d_with_indices = staticmethod(max_pool3d_with_indices)
+    max_unpool1d = staticmethod(max_unpool1d)
+    max_unpool2d = staticmethod(max_unpool2d)
+    max_unpool3d = staticmethod(max_unpool3d)
     conv_transpose1d = staticmethod(conv_transpose1d)
     conv_transpose2d = staticmethod(conv_transpose2d)
     conv_transpose3d = staticmethod(conv_transpose3d)

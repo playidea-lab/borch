@@ -468,6 +468,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addShuffle(out);
   addMisc(out);
   addCell(out);
+  addUnpool(out);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -1060,6 +1061,83 @@ function addCell(out: Map<string, Case>): void {
       return gradOf(inp, name);
     });
   }
+}
+
+/**
+ * 이긴 자리를 함께 내는 풀링과, 그 자리로 되돌리는 짝.
+ *
+ * 최대 풀링은 창마다 하나만 남기므로 **값 안에 "어느 칸이 이겼는가" 가 없다.**
+ * `maxUnpool` 은 그래서 값만으로 못 돌아간다. 자리는 torch 의 규약대로 **평면 안의
+ * 평평한 번호**이고, 배치·채널마다 0 부터 다시 센다.
+ *
+ * 함정 둘은 파이썬 쪽 `unpool_cases` 에 길게 적었다. 짧게: 같은 값이 둘이면 평평한
+ * 번호가 작은 쪽이 이기고, 나누어떨어지지 않는 적응형은 창 길이가 자리마다 다르다.
+ */
+function addUnpool(out: Map<string, Case>): void {
+  const grid = (shape: number[]) =>
+    Tensor.from(
+      Array.from({ length: shape.reduce((a, b) => a * b, 1) }, (_, i) => i),
+      shape,
+    );
+  const plane = () => grid([1, 1, 4, 4]);
+  const planes = () => grid([2, 2, 4, 4]);
+  const line = () => grid([1, 1, 8]);
+  const cube = () => grid([1, 1, 4, 4, 4]);
+  const odd = () => grid([1, 1, 3, 3]);
+
+  const pools: [string, () => { values: Tensor; indices: Tensor }][] = [
+    ["max_pool1d", () => line().maxPoolWithIndices(2)],
+    ["max_pool2d", () => plane().maxPoolWithIndices(2)],
+    ["max_pool2d(stride=1)", () => plane().maxPoolWithIndices(2, 1)],
+    ["여러 평면", () => planes().maxPoolWithIndices(2)],
+    ["max_pool3d", () => cube().maxPoolWithIndices(2)],
+    ["적응형", () => plane().adaptiveMaxPoolWithIndices(2)],
+    ["적응형(3→2)", () => odd().adaptiveMaxPoolWithIndices(2)],
+    ["적응형 1차원", () => line().adaptiveMaxPoolWithIndices(4)],
+    ["적응형 3차원", () => cube().adaptiveMaxPoolWithIndices(2)],
+  ];
+  for (const [name, run] of pools) {
+    out.set(`unpool::자리::${name}`, () => run().indices);
+    out.set(`unpool::값::${name}`, () => run().values);
+  }
+
+  // 자리를 켠 길과 안 켠 길이 **같은 값**이어야 한다. 커널이 둘이라 갈릴 수 있다.
+  out.set("unpool::자리를 켜도 값은 같다",
+    () => plane().maxPool2d(2).sub(plane().maxPoolWithIndices(2).values));
+
+  const back = (src: () => Tensor, kernel = 2, stride?: number) => {
+    const got = src().maxPoolWithIndices(kernel, stride);
+    return got.values.maxUnpool(got.indices, kernel, stride);
+  };
+  out.set("unpool::되돌리기::1차원", () => back(line));
+  out.set("unpool::되돌리기::2차원", () => back(plane));
+  out.set("unpool::되돌리기::3차원", () => back(cube));
+  out.set("unpool::되돌리기::여러 평면", () => back(planes));
+  out.set("unpool::되돌리기::겹치는 창", () => back(plane, 2, 1));
+  out.set("unpool::되돌리기::output_size", () => {
+    const got = plane().maxPoolWithIndices(2);
+    return got.values.maxUnpool(got.indices, 2, undefined, 0, [5, 5]);
+  });
+
+  out.set("unpool::grad::자리 판의 풀링", () => {
+    const x = grid([1, 1, 4, 4]);
+    x.requiresGrad = true;
+    const got = x.maxPoolWithIndices(2);
+    got.values.mul(Tensor.full([], 2)).sum().backward();
+    return gradOf(x, "maxPoolWithIndices");
+  });
+
+  out.set("unpool::grad::되돌리기", () => {
+    const pooled = grid([1, 1, 2, 2]);
+    pooled.requiresGrad = true;
+    const idx = plane().maxPoolWithIndices(2).indices;
+    pooled.maxUnpool(idx, 2).sum().backward();
+    return gradOf(pooled, "maxUnpool");
+  });
+
+  const small = () => grid([1, 1, 4, 4, 4]).div(Tensor.full([], 8));
+  out.set("unpool::lp_pool3d", () => small().lpPool(2, 2));
+  out.set("unpool::lp_pool3d(p=1)", () => small().lpPool(1, 2));
 }
 
 /**
