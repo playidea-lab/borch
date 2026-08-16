@@ -51,27 +51,6 @@ function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
   return arg.length > 0 && !(arg[0] instanceof Tensor);
 }
 
-/**
- * **제자리로 고칠 버퍼는 자기 것이어야 한다.**
- *
- * `Tensor.full` 은 원소가 하나면 **값으로 캐시한 버퍼를 돌려준다**(`scalarCache`).
- * 학습 루프에서 `x * 0.5` 가 매 스텝 같은 상수를 만드는 것을 막으려는 것이고 거기서는
- * 옳다 — 아무도 그 버퍼에 안 쓰기 때문이다.
- *
- * 옵티마이저 상태는 다르다. `copyFrom` 으로 제자리에 쓰므로, 크기 1 파라미터에서는
- * **프로그램 전체가 공유하는 그 상수를 덮어쓴다.** 예외도 경고도 없고, 그때부터
- * `Tensor.full([], lr)` 이 다른 값을 낸다 — 원인에서 아주 먼 자리에서 틀리기 시작한다.
- *
- * `Tensor.zeros`·`ones` 도 `full` 을 지나므로 같은 자리다. **상태를 만드는 길은 전부
- * 여기를 지나야 한다** — 처음에 `Composed.state()` 만 고쳤는데 `SGD`·`Adam`·`RMSprop`
- * 은 전용 커널을 써서 그 밑동 밖이라 안 닿았다. "크기가 1 일 때만 조심" 같은 규칙으로
- * 두면 잊으므로, 만드는 자리를 하나로 모은다.
- */
-function ownedBuffer(shape: readonly number[], value = 0): Tensor {
-  const n = shape.reduce((a, b) => a * b, 1);
-  return keepAlive(Tensor.from(new Float32Array(n).fill(value), shape));
-}
-
 export abstract class Optimizer {
   /** torch 와 같은 모양 — 스케줄러가 여기 `lr` 을 고친다. */
   readonly paramGroups: ParamGroup[] = [];
@@ -85,8 +64,13 @@ export abstract class Optimizer {
   /** `step` 이 도는 동안 지금 밟고 있는 그룹. `lr` 이 이것을 본다. */
   private currentGroup = 0;
 
-  /** `state()` 가 만든 은행들. 그룹이 늘면 여기 전부에 자리를 더한다. */
-  private readonly banks: Tensor[][] = [];
+  /**
+   * `state()` 가 만든 은행들. 그룹이 늘면 여기 전부에 자리를 더한다.
+   *
+   * 채운 값을 같이 든다 — `Rprop` 의 걸음 크기는 0 이 아니라 `lr` 에서 시작하고,
+   * 나중에 더한 파라미터도 같은 자리에서 출발해야 한다.
+   */
+  private readonly banks: { slots: Tensor[]; value: number }[] = [];
 
   constructor(params: ParamsArg, private readonly defaultLr: number) {
     const groups: readonly ParamGroupInit[] = isGroups(params)
@@ -122,9 +106,7 @@ export abstract class Optimizer {
    */
   addParamGroup(init: ParamGroupInit): void {
     const group = this.attach(init);
-    for (const bank of this.banks) {
-      for (const p of group.params) bank.push(keepAlive(Tensor.owned(p.shape)));
-    }
+    this.extendState(group.params);
   }
 
   /**
@@ -132,15 +114,35 @@ export abstract class Optimizer {
    *
    * 옛날에는 옵티마이저마다 `params.map(...)` 으로 직접 만들었고, 그러면 나중에
    * 더해진 파라미터의 자리가 비어 있게 된다.
+   *
+   * @param value 채울 값. `Rprop` 의 걸음 크기만 0 이 아니다.
    */
-  protected state(shapes: readonly Tensor[]): Tensor[] {
-    // **`Tensor.zeros` 를 쓰면 안 된다.** 원소 하나짜리는 값으로 캐시되어 있어 같은
-    // 버퍼가 오고, 옵티마이저는 상태에 **쓴다** — `Adam` 의 m·v 가 겹쳐 명령 버퍼가
-    // 통째로 무효가 되고 `SGD` 의 모멘텀은 전역 0 상수를 덮어쓴다. `owned` 는 자기
-    // 버퍼를 준다(`tensor.ts`).
-    const bank = shapes.map((p) => keepAlive(Tensor.owned(p.shape)));
-    this.banks.push(bank);
-    return bank;
+  protected state(shapes: readonly Tensor[], value = 0): Tensor[] {
+    // **`Tensor.zeros`·`Tensor.full` 을 쓰면 안 된다.** 원소 하나짜리는 값으로
+    // 캐시되어 있어 같은 버퍼가 오고, 옵티마이저는 상태에 **쓴다** — `Adam` 의 m·v 가
+    // 겹쳐 명령 버퍼가 통째로 무효가 되고, `SGD` 의 모멘텀과 `Rprop` 의 걸음 크기는
+    // 프로그램 전체가 쓰는 상수를 덮어쓴다. `owned` 는 자기 버퍼를 준다(`tensor.ts`).
+    //
+    // **만드는 자리를 하나로 모으는 것이 요점이다.** 이 결함을 처음 고칠 때 한쪽은
+    // `Composed.state()` 만 고쳤는데 `SGD`·`Adam`·`RMSprop` 은 전용 커널을 써서 그
+    // 밑동 밖이라 안 닿았고, 고쳤다고 적힌 채로 셋이 남아 있었다. "크기가 1 일 때만
+    // 조심" 같은 규칙으로 두면 다음 옵티마이저에서 또 잊는다 — 실제로 `Rprop` 이
+    // 그렇게 들어왔다.
+    const slots = shapes.map((p) => keepAlive(Tensor.owned(p.shape, value)));
+    this.banks.push({ slots, value });
+    return slots;
+  }
+
+  /**
+   * 그룹이 늘 때 상태를 같이 늘린다.
+   *
+   * 기본은 등록된 은행마다 **파라미터 모양** 자리를 더한다. 그 전제가 안 맞는
+   * 옵티마이저(`Adafactor` 는 행·열로 접은 분산을 든다)는 여기를 덮어쓴다.
+   */
+  protected extendState(added: readonly Tensor[]): void {
+    for (const { slots, value } of this.banks) {
+      for (const p of added) slots.push(keepAlive(Tensor.owned(p.shape, value)));
+    }
   }
 
   /** 지금 밟고 있는 그룹의 학습률. */
@@ -493,11 +495,11 @@ export class ASGD extends Composed {
   private mu = 1;
   private stepCount = 0;
 
-  constructor(params: Tensor[], lr = 1e-2, private readonly lambd = 1e-4,
+  constructor(params: ParamsArg, lr = 1e-2, private readonly lambd = 1e-4,
               private readonly alpha = 0.75, private readonly t0 = 1e6,
               private readonly weightDecay = 0) {
     super(params, lr);
-    this.ax = this.state(params);
+    this.ax = this.state(this.params);
     this.eta = lr;
   }
 
@@ -532,12 +534,15 @@ export class Rprop extends Composed {
   private readonly prev: Tensor[];
   private readonly stepSize: Tensor[];
 
-  constructor(params: Tensor[], lr = 1e-2, private readonly etaMinus = 0.5,
+  constructor(params: ParamsArg, lr = 1e-2, private readonly etaMinus = 0.5,
               private readonly etaPlus = 1.2, private readonly sizeMin = 1e-6,
               private readonly sizeMax = 50) {
     super(params, lr);
-    this.prev = this.state(params);
-    this.stepSize = params.map((p) => ownedBuffer(p.shape, lr));
+    this.prev = this.state(this.params);
+    // **`Tensor.full` 로 만들면 안 된다.** 크기 1 파라미터에서 그것은 값으로 캐시된
+    // 전역 `lr` 상수를 돌려주는데, 아래 `update` 가 `size.copyFrom(...)` 으로 거기에
+    // 쓴다 — 프로그램 전체의 그 상수가 학습 중에 바뀐다. 예외는 안 난다.
+    this.stepSize = this.state(this.params, lr);
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
@@ -574,25 +579,36 @@ export class Adafactor extends Composed {
   private readonly variance: (Tensor | null)[] = [];
   private stepCount = 0;
 
-  constructor(params: Tensor[], lr = 1e-2, private readonly beta2Decay = -0.8,
+  constructor(params: ParamsArg, lr = 1e-2, private readonly beta2Decay = -0.8,
               private readonly eps1: number | null = null,
               private readonly eps2 = 1e-3, private readonly d = 1.0,
               private readonly weightDecay = 0) {
     super(params, lr);
-    for (const p of params) {
+    this.extendState(this.params);
+  }
+
+  /**
+   * **밑동의 기본을 못 쓴다.** 이 옵티마이저의 상태는 파라미터 모양이 아니라 행·열로
+   * 접은 것이고, 랭크에 따라 어느 쪽을 드는지도 갈린다. 자리 수는 파라미터와 맞으므로
+   * (안 쓰는 쪽은 `null` 로 채운다) 색인은 그대로 통한다.
+   *
+   * 생성자와 `addParamGroup` 이 같은 이 자리를 지난다 — 둘로 나눠 적으면 언젠가
+   * 한쪽만 고친다.
+   */
+  protected override extendState(added: readonly Tensor[]): void {
+    for (const p of added) {
       const rank = p.shape.length;
       if (rank > 1) {
         const rows = [...p.shape.slice(0, -1), 1];
         const cols = [...p.shape.slice(0, -2), 1, p.shape[rank - 1] ?? 1];
-        // 행·열 은행은 파라미터 모양이 아니라 **접은 모양**이라 `state()` 를 못 쓴다.
-        // 캐시를 피하는 것은 같은 이유다 — `(1, 1)` 이면 원소가 하나다.
-        this.rowVar.push(ownedBuffer(rows));
-        this.colVar.push(ownedBuffer(cols));
+        // 제자리로 갱신되므로 캐시를 안 타는 `owned` 여야 한다.
+        this.rowVar.push(keepAlive(Tensor.owned(rows)));
+        this.colVar.push(keepAlive(Tensor.owned(cols)));
         this.variance.push(null);
       } else {
         this.rowVar.push(null);
         this.colVar.push(null);
-        this.variance.push(ownedBuffer(p.shape));
+        this.variance.push(keepAlive(Tensor.owned(p.shape)));
       }
     }
   }
@@ -884,6 +900,13 @@ export class OneCycleLR extends LRScheduler {
  * 내려온다 — **오르내림이 같으면 그 인자가 있는지도 안 보인다.**
  *
  * `mode` 셋 중 `expRange` 만 기준이 **주기가 아니라 걸음**이다. 거기가 갈리는 자리다.
+ */
+/**
+ * **그룹이 여럿이면 경계가 상대값이 된다.** torch 는 `base_lr`·`max_lr` 을 그룹마다
+ * 목록으로 받는데 여기서는 수 하나다. 밑동의 규칙대로 첫 그룹 기준으로 계산한 값에
+ * 각 그룹의 기준 비율이 곱해지므로, 그룹 i 는 `baseLr·rᵢ` 와 `maxLr·rᵢ` 사이를 돈다.
+ * 층별 학습률을 준 사람이 기대하는 쪽이지만, torch 와 **같은 것은 아니다.**
+ * 그룹이 하나면 비율이 1 이라 차이가 없다.
  */
 export class CyclicLR extends LRScheduler {
   private readonly down: number;

@@ -1307,14 +1307,14 @@ function addUnpool(out: Map<string, Case>): void {
   // ── embedding_bag ──────────────────────────────────────────────────────
   const ebTable = () => Tensor.from(
     Array.from({ length: 20 }, (_, i) => i / 10), [5, 4]);
-  const ebIdx = () => Tensor.from([0, 2, 1, 4], [2, 2], false, "int64");
+  const ebIdx = () => Tensor.from([0, 2, 1, 4], [2, 2], { dtype: "int64" });
   for (const mode of ["mean", "sum", "max"] as const) {
     out.set(`fname::embedding_bag::${mode}`,
       () => nn.embeddingBag(ebIdx(), ebTable(), null, mode));
   }
   out.set("fname::embedding_bag::offsets",
     () => nn.embeddingBag(
-      Tensor.from([0, 2, 1, 4, 3], [5], false, "int64"), ebTable(), [0, 2], "sum"));
+      Tensor.from([0, 2, 1, 4, 3], [5], { dtype: "int64" }), ebTable(), [0, 2], "sum"));
   out.set("fname::embedding_bag::per_sample_weights",
     () => nn.embeddingBag(ebIdx(), ebTable(), null, "sum",
       Tensor.from([1, 2, 0.5, 0.5], [2, 2])));
@@ -1414,8 +1414,7 @@ function addUnpool(out: Map<string, Case>): void {
   const mhaW = (shape: number[], spin: number, grad = false) => {
     const n = shape.reduce((a, b) => a * b, 1);
     return Tensor.from(
-      Array.from({ length: n }, (_, i) => Math.sin(i + spin) * 0.5), shape,
-      grad);
+      Array.from({ length: n }, (_, i) => Math.sin(i + spin) * 0.5), shape, { requiresGrad: grad });
   };
   const mhaQ = (grad = false) => mhaW([3, 2, 4], 0.0, grad);
   const mhaK = () => mhaW([3, 2, 4], 0.7);
@@ -2195,7 +2194,7 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   //
   // 위의 모델 학습은 옵티마이저가 **대충 맞으면** 지난다. 갈래를 정하는 인자들은
   // 파라미터 하나에 기울기를 손으로 먹여야 드러난다.
-  const start = () => Tensor.from([1, -2, 0.5], [3], true);
+  const start = () => Tensor.from([1, -2, 0.5], [3], { requiresGrad: true });
   const ramp = (i: number) => Tensor.from(
     [0.1 * (i + 1), -0.3 * (i + 1), 0.2 * (i + 1)], [3]);
   // **부호가 뒤집히는 기울기.** Rprop 의 `etas` 와 "뒤집힌 칸은 안 간다" 규칙이
@@ -2253,7 +2252,7 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   const matrixWalk = (shape: number[]) => () => {
     const n = shape.reduce((a, b) => a * b, 1);
     const p = Tensor.from(
-      Array.from({ length: n }, (_, i) => i / 4 - 0.5), shape, true);
+      Array.from({ length: n }, (_, i) => i / 4 - 0.5), shape, { requiresGrad: true });
     const opt = new optim.Adafactor([p], 0.1);
     for (let i = 0; i < 3; i++) {
       opt.zeroGrad();
