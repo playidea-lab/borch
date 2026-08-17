@@ -10,7 +10,9 @@ import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
 import { Device, type DeviceKind, type InitOptions } from "./device.js";
 import { type AxisPlan, isSlice, planAxis, type Slice } from "./indexing.js";
 import { gauss, uniform } from "./random.js";
-import { byRank, type DType, promote, rankOf } from "./dtype.js";
+import {
+  byRank, type DType, floatsPerElement, isComplexDType, promote, rankOf,
+} from "./dtype.js";
 import {
   IndexError, LinAlgError, NotImplementedError, RuntimeError, TORCH,
 } from "./errors.js";
@@ -675,7 +677,49 @@ export class Tensor implements Node<Tensor> {
           "호스트에 있는 텐서는 연산에 못 쓴다 — `webgpu()` 로 올려라.",
       );
     }
+    // **복소수도 여기서 막힌다 — 같은 문 하나를 두 번 쓴다.**
+    //
+    // 복소수 버퍼는 칸당 f32 두 개다. 그것을 모르는 커널이 받으면 앞쪽 절반만
+    // 실수로 읽고 **예외 없이** 틀린 답을 낸다. 176 군데 진입점에 하나씩 가드를
+    // 다는 것은 될 일이 아니지만, 그 전부가 결국 이 게터를 지난다.
+    //
+    // 복소수를 아는 코드는 `raw` 로 들어온다. 그래서 **기본값이 거절**이고, 새 연산을
+    // 추가하는 사람이 아무것도 안 하면 그 연산은 복소수를 안 받는다 — 반대로 두면
+    // 아무것도 안 한 연산이 복소수를 조용히 잘못 먹는다.
+    if (isComplexDType(this.dtype)) {
+      throw new RuntimeError(
+        "이 연산은 complex64 를 아직 안 받는다 — 저장이 칸당 f32 두 개(인터리브)라 " +
+          "복소수를 모르는 커널이 읽으면 조용히 틀린다. " +
+          "`view_as_real` 로 실수 텐서를 만든 뒤 쓰거나, 실수부·허수부를 따로 다뤄라.",
+      );
+    }
     return this.gpu;
+  }
+
+  /**
+   * 값이 든 버퍼 — **복소수 검사 없이.** 복소수를 아는 코드만 쓴다.
+   *
+   * 장치 검사는 그대로 한다. 두 게터의 차이는 복소수 한 줄뿐이고, 그 한 줄이 곧
+   * "이 코드가 인터리브 저장을 안다" 는 선언이다.
+   */
+  get raw(): GPUBuffer {
+    if (this.gpu === null) {
+      throw new RuntimeError(
+        `${TORCH.crossDevice}, but found at least two devices, webgpu and cpu! ` +
+          "호스트에 있는 텐서는 연산에 못 쓴다 — `webgpu()` 로 올려라.",
+      );
+    }
+    return this.gpu;
+  }
+
+  /**
+   * 버퍼가 실제로 든 f32 칸 수. 실수는 `size` 와 같고 **복소수는 그 두 배다.**
+   *
+   * 읽기·복사·수명처럼 "값이 몇 칸인가" 만 묻는 자리가 이것을 쓴다. `size` 를 그대로
+   * 쓰면 복소수의 뒤쪽 절반이 조용히 잘린다 — 모양도 원소 수도 그럴듯한 채로.
+   */
+  get floats(): number {
+    return this.size * floatsPerElement(this.dtype);
   }
 
   /**
@@ -731,6 +775,16 @@ export class Tensor implements Node<Tensor> {
     const shp = shape ?? [flat.length];
     if (numel(shp) !== flat.length) {
       throw new Error(`모양 [${shp}] 는 원소 ${flat.length}개와 안 맞는다.`);
+    }
+    // **복소수는 이 문으로 못 들어온다.** 이름표만 `complex64` 로 달면 칸 수는
+    // `n` 인데 저장 규약은 `2n` 을 요구하므로, 뒤쪽 절반이 남의 메모리가 된다 —
+    // 예외 없이 아무 값이나 읽힌다. 엮는 자리를 하나로 둔다.
+    if (dtype === "complex64") {
+      throw new RuntimeError(
+        "Tensor.from 으로는 complex64 를 못 만든다 — 저장이 칸당 f32 두 개다. " +
+          "`Tensor.complex(re, im)`·`Tensor.polar(r, θ)` 나 " +
+          "`x.viewAsComplex()` 를 써라.",
+      );
     }
     if (requiresGrad && dtype !== "float32") {
       // 정수와 참·거짓에는 기울기가 정의되지 않는다. torch 도 여기서 멈춘다 —
@@ -1107,6 +1161,20 @@ export class Tensor implements Node<Tensor> {
   binary(name: string, other: Tensor, dtype?: DType): Tensor {
     const spec = BINARY[name];
     if (!spec) throw new Error(`모르는 이항 연산: ${name}`);
+    // **복소수가 끼면 여기서 갈린다.** 이 메서드가 이항 연산의 유일한 문이라
+    // `add`·`mul` 뿐 아니라 역전파의 기울기 누적까지 전부 여기를 지난다 — 누적이
+    // 실수 커널로 새면 복소수 잎의 기울기가 앞쪽 절반만 더해진다.
+    if (this.isComplex() || other.isComplex()) {
+      if (name === "add" || name === "sub" || name === "mul" || name === "div") {
+        return this.complexBinary(name, other);
+      }
+      // 나머지는 아래 실수 커널로 가면 안 된다. `buffer` 게터가 막겠지만, 문구가
+      // "이 연산은 아직" 이라 어느 연산인지가 안 남는다.
+      throw new RuntimeError(
+        `complex64 에는 ${name} 이(가) 아직 없다 — 지금 되는 것은 ` +
+          "add·sub·mul·div 다.",
+      );
+    }
     const outType = dtype ?? resultDType(name, this.dtype, other.dtype);
     const shape = broadcastShapes(this.shape, other.shape);
     const sa = alignStrides(this.shape, shape);
@@ -1220,6 +1288,13 @@ export class Tensor implements Node<Tensor> {
 
   /** 전부 더해 스칼라 하나로. `backward()` 의 출발점이다. */
   sum(): Tensor {
+    // **복소수는 실수 축약 둘로 쪼갠다.** 합은 실수부와 허수부에 각각 걸리므로
+    // 새 커널이 필요 없다 — `real`·`imag`·`complex` 가 이미 있고 셋 다 역방향을 안다.
+    //
+    // 이 자리가 있어야 "복소 손실의 backward 는 거절" 이 **거절 자리에서** 거절된다.
+    // 없으면 그 앞의 `sum()` 이 먼저 막고, 그러면 같은 예외 종류가 나와서 케이스는
+    // 통과하는데 정작 물으려던 자리는 안 지난다 — 통과가 증명을 안 하는 모양이다.
+    if (this.isComplex()) return Tensor.complex(this.real().sum(), this.imag().sum());
     const out = dev().sumAll(this.buffer, this.size);
     const shape = this.shape;
     return Tensor.make(
@@ -1338,7 +1413,12 @@ export class Tensor implements Node<Tensor> {
    * 그 몫이 정확히 상쇄되긴 하지만 부동소수에서는 큰 것끼리 빼는 꼴이 된다.
    */
   detach(): Tensor {
-    return new Tensor(this.buffer, this.shape, { requiresGrad: false });
+    // **형을 물려준다.** 안 물려주면 `x.to("int64").detach().dtype` 이 float32 다 —
+    // 값은 같은 버퍼라 안 변하고 이름표만 조용히 갈린다. 복소수에서는 그 이름표가
+    // 곧 저장 규약이라 잃으면 뒤쪽 절반이 사라진 것처럼 읽힌다.
+    return new Tensor(this.raw, this.shape, {
+      requiresGrad: false, dtype: this.dtype,
+    });
   }
 
   /**
@@ -1608,13 +1688,18 @@ export class Tensor implements Node<Tensor> {
       );
     }
     const from = this.shape;
+    // **복소수도 지난다.** 이 연산은 칸을 안 옮기고 이름표만 바꾸므로 인터리브
+    // 저장에 그대로 맞다 — 그래서 `raw` 로 들어온다. 칸을 **옮기는** 모양 연산
+    // (`cat`·`select`·`transpose`…)은 f32 단위로 옮겨서 실·허가 어긋나므로
+    // `buffer` 게터가 계속 막는다. 둘을 한 묶음으로 보면 안 된다.
+    const dt = this.dtype;
     return Tensor.make(
-      this.buffer,
+      this.raw,
       shape,
       [this],
-      (g) => [new Tensor(g.buffer, from)],
+      (g) => [new Tensor(g.raw, from, { dtype: dt })],
       "ViewBackward0",
-      this.dtype,
+      dt,
     );
   }
 
@@ -6533,6 +6618,322 @@ export class Tensor implements Node<Tensor> {
     return centered.div(varc.binary("add", Tensor.full([], eps)).sqrt());
   }
 
+  // ── 복소수 ────────────────────────────────────────────────────────────
+  //
+  // 저장은 **인터리브** 다 — `[re, im, re, im, …]` 한 버퍼. 그래서 `viewAsReal` 과
+  // `viewAsComplex` 가 **진짜 뷰**가 된다(버퍼를 그대로 들고 이름표와 모양만 바꾼다).
+  // torch 도 그 둘이 뷰다. 실수부와 허수부를 텐서 둘로 나눠 들었다면 여기서 복사가
+  // 났을 것이고, `Tensor` 가 버퍼를 둘 들어야 해서 수명·장치 경로가 전부 그것을
+  // 배워야 했다. 버퍼 하나라는 불변식을 지키는 대신 **길이**만 두 배가 된다.
+  //
+  // ## 기울기 규약 (재서 못 박은 것)
+  //
+  // torch 는 복소 손실에 `backward()` 를 거절한다. 손실이 늘 실수이므로
+  //
+  //     z.grad = ∂L/∂re + i·∂L/∂im
+  //
+  // 이 잘 정의되고, 그 위에서 **정칙 함수의 역방향에 켤레가 붙는다** —
+  // `mul`·`div` 가 그 자리다. 실수를 내는 `abs` 는 정칙이 아니라 안 붙고(`z/|z|`),
+  // `conj` 자신은 `conj(g)` 다. 셋이 다른 규칙이고 실수 입력으로는 셋 다 구분이
+  // 안 된다 — 켤레가 실수에서 항등이기 때문이다.
+
+  /** 이 텐서가 복소수인가. `torch.is_complex` 자리다. */
+  isComplex(): boolean {
+    return isComplexDType(this.dtype);
+  }
+
+  /** 복소수 커널 하나. 입력들을 받아 `outFloats` 칸짜리 버퍼를 낸다. */
+  private static cRun(
+    key: string,
+    source: () => string,
+    inputs: readonly GPUBuffer[],
+    outFloats: number,
+    threads: number,
+  ): GPUBuffer {
+    const out = dev().alloc(outFloats);
+    dev().run1d(dev().pipeline(key, source), [...inputs, out], threads);
+    return out;
+  }
+
+  /**
+   * 실수부와 허수부를 엮는다. `torch.complex` 자리다.
+   *
+   * 역방향은 받은 복소 기울기를 **그대로 갈라 준다** — 규약이 곧
+   * `(∂L/∂re, ∂L/∂im)` 이라 꺼내는 것 말고 할 일이 없다. 이 자리가 규약의 정의다.
+   */
+  static complex(re: Tensor, im: Tensor): Tensor {
+    if (re.shape.length !== im.shape.length
+      || re.shape.some((d, i) => d !== im.shape[i])) {
+      throw new RuntimeError(
+        `complex 는 모양이 같아야 한다: [${re.shape}] vs [${im.shape}]`,
+      );
+    }
+    const n = re.size;
+    const out = Tensor.cRun(`cpack:${n}`, () => complexPack(n),
+      [re.buffer, im.buffer], 2 * n, n);
+    return Tensor.make(
+      out, re.shape, [re, im],
+      (g) => [
+        re.requiresGrad ? g.real() : null,
+        im.requiresGrad ? g.imag() : null,
+      ],
+      "ComplexBackward0", "complex64",
+    );
+  }
+
+  /** 크기와 편각으로 만든다. `torch.polar` 자리다. */
+  static polar(abs: Tensor, angle: Tensor): Tensor {
+    if (abs.shape.length !== angle.shape.length
+      || abs.shape.some((d, i) => d !== angle.shape[i])) {
+      throw new RuntimeError(
+        `polar 는 모양이 같아야 한다: [${abs.shape}] vs [${angle.shape}]`,
+      );
+    }
+    const n = abs.size;
+    const out = Tensor.cRun(`cpolar:${n}`, () => complexPolar(n),
+      [abs.buffer, angle.buffer], 2 * n, n);
+    return new Tensor(out, abs.shape, { dtype: "complex64" });
+  }
+
+  /**
+   * 복소수를 **실수 짝으로 본다** — 모양 끝에 2 가 붙는다. 버퍼를 안 옮긴다.
+   *
+   * 인터리브 저장이 이 한 줄을 위해 있다고 해도 된다. torch 에서도 뷰다.
+   */
+  viewAsReal(): Tensor {
+    if (!this.isComplex()) {
+      throw new RuntimeError(
+        "view_as_real 은 복소수 텐서에만 쓴다 — 지금 형은 " +
+          `torch.${this.dtype} 다.`,
+      );
+    }
+    const shape = [...this.shape, 2];
+    const back = this.shape;
+    return Tensor.make(
+      this.raw, shape, [this],
+      (g) => [new Tensor(g.raw, back, { dtype: "complex64" })],
+      "ViewAsRealBackward0", "float32",
+    );
+  }
+
+  /** 실수 짝을 복소수로 본다. `viewAsReal` 의 반대이고 역시 뷰다. */
+  viewAsComplex(): Tensor {
+    const last = this.shape[this.shape.length - 1];
+    if (this.isComplex() || last !== 2) {
+      throw new RuntimeError(
+        "view_as_complex 는 마지막 축이 2 인 실수 텐서에만 쓴다: " +
+          `[${this.shape}] (형 torch.${this.dtype})`,
+      );
+    }
+    const shape = this.shape.slice(0, -1);
+    const back = this.shape;
+    return Tensor.make(
+      this.raw, shape, [this],
+      (g) => [new Tensor(g.raw, back, { dtype: "float32" })],
+      "ViewAsComplexBackward0", "complex64",
+    );
+  }
+
+  /** 복소수 하나를 요구한다. 실수를 받으면 어느 이름이 틀렸는지 말한다. */
+  private needComplex(what: string): void {
+    if (!this.isComplex()) {
+      throw new RuntimeError(
+        `${what} 은(는) 복소수 텐서에만 쓴다 — 지금 형은 torch.${this.dtype} 다.`,
+      );
+    }
+  }
+
+  /**
+   * 실수부. **기울기는 `g + 0i` 로 돌아간다.**
+   *
+   * torch 에서 이것은 스트라이드 뷰인데 여기서는 **복사**다 — 우리 텐서는 모양만
+   * 들고 스트라이드를 안 들어서 칸 걸러 보는 틀을 만들 수가 없다. 값은 같다.
+   */
+  real(): Tensor {
+    this.needComplex("real");
+    const n = this.size;
+    const out = Tensor.cRun(`cpart:0:${n}`, () => complexPart(n, 0),
+      [this.raw], n, n);
+    return Tensor.make(
+      out, this.shape, [this], (g) => [g.asComplexRe()],
+      "RealBackward0", "float32",
+    );
+  }
+
+  /**
+   * 허수부. **기울기는 `0 + gi` 다** — `−gi` 로 적으면 부호만 뒤집힌 채 그럴듯하게
+   * 돈다. torch 를 재보면 `z.imag` 의 기울기가 `0+1j` 다.
+   */
+  imag(): Tensor {
+    this.needComplex("imag");
+    const n = this.size;
+    const out = Tensor.cRun(`cpart:1:${n}`, () => complexPart(n, 1),
+      [this.raw], n, n);
+    return Tensor.make(
+      out, this.shape, [this], (g) => [g.asComplexIm()],
+      "ImagBackward0", "float32",
+    );
+  }
+
+  /** 실수를 `x + 0i` 로 올린다. 역방향이 실수부만 도로 꺼낸다. */
+  private asComplexRe(): Tensor {
+    const n = this.size;
+    const out = Tensor.cRun(`cfromre:${n}`, () => complexFromReal(n),
+      [this.buffer], 2 * n, n);
+    return Tensor.make(
+      out, this.shape, [this], (g) => [g.real()],
+      "ToComplexBackward0", "complex64",
+    );
+  }
+
+  /** 실수를 `0 + xi` 로 올린다. */
+  private asComplexIm(): Tensor {
+    const n = this.size;
+    const out = Tensor.cRun(`cfromim:${n}`, () => complexFromImag(n),
+      [this.buffer], 2 * n, n);
+    return Tensor.make(
+      out, this.shape, [this], (g) => [g.imag()],
+      "ToComplexBackward0", "complex64",
+    );
+  }
+
+  /**
+   * 켤레. **정칙이 아니라 역방향이 `conj(g)`** 다 — `conj(f')·g` 꼴이 아니다.
+   *
+   * **torch 와 갈리는 자리다.** torch 의 `conj` 는 게을러서 켤레 비트만 세우고
+   * 값을 안 뒤집는다(그래서 `is_conj` 가 참이고 `view_as_real` 이 거절한다).
+   * 우리 것은 즉시 뒤집으므로 그 상태가 아예 없다 — 값은 같다.
+   */
+  conjPhysical(): Tensor {
+    if (!this.isComplex()) return this;
+    const n = this.size;
+    const out = Tensor.cRun(`cconj:${n}`, () => complexConj(n), [this.raw],
+      2 * n, n);
+    return Tensor.make(
+      out, this.shape, [this], (g) => [g.conjPhysical()],
+      "ConjBackward0", "complex64",
+    );
+  }
+
+  conj(): Tensor {
+    return this.conjPhysical();
+  }
+
+  /**
+   * 부호를 뒤집는다. **스칼라 −1 을 곱하지 않는다** — 복소수 이항은 모양이 같아야
+   * 해서 스칼라가 못 들어오고, 모양대로 −1 텐서를 만드는 것은 버퍼 한 벌을 더 쓴다.
+   */
+  private complexNeg(): Tensor {
+    const n = this.size;
+    const out = Tensor.cRun(`cneg:${n}`, () => complexNeg(n), [this.raw],
+      2 * n, n);
+    return Tensor.make(
+      out, this.shape, [this], (g) => [g.complexNeg()],
+      "NegBackward0", "complex64",
+    );
+  }
+
+  /**
+   * 복소수의 크기. **결과가 실수이고 기울기가 `z/|z|`** 다 — 켤레가 **안** 붙는다.
+   *
+   * 실수 `abs` 는 단항 표에 있고 이쪽으로 안 온다. `abs()` 가 형을 보고 갈라 준다 —
+   * **공개인 이유가 그것이다.** 갈라 주는 자리가 클래스 밖(단항 표를 얹은 뒤)이라
+   * 비공개면 못 부른다.
+   */
+  complexAbs(): Tensor {
+    const n = this.size;
+    const out = Tensor.cRun(`cabs:${n}`, () => complexAbs(n), [this.raw], n, n);
+    return Tensor.make(
+      out, this.shape, [this],
+      (g) => [new Tensor(
+        Tensor.cRun(`cabsb:${n}`, () => complexAbsBackward(n),
+          [this.raw, g.buffer], 2 * n, n),
+        this.shape, { dtype: "complex64" },
+      )],
+      "AbsBackward0", "float32",
+    );
+  }
+
+  /** 편각. 복소수는 `atan2(im, re)`, 실수는 음수에 π 다(형은 언제나 실수). */
+  angle(): Tensor {
+    if (!this.isComplex()) {
+      return this.binary("lt", Tensor.full([], 0), "float32")
+        .mul(Tensor.full([], Math.PI));
+    }
+    const n = this.size;
+    const out = Tensor.cRun(`cangle:${n}`, () => complexAngle(n), [this.raw],
+      n, n);
+    return new Tensor(out, this.shape, { dtype: "float32" });
+  }
+
+  /**
+   * 복소수 이항. **모양이 같아야 한다** — 브로드캐스팅은 아직 없다.
+   *
+   * 실수가 한쪽에 오면 `x + 0i` 로 올려서 들인다. 실수 커널을 그대로 쓰는 길도
+   * 있지만(덧셈은 평평한 2n 칸에서 그냥 맞는다) 곱셈이 안 맞고, 어떤 연산은 맞고
+   * 어떤 연산은 안 맞는 규칙은 다음 사람이 틀리기 좋은 규칙이다.
+   */
+  private complexBinary(name: "add" | "sub" | "mul" | "div", other: Tensor): Tensor {
+    // **실수 쪽만 모양을 맞춰 준다** — 복소수로 올리기 **전에** 늘리면 실수 쪽의
+    // 브로드캐스팅(`expand`)을 그대로 빌릴 수 있다. 올린 뒤에 늘리려 하면 인터리브를
+    // 아는 `expand` 가 따로 있어야 한다. 순서 하나로 커널 하나를 안 쓴다.
+    const same = (p: readonly number[], q: readonly number[]): boolean =>
+      p.length === q.length && p.every((d, i) => d === q[i]);
+    let x: Tensor = this;
+    let y: Tensor = other;
+    if (!x.isComplex() && y.isComplex() && !same(x.shape, y.shape)) {
+      x = x.expand(...y.shape);
+    }
+    if (!y.isComplex() && x.isComplex() && !same(x.shape, y.shape)) {
+      y = y.expand(...x.shape);
+    }
+    const a: Tensor = x.isComplex() ? x : x.asComplexRe();
+    const b: Tensor = y.isComplex() ? y : y.asComplexRe();
+    if (!same(a.shape, b.shape)) {
+      // 복소수끼리 모양이 다른 경우다. 여기는 아직 없다 — 값을 지어내지 않는다.
+      throw new RuntimeError(
+        `복소수 ${name} 은 아직 모양이 같아야 한다: [${a.shape}] vs [${b.shape}] ` +
+          "— 복소수끼리의 브로드캐스팅은 없다.",
+      );
+    }
+    const n = a.size;
+    const out = Tensor.cRun(`cbin:${name}:${n}`, () => complexBinary(name, n),
+      [a.raw, b.raw], 2 * n, n);
+    return Tensor.make(
+      out, a.shape, [a, b],
+      (g) => {
+        // **켤레가 여기 붙는다.** `d(ab)/da = b` 가 아니라 `conj(b)` 이고,
+        // 나눗셈도 같은 자리다. 실수만 넣어 보면 이 줄이 있는지 없는지 모른다.
+        switch (name) {
+          case "add":
+            return [a.requiresGrad ? g : null, b.requiresGrad ? g : null];
+          case "sub":
+            return [
+              a.requiresGrad ? g : null,
+              b.requiresGrad ? g.complexNeg() : null,
+            ];
+          case "mul":
+            return [
+              a.requiresGrad ? g.complexBinary("mul", b.conjPhysical()) : null,
+              b.requiresGrad ? g.complexBinary("mul", a.conjPhysical()) : null,
+            ];
+          default: {
+            const cb = b.conjPhysical();
+            return [
+              a.requiresGrad ? g.complexBinary("div", cb) : null,
+              b.requiresGrad
+                ? g.complexBinary("mul", a.conjPhysical())
+                  .complexBinary("div", cb.complexBinary("mul", cb))
+                  .complexNeg()
+                : null,
+            ];
+          }
+        }
+      },
+      `${name[0]?.toUpperCase()}${name.slice(1)}Backward0`, "complex64",
+    );
+  }
+
   // ── 역전파 ────────────────────────────────────────────────────────────
 
   /**
@@ -6564,6 +6965,17 @@ export class Tensor implements Node<Tensor> {
       throw new RuntimeError(
         `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: ` +
           "no_grad 안이었거나 흐름을 끊는 연산을 지났다.",
+      );
+    }
+    // **손실은 실수여야 한다.** torch 가 그 자리에서 멈춘다(실측).
+    //
+    // 이 한 줄이 복소수 기울기 규약 전체를 떠받친다 — 손실이 늘 실수라야
+    // `z.grad = ∂L/∂re + i·∂L/∂im` 이 잘 정의된다. 복소 손실을 받아 주면
+    // Wirtinger 의 나머지 절반을 정해야 하고, 그것은 안 정한 자리다.
+    if (isComplexDType(this.dtype)) {
+      throw new RuntimeError(
+        "grad can be implicitly created only for real scalar outputs " +
+          "but got torch.complex64: `.real`·`.abs()` 로 실수를 만든 뒤 불러라.",
       );
     }
     let seed: Tensor;
@@ -6610,7 +7022,9 @@ export class Tensor implements Node<Tensor> {
    */
   async cpu(): Promise<Tensor> {
     if (this.gpu === null) return this;
-    return new Tensor(await dev().read(this.gpu, this.size), this.shape, {
+    // **`floats` 다.** 복소수는 칸당 둘이라 `size` 로 읽으면 뒤쪽 절반이 잘린다 —
+    // 모양과 형은 그대로 붙어 나오므로 잘린 것이 안 보인다.
+    return new Tensor(await dev().read(this.gpu, this.floats), this.shape, {
       dtype: this.dtype,
     });
   }
@@ -6628,11 +7042,19 @@ export class Tensor implements Node<Tensor> {
 
   // ── 읽기 ──────────────────────────────────────────────────────────────
 
+  /**
+   * 값을 평평한 f32 배열로.
+   *
+   * **복소수는 인터리브 그대로 나온다** — 길이가 `size` 가 아니라 `2 × size` 이고
+   * `[re, im, re, im, …]` 이다. 실수부만 원하면 `real()` 을, 짝으로 원하면
+   * `viewAsReal()` 을 먼저 불러라. 여기서 실수부만 골라 주면 길이가 그럴듯해져서
+   * 값을 잃은 것이 안 보인다.
+   */
   async toArray(): Promise<Float32Array> {
     // 이미 호스트에 있으면 왕복이 없다. **사본을 준다** — 안쪽 저장을 그대로 내보내면
     // 받은 쪽이 그것을 고칠 때 텐서 값이 같이 바뀐다.
     if (this.host !== null) return this.host.slice();
-    return dev().read(this.buffer, this.size);
+    return dev().read(this.raw, this.floats);
   }
 
   /**
@@ -6670,6 +7092,14 @@ export class Tensor implements Node<Tensor> {
    * 자세한 이유는 `src/repr.ts` 에 있다.
    */
   async repr(): Promise<string> {
+    // **복소수는 아직 못 찍는다.** `1.+2.j` 꼴을 torch 와 글자까지 맞추려면 그쪽
+    // 자리맞춤 규칙을 재서 굳혀야 하고, 그건 아직 안 한 일이다. 반쯤 맞는 글자를
+    // 내면 그것이 교재의 줄과 안 맞는데도 맞는 것처럼 보인다.
+    if (isComplexDType(this.dtype)) {
+      throw new RuntimeError(
+        "complex64 의 repr 은 아직 없다 — `viewAsReal()` 로 실수 짝을 찍어라.",
+      );
+    }
     const values = Array.from(await this.toArray());
     return formatTensor({
       values,
@@ -6688,6 +7118,16 @@ export class Tensor implements Node<Tensor> {
   /** 형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다. */
   to(dtype: DType): Tensor {
     if (dtype === this.dtype) return this;
+    // **복소수는 이름표 갈이로 오갈 수 없다.** 다른 형끼리는 저장이 float32 하나로
+    // 같아서 이름만 바꾸면 되는데, 복소수만 칸당 두 개다 — 양쪽 어느 방향으로든
+    // 이름만 바꾸면 버퍼 길이와 `size` 가 어긋난 채로 남는다.
+    if (dtype === "complex64" || isComplexDType(this.dtype)) {
+      throw new RuntimeError(
+        `torch.${this.dtype} → torch.${dtype} 는 이름표 갈이로 안 된다 — ` +
+          "복소수는 저장이 칸당 f32 두 개다. " +
+          "`Tensor.complex(re, im)`·`viewAsComplex()`·`real()` 로 오가라.",
+      );
+    }
     const from = this.dtype;
     return Tensor.make(
       this.buffer,
@@ -6702,6 +7142,14 @@ export class Tensor implements Node<Tensor> {
   }
 
   async item(): Promise<number> {
+    // **자바스크립트에 복소수가 없다.** 실수부만 돌려주면 숫자 하나가 그럴듯하게
+    // 나오면서 허수부가 사라진다 — 없는 것보다 나쁜 답이다.
+    if (isComplexDType(this.dtype)) {
+      throw new RuntimeError(
+        "complex64 에는 item() 이 없다 — JS 에 복소수 값이 없다. " +
+          "`real()`·`imag()` 로 갈라서 꺼내라.",
+      );
+    }
     if (this.size !== 1) {
       throw new RuntimeError(
         `a Tensor with ${this.size} elements ${TORCH.itemScalar}`,
@@ -6756,6 +7204,124 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 }`;
 }
 
+// ── 복소수 커널 ─────────────────────────────────────────────────────────
+//
+// 전부 **복소수 칸 하나에 스레드 하나**다. 그래서 `i` 는 언제나 복소수 색인이고,
+// f32 자리는 `i*2`(실수부)와 `i*2+1`(허수부)이다. 스레드를 f32 칸에 붙이면 짝을
+// 한꺼번에 못 읽어서 곱셈이 안 써진다.
+
+/**
+ * 1 차원 복소수 커널의 틀. **격자 접는 줄을 한 번만 적는다.**
+ *
+ * 열 개 가까운 커널이 같은 머리를 갖는데, 손으로 열 번 적으면 그중 하나가 다르게
+ * 적히는 날이 온다 — 이 저장소가 이미 그 종류로 여러 번 물렸다.
+ *
+ * @param names 바인딩 이름들. **마지막이 출력**이고 그것만 쓰기 가능이다.
+ */
+function complexShader(n: number, names: readonly string[], body: string): string {
+  const decls = names.map((nm, i) => {
+    const mode = i === names.length - 1 ? "read_write" : "read";
+    return `@group(0) @binding(${i}) var<storage, ${mode}> ${nm}: array<f32>;`;
+  }).join("\n");
+  const stride = Math.min(Math.max(1, Math.ceil(n / 64)), 65535) * 64;
+  return `
+${decls}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let gid = g.y * ${stride}u + g.x;
+  if (gid >= ${n}u) { return; }
+  let i = gid * 2u;
+${body}
+}`;
+}
+
+/** 실수부·허수부를 엮어 인터리브로. */
+function complexPack(n: number): string {
+  return complexShader(n, ["Re", "Im", "Out"],
+    "  Out[i] = Re[gid];\n  Out[i + 1u] = Im[gid];");
+}
+
+/** 크기·편각에서 인터리브로. */
+function complexPolar(n: number): string {
+  return complexShader(n, ["R", "T", "Out"],
+    "  Out[i] = R[gid] * cos(T[gid]);\n  Out[i + 1u] = R[gid] * sin(T[gid]);");
+}
+
+/** 실수부(`off=0`)나 허수부(`off=1`)를 꺼낸다. */
+function complexPart(n: number, off: 0 | 1): string {
+  return complexShader(n, ["Z", "Out"], `  Out[gid] = Z[i + ${off}u];`);
+}
+
+/** 실수를 `x + 0i` 로. */
+function complexFromReal(n: number): string {
+  return complexShader(n, ["A", "Out"],
+    "  Out[i] = A[gid];\n  Out[i + 1u] = 0.0;");
+}
+
+/** 실수를 `0 + xi` 로. */
+function complexFromImag(n: number): string {
+  return complexShader(n, ["A", "Out"],
+    "  Out[i] = 0.0;\n  Out[i + 1u] = A[gid];");
+}
+
+/** 켤레. 허수부만 뒤집는다. */
+function complexConj(n: number): string {
+  return complexShader(n, ["Z", "Out"],
+    "  Out[i] = Z[i];\n  Out[i + 1u] = -Z[i + 1u];");
+}
+
+/** 부호 뒤집기. 둘 다 뒤집는다 — 켤레와 헷갈리기 쉬운 자리다. */
+function complexNeg(n: number): string {
+  return complexShader(n, ["Z", "Out"],
+    "  Out[i] = -Z[i];\n  Out[i + 1u] = -Z[i + 1u];");
+}
+
+/** 크기. 결과는 실수 한 칸이다. */
+function complexAbs(n: number): string {
+  return complexShader(n, ["Z", "Out"],
+    "  Out[gid] = sqrt(Z[i] * Z[i] + Z[i + 1u] * Z[i + 1u]);");
+}
+
+/** 편각. `atan2(im, re)` — 인자 차례가 뒤집히면 조용히 다른 각이 된다. */
+function complexAngle(n: number): string {
+  return complexShader(n, ["Z", "Out"], "  Out[gid] = atan2(Z[i + 1u], Z[i]);");
+}
+
+/**
+ * `abs` 의 역방향. **켤레가 안 붙는다** — `abs` 는 실수를 내므로 정칙이 아니다.
+ *
+ * 0 에서는 방향이 없다. torch 도 거기서 0 을 준다 — 나누는 값을 1 로 바꿔 두면
+ * 분자가 0 이라 결과가 0 이 된다.
+ */
+function complexAbsBackward(n: number): string {
+  return complexShader(n, ["Z", "G", "Out"], `
+  let re = Z[i];
+  let im = Z[i + 1u];
+  let m = sqrt(re * re + im * im);
+  let s = select(1.0, m, m > 0.0);
+  Out[i] = G[gid] * re / s;
+  Out[i + 1u] = G[gid] * im / s;`);
+}
+
+/** 복소수 사칙. 모양이 같은 것끼리만 온다. */
+function complexBinary(name: "add" | "sub" | "mul" | "div", n: number): string {
+  const head = `
+  let ar = A[i];
+  let ai = A[i + 1u];
+  let br = B[i];
+  let bi = B[i + 1u];`;
+  const body: Readonly<Record<string, string>> = {
+    add: "\n  Out[i] = ar + br;\n  Out[i + 1u] = ai + bi;",
+    sub: "\n  Out[i] = ar - br;\n  Out[i + 1u] = ai - bi;",
+    mul: "\n  Out[i] = ar * br - ai * bi;\n  Out[i + 1u] = ar * bi + ai * br;",
+    div: `
+  let d = br * br + bi * bi;
+  Out[i] = (ar * br + ai * bi) / d;
+  Out[i + 1u] = (ai * br - ar * bi) / d;`,
+  };
+  return complexShader(n, ["A", "B", "Out"], head + (body[name] ?? ""));
+}
+
 /** 2차원 전치 커널. 모양이 상수라 나눗셈이 안 남는다. */
 function transposeKernel(M: number, N: number): string {
   const n = M * N;
@@ -6789,6 +7355,24 @@ for (const name of Object.keys(UNARY)) {
   Object.defineProperty(Tensor.prototype, `${name}_`, {
     value: function (this: Tensor): Tensor {
       return this.inplaceUnary(name);
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * **`abs` 만 표 뒤에서 다시 단다.** 위 루프가 프로토타입에 얹고 나므로, 클래스
+ * 본문에 적은 것은 덮인다 — 순서가 곧 규칙이다.
+ *
+ * 복소수의 `abs` 는 실수를 내고 기울기가 `z/|z|` 다. 실수의 것과 커널도 형도
+ * 역방향도 달라서 표의 단항으로는 안 된다.
+ */
+{
+  const realAbs = Tensor.prototype.abs;
+  Object.defineProperty(Tensor.prototype, "abs", {
+    value: function (this: Tensor): Tensor {
+      return this.isComplex() ? this.complexAbs() : realAbs.call(this);
     },
     writable: true,
     configurable: true,
@@ -6867,7 +7451,9 @@ export async function scope<T>(
   try {
     return await body();
   } finally {
-    d.endScope(keep().map((t) => t.buffer));
+    // **`raw` 다.** 살려 둘 것 중에 복소수가 있으면 `buffer` 가 거절하고, 그러면
+    // 구역을 닫는 자리에서 예외가 난다 — 수명 관리는 값의 형을 알 필요가 없다.
+    d.endScope(keep().map((t) => t.raw));
   }
 }
 
@@ -6877,7 +7463,7 @@ export function keepAlive(t: Tensor): Tensor {
   // 자바스크립트의 쓰레기 수집이 알아서 가져간다. `keepAlive(await t.cpu())` 는
   // 자연스러운 줄이므로 여기서 거절하면 안 된다.
   if (t.device === "cpu") return t;
-  dev().keep(t.buffer);
+  dev().keep(t.raw);
   return t;
 }
 

@@ -262,9 +262,9 @@ uv run --with playwright python tests/browser/run.py \
 | **데이터** | `Dataset` · `TensorDataset` · `Subset` · `ConcatDataset` · `DataLoader` · `WeightedRandomSampler` · `random_split(generator=)` · `collate_fn` |
 | **저장** | `state_dict` · `load_state_dict` · `save`/`load` · 버퍼(`running_mean` 등) 포함 |
 | **nn.functional** | 25종 — 활성·손실·`pad`·`normalize`·`cosine_similarity`·`one_hot`·`layer_norm`·`embedding` |
-| **복소수** | `complex64` 만 — `complex`·`polar`·`view_as_real`/`view_as_complex`·`real`/`imag`/`conj`/`angle`/`abs` · 산술 · autograd. **코어(numpy)에만 있다** (아래) |
+| **복소수** | `complex64` 만 — `complex`·`polar`·`view_as_real`/`view_as_complex`·`real`/`imag`/`conj`/`angle`/`abs` · 산술 · autograd. 코어와 borch.ts 에 있고 **파이썬 결속에는 아직 없다** (아래) |
 
-### 복소수 — `complex64` 만, 지금은 코어만
+### 복소수 — `complex64` 만
 
 `complex128` 은 **영원히 없다.** WGSL 에 `f64` 가 없어서 브라우저에서 도는 절반이
 그것을 못 든다. 그래서 이름은 두되, `complex64 + float64` 처럼 승격이 그것을 만들려는
@@ -286,8 +286,16 @@ uv run --with playwright python tests/browser/run.py \
 그 상태가 아예 없고, **`is_conj` 는 언제나 `False`** 다. 값은 같다 —
 `conj_physical` 로 물으면 양쪽이 같은 답을 낸다.
 
-**borch.ts 에는 아직 없다.** 저장이 인터리브(실·허가 번갈아)로 바뀌어야 하는데
-그것이 `size ↔ 버퍼 길이 1:1` 전제를 건드린다. 그 전까지 복소수 케이스는 코어만 본다.
+**borch.ts 의 저장은 인터리브다** — `[re, im, re, im, …]` 한 버퍼. 그래서
+`view_as_real`·`view_as_complex` 가 **진짜 뷰**이고(torch 도 그렇다), 대신 오래된
+불변식 `size = 버퍼 길이` 가 `버퍼 길이 = size × 2` 로 갈린다. 그것을 모르는 커널이
+복소수 버퍼를 읽으면 앞쪽 절반만 실수로 보고 **예외 없이** 틀린 답을 내므로,
+**기본값이 거절**이다 — 복소수를 아는 연산만 따로 문을 지난다. `Tensor.from` 으로
+형만 `complex64` 라고 붙이는 것, 이름표 갈이(`to`), 체크포인트 저장도 같은 이유로
+막혀 있다.
+
+**파이썬 결속(`borch_webgpu`)에는 아직 이름이 안 붙었다.** 그동안 복소수 골든 25 건은
+그쪽만 건너뛴다.
 
 ## torchvision — `transforms` 만 (`borch_vision`)
 
@@ -371,12 +379,12 @@ WebGPU 에 동기 읽기가 없는데도 **`await` 이 안 나온다.** Pyodide 
 부른다. 기본값이 자기 이름이라 남의 `import torch` 는 안 건드린다 — 위의 표와 같은
 선택이다.
 
-골든 **2263 건**을 지난다. 표 전체는 2288 건인데 **복소수 25 건은 코어에만 있다** —
-borch.ts 에 아직 복소수 저장이 없어서다(반대로 1·3 차원 합성곱 53 건은 코어가
-일부러 거절하는 것이라 코어가 건너뛴다). 갈림이 양쪽으로 나 있고, 건너뛴 수가 곧
-그 범위 차이다.
+골든 **2263 건**을 지난다. 표 전체는 2288 건인데 **복소수 25 건이 여기만 빠진다** —
+코어와 borch.ts 에는 복소수가 있고 이 결속에 아직 이름이 안 붙었다(반대로 1·3 차원
+합성곱 53 건은 코어가 일부러 거절하는 것이라 코어가 건너뛴다). 갈림이 양쪽으로 나
+있고, 건너뛴 수가 곧 그 범위 차이다.
 
-borch.ts 자신은 1779 건에 TS 본문을 써 두었다. 나머지 509 건은 **일부러 안 옮겼다** —
+borch.ts 자신은 1804 건에 TS 본문을 써 두었다. 나머지 484 건은 **일부러 안 옮겼다** —
 결속(`borch-webgpu`)이 이미 그 케이스들에서 borch.ts 커널을 지나므로 **값은 검증되고
 있고**, TS 본문이 추가로 증명하는 것은 값이 아니라 이쪽 표면(이름과 인자 순서)이다.
 그중 상당수는 파이썬 이름 별칭을 묻는 것이라 옮기면 같은 질문이 두 번이 된다.

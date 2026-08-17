@@ -20,12 +20,37 @@
 
 import { RuntimeError } from "./errors.js";
 
-export type DType = "float32" | "int64" | "bool";
+export type DType = "float32" | "int64" | "bool" | "complex64";
 
 /** 낮을수록 아래. 승격은 높은 쪽으로만 간다. */
-const RANK: Readonly<Record<DType, number>> = { bool: 0, int64: 1, float32: 2 };
+const RANK: Readonly<Record<DType, number>> = {
+  bool: 0, int64: 1, float32: 2, complex64: 3,
+};
 
-const BY_RANK: readonly DType[] = ["bool", "int64", "float32"];
+const BY_RANK: readonly DType[] = ["bool", "int64", "float32", "complex64"];
+
+/**
+ * 원소 하나가 float32 몇 칸을 먹는가.
+ *
+ * **여기가 이 파일에서 유일하게 `int64` 와 다른 자리다.** `int64` 는 이름표라 저장이
+ * float32 하나 그대로인데, `complex64` 는 **실제로 두 칸**을 먹는다 — 실수부와
+ * 허수부가 번갈아 놓인다(인터리브).
+ *
+ * 그래서 `tensor.ts` 의 오랜 불변식 **"칸 수 = 버퍼 길이"** 가 깨진다. 새 불변식은
+ * `버퍼 길이 = size × floatsPerElement(dtype)` 이고, 그것을 아는 코드만 복소수
+ * 버퍼에 닿아야 한다 — 모르는 커널이 닿으면 앞쪽 절반만 실수로 읽고 **조용히**
+ * 틀린 답을 낸다. 그 문을 `Tensor.buffer` 게터가 지킨다.
+ *
+ * **`complex128` 은 여기 안 온다.** WGSL 에 `f64` 가 없어서 배정도 복소수를 담을
+ * 수단이 아예 없다 — 코어(numpy)도 같은 이유로 그 이름에서 멈춘다.
+ */
+export function floatsPerElement(d: DType): number {
+  return d === "complex64" ? 2 : 1;
+}
+
+export function isComplexDType(d: DType): boolean {
+  return d === "complex64";
+}
 
 /**
  * 형 이름 전부. **밖에서 들어온 문자열이 형인지 가리는 자리**가 이것을 쓴다 —
@@ -48,15 +73,21 @@ export function scalarDType(v: number | boolean): DType {
 /**
  * 이항 연산의 결과 형.
  *
- * 세 규칙뿐이다.
- * 1. **나눗셈은 언제나 실수다.** `int64 / int64` 도 float32 다 — torch 의 `/` 는
+ * 네 규칙뿐이다.
+ * 1. **복소수가 끼면 결과도 복소수다.** 나눗셈도 마찬가지다 — 아래 2번보다 먼저 본다.
+ * 2. **나눗셈은 언제나 실수다.** `int64 / int64` 도 float32 다 — torch 의 `/` 는
  *    참나눗셈이고, 정수 나눗셈을 원하면 `//` 를 따로 부른다.
- * 2. **뺄셈에 bool 이 끼면 거절한다.** 참에서 거짓을 빼는 것이 무슨 뜻인지 정해진
+ * 3. **뺄셈에 bool 이 끼면 거절한다.** 참에서 거짓을 빼는 것이 무슨 뜻인지 정해진
  *    답이 없어서, torch 는 답을 지어내는 대신 멈춘다.
- * 3. 나머지는 높은 범주로 올린다.
+ * 4. 나머지는 높은 범주로 올린다.
+ *
+ * 1번을 2번 **앞에** 두는 것이 요점이다. 뒤에 두면 `z / z` 가 float32 로 내려앉고,
+ * 그러면 값이 반쯤 맞는 텐서가 나온다 — 실수부만 남고 허수부가 사라진 것이라
+ * 모양도 원소 수도 그럴듯하다.
  */
 export function promote(a: DType, b: DType, op: "+" | "-" | "*" | "/"): DType {
   if (op === "-" && (a === "bool" || b === "bool")) throw BoolSubtraction();
+  if (a === "complex64" || b === "complex64") return "complex64";
   if (op === "/") return "float32";
   return (RANK[a] >= RANK[b] ? a : b);
 }

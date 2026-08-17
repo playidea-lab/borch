@@ -481,7 +481,95 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addVision(out, inputs);
   addSeq(out, inputs);
   addEdge(out);
+  addComplex(out);
   return out;
+}
+
+/**
+ * 복소수 — `cplx::`.
+ *
+ * **파이썬 코어(numpy)가 먼저 갔고 여기가 뒤따른다.** 그동안 이 케이스들은 `golden.py`
+ * 의 `CORE_ONLY_PREFIXES` 에 걸려 브라우저 쪽이 통째로 건너뛰었다. 여기 본문이 생기는
+ * 순간 그 건너뜀이 끝나는 것이 아니라, **결속(`borch_webgpu`)은 아직 건너뛴다** —
+ * 파이썬 결속에 복소수 이름이 아직 없기 때문이다. 셋의 범위가 한 줄로 안 움직인다.
+ *
+ * ## 무엇을 묻는가
+ *
+ * 값보다 **기울기 쪽이 이 표의 요점**이다. 규약이
+ *
+ *     z.grad = ∂L/∂re + i·∂L/∂im
+ *
+ * 이라 정칙 함수(`mul`·`div`)의 역방향에는 켤레가 붙고, 실수를 내는 `abs` 에는 안
+ * 붙는다. **실수 입력으로는 그 차이가 안 보인다** — 켤레가 실수에서 항등이라서다.
+ * 그래서 셋을 한 표에서 묻는다.
+ *
+ * `(z*z).real` 은 그중에서도 **규약 자체를 가른다**: 이 규약이면 `2−4j`, 보통의 복소
+ * 미분이면 `2+4j` 다. 값만 맞히는 구현은 여기서 갈린다.
+ */
+function addComplex(out: Map<string, Case>): void {
+  const re = [1.0, -3.0];
+  const im = [2.0, 0.5];
+  const z = (): Tensor => Tensor.complex(Tensor.from(re), Tensor.from(im));
+  const P = "cplx::";
+
+  out.set(`${P}complex(re, im)`, () => z().viewAsReal());
+  out.set(`${P}complex 의 형`, () => dtypeName(z().dtype));
+  out.set(`${P}polar`, () =>
+    Tensor.polar(Tensor.from([1.0, 2.0]), Tensor.from([0.0, 1.5708]))
+      .viewAsReal());
+  out.set(`${P}view_as_complex 왕복`, () =>
+    z().viewAsReal().viewAsComplex().viewAsReal());
+  out.set(`${P}real`, () => z().real());
+  out.set(`${P}imag`, () => z().imag());
+  out.set(`${P}conj_physical`, () => z().conjPhysical().viewAsReal());
+  out.set(`${P}angle`, () => z().angle());
+  out.set(`${P}abs`, () => z().abs());
+  out.set(`${P}abs 의 형`, () => dtypeName(z().abs().dtype));
+  out.set(`${P}is_complex`, () => verdict(z().isComplex()));
+
+  out.set(`${P}z * z`, () => z().mul(z()).viewAsReal());
+  out.set(`${P}z + z`, () => z().add(z()).viewAsReal());
+  out.set(`${P}z / z`, () => z().div(z()).viewAsReal());
+  out.set(`${P}z * 실수`, () => z().mul(Tensor.from(re)).viewAsReal());
+  // 승격은 **형 이름**을 묻는다. 실수가 끼어도 복소수로 남아야 한다.
+  out.set(`${P}complex64 + float32 의 형`, () =>
+    dtypeName(z().add(Tensor.from([1.0])).dtype));
+  out.set(`${P}complex64 + int64 의 형`, () =>
+    dtypeName(z().add(Tensor.from([1]).to("int64")).dtype));
+
+  /**
+   * 기울기를 **실수 잎 둘**에서 받는다. 복소수 잎을 직접 만들지 않는 것이 요점이다 —
+   * 값이 `(∂L/∂re, ∂L/∂im)` 로 갈려 나와서 어느 쪽이 틀렸는지가 보인다.
+   */
+  const grad = (name: string, body: (w: Tensor) => Tensor): void => {
+    out.set(`${P}grad::${name}`, () => {
+      const r = Tensor.from(re, undefined, { requiresGrad: true });
+      const i = Tensor.from(im, undefined, { requiresGrad: true });
+      body(Tensor.complex(r, i)).sum().backward();
+      return Tensor.cat([gradOf(r, name), gradOf(i, name)], 0);
+    });
+  };
+
+  grad("z.real", (w) => w.real());
+  grad("z.imag", (w) => w.imag());
+  grad("abs(z)", (w) => w.abs());
+  grad("abs(z) 제곱", (w) => w.abs().mul(w.abs()));
+  grad("(z*z).real", (w) => w.mul(w).real());
+  grad("(z*conj(z)).real", (w) => w.mul(w.conjPhysical()).real());
+  grad("view_as_real 합", (w) => w.viewAsReal());
+
+  out.set(`${P}복소 손실의 backward 는 거절`, () => {
+    const r = Tensor.from(re, undefined, { requiresGrad: true });
+    const i = Tensor.from(im, undefined, { requiresGrad: true });
+    try {
+      Tensor.complex(r, i).mul(Tensor.complex(r, i)).sum().backward();
+      return "예외가 안 났다";
+    } catch {
+      // 골든은 **예외의 종류 이름**을 굳혔다. 코어(numpy)가 `RuntimeError` 를 내고
+      // 여기도 같은 이름이라야 옮겨 적은 코드가 같은 것을 잡는다.
+      return "RuntimeError";
+    }
+  });
 }
 
 /**

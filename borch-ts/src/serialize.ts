@@ -83,6 +83,15 @@ export async function save(
 
   for (const name of names) {
     const t = tensors[name] as Tensor;
+    // **복소수는 아직 이 파일 형식에 안 들어간다.** 저장이 칸당 f32 두 개라
+    // `shape` 와 몸 길이가 어긋나고, 그 상태는 저장은 되는데 **읽을 때** 터진다 —
+    // 체크포인트가 몇 시간 뒤에 못 읽히는 것이 제일 나쁜 실패다.
+    if (t.dtype === "complex64") {
+      throw new RuntimeError(
+        `'${name}' 이 complex64 다 — 아직 저장 못 한다. ` +
+          "`viewAsReal()` 로 실수 짝을 저장하고 읽을 때 `viewAsComplex()` 로 되돌려라.",
+      );
+    }
     const values = await t.toArray();
     const bytes = values.length * BYTES_PER_F32;
     header[name] = {
