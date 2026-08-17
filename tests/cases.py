@@ -1275,10 +1275,14 @@ CPLX_PREFIX = "cplx::"
 
 # **코어만 보는 케이스.** `WEBGPU_PREFIX` 와 정확히 반대 방향이다.
 #
-# 두 구현의 범위가 양쪽으로 갈리기 시작했다 — 자매에만 있는 것(1·3 차원 합성곱, 랭크
-# 7·8)은 코어가 건너뛰고, 코어에만 있는 것(지금은 복소수)은 자매가 건너뛴다. 갈림을
-# 접두사로 적어 두면 **건너뛴 수가 곧 그 범위 차이**가 되어 눈에 보인다.
-CORE_ONLY_PREFIXES = (CPLX_PREFIX,)
+# **지금은 비어 있다.** 복소수가 셋 다에 생기면서 이 방향의 갈림이 닫혔다 —
+# 코어 → borch.ts → 결속 순으로 세 커밋에 걸쳐 좁혀졌고, 그동안 이 자리가 "어디까지
+# 왔는가" 를 수로 보여 줬다.
+#
+# **장치는 남긴다.** 갈림은 다시 열린다(다음은 `fft` 가 그럴 참이다). 비었을 때
+# `startswith(())` 는 언제나 거짓이라 아무것도 안 건너뛴다 — 목록을 지우고 검사를
+# 지우면, 다음에 갈릴 때 그 갈림이 "구현이 빠졌다" 로 보인다.
+CORE_ONLY_PREFIXES = ()
 
 
 def complex_cases(inp=None):
@@ -1374,6 +1378,42 @@ def complex_cases(inp=None):
     grad("(z*z).real", lambda L, w: L.real(w * w))
     grad("(z*conj(z)).real", lambda L, w: L.real(w * L.conj_physical(w)))
     grad("view_as_real 합", lambda L, w: L.view_as_real(w))
+
+    # ── 찍기 ────────────────────────────────────────────────────────────
+    #
+    # **글자가 명세다.** 복소수의 `repr` 은 실수의 것을 조금 고친 게 아니라 규칙이
+    # 하나 더 있다 — **실수부와 허수부를 따로 잰다.** `[1+2j, -0.5-1j]` 에서 실수부는
+    # 소수 네 자리를 요구하고 허수부는 정수라, torch 가 `1.0000+2.j` 를 찍는다.
+    # 한 형식으로 재면 `1.0000+2.0000j` 가 되는데, 값은 전부 맞는 채로 글자만 갈린다.
+    #
+    # 세 줄로 그 규칙을 가른다: 실수부만 소수인 것, 허수부만 소수인 것, 그리고 형
+    # 이름이 붙는 자리(빈 텐서에는 `j` 라는 단서가 없어서 torch 가 형을 찍는다).
+    def shown(fn):
+        return lambda L, f=fn: repr(f(L))
+
+    def cx(L, values):
+        return L.tensor(np.array(values, dtype=np.complex64))
+
+    add("repr::실수부만 소수", shown(lambda L: cx(L, [1 + 2j, -0.5 - 1j])))
+    add("repr::허수부만 소수", shown(lambda L: cx(L, [1 + 2j, -3 + 0.5j])))
+    add("repr::둘 다 정수", shown(lambda L: cx(L, [1 + 2j, -3 - 1j])))
+    add("repr::2 차원", shown(lambda L: cx(L, [[1 + 2j, -0.5 - 1j],
+                                              [3 + 0j, 0 + 4j]])))
+    # **음의 0 은 부호가 산다** — 허수부를 절댓값으로 찍으면 여기서만 갈린다.
+    add("repr::음의 0 허수부", shown(lambda L: cx(L, [complex(1.0, -0.0)])))
+    # 빈 것에는 `j` 가 없어서 형 이름이 붙는다(실측). 값이 있으면 안 붙는다.
+    add("repr::빈 것", shown(lambda L: cx(L, [])))
+    # 한 줄에 몇 개가 들어가는지도 글자다. torch 는 글자 수가 아니라 **폭**으로 센다.
+    add("repr::줄바꿈",
+        shown(lambda L: cx(L, [complex(k, 0.5) for k in range(12)])))
+    add("repr::grad_fn 이 붙는다",
+        shown(lambda L: L.complex(L.tensor(re, requires_grad=True),
+                                  L.tensor(im, requires_grad=True))))
+    # **실수 쪽에서 같이 드러난 자리.** 정수 판의 서식이 `nan` 에도 점을 붙여서
+    # `tensor([nan., 1.])` 이 나왔다 — 소수 판은 `f"{nan:.4f}"` 가 이미 `nan` 이라
+    # 안 갈렸고, 그래서 nan 이 낀 **정수** 텐서에서만 났다.
+    add("repr::nan 낀 정수 텐서",
+        shown(lambda L: L.tensor(np.array([float("nan"), 1.0], dtype=np.float32))))
 
     # ── 거절 ────────────────────────────────────────────────────────────
     def refuses_complex_loss(L):

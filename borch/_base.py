@@ -160,20 +160,47 @@ def set_printoptions(precision=None, linewidth=None):
         _LINE_WIDTH = linewidth
 
 
+def _nonfinite_str(v):
+    """`nan`·`inf`·`-inf`. **점을 안 붙인다** — torch 도 그렇다(실측)."""
+    return "nan" if _np.isnan(v) else ("inf" if v > 0 else "-inf")
+
+
+def _integral_str(v):
+    """정수 판. 유한하지 않은 값은 점 없이 그대로 간다.
+
+    **여기가 한동안 `nan.` 을 찍고 있었다.** `f"{v:.0f}."` 가 `nan` 에도 점을 붙여서,
+    `tensor([nan, 1.])` 이 `tensor([nan., 1.])` 로 나왔다. 소수 판은 `f"{nan:.4f}"`
+    가 이미 `nan` 이라 이 자리만 갈렸고, 그래서 nan 이 낀 **정수** 텐서를 찍을 때만
+    드러났다 — 복소수를 붙이며 실수부에 nan 을 넣어 보다가 잡혔다.
+    """
+    return _nonfinite_str(v) if not _np.isfinite(v) else f"{v:.0f}."
+
+
 def _float_formatter(arr):
     """torch 의 규칙: 값이 전부 정수면 `1.`, 아니면 소수 네 자리, 범위가 넓으면 지수."""
     finite = arr[_np.isfinite(arr)]
     nonzero = finite[finite != 0]
     if nonzero.size == 0:
-        return lambda v: f"{v:.0f}."
+        return _integral_str
     amax, amin = _np.abs(nonzero).max(), _np.abs(nonzero).min()
     integral = bool(_np.all(finite == _np.floor(finite)))
 
     if integral and amax < 1e8:
-        return lambda v: f"{v:.0f}."
+        return _integral_str
     if amax / amin > 1000 or amax > 1e8 or amin < 1e-4:
         return lambda v, p=_PRINT_PRECISION: f"{v:.{p}e}"
     return lambda v, p=_PRINT_PRECISION: f"{v:.{p}f}"
+
+
+def _field_width(arr, fmt):
+    """오른쪽 정렬 폭.
+
+    **유한한 값만 센다** — torch 가 그렇다(실측). `nan` 을 폭에 넣으면 정수 판에서
+    폭이 3 이 되어 `1.` 이 ` 1.` 로 밀리는데, torch 는 `tensor([nan, 1.])` 이다.
+    유한하지 않은 값은 폭보다 길면 그냥 삐져나온다.
+    """
+    return max((len(fmt(v)) for v in _np.asarray(arr).reshape(-1)
+                if _np.isfinite(v)), default=0)
 
 
 def _tensor_str(data):
@@ -182,11 +209,37 @@ def _tensor_str(data):
     if data.dtype.kind == "f":
         fmt = _float_formatter(data)
         # torch 는 원소를 같은 너비로 오른쪽 정렬한다 — 음수가 섞이면 양수 앞에 자리가 생긴다.
-        width = max((len(fmt(v)) for v in data.reshape(-1)), default=0)
+        width = _field_width(data, fmt)
         padded = lambda v, f=fmt, w=width: f(v).rjust(w)
         body = _np.array2string(
             data, formatter={"float_kind": padded}, separator=", ",
             max_line_width=_LINE_WIDTH - 8, threshold=1000)
+    elif data.dtype.kind == "c":
+        # **실수부와 허수부를 따로 잰다**(실측). `[1+2j, -0.5-1j]` 에서 실수부는 소수
+        # 네 자리를 요구하고 허수부는 정수라, torch 가 `1.0000+2.j` 를 찍는다 — 한
+        # 형식으로 재면 `1.0000+2.0000j` 가 되어 글자가 갈린다.
+        #
+        # **자리맞춤은 실수부에만 건다**(실측). 허수부는 안 밀고 부호는 값의 부호를
+        # 그대로 쓴다 — 그래서 `1.-0.j` 처럼 **음의 0** 도 부호가 산다.
+        re_fmt = _float_formatter(data.real)
+        im_fmt = _float_formatter(data.imag)
+        width = _field_width(data.real, re_fmt)
+
+        def one(v, rf=re_fmt, mf=im_fmt, w=width):
+            im = mf(v.imag)
+            return f"{rf(v.real).rjust(w)}{im if im.startswith('-') else '+' + im}j"
+
+        # **줄바꿈 자리도 명세다.** torch 는 한 줄에 들어갈 개수를 글자 수가 아니라
+        # **폭**으로 센다 — `floor((linewidth − 7) / (실수폭 + 허수폭 + 3))`. numpy 는
+        # 실제 글자 길이로 끊으므로, 같은 자리에서 끊기게 예산을 되계산해 넘긴다.
+        # 실수 경로의 `_LINE_WIDTH - 8` 을 그대로 쓰면 12 개짜리가 6+6 이 아니라
+        # 5+5+2 로 접혀서, 값이 전부 맞는데 글자가 갈린다.
+        im_width = _field_width(data.imag, im_fmt)
+        per_line = max(1, (_LINE_WIDTH - 7) // (width + im_width + 3))
+        budget = per_line * (width + im_width + 4)
+        body = _np.array2string(
+            data, formatter={"complex_kind": one}, separator=", ",
+            max_line_width=budget, threshold=1000)
     else:
         body = _np.array2string(data, separator=", ",
                                 max_line_width=_LINE_WIDTH - 8, threshold=1000)
@@ -196,7 +249,15 @@ def _tensor_str(data):
 
 def _tensor_repr(t):
     parts = [_tensor_str(t.data)]
-    if t.data.dtype not in (_np.dtype("float32"), _np.dtype("int64"), _np.dtype("bool")):
+    dt = t.data.dtype
+    plain = dt in (_np.dtype("float32"), _np.dtype("int64"), _np.dtype("bool"))
+    # **complex64 는 값이 있으면 형을 안 찍는다**(실측). 끝의 `j` 가 이미 복소수라고
+    # 말하고 있어서 torch 도 생략한다. **빈 텐서에는 그 단서가 없어서 찍는다** —
+    # `tensor([], dtype=torch.complex64)`. 규칙이 형이 아니라 **단서의 유무**에 걸려
+    # 있는 자리라, 형 목록에만 넣어 두면 빈 것에서 갈린다.
+    if dt == _np.dtype("complex64") and t.data.size > 0:
+        plain = True
+    if not plain:
         parts.append(f"dtype={t.dtype}")
     if t._op:
         parts.append(f"grad_fn=<{t._op}>")

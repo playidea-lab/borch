@@ -6,7 +6,7 @@
 
 전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
 원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **5,314 줄**이다 — borch.ts 에 그것이 이미 다
+다시 구현해야 했기 때문이다. 이쪽은 **5,647 줄**이다 — borch.ts 에 그것이 이미 다
 있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
 
 `_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
@@ -102,10 +102,16 @@ from ._ops import (                                      # noqa: E402,F401
     # 통계. 난수 넷은 값이 아니라 **끝값**으로 굳는다. 뒤의 셋은 이름만 두고 거절한다.
     bernoulli, binomial, hash_tensor, histogramdd, istft, normal, poisson,
     stft, trapz,
-    # 복소수의 이웃. `imag` 만 거절인데 **torch 자신이 그렇게 한다**(실측).
-    angle, asarray, conj, conj_physical, conj_physical_, empty_permuted,
-    empty_strided, frombuffer, imag, is_complex, is_conj, is_neg, real,
-    resolve_conj, resolve_neg, range_top as range,
+    # 복소수. `imag` 는 실수에서 거절인데 **torch 자신이 그렇게 한다**(실측).
+    #
+    # **`complex` 는 파이썬 내장을 가린다.** 그래도 이 이름으로 내보내는 이유는
+    # `torch.complex(re, im)` 이 torch 의 이름이기 때문이다 — 여기는 `torch` 의
+    # 자리이지 파이썬의 자리가 아니다. `_ops.py` 안에서는 그 가림이 실제로 문제라
+    # 복소수 판정을 `_is_cplx` 로 따로 둔다.
+    angle, asarray, complex, conj, conj_physical, conj_physical_,
+    empty_permuted, empty_strided, frombuffer, imag, is_complex, is_conj,
+    is_neg, polar, real, resolve_conj, resolve_neg, view_as_complex,
+    view_as_real, range_top as range,
     # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,
@@ -174,4 +180,10 @@ int64 = _DType("int64")
 # 깨지고, 그 자리가 `_DType` 의 `__repr__` 로 새어 나왔다. 골든은 `L.bool` 로 부르므로
 # 모듈의 `__getattr__` 이 그 이름만 골라 준다 — `_ops.__getattr__` 이 그 일을 한다.
 bool_ = _DType("bool")
+complex64 = _DType("complex64")
+cfloat = complex64
+# **`complex128` 은 이름조차 안 둔다.** 코어는 이름을 두고 그 자리에서 멈추는데,
+# 거기는 numpy 가 승격으로 그것을 **만들 수 있어서** 막을 문이 필요했다. 여기는
+# borch.ts 가 `float64` 자체를 안 들어서 그 승격이 일어날 길이 없다 — 없는 문을
+# 세워 두면 다음 사람이 그 문이 무언가를 막고 있다고 읽는다.
 

@@ -1402,10 +1402,14 @@ def trapz(y, x=None, dx=1.0, dim=-1, **kw):
     return trapezoid(y, x, dx, dim, **kw)
 
 
-# ── 복소수의 이웃, 그리고 생성 몇 ──────────────────────────────────────────
+# ── 복소수, 그리고 생성 몇 ─────────────────────────────────────────────────
 #
-# **복소수가 없어도 답이 있는 이름들.** 실수에서 `conj` 계열은 항등이고 형까지 지킨다 —
-# `positive` 의 단항 커널로 보내면 형이 float32 로 떨어져서 `bool` 이 `bool` 로 안 나온다.
+# 한동안 이 자리는 **"복소수가 없어도 답이 있는 이름들"** 이었다 — 실수에서 `conj`
+# 계열이 항등이라 `_alias` 하나로 다 됐고, `is_complex` 는 `return False` 로 못
+# 박혀 있었다. borch.ts 에 복소수가 생기면서 그 답들이 **틀린 답**이 됐다.
+#
+# **"지금 통과하는 항등" 이 범위가 넓어질 때 제일 먼저 무너진다** — 코어에서
+# `conj_physical` 이 정확히 그렇게 무너졌고, 여기는 그 이름이 여섯 개였다.
 
 def _alias(t, **kw):
     """항등. **형과 그래프를 지키려면 `to(자기 형)` 이 가장 짧다** — borch.ts 의
@@ -1414,24 +1418,68 @@ def _alias(t, **kw):
     return t
 
 
+def _is_cplx(t):
+    """이 손잡이가 복소수인가. **`str()` 을 거친다** — `dtype` 은 JS 문자열이다."""
+    return str(handle(t).dtype) == "complex64"
+
+
+def complex(re, im, **kw):
+    """실수부와 허수부를 엮는다.
+
+    **이 이름이 파이썬 내장 `complex` 를 가린다.** 이 파일 안에서 복소수 판정에
+    `_is_cplx` 를 쓰는 이유가 그것이다 — 코어(`borch/_ops.py`)가 같은 자리에서
+    같은 선택을 했고, 셋째로 이름을 가리는 내장이다(`abs`·`bool`·`max`·`range`).
+    """
+    return wrap(_ts.Tensor.complex(handle(re), handle(im)))
+
+
+def polar(abs, angle, **kw):                                    # noqa: A002
+    """크기와 편각으로. 인자 이름이 torch 의 것이라 내장 `abs` 를 가린다."""
+    return wrap(_ts.Tensor.polar(handle(abs), handle(angle)))
+
+
+def view_as_real(t, **kw):
+    """복소수를 실수 짝으로. **뷰다** — borch.ts 의 저장이 인터리브라서 그렇다."""
+    return wrap(guarded(handle(t).viewAsReal))
+
+
+def view_as_complex(t, **kw):
+    return wrap(guarded(handle(t).viewAsComplex))
+
+
 def real(t, **kw):
-    """실수부. 실수 텐서에서는 자기 자신이고 형도 그대로다."""
-    return _alias(t)
+    """실수부. **실수 텐서에서는 자기 자신**이고 형도 그대로다(실측)."""
+    return wrap(guarded(handle(t).real)) if _is_cplx(t) else _alias(t)
+
+
+def imag(t, **kw):
+    """허수부. **실수 텐서에서는 torch 자신이 거절한다**(실측) — 우리 한계가 아니다."""
+    if not _is_cplx(t):
+        raise RuntimeError(
+            "imag is not implemented for tensors with non-complex dtypes.")
+    return wrap(guarded(handle(t).imag))
 
 
 def conj(t, **kw):
-    return _alias(t)
+    """켤레. 실수에서는 항등이다.
+
+    **torch 와 갈린다.** torch 의 `conj` 는 게을러서 켤레 비트만 세우는데 우리는
+    값을 바로 뒤집는다 — 그래서 아래 `is_conj` 가 언제나 거짓이다. 값은 같다.
+    """
+    return wrap(guarded(handle(t).conjPhysical)) if _is_cplx(t) else _alias(t)
 
 
 def conj_physical(t, **kw):
-    return _alias(t)
+    return conj(t)
 
 
 def conj_physical_(t, **kw):
-    return _alias(t)
+    x = wrap(t)
+    return x._write_back(conj(x)) if _is_cplx(x) else _alias(x)
 
 
 def resolve_conj(t, **kw):
+    """켤레 표시를 굳힌다. **우리에게는 그 표시가 아예 없어서** 언제나 항등이다."""
     return _alias(t)
 
 
@@ -1439,14 +1487,10 @@ def resolve_neg(t, **kw):
     return _alias(t)
 
 
-def imag(t, **kw):
-    """**torch 자신이 실수에서 거절한다**(실측) — 우리 한계가 아니다."""
-    raise RuntimeError(
-        "imag is not implemented for tensors with non-complex dtypes.")
-
-
 def angle(t, **kw):
-    """편각. **음수는 π, 나머지는 0** 이고 형은 **언제나 float32** 다(실측)."""
+    """편각. 복소수는 `atan2(허수, 실수)`, **실수는 음수에 π** 이고 형은 언제나 실수다."""
+    if _is_cplx(t):
+        return wrap(guarded(handle(t).angle))
     import math
 
     x = wrap(t)
@@ -1455,8 +1499,7 @@ def angle(t, **kw):
 
 
 def is_complex(t, **kw):
-    """**늘 거짓이다.** 복소수 규약을 안 정했다 — `stft` 와 같은 이야기다."""
-    return False
+    return _is_cplx(t)
 
 
 def is_conj(t, **kw):

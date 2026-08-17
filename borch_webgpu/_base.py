@@ -53,8 +53,22 @@ def _read(handle):
     멈춘다. 라이브러리의 한계가 아니라 그 스택의 사정이다. 실측해서 안 것이고
     (`tests/browser/sync_probe.py`), 그것 하나로 이 결속이 성립한다 — 안 되면
     `await loss.item()` 이 되고 그러면 이 프로젝트의 주장이 깨진다.
+
+    ## `to_py()` 를 거치는 이유 — **음의 0**
+
+    예전에는 `_np.asarray(js_array, dtype=float32)` 였는데, 그 길은 **`-0.0` 을
+    `0.0` 으로 만든다**(실측). JS 쪽에서는 `Object.is(a[0], -0)` 이 참인 채로 왔고
+    numpy 로 옮긴 뒤에만 부호가 없었다 — 원소를 하나씩 옮기는 길이라 그렇다.
+    `to_py()` 는 **memoryview** 를 주므로 `frombuffer` 가 바이트를 그대로 읽는다.
+
+    값 대조로는 절대 안 걸린다 — `-0.0 == 0.0` 이다. **글자로만** 걸린다:
+    `tensor([1.-0.j])` 가 `tensor([1.+0.j])` 로 찍혔다. 복소수 repr 을 굳히다가
+    나왔고, 실수 텐서에도 내내 있던 자리다.
     """
-    return _np.asarray(_run_sync(handle.toArray()), dtype=_np.float32)
+    raw = _run_sync(handle.toArray())
+    # **사본을 뜬다.** `frombuffer` 는 WASM 힙을 가리키는 읽기 전용 뷰라, 그대로
+    # 들고 있으면 그 자리가 다음 읽기에 덮인다.
+    return _np.frombuffer(raw.to_py(), dtype=_np.float32).copy()
 
 
 def int64_name():
@@ -154,10 +168,22 @@ class Tensor:
     def numpy(self):
         flat = _read(self._h)
         shape = self.shape
+        kind = str(self._h.dtype)
+        # **복소수만 칸 수와 버퍼 길이가 다르다.** borch.ts 의 저장이 인터리브라
+        # `[re, im, re, im, …]` 로 2n 개가 온다 — 그대로 `reshape(shape)` 하면
+        # 칸이 두 배라 거기서 멈춘다. 다른 형은 이름표일 뿐이라 이 자리가 없다.
+        if kind == "complex64":
+            pair = flat.reshape(-1, 2)
+            # **자리에 써 넣는다 — `re + 1j*im` 이 아니다.** 그 식은 **음의 0** 을
+            # 잃는다: `1j * (-0.0)` 의 허수부가 `-0.0` 인데 실수부의 `+0.0` 과
+            # 더해지면서 `+0.0` 이 된다. `tensor([1.-0.j])` 가 `tensor([1.+0.j])` 로
+            # 찍혔고, 값 대조로는 안 걸린다(둘은 `==` 로 같다) — **글자로만** 걸린다.
+            out = _np.empty(pair.shape[0], dtype=_np.complex64)
+            out.real, out.imag = pair[:, 0], pair[:, 1]
+            return out.reshape(shape) if shape else out.reshape(())
         out = flat.reshape(shape) if shape else flat.reshape(())
         # dtype 은 borch.ts 에서 float32 저장 위의 **이름표**다. 되돌릴 때 그 이름을
         # 따라간다 — 안 그러면 int64 케이스가 실수로 나오고, 값은 맞아 보인다.
-        kind = str(self._h.dtype)
         if kind == "int64":
             return out.astype(_np.int64)
         if kind == "bool":
@@ -197,7 +223,12 @@ class Tensor:
         if self._h.size != 1:
             raise RuntimeError(
                 f"a Tensor with {self._h.size} elements cannot be converted to Scalar")
-        return float(_read(self._h)[0])
+        flat = _read(self._h)
+        # **복소수는 파이썬 `complex` 로 낸다** — torch 도 그렇다. borch.ts 쪽
+        # `item()` 은 JS 에 복소수 값이 없어서 거절하는데, 파이썬에는 있다.
+        if str(self._h.dtype) == "complex64":
+            return complex(float(flat[0]), float(flat[1]))
+        return float(flat[0])
 
     def backward(self, *args):
         return guarded(self._h.backward, *[handle(a) for a in args])
@@ -682,12 +713,32 @@ def tensor(data, dtype=None, requires_grad=False):
     if dtype is not None:
         # `torch.float32` 로 보이는 물건이 와도 borch.ts 에는 `float32` 로 넘긴다.
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
+    elif arr.dtype.kind == "c":
+        name = "complex64"
     elif arr.dtype == bool:
         name = "bool"
     elif arr.dtype.kind in "iu":
         name = "int64"
     else:
         name = "float32"
+    # **복소수는 다른 문으로 들어간다.** borch.ts 의 `Tensor.from` 은 형만
+    # `complex64` 라고 붙는 것을 거절한다 — 저장이 칸당 f32 두 개라 이름표만 갈면
+    # 뒤쪽 절반이 남의 메모리가 되기 때문이다. 실수부와 허수부로 갈라서 엮는다.
+    if name == "complex64":
+        if requires_grad:
+            # **잎이 안 되기 때문에 거절한다.** 엮어서 만들면 `ComplexBackward0` 이
+            # 붙은 **중간 마디**가 되고, torch 의 `requires_grad=True` 텐서는 잎이다.
+            # 그 차이는 `.grad` 가 안 쌓이는 것으로만 드러난다 — 값은 다 맞는 채로.
+            raise RuntimeError(
+                "complex64 텐서에 requires_grad=True 를 여기서는 못 준다 — "
+                "실수 잎 둘을 만들어 `complex(re, im)` 으로 엮어라.")
+        parts = _np.asarray(arr, dtype=_np.complex64)
+        pair = [_np.ascontiguousarray(half.ravel(), dtype=_np.float32)
+                for half in (parts.real, parts.imag)]
+        made = [_ts.Tensor.from_(_js.Float32Array.new(_to_js(half)),
+                                 _js_list(parts.shape), _js_options())
+                for half in pair]
+        return Tensor(_ts.Tensor.complex(made[0], made[1]))
     flat = _js.Float32Array.new(_to_js(arr.ravel().astype(_np.float32)))
     try:
         return Tensor(_ts.Tensor.from_(
