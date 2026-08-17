@@ -84,8 +84,8 @@ _SIGNATURE = {
     "var": ("dim", "keepdim"),
     "std": ("dim", "keepdim"),
     "logsumexp": ("dim", "keepdim"),
-    "argmax": ("dim",),
-    "argmin": ("dim",),
+    "argmax": ("dim", "keepdim"),
+    "argmin": ("dim", "keepdim"),
     "softmax": ("dim",),
     "log_softmax": ("dim",),
     "cumsum": ("dim",),
@@ -162,6 +162,12 @@ _SIGNATURE = {
     "max": ("dim", "keepdim"),
     "min": ("dim", "keepdim"),
     "aminmax": ("dim",),
+    # 참거짓 축약과 개수 세기. **오래 축 자체가 없었다** — 인자를 주면 조용히
+    # 버려지고 전체 축약이 나왔다.
+    "all": ("dim", "keepdim"),
+    "any": ("dim", "keepdim"),
+    "count_nonzero": ("dim",),
+    "kthvalue": ("k", "dim", "keepdim"),
     "quantile": ("q", "dim"),
     "index_fill": ("dim", "index", "value"),
     "scatter": ("dim", "index", "src"),

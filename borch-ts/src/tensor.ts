@@ -2609,13 +2609,28 @@ export class Tensor implements Node<Tensor> {
     return this.sub(this.logsumexp(dim, true));
   }
 
-  /** 최대·최소가 **어디에** 있는가. 동점이면 먼저 나온 자리다. */
-  argmax(dim = 0): Tensor {
-    return this.argReduceOver("max", dim);
+  /**
+   * 접힌 축을 크기 1 로 되살린다. `keepdim` 을 받는 것들이 마지막에 부른다.
+   *
+   * **축이 사라진 모양은 브로드캐스팅에 자주 들어맞는다.** 그래서 `keepdim` 을 안
+   * 받으면 시끄럽게 멈추는 대신 값만 틀린 채 끝까지 가는 일이 생긴다 —
+   * `x.gather(1, x.argmax(1, true))` 가 그 꼴이다.
+   */
+  private liftAxis(out: Tensor, dim: number, keepdim: boolean): Tensor {
+    if (!keepdim) return out;
+    const axis = dim < 0 ? dim + this.shape.length : dim;
+    const shape = [...out.shape];
+    shape.splice(axis, 0, 1);
+    return out.reshape(shape);
   }
 
-  argmin(dim = 0): Tensor {
-    return this.argReduceOver("min", dim);
+  /** 최대·최소가 **어디에** 있는가. 동점이면 먼저 나온 자리다. */
+  argmax(dim = 0, keepdim = false): Tensor {
+    return this.liftAxis(this.argReduceOver("max", dim), dim, keepdim);
+  }
+
+  argmin(dim = 0, keepdim = false): Tensor {
+    return this.liftAxis(this.argReduceOver("min", dim), dim, keepdim);
   }
 
   /**
@@ -2626,15 +2641,15 @@ export class Tensor implements Node<Tensor> {
    * 고르게 나누고 `argmax` 는 먼저 나온 자리 하나를 고르는데, 값을 번호로 다시
    * 뽑아 오면 나누는 일이 없다 — torch 의 `max(dim)` 이 그쪽이다.
    */
-  max(dim = 0): { values: Tensor; indices: Tensor } {
-    return this.pickReduce("max", dim);
+  max(dim = 0, keepdim = false): { values: Tensor; indices: Tensor } {
+    return this.pickReduce("max", dim, keepdim);
   }
 
-  min(dim = 0): { values: Tensor; indices: Tensor } {
-    return this.pickReduce("min", dim);
+  min(dim = 0, keepdim = false): { values: Tensor; indices: Tensor } {
+    return this.pickReduce("min", dim, keepdim);
   }
 
-  private pickReduce(kind: "max" | "min", dim: number):
+  private pickReduce(kind: "max" | "min", dim: number, keepdim = false):
     { values: Tensor; indices: Tensor } {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2645,7 +2660,12 @@ export class Tensor implements Node<Tensor> {
     lifted[axis] = 1;
     const values = this.gather(axis, indices.reshape(lifted))
       .reshape(indices.shape);
-    return { values, indices };
+    // **번호도 축을 지켜야 한다.** 값만 살리면 `x.gather(1, m.indices)` 가 랭크
+    // 어긋남으로 멈추거나 — 더 나쁘게 — 브로드캐스팅으로 통과한다.
+    return {
+      values: this.liftAxis(values, axis, keepdim),
+      indices: this.liftAxis(indices, axis, keepdim),
+    };
   }
 
   private argReduceOver(kind: "max" | "min", dim: number): Tensor {
@@ -2671,18 +2691,34 @@ export class Tensor implements Node<Tensor> {
     return new Tensor(out, outShape, { dtype: "int64" });
   }
 
-  /** 0 이 아닌 것의 개수. */
-  countNonzero(): Tensor {
-    return this.binary("ne", Tensor.full([], 0)).sum();
+  /**
+   * 0 이 아닌 것의 개수. **축을 받는다** — 전체 축약만 되던 자리다.
+   *
+   * 축이 없으면 `x.countNonzero(1)` 이 인자를 조용히 버리고 스칼라를 내는데,
+   * 그 스칼라는 어디에나 브로드캐스팅된다.
+   */
+  countNonzero(dim?: number): Tensor {
+    const flags = this.binary("ne", Tensor.full([], 0));
+    return dim === undefined ? flags.sum() : flags.sumDim(dim);
   }
 
   /** 전부 참인가 / 하나라도 참인가. 0/1 로 답한다. */
-  all(): Tensor {
-    return this.binary("ne", Tensor.full([], 0)).amin();
+  all(dim?: number, keepdim = false): Tensor {
+    return this.boolReduce("amin", dim, keepdim);
   }
 
-  any(): Tensor {
-    return this.binary("ne", Tensor.full([], 0)).amax();
+  any(dim?: number, keepdim = false): Tensor {
+    return this.boolReduce("amax", dim, keepdim);
+  }
+
+  /** `all`·`any` 의 몸통. 0 이 아닌가로 바꾼 뒤 고르기로 접는다. */
+  private boolReduce(pick: "amin" | "amax", dim: number | undefined,
+                     keepdim: boolean): Tensor {
+    const flags = this.binary("ne", Tensor.full([], 0));
+    if (dim === undefined) return pick === "amin" ? flags.amin() : flags.amax();
+    const out = pick === "amin" ? flags.amin(dim, keepdim)
+                                : flags.amax(dim, keepdim);
+    return out;
   }
 
   /** 축 하나의 앞뒤에 상수를 덧댄다. 여러 축이면 축마다 부른다. */
@@ -5365,13 +5401,14 @@ export class Tensor implements Node<Tensor> {
   /**
    * `k` 번째로 작은 값. **1 부터 센다** — torch 가 그렇다.
    */
-  kthvalue(k: number, dim = 0): { values: Tensor; indices: Tensor } {
+  kthvalue(k: number, dim = 0, keepdim = false):
+    { values: Tensor; indices: Tensor } {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const sorted = this.sort(axis, false);
     return {
-      values: sorted.values.select(axis, k - 1),
-      indices: sorted.indices.select(axis, k - 1),
+      values: this.liftAxis(sorted.values.select(axis, k - 1), axis, keepdim),
+      indices: this.liftAxis(sorted.indices.select(axis, k - 1), axis, keepdim),
     };
   }
 
@@ -5383,7 +5420,7 @@ export class Tensor implements Node<Tensor> {
    * 이쪽은 아니다. 코어에도 같은 결함이 있었고, 둘을 나란히 묻는 케이스를 넣으면서
    * 양쪽이 같이 걸렸다.
    */
-  median(dim?: number): { values: Tensor; indices: Tensor } {
+  median(dim?: number, keepdim = false): { values: Tensor; indices: Tensor } {
     const spoil = (got: { values: Tensor; indices: Tensor }, axis?: number):
       { values: Tensor; indices: Tensor } => {
       // NaN 이 든 줄은 통째로 NaN 이다. `isnan` 의 합이 0 보다 크면 그 줄이다.
@@ -5404,7 +5441,15 @@ export class Tensor implements Node<Tensor> {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const len = this.shape[axis] ?? 1;
-    return spoil(this.kthvalue(Math.floor((len + 1) / 2), axis), axis);
+    // **NaN 을 덮어씌우는 일이 먼저다.** `keepdim` 을 `kthvalue` 에 넘겨 버리면
+    // `spoil` 이 만드는 `sick` 은 축이 접힌 모양이라 `where` 가 랭크에서 어긋난다.
+    // 접힌 채로 고치고 마지막에 축을 되살린다.
+    const got = spoil(this.kthvalue(Math.floor((len + 1) / 2), axis), axis);
+    if (!keepdim) return got;
+    return {
+      values: this.liftAxis(got.values, axis, true),
+      indices: this.liftAxis(got.indices, axis, true),
+    };
   }
 
   /** 정렬만 하고 자리는 안 준다. */

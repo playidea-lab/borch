@@ -23,6 +23,20 @@ def _conj(x):
     return _np.conj(x) if _np.asarray(x).dtype.kind == "c" else x
 
 
+def _keep(out, source, dim, keepdim):
+    """접힌 축을 크기 1 로 되살린다. `numpy` 의 `keepdims` 가 없는 함수들이 쓴다.
+
+    **`argmax`·`argmin` 이 그런 자리다** — numpy 가 그 인자를 안 받아서, 축을 되살릴
+    곳이 여기밖에 없다. 안 되살리면 축 하나가 사라진 채로 브로드캐스팅이 **맞아
+    버리고**, 값만 틀린 채 끝까지 간다.
+    """
+    if not keepdim or dim is None:
+        return out
+    shape = list(_np.shape(source.data))
+    shape[dim if dim >= 0 else dim + len(shape)] = 1
+    return _np.reshape(out, shape)
+
+
 def _unbroadcast(grad, shape):
     """브로드캐스팅으로 늘어난 축을 되돌린다. 역전파의 필수 단계다."""
     while grad.ndim > len(shape):
@@ -537,11 +551,17 @@ class Tensor:
     def __and__(self, o): return self._cmp(o, _np.logical_and)
     def __or__(self, o): return self._cmp(o, _np.logical_or)
 
-    def all(self):
-        return Tensor(_np.all(self.data))
+    def all(self, dim=None, keepdim=False):
+        """전부 참인가. **축과 `keepdim` 을 받는다** — 안 받으면 조용히 틀린다.
 
-    def any(self):
-        return Tensor(_np.any(self.data))
+        축을 안 받으면 `x.all(dim=1)` 이 전체 축약으로 떨어져 스칼라가 나오는데,
+        그 뒤 브로드캐스팅이 **맞아 버려서** 값만 틀린 채 끝까지 간다. `keepdim` 도
+        같은 갈래다 — 축 하나가 사라진 모양이 우연히 브로드캐스팅으로 들어맞는다.
+        """
+        return Tensor(_np.all(self.data, axis=dim, keepdims=bool(keepdim)))
+
+    def any(self, dim=None, keepdim=False):
+        return Tensor(_np.any(self.data, axis=dim, keepdims=bool(keepdim)))
 
     # ---- 모양
 
@@ -743,7 +763,10 @@ class Tensor:
             return (z,)
 
         out = self._make(values, (self,), back)
-        return _MinMax(out, Tensor(idx))
+        # **번호도 축을 지켜야 한다.** 값만 살리면 `x.gather(1, m.indices)` 가 랭크
+        # 어긋남으로 멈추거나 — 더 나쁘게 — 브로드캐스팅으로 통과한다. torch 는 둘
+        # 다 `(2, 1)` 을 준다(실측).
+        return _MinMax(out, Tensor(_np.expand_dims(idx, d) if keepdim else idx))
 
     def _elementwise_extreme(self, other, pick, name):
         """**동점이면 반씩 나눈다.** torch 가 그렇다 — `maximum(2, 2)` 의 기울기는
@@ -772,15 +795,15 @@ class Tensor:
             return self._elementwise_extreme(dim, _np.minimum, "MinimumBackward0")
         return self._argreduce(_np.min, _np.argmin, dim, keepdim)
 
-    def argmax(self, dim=None):
+    def argmax(self, dim=None, keepdim=False):
         _refuses_bool(self.data, "argmax 는 참거짓을 받지 않습니다.",
                       "argmax(): does not support bool input")
-        return Tensor(_np.argmax(self.data, axis=dim))
+        return Tensor(_keep(_np.argmax(self.data, axis=dim), self, dim, keepdim))
 
-    def argmin(self, dim=None):
+    def argmin(self, dim=None, keepdim=False):
         _refuses_bool(self.data, "argmin 은 참거짓을 받지 않습니다.",
                       "argmin(): does not support bool input")
-        return Tensor(_np.argmin(self.data, axis=dim))
+        return Tensor(_keep(_np.argmin(self.data, axis=dim), self, dim, keepdim))
 
     def var(self, dim=None, unbiased=True, keepdim=False):
         """**그래프 안에서** 계산한다.

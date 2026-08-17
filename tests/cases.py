@@ -1724,6 +1724,115 @@ def make_cases(inp=None):
 STAT_PREFIX = "stat::"
 
 
+KEEP_PREFIX = "keep::"
+
+
+def keepdim_cases(inp=None):
+    """`keepdim` — **축이 조용히 사라지는 자리.**
+
+    동료가 `Tensor` 메서드 401 개를 훑어 넘긴 표의 첫 묶음이다. 성격이 "이름은
+    torch 인데 의미가 다르다" 가 아니라 **"torch 에 있는 인자를 우리가 안 받는다"**
+    인데, 그중 `keepdim` 만은 조용히 틀리는 쪽이다:
+
+        m = x.argmax(dim=1, keepdim=True)      # torch: (2, 1)
+        x - x.gather(1, m)                     # 우리가 (2,) 를 내면 여기서
+                                               # 브로드캐스팅이 **맞아 버린다**
+
+    모양이 안 맞으면 시끄럽게 멈추는데, 축 하나가 사라진 모양은 브로드캐스팅에
+    **자주 들어맞는다.** 그러면 값만 틀린 채 끝까지 간다.
+
+    ## 무엇을 묻는가
+
+    `keepdim=True` 의 **모양**이다. 값은 이미 다른 케이스가 묻고 있고, 여기서 갈리는
+    것은 축 하나뿐이다. 그래서 모양을 문자열로 굳힌다 — 값으로 물으면 원소 수가 같아
+    (`(2,)` 와 `(2,1)`) 통과해 버린다. 하네스가 모양도 보지만, **이 표의 요점이
+    모양이라는 것을 케이스 이름이 말해야** 다음 사람이 안 지운다.
+    """
+    grid = np.array([[1.0, 4.0, 2.0], [3.0, 0.5, 5.0]], dtype=np.float32)
+    flags = np.array([[True, False, True], [False, False, True]])
+    cases = []
+
+    def add(name, fn):
+        cases.append((KEEP_PREFIX + name, fn))
+
+    def shape_of(fn):
+        """모양만 굳힌다. 쌍을 내는 것은 값 쪽을 본다.
+
+        **`isinstance(got, tuple)` 로 가르면 안 된다** — torch 는 이름 붙은 튜플을
+        주는데 우리 쪽은 `_MinMax` 같은 자기 물건이라 튜플이 아니다. 그러면 벗기지
+        않고 `.shape` 를 찾다가 셋 중 우리 쪽만 `AttributeError` 로 터진다.
+        """
+        def run(L, f=fn):
+            got = f(L)
+            head = got if hasattr(got, "shape") else got[0]
+            return str(tuple(int(n) for n in head.shape))
+
+        return run
+
+    def g(L):
+        return L.tensor(grid.copy())
+
+    def b(L):
+        return L.tensor(flags.copy())
+
+    # 축을 접는 것들. **`dim` 없이 `keepdim` 만 주는 자리는 안 묻는다** — torch 도
+    # 그때는 `keepdim` 을 무시한다.
+    for name in ("sum", "mean", "amax", "amin", "prod", "logsumexp"):
+        add(f"{name}(dim=1, keepdim)",
+            shape_of(lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True)))
+        add(f"{name}(dim=1) 값",
+            lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True))
+    # 번호를 내는 것들 — 형이 int64 라 값도 같이 묻는다.
+    for name in ("argmax", "argmin"):
+        add(f"{name}(dim=1, keepdim)",
+            shape_of(lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True)))
+        add(f"{name}(dim=1) 값",
+            lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True))
+    # 쌍을 내는 것들. **둘 다 축이 살아야 한다** — 값만 살리면 번호로 다시 뽑는
+    # 코드가 그 다음 줄에서 어긋난다.
+    for name in ("max", "min", "median"):
+        add(f"{name}(dim=1, keepdim) 값",
+            lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True)[0])
+        add(f"{name}(dim=1, keepdim) 번호",
+            lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True)[1])
+        add(f"{name}(dim=1, keepdim) 모양",
+            shape_of(lambda L, n=name: getattr(g(L), n)(dim=1, keepdim=True)))
+    add("kthvalue(2, dim=1, keepdim) 값",
+        lambda L: g(L).kthvalue(2, 1, True)[0])
+    add("kthvalue(2, dim=1, keepdim) 모양",
+        shape_of(lambda L: g(L).kthvalue(2, 1, True)))
+
+    # **참거짓 축약은 축 자체가 없었다.** `x.all(dim=1)` 이 전체로 떨어지면 스칼라가
+    # 나오고, 그 스칼라는 어디에나 브로드캐스팅된다.
+    for name in ("all", "any"):
+        add(f"{name}(dim=1)", lambda L, n=name: getattr(b(L), n)(dim=1))
+        add(f"{name}(dim=1, keepdim) 모양",
+            shape_of(lambda L, n=name: getattr(b(L), n)(dim=1, keepdim=True)))
+        add(f"{name}(dim=1, keepdim) 값",
+            lambda L, n=name: getattr(b(L), n)(dim=1, keepdim=True))
+        add(f"{name}() 전체", lambda L, n=name: getattr(b(L), n)())
+    add("count_nonzero(dim=1)", lambda L: g(L).count_nonzero(dim=1))
+    add("count_nonzero() 전체", lambda L: g(L).count_nonzero())
+
+    # 기울기도 축을 살린 채 와야 한다. 모양이 어긋나면 잎에서 터지거나 — 더 나쁘게 —
+    # 브로드캐스팅으로 **번져서** 값이 커진다.
+    def grad(name, fn):
+        def run(L, f=fn, n=name):
+            leaf = L.tensor(grid.copy(), requires_grad=True)
+            f(L, leaf).sum().backward()
+            return _grad_of(leaf, n)
+
+        add(f"grad::{name}", run)
+
+    grad("sum(keepdim)", lambda L, t: t.sum(dim=1, keepdim=True))
+    grad("prod(keepdim)", lambda L, t: t.prod(dim=1, keepdim=True))
+    grad("amax(keepdim)", lambda L, t: t.amax(dim=1, keepdim=True))
+    grad("max(keepdim)", lambda L, t: t.max(dim=1, keepdim=True)[0])
+    grad("median(keepdim)", lambda L, t: t.median(dim=1, keepdim=True)[0])
+    grad("mean(keepdim)", lambda L, t: t.mean(dim=1, keepdim=True))
+    return cases
+
+
 def stat_cases(inp=None):
     """통계. **난수의 값은 못 굳히지만 끝값은 결정적이다.**
 
@@ -7554,6 +7663,7 @@ def golden_cases(inp=None):
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
+            + keepdim_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

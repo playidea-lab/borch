@@ -2594,13 +2594,19 @@ def movedim(t, source, destination):
 
 # ---------------------------------------------------------------- 축약(추가)
 
-def prod(t, dim=None):
+def prod(t, dim=None, keepdim=False):
     t = _wrap(t)
-    out = _np.prod(t.data, axis=dim)
-    return t._make(out, (t,), lambda g: (_np.asarray(g) * out / t.data,), "ProdBackward0")
+    out = _np.prod(t.data, axis=dim, keepdims=bool(keepdim) and dim is not None)
+    # 역방향은 접기 전 모양으로 편다 — `keepdim` 이면 축이 이미 살아 있어 그대로다.
+    wide = out if keepdim or dim is None else _np.expand_dims(out, dim)
+    return t._make(out, (t,),
+                   lambda g: (_np.asarray(g if keepdim or dim is None
+                                          else _np.expand_dims(g, dim))
+                              * wide / t.data,),
+                   "ProdBackward0")
 
 
-def median(t, dim=None):
+def median(t, dim=None, keepdim=False):
     """torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다. numpy 는 평균을 낸다 —
     그대로 쓰면 조용히 다른 값이 나온다.
 
@@ -2642,8 +2648,15 @@ def median(t, dim=None):
 
     def back_dim(g):
         z = _np.zeros_like(t.data)
-        _np.put_along_axis(z, at, _np.expand_dims(_np.asarray(g), dim), axis=dim)
+        # **`keepdim` 이면 축이 이미 살아 있다.** 여기서 한 번 더 펴면 랭크가 하나
+        # 늘어 `put_along_axis` 가 멈춘다 — 값이 아니라 모양에서 걸리는 자리다.
+        wide = _np.asarray(g) if keepdim else _np.expand_dims(_np.asarray(g), dim)
+        _np.put_along_axis(z, at, wide, axis=dim)
         return (z,)
+
+    if keepdim:
+        picked = _np.expand_dims(picked, dim)
+        take = _np.expand_dims(take, dim)
 
     return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
 

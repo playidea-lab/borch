@@ -485,7 +485,84 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addEdge(out);
   addComplex(out);
   addFft(out);
+  addKeepdim(out);
   return out;
+}
+
+/**
+ * `keepdim` — `keep::`.
+ *
+ * **축이 조용히 사라지는 자리다.** 모양이 안 맞으면 시끄럽게 멈추는데, 축 하나가
+ * 빠진 모양은 브로드캐스팅에 **자주 들어맞는다** — 그러면 값만 틀린 채 끝까지 간다.
+ *
+ * `all`·`any`·`countNonzero` 는 축 자체가 없었다. 인자를 주면 조용히 버려지고
+ * 전체 축약이 나왔다.
+ */
+function addKeepdim(out: Map<string, Case>): void {
+  const P = "keep::";
+  const GRID = [1.0, 4.0, 2.0, 3.0, 0.5, 5.0];
+  const FLAGS = [1, 0, 1, 0, 0, 1];
+  const g = (grad = false): Tensor =>
+    Tensor.from(GRID, [2, 3], { requiresGrad: grad });
+  const b = (): Tensor => Tensor.from(FLAGS, [2, 3], { dtype: "bool" });
+  const shapeOf = (fn: () => Tensor): Case => () => `(${fn().shape.join(", ")})`;
+
+  // 축을 접는 것들. 골든의 이름이 파이썬 쪽 철자라 그대로 쓴다.
+  const folds: [string, (keep: boolean) => Tensor][] = [
+    ["sum", (k) => g().sumDim(1, k)],
+    ["mean", (k) => g().mean(1, k)],
+    ["amax", (k) => g().amax(1, k)],
+    ["amin", (k) => g().amin(1, k)],
+    ["prod", (k) => g().prod(1, k)],
+    ["logsumexp", (k) => g().logsumexp(1, k)],
+    ["argmax", (k) => g().argmax(1, k)],
+    ["argmin", (k) => g().argmin(1, k)],
+  ];
+  for (const [name, fn] of folds) {
+    out.set(`${P}${name}(dim=1, keepdim)`, shapeOf(() => fn(true)));
+    out.set(`${P}${name}(dim=1) 값`, () => fn(true));
+  }
+
+  // 쌍을 내는 것들 — **둘 다 축이 살아야 한다.**
+  const pairs: [string, (keep: boolean) => { values: Tensor; indices: Tensor }][] = [
+    ["max", (k) => g().max(1, k)],
+    ["min", (k) => g().min(1, k)],
+    ["median", (k) => g().median(1, k)],
+  ];
+  for (const [name, fn] of pairs) {
+    out.set(`${P}${name}(dim=1, keepdim) 값`, () => fn(true).values);
+    out.set(`${P}${name}(dim=1, keepdim) 번호`, () => fn(true).indices);
+    out.set(`${P}${name}(dim=1, keepdim) 모양`, shapeOf(() => fn(true).values));
+  }
+  out.set(`${P}kthvalue(2, dim=1, keepdim) 값`,
+    () => g().kthvalue(2, 1, true).values);
+  out.set(`${P}kthvalue(2, dim=1, keepdim) 모양`,
+    shapeOf(() => g().kthvalue(2, 1, true).values));
+
+  for (const name of ["all", "any"] as const) {
+    out.set(`${P}${name}(dim=1)`, () => b()[name](1));
+    out.set(`${P}${name}(dim=1, keepdim) 모양`, shapeOf(() => b()[name](1, true)));
+    out.set(`${P}${name}(dim=1, keepdim) 값`, () => b()[name](1, true));
+    out.set(`${P}${name}() 전체`, () => b()[name]());
+  }
+  out.set(`${P}count_nonzero(dim=1)`, () => g().countNonzero(1));
+  out.set(`${P}count_nonzero() 전체`, () => g().countNonzero());
+
+  // 기울기도 축을 살린 채 와야 한다. 어긋나면 잎에서 터지거나 — 더 나쁘게 —
+  // 브로드캐스팅으로 **번져서** 값이 커진다.
+  const grad = (name: string, body: (t: Tensor) => Tensor): void => {
+    out.set(`${P}grad::${name}`, () => {
+      const leaf = g(true);
+      body(leaf).sum().backward();
+      return gradOf(leaf, name);
+    });
+  };
+  grad("sum(keepdim)", (t) => t.sumDim(1, true));
+  grad("prod(keepdim)", (t) => t.prod(1, true));
+  grad("amax(keepdim)", (t) => t.amax(1, true));
+  grad("max(keepdim)", (t) => t.max(1, true).values);
+  grad("median(keepdim)", (t) => t.median(1, true).values);
+  grad("mean(keepdim)", (t) => t.mean(1, true));
 }
 
 /**
