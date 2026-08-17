@@ -5162,6 +5162,14 @@ export class Tensor implements Node<Tensor> {
   async svdLowrank(q = 6, niter = 2, M: Tensor | null = null): Promise<{
     U: Tensor; S: Tensor; V: Tensor;
   }> {
+    // **받되 안 쓴다 — 다듬을 것이 없어서다.** `niter` 는 torch 가 무작위 부분공간을
+    // 몇 번 다듬는가이고, 그 반복이 있는 이유는 사영이 근사이기 때문이다. 우리는
+    // 전체 SVD 를 구하므로 첫 답이 이미 수렴한 답이다 — 값은 torch 의 `niter` 를
+    // 크게 키운 극한 쪽에 있다.
+    //
+    // 그래서 **작은 `niter` 에서는 torch 와 값이 갈린다.** 우리 쪽이 더 정확한
+    // 갈림이지만 갈림은 갈림이라 README 에 적어 뒀다. 이유를 안 적으면 다음 사람이
+    // "덜 구현됐다" 로 읽고 근사를 도로 넣는다.
     void niter;
     const src = M === null ? this : this.sub(M);
     const { u, s, vt } = await src.svd(false);
