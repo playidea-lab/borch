@@ -361,13 +361,31 @@ class Tensor:
         return Tensor(self.data.astype(_np.int64))
 
     def int(self):
-        return Tensor(self.data.astype(_np.int64))
+        """**int32 가 없다 — 그래서 거절한다.**
+
+        오래 int64 를 내주고 있었다. 값은 그럴듯한데 `x.int().dtype == torch.int32`
+        를 보는 코드가 자기 컴퓨터에서 갈리고, 그때 원인은 이 줄이 아니라 훨씬
+        뒤에서 드러난다. torch 의 `.int()` 는 int32 다(실측) — 우리에게 그 칸이
+        없으면 다른 칸을 대신 주는 것이 아니라 멈추는 편이 낫다.
+        """
+        _unsupported("`.int()`(int32)")
 
     def bool(self):
         return Tensor(self.data.astype(_np.bool_))
 
     def double(self):
         return self._cast(_np.float64)
+
+    def type_as(self, other):
+        """`other` 의 형으로 맞춘다. **없는 기능이 아니라 안 적힌 기능이었다** —
+        `type()` 은 있는데 이쪽이 없어서 `AttributeError` 로 멈췄다."""
+        return self.type(other.dtype if isinstance(other, Tensor)
+                         else _np.asarray(other).dtype)
+
+    def cfloat(self):
+        """complex64. 이 칸은 있다 — `cdouble`·`chalf` 와 달리."""
+        return Tensor(self.data.astype(_np.complex64))
+
 
     def type(self, dt):
         target = dt.np if isinstance(dt, dtype) else dt
@@ -1031,3 +1049,34 @@ def _float_power_(self, exponent):
 
 Tensor.bernoulli_ = _bernoulli_
 Tensor.float_power_ = _float_power_
+
+
+# ── 없는 형은 이름째 거절한다 ────────────────────────────────────────────────
+#
+# 예전에는 `AttributeError: 'Tensor' object has no attribute 'half'` 가 났다.
+# **그 문구는 오타와 구별이 안 된다** — 배우는 사람은 자기가 이름을 잘못 쳤다고
+# 읽지, 그 형이 여기 없다고는 안 읽는다.
+#
+# `half`·`bfloat16` 은 튜토리얼의 혼합정밀도 절에서 **실제로 치는 줄**이라, 그
+# 자리에서 나는 말이 셋 다 같아야 한다. 값이 아니라 **거절 문구**를 맞추는 자리이고,
+# 그런 자리는 서로 대조해도 안 걸린다 — `i0` 이 물렸던 갈래와 같다.
+_ABSENT_DTYPES = {
+    "half": "float16", "bfloat16": "bfloat16", "chalf": "complex32",
+    "cdouble": "complex128", "byte": "uint8", "char": "int8", "short": "int16",
+}
+
+
+def _bind_absent_dtype(name, shown):
+    def method(self):
+        del self
+        _unsupported(f"`.{name}()`({shown})")
+
+    method.__name__ = name
+    method.__qualname__ = f"Tensor.{name}"
+    method.__doc__ = f"{shown} 은 이 축소판에 없다 — 다른 칸을 대신 주지 않는다."
+    return method
+
+
+for _dname, _shown in _ABSENT_DTYPES.items():
+    setattr(Tensor, _dname, _bind_absent_dtype(_dname, _shown))
+del _dname, _shown

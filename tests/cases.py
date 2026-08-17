@@ -8516,6 +8516,68 @@ def dtype_cases(inp=None):
     # 이야기다. 한 표에 두 질문을 섞으면 어느 쪽이 빨간지 못 읽는다.
     cases.append(("dtype::자리만::topk[0](int64)",
                   lambda L: outcome(lambda: L.tensor(ints).topk(2, 1)[0])))
+
+    # ── 형 바꾸는 이름 열넷 — **없는 것은 거절 문구까지 같아야 한다** ────────
+    #
+    # 값이 아니라 **거절이 어떻게 나오는가**를 묻는 자리다. 그런 자리는 셋이 서로를
+    # 대조해도 안 걸린다 — 아무도 안 물으면 각자 다른 말을 하고, 배우는 사람은 그것을
+    # **구현마다 다른 것**으로 읽는다. 실제로 그랬다: 코어는 `AttributeError: 'Tensor'
+    # object has no attribute 'half'`(오타와 구별이 안 된다), 결속은 `borch.ts 텐서에
+    # `half` 이 없다` 였다.
+    #
+    # `half`·`bfloat16` 은 튜토리얼의 혼합정밀도 절에서 **실제로 치는 줄**이다.
+    # `.int()` 는 더 나빴다 — 둘 다 **말없이 int64** 를 줬다. torch 는 int32 이고,
+    # 우리에게 그 칸이 없으면 다른 칸을 대신 주는 것이 아니라 멈추는 편이 낫다.
+    floats = np.array([1.5, -2.5, 3.0], dtype=np.float32)
+
+    def casts(name, call):
+        """있는 형은 **이름**을, 없는 형은 **거절 문구의 조각**을 답으로 굳힌다."""
+        def run(L, f=call):
+            try:
+                return str(f(L).dtype)
+            except Exception as exc:                            # noqa: BLE001
+                text = str(exc)
+                mark = "브라우저 축소판에 없습니다"
+                return f"거절({mark})" if mark in text \
+                    else f"거절(다른 문구: {text.splitlines()[0][:40]})"
+        cases.append((f"dtype::형바꾸기::{name}", run))
+
+    def we_refuse(name, call):
+        """**torch 는 해내고 우리 셋은 거절하는** 형. 값을 물으면 영원히 갈리므로
+        "각자 문서대로 굴었는가" 를 묻는다 — `_as_expected` 와 같은 꼴인데, 저쪽은
+        브라우저만 거절하는 자리이고 이쪽은 **코어도 같이** 거절한다.
+
+        그래서 가르는 것이 "브라우저인가" 가 아니라 **"진짜 torch 인가"** 다.
+
+        **`hasattr` 로는 못 가른다.** 결속은 모듈 `__getattr__` 이 아무 이름에나
+        답하므로 `hasattr(borch_webgpu, "compile")` 이 참이다 — 처음에 그렇게 썼다가
+        여덟 건이 "뜻밖의 거절" 로 나왔다. 모듈의 `__name__` 은 그 모듈에 박힌
+        것이라 `import borch as torch` 로도 안 바뀐다.
+        """
+        def run(L, f=call, n=name):
+            real = getattr(L, "__name__", "") == "torch"
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                if real:
+                    return f"뜻밖의 거절 <{type(exc).__name__}>"
+                mark = "브라우저 축소판에 없습니다"
+                return "기대대로" if mark in str(exc) \
+                    else f"다른 문구 <{str(exc).splitlines()[0][:44]}>"
+            return "기대대로" if real else "뜻밖의 성공"
+        cases.append((f"dtype::형바꾸기::{name}=우리는거절", run))
+
+    for name in ("float", "long", "bool", "cfloat"):
+        casts(name, lambda L, n=name: getattr(L.tensor(floats), n)())
+    casts("type_as", lambda L: L.tensor(floats).type_as(L.tensor(ints)))
+    for name in ("half", "bfloat16", "chalf", "cdouble", "byte", "char",
+                 "short", "int"):
+        we_refuse(name, lambda L, n=name: getattr(L.tensor(floats), n)())
+
+    # `double` 은 **일부러 갈린다** — 코어에는 float64 가 있고 브라우저 쪽에는
+    # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.
+    cases.append(("dtype::형바꾸기::double=브라우저는거절",
+                  _as_expected(lambda L: L.tensor(floats).double())))
     return cases
 
 

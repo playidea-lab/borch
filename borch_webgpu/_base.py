@@ -256,7 +256,23 @@ class Tensor:
         return self.to("int64")
 
     def int(self):
-        return self.to("int64")
+        """**int32 가 없다 — 그래서 거절한다.** 오래 int64 를 내주고 있었다.
+
+        값은 그럴듯한데 `x.int().dtype == torch.int32` 를 보는 코드가 진짜 torch 에서
+        갈리고, 그때 원인은 이 줄이 아니라 훨씬 뒤에서 드러난다. 코어도 같이 고쳤다 —
+        **거절 문구가 셋에서 같아야** 배우는 사람이 "구현마다 다른 것" 으로 안 읽는다.
+        """
+        _absent_dtype("int", "int32")
+
+    def type_as(self, other):
+        """`other` 의 형으로 맞춘다. 코어에도 없던 이름이라 양쪽에 같이 넣었다."""
+        return self.to(other.dtype if isinstance(other, Tensor) else other)
+
+    def cfloat(self):
+        """complex64. **이름표 갈이가 아니다** — borch.ts 는 복소수를 `[re, im]`
+        엇갈이로 저장하므로 칸 수가 두 배다. 허수부 0 을 붙여 진짜로 만든다."""
+        from . import _ops
+        return _ops.complex(self, _ops.zeros_like(self))
 
     def bool(self):
         return self.to("bool")
@@ -768,3 +784,40 @@ def tensor(data, dtype=None, requires_grad=False):
         # 정수·참거짓에 기울기를 켜는 것은 torch 도 거절한다. 종류를 옮겨 준다 —
         # `except RuntimeError` 로 잡던 코드가 안 잡히면 안 된다.
         raise translate(exc) from None
+
+
+# ── 없는 형은 이름째 거절한다 — **코어와 같은 문구로** ────────────────────────
+#
+# 그냥 두면 `AttributeError: borch.ts 텐서에 'half' 이 없다` 가 났다. 코어는
+# `BrowserTorchError: '.half()'(float16) 은(는) 브라우저 축소판에 없습니다` 였고,
+# 배우는 사람은 그 둘을 보고 **구현마다 다른 것** 으로 읽는다. 값이 아니라 문구를
+# 맞추는 자리이고, 그런 자리는 서로 대조해도 안 걸린다 — 아무도 안 물었기 때문이다.
+_ABSENT_DTYPES = {
+    "half": "float16", "bfloat16": "bfloat16", "chalf": "complex32",
+    "cdouble": "complex128", "byte": "uint8", "char": "int8", "short": "int16",
+}
+
+
+def _absent_dtype(name, shown):
+    # 예외 **종류**도 같아야 한다 — 코어의 `BrowserTorchError` 를 빌려온다.
+    # 브라우저에서는 `borch` 도 `/work` 아래 있으므로 늦게 들여오면 된다
+    # (`_core_repr` 이 같은 방식이다).
+    from borch._base import BrowserTorchError
+    raise BrowserTorchError(
+        f"`.{name}()`({shown}) 은(는) 브라우저 축소판에 없습니다.\n"
+        "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
+        "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.")
+
+
+def _bind_absent(name, shown):
+    def method(self):
+        del self
+        _absent_dtype(name, shown)
+
+    method.__name__ = name
+    return method
+
+
+for _dname, _shown in _ABSENT_DTYPES.items():
+    setattr(Tensor, _dname, _bind_absent(_dname, _shown))
+del _dname, _shown
