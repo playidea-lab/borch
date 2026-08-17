@@ -9,7 +9,7 @@ from ._tensor import (
     Tensor, _MinMax, _grad_mode, _unbroadcast, result_type,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _like_torch, _math, _needs_float, _np, _refuses_bool,
+    _DEFAULT_DTYPE, _TYPE_NAMES, _like_torch, _math, _needs_float, _np, _refuses_bool,
     _refuses_nonfloat_kernel, _resolve, _unsupported, Size, dtype,
 )
 # **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
@@ -7761,3 +7761,134 @@ Tensor.lu_solve = _as_method("lu_solve_top")
 Tensor.lu_solve.__name__ = "lu_solve"
 
 
+# ── 분포에서 뽑아 제자리에 채우는 일곱 ────────────────────────────────────────
+#
+# **`_ops.py` 에 둔다 — `_rng` 가 여기 산다.** 처음에 `_tensor.py` 에 두고 부를 때마다
+# `from ._ops import _rng` 로 집었는데, `sys.modules` 에서 `borch.*` 를 지우는 검사
+# (`test_alias`)가 먼저 돌면 **다른 `_ops` 의 생성기**를 집는다. 그러면 씨앗을 심어도
+# 안 먹고, 그 증상은 "혼자 돌리면 되는데 다 같이 돌리면 안 된다" 라 원인에서 멀다.
+#
+# `bernoulli_` 처럼 끝값이 확정인 자리가 없어서 **값은 못 굳힌다.** 그래서 표에
+# 물을 것은 값이 아니라 셋이다 — 모양·형이 안 바뀌는가, 못 쓰는 형을 거절하는가,
+# 인자의 정의역을 지키는가. 뒤의 둘이 특히 갈리기 쉽다: **torch 의 규칙이 분포마다
+# 다르고 예외 종류까지 다르다**(실측).
+#
+#   연속 분포는 정수·참거짓을 **거절**한다 — `normal_`·`uniform_`·`log_normal_` 은
+#   `NotImplementedError`, `exponential_`·`cauchy_` 는 이유를 적은 `RuntimeError` 다.
+#   `geometric_` 은 **이산이라 정수에서 돈다.** 이름만 보고 "난수는 실수만" 으로
+#   묶으면 그 하나에서 틀린다.
+#
+#   `random_` 은 어느 형에서든 돌고 **범위가 형에 달렸다** — int64 는 그 형의
+#   최대까지, bool 은 {0,1} 이다.
+_CONTINUOUS_REFUSAL = {
+    "normal_": ("NotImplementedError", '"normal_kernel_cpu" not implemented for'),
+    "uniform_": ("NotImplementedError", '"check_uniform_bounds" not implemented for'),
+    "log_normal_": ("NotImplementedError", '"log_normal_cpu" not implemented for'),
+    "exponential_": ("RuntimeError",
+                     "Exponential distribution is a continuous probability "
+                     "distribution. dtype must be a floating point but you "
+                     "specified"),
+    "cauchy_": ("RuntimeError",
+                "Cauchy distribution is a continuous probability distribution. "
+                "dtype must be a floating point but you specified"),
+}
+
+
+def _refuse_leaf(self, name):
+    if self.requires_grad and _grad_mode.enabled:
+        raise RuntimeError(_like_torch(
+            f"기울기가 필요한 잎 텐서에는 `{name}` 을(를) 쓸 수 없습니다. "
+            "`with torch.no_grad():` 안에서 하세요.",
+            "a leaf Variable that requires grad is being used in an in-place operation"))
+
+
+def _needs_continuous(self, name):
+    """연속 분포는 실수 칸에만 채운다 — **예외 종류가 분포마다 다르다.**"""
+    if self.data.dtype.kind == "f":
+        return
+    kind, phrase = _CONTINUOUS_REFUSAL[name]
+    shown = _TYPE_NAMES.get(self.data.dtype.kind, "Long")
+    error = NotImplementedError if kind == "NotImplementedError" else RuntimeError
+    raise error(_like_torch(
+        f"`{name}` 은 실수 텐서에만 채웁니다 ({self.dtype} 을 받았습니다).",
+        f"{phrase} '{shown}'"))
+
+
+def _fill_from(self, name, draw):
+    _refuse_leaf(self, name)
+    if name in _CONTINUOUS_REFUSAL:
+        _needs_continuous(self, name)
+    self.data[...] = _np.asarray(draw(_rng, self.data.shape),
+                                 dtype=self.data.dtype)
+    return self
+
+
+def _normal_(self, mean=0.0, std=1.0, generator=None):
+    del generator
+    if std < 0:
+        raise RuntimeError(_like_torch(
+            f"normal_ 의 표준편차는 0 이상이어야 합니다 ({std} 을 받았습니다).",
+            f"normal expects std >= 0.0, but found std {std}"))
+    return _fill_from(self, "normal_", lambda r, s: r.normal(mean, std, s))
+
+
+def _uniform_(self, from_=0.0, to=1.0, generator=None):
+    del generator
+    if from_ > to:
+        raise RuntimeError(_like_torch(
+            f"uniform_ 은 [from, to) 를 받습니다 ({from_}, {to} 을 받았습니다).",
+            f"uniform_ expects to return a [from, to) range, but found from={from_} > to={to}"))
+    return _fill_from(self, "uniform_", lambda r, s: r.uniform(from_, to, s))
+
+
+def _exponential_(self, lambd=1.0, generator=None):
+    del generator
+    if lambd <= 0:
+        raise RuntimeError(_like_torch(
+            f"exponential_ 의 lambda 는 0 보다 커야 합니다 ({lambd} 을 받았습니다).",
+            f"exponential_ expects lambda > 0.0, but found lambda={lambd}"))
+    return _fill_from(self, "exponential_",
+                      lambda r, s: r.exponential(1.0 / lambd, s))
+
+
+def _cauchy_(self, median=0.0, sigma=1.0, generator=None):
+    del generator
+    return _fill_from(self, "cauchy_",
+                      lambda r, s: median + sigma * r.standard_cauchy(s))
+
+
+def _log_normal_(self, mean=1.0, std=2.0, generator=None):
+    del generator
+    return _fill_from(self, "log_normal_", lambda r, s: r.lognormal(mean, std, s))
+
+
+def _geometric_(self, p, generator=None):
+    """**이산이라 정수 텐서에서도 돈다.** 연속 다섯과 갈리는 하나다."""
+    del generator
+    if not 0 < p < 1:
+        raise RuntimeError(_like_torch(
+            f"geometric_ 의 p 는 (0, 1) 안이어야 합니다 ({p} 을 받았습니다).",
+            f"geometric_ expects p to be in (0, 1), but got p={p}"))
+    return _fill_from(self, "geometric_", lambda r, s: r.geometric(p, s))
+
+
+def _random_(self, from_=0, to=None, generator=None):
+    """**범위가 형에 달렸다** — 안 주면 그 형이 담을 수 있는 데까지다."""
+    del generator
+    kind = self.data.dtype.kind
+    if to is None:
+        to = 2 if kind == "b" else (1 << 53 if kind == "f" else 1 << 62)
+    if from_ >= to:
+        raise RuntimeError(_like_torch(
+            f"random_ 의 from 은 to 보다 작아야 합니다 ({from_}, {to} 을 받았습니다).",
+            f"random_ expects 'from' to be less than 'to', but got from={from_} >= to={to}"))
+    return _fill_from(self, "random_",
+                      lambda r, s: r.integers(from_, to, s))
+
+
+for _rname, _rfn in (("normal_", _normal_), ("uniform_", _uniform_),
+                     ("exponential_", _exponential_), ("cauchy_", _cauchy_),
+                     ("log_normal_", _log_normal_), ("geometric_", _geometric_),
+                     ("random_", _random_)):
+    setattr(Tensor, _rname, _rfn)
+del _rname, _rfn

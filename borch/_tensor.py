@@ -5,7 +5,7 @@ import math as _math
 import numpy as _np
 
 from ._base import (
-    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _like_torch, _needs_float,
+    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _like_torch, _needs_float,
     _no_complex128, _np, _refuses_bool, _tensor_repr, _unsupported,
     device as _device, dtype, float32,
 )

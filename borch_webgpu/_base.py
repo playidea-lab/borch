@@ -331,6 +331,51 @@ class Tensor:
         self.requires_grad = bool(requires_grad)
         return self
 
+    # ── 분포에서 뽑아 제자리에 채우는 일곱 ────────────────────────────────
+    #
+    # **값은 못 굳힌다**(난수기가 셋 다 다르다 — `randn` 에서 이미 받아들인 자리다).
+    # 그래서 맞출 것은 모양·형과 **거절**이다. torch 의 규칙이 분포마다 다르고
+    # 예외 종류까지 다르다 — 코어에 그 표가 있으니 여기서는 그것을 빌려 쓴다.
+    #
+    # 값을 파이썬에서 만들어 되쓴다. 셰이더로 뽑으면 씨앗 규칙이 두 벌이 되고,
+    # 그 두 벌은 언젠가 갈린다.
+    def _draw_(self, name, *args, **kw):
+        from borch._tensor import Tensor as _Core
+
+        core = _Core(self.numpy().copy())
+        getattr(core, name)(*args, **kw)
+        from ._base import tensor as _t
+        return self._write_back(_t(core.data))
+
+    def normal_(self, mean=0.0, std=1.0, generator=None):
+        del generator
+        return self._draw_("normal_", mean, std)
+
+    def uniform_(self, from_=0.0, to=1.0, generator=None):
+        del generator
+        return self._draw_("uniform_", from_, to)
+
+    def exponential_(self, lambd=1.0, generator=None):
+        del generator
+        return self._draw_("exponential_", lambd)
+
+    def cauchy_(self, median=0.0, sigma=1.0, generator=None):
+        del generator
+        return self._draw_("cauchy_", median, sigma)
+
+    def log_normal_(self, mean=1.0, std=2.0, generator=None):
+        del generator
+        return self._draw_("log_normal_", mean, std)
+
+    def geometric_(self, p, generator=None):
+        """**이산이라 정수 텐서에서도 돈다** — 연속 다섯과 갈리는 하나다."""
+        del generator
+        return self._draw_("geometric_", p)
+
+    def random_(self, from_=0, to=None, generator=None):
+        del generator
+        return self._draw_("random_", from_, to)
+
     def fill_diagonal_(self, value, wrap=False):
         from ._base import tensor as _t
         got = self.numpy().copy()

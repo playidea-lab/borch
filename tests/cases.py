@@ -7977,6 +7977,74 @@ def inplace_cases(inp=None):
     in_place_new("arctan2_", lambda L, x: x.arctan2_(L.tensor(ones2)))
     in_place_new("polygamma_", lambda L, x: x.abs_().polygamma_(1))
 
+    # ── 분포에서 뽑아 채우는 일곱 — **값 말고 물을 수 있는 것** ──────────
+    #
+    # 난수기가 셋 다 달라서 값은 못 굳힌다(`randn` 에서 이미 받아들인 자리다).
+    # 표에 넣을 수 있는 것은 둘뿐이다:
+    #
+    #   **모양·형이 안 바뀐다** — torch 가 답을 내므로 표의 성격이 그대로다.
+    #   이미 `keep::`·`resize_as_::` 가 같은 꼴로 모양을 굳히고 있다.
+    #
+    #   **거절** — torch 의 규칙이 분포마다 다르고 예외 종류까지 다르다. 값이
+    #   아니라 문구라 셋이 갈리기 쉬운 자리다.
+    #
+    # 분포가 정말 그 분포인가(평균·분산·서로 다른 값이 여럿인가)는 여기 없다.
+    # 그 답은 torch 가 아니라 **우리가 정한 술어**에서 나오므로 표에 있어도 torch 를
+    # 안 재고, 표본 수와 허용 오차를 고르는 일이라 `tests/test_random_fill.py` 다.
+    draws = (
+        ("normal_", lambda L, x: x.normal_(0.0, 2.0)),
+        ("uniform_", lambda L, x: x.uniform_(-1.0, 3.0)),
+        ("exponential_", lambda L, x: x.exponential_(2.0)),
+        ("cauchy_", lambda L, x: x.cauchy_(1.0, 0.5)),
+        ("log_normal_", lambda L, x: x.log_normal_(0.0, 1.0)),
+        ("geometric_", lambda L, x: x.geometric_(0.3)),
+        ("random_", lambda L, x: x.random_(0, 5)),
+    )
+    for name, call in draws:
+        def shape_kept(L, f=call):
+            x = L.zeros(2, 3)
+            f(L, x)
+            return f"{tuple(x.shape)} {x.dtype}"
+        cases.append((INPLACE_PREFIX + f"분포::{name} 는 모양과 형을 지킨다",
+                      shape_kept))
+
+    # **연속 다섯은 정수를 거절하고 `geometric_`·`random_` 은 안 한다.** 이름만 보고
+    # "난수는 실수만" 으로 묶으면 그 둘에서 틀린다 — 이산이라 정수 칸에 답이 있다.
+    def on_int(L, name, arg=()):
+        x = L.tensor(np.zeros(6, dtype=np.int64))
+        try:
+            getattr(x, name)(*arg)
+        except Exception as exc:                                # noqa: BLE001
+            return f"거절({type(exc).__name__})"
+        return f"돈다 {x.dtype}"
+
+    for name, arg in (("normal_", ()), ("uniform_", ()), ("exponential_", ()),
+                      ("cauchy_", ()), ("log_normal_", ()),
+                      ("geometric_", (0.5,)), ("random_", ())):
+        cases.append((INPLACE_PREFIX + f"분포::{name}(int64)",
+                      lambda L, n=name, a=arg: on_int(L, n, a)))
+
+    # 인자의 정의역. **분포마다 다르다** — `p` 는 열린 구간, `lambda` 는 양수,
+    # `from < to`, `std >= 0`.
+    def refuses_arg(L, call, fragment):
+        try:
+            call(L)
+        except Exception as exc:                                # noqa: BLE001
+            return "멈췄다" if fragment in str(exc) else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    for label, call, fragment in (
+        ("geometric_(0)", lambda L: L.zeros(3).geometric_(0), "p to be in (0, 1)"),
+        ("geometric_(1)", lambda L: L.zeros(3).geometric_(1), "p to be in (0, 1)"),
+        ("exponential_(0)", lambda L: L.zeros(3).exponential_(0), "lambda > 0.0"),
+        ("uniform_(3,1)", lambda L: L.zeros(3).uniform_(3, 1), "[from, to) range"),
+        ("normal_(0,-1)", lambda L: L.zeros(3).normal_(0, -1), "std >= 0.0"),
+        ("random_(5,2)", lambda L: L.tensor(np.zeros(3, dtype=np.int64)).random_(5, 2),
+         "'from' to be less than 'to'"),
+    ):
+        cases.append((INPLACE_PREFIX + f"분포::거절::{label}",
+                      lambda L, c=call, f=fragment: refuses_arg(L, c, f)))
+
     # 값이 아니라 **참거짓**을 내는 셋. `is_same_size` 는 모양만 본다.
     for label, call in (
         ("is_same_size(같음)",
