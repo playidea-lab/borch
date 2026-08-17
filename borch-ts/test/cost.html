@@ -1,0 +1,41 @@
+<!doctype html>
+<!--
+  한 스텝의 **비용**을 센다 — 시간이 아니라 dispatch·버퍼 수.
+
+      npm run build:ts
+      npm run cost:ts
+
+  벤치(`bench.html`)와 달리 **소프트웨어 어댑터에서도 답이 뜻이 있다.** 여기서 세는
+  것은 코드 경로가 정하는 수라 장치가 안 바꾼다.
+-->
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>borch.ts — 스텝 비용</title>
+  <style>
+    body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+           margin: 2rem; max-width: 60rem; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>borch.ts — 한 스텝이 무엇을 얼마나 쓰는가</h1>
+  <pre id="out">재는 중…</pre>
+  <script type="module">
+    import { init } from "../dist/src/tensor.js";
+    import { report } from "../dist/test/cost.js";
+
+    const out = document.getElementById("out");
+    try {
+      await init();
+      const text = await report();
+      window.__borchCost = { text, ok: !text.includes("갈렸다") };
+      out.textContent = text;
+    } catch (err) {
+      // 안 돈 것과 통과한 것은 다르다 — 조용히 넘기지 않는다.
+      window.__borchCost = { error: String(err && err.stack ? err.stack : err) };
+      out.textContent = `재지 못했다: ${err && err.stack ? err.stack : err}`;
+    }
+  </script>
+</body>
+</html>

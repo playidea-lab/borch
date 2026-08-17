@@ -27,6 +27,8 @@
     "example:ts": "uv run --with playwright python borch-ts/test/readme.py",
     "device:ts": "uv run --with playwright python borch-ts/test/device.py",
     "parity:ts": "uv run --with playwright python borch-ts/test/parity.py",
+    "cost:ts": "uv run --with playwright python borch-ts/test/cost.py",
+    "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",
     "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",
     "data:ts": "uv run --with playwright python borch-ts/test/data.py",
     "prepublishOnly": "npm run build:ts"
@@ -51,6 +53,11 @@
     "저장소에 안 남는다. 여기 적어두면 남는다.",
     "golden:ts 는 build:ts 를 먼저 돌려야 한다 — dist 가 없으면 러너가 멈추고 종료 코드 2 를 낸다.",
     "낡은 dist 로 초록색을 보는 것보다 안 도는 편이 낫다.",
+    "",
+    "bench:ts 와 cost:ts 는 재는 것이 다르다. 벤치는 벽시계라 소프트웨어 어댑터에서",
+    "답을 거부하고(그 수는 래스터라이저의 수이지 이 라이브러리의 수가 아니다),",
+    "cost 는 dispatch·버퍼를 세므로 어디서 돌려도 같은 수가 나온다 — 그래서 막지 않는다.",
+    "골든이 값만 보는 자리를 cost 가 메운다: 버퍼를 흘리는 구현도 값은 맞는다.",
     "받은 것은 둘이다: typescript(컴파일러)와 @webgpu/types(타입 전용, 런타임 코드 없음).",
     "WebGPU 타입이 TypeScript 기본 DOM 라이브러리에 아직 없어서 필요하다. 셋째가 필요해지면 그때 적는다."
   ],
