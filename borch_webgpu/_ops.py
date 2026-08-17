@@ -177,6 +177,8 @@ _SIGNATURE = {
     "mse_loss": ("target", "reduction"),
     "bce_with_logits": ("target", "reduction"),
     "binary_cross_entropy_with_logits": ("target", "reduction"),
+    "nll_loss": ("target", "reduction"),
+    "cross_entropy": ("target", "reduction"),
     "huber_loss": ("target", "delta", "reduction"),
     "interpolate": ("scale_factor",),
     "max": ("dim", "keepdim"),

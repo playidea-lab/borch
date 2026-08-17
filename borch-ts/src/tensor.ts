@@ -3846,14 +3846,17 @@ export class Tensor implements Node<Tensor> {
    * **정답 자리를 뽑는 곳에서 그래프가 끊기기 쉽다.** 값만 떼어 돌려주면 뽑은 자리로
    * 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.
    */
-  nllLoss(target: Tensor): Tensor {
-    const picked = this.gather(1, target.reshape([target.size, 1]));
-    return picked.mean().neg();
+  nllLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    // **접기 전에 표본별 값을 만든다.** 뽑자마자 평균을 내면 `reduction: "none"`
+    // 을 만들 자리가 없어진다 — 스칼라에서 표본별 값을 되살릴 수는 없다.
+    const each = this.gather(1, target.reshape([target.size, 1]))
+      .reshape([target.size]).neg();
+    return each.reduceAs(reduction);
   }
 
   /** 로짓에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다. */
-  crossEntropy(target: Tensor): Tensor {
-    return this.logSoftmax(-1).nllLoss(target);
+  crossEntropy(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    return this.logSoftmax(-1).nllLoss(target, reduction);
   }
 
   // ── 결과 크기가 값에 달린 것들 ────────────────────────────────────────

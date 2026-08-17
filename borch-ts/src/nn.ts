@@ -1557,6 +1557,84 @@ export class CTCLoss {
   describe(): string { return "CTCLoss()"; }
 }
 
+// **흔한 손실 층 넷이 없었다.** `HuberLoss`·`KLDivLoss`·`TripletMarginLoss` 같은
+// 드문 것은 있는데 `MSELoss`·`L1Loss`·`SmoothL1Loss`·`BCEWithLogitsLoss` 가 없었다 —
+// `reduction` 때와 **같은 방향의 뒤집힘**이 층 이름에서 한 번 더 나온 자리다.
+// 나중에 쓴 것이 torch 를 따랐고 처음 자리가 안 채워졌다.
+//
+// 파이썬 결속은 텐서 메서드 위에 스스로 만들어 두어 멀쩡했다. 그래서 **TypeScript
+// 로 직접 쓰는 사람에게만** 없었고, 골든도 결속을 지나므로 안 물었다.
+
+export class MSELoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.mseLoss(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "MSELoss()"; }
+}
+
+export class L1Loss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.l1Loss(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "L1Loss()"; }
+}
+
+export class SmoothL1Loss {
+  constructor(readonly reduction: Reduction = "mean", readonly beta = 1.0) {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.smoothL1Loss(target, this.beta, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "SmoothL1Loss()"; }
+}
+
+export class BCEWithLogitsLoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.bceWithLogits(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "BCEWithLogitsLoss()"; }
+}
+
+export class NLLLoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.nllLoss(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "NLLLoss()"; }
+}
+
 export class HuberLoss {
   constructor(readonly delta = 1.0, readonly reduction: Reduction = "mean") {
   }
@@ -2490,15 +2568,24 @@ export class MultiheadAttention extends Module {
   }
 }
 
-/** 로짓과 정답 번호에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다. */
+/**
+ * 로짓과 정답 번호에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다.
+ *
+ * **`reduction` 이 없었다** — 층 쪽에도 같은 구멍이 있었다. 교재는 함수보다 층을
+ * 더 많이 쓰므로 이쪽이 더 자주 닿는 자리다.
+ */
 export class CrossEntropyLoss {
+  constructor(readonly reduction: Reduction = "mean") {}
+
   forward(logits: Tensor, target: Tensor): Tensor {
-    return logits.crossEntropy(target);
+    return logits.crossEntropy(target, this.reduction);
   }
 
   call(logits: Tensor, target: Tensor): Tensor {
     return this.forward(logits, target);
   }
+
+  describe(): string { return "CrossEntropyLoss()"; }
 }
 
 // ── torch.nn.functional 자리 ────────────────────────────────────────────
