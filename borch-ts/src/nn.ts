@@ -14,6 +14,7 @@
  * 배선이 갈린다.
  */
 
+import { RuntimeError } from "./errors.js";
 import { runningStats } from "./kernels.js";
 import { onSeed, uniformArray } from "./random.js";
 import {
@@ -1010,6 +1011,124 @@ export class Flatten extends Module {
   override forward(x: Tensor): Tensor {
     const batch = x.shape[0] ?? 1;
     return x.reshape([batch, x.size / batch]);
+  }
+}
+
+/** `Flatten` 의 반대. 축 하나를 여러 축으로 편다. */
+export class Unflatten extends Module {
+  constructor(private readonly dim: number,
+              private readonly sizes: readonly number[]) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.unflatten(this.dim, this.sizes);
+  }
+}
+
+export class AvgPool2d extends Module {
+  constructor(private readonly kernel: number,
+              private readonly stride?: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.avgPool2d(this.kernel, this.stride);
+  }
+}
+
+/** p-노름 풀링. **첫 인자가 `normType` 이다** — 커널이 아니다(torch 가 그렇다). */
+export class LPPool1d extends Module {
+  constructor(private readonly normType: number,
+              private readonly kernel: number,
+              private readonly stride?: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.lpPool(this.normType, this.kernel, this.stride);
+  }
+}
+
+export class LPPool2d extends LPPool1d {}
+export class LPPool3d extends LPPool1d {}
+
+/**
+ * 뒤쪽 축들을 평균 0, 분산 1 로. **`normalizedShape` 가 접는 축의 개수를 정한다.**
+ *
+ * 축 하나짜리(`new LayerNorm(4)`)로만 재면 "마지막 축을 접는다" 와 답이 같아서
+ * 이 규칙이 안 보인다. `[3, 4]` 를 주면 뒤 두 축을 **한 덩어리로** 접는다.
+ *
+ * 기본이 파라미터 있음이다 — `InstanceNorm` 과 반대라 헷갈리는 자리이고, 기본을
+ * 뒤집으면 `stateDict` 열쇠가 통째로 갈린다.
+ */
+export class LayerNorm extends Module {
+  readonly weight: Tensor | null = null;
+  readonly bias: Tensor | null = null;
+  private readonly dims: number;
+  private readonly shape: number[];
+
+  constructor(normalizedShape: number | readonly number[],
+              private readonly eps = 1e-5,
+              elementwiseAffine = true, useBias = true) {
+    super();
+    const shape = typeof normalizedShape === "number"
+      ? [normalizedShape] : [...normalizedShape];
+    this.shape = shape;
+    this.dims = shape.length;
+    if (elementwiseAffine) {
+      this.weight = Tensor.owned(shape, 1);
+      this.claim(this.weight);
+      if (useBias) {
+        this.bias = Tensor.owned(shape, 0);
+        this.claim(this.bias);
+      }
+    }
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    const out: Record<string, Tensor> = {};
+    if (this.weight) out["weight"] = this.weight;
+    if (this.bias) out["bias"] = this.bias;
+    return out;
+  }
+
+  override forward(x: Tensor): Tensor {
+    // **모양이 안 맞으면 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
+    const tail = x.shape.slice(x.shape.length - this.dims);
+    if (tail.length !== this.shape.length
+      || tail.some((d, i) => d !== this.shape[i])) {
+      throw new RuntimeError(
+        `Given normalized_shape=[${this.shape}], expected input with shape `
+        + `[*, ${this.shape}]`);
+    }
+    const normed = x.layerNormOver(this.dims, this.eps);
+    if (!this.weight) return normed;
+    const out = normed.mul(this.weight);
+    return this.bias ? out.add(this.bias) : out;
+  }
+}
+
+/**
+ * 확대. **첫 자리는 `size` 다** — torch 가 그렇다.
+ *
+ * 배율을 첫 자리에 두면 `new Upsample(2)` 가 늘리는 것과 "출력을 2 로" 사이에서
+ * 갈리고, 모양이 그럴듯해 값으로만 걸린다.
+ */
+export class Upsample extends Module {
+  constructor(private readonly size: number | readonly number[] | null = null,
+              private readonly scaleFactor: number | null = null,
+              private readonly mode: "nearest" | "bilinear" = "nearest",
+              private readonly alignCorners: boolean | null = null) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    if (this.size === null && this.scaleFactor === null) {
+      throw new RuntimeError("either size or scale_factor should be defined");
+    }
+    return x.interpolate(this.size, this.scaleFactor, this.mode,
+                         this.alignCorners ?? false);
   }
 }
 

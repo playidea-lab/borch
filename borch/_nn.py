@@ -601,19 +601,54 @@ class Embedding(Module):
 
 
 class LayerNorm(Module):
-    def __init__(self, normalized_shape, eps=1e-5):
+    """**`normalized_shape` 는 접는 축의 개수를 정한다** — 마지막 축 하나가 아니다.
+
+    `LayerNorm(4)` 로만 재면 이 갈림이 안 보인다. 축이 하나일 때는 "마지막 축을
+    접는다" 와 같은 답이기 때문이고, 실제로 그렇게 적혀 있었다. `LayerNorm((3, 4))`
+    는 뒤 두 축을 **한 덩어리로** 접는다 — 평균과 분산이 12 칸에서 나온다.
+
+    `elementwise_affine` 도 받는다. 끄면 파라미터가 없어지고, 그러면 `state_dict`
+    열쇠가 통째로 사라진다 — 그것은 값이 아니라 배선의 이야기다.
+    """
+
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
+                 bias=True):
         super().__init__()
-        shape = (normalized_shape,) if isinstance(normalized_shape, int) else tuple(normalized_shape)
+        shape = ((normalized_shape,) if isinstance(normalized_shape, int)
+                 else tuple(normalized_shape))
+        self.normalized_shape = shape
         self.eps = eps
-        self.weight = Parameter(_np.ones(shape, dtype=_DEFAULT_DTYPE))
-        self.bias = Parameter(_np.zeros(shape, dtype=_DEFAULT_DTYPE))
+        self.elementwise_affine = elementwise_affine
+        if elementwise_affine:
+            self.weight = Parameter(_np.ones(shape, dtype=_DEFAULT_DTYPE))
+            if bias:
+                self.bias = Parameter(_np.zeros(shape, dtype=_DEFAULT_DTYPE))
 
     def forward(self, x):
-        mean = x.mean(dim=-1, keepdim=True)
-        centered = x - mean
+        dims = len(self.normalized_shape)
+        # 뒤 `dims` 개 축을 하나로 접어 평균·분산을 한 번에 낸다. 축마다 따로 접으면
+        # 같은 수가 안 나온다 — 평균의 평균은 평균이 아니다.
+        shape = tuple(int(n) for n in x.shape)
+        # **모양이 안 맞으면 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
+        if shape[len(shape) - dims:] != self.normalized_shape:
+            raise RuntimeError(_like_torch(
+                f"normalized_shape={list(self.normalized_shape)} 인데 입력이 "
+                f"{list(shape)} 입니다.",
+                f"Given normalized_shape={list(self.normalized_shape)}, expected "
+                f"input with shape [*, "
+                f"{', '.join(str(n) for n in self.normalized_shape)}]"))
+        lead = shape[:len(shape) - dims]
+        flat = x.reshape(*lead, -1) if dims > 1 else x
+        mean = flat.mean(dim=-1, keepdim=True)
+        centered = flat - mean
         var = (centered * centered).mean(dim=-1, keepdim=True)
         normed = centered / (var + self.eps) ** 0.5
-        return normed * self.weight + self.bias
+        if dims > 1:
+            normed = normed.reshape(*shape)
+        if not self.elementwise_affine:
+            return normed
+        out = normed * self.weight
+        return out + self.bias if hasattr(self, "bias") else out
 
 
 class BatchNorm2d(Module):
@@ -1908,12 +1943,21 @@ class AdaptiveAvgPool2d(_PoolND):
 
 
 class Unflatten(Module):
+    """축 하나를 여러 축으로 편다. **뒤에 오는 축은 그대로 남는다.**
+
+    `shape[:dim] + sizes` 로만 적혀 있었다 — 펴는 축이 마지막일 때는 맞는 답이라
+    오래 안 보였고, 가운데 축을 펴면 뒤쪽이 통째로 사라진다. 원소 수가 안 맞아
+    `reshape` 이 멈추므로 조용히 틀리지는 않지만, 멈추는 자리가 원인에서 멀다.
+    """
+
     def __init__(self, dim, unflattened_size):
         super().__init__()
         self.dim, self.unflattened_size = dim, tuple(unflattened_size)
 
     def forward(self, x):
-        return x.reshape(x.data.shape[:self.dim] + self.unflattened_size)
+        shape = tuple(x.data.shape)
+        dim = self.dim if self.dim >= 0 else self.dim + len(shape)
+        return x.reshape(shape[:dim] + self.unflattened_size + shape[dim + 1:])
 
 
 class L1Loss(_Loss):
@@ -2587,16 +2631,30 @@ for _name, _pad_cls in _make_pads().items():
 
 
 class Upsample(Module):
-    """최근접 확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다."""
+    """확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다.
 
-    def __init__(self, scale_factor=2, mode="nearest"):
+    **첫 자리는 `size` 다.** torch 가 그렇다 — `Upsample(2)` 는 배율 2 가 아니라
+    "출력을 2×2 로" 다. 배율을 첫 자리에 두고 있었고, 그러면 `Upsample(2)` 가 같은
+    코드에서 늘리는 것과 줄이는 것으로 갈린다. 모양이 그럴듯해서 값으로만 걸린다.
+
+    **`mode='bilinear'` 를 거절하고 있었다.** 계산은 `interpolate` 에 이미 있었고
+    `F.upsample_bilinear` 로는 돌았다 — 같은 계산에 이름이 둘인데 한쪽만 되던
+    자리다. 교재가 쓰는 꼴은 층 쪽이다.
+    """
+
+    def __init__(self, size=None, scale_factor=None, mode="nearest",
+                 align_corners=None):
         super().__init__()
-        if mode != "nearest":
-            _unsupported(f"Upsample(mode={mode!r})")
-        self.scale_factor, self.mode = scale_factor, mode
+        self.size, self.scale_factor = size, scale_factor
+        self.mode, self.align_corners = mode, align_corners
 
     def forward(self, x):
-        return interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
+        if self.size is None and self.scale_factor is None:
+            raise RuntimeError(_like_torch(
+                "size 나 scale_factor 중 하나는 주어야 합니다.",
+                "either size or scale_factor should be defined"))
+        return interpolate(x, size=self.size, scale_factor=self.scale_factor,
+                           mode=self.mode, align_corners=self.align_corners)
 
     def __repr__(self):
         return f"Upsample(scale_factor={self.scale_factor}, mode={self.mode!r})"

@@ -3446,6 +3446,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * **뒤쪽 `dims` 개 축을 한꺼번에** 접는다. `layerNorm` 은 축 하나만 접는다.
+   *
+   * torch 의 `LayerNorm(normalized_shape)` 이 접는 축의 **개수**를 그 모양의 길이로
+   * 정하는데, 축 하나짜리(`LayerNorm(4)`)로만 재면 둘이 같은 답을 낸다 — 그래서
+   * 오래 안 보였다. `(3, 4)` 를 주면 갈린다.
+   */
+  layerNormOver(dims = 1, eps = 1e-5): Tensor {
+    if (dims <= 1) return this.layerNorm(-1, eps);
+    const rank = this.shape.length;
+    const lead = this.shape.slice(0, rank - dims).reduce((a, b) => a * b, 1);
+    return this.reshape([lead, this.size / lead])
+      .layerNorm(-1, eps).reshape(this.shape);
+  }
+
+  /**
    * 배치 축을 따라 정규화. 학습 모드 — 이동 통계를 안 쓰고 이 배치로 센다.
    *
    * `layer_norm` 과 접는 축만 다르다. 축이 다르면 접는 축을 바꾸면 되지, 함수를
@@ -6868,6 +6883,35 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       },
       kind === "max" ? "MaxPoolNDBackward0" : "AvgPoolNDBackward0",
     );
+  }
+
+  /**
+   * `size`·`scaleFactor`·`mode` 를 한자리에서 받는 확대. `Upsample` 층이 이것이다.
+   *
+   * **`mode` 를 받아만 놓고 안 쓰는 것이 이 함수가 있는 이유다.** 최근접과 겹선형은
+   * 커널이 아예 다른데, 골라 주지 않으면 겹선형을 달라고 해도 최근접이 나온다 —
+   * 예외가 아니라 조용히 다른 값이다.
+   */
+  interpolate(size: number | readonly number[] | null = null,
+              scaleFactor: number | null = null,
+              mode: "nearest" | "bilinear" = "nearest",
+              alignCorners = false): Tensor {
+    const h = this.shape[2] ?? 1;
+    const w = this.shape[3] ?? 1;
+    const pair = (v: number | readonly number[]): [number, number] =>
+      typeof v === "number" ? [v, v] : [v[0] ?? 1, v[1] ?? v[0] ?? 1];
+    if (mode === "nearest") {
+      if (size === null) return this.upsample(scaleFactor ?? 2);
+      // 저쪽 커널은 **배수만** 받는다. 배수가 아니면 조용히 근사하지 않고 멈춘다.
+      const [oh, ow] = pair(size);
+      if (oh % h || ow % w || oh / h !== ow / w) {
+        throw new RuntimeError("interpolate(size=) — 배수가 아닌 최근접 확대");
+      }
+      return this.upsample(oh / h);
+    }
+    const [oh, ow] = size === null
+      ? [h * (scaleFactor ?? 2), w * (scaleFactor ?? 2)] : pair(size);
+    return this.interpolateBilinear(oh, ow, alignCorners);
   }
 
   /** 최근접 이웃으로 확대. `Upsample`·`interpolate` 가 이것이다. */

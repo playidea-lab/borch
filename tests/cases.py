@@ -6127,6 +6127,33 @@ def norm_cases(inp=None):
     cases.append((NORM_PREFIX + "nn.RMSNorm",
                   lambda L: L.nn.RMSNorm(4)(L.tensor(img))))
 
+    # ── LayerNorm 의 `normalized_shape` 는 **접는 축의 개수**다 ──────────────
+    #
+    # 축 하나짜리(`LayerNorm(4)`)로만 재면 "마지막 축을 접는다" 와 답이 같아서 이
+    # 규칙이 안 보인다. 실제로 셋 다 그렇게 적혀 있었고, 결속은 모양을 **통째로**
+    # 버리고 있었다. 축 둘을 주면 평균과 분산이 12 칸에서 나온다.
+    cases.append((NORM_PREFIX + "nn.LayerNorm(축 하나)",
+                  lambda L: L.nn.LayerNorm(4)(L.tensor(img))))
+    add("nn.LayerNorm(축 둘)", lambda L, x: L.nn.LayerNorm((4, 4))(x), img)
+    # **모양이 안 맞으면 torch 는 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
+    def layer_norm_mismatch(L):
+        try:
+            L.nn.LayerNorm((3, 4))(L.tensor(img))
+            return "예외가 안 났다"
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+
+    cases.append((NORM_PREFIX + "nn.LayerNorm(모양 불일치)", layer_norm_mismatch))
+    # 파라미터가 붙어야 학습이 간다. `elementwise_affine=False` 면 이름이 통째로
+    # 사라지는데, 그것은 값이 아니라 `state_dict` 열쇠의 이야기다.
+    cases.append((NORM_PREFIX + "nn.LayerNorm/파라미터 이름",
+                  lambda L: " ".join(
+                      n for n, _ in L.nn.LayerNorm(4).named_parameters())))
+    cases.append((NORM_PREFIX + "nn.LayerNorm(affine 끄면)",
+                  lambda L: " ".join(
+                      n for n, _ in L.nn.LayerNorm(
+                          4, elementwise_affine=False).named_parameters()) or "없음"))
+
     # ── 전치 합성곱. ───────────────────────────────────────────────────────
     add("F.conv_transpose1d",
         lambda L, x: L.nn.functional.conv_transpose1d(x, L.tensor(tw1)), seq)
@@ -7095,6 +7122,22 @@ def ndim_cases(inp=None):
         (NDIM_PREFIX + "nn.BatchNorm3d", lambda L: L.nn.BatchNorm3d(2)(L.tensor(vol))),
         (NDIM_PREFIX + "nn.Upsample",
          lambda L: L.nn.Upsample(scale_factor=2)(L.tensor(img))),
+        # **`mode` 를 받아만 놓고 안 쓰던 자리다.** 겹선형을 달라고 해도 최근접이
+        # 나왔다 — 예외가 아니라 조용히 다른 값이다. 계산은 `F.upsample_bilinear`
+        # 로는 이미 돌고 있었으니, 같은 계산에 이름이 둘인데 한쪽만 되던 꼴이다.
+        (NDIM_PREFIX + "nn.Upsample(겹선형)",
+         lambda L: L.nn.Upsample(scale_factor=2, mode="bilinear")(L.tensor(img))),
+        # **첫 자리는 `size` 다**(torch 가 그렇다). 배율을 첫 자리에 두면 같은 줄이
+        # 늘리는 것과 줄이는 것으로 갈리는데 모양이 그럴듯해 값으로만 걸린다.
+        (NDIM_PREFIX + "nn.Upsample(첫 자리는 size)",
+         lambda L: L.nn.Upsample(8)(L.tensor(img))),
+        (NDIM_PREFIX + "nn.AvgPool2d", lambda L: L.nn.AvgPool2d(2)(L.tensor(img))),
+        (NDIM_PREFIX + "nn.AvgPool2d(보폭)",
+         lambda L: L.nn.AvgPool2d(2, 1)(L.tensor(img))),
+        (NDIM_PREFIX + "nn.LPPool1d",
+         lambda L: L.nn.LPPool1d(2, 2)(L.tensor(seq))),
+        (NDIM_PREFIX + "nn.Unflatten",
+         lambda L: L.nn.Unflatten(1, (1, 3))(L.tensor(img.reshape(2, 3, 16)))),
     ]
 
     # 메서드로만 있던 것들의 **함수 형태**. torch 는 둘 다 주는데 코어는 한쪽만
@@ -8452,10 +8495,31 @@ def edge_cases(inp=None):
     return cases
 
 
+def _no_duplicate_names(cases):
+    """이름이 겹치면 멈춘다. **겹치면 조용히 하나가 먹힌다.**
+
+    `dump` 는 목록이라 둘 다 돌리고 나중 것이 앞의 답을 덮는데, `export_json` 은
+    사전이라 케이스 수가 하나 줄어든다 — 그 어긋남으로 처음 알았다(2724 대 2723).
+    러너는 "골든에 없는 이름" 은 세지만 "골든에 두 번 있는 이름" 은 못 센다.
+
+    덮이는 쪽이 진 케이스는 **아무도 안 돌린다.** 이름을 짓다 부주의로 겹치는 것이
+    실제로 났고(값 케이스와 `add` 가 만드는 값 케이스), 그때 표는 초록이었다.
+    """
+    seen, dup = set(), []
+    for name, _ in cases:
+        (dup.append(name) if name in seen else seen.add(name))
+    if dup:
+        raise AssertionError(
+            "케이스 이름이 겹친다 — 겹치면 하나가 조용히 안 돌아간다:\n  "
+            + "\n  ".join(sorted(set(dup))))
+    return cases
+
+
 def golden_cases(inp=None):
     """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
     inp = golden_inputs() if inp is None else inp
-    return (wide_cases(inp) + grad_cases(inp) + train_cases(inp)
+    return _no_duplicate_names(
+           wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
             + vision_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)

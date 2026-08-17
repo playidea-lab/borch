@@ -1471,14 +1471,14 @@ AvgPool3d = _pool_layer("avg", False)
 
 
 def LPPool1d(norm_type, kernel_size, stride=None):
-    return _Wrap(lambda x: _lp_pool(x, norm_type, kernel_size, stride))
+    return _layer("LPPool1d", norm_type, kernel_size, stride)
 
 
 LPPool2d = LPPool3d = LPPool1d
 
 
 def AvgPool2d(k=2, stride=None):
-    return _Wrap(lambda x: wrap(handle(x).avgPool2d(k, stride)))
+    return _layer("AvgPool2d", k, stride)
 
 
 # ── 여덟은 이제 borch.ts 의 층을 그대로 부른다 ──────────────────────────────
@@ -1695,16 +1695,27 @@ class Dropout(Module):
         return wrap(handle(x).dropout(self.p, self.training))
 
 
-def LayerNorm(shape, eps=1e-5):
-    return _Wrap(lambda x: wrap(handle(x).layerNorm(-1, eps)))
+def LayerNorm(normalized_shape, eps=1e-5, elementwise_affine=True, bias=True):
+    """**`normalized_shape` 는 접는 축의 개수를 정한다** — 전에는 통째로 버렸다.
+
+    `LayerNorm(4)` 로만 재면 이 갈림이 안 보인다(마지막 축 하나를 접는 것과 답이
+    같다). 게다가 `_Wrap` 이라 **파라미터가 없었다** — torch 의 기본은 `weight`·
+    `bias` 를 학습하는 것이고, 없으면 그 층은 조용히 안 배운다.
+    """
+    shape = ([normalized_shape] if isinstance(normalized_shape, int)
+             else list(normalized_shape))
+    return _layer("LayerNorm", _arg(shape), eps, elementwise_affine, bias)
 
 
 def Unflatten(dim, sizes):
-    return _Wrap(lambda x: wrap(handle(x).unflatten(dim, _arg(list(sizes)))))
+    return _layer("Unflatten", dim, _arg(list(sizes)))
 
 
-def Upsample(scale_factor=2, mode="nearest"):
-    return _Wrap(lambda x: wrap(handle(x).upsample(scale_factor)))
+def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None):
+    """**첫 자리는 `size` 다**(torch 가 그렇다). 전에는 배율이 첫 자리였고 `mode` 는
+    받아만 놓고 안 썼다 — 겹선형을 달라고 해도 최근접이 조용히 나왔다."""
+    return _layer("Upsample", _arg(size) if size is not None else None,
+                  scale_factor, mode, align_corners)
 
 
 # **접는 방식은 손실의 일부다 — 층 쪽에도 있어야 한다.** 함수 쪽만 고치면
