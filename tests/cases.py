@@ -722,6 +722,36 @@ def grad_cases(inp=None):
     # `backward()` 가 멈추는데 torch 는 안 멈춘다.
     folds("angle() 은 0 을 흘린다", lambda L, x: x.angle(), step)
 
+    # 아래는 처음에 `tests/test_fold_grad.py` 에만 있었다. borch.ts 가 그때 답을 못
+    # 해서 셋을 함께 묻는 자리에 못 올렸던 것들이고, 이제 셋 다 답한다.
+    #
+    # **`median` 과 `quantile` 이 같은 값을 내면서 다른 것을 떠받친다.** [1,5,5,5] 의
+    # 중앙값도 0.5 분위수도 5 인데, median 은 5 인 칸 **셋 전부**에 ⅓ 씩 주고
+    # quantile 은 정렬해서 쓴 **두 자리**에 ½ 씩 준다. 값만 재면 둘이 같아 보인다.
+    even = np.array([1.0, 5.0, 5.0, 5.0], dtype=np.float32)
+    dup = np.array([1.0, 1.0, 2.0, 2.0, 2.0], dtype=np.float32)
+    nan_tie = np.array([1.0, np.nan, 5.0, 5.0, 5.0], dtype=np.float32)
+
+    folds("median() 동점 셋", lambda L, x: x.median())
+    folds("median() 짝수·동점", lambda L, x: x.median(), even)
+    folds("median(dim=0) 은 한 자리로", lambda L, x: x.median(dim=0)[0])
+    folds("nanmedian() 동점", lambda L, x: x.nanmedian(), nan_tie)
+    folds("nanmedian(dim=0)", lambda L, x: x.nanmedian(0)[0], nan_tie)
+    folds("mode() 는 마지막 자리로", lambda L, x: x.mode()[0], dup)
+    folds("kthvalue(2)", lambda L, x: x.kthvalue(2)[0])
+    folds("quantile(0.5) 정확히 맞음", lambda L, x: x.quantile(0.5))
+    folds("quantile(0.3) 보간", lambda L, x: x.quantile(0.3))
+    folds("quantile(0.5) 짝수는 둘로", lambda L, x: x.quantile(0.5), even)
+    folds("quantile(0.75) 짝수", lambda L, x: x.quantile(0.75), even)
+    # 도함수가 `i1` 이다. 이 자리는 borch.ts 가 **0 을 흘리고 있었고**, 그 주석이
+    # 코어의 구멍을 근거로 대고 있었다 — 한쪽이 다른 쪽을 베낀 것이다. 값이 0 인
+    # 기울기와 기울기가 없는 것은 다른 말인데, 베낄 때 뒤가 앞으로 바뀌었다.
+    folds("i0() 의 도함수는 i1", lambda L, x: x.i0(), step)
+    # 접히지 않는 이웃. 같은 자료로 나란히 물어야 규칙이 다르다는 것이 남는다.
+    folds("topk(3) 는 셋 다", lambda L, x: x.topk(3)[0])
+    folds("sort() 는 전부 하나씩", lambda L, x: x.sort()[0])
+    folds("cummax(0) 은 늦은 자리를", lambda L, x: x.cummax(0)[0])
+
     return cases
 
 
@@ -5632,6 +5662,51 @@ def loss_cases(inp=None):
         return _grad_of(p, "cosine_embedding")
 
     cases.append((LOSS_PREFIX + "grad::cosine_embedding", cosine_grad))
+
+    # ── 접는 방식은 손실의 일부다 ────────────────────────────────────────
+    #
+    # **제일 흔한 손실들이 `reduction` 을 안 받고 있었다.** 본문에 `.mean()` 이
+    # 박혀 있어서 `reduction=` 을 주면 `TypeError` 였다. 셋 다 그랬다.
+    #
+    # 실마리는 뒤집혀 있다는 것이었다 — `cosine_embedding`·`multi_margin`·`triplet`
+    # 처럼 **드문 손실은 열셋 전부** 받았다. 나중에 쓴 것이 torch 서명을 따랐고
+    # 처음 쓴 것이 안 고쳐진 것이다. 표가 못 본 이유는 교재가 기본값 `mean` 만
+    # 쓰기 때문이고, **제일 많이 쓰는 자리가 제일 안 물어진 자리**였다.
+    #
+    # `nll_loss`·`cross_entropy` 는 아직 여기 없다 — borch.ts 쪽이 스칼라만 낸다.
+    for reduction in ("none", "mean", "sum"):
+        for name, call in (
+            ("mse_loss", lambda L, r: F(L).mse_loss(L.tensor(x), L.tensor(y),
+                                                    reduction=r)),
+            ("l1_loss", lambda L, r: F(L).l1_loss(L.tensor(x), L.tensor(y),
+                                                  reduction=r)),
+            ("smooth_l1_loss", lambda L, r: F(L).smooth_l1_loss(
+                L.tensor(x), L.tensor(y), reduction=r)),
+            ("huber_loss", lambda L, r: F(L).huber_loss(
+                L.tensor(x), L.tensor(y), reduction=r)),
+            ("nn.MSELoss", lambda L, r: L.nn.MSELoss(reduction=r)(
+                L.tensor(x), L.tensor(y))),
+            ("nn.L1Loss", lambda L, r: L.nn.L1Loss(reduction=r)(
+                L.tensor(x), L.tensor(y))),
+            ("nn.SmoothL1Loss", lambda L, r: L.nn.SmoothL1Loss(reduction=r)(
+                L.tensor(x), L.tensor(y))),
+        ):
+            add(f"reduction::{name}({reduction})",
+                lambda L, c=call, r=reduction: c(L, r))
+
+    # **모르는 값을 평균으로 삼키지 않는다.** `else: return mean()` 이었고, 그러면
+    # `reduction="MEAN"` 같은 오타가 조용히 통과해 그대로 학습된다 — 사람은 자기가
+    # 고른 것이 쓰이는 줄 안다. `batchmean` 은 `kl_div` **에만** 있는 값이라
+    # 다른 손실에서는 틀린 이름이고, 삼키면 배치로 나눌 줄 알았던 사람이 원소
+    # 수로 나눈 값을 받는다.
+    for bad in ("MEAN", "batchmean"):
+        def refuses(L, b=bad):
+            try:
+                F(L).l1_loss(L.tensor(x), L.tensor(y), reduction=b)
+            except Exception as exc:                            # noqa: BLE001
+                return "멈췄다" if b in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+        add(f"reduction::거절::{bad}", refuses)
     return cases
 
 

@@ -2312,6 +2312,40 @@ function addLoss(out: Map<string, Case>): void {
   ];
   for (const [name, fn] of layers) out.set(`loss::층::${name}`, fn);
 
+  // ── 접는 방식은 손실의 일부다 ─────────────────────────────────────────
+  //
+  // `reduceAs` 는 오래 있었는데 **`huberLoss`·`klDiv` 만 쓰고 있었다.** 흔한 넷은
+  // `.mean()` 이 박혀 있었다. 코어도 같은 자리에 같은 구멍이었고, 표가 못 본 이유는
+  // 교재가 기본값 `mean` 만 쓰기 때문이다.
+  //
+  // `nllLoss`·`crossEntropy` 는 아직 스칼라만 내므로 여기 없다.
+  for (const reduction of ["none", "mean", "sum"] as const) {
+    const fns: [string, () => Tensor][] = [
+      [`mse_loss(${reduction})`, () => x().mseLoss(y(), reduction)],
+      [`l1_loss(${reduction})`, () => x().l1Loss(y(), reduction)],
+      [`smooth_l1_loss(${reduction})`,
+        () => x().smoothL1Loss(y(), 1.0, reduction)],
+      [`huber_loss(${reduction})`, () => x().huberLoss(y(), 1.0, reduction)],
+      // `nn.MSELoss`·`nn.L1Loss`·`nn.SmoothL1Loss` 는 **여기 없다.** borch.ts 의 `nn`
+      // 에는 `HuberLoss`·`KLDivLoss`·`TripletMarginLoss` 같은 드문 것만 층으로
+      // 있고 흔한 넷이 빠져 있다 — `reduction` 때와 **같은 뒤집힘**이 층 이름에서
+      // 한 번 더 나온 자리다. 파이썬 쪽 케이스는 코어와 결속이 받는다.
+    ];
+    for (const [name, fn] of fns) out.set(`loss::reduction::${name}`, fn);
+  }
+  // 모르는 값을 평균으로 삼키지 않는다. `batchmean` 은 `klDiv` **에만** 있는 값이라
+  // 다른 손실에서는 틀린 이름이다.
+  for (const bad of ["MEAN", "batchmean"]) {
+    out.set(`loss::reduction::거절::${bad}`, () => {
+      try {
+        x().l1Loss(y(), bad as "mean");
+      } catch (err) {
+        return String(err).includes(bad) ? "멈췄다" : `다른 문구 <${err}>`;
+      }
+      return "안 던졌다";
+    });
+  }
+
   // **손실은 기울기가 전부다.** 값이 맞고 기울기가 틀리면 학습이 조용히 다른 데로 간다.
   const grads: [string, (p: Tensor) => Tensor][] = [
     ["huber", (p) => p.huberLoss(y(), 0.5)],
@@ -4544,6 +4578,61 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     x.angle().sum().backward();
     return gradOf(x, "angle");
   });
+
+  // 아래는 한동안 코어 쪽 `tests/test_fold_grad.py` 에만 있었다 — borch.ts 가 그때
+  // 답을 못 해서 셋을 함께 묻는 자리에 못 올렸던 것들이다. 이제 셋 다 답한다.
+  const leaf = (v: number[]) => Tensor.from(v, [v.length], { requiresGrad: true });
+  const even = () => leaf([1, 5, 5, 5]);
+  const dup = () => leaf([1, 1, 2, 2, 2]);
+  const nanTie = () => leaf([1, NaN, 5, 5, 5]);
+  const back = (x: Tensor, got: Tensor, tag: string) => {
+    got.sum().backward();
+    return gradOf(x, tag);
+  };
+
+  // **축이 없으면 번호도 없다.** `median()` 은 텐서 하나를 주고 `median(0)` 은
+  // 값·번호 쌍을 준다 — 규칙이 반대인 것이 서명에도 그대로 드러나 있다.
+  const vals = (r: Tensor | { values: Tensor; indices: Tensor }) =>
+    r instanceof Tensor ? r : r.values;
+  fold("median() 동점 셋", (x) => vals(x.median()));
+  out.set("grad::접힘::median() 짝수·동점",
+    () => { const x = even(); return back(x, vals(x.median()), "median 짝수"); });
+  fold("median(dim=0) 은 한 자리로", (x) => x.median(0).values);
+  out.set("grad::접힘::nanmedian() 동점", async () => {
+    const x = nanTie();
+    return back(x, vals(await x.nanmedian()), "nanmedian");
+  });
+  out.set("grad::접힘::nanmedian(dim=0)", async () => {
+    const x = nanTie();
+    return back(x, vals(await x.nanmedian(0)), "nanmedian(0)");
+  });
+  out.set("grad::접힘::mode() 는 마지막 자리로", async () => {
+    const x = dup();
+    return back(x, (await x.mode()).values, "mode");
+  });
+  fold("kthvalue(2)", (x) => x.kthvalue(2).values);
+  for (const [tag, q, src] of [
+    ["quantile(0.5) 정확히 맞음", 0.5, tied],
+    ["quantile(0.3) 보간", 0.3, tied],
+    ["quantile(0.5) 짝수는 둘로", 0.5, even],
+    ["quantile(0.75) 짝수", 0.75, even],
+  ] as [string, number, () => Tensor][]) {
+    out.set(`grad::접힘::${tag}`, async () => {
+      const x = src();
+      return back(x, await x.quantile(q), tag);
+    });
+  }
+  // 도함수가 `i1` 이다. 여기가 **0 을 흘리고 있었고**, 그 주석이 코어의 구멍을
+  // 근거로 대고 있었다 — 값이 0 인 기울기와 기울기가 없는 것은 다른 말인데,
+  // 베낄 때 뒤가 앞으로 바뀌었다.
+  out.set("grad::접힘::i0() 의 도함수는 i1", () => {
+    const x = leaf([0.5, -1, 2]);
+    x.i0().sum().backward();
+    return gradOf(x, "i0");
+  });
+  fold("topk(3) 는 셋 다", (x) => x.topk(3).values);
+  fold("sort() 는 전부 하나씩", (x) => x.sort().values);
+  fold("cummax(0) 은 늦은 자리를", (x) => x.cummax(0).values);
 }
 
 /**

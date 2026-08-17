@@ -1677,24 +1677,31 @@ def Upsample(scale_factor=2, mode="nearest"):
     return _Wrap(lambda x: wrap(handle(x).upsample(scale_factor)))
 
 
-def L1Loss():
-    return _Wrap(lambda a, b: wrap(handle(a).l1Loss(handle(b))))
+# **접는 방식은 손실의 일부다 — 층 쪽에도 있어야 한다.** 함수 쪽만 고치면
+# `nn.MSELoss(reduction="sum")` 이 `TypeError` 로 멈춘다. 실제로 그 상태였고,
+# 교재 코드는 함수보다 층을 더 많이 쓴다.
+#
+# `NLLLoss`·`CrossEntropyLoss` 는 아직 없다 — borch.ts 의 `nllLoss`·`crossEntropy` 가
+# 스칼라만 내므로 여기서 `none` 을 만들 수 없다. 없는 것을 만드는 대신 멈춘다.
+def L1Loss(reduction="mean"):
+    return _Wrap(lambda a, b: wrap(handle(a).l1Loss(handle(b), reduction)))
 
 
-def MSELoss():
-    return _Wrap(lambda a, b: wrap(handle(a).mseLoss(handle(b))))
+def MSELoss(reduction="mean"):
+    return _Wrap(lambda a, b: wrap(handle(a).mseLoss(handle(b), reduction)))
 
 
-def SmoothL1Loss(beta=1.0):
-    return _Wrap(lambda a, b: wrap(handle(a).smoothL1Loss(handle(b), beta)))
+def SmoothL1Loss(beta=1.0, reduction="mean"):
+    return _Wrap(lambda a, b: wrap(
+        handle(a).smoothL1Loss(handle(b), beta, reduction)))
 
 
 def NLLLoss():
     return _Wrap(lambda a, b: wrap(handle(a).nllLoss(handle(b))))
 
 
-def BCEWithLogitsLoss():
-    return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b))))
+def BCEWithLogitsLoss(reduction="mean"):
+    return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
 
 
 def CrossEntropyLoss():
