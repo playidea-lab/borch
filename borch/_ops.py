@@ -2575,10 +2575,17 @@ def prod(t, dim=None):
 
 def median(t, dim=None):
     """torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다. numpy 는 평균을 낸다 —
-    그대로 쓰면 조용히 다른 값이 나온다."""
+    그대로 쓰면 조용히 다른 값이 나온다.
+
+    **NaN 이 하나라도 있으면 NaN 이다**(실측). `argsort` 는 NaN 을 맨 뒤로 밀어내므로
+    그냥 정렬해 고르면 **NaN 을 건너뛰고** 멀쩡한 값이 나온다 — 그것이 `nanmedian` 이고
+    이쪽은 아니다. 둘을 나란히 묻는 케이스를 넣으면서 걸렸다.
+    """
     t = _wrap(t)
     if dim is None:
         flat = t.data.reshape(-1)
+        if _np.isnan(flat).any():
+            return Tensor(_np.asarray(_np.nan, dtype=t.data.dtype))
         pick = int(_np.argsort(flat)[(flat.size - 1) // 2])
 
         # 기울기는 **뽑힌 그 자리 하나로만** 간다. 중앙값은 고른 원소를 그대로 내놓는
@@ -2595,6 +2602,10 @@ def median(t, dim=None):
     take = _np.take(order, idx, axis=dim)
     at = _np.expand_dims(take, dim)
     picked = _np.take_along_axis(t.data, at, axis=dim).squeeze(dim)
+    # NaN 이 든 줄은 통째로 NaN 이다 — 위 docstring 의 그 자리다.
+    sick = _np.isnan(t.data).any(axis=dim)
+    if sick.any():
+        picked = _np.where(sick, _np.asarray(_np.nan, dtype=picked.dtype), picked)
 
     def back_dim(g):
         z = _np.zeros_like(t.data)
@@ -4284,6 +4295,13 @@ _LdlFactor = _named("linalg_ldl_factor", "LD", "pivots")
 _LdlFactorEx = _named("linalg_ldl_factor_ex", "LD", "pivots", "info")
 _Geqrf = _named("geqrf", "a", "tau")
 _Frexp = _named("frexp", "mantissa", "exponent")
+# 통계의 답들. `histogram` 과 `histogramdd` 의 인자 이름이 `range` 라 그 안에서는
+# 파이썬 내장이 가려진다 — 이 파일에서 아홉 번째 겪는 일이라 별칭을 미리 둔다.
+_Histogram = _named("histogram", "hist", "bin_edges")
+_HistogramDD = _named("histogramdd", "hist", "bin_edges")
+_Mode = _named("mode", "values", "indices")
+_NanMedian = _named("nanmedian", "values", "indices")
+_builtin_range = range
 # 최상위 선형대수의 답들. **`triangular_solve` 는 둘을 주는데 둘째가 계수 행렬의
 # 사본이다**(실측) — 쓸모가 없어 보이지만 torch 가 그렇게 주므로 자리를 맞춘다.
 _TriangularSolve = _named("triangular_solve", "solution", "cloned_coefficient")
@@ -6514,6 +6532,272 @@ def pca_lowrank(a, q=None, center=True, niter=2):
     return svd_lowrank(Tensor(data.astype(a.data.dtype)), q, niter)
 
 
+# ── 통계 ────────────────────────────────────────────────────────────────────
+#
+# **난수 넷에는 굳힐 수 있는 구석이 있다.**
+#
+# `normal`·`bernoulli`·`poisson`·`binomial` 의 값은 골든이 못 굳힌다 — torch 의 난수
+# 줄기와 우리 것이 다르고, 같게 만들 방법도 없다. 그런데 **끝값은 결정적이다**:
+# `std=0` 이면 평균 그대로, `p=0` 이면 전부 0, `p=1` 이면 전부 1, `poisson(0)` 은 0 이다
+# (실측). 골든은 그 자리를 묻고, 나머지는 모양과 형만 본다.
+#
+# 그것이 "난수라 못 묻는다" 와 "안 묻는다" 의 차이다.
+
+def _edges(data, bins, low, high):
+    """경계를 세운다. **마지막 칸은 오른쪽이 닫혀 있다**(실측)."""
+    if low == high:
+        low, high = float(_np.min(data)), float(_np.max(data))
+        if low == high:
+            low, high = low - 0.5, high + 0.5
+    return _np.linspace(low, high, int(bins) + 1)
+
+
+def _count_into(data, edges, weights=None):
+    """`edges` 가 나눈 칸에 센다. **범위 밖은 버린다** — torch 가 그렇다(실측)."""
+    flat = _np.asarray(data, dtype=_np.float64).reshape(-1)
+    w = (_np.ones_like(flat) if weights is None
+         else _np.asarray(weights, dtype=_np.float64).reshape(-1))
+    out = _np.zeros(len(edges) - 1, dtype=_np.float64)
+    for value, weight in zip(flat, w):
+        if value < edges[0] or value > edges[-1]:
+            continue
+        # 오른쪽 끝은 마지막 칸에 넣는다.
+        slot = int(_np.searchsorted(edges, value, side="right")) - 1
+        out[min(max(slot, 0), len(out) - 1)] += weight
+    return out
+
+
+def histc(t, bins=100, min=0, max=0):
+    """칸마다 몇 개인가. **`min == max` 면 자료의 범위를 쓴다**(실측).
+
+    범위를 주면 **밖은 버린다** — 양끝 칸으로 몰아넣지 않는다. 전부 범위 안인 자료로
+    재면 그 규칙이 안 드러난다.
+    """
+    t = _wrap(t)
+    edges = _edges(t.data, bins, float(min), float(max))
+    return Tensor(_count_into(t.data, edges).astype(t.data.dtype))
+
+
+def histogram(t, bins=100, range=None, weight=None, density=False):
+    """`histc` 와 같은 셈에 **경계까지 준다.**
+
+    `bins` 에 텐서를 주면 그것이 곧 경계다 — 칸 너비가 다를 수 있고, 그러면
+    `density` 가 칸마다 다른 값으로 나눈다.
+    """
+    t = _wrap(t)
+    if isinstance(bins, (Tensor, list, tuple, _np.ndarray)):
+        edges = _np.asarray(_wrap(bins).data if isinstance(bins, Tensor) else bins,
+                            dtype=_np.float64)
+    else:
+        low, high = (0.0, 0.0) if range is None else (float(range[0]), float(range[1]))
+        edges = _edges(t.data, bins, low, high)
+    counts = _count_into(t.data, edges,
+                         None if weight is None else _wrap(weight).data)
+    if density:
+        widths = _np.diff(edges)
+        total = counts.sum()
+        counts = counts / (widths * (total if total else 1.0))
+    kind = t.data.dtype
+    return _Histogram(Tensor(counts.astype(kind)), Tensor(edges.astype(kind)))
+
+
+def histogramdd(t, bins=10, range=None, weight=None, density=False):
+    """축이 여럿인 히스토그램. `t` 는 `(표본 수, 차원)` 이다."""
+    t = _wrap(t)
+    data = _np.asarray(t.data, dtype=_np.float64)
+    dims = data.shape[-1]
+    counts = [bins] * dims if isinstance(bins, int) else list(bins)
+    edges = []
+    for d in _builtin_range(dims):
+        low, high = (0.0, 0.0)
+        if range is not None:
+            low, high = float(range[2 * d]), float(range[2 * d + 1])
+        edges.append(_edges(data[:, d], counts[d], low, high))
+    hist, _ = _np.histogramdd(data, bins=edges, density=density,
+                              weights=None if weight is None
+                              else _np.asarray(_wrap(weight).data).reshape(-1))
+    kind = t.data.dtype
+    return _HistogramDD(Tensor(hist.astype(kind)),
+                        [Tensor(e.astype(kind)) for e in edges])
+
+
+def mode(t, dim=-1, keepdim=False):
+    """가장 자주 나온 값. **같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**
+    (실측: `[4,4,5,5]` 가 값 4 · 자리 1 을 준다).
+
+    비긴 자리가 없는 자료로 재면 그 규칙이 안 드러난다.
+    """
+    t = _wrap(t)
+    data = _np.asarray(t.data)
+    axis = dim % data.ndim
+    moved = _np.moveaxis(data, axis, -1)
+    flat = moved.reshape(-1, moved.shape[-1])
+    vals = _np.empty(flat.shape[0], dtype=data.dtype)
+    idx = _np.empty(flat.shape[0], dtype=_np.int64)
+    for row in _builtin_range(flat.shape[0]):
+        line = flat[row]
+        best, best_count = None, -1
+        for value in _np.unique(line):
+            count = int((line == value).sum())
+            if count > best_count:
+                best, best_count = value, count
+        vals[row] = best
+        idx[row] = int(_np.flatnonzero(line == best)[-1])
+    shape = moved.shape[:-1]
+    vals = vals.reshape(shape)
+    idx = idx.reshape(shape)
+    if keepdim:
+        vals = _np.expand_dims(vals, axis)
+        idx = _np.expand_dims(idx, axis)
+    return _Mode(Tensor(vals), Tensor(idx))
+
+
+def nanmedian(t, dim=None, keepdim=False):
+    """NaN 을 **빼고** 센 중앙값. `median` 은 NaN 이 하나만 있어도 NaN 을 낸다(실측).
+
+    짝수 개면 **아래를 고른다** — 평균을 내지 않는다.
+    """
+    t = _wrap(t)
+    data = _np.asarray(t.data, dtype=_np.float64)
+    if dim is None:
+        clean = data.reshape(-1)
+        clean = clean[~_np.isnan(clean)]
+        pick = _np.sort(clean)[(clean.shape[0] - 1) // 2]
+        return Tensor(_np.asarray(pick, dtype=t.data.dtype))
+    axis = dim % data.ndim
+    moved = _np.moveaxis(data, axis, -1)
+    flat = moved.reshape(-1, moved.shape[-1])
+    vals = _np.empty(flat.shape[0], dtype=_np.float64)
+    idx = _np.empty(flat.shape[0], dtype=_np.int64)
+    for row in _builtin_range(flat.shape[0]):
+        line = flat[row]
+        keep = _np.flatnonzero(~_np.isnan(line))
+        order = keep[_np.argsort(line[keep], kind="stable")]
+        at = order[(order.shape[0] - 1) // 2]
+        vals[row] = line[at]
+        idx[row] = int(at)
+    shape = moved.shape[:-1]
+    vals = vals.reshape(shape).astype(t.data.dtype)
+    idx = idx.reshape(shape)
+    if keepdim:
+        vals = _np.expand_dims(vals, axis)
+        idx = _np.expand_dims(idx, axis)
+    return _NanMedian(Tensor(vals), Tensor(idx))
+
+
+def gradient(t, spacing=1, dim=None, edge_order=1):
+    """중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.
+
+    `edge_order` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측:
+    `x²` 에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다).
+    """
+    t = _wrap(t)
+    data = _np.asarray(t.data, dtype=_np.float64)
+    axes = (tuple(_builtin_range(data.ndim)) if dim is None
+            else (dim,) if isinstance(dim, int) else tuple(dim))
+    step = spacing if isinstance(spacing, (list, tuple)) else [spacing] * len(axes)
+    outs = []
+    for axis, gap in zip(axes, step):
+        if isinstance(gap, Tensor):
+            gap = _np.asarray(gap.data, dtype=_np.float64)
+        got = _np.gradient(data, gap, axis=axis % data.ndim,
+                           edge_order=int(edge_order))
+        outs.append(Tensor(got.astype(t.data.dtype)))
+    return tuple(outs)
+
+
+def trapz(y, x=None, dx=1.0, dim=-1):
+    """`trapezoid` 의 옛 이름. 같은 것이다(실측)."""
+    return trapezoid(y, x, dx, dim)
+
+
+def nonzero_static(t, size, fill_value=-1):
+    """0 이 아닌 자리를 **정해진 개수만큼** 낸다. 모자라면 채우고 넘치면 자른다.
+
+    `nonzero` 는 결과 크기가 값에 달려 GPU 에서 한 번 읽어야 하는데, 이쪽은 크기를
+    미리 주므로 그 왕복이 없다 — 그 자리를 위해 있는 이름이다.
+    """
+    t = _wrap(t)
+    found = _np.argwhere(_np.asarray(t.data) != 0)
+    rank = max(1, _np.asarray(t.data).ndim)
+    out = _np.full((int(size), rank), int(fill_value), dtype=_np.int64)
+    take = min(int(size), found.shape[0])
+    out[:take] = found[:take]
+    return Tensor(out)
+
+
+def normal(mean=0.0, std=1.0, size=None, **kw):
+    """정규분포 표본. **`std` 가 0 이면 평균 그대로다** — 골든이 그 자리를 묻는다.
+
+    `mean`·`std` 를 텐서로 주면 자리마다 다른 분포다. 그때는 `size` 를 안 받는다.
+    """
+    if isinstance(mean, Tensor) or isinstance(std, Tensor):
+        m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
+        s = _np.asarray(_wrap(std).data, dtype=_np.float64)
+        m, s = _np.broadcast_arrays(m, s)
+        return Tensor(_rng.normal(m, s).astype(_DEFAULT_DTYPE))
+    shape = () if size is None else tuple(size)
+    return Tensor(_rng.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE))
+
+
+def bernoulli(t, **kw):
+    """자리마다 그 확률로 1. **0 이면 전부 0, 1 이면 전부 1** — 그 두 끝이 결정적이다."""
+    t = _wrap(t)
+    p = _np.asarray(t.data, dtype=_np.float64)
+    return Tensor((_rng.random(p.shape) < p).astype(t.data.dtype))
+
+
+def poisson(t, **kw):
+    """자리마다 그 세기의 포아송 표본. **0 이면 전부 0 이다**(실측)."""
+    t = _wrap(t)
+    lam = _np.asarray(t.data, dtype=_np.float64)
+    return Tensor(_rng.poisson(lam).astype(t.data.dtype))
+
+
+def binomial(count, prob, **kw):
+    """`count` 번 중 성공 횟수. **`p=0` 이면 0, `p=1` 이면 `count` 다.**"""
+    n = _np.asarray(_wrap(count).data, dtype=_np.float64)
+    p = _np.asarray(_wrap(prob).data, dtype=_np.float64)
+    n, p = _np.broadcast_arrays(n, p)
+    return Tensor(_rng.binomial(n.astype(_np.int64), p).astype(_DEFAULT_DTYPE))
+
+
+def stft(*args, **kw):
+    """**복소수 규약을 안 정해서 없다.** 저장이 모자라서가 아니다.
+
+    torch 의 `stft` 는 이제 기본이 복소수 텐서(`return_complex=True`)이고, 실수
+    `(…, 2)` 로 내는 길은 **폐기 예정**이다 — 그 꼴로 흉내 내면 torch 에서 곧
+    사라질 모양을 가르치게 된다. `.double()` 을 거절한 것과 같은 자리다.
+
+    **막힌 것이 저장이라고 적었다가 고쳤다.** 재보니 `complex64` 는 하드웨어 타입이
+    아니라 **float32 둘의 배치 규약**이다(원소당 8 바이트, `view_as_real` 이 마지막
+    축에 `(re, im)`). 우리 `int64`·`bool` 이 float32 버퍼 위의 이름표인 것과 같은
+    갈래이고, 그 기계는 이미 있다.
+
+    정말 막힌 것은 `float64` 이고(WGSL 에 `f64` 가 없다), 그래서 `complex128` 은
+    영원히 없다. 그리고 **진짜 결정은 autograd 다** — torch 는 Wirtinger 규약을
+    쓴다(`L = (z·z̄).real` 에서 `z.grad` 가 보통의 복소 미분이 아니다). 그 규약을
+    재서 못 박기 전에 손대면 그럴듯한데 틀린 기울기가 나온다.
+
+    자세한 것은 `BORCH-TS.md` 의 "안 정한 것" 절에 있다.
+    """
+    _unsupported("torch.stft — 복소수 규약을 안 정했습니다")
+
+
+def istft(*args, **kw):
+    """`stft` 와 같은 이유로 없다."""
+    _unsupported("torch.istft — 복소수 규약을 안 정했습니다")
+
+
+def hash_tensor(*args, **kw):
+    """**uint64 도 없고 규격도 없다.**
+
+    torch 가 내는 것은 `uint64` 이고(실측), 어떤 해시인지는 문서에도 없다. 값을
+    맞출 수 없는 것을 이름만 놓으면 그 값을 믿고 쓰는 코드가 생긴다.
+    """
+    _unsupported("torch.hash_tensor — uint64 도, 정해진 해시 규격도 없습니다")
+
+
 # ================================================================ 이름 잇기
 #
 # **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
@@ -6568,6 +6852,10 @@ _AS_METHOD = (
     # 최상위 선형대수. `lu_unpack`·`lobpcg`·`pca_lowrank`·`svd_lowrank` 는 여기
     # 없다 — torch 가 그 넷은 최상위에만 둔다(실측).
     "cholesky_solve", "cholesky_inverse", "triangular_solve", "orgqr", "ormqr",
+    # 통계. `histogramdd`·`gradient`·`trapz`·`normal`·`poisson`·`binomial` 은
+    # 여기 없다 — torch 가 그것들을 최상위에만 둔다(실측).
+    "histc", "histogram", "mode", "nanmedian", "bernoulli", "nonzero_static",
+    "stft", "istft", "hash_tensor",
 )
 
 

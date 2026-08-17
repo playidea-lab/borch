@@ -99,6 +99,9 @@ from ._ops import (                                      # noqa: E402,F401
     # 최상위 선형대수. **`linalg` 쪽과 이름이 겹치는 셋만 손으로 적혀 있다** —
     # 나머지는 `__getattr__` 이 첫 인자의 메서드로 넘긴다.
     lu, lu_solve, lu_unpack,
+    # 통계. 난수 넷은 값이 아니라 **끝값**으로 굳는다. 뒤의 셋은 이름만 두고 거절한다.
+    bernoulli, binomial, hash_tensor, histogramdd, istft, normal, poisson,
+    stft, trapz,
     # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,

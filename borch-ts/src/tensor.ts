@@ -497,6 +497,54 @@ function diagonalSpots(
   return { spots, shape: out };
 }
 
+/**
+ * 히스토그램의 경계. **`min === max` 면 자료의 범위를 쓴다**(실측).
+ *
+ * 자료가 한 값뿐이면 그 범위가 0 이 되므로 양옆으로 반 칸씩 벌린다 — 안 그러면
+ * 경계가 전부 같은 수가 되고 칸 너비가 0 이 된다.
+ */
+function histEdges(
+  values: readonly number[],
+  bins: number,
+  min: number,
+  max: number,
+): number[] {
+  let low = min;
+  let high = max;
+  if (low === high) {
+    low = Math.min(...values);
+    high = Math.max(...values);
+    if (low === high) { low -= 0.5; high += 0.5; }
+  }
+  const step = (high - low) / bins;
+  return Array.from({ length: bins + 1 }, (_, i) => low + step * i);
+}
+
+/** 값이 들어갈 칸. **범위 밖은 -1** 이고, 오른쪽 끝은 마지막 칸에 넣는다. */
+function slotOf(value: number, edges: readonly number[]): number {
+  const last = edges.length - 1;
+  if (value < (edges[0] ?? 0) || value > (edges[last] ?? 0)) return -1;
+  for (let i = 1; i <= last; i++) {
+    if (value < (edges[i] ?? 0)) return i - 1;
+  }
+  return last - 1;
+}
+
+/** `edges` 가 나눈 칸에 센다. **범위 밖은 버린다** — torch 가 그렇다(실측). */
+function countInto(
+  values: readonly number[],
+  edges: readonly number[],
+  weights: readonly number[] | null,
+): number[] {
+  const out = new Array<number>(edges.length - 1).fill(0);
+  values.forEach((value, i) => {
+    const slot = slotOf(value, edges);
+    if (slot < 0) return;
+    out[slot] = (out[slot] ?? 0) + (weights === null ? 1 : (weights[i] ?? 0));
+  });
+  return out;
+}
+
 /** `dim` 축의 `at` 번째 줄이 차지하는 자리들. `uniqueConsecutive` 가 쓴다. */
 function rowSpots(
   shape: readonly number[],
@@ -3558,6 +3606,229 @@ export class Tensor implements Node<Tensor> {
     return this.nonzero();
   }
 
+  /**
+   * 0 이 아닌 자리를 **정해진 개수만큼.** 모자라면 채우고 넘치면 자른다.
+   *
+   * `nonzero` 는 결과 크기가 값에 달려 GPU 를 한 번 읽어야 하는데, 이쪽은 크기를 미리
+   * 주므로 그 왕복이 **원리상** 필요 없다 — 그 자리를 위해 있는 이름이다. 여기서는
+   * 아직 읽는다(어느 자리가 0 이 아닌지는 값이라서). 커널로 옮길 자리다.
+   */
+  async nonzeroStatic(size: number, fillValue = -1): Promise<Tensor> {
+    const found = await this.nonzero();
+    const rank = Math.max(1, this.shape.length);
+    const rows = Array.from(await found.toArray());
+    const out = new Array<number>(size * rank).fill(fillValue);
+    for (let i = 0; i < Math.min(size * rank, rows.length); i++) {
+      out[i] = rows[i] ?? fillValue;
+    }
+    return Tensor.from(out, [size, rank], { dtype: "int64" });
+  }
+
+  /**
+   * 칸마다 몇 개인가. **`min === max` 면 자료의 범위를 쓴다**(실측).
+   *
+   * 범위를 주면 **밖은 버린다** — 양끝 칸으로 몰아넣지 않는다. 전부 범위 안인 자료로
+   * 재면 그 규칙이 안 드러난다.
+   */
+  async histc(bins = 100, min = 0, max = 0): Promise<Tensor> {
+    const values = Array.from(await this.toArray());
+    const edges = histEdges(values, bins, min, max);
+    return Tensor.from(countInto(values, edges, null), [bins]);
+  }
+
+  /**
+   * `histc` 와 같은 셈에 **경계까지.**
+   *
+   * `bins` 에 텐서를 주면 그것이 곧 경계다 — 칸 너비가 다를 수 있고, 그러면
+   * `density` 가 칸마다 다른 값으로 나눈다.
+   */
+  async histogram(
+    bins: number | Tensor = 100,
+    range: readonly [number, number] | null = null,
+    weight: Tensor | null = null,
+    density = false,
+  ): Promise<{ hist: Tensor; bin_edges: Tensor }> {
+    const values = Array.from(await this.toArray());
+    const edges = typeof bins === "number"
+      ? histEdges(values, bins, range?.[0] ?? 0, range?.[1] ?? 0)
+      : Array.from(await bins.toArray());
+    const w = weight === null ? null : Array.from(await weight.toArray());
+    let counts = countInto(values, edges, w);
+    if (density) {
+      const total = counts.reduce((a, b) => a + b, 0) || 1;
+      counts = counts.map((c, i) => c / (((edges[i + 1] ?? 0) - (edges[i] ?? 0)) * total));
+    }
+    return {
+      hist: Tensor.from(counts, [counts.length]),
+      bin_edges: Tensor.from(edges, [edges.length]),
+    };
+  }
+
+  /** 축이 여럿인 히스토그램. `this` 는 `(표본 수, 차원)` 이다. */
+  async histogramdd(bins: number | readonly number[] = 10): Promise<{
+    hist: Tensor; bin_edges: Tensor[];
+  }> {
+    const values = Array.from(await this.toArray());
+    const rows = this.shape[0] ?? 0;
+    const dims = this.shape[1] ?? 1;
+    const counts = typeof bins === "number"
+      ? new Array<number>(dims).fill(bins)
+      : [...bins];
+    const edges = counts.map((n, d) => {
+      const column: number[] = [];
+      for (let r = 0; r < rows; r++) column.push(values[r * dims + d] ?? 0);
+      return histEdges(column, n, 0, 0);
+    });
+    const total = counts.reduce((a, b) => a * b, 1);
+    const hist = new Array<number>(total).fill(0);
+    for (let r = 0; r < rows; r++) {
+      let flat = 0;
+      let inside = true;
+      for (let d = 0; d < dims; d++) {
+        const slot = slotOf(values[r * dims + d] ?? 0, edges[d]!);
+        if (slot < 0) { inside = false; break; }
+        flat = flat * (counts[d] ?? 1) + slot;
+      }
+      if (inside) hist[flat] = (hist[flat] ?? 0) + 1;
+    }
+    return {
+      hist: Tensor.from(hist, counts),
+      bin_edges: edges.map((e) => Tensor.from(e, [e.length])),
+    };
+  }
+
+  /**
+   * 가장 자주 나온 값. **같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**
+   * (실측: `[4,4,5,5]` 가 값 4 · 자리 1 을 준다).
+   *
+   * 비긴 자리가 없는 자료로 재면 그 규칙이 안 드러난다.
+   */
+  async mode(dim = -1, keepdim = false): Promise<{
+    values: Tensor; indices: Tensor;
+  }> {
+    return this.alongAxis(dim, keepdim, (line) => {
+      const sorted = [...new Set(line)].sort((a, b) => a - b);
+      let best = sorted[0] ?? 0;
+      let bestCount = -1;
+      for (const value of sorted) {
+        const count = line.filter((v) => v === value).length;
+        if (count > bestCount) { best = value; bestCount = count; }
+      }
+      return { value: best, index: line.lastIndexOf(best) };
+    });
+  }
+
+  /**
+   * NaN 을 **빼고** 센 중앙값. `median` 은 NaN 이 하나만 있어도 NaN 을 낸다(실측).
+   *
+   * 짝수 개면 **아래를 고른다** — 평균을 내지 않는다.
+   */
+  async nanmedian(dim?: number, keepdim = false): Promise<
+    Tensor | { values: Tensor; indices: Tensor }
+  > {
+    if (dim === undefined) {
+      const clean = Array.from(await this.toArray()).filter((v) => !Number.isNaN(v));
+      const sorted = [...clean].sort((a, b) => a - b);
+      return Tensor.from([sorted[(sorted.length - 1) >> 1] ?? Number.NaN], []);
+    }
+    return this.alongAxis(dim, keepdim, (line) => {
+      const keep = line.map((v, i) => [v, i] as const)
+        .filter(([v]) => !Number.isNaN(v))
+        .sort((a, b) => a[0] - b[0]);
+      const at = keep[(keep.length - 1) >> 1];
+      return { value: at?.[0] ?? Number.NaN, index: at?.[1] ?? 0 };
+    });
+  }
+
+  /**
+   * 축 하나를 따라 줄마다 값 하나와 자리 하나를 뽑는다.
+   *
+   * `mode` 와 `nanmedian` 이 같은 뼈대다 — 다른 것은 **줄 하나에서 무엇을 고르는가**
+   * 뿐이라 그 하나만 넘긴다.
+   */
+  private async alongAxis(
+    dim: number,
+    keepdim: boolean,
+    pick: (line: number[]) => { value: number; index: number },
+  ): Promise<{ values: Tensor; indices: Tensor }> {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const values = Array.from(await this.toArray());
+    const st = rowStrides(this.shape);
+    const outShape = this.shape.filter((_, d) => d !== axis);
+    const len = this.shape[axis] ?? 0;
+    const vals: number[] = [];
+    const idx: number[] = [];
+    eachCoord(outShape, (c) => {
+      let base = 0;
+      let k = 0;
+      for (let d = 0; d < rank; d++) if (d !== axis) base += c[k++]! * st[d]!;
+      const line: number[] = [];
+      for (let i = 0; i < len; i++) line.push(values[base + i * st[axis]!] ?? 0);
+      const got = pick(line);
+      vals.push(got.value);
+      idx.push(got.index);
+    });
+    const shape = keepdim
+      ? this.shape.map((s, d) => (d === axis ? 1 : s))
+      : outShape;
+    return {
+      values: Tensor.from(vals, shape, { dtype: this.dtype }),
+      indices: Tensor.from(idx, shape, { dtype: "int64" }),
+    };
+  }
+
+  /**
+   * 중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.
+   *
+   * `edgeOrder` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측: `x²`
+   * 에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다).
+   */
+  async gradient(spacing: number | readonly number[] = 1, dim?: number | readonly number[],
+    edgeOrder = 1): Promise<Tensor[]> {
+    const rank = this.shape.length;
+    const axes = dim === undefined
+      ? Array.from({ length: rank }, (_, i) => i)
+      : (typeof dim === "number" ? [dim] : [...dim]);
+    const steps = typeof spacing === "number"
+      ? axes.map(() => spacing)
+      : [...spacing];
+    const values = Array.from(await this.toArray());
+    const st = rowStrides(this.shape);
+    const outs: Tensor[] = [];
+    for (const [k, raw] of axes.entries()) {
+      const axis = raw < 0 ? raw + rank : raw;
+      const gap = steps[k] ?? 1;
+      const len = this.shape[axis] ?? 0;
+      const got = new Array<number>(values.length).fill(0);
+      eachCoord(this.shape.filter((_, d) => d !== axis), (c) => {
+        let base = 0;
+        let j = 0;
+        for (let d = 0; d < rank; d++) if (d !== axis) base += c[j++]! * st[d]!;
+        const at = (i: number): number => values[base + i * st[axis]!] ?? 0;
+        const put = (i: number, v: number): void => {
+          got[base + i * st[axis]!] = v;
+        };
+        for (let i = 1; i < len - 1; i++) put(i, (at(i + 1) - at(i - 1)) / (2 * gap));
+        if (len >= 2 && edgeOrder === 1) {
+          put(0, (at(1) - at(0)) / gap);
+          put(len - 1, (at(len - 1) - at(len - 2)) / gap);
+        } else if (len >= 3) {
+          // 이차식으로 맞춘 한쪽 차분. `x²` 에서 정확해진다.
+          put(0, (-3 * at(0) + 4 * at(1) - at(2)) / (2 * gap));
+          put(len - 1,
+            (3 * at(len - 1) - 4 * at(len - 2) + at(len - 3)) / (2 * gap));
+        }
+      });
+      outs.push(Tensor.from(got, [...this.shape]));
+    }
+    return outs;
+  }
+
+  // `trapz` 는 여기 없다. **`trapezoid` 자체가 borch.ts 의 메서드가 아니라**
+  // 결속이 파이썬에서 조립하는 것이라(사다리꼴 조각을 더하는 몇 줄), 옛 이름도
+  // 같은 자리에서 별칭으로 둔다 — 여기 하나 더 만들면 조립이 두 벌이 된다.
+
   /** 서로 다른 값을 **오름차순으로**. torch 의 기본이 정렬해서 주는 것이다. */
   async unique(): Promise<Tensor> {
     const values = Array.from(await this.toArray());
@@ -4934,17 +5205,34 @@ export class Tensor implements Node<Tensor> {
 
   /**
    * 중앙값. **짝수 개일 때 아래쪽을 준다** — torch 가 두 값을 평균내지 않는다.
+   *
+   * **NaN 이 하나라도 있으면 NaN 이다**(실측). 정렬은 NaN 을 한쪽 끝으로 밀어내므로
+   * 그냥 골라 오면 **NaN 을 건너뛰고** 멀쩡한 값이 나온다 — 그것이 `nanmedian` 이고
+   * 이쪽은 아니다. 코어에도 같은 결함이 있었고, 둘을 나란히 묻는 케이스를 넣으면서
+   * 양쪽이 같이 걸렸다.
    */
   median(dim?: number): { values: Tensor; indices: Tensor } {
+    const spoil = (got: { values: Tensor; indices: Tensor }, axis?: number):
+      { values: Tensor; indices: Tensor } => {
+      // NaN 이 든 줄은 통째로 NaN 이다. `isnan` 의 합이 0 보다 크면 그 줄이다.
+      const sick = axis === undefined
+        ? this.flat().unary("isnan").sum()
+        : this.unary("isnan").sumDim(axis);
+      const bad = sick.binary("gt", Tensor.full([], 0));
+      // **산술로 섞으면 안 된다.** `0 * NaN` 이 NaN 이라, 성한 줄까지 NaN 이 된다 —
+      // 기존 `median` 케이스 셋이 그렇게 빨개졌다. 골라야 한다.
+      const nan = Tensor.zeros(got.values.shape).add(Tensor.full([], Number.NaN));
+      return { values: nan.where(bad, got.values), indices: got.indices };
+    };
     if (dim === undefined) {
       const flat = this.flat();
       const k = Math.floor((flat.size + 1) / 2);
-      return flat.kthvalue(k, 0);
+      return spoil(flat.kthvalue(k, 0));
     }
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const len = this.shape[axis] ?? 1;
-    return this.kthvalue(Math.floor((len + 1) / 2), axis);
+    return spoil(this.kthvalue(Math.floor((len + 1) / 2), axis), axis);
   }
 
   /** 정렬만 하고 자리는 안 준다. */

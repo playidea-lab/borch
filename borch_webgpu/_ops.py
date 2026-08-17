@@ -213,6 +213,14 @@ _SIGNATURE = {
     "lobpcg": ("k", "largest"),
     "svd_lowrank": ("q", "niter", "M"),
     "pca_lowrank": ("q", "center", "niter"),
+    # 통계. borch.ts 쪽 인자 순서다.
+    "histc": ("bins", "min", "max"),
+    "histogram": ("bins", "range", "weight", "density"),
+    "histogramdd": ("bins",),
+    "mode": ("dim", "keepdim"),
+    "nanmedian": ("dim", "keepdim"),
+    "gradient": ("spacing", "dim", "edge_order"),
+    "nonzero_static": ("size", "fill_value"),
 }
 
 # **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
@@ -1379,6 +1387,97 @@ def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True, **kw):
     got = guarded(handle(lu_data).luUnpack, handle(lu_pivots), unpack_data,
                   unpack_pivots)
     return (got.P, got.L, got.U)
+
+
+# ── 통계 ────────────────────────────────────────────────────────────────────
+#
+# 손으로 적는 것은 **난수 넷**과 **거절 셋**, 그리고 조립인 `trapz` 다. 나머지는
+# `__getattr__` 이 첫 인자의 메서드로 넘긴다.
+#
+# **난수의 값은 골든이 못 굳힌다** — borch.ts 의 난수 줄기와 torch 의 것이 다르다.
+# 그런데 끝값은 결정적이다(`std=0`·`p=0`·`p=1`), 그 자리를 골든이 묻는다.
+
+def trapz(y, x=None, dx=1.0, dim=-1, **kw):
+    """`trapezoid` 의 옛 이름. 같은 것이다(실측)."""
+    return trapezoid(y, x, dx, dim, **kw)
+
+
+def histogramdd(t, bins=10, **kw):
+    """축이 여럿인 히스토그램.
+
+    **경계가 텐서 목록으로 온다.** borch.ts 가 JS 배열로 주는데 `settle` 은 그 안까지
+    안 들어가서, 그대로 두면 파이썬 쪽에 JS 손잡이가 남는다 — 받는 쪽이 `.shape` 도
+    `._h` 도 못 쓴다. 여기서 하나씩 감싼다.
+    """
+    from ._base import _Fields
+
+    got = guarded(handle(t).histogramdd, _arg(bins))
+    out = _Fields.__new__(_Fields)
+    object.__setattr__(out, "_order", ["hist", "bin_edges"])
+    object.__setattr__(out, "_d", {
+        "hist": got.hist,
+        "bin_edges": [wrap(e) for e in got.bin_edges],
+    })
+    return out
+
+
+def normal(mean=0.0, std=1.0, size=None, **kw):
+    """정규분포 표본. **`std` 가 0 이면 평균 그대로다.**"""
+    from ._base import tensor as _t
+
+    if isinstance(mean, Tensor) or isinstance(std, Tensor):
+        m = _np.asarray(wrap(mean).numpy(), dtype=_np.float64)
+        s = _np.asarray(wrap(std).numpy(), dtype=_np.float64)
+        m, s = _np.broadcast_arrays(m, s)
+        return _t(_rng.normal(m, s).astype(_np.float32))
+    shape = () if size is None else tuple(size)
+    return _t(_rng.normal(float(mean), float(std), shape).astype(_np.float32))
+
+
+def bernoulli(t, **kw):
+    """자리마다 그 확률로 1. **0 이면 전부 0, 1 이면 전부 1.**"""
+    from ._base import tensor as _t
+
+    p = _np.asarray(wrap(t).numpy(), dtype=_np.float64)
+    return _t((_rng.random(p.shape) < p).astype(_np.float32))
+
+
+def poisson(t, **kw):
+    from ._base import tensor as _t
+
+    lam = _np.asarray(wrap(t).numpy(), dtype=_np.float64)
+    return _t(_rng.poisson(lam).astype(_np.float32))
+
+
+def binomial(count, prob, **kw):
+    from ._base import tensor as _t
+
+    n = _np.asarray(wrap(count).numpy(), dtype=_np.float64)
+    p = _np.asarray(wrap(prob).numpy(), dtype=_np.float64)
+    n, p = _np.broadcast_arrays(n, p)
+    return _t(_rng.binomial(n.astype(_np.int64), p).astype(_np.float32))
+
+
+def _no_complex(what):
+    raise RuntimeError(
+        f"{what} — 복소수 규약을 안 정했습니다. `complex64` 는 float32 둘의 배치라 "
+        "저장은 되지만, autograd 규약(Wirtinger)을 재서 못 박기 전에는 그럴듯하고 "
+        "틀린 기울기가 나옵니다. 자세한 것은 BORCH-TS.md 의 '안 정한 것' 절에.")
+
+
+def stft(*args, **kw):
+    """**복소수 규약을 안 정해서 없다.** 코어와 같은 자리, 같은 이유."""
+    _no_complex("torch.stft")
+
+
+def istft(*args, **kw):
+    _no_complex("torch.istft")
+
+
+def hash_tensor(*args, **kw):
+    """**uint64 도 없고 규격도 없다.** 값을 맞출 수 없는 것에 이름만 놓지 않는다."""
+    raise RuntimeError(
+        "torch.hash_tensor — uint64 도, 정해진 해시 규격도 없습니다.")
 
 
 def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):

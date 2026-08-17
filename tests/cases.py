@@ -1271,6 +1271,165 @@ def shape_index_cases(inp=None):
     return cases
 
 
+STAT_PREFIX = "stat::"
+
+
+def stat_cases(inp=None):
+    """통계. **난수의 값은 못 굳히지만 끝값은 결정적이다.**
+
+    ## 난수 넷을 어떻게 묻는가
+
+    `normal`·`bernoulli`·`poisson`·`binomial` 의 값은 골든이 못 굳힌다 — torch 의 난수
+    줄기와 우리 것이 다르고, 같게 만들 방법도 없다. 그래서 **결정적인 구석**을 묻는다:
+
+    - `std=0` 이면 평균 그대로 (실측)
+    - `p=0` 이면 전부 0, `p=1` 이면 전부 1
+    - `poisson(0)` 은 전부 0
+    - 나머지는 모양만
+
+    "난수라 못 묻는다" 와 "안 묻는다" 는 다르다. 끝값을 안 물으면 `bernoulli` 가
+    확률을 아예 안 보고 있어도 통과한다.
+
+    ## 나머지가 갈리는 자리
+
+    - **범위 밖을 버린다.** `histc`·`histogram` 은 `min`/`max` 밖의 값을 양끝 칸으로
+      몰아넣지 않는다(실측). 전부 범위 안인 자료로 재면 그 규칙이 안 드러난다.
+    - **`min == max` 면 자료의 범위를 쓴다.** 기본값이 `0, 0` 이라 그 갈래가 기본이다.
+    - **마지막 칸은 오른쪽이 닫혀 있다.** 최댓값이 마지막 칸에 들어간다.
+    - **`mode` 는 같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**(실측:
+      `[4,4,5,5]` 가 값 4 · 자리 1). 비긴 자리가 없으면 그 규칙이 안 드러난다.
+    - **`nanmedian` 은 짝수 개에서 아래를 고른다** — 평균을 내지 않는다. 그리고
+      `median` 은 NaN 이 하나만 있어도 NaN 을 낸다 — 둘을 나란히 물어야 갈린다.
+    - **`gradient` 의 `edge_order`.** 1 이면 양끝이 한쪽 차분이고 2 면 이차식이다.
+      `x²` 을 넣으면 2 에서만 정확한 도함수가 나온다.
+    - **`histogram(density)` 는 칸 너비로 나눈다** — 경계를 직접 준 경우 칸마다
+      너비가 달라서, 균등한 칸으로만 재면 그 나눗셈이 안 드러난다.
+
+    ## 셋은 이름만 두고 거절한다
+
+    `stft`·`istft` 는 **복소수 dtype 이 없다**. torch 의 기본이 이제 복소수이고, 실수
+    `(…, 2)` 로 내는 길은 폐기 예정이라 그 꼴로 흉내 내면 곧 사라질 모양을 가르친다.
+    `hash_tensor` 는 uint64 도 없고 어떤 해시인지 규격도 없다 — 값을 맞출 수 없는
+    것에 이름만 놓으면 그 값을 믿는 코드가 생긴다.
+    """
+    x = np.array([0.5, 2.0, 2.0, 3.5, 1.0, 4.0, 2.0], dtype=np.float32)
+    w = np.array([1.0, 2.0, 1.0, 1.0, 3.0, 1.0, 1.0], dtype=np.float32)
+    # **비긴 자리가 있다** — 없으면 `mode` 의 규칙이 안 드러난다.
+    tie = np.array([[1.0, 2.0, 2.0, 3.0], [4.0, 4.0, 5.0, 5.0]], dtype=np.float32)
+    holes = np.array([[1.0, np.nan, 3.0, 5.0], [2.0, 4.0, np.nan, np.nan]],
+                     dtype=np.float32)
+    # `x²` 이다 — `edge_order=2` 가 정확해지는 자리.
+    line = np.array([1.0, 4.0, 9.0, 16.0, 25.0], dtype=np.float32)
+    mat = np.array([[1.0, 2.0, 4.0], [8.0, 16.0, 32.0], [64.0, 128.0, 256.0]],
+                   dtype=np.float32)
+    pts = np.array([[0.5, 1.0], [1.5, 1.5], [2.5, 0.5], [0.2, 2.5]],
+                   dtype=np.float32)
+    sparse = np.array([0.0, 3.0, 0.0, 5.0, 0.0], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((STAT_PREFIX + name, fn))
+
+    # ── 히스토그램 ──────────────────────────────────────────────────────
+    add("histc(bins=4)", lambda L: L.histc(L.tensor(x), bins=4))
+    add("histc(min/max)",
+        lambda L: L.histc(L.tensor(x), bins=4, min=0.0, max=4.0))
+    add("histc(범위 밖은 버림)",
+        lambda L: L.histc(L.tensor(x), bins=2, min=1.0, max=3.0))
+    add("histogram 의 hist", lambda L: L.histogram(L.tensor(x), bins=4).hist)
+    add("histogram 의 edges",
+        lambda L: L.histogram(L.tensor(x), bins=4).bin_edges)
+    add("histogram(weight)",
+        lambda L: L.histogram(L.tensor(x), bins=4, weight=L.tensor(w)).hist)
+    add("histogram(density)",
+        lambda L: L.histogram(L.tensor(x), bins=4, density=True).hist)
+    add("histogram(range)",
+        lambda L: L.histogram(L.tensor(x), bins=4, range=(0.0, 4.0)).hist)
+    # **칸 너비가 다르다** — `density` 가 칸마다 다른 값으로 나누는지 여기서만 보인다.
+    add("histogram(경계를 직접)",
+        lambda L: L.histogram(
+            L.tensor(x),
+            bins=L.tensor(np.array([0.0, 1.0, 2.0, 4.0], dtype=np.float32))).hist)
+    add("histogramdd 의 hist",
+        lambda L: L.histogramdd(L.tensor(pts), bins=[2, 2]).hist)
+    add("histogramdd 의 edges",
+        lambda L: L.cat(list(L.histogramdd(L.tensor(pts), bins=[2, 2]).bin_edges)))
+
+    # ── mode · nanmedian ────────────────────────────────────────────────
+    for dim in (0, 1):
+        add(f"mode(dim={dim}) 값",
+            lambda L, d=dim: L.mode(L.tensor(tie), dim=d).values)
+        add(f"mode(dim={dim}) 자리",
+            lambda L, d=dim: L.mode(L.tensor(tie), dim=d).indices)
+    add("mode(keepdim) 모양",
+        lambda L: str(tuple(L.mode(L.tensor(tie), dim=1, keepdim=True).values.shape)))
+    add("nanmedian(전체)", lambda L: L.nanmedian(L.tensor(holes)))
+    add("nanmedian(dim=1) 값",
+        lambda L: L.nanmedian(L.tensor(holes), dim=1).values)
+    add("nanmedian(dim=1) 자리",
+        lambda L: L.nanmedian(L.tensor(holes), dim=1).indices)
+    # **짝수 개면 아래를 고른다** — 평균을 내면 여기서 갈린다.
+    add("nanmedian(짝수 개)",
+        lambda L: L.nanmedian(L.tensor(np.array([1.0, 2.0, 3.0, 4.0],
+                                                dtype=np.float32))))
+    # `median` 은 NaN 하나에도 NaN 이다 — 나란히 둬야 `nanmedian` 이 무엇인지 보인다.
+    #
+    # **값이 아니라 판정을 굳힌다.** 골든의 대조는 `allclose` 인데 그것이 `equal_nan`
+    # 없이 돌아서 **NaN 은 자기 자신과도 다르다** — 답이 NaN 인 케이스는 이 하네스가
+    # 통째로 못 굳힌다. 그 자리를 "NaN 인가" 로 바꾸면 문자열 비교가 되고, 묻고 싶던
+    # 것(둘이 다르다)은 그대로 남는다.
+    add("median(NaN 이 섞이면 NaN 이다)",
+        lambda L: " ".join(
+            str(bool(v))
+            for v in L.isnan(L.median(L.tensor(holes), dim=1).values).tolist()))
+
+    # ── gradient · trapz ────────────────────────────────────────────────
+    add("gradient(기본)", lambda L: L.cat(list(L.gradient(L.tensor(line)))))
+    add("gradient(spacing=2)",
+        lambda L: L.cat(list(L.gradient(L.tensor(line), spacing=2.0))))
+    add("gradient(edge_order=2)",
+        lambda L: L.cat(list(L.gradient(L.tensor(line), edge_order=2))))
+    for axis in (0, 1):
+        add(f"gradient(2차)[{axis}]",
+            lambda L, a=axis: L.gradient(L.tensor(mat))[a])
+    add("gradient(dim=1)", lambda L: L.gradient(L.tensor(mat), dim=1)[0])
+    add("trapz(y)", lambda L: L.trapz(L.tensor(line)))
+    add("trapz(dx=2)", lambda L: L.trapz(L.tensor(line), dx=2.0))
+    add("trapz(y, x)",
+        lambda L: L.trapz(L.tensor(line),
+                          L.tensor(np.array([0.0, 1.0, 3.0, 6.0, 10.0],
+                                            dtype=np.float32))))
+
+    # ── nonzero_static ──────────────────────────────────────────────────
+    #
+    # **모자라면 채우고 넘치면 자른다.** 딱 맞는 크기로만 재면 두 갈래가 안 드러난다.
+    for size in (1, 2, 5):
+        add(f"nonzero_static(size={size})",
+            lambda L, n=size: L.nonzero_static(L.tensor(sparse), size=n))
+    add("nonzero_static(fill=-9)",
+        lambda L: L.nonzero_static(L.tensor(sparse), size=5, fill_value=-9))
+
+    # ── 난수 넷 — 결정적인 끝값만 ───────────────────────────────────────
+    add("bernoulli(p=0)", lambda L: L.bernoulli(L.zeros(4)))
+    add("bernoulli(p=1)", lambda L: L.bernoulli(L.ones(4)))
+    add("poisson(0)", lambda L: L.poisson(L.zeros(4)))
+    ten = np.array([10.0, 10.0], dtype=np.float32)
+    add("binomial(p=0)",
+        lambda L: L.binomial(L.tensor(ten),
+                             L.tensor(np.zeros(2, dtype=np.float32))))
+    add("binomial(p=1)",
+        lambda L: L.binomial(L.tensor(ten),
+                             L.tensor(np.ones(2, dtype=np.float32))))
+    add("normal(std=0)",
+        lambda L: L.normal(L.tensor(np.array([1.0, 100.0], dtype=np.float32)),
+                           L.tensor(np.zeros(2, dtype=np.float32))))
+    # 값은 못 묻지만 **모양은 묻는다** — 그것마저 안 물으면 이름만 있는 것과 같다.
+    add("normal(size) 모양",
+        lambda L: str(tuple(L.normal(0.0, 1.0, (2, 3)).shape)))
+    add("bernoulli 모양", lambda L: str(tuple(L.bernoulli(L.zeros(2, 3)).shape)))
+    return cases
+
+
 TOPLIN_PREFIX = "toplin::"
 
 
@@ -6943,7 +7102,7 @@ def golden_cases(inp=None):
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
-            + scalar_cache_cases(inp) + top_linalg_cases(inp)
+            + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

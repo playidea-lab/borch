@@ -309,7 +309,11 @@ class Tensor:
                     "sspaddmm",
                     # **`linalg` 쪽과 이름이 겹치는 둘.** 그냥 넘기면 `luSolve` 가
                     # 잡혀서 인자 순서가 뒤집힌 채 다른 답이 나온다.
-                    "lu", "lu_solve"):
+                    "lu", "lu_solve",
+                    # 통계 중 모듈 쪽에 손으로 쓴 것들 — 난수와 거절, 조립, 그리고
+                    # 경계를 목록으로 주는 `histogramdd`.
+                    "bernoulli", "stft", "istft", "hash_tensor", "trapz",
+                    "histogramdd"):
             from . import _ops
             # **`max`·`min` 은 모듈 전역에 없다.** 그 이름을 `_ops` 에 두면 그 파일
             # 안에서 파이썬 내장을 가리고, `max(a, b)` 로 크기를 재던 자리가 텐서

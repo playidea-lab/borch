@@ -135,6 +135,10 @@ from ._ops import (
     cholesky_inverse, cholesky_solve, lobpcg, lu_top as lu,
     lu_solve_top as lu_solve, lu_unpack, orgqr, ormqr, pca_lowrank,
     svd_lowrank, triangular_solve,
+    # 통계. **난수 넷의 값은 못 굳히지만 끝값은 결정적이다** — 그 자리를 골든이 묻는다.
+    # `stft`·`istft`·`hash_tensor` 는 이름만 두고 거절한다(복소수·uint64 가 없다).
+    bernoulli, binomial, gradient, hash_tensor, histc, histogram, histogramdd,
+    istft, mode, nanmedian, nonzero_static, normal, poisson, stft, trapz,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #
