@@ -766,6 +766,23 @@ export class Tensor implements Node<Tensor> {
     return new Tensor(buffer, shape, { parents, backwardFn, gradName, dtype });
   }
 
+  /**
+   * `make` 의 공개 문. **자기 커널을 가진 다른 모듈**(`fft.ts`)이 여기로 들어온다.
+   *
+   * `make` 자체를 공개하지 않는 이유는 이름이 너무 흔해서다 — 밖에서 `Tensor.make`
+   * 를 보면 무엇을 만드는지가 안 읽힌다. 파일 끝의 `makeNode` 가 이 자리를 감싼다.
+   */
+  static node(
+    buffer: GPUBuffer,
+    shape: readonly number[],
+    parents: readonly Tensor[],
+    backwardFn: (grad: Tensor) => readonly (Tensor | null)[],
+    gradName: string,
+    dtype: DType = "float32",
+  ): Tensor {
+    return Tensor.make(buffer, shape, parents, backwardFn, gradName, dtype);
+  }
+
   // ── 만들기 ────────────────────────────────────────────────────────────
 
   /**
@@ -7516,4 +7533,23 @@ export function keepAlive(t: Tensor): Tensor {
 /** 놓은 버퍼 수를 세는 자리. 벤치가 누수를 본다. */
 export function device(): Device {
   return dev();
+}
+
+/**
+ * 그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**
+ *
+ * `Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데
+ * `fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을
+ * 다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)
+ * 같은 자리로 넘긴다.
+ */
+export function makeNode(
+  buffer: GPUBuffer,
+  shape: readonly number[],
+  parents: readonly Tensor[],
+  backwardFn: (grad: Tensor) => readonly (Tensor | null)[],
+  gradName: string,
+  dtype: DType = "float32",
+): Tensor {
+  return Tensor.node(buffer, shape, parents, backwardFn, gradName, dtype);
 }

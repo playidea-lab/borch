@@ -106,6 +106,13 @@ export type { DType } from "./dtype.js";
 // torch 도 `torch.nn` · `torch.optim` 으로 갈라 부른다.
 // `torch.utils.data` 자리. 이름 공간을 나눠 두는 것은 `nn`·`optim` 과 같은 이유다.
 export * as data from "./data.js";
+// `torch.fft` 자리. 몸통이 자기 커널(DFT 셰이더)을 갖고 있어 따로 선다.
+export * as fft from "./fft.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
+
+// **`stft`·`istft` 는 최상위다** — torch 가 `torch.stft` 로 둔다. `fft` 이름 공간
+// 안에도 같은 함수가 보이지만, 교재 코드가 쓰는 꼴은 최상위 쪽이다.
+export { istft, stft } from "./fft.js";
+export type { StftOptions } from "./fft.js";

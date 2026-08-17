@@ -99,9 +99,10 @@ from ._ops import (                                      # noqa: E402,F401
     # 최상위 선형대수. **`linalg` 쪽과 이름이 겹치는 셋만 손으로 적혀 있다** —
     # 나머지는 `__getattr__` 이 첫 인자의 메서드로 넘긴다.
     lu, lu_solve, lu_unpack,
-    # 통계. 난수 넷은 값이 아니라 **끝값**으로 굳는다. 뒤의 셋은 이름만 두고 거절한다.
-    bernoulli, binomial, hash_tensor, histogramdd, istft, normal, poisson,
-    stft, trapz,
+    # 통계. 난수 넷은 값이 아니라 **끝값**으로 굳는다. 뒤의 둘은 이름만 두고 거절한다.
+    bernoulli, binomial, hash_tensor, histogramdd, normal, poisson, trapz,
+    # 푸리에. `fft` 는 이름 공간이고 `stft`·`istft` 는 최상위다 — torch 와 같은 자리.
+    fft, istft, stft,
     # 복소수. `imag` 는 실수에서 거절인데 **torch 자신이 그렇게 한다**(실측).
     #
     # **`complex` 는 파이썬 내장을 가린다.** 그래도 이 이름으로 내보내는 이유는

@@ -18,7 +18,8 @@ import js as _js
 from pyodide.ffi import to_js as _to_js
 
 from ._base import (
-    LinAlgError as _LinAlgError, Tensor, _js_list, _Size, guarded, handle, settle, wrap,
+    LinAlgError as _LinAlgError, Tensor, _js_list, _js_options, _Size, guarded,
+    handle, settle, wrap,
 )
 
 _ts = _js.borch
@@ -1614,20 +1615,100 @@ def binomial(count, prob, **kw):
     return _t(_rng.binomial(n.astype(_np.int64), p).astype(_np.float32))
 
 
-def _no_complex(what):
-    raise RuntimeError(
-        f"{what} — 복소수 규약을 안 정했습니다. `complex64` 는 float32 둘의 배치라 "
-        "저장은 되지만, autograd 규약(Wirtinger)을 재서 못 박기 전에는 그럴듯하고 "
-        "틀린 기울기가 나옵니다. 자세한 것은 BORCH-TS.md 의 '안 정한 것' 절에.")
+# ── 짧은 시간 변환 ────────────────────────────────────────────────────────
+#
+# **오래 거절이었다.** 거절문에 "복소수 규약(Wirtinger)을 안 재서" 라고 적혀 있었고
+# 그 이유가 맞았다 — 저장이 아니라 규약이 막고 있었다. 재서 못 박고 나니 열렸다.
+
+def _stft_options(hop_length, win_length, window, center, pad_mode,
+                  normalized, onesided, return_complex, length=None):
+    """borch.ts 의 `StftOptions` 로. **없는 것은 안 넣는다** — `undefined` 와
+    `null` 이 저쪽에서 다른 뜻이라(기본값 대 "명시적으로 없음"), 파이썬의 `None` 을
+    그대로 넘기면 `return_complex` 강제 검사가 안 걸린다."""
+    kw = {}
+    if hop_length is not None:
+        kw["hopLength"] = int(hop_length)
+    if win_length is not None:
+        kw["winLength"] = int(win_length)
+    if window is not None:
+        kw["window"] = handle(window)
+    kw["center"] = bool(center)
+    if pad_mode is not None:
+        kw["padMode"] = str(pad_mode)
+    kw["normalized"] = bool(normalized)
+    if onesided is not None:
+        kw["onesided"] = bool(onesided)
+    if return_complex is not None:
+        kw["returnComplex"] = bool(return_complex)
+    if length is not None:
+        kw["length"] = int(length)
+    return _js_options(**kw)
 
 
-def stft(*args, **kw):
-    """**복소수 규약을 안 정해서 없다.** 코어와 같은 자리, 같은 이유."""
-    _no_complex("torch.stft")
+def stft(input, n_fft, hop_length=None, win_length=None, window=None,
+         center=True, pad_mode="reflect", normalized=False, onesided=None,
+         return_complex=None, **kw):
+    """짧은 시간 푸리에 변환. **`return_complex` 를 안 주면 거절한다**(실측)."""
+    return wrap(guarded(
+        _ts.stft, handle(input), int(n_fft),
+        _stft_options(hop_length, win_length, window, center, pad_mode,
+                      normalized, onesided, return_complex)))
 
 
-def istft(*args, **kw):
-    _no_complex("torch.istft")
+def istft(input, n_fft, hop_length=None, win_length=None, window=None,
+          center=True, normalized=False, onesided=None, length=None,
+          return_complex=False, **kw):
+    return wrap(guarded(
+        _ts.istft, handle(input), int(n_fft),
+        _stft_options(hop_length, win_length, window, center, None,
+                      normalized, onesided, None, length)))
+
+
+# **`torch.fft` 는 이름 공간이다.** borch.ts 쪽도 모듈이라 그대로 넘기면 되는데,
+# 파이썬의 `None` 기본값과 이름 붙은 인자를 자리로 푸는 일이 남는다.
+class _Fft:
+    @staticmethod
+    def fft(input, n=None, dim=-1, norm=None, **kw):
+        return wrap(guarded(_ts.fft.fft, handle(input), n, int(dim), norm))
+
+    @staticmethod
+    def ifft(input, n=None, dim=-1, norm=None, **kw):
+        return wrap(guarded(_ts.fft.ifft, handle(input), n, int(dim), norm))
+
+    @staticmethod
+    def rfft(input, n=None, dim=-1, norm=None, **kw):
+        return wrap(guarded(_ts.fft.rfft, handle(input), n, int(dim), norm))
+
+    @staticmethod
+    def irfft(input, n=None, dim=-1, norm=None, **kw):
+        return wrap(guarded(_ts.fft.irfft, handle(input), n, int(dim), norm))
+
+    @staticmethod
+    def fftfreq(n, d=1.0, **kw):
+        return wrap(guarded(_ts.fft.fftfreq, int(n), float(d)))
+
+    @staticmethod
+    def rfftfreq(n, d=1.0, **kw):
+        return wrap(guarded(_ts.fft.rfftfreq, int(n), float(d)))
+
+    @staticmethod
+    def fftshift(input, dim=None, **kw):
+        return wrap(guarded(_ts.fft.fftshift, handle(input),
+                            None if dim is None else _dim_arg(dim)))
+
+    @staticmethod
+    def ifftshift(input, dim=None, **kw):
+        return wrap(guarded(_ts.fft.ifftshift, handle(input),
+                            None if dim is None else _dim_arg(dim)))
+
+
+def _dim_arg(dim):
+    """축 하나면 수로, 여럿이면 JS 배열로. 파이썬 목록을 그냥 넘기면 저쪽이 배열로
+    안 본다 — `_js_list` 가 그 자리를 위해 있다."""
+    return _js_list(dim) if isinstance(dim, (list, tuple)) else int(dim)
+
+
+fft = _Fft()
 
 
 def hash_tensor(*args, **kw):

@@ -21,6 +21,8 @@
 
 import { type DType, dtypeName } from "../src/dtype.js";
 import { einsum } from "../src/einsum.js";
+import * as fft from "../src/fft.js";
+import { istft, stft } from "../src/fft.js";
 import * as nn from "../src/nn.js";
 import * as optim from "../src/optim.js";
 import * as vision from "../src/vision.js";
@@ -482,7 +484,161 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addSeq(out, inputs);
   addEdge(out);
   addComplex(out);
+  addFft(out);
   return out;
+}
+
+/**
+ * 푸리에 — `fft::`.
+ *
+ * **커널이 하나다.** 정변환·역변환·반쪽 변환과 그 셋의 역방향이 전부 같은 셰이더를
+ * 부호와 배율만 바꿔 부른다. 그래서 이 표가 실제로 묻는 것은 **그 인자 조합**이다.
+ *
+ * 값보다 기울기가 요점이다. 변환은 선형이라 순방향은 맞히기 쉽고, 어려운 자리는
+ * **어느 쪽 반쪽을 세는가** 다 — `rfft` 는 켤레 짝을 안 더하고(더하면 두 배),
+ * `irfft` 는 가장자리만 한 번 가운데는 두 번 센다. 둘 다 **순방향 값은 멀쩡한 채로**
+ * 틀릴 수 있어서, 값 케이스만 있으면 초록인 채로 지나간다.
+ */
+function addFft(out: Map<string, Case>): void {
+  const P = "fft::";
+  const XS = [1.0, -2.0, 0.5, 3.0, -1.0, 0.25];
+  const YS = [0.5, 1.0, -1.5, 0.25, 2.0, -0.5];
+  // **칼날을 피한 신호다.** 경사 신호(`arange/8 − 1`)는 나이퀴스트 칸이 정확히 0 이
+  // 되는데 거기서 `abs` 가 미분 불가능하고 부호가 반올림에 달린다 — 값이 아니라
+  // 케이스가 문제인 자리라, 0 인 칸이 없는 수로 바꿔 두었다.
+  const SIG = [0.3, -1.2, 0.7, 2.1, -0.4, 1.5, -2.3, 0.9,
+               1.1, -0.6, 0.25, -1.7, 2.4, 0.05, -0.8, 1.35];
+  const MAT = Array.from({ length: 12 }, (_, i) => i);
+
+  const x = (grad = false): Tensor => Tensor.from(XS, [6], { requiresGrad: grad });
+  const z = (): Tensor => Tensor.complex(Tensor.from(XS, [6]), Tensor.from(YS, [6]));
+  const mat = (): Tensor => Tensor.from(MAT, [3, 4]);
+  const sig = (grad = false): Tensor =>
+    Tensor.from(SIG, [16], { requiresGrad: grad });
+  const hann = (n = 8): Tensor => Tensor.hannWindow(n);
+  const pair = (fn: () => Tensor): Case => () => fn().viewAsReal();
+
+  out.set(`${P}fft(실수)`, pair(() => fft.fft(x())));
+  out.set(`${P}fft(복소)`, pair(() => fft.fft(z())));
+  out.set(`${P}fft 의 형`, () => dtypeName(fft.fft(x()).dtype));
+  out.set(`${P}ifft(fft)`, pair(() => fft.ifft(fft.fft(x()))));
+  out.set(`${P}ifft(복소)`, pair(() => fft.ifft(z())));
+  out.set(`${P}rfft`, pair(() => fft.rfft(x())));
+  out.set(`${P}irfft(rfft)`, () => fft.irfft(fft.rfft(x())));
+  out.set(`${P}irfft 의 형`, () => dtypeName(fft.irfft(fft.rfft(x())).dtype));
+  out.set(`${P}irfft(n=5)`, () => fft.irfft(fft.rfft(x()), 5));
+  out.set(`${P}irfft(n=7)`, () => fft.irfft(fft.rfft(x()), 7));
+  for (const norm of ["forward", "backward", "ortho"]) {
+    out.set(`${P}fft norm=${norm}`, pair(() => fft.fft(x(), null, -1, norm)));
+    out.set(`${P}ifft norm=${norm}`, pair(() => fft.ifft(z(), null, -1, norm)));
+  }
+  for (const n of [4, 8]) {
+    out.set(`${P}fft(n=${n})`, pair(() => fft.fft(x(), n)));
+    out.set(`${P}rfft(n=${n})`, pair(() => fft.rfft(x(), n)));
+  }
+  out.set(`${P}fft(dim=0)`, pair(() => fft.fft(mat(), null, 0)));
+  out.set(`${P}rfft(dim=0)`, pair(() => fft.rfft(mat(), null, 0)));
+
+  for (const n of [5, 6]) {
+    out.set(`${P}fftfreq(${n})`, () => fft.fftfreq(n));
+    out.set(`${P}rfftfreq(${n})`, () => fft.rfftfreq(n));
+    out.set(`${P}fftshift(${n})`, () => fft.fftshift(fft.fftfreq(n)));
+    out.set(`${P}ifftshift(fftshift(${n}))`,
+      () => fft.ifftshift(fft.fftshift(fft.fftfreq(n))));
+  }
+  out.set(`${P}fftfreq(6, d=0.5)`, () => fft.fftfreq(6, 0.5));
+
+  const grad = (name: string, body: (t: Tensor) => Tensor): void => {
+    out.set(`${P}grad::${name}`, () => {
+      const leaf = x(true);
+      body(leaf).sum().backward();
+      return gradOf(leaf, name);
+    });
+  };
+  grad("fft 실수부", (t) => fft.fft(t).real());
+  grad("fft 크기", (t) => fft.fft(t).abs());
+  grad("rfft 실수부", (t) => fft.rfft(t).real());
+  grad("rfft 허수부", (t) => fft.rfft(t).imag());
+  grad("rfft 크기", (t) => fft.rfft(t).abs());
+  grad("irfft(rfft)", (t) => fft.irfft(fft.rfft(t)));
+  grad("irfft 가중", (t) => fft.irfft(fft.rfft(t))
+    .mul(Tensor.from([0, 1, 2, 3, 4, 5], [6])));
+  grad("ifft(fft) 실수부", (t) => fft.ifft(fft.fft(t)).real());
+  grad("fftshift(rfft) 크기", (t) => fft.fftshift(fft.rfft(t)).abs());
+
+  for (const center of [true, false]) {
+    for (const hop of [2, 4]) {
+      // **이름은 파이썬 쪽 글자다.** JS 의 `true` 를 그대로 끼우면 `center=true` 가
+      // 되어 골든의 `center=True` 와 안 맞고, 그 케이스는 **조용히 안 돌아간다** —
+      // 러너가 "이름이 골든에 없다" 로 따로 세는 이유가 이것이다.
+      const tag = center ? "True" : "False";
+      out.set(`${P}stft center=${tag} hop=${hop}`, pair(() => stft(sig(), 8, {
+        hopLength: hop, window: hann(), center, returnComplex: true,
+      })));
+    }
+  }
+  out.set(`${P}stft 기본 hop`,
+    pair(() => stft(sig(), 8, { window: hann(), returnComplex: true })));
+  out.set(`${P}stft 창 없이`,
+    pair(() => stft(sig(), 8, { hopLength: 4, returnComplex: true })));
+  out.set(`${P}stft win_length=6`, pair(() => stft(sig(), 8, {
+    hopLength: 4, winLength: 6, window: hann(6), returnComplex: true,
+  })));
+  out.set(`${P}stft onesided=False`, pair(() => stft(sig(), 8, {
+    hopLength: 4, window: hann(), onesided: false, returnComplex: true,
+  })));
+  out.set(`${P}stft normalized`, pair(() => stft(sig(), 8, {
+    hopLength: 4, window: hann(), normalized: true, returnComplex: true,
+  })));
+  for (const mode of ["reflect", "constant", "replicate"] as const) {
+    out.set(`${P}stft pad_mode=${mode}`, pair(() =>
+      stft(Tensor.from([1, 2, 3, 4], [4]), 4, {
+        hopLength: 2, window: Tensor.ones([4]), padMode: mode,
+        returnComplex: true,
+      })));
+  }
+  out.set(`${P}stft 배치`, pair(() => stft(sig().reshape([1, 16]), 8, {
+    hopLength: 4, window: hann(), returnComplex: true,
+  })));
+  out.set(`${P}istft(length=16)`, () => istft(
+    stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
+    8, { hopLength: 4, window: hann(), length: 16 }));
+  out.set(`${P}istft 길이 없이`, () => istft(
+    stft(sig(), 8, { hopLength: 4, window: hann(), returnComplex: true }),
+    8, { hopLength: 4, window: hann() }));
+
+  const sgrad = (name: string, body: (t: Tensor) => Tensor): void => {
+    out.set(`${P}grad::${name}`, () => {
+      const leaf = sig(true);
+      body(leaf).sum().backward();
+      return gradOf(leaf, name);
+    });
+  };
+  sgrad("stft 크기", (t) => stft(t, 8, {
+    hopLength: 4, window: hann(), returnComplex: true,
+  }).abs());
+  sgrad("stft center=False 크기", (t) => stft(t, 8, {
+    hopLength: 4, window: hann(), center: false, returnComplex: true,
+  }).abs());
+  sgrad("istft(stft)", (t) => istft(
+    stft(t, 8, { hopLength: 4, window: hann(), returnComplex: true }),
+    8, { hopLength: 4, window: hann(), length: 16 }));
+
+  const refuses = (name: string, body: () => unknown): void => {
+    out.set(`${P}${name}`, () => {
+      try {
+        body();
+        return "예외가 안 났다";
+      } catch {
+        return "RuntimeError";
+      }
+    });
+  };
+  refuses("rfft(복소)는 거절", () => fft.rfft(z()));
+  refuses("stft 는 return_complex 를 요구",
+    () => stft(sig(), 8, { hopLength: 4, window: hann() }));
+  refuses("복소 스펙트럼의 backward 는 거절",
+    () => fft.fft(x(true)).sum().backward());
 }
 
 /**
