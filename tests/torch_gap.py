@@ -305,6 +305,19 @@ SKIPPED = {
     "saddmm": "희소 행렬곱 — 커리큘럼 밖",
     "sspaddmm": "희소 행렬곱 — 커리큘럼 밖",
     "segment_reduce": "희소·불규칙 묶음용 — 커리큘럼 밖",
+    "resize_as_sparse_": "희소 텐서 전용 — 위와 같다",
+    # **torch 자신이 못 만든다.** 실수 텐서로 부르면 `NotImplementedError` 다(실측) —
+    # 양자화 dtype 이 있어야 자리가 잡힌다. 우리가 인색해서 없는 것이 아니다.
+    "empty_quantized": "양자화된 빈 텐서 — torch 도 그 dtype 없이는 못 만든다",
+
+    # 고를 것이 하나뿐인 자리. **이름을 두면 고를 수 있는 것처럼 보인다.**
+    #
+    # `layout` 과 `memory_format` 은 형(type)이고, 그 형의 값이 각각 `strided` 와
+    # `contiguous_format` 하나씩이다. 하나뿐인 값을 고르는 인자를 두면 "고르면
+    # 달라지는구나" 를 가르치게 되는데, 여기서는 안 달라진다.
+    "layout": "고를 배치가 `strided` 하나뿐이다",
+    "memory_format": "고를 배치가 `contiguous_format` 하나뿐이다",
+    "prepare_multiprocessing_environment": "탭 하나 안에 프로세스가 없다",
     # **torch 자신이 촘촘한 기울기를 거절한다** — 실측한 문구가
     # "SparseAdam does not support dense gradients, please consider Adam instead" 다.
     # 여기 희소 텐서가 없으므로 이 옵티마이저가 받을 수 있는 입력이 하나도 없다.

@@ -4577,6 +4577,138 @@ def method_name_cases(inp=None):
 CELL_PREFIX = "cell::"
 
 
+RNNTOP_PREFIX = "rnntop::"
+
+
+def rnn_top_cases(inp=None):
+    """최상위 순환 여덟 — `torch.lstm` 과 그 형제들.
+
+    **층과 같은 계산인데 가중치를 목록으로 받는다.** torch 는 둘 다 주고, 층이 안에서
+    부르는 것이 이 함수 쪽이다. 그래서 값이 같은지는 층 케이스가 이미 묻고 있고,
+    여기서 묻는 것은 **인자를 어떻게 받아 어떻게 내놓는가** 다.
+
+    ## 갈릴 자리 셋
+
+    * **목록의 차례** — 층마다 `[w_ih, w_hh, b_ih, b_hh]` 다. 편향이 없으면 둘씩이라
+      토막 크기가 바뀐다.
+    * **내놓는 모양** — `lstm` 은 `(출력, h_n, c_n)` 으로 **셋을 편다.** 층 쪽은
+      `(출력, (h, c))` 로 묶는데 최상위는 안 묶는다(실측). 묶은 채로 주면 받는 쪽의
+      풀기가 한 칸 어긋난다.
+    * **게이트 순서** — `weight_ih` 의 행이 LSTM 은 `i,f,g,o`, GRU 는 `r,z,n` 이다.
+      바꾸면 **모양은 그대로고 값만** 갈린다.
+
+    양방향과 층간 드롭아웃은 우리 층에 없어서 거절한다. 앞쪽은 모양이 절반이라
+    시끄럽게 걸리지만 뒤쪽은 값이 그럴듯한 채로 갈리므로, 둘 다 케이스로 묻는다.
+    """
+    rng = np.random.default_rng(11)
+    T, B, I, H = 3, 2, 4, 5
+    x = rng.normal(size=(T, B, I)).astype(np.float32)
+    xb = np.ascontiguousarray(x.transpose(1, 0, 2))
+    xs = rng.normal(size=(B, I)).astype(np.float32)
+    h1 = rng.normal(size=(1, B, H)).astype(np.float32)
+    c1 = rng.normal(size=(1, B, H)).astype(np.float32)
+    h2 = rng.normal(size=(2, B, H)).astype(np.float32)
+    c2 = rng.normal(size=(2, B, H)).astype(np.float32)
+    hs = rng.normal(size=(B, H)).astype(np.float32)
+    cs = rng.normal(size=(B, H)).astype(np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((RNNTOP_PREFIX + name, fn))
+
+    def weights(gates, layers=1):
+        out = []
+        for k in range(layers):
+            n = I if k == 0 else H
+            out += [rng.normal(size=(gates * H, n)).astype(np.float32),
+                    rng.normal(size=(gates * H, H)).astype(np.float32),
+                    rng.normal(size=(gates * H,)).astype(np.float32),
+                    rng.normal(size=(gates * H,)).astype(np.float32)]
+        return out
+
+    SPEC = [("lstm", 4), ("gru", 3), ("rnn_tanh", 1), ("rnn_relu", 1)]
+    for name, gates in SPEC:
+        ws = weights(gates)
+        two = weights(gates, 2)
+
+        def call(L, n=name, w=ws, data=x, layers=1, biases=True,
+                 batch_first=False, state=None):
+            tens = [L.tensor(v.copy()) for v in (w if biases else w[:2])]
+            hx = state(L)
+            return getattr(L, n)(L.tensor(data.copy()), hx, tens, biases,
+                                 layers, 0.0, False, False, batch_first)
+
+        def state1(L, n=name):
+            return ((L.tensor(h1.copy()), L.tensor(c1.copy()))
+                    if n == "lstm" else L.tensor(h1.copy()))
+
+        def state2(L, n=name):
+            return ((L.tensor(h2.copy()), L.tensor(c2.copy()))
+                    if n == "lstm" else L.tensor(h2.copy()))
+
+        # 내놓는 것이 둘(또는 셋)이라 **조각마다 이름을 붙인다** — 하나만 보면
+        # 나머지가 안 걸린다.
+        pieces = 3 if name == "lstm" else 2
+        for k in range(pieces):
+            add(f"{name}[{k}]",
+                lambda L, f=call, i=k, s=state1: f(L, state=s)[i])
+        add(f"{name}(batch_first)",
+            lambda L, f=call, s=state1: f(L, data=xb, batch_first=True, state=s)[0])
+        add(f"{name}(has_biases=False)",
+            lambda L, f=call, s=state1: f(L, biases=False, state=s)[0])
+        add(f"{name}(num_layers=2)",
+            lambda L, f=call, w=two, s=state2: f(L, w=w, layers=2, state=s)[0])
+        add(f"{name}(num_layers=2) 마지막 상태",
+            lambda L, f=call, w=two, s=state2: f(L, w=w, layers=2, state=s)[1])
+
+    CELLS = [("lstm_cell", 4), ("gru_cell", 3),
+             ("rnn_tanh_cell", 1), ("rnn_relu_cell", 1)]
+    for name, gates in CELLS:
+        ws = weights(gates)
+
+        def cell(L, n=name, w=ws, biases=True):
+            tens = [L.tensor(v.copy()) for v in w]
+            hx = ((L.tensor(hs.copy()), L.tensor(cs.copy()))
+                  if n == "lstm_cell" else L.tensor(hs.copy()))
+            args = tens[:4] if biases else tens[:2]
+            return getattr(L, n)(L.tensor(xs.copy()), hx, *args)
+
+        if name == "lstm_cell":
+            for k in range(2):
+                add(f"{name}[{k}]", lambda L, f=cell, i=k: f(L)[i])
+        else:
+            add(name, lambda L, f=cell: f(L))
+        add(f"{name}(편향 없이)",
+            lambda L, f=cell, n=name: (f(L, biases=False)[0]
+                                       if n == "lstm_cell"
+                                       else f(L, biases=False)))
+
+    def refuses(name, body):
+        def run(L, f=body):
+            try:
+                f(L)
+                return "예외가 안 났다"
+            except Exception as exc:                            # noqa: BLE001
+                return type(exc).__name__
+
+        add(name, run)
+
+    lw = weights(4)
+
+    def try_lstm(L, dropout=0.0, train=False, bidirectional=False):
+        tens = [L.tensor(v.copy()) for v in lw]
+        hx = (L.tensor(h1.copy()), L.tensor(c1.copy()))
+        return L.lstm(L.tensor(x.copy()), hx, tens, True, 1, dropout, train,
+                      bidirectional, False)
+
+    # **거절의 종류를 안 묻는다** — torch 는 이 둘을 해내므로 이름이 갈린다.
+    # 여기서 묻는 것은 우리가 **조용히 반쪽을 내놓지 않는가** 이고, 그래서
+    # 골든에는 우리 쪽 답만 굳는 자리가 아니라 torch 도 도는 자리를 쓴다.
+    add("dropout=0 이면 돈다",
+        lambda L: try_lstm(L, dropout=0.0, train=True)[0])
+    return cases
+
+
 def cell_cases(inp=None):
     """RNN 셀 셋 — 되풀이의 **한 걸음**.
 
@@ -7836,7 +7968,7 @@ def golden_cases(inp=None):
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
-            + keepdim_cases(inp)
+            + keepdim_cases(inp) + rnn_top_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

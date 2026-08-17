@@ -116,3 +116,10 @@ export * as vision from "./vision.js";
 // 안에도 같은 함수가 보이지만, 교재 코드가 쓰는 꼴은 최상위 쪽이다.
 export { istft, stft } from "./fft.js";
 export type { StftOptions } from "./fft.js";
+
+// **최상위 순환 여덟.** torch 는 층(`nn.LSTM`)과 함수(`torch.lstm`)를 둘 다 주고,
+// 층이 안에서 부르는 것이 함수 쪽이다 — 가중치를 목록으로 받는 것이 차이다.
+export {
+  gru, gruCell, lstm, lstmCell, rnnRelu, rnnReluCell, rnnTanh, rnnTanhCell,
+} from "./rnn.js";
+export type { RnnOptions } from "./rnn.js";

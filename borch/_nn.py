@@ -9,7 +9,7 @@ from ._tensor import (
     Tensor,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _math, _np, _unsupported,
+    _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
 )
 from ._ops import (
     _Namespace, _gelu, _pool_all, _rng, _spread, _wrap, adaptive_avg_pool1d,
@@ -900,6 +900,114 @@ nn.GRUCell = GRUCell
 nn.LSTMCell = LSTMCell
 # `RNNBase` 는 `RNN`·`LSTM`·`GRU` 의 부모다. torch 에서도 직접 못 만든다(ValueError).
 nn.RNNBase = _RNNBase
+
+
+# ---------------------------------------------------------------- 최상위 순환
+#
+# **층과 같은 계산인데 가중치를 목록으로 받는다.** `torch.lstm(x, (h,c), params, …)`
+# 이 그 꼴이고, 층이 안에서 부르는 것이 이것이다.
+#
+# **층을 지어 가중치를 갈아 끼운다.** 되풀이 식을 여기서 다시 적으면 게이트 순서가
+# 갈리는 날이 오고, 그때 모양은 같고 값만 틀린다 — 셀 쪽 docstring 이 이미 같은
+# 이유로 층의 식을 빌려 쓴다. 지어 두면 파라미터가 한 벌 낭비되지만, 그것은 값이
+# 아니라 시간이다.
+
+def _install_weights(mod, params, num_layers, has_biases):
+    """평평한 가중치 목록을 층의 이름표 자리에 꽂는다.
+
+    차례는 **층마다 `[w_ih, w_hh, b_ih, b_hh]`** 다(실측). 편향이 없으면 둘씩이다.
+    `Parameter` 로 감싸지 않는다 — 부르는 쪽이 준 텐서로 기울기가 그대로 가야 한다.
+    """
+    per = 4 if has_biases else 2
+    want = per * num_layers
+    if len(params) != want:
+        raise RuntimeError(_like_torch(
+            f"가중치가 {want} 개여야 하는데 {len(params)} 개입니다 "
+            f"(층 {num_layers} × {per}).",
+            "expected a tuple of tensors of the right length"))
+    for layer in range(num_layers):
+        chunk = params[layer * per:(layer + 1) * per]
+        setattr(mod, f"weight_ih_l{layer}", chunk[0])
+        setattr(mod, f"weight_hh_l{layer}", chunk[1])
+        if has_biases:
+            setattr(mod, f"bias_ih_l{layer}", chunk[2])
+            setattr(mod, f"bias_hh_l{layer}", chunk[3])
+
+
+def _rnn_top(cls, x, hx, params, has_biases, num_layers, dropout, train,
+             bidirectional, batch_first, **kw):
+    """최상위 순환 넷의 공통 몸통.
+
+    **양방향과 층간 드롭아웃은 거절한다.** 우리 층에 그 둘이 없어서다 — 여기서
+    한 방향만 돌려주면 모양이 절반이라 시끄럽게 걸리겠지만, 드롭아웃 쪽은 값이
+    그럴듯한 채로 갈린다(정칙화가 안 걸린 학습). 둘 다 여기서 멈춘다.
+    """
+    if bidirectional:
+        _unsupported("양방향 순환(bidirectional=True)")
+    if train and dropout:
+        _unsupported(f"층간 드롭아웃(dropout={dropout})")
+    first = params[0]
+    hidden = first.data.shape[0] // cls.gates
+    mod = cls(first.data.shape[1], hidden, num_layers, bias=bool(has_biases),
+              batch_first=bool(batch_first), **kw)
+    _install_weights(mod, params, num_layers, bool(has_biases))
+    return mod(x, hx)
+
+
+def lstm(input, hx, params, has_biases, num_layers, dropout, train,      # noqa: A002
+         bidirectional, batch_first=False):
+    """`(출력, h_n, c_n)` — **셋을 편다.** 층 쪽은 `(출력, (h, c))` 로 묶는데
+    최상위는 안 묶는다(실측). 묶은 채로 주면 받는 쪽의 풀기가 한 칸 어긋난다."""
+    out, (h, c) = _rnn_top(LSTM, input, hx, params, has_biases, num_layers,
+                           dropout, train, bidirectional, batch_first)
+    return out, h, c
+
+
+def gru(input, hx, params, has_biases, num_layers, dropout, train,      # noqa: A002
+        bidirectional, batch_first=False):
+    return _rnn_top(GRU, input, hx, params, has_biases, num_layers, dropout,
+                    train, bidirectional, batch_first)
+
+
+def rnn_tanh(input, hx, params, has_biases, num_layers, dropout, train,  # noqa: A002
+             bidirectional, batch_first=False):
+    return _rnn_top(RNN, input, hx, params, has_biases, num_layers, dropout,
+                    train, bidirectional, batch_first, nonlinearity="tanh")
+
+
+def rnn_relu(input, hx, params, has_biases, num_layers, dropout, train,  # noqa: A002
+             bidirectional, batch_first=False):
+    return _rnn_top(RNN, input, hx, params, has_biases, num_layers, dropout,
+                    train, bidirectional, batch_first, nonlinearity="relu")
+
+
+def _cell_top(cls, x, hx, w_ih, w_hh, b_ih, b_hh, **kw):
+    """칸 넷의 공통 몸통. 층 쪽과 달리 이름에 층 번호가 없다."""
+    hidden = w_ih.data.shape[0] // cls.gates
+    cell = cls(w_ih.data.shape[1], hidden, bias=b_ih is not None, **kw)
+    cell.weight_ih, cell.weight_hh = w_ih, w_hh
+    if b_ih is not None:
+        cell.bias_ih, cell.bias_hh = b_ih, b_hh
+    return cell(x, hx)
+
+
+def lstm_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):              # noqa: A002
+    """한 걸음. `nn.LSTMCell` 과 **같은 값**이다(실측)."""
+    return _cell_top(LSTMCell, input, tuple(hx), w_ih, w_hh, b_ih, b_hh)
+
+
+def gru_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):              # noqa: A002
+    return _cell_top(GRUCell, input, hx, w_ih, w_hh, b_ih, b_hh)
+
+
+def rnn_tanh_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):         # noqa: A002
+    return _cell_top(RNNCell, input, hx, w_ih, w_hh, b_ih, b_hh,
+                     nonlinearity="tanh")
+
+
+def rnn_relu_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):         # noqa: A002
+    return _cell_top(RNNCell, input, hx, w_ih, w_hh, b_ih, b_hh,
+                     nonlinearity="relu")
 
 
 class MultiheadAttention(Module):

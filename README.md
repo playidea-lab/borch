@@ -170,7 +170,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 ```
 
 > **GPU 쪽은 코드 커버리지를 못 잰다.** 브라우저 안에서만 돌아서 `pytest --cov` 가
-> 닿지 않는다. 그쪽에 대해 말할 수 있는 것은 **골든 2468건이 지난다**는 것뿐이고,
+> 닿지 않는다. 그쪽에 대해 말할 수 있는 것은 **골든 2503건이 지난다**는 것뿐이고,
 > 그것은 표면 검사이지 줄 검사가 아니다. 두 수를 같은 것처럼 적지 않는다.
 
 이 검사가 첫 실행에서 잡은 것: PyTorch 의 `BatchNorm2d` 는 **같은 forward 안에서 분산을
@@ -261,7 +261,7 @@ uv run --with playwright python tests/browser/run.py \
 | **autograd** | `requires_grad` · `backward()` · `.grad` · `no_grad()` · `detach()` · 누적 |
 | **축약** | `sum`·`mean`·`max`·`min`·`prod`·`median`·`norm`·`cumsum`·`topk`·`sort`·`unique`·`std` — 역전파 포함 |
 | **nn** | `Module` · `Linear` · `Conv1d/2d/3d` · `MaxPool1d/2d/3d` · `Upsample` · `Embedding` · `LayerNorm` · `BatchNorm1d/2d/3d` · `Dropout` · `Sequential` · `ModuleList` |
-| **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태 |
+| **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태. **최상위 함수 꼴도** (`torch.lstm`·`lstm_cell` 등 여덟) — 가중치를 목록으로 받는다. 양방향과 층간 드롭아웃은 거절한다 |
 | **트랜스포머** | `MultiheadAttention` · 인코더·디코더 층 · `nn.Transformer` — 불리언·실수 마스크 · `norm_first` · gelu |
 | **손실** | `MSELoss`·`L1Loss`·`SmoothL1Loss`·`BCELoss`·`BCEWithLogitsLoss`·`CrossEntropyLoss`·`NLLLoss` |
 | **optim** | `SGD`(momentum·weight_decay) · `Adam` · `AdamW` · `RMSprop` — `param_groups` · `state_dict` |
@@ -419,11 +419,11 @@ WebGPU 에 동기 읽기가 없는데도 **`await` 이 안 나온다.** Pyodide 
 부른다. 기본값이 자기 이름이라 남의 `import torch` 는 안 건드린다 — 위의 표와 같은
 선택이다.
 
-**골든 2468 건 전부**를 지난다 — 표에서 이쪽만 건너뛰는 것이 하나도 없다. 코어는
-그중 2415 건을 보는데, 나머지 53 건은 코어가 일부러 거절하는 것들(1·3 차원 합성곱,
+**골든 2503 건 전부**를 지난다 — 표에서 이쪽만 건너뛰는 것이 하나도 없다. 코어는
+그중 2450 건을 보는데, 나머지 53 건은 코어가 일부러 거절하는 것들(1·3 차원 합성곱,
 랭크 7·8)이라 안 묻는다.
 
-borch.ts 자신은 1939 건에 TS 본문을 써 두었다. 나머지 529 건은 **일부러 안 옮겼다** —
+borch.ts 자신은 1939 건에 TS 본문을 써 두었다. 나머지 564 건은 **일부러 안 옮겼다** —
 결속(`borch-webgpu`)이 이미 그 케이스들에서 borch.ts 커널을 지나므로 **값은 검증되고
 있고**, TS 본문이 추가로 증명하는 것은 값이 아니라 이쪽 표면(이름과 인자 순서)이다.
 그중 상당수는 파이썬 이름 별칭을 묻는 것이라 옮기면 같은 질문이 두 번이 된다.
@@ -712,8 +712,8 @@ WGSL 이 Metal 전용이 아니라는 뜻이다. (4090 쪽은 그때의 표로 �
 그래프가 끊긴 것을 못 본다 — 값은 맞기 때문이다. 실제로 GPU 쪽의 `roll` 과
 `masked_select` 가 그렇게 조용히 끊겨 있었고 그때 골든은 전부 초록이었다.
 
-그리고 **골든 2468건**이 세 구현을 **같은 기대값**에 대조한다. 코어는 브라우저
-전용(1·3 차원 합성곱처럼 코어가 일부러 거절하는 것) 53 건을 빼고 2415 건을 본다 —
+그리고 **골든 2503건**이 세 구현을 **같은 기대값**에 대조한다. 코어는 브라우저
+전용(1·3 차원 합성곱처럼 코어가 일부러 거절하는 것) 53 건을 빼고 2450 건을 본다 —
 없는 것을 물으면 그건 검사가 아니라 오답이다. 진짜 torch 를 브라우저에 넣을 수
 없어서, 네이티브에서 기대값을 굳혀 브라우저로 들고 간다.
 

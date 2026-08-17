@@ -1748,6 +1748,75 @@ def _dim_arg(dim):
 fft = _Fft()
 
 
+# ── 최상위 순환 여덟 ───────────────────────────────────────────────────────
+#
+# **`__getattr__` 이 못 넘긴다.** 그쪽은 첫 인자의 메서드로 보내는데, 이 여덟은
+# borch.ts 에서도 자유 함수다(가중치를 목록으로 받는다). 손으로 적는다.
+
+def _rnn_options(has_biases, num_layers, dropout, train, bidirectional,
+                 batch_first):
+    return _js_options(hasBiases=bool(has_biases), numLayers=int(num_layers),
+                       dropout=float(dropout), train=bool(train),
+                       bidirectional=bool(bidirectional),
+                       batchFirst=bool(batch_first))
+
+
+def _rnn_params(params):
+    return _js.Array.from_([handle(p) for p in params])
+
+
+def lstm(input, hx, params, has_biases, num_layers, dropout, train,     # noqa: A002
+         bidirectional, batch_first=False, **kw):
+    """`(출력, h_n, c_n)` — **셋을 편다.** 층 쪽은 `(출력, (h, c))` 로 묶는다."""
+    got = guarded(_ts.lstm, handle(input),
+                  _js.Array.from_([handle(hx[0]), handle(hx[1])]),
+                  _rnn_params(params),
+                  _rnn_options(has_biases, num_layers, dropout, train,
+                               bidirectional, batch_first))
+    return tuple(wrap(t) for t in got)
+
+
+def _rnn_two(name):
+    def call(input, hx, params, has_biases, num_layers, dropout, train,  # noqa: A002
+              bidirectional, batch_first=False, **kw):
+        got = guarded(getattr(_ts, name), handle(input), handle(hx),
+                      _rnn_params(params),
+                      _rnn_options(has_biases, num_layers, dropout, train,
+                                   bidirectional, batch_first))
+        return tuple(wrap(t) for t in got)
+
+    return call
+
+
+gru = _rnn_two("gru")
+rnn_tanh = _rnn_two("rnnTanh")
+rnn_relu = _rnn_two("rnnRelu")
+
+
+def lstm_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None, **kw):       # noqa: A002
+    got = guarded(_ts.lstmCell, handle(input),
+                  _js.Array.from_([handle(hx[0]), handle(hx[1])]),
+                  handle(w_ih), handle(w_hh),
+                  None if b_ih is None else handle(b_ih),
+                  None if b_hh is None else handle(b_hh))
+    return tuple(wrap(t) for t in got)
+
+
+def _cell_one(name):
+    def call(input, hx, w_ih, w_hh, b_ih=None, b_hh=None, **kw):        # noqa: A002
+        return wrap(guarded(getattr(_ts, name), handle(input), handle(hx),
+                            handle(w_ih), handle(w_hh),
+                            None if b_ih is None else handle(b_ih),
+                            None if b_hh is None else handle(b_hh)))
+
+    return call
+
+
+gru_cell = _cell_one("gruCell")
+rnn_tanh_cell = _cell_one("rnnTanhCell")
+rnn_relu_cell = _cell_one("rnnReluCell")
+
+
 def hash_tensor(*args, **kw):
     """**uint64 도 없고 규격도 없다.** 값을 맞출 수 없는 것에 이름만 놓지 않는다."""
     raise RuntimeError(

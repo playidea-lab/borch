@@ -173,6 +173,10 @@ from ._nn import (
     TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer, Unflatten,
     Upsample, _Activation, _Functional, _NN, _RNNBase, _apply_mask, _cls,
     _nn_unsupported, _split_heads, nn, one_hot,
+    # **최상위 순환 여덟.** torch 는 층(`nn.LSTM`)과 함수(`torch.lstm`)를 둘 다 주고,
+    # 층이 안에서 부르는 것이 함수 쪽이다. 가중치를 목록으로 받는 것이 차이다.
+    gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,
+    rnn_tanh_cell,
 )
 from ._optim import (
     Adadelta, Adagrad, Adam, AdamW, Adamax, ChainedScheduler, ConstantLR,

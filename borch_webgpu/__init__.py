@@ -103,6 +103,9 @@ from ._ops import (                                      # noqa: E402,F401
     bernoulli, binomial, hash_tensor, histogramdd, normal, poisson, trapz,
     # 푸리에. `fft` 는 이름 공간이고 `stft`·`istft` 는 최상위다 — torch 와 같은 자리.
     fft, istft, stft,
+    # 최상위 순환 여덟. 층(`nn.LSTM`)과 같은 계산인데 가중치를 목록으로 받는다.
+    gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,
+    rnn_tanh_cell,
     # 복소수. `imag` 는 실수에서 거절인데 **torch 자신이 그렇게 한다**(실측).
     #
     # **`complex` 는 파이썬 내장을 가린다.** 그래도 이 이름으로 내보내는 이유는
