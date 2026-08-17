@@ -996,7 +996,24 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     if p == float("inf"):
         got = guarded(h.abs)
         return wrap(got.max() if dim is None else got.amax(dim, bool(keepdim)))
-    raise NotImplementedError(f"norm 의 p={p} 는 아직 없다 — 근사하지 않는다")
+    # 아래 셋은 코어가 조용히 2-노름을 내던 자리를 고치면서 같이 열었다. 코어만
+    # 고치면 **셋이 서로 갈린다** — 골든은 세 구현에 같은 것을 묻는 자리라, 한쪽만
+    # 답할 수 있으면 그 케이스를 아예 못 넣는다.
+    if p == float("-inf"):
+        got = guarded(h.abs)
+        return wrap(got.min() if dim is None else got.amin(dim, bool(keepdim)))
+    if p == 0:
+        got = handle(x)
+        return wrap(got.countNonzero() if dim is None
+                    else got.countNonzero(dim)).float()
+    if p in (None, "fro"):
+        return norm(x, 2, dim, keepdim)
+    if p == "nuc":
+        raise NotImplementedError(
+            "norm('nuc') 는 아직 없다 — 특이값의 합이라 SVD 가 필요하다. 근사하지 않는다")
+    powed = handle(guarded(handle(guarded(h.abs)).powScalar, float(p)))
+    total = powed.sum() if dim is None else powed.sumDim(dim, bool(keepdim))
+    return wrap(handle(wrap(total)).powScalar(1.0 / float(p)))
 
 
 def transpose(x, dim0=None, dim1=None, **kw):

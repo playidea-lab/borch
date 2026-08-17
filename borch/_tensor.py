@@ -792,7 +792,20 @@ class Tensor:
 
     def _argreduce(self, np_fn, np_arg, dim, keepdim):
         if dim is None:
-            return Tensor(np_fn(self.data))
+            # **축이 없으면 번호도 없고, 그래서 규칙이 반대가 된다.** 번호를 주는
+            # `max(dim=0)` 은 고른 한 자리에 기울기를 전부 주지만, 번호가 없는
+            # `max()` 는 동점에 **고르게 나눈다** — `amax()` 와 같은 규칙이다
+            # (실측: [3,5,5,1,5] → [0, ⅓, ⅓, 0, ⅓]).
+            #
+            # 예전에는 여기서 `Tensor(...)` 를 맨손으로 만들어 **그래프가 조용히
+            # 끊겼다.** 값 검사는 전부 통과했다 — 값은 맞았기 때문이다. 드러난 것은
+            # `backward()` 를 불렀을 때이고, 그때 나오는 말은 "requires_grad 가 아닌
+            # 텐서" 라 사용자를 가리킨다. 연산이 없다고는 아무도 안 말해 준다.
+            value = _np.asarray(np_fn(self.data))
+            hit = (self.data == value).astype(self.data.dtype)
+            share = hit / hit.sum()
+            return self._make(value, (self,),
+                              lambda g: (_np.asarray(g) * share,))
         idx = np_arg(self.data, axis=dim)
         values = _np.take_along_axis(self.data, _np.expand_dims(idx, dim), axis=dim)
         if not keepdim:

@@ -4515,6 +4515,35 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
       return gradOf(leaf, `pad_sequence/${tag}`);
     });
   }
+
+  // ── 접히는 자리 — **동점이 있어야 열린다** ──────────────────────────────
+  //
+  // 여러 칸이 한 칸으로 접히면, 되돌릴 때 어디로 가는가가 갈린다. 값이 전부
+  // 다르면 어떤 규칙을 써도 같은 답이 나와서 이 물음이 안 열린다. 이유는 파이썬
+  // 쪽 `grad_cases` 에 길게 적었다.
+  //
+  // **여기 없는 것이 있다.** `max()`·`min()` 의 축 없는 꼴은 borch.ts 에 없다 —
+  // `max(dim)` 만 있고 그것은 번호를 건네므로 규칙이 반대다. 축 없는 꼴은 결속이
+  // 만들고, 그래서 그 두 케이스는 코어와 결속만 답한다.
+  const tied = () => Tensor.from([3, 5, 5, 1, 5], [5], { requiresGrad: true });
+  const fold = (name: string, fn: (x: Tensor) => Tensor) => {
+    out.set(`grad::접힘::${name}`, () => {
+      const x = tied();
+      fn(x).sum().backward();
+      return gradOf(x, name);
+    });
+  };
+  fold("amax() 동점 셋", (x) => x.amax());
+  fold("amin() 동점 없음", (x) => x.amin());
+  fold("max(dim=0) 은 한 자리로", (x) => x.max(0).values);
+  fold("norm(inf)", (x) => x.vectorNorm(Infinity));
+  fold("norm(-inf)", (x) => x.vectorNorm(-Infinity));
+  fold("norm(3)", (x) => x.vectorNorm(3));
+  out.set("grad::접힘::angle() 은 0 을 흘린다", () => {
+    const x = Tensor.from([0.5, -1, 2], [3], { requiresGrad: true });
+    x.angle().sum().backward();
+    return gradOf(x, "angle");
+  });
 }
 
 /**

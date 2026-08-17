@@ -2641,12 +2641,18 @@ def median(t, dim=None, keepdim=False):
             return Tensor(_np.asarray(_np.nan, dtype=t.data.dtype))
         pick = int(_np.argsort(flat)[(flat.size - 1) // 2])
 
-        # 기울기는 **뽑힌 그 자리 하나로만** 간다. 중앙값은 고른 원소를 그대로 내놓는
-        # 연산이라, 나머지 원소를 조금 흔들어도 답이 안 움직인다.
+        # 기울기는 **값이 같은 칸 전부에 고르게** 간다 — `max()` 와 같은 규칙이다
+        # (실측: [1,5,5,5] 의 median 기울기가 [0, ⅓, ⅓, ⅓]).
+        #
+        # 여기에는 "뽑힌 자리 하나로만 간다" 가 있었고, 근거도 적혀 있었다 — 나머지
+        # 원소를 흔들어도 답이 안 움직인다는 것. **동점이 아닐 때만 맞는 말이다.**
+        # 동점이면 그 원소들도 답을 같이 떠받치고 있어서, 하나만 흔들어도 답이
+        # 따라 움직인다. 동점 없는 자료로만 재면 두 규칙이 같은 답을 내므로 안 갈린다.
+        share = (flat == flat[pick]).astype(_np.float64)
+        share = (share / share.sum()).reshape(t.data.shape)
+
         def back(g):
-            z = _np.zeros_like(flat)
-            z[pick] = _np.asarray(g)
-            return (z.reshape(t.data.shape),)
+            return (_np.asarray(g) * share,)
 
         return t._make(flat[pick], (t,), back, "MedianBackward0")
 
@@ -2694,7 +2700,12 @@ def norm(t, p=2, dim=None):
     if p == -float("inf"):
         return t.abs().min(dim=dim) if dim is None else t.abs().amin(dim=dim)
     if p == 0:
-        return (t != 0).float().sum(dim=dim)
+        # **`t * 0` 을 더해 그래프를 잇는다.** 세는 것은 계단이라 도함수가 0 이고,
+        # 0 은 "없다" 가 아니라 맞는 답이다. 안 이으면 `norm(0).backward()` 가 멈추는데
+        # torch 는 안 멈춘다 — `grad_fn` 은 두고 잎에는 안 닿아서 `grad` 가 None 으로
+        # 남는다(실측). 우리는 0 이 쌓이고 torch 는 None 이 남는 차이만 있고, 손실에
+        # 더했을 때 학습에 미치는 영향은 같다. **멈추는 쪽이 제일 멀다.**
+        return (t != 0).float().sum(dim=dim) + (t * 0).sum(dim=dim)
     return (t.abs() ** float(p)).sum(dim=dim) ** (1.0 / float(p))
 
 
@@ -2931,7 +2942,44 @@ def quantile(t, q, dim=None, keepdim=False):
         "quantile() input tensor must be either float or double dtype")
     qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
     out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim)
-    return Tensor(_np.asarray(out, dtype=t.data.dtype))
+
+    # **기울기는 보간에 쓰인 두 자리로 나뉜다** — 정확히 맞아떨어지면 한 자리다
+    # (실측: [3,5,5,1,5] 의 quantile(0.3) 기울기가 [0.8, 0.2, 0, 0, 0]).
+    #
+    # `median` 과 규칙이 다르다. `median` 은 **값이 같은 칸 전부**에 나누는데
+    # `quantile` 은 **정렬한 자리**로 나눈다 — [1,5,5,5] 에서 median 은 세 5 에
+    # ⅓ 씩 주고 quantile(0.5) 는 앞의 두 5 에 ½ 씩 준다. 동점이 없는 자료로 재면
+    # 둘이 같은 답을 내므로 이 갈림이 안 보인다.
+    #
+    # 여기에도 `Tensor(...)` 만 있어서 그래프가 조용히 끊겨 있었다.
+    data = _np.asarray(t.data, dtype=_np.float64)
+    lines = data.reshape(1, -1) if dim is None else \
+        _np.moveaxis(data, dim, -1).reshape(-1, data.shape[dim])
+    order = _np.argsort(lines, axis=-1, kind="stable")
+    n = lines.shape[-1]
+    rows = _np.arange(lines.shape[0])
+    # q 하나마다 무게판을 한 장 만든다. 스칼라 q 면 한 장이다.
+    qs = _np.atleast_1d(_np.asarray(qq, dtype=_np.float64))
+    sheets = _np.zeros((qs.size,) + lines.shape, dtype=_np.float64)
+    for k, one in enumerate(qs):
+        pos = float(one) * (n - 1)
+        lo, hi = int(_np.floor(pos)), int(_np.ceil(pos))
+        frac = pos - lo
+        _np.add.at(sheets[k], (rows, order[:, lo]), 1.0 - frac)
+        _np.add.at(sheets[k], (rows, order[:, hi]), frac)
+
+    def back(g):
+        gg = _np.asarray(g, dtype=_np.float64)
+        # q 가 벡터면 결과의 맨 앞 축이 q 다. 판마다 그 몫을 실어 더한다.
+        parts = gg.reshape(qs.size, -1) if _np.ndim(qq) else gg.reshape(1, -1)
+        total = (sheets * parts[:, :, None]).sum(axis=0)
+        if dim is None:
+            return (total.reshape(t.data.shape),)
+        moved = data.shape[:dim] + data.shape[dim + 1:] + (n,)
+        return (_np.moveaxis(total.reshape(moved), -1, dim),)
+
+    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,), back,
+                   "QuantileBackward0")
 
 
 def nanquantile(t, q, dim=None, keepdim=False):
@@ -5816,10 +5864,36 @@ def detach_(x):
     return x
 
 
+def _i1(x):
+    """1 차 변형 베셀 함수 — `i0` 의 도함수다. numpy 가 `i0` 만 주므로 급수로 짠다.
+
+    급수는 `i1(x) = Σ (x/2)^(2k+1) / (k! (k+1)!)` 이고, 항을 앞 항에 곱해 이어 가면
+    계승이 넘치지 않는다. **항이 전부 양수라 서로 지우지 않으므로** 자릿수를 잃는
+    자리가 없다 — 부호는 홀함수라 마지막에 붙인다.
+
+    근사가 아니라 수렴이다. torch 와 [-30, 30] 을 촘촘히 대조해 float32 안에서
+    상대오차 1e-6 아래임을 확인했다(`tests/test_bessel.py`).
+    """
+    a = _np.abs(_np.asarray(x, dtype=_np.float64))
+    half = a / 2.0
+    term = half.copy()                     # k=0 항
+    total = term.copy()
+    for k in _builtin_range(1, 400):
+        term = term * (half * half) / (k * (k + 1.0))
+        total = total + term
+        if _np.all(term <= _np.abs(total) * 1e-17):
+            break
+    return _np.sign(_np.asarray(x, dtype=_np.float64)) * total
+
+
 def i0(x):
     """0 차 변형 베셀 함수. `kaiser_window` 가 이것 위에 선다."""
     x = _wrap(x)
-    return Tensor(_np.i0(x.data).astype(x.data.dtype))
+    data = _np.asarray(x.data)
+    # 도함수는 `i1` 이다. 여기에는 `Tensor(...)` 만 있어서 그래프가 조용히 끊겨
+    # 있었고, `backward()` 를 부르기 전까지는 값 검사로 안 드러났다.
+    return x._make(_np.i0(data).astype(x.data.dtype), (x,),
+                   lambda g: (_np.asarray(g) * _i1(data),), "I0Backward0")
 
 
 def i0_(x):
@@ -6842,13 +6916,27 @@ def mode(t, dim=-1, keepdim=False):
                 best, best_count = value, count
         vals[row] = best
         idx[row] = int(_np.flatnonzero(line == best)[-1])
+    # 기울기는 **밝힌 그 자리 하나로** 간다. 가장 자주 나온 값이라 같은 값이 여럿
+    # 있지만, `mode` 는 그중 마지막을 번호로 건네므로 그 자리가 답을 대표한다
+    # (실측: [1,1,2,2,2] 의 기울기가 마지막 2 에만 간다). 여기에도 `Tensor(...)` 만
+    # 있어서 그래프가 끊겨 있었다.
+    weight = _np.zeros(flat.shape, dtype=_np.float64)
+    weight[_np.arange(flat.shape[0]), idx] = 1.0
+    weight = _np.moveaxis(weight.reshape(moved.shape), -1, axis)
     shape = moved.shape[:-1]
     vals = vals.reshape(shape)
     idx = idx.reshape(shape)
     if keepdim:
         vals = _np.expand_dims(vals, axis)
         idx = _np.expand_dims(idx, axis)
-    return _Mode(Tensor(vals), Tensor(idx))
+
+    def back(g):
+        gg = _np.asarray(g)
+        if keepdim:
+            gg = _np.squeeze(gg, axis)
+        return (_np.expand_dims(gg, axis) * weight,)
+
+    return _Mode(t._make(vals, (t,), back, "ModeBackward0"), Tensor(idx))
 
 
 def nanmedian(t, dim=None, keepdim=False):
@@ -6862,10 +6950,15 @@ def nanmedian(t, dim=None, keepdim=False):
                   kind=NotImplementedError)
     data = _np.asarray(t.data, dtype=_np.float64)
     if dim is None:
-        clean = data.reshape(-1)
-        clean = clean[~_np.isnan(clean)]
+        flat = data.reshape(-1)
+        clean = flat[~_np.isnan(flat)]
         pick = _np.sort(clean)[(clean.shape[0] - 1) // 2]
-        return Tensor(_np.asarray(pick, dtype=t.data.dtype))
+        # **값이 같은 칸 전부에 고르게 나눈다** — `median()` 과 같은 규칙이다.
+        # 여기에는 `Tensor(...)` 만 있어서 그래프가 조용히 끊겨 있었다.
+        share = (flat == pick).astype(_np.float64)
+        share = (share / share.sum()).reshape(t.data.shape)
+        return t._make(_np.asarray(pick, dtype=t.data.dtype), (t,),
+                       lambda g: (_np.asarray(g) * share,), "NanmedianBackward0")
     axis = dim % data.ndim
     moved = _np.moveaxis(data, axis, -1)
     flat = moved.reshape(-1, moved.shape[-1])
@@ -6878,13 +6971,26 @@ def nanmedian(t, dim=None, keepdim=False):
         at = order[(order.shape[0] - 1) // 2]
         vals[row] = line[at]
         idx[row] = int(at)
+    # **축을 주면 번호가 나오고, 번호가 나오면 기울기는 그 자리 하나로 간다.**
+    # 축이 없을 때 고르게 나누는 것과 반대인데, 갈림은 같다 — 번호를 건네는 연산은
+    # 고른 자리를 밝히고, 안 건네는 연산은 값이 같은 칸을 구별하지 않는다.
+    weight = _np.zeros(flat.shape, dtype=_np.float64)
+    weight[_np.arange(flat.shape[0]), idx] = 1.0
+    weight = _np.moveaxis(weight.reshape(moved.shape), -1, axis)
     shape = moved.shape[:-1]
     vals = vals.reshape(shape).astype(t.data.dtype)
     idx = idx.reshape(shape)
     if keepdim:
         vals = _np.expand_dims(vals, axis)
         idx = _np.expand_dims(idx, axis)
-    return _NanMedian(Tensor(vals), Tensor(idx))
+
+    def back(g):
+        gg = _np.asarray(g)
+        if keepdim:
+            gg = _np.squeeze(gg, axis)
+        return (_np.expand_dims(gg, axis) * weight,)
+
+    return _NanMedian(t._make(vals, (t,), back, "NanmedianBackward0"), Tensor(idx))
 
 
 def gradient(t, spacing=1, dim=None, edge_order=1):
@@ -7116,7 +7222,11 @@ def angle(t):
     if data.dtype.kind == "c":
         return Tensor(_np.angle(data).astype(_DEFAULT_DTYPE))
     out = _np.where(data < 0, _math.pi, 0.0).astype(_DEFAULT_DTYPE)
-    return Tensor(out)
+    # **0 을 흘린다 — "없다" 가 아니라 맞는 답이다.** 실수의 편각은 계단이라 어디서든
+    # 도함수가 0 이고, torch 도 0 을 채운다(실측). 그래프를 안 이으면 `backward()` 가
+    # 멈추는데, 그때 나오는 말은 사용자를 가리키지 이 연산을 가리키지 않는다.
+    return t._make(out, (t,), lambda g: (_np.zeros_like(data, dtype=_np.float64),),
+                   "AngleBackward0")
 
 
 def _complex_abs(t):

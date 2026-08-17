@@ -683,6 +683,45 @@ def grad_cases(inp=None):
 
     refuses("씨앗 모양이 어긋남", "Mismatch in shape", bad_seed)
 
+    # ── 접히는 자리 — **동점이 있어야 열린다** ────────────────────────────
+    #
+    # `max()` 가 [3,5,5,1,5] 를 5 로 접으면 그 5 를 만든 자리가 셋이다. 되돌릴 때
+    # 어디로 가는가 — **값이 전부 다르면 이 물음이 안 열린다.** "고른 자리 하나로
+    # 준다" 와 "값이 같은 칸에 나눈다" 가 같은 답을 내기 때문이다. 표의 기울기
+    # 케이스는 오래 서로 다른 값만 써서, 절반만 맞는 구현이 통과했다.
+    #
+    # torch 의 규칙은 셋이다 — 번호를 **건네는** 연산은 고른 자리 하나로,
+    # **안 건네는** 연산은 값이 같은 칸에 고르게, **정렬 자리**로 접는 연산은
+    # 그 자리들로. 여기에는 셋이 다 답할 수 있는 것만 넣는다. 나머지 절반(코어만
+    # 맞출 수 있는 `median` 의 동점·`mode`·`quantile`·`i0`)은 `tests/test_fold_grad.py`
+    # 에 있고, borch.ts 가 따라오면 이리로 옮긴다.
+    tied = np.array([3.0, 5.0, 5.0, 1.0, 5.0], dtype=np.float32)
+    step = np.array([0.5, -1.0, 2.0], dtype=np.float32)
+
+    def folds(name, fn, arr=tied):
+        def run(L, f=fn, a=arr, n=name):
+            x = L.tensor(a, requires_grad=True)
+            out = f(L, x)
+            (out.sum() if out.numel() > 1 else out).backward()
+            return _grad_of(x, n)
+        cases.append((f"grad::접힘::{name}", run))
+
+    folds("max() 동점 셋", lambda L, x: x.max())
+    folds("min() 동점 없음", lambda L, x: x.min())
+    folds("amax() 동점 셋", lambda L, x: x.amax())
+    folds("amin() 동점 없음", lambda L, x: x.amin())
+    # `max(dim=0)` 은 번호를 건네므로 **반대 규칙**이다. 같은 자료로 나란히 물어야
+    # 둘이 다르다는 것이 케이스로 남는다.
+    folds("max(dim=0) 은 한 자리로", lambda L, x: x.max(dim=0)[0])
+    # 노름은 `p` 가 규칙을 통째로 바꾼다. `inf` 는 최대 절댓값이라 동점이 열리고,
+    # 유한한 `p` 는 모든 칸에 흐른다.
+    folds("norm(inf)", lambda L, x: x.norm(float("inf")))
+    folds("norm(-inf)", lambda L, x: x.norm(float("-inf")))
+    folds("norm(3)", lambda L, x: x.norm(3))
+    # 계단 함수의 도함수는 **0 이고, 0 은 없는 것이 아니다.** 그래프를 안 이으면
+    # `backward()` 가 멈추는데 torch 는 안 멈춘다.
+    folds("angle() 은 0 을 흘린다", lambda L, x: x.angle(), step)
+
     return cases
 
 
