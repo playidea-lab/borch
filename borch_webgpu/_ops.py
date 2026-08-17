@@ -1773,6 +1773,11 @@ def _dim_arg(dim):
 
 fft = _Fft()
 
+# **`torch.device` 는 코어의 것을 빌린다.** 순수한 값 물건이라(형과 번호 둘) 여기서
+# 다시 쓸 것이 없다 — 두 벌로 두면 `repr` 이 갈리는 날이 오고, 골든이 그 글자를
+# 굳혀 두었다.
+from borch._base import device                            # noqa: E402,F401
+
 
 # ── 최상위 순환 여덟 ───────────────────────────────────────────────────────
 #
@@ -1841,6 +1846,70 @@ def _cell_one(name):
 gru_cell = _cell_one("gruCell")
 rnn_tanh_cell = _cell_one("rnnTanhCell")
 rnn_relu_cell = _cell_one("rnnReluCell")
+
+
+# ── 최상위에 남아 있던 이름들 ─────────────────────────────────────────────
+#
+# **이름으로 세면 틀린다.** `fake_quantize_*` 는 이름이 양자화인데 실수를 받아
+# 실수를 내고, `dequantize` 는 실수에서 항등이다 — 재고 나서야 거절이 아닌 줄 알았다.
+
+def igamma(input, other, **kw):                                 # noqa: A002
+    """정규화된 하부 불완전 감마. **기울기가 `x` 쪽에만 있다**(실측)."""
+    return wrap(guarded(_ts.igamma, handle(input), handle(other)))
+
+
+def igammac(input, other, **kw):                                # noqa: A002
+    return wrap(guarded(_ts.igammac, handle(input), handle(other)))
+
+
+def polygamma(n, input, **kw):                                  # noqa: A002
+    """**`n` 이 첫 자리다** — 텐서가 둘째다. torch 의 서명이 그렇다."""
+    return wrap(guarded(_ts.polygamma, int(n), handle(input)))
+
+
+def constant_pad_nd(input, pad, value=0.0, **kw):               # noqa: A002
+    return wrap(guarded(handle(input).constantPadNd, _js_list(pad),
+                        float(value)))
+
+
+def fake_quantize_per_tensor_affine(input, scale, zero_point,   # noqa: A002
+                                    quant_min, quant_max, **kw):
+    return wrap(guarded(handle(input).fakeQuantizePerTensorAffine,
+                        float(scale), float(zero_point), int(quant_min),
+                        int(quant_max)))
+
+
+def fake_quantize_per_channel_affine(input, scale, zero_point,  # noqa: A002
+                                     axis, quant_min, quant_max, **kw):
+    return wrap(guarded(handle(input).fakeQuantizePerChannelAffine,
+                        handle(scale), handle(zero_point), int(axis),
+                        int(quant_min), int(quant_max)))
+
+
+def dequantize(input, **kw):                                    # noqa: A002
+    """실수에서는 항등. 양자화 dtype 이 **영원히 없어서** 그것이 완전한 답이다."""
+    return wrap(guarded(handle(input).dequantize))
+
+
+def resize_as_(input, other, **kw):                             # noqa: A002
+    """`other` 의 모양으로 제자리에서. **늘어난 칸의 값은 정해지지 않는다**(실측).
+
+    **`copyFrom` 으로는 안 된다** — 그것은 칸 수가 같아야 하는데 이 연산은 칸 수를
+    바꾸는 것이 전부다. 제자리성은 파이썬 쪽 손잡이를 갈아 끼워서 지킨다: 부르는
+    쪽이 쥔 객체는 그대로고 밑에 깔린 버퍼만 바뀐다.
+    """
+    x = wrap(input)
+    want = wrap(other).shape
+    flat = x.numpy().reshape(-1)
+    need = 1
+    for d in want:
+        need *= int(d)
+    grown = _np.zeros(need, dtype=flat.dtype)
+    keep = min(flat.size, need)
+    grown[:keep] = flat[:keep]
+    from ._base import tensor as _mk
+    x._h = handle(_mk(grown.reshape(tuple(int(d) for d in want))))
+    return x
 
 
 def hash_tensor(*args, **kw):

@@ -306,6 +306,10 @@ SKIPPED = {
     "sspaddmm": "희소 행렬곱 — 커리큘럼 밖",
     "segment_reduce": "희소·불규칙 묶음용 — 커리큘럼 밖",
     "resize_as_sparse_": "희소 텐서 전용 — 위와 같다",
+    # **이름만 보면 `nn.ParameterDict` 의 짝 같은데 아니다.** 재보니 생성자가
+    # `torch._C.ScriptModule` 하나만 받고 `nn` 아래에는 없다 — TorchScript 내부다.
+    # 사전처럼 쓰려고 만들면 이름은 같고 물건이 다른 것을 주게 된다.
+    "BufferDict": "TorchScript 내부 — 생성자가 ScriptModule 을 받는다",
     # **torch 자신이 못 만든다.** 실수 텐서로 부르면 `NotImplementedError` 다(실측) —
     # 양자화 dtype 이 있어야 자리가 잡힌다. 우리가 인색해서 없는 것이 아니다.
     "empty_quantized": "양자화된 빈 텐서 — torch 도 그 dtype 없이는 못 만든다",

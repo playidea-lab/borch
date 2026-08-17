@@ -123,3 +123,6 @@ export {
   gru, gruCell, lstm, lstmCell, rnnRelu, rnnReluCell, rnnTanh, rnnTanhCell,
 } from "./rnn.js";
 export type { RnnOptions } from "./rnn.js";
+
+// 특수 함수. `n` 이 셰이더 상수라 단항 표에 안 들어가서 따로 선다.
+export { igamma, igammac, polygamma } from "./special.js";

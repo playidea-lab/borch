@@ -4673,6 +4673,131 @@ def method_name_cases(inp=None):
 CELL_PREFIX = "cell::"
 
 
+TOP10_PREFIX = "top::"
+
+
+def top_rest_cases(inp=None):
+    """최상위에 남아 있던 이름들 — `tests/torch_gap.py` 의 마지막 검토 대상.
+
+    **이름으로 세면 틀린다는 것이 이 묶음의 교훈이다.** `fake_quantize_*` 는 이름이
+    양자화라 거절 쪽으로 세어 두었는데 **실수를 받아 실수를 낸다** — 양자화 dtype 이
+    필요 없다. `dequantize` 도 실수에서는 항등이다. 반대로 `BufferDict` 는 이름이
+    `nn.ParameterDict` 의 짝 같은데 **TorchScript 내부**라 거절이다.
+
+    ## 무엇을 못 묻는가
+
+    `resize_as_` 는 **모양만** 묻는다. 늘어난 칸의 값은 torch 도 초기화하지 않아서
+    (실측: 같은 코드가 매번 같은 값을 내지만 그것은 약속이 아니다) 값을 굳히면 그
+    구현의 우연을 명세로 박제하게 된다.
+    """
+    grid = np.array([-1.7, 0.3, 2.9, 5.5], dtype=np.float32)
+    shapes = np.array([0.5, 1.0, 2.0, 3.0], dtype=np.float32)
+    spots = np.array([0.25, 1.5, 0.5, 4.0], dtype=np.float32)
+    steps = np.array([1.0, 2.0, 3.5], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((TOP10_PREFIX + name, fn))
+
+    def X(L):
+        return L.tensor(grid.copy())
+
+    add("igamma", lambda L: L.igamma(L.tensor(shapes.copy()),
+                                     L.tensor(spots.copy())))
+    # **한 식으로 못 덮는다** — `x < a+1` 은 급수, 그 밖은 연분수다. 작은 x 로만
+    # 물으면 그 갈림이 안 보인다.
+    add("igamma(큰 x)", lambda L: L.igamma(L.tensor(shapes.copy()),
+                                          L.tensor(shapes.copy() * 8)))
+    add("igammac", lambda L: L.igammac(L.tensor(shapes.copy()),
+                                       L.tensor(spots.copy())))
+    add("igamma + igammac = 1",
+        lambda L: L.igamma(L.tensor(shapes.copy()), L.tensor(spots.copy()))
+        + L.igammac(L.tensor(shapes.copy()), L.tensor(spots.copy())))
+    for n in (0, 1, 2, 3):
+        add(f"polygamma({n})",
+            lambda L, k=n: L.polygamma(k, L.tensor(steps.copy())))
+    add("constant_pad_nd", lambda L: L.constant_pad_nd(X(L), [1, 2], 9.0))
+    add("fake_quantize(per_tensor)",
+        lambda L: L.fake_quantize_per_tensor_affine(X(L), 0.5, 0, 0, 7))
+    # 영점을 옮기면 자르는 자리가 바뀐다 — 0 으로만 물으면 그 인자가 죽어도 안 보인다.
+    add("fake_quantize(zp=2)",
+        lambda L: L.fake_quantize_per_tensor_affine(X(L), 0.5, 2, 0, 7))
+    add("fake_quantize(per_channel)",
+        lambda L: L.fake_quantize_per_channel_affine(
+            L.tensor(grid.reshape(2, 2).copy()),
+            L.tensor(np.array([0.5, 0.25], dtype=np.float32)),
+            L.tensor(np.array([0.0, 1.0], dtype=np.float32)), 0, 0, 7))
+    add("dequantize", lambda L: L.dequantize(X(L)))
+
+    def grad(name, fn, data):
+        def run(L, f=fn, d=data, n=name):
+            leaf = L.tensor(d.copy(), requires_grad=True)
+            f(L, leaf).sum().backward()
+            return _grad_of(leaf, n)
+
+        add(f"grad::{name}", run)
+
+    grad("igamma / x",
+         lambda L, t: L.igamma(L.tensor(shapes.copy()), t), spots)
+    grad("igammac / x",
+         lambda L, t: L.igammac(L.tensor(shapes.copy()), t), spots)
+    grad("polygamma(1)", lambda L, t: L.polygamma(1, t), steps)
+    grad("constant_pad_nd", lambda L, t: L.constant_pad_nd(t, [1, 2], 9.0), grid)
+    # **범위 밖은 0 이다** — 반올림이 계단이라 도함수가 거의 어디서나 0 인데,
+    # torch 는 범위 안을 "곧바로 통과" 로 둔다. 안 그러면 학습이 아예 안 간다.
+    grad("fake_quantize", lambda L, t:
+         L.fake_quantize_per_tensor_affine(t, 0.5, 0, 0, 7), grid)
+
+    def refuses(name, body):
+        def run(L, f=body):
+            try:
+                f(L)
+                return "예외가 안 났다"
+            except Exception as exc:                            # noqa: BLE001
+                return type(exc).__name__
+
+        add(name, run)
+
+    # 첫 인자로는 안 미분한다 — **torch 자신이 거절한다**(닫힌 꼴이 없다).
+    def igamma_on_a(L):
+        a = L.tensor(shapes.copy(), requires_grad=True)
+        L.igamma(a, L.tensor(spots.copy())).sum().backward()
+
+    refuses("igamma 는 a 로 안 미분한다", igamma_on_a)
+
+    # ── device ─────────────────────────────────────────────────────────
+    #
+    # **만드는 것과 쓰는 것을 가른다.** `torch.device("cuda")` 는 하드웨어가 없어도
+    # 만들어진다(실측) — 거기서 멈추면 튜토리얼 첫 줄의 삼항식이 통째로 못 돈다.
+    add("device::str", lambda L: str(L.device("cpu")))
+    add("device::repr", lambda L: repr(L.device("cpu")))
+    add("device::type", lambda L: str(L.device("cpu").type))
+    add("device::번호 있는 것", lambda L: str(L.device("cpu", 0)))
+    add("device::문자열에서 번호", lambda L: str(L.device("cpu:1")))
+    add("device::cuda 도 만들어진다", lambda L: repr(L.device("cuda")))
+    add("device::같음", lambda L: str(L.device("cpu") == L.device("cpu")))
+    # **문자열과는 안 같다**(실측). 관대하면 `if d == "cpu":` 의 방향이 갈린다.
+    add("device::문자열과는 다름", lambda L: str(L.device("cpu") == "cpu"))
+    add("device::to(device) 모양",
+        lambda L: str(tuple(int(n) for n in X(L).to(L.device("cpu")).shape)))
+
+    def resized(L, want, start):
+        t = L.tensor(start.copy())
+        L.resize_as_(t, L.zeros(*want))
+        return t
+
+    add("resize_as_::늘린 모양",
+        lambda L: str(tuple(int(n) for n in resized(
+            L, (2, 3), np.array([1.0, 2.0], dtype=np.float32)).shape)))
+    add("resize_as_::줄인 모양",
+        lambda L: str(tuple(int(n) for n in resized(
+            L, (2,), np.arange(6, dtype=np.float32)).shape)))
+    # 줄일 때는 앞을 남긴다 — 그건 정해져 있다(실측).
+    add("resize_as_::줄이면 앞이 남는다",
+        lambda L: resized(L, (2,), np.arange(6, dtype=np.float32)))
+    return cases
+
+
 RNNTOP_PREFIX = "rnntop::"
 
 
@@ -8128,7 +8253,7 @@ def golden_cases(inp=None):
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
-            + keepdim_cases(inp) + rnn_top_cases(inp)
+            + keepdim_cases(inp) + rnn_top_cases(inp) + top_rest_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

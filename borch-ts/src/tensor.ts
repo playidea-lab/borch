@@ -2812,6 +2812,71 @@ export class Tensor implements Node<Tensor> {
     return out;
   }
 
+  /**
+   * `padND(mode="constant")` 의 날 이름. **마지막 축부터 (앞, 뒤) 순이다.**
+   *
+   * 같은 계산에 이름이 둘인 자리라 **여기서 계산하지 않고** 넘긴다 — 한쪽만
+   * 맞는 것이 이 저장소에서 세 번 나왔다.
+   */
+  constantPadNd(pad: readonly number[], value = 0): Tensor {
+    return this.padND(pad, "constant", value);
+  }
+
+  /**
+   * 양자화를 **실수 위에서 흉내 낸다** — `clamp(round(x/s) + z)` 뒤 되돌린다.
+   *
+   * **양자화 dtype 이 필요 없다.** 이름 때문에 오래 거절 쪽으로 세어 두었는데
+   * 재보니 torch 도 실수 텐서를 받아 실수를 낸다.
+   *
+   * **기울기는 범위 안에서만 1 이다**(실측). 반올림은 계단이라 도함수가 거의
+   * 어디서나 0 인데, 그대로 두면 이 층 아래로 학습이 아예 안 간다 — torch 는 그
+   * 자리를 "곧바로 통과" 로 둔다.
+   */
+  fakeQuantizePerTensorAffine(scale: number, zeroPoint: number,
+                              quantMin: number, quantMax: number): Tensor {
+    const s = Tensor.full([], scale);
+    const z = Tensor.full([], zeroPoint);
+    const raw = this.div(s).round().add(z);
+    const clipped = raw.clamp(quantMin, quantMax);
+    const value = clipped.sub(z).mul(s).detach();
+    // 범위 안이면 기울기를 그대로, 밖이면 0. `where` 로 고른다.
+    const inside = raw.detach().binary("ge", Tensor.full([], quantMin), "bool")
+      .binary("logical_and",
+              raw.detach().binary("le", Tensor.full([], quantMax), "bool"),
+              "bool");
+    return value.add(this.sub(this.detach()).where(inside,
+                                                   Tensor.zeros(this.shape)));
+  }
+
+  /** 칸마다 다른 눈금으로. 축 하나를 따라 눈금이 바뀐다. */
+  fakeQuantizePerChannelAffine(scale: Tensor, zeroPoint: Tensor, axis: number,
+                               quantMin: number, quantMax: number): Tensor {
+    const line = new Array<number>(this.shape.length).fill(1);
+    line[axis < 0 ? axis + this.shape.length : axis] = scale.size;
+    const s = scale.reshape(line);
+    const z = zeroPoint.reshape(line);
+    const raw = this.div(s).round().add(z);
+    const clipped = raw.clamp(quantMin, quantMax);
+    const value = clipped.sub(z).mul(s).detach();
+    const inside = raw.detach().binary("ge", Tensor.full([], quantMin), "bool")
+      .binary("logical_and",
+              raw.detach().binary("le", Tensor.full([], quantMax), "bool"),
+              "bool");
+    return value.add(this.sub(this.detach()).where(inside,
+                                                   Tensor.zeros(this.shape)));
+  }
+
+  /**
+   * 양자화된 텐서를 실수로. **우리에게는 언제나 항등이다.**
+   *
+   * "지금 통과하는 항등" 과 다른 이유는 양자화 dtype 이 **영원히 없다**는 것이
+   * 이미 정해져 있어서다 — 받을 수 있는 입력이 실수뿐이고 실수에서 torch 도
+   * 항등이다(실측). **미분되지 않는다** — torch 가 `backward` 에서 멈춘다.
+   */
+  dequantize(): Tensor {
+    return new Tensor(this.raw, this.shape, { dtype: this.dtype });
+  }
+
   /** 축 하나의 앞뒤에 상수를 덧댄다. 여러 축이면 축마다 부른다. */
   pad(dim: number, before: number, after: number, value = 0): Tensor {
     const rank = this.shape.length;

@@ -2363,6 +2363,88 @@ def _polygamma1(d):
                         + inv2 * (1.0 / 6 - inv2 * (1.0 / 30 - inv2 / 42)))
 
 
+def _polygamma_np(n, d):
+    """`ψ^(n)` — 감마 로그의 `n+1` 번째 미분. `n=0` 이 `digamma` 다.
+
+    **`digamma` 와 같은 방식이다** — 되풀이 식으로 큰 쪽으로 민 뒤 점근식을 쓴다.
+    그 둘(`n=0`·`n=1`)이 이미 손으로 적혀 있었고, 여기는 그 규칙을 `n` 으로 일반화한
+    것뿐이다. 식을 세 벌로 두면 한쪽만 고쳐지는 날이 오므로 `n` 이 작을 때도 이쪽을
+    지나게 두는 편이 낫지만, 있던 둘은 이미 골든이 물고 있어 그대로 둔다.
+
+    되풀이: `ψ^(n)(x) = ψ^(n)(x+1) + (−1)^(n+1) n! / x^(n+1)`
+    점근  : `ψ^(n)(x) ≈ (−1)^(n+1) [ (n−1)!/xⁿ + n!/(2x^(n+1)) + Σ B_2k … ]`
+    """
+    x = _np.asarray(d, dtype=_np.float64)
+    fact = float(_math.factorial(n))
+    sign = 1.0 if (n + 1) % 2 == 0 else -1.0
+    out = _np.zeros_like(x)
+    while _np.any(x < 20):
+        small = x < 20
+        safe = _np.where(small, x, 1.0)
+        out = _np.where(small, out + sign * fact / safe ** (n + 1), out)
+        x = _np.where(small, x + 1.0, x)
+    # 베르누이 수 B₂·B₄·B₆·B₈. x ≥ 20 에서 네 항이면 float32 정밀도를 넘는다.
+    series = _math.factorial(n - 1) / x ** n + fact / (2.0 * x ** (n + 1))
+    for k, bern in enumerate((1 / 6, -1 / 30, 1 / 42, -1 / 30), start=1):
+        series = series + (bern * _math.factorial(2 * k + n - 1)
+                           / _math.factorial(2 * k) / x ** (2 * k + n))
+    return out + sign * series
+
+
+def _igamma_np(a, x):
+    """정규화된 하부 불완전 감마 `P(a, x) = γ(a,x)/Γ(a)`.
+
+    **한 식으로 못 덮는다.** `x < a+1` 에서는 급수가 빨리 수렴하고 그 밖에서는 연분수가
+    빠르다 — 반대로 쓰면 항이 서로 지워 자릿수를 잃는다. 경계에서 갈라 쓰는 것이
+    이 함수의 표준 꼴이고, 작은 값으로만 재면 그 갈림이 안 보인다.
+    """
+    av = _np.asarray(a, dtype=_np.float64)
+    xv = _np.asarray(x, dtype=_np.float64)
+    av, xv = _np.broadcast_arrays(av, xv)
+    out = _np.zeros(av.shape, dtype=_np.float64)
+    lg = _np.vectorize(_math.lgamma)(av)
+
+    # ── 급수 (x < a+1): P = e^(−x + a·ln x − lnΓ(a)) · Σ xⁿ / (a(a+1)…(a+n))
+    low = xv < av + 1.0
+    if _np.any(low):
+        ap = _np.where(low, av, 1.0)
+        term = 1.0 / ap
+        total = term.copy()
+        for _ in _builtin_range(300):
+            ap = ap + 1.0
+            term = term * _np.where(low, xv, 0.0) / ap
+            total = total + term
+            if _np.all(_np.abs(term) <= _np.abs(total) * 1e-16):
+                break
+        out = _np.where(low, total * _np.exp(-xv + av * _np.log(
+            _np.where(xv > 0, xv, 1.0)) - lg), out)
+
+    # ── 연분수 (x ≥ a+1): Q 를 구하고 P = 1 − Q
+    high = ~low
+    if _np.any(high):
+        tiny = 1e-300
+        b = _np.where(high, xv + 1.0 - av, 1.0)
+        c = 1.0 / tiny
+        dd = 1.0 / b
+        h = dd.copy()
+        for i in _builtin_range(1, 300):
+            an = -i * (i - av)
+            b = b + 2.0
+            dd = an * dd + b
+            dd = _np.where(_np.abs(dd) < tiny, tiny, dd)
+            c = b + an / c
+            c = _np.where(_np.abs(c) < tiny, tiny, c)
+            dd = 1.0 / dd
+            delta = dd * c
+            h = h * delta
+            if _np.all(_np.abs(delta - 1.0) <= 1e-16):
+                break
+        q = _np.exp(-xv + av * _np.log(_np.where(xv > 0, xv, 1.0)) - lg) * h
+        out = _np.where(high, 1.0 - q, out)
+    # `x = 0` 이면 P = 0 이다. 위 로그가 그 자리를 못 지난다.
+    return _np.where(xv <= 0, 0.0, out)
+
+
 def _erfinv_np(d):
     """`erf` 의 역함수. **닫힌 식이 없다** — 잘 알려진 유리식 근사를 쓴다.
 
@@ -2415,6 +2497,154 @@ def erfinv(t):
     grad = (_math.sqrt(_math.pi) / 2.0) * _np.exp(out * out)
     return t._make(out.astype(d.dtype), (t,),
                    lambda g: (g * grad.astype(d.dtype),), "ErfinvBackward0")
+
+
+# ── 최상위에 남아 있던 이름들 ─────────────────────────────────────────────
+#
+# `tests/torch_gap.py` 의 "검토 대상" 을 재서 가른 나머지다. **이름으로 세면
+# 틀린다** — `fake_quantize_*` 는 이름이 양자화인데 실수를 받아 실수를 내고,
+# `dequantize` 는 실수에서 항등이다. 재고 나서야 거절이 아닌 줄 알았다.
+
+def igamma(input, other):                                       # noqa: A002
+    """정규화된 하부 불완전 감마 `P(a, x)`.
+
+    **기울기가 `x` 쪽에만 있다**(실측). `a` 로 미분하려 들면 torch 가
+    `NotImplementedError` 를 낸다 — 닫힌 꼴이 없어서다. 따라간다: 한쪽만 흘리면
+    나머지 한쪽이 조용히 0 이 되고, 그러면 학습이 안 되는 것으로만 드러난다.
+
+        dP/dx = x^(a−1)·e^(−x) / Γ(a)
+    """
+    a, x = _wrap(input), _wrap(other)
+    av = _np.asarray(a.data, dtype=_np.float64)
+    xv = _np.asarray(x.data, dtype=_np.float64)
+    out = _igamma_np(av, xv)
+    lg = _np.vectorize(_math.lgamma)(av)
+    slope = _np.exp((av - 1.0) * _np.log(_np.where(xv > 0, xv, 1.0)) - xv - lg)
+    slope = _np.where(xv > 0, slope, 0.0)
+
+    def back(g):
+        if a.requires_grad:
+            raise NotImplementedError(_like_torch(
+                "igamma 는 첫 인자로 미분되지 않습니다 — 닫힌 꼴이 없습니다.",
+                "the derivative for 'igamma: input' is not implemented."))
+        return (None, _unbroadcast(_np.asarray(g) * slope, x.data.shape)
+                .astype(x.data.dtype))
+
+    return a._make(out.astype(_DEFAULT_DTYPE), (a, x), back, "IgammaBackward0")
+
+
+def igammac(input, other):                                      # noqa: A002
+    """상부 쪽 `Q(a, x) = 1 − P(a, x)`. **둘을 더하면 정확히 1 이다**(실측)."""
+    a, x = _wrap(input), _wrap(other)
+    return ones(a.data.shape if a.data.ndim >= x.data.ndim else x.data.shape) \
+        - igamma(a, x)
+
+
+def polygamma(n, input):                                        # noqa: A002
+    """`ψ^(n)` — 감마 로그의 `n+1` 번째 미분. `n=0` 이 `digamma` 다.
+
+    **`n` 이 첫 자리다** — 텐서가 둘째다. `torch.polygamma(1, x)` 가 그 꼴이고,
+    자리를 뒤집으면 정수를 텐서 자리에 넣게 되어 시끄럽게 멈춘다.
+
+    미분은 `ψ^(n+1)` 이다(실측: `polygamma(1, x)` 의 기울기가 `polygamma(2, x)`).
+    """
+    t = _wrap(input)
+    k = int(n)
+    if k < 0:
+        raise RuntimeError(_like_torch(
+            "polygamma 의 n 은 0 이상이어야 합니다.",
+            "polygamma(n, x) does not support negative n."))
+    out = (_polygamma0(t.data) if k == 0 else _polygamma_np(k, t.data))
+    nxt = _polygamma_np(k + 1, t.data)
+    return t._make(out.astype(t.data.dtype), (t,),
+                   lambda g: (_np.asarray(g) * nxt.astype(t.data.dtype),),
+                   "PolygammaBackward0")
+
+
+def constant_pad_nd(input, pad, value=0.0):                     # noqa: A002
+    """`F.pad(mode='constant')` 의 날 이름. **마지막 축부터 (앞, 뒤) 순이다.**
+
+    같은 계산에 이름이 둘인 자리다 — 한쪽만 맞을 수 있으므로 **여기서 계산하지 않고**
+    그쪽으로 넘긴다. 이 저장소가 그 모양으로 세 번 물렸다(README 의 목록 1번).
+    """
+    return globals()["pad"](_wrap(input), list(pad), mode="constant",
+                            value=value)
+
+
+def _quantize_round(x, scale, zero_point, quant_min, quant_max):
+    """`clamp(round(x/scale) + zp, [qmin, qmax])` 뒤 되돌린 값.
+
+    **양자화 dtype 이 필요 없다** — 실수를 받아 실수를 낸다. 이름 때문에 오래 거절
+    쪽으로 세어 두었는데, 재보니 torch 도 실수 텐서를 받는다.
+    """
+    q = _np.clip(_np.round(x / scale) + zero_point, quant_min, quant_max)
+    return (q - zero_point) * scale
+
+
+def fake_quantize_per_tensor_affine(input, scale, zero_point,   # noqa: A002
+                                    quant_min, quant_max):
+    """양자화를 **실수 위에서 흉내 낸다.** 학습 중 양자화 오차를 보려고 쓰는 자리다.
+
+    **기울기는 범위 안에서만 1 이다**(실측: 잘린 자리는 0). 반올림은 계단이라
+    도함수가 거의 어디서나 0 인데, torch 는 그 자리를 "곧바로 통과(STE)" 로 둔다 —
+    안 그러면 이 층 아래로 학습이 아예 안 간다.
+    """
+    t = _wrap(input)
+    s, z = float(scale), float(zero_point)
+    x = _np.asarray(t.data, dtype=_np.float64)
+    out = _quantize_round(x, s, z, quant_min, quant_max)
+    inside = ((_np.round(x / s) + z >= quant_min)
+              & (_np.round(x / s) + z <= quant_max)).astype(t.data.dtype)
+    return t._make(out.astype(t.data.dtype), (t,),
+                   lambda g: (_np.asarray(g) * inside,),
+                   "FakeQuantizePerTensorAffineBackward0")
+
+
+def fake_quantize_per_channel_affine(input, scale, zero_point,  # noqa: A002
+                                     axis, quant_min, quant_max):
+    """칸마다 다른 눈금으로. **축 하나를 따라 눈금이 바뀐다.**"""
+    t = _wrap(input)
+    s = _np.asarray(_wrap(scale).data, dtype=_np.float64)
+    z = _np.asarray(_wrap(zero_point).data, dtype=_np.float64)
+    shape = [1] * t.data.ndim
+    shape[int(axis)] = -1
+    s, z = s.reshape(shape), z.reshape(shape)
+    x = _np.asarray(t.data, dtype=_np.float64)
+    out = _quantize_round(x, s, z, quant_min, quant_max)
+    inside = ((_np.round(x / s) + z >= quant_min)
+              & (_np.round(x / s) + z <= quant_max)).astype(t.data.dtype)
+    return t._make(out.astype(t.data.dtype), (t,),
+                   lambda g: (_np.asarray(g) * inside,),
+                   "FakeQuantizePerChannelAffineBackward0")
+
+
+def dequantize(input):                                          # noqa: A002
+    """양자화된 텐서를 실수로. **우리에게는 언제나 항등이다.**
+
+    항등인 것이 "지금 통과하는 항등" 과 다른 이유는, 양자화 dtype 이 **영원히
+    없다**는 것이 이미 정해져 있어서다 — 이 함수가 받을 수 있는 입력이 실수뿐이고
+    실수에서 torch 도 항등이다(실측). 나중에 그 dtype 이 생기면 이 줄이 틀리는데,
+    생기지 않는 것이 결정이다.
+
+    **미분되지 않는다** — torch 가 `backward` 에서 멈춘다(실측).
+    """
+    return Tensor(_np.asarray(_wrap(input).data).copy())
+
+
+def resize_as_(input, other):                                   # noqa: A002
+    """`other` 의 모양으로 **제자리에서** 바꾼다.
+
+    **늘어난 칸의 값은 정해지지 않는다** — torch 도 초기화하지 않는다(실측). 그래서
+    골든은 **모양만** 묻는다. 값을 굳히면 그 구현의 우연을 명세로 박제하게 된다.
+    """
+    t, o = _wrap(input), _wrap(other)
+    flat = _np.asarray(t.data).reshape(-1)
+    want = int(_np.prod(o.data.shape)) if o.data.shape else 1
+    grown = _np.zeros(want, dtype=t.data.dtype)
+    keep = min(flat.size, want)
+    grown[:keep] = flat[:keep]
+    t.data = Tensor(grown.reshape(o.data.shape))
+    return t
 
 
 # ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────

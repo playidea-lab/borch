@@ -35,8 +35,8 @@ import numpy as _np
 from ._base import (
     BrowserTorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
-    _tensor_str, _unsupported, bool_, dtype, float32, float64, int64, long,
-    set_printoptions,
+    _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
+    long, set_printoptions,
     # 복소수의 형 이름. `complex128`·`cdouble` 은 **이름만** 있다 — 만들려 하면
     # `Tensor.__init__` 의 목문이 멈춘다.
     cdouble, cfloat, complex128, complex64,
@@ -60,6 +60,8 @@ from ._ops import (
     cosine_similarity, count_nonzero, cuda, cummax, cummin, cumprod, cumsum, deg2rad,
     det, diag, diagflat, diagonal, diff, dist, dot, dropout, dsplit, eigh, einsum, elu,
     embedding, empty, eq, equal, erf, erfc, exp, exp2, expand, expand_as, expm1, eye,
+    constant_pad_nd, dequantize, fake_quantize_per_channel_affine,
+    fake_quantize_per_tensor_affine, igamma, igammac, polygamma, resize_as_,
     fft, fix, flip, fliplr, flipud, floor, frac, from_numpy, full, full_like, gather, ge,
     gelu, gt, heaviside, hsplit, hypot, index_select, interpolate, inverse, isfinite,
     isinf, isnan, kthvalue, l1_loss, layer_norm, ldexp, le, leaky_relu, linalg,

@@ -268,6 +268,54 @@ def _tensor_repr(t):
 
 # ---------------------------------------------------------------- Size
 
+class device:                                                   # noqa: N801
+    """`torch.device` — **장치를 가리키는 이름표.**
+
+    이 이름이 오래 없었고, 그것이 이 목록에서 제일 큰 구멍이었다:
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+
+    **튜토리얼 절반의 첫 줄**이고, 이름이 없으면 거기서 `AttributeError` 로 멈춘다.
+    `cuda.is_available()` 이 거짓이라 실제로 만들어지는 것은 `cpu` 인데도 그렇다.
+
+    **만드는 것과 쓰는 것을 가른다.** `torch.device("cuda")` 는 **하드웨어가 없어도
+    만들어진다**(실측 — torch 도 그렇다). 거기서 멈추면 위의 삼항식이 통째로 못
+    돌고, 그러면 학습자는 자기 코드가 틀렸다고 읽는다. 멈추는 자리는 그 장치로
+    **텐서를 옮길 때**이고, 그때 나오는 문구가 원인을 가리킨다.
+    """
+
+    __slots__ = ("type", "index")
+
+    def __init__(self, kind, index=None):
+        if isinstance(kind, device):
+            self.type, self.index = kind.type, kind.index
+            return
+        text = str(kind)
+        if ":" in text:
+            text, _, tail = text.partition(":")
+            index = int(tail)
+        self.type = text
+        self.index = None if index is None else int(index)
+
+    def __repr__(self):
+        tail = "" if self.index is None else f", index={self.index}"
+        return f"device(type='{self.type}'{tail})"
+
+    def __str__(self):
+        return self.type if self.index is None else f"{self.type}:{self.index}"
+
+    def __eq__(self, other):
+        # **문자열과는 안 같다**(실측: `torch.device("cpu") == "cpu"` 가 거짓).
+        # 관대하게 참을 주면 `if d == "cpu":` 가 여기서는 도는데 진짜 torch 에서는
+        # 안 돈다 — 관대한 것도 갈리는 것이고, 이쪽은 **조건문의 방향**을 바꾼다.
+        return (isinstance(other, device) and self.type == other.type
+                and self.index == other.index)
+
+    def __hash__(self):
+        return hash((self.type, self.index))
+
+
 class Size(tuple):
     def __repr__(self):
         return f"torch.Size([{', '.join(str(x) for x in self)}])"

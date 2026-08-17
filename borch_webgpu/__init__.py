@@ -6,7 +6,7 @@
 
 전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
 원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **5,647 줄**이다 — borch.ts 에 그것이 이미 다
+다시 구현해야 했기 때문이다. 이쪽은 **5,961 줄**이다 — borch.ts 에 그것이 이미 다
 있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
 
 `_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
@@ -106,6 +106,9 @@ from ._ops import (                                      # noqa: E402,F401
     # 최상위 순환 여덟. 층(`nn.LSTM`)과 같은 계산인데 가중치를 목록으로 받는다.
     gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,
     rnn_tanh_cell,
+    # 최상위에 남아 있던 나머지. `device` 가 제일 큰데, 튜토리얼 절반의 첫 줄이다.
+    constant_pad_nd, dequantize, device, fake_quantize_per_channel_affine,
+    fake_quantize_per_tensor_affine, igamma, igammac, polygamma, resize_as_,
     # 복소수. `imag` 는 실수에서 거절인데 **torch 자신이 그렇게 한다**(실측).
     #
     # **`complex` 는 파이썬 내장을 가린다.** 그래도 이 이름으로 내보내는 이유는

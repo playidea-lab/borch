@@ -24,6 +24,7 @@ import { einsum } from "../src/einsum.js";
 import * as fft from "../src/fft.js";
 import { istft, stft } from "../src/fft.js";
 import * as nn from "../src/nn.js";
+import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
 import * as vision from "../src/vision.js";
 import { LinAlgError } from "../src/errors.js";
@@ -486,7 +487,73 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addComplex(out);
   addFft(out);
   addKeepdim(out);
+  addTopRest(out);
   return out;
+}
+
+/**
+ * 최상위에 남아 있던 이름들 — `top::`.
+ *
+ * **골든의 `top::` 가운데 여기서 안 묻는 것이 둘 있다.** `device::` 는 borch.ts 에
+ * 같은 것이 없고(우리 쪽 `device()` 는 어댑터를 내는 다른 함수다), `resize_as_` 는
+ * 파이썬 결속이 손잡이를 갈아 끼워 해내는 것이라 TS 표면에 없다. 이름을 안 맞춰
+ * 두면 러너가 "골든에 없는 이름"으로 세어 주므로, 안 쓰는 쪽을 고른 것이다.
+ */
+function addTopRest(out: Map<string, Case>): void {
+  const P = "top::";
+  const GRID = [-1.7, 0.3, 2.9, 5.5];
+  const SHAPES = [0.5, 1.0, 2.0, 3.0];
+  const SPOTS = [0.25, 1.5, 0.5, 4.0];
+  const STEPS = [1.0, 2.0, 3.5];
+  const x = (grad = false): Tensor => Tensor.from(GRID, undefined, { requiresGrad: grad });
+  const a = (): Tensor => Tensor.from(SHAPES);
+
+  out.set(`${P}igamma`, () => igamma(a(), Tensor.from(SPOTS)));
+  // **한 식으로 못 덮는다** — `x < a+1` 은 급수, 그 밖은 연분수다.
+  out.set(`${P}igamma(큰 x)`, () =>
+    igamma(a(), Tensor.from(SHAPES.map((v) => v * 8))));
+  out.set(`${P}igammac`, () => igammac(a(), Tensor.from(SPOTS)));
+  out.set(`${P}igamma + igammac = 1`, () =>
+    igamma(a(), Tensor.from(SPOTS)).add(igammac(a(), Tensor.from(SPOTS))));
+  for (const n of [0, 1, 2, 3]) {
+    out.set(`${P}polygamma(${n})`, () => polygamma(n, Tensor.from(STEPS)));
+  }
+  out.set(`${P}constant_pad_nd`, () => x().constantPadNd([1, 2], 9.0));
+  out.set(`${P}fake_quantize(per_tensor)`, () =>
+    x().fakeQuantizePerTensorAffine(0.5, 0, 0, 7));
+  // 영점을 옮기면 자르는 자리가 바뀐다.
+  out.set(`${P}fake_quantize(zp=2)`, () =>
+    x().fakeQuantizePerTensorAffine(0.5, 2, 0, 7));
+  out.set(`${P}fake_quantize(per_channel)`, () =>
+    Tensor.from(GRID, [2, 2]).fakeQuantizePerChannelAffine(
+      Tensor.from([0.5, 0.25]), Tensor.from([0.0, 1.0]), 0, 0, 7));
+  out.set(`${P}dequantize`, () => x().dequantize());
+
+  const grad = (name: string, values: number[],
+                fn: (leaf: Tensor) => Tensor): void => {
+    out.set(`${P}grad::${name}`, () => {
+      const leaf = Tensor.from(values, undefined, { requiresGrad: true });
+      fn(leaf).sum().backward();
+      return gradOf(leaf, name);
+    });
+  };
+  grad("igamma / x", SPOTS, (t) => igamma(a(), t));
+  grad("igammac / x", SPOTS, (t) => igammac(a(), t));
+  grad("polygamma(1)", STEPS, (t) => polygamma(1, t));
+  grad("constant_pad_nd", GRID, (t) => t.constantPadNd([1, 2], 9.0));
+  // **범위 밖은 0 이다** — 반올림이 계단인데 범위 안은 곧바로 통과시킨다.
+  grad("fake_quantize", GRID, (t) => t.fakeQuantizePerTensorAffine(0.5, 0, 0, 7));
+
+  // 첫 인자로는 안 미분한다 — torch 자신이 거절한다(닫힌 꼴이 없다).
+  out.set(`${P}igamma 는 a 로 안 미분한다`, () => {
+    try {
+      const leaf = Tensor.from(SHAPES, undefined, { requiresGrad: true });
+      igamma(leaf, Tensor.from(SPOTS)).sum().backward();
+      return "예외가 안 났다";
+    } catch (err) {
+      return err instanceof Error ? err.constructor.name : typeof err;
+    }
+  });
 }
 
 /**

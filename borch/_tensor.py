@@ -6,8 +6,8 @@ import numpy as _np
 
 from ._base import (
     Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _like_torch, _needs_float,
-    _no_complex128, _np, _refuses_bool, _tensor_repr, _unsupported, dtype,
-    float32,
+    _no_complex128, _np, _refuses_bool, _tensor_repr, _unsupported,
+    device as _device, dtype, float32,
 )
 
 # ---------------------------------------------------------------- Tensor
@@ -387,6 +387,14 @@ class Tensor:
         """
         target = None
         for a in list(args) + list(kwargs.values()):
+            # **`device` 물건도 받는다.** `x.to(device)` 가 튜토리얼의 꼴이고,
+            # 그 `device` 는 문자열이 아니라 `torch.device(...)` 다. 문자열만 보면
+            # 그 줄이 조용히 아무것도 안 한다 — 형 인자로 읽혀 `target` 이 되면
+            # 오히려 `numpy` 가 "형이 아니다" 로 멈춘다.
+            if isinstance(a, _device):
+                if a.type != "cpu":
+                    _unsupported(f"장치 '{a}'")
+                continue
             if isinstance(a, str):
                 if a != "cpu":
                     _unsupported(f"장치 '{a}'")
