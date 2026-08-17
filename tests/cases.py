@@ -8672,6 +8672,60 @@ def dtype_cases(inp=None):
 
     cases.append(("dtype::묻는것::is_nonzero(여럿)은 멈춘다", nonzero_many))
 
+    # ── 이름만 보면 "없는 게 맞다" 인데 조밀 텐서에는 답이 있는 여섯 ─────────
+    #
+    # 희소·장치·양자화라 전부 거절이라고 세었다가 재보니 torch 가 서른셋 중 **열넷**을
+    # 조밀 텐서에서 그냥 해냈다. 그중 여섯은 희소·양자화 기계가 필요한 것이 아니라
+    # **"이 텐서는 조밀하다"·"CPU 다"** 라는 답이 있는 것이다.
+    #
+    # 이름으로 세고 거절 케이스를 굳혔으면 **없는 결함을 못 박고**, 나중에 누가 그
+    # 이름을 구현할 때 초록이던 케이스가 빨개진다 — 검사가 기능을 막는 자리가 된다.
+    for label, call in (
+        ("dense_dim", lambda L: L.tensor(floats).dense_dim()),
+        ("sparse_dim", lambda L: L.tensor(floats).sparse_dim()),
+        ("storage_offset", lambda L: L.tensor(floats).storage_offset()),
+        ("get_device(CPU 는 -1)", lambda L: L.tensor(floats).get_device()),
+    ):
+        cases.append((f"dtype::조밀에도답::{label}", lambda L, f=call: str(f(L))))
+    for label, call in (
+        ("to_dense 는 항등", lambda L: L.tensor(floats).to_dense()),
+        ("dequantize 는 항등", lambda L: L.tensor(floats).dequantize()),
+    ):
+        cases.append((f"dtype::조밀에도답::{label}", call))
+
+    # ── 없는 이름은 셋이 **같은 말**로 멈춘다 ──────────────────────────────
+    #
+    # 나머지 스물일곱(희소·저장소·양자화)은 진짜로 없다. 그런데 거절 문구가 갈려
+    # 있었다 — 코어는 파이썬의 표준 문구, 결속은 `borch.ts 텐서에 X 이 없다` 였다.
+    # 진짜 torch 도 표준 문구를 쓰므로 거기에 맞췄다.
+    #
+    # **스물일곱을 하나씩 안 굳힌다.** 그러면 누가 희소를 구현할 때 그만큼이 빨개진다.
+    # 대표 셋만 물어 **대체 경로가 같은 말을 하는지**를 본다.
+    def missing_name(L, name):
+        """**torch 가 그 이름을 가졌다면 무엇을 하든 기대대로다.**
+
+        처음에는 "torch 는 해낸다" 로만 갈랐는데, `coalesce` 는 조밀 텐서에서
+        `RuntimeError` 로 멈추고 `int_repr` 은 `NotImplementedError` 로 멈춘다 —
+        **이름은 있고 그 입력에서 안 될 뿐이다.** 우리가 묻는 것은 "torch 에 있고
+        우리에게 없는 이름을 물었을 때 우리 셋이 같은 말을 하는가" 이므로, torch
+        쪽에서는 `AttributeError` 만 뜻밖이다.
+        """
+        real = getattr(L, "__name__", "") == "torch"
+        try:
+            getattr(L.tensor(floats), name)()
+        except AttributeError as exc:
+            if real:
+                return "뜻밖에 torch 에도 없다"
+            return ("기대대로" if "has no attribute" in str(exc)
+                    else f"다른 문구 <{str(exc).splitlines()[0][:44]}>")
+        except Exception as exc:                                # noqa: BLE001
+            return "기대대로" if real else f"다른 종류 <{type(exc).__name__}>"
+        return "기대대로" if real else "뜻밖의 성공"
+
+    for name in ("coalesce", "untyped_storage", "int_repr"):
+        cases.append((f"dtype::없는이름::{name}",
+                      lambda L, n=name: missing_name(L, n)))
+
     # `double` 은 **일부러 갈린다** — 코어에는 float64 가 있고 브라우저 쪽에는
     # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.
     cases.append(("dtype::형바꾸기::double=브라우저는거절",

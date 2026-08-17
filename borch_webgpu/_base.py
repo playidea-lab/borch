@@ -278,6 +278,28 @@ class Tensor:
     def is_floating_point(self):
         return self.dtype.plain in ("float32", "float64")
 
+    # ── 조밀 텐서에도 답이 있는 다섯 ──────────────────────────────────────
+    #
+    # 이름만 보면 희소·장치라 없는 게 맞다고 세게 되는데, torch 는 조밀 텐서에서
+    # 그냥 해낸다 — "이 텐서는 조밀하다"·"CPU 다" 라는 답이 있는 것이다. 코어에도
+    # 같이 넣었다.
+
+    def dense_dim(self):
+        return self.ndim
+
+    def sparse_dim(self):
+        return 0
+
+    def to_dense(self):
+        return self
+
+    def storage_offset(self):
+        return 0
+
+    def get_device(self):
+        """장치 번호가 없다는 뜻으로 -1 이다 — 오류가 아니다(실측)."""
+        return -1
+
     def is_signed(self):
         return self.dtype.plain not in ("bool", "uint8")
 
@@ -451,8 +473,16 @@ class Tensor:
             return lambda other, *_: guarded(self._h.binary, js_name, handle(other))
         got = getattr(self._h, js_name, None)
         if got is None:
+            # **첫 마디를 torch 와 같게 둔다.** 예전에는 `borch.ts 텐서에 X 이
+            # 없다` 로만 말했는데, 같은 이름을 코어에 물으면 파이썬의 표준 문구가
+            # 났다 — 배우는 사람은 그 둘을 보고 **구현마다 다른 것**으로 읽는다.
+            # 진짜 torch 도 `'Tensor' object has no attribute 'x'` 라고 말한다.
+            #
+            # 뒤에 붙는 힌트는 우리를 위한 것이라 남긴다. 앞 마디로 무는 검사는
+            # 그대로 통과하고, 결속을 고칠 때는 `js_name` 이 필요하다.
             raise AttributeError(
-                f"borch.ts 텐서에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
+                f"'Tensor' object has no attribute '{name}'"
+                f" — borch.ts 에 `{js_name}` 이 없다")
         if not callable(got):
             return settle(got)
 

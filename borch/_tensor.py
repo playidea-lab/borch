@@ -683,6 +683,39 @@ class Tensor:
     def is_floating_point(self):
         return bool(self.data.dtype.kind == "f")
 
+    # ── 조밀 텐서에도 답이 있는 여섯 ──────────────────────────────────────
+    #
+    # 이름만 보면 **희소·장치·양자화라 없는 게 맞다**고 세게 된다. 실제로 재보니
+    # torch 가 조밀 텐서에서 여섯을 그냥 해낸다 — 희소·양자화 기계가 필요한 것이
+    # 아니라 "이 텐서는 조밀하다"·"CPU 다" 라는 답이 있는 것이다. 이름으로 세면
+    # 없는 결함을 굳히게 되고, 나중에 누가 구현하면 **초록이던 케이스가 빨개진다.**
+    #
+    # `to_dense`·`dequantize` 는 **기울기를 나른다**(실측) — 항등이라 그대로 지난다.
+
+    def dense_dim(self):
+        """조밀 텐서는 축이 전부 조밀하다."""
+        return self.data.ndim
+
+    def sparse_dim(self):
+        """조밀 텐서에 희소 축은 없다."""
+        return 0
+
+    def to_dense(self):
+        """이미 조밀하다 — torch 도 같은 객체를 돌려준다(실측)."""
+        return self
+
+    def dequantize(self):
+        """실수에서는 항등이다. 양자화 dtype 이 필요한 자리가 아니다."""
+        return self
+
+    def storage_offset(self):
+        """우리 배열은 언제나 자기 버퍼의 처음부터다 — 저장을 나눠 갖지 않는다."""
+        return 0
+
+    def get_device(self):
+        """CPU 텐서는 -1 이다(실측). 장치 번호가 없다는 뜻이지 오류가 아니다."""
+        return -1
+
     def is_signed(self):
         """참거짓과 부호 없는 정수만 거짓이다 — 실수·정수·복소수는 참."""
         return bool(self.data.dtype.kind in "fci")
