@@ -691,6 +691,111 @@ export class GLU extends Module {
   }
 }
 
+// ── 결속이 손으로 메꾸고 있던 여덟. **이름은 껍데기인데 인자는 진짜다.** ─────
+//
+// 파이썬 결속(`borch_webgpu/_nn.py`)이 텐서 메서드 위에 factory 로 만들어 두어서
+// 골든은 이 여덟이 없는 것을 **구조적으로 못 봤다** — 케이스가 전부 결속을 지나기
+// 때문이다. TypeScript 로 `new nn.GELU()` 를 쓰는 사람에게만 없는 이름이었다.
+//
+// 옮기면서 셋이 인자를 갖고 있는 것이 드러났다(실측): `GELU(approximate)` 는 식이
+// 통째로 다르고, `ELU(alpha)` 는 음수 쪽 크기를 정하고, `Softmax()` 의 기본 축은
+// **`-1` 이 아니다.**
+
+export class SiLU extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("silu");
+  }
+}
+
+export class Sigmoid extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("sigmoid");
+  }
+}
+
+export class Tanh extends Module {
+  override forward(x: Tensor): Tensor {
+    return x.unary("tanh");
+  }
+}
+
+/** 받은 것을 그대로 낸다. `Sequential` 의 자리 채우개로 쓴다. */
+export class Identity extends Module {
+  override forward(x: Tensor): Tensor {
+    return x;
+  }
+}
+
+export class LeakyReLU extends Module {
+  constructor(private readonly negativeSlope = 0.01) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.leakyRelu(this.negativeSlope);
+  }
+}
+
+/** 음수 쪽이 지수로 눕는다. **α 를 안 흔들면 표의 무인자 판과 못 가른다.** */
+export class ELU extends Module {
+  constructor(private readonly alpha = 1.0) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.elu(this.alpha);
+  }
+}
+
+/**
+ * **`approximate` 는 받는 척이 아니다** — `"tanh"` 는 다른 식이고 값이 다르다.
+ *
+ * 최대차가 1e-4 언저리라 이 프로젝트의 허용 오차 언저리이고, 그래서 "거의 같으니
+ * 하나로 둔다" 가 통할 뻔한 자리다. 골든이 둘을 따로 묻는다.
+ */
+export class GELU extends Module {
+  constructor(private readonly approximate: "none" | "tanh" = "none") {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return this.approximate === "tanh" ? x.geluTanh() : x.unary("gelu");
+  }
+}
+
+/**
+ * `dim` 을 안 주었을 때 torch 가 고르는 축. **`-1` 이 아니다.**
+ *
+ * 랭크 1 → 0, 2 → 1, 3 → **0**, 4 → 1 (실측). torch 는 그 자리에서 경고까지 낸다.
+ *
+ * **랭크 2 로만 물으면 이 규칙이 안 보인다** — 거기서는 `dim=1` 과 `dim=-1` 이 같은
+ * 축이라 `-1` 을 기본값으로 두어도 답이 같다. 코어가 실제로 그렇게 두고 있었고,
+ * 랭크 3 에서 조용히 다른 축을 접고 있었다.
+ */
+function defaultSoftmaxDim(ndim: number): number {
+  return ndim === 0 || ndim === 1 || ndim === 3 ? 0 : 1;
+}
+
+export class Softmax extends Module {
+  constructor(private readonly dim: number | null = null) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.softmax(this.dim ?? defaultSoftmaxDim(x.shape.length));
+  }
+}
+
+export class LogSoftmax extends Module {
+  constructor(private readonly dim: number | null = null) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.logSoftmax(this.dim ?? defaultSoftmaxDim(x.shape.length));
+  }
+}
+
 /**
  * 음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
  *

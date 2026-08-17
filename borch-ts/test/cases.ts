@@ -1406,6 +1406,64 @@ function addAct(out: Map<string, Case>, inp: Inputs): void {
   out.set("act::nn.PReLU", () => new nn.PReLU().call(inp.get("kinks")));
   out.set("act::nn.PReLU/파라미터 이름",
     () => Object.keys(new nn.PReLU().namedParameters()).join(" "));
+
+  // ── 결속이 메꾸고 있던 여덟. **여기서 처음 물어진다.** ──────────────────
+  //
+  // 케이스가 전부 결속을 지나므로 이 층들이 borch.ts 에 없다는 것을 골든이 구조적으로
+  // 못 봤다. 옮기면서 셋이 인자를 갖고 있는 것이 드러났다.
+  for (const [fname, cls] of [
+    ["silu", "SiLU"], ["sigmoid", "Sigmoid"], ["tanh", "Tanh"], ["gelu", "GELU"],
+  ] as [string, string][]) {
+    add(`F.${fname}`, (x) => x.unary(fname));
+    out.set(`act::nn.${cls}`, () => {
+      const table: Record<string, () => nn.Module> = {
+        SiLU: () => new nn.SiLU(), Sigmoid: () => new nn.Sigmoid(),
+        Tanh: () => new nn.Tanh(), GELU: () => new nn.GELU(),
+      };
+      const make = table[cls];
+      if (!make) throw new Error(`모르는 활성함수 층: ${cls}`);
+      return make().call(inp.get("kinks"));
+    });
+  }
+
+  add("F.gelu(tanh)", (x) => x.geluTanh());
+  out.set("act::nn.GELU(tanh)", () => new nn.GELU("tanh").call(inp.get("kinks")));
+  out.set("act::GELU 두 꼴은 다르다", async () => {
+    const k = inp.get("kinks");
+    // `max()` 는 값과 자리를 함께 낸다 — 축 없이 접는 것은 `amax` 다.
+    const gap = await k.unary("gelu").sub(k.geluTanh()).abs().amax().item();
+    return verdict(gap > 1e-6);
+  });
+
+  add("F.elu(alpha)", (x) => x.elu(0.5));
+  out.set("act::nn.ELU", () => new nn.ELU().call(inp.get("kinks")));
+  out.set("act::nn.ELU(alpha)", () => new nn.ELU(0.5).call(inp.get("kinks")));
+  out.set("act::nn.LeakyReLU", () => new nn.LeakyReLU().call(inp.get("kinks")));
+  out.set("act::nn.LeakyReLU(기울기)",
+    () => new nn.LeakyReLU(0.2).call(inp.get("kinks")));
+  out.set("act::nn.Identity", () => new nn.Identity().call(inp.get("kinks")));
+  // torch 의 `Identity` 는 아무 인자나 받아 버린다. 자바스크립트는 남는 인자를 그냥
+  // 버리므로 이쪽은 저절로 그렇게 되지만, **저절로 되는 것도 물어 둔다** —
+  // 생성자에 인자를 넣는 날 조용히 갈릴 자리다.
+  out.set("act::nn.Identity(인자를 삼킨다)",
+    () => new nn.Identity().call(inp.get("kinks")));
+
+  // `Softmax()` 의 기본 축은 **`-1` 이 아니다.** 랭크 2 로만 물으면 `dim=1` 과
+  // `dim=-1` 이 같은 축이라 그 규칙이 안 보인다.
+  const ranked = Array.from({ length: 24 }, (_, i) => i * 0.1);
+  const folds: [string, (x: Tensor, dim: number | null) => Tensor][] = [
+    ["Softmax", (x, d) => new nn.Softmax(d).call(x)],
+    ["LogSoftmax", (x, d) => new nn.LogSoftmax(d).call(x)],
+  ];
+  for (const [cls, make] of folds) {
+    out.set(`act::nn.${cls}(dim 지정)`, () => make(inp.get("x2"), -1));
+    out.set(`act::nn.${cls}(기본 축/랭크2)`,
+      () => make(inp.get("x2").reshape([3, 4]), null));
+    out.set(`act::nn.${cls}(기본 축/랭크3)`,
+      () => make(Tensor.from(ranked, [2, 3, 4]), null));
+    out.set(`act::nn.${cls}(기본 축/랭크4)`,
+      () => make(Tensor.from(ranked, [2, 3, 2, 2]), null));
+  }
 }
 
 /**

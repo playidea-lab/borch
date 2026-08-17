@@ -540,10 +540,11 @@ export async function report(): Promise<string> {
   // **지금 없는 것.** 채워지면 여기서 지운다 — 안 지워도 초록이고, **늘어나는 쪽만**
   // 빨개진다. 목록에서 걸러 낸 것을 다시 목록과 대조하면 늘 초록이라 아무것도 안
   // 묻는다(처음에 그렇게 썼다가 고쳤다).
+  // 아홉을 채웠다(활성함수 계열) — 목록에서 뺀다. 남은 여덟은 계산이 따로 필요한
+  // 쪽이다.
   const KNOWN_ABSENT = new Set([
-    "AvgPool2d", "ELU", "FractionalMaxPool2d", "FractionalMaxPool3d", "GELU",
-    "Identity", "LPPool1d", "LayerNorm", "LeakyReLU", "LogSoftmax", "Parameter",
-    "SiLU", "Sigmoid", "Softmax", "Tanh", "Unflatten", "Upsample",
+    "AvgPool2d", "FractionalMaxPool2d", "FractionalMaxPool3d", "LPPool1d",
+    "LayerNorm", "Parameter", "Unflatten", "Upsample",
   ]);
   const bag = nn as unknown as Record<string, unknown>;
   const absent = FILLED_IN.filter((n) => !(n in bag));

@@ -884,6 +884,60 @@ def act_cases(inp=None):
     cases.append((ACT_PREFIX + "nn.PReLU", lambda L: L.nn.PReLU()(L.tensor(k))))
     cases.append((ACT_PREFIX + "nn.PReLU/파라미터 이름",
                   lambda L: " ".join(n for n, _ in L.nn.PReLU().named_parameters())))
+
+    # ── 결속이 메꾸고 있던 여덟. **이름은 껍데기인데 인자는 진짜다.** ──────
+    #
+    # borch.ts 에 층이 없어서 결속이 텐서 메서드 위에 factory 로 만들어 두었고,
+    # 케이스가 전부 결속을 지나므로 **표가 그 없음을 구조적으로 못 봤다.** 옮기면서
+    # 셋이 인자를 갖고 있는 것이 드러났다.
+    for cls, fn in (("SiLU", "silu"), ("Sigmoid", "sigmoid"), ("Tanh", "tanh"),
+                    ("GELU", "gelu")):
+        add(f"F.{fn}", lambda L, x, f=fn: getattr(L.nn.functional, f)(x))
+        cases.append((ACT_PREFIX + f"nn.{cls}",
+                      lambda L, c=cls, a=k: getattr(L.nn, c)()(L.tensor(a))))
+
+    # **`approximate='tanh'` 는 다른 식이다.** 최대차가 1e-4 언저리라 "거의 같으니
+    # 하나로 둔다" 가 통할 뻔한 자리이고, 기본값만 물으면 그 인자가 없어도 통과한다.
+    add("F.gelu(tanh)",
+        lambda L, x: L.nn.functional.gelu(x, approximate="tanh"))
+    cases.append((ACT_PREFIX + "nn.GELU(tanh)",
+                  lambda L: L.nn.GELU("tanh")(L.tensor(k))))
+    # 둘이 **정말 다른가** — 같은 값이면 위의 두 케이스는 한 함수를 두 번 묻는 것이다.
+    cases.append((ACT_PREFIX + "GELU 두 꼴은 다르다",
+                  lambda L: str(bool(
+                      (L.nn.functional.gelu(L.tensor(k))
+                       - L.nn.functional.gelu(L.tensor(k), approximate="tanh"))
+                      .abs().max().item() > 1e-6))))
+
+    add("F.elu(alpha)", lambda L, x: L.nn.functional.elu(x, alpha=0.5))
+    cases.append((ACT_PREFIX + "nn.ELU", lambda L: L.nn.ELU()(L.tensor(k))))
+    cases.append((ACT_PREFIX + "nn.ELU(alpha)",
+                  lambda L: L.nn.ELU(0.5)(L.tensor(k))))
+    cases.append((ACT_PREFIX + "nn.LeakyReLU",
+                  lambda L: L.nn.LeakyReLU()(L.tensor(k))))
+    cases.append((ACT_PREFIX + "nn.LeakyReLU(기울기)",
+                  lambda L: L.nn.LeakyReLU(0.2)(L.tensor(k))))
+    cases.append((ACT_PREFIX + "nn.Identity", lambda L: L.nn.Identity()(L.tensor(k))))
+    # torch 의 `Identity` 는 **아무 인자나 받아 버린다**(실측). 자리 채우개로 쓰는
+    # 층이라, 갈아 끼운 층의 인자를 그대로 둔 채 이름만 바꾸는 것이 예사다.
+    cases.append((ACT_PREFIX + "nn.Identity(인자를 삼킨다)",
+                  lambda L: L.nn.Identity(64, unused=True)(L.tensor(k))))
+
+    # ── `Softmax()` 의 기본 축은 **`-1` 이 아니다** ────────────────────────
+    #
+    # 랭크마다 다르다(실측: 1→0, 2→1, 3→**0**, 4→1). 랭크 2 로만 물으면 `dim=1` 과
+    # `dim=-1` 이 같은 축이라 이 규칙이 안 보이고, 셋 다 `-1` 로 두고 있었다.
+    ranked = np.arange(24, dtype=np.float32).reshape(2, 3, 4) * 0.1
+    for cls in ("Softmax", "LogSoftmax"):
+        cases.append((ACT_PREFIX + f"nn.{cls}(dim 지정)",
+                      lambda L, c=cls: getattr(L.nn, c)(dim=-1)(L.tensor(x2))))
+        cases.append((ACT_PREFIX + f"nn.{cls}(기본 축/랭크2)",
+                      lambda L, c=cls: getattr(L.nn, c)()(L.tensor(x2.reshape(3, 4)))))
+        cases.append((ACT_PREFIX + f"nn.{cls}(기본 축/랭크3)",
+                      lambda L, c=cls: getattr(L.nn, c)()(L.tensor(ranked.copy()))))
+        cases.append((ACT_PREFIX + f"nn.{cls}(기본 축/랭크4)",
+                      lambda L, c=cls: getattr(L.nn, c)()(
+                          L.tensor(ranked.reshape(2, 3, 2, 2).copy()))))
     return cases
 
 

@@ -444,6 +444,22 @@ def _functional_inplace(name):
     return call
 
 
+def _gelu(x, approximate="none"):
+    """**두 식이다.** 표의 `gelu` 는 정확형(erf)이고 `"tanh"` 는 다른 커널이다."""
+    h = handle(x)
+    if approximate == "tanh":
+        return wrap(guarded(h.geluTanh))
+    if approximate != "none":
+        raise ValueError(
+            f"gelu(): approximate 는 'none' 또는 'tanh' 입니다 (받은 것: {approximate!r})")
+    return wrap(guarded(h.unary, "gelu"))
+
+
+def _elu(x, alpha=1.0, inplace=False):
+    """**α 를 받는다.** 일반 길로 가면 표의 무인자 판으로 가서 α 가 사라진다."""
+    return wrap(guarded(handle(x).elu, float(alpha)))
+
+
 def _bilinear(x1, x2, weight, bias=None):
     """가중치를 밖에서 받는 꼴. 층 쪽과 같은 텐서 메서드로 간다."""
     return wrap(guarded(handle(x1).bilinear, handle(x2), handle(weight),
@@ -465,6 +481,8 @@ _HAND_WRITTEN = {
        ("relu", "celu", "elu", "selu", "hardtanh", "leaky_relu", "threshold",
         "rrelu")},
     "bilinear": _bilinear,
+    "gelu": _gelu,
+    "elu": _elu,
     "dropout1d": _dropout1d,
     "alpha_dropout": _alpha_dropout(False),
     "feature_alpha_dropout": _alpha_dropout(True),
@@ -1429,8 +1447,9 @@ def Flatten(start_dim=1, end_dim=-1):
     return _Wrap(lambda x: flatten(x, start_dim, end_dim))
 
 
-def Identity():
-    return _Wrap(lambda x: x)
+def Identity(*args, **kw):
+    """torch 는 아무 인자나 받아 버린다(실측) — `Identity(64, unused=True)` 가 돈다."""
+    return _layer("Identity")
 
 
 def _pool_layer(kind, adaptive):
@@ -1462,36 +1481,47 @@ def AvgPool2d(k=2, stride=None):
     return _Wrap(lambda x: wrap(handle(x).avgPool2d(k, stride)))
 
 
-def Softmax(dim=-1):
-    return _Wrap(lambda x: wrap(handle(x).softmax(dim)))
+# ── 여덟은 이제 borch.ts 의 층을 그대로 부른다 ──────────────────────────────
+#
+# 전에는 여기서 텐서 메서드를 감싸 만들었다. 그러면 **규칙이 두 벌**이 되고, 실제로
+# 그 두 벌이 갈렸다 — `Softmax()` 의 기본 축은 `-1` 이 아니라 랭크마다 다른데(실측:
+# 1→0, 2→1, 3→**0**, 4→1) 양쪽 다 `-1` 로 두고 있었다. 랭크 2 로만 물으면 `dim=1` 과
+# `dim=-1` 이 같은 축이라 그 갈림이 안 보인다.
+#
+# 저쪽에 층이 생겼으니 여기서는 이름만 옮긴다. 규칙이 한 벌이면 갈릴 자리가 없다.
+
+def Softmax(dim=None):
+    return _layer("Softmax", dim)
 
 
-def LogSoftmax(dim=-1):
-    return _Wrap(lambda x: wrap(handle(x).logSoftmax(dim)))
+def LogSoftmax(dim=None):
+    return _layer("LogSoftmax", dim)
 
 
-def LeakyReLU(slope=0.01):
-    return _Wrap(lambda x: wrap(handle(x).leakyRelu(slope)))
+def LeakyReLU(negative_slope=0.01):
+    return _layer("LeakyReLU", negative_slope)
 
 
-def ELU():
-    return _Wrap(lambda x: wrap(handle(x).unary("elu")))
+def ELU(alpha=1.0):
+    """**α 를 받는다.** 전에는 안 받아서 `nn.ELU(0.5)` 가 그 줄에서 멈췄다."""
+    return _layer("ELU", alpha)
 
 
 def SiLU():
-    return _Wrap(lambda x: wrap(handle(x).unary("silu")))
+    return _layer("SiLU")
 
 
-def GELU():
-    return _Wrap(lambda x: wrap(handle(x).unary("gelu")))
+def GELU(approximate="none"):
+    """**`approximate='tanh'` 는 다른 식이다** — 받는 척이 아니라 값이 갈린다."""
+    return _layer("GELU", approximate)
 
 
 def Sigmoid():
-    return _Wrap(lambda x: wrap(handle(x).unary("sigmoid")))
+    return _layer("Sigmoid")
 
 
 def Tanh():
-    return _Wrap(lambda x: wrap(handle(x).unary("tanh")))
+    return _layer("Tanh")
 
 
 # ── 활성함수 층. 전부 borch.ts 의 메서드 하나를 감싼다. ─────────────────────

@@ -3222,6 +3222,41 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * 음수 쪽이 지수로 눕는다. **α 를 받는다** — 표의 `elu` 는 α=1 로 구워져 있다.
+   *
+   * `nn.ELU(0.5)` 가 torch 에 있는 꼴이라, 인자 없는 판만 두면 그 줄이 멈춘다.
+   * α=1 에서는 표의 것과 값이 같으므로 **α 를 안 흔들면 둘을 못 가른다.**
+   */
+  elu(alpha = 1.0): Tensor {
+    const a = f32lit(alpha);
+    return this.unary(unaryWith(`elu<${a}>`, () => ({
+      fwd: `select(${a} * (exp(x) - 1.0), x, x > 0.0)`,
+      bwd: `select(${a} * exp(x), 1.0, x > 0.0)`,
+    })));
+  }
+
+  /**
+   * `approximate="tanh"` 쪽 GELU. 표의 `gelu` 는 **정확형**(erf)이다.
+   *
+   * 최대차가 1e-4 언저리라 "거의 같으니 하나로 둔다" 가 통할 뻔한 자리다. torch 가
+   * 둘을 나눠 둔 이유는 tanh 쪽이 빠르기 때문이지 같아서가 아니다.
+   */
+  geluTanh(): Tensor {
+    return this.unary(unaryWith("geluTanh", () => ({
+      fwd: "0.5 * x * (1.0 + tanh(0.7978845608028654 * "
+        + "(x + 0.044715 * x * x * x)))",
+      bwd: "gelu_tanh_grad(x)",
+      prelude: `
+fn gelu_tanh_grad(x: f32) -> f32 {
+  let inner = 0.7978845608028654 * (x + 0.044715 * x * x * x);
+  let t = tanh(inner);
+  let d = 0.7978845608028654 * (1.0 + 3.0 * 0.044715 * x * x);
+  return 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * d;
+}`,
+    })));
+  }
+
+  /**
    * ELU 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.
    *
    * α=1 이면 ELU 와 같은 값이라, α 를 안 주고 재면 둘을 못 가른다.
@@ -7795,6 +7830,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
  * 제자리 판(`abs_` 처럼 밑줄이 붙은 것)도 같이 단다 — 스물일곱 개를 손으로 적으면
  * 그중 하나가 다른 연산을 부르는 날이 온다.
  */
+// **표가 덮기 전에 잡아 둔다.** 클래스 본문의 `elu` 는 α 를 받는데, 아래 루프가
+// 표의 무인자 판으로 덮어 버린다 — `abs` 에서 이미 물린 순서 문제다. 루프 뒤에
+// 되돌린다. 제자리 판(`elu_`)은 표 쪽 것을 그대로 쓴다(α=1).
+const eluWithAlpha = Tensor.prototype.elu;
+
 for (const name of Object.keys(UNARY)) {
   Object.defineProperty(Tensor.prototype, name, {
     value: function (this: Tensor): Tensor {
@@ -7819,6 +7859,13 @@ for (const name of Object.keys(UNARY)) {
  * 복소수의 `abs` 는 실수를 내고 기울기가 `z/|z|` 다. 실수의 것과 커널도 형도
  * 역방향도 달라서 표의 단항으로는 안 된다.
  */
+// α 를 받는 `elu` 를 되돌린다. 위에서 잡아 둔 것이다.
+Object.defineProperty(Tensor.prototype, "elu", {
+  value: eluWithAlpha,
+  writable: true,
+  configurable: true,
+});
+
 {
   const realAbs = Tensor.prototype.abs;
   Object.defineProperty(Tensor.prototype, "abs", {

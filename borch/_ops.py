@@ -3505,6 +3505,27 @@ def silu(t):
                    lambda g: (g * (sig * (1 + t.data * (1 - sig))),), "SiluBackward0")
 
 
+def _gelu_tanh(t):
+    """`approximate="tanh"` 쪽 — 0.5·x·(1 + tanh(√(2/π)·(x + 0.044715·x³))).
+
+    **정확형과 값이 다르다.** 최대차가 1e-4 쯤이라 이 프로젝트의 허용 오차 언저리이고,
+    그래서 "거의 같으니 하나로 둔다" 가 통할 뻔한 자리다. torch 가 둘을 나눠 둔 이유는
+    tanh 쪽이 빠르기 때문이지 같아서가 아니다 — 골든이 둘을 따로 묻는다.
+    """
+    d = _np.asarray(t.data, dtype=_np.float64)
+    root = _math.sqrt(2.0 / _math.pi)
+    inner = root * (d + 0.044715 * d ** 3)
+    th = _np.tanh(inner)
+    out = (0.5 * d * (1.0 + th)).astype(t.data.dtype)
+
+    def back(g):
+        dinner = root * (1.0 + 3 * 0.044715 * d * d)
+        grad = 0.5 * (1.0 + th) + 0.5 * d * (1.0 - th * th) * dinner
+        return (g * grad.astype(t.data.dtype),)
+
+    return t._make(out, (t,), back, "GeluBackward0")
+
+
 def _gelu(t):
     """torch 의 기본 gelu(정확형)와 같은 식 — 0.5·x·(1 + erf(x/√2)).
 
@@ -3528,7 +3549,12 @@ def _gelu(t):
     return t._make(out, (t,), back, "GeluBackward0")
 
 
-def gelu(t):
+def gelu(t, approximate="none"):
+    if approximate == "tanh":
+        return _gelu_tanh(_wrap(t))
+    if approximate != "none":
+        raise ValueError(
+            f"gelu(): approximate 는 'none' 또는 'tanh' 입니다 (받은 것: {approximate!r})")
     return _gelu(_wrap(t))
 
 

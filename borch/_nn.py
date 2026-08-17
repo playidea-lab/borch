@@ -248,6 +248,15 @@ class Flatten(Module):
 
 
 class Identity(Module):
+    """**아무 인자나 받는다.** torch 가 그렇다(실측) — `Identity(64, unused=True)`.
+
+    자리 채우개로 쓰는 층이라, 쓰는 쪽은 갈아 끼운 층의 인자를 그대로 둔 채 이름만
+    바꾼다. 인자를 거절하면 그 줄에서 멈춘다.
+    """
+
+    def __init__(self, *args, **kw):
+        super().__init__()
+
     def forward(self, x):
         return x
 
@@ -1361,8 +1370,20 @@ class _Activation(Module):
         return type(self).fn(x)
 
 
-class GELU(_Activation):
-    fn = staticmethod(gelu)
+class GELU(Module):
+    """**인자를 받는다** — `approximate='tanh'` 는 다른 식이고 값이 다르다.
+
+    `_Activation` 껍데기로 두면 `nn.GELU('tanh')` 가 `Module.__init__() takes 1
+    positional argument` 로 멈춘다. 없는 인자를 조용히 버리는 것보다는 낫지만,
+    torch 에 있는 것을 없다고 하는 것은 그대로 갈림이다.
+    """
+
+    def __init__(self, approximate="none"):
+        super().__init__()
+        self.approximate = approximate
+
+    def forward(self, x):
+        return gelu(x, self.approximate)
 
 
 class SiLU(_Activation):
@@ -1618,22 +1639,38 @@ class ConvTranspose3d(_ConvTransposeND):
     nd = 3
 
 
+def _default_softmax_dim(ndim):
+    """`dim` 을 안 주었을 때 torch 가 고르는 축.
+
+    **`-1` 이 아니다.** 랭크에 따라 0 이나 1 이고, torch 는 그 자리에서 경고까지
+    낸다("Implicit dimension choice for softmax has been deprecated"). 규칙은
+    실측했다 — 랭크 1 → 0, 2 → 1, 3 → **0**, 4 → 1.
+
+    **랭크 2 로만 물으면 이 결함이 안 보인다.** 거기서는 `dim=1` 과 `dim=-1` 이
+    같은 축이라 `-1` 을 기본값으로 두어도 답이 같다. 실제로 그렇게 두고 있었고,
+    랭크 3 에서 조용히 다른 축을 접고 있었다.
+    """
+    return 0 if ndim in (0, 1, 3) else 1
+
+
 class Softmax(Module):
-    def __init__(self, dim=-1):
+    def __init__(self, dim=None):
         super().__init__()
         self.dim = dim
 
     def forward(self, x):
-        return softmax(x, dim=self.dim)
+        dim = _default_softmax_dim(x.dim()) if self.dim is None else self.dim
+        return softmax(x, dim=dim)
 
 
 class LogSoftmax(Module):
-    def __init__(self, dim=-1):
+    def __init__(self, dim=None):
         super().__init__()
         self.dim = dim
 
     def forward(self, x):
-        return log_softmax(x, dim=self.dim)
+        dim = _default_softmax_dim(x.dim()) if self.dim is None else self.dim
+        return log_softmax(x, dim=dim)
 
 
 class AvgPool2d(Module):
