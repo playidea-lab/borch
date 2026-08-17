@@ -1272,17 +1272,15 @@ def shape_index_cases(inp=None):
 
 
 CPLX_PREFIX = "cplx::"
+FFT_PREFIX = "fft::"
 
 # **코어만 보는 케이스.** `WEBGPU_PREFIX` 와 정확히 반대 방향이다.
 #
-# **지금은 비어 있다.** 복소수가 셋 다에 생기면서 이 방향의 갈림이 닫혔다 —
-# 코어 → borch.ts → 결속 순으로 세 커밋에 걸쳐 좁혀졌고, 그동안 이 자리가 "어디까지
-# 왔는가" 를 수로 보여 줬다.
-#
-# **장치는 남긴다.** 갈림은 다시 열린다(다음은 `fft` 가 그럴 참이다). 비었을 때
-# `startswith(())` 는 언제나 거짓이라 아무것도 안 건너뛴다 — 목록을 지우고 검사를
-# 지우면, 다음에 갈릴 때 그 갈림이 "구현이 빠졌다" 로 보인다.
-CORE_ONLY_PREFIXES = ()
+# 복소수가 셋 다에 생기면서 한 번 비었고, **`fft` 가 그 자리를 도로 채웠다** —
+# 예상한 대로다. 코어 → borch.ts → 결속 순으로 좁혀지는 동안 이 목록이 "어디까지
+# 왔는가" 를 수로 보여 준다. 비면 `startswith(())` 가 언제나 거짓이라 아무것도
+# 안 건너뛴다.
+CORE_ONLY_PREFIXES = (FFT_PREFIX,)
 
 
 def complex_cases(inp=None):
@@ -1432,6 +1430,190 @@ def complex_cases(inp=None):
             return type(exc).__name__
 
     add("복소 손실의 backward 는 거절", refuses_complex_loss)
+    return cases
+
+
+def fft_cases(inp=None):
+    """푸리에 변환 — `torch.fft` 와 `stft`.
+
+    **복소수 위에 선다.** 이 이름들은 오래 거절이었고 거절문에 "복소수 규약을 안
+    정했다" 고 적혀 있었다. 그 이유가 정확했기 때문에 규약이 정해진 날 문이 열렸다 —
+    "저장이 없다" 로 적어 두었으면 저장이 생긴 뒤에도 아무도 다시 안 물었을 것이다.
+
+    ## 값보다 기울기가 요점이다
+
+    변환은 선형이라 순방향은 맞히기 쉽다. 어려운 자리는 **어느 쪽 반쪽을 세는가** 다 —
+
+    * `rfft` 의 역방향은 저장된 반쪽에만 기울기가 온다. 켤레 짝을 더하면 두 배가 된다.
+    * `irfft` 의 역방향은 **가장자리만 한 번, 가운데는 두 번** 세야 한다. 되살린
+      켤레 짝이 같은 저장 칸에서 왔기 때문이다.
+
+    둘은 서로 반대 방향의 실수이고, **둘 다 순방향 값은 멀쩡하다.**
+
+    ## `abs` 의 칼날을 피한 입력
+
+    `stft(…).abs()` 케이스의 신호가 고르지 않은 수인 데는 이유가 있다. 경사 신호
+    (`arange/8 − 1`)는 나이퀴스트 칸이 **정확히 0** 이 되는데, 거기서 `abs` 는
+    미분 불가능하고 부호가 구현의 반올림에 달린다 — 우리는 float64 로 누산해서
+    +1 을, torch 는 float32 FFT 라 0 을 골랐다. **규칙이 갈린 것이 아니라 케이스가
+    칼날 위에 서 있던 것**이고, 그런 케이스를 굳히면 골든이 부동소수 우연을 명세로
+    박제한다. 0 인 칸이 없는 신호로 바꾸니 열여섯 자리가 전부 맞았다.
+    """
+    sig = np.array([0.3, -1.2, 0.7, 2.1, -0.4, 1.5, -2.3, 0.9,
+                    1.1, -0.6, 0.25, -1.7, 2.4, 0.05, -0.8, 1.35],
+                   dtype=np.float32)
+    xs = np.array([1.0, -2.0, 0.5, 3.0, -1.0, 0.25], dtype=np.float32)
+    ys = np.array([0.5, 1.0, -1.5, 0.25, 2.0, -0.5], dtype=np.float32)
+    mat = np.arange(12, dtype=np.float32).reshape(3, 4)
+    cases = []
+
+    def add(name, fn):
+        cases.append((FFT_PREFIX + name, fn))
+
+    def x(L):
+        return L.tensor(xs.copy())
+
+    def z(L):
+        return L.complex(L.tensor(xs.copy()), L.tensor(ys.copy()))
+
+    def pair(fn):
+        """복소수 답은 실수 짝으로 묻는다 — 골든 파일이 실수만 담는다."""
+        return lambda L, f=fn: L.view_as_real(f(L))
+
+    # ── 값 ──────────────────────────────────────────────────────────────
+    add("fft(실수)", pair(lambda L: L.fft.fft(x(L))))
+    add("fft(복소)", pair(lambda L: L.fft.fft(z(L))))
+    add("fft 의 형", lambda L: str(L.fft.fft(x(L)).dtype))
+    add("ifft(fft)", pair(lambda L: L.fft.ifft(L.fft.fft(x(L)))))
+    add("ifft(복소)", pair(lambda L: L.fft.ifft(z(L))))
+    add("rfft", pair(lambda L: L.fft.rfft(x(L))))
+    add("irfft(rfft)", lambda L: L.fft.irfft(L.fft.rfft(x(L))))
+    add("irfft 의 형", lambda L: str(L.fft.irfft(L.fft.rfft(x(L))).dtype))
+    # **홀수 길이를 따로 묻는다.** `irfft` 는 n 을 안 주면 `2*(m-1)` 이라 짝수만
+    # 나온다 — 홀수는 n 을 줘야만 나오고, 되살리는 켤레 짝의 개수가 거기서 갈린다.
+    add("irfft(n=5)", lambda L: L.fft.irfft(L.fft.rfft(x(L)), n=5))
+    add("irfft(n=7)", lambda L: L.fft.irfft(L.fft.rfft(x(L)), n=7))
+    for norm in ("forward", "backward", "ortho"):
+        add(f"fft norm={norm}", pair(lambda L, m=norm: L.fft.fft(x(L), norm=m)))
+        add(f"ifft norm={norm}", pair(lambda L, m=norm: L.fft.ifft(z(L), norm=m)))
+    for n in (4, 8):
+        add(f"fft(n={n})", pair(lambda L, k=n: L.fft.fft(x(L), n=k)))
+        add(f"rfft(n={n})", pair(lambda L, k=n: L.fft.rfft(x(L), n=k)))
+    add("fft(dim=0)", pair(lambda L: L.fft.fft(L.tensor(mat.copy()), dim=0)))
+    add("rfft(dim=0)", pair(lambda L: L.fft.rfft(L.tensor(mat.copy()), dim=0)))
+
+    for n in (5, 6):
+        add(f"fftfreq({n})", lambda L, k=n: L.fft.fftfreq(k))
+        add(f"rfftfreq({n})", lambda L, k=n: L.fft.rfftfreq(k))
+        # **홀수에서 갈린다.** `fftshift` 는 `n//2` 만큼 미는데 되돌리려면
+        # `(n+1)//2` 여야 한다 — 짝수만 물으면 둘이 같아서 안 보인다.
+        add(f"fftshift({n})", lambda L, k=n: L.fft.fftshift(L.fft.fftfreq(k)))
+        add(f"ifftshift(fftshift({n}))",
+            lambda L, k=n: L.fft.ifftshift(L.fft.fftshift(L.fft.fftfreq(k))))
+    add("fftfreq(6, d=0.5)", lambda L: L.fft.fftfreq(6, 0.5))
+
+    # ── 기울기 ──────────────────────────────────────────────────────────
+    def grad(name, fn):
+        def run(L, f=fn, n=name):
+            leaf = L.tensor(xs.copy(), requires_grad=True)
+            f(L, leaf).sum().backward()
+            return _grad_of(leaf, n)
+
+        add(f"grad::{name}", run)
+
+    grad("fft 실수부", lambda L, t: L.real(L.fft.fft(t)))
+    grad("fft 크기", lambda L, t: L.fft.fft(t).abs())
+    # **켤레 짝을 더하면 두 배가 된다.** 실측이 `[4, 0, 1, 0, 1, 0]` 이다.
+    grad("rfft 실수부", lambda L, t: L.real(L.fft.rfft(t)))
+    grad("rfft 허수부", lambda L, t: L.imag(L.fft.rfft(t)))
+    grad("rfft 크기", lambda L, t: L.fft.rfft(t).abs())
+    # **가장자리를 두 번 세면 여기서 갈린다.**
+    grad("irfft(rfft)", lambda L, t: L.fft.irfft(L.fft.rfft(t)))
+    grad("irfft 가중", lambda L, t: L.fft.irfft(L.fft.rfft(t))
+         * L.tensor(np.arange(6, dtype=np.float32)))
+    grad("ifft(fft) 실수부", lambda L, t: L.real(L.fft.ifft(L.fft.fft(t))))
+    grad("fftshift(rfft) 크기",
+         lambda L, t: L.fft.fftshift(L.fft.rfft(t)).abs())
+
+    # ── stft ────────────────────────────────────────────────────────────
+    def s(L):
+        return L.tensor(sig.copy())
+
+    def hann(L, n=8):
+        return L.hann_window(n)
+
+    for center in (True, False):
+        for hop in (2, 4):
+            add(f"stft center={center} hop={hop}",
+                pair(lambda L, c=center, h=hop: L.stft(
+                    s(L), 8, h, window=hann(L), center=c, return_complex=True)))
+    add("stft 기본 hop",
+        pair(lambda L: L.stft(s(L), 8, window=hann(L), return_complex=True)))
+    add("stft 창 없이", pair(lambda L: L.stft(s(L), 8, 4, return_complex=True)))
+    # 창이 짧으면 **가운데에 놓고 양쪽을 0 으로 채운다**(실측). 왼쪽 정렬이면 갈린다.
+    add("stft win_length=6",
+        pair(lambda L: L.stft(s(L), 8, 4, 6, hann(L, 6), return_complex=True)))
+    add("stft onesided=False",
+        pair(lambda L: L.stft(s(L), 8, 4, window=hann(L), onesided=False,
+                              return_complex=True)))
+    add("stft normalized",
+        pair(lambda L: L.stft(s(L), 8, 4, window=hann(L), normalized=True,
+                              return_complex=True)))
+    for mode in ("reflect", "constant", "replicate"):
+        add(f"stft pad_mode={mode}",
+            pair(lambda L, m=mode: L.stft(
+                L.tensor(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)),
+                4, 2, window=L.ones([4]), pad_mode=m, return_complex=True)))
+    add("stft 배치",
+        pair(lambda L: L.stft(L.tensor(sig.reshape(1, 16).copy()), 8, 4,
+                              window=hann(L), return_complex=True)))
+    add("istft(length=16)",
+        lambda L: L.istft(L.stft(s(L), 8, 4, window=hann(L),
+                                 return_complex=True),
+                          8, 4, window=hann(L), length=16))
+    add("istft 길이 없이",
+        lambda L: L.istft(L.stft(s(L), 8, 4, window=hann(L),
+                                 return_complex=True),
+                          8, 4, window=hann(L)))
+
+    def sgrad(name, fn):
+        def run(L, f=fn, n=name):
+            leaf = L.tensor(sig.copy(), requires_grad=True)
+            f(L, leaf).sum().backward()
+            return _grad_of(leaf, n)
+
+        add(f"grad::{name}", run)
+
+    sgrad("stft 크기",
+          lambda L, t: L.stft(t, 8, 4, window=hann(L),
+                              return_complex=True).abs())
+    sgrad("stft center=False 크기",
+          lambda L, t: L.stft(t, 8, 4, window=hann(L), center=False,
+                              return_complex=True).abs())
+    sgrad("istft(stft)",
+          lambda L, t: L.istft(L.stft(t, 8, 4, window=hann(L),
+                                      return_complex=True),
+                               8, 4, window=hann(L), length=16))
+
+    # ── 거절 ────────────────────────────────────────────────────────────
+    def refuses(name, body):
+        def run(L, f=body):
+            try:
+                f(L)
+                return "예외가 안 났다"
+            except Exception as exc:                            # noqa: BLE001
+                return type(exc).__name__
+
+        add(name, run)
+
+    refuses("rfft(복소)는 거절", lambda L: L.fft.rfft(z(L)))
+    # **`return_complex` 를 안 주면 torch 가 멈춘다**(실측). 기본값을 정해 주면
+    # 곧 폐기될 모양(실수 `(…, 2)`)을 가르치게 된다.
+    refuses("stft 는 return_complex 를 요구",
+            lambda L: L.stft(s(L), 8, 4, window=hann(L)))
+    refuses("복소 스펙트럼의 backward 는 거절",
+            lambda L: L.fft.fft(
+                L.tensor(xs.copy(), requires_grad=True)).sum().backward())
     return cases
 
 
@@ -7350,7 +7532,7 @@ def golden_cases(inp=None):
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
-            + make_cases(inp) + complex_cases(inp)
+            + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

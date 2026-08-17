@@ -43,7 +43,8 @@ window.GOLDEN_RESULT = null;
 // 두 라이브러리는 **패키지다**(예전에는 파일 하나였다). 모듈을 여기 적어야 한다 —
 // 빠뜨리면 `ImportError` 로 시끄럽게 터진다. 조용히 반쪽만 실리는 것보다 낫다.
 const PACKAGES = {
-  borch: ["__init__", "_base", "_tensor", "_ops", "_nn", "_optim", "_data", "_rnn"],
+  borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
+          "_data", "_rnn"],
   // borch.ts 위에 얹은 얇은 결속. 예전에는 이 이름이 TF.js 판이었다.
   borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data"],
 };

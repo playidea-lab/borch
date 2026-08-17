@@ -14,6 +14,16 @@ from ._base import (
 )
 # **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
 # 그 이름을 쓰는 함수와 부딪힌다 — `bool` 을 그렇게 가려서 한 번 겪었다.
+# **`from . import _fft` 로 쓰면 안 된다.** 그 꼴은 부모 패키지의 **속성**을 보는데,
+# 이 파일이 도는 동안 `borch/__init__` 은 아직 반쯤 초기화된 상태다. 네이티브에서는
+# 지나갔고 **Pyodide 안에서만** `cannot import name '_fft' from partially initialized
+# module` 로 멈췄다 — 골든의 `repr::스칼라` 하나가 그것을 잡았다. 하위 모듈을 직접
+# 들여오는 꼴은 그 속성을 안 본다.
+from ._fft import fft as _fft_fft, fftfreq as _fft_fftfreq
+from ._fft import fftshift as _fft_fftshift, ifft as _fft_ifft
+from ._fft import ifftshift as _fft_ifftshift, irfft as _fft_irfft
+from ._fft import istft as _fft_istft, rfft as _fft_rfft
+from ._fft import rfftfreq as _fft_rfftfreq, stft as _fft_stft
 from ._base import bool_ as _bool_dtype, float32 as _float32
 from ._base import float64 as _float64, int64 as _int64
 
@@ -1499,6 +1509,7 @@ def minimum(a, b):
 
 def split(t, size, dim=0):
     t = _wrap(t)
+    dim = _pos_dim(t, dim)
     n = t.data.shape[dim]
     sizes = size if isinstance(size, (list, tuple)) else \
         [size] * (n // size) + ([n % size] if n % size else [])
@@ -1517,16 +1528,31 @@ def chunk(t, chunks, dim=0):
 
 
 def _slice_at(dim, start, end):
+    """축 `dim` 만 자르는 색인 묶음. **`dim` 은 양수여야 한다** — 음수를 주면
+    `range(dim)` 이 비어서 **축 0 을 자른다.** 예외 없이."""
     return tuple(slice(None) for _ in range(dim)) + (slice(start, end),)
+
+
+def _pos_dim(t, dim):
+    """음수 축을 양수로.
+
+    **`_slice_at` 이 음수를 못 받는다.** `narrow(x, -1, …)` 이 랭크 2 이상에서
+    **축 0 을 잘랐고**, 랭크 1 에서는 축 −1 과 축 0 이 같아서 오래 안 보였다.
+    `stft` 를 조립하다가 배치 신호(1, 16)에서 처음 드러났다 — 모양이 (0, 24) 가
+    되어 `stack` 이 멈췄다. 값이 틀리는 대신 모양이 무너져서 시끄러웠던 것이 운이다.
+    """
+    return dim + t.data.ndim if dim < 0 else dim
 
 
 def unbind(t, dim=0):
     t = _wrap(t)
+    dim = _pos_dim(t, dim)
     return tuple(t[_slice_at(dim, i, i + 1)].squeeze(dim) for i in range(t.data.shape[dim]))
 
 
 def narrow(t, dim, start, length):
-    return _wrap(t)[_slice_at(dim, start, start + length)]
+    t = _wrap(t)
+    return t[_slice_at(_pos_dim(t, dim), start, start + length)]
 
 
 def flip(t, dims):
@@ -5256,6 +5282,23 @@ class _Linalg(_Namespace):
 linalg = _Linalg()
 
 
+class _Fft(_Namespace):
+    """`torch.fft`. 몸통은 `borch/_fft.py` 에 있다 — 이 파일이 이미 크고, 그쪽은
+    `_tensor` 말고는 아무것도 안 들여와서 따로 설 수 있다."""
+
+    fft = staticmethod(_fft_fft)
+    ifft = staticmethod(_fft_ifft)
+    rfft = staticmethod(_fft_rfft)
+    irfft = staticmethod(_fft_irfft)
+    fftfreq = staticmethod(_fft_fftfreq)
+    rfftfreq = staticmethod(_fft_rfftfreq)
+    fftshift = staticmethod(_fft_fftshift)
+    ifftshift = staticmethod(_fft_ifftshift)
+
+
+fft = _Fft()
+
+
 class _Cuda(_Namespace):
     @staticmethod
     def is_available():
@@ -6810,31 +6853,14 @@ def binomial(count, prob, **kw):
     return Tensor(_rng.binomial(n.astype(_np.int64), p).astype(_DEFAULT_DTYPE))
 
 
-def stft(*args, **kw):
-    """**복소수 규약을 안 정해서 없다.** 저장이 모자라서가 아니다.
-
-    torch 의 `stft` 는 이제 기본이 복소수 텐서(`return_complex=True`)이고, 실수
-    `(…, 2)` 로 내는 길은 **폐기 예정**이다 — 그 꼴로 흉내 내면 torch 에서 곧
-    사라질 모양을 가르치게 된다. `.double()` 을 거절한 것과 같은 자리다.
-
-    **막힌 것이 저장이라고 적었다가 고쳤다.** 재보니 `complex64` 는 하드웨어 타입이
-    아니라 **float32 둘의 배치 규약**이다(원소당 8 바이트, `view_as_real` 이 마지막
-    축에 `(re, im)`). 우리 `int64`·`bool` 이 float32 버퍼 위의 이름표인 것과 같은
-    갈래이고, 그 기계는 이미 있다.
-
-    정말 막힌 것은 `float64` 이고(WGSL 에 `f64` 가 없다), 그래서 `complex128` 은
-    영원히 없다. 그리고 **진짜 결정은 autograd 다** — torch 는 Wirtinger 규약을
-    쓴다(`L = (z·z̄).real` 에서 `z.grad` 가 보통의 복소 미분이 아니다). 그 규약을
-    재서 못 박기 전에 손대면 그럴듯한데 틀린 기울기가 나온다.
-
-    자세한 것은 `BORCH-TS.md` 의 "안 정한 것" 절에 있다.
-    """
-    _unsupported("torch.stft — 복소수 규약을 안 정했습니다")
-
-
-def istft(*args, **kw):
-    """`stft` 와 같은 이유로 없다."""
-    _unsupported("torch.istft — 복소수 규약을 안 정했습니다")
+# **오래 거절이었다.** 거절문에는 "복소수 규약을 안 정했다" 고 적혀 있었고, 그
+# 이유가 맞았다 — 저장이 모자란 것이 아니라 **Wirtinger 규약을 안 재본 것**이었다.
+# 재서 못 박고 나니(`z.grad = ∂L/∂re + i·∂L/∂im`) 이 두 이름이 조립으로 나왔다.
+#
+# 못 하는 이유를 **정확히** 적어 둔 값어치가 여기서 나왔다. "저장이 없다" 로 적어
+# 두었으면 저장이 생긴 날에도 아무도 다시 안 물었을 것이다.
+stft = _fft_stft
+istft = _fft_istft
 
 
 def hash_tensor(*args, **kw):

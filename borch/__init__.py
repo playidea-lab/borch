@@ -60,7 +60,7 @@ from ._ops import (
     cosine_similarity, count_nonzero, cuda, cummax, cummin, cumprod, cumsum, deg2rad,
     det, diag, diagflat, diagonal, diff, dist, dot, dropout, dsplit, eigh, einsum, elu,
     embedding, empty, eq, equal, erf, erfc, exp, exp2, expand, expand_as, expm1, eye,
-    fix, flip, fliplr, flipud, floor, frac, from_numpy, full, full_like, gather, ge,
+    fft, fix, flip, fliplr, flipud, floor, frac, from_numpy, full, full_like, gather, ge,
     gelu, gt, heaviside, hsplit, hypot, index_select, interpolate, inverse, isfinite,
     isinf, isnan, kthvalue, l1_loss, layer_norm, ldexp, le, leaky_relu, linalg,
     linspace, load, log, log10, log1p, log2, log_softmax, logaddexp, logaddexp2, logdet,
