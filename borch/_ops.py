@@ -2538,8 +2538,29 @@ def take_along_dim(t, indices, dim=None):
     return gather(t, dim, indices)
 
 
-def searchsorted(sorted_sequence, values, right=False, **kw):
-    """정렬된 것 안에서 들어갈 자리. **`right` 가 동점의 어느 쪽인지 정한다.**"""
+def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
+    """정렬된 것 안에서 들어갈 자리. **동점의 어느 쪽인지를 두 인자가 함께 정한다.**
+
+    torch 는 같은 것을 두 이름으로 받는다 — 참거짓 `right` 와 문자열 `side` 다.
+    여기에는 `right` 만 있었고 `side` 는 `**kw` 로 들어가 **조용히 버려졌다.**
+    `searchsorted(seq, v, side="right")` 가 왼쪽 답을 냈고, 값이 하나씩만 어긋나서
+    그럴듯해 보인다. `bucketize(right=True)` 는 처음부터 맞았다 — **같은 계산에
+    이름이 둘인데 한쪽만 맞은** 자리가 이 저장소에서 세 번째다.
+
+    둘이 어긋나면 torch 는 멈춘다(실측). 하나만 주거나, 같은 뜻으로 둘 다 줘야 한다.
+    """
+    if side is not None:
+        if side not in ("left", "right"):
+            raise RuntimeError(_like_torch(
+                f"side 는 'left' 나 'right' 여야 합니다 ({side!r} 을 받았습니다).",
+                f"torch.searchsorted(): side can only be 'left' or 'right' but "
+                f"got {side}"))
+        if right and side == "left":
+            raise RuntimeError(_like_torch(
+                "side 와 right 가 서로 반대입니다 — 둘 중 하나만 주세요.",
+                "torch.searchsorted(): side and right can't be set to opposites, "
+                "got side of left while right was True"))
+        right = side == "right"
     seq = _wrap(sorted_sequence).data
     want = _wrap(values).data
     return Tensor(_np.searchsorted(seq, want, side="right" if right else "left")
@@ -3551,10 +3572,10 @@ def embedding(idx, weight):
     return weight._make(out, (weight,), back, "EmbeddingBackward0")
 
 
-def nll_loss(log_probs, target):
+def nll_loss(log_probs, target, reduction="mean"):
     n = log_probs.data.shape[0]
     picked = log_probs[_np.arange(n), target.data.astype(int)]
-    return -picked.mean()
+    return _reduce(-picked, reduction)
 
 
 def l1_loss(pred, target, reduction="mean"):
@@ -3580,6 +3601,17 @@ def _reduce(out, reduction):
         return out
     if reduction == "sum":
         return out.sum()
+    # **모르는 값을 평균으로 삼키지 않는다.** `else: return out.mean()` 이었는데,
+    # 그러면 `reduction="MEAN"` 같은 오타가 조용히 통과해 그대로 학습된다 — 사람이
+    # 대문자로 적어 놓고 자기가 고른 것이 쓰이는 줄 안다. torch 는 멈춘다(실측).
+    #
+    # `else` 가 한 값의 이름을 달고 정의역의 나머지를 전부 삼키는 꼴이고, 같은
+    # 모양을 `norm(p)`·`dist(p)` 에서도 봤다.
+    if reduction != "mean":
+        raise ValueError(_like_torch(
+            f"reduction 은 'none'·'mean'·'sum' 중 하나여야 합니다 "
+            f"({reduction!r} 을 받았습니다).",
+            f"{reduction} is not a valid value for reduction"))
     return out.mean()
 
 

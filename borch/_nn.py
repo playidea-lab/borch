@@ -12,7 +12,7 @@ from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _rng, _spread, _wrap, adaptive_avg_pool1d,
+    _Namespace, _gelu, _pool_all, _reduce, _rng, _spread, _wrap, adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
     celu, lp_pool1d, lp_pool2d, lp_pool3d,
@@ -480,31 +480,49 @@ class ParameterDict(Module):
         return self
 
 
-class MSELoss(Module):
+# **접는 방식은 손실의 일부다.** `_ops._reduce` 가 그 규칙을 한 자리에 두고 열셋이
+# 그것을 쓰는데, **제일 흔한 다섯이 안 쓰고 있었다** — 여기 넷과 `NLLLoss` 다.
+# `.mean()` 이 박혀 있어서 `reduction=` 을 주면 `TypeError` 로 멈췄다.
+#
+# 뒤집혀 있다는 것이 실마리였다. `cosine_embedding`·`multi_margin`·`triplet` 처럼
+# **드문 손실은 전부** `reduction` 을 받는데 `MSELoss`·`CrossEntropyLoss` 가 안 받았다.
+# 나중에 쓴 것이 torch 서명을 따랐고 처음 쓴 것이 안 고쳐진 것이다. 골든이 못 본
+# 이유는 튜토리얼이 기본값 `mean` 만 쓰기 때문이다.
+class _Loss(Module):
+    """`reduction` 을 한 번만 받아 둔다. 손실마다 적으면 자리마다 어긋난다."""
+
+    def __init__(self, reduction="mean"):
+        super().__init__()
+        self.reduction = reduction
+
+
+class MSELoss(_Loss):
     def forward(self, pred, target):
-        return ((pred - target) ** 2).mean()
+        return _reduce((pred - target) ** 2, self.reduction)
 
 
-class BCEWithLogitsLoss(Module):
+class BCEWithLogitsLoss(_Loss):
     def forward(self, logits, target):
         # log(1+e^-|x|) + max(x,0) - x*t  — 큰 값에서도 안전한 형태
         x, t = logits, target
-        return (relu(x) - x * t + (1 + (-(x.abs())).exp()).log()).mean()
+        return _reduce(relu(x) - x * t + (1 + (-(x.abs())).exp()).log(),
+                       self.reduction)
 
 
-class BCELoss(Module):
+class BCELoss(_Loss):
     def forward(self, p, t):
         eps = 1e-12
-        return -(t * (p + eps).log() + (1 - t) * (1 - p + eps).log()).mean()
+        return _reduce(-(t * (p + eps).log() + (1 - t) * (1 - p + eps).log()),
+                       self.reduction)
 
 
-class CrossEntropyLoss(Module):
+class CrossEntropyLoss(_Loss):
     def forward(self, logits, target):
         n = logits.data.shape[0]
         sm = softmax(logits, dim=-1)
         idx = target.data.astype(int)
         picked = sm[_np.arange(n), idx]
-        return -(picked + 1e-12).log().mean()
+        return _reduce(-(picked + 1e-12).log(), self.reduction)
 
 
 def _nn_unsupported(name):
@@ -1861,23 +1879,23 @@ class Unflatten(Module):
         return x.reshape(x.data.shape[:self.dim] + self.unflattened_size)
 
 
-class L1Loss(Module):
+class L1Loss(_Loss):
     def forward(self, pred, target):
-        return l1_loss(pred, target)
+        return l1_loss(pred, target, self.reduction)
 
 
-class SmoothL1Loss(Module):
-    def __init__(self, beta=1.0):
-        super().__init__()
+class SmoothL1Loss(_Loss):
+    def __init__(self, beta=1.0, reduction="mean"):
+        super().__init__(reduction)
         self.beta = beta
 
     def forward(self, pred, target):
-        return smooth_l1_loss(pred, target, self.beta)
+        return smooth_l1_loss(pred, target, self.beta, self.reduction)
 
 
-class NLLLoss(Module):
+class NLLLoss(_Loss):
     def forward(self, log_probs, target):
-        return nll_loss(log_probs, target)
+        return nll_loss(log_probs, target, reduction=self.reduction)
 
 
 class BatchNorm1d(Module):
@@ -2724,16 +2742,16 @@ class _Functional(_Namespace):
     interpolate = staticmethod(interpolate)
 
     @staticmethod
-    def mse_loss(pred, target):
-        return MSELoss()(pred, target)
+    def mse_loss(pred, target, reduction="mean"):
+        return MSELoss(reduction)(pred, target)
 
     @staticmethod
-    def binary_cross_entropy_with_logits(logits, target):
-        return BCEWithLogitsLoss()(logits, target)
+    def binary_cross_entropy_with_logits(logits, target, reduction="mean"):
+        return BCEWithLogitsLoss(reduction)(logits, target)
 
     @staticmethod
-    def binary_cross_entropy(p, target):
-        return BCELoss()(p, target)
+    def binary_cross_entropy(p, target, reduction="mean"):
+        return BCELoss(reduction)(p, target)
 
     @staticmethod
     def linear(x, weight, bias=None):
@@ -2744,8 +2762,8 @@ class _Functional(_Namespace):
     max_pool2d = staticmethod(max_pool2d)
 
     @staticmethod
-    def cross_entropy(logits, target):
-        return CrossEntropyLoss()(logits, target)
+    def cross_entropy(logits, target, reduction="mean"):
+        return CrossEntropyLoss(reduction)(logits, target)
 
 
 nn.functional = _Functional()

@@ -2625,6 +2625,33 @@ def index_cases(inp=None):
     add("searchsorted(right)",
         lambda L: L.searchsorted(L.tensor(line), L.tensor(want), right=True))
     add("bucketize", lambda L: L.bucketize(L.tensor(want), L.tensor(line)))
+    # **같은 것을 두 이름으로 받는다** — 참거짓 `right` 와 문자열 `side` 다. 표는
+    # `right` 만 물었고, `side` 는 코어·결속 양쪽에서 `**kw` 로 들어가 조용히
+    # 버려졌다. `side="right"` 가 왼쪽 답을 냈고 자리가 하나씩만 어긋나서
+    # 그럴듯해 보인다. `bucketize` 는 처음부터 맞았다 — 같은 계산에 이름이 둘인데
+    # 한쪽만 맞은 자리다.
+    for tag in ("left", "right"):
+        add(f"searchsorted(side={tag})",
+            lambda L, s=tag: L.searchsorted(L.tensor(line), L.tensor(want), side=s))
+    # 둘을 같이 주는 것도 torch 가 받는다 — **뜻이 맞을 때만** 이다.
+    add("searchsorted(side=right, right=True)",
+        lambda L: L.searchsorted(L.tensor(line), L.tensor(want),
+                                 side="right", right=True))
+
+    def refuses(name, fragment, fn):
+        def run(L, f=fn, frag=fragment):
+            try:
+                f(L)
+            except Exception as exc:                            # noqa: BLE001
+                return frag if frag in str(exc) else f"다른 문구 <{exc}>"
+            return "안 던졌다"
+        cases.append((INDEX_PREFIX + f"거절::{name}", run))
+
+    refuses("side 와 right 가 반대", "opposites",
+            lambda L: L.searchsorted(L.tensor(line), L.tensor(want),
+                                     side="left", right=True))
+    refuses("side 가 셋째 값", "can only be 'left' or 'right'",
+            lambda L: L.searchsorted(L.tensor(line), L.tensor(want), side="both"))
     return cases
 
 

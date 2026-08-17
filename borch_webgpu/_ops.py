@@ -2145,12 +2145,30 @@ def take_along_dim(t, indices, dim=None, **kw):
     return wrap(guarded(handle(t).gather, dim, handle(indices)))
 
 
-def searchsorted(sorted_sequence, values, right=False, **kw):
-    """정렬된 것 안에서 들어갈 자리. **`right` 가 동점의 어느 쪽인지 정한다.**
+def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
+    """정렬된 것 안에서 들어갈 자리. **동점의 어느 쪽인지를 두 인자가 함께 정한다.**
 
     커널이 필요 없다 — "나보다 작은 것이 몇 개인가" 를 세면 그것이 자리다.
+
+    torch 는 같은 것을 두 이름으로 받는다 — 참거짓 `right` 와 문자열 `side` 다.
+    여기에는 `right` 만 있었고 `side` 는 `**kw` 로 들어가 **조용히 버려졌다.** 코어도
+    같았고, `bucketize(right=True)` 는 양쪽 다 처음부터 맞았다. 인자가 하나씩만
+    어긋나서 값이 그럴듯해 보인다.
     """
+    side = kw.get("side", side)
     right = kw.get("right", right)
+    if side is not None:
+        if side not in ("left", "right"):
+            raise RuntimeError(
+                f"side 는 'left' 나 'right' 여야 합니다 ({side!r} 을 받았습니다). "
+                f"(torch: torch.searchsorted(): side can only be 'left' or 'right' "
+                f"but got {side})")
+        if right and side == "left":
+            raise RuntimeError(
+                "side 와 right 가 서로 반대입니다 — 둘 중 하나만 주세요. "
+                "(torch: torch.searchsorted(): side and right can't be set to "
+                "opposites, got side of left while right was True)")
+        right = side == "right"
     seq, want = wrap(sorted_sequence), wrap(values)
     n = int(handle(seq).size)
     m = int(handle(want).size)
