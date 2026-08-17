@@ -4894,7 +4894,15 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** `luFactor` 가 낸 것으로 `A x = b` 를 푼다. */
-  async luSolve(pivots: Tensor, b: Tensor): Promise<Tensor> {
+  /**
+   * 인수분해한 것으로 `A x = b` 를 푼다. **`this` 가 LU 다** — `linalg.lu_solve(LU,
+   * pivots, B)` 의 자리 배치이고, torch 의 `Tensor.lu_solve` 와는 수신자가 다르다.
+   *
+   * 그래서 **이름에서 torch 주장을 뺐다.** 전에는 이것이 `luSolve` 였는데, torch 를
+   * 옮겨 적는 사람이 `b.lu_solve(LU, piv)` 를 쓰면 `LU` 가 `pivots` 자리에 들어간다 —
+   * 이름도 인자 개수도 맞아서 **그 자리에서는 안 걸리고** 값만 틀린다.
+   */
+  async luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
     if (v.batch !== 1) throw new RuntimeError("lu_solve: 배치는 아직 없다");
     const n = v.rows;
@@ -4977,9 +4985,25 @@ export class Tensor implements Node<Tensor> {
     return getInfos ? { ...got, info: Tensor.zeros([]) } : got;
   }
 
-  /** **`luSolve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다. */
+  /**
+   * `torch.Tensor.lu_solve` — **수신자가 오른쪽 변 `b` 다.**
+   *
+   * torch 가 `b.lu_solve(LU, piv)` 이므로 여기도 그렇다. 인수를 수신자로 받는 쪽은
+   * `luSolveFactored` 이고, 그것이 `linalg.lu_solve` 의 자리 배치다.
+   */
+  async luSolve(luData: Tensor, pivots: Tensor): Promise<Tensor> {
+    return luData.luSolveFactored(pivots, this);
+  }
+
+  /**
+   * 옛 이름. 결속이 이것을 부르고 있어서 남긴다 — 위임 한 줄이다.
+   *
+   * `luSolve` 가 인수를 수신자로 받던 시절에 그 반대편을 가리키려고 만든 이름인데,
+   * 이제 `luSolve` 자체가 torch 와 같은 자리이므로 **`Top` 이 가리킬 반대편이 없다.**
+   * 결속이 `luSolve` 로 옮겨 가면 지워도 된다.
+   */
   async luSolveTop(luData: Tensor, pivots: Tensor): Promise<Tensor> {
-    return luData.luSolve(pivots, this);
+    return this.luSolve(luData, pivots);
   }
 
   /**

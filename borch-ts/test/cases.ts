@@ -3757,7 +3757,7 @@ function addLinalgStruct(out: Map<string, Case>): void {
   }
   out.set("linalg::lu::lu_solve(교환)", async () => {
     const f = await Tensor.from(LA_PIVOT, [2, 2]).luFactor();
-    return f.LU.luSolve(f.pivots, Tensor.from([1, 2], [2, 1]));
+    return f.LU.luSolveFactored(f.pivots, Tensor.from([1, 2], [2, 1]));
   });
 
   out.set("linalg::ex::inv(특이)가 던지는 것", async () => {

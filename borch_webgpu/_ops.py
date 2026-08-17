@@ -26,6 +26,11 @@ _ts = _js.borch
 
 # 두 언어에서 철자가 아예 다른 것들. 규칙으로 안 되는 것만 적는다.
 _RENAME = {
+    # **`linalg.lu_solve` 는 인수가 받는다.** borch.ts 의 `luSolve` 는 torch 의
+    # `Tensor.lu_solve` 라 오른쪽 변이 받으므로, 그냥 camel 로 넘기면 수신자가
+    # 뒤바뀐다 — 이름도 인자 개수도 맞아서 값만 틀린다. 인수가 받는 쪽은
+    # `luSolveFactored` 로 따로 있다.
+    "lu_solve": "luSolveFactored",
     "adaptive_avg_pool2d": "adaptiveAvgPool",
     "adaptive_avg_pool1d": "adaptiveAvgPool",
     "absolute": "abs",

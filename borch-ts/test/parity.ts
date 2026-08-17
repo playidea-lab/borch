@@ -414,6 +414,17 @@ export async function report(): Promise<string> {
     same(await F.huberLoss(fx, fx.zerosLike(), "mean", 2).toArray(),
       await fx.huberLoss(fx.zerosLike(), 2, "mean").toArray()));
 
+  // **수신자가 누구인가도 이름의 일부다.** `Tensor.lu_solve` 는 torch 에서 오른쪽
+  // 변이 받는다 — 인수가 받도록 두면 이름도 인자 개수도 맞아서 그 자리에서는 안
+  // 걸리고 값만 틀린다. 인수가 받는 쪽은 `luSolveFactored` 로 따로 있다.
+  const lu = await Tensor.from([4, 3, 6, 3], [2, 2]).luFactor();
+  const rhs = Tensor.from([1, 2], [2, 1]);
+  const viaMethod = await rhs.luSolve(lu.LU, lu.pivots);
+  const viaFactored = await lu.LU.luSolveFactored(lu.pivots, rhs);
+  want("lu_solve 의 수신자가 b 다",
+    same(await viaMethod.toArray(), await viaFactored.toArray()),
+    `${Array.from(await viaMethod.toArray()).join(",")}`);
+
   // 이어서는 안 되는 것들은 **없어야** 한다. 있으면 조용히 다른 연산이다.
   for (const missing of ["layerNorm", "rmsNorm", "pad", "upsample"]) {
     want(`F.${missing} 은 안 낸다 — 연산이 다르다`,
