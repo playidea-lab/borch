@@ -92,6 +92,43 @@ def test_a_case_named_after_an_argument_asks_about_it():
     )
 
 
+# **기울기가 통째로 0 이면 그 케이스는 아무것도 안 묻는다** — 기울기를 아예 안
+# 흘리는 구현도 통과한다. 아래는 도함수가 진짜 0 인 자리들이고, 그 밖의 것이 0 이 되면
+# 대개 **케이스 배선**이 잘못된 것이다.
+#
+# 실제로 그렇게 걸렸다. `edge::` 의 접기 헬퍼가 자리마다 다른 가중치를 주려고
+# `arange` 를 곱했는데 첫 몫이 0 이라, **출력이 한 칸인 케이스는 기울기가 통째로
+# 0** 이 됐다. 균일 접기를 피하려고 넣은 장치가 그 케이스를 아무것도 안 묻는 상태로
+# 만든 것이다 — `max(동점)` 이 `[0,1,0,0]` 대신 `[0,0,0,0]` 을 굳히고 있었다.
+ZERO_ON_PURPOSE = {
+    "grad::접힘::angle() 은 0 을 흘린다": "실수의 편각은 계단이라 도함수가 0 이다.",
+    "math::grad::trunc": "버림은 계단이다.",
+    "math::grad::fix": "`trunc` 와 같은 함수다.",
+    "math::grad::copysign/b": "부호를 주는 쪽으로는 기울기가 안 간다.",
+    "blend::grad::addmm(beta=0)": "`beta=0` 이면 더해지는 항이 빠진다.",
+    "edge::grad::sign(0포함)": "부호 함수의 도함수는 어디서나 0 이다.",
+}
+
+
+def test_no_gradient_case_is_all_zero_by_accident():
+    """0 인 기울기와 **안 흐르는 기울기**는 다른 말이다.
+
+    이름에 `(0이어야)` 가 붙은 것은 그 자체로 답을 적어 둔 것이라 지나간다.
+    """
+    zero = []
+    for name, case in CASES.items():
+        if "grad::" not in name or "(0이어야)" in name:
+            continue
+        vals = [v for v in (case.get("values") or []) if isinstance(v, (int, float))]
+        if len(vals) >= 2 and set(vals) == {0.0} and name not in ZERO_ON_PURPOSE:
+            zero.append(name)
+    assert not zero, (
+        "기울기가 통째로 0 인 케이스: " + ", ".join(zero) + "\n"
+        "도함수가 진짜 0 이면 `ZERO_ON_PURPOSE` 에 이유와 함께 적고, 아니면 "
+        "케이스 배선을 보라 — 접는 가중치에 0 이 섞이면 이렇게 된다."
+    )
+
+
 def test_the_deliberate_list_does_not_rot():
     """**적어 둔 것이 실제로 같은지도 본다.**
 

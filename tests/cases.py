@@ -537,8 +537,12 @@ def grad_cases(inp=None):
     unary("SiLU(층)", lambda L, x: L.nn.SiLU()(x))
     unary("Identity", lambda L, x: L.nn.Identity()(x))
     unary("Unflatten", lambda L, x: L.nn.Unflatten(0, (3, 2))(x))
-    binary("L1Loss(층)", lambda L, a, b: L.nn.L1Loss()(a, b), "a")
-    binary("SmoothL1Loss(층)", lambda L, a, b: L.nn.SmoothL1Loss()(a, b), "a")
+    # **손실은 두 자리에 다른 값을 줘야 한다.** `binary` 의 기본값이 양쪽 다 `x1`
+    # 이라 `l1_loss(x, x)` 처럼 예측과 표적이 같았고, 그러면 기울기가 **전부 0** 이다 —
+    # 부호가 뒤집힌 구현도, 개수로 안 나눈 구현도 0 을 낸다. 굳은 답이 한 값뿐인
+    # 케이스를 세다가 여덟 자리가 그렇게 걸렸다.
+    binary("L1Loss(층)", lambda L, a, b: L.nn.L1Loss()(a, b), "a", x1, -x1)
+    binary("SmoothL1Loss(층)", lambda L, a, b: L.nn.SmoothL1Loss()(a, b), "a", x1, xp)
     binary("BCEWithLogitsLoss", lambda L, a, b: L.nn.BCEWithLogitsLoss()(a, b), "a")
 
     # Embedding — 같은 번호가 여러 번 나오면 그 행에 기울기가 **쌓여야** 한다.
@@ -570,10 +574,11 @@ def grad_cases(inp=None):
         binary("maximum", lambda L, a, b: L.maximum(a, b), which, x1, -x1)
         binary("minimum", lambda L, a, b: L.minimum(a, b), which, x1, -x1)
         binary("matmul", lambda L, a, b: a @ b, which, x2, x2.T.copy())
-        binary("l1_loss", lambda L, a, b: L.nn.functional.l1_loss(a, b), which)
-        binary("mse_loss", lambda L, a, b: L.nn.functional.mse_loss(a, b), which)
+        # **예측과 표적을 다르게 준다** — 같으면 기울기가 전부 0 이라 아무것도 안 묻는다.
+        binary("l1_loss", lambda L, a, b: L.nn.functional.l1_loss(a, b), which, x1, -x1)
+        binary("mse_loss", lambda L, a, b: L.nn.functional.mse_loss(a, b), which, x1, xp)
         binary("smooth_l1_loss",
-               lambda L, a, b: L.nn.functional.smooth_l1_loss(a, b), which)
+               lambda L, a, b: L.nn.functional.smooth_l1_loss(a, b), which, x1, xp)
         binary("cosine_similarity",
                lambda L, a, b: L.nn.functional.cosine_similarity(a, b), which, x2, x2 * 2)
 
@@ -8564,12 +8569,19 @@ def edge_cases(inp=None):
         cases.append((EDGE_PREFIX + name, fn))
 
     def grad(name, fn, arr, which=0):
-        """자리마다 다른 가중치로 접는다 — 균일하게 접으면 꺾인 자리가 묻힌다."""
+        """자리마다 다른 가중치로 접는다 — 균일하게 접으면 꺾인 자리가 묻힌다.
+
+        **가중치가 1 부터다.** `arange` 로 시작했더니 첫 자리의 몫이 0 이었고, 출력이
+        한 칸인 케이스는 그 하나가 전부라 **기울기가 통째로 0** 이 됐다. 균일 접기를
+        피하려고 넣은 장치가 그 케이스를 아무것도 안 묻는 상태로 만든 것이다 —
+        `edge::grad::max(동점)` 이 `[0,1,0,0]` 대신 `[0,0,0,0]` 을 굳히고 있었고,
+        기울기를 아예 안 흘리는 구현도 통과했다.
+        """
         def run(L, f=fn, a=arr, n=name, w=which):
             leaves = [L.tensor(x.copy(), requires_grad=True) for x in a]
             out = f(L, *leaves)
             if out.shape:
-                out = out * L.arange(out.numel()).reshape(out.shape).float()
+                out = out * (L.arange(out.numel()).reshape(out.shape).float() + 1)
             out.sum().backward()
             return _grad_of(leaves[w], n)
         cases.append((EDGE_PREFIX + "grad::" + name, run))
@@ -8642,7 +8654,7 @@ def edge_cases(inp=None):
     def pooled_tie(L):
         x = L.tensor(tied_img.copy(), requires_grad=True)
         out = L.nn.functional.max_pool2d(x, 2)
-        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        (out * (L.arange(out.numel()).reshape(out.shape).float() + 1)).sum().backward()
         return _grad_of(x, "max_pool2d(동점)")
 
     cases.append((EDGE_PREFIX + "grad::max_pool2d(동점)", pooled_tie))

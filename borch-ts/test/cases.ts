@@ -939,8 +939,11 @@ function addEdge(out: Map<string, Case>): void {
   const dup = [1, 3, 2, 3];
 
   const set = (name: string, fn: Case): void => { out.set(`edge::${name}`, fn); };
+  // **가중치가 1 부터다.** 0 부터면 첫 자리의 몫이 0 이고, 출력이 한 칸인 케이스는
+  // 그 하나가 전부라 **기울기가 통째로 0** 이 된다 — 균일 접기를 피하려는 장치가
+  // 그 케이스를 아무것도 안 묻는 상태로 만든다.
   const seed = (t: Tensor): Tensor =>
-    t.mul(Tensor.from([...Array(t.size).keys()], t.shape));
+    t.mul(Tensor.from([...Array(t.size).keys()].map((i) => i + 1), t.shape));
 
   const grad = (name: string, src: readonly number[],
                 fn: (x: Tensor) => Tensor): void => {
@@ -4567,9 +4570,11 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     ["maximum", (a, b) => a.binary("maximum", b), () => [x1(true), asLeaf(x1().neg())]],
     ["minimum", (a, b) => a.binary("minimum", b), () => [x1(true), asLeaf(x1().neg())]],
     ["matmul", (a, b) => a.mm(b), () => [x2(true), asLeaf(x2().transpose())]],
-    ["l1_loss", (a, b) => a.l1Loss(b), () => [x1(true), x1(true)]],
-    ["mse_loss", (a, b) => a.mseLoss(b), () => [x1(true), x1(true)]],
-    ["smooth_l1_loss", (a, b) => a.smoothL1Loss(b), () => [x1(true), x1(true)]],
+    // **예측과 표적을 다르게 준다.** 같으면 기울기가 전부 0 이라 부호가 뒤집힌
+    // 구현도, 개수로 안 나눈 구현도 통과한다.
+    ["l1_loss", (a, b) => a.l1Loss(b), () => [x1(true), asLeaf(x1().neg())]],
+    ["mse_loss", (a, b) => a.mseLoss(b), () => [x1(true), xp(true)]],
+    ["smooth_l1_loss", (a, b) => a.smoothL1Loss(b), () => [x1(true), xp(true)]],
     ["cosine_similarity", (a, b) => a.cosineSimilarity(b),
       () => [x2(true), asLeaf(x2().binary("mul", Tensor.full([], 2)))]],
   ];
@@ -4665,8 +4670,9 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   weighted("median(dim)", () => [mat(true)], (x) => x.median(1).values);
 
   // 골든이 이항 형태로 굳혔으므로 이름 뒤에 잎 표시가 붙는다.
-  one("L1Loss(층)/a", x1, (x) => x.l1Loss(inp.get("x1")));
-  one("SmoothL1Loss(층)/a", x1, (x) => x.smoothL1Loss(inp.get("x1")));
+  // **예측과 표적을 다르게 준다** — 같으면 기울기가 전부 0 이다.
+  one("L1Loss(층)/a", x1, (x) => x.l1Loss(inp.get("x1").neg()));
+  one("SmoothL1Loss(층)/a", x1, (x) => x.smoothL1Loss(inp.get("xp")));
   one("BCEWithLogitsLoss/a", x1, (x) => x.bceWithLogits(inp.get("x1")));
 
   // **형만 바꾼 자리에서 그래프가 끊긴 적이 있다.** 코어의 `.float()` 이 결과에
