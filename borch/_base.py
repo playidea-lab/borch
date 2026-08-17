@@ -58,6 +58,24 @@ def _refuses_bool(data, korean: str, torch_phrase: str, kind=RuntimeError):
         raise kind(_like_torch(korean, torch_phrase))
 
 
+def _refuses_nonfloat_kernel(data, name: str, kernel: str):
+    """torch 의 **커널 구멍**을 그대로 흉내 내는 자리.
+
+    규칙이 아니다 — `logsumexp` 는 정수를 받는데 `logcumsumexp` 는 안 받는다(실측).
+    torch 가 CPU 커널을 그 형으로 안 만들어 둔 것뿐이고, 그래서 `RuntimeError` 가
+    아니라 `NotImplementedError` 로 나온다.
+
+    **그래도 흉내 낸다.** 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨지고,
+    관대한 것도 갈리는 것이다. 커널 이름을 문구에 넣는 것은 torch 가 그렇게 하기
+    때문이고, 검색이 통하는 쪽이 그 문구다.
+    """
+    if data.dtype.kind not in "fc":
+        raise NotImplementedError(_like_torch(
+            f"{name} 은(는) 실수에만 있습니다. `.float()` 을 먼저 부르세요.",
+            f'"{kernel}" not implemented for '
+            f"'{_TYPE_NAMES.get(data.dtype.kind, data.dtype.name)}'"))
+
+
 # ---------------------------------------------------------------- dtype
 
 class dtype:

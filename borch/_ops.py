@@ -10,7 +10,7 @@ from ._tensor import (
 )
 from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _needs_float, _np, _refuses_bool,
-    _resolve, _unsupported, Size, dtype,
+    _refuses_nonfloat_kernel, _resolve, _unsupported, Size, dtype,
 )
 # **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
 # 그 이름을 쓰는 함수와 부딪힌다 — `bool` 을 그렇게 가려서 한 번 겪었다.
@@ -2680,6 +2680,10 @@ def _nan_mask(t):
 def nansum(t, dim=None, keepdim=False):
     """nan 을 **0 으로 세는** 합. 기울기도 그 자리로는 안 간다."""
     t = _wrap(t)
+    # **형을 지킨다.** `sum` 과 같은 규칙인데 `_nan_mask` 가 nan 을 다루려고 실수로
+    # 올려 버려서 정수·참거짓이 float64 로 나왔다. 정수엔 nan 이 없으므로 그대로 센다.
+    if t.data.dtype.kind not in "fc":
+        return t.sum(dim=dim, keepdim=keepdim)
     clean, bad = _nan_mask(t)
     return t._make(clean.sum(axis=dim, keepdims=keepdim), (t,),
                    lambda g: (_np.where(bad, 0.0, _expand_reduced(g, t.data.shape, dim, keepdim)),),
@@ -2689,6 +2693,10 @@ def nansum(t, dim=None, keepdim=False):
 def nanmean(t, dim=None, keepdim=False):
     """nan 을 **빼고** 낸 평균 — 세는 개수도 nan 이 아닌 것만이다."""
     t = _wrap(t)
+    _needs_float(
+        t.data,
+        "nanmean 은 실수에만 있습니다. `.float()` 을 먼저 부르세요.",
+        "nanmean(): expected input to have floating point or complex dtype")
     clean, bad = _nan_mask(t)
     count = (~bad).sum(axis=dim, keepdims=keepdim)
     total = clean.sum(axis=dim, keepdims=keepdim)
@@ -2810,8 +2818,18 @@ def diff(t, n=1, dim=-1):
     """이웃한 것의 차. `x[1:] - x[:-1]` 을 n 번 한다.
 
     **자르기로 짠다** — 자르기가 이미 그래프를 이으므로 역방향을 새로 쓸 것이 없다.
+
+    **참·거짓은 뺄셈이 아니라 XOR 이다.** torch 가 `[T, F, T]` 에서 `[T, T]` 를
+    주는데(실측) 그것은 이웃이 다른가를 묻는 것이다. 여기서는 `-` 가 불리언을 거절해
+    아예 멈추고 있었다 — 인색한 것도 갈리는 것이다.
     """
     out = _wrap(t)
+    if out.data.dtype.kind == "b":
+        data = out.data
+        for _ in range(n):
+            data = _np.logical_xor(data.take(_np.arange(1, data.shape[dim]), axis=dim),
+                                   data.take(_np.arange(0, data.shape[dim] - 1), axis=dim))
+        return Tensor(data)
     axis = dim % out.data.ndim
     for _ in range(n):
         length = out.data.shape[axis]
@@ -2827,6 +2845,10 @@ def dist(a, b, p=2):
 def quantile(t, q, dim=None, keepdim=False):
     """분위수. torch 의 기본은 **선형 보간**이고 numpy 와 같다."""
     t = _wrap(t)
+    _needs_float(
+        t.data,
+        "분위수는 실수에만 있습니다 — 보간이 정수 칸에 안 들어갑니다.",
+        "quantile() input tensor must be either float or double dtype")
     qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
     out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim)
     return Tensor(_np.asarray(out, dtype=t.data.dtype))
@@ -3971,8 +3993,12 @@ def isfinite(t):
 
 
 def bincount(t):
+    t = _wrap(t)
+    _refuses_bool(t.data, "bincount 는 참거짓을 받지 않습니다.",
+                  '"bincount_cpu" not implemented for \'Bool\'',
+                  kind=NotImplementedError)
     # `intp` 다 — wasm32 에서 int64 를 주면 거절한다. 위 `repeat_interleave` 참고.
-    return Tensor(_np.bincount(_wrap(t).data.astype(_np.intp)))
+    return Tensor(_np.bincount(t.data.astype(_np.intp)))
 
 
 def _to_plain(obj):
@@ -5577,6 +5603,9 @@ def frexp(x):
 def logcumsumexp(x, dim):
     """누적 `logsumexp`. **넘치지 않게** 센다 — 큰 값을 빼고 더한 뒤 되돌린다."""
     x = _wrap(x)
+    # **`logsumexp` 는 정수를 받는데 이쪽은 안 받는다**(실측). 규칙이 아니라 torch 의
+    # 커널 구멍이지만, 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨진다.
+    _refuses_nonfloat_kernel(x.data, "logcumsumexp", "logcumsumexp_out_cpu")
     data = x.data
     big = _np.max(data, axis=dim, keepdims=True)
     shifted = _np.exp(data - big)
@@ -6674,6 +6703,9 @@ def nanmedian(t, dim=None, keepdim=False):
     짝수 개면 **아래를 고른다** — 평균을 내지 않는다.
     """
     t = _wrap(t)
+    _refuses_bool(t.data, "nanmedian 은 참거짓을 받지 않습니다.",
+                  '"median_cpu" not implemented for \'Bool\'',
+                  kind=NotImplementedError)
     data = _np.asarray(t.data, dtype=_np.float64)
     if dim is None:
         clean = data.reshape(-1)

@@ -53,6 +53,27 @@ OPS = [
     ("var", lambda t: t.var()),
     ("std", lambda t: t.std()),
     ("norm", lambda t: t.norm()),
+    # ── 표 밖에 있던 것들 ────────────────────────────────────────────────
+    #
+    # 처음 굳힌 열아홉으로는 부족했다. **묻지 않은 자리는 안 맞는다** — 아래 열넷을
+    # 재보니 열 자리가 갈렸고, 갈래는 위와 같은 둘이었다(torch 가 멈추는데 우리가
+    # 근사한다 / 우리가 멈추는데 torch 가 답한다) 더하기 numpy 의 float64 누출.
+    ("nansum", lambda t: t.nansum()),
+    ("nanmean", lambda t: t.nanmean()),
+    ("nanmedian", lambda t: t.nanmedian()),
+    ("logcumsumexp", lambda t: t.logcumsumexp(0)),
+    ("quantile", lambda t: t.quantile(0.5)),
+    ("bincount", lambda t: t.bincount()),
+    ("diff", lambda t: t.diff()),
+    # 값과 색인을 같이 내는 것들. **둘의 형이 따로 논다** — `bool.sort()` 는
+    # `bool + int64` 다.
+    ("cummax", lambda t: t.cummax(0)),
+    ("cummin", lambda t: t.cummin(0)),
+    ("aminmax", lambda t: t.aminmax()),
+    ("mode", lambda t: t.mode()),
+    ("sort", lambda t: t.sort()),
+    ("topk", lambda t: t.topk(2)),
+    ("median(dim=0)", lambda t: t.median(dim=0)),
 ]
 
 # **둘 다 물어야 한다.** int64 만 물으면 "형을 지킨다" 와 "bool 을 올린다" 가 같아
@@ -63,6 +84,22 @@ KINDS = [
 ]
 
 
+def name_of(out):
+    """형 이름. 값·색인을 같이 내는 것은 **둘 다** 적는다 — 한쪽만 보면 갈림이 숨는다.
+
+    torch 는 `return_types.sort` 같은 네임드튜플을, 코어는 자기 래퍼를 준다. 둘 다
+    `.values`/`.indices` 를 갖지만 **평범한 텐서도 `.values` 를 갖는다**(희소용) —
+    그것으로 가리면 모든 텐서가 튜플로 읽힌다. 실제로 한 번 그렇게 재서 스물다섯
+    자리가 갈린 것처럼 나왔다.
+    """
+    if isinstance(out, tuple) or hasattr(out, "_fields"):
+        return " + ".join(name_of(x) for x in tuple(out))
+    if type(out).__name__ in ("_MinMax", "mode", "_Mode"):
+        return f"{name_of(out.values)} + {name_of(out.indices)}"
+    return str(out.dtype).replace("torch.", "") if hasattr(out, "dtype") \
+        else type(out).__name__
+
+
 def answer(lib, values, as_int, fn):
     """형 이름, 또는 거절했으면 `"거절"`. **거절도 답이다.**"""
     try:
@@ -70,8 +107,7 @@ def answer(lib, values, as_int, fn):
         out = fn(t)
     except Exception:                                           # noqa: BLE001
         return "거절"
-    return str(out.dtype).replace("torch.", "") if hasattr(out, "dtype") \
-        else type(out).__name__
+    return name_of(out)
 
 
 @pytest.mark.parametrize("op,fn", OPS, ids=[n for n, _ in OPS])

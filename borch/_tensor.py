@@ -835,6 +835,12 @@ class Tensor:
 
     def bincount(self):
         # `intp` 다 — wasm32 에서 int64 를 주면 거절한다. `_ops.repeat_interleave` 참고.
+        # **참·거짓은 거절한다** — torch 가 `"bincount_cpu" not implemented for
+        # 'Bool'` 로 멈춘다(실측). `_ops.bincount` 에도 같은 가드가 있는데 메서드가
+        # 그 문을 안 지나고 numpy 를 직접 부르고 있었다 — 두 벌은 이렇게 갈린다.
+        _refuses_bool(self.data, "bincount 는 참거짓을 받지 않습니다.",
+                      '"bincount_cpu" not implemented for \'Bool\'',
+                      kind=NotImplementedError)
         return Tensor(_np.bincount(self.data.astype(_np.intp)))
 
 
