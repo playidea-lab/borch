@@ -662,7 +662,44 @@ class Tensor:
                           lambda g: (_np.transpose(g, inv),))
 
     def contiguous(self):
-        return self
+        """**`self` 를 그냥 돌려주고 있었다.** 이미 연속이면 그것이 맞지만 아니면
+        틀리다 — 전치한 뒤 불러도 여전히 비연속이었고, 그래서 `is_contiguous()` 가
+        torch 와 반대 답을 낸다. 기울기는 항등이다.
+        """
+        if self.data.flags["C_CONTIGUOUS"]:
+            return self
+        return self._make(_np.ascontiguousarray(self.data), (self,),
+                          lambda g: (_np.asarray(g),), "CloneBackward0")
+
+    # ── 묻는 것 넷 ────────────────────────────────────────────────────────
+    #
+    # 넷 다 **torch 에서 실제로 거짓이 나온다** — 그것을 먼저 재고 넣었다. 늘 참인
+    # 술어는 우리 구현을 굳히는 것뿐이라 케이스로 물어도 묻는 게 아니다.
+    #
+    # `is_contiguous` 는 우리에게도 뜻이 있다. numpy 가 전치·permute·성긴 슬라이스를
+    # **뷰**로 주므로 그 자리에서 거짓이 되고, torch 와 같은 답이다. 브라우저 쪽은
+    # 뷰를 안 만들어서 늘 참인데, 그것은 이 술어의 이야기가 아니라 **뷰의 이야기**다.
+
+    def is_floating_point(self):
+        return bool(self.data.dtype.kind == "f")
+
+    def is_signed(self):
+        """참거짓과 부호 없는 정수만 거짓이다 — 실수·정수·복소수는 참."""
+        return bool(self.data.dtype.kind in "fci")
+
+    def is_contiguous(self):
+        return bool(self.data.flags["C_CONTIGUOUS"])
+
+    def is_nonzero(self):
+        """**원소가 하나여야 한다.** 여럿이면 torch 가 "모호하다" 로 멈춘다 —
+        `if tensor:` 가 조용히 첫 원소를 보는 일을 막는 자리다."""
+        if self.data.size != 1:
+            raise RuntimeError(_like_torch(
+                f"값이 {self.data.size}개인 텐서의 참거짓은 모호합니다.",
+                "Boolean value of Tensor with "
+                f"{'no values' if self.data.size == 0 else 'more than one value'}"
+                " is ambiguous"))
+        return bool(self.data.reshape(-1)[0] != 0)
 
     def flatten(self, start_dim=0):
         shape = self.data.shape[:start_dim] + (-1,)

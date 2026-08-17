@@ -268,6 +268,37 @@ class Tensor:
         """`other` 의 형으로 맞춘다. 코어에도 없던 이름이라 양쪽에 같이 넣었다."""
         return self.to(other.dtype if isinstance(other, Tensor) else other)
 
+    # ── 묻는 것 넷 ────────────────────────────────────────────────────────
+    #
+    # 셋은 형과 값에서 바로 나온다. 넷째(`is_contiguous`)만 성격이 다르다 —
+    # **여기는 뷰가 없어서 늘 참이다.** 그것은 이 술어의 이야기가 아니라 뷰의
+    # 이야기이고, 뷰 전파를 거절하는 자리와 같은 뿌리다. 코어는 numpy 가 전치를
+    # 뷰로 주므로 거기서 거짓이 되고, 그 갈림을 골든에 따로 굳혀 뒀다.
+
+    def is_floating_point(self):
+        return self.dtype.plain in ("float32", "float64")
+
+    def is_signed(self):
+        return self.dtype.plain not in ("bool", "uint8")
+
+    def is_nonzero(self):
+        if self.numel() != 1:
+            raise RuntimeError(
+                f"값이 {self.numel()}개인 텐서의 참거짓은 모호합니다. "
+                "(torch: Boolean value of Tensor with "
+                f"{'no values' if self.numel() == 0 else 'more than one value'}"
+                " is ambiguous)")
+        return bool(self.item() != 0)
+
+    def is_contiguous(self):
+        """**늘 참이다** — GPU 버퍼를 뷰로 나눠 갖지 않으므로 비연속이 될 자리가
+        없다. 코어는 numpy 뷰 때문에 전치 뒤 거짓이 된다."""
+        return True
+
+    def contiguous(self):
+        """이미 연속이라 자기를 돌려준다. 코어에서는 비연속이면 옮겨 담는다."""
+        return self
+
     def cfloat(self):
         """complex64. **이름표 갈이가 아니다** — borch.ts 는 복소수를 `[re, im]`
         엇갈이로 저장하므로 칸 수가 두 배다. 허수부 0 을 붙여 진짜로 만든다."""

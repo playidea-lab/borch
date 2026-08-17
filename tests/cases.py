@@ -7724,6 +7724,22 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "뷰 전파=브라우저는거절",
                   _as_expected(view_propagates)))
 
+    # **같은 뿌리에서 나오는 둘째 갈림.** 뷰가 없으면 비연속이 될 자리도 없어서
+    # `is_contiguous()` 가 브라우저에서 늘 참이다. 코어는 numpy 가 전치를 뷰로 주므로
+    # torch 처럼 거짓이 된다.
+    #
+    # 거절이 아니라 **다른 값**이라 `_as_expected` 로는 못 담는다 — 어느 쪽인지를
+    # 값으로 답한다. `from_numpy` 의 공유와 같은 꼴이다.
+    def transposed_is_not_contiguous(L):
+        got = L.tensor(plain.reshape(2, 2).copy()).t().is_contiguous()
+        views = not hasattr(L, "backend")       # 브라우저 쪽만 뷰가 없다
+        if got == (not views):
+            return "기대대로"
+        return "뜻밖에 연속" if got else "뜻밖에 비연속"
+
+    cases.append((INPLACE_PREFIX + "전치는 비연속=브라우저는뷰가없다",
+                  transposed_is_not_contiguous))
+
     # 잎에 기울기가 켜져 있으면 **양쪽 다** 거절한다.
     def leaf_refuses(L):
         x = L.tensor(plain, requires_grad=True)
@@ -8573,6 +8589,34 @@ def dtype_cases(inp=None):
     for name in ("half", "bfloat16", "chalf", "cdouble", "byte", "char",
                  "short", "int"):
         we_refuse(name, lambda L, n=name: getattr(L.tensor(floats), n)())
+
+    # ── 묻는 것 셋 — **거짓이 나오는 입력을 먼저 쟀다** ──────────────────
+    #
+    # 늘 참인 술어는 케이스로 물어도 묻는 게 아니다. 넷 중 셋은 형과 값에서 답이
+    # 나오고 torch 에서 실제로 거짓이 나온다. 넷째(`is_contiguous`)는 브라우저에
+    # 뷰가 없어서 갈리므로 `inplace::` 의 뷰 자리 옆에 뒀다.
+    for label, call in (
+        ("is_floating_point(float32)", lambda L: L.tensor(floats).is_floating_point()),
+        ("is_floating_point(int64)", lambda L: L.tensor(ints).is_floating_point()),
+        ("is_floating_point(bool)", lambda L: L.tensor(flags).is_floating_point()),
+        ("is_signed(float32)", lambda L: L.tensor(floats).is_signed()),
+        ("is_signed(int64)", lambda L: L.tensor(ints).is_signed()),
+        ("is_signed(bool)", lambda L: L.tensor(flags).is_signed()),
+        ("is_nonzero(0)", lambda L: L.tensor(np.zeros(1, dtype=np.float32)).is_nonzero()),
+        ("is_nonzero(3)", lambda L: L.tensor(np.full(1, 3.0, dtype=np.float32)).is_nonzero()),
+    ):
+        cases.append((f"dtype::묻는것::{label}",
+                      lambda L, f=call: str(f(L))))
+
+    # 여럿이면 멈춘다 — `if tensor:` 가 조용히 첫 원소를 보는 일을 막는 자리다.
+    def nonzero_many(L):
+        try:
+            L.tensor(floats).is_nonzero()
+        except Exception as exc:                                # noqa: BLE001
+            return "멈췄다" if "ambiguous" in str(exc) else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    cases.append(("dtype::묻는것::is_nonzero(여럿)은 멈춘다", nonzero_many))
 
     # `double` 은 **일부러 갈린다** — 코어에는 float64 가 있고 브라우저 쪽에는
     # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.
