@@ -2594,8 +2594,10 @@ def movedim(t, source, destination):
 
 # ---------------------------------------------------------------- 축약(추가)
 
-def prod(t, dim=None, keepdim=False):
+def prod(t, dim=None, keepdim=False, dtype=None):
     t = _wrap(t)
+    if dtype is not None:
+        return prod(t.to(dtype), dim, keepdim).to(dtype)
     out = _np.prod(t.data, axis=dim, keepdims=bool(keepdim) and dim is not None)
     # 역방향은 접기 전 모양으로 편다 — `keepdim` 이면 축이 이미 살아 있어 그대로다.
     wide = out if keepdim or dim is None else _np.expand_dims(out, dim)
@@ -2716,9 +2718,11 @@ def _nan_mask(t):
     return _np.where(bad, 0.0, t.data), bad
 
 
-def nansum(t, dim=None, keepdim=False):
+def nansum(t, dim=None, keepdim=False, dtype=None):
     """nan 을 **0 으로 세는** 합. 기울기도 그 자리로는 안 간다."""
     t = _wrap(t)
+    if dtype is not None:
+        return nansum(t.to(dtype), dim, keepdim).to(dtype)
     # **형을 지킨다.** `sum` 과 같은 규칙인데 `_nan_mask` 가 nan 을 다루려고 실수로
     # 올려 버려서 정수·참거짓이 float64 로 나왔다. 정수엔 nan 이 없으므로 그대로 센다.
     if t.data.dtype.kind not in "fc":
@@ -2729,8 +2733,13 @@ def nansum(t, dim=None, keepdim=False):
                    "NansumBackward0")
 
 
-def nanmean(t, dim=None, keepdim=False):
-    """nan 을 **빼고** 낸 평균 — 세는 개수도 nan 이 아닌 것만이다."""
+def nanmean(t, dim=None, keepdim=False, dtype=None):
+    """nan 을 **빼고** 낸 평균 — 세는 개수도 nan 이 아닌 것만이다.
+
+    **`dtype=` 이 정수 거절을 안 풀어 준다.** `mean` 은 풀어 주는데 이쪽은 안 풀린다
+    (실측: `torch.tensor([3,1,4]).nanmean(dtype=torch.float32)` 이 멈춘다). 규칙이
+    아니라 torch 의 비대칭이고, 관대한 쪽으로 갈리는 것도 갈리는 것이라 따라간다.
+    """
     t = _wrap(t)
     _needs_float(
         t.data,
@@ -2746,7 +2755,8 @@ def nanmean(t, dim=None, keepdim=False):
         n = _expand_reduced(count, t.data.shape, dim, keepdim) if dim is not None else count
         return (_np.where(bad, 0.0, gg / n),)
 
-    return t._make(out, (t,), back, "NanmeanBackward0")
+    got = t._make(out, (t,), back, "NanmeanBackward0")
+    return got if dtype is None else got.to(dtype)
 
 
 def _expand_reduced(g, shape, dim, keepdim):
@@ -2909,15 +2919,40 @@ def argwhere(t):
     return nonzero(t)
 
 
-def cumsum(t, dim):
+def _no_bool_accumulate(name, dt):
+    """누적에 `dtype=bool` 은 torch 가 거절한다(실측 — `NotImplementedError` 다).
+
+    **`sum(dtype=bool)` 은 되는데 `cumsum(dtype=bool)` 은 안 된다.** 규칙이 아니라
+    torch 가 그 커널을 안 만든 것이고, 관대한 쪽으로 갈리는 것도 갈리는 것이라
+    따라간다 — 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨진다.
+    """
+    plain = getattr(dt, "np", dt)
+    if _np.dtype(plain) == _np.bool_:
+        raise NotImplementedError(_like_torch(
+            f"{name} 은 결과 형이 참거짓일 수 없습니다.",
+            f'"{name}_out_cpu" not implemented for \'Bool\''))
+
+
+def cumsum(t, dim, dtype=None):
     t = _wrap(t)
+    if dtype is not None:
+        # **넣기 전에 바꾼다.** 실측: 실수 `[1.7, −2.3, 0.9]` 에 `dtype=int64` 를 주면
+        # `[1, −1, −1]` 이다 — 먼저 깎은 `[1, −2, 0]` 의 누적합이다. 접고 나서
+        # 깎으면 `[1, 0, 0]` 이 나온다.
+        _no_bool_accumulate("cumsum", dtype)
+        return cumsum(t.to(dtype), dim).to(dtype)
     return t._make(_np.cumsum(t.data, axis=dim), (t,),
                    lambda g: (_np.flip(_np.cumsum(_np.flip(_np.asarray(g), dim), axis=dim), dim),),
                    "CumsumBackward0")
 
 
-def cumprod(t, dim):
+def cumprod(t, dim, dtype=None):
     """누적 곱. 역방향을 **나눗셈 없이** 쓴다.
+
+    **`dtype` 을 인자로 안 적고 몸통에만 썼다가 무한 재귀가 났다.** 이 파일이
+    `_base` 의 `dtype` 을 전역으로 들여오고 있어서, 없는 인자가 **참인 전역**으로
+    잡혔다 — `NameError` 가 아니라 `RecursionError` 로 나온다. 이름을 가리는 것이
+    이 저장소에서 열한 번째 자리다.
 
     흔한 유도는 `dL/dx_k = (1/x_k) * sum_{j>=k} g_j y_j` 인데, 입력에 0 이 있으면
     거기서 나눗셈이 터져 조용히 `nan` 이 흐른다. 예외도 안 난다. 그래서 각 k 마다
@@ -2925,6 +2960,9 @@ def cumprod(t, dim):
     안쪽이 아니고, **0 이 섞였을 때 답이 맞는 쪽**이 이 저장소의 기준이다.
     """
     t = _wrap(t)
+    if dtype is not None:
+        _no_bool_accumulate("cumprod", dtype)
+        return cumprod(t.to(dtype), dim).to(dtype)
     out = _np.cumprod(t.data, axis=dim)
 
     def back(g):

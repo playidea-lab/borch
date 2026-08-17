@@ -1425,11 +1425,36 @@ export class Tensor implements Node<Tensor> {
     return this.reduceOver("min", dim, keepdim);
   }
 
-  sumDim(dim: number, keepdim = false): Tensor {
+  sumDim(dim: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) return this.castFirst(dtype).sumDim(dim, keepdim).to(dtype);
     return this.reduceOver("sum", dim, keepdim);
   }
 
-  mean(dim?: number, keepdim = false): Tensor {
+  /**
+   * `dtype=` 를 받은 축약이 맨 앞에서 부른다.
+   *
+   * **규칙 한 줄이다: 넣기 전에 바꾼다.** 접고 나서가 아니다 — 실측이 그 둘을
+   * 가른다: `[1.7, −2.3, 0.9].sum(dtype=int64)` 이 `−1` 이다. 먼저 접으면 `0.3`
+   * 이라 깎아도 `0` 인데, 먼저 깎으면 `[1, −2, 0]` 이라 합이 `−1` 이다.
+   *
+   * 결과 형도 마지막에 못 박는다 — 안 그러면 누적 규칙이 다시 올려서
+   * `sum(dtype=bool)` 이 int64 로 나온다(torch 는 `true` 다).
+   */
+  private castFirst(dtype: DType): Tensor {
+    return this.dtype === dtype ? this : this.to(dtype);
+  }
+
+  mean(dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      // **정수로 내리라는 것은 거절한다**(실측). `dtype=` 이 푸는 것은 **입력 쪽**
+      // 거절뿐이다 — 결과가 정수인 평균은 여전히 답이 없다.
+      if (dtype !== "float32" && dtype !== "complex64") {
+        throw new RuntimeError(
+          "mean(): could not infer output dtype. Input dtype must be either " +
+            "a floating point or complex dtype");
+      }
+      return this.castFirst(dtype).mean(dim, keepdim).to(dtype);
+    }
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
     // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
     // torch 에서 깨진다.
@@ -1538,7 +1563,8 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** NaN 을 0 으로 보고 더한다. NaN 자리로는 기울기가 안 간다. */
-  nansum(dim?: number, keepdim = false): Tensor {
+  nansum(dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) return this.castFirst(dtype).nansum(dim, keepdim).to(dtype);
     const clean = this.unary("nanToZero");
     return dim === undefined ? clean.sum() : clean.sumDim(dim, keepdim);
   }
@@ -2248,11 +2274,19 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** 축 하나를 누적한다. */
-  cumsum(dim = 0): Tensor {
+  cumsum(dim = 0, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      noBoolAccumulate("cumsum", dtype);
+      return this.castFirst(dtype).cumsum(dim).to(dtype);
+    }
     return this.scan("sum", dim);
   }
 
-  cumprod(dim = 0): Tensor {
+  cumprod(dim = 0, dtype?: DType): Tensor {
+    if (dtype !== undefined) {
+      noBoolAccumulate("cumprod", dtype);
+      return this.castFirst(dtype).cumprod(dim).to(dtype);
+    }
     return this.scan("prod", dim);
   }
 
@@ -2536,7 +2570,8 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** 전부 곱한다. */
-  prod(dim?: number, keepdim = false): Tensor {
+  prod(dim?: number, keepdim = false, dtype?: DType): Tensor {
+    if (dtype !== undefined) return this.castFirst(dtype).prod(dim, keepdim).to(dtype);
     if (dim === undefined) return this.flat().reduceOver("prod", 0, false);
     return this.reduceOver("prod", dim, keepdim);
   }
@@ -7268,13 +7303,35 @@ export class Tensor implements Node<Tensor> {
           "`Tensor.complex(re, im)`·`viewAsComplex()`·`real()` 로 오가라.",
       );
     }
+    // **정수·참거짓으로 갈 때는 값도 바꾼다.** 형이 이름표라는 것이 "아무 값이나
+    // 들어 있어도 된다" 는 뜻은 아니다 — torch 의 int64 텐서에는 정수가 들어 있다.
+    //
+    // 오래 이름만 갈고 있었다. `x.to("int64")` 뒤에도 버퍼에 `1.7` 이 남아서,
+    // 읽어 갈 때만 깎이고 **GPU 위의 산술은 소수로 계속됐다.** `sum(dtype=int64)`
+    // 케이스가 정확히 1 만큼 갈려서 드러났다 — torch 는 먼저 깎아 `−1` 인데
+    // 우리는 안 깎아 `0.3` 을 접고 그것을 깎아 `0` 이었다.
+    if (dtype === "int64" && this.dtype === "float32") {
+      // **0 쪽으로 깎는다**(실측: `−2.3 → −2`). `floor` 면 `−3` 이라 갈린다.
+      return this.unary("trunc").relabel(dtype);
+    }
+    if (dtype === "bool" && this.dtype !== "bool") {
+      return this.binary("ne", Tensor.full([], 0), "bool");
+    }
+    return this.relabel(dtype);
+  }
+
+  /**
+   * 값은 그대로 두고 이름표만 간다. **저장이 같은 형끼리만** 쓴다.
+   *
+   * `int64 → float32` 처럼 값이 이미 그 형의 것인 자리다. 기울기는 **끊지 않는다** —
+   * 코어에서 `.float()` 이 조용히 끊겨 있던 자리가 정확히 이것이다.
+   */
+  private relabel(dtype: DType): Tensor {
     const from = this.dtype;
     return Tensor.make(
       this.buffer,
       this.shape,
       [this],
-      // 형만 바뀐 것이라 기울기는 그대로 지난다. **끊지 않는다** — 코어에서
-      // `.float()` 이 조용히 끊겨 있던 자리가 정확히 이것이다.
       (g) => [new Tensor(g.buffer, this.shape, { dtype: from })],
       "ToCopyBackward0",
       dtype,
@@ -7297,6 +7354,19 @@ export class Tensor implements Node<Tensor> {
     }
     const arr = await this.toArray();
     return arr[0] ?? Number.NaN;
+  }
+}
+
+/**
+ * 누적에 `dtype: "bool"` 은 torch 가 거절한다(실측 — `NotImplementedError` 다).
+ *
+ * **`sum(dtype=bool)` 은 되는데 `cumsum(dtype=bool)` 은 안 된다.** 규칙이 아니라
+ * torch 가 그 커널을 안 만든 것이고, 관대한 쪽으로 갈리는 것도 갈리는 것이라
+ * 따라간다 — 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨진다.
+ */
+function noBoolAccumulate(name: string, dtype: DType): void {
+  if (dtype === "bool") {
+    throw new NotImplementedError(`"${name}_out_cpu" not implemented for 'Bool'`);
   }
 }
 

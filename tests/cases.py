@@ -1830,6 +1830,81 @@ def keepdim_cases(inp=None):
     grad("max(keepdim)", lambda L, t: t.max(dim=1, keepdim=True)[0])
     grad("median(keepdim)", lambda L, t: t.median(dim=1, keepdim=True)[0])
     grad("mean(keepdim)", lambda L, t: t.mean(dim=1, keepdim=True))
+
+    # ── `dtype=` ────────────────────────────────────────────────────────
+    #
+    # **규칙 한 줄이다: 넣기 전에 바꾼다.** 접고 나서가 아니다. 형만 물으면 두 순서가
+    # 구별이 안 되므로 **값도 묻는다** — 실수를 정수로 접는 자리가 그 둘을 가른다:
+    # `[1.7, −2.3, 0.9]` 의 합이 먼저 깎으면 −1, 나중에 깎으면 0 이다.
+    slant = np.array([1.7, -2.3, 0.9], dtype=np.float32)
+    counts = np.array([3, 1, 4], dtype=np.int64)
+    marks = np.array([True, False, True])
+
+    def dt(L, name):
+        """양쪽에서 같은 뜻의 형. **이름이 갈리는 것은 `bool` 뿐이다.**
+
+        코어의 모듈 전역 `bool` 은 형이 아니라 **`Tensor.bool` 을 함수로 낸 것**이다
+        (파이썬 내장을 가리지 않으려고 형은 `bool_` 로 두었다). 그것을 `dtype=` 에
+        넘기면 numpy 가 "함수를 형으로 못 읽는다" 로 멈춘다 — `_dtype_tensor` 가
+        같은 자리를 이미 이렇게 피하고 있다.
+        """
+        if name != "bool":
+            return getattr(L, name)
+        return getattr(L, "bool_", None) or getattr(L, "bool")
+
+    for src, arr in (("실수", slant), ("정수", counts), ("참거짓", marks)):
+        for want in ("float32", "int64"):
+            add(f"dtype::sum({src}→{want})",
+                lambda L, a=arr, w=want: L.tensor(a.copy()).sum(dtype=dt(L, w)))
+            add(f"dtype::sum({src}→{want}) 의 형",
+                lambda L, a=arr, w=want: str(
+                    L.tensor(a.copy()).sum(dtype=dt(L, w)).dtype))
+            add(f"dtype::cumsum({src}→{want})",
+                lambda L, a=arr, w=want: L.tensor(a.copy()).cumsum(0,
+                                                                  dtype=dt(L, w)))
+        # **`sum(dtype=bool)` 은 되는데 `cumsum(dtype=bool)` 은 안 된다** — 규칙이
+        # 아니라 torch 가 그 커널을 안 만든 것이라, 따로 묻지 않으면 안 보인다.
+        add(f"dtype::sum({src}→참거짓)",
+            lambda L, a=arr: L.tensor(a.copy()).sum(dtype=dt(L, "bool")))
+        add(f"dtype::prod({src}→float32)",
+            lambda L, a=arr: L.tensor(a.copy()).prod(dtype=dt(L, "float32")))
+    add("dtype::mean(정수→float32)",
+        lambda L: L.tensor(counts.copy()).mean(dtype=L.float32))
+    add("dtype::mean(참거짓→float32)",
+        lambda L: L.tensor(marks.copy()).mean(dtype=L.float32))
+    add("dtype::sum(dim=1→float32)",
+        lambda L: L.tensor(np.array([[1, 2], [3, 4]], dtype=np.int64)).sum(
+            dim=1, dtype=L.float32))
+    add("dtype::nansum(실수→int64)",
+        lambda L: L.nansum(L.tensor(slant.copy()), dtype=L.int64))
+
+    def refuses(name, body):
+        def run(L, f=body):
+            try:
+                f(L)
+                return "예외가 안 났다"
+            except Exception as exc:                            # noqa: BLE001
+                return type(exc).__name__
+
+        add(name, run)
+
+    # `dtype=` 이 **모든** 거절을 풀지는 않는다. 둘은 그대로다(실측).
+    refuses("dtype::mean(→int64)는 거절",
+            lambda L: L.tensor(slant.copy()).mean(dtype=L.int64))
+    refuses("dtype::cumsum(→참거짓)은 거절",
+            lambda L: L.tensor(counts.copy()).cumsum(0, dtype=dt(L, "bool")))
+    refuses("dtype::cumprod(→참거짓)은 거절",
+            lambda L: L.tensor(counts.copy()).cumprod(0, dtype=dt(L, "bool")))
+
+    # **`to` 가 형을 진짜 바꾼다.** 오래 장치 문자열만 보고 형을 조용히 버렸다.
+    add("dtype::to(float32) 의 형",
+        lambda L: str(L.tensor(counts.copy()).to(L.float32).dtype))
+    add("dtype::to(int64) 의 형",
+        lambda L: str(L.tensor(slant.copy()).to(L.int64).dtype))
+    add("dtype::to(int64) 의 값", lambda L: L.tensor(slant.copy()).to(L.int64))
+
+    grad("sum(dtype=float32)",
+         lambda L, t: t.sum(dim=1, keepdim=True, dtype=L.float32))
     return cases
 
 

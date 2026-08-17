@@ -18,8 +18,8 @@ import js as _js
 from pyodide.ffi import to_js as _to_js
 
 from ._base import (
-    LinAlgError as _LinAlgError, Tensor, _js_list, _js_options, _Size, guarded,
-    handle, settle, wrap,
+    LinAlgError as _LinAlgError, Tensor, _DType, _js_list, _js_options, _Size,
+    guarded, handle, settle, wrap,
 )
 
 _ts = _js.borch
@@ -76,9 +76,13 @@ _RENAME = {
 _SIGNATURE = {
     "clamp": ("min", "max"),
     "clip": ("min", "max"),
-    "sum": ("dim", "keepdim"),
-    "mean": ("dim", "keepdim"),
-    "prod": ("dim", "keepdim"),
+    # **`dtype` 이 셋째 자리다.** torch 의 서명 그대로다 — 넣기 전에 형을 바꾸라는
+    # 뜻이고, 그 순서가 값을 바꾼다(실수를 정수로 접을 때).
+    "sum": ("dim", "keepdim", "dtype"),
+    "mean": ("dim", "keepdim", "dtype"),
+    "prod": ("dim", "keepdim", "dtype"),
+    "nansum": ("dim", "keepdim", "dtype"),
+    "nanmean": ("dim", "keepdim", "dtype"),
     "amax": ("dim", "keepdim"),
     "amin": ("dim", "keepdim"),
     "var": ("dim", "keepdim"),
@@ -88,8 +92,8 @@ _SIGNATURE = {
     "argmin": ("dim", "keepdim"),
     "softmax": ("dim",),
     "log_softmax": ("dim",),
-    "cumsum": ("dim",),
-    "cumprod": ("dim",),
+    "cumsum": ("dim", "dtype"),
+    "cumprod": ("dim", "dtype"),
     "logcumsumexp": ("dim",),
     "mvlgamma": ("p",),
     "clamp_max": ("max",),
@@ -303,6 +307,11 @@ def _arg(a):
         return a._h
     if isinstance(a, (list, tuple)):
         return _js_list(a)
+    # **형 이름은 벗겨서 넘긴다.** `_DType` 은 `str` 을 물려받는데 그 `str()` 이
+    # `torch.float32` 라, 그대로 넘기면 borch.ts 가 모르는 이름을 받는다 —
+    # 저쪽은 `"float32"` 만 안다. 축약에 `dtype=` 이 붙으면서 처음 지나는 길이다.
+    if isinstance(a, _DType):
+        return a.plain
     return a
 
 
@@ -937,7 +946,7 @@ def squeeze(x, dim=None, **kw):
     return guarded(h.reshape, _js_list(keep))
 
 
-def sum(x, dim=None, keepdim=False, **kw):               # noqa: A001
+def sum(x, dim=None, keepdim=False, dtype=None, **kw):   # noqa: A001
     """borch.ts 는 전체 합(`sum()`)과 축 합(`sumDim`)을 **다른 이름**으로 둔다.
 
     이 자리가 조용히 틀렸다. `sum(dim=1)` 이 `sum()` 으로 가서 축을 무시한 스칼라를
@@ -945,7 +954,15 @@ def sum(x, dim=None, keepdim=False, **kw):               # noqa: A001
     """
     dim = kw.get("dim", dim)
     keepdim = kw.get("keepdim", keepdim)
+    dtype = kw.get("dtype", dtype)
     h = handle(x)
+    # **`dtype=` 는 전체 합에도 붙는다.** borch.ts 쪽 `sum()` 은 그 인자를 안 받으므로
+    # 여기서 앞뒤로 형을 바꿔 준다 — 규칙은 같다: 넣기 전에 바꾸고 결과도 못 박는다.
+    if dtype is not None:
+        name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
+        cast = wrap(guarded(h.to, name.replace("torch.", "")))
+        return wrap(guarded(handle(sum(cast, dim, keepdim)).to,
+                            name.replace("torch.", "")))
     if dim is None:
         return guarded(h.sum)
     return guarded(h.sumDim, dim, bool(keepdim))

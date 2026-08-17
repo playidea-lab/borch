@@ -123,21 +123,59 @@ def test_reduction_dtype_matches_torch(op, fn, kind, values, as_int):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="코어의 축약에 dtype= 인자가 아직 없다")
 def test_dtype_argument_beats_the_rule():
     """`dtype=` 를 주면 그것이 전부를 이긴다 — 규칙보다 위다.
 
-    **아직 없다.** 표를 뽑을 때 같이 나온 자리인데, 이것은 규칙을 어긴 것이 아니라
-    **기능이 없는 것**이라 성격이 다르다 — 위의 여섯 자리는 "torch 가 멈추는데 우리가
-    값을 낸다" 였고 이쪽은 "torch 가 받는 인자를 우리가 안 받는다" 다.
+    **`xfail(strict=True)` 로 걸려 있던 자리다.** 채우니 그 표시가 "예상 못 한
+    통과" 로 빨개져서 여기를 같이 고치라고 말했다 — 설계한 그대로 물었다.
 
-    `strict=True` 로 둔다. 누군가 `dtype=` 를 넣으면 **이 검사가 빨개져서** 표를 같이
-    고치라고 말한다 — 조용히 통과하면 없던 것이 생긴 줄 아무도 모른다.
+    규칙은 한 줄이다: **넣기 전에 바꾼다.** 접고 나서가 아니다. 실측이 그 둘을
+    가른다 — `[1.7, −2.3, 0.9].sum(dtype=int64)` 이 `−1` 이다. 먼저 접으면 `0.3`
+    이고 깎아도 `0` 인데, 먼저 깎으면 `[1, −2, 0]` 이라 합이 `−1` 이다.
     """
     for values in ([3, 1, 4], [True, False, True]):
         a = torch.tensor(values).sum(dtype=torch.float32).dtype
         b = borch.tensor(values).sum(dtype=borch.float32).dtype
         assert str(a) == str(b) == "torch.float32"
+    # **먼저 깎는다는 것**을 값으로 못 박는다. 형만 물으면 두 순서가 구별이 안 된다.
+    reals = [1.7, -2.3, 0.9]
+    assert torch.tensor(reals).sum(dtype=torch.int64).item() == -1
+    assert borch.tensor(reals).sum(dtype=borch.int64).item() == -1
+
+
+def test_dtype_argument_keeps_the_two_refusals_torch_keeps():
+    """`dtype=` 이 **모든** 거절을 푸는 것은 아니다 — 둘은 그대로다(실측).
+
+    `mean` 은 입력 쪽 거절만 풀린다. 정수 입력에 `dtype=float32` 는 돌지만
+    **결과가 정수인 평균**은 여전히 답이 없다. `cumsum`·`cumprod` 는 `dtype=bool`
+    을 torch 가 아예 안 만들었다 — `sum(dtype=bool)` 은 되는데도 그렇다.
+
+    관대한 쪽으로 갈리는 것도 갈리는 것이다. 여기서 값을 내주면 그 코드가 진짜
+    torch 에서 깨진다.
+    """
+    assert borch.tensor([3, 1, 4]).mean(dtype=borch.float32).item() == pytest.approx(
+        torch.tensor([3, 1, 4]).mean(dtype=torch.float32).item())
+    with pytest.raises(RuntimeError, match="could not infer output dtype"):
+        borch.tensor([1.5, 2.5]).mean(dtype=borch.int64)
+    with pytest.raises(NotImplementedError):
+        borch.tensor([1, 2, 3]).cumsum(0, dtype=borch.bool_)
+    with pytest.raises(NotImplementedError):
+        borch.tensor([1, 2, 3]).cumprod(0, dtype=borch.bool_)
+
+
+def test_to_actually_changes_the_dtype():
+    """`x.to(torch.float32)` 가 **형을 바꾼다.**
+
+    오래 안 바꿨다 — `to` 가 장치 문자열만 보고 나머지를 조용히 버렸다. 예외도
+    경고도 없이 원래 형 그대로였고, 정수 텐서에서는 그 뒤 나눗셈이 **정수
+    나눗셈으로** 갈렸다. 축약에 `dtype=` 를 붙이다가 드러났다 — 그쪽이 이 함수를
+    부르는데 형이 안 바뀌어서.
+    """
+    ints = borch.tensor([3, 1, 4], dtype=borch.int64)
+    assert str(ints.to(borch.float32).dtype) == "torch.float32"
+    assert str(ints.to(borch.int64).dtype) == "torch.int64"
+    # 장치 쪽은 그대로다 — 'cpu' 는 통과하고 다른 장치는 멈춘다.
+    assert str(ints.to("cpu").dtype) == "torch.int64"
 
 
 def test_the_line_is_accumulate_versus_select():

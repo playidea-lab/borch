@@ -376,10 +376,26 @@ class Tensor:
         return self._cast(target)
 
     def to(self, *args, **kwargs):
+        """장치와 **형** 둘 다 받는다. torch 의 `to` 가 그 둘을 한 이름에 담는다.
+
+        **오래 형을 조용히 버리고 있었다.** 장치 문자열만 보고 나머지는 무시한 채
+        `self` 를 돌려줬으므로 `x.to(torch.float32)` 가 아무 일도 안 했다 — 예외도
+        경고도 없이 원래 형 그대로다. 그 꼴이 교재 코드에 흔하고(`x.to(device)` 와
+        나란히 쓰인다), 정수 텐서에서는 그 뒤 나눗셈이 **정수 나눗셈으로 조용히**
+        갈린다. 축약에 `dtype=` 를 붙이다가 드러났다 — 그쪽이 이 함수를 부르는데
+        형이 안 바뀌어서.
+        """
+        target = None
         for a in list(args) + list(kwargs.values()):
-            if isinstance(a, str) and a != "cpu":
-                _unsupported(f"장치 '{a}'")
-        return self
+            if isinstance(a, str):
+                if a != "cpu":
+                    _unsupported(f"장치 '{a}'")
+                continue
+            if isinstance(a, Tensor):
+                target = a.data.dtype
+            elif a is not None and not isinstance(a, bool):
+                target = a
+        return self if target is None else self.type(target)
 
     def cpu(self):
         return self
@@ -709,12 +725,31 @@ class Tensor:
 
     # ---- 축약
 
+    def _cast_first(self, dtype):
+        """`dtype=` 를 받은 축약이 맨 앞에서 부른다. 안 주면 자기 자신이다.
+
+        **규칙 한 줄이다: 넣기 전에 바꾼다.** 접고 나서 바꾸는 것이 아니다 —
+        실측이 그것을 못 박는다:
+
+            torch.tensor([1.7, -2.3, 0.9]).sum(dtype=torch.int64)  →  -1
+
+        먼저 접으면 `0.3` 이고 그것을 정수로 깎아도 `0` 이다. 먼저 깎으면
+        `[1, -2, 0]` 이라 합이 `-1` 이다. 답이 갈리는 자리이고, 그래서 이 한 줄이
+        `dtype=` 의 정의다. 정수 입력에 `mean(dtype=float32)` 이 도는 것도 같은
+        이유다 — 거절하던 것은 **결과 형을 못 정해서**였고, 그것을 받았으니 돈다.
+        """
+        return self if dtype is None else self.to(dtype)
+
     def _reduce(self, fn, dim, keepdim, grad_fn, op=None):
         axis = dim
         out = fn(self.data, axis=axis, keepdims=keepdim)
         return self._make(out, (self,), lambda g: (grad_fn(g, axis, keepdim),), op)
 
-    def sum(self, dim=None, keepdim=False):
+    def sum(self, dim=None, keepdim=False, dtype=None):
+        if dtype is not None:
+            # **결과 형도 못 박는다.** 캐스팅만 하면 누적 규칙이 다시 올린다 —
+            # `sum(dtype=bool)` 이 int64 로 나온다(torch 는 `True` 다, 실측).
+            return self._cast_first(dtype).sum(dim, keepdim).to(dtype)
         shape = self.data.shape
 
         def back(g, axis, kd):
@@ -726,7 +761,17 @@ class Tensor:
         return self._reduce(_np.sum, dim, keepdim, back,
                             "SumBackward0" if dim is None else "SumBackward1")
 
-    def mean(self, dim=None, keepdim=False):
+    def mean(self, dim=None, keepdim=False, dtype=None):
+        if dtype is not None:
+            # **정수로 내리라는 것은 거절한다**(실측). `dtype=` 이 입력 쪽 거절은
+            # 풀어 주지만(정수 입력 + `dtype=float32` 는 돈다) 결과가 정수인 평균은
+            # 여전히 답이 없다 — 푸는 것은 **결과 형을 못 정하던 것**뿐이다.
+            _needs_float(
+                _np.empty(0, dtype=_np.dtype(getattr(dtype, "np", dtype))),
+                "평균의 결과 형은 실수여야 합니다.",
+                "mean(): could not infer output dtype. Input dtype must be either "
+                "a floating point or complex dtype")
+            return self._cast_first(dtype).mean(dim, keepdim).to(dtype)
         _needs_float(
             self.data,
             "평균은 실수에만 있습니다 — 정수·참거짓 칸에는 나눗셈의 답이 안 들어갑니다. "
