@@ -9,7 +9,8 @@ from ._tensor import (
     Tensor, _MinMax, _grad_mode, _unbroadcast,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _like_torch, _math, _np, _resolve, _unsupported, Size, dtype,
+    _DEFAULT_DTYPE, _like_torch, _math, _needs_float, _np, _refuses_bool,
+    _resolve, _unsupported, Size, dtype,
 )
 # **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
 # 그 이름을 쓰는 함수와 부딪힌다 — `bool` 을 그렇게 가려서 한 번 겪었다.
@@ -2582,6 +2583,12 @@ def median(t, dim=None):
     이쪽은 아니다. 둘을 나란히 묻는 케이스를 넣으면서 걸렸다.
     """
     t = _wrap(t)
+    # **참·거짓은 거절한다.** torch 가 `"median_cpu" not implemented for 'Bool'` 로
+    # 멈춘다(실측). 규칙이 아니라 torch 의 구멍이지만, 여기서 값을 내주면 그 코드가
+    # 진짜 torch 에서 깨진다 — 관대한 것도 갈리는 것이다.
+    _refuses_bool(t.data, "median 은 참거짓을 받지 않습니다.",
+                  '"median_cpu" not implemented for \'Bool\'',
+                  kind=NotImplementedError)
     if dim is None:
         flat = t.data.reshape(-1)
         if _np.isnan(flat).any():
@@ -2617,6 +2624,11 @@ def median(t, dim=None):
 
 def norm(t, p=2, dim=None):
     t = _wrap(t)
+    _needs_float(
+        t.data,
+        "노름은 실수에만 있습니다 — 제곱근이 정수 칸에 안 들어갑니다. "
+        "`.float()` 을 먼저 부르세요.",
+        "linalg.vector_norm: Expected a floating point or complex tensor as input")
     if p == 1:
         return t.abs().sum(dim=dim)
     return (t * t).sum(dim=dim) ** 0.5
@@ -2703,6 +2715,10 @@ def _expand_reduced(g, shape, dim, keepdim):
 def logsumexp(t, dim=None, keepdim=False):
     """`log(sum(exp(x)))` 를 **넘치지 않게** 센다 — 큰 값을 빼고 더한다."""
     t = _wrap(t)
+    # **정수·참거짓도 받고 float32 를 낸다**(실측). 그냥 두면 두 자리가 틀린다 —
+    # numpy 가 정수를 float64 로 올리고, 참거짓은 `-` 를 거절해 아래 뺄셈에서 멈춘다.
+    if t.data.dtype.kind not in "fc":
+        t = _wrap(t.data.astype(_DEFAULT_DTYPE))
     big = _np.max(t.data, axis=dim, keepdims=True)
     shifted = _np.exp(t.data - big)
     total = shifted.sum(axis=dim, keepdims=True)

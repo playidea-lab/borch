@@ -5,8 +5,8 @@ import math as _math
 import numpy as _np
 
 from ._base import (
-    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _like_torch, _np, _tensor_repr, _unsupported,
-    dtype, float32,
+    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _like_torch, _needs_float, _np,
+    _refuses_bool, _tensor_repr, _unsupported, dtype, float32,
 )
 
 # ---------------------------------------------------------------- Tensor
@@ -650,6 +650,12 @@ class Tensor:
                             "SumBackward0" if dim is None else "SumBackward1")
 
     def mean(self, dim=None, keepdim=False):
+        _needs_float(
+            self.data,
+            "평균은 실수에만 있습니다 — 정수·참거짓 칸에는 나눗셈의 답이 안 들어갑니다. "
+            "`.float()` 을 먼저 부르세요.",
+            "mean(): could not infer output dtype. Input dtype must be either "
+            "a floating point or complex dtype")
         shape = self.data.shape
         n = self.data.size if dim is None else shape[dim]
 
@@ -710,9 +716,13 @@ class Tensor:
         return self._argreduce(_np.min, _np.argmin, dim, keepdim)
 
     def argmax(self, dim=None):
+        _refuses_bool(self.data, "argmax 는 참거짓을 받지 않습니다.",
+                      "argmax(): does not support bool input")
         return Tensor(_np.argmax(self.data, axis=dim))
 
     def argmin(self, dim=None):
+        _refuses_bool(self.data, "argmin 은 참거짓을 받지 않습니다.",
+                      "argmin(): does not support bool input")
         return Tensor(_np.argmin(self.data, axis=dim))
 
     def var(self, dim=None, unbiased=True, keepdim=False):
@@ -722,6 +732,10 @@ class Tensor:
         분산을 손실에 끼우면 학습이 조용히 멈춘다. ROADMAP 11번이 topk·sort 에서
         잡은 것과 같은 종류인데, 여기는 검사가 없어서 남아 있었다.
         """
+        _needs_float(
+            self.data,
+            "분산·표준편차는 실수에만 있습니다. `.float()` 을 먼저 부르세요.",
+            "std and var only support floating point and complex dtypes")
         n = self.data.size if dim is None else self.data.shape[dim]
         mean = self.mean(dim=dim, keepdim=True) if dim is not None else self.mean()
         centered = self - mean

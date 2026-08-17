@@ -35,6 +35,29 @@ def _unsupported(what: str):
     )
 
 
+_TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float"}
+
+
+def _needs_float(data, korean: str, torch_phrase: str):
+    """**torch 가 멈추는 자리에서 우리도 멈춘다.**
+
+    평균·분산·노름은 나눗셈과 제곱근이라 정수 칸에 답이 안 들어간다. numpy 는 조용히
+    float64 로 올려 값을 내주는데, 그 값을 받은 사람은 torch 에서 같은 줄이 `RuntimeError`
+    로 멈추는 것을 나중에야 안다 — 이 저장소의 첫 줄이 거절하는 종류다.
+
+    빠져나가는 것이 numpy 쪽이라 자리마다 따로 막아야 한다. 한 곳에 모아 두면 어느
+    함수가 이 규칙 아래 있는지가 목록으로 보인다.
+    """
+    if data.dtype.kind not in "fc":
+        raise RuntimeError(_like_torch(korean, torch_phrase))
+
+
+def _refuses_bool(data, korean: str, torch_phrase: str, kind=RuntimeError):
+    """참·거짓만 거절하는 자리. `argmax`·`median` 이 그렇다(실측)."""
+    if data.dtype.kind == "b":
+        raise kind(_like_torch(korean, torch_phrase))
+
+
 # ---------------------------------------------------------------- dtype
 
 class dtype:
