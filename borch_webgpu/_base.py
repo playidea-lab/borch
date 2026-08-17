@@ -313,7 +313,11 @@ class Tensor:
                     # 통계 중 모듈 쪽에 손으로 쓴 것들 — 난수와 거절, 조립, 그리고
                     # 경계를 목록으로 주는 `histogramdd`.
                     "bernoulli", "stft", "istft", "hash_tensor", "trapz",
-                    "histogramdd"):
+                    "histogramdd",
+                    # 복소수의 이웃 — 항등이라 borch.ts 에 이름이 없다.
+                    "real", "conj", "conj_physical", "conj_physical_",
+                    "resolve_conj", "resolve_neg", "imag", "angle",
+                    "is_complex", "is_conj", "is_neg"):
             from . import _ops
             # **`max`·`min` 은 모듈 전역에 없다.** 그 이름을 `_ops` 에 두면 그 파일
             # 안에서 파이썬 내장을 가리고, `max(a, b)` 로 크기를 재던 자리가 텐서

@@ -1271,6 +1271,89 @@ def shape_index_cases(inp=None):
     return cases
 
 
+MAKE_PREFIX = "make::"
+
+
+def make_cases(inp=None):
+    """**복소수가 없어도 답이 있는 이름들**, 그리고 생성 몇.
+
+    ## 답할 수 있는 것과 없는 것은 다르다
+
+    복소수 규약을 안 정했다고 `is_complex` 까지 없으면, 그것을 분기에 쓰는 교재 코드가
+    `AttributeError` 로 멈춘다. 실수 텐서에서 이 이름들은 전부 답이 있다 —
+    `real`·`conj`·`resolve_conj` 는 **항등**이고, 판정 셋은 **전부 거짓**이며,
+    `angle` 은 음수에서 π 다.
+
+    `imag` 만 거절인데, 그것은 **torch 자신이 실수에서 거절하기 때문**이다(실측:
+    "imag is not implemented for tensors with non-complex dtypes"). 우리 한계가
+    아니라 torch 를 그대로 옮긴 것이다.
+
+    ## 무엇을 물어야 갈리는가
+
+    - **형을 셋으로 묻는다.** `real(bool)` 은 `bool` 이다(실측). 항등을 `positive` 의
+      단항 커널로 보내면 형이 float32 로 떨어지는데, float32 입력으로만 재면 그것이
+      안 보인다 — dtype 이름표 건에서 겪은 자리와 같다.
+    - **`angle` 은 그 반대다.** 정수를 넣어도 **float32** 가 나온다(실측). 각도는 정수
+      칸에 안 들어가므로 그것이 맞고, 실수만 넣으면 규칙이 안 드러난다.
+    - **`asarray` 는 안 베끼는 것이 기본이다.** `copy=True` 여야 사본이다(실측).
+    - **`frombuffer` 의 `offset` 은 바이트다** — 원소 수로 읽으면 값이 밀린다.
+    - **`range` 는 끝을 포함한다.** `arange` 는 뺀다 — `range(0, 4)` 가 다섯 개다.
+      조용히 `arange` 로 넘기면 원소가 하나 모자라고, 그것이 torch 가 이 이름을
+      폐기하는 사유이기도 하다.
+
+    ## 둘은 거절한다
+
+    `empty_strided`·`empty_permuted` 는 **걸음(stride) 자체가 유일한 답**인데(값은
+    쓰레기다) 우리 텐서에 걸음이라는 것이 없다. `as_strided` 와 다른 자리다 — 그쪽은
+    값이 답이라 사본으로도 같은 답을 낸다.
+    """
+    plain = np.array([[-1.5, 0.0, 2.0], [3.0, -4.0, 0.5]], dtype=np.float32)
+    ints = np.array([1, -2, 3], dtype=np.int64)
+    flags = np.array([True, False, True])
+    kinds = ((plain, "float32"), (ints, "int64"), (flags, "bool"))
+    cases = []
+
+    def add(name, fn):
+        cases.append((MAKE_PREFIX + name, fn))
+
+    # ── 항등 다섯 — **형까지 지켜야 한다** ──────────────────────────────
+    for name in ("real", "conj", "conj_physical", "resolve_conj", "resolve_neg"):
+        for src, tag in kinds:
+            add(f"{name}({tag})",
+                lambda L, n=name, s=src: getattr(L, n)(L.tensor(s)))
+            add(f"{name}({tag}) 형",
+                lambda L, n=name, s=src: str(getattr(L, n)(L.tensor(s)).dtype))
+
+    # ── angle — 형이 **언제나 float32** ────────────────────────────────
+    for src, tag in kinds:
+        add(f"angle({tag})", lambda L, s=src: L.angle(L.tensor(s)))
+        add(f"angle({tag}) 형", lambda L, s=src: str(L.angle(L.tensor(s)).dtype))
+
+    # ── 판정 셋 — 전부 거짓 ────────────────────────────────────────────
+    for name in ("is_complex", "is_conj", "is_neg"):
+        add(name, lambda L, n=name: " ".join(
+            str(getattr(L, n)(L.tensor(s))) for s, _ in kinds))
+
+    # ── 생성 ───────────────────────────────────────────────────────────
+    add("asarray(list)", lambda L: L.asarray([1.0, 2.0]))
+    add("asarray(ndarray) 형", lambda L: str(L.asarray(ints).dtype))
+    raw = np.array([1.0, 2.0, 3.0], dtype=np.float32).tobytes()
+    add("frombuffer",
+        lambda L: L.frombuffer(bytearray(raw), dtype=L.float32))
+    add("frombuffer(count=2)",
+        lambda L: L.frombuffer(bytearray(raw), dtype=L.float32, count=2))
+    # **`offset` 은 바이트다** — 원소 수로 읽으면 여기서 갈린다.
+    add("frombuffer(offset=4)",
+        lambda L: L.frombuffer(bytearray(raw), dtype=L.float32, offset=4))
+    # **끝을 포함한다** — `arange` 와 한 칸 다르다.
+    add("range(0, 4)", lambda L: L.range(0, 4))
+    add("range(1, 7, 2)", lambda L: L.range(1, 7, 2))
+    add("range(0, 1, 0.25)", lambda L: L.range(0, 1, 0.25))
+    add("range 와 arange 의 개수",
+        lambda L: f"{L.range(0, 4).numel()} {L.arange(0, 4).numel()}")
+    return cases
+
+
 STAT_PREFIX = "stat::"
 
 
@@ -7103,6 +7186,7 @@ def golden_cases(inp=None):
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
+            + make_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

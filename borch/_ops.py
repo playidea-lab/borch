@@ -9,7 +9,7 @@ from ._tensor import (
     Tensor, _MinMax, _grad_mode, _unbroadcast,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _math, _np, _resolve, _unsupported, Size, dtype,
+    _DEFAULT_DTYPE, _like_torch, _math, _np, _resolve, _unsupported, Size, dtype,
 )
 # **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
 # 그 이름을 쓰는 함수와 부딪힌다 — `bool` 을 그렇게 가려서 한 번 겪었다.
@@ -6798,6 +6798,146 @@ def hash_tensor(*args, **kw):
     _unsupported("torch.hash_tensor — uint64 도, 정해진 해시 규격도 없습니다")
 
 
+# ── 복소수의 이웃, 그리고 생성 몇 ──────────────────────────────────────────
+#
+# **복소수가 없어도 답이 있는 이름들이다.**
+#
+# `real`·`conj`·`resolve_conj` 는 실수 텐서에서 **항등**이고(실측: 버퍼까지 공유한다),
+# `is_complex`·`is_conj`·`is_neg` 는 전부 거짓이며, `angle` 은 음수에서 π 다. 복소수
+# 규약을 안 정했다고 이 이름들까지 없으면, 그것을 분기에 쓰는 교재 코드가 `AttributeError`
+# 로 멈춘다 — 답할 수 있는 것과 없는 것은 다르다.
+#
+# `imag` 만 다르다. **torch 자신이 실수에서 거절한다**(실측) — 그래서 여기서 거절하는
+# 것은 우리 한계가 아니라 **torch 를 그대로 옮긴 것**이다.
+
+def _alias(t, name):
+    """같은 값을 그대로 내는 항등. **형과 그래프를 지킨다.**
+
+    `positive` 의 단항 커널로 보내면 안 된다 — 그쪽은 형이 float32 로 떨어져서
+    `bool` 을 넣으면 `bool` 이 안 나온다(실측: torch 는 `bool` 을 그대로 준다).
+    """
+    t = _wrap(t)
+    return t._make(t.data, (t,), lambda g: (g,), name)
+
+
+def real(t):
+    """실수부. 실수 텐서에서는 **자기 자신**이고 형도 그대로다(`bool` 도 `bool`)."""
+    return _alias(t, "RealBackward0")
+
+
+def imag(t):
+    """허수부. **실수 텐서에서는 torch 도 거절한다**(실측) — 우리 한계가 아니다."""
+    raise RuntimeError(_like_torch(
+        "실수 텐서에는 허수부가 없습니다.",
+        "imag is not implemented for tensors with non-complex dtypes."))
+
+
+def conj(t):
+    """켤레. 실수에서는 항등이고 **뷰다** — torch 도 버퍼를 공유한다(실측)."""
+    return _alias(t, "ConjBackward0")
+
+
+def conj_physical(t):
+    """`conj` 와 같은 값. torch 는 이쪽이 **실제로 복사하는 판**이라고 이름을 나눈다."""
+    return _alias(t, "ConjPhysicalBackward0")
+
+
+def conj_physical_(t):
+    t = _wrap(t)
+    return t._inplace(lambda: conj_physical(t), "conj_physical_")
+
+
+def resolve_conj(t):
+    """켤레 표시를 실제 값으로 굳힌다. 실수에는 그 표시가 없어 항등이다."""
+    return _alias(t, "ResolveConjBackward0")
+
+
+def resolve_neg(t):
+    """부호 표시를 굳힌다. `resolve_conj` 와 같은 자리다."""
+    return _alias(t, "ResolveNegBackward0")
+
+
+def angle(t):
+    """편각. **음수는 π, 나머지는 0** 이다.
+
+    **형이 언제나 float32 다** — 정수를 넣어도 정수가 안 나온다(실측). 각도는 정수 칸에
+    안 들어가므로 그것이 맞고, 실수만 넣어 보면 그 규칙이 안 드러난다.
+    """
+    t = _wrap(t)
+    data = _np.asarray(t.data)
+    out = _np.where(data < 0, _math.pi, 0.0).astype(_DEFAULT_DTYPE)
+    return Tensor(out)
+
+
+def is_complex(t):
+    """**늘 거짓이다.** 복소수 규약을 안 정했다 — `stft` 의 그 자리와 같은 이야기다."""
+    return False
+
+
+def is_conj(t):
+    """켤레 표시가 붙어 있는가. 그 표시를 만들 길이 없으니 늘 거짓이다."""
+    return False
+
+
+def is_neg(t):
+    """부호 표시가 붙어 있는가. `is_conj` 와 같은 자리다."""
+    return False
+
+
+def asarray(obj, dtype=None, copy=None, **kw):
+    """**텐서를 주면 사본이 아니다**(실측). `copy=True` 여야 사본이다.
+
+    `as_tensor` 와 거의 같은데 `copy` 를 명시로 받는 자리가 다르다 — 그 인자가
+    없으면 "안 베끼는 것이 기본" 이라는 규칙을 부르는 쪽이 못 고른다.
+    """
+    if isinstance(obj, Tensor) and dtype is None and not copy:
+        return obj
+    if isinstance(obj, Tensor):
+        data = obj.data.astype(dtype.np) if dtype is not None else obj.data
+        return Tensor(_np.array(data, copy=True) if copy else data)
+    got = tensor(obj, dtype)
+    return Tensor(_np.array(got.data, copy=True)) if copy else got
+
+
+def frombuffer(buffer, dtype=_float32, count=-1, offset=0, **kw):
+    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측)."""
+    kind = dtype.np if hasattr(dtype, "np") else _np.dtype(dtype)
+    return Tensor(_np.frombuffer(buffer, dtype=kind, count=count,
+                                 offset=offset).copy())
+
+
+def range_top(start, end=None, step=1, **kw):
+    """**끝을 포함한다** — `arange` 는 뺀다(실측: `range(0, 4)` 가 다섯 개다).
+
+    torch 가 폐기 예정으로 두었지만 옛 교재에 남아 있고, `arange` 와 한 칸 다른 것이
+    바로 그 폐기 사유다. 조용히 `arange` 로 넘기면 원소가 하나 모자란다.
+
+    **이름이 `range` 가 아닌 이유**: 이 파일이 파이썬 내장 `range` 를 91 곳에서 쓴다.
+    모듈에 그 이름을 두면 전부가 이 함수를 부르게 된다 — `lu`·`lu_solve` 와 같은
+    수법으로 여기서는 `range_top` 이고 `borch/__init__.py` 가 `range` 로 내보낸다.
+    이 파일에서 아홉 번째 겪는 "모듈 이름이 내장을 가린다" 다.
+    """
+    if end is None:
+        start, end = 0, start
+    return Tensor(_np.arange(start, end + step / 2.0, step,
+                             dtype=_DEFAULT_DTYPE))
+
+
+def empty_strided(size, stride, **kw):
+    """**걸음을 표현할 수 없어서 없다.**
+
+    `as_strided` 와 다른 자리다. 그쪽은 **값**이 답이라 사본으로도 같은 답을 내는데,
+    이쪽은 값이 쓰레기이고 **걸음 자체가 유일한 답**이다. 우리 텐서에는 걸음이라는
+    것이 없으므로 모양만 맞춘 것을 주면 "걸음이 그렇다" 고 믿는 코드가 생긴다.
+    """
+    _unsupported("torch.empty_strided — 걸음(stride)이라는 것이 없습니다")
+
+
+def empty_permuted(size, physical_layout, **kw):
+    """`empty_strided` 와 같은 이유로 없다."""
+    _unsupported("torch.empty_permuted — 걸음(stride)이라는 것이 없습니다")
+
+
 # ================================================================ 이름 잇기
 #
 # **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
@@ -6856,6 +6996,10 @@ _AS_METHOD = (
     # 여기 없다 — torch 가 그것들을 최상위에만 둔다(실측).
     "histc", "histogram", "mode", "nanmedian", "bernoulli", "nonzero_static",
     "stft", "istft", "hash_tensor",
+    # 복소수의 이웃. `asarray`·`frombuffer`·`range`·`empty_strided` 는 여기 없다 —
+    # torch 가 그것들을 최상위에만 둔다(실측).
+    "angle", "conj", "conj_physical", "conj_physical_", "imag", "is_complex",
+    "is_conj", "is_neg", "resolve_conj", "resolve_neg",
 )
 
 

@@ -1402,6 +1402,119 @@ def trapz(y, x=None, dx=1.0, dim=-1, **kw):
     return trapezoid(y, x, dx, dim, **kw)
 
 
+# ── 복소수의 이웃, 그리고 생성 몇 ──────────────────────────────────────────
+#
+# **복소수가 없어도 답이 있는 이름들.** 실수에서 `conj` 계열은 항등이고 형까지 지킨다 —
+# `positive` 의 단항 커널로 보내면 형이 float32 로 떨어져서 `bool` 이 `bool` 로 안 나온다.
+
+def _alias(t, **kw):
+    """항등. **형과 그래프를 지키려면 `to(자기 형)` 이 가장 짧다** — borch.ts 의
+    `to` 는 형이 같으면 자기 자신을 돌려주므로 커널도 안 돈다."""
+    t = wrap(t)
+    return t
+
+
+def real(t, **kw):
+    """실수부. 실수 텐서에서는 자기 자신이고 형도 그대로다."""
+    return _alias(t)
+
+
+def conj(t, **kw):
+    return _alias(t)
+
+
+def conj_physical(t, **kw):
+    return _alias(t)
+
+
+def conj_physical_(t, **kw):
+    return _alias(t)
+
+
+def resolve_conj(t, **kw):
+    return _alias(t)
+
+
+def resolve_neg(t, **kw):
+    return _alias(t)
+
+
+def imag(t, **kw):
+    """**torch 자신이 실수에서 거절한다**(실측) — 우리 한계가 아니다."""
+    raise RuntimeError(
+        "imag is not implemented for tensors with non-complex dtypes.")
+
+
+def angle(t, **kw):
+    """편각. **음수는 π, 나머지는 0** 이고 형은 **언제나 float32** 다(실측)."""
+    import math
+
+    x = wrap(t)
+    below = x.binary("lt", full([], 0.0))
+    return wrap(guarded(handle(below).to, "float32")).mul(full([], math.pi))
+
+
+def is_complex(t, **kw):
+    """**늘 거짓이다.** 복소수 규약을 안 정했다 — `stft` 와 같은 이야기다."""
+    return False
+
+
+def is_conj(t, **kw):
+    return False
+
+
+def is_neg(t, **kw):
+    return False
+
+
+def asarray(obj, dtype=None, copy=None, **kw):
+    """**텐서를 주면 사본이 아니다**(실측). `copy=True` 여야 사본이다."""
+    from ._base import tensor as _t
+
+    if isinstance(obj, Tensor) and dtype is None and not copy:
+        return obj
+    if isinstance(obj, Tensor):
+        got = obj.to(dtype) if dtype is not None else obj
+        return _t(got.numpy().copy()) if copy else got
+    # **`copy=False` 를 numpy 에 그대로 넘기면 안 된다.** numpy 2 에서 그것은
+    # "베끼지 마라" 는 명령이라 목록처럼 베낄 수밖에 없는 것에서 던진다 — 기본값
+    # `None`("되면 안 베낀다")과 다르다. 여기서는 참일 때만 말한다.
+    arr = _np.array(obj, copy=True) if copy else _np.asarray(obj)
+    return _t(arr, dtype)
+
+
+def frombuffer(buffer, dtype=None, count=-1, offset=0, **kw):
+    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측)."""
+    from ._base import _DType, tensor as _t
+
+    name = dtype.plain if isinstance(dtype, _DType) else "float32"
+    kind = _np.dtype(name.replace("torch.", ""))
+    return _t(_np.frombuffer(buffer, dtype=kind, count=count,
+                             offset=offset).copy())
+
+
+def range_top(start, end=None, step=1, **kw):
+    """**끝을 포함한다** — `arange` 는 뺀다(실측). 조용히 `arange` 로 넘기면
+    원소가 하나 모자란다."""
+    from ._base import tensor as _t
+
+    if end is None:
+        start, end = 0, start
+    return _t(_np.arange(start, end + step / 2.0, step, dtype=_np.float32))
+
+
+def empty_strided(size, stride, **kw):
+    """**걸음을 표현할 수 없어서 없다.** `as_strided` 와 다른 자리다 — 그쪽은 값이
+    답이라 사본으로도 같은 답을 내는데, 이쪽은 **걸음 자체가 유일한 답**이다."""
+    raise RuntimeError(
+        "torch.empty_strided — 걸음(stride)이라는 것이 없습니다.")
+
+
+def empty_permuted(size, physical_layout, **kw):
+    raise RuntimeError(
+        "torch.empty_permuted — 걸음(stride)이라는 것이 없습니다.")
+
+
 def histogramdd(t, bins=10, **kw):
     """축이 여럿인 히스토그램.
 

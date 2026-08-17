@@ -139,6 +139,14 @@ from ._ops import (
     # `stft`·`istft`·`hash_tensor` 는 이름만 두고 거절한다(복소수·uint64 가 없다).
     bernoulli, binomial, gradient, hash_tensor, histc, histogram, histogramdd,
     istft, mode, nanmedian, nonzero_static, normal, poisson, stft, trapz,
+    # **복소수가 없어도 답이 있는 이름들.** 실수에서 `conj` 계열은 항등이고
+    # `is_complex` 는 거짓이다. `imag` 만 거절인데 **torch 자신이 그렇게 한다**(실측).
+    angle, asarray, conj, conj_physical, conj_physical_, empty_permuted,
+    empty_strided, frombuffer, imag, is_complex, is_conj, is_neg, real,
+    resolve_conj, resolve_neg,
+    # **이 파일이 내장 `range` 를 91 곳에서 쓴다** — `_ops` 안에서는 다른 이름이고
+    # 밖으로만 `range` 로 낸다. `lu`·`lu_solve` 와 같은 자리다.
+    range_top as range,
     # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
     # 함수**다(`torch.pdist is F.pdist` 가 참이다).
     #
