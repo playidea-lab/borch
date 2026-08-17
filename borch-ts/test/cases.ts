@@ -1691,6 +1691,32 @@ function addUnpool(out: Map<string, Case>): void {
     return gradOf(x, "fractionalMaxPool");
   });
 
+  // 층 꼴. **위의 `output_ratio` 케이스는 비율을 안 묻는다** — 본문이 크기를 직접
+  // 적고 있어서(`[3, 3]`) 비율을 크기로 바꾸는 규칙이 그 자리에 없다. 층에는 그
+  // 인자가 있으므로 여기서 비로소 물어진다. 7×0.5 는 3.5 라 버림과 반올림이 갈린다.
+  out.set("unpool::층::FractionalMaxPool2d",
+    () => new nn.FractionalMaxPool2d(2, [3, 3], null, false, [[0.0, 0.75]])
+      .call(frac()));
+  out.set("unpool::층::FractionalMaxPool2d(비율)",
+    () => new nn.FractionalMaxPool2d(2, null, [0.5, 0.5], false, [[0.0, 0.75]])
+      .call(frac()));
+  const fracRefuses = (
+    size: readonly number[] | null, ratio: readonly number[] | null,
+  ): string => {
+    try {
+      new nn.FractionalMaxPool2d(2, size, ratio);
+      return "예외가 안 났다";
+    } catch (err) {
+      // **종류 이름을 그대로 답한다.** "멈췄는가" 로만 접으면 오타가 낸 `TypeError`
+      // 도 통과한다 — 그건 아무것도 안 묻는 검사다.
+      return err instanceof Error ? err.constructor.name : typeof err;
+    }
+  };
+  out.set("unpool::층::FractionalMaxPool2d(둘 다 주면)",
+    () => fracRefuses([3, 3], [0.5, 0.5]));
+  out.set("unpool::층::FractionalMaxPool2d(둘 다 없으면)",
+    () => fracRefuses(null, null));
+
   // ── CTC ────────────────────────────────────────────────────────────────
   //
   // `reduction="mean"` 은 표본마다 **제 표적 길이로 나눈 뒤** 평균한다. 길이가 다

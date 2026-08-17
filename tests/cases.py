@@ -4329,6 +4329,28 @@ def unpool_cases(inp=None):
         return layer(L.tensor(frac))
 
     add("층::FractionalMaxPool2d", frac_layer)
+
+    # **비율은 층에서만 물어진다.** 함수 쪽 `output_ratio` 케이스는 위에 있지만
+    # 층에도 같은 인자가 있고, 인자를 받아 크기로 바꾸는 규칙이 두 벌이다. 7×0.5 는
+    # 3.5 라 **버림과 반올림이 갈린다**(3 대 4) — 짝수 크기로 물으면 둘이 같다.
+    def frac_layer_ratio(L):
+        layer = L.nn.FractionalMaxPool2d(2, output_ratio=(0.5, 0.5),
+                                         _random_samples=L.tensor(axis_split))
+        return layer(L.tensor(frac))
+
+    add("층::FractionalMaxPool2d(비율)", frac_layer_ratio)
+
+    def frac_layer_refuses(L, **kw):
+        try:
+            L.nn.FractionalMaxPool2d(2, **kw)
+            return "예외가 안 났다"
+        except Exception as exc:                                # noqa: BLE001
+            return type(exc).__name__
+
+    # 둘 중 **하나만** 받는다. 둘 다 받으면 어느 쪽이 이겼는지 값으로만 드러난다.
+    add("층::FractionalMaxPool2d(둘 다 주면)",
+        lambda L: frac_layer_refuses(L, output_size=(3, 3), output_ratio=(0.5, 0.5)))
+    add("층::FractionalMaxPool2d(둘 다 없으면)", frac_layer_refuses)
     # **`repr` 이 비어 있다** — torch 의 `extra_repr` 가 아무것도 안 낸다.
     add("층::repr::FractionalMaxPool2d",
         lambda L: repr(L.nn.FractionalMaxPool2d(2, output_size=(3, 3))))

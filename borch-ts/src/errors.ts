@@ -48,6 +48,18 @@ export class NotImplementedError extends Error {
 }
 
 /**
+ * 인자 자체가 말이 안 되는 것 — 서로 배타인 둘을 같이 주었거나, 정의역 밖이거나.
+ *
+ * **`RuntimeError` 와 다른 말이다.** 파이썬은 이 자리에 `ValueError` 를 쓰고 torch 도
+ * 그렇다(`FractionalMaxPool2d` 가 크기와 비율을 둘 다 받으면 그 종류로 멈춘다).
+ * 골든이 예외의 **종류 이름**을 답으로 굳히므로, 여기서 다른 이름을 던지면 결속이
+ * 옮길 것이 없어진다.
+ */
+export class ValueError extends Error {
+  override readonly name = "ValueError";
+}
+
+/**
  * 선형대수가 답을 못 내는 것 — 특이행렬, 양정부호가 아닌 콜레스키.
  *
  * **이름이 하는 일이 있다.** 특이행렬을 만날 수 있는 코드는 `except LinAlgError` 로

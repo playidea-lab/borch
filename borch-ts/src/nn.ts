@@ -14,9 +14,9 @@
  * 배선이 갈린다.
  */
 
-import { RuntimeError } from "./errors.js";
+import { RuntimeError, ValueError } from "./errors.js";
 import { runningStats } from "./kernels.js";
-import { onSeed, uniformArray } from "./random.js";
+import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import {
   device, keepAlive, noGrad, type PadMode, type Reduction, Tensor,
 } from "./tensor.js";
@@ -1023,6 +1023,86 @@ export class Unflatten extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.unflatten(this.dim, this.sizes);
+  }
+}
+
+/**
+ * 창 자리를 표본이 흔드는 최대 풀링.
+ *
+ * **표본은 호스트에서 뽑는다.** 창 자리를 셰이더에 구워야 해서 CPU 에 값이 있어야
+ * 하는데, GPU 난수를 읽어 오는 것은 비동기다 — `forward` 는 동기여야 하므로
+ * `random.ts` 의 줄기를 쓴다. `manualSeed` 가 그 줄기도 잡는다.
+ *
+ * `randomSamples` 를 주면 그것을 쓴다. torch 의 `_random_samples` 자리이고, 값을
+ * 굳혀 대조하려면 이 길이 필요하다 — 안 주면 셋의 난수기가 달라 값이 안 맞는다.
+ *
+ * **`outputSize` 와 `outputRatio` 는 둘 중 하나만** 받는다. 둘 다 주거나 둘 다
+ * 안 주면 멈춘다 — torch 가 그렇다.
+ */
+export class FractionalMaxPoolND extends Module {
+  constructor(private readonly spatial: number,
+              private readonly kernel: number,
+              private readonly outputSize: number | readonly number[] | null = null,
+              private readonly outputRatio: number | readonly number[] | null = null,
+              returnIndices = false,
+              private readonly randomSamples: readonly (readonly number[])[] | null
+                = null) {
+    super();
+    if ((outputSize === null) === (outputRatio === null)) {
+      throw new ValueError(
+        "FractionalMaxPool 은 outputSize 나 outputRatio 중 하나만 받는다.");
+    }
+    // **받아만 놓고 버리지 않는다.** torch 는 이 깃발이 참이면 `forward` 가 쌍을
+    // 내는데, 여기 `forward` 는 텐서를 내기로 되어 있다(`Module` 의 약속). 조용히
+    // 값만 주는 대신 멈추고 `pool()` 로 보낸다.
+    if (returnIndices) {
+      throw new RuntimeError(
+        "returnIndices 는 `pool(x)` 로 받는다 — forward 는 텐서 하나를 낸다.");
+    }
+  }
+
+  private sizesFor(shape: readonly number[]): number[] {
+    if (this.outputSize !== null) {
+      return typeof this.outputSize === "number"
+        ? new Array<number>(this.spatial).fill(this.outputSize)
+        : [...this.outputSize];
+    }
+    const ratio = this.outputRatio as number | readonly number[];
+    const each = typeof ratio === "number"
+      ? new Array<number>(this.spatial).fill(ratio) : [...ratio];
+    return each.map((r, k) => Math.trunc((shape[2 + k] ?? 1) * r));
+  }
+
+  pool(x: Tensor): { values: Tensor; indices: Tensor } {
+    const planes = (x.shape[0] ?? 1) * (x.shape[1] ?? 1);
+    const samples: readonly (readonly number[])[] = this.randomSamples
+      ?? Array.from({ length: planes }, () =>
+        Array.from({ length: this.spatial }, () => uniform01()));
+    return x.fractionalMaxPool(this.kernel, this.sizesFor(x.shape), samples);
+  }
+
+  override forward(x: Tensor): Tensor {
+    return this.pool(x).values;
+  }
+}
+
+export class FractionalMaxPool2d extends FractionalMaxPoolND {
+  constructor(kernel: number,
+              outputSize: number | readonly number[] | null = null,
+              outputRatio: number | readonly number[] | null = null,
+              returnIndices = false,
+              randomSamples: readonly (readonly number[])[] | null = null) {
+    super(2, kernel, outputSize, outputRatio, returnIndices, randomSamples);
+  }
+}
+
+export class FractionalMaxPool3d extends FractionalMaxPoolND {
+  constructor(kernel: number,
+              outputSize: number | readonly number[] | null = null,
+              outputRatio: number | readonly number[] | null = null,
+              returnIndices = false,
+              randomSamples: readonly (readonly number[])[] | null = null) {
+    super(3, kernel, outputSize, outputRatio, returnIndices, randomSamples);
   }
 }
 

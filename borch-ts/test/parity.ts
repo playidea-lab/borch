@@ -540,12 +540,10 @@ export async function report(): Promise<string> {
   // **지금 없는 것.** 채워지면 여기서 지운다 — 안 지워도 초록이고, **늘어나는 쪽만**
   // 빨개진다. 목록에서 걸러 낸 것을 다시 목록과 대조하면 늘 초록이라 아무것도 안
   // 묻는다(처음에 그렇게 썼다가 고쳤다).
-  // 열넷을 채웠다. 남은 셋 중 `FractionalMaxPool*` 은 난수 표본을 받는 자리이고,
-  // `Parameter` 는 층이 아니라 텐서 표식이라 `requiresGrad` 가 그 자리를 대신한다 —
-  // 이름을 만들지가 먼저 정해질 일이다.
-  const KNOWN_ABSENT = new Set([
-    "FractionalMaxPool2d", "FractionalMaxPool3d", "Parameter",
-  ]);
+  // 열여섯을 채웠다. 남은 하나(`Parameter`)는 층이 아니라 **텐서 표식**이라
+  // `requiresGrad` 가 그 자리를 대신하고 있다 — 이름을 만들지가 먼저 정해질 일이고,
+  // 만들면 `stateDict` 열쇠 규칙과 엮인다.
+  const KNOWN_ABSENT = new Set(["Parameter"]);
   const bag = nn as unknown as Record<string, unknown>;
   const absent = FILLED_IN.filter((n) => !(n in bag));
   const surprise = absent.filter((n) => !KNOWN_ABSENT.has(n));

@@ -1905,6 +1905,14 @@ class _FractionalMaxPoolND(Module):
     def __init__(self, kernel_size, output_size=None, output_ratio=None,
                  return_indices=False, _random_samples=None):
         super().__init__()
+        # **둘 중 하나만 받는다** — torch 는 생성자에서 멈춘다. 관대하면 둘 다
+        # 주었을 때 어느 쪽이 이겼는지가 값으로만 드러나고, 하나도 안 주었을 때는
+        # 크기가 어디서 왔는지 아무도 못 읽는다.
+        if (output_size is None) == (output_ratio is None):
+            raise ValueError(
+                "FractionalMaxPool 은 output_size 나 output_ratio 중 하나만 받습니다."
+                "\n(torch: FractionalMaxPool2d requires specifying either "
+                "an output size, or a pooling ratio)")
         self.kernel_size = kernel_size
         self.output_size = output_size
         self.output_ratio = output_ratio

@@ -1410,6 +1410,12 @@ class _FractionalMaxPool(_Wrap):
 
     def __init__(self, dim, kernel_size, output_size=None, output_ratio=None,
                  return_indices=False, _random_samples=None):
+        # **둘 중 하나만 받는다** — torch 는 생성자에서 멈춘다. 안쪽 `_fractional` 도
+        # 같은 것을 보지만 그쪽은 **부를 때** 멈추고, 그러면 층을 만든 줄과 멈추는
+        # 줄이 갈라진다.
+        if (output_size is None) == (output_ratio is None):
+            raise ValueError(
+                "FractionalMaxPool 은 output_size 나 output_ratio 중 하나만 받습니다.")
         fn = _fractional(dim)
         super().__init__(lambda x: fn(x, kernel_size, output_size, output_ratio,
                                       return_indices, _random_samples))
