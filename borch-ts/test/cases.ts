@@ -1456,6 +1456,21 @@ function addUnpool(out: Map<string, Case>): void {
     return gradOf(pooled, "maxUnpool");
   });
 
+  // ── 보폭을 창에서 떼어 놓는다 ─────────────────────────────────────────
+  //
+  // `stride` 를 안 주면 `kernel` 이 된다 — **기본값이 겹치는 짝**이라, 둘을 같게 두고
+  // 묻는 케이스만으로는 보폭을 흘리는 구현도 통과한다. 파이썬 쪽에 이유를 길게 적었다.
+  const div = (t: Tensor, by: number) => t.div(Tensor.full([], by));
+  out.set("unpool::겹치는 창::max_pool1d", () => line().maxPool1d(3, 1));
+  out.set("unpool::겹치는 창::max_pool3d", () => cube().maxPool3d(3, 1));
+  out.set("unpool::겹치는 창::avg_pool1d", () => line().poolND("avg", 3, 1));
+  out.set("unpool::겹치는 창::avg_pool3d", () => cube().poolND("avg", 3, 1));
+  out.set("unpool::겹치는 창::lp_pool1d", () => div(line(), 8).lpPool(2, 3, 1));
+  out.set("unpool::겹치는 창::lp_pool2d", () => div(plane(), 8).lpPool(2, 3, 1));
+  out.set("unpool::겹치는 창::lp_pool3d", () => div(cube(), 64).lpPool(2, 3, 1));
+  out.set("unpool::겹치는 창::max_unpool1d", () => back(line, 3, 1));
+  out.set("unpool::겹치는 창::max_unpool3d", () => back(cube, 3, 1));
+
   const small = () => grid([1, 1, 4, 4, 4]).div(Tensor.full([], 8));
   out.set("unpool::lp_pool3d", () => small().lpPool(2, 2));
   out.set("unpool::lp_pool3d(p=1)", () => small().lpPool(1, 2));

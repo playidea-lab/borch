@@ -62,6 +62,34 @@ def require_fresh_dist(root=ROOT):
             "   진짜 결손일 때와 **같은 문구**라 원인이 안 보인다.)")
 
 
+def require_fresh_golden(root=ROOT):
+    """**`cases.py` 가 `golden.json` 보다 새것이면 여기서 멈춘다.**
+
+    `dist` 와 같은 함정이 골든에도 있다. 러너가 읽는 것은 `tests/golden.json` 이고,
+    그것은 `tests/cases.py` → `golden.npz` → `golden.json` 의 두 단계를 거쳐 나온다.
+    가운데 `npz` 는 `.gitignore` 라 어느 커밋에도 없다.
+
+    그래서 케이스를 새로 쓰고 뽑기를 잊으면 **그 케이스가 "이름이 골든에 없다" 로
+    나온다** — 이름을 오타 낸 것과 **같은 문구**다. 실제로 아홉 건을 넣고 그 화면을
+    받아, 없는 오타를 먼저 찾았다.
+
+    두 단계라 잊기 쉽고, 첫 단계는 진짜 torch 를 요구해서 아무 데서나 못 돈다.
+    잊었을 때 **다른 것을 의심하기 전에** 멈추는 편이 낫다.
+    """
+    cases = root / "tests" / "cases.py"
+    exported = root / "tests" / "golden.json"
+    if not exported.exists():
+        raise SystemExit(f"골든이 없다: {exported}")
+    if cases.stat().st_mtime > exported.stat().st_mtime:
+        raise SystemExit(
+            "골든이 케이스 표보다 낡았다 — 러너는 `tests/golden.json` 을 읽는다.\n"
+            "  먼저: uv run --with numpy --with torch --with torchvision "
+            "python tests/golden.py dump\n"
+            "  그다음: uv run --with numpy python tests/export_json.py\n"
+            "  (이대로 돌리면 새 케이스가 `이름이 골든에 없다` 로 나오는데, 그것은\n"
+            "   이름을 틀렸을 때와 **같은 문구**라 원인이 안 보인다.)")
+
+
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -103,6 +131,7 @@ def run(headed=False, verbose=False):
     from playwright.sync_api import sync_playwright
 
     require_fresh_dist()
+    require_fresh_golden()
     port, stop = serve(ROOT)
     url = f"http://127.0.0.1:{port}{PAGE}"
     last = []

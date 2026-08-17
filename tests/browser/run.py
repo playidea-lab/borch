@@ -57,8 +57,11 @@ def run(lib, headed, probe=None):
     # **방출물이 소스보다 낡았는지 먼저 본다.** 낡은 `dist` 는 진짜 결손과 같은 문구로
     # 나온다 — 검사를 두 벌 두면 한쪽만 고쳐지므로 TS 러너의 것을 빌려 쓴다.
     sys.path.insert(0, str(ROOT / "borch-ts" / "test"))
-    from run import require_fresh_dist          # noqa: PLC0415
+    from run import require_fresh_dist, require_fresh_golden   # noqa: PLC0415
     require_fresh_dist(ROOT)
+    # 골든도 같은 함정이다 — `cases.py` 만 고치고 안 뽑으면 새 케이스가 "이름이
+    # 골든에 없다" 로 나오는데, 오타와 같은 문구다.
+    require_fresh_golden(ROOT)
 
     port, stop = serve(ROOT)
     url = f"http://127.0.0.1:{port}/tests/browser/runner.html?lib={lib}"

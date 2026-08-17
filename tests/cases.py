@@ -3878,6 +3878,37 @@ def unpool_cases(inp=None):
 
     add("grad::되돌리기", grad_unpool)
 
+    # ── 보폭을 창에서 떼어 놓는다 ────────────────────────────────────────
+    #
+    # 풀링의 `stride` 는 안 주면 `kernel` 이 된다. **기본값이 서로 겹치는 짝**이라,
+    # 둘을 같게 두고 묻는 케이스만 있으면 `stride` 를 통째로 흘리는 구현도, `kernel`
+    # 자리에 잘못 넣는 구현도 전부 통과한다 — 창이 안 겹치니 답이 같기 때문이다.
+    #
+    # 표를 세어 보니 열두 자리 중 셋만 둘을 갈라 놨고 **그 셋이 전부 2차원이었다.**
+    # 1·3차원과 평균·L^p 풀링은 창과 보폭이 늘 같은 값으로만 불렸다. 보폭을 좁게 주면
+    # 한 칸이 여러 창에 들어가므로, 보폭을 흘리거나 축을 잘못 세면 그때 갈린다.
+    overlap = (
+        ("max_pool1d", line, lambda L, x: F(L).max_pool1d(x, 3, 1)),
+        ("max_pool3d", cube, lambda L, x: F(L).max_pool3d(x, 3, 1)),
+        ("avg_pool1d", line, lambda L, x: F(L).avg_pool1d(x, 3, 1)),
+        ("avg_pool3d", cube, lambda L, x: F(L).avg_pool3d(x, 3, 1)),
+        ("lp_pool1d", line / 8, lambda L, x: F(L).lp_pool1d(x, 2, 3, 1)),
+        ("lp_pool2d", plane / 8, lambda L, x: F(L).lp_pool2d(x, 2, 3, 1)),
+        ("lp_pool3d", cube / 64, lambda L, x: F(L).lp_pool3d(x, 2, 3, 1)),
+    )
+    for name, src, call in overlap:
+        add(f"겹치는 창::{name}", lambda L, s=src, c=call: c(L, L.tensor(s)))
+
+    # 되돌리기는 창·보폭을 **풀링과 같이** 받아야 자리를 되짚는다. 2차원만 물어
+    # 놨었다 — 1·3차원은 축 수가 달라 같은 코드가 아니다.
+    def unpool_overlap(L, src, dim):
+        pool = getattr(F(L), f"max_pool{dim}d")
+        out, idx = pool(L.tensor(src), 3, 1, return_indices=True)
+        return getattr(F(L), f"max_unpool{dim}d")(out, idx, 3, 1)
+
+    add("겹치는 창::max_unpool1d", lambda L: unpool_overlap(L, line, 1))
+    add("겹치는 창::max_unpool3d", lambda L: unpool_overlap(L, cube, 3))
+
     # ── LPPool3d ───────────────────────────────────────────────────────
     small = grid(1, 1, 4, 4, 4) / 8
     add("lp_pool3d", lambda L: F(L).lp_pool3d(L.tensor(small), 2, 2))
