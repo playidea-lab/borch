@@ -145,14 +145,14 @@ BrowserTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 | | 줄 | 무엇 |
 |---|---|---|
 | `_base.py` | 275 | dtype · 오류 규격 · `repr` |
-| `_tensor.py` | 861 | `Tensor` 와 autograd |
-| `_ops.py` | 7,241 | 수학 · 모양 · `nn.functional` |
-| `_nn.py` | 2,645 | 층 · 순환 · 트랜스포머 |
+| `_tensor.py` | 1,025 | `Tensor` 와 autograd |
+| `_ops.py` | 7,507 | 수학 · 모양 · `nn.functional` |
+| `_nn.py` | 2,771 | 층 · 순환 · 트랜스포머 |
 | `_optim.py` | 1,000 | 옵티마이저 · 스케줄러 |
 | `_fft.py` | 364 | `torch.fft` · `stft`/`istft` |
 | `_data.py` | 355 | `Dataset` · `DataLoader` |
 | `_rnn.py` | 65 | `nn.utils.rnn` |
-| `__init__.py` | 334 | 전부 모으고 `torch` 로 심는 자리 |
+| `__init__.py` | 338 | 전부 모으고 `torch` 로 심는 자리 |
 
 **공개 이름은 안 바뀌었다** — 쪼개기 전후로 197개 그대로다. `import borch` 는
 같은 것을 준다. `borch_webgpu` 도 같은 모양이고 5,961 줄에 여섯 파일이다.

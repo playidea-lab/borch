@@ -329,6 +329,12 @@ class Tensor:
                     "greater", "less_equal", "isclose", "nan_to_num", "fmax",
                     "inner", "adjoint", "moveaxis", "t", "corrcoef", "cov",
                     "vdot", "kron", "broadcast_to",
+                    # 여섯이 빠져 있었다. **짝은 위에 있는데 별칭만 없는 꼴**이라
+                    # `x.multiply_(3)` 은 되고 `x.divide_(2)` 는 안 됐다 — 두 이름이
+                    # 나란히 서 있는데 한쪽만 도는 자리가 제일 안 보인다. 코어에
+                    # 제자리 판 마흔한 개를 채우면서 셋을 나란히 재다가 걸렸다.
+                    "divide", "subtract", "greater_equal", "less", "not_equal",
+                    "logical_xor",
                     # 참거짓이면 논리 부정으로 갈라야 한다 — 그 갈림이 `_ops` 에 있다.
                     "bitwise_not",
                     # 모양·색인 중 **모듈 쪽에 손으로 쓴 것들.** 텐서 목록을 받거나
@@ -343,7 +349,7 @@ class Tensor:
                     "lu", "lu_solve",
                     # 통계 중 모듈 쪽에 손으로 쓴 것들 — 난수와 거절, 조립, 그리고
                     # 경계를 목록으로 주는 `histogramdd`.
-                    "bernoulli", "stft", "istft", "hash_tensor", "trapz",
+                    "bernoulli", "float_power", "stft", "istft", "hash_tensor", "trapz",
                     "histogramdd",
                     # 복소수의 이웃 — 항등이라 borch.ts 에 이름이 없다.
                     "real", "conj", "conj_physical", "conj_physical_",
@@ -353,6 +359,20 @@ class Tensor:
             # **`max`·`min` 은 모듈 전역에 없다.** 그 이름을 `_ops` 에 두면 그 파일
             # 안에서 파이썬 내장을 가리고, `max(a, b)` 로 크기를 재던 자리가 텐서
             # 함수를 부른다 — 증상이 GPU 버퍼 할당 실패라 원인에서 아주 멀다.
+            # **밑줄 이름이 따로 있으면 그것을 먼저 쓴다.** 보통은 짝을 부르고 값을
+            # 되쓰면 되는데, 밑줄이 붙었다고 **같은 연산이라는 보장이 없다** —
+            # `bernoulli_(p)` 는 자기 값을 확률로 읽는 `bernoulli()` 와 달리 자기 값을
+            # 무시하고 `p` 로 채운다. 짝으로 흘려보내면 인자 수부터 안 맞는다.
+            #
+            # **`__dict__` 로 본다.** `getattr` 은 이 모듈의 `__getattr__` 을 깨워서
+            # 없는 이름을 자기 자신으로 되돌려 준다 — 무한 재귀가 되고, 증상이
+            # `maximum recursion depth exceeded` 라 원인에서 멀다.
+            exact = _ops.__dict__.get(name) if inplace else None
+            if exact is not None:
+                # **제자리 이름이므로 되쓴다.** 값만 돌려주면 `x.bernoulli_(0)` 이
+                # `x` 를 안 바꾸고, 그것은 제자리 연산이 아니다.
+                self._refuse_inplace_on_leaf(name)
+                return lambda *a, **k: self._write_back(exact(self, *a, **k))
             fn = _EXTREME[bare] if bare in _EXTREME else getattr(_ops, bare)
             if not inplace:
                 return lambda *a, **k: fn(self, *a, **k)

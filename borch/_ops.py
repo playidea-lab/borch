@@ -30,9 +30,22 @@ from ._base import float64 as _float64, int64 as _int64
 # ---------------------------------------------------------------- 만들기
 
 def tensor(data, dtype=None, requires_grad=False):
+    """**언제나 사본을 뜬다.** torch 가 그렇게 문서화되어 있고, 공유하고 싶으면
+    `from_numpy` 를 쓴다.
+
+    `_np.asarray` 만 쓰면 이미 맞는 형인 ndarray 는 **그대로 통과해서 공유된다.**
+    그러면 `t = torch.tensor(arr); t.add_(1)` 이 사용자의 `arr` 까지 바꾼다 — 예외도
+    경고도 없고, 진짜 torch 에서는 안 그러므로 그 코드가 자기 컴퓨터에서 다르게 돈다.
+
+    이 저장소의 케이스 파일이 실제로 그것에 걸렸다. 입력을 공유하던 케이스 하나가
+    `plain` 을 제자리에서 1 만큼 올렸는데, **torch 는 사본을 떠서 안 샜고 코어만
+    샜다.** 그래서 그 뒤에 오는 케이스들이 코어에서만 틀렸고, 원인이 자기 케이스에
+    없어서 열여섯 자리를 헤맸다.
+    """
     if isinstance(data, Tensor):
         data = data.data
-    return Tensor(_np.asarray(data, dtype=_resolve(data, dtype)), requires_grad)
+    return Tensor(_np.array(data, dtype=_resolve(data, dtype), copy=True),
+                  requires_grad)
 
 
 def as_tensor(data, dtype=None):

@@ -841,6 +841,19 @@ def as_tensor(data, dtype=None):
     return data if isinstance(data, Tensor) else _t(data, dtype)
 
 
+def from_numpy(arr):
+    """**값은 나르고 메모리는 못 나눈다.** torch 는 numpy 배열과 저장을 공유해서
+    한쪽을 고치면 다른 쪽도 바뀌는데, 여기는 값이 GPU 버퍼에 있어 그럴 자리가 없다 —
+    뷰 전파를 거절하는 것과 같은 이유다.
+
+    그래서 `tensor()` 와 같아진다. 거절하지 않는 이유는 교재가 이 이름을 **텐서를
+    만드는 데** 쓰지 별칭을 만드는 데 안 쓰기 때문이고, 그래도 갈림은 갈림이라
+    골든에 자리를 만들어 두었다.
+    """
+    from ._base import tensor as _t
+    return _t(arr)
+
+
 def matrix_power(x, n):
     """**음수 지수는 역행렬의 거듭제곱이다.** borch.ts 는 1 이상만 한다.
 
@@ -1660,6 +1673,32 @@ def bernoulli(t, **kw):
 
     p = _np.asarray(wrap(t).numpy(), dtype=_np.float64)
     return _t((_rng.random(p.shape) < p).astype(_np.float32))
+
+
+def bernoulli_(t, p=0.5, generator=None, **kw):
+    """**짝과 다른 연산이다.** `bernoulli()` 는 자기 값을 확률로 읽는데 이쪽은 자기
+    값을 **무시하고** `p` 로 채운다(실측: `[0,1,0,1]` 을 넣어도 매번 다르다).
+
+    밑줄만 보고 짝에서 만들면 확률이 0·1 인 자리는 확정이라 값이 맞고 **가운데
+    확률에서만 조용히 틀린다.** 코어에서도 같은 이유로 자동 표 밖에 뒀다.
+    """
+    del generator, kw
+    from ._base import tensor as _t
+
+    got = wrap(t)
+    shape = tuple(int(v) for v in handle(got).shape)
+    return _t((_rng.random(shape) < p).astype(_np.float32))
+
+
+def float_power_(t, exponent, **kw):
+    """**언제나 거절한다.** `float_power` 의 결과가 배정도인데 되쓸 자리가 없다.
+    torch 도 float32 자리에서 같은 이유로 멈춘다(실측)."""
+    del t, exponent, kw
+    raise RuntimeError(
+        "`float_power_` 는 제자리로 쓸 수 없습니다 — 결과가 배정도라 되쓸 곳이 "
+        "없습니다. `x.float_power(k)` 로 새 텐서를 받으세요. "
+        "(torch: the base given to float_power_ has dtype Float but the "
+        "operation's result requires dtype Double)")
 
 
 def poisson(t, **kw):

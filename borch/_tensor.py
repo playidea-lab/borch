@@ -948,3 +948,86 @@ class _MinMax:
         return (self.values, self.indices)[i]
 
 
+
+
+# ── 제자리 판을 짝에서 만든다 ────────────────────────────────────────────────
+#
+# torch 의 제자리 연산은 `x.add_(1)` 처럼 이름 끝에 밑줄이 붙고, **학습 루프에서
+# 관용구다** — `p.data.add_(-lr * g)` 를 안 쓰는 교재가 드물다. 그런데 마흔한 개가
+# 빠져 있었다. 짝(`x.add`)은 전부 있고 `_inplace` 관용구도 있었으니, 없던 것은
+# **잇는 줄** 하나씩이었다.
+#
+# 손으로 마흔한 벌을 적지 않는다. 서로 다른 것이 이름뿐이면 그 마흔한 벌은 언젠가
+# 한 자리만 다르게 고쳐지고, 그 한 자리는 아무도 안 본다. 표를 두고 붙인다.
+#
+# **`i0_`·`clamp_min_`·`clamp_max_` 는 셋 다 `_ops` 에 이미 있었다** — 모듈 함수로만
+# 있고 메서드로는 없었던 것이다. `borch.i0_(x)` 는 되고 `x.i0_()` 는 안 됐는데,
+# 교재가 쓰는 쪽은 뒤쪽이다.
+#
+# **둘은 이 표에 못 넣는다.** 이름 끝에 밑줄이 붙었다고 짝과 같은 연산이 아니다 —
+# 마흔한 개를 전부 torch 와 대조해서 확인했고 거기서 갈렸다.
+#
+#   `bernoulli_` 는 **짝과 다른 연산이다.** `x.bernoulli()` 는 `x` 를 확률로 읽는데
+#   `x.bernoulli_(p=0.5)` 는 `x` 를 무시하고 `p` 로 채운다(실측: `[0,1,0,1]` 을 넣어도
+#   결과가 매번 다르다). 짝에서 만들었으면 확률이 0·1 인 자리는 확정이라 값이 맞고,
+#   **가운데 확률에서만 조용히 틀렸을** 것이다.
+#
+#   `float_power_` 는 **torch 가 거절한다.** `float_power` 의 결과가 언제나 float64 라
+#   float32 자리에 되쓸 수 없어서다. 우리에게는 float64 가 아예 없으므로 이 연산은
+#   제자리로는 영영 안 된다.
+_INPLACE_FROM_PAIR = (
+    "bitwise_and_", "bitwise_left_shift_", "bitwise_not_",
+    "bitwise_or_", "bitwise_right_shift_", "bitwise_xor_", "clamp_max_",
+    "clamp_min_", "digamma_", "divide_", "erfinv_",
+    "floor_divide_", "fmod_", "gcd_", "greater_", "greater_equal_", "i0_",
+    "lcm_", "lerp_", "less_", "less_equal_", "lgamma_", "logical_and_",
+    "logical_not_", "logical_or_", "logical_xor_", "multiply_", "mvlgamma_",
+    "nan_to_num_", "nextafter_", "not_equal_", "put_", "remainder_", "renorm_",
+    "subtract_", "t_", "true_divide_",
+)
+
+
+def _bind_inplace(name):
+    pair = name[:-1]
+
+    def method(self, *args, **kw):
+        return self._inplace(lambda: getattr(self, pair)(*args, **kw), name)
+
+    method.__name__ = name
+    method.__qualname__ = f"Tensor.{name}"
+    method.__doc__ = f"`{pair}` 를 제자리에서. 값을 되쓰고 자기를 돌려준다."
+    return method
+
+
+for _name in _INPLACE_FROM_PAIR:
+    setattr(Tensor, _name, _bind_inplace(_name))
+del _name
+
+
+def _bernoulli_(self, p=0.5, generator=None):
+    """**`p` 로 채운다 — 자기 값을 확률로 읽지 않는다.** `bernoulli()` 와 다르다."""
+    del generator
+    if self.requires_grad and _grad_mode.enabled:
+        raise RuntimeError(_like_torch(
+            "기울기가 필요한 잎 텐서에는 `bernoulli_` 을(를) 쓸 수 없습니다. "
+            "`with torch.no_grad():` 안에서 하세요.",
+            "a leaf Variable that requires grad is being used in an in-place operation"))
+    draw = _np.random.random(self.data.shape) < p
+    self.data[...] = draw.astype(self.data.dtype)
+    return self
+
+
+def _float_power_(self, exponent):
+    """**언제나 거절한다.** torch 도 float32 자리에서는 거절한다 — `float_power` 의
+    결과가 float64 이고 그것을 float32 에 되쓸 수 없어서다. 우리에게는 float64 가
+    없으므로 어떤 dtype 에서도 안 된다. 값을 내주면 그 코드가 진짜 torch 에서 깨진다."""
+    del exponent
+    raise RuntimeError(_like_torch(
+        f"`float_power_` 는 {self.dtype} 자리에 쓸 수 없습니다 — 결과가 배정도라 "
+        "되쓸 곳이 없습니다. `x.float_power(k)` 로 새 텐서를 받으세요.",
+        f"the base given to float_power_ has dtype {str(self.dtype).split('.')[-1].capitalize()} "
+        "but the operation's result requires dtype Double"))
+
+
+Tensor.bernoulli_ = _bernoulli_
+Tensor.float_power_ = _float_power_

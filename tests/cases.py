@@ -7712,12 +7712,137 @@ def inplace_cases(inp=None):
 
     # `no_grad` 안에서는 잎도 고칠 수 있다 — 옵티마이저가 실제로 그렇게 한다.
     def under_no_grad(L):
-        x = L.tensor(plain, requires_grad=True)
+        # **`.copy()` 가 여기 없었다.** 코어의 `tensor()` 가 그때 배열을 공유해서
+        # 이 한 줄이 `plain` 을 1 만큼 올렸고, 뒤에 오는 케이스들이 코어에서만
+        # 틀렸다. 이제 `tensor()` 가 사본을 뜨지만 **케이스도 자기 몫을 한다** —
+        # 공유 입력을 제자리에서 고치는 케이스는 순서에 기대게 된다.
+        x = L.tensor(plain.copy(), requires_grad=True)
         with L.no_grad():
             x.add_(1)
         return x
 
     cases.append((INPLACE_PREFIX + "no_grad 안에서는 된다", under_no_grad))
+
+    # ── 짝은 있는데 밑줄 판이 없던 마흔한 개 ──────────────────────────────
+    #
+    # `x.add_(1)` 은 **학습 루프의 관용구다** — `p.data.add_(-lr * g)` 를 안 쓰는
+    # 교재가 드물다. 그런데 마흔한 개가 빠져 있었다. 짝(`x.add`)은 전부 있었고
+    # 잇는 관용구도 있었으니, 없던 것은 **잇는 줄** 하나씩이었다.
+    #
+    # **둘은 짝에서 만들면 안 된다.** 밑줄이 붙었다고 같은 연산이 아니다 —
+    # `bernoulli_(p)` 는 자기 값을 확률로 읽는 `bernoulli()` 와 달리 자기 값을
+    # 무시하고 `p` 로 채우고, `float_power_` 는 결과가 배정도라 torch 도 거절한다.
+    # 마흔한 개를 전부 torch 와 대조해서 그 둘만 갈렸다.
+    ints = np.array([6, -4, 3, 9])
+    flags = np.array([True, False, True, False])
+    other = np.array([True, True, False, False])
+    twos = np.array([2., 2., 2., 2.], dtype=np.float32)
+    pos = np.array([2., 3., 4., 5.], dtype=np.float32)      # 정의역이 양수인 것들
+    grid = np.arange(6, dtype=np.float32).reshape(2, 3)
+
+    derived = (
+        ("bitwise_and_", lambda L, x: x.bitwise_and_(3), ints),
+        ("bitwise_or_", lambda L, x: x.bitwise_or_(3), ints),
+        ("bitwise_xor_", lambda L, x: x.bitwise_xor_(3), ints),
+        ("bitwise_not_", lambda L, x: x.bitwise_not_(), ints),
+        ("bitwise_left_shift_", lambda L, x: x.bitwise_left_shift_(1), ints),
+        ("bitwise_right_shift_", lambda L, x: x.bitwise_right_shift_(1), ints),
+        ("logical_and_", lambda L, x: x.logical_and_(L.tensor(other)), flags),
+        ("logical_or_", lambda L, x: x.logical_or_(L.tensor(other)), flags),
+        ("logical_xor_", lambda L, x: x.logical_xor_(L.tensor(other)), flags),
+        ("logical_not_", lambda L, x: x.logical_not_(), flags),
+        ("clamp_max_", lambda L, x: x.clamp_max_(4), plain),
+        ("clamp_min_", lambda L, x: x.clamp_min_(3), plain),
+        ("digamma_", lambda L, x: x.digamma_(), pos),
+        ("divide_", lambda L, x: x.divide_(2), plain),
+        ("erfinv_", lambda L, x: x.erfinv_(), small - 0.5),
+        ("floor_divide_", lambda L, x: x.floor_divide_(2), plain),
+        ("fmod_", lambda L, x: x.fmod_(2), plain),
+        ("gcd_", lambda L, x: x.gcd_(L.tensor(np.array([2, 2, 3, 3]))), ints),
+        ("lcm_", lambda L, x: x.lcm_(L.tensor(np.array([2, 2, 3, 3]))), ints),
+        ("greater_", lambda L, x: x.greater_(3), plain),
+        ("greater_equal_", lambda L, x: x.greater_equal_(4), plain),
+        ("less_", lambda L, x: x.less_(3), plain),
+        ("less_equal_", lambda L, x: x.less_equal_(4), plain),
+        ("not_equal_", lambda L, x: x.not_equal_(4), plain),
+        ("i0_", lambda L, x: x.i0_(), plain),
+        ("lgamma_", lambda L, x: x.lgamma_(), pos),
+        ("lerp_", lambda L, x: x.lerp_(L.tensor(twos), 0.5), plain),
+        ("mvlgamma_", lambda L, x: x.mvlgamma_(1), pos),
+        ("multiply_", lambda L, x: x.multiply_(3), plain),
+        ("nan_to_num_", lambda L, x: x.nan_to_num_(),
+         np.array([1.0, np.nan, np.inf, -np.inf], dtype=np.float32)),
+        ("nextafter_", lambda L, x: x.nextafter_(L.tensor(twos)), plain),
+        ("put_", lambda L, x: x.put_(L.tensor(np.array([0, 2])),
+                                     L.tensor(np.array([9., 9.], dtype=np.float32))), plain),
+        ("remainder_", lambda L, x: x.remainder_(2), plain),
+        ("renorm_", lambda L, x: x.renorm_(2, 0, 1.0), grid),
+        ("subtract_", lambda L, x: x.subtract_(1), plain),
+        ("true_divide_", lambda L, x: x.true_divide_(2), plain),
+        # **모양이 바뀌는 제자리 연산.** 정사각으로만 물으면 안 바뀐 채 통과한다.
+        ("t_", lambda L, x: x.t_(), grid),
+    )
+    for name, call, src in derived:
+        def go(L, f=call, a=src):
+            x = L.tensor(a.copy())
+            f(L, x)
+            return x
+        cases.append((INPLACE_PREFIX + f"짝에서::{name}", go))
+
+    # `bernoulli_` 는 무작위라 값을 못 굳힌다 — **확률이 0·1 이면 확정**이므로
+    # 그 두 끝만 묻는다. 자기 값을 확률로 읽지 **않는다**는 것이 여기서 드러난다:
+    # 입력이 [1,4,9,2] 인데 `p=0` 이면 전부 0 이다.
+    for p in (0.0, 1.0):
+        def bern(L, prob=p):
+            x = L.tensor(plain.copy())
+            x.bernoulli_(prob)
+            return x
+        cases.append((INPLACE_PREFIX + f"짝에서::bernoulli_(p={p})", bern))
+
+    def refuses_float_power(L):
+        try:
+            L.tensor(plain.copy()).float_power_(2)
+        except Exception as exc:                                # noqa: BLE001
+            return "Double" if "Double" in str(exc) else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "짝에서::float_power_ 는 거절", refuses_float_power))
+
+    # **`tensor()` 는 사본을 뜬다 — 공유하면 사용자의 배열이 조용히 바뀐다.**
+    #
+    # 이 케이스는 위의 마흔한 개를 넣다가 나왔다. 케이스 하나가 입력을 `.copy()` 없이
+    # 받아 `add_(1)` 을 했는데 **torch 는 사본을 떠서 안 샜고 코어만 샜다.** 그래서
+    # 그 뒤 케이스 열여섯이 코어에서만 틀렸고, 원인이 자기 자리에 없어서 한참
+    # 헤맸다. 두 라이브러리가 갈리면 결함이 **엉뚱한 이름으로** 나온다.
+    def copies_input(L):
+        src = np.array([1., 4., 9., 2.], dtype=np.float32)
+        L.tensor(src).add_(1)
+        return L.tensor(src)          # 원본이 그대로여야 한다
+
+    cases.append((INPLACE_PREFIX + "tensor() 는 사본을 뜬다", copies_input))
+
+    def from_numpy_value(L):
+        """값은 셋 다 나른다."""
+        return L.from_numpy(np.array([1., 4., 9., 2.], dtype=np.float32))
+
+    cases.append((INPLACE_PREFIX + "from_numpy 는 값을 나른다", from_numpy_value))
+
+    def from_numpy_aliasing(L):
+        """**공유는 브라우저에 없다.** 값이 GPU 버퍼에 있어서 호스트 배열과 저장을
+        나눠 가질 자리가 없다 — 뷰 전파를 거절하는 것과 같은 이유다. 거절 대신
+        사본이 되므로 `_as_expected` 로는 못 담고, 어느 쪽인지를 값으로 답한다.
+
+        브라우저 쪽이 어느 날 공유하기 시작하면 (그럴 수 없지만) 여기서 갈린다."""
+        src = np.array([1., 4., 9., 2.], dtype=np.float32)
+        L.from_numpy(src).add_(1)
+        shared = bool(src[0] != 1.0)
+        must_copy = hasattr(L, "backend")        # 브라우저 쪽만 참이다
+        if shared == (not must_copy):
+            return "기대대로"
+        return "뜻밖의 공유" if shared else "뜻밖의 사본"
+
+    cases.append((INPLACE_PREFIX + "from_numpy 의 공유=브라우저는사본",
+                  from_numpy_aliasing))
     return cases
 
 

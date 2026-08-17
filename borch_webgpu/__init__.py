@@ -65,6 +65,7 @@ from ._base import Tensor, tensor                        # noqa: E402,F401
 # 실제로 `linalg` 가 함수로 잡혀서 `linalg.cholesky` 가 통째로 실패했다.
 from ._ops import (                                      # noqa: E402,F401
     aminmax, arange, argmax, argmin, as_tensor, cat, chunk, clamp, clip, einsum, eye,
+    from_numpy,
     flatten, flip,
     full, linalg, linspace, matrix_power, memory, no_grad, norm, numel,
     ones, pow,
