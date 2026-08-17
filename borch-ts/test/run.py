@@ -31,6 +31,37 @@ PAGE = "/borch-ts/test/index.html"
 TIMEOUT_MS = 600_000
 
 
+def require_fresh_dist(root=ROOT):
+    """**소스가 `dist` 보다 새것이면 여기서 멈춘다.**
+
+    러너가 싣는 것은 `borch-ts/dist` 이고 그것은 `.gitignore` 라 어느 커밋에도 없다.
+    그래서 리베이스하거나 브랜치를 옮기면 소스만 바뀌고 방출물은 옛것으로 남는다.
+
+    **그 상태를 러너가 못 알린다.** 낡은 `dist` 와 진짜 결손이 `borch.ts 에 X 가 없다`
+    라는 **같은 문구**로 나오기 때문이다. 실제로 두 사람이 각각 밟았다 — 한쪽은 새
+    케이스 119 건을 넣고 러너 수가 한 건도 안 움직여 이름 오타를 찾았고, 다른 쪽은
+    결속에서 31 건이 빨개진 것을 회귀로 보고했다. 그 31 건은 `tensor.ts` 에 **있는**
+    이름들이었고, 소스를 읽으면서 러너는 `dist` 를 읽고 있었다.
+
+    `check:ts` 는 `--noEmit` 이라 이 자리를 안 고친다. 빌드를 잊는 것이 자연스러운
+    구조이므로, 잊었을 때 **다른 것을 의심하기 전에** 멈추는 편이 낫다.
+    """
+    dist = root / "borch-ts" / "dist"
+    if not dist.exists():
+        raise SystemExit(f"방출물이 없다: {dist}\n  먼저: npm run build:ts")
+    newest_src = max(
+        (p.stat().st_mtime for p in (root / "borch-ts").rglob("*.ts")
+         if "dist" not in p.parts and "node_modules" not in p.parts),
+        default=0)
+    oldest_out = min((p.stat().st_mtime for p in dist.rglob("*.js")), default=0)
+    if newest_src > oldest_out:
+        raise SystemExit(
+            "방출물이 소스보다 낡았다 — 러너는 `borch-ts/dist` 를 싣는다.\n"
+            "  먼저: npm run build:ts\n"
+            "  (이대로 돌리면 새 이름이 `borch.ts 에 없다` 로 나오는데, 그것은\n"
+            "   진짜 결손일 때와 **같은 문구**라 원인이 안 보인다.)")
+
+
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -71,6 +102,7 @@ def run(headed=False, verbose=False):
     """
     from playwright.sync_api import sync_playwright
 
+    require_fresh_dist()
     port, stop = serve(ROOT)
     url = f"http://127.0.0.1:{port}{PAGE}"
     last = []

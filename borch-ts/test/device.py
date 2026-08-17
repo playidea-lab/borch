@@ -23,6 +23,9 @@ TIMEOUT_MS = 300_000
 
 
 def main(argv):
+    # **낡은 방출물도 없는 것만큼 나쁘다** — 소스를 고치고 빌드를 잊으면 옛 코드를
+    # 재게 된다. `require_fresh_dist` 가 그 자리를 본다(`run.py`).
+    runner.require_fresh_dist()
     dist = runner.ROOT / "borch-ts" / "dist" / "test" / "device.js"
     if not dist.exists():
         print(f"방출물이 없다: {dist}\n  먼저: npm run build:ts", file=sys.stderr)

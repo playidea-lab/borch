@@ -54,6 +54,12 @@ def serve(root):
 def run(lib, headed, probe=None):
     from playwright.sync_api import sync_playwright
 
+    # **방출물이 소스보다 낡았는지 먼저 본다.** 낡은 `dist` 는 진짜 결손과 같은 문구로
+    # 나온다 — 검사를 두 벌 두면 한쪽만 고쳐지므로 TS 러너의 것을 빌려 쓴다.
+    sys.path.insert(0, str(ROOT / "borch-ts" / "test"))
+    from run import require_fresh_dist          # noqa: PLC0415
+    require_fresh_dist(ROOT)
+
     port, stop = serve(ROOT)
     url = f"http://127.0.0.1:{port}/tests/browser/runner.html?lib={lib}"
     probed = None
