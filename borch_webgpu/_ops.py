@@ -23,6 +23,9 @@ from ._base import (
 )
 
 _ts = _js.borch
+# borch.ts 텐서의 프로토타입. **이름이 있는지 인스턴스 없이 묻는 유일한 자리**라
+# 여기서 한 번만 잡는다 — `__getattr__` 이 아무 이름에나 답하지 않게 하는 데 쓴다.
+_PROTO = _ts.Tensor.prototype
 
 # 두 언어에서 철자가 아예 다른 것들. 규칙으로 안 되는 것만 적는다.
 _RENAME = {
@@ -414,6 +417,16 @@ def __getattr__(name):
             return guarded(handle(a).binary, js_name, handle(b))
         call.__name__ = name
         return call
+
+    # **여기서 미리 묻는다 — 부를 때가 아니라.** 안 물으면 `__getattr__` 이 아무
+    # 이름에나 함수를 내주고, 그러면 `hasattr(torch, "compile")` 이 **늘 참**이다.
+    # 기능을 있는지 보고 갈라 쓰는 코드(`if hasattr(torch, "compile"): …`)가 없는
+    # 쪽으로 들어가서, 오류는 한참 뒤 부르는 자리에서 난다. 프로토타입에 물을 수
+    # 있는 이유는 borch.ts 가 표에서 다는 단항까지 전부
+    # `Object.defineProperty(Tensor.prototype, …)` 로 얹기 때문이다.
+    if getattr(_PROTO, js_name, None) is None:
+        raise AttributeError(
+            f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
 
     def call(x, *args, **kw):
         h = handle(x)

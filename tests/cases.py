@@ -8578,6 +8578,29 @@ def dtype_cases(inp=None):
     # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.
     cases.append(("dtype::형바꾸기::double=브라우저는거절",
                   _as_expected(lambda L: L.tensor(floats).double())))
+
+    # ── 없는 이름은 `hasattr` 에도 없어야 한다 ────────────────────────────
+    #
+    # 위의 `we_refuse` 가 `hasattr` 로 못 갈랐던 이유가 그대로 **사용자의 결함**이다.
+    # 결속의 모듈 `__getattr__` 이 아무 이름에나 함수를 내주면 `hasattr(torch,
+    # "compile")` 이 참이고, 있는지 보고 갈라 쓰는 코드가 **없는 쪽으로 들어간다** —
+    # 오류는 한참 뒤 부르는 자리에서 난다. 검사 장치를 막았던 것이 사용자도 막는다.
+    #
+    # 셋이 갈리는 자리라 값을 그대로 못 굳힌다. 진짜 torch 는 참, 우리 둘은 거짓이
+    # **답인** 자리이므로 "각자 문서대로 굴었는가"로 접는다 — `we_refuse` 와 같은 꼴.
+    def absent(name):
+        def run(L, n=name):
+            real = getattr(L, "__name__", "") == "torch"
+            has = hasattr(L, n)
+            want = real
+            return "묻는 대로" if has == want else (
+                f"뜻밖에 있다({n})" if has else f"뜻밖에 없다({n})")
+        cases.append((f"dtype::없는이름::hasattr({name})", run))
+
+    # torch 에는 있고 우리 둘에는 없는 것으로 골랐다(실측). `cuda` 는 우리도 갖고
+    # 있어서 뺐다 — 있는 이름으로 물으면 이 검사는 아무것도 안 묻는다.
+    for name in ("compile", "vmap", "autocast", "jit", "sparse_coo_tensor"):
+        absent(name)
     return cases
 
 
