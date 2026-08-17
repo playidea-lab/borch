@@ -6,7 +6,7 @@ import math as _math
 import numpy as _np
 
 from ._tensor import (
-    Tensor, _MinMax, _grad_mode, _unbroadcast,
+    Tensor, _MinMax, _grad_mode, _unbroadcast, result_type,
 )
 from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _needs_float, _np, _refuses_bool,
@@ -1701,15 +1701,27 @@ def mul(a, b):
 
 
 def div(a, b, rounding_mode=None):
-    """`rounding_mode` 는 셋이다 — 없으면 참나눗셈, `'floor'`·`'trunc'` 는 정수 쪽."""
-    out = _wrap(a) / b
+    """`rounding_mode` 는 셋이다 — 없으면 참나눗셈, `'floor'`·`'trunc'` 는 정수 쪽.
+
+    **형이 갈리는 자리다.** 참나눗셈은 언제나 실수인데, 자르거나 내림하면 **입력의
+    형으로 돌아온다**(실측: `int64 / int64` 에 `trunc` 를 주면 int64 다). 값만 맞추고
+    형을 실수로 두면 그 뒤 색인이나 `bincount` 가 정수를 요구하는 자리에서 갈린다 —
+    값 대조로는 안 보인다.
+    """
+    left, right = _wrap(a), _wrap(b)
+    out = left / right
     if rounding_mode is None:
         return out
     if rounding_mode == "floor":
-        return out.floor()
-    if rounding_mode == "trunc":
-        return out.trunc()
-    raise RuntimeError(f"rounding_mode 는 None·'floor'·'trunc' 뿐입니다: {rounding_mode!r}")
+        out = out.floor()
+    elif rounding_mode == "trunc":
+        out = out.trunc()
+    else:
+        raise RuntimeError(
+            f"rounding_mode 는 None·'floor'·'trunc' 뿐입니다: {rounding_mode!r}")
+    kind = result_type(left.data.dtype, _np.asarray(
+        right.data if isinstance(right, Tensor) else right).dtype)
+    return out if _np.dtype(kind).kind == "f" else out.type(kind)
 
 
 def floor_divide(a, b):
@@ -2672,7 +2684,18 @@ def norm(t, p=2, dim=None):
         "linalg.vector_norm: Expected a floating point or complex tensor as input")
     if p == 1:
         return t.abs().sum(dim=dim)
-    return (t * t).sum(dim=dim) ** 0.5
+    if p == 2:
+        return (t * t).sum(dim=dim) ** 0.5
+    # **`p` 가 1·2 말고도 온다.** 오래 나머지를 전부 2 로 셌다 — `dist(a, b, 3)` 이
+    # L2 를 돌려줬고 값이 그럴듯해서(같은 크기 대) 안 보였다. `inf` 는 최대 절댓값이고
+    # `-inf` 는 최소, `0` 은 0 이 아닌 것의 개수다(실측).
+    if p == float("inf"):
+        return t.abs().max(dim=dim) if dim is None else t.abs().amax(dim=dim)
+    if p == -float("inf"):
+        return t.abs().min(dim=dim) if dim is None else t.abs().amin(dim=dim)
+    if p == 0:
+        return (t != 0).float().sum(dim=dim)
+    return (t.abs() ** float(p)).sum(dim=dim) ** (1.0 / float(p))
 
 
 # ---- 축약의 나머지
@@ -2863,7 +2886,7 @@ def msort(t):
     return sort(_wrap(t), dim=0).values
 
 
-def diff(t, n=1, dim=-1):
+def diff(t, n=1, dim=-1, prepend=None, append=None):
     """이웃한 것의 차. `x[1:] - x[:-1]` 을 n 번 한다.
 
     **자르기로 짠다** — 자르기가 이미 그래프를 이으므로 역방향을 새로 쓸 것이 없다.
@@ -2871,8 +2894,16 @@ def diff(t, n=1, dim=-1):
     **참·거짓은 뺄셈이 아니라 XOR 이다.** torch 가 `[T, F, T]` 에서 `[T, T]` 를
     주는데(실측) 그것은 이웃이 다른가를 묻는 것이다. 여기서는 `-` 가 불리언을 거절해
     아예 멈추고 있었다 — 인색한 것도 갈리는 것이다.
+
+    **앞뒤로 붙이면 길이가 안 줄어든다.** `prepend`·`append` 는 차를 구하기 **전에**
+    이어 붙이는 것이라, 하나를 붙이면 결과가 입력과 같은 길이가 된다 — 시계열에서
+    첫 칸을 잃지 않으려고 쓰는 자리다.
     """
     out = _wrap(t)
+    if prepend is not None or append is not None:
+        parts = ([_wrap(prepend)] if prepend is not None else []) + [out] \
+            + ([_wrap(append)] if append is not None else [])
+        out = cat(parts, dim=dim)
     if out.data.dtype.kind == "b":
         data = out.data
         for _ in range(n):
@@ -3057,17 +3088,28 @@ def _diagonal_scatter(shape, g):
     return z
 
 
-def diag(t):
+def diag(t, diagonal=0):
     """1차원이면 대각행렬을 만들고, 2차원이면 대각선을 뽑는다 — 방향이 반대라
-    역방향도 반대다."""
+    역방향도 반대다.
+
+    **`diagonal` 은 어느 대각선인가다.** 양수는 위쪽, 음수는 아래쪽. 안 받으면
+    `x.diag(1)` 이 `TypeError` 로 멈춘다 — 시끄럽게 멈추는 쪽이라 값은 안 갈렸다.
+    """
     t = _wrap(t)
-    out = _np.diag(t.data)
+    k = int(diagonal)
+    out = _np.diag(t.data, k)
     if t.data.ndim == 1:
         def back(g):
-            return (_np.diag(_np.asarray(g)),)
+            # 만든 행렬에서 그 대각선만 도로 뽑는다.
+            return (_np.diagonal(_np.asarray(g), k).copy(),)
     else:
         def back(g):
-            return (_diagonal_scatter(t.data.shape, _np.asarray(g)),)
+            z = _np.zeros_like(t.data)
+            _np.fill_diagonal(z[max(0, -k):, max(0, k):], 1.0)
+            spread = _np.zeros_like(t.data)
+            rows, cols = _np.nonzero(z)
+            spread[rows, cols] = _np.asarray(g)
+            return (spread,)
     return t._make(out, (t,), back, "DiagBackward0")
 
 
@@ -4057,8 +4099,15 @@ def triu(t, diagonal=0):
                    lambda g: (_np.triu(_np.asarray(g), k=diagonal),), "TriuBackward0")
 
 
-def allclose(a, b, rtol=1e-5, atol=1e-8):
-    return bool(_np.allclose(_wrap(a).data, _wrap(b).data, rtol=rtol, atol=atol))
+def allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
+    """**`equal_nan` 을 받는다.** 기본은 거짓이라 NaN 끼리도 안 같다(실측).
+
+    골든 하네스는 이 인자를 **안 켠다** — 켜면 NaN 이 통과하면 안 되는 자리에서
+    통과한다. 그것과 이것은 다른 자리다: 여기는 torch 가 주는 인자를 우리도 주는
+    것이고, 켤지 말지는 부르는 쪽이 정한다.
+    """
+    return bool(_np.allclose(_wrap(a).data, _wrap(b).data, rtol=rtol, atol=atol,
+                             equal_nan=bool(equal_nan)))
 
 
 def equal(a, b):
@@ -4069,13 +4118,24 @@ def isfinite(t):
     return Tensor(_np.isfinite(_wrap(t).data))
 
 
-def bincount(t):
+def bincount(t, weights=None, minlength=0):
+    """칸마다 몇 번 나왔는가. **무게를 주면 개수 대신 무게를 더한다.**
+
+    형이 갈린다(실측): 무게 없이는 `int64`, 무게가 있으면 그 무게의 형이다 —
+    개수를 세는 것과 값을 더하는 것이 다른 일이기 때문이다.
+    """
     t = _wrap(t)
     _refuses_bool(t.data, "bincount 는 참거짓을 받지 않습니다.",
                   '"bincount_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
     # `intp` 다 — wasm32 에서 int64 를 주면 거절한다. 위 `repeat_interleave` 참고.
-    return Tensor(_np.bincount(t.data.astype(_np.intp)))
+    w = None if weights is None else _np.asarray(_wrap(weights).data)
+    out = _np.bincount(t.data.astype(_np.intp), weights=w,
+                       minlength=int(minlength))
+    # numpy 는 무게가 있으면 언제나 float64 를 준다. 무게의 형으로 되돌린다.
+    if w is not None:
+        return Tensor(out.astype(w.dtype))
+    return Tensor(out)
 
 
 def _to_plain(obj):

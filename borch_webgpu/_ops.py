@@ -134,7 +134,16 @@ _SIGNATURE = {
     "flip": ("dims",),
     "roll": ("shifts", "dims"),
     "norm": ("p", "dim", "keepdim"),
-    "diff": ("n", "dim"),
+    "diff": ("n", "dim", "prepend", "append"),
+    # 이름이 갈리는 자리 — 파이썬은 `rounding_mode`, JS 는 `roundingMode` 다.
+    # `_SIGNATURE` 는 **torch 의 이름**을 적고 자리는 borch.ts 의 것을 따른다.
+    "div": ("other", "rounding_mode"),
+    "dist": ("other", "p"),
+    "bincount": ("weights", "minlength"),
+    "cholesky": ("upper",),
+    "diag": ("diagonal",),
+    "diagflat": ("offset",),
+    "allclose": ("other", "rtol", "atol", "equal_nan"),
     "median": ("dim", "keepdim"),
     "gather": ("dim", "index"),
     "index_select": ("dim", "index"),

@@ -1905,6 +1905,73 @@ def keepdim_cases(inp=None):
 
     grad("sum(dtype=float32)",
          lambda L, t: t.sum(dim=1, keepdim=True, dtype=L.float32))
+
+    # ── 나머지 선택 인자 ─────────────────────────────────────────────────
+    #
+    # 동료가 넘긴 표의 C 묶음 — "torch 가 받는 인자를 우리가 안 받는다" 인데, 이쪽은
+    # **받는 척하고 버리던 것**이 둘 섞여 있었다. `dist(p)` 는 `p` 를 무시하고 늘 L2 를
+    # 냈고(값이 그럴듯한 크기라 안 보였다), `div(rounding_mode)` 는 값만 맞추고 **형을
+    # 실수로** 뒀다. 나머지는 `TypeError` 로 시끄럽게 멈추던 자리다.
+    pair_a = np.array([1.0, 4.0, -2.0, 3.0], dtype=np.float32)
+    pair_b = np.array([2.0, 3.0, 5.0, -1.0], dtype=np.float32)
+    tops = np.array([7, -7, 8, -8], dtype=np.int64)
+    bots = np.array([2, 2, 3, 3], dtype=np.int64)
+    tally = np.array([1, 2, 2, 5], dtype=np.int64)
+    spd = np.array([[4.0, 1.0], [1.0, 3.0]], dtype=np.float32)
+    grid3 = np.arange(9, dtype=np.float32).reshape(3, 3)
+
+    def A(L):
+        return L.tensor(pair_a.copy())
+
+    def B(L):
+        return L.tensor(pair_b.copy())
+
+    add("arg::add(alpha=2)", lambda L: A(L).add(B(L), alpha=2))
+    add("arg::sub(alpha=2)", lambda L: A(L).sub(B(L), alpha=2))
+    for mode in ("trunc", "floor"):
+        add(f"arg::div(정수, {mode})",
+            lambda L, m=mode: L.tensor(tops.copy()).div(L.tensor(bots.copy()),
+                                                        rounding_mode=m))
+        # **형까지 묻는다.** 값만 물으면 실수로 남은 것이 통과한다 — 정수 나눗셈의
+        # 결과는 정수라야 그 뒤 색인이 받는다.
+        add(f"arg::div(정수, {mode}) 의 형",
+            lambda L, m=mode: str(
+                L.tensor(tops.copy()).div(L.tensor(bots.copy()),
+                                          rounding_mode=m).dtype))
+        add(f"arg::div(실수, {mode})",
+            lambda L, m=mode: A(L).div(B(L), rounding_mode=m))
+    # **`p` 를 오래 무시했다.** 2 만 물으면 영영 안 보이는 자리다.
+    for p in (1, 3):
+        add(f"arg::dist(p={p})", lambda L, k=p: A(L).dist(B(L), k))
+    add("arg::cholesky(upper)",
+        lambda L: L.tensor(spd.copy()).cholesky(upper=True))
+    add("arg::diag(diagonal=1)", lambda L: L.tensor(grid3.copy()).diag(1))
+    add("arg::diag(diagonal=-1)", lambda L: L.tensor(grid3.copy()).diag(-1))
+    add("arg::diagflat(offset=1)", lambda L: A(L).diagflat(1))
+    add("arg::diagflat(offset=-1)", lambda L: A(L).diagflat(-1))
+    zero = np.array([0.0], dtype=np.float32)
+    add("arg::diff(prepend)",
+        lambda L: L.diff(A(L), prepend=L.tensor(zero.copy())))
+    add("arg::diff(append)",
+        lambda L: L.diff(A(L), append=L.tensor(zero.copy())))
+    add("arg::bincount(weights)",
+        lambda L: L.bincount(L.tensor(tally.copy()), weights=A(L)))
+    add("arg::bincount(weights) 의 형",
+        lambda L: str(L.bincount(L.tensor(tally.copy()), weights=A(L)).dtype))
+    add("arg::bincount(minlength=8)",
+        lambda L: L.bincount(L.tensor(tally.copy()), minlength=8))
+
+    def verdict(fn):
+        return lambda L, f=fn: str(f(L))
+
+    nan_pair = np.array([1.0, float("nan")], dtype=np.float32)
+    add("arg::allclose(equal_nan=False)",
+        verdict(lambda L: L.allclose(L.tensor(nan_pair.copy()),
+                                     L.tensor(nan_pair.copy()))))
+    add("arg::allclose(equal_nan=True)",
+        verdict(lambda L: L.allclose(L.tensor(nan_pair.copy()),
+                                     L.tensor(nan_pair.copy()),
+                                     equal_nan=True)))
     return cases
 
 

@@ -1245,17 +1245,36 @@ export class Tensor implements Node<Tensor> {
     return result;
   }
 
-  add(other: Tensor): Tensor {
-    return this.binary("add", other);
+  /**
+   * @param alpha 상대 쪽에 먼저 곱하는 값 — `this + alpha·other` 다.
+   *
+   * torch 가 주는 인자인데 여기 없었다. 없으면 부르는 쪽이 `x.add(y.mul(a))` 로
+   * 풀어 쓰게 되고 답은 같은데, **제자리 판(`add_`)에는 이미 있어서** 두 이름이
+   * 서로 다른 것을 받고 있었다.
+   */
+  add(other: Tensor, alpha = 1): Tensor {
+    return this.binary("add", alpha === 1 ? other : other.mul(Tensor.full([], alpha)));
   }
-  sub(other: Tensor): Tensor {
-    return this.binary("sub", other);
+  sub(other: Tensor, alpha = 1): Tensor {
+    return this.binary("sub", alpha === 1 ? other : other.mul(Tensor.full([], alpha)));
   }
   mul(other: Tensor): Tensor {
     return this.binary("mul", other);
   }
-  div(other: Tensor): Tensor {
-    return this.binary("div", other);
+
+  /**
+   * @param roundingMode `null` 이면 참나눗셈, `"trunc"`·`"floor"` 는 정수 쪽.
+   *
+   * **형이 갈린다.** 참나눗셈은 언제나 실수인데, 자르거나 내리면 **입력의 형으로
+   * 돌아온다**(실측: `int64 / int64` 에 `trunc` 를 주면 int64 다). 값만 맞추고 형을
+   * 실수로 두면 그 뒤 색인이 정수를 요구하는 자리에서 갈린다.
+   */
+  div(other: Tensor, roundingMode: "trunc" | "floor" | null = null): Tensor {
+    const out = this.binary("div", other);
+    if (roundingMode === null) return out;
+    const rounded = roundingMode === "floor" ? out.floor() : out.trunc();
+    const kind = resultDType("mul", this.dtype, other.dtype);
+    return kind === "float32" ? rounded : rounded.to(kind);
   }
 
   // ── 행렬곱 ────────────────────────────────────────────────────────────
@@ -1557,9 +1576,20 @@ export class Tensor implements Node<Tensor> {
     return Tensor.full(this.shape, value);
   }
 
-  /** `‖x - y‖₂`. 조립이라 역방향이 저절로 따라온다. */
-  dist(other: Tensor): Tensor {
-    return this.sub(other).square().sum().sqrt();
+  /**
+   * `‖x − y‖_p`. 조립이라 역방향이 저절로 따라온다.
+   *
+   * **`p` 를 오래 안 받았다** — 언제나 L2 였고, `dist(a, b, 3)` 이 그럴듯한 크기의
+   * 다른 값을 냈다. 코어에도 같은 자리가 있었고 둘 다 값 대조로만 드러났다.
+   */
+  dist(other: Tensor, p = 2): Tensor {
+    const diff = this.sub(other);
+    if (p === 2) return diff.square().sum().sqrt();
+    if (p === 1) return diff.abs().sum();
+    if (p === Number.POSITIVE_INFINITY) return diff.abs().amax();
+    if (p === Number.NEGATIVE_INFINITY) return diff.abs().amin();
+    if (p === 0) return diff.binary("ne", Tensor.full([], 0), "float32").sum();
+    return diff.abs().powScalar(p).sum().powScalar(1 / p);
   }
 
   /** NaN 을 0 으로 보고 더한다. NaN 자리로는 기울기가 안 간다. */
@@ -1934,8 +1964,22 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, start, outShape, "DiagonalBackward0");
   }
 
-  /** 벡터를 대각선에 놓은 정사각 행렬. */
-  diagflat(): Tensor {
+  /**
+   * 벡터를 대각선에 놓은 정사각 행렬.
+   *
+   * @param offset 어느 대각선인가. 0 이 아니면 **행렬이 그만큼 커진다** —
+   *   `n+|offset|` 변이고, 그래서 커널을 다시 부르는 대신 큰 판에 넣고 옮긴다.
+   */
+  diagflat(offset = 0): Tensor {
+    if (offset !== 0) {
+      // **앞에 0 을 채우고 굴린다.** 앞에 `k` 개를 채우면 값이 `(i+k, i+k)` 에
+      // 놓이는데, 위쪽 대각선은 행을 `k` 만큼 당기면 `(i, i+k)` 가 되고 아래쪽은
+      // 열을 당기면 `(i+k, i)` 가 된다. 굴림이 감아 넘기는 자리는 채운 0 이라
+      // 해가 없다 — 그래서 커널을 새로 안 쓴다.
+      const k = Math.abs(offset);
+      const wide = this.padND([k, 0]).diagflat();
+      return wide.roll(-k, offset > 0 ? 0 : 1);
+    }
     const n = this.size;
     const out = dev().alloc(n * n);
     dev().run1d(dev().pipeline(`df:${n}`, () => diagflat(n)), [this.buffer, out], n * n);
@@ -2268,9 +2312,15 @@ export class Tensor implements Node<Tensor> {
     return this.diagonal().sum();
   }
 
-  /** 2차원이면 대각선을 뽑고, 1차원이면 대각선에 놓는다 — torch 의 `diag` 다. */
-  diag(): Tensor {
-    return this.shape.length === 2 ? this.diagonal() : this.diagflat();
+  /**
+   * 2차원이면 대각선을 뽑고, 1차원이면 대각선에 놓는다 — torch 의 `diag` 다.
+   *
+   * @param diagonal 어느 대각선인가. 양수는 위쪽, 음수는 아래쪽.
+   */
+  diag(diagonal = 0): Tensor {
+    return this.shape.length === 2
+      ? this.diagonal(diagonal)
+      : this.diagflat(diagonal);
   }
 
   /** 축 하나를 누적한다. */
@@ -2498,11 +2548,27 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, outShape, "RepeatInterleaveBackward0");
   }
 
-  /** 이웃 차. `n` 번 되풀이하면 그만큼 짧아진다. */
-  diff(n = 1, dim = 0): Tensor {
+  /**
+   * 이웃 차. `n` 번 되풀이하면 그만큼 짧아진다.
+   *
+   * @param prepend 차를 구하기 **전에** 앞에 이어 붙일 것.
+   * @param append 뒤에 이어 붙일 것.
+   *
+   * 하나를 붙이면 결과가 입력과 **같은 길이**가 된다 — 시계열에서 첫 칸을 잃지
+   * 않으려고 쓰는 자리다. 붙이는 것이 차를 구한 뒤가 아니라 **전**이라는 것이 요점이고,
+   * 뒤에 붙이면 마지막 차가 달라진다.
+   */
+  diff(n = 1, dim = 0, prepend?: Tensor, append?: Tensor): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     let cur: Tensor = this;
+    if (prepend !== undefined || append !== undefined) {
+      const parts: Tensor[] = [];
+      if (prepend !== undefined) parts.push(prepend);
+      parts.push(this);
+      if (append !== undefined) parts.push(append);
+      cur = Tensor.cat(parts, axis);
+    }
     for (let k = 0; k < n; k++) {
       const len = cur.shape[axis] ?? 0;
       if (len < 2) throw new Error(`축 ${dim} 가 짧아서 diff 를 더 못 한다.`);
@@ -4126,13 +4192,28 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** 정수 값마다 몇 번 나왔는가. 길이는 가장 큰 값이 정한다. */
-  async bincount(): Promise<Tensor> {
+  /**
+   * 칸마다 몇 번 나왔는가.
+   *
+   * @param weights 주면 개수 대신 **무게를 더한다.**
+   * @param minlength 결과의 최소 길이. 안 나온 칸까지 자리를 잡아 둔다.
+   *
+   * **형이 갈린다**(실측): 무게 없이는 `int64`, 무게가 있으면 그 무게의 형이다 —
+   * 개수를 세는 것과 값을 더하는 것이 다른 일이기 때문이다.
+   */
+  async bincount(weights?: Tensor, minlength = 0): Promise<Tensor> {
     const values = await this.toArray();
+    const w = weights === undefined ? null : await weights.toArray();
     let top = 0;
     for (const v of values) top = Math.max(top, Math.trunc(v));
-    const counts = new Float32Array(top + 1);
-    for (const v of values) counts[Math.trunc(v)] = (counts[Math.trunc(v)] ?? 0) + 1;
-    return Tensor.from(counts, [counts.length], { dtype: "int64" });
+    const size = Math.max(top + 1, minlength);
+    const counts = new Float32Array(size);
+    for (const [i, v] of values.entries()) {
+      const at = Math.trunc(v);
+      counts[at] = (counts[at] ?? 0) + (w === null ? 1 : (w[i] ?? 0));
+    }
+    return Tensor.from(counts, [counts.length],
+      { dtype: w === null ? "int64" : (weights?.dtype ?? "float32") });
   }
 
   /**
@@ -4358,7 +4439,14 @@ export class Tensor implements Node<Tensor> {
    * 적힌다. `L` 과 `L⁻¹` 만 순방향에서 CPU 로 구해 상수로 들고 온다 — 역방향 안에서는
    * GPU 를 기다릴 수가 없으므로 그 값이 미리 있어야 한다.
    */
-  async cholesky(): Promise<Tensor> {
+  /**
+   * @param upper 참이면 위 삼각을 준다 — `L` 대신 `Lᵀ` 다.
+   *
+   * **뒤집기로 짠다.** `Lᵀ` 는 `L` 의 전치이고 전치는 이미 미분되므로, 분해를 두 벌
+   * 쓰지 않는다 — 같은 식을 두 벌로 두면 언젠가 한쪽만 고쳐진다.
+   */
+  async cholesky(upper = false): Promise<Tensor> {
+    if (upper) return (await this.cholesky()).transpose();
     const v = await this.asBatch();
     const n = v.rows;
     const ls = v.mats.map((a) => {
@@ -7248,7 +7336,14 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** 허용 오차 안에서 같은가. torch 의 기본값과 같다. */
-  async allclose(other: Tensor, rtol = 1e-5, atol = 1e-8): Promise<boolean> {
+  /**
+   * @param equalNan 참이면 **NaN 끼리를 같다고 본다.** 기본은 거짓이라 안 같다.
+   *
+   * 골든 하네스는 이것을 **안 켠다** — 켜면 NaN 이 통과하면 안 되는 자리에서
+   * 통과한다. 그것과 이 인자를 갖는 것은 다른 자리다: 켤지 말지는 부르는 쪽이 정한다.
+   */
+  async allclose(other: Tensor, rtol = 1e-5, atol = 1e-8,
+                 equalNan = false): Promise<boolean> {
     if (this.shape.length !== other.shape.length ||
         this.shape.some((d, i) => d !== other.shape[i])) {
       return false;
@@ -7256,6 +7351,7 @@ export class Tensor implements Node<Tensor> {
     const [a, b] = await Promise.all([this.toArray(), other.toArray()]);
     return a.every((v, i) => {
       const w = b[i] ?? Number.NaN;
+      if (Number.isNaN(v) && Number.isNaN(w)) return equalNan;
       return Math.abs(v - w) <= atol + rtol * Math.abs(w);
     });
   }

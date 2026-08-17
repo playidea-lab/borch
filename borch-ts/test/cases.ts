@@ -563,6 +563,54 @@ function addKeepdim(out: Map<string, Case>): void {
   grad("max(keepdim)", (t) => t.max(1, true).values);
   grad("median(keepdim)", (t) => t.median(1, true).values);
   grad("mean(keepdim)", (t) => t.mean(1, true));
+  addArgs(out);
+}
+
+/**
+ * 나머지 선택 인자 — `keep::arg::`.
+ *
+ * **둘은 받는 척하고 버리던 자리였다.** `dist(p)` 가 `p` 를 무시하고 늘 L2 를 냈고
+ * (값이 그럴듯한 크기라 안 보였다), `div(roundingMode)` 는 값만 맞추고 형을 실수로
+ * 뒀다. 나머지는 인자 자체가 없어 시끄럽게 멈추던 것들이다.
+ */
+function addArgs(out: Map<string, Case>): void {
+  const P = "keep::arg::";
+  const A = (): Tensor => Tensor.from([1.0, 4.0, -2.0, 3.0], [4]);
+  const B = (): Tensor => Tensor.from([2.0, 3.0, 5.0, -1.0], [4]);
+  const tops = (): Tensor => Tensor.from([7, -7, 8, -8], [4], { dtype: "int64" });
+  const bots = (): Tensor => Tensor.from([2, 2, 3, 3], [4], { dtype: "int64" });
+  const tally = (): Tensor => Tensor.from([1, 2, 2, 5], [4], { dtype: "int64" });
+  const spd = (): Tensor => Tensor.from([4.0, 1.0, 1.0, 3.0], [2, 2]);
+  const grid3 = (): Tensor =>
+    Tensor.from(Array.from({ length: 9 }, (_, i) => i), [3, 3]);
+  const zero = (): Tensor => Tensor.from([0.0], [1]);
+  const nanPair = (): Tensor => Tensor.from([1.0, Number.NaN], [2]);
+
+  out.set(`${P}add(alpha=2)`, () => A().add(B(), 2));
+  out.set(`${P}sub(alpha=2)`, () => A().sub(B(), 2));
+  for (const mode of ["trunc", "floor"] as const) {
+    out.set(`${P}div(정수, ${mode})`, () => tops().div(bots(), mode));
+    out.set(`${P}div(정수, ${mode}) 의 형`,
+      () => dtypeName(tops().div(bots(), mode).dtype));
+    out.set(`${P}div(실수, ${mode})`, () => A().div(B(), mode));
+  }
+  for (const p of [1, 3]) out.set(`${P}dist(p=${p})`, () => A().dist(B(), p));
+  out.set(`${P}cholesky(upper)`, async () => spd().cholesky(true));
+  out.set(`${P}diag(diagonal=1)`, () => grid3().diag(1));
+  out.set(`${P}diag(diagonal=-1)`, () => grid3().diag(-1));
+  out.set(`${P}diagflat(offset=1)`, () => A().diagflat(1));
+  out.set(`${P}diagflat(offset=-1)`, () => A().diagflat(-1));
+  out.set(`${P}diff(prepend)`, () => A().diff(1, 0, zero()));
+  out.set(`${P}diff(append)`, () => A().diff(1, 0, undefined, zero()));
+  out.set(`${P}bincount(weights)`, async () => tally().bincount(A()));
+  out.set(`${P}bincount(weights) 의 형`,
+    async () => dtypeName((await tally().bincount(A())).dtype));
+  out.set(`${P}bincount(minlength=8)`,
+    async () => tally().bincount(undefined, 8));
+  out.set(`${P}allclose(equal_nan=False)`,
+    async () => verdict(await nanPair().allclose(nanPair())));
+  out.set(`${P}allclose(equal_nan=True)`,
+    async () => verdict(await nanPair().allclose(nanPair(), 1e-5, 1e-8, true)));
 }
 
 /**
