@@ -1271,6 +1271,130 @@ def shape_index_cases(inp=None):
     return cases
 
 
+CPLX_PREFIX = "cplx::"
+
+# **코어만 보는 케이스.** `WEBGPU_PREFIX` 와 정확히 반대 방향이다.
+#
+# 두 구현의 범위가 양쪽으로 갈리기 시작했다 — 자매에만 있는 것(1·3 차원 합성곱, 랭크
+# 7·8)은 코어가 건너뛰고, 코어에만 있는 것(지금은 복소수)은 자매가 건너뛴다. 갈림을
+# 접두사로 적어 두면 **건너뛴 수가 곧 그 범위 차이**가 되어 눈에 보인다.
+CORE_ONLY_PREFIXES = (CPLX_PREFIX,)
+
+
+def complex_cases(inp=None):
+    """복소수 — **1 단계는 코어(numpy)만이다.**
+
+    자매(borch.ts)에는 아직 저장이 없어서 이 케이스들은 지금 브라우저에서 안 돈다.
+    그래서 `webgpu::` 와 반대 방향의 자리다 — 이쪽은 **코어만 보는** 표이고,
+    borch.ts 가 인터리브 저장을 갖추면 그때 같이 초록이 된다.
+
+    ## 규약이 실측으로 못 박혀 있다
+
+    **torch 는 복소 손실에 `backward()` 를 거절한다**(실측). 손실이 늘 실수라면
+    Wirtinger 규약이 이것으로 정리된다 —
+
+        z.grad = ∂L/∂re + i·∂L/∂im
+
+    실측이 그것을 받친다(z = 1+2j): `z.real → 1+0j`, **`z.imag → 0+1j`**(−1j 가
+    아니다), `|z|² → 2+4j`, `(z·z̄).real → 2+4j`.
+
+    ## 켤레가 붙는 자리와 안 붙는 자리
+
+    이 규약에서 **정칙 함수의 역방향은 `conj(f'(z))·g`** 다. 곱셈·나눗셈이 그 자리이고,
+    실수에서는 켤레가 항등이라 **실수 입력으로는 있는지 없는지 알 수 없다.**
+
+    반대로 `abs` 는 실수를 내므로 정칙이 아니고 켤레가 **안** 붙는다 — `z/|z|` 다.
+    `conj` 자신은 `conj(g)` 다. 셋을 한 표에서 물어야 어느 규칙이 어디에 붙는지가 갈린다.
+
+    ## 기울기를 실수 잎에서 받는다
+
+    복소수 잎을 직접 만들지 않고 `complex(re, im)` 으로 엮은 뒤 **실수 잎 둘의
+    기울기**를 본다. 그것이 규약의 반대 방향이고, 값이 `(∂L/∂re, ∂L/∂im)` 로 나뉘어
+    나와서 **어느 쪽이 틀렸는지가 보인다** — 복소수 하나로 받으면 둘이 섞인다.
+    """
+    re = np.array([1.0, -3.0], dtype=np.float32)
+    im = np.array([2.0, 0.5], dtype=np.float32)
+    cases = []
+
+    def add(name, fn):
+        cases.append((CPLX_PREFIX + name, fn))
+
+    def z(L):
+        return L.complex(L.tensor(re), L.tensor(im))
+
+    def grad(name, fn):
+        """`re`·`im` 두 잎의 기울기를 이어 붙여 하나로 굳힌다."""
+        def run(L, f=fn, n=name):
+            r = L.tensor(re.copy(), requires_grad=True)
+            i = L.tensor(im.copy(), requires_grad=True)
+            f(L, L.complex(r, i)).sum().backward()
+            return L.cat([_grad_of(r, n), _grad_of(i, n)])
+
+        cases.append((CPLX_PREFIX + f"grad::{name}", run))
+
+    # ── 만들기·꺼내기 ───────────────────────────────────────────────────
+    add("complex(re, im)", lambda L: L.view_as_real(z(L)))
+    add("complex 의 형", lambda L: str(z(L).dtype))
+    add("polar",
+        lambda L: L.view_as_real(L.polar(
+            L.tensor(np.array([1.0, 2.0], dtype=np.float32)),
+            L.tensor(np.array([0.0, 1.5708], dtype=np.float32)))))
+    add("view_as_complex 왕복",
+        lambda L: L.view_as_real(L.view_as_complex(L.view_as_real(z(L)))))
+    add("real", lambda L: L.real(z(L)))
+    add("imag", lambda L: L.imag(z(L)))
+    # **`conj_physical` 로 묻는다.** torch 의 `conj` 는 **게으르다** — 켤레 비트만
+    # 세워 두고 값을 안 뒤집어서, `view_as_real` 이 "풀지 않은 켤레" 라며 거절한다
+    # (실측). 우리 것은 즉시 뒤집으므로 그 상태가 없다. 그 갈림은 README 의
+    # "torch 와 갈리는 자리" 에 적었고, 여기서는 **값**을 물으려는 것이므로 둘 다
+    # 값을 내는 이름으로 묻는다.
+    add("conj_physical", lambda L: L.view_as_real(L.conj_physical(z(L))))
+    add("angle", lambda L: L.angle(z(L)))
+    add("abs", lambda L: z(L).abs())
+    add("abs 의 형", lambda L: str(z(L).abs().dtype))
+    add("is_complex", lambda L: str(L.is_complex(z(L))))
+
+    # ── 산술 ────────────────────────────────────────────────────────────
+    add("z * z", lambda L: L.view_as_real(z(L) * z(L)))
+    add("z + z", lambda L: L.view_as_real(z(L) + z(L)))
+    add("z / z", lambda L: L.view_as_real(z(L) / z(L)))
+    add("z * 실수", lambda L: L.view_as_real(z(L) * L.tensor(re)))
+    for other, tag in ((np.float32, "float32"), (np.int64, "int64")):
+        add(f"complex64 + {tag} 의 형",
+            lambda L, k=other: str(
+                (z(L) + L.tensor(np.array([1], dtype=k))).dtype))
+
+    # ── 기울기 — **켤레가 붙는 자리와 안 붙는 자리** ────────────────────
+    grad("z.real", lambda L, w: L.real(w))
+    # **`0+1j` 다.** `−1j` 로 적으면 부호만 뒤집힌 채 그럴듯하게 돈다.
+    grad("z.imag", lambda L, w: L.imag(w))
+    grad("abs(z)", lambda L, w: w.abs())
+    grad("abs(z) 제곱", lambda L, w: w.abs() * w.abs())
+    # 곱셈·나눗셈이 **켤레가 붙는** 자리다.
+    grad("(z*z).real", lambda L, w: L.real(w * w))
+    grad("(z*conj(z)).real", lambda L, w: L.real(w * L.conj_physical(w)))
+    grad("view_as_real 합", lambda L, w: L.view_as_real(w))
+
+    # ── 거절 ────────────────────────────────────────────────────────────
+    def refuses_complex_loss(L):
+        """**복소 손실은 거절해야 한다.** 위 규약 전체가 이것 위에 서 있다.
+
+        손실이 실수라는 것이 `z.grad = ∂L/∂re + i·∂L/∂im` 의 전제다. 거절을 안 하면
+        규약이 정의되지 않은 자리에 그럴듯한 숫자가 들어가고, 값 케이스는 전부
+        초록인 채로 남는다 — **전제를 케이스로 묻지 않으면 전제가 아니라 희망이다.**
+        """
+        r = L.tensor(re.copy(), requires_grad=True)
+        i = L.tensor(im.copy(), requires_grad=True)
+        try:
+            (L.complex(r, i) * L.complex(r, i)).sum().backward()
+            return "예외가 안 났다"
+        except Exception as exc:                                    # noqa: BLE001
+            return type(exc).__name__
+
+    add("복소 손실의 backward 는 거절", refuses_complex_loss)
+    return cases
+
+
 MAKE_PREFIX = "make::"
 
 
@@ -7186,7 +7310,7 @@ def golden_cases(inp=None):
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
             + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
-            + make_cases(inp)
+            + make_cases(inp) + complex_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))
 
 

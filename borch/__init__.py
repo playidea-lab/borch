@@ -37,6 +37,9 @@ from ._base import (
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
     _tensor_str, _unsupported, bool_, dtype, float32, float64, int64, long,
     set_printoptions,
+    # 복소수의 형 이름. `complex128`·`cdouble` 은 **이름만** 있다 — 만들려 하면
+    # `Tensor.__init__` 의 목문이 멈춘다.
+    cdouble, cfloat, complex128, complex64,
 )
 from ._tensor import (
     Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,
@@ -144,6 +147,9 @@ from ._ops import (
     angle, asarray, conj, conj_physical, conj_physical_, empty_permuted,
     empty_strided, frombuffer, imag, is_complex, is_conj, is_neg, real,
     resolve_conj, resolve_neg,
+    # **복소수.** `complex128` 은 이름만 있고 만들려 하면 멈춘다 — `float64` 가
+    # 없어서다. 기울기 규약은 `∂L/∂re + i·∂L/∂im` 이고 실측으로 못 박았다.
+    complex, polar, view_as_complex, view_as_real,
     # **이 파일이 내장 `range` 를 91 곳에서 쓴다** — `_ops` 안에서는 다른 이름이고
     # 밖으로만 `range` 로 낸다. `lu`·`lu_solve` 와 같은 자리다.
     range_top as range,

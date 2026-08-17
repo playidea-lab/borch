@@ -113,6 +113,12 @@ def check(lib, path=DEFAULT_PATH, faults=None):
         if name.startswith(cases_mod.WEBGPU_PREFIX) and not is_webgpu:
             skipped += 1
             continue
+        # **반대 방향의 갈림.** 코어에만 있는 것(복소수)은 자매가 건너뛴다 —
+        # 범위가 양쪽으로 갈리기 시작했고, 한쪽 방향만 적어 두면 나머지 절반이
+        # "구현이 빠졌다" 로 보인다.
+        if is_webgpu and name.startswith(cases_mod.CORE_ONLY_PREFIXES):
+            skipped += 1
+            continue
         want = z[_PREFIX + name]
         try:
             raw = fn(lib)

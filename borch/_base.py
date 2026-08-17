@@ -80,21 +80,47 @@ float64 = dtype("float64", _np.float64)
 int64 = dtype("int64", _np.int64)
 long = int64
 bool_ = dtype("bool", _np.bool_)
+# **복소수는 float32 둘이다.** 하드웨어 타입이 아니라 배치 규약이고(실측: 원소당
+# 8 바이트, `view_as_real` 이 마지막 축에 `(re, im)`), 그래서 GPU 쪽에서도 표현된다.
+complex64 = dtype("complex64", _np.complex64)
+cfloat = complex64
+# **`complex128` 은 영원히 없다.** WGSL 에 `f64` 가 없어서 `float64` 가 없고, 그러면
+# 배정도 복소수도 없다. 이름만 두는 이유는 **승격이 그것을 만들기 때문**이다 —
+# `complex64 + float64` 가 torch 에서 `complex128` 이라(실측), 그 자리에서 멈추려면
+# 무엇을 만들려다 멈췄는지 말할 수 있어야 한다.
+complex128 = dtype("complex128", _np.complex128)
+cdouble = complex128
 
 _NP_TO_DTYPE = {_np.dtype("float32"): float32, _np.dtype("float64"): float64,
-                _np.dtype("int64"): int64, _np.dtype("bool"): bool_}
+                _np.dtype("int64"): int64, _np.dtype("bool"): bool_,
+                _np.dtype("complex64"): complex64,
+                _np.dtype("complex128"): complex128}
 
 
 def _resolve(data, dt):
-    """진짜 torch 의 규칙을 따른다 — 정수만 있으면 int64, 하나라도 실수면 float32."""
+    """진짜 torch 의 규칙을 따른다 — 정수만 있으면 int64, 하나라도 실수면 float32.
+
+    **파이썬 `complex` 가 섞이면 complex64 다**(실측: `torch.tensor([1+1j])` 가
+    `complex64`). numpy 에 맡기면 `complex128` 이 되고, 그것은 우리에게 없다.
+    """
     if dt is not None:
         return dt.np
     arr = _np.asarray(data)
+    if arr.dtype.kind == "c":
+        return _np.complex64
     if arr.dtype.kind == "b":
         return _np.bool_
     if arr.dtype.kind in "iu":
         return _np.int64
     return _np.float32
+
+
+def _no_complex128(what="이 연산"):
+    """**배정도 복소수는 만들 수 없다.** `float64` 가 없는 것과 같은 자리다."""
+    raise BrowserTorchError(
+        f"{what} 이(가) complex128 을 만들려 합니다 — 브라우저 축소판에는 "
+        "`float64` 가 없고(WGSL 에 `f64` 가 없습니다) 그래서 배정도 복소수도 "
+        "없습니다. `complex64` 로 맞추세요.")
 
 
 

@@ -5,11 +5,23 @@ import math as _math
 import numpy as _np
 
 from ._base import (
-    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _like_torch, _needs_float, _np,
-    _refuses_bool, _tensor_repr, _unsupported, dtype, float32,
+    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _like_torch, _needs_float,
+    _no_complex128, _np, _refuses_bool, _tensor_repr, _unsupported, dtype,
+    float32,
 )
 
 # ---------------------------------------------------------------- Tensor
+
+def _conj(x):
+    """**정칙 함수의 역방향에 붙는 켤레.**
+
+    복소수 기울기 규약이 `z.grad = ∂L/∂re + i·∂L/∂im` 이라(실측), 정칙 함수 `f` 의
+    역방향이 `conj(f'(z))·g` 다. 실수에서는 켤레가 항등이라 **실수만 넣어 보면 이
+    자리가 있는지 없는지 알 수 없다** — 그래서 실수 코드에 그냥 넣어 두어도 안전하고,
+    빼먹으면 복소수에서만 부호가 뒤집힌다.
+    """
+    return _np.conj(x) if _np.asarray(x).dtype.kind == "c" else x
+
 
 def _unbroadcast(grad, shape):
     """브로드캐스팅으로 늘어난 축을 되돌린다. 역전파의 필수 단계다."""
@@ -23,17 +35,25 @@ def _unbroadcast(grad, shape):
 
 # torch 의 dtype 승격은 numpy 와 다르다 — **범주**로 먼저 가르고, 그 범주 안에서만 올린다.
 #
-#   범주:  bool(0) < 정수(1) < 실수(2)
+#   범주:  bool(0) < 정수(1) < 실수(2) < 복소수(3)
 #   규칙:  참여한 것 중 가장 높은 범주를 고르고, 그 범주에 속한 것들 중 큰 것을 쓴다.
 #          낮은 범주는 높은 범주를 **끌어올리지 않는다.**
 #
 # 그래서 float32 + int64 가 torch 에서는 float32 다 (numpy 는 float64 로 올린다).
 # 여기를 numpy 에 맡기면 학습자는 틀린 규칙을 배운다.
+#
+# **복소수는 한 칸 더 위다**(실측: `complex64 + int64` 가 complex64). 그런데 실수 쪽
+# 정밀도가 복소수 쪽으로 **건너온다** — `complex64 + float64` 가 **complex128** 이다
+# (실측). 범주 규칙만으로는 그 자리가 안 나오므로 따로 적는다.
 
-_CATEGORY = {"b": 0, "i": 1, "u": 1, "f": 2}
+_CATEGORY = {"b": 0, "i": 1, "u": 1, "f": 2, "c": 3}
 _RANK = {_np.dtype("bool"): 0, _np.dtype("int64"): 10,
-         _np.dtype("float32"): 20, _np.dtype("float64"): 21}
-_DEFAULT_BY_CATEGORY = {0: _np.dtype("bool"), 1: _np.dtype("int64"), 2: _np.dtype("float32")}
+         _np.dtype("float32"): 20, _np.dtype("float64"): 21,
+         _np.dtype("complex64"): 30, _np.dtype("complex128"): 31}
+_DEFAULT_BY_CATEGORY = {0: _np.dtype("bool"), 1: _np.dtype("int64"),
+                        2: _np.dtype("float32"), 3: _np.dtype("complex64")}
+# 실수의 정밀도가 복소수로 건너오는 표. 배정도 실수 하나가 배정도 복소수를 만든다.
+_WIDENS_COMPLEX = {_np.dtype("float64"): _np.dtype("complex128")}
 
 
 def _category(dt):
@@ -45,7 +65,14 @@ def result_type(a, b):
     da, db = _np.dtype(a), _np.dtype(b)
     cat = max(_category(da), _category(db))
     same = [d for d in (da, db) if _category(d) == cat]
-    return max(same, key=lambda d: _RANK.get(d, 0))
+    out = max(same, key=lambda d: _RANK.get(d, 0))
+    if cat == 3:
+        # **실수 쪽 정밀도가 건너온다.** `complex64 + float64` 가 complex128 이다.
+        for d in (da, db):
+            wide = _WIDENS_COMPLEX.get(d)
+            if wide is not None and _RANK[wide] > _RANK[out]:
+                out = wide
+    return out
 
 
 def _scalar_category(value):
@@ -53,6 +80,8 @@ def _scalar_category(value):
         return 0
     if isinstance(value, int):
         return 1
+    if isinstance(value, complex):
+        return 3
     return 2
 
 
@@ -124,6 +153,13 @@ class Tensor:
 
     def __init__(self, data, requires_grad=False, _parents=(), _backward=None):
         self._array = data if isinstance(data, _np.ndarray) else _np.asarray(data)
+        # **배정도가 여기서 막힌다.** `float64` 가 없으니 `complex128` 도 없다.
+        #
+        # 이 한 줄이 목문이다 — 승격이 그것을 만드는 유일한 길이 `complex64 + float64`
+        # 이고, 그 결과도 여기를 지나 텐서가 된다. 자리마다 막으면 새 연산이 생길
+        # 때마다 빠뜨린다.
+        if self._array.dtype == _np.complex128:
+            _no_complex128("이 연산")
         # no_grad 는 **연산의 결과**가 그래프를 안 갖게 할 뿐, 직접 만든 잎의 requires_grad 를
         # 끄지는 않는다. torch 도 그렇다 — 여기서 끄면 no_grad 블록 안에서 만든 파라미터가
         # 학습 대상에서 조용히 빠진다.
@@ -221,6 +257,17 @@ class Tensor:
                     "값이 하나가 아닌 텐서에는 gradient 를 줘야 합니다. "
                     "보통은 손실을 스칼라로 만든 뒤 부릅니다.",
                     "grad can be implicitly created only for scalar outputs"))
+            # **손실은 실수여야 한다.** torch 가 그 자리에서 멈춘다(실측).
+            #
+            # 그리고 이 한 줄이 복소수 기울기 규약 전체를 떠받친다 — 손실이 늘 실수라야
+            # `z.grad = ∂L/∂re + i·∂L/∂im` 이 잘 정의된다. 복소 손실을 받아 주면
+            # Wirtinger 의 나머지 절반을 정해야 하고, 그것은 안 정한 자리다.
+            if self.data.dtype.kind == "c":
+                raise RuntimeError(_like_torch(
+                    "복소수 손실에는 backward() 를 부를 수 없습니다 — "
+                    "`.real`·`.abs()` 로 실수를 만든 뒤 부르세요.",
+                    "grad can be implicitly created only for real scalar outputs "
+                    "but got torch.complex64"))
             gradient = _np.ones_like(self.data)
 
         seed = _np.asarray(gradient, dtype=self.data.dtype)
@@ -364,8 +411,16 @@ class Tensor:
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__sub__(self)
 
     def __mul__(self, o):
-        return self._binary(o, _np.multiply, lambda g, a, b: g * b, lambda g, a, b: g * a,
-                            "MulBackward0")
+        """곱셈. **복소수에서는 국소 도함수에 켤레가 붙는다.**
+
+        규약이 `z.grad = ∂L/∂re + i·∂L/∂im` 이라, 정칙 함수 `f` 의 역방향은
+        `conj(f'(z))·g` 다. `d(ab)/da = b` 이므로 `conj(b)·g` — 실수에서는 켤레가
+        항등이라 같은 식이 되고, **복소수에서만 갈린다.** 실수 입력으로는 이 자리가
+        절대 안 보인다.
+        """
+        return self._binary(o, _np.multiply,
+                            lambda g, a, b: g * _conj(b),
+                            lambda g, a, b: g * _conj(a), "MulBackward0")
 
     __rmul__ = __mul__
 
@@ -375,8 +430,10 @@ class Tensor:
         def div(a, b):
             out = _np.divide(a, b)
             return out.astype(_DEFAULT_DTYPE) if a.dtype.kind not in "fc" else out
-        return self._binary(o, div, lambda g, a, b: g / b,
-                            lambda g, a, b: -g * a / (b * b), "DivBackward0")
+        # 곱셈과 같은 자리 — `d(a/b)/da = 1/b`, `d(a/b)/db = −a/b²` 에 켤레가 붙는다.
+        return self._binary(o, div, lambda g, a, b: g / _conj(b),
+                            lambda g, a, b: -g * _conj(a) / _conj(b * b),
+                            "DivBackward0")
 
     def __rtruediv__(self, o):
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__truediv__(self)
@@ -746,6 +803,18 @@ class Tensor:
         return self.var(dim=dim, unbiased=unbiased, keepdim=keepdim) ** 0.5
 
     def abs(self):
+        """크기. **복소수에서는 결과가 실수이고 기울기가 `z/|z|` 다.**
+
+        `sign` 을 그대로 쓰면 안 된다 — numpy 의 복소 `sign` 은 torch 의 것과 다르고,
+        애초에 torch 는 복소수에 `sign` 을 거절한다(실측). 여기서 필요한 것은
+        `∂|z|/∂re = re/|z|`, `∂|z|/∂im = im/|z|` 를 묶은 `z/|z|` 다.
+        """
+        if self.data.dtype.kind == "c":
+            mag = _np.abs(self.data)
+            safe = _np.where(mag == 0, 1.0, mag)
+            return self._make(
+                mag.astype(_DEFAULT_DTYPE), (self,),
+                lambda g: ((_np.asarray(g) * self.data / safe).astype(self.data.dtype),))
         return self._make(_np.abs(self.data), (self,), lambda g: (g * _np.sign(self.data),))
 
     def exp(self):

@@ -33,27 +33,39 @@ COUNT = re.compile(r"골든\s*\*{0,2}(\d{3,5})\s*(?:건|/\s*\d{3,5})")
 
 
 def _counts():
-    """(전체, 코어가 보는 수). 코어는 자매 전용 케이스를 건너뛴다."""
+    """(전체, 코어가 보는 수, 결속이 보는 수).
+
+    **셋이 된 것은 범위가 양쪽으로 갈렸기 때문이다.** 자매 전용(1·3 차원 합성곱처럼
+    코어가 일부러 거절하는 것)은 코어가 건너뛰고, 코어 전용(복소수)은 결속이
+    건너뛴다. 둘 중 하나만 세면 나머지 절반이 "구현이 빠졌다" 로 보인다.
+    """
     names = [n for n, _ in cases_mod.golden_cases(cases_mod.golden_inputs())]
     core = [n for n in names if not n.startswith(cases_mod.WEBGPU_PREFIX)]
-    return len(names), len(core)
+    bind = [n for n in names if not n.startswith(cases_mod.CORE_ONLY_PREFIXES)]
+    return len(names), len(core), len(bind)
 
 
 def test_docs_do_not_name_a_stale_golden_count():
     """문서가 대는 케이스 수는 **지금 있는 수**여야 한다.
 
-    실제로 쓰이는 수는 둘이다 — 표 전체(브라우저 구현이 보는 것)와, 코어가 자매
-    전용을 뺀 수. 그 둘 중 아무것도 아닌 세 자리 수가 `골든 N건` 자리에 있으면
-    그것은 낡은 것이다.
+    실제로 쓰이는 수는 셋이다 — 표 전체, 코어가 자매 전용을 뺀 수, 결속이 코어
+    전용을 뺀 수. 그 셋 중 아무것도 아닌 수가 `골든 N건` 자리에 있으면 낡은 것이다.
+
+    **셋을 다 받으면 그물이 성겨진다.** 실제로 복소수를 넣던 날 전체가 2263 에서
+    2287 로 늘었는데 결속이 보는 수가 정확히 2263 이 되어, 낡은 문장 하나가 우연히
+    맞는 수를 들고 통과할 뻔했다. 수가 맞아도 그 문장은 "전부를 지난다" 였고 그건
+    더 이상 사실이 아니었다 — 수를 세는 검사는 문장을 안 읽는다는 것을 적어 둔다.
     """
-    total, core = _counts()
-    allowed = {str(total), str(core)}
+    total, core, bind = _counts()
+    allowed = {str(total), str(core), str(bind)}
     stale = []
     path = ROOT / "README.md"
     for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         for hit in COUNT.findall(line):
             if hit not in allowed:
-                stale.append(f"README.md:{i}  '{hit}' — 지금은 {total} 또는 {core}")
+                stale.append(
+                    f"README.md:{i}  '{hit}' — 지금은 {total}(전체) / "
+                    f"{core}(코어) / {bind}(결속)")
     assert not stale, (
         "README 의 골든 수가 낡았다:\n  " + "\n  ".join(stale) +
         "\n\nREADME 는 지금을 말하는 자리다. 그때를 이야기해야 하는 문장이면 수를 "

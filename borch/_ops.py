@@ -6826,6 +6826,10 @@ def hash_tensor(*args, **kw):
 # `imag` 만 다르다. **torch 자신이 실수에서 거절한다**(실측) — 그래서 여기서 거절하는
 # 것은 우리 한계가 아니라 **torch 를 그대로 옮긴 것**이다.
 
+def _is_complex(t):
+    return _np.asarray(t.data).dtype.kind == "c"
+
+
 def _alias(t, name):
     """같은 값을 그대로 내는 항등. **형과 그래프를 지킨다.**
 
@@ -6836,26 +6840,85 @@ def _alias(t, name):
     return t._make(t.data, (t,), lambda g: (g,), name)
 
 
+# ── 복소수의 기울기 규약 ────────────────────────────────────────────────────
+#
+# **손실이 늘 실수라서 Wirtinger 가 무너진다.** torch 는 복소 손실에 `backward()` 를
+# 거절한다(실측: "grad can be implicitly created only for real scalar outputs").
+# 그러면 규약이 이것으로 정리된다 —
+#
+#   z.grad = ∂L/∂re + i·∂L/∂im        (실수 둘로 따로 미분해서 묶는다)
+#
+# 실측이 그것을 못 박는다(z = 1+2j):
+#
+#   L = z.real  → 1+0j        L = z.imag  → **0+1j** (−1j 가 아니다)
+#   L = |z|²    → 2+4j        L = (z·z̄).real → 2+4j
+#
+# 이 규약에서 **정칙 함수 f 의 역방향은 `conj(f'(z))·g` 다** — 실수 쪽 코드가 쓰는
+# `f'(x)·g` 와 **켤레 하나**가 다르다. 그 하나를 빼먹으면 부호만 뒤집힌 기울기가
+# 나오고, 값이 그럴듯해서 실수 입력으로는 절대 안 보인다.
+
+def _cgrad(local, g):
+    """정칙 함수의 역방향 한 항. **켤레가 붙는 자리**다."""
+    return _np.conj(local) * g
+
+
 def real(t):
-    """실수부. 실수 텐서에서는 **자기 자신**이고 형도 그대로다(`bool` 도 `bool`)."""
-    return _alias(t, "RealBackward0")
+    """실수부.
+
+    실수 텐서에서는 **자기 자신**이고 형도 그대로다(`bool` 도 `bool`). 복소수에서는
+    실수부를 꺼내고, **기울기는 실수 자리로만 흐른다** — `z.real` 의 기울기가
+    `1+0j` 인 것이 그 뜻이다(실측).
+    """
+    t = _wrap(t)
+    if not _is_complex(t):
+        return _alias(t, "RealBackward0")
+    return t._make(_np.real(t.data).copy(), (t,),
+                   lambda g: (_np.asarray(g).astype(t.data.dtype),),
+                   "RealBackward0")
 
 
 def imag(t):
-    """허수부. **실수 텐서에서는 torch 도 거절한다**(실측) — 우리 한계가 아니다."""
-    raise RuntimeError(_like_torch(
-        "실수 텐서에는 허수부가 없습니다.",
-        "imag is not implemented for tensors with non-complex dtypes."))
+    """허수부.
+
+    **실수 텐서에서는 torch 도 거절한다**(실측) — 우리 한계가 아니다. 복소수에서는
+    허수부를 꺼내고, **기울기가 `i` 를 달고 돌아간다** — `z.imag` 의 기울기가
+    `0+1j` 다(실측). `−1j` 로 적으면 부호가 뒤집힌 채 그럴듯하게 돈다.
+    """
+    t = _wrap(t)
+    if not _is_complex(t):
+        raise RuntimeError(_like_torch(
+            "실수 텐서에는 허수부가 없습니다.",
+            "imag is not implemented for tensors with non-complex dtypes."))
+    return t._make(_np.imag(t.data).copy(), (t,),
+                   lambda g: (_np.asarray(g).astype(t.data.dtype) * 1j,),
+                   "ImagBackward0")
 
 
 def conj(t):
-    """켤레. 실수에서는 항등이고 **뷰다** — torch 도 버퍼를 공유한다(실측)."""
-    return _alias(t, "ConjBackward0")
+    """켤레. 실수에서는 항등이고 **뷰다** — torch 도 버퍼를 공유한다(실측).
+
+    **정칙이 아니다.** 그래서 역방향이 `conj(f')·g` 꼴이 아니라 **`conj(g)`** 다 —
+    켤레의 켤레라서 그렇다.
+    """
+    t = _wrap(t)
+    if not _is_complex(t):
+        return _alias(t, "ConjBackward0")
+    return t._make(_np.conj(t.data), (t,), lambda g: (_np.conj(_np.asarray(g)),),
+                   "ConjBackward0")
 
 
 def conj_physical(t):
-    """`conj` 와 같은 값. torch 는 이쪽이 **실제로 복사하는 판**이라고 이름을 나눈다."""
-    return _alias(t, "ConjPhysicalBackward0")
+    """`conj` 와 같은 값. torch 는 이쪽이 **실제로 복사하는 판**이라고 이름을 나눈다.
+
+    **복소수가 들어오기 전에는 이 함수가 항등이었다** — 실수만 있던 시절에는 그것이
+    맞는 값이었고, 골든도 통과했다. 복소수를 붙이는 순간 같은 코드가 틀린 답이 됐다.
+    "지금 통과하는 항등" 은 범위가 넓어질 때 제일 먼저 무너지는 자리다.
+    """
+    t = _wrap(t)
+    if not _is_complex(t):
+        return _alias(t, "ConjPhysicalBackward0")
+    return t._make(_np.conj(t.data), (t,), lambda g: (_np.conj(_np.asarray(g)),),
+                   "ConjPhysicalBackward0")
 
 
 def conj_physical_(t):
@@ -6874,20 +6937,94 @@ def resolve_neg(t):
 
 
 def angle(t):
-    """편각. **음수는 π, 나머지는 0** 이다.
+    """편각. 실수에서는 **음수가 π, 나머지가 0** 이다 — 복소수의 특수한 경우다.
 
     **형이 언제나 float32 다** — 정수를 넣어도 정수가 안 나온다(실측). 각도는 정수 칸에
     안 들어가므로 그것이 맞고, 실수만 넣어 보면 그 규칙이 안 드러난다.
     """
     t = _wrap(t)
     data = _np.asarray(t.data)
+    if data.dtype.kind == "c":
+        return Tensor(_np.angle(data).astype(_DEFAULT_DTYPE))
     out = _np.where(data < 0, _math.pi, 0.0).astype(_DEFAULT_DTYPE)
     return Tensor(out)
 
 
+def _complex_abs(t):
+    """복소수의 크기. **역방향에 켤레가 안 붙는다** — 실수를 내는 함수라 정칙이 아니다.
+
+    `∂|z|/∂re = re/|z|`, `∂|z|/∂im = im/|z|` 를 묶으면 `z/|z|` 다. 실측이 그것을
+    받친다: `L = |z|²` 에서 기울기가 `2z` 다(z=1+2j 에서 2+4j).
+    """
+    data = _np.asarray(t.data)
+    mag = _np.abs(data)
+    out = mag.astype(_DEFAULT_DTYPE)
+    safe = _np.where(mag == 0, 1.0, mag)
+
+    def back(g):
+        return ((_np.asarray(g) * data / safe).astype(data.dtype),)
+
+    return t._make(out, (t,), back, "AbsBackward0")
+
+
+def complex(re, im):
+    """실수부와 허수부를 묶는다. **이 이름이 파이썬 내장을 가린다** — 이 파일 안에서
+    복소수 판정에 `_is_complex` 를 쓰는 이유가 그것이다."""
+    re, im = _wrap(re), _wrap(im)
+    out = (_np.asarray(re.data, dtype=_np.float32)
+           + 1j * _np.asarray(im.data, dtype=_np.float32)).astype(_np.complex64)
+    # **실수 잎으로 기울기가 흐른다.** 실수부는 실수 몫을, 허수부는 허수 몫을 받는다 —
+    # 그것이 `∂L/∂re + i·∂L/∂im` 규약의 반대 방향이다.
+    return re._make(out, (re, im),
+                    lambda g: (_np.real(_np.asarray(g)).astype(_np.float32),
+                               _np.imag(_np.asarray(g)).astype(_np.float32)),
+                    "ComplexBackward0")
+
+
+def polar(abs_, angle_):
+    """크기와 편각으로 만든다. `abs·(cos θ + i sin θ)`."""
+    abs_, angle_ = _wrap(abs_), _wrap(angle_)
+    mag = _np.asarray(abs_.data, dtype=_np.float64)
+    ang = _np.asarray(angle_.data, dtype=_np.float64)
+    return Tensor((mag * _np.exp(1j * ang)).astype(_np.complex64))
+
+
+def view_as_real(t):
+    """복소수를 `(…, 2)` 실수로 본다. 마지막 축이 `(re, im)` 이다(실측).
+
+    **실수 텐서에는 안 된다** — torch 도 거절한다.
+    """
+    t = _wrap(t)
+    if not _is_complex(t):
+        raise RuntimeError(_like_torch(
+            "실수 텐서에는 쓸 수 없습니다 — 복소수만 됩니다.",
+            "view_as_real is only supported for complex tensors"))
+    out = _np.stack([_np.real(t.data), _np.imag(t.data)], axis=-1)
+    return t._make(out.astype(_np.float32), (t,),
+                   lambda g: ((_np.asarray(g)[..., 0]
+                               + 1j * _np.asarray(g)[..., 1]).astype(t.data.dtype),),
+                   "ViewAsRealBackward0")
+
+
+def view_as_complex(t):
+    """`(…, 2)` 실수를 복소수로 본다. `view_as_real` 의 반대다."""
+    t = _wrap(t)
+    data = _np.asarray(t.data)
+    if data.shape[-1] != 2:
+        raise RuntimeError(_like_torch(
+            "마지막 축이 2 여야 합니다.",
+            "Tensor must have a last dimension of size 2"))
+    out = (data[..., 0] + 1j * data[..., 1]).astype(_np.complex64)
+    return t._make(out, (t,),
+                   lambda g: (_np.stack([_np.real(_np.asarray(g)),
+                                         _np.imag(_np.asarray(g))],
+                                        axis=-1).astype(data.dtype),),
+                   "ViewAsComplexBackward0")
+
+
 def is_complex(t):
-    """**늘 거짓이다.** 복소수 규약을 안 정했다 — `stft` 의 그 자리와 같은 이야기다."""
-    return False
+    """복소수인가. **복소수를 넣기 전에는 늘 거짓이었다** — 이제 진짜로 본다."""
+    return _is_complex(_wrap(t))
 
 
 def is_conj(t):
