@@ -24,6 +24,7 @@ import { einsum } from "../src/einsum.js";
 import * as fft from "../src/fft.js";
 import { istft, stft } from "../src/fft.js";
 import * as nn from "../src/nn.js";
+import * as rnn from "../src/rnn.js";
 import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
 import * as vision from "../src/vision.js";
@@ -472,6 +473,7 @@ export function cases(inputs: Inputs): Map<string, Case> {
   addMisc(out);
   addCell(out);
   addUnpool(out);
+  addRnnTop(out, inputs);
   addOpt(out, inputs);
   addDropout(out, inputs);
   addSdpa(out, inputs);
@@ -5214,4 +5216,94 @@ function withLeafCapture(build: () => Tensor, into: Tensor[]): Tensor {
     for (const p of node.parents) stack.push(p as Tensor);
   }
   return result;
+}
+
+/**
+ * 최상위 순환 여덟 — `torch.lstm` 과 그 형제들.
+ *
+ * **한동안 여기 없었다.** 결속이 borch.ts 를 그대로 부르므로 값은 대조됐지만,
+ * borch.ts 의 **직접 표면**(가중치 목록의 차례, 내놓는 것의 개수)은 아무도 안
+ * 물었다. 못 옮긴 이유는 가중치가 `cases.py` 안에서 뽑혀 `golden.json` 에 안
+ * 실렸기 때문이고, `golden_inputs()` 로 옮기고서 열렸다.
+ *
+ * 묻는 것이 값이 아니라 **배선**이라 조각마다 이름을 붙인다 — `lstm` 은 셋을
+ * 펴고(`출력, h_n, c_n`) 나머지는 둘이다. 하나만 보면 나머지가 안 걸린다.
+ */
+function addRnnTop(out: Map<string, Case>, inp: Inputs): void {
+  const w = (prefix: string, count: number) =>
+    Array.from({ length: count }, (_, i) => inp.get(`rt_${prefix}${i}`));
+  const x = () => inp.get("rt_x");
+  const xb = () => inp.get("rt_xb");
+  const h1 = () => inp.get("rt_h1");
+  const c1 = () => inp.get("rt_c1");
+  const h2 = () => inp.get("rt_h2");
+  const c2 = () => inp.get("rt_c2");
+
+  // 이름이 하나라도 어긋나면 그 케이스는 **조용히 안 돈다** — 러너의 "골든에 없는
+  // 이름" 줄이 아니면 못 본다. 여기 이름에는 한글 꼬리와 공백이 있어 더 잘 어긋난다.
+  const many: [string, (o: rnn.RnnOptions, two: boolean) => Tensor[]][] = [
+    ["lstm", (o, two) => rnn.lstm(o.batchFirst ? xb() : x(),
+      two ? [h2(), c2()] : [h1(), c1()],
+      w(two ? "lstm_two" : "lstm_w", o.hasBiases === false ? 2 : (two ? 8 : 4)), o)],
+    ["gru", (o, two) => rnn.gru(o.batchFirst ? xb() : x(), two ? h2() : h1(),
+      w(two ? "gru_two" : "gru_w", o.hasBiases === false ? 2 : (two ? 8 : 4)), o)],
+    ["rnn_tanh", (o, two) => rnn.rnnTanh(o.batchFirst ? xb() : x(), two ? h2() : h1(),
+      w(two ? "rnn_tanh_two" : "rnn_tanh_w", o.hasBiases === false ? 2 : (two ? 8 : 4)), o)],
+    ["rnn_relu", (o, two) => rnn.rnnRelu(o.batchFirst ? xb() : x(), two ? h2() : h1(),
+      w(two ? "rnn_relu_two" : "rnn_relu_w", o.hasBiases === false ? 2 : (two ? 8 : 4)), o)],
+  ];
+  for (const [name, call] of many) {
+    const pieces = name === "lstm" ? 3 : 2;
+    for (let k = 0; k < pieces; k++) {
+      out.set(`rnntop::${name}[${k}]`, () => {
+        const got = call({}, false)[k];
+        if (!got) throw new Error(`${name}[${k}] 이 없다`);
+        return got;
+      });
+    }
+    out.set(`rnntop::${name}(batch_first)`, () => call({ batchFirst: true }, false)[0]!);
+    out.set(`rnntop::${name}(has_biases=False)`, () => call({ hasBiases: false }, false)[0]!);
+    out.set(`rnntop::${name}(num_layers=2)`, () => call({ numLayers: 2 }, true)[0]!);
+    out.set(`rnntop::${name}(num_layers=2) 마지막 상태`,
+      () => call({ numLayers: 2 }, true)[1]!);
+  }
+
+  // 셀 넷. **한 걸음**이라 목록이 아니라 텐서 넷을 낱개로 받는다 — 목록으로 받는
+  // 위쪽과 인자 꼴이 다르고, 그 차이가 여기서만 드러난다.
+  const hs = () => inp.get("rt_hs");
+  const cs = () => inp.get("rt_cs");
+  const xs = () => inp.get("rt_xs");
+  const cw = (n: string) => w(`${n}_w`, 4) as [Tensor, Tensor, Tensor, Tensor];
+
+  for (let k = 0; k < 2; k++) {
+    out.set(`rnntop::lstm_cell[${k}]`, () => {
+      const [a, b, ci, di] = cw("lstm_cell");
+      return rnn.lstmCell(xs(), [hs(), cs()], a, b, ci, di)[k]!;
+    });
+  }
+  out.set("rnntop::lstm_cell(편향 없이)", () => {
+    const [a, b] = cw("lstm_cell");
+    return rnn.lstmCell(xs(), [hs(), cs()], a, b)[0];
+  });
+  const plain: [string, typeof rnn.gruCell][] = [
+    ["gru_cell", rnn.gruCell],
+    ["rnn_tanh_cell", rnn.rnnTanhCell],
+    ["rnn_relu_cell", rnn.rnnReluCell],
+  ];
+  for (const [name, fn] of plain) {
+    out.set(`rnntop::${name}`, () => {
+      const [a, b, ci, di] = cw(name);
+      return fn(xs(), hs(), a, b, ci, di);
+    });
+    out.set(`rnntop::${name}(편향 없이)`, () => {
+      const [a, b] = cw(name);
+      return fn(xs(), hs(), a, b);
+    });
+  }
+
+  // 드롭아웃 0 은 **학습 중에도 아무것도 안 버린다.** 0 이 아닌 값은 우리 층에
+  // 없어서 거절하는데, 0 까지 막으면 정상 경로가 닫힌다.
+  out.set("rnntop::dropout=0 이면 돈다", () =>
+    rnn.lstm(x(), [h1(), c1()], w("drop_w", 4),
+      { dropout: 0, train: true })[0]);
 }

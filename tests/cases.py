@@ -127,6 +127,48 @@ def golden_inputs():
     tb = (tc.standard_normal(4) * 0.1).astype(np.float32)
     tb3 = (tc.standard_normal(3) * 0.1).astype(np.float32)
 
+    # 최상위 순환용. **`rnn_top_cases` 안에서 뽑던 것을 그대로 옮겼다** — 케이스
+    # 안에서 만들면 `golden.json` 에 안 실리고, 그러면 borch.ts 는 기대값은 있는데
+    # 입력이 없어서 서른다섯 건을 못 묻는다. 위 `nd_*` 가 같은 이유로 여기 왔다.
+    #
+    # **뽑는 차례가 값을 정한다.** 시드도 차례도 원래 그대로여야 기존 기대값이 안
+    # 흔들리는데, 흔들려도 **아무 검사도 안 빨개진다** — 다시 굳히면 torch 가 새
+    # 입력에 맞는 새 답을 내고 셋 다 거기에 맞기 때문이다. 그래서 옮기기 전
+    # `golden.json` 의 `rnntop::` 서른다섯 건을 떼어 두었다가 옮긴 뒤와 바이트로
+    # 대조했다. **다시 굳혀서 초록인 것은 증거가 아니다.**
+    rt = np.random.default_rng(11)
+    _T, _B, _I, _H = 3, 2, 4, 5
+    top = {"x": rt.normal(size=(_T, _B, _I)).astype(np.float32)}
+    top["xb"] = np.ascontiguousarray(top["x"].transpose(1, 0, 2))
+    top["xs"] = rt.normal(size=(_B, _I)).astype(np.float32)
+    for _key, _shape in (("h1", (1, _B, _H)), ("c1", (1, _B, _H)),
+                         ("h2", (2, _B, _H)), ("c2", (2, _B, _H)),
+                         ("hs", (_B, _H)), ("cs", (_B, _H))):
+        top[_key] = rt.normal(size=_shape).astype(np.float32)
+
+    def _top_w(gates, layers=1):
+        out = []
+        for k in range(layers):
+            n = _I if k == 0 else _H
+            out += [rt.normal(size=(gates * _H, n)).astype(np.float32),
+                    rt.normal(size=(gates * _H, _H)).astype(np.float32),
+                    rt.normal(size=(gates * _H,)).astype(np.float32),
+                    rt.normal(size=(gates * _H,)).astype(np.float32)]
+        return out
+
+    for _name, _gates in (("lstm", 4), ("gru", 3), ("rnn_tanh", 1), ("rnn_relu", 1)):
+        for _i, _arr in enumerate(_top_w(_gates)):
+            top[f"{_name}_w{_i}"] = _arr
+        for _i, _arr in enumerate(_top_w(_gates, 2)):
+            top[f"{_name}_two{_i}"] = _arr
+    for _name, _gates in (("lstm_cell", 4), ("gru_cell", 3),
+                          ("rnn_tanh_cell", 1), ("rnn_relu_cell", 1)):
+        for _i, _arr in enumerate(_top_w(_gates)):
+            top[f"{_name}_w{_i}"] = _arr
+    for _i, _arr in enumerate(_top_w(4)):
+        top[f"drop_w{_i}"] = _arr
+    rnn_top = {f"rt_{k}": v for k, v in top.items()}
+
     vis = np.random.default_rng(31)
     vis_u8 = vis.integers(0, 256, (5, 4, 3), dtype=np.uint8)
     vis_f = vis.random((5, 4, 3)).astype(np.float32)
@@ -147,6 +189,7 @@ def golden_inputs():
             "mha_out_w": mha[2], "mha_out_b": mha[3],
             "vis_u8": vis_u8, "vis_f": vis_f, "vis_gray": vis_gray,
             "kinks": kinks,
+            **rnn_top,
             "tw1": tw1, "tw2": tw2, "tw3": tw3, "tb": tb, "tb3": tb3}
 
 
@@ -4821,36 +4864,26 @@ def rnn_top_cases(inp=None):
     양방향과 층간 드롭아웃은 우리 층에 없어서 거절한다. 앞쪽은 모양이 절반이라
     시끄럽게 걸리지만 뒤쪽은 값이 그럴듯한 채로 갈리므로, 둘 다 케이스로 묻는다.
     """
-    rng = np.random.default_rng(11)
-    T, B, I, H = 3, 2, 4, 5
-    x = rng.normal(size=(T, B, I)).astype(np.float32)
-    xb = np.ascontiguousarray(x.transpose(1, 0, 2))
-    xs = rng.normal(size=(B, I)).astype(np.float32)
-    h1 = rng.normal(size=(1, B, H)).astype(np.float32)
-    c1 = rng.normal(size=(1, B, H)).astype(np.float32)
-    h2 = rng.normal(size=(2, B, H)).astype(np.float32)
-    c2 = rng.normal(size=(2, B, H)).astype(np.float32)
-    hs = rng.normal(size=(B, H)).astype(np.float32)
-    cs = rng.normal(size=(B, H)).astype(np.float32)
+    # **입력이 `golden_inputs()` 로 옮겨갔다.** 여기서 뽑으면 `golden.json` 에 안
+    # 실려서 borch.ts 가 같은 가중치를 못 받는다 — 값은 결속을 지나 대조되지만
+    # borch.ts 의 **직접 표면**(인자 차례)은 아무도 안 묻는 상태가 된다.
+    inp = golden_inputs() if inp is None else inp
+    x, xb, xs = inp["rt_x"], inp["rt_xb"], inp["rt_xs"]
+    h1, c1 = inp["rt_h1"], inp["rt_c1"]
+    h2, c2 = inp["rt_h2"], inp["rt_c2"]
+    hs, cs = inp["rt_hs"], inp["rt_cs"]
     cases = []
 
     def add(name, fn):
         cases.append((RNNTOP_PREFIX + name, fn))
 
-    def weights(gates, layers=1):
-        out = []
-        for k in range(layers):
-            n = I if k == 0 else H
-            out += [rng.normal(size=(gates * H, n)).astype(np.float32),
-                    rng.normal(size=(gates * H, H)).astype(np.float32),
-                    rng.normal(size=(gates * H,)).astype(np.float32),
-                    rng.normal(size=(gates * H,)).astype(np.float32)]
-        return out
+    def weights(prefix, count):
+        return [inp[f"rt_{prefix}{i}"] for i in range(count)]
 
     SPEC = [("lstm", 4), ("gru", 3), ("rnn_tanh", 1), ("rnn_relu", 1)]
     for name, gates in SPEC:
-        ws = weights(gates)
-        two = weights(gates, 2)
+        ws = weights(f"{name}_w", 4)
+        two = weights(f"{name}_two", 8)
 
         def call(L, n=name, w=ws, data=x, layers=1, biases=True,
                  batch_first=False, state=None):
@@ -4885,7 +4918,7 @@ def rnn_top_cases(inp=None):
     CELLS = [("lstm_cell", 4), ("gru_cell", 3),
              ("rnn_tanh_cell", 1), ("rnn_relu_cell", 1)]
     for name, gates in CELLS:
-        ws = weights(gates)
+        ws = weights(f"{name}_w", 4)
 
         def cell(L, n=name, w=ws, biases=True):
             tens = [L.tensor(v.copy()) for v in w]
@@ -4904,17 +4937,9 @@ def rnn_top_cases(inp=None):
                                        if n == "lstm_cell"
                                        else f(L, biases=False)))
 
-    def refuses(name, body):
-        def run(L, f=body):
-            try:
-                f(L)
-                return "예외가 안 났다"
-            except Exception as exc:                            # noqa: BLE001
-                return type(exc).__name__
-
-        add(name, run)
-
-    lw = weights(4)
+    # 여기 `refuses` 헬퍼가 정의만 되어 있고 부르는 자리가 없었다. 양방향·드롭아웃
+    # 거절을 물으려다 "torch 는 둘 다 해내므로 이름이 갈린다" 로 접은 흔적이다.
+    lw = weights("drop_w", 4)
 
     def try_lstm(L, dropout=0.0, train=False, bidirectional=False):
         tens = [L.tensor(v.copy()) for v in lw]
