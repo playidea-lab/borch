@@ -8193,6 +8193,14 @@ def shape_cases(inp=None):
         ("transpose(랭크3, 0과2)", lambda t: t.transpose(0, 2), cube),
         ("transpose(랭크3, 음수축)", lambda t: t.transpose(-1, -3), cube),
         ("swapdims(랭크3)", lambda t: t.swapdims(0, 1), cube),
+        # **자기 역이 아닌 순열.** 표의 `permute` 는 전부 `(1,0)` 아니면 축 뒤집기였고
+        # 둘 다 자기 역이라, **순열을 거꾸로 적용하는 구현이 전부 통과**했다. 랭크 3
+        # 에서 `(1,2,0)` 의 역은 `(2,0,1)` 이고 모양부터 갈린다([3,4,2] 대 [4,2,3]).
+        #
+        # 역방향은 더 그렇다 — 되돌릴 때는 **역순열**을 써야 하는데, 순열이 자기
+        # 역이면 앞뒤가 같은 것을 쓰고도 맞는 답이 나온다.
+        ("permute(비가역)", lambda t: t.permute(1, 2, 0), cube),
+        ("permute(비가역의 역)", lambda t: t.permute(2, 0, 1), cube),
         ("select", lambda t: t.select(0, 1), mat),
         ("select(dim1)", lambda t: t.select(1, 2), mat),
         ("diagonal", lambda t: t.diagonal(), square),
@@ -8231,6 +8239,9 @@ def shape_cases(inp=None):
         ("unfold(겹침)", lambda t: t.unfold(0, 3, 1), line),
         ("select", lambda t: t.select(0, 1), mat),
         ("swapaxes", lambda t: t.swapaxes(0, 1), mat),
+        # **되돌릴 때는 역순열을 쓴다.** 순열이 자기 역이면 앞뒤로 같은 것을 써도
+        # 답이 맞아서, 표에 있던 `(1,0)`·축 뒤집기로는 그 자리가 안 열렸다.
+        ("permute(비가역)", lambda t: t.permute(1, 2, 0), cube),
     )
     for name, fn, arr in grads:
         def run(L, f=fn, a=arr, n=name):
