@@ -8,7 +8,8 @@
  */
 
 import {
-  device, init, keepAlive, manualSeed, nn, noGrad, optim, scope, slice, Tensor,
+  device, type DType, init, keepAlive, manualSeed, nn, noGrad, optim, scope,
+  slice, Tensor,
 } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -330,6 +331,60 @@ export async function report(): Promise<string> {
     () => cube.at([0, 0, 0, 0]));
   wantThrow("음수 걸음은 flip 을 가리킨다", "flip()",
     () => slice(0, 3, -1));
+
+  // ── 축약의 형 ─────────────────────────────────────────────────────────
+  //
+  // 표는 torch 에게 물어 굳혔고 코어 쪽은 `tests/test_reduce_dtype.py` 가 쥔다.
+  // 여기는 **borch.ts 쪽 같은 표**다 — 셋이 같은 답을 내야 한다.
+  //
+  // **int64 와 bool 을 둘 다 묻는다.** int64 만 물으면 "형을 지킨다" 와 "bool 을
+  // 올린다" 가 같아 보이고, 절반만 맞는 구현이 통과한다.
+  const ints = Tensor.from([3, 1, 4], [3], { dtype: "int64" });
+  const flags = Tensor.from([1, 0, 1], [3], { dtype: "bool" });
+  const table: [string, DType, DType][] = [
+    // 누적 — 값을 만든다. 참·거짓 칸에 3 이 안 들어가므로 bool 이 올라간다.
+    ["sum", ints.sum().dtype, flags.sum().dtype],
+    ["prod", ints.prod().dtype, flags.prod().dtype],
+    ["cumsum", ints.cumsum(0).dtype, flags.cumsum(0).dtype],
+    ["cumprod", ints.cumprod(0).dtype, flags.cumprod(0).dtype],
+    // 고르기 — 있던 값을 건넨다. 형이 그대로 간다.
+    ["amax", ints.amax().dtype, flags.amax().dtype],
+    ["amin", ints.amin().dtype, flags.amin().dtype],
+    // 고정
+    ["any", ints.any().dtype, flags.any().dtype],
+    ["all", ints.all().dtype, flags.all().dtype],
+    ["countNonzero", ints.countNonzero().dtype, flags.countNonzero().dtype],
+    ["argmax", ints.argmax().dtype, flags.argmax().dtype],
+    ["logsumexp", ints.logsumexp(0).dtype, flags.logsumexp(0).dtype],
+  ];
+  const expected: Record<string, [DType, DType]> = {
+    sum: ["int64", "int64"], prod: ["int64", "int64"],
+    cumsum: ["int64", "int64"], cumprod: ["int64", "int64"],
+    amax: ["int64", "bool"], amin: ["int64", "bool"],
+    any: ["bool", "bool"], all: ["bool", "bool"],
+    countNonzero: ["int64", "int64"], argmax: ["int64", "int64"],
+    logsumexp: ["float32", "float32"],
+  };
+  const wrong = table.filter(([name, i, b]) => {
+    const [wi, wb] = expected[name] as [DType, DType];
+    return i !== wi || b !== wb;
+  });
+  want("축약의 형이 torch 표와 같다", wrong.length === 0,
+    wrong.map(([n, i, b]) => `${n}: ${i}/${b}`).join(", ") || "11 개");
+
+  // 누적과 고르기가 **갈리는지**를 따로 묻는다. 위의 표가 통째로 한 방향으로 틀려도
+  // 이 줄은 살아남아 "둘이 서로 다른 것" 이라는 규칙을 지킨다.
+  want("bool 에서 누적과 고르기가 갈린다",
+    flags.sum().dtype === "int64" && flags.amax().dtype === "bool",
+    `${flags.sum().dtype} / ${flags.amax().dtype}`);
+
+  // 실수만 받는 넷. torch 가 멈추는 자리에서 멈춰야 한다.
+  for (const [name, call] of [
+    ["mean", () => ints.mean()], ["variance", () => ints.variance()],
+    ["std", () => ints.std()], ["norm", () => ints.norm()],
+  ] as [string, () => Tensor][]) {
+    wantThrow(`${name} 은 정수를 거절한다`, "torch:", call);
+  }
 
   // ── 3. 난수 팩토리 ────────────────────────────────────────────────────
   const N = 4096;

@@ -225,6 +225,18 @@ const MAX_UNROLLED_POWER = 8;
  */
 const EXACT_INT_LIMIT = 16_777_216;
 
+/**
+ * 축약이 내는 형. **가르는 선은 "값을 만드는가" 다** — 모양·색인 연산에 그은 선과
+ * 같은 선이고, torch 에게 서른세 자리를 물어 확인했다(`tests/test_reduce_dtype.py`).
+ *
+ * 누적(`sum`·`prod`·`cumsum`·`cumprod`)은 값을 **만든다** — 참·거짓 칸에 3 이 안
+ * 들어가므로 bool 이 int64 로 올라간다. 고르기(`amax`·`amin`·`max`·`min`)는 있던 값을
+ * **건네므로** 형이 그대로 간다. 축약이 예외였던 것이 아니라 둘이 서로 다른 것이다.
+ */
+function accumulated(from: DType): DType {
+  return from === "bool" ? "int64" : from;
+}
+
 /** `at()` 의 축 하나에 넣을 수 있는 것. 문법은 `indexing.ts` 에 적혀 있다. */
 export type AtIndex = number | null | Slice | Tensor | readonly number[];
 
@@ -1304,6 +1316,7 @@ export class Tensor implements Node<Tensor> {
       // d(sum)/dx 는 어디서나 1 이므로 씨앗을 모양대로 펴 준다.
       (g) => [foldFrom(g, shape)],
       "SumBackward0",
+      accumulated(this.dtype),
     );
   }
 
@@ -1369,6 +1382,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, this.shape)];
       },
       kind === "sum" ? "SumBackward1" : "AmaxBackward0",
+      kind === "sum" || kind === "prod" ? accumulated(this.dtype) : this.dtype,
     );
     return result;
   }
@@ -1399,6 +1413,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   mean(dim?: number, keepdim = false): Tensor {
+    // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
+    // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
+    // torch 에서 깨진다.
+    this.needsFloat("mean 은 실수에만 있습니다", "mean(): could not infer output dtype. Input dtype must be either a floating point or complex dtype");
     const count = dim === undefined
       ? this.size
       : (this.shape[dim < 0 ? dim + this.shape.length : dim] ?? 1);
@@ -1442,6 +1460,10 @@ export class Tensor implements Node<Tensor> {
    * 쓰지 않는다 — 그 자리가 이번 주에 가장 자주 틀린 자리였다.
    */
   logsumexp(dim?: number, keepdim = false): Tensor {
+    // **정수·참거짓도 받고 float32 를 낸다**(실측). 실수로 올려 두면 아래 조립이
+    // 그대로 돌고, 결과 형도 따라온다 — `logcumsumexp` 는 torch 가 거절하는 쪽이라
+    // 여기와 갈린다(규칙이 아니라 torch 의 커널 구멍이다).
+    if (this.dtype !== "float32") return this.to("float32").logsumexp(dim, keepdim);
     const m = (dim === undefined ? this.amax() : this.amax(dim, true)).detach();
     const shifted = this.sub(m);
     const summed = dim === undefined
@@ -1570,6 +1592,10 @@ export class Tensor implements Node<Tensor> {
    * 값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.
    */
   variance(correction = 1): Tensor {
+    // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
+    // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
+    // torch 에서 깨진다.
+    this.needsFloat("variance 는 실수에만 있습니다", "std and var only support floating point and complex dtypes");
     const n = this.size;
     // **평균을 떼도 기울기가 같다.** 평균을 통과하는 몫은 Σ(x−m) 에 비례하는데
     // 그 합이 정의상 0 이라 통째로 사라진다. 이어두면 큰 항 둘이 상쇄되는 계산이
@@ -1579,6 +1605,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   std(correction = 1): Tensor {
+    // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
+    // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
+    // torch 에서 깨진다.
+    this.needsFloat("std 는 실수에만 있습니다", "std and var only support floating point and complex dtypes");
     return this.variance(correction).sqrt();
   }
 
@@ -2246,6 +2276,7 @@ export class Tensor implements Node<Tensor> {
         return [new Tensor(gi, shape)];
       },
       kind === "sum" ? "CumsumBackward0" : "CumprodBackward0",
+      accumulated(this.dtype),
     );
   }
 
@@ -2343,6 +2374,16 @@ export class Tensor implements Node<Tensor> {
       if (plan.kind !== "int") axis += 1;
     }
     return out;
+  }
+
+  /**
+   * 실수만 받는 자리에서 멈춘다. **torch 가 멈추는 곳에서 멈추는 것이 규칙이다** —
+   * 관대한 쪽도 갈리는 것이고, 그 코드는 진짜 torch 에서 나중에 깨진다.
+   */
+  private needsFloat(korean: string, phrase: string): void {
+    if (this.dtype !== "float32") {
+      throw new RuntimeError(`${korean} — \`.to("float32")\` 를 먼저 불러라.\n(torch: ${phrase})`);
+    }
   }
 
   /** 축 하나를 색인 **벡터**가 고른다. `gather` 와 달리 색인이 자리마다 다르지 않다. */
@@ -2485,6 +2526,10 @@ export class Tensor implements Node<Tensor> {
 
   /** L2 노름. */
   norm(): Tensor {
+    // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
+    // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
+    // torch 에서 깨진다.
+    this.needsFloat("norm 은 실수에만 있습니다", "linalg.vector_norm: Expected a floating point or complex tensor as input");
     return this.square().sum().sqrt();
   }
 
@@ -2605,7 +2650,8 @@ export class Tensor implements Node<Tensor> {
       n,
     );
     // 자리는 값이 아니다 — 기울기가 흐를 자리가 없다. torch 도 안 흘린다.
-    return new Tensor(out, outShape);
+    // **형은 언제나 int64 다.** 고르기가 아니라 번호를 세는 것이라 원래 형과 무관하다.
+    return new Tensor(out, outShape, { dtype: "int64" });
   }
 
   /** 0 이 아닌 것의 개수. */
