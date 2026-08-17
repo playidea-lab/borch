@@ -4324,7 +4324,9 @@ def unpool_cases(inp=None):
     add("분수::grad", frac_grad)
 
     def frac_layer(L):
-        layer = L.nn.FractionalMaxPool2d(2, output_size=(3, 3),
+        # **크기는 4 로 묻는다.** 3 으로 물으면 아래 비율 케이스(7×0.5=3.5→3)와
+        # 답이 같아서, 비율을 무시하고 크기 기본값을 쓰는 구현도 통과한다.
+        layer = L.nn.FractionalMaxPool2d(2, output_size=(4, 4),
                                          _random_samples=L.tensor(axis_split))
         return layer(L.tensor(frac))
 
@@ -7151,8 +7153,12 @@ def ndim_cases(inp=None):
          lambda L: L.nn.Upsample(scale_factor=2, mode="bilinear")(L.tensor(img))),
         # **첫 자리는 `size` 다**(torch 가 그렇다). 배율을 첫 자리에 두면 같은 줄이
         # 늘리는 것과 줄이는 것으로 갈리는데 모양이 그럴듯해 값으로만 걸린다.
+        # **12 는 기본값(배율 2 → 8)과 다른 정수 배수다.** 처음에 8 로 물었는데 입력이 4×4 라
+        # `Upsample(8)` 과 기본값 `scale_factor=2` 가 **같은 답**이었다 — 첫 자리를
+        # 배율로 읽는 구현도 통과했다. 크기와 배율이 갈리는 수로 물어야 묻는 것이 되는데,
+        # **정수 배수여야 한다** — 6 으로 물었더니 1.5 배라 셋 다 거절했다.
         (NDIM_PREFIX + "nn.Upsample(첫 자리는 size)",
-         lambda L: L.nn.Upsample(8)(L.tensor(img))),
+         lambda L: L.nn.Upsample(12)(L.tensor(img))),
         (NDIM_PREFIX + "nn.AvgPool2d", lambda L: L.nn.AvgPool2d(2)(L.tensor(img))),
         (NDIM_PREFIX + "nn.AvgPool2d(보폭)",
          lambda L: L.nn.AvgPool2d(2, 1)(L.tensor(img))),

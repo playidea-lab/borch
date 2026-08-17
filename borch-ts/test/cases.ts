@@ -1695,7 +1695,7 @@ function addUnpool(out: Map<string, Case>): void {
   // 적고 있어서(`[3, 3]`) 비율을 크기로 바꾸는 규칙이 그 자리에 없다. 층에는 그
   // 인자가 있으므로 여기서 비로소 물어진다. 7×0.5 는 3.5 라 버림과 반올림이 갈린다.
   out.set("unpool::층::FractionalMaxPool2d",
-    () => new nn.FractionalMaxPool2d(2, [3, 3], null, false, [[0.0, 0.75]])
+    () => new nn.FractionalMaxPool2d(2, [4, 4], null, false, [[0.0, 0.75]])
       .call(frac()));
   out.set("unpool::층::FractionalMaxPool2d(비율)",
     () => new nn.FractionalMaxPool2d(2, null, [0.5, 0.5], false, [[0.0, 0.75]])
