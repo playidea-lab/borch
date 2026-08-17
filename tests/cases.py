@@ -5673,9 +5673,28 @@ def loss_cases(inp=None):
     # 처음 쓴 것이 안 고쳐진 것이다. 표가 못 본 이유는 교재가 기본값 `mean` 만
     # 쓰기 때문이고, **제일 많이 쓰는 자리가 제일 안 물어진 자리**였다.
     #
-    # `nll_loss`·`cross_entropy` 는 아직 여기 없다 — borch.ts 쪽이 스칼라만 낸다.
+    # **`nll_loss` 는 뽑자마자 평균을 내고 있었다.** 그래서 `none` 을 만들 자리가
+    # 아예 없었다 — 스칼라에서 표본별 값을 되살릴 수는 없다. 접기 전 벡터를 먼저
+    # 만들어야 `reduction` 이 뜻을 갖는다. `cross_entropy` 가 그것을 물려받는다.
+    _CE_X = np.array([[0.5, -1.0, 2.0], [1.5, 0.25, -0.5]], dtype=np.float32)
+    _CE_T = np.array([2, 0])
+    _LOGP = np.log(np.array([[0.2, 0.5, 0.3], [0.6, 0.1, 0.3]], dtype=np.float32))
+    _BCE_P = np.array([[0.2, 0.7, 0.9], [0.4, 0.15, 0.6]], dtype=np.float32)
+    _BCE_T = np.array([[0.0, 1.0, 1.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
     for reduction in ("none", "mean", "sum"):
         for name, call in (
+            ("cross_entropy", lambda L, r: F(L).cross_entropy(
+                L.tensor(_CE_X), L.tensor(_CE_T), reduction=r)),
+            ("nll_loss", lambda L, r: F(L).nll_loss(
+                L.tensor(_LOGP), L.tensor(_CE_T), reduction=r)),
+            # `binary_cross_entropy` 는 아직 여기 없다 — borch.ts 에 `bceWithLogits`
+            # 만 있고 로짓이 아닌 확률을 받는 쪽이 없다. 코어 케이스는
+            # `tests/test_arg_domain.py` 에 남는다.
+            ("nn.CrossEntropyLoss", lambda L, r: L.nn.CrossEntropyLoss(reduction=r)(
+                L.tensor(_CE_X), L.tensor(_CE_T))),
+            ("nn.NLLLoss", lambda L, r: L.nn.NLLLoss(reduction=r)(
+                L.tensor(_LOGP), L.tensor(_CE_T))),
             ("mse_loss", lambda L, r: F(L).mse_loss(L.tensor(x), L.tensor(y),
                                                     reduction=r)),
             ("l1_loss", lambda L, r: F(L).l1_loss(L.tensor(x), L.tensor(y),

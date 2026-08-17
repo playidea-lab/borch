@@ -1696,16 +1696,16 @@ def SmoothL1Loss(beta=1.0, reduction="mean"):
         handle(a).smoothL1Loss(handle(b), beta, reduction)))
 
 
-def NLLLoss():
-    return _Wrap(lambda a, b: wrap(handle(a).nllLoss(handle(b))))
+def NLLLoss(reduction="mean"):
+    return _Wrap(lambda a, b: wrap(handle(a).nllLoss(handle(b), reduction)))
 
 
 def BCEWithLogitsLoss(reduction="mean"):
     return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
 
 
-def CrossEntropyLoss():
-    return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(handle(b))))
+def CrossEntropyLoss(reduction="mean"):
+    return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(handle(b), reduction)))
 
 
 class _Recurrent(Module):

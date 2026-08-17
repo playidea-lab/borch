@@ -2313,6 +2313,10 @@ function addLoss(out: Map<string, Case>): void {
   for (const [name, fn] of layers) out.set(`loss::층::${name}`, fn);
 
   // ── 접는 방식은 손실의 일부다 ─────────────────────────────────────────
+  const ceX = () => Tensor.from([0.5, -1, 2, 1.5, 0.25, -0.5], [2, 3]);
+  const ceT = () => Tensor.from([2, 0], [2], { dtype: "int64" });
+  const ceLogp = () => Tensor.from(
+    [0.2, 0.5, 0.3, 0.6, 0.1, 0.3].map(Math.log), [2, 3]);
   //
   // `reduceAs` 는 오래 있었는데 **`huberLoss`·`klDiv` 만 쓰고 있었다.** 흔한 넷은
   // `.mean()` 이 박혀 있었다. 코어도 같은 자리에 같은 구멍이었고, 표가 못 본 이유는
@@ -2326,10 +2330,25 @@ function addLoss(out: Map<string, Case>): void {
       [`smooth_l1_loss(${reduction})`,
         () => x().smoothL1Loss(y(), 1.0, reduction)],
       [`huber_loss(${reduction})`, () => x().huberLoss(y(), 1.0, reduction)],
-      // `nn.MSELoss`·`nn.L1Loss`·`nn.SmoothL1Loss` 는 **여기 없다.** borch.ts 의 `nn`
-      // 에는 `HuberLoss`·`KLDivLoss`·`TripletMarginLoss` 같은 드문 것만 층으로
-      // 있고 흔한 넷이 빠져 있다 — `reduction` 때와 **같은 뒤집힘**이 층 이름에서
-      // 한 번 더 나온 자리다. 파이썬 쪽 케이스는 코어와 결속이 받는다.
+      // 분류 손실 둘. `nllLoss` 는 **뽑자마자 평균을 내고 있어서** `none` 을 만들
+      // 자리가 없었다 — 스칼라에서 표본별 값은 되살릴 수 없다.
+      [`cross_entropy(${reduction})`,
+        () => ceX().crossEntropy(ceT(), reduction)],
+      [`nll_loss(${reduction})`, () => ceLogp().nllLoss(ceT(), reduction)],
+      // 층 여섯도 한동안 **없었다.** borch.ts 의 `nn` 에 `HuberLoss` 같은 드문 것만
+      // 있고 흔한 것이 빠져 있었는데, **결속이 텐서 메서드 위에 스스로 층을 만들어
+      // 메꾸고 있어서** 골든이 하나도 못 봤다 — 케이스가 전부 결속을 지나기 때문이다.
+      // TypeScript 로 직접 쓰는 사람에게만 없는 이름이었다.
+      [`nn.MSELoss(${reduction})`,
+        () => new nn.MSELoss(reduction).call(x(), y())],
+      [`nn.L1Loss(${reduction})`,
+        () => new nn.L1Loss(reduction).call(x(), y())],
+      [`nn.SmoothL1Loss(${reduction})`,
+        () => new nn.SmoothL1Loss(reduction, 1.0).call(x(), y())],
+      [`nn.CrossEntropyLoss(${reduction})`,
+        () => new nn.CrossEntropyLoss(reduction).call(ceX(), ceT())],
+      [`nn.NLLLoss(${reduction})`,
+        () => new nn.NLLLoss(reduction).call(ceLogp(), ceT())],
     ];
     for (const [name, fn] of fns) out.set(`loss::reduction::${name}`, fn);
   }

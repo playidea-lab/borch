@@ -485,6 +485,42 @@ export async function report(): Promise<string> {
   want("같은 씨앗이면 GPU 줄기가 같다",
     same(await gpuDraw(7), await gpuDraw(7)));
 
+  // ── 결속이 메꿔 주던 이름들 ─────────────────────────────────────────────
+  //
+  // **골든은 이 여섯을 구조적으로 못 본다.** 케이스가 전부 `borch_webgpu` 를
+  // 지나는데, 그쪽이 텐서 메서드 위에 층을 **스스로 만들어** 놓아서 borch.ts 에
+  // 클래스가 없어도 파이썬 쪽은 멀쩡했다. TypeScript 로 `new nn.MSELoss()` 를 쓰는
+  // 사람에게만 없는 이름이었다.
+  //
+  // 여기서 묻는 것은 값이 아니라 **이름이 있는가와 인자가 닿는가**다.
+  const lx = () => Tensor.from([0.5, -1, 2, 1.5], [2, 2]);
+  const ly = () => Tensor.from([1, 0, -1, 0.5], [2, 2]);
+  const label = () => Tensor.from([1, 0], [2], { dtype: "int64" as DType });
+  const lossLayers: [string, (r: "none" | "sum") => Tensor][] = [
+    ["MSELoss", (r) => new nn.MSELoss(r).call(lx(), ly())],
+    ["L1Loss", (r) => new nn.L1Loss(r).call(lx(), ly())],
+    ["SmoothL1Loss", (r) => new nn.SmoothL1Loss(r).call(lx(), ly())],
+    ["BCEWithLogitsLoss", (r) => new nn.BCEWithLogitsLoss(r).call(
+      lx(), Tensor.from([1, 0, 1, 0], [2, 2]))],
+    ["NLLLoss", (r) => new nn.NLLLoss(r).call(
+      Tensor.from([-1.6, -0.7, -0.5, -1.2], [2, 2]), label())],
+    ["CrossEntropyLoss", (r) => new nn.CrossEntropyLoss(r).call(lx(), label())],
+  ];
+  for (const [name, call] of lossLayers) {
+    // `none` 은 접기 전이라 원소가 여럿이고 `sum` 은 스칼라다. **둘의 모양이 달라야**
+    // 인자가 실제로 닿은 것이다 — 값을 안 봐도 이것만으로 갈린다.
+    want(`nn.${name} 이 있고 reduction 이 닿는다`,
+      call("none").size > 1 && call("sum").size === 1,
+      `none=${call("none").size} sum=${call("sum").size}`);
+  }
+
+  // **`SmoothL1Loss` 의 첫 인자가 코어와 다르다.** 코어는 `(beta, reduction)` 이고
+  // 여기는 `(reduction, beta)` 다. torch 자신은 둘 다 이름으로만 받는 자리라
+  // "torch 와 갈렸다" 고는 못 하지만, **자매끼리 갈린 것**은 맞다 — 같은 코드를
+  // 옮겨 적는 사람이 첫 인자에서 걸린다. 여기 적어 두어 다음에 정리할 때 안 잊는다.
+  want("SmoothL1Loss 의 첫 인자는 reduction 이다",
+    new nn.SmoothL1Loss("none").call(lx(), ly()).size > 1);
+
   // **검증 오류가 하나라도 났으면 위의 초록은 못 믿는다.** WebGPU 는 무효한 명령
   // 버퍼를 조용히 버리므로, 값이 안 바뀐 것을 "통과" 로 읽는 검사가 생길 수 있다.
   want("WebGPU 검증 오류가 없다", device().faults.count === 0,
