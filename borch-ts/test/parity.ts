@@ -514,6 +514,44 @@ export async function report(): Promise<string> {
       `none=${call("none").size} sum=${call("sum").size}`);
   }
 
+  // **결속이 메꾸고 있는 층 이름 열일곱.** 위의 여섯과 같은 갈래인데 아직 안 고쳤다 —
+  // 여기서는 **묻기만 한다.** 고치는 것은 `nn.ts` 이고, 묻는 줄을 먼저 붙여 두면
+  // 그 사이에 하나가 조용히 생기거나 사라져도 잡힌다.
+  //
+  // 결속(`borch_webgpu/_nn.py`)이 텐서 메서드 위에 factory 로 만들어 두어서 파이썬
+  // 쪽은 멀쩡하다. 골든 케이스는 전부 결속을 지나므로 **이 열일곱은 표가 구조적으로
+  // 못 본다** — TypeScript 로 `new nn.GELU()` 를 쓰는 사람에게만 없는 이름이다.
+  // **빨간 채로 두지 않는다.** 열일곱이 지금 없는 것은 아는 사실이고, 러너가 늘
+  // 빨가면 다음 사람이 러너를 안 읽는다. 그래서 묻는 것은 "다 있는가" 가 아니라
+  // **"아는 것 말고 새로 없어진 것이 있는가"** 다. 하나가 채워지면 아래 목록에서
+  // 지우면 되고, 안 지워도 초록이 유지된다 — 늘어나는 쪽만 빨개진다.
+  // 결속(`borch_webgpu/_nn.py`)이 손으로 쓴 층 factory 마흔일곱 — torch 에 있는 것만.
+  const FILLED_IN = [
+    "AdaptiveLogSoftmaxWithLoss", "AvgPool2d", "BCEWithLogitsLoss", "Bilinear",
+    "CELU", "CTCLoss", "Conv1d", "Conv2d", "Conv3d", "CrossEntropyLoss", "ELU",
+    "EmbeddingBag", "Flatten", "FractionalMaxPool2d", "FractionalMaxPool3d",
+    "GELU", "GLU", "Hardshrink", "Hardtanh", "Identity", "L1Loss", "LPPool1d",
+    "LayerNorm", "LeakyReLU", "Linear", "LogSoftmax", "MSELoss", "ModuleDict",
+    "ModuleList", "MultiheadAttention", "NLLLoss", "Parameter", "ParameterDict",
+    "ParameterList", "ReLU", "Sequential", "SiLU", "Sigmoid", "SmoothL1Loss",
+    "Softmax", "Softmin", "Softplus", "Softshrink", "Tanh", "Threshold",
+    "Unflatten", "Upsample",
+  ];
+  // **지금 없는 것.** 채워지면 여기서 지운다 — 안 지워도 초록이고, **늘어나는 쪽만**
+  // 빨개진다. 목록에서 걸러 낸 것을 다시 목록과 대조하면 늘 초록이라 아무것도 안
+  // 묻는다(처음에 그렇게 썼다가 고쳤다).
+  const KNOWN_ABSENT = new Set([
+    "AvgPool2d", "ELU", "FractionalMaxPool2d", "FractionalMaxPool3d", "GELU",
+    "Identity", "LPPool1d", "LayerNorm", "LeakyReLU", "LogSoftmax", "Parameter",
+    "SiLU", "Sigmoid", "Softmax", "Tanh", "Unflatten", "Upsample",
+  ]);
+  const bag = nn as unknown as Record<string, unknown>;
+  const absent = FILLED_IN.filter((n) => !(n in bag));
+  const surprise = absent.filter((n) => !KNOWN_ABSENT.has(n));
+  want("결속이 메꾸는 층 이름에 새 구멍이 없다", surprise.length === 0,
+    `아는 것 ${absent.length}/${KNOWN_ABSENT.size}` +
+    (surprise.length ? ` · **새로 없어진 것**: ${surprise.join(", ")}` : ""));
+
   // **`SmoothL1Loss` 의 첫 인자가 코어와 다르다.** 코어는 `(beta, reduction)` 이고
   // 여기는 `(reduction, beta)` 다. torch 자신은 둘 다 이름으로만 받는 자리라
   // "torch 와 갈렸다" 고는 못 하지만, **자매끼리 갈린 것**은 맞다 — 같은 코드를
