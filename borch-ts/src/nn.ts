@@ -448,6 +448,36 @@ export class ParameterDict extends Module {
   }
 }
 
+/**
+ * `nn.Parameter` 자리. **새 잎을 하나 세운다.**
+ *
+ * ```ts
+ * class Net extends nn.Module {
+ *   w = new nn.Parameter(Tensor.zeros([4]));
+ *   forward(x: Tensor) { return x.mul(this.w); }
+ * }
+ * ```
+ *
+ * ## torch 와 갈리는 자리 둘 — 재봤다
+ *
+ * **저장을 안 나눠 갖는다.** torch 의 `nn.Parameter(t)` 는 `t` 와 같은 저장을 보므로
+ * 한쪽을 고치면 다른 쪽도 바뀌는데, 우리에게는 뷰가 없어서 **값을 복사한다.** 뷰를
+ * 거절하는 것과 같은 이유이고, 파이썬 결속도 같은 자리에서 같은 선택을 했다 —
+ * 두 GPU 구현이 서로 갈리는 것이 torch 와 갈리는 것보다 나쁘다.
+ *
+ * **`requiresGrad` 만으로도 파라미터가 된다.** torch 는 `Parameter` 로 감싼 것만
+ * `named_parameters()` 에 넣고 평범한 `requires_grad=True` 텐서는 안 넣는다(실측).
+ * 여기서는 `ownParameters()` 가 깃발을 보므로 둘 다 들어온다. 규칙을 torch 쪽으로
+ * 바꾸면 `claim()` 으로 세워 둔 지금 코드가 **조용히 파라미터를 잃는다** — 갈림을
+ * 적어 두는 쪽이 싸다. `parity.ts` 가 이 둘을 값으로 붙잡고 있다.
+ */
+export const Parameter = function (t: Tensor, requiresGrad = true): Tensor {
+  const p = t.clone().detach();
+  p.requiresGrad = requiresGrad;
+  keepAlive(p);
+  return p;
+} as unknown as { new (t: Tensor, requiresGrad?: boolean): Tensor };
+
 /** `y = x·Wᵀ + b`. 가중치는 `(출력, 입력)` 이다 — torch 와 같다. */
 export class Linear extends Module {
   readonly weight: Tensor;

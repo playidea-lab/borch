@@ -77,6 +77,42 @@ export async function report(): Promise<string> {
     Object.keys(wc.ownParameters()).join(",") === "weight",
     Object.keys(wc.ownParameters()).join(","));
 
+  // ── `nn.Parameter` — **torch 와 갈리는 자리 둘을 값으로 붙잡는다** ────────
+  //
+  // 갈림을 주석에만 적으면 다음 사람이 그 주석을 안 읽고 고친다. 여기 있으면
+  // 고치는 순간 빨개지고, 그때 갈림이 **의도였는지**를 다시 정하게 된다.
+  const src = Tensor.from([1, 2, 3], [3]);
+  const par = new nn.Parameter(src);
+  want("Parameter 가 학습 대상 표식을 세운다", par.requiresGrad);
+  // torch 는 원본을 안 건드린다 — 우리도 그렇다.
+  want("Parameter 가 원본의 깃발을 안 건드린다", !src.requiresGrad);
+  // **저장은 안 나눠 갖는다.** torch 는 나눠 갖지만 우리에게는 뷰가 없다.
+  // 파이썬 결속도 같은 선택이라, 두 GPU 구현끼리는 안 갈린다.
+  // 둘째 인자로 깃발을 끈다 — 안 끄면 잎에 제자리 쓰기를 못 해서 이 물음 자체가
+  // 안 선다. 덤으로 그 인자가 닿는지도 여기서 물어진다.
+  await (async () => {
+    const p2 = new nn.Parameter(src, false);
+    want("Parameter(t, false) 는 깃발을 안 세운다", !p2.requiresGrad);
+    p2.copyFrom(Tensor.from([9, 9, 9], [3]));
+    const after = await src.toArray();
+    want("Parameter 는 저장을 안 나눠 갖는다 — torch 와 갈린다",
+      after[0] === 1, `원본 첫 칸 ${after[0]}`);
+  })();
+  // **평범한 `requiresGrad` 텐서도 파라미터로 센다.** torch 는 `Parameter` 로 감싼
+  // 것만 세고 이것은 안 센다(실측) — 규칙을 그쪽으로 바꾸면 `claim()` 으로 세워 둔
+  // 지금 코드가 조용히 파라미터를 잃는다.
+  class Bare extends nn.Module {
+    marked = new nn.Parameter(Tensor.from([1, 1], [2]));
+    flagged = Tensor.from([1, 1], [2], { requiresGrad: true });
+
+    override forward(x: Tensor): Tensor {
+      return x;
+    }
+  }
+  want("깃발만 세운 텐서도 파라미터로 센다 — torch 와 갈린다",
+    Object.keys(new Bare().ownParameters()).sort().join(",") === "flagged,marked",
+    Object.keys(new Bare().ownParameters()).sort().join(","));
+
   // 컨테이너는 자리 번호를 지켜야 한다 — 골든이 그 이름으로 가중치를 넣는다.
   const seq = new nn.Sequential(new nn.Linear(2, 2), new nn.ReLU());
   want("Sequential 은 자리 번호를 지킨다",
@@ -540,10 +576,9 @@ export async function report(): Promise<string> {
   // **지금 없는 것.** 채워지면 여기서 지운다 — 안 지워도 초록이고, **늘어나는 쪽만**
   // 빨개진다. 목록에서 걸러 낸 것을 다시 목록과 대조하면 늘 초록이라 아무것도 안
   // 묻는다(처음에 그렇게 썼다가 고쳤다).
-  // 열여섯을 채웠다. 남은 하나(`Parameter`)는 층이 아니라 **텐서 표식**이라
-  // `requiresGrad` 가 그 자리를 대신하고 있다 — 이름을 만들지가 먼저 정해질 일이고,
-  // 만들면 `stateDict` 열쇠 규칙과 엮인다.
-  const KNOWN_ABSENT = new Set(["Parameter"]);
+  // **열일곱 전부 채웠다.** 목록이 비어도 검사는 뜻이 있다 — 하나가 사라지면
+  // `새로 없어진 것` 으로 빨개진다.
+  const KNOWN_ABSENT = new Set<string>();
   const bag = nn as unknown as Record<string, unknown>;
   const absent = FILLED_IN.filter((n) => !(n in bag));
   const surprise = absent.filter((n) => !KNOWN_ABSENT.has(n));

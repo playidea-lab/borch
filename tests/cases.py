@@ -8125,6 +8125,33 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "from_numpy 의 공유=브라우저는사본",
                   from_numpy_aliasing))
+
+    # ── `nn.Parameter` — 하나는 맞고 하나는 갈린다 ─────────────────────────
+    #
+    # 셋 다 **새 물건**을 내고 **원본의 깃발을 안 건드린다** — 그건 torch 와 같다.
+    # 갈리는 것은 저장이다: torch 와 코어는 나눠 갖고 브라우저 둘은 사본이다.
+    # 위의 `from_numpy` 와 같은 자리이고 같은 이유다(GPU 버퍼는 호스트와 저장을
+    # 나눌 수 없다). 갈림을 값으로 답하게 두면 어느 날 한쪽이 바뀔 때 걸린다.
+    def parameter_leaves_source(L):
+        t = L.tensor(np.array([1., 2., 3.], dtype=np.float32))
+        p = L.nn.Parameter(t)
+        return f"{p.requires_grad} {t.requires_grad} {p is t}"
+
+    cases.append((INPLACE_PREFIX + "Parameter 는 원본을 안 건드린다",
+                  parameter_leaves_source))
+
+    def parameter_aliasing(L):
+        t = L.tensor(np.array([1., 2., 3.], dtype=np.float32))
+        p = L.nn.Parameter(t, requires_grad=False)
+        p.add_(1)
+        shared = bool(float(t.numpy()[0]) != 1.0)
+        must_copy = hasattr(L, "backend")        # 브라우저 쪽만 참이다
+        if shared == (not must_copy):
+            return "기대대로"
+        return "뜻밖의 공유" if shared else "뜻밖의 사본"
+
+    cases.append((INPLACE_PREFIX + "Parameter 의 공유=브라우저는사본",
+                  parameter_aliasing))
     return cases
 
 

@@ -72,10 +72,17 @@ nn = _NN()
 
 
 class Parameter(Tensor):
-    """학습 대상. `nn.Linear` 가 만드는 가중치는 처음부터 requires_grad 다."""
+    """학습 대상. `nn.Linear` 가 만드는 가중치는 처음부터 requires_grad 다.
 
-    def __init__(self, data):
-        super().__init__(data.data if isinstance(data, Tensor) else _np.asarray(data), True)
+    **`requires_grad` 를 받는다.** torch 에 있는 인자인데 여기 없어서
+    `nn.Parameter(t, requires_grad=False)` 가 `TypeError` 로 멈췄다 — 얼려 두는
+    가중치를 만들 때 교재가 쓰는 꼴이다.
+    """
+
+    def __init__(self, data, requires_grad=True):
+        super().__init__(
+            data.data if isinstance(data, Tensor) else _np.asarray(data),
+            requires_grad)
 
 
 class Module:
