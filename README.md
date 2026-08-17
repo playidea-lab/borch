@@ -494,6 +494,30 @@ Tensor.randperm(64);
 t.randnLike();
 ```
 
+### `nn.functional` — `F.` 로 적힌 줄
+
+torch 는 같은 연산을 두 이름으로 갖는다. `x.relu()` 도 되고 `F.relu(x)` 도 되며,
+교재 코드는 층을 쓸 때 앞쪽을, 손실·합성곱을 직접 부를 때 뒤쪽을 쓴다. borch 에는
+앞쪽만 있어서 `F.` 로 적힌 줄을 통째로 다시 써야 했다.
+
+```ts
+import { nn } from "borch";
+const F = nn.functional;                 // torch.nn.functional 과 같은 경로다
+
+F.relu(x);
+F.conv2d(x, weight, bias);
+F.crossEntropy(logits, target);
+```
+
+**메서드를 안 없앤다.** torch 가 둘 다 갖고 있으므로 우리도 둘 다 갖는다 —
+`x.relu()` 로 적힌 코드가 이 변경으로 멈출 이유가 없다. `Tensor` 가 작아지지도
+않는다. 없던 문을 내는 것이지 있던 것을 치우는 것이 아니다.
+
+**이름이 같은데 연산이 다른 다섯은 안 낸다.** `F.layer_norm`·`F.rms_norm`·`F.pad`·
+`F.upsample` 은 torch 와 인자 규약이 다르고, `F.batch_norm` 은 `Tensor.batchNorm`
+(축만 바꾼 `layerNorm`)이 아니라 층 쪽 자유 함수로 나간다. 이름으로 이으면 조용히
+다른 연산이 걸리므로, 없는 것은 없다고 둔다.
+
 ### 대괄호 자리 — `x[...]`
 
 **자바스크립트는 `[]` 를 오버로드할 수 없다.** 그래서 torch 의 대괄호 한 줄이 여기서는

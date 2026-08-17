@@ -2500,3 +2500,28 @@ export class CrossEntropyLoss {
     return this.forward(logits, target);
   }
 }
+
+// ── torch.nn.functional 자리 ────────────────────────────────────────────
+//
+// **`nn.functional` 로 낸다** — torch 의 경로가 `torch.nn.functional` 이므로
+// `const F = nn.functional` 한 줄이면 `F.conv2d(x, w, b)` 가 그대로 돈다.
+//
+// 이 파일이 이미 갖고 있던 자유 함수 여덟도 같이 모은다. 지금은 `nn.batchNorm` 과
+// `nn.Linear` 가 한 이름 공간에 섞여 있는데, torch 에서 앞은 `F.` 이고 뒤는 `nn.` 이다.
+// **옛 이름은 그대로 둔다** — 옮기는 것이 목적이지 깨는 것이 아니다.
+//
+// 방향이 하나다: `nn` → `functional` → `tensor`. `functional` 이 이 파일을 도로
+// 부르면 순환이 되므로, 여기 있는 여덟은 옮기지 않고 **여기서 묶기만** 한다.
+import * as delegated from "./functional.js";
+
+export const functional = {
+  ...delegated,
+  affineGrid,
+  batchNorm,
+  ctcLoss,
+  embeddingBag,
+  gridSample,
+  gumbelSoftmax,
+  multiHeadAttentionForward,
+  scaledDotProductAttention,
+};

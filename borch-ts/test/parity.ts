@@ -386,6 +386,40 @@ export async function report(): Promise<string> {
     wantThrow(`${name} 은 정수를 거절한다`, "torch:", call);
   }
 
+  // ── nn.functional ─────────────────────────────────────────────────────
+  //
+  // **값은 안 만든다.** 전부 `Tensor` 메서드로 넘기므로 골든이 이미 그 값들을 지킨다.
+  // 여기서 묻는 것은 **위임한 것과 같은 답을 내는가**, 그리고 **이름으로 이어서는 안
+  // 되는 자리가 안 이어졌는가** 둘이다.
+  const F = nn.functional;
+  const fx = keepAlive(Tensor.from([1, -2, 3, -4], [2, 2]));
+
+  want("nn.functional 이 열린다", typeof F === "object" && F !== null);
+  same(await F.relu(fx).toArray(), await fx.relu().toArray())
+    ? want("F.relu 가 메서드와 같다", true)
+    : want("F.relu 가 메서드와 같다", false);
+  want("F.leakyRelu 가 메서드와 같다",
+    same(await F.leakyRelu(fx, 0.2).toArray(), await fx.leakyRelu(0.2).toArray()));
+  want("F.softmax 가 메서드와 같다",
+    same(await F.softmax(fx, 1).toArray(), await fx.softmax(1).toArray()));
+
+  // **이름이 같은데 연산이 다른 자리.** 자동으로 이었으면 조용히 다른 것이 걸린다.
+  want("F.batchNorm 은 층의 자유 함수다 — Tensor.batchNorm 이 아니다",
+    F.batchNorm.length >= 5, `인자 ${F.batchNorm.length} 개`);
+  want("F.unfold 는 im2col 이다 — Tensor.unfold 가 아니다",
+    same(await F.unfold(fx.reshape([1, 1, 2, 2]), 2).toArray(),
+      await fx.reshape([1, 1, 2, 2]).unfoldIm2col(2).toArray()));
+  // huberLoss 는 torch 가 (reduction, delta) 차례라 위치 인자가 뒤바뀐다.
+  want("F.huberLoss 가 torch 의 인자 차례를 쓴다",
+    same(await F.huberLoss(fx, fx.zerosLike(), "mean", 2).toArray(),
+      await fx.huberLoss(fx.zerosLike(), 2, "mean").toArray()));
+
+  // 이어서는 안 되는 것들은 **없어야** 한다. 있으면 조용히 다른 연산이다.
+  for (const missing of ["layerNorm", "rmsNorm", "pad", "upsample"]) {
+    want(`F.${missing} 은 안 낸다 — 연산이 다르다`,
+      (F as Record<string, unknown>)[missing] === undefined);
+  }
+
   // ── 3. 난수 팩토리 ────────────────────────────────────────────────────
   const N = 4096;
   const g = await Tensor.randn([N]).toArray();
