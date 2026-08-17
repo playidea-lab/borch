@@ -170,7 +170,14 @@ _SIGNATURE = {
     "layer_norm": ("dim", "eps"),
     "leaky_relu": ("negative_slope",),
     "one_hot": ("num_classes",),
-    "smooth_l1_loss": ("target", "beta"),
+    # **손실은 전부 `reduction` 을 받는다.** 흔한 넷이 오래 안 받고 있었다 —
+    # 드문 손실 열셋은 처음부터 받았는데, 튜토리얼이 기본값만 쓰니 아무도 안 물었다.
+    "smooth_l1_loss": ("target", "beta", "reduction"),
+    "l1_loss": ("target", "reduction"),
+    "mse_loss": ("target", "reduction"),
+    "bce_with_logits": ("target", "reduction"),
+    "binary_cross_entropy_with_logits": ("target", "reduction"),
+    "huber_loss": ("target", "delta", "reduction"),
     "interpolate": ("scale_factor",),
     "max": ("dim", "keepdim"),
     "min": ("dim", "keepdim"),

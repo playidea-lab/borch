@@ -348,21 +348,11 @@ export function alignStrides(
   return strides;
 }
 
-/**
- * 정렬된 값에서 분위수 하나를 뽑는다. **자리 사이를 선형으로 잇는다.**
- *
- * 가장 가까운 값을 고르는 방식과 다르다 — torch 의 기본이 보간이고, 홀수 개일 때만
- * 둘이 같은 답을 낸다.
- */
-function interpolate(sorted: readonly number[], q: number): number {
-  if (sorted.length === 0) return Number.NaN;
-  const pos = q * (sorted.length - 1);
-  const low = Math.floor(pos);
-  const high = Math.ceil(pos);
-  const a = sorted[low] ?? Number.NaN;
-  const b = sorted[high] ?? Number.NaN;
-  return a + (b - a) * (pos - low);
-}
+// **분위수의 보간은 `quantileOver` 안으로 들어갔다.**
+//
+// 여기 값만 내는 헬퍼가 있었는데, 그 값으로 텐서를 만들면 **그래프가 없다.** 정렬
+// 자리로 되짚어 뽑으면 값이 같고 기울기가 보간에 쓴 두 자리로 간다 — 그것이 이
+// 연산의 규칙이다.
 
 /**
  * 0 차 변형 베셀 함수. `kaiserWindow` 를 CPU 에서 만들므로 여기에도 한 벌 필요하다.
@@ -3310,18 +3300,24 @@ export class Tensor implements Node<Tensor> {
     return dotted.div(la.mul(lb).binary("maximum", Tensor.full([], eps)));
   }
 
-  /** 절대 오차의 평균. */
-  l1Loss(target: Tensor): Tensor {
-    return this.sub(target).abs().mean();
+  /**
+   * 절대 오차.
+   *
+   * **`reduction` 이 여기 없었다.** 드물게 쓰는 손실 열셋은 전부 받고 있었는데
+   * 제일 많이 쓰는 넷이 안 받았다 — 나중에 쓴 것이 torch 서명을 따랐고 처음 쓴 것이
+   * 안 고쳐졌다. 튜토리얼이 기본값만 쓰니 표도 안 물었다.
+   */
+  l1Loss(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    return this.sub(target).abs().reduceAs(reduction);
   }
 
   /**
    * 작을 때는 제곱, 클 때는 절대값. **원점에서 미분이 이어진다** — 그것이 이 손실을
    * 쓰는 이유이므로 `beta` 를 경계로 두 식을 붙인다.
    */
-  /** 제곱 오차의 평균. */
-  mseLoss(target: Tensor): Tensor {
-    return this.sub(target).square().mean();
+  /** 제곱 오차. */
+  mseLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    return this.sub(target).square().reduceAs(reduction);
   }
 
   /**
@@ -3331,11 +3327,11 @@ export class Tensor implements Node<Tensor> {
    * `log(0)` 이 되어 손실이 무한대가 된다. `max(x,0) − x·y + log(1+exp(−|x|))` 는
    * 같은 값을 넘침 없이 낸다 — 이 함수가 따로 있는 이유가 그것이다.
    */
-  bceWithLogits(target: Tensor): Tensor {
+  bceWithLogits(target: Tensor, reduction: Reduction = "mean"): Tensor {
     const zero = Tensor.full([], 0);
     const hinge = this.binary("maximum", zero);
     const stable = this.abs().neg().exp().unary("log1p");
-    return hinge.sub(this.mul(target)).add(stable).mean();
+    return hinge.sub(this.mul(target)).add(stable).reduceAs(reduction);
   }
 
   /**
@@ -3405,12 +3401,13 @@ export class Tensor implements Node<Tensor> {
     return this.mm(weight.transpose());
   }
 
-  smoothL1Loss(target: Tensor, beta = 1.0): Tensor {
+  smoothL1Loss(target: Tensor, beta = 1.0,
+               reduction: Reduction = "mean"): Tensor {
     const d = this.sub(target);
     const near = d.square().binary("mul", Tensor.full([], 0.5 / beta));
     const far = d.abs().binary("sub", Tensor.full([], 0.5 * beta));
     const isNear = d.abs().binary("lt", Tensor.full([], beta));
-    return near.where(isNear, far).mean();
+    return near.where(isNear, far).reduceAs(reduction);
   }
 
   // ── 손실과 거리 ───────────────────────────────────────────────────────
@@ -3420,7 +3417,16 @@ export class Tensor implements Node<Tensor> {
 
   private reduceAs(reduction: Reduction): Tensor {
     if (reduction === "none") return this;
-    return reduction === "sum" ? this.sum() : this.mean();
+    if (reduction === "sum") return this.sum();
+    // **모르는 이름은 멈춘다.** `else` 로 평균에 흘려보내면 `"MEAN"` 을 적은 사람이
+    // 자기가 고른 것이 쓰이는 줄 안다 — 값은 나오고 그것이 기본값과 같아서, 인자를
+    // 준 적이 없는 것과 구별이 안 된다. torch 도 여기서 멈춘다.
+    if (reduction !== "mean") {
+      throw new RuntimeError(
+        `${reduction} is not a valid value for reduction ` +
+          "('none' | 'mean' | 'sum')");
+    }
+    return this.mean();
   }
 
   /**
@@ -4014,7 +4020,10 @@ export class Tensor implements Node<Tensor> {
     if (dim === undefined) {
       const clean = Array.from(await this.toArray()).filter((v) => !Number.isNaN(v));
       const sorted = [...clean].sort((a, b) => a - b);
-      return Tensor.from([sorted[(sorted.length - 1) >> 1] ?? Number.NaN], []);
+      const pick = sorted[(sorted.length - 1) >> 1] ?? Number.NaN;
+      if (Number.isNaN(pick)) return Tensor.from([pick], []);
+      // **번호를 안 건네므로 고르게 나눈다.** NaN 칸은 `eq` 가 거짓이라 저절로 빠진다.
+      return this.flat().spreadEqual(Tensor.full([], pick));
     }
     return this.alongAxis(dim, keepdim, (line) => {
       const keep = line.map((v, i) => [v, i] as const)
@@ -4057,10 +4066,41 @@ export class Tensor implements Node<Tensor> {
     const shape = keepdim
       ? this.shape.map((s, d) => (d === axis ? 1 : s))
       : outShape;
+    void vals;
+    // **값을 손으로 만들지 않고 뽑아 온다.** `Tensor.from(vals, …)` 는 값이 맞고
+    // **그래프가 없다** — 값 검사는 전부 통과하고 `backward()` 에서야 드러나는데,
+    // 그때 나오는 말이 "requires_grad 가 아니다" 라 **사용자를 가리킨다.**
+    //
+    // 번호를 건네는 연산이므로 규칙도 이쪽이 맞다: 기울기가 **고른 자리 하나로만**
+    // 간다(실측). 뽑아 오면 그 규칙이 `gather` 의 역방향에서 저절로 나온다.
+    const lifted = this.shape.map((s, d) => (d === axis ? 1 : s));
+    const at = Tensor.from(idx, lifted, { dtype: "int64" });
     return {
-      values: Tensor.from(vals, shape, { dtype: this.dtype }),
-      indices: Tensor.from(idx, shape, { dtype: "int64" }),
+      values: this.gather(axis, at).reshape(shape),
+      indices: at.reshape(shape),
     };
+  }
+
+  /**
+   * 값이 같은 칸에 기울기를 **고르게 나눈다.**
+   *
+   * 번호를 안 건네는 축약(`median()`·`max()`·`nanmedian()`)의 규칙이다(실측:
+   * `[3,5,5,1,5]` 의 `median()` 기울기가 세 5 에 ⅓ 씩). 한 자리로 몰아주면 값은
+   * 같고 기울기만 갈리는데, **동점이 없는 자료로 재면 어떤 규칙이든 같은 답**이라
+   * 표가 아무것도 안 묻는다.
+   *
+   * 마스크로 곱해 더하고 개수로 나눈다 — 값은 그대로(같은 칸끼리 더해 개수로 나눔)
+   * 이고 역방향이 `mask/개수` 라 규칙이 저절로 나온다. `mask` 는 비교라 기울기가
+   * 없고, 개수도 끊어 둔다.
+   */
+  private spreadEqual(value: Tensor): Tensor {
+    const hit = this.binary("eq", value, "bool").detach();
+    const count = hit.to("float32").sum().detach();
+    // **곱하면 안 된다 — `0 × NaN` 은 NaN 이다.** 마스크로 곱해 더하는 판이 먼저
+    // 있었고, `nanmedian` 이 NaN 을 품은 자료에서 통째로 NaN 이 됐다. 이 저장소가
+    // 같은 자리에서 세 번째로 물린 것이라(코어의 `median`, borch.ts 의 `median`,
+    // 여기) 골라야 한다 — `where` 는 안 고른 칸을 **계산에 안 넣는다.**
+    return this.where(hit, Tensor.zeros(this.shape)).sum().div(count);
   }
 
   /**
@@ -4221,20 +4261,50 @@ export class Tensor implements Node<Tensor> {
    * 다르다.
    */
   async quantile(q: number | readonly number[]): Promise<Tensor> {
-    const sorted = Array.from(await this.toArray()).sort((a, b) => a - b);
-    const wanted = typeof q === "number" ? [q] : [...q];
-    const picked = wanted.map((p) => interpolate(sorted, p));
-    return Tensor.from(picked, typeof q === "number" ? [] : [picked.length]);
+    return this.quantileOver(Array.from(await this.toArray()), q);
   }
 
-  /** NaN 을 빼고 센 분위수. */
-  async nanquantile(q: number | readonly number[]): Promise<Tensor> {
-    const clean = Array.from(await this.toArray())
-      .filter((v) => !Number.isNaN(v))
-      .sort((a, b) => a - b);
+  /**
+   * 분위수의 몸통 — **정렬 자리로 되짚어 뽑는다.**
+   *
+   * 값을 손으로 만들면 그래프가 없다. 되짚어 뽑으면 기울기가 **보간에 쓴 두 자리로**
+   * 가는데, 그것이 이 연산의 규칙이다(실측). 동점일 때 `median` 과 갈리는 자리가
+   * 여기다 — `[1,5,5,5]` 에서 `median` 은 세 5 에 ⅓ 씩이고 `quantile(0.5)` 는
+   * **앞의 두 5 에 ½ 씩**이다. 값은 둘 다 5 라, 되짚어야만 갈린다.
+   */
+  private quantileOver(host: number[], q: number | readonly number[]): Tensor {
+    const order = host.map((_, i) => i).sort((a, b) => (host[a]! - host[b]!));
+    const flat = this.flat();
     const wanted = typeof q === "number" ? [q] : [...q];
-    const picked = wanted.map((p) => interpolate(clean, p));
-    return Tensor.from(picked, typeof q === "number" ? [] : [picked.length]);
+    const parts = wanted.map((p) => {
+      const at = p * (order.length - 1);
+      const lo = Math.floor(at);
+      const hi = Math.min(lo + 1, order.length - 1);
+      const w = at - lo;
+      const pickLo = flat.select(0, order[lo] ?? 0);
+      if (w === 0) return pickLo;
+      const pickHi = flat.select(0, order[hi] ?? 0);
+      return pickLo.mul(Tensor.full([], 1 - w))
+        .add(pickHi.mul(Tensor.full([], w)));
+    });
+    if (typeof q === "number") return parts[0] as Tensor;
+    return Tensor.stack(parts, 0);
+  }
+
+  /**
+   * NaN 을 빼고 센 분위수.
+   *
+   * **NaN 을 빼면 자리가 밀린다.** 그래서 성한 칸만 모은 작은 텐서를 만들어 그 위에서
+   * 되짚는다 — 원래 자리로 돌아가는 길은 `indexSelect` 가 이미 미분되므로 이어진다.
+   */
+  async nanquantile(q: number | readonly number[]): Promise<Tensor> {
+    const values = Array.from(await this.toArray());
+    const keep = values.map((v, i) => [v, i] as const)
+      .filter(([v]) => !Number.isNaN(v));
+    const at = Tensor.from(keep.map(([, i]) => i), [keep.length],
+      { dtype: "int64" });
+    const clean = this.flat().indexSelect(0, at);
+    return clean.quantileOver(keep.map(([v]) => v), q);
   }
 
   // ── 선형대수 ──────────────────────────────────────────────────────────
@@ -5567,7 +5637,14 @@ export class Tensor implements Node<Tensor> {
     if (dim === undefined) {
       const flat = this.flat();
       const k = Math.floor((flat.size + 1) / 2);
-      return spoil(flat.kthvalue(k, 0));
+      const got = spoil(flat.kthvalue(k, 0));
+      // **번호를 안 건네므로 값이 같은 칸에 고르게 나눈다**(실측: `[3,5,5,1,5]` 의
+      // 기울기가 세 5 에 ⅓ 씩). `kthvalue` 는 고른 자리 하나로만 흘리는데, 그것은
+      // **번호를 건네는** 연산의 규칙이다 — 여기서는 그 번호를 안 내놓는다.
+      return {
+        values: flat.spreadEqual(got.values.detach()),
+        indices: got.indices,
+      };
     }
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
