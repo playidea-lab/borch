@@ -287,6 +287,56 @@ class Tensor:
     def dense_dim(self):
         return self.ndim
 
+    # ── 모듈에만 있던 이름을 메서드로도 낸다 ──────────────────────────────
+    #
+    # torch 는 거의 모든 연산을 둘 다 준다. 코어에 열셋이 모듈에만 있었고 여기도
+    # 같았다 — 교재가 쓰는 쪽은 메서드다.
+
+    def igamma(self, other):
+        from . import _ops
+        return _ops.igamma(self, other)
+
+    def igammac(self, other):
+        from . import _ops
+        return _ops.igammac(self, other)
+
+    def polygamma(self, n):
+        """**인자가 뒤집혀 있다** — 모듈은 `polygamma(n, x)`, 메서드는
+        `x.polygamma(n)` 이다(torch 가 그렇게 둔다). 표로 그냥 붙이면 차수와 입력이
+        뒤바뀐 채 값이 나온다."""
+        from . import _ops
+        return _ops.polygamma(n, self)
+
+    def polygamma_(self, n):
+        return self._write_back(self.polygamma(n))
+
+    def is_same_size(self, other):
+        return tuple(self.shape) == tuple(other.shape)
+
+    def is_inference(self):
+        return False
+
+    def is_distributed(self):
+        return False
+
+    def share_memory_(self):
+        """프로세스 사이 공유는 없다. torch 도 CPU 에서는 자기를 돌려준다."""
+        return self
+
+    def requires_grad_(self, requires_grad=True):
+        """**밑줄을 떼면 참거짓 속성이 나온다.** 일반 길로 두면 `requires_grad` 를
+        찾아 부르려다 `'bool' object is not callable` 로 멈춘다 — 제자리 이름을
+        짝에서 만드는 규칙이 **속성과 부딪히는** 자리다.
+        """
+        self.requires_grad = bool(requires_grad)
+        return self
+
+    def fill_diagonal_(self, value, wrap=False):
+        from ._base import tensor as _t
+        got = self.numpy().copy()
+        _np.fill_diagonal(got, value, wrap=wrap)
+        return self._write_back(_t(got))
+
     def sparse_dim(self):
         return 0
 

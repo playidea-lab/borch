@@ -7946,6 +7946,54 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "짝에서::float_power_ 는 거절", refuses_float_power))
 
+    # ── 모듈에만 있고 메서드가 없던 이름들 ────────────────────────────────
+    #
+    # torch 는 거의 모든 연산을 **둘 다** 준다 — `torch.igamma(x, y)` 와
+    # `x.igamma(y)`. 우리는 모듈 쪽만 있는 자리가 열셋이었고, **교재가 쓰는 쪽은
+    # 메서드다.** 결속의 주석에 같은 이야기가 이미 적혀 있었는데(`borch.t(x)` 는
+    # 되고 `x.t()` 는 안 되던 자리) 그쪽만 메꾸고 코어는 안 메꿨다.
+    grid2 = np.array([[1.5, -2.5], [0.5, 1.0]], dtype=np.float32)
+    ones2 = np.ones_like(grid2)
+
+    def method_form(name, call):
+        cases.append((INPLACE_PREFIX + f"메서드꼴::{name}", call))
+
+    method_form("arctan2", lambda L: L.tensor(grid2).arctan2(L.tensor(ones2)))
+    method_form("igamma", lambda L: L.tensor(grid2).abs().igamma(L.tensor(ones2)))
+    method_form("igammac", lambda L: L.tensor(grid2).abs().igammac(L.tensor(ones2)))
+    # **인자가 뒤집혀 있다** — 모듈은 `polygamma(n, x)`, 메서드는 `x.polygamma(n)`.
+    # 표로 그냥 붙였다가 걸렸다. 안 걸렸으면 차수와 입력이 뒤바뀐 채 값이 나왔다.
+    method_form("polygamma(1)", lambda L: L.tensor(grid2).abs().polygamma(1))
+    method_form("polygamma(2)", lambda L: L.tensor(grid2).abs().polygamma(2))
+
+    def in_place_new(name, call):
+        def run(L, f=call):
+            x = L.tensor(grid2.copy())
+            f(L, x)
+            return x
+        cases.append((INPLACE_PREFIX + f"짝없이::{name}", run))
+
+    in_place_new("fill_diagonal_", lambda L, x: x.fill_diagonal_(9))
+    in_place_new("arctan2_", lambda L, x: x.arctan2_(L.tensor(ones2)))
+    in_place_new("polygamma_", lambda L, x: x.abs_().polygamma_(1))
+
+    # 값이 아니라 **참거짓**을 내는 셋. `is_same_size` 는 모양만 본다.
+    for label, call in (
+        ("is_same_size(같음)",
+         lambda L: L.tensor(grid2).is_same_size(L.tensor(ones2))),
+        ("is_same_size(다름)",
+         lambda L: L.tensor(grid2).is_same_size(L.tensor(np.zeros((3, 3), dtype=np.float32)))),
+        ("is_inference", lambda L: L.tensor(grid2).is_inference()),
+        ("is_distributed", lambda L: L.tensor(grid2).is_distributed()),
+        # **교재의 관용구다** — `x.requires_grad_()` 로 잎을 켜고 자기를 돌려받는다.
+        ("requires_grad_ 가 자기를 돌려준다",
+         lambda L: L.tensor(grid2).requires_grad_(True).requires_grad),
+        ("share_memory_ 가 자기를 돌려준다",
+         lambda L: L.tensor(grid2).share_memory_() is not None),
+    ):
+        cases.append((INPLACE_PREFIX + f"묻는꼴::{label}",
+                      lambda L, f=call: str(f(L))))
+
     # **`tensor()` 는 사본을 뜬다 — 공유하면 사용자의 배열이 조용히 바뀐다.**
     #
     # 이 케이스는 위의 마흔한 개를 넣다가 나왔다. 케이스 하나가 입력을 `.copy()` 없이

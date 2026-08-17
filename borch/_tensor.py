@@ -1150,3 +1150,87 @@ def _bind_absent_dtype(name, shown):
 for _dname, _shown in _ABSENT_DTYPES.items():
     setattr(Tensor, _dname, _bind_absent_dtype(_dname, _shown))
 del _dname, _shown
+
+
+# ── 모듈에만 있던 이름을 메서드로도 낸다 ──────────────────────────────────────
+#
+# torch 는 거의 모든 연산을 **둘 다** 준다 — `torch.igamma(x, y)` 와 `x.igamma(y)`.
+# 우리는 모듈 쪽만 있고 메서드가 없는 자리가 열셋이었다. `borch.arctan2(x, y)` 는
+# 되고 `x.arctan2(y)` 는 `AttributeError` 였는데, **교재가 쓰는 쪽은 메서드다.**
+#
+# 결속의 `_base.py` 에 같은 이야기가 이미 적혀 있었다("`borch.t(x)` 는 되고
+# `x.t()` 는 안 되는 한쪽 고리만 남았다") — 그쪽은 그때 메꿨고 코어는 안 메꿨다.
+_METHOD_FROM_MODULE = (
+    "arctan2", "igamma", "igammac", "geqrf", "lstsq", "solve",
+)
+
+
+def _polygamma(self, n):
+    """**인자가 뒤집혀 있다.** 모듈은 `polygamma(n, x)` 이고 메서드는
+    `x.polygamma(n)` 이다 — torch 가 그렇게 둔다(실측).
+
+    표로 그냥 붙였다가 `TypeError` 로 걸렸다. 안 걸렸으면 차수와 입력이 뒤바뀐 채
+    값이 나왔을 자리다 — `lu_solve` 가 같은 모양이었다.
+    """
+    from . import _ops
+    return _ops.polygamma(n, self)
+
+
+def _bind_from_module(name):
+    def method(self, *args, **kw):
+        from . import _ops
+        return getattr(_ops, name)(self, *args, **kw)
+
+    method.__name__ = name
+    method.__qualname__ = f"Tensor.{name}"
+    method.__doc__ = f"`borch.{name}` 을 메서드로. torch 는 둘 다 준다."
+    return method
+
+
+for _mname in _METHOD_FROM_MODULE:
+    setattr(Tensor, _mname, _bind_from_module(_mname))
+del _mname
+
+
+def _is_same_size(self, other):
+    """모양이 같은가. **값이 아니라 모양만** 본다."""
+    return tuple(self.data.shape) == tuple(_np.asarray(other.data).shape)
+
+
+def _fill_diagonal_(self, value, wrap=False):
+    """대각을 채운다. `wrap` 은 세로로 긴 행렬에서 대각을 **감아 이어 간다**."""
+    if self.requires_grad and _grad_mode.enabled:
+        raise RuntimeError(_like_torch(
+            "기울기가 필요한 잎 텐서에는 `fill_diagonal_` 을 쓸 수 없습니다.",
+            "a leaf Variable that requires grad is being used in an in-place operation"))
+    _np.fill_diagonal(self._array, value, wrap=wrap)
+    return self
+
+
+def _requires_grad_(self, requires_grad=True):
+    """**교재의 관용구다** — `x.requires_grad_()` 로 잎을 켠다. 자기를 돌려준다."""
+    if requires_grad and self.data.dtype.kind not in "fc":
+        raise RuntimeError(
+            "정수 텐서에는 기울기가 흐르지 않습니다. 미분은 실수에서만 정의됩니다 "
+            "— `.float()` 로 바꾸세요.")
+    self.requires_grad = bool(requires_grad)
+    return self
+
+
+def _share_memory_(self):
+    """프로세스 사이 공유는 여기 없다. torch 도 CPU 에서는 자기를 돌려준다."""
+    return self
+
+
+Tensor.polygamma = _polygamma
+Tensor.is_same_size = _is_same_size
+Tensor.is_distributed = lambda self: False
+Tensor.is_inference = lambda self: False
+Tensor.fill_diagonal_ = _fill_diagonal_
+Tensor.requires_grad_ = _requires_grad_
+Tensor.share_memory_ = _share_memory_
+
+# 짝이 생겼으니 밑줄 판도 같은 표에서 나온다.
+for _iname in ("arctan2_", "igamma_", "igammac_", "polygamma_"):
+    setattr(Tensor, _iname, _bind_inplace(_iname))
+del _iname
