@@ -122,6 +122,26 @@ export { gradMode } from "./autograd.js";
 export function isTensor(x: unknown): boolean {
   return x instanceof TensorClass;
 }
+
+/**
+ * 자리 하나를 **`null` 로** 비운다.
+ *
+ * ## 왜 이것이 밖에 있는가
+ *
+ * 파이썬에서는 JS 의 `null` 을 만들 수 없다. Pyodide 는 `null` 을 파이썬 `None` 으로
+ * 주고, 반대로 `None` 을 보내면 **`undefined`** 가 된다 — JS 에서 그 둘은 다른 값이다.
+ *
+ * 그래서 `p.grad = None` 이 저쪽 자리를 `undefined` 로 만들었고, `autograd.ts` 는
+ * 비었는지를 `node.grad === null` 로 묻는다. 비교가 거짓이 되어 없는 것에 기울기를
+ * 쌓으려 들었고, 터진 자리는 `Cannot read properties of undefined (reading 'add')`
+ * 였다 — 파이썬 줄에서 한참 떨어진 곳이다.
+ *
+ * **저쪽의 엄격한 비교를 느슨하게 바꾸지 않는다.** 그러면 TS 쪽 불변식이 약해지고
+ * 진짜 원인인 변환은 그대로 남는다. null 이 있는 쪽에 만드는 자리를 낸다.
+ */
+export function setNull(target: Record<string, unknown>, key: string): void {
+  target[key] = null;
+}
 export { IndexError, RuntimeError } from "./errors.js";
 export type { DType } from "./dtype.js";
 

@@ -9,7 +9,6 @@ from pyodide.ffi import run_sync as _run_sync, to_js as _to_js
 
 _ts = _js.borch
 
-
 def _js_list(seq):
     """파이썬 목록 → JS 배열. 프록시를 그냥 넘기면 JS 쪽이 배열로 안 본다."""
     return _to_js(list(int(n) for n in seq))
@@ -153,6 +152,17 @@ class Tensor:
         """
         if name == "_h":
             object.__setattr__(self, name, value)
+            return
+        # **`None` 은 JS 의 `null` 로 보내야 한다.** Pyodide 는 그것을 `undefined` 로
+        # 넘기는데, borch.ts 는 `node.grad === null` 로 **엄격하게** 묻는다(`autograd.ts`).
+        # 그러면 `p.grad = None` 뒤의 역전파가 "비었다" 를 못 알아보고 쌓으려 들어서
+        # `Cannot read properties of undefined (reading 'add')` 로 터진다 — 파이썬
+        # 줄에서 한참 떨어진 자리다.
+        #
+        # **파이썬에서는 `null` 을 만들 수 없다.** Pyodide 가 `null` 을 `None` 으로
+        # 주므로 되돌릴 길이 없다. 그래서 만드는 자리를 저쪽에 냈다(`borch.setNull`).
+        if value is None:
+            _ts.setNull(self._h, camel_name(name))
             return
         setattr(self._h, camel_name(name),
                 handle(value) if isinstance(value, Tensor) else value)
@@ -332,6 +342,26 @@ class Tensor:
     def device(self):
         from . import _ops
         return _ops.device(str(self._h.device))
+
+    @property
+    def grad(self):
+        """**없는 기울기와 없는 이름을 갈라야 한다.**
+
+        일반 길(`__getattr__`)은 `getattr(self._h, name, None)` 으로 묻고 `None` 이면
+        "그런 이름이 없다" 로 멈춘다. 그런데 borch.ts 의 `grad` 는 `Tensor | null`
+        이고 Pyodide 가 JS 의 `null` 을 파이썬 `None` 으로 준다 — **두 경우가 같은
+        값이 된다.**
+
+        그래서 기울기가 아직 없을 때 `p.grad` 가 `AttributeError` 로 멈췄다. 하필
+        그때가 `if p.grad is not None:` 이 물으려던 바로 그 경우다. 옵티마이저를 손으로
+        쓰는 코드, 기울기를 자르는 코드가 전부 그 줄로 시작한다.
+
+        쓰기는 `__setattr__` 이 이미 저쪽으로 넘긴다. 읽기만 비어 있었다 — `device`·
+        `real`·`imag` 가 여기 있는 것과 **같은 이유**이고, 그 셋을 적을 때 이것이
+        목록에 없었다.
+        """
+        got = self._h.grad
+        return None if got is None else wrap(got)
 
     @property
     def real(self):

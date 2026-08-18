@@ -3488,6 +3488,52 @@ def opt_cases(inp=None):
     cases.append((OPT_PREFIX + "LBFGS/history_size",
                   lambda L: lbfgs(L, lr=0.5, max_iter=5, history_size=2)))
 
+    # ── **위의 셋은 준뉴턴 부분을 한 번도 안 밟는다.** ──────────────────────
+    #
+    # 저 닫힘은 기울기를 상수로 **넣어 준다**(`pp.grad = tensor([0.1, -0.3, 0.2])`).
+    # 그러면 반복마다 `flat` 이 그대로라 `y = flat - prev_flat` 이 0 이고, `ys` 가
+    # 0 이라 **이력에 아무것도 안 들어간다.** 이력이 비면 두 겹 되돌이는 `q = -flat`,
+    # `r = q * h_diag(=1)` 로 지나가므로, 남는 것은 첫 반복의 경사하강과 LBFGS 의
+    # 보폭 규칙뿐이다.
+    #
+    # 이름은 LBFGS 인데 재는 것은 그 알고리즘의 절반도 아니었다. **기울기가 자리에
+    # 따라 달라야** 이력이 쌓이고, 그래야 `history_size` 라는 이름이 무언가를 뜻한다.
+    curve = np.array([1.0, 4.0, 9.0], dtype=np.float32)
+
+    def lbfgs_real(L, steps=3, **args):
+        """닫힘이 **진짜로 미분한다.** `sum(w·p²)` 이라 기울기가 `2·w·p` 다.
+
+        자리마다 곡률이 다른 이차식이고, 그것이 준뉴턴법이 이기는 바로 그 모양이다 —
+        이력이 쌓이면 축마다 다른 보폭이 나온다.
+        """
+        p = L.tensor(start.copy(), requires_grad=True)
+        w = L.tensor(curve)
+        opt = L.optim.LBFGS([p], **args)
+        seen = []
+        for _ in range(steps):
+            def closure(pp=p, ww=w):
+                if pp.grad is not None:
+                    pp.grad = None
+                out = (pp * pp * ww).sum()
+                out.backward()
+                return out
+            opt.step(closure)
+            seen.append(np.asarray(p.detach().numpy(), dtype=np.float32).copy())
+        return L.tensor(np.stack(seen))
+
+    cases.append((OPT_PREFIX + "LBFGS/진짜 기울기", lambda L: lbfgs_real(L, lr=0.1)))
+    # **이력이 실제로 차서 밀려난다.** `history_size=2` 에 반복이 그보다 많아야
+    # 오래된 짝을 버리는 자리를 밟는다 — 위의 `history_size` 케이스는 이력이 아예
+    # 안 쌓여서 그 이름이 아무것도 안 골랐다.
+    cases.append((OPT_PREFIX + "LBFGS/이력이 밀려난다",
+                  lambda L: lbfgs_real(L, steps=2, lr=0.5, max_iter=8,
+                                       history_size=2)))
+    # **문턱 근처.** 수렴 판정이 한 반복이라도 다르게 걸리면 궤적이 통째로 갈린다.
+    # f32 축약의 반올림이 numpy 와 다르므로, 이 자리가 GPU 구현의 진짜 위험이다.
+    cases.append((OPT_PREFIX + "LBFGS/문턱 근처에서 멈춘다",
+                  lambda L: lbfgs_real(L, steps=2, lr=0.3, max_iter=12,
+                                       tolerance_change=1e-3)))
+
     def scalar_param_keeps_constants(L):
         """**원소가 하나인 파라미터를 학습해도 상수가 안 변해야 한다.**
 
