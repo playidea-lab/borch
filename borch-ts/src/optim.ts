@@ -900,6 +900,17 @@ export abstract class LRScheduler {
   protected abstract compute(epoch: number): number;
 }
 
+/**
+ * `stepSize` 에폭마다 `gamma` 를 곱한다.
+ *
+ * **재귀식이다** — 아래 `ExponentialLR` 이 적어 둔 것과 같은 이유다. 여기는
+ * `base * gamma ** floor(epoch / stepSize)` 라는 닫힌 식이었다.
+ *
+ * 혼자 처음부터 밟으면 두 방식이 **같은 수열**을 낸다. 그래서 자취를 통째로 굳혀
+ * 둔 골든이 오래 초록이었다. 갈리는 것은 lr 이 이미 옮겨진 옵티마이저 위에
+ * 스케줄러를 새로 세울 때 — **이어서 학습할 때**다. 닫힌 식은 그 순간 학습률을
+ * 처음 값으로 되돌려 놓는다(0.05 를 0.2 로). 오류는 안 나고 손실만 한 번 튄다.
+ */
 export class StepLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly stepSize: number,
               private readonly gamma = 0.1) {
@@ -907,10 +918,17 @@ export class StepLR extends LRScheduler {
   }
 
   protected override compute(epoch: number): number {
-    return this.base * this.gamma ** Math.floor(epoch / this.stepSize);
+    if (epoch === 0 || epoch % this.stepSize !== 0) return this.current;
+    return this.current * this.gamma;
   }
 }
 
+/**
+ * 이정표에서만 깎는다. **재귀식이다** — `StepLR` 과 같은 이유로 고쳤다.
+ *
+ * 이정표가 겹쳐 적히면(`[3, 3]`) 그 자리에서 두 번 곱한다 — 닫힌 식으로 세던
+ * 때도 그랬고 torch 도 그렇다.
+ */
 export class MultiStepLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly milestones: readonly number[],
               private readonly gamma = 0.1) {
@@ -918,8 +936,8 @@ export class MultiStepLR extends LRScheduler {
   }
 
   protected override compute(epoch: number): number {
-    const passed = this.milestones.filter((m) => m <= epoch).length;
-    return this.base * this.gamma ** passed;
+    const hits = this.milestones.filter((m) => m === epoch).length;
+    return hits === 0 ? this.current : this.current * this.gamma ** hits;
   }
 }
 

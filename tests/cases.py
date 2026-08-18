@@ -3462,6 +3462,111 @@ def opt_cases(inp=None):
 
     cases.append((OPT_PREFIX + "크기 1 파라미터가 상수를 안 더럽힌다",
                   scalar_param_keeps_constants))
+
+    # ── **옵티마이저의 `state_dict`.** 이어서 학습하기가 여기 걸려 있다. ────
+    #
+    # 모델 가중치만 저장하고 옵티마이저를 안 저장하면, 이어 붙인 학습이 **모멘텀과
+    # 2 차 모먼트를 잃은 채로** 다시 시작한다. 예외는 안 나고 손실 곡선만 한 번
+    # 튄다 — 사람이 "원래 그런가 보다" 하고 넘기는 종류다.
+    #
+    # **열쇠 이름이 아니라 값을 묻는다.** torch 는 `{"state": …, "param_groups": …}`
+    # 이고 borch.ts 는 은행 구조라 모양이 다르다. 모양을 물으면 영원히 갈리는데,
+    # 정작 사용자에게 중요한 것은 "끊었다 이으면 안 끊은 것과 같은가" 이고 그것은
+    # 모양과 무관하게 물을 수 있다.
+    #
+    # `Adam` 을 쓰는 이유가 있다 — `SGD(momentum=0)` 은 상태가 없어서 저장을
+    # 통째로 빼먹어도 이 케이스를 지난다. 상태를 가진 옵티마이저로 물어야 한다.
+    def resume(L, name, args):
+        m = model_of(L)
+        opt = getattr(L.optim, name)(m.parameters(), **args)
+        crit = L.nn.CrossEntropyLoss()
+        x, y = L.tensor(xin), L.tensor(yin)
+
+        def one(o):
+            o.zero_grad()
+            crit(m(x), y).backward()
+            o.step()
+
+        for _ in range(3):
+            one(opt)
+        saved = opt.state_dict()
+        # **새 옵티마이저에 얹는다.** 같은 것에 도로 넣으면 아무것도 안 물은 것이
+        # 된다 — 상태가 이미 거기 있으므로 `load` 가 빈 일을 해도 통과한다.
+        fresh = getattr(L.optim, name)(m.parameters(), **args)
+        fresh.load_state_dict(saved)
+        for _ in range(2):
+            one(fresh)
+        return dict(m.named_parameters())["0.weight"]
+
+    for _name, _args in (("SGD", {"lr": 0.1, "momentum": 0.9}),
+                         ("Adam", {"lr": 0.05}),
+                         ("RMSprop", {"lr": 0.05})):
+        cases.append((OPT_PREFIX + f"{_name}/이어서 학습하기",
+                      lambda L, n=_name, a=_args: resume(L, n, a)))
+
+    # **위의 셋이 정말 무언가를 옮겼는가.**
+    #
+    # `load_state_dict` 가 빈 일을 해도 위 케이스는 통과할 수 있다 — 얹은 것과 안
+    # 얹은 것이 같은 값을 내면 그렇다. 그래서 **둘의 차이**를 답으로 굳힌다. torch
+    # 에서 이 차이는 0 이 아니고, 얹기가 아무 일도 안 하는 구현에서는 0 이 된다.
+    # 그때 위의 셋은 초록인 채로 아무것도 안 재고 있게 되는데, 이 케이스가 그
+    # 상태를 빨갛게 만든다.
+    def resume_gap(L):
+        def run(carry):
+            m = model_of(L)
+            opt = L.optim.Adam(m.parameters(), lr=0.05)
+            crit = L.nn.CrossEntropyLoss()
+            x, y = L.tensor(xin), L.tensor(yin)
+
+            def one(o):
+                o.zero_grad()
+                crit(m(x), y).backward()
+                o.step()
+
+            for _ in range(3):
+                one(opt)
+            saved = opt.state_dict()
+            fresh = L.optim.Adam(m.parameters(), lr=0.05)
+            if carry:
+                fresh.load_state_dict(saved)
+            for _ in range(2):
+                one(fresh)
+            return dict(m.named_parameters())["0.weight"]
+
+        return run(True) - run(False)
+
+    cases.append((OPT_PREFIX + "상태를 안 옮기면 갈린다", resume_gap))
+
+    # **스케줄러도 이어져야 한다.** 옵티마이저만 되돌리고 스케줄러를 새로 세우면
+    # 학습률이 **처음 값으로 돌아간다** — 반쯤 식혀 놓은 학습이 다시 뜨거워지는
+    # 것이고, 손실은 내려가던 것이 한 번 올라갔다 다시 내려온다.
+    def sched_resume(L, carry):
+        m = model_of(L)
+        opt = L.optim.SGD(m.parameters(), lr=0.2)
+        sch = L.optim.lr_scheduler.StepLR(opt, step_size=2, gamma=0.5)
+        seen = []
+        for _ in range(4):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            sch.step()
+        saved = sch.state_dict()
+        fresh = L.optim.lr_scheduler.StepLR(opt, step_size=2, gamma=0.5)
+        if carry:
+            fresh.load_state_dict(saved)
+        for _ in range(4):
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+            opt.step()
+            fresh.step()
+        # **글자로 돌려준다.** 학습률의 자취는 수열이라, 갈렸을 때 어느 칸에서
+        # 갈렸는지가 그대로 보여야 한다 — 텐서로 주면 "최대차 1.5e-01" 만 남고
+        # 여덟 칸 중 어디인지는 안 나온다.
+        return " ".join(f"{v:g}" for v in seen)
+
+    cases.append((OPT_PREFIX + "StepLR/이어서 학습하기",
+                  lambda L: sched_resume(L, True)))
+    # 얹기가 빈 일이면 두 자취가 같아지고, 그러면 위 케이스는 아무것도 안 재고 있다.
+    cases.append((OPT_PREFIX + "스케줄러 상태를 안 옮기면 갈린다",
+                  lambda L: f"{sched_resume(L, True)} | {sched_resume(L, False)}"))
     return cases
 
 

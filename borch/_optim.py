@@ -618,27 +618,67 @@ class _Scheduler:
     def get_last_lr(self):
         return [g["lr"] for g in self.optimizer.param_groups]
 
+    def state_dict(self):
+        """**옵티마이저는 안 담는다** — torch 도 그렇다. 담으면 서로를 물고 돈다.
+
+        이어 붙인 학습에서 옵티마이저만 되돌리고 스케줄러를 새로 세우면 학습률이
+        **처음 값으로 돌아간다.** 반쯤 식혀 놓은 학습이 다시 뜨거워지는 것이고,
+        손실은 내려가던 것이 한 번 올라갔다 다시 내려온다 — 오류는 안 난다.
+        골든이 이 자리를 `opt::StepLR/이어서 학습하기` 로 붙잡는다.
+
+        하위 클래스가 자기 상태를 더 들어도 여기 적을 것이 없다. `__dict__` 에서
+        옵티마이저만 빼고 통째로 담으므로 `T_cur` 같은 것이 저절로 따라온다 —
+        이름을 따로 나열하면 스케줄러를 하나 더할 때마다 그 목록을 갱신해야 하고,
+        잊으면 **그 스케줄러만 조용히 안 이어진다.**
+        """
+        return {k: v for k, v in self.__dict__.items() if k != "optimizer"}
+
+    def load_state_dict(self, state):
+        self.__dict__.update(state)
+        return self
+
 
 class StepLR(_Scheduler):
-    """step_size 에폭마다 gamma 를 곱한다. 4장의 "멀리서는 성큼, 가까이서는 조심"."""
+    """step_size 에폭마다 gamma 를 곱한다. 4장의 "멀리서는 성큼, 가까이서는 조심".
+
+    **재귀식이다** — 아래 `ExponentialLR` 이 적어 둔 것과 같은 이유다. 여기만
+    `base * gamma ** (last_epoch // step_size)` 라는 닫힌 식이었다.
+
+    혼자 처음부터 돌리면 두 방식이 **같은 수열**을 낸다. 그래서 `StepLR/자취` 가
+    오래 초록이었다. 갈리는 것은 lr 이 이미 옮겨진 옵티마이저 위에 스케줄러를
+    새로 세울 때 — 즉 **이어서 학습할 때**다. 닫힌 식은 그 순간 학습률을 처음
+    값으로 되돌려 놓는다(0.05 를 0.2 로). 반쯤 식힌 학습이 다시 뜨거워지고,
+    오류는 안 난다. `opt::StepLR/이어서 학습하기` 가 이 자리를 붙잡는다.
+    """
 
     def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1):
         self.step_size, self.gamma = step_size, gamma
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        return [base * self.gamma ** (self.last_epoch // self.step_size)
-                for base in self.base_lrs]
+        now = [g["lr"] for g in self.optimizer.param_groups]
+        if self.last_epoch == 0 or self.last_epoch % self.step_size != 0:
+            return now
+        return [lr * self.gamma for lr in now]
 
 
 class MultiStepLR(_Scheduler):
+    """이정표에서만 깎는다. **재귀식이다** — `StepLR` 과 같은 이유로 고쳤다.
+
+    이정표가 겹쳐 적히면(`[3, 3]`) 그 자리에서 두 번 곱한다 — torch 가 그렇고,
+    닫힌 식으로 세던 때도 그랬으므로 여기서도 개수를 센다.
+    """
+
     def __init__(self, optimizer, milestones, gamma=0.1, last_epoch=-1):
         self.milestones, self.gamma = sorted(milestones), gamma
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        passed = sum(1 for m in self.milestones if m <= self.last_epoch)
-        return [base * self.gamma ** passed for base in self.base_lrs]
+        now = [g["lr"] for g in self.optimizer.param_groups]
+        hits = self.milestones.count(self.last_epoch)
+        if hits == 0:
+            return now
+        return [lr * self.gamma ** hits for lr in now]
 
 
 class ExponentialLR(_Scheduler):

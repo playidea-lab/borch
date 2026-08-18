@@ -25,6 +25,46 @@ class _Opt:
     def step(self):
         self._o.step()
 
+    def state_dict(self):
+        """**이어서 학습하기가 여기 걸려 있다.**
+
+        전에는 이 자리가 통째로 없었다(`__slots__` 라 `AttributeError` 였다). 모델
+        가중치는 `Module.state_dict` 로 저장되는데 옵티마이저는 저장할 길이 없었고,
+        그래서 GPU 경로에서 이어 붙인 학습은 **모멘텀과 2 차 모먼트를 잃은 채로**
+        다시 시작했다. 예외는 안 나고 손실 곡선만 한 번 튄다.
+
+        **모양은 torch 와 다르다.** torch 는 `{"state": …, "param_groups": …}` 이고
+        borch.ts 는 은행 구조(`{tensors, numbers}`)다. 파라미터마다 슬롯을 나누어
+        torch 이름(`exp_avg` 따위)을 붙이려면 저쪽 설계를 바꿔야 하는데, 그것으로
+        얻는 것은 **남의 torch 체크포인트를 읽는 일** 뿐이고 그 길은 어차피
+        커널까지 막혀 있다. 우리 것을 저장했다 우리 것으로 되돌리는 일은 이 모양
+        으로 된다 — 골든이 값으로 그것을 붙잡는다(`opt::*/이어서 학습하기`).
+
+        `state_dict` 가 **사본이 아니라 지금 슬롯**을 준다는 것도 torch 와 같다.
+        저장해 두고 계속 밟으면 저장해 둔 것도 같이 움직인다.
+        """
+        got = self._o.stateDict()
+        return {
+            "tensors": {str(k): wrap(getattr(got.tensors, k))
+                        for k in _js.Object.keys(got.tensors)},
+            "numbers": {str(k): getattr(got.numbers, k)
+                        for k in _js.Object.keys(got.numbers)},
+        }
+
+    def load_state_dict(self, state):
+        """`state_dict()` 가 준 것을 되돌린다. **같은 인자로 다시 세운 뒤** 부른다."""
+        obj = _js.Object.new()
+        tensors = _js.Object.new()
+        for key, value in state["tensors"].items():
+            setattr(tensors, key, handle(value))
+        numbers = _js.Object.new()
+        for key, value in state["numbers"].items():
+            setattr(numbers, key, value)
+        obj.tensors = tensors
+        obj.numbers = numbers
+        self._o.loadStateDict(obj)
+        return self
+
     @property
     def param_groups(self):
         """**`opt.param_groups[0]["lr"]` 로 읽는다.** torch 코드가 그렇게 쓴다.
@@ -269,6 +309,25 @@ class _Sched:
 
     def get_last_lr(self):
         return list(self._s.getLastLr())
+
+    def state_dict(self):
+        """**옵티마이저만 되돌리면 학습률이 처음 값으로 돌아간다.**
+
+        이 자리도 통째로 없었다. 반쯤 식혀 놓은 학습이 이어 붙이는 순간 다시
+        뜨거워지고, 오류는 안 난다 — 손실 곡선만 한 번 올라갔다 내려온다.
+
+        저쪽은 수 사전이라 그대로 넘긴다. 모양은 torch(`last_epoch`·`_step_count`)
+        와 다르지만, 우리 것을 저장했다 우리 것으로 되돌리는 일은 이것으로 된다.
+        """
+        got = self._s.stateDict()
+        return {str(k): getattr(got, k) for k in _js.Object.keys(got)}
+
+    def load_state_dict(self, state):
+        obj = _js.Object.new()
+        for key, value in state.items():
+            setattr(obj, key, value)
+        self._s.loadStateDict(obj)
+        return self
 
 
 # 스케줄러도 이름 붙은 인자로 부른다 — `StepLR(o, step_size=2, gamma=0.5)`.
