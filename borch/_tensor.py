@@ -318,6 +318,11 @@ class Tensor:
                 if t.requires_grad:
                     t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
                 continue
+            # **`retain_grad()` 를 부른 파생 텐서에도 쌓는다.** 안 그러면 그 이름이
+            # 거절만 흉내 내고 하는 일이 없다 — 잎에서 멈추는 것까지만 맞고 정작
+            # 하려던 일을 안 한다.
+            if getattr(t, "_retain", False):
+                t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
             for parent, pg in zip(t._parents, t._backward(g)):
                 if pg is None:
                     continue
@@ -1273,8 +1278,8 @@ Tensor.is_leaf = property(
     lambda self: not self._parents,
     doc="연산에서 안 나온 텐서. **거짓이면 `.grad` 가 안 쌓인다.**")
 Tensor.retains_grad = property(
-    lambda self: False,
-    doc="`retain_grad()` 가 없으므로 언제나 거짓이다 — torch 도 잎에서는 거짓이다.")
+    lambda self: bool(getattr(self, "_retain", False)),
+    doc="`retain_grad()` 를 부른 파생 텐서만 참이다 — 잎은 torch 도 거짓이다.")
 
 
 def _is_pinned(self):
@@ -1385,3 +1390,253 @@ Tensor.set_ = _set_
 for _sname in ("resize_as_sparse_", "sparse_resize_", "sparse_resize_and_clear_"):
     setattr(Tensor, _sname, _sparse_only(_sname))
 del _sname
+
+
+# ── 저장을 들여다보는 것들 ───────────────────────────────────────────────────
+#
+# 값이 아니라 **어떻게 놓여 있는가**를 묻는다. numpy 가 그대로 답해 주므로 우리도
+# 진짜 수를 낼 수 있다 — `stride()` 는 전치하면 `(3,1)` 에서 `(1,3)` 이 되고, 그것이
+# 뷰라는 사실 자체다.
+
+def _stride(self, dim=None):
+    """칸 단위 걸음. **바이트가 아니다** — numpy 의 `strides` 를 원소 크기로 나눈다."""
+    got = tuple(s // self.data.itemsize for s in self.data.strides)
+    return got if dim is None else got[dim]
+
+
+def _dim_order(self):
+    """메모리에서 빠른 축부터의 차례. 연속이면 `(0, 1, …)` 이고 전치하면 뒤집힌다."""
+    return tuple(int(i) for i in _np.argsort([-s for s in self.data.strides]))
+
+
+Tensor.stride = _stride
+Tensor.dim_order = _dim_order
+Tensor.element_size = lambda self: int(self.data.itemsize)
+Tensor.nelement = lambda self: int(self.data.size)
+Tensor.ndimension = lambda self: int(self.data.ndim)
+Tensor.itemsize = property(lambda self: int(self.data.itemsize))
+Tensor.nbytes = property(lambda self: int(self.data.nbytes))
+Tensor.data_ptr = lambda self: int(self.data.__array_interface__["data"][0])
+Tensor.const_data_ptr = Tensor.data_ptr
+Tensor.layout = property(lambda self: _Layout())
+Tensor.output_nr = property(lambda self: 0)
+Tensor.volatile = property(lambda self: False)
+Tensor.name = property(lambda self: None)
+Tensor.grad_dtype = property(lambda self: self.dtype)
+
+
+class _Layout:
+    """`torch.strided`. 우리에게 다른 배치는 없다 — 희소도 mkldnn 도 없다."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return "torch.strided"
+
+    __str__ = __repr__
+
+    def __eq__(self, other):
+        return repr(other) == "torch.strided"
+
+    def __hash__(self):
+        return hash("torch.strided")
+
+
+# ── 전치의 세 이름 ──────────────────────────────────────────────────────────
+#
+# `H` 는 **2차원 전용**이고(torch 가 거기서 멈춘다), `mT`·`mH` 는 **마지막 두 축만**
+# 바꿔서 묶음에도 쓴다. 셋 다 켤레 여부가 갈린다 — `mT` 만 켤레를 안 취한다.
+# 실수에서는 셋이 같은 답이라, **복소수로 물어야** 그 차이가 드러난다.
+
+def _hermitian(self):
+    if self.data.ndim != 2:
+        raise RuntimeError(_like_torch(
+            f"`.H` 는 행렬(2차원)에만 있습니다 ({self.data.ndim}차원을 받았습니다).",
+            f"tensor.H is only supported on matrices (2-D tensors). "
+            f"Got {self.data.ndim}-D tensor."))
+    return self.transpose(0, 1).conj()
+
+
+def _matrix_transpose(self):
+    if self.data.ndim < 2:
+        raise RuntimeError(_like_torch(
+            "`.mT` 는 2차원 이상에만 있습니다.",
+            "tensor.mT is only supported on matrices or batches of matrices. "
+            f"Got {self.data.ndim}-D tensor."))
+    return self.transpose(-2, -1)
+
+
+Tensor.H = property(_hermitian)
+Tensor.mT = property(_matrix_transpose)
+Tensor.mH = property(lambda self: _matrix_transpose(self).conj())
+
+
+# ── `new_*` — **형을 물려받아** 새 텐서를 만든다 ─────────────────────────────
+#
+# `torch.zeros(...)` 와 다른 점이 그것뿐이다. 교재가 쓰는 이유도 그것이고 —
+# 형을 손으로 적으면 원본이 바뀔 때 같이 안 바뀐다.
+
+def _new_like(name, fill):
+    def method(self, *size, dtype=None, requires_grad=False):
+        shape = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list)) \
+            else tuple(int(s) for s in size)
+        want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
+                (dtype if dtype is not None else self.data.dtype))
+        return Tensor(fill(shape, want), requires_grad)
+
+    method.__name__ = name
+    method.__doc__ = f"`{name}` — 이 텐서의 형을 물려받는다."
+    return method
+
+
+Tensor.new_zeros = _new_like("new_zeros", lambda s, d: _np.zeros(s, dtype=d))
+Tensor.new_ones = _new_like("new_ones", lambda s, d: _np.ones(s, dtype=d))
+# **`new_empty` 는 값이 정해지지 않는다.** torch 도 쓰레기값을 준다 — 우리는 0 으로
+# 채우되 골든은 **모양과 형만** 묻는다. 값을 굳히면 그것이 명세가 되어 버린다.
+Tensor.new_empty = _new_like("new_empty", lambda s, d: _np.zeros(s, dtype=d))
+
+
+def _new_full(self, size, fill_value, dtype=None, requires_grad=False):
+    want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
+            (dtype if dtype is not None else self.data.dtype))
+    return Tensor(_np.full(tuple(size), fill_value, dtype=want), requires_grad)
+
+
+def _new_tensor(self, data, dtype=None, requires_grad=False):
+    want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
+            (dtype if dtype is not None else self.data.dtype))
+    return Tensor(_np.array(data, dtype=want, copy=True), requires_grad)
+
+
+Tensor.new_full = _new_full
+Tensor.new_tensor = _new_tensor
+Tensor.new = lambda self, *size: (self.new_empty(*size) if size
+                                  else Tensor(_np.empty(0, dtype=self.data.dtype)))
+
+# ── 모양을 **남에게서 받아 오는** 이름들 ─────────────────────────────────────
+Tensor.reshape_as = lambda self, other: self.reshape(*other.shape)
+Tensor.view_as = lambda self, other: self.view(*other.shape)
+Tensor.resize_as = lambda self, other: self.reshape(*other.shape)
+# **`narrow_copy`·`unsafe_*`·`slice_inverse` 는 안 만든다.** 넣었다가
+# `tests/test_gap.py` 가 잡았다 — `NOT_API` 가 그것들을 **함수화 패스용 내부 변종**
+# 이라고 이미 적어 두고 있었고, 진짜 이름은 `narrow`·`chunk`·`split` 이다.
+# torch 에 이름이 있다고 다 공개 API 인 것은 아니고, 그 판단이 이미 있었다.
+
+
+def _sum_to_size(self, *size):
+    """**브로드캐스팅을 되돌린다.** 늘어난 축을 도로 합쳐 그 모양으로 만든다 —
+    역전파가 안에서 하는 일과 같고, torch 는 그것을 이름으로도 준다."""
+    shape = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list)) \
+        else tuple(int(s) for s in size)
+    return Tensor(_unbroadcast(self.data, shape))
+
+
+Tensor.sum_to_size = _sum_to_size
+
+
+def _retain_grad(self):
+    """**가르는 것은 잎인가가 아니라 `requires_grad` 다**(실측).
+
+    처음에 "잎이면 멈춘다" 로 썼는데 torch 는 `requires_grad=True` 인 잎에서 **그냥
+    지나간다** — 잎은 이미 `.grad` 가 쌓이므로 청할 것이 없어서다. 멈추는 것은
+    기울기를 아예 안 받는 텐서뿐이다. 앞의 측정이 `requires_grad=False` 인 텐서
+    하나였고, 그 하나로 규칙을 정했다.
+
+    잎에 부르면 `retains_grad` 는 **거짓으로 남는다** — 남기고 있는 것이 아니라
+    원래 쌓이는 것이라서다.
+    """
+    if not self.requires_grad:
+        raise RuntimeError(_like_torch(
+            "기울기를 안 받는 텐서에는 `retain_grad()` 를 쓸 수 없습니다.",
+            "can't retain_grad on Tensor that has requires_grad=False"))
+    if self._parents:
+        self._retain = True
+    return None
+
+
+Tensor.retain_grad = _retain_grad
+
+
+# ── torch 가 **스스로 거절하는** 것들 ────────────────────────────────────────
+#
+# 이름은 남아 있는데 부르면 멈춘다. 우리가 답을 내주면 그 코드가 진짜 torch 에서
+# 깨진다 — `lstsq`·`solve` 에서 이미 한 번 밟은 자리다.
+_GONE = {
+    "eig": "linalg.eig", "symeig": "linalg.eigh",
+}
+# 우리에게 그 기계가 없는 것들. **없다고 말하는 것이 답이다.**
+_NO_MACHINERY = {
+    "to_mkldnn": "MKL-DNN",
+    "q_per_channel_axis": "채널별 양자화",
+    "q_per_channel_scales": "채널별 양자화",
+    "q_per_channel_zero_points": "채널별 양자화",
+    "smm": "희소 행렬곱",
+    "to_padded_tensor": "중첩 텐서",
+    "as_subclass": "텐서 하위 클래스",
+    "module_load": "`load_state_dict` 의 내부 훅",
+    "reinforce": "옛 확률적 그래프",
+    "new_empty_strided": "걸음을 손으로 주는 저장",
+    "register_hook": "역전파 훅",
+    "register_post_accumulate_grad_hook": "역전파 훅",
+    "index": "고급 색인의 내부 진입점 — `x[...]` 를 쓰세요",
+}
+
+
+def _bind_gone(name, instead):
+    def method(self, *args, **kw):
+        del self, args, kw
+        raise RuntimeError(_like_torch(
+            f"`{name}` 은 torch 에서 없어졌습니다 — `{instead}` 을(를) 쓰세요.",
+            "This function was deprecated since version 1.9 and is now removed. "
+            f"Please use the `torch.{instead}` function instead."))
+
+    method.__name__ = name
+    return method
+
+
+def _bind_absent(name, what):
+    def method(self, *args, **kw):
+        del self, args, kw
+        _unsupported(f"`.{name}()`({what})")
+
+    method.__name__ = name
+    return method
+
+
+for _gname, _instead in _GONE.items():
+    setattr(Tensor, _gname, _bind_gone(_gname, _instead))
+for _aname, _what in _NO_MACHINERY.items():
+    setattr(Tensor, _aname, _bind_absent(_aname, _what))
+del _gname, _instead, _aname, _what
+
+# `resize` 는 밑줄 없는 옛 이름이고 torch 도 조건이 맞아야 돈다. 우리는 제자리 판을
+# 부르는 얇은 껍데기로 둔다 — 사본을 주는 것이 아니라는 점이 torch 와 같다.
+Tensor.resize = lambda self, *size: self.resize_(*size)
+
+
+class _GradFn:
+    """`grad_fn` 자리. **주소는 못 맞추지만 이름은 맞출 수 있다.**
+
+    torch 는 `<MulBackward0 object at 0x…>` 를 찍는다. 주소가 들어가므로 글자를
+    굳힐 수는 없고, **형 이름**(`MulBackward0`)은 굳힐 수 있다 — 어느 연산에서
+    나왔는가가 그 이름에 들어 있다.
+    """
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name):
+        self._name = name
+
+    def __repr__(self):
+        return f"<{self._name} object at 0x{id(self):012x}>"
+
+
+def _grad_fn(self):
+    if self._op is None:
+        return None
+    got = _GradFn(self._op)
+    got.__class__ = type(self._op, (_GradFn,), {"__slots__": ()})
+    return got
+
+
+Tensor.grad_fn = property(_grad_fn)

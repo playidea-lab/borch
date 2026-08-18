@@ -1023,3 +1023,21 @@ def test_inplace_on_grad_tensor_raises():
         r += 1
     with pytest.raises(RuntimeError):
         m += 1
+
+
+def test_the_three_transposes_differ_only_on_complex():
+    """`H`·`mT`·`mH` 는 **켤레를 취하는가**로 갈린다 — 실수에서는 셋이 같은 답이다.
+
+    골든에는 이 셋이 `_as_expected` 로 들어가 있다. borch.ts 가 복소수 전치를 아직
+    거절해서 값을 셋에 함께 못 묻기 때문인데, **그렇게 감싸는 순간 코어의 값 검사가
+    사라진다** — `mH` 가 `mT` 를 돌려줘도 "브라우저가 거절했는가" 는 그대로 참이다.
+    실제로 `mH` 를 켤레 없이 만들어 보니 골든이 초록이었다. 그 절반이 여기 있다.
+    """
+    raw = np.array([[1 + 2j, 3 - 1j]], dtype=np.complex64)
+    for name in ("H", "mT", "mH"):
+        want = getattr(real.tensor(raw), name).resolve_conj().numpy()
+        got = np.asarray(getattr(bt.tensor(raw), name).resolve_conj().tolist())
+        assert np.array_equal(got, want), f"{name}: {got} != {want}"
+    # **셋이 서로 다르다는 것**까지 못 박는다 — 같은 함수를 세 번 묻는 것이 아니다.
+    x = bt.tensor(raw)
+    assert x.mT.tolist() != x.mH.resolve_conj().tolist(), "mT 와 mH 가 같다"

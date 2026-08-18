@@ -1116,3 +1116,148 @@ for _n in ("apply_", "map_", "map2_"):
 for _n in ("resize_as_sparse_", "sparse_resize_", "sparse_resize_and_clear_"):
     setattr(Tensor, _n, _sparse_only(_n))
 del _n
+
+
+# ── 저장을 들여다보는 것들과 전치의 세 이름 ─────────────────────────────────
+#
+# **`stride`·`dim_order`·`data_ptr` 는 여기서 갈린다.** 값이 GPU 버퍼에 있고 우리는
+# 뷰를 안 만들므로 언제나 연속이다 — 전치해도 걸음이 안 바뀐다. 코어는 numpy 뷰라
+# 바뀐다. 거짓말하지 않고 **연속인 걸음**을 낸다.
+def _row_major_stride(shape):
+    out, step = [], 1
+    for n in reversed(shape):
+        out.append(step)
+        step *= int(n)
+    return tuple(reversed(out))
+
+
+def _stride(self, dim=None):
+    got = _row_major_stride(tuple(self.shape))
+    return got if dim is None else got[dim]
+
+
+Tensor.stride = _stride
+Tensor.dim_order = lambda self: tuple(range(self.ndim))
+Tensor.element_size = lambda self: 4          # 저장이 float32 하나다
+Tensor.nelement = lambda self: self.numel()
+Tensor.ndimension = lambda self: self.ndim
+Tensor.itemsize = property(lambda self: 4)
+Tensor.nbytes = property(lambda self: 4 * self.numel())
+Tensor.output_nr = property(lambda self: 0)
+Tensor.volatile = property(lambda self: False)
+Tensor.name = property(lambda self: None)
+Tensor.grad_dtype = property(lambda self: self.dtype)
+Tensor.layout = property(lambda self: _CoreLayout())
+
+
+def _CoreLayout():                                          # noqa: N802
+    from borch._tensor import _Layout
+    return _Layout()
+
+
+def _matrix_transpose(self):
+    if self.ndim < 2:
+        raise RuntimeError(
+            "`.mT` 는 2차원 이상에만 있습니다. "
+            "(torch: tensor.mT is only supported on matrices or batches of matrices)")
+    return self.transpose(-2, -1)
+
+
+def _hermitian(self):
+    if self.ndim != 2:
+        raise RuntimeError(
+            f"`.H` 는 행렬(2차원)에만 있습니다 ({self.ndim}차원을 받았습니다). "
+            "(torch: tensor.H is only supported on matrices (2-D tensors))")
+    return self.transpose(0, 1).conj()
+
+
+Tensor.mT = property(_matrix_transpose)
+Tensor.mH = property(lambda self: _matrix_transpose(self).conj())
+Tensor.H = property(_hermitian)
+Tensor.grad_fn = property(lambda self: _grad_fn_of(self))
+
+
+def _grad_fn_of(t):
+    name = t._h.gradName
+    if not name:
+        return None
+    from borch._tensor import _GradFn
+    got = _GradFn(str(name))
+    got.__class__ = type(str(name), (_GradFn,), {"__slots__": ()})
+    return got
+
+
+# ── `new_*` 와 모양을 남에게서 받아 오는 이름들 ──────────────────────────────
+def _new_like(name, fill):
+    def method(self, *size, dtype=None, requires_grad=False):
+        from ._base import tensor as _t
+        shape = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list)) \
+            else tuple(int(s) for s in size)
+        want = str(dtype).replace("torch.", "") if dtype is not None else self.dtype.plain
+        got = _t(fill(shape))
+        return (got if want == "float32" else got.to(want)) if not requires_grad \
+            else _t(fill(shape), requires_grad=True)
+
+    method.__name__ = name
+    return method
+
+
+Tensor.new_zeros = _new_like("new_zeros", lambda s: _np.zeros(s, dtype=_np.float32))
+Tensor.new_ones = _new_like("new_ones", lambda s: _np.ones(s, dtype=_np.float32))
+Tensor.new_empty = _new_like("new_empty", lambda s: _np.zeros(s, dtype=_np.float32))
+Tensor.reshape_as = lambda self, other: self.reshape(*[int(v) for v in other.shape])
+Tensor.view_as = lambda self, other: self.reshape(*[int(v) for v in other.shape])
+Tensor.resize_as = lambda self, other: self.reshape(*[int(v) for v in other.shape])
+
+
+def _new_full(self, size, fill_value, dtype=None, requires_grad=False):
+    from ._base import tensor as _t
+    del dtype, requires_grad
+    return _t(_np.full(tuple(size), fill_value, dtype=_np.float32))
+
+
+def _new_tensor(self, data, dtype=None, requires_grad=False):
+    from ._base import tensor as _t
+    del dtype, requires_grad
+    return _t(_np.array(data, dtype=_np.float32))
+
+
+def _sum_to_size(self, *size):
+    from borch._tensor import Tensor as _Core, _unbroadcast
+    from ._base import tensor as _t
+    shape = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list)) \
+        else tuple(int(s) for s in size)
+    return _t(_unbroadcast(self.numpy(), shape))
+
+
+def _retain_grad(self):
+    """**잎에서는 멈춘다** — 코어와 같다. 파생 텐서는 borch.ts 가 이미 기울기를
+    남기므로 여기서는 표시만 세운다."""
+    if not self._h.requiresGrad:
+        raise RuntimeError(
+            "기울기를 안 받는 텐서에는 `retain_grad()` 를 쓸 수 없습니다. "
+            "(torch: can't retain_grad on Tensor that has requires_grad=False)")
+    return None
+
+
+Tensor.new_full = _new_full
+Tensor.new_tensor = _new_tensor
+Tensor.new = lambda self, *size: (self.new_empty(*size) if size
+                                  else _new_like("new", lambda s: _np.zeros(0, dtype=_np.float32))(self))
+Tensor.sum_to_size = _sum_to_size
+Tensor.retain_grad = _retain_grad
+
+
+def _gone(name, instead):
+    def method(self, *a, **k):
+        del self, a, k
+        raise RuntimeError(
+            f"`{name}` 은 torch 에서 없어졌습니다 — `torch.{instead}` 을 쓰세요. "
+            "(torch: This function was deprecated since version 1.9 and is now removed.)")
+    method.__name__ = name
+    return method
+
+
+for _n, _i in (("eig", "linalg.eig"), ("symeig", "linalg.eigh")):
+    setattr(Tensor, _n, _gone(_n, _i))
+del _n, _i

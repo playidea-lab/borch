@@ -105,3 +105,25 @@ def test_the_i1_series_is_convergence_not_approximation():
     got = borch._ops._i1(xs)
     rel = np.abs(want - got) / np.maximum(np.abs(want), 1e-300)
     assert rel.max() < 1e-12, f"최대 상대오차 {rel.max():.3e}"
+
+
+def test_retain_grad_actually_retains():
+    """**거절만 맞추면 반쪽이다.** 이 이름이 하려는 일은 파생 텐서의 `.grad` 를
+    남기는 것이고, 그것을 안 하면 잎에서 멈추는 것까지만 맞는 껍데기가 된다.
+
+    골든에 못 두는 이유는 borch.ts 가 파생 텐서의 `.grad` 를 안 내주기 때문이다 —
+    셋을 함께 묻는 자리가 아니다.
+    """
+    x = borch.tensor([1.0, 2.0], requires_grad=True)
+    plain = x * 2
+    plain.sum().backward()
+    assert plain.grad is None, "안 청했는데 남았다"
+
+    y = borch.tensor([1.0, 2.0], requires_grad=True)
+    kept = y * 3
+    kept.retain_grad()
+    kept.sum().backward()
+    assert kept.grad is not None and kept.grad.tolist() == [1.0, 1.0]
+    assert kept.retains_grad is True
+    # **잎은 청해도 거짓으로 남는다** — 남기고 있는 것이 아니라 원래 쌓이는 것이다.
+    assert y.retains_grad is False

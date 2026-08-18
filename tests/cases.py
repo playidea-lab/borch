@@ -8211,6 +8211,126 @@ def inplace_cases(inp=None):
             return "안 던졌다"
         cases.append((INPLACE_PREFIX + f"짝없이::{gone} 는 희소 전용", sparse_only))
 
+    # ── 저장을 들여다보는 것들 ────────────────────────────────────────────
+    #
+    # 값이 아니라 **어떻게 놓여 있는가**를 묻는다. `stride` 는 전치하면 바뀌고,
+    # 그것이 뷰라는 사실 자체다 — **브라우저 쪽은 뷰가 없어 안 바뀐다**(뷰 전파를
+    # 거절하는 것과 같은 뿌리라 그 자리 옆에 따로 뒀다).
+    wide = np.arange(6, dtype=np.float32).reshape(2, 3)
+    for label, call in (
+        ("stride()", lambda L: L.tensor(wide).stride()),
+        ("dim_order()", lambda L: L.tensor(wide).dim_order()),
+        ("element_size()", lambda L: L.tensor(wide).element_size()),
+        ("nelement()", lambda L: L.tensor(wide).nelement()),
+        ("ndimension()", lambda L: L.tensor(wide).ndimension()),
+        ("itemsize", lambda L: L.tensor(wide).itemsize),
+        ("nbytes", lambda L: L.tensor(wide).nbytes),
+        ("layout", lambda L: L.tensor(wide).layout),
+        ("output_nr", lambda L: L.tensor(wide).output_nr),
+    ):
+        cases.append((INPLACE_PREFIX + f"저장::{label}", lambda L, f=call: str(f(L))))
+
+    def stride_after_transpose(L):
+        """**전치하면 걸음이 바뀐다** — 코어는 numpy 뷰라 `(1, 3)` 이고 브라우저는
+        뷰가 없어 `(3, 1)` 그대로다. 어느 쪽인지를 값으로 답한다."""
+        got = L.tensor(wide).t().stride()
+        views = not hasattr(L, "backend")
+        return "기대대로" if (got == (1, 3)) == views else f"뜻밖에 {got}"
+
+    cases.append((INPLACE_PREFIX + "저장::전치한 걸음=브라우저는뷰가없다",
+                  stride_after_transpose))
+
+    # ── 전치의 세 이름 ────────────────────────────────────────────────────
+    #
+    # `H` 는 **2차원 전용**이고 `mT`·`mH` 는 마지막 두 축만 바꿔 묶음에도 쓴다.
+    # 셋의 차이는 **켤레를 취하는가**인데, 실수에서는 셋이 같은 답이라
+    # **복소수로 물어야** 드러난다.
+    cplx = np.array([[1 + 2j, 3 - 1j]], dtype=np.complex64)
+    for label, call in (
+        ("H", lambda L: L.tensor(wide).H),
+        ("mT", lambda L: L.tensor(wide).mT),
+    ):
+        cases.append((INPLACE_PREFIX + f"전치::{label}", call))
+
+    # **복소수는 브라우저 쪽이 거절한다** — borch.ts 의 전치가 인터리브 저장을 아직
+    # 모른다. 셋의 차이(켤레를 취하는가)는 복소수에서만 드러나므로, 값을 못 물으면
+    # 그 차이 자체를 못 묻는다. 거절이 답인 자리라 `_as_expected` 로 둔다.
+    #
+    # torch 는 켤레를 **비트로만** 세워서 `numpy()` 가 멈춘다 — `resolve_conj()` 로
+    # 풀어야 값이 보이고, 우리 쪽은 이미 뒤집어 담으므로 그 호출이 항등이다.
+    for label, call in (
+        ("H(복소수)", lambda L: L.tensor(cplx).H.resolve_conj()),
+        ("mT(복소수) 는 켤레를 안 한다", lambda L: L.tensor(cplx).mT.resolve_conj()),
+        ("mH(복소수) 는 켤레를 한다", lambda L: L.tensor(cplx).mH.resolve_conj()),
+    ):
+        cases.append((INPLACE_PREFIX + f"전치::{label}=브라우저는거절",
+                      _as_expected(call)))
+
+    def h_needs_a_matrix(L):
+        try:
+            L.tensor(np.array([1.0, 2.0], dtype=np.float32)).H
+        except Exception as exc:                                # noqa: BLE001
+            return "멈췄다" if "2-D" in str(exc) else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "전치::H 는 1차원에서 멈춘다", h_needs_a_matrix))
+
+    # ── `new_*` — 형을 **물려받아** 만든다 ────────────────────────────────
+    for label, call in (
+        ("new_zeros", lambda L: L.tensor(wide).new_zeros((2,))),
+        ("new_ones", lambda L: L.tensor(wide).new_ones(2, 2)),
+        ("new_full", lambda L: L.tensor(wide).new_full((2,), 7)),
+        ("new_tensor", lambda L: L.tensor(wide).new_tensor([1, 2])),
+        ("reshape_as", lambda L: L.tensor(wide).reshape_as(
+            L.tensor(np.zeros((3, 2), dtype=np.float32)))),
+        ("view_as", lambda L: L.tensor(wide).view_as(
+            L.tensor(np.zeros((3, 2), dtype=np.float32)))),
+        # **브로드캐스팅을 되돌린다** — 역전파가 안에서 하는 일과 같다.
+        ("sum_to_size", lambda L: L.tensor(wide).sum_to_size(2, 1)),
+    ):
+        cases.append((INPLACE_PREFIX + f"새로::{label}", call))
+    # **값이 정해지지 않는다** — torch 가 쓰레기값을 준다. 모양과 형만 묻는다.
+    cases.append((INPLACE_PREFIX + "새로::new_empty 는 모양만",
+                  lambda L: f"{tuple(L.tensor(wide).new_empty((2, 3)).shape)} "
+                            f"{L.tensor(wide).new_empty((2, 3)).dtype}"))
+
+    # ── `retain_grad` — **잎에서는 멈추고, 파생에는 기울기를 남긴다** ──────
+    #
+    # 거절만 맞추면 반쪽이다. 이름이 하려는 일은 파생 텐서의 `.grad` 를 남기는 것이고,
+    # 그것을 안 하면 거절만 흉내 내는 꼴이 된다.
+    def retain_refuses(L):
+        """**가르는 것은 잎인가가 아니라 `requires_grad` 다.** 기울기를 받는 잎에는
+        그냥 지나간다 — 이미 쌓이므로 청할 것이 없어서다."""
+        try:
+            L.tensor(wide).retain_grad()
+        except Exception as exc:                                # noqa: BLE001
+            return ("멈췄다" if "requires_grad=False" in str(exc)
+                    else f"다른 문구 <{exc}>")
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "기울기::retain_grad 는 requires_grad 를 본다",
+                  retain_refuses))
+    cases.append((INPLACE_PREFIX + "기울기::잎에 부르면 지나간다",
+                  lambda L: str(L.tensor(wide, requires_grad=True).retain_grad())))
+
+    # `retain_grad` 뒤에 **값이 실제로 남는가**는 `tests/test_fold_grad.py` 에 있다 —
+    # borch.ts 가 파생 텐서의 `.grad` 를 안 내줘서 셋을 함께 못 묻는다.
+    cases.append((INPLACE_PREFIX + "기울기::grad_fn 의 형 이름",
+                  lambda L: type((L.tensor(wide, requires_grad=True) * 2).grad_fn).__name__))
+    cases.append((INPLACE_PREFIX + "기울기::잎의 grad_fn 은 없다",
+                  lambda L: str(L.tensor(wide, requires_grad=True).grad_fn)))
+
+    # ── torch 가 스스로 거절하는 둘 ───────────────────────────────────────
+    for gone in ("eig", "symeig"):
+        def deprecated_op(L, n=gone):
+            try:
+                getattr(L.tensor(wide), n)()
+            except Exception as exc:                            # noqa: BLE001
+                return ("멈췄다" if "deprecated" in str(exc)
+                        else f"다른 문구 <{str(exc).splitlines()[0][:44]}>")
+            return "안 던졌다"
+        cases.append((f"dtype::없는이름::{gone}(폐기됨)", deprecated_op))
+
     # 값이 아니라 **참거짓**을 내는 셋. `is_same_size` 는 모양만 본다.
     for label, call in (
         ("is_same_size(같음)",
