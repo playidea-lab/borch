@@ -30,7 +30,10 @@ def _unsupported(what: str):
     )
 
 
-_TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float"}
+# torch 가 오류 문구에서 쓰는 형 이름. **복소수가 빠져 있었다** —
+# `out=` 의 형 거절이 그 자리에서 `KeyError` 로 터지며 알려 주었다.
+_TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float",
+               "c": "ComplexFloat"}
 
 
 def _needs_float(data, korean: str, torch_phrase: str):

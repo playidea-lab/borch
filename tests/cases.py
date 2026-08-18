@@ -9920,31 +9920,82 @@ def dtype_cases(inp=None):
                   _as_expected(lambda L: L.tensor(np.float32([1.0, 2.0, 3.0]))
                                .norm(dtype=L.float64))))
 
-    # ── `out=` 은 **삼키지 않고 멈춘다** ─────────────────────────────────
+    # ── `out=` — 미리 만든 텐서에 써 넣기 ────────────────────────────────
     #
-    # torch 는 198 개 이름에서 `out=` 을 받아 미리 만든 텐서에 써 넣는다. 우리는 안
-    # 한다 — 계산해서 사본을 넣게 되므로 `out=` 의 존재 이유인 **할당을 안 하는 것**이
-    # 일어나지 않고, 절약을 흉내 내면 없는 것을 배우게 된다.
+    # **규약은 진짜 torch 에서 받아 적었다**(짐작 아님). 다섯 가지가 관측된다:
+    # 목적지에 쓰고 **같은 객체**를 돌려준다 · 모양이 다르면 오류가 아니라 **다시
+    # 잡는다** · 형은 `can_cast`(범주만, 정밀도는 자유) · 입력이든 목적지든
+    # **기울기를 요구하면 멈춘다** · 축약은 `dim` 없이 못 받는다.
     #
-    # **안 하는 방식이 문제였다.** 대부분은 `**kw` 가 없어서 파이썬이 `TypeError` 로
-    # 멈춰 주는데 — 그건 우연히 안전했던 것이다 — `**kw` 를 받는 **예순넷**이 `out=`
-    # 을 받아 **버리고** 있었다. `randint(0, 5, (4,), out=buf)` 를 쓴 코드는 오류 없이
-    # `buf` 가 0 인 채로 다음 줄로 간다.
-    #
-    # 셋이 갈린다(torch 는 해내고 우리 둘은 거절). 대표 넷만 묻는다 — 문이 하나이고
-    # `tests/test_no_silent_out.py` 가 그 문이 모든 자리에 있는지 기계로 본다.
-    # **torch 가 진짜로 받는 것만 고른다.** `rand_like`·`randn_like` 는 docstring 에
-    # `out=None` 이 적혀 있는데 실제 오버로드는 안 받는다 — 처음에 그것으로 물었다가
-    # torch 쪽이 `TypeError` 를 내며 알려 주었다. 문서와 서명이 갈리는 자리다.
-    for _name, _call in (
-        ("randint", lambda L: L.randint(0, 5, (4,), out=L.zeros(4, dtype=L.int64))),
-        ("randperm", lambda L: L.randperm(4, out=L.zeros(4, dtype=L.int64))),
-        ("logspace", lambda L: L.logspace(0.0, 1.0, 3, out=L.zeros(3))),
-        ("searchsorted", lambda L: L.searchsorted(
-            L.tensor(np.float32([1.0, 2.0, 3.0])),
-            L.tensor(np.float32([2.0])), out=L.zeros(1, dtype=L.int64))),
+    # 절약은 우리에게 안 일어난다 — 계산한 뒤 옮긴다. 그래도 **목적지가 바뀌는 것과
+    # 돌아오는 것이 같은 객체라는 것은 사실**이라 그 둘은 지킨다.
+    _o_a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    _o_b = np.array([4.0, 5.0, 6.0], dtype=np.float32)
+
+    def _wrote(L, fn, shape=(3,), dt=None):
+        """**같은 객체를 돌려주는가**와 **목적지가 바뀌었는가**를 함께 본다.
+
+        값은 반올림한다 — `exp` 는 GPU 와 CPU 의 마지막 자리가 갈리고, 여기서 묻는
+        것은 정밀도가 아니라 `out=` 이 목적지에 썼는가다.
+        """
+        dst = L.zeros(shape) if dt is None else L.zeros(shape, dtype=getattr(L, dt))
+        got = fn(L, dst)
+        flat = np.asarray(dst.tolist(), dtype=np.float64).round(4).ravel().tolist()
+        return f"{got is dst} {flat}"
+
+    for _name, _fn in (
+        ("add", lambda L, o: L.add(L.tensor(_o_a), L.tensor(_o_b), out=o)),
+        ("mul", lambda L, o: L.mul(L.tensor(_o_a), L.tensor(_o_b), out=o)),
+        ("exp", lambda L, o: L.exp(L.tensor(_o_a), out=o)),
+        ("clamp", lambda L, o: L.clamp(L.tensor(_o_a), 1.5, out=o)),
+        ("logspace", lambda L, o: L.logspace(0.0, 1.0, 3, out=o)),
     ):
-        we_refuse(f"{_name}(out=)", _call, group="out")
+        cases.append((f"dtype::out::{_name}(out=) 이 쓰고 같은 것을 준다",
+                      lambda L, f=_fn: _wrote(L, f)))
+
+    cases.append(("dtype::out::matmul(out=)",
+                  lambda L: _wrote(L, lambda L2, o: L2.matmul(
+                      L2.tensor(np.eye(3, dtype=np.float32)),
+                      L2.tensor(np.eye(3, dtype=np.float32)), out=o), (3, 3))))
+    # **번호를 내는 것들은 목적지도 정수여야 한다** — 실수 칸에 넣으면 형 규칙이 막는다.
+    cases.append(("dtype::out::searchsorted(out=)",
+                  lambda L: _wrote(L, lambda L2, o: L2.searchsorted(
+                      L2.tensor(_o_a), L2.tensor(np.float32([2.5])), out=o),
+                      (1,), "int64")))
+
+    # **정수 결과를 실수 칸에 넣는 것은 된다** — 범주가 넓어지는 쪽이다.
+    cases.append(("dtype::out::int 결과를 float 칸에",
+                  lambda L: _wrote(L, lambda L2, o: L2.add(
+                      L2.tensor(np.array([1, 2, 3])), L2.tensor(np.array([1, 1, 1])), out=o))))
+
+    # 거절 셋. 값을 굳히면 문구까지 맞춰야 하므로 **종류만** 본다.
+    def _refused(L, fn):
+        try:
+            fn(L)
+        except Exception as exc:                            # noqa: BLE001
+            return type(exc).__name__
+        return "안 멈췄다"
+
+    cases.append(("dtype::out::형이 좁아지면 멈춘다",
+                  lambda L: _refused(L, lambda L2: L2.add(
+                      L2.tensor(_o_a), L2.tensor(_o_b),
+                      out=L2.zeros(3, dtype=L2.int64)))))
+    cases.append(("dtype::out::입력이 기울기를 요구하면 멈춘다",
+                  lambda L: _refused(L, lambda L2: L2.add(
+                      L2.tensor(_o_a, requires_grad=True), L2.tensor(_o_b),
+                      out=L2.zeros(3)))))
+    cases.append(("dtype::out::목적지가 기울기를 요구하면 멈춘다",
+                  lambda L: _refused(L, lambda L2: L2.add(
+                      L2.tensor(_o_a), L2.tensor(_o_b),
+                      out=L2.zeros(3, requires_grad=True)))))
+
+    # **모양이 다르면 다시 잡는다** — 오류가 아니다. 경고는 문구가 길어 모양만 본다.
+    def _resized(L):
+        dst = L.zeros(7)
+        L.add(L.tensor(_o_a), L.tensor(_o_b), out=dst)
+        return str(tuple(dst.shape))
+
+    cases.append(("dtype::out::모양이 다르면 다시 잡는다", _resized))
 
     # ── 이름은 있고 **칸이 없는** 형 넷 ──────────────────────────────────
     #

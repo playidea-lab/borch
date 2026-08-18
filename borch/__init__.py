@@ -49,6 +49,7 @@ from ._tensor import (
     _category, _grad_mode, _no_bool_subtract, _promote, _scalar_category, _unbroadcast,
     result_type,
 )
+from ._ops import _out                                   # noqa: E402
 from ._ops import (
     Generator, _Cuda, _ERF_A, _ERF_P, _INPLACE_UNARY, _Linalg, _Lstsq, _Namespace, _SVD,
     _abs, _binary_math, _col2im, _compare, _cum_extreme, _diagonal_scatter, _erf64,
@@ -349,6 +350,64 @@ for _name in dir(Tensor):
 # **여기가 파일의 끝 가까이여야 한다.** 위 고리가 `sum`·`min`·`max`·`all`·`any` 를
 # 모듈 전역에 놓는데, 그 이름들은 파이썬 내장이기도 하다. 이 아래에서 내장으로
 # 부르는 코드가 있으면 조용히 다른 것이 불린다 — 결속에서 `bool` 로 한 번 겪었다.
+
+
+# ── `out=` — 미리 만든 텐서에 써 넣기 ────────────────────────────────────────
+#
+# torch 는 이 이름들에서 결과를 새로 만들지 않고 건네받은 텐서에 써 넣는다.
+# **절약은 우리에게 안 일어난다** — 계산한 뒤 옮기므로 할당은 그대로 생긴다. 그래도
+# 관측되는 것 둘은 진짜다: 목적지가 바뀌고, 돌아오는 것이 **같은 객체**다. 그 둘에
+# 기대는 코드가 있으므로 흉내가 아니라 사실을 지키는 쪽이다.
+#
+# **목록은 재서 만들었다.** docstring 의 `out=None` 만 보면 넓다 —
+# `rand_like`·`zeros_like`·`median`·`where` 는 거기 적혀 있는데 실제 오버로드는 안
+# 받는다. 그래서 torch 를 **실제로 불러 보고** 갈랐고, `tests/test_out_names.py` 가
+# 그 갈림을 다시 잰다. 코어는 torch 에 기대지 않으므로 표는 여기 적고 대조는 저기서.
+_TAKES_OUT = frozenset("""
+    add addbmm addcdiv addcmul addmm addmv addr all amax amin any arange
+    baddbmm bitwise_and bitwise_left_shift bitwise_not bitwise_right_shift
+    bitwise_xor bmm bucketize cat ceil cholesky cholesky_inverse
+    cholesky_solve clamp clip column_stack complex concat concatenate
+    conj_physical copysign cos cosh cross cumprod cumsum deg2rad diag
+    digamma div divide dot dstack empty eq erf erfc erfinv exp exp2 expm1
+    eye fix float_power floor floor_divide fmax fmin fmod frac full gather
+    gcd ge ger greater greater_equal gt heaviside histc hstack hypot i0
+    igamma igammac index_select inner inverse isneginf isposinf kron lcm
+    ldexp le lerp less less_equal lgamma linspace log log1p logaddexp
+    logaddexp2 logcumsumexp logical_and logical_not logical_or logit
+    logspace logsumexp lt lu_solve masked_select matmul matrix_power max
+    maximum mean min minimum mm mul multinomial multiply mv mvlgamma
+    nan_to_num nanmean nanquantile ne neg negative nextafter nonzero normal
+    not_equal ones ormqr outer polar polygamma pow quantile rand randint
+    randn randperm range reciprocal remainder renorm round row_stack rsqrt
+    searchsorted sgn sigmoid sign signbit sin sinc sinh sqrt stack std sub
+    subtract take_along_dim tan tanh tril triu trunc var vdot vstack xlogy
+    zeros
+""".split())
+
+# `out=(값, 번호)` 처럼 **여럿**을 받는 것들. 규칙은 같고 자리가 여럿일 뿐이다.
+_TAKES_OUT_TUPLE = frozenset("""
+    aminmax cummax cummin frexp geqrf histogram kthvalue mode sort svd topk
+    triangular_solve
+""".split())
+
+
+def _accepts_out(fn, name):
+    """`out=` 을 받아 `_out` 에 넘긴다. **함수마다 손으로 안 적는다** — 백일흔둘을
+    손으로 고치면 그중 하나가 빠지고, 빠진 자리는 조용히 삼킨다."""
+    def call(*args, **kwargs):
+        out = kwargs.pop("out", None)
+        return _out(fn(*args, **kwargs), out, name)
+    call.__name__ = getattr(fn, "__name__", name)
+    call.__doc__ = getattr(fn, "__doc__", None)
+    return call
+
+
+for _name in _TAKES_OUT | _TAKES_OUT_TUPLE:
+    _fn = globals().get(_name)
+    if _fn is not None:
+        globals()[_name] = _accepts_out(_fn, _name)
+del _name
 
 
 # ================================================================ install

@@ -399,7 +399,23 @@ def __getattr__(name):
     """모듈에 없는 이름은 **첫 인자의 메서드**로 넘긴다.
 
     `torch.exp(x)` 와 `x.exp()` 가 같은 것이라는 torch 의 규칙을 그대로 쓴다.
+
+    **`out=` 도 여기서 붙인다.** 손으로 쓴 이름만 감쌌더니 `exp`·`matmul` 처럼 이
+    문으로 나오는 것들이 빠졌다 — 이름이 두 곳에서 나오면 한 곳만 고쳐진다.
     """
+    got = _resolve_name(name)
+    if callable(got) and not name.startswith("_"):
+        from borch import _TAKES_OUT, _TAKES_OUT_TUPLE
+        if name in _TAKES_OUT or name in _TAKES_OUT_TUPLE:
+            def with_out(*args, _fn=got, _n=name, **kwargs):
+                out = kwargs.pop("out", None)
+                return _out(_fn(*args, **kwargs), out, _n)
+            with_out.__name__ = name
+            return with_out
+    return got
+
+
+def _resolve_name(name):
     if name.startswith("_"):
         raise AttributeError(name)
     # dtype 이름들. `bool` 을 모듈 전역에 두면 파이썬 내장을 가리므로 여기서 준다.
@@ -846,12 +862,51 @@ def promote_types(a, b):
     return _base._DType(best)
 
 
+# 형의 **범주**. `can_cast` 은 이것만 본다 — 정밀도는 자유고 범주가 좁아지는 쪽만
+# 막힌다(실측: `float64 → float32` 는 참이다). 순서표로 짰더니 복소수가 빠져 있어서
+# **복소수끼리도 거짓**이었다. 코어가 같은 자리를 같이 고쳤다.
+_CATEGORY_OF = {"bool": 0, "int64": 1, "float32": 2, "float64": 2, "complex64": 3}
+
+
 def can_cast(from_type, to_type):
-    """**한 방향만 참이다.** 좁아지는 쪽(실수 → 정수)은 거짓이다."""
-    names = [_dtype_name(t) for t in (from_type, to_type)]
-    if any(n not in _PROMOTE_ORDER for n in names):
-        return False
-    return _PROMOTE_ORDER.index(names[0]) <= _PROMOTE_ORDER.index(names[1])
+    """**범주만 본다** — bool < 정수 < 실수 < 복소수."""
+    a, b = (_CATEGORY_OF.get(_dtype_name(t), 2) for t in (from_type, to_type))
+    return a <= b
+
+
+def _out(result, out, name="op"):
+    """torch 의 `out=` 규약. **코어와 같은 규칙이고 같은 문구다.**
+
+    저쪽은 numpy 배열을 되쓰고 이쪽은 borch.ts 버퍼를 되쓴다. 모양이 다르면 칸 수가
+    달라지므로 `copyFrom` 으로는 안 되고 **손잡이를 갈아 끼운다**(`_set_` 이 같은
+    까닭으로 그렇게 한다).
+    """
+    if out is None:
+        return result
+    if isinstance(out, (tuple, list)):
+        parts = [_out(r, o, name) for r, o in zip(tuple(result), out)]
+        return type(result)(*parts) if hasattr(result, "_fields") else tuple(parts)
+    if result.requires_grad or out.requires_grad:
+        raise RuntimeError(
+            f"{name}(): functions with out=... arguments don't support automatic "
+            "differentiation, but one of the arguments requires grad.")
+    if not can_cast(result.dtype, out.dtype):
+        names = {"bool": "Bool", "int64": "Long", "float32": "Float",
+                 "float64": "Double", "complex64": "ComplexFloat"}
+        raise RuntimeError(
+            f"result type {names.get(_dtype_name(result.dtype), 'Float')} can't be "
+            f"cast to the desired output type "
+            f"{names.get(_dtype_name(out.dtype), 'Float')}")
+    want = tuple(result.shape)
+    if tuple(out.shape) != want:
+        import warnings as _w
+        _w.warn(
+            f"An output with one or more elements was resized since it had shape "
+            f"{list(out.shape)}, which does not match the required output shape "
+            f"{list(want)}.", UserWarning, stacklevel=3)
+        out._h = handle(result.to(_dtype_name(out.dtype)))
+        return out
+    return out._write_back(result.to(_dtype_name(out.dtype)))
 
 
 def get_default_dtype():

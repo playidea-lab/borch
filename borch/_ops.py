@@ -3,13 +3,16 @@
 import builtins as _builtins
 import math as _math
 
+import warnings as _warnings
+
 import numpy as _np
 
 from ._tensor import (
     Tensor, _MinMax, _grad_mode, _unbroadcast, result_type,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _TYPE_NAMES, _like_torch, _math, _needs_float, _np, _refuses_bool,
+    _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _like_torch, _math, _needs_float,
+    _np, _refuses_bool,
     _refuses_nonfloat_kernel, _resolve, _unsupported, Size, device as _device,
     dtype,
 )
@@ -218,6 +221,47 @@ def randn(*shape, requires_grad=False):
 def rand(*shape, dtype=None, requires_grad=False, device=None):
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
     return _made(_rng.random(shape).astype(_DEFAULT_DTYPE), dtype, requires_grad)
+
+
+def _out(result, out, name="op"):
+    """torch 의 `out=` 규약. **짐작이 아니라 진짜 torch 에서 받아 적었다.**
+
+    다섯 가지가 관측된다:
+
+    - 결과를 `out` 에 써 넣고 **`out` 자체를 돌려준다**(`result is out` 이 참).
+    - **모양이 다르면 `out` 을 다시 잡는다** — 오류가 아니라 경고다. 크든 작든 그렇다.
+    - **형은 `can_cast` 다**(실측). float32→int64 는 멈추고 float64→float32 는 된다.
+      정밀도는 자유롭고 **범주가 좁아지는 것**만 막힌다.
+    - `out` 이든 입력이든 **기울기를 요구하면 멈춘다.** `out=` 은 미분을 안 받는다.
+    - 축약은 `dim` 없이 `out=` 을 못 받는다 — 그건 torch 쪽 서명이라 우리가 안 만든다.
+
+    **절약은 여기서 일어나지 않는다.** 우리는 결과를 만든 뒤 옮긴다. `out=` 의 존재
+    이유가 할당을 안 하는 것인데 그것은 못 준다 — 그러나 목적지가 바뀌는 것과
+    돌아오는 것이 같은 객체라는 것은 **성능이 아니라 사실**이라, 그 둘은 지킨다.
+    """
+    if out is None:
+        return result
+    # 여럿을 내는 것들(`sort`·`topk`·`svd` …)은 `out=(a, b)` 를 받는다.
+    if isinstance(out, (tuple, list)):
+        parts = [_out(r, o, name) for r, o in zip(tuple(result), out)]
+        return type(result)(*parts) if hasattr(result, "_fields") else tuple(parts)
+    if result.requires_grad or out.requires_grad:
+        raise RuntimeError(
+            f"{name}(): functions with out=... arguments don't support automatic "
+            "differentiation, but one of the arguments requires grad.")
+    if not can_cast(_NP_TO_DTYPE[_np.dtype(result.data.dtype)],
+                    _NP_TO_DTYPE[_np.dtype(out.data.dtype)]):
+        raise RuntimeError(
+            f"result type {_TYPE_NAMES[result.data.dtype.kind]} can't be cast to "
+            f"the desired output type {_TYPE_NAMES[out.data.dtype.kind]}")
+    if out.data.shape != result.data.shape:
+        _warnings.warn(
+            f"An output with one or more elements was resized since it had shape "
+            f"{list(out.data.shape)}, which does not match the required output shape "
+            f"{list(result.data.shape)}.", UserWarning, stacklevel=3)
+        out._array = _np.empty(result.data.shape, dtype=out.data.dtype)
+    out._array[...] = result.data.astype(out.data.dtype, copy=False)
+    return out
 
 
 def _no_out(kw):
@@ -3117,7 +3161,9 @@ def nanmean(t, dim=None, keepdim=False, dtype=None):
     clean, bad = _nan_mask(t)
     count = (~bad).sum(axis=dim, keepdims=keepdim)
     total = clean.sum(axis=dim, keepdims=keepdim)
-    out = total / count
+    # **numpy 의 승격 규칙을 그대로 두면 안 된다.** float32 를 int64 로 나누면
+    # numpy 는 float64 로 올리는데 torch 는 float32 를 낸다 — 값은 같고 형만 갈린다.
+    out = total / count.astype(total.dtype)
 
     def back(g):
         gg = _expand_reduced(g, t.data.shape, dim, keepdim)
@@ -4724,20 +4770,31 @@ _PROMOTE_ORDER = ("bool", "int64", "float32", "float64")
 
 
 def promote_types(a, b):
-    """둘을 담을 수 있는 형. **순서가 정해져 있다** — bool < int64 < float32 < float64."""
-    names = [getattr(t, "name", str(t)) for t in (a, b)]
-    best = max(names, key=lambda n: _PROMOTE_ORDER.index(n)
-               if n in _PROMOTE_ORDER else 0)
-    return {"bool": _bool_dtype, "int64": _int64, "float32": _float32,
-            "float64": _float64}[best]
+    """둘을 담을 수 있는 형.
+
+    **산수가 쓰는 규칙을 그대로 쓴다.** 여기 따로 순서표를 두었더니 복소수를 몰라서
+    `float32 + complex64` 가 float32 로 나왔다 — 산수는 그 자리를 맞게 하고 있었는데
+    같은 물음에 답하는 함수가 **두 벌**이라 한쪽만 맞았다. 값 대조로는 안 걸린다.
+    이 함수를 부르는 사람이 형만 묻기 때문이다.
+    """
+    from ._tensor import result_type                       # noqa: PLC0415
+
+    return _NP_TO_DTYPE[result_type(_np_of(a), _np_of(b))]
 
 
 def can_cast(from_type, to_type):
-    """**한 방향만 참이다.** 좁아지는 쪽(실수 → 정수)은 거짓이다 — 값이 깎이므로."""
-    names = [getattr(t, "name", str(t)) for t in (from_type, to_type)]
-    if any(n not in _PROMOTE_ORDER for n in names):
-        return False
-    return _PROMOTE_ORDER.index(names[0]) <= _PROMOTE_ORDER.index(names[1])
+    """**범주만 본다** — bool < 정수 < 실수 < 복소수.
+
+    정밀도는 자유롭다: `float64 → float32` 는 참이다(실측). 값이 깎이는데도 참인 것이
+    뜻밖이지만 torch 가 그렇고, 여덟 짝을 다 재서 확인했다. 거짓인 것은 **범주가
+    좁아지는 쪽**뿐이다 — 실수를 정수 칸에, 정수를 불리언 칸에 넣는 것.
+
+    전에는 이름 순서표를 봤는데 그 표에 복소수가 없어서 **복소수끼리도 거짓**이었다.
+    `out=` 을 만들면서 드러났다.
+    """
+    from ._tensor import _category                         # noqa: PLC0415
+
+    return _category(_np_of(from_type)) <= _category(_np_of(to_type))
 
 
 def get_default_dtype():

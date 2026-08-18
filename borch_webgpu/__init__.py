@@ -156,6 +156,32 @@ from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 # 보이는 이름은 torch 의 것이다 — 골든이 `torch.float32` 를 답으로 굳혔다.
 from ._base import _DType                                # noqa: E402
 
+# ── `out=` — 코어와 같은 표, 같은 규칙 ──────────────────────────────────────
+#
+# 표를 두 벌 적지 않는다. 코어의 것을 그대로 쓰고, 여기서는 **우리에게 있는 이름만**
+# 감싼다 — 없는 이름은 감쌀 것이 없다. 표가 갈리면 셋이 다른 답을 내고, 그것은 골든이
+# 잡기 전에는 안 보인다.
+def _wrap_out_names():
+    from borch import _TAKES_OUT, _TAKES_OUT_TUPLE
+    from ._ops import _out
+
+    def wrap(fn, name):
+        def call(*args, **kwargs):
+            out = kwargs.pop("out", None)
+            return _out(fn(*args, **kwargs), out, name)
+        call.__name__ = getattr(fn, "__name__", name)
+        call.__doc__ = getattr(fn, "__doc__", None)
+        return call
+
+    for name in _TAKES_OUT | _TAKES_OUT_TUPLE:
+        fn = globals().get(name)
+        if fn is not None:
+            globals()[name] = wrap(fn, name)
+
+
+_wrap_out_names()
+
+
 def install(name="borch_webgpu", modules=None):
     """`from <name>.nn import Linear` 이 통하게 하위 경로를 심는다.
 
