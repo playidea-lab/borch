@@ -2634,6 +2634,29 @@ export class BatchNormND extends Module {
   readonly bias: Tensor;
   readonly runningMean: Tensor;
   readonly runningVar: Tensor;
+  /**
+   * 학습 모드로 지나간 횟수. **GPU 에 안 둔다 — 그냥 수다.**
+   *
+   * torch 는 이것을 0 차원 텐서 버퍼로 갖고 `state_dict` 에 넣는다. 우리는 이 값을
+   * 계산에 안 쓰므로(`momentum` 이 늘 수다) 텐서로 둘 이유가 없고, 텐서로 두면
+   * **BN 층마다 스텝당 dispatch 가 하나씩 는다** — ResNet-18 이면 스무 개다. 쓰지도
+   * 않는 값에 그 값을 낼 수 없다.
+   *
+   * 그런데도 세는 이유는 `state_dict` 다. 이 열쇠가 없으면 torch·`borch` 가 낸
+   * 체크포인트를 **기본(strict)으로 못 읽는다.** 실제로 그랬다 — 골든이
+   * `container::BatchNorm/state_dict 열쇠` 로 그것을 잡았고, 그 전까지 열쇠를 묻는
+   * 케이스가 `Linear` 뿐이라 버퍼 갈래를 한 번도 안 물었다.
+   */
+  private numBatchesTracked = 0;
+  /**
+   * 불러온 체크포인트가 갖고 있던 횟수. **텐서로 들고 있는다.**
+   *
+   * `item()` 이 비동기라 동기인 `loadStateDict` 안에서 수로 못 읽는다. 그렇다고
+   * 버리면 불러온 것을 **다시 저장할 때 0 이 나온다** — 아무도 안 읽는 값이 조용히
+   * 틀리는 것이라 제일 늦게 발견된다. 그래서 텐서인 채로 두고, 그 뒤로 지나간
+   * 횟수만 수로 세어 내보낼 때 한 번 더한다.
+   */
+  private trackedBase: Tensor | null = null;
 
   constructor(
     readonly channels: number,
@@ -2661,6 +2684,11 @@ export class BatchNormND extends Module {
       ...this.namedParameters(),
       running_mean: this.runningMean,
       running_var: this.runningVar,
+      // 셀 때는 수였지만 내보낼 때는 텐서여야 한다 — 저장 형식이 텐서 사전이다.
+      // 부를 때마다 새로 만든다. `state_dict` 는 드물게 도는 길이라 값이 안 든다.
+      num_batches_tracked: this.trackedBase === null
+        ? Tensor.owned([], this.numBatchesTracked)
+        : this.trackedBase.add(Tensor.owned([], this.numBatchesTracked)),
     };
   }
 
@@ -2672,12 +2700,21 @@ export class BatchNormND extends Module {
     for (const [name, src] of Object.entries(values)) {
       if (name === "running_mean") noGrad(() => this.runningMean.copyFrom(src));
       else if (name === "running_var") noGrad(() => this.runningVar.copyFrom(src));
+      else if (name === "num_batches_tracked") {
+        // 준 텐서를 그대로 붙잡지 않는다 — 구역이 닫히면 그 버퍼는 재활용된다.
+        const base = Tensor.owned([], 0);
+        noGrad(() => base.copyFrom(src));
+        keepAlive(base);
+        this.trackedBase = base;
+        this.numBatchesTracked = 0;
+      }
       else rest[name] = src;
     }
     super.loadStateDict(rest, strict);
   }
 
   override forward(x: Tensor): Tensor {
+    if (this.training) this.numBatchesTracked += 1;
     // **계산은 `batchNorm` 이 한다.** 층과 함수가 각자 적으면 언젠가 갈리고,
     // 갈리는 자리가 이동 통계라 학습은 멀쩡하고 평가만 틀린다.
     return batchNorm(x, this.runningMean, this.runningVar, this.weight,

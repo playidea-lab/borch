@@ -6394,6 +6394,20 @@ def container_cases(inp=None):
     cases.append((CONTAINER_PREFIX + "ModuleDict/state_dict 열쇠",
                   lambda L: " ".join(sorted(build_dict(L).state_dict()))))
 
+    # **버퍼를 가진 층으로도 물어야 한다.** 위의 둘은 `Linear` 뿐이라 파라미터만 나온다 —
+    # `state_dict` 에는 학습 안 하는 버퍼도 들어가는데, 그 갈래를 한 번도 안 물었다.
+    # 버퍼를 가진 층은 `BatchNorm` 이고, 거기서 갈리면 **평가 모드에서만** 틀리거나
+    # 아예 체크포인트를 못 읽는다. 골든이 안 보던 표면이라 여기 적는다.
+    cases.append((CONTAINER_PREFIX + "BatchNorm/state_dict 열쇠",
+                  lambda L: " ".join(sorted(L.nn.BatchNorm2d(3).state_dict()))))
+
+    # **`named_parameters` 는 `state_dict` 가 아니다.** 정확히 버퍼만큼 다르다.
+    # 두 목록을 한 줄로 쓰면 버퍼가 파라미터 행세를 하고, 그것을 옵티마이저에 넘기는
+    # 코드가 이동 통계를 학습하려 든다. `Linear` 로만 물으면 둘이 같아서 안 보인다.
+    cases.append((CONTAINER_PREFIX + "BatchNorm/named_parameters 열쇠",
+                  lambda L: " ".join(sorted(
+                      n for n, _ in L.nn.BatchNorm2d(3).named_parameters()))))
+
     # ── `eval()` 이 컨테이너를 **뚫고** 내려가는가. ─────────────────────────
     #
     # 안 내려가면 학습은 멀쩡해 보이고 **추론만 틀린다.** 가장 늦게 발견되는 종류다.

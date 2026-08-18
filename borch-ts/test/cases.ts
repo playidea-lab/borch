@@ -1300,6 +1300,14 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
   out.set("container::ModuleDict/state_dict 열쇠",
     () => Object.keys(new Dicted().stateDict()).sort().join(" "));
 
+  // **버퍼를 가진 층으로도 물어야 한다.** 위의 둘은 `Linear` 뿐이라 파라미터만 나오고,
+  // 그래서 `stateDict` 와 `namedParameters` 가 같은지 다른지가 안 보인다. 둘은 정확히
+  // 버퍼만큼 달라야 한다 — 같으면 이동 통계가 파라미터 행세를 하고 옵티마이저로 간다.
+  out.set("container::BatchNorm/state_dict 열쇠",
+    () => Object.keys(new nn.BatchNormND(3).stateDict()).sort().join(" "));
+  out.set("container::BatchNorm/named_parameters 열쇠",
+    () => Object.keys(new nn.BatchNormND(3).namedParameters()).sort().join(" "));
+
   // ── `eval()` 이 컨테이너를 뚫고 내려가는가. ─────────────────────────────
   //
   // 갓 세운 BatchNorm 은 `running_mean=0`·`running_var=1` 이라 평가 모드의 출력이

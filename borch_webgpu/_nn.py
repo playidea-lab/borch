@@ -680,10 +680,30 @@ class Module:
     def named_parameters(self):
         """`(이름, 텐서)` 짝. torch 코드가 `dict(...)` 로 받아 이름으로 꺼낸다.
 
-        `state_dict` 와 같은 이름 규칙을 쓴다 — `0.weight` 처럼 자리 번호가 앞에
+        `state_dict` 와 **같은 이름 규칙**을 쓴다 — `0.weight` 처럼 자리 번호가 앞에
         붙는다. 실제로 그 이름으로 꺼내는 케이스가 있어서 규칙이 맞아야 한다.
+
+        **그런데 같은 목록은 아니다.** 여기는 `return list(self.state_dict().items())`
+        한 줄이었다. 파라미터만 있는 층에서는 두 목록이 같아서 오래 안 보였는데,
+        `state_dict` 에는 버퍼도 들어간다 — `BatchNorm` 을 물으면 `running_mean`·
+        `running_var`·`num_batches_tracked` 가 **파라미터 행세를 하고** 나왔다.
+        그것을 옵티마이저에 넘기는 코드는 이동 통계를 학습하려 든다.
+
+        골든이 `Linear` 로만 물었기 때문에 안 보였다. 버퍼를 가진 층으로 물으니
+        한 번에 나왔다 — `container::BatchNorm/named_parameters 열쇠`.
         """
-        return list(self.state_dict().items())
+        if self._m is None:
+            out = []
+            for name, m in self._children():
+                # 속성에 바로 붙은 텐서는 `parameters()` 와 같은 잣대로 가른다.
+                if isinstance(m, Tensor):
+                    if bool(m._h.requiresGrad):
+                        out.append((name, m))
+                    continue
+                out.extend((f"{name}.{k}", v) for k, v in _named_of(m))
+            return out
+        got = self._m.namedParameters()
+        return [(str(k), wrap(getattr(got, k))) for k in _js.Object.keys(got)]
 
     def load_state_dict(self, values, strict=True):
         if self._m is None:
@@ -782,6 +802,11 @@ class _Wrap:
     def state_dict(self):
         return {}
 
+    # 파라미터가 없는 층이라 빈 목록이다. **없으면 `AttributeError` 가 난다** —
+    # torch 는 `nn.ReLU().named_parameters()` 에 빈 것을 준다.
+    def named_parameters(self):
+        return []
+
     def load_state_dict(self, values, strict=True):
         pass
 
@@ -828,7 +853,8 @@ class _Sequential:
         return out
 
     def named_parameters(self):
-        return list(self.state_dict().items())
+        return [(f"{i}.{k}", v)
+                for i, m in enumerate(self.layers) for k, v in _named_of(m)]
 
     def load_state_dict(self, values, strict=True):
         groups = {}
@@ -853,6 +879,14 @@ def _params_of(m):
 
 def _state_of(m):
     return m.state_dict() if hasattr(m, "state_dict") else {}
+
+
+def _named_of(m):
+    """`(이름, 파라미터)` 짝. **`_state_of` 와 정확히 버퍼만큼 다르다.**
+
+    둘을 한 줄로 쓰면 버퍼가 파라미터가 된다. 그래서 함수가 둘이다.
+    """
+    return m.named_parameters() if hasattr(m, "named_parameters") else []
 
 
 # ── 컨테이너 ────────────────────────────────────────────────────────────────
@@ -894,7 +928,8 @@ class _Holder:
         return out
 
     def named_parameters(self):
-        return list(self.state_dict().items())
+        return [(f"{name}.{k}", v)
+                for name, m in self._entries() for k, v in _named_of(m)]
 
     def load_state_dict(self, values, strict=True):
         own = dict(self._entries())
@@ -1020,6 +1055,12 @@ class _ParamHolder(_Holder):
 
     def state_dict(self):
         return dict(self._entries())
+
+    # **잎이 텐서라 `_Holder` 의 것을 못 쓴다.** 저쪽은 자식에게 `named_parameters` 를
+    # 다시 묻는데 텐서에는 그것이 없어서 빈 목록이 된다 — 예외 없이 파라미터가 통째로
+    # 사라진다. `parameters()` 가 바로 위에서 같은 이유로 재정의돼 있다.
+    def named_parameters(self):
+        return list(self._entries())
 
     def load_state_dict(self, values, strict=True):
         own = dict(self._entries())
