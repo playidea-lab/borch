@@ -141,3 +141,77 @@ def test_docs_do_not_name_a_stale_bundle_size():
     assert not stale, (
         "문서가 대는 방출물 크기가 낡았다:\n  " + "\n  ".join(stale) +
         "\n\n재서 고쳐라: cat borch-ts/dist/src/*.js | wc -c")
+
+# ── 페이지들이 서로 맞는가 ─────────────────────────────────────────────
+#
+# 사이트는 지금 스무 페이지이고 두 언어다. **손으로 훑는 것은 방식이 아니다** —
+# 실제로 브라우저로 스무 장을 열어 세 가지를 잡았다(랜딩만 앵커를 더 갖고 있었고,
+# 플레이그라운드에 자기 항목이 없었고, 한국어 API 페이지의 이름표가 영어였다).
+# 그 방식은 다음번에 반복되지 않는다.
+
+SITE = ROOT / "site"
+HREF = re.compile(r'(?:href|src)="([^"]+)"')
+NAV = re.compile(r'<header class="top">.*?<nav>(.*?)</nav>', re.S)
+LINK_TEXT = re.compile(r'<a [^>]*>([^<]*)</a>')
+
+
+def _pages():
+    return sorted(SITE.rglob("*.html"))
+
+
+def test_site_has_no_broken_relative_links():
+    """페이지가 가리키는 상대 경로가 실제로 있어야 한다.
+
+    깨진 링크는 **누르기 전까지 안 보인다.** 문서 사이트에서 그것은 없는 페이지가
+    아니라 없는 신뢰다 — 한 번 404 를 만난 사람은 나머지도 의심한다.
+    """
+    missing = []
+    for page in _pages():
+        for raw in HREF.findall(page.read_text(encoding="utf-8")):
+            if raw.startswith(("http://", "https://", "#", "data:", "mailto:")):
+                continue
+            target = (page.parent / raw.split("#")[0].split("?")[0]).resolve()
+            if target.is_dir():
+                target = target / "index.html"
+            if not target.exists():
+                missing.append(f"{page.relative_to(ROOT)} → {raw}")
+    assert not missing, "사이트에 깨진 링크가 있다:\n  " + "\n  ".join(missing)
+
+
+def test_every_page_carries_the_same_global_nav():
+    """전역 차림표는 **모든 페이지에서 한 벌**이어야 한다.
+
+    페이지를 옮길 때 항목이 바뀌면 다른 사이트에 온 것처럼 읽힌다. 지금 어디에
+    있는지는 표시(`class="on"`)로만 갈리고, 그 표시는 **정확히 하나**여야 한다 —
+    둘이면 어디에 있는지 모르는 것이고, 없으면(랜딩만 예외) 차림표에 그 자리가
+    없다는 뜻이다.
+
+    언어별로 이름표가 다르므로 언어끼리 비교한다.
+    """
+    shapes = {}
+    problems = []
+    for page in _pages():
+        text = page.read_text(encoding="utf-8")
+        nav = NAV.search(text)
+        assert nav, f"{page.relative_to(ROOT)} 에 전역 차림표가 없다"
+        block = nav.group(1)
+        # 언어 전환 고리는 페이지마다 목적지가 다르므로 이름표만 본다.
+        labels = tuple(LINK_TEXT.findall(block))
+        lang = "ko" if page.relative_to(SITE).as_posix().startswith("ko/") else "en"
+        shapes.setdefault(lang, {}).setdefault(labels, []).append(
+            page.relative_to(ROOT).as_posix())
+
+        marked = block.count('class="on"')
+        is_home = page.name == "index.html" and page.parent in (SITE, SITE / "ko")
+        if is_home and marked:
+            problems.append(f"{page.relative_to(ROOT)}: 첫 화면인데 차림표에 표시가 있다")
+        elif not is_home and marked != 1:
+            problems.append(f"{page.relative_to(ROOT)}: 현재 위치 표시가 {marked} 개")
+
+    for lang, found in shapes.items():
+        if len(found) > 1:
+            lines = [f"  {labels} ← {len(pages)} 쪽 (예: {pages[0]})"
+                     for labels, pages in found.items()]
+            problems.append(f"{lang} 페이지들의 차림표가 갈렸다:\n" + "\n".join(lines))
+
+    assert not problems, "\n".join(problems)
