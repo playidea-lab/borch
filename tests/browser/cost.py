@@ -122,6 +122,25 @@ def report(L):
     want("스텝을 열 번 더 돌려도 잡은 버퍼가 안 는다", late <= early,
          f"{early} → {late} 개 (하네스가 남긴 것이 대부분이다)")
 
+    # ── 통을 물을 수 있는가, 비울 수 있는가 ──────────────────────────────────
+    #
+    # `memory()` 는 통에 든 것을 **일부러 뺀다** — 저것은 "새는가" 를 묻는 수라서
+    # 그게 맞다. 그래서 "얼마나 쥐고 있는가" 를 물을 자리가 따로 있어야 하고,
+    # 그것이 없는 동안 아무도 진짜 발자국을 못 물었다(벤치가 269.7MB 라고 적는
+    # 동안 통에 1,699.6MB 가 있었다).
+    #
+    # **borch.ts 쪽에만 있으면 소용이 없다.** 브라우저에서 학습하는 쪽이 여기다.
+    held = L.pooled()
+    want("통을 물을 수 있다", held["count"] > 0,
+         f"{held['count']} 개 · {held['bytes'] // 1024}KB")
+    freed = L.empty_cache()
+    want("empty_cache 가 통을 비운다",
+         freed["count"] == held["count"] and L.pooled()["count"] == 0,
+         f"{freed['count']} 개 · {freed['bytes'] // 1024}KB 돌려줬다")
+    # 비운 뒤에도 학습이 돌아야 한다 — 통을 비우는 것이 장치를 망가뜨리면 안 된다.
+    one()
+    want("통을 비운 뒤에도 스텝이 돈다", L.dispatches() > 0, f"{L.dispatches()}")
+
     bad = [c for c in checks if not c[1]]
     lines = [f"  {'✓' if ok else '✗'} {name}{f' — {note}' if note else ''}"
              for name, ok, note in checks]
