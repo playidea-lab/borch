@@ -13,7 +13,7 @@
 import sys
 
 import run as runner
-from launch import launch, refuse_if_software
+from launch import browser as browser_of, refuse_if_software
 
 TIMEOUT_MS = 7_200_000
 
@@ -42,8 +42,8 @@ def main(argv):
     try:
         from playwright.sync_api import sync_playwright
 
-        with sync_playwright() as p:
-            browser = launch(p, headed="--headed" in argv)
+        with sync_playwright() as p, \
+                browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
             # 긴 측정은 도중에 죽으면 반환값이 통째로 사라진다. 진행 줄을 흘려보낸다.
@@ -54,7 +54,6 @@ def main(argv):
             page.wait_for_function("window.__borchAccuracy !== undefined",
                                    timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchAccuracy")
-            browser.close()
     finally:
         stop()
 

@@ -15,7 +15,7 @@
 import sys
 
 import run as runner
-from launch import launch
+from launch import browser as browser_of
 
 PAGE = "/borch-ts/test/readme.html"
 TIMEOUT_MS = 300_000
@@ -31,8 +31,8 @@ def main(argv):
     try:
         from playwright.sync_api import sync_playwright
 
-        with sync_playwright() as p:
-            browser = launch(p, headed="--headed" in argv)
+        with sync_playwright() as p, \
+                browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
             page.on("console", lambda m: print(f"  [브라우저] {m.text}")
@@ -42,7 +42,6 @@ def main(argv):
             page.wait_for_function("window.__borchReadme !== undefined",
                                    timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchReadme")
-            browser.close()
     finally:
         stop()
 

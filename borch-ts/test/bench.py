@@ -10,7 +10,7 @@ borch.ts 는 브라우저가 그냥 읽는 JS 다.
 import sys
 
 import run as runner
-from launch import launch, refuse_if_software
+from launch import browser as browser_of, refuse_if_software
 
 PAGE = "/borch-ts/test/bench.html"
 TIMEOUT_MS = 1_800_000
@@ -26,8 +26,8 @@ def main(argv):
     try:
         from playwright.sync_api import sync_playwright
 
-        with sync_playwright() as p:
-            browser = launch(p, headed="--headed" in argv)
+        with sync_playwright() as p, \
+                browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
             page.on("console", lambda m: print(f"  [브라우저] {m.text}")
@@ -37,7 +37,6 @@ def main(argv):
             page.wait_for_function("window.__borchBench !== undefined",
                                    timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchBench")
-            browser.close()
     finally:
         stop()
 

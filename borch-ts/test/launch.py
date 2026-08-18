@@ -16,7 +16,8 @@ _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
 FLAGS = _mod.FLAGS
-launch = _mod.launch
+# **`browser` 하나만 내보낸다.** 저쪽에서 안 닫는 판(`_open`)을 비공개로 돌렸고,
+# 여기서 그것을 다시 열어 주면 그 조치가 무의미해진다 — 문이 둘이면 하나만 고쳐진다.
 browser = _mod.browser
 is_software = _mod.is_software
 refuse_if_software = _mod.refuse_if_software

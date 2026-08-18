@@ -66,24 +66,32 @@ import contextlib
 
 @contextlib.contextmanager
 def browser(playwright, headed=False, flags=FLAGS):
-    """**닫는 것까지 여기서 한다.** 여섯 러너가 전부 `browser.close()` 를 `with` 의
-    마지막 줄에 두고 있었고, 그 앞에서 예외가 나면 **브라우저가 안 닫힌다.**
+    """**브라우저를 여는 유일한 문.** 닫는 것까지 여기서 한다.
 
-    조용히 새는 것이 아니다 — 남은 크로미머가 CPU 를 계속 쓴다. 실제로 러너 하나가
+    열두 러너가 전부 `browser.close()` 를 `with` 의 마지막 줄에 두고 있었고, 그 앞에서
+    예외가 나면 **브라우저가 안 닫힌다.**
+
+    조용히 새는 것이 아니다 — 남은 크로미엄이 CPU 를 계속 쓴다. 실제로 러너 하나가
     2 분 42 초째 살아 있었고, 그 사이 다른 세션이 벤치를 재고 있었다. 그쪽 수가
-    문서의 16 배로 나왔고, 원인을 찾는 데 **양쪽이 각자 시간을 썼다.**
+    문서의 16 배로 나왔고, 원인을 찾는 데 **양쪽이 각자 시간을 썼다**(끝내 보니 그
+    16 배는 다른 원인이었지만, 그것을 가려내느라 또 시간이 들었다).
 
     값 검사로는 절대 안 보인다. 검사 장치가 자기 뒷정리를 안 해서 **다른 측정을
-    망가뜨리는** 종류이고, 그것을 막는 자리는 여섯이 아니라 하나여야 한다.
+    망가뜨리는** 종류다.
+
+    **그래서 안 닫는 판은 밖에 없다.** 처음 고칠 때 여섯만 옮기고 `launch` 를 공개로
+    남겼는데, 나머지 여섯이 그대로 그것을 쓰고 있었다 — 그중 셋이 하필
+    `bench`·`cost`·`accuracy`, 누수가 제일 해로운 자리였다. 목록이 두 벌이면 갈리고,
+    문이 둘이면 하나만 고쳐진다.
     """
-    got = launch(playwright, headed=headed, flags=flags)
+    got = _open(playwright, headed=headed, flags=flags)
     try:
         yield got
     finally:
         got.close()
 
 
-def launch(playwright, headed=False, flags=FLAGS):
+def _open(playwright, headed=False, flags=FLAGS):
     """`headed` 가 아니면 소프트웨어 어댑터가 나온다 — 부르는 쪽이 어댑터를 찍어야 한다."""
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     return playwright.chromium.launch(
