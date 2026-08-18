@@ -8144,6 +8144,73 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "짝없이::resize_as_ 는 제자리다", resized))
 
+    # ── torch 가 속성으로 주는 술어 스무 개 ──────────────────────────────
+    #
+    # 대부분 답이 하나로 정해져 있다. **그래도 이름이 있어야 한다** — 없으면
+    # `if x.is_cuda:` 가 `AttributeError` 로 멈추는데, torch 에서는 그냥 거짓으로
+    # 지나가는 줄이다. 늘 거짓인 술어를 넣는 것이 얕다는 기준은 **거짓이 나오는
+    # 입력이 있는가**를 묻는 것이었지, 이름이 있는가를 묻는 것이 아니다.
+    #
+    # `is_cpu` 는 **일부러 갈린다** — 브라우저 쪽 값은 GPU 버퍼에 있다. 참이라고
+    # 하면 그것을 보고 갈래를 고르는 코드가 틀린 길로 간다.
+    for label in ("is_cuda", "is_mps", "is_sparse", "is_quantized", "is_nested",
+                  "is_meta", "is_mkldnn", "is_vulkan", "is_xla", "is_xpu",
+                  "is_ipu", "is_maia", "is_mtia", "is_sparse_csr",
+                  "retains_grad"):
+        cases.append((INPLACE_PREFIX + f"술어::{label}",
+                      lambda L, n=label: str(getattr(L.tensor(grid2), n))))
+    # **`is_leaf` 만 진짜 계산이다.** 연산에서 나온 텐서는 거짓이고, 거짓이면
+    # `.grad` 가 안 쌓인다 — 값이 하나로 정해진 나머지와 성격이 다르다.
+    cases.append((INPLACE_PREFIX + "술어::is_leaf(잎)",
+                  lambda L: str(L.tensor(grid2, requires_grad=True).is_leaf)))
+    cases.append((INPLACE_PREFIX + "술어::is_leaf(파생)",
+                  lambda L: str((L.tensor(grid2, requires_grad=True) * 2).is_leaf)))
+    # **이 둘만 메서드다** — 괄호가 있다.
+    # **이 둘만 메서드다** — 괄호가 있다. 속성으로 두면 `x.is_neg` 가 참거짓이
+    # 아니라 묶인 메서드를 돌려주고, 그것은 참으로 지나간다.
+    for label in ("is_pinned", "is_neg"):
+        cases.append((INPLACE_PREFIX + f"술어::{label}() 는 메서드",
+                      lambda L, n=label: str(getattr(L.tensor(grid2), n)())))
+
+    def coalesced_refuses(L):
+        try:
+            L.tensor(grid2).is_coalesced()
+        except Exception as exc:                                # noqa: BLE001
+            return ("멈췄다" if "but got Strided" in str(exc)
+                    else f"다른 문구 <{exc}>")
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "술어::is_coalesced 는 조밀에서 멈춘다",
+                  coalesced_refuses))
+
+    # ── 짝이 없는 제자리 판 여덟 ──────────────────────────────────────────
+    #
+    # 다섯은 torch 가 해내고 셋은 희소 전용이라 **torch 도 조밀 텐서에서 멈춘다.**
+    # 이름만 보고 "제자리니까 다 만든다" 로 묶으면 뒤의 셋에서 우리가 더 관대해진다.
+    reduced("apply_", lambda L, x: x.apply_(lambda v: v * 2))
+    reduced("map_", lambda L, x: x.map_(L.tensor(np.ones(2, dtype=np.float32)),
+                                        lambda a, b: a + b))
+    reduced("map2_", lambda L, x: x.map2_(L.tensor(np.ones(2, dtype=np.float32)),
+                                          L.tensor(np.full(2, 2.0, dtype=np.float32)),
+                                          lambda a, b, c: a + b + c))
+    # **키우는 쪽은 안 묻는다** — torch 가 정해지지 않은 값을 준다. 줄이는 쪽과
+    # 모양만 바꾸는 쪽은 답이 있다.
+    reduced("resize_(줄임)", lambda L, x: x.resize_(1))
+    reduced("resize_(모양만)", lambda L, x: x.resize_(1, 2))
+    reduced("set_", lambda L, x: x.set_(L.tensor(np.zeros(3, dtype=np.float32))))
+
+    for gone in ("sparse_resize_", "resize_as_sparse_"):
+        def sparse_only(L, n=gone):
+            try:
+                arg = ((2,), 1, 0) if n == "sparse_resize_" else (L.tensor(line2),)
+                getattr(L.tensor(line2.copy()), n)(*arg)
+            except Exception as exc:                            # noqa: BLE001
+                return (f"멈췄다({type(exc).__name__})"
+                        if isinstance(exc, NotImplementedError)
+                        else f"다른 종류 <{type(exc).__name__}>")
+            return "안 던졌다"
+        cases.append((INPLACE_PREFIX + f"짝없이::{gone} 는 희소 전용", sparse_only))
+
     # 값이 아니라 **참거짓**을 내는 셋. `is_same_size` 는 모양만 본다.
     for label, call in (
         ("is_same_size(같음)",

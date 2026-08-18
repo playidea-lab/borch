@@ -1025,3 +1025,94 @@ def _deprecated_by_torch(name):
         f"`{name}` 은 torch 1.9 에서 없어졌습니다 — `torch.linalg.{name}` 을 쓰세요. "
         f"(torch: This function was deprecated since version 1.9 and is now removed. "
         f"Please use the `torch.linalg.{name}` function instead.)")
+
+
+# ── torch 가 속성으로 주는 술어들 ────────────────────────────────────────────
+#
+# 코어와 같은 답인데 **`is_cpu` 만 갈린다** — 값이 GPU 버퍼에 있으므로 거짓이다.
+# 그것이 이 결속의 사실이고, 참이라고 하면 `x.is_cpu` 를 보고 갈래를 고르는 코드가
+# 틀린 길로 간다.
+_ALWAYS_FALSE = (
+    "is_cuda", "is_ipu", "is_maia", "is_meta", "is_mkldnn", "is_mps", "is_mtia",
+    "is_nested", "is_quantized", "is_sparse", "is_sparse_csr", "is_vulkan",
+    "is_xla", "is_xpu", "is_cpu", "retains_grad",
+)
+
+for _pname in _ALWAYS_FALSE:
+    setattr(Tensor, _pname, property(lambda self: False))
+del _pname
+
+Tensor.is_leaf = property(lambda self: not bool(self._h.gradName))
+# `is_neg`·`is_pinned` 만 메서드다 — 괄호가 있다.
+Tensor.is_neg = lambda self: False
+Tensor.is_pinned = lambda self: False
+
+
+def _is_coalesced(self):
+    del self
+    raise RuntimeError(
+        "조밀 텐서에는 coalesce 상태가 없습니다. "
+        "(torch: is_coalesced expected sparse coordinate tensor layout "
+        "but got Strided)")
+
+
+def _borrow_core(name):
+    """**코어의 규칙을 빌린다.** 파이썬 함수를 칸마다 거는 것들이라 GPU 로는 못 하고,
+    규칙을 두 벌 두면 갈린다 — 분포 일곱과 같은 방식이다."""
+    def method(self, *args, **kw):
+        from borch._tensor import Tensor as _Core
+        from ._base import tensor as _t
+
+        core = _Core(self.numpy().copy())
+        got = getattr(core, name)(*[
+            _Core(a.numpy().copy()) if isinstance(a, Tensor) else a for a in args], **kw)
+        return self._write_back(_t(got.data))
+
+    method.__name__ = name
+    return method
+
+
+def _sparse_only(name):
+    def method(self, *args, **kw):
+        del self, args, kw
+        raise NotImplementedError(
+            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 쓸 수 없습니다. "
+            f"(torch: Could not run 'aten::{name}' with arguments from the 'CPU' backend)")
+
+    method.__name__ = name
+    return method
+
+
+Tensor.is_coalesced = _is_coalesced
+def _set_(self, source=None):
+    """**저장을 갈아 끼운다** — 값을 되쓰는 것이 아니다. 칸 수가 바뀌므로
+    `copyFrom` 으로는 안 되고 손잡이 자체를 바꾼다. 되쓰기로 짰다가 칸 수가 다른
+    자리에서 JS 예외가 났다."""
+    from ._base import tensor as _t
+    import numpy as _n2
+
+    got = _t(_n2.empty(0, dtype=_n2.float32)) if source is None else source
+    self._h = handle(got)
+    return self
+
+
+def _resize_(self, *sizes):
+    """**칸 수가 바뀔 수 있다.** `_write_back` 은 같은 크기만 받으므로 여기도
+    손잡이를 갈아 끼운다 — `set_` 과 같은 이유다. 되쓰기로 짰다가 줄이는 자리에서
+    `크기가 다르다` 로 멈췄다."""
+    from borch._tensor import Tensor as _Core
+    from ._base import tensor as _t
+
+    core = _Core(self.numpy().copy())
+    core.resize_(*sizes)
+    self._h = handle(_t(core.data))
+    return self
+
+
+Tensor.set_ = _set_
+Tensor.resize_ = _resize_
+for _n in ("apply_", "map_", "map2_"):
+    setattr(Tensor, _n, _borrow_core(_n))
+for _n in ("resize_as_sparse_", "sparse_resize_", "sparse_resize_and_clear_"):
+    setattr(Tensor, _n, _sparse_only(_n))
+del _n

@@ -1247,3 +1247,141 @@ Tensor.share_memory_ = _share_memory_
 for _iname in ("arctan2_", "igamma_", "igammac_", "polygamma_"):
     setattr(Tensor, _iname, _bind_inplace(_iname))
 del _iname
+
+
+# ── torch 가 **속성**으로 주는 술어들 ────────────────────────────────────────
+#
+# 대부분 "이 텐서가 어디 있는가·어떤 저장인가" 를 묻고 우리 답은 하나로 정해져
+# 있다. **그래도 이름이 있어야 한다** — 없으면 `if x.is_cuda:` 가 `AttributeError`
+# 로 멈추는데, torch 에서는 그냥 거짓으로 지나가는 줄이다.
+#
+# **`is_leaf` 만 진짜 계산이다.** 잎은 연산에서 나오지 않은 텐서이고, 그것이
+# 거짓이면 `.grad` 가 안 쌓인다 — 값이 하나로 정해진 나머지와 성격이 다르다.
+_ALWAYS_FALSE = (
+    "is_cuda", "is_ipu", "is_maia", "is_meta", "is_mkldnn", "is_mps", "is_mtia",
+    "is_nested", "is_quantized", "is_sparse", "is_sparse_csr", "is_vulkan",
+    "is_xla", "is_xpu",
+)
+
+for _pname in _ALWAYS_FALSE:
+    setattr(Tensor, _pname, property(lambda self: False, doc="이 축소판에는 없다."))
+del _pname
+
+# CPU 에 산다. **결속은 여기서 갈린다** — 값이 GPU 버퍼에 있으므로 거짓이다.
+Tensor.is_cpu = property(lambda self: True)
+Tensor.is_leaf = property(
+    lambda self: not self._parents,
+    doc="연산에서 안 나온 텐서. **거짓이면 `.grad` 가 안 쌓인다.**")
+Tensor.retains_grad = property(
+    lambda self: False,
+    doc="`retain_grad()` 가 없으므로 언제나 거짓이다 — torch 도 잎에서는 거짓이다.")
+
+
+def _is_pinned(self):
+    """**메서드다** — 위의 것들과 달리 괄호가 있다(실측). 고정 메모리는 없다."""
+    del self
+    return False
+
+
+def _is_coalesced(self):
+    """희소 전용이라 **조밀 텐서에서는 멈춘다** — torch 도 그렇다(실측)."""
+    raise RuntimeError(_like_torch(
+        "조밀 텐서에는 coalesce 상태가 없습니다.",
+        "is_coalesced expected sparse coordinate tensor layout but got Strided"))
+
+
+# **`is_neg`·`is_pinned` 만 메서드다** — 괄호가 있다(실측). 속성으로 두면
+# `x.is_neg` 가 참거짓이 아니라 묶인 메서드를 돌려주는데, torch 쪽은
+# 묶인 메서드다 — 이번엔 **우리가 속성으로 만든 것이 갈림**이었다.
+Tensor.is_neg = lambda self: False
+Tensor.is_pinned = _is_pinned
+Tensor.is_coalesced = _is_coalesced
+
+
+# ── 짝이 없는 제자리 판 여덟 ────────────────────────────────────────────────
+#
+# 파생표로는 못 만든다 — 짝이 아예 없다. 다섯은 torch 가 해내고 셋은 희소 전용이라
+# **torch 도 조밀 텐서에서 멈춘다.** 이름만 보고 "제자리니까 다 만든다" 로 묶으면
+# 뒤의 셋에서 우리가 더 관대해진다.
+
+def _apply_(self, fn):
+    """칸마다 파이썬 함수를 건다. **torch 도 CPU 에서만 된다** — 느린 길이고,
+    그래서 값이 아니라 편의를 주는 이름이다."""
+    _refuse_leaf_inplace(self, "apply_")
+    flat = self.data.reshape(-1)
+    self.data[...] = _np.array([fn(v.item()) for v in flat],
+                               dtype=self.data.dtype).reshape(self.data.shape)
+    return self
+
+
+def _map_(self, other, fn):
+    _refuse_leaf_inplace(self, "map_")
+    a, b = self.data.reshape(-1), _np.broadcast_to(other.data, self.data.shape).reshape(-1)
+    self.data[...] = _np.array([fn(x.item(), y.item()) for x, y in zip(a, b)],
+                               dtype=self.data.dtype).reshape(self.data.shape)
+    return self
+
+
+def _map2_(self, other, third, fn):
+    _refuse_leaf_inplace(self, "map2_")
+    a = self.data.reshape(-1)
+    b = _np.broadcast_to(other.data, self.data.shape).reshape(-1)
+    c = _np.broadcast_to(third.data, self.data.shape).reshape(-1)
+    self.data[...] = _np.array(
+        [fn(x.item(), y.item(), z.item()) for x, y, z in zip(a, b, c)],
+        dtype=self.data.dtype).reshape(self.data.shape)
+    return self
+
+
+def _resize_(self, *sizes):
+    """**키우면 새 칸의 값이 정해지지 않는다** — torch 는 쓰레기값을 준다(실측:
+    우연히 0 이 나오기도 한다). 우리는 0 으로 채운다. 값을 굳힐 수 없는 자리라
+    골든은 **줄이는 쪽과 모양만** 묻는다."""
+    _refuse_leaf_inplace(self, "resize_")
+    shape = tuple(sizes[0]) if len(sizes) == 1 and isinstance(sizes[0], (tuple, list)) \
+        else tuple(int(s) for s in sizes)
+    want = int(_np.prod(shape)) if shape else 1
+    flat = self.data.reshape(-1)
+    if want <= flat.size:
+        self._array = flat[:want].reshape(shape).copy()
+    else:
+        grown = _np.zeros(want, dtype=self.data.dtype)
+        grown[:flat.size] = flat
+        self._array = grown.reshape(shape)
+    return self
+
+
+def _set_(self, source=None):
+    """**저장을 통째로 갈아 끼운다.** 인자가 없으면 빈 텐서가 된다."""
+    _refuse_leaf_inplace(self, "set_")
+    self._array = (_np.empty(0, dtype=self.data.dtype) if source is None
+                   else _np.asarray(source.data))
+    return self
+
+
+def _refuse_leaf_inplace(self, name):
+    if self.requires_grad and _grad_mode.enabled:
+        raise RuntimeError(_like_torch(
+            f"기울기가 필요한 잎 텐서에는 `{name}` 을(를) 쓸 수 없습니다.",
+            "a leaf Variable that requires grad is being used in an in-place operation"))
+
+
+def _sparse_only(name):
+    def method(self, *args, **kw):
+        del self, args, kw
+        raise NotImplementedError(_like_torch(
+            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 쓸 수 없습니다.",
+            f"Could not run 'aten::{name}' with arguments from the 'CPU' backend"))
+
+    method.__name__ = name
+    return method
+
+
+Tensor.apply_ = _apply_
+Tensor.map_ = _map_
+Tensor.map2_ = _map2_
+Tensor.resize_ = _resize_
+Tensor.set_ = _set_
+for _sname in ("resize_as_sparse_", "sparse_resize_", "sparse_resize_and_clear_"):
+    setattr(Tensor, _sname, _sparse_only(_sname))
+del _sname
