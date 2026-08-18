@@ -615,6 +615,13 @@ export class Tensor implements Node<Tensor> {
    * 보는 자리는 `buffer` 게터이고 그쪽이 장치를 확인한다.
    */
   private readonly gpu: GPUBuffer | null;
+  /**
+   * 태어날 때 그 버퍼가 **몇 번째 삶**이었는가. `device.ts` 의 `age` 와 짝이다.
+   *
+   * 구역이 닫히면 버퍼는 통으로 돌아가고 삶이 하나 오른다. 그 뒤로 이 텐서가 값에
+   * 닿으려 하면 두 수가 어긋나고, 그러면 **이미 죽은 텐서**다.
+   */
+  private readonly age: number;
   /** 값이 호스트에 있으면 그 배열, GPU 에 있으면 `null`. */
   private readonly host: Float32Array | null;
   requiresGrad: boolean;
@@ -648,6 +655,7 @@ export class Tensor implements Node<Tensor> {
     const onHost = storage instanceof Float32Array;
     this.gpu = onHost ? null : storage;
     this.host = onHost ? storage : null;
+    this.age = this.gpu === null ? 0 : dev().age(this.gpu);
     this.shape = [...shape];
     this.size = numel(this.shape);
     this.parents = options.parents ?? [];
@@ -695,7 +703,25 @@ export class Tensor implements Node<Tensor> {
           "`view_as_real` 로 실수 텐서를 만든 뒤 쓰거나, 실수부·허수부를 따로 다뤄라.",
       );
     }
+    // **죽은 텐서도 여기서 막힌다 — 같은 문 하나를 세 번 쓴다.**
+    this.refuseIfDead();
     return this.gpu;
+  }
+
+  /**
+   * 구역이 닫힌 뒤에도 쓰이는 텐서를 멈춘다.
+   *
+   * **이걸 안 하면 조용히 남의 값이 나온다**(실측: `[1,2,3,4]` 를 흘리고 같은 크기를
+   * 몇 번 더 잡은 뒤 읽으니 `9,9,9,9`). 버퍼가 파괴되지 않고 통에 돌아가기 때문이라
+   * WebGPU 도 안 막아 준다 — 유효한 버퍼를 유효하게 읽는 것이 맞으니까.
+   */
+  private refuseIfDead(): void {
+    if (this.gpu === null || dev().age(this.gpu) === this.age) return;
+    throw new RuntimeError(
+      "닫힌 구역의 텐서다 — 그 버퍼는 이미 통에 돌아갔고 다른 값이 들어 있다.\n" +
+        "  `scope()` 밖으로 들고 나갈 것은 `keepAlive(t)` 로 표시하거나 " +
+        "`scope(body, () => [t])` 의 둘째 인자로 넘겨라.",
+    );
   }
 
   /**
@@ -711,6 +737,7 @@ export class Tensor implements Node<Tensor> {
           "호스트에 있는 텐서는 연산에 못 쓴다 — `webgpu()` 로 올려라.",
       );
     }
+    this.refuseIfDead();
     return this.gpu;
   }
 

@@ -182,6 +182,29 @@ export async function report(): Promise<string> {
   // 다른 자리에서 돌려 보지 않았으면 그 겹침을 몰랐을 것이다. 검사 하나를 지우는
   // 것이 이 실행의 결과다.
 
+  // ── 구역 밖으로 샌 텐서는 **시끄럽게 멈춘다** ─────────────────────────
+  //
+  // 전에는 조용히 남의 값이 나왔다(실측: `[1,2,3,4]` 가 `9,9,9,9` 로 읽혔다).
+  // 버퍼가 파괴되지 않고 통에 돌아가서 다음 할당이 덮어쓰기 때문이고, WebGPU 는
+  // 그것을 안 막아 준다 — 유효한 버퍼를 유효하게 읽는 것이니까.
+  {
+    let escaped: Tensor | null = null;
+    await scope(async () => {
+      escaped = Tensor.from([1, 2, 3, 4], [4]).mul(Tensor.full([], 1));
+      return 0;
+    });
+    let note = "";
+    let stopped = false;
+    try {
+      const got = await (escaped as unknown as Tensor).toArray();
+      note = `조용히 읽혔다: ${Array.from(got).join(",")}`;
+    } catch (err) {
+      stopped = true;
+      note = (err as Error).message.split("\n")[0] ?? "";
+    }
+    want("샌 텐서를 쓰면 멈춘다", stopped, note);
+  }
+
   const bad = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>
     `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);
