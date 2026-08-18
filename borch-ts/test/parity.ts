@@ -49,6 +49,29 @@ class Net extends nn.Module {
   }
 }
 
+/**
+ * **자식을 평범한 객체에 담으면 등록이 안 된다.** torch 도 그렇고(그래서
+ * `nn.ModuleDict` 가 있다), 그 자체는 옳다. 잡아야 하는 것은 그 다음이다 —
+ * `children()` 만 덮어써서 **둘이 어긋나는 것.**
+ *
+ * 파라미터를 모으는 것은 `namedChildren()` 이므로, `children()` 에만 적어 두면
+ * 그 자식은 **예외 없이 학습만 안 된다.** 실제로 벤치의 ResNet-18 이 그 상태였고
+ * 지름길 층 여섯이 한 번도 안 배웠다 — 손실은 내려갔다. 나머지가 대신 맞춘다.
+ */
+class SplitBrain extends nn.Module {
+  readonly a = new nn.Linear(2, 2);
+  // 평범한 객체 — `namedChildren()` 의 `instanceof Module` 에 안 걸린다.
+  readonly side = { fc: new nn.Linear(2, 2) };
+
+  override children(): nn.Module[] {
+    return [this.a, this.side.fc];      // ← 여기에만 적혀 있다
+  }
+
+  override forward(x: Tensor): Tensor {
+    return this.a.call(x).add(this.side.fc.call(x));
+  }
+}
+
 /** 텐서 필드가 전부 파라미터인 것은 아니다. */
 class WithConstant extends nn.Module {
   weight = Tensor.from([2, 3], [2], { requiresGrad: true });
@@ -76,6 +99,26 @@ export async function report(): Promise<string> {
   want("requiresGrad 가 파라미터의 표식이다",
     Object.keys(wc.ownParameters()).join(",") === "weight",
     Object.keys(wc.ownParameters()).join(","));
+
+  // **`children()` 과 `namedChildren()` 이 어긋나면 그 자식은 안 배운다.**
+  //
+  // 파라미터를 모으는 것은 `namedChildren()` 뿐이다. `children()` 만 덮어쓰면
+  // 층은 눈에 보이는데 파라미터는 안 잡히고, **예외도 경고도 없이 학습만** 그
+  // 자리에서 멈춘다. 손실은 내려간다 — 나머지가 대신 맞추기 때문이다.
+  //
+  // 벤치의 ResNet-18 이 정확히 그 상태였다(지름길 층 여섯). 붙잡은 것은 값 검사가
+  // 아니라 **죽은 텐서 가드**였다: 옵티마이저가 못 보는 잎은 `zeroGrad()` 도 못
+  // 받으므로 지난 스텝의 기울기가 남고, 그것이 이미 통에 돌아간 버퍼였다.
+  const split = new SplitBrain();
+  let splitNote = "안 멈췄다";
+  let splitStopped = false;
+  try {
+    split.parameters();
+  } catch (err) {
+    splitStopped = true;
+    splitNote = (err as Error).message.split("\n")[0] ?? "";
+  }
+  want("children() 과 namedChildren() 이 어긋나면 멈춘다", splitStopped, splitNote);
 
   // ── `nn.Parameter` — **torch 와 갈리는 자리 둘을 값으로 붙잡는다** ────────
   //

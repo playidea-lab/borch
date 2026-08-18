@@ -22,7 +22,17 @@ export class Block extends nn.Module {
   private readonly bn1: nn.BatchNormND;
   private readonly conv2: nn.Conv2d;
   private readonly bn2: nn.BatchNormND;
-  private readonly down: { conv: nn.Conv2d; bn: nn.BatchNormND } | null;
+  /**
+   * **필드로 꺼내 둔다.** 전에는 `{ conv, bn }` 이라는 평범한 객체였고
+   * `children()` 에만 적혀 있었다 — `namedChildren()` 은 `instanceof Module` 인
+   * 필드만 훑으므로 그 둘을 못 봤고, **지름길 층 여섯이 한 번도 안 배웠다.**
+   * 손실은 내려갔다. 나머지가 대신 맞추기 때문이다.
+   *
+   * torch 도 파이썬 dict 에 담은 층을 등록 안 한다(그래서 `nn.ModuleDict` 가
+   * 있다). 라이브러리가 옳았고 이 파일이 틀렸다.
+   */
+  private readonly downConv: nn.Conv2d | null;
+  private readonly downBn: nn.BatchNormND | null;
 
   constructor(cin: number, cout: number, stride: number) {
     super();
@@ -30,22 +40,16 @@ export class Block extends nn.Module {
     this.bn1 = new nn.BatchNormND(cout);
     this.conv2 = new nn.Conv2d(cout, cout, 3, 1, 1, false);
     this.bn2 = new nn.BatchNormND(cout);
-    this.down = stride !== 1 || cin !== cout
-      ? { conv: new nn.Conv2d(cin, cout, 1, stride, 0, false), bn: new nn.BatchNormND(cout) }
-      : null;
-  }
-
-  override children(): nn.Module[] {
-    const kids: nn.Module[] = [this.conv1, this.bn1, this.conv2, this.bn2];
-    if (this.down) kids.push(this.down.conv, this.down.bn);
-    return kids;
+    const shrinks = stride !== 1 || cin !== cout;
+    this.downConv = shrinks ? new nn.Conv2d(cin, cout, 1, stride, 0, false) : null;
+    this.downBn = shrinks ? new nn.BatchNormND(cout) : null;
   }
 
   override forward(x: Tensor): Tensor {
     let out = this.bn1.forward(this.conv1.forward(x)).unary("relu");
     out = this.bn2.forward(this.conv2.forward(out));
-    const side = this.down
-      ? this.down.bn.forward(this.down.conv.forward(x))
+    const side = this.downConv && this.downBn
+      ? this.downBn.forward(this.downConv.forward(x))
       : x;
     return out.add(side).unary("relu");
   }
@@ -73,9 +77,9 @@ export class ResNet18 extends nn.Module {
     this.fc = new nn.Linear(512, classes);
   }
 
-  override children(): nn.Module[] {
-    return [this.stem, this.bn, this.body, this.fc];
-  }
+  // `children()` 을 안 덮어쓴다 — 넷 다 필드라 기본 훑기가 찾는다. 덮어쓰면
+  // `namedChildren()` 과 어긋날 자리가 생기고, 그 어긋남이 바로 위 `Block` 을
+  // 여섯 층 동안 안 배우게 만든 것이다.
 
   override forward(x: Tensor): Tensor {
     let h = this.bn.forward(this.stem.forward(x)).unary("relu");
@@ -99,10 +103,19 @@ export interface StepResult {
   kinds: [string, number][];
   /** 스텝당 실제 제출 수. dispatch 수와 갈리는 만큼이 묶인 것이다. */
   submits: number;
+  /**
+   * 스텝이 끝난 뒤 잡고 있는 GPU 메모리(MB).
+   *
+   * **파이썬 벤치는 이것을 재는데 이쪽은 안 쟀다.** 같은 잣대라고 부르면서 한쪽만
+   * 보는 칸이 있으면 그 칸에서 갈린 것은 비교에 안 나온다.
+   */
+  gpuMb: number;
   /** 순방향만 돌렸을 때의 벽시계. 나머지가 역방향과 옵티마이저의 몫이다. */
   msForward: number;
   /** 가중치 기울기를 끈 스텝. 전체에서 빼면 `gradWeight` 의 몫이다. */
   msNoWeightGrad: number;
+  /** 그때의 dispatch 수. 안 줄었으면 **깃발이 안 먹은 것**이다. */
+  noWeightDispatches: number;
   loss: number;
 }
 
@@ -210,8 +223,12 @@ export async function runStep(
   for (const p of convWeights) p.requiresGrad = false;
   await one();
   const w0 = performance.now();
+  const wd0 = device().dispatches;
   for (let i = 0; i < steps; i++) await one();
   const perNoWeightGrad = (performance.now() - w0) / steps;
+  // **깃발이 진짜로 일을 줄이는가.** 시간만 보면 "gradWeight 가 싸다" 와 "깃발이
+  // 안 먹는다" 가 같은 화면이다. dispatch 수가 안 줄면 뒤쪽이다.
+  const noWeightDispatches = (device().dispatches - wd0) / steps;
   for (const p of convWeights) p.requiresGrad = true;
 
   // **검증 오류가 하나라도 났으면 수를 안 낸다.**
@@ -232,6 +249,7 @@ export async function runStep(
   return {
     batch,
     params: count,
+    gpuMb: Math.round(device().memory.bytes / 1e5) / 10,
     msPerStep: Math.round(perStep * 10) / 10,
     epochMin: Math.round((perStep * stepsPerEpoch) / 600) / 100,
     leakPerStep: leak,
@@ -241,6 +259,7 @@ export async function runStep(
     submits: Math.round(perStepSubmits),
     msForward: Math.round(perForward * 10) / 10,
     msNoWeightGrad: Math.round(perNoWeightGrad * 10) / 10,
+    noWeightDispatches: Math.round(noWeightDispatches),
     loss: Math.round(last * 10000) / 10000,
   };
 }
@@ -255,12 +274,13 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
         `batch ${String(r.batch).padStart(3)}  ` +
         `${r.msPerStep.toFixed(1).padStart(8)} ms/step  ` +
         `(순방향 ${r.msForward.toFixed(1).padStart(7)} · dW뺀것 ` +
-        `${r.msNoWeightGrad.toFixed(1).padStart(7)})  ` +
+        `${r.msNoWeightGrad.toFixed(1).padStart(7)}/${r.noWeightDispatches}d)  ` +
         `에폭 ${r.epochMin.toFixed(2).padStart(6)}분  ` +
         `dispatch ${String(r.dispatches).padStart(5)}  ` +
         `제출 ${String(r.submits).padStart(3)}  ` +
         `${String(r.usPerDispatch).padStart(5)}µs/dispatch  ` +
         `누수 ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
+        `${r.gpuMb.toFixed(1).padStart(6)}MB  ` +
         `손실 ${r.loss.toFixed(4)}`,
       );
       // 종류별 내역은 배치마다 같으므로 한 번만 찍는다.
@@ -272,6 +292,11 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
     } catch (err) {
       lines.push(`batch ${String(b).padStart(3)}  실패: ` +
         `${err instanceof Error ? `${err.constructor.name}: ${err.message.slice(0, 120)}` : String(err)}`);
+      // **어디서 났는지가 무엇이 났는지만큼 중요하다.** 문구만 남기면 같은 문구를
+      // 내는 자리가 여럿일 때 어느 쪽인지 못 가른다.
+      if (err instanceof Error && err.stack) {
+        lines.push(`         ${err.stack.split("\n").slice(3, 11).join("\n         ")}`);
+      }
     }
   }
   // **어느 장치에서 잰 것인지가 수보다 먼저 온다.** 헤드리스 브라우저가 소프트웨어

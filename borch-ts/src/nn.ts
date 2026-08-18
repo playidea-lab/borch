@@ -155,11 +155,35 @@ export abstract class Module {
 
   /** `0.weight` 처럼 자리 이름을 앞에 붙인 이름표. */
   namedParameters(prefix = ""): Record<string, Tensor> {
+    // **`children()` 만 덮어쓰면 그 자식은 안 배운다.**
+    //
+    // 파라미터를 모으는 것은 `namedChildren()` 뿐이다. 둘이 어긋나면 층은 눈에
+    // 보이는데 파라미터가 안 잡히고, **예외도 경고도 없이 학습만** 그 자리에서
+    // 멈춘다 — 손실은 내려간다. 나머지가 대신 맞추기 때문이다.
+    //
+    // 벤치의 ResNet-18 이 그 상태였다. 지름길을 평범한 객체(`{conv, bn}`)에 담고
+    // `children()` 에만 적어 두어서, 지름길 층 여섯이 한 번도 안 배운 채로 에폭
+    // 시간을 재고 있었다. 그것을 붙잡은 것은 값 검사가 아니라 **죽은 텐서 가드**다 —
+    // 옵티마이저가 못 보는 잎은 `zeroGrad()` 도 못 받아 지난 스텝의 기울기가 남고,
+    // 그 버퍼는 이미 통에 돌아간 것이었다.
+    const kids = this.namedChildren();
+    const listed = this.children().length;
+    if (listed !== Object.keys(kids).length) {
+      throw new RuntimeError(
+        `${this.constructor.name}: children() 이 ${listed} 개를 대는데 ` +
+          `namedChildren() 은 ${Object.keys(kids).length} 개다.\n` +
+          "  파라미터는 `namedChildren()` 이 모은다 — 어긋난 만큼이 **학습에서 " +
+          "조용히 빠진다**.\n" +
+          "  자식을 평범한 객체나 배열에 담았으면 필드로 꺼내거나 " +
+          "`nn.ModuleList`·`nn.ModuleDict` 에 담고, `children()` 대신 " +
+          "`namedChildren()` 을 덮어써라.",
+      );
+    }
     const out: Record<string, Tensor> = {};
     for (const [name, p] of Object.entries(this.ownParameters())) {
       out[`${prefix}${name}`] = p;
     }
-    for (const [name, child] of Object.entries(this.namedChildren())) {
+    for (const [name, child] of Object.entries(kids)) {
       Object.assign(out, child.namedParameters(`${prefix}${name}.`));
     }
     return out;
