@@ -2983,8 +2983,13 @@ def median(t, dim=None, keepdim=False):
     return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
 
 
-def norm(t, p=2, dim=None):
+def norm(t, p=2, dim=None, dtype=None):
     t = _wrap(t)
+    # **먼저 형을 바꾼 뒤 계산한다** — torch 가 그렇다(실측: float32 를
+    # `dtype=float64` 로 물으면 답이 float64 다). 계산하고 나서 바꾸면 정밀도가
+    # 이미 깎인 뒤라 값이 다르다.
+    if dtype is not None:
+        t = _wrap(t.data.astype(_np_of(dtype)))
     _needs_float(
         t.data,
         "노름은 실수에만 있습니다 — 제곱근이 정수 칸에 안 들어갑니다. "
@@ -4720,10 +4725,16 @@ def set_default_dtype(dt):
     return None
 
 
-class _FInfo:
-    """`torch.finfo` 가 주는 것. numpy 가 이미 아는 수를 이름만 바꿔 낸다."""
+class finfo:
+    """`torch.finfo` 가 주는 것. numpy 가 이미 아는 수를 이름만 바꿔 낸다.
 
-    def __init__(self, dt):
+    **클래스여야 한다.** torch 의 것은 타입이라 `isinstance` 로 물을 수 있다. 감싸는
+    함수를 두면 값은 같은데 종류가 달라지고, 이름이 있는지만 보는 검사는 그 차이를
+    못 본다 — 형 별칭이 함수로 앉아 있던 것과 같은 자리다.
+    """
+
+    def __init__(self, dt=None):
+        dt = _float32 if dt is None else dt
         info = _np.finfo(getattr(dt, "np", _np.float32))
         self.eps = float(info.eps)
         self.max = float(info.max)
@@ -4741,7 +4752,9 @@ class _FInfo:
                 f"dtype={self.dtype})")
 
 
-class _IInfo:
+class iinfo:
+    """`finfo` 와 같은 까닭으로 클래스다."""
+
     def __init__(self, dt):
         info = _np.iinfo(getattr(dt, "np", _np.int64))
         self.max = int(info.max)
@@ -4753,12 +4766,7 @@ class _IInfo:
         return (f"iinfo(min={self.min}, max={self.max}, dtype={self.dtype})")
 
 
-def finfo(dt=None):
-    return _FInfo(_float32 if dt is None else dt)
 
-
-def iinfo(dt):
-    return _IInfo(dt)
 
 
 class _Namespace:

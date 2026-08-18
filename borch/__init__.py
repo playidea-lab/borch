@@ -320,8 +320,28 @@ def _wrap_tensor(t):
     return t if isinstance(t, Tensor) else tensor(t)
 
 
+# **torch 가 다른 종류로 내주는 이름은 가져가지 않는다.**
+#
+# 이 고리는 메서드 이름을 그대로 모듈 자리에 놓는데, torch 에서 그 이름이 함수가
+# 아닌 자리가 있다. 그러면 우리 쪽에는 **함수가 앉고**, 쓰는 사람은 그 이름을 원래
+# 용도로 쓰다가 한 칸 밀린 오류를 본다 — `dtype=torch.float` 이
+# `'function' object has no attribute 'np'` 로 멈춘 것이 그 꼴이었다.
+#
+# 형 여덟(`float`·`bool`·`half` …)은 **위에서 먼저 놓아** 막았고, 남은 것이 아래
+# 다섯이다. 손으로 세 번 뺐으니 이번에는 규칙으로 적는다.
+#
+# **이 표는 torch 를 안 보고 적는다** — 코어는 torch 에 기대지 않는다. 대신
+# `tests/test_module_names.py` 가 torch 를 들고 이 표가 낡지도 짧지도 않은지 본다.
+_NOT_OURS = {
+    "cpu": "torch 에서는 이름 공간이다 — 고를 장치가 하나뿐이라 우리에게는 없다",
+    "storage": "torch 에서는 이름 공간이다 — 저장 계층을 들여다보는 자리가 없다",
+    "mtia": "torch 에서는 이름 공간이다 — 다른 가속기다",
+    "xpu": "torch 에서는 이름 공간이다 — 다른 가속기다",
+    "qscheme": "torch 에서는 클래스다 — 양자화 방식이고 그 형이 없다",
+}
+
 for _name in dir(Tensor):
-    if _name.startswith("_") or _name in globals():
+    if _name.startswith("_") or _name in globals() or _name in _NOT_OURS:
         continue
     if callable(getattr(Tensor, _name, None)):
         globals()[_name] = _as_function(_name)

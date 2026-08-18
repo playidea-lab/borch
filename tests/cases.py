@@ -4273,6 +4273,13 @@ def top_level_cases(inp=None):
                    f"{L.finfo(L.float32).bits}"))
     add("살펴보기::iinfo",
         lambda L: f"{L.iinfo(L.int64).max} {L.iinfo(L.int64).min}")
+    # **종류까지 묻는다.** 위 두 줄은 값만 보므로 감싸는 함수가 앉아 있어도 통과한다 —
+    # 실제로 그랬다. torch 의 것은 타입이라 `isinstance` 로 물을 수 있고, 그 차이는
+    # 이름이 있는지만 보는 검사에도 값 대조에도 안 걸린다.
+    add("살펴보기::finfo 는 클래스다", lambda L: type(L.finfo).__name__)
+    add("살펴보기::iinfo 는 클래스다", lambda L: type(L.iinfo).__name__)
+    add("살펴보기::finfo(인자 없이) 는 기본형",
+        lambda L: str(L.finfo().dtype))
 
     def rng_round_trip(L):
         """**상태를 되돌리면 같은 수가 나와야 한다.** 그 왕복이 이어서 학습하기다.
@@ -9816,6 +9823,16 @@ def dtype_cases(inp=None):
     for _name, _call in _int_makers:
         cases.append((f"dtype::공장::{_name}(dtype=int64)",
                       lambda L, f=_call: str(f(L, {"dtype": L.int64}).dtype)))
+
+    # **축약 중 `norm` 만 `dtype=` 을 안 들었다.** `sum`·`mean`·`prod` 는 듣는데
+    # 하나만 안 들으면 규칙이 없는 것과 같다. torch 는 **먼저 형을 바꾸고 계산한다** —
+    # 계산한 뒤 바꾸면 정밀도가 이미 깎인 뒤라 값이 다르다.
+    # 물을 수 있는 형이 float64 뿐이다 — 기본값(float32)으로 물으면 답이 같아서
+    # 아무것도 안 묻는 케이스가 된다. 그런데 브라우저 쪽에는 배정도가 없으므로
+    # **셋이 갈린다.** 값 대신 "각자 문서대로 굴었는가" 를 묻는다.
+    cases.append(("dtype::공장::x.norm(dtype=float64)=브라우저는거절",
+                  _as_expected(lambda L: L.tensor(np.float32([1.0, 2.0, 3.0]))
+                               .norm(dtype=L.float64))))
 
     # ── 이름은 있고 **칸이 없는** 형 넷 ──────────────────────────────────
     #

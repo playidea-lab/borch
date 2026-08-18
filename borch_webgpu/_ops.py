@@ -861,8 +861,11 @@ def set_default_dtype(dt):
     return None
 
 
-class _FInfo:
-    def __init__(self, dt):
+class finfo:
+    """`torch.finfo`. **클래스여야 한다** — 감싸는 함수를 두면 값은 같은데 종류가
+    달라지고, 이름만 보는 검사는 그 차이를 못 본다. 코어와 같은 자리다."""
+
+    def __init__(self, dt=None):
         info = _np.finfo(_np.float32)
         self.eps = float(info.eps)
         self.max = float(info.max)
@@ -871,24 +874,21 @@ class _FInfo:
         self.smallest_normal = float(info.tiny)
         self.resolution = float(info.resolution)
         self.bits = int(info.bits)
-        self.dtype = _dtype_name(dt)
+        self.dtype = "float32" if dt is None else _dtype_name(dt)
 
 
-class _IInfo:
-    def __init__(self, dt):
+class iinfo:
+    """`finfo` 와 같은 까닭으로 클래스다."""
+
+    def __init__(self, dt=None):
         info = _np.iinfo(_np.int64)
         self.max = int(info.max)
         self.min = int(info.min)
         self.bits = int(info.bits)
-        self.dtype = _dtype_name(dt)
+        self.dtype = "float32" if dt is None else _dtype_name(dt)
 
 
-def finfo(dt=None):
-    return _FInfo(dt if dt is not None else "float32")
 
-
-def iinfo(dt):
-    return _IInfo(dt)
 
 
 def linspace(start, end, count, **kw):
@@ -1182,6 +1182,11 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     p = kw.get("p", p)
     dim = kw.get("dim", dim)
     keepdim = kw.get("keepdim", keepdim)
+    # **`dtype=` 은 조용히 버리지 않는다.** torch 는 그 형으로 바꾼 뒤 계산하는데
+    # 여기서 물을 수 있는 것은 float32 뿐이라, 다른 형이 오면 멈추는 것이 답이다 —
+    # float32 를 돌려주면 "배정도로 쟀다" 고 믿는 코드가 생긴다.
+    if kw.get("dtype") is not None:
+        x = wrap(x).to(_dtype_to_make(kw["dtype"]))
     h = handle(x)
     if dim is None and p == 2:
         return guarded(h.norm)
