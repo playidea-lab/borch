@@ -4117,10 +4117,6 @@ def _window_index(shape, kernel, dilation, padding, stride):
     return idx, (out_h, out_w)
 
 
-def _pair(v):
-    return (v, v) if isinstance(v, int) else tuple(v)
-
-
 def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
     """창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
 
@@ -5491,10 +5487,6 @@ def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
 # 대부분 이미 있는 것에 이름을 붙이는 자리다. 계산이 새로 필요한 것은 `matrix_exp`
 # 하나뿐인데, 그 하나가 닫힌 식이 없다.
 
-def matmul(a, b):
-    return _wrap(a) @ _wrap(b)
-
-
 def vecdot(a, b, dim=-1):
     return (_wrap(a) * _wrap(b)).sum(dim=dim)
 
@@ -5596,8 +5588,16 @@ def multi_dot(mats):
     return out
 
 
-def vander(x, N=None):
-    """반데르몽드 행렬. 열이 **커지는 차수**다 — numpy 의 기본과 반대라 뒤집는다."""
+def _vander_increasing(x, N=None):
+    """`linalg.vander` 의 판. **열이 커지는 차수**이고 마지막 열이 최고차다.
+
+    torch 도 둘을 갈라 놓았다 — `torch.vander` 는 줄어드는 쪽이 기본이고
+    `torch.linalg.vander` 는 늘어나는 쪽이다. 값이 뒤집힌 **서로 다른 두 함수**다.
+
+    **이름을 가른 이유.** 전에는 둘 다 `vander` 였고, 아래 클래스 몸이 *먼저
+    정의된* 쪽을 잡는 것으로 갈렸다. 정의 차례에 기대는 배선인데 그 기댐이 어디에도
+    안 적혀 있어서, 읽는 사람에게는 뒤의 정의가 앞의 것을 덮는 것으로 보인다.
+    """
     v = _wrap(x)
     n = v.data.shape[-1] if N is None else N
     cols = [v ** k for k in range(n)]
@@ -5733,7 +5733,7 @@ class _Linalg(_Namespace):
     matrix_norm = staticmethod(matrix_norm)
     cond = staticmethod(cond)
     multi_dot = staticmethod(multi_dot)
-    vander = staticmethod(vander)
+    vander = staticmethod(_vander_increasing)
     solve_triangular = staticmethod(solve_triangular)
     tensorsolve = staticmethod(tensorsolve)
     tensorinv = staticmethod(tensorinv)

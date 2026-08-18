@@ -109,6 +109,32 @@ cfloat = complex64
 complex128 = dtype("complex128", _np.complex128)
 cdouble = complex128
 
+
+class _AbsentDtype(dtype):
+    """torch 와 **이름은 같은데 이 축소판에 칸이 없는** 형.
+
+    이름을 아예 안 두면 `dtype=torch.int` 가 `AttributeError` 로 멈추는데, 그 문구는
+    **오타와 구별이 안 된다.** 이름은 두고 쓰려 할 때 무엇이 없는지 말한다 —
+    `complex128` 이 같은 이유로 이름만 있다.
+
+    부모의 `__init__` 을 안 부른다. 부모는 `self.np` 를 값으로 심는데 여기서는 그
+    자리가 **읽을 때 멈추는 문**이어야 한다.
+    """
+
+    def __init__(self, name, instead):
+        self.name = name
+        self._instead = instead
+
+    @property
+    def np(self):
+        _unsupported(f"`torch.{self.name}` (→ `{self._instead}` 로 맞추세요)")
+
+
+# **`torch.int` 는 int32 다**(실측 — `torch.long` 이 int64다). 정수 칸을 int64 하나로
+# 모았으므로 int32 는 없다. 그래도 이름은 둔다: 교재가 `dtype=torch.int` 를 쓰고,
+# 그때 "없다" 와 "오타다" 는 다른 말이어야 한다.
+int32 = _AbsentDtype("int32", "int64")
+
 _NP_TO_DTYPE = {_np.dtype("float32"): float32, _np.dtype("float64"): float64,
                 _np.dtype("int64"): int64, _np.dtype("bool"): bool_,
                 _np.dtype("complex64"): complex64,

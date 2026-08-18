@@ -394,6 +394,20 @@ def __getattr__(name):
     if name in ("bool", "float32", "int64"):
         from ._base import _DType
         return _DType(name)
+    # **형 별칭은 형이지 함수가 아니다.** 이 셋은 Tensor 의 메서드이기도 해서 아래로
+    # 흘리면 `x.float()` 로 넘기는 함수가 나왔고, `dtype=torch.float` 이 그 함수를
+    # 받아 엉뚱한 자리에서 멈췄다. 코어가 같은 자리를 같은 이유로 겪었다.
+    #
+    # 셋 중 하나만 진짜 형이다. `torch.double` 은 float64 이고 WebGPU 셰이더에 배정도가
+    # 없다. `torch.int` 는 **int32** 이고(long 이 int64다) 정수 칸을 int64 하나로 모았다.
+    # 이름은 두되 쓰려 할 때 멈춘다 — 없는 것과 오타는 다른 말이어야 한다.
+    if name == "float":
+        from ._base import _DType
+        return _DType("float32")
+    if name in ("double", "int"):
+        from borch._base import _AbsentDtype
+        return _AbsentDtype(*{"double": ("float64", "float32"),
+                              "int": ("int32", "int64")}[name])
     # `max`·`min` 도 같은 이유로 여기서 준다 — 위에 적은 그대로다.
     if name in _EXTREME:
         return _EXTREME[name]
@@ -463,7 +477,7 @@ def arange(*args, **kw):
     if start or step != 1:
         out = out.binary("mul", _ts.Tensor.full(_js_list([]), float(step)))
         out = out.binary("add", _ts.Tensor.full(_js_list([]), float(start)))
-    return wrap(out)
+    return _made(out, kw)
 
 
 def _shape_of(shape):
@@ -473,20 +487,62 @@ def _shape_of(shape):
     return _js_list(shape)
 
 
+def _dtype_to_make(dt):
+    """공장 함수가 받은 형에서 **borch.ts 가 아는 이름**을 꺼낸다.
+
+    `_DType` 은 문자열을 물려받았지만 `str()` 이 `torch.` 를 붙이므로 그대로 쓰면
+    안 된다 — 속 이름은 `plain` 이다. 이름만 있고 칸은 없는 형(코어의
+    `_AbsentDtype`)은 **여기서 제 문구로 멈춘다.** `.np` 를 읽는 것이 그 문이다.
+
+    **이름이 `_dtype_name` 이면 안 된다.** 이 파일에 그 이름이 이미 있고(승격표가
+    쓴다), 그쪽은 이름만 꺼내는 자리라 멈추면 안 된다. 처음에 같은 이름으로 썼더니
+    파이썬이 뒤의 정의를 택해 **조용히 다른 함수가 불렸다** — 오류도 경고도 없이
+    `dtype=torch.int` 가 통과했다.
+    """
+    from ._base import _DType
+
+    if isinstance(dt, _DType):
+        return dt.plain
+    if isinstance(dt, str):
+        return str(dt)
+    _ = dt.np
+    return dt.name
+
+
+def _made(out, kw):
+    """공장 함수가 받은 `dtype=`·`requires_grad=` 를 **실제로 적용한다.**
+
+    **여기 오기 전까지 그 둘은 `**kw` 로 조용히 버려지고 있었다.**
+    `zeros(2, dtype=torch.int64)` 가 float32 를 냈다 — 값은 0 이라 맞고 형만 틀리니
+    값 대조로는 안 걸린다. 골든에 `zeros(..., dtype=)` 꼴이 하나도 없어서 아무도
+    안 물었다. 형 별칭을 케이스로 못 박다가 드러났다.
+
+    **한 자리에 모으는 것이 요점이다.** `zeros`·`ones`·`full`·`eye`·`linspace` 가
+    같은 결함을 각자 갖고 있었고, 다섯 벌로 두면 다음에도 한쪽만 고쳐진다.
+    """
+    t = wrap(out)
+    dt = kw.get("dtype")
+    if dt is not None:
+        t = t.to(_dtype_to_make(dt))
+    if kw.get("requires_grad"):
+        t.requires_grad_(True)
+    return t
+
+
 def zeros(*shape, **kw):
-    return wrap(_ts.Tensor.zeros(_shape_of(shape)))
+    return _made(_ts.Tensor.zeros(_shape_of(shape)), kw)
 
 
 def ones(*shape, **kw):
-    return wrap(_ts.Tensor.ones(_shape_of(shape)))
+    return _made(_ts.Tensor.ones(_shape_of(shape)), kw)
 
 
 def full(shape, value, **kw):
-    return wrap(_ts.Tensor.full(_js_list(shape), float(value)))
+    return _made(_ts.Tensor.full(_js_list(shape), float(value)), kw)
 
 
 def eye(n, m=None, **kw):
-    return wrap(_ts.Tensor.eye(n, n if m is None else m))
+    return _made(_ts.Tensor.eye(n, n if m is None else m), kw)
 
 
 def cat(parts, dim=0):
@@ -762,7 +818,7 @@ def iinfo(dt):
 
 
 def linspace(start, end, count, **kw):
-    return wrap(_ts.Tensor.linspace(start, end, count))
+    return _made(_ts.Tensor.linspace(start, end, count), kw)
 
 
 # ── 창 함수 ─────────────────────────────────────────────────────────────────

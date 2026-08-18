@@ -9397,11 +9397,14 @@ def dtype_cases(inp=None):
                     else f"거절(다른 문구: {text.splitlines()[0][:40]})"
         cases.append((f"dtype::형바꾸기::{name}", run))
 
-    def we_refuse(name, call):
+    def we_refuse(name, call, group="형바꾸기"):
         """형바꾸기 자리의 거절 케이스. 판정은 `refusal_case` 하나가 한다 —
         같은 규칙이 두 벌이면 한쪽만 고쳐지고, 이 저장소는 그 자리를 여러 번 밟았다.
+
+        `group` 은 자리 이름이다. 형 별칭(`dtype=torch.int`)도 **코어까지 거절하는**
+        같은 규칙이라 판정을 두 벌 쓰지 않고 이름만 갈라 쓴다.
         """
-        cases.append((f"dtype::형바꾸기::{name}=우리는거절", refusal_case(call)))
+        cases.append((f"dtype::{group}::{name}=우리는거절", refusal_case(call)))
 
     for name in ("float", "long", "bool", "cfloat"):
         casts(name, lambda L, n=name: getattr(L.tensor(floats), n)())
@@ -9577,6 +9580,50 @@ def dtype_cases(inp=None):
     # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.
     cases.append(("dtype::형바꾸기::double=브라우저는거절",
                   _as_expected(lambda L: L.tensor(floats).double())))
+
+    # ── 형 **별칭**은 형이지 함수가 아니다 ────────────────────────────────
+    #
+    # `torch.float`·`torch.double`·`torch.int`·`torch.bool` 은 dtype 이다. 그런데 이
+    # 넷은 Tensor 의 메서드 이름이기도 해서, 메서드를 모듈 함수로도 내는 고리가
+    # 같은 이름을 **함수로** 채우고 있었다. 그래서 교재에 흔한
+    # `zeros(2, dtype=torch.float)` 이 `'function' object has no attribute 'np'` 로
+    # 멈췄다 — 가리키는 형은 멀쩡히 있는데 이름만 가려져 있었다.
+    #
+    # **이름만 물으면 안 잡힌다.** 있는지만 보는 검사는 함수가 앉아 있어도 통과한다
+    # (커버리지 표가 실제로 그랬다). 그래서 **써 본다** — 그 형으로 텐서를 만들고
+    # 나온 형의 이름을 굳힌다. 함수가 앉아 있으면 그 자리에서 멈춘다.
+    for _alias in ("float", "bool"):
+        cases.append((f"dtype::별칭::dtype={_alias} 로 만든다",
+                      lambda L, a=_alias: str(L.zeros(2, dtype=getattr(L, a)).dtype)))
+
+    # **`torch.int` 는 int32 다**(`long` 이 int64 다). 정수 칸을 int64 하나로 모았으므로
+    # 그 형은 없다 — 그래도 이름은 **int32 를 가리켜야** 한다. 이름을 아예 안 두면
+    # `dtype=torch.int` 가 오타와 같은 문구로 멈춘다. 만들기는 셋 다 갈리므로
+    # (torch 는 되고 우리 둘은 거절) 여기서는 **무엇을 가리키는지**만 굳힌다.
+    cases.append(("dtype::별칭::int 은 int32 를 가리킨다",
+                  lambda L: str(L.int)))
+    # 만드는 쪽. **코어까지** 거절하는 자리라 `_as_expected` 가 아니라 `we_refuse` 다.
+    we_refuse("dtype=int", lambda L: L.zeros(2, dtype=L.int), group="별칭")
+    # `double` 은 코어에는 있고 브라우저 쪽에만 없다 — 위 `형바꾸기::double` 과 같은 갈림.
+    cases.append(("dtype::별칭::dtype=double=브라우저는거절",
+                  _as_expected(lambda L: L.zeros(2, dtype=L.double))))
+
+    # ── 공장 함수가 `dtype=` 을 **실제로 쓰는가** ──────────────────────────
+    #
+    # 위 별칭을 못 박다가 드러났다: 결속의 `zeros`·`ones`·`full`·`eye`·`linspace` 가
+    # `**kw` 를 통째로 버리고 있었다. `zeros(2, dtype=int64)` 가 float32 를 냈고
+    # **값은 0 이라 맞아서** 값 대조로는 안 걸렸다. 골든에 `zeros(..., dtype=)` 꼴이
+    # 하나도 없었기 때문이다 — 안 물은 것은 안 맞는다.
+    #
+    # `ones` 를 같이 묻는 이유는 다섯이 **한 문**을 지나는지 보기 위해서다. 하나만
+    # 물으면 그 하나만 고친 판이 통과한다.
+    cases.append(("dtype::별칭::zeros(dtype=int64)",
+                  lambda L: str(L.zeros(2, dtype=L.int64).dtype)))
+    cases.append(("dtype::별칭::ones(dtype=int64)",
+                  lambda L: str(L.ones(2, dtype=L.int64).dtype)))
+    # `requires_grad` 도 같은 `**kw` 에 같이 버려지고 있었다.
+    cases.append(("dtype::별칭::zeros(requires_grad=True)",
+                  lambda L: str(L.zeros(2, requires_grad=True).requires_grad)))
 
     # ── 없는 이름은 `hasattr` 에도 없어야 한다 ────────────────────────────
     #

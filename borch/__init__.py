@@ -36,7 +36,7 @@ from ._base import (
     BrowserTorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
     _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
-    long, set_printoptions,
+    int32, long, set_printoptions,
     # 복소수의 형 이름. `complex128`·`cdouble` 은 **이름만** 있다 — 만들려 하면
     # `Tensor.__init__` 의 목문이 멈춘다.
     cdouble, cfloat, complex128, complex64,
@@ -278,6 +278,25 @@ for _name in ("conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
 # 목록을 손으로 안 적는다. **torch 가 모듈 함수로도 주는 것**과 우리가 메서드로 가진
 # 것의 교집합이 곧 답이고, 그것을 기계가 낸다. 손으로 적으면 다음에 메서드를 하나
 # 늘릴 때 이쪽을 빼먹는다.
+# ── torch 의 **형 별칭**을 먼저 놓는다. 아래 고리보다 위여야 한다. ──────────────
+#
+# `torch.float`·`torch.double`·`torch.int`·`torch.bool` 은 dtype 이지 함수가 아니다.
+# 그런데 `float`·`double`·`int`·`bool` 은 Tensor 의 메서드이기도 해서, 아래 고리가
+# 이 이름들을 **메서드에서 만든 함수**로 채우고 있었다. 그래서 교재에 흔한
+# `zeros(2, dtype=torch.float)` 이 `'function' object has no attribute 'np'` 로
+# 멈췄다 — 가리키는 형은 멀쩡히 있는데 이름만 가려져 있었다.
+#
+# 고리는 `_name in globals()` 를 보고 건너뛰므로, **여기 먼저 놓는 것이 곧 고침**이다.
+# 메서드 쪽(`x.float()`)은 그대로다 — 이 이름들은 모듈 자리에만 놓인다.
+#
+# `int` 만 별칭이 아니다. **`torch.int` 는 int32 이고 우리에게 그 칸이 없다** —
+# 이름은 두되 쓰려 하면 멈춘다(`int32` 는 `_AbsentDtype` 이다).
+float = float32
+double = float64
+bool = bool_
+int = int32
+
+
 def _as_function(name):
     """메서드를 첫 인자로 받는 함수로 감싼다."""
     def call(t, *args, **kwargs):
