@@ -30,6 +30,22 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # 잡는 검사는 통과하는 검사처럼 보이고, 그것이 낡은 수보다 나쁘다 — 낡은 수는
 # 언젠가 눈에 띄지만 안 도는 검사는 안 띈다. 자릿수를 넉넉히 잡는다.
 COUNT = re.compile(r"골든\s*\*{0,2}(\d{3,5})\s*(?:건|/\s*\d{3,5})")
+# **`골든` 을 앞에 안 단 자리도 있다.** "53 건을 빼고 2709 건을 본다" 가 그것이고,
+# 위 그물이 접두사를 요구해서 통째로 빠져나갔다 — 골든이 2263 에서 2953 으로 가는
+# 동안 그 한 줄만 옛날 수를 들고 남아 있었다. 사이트 세션이 눈으로 찾아 줬다.
+# **파생된 수도 수다.** 여기서 세 값 중 하나여야 한다는 규칙은 똑같이 적용된다.
+DERIVED = re.compile(r"(\d{3,5})\s*건을\s*본다")
+
+
+def _hit(found):
+    """`findall` 이 준 하나에서 수를 꺼낸다.
+
+    **그물이 여럿이면 꼴이 달라진다.** 묶음이 하나인 정규식은 문자열을 주고, 갈래를
+    나눈 정규식은 **빈 칸이 섞인 튜플**을 준다. 둘을 한 고리에서 쓰려면 여기서 맞춰야
+    한다 — 안 맞추면 튜플이 그대로 비교에 들어가 **아무 수와도 안 같아지고**, 그러면
+    낡은 수를 전부 낡았다고 외치거나(운이 좋으면) 조용히 지나간다(운이 나쁘면).
+    """
+    return found if isinstance(found, str) else next((g for g in found if g), "")
 
 
 def _counts():
@@ -61,7 +77,8 @@ def test_docs_do_not_name_a_stale_golden_count():
     stale = []
     path = ROOT / "README.md"
     for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        for hit in COUNT.findall(line):
+        for found in COUNT.findall(line) + DERIVED.findall(line):
+            hit = _hit(found)
             if hit not in allowed:
                 stale.append(
                     f"README.md:{i}  '{hit}' — 지금은 {total}(전체) / "
