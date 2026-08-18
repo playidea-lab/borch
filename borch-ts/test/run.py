@@ -175,6 +175,91 @@ def run(headed=False, verbose=False):
     return report
 
 
+# 안 옮긴 까닭. **접두어마다 이유와 개수가 있어야 한다.**
+#
+# 오래 "N 건은 일부러 안 옮겼다" 한 줄이었다. 그 문장 안에 세 가지가 섞여 있었다 —
+# 정말 옮길 값이 없는 것, 아직 안 옮긴 것, 그리고 **borch.ts 에 아예 없는 것.**
+# 개수만 찍으니 셋이 화면에서 똑같이 보였고, 실제로 `rnntop::` 35 건이 빠뜨린
+# 것인 채로 그 안에 있었다. 여기 적고 나서야 `opt::LBFGS` 와 `index::searchsorted`
+# 가 **없는 이름**이라는 것이 드러났다.
+#
+# 개수는 **정확히 맞아야 한다.** 여유를 두면 새로 안 옮긴 케이스가 그 틈에 숨는다 —
+# 바로 그것이 이 검사가 막으려는 일이다. 케이스를 늘렸으면 옮기거나, 못 옮길
+# 까닭과 함께 수를 올려라.
+#
+# 표시:  별칭 = 옮기면 같은 질문을 두 번 한다
+#        파이썬 = 파이썬 표면의 것이라 TS 에 대응물이 없다
+#        아직 = 옮길 값이 있는데 안 옮겼다 (**밀린 일이다**)
+#        없음 = borch.ts 에 그 이름이 없다 (**결손이다**)
+NOT_PORTED = {
+    "dtype::": (102, "아직 — 형 보존은 borch.ts 도 지켜야 한다"),
+    # 이 수가 82 에서 88 로 뛰는 것을 이 검사가 **붙인 날 잡았다** —
+    # `x.real`·`x.device` 를 속성으로 바꾼 묶음이 케이스를 여섯 늘렸다.
+    "inplace::": (88, "별칭 — 짝에서 만든 제자리 이름. 뷰·공유·속성은 파이썬 쪽이다"),
+    "method2::": (60, "별칭 — `multiply`=`mul` 처럼 파이썬의 둘째 이름"),
+    "make::": (48, "아직 — `real`·`conj` 는 저쪽에도 있다"),
+    "top::": (47, "별칭 — 최상위 제자리 함수. TS 는 메서드로만 준다"),
+    "spot::": (47, "아직 — `asStrided`·`diagEmbed` 는 저쪽에도 있다"),
+    "toplin::": (42, "별칭 — `lu`=`linalg.lu_factor` 처럼 최상위의 둘째 이름"),
+    "stat::": (42, "아직 — `histc`·`histogram` 은 저쪽에도 있다(비동기다)"),
+    "keep::": (35, "아직 — `dtype=` 는 저쪽 `castFirst` 가 한다"),
+    "blend::": (34, "아직 — `addmm` 계열은 저쪽에도 있다"),
+    "fname::": (28, "별칭 — `F` 의 제자리 판. 메서드 쪽에서 이미 묻는다"),
+    "bit::": (24, "별칭 — 비트 연산의 메서드 이름"),
+    "unpool::": (22, "파이썬 — 대부분 `repr` 이고 그것은 파이썬 쪽 글자다"),
+    "linalg::": (17, "아직 — `*_ex` 변종. info 를 내는 자리라 값이 있다"),
+    "grad::": (12, "별칭 — vjp 는 `backward(seed)` 이고 parity 가 이미 묻는다"),
+    "cplx::": (10, "파이썬 — 복소수 `repr` 은 파이썬 formatter 의 것이다"),
+    "index::": (5, "**없음** — borch.ts 에 `searchsorted`·`bucketize` 가 없다"),
+    "opt::": (4, "**없음** — borch.ts 에 `LBFGS` 가 없다"),
+    "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
+    "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
+}
+
+
+def unasked_report(report):
+    """안 물어본 것을 **접두어로 묶어** 보여주고, 까닭 없는 것을 가려낸다.
+
+    개수만 찍으면 그 수가 무엇으로 이루어졌는지 아무도 모른다. `679 건` 안에
+    "일부러 안 옮긴 것" 과 "빠뜨린 것" 이 섞여 있어도 화면은 똑같다.
+    """
+    import json
+
+    doc = json.loads((ROOT / "tests" / "golden.json").read_text(encoding="utf-8"))
+    asked = set(report.get("asked", ()))
+    rest = [n for n in doc["cases"] if n not in asked]
+    groups = {}
+    for name in rest:
+        head = name.split("::", 1)[0] + "::" if "::" in name else "(접두어 없음)"
+        groups.setdefault(head, []).append(name)
+
+    lines = []
+    surprise = []
+    for head, names in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        entry = NOT_PORTED.get(head)
+        if entry is None:
+            lines.append(f"    ✘ {head:18s} {len(names):>4}건  "
+                         f"**까닭이 안 적혀 있다**  [{names[0]}]")
+            surprise.append(f"{head} ({len(names)}건, 까닭 없음)")
+            continue
+        frozen, why = entry
+        mark = " " if len(names) == frozen else "✘"
+        lines.append(f"    {mark} {head:18s} {len(names):>4}건  {why}")
+        if len(names) != frozen:
+            surprise.append(f"{head} (적힌 것 {frozen}, 실제 {len(names)})")
+    if lines:
+        lines.insert(0, "  안 물어본 것 — 접두어별:")
+    # 목록에 있는데 하나도 안 남은 것은 **다 옮긴 것**이다. 그 줄은 지워야 한다 —
+    # 안 지우면 다음 사람이 아직 안 옮긴 줄로 읽는다.
+    for head, (frozen, _) in NOT_PORTED.items():
+        if head not in groups:
+            surprise.append(f"{head} (전부 옮겼다 — 목록에서 지워라)")
+    if surprise:
+        lines.append("  ✘ 맞춰지지 않는 자리: " + " · ".join(surprise))
+        lines.append("     옮겼으면 수를 내리고, 못 옮겼으면 까닭과 함께 올려라.")
+    return lines
+
+
 def main(argv):
     dist = ROOT / "borch-ts" / "dist" / "test" / "golden.js"
     if not dist.exists():
@@ -200,13 +285,19 @@ def main(argv):
     gap = report["total"] - report["registered"]
     print(f"골든 {report['total']}건 중 {report['registered']}건을 TS 로 썼다 "
           f"— {gap}건은 아직 안 물었다.")
+    gap_lines = unasked_report(report)
+    for line in gap_lines:
+        print(line)
+    gap_ok = not any("✘" in line for line in gap_lines)
     for name in report["unknown"]:
         print(f"  ? 이름이 골든에 없다: {name}")
     for f in report["failed"]:
         print(f"  ✘ {f['name']} — {f['why']}")
     print(f"통과 {report['passed']} / 실패 {len(report['failed'])}")
 
-    ok = not report["failed"] and not report["unknown"]
+    # **안 물어본 것도 실패다** — 까닭이 안 적혀 있거나 수가 안 맞으면.
+    # 골든이 자라는데 TS 쪽이 안 따라가는 것을 개수 한 줄로는 못 본다.
+    ok = not report["failed"] and not report["unknown"] and gap_ok
     return 0 if ok else 1
 
 

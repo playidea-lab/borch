@@ -2658,6 +2658,33 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
   add("F.rms_norm", (x) => x.rmsNorm(1), "img");
   out.set("norm::nn.RMSNorm", () => new nn.RMSNorm(4).call(inp.get("img")));
 
+  // **`normalizedShape` 는 접는 축의 개수다.** 축 하나짜리로만 물으면 "마지막 축을
+  // 접는다" 와 답이 같아서 그 규칙이 안 보인다 — 셋 다 그렇게 적혀 있었다.
+  out.set("norm::nn.LayerNorm(축 하나)",
+    () => new nn.LayerNorm(4).call(inp.get("img")));
+  out.set("norm::nn.LayerNorm(축 둘)",
+    () => new nn.LayerNorm([4, 4]).call(inp.get("img")));
+  out.set("norm::grad::nn.LayerNorm(축 둘)", () => {
+    const x = inp.get("img", true);
+    seeded(new nn.LayerNorm([4, 4]).call(x)).backward();
+    return gradOf(x, "LayerNorm(축 둘)");
+  });
+  // 골든이 굳힌 것은 **예외 종류의 이름**이다. "멈췄는가" 로 접으면 오타가 낸
+  // `TypeError` 도 통과한다.
+  out.set("norm::nn.LayerNorm(모양 불일치)", () => {
+    try {
+      new nn.LayerNorm([3, 4]).call(inp.get("img"));
+    } catch (e) {
+      return e instanceof Error ? e.constructor.name : typeof e;
+    }
+    return "예외가 안 났다";
+  });
+  out.set("norm::nn.LayerNorm/파라미터 이름",
+    () => Object.keys(new nn.LayerNorm(4).namedParameters()).join(" "));
+  out.set("norm::nn.LayerNorm(affine 끄면)",
+    () => Object.keys(
+      new nn.LayerNorm(4, 1e-5, false).namedParameters()).join(" ") || "없음");
+
   add("F.conv_transpose1d", (x) => x.convTransposeND(inp.get("tw1")), "nd_seq");
   add("F.conv_transpose2d", (x) => x.convTransposeND(inp.get("tw2")), "img");
   add("F.conv_transpose2d(스트라이드2)",
@@ -3762,6 +3789,18 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
     ["nn.MaxPool3d", () => nd("nd_vol").maxPool3d(2)],
     ["nn.BatchNorm3d", () => new nn.BatchNormND(2).forward(nd("nd_vol"))],
     ["nn.Upsample", () => nd("nd_img").upsample(2)],
+    // **`mode` 를 받아만 놓고 안 쓰던 자리다** — 겹선형을 달라고 해도 최근접이
+    // 나왔다. 예외가 아니라 조용히 다른 값이다.
+    ["nn.Upsample(겹선형)",
+      () => new nn.Upsample(null, 2, "bilinear").call(nd("nd_img"))],
+    // **첫 자리는 `size` 다.** 배율을 첫 자리에 두면 같은 줄이 늘리는 것과 줄이는
+    // 것으로 갈리는데 모양이 양쪽 다 그럴듯하다. 12 는 3 배라 기본값 2 와 갈린다.
+    ["nn.Upsample(첫 자리는 size)", () => new nn.Upsample(12).call(nd("nd_img"))],
+    ["nn.AvgPool2d", () => new nn.AvgPool2d(2).call(nd("nd_img"))],
+    ["nn.AvgPool2d(보폭)", () => new nn.AvgPool2d(2, 1).call(nd("nd_img"))],
+    ["nn.LPPool1d", () => new nn.LPPool1d(2, 2).call(nd("nd_seq"))],
+    ["nn.Unflatten",
+      () => new nn.Unflatten(1, [1, 3]).call(nd("nd_img").reshape([2, 3, 16]))],
   ];
   for (const [name, fn] of values) out.set(`ndim::${name}`, fn);
 
@@ -5138,6 +5177,11 @@ function addShape(out: Map<string, Case>): void {
     ["fliplr", () => m().fliplr()],
     ["flipud", () => m().flipud()],
     ["atleast_2d", () => Tensor.from([1.0], []).atleast2d()],
+    // **자기 역이 아닌 순열.** 위의 넷은 전부 대합이라(두 축 맞바꾸기·뒤집기)
+    // 순열을 거꾸로 적용하는 구현도 통과한다. `(1,2,0)` 은 역이 `(2,0,1)` 이고
+    // 모양부터 다르다 — [3,4,2] 대 [4,2,3].
+    ["permute(비가역)", () => cube().permute([1, 2, 0])],
+    ["permute(비가역의 역)", () => cube().permute([2, 0, 1])],
   ];
   for (const [name, fn] of value) out.set(`shape::${name}`, fn);
 
@@ -5168,6 +5212,9 @@ function addShape(out: Map<string, Case>): void {
     ["unfold(겹침)", () => line(true).unfold(0, 3, 1), line],
     ["select", () => m(true).select(0, 1), m],
     ["swapaxes", () => m(true).swapaxes(0, 1), m],
+    // **역방향에서 더 그렇다** — 되돌리려면 역순열이 필요한데, 순열이 자기 역이면
+    // 앞뒤로 같은 배열을 쓰고도 답이 맞는다.
+    ["permute(비가역)", () => cube(true).permute([1, 2, 0]), cube],
   ];
   for (const [name, build] of grads) {
     out.set(`shape::grad::${name}`, () => {
