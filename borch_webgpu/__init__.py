@@ -82,7 +82,8 @@ from ._ops import (                                      # noqa: E402,F401
     hstack, moveaxis, mul, multiply, remainder, row_stack, rsub, sub, subtract, t,
     true_divide, vstack,
     # 계산 자체가 없던 것들.
-    cross, empty_like, float_power, fmax, fmin, inner, isclose, isin, isneginf,
+    cross, empty, empty_like, float_power, fmax, fmin, full_like, inner,
+    isclose, isin, isneginf, ones_like, zeros_like,
     isposinf, isreal, kron, lerp, logical_xor, logspace, meshgrid, nan_to_num,
     rand_like, randint_like, randn_like, scalar_tensor, std_mean, var_mean, vdot,
     # 색인으로 쓰는 쪽.

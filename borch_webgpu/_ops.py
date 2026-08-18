@@ -383,6 +383,18 @@ _BINARY_ONLY = frozenset((
 ))
 
 
+# 이름은 두되 **쓰려 하면 멈추는** 형들. 코어와 같은 표이고 같은 까닭이다 —
+# 이름이 없으면 `dtype=torch.half` 가 오타와 같은 문구로 멈춘다.
+_ABSENT_DTYPE_NAMES = {
+    "double": ("float64", "float32"), "float64": ("float64", "float32"),
+    "int": ("int32", "int64"), "int32": ("int32", "int64"),
+    "half": ("float16", "float32"), "float16": ("float16", "float32"),
+    "bfloat16": ("bfloat16", "float32"),
+    "short": ("int16", "int64"), "int16": ("int16", "int64"),
+    "chalf": ("complex32", "complex64"), "complex32": ("complex32", "complex64"),
+}
+
+
 def __getattr__(name):
     """모듈에 없는 이름은 **첫 인자의 메서드**로 넘긴다.
 
@@ -404,10 +416,9 @@ def __getattr__(name):
     if name == "float":
         from ._base import _DType
         return _DType("float32")
-    if name in ("double", "int"):
+    if name in _ABSENT_DTYPE_NAMES:
         from borch._base import _AbsentDtype
-        return _AbsentDtype(*{"double": ("float64", "float32"),
-                              "int": ("int32", "int64")}[name])
+        return _AbsentDtype(*_ABSENT_DTYPE_NAMES[name])
     # `max`·`min` 도 같은 이유로 여기서 준다 — 위에 적은 그대로다.
     if name in _EXTREME:
         return _EXTREME[name]
@@ -507,6 +518,20 @@ def _dtype_to_make(dt):
         return str(dt)
     _ = dt.np
     return dt.name
+
+
+def _kept(t, kw):
+    """**이미 만들어진 우리 텐서**에 `dtype=`·`requires_grad=` 를 건다.
+
+    `_made` 와 규칙이 같고 받는 것만 다르다 — 저쪽은 JS 손잡이, 이쪽은 우리 텐서다.
+    규칙을 두 벌 쓰지 않으려고 판정은 여기 한 줄로 모은다.
+    """
+    dt = kw.get("dtype")
+    if dt is not None:
+        t = t.to(_dtype_to_make(dt))
+    if kw.get("requires_grad"):
+        t.requires_grad_(True)
+    return t
 
 
 def _made(out, kw):
@@ -1383,31 +1408,55 @@ def _shape_list(x):
     return [int(n) for n in handle(x).shape]
 
 
+# **모양을 빌리는 공장도 `dtype=`·`requires_grad=` 를 들어야 한다.** 위의 여섯과
+# 같은 결함이 여기 남아 있었다 — `zeros` 만 고치고 `zeros_like` 를 두면 반쪽이다.
+# 코어도 같은 자리를 같이 고쳤고, 셋이 어긋나면 골든이 잡는다.
+
+# **넷은 아예 없었다.** 모듈 `__getattr__` 이 borch.ts 쪽으로 넘기고 있었는데 저쪽에는
+# `fullLike` 이 없고, 있는 것도 이름 붙은 인자를 안 받는다. 이름이 있는 것처럼 보이고
+# 부르면 멈추는 자리라, 코어와 같은 표면을 여기 적는다.
+
+def empty(*shape, **kw):
+    return _made(_ts.Tensor.zeros(_shape_of(shape)), kw)
+
+
+def zeros_like(t, **kw):
+    return _kept(zeros(*_shape_list(t)), kw)
+
+
+def ones_like(t, **kw):
+    return _kept(ones(*_shape_list(t)), kw)
+
+
+def full_like(t, value, **kw):
+    return _kept(full(_shape_list(t), value), kw)
+
+
 def empty_like(t, **kw):
-    return zeros(*_shape_list(t))
+    return _kept(zeros(*_shape_list(t)), kw)
 
 
 def rand_like(t, **kw):
-    return rand(*_shape_list(t))
+    return _kept(rand(*_shape_list(t)), kw)
 
 
 def randn_like(t, **kw):
-    return randn(*_shape_list(t))
+    return _kept(randn(*_shape_list(t)), kw)
 
 
 def randint_like(t, low, high=None, **kw):
     if high is None:
         low, high = 0, low
-    return randint(low, high, tuple(_shape_list(t)))
+    return _kept(randint(low, high, tuple(_shape_list(t))), kw)
 
 
 def scalar_tensor(value, **kw):
-    return full([], float(value))
+    return _kept(full([], float(value)), kw)
 
 
 def logspace(start, end, steps, base=10.0, **kw):
     """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
-    return pow(full([], float(base)), linspace(start, end, steps))
+    return _kept(pow(full([], float(base)), linspace(start, end, steps)), kw)
 
 
 def meshgrid(*tensors, indexing="ij"):

@@ -61,42 +61,76 @@ def from_numpy(arr):
     return Tensor(arr)
 
 
-def zeros(*shape, dtype=None, requires_grad=False):
+def _np_of(dt):
+    """형에서 numpy 형을 꺼낸다. **이름만 있는 형은 여기서 제 문구로 멈춘다.**
+
+    `hasattr(dt, "np")` 로 물으면 안 된다 — 그 자리가 멈추라고 열어 둔 문이고,
+    `hasattr` 은 그것을 삼키려 든다. 무엇인지 먼저 묻는다.
+    """
+    return dt.np if isinstance(dt, dtype) else _np.dtype(dt)
+
+
+def _made(arr, dt=None, requires_grad=False):
+    """공장 함수가 만든 배열에 **`dtype=` 과 `requires_grad=` 를 적용한다.**
+
+    **이 문이 없어서 공장마다 답이 달랐다.** `zeros` 는 둘 다 들었고 `zeros_like` 는
+    `dtype=` 을 받아 놓고 안 썼으며(값은 맞고 형만 틀리니 값 대조로는 안 걸린다),
+    `rand` 는 `requires_grad=` 를 아예 안 받아 `rand(3, requires_grad=True)` 가
+    `TypeError` 로 멈췄다. **되는 것과 안 되는 것이 섞여 있으면 배우는 사람이 규칙을
+    못 세운다** — 그래서 열넷을 한 문으로 모은다.
+
+    `requires_grad` 쪽이 더 나쁘다. 형이 틀리면 언젠가 눈에 띄지만, 기울기가 안 붙은
+    잎은 **손실이 내려가는 동안 그 파라미터만 조용히 안 움직인다.**
+    """
+    arr = _np.asarray(arr)
+    if dt is not None:
+        arr = arr.astype(_np_of(dt))
+    return Tensor(arr, requires_grad)
+
+
+def zeros(*shape, dtype=None, requires_grad=False, device=None):
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_np.zeros(shape, dtype=(dtype.np if dtype else _DEFAULT_DTYPE)), requires_grad)
+    return _made(_np.zeros(shape, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
 def ones(*shape, dtype=None, requires_grad=False, device=None):
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_np.ones(shape, dtype=(dtype.np if dtype else _DEFAULT_DTYPE)), requires_grad)
+    return _made(_np.ones(shape, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
-def full(shape, value, dtype=None):
-    return Tensor(_np.full(shape, value, dtype=(dtype.np if dtype else _DEFAULT_DTYPE)))
+def full(shape, value, dtype=None, requires_grad=False):
+    return _made(_np.full(shape, value, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
-def zeros_like(t, dtype=None):
-    return Tensor(_np.zeros_like(t.data if isinstance(t, Tensor) else t))
+def zeros_like(t, dtype=None, requires_grad=False):
+    return _made(_np.zeros_like(t.data if isinstance(t, Tensor) else t),
+                 dtype, requires_grad)
 
 
-def ones_like(t, dtype=None):
-    return Tensor(_np.ones_like(t.data if isinstance(t, Tensor) else t))
+def ones_like(t, dtype=None, requires_grad=False):
+    return _made(_np.ones_like(t.data if isinstance(t, Tensor) else t),
+                 dtype, requires_grad)
 
 
-def full_like(t, value):
-    return Tensor(_np.full_like(t.data, value))
+def full_like(t, value, dtype=None, requires_grad=False):
+    return _made(_np.full_like(t.data, value), dtype, requires_grad)
 
 
-def arange(*args, dtype=None):
-    return Tensor(_np.arange(*args, dtype=(dtype.np if dtype else None)))
+def arange(*args, dtype=None, requires_grad=False):
+    # **여기만 기본 형을 안 정한다** — numpy 가 인자에서 고르는 것이 torch 와 같다
+    # (정수만 넣으면 int64, 하나라도 실수면 실수). `_made` 에 맡기면 그 규칙이 깨진다.
+    return _made(_np.arange(*args, dtype=(dtype.np if dtype else None)),
+                 requires_grad=requires_grad)
 
 
-def linspace(start, end, steps):
-    return Tensor(_np.linspace(start, end, steps, dtype=_DEFAULT_DTYPE))
+def linspace(start, end, steps, dtype=None, requires_grad=False):
+    return _made(_np.linspace(start, end, steps, dtype=_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
-def eye(n):
-    return Tensor(_np.eye(n, dtype=_DEFAULT_DTYPE))
+def eye(n, m=None, dtype=None, requires_grad=False):
+    return _made(_np.eye(n, n if m is None else m, dtype=_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 _rng = _np.random.default_rng(0)
@@ -181,9 +215,9 @@ def randn(*shape, requires_grad=False):
     return Tensor(_rng.standard_normal(shape).astype(_DEFAULT_DTYPE), requires_grad)
 
 
-def rand(*shape):
+def rand(*shape, dtype=None, requires_grad=False, device=None):
     shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
-    return Tensor(_rng.random(shape).astype(_DEFAULT_DTYPE))
+    return _made(_rng.random(shape).astype(_DEFAULT_DTYPE), dtype, requires_grad)
 
 
 def randint(low, high, shape):
@@ -1839,32 +1873,34 @@ row_stack = vstack
 
 # ── 이름만이 아니라 **계산이 없던** 것들 ───────────────────────────────────
 
-def empty_like(t, **kw):
+def empty_like(t, dtype=None, requires_grad=False, **kw):
     """모양만 빌린다. 값은 정하지 않는다 — torch 도 그렇다."""
-    return zeros(*_wrap(t).data.shape)
+    return _made(_np.zeros(_wrap(t).data.shape, dtype=_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
-def rand_like(t, **kw):
-    return rand(*_wrap(t).data.shape)
+def rand_like(t, dtype=None, requires_grad=False, **kw):
+    return _made(rand(*_wrap(t).data.shape).data, dtype, requires_grad)
 
 
-def randn_like(t, **kw):
-    return randn(*_wrap(t).data.shape)
+def randn_like(t, dtype=None, requires_grad=False, **kw):
+    return _made(randn(*_wrap(t).data.shape).data, dtype, requires_grad)
 
 
-def randint_like(t, low, high=None, **kw):
+def randint_like(t, low, high=None, dtype=None, requires_grad=False, **kw):
     if high is None:
         low, high = 0, low
-    return randint(low, high, _wrap(t).data.shape)
+    return _made(randint(low, high, _wrap(t).data.shape).data, dtype, requires_grad)
 
 
-def scalar_tensor(value, **kw):
-    return tensor(_np.asarray(value, dtype=_DEFAULT_DTYPE))
+def scalar_tensor(value, dtype=None, requires_grad=False, **kw):
+    return _made(_np.asarray(value, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
-def logspace(start, end, steps, base=10.0, **kw):
+def logspace(start, end, steps, base=10.0, dtype=None, requires_grad=False, **kw):
     """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
-    return tensor((base ** _np.linspace(start, end, steps)).astype(_DEFAULT_DTYPE))
+    return _made((base ** _np.linspace(start, end, steps)).astype(_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 def meshgrid(*tensors, indexing="ij"):
@@ -3477,8 +3513,8 @@ def einsum(equation, *operands):
     return ops[0]._make(out, tuple(ops), back, "EinsumBackward0")
 
 
-def empty(*shape, dtype=None):
-    return zeros(*shape, dtype=dtype)
+def empty(*shape, dtype=None, requires_grad=False, device=None):
+    return zeros(*shape, dtype=dtype, requires_grad=requires_grad)
 
 
 
@@ -7620,7 +7656,7 @@ def frombuffer(buffer, dtype=_float32, count=-1, offset=0, **kw):
                                  offset=offset).copy())
 
 
-def range_top(start, end=None, step=1, **kw):
+def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
     """**끝을 포함한다** — `arange` 는 뺀다(실측: `range(0, 4)` 가 다섯 개다).
 
     torch 가 폐기 예정으로 두었지만 옛 교재에 남아 있고, `arange` 와 한 칸 다른 것이
@@ -7633,8 +7669,8 @@ def range_top(start, end=None, step=1, **kw):
     """
     if end is None:
         start, end = 0, start
-    return Tensor(_np.arange(start, end + step / 2.0, step,
-                             dtype=_DEFAULT_DTYPE))
+    return _made(_np.arange(start, end + step / 2.0, step, dtype=_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 def empty_strided(size, stride, **kw):

@@ -36,7 +36,8 @@ from ._base import (
     BrowserTorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
     _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
-    int32, long, set_printoptions,
+    bfloat16, chalf, complex32, float16, half, int16, int32, long,
+    set_printoptions, short,
     # 복소수의 형 이름. `complex128`·`cdouble` 은 **이름만** 있다 — 만들려 하면
     # `Tensor.__init__` 의 목문이 멈춘다.
     cdouble, cfloat, complex128, complex64,
@@ -297,7 +298,11 @@ for _name in ("conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
 float = float32
 double = float64
 bool = bool_
+# 아래 넷은 가리키는 형 자체가 없다 — 이름만 두고 쓰려 하면 멈춘다.
 int = int32
+half = float16
+short = int16
+chalf = complex32
 
 
 def _as_function(name):

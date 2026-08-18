@@ -910,10 +910,11 @@ export class Tensor implements Node<Tensor> {
    * 단위 행렬. **CPU 에서 만들어 올린다** — 만드는 일은 한 번뿐이고, 이걸 위해
    * 셰이더를 하나 더 굽는 것은 얻는 것보다 비싸다.
    */
-  static eye(n: number): Tensor {
-    const data = new Float32Array(n * n);
-    for (let i = 0; i < n; i++) data[i * n + i] = 1;
-    return Tensor.from(data, [n, n]);
+  /** 단위행렬. **정사각만이 아니다** — torch 의 `eye(n, m)` 은 직사각을 만든다. */
+  static eye(n: number, m: number = n): Tensor {
+    const data = new Float32Array(n * m);
+    for (let i = 0; i < Math.min(n, m); i++) data[i * m + i] = 1;
+    return Tensor.from(data, [n, m]);
   }
 
   /** `0` 부터 `n-1` 까지. */

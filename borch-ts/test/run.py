@@ -194,11 +194,11 @@ def run(headed=False, verbose=False):
 NOT_PORTED = {
     # 104 → 103. `dtype::없는이름::` 이 물던 이름을 `narrow_copy`·`unsafe_chunk` 로
     # 옮겼다 — 앞의 것은 torch 가 실제로 답해서 "없는 이름" 이 아니었다.
-    # 103 → 111. 형 별칭 다섯(`dtype=torch.float` 꼴)과 공장 함수가 `dtype=`·
-    # `requires_grad=` 를 실제로 쓰는지 묻는 셋. **파이썬 쪽 이야기다** — borch.ts 는
-    # 형을 문자열로 받으므로 `torch.float` 이라는 이름 자체가 없고, 공장도
-    # `Tensor.zeros(shape)` 라 형을 인자로 안 받는다.
-    "dtype::": (111, "아직 — 형 보존은 borch.ts 도 지켜야 한다"),
+    # 103 → 111 → 147. 형 별칭과 공장 열넷이 `dtype=`·`requires_grad=` 를 실제로
+    # 듣는지 묻는 것들. **파이썬 쪽 이야기다** — borch.ts 는 형을 문자열로 받으므로
+    # `torch.float` 이라는 이름 자체가 없고, 공장도 `Tensor.zeros(shape)` 라 형을
+    # 인자로 안 받는다. 기울기도 저쪽은 `requiresGrad()` 를 따로 부른다.
+    "dtype::": (147, "아직 — 형 보존은 borch.ts 도 지켜야 한다"),
     # 이 수가 82 에서 88 로 뛰는 것을 이 검사가 **붙인 날 잡았다** —
     # `x.real`·`x.device` 를 속성으로 바꾼 묶음이 케이스를 여섯 늘렸다.
     # 88 → 116. 술어 스무 개와 짝 없는 제자리 판 여덟을 넣었다. 둘 다 **파이썬

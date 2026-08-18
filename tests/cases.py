@@ -9685,6 +9685,62 @@ def dtype_cases(inp=None):
     cases.append(("dtype::별칭::zeros(requires_grad=True)",
                   lambda L: str(L.zeros(2, requires_grad=True).requires_grad)))
 
+    # ── 공장 열넷이 **같은 두 인자**를 듣는가 ────────────────────────────
+    #
+    # 위를 못 박고 나서 전수로 쟀더니 공장마다 답이 달랐다. `zeros` 는 둘 다 들었고,
+    # `zeros_like` 는 `dtype=` 을 **받아 놓고 안 썼으며**(값은 맞고 형만 틀리다),
+    # `rand` 는 `requires_grad=` 를 아예 안 받아 `rand(3, requires_grad=True)` 가
+    # 멈췄다. **되는 것과 안 되는 것이 섞여 있으면 배우는 사람이 규칙을 못 세운다.**
+    #
+    # `requires_grad` 쪽이 더 나쁘다. 형이 틀리면 언젠가 눈에 띄지만, 기울기가 안 붙은
+    # 잎은 **손실이 내려가는 동안 그 파라미터만 조용히 안 움직인다** — 오류가 없다.
+    _like = np.array([1.0, 2.0], dtype=np.float32)
+    _factories = (
+        ("zeros", lambda L, k: L.zeros(2, **k)),
+        ("ones", lambda L, k: L.ones(2, **k)),
+        ("empty", lambda L, k: L.empty(2, **k)),
+        ("full", lambda L, k: L.full((2,), 3.0, **k)),
+        ("eye", lambda L, k: L.eye(2, **k)),
+        # **정수 텐서는 기울기를 못 받는다**(torch 가 거절한다). `arange(4)` 는
+        # int64 라 실수로 물어야 한다 — 형과 기울기를 한 입력으로 묻는 값이다.
+        ("arange", lambda L, k: L.arange(4.0, **k)),
+        ("linspace", lambda L, k: L.linspace(0.0, 1.0, 3, **k)),
+        ("logspace", lambda L, k: L.logspace(0.0, 1.0, 3, **k)),
+        ("scalar_tensor", lambda L, k: L.scalar_tensor(1.0, **k)),
+        ("zeros_like", lambda L, k: L.zeros_like(L.tensor(_like), **k)),
+        ("ones_like", lambda L, k: L.ones_like(L.tensor(_like), **k)),
+        ("empty_like", lambda L, k: L.empty_like(L.tensor(_like), **k)),
+        ("full_like", lambda L, k: L.full_like(L.tensor(_like), 2.0, **k)),
+        # **`randn_like` 는 형을 못 묻는다.** 정규분포는 정수 칸에 못 뽑아서(torch 가
+        # 거절한다) 남는 것이 float64 인데 브라우저 쪽에는 배정도가 없다 — 셋이
+        # 갈리는 자리라 값으로 굳힐 수 없다. 기울기만 묻는다.
+        ("randn_like", lambda L, k: L.randn_like(L.tensor(_like), **k), None),
+    )
+    for _spec in _factories:
+        _name, _call = _spec[0], _spec[1]
+        _dt = _spec[2] if len(_spec) > 2 else "int64"
+        if _dt is not None:
+            cases.append((f"dtype::공장::{_name}(dtype={_dt})",
+                          lambda L, f=_call, d=_dt: str(f(L, {"dtype": getattr(L, d)}).dtype)))
+        cases.append((f"dtype::공장::{_name}(requires_grad=True)",
+                      lambda L, f=_call: str(f(L, {"requires_grad": True}).requires_grad)))
+
+    # **모양도 같이 묻는다.** 형만 물으면 `eye(n, m)` 의 둘째 인자가 없어도 통과한다.
+    cases.append(("dtype::공장::eye(2, 3) 은 직사각이다",
+                  lambda L: str(tuple(L.eye(2, 3).shape))))
+
+    # ── 이름은 있고 **칸이 없는** 형 넷 ──────────────────────────────────
+    #
+    # `torch.half`·`bfloat16`·`short`·`chalf` 는 dtype 인데 우리 쪽에서는 Tensor
+    # 메서드에서 파생된 **함수**였다. `dtype=torch.half` 가
+    # `'function' object has no attribute 'np'` 로 멈췄고 그건 오타와 같은 문구다.
+    # 형 자체는 없으므로 별칭이 아니라 **가리키는 것을 말하고 쓰면 멈추는** 이름이다.
+    for _name in ("half", "bfloat16", "short", "chalf"):
+        cases.append((f"dtype::별칭::{_name} 이 가리키는 형",
+                      lambda L, n=_name: str(getattr(L, n))))
+        we_refuse(f"dtype={_name}",
+                  lambda L, n=_name: L.zeros(2, dtype=getattr(L, n)), group="별칭")
+
     # ── 없는 이름은 `hasattr` 에도 없어야 한다 ────────────────────────────
     #
     # 위의 `we_refuse` 가 `hasattr` 로 못 갈랐던 이유가 그대로 **사용자의 결함**이다.

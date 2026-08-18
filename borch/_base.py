@@ -134,6 +134,16 @@ class _AbsentDtype(dtype):
 # 모았으므로 int32 는 없다. 그래도 이름은 둔다: 교재가 `dtype=torch.int` 를 쓰고,
 # 그때 "없다" 와 "오타다" 는 다른 말이어야 한다.
 int32 = _AbsentDtype("int32", "int64")
+# 같은 까닭으로 이름만 두는 나머지. **반정밀은 WGSL 에 없고**(f16 확장은 기기마다
+# 다르다) 좁은 정수는 int64 하나로 모았다. 이름을 안 두면 `dtype=torch.half` 가
+# `'function' object has no attribute 'np'` 로 멈추는데, 그건 오타와 같은 문구다.
+float16 = _AbsentDtype("float16", "float32")
+bfloat16 = _AbsentDtype("bfloat16", "float32")
+int16 = _AbsentDtype("int16", "int64")
+complex32 = _AbsentDtype("complex32", "complex64")
+half = float16
+short = int16
+chalf = complex32
 
 _NP_TO_DTYPE = {_np.dtype("float32"): float32, _np.dtype("float64"): float64,
                 _np.dtype("int64"): int64, _np.dtype("bool"): bool_,
