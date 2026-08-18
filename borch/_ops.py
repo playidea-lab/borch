@@ -10,7 +10,8 @@ from ._tensor import (
 )
 from ._base import (
     _DEFAULT_DTYPE, _TYPE_NAMES, _like_torch, _math, _needs_float, _np, _refuses_bool,
-    _refuses_nonfloat_kernel, _resolve, _unsupported, Size, dtype,
+    _refuses_nonfloat_kernel, _resolve, _unsupported, Size, device as _device,
+    dtype,
 )
 # **이름을 바꿔 들여온다.** `float32` 같은 이름을 이 파일 전역에 두면 아래에서
 # 그 이름을 쓰는 함수와 부딪힌다 — `bool` 을 그렇게 가려서 한 번 겪었다.
@@ -7912,3 +7913,20 @@ def _bernoulli_(self, p=0.5, generator=None):
     return self
 
 Tensor.bernoulli_ = _bernoulli_
+
+
+# ── torch 가 **속성**으로 주는 셋 ────────────────────────────────────────────
+#
+# `x.device`·`x.real`·`x.imag` 는 torch 에서 괄호가 없다. 우리는 셋 다 함수로만
+# 있었고, 그중 둘은 `_as_method` 가 **메서드로** 붙여 놓았다 — 그러면 `x.real` 이
+# 텐서가 아니라 **묶인 메서드 객체**를 돌려준다. 예외도 안 나고, `if x.imag:` 같은
+# 줄이 참으로 지나간다. torch 는 실수 텐서의 `imag` 에서 멈춘다.
+#
+# `x.device` 는 아예 없었다. `torch.device(...)` 라는 이름은 있는데 텐서 쪽 속성이
+# 없어서, **`print(x.device)` 나 `if x.device.type == "cuda"` 가 거기서 멈춘다** —
+# 교재가 장치를 확인할 때 치는 줄이다.
+Tensor.device = property(
+    lambda self: _device("cpu"),
+    doc="언제나 `cpu` 다 — numpy 위에 있고 다른 장치가 없다.")
+Tensor.real = property(real, doc="실수부. 실수 텐서에서는 자기 자신이다.")
+Tensor.imag = property(imag, doc="허수부. **실수 텐서에서는 멈춘다** — torch 가 그렇다.")

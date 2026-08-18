@@ -1068,6 +1068,10 @@ _INPLACE_FROM_PAIR = (
     "bitwise_or_", "bitwise_right_shift_", "bitwise_xor_", "clamp_max_",
     "clamp_min_", "digamma_", "divide_", "erfinv_",
     "floor_divide_", "fmod_", "gcd_", "greater_", "greater_equal_", "i0_",
+    # **셋이 빠져 있었다.** 마흔한 개를 재놓고 목록을 손으로 옮겨 적으면서
+    # `index_reduce_`·`scatter_reduce_` 를 흘렸고, `resize_as_` 는 모듈에만 있던
+    # 이름을 정리하다 같이 빠졌다 — **잰 것과 적은 것이 갈리는** 자리다.
+    "index_reduce_", "scatter_reduce_",
     "lcm_", "lerp_", "less_", "less_equal_", "lgamma_", "logical_and_",
     "logical_not_", "logical_or_", "logical_xor_", "multiply_", "mvlgamma_",
     "nan_to_num_", "nextafter_", "not_equal_", "put_", "remainder_", "renorm_",
@@ -1153,6 +1157,10 @@ del _dname, _shown
 # 진짜 torch 에서 깨진다 — **관대한 것도 갈리는 것이다.**
 _METHOD_FROM_MODULE = (
     "arctan2", "igamma", "igammac", "geqrf",
+    # **짝이 없는 밑줄 이름.** `resize_as_` 는 모듈에만 있고 `resize_as` 라는 짝이
+    # 아예 없어서, 파생표에 넣으면 없는 이름을 찾다가 `AttributeError` 로 멈춘다 —
+    # 표에 이름을 적는 것과 그 표가 그 이름을 만들 수 있는 것은 다른 일이다.
+    "resize_as_",
 )
 
 

@@ -8092,6 +8092,58 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"분포::거절::{label}",
                       lambda L, c=call, f=fragment: refuses_arg(L, c, f)))
 
+    # ── torch 가 **속성**으로 주는 것들 ──────────────────────────────────
+    #
+    # 괄호가 없다. 함수로만 두면 `x.real` 이 텐서가 아니라 **묶인 메서드**를 돌려주고
+    # 예외도 안 난다 — `if x.imag:` 가 참으로 지나간다. 셋 다 그 상태였다.
+    #
+    # `x.device` 는 **문자열이 아니라 객체**여야 한다. `x.device.type` 이 교재가
+    # 장치를 확인할 때 치는 줄이다. 값은 구현마다 다르므로(`cpu` 대 `webgpu`)
+    # 여기서는 **꼴만** 묻는다.
+    cases.append((INPLACE_PREFIX + "속성::x.device 는 객체다",
+                  lambda L: f"{type(L.tensor(grid2).device).__name__} "
+                            f"{isinstance(L.tensor(grid2).device.type, str)}"))
+    cases.append((INPLACE_PREFIX + "속성::x.real 은 실수부다",
+                  lambda L: L.tensor(grid2).real))
+
+    def imag_refuses(L):
+        try:
+            L.tensor(grid2).imag
+        except Exception as exc:                                # noqa: BLE001
+            return "멈췄다" if "non-complex" in str(exc) else f"다른 문구 <{exc}>"
+        return "안 던졌다"
+
+    cases.append((INPLACE_PREFIX + "속성::x.imag 는 실수에서 멈춘다", imag_refuses))
+
+    # 짝이 없거나 잰 뒤 목록에서 흘린 셋. `resize_as_` 는 짝(`resize_as`)이 아예 없어
+    # 파생표로는 못 만든다 — 표에 이름을 적는 것과 그 표가 그것을 만들 수 있는 것은
+    # 다른 일이다.
+    line2 = np.array([1.5, -2.5], dtype=np.float32)
+
+    def reduced(name, call):
+        def run(L, f=call):
+            x = L.tensor(line2.copy())
+            f(L, x)
+            return x
+        cases.append((INPLACE_PREFIX + f"짝없이::{name}", run))
+
+    reduced("index_reduce_",
+            lambda L, x: x.index_reduce_(0, L.tensor(np.array([0, 1])),
+                                         L.tensor(np.full(2, 3.0, dtype=np.float32)),
+                                         "prod"))
+    reduced("scatter_reduce_",
+            lambda L, x: x.scatter_reduce_(0, L.tensor(np.array([0, 1])),
+                                           L.tensor(np.full(2, 2.0, dtype=np.float32)),
+                                           "sum"))
+
+    def resized(L):
+        x = L.tensor(grid2.copy())
+        got = x.resize_as_(L.tensor(np.zeros((1, 4), dtype=np.float32)))
+        # **제자리여야 한다** — 새 텐서를 돌려주면 이름이 거짓말한다.
+        return f"{tuple(x.shape)} {got is x}"
+
+    cases.append((INPLACE_PREFIX + "짝없이::resize_as_ 는 제자리다", resized))
+
     # 값이 아니라 **참거짓**을 내는 셋. `is_same_size` 는 모양만 본다.
     for label, call in (
         ("is_same_size(같음)",

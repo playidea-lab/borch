@@ -320,6 +320,37 @@ class Tensor:
         del args, kw
         _deprecated_by_torch("solve")
 
+    # ── torch 가 **속성**으로 주는 셋 ──────────────────────────────────────
+    #
+    # 괄호가 없다. 그냥 두면 이 결속의 `__getattr__` 이 **함수 객체**를 돌려주고,
+    # 예외도 안 난다 — `x.real` 이 텐서가 아닌 것이 되고 `if x.imag:` 가 참으로
+    # 지나간다. 코어도 같은 자리에 같은 결함이 있었다.
+    #
+    # `device` 는 **문자열이 아니라 객체**여야 한다. `x.device.type` 이 교재가 장치를
+    # 확인할 때 치는 줄이고, 문자열이면 거기서 멈춘다.
+    @property
+    def device(self):
+        from . import _ops
+        return _ops.device(str(self._h.device))
+
+    @property
+    def real(self):
+        from . import _ops
+        return _ops.real(self)
+
+    @property
+    def imag(self):
+        from . import _ops
+        return _ops.imag(self)
+
+    def resize_as_(self, other):
+        """짝이 없는 밑줄 이름이라 파생표로는 안 만들어진다.
+
+        **제자리다** — 새 텐서를 돌려주면 이름이 거짓말한다.  이
+        모양 변화까지 따라간다( 가 같은 길을 쓴다).
+        """
+        return self._write_back(self.reshape(*[int(v) for v in other.shape]))
+
     def is_same_size(self, other):
         return tuple(self.shape) == tuple(other.shape)
 
