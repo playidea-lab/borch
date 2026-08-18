@@ -466,6 +466,36 @@ def _public(obj):
     return out
 
 
+def _props(obj):
+    """**부를 수 없는 공개 이름** — 속성과 dtype 상수.
+
+    `_public` 은 `callable` 만 센다. 그래서 `x.real`·`x.mT`·`x.is_cuda` 처럼
+    **괄호 없이 쓰는 이름**이 분모에도 분자에도 안 들어간다. 그 상태로 나온
+    "Tensor 표면 100%" 는 *메서드의* 100% 이지 표면의 100% 가 아니다.
+
+    갈라 세는 이유는 두 물음이 다르기 때문이다. 메서드가 없으면 `AttributeError`
+    가 나고, 속성이 없으면 **같은 예외가 나는데 고치는 자리가 다르다** — 앞의 것은
+    함수를 만들고 뒤의 것은 `@property` 를 만든다. 한 수로 합치면 어느 쪽인지
+    안 보인다.
+    """
+    import types as _types
+
+    out = set()
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        thing = getattr(obj, name, None)
+        if callable(thing):
+            continue
+        # **모듈은 이 물음의 대상이 아니다.** `torch.math`·`torch.sys` 는 torch 가
+        # 자기 임포트를 안 숨긴 것뿐이고, `torch.nn.init` 처럼 진짜 하위 자리는
+        # 위의 자리별 표가 따로 본다. 안 거르면 잡음이 신호를 덮는다.
+        if isinstance(thing, _types.ModuleType):
+            continue
+        out.add(name)
+    return out
+
+
 def _look(table, name, full=None):
     """표에서 사유를 찾는다. **자리 붙은 이름 → 이름 → 와일드카드** 순이다.
 
@@ -519,10 +549,33 @@ def _why(space, name):
     return None
 
 
+def props_report():
+    """**괄호 없이 쓰는 이름**만 따로 센다.
+
+    이 파일의 본 계산은 `callable` 만 본다. 그래서 커버리지 표가 "Tensor 표면
+    100%" 라고 말할 때 그것은 **메서드의** 100% 이고, `x.real`·`x.mT`·`x.is_cuda`
+    같은 이름은 분모에도 분자에도 없었다. 없는 줄도 몰랐다는 뜻이다.
+
+    표에 사유를 안 붙인다 — 붙이면 또 "수를 예쁘게 만드는 자리" 가 된다. 여기서는
+    **무엇이 없는지 보이기만** 하고, 판단은 사람이 위의 두 표에 적는다.
+    """
+    for space, theirs, ours in _spaces():
+        a, b = _props(theirs), _props(ours)
+        # 위의 두 표가 이미 설명한 것은 여기서 다시 안 묻는다 — 자리째 거절한
+        # 이름 공간, API 가 아닌 것, 안 하기로 한 것. 남는 것이 곧 물음이다.
+        gap = sorted(n for n in a - b if _why(space, n) is None)
+        print(f"\n{space} — 부를 수 없는 공개 이름 {len(a)}개 중 {len(a & b)}개 있다")
+        if gap:
+            print(f"  사유 없이 없는 것 {len(gap)}: " + ", ".join(gap))
+    return 0
+
+
 def main(argv):
     show = None
     if "--show" in argv:
         show = argv[argv.index("--show") + 1]
+    if "--props" in argv:
+        return props_report()
     extra = "--extra" in argv
 
     total_missing = total_have = 0

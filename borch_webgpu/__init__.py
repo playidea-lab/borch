@@ -202,3 +202,16 @@ cfloat = complex64
 # borch.ts 가 `float64` 자체를 안 들어서 그 승격이 일어날 길이 없다 — 없는 문을
 # 세워 두면 다음 사람이 그 문이 무언가를 막고 있다고 읽는다.
 
+# ── torch 최상위의 수 상수 다섯 ────────────────────────────────────────────
+#
+# 코어(`borch._base`)와 **같은 값**이다. 이쪽은 borch.ts 를 안 거친다 — 파이썬
+# 값이라 GPU 에 물어볼 것이 없고, 물으면 저쪽에 그 이름이 없어서 `AttributeError`
+# 가 난다(실제로 그렇게 났다).
+#
+# 커버리지 표가 이 다섯을 못 보고 있었다. `tests/torch_gap.py` 가 `callable` 인
+# 이름만 세는데 이것들은 값이라 분모에도 분자에도 안 들어갔다.
+from math import e, inf, nan, pi                        # noqa: E402,F401
+
+# torch 도 그냥 `None` 이다 — `x[:, None]` 과 같은 뜻이라는 표시다.
+newaxis = None
+

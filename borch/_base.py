@@ -4,11 +4,6 @@ import math as _math
 
 import numpy as _np
 
-
-import math as _math
-
-import numpy as _np
-
 __all__ = ["Tensor", "tensor", "nn", "optim", "no_grad"]
 
 _DEFAULT_DTYPE = _np.float32
@@ -108,6 +103,23 @@ cfloat = complex64
 # 무엇을 만들려다 멈췄는지 말할 수 있어야 한다.
 complex128 = dtype("complex128", _np.complex128)
 cdouble = complex128
+
+# ── torch 가 최상위에 두는 수 상수 다섯 ────────────────────────────────────
+#
+# **커버리지 표가 구조적으로 못 보던 자리다.** `tests/torch_gap.py` 는 `callable`
+# 인 이름만 세는데 이 다섯은 부를 수 있는 것이 아니라 **값**이다. 그래서 분모에도
+# 분자에도 안 들어갔고, "torch 79% · 검토 대상 0" 이라는 수가 이것들이 없는 채로
+# 나왔다. 세는 잣대가 못 보는 자리는 아무리 세도 안 보인다.
+#
+# 다 교재가 실제로 쓰는 이름이다 — `torch.clamp(x, min=-torch.inf)`,
+# `x[:, torch.newaxis]`, `torch.pi`. numpy 의 같은 이름을 그대로 가리키므로
+# 값이 갈릴 자리도 없다.
+e = _math.e
+pi = _math.pi
+inf = _math.inf
+nan = _math.nan
+# torch 도 이것이 그냥 `None` 이다 — `x[:, None]` 과 같은 뜻이라는 표시다.
+newaxis = None
 
 
 class _AbsentDtype(dtype):

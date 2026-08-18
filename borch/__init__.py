@@ -41,6 +41,8 @@ from ._base import (
     # 복소수의 형 이름. `complex128`·`cdouble` 은 **이름만** 있다 — 만들려 하면
     # `Tensor.__init__` 의 목문이 멈춘다.
     cdouble, cfloat, complex128, complex64,
+    # 최상위 수 상수. **`callable` 만 세는 커버리지 표가 못 보던 다섯이다.**
+    e, inf, nan, newaxis, pi,
 )
 from ._tensor import (
     Tensor, _CATEGORY, _DEFAULT_BY_CATEGORY, _DataDescriptor, _GradMode, _MinMax, _RANK,

@@ -232,6 +232,11 @@ NOT_PORTED = {
     # 손실 둘은 거절을 묻는 케이스인데, TypeScript 에서는 없는 인자를 주는 것이
     # 실행 중 거절이 아니라 **컴파일 오류**라 물을 자리가 없다.
     "container::": (5, "파이썬 — InstanceNorm 층은 결속이 세우고, 거절은 파이썬 인자다"),
+    # `torch.pi`·`inf`·`nan`·`newaxis` 는 **파이썬 최상위의 값**이다. borch.ts 는
+    # 모듈이 아니라 클래스 묶음이고, JS 에는 `Math.PI`·`Infinity`·`null` 이 이미
+    # 있어서 같은 이름을 다시 낼 자리가 없다 — `x[:, None]` 도 저쪽에서는
+    # `unsqueeze(1)` 이라 색인 문법 자체가 파이썬 쪽 이야기다.
+    "const::": (6, "파이썬 — 최상위 값과 색인 문법. JS 에는 그 자리가 없다"),
     "index::": (5, "**없음** — borch.ts 에 `searchsorted`·`bucketize` 가 없다"),
     # 4 → 10. "이어서 학습하기" 여섯이 늘었다. **저것들은 borch.ts 를 이미 밟는다** —
     # 결속의 옵티마이저·스케줄러가 저쪽 것을 그대로 부르므로 `--lib borch_webgpu`

@@ -2453,6 +2453,61 @@ def top_linalg_cases(inp=None):
     return cases
 
 
+CONST_PREFIX = "const::"
+
+
+def constant_cases(inp=None):
+    """torch 가 최상위에 두는 **수 상수**. `torch.pi`·`inf`·`nan`·`e`·`newaxis`.
+
+    ## 왜 이 자리가 늦게 생겼는가
+
+    `tests/torch_gap.py` 는 표면을 재는 도구인데 **`callable` 인 이름만 센다.**
+    이 다섯은 부르는 것이 아니라 값이라 분모에도 분자에도 안 들어갔고, 그래서
+    "torch 691 개 중 547 개 · 검토 대상 0" 이라는 수가 **이것들이 통째로 없는 채로**
+    나왔다. 세는 잣대가 못 보는 자리는 아무리 세도 안 보인다.
+
+    도구에 `--props` 를 붙여 부를 수 없는 이름을 따로 세고 나서야 드러났다.
+
+    ## 교재가 쓰는 이름들이다
+
+        torch.clamp(x, min=-torch.inf)      x[:, torch.newaxis]      torch.pi
+
+    값은 numpy 의 같은 상수를 그대로 가리키므로 갈릴 자리가 없다. 그래도 묻는
+    이유는 **있는가**가 물음이기 때문이다 — 없으면 `AttributeError` 이고, 그것은
+    오타를 냈을 때와 같은 화면이다.
+    """
+    inp = golden_inputs() if inp is None else inp
+    cases = []
+
+    # 하네스는 텐서나 글자를 받는다 — 맨 `float` 은 `detach` 가 없어 거절된다.
+    cases.append((CONST_PREFIX + "pi", lambda L: f"{L.pi:.12f}"))
+    cases.append((CONST_PREFIX + "e", lambda L: f"{L.e:.12f}"))
+    # `inf`·`nan` 은 수로 굳히면 비교가 흐려진다 — 글자로 묻는다.
+    cases.append((CONST_PREFIX + "inf/nan/newaxis",
+                  lambda L: f"{L.inf} {-L.inf} {L.nan} {L.newaxis}"))
+
+    # **쓰이는 자리까지 묻는다.** 이름만 있고 쓸 수 없으면 있는 것이 아니다.
+    cases.append((CONST_PREFIX + "newaxis 가 축을 늘린다",
+                  lambda L: str(tuple(L.tensor(inp["train_x"])[:, L.newaxis].shape))))
+    cases.append((CONST_PREFIX + "inf 가 비교에 쓰인다",
+                  lambda L: (L.tensor(inp["train_x"]) < L.inf).sum()))
+
+    # **이름이 있다고 어디서나 쓰이는 것은 아니다.**
+    #
+    # `clamp(min=-inf)` 는 코어에서는 그냥 된다(numpy 다). 브라우저 쪽은 그 값을
+    # 셰이더의 **상수로 구워야** 하는데 WGSL 이 무한대·NaN 리터럴을 금지한다 —
+    # 하드웨어가 아니라 언어의 한계라 우회할 자리가 없다. 그래서 거절이 정답이고,
+    # 값을 물으면 영원히 갈린다.
+    #
+    # 이 케이스를 값으로 두었다가 결속에서 빨간 줄을 받고 알았다. 상수 다섯을
+    # 넣으면서 "이제 torch 처럼 쓸 수 있다" 로 넘어갈 뻔한 자리다.
+    cases.append((CONST_PREFIX + "-inf 를 상수로 굽는 것은 브라우저가 거절한다",
+                  _as_expected(lambda L: L.clamp(L.tensor(inp["train_x"]),
+                                                 min=-L.inf))))
+
+    return cases
+
+
 CACHE_PREFIX = "cache::"
 
 
@@ -9316,7 +9371,8 @@ def golden_cases(inp=None):
             + module_function_cases(inp) + pool_cases(inp)
             + new_function_cases(inp) + index_cases(inp) + numeric_cases(inp)
             + bit_cases(inp) + shape_index_cases(inp) + blend_cases(inp)
-            + scalar_cache_cases(inp) + top_linalg_cases(inp) + stat_cases(inp)
+            + scalar_cache_cases(inp) + constant_cases(inp)
+            + top_linalg_cases(inp) + stat_cases(inp)
             + make_cases(inp) + complex_cases(inp) + fft_cases(inp)
             + keepdim_cases(inp) + rnn_top_cases(inp) + top_rest_cases(inp)
             + webgpu_cases(inp) + edge_cases(inp))

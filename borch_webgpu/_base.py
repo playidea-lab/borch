@@ -715,6 +715,13 @@ class Tensor:
                 stop = out.shape[axis] if k.stop is None else k.stop
                 out = wrap(out._h.narrow(axis, start, stop - start))
                 axis += 1
+            elif k is None:
+                # **`x[:, None]` 은 축을 끼운다.** `torch.newaxis` 가 바로 이 `None`
+                # 이다. 없으면 아래 정수 갈래로 떨어져 `'<' not supported between
+                # instances of 'NoneType' and 'int'` 가 나는데, 그 문구는 색인이
+                # 하려던 일과 아무 상관이 없어서 원인이 안 보인다.
+                out = wrap(out._h.unsqueeze(axis))
+                axis += 1
             elif isinstance(k, (Tensor, list, tuple)):
                 # `x[[2, 0]]` — 번호 목록으로 고르는 자리. torch 코드가 흔히 쓴다.
                 idx = k if isinstance(k, Tensor) else tensor(list(k), int64_name())
