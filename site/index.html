@@ -1,0 +1,425 @@
+<!doctype html>
+<!--
+  borch explainer page. **English is the default; Korean lives in `ko/`.**
+
+  Serve the repository root and open /site/:
+      python3 site/serve.py          (or python3 -m http.server 8000)
+
+  The hero demo only runs if the build exists — `npm run build:ts`. If it does
+  not, the page says so on screen. It never sits there blank.
+
+  두 언어는 **두 벌의 파일**이다. 문구를 고치면 이 파일과 `ko/index.html` 을 같이
+  고친다 — 코드로 짜맞추면 본문이 HTML 밖으로 나가고, 그러면 자바스크립트가 꺼진
+  브라우저와 링크 미리보기에서 빈 페이지가 된다.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch — Machine Learning, native to the Web</title>
+<meta name="description" content="A PyTorch-like tensor library that runs on WebGPU in the browser. Learn, train and run with nothing to install.">
+<link rel="alternate" hreflang="ko" href="ko/">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="#why">Why</a>
+      <a href="#how">How</a>
+      <a href="#python">Python</a>
+      <a href="#state">What exists</a>
+      <a href="#measured">Measured</a>
+      <a href="playground.html">Playground</a>
+      <a href="ko/" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ── Hero ───────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">PyTorch-like ML · native to the Web</p>
+    <h1>Machine Learning,<br><span class="accent">native to the Web.</span></h1>
+    <p class="sub lead">
+      A PyTorch-like TypeScript runtime on WebGPU. No Python, no server, no install —
+      build tensors and train models <strong>inside this tab</strong>.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn primary" href="playground.html">Try Playground →</a>
+      <a class="btn ghost mono" href="#install">npm install borch</a>
+      <a class="btn ghost" href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+    </div>
+    <p class="install">Zero runtime dependencies · 232KB ES module (uncompressed) · safetensors checkpoints</p>
+
+    <div class="card" style="margin-top:2.4rem">
+      <div class="card-head">
+        <span>hero.js — running here, right now</span>
+        <span class="grow"></span>
+        <span class="badge" id="device-badge"><span class="led"></span><span id="device-text">checking device…</span></span>
+      </div>
+      <div class="demo">
+        <pre><code id="hero-code"></code></pre>
+        <div class="side">
+          <button class="btn primary" id="hero-run">▶ Run</button>
+          <pre class="out" id="hero-out"></pre>
+        </div>
+      </div>
+    </div>
+    <p class="small muted" style="margin-top:.9rem">
+      Pressing Run sends no network request. The computation happens on your GPU and the values stay here.
+    </p>
+  </div>
+</section>
+
+<!-- ── Why ────────────────────────────────────────────────────────── -->
+<section id="why">
+  <div class="wrap">
+    <p class="eyebrow">Why borch</p>
+    <h2>What disappears when the browser is the runtime</h2>
+    <p class="lead">
+      Python ML charges you before you start — virtualenvs, version conflicts, CUDA and cuDNN,
+      and one more server in front if you want it on the web. borch deletes that line.
+    </p>
+
+    <div class="grid c3" style="margin-top:2rem">
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>No Python environment</h3>
+        <p>A browser and TypeScript are the whole setup. Nothing to install means no versions to collide.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>Local-first</h3>
+        <p>Data and computation stay in the user's tab. Nothing is uploaded, so nothing needs permission to be uploaded.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>WebGPU-native</h3>
+        <p>The kernels are hand-written WGSL. No TF.js, no other runtime in between — zero runtime dependencies.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>PyTorch-shaped</h3>
+        <p>Tensor · Autograd · nn.Module · Optimizer. No invented concepts. The five places it differs are listed below.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>Documentation that runs</h3>
+        <p>Every example here actually executes. Examples that are never run rot, and the first user is who finds out.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>A URL is the deployment</h3>
+        <p>Share a playground link and the person who opens it runs the same code on their own GPU, with no install.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── How ────────────────────────────────────────────────────────── -->
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>Four hops become two</h2>
+
+    <div class="flow" style="margin-top:2rem">
+      <div class="flow-row">
+        <span class="flow-tag">Server</span>
+        <span class="node">Browser</span><span class="arrow">→</span>
+        <span class="node">HTTP</span><span class="arrow">→</span>
+        <span class="node">Python API</span><span class="arrow">→</span>
+        <span class="node">PyTorch</span><span class="arrow">→</span>
+        <span class="node">GPU</span>
+      </div>
+      <div class="flow-row now">
+        <span class="flow-tag">borch</span>
+        <span class="node hot">Browser</span><span class="arrow">→</span>
+        <span class="node hot">borch</span><span class="arrow">→</span>
+        <span class="node hot">WebGPU</span><span class="arrow">→</span>
+        <span class="node hot">GPU</span>
+      </div>
+    </div>
+
+    <div class="grid c2" style="margin-top:1.6rem">
+      <div class="tile">
+        <h3>Inside</h3>
+        <p class="small">
+          TypeScript → Tensor/Autograd → operator runtime → hand-written WGSL shaders → the browser's GPU.
+          Nothing else sits in the path, so when something is slow, it is our shader.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>When WebGPU is missing</h3>
+        <p class="small">
+          <strong>It refuses instead of falling back.</strong> The TF.js version that used to live here silently
+          dropped to WebGL when it could not get WebGPU — and for a while we read numbers measured on a CPU path
+          as if they were GPU numbers. Better not to run than to quietly go slow.
+        </p>
+      </div>
+    </div>
+
+    <div class="note-box">
+      <strong>Five places it differs from torch — you meet all of them in the first ten lines.</strong><br>
+      <code>await init()</code> comes first (acquiring the adapter is async) ·
+      reading a value is <code>await t.item()</code> (forward and backward are synchronous) ·
+      a step is wrapped in <code>scope()</code> (JS garbage collection does not release GPU memory in time) ·
+      anything that must survive is marked <code>keepAlive()</code> ·
+      you call a model with <code>model.call(x)</code> (JS cannot call an object).
+    </div>
+  </div>
+</section>
+
+<!-- ── Playground ─────────────────────────────────────────────────── -->
+<section id="playground">
+  <div class="wrap">
+    <p class="eyebrow">Live Playground</p>
+    <h2>Type it, run it, watch the loss come down</h2>
+    <p class="lead">
+      Editor, output, loss curve, and the dispatch count and GPU memory this run held — one screen.
+      The path starts at tensors and ends at a CNN.
+    </p>
+
+    <div class="grid c3" style="margin-top:2rem">
+      <a class="tile" href="playground.html#example=tensor" style="text-decoration:none">
+        <h3>1 · Tensors</h3><p class="small">Make them, add them, multiply them, read them.</p>
+      </a>
+      <a class="tile" href="playground.html#example=autograd" style="text-decoration:none">
+        <h3>2 · Autograd</h3><p class="small">One backward() and gradients flow.</p>
+      </a>
+      <a class="tile" href="playground.html#example=linreg" style="text-decoration:none">
+        <h3>3 · Linear regression</h3><p class="small">y = 3x + 2, recovered in 200 steps.</p>
+      </a>
+      <a class="tile" href="playground.html#example=mlp" style="text-decoration:none">
+        <h3>4 · MLP</h3><p class="small">784 → 128 → 10. The code from the README.</p>
+      </a>
+      <a class="tile" href="playground.html#example=cnn" style="text-decoration:none">
+        <h3>5 · CNN</h3><p class="small">Convolution and pooling on the browser's GPU.</p>
+      </a>
+      <a class="tile" href="playground.html#example=bench" style="text-decoration:none">
+        <h3>6 · Measure</h3><p class="small">What your GPU does with a 512×512 matmul.</p>
+      </a>
+    </div>
+    <p style="margin-top:1.6rem"><a class="btn primary" href="playground.html">Open Playground →</a></p>
+  </div>
+</section>
+
+<!-- ── Python ─────────────────────────────────────────────────────── -->
+<section id="python">
+  <div class="wrap">
+    <p class="eyebrow">Same kernels, Python surface</p>
+    <h2>Run textbook code in the browser by changing one import</h2>
+    <p class="lead">
+      The playground has a Python mode. <code>borch_webgpu</code> on Pyodide calls the
+      <strong>same WGSL kernels</strong>, so the losses match the JavaScript examples digit for digit.
+      Pyodide and numpy are served from this repository — nothing leaves the page.
+    </p>
+
+    <div class="grid c2" style="margin-top:1.8rem">
+      <div class="tile">
+        <h3>How it reads</h3>
+        <pre class="small" style="overflow-x:auto"><code>import borch_webgpu as torch
+
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+crit = torch.nn.MSELoss()
+
+for step in range(201):
+    with torch.scope():          # the one line the browser adds
+        opt.zero_grad()
+        loss = crit(model(x), y)
+        loss.backward()
+        opt.step()</code></pre>
+      </div>
+      <div class="tile">
+        <h3>Why there is no <code>await</code></h3>
+        <p class="small">
+          WebGPU has no synchronous read, yet <code>loss.item()</code> simply returns a value —
+          Pyodide's <code>run_sync</code> (on JSPI) fills that gap. One measured condition applies:
+          the page must enter Python asynchronously. So the async parts of <code>await init()</code>,
+          <code>.call()</code> and reading values all disappear, and the only difference left is
+          <code>scope()</code>.
+        </p>
+        <p class="small">
+          You can also see what happens without that line: in the same training run, held GPU memory
+          goes from <strong>1.0MB to 228.9MB</strong> (measured on this machine).
+        </p>
+      </div>
+    </div>
+
+    <div class="grid c3" style="margin-top:1rem">
+      <a class="tile" href="playground.html#example=py-autograd" style="text-decoration:none">
+        <h3>py · Autograd</h3><p class="small">The gradient of (w - 5)². No await.</p>
+      </a>
+      <a class="tile" href="playground.html#example=py-linreg" style="text-decoration:none">
+        <h3>py · Linear regression</h3><p class="small">A torch training loop as written.</p>
+      </a>
+      <a class="tile" href="playground.html#example=py-cnn" style="text-decoration:none">
+        <h3>py · CNN</h3><p class="small">Convolution, called from Python.</p>
+      </a>
+    </div>
+
+    <p class="small muted" style="margin-top:1rem">
+      The first run spends a few seconds loading Pyodide. After that it starts immediately.
+    </p>
+  </div>
+</section>
+
+<!-- ── What exists ────────────────────────────────────────────────── -->
+<section id="state">
+  <div class="wrap">
+    <p class="eyebrow">What exists · what does not</p>
+    <h2>The long refusal list is the point</h2>
+    <p class="lead">
+      The goal is not "reproduce PyTorch" but <strong>equivalence within the range a curriculum uses</strong>.
+      The table below is the current state, not a plan — what is missing is written as missing.
+    </p>
+
+    <div class="scroll-x" style="margin-top:1.6rem">
+    <table class="data">
+      <thead><tr><th>Piece</th><th>State</th><th>What it is today</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Tensor</strong></td><td><span class="state now">here</span></td>
+            <td>Shape, dtype, device, broadcasting, indexing and views, shared storage</td></tr>
+        <tr><td><strong>WebGPU backend</strong></td><td><span class="state now">here</span></td>
+            <td>Hand-written WGSL kernels. No fallback</td></tr>
+        <tr><td><strong>Autograd</strong></td><td><span class="state now">here</span></td>
+            <td>Reverse-mode. Tested for values and separately for "does the gradient flow"</td></tr>
+        <tr><td><strong>nn.Module</strong></td><td><span class="state now">here</span></td>
+            <td>Linear, Conv1d/2d/3d, normalization, pooling, RNN/LSTM/GRU cells, many losses</td></tr>
+        <tr><td><strong>Optimizer</strong></td><td><span class="state now">here</span></td>
+            <td>SGD, Adam, RMSprop and more, with LR schedulers</td></tr>
+        <tr><td><strong>Playground</strong></td><td><span class="state now">here</span></td>
+            <td>This site. Code, run, output, loss curve, GPU instrumentation</td></tr>
+        <tr><td><strong>Model I/O</strong></td><td><span class="state now">here</span></td>
+            <td>safetensors — the Python borch, numpy and HF tools read the same file</td></tr>
+        <tr><td>Borch Models (@borch/models)</td><td><span class="state soon">planned</span></td>
+            <td>P1 in the PRD. Not here yet — and no pretrained weights either</td></tr>
+        <tr><td>Learn (interactive tutorials)</td><td><span class="state soon">partial</span></td>
+            <td>The eleven playground examples are the start of it</td></tr>
+        <tr><td>Hub (publish and share models)</td><td><span class="state soon">planned</span></td>
+            <td>P2 in the PRD. Sharing today is one URL carrying code</td></tr>
+        <tr><td>WASM fallback</td><td><span class="state soon">planned</span></td>
+            <td>P2 in the PRD. Today, no WebGPU means it refuses</td></tr>
+        <tr><td>CUDA · distributed · mixed precision · torch.compile · pretrained weights</td>
+            <td><span class="state never">never</span></td>
+            <td>Things that cannot exist in a browser, or that you must leave the browser to learn</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── Measured ───────────────────────────────────────────────────── -->
+<section id="measured">
+  <div class="wrap">
+    <p class="eyebrow">Only what was measured</p>
+    <h2>How fast · how correct</h2>
+
+    <h3 style="margin-top:2rem">CIFAR ResNet-18, batch 64 — same machine, same bench</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th></th><th>TF.js version (removed)</th><th>borch.ts</th><th>borch-webgpu</th></tr></thead>
+      <tbody>
+        <tr><td>ms / step</td><td class="num">154.9</td><td class="num"><strong>118.5</strong></td><td class="num">123.4</td></tr>
+        <tr><td>epoch</td><td class="num">2.02 min</td><td class="num"><strong>1.55 min</strong></td><td class="num">1.61 min</td></tr>
+        <tr><td>test accuracy (10 epochs, augmentation on)</td><td class="num">60.4%</td><td class="num"><strong>64.6%</strong></td><td class="num">not measured</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted" style="margin-top:.8rem">
+      The two right-hand columns are <strong>the same kernels</strong> — the 4.9ms gap is the cost of passing
+      through Python (Pyodide) once. The hand-written WGSL beat the TF.js version on the same bench and had no
+      rank limit, which is why that version is gone.
+    </p>
+
+    <h3 style="margin-top:2.6rem">Checked against real PyTorch</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>Tier</th><th>Today</th></tr></thead>
+      <tbody>
+        <tr><td>T1 values and gradients (<code>allclose 1e-5</code>)</td><td class="num"><strong>100%</strong> — 132 generated cases</td></tr>
+        <tr><td>T2 error equivalence</td><td class="num">12/12 — exception types · searchable messages 9/9</td></tr>
+        <tr><td>T3 <code>repr</code> equivalence</td><td class="num">15/15</td></tr>
+        <tr><td>dtype promotion</td><td class="num">112/112</td></tr>
+        <tr><td>shared storage (view · slice)</td><td class="num">13/13</td></tr>
+        <tr><td>common API names</td><td class="num">144/144</td></tr>
+        <tr><td>T4 bit equivalence</td><td class="num muted">explicit non-goal</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted" style="margin-top:.8rem">
+      On top of that, <strong>2945 golden cases</strong> hold all three implementations to the same expected values.
+      Real torch cannot run in a browser, so the expectations are frozen natively and carried in. Golden matches
+      identically on Apple Metal and on NVIDIA — the hand-written WGSL is not one vendor's.
+    </p>
+  </div>
+</section>
+
+<!-- ── The three ──────────────────────────────────────────────────── -->
+<section id="install">
+  <div class="wrap">
+    <p class="eyebrow">Three things share this name</p>
+    <h2>Pick by where you intend to run</h2>
+    <div class="scroll-x" style="margin-top:1.6rem">
+    <table class="data">
+      <thead><tr><th></th><th>On top of</th><th>Runs</th><th>Ceiling</th></tr></thead>
+      <tbody>
+        <tr><td><strong>borch</strong> (PyPI)</td><td>numpy</td><td>anywhere · Pyodide</td><td>MNIST class</td></tr>
+        <tr><td><strong>borch</strong> (npm) — borch.ts</td><td>WGSL directly, zero deps</td><td>browser only</td><td>CIFAR ResNet-18, 1.5 min/epoch</td></tr>
+        <tr><td><strong>borch-webgpu</strong> (Python)</td><td>borch.ts above</td><td>browser only</td><td>the same at 1.6 min/epoch</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="grid c2" style="margin-top:1.6rem">
+      <div class="tile">
+        <h3>TypeScript — what this page uses</h3>
+        <pre class="small" style="overflow-x:auto"><code>npm install borch
+
+import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
+await init();</code></pre>
+      </div>
+      <div class="tile">
+        <h3>Python</h3>
+        <pre class="small" style="overflow-x:auto"><code>uv add ./borch-1.4.0-py3-none-any.whl
+
+import borch as torch          # changing the import is the whole change
+import borch_webgpu as torch   # on the GPU, inside Pyodide</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Final ──────────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap" style="text-align:center">
+    <h2>Build AI where your users already are — in the browser.</h2>
+    <p class="lead" style="margin-inline:auto">
+      No install, no server, no account. One tab is enough.
+    </p>
+    <div class="cta-row" style="justify-content:center">
+      <a class="btn primary" href="playground.html">Open Playground</a>
+      <a class="btn ghost" href="https://github.com/playidea-lab/browsertorch">View GitHub</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    borch — a PyTorch-shaped tensor library running on WebGPU in the browser · Apache-2.0<br>
+    Unrelated to other projects with similar names — minitorch · nanotorch · edutorch.
+  </div>
+</footer>
+
+<script type="module" src="assets/home.js"></script>
+</body>
+</html>

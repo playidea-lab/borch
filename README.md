@@ -35,6 +35,18 @@
 
 아래는 파이썬 쪽 이야기다. TypeScript 쪽은 [borch.ts](#borchts--typescript-와-wgsl) 절에 있다.
 
+## 눈으로 먼저 — 설명 페이지와 플레이그라운드
+
+`site/` 에 정적 페이지 둘이 있다. 히어로의 코드가 그 자리에서 돌고, 플레이그라운드는
+**자바스크립트와 파이썬 둘 다** 받는다 — 같은 WGSL 커널 위에서 손실 값이 자릿수까지 같다.
+
+```bash
+npm run build:ts && npm run site      # http://127.0.0.1:8123/site/
+```
+
+밖으로 나가는 요청이 없다. Pyodide 와 numpy 까지 저장소 안(`vendor/`)에서 온다.
+기본은 영어이고 한국어는 `/site/ko/` 에 있다. 자세한 것은 [site/README.md](site/README.md).
+
 ## 설치
 
 순수 파이썬 휠 하나다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.

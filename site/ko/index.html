@@ -1,0 +1,419 @@
+<!doctype html>
+<!--
+  borch 설명 페이지.
+
+  저장소 루트를 정적 서버에 얹고 /site/ 를 연다:
+      python3 site/serve.py          (또는 python3 -m http.server 8000)
+
+  히어로의 데모가 실제로 돌려면 방출물이 있어야 한다 — `npm run build:ts`.
+  없으면 페이지는 그 사실을 화면에 적는다. 조용히 빈 채로 두지 않는다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch — Machine Learning, native to the Web</title>
+<meta name="description" content="브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리. 설치 없이 배우고, 학습하고, 돌린다.">
+<link rel="alternate" hreflang="en" href="../">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="#why">왜</a>
+      <a href="#how">구조</a>
+      <a href="#python">파이썬</a>
+      <a href="#state">지금 되는 것</a>
+      <a href="#measured">잰 것</a>
+      <a href="playground.html">Playground</a>
+      <a href="../" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ── 히어로 ─────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">PyTorch-like ML · native to the Web</p>
+    <h1>Machine Learning,<br><span class="accent">native to the Web.</span></h1>
+    <p class="sub lead">
+      WebGPU 위에 도는 PyTorch 모양의 TypeScript 런타임.
+      파이썬도, 서버도, 설치도 없이 <strong>이 탭 안에서</strong> 텐서를 만들고 모델을 학습시킨다.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn primary" href="playground.html">Playground 열기 →</a>
+      <a class="btn ghost mono" href="#install">npm install borch</a>
+      <a class="btn ghost" href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+    </div>
+    <p class="install">런타임 의존성 0개 · ES 모듈 232KB(압축 전) · 체크포인트는 safetensors</p>
+
+    <div class="card" style="margin-top:2.4rem">
+      <div class="card-head">
+        <span>hero.js — 이 페이지에서 지금 돈다</span>
+        <span class="grow"></span>
+        <span class="badge" id="device-badge"><span class="led"></span><span id="device-text">장치 확인 중…</span></span>
+      </div>
+      <div class="demo">
+        <pre><code id="hero-code"></code></pre>
+        <div class="side">
+          <button class="btn primary" id="hero-run">▶ Run</button>
+          <pre class="out" id="hero-out"></pre>
+        </div>
+      </div>
+    </div>
+    <p class="small muted" style="margin-top:.9rem">
+      누르는 순간 네트워크로 나가는 요청은 없다. 계산은 당신의 GPU 에서 나고, 값도 여기 머문다.
+    </p>
+  </div>
+</section>
+
+<!-- ── 왜 ─────────────────────────────────────────────────────────── -->
+<section id="why">
+  <div class="wrap">
+    <p class="eyebrow">Why borch</p>
+    <h2>브라우저를 런타임으로 삼으면 사라지는 것들</h2>
+    <p class="lead">
+      파이썬 ML 은 시작하기 전에 값을 치른다 — 가상환경, 버전 충돌, CUDA·cuDNN,
+      그리고 웹에 붙이려면 그 앞에 서버 한 겹. borch 는 그 줄을 지운다.
+    </p>
+
+    <div class="grid c3" style="margin-top:2rem">
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>파이썬 환경이 없다</h3>
+        <p>브라우저와 TypeScript 만으로 시작한다. 설치할 것이 없으니 버전이 충돌할 것도 없다.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>Local-first</h3>
+        <p>데이터도 연산도 사용자의 탭 안에 머문다. 올려 보내지 않으므로 올려 보낼 권한을 물을 일도 없다.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>WebGPU 네이티브</h3>
+        <p>커널을 WGSL 로 직접 썼다. TF.js 도, 다른 런타임도 거치지 않는다 — 런타임 의존성 0개.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>PyTorch 를 닮았다</h3>
+        <p>Tensor · Autograd · nn.Module · Optimizer. 새 개념을 발명하지 않는다. 갈리는 자리는 다섯이고 아래에 적어 두었다.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>문서가 곧 실행이다</h3>
+        <p>여기 있는 예시는 전부 실제로 돈다. 안 돌리는 예시는 썩고, 첫 사용자가 정확히 거기서 막힌다.</p>
+      </div>
+      <div class="tile">
+        <span class="icon">◆</span>
+        <h3>URL 하나가 곧 배포다</h3>
+        <p>플레이그라운드의 공유 링크를 받은 사람은 설치 없이 같은 코드를 자기 GPU 에서 돌린다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 구조 ───────────────────────────────────────────────────────── -->
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>지나는 자리가 넷에서 둘로 준다</h2>
+
+    <div class="flow" style="margin-top:2rem">
+      <div class="flow-row">
+        <span class="flow-tag">서버형</span>
+        <span class="node">Browser</span><span class="arrow">→</span>
+        <span class="node">HTTP</span><span class="arrow">→</span>
+        <span class="node">Python API</span><span class="arrow">→</span>
+        <span class="node">PyTorch</span><span class="arrow">→</span>
+        <span class="node">GPU</span>
+      </div>
+      <div class="flow-row now">
+        <span class="flow-tag">borch</span>
+        <span class="node hot">Browser</span><span class="arrow">→</span>
+        <span class="node hot">borch</span><span class="arrow">→</span>
+        <span class="node hot">WebGPU</span><span class="arrow">→</span>
+        <span class="node hot">GPU</span>
+      </div>
+    </div>
+
+    <div class="grid c2" style="margin-top:1.6rem">
+      <div class="tile">
+        <h3>안에서는</h3>
+        <p class="small">
+          TypeScript 코드 → Tensor/Autograd → 연산자 런타임 → 손으로 쓴 WGSL 셰이더 → 브라우저 GPU.
+          중간에 다른 런타임이 없어서, 느린 자리가 나오면 그것은 우리 셰이더다.
+        </p>
+      </div>
+      <div class="tile">
+        <h3>WebGPU 가 없으면</h3>
+        <p class="small">
+          <strong>폴백하지 않고 거절한다.</strong> 여기 있던 TF.js 판은 WebGPU 를 못 얻으면 WebGL 로 조용히
+          내려갔고, 그 때문에 한동안 CPU 경로에서 잰 수를 GPU 의 것으로 읽었다. 조용히 느려지느니 안 도는 편이 낫다.
+        </p>
+      </div>
+    </div>
+
+    <div class="note-box">
+      <strong>torch 와 갈리는 다섯 자리 — 첫 열 줄에서 전부 만난다.</strong><br>
+      <code>await init()</code> 이 먼저다(어댑터를 잡는 것이 비동기다) ·
+      값을 읽는 것이 <code>await t.item()</code> 이다(순방향·역방향은 동기다) ·
+      한 스텝을 <code>scope()</code> 로 감싼다(JS 의 쓰레기 수집이 GPU 메모리를 제때 안 놓는다) ·
+      살아남아야 하는 텐서는 <code>keepAlive()</code> 로 표시한다 ·
+      모델을 부르는 것은 <code>model.call(x)</code> 다(JS 는 객체를 그냥 못 부른다).
+    </div>
+  </div>
+</section>
+
+<!-- ── 플레이그라운드 ─────────────────────────────────────────────── -->
+<section id="playground">
+  <div class="wrap">
+    <p class="eyebrow">Live Playground</p>
+    <h2>치고, 돌리고, 손실이 내려가는 것을 본다</h2>
+    <p class="lead">
+      코드 편집기 · 출력 · 손실 곡선 · 이 실행이 건 dispatch 수와 쥐고 있는 GPU 메모리가 한 화면에 있다.
+      학습 경로는 텐서에서 시작해 CNN 까지 간다.
+    </p>
+
+    <div class="grid c3" style="margin-top:2rem">
+      <a class="tile" href="playground.html#example=tensor" style="text-decoration:none">
+        <h3>1 · 텐서</h3><p class="small">만들고, 더하고, 곱하고, 읽는다.</p>
+      </a>
+      <a class="tile" href="playground.html#example=autograd" style="text-decoration:none">
+        <h3>2 · Autograd</h3><p class="small">backward() 한 번에 기울기가 흐른다.</p>
+      </a>
+      <a class="tile" href="playground.html#example=linreg" style="text-decoration:none">
+        <h3>3 · 선형회귀</h3><p class="small">y = 3x + 2 를 200 스텝에 찾아낸다.</p>
+      </a>
+      <a class="tile" href="playground.html#example=mlp" style="text-decoration:none">
+        <h3>4 · MLP</h3><p class="small">784 → 128 → 10. README 에 적힌 그 코드.</p>
+      </a>
+      <a class="tile" href="playground.html#example=cnn" style="text-decoration:none">
+        <h3>5 · CNN</h3><p class="small">합성곱·풀링·평탄화가 브라우저 GPU 에서.</p>
+      </a>
+      <a class="tile" href="playground.html#example=bench" style="text-decoration:none">
+        <h3>6 · 재보기</h3><p class="small">이 기계의 GPU 가 512×512 행렬곱에 몇 ms 를 쓰나.</p>
+      </a>
+    </div>
+    <p style="margin-top:1.6rem"><a class="btn primary" href="playground.html">Playground 열기 →</a></p>
+  </div>
+</section>
+
+<!-- ── 파이썬 ─────────────────────────────────────────────────────── -->
+<section id="python">
+  <div class="wrap">
+    <p class="eyebrow">같은 커널, 파이썬 표면</p>
+    <h2>교재 코드를 임포트만 바꿔 브라우저에서 돌린다</h2>
+    <p class="lead">
+      플레이그라운드에는 파이썬 모드가 있다. Pyodide 위의 <code>borch_webgpu</code> 가
+      <strong>같은 WGSL 커널</strong>을 부르므로, 자바스크립트 예시와 손실 값이 자릿수까지 같다.
+      Pyodide 도 numpy 도 이 서버에서 온다 — 밖으로 나가는 요청은 없다.
+    </p>
+
+    <div class="grid c2" style="margin-top:1.8rem">
+      <div class="tile">
+        <h3>이렇게 쓴다</h3>
+        <pre class="small" style="overflow-x:auto"><code>import borch_webgpu as torch
+
+model = torch.nn.Linear(1, 1)
+opt = torch.optim.SGD(model.parameters(), lr=0.1)
+crit = torch.nn.MSELoss()
+
+for step in range(201):
+    with torch.scope():          # 브라우저라서 늘어난 유일한 줄
+        opt.zero_grad()
+        loss = crit(model(x), y)
+        loss.backward()
+        opt.step()</code></pre>
+      </div>
+      <div class="tile">
+        <h3><code>await</code> 이 없는 이유</h3>
+        <p class="small">
+          WebGPU 에 동기 읽기가 없는데도 <code>loss.item()</code> 이 그냥 값을 준다 —
+          Pyodide 의 <code>run_sync</code>(JSPI)가 그 자리를 메운다. 실측된 조건이 하나 있다:
+          페이지가 비동기로 파이썬에 들어가야 한다. 그래서 <code>await init()</code>·
+          <code>.call()</code>·값 읽기의 비동기가 전부 사라지고, 남는 차이는
+          <code>scope()</code> 한 줄뿐이다.
+        </p>
+        <p class="small">
+          그 한 줄을 빼면 어떻게 되는지도 이 페이지에서 볼 수 있다 — 같은 학습에서
+          쥐고 있는 GPU 메모리가 <strong>1.0MB 에서 228.9MB</strong> 로 간다(이 기계에서 잰 것).
+        </p>
+      </div>
+    </div>
+
+    <div class="grid c3" style="margin-top:1rem">
+      <a class="tile" href="playground.html#example=py-autograd" style="text-decoration:none">
+        <h3>py · Autograd</h3><p class="small">(w - 5)² 의 기울기. await 이 없다.</p>
+      </a>
+      <a class="tile" href="playground.html#example=py-linreg" style="text-decoration:none">
+        <h3>py · 선형회귀</h3><p class="small">torch 학습 루프 그대로.</p>
+      </a>
+      <a class="tile" href="playground.html#example=py-cnn" style="text-decoration:none">
+        <h3>py · CNN</h3><p class="small">합성곱까지 파이썬으로 부른다.</p>
+      </a>
+    </div>
+
+    <p class="small muted" style="margin-top:1rem">
+      처음 한 번은 Pyodide 를 올리느라 몇 초 걸린다. 그 뒤로는 바로 돈다.
+    </p>
+  </div>
+</section>
+
+<!-- ── 지금 되는 것 ───────────────────────────────────────────────── -->
+<section id="state">
+  <div class="wrap">
+    <p class="eyebrow">지금 있는 것 · 아직 없는 것</p>
+    <h2>거절 목록이 긴 것이 의도다</h2>
+    <p class="lead">
+      목표는 "PyTorch 재현" 이 아니라 <strong>커리큘럼이 쓰는 범위 안에서의 동등성</strong>이다.
+      아래 표는 계획이 아니라 지금 상태다 — 없는 것은 없다고 적는다.
+    </p>
+
+    <div class="scroll-x" style="margin-top:1.6rem">
+    <table class="data">
+      <thead><tr><th>조각</th><th>상태</th><th>지금 무엇인가</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Tensor</strong></td><td><span class="state now">있다</span></td>
+            <td>모양·dtype·장치, 브로드캐스트, 색인·뷰, 저장소 공유까지</td></tr>
+        <tr><td><strong>WebGPU 백엔드</strong></td><td><span class="state now">있다</span></td>
+            <td>손으로 쓴 WGSL 커널. 폴백 없음</td></tr>
+        <tr><td><strong>Autograd</strong></td><td><span class="state now">있다</span></td>
+            <td>역방향 자동미분. 값뿐 아니라 "기울기가 흐르는가" 도 따로 검사한다</td></tr>
+        <tr><td><strong>nn.Module</strong></td><td><span class="state now">있다</span></td>
+            <td>Linear·Conv1d/2d/3d·정규화·풀링·RNN/LSTM/GRU 셀·손실 여러 종</td></tr>
+        <tr><td><strong>Optimizer</strong></td><td><span class="state now">있다</span></td>
+            <td>SGD·Adam·RMSprop 외 여럿, LR 스케줄러 포함</td></tr>
+        <tr><td><strong>Playground</strong></td><td><span class="state now">있다</span></td>
+            <td>이 페이지. 코드·실행·출력·손실 곡선·GPU 계측</td></tr>
+        <tr><td><strong>모델 I/O</strong></td><td><span class="state now">있다</span></td>
+            <td>safetensors — 파이썬 쪽 borch·numpy·HF 도구가 같은 파일을 읽는다</td></tr>
+        <tr><td>Borch Models (@borch/models)</td><td><span class="state soon">계획</span></td>
+            <td>PRD 의 P1. 지금은 없다 — 사전학습 가중치도 없다</td></tr>
+        <tr><td>Learn (인터랙티브 튜토리얼)</td><td><span class="state soon">일부</span></td>
+            <td>플레이그라운드 예시 여섯이 그 자리의 시작이다</td></tr>
+        <tr><td>Hub (모델 공개·공유)</td><td><span class="state soon">계획</span></td>
+            <td>PRD 의 P2. 지금 있는 공유는 코드가 담긴 URL 하나다</td></tr>
+        <tr><td>WASM 폴백</td><td><span class="state soon">계획</span></td>
+            <td>PRD 의 P2. 지금은 WebGPU 가 없으면 거절한다</td></tr>
+        <tr><td>CUDA · 분산 · 혼합정밀도 · torch.compile · 사전학습 가중치</td>
+            <td><span class="state never">안 한다</span></td>
+            <td>브라우저에 존재할 수 없거나, 그것을 배우려면 브라우저를 벗어나야 하는 것들</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── 잰 것 ──────────────────────────────────────────────────────── -->
+<section id="measured">
+  <div class="wrap">
+    <p class="eyebrow">잰 것만 적는다</p>
+    <h2>얼마나 빠른가 · 얼마나 맞는가</h2>
+
+    <h3 style="margin-top:2rem">CIFAR ResNet-18, 배치 64 — 같은 기계, 같은 벤치</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th></th><th>TF.js 판 (걷어냈다)</th><th>borch.ts</th><th>borch-webgpu</th></tr></thead>
+      <tbody>
+        <tr><td>ms / step</td><td class="num">154.9</td><td class="num"><strong>118.5</strong></td><td class="num">123.4</td></tr>
+        <tr><td>에폭</td><td class="num">2.02분</td><td class="num"><strong>1.55분</strong></td><td class="num">1.61분</td></tr>
+        <tr><td>시험 정확도 (10 에폭, 늘리기 켬)</td><td class="num">60.4%</td><td class="num"><strong>64.6%</strong></td><td class="num">안 쟀다</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted" style="margin-top:.8rem">
+      오른쪽 둘은 <strong>같은 커널</strong>이다 — 차이 4.9ms 가 파이썬(Pyodide)을 한 번 지나는 값이다.
+      직접 쓴 WGSL 이 같은 벤치에서 TF.js 판보다 빨랐고 랭크 한계도 없어서 그쪽을 걷어냈다.
+    </p>
+
+    <h3 style="margin-top:2.6rem">진짜 PyTorch 와 대조한 결과</h3>
+    <div class="scroll-x">
+    <table class="data">
+      <thead><tr><th>등급</th><th>지금</th></tr></thead>
+      <tbody>
+        <tr><td>T1 값·기울기 (<code>allclose 1e-5</code>)</td><td class="num"><strong>100%</strong> — 생성 케이스 132개</td></tr>
+        <tr><td>T2 오류 동등</td><td class="num">12/12 — 예외 종류 · 검색 가능한 메시지 9/9</td></tr>
+        <tr><td>T3 표현(<code>repr</code>) 동등</td><td class="num">15/15</td></tr>
+        <tr><td>dtype 승격</td><td class="num">112/112</td></tr>
+        <tr><td>저장소 공유 (view · slice)</td><td class="num">13/13</td></tr>
+        <tr><td>흔한 API 이름</td><td class="num">144/144</td></tr>
+        <tr><td>T4 비트 동등</td><td class="num muted">명시적 비목표</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted" style="margin-top:.8rem">
+      그 위에 <strong>골든 2945건</strong>이 세 구현을 같은 기대값에 대조한다. 진짜 torch 를 브라우저에
+      넣을 수 없어서, 네이티브에서 굳힌 기대값을 브라우저로 들고 간다. Apple Metal 과 NVIDIA 두 벤더에서
+      골든이 전건 같다 — 손으로 쓴 WGSL 이 한 벤더 전용이 아니라는 뜻이다.
+    </p>
+  </div>
+</section>
+
+<!-- ── 셋 ─────────────────────────────────────────────────────────── -->
+<section id="install">
+  <div class="wrap">
+    <p class="eyebrow">이 이름을 쓰는 셋</p>
+    <h2>어디서 돌릴 것인가에 따라 고른다</h2>
+    <div class="scroll-x" style="margin-top:1.6rem">
+    <table class="data">
+      <thead><tr><th></th><th>무엇 위에</th><th>어디서</th><th>천장</th></tr></thead>
+      <tbody>
+        <tr><td><strong>borch</strong> (PyPI)</td><td>numpy</td><td>어디서나 · Pyodide</td><td>MNIST 급</td></tr>
+        <tr><td><strong>borch</strong> (npm) — borch.ts</td><td>WGSL 직접, 의존성 0</td><td>브라우저 안에서만</td><td>CIFAR ResNet-18 에폭 1.5분</td></tr>
+        <tr><td><strong>borch-webgpu</strong> (파이썬)</td><td>위의 borch.ts</td><td>브라우저 안에서만</td><td>같은 것이 에폭 1.6분</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="grid c2" style="margin-top:1.6rem">
+      <div class="tile">
+        <h3>TypeScript 쪽 — 이 페이지가 쓰는 것</h3>
+        <pre class="small" style="overflow-x:auto"><code>npm install borch
+
+import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
+await init();</code></pre>
+      </div>
+      <div class="tile">
+        <h3>파이썬 쪽</h3>
+        <pre class="small" style="overflow-x:auto"><code>uv add ./borch-1.4.0-py3-none-any.whl
+
+import borch as torch          # 임포트만 바꾸면 된다
+import borch_webgpu as torch   # Pyodide 안에서 GPU 로</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 마지막 ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap" style="text-align:center">
+    <h2>Build AI where your users already are — in the browser.</h2>
+    <p class="lead" style="margin-inline:auto">
+      설치도, 서버도, 계정도 없다. 탭 하나면 된다.
+    </p>
+    <div class="cta-row" style="justify-content:center">
+      <a class="btn primary" href="playground.html">Open Playground</a>
+      <a class="btn ghost" href="https://github.com/playidea-lab/browsertorch">View GitHub</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리 · Apache-2.0<br>
+    이름이 비슷한 다른 프로젝트들과 무관하다 — minitorch · nanotorch · edutorch.
+  </div>
+</footer>
+
+<script type="module" src="../assets/home.js"></script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!doctype html>
+<!--
+  borch Playground — 코드를 치고 이 탭의 GPU 에서 돌린다.
+
+  서버로 아무것도 안 보낸다. 보낼 곳이 없다: 이 페이지는 정적 파일이고,
+  사용자 코드는 Blob 모듈로 만들어져 같은 탭 안에서 돈다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch Playground</title>
+<link rel="alternate" hreflang="en" href="../playground.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body class="pg">
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./#state">지금 되는 것</a>
+      <a href="./#measured">잰 것</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../playground.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="pg-bar">
+    <select id="lang" aria-label="언어 고르기">
+      <option value="js">JavaScript · borch.ts</option>
+      <option value="py">Python · borch_webgpu</option>
+    </select>
+    <select id="example" aria-label="예시 고르기"></select>
+    <button class="btn primary" id="run">▶ Run <span class="small muted" style="opacity:.75">⌘↵</span></button>
+    <button class="btn" id="stop" disabled>■ Stop</button>
+    <button class="btn ghost" id="share">링크로 공유</button>
+    <span class="spacer"></span>
+    <span class="badge" id="device-badge"><span class="led"></span><span id="device-text">장치 확인 중…</span></span>
+  </div>
+
+  <div class="pg-body">
+    <div class="editor-pane">
+      <div class="pane-head">
+        <span id="filename">code.js — 이 탭 안에서 돈다</span>
+        <span class="grow"></span>
+        <span id="surface">init · Tensor · nn · optim · scope · keepAlive · log() · plot() · stopped()</span>
+      </div>
+      <div class="editor-wrap">
+        <!-- 색을 칠한 층. 위의 textarea 는 글자가 투명하고 커서만 보인다 —
+             입력·선택·IME 는 전부 브라우저의 것이라 우리가 흉내 내지 않는다. -->
+        <pre id="highlight" aria-hidden="true"><code></code></pre>
+        <textarea id="code" spellcheck="false" autocomplete="off"
+                  autocapitalize="off" autocorrect="off" wrap="off"></textarea>
+      </div>
+    </div>
+
+    <div class="right-pane">
+      <div class="pane-head"><span>출력</span></div>
+      <pre id="console"></pre>
+
+      <div class="pane-head"><span>손실 곡선 — plot(name, value)</span></div>
+      <canvas id="chart"></canvas>
+
+      <div class="stats">
+        <div class="stat"><div class="k">걸린 시간</div><div class="v" id="stat-time">—</div></div>
+        <div class="stat"><div class="k">dispatch</div><div class="v" id="stat-dispatch">—</div></div>
+        <div class="stat"><div class="k">GPU 메모리</div><div class="v" id="stat-mem">—</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- 이 페이지는 Pyodide 를 서빙한다 = 실행 형태로 배포한다. MPL-2.0 §3.2 가 소스를
+     구할 길을 알리라고 하므로, 문서에만 적어두지 않고 페이지에 둔다. -->
+<footer style="padding:.6rem 1rem;border-top:1px solid var(--line-soft);font-size:.75rem;color:var(--fg-faint)">
+  파이썬 모드는 <a href="https://github.com/pyodide/pyodide">Pyodide</a>(MPL-2.0)를 포함하며
+  numpy(BSD-3-Clause)와 CPython 표준 라이브러리(PSF)도 함께 실린다 —
+  <a href="../../THIRD-PARTY.md">THIRD-PARTY.md</a>. 전부 이 서버에서 온다.
+</footer>
+
+<script type="module" src="../assets/playground.js"></script>
+</body>
+</html>

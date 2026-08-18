@@ -1,0 +1,90 @@
+<!doctype html>
+<!--
+  borch Playground — type code and run it on this tab's GPU.
+
+  Nothing is sent to a server; there is nowhere to send it. This page is a static
+  file and user code runs as a Blob module inside the same tab.
+
+  한국어 판은 `ko/playground.html` 이다. 두 벌이므로 문구를 고치면 같이 고친다.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch Playground</title>
+<link rel="alternate" hreflang="ko" href="ko/playground.html">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body class="pg">
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./#state">What exists</a>
+      <a href="./#measured">Measured</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="ko/playground.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="pg-bar">
+    <select id="lang" aria-label="language of the code">
+      <option value="js">JavaScript · borch.ts</option>
+      <option value="py">Python · borch_webgpu</option>
+    </select>
+    <select id="example" aria-label="pick an example"></select>
+    <button class="btn primary" id="run">▶ Run <span class="small muted" style="opacity:.75">⌘↵</span></button>
+    <button class="btn" id="stop" disabled>■ Stop</button>
+    <button class="btn ghost" id="share">Share link</button>
+    <span class="spacer"></span>
+    <span class="badge" id="device-badge"><span class="led"></span><span id="device-text">checking device…</span></span>
+  </div>
+
+  <div class="pg-body">
+    <div class="editor-pane">
+      <div class="pane-head">
+        <span id="filename">code.js — runs inside this tab</span>
+        <span class="grow"></span>
+        <span id="surface">init · Tensor · nn · optim · scope · keepAlive · log() · plot() · stopped()</span>
+      </div>
+      <div class="editor-wrap">
+        <!-- The painted layer. The textarea on top has transparent text and a
+             visible caret — input, selection and IME stay the browser's. -->
+        <pre id="highlight" aria-hidden="true"><code></code></pre>
+        <textarea id="code" spellcheck="false" autocomplete="off"
+                  autocapitalize="off" autocorrect="off" wrap="off"></textarea>
+      </div>
+    </div>
+
+    <div class="right-pane">
+      <div class="pane-head"><span>output</span></div>
+      <pre id="console"></pre>
+
+      <div class="pane-head"><span>loss curve — plot(name, value)</span></div>
+      <canvas id="chart"></canvas>
+
+      <div class="stats">
+        <div class="stat"><div class="k">elapsed</div><div class="v" id="stat-time">—</div></div>
+        <div class="stat"><div class="k">dispatch</div><div class="v" id="stat-dispatch">—</div></div>
+        <div class="stat"><div class="k">GPU memory</div><div class="v" id="stat-mem">—</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- This page serves Pyodide, i.e. distributes it in executable form. MPL-2.0 §3.2
+     asks that the way to obtain the source be stated, so it is on the page and not
+     only in a document. -->
+<footer style="padding:.6rem 1rem;border-top:1px solid var(--line-soft);font-size:.75rem;color:var(--fg-faint)">
+  Python mode includes <a href="https://github.com/pyodide/pyodide">Pyodide</a> (MPL-2.0),
+  and loads numpy (BSD-3-Clause) and the CPython standard library (PSF) —
+  <a href="../THIRD-PARTY.md">THIRD-PARTY.md</a>. All of it is served from here.
+</footer>
+
+<script type="module" src="assets/playground.js"></script>
+</body>
+</html>
