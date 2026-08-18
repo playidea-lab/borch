@@ -101,6 +101,9 @@ def main():
     ap.add_argument("--probe", help="대조 뒤 브라우저 안에서 돌릴 파이썬. 디버깅용")
     ap.add_argument("--bench", action="store_true",
                     help="ResNet-18 로 실제 학습 스텝을 잰다(tests/browser/bench.py)")
+    ap.add_argument("--cost", action="store_true",
+                    help="한 스텝의 **비용**을 센다 — 시간이 아니라 dispatch·버퍼 수라 "
+                         "소프트웨어 어댑터에서도 뜻이 있다(tests/browser/cost.py)")
     ap.add_argument("--accuracy", action="store_true",
                     help="**정확도**를 잰다 — 늘리기를 켠 쪽과 끈 쪽을 나란히. "
                          "cifar-batch1.bin 과 cifar-batch-test.bin 이 저장소 루트에 있어야 한다")
@@ -115,6 +118,10 @@ def main():
         args.probe = (f"import bench, importlib\n"
                       f"L = importlib.import_module({args.lib!r})\n"
                       f"bench.report(L)")
+    if args.cost and not args.probe:
+        args.probe = (f"import cost, importlib\n"
+                      f"L = importlib.import_module({args.lib!r})\n"
+                      f"cost.report(L)")
     if args.accuracy and not args.probe:
         # 시험 데이터는 **학습에 안 쓴 것**이어야 한다. 그래서 원본 아카이브의
         # test_batch 를 따로 꺼내 둔다 — 같은 덩이를 나눠 쓰면 재는 것이 정확도가 아니다.

@@ -524,6 +524,29 @@ def memory():
     return {"tensors": int(got.tensors), "bytes": int(got.bytes)}
 
 
+# ── 비용을 재는 자리 셋. `memory()` 와 같은 이유로 여기 있다 ─────────────────
+#
+# **골든은 값만 본다.** 스텝마다 버퍼를 흘려도, 커널을 두 배로 걸어도 값은 맞으므로
+# 표가 전부 초록이다. 그 자리를 묻는 검사(`tests/browser/cost.py`)가 밖에서 이 수를
+# 읽을 수 있어야 하고, 저쪽 손잡이를 직접 파고들게 두면 계측이 borch.ts 의 안쪽
+# 모양에 묶인다 — `memory()` 를 만들 때 배운 것과 같다.
+
+def dispatches():
+    """지금까지 건 커널 호출 수. **차이만 뜻이 있다** — 절대값은 세션에 달렸다."""
+    return int(_ts.device().dispatches)
+
+
+def submits():
+    """큐에 보낸 횟수. 스텝당 하나가 아니면 중간에 GPU 를 기다리는 자리가 있다."""
+    return int(_ts.device().submits)
+
+
+def last_scope():
+    """가장 최근에 닫힌 구역의 셈. **`survived` 가 0 이 아니면 그것이 누수다.**"""
+    got = _ts.device().lastScope
+    return {"freed": int(got.freed), "survived": int(got.survived)}
+
+
 class no_grad:                                           # noqa: N801
     """`with L.no_grad():`.
 

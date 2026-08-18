@@ -70,6 +70,8 @@ from ._ops import (                                      # noqa: E402,F401
     full, linalg, linspace, matrix_power, memory, no_grad, norm, numel,
     ones, pow,
     quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
+    # 비용을 재는 자리. `memory` 와 한 묶음이고 `tests/browser/cost.py` 가 쓴다.
+    dispatches, last_scope, submits,
     sum, swapdims, transpose, where, zeros,
     # torch 가 두 번째 이름으로 주는 것들 — 조합에 이름만 붙인다.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,

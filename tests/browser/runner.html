@@ -53,6 +53,8 @@ const FILES = [
   ["/tests/cases.py", "/work/tests/cases.py"],
   ["/tests/golden.py", "/work/tests/golden.py"],
   ["/tests/browser/bench.py", "/work/bench.py"],
+  // 벤치와 짝이다 — 저쪽은 시간, 이쪽은 세는 것. `--cost` 가 부른다.
+  ["/tests/browser/cost.py", "/work/cost.py"],
 ];
 for (const [pkg, mods] of Object.entries(PACKAGES)) {
   for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);
