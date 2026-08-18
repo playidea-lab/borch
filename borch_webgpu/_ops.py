@@ -2824,15 +2824,14 @@ class _Linalg:
         return guarded(handle(a).ldlFactor)
 
     def ldl_factor_ex(self, a, hermitian=False, check_errors=False):
-        """`ldl_factor` 에 `info` 를 붙인 것. 여기서는 늘 0 이다 — 나쁜 자리는 거절한다."""
-        from ._base import _Fields, tensor as _tensor
-        got = guarded(handle(a).ldlFactor)
-        zero = _tensor(_np.zeros((), dtype=_np.float32))
-        out = _Fields.__new__(_Fields)
-        object.__setattr__(out, "_order", ["LD", "pivots", "info"])
-        object.__setattr__(out, "_d", {"LD": got.LD, "pivots": got.pivots,
-                                       "info": zero})
-        return out
+        """`ldl_factor` 에 `info` 를 붙인 것. 여기서는 늘 0 이다 — 나쁜 자리는 거절한다.
+
+        **자리 셋을 손으로 세우고 있었다.** `_Fields` 를 직접 만들어 `LD`·`pivots` 는
+        borch.ts 것을 넣고 `info` 에 numpy 스칼라를 끼웠는데, 그러면 이 이름이
+        borch.ts 에 없다는 것이 골든에 안 걸린다 — 케이스가 전부 여기를 지나서다.
+        `trapezoid` 와 같은 자리라 같게 고친다.
+        """
+        return guarded(handle(a).ldlFactorEx)
 
     def ldl_solve(self, ld, pivots, b, hermitian=False):
         return wrap(guarded(handle(ld).ldlSolve, handle(b)))

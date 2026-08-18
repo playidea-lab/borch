@@ -4754,7 +4754,70 @@ function addLinalgStruct(out: Map<string, Case>): void {
       });
     }
   }
+  addLinalgEx(out);
   addLinalgNames(out);
+}
+
+/**
+ * `_ex` 변종과 LDL·반사자.
+ *
+ * **`_ex` 는 던지는 대신 `info` 로 알린다** — 0 이면 잘 됐고, `k` 면 `k` 번째 피벗이
+ * 0 이다(1 부터 센다). 잘 되는 행렬로만 재면 그 수가 늘 0 이라 자리만 있는 것과
+ * 구분이 안 가므로 특이행렬로도 묻는다.
+ */
+function addLinalgEx(out: Map<string, Case>): void {
+  const pivot2 = (): Tensor => Tensor.from([1, 2, 3, 4], [2, 2]);
+  // 대칭이다 — LDL 은 대칭에만 뜻이 있다.
+  const lin4 = (): Tensor => Tensor.from(
+    [2.0, 1.0, 0.5, -1.0, 1.0, 3.0, -0.5, 0.25,
+      0.5, -0.5, 2.5, 0.75, -1.0, 0.25, 0.75, 4.0], [4, 4]);
+  const singular2 = (): Tensor => Tensor.from([1, 2, 2, 4], [2, 2]);
+  // 대각을 3 만큼 올려 계수를 채운다 — 안 올리면 열이 서로 비례해서 특이행렬이다.
+  const rect53 = (): Tensor => Tensor.from(
+    Array.from({ length: 15 }, (_, i) =>
+      i / 4 - 1.5 + (Math.floor(i / 3) === i % 3 ? 3 : 0)), [5, 3]);
+
+  const shapes: [string, () => Tensor][] = [
+    ["정사각", pivot2], ["직사각", rect53],
+  ];
+  for (const [tag, src] of shapes) {
+    out.set(`linalg::ex::lu_factor_ex/${tag}/LU`,
+      async () => (await src().luFactorEx()).LU);
+    out.set(`linalg::ex::lu_factor_ex/${tag}/pivots`,
+      async () => (await src().luFactorEx()).pivots);
+    out.set(`linalg::ex::lu_factor_ex/${tag}/info`,
+      async () => (await src().luFactorEx()).info);
+  }
+  // **특이행렬로도 물어야** `info` 가 자리만 지키는 0 이 아니라는 것이 드러난다.
+  out.set("linalg::ex::lu_factor_ex/특이행렬 info",
+    async () => (await singular2().luFactorEx()).info);
+
+  out.set("linalg::ex::ldl_factor/LD",
+    async () => (await lin4().ldlFactor()).LD);
+  out.set("linalg::ex::ldl_factor/pivots",
+    async () => (await lin4().ldlFactor()).pivots);
+  out.set("linalg::ex::ldl_factor_ex/info",
+    async () => (await lin4().ldlFactorEx()).info);
+  out.set("linalg::ex::ldl_solve", async () => {
+    const got = await lin4().ldlFactor();
+    return got.LD.ldlSolve(Tensor.from(
+      [1.0, -2.0, 0.5, 0.25, -1.5, 3.0, 2.0, 0.5], [4, 2]));
+  });
+
+  // **반사자 꼴 QR.** `geqrf` 가 담고 `householderProduct` 가 `Q` 로 편다.
+  //
+  // **정사각으로도 물어야 한다.** 대각 아래가 전부 0 이면 반사를 안 하고(`tau = 0`)
+  // 값을 그대로 두는데, 정사각의 마지막 열이 늘 그 자리다 — 직사각으로만 물으면
+  // 그 열이 안 나와서 거기서 부호를 뒤집어도 안 걸린다.
+  for (const [tag, src] of [["정사각", lin4], ["직사각", rect53]] as const) {
+    out.set(`linalg::ex::geqrf/${tag}/a`, async () => (await src().geqrf()).a);
+    out.set(`linalg::ex::geqrf/${tag}/tau`,
+      async () => (await src().geqrf()).tau);
+    out.set(`linalg::ex::householder_product/${tag}`, async () => {
+      const got = await src().geqrf();
+      return got.a.householderProduct(got.tau);
+    });
+  }
 }
 
 /**

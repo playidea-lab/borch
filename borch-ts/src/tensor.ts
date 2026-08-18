@@ -5308,6 +5308,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
+  /**
+   * `ldlFactor` 에 **`info` 를 하나 더.** `luFactorEx` 와 같은 자리다.
+   *
+   * **여기서는 늘 0 이다** — 나쁜 자리를 만나면 `ldlFactor` 가 그 자리에서 거절하므로
+   * 번호로 알릴 것이 안 남는다. 그래도 이름을 둔다: torch 가 주는 이름이고, 없으면
+   * 부르는 쪽이 세 자리 중 하나를 스스로 지어내야 한다 — 결속이 실제로 그러고
+   * 있었다(`_Fields` 를 손으로 세워 `info` 에 0 을 끼웠다). 그러면 골든은 결속을
+   * 지나니 초록이고, 없는 것은 TypeScript 로 쓰는 쪽뿐이다.
+   */
+  async ldlFactorEx(): Promise<{ LD: Tensor; pivots: Tensor; info: Tensor }> {
+    const v = await this.asBatch();
+    const got = await this.ldlFactor();
+    return { ...got, info: Tensor.zeros(v.lead).to("int64") };
+  }
+
   /** `ldlFactor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다. */
   async ldlSolve(b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
