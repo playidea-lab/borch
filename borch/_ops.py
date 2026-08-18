@@ -220,12 +220,31 @@ def rand(*shape, dtype=None, requires_grad=False, device=None):
     return _made(_rng.random(shape).astype(_DEFAULT_DTYPE), dtype, requires_grad)
 
 
+def _no_out(kw):
+    """`out=` 을 **조용히 안 삼킨다.**
+
+    torch 는 198 개 이름에서 `out=` 을 받아 그 텐서에 써 넣는다. 우리는 그것을 안
+    하는데, 대부분은 `**kw` 가 없어서 파이썬이 `TypeError` 로 멈춰 준다. 문제는
+    `**kw` 를 받는 자리다 — 여섯이 `out=` 을 받아 **버리고** 있었다. 오류가 없으니
+    `randint(0, 5, (4,), out=buf)` 를 쓴 코드는 `buf` 가 0 인 채로 다음 줄로 간다.
+
+    **없는 것과 삼키는 것은 다른 일이다.** 멈추는 쪽은 그 자리에서 알려 주고,
+    삼키는 쪽은 한참 뒤 엉뚱한 값으로 드러난다.
+
+    `tests/test_no_silent_out.py` 가 `**kw` 를 받는 자리마다 이 문이 있는지 본다.
+    """
+    if "out" in kw:
+        _unsupported("`out=`(미리 만든 텐서에 써 넣기)")
+
+
 def randint(low, high, shape, dtype=None, requires_grad=False, **kw):
+    _no_out(kw)
     return _made(_rng.integers(low, high, shape).astype(_np.int64),
                  dtype, requires_grad)
 
 
 def randperm(n, dtype=None, requires_grad=False, **kw):
+    _no_out(kw)
     return _made(_rng.permutation(n).astype(_np.int64), dtype, requires_grad)
 
 
@@ -1876,19 +1895,23 @@ row_stack = vstack
 
 def empty_like(t, dtype=None, requires_grad=False, **kw):
     """모양만 빌린다. 값은 정하지 않는다 — torch 도 그렇다."""
+    _no_out(kw)
     return _made(_np.zeros(_wrap(t).data.shape, dtype=_DEFAULT_DTYPE),
                  dtype, requires_grad)
 
 
 def rand_like(t, dtype=None, requires_grad=False, **kw):
+    _no_out(kw)
     return _made(rand(*_wrap(t).data.shape).data, dtype, requires_grad)
 
 
 def randn_like(t, dtype=None, requires_grad=False, **kw):
+    _no_out(kw)
     return _made(randn(*_wrap(t).data.shape).data, dtype, requires_grad)
 
 
 def randint_like(t, low, high=None, dtype=None, requires_grad=False, **kw):
+    _no_out(kw)
     if high is None:
         low, high = 0, low
     return _made(randint(low, high, _wrap(t).data.shape).data, dtype, requires_grad)
@@ -1900,6 +1923,7 @@ def scalar_tensor(value, dtype=None, requires_grad=False, **kw):
 
 def logspace(start, end, steps, base=10.0, dtype=None, requires_grad=False, **kw):
     """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
+    _no_out(kw)
     return _made((base ** _np.linspace(start, end, steps)).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
 
@@ -2004,11 +2028,13 @@ def var_mean(t, dim=None, keepdim=False, **kw):
     주면 `keepdim` 이 `unbiased` 자리에 들어간다 — 그러면 ddof 가 1 에서 0 으로
     바뀌어 값이 12/11 배 어긋난다. 실제로 그렇게 걸렸다.
     """
+    _no_out(kw)
     t = _wrap(t)
     return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
 def std_mean(t, dim=None, keepdim=False, **kw):
+    _no_out(kw)
     t = _wrap(t)
     return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
@@ -2830,6 +2856,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
 
     둘이 어긋나면 torch 는 멈춘다(실측). 하나만 주거나, 같은 뜻으로 둘 다 줘야 한다.
     """
+    _no_out(kw)
     if side is not None:
         if side not in ("left", "right"):
             raise RuntimeError(_like_torch(
@@ -2850,6 +2877,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
 
 def bucketize(values, boundaries, right=False, **kw):
     """`searchsorted` 와 **인자 순서가 뒤집혀 있다.** 그것이 두 이름의 차이 전부다."""
+    _no_out(kw)
     return searchsorted(boundaries, values, right=right)
 
 
@@ -6276,6 +6304,7 @@ def hann_window(window_length, periodic=True, dtype=None,
 
 def hamming_window(window_length, periodic=True, alpha=0.54, beta=0.46,
                    dtype=None, requires_grad=False, **kw):
+    _no_out(kw)
     return _window(window_length, periodic,
                    lambda k, n: alpha - beta * _np.cos(2 * _np.pi * k / (n - 1)),
                    dtype, requires_grad)
@@ -7386,6 +7415,7 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
     훑어 후보를 넷 뽑았는데 torch 서명을 보니 진짜는 이것과 `frombuffer` 둘이었다
     (`bernoulli` 는 torch 자신이 그 인자를 안 받고, `empty_strided` 는 이미 거절한다).
     """
+    _no_out(kw)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
         s = _np.asarray(_wrap(std).data, dtype=_np.float64)
@@ -7705,6 +7735,7 @@ def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
     수법으로 여기서는 `range_top` 이고 `borch/__init__.py` 가 `range` 로 내보낸다.
     이 파일에서 아홉 번째 겪는 "모듈 이름이 내장을 가린다" 다.
     """
+    _no_out(kw)
     if end is None:
         start, end = 0, start
     return _made(_np.arange(start, end + step / 2.0, step, dtype=_DEFAULT_DTYPE),
@@ -7718,11 +7749,13 @@ def empty_strided(size, stride, **kw):
     이쪽은 값이 쓰레기이고 **걸음 자체가 유일한 답**이다. 우리 텐서에는 걸음이라는
     것이 없으므로 모양만 맞춘 것을 주면 "걸음이 그렇다" 고 믿는 코드가 생긴다.
     """
+    _no_out(kw)
     _unsupported("torch.empty_strided — 걸음(stride)이라는 것이 없습니다")
 
 
 def empty_permuted(size, physical_layout, **kw):
     """`empty_strided` 와 같은 이유로 없다."""
+    _no_out(kw)
     _unsupported("torch.empty_permuted — 걸음(stride)이라는 것이 없습니다")
 
 

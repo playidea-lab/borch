@@ -9874,6 +9874,32 @@ def dtype_cases(inp=None):
                   _as_expected(lambda L: L.tensor(np.float32([1.0, 2.0, 3.0]))
                                .norm(dtype=L.float64))))
 
+    # ── `out=` 은 **삼키지 않고 멈춘다** ─────────────────────────────────
+    #
+    # torch 는 198 개 이름에서 `out=` 을 받아 미리 만든 텐서에 써 넣는다. 우리는 안
+    # 한다 — 계산해서 사본을 넣게 되므로 `out=` 의 존재 이유인 **할당을 안 하는 것**이
+    # 일어나지 않고, 절약을 흉내 내면 없는 것을 배우게 된다.
+    #
+    # **안 하는 방식이 문제였다.** 대부분은 `**kw` 가 없어서 파이썬이 `TypeError` 로
+    # 멈춰 주는데 — 그건 우연히 안전했던 것이다 — `**kw` 를 받는 **예순넷**이 `out=`
+    # 을 받아 **버리고** 있었다. `randint(0, 5, (4,), out=buf)` 를 쓴 코드는 오류 없이
+    # `buf` 가 0 인 채로 다음 줄로 간다.
+    #
+    # 셋이 갈린다(torch 는 해내고 우리 둘은 거절). 대표 넷만 묻는다 — 문이 하나이고
+    # `tests/test_no_silent_out.py` 가 그 문이 모든 자리에 있는지 기계로 본다.
+    # **torch 가 진짜로 받는 것만 고른다.** `rand_like`·`randn_like` 는 docstring 에
+    # `out=None` 이 적혀 있는데 실제 오버로드는 안 받는다 — 처음에 그것으로 물었다가
+    # torch 쪽이 `TypeError` 를 내며 알려 주었다. 문서와 서명이 갈리는 자리다.
+    for _name, _call in (
+        ("randint", lambda L: L.randint(0, 5, (4,), out=L.zeros(4, dtype=L.int64))),
+        ("randperm", lambda L: L.randperm(4, out=L.zeros(4, dtype=L.int64))),
+        ("logspace", lambda L: L.logspace(0.0, 1.0, 3, out=L.zeros(3))),
+        ("searchsorted", lambda L: L.searchsorted(
+            L.tensor(np.float32([1.0, 2.0, 3.0])),
+            L.tensor(np.float32([2.0])), out=L.zeros(1, dtype=L.int64))),
+    ):
+        we_refuse(f"{_name}(out=)", _call, group="out")
+
     # ── 이름은 있고 **칸이 없는** 형 넷 ──────────────────────────────────
     #
     # `torch.half`·`bfloat16`·`short`·`chalf` 는 dtype 인데 우리 쪽에서는 Tensor

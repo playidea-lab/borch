@@ -477,6 +477,7 @@ def arange(*args, **kw):
     실패 문구는 `shape '[3,3]' is invalid for input of size 0` 이었고, 원인에서
     두 칸 떨어진 자리다. 나머지 두 꼴은 여기서 만든다.
     """
+    _no_out(kw)
     if len(args) == 1:
         start, stop, step = 0, args[0], 1
     elif len(args) == 2:
@@ -555,18 +556,22 @@ def _made(out, kw):
 
 
 def zeros(*shape, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.zeros(_shape_of(shape)), kw)
 
 
 def ones(*shape, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.ones(_shape_of(shape)), kw)
 
 
 def full(shape, value, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.full(_js_list(shape), float(value)), kw)
 
 
 def eye(n, m=None, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.eye(n, n if m is None else m), kw)
 
 
@@ -892,6 +897,7 @@ class iinfo:
 
 
 def linspace(start, end, count, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.linspace(start, end, count), kw)
 
 
@@ -912,6 +918,7 @@ def hann_window(n, periodic=True, **kw):
 
 
 def hamming_window(n, periodic=True, alpha=0.54, beta=0.46, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.hammingWindow(n, periodic, alpha, beta), kw)
 
 
@@ -979,6 +986,7 @@ def randn(*shape, **kw):
     본다(`L.randn(3, 4) @ L.randn(3, 2)`). 값을 묻는 케이스가 생기면 그때는 borch.ts
     쪽에 제대로 넣어야 한다 — 여기 있는 것은 CPU 를 한 번 거친다.
     """
+    _no_out(kw)
     from ._base import tensor as _t
 
     return _t(_rng.standard_normal(tuple(_shaped(shape))).astype("float32"),
@@ -986,13 +994,23 @@ def randn(*shape, **kw):
 
 
 def rand(*shape, **kw):
+    _no_out(kw)
     from ._base import tensor as _t
 
     return _t(_rng.random(tuple(_shaped(shape))).astype("float32"),
               requires_grad=kw.get("requires_grad", False))
 
 
+def _no_out(kw):
+    """`out=` 을 **조용히 안 삼킨다.** 코어와 같은 문이고 같은 까닭이다 —
+    `**kw` 를 받는 자리에서만 삼킬 수 있고, 여섯이 실제로 삼키고 있었다."""
+    if "out" in kw:
+        from borch._base import _unsupported
+        _unsupported("`out=`(미리 만든 텐서에 써 넣기)")
+
+
 def randint(low, high=None, size=(), **kw):
+    _no_out(kw)
     from ._base import tensor as _t
 
     if high is None:
@@ -1001,6 +1019,7 @@ def randint(low, high=None, size=(), **kw):
 
 
 def randperm(n, **kw):
+    _no_out(kw)
     from ._base import tensor as _t
 
     return _t(_rng.permutation(n).astype("int64"))
@@ -1045,6 +1064,7 @@ def matrix_power(x, n):
 
 def quantile(x, q, dim=None, **kw):
     """`q` 는 수 하나일 수도 목록일 수도 있다 — borch.ts 는 늘 목록을 받는다."""
+    _no_out(kw)
     one = isinstance(q, (int, float))
     qs = [float(v) for v in ([q] if one else q)]
     out = guarded(handle(x).quantile, _to_js(qs))
@@ -1249,20 +1269,24 @@ def swapdims(x, dim0=None, dim1=None, **kw):
 
 def add(a, b, alpha=1, **kw):
     """`a + alpha·b`. **`alpha` 가 연산자에 없어서** 별칭이 아니라 함수다."""
+    _no_out(kw)
     alpha = kw.get("alpha", alpha)
     return wrap(a) + (b if alpha == 1 else wrap(b) * alpha)
 
 
 def sub(a, b, alpha=1, **kw):
+    _no_out(kw)
     alpha = kw.get("alpha", alpha)
     return wrap(a) - (b if alpha == 1 else wrap(b) * alpha)
 
 
 def mul(a, b, **kw):
+    _no_out(kw)
     return wrap(a) * b
 
 
 def div(a, b, rounding_mode=None, **kw):
+    _no_out(kw)
     mode = kw.get("rounding_mode", rounding_mode)
     out = wrap(a) / b
     if mode is None:
@@ -1275,17 +1299,20 @@ def div(a, b, rounding_mode=None, **kw):
 
 
 def floor_divide(a, b, **kw):
+    _no_out(kw)
     return div(a, b, rounding_mode="floor")
 
 
 def remainder(a, b, **kw):
     """**부호가 나누는 쪽을 따른다.** `fmod` 와 갈리는 자리가 그것이다."""
+    _no_out(kw)
     a, b = wrap(a), wrap(b)
     return a - wrap(guarded(handle(a / b).unary, "floor")) * b
 
 
 def fmod(a, b, **kw):
     """**부호가 나뉘는 쪽을 따른다.** C 의 규칙이고 `remainder` 와 반대다."""
+    _no_out(kw)
     a, b = wrap(a), wrap(b)
     return a - wrap(guarded(handle(a / b).unary, "trunc")) * b
 
@@ -1338,6 +1365,7 @@ def broadcast_tensors(*tensors):
 
 def hstack(tensors, **kw):
     """1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다."""
+    _no_out(kw)
     ts = list(tensors)
     dim = 0 if len(handle(ts[0]).shape) == 1 else 1
     return cat(ts, dim)
@@ -1353,6 +1381,7 @@ def _lift(x, rank):
 
 
 def vstack(tensors, **kw):
+    _no_out(kw)
     return cat([_lift(v, 2) for v in tensors], 0)
 
 
@@ -1377,11 +1406,13 @@ def _atleast3(x):
 
 
 def dstack(tensors, **kw):
+    _no_out(kw)
     return cat([_atleast3(v) for v in tensors], 2)
 
 
 def column_stack(tensors, **kw):
     """1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다."""
+    _no_out(kw)
     ts = []
     for v in tensors:
         h = handle(v)
@@ -1425,14 +1456,17 @@ def _shape_list(x):
 # 부르면 멈추는 자리라, 코어와 같은 표면을 여기 적는다.
 
 def empty(*shape, **kw):
+    _no_out(kw)
     return _made(_ts.Tensor.zeros(_shape_of(shape)), kw)
 
 
 def zeros_like(t, **kw):
+    _no_out(kw)
     return _kept(zeros(*_shape_list(t)), kw)
 
 
 def ones_like(t, **kw):
+    _no_out(kw)
     return _kept(ones(*_shape_list(t)), kw)
 
 
@@ -1441,18 +1475,22 @@ def full_like(t, value, **kw):
 
 
 def empty_like(t, **kw):
+    _no_out(kw)
     return _kept(zeros(*_shape_list(t)), kw)
 
 
 def rand_like(t, **kw):
+    _no_out(kw)
     return _kept(rand(*_shape_list(t)), kw)
 
 
 def randn_like(t, **kw):
+    _no_out(kw)
     return _kept(randn(*_shape_list(t)), kw)
 
 
 def randint_like(t, low, high=None, **kw):
+    _no_out(kw)
     if high is None:
         low, high = 0, low
     return _kept(randint(low, high, tuple(_shape_list(t))), kw)
@@ -1464,6 +1502,7 @@ def scalar_tensor(value, **kw):
 
 def logspace(start, end, steps, base=10.0, **kw):
     """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
+    _no_out(kw)
     return _kept(pow(full([], float(base)), linspace(start, end, steps)), kw)
 
 
@@ -1488,6 +1527,7 @@ def meshgrid(*tensors, indexing="ij"):
 
 
 def lerp(start, end, weight, **kw):
+    _no_out(kw)
     start, end = wrap(start), wrap(end)
     return start + (end - start) * weight
 
@@ -1498,6 +1538,7 @@ def _unary(x, name):
 
 def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
     """NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다.**"""
+    _no_out(kw)
     t = wrap(t)
     hi = 3.4028234663852886e38 if posinf is None else posinf
     lo = -3.4028234663852886e38 if neginf is None else neginf
@@ -1514,11 +1555,13 @@ def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
 
 
 def isposinf(t, **kw):
+    _no_out(kw)
     t = wrap(t)
     return _unary(t, "isinf") * (t > full([], 0.0))
 
 
 def isneginf(t, **kw):
+    _no_out(kw)
     t = wrap(t)
     return _unary(t, "isinf") * (t < full([], 0.0))
 
@@ -1560,6 +1603,7 @@ fmin = _nan_extreme("fmin", "minimum")
 
 
 def float_power(a, b, **kw):
+    _no_out(kw)
     return wrap(a) ** b
 
 
@@ -1659,12 +1703,14 @@ def lu(a, pivot=True, get_infos=False, **kw):
 
 def lu_solve(b, lu_data, lu_pivots, **kw):
     """**`linalg.lu_solve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다."""
+    _no_out(kw)
     return wrap(guarded(handle(b).luSolveTop, handle(lu_data),
                         handle(lu_pivots)))
 
 
 def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True, **kw):
     """**끄면 `None` 이 아니라 빈 텐서가 온다**(실측: 모양이 `(0,)` 이다)."""
+    _no_out(kw)
     got = guarded(handle(lu_data).luUnpack, handle(lu_pivots), unpack_data,
                   unpack_pivots)
     return (got.P, got.L, got.U)
@@ -1711,11 +1757,13 @@ def complex(re, im, **kw):
     `_is_cplx` 를 쓰는 이유가 그것이다 — 코어(`borch/_ops.py`)가 같은 자리에서
     같은 선택을 했고, 셋째로 이름을 가리는 내장이다(`abs`·`bool`·`max`·`range`).
     """
+    _no_out(kw)
     return wrap(_ts.Tensor.complex(handle(re), handle(im)))
 
 
 def polar(abs, angle, **kw):                                    # noqa: A002
     """크기와 편각으로. 인자 이름이 torch 의 것이라 내장 `abs` 를 가린다."""
+    _no_out(kw)
     return wrap(_ts.Tensor.polar(handle(abs), handle(angle)))
 
 
@@ -1751,6 +1799,7 @@ def conj(t, **kw):
 
 
 def conj_physical(t, **kw):
+    _no_out(kw)
     return conj(t)
 
 
@@ -1830,6 +1879,7 @@ def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False, **kw
 def range_top(start, end=None, step=1, **kw):
     """**끝을 포함한다** — `arange` 는 뺀다(실측). 조용히 `arange` 로 넘기면
     원소가 하나 모자란다."""
+    _no_out(kw)
     from ._base import tensor as _t
 
     if end is None:
@@ -1840,11 +1890,13 @@ def range_top(start, end=None, step=1, **kw):
 def empty_strided(size, stride, **kw):
     """**걸음을 표현할 수 없어서 없다.** `as_strided` 와 다른 자리다 — 그쪽은 값이
     답이라 사본으로도 같은 답을 내는데, 이쪽은 **걸음 자체가 유일한 답**이다."""
+    _no_out(kw)
     raise RuntimeError(
         "torch.empty_strided — 걸음(stride)이라는 것이 없습니다.")
 
 
 def empty_permuted(size, physical_layout, **kw):
+    _no_out(kw)
     raise RuntimeError(
         "torch.empty_permuted — 걸음(stride)이라는 것이 없습니다.")
 
@@ -1856,6 +1908,7 @@ def histogramdd(t, bins=10, **kw):
     안 들어가서, 그대로 두면 파이썬 쪽에 JS 손잡이가 남는다 — 받는 쪽이 `.shape` 도
     `._h` 도 못 쓴다. 여기서 하나씩 감싼다.
     """
+    _no_out(kw)
     from ._base import _Fields
 
     got = guarded(handle(t).histogramdd, _arg(bins))
@@ -1872,8 +1925,9 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
     """정규분포 표본. **`std` 가 0 이면 평균 그대로다.**
 
     `dtype=`·`requires_grad=` 는 `**kw` 가 삼키고 있었다 — 공장을 `_made` 로 모을 때
-    두 번 다 목록 밖이었다.
+    두 번 다 목록 밖이었다. `out=` 도 같은 `**kw` 가 삼키고 있었다.
     """
+    _no_out(kw)
     from ._base import tensor as _t
 
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
@@ -2112,15 +2166,18 @@ rnn_relu_cell = _cell_one("rnnReluCell")
 
 def igamma(input, other, **kw):                                 # noqa: A002
     """정규화된 하부 불완전 감마. **기울기가 `x` 쪽에만 있다**(실측)."""
+    _no_out(kw)
     return wrap(guarded(_ts.igamma, handle(input), handle(other)))
 
 
 def igammac(input, other, **kw):                                # noqa: A002
+    _no_out(kw)
     return wrap(guarded(_ts.igammac, handle(input), handle(other)))
 
 
 def polygamma(n, input, **kw):                                  # noqa: A002
     """**`n` 이 첫 자리다** — 텐서가 둘째다. torch 의 서명이 그렇다."""
+    _no_out(kw)
     return wrap(guarded(_ts.polygamma, int(n), handle(input)))
 
 
@@ -2178,6 +2235,7 @@ def hash_tensor(*args, **kw):
 def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
     """**희소 텐서 전용이라 없다.** 코어와 같은 자리, 같은 이유로 거절한다 —
     조밀 텐서로 흉내 내면 모양은 맞고 저장 방식이 다른 것을 주게 된다."""
+    _no_out(kw)
     raise RuntimeError(
         "torch.sspaddmm — 희소(sparse) 텐서 배치가 없습니다. "
         "자기 컴퓨터에서 진짜 PyTorch 를 쓰세요.")
@@ -2199,6 +2257,7 @@ def bitwise_not(x, **kw):
     이항 쪽(`and`·`or`·`xor`)은 갈래가 필요 없다. 0/1 에서 비트 셈과 논리 셈이 같은
     답을 내고, 형도 `bool` 끼리면 `bool` 로 남는다. 부정만 다르다.
     """
+    _no_out(kw)
     x = wrap(x)
     return _unary(x, "logical_not" if str(handle(x).dtype) == "bool"
                   else "bitwise_not")
@@ -2206,16 +2265,19 @@ def bitwise_not(x, **kw):
 
 def var_mean(t, dim=None, keepdim=False, **kw):
     """**둘을 한 번에 준다.** 하나만 물으면 다른 하나가 틀려도 안 걸린다."""
+    _no_out(kw)
     t = wrap(t)
     return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
 def std_mean(t, dim=None, keepdim=False, **kw):
+    _no_out(kw)
     t = wrap(t)
     return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
 def inner(a, b, **kw):
+    _no_out(kw)
     a, b = wrap(a), wrap(b)
     if len(_shape_list(a)) > 1:
         return a @ transpose(b, -2, -1)
@@ -2223,10 +2285,12 @@ def inner(a, b, **kw):
 
 
 def vdot(a, b, **kw):
+    _no_out(kw)
     return (wrap(a) * wrap(b)).sum()
 
 
 def kron(a, b, **kw):
+    _no_out(kw)
     a, b = wrap(a), wrap(b)
     n, m = _shape_list(a)[0], _shape_list(b)[0]
     out = (wrap(guarded(handle(a).reshape, _js_list([n, 1])))
@@ -2235,6 +2299,7 @@ def kron(a, b, **kw):
 
 
 def cross(a, b, dim=-1, **kw):
+    _no_out(kw)
     a, b = wrap(a), wrap(b)
     rank = len(_shape_list(a))
     axis = dim + rank if dim < 0 else dim
@@ -2346,6 +2411,7 @@ def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
 
 def geqrf(t, **kw):
     """반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다."""
+    _no_out(kw)
     return guarded(handle(t).geqrf)
 
 
@@ -2475,6 +2541,7 @@ def take(t, index, **kw):
 
 
 def take_along_dim(t, indices, dim=None, **kw):
+    _no_out(kw)
     if dim is None:
         return take(t, indices)
     return wrap(guarded(handle(t).gather, dim, handle(indices)))
@@ -2490,6 +2557,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
     같았고, `bucketize(right=True)` 는 양쪽 다 처음부터 맞았다. 인자가 하나씩만
     어긋나서 값이 그럴듯해 보인다.
     """
+    _no_out(kw)
     side = kw.get("side", side)
     right = kw.get("right", right)
     if side is not None:
@@ -2517,6 +2585,7 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
 
 def bucketize(values, boundaries, right=False, **kw):
     """`searchsorted` 와 **인자 순서가 뒤집혀 있다.** 그것이 두 이름의 차이 전부다."""
+    _no_out(kw)
     return searchsorted(boundaries, values, right=kw.get("right", right))
 
 
@@ -2624,6 +2693,7 @@ clip = clamp
 
 def aminmax(x, **kw):
     """최소와 최대를 함께. borch.ts 는 둘을 따로 갖고 있어서 여기서 묶는다."""
+    _no_out(kw)
     h = handle(x)
     return _MinMax(wrap(h.amin()), wrap(h.amax()))
 
