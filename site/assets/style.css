@@ -116,12 +116,37 @@ header.top {
 .top nav { margin-left: auto; display: flex; align-items: center; gap: 1.4rem; }
 .top nav a { color: var(--fg-dim); text-decoration: none; font-size: 0.9rem; }
 .top nav a:hover { color: var(--fg); }
+/* 지금 어디에 있는지. 차림표가 모든 페이지에서 같으므로 이 표시가 유일한 단서다. */
+.top nav a.on { color: var(--fg); font-weight: 600; }
+.top nav a.on::after {
+  content: ""; display: block; height: 2px; margin-top: 4px;
+  background: var(--ember); border-radius: 2px;
+}
 /* 언어 전환은 목차의 한 항목이 아니다 — 테두리로 갈라 둔다. */
 .top nav a.lang {
   padding: .25rem .6rem; border: 1px solid var(--line); border-radius: 7px;
   font-size: .82rem;
 }
 .top nav a.lang:hover { border-color: var(--fg-faint); }
+
+/* ── 페이지 안 이동 ─────────────────────────────────────────────────
+   전역 차림표와 **다른 것**이라는 게 보여야 한다. 한 줄 아래, 더 작게, 밑줄 없이.
+   이것이 전역 차림표처럼 보이면 페이지마다 차림표가 바뀌는 것처럼 읽힌다. */
+
+.subnav {
+  position: sticky; top: 58px; z-index: 30;
+  background: color-mix(in srgb, var(--bg-soft) 92%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+}
+.subnav .wrap { display: flex; gap: 1.1rem; height: 40px; align-items: center; white-space: nowrap; }
+.subnav a {
+  color: var(--fg-faint); text-decoration: none;
+  font: 500 .82rem/1 var(--sans);
+}
+.subnav a:hover { color: var(--ember); }
+@media (max-width: 620px) { .subnav .wrap { width: auto; padding-inline: 1.5rem; } }
 
 /* ── 버튼 ───────────────────────────────────────────────────────────── */
 
