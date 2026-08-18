@@ -9785,6 +9785,38 @@ def dtype_cases(inp=None):
     cases.append(("dtype::공장::eye(2, 3) 은 직사각이다",
                   lambda L: str(tuple(L.eye(2, 3).shape))))
 
+    # ── 위의 열넷 **밖에 남은 공장들** ──────────────────────────────────────
+    #
+    # 열넷을 한 문으로 모으고 나서 같은 잣대를 나머지에 대 봤다. **고친 것은 목록
+    # 이었지 결함의 갈래가 아니었다** — `**kw` 로 인자를 삼키는 모양이 창 함수
+    # 다섯과 번호 만드는 넷에 그대로 남아 있었다.
+    #
+    # 창 함수 쪽이 더 나쁘다. `hann_window(8, requires_grad=True)` 가 조용히
+    # 기울기 없는 잎을 주면, 그것을 학습시키는 코드는 오류 없이 **그 창만 안
+    # 움직인다.** 위 주석이 "더 나쁘다" 고 적어 둔 바로 그 갈래다.
+    _rest = (
+        ("hann_window", lambda L, k: L.hann_window(8, **k), None),
+        ("hamming_window", lambda L, k: L.hamming_window(8, **k), None),
+        ("blackman_window", lambda L, k: L.blackman_window(8, **k), None),
+        ("bartlett_window", lambda L, k: L.bartlett_window(8, **k), None),
+        ("kaiser_window", lambda L, k: L.kaiser_window(8, **k), None),
+    )
+    for _name, _call, _dt in _rest:
+        cases.append((f"dtype::공장::{_name}(requires_grad=True)",
+                      lambda L, f=_call: str(f(L, {"requires_grad": True}).requires_grad)))
+
+    # 번호를 만드는 넷. **기울기는 물을 수 없다**(정수라 torch 가 거절한다) —
+    # 형만 묻는다. `dtype=` 을 삼키면 여기서 갈린다.
+    _int_makers = (
+        ("randint", lambda L, k: L.randint(0, 5, (4,), **k)),
+        ("randperm", lambda L, k: L.randperm(4, **k)),
+        ("tril_indices", lambda L, k: L.tril_indices(3, 3, **k)),
+        ("triu_indices", lambda L, k: L.triu_indices(3, 3, **k)),
+    )
+    for _name, _call in _int_makers:
+        cases.append((f"dtype::공장::{_name}(dtype=int64)",
+                      lambda L, f=_call: str(f(L, {"dtype": L.int64}).dtype)))
+
     # ── 이름은 있고 **칸이 없는** 형 넷 ──────────────────────────────────
     #
     # `torch.half`·`bfloat16`·`short`·`chalf` 는 dtype 인데 우리 쪽에서는 Tensor

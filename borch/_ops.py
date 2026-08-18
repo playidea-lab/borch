@@ -220,12 +220,13 @@ def rand(*shape, dtype=None, requires_grad=False, device=None):
     return _made(_rng.random(shape).astype(_DEFAULT_DTYPE), dtype, requires_grad)
 
 
-def randint(low, high, shape):
-    return Tensor(_rng.integers(low, high, shape).astype(_np.int64))
+def randint(low, high, shape, dtype=None, requires_grad=False, **kw):
+    return _made(_rng.integers(low, high, shape).astype(_np.int64),
+                 dtype, requires_grad)
 
 
-def randperm(n):
-    return Tensor(_rng.permutation(n).astype(_np.int64))
+def randperm(n, dtype=None, requires_grad=False, **kw):
+    return _made(_rng.permutation(n).astype(_np.int64), dtype, requires_grad)
 
 
 def multinomial(probs, num_samples, replacement=True):
@@ -6234,43 +6235,58 @@ def mvlgamma(x, p):
 # 대칭 창을 만들어 마지막을 버린다(실측: `hann_window(5)` 가 대칭 6 의 앞 다섯과
 # 정확히 같다). 거짓으로만 물으면 그 규칙이 안 드러난다.
 
-def _window(n, periodic, shape):
+def _window(n, periodic, shape, dt=None, requires_grad=False):
+    """다섯이 나눠 쓰는 문. **`dtype=`·`requires_grad=` 도 여기서 받는다.**
+
+    다섯 다 `**kw` 로 그 둘을 **삼키고 있었다.** 형이 틀리는 것보다 나쁜 쪽은
+    기울기다 — `hann_window(8, requires_grad=True)` 가 조용히 기울기 없는 잎을
+    주면, 그 창을 학습시키는 코드는 오류 없이 **그것만 안 움직인다.**
+    공장 열넷을 `_made` 로 모은 것과 같은 이유이고, 그때 이 다섯이 밖에 있었다.
+    """
     if n <= 0:
-        return Tensor(_np.zeros(0, dtype=_DEFAULT_DTYPE))
+        return _made(_np.zeros(0, dtype=_DEFAULT_DTYPE), dt, requires_grad)
     if n == 1:
-        return Tensor(_np.ones(1, dtype=_DEFAULT_DTYPE))
+        return _made(_np.ones(1, dtype=_DEFAULT_DTYPE), dt, requires_grad)
     total = n + 1 if periodic else n
     k = _np.arange(total, dtype=_np.float64)
-    return Tensor(shape(k, total)[:n].astype(_DEFAULT_DTYPE))
+    return _made(shape(k, total)[:n].astype(_DEFAULT_DTYPE), dt, requires_grad)
 
 
-def bartlett_window(window_length, periodic=True, **kw):
+def bartlett_window(window_length, periodic=True, dtype=None,
+                    requires_grad=False, **kw):
     return _window(window_length, periodic,
-                   lambda k, n: 1.0 - _np.abs(2.0 * k / (n - 1) - 1.0))
+                   lambda k, n: 1.0 - _np.abs(2.0 * k / (n - 1) - 1.0),
+                   dtype, requires_grad)
 
 
-def hann_window(window_length, periodic=True, **kw):
+def hann_window(window_length, periodic=True, dtype=None,
+                requires_grad=False, **kw):
     return _window(window_length, periodic,
-                   lambda k, n: 0.5 - 0.5 * _np.cos(2 * _np.pi * k / (n - 1)))
+                   lambda k, n: 0.5 - 0.5 * _np.cos(2 * _np.pi * k / (n - 1)),
+                   dtype, requires_grad)
 
 
-def hamming_window(window_length, periodic=True, alpha=0.54, beta=0.46, **kw):
+def hamming_window(window_length, periodic=True, alpha=0.54, beta=0.46,
+                   dtype=None, requires_grad=False, **kw):
     return _window(window_length, periodic,
-                   lambda k, n: alpha - beta * _np.cos(2 * _np.pi * k / (n - 1)))
+                   lambda k, n: alpha - beta * _np.cos(2 * _np.pi * k / (n - 1)),
+                   dtype, requires_grad)
 
 
-def blackman_window(window_length, periodic=True, **kw):
+def blackman_window(window_length, periodic=True, dtype=None,
+                    requires_grad=False, **kw):
     def shape(k, n):
         t = 2 * _np.pi * k / (n - 1)
         return 0.42 - 0.5 * _np.cos(t) + 0.08 * _np.cos(2 * t)
-    return _window(window_length, periodic, shape)
+    return _window(window_length, periodic, shape, dtype, requires_grad)
 
 
-def kaiser_window(window_length, periodic=True, beta=12.0, **kw):
+def kaiser_window(window_length, periodic=True, beta=12.0, dtype=None,
+                  requires_grad=False, **kw):
     def shape(k, n):
         half = (n - 1) / 2.0
         return _np.i0(beta * _np.sqrt(1.0 - ((k - half) / half) ** 2)) / _np.i0(beta)
-    return _window(window_length, periodic, shape)
+    return _window(window_length, periodic, shape, dtype, requires_grad)
 
 
 # ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
@@ -6745,16 +6761,16 @@ def combinations(t, r=2, with_replacement=False):
     return Tensor(flat[_np.asarray(rows, dtype=_np.int64)])
 
 
-def tril_indices(row, col, offset=0):
+def tril_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
     """아래 삼각의 자리들. **`(2, 개수)` 짜리 int64 표다**(실측) — 자리 쌍이 아니라
     행 줄과 열 줄로 나뉘어 온다."""
     r, c = _np.tril_indices(int(row), int(offset), int(col))
-    return Tensor(_np.stack([r, c]).astype(_np.int64))
+    return _made(_np.stack([r, c]).astype(_np.int64), dtype, requires_grad)
 
 
-def triu_indices(row, col, offset=0):
+def triu_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
     r, c = _np.triu_indices(int(row), int(offset), int(col))
-    return Tensor(_np.stack([r, c]).astype(_np.int64))
+    return _made(_np.stack([r, c]).astype(_np.int64), dtype, requires_grad)
 
 
 def vander(x, N=None, increasing=False):

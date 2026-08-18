@@ -900,25 +900,28 @@ def linspace(start, end, count, **kw):
 # 텐서를 받지 않고 **개수를 받는다** — 첫 인자의 메서드로 넘기는 길이 안 통하므로
 # 여기 손으로 적는다. borch.ts 쪽이 CPU 에서 만들고, `periodic` 의 규약도 저쪽에 있다.
 
+# 다섯 다 `**kw` 로 `dtype=`·`requires_grad=` 를 **삼키고 있었다.** 공장 열넷을
+# `_made` 로 모을 때 이 다섯이 목록 밖에 있었다 — 고친 것이 갈래가 아니라 목록이면
+# 같은 결함이 옆자리에 남는다. 코어도 같은 자리에서 같이 삼키고 있었다.
 def bartlett_window(n, periodic=True, **kw):
-    return wrap(_ts.Tensor.bartlettWindow(n, periodic))
+    return _made(_ts.Tensor.bartlettWindow(n, periodic), kw)
 
 
 def hann_window(n, periodic=True, **kw):
-    return wrap(_ts.Tensor.hannWindow(n, periodic))
+    return _made(_ts.Tensor.hannWindow(n, periodic), kw)
 
 
 def hamming_window(n, periodic=True, alpha=0.54, beta=0.46, **kw):
-    return wrap(_ts.Tensor.hammingWindow(n, periodic, alpha, beta))
+    return _made(_ts.Tensor.hammingWindow(n, periodic, alpha, beta), kw)
 
 
 def blackman_window(n, periodic=True, **kw):
-    return wrap(_ts.Tensor.blackmanWindow(n, periodic))
+    return _made(_ts.Tensor.blackmanWindow(n, periodic), kw)
 
 
 def kaiser_window(n, periodic=True, beta=12.0, **kw):
     """**`beta` 는 자리 인자다** — torch 가 `kaiser_window(n, periodic, beta)` 로 받는다."""
-    return wrap(_ts.Tensor.kaiserWindow(n, periodic, beta))
+    return _made(_ts.Tensor.kaiserWindow(n, periodic, beta), kw)
 
 
 # **난수는 한 흐름에서 나온다.** 처음에는 부를 때마다 `default_rng(0)` 을 새로
