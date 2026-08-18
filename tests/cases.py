@@ -6523,6 +6523,36 @@ def container_cases(inp=None):
 
     cases.append((CONTAINER_PREFIX + "버퍼 값이 왕복한다", buffer_roundtrip))
 
+    # **등록 안 한 텐서 속성은 버퍼가 아니다.**
+    #
+    # torch 는 `self.t = torch.ones(3)` 를 어느 목록에도 안 넣는다 — 파라미터도
+    # 버퍼도 아니고 `state_dict` 에도 안 실린다. 버퍼가 되려면 `register_buffer` 를
+    # 지나야 한다는 것이 그 API 가 있는 이유다.
+    #
+    # 기울기를 받는 잎은 이 물음 밖이다 — 그쪽은 "깃발만 세운 텐서도 파라미터로
+    # 센다" 로 **이미 갈림이 적혀 있고** parity 가 값으로 붙잡고 있다. 여기서 묻는
+    # 것은 기울기를 안 받는, 그래서 버퍼처럼 생긴 속성이다.
+    def unregistered_keys(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = L.nn.Linear(6, 8)
+                self.plain = L.ones(3)          # 등록 안 했다
+        return " ".join(sorted(Net().state_dict()))
+
+    cases.append((CONTAINER_PREFIX + "등록 안 한 텐서 속성/state_dict 열쇠",
+                  unregistered_keys))
+
+    def unregistered_buffers(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.plain = L.ones(3)
+        return " ".join(sorted(n for n, _ in Net().named_buffers()))
+
+    cases.append((CONTAINER_PREFIX + "등록 안 한 텐서 속성/named_buffers 열쇠",
+                  unregistered_buffers))
+
     # ── `eval()` 이 컨테이너를 **뚫고** 내려가는가. ─────────────────────────
     #
     # 안 내려가면 학습은 멀쩡해 보이고 **추론만 틀린다.** 가장 늦게 발견되는 종류다.

@@ -1351,6 +1351,20 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
     override forward(x: Tensor): Tensor { return x; }
   }
 
+  // **등록 안 한 텐서 속성은 버퍼가 아니다.** torch 는 어느 목록에도 안 넣는다.
+  // 여기는 `ownParameters` 가 깃발을, `namedBuffers` 가 등록을 보므로 이미 그렇다 —
+  // 결속은 안 그랬고(속성에 붙은 텐서를 전부 실었다) 그래서 이 규칙을 못 박는다.
+  class Plain extends nn.Module {
+    fc = new nn.Linear(6, 8);
+    plain = Tensor.owned([3], 1);              // 등록 안 했다
+    override forward(x: Tensor): Tensor { return this.fc.forward(x); }
+  }
+
+  out.set("container::등록 안 한 텐서 속성/state_dict 열쇠",
+    () => Object.keys(new Plain().stateDict()).sort().join(" "));
+  out.set("container::등록 안 한 텐서 속성/named_buffers 열쇠",
+    () => Object.keys(new Plain().namedBuffers()).sort().join(" "));
+
   out.set("container::버퍼 값이 왕복한다", () => {
     const src = new Masked();
     src.loadStateDict({ mask: Tensor.from([2, 5, 9]) });

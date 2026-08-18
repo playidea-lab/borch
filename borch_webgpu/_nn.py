@@ -711,12 +711,24 @@ class Module:
     def state_dict(self):
         if self._m is None:
             out = {}
-            # `persistent=False` 로 등록한 버퍼는 **저장에서 빠진다.** 그것이 그
-            # 인자의 뜻이고, 무시하면 남의 체크포인트와 열쇠가 어긋난다.
+            # **텐서 속성이라고 다 실리는 것이 아니다.**
+            #
+            # 전에는 속성에 붙은 `Tensor` 를 전부 실었다. torch 는 등록을 지난 것만
+            # 싣는다 — `self.t = torch.ones(3)` 은 파라미터도 버퍼도 아니고
+            # `state_dict` 에도 안 들어간다. `register_buffer` 라는 API 가 있는
+            # 이유가 그것이다. 중간값을 속성에 얹어 둔 모델이 그것을 체크포인트에
+            # 실어 보내고 있었고, 받는 쪽은 torch 라면 "남는 열쇠" 로 거절한다.
+            #
+            # 기울기를 받는 잎은 계속 싣는다 — "깃발만 세운 텐서도 파라미터로
+            # 센다" 는 **이미 적어 둔 갈림**이고 parity 가 값으로 붙잡고 있다.
+            # 여기서 같이 조이면 그쪽 규칙이 조용히 뒤집힌다.
+            registered = self.__dict__.get("_buffers", {})
             skip = self.__dict__.get("_nonpersistent", set())
             for name, m in self._children():
                 if isinstance(m, Tensor):
-                    if name not in skip:
+                    if bool(m._h.requiresGrad):
+                        out[name] = m
+                    elif name in registered and name not in skip:
                         out[name] = m
                     continue
                 for k, v in _state_of(m).items():
