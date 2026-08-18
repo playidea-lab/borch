@@ -237,7 +237,11 @@ NOT_PORTED = {
     # 결속의 옵티마이저·스케줄러가 저쪽 것을 그대로 부르므로 `--lib borch_webgpu`
     # 로 도는 그 여섯이 곧 borch.ts 의 `StepLR`·은행 왕복을 재는 것이고, TS 쪽
     # `serialize` 가 같은 것을 바이트로 한 번 더 붙잡는다. 넷은 여전히 `LBFGS` 다.
-    "opt::": (10, "**없음**(LBFGS) · 이어서 학습하기는 결속이 같은 borch.ts 를 밟는다"),
+    # 10 → 14. `save`/`load` 왕복 넷이 늘었다. **TS 쪽은 `serialize` 가 이미
+    # 바이트로 묻는다** — 같은 코덱을 왕복시키고, 남이(numpy·파이썬 `borch`) 읽는지
+    # 까지 확인한다. 골든으로 한 번 더 묻는 것은 파이썬의 `torch.save(경로)` 표면
+    # 이고 borch.ts 는 바이트만 다루므로(파일은 페이지의 일이다) 물을 자리가 없다.
+    "opt::": (14, "**없음**(LBFGS) · 이어서 학습·저장은 결속과 serialize 가 밟는다"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

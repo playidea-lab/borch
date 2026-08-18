@@ -3567,6 +3567,66 @@ def opt_cases(inp=None):
     # 얹기가 빈 일이면 두 자취가 같아지고, 그러면 위 케이스는 아무것도 안 재고 있다.
     cases.append((OPT_PREFIX + "스케줄러 상태를 안 옮기면 갈린다",
                   lambda L: f"{sched_resume(L, True)} | {sched_resume(L, False)}"))
+
+    # ── **`save`/`load`.** 위의 것들이 쓸모가 있으려면 파일이 되어야 한다. ──
+    #
+    # `state_dict()` 를 셋 다 맞춰 놓고도 그것을 **쓸 방법이 없으면** 이어서
+    # 학습하기는 한 세션 안에서만 되는 이야기다. 탭을 새로고침하면 사라진다.
+    #
+    # 형식은 서로 다르다(torch 는 pickle, 우리는 safetensors). 그러니 **바이트가
+    # 아니라 왕복을 묻는다** — 쓴 것을 되읽으면 같은 것이 나오는가.
+    def _tmp(L, name):
+        # **Pyodide 에서도 돌아야 한다.** 브라우저 안에는 진짜 파일시스템이 없지만
+        # 가상 파일시스템이 있고 `tempfile` 이 그것을 쓴다 — 파이썬 코드는 안 바뀐다.
+        import os
+        import tempfile
+        return os.path.join(tempfile.mkdtemp(), name)
+
+    def save_load_state_dict(L):
+        m = model_of(L)
+        path = _tmp(L, "sd.bin")
+        L.save(m.state_dict(), path)
+        got = L.load(path)
+        return got["0.weight"]
+
+    cases.append((OPT_PREFIX + "save/load 가 state_dict 를 왕복한다",
+                  save_load_state_dict))
+
+    # **교재의 관용구는 중첩이다.** `{"model": …, "opt": …, "epoch": 3}` 를 통째로
+    # 저장한다. 평평한 텐서 사전만 되면 그 코드가 안 돈다.
+    def save_load_nested(L):
+        m = model_of(L)
+        opt = L.optim.Adam(m.parameters(), lr=0.05)
+        path = _tmp(L, "ckpt.bin")
+        L.save({"model": m.state_dict(), "opt": opt.state_dict(),
+                "epoch": 3, "note": "half way"}, path)
+        got = L.load(path)
+        return f"{' '.join(sorted(got))} epoch={got['epoch']} note={got['note']}"
+
+    cases.append((OPT_PREFIX + "save/load 가 중첩을 왕복한다", save_load_nested))
+
+    # **`state_dict` 의 열쇠에는 이미 점이 들어 있다**(`fc.weight`). 편 이름을 점으로
+    # 다시 쪼개 되돌리면 `{"model": {"fc": {"weight": …}}}` 가 나온다 — 값은 다
+    # 있는데 구조가 달라서, 되읽은 것을 `load_state_dict` 에 넣으면 그때 터진다.
+    def save_load_dotted(L):
+        m = model_of(L)
+        path = _tmp(L, "dotted.bin")
+        L.save({"model": m.state_dict()}, path)
+        got = L.load(path)
+        return " ".join(sorted(got["model"]))
+
+    cases.append((OPT_PREFIX + "중첩 안의 점 찍힌 열쇠가 안 쪼개진다", save_load_dotted))
+
+    # 되읽은 것이 **정말 쓸 수 있는가.** 열쇠와 값이 맞아도 그대로 못 얹으면 소용없다.
+    def save_load_then_use(L):
+        src = model_of(L)
+        path = _tmp(L, "use.bin")
+        L.save(src.state_dict(), path)
+        dst = L.nn.Sequential(L.nn.Linear(6, 8), L.nn.ReLU(), L.nn.Linear(8, 3))
+        dst.load_state_dict(L.load(path))
+        return dst(L.tensor(xin))
+
+    cases.append((OPT_PREFIX + "되읽은 것을 그대로 얹을 수 있다", save_load_then_use))
     return cases
 
 

@@ -107,6 +107,39 @@ def cross_language(sample):
 
     print(f"  ✓ numpy 가 같은 파일을 읽는다 — 텐서 {len(got)}개, "
           f"이름표 fc.labels={labels}")
+    return cross_library(blob)
+
+
+def cross_library(blob):
+    """브라우저가 쓴 파일을 **파이썬 `borch` 가** 읽는다.
+
+    `serialize.ts` 의 첫 문단이 safetensors 를 고른 이유로 "파이썬 `borch`·numpy·HF
+    도구가 같은 파일을 읽는다" 를 든다. **그 문장이 오래 거짓이었다** — 파이썬 쪽
+    `save`/`load` 는 pickle 이었고, 그래서 브라우저에서 학습해 자기 컴퓨터로
+    가져가는 길이 막혀 있었다. 그 길이 이 프로젝트가 그 형식을 고른 유일한 이유다.
+
+    위의 numpy 검사로는 이것이 안 보인다. 저쪽은 **형식**이 열려 있는지를 묻고
+    이쪽은 **우리 파이썬 코드가 실제로 그 문을 여는지**를 묻는다 — 형식이 맞아도
+    읽는 함수가 없으면 사용자에게는 없는 것과 같다.
+    """
+    import pathlib
+    import sys as _sys
+    import tempfile
+
+    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    import borch
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "from_browser.bin"
+    path.write_bytes(blob)
+    got = borch.load(path)          # 나무가 없는 파일이다 — 평평한 사전으로 온다
+    if "fc.weight" not in got:
+        print(f"**borch 가 못 읽었다** — 열쇠 {sorted(got)}", file=_sys.stderr)
+        return False
+    first = float(got["fc.weight"].data.reshape(-1)[0])
+    if abs(first - 1.5) > 1e-6:
+        print(f"**borch 가 읽은 값이 다르다** — {first}", file=_sys.stderr)
+        return False
+    print(f"  ✓ 파이썬 borch 가 브라우저의 파일을 읽는다 — fc.weight[0]={first}")
     return True
 
 

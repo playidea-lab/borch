@@ -316,38 +316,10 @@ def decode_cifar10(raw):
     return x, y
 
 
-def _to_plain(obj):
-    """텐서를 numpy 로 바꿔 저장 가능한 형태로. 중첩 dict/list 도 따라간다."""
-    if isinstance(obj, Tensor):
-        return {"__tensor__": obj.numpy()}
-    if isinstance(obj, dict):
-        return {k: _to_plain(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_to_plain(v) for v in obj)
-    return obj
-
-
-def _from_plain(obj):
-    if isinstance(obj, dict):
-        if "__tensor__" in obj:
-            return tensor(obj["__tensor__"])
-        return {k: _from_plain(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_from_plain(v) for v in obj)
-    return obj
-
-
-def save(obj, path):
-    """브라우저에도 가상 파일시스템이 있어 경로가 통한다. pickle 한 겹만 쓴다."""
-    import pickle
-    with open(path, "wb") as f:
-        pickle.dump(_to_plain(obj), f)
-
-
-def load(path, **kwargs):
-    import pickle
-    with open(path, "rb") as f:
-        return _from_plain(pickle.load(f))
+# `save`·`load` 는 여기 있었다 — pickle 한 겹이었다. **`_serialize.py` 로 옮겼고
+# 형식이 safetensors 로 바뀌었다.** 코어와 같은 코덱을 부르므로 이제 한쪽이 쓴
+# 파일을 다른 쪽이 읽는다 — borch.ts 가 그 형식을 고른 이유가 그것인데, 파이썬 쪽
+# 둘이 pickle 을 쓰는 동안 그 문장이 사실이 아니었다.
 
 
 class _Cuda:

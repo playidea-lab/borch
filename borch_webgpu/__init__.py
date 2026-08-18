@@ -142,8 +142,9 @@ from ._ops import (                                      # noqa: E402,F401
 from ._data import (                                     # noqa: E402,F401
     ConcatDataset, DataLoader, Dataset, RandomSampler, SequentialSampler, Subset,
     TensorDataset, WeightedRandomSampler, backend, cache_get, cache_put, cuda,
-    decode_cifar10, fetch_cached, load, random_split, save, utils,
+    decode_cifar10, fetch_cached, random_split, utils,
 )
+from ._serialize import load, save                       # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 

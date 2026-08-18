@@ -4484,38 +4484,18 @@ def bincount(t, weights=None, minlength=0):
     return Tensor(out)
 
 
-def _to_plain(obj):
-    """텐서를 numpy 로 바꿔 저장 가능한 형태로. 중첩 dict/list 도 따라간다."""
-    if isinstance(obj, Tensor):
-        return {"__tensor__": obj.data}
-    if isinstance(obj, dict):
-        return {k: _to_plain(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_to_plain(v) for v in obj)
-    return obj
-
-
-def _from_plain(obj):
-    if isinstance(obj, dict):
-        if "__tensor__" in obj:
-            return Tensor(obj["__tensor__"])
-        return {k: _from_plain(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_from_plain(v) for v in obj)
-    return obj
-
-
-def save(obj, path):
-    """진짜 torch 와 달리 pickle 한 겹만 쓴다. 브라우저에도 가상 파일시스템이 있어 경로가 통한다."""
-    import pickle
-    with open(path, "wb") as f:
-        pickle.dump(_to_plain(obj), f)
-
-
-def load(path, **kwargs):
-    import pickle
-    with open(path, "rb") as f:
-        return _from_plain(pickle.load(f))
+# `save`·`load` 는 여기 있었다 — pickle 한 겹이었다. **`_serialize.py` 로 옮겼고
+# 형식이 safetensors 로 바뀌었다.**
+#
+# 옮긴 이유는 셋이 갈려 있었기 때문이다. borch.ts 는 처음부터 safetensors 였고,
+# 그 파일의 첫 문단이 그 형식을 고른 이유로 "**파이썬 `borch`·numpy·HF 도구가 같은
+# 파일을 읽는다**" 를 든다. 그런데 파이썬 쪽이 pickle 을 쓰고 있었으므로 그 문장은
+# 사실이 아니었다 — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 막혀 있었고,
+# 그 길이 이 프로젝트가 그 형식을 고른 유일한 이유다.
+#
+# 잃는 것도 있다. pickle 은 아무 파이썬 객체나 담았고 safetensors 는 텐서·수·글자만
+# 담는다. 그 밖의 것은 이제 **거절**한다 — 조용히 못 담는 것보다 낫고, 애초에 남이
+# 읽을 수 있어야 한다는 것이 이 형식의 조건이다.
 
 
 class no_grad:

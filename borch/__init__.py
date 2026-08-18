@@ -49,10 +49,10 @@ from ._tensor import (
 from ._ops import (
     Generator, _Cuda, _ERF_A, _ERF_P, _INPLACE_UNARY, _Linalg, _Lstsq, _Namespace, _SVD,
     _abs, _binary_math, _col2im, _compare, _cum_extreme, _diagonal_scatter, _erf64,
-    _erfc_pos, _expand_reduced, _from_plain, _gelu, _im2col, _index_at, _index_for,
+    _erfc_pos, _expand_reduced, _gelu, _im2col, _index_at, _index_for,
     _make_inplace, _mat, _nan_mask, _negate, _nm, _one_plus_erf64, _pad2d, _pair, _pick,
     _pool_1d_over_last, _pool_all, _rng, _running_idx, _slice_at, _spread_max,
-    _to_plain, _unary, _wrap, _zero_grad, abs, absolute, acos, acosh,
+    _unary, _wrap, _zero_grad, abs, absolute, acos, acosh,
     adaptive_avg_pool2d, allclose, amax, amin, aminmax, arange, arccos, arccosh, arcsin,
     arcsinh, arctan, arctanh, argsort, argwhere, as_tensor, asin, asinh, atan, atan2,
     atanh, atleast_1d, atleast_2d, atleast_3d, avg_pool2d, bincount, bmm, cat, ceil,
@@ -65,7 +65,7 @@ from ._ops import (
     fft, fix, flip, fliplr, flipud, floor, frac, from_numpy, full, full_like, gather, ge,
     gelu, gt, heaviside, hsplit, hypot, index_select, interpolate, inverse, isfinite,
     isinf, isnan, kthvalue, l1_loss, layer_norm, ldexp, le, leaky_relu, linalg,
-    linspace, load, log, log10, log1p, log2, log_softmax, logaddexp, logaddexp2, logdet,
+    linspace, log, log10, log1p, log2, log_softmax, logaddexp, logaddexp2, logdet,
     logical_and, logical_not, logical_or, logit, logsumexp, lstsq, lt, manual_seed,
     masked_fill, masked_select, matmul, matrix_exp, matrix_power, matrix_rank,
     max_pool1d,
@@ -73,7 +73,7 @@ from ._ops import (
     nanmean, nanquantile, nansum, narrow, ne, neg, negative, nll_loss, no_grad, nonzero,
     norm, normalize, ones, ones_like, outer, pad, pinverse, positive, pow, prod, qr,
     quantile, rad2deg, rand, randint, randn, randperm, ravel, reciprocal, relu, repeat,
-    repeat_interleave, reshape, roll, rot90, round, rsqrt, save, select, sgn, sigmoid,
+    repeat_interleave, reshape, roll, rot90, round, rsqrt, select, sgn, sigmoid,
     sign, signbit, silu, sin, sinc, sinh, slogdet, smooth_l1_loss, softmax, solve, sort,
     split, sqrt, square, stack, svd, swapaxes, swapdims, tan, tanh, tensor, tile, topk,
     trace, tril, triu, trunc, unbind, unflatten, unfold, unique, unsqueeze, vsplit,
@@ -196,6 +196,9 @@ from ._data import (
 )
 from ._rnn import (
     _NnUtils, _NnUtilsRnn, pad_sequence,
+)
+from ._serialize import (
+    load, save,
 )
 
 # ================================================================ 메서드 노출
