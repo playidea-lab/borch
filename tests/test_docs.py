@@ -16,6 +16,11 @@ S3 단계가 그때 도달한 지점이다.
 그래서 경계를 **문서의 종류**로 긋는다. README 는 지금을 말하는 자리이므로 늘
 현재여야 하고, 설계·이력 문서는 그때를 말하는 자리이므로 손대면 안 된다. 시제를
 정규식으로 가르려던 첫 시도는 그 구분을 못 했다.
+
+**설명 페이지(`site/`)도 지금을 말하는 자리다.** 남에게 보이는 첫 화면이라 오히려
+README 보다 낡으면 안 되는데, 여기서 안 보면 아무도 안 본다 — 사이트 문구는 골든을
+늘리는 사람의 시야 밖에 있다. 이 저장소가 세 번 겪은 것과 **같은 방식의 실패**이므로
+같은 그물을 씌운다. 영어 판이 있으므로 `N golden cases` 꼴도 함께 잡는다.
 """
 
 import pathlib
@@ -29,12 +34,18 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # **세 자리로 못 박아 두었다가 표가 1000 을 넘는 순간 조용해졌다.** 아무것도 안
 # 잡는 검사는 통과하는 검사처럼 보이고, 그것이 낡은 수보다 나쁘다 — 낡은 수는
 # 언젠가 눈에 띄지만 안 도는 검사는 안 띈다. 자릿수를 넉넉히 잡는다.
-COUNT = re.compile(r"골든\s*\*{0,2}(\d{3,5})\s*(?:건|/\s*\d{3,5})")
+COUNT = re.compile(
+    r"골든\s*\*{0,2}(\d{3,5})\s*(?:건|/\s*\d{3,5})"
+    # 사이트는 기본이 영어다. `<strong>` 같은 표시는 앞뒤로 흘려보낸다.
+    r"|(\d{3,5})\s*golden\s*cases")
 # **`골든` 을 앞에 안 단 자리도 있다.** "53 건을 빼고 2709 건을 본다" 가 그것이고,
 # 위 그물이 접두사를 요구해서 통째로 빠져나갔다 — 골든이 2263 에서 2953 으로 가는
 # 동안 그 한 줄만 옛날 수를 들고 남아 있었다. 사이트 세션이 눈으로 찾아 줬다.
 # **파생된 수도 수다.** 여기서 세 값 중 하나여야 한다는 규칙은 똑같이 적용된다.
 DERIVED = re.compile(r"(\d{3,5})\s*건을\s*본다")
+
+# **지금을 말하는 자리들.** 설계·이력 문서는 여기 없다 — 위의 docstring 참고.
+LIVE_DOCS = ("README.md", "site/index.html", "site/ko/index.html")
 
 
 def _hit(found):
@@ -75,19 +86,23 @@ def test_docs_do_not_name_a_stale_golden_count():
     total, core, bind = _counts()
     allowed = {str(total), str(core), str(bind)}
     stale = []
-    path = ROOT / "README.md"
-    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        for found in COUNT.findall(line) + DERIVED.findall(line):
-            hit = _hit(found)
-            if hit not in allowed:
-                stale.append(
-                    f"README.md:{i}  '{hit}' — 지금은 {total}(전체) / "
-                    f"{core}(코어) / {bind}(결속)")
+    for rel in LIVE_DOCS:
+        path = ROOT / rel
+        # 사이트는 없을 수도 있다(체크아웃에 따라). 없는 것을 실패로 만들지 않는다.
+        if not path.exists():
+            continue
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for found in COUNT.findall(line) + DERIVED.findall(line):
+                hit = _hit(found)
+                if hit not in allowed:
+                    stale.append(
+                        f"{rel}:{i}  '{hit}' — 지금은 {total}(전체) / "
+                        f"{core}(코어) / {bind}(결속)")
     assert not stale, (
-        "README 의 골든 수가 낡았다:\n  " + "\n  ".join(stale) +
-        "\n\nREADME 는 지금을 말하는 자리다. 그때를 이야기해야 하는 문장이면 수를 "
-        "빼고 쓰거나 설계 문서로 옮겨라 — 지난 수를 현재 수로 고치는 것은 낡은 수를 "
-        "고치는 것이 아니라 역사를 위조하는 것이다.")
+        "지금을 말하는 문서의 골든 수가 낡았다:\n  " + "\n  ".join(stale) +
+        "\n\nREADME 와 `site/` 는 지금을 말하는 자리다. 그때를 이야기해야 하는 "
+        "문장이면 수를 빼고 쓰거나 설계 문서로 옮겨라 — 지난 수를 현재 수로 고치는 "
+        "것은 낡은 수를 고치는 것이 아니라 역사를 위조하는 것이다.")
 
 
 # `2,358 줄` 처럼 패키지 크기를 말하는 자리. 천 단위 쉼표를 쓰든 안 쓰든 잡는다.
