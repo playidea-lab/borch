@@ -1354,7 +1354,22 @@ export class Tensor implements Node<Tensor> {
   // ── 축약 ──────────────────────────────────────────────────────────────
 
   /** 전부 더해 스칼라 하나로. `backward()` 의 출발점이다. */
-  sum(): Tensor {
+  /**
+   * 전부 더한다. `dtype` 을 주면 **더하기 전에** 그 형으로 바꾼다.
+   *
+   * **이웃 전부가 그 인자를 받는데 이것만 안 받았다.** `mean`·`prod`·`nansum` 은
+   * `(dim?, keepdim, dtype?)` 이고 `cumsum`·`cumprod` 도 받는다. 축 있는 쪽인
+   * `sumDim` 도 받는다. 축약 중 **가장 많이 불리는 이름 하나만** 빠져 있었고,
+   * 그래서 `torch.sum(x, dtype=torch.float32)` 을 옮길 자리가 없었다.
+   *
+   * 넷 중 하나만 안 듣는 것이 하나도 안 듣는 것보다 나쁘다 — 규칙을 세울 수가
+   * 없어서다. 같은 자리를 `norm` 이 이미 한 번 보여 줬다.
+   *
+   * **순서가 값을 정한다.** 먼저 바꾸고 더한다 — `[1.7, −2.3, 0.9]` 를 int64 로
+   * 접으면 먼저 깎을 때 −1, 나중에 깎을 때 0 이다. torch 는 앞쪽이다.
+   */
+  sum(dtype?: DType): Tensor {
+    if (dtype !== undefined) return this.castFirst(dtype).sum().to(dtype);
     // **복소수는 실수 축약 둘로 쪼갠다.** 합은 실수부와 허수부에 각각 걸리므로
     // 새 커널이 필요 없다 — `real`·`imag`·`complex` 가 이미 있고 셋 다 역방향을 안다.
     //

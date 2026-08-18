@@ -632,7 +632,88 @@ function addKeepdim(out: Map<string, Case>): void {
   grad("max(keepdim)", (t) => t.max(1, true).values);
   grad("median(keepdim)", (t) => t.median(1, true).values);
   grad("mean(keepdim)", (t) => t.mean(1, true));
+  addReduceDtype(out);
   addArgs(out);
+}
+
+/**
+ * 축약의 `dtype=` — `keep::dtype::`.
+ *
+ * **규칙 한 줄이다: 넣기 전에 바꾼다.** 접고 나서가 아니다. 형만 물으면 두 순서가
+ * 구별이 안 되므로 값도 묻는다 — `[1.7, −2.3, 0.9]` 의 합이 먼저 깎으면 −1,
+ * 나중에 깎으면 0 이다.
+ *
+ * **이 갈래가 조용히 틀리는 자리라는 것은 이미 실측됐다.** 축약 중 `norm` 하나만
+ * `dtype=` 을 안 듣고 있었고, `sum`·`mean`·`prod` 는 들었다 — 넷 중 하나만 안 듣는
+ * 것이 하나도 안 듣는 것보다 나쁘다. 파이썬 쪽에서 그것을 잡았고, 여기 서른다섯은
+ * **같은 물음을 borch.ts 에 처음 하는 것**이다.
+ */
+function addReduceDtype(out: Map<string, Case>): void {
+  const P = "keep::dtype::";
+  // 실수를 정수로 접는 자리가 순서를 가른다. 정수·참거짓은 올림 쪽을 본다.
+  const SLANT = [1.7, -2.3, 0.9];
+  const COUNTS = [3, 1, 4];
+  const MARKS = [1, 0, 1];
+  const src = (name: string): Tensor => {
+    if (name === "실수") return Tensor.from(SLANT, [3]);
+    if (name === "정수") return Tensor.from(COUNTS, [3], { dtype: "int64" });
+    return Tensor.from(MARKS, [3], { dtype: "bool" });
+  };
+
+  for (const kind of ["실수", "정수", "참거짓"]) {
+    for (const want of ["float32", "int64"] as const) {
+      out.set(`${P}sum(${kind}→${want})`, () => src(kind).sum(want));
+      // **형 이름은 `dtypeName` 을 지난다.** 골든은 파이썬의 `str(dtype)` 인
+      // `torch.float32` 를 굳혔고 borch.ts 의 `.dtype` 은 `float32` 다 — 그대로
+      // 내면 여덟 건이 이름 표기 하나로 빨개진다.
+      out.set(`${P}sum(${kind}→${want}) 의 형`,
+        () => dtypeName(src(kind).sum(want).dtype));
+      out.set(`${P}cumsum(${kind}→${want})`, () => src(kind).cumsum(0, want));
+    }
+    // **`sum(dtype=bool)` 은 되는데 `cumsum(dtype=bool)` 은 안 된다** — 규칙이
+    // 아니라 torch 가 그 커널을 안 만든 것이라, 따로 묻지 않으면 안 보인다.
+    out.set(`${P}sum(${kind}→참거짓)`, () => src(kind).sum("bool"));
+    out.set(`${P}prod(${kind}→float32)`, () => src(kind).prod(undefined, false, "float32"));
+  }
+  out.set(`${P}mean(정수→float32)`,
+    () => src("정수").mean(undefined, false, "float32"));
+  out.set(`${P}mean(참거짓→float32)`,
+    () => src("참거짓").mean(undefined, false, "float32"));
+  out.set(`${P}sum(dim=1→float32)`,
+    () => Tensor.from([1, 2, 3, 4], [2, 2], { dtype: "int64" })
+      .sumDim(1, false, "float32"));
+  out.set(`${P}nansum(실수→int64)`, () => src("실수").nansum(undefined, false, "int64"));
+
+  // `dtype=` 이 **모든** 거절을 풀지는 않는다. 셋은 그대로다(실측).
+  const refuses = (name: string, body: () => unknown): void => {
+    out.set(`${P}${name}`, () => {
+      try {
+        body();
+      } catch (err) {
+        // 파이썬 쪽은 예외의 **종류 이름**을 굳혔다. 저쪽 `RuntimeError` 가
+        // 여기서도 같은 이름이라 그대로 맞는다.
+        return (err as Error).constructor.name;
+      }
+      return "예외가 안 났다";
+    });
+  };
+  refuses("mean(→int64)는 거절", () => src("실수").mean(undefined, false, "int64"));
+  refuses("cumsum(→참거짓)은 거절", () => src("정수").cumsum(0, "bool"));
+  refuses("cumprod(→참거짓)은 거절", () => src("정수").cumprod(0, "bool"));
+
+  // **`to` 가 형을 진짜 바꾼다.** 오래 장치 문자열만 보고 형을 조용히 버렸다.
+  out.set(`${P}to(float32) 의 형`, () => dtypeName(src("정수").to("float32").dtype));
+  out.set(`${P}to(int64) 의 형`, () => dtypeName(src("실수").to("int64").dtype));
+  out.set(`${P}to(int64) 의 값`, () => src("실수").to("int64"));
+
+  // **이름은 `keep::grad::` 다** — 파이썬 쪽에서 `grad()` 헬퍼가 붙이는 접두어가
+  // `dtype::` 이 아니다. 여기서 한 칸 더 넣었더니 "골든에 없는 이름" 으로 나왔다.
+  out.set("keep::grad::sum(dtype=float32)", () => {
+    const leaf = Tensor.from([1.0, 4.0, 2.0, 3.0, 0.5, 5.0], [2, 3],
+      { requiresGrad: true });
+    leaf.sumDim(1, true, "float32").sum().backward();
+    return gradOf(leaf, "sum(dtype=float32)");
+  });
 }
 
 /**

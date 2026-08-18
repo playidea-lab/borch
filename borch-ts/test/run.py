@@ -230,7 +230,13 @@ NOT_PORTED = {
     "spot::": (47, "아직 — `asStrided`·`diagEmbed` 는 저쪽에도 있다"),
     "toplin::": (42, "별칭 — `lu`=`linalg.lu_factor` 처럼 최상위의 둘째 이름"),
     "stat::": (42, "아직 — `histc`·`histogram` 은 저쪽에도 있다(비동기다)"),
-    "keep::": (35, "아직 — `dtype=` 는 저쪽 `castFirst` 가 한다"),
+    # `keep::` 이 여기 있었다 — 35 건, "아직". 전부 옮겼으므로 줄을 지운다.
+    #
+    # 옮겨 보니 **값은 서른네 건이 첫 시도에 맞았다.** 축약의 `dtype=` 은 "넣기 전에
+    # 바꾼다" 는 규칙도, `sum(→bool)` 은 되고 `cumsum(→bool)` 은 안 된다는 갈림도
+    # 이미 지켜지고 있었다. 안 지켜진 것은 하나 — **`sum` 만 `dtype=` 을 받을 자리가
+    # 없었다.** 이웃(`mean`·`prod`·`nansum`·`cumsum`·`sumDim`)이 전부 받는데
+    # 축약에서 제일 많이 불리는 이름 하나가 빠져 있었다.
     "blend::": (34, "아직 — `addmm` 계열은 저쪽에도 있다"),
     "fname::": (28, "별칭 — `F` 의 제자리 판. 메서드 쪽에서 이미 묻는다"),
     "bit::": (24, "별칭 — 비트 연산의 메서드 이름"),
@@ -277,11 +283,17 @@ NOT_PORTED = {
 }
 
 
-def unasked_report(report):
+def unasked_report(report, show=None):
     """안 물어본 것을 **접두어로 묶어** 보여주고, 까닭 없는 것을 가려낸다.
 
     개수만 찍으면 그 수가 무엇으로 이루어졌는지 아무도 모른다. `679 건` 안에
     "일부러 안 옮긴 것" 과 "빠뜨린 것" 이 섞여 있어도 화면은 똑같다.
+
+    `show` 에 접두어를 주면 **그 자리의 이름을 전부 편다.** 개수와 한 줄짜리 까닭만
+    보고는 "무엇이 빠졌는지" 를 물을 수가 없었다 — 한 묶음을 옮기려면 먼저 그 목록을
+    봐야 하는데, 그 목록을 내주는 자리가 없어서 케이스 표를 손으로 뒤져야 했다.
+    까닭이 한 줄로 굳으면 그 안에서 성격이 갈려도 안 보인다는 것이 이 저장소가
+    접두어별로 나눠 적기 시작한 이유이고, 같은 이유가 한 칸 더 안쪽에도 있었다.
     """
     import json
 
@@ -292,6 +304,13 @@ def unasked_report(report):
     for name in rest:
         head = name.split("::", 1)[0] + "::" if "::" in name else "(접두어 없음)"
         groups.setdefault(head, []).append(name)
+
+    if show is not None:
+        want = show if show.endswith("::") else show + "::"
+        names = groups.get(want, [])
+        out = [f"  {want} 에서 안 물어본 것 {len(names)}건:"]
+        out.extend(f"    · {n}" for n in sorted(names))
+        return out
 
     lines = []
     surprise = []
@@ -345,7 +364,8 @@ def main(argv):
     gap = report["total"] - report["registered"]
     print(f"골든 {report['total']}건 중 {report['registered']}건을 TS 로 썼다 "
           f"— {gap}건은 아직 안 물었다.")
-    gap_lines = unasked_report(report)
+    show = argv[argv.index("--show") + 1] if "--show" in argv else None
+    gap_lines = unasked_report(report, show)
     for line in gap_lines:
         print(line)
     gap_ok = not any("✘" in line for line in gap_lines)
