@@ -3371,15 +3371,32 @@ function addIndex(out: Map<string, Case>, inp: Inputs): void {
     return gradOf(s, "scatter_add");
   });
 
-  // 정렬된 것 안에서 자리를 찾는다 — "나보다 작은 것이 몇 개인가" 를 센다.
-  const seq = (): Tensor => Tensor.from([1, 3, 5, 7], [1, 4]);
-  const want = (): Tensor => Tensor.from([0, 3, 6, 9], [4, 1]);
-  const counted = (right: boolean): Tensor =>
-    seq().binary(right ? "le" : "lt", want()).to("float32").sumDim(1)
-      .to("int64").reshape([4]);
-  out.set("index::searchsorted", () => counted(false));
-  out.set("index::searchsorted(right)", () => counted(true));
-  out.set("index::bucketize", () => counted(false));
+  // 정렬된 것 안에서 자리를 찾는다.
+  //
+  // **이 셋이 오래 `searchSorted` 를 안 불렀다.** `seq < want` 를 퍼뜨려 더하는
+  // 것으로 적혀 있었고, 값은 정확히 같아서 초록이었다 — 다만 그때 재던 것은
+  // 퍼뜨리기와 축약이었지 이 이름이 아니었다. borch.ts 에 그 이름이 없었으므로
+  // 그것이 그때 할 수 있는 전부이기도 했다.
+  const seq = (): Tensor => Tensor.from([1, 3, 5, 7], [4]);
+  const want = (): Tensor => Tensor.from([0, 3, 6, 9], [4]);
+  out.set("index::searchsorted", () => seq().searchSorted(want()));
+  out.set("index::searchsorted(right)", () => seq().searchSorted(want(), true));
+  out.set("index::bucketize", () => want().bucketize(seq()));
+
+  // **같은 것을 두 이름으로 받는 자리**는 파이썬 쪽 이야기다 — `right`(참거짓)와
+  // `side`(글자)를 맞춰 보는 일, 그리고 둘이 어긋날 때 멈추는 일. borch.ts 는
+  // 하나만 알고, 그 하나가 맞는지를 여기서 묻는다.
+  out.set("index::searchsorted(side=left)", () => seq().searchSorted(want(), false));
+  out.set("index::searchsorted(side=right)", () => seq().searchSorted(want(), true));
+  out.set("index::searchsorted(side=right, right=True)",
+    () => seq().searchSorted(want(), true));
+
+  // 경계가 하나뿐이거나 값이 경계를 벗어나는 자리. **이진 탐색의 양 끝**이고,
+  // 가운데만 물으면 `lo`·`hi` 의 초기값이 틀려도 답이 맞는다.
+  out.set("index::searchsorted(끝 밖)", () =>
+    Tensor.from([2, 4], [2]).searchSorted(Tensor.from([0, 1, 2, 3, 4, 5], [6])));
+  out.set("index::searchsorted(경계 하나)", () =>
+    Tensor.from([3], [1]).searchSorted(Tensor.from([1, 3, 5], [3]), true));
 }
 
 /**

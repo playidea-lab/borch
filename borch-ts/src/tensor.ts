@@ -169,6 +169,7 @@ import {
   gatherIndexBackward,
   indexSelect,
   indexSelectBackward,
+  searchSorted,
   maskedScatterKernel,
   maskedScatterSourceBackward,
   matmul,
@@ -2504,6 +2505,50 @@ export class Tensor implements Node<Tensor> {
     if (this.dtype !== "float32") {
       throw new RuntimeError(`${korean} — \`.to("float32")\` 를 먼저 불러라.\n(torch: ${phrase})`);
     }
+  }
+
+  /**
+   * **정렬된** 경계(`this`) 안에서 `values` 의 각 값이 들어갈 자리.
+   *
+   * `torch.searchsorted(sorted_sequence, values)` 이고, 받는 쪽이 경계라 여기서는
+   * 경계의 메서드다. 답은 `int64` 이고 모양은 `values` 를 따른다.
+   *
+   * **동점을 어느 쪽으로 보낼지가 이 함수의 절반이다.** 기본은 왼쪽 — 같은 값이
+   * 이미 있으면 그 **앞**에 선다(나보다 작은 것의 수). `right` 를 주면 뒤에 선다.
+   * 파이썬 쪽은 이것을 `right`(참거짓)와 `side`(글자) **두 이름으로** 받는데,
+   * 그 둘을 맞춰 보는 일은 거기서 한다 — 여기는 하나만 안다.
+   *
+   * 정렬돼 있는지는 **안 확인한다.** torch 도 안 한다(확인하려면 O(n) 을 더 도는데,
+   * 그 값을 치를 자리면 애초에 이 함수를 안 쓴다). 안 정렬된 것을 주면 답이
+   * 조용히 뜻을 잃는 것이 아니라 — 이진 탐색이 그냥 어떤 자리를 낸다.
+   */
+  searchSorted(values: Tensor, right = false): Tensor {
+    const nSeq = this.size;
+    const nVal = values.size;
+    if (nVal === 0) {
+      return new Tensor(dev().alloc(0), [...values.shape], { dtype: "int64" });
+    }
+    const out = dev().alloc(nVal);
+    dev().run1d(
+      dev().pipeline(
+        `ss:${nSeq}:${nVal}:${right ? "r" : "l"}`,
+        () => searchSorted(nSeq, nVal, right),
+      ),
+      [this.buffer, values.buffer, out],
+      nVal,
+    );
+    // **자리는 값이 아니다** — 기울기가 안 흐른다. torch 도 그렇다.
+    return new Tensor(out, [...values.shape], { dtype: "int64" });
+  }
+
+  /**
+   * `searchSorted` 와 **받는 쪽이 뒤집힌 것**. 그것이 두 이름의 차이 전부다.
+   *
+   * torch 가 `bucketize(input, boundaries)` 로 값 쪽을 먼저 받아서, 여기서도 값이
+   * 수신자다. 계산은 저쪽 하나뿐이다 — 두 벌로 두면 한쪽만 고쳐진다.
+   */
+  bucketize(boundaries: Tensor, right = false): Tensor {
+    return boundaries.searchSorted(this, right);
   }
 
   /** 축 하나를 색인 **벡터**가 고른다. `gather` 와 달리 색인이 자리마다 다르지 않다. */

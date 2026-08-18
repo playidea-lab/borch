@@ -2825,6 +2825,18 @@ def index_cases(inp=None):
         lambda L: L.searchsorted(L.tensor(line), L.tensor(want),
                                  side="right", right=True))
 
+    # **이진 탐색의 양 끝.** 가운데만 물으면 `lo`·`hi` 의 초기값이 틀려도 답이 맞는다 —
+    # 값이 경계 전부보다 작거나 크면 0 과 n 이 나와야 하고, 경계가 하나면 고리가
+    # 한 번도 안 도는 자리를 지난다.
+    edge = np.array([2., 4.], dtype=np.float32)
+    span = np.array([0., 1., 2., 3., 4., 5.], dtype=np.float32)
+    add("searchsorted(끝 밖)",
+        lambda L: L.searchsorted(L.tensor(edge), L.tensor(span)))
+    one = np.array([3.], dtype=np.float32)
+    trio = np.array([1., 3., 5.], dtype=np.float32)
+    add("searchsorted(경계 하나)",
+        lambda L: L.searchsorted(L.tensor(one), L.tensor(trio), right=True))
+
     def refuses(name, fragment, fn):
         def run(L, f=fn, frag=fragment):
             try:

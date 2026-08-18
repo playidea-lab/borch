@@ -1792,6 +1792,41 @@ ${flatId(n)}
 }`;
 }
 
+/**
+ * 정렬된 경계 안에서 각 값이 들어갈 자리. `searchsorted`·`bucketize` 가 같이 쓴다.
+ *
+ * **비교해서 세는 것으로도 답은 나온다.** 골든의 TS 판이 오래 그렇게 적혀 있었다 —
+ * `seq < want` 를 퍼뜨려 더하면 정확히 이 수다. 값은 맞지만 그 길은 `n·m` 짜리 중간
+ * 텐서를 만든다. 경계 1,000 개에 값 100 만 개면 4GB 이고, 그러면 이 이름이
+ * **버퍼 한계에서 멈춘다** — 사용자가 `bucketize` 를 고르는 이유가 바로 그 크기에서
+ * 싸게 하려는 것인데 거기서 못 쓰게 된다.
+ *
+ * 그래서 이진 탐색이다. 스레드는 값마다 하나, 고리는 `log2(n)` 번, 중간 텐서는 없다.
+ *
+ * `right` 가 동점의 어느 쪽인지를 정한다 — 거짓이면 **나보다 작은 것의 수**(같은 값
+ * 앞에 선다), 참이면 **나보다 작거나 같은 것의 수**(같은 값 뒤에 선다).
+ */
+export function searchSorted(nSeq: number, nVal: number, right: boolean): string {
+  // 동점을 왼쪽으로 보낼지 오른쪽으로 보낼지가 이 비교 하나에 걸려 있다.
+  const goRight = right ? "A[mid] <= v" : "A[mid] < v";
+  return `
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> V: array<f32>;
+@group(0) @binding(2) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(nVal)}
+  let v = V[gid];
+  var lo = 0u;
+  var hi = ${nSeq}u;
+  while (lo < hi) {
+    let mid = lo + (hi - lo) / 2u;
+    if (${goRight}) { lo = mid + 1u; } else { hi = mid; }
+  }
+  Out[gid] = f32(lo);
+}`;
+}
+
 /** `index_select` 의 역방향. 같은 자리를 여러 번 골랐으면 쌓인다. */
 export function indexSelectBackward(
   outer: number,
