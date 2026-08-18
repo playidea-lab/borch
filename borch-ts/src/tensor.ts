@@ -7326,7 +7326,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * 들고 스트라이드를 안 들어서 칸 걸러 보는 틀을 만들 수가 없다. 값은 같다.
    */
   real(): Tensor {
-    this.needComplex("real");
+    // **`real` 과 `imag` 는 규칙이 다르다.** torch 는 실수 텐서에 `real` 을 주면
+    // 그것을 그대로 돌려주고(문서에 그렇게 적혀 있다), `imag` 는 거절한다 —
+    // "imag is not implemented for tensors with non-complex dtypes".
+    //
+    // 여기서는 둘 다 거절하고 있었다. 나란히 선 두 이름을 같은 규칙으로 묶은 것인데
+    // torch 가 그 둘을 다르게 두었고, 그래서 `torch.real(x)` 를 쓰는 코드가 실수
+    // 텐서에서 멈췄다. 형도 그대로여야 한다 — int64 를 넣으면 int64 가 나온다.
+    if (!this.isComplex()) return this;
     const n = this.size;
     const out = Tensor.cRun(`cpart:0:${n}`, () => complexPart(n, 0),
       [this.raw], n, n);
@@ -7393,6 +7400,42 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   conj(): Tensor {
     return this.conjPhysical();
+  }
+
+  /**
+   * 켤레 비트가 서 있는가. **여기서는 언제나 거짓이다.**
+   *
+   * torch 의 `conj()` 는 값을 안 바꾸고 **비트 하나를 세운다** — 실제 켤레는 나중에
+   * 필요할 때 만든다(그래서 `resolve_conj` 가 따로 있다). 여기 `conj` 는 그 자리에서
+   * 켤레를 만들므로 미룰 것이 없고, 세울 비트도 없다.
+   *
+   * **그래도 이름을 둔다.** 없으면 `x.isConj()` 가 "그런 것 없다" 로 멈추는데, 그
+   * 물음의 답은 있다 — 거짓이다. 게으른 비트가 없다는 것은 구현의 사정이지
+   * 물음이 뜻을 잃는 이유가 아니다.
+   */
+  isConj(): boolean {
+    return false;
+  }
+
+  /** 부호 비트가 서 있는가. `isConj` 와 같은 이유로 언제나 거짓이다. */
+  isNeg(): boolean {
+    return false;
+  }
+
+  /**
+   * 미뤄 둔 켤레를 실제 값으로. **여기서는 자기 자신이다** — 미뤄 둔 것이 없다.
+   *
+   * torch 에서는 `conj()` 가 세운 비트를 여기서 갚는다. 우리 `conj` 는 이미 갚고
+   * 오므로 갚을 것이 없고, 그래서 이것은 항등이다. 항등인 것과 **없는 것은 다르다** —
+   * torch 코드가 켤레를 넘기기 전에 이 줄을 넣는 것은 흔한 관용구다.
+   */
+  resolveConj(): Tensor {
+    return this;
+  }
+
+  /** 미뤄 둔 부호 뒤집기를 실제 값으로. `resolveConj` 와 같은 이유로 항등이다. */
+  resolveNeg(): Tensor {
+    return this;
   }
 
   /**

@@ -3680,6 +3680,134 @@ function addRecent(out: Map<string, Case>): void {
     out.set(`blend::addcdiv(value=${value})`, () => t0().addcdiv(t1(), t2(), value));
   }
 
+  // ── 남은 서른넷 ─────────────────────────────────────────────────────
+  //
+  // 위는 값만 물었고, 이 아래가 **인자가 실제로 닿는지**를 묻는 자리다.
+  //
+  // - `addmv`·`addr` 은 `beta`·`alpha` 를 한 번도 안 물었다.
+  // - `input` 이 결과보다 **작아야** 퍼지는 것이 보인다 — torch 는 `(4,)` 도
+  //   스칼라도 받는다.
+  // - **기울기가 `beta=0` 을 가른다.** 값만 보면 그래프에서 뺀 것과 구별이 안 되는데,
+  //   빼 두면 `input.grad` 가 0 이 아니라 **없다**. torch 는 0 을 준다.
+  // - 제자리 판은 **자기를 돌려줘야** 한다. 새 텐서를 주면 `x.addmm_(a, b).add_(1)`
+  //   이 원본이 아닌 사본을 고치기 시작한다.
+  const vecv = (): Tensor => Tensor.from([1, 0, 2], [3]);
+  const v1 = (): Tensor => Tensor.from([1, 2], [2]);
+  const v2 = (): Tensor => Tensor.from([3, 4, 5], [3]);
+  const ones = (shape: number[]): Tensor =>
+    Tensor.zeros(shape).add(Tensor.full([], 1));
+
+  for (const [beta, alpha] of [[1, 1], [2, 3], [0, 1]] as const) {
+    out.set(`blend::addmv(beta=${beta}, alpha=${alpha})`,
+      () => ones([2]).addmv(m1(), vecv(), beta, alpha));
+    out.set(`blend::addr(beta=${beta}, alpha=${alpha})`,
+      () => ones([2, 3]).addr(v1(), v2(), beta, alpha));
+  }
+
+  // 퍼지는 `input`. 결과는 (2,4) 인데 받는 쪽이 (4,) 이거나 스칼라다.
+  out.set("blend::addmm(input 이 (4,))", () => ones([4]).addmm(m1(), m2()));
+  out.set("blend::addmm(input 이 스칼라)", () => ones([]).addmm(m1(), m2()));
+  out.set("blend::baddbmm(input 이 (2,4))", () => base24().baddbmm(b1(), b2()));
+  out.set("blend::addcmul(브로드캐스트)",
+    () => t0().addcmul(Tensor.from([1, 10], [2]), t2()));
+
+  // 기울기. 무게를 **고르지 않게** 줘야 자리마다 다른 몫이 안 상쇄된다.
+  const WEIGHT = [1.0, 2.0, 0.5, 3.0, 2.0, 0.5, 1.5, 1.0];
+  const blendGrad = (
+    name: string, src: () => Tensor, body: (t: Tensor) => Tensor,
+    weight: () => Tensor = () => Tensor.from(WEIGHT, [2, 4]),
+  ): void => {
+    out.set(`blend::grad::${name}`, () => {
+      const leaf = src();
+      leaf.requiresGrad = true;
+      body(leaf).mul(weight()).sum().backward();
+      return gradOf(leaf, name);
+    });
+  };
+
+  blendGrad("addmm(beta=2, alpha=3)", base24, (x) => x.addmm(m1(), m2(), 2, 3));
+  // **여기서 그래프에서 뺀 구현이 멈춘다** — `requires_grad 가 아니다` 로.
+  blendGrad("addmm(beta=0)", base24, (x) => x.addmm(m1(), m2(), 0));
+  blendGrad("addmm(퍼지는 input)", () => ones([4]), (x) => x.addmm(m1(), m2()));
+  blendGrad("addmm(mat1)", m1, (x) => base24().addmm(x, m2(), 1, 3));
+  blendGrad("addbmm", base24, (x) => x.addbmm(b1(), b2()));
+  blendGrad("addbmm(batch1)", b1, (x) => base24().addbmm(x, b2(), 1, 2));
+  blendGrad("baddbmm", deep, (x) => x.baddbmm(b1(), b2()),
+    () => Tensor.from(Array.from({ length: 16 }, (_, i) => i + 1), [2, 2, 4]));
+  blendGrad("addmv(mat)", m1, (x) => ones([2]).addmv(x, vecv(), 1, 2),
+    () => Tensor.from([1, 2], [2]));
+  blendGrad("addr(vec1)", v1, (x) => ones([2, 3]).addr(x, v2(), 1, 2),
+    () => Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]));
+  blendGrad("addcdiv", t0, (x) => x.addcdiv(t1(), t2(), 2),
+    () => Tensor.from([1.0, 2.0, 0.5, 3.0], [2, 2]));
+
+  // 제자리. **값과 "자기를 돌려주는가" 를 따로 묻는다** — 값만 물으면 사본을
+  // 돌려주는 구현이 통과한다.
+  const inplace: [string, () => Tensor, (t: Tensor) => Tensor][] = [
+    ["addmm_", base24, (t) => t.addmm_(m1(), m2())],
+    ["addbmm_", base24, (t) => t.addbmm_(b1(), b2())],
+    ["baddbmm_", deep, (t) => t.baddbmm_(b1(), b2())],
+    ["addmv_", () => ones([2]), (t) => t.addmv_(m1(), vecv())],
+    ["addr_", () => ones([2, 3]), (t) => t.addr_(v1(), v2())],
+    ["addcmul_", t0, (t) => t.addcmul_(t1(), t2())],
+    ["addcdiv_", t0, (t) => t.addcdiv_(t1(), t2())],
+  ];
+  for (const [name, src, run] of inplace) {
+    out.set(`blend::제자리::${name}`, () => {
+      const x = src();
+      run(x);
+      return x;
+    });
+    // **`verdict` 를 지나야 한다.** 골든은 파이썬의 `str(bool)` 이라 `True` 이고
+    // JS 의 `String(true)` 는 `true` 다 — 판정이 다른 것이 아니라 적는 법이 다르다.
+    out.set(`blend::제자리::${name}(같은 텐서)`, () => {
+      const x = src();
+      return verdict(run(x) === x);
+    });
+  }
+
+  // ── 복소수의 이웃 (`make::`) ────────────────────────────────────────
+  //
+  // **복소수가 없어도 답이 있는 이름들이다.** 실수를 주면 `real`·`conj` 는 자기
+  // 자신이고 `angle` 은 0(음수면 π)이다. 항등인 것과 **없는 것은 다르다** — torch
+  // 코드는 켤레를 넘기기 전에 `resolve_conj()` 를 넣는 관용구를 쓴다.
+  //
+  // **형까지 지켜야 한다.** 항등이라고 아무거나 돌려주면 int64 가 float32 로
+  // 새는데, 값이 같아서 값만 묻는 케이스는 통과한다.
+  const kinds: [string, () => Tensor][] = [
+    ["float32", () => Tensor.from([-1.5, 0.0, 2.0, 3.0, -4.0, 0.5], [2, 3])],
+    ["int64", () => Tensor.from([1, -2, 3], [3], { dtype: "int64" })],
+    ["bool", () => Tensor.from([1, 0, 1], [3], { dtype: "bool" })],
+  ];
+  const idents: [string, (t: Tensor) => Tensor][] = [
+    ["real", (t) => t.real()],
+    ["conj", (t) => t.conj()],
+    ["conj_physical", (t) => t.conjPhysical()],
+    ["resolve_conj", (t) => t.resolveConj()],
+    ["resolve_neg", (t) => t.resolveNeg()],
+  ];
+  for (const [name, fn] of idents) {
+    for (const [tag, src] of kinds) {
+      out.set(`make::${name}(${tag})`, () => fn(src()));
+      out.set(`make::${name}(${tag}) 형`, () => dtypeName(fn(src()).dtype));
+    }
+  }
+  // `angle` 만 형이 **언제나 float32** 다 — 각도는 실수라서.
+  for (const [tag, src] of kinds) {
+    out.set(`make::angle(${tag})`, () => src().angle());
+    out.set(`make::angle(${tag}) 형`, () => dtypeName(src().angle().dtype));
+  }
+  // 판정 셋 — 전부 거짓. **게으른 비트가 없다는 것이 물음이 뜻을 잃는 이유는 아니다.**
+  const predicates: [string, (t: Tensor) => boolean][] = [
+    ["is_complex", (t) => t.isComplex()],
+    ["is_conj", (t) => t.isConj()],
+    ["is_neg", (t) => t.isNeg()],
+  ];
+  for (const [name, fn] of predicates) {
+    out.set(`make::${name}`,
+      () => kinds.map(([, src]) => verdict(fn(src()))).join(" "));
+  }
+
   // ── 최상위 선형대수 (`toplin::`) ────────────────────────────────────
   //
   // **인자 순서가 `linalg` 쪽과 뒤집혀 있다.** 그 자리를 TS 에서도 물어 둔다.
