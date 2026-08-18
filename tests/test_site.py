@@ -9,8 +9,10 @@
 파서가 텐서 메서드 422 개 중 18 개만 물고 있었는데 화면은 멀쩡해 보였다).
 """
 
+import gzip
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -79,3 +81,63 @@ def test_site_examples_name_only_real_modules():
             f"{package} 의 모듈을 사이트가 안 싣는다: {sorted(forgotten)}\n"
             "  site/assets/runner.js 의 PACKAGES 에 넣어라 — 빠지면 브라우저에서 "
             "ImportError 로 터진다.")
+
+# ── 크기를 대는 자리 ──────────────────────────────────────────────────
+#
+# **`KB` 도 수다.** `test_docs.py` 가 골든 개수와 패키지 줄 수를 붙잡는데 크기만
+# 빠져 있었고, 그 사이 "ES 모듈 232KB" 가 **3.3 배** 낡았다(실측 770KB). 그 수는
+# README 에서 사이트 두 페이지로 그대로 옮겨 적혔다 — 원천이 낡으면 사본도 낡는다.
+#
+# 여기 있는 셋은 전부 **잴 수 있는 것**이다. 못 재는 수는 애초에 이 목록에 없다.
+SIZE_CLAIMS = (
+    # (문서, 그 줄에 있어야 하는 표시, 실제를 재는 함수 이름)
+    ("README.md", "ES 모듈", "bundle"),
+    ("site/index.html", "ES module", "bundle"),
+    ("site/ko/index.html", "ES 모듈", "bundle"),
+)
+
+# 재는 것이 얼마나 어긋나도 되는가. `test_docs.py` 의 줄 수와 같은 5% 다 — 잡으려는
+# 것은 3.3 배 오차이지 커밋 하나가 만드는 몇 킬로바이트가 아니다.
+SIZE_TOLERANCE = 0.05
+
+KB = re.compile(r"(\d{2,5})\s*KB")
+
+
+def _bundle_sizes():
+    """브라우저가 싣는 ES 모듈의 (압축 전, gzip) 크기를 KB 로."""
+    raw = b"".join(p.read_bytes() for p in sorted(DECL.glob("*.js")))
+    return len(raw) / 1024, len(gzip.compress(raw, 9)) / 1024
+
+
+def test_docs_do_not_name_a_stale_bundle_size():
+    """문서가 대는 **크기**가 실제와 크게 어긋나지 않아야 한다.
+
+    한 줄에 여러 수가 있을 수 있다(압축 전과 gzip). 그중 **아무것도** 실제와 안 맞으면
+    낡은 것이다 — 하나만 맞아도 통과시키면 "232KB(압축 전)" 처럼 **수는 맞고 이름표가
+    틀린** 문장을 놓친다.
+    """
+    if not DECL.exists():
+        pytest.skip(f"선언 파일이 없다({DECL.relative_to(ROOT)}) — 먼저 npm run build:ts")
+
+    raw_kb, gzip_kb = _bundle_sizes()
+    ok = lambda said: any(abs(said - real) <= real * SIZE_TOLERANCE
+                          for real in (raw_kb, gzip_kb))
+
+    stale = []
+    for rel, marker, _ in SIZE_CLAIMS:
+        path = ROOT / rel
+        if not path.exists():
+            continue
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if marker not in line:
+                continue
+            said = [int(hit) for hit in KB.findall(line)]
+            if not said:
+                stale.append(f"{rel}:{i}  크기를 안 적었다")
+            elif not all(ok(v) for v in said):
+                stale.append(
+                    f"{rel}:{i}  {said} KB — 지금은 압축 전 {raw_kb:.0f}KB · "
+                    f"gzip {gzip_kb:.0f}KB")
+    assert not stale, (
+        "문서가 대는 방출물 크기가 낡았다:\n  " + "\n  ".join(stale) +
+        "\n\n재서 고쳐라: cat borch-ts/dist/src/*.js | wc -c")
