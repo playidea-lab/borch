@@ -1225,12 +1225,85 @@ ${sourceIndex(rules, offset, "gid", "src")}
  * 겹치는 자리를 제대로 더하는 것이 요점이다 — 길이 5 를 `unfold(3, 1)` 로 펴면
  * 기울기가 `[1,2,3,2,1]` 이 된다. 겹친 만큼 쌓이는 것이고, 안 더하면 전부 1 이 된다.
  */
+/**
+ * 규칙이 **되짚을 수 있는가** — 입력 자리에서 출력 자리를 바로 셀 수 있는가.
+ *
+ * 조건 둘이다. 모든 축이 `lin`(그대로 나아감)이고 걸음이 0 이 아닐 것 —
+ * `expand` 는 걸음이 0 이라 여러 출력이 한 입력을 보므로 되짚기가 하나로 안 나온다.
+ * 그리고 걸음을 큰 것부터 놓았을 때 **블록이 안 겹칠 것**: 큰 걸음 하나가 그 아래
+ * 축들이 덮는 범위보다 넓어야 나눗셈으로 좌표가 갈린다.
+ *
+ * 자르기·전치·`select`·`permute` 가 전부 이 조건을 만족한다. `repeat`·`expand`·
+ * `flip`·`roll` 은 아니고, 그쪽은 훑는 길로 간다.
+ *
+ * @returns 걸음 내림차순으로 정렬한 축들, 또는 조건에 안 맞으면 `null`.
+ */
+function invertibleAxes(
+  rules: readonly AxisRule[],
+): { size: number; stride: number; outStride: number }[] | null {
+  if (rules.length === 0) return null;
+  // 출력에서의 걸음(행 우선). 되짚은 좌표를 출력 번호로 되돌릴 때 쓴다.
+  const outStrides: number[] = new Array(rules.length).fill(1);
+  for (let d = rules.length - 2; d >= 0; d--) {
+    outStrides[d] = (outStrides[d + 1] ?? 1) * (rules[d + 1]?.size ?? 1);
+  }
+  const axes: { size: number; stride: number; outStride: number }[] = [];
+  for (const [d, r] of rules.entries()) {
+    if (r.kind !== "lin" || r.stride === 0) return null;
+    // 크기 1 인 축은 좌표가 늘 0 이라 되짚기에 아무 몫이 없다.
+    if (r.size === 1) continue;
+    axes.push({ size: r.size, stride: r.stride, outStride: outStrides[d] ?? 1 });
+  }
+  if (axes.length === 0) return [];
+  axes.sort((a, b) => b.stride - a.stride);
+  // 아래 축들이 덮는 폭보다 위 축의 걸음이 넓어야 나눗셈이 좌표를 가른다.
+  let span = 1;
+  for (let i = axes.length - 1; i >= 0; i--) {
+    const a = axes[i];
+    if (!a) return null;
+    if (a.stride < span) return null;
+    span = a.stride * a.size;
+  }
+  return axes;
+}
+
 export function gatherBackward(
   rules: readonly AxisRule[],
   offset: number,
   inSize: number,
 ): string {
   const outN = ruleCount(rules);
+  const axes = invertibleAxes(rules);
+  if (axes) {
+    // **되짚는 길.** 입력 자리마다 출력 자리를 한 번에 셈한다 — `O(입력)`.
+    //
+    // 훑는 길은 `O(입력 × 출력)` 이라 배치가 두 배면 **네 배**가 된다. 실측:
+    // ResNet-18 한 스텝의 94% 가 이 커널 하나였고, `adaptiveAvgPool(1)` 이 4×4 를
+    // 통째로 자르면서 **입력과 출력이 같은 크기인 자르기**를 만들고 있었다.
+    const steps = axes.map((a) => `
+    { let c = rest / ${a.stride}u;
+      if (c >= ${a.size}u) { ok = false; } else {
+        rest = rest - c * ${a.stride}u;
+        t = t + c * ${a.outStride}u;
+      } }`).join("");
+    return `
+@group(0) @binding(0) var<storage, read> G: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(inSize)}
+  var acc = 0.0;
+  if (gid >= ${offset}u) {
+    var rest = gid - ${offset}u;
+    var t = 0u;
+    var ok = true;
+${steps}
+    // 남은 것이 0 이어야 이 입력이 정확히 그 출력 자리다. 아니면 안 뽑힌 칸이다.
+    if (ok && rest == 0u && t < ${outN}u) { acc = G[t]; }
+  }
+  Out[gid] = acc;
+}`;
+  }
   return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;

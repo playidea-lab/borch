@@ -1768,7 +1768,8 @@ export class Tensor implements Node<Tensor> {
       (g) => {
         const gi = dev().alloc(inSize);
         dev().run1d(
-          dev().pipeline(`gb:${key}|${inSize}`, () => gatherBackward(rules, offset, inSize)),
+          dev().pipeline(`gb:${gradName}:${key}|${inSize}`,
+                        () => gatherBackward(rules, offset, inSize)),
           [g.buffer, gi],
           inSize,
         );

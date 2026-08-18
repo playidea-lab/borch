@@ -54,6 +54,9 @@ def main(argv):
         print(f"**장치 점검이 터졌다**\n{result['error']}", file=sys.stderr)
         return 1
     print(f"어댑터: {result.get('adapter', '(모름)')}")
+    # **선택 기능도 같이 적는다.** `timestamp-query` 가 없으면 커널별 시간을 재는
+    # 길이 아예 막힌다 — 그때 벽시계만 들고 원인을 찾게 된다.
+    print(f"기능:   {result.get('features') or '(없음)'}")
     print(result["text"])
     # 실패 건수를 세는 것은 페이지 쪽이다. 여기서는 그 판정을 그대로 받는다 —
     # 두 곳에서 세면 두 셈이 갈릴 때 어느 쪽이 맞는지 알 방법이 없다.

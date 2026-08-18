@@ -101,6 +101,10 @@ export interface StepResult {
   usPerDispatch: number;
   /** 커널 종류별 dispatch 수, 많은 것부터. 다음에 무엇을 고칠지가 여기서 나온다. */
   kinds: [string, number][];
+  /** 커널 종류별 **GPU 시간**(ms), 큰 것부터. 횟수와 다른 순서가 나오는 것이 요점이다. */
+  hot: [string, number][];
+  /** 프로파일 중에 잰 총합(ms). 패스를 하나씩 여느라 평소보다 크다. */
+  profiledMs: number;
   /** 스텝당 실제 제출 수. dispatch 수와 갈리는 만큼이 묶인 것이다. */
   submits: number;
   /**
@@ -231,6 +235,22 @@ export async function runStep(
   const noWeightDispatches = (device().dispatches - wd0) / steps;
   for (const p of convWeights) p.requiresGrad = true;
 
+  /**
+   * 커널 종류별 GPU 시간. **횟수만으로는 어디가 비싼지 안 나온다** — 횟수는 배치가
+   * 커져도 그대로인데 시간은 배치마다 다르게 늘어난다.
+   *
+   * 재는 동안은 dispatch 마다 패스를 열므로 **합이 위의 ms/step 보다 크다.** 여기서
+   * 볼 것은 절대값이 아니라 몫이다.
+   */
+  device().startProfile();
+  await one();
+  await device().collectProfile();
+  const hot: [string, number][] = [];
+  for (const [kind, ns] of device().nsByKind) hot.push([kind, ns / 1e6]);
+  hot.sort((a, b) => b[1] - a[1]);
+  const profiledMs = hot.reduce((a, [, ms]) => a + ms, 0);
+  device().profiling = false;
+
   // **검증 오류가 하나라도 났으면 수를 안 낸다.**
   //
   // 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도 안 한다. 그 상태에서도
@@ -256,6 +276,8 @@ export async function runStep(
     dispatches: Math.round(perStepDispatches),
     usPerDispatch: Math.round((perStep * 1000) / Math.max(1, perStepDispatches)),
     kinds,
+    hot: hot.map(([k, ms]) => [k, Math.round(ms * 100) / 100]),
+    profiledMs: Math.round(profiledMs * 10) / 10,
     submits: Math.round(perStepSubmits),
     msForward: Math.round(perForward * 10) / 10,
     msNoWeightGrad: Math.round(perNoWeightGrad * 10) / 10,
@@ -283,7 +305,12 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
         `${r.gpuMb.toFixed(1).padStart(6)}MB  ` +
         `손실 ${r.loss.toFixed(4)}`,
       );
-      // 종류별 내역은 배치마다 같으므로 한 번만 찍는다.
+      // **시간 내역은 배치마다 찍는다.** 횟수는 배치가 커져도 그대로지만 시간은
+      // 안 그렇다 — 초선형인 커널이 있으면 여기서만 보인다.
+      const hot = r.hot.slice(0, 8)
+        .map(([kind, ms]) => `${kind} ${ms.toFixed(1)}`).join(" · ");
+      lines.push(`         GPU 시간(ms, 합 ${r.profiledMs}): ${hot}`);
+      // 종류별 횟수는 배치마다 같으므로 한 번만 찍는다.
       if (b === batches[0]) {
         const top = r.kinds.slice(0, 8)
           .map(([kind, n]) => `${kind} ${n}`).join(" · ");

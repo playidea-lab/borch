@@ -142,6 +142,7 @@ export class Device {
     // 소프트웨어 어댑터를 주는 일이 있고, 그것도 어댑터라 예외가 안 난다 — 그러면
     // 벽시계는 멀쩡히 돌고 "느리다" 는 결론만 남는다. 재는 쪽이 이것을 봐야 한다.
     Device.adapterInfo = describe(adapter);
+    Device.adapterFeatures = [...adapter.features].sort().join(" ");
     // 기본 한계를 그대로 쓰지 않고 어댑터가 주는 최대치를 요청한다. 기본
     // maxStorageBufferBindingSize 는 128MB 이고, 그 위에서 조용히 틀린 답이 나온다.
     const want: Record<string, number> = {
@@ -149,7 +150,14 @@ export class Device {
       maxBufferSize: adapter.limits.maxBufferSize,
       maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
     };
-    const device = await adapter.requestDevice({ requiredLimits: want });
+    // **`timestamp-query` 는 있으면 받아 둔다.** 요청해 두어도 안 켜면 비용이 없고,
+    // 나중에 켜려면 장치를 다시 만들어야 한다 — 재는 사람이 그 시점에 그것을 알 수
+    // 없다. 없는 어댑터에서 요청하면 `requestDevice` 가 거절하므로 있을 때만 넣는다.
+    const canTime = adapter.features.has("timestamp-query");
+    const device = await adapter.requestDevice({
+      requiredLimits: want,
+      requiredFeatures: canTime ? ["timestamp-query"] : [],
+    });
     // 검증 오류도 예외로 안 온다. 붙잡지 않으면 잘못 만든 파이프라인이 조용히
     // 아무것도 안 하고, 그 결과를 우리는 "값이 틀렸다" 로만 보게 된다.
     //
@@ -229,6 +237,8 @@ export class Device {
 
   /** 지금 어느 커널을 부르는지. `pipeline` 이 서명의 앞머리를 여기 남긴다. */
   private current = "?";
+  /** 지금 굽는 파이프라인의 **서명 전체**. 프로파일이 이것으로 쌓는다. */
+  private currentSig = "?";
 
   /**
    * 아직 안 보낸 명령들.
@@ -258,6 +268,10 @@ export class Device {
     // 서명의 첫 토막이 커널 종류다(`cnt:...`, `u:relu:...`). 모양까지 세면 종류가
     // 수백 개가 되어 어디가 무거운지가 안 보인다.
     this.current = signature.split(":")[0] ?? "?";
+    // **프로파일 중에는 서명 전체를 쓴다.** 종류만으로는 "gb 가 94%" 까지밖에 못 가고,
+    // 그 다음 물음(어느 규칙·어느 모양인가)에서 막힌다 — 실제로 거기서 막혔다.
+    // 켰을 때만 쌓이므로 평소에는 값이 없다.
+    this.currentSig = signature;
     const hit = this.pipelines.get(signature);
     if (hit) return hit;
     const code = source();
@@ -568,10 +582,109 @@ export class Device {
     this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
   }
 
-  /** 계산 패스를 연다. 이미 열려 있으면 그것을 쓴다. */
+  /**
+   * 커널마다 GPU 시간을 잰다. **기본은 꺼져 있다.**
+   *
+   * ## 왜 있는가
+   *
+   * 벽시계로는 스텝 전체밖에 못 잰다. 429 개 dispatch 중 어느 것이 비싼지 물으려
+   * 했더니 물을 방법이 없었다 — 종류별 **횟수**는 있는데 종류별 **시간**이 없었고,
+   * 횟수는 배치가 커져도 그대로라 아무것도 안 가리켰다.
+   *
+   * ## 켜면 무엇이 달라지는가
+   *
+   * 평소에는 모든 dispatch 가 계산 패스 **하나**를 함께 쓴다(제출도 스텝당 한 번).
+   * 타임스탬프는 패스 단위라, 그 상태로는 패스 전체의 시작·끝밖에 못 찍는다.
+   * 그래서 켜면 **dispatch 마다 패스를 연다.**
+   *
+   * **그러면 절대값은 평소보다 커진다.** 패스를 여는 값이 붙기 때문이다. 여기서
+   * 얻으려는 것은 절대 시간이 아니라 **어느 커널이 몫이 큰가** 이고, 그 비율은
+   * 남는다. 절대값을 재려면 끄고 벤치를 쓴다.
+   */
+  profiling = false;
+  /** 켰을 때 커널 종류별로 쌓인 GPU 시간(나노초). */
+  readonly nsByKind = new Map<string, number>();
+  private querySet: GPUQuerySet | null = null;
+  private queryUsed = 0;
+  private queryKinds: string[] = [];
+  /** 질의 집합의 크기. 한 제출에 이보다 많이 재면 나머지는 안 잰다. */
+  private static readonly MAX_QUERIES = 4096;
+
+  /** 프로파일을 켜고 쌓인 것을 비운다. */
+  startProfile(): void {
+    this.profiling = true;
+    this.nsByKind.clear();
+  }
+
+  /** 계산 패스를 연다. 평소에는 하나를 함께 쓰고, 프로파일 중에는 하나씩 연다. */
   private openPass(): GPUComputePassEncoder {
-    if (!this.pass) this.pass = this.openEncoder().beginComputePass();
+    if (!this.profiling) {
+      if (!this.pass) this.pass = this.openEncoder().beginComputePass();
+      return this.pass;
+    }
+    // 프로파일 중 — 앞 패스를 닫고 타임스탬프를 낀 새 패스를 연다.
+    if (this.pass) {
+      this.pass.end();
+      this.pass = null;
+    }
+    const encoder = this.encoder ?? (this.encoder = this.device.createCommandEncoder());
+    this.querySet ??= this.device.createQuerySet({
+      type: "timestamp", count: Device.MAX_QUERIES,
+    });
+    if (this.queryUsed + 2 > Device.MAX_QUERIES) {
+      // 자리가 없으면 그냥 평소처럼 연다 — **안 잰 것을 0 으로 세면 안 된다.**
+      this.pass = encoder.beginComputePass();
+      return this.pass;
+    }
+    const at = this.queryUsed;
+    this.queryUsed += 2;
+    this.queryKinds.push(this.currentSig);
+    this.pass = encoder.beginComputePass({
+      timestampWrites: {
+        querySet: this.querySet,
+        beginningOfPassWriteIndex: at,
+        endOfPassWriteIndex: at + 1,
+      },
+    });
     return this.pass;
+  }
+
+  /**
+   * 찍어 둔 타임스탬프를 읽어 종류별로 더한다. **제출 뒤에 불러야 한다.**
+   *
+   * 해석 버퍼와 읽기 버퍼를 그때그때 만들고 버린다 — 프로파일은 드물게 도는 길이라
+   * 통을 쓸 값어치가 없고, 통을 쓰면 재는 장치가 재는 대상을 건드린다.
+   */
+  async collectProfile(): Promise<void> {
+    if (!this.querySet || this.queryUsed === 0) return;
+    const count = this.queryUsed;
+    const kinds = this.queryKinds;
+    this.queryUsed = 0;
+    this.queryKinds = [];
+    const bytes = count * 8;
+    const resolved = this.device.createBuffer({
+      size: bytes,
+      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+    });
+    const stage = this.device.createBuffer({
+      size: bytes,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    const encoder = this.device.createCommandEncoder();
+    encoder.resolveQuerySet(this.querySet, 0, count, resolved, 0);
+    encoder.copyBufferToBuffer(resolved, 0, stage, 0, bytes);
+    this.device.queue.submit([encoder.finish()]);
+    await stage.mapAsync(GPUMapMode.READ);
+    const times = new BigUint64Array(stage.getMappedRange().slice(0));
+    stage.unmap();
+    stage.destroy();
+    resolved.destroy();
+    for (const [i, kind] of kinds.entries()) {
+      const start = times[i * 2];
+      const end = times[i * 2 + 1];
+      if (start === undefined || end === undefined || end <= start) continue;
+      this.nsByKind.set(kind, (this.nsByKind.get(kind) ?? 0) + Number(end - start));
+    }
   }
 
   /** 인코더를 연다. 계산 패스가 열려 있으면 닫는다 — 복사가 그 밖에 있어야 한다. */
@@ -650,4 +763,12 @@ export class Device {
 
   /** 어느 어댑터에 붙었는가. 성능을 재는 쪽이 반드시 같이 적어야 하는 값이다. */
   static adapterInfo = "(아직 안 붙음)";
+
+  /**
+   * 어댑터가 주는 선택 기능들. **`timestamp-query` 가 여기 있어야 커널별 시간을 잰다.**
+   *
+   * 벽시계로는 스텝 전체밖에 못 재고, 그러면 429 개 dispatch 중 어느 것이 비싼지
+   * 물을 방법이 없다 — 실제로 그 자리에서 막혔다.
+   */
+  static adapterFeatures = "";
 }
