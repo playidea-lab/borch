@@ -53,6 +53,27 @@
  * 수천 개를 그냥 두면 몇 스텝 만에 장치가 찬다. torch 에 없는 개념이고 TF.js 의
  * `tidy` 와 같은 자리다. 파라미터처럼 살아남아야 하는 것은 `keepAlive` 로 표시한다.
  *
+ * **꼴이 둘이다 — 파이썬의 `with` 에 가까운 쪽을 권한다.**
+ *
+ * ```ts
+ * for (let i = 0; i < steps; i++) {
+ *   using s = scope();                 // 블록 끝에서 닫힌다
+ *   opt.zeroGrad();
+ *   const loss = crit.call(model.call(x), y);
+ *   loss.backward();
+ *   opt.step();
+ *   console.log(await loss.item());
+ * }
+ * ```
+ *
+ * 놓는 일이 동기라 `await using` 이 아니라 `using` 이다. 블록을 벗어나는 시점은
+ * 안의 `await` 이 전부 끝난 뒤이므로 위의 `await loss.item()` 은 안전하다(실측).
+ * 콜백 꼴도 그대로 남는다 — 값을 그대로 돌려받는 자리는 그쪽이 짧다.
+ *
+ * **까먹으면 시끄럽게 멈춘다.** 표시 없이 구역 밖으로 들고 나간 텐서를 쓰면 그
+ * 자리에서 예외가 난다. 한동안 안 그랬고, 그때는 **다음 할당이 덮어쓴 남의 값**이
+ * 조용히 읽혔다(실측: `[1,2,3,4]` → `9,9,9,9`).
+ *
  * **모델을 부르는 것은 `model.call(x)` 다.** 자바스크립트는 객체를 그냥 부를 수
  * 없어서 torch 의 `model(x)` 를 그대로 옮길 수 없다. `forward` 를 직접 불러도 같은
  * 값이 나오지만 `call` 쪽을 권한다 — 나중에 훅이 붙는다면 그 자리다.
@@ -67,6 +88,8 @@ export {
   scope,
   Tensor,
 } from "./tensor.js";
+// `using s = scope()` 를 쓰는 쪽이 손잡이의 형을 적을 수 있어야 한다.
+export type { Scope } from "./tensor.js";
 
 import { Tensor as TensorClass } from "./tensor.js";
 

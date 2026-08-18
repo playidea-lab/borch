@@ -8004,26 +8004,83 @@ export interface Tensor {
 export { noGrad } from "./autograd.js";
 
 /**
+ * 열어 둔 구역 하나. `using` 이 블록 끝에서 닫는다.
+ *
+ * @see scope
+ */
+export interface Scope extends Disposable {
+  /**
+   * 이 구역이 닫혀도 살려 둔다. 콜백 꼴의 둘째 인자와 같은 일이다.
+   *
+   * `keepAlive(t)` 와 다른 점은 **매이는 곳**이다. 저쪽은 영영 살리고 이쪽은
+   * 바깥 구역으로 넘긴다 — 바깥이 닫히면 같이 놓인다.
+   */
+  keep(t: Tensor): Tensor;
+}
+
+/**
  * 구역 하나를 열고 닫는다. 안에서 만든 GPU 버퍼는 나갈 때 놓는다.
  *
  * **학습 루프에 이것이 없으면 안 돈다.** 한 스텝이 중간 버퍼를 수천 개 만들고,
  * 자바스크립트의 쓰레기 수집은 GPU 메모리를 제때 안 놓아준다.
  *
+ * ## 두 가지 꼴 — 같은 기계다
+ *
+ * ```ts
+ * await scope(async () => {           // 콜백
+ *   ...
+ *   return await loss.item();
+ * });
+ *
+ * {
+ *   using s = scope();                // 블록. torch 의 `with` 에 가깝다
+ *   ...
+ *   await loss.item();
+ * }                                   // 여기서 닫힌다
+ * ```
+ *
+ * **블록 꼴이 `await` 뒤에 닫힌다.** 비동기 함수 안에서 블록을 벗어나는 시점은
+ * 그 안의 `await` 이 전부 끝난 뒤이고, 놓는 일(`endScope`) 자체는 동기라
+ * `await using` 이 아니라 `using` 으로 된다 — 그쪽이 지원도 넓다.
+ *
+ * **콜백 꼴을 안 없앤다.** 두 꼴이 같은 `beginScope`/`endScope` 위에 서므로
+ * 갈릴 자리가 없고, 값을 그대로 돌려받는 자리(`const loss = await scope(...)`)는
+ * 콜백 쪽이 짧다.
+ *
  * @param keep 구역 밖으로 들고 나갈 텐서. 나머지는 놓는다.
  */
-export async function scope<T>(
+export function scope(): Scope;
+export function scope<T>(
   body: () => Promise<T>,
+  keep?: () => readonly Tensor[],
+): Promise<T>;
+export function scope<T>(
+  body?: () => Promise<T>,
   keep: () => readonly Tensor[] = () => [],
-): Promise<T> {
+): Promise<T> | Scope {
   const d = dev();
   d.beginScope();
-  try {
-    return await body();
-  } finally {
-    // **`raw` 다.** 살려 둘 것 중에 복소수가 있으면 `buffer` 가 거절하고, 그러면
-    // 구역을 닫는 자리에서 예외가 난다 — 수명 관리는 값의 형을 알 필요가 없다.
-    d.endScope(keep().map((t) => t.raw));
+  // **`raw` 다.** 살려 둘 것 중에 복소수가 있으면 `buffer` 가 거절하고, 그러면
+  // 구역을 닫는 자리에서 예외가 난다 — 수명 관리는 값의 형을 알 필요가 없다.
+  if (body === undefined) {
+    const kept: Tensor[] = [];
+    return {
+      keep(t: Tensor): Tensor {
+        kept.push(t);
+        return t;
+      },
+      [Symbol.dispose](): void {
+        d.endScope(kept.map((t) => t.raw));
+      },
+    };
   }
+  return (async () => {
+    try {
+      return await body();
+    } finally {
+      d.endScope(keep().map((t) => t.raw));
+    }
+  })();
 }
 
 /** 구역이 닫혀도 살려 둔다. 파라미터와 옵티마이저 상태가 쓴다. */

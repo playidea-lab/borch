@@ -499,12 +499,31 @@ borch.ts 자신은 2086 건에 TS 본문을 써 두었다. 나머지 676 건은 
 |---|---|
 | `await init()` 을 먼저 | WebGPU 어댑터를 잡는 것이 비동기다 |
 | `await loss.item()` | GPU 메모리를 도로 가져온다. 순방향·역방향은 동기다 |
-| `scope()` 로 감싼다 | JS 의 쓰레기 수집이 GPU 메모리를 제때 안 놓는다. 한 스텝이 중간 버퍼를 수천 개 만든다 |
+| `using s = scope()` 로 감싼다 | JS 의 쓰레기 수집이 GPU 메모리를 제때 안 놓는다. 한 스텝이 중간 버퍼를 수천 개 만든다 |
 | `model.call(x)` | JS 는 객체를 그냥 못 부른다 |
 | `'cpu'` 로는 연산이 안 된다 | 값을 내려두는 자리이지 커널이 있는 장치가 아니다 (아래 절) |
 
 `scope()` 는 torch 에 없다 — TF.js 의 `tidy` 와 같은 자리이고 이유도 같다. 파라미터처럼
 살아남아야 하는 것은 `keepAlive` 로 표시한다 — **안 감싸면 몇 스텝 만에 장치가 찬다.**
+
+**꼴이 둘이고 같은 기계다.** 파이썬의 `with` 에 가까운 쪽을 권한다.
+
+```ts
+for (let i = 0; i < steps; i++) {
+  using s = scope();              // 블록 끝에서 닫힌다
+  opt.zeroGrad();
+  const loss = crit.call(model.call(x), y);
+  loss.backward();
+  opt.step();
+  console.log(await loss.item());
+}
+
+const loss = await scope(async () => { … });   // 값을 그대로 받는 자리는 이쪽이 짧다
+```
+
+놓는 일이 동기라 `await using` 이 아니라 **`using`** 이다 — 지원도 그쪽이 넓다.
+블록을 벗어나는 시점은 안의 `await` 이 전부 끝난 뒤이므로 위의 `await loss.item()` 은
+안전하다(실측). 구역 밖으로 들고 나갈 것은 `s.keep(t)` 로 표시한다.
 
 **둘 중 하나를 까먹으면 시끄럽게 멈춘다.** 한동안 안 그랬다. 구역이 닫힐 때 버퍼는
 파괴되지 않고 통에 돌아가므로(그것이 통이 있는 이유다), 표시를 안 하고 밖으로 들고

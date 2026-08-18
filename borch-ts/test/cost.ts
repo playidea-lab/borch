@@ -205,6 +205,36 @@ export async function report(): Promise<string> {
     want("샌 텐서를 쓰면 멈춘다", stopped, note);
   }
 
+  // ── 블록 꼴(`using`)이 콜백 꼴과 같은 일을 하는가 ─────────────────────
+  //
+  // 두 꼴이 같은 `beginScope`/`endScope` 위에 서지만, **그것을 말로만 두면 갈린다.**
+  // 여기서 묻는 것은 세 가지다 — 블록을 벗어날 때 닫히는가, 그 시점이 안의 `await`
+  // **뒤**인가, 그리고 `keep()` 한 것이 살아남는가.
+  {
+    const before = dev.scopeDepth;
+    let inside = -1;
+    let survived: Tensor | null = null;
+    let awaited = -1;
+    {
+      using s = scope();
+      inside = dev.scopeDepth;
+      survived = s.keep(Tensor.from([5, 6], [2]).mul(Tensor.full([], 1)));
+      // **`await` 이 블록 안에 있다.** 놓는 일이 이 기다림보다 먼저 일어나면
+      // 여기서 죽은 텐서를 읽게 된다 — 그것이 `using` 으로 되는지의 핵심이다.
+      awaited = (await survived.toArray())[0] ?? -1;
+    }
+    want("using 이 블록 안에서 구역을 연다", inside === before + 1,
+      `깊이 ${before} → ${inside}`);
+    want("using 이 블록 끝에서 닫는다", dev.scopeDepth === before,
+      `깊이 ${dev.scopeDepth}`);
+    want("블록 안의 await 이 닫히기 전에 끝난다", awaited === 5, `${awaited}`);
+    // 살린 것은 바깥 구역으로 넘어갔으므로 블록 뒤에도 읽힌다. 안 넘겼으면 위에서
+    // 만든 죽은 텐서 가드가 여기서 멈춘다 — 그래서 이 줄이 `keep()` 을 묻는다.
+    const after = await survived.toArray();
+    want("keep() 한 것이 블록 뒤에도 산다", after[1] === 6,
+      Array.from(after).join(","));
+  }
+
   const bad = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>
     `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);
