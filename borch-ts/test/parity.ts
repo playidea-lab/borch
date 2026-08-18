@@ -531,6 +531,44 @@ export async function report(): Promise<string> {
   const perm = Array.from(await Tensor.randperm(64).toArray()).sort((a, b) => a - b);
   want("randperm 이 순열이다", perm.every((v, i) => v === i));
 
+  // **골든은 이 넷의 끝값만 묻는다.** `p=0`·`p=1`·`std=0`·`λ=0` 은 결정적이라 굳힐
+  // 수 있지만 가운데는 아니고, 그래서 골든만 보면 `normal` 이 `std` 를 곱하지 않고
+  // 평균만 돌려줘도 초록이다 — `std=0` 에서 답이 같기 때문이다. 씨앗 케이스가 위에서
+  // 배운 것과 같은 자리다: **끝값만 지키면 절반이다.**
+  const bern = await Tensor.zeros([N]).add(Tensor.full([], 0.25)).bernoulli()
+    .toArray();
+  const hits = bern.reduce((a, b) => a + b, 0) / N;
+  want("bernoulli 가 확률을 실제로 본다",
+    bern.every((v) => v === 0 || v === 1) && near(hits, 0.25, 0.03),
+    `1 이 나온 비율 ${hits.toFixed(4)}`);
+
+  const nm = await Tensor.normal(
+    Tensor.zeros([N]).add(Tensor.full([], 5)), 2).toArray();
+  const nmMean = nm.reduce((a, b) => a + b, 0) / N;
+  const nmSd = Math.sqrt(nm.reduce((a, b) => a + (b - nmMean) ** 2, 0) / N);
+  want("normal 이 평균과 표준편차를 둘 다 쓴다",
+    near(nmMean, 5, 0.15) && near(nmSd, 2, 0.15),
+    `평균 ${nmMean.toFixed(4)}, 표준편차 ${nmSd.toFixed(4)}`);
+
+  // 푸아송은 **평균과 분산이 같다** — 하나만 맞으면 다른 분포다.
+  const po = await Tensor.zeros([N]).add(Tensor.full([], 4)).poisson()
+    .then((t) => t.toArray());
+  const poMean = po.reduce((a, b) => a + b, 0) / N;
+  const poVar = po.reduce((a, b) => a + (b - poMean) ** 2, 0) / N;
+  want("poisson 이 평균 λ·분산 λ 를 낸다",
+    po.every((v) => Number.isInteger(v) && v >= 0)
+      && near(poMean, 4, 0.25) && near(poVar, 4, 0.5),
+    `평균 ${poMean.toFixed(3)}, 분산 ${poVar.toFixed(3)}`);
+
+  const bi = await Tensor.zeros([N]).add(Tensor.full([], 10))
+    .binomial(Tensor.zeros([N]).add(Tensor.full([], 0.5)))
+    .then((t) => t.toArray());
+  const biMean = bi.reduce((a, b) => a + b, 0) / N;
+  want("binomial 이 n·p 를 낸다",
+    bi.every((v) => Number.isInteger(v) && v >= 0 && v <= 10)
+      && near(biMean, 5, 0.2),
+    `평균 ${biMean.toFixed(3)}`);
+
   want("randnLike 가 모양을 빌린다",
     Tensor.zeros([2, 3]).randnLike().shape.join(",") === "2,3");
 

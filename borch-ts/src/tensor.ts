@@ -1052,6 +1052,77 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
+   * 정규분포 표본. **`std` 가 0 이면 평균 그대로다**(실측) — 그 끝값이 이 이름이
+   * 표준편차를 실제로 보고 있는지 묻는 유일한 자리다.
+   *
+   * torch 는 두 꼴을 준다: 텐서 둘을 주면 자리마다 다른 평균·표준편차이고, 수 둘과
+   * 모양을 주면 전부 같다. 앞쪽이 **브로드캐스트한다** — `(2,)` 평균에 스칼라
+   * 표준편차를 줘도 된다.
+   */
+  static normal(
+    mean: number | Tensor = 0,
+    std: number | Tensor = 1,
+    size?: readonly number[],
+  ): Tensor {
+    if (mean instanceof Tensor || std instanceof Tensor) {
+      const m = mean instanceof Tensor ? mean : Tensor.full([], mean);
+      const s = std instanceof Tensor ? std : Tensor.full([], std);
+      return Tensor.randn(broadcastShapes(m.shape, s.shape)).mul(s).add(m);
+    }
+    return Tensor.randn(size ?? []).mul(Tensor.full([], std))
+      .add(Tensor.full([], mean));
+  }
+
+  /**
+   * 자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,
+   * `p=1` 이면 전부 1 이다.
+   *
+   * **비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.
+   * 결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가
+   * 한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다.
+   */
+  bernoulli(): Tensor {
+    return Tensor.rand(this.shape).binary("lt", this).to(this.dtype);
+  }
+
+  /**
+   * 자리마다 그 평균의 푸아송 표본. **평균이 0 이면 0 이다.**
+   *
+   * Knuth 의 곱셈 꼴이라 **값마다 도는 횟수가 다르다** — 자리별로 갈리는 반복은
+   * 셰이더로 못 옮기므로 여기서 한 번 읽는다. `histc`·`mode` 와 같은 자리다.
+   */
+  async poisson(): Promise<Tensor> {
+    const lam = Array.from(await this.toArray());
+    const got = lam.map((mean) => {
+      if (!(mean > 0)) return 0;
+      const limit = Math.exp(-mean);
+      let count = 0;
+      let product = uniform();
+      while (product > limit) { count += 1; product *= uniform(); }
+      return count;
+    });
+    return Tensor.from(got, [...this.shape], { dtype: this.dtype });
+  }
+
+  /**
+   * `this` 번 시행에서 성공한 횟수. **확률이 0 이면 0, 1 이면 시행 횟수 그대로다.**
+   *
+   * 시행 횟수가 값이라 도는 횟수도 값이다 — `poisson` 과 같은 이유로 읽는다.
+   */
+  async binomial(prob: Tensor): Promise<Tensor> {
+    const shape = broadcastShapes(this.shape, prob.shape);
+    const counts = Array.from(await this.add(Tensor.zeros(shape)).toArray());
+    const chances = Array.from(await prob.add(Tensor.zeros(shape)).toArray());
+    const got = counts.map((n, i) => {
+      const p = chances[i] ?? 0;
+      let hits = 0;
+      for (let k = 0; k < n; k++) if (uniform() < p) hits += 1;
+      return hits;
+    });
+    return Tensor.from(got, shape, { dtype: this.dtype });
+  }
+
+  /**
    * 아래·위 삼각의 자리들. **`(2, 개수)` 짜리 표다**(실측) — 자리 쌍이 아니라 행 줄과
    * 열 줄로 나뉘어 온다. 쌍의 목록으로 읽으면 모양부터 다르다.
    */
@@ -4357,9 +4428,42 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return outs;
   }
 
-  // `trapz` 는 여기 없다. **`trapezoid` 자체가 borch.ts 의 메서드가 아니라**
-  // 결속이 파이썬에서 조립하는 것이라(사다리꼴 조각을 더하는 몇 줄), 옛 이름도
-  // 같은 자리에서 별칭으로 둔다 — 여기 하나 더 만들면 조립이 두 벌이 된다.
+  /**
+   * 이웃한 두 점의 **평균에 간격을 곱해** 더한다. 사다리꼴 적분이다.
+   *
+   * 오래 여기 없었다. 결속이 파이썬에서 같은 몇 줄로 조립하고 있었고, 주석에는
+   * "여기 하나 더 만들면 조립이 두 벌이 된다" 고 적혀 있었다. 그 말이 놓친 것은
+   * **borch.ts 를 TypeScript 에서 쓰는 쪽에는 이 이름이 아예 없다**는 것이다 —
+   * 조립이 한 벌이었던 게 아니라 파이썬 쪽에만 있었다.
+   *
+   * 조각 자르기와 더하기뿐이라 **기울기가 저절로 흐른다.** 손으로 적을 것이 없다.
+   *
+   * @param x 자리를 직접 준다. 안 주면 간격이 `dx` 로 고르다.
+   */
+  trapezoid(x?: Tensor, dx = 1, dim = -1): Tensor {
+    const { pieces, axis } = this.trapezoidPieces(x, dx, dim);
+    return pieces.sumDim(axis);
+  }
+
+  /** 누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다. */
+  cumulativeTrapezoid(x?: Tensor, dx = 1, dim = -1): Tensor {
+    const { pieces, axis } = this.trapezoidPieces(x, dx, dim);
+    return pieces.cumsum(axis);
+  }
+
+  private trapezoidPieces(
+    x: Tensor | undefined, dx: number, dim: number,
+  ): { pieces: Tensor; axis: number } {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const n = this.shape[axis] ?? 0;
+    const both = this.narrow(axis, 0, n - 1).add(this.narrow(axis, 1, n - 1));
+    if (x === undefined) {
+      return { pieces: both.mul(Tensor.full([], dx / 2)), axis };
+    }
+    const step = x.narrow(axis, 1, n - 1).sub(x.narrow(axis, 0, n - 1));
+    return { pieces: both.mul(step).mul(Tensor.full([], 0.5)), axis };
+  }
 
   /** 서로 다른 값을 **오름차순으로**. torch 의 기본이 정렬해서 주는 것이다. */
   async unique(): Promise<Tensor> {

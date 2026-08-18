@@ -3883,6 +3883,32 @@ function addRecent(out: Map<string, Case>): void {
   out.set("stat::nonzero_static(fill=-9)",
     async () => await sparse().nonzeroStatic(5, -9));
 
+  out.set("stat::trapz(y)", () => curve().trapezoid());
+  out.set("stat::trapz(dx=2)", () => curve().trapezoid(undefined, 2.0));
+  out.set("stat::trapz(y, x)",
+    () => curve().trapezoid(Tensor.from([0.0, 1.0, 3.0, 6.0, 10.0], [5])));
+
+  // ── 난수 넷 — 결정적인 끝값만 ───────────────────────────────────────
+  //
+  // 값은 못 굳힌다(torch 의 난수 줄기와 우리 것이 다르고 같게 만들 길이 없다).
+  // **그래서 끝값을 묻는다** — 안 물으면 `bernoulli` 가 확률을 아예 안 보고 있어도
+  // 통과한다. "난수라 못 묻는다" 와 "안 묻는다" 는 다르다.
+  out.set("stat::bernoulli(p=0)", () => Tensor.zeros([4]).bernoulli());
+  out.set("stat::bernoulli(p=1)", () => Tensor.ones([4]).bernoulli());
+  out.set("stat::poisson(0)", async () => await Tensor.zeros([4]).poisson());
+  const ten = (): Tensor => Tensor.from([10.0, 10.0], [2]);
+  out.set("stat::binomial(p=0)",
+    async () => await ten().binomial(Tensor.zeros([2])));
+  out.set("stat::binomial(p=1)",
+    async () => await ten().binomial(Tensor.ones([2])));
+  out.set("stat::normal(std=0)",
+    () => Tensor.normal(Tensor.from([1.0, 100.0], [2]), Tensor.zeros([2])));
+  // 값은 못 묻지만 **모양은 묻는다** — 그것마저 안 물으면 이름만 있는 것과 같다.
+  out.set("stat::normal(size) 모양",
+    () => `(${Tensor.normal(0.0, 1.0, [2, 3]).shape.join(", ")})`);
+  out.set("stat::bernoulli 모양",
+    () => `(${Tensor.zeros([2, 3]).bernoulli().shape.join(", ")})`);
+
   // ── addmm 계열 (`blend::`) ──────────────────────────────────────────
   //
   // **`beta=0` 은 값만 안 보고 그래프에는 남는다.** 여기서는 값만 묻는다 — 기울기

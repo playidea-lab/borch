@@ -2511,31 +2511,28 @@ def tensordot(a, b, dims=2, **kw):
     return wrap(guarded(handle(am @ bm).reshape, _js_list(a_shape + b_shape)))
 
 
-def _trapezoid_pieces(y, x, dx, dim):
-    y = wrap(y)
-    rank = len(_shape_list(y))
-    axis = dim + rank if dim < 0 else dim
-    n = _shape_list(y)[axis]
-    left = wrap(guarded(handle(y).narrow, axis, 0, n - 1))
-    right = wrap(guarded(handle(y).narrow, axis, 1, n - 1))
-    if x is None:
-        return (left + right) * (dx / 2.0), axis
-    x = wrap(x)
-    step = (wrap(guarded(handle(x).narrow, axis, 1, n - 1))
-            - wrap(guarded(handle(x).narrow, axis, 0, n - 1)))
-    return (left + right) * step * 0.5, axis
+def _trapezoid_x(x):
+    """자리 텐서를 손잡이로. **`None` 은 그대로 넘긴다** — Pyodide 가 `undefined` 로
+    바꿔 주고, 저쪽 서명의 기본값이 바로 그 자리다."""
+    return None if x is None else handle(wrap(x))
 
 
 def trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
-    """사다리꼴 적분. 이웃한 두 점의 평균에 간격을 곱해 더한다."""
-    pieces, axis = _trapezoid_pieces(y, x, kw.get("dx", dx), dim)
-    return pieces.sum(dim=axis)
+    """사다리꼴 적분. 이웃한 두 점의 평균에 간격을 곱해 더한다.
+
+    **조립이 여기 있었다.** 조각을 자르고 더하는 몇 줄이었고, borch.ts 쪽 주석에는
+    "여기 하나 더 만들면 조립이 두 벌이 된다" 고 적혀 있었다. 그 말이 놓친 것은
+    borch.ts 를 TypeScript 에서 쓰는 쪽에는 이 이름이 **아예 없었다**는 것이다 —
+    한 벌이 아니라 파이썬 쪽에만 있었다. 이름을 저쪽에 놓고 여기서는 넘긴다.
+    """
+    return wrap(guarded(handle(wrap(y)).trapezoid,
+                        _trapezoid_x(x), kw.get("dx", dx), dim))
 
 
 def cumulative_trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
     """누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다."""
-    pieces, axis = _trapezoid_pieces(y, x, kw.get("dx", dx), dim)
-    return wrap(guarded(handle(pieces).cumsum, axis))
+    return wrap(guarded(handle(wrap(y)).cumulativeTrapezoid,
+                        _trapezoid_x(x), kw.get("dx", dx), dim))
 
 
 # ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────
