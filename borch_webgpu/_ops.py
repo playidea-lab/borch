@@ -811,6 +811,12 @@ def manual_seed(seed):
     global _rng
     _rng = _np.random.default_rng(seed)
     _ts.nn.manualSeed(int(seed))
+    # **코어의 생성기에도 심는다.** 분포에서 뽑아 채우는 일곱(`uniform_` 등)은 규칙이
+    # 두 벌이 되지 않도록 코어의 것을 빌려 쓰는데, 그러면 뽑는 것도 코어의 `_rng` 다.
+    # 여기만 심으면 `randn` 은 재현되고 `x.uniform_()` 은 매번 다르다 — 위 주석이
+    # 말하는 그 결함이 **생성기가 하나 늘 때마다** 다시 들어온다.
+    from borch import manual_seed as _core_seed
+    _core_seed(int(seed))
     _LAST_SEED[0] = int(seed)
     return _rng
 

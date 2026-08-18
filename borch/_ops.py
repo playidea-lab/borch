@@ -7875,9 +7875,13 @@ def _geometric_(self, p, generator=None):
 def _random_(self, from_=0, to=None, generator=None):
     """**범위가 형에 달렸다** — 안 주면 그 형이 담을 수 있는 데까지다."""
     del generator
-    kind = self.data.dtype.kind
+    # **상한이 그 형이 정확히 셀 수 있는 데까지다.** float32 는 2^24 를 넘으면
+    # 이웃한 정수를 구별 못 하므로 그 위를 뽑으면 값이 뭉친다 — torch 도 거기서
+    # 끊는다(실측: 최댓값이 1.677e7). 처음에 2^53 으로 뒀는데 그것은 float64 의
+    # 자리이고, 우리 저장은 float32 다.
+    kind, bits = self.data.dtype.kind, self.data.dtype.itemsize * 8
     if to is None:
-        to = 2 if kind == "b" else (1 << 53 if kind == "f" else 1 << 62)
+        to = {"b": 2, "f": 1 << 24, "i": 1 << (bits - 1), "u": 1 << bits}[kind]
     if from_ >= to:
         raise RuntimeError(_like_torch(
             f"random_ 의 from 은 to 보다 작아야 합니다 ({from_}, {to} 을 받았습니다).",
@@ -7892,3 +7896,19 @@ for _rname, _rfn in (("normal_", _normal_), ("uniform_", _uniform_),
                      ("random_", _random_)):
     setattr(Tensor, _rname, _rfn)
 del _rname, _rfn
+
+
+def _bernoulli_(self, p=0.5, generator=None):
+    """**`p` 로 채운다 — 자기 값을 확률로 읽지 않는다.** `bernoulli()` 와 다르다.
+
+    **`_ops` 에 둔다 — `_rng` 가 여기 산다.** 처음에 `_tensor.py` 에 두면서 그 파일에
+    없는 `_rng` 대신 `_np.random` 을 썼는데, 그것은 numpy 의 **전역** 난수기라
+    `manual_seed` 가 안 닿는다. 같은 씨앗으로 두 번 뽑으면 다른 값이 나왔고, 아무도
+    안 물었다 — 씨앗 검사가 나중에 넣은 일곱만 돌고 이 하나를 안 세었기 때문이다.
+    """
+    del generator
+    _refuse_leaf(self, "bernoulli_")
+    self.data[...] = (_rng.random(self.data.shape) < p).astype(self.data.dtype)
+    return self
+
+Tensor.bernoulli_ = _bernoulli_

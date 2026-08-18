@@ -8066,6 +8066,20 @@ def inplace_cases(inp=None):
             return "멈췄다" if fragment in str(exc) else f"다른 문구 <{exc}>"
         return "안 던졌다"
 
+    # **범위가 형이 정확히 셀 수 있는 데까지다.** float32 는 2^24 를 넘으면 이웃한
+    # 정수를 구별 못 해서 값이 뭉친다 — torch 도 거기서 끊는다. 2^53(float64 의 자리)
+    # 으로 두고 있었고, 모양·형만 묻는 케이스는 그것을 못 봤다.
+    for kind, arr, cap in (("float32", np.zeros(1, dtype=np.float32), 1 << 24),
+                           ("int64", np.zeros(1, dtype=np.int64), 1 << 62)):
+        def ceiling(L, a=arr, c=cap):
+            x = L.tensor(np.zeros(3000, dtype=a.dtype))
+            x.random_()
+            got = np.abs(np.asarray(x.tolist(), dtype=np.float64)).max()
+            # 표본 3000 이면 상한 근처가 나온다. **자리(2의 거듭제곱)만** 묻는다 —
+            # 정확한 최댓값은 뽑기마다 다르다.
+            return f"2^{int(np.floor(np.log2(got)))}"
+        cases.append((INPLACE_PREFIX + f"분포::random_({kind}) 의 상한", ceiling))
+
     for label, call, fragment in (
         ("geometric_(0)", lambda L: L.zeros(3).geometric_(0), "p to be in (0, 1)"),
         ("geometric_(1)", lambda L: L.zeros(3).geometric_(1), "p to be in (0, 1)"),
@@ -8979,6 +8993,19 @@ def dtype_cases(inp=None):
         except Exception as exc:                                # noqa: BLE001
             return "기대대로" if real else f"다른 종류 <{type(exc).__name__}>"
         return "기대대로" if real else "뜻밖의 성공"
+
+    # **torch 가 1.9 에서 없앤 둘.** 이름은 남아 있고 부르면 멈춘다. "torch 에 있는
+    # 이름" 으로 세면 구현해야 할 것으로 보이는데, 구현하면 **우리가 더 관대해진다** —
+    # 그 코드가 진짜 torch 에서 깨진다.
+    for gone in ("lstsq", "solve"):
+        def deprecated(L, n=gone):
+            try:
+                getattr(L.tensor(floats.reshape(1, 3)), n)(L.tensor(floats.reshape(3, 1)))
+            except Exception as exc:                            # noqa: BLE001
+                return ("멈췄다" if "deprecated since version 1.9" in str(exc)
+                        else f"다른 문구 <{str(exc).splitlines()[0][:44]}>")
+            return "안 던졌다"
+        cases.append((f"dtype::없는이름::{gone}(폐기됨)", deprecated))
 
     for name in ("coalesce", "untyped_storage", "int_repr"):
         cases.append((f"dtype::없는이름::{name}",

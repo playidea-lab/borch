@@ -110,6 +110,10 @@ def test_random_on_bool_is_zero_or_one():
     ("normal_", ()), ("uniform_", ()), ("exponential_", ()),
     ("cauchy_", ()), ("log_normal_", ()), ("geometric_", (0.5,)),
     ("random_", ()),
+    # **`bernoulli_` 가 빠져 있었다.** 표 밖에 따로 구현한 하나라 이 목록이 안 셌고,
+    # 그 사이 numpy 의 **전역** 난수기를 쓰고 있어서 씨앗이 안 닿았다. 나중에 넣은
+    # 일곱만 세는 목록은 먼저 있던 하나를 못 본다.
+    ("bernoulli_", (0.5,)),
 ])
 def test_the_same_seed_gives_the_same_draw(name, args):
     """**각자 안에서만 뜻이 있는 물음.** 셋의 난수기가 다르므로 표에서는 못 묻는다.

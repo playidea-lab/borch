@@ -310,6 +310,16 @@ class Tensor:
     def polygamma_(self, n):
         return self._write_back(self.polygamma(n))
 
+    # **torch 가 1.9 에서 없앤 둘.** 이름은 남아 있는데 부르면 멈춘다 — 우리가
+    # 답을 내주면 그 코드가 진짜 torch 에서 깨진다. 코어도 같이 거절한다.
+    def lstsq(self, *args, **kw):
+        del args, kw
+        _deprecated_by_torch("lstsq")
+
+    def solve(self, *args, **kw):
+        del args, kw
+        _deprecated_by_torch("solve")
+
     def is_same_size(self, other):
         return tuple(self.shape) == tuple(other.shape)
 
@@ -977,3 +987,10 @@ def _bind_absent(name, shown):
 for _dname, _shown in _ABSENT_DTYPES.items():
     setattr(Tensor, _dname, _bind_absent(_dname, _shown))
 del _dname, _shown
+
+
+def _deprecated_by_torch(name):
+    raise RuntimeError(
+        f"`{name}` 은 torch 1.9 에서 없어졌습니다 — `torch.linalg.{name}` 을 쓰세요. "
+        f"(torch: This function was deprecated since version 1.9 and is now removed. "
+        f"Please use the `torch.linalg.{name}` function instead.)")

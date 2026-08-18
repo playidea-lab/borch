@@ -1092,19 +1092,6 @@ for _name in _INPLACE_FROM_PAIR:
 del _name
 
 
-def _bernoulli_(self, p=0.5, generator=None):
-    """**`p` 로 채운다 — 자기 값을 확률로 읽지 않는다.** `bernoulli()` 와 다르다."""
-    del generator
-    if self.requires_grad and _grad_mode.enabled:
-        raise RuntimeError(_like_torch(
-            "기울기가 필요한 잎 텐서에는 `bernoulli_` 을(를) 쓸 수 없습니다. "
-            "`with torch.no_grad():` 안에서 하세요.",
-            "a leaf Variable that requires grad is being used in an in-place operation"))
-    draw = _np.random.random(self.data.shape) < p
-    self.data[...] = draw.astype(self.data.dtype)
-    return self
-
-
 def _float_power_(self, exponent):
     """**언제나 거절한다.** torch 도 float32 자리에서는 거절한다 — `float_power` 의
     결과가 float64 이고 그것을 float32 에 되쓸 수 없어서다. 우리에게는 float64 가
@@ -1117,7 +1104,6 @@ def _float_power_(self, exponent):
         "but the operation's result requires dtype Double"))
 
 
-Tensor.bernoulli_ = _bernoulli_
 Tensor.float_power_ = _float_power_
 
 
@@ -1160,9 +1146,26 @@ del _dname, _shown
 #
 # 결속의 `_base.py` 에 같은 이야기가 이미 적혀 있었다("`borch.t(x)` 는 되고
 # `x.t()` 는 안 되는 한쪽 고리만 남았다") — 그쪽은 그때 메꿨고 코어는 안 메꿨다.
+#
+# **`lstsq`·`solve` 는 여기 없다.** torch 가 1.9 에서 폐기하고 **지금은 거절한다** —
+# 이름은 남아 있는데 부르면 멈춘다. 처음에 "torch 에 있는 이름" 으로 세어 붙였다가,
+# 인자 차례를 재보려다 torch 쪽이 거절하는 것을 봤다. 우리가 답을 내주면 그 코드가
+# 진짜 torch 에서 깨진다 — **관대한 것도 갈리는 것이다.**
 _METHOD_FROM_MODULE = (
-    "arctan2", "igamma", "igammac", "geqrf", "lstsq", "solve",
+    "arctan2", "igamma", "igammac", "geqrf",
 )
+
+
+def _deprecated_by_torch(name, instead):
+    def method(self, *args, **kw):
+        del self, args, kw
+        raise RuntimeError(_like_torch(
+            f"`{name}` 은 torch 1.9 에서 없어졌습니다 — `{instead}` 을(를) 쓰세요.",
+            f"This function was deprecated since version 1.9 and is now removed. "
+            f"Please use the `torch.linalg.{instead}` function instead."))
+
+    method.__name__ = name
+    return method
 
 
 def _polygamma(self, n):
@@ -1223,6 +1226,8 @@ def _share_memory_(self):
 
 
 Tensor.polygamma = _polygamma
+Tensor.lstsq = _deprecated_by_torch("lstsq", "lstsq")
+Tensor.solve = _deprecated_by_torch("solve", "solve")
 Tensor.is_same_size = _is_same_size
 Tensor.is_distributed = lambda self: False
 Tensor.is_inference = lambda self: False
