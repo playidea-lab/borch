@@ -214,7 +214,11 @@ export abstract class Module {
    * 다른 텐서가 되어, 학습이 도는데 파라미터가 안 움직이는 상태가 된다.
    */
   loadStateDict(values: Readonly<Record<string, Tensor>>, strict = true): void {
-    const own = this.namedParameters();
+    // **버퍼도 받는다.** 내보내는 것과 받는 것이 다르면 자기가 저장한 파일을
+    // 자기가 못 읽는다 — `stateDict()` 는 버퍼를 실어 보내는데 여기는
+    // `namedParameters()` 만 보고 있어서 strict 로는 "모르는 이름" 이 났다.
+    // 저장과 복원은 **같은 목록**을 봐야 한다.
+    const own = { ...this.namedParameters(), ...this.namedBuffers() };
     for (const [name, src] of Object.entries(values)) {
       const dst = own[name];
       if (!dst) {
@@ -226,7 +230,53 @@ export abstract class Module {
   }
 
   stateDict(): Record<string, Tensor> {
-    return this.namedParameters();
+    return { ...this.namedParameters(), ...this.namedBuffers(true) };
+  }
+
+  /**
+   * 학습은 안 하지만 저장·복원되는 값. torch 의 `register_buffer` 다.
+   *
+   * **전에는 이런 것이 없었다.** `BatchNormND` 가 자기 `stateDict` 를 손으로 적어
+   * 이동 통계를 실어 보내는 길만 있었고, 그래서 버퍼는 **그 층의 특례**였다.
+   * 마스크·위치표·정규화 상수를 들고 다니는 모델은 전부 이 문법을 쓰는데 쓸 수가
+   * 없었다.
+   *
+   * `persistent=false` 면 `stateDict` 에서 빠진다 — 다시 만들 수 있는 캐시를
+   * 체크포인트에 안 싣는 자리다.
+   */
+  registerBuffer(name: string, value: Tensor, persistent = true): void {
+    this.bufferNames.set(name, persistent);
+    // 구역이 닫혀도 살아야 한다 — 파라미터가 아니라 아무도 안 잡아 준다.
+    keepAlive(value);
+    (this as unknown as Record<string, Tensor>)[name] = value;
+  }
+
+  /** 이름 → 저장되는가. 필드 자체는 층에 그대로 붙어 있고 여기는 표식만 든다. */
+  private readonly bufferNames = new Map<string, boolean>();
+
+  /**
+   * `namedParameters` 와 **정확히 버퍼만큼 다른** 목록.
+   *
+   * 자기 것은 등록한 표에서, 자식 것은 자식에게 물어 모은다. `stateDict` 를 손으로
+   * 적는 층(`BatchNormND`)은 이것도 같이 덮어써야 셋이 안 어긋난다.
+   */
+  namedBuffers(persistentOnly = false): Record<string, Tensor> {
+    const out: Record<string, Tensor> = {};
+    for (const [name, persistent] of this.bufferNames) {
+      if (persistentOnly && !persistent) continue;
+      const got = (this as unknown as Record<string, unknown>)[name];
+      if (got instanceof Tensor) out[name] = got;
+    }
+    for (const [prefix, child] of Object.entries(this.namedChildren())) {
+      for (const [name, t] of Object.entries(child.namedBuffers(persistentOnly))) {
+        out[`${prefix}.${name}`] = t;
+      }
+    }
+    return out;
+  }
+
+  buffers(): Tensor[] {
+    return Object.values(this.namedBuffers());
   }
 
   train(mode = true): this {
@@ -2678,14 +2728,21 @@ export class BatchNormND extends Module {
     return { weight: this.weight, bias: this.bias };
   }
 
-  /** **이동 통계도 함께 나간다.** 빠지면 평가 모드에서만 조용히 틀린다. */
-  override stateDict(): Record<string, Tensor> {
+  /**
+   * **이동 통계도 함께 나간다.** 빠지면 평가 모드에서만 조용히 틀린다.
+   *
+   * 이름이 `runningMean` 인 필드를 `running_mean` 이라는 열쇠로 내야 해서
+   * `registerBuffer` 를 못 쓴다(그쪽은 필드 이름이 곧 열쇠다). 대신 **목록은
+   * 여기 하나만 두고** `stateDict` 는 밑절미와 같은 식으로 파생시킨다 — 셋이
+   * 어긋나는 것이 이 층에서 이미 두 번 났다.
+   */
+  override namedBuffers(persistentOnly = false): Record<string, Tensor> {
+    void persistentOnly;                      // 이 층에는 안 싣는 버퍼가 없다
     return {
-      ...this.namedParameters(),
       running_mean: this.runningMean,
       running_var: this.runningVar,
       // 셀 때는 수였지만 내보낼 때는 텐서여야 한다 — 저장 형식이 텐서 사전이다.
-      // 부를 때마다 새로 만든다. `state_dict` 는 드물게 도는 길이라 값이 안 든다.
+      // 부를 때마다 새로 만든다. `stateDict` 는 드물게 도는 길이라 값이 안 든다.
       num_batches_tracked: this.trackedBase === null
         ? Tensor.owned([], this.numBatchesTracked)
         : this.trackedBase.add(Tensor.owned([], this.numBatchesTracked)),

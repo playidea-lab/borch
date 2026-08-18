@@ -1307,6 +1307,57 @@ function addContainer(out: Map<string, Case>, inp: Inputs): void {
     () => Object.keys(new nn.BatchNormND(3).stateDict()).sort().join(" "));
   out.set("container::BatchNorm/named_parameters 열쇠",
     () => Object.keys(new nn.BatchNormND(3).namedParameters()).sort().join(" "));
+  out.set("container::BatchNorm/named_buffers 열쇠",
+    () => Object.keys(new nn.BatchNormND(3).namedBuffers()).sort().join(" "));
+
+  // `registerBuffer` 는 층이 아니라 **사용자가 쓰는 문법**이다. 마스크·위치표를
+  // 들고 다니는 모델이 전부 이것을 쓴다. borch.ts 에도 있어야 파이썬 쪽과 같은
+  // 모델을 세울 수 있다.
+  class Buffered extends nn.Module {
+    fc = new nn.Linear(6, 8);
+    constructor() {
+      super();
+      this.registerBuffer("mask", Tensor.owned([4], 1));
+    }
+    override forward(x: Tensor): Tensor { return this.fc.forward(x); }
+  }
+
+  out.set("container::register_buffer/state_dict 열쇠",
+    () => Object.keys(new Buffered().stateDict()).sort().join(" "));
+  out.set("container::register_buffer/named_parameters 열쇠",
+    () => Object.keys(new Buffered().namedParameters()).sort().join(" "));
+
+  // `persistent=false` 는 **저장에서 빠진다.** 무시하면 남의 체크포인트와 열쇠가
+  // 어긋나고, 받는 쪽이 strict 로 읽으면 그대로 거절이다.
+  class Cached extends nn.Module {
+    constructor() {
+      super();
+      this.registerBuffer("kept", Tensor.owned([2], 1));
+      this.registerBuffer("cache", Tensor.owned([2], 1), false);
+    }
+    override forward(x: Tensor): Tensor { return x; }
+  }
+
+  out.set("container::register_buffer(persistent=False)",
+    () => Object.keys(new Cached().stateDict()).sort().join(" "));
+
+  // **열쇠가 맞아도 값이 안 건너가면 소용없다.** 내보내는 목록과 받는 목록이
+  // 갈리면 자기가 저장한 파일을 자기가 못 읽는다 — 실제로 그 상태였다.
+  class Masked extends nn.Module {
+    constructor() {
+      super();
+      this.registerBuffer("mask", Tensor.owned([3], 1));
+    }
+    override forward(x: Tensor): Tensor { return x; }
+  }
+
+  out.set("container::버퍼 값이 왕복한다", () => {
+    const src = new Masked();
+    src.loadStateDict({ mask: Tensor.from([2, 5, 9]) });
+    const dst = new Masked();
+    dst.loadStateDict(src.stateDict());
+    return dst.namedBuffers()["mask"] as Tensor;
+  });
 
   // ── `eval()` 이 컨테이너를 뚫고 내려가는가. ─────────────────────────────
   //

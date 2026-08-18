@@ -6218,6 +6218,31 @@ def norm_cases(inp=None):
     return cases
 
 
+def refusal_case(call):
+    """**torch 는 해내고 우리 셋은 거절하는** 자리의 판정 함수.
+
+    값을 물으면 영원히 갈리므로 "각자 문서대로 굴었는가" 를 묻는다. 우리 쪽은
+    거절 문구가 규격(`브라우저 축소판에 없습니다`)이어야 하고, torch 는 성공해야
+    한다. 이름과 접두어는 부르는 쪽이 짓는다 — 이 규칙만 여기 있다.
+
+    **`hasattr` 로는 못 가른다.** 결속은 모듈 `__getattr__` 이 아무 이름에나 답하므로
+    `hasattr(borch_webgpu, "compile")` 이 참이다. 모듈의 `__name__` 은 그 모듈에 박힌
+    것이라 `import borch as torch` 로도 안 바뀐다.
+    """
+    def run(L, f=call):
+        real = getattr(L, "__name__", "") == "torch"
+        try:
+            f(L)
+        except Exception as exc:                                # noqa: BLE001
+            if real:
+                return f"뜻밖의 거절 <{type(exc).__name__}>"
+            mark = "브라우저 축소판에 없습니다"
+            return "기대대로" if mark in str(exc) \
+                else f"다른 문구 <{str(exc).splitlines()[0][:44]}>"
+        return "기대대로" if real else "뜻밖의 성공"
+    return run
+
+
 CONTAINER_PREFIX = "container::"
 
 
@@ -6407,6 +6432,96 @@ def container_cases(inp=None):
     cases.append((CONTAINER_PREFIX + "BatchNorm/named_parameters 열쇠",
                   lambda L: " ".join(sorted(
                       n for n, _ in L.nn.BatchNorm2d(3).named_parameters()))))
+
+    # ── **버퍼를 가진 자리는 BatchNorm 뿐이 아니다.** ────────────────────────
+    #
+    # 위의 둘을 고치고 나서 같은 질문을 나머지 버퍼 표면에 그대로 물었다. 한 자리를
+    # 고치고 "버퍼는 봤다" 로 넘어가면, 같은 결함이 남은 자리에 그대로 남는다 —
+    # 이 저장소가 `launch` 를 여섯만 옮기고 여섯을 남겼을 때 겪은 모양이다.
+
+    # `register_buffer` 는 층이 아니라 **사용자가 쓰는 문법**이다. 마스크·위치표·
+    # 정규화 상수를 들고 다니는 모델이 전부 이것을 쓴다. 없으면 그런 모델은
+    # 임포트만 바꿔서는 안 돈다.
+    def buffer_keys(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = L.nn.Linear(6, 8)
+                self.register_buffer("mask", L.ones(4))
+        return " ".join(sorted(Net().state_dict()))
+
+    cases.append((CONTAINER_PREFIX + "register_buffer/state_dict 열쇠", buffer_keys))
+
+    # 등록한 버퍼는 **파라미터가 아니다.** 여기가 갈리면 옵티마이저가 마스크를 학습한다.
+    def buffer_not_param(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = L.nn.Linear(6, 8)
+                self.register_buffer("mask", L.ones(4))
+        return " ".join(sorted(n for n, _ in Net().named_parameters()))
+
+    cases.append((CONTAINER_PREFIX + "register_buffer/named_parameters 열쇠",
+                  buffer_not_param))
+
+    # `persistent=False` 는 **저장에서 빠진다.** 캐시성 버퍼를 체크포인트에 안 싣는
+    # 자리이고, 이것을 무시하면 남의 체크포인트와 열쇠가 어긋난다.
+    def buffer_nonpersistent(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("kept", L.ones(2))
+                self.register_buffer("cache", L.ones(2), persistent=False)
+        return " ".join(sorted(Net().state_dict()))
+
+    cases.append((CONTAINER_PREFIX + "register_buffer(persistent=False)",
+                  buffer_nonpersistent))
+
+    # `buffers()`·`named_buffers()` 는 파라미터와 **짝을 이루는 목록**이다.
+    cases.append((CONTAINER_PREFIX + "BatchNorm/named_buffers 열쇠",
+                  lambda L: " ".join(sorted(
+                      n for n, _ in L.nn.BatchNorm2d(3).named_buffers()))))
+
+    # **`InstanceNorm` 의 기본값은 `BatchNorm` 과 반대다** — `affine=False`,
+    # `track_running_stats=False`. 그래서 기본으로 세우면 열쇠가 하나도 없고,
+    # 켜면 파라미터와 버퍼가 동시에 생긴다. 기본값을 뒤집으면 두 경우가 다 갈린다.
+    cases.append((CONTAINER_PREFIX + "InstanceNorm(기본)/state_dict 열쇠",
+                  lambda L: " ".join(sorted(L.nn.InstanceNorm2d(3).state_dict()))))
+    cases.append((CONTAINER_PREFIX + "InstanceNorm(affine)/state_dict 열쇠",
+                  lambda L: " ".join(sorted(
+                      L.nn.InstanceNorm2d(3, affine=True).state_dict()))))
+    # **아래 셋은 torch 에 있고 우리에게 없다.** 값을 물으면 영원히 갈리므로
+    # "안 된다고 말하는가" 를 묻는다.
+    #
+    # 버퍼만 등록하고 순방향이 안 쓰면 **열쇠는 맞고 값이 틀리는** 더 나쁜 자리로
+    # 옮겨 갈 뿐이다. `track_running_stats=True` 는 평가 모드의 계산이 통째로
+    # 달라지고, 손실의 `weight` 는 `mean` 의 나눗셈이 표본 수가 아니라 **가중치 합**
+    # 으로 바뀐다 — 받아만 두면 손실 값이 조용히 달라진다.
+    #
+    # 셋 다 `TypeError` 로 막혀 있었다. 그것은 오타를 냈을 때와 같은 화면이라
+    # "이 라이브러리에 없다" 를 안 말해 준다.
+    cases.append((CONTAINER_PREFIX + "InstanceNorm(추적)=우리는거절",
+                  refusal_case(
+                      lambda L: L.nn.InstanceNorm2d(3, track_running_stats=True))))
+    cases.append((CONTAINER_PREFIX + "CrossEntropyLoss(weight)=우리는거절",
+                  refusal_case(lambda L: L.nn.CrossEntropyLoss(weight=L.ones(3)))))
+    cases.append((CONTAINER_PREFIX + "BCEWithLogitsLoss(pos_weight)=우리는거절",
+                  refusal_case(
+                      lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.ones(3)))))
+
+    # 열쇠가 맞아도 **값이 안 건너가면** 소용없다. 버퍼 왕복을 값으로 묻는다.
+    def buffer_roundtrip(L):
+        class Net(L.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("mask", L.ones(3))
+        src = Net()
+        src.load_state_dict({"mask": L.tensor(np.array([2., 5., 9.], dtype=np.float32))})
+        dst = Net()
+        dst.load_state_dict(src.state_dict())
+        return dst.mask
+
+    cases.append((CONTAINER_PREFIX + "버퍼 값이 왕복한다", buffer_roundtrip))
 
     # ── `eval()` 이 컨테이너를 **뚫고** 내려가는가. ─────────────────────────
     #
@@ -9148,29 +9263,10 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::형바꾸기::{name}", run))
 
     def we_refuse(name, call):
-        """**torch 는 해내고 우리 셋은 거절하는** 형. 값을 물으면 영원히 갈리므로
-        "각자 문서대로 굴었는가" 를 묻는다 — `_as_expected` 와 같은 꼴인데, 저쪽은
-        브라우저만 거절하는 자리이고 이쪽은 **코어도 같이** 거절한다.
-
-        그래서 가르는 것이 "브라우저인가" 가 아니라 **"진짜 torch 인가"** 다.
-
-        **`hasattr` 로는 못 가른다.** 결속은 모듈 `__getattr__` 이 아무 이름에나
-        답하므로 `hasattr(borch_webgpu, "compile")` 이 참이다 — 처음에 그렇게 썼다가
-        여덟 건이 "뜻밖의 거절" 로 나왔다. 모듈의 `__name__` 은 그 모듈에 박힌
-        것이라 `import borch as torch` 로도 안 바뀐다.
+        """형바꾸기 자리의 거절 케이스. 판정은 `refusal_case` 하나가 한다 —
+        같은 규칙이 두 벌이면 한쪽만 고쳐지고, 이 저장소는 그 자리를 여러 번 밟았다.
         """
-        def run(L, f=call, n=name):
-            real = getattr(L, "__name__", "") == "torch"
-            try:
-                f(L)
-            except Exception as exc:                            # noqa: BLE001
-                if real:
-                    return f"뜻밖의 거절 <{type(exc).__name__}>"
-                mark = "브라우저 축소판에 없습니다"
-                return "기대대로" if mark in str(exc) \
-                    else f"다른 문구 <{str(exc).splitlines()[0][:44]}>"
-            return "기대대로" if real else "뜻밖의 성공"
-        cases.append((f"dtype::형바꾸기::{name}=우리는거절", run))
+        cases.append((f"dtype::형바꾸기::{name}=우리는거절", refusal_case(call)))
 
     for name in ("float", "long", "bool", "cfloat"):
         casts(name, lambda L, n=name: getattr(L.tensor(floats), n)())

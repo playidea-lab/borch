@@ -92,13 +92,21 @@ class Module:
         self._buffers = {}          # 학습은 안 하지만 저장·복원되는 값 (running_mean 등)
         self.training = True
 
-    def register_buffer(self, name, value):
+    def register_buffer(self, name, value, persistent=True):
         """torch 의 `register_buffer`. `state_dict` 에 들어가고 학습 대상은 아니다.
 
         BatchNorm 의 running_mean 이 여기 들어간다 — 빠뜨리면 저장했다 불러왔을 때
         **평가 모드가 초기값으로 돌아가고**, 학습은 멀쩡해 보이는데 추론만 틀린다.
+
+        `persistent=False` 면 `state_dict` 에서 빠진다. 캐시처럼 다시 만들 수 있는
+        값을 체크포인트에 안 싣는 자리이고, **이 인자를 무시하면 남의 체크포인트와
+        열쇠가 어긋난다** — 받는 쪽이 strict 로 읽으면 그대로 거절이다.
         """
         self.__dict__.setdefault("_buffers", {})[name] = value
+        if not persistent:
+            self.__dict__.setdefault("_nonpersistent", set()).add(name)
+        else:
+            self.__dict__.get("_nonpersistent", set()).discard(name)
         object.__setattr__(self, name, value)
 
     def __setattr__(self, name, value):
@@ -110,11 +118,23 @@ class Module:
             self._buffers[name] = value
         object.__setattr__(self, name, value)
 
-    def named_buffers(self, prefix=""):
+    def named_buffers(self, prefix="", persistent_only=False):
+        """버퍼를 이름과 함께. **`persistent_only` 는 저장 쪽에서만 켠다.**
+
+        torch 의 `named_buffers()` 는 `persistent=False` 인 것도 낸다 — 그것은 "저장"
+        목록이 아니라 "버퍼" 목록이다. 저장에서 빼는 것은 `state_dict` 의 일이라
+        여기서 기본으로 걸러 버리면 두 목록이 하나로 뭉개진다.
+        """
+        skip = self.__dict__.get("_nonpersistent", set()) if persistent_only else ()
         for n, b in self.__dict__.get("_buffers", {}).items():
-            yield (f"{prefix}{n}", b)
+            if n not in skip:
+                yield (f"{prefix}{n}", b)
         for n, m in self._modules.items():
-            yield from m.named_buffers(f"{prefix}{n}.")
+            yield from m.named_buffers(f"{prefix}{n}.", persistent_only)
+
+    def buffers(self):
+        for _, b in self.named_buffers():
+            yield b
 
     def parameters(self):
         for p in self._params.values():
@@ -154,14 +174,20 @@ class Module:
 
     def state_dict(self):
         out = {name: Tensor(p.data.copy()) for name, p in self.named_parameters()}
-        for name, buf in self.named_buffers():
-            out[name] = Tensor(_np.array(buf, copy=True))
+        # **저장에서는 `persistent=False` 를 뺀다.** 그것이 그 인자의 뜻이다.
+        for name, buf in self.named_buffers(persistent_only=True):
+            # 버퍼는 두 모양으로 들어온다 — 층이 등록한 numpy 값과 **사용자가
+            # `register_buffer` 로 넣은 텐서**. 저장 형식은 텐서 하나다.
+            out[name] = Tensor(buf.data.copy() if isinstance(buf, Tensor)
+                               else _np.array(buf, copy=True))
         return out
 
     def load_state_dict(self, state, strict=True):
         own = dict(self.named_parameters())
+        # 받을 수 있는 것은 버퍼 전부지만, **없다고 나무랄 것은 저장되는 것뿐**이다.
         buffers = dict(self.named_buffers())
-        missing = [k for k in list(own) + list(buffers) if k not in state]
+        saved = dict(self.named_buffers(persistent_only=True))
+        missing = [k for k in list(own) + list(saved) if k not in state]
         unexpected = [k for k in state if k not in own and k not in buffers]
         if strict and (missing or unexpected):
             raise RuntimeError(
@@ -174,7 +200,15 @@ class Module:
                 *path, leaf = name.split(".")
                 for part in path:
                     holder = holder._modules[part]
-                holder.register_buffer(leaf, data.copy() if data.ndim else data.item())
+                # **들어 있던 것과 같은 모양으로 되돌린다.** 텐서로 등록한 버퍼를
+                # numpy 로 바꿔치기하면 `self.mask.unsqueeze(0)` 같은 줄이 불러온
+                # 뒤에만 터진다 — 저장 전에는 되던 코드가 저장 후에 안 된다.
+                keep = isinstance(buffers[name], Tensor)
+                holder.register_buffer(
+                    leaf,
+                    Tensor(data.copy()) if keep
+                    else (data.copy() if data.ndim else data.item()),
+                    persistent=leaf not in holder.__dict__.get("_nonpersistent", set()))
                 continue
             if name in own:
                 target = own[name]
@@ -505,10 +539,23 @@ class ParameterDict(Module):
 # 나중에 쓴 것이 torch 서명을 따랐고 처음 쓴 것이 안 고쳐진 것이다. 골든이 못 본
 # 이유는 튜토리얼이 기본값 `mean` 만 쓰기 때문이다.
 class _Loss(Module):
-    """`reduction` 을 한 번만 받아 둔다. 손실마다 적으면 자리마다 어긋난다."""
+    """`reduction` 을 한 번만 받아 둔다. 손실마다 적으면 자리마다 어긋난다.
 
-    def __init__(self, reduction="mean"):
+    **`weight`·`pos_weight` 는 여기서 거절한다.** torch 는 그 둘을 버퍼로 등록하고
+    `state_dict` 에 실어 보내는데(손실도 체크포인트를 갖는다), 무엇보다 `mean` 의
+    나눗셈이 달라진다 — 표본 수가 아니라 **가중치의 합**으로 나눈다. 받아만 두고
+    안 쓰면 손실 값이 조용히 달라지고, 그것은 학습률을 잘못 고르게 만든다.
+
+    거절 문구를 쓰는 이유는 `TypeError` 가 "이 라이브러리에 없다" 를 안 말해 주기
+    때문이다 — 오타를 냈을 때와 같은 화면이다.
+    """
+
+    def __init__(self, reduction="mean", *, weight=None, pos_weight=None):
         super().__init__()
+        if weight is not None:
+            _unsupported(f"{type(self).__name__}(weight=…) — 클래스 가중치")
+        if pos_weight is not None:
+            _unsupported(f"{type(self).__name__}(pos_weight=…)")
         self.reduction = reduction
 
 
@@ -1611,6 +1658,15 @@ class _InstanceNorm(Module):
             self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
         else:
             self.weight = self.bias = None
+        # **인자를 받아 놓고 안 쓰면 거짓말이 된다.**
+        #
+        # `track_running_stats=True` 를 주면 torch 는 이동 통계 셋을 등록하고,
+        # 그것을 평가 모드에서 **실제로 쓴다**. 여기서는 조용히 무시하고 있었다 —
+        # `state_dict` 열쇠 셋이 통째로 없어지고, 학습은 멀쩡한데 평가만 다른 값을
+        # 낸다. 버퍼만 등록하고 순방향이 안 쓰면 열쇠만 맞고 값이 틀리는, 더 늦게
+        # 발견되는 자리로 옮겨 갈 뿐이다. 그래서 **안 되는 것은 안 된다고 한다.**
+        if track_running_stats:
+            _unsupported("InstanceNorm 의 track_running_stats=True")
 
     def forward(self, x):
         return instance_norm(x, self.weight, self.bias, self.eps)

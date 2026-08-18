@@ -222,6 +222,12 @@ NOT_PORTED = {
     "linalg::": (17, "아직 — `*_ex` 변종. info 를 내는 자리라 값이 있다"),
     "grad::": (12, "별칭 — vjp 는 `backward(seed)` 이고 parity 가 이미 묻는다"),
     "cplx::": (10, "파이썬 — 복소수 `repr` 은 파이썬 formatter 의 것이다"),
+    # 버퍼 케이스 열 중 다섯은 옮겼고(등록·저장 제외·목록·값 왕복), 다섯이 남았다.
+    # **남은 것의 까닭이 둘로 갈린다.** `InstanceNorm` 셋은 borch.ts 에 그 **층**이
+    # 없어서다 — 텐서 메서드 `instanceNorm` 은 있고 층은 파이썬 쪽에서 세운다.
+    # 손실 둘은 거절을 묻는 케이스인데, TypeScript 에서는 없는 인자를 주는 것이
+    # 실행 중 거절이 아니라 **컴파일 오류**라 물을 자리가 없다.
+    "container::": (5, "파이썬 — InstanceNorm 층은 결속이 세우고, 거절은 파이썬 인자다"),
     "index::": (5, "**없음** — borch.ts 에 `searchsorted`·`bucketize` 가 없다"),
     "opt::": (4, "**없음** — borch.ts 에 `LBFGS` 가 없다"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),

@@ -619,6 +619,50 @@ class Module:
                 got.append((key, value))
         return got
 
+    # ── 버퍼 ──────────────────────────────────────────────────────────────
+    #
+    # **버퍼가 `BatchNorm` 의 특례로만 있었다.** borch.ts 쪽 `BatchNormND` 가 이동
+    # 통계를 자기 `stateDict` 에 실어 보내는 길만 있었고, `register_buffer` 자체가
+    # 없어서 **사용자가 버퍼를 가진 모델을 못 썼다** — 마스크·위치표·정규화 상수를
+    # 들고 다니는 모델이 전부 이 문법을 쓰는데 `AttributeError` 로 막혔다.
+
+    def register_buffer(self, name, value, persistent=True):
+        """학습은 안 하지만 저장·복원되는 값. 속성으로도 붙는다.
+
+        속성으로 붙으면 `_children()` 이 텐서로 알아보고 `state_dict` 에 실린다 —
+        그래서 저장 쪽에 따로 적을 것이 없다. `requiresGrad` 가 거짓이라
+        `parameters()`·`named_parameters()` 는 이것을 안 집는다.
+        """
+        self.__dict__.setdefault("_buffers", {})[name] = value
+        if not persistent:
+            self.__dict__.setdefault("_nonpersistent", set()).add(name)
+        else:
+            self.__dict__.get("_nonpersistent", set()).discard(name)
+        object.__setattr__(self, name, value)
+
+    def named_buffers(self, persistent_only=False):
+        """`(이름, 버퍼)` 짝.
+
+        감싼 층은 **빼기로 낸다** — `state_dict` 에서 `named_parameters` 를 뺀
+        나머지가 버퍼다. borch.ts 에 목록을 하나 더 두면 그것이 세 번째 목록이 되고,
+        이 저장소가 반복해서 겪은 실패가 "같은 것의 목록이 둘" 이다.
+        """
+        if self._m is None:
+            skip = self.__dict__.get("_nonpersistent", set()) if persistent_only else ()
+            out = [(n, v) for n, v in self.__dict__.get("_buffers", {}).items()
+                   if n not in skip]
+            for name, m in self._children():
+                if isinstance(m, Tensor):
+                    continue
+                out.extend((f"{name}.{k}", v)
+                           for k, v in _buffers_of(m, persistent_only))
+            return out
+        params = {n for n, _ in self.named_parameters()}
+        return [(n, v) for n, v in self.state_dict().items() if n not in params]
+
+    def buffers(self):
+        return [b for _, b in self.named_buffers()]
+
     def __call__(self, *args):
         # 상속한 쪽은 자기 `forward` 를 갖는다. 감싼 쪽만 JS 로 넘긴다.
         if self._m is None:
@@ -667,9 +711,13 @@ class Module:
     def state_dict(self):
         if self._m is None:
             out = {}
+            # `persistent=False` 로 등록한 버퍼는 **저장에서 빠진다.** 그것이 그
+            # 인자의 뜻이고, 무시하면 남의 체크포인트와 열쇠가 어긋난다.
+            skip = self.__dict__.get("_nonpersistent", set())
             for name, m in self._children():
                 if isinstance(m, Tensor):
-                    out[name] = m
+                    if name not in skip:
+                        out[name] = m
                     continue
                 for k, v in _state_of(m).items():
                     out[f"{name}.{k}"] = v
@@ -807,6 +855,9 @@ class _Wrap:
     def named_parameters(self):
         return []
 
+    def named_buffers(self, persistent_only=False):
+        return []
+
     def load_state_dict(self, values, strict=True):
         pass
 
@@ -856,6 +907,10 @@ class _Sequential:
         return [(f"{i}.{k}", v)
                 for i, m in enumerate(self.layers) for k, v in _named_of(m)]
 
+    def named_buffers(self, persistent_only=False):
+        return [(f"{i}.{k}", v) for i, m in enumerate(self.layers)
+                for k, v in _buffers_of(m, persistent_only)]
+
     def load_state_dict(self, values, strict=True):
         groups = {}
         for key, v in values.items():
@@ -887,6 +942,13 @@ def _named_of(m):
     둘을 한 줄로 쓰면 버퍼가 파라미터가 된다. 그래서 함수가 둘이다.
     """
     return m.named_parameters() if hasattr(m, "named_parameters") else []
+
+
+def _buffers_of(m, persistent_only=False):
+    """`(이름, 버퍼)` 짝. 셋째 목록이고, 앞의 둘의 차이가 정확히 이것이다."""
+    if not hasattr(m, "named_buffers"):
+        return []
+    return m.named_buffers(persistent_only)
 
 
 # ── 컨테이너 ────────────────────────────────────────────────────────────────
@@ -930,6 +992,10 @@ class _Holder:
     def named_parameters(self):
         return [(f"{name}.{k}", v)
                 for name, m in self._entries() for k, v in _named_of(m)]
+
+    def named_buffers(self, persistent_only=False):
+        return [(f"{name}.{k}", v) for name, m in self._entries()
+                for k, v in _buffers_of(m, persistent_only)]
 
     def load_state_dict(self, values, strict=True):
         own = dict(self._entries())
@@ -1061,6 +1127,10 @@ class _ParamHolder(_Holder):
     # 사라진다. `parameters()` 가 바로 위에서 같은 이유로 재정의돼 있다.
     def named_parameters(self):
         return list(self._entries())
+
+    # 담고 있는 것이 전부 파라미터다 — 버퍼는 하나도 없다.
+    def named_buffers(self, persistent_only=False):
+        return []
 
     def load_state_dict(self, values, strict=True):
         own = dict(self._entries())
@@ -1660,12 +1730,41 @@ class GroupNorm(Module):
         return (wrap(out) * self.weight.reshape(*shape)) + self.bias.reshape(*shape)
 
 
-def _instance_norm_layer(eps=1e-5):
-    return _Wrap(lambda x: wrap(handle(x).instanceNorm(eps)))
+class _InstanceNorm(Module):
+    """표본마다·채널마다 따로. **기본이 `affine=False` 다** — torch 가 그렇다.
+
+    전에는 `lambda num_features=0, eps=1e-5, **kw: ...` 였다. `**kw` 가 `affine` 과
+    `track_running_stats` 를 통째로 삼켜서, `affine=True` 로 세운 층이 **파라미터를
+    하나도 안 갖고** 조용히 돌았다 — 정규화는 되는데 배우는 것이 없고, 손실은
+    나머지 층이 대신 맞춰서 내려간다. 예외도 경고도 없는 자리다.
+
+    `_Wrap` 이 아니라 `Module` 인 이유가 그것이다. 가중치가 `named_parameters` 에
+    잡혀야 하고, 그 이름이 `state_dict` 열쇠가 된다.
+    """
+
+    def __init__(self, num_features=0, eps=1e-5, momentum=0.1, affine=False,
+                 track_running_stats=False):
+        super().__init__()
+        if track_running_stats:
+            # 버퍼만 등록하고 순방향이 안 쓰면 **열쇠는 맞고 값이 틀린다.**
+            # 평가 모드의 계산이 통째로 달라지는 자리라, 안 되는 것은 안 된다고 한다.
+            from borch._base import _unsupported
+            _unsupported("InstanceNorm 의 track_running_stats=True")
+        self.eps = eps
+        if affine:
+            self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
+            self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
+
+    def forward(self, x):
+        h = handle(x)
+        out = wrap(h.instanceNorm(self.eps))
+        if getattr(self, "weight", None) is None:
+            return out
+        shape = [1, int(handle(self.weight).size)] + [1] * (len(h.shape) - 2)
+        return out * self.weight.reshape(*shape) + self.bias.reshape(*shape)
 
 
-InstanceNorm1d = InstanceNorm2d = InstanceNorm3d = (
-    lambda num_features=0, eps=1e-5, **kw: _instance_norm_layer(eps))
+InstanceNorm1d = InstanceNorm2d = InstanceNorm3d = _InstanceNorm
 
 
 class RMSNorm(Module):
@@ -1771,6 +1870,24 @@ def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None):
 #
 # `NLLLoss`·`CrossEntropyLoss` 는 아직 없다 — borch.ts 의 `nllLoss`·`crossEntropy` 가
 # 스칼라만 내므로 여기서 `none` 을 만들 수 없다. 없는 것을 만드는 대신 멈춘다.
+def _no_class_weights(who, weight, pos_weight):
+    """**`weight`·`pos_weight` 는 여기 없다.** 받아 두고 안 쓰면 손실이 조용히 달라진다.
+
+    torch 는 그 둘을 버퍼로 등록해 `state_dict` 에 실어 보내고, 무엇보다 `mean` 의
+    나눗셈을 바꾼다 — 표본 수가 아니라 **가중치의 합**으로 나눈다. 무시하면 값이
+    달라지고, 그 값으로 고른 학습률이 따라 틀린다.
+
+    `TypeError` 로 막혀 있었는데 그것은 오타를 냈을 때와 같은 화면이라 "이
+    라이브러리에 없다" 를 안 말해 준다.
+    """
+    from borch._base import _unsupported
+
+    if weight is not None:
+        _unsupported(f"{who}(weight=…) — 클래스 가중치")
+    if pos_weight is not None:
+        _unsupported(f"{who}(pos_weight=…)")
+
+
 def L1Loss(reduction="mean"):
     return _Wrap(lambda a, b: wrap(handle(a).l1Loss(handle(b), reduction)))
 
@@ -1784,15 +1901,18 @@ def SmoothL1Loss(beta=1.0, reduction="mean"):
         handle(a).smoothL1Loss(handle(b), beta, reduction)))
 
 
-def NLLLoss(reduction="mean"):
+def NLLLoss(reduction="mean", *, weight=None):
+    _no_class_weights("NLLLoss", weight, None)
     return _Wrap(lambda a, b: wrap(handle(a).nllLoss(handle(b), reduction)))
 
 
-def BCEWithLogitsLoss(reduction="mean"):
+def BCEWithLogitsLoss(reduction="mean", *, weight=None, pos_weight=None):
+    _no_class_weights("BCEWithLogitsLoss", weight, pos_weight)
     return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
 
 
-def CrossEntropyLoss(reduction="mean"):
+def CrossEntropyLoss(reduction="mean", *, weight=None):
+    _no_class_weights("CrossEntropyLoss", weight, None)
     return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(handle(b), reduction)))
 
 
