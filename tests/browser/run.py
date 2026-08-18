@@ -23,7 +23,7 @@ import socketserver
 import sys
 import threading
 
-from launch import launch as _launch
+from launch import browser as browser_of
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -67,11 +67,12 @@ def run(lib, headed, probe=None):
     url = f"http://127.0.0.1:{port}/tests/browser/runner.html?lib={lib}"
     probed = None
     try:
-        with sync_playwright() as p:
+        # **브라우저를 닫는 것도 `with` 가 한다** — 마지막 줄에 두면 그 앞에서
+        # 예외가 날 때 안 닫히고, 남은 크로미엄이 다른 측정을 망가뜨린다.
+        with sync_playwright() as p, browser_of(p, headed=headed) as browser:
             # **이 러너에는 여태 플래그가 없었다.** macOS 에서는 그래도 WebGPU 가
             # 나와서 안 보였는데, 리눅스 GPU 서버에서는 Vulkan 을 켜 줘야 한다.
             # borch.ts 쪽 러너와 다른 조건으로 재면 그때부터 같은 잣대가 아니다.
-            browser = _launch(p, headed=headed)
             page = browser.new_page()
             # 정확도 측정은 몇 분씩 걸린다. 기본 제한에 걸려 죽으면 잰 것이 없어진다.
             page.set_default_timeout(0)
@@ -87,7 +88,6 @@ def run(lib, headed, probe=None):
                 # 브라우저 안에서만 재현되는 것을 눈으로 보는 통로다.
                 probed = page.evaluate(
                     "async (code) => String(await window.PY.runPythonAsync(code))", probe)
-            browser.close()
     finally:
         stop()
     return result, probed

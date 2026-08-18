@@ -16,7 +16,7 @@
 import sys
 
 import run as runner
-from launch import launch
+from launch import browser as browser_of
 
 PAGE = "/borch-ts/test/device.html"
 TIMEOUT_MS = 300_000
@@ -35,8 +35,10 @@ def main(argv):
     try:
         from playwright.sync_api import sync_playwright
 
-        with sync_playwright() as p:
-            browser = launch(p, headed="--headed" in argv)
+        # **닫는 것도 `with` 가 한다** — 마지막 줄에 두면 그 앞에서 예외가 날 때
+        # 안 닫히고, 남은 크로미엄이 다른 측정을 망가뜨린다.
+        with sync_playwright() as p, \
+                browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
             page.on("console", lambda m: print(f"  [브라우저] {m.text}")
@@ -46,7 +48,6 @@ def main(argv):
             page.wait_for_function("window.__borchDevice !== undefined",
                                    timeout=TIMEOUT_MS)
             result = page.evaluate("window.__borchDevice")
-            browser.close()
     finally:
         stop()
 

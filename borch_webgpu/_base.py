@@ -1261,3 +1261,70 @@ def _gone(name, instead):
 for _n, _i in (("eig", "linalg.eig"), ("symeig", "linalg.eigh")):
     setattr(Tensor, _n, _gone(_n, _i))
 del _n, _i
+
+
+# ── 희소·저장소·양자화 — **이름은 있고 이 텐서에는 안 맞는다** ───────────────
+#
+# 코어와 같은 이유로 여기도 고친다. 그냥 두면 `'Tensor' object has no attribute
+# 'coalesce'` 가 나오는데 그것은 **오타와 구별이 안 된다.** torch 는 "희소 배치를
+# 기대했는데 Strided 를 받았다" 고 말한다 — 이름은 있고 이 텐서에 안 맞는다는 뜻이다.
+_SPARSE_ACCESSOR = {
+    "coalesce": "coordinate tensor layout",
+    "indices": "coordinate tensor layout",
+    "values": "tensor layout",
+    "crow_indices": "row compressed tensor layout",
+    "col_indices": "row compressed tensor layout",
+    "ccol_indices": "column compressed tensor layout",
+    "row_indices": "column compressed tensor layout",
+}
+
+
+def _needs_sparse(name, layout):
+    def method(self, *a, **k):
+        del self, a, k
+        raise RuntimeError(
+            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 없습니다. "
+            f"(torch: {name} expected sparse {layout} but got Strided)")
+
+    method.__name__ = name
+    return method
+
+
+def _absent_here(name, what):
+    def method(self, *a, **k):
+        del self, a, k
+        from borch._base import BrowserTorchError
+        raise BrowserTorchError(
+            f"`.{name}()`({what}) 은(는) 브라우저 축소판에 없습니다.\n"
+            "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
+            "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.")
+
+    method.__name__ = name
+    return method
+
+
+for _n, _layout in _SPARSE_ACCESSOR.items():
+    setattr(Tensor, _n, _needs_sparse(_n, _layout))
+for _n in ("to_sparse", "to_sparse_coo", "to_sparse_csr", "to_sparse_csc",
+           "to_sparse_bsr", "to_sparse_bsc", "sparse_mask"):
+    setattr(Tensor, _n, _absent_here(_n, "희소 텐서"))
+for _n in ("storage", "storage_type", "untyped_storage"):
+    setattr(Tensor, _n, _absent_here(_n, "저장소 객체 — `.numpy()` 를 쓰세요"))
+for _n in ("int_repr", "q_scale", "q_zero_point", "qscheme"):
+    setattr(Tensor, _n, _absent_here(_n, "양자화"))
+for _n in ("cuda", "ipu", "mtia", "xpu"):
+    setattr(Tensor, _n, _absent_here(_n, "그 장치"))
+for _n in ("pin_memory", "record_stream"):
+    setattr(Tensor, _n, _absent_here(_n, "고정 메모리·스트림"))
+del _n, _layout
+
+
+def _is_set_to(self, other):
+    """**두 텐서가 같은 저장을 가리키는가.** 여기서는 손잡이가 같아야 참이다 —
+    뷰를 안 만들므로 전치·재구성은 늘 새 버퍼다. 코어는 numpy 뷰라 참이 나오는
+    자리가 있고, 그 갈림은 뷰 이야기지 이 술어의 이야기가 아니다."""
+    return isinstance(other, Tensor) and self._h is other._h
+
+
+Tensor.is_set_to = _is_set_to
+Tensor.is_shared = lambda self: False

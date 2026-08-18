@@ -17,6 +17,7 @@ _spec.loader.exec_module(_mod)
 
 FLAGS = _mod.FLAGS
 launch = _mod.launch
+browser = _mod.browser
 is_software = _mod.is_software
 refuse_if_software = _mod.refuse_if_software
 warn_if_software = _mod.warn_if_software

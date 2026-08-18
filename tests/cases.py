@@ -8522,17 +8522,22 @@ def reduce_cases(inp=None):
     zeros_in = np.array([0., 1., 0., 2.], dtype=np.float32)
     weights = np.arange(1, 5, dtype=np.float32)
 
-    def values_of(got):
-        return got if hasattr(got, "numpy") else got.values
+    def values_of(L, got):
+        # **`hasattr(got, "numpy")` 로 물으면 안 된다.** 우리 쪽 쌍은 못 찾은 이름을
+        # 값으로 넘기므로 `numpy` 에도 참이라고 답하고, 그러면 이 함수가 쌍을 그대로
+        # 돌려준다 — torch 의 namedtuple 은 안 넘기니 **같은 헬퍼가 라이브러리마다
+        # 다른 갈래를 탄다.** 그 상태로도 오래 초록이었다가, `Tensor.values`(희소용)
+        # 가 생기자 쌍에 곱셈을 한 결과에서 `.values` 가 메서드로 잡히며 터졌다.
+        return got if isinstance(got, L.Tensor) else got.values
 
     cases = []
 
     def add(name, fn, grad_of=None):
-        cases.append((REDUCE_PREFIX + name, lambda L, f=fn: values_of(f(L))))
+        cases.append((REDUCE_PREFIX + name, lambda L, f=fn: values_of(L, f(L))))
         if grad_of is not None:
             def run(L, f=fn, arr=grad_of):
                 x = L.tensor(arr, requires_grad=True)
-                out = values_of(f(L, x))
+                out = values_of(L, f(L, x))
                 w = L.arange(out.numel()).reshape(out.shape).float() if out.shape else None
                 (out * w if w is not None else out).sum().backward()
                 return _grad_of(x, name)
@@ -8742,20 +8747,25 @@ def method_cases(inp=None):
     mat = np.arange(1, 10, dtype=np.float32).reshape(3, 3)
     mask = np.array([True, False, True, False])
 
-    def values_of(got):
+    def values_of(L, got):
         """(값, 번호) 를 주는 것들은 값 쪽만 본다 — 번호는 동점에서 갈릴 수 있다.
 
         `getattr(got, "values", got)` 로 쓰면 안 된다. **진짜 torch 텐서에는 `.values`
         가 메서드로 있어서**(희소 텐서용) 텐서 대신 그 메서드가 나온다 — 굳히기가
         `'builtin_function_or_method' object has no attribute 'detach'` 로 터지며
         알려줬다. 텐서인지를 먼저 묻는다.
+
+        **묻는 방법이 오래 틀려 있었다.** `hasattr(got, "numpy")` 로 물었는데 우리
+        쪽 쌍은 못 찾은 이름을 값으로 넘기므로 참이라고 답한다 — torch 의 namedtuple
+        은 안 넘기니 같은 헬퍼가 라이브러리마다 다른 갈래를 탔다. 그 라이브러리의
+        `Tensor` 인지로 물으면 셋이 같은 갈래를 탄다.
         """
-        return got if hasattr(got, "numpy") else got.values
+        return got if isinstance(got, L.Tensor) else got.values
 
     def call(name, args, arr, extra=()):
         def run(L, n=name, a=args, base=arr, ex=extra):
             return values_of(
-                getattr(L.tensor(base), n)(*[L.tensor(e) for e in ex], *a))
+                L, getattr(L.tensor(base), n)(*[L.tensor(e) for e in ex], *a))
         return run
 
     cases = []
@@ -9246,9 +9256,77 @@ def dtype_cases(inp=None):
             return "안 던졌다"
         cases.append((f"dtype::없는이름::{gone}(폐기됨)", deprecated))
 
-    for name in ("coalesce", "untyped_storage", "int_repr"):
+    # **`coalesce`·`untyped_storage`·`int_repr` 는 이제 여기 없다.** 셋 다 이름을
+    # 갖고 이유를 대며 거절하도록 고쳤기 때문이다 — 이 검사는 **정말로 이름이 없는**
+    # 자리를 봐야 한다. `NOT_API` 가 공개 API 가 아니라고 적어 둔 둘을 쓴다.
+    for name in ("narrow_copy", "unsafe_chunk"):
         cases.append((f"dtype::없는이름::{name}",
                       lambda L, n=name: missing_name(L, n)))
+
+    square2 = np.array([[1.5, 0.0], [0.0, -2.5]], dtype=np.float32)
+
+    # ── 이름은 있고 **이 텐서에는 안 맞는** 것들 ──────────────────────────
+    #
+    # 오래 `'Tensor' object has no attribute 'coalesce'` 를 냈는데, 그것은 **오타와
+    # 구별이 안 된다.** torch 는 "희소 배치를 기대했는데 Strided 를 받았다" 고
+    # 말한다 — 이름은 있고 이 텐서에 안 맞는다는 뜻이다.
+    #
+    # 셋으로 갈린다: **희소 접근자**는 배치를 탓하고, **희소를 만드는 쪽**과
+    # **저장소·양자화**는 그 기능이 여기 없다고 말한다. torch 는 앞의 것만 거절하고
+    # 뒤의 것은 해낸다 — 우리가 갈리는 자리가 서로 다르다.
+    def refuses_with(L, name, fragment, arg=()):
+        try:
+            getattr(L.tensor(square2), name)(*arg)
+        except Exception as exc:                                # noqa: BLE001
+            return ("멈췄다" if fragment in str(exc)
+                    else f"다른 문구 <{str(exc).splitlines()[0][:44]}>")
+        return "안 던졌다"
+
+    for name in ("coalesce", "indices", "values", "crow_indices", "row_indices"):
+        cases.append((INPLACE_PREFIX + f"희소::{name} 는 배치를 탓한다",
+                      lambda L, n=name: refuses_with(L, n, "but got Strided")))
+
+    # 아래는 **torch 가 해내는** 자리다. 우리에게 희소 텐서·저장소 객체가 없어서
+    # 갈리고, 그것은 배치 탓이 아니라 **없는 기능**이다.
+    for name in ("to_sparse", "to_sparse_csr", "sparse_mask", "untyped_storage"):
+        def absent_here(L, n=name):
+            """**torch 는 해내고 우리는 멈춘다.** 값을 물으면 영원히 갈리므로
+            "각자 문서대로 굴었는가" 를 묻는다 — 처음에 서로 다른 문자열을
+            돌려주게 썼다가, 그러면 골든이 torch 의 답을 굳혀서 우리는 영영
+            빨간 것을 확인했다."""
+            real = getattr(L, "__name__", "") == "torch"
+            try:
+                getattr(L.tensor(square2), n)(
+                    *((L.tensor(square2).to_sparse(),) if n == "sparse_mask" else ()))
+            except Exception as exc:                            # noqa: BLE001
+                return "기대대로" if not real else f"뜻밖의 거절 <{type(exc).__name__}>"
+            return "기대대로" if real else "뜻밖의 성공"
+        cases.append((INPLACE_PREFIX + f"없는기능::{name}=우리는거절", absent_here))
+
+    # `int_repr`·`cuda` 는 **torch 도 멈춘다** — 앞의 넷과 갈래가 다르다. 한 묶음으로
+    # 두면 "torch 가 해내는가" 가 이름마다 다른데 판정은 하나가 되어 안 맞는다.
+    for name in ("int_repr", "cuda"):
+        def both_refuse(L, n=name):
+            try:
+                getattr(L.tensor(square2), n)()
+            except Exception:                                   # noqa: BLE001
+                return "멈췄다"
+            return "안 던졌다"
+        cases.append((INPLACE_PREFIX + f"없는기능::{name} 는 양쪽 다 멈춘다",
+                      both_refuse))
+
+    # `is_set_to` 는 **늘 거짓이 아니다** — 뷰는 참이고 사본은 거짓이라, 이 술어가
+    # `tensor()` 의 사본 여부를 묻는 이름이기도 하다.
+    cases.append((INPLACE_PREFIX + "술어::is_set_to(자기)",
+                  lambda L: str(L.tensor(square2).is_set_to(L.tensor(square2)))))
+
+    def set_to_itself(L):
+        x = L.tensor(square2)
+        return str(x.is_set_to(x))
+
+    cases.append((INPLACE_PREFIX + "술어::is_set_to(같은 객체)", set_to_itself))
+    cases.append((INPLACE_PREFIX + "술어::is_shared()",
+                  lambda L: str(L.tensor(square2).is_shared())))
 
     # `double` 은 **일부러 갈린다** — 코어에는 float64 가 있고 브라우저 쪽에는
     # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.

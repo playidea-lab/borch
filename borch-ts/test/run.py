@@ -20,7 +20,7 @@ import socketserver
 import sys
 import threading
 
-from launch import launch, warn_if_software
+from launch import browser as browser_of, warn_if_software
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = "/borch-ts/test/index.html"
@@ -143,12 +143,13 @@ def run(headed=False, verbose=False):
             print(f"  [브라우저] {m.text}")
 
     try:
-        with sync_playwright() as p:
+        # **브라우저를 닫는 것도 `with` 가 한다** — 마지막 줄에 두면 그 앞에서
+        # 예외가 날 때 안 닫히고, 남은 크로미엄이 다른 측정을 망가뜨린다.
+        with sync_playwright() as p, browser_of(p, headed=headed) as browser:
             # 헤드리스 Chromium 은 기본으로 WebGPU 어댑터를 안 준다 — 요청하면
             # 예외가 아니라 null 이 온다. 예전 TF.js 판에서는 이 문제가 안 보였다.
             # 못 얻으면 WebGL 로 조용히 내려갔기 때문이다 — 안 보이는 것이 나은
             # 것이 아니라, 그때 잰 수가 GPU 의 것이 아니었다.
-            browser = launch(p, headed=headed)
             page = browser.new_page()
             page.set_default_timeout(0)
             # 셰이더 컴파일 오류는 콘솔로만 나온다. 삼키면 원인을 못 찾는다.
@@ -169,7 +170,6 @@ def run(headed=False, verbose=False):
                       file=sys.stderr)
                 raise
             report = page.evaluate("window.__borchReport")
-            browser.close()
     finally:
         stop()
     return report
@@ -192,7 +192,9 @@ def run(headed=False, verbose=False):
 #        아직 = 옮길 값이 있는데 안 옮겼다 (**밀린 일이다**)
 #        없음 = borch.ts 에 그 이름이 없다 (**결손이다**)
 NOT_PORTED = {
-    "dtype::": (104, "아직 — 형 보존은 borch.ts 도 지켜야 한다"),
+    # 104 → 103. `dtype::없는이름::` 이 물던 이름을 `narrow_copy`·`unsafe_chunk` 로
+    # 옮겼다 — 앞의 것은 torch 가 실제로 답해서 "없는 이름" 이 아니었다.
+    "dtype::": (103, "아직 — 형 보존은 borch.ts 도 지켜야 한다"),
     # 이 수가 82 에서 88 로 뛰는 것을 이 검사가 **붙인 날 잡았다** —
     # `x.real`·`x.device` 를 속성으로 바꾼 묶음이 케이스를 여섯 늘렸다.
     # 88 → 116. 술어 스무 개와 짝 없는 제자리 판 여덟을 넣었다. 둘 다 **파이썬
@@ -202,7 +204,10 @@ NOT_PORTED = {
     # `retain_grad` 를 넣었다. **여기 있는 이유가 갈래마다 다르다** — `stride` 는
     # 저쪽이 뷰를 안 만들어 답이 갈리고(그 갈림 자체를 케이스로 뒀다), `new_*` 는
     # 파이썬의 형 물려받기이고, `H`·`mT` 는 저쪽에 이름이 없다.
-    "inplace::": (144, "별칭·파이썬 — 제자리 이름, 뷰·공유·속성·술어·저장 들여다보기"),
+    # 144 → 158. 희소 접근자 일곱(`values`·`indices`·`crow_indices` …)과 저장·양자화
+    # 쪽 없는 기능들, 그리고 `is_set_to`. **전부 거절이 답인 자리**다 — borch.ts 는
+    # 조밀 텐서만 다루므로 저쪽에 물을 자리 자체가 없다.
+    "inplace::": (158, "별칭·파이썬 — 제자리 이름, 뷰·공유·속성·술어·저장 들여다보기"),
     "method2::": (60, "별칭 — `multiply`=`mul` 처럼 파이썬의 둘째 이름"),
     "make::": (48, "아직 — `real`·`conj` 는 저쪽에도 있다"),
     "top::": (47, "별칭 — 최상위 제자리 함수. TS 는 메서드로만 준다"),

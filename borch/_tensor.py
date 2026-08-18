@@ -1640,3 +1640,72 @@ def _grad_fn(self):
 
 
 Tensor.grad_fn = property(_grad_fn)
+
+
+# ── 희소·저장소·양자화 — **이름은 있고 조밀 텐서에는 안 맞는다** ─────────────
+#
+# 이 셋을 "없는 게 맞다" 로 묶어 두고 이름조차 안 만들었는데, 두 가지가 틀렸다.
+#
+# **첫째, torch 는 열둘에 답한다.** `to_sparse()` 는 조밀 텐서를 받아 희소를 만들고
+# `storage()` 도 답이 있다. 그것들은 "없는 게 맞다" 가 아니라 **없는 기능**이다 —
+# 희소 텐서라는 물건 자체가 여기 없다.
+#
+# **둘째, 나머지 스물둘도 문구가 갈렸다.** 우리는 `'Tensor' object has no attribute
+# 'coalesce'` 를 냈는데 그것은 **오타와 구별이 안 된다.** torch 는 `coalesce expected
+# sparse coordinate tensor layout but got Strided` 라고 — 이름은 있고 이 텐서에
+# 안 맞는다고 말한다. 형 변환 아홉에서 고친 것과 같은 갈래를 여기서 또 만났다.
+
+def _needs_sparse(name, layout):
+    def method(self, *args, **kw):
+        del self, args, kw
+        raise RuntimeError(_like_torch(
+            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 없습니다.",
+            f"{name} expected sparse {layout} but got Strided"))
+
+    method.__name__ = name
+    return method
+
+
+for _n, _layout in (
+        ("coalesce", "coordinate tensor layout"),
+        ("indices", "coordinate tensor layout"),
+        ("values", "tensor layout"),
+        ("crow_indices", "row compressed tensor layout"),
+        ("col_indices", "row compressed tensor layout"),
+        ("ccol_indices", "column compressed tensor layout"),
+        ("row_indices", "column compressed tensor layout")):
+    setattr(Tensor, _n, _needs_sparse(_n, _layout))
+del _n, _layout
+
+# 희소를 **만드는** 쪽. torch 는 해내지만 우리에게는 희소 텐서라는 물건이 없다.
+# "이 텐서에 안 맞는다" 가 아니라 **"그 기능이 없다"** 이므로 문구를 가른다.
+for _n in ("to_sparse", "to_sparse_coo", "to_sparse_csr", "to_sparse_csc",
+           "to_sparse_bsr", "to_sparse_bsc", "sparse_mask"):
+    setattr(Tensor, _n, _bind_absent(_n, "희소 텐서"))
+for _n in ("storage", "storage_type", "untyped_storage"):
+    setattr(Tensor, _n, _bind_absent(_n, "저장소 객체 — `.numpy()` 를 쓰세요"))
+for _n in ("int_repr", "q_scale", "q_zero_point", "qscheme"):
+    setattr(Tensor, _n, _bind_absent(_n, "양자화"))
+for _n in ("cuda", "ipu", "mtia", "xpu"):
+    setattr(Tensor, _n, _bind_absent(_n, "그 장치"))
+for _n in ("pin_memory", "record_stream"):
+    setattr(Tensor, _n, _bind_absent(_n, "고정 메모리·스트림"))
+del _n
+
+
+def _is_set_to(self, other):
+    """**두 텐서가 같은 저장을 가리키는가.** 모양·걸음·시작 자리까지 같아야 한다.
+
+    늘 거짓이 아니다 — 뷰는 참이고 사본은 거짓이다. 그래서 이 술어는 `tensor()` 가
+    사본을 뜨는지 `from_numpy` 가 공유하는지를 **묻는 이름**이기도 하다.
+    """
+    if not isinstance(other, Tensor):
+        return False
+    mine, theirs = self.data, other.data
+    return bool(
+        mine.__array_interface__["data"][0] == theirs.__array_interface__["data"][0]
+        and mine.shape == theirs.shape and mine.strides == theirs.strides)
+
+
+Tensor.is_set_to = _is_set_to
+Tensor.is_shared = lambda self: False

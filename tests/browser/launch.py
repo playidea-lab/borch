@@ -61,6 +61,28 @@ def warn_if_software(adapter, what):
               "   GPU 경로가 도는지는 이 실행이 증명하지 않는다.)")
 
 
+import contextlib
+
+
+@contextlib.contextmanager
+def browser(playwright, headed=False, flags=FLAGS):
+    """**닫는 것까지 여기서 한다.** 여섯 러너가 전부 `browser.close()` 를 `with` 의
+    마지막 줄에 두고 있었고, 그 앞에서 예외가 나면 **브라우저가 안 닫힌다.**
+
+    조용히 새는 것이 아니다 — 남은 크로미머가 CPU 를 계속 쓴다. 실제로 러너 하나가
+    2 분 42 초째 살아 있었고, 그 사이 다른 세션이 벤치를 재고 있었다. 그쪽 수가
+    문서의 16 배로 나왔고, 원인을 찾는 데 **양쪽이 각자 시간을 썼다.**
+
+    값 검사로는 절대 안 보인다. 검사 장치가 자기 뒷정리를 안 해서 **다른 측정을
+    망가뜨리는** 종류이고, 그것을 막는 자리는 여섯이 아니라 하나여야 한다.
+    """
+    got = launch(playwright, headed=headed, flags=flags)
+    try:
+        yield got
+    finally:
+        got.close()
+
+
 def launch(playwright, headed=False, flags=FLAGS):
     """`headed` 가 아니면 소프트웨어 어댑터가 나온다 — 부르는 쪽이 어댑터를 찍어야 한다."""
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
