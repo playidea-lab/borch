@@ -73,6 +73,13 @@ export class LinAlgError extends Error {
 /** torch 가 내는 문구. 검색이 통하라고 원문 그대로 둔다. */
 export const TORCH = {
   matmulShape: "shapes cannot be multiplied",
+  // **이 축소판에 칸이 없는 것.** torch 의 문구가 아니라 우리 문구인데, 여기 두는
+  // 까닭은 같다 — 파이썬 두 판이 같은 문장으로 멈추고, 골든이 그 **조각**을 찾는다.
+  // 자리마다 손으로 적으면 구현마다 다른 문장이 생기고, 배우는 사람은 그것을 다른
+  // 규칙으로 읽는다. 값이 아니라 글자라 상호 대조로는 안 걸린다.
+  absent: "은(는) 브라우저 축소판에 없습니다.",
+  absentAdvice: "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
+    + "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.",
   broadcast: "must match the size of tensor",
   reshapeSize: "is invalid for input of size",
   nonScalarBackward: "grad can be implicitly created only for scalar outputs",

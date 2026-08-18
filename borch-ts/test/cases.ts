@@ -633,6 +633,7 @@ function addKeepdim(out: Map<string, Case>): void {
   grad("median(keepdim)", (t) => t.median(1, true).values);
   grad("mean(keepdim)", (t) => t.mean(1, true));
   addReduceDtype(out);
+  addNamedCasts(out);
   addArgs(out);
 }
 
@@ -648,6 +649,69 @@ function addKeepdim(out: Map<string, Case>): void {
  * 것이 하나도 안 듣는 것보다 나쁘다. 파이썬 쪽에서 그것을 잡았고, 여기 서른다섯은
  * **같은 물음을 borch.ts 에 처음 하는 것**이다.
  */
+/**
+ * 이름 있는 형 바꾸기 — `dtype::형바꾸기::`.
+ *
+ * **`to(형)` 이 있는데 왜 이름이 또 필요한가.** torch 가 둘 다 주기 때문이고, 교재가
+ * `x.float()` 을 쓰기 때문이다. 이 이름들이 borch.ts 에 없어서 파이썬 두 판만 답하고
+ * 있었고, 골든의 그 열넷은 "파이썬 쪽 이야기" 로 안 옮겨져 있었다. **실제로는
+ * 아무도 안 물어본 이름이었다** — `spot::` 마흔일곱이 같은 꼴이었다.
+ *
+ * 여덟은 **거절이 답**이다. 그 자리에서 무엇이 중요한지가 값이 아니라 **문구**라는
+ * 것이 이 묶음의 요점이다. 이름이 아예 없으면 `'half' 이 없다` 가 나오는데 그것은
+ * 오타와 구별이 안 되고, 파이썬 두 판은 `.half()`(float16) 은(는) 브라우저 축소판에
+ * 없습니다 로 멈춘다. 셋이 다른 문장을 말하면 배우는 사람은 **구현마다 다른 것**으로
+ * 읽는다. 값 대조로는 절대 안 걸리는 갈래다.
+ */
+function addNamedCasts(out: Map<string, Case>): void {
+  const P = "dtype::형바꾸기::";
+  const src = (): Tensor => Tensor.from([1.5, -2.5, 3.0], [3]);
+
+  out.set(`${P}float`, () => dtypeName(src().float().dtype));
+  out.set(`${P}long`, () => dtypeName(src().long().dtype));
+  out.set(`${P}bool`, () => dtypeName(src().bool().dtype));
+  out.set(`${P}cfloat`, () => dtypeName(src().cfloat().dtype));
+  // **`type_as` 는 상대의 형을 따른다** — 상대가 정수면 정수다.
+  out.set(`${P}type_as`, () => dtypeName(
+    src().typeAs(Tensor.from([1, 2, 3], [3], { dtype: "int64" })).dtype));
+
+  // 파이썬 쪽 판정이 문구의 **조각**을 본다. 여기서도 같은 조각을 확인하고 같은
+  // 낱말을 돌려준다 — 문장 전체를 굳히면 한 글자만 바뀌어도 갈린다.
+  const MARK = "브라우저 축소판에 없습니다";
+  const weRefuse = (name: string, body: () => unknown): void => {
+    out.set(`${P}${name}=우리는거절`, () => {
+      try {
+        body();
+      } catch (err) {
+        return (err as Error).message.includes(MARK)
+          ? "기대대로"
+          : `다른 문구 <${(err as Error).message.slice(0, 44)}>`;
+      }
+      return "뜻밖의 성공";
+    });
+  };
+  weRefuse("half", () => src().half());
+  weRefuse("bfloat16", () => src().bfloat16());
+  weRefuse("chalf", () => src().chalf());
+  weRefuse("cdouble", () => src().cdouble());
+  weRefuse("byte", () => src().byte());
+  weRefuse("char", () => src().char());
+  weRefuse("short", () => src().short());
+  weRefuse("int", () => src().int());
+
+  // **`double` 은 갈래가 다르다** — 코어에는 float64 가 있고 브라우저 쪽에만 없다.
+  // 파이썬 쪽은 `_as_expected` 로 접었고 답이 같은 낱말이다.
+  out.set(`${P}double=브라우저는거절`, () => {
+    try {
+      src().double();
+    } catch {
+      return "기대대로";
+    }
+    return "뜻밖의 성공";
+  });
+}
+
+
 function addReduceDtype(out: Map<string, Case>): void {
   const P = "keep::dtype::";
   // 실수를 정수로 접는 자리가 순서를 가른다. 정수·참거짓은 올림 쪽을 본다.

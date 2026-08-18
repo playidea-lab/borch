@@ -595,6 +595,16 @@ function padShape(shape: readonly number[], rank: number): number[] {
   return out;
 }
 
+/**
+ * 이 축소판에 **칸이 없는 형**의 거절. 파이썬 두 판의 문장을 그대로 쓴다 —
+ * `borch/_base.py` 의 `_unsupported` 와 결속의 `_absent_dtype` 이 같은 글자다.
+ */
+function absentDType(name: string, shown: string): never {
+  throw new RuntimeError(
+    `\`.${name}()\`(${shown}) ${TORCH.absent}\n${TORCH.absentAdvice}`,
+  );
+}
+
 export class Tensor implements Node<Tensor> {
   /**
    * **`readonly` 가 아니다** — `mutate` 하나가 고친다.
@@ -7862,6 +7872,90 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /** 형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다. */
+  /**
+   * torch 의 **이름 있는 형 바꾸기**. `to(형)` 과 같은 일을 다른 이름으로 한다.
+   *
+   * 이 이름들이 없어서 `x.float()` 이 borch.ts 에서만 안 됐다. 파이썬 두 판은 갖고
+   * 있었고 골든의 그 줄은 "파이썬 쪽 이야기라 안 옮긴다" 로 남아 있었는데, 실제로는
+   * 저쪽이 못 하는 것이 아니라 **아무도 안 물어본** 이름이었다.
+   */
+  float(): Tensor {
+    return this.to("float32");
+  }
+
+  long(): Tensor {
+    return this.to("int64");
+  }
+
+  bool(): Tensor {
+    return this.to("bool");
+  }
+
+  /**
+   * 실수를 복소수로. **`to("complex64")` 로는 안 된다** — 복소수는 칸당 f32 두 개라
+   * 이름표 갈이가 막혀 있고, 그 막음이 옳다. 허수부 0 을 붙여 만든다.
+   */
+  cfloat(): Tensor {
+    if (isComplexDType(this.dtype)) return this;
+    const re = this.dtype === "float32" ? this : this.to("float32");
+    return Tensor.complex(re, Tensor.zeros(this.shape));
+  }
+
+  /** `other` 와 같은 형으로. torch 의 `type_as`. */
+  typeAs(other: Tensor): Tensor {
+    return other.dtype === "complex64" ? this.cfloat() : this.to(other.dtype);
+  }
+
+  /**
+   * **없는 형들.** 이름을 두는 까닭은 문구다 — 이름이 아예 없으면 `'half' 이 없다`
+   * 가 나오는데 그것은 **오타와 구별이 안 된다.** 파이썬 두 판이 같은 문장으로
+   * 멈추므로 여기서도 같게 한다. 값이 아니라 글자를 맞추는 자리라 서로 대조해도
+   * 안 걸리고, 배우는 사람은 갈린 문구를 보고 **구현마다 다른 것**으로 읽는다.
+   */
+  half(): Tensor {
+    return absentDType("half", "float16");
+  }
+
+  bfloat16(): Tensor {
+    return absentDType("bfloat16", "bfloat16");
+  }
+
+  chalf(): Tensor {
+    return absentDType("chalf", "complex32");
+  }
+
+  cdouble(): Tensor {
+    return absentDType("cdouble", "complex128");
+  }
+
+  byte(): Tensor {
+    return absentDType("byte", "uint8");
+  }
+
+  char(): Tensor {
+    return absentDType("char", "int8");
+  }
+
+  short(): Tensor {
+    return absentDType("short", "int16");
+  }
+
+  int(): Tensor {
+    return absentDType("int", "int32");
+  }
+
+  /**
+   * **배정도는 다른 까닭으로 없다.** 위의 여덟은 우리가 그 칸을 안 두기로 한 것이고,
+   * 이쪽은 WebGPU 셰이더에 `f64` 자체가 없다. 문구도 그래서 다르다 — 파이썬 결속이
+   * 같은 문장으로 멈춘다.
+   */
+  double(): Tensor {
+    throw new RuntimeError(
+      "Only Tensors of floating point dtype float32 are supported — "
+        + "float64 는 WebGPU 셰이더에 없다",
+    );
+  }
+
   to(dtype: DType): Tensor {
     if (dtype === this.dtype) return this;
     // **복소수는 이름표 갈이로 오갈 수 없다.** 다른 형끼리는 저장이 float32 하나로

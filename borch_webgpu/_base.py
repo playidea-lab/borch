@@ -1328,13 +1328,12 @@ def _needs_sparse(name, layout):
 
 
 def _absent_here(name, what):
+    """**문장은 한 벌이다.** 여기 따로 적어 두었더니 같은 문장이 이 파일에 두 벌이
+    되었다 — 한쪽을 고치면 다른 쪽은 그대로 남는 자리이고, 골든이 찾는 것이 값이
+    아니라 **문구의 조각**이라 그 갈림은 상호 대조로 안 걸린다."""
     def method(self, *a, **k):
         del self, a, k
-        from borch._base import BrowserTorchError
-        raise BrowserTorchError(
-            f"`.{name}()`({what}) 은(는) 브라우저 축소판에 없습니다.\n"
-            "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
-            "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.")
+        _absent_dtype(name, what)
 
     method.__name__ = name
     return method
