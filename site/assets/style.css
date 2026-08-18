@@ -420,3 +420,205 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .editor-wrap { min-height: 20rem; }
   #console { min-height: 12rem; }
 }
+
+/* ══ 문서 껍데기 — API 레퍼런스와 Learn 이 같이 쓴다 ═══════════════════ */
+
+.docs {
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+@media (max-width: 900px) { .docs { grid-template-columns: 1fr; } }
+
+.sidebar {
+  position: sticky; top: 58px;
+  height: calc(100vh - 58px);
+  overflow-y: auto;
+  border-right: 1px solid var(--line-soft);
+  padding: 1.1rem .9rem 3rem;
+  background: var(--bg-soft);
+}
+@media (max-width: 900px) {
+  .sidebar { position: static; height: auto; border-right: 0;
+             border-bottom: 1px solid var(--line-soft); }
+}
+.sidebar h4 {
+  margin: 1.2rem 0 .5rem;
+  font: 600 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.sidebar h4:first-child { margin-top: 0; }
+.sidebar a {
+  display: block; padding: .3rem .55rem; border-radius: 6px;
+  text-decoration: none; color: var(--fg-dim);
+  font-size: .88rem; line-height: 1.45;
+}
+.sidebar a:hover { background: var(--surface); color: var(--fg); }
+.sidebar a.on { background: var(--surface); color: var(--ember); font-weight: 600; }
+.sidebar a .n { font-family: var(--mono); font-size: .82rem; }
+.sidebar a .c { float: right; color: var(--fg-faint); font-size: .74rem; }
+
+#search {
+  width: 100%; padding: .5rem .65rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--fg);
+  font: .86rem/1 var(--sans);
+}
+#search:focus { outline: none; border-color: var(--ember); }
+
+.doc-main { padding: 2rem 2rem 6rem; min-width: 0; }
+@media (max-width: 620px) { .doc-main { padding: 1.5rem 1.1rem 4rem; } }
+.doc-main > header { margin-bottom: 2rem; }
+.doc-main h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); }
+
+/* ── 심볼 카드 ─────────────────────────────────────────────────────── */
+
+.symbol {
+  border-top: 1px solid var(--line-soft);
+  padding: 1.6rem 0;
+  scroll-margin-top: 70px;
+}
+.symbol > h3 {
+  display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+  font: 600 1.05rem/1.4 var(--mono);
+  margin-bottom: .6rem;
+}
+.kind {
+  font: 600 .66rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: .22rem .45rem; border-radius: 5px;
+  border: 1px solid var(--line); color: var(--fg-faint);
+}
+.kind.class { color: var(--gpu); border-color: color-mix(in srgb, var(--gpu) 40%, transparent); }
+.kind.function { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 40%, transparent); }
+.torch-hint {
+  font: .78rem/1 var(--mono); color: var(--fg-faint);
+  margin-left: auto;
+}
+.torch-hint b { color: var(--fg-dim); font-weight: 500; }
+
+pre.sig {
+  margin: 0 0 .8rem; padding: .7rem .85rem;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: 8px; overflow-x: auto;
+  font-size: .8rem; line-height: 1.6;
+}
+pre.sig + pre.sig { margin-top: -.4rem; }
+
+.prose { font-size: .93rem; }
+.prose p { margin: 0 0 .7rem; }
+.prose p:last-child { margin-bottom: 0; }
+.prose code {
+  font-size: .86em; padding: .1em .32em; border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+}
+.prose h4 { margin: 1rem 0 .4rem; font-size: .95rem; color: var(--fg); }
+.prose ul { margin: 0 0 .7rem; padding-left: 1.1rem; }
+.prose strong { color: var(--fg); }
+
+table.tags { width: 100%; border-collapse: collapse; margin: .6rem 0 0; font-size: .86rem; }
+table.tags td { padding: .35rem .6rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space: nowrap; width: 5rem; }
+
+.members { margin-top: 1rem; }
+.members > summary {
+  cursor: pointer; font: .84rem/1 var(--mono); color: var(--fg-faint);
+  padding: .45rem 0;
+}
+.members > summary:hover { color: var(--fg); }
+.member {
+  border-left: 2px solid var(--line-soft);
+  padding: .7rem 0 .7rem .9rem;
+  margin-left: .2rem;
+  scroll-margin-top: 70px;
+}
+.member:target { border-left-color: var(--ember); }
+.member h4 {
+  display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+  margin: 0 0 .35rem; font: 600 .88rem/1.4 var(--mono);
+}
+.member .sigline {
+  font: .8rem/1.6 var(--mono); color: var(--fg-dim);
+  overflow-x: auto; white-space: pre;
+}
+
+.hits { margin: 0; padding: 0; list-style: none; }
+.hits li { padding: .3rem 0; border-bottom: 1px solid var(--line-soft); }
+.hits a { text-decoration: none; font: .86rem/1.5 var(--mono); color: var(--fg-dim); }
+.hits a:hover { color: var(--ember); }
+.hits .where { color: var(--fg-faint); font-size: .78rem; }
+
+/* ── 실행되는 코드 블록 (Learn 이 쓴다) ────────────────────────────── */
+
+.runnable {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin: 1.4rem 0;
+  background: var(--surface);
+}
+.runnable-head {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .45rem .75rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-soft);
+  font: .74rem/1 var(--mono); color: var(--fg-faint);
+}
+.runnable-head .grow { margin-left: auto; }
+.runnable-head button {
+  padding: .3rem .7rem; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--fg); font: 600 .76rem/1 var(--sans); cursor: pointer;
+}
+.runnable-head button.go { background: var(--ember); border-color: var(--ember); color: #180a02; }
+.runnable-head button:hover { filter: brightness(1.08); }
+.runnable-head button[disabled] { opacity: .5; cursor: not-allowed; }
+
+.runnable .edit { position: relative; }
+.runnable .edit textarea,
+.runnable .edit pre {
+  margin: 0; padding: .85rem 1rem;
+  font: 12.5px/1.6 var(--mono);
+  tab-size: 2; white-space: pre; overflow: auto;
+  border: 0;
+}
+.runnable .edit pre { background: var(--bg-soft); color: var(--fg); }
+.runnable .edit textarea {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  resize: none; outline: none;
+  background: transparent; color: transparent; caret-color: var(--fg);
+}
+.runnable .edit textarea::selection { background: color-mix(in srgb, var(--ember) 30%, transparent); }
+.runnable .out {
+  border-top: 1px solid var(--line-soft);
+  padding: .7rem 1rem; margin: 0;
+  font: 12px/1.6 var(--mono); color: var(--fg-dim);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 20rem; overflow: auto;
+}
+.runnable .out:empty { display: none; }
+.runnable .out .err { color: var(--bad); }
+.runnable .out .ok { color: var(--good); }
+.runnable .out .note { color: var(--fg-faint); }
+
+/* ── 강의 본문 ─────────────────────────────────────────────────────── */
+
+.lesson { max-width: 46rem; }
+.lesson h2 { margin-top: 2.6rem; font-size: 1.45rem; }
+.lesson h3 { margin-top: 1.8rem; }
+.lesson p { font-size: .97rem; }
+.lesson > p code, .lesson li code {
+  font-size: .86em; padding: .1em .32em; border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+}
+.lesson ul, .lesson ol { padding-left: 1.2rem; color: var(--fg-dim); }
+.lesson li { margin: .3rem 0; }
+
+.pager {
+  display: flex; gap: 1rem; justify-content: space-between;
+  margin-top: 3.5rem; padding-top: 1.5rem;
+  border-top: 1px solid var(--line-soft);
+}
+.pager a { text-decoration: none; font-size: .9rem; color: var(--fg-dim); }
+.pager a:hover { color: var(--ember); }
+.pager a b { display: block; color: var(--fg); font-weight: 600; margin-top: .2rem; }

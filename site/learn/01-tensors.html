@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1 · Tensors — borch Learn</title>
+<meta name="description" content="Make tensors, look at their shape and dtype, run operations, and read values back from the GPU.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/01-tensors.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">Learn</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/learn/01-tensors.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html" class="on">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · Modules</a>
+      <a href="04-training.html">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving &amp; Python</a>
+    </nav>
+    <h4>Also</h4>
+    <nav>
+      <a href="../api/">API reference</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 1</p>
+    <h1>Tensors</h1>
+    <p class="lead">
+      A tensor is an array with a shape, living in GPU memory. Everything below runs
+      in this page — edit any block and press Run, or ⌘/Ctrl + Enter.
+    </p>
+
+    <h2>Acquiring the device</h2>
+    <p>
+      <code>await init()</code> comes before anything else. Getting a WebGPU adapter is
+      asynchronous and there is no way around it — call it once, then forget it.
+      If it fails, borch stops there rather than falling back to something slower.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        log("device:", currentDevice());
+        log("adapter:", Device.adapterInfo);
+      </script>
+    </div>
+
+    <h2>Making one</h2>
+    <p>
+      <code>Tensor.from(data, shape)</code> takes a flat array and the shape you want.
+      The factory names are torch's: <code>zeros</code>, <code>ones</code>,
+      <code>arange</code>, <code>randn</code>, <code>eye</code>, <code>linspace</code>.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const a = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
+        log(await a.repr());
+
+        log("shape", JSON.stringify(a.shape));
+        log("size ", a.size);
+        log("dtype", a.dtype);
+        log("device", a.device);
+
+        log("");
+        log(await Tensor.arange(6).reshape([2, 3]).repr());
+        log(await Tensor.eye(3).repr());
+      </script>
+    </div>
+
+    <h2>Reading values is awaited</h2>
+    <p>
+      This is the second place borch differs from torch. The numbers live in GPU memory,
+      and getting them back to JavaScript is a copy — so <code>item()</code> and
+      <code>toArray()</code> return promises. Forward and backward passes are
+      <strong>synchronous</strong>; only reading crosses back.
+      Reductions that torch splits in two are split here too:
+      <code>amax()</code> gives the value, <code>max(dim)</code> gives
+      <code>{ values, indices }</code>.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const x = Tensor.from([3, 1, 4, 1, 5, 9], [6]);
+
+        log("item of a 1-element tensor:", await x.sum().item());
+        log("the whole thing:", Array.from(await x.toArray()).join(", "));
+        log("max:", await x.amax().item(), " min:", await x.amin().item());
+        log("sorted:", Array.from(await x.sort().values.toArray()).join(", "));
+      </script>
+    </div>
+
+    <h2>Operations</h2>
+    <p>
+      Elementwise operations broadcast the way torch's do. Note that operators take
+      tensors, not numbers — JavaScript has no operator overloading, so a scalar is
+      written <code>Tensor.full([], 5)</code>, and <code>powScalar(k)</code> exists for
+      the common case.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const a = Tensor.from([1, 2, 3, 4], [2, 2]);
+        const b = Tensor.from([10, 20, 30, 40], [2, 2]);
+
+        log("a + b\n" + await a.add(b).repr());
+        log("a * b\n" + await a.mul(b).repr());
+        log("a @ b\n" + await a.mm(b).repr());
+        log("a transposed\n" + await a.transpose().repr());
+
+        // Broadcasting: [2,2] against [2] stretches the row.
+        const row = Tensor.from([100, 200], [2]);
+        log("a + row\n" + await a.add(row).repr());
+
+        // A scalar is a shape-[] tensor.
+        log("a * 3\n" + await a.mul(Tensor.full([], 3)).repr());
+      </script>
+    </div>
+
+    <h2>Shapes and views</h2>
+    <p>
+      <code>reshape</code>, <code>transpose</code>, <code>slice</code> and friends give
+      you a view onto the same storage where torch would — the conformance suite checks
+      that 13 of these share storage exactly as torch does, because a copy where torch
+      shares is a bug you only notice much later.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const t = Tensor.arange(12).reshape([3, 4]);
+        log(await t.repr());
+
+        log("row 1:      " + Array.from(await t.at(1).toArray()).join(", "));
+        log("column 2:   " + Array.from(await t.at([null, 2]).toArray()).join(", "));
+        log("first 2 rows:\n" + await t.at(slice(0, 2)).repr());
+        log("transposed shape: " + JSON.stringify(t.transpose().shape));
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>If a block above errors, that is worth knowing.</strong> Every example on
+      this page runs against the same library the tests run against — nothing here is a
+      screenshot. Press Reset to get the original code back.
+    </div>
+
+    <div class="pager">
+      <a href="./">← Overview</a>
+      <a href="02-autograd.html" style="text-align:right">Next<b>2 · Autograd</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+</body>
+</html>

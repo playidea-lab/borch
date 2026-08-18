@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modules — borch Learn</title>
+<meta name="description" content="nn.Module, Linear, Sequential, and calling a model.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/03-modules.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">Learn</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/learn/03-modules.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html" class="on">3 · Modules</a>
+      <a href="04-training.html">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving &amp; Python</a>
+    </nav>
+    <h4>Also</h4>
+    <nav>
+      <a href="../api/">API reference</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 3</p>
+    <h1>Modules</h1>
+    <p class="lead">
+      <code>nn.Module</code> holds parameters and knows how to run forward. The names
+      are torch's; the one difference is that you call it with
+      <code>model.call(x)</code>, because JavaScript cannot call an object.
+    </p>
+
+    <h2>A layer on its own</h2>
+    <p>
+      <code>nn.Linear(in, out)</code> stores <code>weight</code> as
+      <code>(out, in)</code> — the same layout as torch, so a checkpoint moves across
+      without transposing.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const fc = new nn.Linear(3, 2);
+        log("weight shape:", JSON.stringify(fc.weight.shape));
+        log("bias shape:  ", JSON.stringify(fc.bias.shape));
+
+        const x = Tensor.from([1, 2, 3], [1, 3]);
+        log("");
+        log("forward:\n" + await fc.call(x).repr());
+      </script>
+    </div>
+
+    <h2>Stacking</h2>
+    <p>
+      <code>nn.Sequential</code> chains modules. <code>parameters()</code> collects
+      every tensor the optimizer should touch — if a parameter is missing from that
+      list, training runs and that layer simply never learns, with no error.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Linear(4, 8), new nn.ReLU(), new nn.Linear(8, 2));
+
+        log("parameters:", model.parameters().length, "tensors");
+        for (const p of model.parameters()) log("  ", JSON.stringify(p.shape));
+
+        const x = Tensor.randn([2, 4]);
+        log("");
+        log("out shape:", JSON.stringify(model.call(x).shape));
+      </script>
+    </div>
+
+    <h2>Writing your own</h2>
+    <p>
+      Extend <code>nn.Module</code> and implement <code>forward</code>. Parameters you
+      create yourself must be claimed, otherwise they do not appear in
+      <code>parameters()</code> — the failure is silent, so the base class makes you say it.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        class Scale extends nn.Module {
+          constructor(n) {
+            super();
+            this.gain = keepAlive(Tensor.ones([n]));
+            this.gain.requiresGrad = true;
+            this.claim(this.gain);          // without this it never trains
+          }
+          ownParameters() { return { gain: this.gain }; }
+          forward(x) { return x.mul(this.gain); }
+        }
+
+        const layer = new Scale(3);
+        log("parameters:", layer.parameters().length);
+        log(await layer.call(Tensor.from([1, 2, 3], [3])).repr());
+      </script>
+    </div>
+
+    <h2>Losses</h2>
+    <p>
+      Losses live in the same namespace and are called the same way.
+      <code>CrossEntropyLoss</code> takes logits and <code>int64</code> targets, exactly
+      as torch does — not one-hot vectors.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const logits = Tensor.from([2.0, 0.5, 0.1,
+                                    0.2, 1.9, 0.3], [2, 3]);
+        const target = Tensor.from([0, 1], [2], { dtype: "int64" });
+
+        log("cross entropy:", await new nn.CrossEntropyLoss().call(logits, target).item());
+
+        const pred = Tensor.from([1, 2, 3], [3]);
+        const truth = Tensor.from([1, 2, 4], [3]);
+        log("mse:          ", await new nn.MSELoss().call(pred, truth).item());
+      </script>
+    </div>
+
+    <div class="pager">
+      <a href="02-autograd.html">← 2 · Autograd</a>
+      <a href="04-training.html" style="text-align:right">Next<b>4 · Training</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="../assets/runnable.js"></script>
+</body>
+</html>

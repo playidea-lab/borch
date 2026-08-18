@@ -1,6 +1,7 @@
-"""설명 페이지와 플레이그라운드를 띄운다.
+"""설명 페이지·강의·API 레퍼런스·플레이그라운드를 띄운다.
 
     npm run build:ts          # 브라우저는 TypeScript 를 그대로 못 읽는다
+    python3 site/build_api.py # API 목록을 선언 파일에서 뽑는다
     python3 site/serve.py     # http://127.0.0.1:8123/site/ 가 열린다
 
 **저장소 루트를 얹는다** — 페이지가 `../borch-ts/dist` 를 부르기 때문이다. `site/`
@@ -26,6 +27,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def end_headers(self):
+        # **캐시를 끈다.** 고친 파일이 브라우저의 옛 사본에 가려지면, 안 고쳐진 것과
+        # 구별이 안 된다 — 실제로 검색 순서를 고쳐 놓고 "안 바뀌었다" 를 한참 봤다.
+        # 개발 서버에서 캐시가 버는 시간보다 그 혼동이 훨씬 비싸다.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
     def send_error(self, code, message=None, explain=None):
         # 설명 안 된 404 를 덮어두지 않는다 — 이 저장소의 러너가 한 번 404 HTML 을
         # 자바스크립트로 받아 엉뚱한 자리에서 터진 적이 있다.
@@ -39,6 +47,9 @@ def main():
     if not dist.exists():
         print("방출물이 없다 — 데모는 뜨지만 Run 이 안 된다.")
         print("  먼저: npm run build:ts")
+    if not (ROOT / "site" / "assets" / "api.json").exists():
+        print("API 목록이 없다 — 레퍼런스가 빈 채로 뜬다.")
+        print("  먼저: python3 site/build_api.py")
 
     handler = functools.partial(Handler, directory=str(ROOT))
     socketserver.ThreadingTCPServer.allow_reuse_address = True

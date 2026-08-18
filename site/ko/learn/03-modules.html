@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3 · 모듈 — borch 배우기</title>
+<meta name="description" content="nn.Module·Linear·Sequential, 그리고 모델을 부르는 법.">
+<link rel="alternate" hreflang="en" href="../../learn/03-modules.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">배우기</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../learn/03-modules.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html" class="on">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+    </nav>
+    <h4>그 밖에</h4>
+    <nav>
+      <a href="../api/">API 레퍼런스</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 3</p>
+    <h1>모듈</h1>
+    <p class="lead">
+      <code>nn.Module</code> 이 파라미터를 들고 순방향을 안다. 이름은 torch 의 것이고,
+      다른 것은 <code>model.call(x)</code> 로 부른다는 것뿐이다 — 자바스크립트는 객체를
+      그냥 부를 수 없다.
+    </p>
+
+    <h2>층 하나</h2>
+    <p>
+      <code>nn.Linear(in, out)</code> 의 <code>weight</code> 는 <code>(출력, 입력)</code>
+      이다. torch 와 같은 배치라 체크포인트가 전치 없이 건너간다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const fc = new nn.Linear(3, 2);
+        log("weight 모양:", JSON.stringify(fc.weight.shape));
+        log("bias 모양:  ", JSON.stringify(fc.bias.shape));
+
+        const x = Tensor.from([1, 2, 3], [1, 3]);
+        log("");
+        log("순방향:\n" + await fc.call(x).repr());
+      </script>
+    </div>
+
+    <h2>쌓기</h2>
+    <p>
+      <code>nn.Sequential</code> 이 모듈을 잇는다. <code>parameters()</code> 는 옵티마이저가
+      밟아야 할 텐서를 모은다 — 거기 빠진 파라미터가 있으면 학습은 돌고 그 층만 안 배운다.
+      <strong>예외는 안 난다.</strong>
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Linear(4, 8), new nn.ReLU(), new nn.Linear(8, 2));
+
+        log("파라미터:", model.parameters().length, "개");
+        for (const p of model.parameters()) log("  ", JSON.stringify(p.shape));
+
+        const x = Tensor.randn([2, 4]);
+        log("");
+        log("출력 모양:", JSON.stringify(model.call(x).shape));
+      </script>
+    </div>
+
+    <h2>직접 만들 때</h2>
+    <p>
+      <code>nn.Module</code> 을 물려받고 <code>forward</code> 를 쓴다. 직접 만든 파라미터는
+      <code>claim</code> 으로 세워야 <code>parameters()</code> 에 나온다 — 안 하면 조용히
+      안 배우므로, 밑 클래스가 그것을 말하게 한다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        class Scale extends nn.Module {
+          constructor(n) {
+            super();
+            this.gain = keepAlive(Tensor.ones([n]));
+            this.gain.requiresGrad = true;
+            this.claim(this.gain);          // 이 줄이 없으면 영영 안 배운다
+          }
+          ownParameters() { return { gain: this.gain }; }
+          forward(x) { return x.mul(this.gain); }
+        }
+
+        const layer = new Scale(3);
+        log("파라미터:", layer.parameters().length, "개");
+        log(await layer.call(Tensor.from([1, 2, 3], [3])).repr());
+      </script>
+    </div>
+
+    <h2>손실</h2>
+    <p>
+      손실도 같은 이름 공간에 있고 부르는 꼴도 같다. <code>CrossEntropyLoss</code> 는
+      logits 와 <code>int64</code> 정답을 받는다 — torch 와 똑같이, 원-핫이 아니다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const logits = Tensor.from([2.0, 0.5, 0.1,
+                                    0.2, 1.9, 0.3], [2, 3]);
+        const target = Tensor.from([0, 1], [2], { dtype: "int64" });
+
+        log("교차 엔트로피:", await new nn.CrossEntropyLoss().call(logits, target).item());
+
+        const pred = Tensor.from([1, 2, 3], [3]);
+        const truth = Tensor.from([1, 2, 4], [3]);
+        log("MSE:          ", await new nn.MSELoss().call(pred, truth).item());
+      </script>
+    </div>
+
+
+    <div class="pager">
+      <a href="02-autograd.html">← 2 · Autograd</a>
+      <a href="04-training.html" style="text-align:right">다음<b>4 · 학습</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+</body>
+</html>

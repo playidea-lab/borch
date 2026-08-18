@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4 · 학습 — borch 배우기</title>
+<meta name="description" content="루프: 옵티마이저와 손실, 그리고 장치를 안 채우는 구역.">
+<link rel="alternate" hreflang="en" href="../../learn/04-training.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">배우기</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../learn/04-training.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html" class="on">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+    </nav>
+    <h4>그 밖에</h4>
+    <nav>
+      <a href="../api/">API 레퍼런스</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 4</p>
+    <h1>학습</h1>
+    <p class="lead">
+      기울기를 지우고, 순방향, 손실, 역방향, 한 걸음. torch 에 없는 것은
+      <code>scope()</code> 하나이고, 그것이 없으면 장치가 몇 초 만에 찬다.
+    </p>
+
+    <h2>구역이 왜 있는가</h2>
+    <p>
+      한 스텝이 중간 버퍼를 수천 개 만든다. 자바스크립트의 쓰레기 수집은 GPU 메모리를
+      제때 안 놓아준다 — 작은 객체가 큰 할당을 쥐고 있다는 것을 모르기 때문이다.
+      <code>scope()</code> 는 그 안에서 만든 것을 나갈 때 놓고,
+      <code>keepAlive()</code> 가 살아남을 것을 표시한다. TF.js 의 <code>tidy</code> 와
+      같은 자리다.
+    </p>
+    <p>
+      이 블록을 돌려 수를 보고, <code>scope</code> 를 지운 뒤 다시 돌려 보라.
+    </p>
+    <p>
+      <code>zeroGrad()</code> 가 구역의 첫 줄인 것도 그냥 습관이 아니다. 지난 스텝의
+      기울기는 지난 구역에서 만들어졌고, 그 구역이 닫힌 뒤에 거기 더하려 하면 이미 남에게
+      넘어간 버퍼를 읽는다. borch 는 그 자리에서 멈춘다 — 지금 그 메모리에 무엇이 들어
+      있든 그것을 답으로 주지 않는다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.randn([64, 32]));
+        const model = new nn.Linear(32, 1);
+        const opt = new optim.SGD(model.parameters(), 0.01);
+        const before = device().memory;
+
+        for (let i = 0; i < 20; i++) {
+          await scope(async () => {
+            opt.zeroGrad();          // 지난 스텝의 기울기는 지난 구역에 있었다
+            const out = model.call(x).sum();
+            out.backward();
+            opt.step();
+          });
+        }
+
+        const after = device().memory;
+        log("텐서  전:", before.tensors, " 후:", after.tensors);
+        log("바이트 전:", before.bytes, "  후:", after.bytes);
+        log("");
+        log("마지막 구역에서 살아남은 것:", device().lastScope.survived,
+            "· 놓은 것:", device().lastScope.freed);
+      </script>
+    </div>
+
+    <h2>루프</h2>
+    <p>
+      정답이 있는 데이터로 보는 것이 정직하다. <code>y = 3x + 2</code> 를 못 찾는 루프가
+      내놓는 다른 수는 아무 뜻도 없다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 128;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const v = (i / N) * 4 - 2;
+          xs[i] = v;
+          ys[i] = 3 * v + 2;
+        }
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.1);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step <= 200; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            if (step % 50 === 0) log(`step ${String(step).padStart(3)}  loss ${(await loss.item()).toFixed(6)}`);
+          });
+        }
+
+        log("");
+        log("w =", (await model.weight.item()).toFixed(4), "(3)");
+        log("b =", (await model.bias.item()).toFixed(4), "(2)");
+      </script>
+    </div>
+
+    <h2>옵티마이저와 스케줄</h2>
+    <p>
+      <code>SGD</code>·<code>Adam</code>·<code>RMSprop</code> 을 비롯해 열 몇 가지가 있고
+      학습률 스케줄러도 있다. 파라미터 그룹도 torch 처럼 돈다 — 그룹별 학습률, 그리고
+      치우침에는 weight decay 를 빼는 것.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Linear(4, 1);
+        const opt = new optim.Adam(model.parameters(), 0.05);
+        const sched = new optim.StepLR(opt, 10, 0.5);
+
+        const x = keepAlive(Tensor.randn([16, 4]));
+        const y = keepAlive(Tensor.randn([16, 1]));
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 30; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            if (step % 10 === 0) {
+              log(`step ${String(step).padStart(2)}  lr ${opt.paramGroups[0].lr.toFixed(4)}  loss ${(await loss.item()).toFixed(4)}`);
+            }
+          });
+          sched.step();
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>keepAlive 를 까먹는 것이 한동안 조용했다.</strong> 표시 없이 구역 밖으로
+      들고 나간 텐서를 읽으면 그 버퍼가 이미 남에게 넘어간 뒤였다 —
+      <code>[1,2,3,4]</code> 가 <code>9,9,9,9</code> 로 돌아왔다. 지금은 쓰는 그 자리에서
+      예외가 난다. 조용한 것보다 시끄러운 편이 낫다.
+    </div>
+
+    <div class="pager">
+      <a href="03-modules.html">← 3 · 모듈</a>
+      <a href="05-cnn.html" style="text-align:right">다음<b>5 · 합성곱</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+</body>
+</html>

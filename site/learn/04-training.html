@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training — borch Learn</title>
+<meta name="description" content="The loop: optimizer, loss, and the scope that keeps the device from filling.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/04-training.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">Learn</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/learn/04-training.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · Modules</a>
+      <a href="04-training.html" class="on">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving &amp; Python</a>
+    </nav>
+    <h4>Also</h4>
+    <nav>
+      <a href="../api/">API reference</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 4</p>
+    <h1>Training</h1>
+    <p class="lead">
+      Zero the gradients, forward, loss, backward, step. The one thing torch does not
+      have is <code>scope()</code>, and without it the device fills up in seconds.
+    </p>
+
+    <h2>Why scope exists</h2>
+    <p>
+      A single training step creates thousands of intermediate buffers. JavaScript's
+      garbage collector does not release GPU memory promptly — it does not know that a
+      small object owns a large allocation. <code>scope()</code> frees everything
+      created inside it when it exits; <code>keepAlive()</code> marks what must survive.
+      TF.js calls the same idea <code>tidy</code>.
+    </p>
+    <p>
+      Run this block and watch the numbers, then delete the <code>scope</code> wrapper
+      and run it again.
+    </p>
+    <p>
+      Note that <code>zeroGrad()</code> is the first line inside the scope, not an
+      afterthought. Gradients from the previous step were allocated in the previous
+      scope; accumulating into them after that scope closed reads a buffer that has
+      already been handed to something else. borch throws there rather than returning
+      whatever now sits in that memory.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.randn([64, 32]));
+        const model = new nn.Linear(32, 1);
+        const opt = new optim.SGD(model.parameters(), 0.01);
+        const before = device().memory;
+
+        for (let i = 0; i < 20; i++) {
+          await scope(async () => {
+            opt.zeroGrad();          // the gradients of the last step lived in the last scope
+            const out = model.call(x).sum();
+            out.backward();
+            opt.step();
+          });
+        }
+
+        const after = device().memory;
+        log("tensors before:", before.tensors, " after:", after.tensors);
+        log("bytes   before:", before.bytes, "  after:", after.bytes);
+        log("");
+        log("survivors of the last scope:", device().lastScope.survived,
+            "· freed:", device().lastScope.freed);
+      </script>
+    </div>
+
+    <h2>The loop</h2>
+    <p>
+      Data with a known answer is the honest way to see whether training works:
+      if the loop cannot recover <code>y = 3x + 2</code>, nothing else it reports means
+      anything.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 128;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const v = (i / N) * 4 - 2;
+          xs[i] = v;
+          ys[i] = 3 * v + 2;
+        }
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.1);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step <= 200; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            if (step % 50 === 0) log(`step ${String(step).padStart(3)}  loss ${(await loss.item()).toFixed(6)}`);
+          });
+        }
+
+        log("");
+        log("w =", (await model.weight.item()).toFixed(4), "(3)");
+        log("b =", (await model.bias.item()).toFixed(4), "(2)");
+      </script>
+    </div>
+
+    <h2>Optimizers and schedules</h2>
+    <p>
+      <code>SGD</code>, <code>Adam</code>, <code>RMSprop</code> and a dozen more are
+      here, along with the learning-rate schedulers. Parameter groups work the way
+      torch's do — per-group learning rates, and weight decay you can leave off the
+      biases.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Linear(4, 1);
+        const opt = new optim.Adam(model.parameters(), 0.05);
+        const sched = new optim.StepLR(opt, 10, 0.5);
+
+        const x = keepAlive(Tensor.randn([16, 4]));
+        const y = keepAlive(Tensor.randn([16, 1]));
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 30; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            if (step % 10 === 0) {
+              log(`step ${String(step).padStart(2)}  lr ${opt.paramGroups[0].lr.toFixed(4)}  loss ${(await loss.item()).toFixed(4)}`);
+            }
+          });
+          sched.step();
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Forgetting keepAlive used to be silent.</strong> A tensor carried out of a
+      scope without being marked was read after its buffer had been handed to something
+      else — <code>[1,2,3,4]</code> came back as <code>9,9,9,9</code>. It now throws at
+      the point of use instead. Loud beats subtle.
+    </div>
+
+    <div class="pager">
+      <a href="03-modules.html">← 3 · Modules</a>
+      <a href="05-cnn.html" style="text-align:right">Next<b>5 · Convolution</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="../assets/runnable.js"></script>
+</body>
+</html>

@@ -26,10 +26,10 @@
     <nav>
       <a href="#why">왜</a>
       <a href="#how">구조</a>
-      <a href="#python">파이썬</a>
-      <a href="#state">지금 되는 것</a>
-      <a href="#measured">잰 것</a>
+      <a href="learn/">배우기</a>
+      <a href="api/">API</a>
       <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
       <a href="../" class="lang">English</a>
     </nav>
   </div>
@@ -174,12 +174,36 @@
 <!-- ── 플레이그라운드 ─────────────────────────────────────────────── -->
 <section id="playground">
   <div class="wrap">
-    <p class="eyebrow">Live Playground</p>
-    <h2>치고, 돌리고, 손실이 내려가는 것을 본다</h2>
+    <p class="eyebrow">배우기 · API · Playground</p>
+    <h2>들어가는 길 셋, 전부 도는 것</h2>
     <p class="lead">
-      코드 편집기 · 출력 · 손실 곡선 · 이 실행이 건 dispatch 수와 쥐고 있는 GPU 메모리가 한 화면에 있다.
-      학습 경로는 텐서에서 시작해 CNN 까지 간다.
+      강의를 읽으면서 읽고 있는 그 페이지에서 Run 을 누른다. 이름을 찾으면 컴파일러가 낸
+      시그니처를 그대로 본다. 아니면 손실 곡선과 GPU 계측이 붙은 큰 편집기를 연다.
+      셋 다 설치할 것이 없다.
     </p>
+
+    <div class="grid c3" style="margin-top:2rem">
+      <a class="tile" href="learn/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>배우기 — 여섯 강</h3>
+        <p class="small">텐서 → autograd → 모듈 → 학습 → 합성곱 → 저장. 모든 코드 블록이
+          그 페이지에서 돌고, 돌리기 전에 고칠 수 있다.</p>
+      </a>
+      <a class="tile" href="api/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>API 레퍼런스</h3>
+        <p class="small">공개된 모든 이름을 컴파일러의 선언 파일에서 뽑았다 — 시그니처,
+          갈래, 그리고 대응하는 torch 이름. 검색된다.</p>
+      </a>
+      <a class="tile" href="playground.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Playground</h3>
+        <p class="small">자바스크립트와 파이썬을 받는 큰 편집기. 손실 곡선과 dispatch 수,
+          그 실행이 쥔 GPU 메모리가 함께 보인다.</p>
+      </a>
+    </div>
+
+    <h3 style="margin-top:2.6rem">아니면 예제로 바로</h3>
 
     <div class="grid c3" style="margin-top:2rem">
       <a class="tile" href="playground.html#example=tensor" style="text-decoration:none">
@@ -201,7 +225,10 @@
         <h3>6 · 재보기</h3><p class="small">이 기계의 GPU 가 512×512 행렬곱에 몇 ms 를 쓰나.</p>
       </a>
     </div>
-    <p style="margin-top:1.6rem"><a class="btn primary" href="playground.html">Playground 열기 →</a></p>
+    <p style="margin-top:1.6rem">
+      <a class="btn primary" href="learn/">강의 시작 →</a>
+      <a class="btn ghost" href="playground.html">Playground 열기</a>
+    </p>
   </div>
 </section>
 

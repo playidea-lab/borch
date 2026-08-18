@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>6 · 저장과 파이썬 — borch 배우기</title>
+<meta name="description" content="safetensors 체크포인트, 그리고 같은 커널을 파이썬에서.">
+<link rel="alternate" hreflang="en" href="../../learn/06-save-load.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">배우기</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../learn/06-save-load.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html" class="on">6 · 저장과 파이썬</a>
+    </nav>
+    <h4>그 밖에</h4>
+    <nav>
+      <a href="../api/">API 레퍼런스</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 6</p>
+    <h1>저장, 그리고 파이썬 쪽</h1>
+    <p class="lead">
+      체크포인트는 pickle 이 아니라 <strong>safetensors</strong> 다. 파이썬 borch·numpy·
+      Hugging Face 도구가 같은 바이트를 읽는다 — 우리만 읽는 형식이면 절반을 버리는 것이다.
+    </p>
+
+    <h2>저장하고 불러오기</h2>
+    <p>
+      <code>save</code> 는 이름 붙은 텐서 묶음을 받아 바이트를 주고, <code>load</code> 가
+      그것을 되돌린다. 파일시스템은 안 건드린다 — 브라우저에는 없다. 받는 것은
+      <code>ArrayBuffer</code> 이고, 내려받든 IndexedDB 에 넣든 그대로 <code>load</code> 에
+      돌려주든 쓰는 쪽 마음이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(new nn.Linear(4, 3), new nn.ReLU());
+        const x = keepAlive(Tensor.randn([2, 4]));
+        const before = await model.call(x).sum().item();
+
+        // 상태 → 바이트
+        const bytes = await save(model.stateDict());
+        log("체크포인트:", bytes.byteLength, "바이트의 safetensors");
+
+        // 가중치가 다른 새 모델
+        const fresh = new nn.Sequential(new nn.Linear(4, 3), new nn.ReLU());
+        log("새 모델의 출력:", (await fresh.call(x).sum().item()).toFixed(4));
+
+        // 바이트 → 상태. load() 는 { tensors, metadata } 를 준다 — 앞쪽이 state dict 이고,
+        // 뒤쪽은 학습 스텝 수 같은 것이 들어갈 자리다.
+        const bundle = load(new Uint8Array(bytes));
+        log("metadata 열쇠:", Object.keys(bundle.metadata).join(", ") || "(없음)");
+        fresh.loadStateDict(bundle.tensors);
+        log("불러온 뒤:      ", (await fresh.call(x).sum().item()).toFixed(4));
+        log("원래 값:        ", before.toFixed(4));
+      </script>
+    </div>
+
+    <h2>같은 커널을, 파이썬에서</h2>
+    <p>
+      <code>borch_webgpu</code> 는 Pyodide 안에서 borch.ts 위에 얹히는 결속이다. 감추는
+      것은 1강에서 만난 네 가지다 — <code>await init()</code>, 비동기 읽기,
+      <code>.call()</code>, 그리고 <code>scope()</code> 의 절반. 그래서 남는 코드가
+      흉내 내려던 교재 코드와 같은 모양이 된다.
+    </p>
+    <p>
+      이 블록의 첫 실행은 Pyodide 를 올리느라 몇 초 걸린다. 그다음부터는 바로 돈다.
+    </p>
+    <div class="runnable" data-lang="py">
+      <script type="text/plain">
+        import borch_webgpu as torch
+
+        w = torch.tensor(3.0, requires_grad=True)
+        loss = (w - 5.0) ** 2
+        loss.backward()
+
+        print("loss  =", loss.item())      # await 이 한 번도 안 나온다
+        print("dL/dw =", w.grad.item())
+      </script>
+    </div>
+
+    <h2>파이썬으로 학습</h2>
+    <p>
+      교재보다 딱 한 줄 많다 — <code>with torch.scope():</code>. 나머지는 이미 아는
+      그 루프다. 4강의 손실과 비교해 보라. 같은 수가 나온다. 밑에서 같은 WGSL 이 돌기
+      때문이다.
+    </p>
+    <div class="runnable" data-lang="py">
+      <script type="text/plain">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        N = 128
+        xs = [[(i / N) * 4 - 2] for i in range(N)]
+        ys = [[3 * row[0] + 2] for row in xs]
+        x, y = torch.tensor(xs), torch.tensor(ys)
+
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.1)
+        crit = nn.MSELoss()
+
+        for step in range(201):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                if step % 50 == 0:
+                    print(f"step {step:3d}  loss {loss.item():.6f}")
+
+        print("")
+        print("w =", round(model.weight.item(), 4), "(3)")
+        print("b =", round(model.bias.item(), 4), "(2)")
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>다음은 어디로.</strong> <a href="../playground.html">플레이그라운드</a>가
+      같은 런타임에 더 큰 편집기와 손실 곡선, GPU 계측을 붙여 준다.
+      <a href="../api/">API 레퍼런스</a>는 공개된 모든 이름을 torch 이름과 함께 늘어놓는다.
+      여기 <em>없는</em> 것 — CUDA·사전학습 가중치·혼합정밀도·분산 —
+      은 <a href="../#state">첫 화면</a>에 적혀 있고, 그 목록이 긴 것은 의도다.
+    </div>
+
+    <div class="pager">
+      <a href="05-cnn.html">← 5 · 합성곱</a>
+      <a href="../playground.html" style="text-align:right">그다음<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+</body>
+</html>

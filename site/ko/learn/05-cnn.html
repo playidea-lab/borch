@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · 합성곱 — borch 배우기</title>
+<meta name="description" content="이미지 배치 위의 Conv2d·풀링·평탄화.">
+<link rel="alternate" hreflang="en" href="../../learn/05-cnn.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">배우기</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../learn/05-cnn.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html" class="on">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+    </nav>
+    <h4>그 밖에</h4>
+    <nav>
+      <a href="../api/">API 레퍼런스</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 5</p>
+    <h1>합성곱</h1>
+    <p class="lead">
+      이미지는 <code>NCHW</code> 다 — 배치·채널·높이·너비, torch 와 같은 배치.
+      자매 결속이 NHWC 를 쓴 것은 TF.js 의 제약을 피한 우회였고, 여기 커널에는 그
+      제약이 없어서 물려받지 않았다.
+    </p>
+
+    <h2>합성곱 하나</h2>
+    <p>
+      <code>nn.Conv2d(inC, outC, kernel, stride, padding)</code>. 모양은 늘 쓰던 식으로
+      나오고, 확실히 하는 가장 빠른 방법은 찍어 보는 것이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const conv = new nn.Conv2d(1, 4, 3, 1, 1);   // 3x3, stride 1, padding 1
+        const x = Tensor.randn([2, 1, 8, 8]);
+
+        log("입력:", JSON.stringify(x.shape));
+        log("출력:", JSON.stringify(conv.call(x).shape), " (padding 1 이라 8x8 그대로)");
+
+        const narrow = new nn.Conv2d(1, 4, 3, 2, 0);  // stride 2, padding 없음
+        log("stride 2, padding 0:", JSON.stringify(narrow.call(x).shape));
+      </script>
+    </div>
+
+    <h2>작은 분류기</h2>
+    <p>
+      합성곱·활성·풀링을 두 번, 그다음 평탄화와 선형 머리. 처음 만드는 CNN 은 다 이
+      모양이고, 여기서는 수백 밀리초면 학습된다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(8, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(16 * 7 * 7, 10));
+
+        const opt = new optim.Adam(model.parameters(), 1e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const B = 16;
+        const x = keepAlive(Tensor.randn([B, 1, 28, 28]));
+        const labels = new Float32Array(B);
+        for (let i = 0; i < B; i++) labels[i] = i % 10;
+        const y = keepAlive(Tensor.from(labels, [B], { dtype: "int64" }));
+
+        for (let i = 0; i < 30; i++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const out = model.call(x);
+            if (i === 0) log("logits 모양:", JSON.stringify(out.shape));
+            const loss = crit.call(out, y);
+            loss.backward();
+            opt.step();
+            if (i % 10 === 0) log(`step ${String(i).padStart(2)}  loss ${(await loss.item()).toFixed(4)}`);
+          });
+        }
+      </script>
+    </div>
+
+    <h2>GPU 가 실제로 한 일</h2>
+    <p>
+      장치는 자기가 무엇을 얼마나 했는지 센다. 이 수들은 어댑터와 무관하다 — 코드 경로가
+      정하는 값이라, 벽시계 벤치가 못 도는 자리에서도 저장소의 cost 검사가 도는 이유가
+      그것이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(8 * 14 * 14, 10));
+        const opt = new optim.SGD(model.parameters(), 0.01);
+        const crit = new nn.CrossEntropyLoss();
+
+        const x = keepAlive(Tensor.randn([8, 1, 28, 28]));
+        const y = keepAlive(Tensor.from(new Float32Array(8), [8], { dtype: "int64" }));
+
+        const before = device().dispatches;
+        await scope(async () => {
+          opt.zeroGrad();
+          const loss = crit.call(model.call(x), y);
+          loss.backward();
+          opt.step();
+          await loss.item();
+        });
+
+        log("한 스텝이 건 dispatch:", device().dispatches - before);
+        log("여태 컴파일한 파이프라인:", device().pipelineCount);
+        log("구역이 닫힌 뒤 쥐고 있는 것:", device().memory.tensors, "개");
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>1·3 차원 합성곱은 여기 있고 numpy 코어에는 없다.</strong> 일부러 그렇다 —
+      코어는 브라우저 쪽이 답하는 53 건을 거절하고, 그것을 코어에 물으면 검사가 아니라
+      오답이 된다. 적합성 러너는 그 수를 감추지 않고 따로 센다.
+    </div>
+
+    <div class="pager">
+      <a href="04-training.html">← 4 · 학습</a>
+      <a href="06-save-load.html" style="text-align:right">다음<b>6 · 저장과 파이썬</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+</body>
+</html>

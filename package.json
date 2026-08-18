@@ -22,7 +22,8 @@
   "scripts": {
     "test": "uv run --with pytest --with numpy --with torch --with torchvision --quiet pytest tests/ -q",
     "build:ts": "tsc -p borch-ts/tsconfig.json",
-    "site": "python3 site/serve.py",
+    "docs:api": "python3 site/build_api.py",
+    "site": "python3 site/build_api.py && python3 site/serve.py",
     "check:ts": "tsc -p borch-ts/tsconfig.json --noEmit",
     "golden:ts": "uv run --with playwright python borch-ts/test/run.py",
     "example:ts": "uv run --with playwright python borch-ts/test/readme.py",
@@ -52,7 +53,7 @@
     "",
     "빌드를 스크립트로 걸어두는 이유: `npx tsc` 로 이름만 불러 받아 쓰면 무엇을 돌렸는지가",
     "저장소에 안 남는다. 여기 적어두면 남는다.",
-    "site 는 설명 페이지와 플레이그라운드를 띄운다(`site/`). 저장소 **루트**를 얹는다 — 그 페이지가\n     `borch-ts/dist` 와 `vendor/pyodide` 를 상대 경로로 부르므로 site/ 만 얹으면 404 가 난다.",
+    "site 는 설명 페이지·강의·API 레퍼런스·플레이그라운드를 띄운다(`site/`). 저장소 **루트**를\n     얹는다 — 그 페이지가 `borch-ts/dist` 와 `vendor/pyodide` 를 상대 경로로 부르므로 site/ 만\n     얹으면 404 가 난다. docs:api 를 먼저 도는 것은 API 목록이 선언 파일에서 나오기 때문이고,\n     낡은 목록으로 띄우는 것보다 한 번 더 뽑는 편이 낫다 — build:ts 를 스크립트로 걸어둔 것과\n     같은 이유다.",
     "golden:ts 는 build:ts 를 먼저 돌려야 한다 — dist 가 없으면 러너가 멈추고 종료 코드 2 를 낸다.",
     "낡은 dist 로 초록색을 보는 것보다 안 도는 편이 낫다.",
     "",

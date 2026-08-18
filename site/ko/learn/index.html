@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch 배우기</title>
+<meta name="description" content="여섯 강. 모든 코드 블록이 그 자리에서, 당신의 GPU 에서 돈다.">
+<link rel="alternate" hreflang="en" href="../../learn/">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="./">배우기</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../learn/" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./" class="on">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+    </nav>
+    <h4>그 밖에</h4>
+    <nav>
+      <a href="../api/">API 레퍼런스</a>
+      <a href="../playground.html">Playground</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기</p>
+    <h1>여섯 강, 전부 도는 것</h1>
+    <p class="lead">
+      이 페이지들의 모든 코드 블록은 이 탭에서, 당신의 GPU 에서 돈다. 돌리기 전에 고쳐도
+      된다. 설치하는 것도 올려 보내는 것도 없다. borch 가 처음이면 위에서부터 —
+      한 강에 몇 분이면 된다.
+    </p>
+
+    <div class="grid c2" style="margin:2rem 0">
+      <a class="tile" href="01-tensors.html" style="text-decoration:none">
+        <h3>1 · 텐서</h3>
+        <p class="small">모양·dtype·연산, 그리고 값을 읽는 것이 왜 await 인가.</p>
+      </a>
+      <a class="tile" href="02-autograd.html" style="text-decoration:none">
+        <h3>2 · Autograd</h3>
+        <p class="small">backward()·누적·noGrad, 그리고 기울기가 정말 흘렀는지 아는 법.</p>
+      </a>
+      <a class="tile" href="03-modules.html" style="text-decoration:none">
+        <h3>3 · 모듈</h3>
+        <p class="small">Linear·Sequential, 층을 직접 만들기, 손실.</p>
+      </a>
+      <a class="tile" href="04-training.html" style="text-decoration:none">
+        <h3>4 · 학습</h3>
+        <p class="small">루프·옵티마이저·스케줄러, 그리고 장치를 안 채우는 구역.</p>
+      </a>
+      <a class="tile" href="05-cnn.html" style="text-decoration:none">
+        <h3>5 · 합성곱</h3>
+        <p class="small">Conv2d·풀링·평탄화, 그리고 GPU 가 한 일을 세는 법.</p>
+      </a>
+      <a class="tile" href="06-save-load.html" style="text-decoration:none">
+        <h3>6 · 저장과 파이썬</h3>
+        <p class="small">safetensors 체크포인트, 그리고 같은 커널을 파이썬에서 부르기.</p>
+      </a>
+    </div>
+
+    <h2>필요한 것</h2>
+    <ul>
+      <li>WebGPU 가 되는 브라우저. 없으면 페이지가 그렇게 말한다 — 조용히 더 느린 것으로
+        내려가지 않는다.</li>
+      <li>그 밖에는 없다. 설치도, 계정도, 서버도.</li>
+    </ul>
+
+    <h2>이 페이지들을 어떻게 안 썩게 하는가</h2>
+    <p>
+      안 돌리는 예제는 썩고, 그것을 처음 아는 사람은 읽는 사람이다. 여기 있는 것은 전부
+      테스트가 도는 그 라이브러리를 부른다 — 이름이 바뀌면 이 페이지가 눈에 보이는
+      자리에서 깨진다.
+    </p>
+    <p>
+      이 프로젝트가 하는 주장은 좁고 실측된 것이다: 입문 튜토리얼 코드가 임포트만 바꿔
+      같은 값을 낸다. <a href="../#measured">그 근거가 되는 수</a>는 첫 화면에 있고,
+      일부러 없는 것도 거기 적혀 있다.
+    </p>
+
+    <div class="pager">
+      <a href="../">← 첫 화면</a>
+      <a href="01-tensors.html" style="text-align:right">시작<b>1 · 텐서</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+</body>
+</html>

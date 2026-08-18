@@ -30,10 +30,10 @@
     <nav>
       <a href="#why">Why</a>
       <a href="#how">How</a>
-      <a href="#python">Python</a>
-      <a href="#state">What exists</a>
-      <a href="#measured">Measured</a>
+      <a href="learn/">Learn</a>
+      <a href="api/">API</a>
       <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
       <a href="ko/" class="lang">한국어</a>
     </nav>
   </div>
@@ -179,12 +179,36 @@
 <!-- ── Playground ─────────────────────────────────────────────────── -->
 <section id="playground">
   <div class="wrap">
-    <p class="eyebrow">Live Playground</p>
-    <h2>Type it, run it, watch the loss come down</h2>
+    <p class="eyebrow">Learn · API · Playground</p>
+    <h2>Three ways in, all of them running</h2>
     <p class="lead">
-      Editor, output, loss curve, and the dispatch count and GPU memory this run held — one screen.
-      The path starts at tensors and ends at a CNN.
+      Read a lesson and press Run on the page you are reading. Look a name up and see the
+      signature the compiler emitted. Or open the full editor with a loss curve and the GPU
+      counters. Nothing to install for any of them.
     </p>
+
+    <div class="grid c3" style="margin-top:2rem">
+      <a class="tile" href="learn/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Learn — six lessons</h3>
+        <p class="small">Tensors → autograd → modules → training → convolution → saving.
+          Every code block executes in the page, and you can edit it first.</p>
+      </a>
+      <a class="tile" href="api/" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>API reference</h3>
+        <p class="small">Every exported name, extracted from the compiler's own declarations —
+          signatures, kinds, and the torch name each answers to. Searchable.</p>
+      </a>
+      <a class="tile" href="playground.html" style="text-decoration:none">
+        <span class="icon">◆</span>
+        <h3>Playground</h3>
+        <p class="small">A full editor in JavaScript or Python, with the loss curve, the
+          dispatch count and the GPU memory a run held.</p>
+      </a>
+    </div>
+
+    <h3 style="margin-top:2.6rem">Or jump straight into an example</h3>
 
     <div class="grid c3" style="margin-top:2rem">
       <a class="tile" href="playground.html#example=tensor" style="text-decoration:none">
@@ -206,7 +230,10 @@
         <h3>6 · Measure</h3><p class="small">What your GPU does with a 512×512 matmul.</p>
       </a>
     </div>
-    <p style="margin-top:1.6rem"><a class="btn primary" href="playground.html">Open Playground →</a></p>
+    <p style="margin-top:1.6rem">
+      <a class="btn primary" href="learn/">Start the lessons →</a>
+      <a class="btn ghost" href="playground.html">Open Playground</a>
+    </p>
   </div>
 </section>
 
