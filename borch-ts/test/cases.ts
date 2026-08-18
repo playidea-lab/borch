@@ -3644,6 +3644,155 @@ function addRecent(out: Map<string, Case>): void {
   out.set("spot::ger", () => trio().ger(Tensor.from([4.0, 5.0], [2])));
   out.set("spot::mv", () => grid().mv(Tensor.from([1, 0, 0, 2], [4])));
 
+  // **고르지 않은 무게.** 전부 1 이면 자리마다 다른 몫이 상쇄되어 안 보인다.
+  const spotW = (): Tensor => Tensor.from(
+    [1.0, 2.0, 0.5, 3.0, 2.0, 0.5, 1.5, 1.0, 0.25, 3.0, 2.0, 0.75], [3, 4]);
+  const spotGrad = (
+    name: string, fn: (x: Tensor) => Tensor, w: () => Tensor = spotW,
+  ): void => {
+    out.set(`spot::grad::${name}`, () => {
+      const x = Tensor.from(Array.from({ length: 12 }, (_, i) => i), [3, 4],
+        { requiresGrad: true });
+      const got = fn(x);
+      got.mul(w().reshape(got.shape)).sum().backward();
+      return gradOf(x, name);
+    });
+  };
+  /** 넣은 값 쪽 기울기. **넣은 자리로만** 흘러야 한다. */
+  const spotSrcGrad = (
+    name: string, fn: (t: Tensor, v: Tensor) => Tensor, src: () => Tensor,
+  ): void => {
+    out.set(`spot::grad(넣는 값)::${name}`, () => {
+      const v = src();
+      const got = fn(grid(), v);
+      got.mul(spotW().reshape(got.shape)).sum().backward();
+      return gradOf(v, name);
+    });
+  };
+  const leafOnes = (shape: number[]): Tensor => Tensor.from(
+    Array.from({ length: shape.reduce((a, b) => a * b, 1) }, () => 1), shape,
+    { requiresGrad: true });
+
+  spotGrad("as_strided", (x) => x.asStrided([3, 4], [1, 3]));
+  // 겹치는 걸음의 기울기 — 한 칸으로 여러 번 온다.
+  spotGrad("as_strided(겹침)", (x) => x.asStrided([3, 3], [1, 1]),
+    () => Tensor.from(Array.from({ length: 9 }, (_, i) => i + 1), [3, 3]));
+  spotGrad("select_scatter", (x) => x.selectScatter(Tensor.zeros([4]), 0, 1));
+  spotGrad("slice_scatter",
+    (x) => x.sliceScatter(Tensor.zeros([3, 2]), 1, 0, 4, 2));
+  spotGrad("diagonal_scatter",
+    (x) => x.diagonalScatter(Tensor.zeros([3]), 1));
+  spotGrad("diag_embed", (x) => x.diagEmbed(),
+    () => Tensor.from(Array.from({ length: 48 }, (_, i) => i + 1), [3, 4, 4]));
+  // (3,4) 를 3 으로 쪼개면 2·1·1 이라 가운데 조각이 (3,1) 이다.
+  spotGrad("tensor_split", (x) => x.tensorSplit(3, 1)[1] ?? Tensor.zeros([3, 1]),
+    () => Tensor.from([1.0, 3.0, 5.0], [3, 1]));
+  spotGrad("masked_scatter", (x) => x.maskedScatter(mask(), feed()));
+  spotGrad("put", (x) => x.put(flatIdx(), flatVal()));
+  spotGrad("index_put", (x) => x.indexPut(
+    [Tensor.from([0, 1, 0], [3]), Tensor.from([1, 2, 1], [3])],
+    Tensor.from([10.0, 20.0, 30.0], [3])));
+  // **깎인 줄의 기울기.** 배율 안에 x 가 있어서 `g·s` 로 적으면 여기서 갈린다.
+  spotGrad("renorm", (x) => x.renorm(2, 0, 5.0));
+  // `mv` 는 1차원이 낀 행렬곱이다 — 그 역방향이 코어에서 축 하나를 놓치고 있었다.
+  spotGrad("mv", (x) => x.mv(Tensor.from([1, 0, 0, 2], [4])),
+    () => Tensor.from([1.0, 2.0, 0.5], [3]));
+
+  spotSrcGrad("select_scatter", (t, v) => t.selectScatter(v, 0, 1),
+    () => leafOnes([4]));
+  spotSrcGrad("diagonal_scatter", (t, v) => t.diagonalScatter(v, 1),
+    () => leafOnes([3]));
+  spotSrcGrad("as_strided_scatter",
+    (t, v) => t.asStridedScatter(v, [2, 2], [1, 2], 3),
+    () => leafOnes([2, 2]));
+  spotSrcGrad("masked_scatter", (t, v) => t.maskedScatter(mask(), v),
+    () => Tensor.from(Array.from({ length: 12 }, (_, i) => 100 + i), [12],
+      { requiresGrad: true }));
+
+  // ── diag_embed ─────────────────────────────────────────────────────
+  for (const offset of [-1, 0, 1]) {
+    out.set(`spot::diag_embed(1차, offset=${offset})`,
+      () => trio().diagEmbed(offset));
+  }
+  out.set("spot::diag_embed(dim1=0, dim2=1)", () => grid().diagEmbed(0, 0, 1));
+
+  // ── 쪼개기·번호 풀기 ────────────────────────────────────────────────
+  out.set("spot::tensor_split(자리 목록)",
+    () => Tensor.cat(line().tensorSplit([2, 5]), 0));
+  out.set("spot::tensor_split(dim=1)",
+    () => grid().tensorSplit(3, 1)[1] ?? Tensor.zeros([3, 1]));
+  out.set("spot::unravel_index",
+    () => Tensor.cat(Tensor.from([0, 5, 11], [3]).unravelIndex([3, 4]), 0));
+
+  // ── 이어진 중복 ─────────────────────────────────────────────────────
+  //
+  // **정렬하지 않는다** — `[1,1,2,2,2,1,3]` 에서 1 이 두 번 남는다. 정렬된 입력으로만
+  // 재면 `unique` 와 구분이 안 간다.
+  const runs = (): Tensor => Tensor.from([1, 1, 2, 2, 2, 1, 3], [7],
+    { dtype: "int64" });
+  const rowRuns = (): Tensor => Tensor.from([1, 1, 1, 1, 1, 2, 3, 3], [4, 2],
+    { dtype: "int64" });
+  out.set("spot::unique_consecutive",
+    async () => await runs().uniqueConsecutive() as Tensor);
+  out.set("spot::unique_consecutive(inverse)",
+    async () => (await runs().uniqueConsecutive(true) as Tensor[])[1]!);
+  out.set("spot::unique_consecutive(counts)",
+    async () => (await runs().uniqueConsecutive(false, true) as Tensor[])[1]!);
+  out.set("spot::unique_consecutive(dim=0)",
+    async () => await rowRuns().uniqueConsecutive(false, false, 0) as Tensor);
+  out.set("spot::unique_consecutive(dim=0, counts)",
+    async () => (await rowRuns().uniqueConsecutive(false, true, 0) as Tensor[])[1]!);
+
+  // ── 줄이며 넣기 ─────────────────────────────────────────────────────
+  //
+  // `index_reduce` 에 `sum` 은 없다 — 그 자리는 `index_add` 다(실측).
+  for (const reduce of ["prod", "mean", "amax", "amin"]) {
+    for (const self of [true, false]) {
+      out.set(`spot::index_reduce(${reduce}, include_self=${self ? "True" : "False"})`,
+        () => base34().indexReduce(0, Tensor.from([0, 0, 2], [3]), grid(),
+          reduce, self));
+    }
+  }
+
+  // ── 조합·행렬 ───────────────────────────────────────────────────────
+  const duo = (): Tensor => Tensor.from([4.0, 5.0], [2]);
+  out.set("spot::cartesian_prod(둘)",
+    () => Tensor.cartesianProd(trio(), duo()));
+  // **하나만 주면 그냥 그것이다**(실측) — 1차원으로 남는다.
+  out.set("spot::cartesian_prod(하나)", () => Tensor.cartesianProd(trio()));
+  out.set("spot::cartesian_prod(셋)",
+    () => Tensor.cartesianProd(trio(), duo(), duo()));
+  for (const r of [1, 2, 3]) {
+    out.set(`spot::combinations(r=${r})`, () => Tensor.combinations(trio(), r));
+  }
+  out.set("spot::combinations(중복 허용)",
+    () => Tensor.combinations(trio(), 2, true));
+  out.set("spot::chain_matmul", () => Tensor.chainMatmul(
+    Tensor.from(Array.from({ length: 6 }, (_, i) => i), [2, 3]),
+    Tensor.from(Array.from({ length: 12 }, (_, i) => i), [3, 4]),
+    Tensor.from(Array.from({ length: 8 }, (_, i) => i), [4, 2])));
+
+  // ── 제자리 ──────────────────────────────────────────────────────────
+  //
+  // **모양까지 따라가야 한다.** 값만 옮기면 정사각으로 물었을 때만 통과한다.
+  out.set("spot::제자리::as_strided_", () => {
+    const x = grid();
+    const got = x.asStrided_([2, 3], [1, 2]);
+    return `${verdict(got === x)} (${x.shape.join(", ")})`;
+  });
+  out.set("spot::제자리::masked_scatter_", async () => {
+    const x = grid();
+    const got = x.maskedScatter_(mask(), feed());
+    return `${verdict(got === x)} ${(await x.toArray())[0]!.toFixed(1)}`;
+  });
+  out.set("spot::제자리::index_put_", async () => {
+    const x = grid();
+    const got = x.indexPut_(
+      [Tensor.from([0, 1, 0], [3]), Tensor.from([1, 2, 1], [3])],
+      Tensor.from([10.0, 20.0, 30.0], [3]));
+    return `${verdict(got === x)} ${(await x.toArray())[1]!.toFixed(1)}`;
+  });
+
   // ── addmm 계열 (`blend::`) ──────────────────────────────────────────
   //
   // **`beta=0` 은 값만 안 보고 그래프에는 남는다.** 여기서는 값만 묻는다 — 기울기
