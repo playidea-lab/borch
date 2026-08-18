@@ -601,19 +601,44 @@ export class Device {
    * 얻으려는 것은 절대 시간이 아니라 **어느 커널이 몫이 큰가** 이고, 그 비율은
    * 남는다. 절대값을 재려면 끄고 벤치를 쓴다.
    */
-  profiling = false;
+  private profiling = false;
   /** 켰을 때 커널 종류별로 쌓인 GPU 시간(나노초). */
   readonly nsByKind = new Map<string, number>();
   private querySet: GPUQuerySet | null = null;
   private queryUsed = 0;
   private queryKinds: string[] = [];
+  /**
+   * 자리가 없어 **안 잰** dispatch 수. 부르는 쪽이 이것을 같이 적어야 한다.
+   *
+   * 0 이 아니면 `nsByKind` 는 스텝의 일부만 담은 것이고, 그런데도 "합" 처럼 읽힌다.
+   * 잘린 것을 안 적으면 "전부 쟀다" 로 읽히는데, 그게 이 저장소가 세어 온 거짓말의
+   * 한 종류다.
+   */
+  profileDropped = 0;
   /** 질의 집합의 크기. 한 제출에 이보다 많이 재면 나머지는 안 잰다. */
   private static readonly MAX_QUERIES = 4096;
 
-  /** 프로파일을 켜고 쌓인 것을 비운다. */
-  startProfile(): void {
+  /**
+   * `body` 를 재면서 돌린다. **끝나면 반드시 끈다 — 예외로 나가도 끈다.**
+   *
+   * 켜고 끄기를 부르는 쪽에 맡기면 안 된다. 프로파일 중에는 dispatch 마다 패스를
+   * 여느라 시간이 부풀고, 켜진 채로 새어 나가면 **그 뒤의 모든 측정이 조용히
+   * 부풀어서** 나온다. 벤치는 배치를 여러 번 재므로, 한 배치에서 예외가 나면
+   * 다음 배치의 ms/step 이 측정이 아니라 프로파일된 수가 된다 — 그런데 화면에는
+   * 똑같이 생긴 수로 찍힌다. 문은 하나여야 하고 뒷정리는 문이 해야 한다.
+   */
+  async profile<T>(body: () => Promise<T>): Promise<T> {
     this.profiling = true;
     this.nsByKind.clear();
+    this.queryUsed = 0;
+    this.queryKinds = [];
+    this.profileDropped = 0;
+    try {
+      return await body();
+    } finally {
+      this.profiling = false;
+      await this.collectProfile();
+    }
   }
 
   /** 계산 패스를 연다. 평소에는 하나를 함께 쓰고, 프로파일 중에는 하나씩 연다. */
@@ -633,6 +658,8 @@ export class Device {
     });
     if (this.queryUsed + 2 > Device.MAX_QUERIES) {
       // 자리가 없으면 그냥 평소처럼 연다 — **안 잰 것을 0 으로 세면 안 된다.**
+      // 세어는 둔다. 안 세면 잘린 표가 온전한 표와 똑같이 생긴다.
+      this.profileDropped += 1;
       this.pass = encoder.beginComputePass();
       return this.pass;
     }
@@ -655,7 +682,7 @@ export class Device {
    * 해석 버퍼와 읽기 버퍼를 그때그때 만들고 버린다 — 프로파일은 드물게 도는 길이라
    * 통을 쓸 값어치가 없고, 통을 쓰면 재는 장치가 재는 대상을 건드린다.
    */
-  async collectProfile(): Promise<void> {
+  private async collectProfile(): Promise<void> {
     if (!this.querySet || this.queryUsed === 0) return;
     const count = this.queryUsed;
     const kinds = this.queryKinds;

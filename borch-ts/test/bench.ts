@@ -105,6 +105,8 @@ export interface StepResult {
   hot: [string, number][];
   /** 프로파일 중에 잰 총합(ms). 패스를 하나씩 여느라 평소보다 크다. */
   profiledMs: number;
+  /** 질의 자리가 모자라 **못 잰** dispatch 수. 0 이 아니면 위 표는 스텝의 일부다. */
+  profileDropped: number;
   /** 스텝당 실제 제출 수. dispatch 수와 갈리는 만큼이 묶인 것이다. */
   submits: number;
   /**
@@ -242,14 +244,12 @@ export async function runStep(
    * 재는 동안은 dispatch 마다 패스를 열므로 **합이 위의 ms/step 보다 크다.** 여기서
    * 볼 것은 절대값이 아니라 몫이다.
    */
-  device().startProfile();
-  await one();
-  await device().collectProfile();
+  await device().profile(() => one());
   const hot: [string, number][] = [];
   for (const [kind, ns] of device().nsByKind) hot.push([kind, ns / 1e6]);
   hot.sort((a, b) => b[1] - a[1]);
   const profiledMs = hot.reduce((a, [, ms]) => a + ms, 0);
-  device().profiling = false;
+  const profileDropped = device().profileDropped;
 
   // **검증 오류가 하나라도 났으면 수를 안 낸다.**
   //
@@ -278,6 +278,7 @@ export async function runStep(
     kinds,
     hot: hot.map(([k, ms]) => [k, Math.round(ms * 100) / 100]),
     profiledMs: Math.round(profiledMs * 10) / 10,
+    profileDropped,
     submits: Math.round(perStepSubmits),
     msForward: Math.round(perForward * 10) / 10,
     msNoWeightGrad: Math.round(perNoWeightGrad * 10) / 10,
@@ -309,7 +310,11 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
       // 안 그렇다 — 초선형인 커널이 있으면 여기서만 보인다.
       const hot = r.hot.slice(0, 8)
         .map(([kind, ms]) => `${kind} ${ms.toFixed(1)}`).join(" · ");
-      lines.push(`         GPU 시간(ms, 합 ${r.profiledMs}): ${hot}`);
+      // 잘렸으면 **합 옆에 붙여서** 적는다. 각주로 미루면 표만 읽고 지나간다.
+      const cut = r.profileDropped > 0
+        ? `, ${r.profileDropped}개는 자리가 없어 못 쟀다 — 아래는 일부다`
+        : "";
+      lines.push(`         GPU 시간(ms, 합 ${r.profiledMs}${cut}): ${hot}`);
       // 종류별 횟수는 배치마다 같으므로 한 번만 찍는다.
       if (b === batches[0]) {
         const top = r.kinds.slice(0, 8)
