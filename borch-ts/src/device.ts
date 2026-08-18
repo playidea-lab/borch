@@ -425,13 +425,52 @@ export class Device {
    * 것이 맞지만 **새는 것은 아니다** — 그것을 세면 누수가 아닌 것을 누수로 읽는다.
    */
   get memory(): { tensors: number; bytes: number } {
-    let spare = 0;
-    let spareBytes = 0;
+    const { count, bytes } = this.pooled;
+    return { tensors: this.made - count, bytes: this.madeBytes - bytes };
+  }
+
+  /**
+   * 통에서 다음 스텝을 기다리는 버퍼. **`memory` 가 일부러 빼는 그것이다.**
+   *
+   * 저쪽은 "새는가" 를 묻고 이쪽은 "얼마나 쥐고 있는가" 를 묻는다. 두 물음이
+   * 다르므로 수도 둘이어야 하는데 뒤엣것이 없었다 — 그래서 **아무도 진짜 발자국을
+   * 못 물었다.**
+   *
+   * 모양이 바뀌면 통이 자란다. 크기별로 나뉘어 있어서 배치 16 으로 돌던 버퍼는
+   * 배치 32 에 못 쓰이고, 그대로 남는다. 벤치가 세 배치를 한 판에서 도는데 그때
+   * 앞의 두 배치 몫이 통에 그대로 있고 `memory` 는 그것을 안 센다.
+   */
+  get pooled(): { count: number; bytes: number } {
+    let count = 0;
+    let bytes = 0;
     for (const [size, pool] of this.spare) {
-      spare += pool.length;
-      spareBytes += size * pool.length;
+      count += pool.length;
+      bytes += size * pool.length;
     }
-    return { tensors: this.made - spare, bytes: this.madeBytes - spareBytes };
+    return { count, bytes };
+  }
+
+  /**
+   * 통을 비운다. `torch.cuda.empty_cache()` 자리다.
+   *
+   * **통은 스스로 줄지 않는다.** 학습 루프처럼 모양이 반복되면 그것이 옳다 — 매번
+   * 다시 만들면 그게 비용이다. 그런데 모양이 **바뀌면** 옛 모양의 버퍼가 영영
+   * 남는다. 브라우저는 GPU 메모리를 탭이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.
+   *
+   * 되돌려 준 버퍼를 아직 안 보낸 명령이 가리킬 수 있으므로 **보내고 나서** 놓는다.
+   */
+  emptyCache(): { count: number; bytes: number } {
+    const freed = this.pooled;
+    if (freed.count === 0) return freed;
+    this.flush();
+    for (const pool of this.spare.values()) {
+      for (const buf of pool) buf.destroy();
+    }
+    this.spare.clear();
+    // 만든 것에서 뺀다 — 안 빼면 `memory` 가 죽은 버퍼를 계속 센다.
+    this.made -= freed.count;
+    this.madeBytes -= freed.bytes;
+    return freed;
   }
 
   // `sizes` 는 WeakMap 이라 셀 수 없다 — 셀 수 있게 두면 버퍼가 안 죽는다.
@@ -754,6 +793,22 @@ export class Device {
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
+    // **장치를 잃었으면 여기서 멈춘다.**
+    //
+    // 잃은 장치에 건 명령은 예외를 안 던지고 그냥 안 돈다(WebGPU 사양이 그렇다).
+    // 그래서 학습 루프는 계속 돌고, 손실은 안 움직이고, `ms/step` 은 멀쩡히 나온다 —
+    // 검증 오류가 났을 때와 **똑같은 화면**이고, 그 자리는 이미 `faults` 로 막아
+    // 두었다. 같은 이유가 여기도 그대로인데 이쪽만 비어 있었다.
+    //
+    // 값이 나가는 자리에 둔다. dispatch 마다 보면 429 번 보게 되고, 무엇보다
+    // **사람이 믿는 수가 되는 순간**이 여기다.
+    if (this.lost) {
+      throw new Error(
+        `WebGPU 장치를 잃었다(${this.lost.reason}) — 이 뒤의 값은 뜻이 없다.\n` +
+          `  ${this.lost.message}\n` +
+          "  장치를 다시 잡으려면 페이지를 새로 열어야 한다.",
+      );
+    }
     // 빈 텐서를 읽으면 빈 것이 나와야 한다. 버퍼는 최소 한 칸을 잡으므로, 그것을
     // 그대로 읽으면 있지도 않은 원소 하나가 딸려 나온다.
     if (count === 0) return new Float32Array(0);

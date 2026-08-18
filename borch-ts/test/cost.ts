@@ -160,12 +160,20 @@ export async function report(): Promise<string> {
   // 위의 `survived` 는 **한 구역**만 본다. 구역 밖에서 새는 것(예: 전역 캐시가
   // 스텝마다 항목을 늘리는 것)은 그 수에 안 잡히므로 따로 본다.
   const early = dev.memory;
+  const earlyPool = dev.pooled;
   for (let i = 0; i < 10; i++) await step();
   const late = dev.memory;
   want("스텝을 열 번 더 돌려도 잡은 버퍼가 안 는다",
     late.tensors <= early.tensors,
     `${early.tensors} → ${late.tensors} 개 · ` +
     `${(early.bytes / 1024).toFixed(0)}KB → ${(late.bytes / 1024).toFixed(0)}KB`);
+  // **통도 같이 봐야 한다.** 위의 수는 통에 든 것을 빼므로, 스텝마다 버퍼가 통으로
+  // 흘러들면 저 줄은 초록인 채로 발자국만 자란다. 같은 모양을 되풀이하는 동안
+  // 통은 작업 집합에서 멈춰야 한다 — 안 멈추면 그것은 정책이 아니라 결함이다.
+  const latePool = dev.pooled;
+  want("스텝을 되풀이해도 통이 안 자란다", latePool.count <= earlyPool.count,
+    `${earlyPool.count} → ${latePool.count} 개 · ` +
+    `${(earlyPool.bytes / 1024).toFixed(0)}KB → ${(latePool.bytes / 1024).toFixed(0)}KB`);
 
   // ── 통이 도는가는 **따로 안 묻는다** ──────────────────────────────────
   //
@@ -233,6 +241,40 @@ export async function report(): Promise<string> {
     const after = await survived.toArray();
     want("keep() 한 것이 블록 뒤에도 산다", after[1] === 6,
       Array.from(after).join(","));
+  }
+
+  // ── 통은 스스로 안 줄어든다 ───────────────────────────────────────────────
+  //
+  // 스텝이 같은 모양을 되풀이하면 통이 값을 한다 — 위의 "잡은 버퍼가 안 는다" 가
+  // 그것을 잰다. **모양이 바뀌면 이야기가 다르다.** 크기별로 나뉜 통이라 배치 16 의
+  // 버퍼는 배치 32 에 못 쓰이고 그대로 남는데, `memory` 는 통에 든 것을 일부러
+  // 빼므로 그 수에는 안 나타난다. 벤치가 한 판에서 세 배치를 돌므로 실제 경로다.
+  {
+    const before = dev.pooled;
+    for (const n of [1000, 2000, 3000]) {
+      dev.beginScope();
+      // 모양마다 다른 크기 — 통이 크기별로 갈린다.
+      Tensor.owned([n], 1).mul(Tensor.owned([n], 2));
+      dev.endScope([]);
+    }
+    const grown = dev.pooled;
+    want("모양이 바뀌면 통이 자란다", grown.count > before.count,
+      `${before.count} → ${grown.count} 개 · ${Math.round(grown.bytes / 1024)}KB`);
+    // **`memory` 는 그것을 안 센다.** 두 수가 다른 것을 묻는다는 것을 여기서 못 박는다 —
+    // 하나로 합치면 누수 검사와 발자국 검사 중 하나가 거짓이 된다.
+    want("memory 는 통에 든 것을 안 센다", dev.memory.bytes < grown.bytes + dev.memory.bytes,
+      `잡은 것 ${Math.round(dev.memory.bytes / 1024)}KB · ` +
+      `통 ${Math.round(grown.bytes / 1024)}KB`);
+    const freed = dev.emptyCache();
+    want("emptyCache 가 통을 비운다",
+      freed.count === grown.count && dev.pooled.count === 0,
+      `${freed.count} 개 · ${Math.round(freed.bytes / 1024)}KB 돌려줬다`);
+    // 비운 뒤에도 계속 돌아야 한다 — 통을 비우는 것이 장치를 망가뜨리면 안 된다.
+    dev.beginScope();
+    const still = Tensor.owned([4], 3).add(Tensor.owned([4], 4));
+    const value = (await still.toArray())[0] ?? -1;
+    dev.endScope([]);
+    want("통을 비운 뒤에도 계산이 돈다", value === 7, `${value}`);
   }
 
   const bad = checks.filter((c) => !c.ok);

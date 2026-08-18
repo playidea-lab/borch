@@ -107,6 +107,13 @@ export interface StepResult {
   profiledMs: number;
   /** 질의 자리가 모자라 **못 잰** dispatch 수. 0 이 아니면 위 표는 스텝의 일부다. */
   profileDropped: number;
+  /**
+   * 통에서 다음 스텝을 기다리는 버퍼(MB). **`gpuMb` 는 이것을 안 센다.**
+   *
+   * 저쪽은 "새는가", 이쪽은 "쥐고 있는가" 다. 한 판에서 배치를 바꿔 가며 재므로
+   * 앞 배치의 버퍼가 여기 쌓인다 — 그것을 안 적으면 발자국이 작아 보인다.
+   */
+  pooledMb: number;
   /** 스텝당 실제 제출 수. dispatch 수와 갈리는 만큼이 묶인 것이다. */
   submits: number;
   /**
@@ -264,12 +271,22 @@ export async function runStep(
         `첫 건: ${faults.first}`,
     );
   }
+  // **장치를 잃은 것도 같은 이유로 막는다.** 잃은 장치는 명령을 조용히 안 돌리므로
+  // 화면이 위와 똑같다 — 손실이 안 움직이고 벽시계만 돈다. 위를 막아 두고 이쪽을
+  // 안 막으면 같은 거짓 수치가 다른 문으로 들어온다.
+  const lost = device().lost;
+  if (lost) {
+    throw new Error(
+      `WebGPU 장치를 잃었다(${lost.reason}) — 이 수는 측정이 아니다.\n${lost.message}`,
+    );
+  }
 
   const stepsPerEpoch = Math.ceil(CIFAR_TRAIN_IMAGES / batch);
   return {
     batch,
     params: count,
     gpuMb: Math.round(device().memory.bytes / 1e5) / 10,
+    pooledMb: Math.round(device().pooled.bytes / 1e5) / 10,
     msPerStep: Math.round(perStep * 10) / 10,
     epochMin: Math.round((perStep * stepsPerEpoch) / 600) / 100,
     leakPerStep: leak,
@@ -303,7 +320,7 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
         `제출 ${String(r.submits).padStart(3)}  ` +
         `${String(r.usPerDispatch).padStart(5)}µs/dispatch  ` +
         `누수 ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
-        `${r.gpuMb.toFixed(1).padStart(6)}MB  ` +
+        `${r.gpuMb.toFixed(1).padStart(6)}MB(+통 ${r.pooledMb.toFixed(1)})  ` +
         `손실 ${r.loss.toFixed(4)}`,
       );
       // **시간 내역은 배치마다 찍는다.** 횟수는 배치가 커져도 그대로지만 시간은
