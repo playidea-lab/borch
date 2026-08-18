@@ -3793,6 +3793,96 @@ function addRecent(out: Map<string, Case>): void {
     return `${verdict(got === x)} ${(await x.toArray())[1]!.toFixed(1)}`;
   });
 
+  // ── 통계 (`stat::`) ─────────────────────────────────────────────────
+  //
+  // **여기 있는 것 거의 전부가 비동기다.** 히스토그램은 어느 칸에 들어가는지가 값이고,
+  // `mode`·`nanmedian` 은 어느 값이 이기는지가 값이라 한 번 읽어야 한다 — 케이스 꼴이
+  // 다른 자리와 갈리는 것은 그 때문이지 이름이 달라서가 아니다.
+  const sample = (): Tensor => Tensor.from([0.5, 2.0, 2.0, 3.5, 1.0, 4.0, 2.0], [7]);
+  const sampleW = (): Tensor => Tensor.from([1.0, 2.0, 1.0, 1.0, 3.0, 1.0, 1.0], [7]);
+  out.set("stat::histc(bins=4)", async () => await sample().histc(4));
+  out.set("stat::histc(min/max)", async () => await sample().histc(4, 0.0, 4.0));
+  // **범위 밖은 버린다** — 양끝 칸으로 몰아넣지 않는다.
+  out.set("stat::histc(범위 밖은 버림)",
+    async () => await sample().histc(2, 1.0, 3.0));
+  out.set("stat::histogram 의 hist",
+    async () => (await sample().histogram(4)).hist);
+  out.set("stat::histogram 의 edges",
+    async () => (await sample().histogram(4)).bin_edges);
+  out.set("stat::histogram(weight)",
+    async () => (await sample().histogram(4, null, sampleW())).hist);
+  out.set("stat::histogram(density)",
+    async () => (await sample().histogram(4, null, null, true)).hist);
+  out.set("stat::histogram(range)",
+    async () => (await sample().histogram(4, [0.0, 4.0])).hist);
+  // **칸 너비가 다르다** — `density` 가 칸마다 다른 값으로 나누는지 여기서만 보인다.
+  out.set("stat::histogram(경계를 직접)",
+    async () => (await sample().histogram(Tensor.from([0.0, 1.0, 2.0, 4.0], [4]))).hist);
+
+  const pts = (): Tensor => Tensor.from(
+    [0.5, 1.0, 1.5, 1.5, 2.5, 0.5, 0.2, 2.5], [4, 2]);
+  out.set("stat::histogramdd 의 hist",
+    async () => (await pts().histogramdd([2, 2])).hist);
+  out.set("stat::histogramdd 의 edges",
+    async () => Tensor.cat((await pts().histogramdd([2, 2])).bin_edges, 0));
+
+  // **비긴 자리가 있다** — 없으면 `mode` 의 규칙(작은 값이 이기고 자리는 마지막)이
+  // 안 드러난다.
+  const tie = (): Tensor => Tensor.from([1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 5.0], [2, 4]);
+  for (const dim of [0, 1]) {
+    out.set(`stat::mode(dim=${dim}) 값`, async () => (await tie().mode(dim)).values);
+    out.set(`stat::mode(dim=${dim}) 자리`, async () => (await tie().mode(dim)).indices);
+  }
+  out.set("stat::mode(keepdim) 모양", async () => {
+    const got = await tie().mode(1, true);
+    return `(${got.values.shape.join(", ")})`;
+  });
+
+  const holes = (): Tensor => Tensor.from(
+    [1.0, Number.NaN, 3.0, 5.0, 2.0, 4.0, Number.NaN, Number.NaN], [2, 4]);
+  out.set("stat::nanmedian(전체)",
+    async () => await holes().nanmedian() as Tensor);
+  out.set("stat::nanmedian(dim=1) 값", async () =>
+    (await holes().nanmedian(1) as { values: Tensor }).values);
+  out.set("stat::nanmedian(dim=1) 자리", async () =>
+    (await holes().nanmedian(1) as { indices: Tensor }).indices);
+  // **짝수 개면 아래를 고른다** — 평균을 내면 여기서 갈린다.
+  out.set("stat::nanmedian(짝수 개)",
+    async () => await Tensor.from([1.0, 2.0, 3.0, 4.0], [4]).nanmedian() as Tensor);
+  // `median` 은 NaN 하나에도 NaN 이다 — 나란히 둬야 `nanmedian` 이 무엇인지 보인다.
+  //
+  // **값이 아니라 판정을 굳힌다.** 대조가 `allclose` 라 NaN 은 자기 자신과도 다르다.
+  out.set("stat::median(NaN 이 섞이면 NaN 이다)", async () => {
+    const got = await holes().median(1).values.toArray();
+    return Array.from(got).map((v) => verdict(Number.isNaN(v))).join(" ");
+  });
+
+  // `x²` 이다 — `edge_order=2` 가 정확해지는 자리.
+  const curve = (): Tensor => Tensor.from([1.0, 4.0, 9.0, 16.0, 25.0], [5]);
+  const mat33 = (): Tensor => Tensor.from(
+    [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0], [3, 3]);
+  out.set("stat::gradient(기본)",
+    async () => Tensor.cat(await curve().gradient(), 0));
+  out.set("stat::gradient(spacing=2)",
+    async () => Tensor.cat(await curve().gradient(2.0), 0));
+  out.set("stat::gradient(edge_order=2)",
+    async () => Tensor.cat(await curve().gradient(1, undefined, 2), 0));
+  for (const axis of [0, 1]) {
+    out.set(`stat::gradient(2차)[${axis}]`,
+      async () => (await mat33().gradient())[axis]!);
+  }
+  out.set("stat::gradient(dim=1)",
+    async () => (await mat33().gradient(1, 1))[0]!);
+
+  // **모자라면 채우고 넘치면 자른다.** 딱 맞는 크기로만 재면 두 갈래가 안 드러난다.
+  const sparse = (): Tensor => Tensor.from([0.0, 3.0, 0.0, 5.0, 0.0], [5]);
+  for (const size of [1, 2, 5]) {
+    out.set(`stat::nonzero_static(size=${size})`,
+      async () => await sparse().nonzeroStatic(size));
+  }
+  out.set("stat::nonzero_static(fill=-9)",
+    async () => await sparse().nonzeroStatic(5, -9));
+
   // ── addmm 계열 (`blend::`) ──────────────────────────────────────────
   //
   // **`beta=0` 은 값만 안 보고 그래프에는 남는다.** 여기서는 값만 묻는다 — 기울기
