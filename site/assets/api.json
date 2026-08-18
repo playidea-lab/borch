@@ -240,6 +240,26 @@
        "doc": "`0..n-1` 을 섞은 것. `torch.randperm` 자리다. Fisher–Yates."
       },
       {
+       "name": "normal",
+       "signature": "static normal(mean?: number | Tensor, std?: number | Tensor, size?: readonly number[]): Tensor",
+       "doc": "정규분포 표본. **`std` 가 0 이면 평균 그대로다**(실측) — 그 끝값이 이 이름이\n표준편차를 실제로 보고 있는지 묻는 유일한 자리다.\n\ntorch 는 두 꼴을 준다: 텐서 둘을 주면 자리마다 다른 평균·표준편차이고, 수 둘과\n모양을 주면 전부 같다. 앞쪽이 **브로드캐스트한다** — `(2,)` 평균에 스칼라\n표준편차를 줘도 된다."
+      },
+      {
+       "name": "bernoulli",
+       "signature": "bernoulli(): Tensor",
+       "doc": "자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,\n`p=1` 이면 전부 1 이다.\n\n**비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.\n결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가\n한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다."
+      },
+      {
+       "name": "poisson",
+       "signature": "poisson(): Promise<Tensor>",
+       "doc": "자리마다 그 평균의 푸아송 표본. **평균이 0 이면 0 이다.**\n\nKnuth 의 곱셈 꼴이라 **값마다 도는 횟수가 다르다** — 자리별로 갈리는 반복은\n셰이더로 못 옮기므로 여기서 한 번 읽는다. `histc`·`mode` 와 같은 자리다."
+      },
+      {
+       "name": "binomial",
+       "signature": "binomial(prob: Tensor): Promise<Tensor>",
+       "doc": "`this` 번 시행에서 성공한 횟수. **확률이 0 이면 0, 1 이면 시행 횟수 그대로다.**\n\n시행 횟수가 값이라 도는 횟수도 값이다 — `poisson` 과 같은 이유로 읽는다."
+      },
+      {
        "name": "trilIndices",
        "signature": "static trilIndices(row: number, col: number, offset?: number): Tensor",
        "doc": "",
@@ -1310,6 +1330,23 @@
        "name": "gradient",
        "signature": "gradient(spacing?: number | readonly number[], dim?: number | readonly number[], edgeOrder?: number): Promise<Tensor[]>",
        "doc": "중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.\n\n`edgeOrder` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측: `x²`\n에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다)."
+      },
+      {
+       "name": "trapezoid",
+       "signature": "trapezoid(x?: Tensor, dx?: number, dim?: number): Tensor",
+       "doc": "이웃한 두 점의 **평균에 간격을 곱해** 더한다. 사다리꼴 적분이다.\n\n오래 여기 없었다. 결속이 파이썬에서 같은 몇 줄로 조립하고 있었고, 주석에는\n\"여기 하나 더 만들면 조립이 두 벌이 된다\" 고 적혀 있었다. 그 말이 놓친 것은\n**borch.ts 를 TypeScript 에서 쓰는 쪽에는 이 이름이 아예 없다**는 것이다 —\n조립이 한 벌이었던 게 아니라 파이썬 쪽에만 있었다.\n\n조각 자르기와 더하기뿐이라 **기울기가 저절로 흐른다.** 손으로 적을 것이 없다.",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "x 자리를 직접 준다. 안 주면 간격이 `dx` 로 고르다."
+        }
+       ]
+      },
+      {
+       "name": "cumulativeTrapezoid",
+       "signature": "cumulativeTrapezoid(x?: Tensor, dx?: number, dim?: number): Tensor",
+       "doc": "누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다.",
+       "torch": "cumulative_trapezoid"
       },
       {
        "name": "unique",
@@ -2490,7 +2527,7 @@
      "torch": "make_node"
     }
    ],
-   "count": 436
+   "count": 442
   },
   {
    "name": "nn",
@@ -8591,5 +8628,5 @@
    "count": 9
   }
  ],
- "total": 1416
+ "total": 1422
 }
