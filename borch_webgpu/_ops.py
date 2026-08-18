@@ -1807,14 +1807,24 @@ def asarray(obj, dtype=None, copy=None, **kw):
     return _t(arr, dtype)
 
 
-def frombuffer(buffer, dtype=None, count=-1, offset=0, **kw):
-    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측)."""
-    from ._base import _DType, tensor as _t
+def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False, **kw):
+    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측).
 
-    name = dtype.plain if isinstance(dtype, _DType) else "float32"
+    형을 가리는 일은 `_dtype_to_make` 가 한다. **여기만 자기 갈래를 따로 적고
+    있었고**, 그 갈래가 `_DType` 이 아닌 것을 만나면 조용히 float32 로 떨어졌다 —
+    `frombuffer(buf, dtype=torch.half)` 가 **아무 말 없이 float32 를 냈다.**
+    이름만 있고 칸이 없는 형은 멈춰야 하고, 그 문이 이미 저 함수 안에 있다.
+
+    `dtype=` 은 여기서 **바이트를 무엇으로 읽을지**를 정하므로 `_made` 에 안 맡긴다 —
+    나중에 형을 바꾸면 이미 다르게 읽은 뒤다. 기울기만 맡긴다.
+    """
+    from ._base import tensor as _t
+
+    name = "float32" if dtype is None else _dtype_to_make(dtype)
     kind = _np.dtype(name.replace("torch.", ""))
-    return _t(_np.frombuffer(buffer, dtype=kind, count=count,
-                             offset=offset).copy())
+    return _made(_t(_np.frombuffer(buffer, dtype=kind, count=count,
+                                   offset=offset).copy()),
+                 {"requires_grad": requires_grad})
 
 
 def range_top(start, end=None, step=1, **kw):
@@ -1859,16 +1869,20 @@ def histogramdd(t, bins=10, **kw):
 
 
 def normal(mean=0.0, std=1.0, size=None, **kw):
-    """정규분포 표본. **`std` 가 0 이면 평균 그대로다.**"""
+    """정규분포 표본. **`std` 가 0 이면 평균 그대로다.**
+
+    `dtype=`·`requires_grad=` 는 `**kw` 가 삼키고 있었다 — 공장을 `_made` 로 모을 때
+    두 번 다 목록 밖이었다.
+    """
     from ._base import tensor as _t
 
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(wrap(mean).numpy(), dtype=_np.float64)
         s = _np.asarray(wrap(std).numpy(), dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return _t(_rng.normal(m, s).astype(_np.float32))
+        return _made(_t(_rng.normal(m, s).astype(_np.float32)), kw)
     shape = () if size is None else tuple(size)
-    return _t(_rng.normal(float(mean), float(std), shape).astype(_np.float32))
+    return _made(_t(_rng.normal(float(mean), float(std), shape).astype(_np.float32)), kw)
 
 
 def bernoulli(t, **kw):

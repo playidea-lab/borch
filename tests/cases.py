@@ -9824,6 +9824,34 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::공장::{_name}(dtype=int64)",
                       lambda L, f=_call: str(f(L, {"dtype": L.int64}).dtype)))
 
+    # ── 목록을 grep 으로 만들면 **아닌 것이 섞인다** ────────────────────────
+    #
+    # `**kw` 를 들고 있는 함수를 훑어 넷을 후보로 적었는데, torch 서명을 하나씩
+    # 보니 둘뿐이었다. `empty_strided` 는 이미 거절하고(걸음이라는 것이 없다),
+    # `bernoulli`·`poisson` 은 **torch 자신이 그 두 인자를 안 받는다** — 삼킬 것이
+    # 애초에 없다. 갈래가 같아 보인다고 몰아서 고치는 것이 이 표가 막는 일이다.
+    #
+    # `normal` 은 **`dtype=` 을 못 묻는다.** 정규분포는 정수 칸에 못 뽑고 남는 것이
+    # float64 인데 브라우저 쪽에 배정도가 없다 — `randn_like` 와 같은 사정이다.
+    cases.append(("dtype::공장::normal(requires_grad=True)",
+                  lambda L: str(L.normal(0.0, 1.0, (2,), requires_grad=True).requires_grad)))
+
+    def _buf():
+        # **쓰기 가능한 버퍼여야 한다** — torch 가 읽기 전용 `bytes` 에 경고를 낸다.
+        return bytearray(np.array([1.5, -2.5, 3.0], dtype=np.float32).tobytes())
+
+    cases.append(("dtype::공장::frombuffer(requires_grad=True)",
+                  lambda L: str(L.frombuffer(_buf(), dtype=L.float32,
+                                             requires_grad=True).requires_grad)))
+
+    # **`hasattr` 이 거절을 삼킨다.** `_AbsentDtype.np` 는 멈추라고 열어 둔 문인데
+    # `hasattr(dtype, "np")` 가 그 예외를 먹고 거짓을 답한다 — 그러면 numpy 갈래로
+    # 떨어져서 우리가 설계한 문구 대신 numpy 의 `TypeError` 가 나온다. 멈추기는
+    # 하므로 값이 틀리진 않지만, **없는 것과 오타가 같은 화면이 되는** 그 자리다.
+    # `_np_of` 가 바로 이 함정을 주석으로 적어 두었고, `frombuffer` 만 목록 밖이었다.
+    cases.append(("dtype::없는형::frombuffer(dtype=half)=우리는거절",
+                  refusal_case(lambda L: L.frombuffer(_buf(), dtype=L.half))))
+
     # **축약 중 `norm` 만 `dtype=` 을 안 들었다.** `sum`·`mean`·`prod` 는 듣는데
     # 하나만 안 들으면 규칙이 없는 것과 같다. torch 는 **먼저 형을 바꾸고 계산한다** —
     # 계산한 뒤 바꾸면 정밀도가 이미 깎인 뒤라 값이 다르다.

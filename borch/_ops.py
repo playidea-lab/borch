@@ -7376,18 +7376,24 @@ def nonzero_static(t, size, fill_value=-1):
     return Tensor(out)
 
 
-def normal(mean=0.0, std=1.0, size=None, **kw):
+def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
     """정규분포 표본. **`std` 가 0 이면 평균 그대로다** — 골든이 그 자리를 묻는다.
 
     `mean`·`std` 를 텐서로 주면 자리마다 다른 분포다. 그때는 `size` 를 안 받는다.
+
+    `dtype=`·`requires_grad=` 는 `**kw` 가 **삼키고 있었다.** 공장 열넷을 `_made` 로
+    모을 때도, 그 밖의 아홉을 모을 때도 목록에 없었다 — `**kw` 를 들고 있는 함수를
+    훑어 후보를 넷 뽑았는데 torch 서명을 보니 진짜는 이것과 `frombuffer` 둘이었다
+    (`bernoulli` 는 torch 자신이 그 인자를 안 받고, `empty_strided` 는 이미 거절한다).
     """
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
         m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
         s = _np.asarray(_wrap(std).data, dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return Tensor(_rng.normal(m, s).astype(_DEFAULT_DTYPE))
+        return _made(_rng.normal(m, s).astype(_DEFAULT_DTYPE), dtype, requires_grad)
     shape = () if size is None else tuple(size)
-    return Tensor(_rng.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE))
+    return _made(_rng.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE),
+                 dtype, requires_grad)
 
 
 def bernoulli(t, **kw):
@@ -7673,11 +7679,19 @@ def asarray(obj, dtype=None, copy=None, **kw):
     return Tensor(_np.array(got.data, copy=True)) if copy else got
 
 
-def frombuffer(buffer, dtype=_float32, count=-1, offset=0, **kw):
-    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측)."""
+def frombuffer(buffer, dtype=_float32, count=-1, offset=0,
+               requires_grad=False, **kw):
+    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측).
+
+    **`dtype=` 은 여기서 뜻이 다르다.** 다른 공장에서는 만든 뒤 형을 바꾸는 것인데
+    여기서는 **바이트를 무엇으로 읽을지**를 정한다 — 나중에 바꾸면 이미 다르게 읽은
+    뒤다. 그래서 `_made` 에 형을 안 맡기고 여기서 읽고, 기울기만 맡긴다.
+
+    `requires_grad=` 는 `**kw` 가 삼키고 있었다.
+    """
     kind = dtype.np if hasattr(dtype, "np") else _np.dtype(dtype)
-    return Tensor(_np.frombuffer(buffer, dtype=kind, count=count,
-                                 offset=offset).copy())
+    return _made(_np.frombuffer(buffer, dtype=kind, count=count,
+                                offset=offset).copy(), None, requires_grad)
 
 
 def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
