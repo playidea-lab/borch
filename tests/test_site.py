@@ -226,3 +226,38 @@ def test_every_page_carries_the_same_global_nav():
             problems.append(f"{lang} 페이지들의 차림표가 갈렸다:\n" + "\n".join(lines))
 
     assert not problems, "\n".join(problems)
+
+
+def test_site_links_to_this_repository():
+    """사이트가 가리키는 GitHub 주소가 **이 저장소의 주소**여야 한다.
+
+    저장소 이름이 `browsertorch` 에서 `borch` 로 바뀌었을 때 사이트 38 개 파일이 옛
+    주소를 그대로 들고 있었다. `tests/rename.py` 는 소문자 식별자를 바꾸는 도구라
+    URL 안의 이름을 규칙에 넣어 두지 않았고, 링크는 리다이렉트로 **여전히 열렸다** —
+    깨지지 않는 낡음이라 아무도 안 봤다.
+
+    그래서 손으로 적은 주소를 손으로 지키지 않는다. `origin` 이 답을 갖고 있으므로
+    거기에 못 박는다. 원격이 없는 체크아웃(압축본·CI 의 일부 모드)에서는 물을 곳이
+    없으므로 건너뛴다.
+    """
+    remote = subprocess.run(["git", "remote", "get-url", "origin"],
+                            cwd=ROOT, capture_output=True, text=True)
+    if remote.returncode != 0 or not remote.stdout.strip():
+        pytest.skip("origin 이 없다 — 대조할 주소가 없다")
+
+    here = remote.stdout.strip().removesuffix(".git").replace("git@github.com:",
+                                                             "https://github.com/")
+    # **우리 조직의 주소만 본다.** 사이트는 Pyodide 저장소도 가리키는데(MPL-2.0 이
+    # 소스를 구할 길을 적으라고 한다) 그것은 남의 것이고 여기와 같을 이유가 없다.
+    # 처음에 전부 보게 했다가 정확히 그 고지 링크가 걸렸다.
+    owner = here.rsplit("/", 2)[-2]
+    linked = re.compile(rf"https://github\.com/{re.escape(owner)}/[\w.-]+")
+    wrong = []
+    for page in _pages():
+        for i, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+            for hit in linked.findall(line):
+                if hit.removesuffix(".git") != here:
+                    wrong.append(f"{page.relative_to(ROOT)}:{i}  {hit} — 이 저장소는 {here}")
+    assert not wrong, (
+        "사이트가 다른 저장소를 가리킨다:\n  " + "\n  ".join(wrong[:12]) +
+        (f"\n  … 그리고 {len(wrong) - 12} 곳 더" if len(wrong) > 12 else ""))
