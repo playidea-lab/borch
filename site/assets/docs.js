@@ -10,6 +10,7 @@
  * 번역본을 지어내면 소스와 갈리기 시작하고, 갈린 뒤에는 어느 쪽이 사실인지 모른다.
  */
 
+import { pick } from "./i18n.js";
 import { highlight } from "./runner.js";
 
 const LANG = document.documentElement.lang === "ko" ? "ko" : "en";
@@ -57,10 +58,11 @@ async function boot() {
 
   for (const mod of api.modules) {
     for (const sym of mod.symbols) {
-      index.push({ mod: mod.name, name: sym.name, id: sym.name, kind: sym.kind });
+      index.push({ mod: mod.name, name: sym.name, id: sym.name, kind: sym.kind,
+                   doc: sym.doc ?? "" });
       for (const mem of sym.members) {
         index.push({ mod: mod.name, name: mem.name, id: `${sym.name}.${mem.name}`,
-                     kind: "member", of: sym.name });
+                     kind: "member", of: sym.name, doc: mem.doc ?? "" });
       }
     }
   }
@@ -124,7 +126,7 @@ function drawModule(mod) {
         // 소스가 자기 설명을 갖고 있으면 그쪽이 원본이다. 우리 한 줄은 그것이
         // 없을 때만 쓴다 — 둘 다 보이면 같은 말을 두 번 하는 화면이 된다.
         ? `<div class="prose">${md(mod.doc)}</div>`
-        : `<p class="lead">${inline(esc(mod.blurb))}</p>`}
+        : `<p class="lead">${inline(esc(pick(mod.blurb)))}</p>`}
     <p class="small muted" style="margin-top:1rem">${say("generated", api.total)}
       ${LANG === "en" ? `<br>${esc(say("koNote"))}` : ""}</p>`;
   main.append(head);
@@ -166,12 +168,27 @@ function card(sym) {
     det.className = "members";
     det.open = sym.members.length <= 12;
     det.innerHTML = `<summary>${say("members", sym.members.length)}</summary>`;
+    // **소스가 나눠 둔 순서와 묶음을 그대로 지킨다.** 428 개가 한 줄로 늘어서면
+    // 목록이 아니라 벽이다. 다시 나누지는 않는다 — 그건 저자의 분류를 우리 짐작으로
+    // 덮는 것이고, 소스가 바뀌면 조용히 어긋난다.
+    let lastSection = null;
     for (const mem of sym.members) {
+      const section = mem.section ? pick(mem.section) : null;
+      if (section !== lastSection) {
+        lastSection = section;
+        if (section) {
+          const head = document.createElement("h5");
+          head.className = "section-head";
+          head.textContent = section;
+          det.append(head);
+        }
+      }
       const el = document.createElement("div");
       el.className = "member";
       el.id = `${sym.name}.${mem.name}`;
       el.innerHTML = `
         <h4>${esc(mem.name)}
+          ${mem.protected ? '<span class="kind">protected</span>' : ""}
           ${mem.torch ? `<span class="torch-hint">torch: <b>${esc(mem.torch)}</b></span>` : ""}
         </h4>
         <div class="sigline">${highlight(mem.signature, "js")}</div>
@@ -203,11 +220,17 @@ function showHits(q) {
     const at = name.indexOf(needle);
     if (at === 0) return [0, name.length];                  // 이름이 그것으로 시작
     if (at > 0) return [1, at];                             // 이름 안 어딘가
-    return [2, (e.of ?? "").toLowerCase().indexOf(needle)]; // 주인 이름에만
+    const owner = (e.of ?? "").toLowerCase().indexOf(needle);
+    if (owner >= 0) return [2, owner];                      // 주인 이름에만
+    return [3, 0];                                          // 설명문에만
   };
+  // **설명문도 찾는다.** 이름을 모르는 채로 오는 것이 흔한 경우다 — "누수"·"전치"·
+  // "in place" 로 찾는 사람에게 이름만 보는 검색은 아무것도 못 준다. 설명이 한국어라
+  // 한국어 검색이 실제로 듣는다.
   const hits = index
     .filter((e) => e.name.toLowerCase().includes(needle)
-                || (e.of ?? "").toLowerCase().includes(needle))
+                || (e.of ?? "").toLowerCase().includes(needle)
+                || e.doc.toLowerCase().includes(needle))
     .sort((a, b) => {
       const [ra, sa] = rank(a), [rb, sb] = rank(b);
       return ra - rb || sa - sb || a.name.localeCompare(b.name);
@@ -220,11 +243,25 @@ function showHits(q) {
   ul.className = "hits";
   for (const h of hits) {
     const li = document.createElement("li");
+    const why = !h.name.toLowerCase().includes(needle)
+             && !(h.of ?? "").toLowerCase().includes(needle)
+      ? snippet(h.doc, needle) : "";
     li.innerHTML = `<a href="#${esc(h.mod)}.${esc(h.id)}">${esc(h.name)}
-      <span class="where">— ${esc(h.mod)}${h.of ? `.${esc(h.of)}` : ""}</span></a>`;
+      <span class="where">— ${esc(h.mod)}${h.of ? `.${esc(h.of)}` : ""}</span></a>`
+      + (why ? `<div class="why">${why}</div>` : "");
     ul.append(li);
   }
   main.append(ul);
+}
+
+/** 걸린 낱말 둘레만 잘라 보여 준다. */
+function snippet(text, needle) {
+  const flat = text.replace(/\s+/g, " ");
+  const at = flat.toLowerCase().indexOf(needle);
+  if (at < 0) return "";
+  const from = Math.max(0, at - 40);
+  const cut = flat.slice(from, at + needle.length + 60);
+  return (from ? "… " : "") + esc(cut) + " …";
 }
 
 /* ── 아주 얇은 마크다운 ─────────────────────────────────────────────── */

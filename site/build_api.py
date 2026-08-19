@@ -37,28 +37,73 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DECL = ROOT / "borch-ts" / "dist" / "src"
 OUT = ROOT / "site" / "assets" / "api.json"
+# 이름 하나로 자리를 찾는 작은 표. 강의 본문의 `code` 가 이것을 보고 링크가 된다 —
+# 350KB 짜리 본문을 강의마다 싣게 할 수는 없다.
+INDEX = ROOT / "site" / "assets" / "api-index.json"
 
 # 공개 표면. `index.ts` 가 내보내는 것들이고, 순서가 곧 사이드바 순서다.
 # 안쪽 사정(`kernels`·`repr`·`functional`)은 여기 없다 — 그것은 쓰는 사람의 것이 아니다.
 MODULES = [
-    ("tensor", "Tensor", "텐서와 그 위의 연산. `scope`·`keepAlive` 도 여기 있다."),
-    ("nn", "nn", "층·손실·활성. `torch.nn` 자리."),
-    ("optim", "optim", "옵티마이저와 학습률 스케줄러. `torch.optim` 자리."),
-    ("data", "data", "데이터셋과 배치. `torch.utils.data` 자리."),
-    ("vision", "vision", "이미지 변환. `torchvision.transforms` 자리."),
-    ("fft", "fft", "푸리에 변환. `torch.fft` 자리."),
-    ("linalg", "linalg", "선형대수 — 분해·풀이·노름."),
-    ("serialize", "serialize", "체크포인트. 형식은 safetensors 다."),
-    ("indexing", "indexing", "대괄호 자리 — `x[1:3]` 에 해당하는 것."),
-    ("einsum", "einsum", "아인슈타인 합 표기."),
-    ("device", "device", "어댑터를 잡고 상태를 묻는 자리."),
-    ("random", "random", "난수의 씨앗."),
-    ("autograd", "autograd", "기울기 스위치."),
-    ("special", "special", "특수함수. `torch.special` 자리."),
-    ("rnn", "rnn", "순환 신경망 유틸."),
-    ("errors", "errors", "예외 종류. torch 와 같은 이름을 쓴다."),
-    ("dtype", "dtype", "자료형."),
+    ("tensor", "Tensor",
+     {"ko": "텐서와 그 위의 연산. `scope`·`keepAlive` 도 여기 있다.",
+      "en": "Tensors and the operations on them. `scope` and `keepAlive` live here too."}),
+    ("nn", "nn",
+     {"ko": "층·손실·활성. `torch.nn` 자리.",
+      "en": "Layers, losses, activations. Where `torch.nn` would be."}),
+    ("optim", "optim",
+     {"ko": "옵티마이저와 학습률 스케줄러. `torch.optim` 자리.",
+      "en": "Optimizers and learning-rate schedulers. Where `torch.optim` would be."}),
+    ("data", "data",
+     {"ko": "데이터셋과 배치. `torch.utils.data` 자리.",
+      "en": "Datasets and batching. Where `torch.utils.data` would be."}),
+    ("vision", "vision",
+     {"ko": "이미지 변환. `torchvision.transforms` 자리.",
+      "en": "Image transforms. Where `torchvision.transforms` would be."}),
+    ("fft", "fft",
+     {"ko": "푸리에 변환. `torch.fft` 자리.",
+      "en": "Fourier transforms. Where `torch.fft` would be."}),
+    ("linalg", "linalg",
+     {"ko": "선형대수 — 분해·풀이·노름.",
+      "en": "Linear algebra — decompositions, solves, norms."}),
+    ("serialize", "serialize",
+     {"ko": "체크포인트. 형식은 safetensors 다.",
+      "en": "Checkpoints. The format is safetensors."}),
+    ("indexing", "indexing",
+     {"ko": "대괄호 자리 — `x[1:3]` 에 해당하는 것.",
+      "en": "The bracket position — what `x[1:3]` would be."}),
+    ("einsum", "einsum",
+     {"ko": "아인슈타인 합 표기.", "en": "Einstein summation."}),
+    ("device", "device",
+     {"ko": "어댑터를 잡고 상태를 묻는 자리.",
+      "en": "Acquiring the adapter, and asking it what it is doing."}),
+    ("random", "random", {"ko": "난수의 씨앗.", "en": "Seeding the random draws."}),
+    ("autograd", "autograd", {"ko": "기울기 스위치.", "en": "The gradient switch."}),
+    ("special", "special",
+     {"ko": "특수함수. `torch.special` 자리.",
+      "en": "Special functions. Where `torch.special` would be."}),
+    ("rnn", "rnn", {"ko": "순환 신경망 유틸.", "en": "Recurrent-network utilities."}),
+    ("errors", "errors",
+     {"ko": "예외 종류. torch 와 같은 이름을 쓴다.",
+      "en": "Exception types, under the names torch uses."}),
+    ("dtype", "dtype", {"ko": "자료형.", "en": "Data types."}),
 ]
+
+# 소스가 스스로 나눠 둔 구획의 영어 이름. **번역이 있는 것만 옮긴다** — 없으면
+# 소스가 쓴 이름을 그대로 보여준다. 여기서 지어내면 소스와 갈리기 시작한다.
+SECTION_EN = {
+    "만들기": "Creating", "원소별": "Elementwise", "행렬곱": "Matrix products",
+    "축약": "Reductions", "모양": "Shape", "창 펴기": "Windows",
+    "나머지 층이 쓰는 것들": "Used by the layers", "자리 옮기기": "Moving elements",
+    "손실과 거리": "Losses and distances", "addmm 계열": "The addmm family",
+    "결과 크기가 값에 달린 것들": "Output size depends on the values",
+    "선형대수": "Linear algebra", "최상위 선형대수": "Linear algebra (top level)",
+    "제자리 연산": "In place", "정렬 계열": "Sorting",
+    "번호표로 읽고 쓰기": "Indexed read and write", "합성곱·풀링": "Convolution and pooling",
+    "이긴 자리를 함께 내는 풀링": "Pooling that also returns indices",
+    "CTC": "CTC", "복소수": "Complex", "역전파": "Backward",
+    "장치 옮기기": "Moving between devices", "읽기": "Reading values",
+    "복소수 커널": "Complex kernels",
+}
 
 # 선언의 시작. `export declare class Tensor ... {` 같은 것들.
 TOP = re.compile(
@@ -167,6 +212,49 @@ def _torch_name(name):
 OURS = {"scope", "keepAlive", "call", "describe", "init", "probe", "isAvailable",
         "currentDevice", "webgpu", "emptyCache", "pooled", "dispatches", "faults",
         "lastScope", "pipelineCount", "synchronize", "adapterInfo"}
+
+
+SECTION = re.compile(r"^\s*// ── (.+?) ─")
+TS_CLASS = re.compile(r"^export\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)")
+# **인터페이스도 몸통을 연다.** `tensor.ts` 끝의 `export interface Tensor` 가 미러된
+# 이름들을 담는데, 이것을 안 보면 그 55 개가 **바로 앞 구획의 이름을 뒤집어쓴다**
+# (실측: 전부 "복소수 커널" 로 나왔다). 구획은 여기서 끊긴다 — 미러된 것들은
+# 저자가 나눠 둔 자리가 아니라 자동으로 붙는 이름이기 때문이다.
+TS_IFACE = re.compile(r"^export\s+interface\s+([A-Za-z_$][\w$]*)")
+TS_MEMBER = re.compile(r"^  (?:(?:static|readonly|get|set|protected|override|async|abstract)\s+)*"
+                       r"([A-Za-z_$][\w$]*)\??\s*[(<:]")
+
+
+def sections_of(name):
+    """`(클래스, 멤버) → 구획 이름`. **소스가 이미 나눠 둔 것을 그대로 쓴다.**
+
+    `tensor.ts` 에는 `// ── 축약 ──` 같은 구획이 스물넷 있다. 그것이 이 표면을 쓴
+    사람의 분류이고, 우리가 다시 나누면 그 사람의 판단을 우리 짐작으로 덮는 것이다.
+
+    **선언 파일에는 안 남는다** — `tsc` 는 TSDoc 만 옮기고 줄 주석은 버린다. 그래서
+    여기서만 소스를 읽는다. 설명문의 원본이 소스인 것과 같은 이유다.
+    """
+    path = ROOT / "borch-ts" / "src" / f"{name}.ts"
+    if not path.exists():
+        return {}
+    out = {}
+    current_class = ""
+    current_section = ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        head = SECTION.match(line)
+        if head:
+            current_section = head.group(1).strip()
+            continue
+        klass = TS_CLASS.match(line) or TS_IFACE.match(line)
+        if klass:
+            current_class = klass.group(1)
+            # 클래스가 새로 열리면 앞 구획은 그 클래스의 것이 아니다.
+            current_section = ""
+            continue
+        member = TS_MEMBER.match(line)
+        if member and current_class and current_section:
+            out.setdefault((current_class, member.group(1)), current_section)
+    return out
 
 
 def parse(path):
@@ -346,6 +434,12 @@ def main():
         if not path.exists():
             continue
         doc, symbols = parse(path)
+        marks = sections_of(name)
+        for sym in symbols:
+            for member in sym["members"]:
+                mark = marks.get((sym["name"], member["name"]))
+                if mark:
+                    member["section"] = {"ko": mark, "en": SECTION_EN.get(mark, mark)}
         # 이름만 있고 설명도 시그니처도 없는 것은 버린다 — 목록만 부풀린다.
         symbols = [s for s in symbols if s["signature"]]
         modules.append({
@@ -362,7 +456,21 @@ def main():
     }
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n",
                    encoding="utf-8")
+
+    # **먼저 앉은 것이 이긴다.** `forward` 처럼 여러 클래스에 있는 이름은 첫 자리로
+    # 보낸다 — 어느 하나로 보내는 것이 아무 데도 안 보내는 것보다 낫고, 모듈 순서가
+    # 곧 중요도 순서다(Tensor 가 맨 앞).
+    index = {}
+    for mod in modules:
+        for sym in mod["symbols"]:
+            index.setdefault(sym["name"], f"{mod['name']}.{sym['name']}")
+            for member in sym["members"]:
+                index.setdefault(member["name"],
+                                 f"{mod['name']}.{sym['name']}.{member['name']}")
+    INDEX.write_text(json.dumps(index, ensure_ascii=False, sort_keys=True) + "\n",
+                     encoding="utf-8")
     print(f"{OUT.relative_to(ROOT)} — 모듈 {len(modules)}개 · 항목 {payload['total']}개")
+    print(f"{INDEX.relative_to(ROOT)} — 이름 {len(index)}개")
     for m in modules:
         print(f"  {m['name']:<12} {m['count']:>5}")
 

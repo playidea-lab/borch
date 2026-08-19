@@ -5,7 +5,10 @@
   {
    "name": "tensor",
    "title": "Tensor",
-   "blurb": "텐서와 그 위의 연산. `scope`·`keepAlive` 도 여기 있다.",
+   "blurb": {
+    "ko": "텐서와 그 위의 연산. `scope`·`keepAlive` 도 여기 있다.",
+    "en": "Tensors and the operations on them. `scope` and `keepAlive` live here too."
+   },
    "doc": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다.",
    "symbols": [
     {
@@ -152,135 +155,235 @@
          "tag": "param",
          "text": "options 위치 인자가 아니라 이름으로 받는다. 넷째 자리에 `device` 가 붙을 참이었는데, `from(data, shape, false, \"int64\", \"cpu\")` 는 읽는 사람이 셋째와 넷째를 세어야 하는 줄이다. npm 에 아직 안 나간 지금이 고칠 수 있는 때다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "full",
        "signature": "static full(shape: readonly number[], value: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "owned",
        "signature": "static owned(shape: readonly number[], value?: number): Tensor",
-       "doc": "값으로 채우되 **캐시를 안 탄다 — 자기 버퍼를 갖는다.**\n\n**제자리로 고쳐질 것은 반드시 이쪽이어야 한다.** `full` 은 원소 하나짜리를 값으로\n캐시하므로 `zeros([1])` 을 두 번 부르면 **같은 버퍼**가 온다. 그 자체는 맞다 —\n상수는 읽기만 하니까. 문제는 상수가 아닌 것이 그 문을 지날 때다:\n\n- `Adam` 의 m·v 가 크기 1 파라미터에서 같은 버퍼가 되어, WebGPU 가 \"writable\n  storage buffer aliasing\" 으로 **명령 버퍼째** 무효로 만든다\n- `SGD` 의 모멘텀 버퍼가 프로그램 전체가 쓰는 0 상수를 덮어쓴다\n- `nn.PReLU()` 는 기본이 파라미터 하나라 가중치가 곧 전역 0.25 상수이고,\n  옵티마이저가 학습 중에 그것을 고친다\n- `BatchNorm(1)` 의 이동 통계가 전역 0·1 상수를 덮어쓴다\n\n앞의 하나만 예외로 터지고 나머지는 **조용히 틀린다.** 그래서 파라미터·옵티마이저\n상태·이동 통계는 값이 무엇이든 여기로 온다."
+       "doc": "값으로 채우되 **캐시를 안 탄다 — 자기 버퍼를 갖는다.**\n\n**제자리로 고쳐질 것은 반드시 이쪽이어야 한다.** `full` 은 원소 하나짜리를 값으로\n캐시하므로 `zeros([1])` 을 두 번 부르면 **같은 버퍼**가 온다. 그 자체는 맞다 —\n상수는 읽기만 하니까. 문제는 상수가 아닌 것이 그 문을 지날 때다:\n\n- `Adam` 의 m·v 가 크기 1 파라미터에서 같은 버퍼가 되어, WebGPU 가 \"writable\n  storage buffer aliasing\" 으로 **명령 버퍼째** 무효로 만든다\n- `SGD` 의 모멘텀 버퍼가 프로그램 전체가 쓰는 0 상수를 덮어쓴다\n- `nn.PReLU()` 는 기본이 파라미터 하나라 가중치가 곧 전역 0.25 상수이고,\n  옵티마이저가 학습 중에 그것을 고친다\n- `BatchNorm(1)` 의 이동 통계가 전역 0·1 상수를 덮어쓴다\n\n앞의 하나만 예외로 터지고 나머지는 **조용히 틀린다.** 그래서 파라미터·옵티마이저\n상태·이동 통계는 값이 무엇이든 여기로 온다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "zeros",
        "signature": "static zeros(shape: readonly number[]): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "ones",
        "signature": "static ones(shape: readonly number[]): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "eye",
        "signature": "static eye(n: number, m?: number): Tensor",
-       "doc": "단위행렬. **정사각만이 아니다** — torch 의 `eye(n, m)` 은 직사각을 만든다."
+       "doc": "단위행렬. **정사각만이 아니다** — torch 의 `eye(n, m)` 은 직사각을 만든다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "arange",
        "signature": "static arange(n: number): Tensor",
-       "doc": "`0` 부터 `n-1` 까지."
+       "doc": "`0` 부터 `n-1` 까지.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "linspace",
        "signature": "static linspace(start: number, end: number, count: number): Tensor",
-       "doc": "양끝을 포함해 고르게 나눈 값들."
+       "doc": "양끝을 포함해 고르게 나눈 값들.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "bartlettWindow",
        "signature": "static bartlettWindow(n: number, periodic?: boolean): Tensor",
        "doc": "삼각창. 가운데가 1 이고 양끝이 0 이다.",
-       "torch": "bartlett_window"
+       "torch": "bartlett_window",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "hannWindow",
        "signature": "static hannWindow(n: number, periodic?: boolean): Tensor",
        "doc": "",
-       "torch": "hann_window"
+       "torch": "hann_window",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "hammingWindow",
        "signature": "static hammingWindow(n: number, periodic?: boolean, alpha?: number, beta?: number): Tensor",
        "doc": "`alpha - beta·cos`. torch 의 기본은 0.54/0.46 이다.",
-       "torch": "hamming_window"
+       "torch": "hamming_window",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "blackmanWindow",
        "signature": "static blackmanWindow(n: number, periodic?: boolean): Tensor",
        "doc": "",
-       "torch": "blackman_window"
+       "torch": "blackman_window",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "kaiserWindow",
        "signature": "static kaiserWindow(n: number, periodic?: boolean, beta?: number): Tensor",
        "doc": "`I₀(β√(1-((k-h)/h)²)) / I₀(β)`. torch 의 기본 `beta` 는 12.0 이다.",
-       "torch": "kaiser_window"
+       "torch": "kaiser_window",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "rand",
        "signature": "static rand(shape: readonly number[]): Tensor",
-       "doc": "`[0, 1)` 균등분포. `torch.rand` 자리이고 **쓰는 사람이 쓸 문은 이쪽이다.**\n\n**호스트에서 만들어 한 번에 올린다.** 그래야 `randn`·`randint`·`randperm` 과 같은\n줄기에서 나오고 `manualSeed` 하나가 넷을 함께 되돌린다.\n\n난수가 나오는 문이 하나 더 있다 — `Tensor.uniform` 은 GPU 커널이고 dropout\n계수기를 쓴다. 그쪽은 **활성값만 한 표본을 스텝마다 뽑는 자리**(dropout·`rrelu`·\ngumbel)의 것이라 업로드를 피하려고 따로 있다. 둘 다 `manualSeed` 가 되돌리지만\n**같은 줄기는 아니다.**"
+       "doc": "`[0, 1)` 균등분포. `torch.rand` 자리이고 **쓰는 사람이 쓸 문은 이쪽이다.**\n\n**호스트에서 만들어 한 번에 올린다.** 그래야 `randn`·`randint`·`randperm` 과 같은\n줄기에서 나오고 `manualSeed` 하나가 넷을 함께 되돌린다.\n\n난수가 나오는 문이 하나 더 있다 — `Tensor.uniform` 은 GPU 커널이고 dropout\n계수기를 쓴다. 그쪽은 **활성값만 한 표본을 스텝마다 뽑는 자리**(dropout·`rrelu`·\ngumbel)의 것이라 업로드를 피하려고 따로 있다. 둘 다 `manualSeed` 가 되돌리지만\n**같은 줄기는 아니다.**",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "randn",
        "signature": "static randn(shape: readonly number[]): Tensor",
-       "doc": "표준정규분포. `torch.randn` 자리다."
+       "doc": "표준정규분포. `torch.randn` 자리다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "randint",
        "signature": "static randint(low: number, high: number, shape: readonly number[]): Tensor",
-       "doc": "`[low, high)` 의 정수. **위끝은 안 들어간다** — torch 와 같다.\n\n형은 `int64` 로 붙지만 값은 float32 버퍼에 있다(`dtype.ts`). 2^24 를 넘는\n정수는 그 안에서 이미 못 세므로 거기서 멈춘다 — 조용히 반올림되느니 낫다."
+       "doc": "`[low, high)` 의 정수. **위끝은 안 들어간다** — torch 와 같다.\n\n형은 `int64` 로 붙지만 값은 float32 버퍼에 있다(`dtype.ts`). 2^24 를 넘는\n정수는 그 안에서 이미 못 세므로 거기서 멈춘다 — 조용히 반올림되느니 낫다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "randperm",
        "signature": "static randperm(n: number): Tensor",
-       "doc": "`0..n-1` 을 섞은 것. `torch.randperm` 자리다. Fisher–Yates."
+       "doc": "`0..n-1` 을 섞은 것. `torch.randperm` 자리다. Fisher–Yates.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "normal",
        "signature": "static normal(mean?: number | Tensor, std?: number | Tensor, size?: readonly number[]): Tensor",
-       "doc": "정규분포 표본. **`std` 가 0 이면 평균 그대로다**(실측) — 그 끝값이 이 이름이\n표준편차를 실제로 보고 있는지 묻는 유일한 자리다.\n\ntorch 는 두 꼴을 준다: 텐서 둘을 주면 자리마다 다른 평균·표준편차이고, 수 둘과\n모양을 주면 전부 같다. 앞쪽이 **브로드캐스트한다** — `(2,)` 평균에 스칼라\n표준편차를 줘도 된다."
+       "doc": "정규분포 표본. **`std` 가 0 이면 평균 그대로다**(실측) — 그 끝값이 이 이름이\n표준편차를 실제로 보고 있는지 묻는 유일한 자리다.\n\ntorch 는 두 꼴을 준다: 텐서 둘을 주면 자리마다 다른 평균·표준편차이고, 수 둘과\n모양을 주면 전부 같다. 앞쪽이 **브로드캐스트한다** — `(2,)` 평균에 스칼라\n표준편차를 줘도 된다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "bernoulli",
        "signature": "bernoulli(): Tensor",
-       "doc": "자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,\n`p=1` 이면 전부 1 이다.\n\n**비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.\n결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가\n한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다."
+       "doc": "자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,\n`p=1` 이면 전부 1 이다.\n\n**비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.\n결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가\n한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "poisson",
        "signature": "poisson(): Promise<Tensor>",
-       "doc": "자리마다 그 평균의 푸아송 표본. **평균이 0 이면 0 이다.**\n\nKnuth 의 곱셈 꼴이라 **값마다 도는 횟수가 다르다** — 자리별로 갈리는 반복은\n셰이더로 못 옮기므로 여기서 한 번 읽는다. `histc`·`mode` 와 같은 자리다."
+       "doc": "자리마다 그 평균의 푸아송 표본. **평균이 0 이면 0 이다.**\n\nKnuth 의 곱셈 꼴이라 **값마다 도는 횟수가 다르다** — 자리별로 갈리는 반복은\n셰이더로 못 옮기므로 여기서 한 번 읽는다. `histc`·`mode` 와 같은 자리다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "binomial",
        "signature": "binomial(prob: Tensor): Promise<Tensor>",
-       "doc": "`this` 번 시행에서 성공한 횟수. **확률이 0 이면 0, 1 이면 시행 횟수 그대로다.**\n\n시행 횟수가 값이라 도는 횟수도 값이다 — `poisson` 과 같은 이유로 읽는다."
+       "doc": "`this` 번 시행에서 성공한 횟수. **확률이 0 이면 0, 1 이면 시행 횟수 그대로다.**\n\n시행 횟수가 값이라 도는 횟수도 값이다 — `poisson` 과 같은 이유로 읽는다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "trilIndices",
        "signature": "static trilIndices(row: number, col: number, offset?: number): Tensor",
        "doc": "",
-       "torch": "tril_indices"
+       "torch": "tril_indices",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "triuIndices",
        "signature": "static triuIndices(row: number, col: number, offset?: number): Tensor",
        "doc": "",
-       "torch": "triu_indices"
+       "torch": "triu_indices",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "cartesianProd",
        "signature": "static cartesianProd(...tensors: readonly Tensor[]): Tensor",
        "doc": "모든 짝. **하나만 주면 그냥 그것이다**(실측) — 1차원으로 남는다.\n\n값을 안 읽는다. 어느 칸이 어디로 가는지는 **개수만으로** 정해지므로 번호표로\n뽑아 모은다 — 읽었으면 이것도 비동기가 됐다.",
-       "torch": "cartesian_prod"
+       "torch": "cartesian_prod",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "combinations",
        "signature": "static combinations(t: Tensor, r?: number, withReplacement?: boolean): Tensor",
-       "doc": "`r` 개씩 고른 조합. **순서는 없고**, 중복 허용이 따로 있다."
+       "doc": "`r` 개씩 고른 조합. **순서는 없고**, 중복 허용이 따로 있다.",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "vander",
@@ -288,36 +391,60 @@
        "doc": "판데르몬드 행렬. **기본은 차수가 줄어드는 쪽이다** — 마지막 열이 1 이다(실측).\n\n거듭제곱을 `pow` 로 짜지 않는다. WGSL 의 `pow` 는 `exp2(y·log2(x))` 라 **밑이\n음수면 답이 없고**, 판데르몬드는 음수 입력이 예사다. 누적곱으로 세면 정확하다.",
        "overloads": [
         "vander(N?: number): Tensor"
-       ]
+       ],
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "zerosLike",
        "signature": "zerosLike(): Tensor",
        "doc": "",
-       "torch": "zeros_like"
+       "torch": "zeros_like",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "onesLike",
        "signature": "onesLike(): Tensor",
        "doc": "",
-       "torch": "ones_like"
+       "torch": "ones_like",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "randLike",
        "signature": "randLike(): Tensor",
        "doc": "`torch.rand_like`. 모양만 빌린다 — 값도 형도 안 물려받는다.",
-       "torch": "rand_like"
+       "torch": "rand_like",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "randnLike",
        "signature": "randnLike(): Tensor",
        "doc": "`torch.randn_like`.",
-       "torch": "randn_like"
+       "torch": "randn_like",
+       "section": {
+        "ko": "만들기",
+        "en": "Creating"
+       }
       },
       {
        "name": "unary",
        "signature": "unary(name: string): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "원소별",
+        "en": "Elementwise"
+       }
       },
       {
        "name": "binary",
@@ -328,7 +455,11 @@
          "tag": "param",
          "text": "dtype 결과의 형. 안 주면 산술 승격 규칙을 따른다. 비교 연산처럼 형이 입력과 무관한 것은 여기서 못 박는다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "원소별",
+        "en": "Elementwise"
+       }
       },
       {
        "name": "add",
@@ -339,17 +470,29 @@
          "tag": "param",
          "text": "alpha 상대 쪽에 먼저 곱하는 값 — `this + alpha·other` 다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "원소별",
+        "en": "Elementwise"
+       }
       },
       {
        "name": "sub",
        "signature": "sub(other: Tensor, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "원소별",
+        "en": "Elementwise"
+       }
       },
       {
        "name": "mul",
        "signature": "mul(other: Tensor): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "원소별",
+        "en": "Elementwise"
+       }
       },
       {
        "name": "div",
@@ -360,180 +503,320 @@
          "tag": "param",
          "text": "roundingMode `null` 이면 참나눗셈, `\"trunc\"`·`\"floor\"` 는 정수 쪽."
         }
-       ]
+       ],
+       "section": {
+        "ko": "원소별",
+        "en": "Elementwise"
+       }
       },
       {
        "name": "mm",
        "signature": "mm(other: Tensor): Tensor",
-       "doc": "2차원만. 배치 행렬곱은 T1 이다 — 없는 기능이 틀린 답보다 낫다."
+       "doc": "2차원만. 배치 행렬곱은 T1 이다 — 없는 기능이 틀린 답보다 낫다.",
+       "section": {
+        "ko": "행렬곱",
+        "en": "Matrix products"
+       }
       },
       {
        "name": "transpose",
        "signature": "transpose(): Tensor",
-       "doc": "2차원 전치. 지금은 실제로 옮겨 담는다 — 뷰는 T1 이다."
+       "doc": "2차원 전치. 지금은 실제로 옮겨 담는다 — 뷰는 T1 이다.",
+       "section": {
+        "ko": "행렬곱",
+        "en": "Matrix products"
+       }
       },
       {
        "name": "sum",
        "signature": "sum(dtype?: DType): Tensor",
-       "doc": "전부 더한다. `dtype` 을 주면 **더하기 전에** 그 형으로 바꾼다.\n\n**이웃 전부가 그 인자를 받는데 이것만 안 받았다.** `mean`·`prod`·`nansum` 은\n`(dim?, keepdim, dtype?)` 이고 `cumsum`·`cumprod` 도 받는다. 축 있는 쪽인\n`sumDim` 도 받는다. 축약 중 **가장 많이 불리는 이름 하나만** 빠져 있었고,\n그래서 `torch.sum(x, dtype=torch.float32)` 을 옮길 자리가 없었다.\n\n넷 중 하나만 안 듣는 것이 하나도 안 듣는 것보다 나쁘다 — 규칙을 세울 수가\n없어서다. 같은 자리를 `norm` 이 이미 한 번 보여 줬다.\n\n**순서가 값을 정한다.** 먼저 바꾸고 더한다 — `[1.7, −2.3, 0.9]` 를 int64 로\n접으면 먼저 깎을 때 −1, 나중에 깎을 때 0 이다. torch 는 앞쪽이다."
+       "doc": "전부 더한다. `dtype` 을 주면 **더하기 전에** 그 형으로 바꾼다.\n\n**이웃 전부가 그 인자를 받는데 이것만 안 받았다.** `mean`·`prod`·`nansum` 은\n`(dim?, keepdim, dtype?)` 이고 `cumsum`·`cumprod` 도 받는다. 축 있는 쪽인\n`sumDim` 도 받는다. 축약 중 **가장 많이 불리는 이름 하나만** 빠져 있었고,\n그래서 `torch.sum(x, dtype=torch.float32)` 을 옮길 자리가 없었다.\n\n넷 중 하나만 안 듣는 것이 하나도 안 듣는 것보다 나쁘다 — 규칙을 세울 수가\n없어서다. 같은 자리를 `norm` 이 이미 한 번 보여 줬다.\n\n**순서가 값을 정한다.** 먼저 바꾸고 더한다 — `[1.7, −2.3, 0.9]` 를 int64 로\n접으면 먼저 깎을 때 −1, 나중에 깎을 때 0 이다. torch 는 앞쪽이다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "amax",
        "signature": "amax(dim?: number, keepdim?: boolean): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "amin",
        "signature": "amin(dim?: number, keepdim?: boolean): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "sumDim",
        "signature": "sumDim(dim: number, keepdim?: boolean, dtype?: DType): Tensor",
        "doc": "",
-       "torch": "sum_dim"
+       "torch": "sum_dim",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "mean",
        "signature": "mean(dim?: number, keepdim?: boolean, dtype?: DType): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "detach",
        "signature": "detach(): Tensor",
-       "doc": "그래프에서 뗀 사본. 버퍼는 **공유한다** — 값을 읽기만 할 자리에 쓴다.\n\n`logsumexp` 가 최대값을 뗄 때 쓴다. 안 떼면 `m` 이 자기 기울기를 갖고, 수식상\n그 몫이 정확히 상쇄되긴 하지만 부동소수에서는 큰 것끼리 빼는 꼴이 된다."
+       "doc": "그래프에서 뗀 사본. 버퍼는 **공유한다** — 값을 읽기만 할 자리에 쓴다.\n\n`logsumexp` 가 최대값을 뗄 때 쓴다. 안 떼면 `m` 이 자기 기울기를 갖고, 수식상\n그 몫이 정확히 상쇄되긴 하지만 부동소수에서는 큰 것끼리 빼는 꼴이 된다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "detach_",
        "signature": "detach_(): Tensor",
-       "doc": "**같은 텐서**에서 그래프를 끊는다. torch 의 `detach_` 다.\n\n`detach()` 는 새것을 내므로 원본은 여전히 위쪽에 붙어 있다 — 그 둘을 같은 것으로\n보면 `y.detach_()` 뒤에도 `y` 를 지나 역전파가 계속 흐른다."
+       "doc": "**같은 텐서**에서 그래프를 끊는다. torch 의 `detach_` 다.\n\n`detach()` 는 새것을 내므로 원본은 여전히 위쪽에 붙어 있다 — 그 둘을 같은 것으로\n보면 `y.detach_()` 뒤에도 `y` 를 지나 역전파가 계속 흐른다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "logsumexp",
        "signature": "logsumexp(dim?: number, keepdim?: boolean): Tensor",
-       "doc": "`log(Σ exp(x))`. **최대값을 빼고 계산한다** — 그냥 쓰면 x 가 89 를 넘는 순간\nfloat32 의 exp 가 inf 가 되고 그 뒤가 전부 inf 다.\n\n조립으로 둔다. 역방향은 이미 있는 연산들의 미분에서 나오므로 새 미분식을 손으로\n쓰지 않는다 — 그 자리가 이번 주에 가장 자주 틀린 자리였다."
+       "doc": "`log(Σ exp(x))`. **최대값을 빼고 계산한다** — 그냥 쓰면 x 가 89 를 넘는 순간\nfloat32 의 exp 가 inf 가 되고 그 뒤가 전부 inf 다.\n\n조립으로 둔다. 역방향은 이미 있는 연산들의 미분에서 나오므로 새 미분식을 손으로\n쓰지 않는다 — 그 자리가 이번 주에 가장 자주 틀린 자리였다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "logcumsumexp",
        "signature": "logcumsumexp(dim: number): Tensor",
-       "doc": "누적 `logsumexp`. **넘치지 않게** 센다 — 축의 최대값을 빼고 더한 뒤 되돌린다.\n\n`logsumexp` 와 같은 자리로 조립한다. 최대값을 떼 두었으므로 역방향은 조립에서\n그대로 나오고, 손으로 쓴 미분식이 하나 줄었다."
+       "doc": "누적 `logsumexp`. **넘치지 않게** 센다 — 축의 최대값을 빼고 더한 뒤 되돌린다.\n\n`logsumexp` 와 같은 자리로 조립한다. 최대값을 떼 두었으므로 역방향은 조립에서\n그대로 나오고, 손으로 쓴 미분식이 하나 줄었다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "mvlgamma",
        "signature": "mvlgamma(p: number): Tensor",
-       "doc": "다변량 로그감마. `log Γ_p(x) = p(p−1)/4 · log π + Σᵢ log Γ(x + (1−i)/2)`.\n\n`p` 가 1 이면 `lgamma` 와 같다 — 그 값으로만 물으면 합이 도는지 안 보인다."
+       "doc": "다변량 로그감마. `log Γ_p(x) = p(p−1)/4 · log π + Σᵢ log Γ(x + (1−i)/2)`.\n\n`p` 가 1 이면 `lgamma` 와 같다 — 그 값으로만 물으면 합이 도는지 안 보인다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "frexp",
        "signature": "frexp(): { mantissa: Tensor; exponent: Tensor; }",
-       "doc": "가수와 지수. `x = 가수 × 2^지수` 이고 가수는 [0.5, 1) 이다.\n\ntorch 는 지수를 int32 로 내는데 여기 저장은 f32 하나뿐이라 값으로만 맞춘다."
+       "doc": "가수와 지수. `x = 가수 × 2^지수` 이고 가수는 [0.5, 1) 이다.\n\ntorch 는 지수를 int32 로 내는데 여기 저장은 f32 하나뿐이라 값으로만 맞춘다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "fillWith",
        "signature": "fillWith(value: number): Tensor",
        "doc": "같은 꼴을 한 값으로 채운 **새** 텐서. **제자리가 아니다** — torch 의 `fill` 이\n그렇고, 이름이 한 글자 다른 `fill_` 과 하는 일이 다르다(실측).",
-       "torch": "fill_with"
+       "torch": "fill_with",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "dist",
        "signature": "dist(other: Tensor, p?: number): Tensor",
-       "doc": "`‖x − y‖_p`. 조립이라 역방향이 저절로 따라온다.\n\n**`p` 를 오래 안 받았다** — 언제나 L2 였고, `dist(a, b, 3)` 이 그럴듯한 크기의\n다른 값을 냈다. 코어에도 같은 자리가 있었고 둘 다 값 대조로만 드러났다."
+       "doc": "`‖x − y‖_p`. 조립이라 역방향이 저절로 따라온다.\n\n**`p` 를 오래 안 받았다** — 언제나 L2 였고, `dist(a, b, 3)` 이 그럴듯한 크기의\n다른 값을 냈다. 코어에도 같은 자리가 있었고 둘 다 값 대조로만 드러났다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "nansum",
        "signature": "nansum(dim?: number, keepdim?: boolean, dtype?: DType): Tensor",
-       "doc": "NaN 을 0 으로 보고 더한다. NaN 자리로는 기울기가 안 간다."
+       "doc": "NaN 을 0 으로 보고 더한다. NaN 자리로는 기울기가 안 간다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "nanmean",
        "signature": "nanmean(dim?: number, keepdim?: boolean): Tensor",
-       "doc": "NaN 을 빼고 평균낸다. **개수도 NaN 을 빼고 센다** — 그것이 mean 과 다른 점이다."
+       "doc": "NaN 을 빼고 평균낸다. **개수도 NaN 을 빼고 센다** — 그것이 mean 과 다른 점이다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "unsqueeze",
        "signature": "unsqueeze(dim: number): Tensor",
-       "doc": "크기 1 인 축을 끼워 넣는다."
+       "doc": "크기 1 인 축을 끼워 넣는다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "squeezeAll",
        "signature": "squeezeAll(): Tensor",
        "doc": "크기 1 인 축을 **전부** 뺀다. 인자 없는 `squeeze()` 다.",
-       "torch": "squeeze_all"
+       "torch": "squeeze_all",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "clone",
        "signature": "clone(): Tensor",
-       "doc": "값이 같은 새 텐서. 그래프는 이어진다 — 그것이 `detach` 와 다른 점이다."
+       "doc": "값이 같은 새 텐서. 그래프는 이어진다 — 그것이 `detach` 와 다른 점이다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "cat",
        "signature": "static cat(parts: readonly Tensor[], dim?: number): Tensor",
-       "doc": "축 하나를 따라 이어 붙인다.\n\n**새 커널이 없다.** 각자를 상대 크기만큼 덧대고 더하면 된다 — 덧댄 자리는 0 이고\n겹치지 않으므로 합이 곧 이어 붙인 것이다. 역방향도 `pad` 의 것이 그대로 쓰인다.\n메모리를 두 배 쓰지만, 손으로 쓴 역방향 하나를 안 만드는 값이 더 크다."
+       "doc": "축 하나를 따라 이어 붙인다.\n\n**새 커널이 없다.** 각자를 상대 크기만큼 덧대고 더하면 된다 — 덧댄 자리는 0 이고\n겹치지 않으므로 합이 곧 이어 붙인 것이다. 역방향도 `pad` 의 것이 그대로 쓰인다.\n메모리를 두 배 쓰지만, 손으로 쓴 역방향 하나를 안 만드는 값이 더 크다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "stack",
        "signature": "static stack(parts: readonly Tensor[], dim?: number): Tensor",
-       "doc": "새 축을 만들어 쌓는다. `cat` 에 축을 하나 끼워 넣은 것과 같다."
+       "doc": "새 축을 만들어 쌓는다. `cat` 에 축을 하나 끼워 넣은 것과 같다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "variance",
        "signature": "variance(correction?: number): Tensor",
-       "doc": "분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면\n값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다."
+       "doc": "분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면\n값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "std",
        "signature": "std(correction?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "squeeze",
        "signature": "squeeze(dim: number): Tensor",
-       "doc": "크기 1 인 축을 뺀다."
+       "doc": "크기 1 인 축을 뺀다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
       },
       {
        "name": "reshape",
        "signature": "reshape(want: readonly number[]): Tensor",
-       "doc": "같은 버퍼를 다른 모양으로 본다. 원소 순서가 안 바뀌므로 커널이 필요 없다.\n\n**`-1` 은 \"나머지\" 다.** torch 코드가 `x.reshape(-1)`·`x.view(n, -1)` 로 늘 쓰는\n꼴인데 여기 없었다 — 곱해서 크기를 맞추는 검사에 걸려 `shape '[-1]' is invalid`\n로 멈췄다. 한 자리에만 쓸 수 있고, 나머지로 나누어떨어져야 한다."
+       "doc": "같은 버퍼를 다른 모양으로 본다. 원소 순서가 안 바뀌므로 커널이 필요 없다.\n\n**`-1` 은 \"나머지\" 다.** torch 코드가 `x.reshape(-1)`·`x.view(n, -1)` 로 늘 쓰는\n꼴인데 여기 없었다 — 곱해서 크기를 맞추는 검사에 걸려 `shape '[-1]' is invalid`\n로 멈췄다. 한 자리에만 쓸 수 있고, 나머지로 나누어떨어져야 한다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "ravel",
        "signature": "ravel(): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "unflatten",
        "signature": "unflatten(dim: number, sizes: readonly number[]): Tensor",
-       "doc": "축 하나를 여러 축으로 편다."
+       "doc": "축 하나를 여러 축으로 편다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "atleast2d",
        "signature": "atleast2d(): Tensor",
-       "doc": "적어도 2차원으로. 이미 2차원 이상이면 그대로."
+       "doc": "적어도 2차원으로. 이미 2차원 이상이면 그대로.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "expand",
        "signature": "expand(...sizes: number[]): Tensor",
-       "doc": "크기 1 인 축을 늘린다. `-1` 은 \"그대로 두라\"는 뜻이다.\n\n앞에 축을 더 붙일 수도 있다 — 그 축들은 걸음이 0 이라 **복제하지 않는다.**"
+       "doc": "크기 1 인 축을 늘린다. `-1` 은 \"그대로 두라\"는 뜻이다.\n\n앞에 축을 더 붙일 수도 있다 — 그 축들은 걸음이 0 이라 **복제하지 않는다.**",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "repeat",
        "signature": "repeat(...times: number[]): Tensor",
-       "doc": "축마다 정수 배로 되풀이한다. `expand` 와 달리 실제로 여러 벌이 된다."
+       "doc": "축마다 정수 배로 되풀이한다. `expand` 와 달리 실제로 여러 벌이 된다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "swapaxes",
        "signature": "swapaxes(a: number, b: number): Tensor",
-       "doc": "축 둘을 맞바꾼다. `swapdims` 와 같다 — torch 가 이름을 둘 다 갖는다."
+       "doc": "축 둘을 맞바꾼다. `swapdims` 와 같다 — torch 가 이름을 둘 다 갖는다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "select",
        "signature": "select(dim: number, index: number): Tensor",
-       "doc": "축 하나에서 한 자리를 고르고 그 축을 없앤다."
+       "doc": "축 하나에서 한 자리를 고르고 그 축을 없앤다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "diagonal",
        "signature": "diagonal(offset?: number, dim1?: number, dim2?: number): Tensor",
-       "doc": "대각선. `offset` 이 양수면 위쪽, 음수면 아래쪽 대각선이다.\n\n**어느 두 축을 볼지가 갈린다.** `torch.diagonal` 은 앞의 두 축(`0, 1`)이고\n`torch.linalg.diagonal` 은 마지막 두 축(`-2, -1`)이다 — 3 차원을 주면 `(2,3,4)`\n가 각각 `(4,2)` 와 `(2,3)` 으로 갈린다. 이름이 비슷해 같은 것으로 읽기 쉬운데\n모양부터 다르다. 그래서 축을 인자로 받는다.\n\n**뽑은 축은 뒤로 간다.** 남은 축이 앞이고 대각선이 마지막이다 — torch 가 그렇다."
+       "doc": "대각선. `offset` 이 양수면 위쪽, 음수면 아래쪽 대각선이다.\n\n**어느 두 축을 볼지가 갈린다.** `torch.diagonal` 은 앞의 두 축(`0, 1`)이고\n`torch.linalg.diagonal` 은 마지막 두 축(`-2, -1`)이다 — 3 차원을 주면 `(2,3,4)`\n가 각각 `(4,2)` 와 `(2,3)` 으로 갈린다. 이름이 비슷해 같은 것으로 읽기 쉬운데\n모양부터 다르다. 그래서 축을 인자로 받는다.\n\n**뽑은 축은 뒤로 간다.** 남은 축이 앞이고 대각선이 마지막이다 — torch 가 그렇다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "diagflat",
@@ -544,115 +827,203 @@
          "tag": "param",
          "text": "offset 어느 대각선인가. 0 이 아니면 **행렬이 그만큼 커진다** — `n+|offset|` 변이고, 그래서 커널을 다시 부르는 대신 큰 판에 넣고 옮긴다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "flip",
        "signature": "flip(dim: number): Tensor",
-       "doc": "축 하나를 거꾸로."
+       "doc": "축 하나를 거꾸로.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "fliplr",
        "signature": "fliplr(): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "flipud",
        "signature": "flipud(): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "rot90",
        "signature": "rot90(k?: number): Tensor",
-       "doc": "2차원 평면 안에서 90° 씩 돌린다.\n\n`k=1` 이면 `out[i][j] = in[j][C-1-i]` 다 — 축을 바꾸면서 한쪽을 뒤집는 것이라,\n규칙 표로 그대로 적힌다."
+       "doc": "2차원 평면 안에서 90° 씩 돌린다.\n\n`k=1` 이면 `out[i][j] = in[j][C-1-i]` 다 — 축을 바꾸면서 한쪽을 뒤집는 것이라,\n규칙 표로 그대로 적힌다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "unfold",
        "signature": "unfold(dim: number, size: number, step: number): Tensor",
-       "doc": "미끄러지는 창. 걸음이 창 크기보다 작으면 창끼리 겹친다.\n\n**겹치면 역방향에서 쌓인다** — 길이 5 를 `unfold(0, 3, 1)` 로 펴면 기울기가\n`[1,2,3,2,1]` 이다. 안 더하면 전부 1 이 되고, 값 검사만으로는 안 걸린다."
+       "doc": "미끄러지는 창. 걸음이 창 크기보다 작으면 창끼리 겹친다.\n\n**겹치면 역방향에서 쌓인다** — 길이 5 를 `unfold(0, 3, 1)` 로 펴면 기울기가\n`[1,2,3,2,1]` 이다. 안 더하면 전부 1 이 되고, 값 검사만으로는 안 걸린다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "split",
        "signature": "split(dim: number, parts: number): Tensor[]",
-       "doc": "축 하나를 같은 크기 조각으로 나눈다. 조각마다 새 텐서다."
+       "doc": "축 하나를 같은 크기 조각으로 나눈다. 조각마다 새 텐서다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "tensorSplit",
        "signature": "tensorSplit(sections: number | readonly number[], dim?: number): Tensor[]",
        "doc": "**나머지를 앞에서부터 나눠 갖는다.** 10 을 4 로 쪼개면 3·3·2·2 다(실측).\n\n`chunk` 와 다르다 — 그쪽은 앞을 크게 채우고 마지막이 남는 것을 받는다. 나눠\n떨어지는 크기로만 재면 두 함수가 같아 보인다.",
-       "torch": "tensor_split"
+       "torch": "tensor_split",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "splitWithSizes",
        "signature": "splitWithSizes(sizes: readonly number[], dim?: number): Tensor[]",
        "doc": "조각 **크기 목록**으로 쪼갠다. `tensorSplit` 은 자르는 **자리**를 받는다.",
-       "torch": "split_with_sizes"
+       "torch": "split_with_sizes",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "hsplit",
        "signature": "hsplit(parts: number): Tensor[]",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "vsplit",
        "signature": "vsplit(parts: number): Tensor[]",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "movedim",
        "signature": "movedim(src: number, dst: number): Tensor",
-       "doc": "축을 원하는 자리로 옮긴다. `swapaxes` 와 달리 나머지 순서를 지킨다."
+       "doc": "축을 원하는 자리로 옮긴다. `swapaxes` 와 달리 나머지 순서를 지킨다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "permute",
        "signature": "permute(order: readonly number[]): Tensor",
-       "doc": "축 순서를 통째로 바꾼다."
+       "doc": "축 순서를 통째로 바꾼다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "narrow",
        "signature": "narrow(dim: number, start: number, length: number): Tensor",
-       "doc": "축 하나에서 `start` 부터 `length` 개만."
+       "doc": "축 하나에서 `start` 부터 `length` 개만.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "roll",
        "signature": "roll(shift: number, dim?: number): Tensor",
-       "doc": "축 하나를 자리이동. **끝에서 빠진 것이 앞으로 돌아온다.**\n\n`out[i] = in[(i - shift) mod n]` 이라, 규칙 표의 `mod` 에 자리이동을 얹으면 된다."
+       "doc": "축 하나를 자리이동. **끝에서 빠진 것이 앞으로 돌아온다.**\n\n`out[i] = in[(i - shift) mod n]` 이라, 규칙 표의 `mod` 에 자리이동을 얹으면 된다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "tile",
        "signature": "tile(...times: number[]): Tensor",
-       "doc": "`repeat` 과 같은 일이되 torch 가 이름을 둘 다 갖는다."
+       "doc": "`repeat` 과 같은 일이되 torch 가 이름을 둘 다 갖는다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "splitSize",
        "signature": "splitSize(dim: number, size: number): Tensor[]",
        "doc": "축 하나를 크기로 나눈다. `split` 은 조각 **크기**, `chunk` 는 조각 **수**다.",
-       "torch": "split_size"
+       "torch": "split_size",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "chunk",
        "signature": "chunk(parts: number, dim?: number): Tensor[]",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "unbind",
        "signature": "unbind(dim?: number): Tensor[]",
-       "doc": "축 하나를 따라 낱개로 뜯는다. 그 축이 사라진다."
+       "doc": "축 하나를 따라 낱개로 뜯는다. 그 축이 사라진다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "tril",
        "signature": "tril(diagonal?: number): Tensor",
-       "doc": "아래 삼각. `diagonal` 위쪽을 0 으로 만든다."
+       "doc": "아래 삼각. `diagonal` 위쪽을 0 으로 만든다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "triu",
        "signature": "triu(diagonal?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "trace",
        "signature": "trace(): Tensor",
-       "doc": "대각선의 합."
+       "doc": "대각선의 합.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "diag",
@@ -663,50 +1034,86 @@
          "tag": "param",
          "text": "diagonal 어느 대각선인가. 양수는 위쪽, 음수는 아래쪽."
         }
-       ]
+       ],
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "cumsum",
        "signature": "cumsum(dim?: number, dtype?: DType): Tensor",
-       "doc": "축 하나를 누적한다."
+       "doc": "축 하나를 누적한다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "cumprod",
        "signature": "cumprod(dim?: number, dtype?: DType): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "gather",
        "signature": "gather(dim: number, index: Tensor): Tensor",
-       "doc": "축 하나를 색인 텐서가 가리키는 대로 고른다. 색인은 float32 에 담겨 온다."
+       "doc": "축 하나를 색인 텐서가 가리키는 대로 고른다. 색인은 float32 에 담겨 온다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "at",
        "signature": "at(index: AtIndex | readonly AtIndex[]): Tensor",
-       "doc": "대괄호 자리. `x[...]` 를 옮겨 적는 문 하나다 — 문법과 이유는 `indexing.ts`.\n\n```ts\nx.at(0)                     // x[0]           축이 사라진다\nx.at([null, 1])             // x[:, 1]        null 이 파이썬의 `:` 다\nx.at(slice(1, 3))           // x[1:3]         축이 남는다\nx.at([0, slice(1, 3)])      // x[0, 1:3]\nx.at(slice(null, null, 2))  // x[::2]\nx.at([[0, 2]])              // x[[0, 2]]      대괄호 둘 — numpy 와 같은 모양\nx.at(idx)                   // x[idx]         int64 텐서\n```\n\n**맨 바깥 배열은 언제나 축 목록이다.** 적게 주면 남은 축은 통째로 온다.\n\n## 값은 여기서 안 만든다\n\n전부 있는 메서드로 넘긴다 — 정수는 `select`, 이어진 구간은 `narrow`, 걸음이\n있거나 번호표면 `indexSelect`. 새 커널이 없으므로 **골든이 이미 그 값들을\n지키고 있다.** 이 메서드가 지는 책임은 값이 아니라 **어느 문으로 보내는가**다.\n\n## 참·거짓 마스크는 안 받는다\n\n`x[mask]` 는 `await x.maskedSelect(mask)` 로 남는다. 결과의 길이가 **값에 달려\n있어서** GPU 에서 한 번 읽어야 알 수 있고, 그것 하나 때문에 `at()` 을 비동기로\n만들면 나머지 모든 쓰임이 이유 없이 `await` 를 달게 된다. `unique`·`nonzero`·\n`bincount` 가 비동기인 것과 같은 이유이고, 같은 자리에 두는 편이 낫다."
+       "doc": "대괄호 자리. `x[...]` 를 옮겨 적는 문 하나다 — 문법과 이유는 `indexing.ts`.\n\n```ts\nx.at(0)                     // x[0]           축이 사라진다\nx.at([null, 1])             // x[:, 1]        null 이 파이썬의 `:` 다\nx.at(slice(1, 3))           // x[1:3]         축이 남는다\nx.at([0, slice(1, 3)])      // x[0, 1:3]\nx.at(slice(null, null, 2))  // x[::2]\nx.at([[0, 2]])              // x[[0, 2]]      대괄호 둘 — numpy 와 같은 모양\nx.at(idx)                   // x[idx]         int64 텐서\n```\n\n**맨 바깥 배열은 언제나 축 목록이다.** 적게 주면 남은 축은 통째로 온다.\n\n## 값은 여기서 안 만든다\n\n전부 있는 메서드로 넘긴다 — 정수는 `select`, 이어진 구간은 `narrow`, 걸음이\n있거나 번호표면 `indexSelect`. 새 커널이 없으므로 **골든이 이미 그 값들을\n지키고 있다.** 이 메서드가 지는 책임은 값이 아니라 **어느 문으로 보내는가**다.\n\n## 참·거짓 마스크는 안 받는다\n\n`x[mask]` 는 `await x.maskedSelect(mask)` 로 남는다. 결과의 길이가 **값에 달려\n있어서** GPU 에서 한 번 읽어야 알 수 있고, 그것 하나 때문에 `at()` 을 비동기로\n만들면 나머지 모든 쓰임이 이유 없이 `await` 를 달게 된다. `unique`·`nonzero`·\n`bincount` 가 비동기인 것과 같은 이유이고, 같은 자리에 두는 편이 낫다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "searchSorted",
        "signature": "searchSorted(values: Tensor, right?: boolean): Tensor",
        "doc": "**정렬된** 경계(`this`) 안에서 `values` 의 각 값이 들어갈 자리.\n\n`torch.searchsorted(sorted_sequence, values)` 이고, 받는 쪽이 경계라 여기서는\n경계의 메서드다. 답은 `int64` 이고 모양은 `values` 를 따른다.\n\n**동점을 어느 쪽으로 보낼지가 이 함수의 절반이다.** 기본은 왼쪽 — 같은 값이\n이미 있으면 그 **앞**에 선다(나보다 작은 것의 수). `right` 를 주면 뒤에 선다.\n파이썬 쪽은 이것을 `right`(참거짓)와 `side`(글자) **두 이름으로** 받는데,\n그 둘을 맞춰 보는 일은 거기서 한다 — 여기는 하나만 안다.\n\n정렬돼 있는지는 **안 확인한다.** torch 도 안 한다(확인하려면 O(n) 을 더 도는데,\n그 값을 치를 자리면 애초에 이 함수를 안 쓴다). 안 정렬된 것을 주면 답이\n조용히 뜻을 잃는 것이 아니라 — 이진 탐색이 그냥 어떤 자리를 낸다.",
-       "torch": "search_sorted"
+       "torch": "search_sorted",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "bucketize",
        "signature": "bucketize(boundaries: Tensor, right?: boolean): Tensor",
-       "doc": "`searchSorted` 와 **받는 쪽이 뒤집힌 것**. 그것이 두 이름의 차이 전부다.\n\ntorch 가 `bucketize(input, boundaries)` 로 값 쪽을 먼저 받아서, 여기서도 값이\n수신자다. 계산은 저쪽 하나뿐이다 — 두 벌로 두면 한쪽만 고쳐진다."
+       "doc": "`searchSorted` 와 **받는 쪽이 뒤집힌 것**. 그것이 두 이름의 차이 전부다.\n\ntorch 가 `bucketize(input, boundaries)` 로 값 쪽을 먼저 받아서, 여기서도 값이\n수신자다. 계산은 저쪽 하나뿐이다 — 두 벌로 두면 한쪽만 고쳐진다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "indexSelect",
        "signature": "indexSelect(dim: number, index: Tensor): Tensor",
        "doc": "축 하나를 색인 **벡터**가 고른다. `gather` 와 달리 색인이 자리마다 다르지 않다.",
-       "torch": "index_select"
+       "torch": "index_select",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "repeatInterleave",
        "signature": "repeatInterleave(times: number, dim?: number): Tensor",
        "doc": "자리마다 되풀이한다. `[a,b]` 를 2 번씩이면 `[a,a,b,b]` 다 — `tile` 과 다르다.",
-       "torch": "repeat_interleave"
+       "torch": "repeat_interleave",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "diff",
@@ -721,277 +1128,481 @@
          "tag": "param",
          "text": "append 뒤에 이어 붙일 것."
         }
-       ]
+       ],
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "maskedFill",
        "signature": "maskedFill(mask: Tensor, value: number): Tensor",
        "doc": "참인 자리를 값으로 덮는다. **덮은 자리로는 기울기가 안 간다.**",
-       "torch": "masked_fill"
+       "torch": "masked_fill",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "matrixPower",
        "signature": "matrixPower(k: number): Tensor",
        "doc": "정수 거듭제곱. 지금은 곱셈을 되풀이한다 — 지수가 작을 때만 쓸 것이다.",
-       "torch": "matrix_power"
+       "torch": "matrix_power",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "where",
        "signature": "where(cond: Tensor, other: Tensor): Tensor",
-       "doc": "조건 자리마다 이쪽 아니면 저쪽. torch 의 메서드 형태는 `x.where(조건, 다른쪽)` 이다."
+       "doc": "조건 자리마다 이쪽 아니면 저쪽. torch 의 메서드 형태는 `x.where(조건, 다른쪽)` 이다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "prod",
        "signature": "prod(dim?: number, keepdim?: boolean, dtype?: DType): Tensor",
-       "doc": "전부 곱한다."
+       "doc": "전부 곱한다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "norm",
        "signature": "norm(): Tensor",
-       "doc": "L2 노름."
+       "doc": "L2 노름.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "dot",
        "signature": "dot(other: Tensor): Tensor",
-       "doc": "두 벡터의 안쪽 곱."
+       "doc": "두 벡터의 안쪽 곱.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "outer",
        "signature": "outer(other: Tensor): Tensor",
-       "doc": "두 벡터의 바깥 곱. 브로드캐스팅으로 나온다 — 새 커널이 필요 없다."
+       "doc": "두 벡터의 바깥 곱. 브로드캐스팅으로 나온다 — 새 커널이 필요 없다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "clamp",
        "signature": "clamp(low: number, high: number): Tensor",
-       "doc": "위아래로 자른다.\n\n**`maximum`·`minimum` 위에 얹으면 안 된다.** 그 둘은 동점에서 기울기를 반씩\n나누는데(torch 가 그렇다) `clamp` 는 경계에서 온전히 흘린다. 얹어 두었더니\n`x` 가 정확히 경계에 앉은 자리에서만 기울기가 절반이 됐다."
+       "doc": "위아래로 자른다.\n\n**`maximum`·`minimum` 위에 얹으면 안 된다.** 그 둘은 동점에서 기울기를 반씩\n나누는데(torch 가 그렇다) `clamp` 는 경계에서 온전히 흘린다. 얹어 두었더니\n`x` 가 정확히 경계에 앉은 자리에서만 기울기가 절반이 됐다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "powScalar",
        "signature": "powScalar(k: number): Tensor",
        "doc": "상수 지수.\n\n**정수 지수는 곱셈으로 간다.** WGSL 의 `pow(x, y)` 는 `exp2(y·log2(x))` 라 밑이\n음수면 답이 없고, 실제로 `|x|` 를 쓴 것 같은 값이 나온다. 짝수 지수에서는 값이\n우연히 맞아서 `method::pow` 는 통과했고, `grad::pow2` 에서 부호가 뒤집힌 채로\n잡혔다 — 값은 맞고 기울기만 틀리는 그 종류다.",
-       "torch": "pow_scalar"
+       "torch": "pow_scalar",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "softmax",
        "signature": "softmax(dim?: number): Tensor",
-       "doc": "`exp(x) / Σ exp(x)`. **최대값을 빼고 계산한다** — 안 그러면 큰 값에서 넘친다."
+       "doc": "`exp(x) / Σ exp(x)`. **최대값을 빼고 계산한다** — 안 그러면 큰 값에서 넘친다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "logSoftmax",
        "signature": "logSoftmax(dim?: number): Tensor",
        "doc": "`log(softmax(x))`. **`softmax` 를 구해 로그를 취하지 않는다** — 작은 확률에서\n0 이 되어 로그가 -inf 가 된다. 빼기로 바로 쓰면 그 자리가 없다.",
-       "torch": "log_softmax"
+       "torch": "log_softmax",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "argmax",
        "signature": "argmax(dim?: number, keepdim?: boolean): Tensor",
-       "doc": "최대·최소가 **어디에** 있는가. 동점이면 먼저 나온 자리다."
+       "doc": "최대·최소가 **어디에** 있는가. 동점이면 먼저 나온 자리다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "argmin",
        "signature": "argmin(dim?: number, keepdim?: boolean): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "max",
        "signature": "max(dim?: number, keepdim?: boolean): { values: Tensor; indices: Tensor; }",
-       "doc": "값과 번호를 함께. torch 의 `x.max(dim)` 이다.\n\n`amax` 와 `argmax` 로 따로 부르면 되기는 하는데, torch 코드가 쓰는 모양은\n이쪽이고 **둘이 같은 자리를 가리키는지**가 여기서만 확인된다. `amax` 는 동점을\n고르게 나누고 `argmax` 는 먼저 나온 자리 하나를 고르는데, 값을 번호로 다시\n뽑아 오면 나누는 일이 없다 — torch 의 `max(dim)` 이 그쪽이다."
+       "doc": "값과 번호를 함께. torch 의 `x.max(dim)` 이다.\n\n`amax` 와 `argmax` 로 따로 부르면 되기는 하는데, torch 코드가 쓰는 모양은\n이쪽이고 **둘이 같은 자리를 가리키는지**가 여기서만 확인된다. `amax` 는 동점을\n고르게 나누고 `argmax` 는 먼저 나온 자리 하나를 고르는데, 값을 번호로 다시\n뽑아 오면 나누는 일이 없다 — torch 의 `max(dim)` 이 그쪽이다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "min",
        "signature": "min(dim?: number, keepdim?: boolean): { values: Tensor; indices: Tensor; }",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "countNonzero",
        "signature": "countNonzero(dim?: number): Tensor",
        "doc": "0 이 아닌 것의 개수. **축을 받는다** — 전체 축약만 되던 자리다.\n\n축이 없으면 `x.countNonzero(1)` 이 인자를 조용히 버리고 스칼라를 내는데,\n그 스칼라는 어디에나 브로드캐스팅된다.",
-       "torch": "count_nonzero"
+       "torch": "count_nonzero",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "all",
        "signature": "all(dim?: number, keepdim?: boolean): Tensor",
-       "doc": "전부 참인가 / 하나라도 참인가. 0/1 로 답한다."
+       "doc": "전부 참인가 / 하나라도 참인가. 0/1 로 답한다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "any",
        "signature": "any(dim?: number, keepdim?: boolean): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "constantPadNd",
        "signature": "constantPadNd(pad: readonly number[], value?: number): Tensor",
        "doc": "`padND(mode=\"constant\")` 의 날 이름. **마지막 축부터 (앞, 뒤) 순이다.**\n\n같은 계산에 이름이 둘인 자리라 **여기서 계산하지 않고** 넘긴다 — 한쪽만\n맞는 것이 이 저장소에서 세 번 나왔다.",
-       "torch": "constant_pad_nd"
+       "torch": "constant_pad_nd",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "fakeQuantizePerTensorAffine",
        "signature": "fakeQuantizePerTensorAffine(scale: number, zeroPoint: number, quantMin: number, quantMax: number): Tensor",
        "doc": "양자화를 **실수 위에서 흉내 낸다** — `clamp(round(x/s) + z)` 뒤 되돌린다.\n\n**양자화 dtype 이 필요 없다.** 이름 때문에 오래 거절 쪽으로 세어 두었는데\n재보니 torch 도 실수 텐서를 받아 실수를 낸다.\n\n**기울기는 범위 안에서만 1 이다**(실측). 반올림은 계단이라 도함수가 거의\n어디서나 0 인데, 그대로 두면 이 층 아래로 학습이 아예 안 간다 — torch 는 그\n자리를 \"곧바로 통과\" 로 둔다.",
-       "torch": "fake_quantize_per_tensor_affine"
+       "torch": "fake_quantize_per_tensor_affine",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "fakeQuantizePerChannelAffine",
        "signature": "fakeQuantizePerChannelAffine(scale: Tensor, zeroPoint: Tensor, axis: number, quantMin: number, quantMax: number): Tensor",
        "doc": "칸마다 다른 눈금으로. 축 하나를 따라 눈금이 바뀐다.",
-       "torch": "fake_quantize_per_channel_affine"
+       "torch": "fake_quantize_per_channel_affine",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "dequantize",
        "signature": "dequantize(): Tensor",
-       "doc": "양자화된 텐서를 실수로. **우리에게는 언제나 항등이다.**\n\n\"지금 통과하는 항등\" 과 다른 이유는 양자화 dtype 이 **영원히 없다**는 것이\n이미 정해져 있어서다 — 받을 수 있는 입력이 실수뿐이고 실수에서 torch 도\n항등이다(실측). **미분되지 않는다** — torch 가 `backward` 에서 멈춘다."
+       "doc": "양자화된 텐서를 실수로. **우리에게는 언제나 항등이다.**\n\n\"지금 통과하는 항등\" 과 다른 이유는 양자화 dtype 이 **영원히 없다**는 것이\n이미 정해져 있어서다 — 받을 수 있는 입력이 실수뿐이고 실수에서 torch 도\n항등이다(실측). **미분되지 않는다** — torch 가 `backward` 에서 멈춘다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "pad",
        "signature": "pad(dim: number, before: number, after: number, value?: number): Tensor",
-       "doc": "축 하나의 앞뒤에 상수를 덧댄다. 여러 축이면 축마다 부른다."
+       "doc": "축 하나의 앞뒤에 상수를 덧댄다. 여러 축이면 축마다 부른다.",
+       "section": {
+        "ko": "모양",
+        "en": "Shape"
+       }
       },
       {
        "name": "unfoldIm2col",
        "signature": "unfoldIm2col(kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor",
        "doc": "창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`.",
-       "torch": "unfold_im2col"
+       "torch": "unfold_im2col",
+       "section": {
+        "ko": "창 펴기",
+        "en": "Windows"
+       }
       },
       {
        "name": "fold",
        "signature": "fold(outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor",
-       "doc": "편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다."
+       "doc": "편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다.",
+       "section": {
+        "ko": "창 펴기",
+        "en": "Windows"
+       }
       },
       {
        "name": "bilinear",
        "signature": "bilinear(other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor",
-       "doc": "`y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. 가중치가 **세 축**이다.\n\n`einsum` 을 안 부른다 — 그쪽이 이 파일을 들여오므로 서로 물게 된다. 두 걸음으로\n나누면 이미 있는 것들로 적힌다: 먼저 `x₂` 를 `W` 에 태워 `(B, O, I)` 를 만들고,\n그 다음 `x₁` 과 마지막 축에서 접는다."
+       "doc": "`y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. 가중치가 **세 축**이다.\n\n`einsum` 을 안 부른다 — 그쪽이 이 파일을 들여오므로 서로 물게 된다. 두 걸음으로\n나누면 이미 있는 것들로 적힌다: 먼저 `x₂` 를 `W` 에 태워 `(B, O, I)` 를 만들고,\n그 다음 `x₁` 과 마지막 축에서 접는다.",
+       "section": {
+        "ko": "나머지 층이 쓰는 것들",
+        "en": "Used by the layers"
+       }
       },
       {
        "name": "localResponseNorm",
        "signature": "localResponseNorm(size: number, alpha?: number, beta?: number, k?: number): Tensor",
        "doc": "이웃 채널로 나눈다.\n\n**창이 한쪽으로 치우쳐 있다.** 채널 `c` 의 창은 `[c − n//2, c + n − 1 − n//2]`\n이고 `size=2` 면 `{c−1, c}` 다 — 가운데를 잡으면 값이 한 칸씩 밀리는데 크기가\n같아서 모양으로는 안 보인다.",
-       "torch": "local_response_norm"
+       "torch": "local_response_norm",
+       "section": {
+        "ko": "나머지 층이 쓰는 것들",
+        "en": "Used by the layers"
+       }
       },
       {
        "name": "uniform",
        "signature": "static uniform(shape: readonly number[], lower?: number, upper?: number): Tensor",
-       "doc": "0..1 사이 난수. `rrelu`·`gumbelSoftmax` 가 쓴다.\n\n`manualSeed` 가 잡는 그 씨앗을 쓴다 — 같은 씨앗에 같은 뽑기가 나와야 재현이 된다."
+       "doc": "0..1 사이 난수. `rrelu`·`gumbelSoftmax` 가 쓴다.\n\n`manualSeed` 가 잡는 그 씨앗을 쓴다 — 같은 씨앗에 같은 뽑기가 나와야 재현이 된다.",
+       "section": {
+        "ko": "나머지 층이 쓰는 것들",
+        "en": "Used by the layers"
+       }
       },
       {
        "name": "oneHotAlong",
        "signature": "oneHotAlong(indices: Tensor, dim: number): Tensor",
        "doc": "축 하나에서 가장 큰 자리만 1 인 표.\n\n**동점을 `eq` 로 가르면 안 된다** — 같은 값이 둘이면 1 이 둘 나오고, 그러면\n`gumbelSoftmax(hard=true)` 의 답이 one-hot 이 아니게 된다. 난수에서는 거의 안\n일어나지만 \"거의\" 는 보장이 아니다. 번호를 골라 그 자리에만 놓는다.",
-       "torch": "one_hot_along"
+       "torch": "one_hot_along",
+       "section": {
+        "ko": "나머지 층이 쓰는 것들",
+        "en": "Used by the layers"
+       }
       },
       {
        "name": "rrelu",
        "signature": "rrelu(lower?: number, upper?: number, training?: boolean): Tensor",
-       "doc": "음수 쪽 기울기를 뽑아 쓴다.\n\n**평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.\n난수가 끼는 것은 학습 모드뿐이다."
+       "doc": "음수 쪽 기울기를 뽑아 쓴다.\n\n**평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.\n난수가 끼는 것은 학습 모드뿐이다.",
+       "section": {
+        "ko": "나머지 층이 쓰는 것들",
+        "en": "Used by the layers"
+       }
       },
       {
        "name": "interpolateBilinear",
        "signature": "interpolateBilinear(outH: number, outW: number, alignCorners: boolean): Tensor",
        "doc": "겹선형 확대.\n\n**`alignCorners` 가 값을 바꾼다.** 참이면 양 끝을 못 박고 그 사이를 고르게\n나누고, 거짓이면 칸의 가운데를 기준으로 잰다. `UpsamplingBilinear2d` 는 참이고\n`Upsample(mode='bilinear')` 의 기본값은 거짓이라, 이름만 보고 별명으로 두면\n가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다.",
-       "torch": "interpolate_bilinear"
+       "torch": "interpolate_bilinear",
+       "section": {
+        "ko": "나머지 층이 쓰는 것들",
+        "en": "Used by the layers"
+       }
       },
       {
        "name": "pixelShuffle",
        "signature": "pixelShuffle(upscaleFactor: number): Tensor",
        "doc": "`(N, C·r², H, W)` → `(N, C, H·r, W·r)`. 채널을 잘라 공간에 심는다.\n\n**엇갈리는 순서가 값의 전부다.** 채널을 `(C, r, r)` 로 갈라 두 `r` 을 각각 `H` 와\n`W` 뒤에 끼워 넣는다. 순서를 바꾸면 모양은 같고 그림만 뒤섞인다.",
-       "torch": "pixel_shuffle"
+       "torch": "pixel_shuffle",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "pixelUnshuffle",
        "signature": "pixelUnshuffle(downscaleFactor: number): Tensor",
        "doc": "`pixelShuffle` 의 역. 공간을 잘라 채널에 쌓는다.",
-       "torch": "pixel_unshuffle"
+       "torch": "pixel_unshuffle",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "channelShuffle",
        "signature": "channelShuffle(groups: number): Tensor",
        "doc": "채널을 묶음으로 갈라 **엇갈려 다시 놓는다.**\n\n`[0,1,2,3]` 을 두 묶음으로 섞으면 `[0,2,1,3]` 이다 — 묶음별 합성곱 뒤에 정보가\n묶음 안에만 갇히는 것을 푸는 자리라, 엇갈리는 방향이 값의 전부다.",
-       "torch": "channel_shuffle"
+       "torch": "channel_shuffle",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "featureDropout",
        "signature": "featureDropout(p?: number, training?: boolean): Tensor",
        "doc": "**원소가 아니라 채널을 떨군다.**\n\n이름이 `dropout` 옆에 있어서 \"N 차원용\" 으로 읽기 쉬운데 하는 일이 다르다 —\n한 채널을 통째로 0 으로 만들거나 통째로 남긴다. 마스크를 `(N, C, 1, …)` 로 뽑아\n브로드캐스트하면 그 뜻이 그대로 적힌다.",
-       "torch": "feature_dropout"
+       "torch": "feature_dropout",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "alphaDropout",
        "signature": "alphaDropout(p?: number, training?: boolean, perChannel?: boolean): Tensor",
        "doc": "SELU 와 함께 쓰는 dropout. **떨군 자리에 0 을 안 넣는다.**\n\n음의 상수를 넣고 전체에 아핀 변환을 걸어 평균과 분산을 지킨다 — 0 을 넣으면\nSELU 의 자기정규화가 깨지는데, 값이 그럴듯해서 학습이 도는 동안은 안 보인다.",
-       "torch": "alpha_dropout"
+       "torch": "alpha_dropout",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "padND",
        "signature": "padND(padding: readonly number[], mode?: PadMode, value?: number): Tensor",
        "doc": "`F.pad` 의 자리 — **마지막 축부터 (앞, 뒤) 순으로** 받는다.\n\n**짝의 개수와 랭크가 맞물린다.** 짝이 하나면 2·3 차원, 둘이면 3·4 차원, 셋이면\n4·5 차원이라야 한다 — torch 가 그 밖을 거절한다. 아무 랭크나 받으면 축을 잘못\n잡고도 통과한다.\n\n상수는 이미 있는 커널이 짧아서 그쪽으로 보내고, 나머지 셋은 색인으로 간다.",
-       "torch": "pad_n_d"
+       "torch": "pad_n_d",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "leakyRelu",
        "signature": "leakyRelu(slope?: number): Tensor",
        "doc": "기울기가 완만한 왼쪽.\n\n`max(x, slope·x)` 로 두었더니 **x 가 정확히 0 인 자리에서 틀렸다.** 그 자리는 두\n항이 동점이고 `maximum` 은 동점에서 반씩 나누므로 (1 + slope)/2 가 나오는데,\ntorch 는 slope 를 준다 — `x > 0` 하나로 가르지 동점이라는 개념이 없다.",
-       "torch": "leaky_relu"
+       "torch": "leaky_relu",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "elu",
        "signature": "elu(alpha?: number): Tensor",
-       "doc": "음수 쪽이 지수로 눕는다. **α 를 받는다** — 표의 `elu` 는 α=1 로 구워져 있다.\n\n`nn.ELU(0.5)` 가 torch 에 있는 꼴이라, 인자 없는 판만 두면 그 줄이 멈춘다.\nα=1 에서는 표의 것과 값이 같으므로 **α 를 안 흔들면 둘을 못 가른다.**"
+       "doc": "음수 쪽이 지수로 눕는다. **α 를 받는다** — 표의 `elu` 는 α=1 로 구워져 있다.\n\n`nn.ELU(0.5)` 가 torch 에 있는 꼴이라, 인자 없는 판만 두면 그 줄이 멈춘다.\nα=1 에서는 표의 것과 값이 같으므로 **α 를 안 흔들면 둘을 못 가른다.**",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "geluTanh",
        "signature": "geluTanh(): Tensor",
        "doc": "`approximate=\"tanh\"` 쪽 GELU. 표의 `gelu` 는 **정확형**(erf)이다.\n\n최대차가 1e-4 언저리라 \"거의 같으니 하나로 둔다\" 가 통할 뻔한 자리다. torch 가\n둘을 나눠 둔 이유는 tanh 쪽이 빠르기 때문이지 같아서가 아니다.",
-       "torch": "gelu_tanh"
+       "torch": "gelu_tanh",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "celu",
        "signature": "celu(alpha?: number): Tensor",
-       "doc": "ELU 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.\n\nα=1 이면 ELU 와 같은 값이라, α 를 안 주고 재면 둘을 못 가른다."
+       "doc": "ELU 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.\n\nα=1 이면 ELU 와 같은 값이라, α 를 안 주고 재면 둘을 못 가른다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "hardshrink",
        "signature": "hardshrink(lambd?: number): Tensor",
-       "doc": "|x| > λ 면 그대로, 아니면 0. **경계는 0 쪽이다**(`>` 이지 `>=` 가 아니다)."
+       "doc": "|x| > λ 면 그대로, 아니면 0. **경계는 0 쪽이다**(`>` 이지 `>=` 가 아니다).",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "softshrink",
        "signature": "softshrink(lambd?: number): Tensor",
-       "doc": "λ 만큼 **원점 쪽으로 당긴다.** `hardshrink` 와 달리 값이 이어진다."
+       "doc": "λ 만큼 **원점 쪽으로 당긴다.** `hardshrink` 와 달리 값이 이어진다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "hardtanh",
        "signature": "hardtanh(minVal?: number, maxVal?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "softplus",
        "signature": "softplus(beta?: number, threshold?: number): Tensor",
-       "doc": "(1/β)·log(1+e^{βx}). **βx 가 threshold 를 넘으면 그냥 x 다.**\n\n그 갈래를 빼면 큰 입력에서 `exp` 가 넘치고, 그 뒤 기울기가 전부 NaN 이 된다."
+       "doc": "(1/β)·log(1+e^{βx}). **βx 가 threshold 를 넘으면 그냥 x 다.**\n\n그 갈래를 빼면 큰 입력에서 `exp` 가 넘치고, 그 뒤 기울기가 전부 NaN 이 된다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "threshold",
        "signature": "threshold(t: number, value: number): Tensor",
-       "doc": "x > t 면 그대로, 아니면 `value`. **경계는 value 쪽이다.**"
+       "doc": "x > t 면 그대로, 아니면 `value`. **경계는 value 쪽이다.**",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "prelu",
        "signature": "prelu(weight: Tensor): Tensor",
-       "doc": "음수 쪽 기울기가 **학습된다.**\n\n**정확히 0 은 음수 쪽이다.** 순방향은 어느 쪽으로 놓아도 0 이라 안 보이는데\n기울기는 갈린다 — torch 는 `x > 0` 일 때만 1 을 준다. 코어에서 `x < 0` 으로\n갈랐다가 그 한 점에서 최대차 3.75 를 냈다.\n\n가중치가 학습되므로 이항으로 엮는다 — 상수로 구우면 기울기가 안 흐른다."
+       "doc": "음수 쪽 기울기가 **학습된다.**\n\n**정확히 0 은 음수 쪽이다.** 순방향은 어느 쪽으로 놓아도 0 이라 안 보이는데\n기울기는 갈린다 — torch 는 `x > 0` 일 때만 1 을 준다. 코어에서 `x < 0` 으로\n갈랐다가 그 한 점에서 최대차 3.75 를 냈다.\n\n가중치가 학습되므로 이항으로 엮는다 — 상수로 구우면 기울기가 안 흐른다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "glu",
        "signature": "glu(dim?: number): Tensor",
-       "doc": "축을 반으로 갈라 `a · σ(b)`. 활성함수 중 유일하게 원소별이 아니다."
+       "doc": "축을 반으로 갈라 `a · σ(b)`. 활성함수 중 유일하게 원소별이 아니다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "softmin",
        "signature": "softmin(dim?: number): Tensor",
-       "doc": "softmax(−x). **부호를 빠뜨리면 softmax 와 같아진다** — 값으로만 갈린다."
+       "doc": "softmax(−x). **부호를 빠뜨리면 softmax 와 같아진다** — 값으로만 갈린다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "dropout",
        "signature": "dropout(p?: number, training?: boolean): Tensor",
-       "doc": "자리를 골라 떨구고 **살아남은 값을 `1/(1-p)` 로 키운다.**\n\n키우는 것이 요점이다 — 그래야 학습 때의 기댓값이 추론 때와 같고, 빼먹으면 두\n모드의 크기가 안 맞는다. `p=1` 은 따로 가른다: `1/(1-p)` 가 0 으로 나누기가 되어\nNaN 이 나오고, NaN 은 자기 자신과도 달라서 그 뒤로 아무 비교도 통과 못 한다.\n\n**부를 때마다 다른 자리를 떨군다.** 씨앗을 하나 올려 가며 쓴다 — 한 번 뽑아\n캐시하면 매 스텝 같은 자리가 죽고, 그것은 dropout 이 아니다."
+       "doc": "자리를 골라 떨구고 **살아남은 값을 `1/(1-p)` 로 키운다.**\n\n키우는 것이 요점이다 — 그래야 학습 때의 기댓값이 추론 때와 같고, 빼먹으면 두\n모드의 크기가 안 맞는다. `p=1` 은 따로 가른다: `1/(1-p)` 가 0 으로 나누기가 되어\nNaN 이 나오고, NaN 은 자기 자신과도 달라서 그 뒤로 아무 비교도 통과 못 한다.\n\n**부를 때마다 다른 자리를 떨군다.** 씨앗을 하나 올려 가며 쓴다 — 한 번 뽑아\n캐시하면 매 스텝 같은 자리가 죽고, 그것은 dropout 이 아니다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "dropoutSeed",
@@ -1002,334 +1613,574 @@
       {
        "name": "normalize",
        "signature": "normalize(dim?: number, eps?: number): Tensor",
-       "doc": "축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다."
+       "doc": "축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "cosineSimilarity",
        "signature": "cosineSimilarity(other: Tensor, dim?: number, eps?: number): Tensor",
        "doc": "두 묶음의 방향이 얼마나 같은가.",
-       "torch": "cosine_similarity"
+       "torch": "cosine_similarity",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "l1Loss",
        "signature": "l1Loss(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "절대 오차.\n\n**`reduction` 이 여기 없었다.** 드물게 쓰는 손실 열셋은 전부 받고 있었는데\n제일 많이 쓰는 넷이 안 받았다 — 나중에 쓴 것이 torch 서명을 따랐고 처음 쓴 것이\n안 고쳐졌다. 튜토리얼이 기본값만 쓰니 표도 안 물었다.",
-       "torch": "l1_loss"
+       "torch": "l1_loss",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "mseLoss",
        "signature": "mseLoss(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "제곱 오차.",
-       "torch": "mse_loss"
+       "torch": "mse_loss",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "bceWithLogits",
        "signature": "bceWithLogits(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "로짓을 그대로 받는 이진 교차엔트로피.\n\n**`sigmoid` 를 먼저 구해서 로그를 취하지 않는다.** 그러면 확신이 큰 자리에서\n`log(0)` 이 되어 손실이 무한대가 된다. `max(x,0) − x·y + log(1+exp(−|x|))` 는\n같은 값을 넘침 없이 낸다 — 이 함수가 따로 있는 이유가 그것이다.",
-       "torch": "bce_with_logits"
+       "torch": "bce_with_logits",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "layerNorm",
        "signature": "layerNorm(dim?: number, eps?: number): Tensor",
        "doc": "마지막 축들을 평균 0, 분산 1 로. **분산은 편향추정(n 으로 나눔)이다** —\ntorch 의 `layer_norm` 이 그렇고, `var()` 의 기본과 다르다.",
-       "torch": "layer_norm"
+       "torch": "layer_norm",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "layerNormOver",
        "signature": "layerNormOver(dims?: number, eps?: number): Tensor",
        "doc": "**뒤쪽 `dims` 개 축을 한꺼번에** 접는다. `layerNorm` 은 축 하나만 접는다.\n\ntorch 의 `LayerNorm(normalized_shape)` 이 접는 축의 **개수**를 그 모양의 길이로\n정하는데, 축 하나짜리(`LayerNorm(4)`)로만 재면 둘이 같은 답을 낸다 — 그래서\n오래 안 보였다. `(3, 4)` 를 주면 갈린다.",
-       "torch": "layer_norm_over"
+       "torch": "layer_norm_over",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "batchNorm",
        "signature": "batchNorm(dim?: number, eps?: number): Tensor",
        "doc": "배치 축을 따라 정규화. 학습 모드 — 이동 통계를 안 쓰고 이 배치로 센다.\n\n`layer_norm` 과 접는 축만 다르다. 축이 다르면 접는 축을 바꾸면 되지, 함수를\n따로 세울 일이 아니다.",
-       "torch": "batch_norm"
+       "torch": "batch_norm",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "groupNorm",
        "signature": "groupNorm(numGroups: number, eps?: number): Tensor",
        "doc": "채널을 그룹으로 묶어 정규화.\n\n`layerNorm` 과 **접는 구간만** 다르다. 그룹 수가 1 이면 채널 전체가 한 묶음이라\nLayerNorm 이고, 채널 수와 같으면 채널마다 따로라 InstanceNorm 이다 — 셋은 서로의\n특수한 경우이고 묶는 규칙이 틀리면 셋 중 둘이 같아진다.\n\n묶는 구간을 마지막 축 하나로 눕혀 놓고 접는다. 그러면 `layerNorm` 의 식을 그대로\n쓰므로 정규화 식이 한 군데에만 있다.",
-       "torch": "group_norm"
+       "torch": "group_norm",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "instanceNorm",
        "signature": "instanceNorm(eps?: number): Tensor",
        "doc": "표본마다·채널마다 따로. 그룹 수를 채널 수로 준 `groupNorm` 이다.",
-       "torch": "instance_norm"
+       "torch": "instance_norm",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "rmsNorm",
        "signature": "rmsNorm(dims?: number, eps?: number): Tensor",
        "doc": "**평균을 안 뺀다.** 그것이 `layerNorm` 과의 유일한 차이다.\n\n기본 eps 가 `1e-5` 가 아니라 f32 의 기계 엡실론이다 — torch 가 그렇다. 다른\n정규화 층에 맞춰 `1e-5` 로 적었더니 순방향은 허용 오차 안이고 **기울기만**\n최대차 2.26e-02 로 갈렸다. 분산이 작은 자리에서 증폭된다.",
-       "torch": "rms_norm"
+       "torch": "rms_norm",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "linear",
        "signature": "linear(weight: Tensor): Tensor",
-       "doc": "`x @ Wᵀ`. torch 의 `F.linear` 는 가중치를 (출력, 입력) 으로 받는다."
+       "doc": "`x @ Wᵀ`. torch 의 `F.linear` 는 가중치를 (출력, 입력) 으로 받는다.",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "smoothL1Loss",
        "signature": "smoothL1Loss(target: Tensor, beta?: number, reduction?: Reduction): Tensor",
        "doc": "",
-       "torch": "smooth_l1_loss"
+       "torch": "smooth_l1_loss",
+       "section": {
+        "ko": "자리 옮기기",
+        "en": "Moving elements"
+       }
       },
       {
        "name": "huberLoss",
        "signature": "huberLoss(target: Tensor, delta?: number, reduction?: Reduction): Tensor",
        "doc": "**`smoothL1Loss` 와 δ=1 에서만 같다.**\n\n실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은\n함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.",
-       "torch": "huber_loss"
+       "torch": "huber_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "klDiv",
        "signature": "klDiv(target: Tensor, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor",
        "doc": "`target · (log target − this)`. **이쪽은 이미 로그**여야 한다.\n\n**`reduction` 이 넷이다.** `mean` 은 원소 수로 나누고 `batchmean` 은 배치 크기로\n나눈다 — 수학적 정의에 맞는 것은 뒤쪽이고, torch 자신도 바꾸겠다고 경고한다.",
-       "torch": "kl_div"
+       "torch": "kl_div",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "poissonNllLoss",
        "signature": "poissonNllLoss(target: Tensor, logInput?: boolean, full?: boolean, eps?: number, reduction?: Reduction): Tensor",
        "doc": "포아송 음의 로그가능도.\n\n**스털링 보정은 `target > 1` 일 때만 더한다** — 조건 없이 늘 더하면 target 이\n작은 자리에서만 틀린다(실측으로 확인했다).",
-       "torch": "poisson_nll_loss"
+       "torch": "poisson_nll_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "gaussianNllLoss",
        "signature": "gaussianNllLoss(target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor",
        "doc": "가우스 음의 로그가능도.\n\n**분산을 `eps` 로 자른다.** 안 자르면 0 으로 나눠 무한대가 된다.",
-       "torch": "gaussian_nll_loss"
+       "torch": "gaussian_nll_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "marginRankingLoss",
        "signature": "marginRankingLoss(other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor",
        "doc": "`max(0, −y·(x₁ − x₂) + margin)`.",
-       "torch": "margin_ranking_loss"
+       "torch": "margin_ranking_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "cosineEmbeddingLoss",
        "signature": "cosineEmbeddingLoss(other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor",
        "doc": "`y=1` 이면 `1 − cos`, `y=−1` 이면 `max(0, cos − margin)`.",
-       "torch": "cosine_embedding_loss"
+       "torch": "cosine_embedding_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "hingeEmbeddingLoss",
        "signature": "hingeEmbeddingLoss(target: Tensor, margin?: number, reduction?: Reduction): Tensor",
        "doc": "`y=1` 이면 `x` 그대로, `y=−1` 이면 `max(0, margin − x)`.\n\n**둘로 가르는 것이 아니라 둘을 더한다.** torch 는 `y ≠ 1` 인 자리에 여백 항을,\n`y ≠ −1` 인 자리에 `x` 를 놓고 **합한다** — ±1 에서는 한쪽만 켜져 평소 식과\n같지만 `y=0` 에서는 **둘 다** 켜진다. `y > 0` 으로 갈라 놓았더니 거기서 조용히\n갈렸고, `sign()` 은 0 을 만든다.",
-       "torch": "hinge_embedding_loss"
+       "torch": "hinge_embedding_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "softMarginLoss",
        "signature": "softMarginLoss(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "`log(1 + e^{−y·x})`. `softplus` 로 가면 큰 값에서 안 넘친다.",
-       "torch": "soft_margin_loss"
+       "torch": "soft_margin_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "pairwiseDistance",
        "signature": "pairwiseDistance(other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor",
        "doc": "짝지어진 두 줄 사이의 거리.\n\n**`eps` 는 결과가 아니라 차에 더한다.** `p=1` 로 차가 정확히 1.0 인 자리를\n물으면 1.0000020 이 나온다(= 1 + 2·1e-6) — 결과에 더한다고 읽으면 1.000001 이\n되어 자릿수 하나가 갈린다. 실측으로 확인했다.",
-       "torch": "pairwise_distance"
+       "torch": "pairwise_distance",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "pdist",
        "signature": "pdist(p?: number): Tensor",
-       "doc": "한 묶음 안의 **모든 짝** 사이 거리. 위 삼각만 준다."
+       "doc": "한 묶음 안의 **모든 짝** 사이 거리. 위 삼각만 준다.",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "tripletMarginLoss",
        "signature": "tripletMarginLoss(positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, reduction?: Reduction): Tensor",
        "doc": "`max(0, d(a,p) − d(a,n) + margin)`.",
-       "torch": "triplet_margin_loss"
+       "torch": "triplet_margin_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "multilabelSoftMarginLoss",
        "signature": "multilabelSoftMarginLoss(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "자리마다 독립인 이진 분류를 **반 전체로 평균**한다.",
-       "torch": "multilabel_soft_margin_loss"
+       "torch": "multilabel_soft_margin_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "multiMarginLoss",
        "signature": "multiMarginLoss(target: Tensor, p?: number, margin?: number, weight?: Tensor | null, reduction?: Reduction): Tensor",
        "doc": "정답 자리와 나머지 사이의 여백.\n\n**반의 개수로 나눈다** — 견준 짝의 수가 아니다. 정답 자리도 분모에 들어간다는\n뜻이고, 짝의 수로 나누면 반이 셋일 때 3/2 배가 나온다.",
-       "torch": "multi_margin_loss"
+       "torch": "multi_margin_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "multilabelMarginLoss",
        "signature": "multilabelMarginLoss(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "**표적이 자리 목록이고 −1 이 끝을 뜻한다.**\n\n`[3, 0, -1, 1]` 은 \"3 번과 0 번이 정답\" 이라는 뜻이고 뒤의 1 은 안 읽는다. 그\n규약을 안 지키면 −1 을 반의 하나로 세거나 끝난 뒤를 계속 읽는다.\n\n어디까지 읽을지는 **누적합**으로 정한다 — `−1` 을 만난 뒤로는 전부 꺼진다. 그\n뒤 정답 자리를 0/1 로 흩어 담으면 CPU 로 읽어 올 일이 없다. 덮어쓰기가 아니라\n**모아 더하기**로 담는 이유는, 끝난 뒤의 자리가 clamp 되어 앞의 1 을 지울 수\n있기 때문이다.",
-       "torch": "multilabel_margin_loss"
+       "torch": "multilabel_margin_loss",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "bmm",
        "signature": "bmm(other: Tensor): Tensor",
-       "doc": "배치 행렬곱. `(B, N, K) × (B, K, M)`.\n\n배치를 풀어 `mm` 을 되풀이한 뒤 쌓는다 — 배치 커널을 따로 두면 `mm` 과 두 벌을\n고치게 된다. 배치가 커지면 그때 커널을 세울 자리다."
+       "doc": "배치 행렬곱. `(B, N, K) × (B, K, M)`.\n\n배치를 풀어 `mm` 을 되풀이한 뒤 쌓는다 — 배치 커널을 따로 두면 `mm` 과 두 벌을\n고치게 된다. 배치가 커지면 그때 커널을 세울 자리다.",
+       "section": {
+        "ko": "손실과 거리",
+        "en": "Losses and distances"
+       }
       },
       {
        "name": "addmm",
        "signature": "addmm(mat1: Tensor, mat2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": "`β·this + α·(mat1 @ mat2)`. `this` 는 결과 모양으로 퍼진다."
+       "doc": "`β·this + α·(mat1 @ mat2)`. `this` 는 결과 모양으로 퍼진다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addbmm",
        "signature": "addbmm(batch1: Tensor, batch2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": "**배치를 합친다** — 곱한 뒤 배치 축을 더해 2차원을 낸다.\n\n`baddbmm` 과 이름이 한 글자 다르고 결과 차수가 다르다. 배치가 1 이면 둘이 같아\n보이므로 케이스는 배치를 둘 이상으로 둔다."
+       "doc": "**배치를 합친다** — 곱한 뒤 배치 축을 더해 2차원을 낸다.\n\n`baddbmm` 과 이름이 한 글자 다르고 결과 차수가 다르다. 배치가 1 이면 둘이 같아\n보이므로 케이스는 배치를 둘 이상으로 둔다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "baddbmm",
        "signature": "baddbmm(batch1: Tensor, batch2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": "*배치를 지킨다.** `addbmm` 과 여기서 갈린다."
+       "doc": "*배치를 지킨다.** `addbmm` 과 여기서 갈린다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addmv",
        "signature": "addmv(mat: Tensor, vec: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": "`β·this + α·(mat @ vec)`. 결과가 1차원이다."
+       "doc": "`β·this + α·(mat @ vec)`. 결과가 1차원이다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addr",
        "signature": "addr(vec1: Tensor, vec2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": "`β·this + α·(vec1 ⊗ vec2)`. 바깥곱이라 결과가 2차원이다."
+       "doc": "`β·this + α·(vec1 ⊗ vec2)`. 바깥곱이라 결과가 2차원이다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addcmul",
        "signature": "addcmul(tensor1: Tensor, tensor2: Tensor, value?: number): Tensor",
-       "doc": "`this + value·(t1 · t2)`. **`beta` 가 없다** — `this` 의 계수는 늘 1 이다."
+       "doc": "`this + value·(t1 · t2)`. **`beta` 가 없다** — `this` 의 계수는 늘 1 이다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addcdiv",
        "signature": "addcdiv(tensor1: Tensor, tensor2: Tensor, value?: number): Tensor",
-       "doc": "`this + value·(t1 / t2)`. 옵티마이저가 갱신을 적을 때 쓰는 꼴이다."
+       "doc": "`this + value·(t1 / t2)`. 옵티마이저가 갱신을 적을 때 쓰는 꼴이다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addmm_",
        "signature": "addmm_(mat1: Tensor, mat2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addbmm_",
        "signature": "addbmm_(batch1: Tensor, batch2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "baddbmm_",
        "signature": "baddbmm_(batch1: Tensor, batch2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addmv_",
        "signature": "addmv_(mat: Tensor, vec: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addr_",
        "signature": "addr_(vec1: Tensor, vec2: Tensor, beta?: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addcmul_",
        "signature": "addcmul_(tensor1: Tensor, tensor2: Tensor, value?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "addcdiv_",
        "signature": "addcdiv_(tensor1: Tensor, tensor2: Tensor, value?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "fmod",
        "signature": "fmod(divisor: number): Tensor",
-       "doc": "나머지. **torch 의 `fmod` 는 피제수의 부호를 따른다** — 파이썬의 `%` 와 다르다.\n\n기울기는 피제수로 1 이 흐른다. 제수 쪽은 계단이라 안 흐른다."
+       "doc": "나머지. **torch 의 `fmod` 는 피제수의 부호를 따른다** — 파이썬의 `%` 와 다르다.\n\n기울기는 피제수로 1 이 흐른다. 제수 쪽은 계단이라 안 흐른다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "remainder",
        "signature": "remainder(divisor: number): Tensor",
-       "doc": "나머지 — **`fmod` 와 부호가 다르다.**\n\ntorch 의 `remainder`(그리고 파이썬·torch 의 `%`)는 **제수**의 부호를 따르고\n`fmod` 는 피제수의 부호를 따른다. `-7` 을 `3` 으로 나눈 나머지가 이쪽은 2 이고\n저쪽은 -1 이다. 둘 다 \"나머지\" 라고 불리는 것이 함정이고, JS 의 `%` 는 `fmod`\n쪽이라 그것을 그대로 쓰면 음수 입력에서만 조용히 갈린다.\n\n잘라내기(`trunc`)냐 내림(`floor`)이냐 하나 차이다."
+       "doc": "나머지 — **`fmod` 와 부호가 다르다.**\n\ntorch 의 `remainder`(그리고 파이썬·torch 의 `%`)는 **제수**의 부호를 따르고\n`fmod` 는 피제수의 부호를 따른다. `-7` 을 `3` 으로 나눈 나머지가 이쪽은 2 이고\n저쪽은 -1 이다. 둘 다 \"나머지\" 라고 불리는 것이 함정이고, JS 의 `%` 는 `fmod`\n쪽이라 그것을 그대로 쓰면 음수 입력에서만 조용히 갈린다.\n\n잘라내기(`trunc`)냐 내림(`floor`)이냐 하나 차이다.",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "clampMin",
        "signature": "clampMin(low: number): Tensor",
        "doc": "아래로만 자른다. torch 의 `clamp(min=…)` 이다.",
-       "torch": "clamp_min"
+       "torch": "clamp_min",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "clampMax",
        "signature": "clampMax(high: number): Tensor",
        "doc": "위로만 자른다. torch 의 `clamp(max=…)` 이다.",
-       "torch": "clamp_max"
+       "torch": "clamp_max",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "padSequence",
        "signature": "static padSequence(parts: readonly Tensor[], batchFirst?: boolean, paddingValue?: number): Tensor",
        "doc": "길이가 다른 것들을 한 배치에 담는다.\n\n기본은 `(가장 긴 길이, 개수, …)` 이고, `batchFirst` 면 앞의 둘이 바뀐다.\n**기울기가 각 조각으로 되돌아간다** — 덧댄 자리는 0 이므로 `pad` 의 역방향이\n잘라내 준다.",
-       "torch": "pad_sequence"
+       "torch": "pad_sequence",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "oneHot",
        "signature": "oneHot(classes: number): Tensor",
        "doc": "번호를 자리 표시로. `n` 칸 중 자기 자리만 1 이다.",
-       "torch": "one_hot"
+       "torch": "one_hot",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "nllLoss",
        "signature": "nllLoss(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "음의 로그가능도. `this` 는 이미 `log_softmax` 를 지난 것이어야 한다.\n\n**정답 자리를 뽑는 곳에서 그래프가 끊기기 쉽다.** 값만 떼어 돌려주면 뽑은 자리로\n기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.",
-       "torch": "nll_loss"
+       "torch": "nll_loss",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "crossEntropy",
        "signature": "crossEntropy(target: Tensor, reduction?: Reduction): Tensor",
        "doc": "로짓에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다.",
-       "torch": "cross_entropy"
+       "torch": "cross_entropy",
+       "section": {
+        "ko": "addmm 계열",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "maskedSelect",
        "signature": "maskedSelect(mask: Tensor): Promise<Tensor>",
        "doc": "참인 자리만 골라 1차원으로. **기울기가 고른 자리로 흐른다.**",
-       "torch": "masked_select"
+       "torch": "masked_select",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "nonzero",
        "signature": "nonzero(): Promise<Tensor>",
-       "doc": "0 이 아닌 자리의 좌표. 자리는 값이 아니라 기울기가 없다."
+       "doc": "0 이 아닌 자리의 좌표. 자리는 값이 아니라 기울기가 없다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "argwhere",
        "signature": "argwhere(): Promise<Tensor>",
-       "doc": "`nonzero` 와 같다 — torch 가 이름을 둘 다 갖는다."
+       "doc": "`nonzero` 와 같다 — torch 가 이름을 둘 다 갖는다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "nonzeroStatic",
        "signature": "nonzeroStatic(size: number, fillValue?: number): Promise<Tensor>",
        "doc": "0 이 아닌 자리를 **정해진 개수만큼.** 모자라면 채우고 넘치면 자른다.\n\n`nonzero` 는 결과 크기가 값에 달려 GPU 를 한 번 읽어야 하는데, 이쪽은 크기를 미리\n주므로 그 왕복이 **원리상** 필요 없다 — 그 자리를 위해 있는 이름이다. 여기서는\n아직 읽는다(어느 자리가 0 이 아닌지는 값이라서). 커널로 옮길 자리다.",
-       "torch": "nonzero_static"
+       "torch": "nonzero_static",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "histc",
        "signature": "histc(bins?: number, min?: number, max?: number): Promise<Tensor>",
-       "doc": "칸마다 몇 개인가. **`min === max` 면 자료의 범위를 쓴다**(실측).\n\n범위를 주면 **밖은 버린다** — 양끝 칸으로 몰아넣지 않는다. 전부 범위 안인 자료로\n재면 그 규칙이 안 드러난다."
+       "doc": "칸마다 몇 개인가. **`min === max` 면 자료의 범위를 쓴다**(실측).\n\n범위를 주면 **밖은 버린다** — 양끝 칸으로 몰아넣지 않는다. 전부 범위 안인 자료로\n재면 그 규칙이 안 드러난다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "histogram",
        "signature": "histogram(bins?: number | Tensor, range?: readonly [number, number] | null, weight?: Tensor | null, density?: boolean): Promise<{ hist: Tensor; bin_edges: Tensor; }>",
-       "doc": "`histc` 와 같은 셈에 **경계까지.**\n\n`bins` 에 텐서를 주면 그것이 곧 경계다 — 칸 너비가 다를 수 있고, 그러면\n`density` 가 칸마다 다른 값으로 나눈다."
+       "doc": "`histc` 와 같은 셈에 **경계까지.**\n\n`bins` 에 텐서를 주면 그것이 곧 경계다 — 칸 너비가 다를 수 있고, 그러면\n`density` 가 칸마다 다른 값으로 나눈다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "histogramdd",
        "signature": "histogramdd(bins?: number | readonly number[]): Promise<{ hist: Tensor; bin_edges: Tensor[]; }>",
-       "doc": "축이 여럿인 히스토그램. `this` 는 `(표본 수, 차원)` 이다."
+       "doc": "축이 여럿인 히스토그램. `this` 는 `(표본 수, 차원)` 이다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "mode",
        "signature": "mode(dim?: number, keepdim?: boolean): Promise<{ values: Tensor; indices: Tensor; }>",
-       "doc": "가장 자주 나온 값. **같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**\n(실측: `[4,4,5,5]` 가 값 4 · 자리 1 을 준다).\n\n비긴 자리가 없는 자료로 재면 그 규칙이 안 드러난다."
+       "doc": "가장 자주 나온 값. **같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**\n(실측: `[4,4,5,5]` 가 값 4 · 자리 1 을 준다).\n\n비긴 자리가 없는 자료로 재면 그 규칙이 안 드러난다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "nanmedian",
        "signature": "nanmedian(dim?: number, keepdim?: boolean): Promise<Tensor | { values: Tensor; indices: Tensor; }>",
-       "doc": "NaN 을 **빼고** 센 중앙값. `median` 은 NaN 이 하나만 있어도 NaN 을 낸다(실측).\n\n짝수 개면 **아래를 고른다** — 평균을 내지 않는다."
+       "doc": "NaN 을 **빼고** 센 중앙값. `median` 은 NaN 이 하나만 있어도 NaN 을 낸다(실측).\n\n짝수 개면 **아래를 고른다** — 평균을 내지 않는다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "gradient",
        "signature": "gradient(spacing?: number | readonly number[], dim?: number | readonly number[], edgeOrder?: number): Promise<Tensor[]>",
-       "doc": "중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.\n\n`edgeOrder` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측: `x²`\n에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다)."
+       "doc": "중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.\n\n`edgeOrder` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측: `x²`\n에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다).",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "trapezoid",
@@ -1340,24 +2191,40 @@
          "tag": "param",
          "text": "x 자리를 직접 준다. 안 주면 간격이 `dx` 로 고르다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "cumulativeTrapezoid",
        "signature": "cumulativeTrapezoid(x?: Tensor, dx?: number, dim?: number): Tensor",
        "doc": "누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다.",
-       "torch": "cumulative_trapezoid"
+       "torch": "cumulative_trapezoid",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "unique",
        "signature": "unique(): Promise<Tensor>",
-       "doc": "서로 다른 값을 **오름차순으로**. torch 의 기본이 정렬해서 주는 것이다."
+       "doc": "서로 다른 값을 **오름차순으로**. torch 의 기본이 정렬해서 주는 것이다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "uniqueConsecutive",
        "signature": "uniqueConsecutive(returnInverse?: boolean, returnCounts?: boolean, dim?: number): Promise<Tensor | Tensor[]>",
        "doc": "**이어진** 중복만 줄인다. `unique` 와 달리 정렬하지 않는다 — `[1,1,2,2,1]` 이\n`[1,2,1]` 이 된다(실측). 정렬된 입력으로만 재면 둘이 같아 보인다.\n\n결과의 **길이가 값에 달렸으므로** 여기서 한 번 읽는다. `unique`·`bincount` 와\n같은 자리이고, 그래서 이 셋만 비동기다.",
-       "torch": "unique_consecutive"
+       "torch": "unique_consecutive",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "bincount",
@@ -1372,48 +2239,84 @@
          "tag": "param",
          "text": "minlength 결과의 최소 길이. 안 나온 칸까지 자리를 잡아 둔다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "quantile",
        "signature": "quantile(q: number | readonly number[]): Promise<Tensor>",
-       "doc": "분위수. **선형 보간이다** — torch 의 기본이 그렇고, 가장 가까운 값을 고르는 것과\n다르다."
+       "doc": "분위수. **선형 보간이다** — torch 의 기본이 그렇고, 가장 가까운 값을 고르는 것과\n다르다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "nanquantile",
        "signature": "nanquantile(q: number | readonly number[]): Promise<Tensor>",
-       "doc": "NaN 을 빼고 센 분위수.\n\n**NaN 을 빼면 자리가 밀린다.** 그래서 성한 칸만 모은 작은 텐서를 만들어 그 위에서\n되짚는다 — 원래 자리로 돌아가는 길은 `indexSelect` 가 이미 미분되므로 이어진다."
+       "doc": "NaN 을 빼고 센 분위수.\n\n**NaN 을 빼면 자리가 밀린다.** 그래서 성한 칸만 모은 작은 텐서를 만들어 그 위에서\n되짚는다 — 원래 자리로 돌아가는 길은 `indexSelect` 가 이미 미분되므로 이어진다.",
+       "section": {
+        "ko": "결과 크기가 값에 달린 것들",
+        "en": "Output size depends on the values"
+       }
       },
       {
        "name": "det",
        "signature": "det(): Promise<Tensor>",
-       "doc": "행렬식. 역방향은 `det·A⁻ᵀ` 다."
+       "doc": "행렬식. 역방향은 `det·A⁻ᵀ` 다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "logdet",
        "signature": "logdet(): Promise<Tensor>",
-       "doc": "`log|det|`. 역방향은 `A⁻ᵀ` — 행렬식이 곱해지지 않아 더 안정적이다."
+       "doc": "`log|det|`. 역방향은 `A⁻ᵀ` — 행렬식이 곱해지지 않아 더 안정적이다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "slogdet",
        "signature": "slogdet(): Promise<{ sign: Tensor; logabs: Tensor; }>",
-       "doc": "부호와 로그 절댓값을 따로. 행렬식이 아주 작아도 자릿수가 안 날아간다."
+       "doc": "부호와 로그 절댓값을 따로. 행렬식이 아주 작아도 자릿수가 안 날아간다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "inverse",
        "signature": "inverse(): Promise<Tensor>",
-       "doc": "역행렬. 역방향은 `-A⁻ᵀ·Ḡ·A⁻ᵀ` 다."
+       "doc": "역행렬. 역방향은 `-A⁻ᵀ·Ḡ·A⁻ᵀ` 다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "invEx",
        "signature": "invEx(): Promise<{ inverse: Tensor; info: Tensor; }>",
        "doc": "`inv` 와 같은데 **안 던진다** — 대신 `info` 에 0 이 아닌 수를 담는다.",
-       "torch": "inv_ex"
+       "torch": "inv_ex",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "pinverse",
        "signature": "pinverse(): Promise<Tensor>",
-       "doc": "유사역행렬. **기울기가 있다** — 항이 셋이다.\n\n    Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)\n\n뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다\n0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을\n빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다."
+       "doc": "유사역행렬. **기울기가 있다** — 항이 셋이다.\n\n    Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)\n\n뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다\n0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을\n빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "cholesky",
@@ -1424,542 +2327,934 @@
          "tag": "param",
          "text": "upper 참이면 위 삼각을 준다 — `L` 대신 `Lᵀ` 다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "choleskyEx",
        "signature": "choleskyEx(): Promise<{ L: Tensor; info: Tensor; }>",
        "doc": "`cholesky` 의 안 던지는 쪽.",
-       "torch": "cholesky_ex"
+       "torch": "cholesky_ex",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "solve",
        "signature": "solve(b: Tensor): Promise<Tensor>",
-       "doc": "`A x = b`. 역방향은 `b` 로는 `A⁻ᵀ·Ḡ`, `A` 로는 `-A⁻ᵀ·Ḡ·xᵀ` 다.\n\n`b` 가 `A` 보다 축이 하나 적으면 **벡터 묶음**으로 본다 — torch 의 규칙이다.\n역방향의 바깥곱이 그 구분에 걸린다."
+       "doc": "`A x = b`. 역방향은 `b` 로는 `A⁻ᵀ·Ḡ`, `A` 로는 `-A⁻ᵀ·Ḡ·xᵀ` 다.\n\n`b` 가 `A` 보다 축이 하나 적으면 **벡터 묶음**으로 본다 — torch 의 규칙이다.\n역방향의 바깥곱이 그 구분에 걸린다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "solveEx",
        "signature": "solveEx(b: Tensor): Promise<{ result: Tensor; info: Tensor; }>",
        "doc": "`solve` 의 안 던지는 쪽.",
-       "torch": "solve_ex"
+       "torch": "solve_ex",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "qr",
        "signature": "qr(mode?: \"reduced\" | \"complete\"): Promise<{ q: Tensor; r: Tensor; }>",
-       "doc": "QR 분해. **`reduced` 에는 기울기가 있다.**\n\n    N = Qᵀ·Q̄ − R̄·Rᵀ\n    Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ\n\n아래 삼각만 남기는 자리가 이 유도의 전부다 — `QᵀQ = I` 를 미분하면 `Qᵀ·dQ` 가\n반대칭이 되고, 위쪽은 아래쪽의 거울이라 따로 셀 것이 없다.\n\n`complete` 는 `Q` 에 남는 열이 있어 유도가 다르다. 그쪽은 값만 낸다."
+       "doc": "QR 분해. **`reduced` 에는 기울기가 있다.**\n\n    N = Qᵀ·Q̄ − R̄·Rᵀ\n    Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ\n\n아래 삼각만 남기는 자리가 이 유도의 전부다 — `QᵀQ = I` 를 미분하면 `Qᵀ·dQ` 가\n반대칭이 되고, 위쪽은 아래쪽의 거울이라 따로 셀 것이 없다.\n\n`complete` 는 `Q` 에 남는 열이 있어 유도가 다르다. 그쪽은 값만 낸다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "svd",
        "signature": "svd(fullMatrices?: boolean): Promise<{ u: Tensor; s: Tensor; vt: Tensor; }>",
-       "doc": "특이값 분해.\n\n**특잇값에는 기울기가 있고 `U`·`Vh` 에는 없다.** `dS = diag(Uᵀ·dA·V)` 라 특잇값\n쪽은 `Ā = U·diag(Ḡ)·Vᵀ` 한 줄이고 겹침 문제도 없다. 벡터 쪽은 `1/(sᵢ²−sⱼ²)` 가\n들어가 특잇값이 겹치면 터지는데, 그 자리는 안 넣었다.\n\n`fullMatrices`(기본 참)는 `U` 를 `rows×rows` 로 채운다 — torch 의 기본값이다.\n채우는 방향은 남는 차원이 둘 이상이면 유일하지 않다(`completeBasis` 참고).\n**역방향에 쓰는 것은 채우기 전의 축소본이다.**"
+       "doc": "특이값 분해.\n\n**특잇값에는 기울기가 있고 `U`·`Vh` 에는 없다.** `dS = diag(Uᵀ·dA·V)` 라 특잇값\n쪽은 `Ā = U·diag(Ḡ)·Vᵀ` 한 줄이고 겹침 문제도 없다. 벡터 쪽은 `1/(sᵢ²−sⱼ²)` 가\n들어가 특잇값이 겹치면 터지는데, 그 자리는 안 넣었다.\n\n`fullMatrices`(기본 참)는 `U` 를 `rows×rows` 로 채운다 — torch 의 기본값이다.\n채우는 방향은 남는 차원이 둘 이상이면 유일하지 않다(`completeBasis` 참고).\n**역방향에 쓰는 것은 채우기 전의 축소본이다.**",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "eigh",
        "signature": "eigh(uplo?: \"L\" | \"U\"): Promise<{ values: Tensor; vectors: Tensor; }>",
-       "doc": "대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다.\n\n**한쪽 삼각만 읽는다** — 기본은 아래쪽이다. 야코비는 행렬 전체를 보므로 먼저\n거울을 만들어 넘긴다. 자세한 것은 `linalg.ts` 의 `mirror` 에 적었다."
+       "doc": "대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다.\n\n**한쪽 삼각만 읽는다** — 기본은 아래쪽이다. 야코비는 행렬 전체를 보므로 먼저\n거울을 만들어 넘긴다. 자세한 것은 `linalg.ts` 의 `mirror` 에 적었다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "svdvals",
        "signature": "svdvals(): Promise<Tensor>",
-       "doc": "특잇값만. `svd` 의 가운데다."
+       "doc": "특잇값만. `svd` 의 가운데다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "eigvalsh",
        "signature": "eigvalsh(uplo?: \"L\" | \"U\"): Promise<Tensor>",
-       "doc": "대칭 행렬의 고윳값만."
+       "doc": "대칭 행렬의 고윳값만.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "matrixNorm",
        "signature": "matrixNorm(ord?: number | string): Promise<Tensor>",
        "doc": "행렬로 보고 재는 노름. **갈래마다 다른 수다.**\n\n기본은 프로베니우스, `2` 는 최대 특잇값, `nuc` 는 특잇값의 합, `1` 은 열 절댓값\n합의 최대, `inf` 는 행 쪽이다. 특잇값이 필요한 셋만 CPU 를 왕복한다.",
-       "torch": "matrix_norm"
+       "torch": "matrix_norm",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "cond",
        "signature": "cond(p?: number | string | null): Promise<Tensor>",
-       "doc": "조건수. 기본은 특잇값의 비다."
+       "doc": "조건수. 기본은 특잇값의 비다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "solveTriangular",
        "signature": "solveTriangular(b: Tensor, upper: boolean, left?: boolean, unitriangular?: boolean): Promise<Tensor>",
        "doc": "삼각행렬이라는 것을 알고 푼다.",
-       "torch": "solve_triangular"
+       "torch": "solve_triangular",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "matrixExp",
        "signature": "matrixExp(): Promise<Tensor>",
        "doc": "행렬 지수 `e^A`. **기울기가 있다.**\n\n역방향은 `linalg.ts` 의 `matrixExpAdjointMap` 이 순방향에서 굳혀 둔 표를 쓴다 —\n왜 표인지는 거기 적었다(짧게: `Ḡ` 가 GPU 에 있고 `expm` 은 CPU 다).\n**기울기가 필요할 때만 만든다.** 표 하나에 `expm` 이 `n²` 번이라 공짜가 아니다.",
-       "torch": "matrix_exp"
+       "torch": "matrix_exp",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "vecdot",
        "signature": "vecdot(other: Tensor, dim?: number): Tensor",
-       "doc": "마지막 축을 벡터로 보고 내적."
+       "doc": "마지막 축을 벡터로 보고 내적.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "cross",
        "signature": "cross(other: Tensor, dim?: number): Tensor",
-       "doc": "3 차원 벡터의 외적. 축을 셋으로 갈라 조합한다."
+       "doc": "3 차원 벡터의 외적. 축을 셋으로 갈라 조합한다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "vectorNorm",
        "signature": "vectorNorm(ord?: number, dim?: number): Tensor",
        "doc": "벡터로 보고 재는 노름. **행렬을 줘도 통째로 편다** — `matrixNorm` 과 갈리는 자리다.\n\n`ord=0` 은 0 이 아닌 것의 개수, `±Infinity` 는 절댓값의 최대·최소다. 거듭제곱\n식에 넣으면 안 되는 갈래라 따로 적는다.",
-       "torch": "vector_norm"
+       "torch": "vector_norm",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "tensorSolve",
        "signature": "tensorSolve(b: Tensor): Promise<Tensor>",
        "doc": "텐서를 행렬로 접어 풀고 다시 편다.",
-       "torch": "tensor_solve"
+       "torch": "tensor_solve",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "tensorInv",
        "signature": "tensorInv(ind?: number): Promise<Tensor>",
        "doc": "텐서를 행렬로 접어 뒤집고 축 순서를 돌려준다.",
-       "torch": "tensor_inv"
+       "torch": "tensor_inv",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "matrixRank",
        "signature": "matrixRank(): Promise<Tensor>",
        "doc": "",
-       "torch": "matrix_rank"
+       "torch": "matrix_rank",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "lstsq",
        "signature": "lstsq(b: Tensor): Promise<Tensor>",
-       "doc": "최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다."
+       "doc": "최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "luFactor",
        "signature": "luFactor(): Promise<{ LU: Tensor; pivots: Tensor; }>",
        "doc": "한 장에 겹쳐 담은 `L`·`U` 와 **1 부터 세는** 교환표.",
-       "torch": "lu_factor"
+       "torch": "lu_factor",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "luFactorEx",
        "signature": "luFactorEx(): Promise<{ LU: Tensor; pivots: Tensor; info: Tensor; }>",
        "doc": "`luFactor` 에 **`info` 를 하나 더.** 던지는 대신 번호로 알린다 — 0 이면 잘 됐고,\n`k` 면 `k` 번째 피벗이 0 이라 특이행렬이다(1 부터 센다).",
-       "torch": "lu_factor_ex"
+       "torch": "lu_factor_ex",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "ldlFactor",
        "signature": "ldlFactor(): Promise<{ LD: Tensor; pivots: Tensor; }>",
        "doc": "대칭 행렬을 `L D Lᵀ` 로. **피벗을 안 한다.**\n\ntorch 는 LAPACK 의 Bunch-Kaufman 을 쓰고 그것은 필요하면 자리를 바꾼다. 여기서는\n바꿀 일이 없는 자리(양의 정부호 같은 것)만 다루고, 대각이 0 에 가까우면 시끄럽게\n거절한다 — 조용히 이어 가면 바꾼 것과 안 바꾼 것이 다른 답을 내는데 둘 다\n그럴듯하다.\n\n답은 torch 와 같은 모양으로 **한 장에 겹쳐 담는다** — 대각이 `D`, 그 아래가 `L`.",
-       "torch": "ldl_factor"
+       "torch": "ldl_factor",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "ldlSolve",
        "signature": "ldlSolve(b: Tensor): Promise<Tensor>",
        "doc": "`ldlFactor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다.",
-       "torch": "ldl_solve"
+       "torch": "ldl_solve",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "geqrf",
        "signature": "geqrf(): Promise<{ a: Tensor; tau: Tensor; }>",
-       "doc": "QR 을 **반사자 꼴로** 낸다. `householderProduct` 가 그것으로 `Q` 를 세운다.\n\n**대각 아래가 전부 0 이면 반사를 안 한다** — LAPACK 의 `dlarfg` 가 그 자리에서\n`tau = 0` 을 놓고 값을 그대로 둔다. 정사각의 마지막 열이 늘 그 자리다."
+       "doc": "QR 을 **반사자 꼴로** 낸다. `householderProduct` 가 그것으로 `Q` 를 세운다.\n\n**대각 아래가 전부 0 이면 반사를 안 한다** — LAPACK 의 `dlarfg` 가 그 자리에서\n`tau = 0` 을 놓고 값을 그대로 둔다. 정사각의 마지막 열이 늘 그 자리다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "householderProduct",
        "signature": "householderProduct(tau: Tensor): Promise<Tensor>",
        "doc": "반사자들을 곱해 `Q` 를 세운다. `geqrf` 의 짝이다.\n\n`v_i` 는 대각이 1 이고 그 아래가 `A[i+1:, i]` 다 — 대각의 1 은 **저장 안 하는\n약속**이라, 그 자리를 읽어 쓰면 분해가 담아 둔 `R` 을 반사자로 착각한다.",
-       "torch": "householder_product"
+       "torch": "householder_product",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "lu",
        "signature": "lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
-       "doc": "`P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다."
+       "doc": "`P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다.",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "luSolveFactored",
        "signature": "luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor>",
        "doc": "인수분해한 것으로 `A x = b` 를 푼다. **`this` 가 LU 다** — `linalg.lu_solve(LU,\npivots, B)` 의 자리 배치이고, torch 의 `Tensor.lu_solve` 와는 수신자가 다르다.\n\n그래서 **이름에서 torch 주장을 뺐다.** 전에는 이것이 `luSolve` 였는데, torch 를\n옮겨 적는 사람이 `b.lu_solve(LU, piv)` 를 쓰면 `LU` 가 `pivots` 자리에 들어간다 —\n이름도 인자 개수도 맞아서 **그 자리에서는 안 걸리고** 값만 틀린다.",
-       "torch": "lu_solve_factored"
+       "torch": "lu_solve_factored",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
       },
       {
        "name": "choleskySolve",
        "signature": "choleskySolve(factor: Tensor, upper?: boolean): Promise<Tensor>",
        "doc": "`A x = b` 를 **촐레스키 인수로** 푼다. `A = L Lᵀ` (또는 `Uᵀ U`).\n\n`A` 를 다시 세워 `solve` 로 보낸다. 삼각 대입 두 번이 더 싸지만, 그 길로 적으면\n역방향을 손으로 써야 하고 **인수 쪽 기울기가 조용히 빠진다.**",
-       "torch": "cholesky_solve"
+       "torch": "cholesky_solve",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "choleskyInverse",
        "signature": "choleskyInverse(upper?: boolean): Promise<Tensor>",
        "doc": "촐레스키 인수에서 **원래 행렬의 역행렬**을 낸다. 인수의 역이 아니다.",
-       "torch": "cholesky_inverse"
+       "torch": "cholesky_inverse",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "triangularSolve",
        "signature": "triangularSolve(a: Tensor, upper?: boolean, transpose?: boolean, unitriangular?: boolean): Promise<{ solution: Tensor; cloned_coefficient: Tensor; }>",
        "doc": "**둘을 준다** — 해와, 넘긴 계수 행렬의 **사본**(실측).\n\n`solveTriangular` 와 같은 계산인데 인자 순서가 뒤집혀 있고 **기본 `upper` 가\n참이다.** 그 둘을 놓치면 다른 삼각을 풀고도 값이 그럴듯하게 나온다.",
-       "torch": "triangular_solve"
+       "torch": "triangular_solve",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "luTop",
        "signature": "luTop(pivot?: boolean, getInfos?: boolean): Promise<{ LU: Tensor; pivots: Tensor; info?: Tensor; }>",
        "doc": "`(LU, pivots)`. **`lu()` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로 펴 주고\n이쪽은 **겹쳐 담은 한 판과 교환 목록**이다(실측).\n\n`getInfos` 면 셋째로 정보 코드가 붙는다. 우리는 늘 0 이다 — 특이 행렬을 만나면\n그 자리에서 던지지 조용히 코드로 알리지 않는다.",
-       "torch": "lu_top"
+       "torch": "lu_top",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "luSolve",
        "signature": "luSolve(luData: Tensor, pivots: Tensor): Promise<Tensor>",
        "doc": "`torch.Tensor.lu_solve` — **수신자가 오른쪽 변 `b` 다.**\n\ntorch 가 `b.lu_solve(LU, piv)` 이므로 여기도 그렇다. 인수를 수신자로 받는 쪽은\n`luSolveFactored` 이고, 그것이 `linalg.lu_solve` 의 자리 배치다.",
-       "torch": "lu_solve"
+       "torch": "lu_solve",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "luSolveTop",
        "signature": "luSolveTop(luData: Tensor, pivots: Tensor): Promise<Tensor>",
        "doc": "옛 이름. 결속이 이것을 부르고 있어서 남긴다 — 위임 한 줄이다.\n\n`luSolve` 가 인수를 수신자로 받던 시절에 그 반대편을 가리키려고 만든 이름인데,\n이제 `luSolve` 자체가 torch 와 같은 자리이므로 **`Top` 이 가리킬 반대편이 없다.**\n결속이 `luSolve` 로 옮겨 가면 지워도 된다.",
-       "torch": "lu_solve_top"
+       "torch": "lu_solve_top",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "luUnpack",
        "signature": "luUnpack(pivots: Tensor, unpackData?: boolean, unpackPivots?: boolean): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
        "doc": "겹쳐 담은 한 판을 `P·L·U` 로 편다.\n\n**끄면 `null` 이 아니라 빈 텐서가 온다**(실측: 모양이 `[0]` 이다). `null` 로 두면\n받는 쪽이 그것으로 갈라 쓰게 되고, 그것은 torch 코드가 아니다.",
-       "torch": "lu_unpack"
+       "torch": "lu_unpack",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "orgqr",
        "signature": "orgqr(tau: Tensor): Promise<Tensor>",
-       "doc": "`householderProduct` 의 다른 이름. torch 가 둘을 준다."
+       "doc": "`householderProduct` 의 다른 이름. torch 가 둘을 준다.",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "ormqr",
        "signature": "ormqr(tau: Tensor, other: Tensor, left?: boolean, transpose?: boolean): Promise<Tensor>",
-       "doc": "**Q 를 안 세우고** `C` 에 곱한다 — 여기서는 세워서 곱한다. 값이 같고 이 크기에서\n아끼는 것이 없다.\n\n**`orgqr` 과 다른 Q 다.** 그쪽은 `m×k` 로 **자른** Q 를 주는데, 이쪽은 자르지\n않은 `m×m` 을 쓴다 — 반사자들은 `Rᵐ` 위의 사상이고, 자르면 그 사상의 일부만\n곱하게 된다. 세로로 긴 행렬에서 답이 통째로 갈린다(실측). 정사각으로만 재면\n둘이 같아서 안 보인다."
+       "doc": "**Q 를 안 세우고** `C` 에 곱한다 — 여기서는 세워서 곱한다. 값이 같고 이 크기에서\n아끼는 것이 없다.\n\n**`orgqr` 과 다른 Q 다.** 그쪽은 `m×k` 로 **자른** Q 를 주는데, 이쪽은 자르지\n않은 `m×m` 을 쓴다 — 반사자들은 `Rᵐ` 위의 사상이고, 자르면 그 사상의 일부만\n곱하게 된다. 세로로 긴 행렬에서 답이 통째로 갈린다(실측). 정사각으로만 재면\n둘이 같아서 안 보인다.",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "lobpcg",
        "signature": "lobpcg(k?: number, largest?: boolean): Promise<{ eigenvalues: Tensor; eigenvectors: Tensor; }>",
-       "doc": "대칭 행렬의 **끝쪽 고유쌍 `k` 개.**\n\n**torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게\n얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이\n정확해로 7e-6 안까지 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 허용 오차\n한참 아래다. 값은 같고 비용만 다르다.\n\n**`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측)."
+       "doc": "대칭 행렬의 **끝쪽 고유쌍 `k` 개.**\n\n**torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게\n얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이\n정확해로 7e-6 안까지 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 허용 오차\n한참 아래다. 값은 같고 비용만 다르다.\n\n**`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "svdLowrank",
        "signature": "svdLowrank(q?: number, niter?: number, M?: Tensor | null): Promise<{ U: Tensor; S: Tensor; V: Tensor; }>",
        "doc": "무작위 사영으로 얻는 **저계수 SVD.** `(U, S, V)` 이고 **V 는 전치가 아니다.**\n\n**정확히 저계수인 입력에서만 답이 안 흔들린다.** torch 는 무작위 행렬로 사영하는데,\n계수가 `q` 를 넘으면 씨앗에 따라 특이값이 0.5 씩 움직인다(실측). 계수가 `q` 이하면\n씨앗을 바꿔도 7e-7 안이다 — 물을 수 있는 자리는 그쪽뿐이다.\n\n우리는 사영을 안 한다. 전체 SVD 를 구해 앞의 `q` 개를 자른다 — 정확히 저계수인\n자리에서는 같은 답이고, 넘치는 자리에서는 **torch 보다 정확한** 답이다.",
-       "torch": "svd_lowrank"
+       "torch": "svd_lowrank",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "pcaLowrank",
        "signature": "pcaLowrank(q?: number, center?: boolean, niter?: number): Promise<{ U: Tensor; S: Tensor; V: Tensor; }>",
        "doc": "저계수 PCA. **`center=false` 면 `svdLowrank` 와 같은 것이다**(실측).\n\n가운데 맞추기가 이 함수와 저쪽의 차이 전부다. 참으로만 재면 그 갈래가 안 보인다.",
-       "torch": "pca_lowrank"
+       "torch": "pca_lowrank",
+       "section": {
+        "ko": "최상위 선형대수",
+        "en": "Linear algebra (top level)"
+       }
       },
       {
        "name": "add_",
        "signature": "add_(other: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "sub_",
        "signature": "sub_(other: number, alpha?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "mul_",
        "signature": "mul_(other: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "div_",
        "signature": "div_(other: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "pow_",
        "signature": "pow_(k: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "zero_",
        "signature": "zero_(): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "fill_",
        "signature": "fill_(value: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "clamp_",
        "signature": "clamp_(low: number, high: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "clip_",
        "signature": "clip_(low: number, high: number): Tensor",
-       "doc": "`clamp_` 와 같다 — torch 가 이름을 둘 다 갖는다."
+       "doc": "`clamp_` 와 같다 — torch 가 이름을 둘 다 갖는다.",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "copyFrom",
        "signature": "copyFrom(src: Tensor): Tensor",
        "doc": "다른 텐서의 값을 이 버퍼로 옮긴다. **텐서를 바꿔치지 않는다.**\n\n옵티마이저가 파라미터의 손잡이를 들고 있으므로, 가중치를 넣을 때 새 텐서를\n만들어 갈아끼우면 옵티마이저가 다른 것을 보게 된다 — 학습이 도는데 파라미터가\n안 움직이는 상태다. 그래서 자리는 그대로 두고 값만 옮긴다.",
-       "torch": "copy_from"
+       "torch": "copy_from",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "lerpFrom",
        "signature": "lerpFrom(other: Tensor, t: number): Tensor",
        "doc": "`this ← (1-t)·this + t·other`. 이동 통계가 쓴다.",
-       "torch": "lerp_from"
+       "torch": "lerp_from",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "inplaceUnary",
        "signature": "inplaceUnary(name: string): Tensor",
        "doc": "표의 단항을 제자리로. `abs_` 같은 이름들이 이리로 온다.",
-       "torch": "inplace_unary"
+       "torch": "inplace_unary",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "transpose_",
        "signature": "transpose_(): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "squeeze_",
        "signature": "squeeze_(dim: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "unsqueeze_",
        "signature": "unsqueeze_(dim: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "tril_",
        "signature": "tril_(diagonal?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "triu_",
        "signature": "triu_(diagonal?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "cumsum_",
        "signature": "cumsum_(dim?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "cumprod_",
        "signature": "cumprod_(dim?: number): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "view",
        "signature": "view(...shape: number[]): Tensor",
-       "doc": "같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다."
+       "doc": "같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다.",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
       },
       {
        "name": "sort",
        "signature": "sort(dim?: number, descending?: boolean): { values: Tensor; indices: Tensor; }",
-       "doc": "축 하나를 정렬해 값과 자리를 낸다.\n\n**기울기가 값을 따라간다.** 뽑아 온 자리로만 흘리고 나머지는 0 인데, 값만 떼어\n돌려주면 그 자리로 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.\n코어가 `topk`·`sort` 에서 겪었고, 자매도 리뷰 전까지 같은 상태였다."
+       "doc": "축 하나를 정렬해 값과 자리를 낸다.\n\n**기울기가 값을 따라간다.** 뽑아 온 자리로만 흘리고 나머지는 0 인데, 값만 떼어\n돌려주면 그 자리로 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.\n코어가 `topk`·`sort` 에서 겪었고, 자매도 리뷰 전까지 같은 상태였다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "argsort",
        "signature": "argsort(dim?: number, descending?: boolean): Tensor",
-       "doc": "정렬한 자리만. 값이 필요 없을 때 쓴다."
+       "doc": "정렬한 자리만. 값이 필요 없을 때 쓴다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "topk",
        "signature": "topk(k: number, dim?: number): { values: Tensor; indices: Tensor; }",
-       "doc": "가장 큰 `k` 개. `sort` 의 앞부분이다 — torch 도 내림차순으로 준다."
+       "doc": "가장 큰 `k` 개. `sort` 의 앞부분이다 — torch 도 내림차순으로 준다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "kthvalue",
        "signature": "kthvalue(k: number, dim?: number, keepdim?: boolean): { values: Tensor; indices: Tensor; }",
-       "doc": "`k` 번째로 작은 값. **1 부터 센다** — torch 가 그렇다."
+       "doc": "`k` 번째로 작은 값. **1 부터 센다** — torch 가 그렇다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "median",
        "signature": "median(dim?: number, keepdim?: boolean): { values: Tensor; indices: Tensor; }",
-       "doc": "중앙값. **짝수 개일 때 아래쪽을 준다** — torch 가 두 값을 평균내지 않는다.\n\n**NaN 이 하나라도 있으면 NaN 이다**(실측). 정렬은 NaN 을 한쪽 끝으로 밀어내므로\n그냥 골라 오면 **NaN 을 건너뛰고** 멀쩡한 값이 나온다 — 그것이 `nanmedian` 이고\n이쪽은 아니다. 코어에도 같은 결함이 있었고, 둘을 나란히 묻는 케이스를 넣으면서\n양쪽이 같이 걸렸다."
+       "doc": "중앙값. **짝수 개일 때 아래쪽을 준다** — torch 가 두 값을 평균내지 않는다.\n\n**NaN 이 하나라도 있으면 NaN 이다**(실측). 정렬은 NaN 을 한쪽 끝으로 밀어내므로\n그냥 골라 오면 **NaN 을 건너뛰고** 멀쩡한 값이 나온다 — 그것이 `nanmedian` 이고\n이쪽은 아니다. 코어에도 같은 결함이 있었고, 둘을 나란히 묻는 케이스를 넣으면서\n양쪽이 같이 걸렸다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "msort",
        "signature": "msort(): Tensor",
-       "doc": "정렬만 하고 자리는 안 준다."
+       "doc": "정렬만 하고 자리는 안 준다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "cummax",
        "signature": "cummax(dim?: number): { values: Tensor; indices: Tensor; }",
-       "doc": "누적 최대·최소. **동점이면 나중 자리**를 준다 — torch 가 그렇다."
+       "doc": "누적 최대·최소. **동점이면 나중 자리**를 준다 — torch 가 그렇다.",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "cummin",
        "signature": "cummin(dim?: number): { values: Tensor; indices: Tensor; }",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "scatterAdd",
        "signature": "scatterAdd(dim: number, index: Tensor, src: Tensor): Tensor",
        "doc": "번호가 가리키는 자리에 **더한다.** 겹치면 쌓인다.\n\n`gather` 의 반대다. 한쪽만 있으면 \"꺼낼 수는 있는데 되돌려 넣을 수가 없는\"\n상태이고, 임베딩이나 원-핫을 손으로 만드는 코드가 그 자리를 바로 만난다.",
-       "torch": "scatter_add"
+       "torch": "scatter_add",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "scatterSet",
        "signature": "scatterSet(dim: number, index: Tensor, src: Tensor): Tensor",
        "doc": "번호가 가리키는 자리에 **덮어쓴다.** 겹치면 마지막에 쓴 것이 남는다.",
-       "torch": "scatter_set"
+       "torch": "scatter_set",
+       "section": {
+        "ko": "정렬 계열",
+        "en": "Sorting"
+       }
       },
       {
        "name": "gatherSpots",
        "signature": "gatherSpots(spots: Tensor, shape: readonly number[]): Tensor",
        "doc": "번호표가 가리키는 칸을 읽어 `shape` 로 낸다.\n\n**겹치는 번호로는 기울기가 쌓인다** — 한 칸을 두 번 읽었으면 두 번 온다. 안\n겹치는 걸음으로만 재면 그 쌓임이 안 보인다.",
-       "torch": "gather_spots"
+       "torch": "gather_spots",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "scatterSpots",
        "signature": "scatterSpots(spots: Tensor, src: Tensor, accumulate?: boolean, gradName?: string): Tensor",
        "doc": "번호표 자리에 `src` 를 써 넣은 **사본.**",
-       "torch": "scatter_spots"
+       "torch": "scatter_spots",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "asStrided",
        "signature": "asStrided(size: readonly number[], stride: readonly number[], storageOffset?: number): Tensor",
        "doc": "평평한 저장소를 **다른 걸음으로** 읽는다. torch 는 뷰지만 여기서는 사본이다.",
-       "torch": "as_strided"
+       "torch": "as_strided",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "asStridedScatter",
        "signature": "asStridedScatter(src: Tensor, size: readonly number[], stride: readonly number[], storageOffset?: number): Tensor",
        "doc": "",
-       "torch": "as_strided_scatter"
+       "torch": "as_strided_scatter",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "selectScatter",
        "signature": "selectScatter(src: Tensor, dim: number, index: number): Tensor",
        "doc": "`select` 가 꺼내던 한 장을 **갈아끼운 사본.**",
-       "torch": "select_scatter"
+       "torch": "select_scatter",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "sliceScatter",
        "signature": "sliceScatter(src: Tensor, dim?: number, start?: number, end?: number, step?: number): Tensor",
        "doc": "`x[..., start:end:step]` 자리를 **갈아끼운 사본.**",
-       "torch": "slice_scatter"
+       "torch": "slice_scatter",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "diagonalScatter",
        "signature": "diagonalScatter(src: Tensor, offset?: number, dim1?: number, dim2?: number): Tensor",
        "doc": "대각선 자리를 **갈아끼운 사본.**",
-       "torch": "diagonal_scatter"
+       "torch": "diagonal_scatter",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "diagEmbed",
        "signature": "diagEmbed(offset?: number, dim1?: number, dim2?: number): Tensor",
        "doc": "마지막 축을 **대각선으로 펴서** 축을 하나 늘린다. `diagonal` 의 반대다.",
-       "torch": "diag_embed"
+       "torch": "diag_embed",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "put",
        "signature": "put(index: Tensor, source: Tensor, accumulate?: boolean): Tensor",
-       "doc": "**평평하게 펴서** 번호대로 넣는다 — 축이라는 개념이 없다. `take` 의 반대다.\n\n번호가 값으로 오므로 CPU 가 만드는 번호표와 같은 문을 그대로 쓴다."
+       "doc": "**평평하게 펴서** 번호대로 넣는다 — 축이라는 개념이 없다. `take` 의 반대다.\n\n번호가 값으로 오므로 CPU 가 만드는 번호표와 같은 문을 그대로 쓴다.",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "indexPut",
        "signature": "indexPut(indices: readonly Tensor[], values: Tensor, accumulate?: boolean): Tensor",
        "doc": "축마다 번호 텐서를 하나씩 받아 그 자리에 넣는다.\n\n축별 번호를 **평평한 번호 하나로 접는다** — 그러면 `put` 과 같은 문이 된다.\n접는 셈이 텐서 산술이라 커널이 안 늘어난다.",
-       "torch": "index_put"
+       "torch": "index_put",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "scatterReduce",
        "signature": "scatterReduce(dim: number, index: Tensor, src: Tensor, reduce: string, includeSelf?: boolean): Tensor",
        "doc": "`scatter` 와 같은 자리지만 **덮어쓰는 대신 합친다.**",
-       "torch": "scatter_reduce"
+       "torch": "scatter_reduce",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "indexReduce",
        "signature": "indexReduce(dim: number, index: Tensor, source: Tensor, reduce: string, includeSelf?: boolean): Tensor",
        "doc": "번호가 가리키는 **줄**을 합친다. `scatterReduce` 와 달리 번호가 줄 단위다.",
-       "torch": "index_reduce"
+       "torch": "index_reduce",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "maskedScatter",
        "signature": "maskedScatter(mask: Tensor, source: Tensor): Tensor",
        "doc": "가면이 참인 자리에 `source` 를 **평평한 차례대로** 채운다.\n\n어느 값이 어디로 가는지가 가면의 **값**에 달렸는데도 결과 모양은 정해져 있다 —\n그래서 값을 읽어 오지 않고 자리마다 \"앞에 참이 몇이었나\" 를 세는 커널로 푼다.",
-       "torch": "masked_scatter"
+       "torch": "masked_scatter",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "renorm",
        "signature": "renorm(p: number, dim: number, maxnorm: number): Tensor",
-       "doc": "`dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.\n\n조립으로 둔다 — **배율 안에 `x` 가 들어 있어서** 역방향이 `g·s` 가 아니다.\n손으로 적으면 순방향만 맞고 기울기가 조용히 틀린다(코어에서 그렇게 한 번 틀렸다)."
+       "doc": "`dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.\n\n조립으로 둔다 — **배율 안에 `x` 가 들어 있어서** 역방향이 `g·s` 가 아니다.\n손으로 적으면 순방향만 맞고 기울기가 조용히 틀린다(코어에서 그렇게 한 번 틀렸다).",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "unravelIndex",
        "signature": "unravelIndex(shape: readonly number[]): Tensor[]",
        "doc": "평평한 번호를 축별 번호로 푼다. **축마다 텐서 하나씩, 묶음으로 낸다**(실측).\n\n셈이 나눗셈과 나머지뿐이라 값을 안 읽는다.",
-       "torch": "unravel_index"
+       "torch": "unravel_index",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "chainMatmul",
        "signature": "static chainMatmul(...matrices: readonly Tensor[]): Tensor",
        "doc": "여러 행렬을 잇달아 곱한다. `multiDot` 이 같은 것을 목록으로 받는다.",
-       "torch": "chain_matmul"
+       "torch": "chain_matmul",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "ger",
        "signature": "ger(other: Tensor): Tensor",
-       "doc": "바깥곱의 옛 이름. `outer` 와 같은 것이다."
+       "doc": "바깥곱의 옛 이름. `outer` 와 같은 것이다.",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "mv",
        "signature": "mv(vec: Tensor): Tensor",
-       "doc": "행렬 × 벡터. `mm` 이 하는 일이지만 torch 는 이름을 따로 준다.\n\n벡터를 열 하나로 세웠다가 그 축을 도로 지운다 — 결과가 1차원이어야 한다."
+       "doc": "행렬 × 벡터. `mm` 이 하는 일이지만 torch 는 이름을 따로 준다.\n\n벡터를 열 하나로 세웠다가 그 축을 도로 지운다 — 결과가 1차원이어야 한다.",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "asStrided_",
        "signature": "asStrided_(size: readonly number[], stride: readonly number[], storageOffset?: number): Tensor",
        "doc": "",
-       "torch": "as_strided_"
+       "torch": "as_strided_",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "maskedScatter_",
        "signature": "maskedScatter_(mask: Tensor, source: Tensor): Tensor",
        "doc": "",
-       "torch": "masked_scatter_"
+       "torch": "masked_scatter_",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "indexPut_",
        "signature": "indexPut_(indices: readonly Tensor[], values: Tensor, accumulate?: boolean): Tensor",
        "doc": "",
-       "torch": "index_put_"
+       "torch": "index_put_",
+       "section": {
+        "ko": "번호표로 읽고 쓰기",
+        "en": "Indexed read and write"
+       }
       },
       {
        "name": "conv2d",
        "signature": "conv2d(weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor",
-       "doc": "2차원 합성곱. `this` 는 `(N, C, H, W)`, 커널은 `(O, C, KH, KW)` 다 — **NCHW** 다.\n\n자매는 NHWC 를 들고 다녔는데 그것은 TF.js 의 conv 가 그 배치에서만 빨라서였다.\n여기서는 커널을 우리가 쓰므로 torch 와 같은 배치를 그대로 쓴다."
+       "doc": "2차원 합성곱. `this` 는 `(N, C, H, W)`, 커널은 `(O, C, KH, KW)` 다 — **NCHW** 다.\n\n자매는 NHWC 를 들고 다녔는데 그것은 TF.js 의 conv 가 그 배치에서만 빨라서였다.\n여기서는 커널을 우리가 쓰므로 torch 와 같은 배치를 그대로 쓴다.",
+       "section": {
+        "ko": "합성곱·풀링",
+        "en": "Convolution and pooling"
+       }
       },
       {
        "name": "conv1d",
        "signature": "conv1d(weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor",
-       "doc": "1차원 합성곱. `(N, C, L)`."
+       "doc": "1차원 합성곱. `(N, C, L)`.",
+       "section": {
+        "ko": "합성곱·풀링",
+        "en": "Convolution and pooling"
+       }
       },
       {
        "name": "conv3d",
        "signature": "conv3d(weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor",
-       "doc": "3차원 합성곱. `(N, C, D, H, W)`."
+       "doc": "3차원 합성곱. `(N, C, D, H, W)`.",
+       "section": {
+        "ko": "합성곱·풀링",
+        "en": "Convolution and pooling"
+       }
       },
       {
        "name": "maxPool1d",
        "signature": "maxPool1d(kernel?: number, stride?: number): Tensor",
        "doc": "",
-       "torch": "max_pool1d"
+       "torch": "max_pool1d",
+       "section": {
+        "ko": "합성곱·풀링",
+        "en": "Convolution and pooling"
+       }
       },
       {
        "name": "maxPool3d",
        "signature": "maxPool3d(kernel?: number, stride?: number): Tensor",
        "doc": "",
-       "torch": "max_pool3d"
+       "torch": "max_pool3d",
+       "section": {
+        "ko": "합성곱·풀링",
+        "en": "Convolution and pooling"
+       }
       },
       {
        "name": "maxPoolWithIndices",
        "signature": "maxPoolWithIndices(kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }",
        "doc": "",
-       "torch": "max_pool_with_indices"
+       "torch": "max_pool_with_indices",
+       "section": {
+        "ko": "이긴 자리를 함께 내는 풀링",
+        "en": "Pooling that also returns indices"
+       }
       },
       {
        "name": "adaptiveMaxPoolWithIndices",
        "signature": "adaptiveMaxPoolWithIndices(outSize: number | readonly number[]): { values: Tensor; indices: Tensor; }",
        "doc": "",
-       "torch": "adaptive_max_pool_with_indices"
+       "torch": "adaptive_max_pool_with_indices",
+       "section": {
+        "ko": "이긴 자리를 함께 내는 풀링",
+        "en": "Pooling that also returns indices"
+       }
       },
       {
        "name": "ctcOne",
@@ -1975,7 +3270,11 @@
          "text": "labels 표적 글자들."
         }
        ],
-       "torch": "ctc_one"
+       "torch": "ctc_one",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "fractionalMaxPool",
@@ -1987,71 +3286,119 @@
          "text": "samples 평면마다의 표본. `samples[plane][i]` 이고 `i` 는 위 순서다."
         }
        ],
-       "torch": "fractional_max_pool"
+       "torch": "fractional_max_pool",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "maxUnpool",
        "signature": "maxUnpool(indices: Tensor, kernel: number, stride?: number, padding?: number, outSize?: readonly number[]): Tensor",
        "doc": "자리표가 가리키는 칸에 값을 놓고 나머지는 0 으로 둔다.\n\n풀링이 버린 자투리는 되살릴 수 없어서 출력 크기를 밖에서 정한다. 기본은\n`(n-1)·stride - 2·padding + kernel` 이고, `outSize` 로 직접 줄 수도 있다.",
-       "torch": "max_unpool"
+       "torch": "max_unpool",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "convND",
        "signature": "convND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[]): Tensor",
        "doc": "차원 수에 상관없는 합성곱. `conv1d`·`conv2d`·`conv3d` 가 전부 이리로 온다.\n\n공간 축이 하나면 1차원, 둘이면 2차원이다 — 차원마다 함수를 따로 두면 세 벌이\n되고 그중 하나만 고치는 날이 온다. 자매가 실제로 그 상태였다.",
-       "torch": "conv_n_d"
+       "torch": "conv_n_d",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "convTransposeND",
        "signature": "convTransposeND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[]): Tensor",
        "doc": "차원 수에 상관없는 전치 합성곱.\n\n**새 커널이 없다.** 전치 합성곱의 순방향은 보통 합성곱이 입력 쪽으로 흘리는\n것과 같은 계산이라 `convNDGradInputTiled` 를 그대로 쓴다. 역방향도 마찬가지로\n뒤집힌다 — 입력 쪽 기울기가 보통 합성곱의 순방향이고, 가중치 쪽은 같은 커널에\n두 인자를 바꿔 넣은 것이다. 같은 계산을 두 벌 두면 한쪽만 고쳐지는 날이 온다.\n\n**가중치 축이 `convND` 와 뒤집혀 있다** — `(입력, 출력, …)` 다. 정사각 커널이면\n뒤집어 놓아도 모양이 맞아서 값으로만 갈린다.",
-       "torch": "conv_transpose_n_d"
+       "torch": "conv_transpose_n_d",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "poolND",
        "signature": "poolND(kind: \"max\" | \"avg\", kernel: number, stride?: number): Tensor",
        "doc": "차원 수에 상관없는 풀링.",
-       "torch": "pool_n_d"
+       "torch": "pool_n_d",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "interpolate",
        "signature": "interpolate(size?: number | readonly number[] | null, scaleFactor?: number | null, mode?: \"nearest\" | \"bilinear\", alignCorners?: boolean): Tensor",
-       "doc": "`size`·`scaleFactor`·`mode` 를 한자리에서 받는 확대. `Upsample` 층이 이것이다.\n\n**`mode` 를 받아만 놓고 안 쓰는 것이 이 함수가 있는 이유다.** 최근접과 겹선형은\n커널이 아예 다른데, 골라 주지 않으면 겹선형을 달라고 해도 최근접이 나온다 —\n예외가 아니라 조용히 다른 값이다."
+       "doc": "`size`·`scaleFactor`·`mode` 를 한자리에서 받는 확대. `Upsample` 층이 이것이다.\n\n**`mode` 를 받아만 놓고 안 쓰는 것이 이 함수가 있는 이유다.** 최근접과 겹선형은\n커널이 아예 다른데, 골라 주지 않으면 겹선형을 달라고 해도 최근접이 나온다 —\n예외가 아니라 조용히 다른 값이다.",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "upsample",
        "signature": "upsample(scale: number): Tensor",
-       "doc": "최근접 이웃으로 확대. `Upsample`·`interpolate` 가 이것이다."
+       "doc": "최근접 이웃으로 확대. `Upsample`·`interpolate` 가 이것이다.",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "adaptivePool",
        "signature": "adaptivePool(kind: \"max\" | \"avg\", outSize: number | readonly number[]): Tensor",
        "doc": "출력 크기를 정해 놓고 접는다. 창 크기가 입력에서 나온다.\n\n**나눠떨어지지 않아도 된다.** 예전에는 거절했는데, torch 는 창을 자리마다 다르게\n잡는다 — 거절은 흉내의 한 방식이 아니라 다른 규칙이었다. 시작은 내림, 끝은\n올림이고, 8 을 3 으로 줄이면 창이 3·3·2 다.\n\n축을 하나씩 접는다. 창이 직사각형이라 축별로 나눠 해도 같은 값이다 — 평균은 각\n줄의 길이가 같아서 평균의 평균이 전체 평균이고, 최댓값은 원래 그렇다.\n\n전용 커널을 안 쓴다. 창이 자리마다 다르면 셰이더에 상수로 구울 것이 없고,\n적응형은 대개 마지막 한 번이라 스텝마다 도는 자리가 아니다.",
-       "torch": "adaptive_pool"
+       "torch": "adaptive_pool",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "adaptiveAvgPool",
        "signature": "adaptiveAvgPool(outSize: number): Tensor",
        "doc": "예전 이름. `adaptivePool(\"avg\", …)` 와 같다 — 부르던 자리가 있어 남긴다.",
-       "torch": "adaptive_avg_pool"
+       "torch": "adaptive_avg_pool",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "lpPool",
        "signature": "lpPool(normType: number, kernel: number, stride?: number): Tensor",
        "doc": "`p` 승의 합을 `p` 제곱근한 것.\n\n**torch 의 조립을 그대로 따른다** — 평균 풀링을 쓰고 창 크기를 곱해 합으로\n되돌린 뒤 제곱근을 취한다. 부호와 `relu` 가 끼는 것도 그쪽 구현 그대로다.",
-       "torch": "lp_pool"
+       "torch": "lp_pool",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "maxPool2d",
        "signature": "maxPool2d(kernel?: number, stride?: number): Tensor",
        "doc": "겹치지 않는 창의 최대값. `this` 는 `(N, C, H, W)`.",
-       "torch": "max_pool2d"
+       "torch": "max_pool2d",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "avgPool2d",
        "signature": "avgPool2d(kernel?: number, stride?: number): Tensor",
        "doc": "",
-       "torch": "avg_pool2d"
+       "torch": "avg_pool2d",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "batchNormFused",
@@ -2063,97 +3410,165 @@
          "text": "정규화 결과와, 이동 통계를 갱신할 평균·분산."
         }
        ],
-       "torch": "batch_norm_fused"
+       "torch": "batch_norm_fused",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "batchNorm2d",
        "signature": "batchNorm2d(eps?: number): Tensor",
        "doc": "",
-       "torch": "batch_norm2d"
+       "torch": "batch_norm2d",
+       "section": {
+        "ko": "CTC",
+        "en": "CTC"
+       }
       },
       {
        "name": "isComplex",
        "signature": "isComplex(): boolean",
        "doc": "이 텐서가 복소수인가. `torch.is_complex` 자리다.",
-       "torch": "is_complex"
+       "torch": "is_complex",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "complex",
        "signature": "static complex(re: Tensor, im: Tensor): Tensor",
-       "doc": "실수부와 허수부를 엮는다. `torch.complex` 자리다.\n\n역방향은 받은 복소 기울기를 **그대로 갈라 준다** — 규약이 곧\n`(∂L/∂re, ∂L/∂im)` 이라 꺼내는 것 말고 할 일이 없다. 이 자리가 규약의 정의다."
+       "doc": "실수부와 허수부를 엮는다. `torch.complex` 자리다.\n\n역방향은 받은 복소 기울기를 **그대로 갈라 준다** — 규약이 곧\n`(∂L/∂re, ∂L/∂im)` 이라 꺼내는 것 말고 할 일이 없다. 이 자리가 규약의 정의다.",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "polar",
        "signature": "static polar(abs: Tensor, angle: Tensor): Tensor",
-       "doc": "크기와 편각으로 만든다. `torch.polar` 자리다."
+       "doc": "크기와 편각으로 만든다. `torch.polar` 자리다.",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "viewAsReal",
        "signature": "viewAsReal(): Tensor",
        "doc": "복소수를 **실수 짝으로 본다** — 모양 끝에 2 가 붙는다. 버퍼를 안 옮긴다.\n\n인터리브 저장이 이 한 줄을 위해 있다고 해도 된다. torch 에서도 뷰다.",
-       "torch": "view_as_real"
+       "torch": "view_as_real",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "viewAsComplex",
        "signature": "viewAsComplex(): Tensor",
        "doc": "실수 짝을 복소수로 본다. `viewAsReal` 의 반대이고 역시 뷰다.",
-       "torch": "view_as_complex"
+       "torch": "view_as_complex",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "real",
        "signature": "real(): Tensor",
-       "doc": "실수부. **기울기는 `g + 0i` 로 돌아간다.**\n\ntorch 에서 이것은 스트라이드 뷰인데 여기서는 **복사**다 — 우리 텐서는 모양만\n들고 스트라이드를 안 들어서 칸 걸러 보는 틀을 만들 수가 없다. 값은 같다."
+       "doc": "실수부. **기울기는 `g + 0i` 로 돌아간다.**\n\ntorch 에서 이것은 스트라이드 뷰인데 여기서는 **복사**다 — 우리 텐서는 모양만\n들고 스트라이드를 안 들어서 칸 걸러 보는 틀을 만들 수가 없다. 값은 같다.",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "imag",
        "signature": "imag(): Tensor",
-       "doc": "허수부. **기울기는 `0 + gi` 다** — `−gi` 로 적으면 부호만 뒤집힌 채 그럴듯하게\n돈다. torch 를 재보면 `z.imag` 의 기울기가 `0+1j` 다."
+       "doc": "허수부. **기울기는 `0 + gi` 다** — `−gi` 로 적으면 부호만 뒤집힌 채 그럴듯하게\n돈다. torch 를 재보면 `z.imag` 의 기울기가 `0+1j` 다.",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "conjPhysical",
        "signature": "conjPhysical(): Tensor",
        "doc": "켤레. **정칙이 아니라 역방향이 `conj(g)`** 다 — `conj(f')·g` 꼴이 아니다.\n\n**torch 와 갈리는 자리다.** torch 의 `conj` 는 게을러서 켤레 비트만 세우고\n값을 안 뒤집는다(그래서 `is_conj` 가 참이고 `view_as_real` 이 거절한다).\n우리 것은 즉시 뒤집으므로 그 상태가 아예 없다 — 값은 같다.",
-       "torch": "conj_physical"
+       "torch": "conj_physical",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "conj",
        "signature": "conj(): Tensor",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "isConj",
        "signature": "isConj(): boolean",
        "doc": "켤레 비트가 서 있는가. **여기서는 언제나 거짓이다.**\n\ntorch 의 `conj()` 는 값을 안 바꾸고 **비트 하나를 세운다** — 실제 켤레는 나중에\n필요할 때 만든다(그래서 `resolve_conj` 가 따로 있다). 여기 `conj` 는 그 자리에서\n켤레를 만들므로 미룰 것이 없고, 세울 비트도 없다.\n\n**그래도 이름을 둔다.** 없으면 `x.isConj()` 가 \"그런 것 없다\" 로 멈추는데, 그\n물음의 답은 있다 — 거짓이다. 게으른 비트가 없다는 것은 구현의 사정이지\n물음이 뜻을 잃는 이유가 아니다.",
-       "torch": "is_conj"
+       "torch": "is_conj",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "isNeg",
        "signature": "isNeg(): boolean",
        "doc": "부호 비트가 서 있는가. `isConj` 와 같은 이유로 언제나 거짓이다.",
-       "torch": "is_neg"
+       "torch": "is_neg",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "resolveConj",
        "signature": "resolveConj(): Tensor",
        "doc": "미뤄 둔 켤레를 실제 값으로. **여기서는 자기 자신이다** — 미뤄 둔 것이 없다.\n\ntorch 에서는 `conj()` 가 세운 비트를 여기서 갚는다. 우리 `conj` 는 이미 갚고\n오므로 갚을 것이 없고, 그래서 이것은 항등이다. 항등인 것과 **없는 것은 다르다** —\ntorch 코드가 켤레를 넘기기 전에 이 줄을 넣는 것은 흔한 관용구다.",
-       "torch": "resolve_conj"
+       "torch": "resolve_conj",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "resolveNeg",
        "signature": "resolveNeg(): Tensor",
        "doc": "미뤄 둔 부호 뒤집기를 실제 값으로. `resolveConj` 와 같은 이유로 항등이다.",
-       "torch": "resolve_neg"
+       "torch": "resolve_neg",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "complexAbs",
        "signature": "complexAbs(): Tensor",
        "doc": "복소수의 크기. **결과가 실수이고 기울기가 `z/|z|`** 다 — 켤레가 **안** 붙는다.\n\n실수 `abs` 는 단항 표에 있고 이쪽으로 안 온다. `abs()` 가 형을 보고 갈라 준다 —\n**공개인 이유가 그것이다.** 갈라 주는 자리가 클래스 밖(단항 표를 얹은 뒤)이라\n비공개면 못 부른다.",
-       "torch": "complex_abs"
+       "torch": "complex_abs",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "angle",
        "signature": "angle(): Tensor",
-       "doc": "편각. 복소수는 `atan2(im, re)`, 실수는 음수에 π 다(형은 언제나 실수)."
+       "doc": "편각. 복소수는 `atan2(im, re)`, 실수는 음수에 π 다(형은 언제나 실수).",
+       "section": {
+        "ko": "복소수",
+        "en": "Complex"
+       }
       },
       {
        "name": "backward",
@@ -2168,28 +3583,48 @@
          "tag": "param",
          "text": "retainGraph 그래프를 남겨 다시 흘릴 수 있게 한다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "역전파",
+        "en": "Backward"
+       }
       },
       {
        "name": "cpu",
        "signature": "cpu(): Promise<Tensor>",
-       "doc": "값을 호스트로 내린다. torch 의 `t.cpu()` 자리이고 **비동기다** — GPU 메모리를\n되가져오는 왕복이라 피할 길이 없다.\n\n**그래프를 끊는다.** torch 의 `.cpu()` 는 미분되지만 여기서는 그럴 수가 없다 —\n호스트에 커널이 없으므로 역방향이 지나갈 길이 없다. 이어 붙여 두고 조용히 0 을\n흘리느니 끊는다."
+       "doc": "값을 호스트로 내린다. torch 의 `t.cpu()` 자리이고 **비동기다** — GPU 메모리를\n되가져오는 왕복이라 피할 길이 없다.\n\n**그래프를 끊는다.** torch 의 `.cpu()` 는 미분되지만 여기서는 그럴 수가 없다 —\n호스트에 커널이 없으므로 역방향이 지나갈 길이 없다. 이어 붙여 두고 조용히 0 을\n흘리느니 끊는다.",
+       "section": {
+        "ko": "장치 옮기기",
+        "en": "Moving between devices"
+       }
       },
       {
        "name": "webgpu",
        "signature": "webgpu(): Tensor",
-       "doc": "값을 GPU 로 올린다. torch 의 `t.cuda()` 자리다.\n\n**`cpu()` 와 달리 동기다.** 올리는 것은 큐에 쓰기 하나여서 기다릴 것이 없다 —\n짝이 안 맞아 보이지만, 없는 왕복을 만들어 대칭을 꾸미는 것보다 낫다."
+       "doc": "값을 GPU 로 올린다. torch 의 `t.cuda()` 자리다.\n\n**`cpu()` 와 달리 동기다.** 올리는 것은 큐에 쓰기 하나여서 기다릴 것이 없다 —\n짝이 안 맞아 보이지만, 없는 왕복을 만들어 대칭을 꾸미는 것보다 낫다.",
+       "section": {
+        "ko": "장치 옮기기",
+        "en": "Moving between devices"
+       }
       },
       {
        "name": "toArray",
        "signature": "toArray(): Promise<Float32Array>",
        "doc": "값을 평평한 f32 배열로.\n\n**복소수는 인터리브 그대로 나온다** — 길이가 `size` 가 아니라 `2 × size` 이고\n`[re, im, re, im, …]` 이다. 실수부만 원하면 `real()` 을, 짝으로 원하면\n`viewAsReal()` 을 먼저 불러라. 여기서 실수부만 골라 주면 길이가 그럴듯해져서\n값을 잃은 것이 안 보인다.",
-       "torch": "to_array"
+       "torch": "to_array",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "equal",
        "signature": "equal(other: Tensor): Promise<boolean>",
-       "doc": "모양과 값이 **정확히** 같은가. 허용 오차가 없다 — 그것이 `allclose` 와 다른 점이다.\n\nGPU 에서 읽어 온다. 판정 하나를 위해 왕복하는 것이 아깝지만, CPU 에 사본을 들고\n있다가 비교하면 GPU 에서 무슨 일이 있었는지를 못 본다."
+       "doc": "모양과 값이 **정확히** 같은가. 허용 오차가 없다 — 그것이 `allclose` 와 다른 점이다.\n\nGPU 에서 읽어 온다. 판정 하나를 위해 왕복하는 것이 아깝지만, CPU 에 사본을 들고\n있다가 비교하면 GPU 에서 무슨 일이 있었는지를 못 본다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "allclose",
@@ -2200,28 +3635,48 @@
          "tag": "param",
          "text": "equalNan 참이면 **NaN 끼리를 같다고 본다.** 기본은 거짓이라 안 같다."
         }
-       ]
+       ],
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "repr",
        "signature": "repr(): Promise<string>",
-       "doc": "`print(t)` 가 찍는 글자. **GPU 에서 읽어 오므로 비동기다.**\n\n교재가 이 글자를 그대로 싣기 때문에 이 프로젝트는 이것도 명세로 본다 —\n자세한 이유는 `src/repr.ts` 에 있다."
+       "doc": "`print(t)` 가 찍는 글자. **GPU 에서 읽어 오므로 비동기다.**\n\n교재가 이 글자를 그대로 싣기 때문에 이 프로젝트는 이것도 명세로 본다 —\n자세한 이유는 `src/repr.ts` 에 있다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "sizeRepr",
        "signature": "sizeRepr(): string",
        "doc": "`torch.Size([2, 2])`. 모양도 찍히는 것이라 명세다.",
-       "torch": "size_repr"
+       "torch": "size_repr",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "to",
        "signature": "to(dtype: DType): Tensor",
-       "doc": "형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다."
+       "doc": "형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "item",
        "signature": "item(): Promise<number>",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
       },
       {
        "name": "neg",
@@ -2532,7 +3987,10 @@
   {
    "name": "nn",
    "title": "nn",
-   "blurb": "층·손실·활성. `torch.nn` 자리.",
+   "blurb": {
+    "ko": "층·손실·활성. `torch.nn` 자리.",
+    "en": "Layers, losses, activations. Where `torch.nn` would be."
+   },
    "doc": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다.",
    "symbols": [
     {
@@ -6067,7 +7525,10 @@
   {
    "name": "optim",
    "title": "optim",
-   "blurb": "옵티마이저와 학습률 스케줄러. `torch.optim` 자리.",
+   "blurb": {
+    "ko": "옵티마이저와 학습률 스케줄러. `torch.optim` 자리.",
+    "en": "Optimizers and learning-rate schedulers. Where `torch.optim` would be."
+   },
    "doc": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다.",
    "symbols": [
     {
@@ -6967,7 +8428,10 @@
   {
    "name": "data",
    "title": "data",
-   "blurb": "데이터셋과 배치. `torch.utils.data` 자리.",
+   "blurb": {
+    "ko": "데이터셋과 배치. `torch.utils.data` 자리.",
+    "en": "Datasets and batching. Where `torch.utils.data` would be."
+   },
    "doc": "데이터셋과 적재기 — `torch.utils.data` 자리.\n\n## 없으면 이야기가 반쯤 거짓이 된다\n\n이 저장소는 \"브라우저에서 학습한다\" 고 말하는데, 여기가 비어 있으면 그 학습이\n**배치를 손으로 자르는 것**으로 끝난다. 실제로 저장소 안의 정확도 러너가 뽑기·섞기를\n직접 짜고 있었다 — 쓰는 사람은 누구나 같은 것을 다시 짜게 된다.\n\n## 무엇을 안 만들었나\n\n**`sampler` 옵션이 없다.** torch 에 있는 이름이지만 지금 받쳐 줄 것이 없다. 이름만\n놓으면 `paramGroups` 가 그랬던 꼴이 된다 — 모양은 torch 인데 속이 비어서, 쓰는\n사람이 넣은 것이 조용히 무시되는 자리. 없는 것은 없다고 둔다.\n\n`num_workers` 도 없다. 워커를 띄우면 GPU 손잡이가 그쪽으로 안 건너간다.\n\n## torch 와 갈리는 두 자리\n\n**배치는 GPU 텐서라 `scope()` 안에서 받아야 한다.** 적재기가 대신 감쌀 수가 없다 —\n텐서가 구역 밖으로 나가는 것이 목적이기 때문이다. 안 감싸면 한 에폭이 만드는 배치가\n전부 남는다.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\n`x` 와 `y` 는 구역 **밖에서** 만들어졌으므로 살려 둘 것으로 표시할 필요가 없다.\n구역이 놓는 것은 그 안에서 만든 중간 버퍼다.\n\n**섞기가 `manualSeed` 를 따른다.** torch 는 DataLoader 에 별도 generator 를 두는데\n여기서는 호스트 줄기 하나를 쓴다(`random.ts`) — 씨앗 하나가 층 초기화·dropout·\n텐서 팩토리에 이어 배치 순서까지 되돌린다. 문을 늘리지 않는 쪽을 골랐다.",
    "symbols": [
     {
@@ -7175,7 +8639,10 @@
   {
    "name": "vision",
    "title": "vision",
-   "blurb": "이미지 변환. `torchvision.transforms` 자리.",
+   "blurb": {
+    "ko": "이미지 변환. `torchvision.transforms` 자리.",
+    "en": "Image transforms. Where `torchvision.transforms` would be."
+   },
    "doc": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borch_vision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다.",
    "symbols": [
     {
@@ -7377,7 +8844,10 @@
   {
    "name": "fft",
    "title": "fft",
-   "blurb": "푸리에 변환. `torch.fft` 자리.",
+   "blurb": {
+    "ko": "푸리에 변환. `torch.fft` 자리.",
+    "en": "Fourier transforms. Where `torch.fft` would be."
+   },
    "doc": "`torch.fft` — 이산 푸리에 변환, 그리고 그 위의 `stft`/`istft`.\n\n**커널이 하나다.** 정변환·역변환·반쪽 변환·그 셋의 역방향이 전부 같은 셰이더를\n부호와 배율만 바꿔 부른다. 나눠 쓰면 여섯 벌이 되고, 그중 하나가 다르게 고쳐지는\n날이 온다 — 이 저장소가 반복해서 진 자리가 그 종류다.\n\n## O(n²) 다 — 이름은 `fft` 인데\n\n직접 DFT 를 돈다. 쿨리-튜키를 쓰면 2 의 거듭제곱에서만 빠르고, 아닌 길이는\n블루스타인이 따로 필요하다. **값은 어느 쪽이든 같고**, 이 프로젝트의 천장(교재\n크기의 신호)에서는 차이가 안 보인다. 빨라야 하는 날이 오면 그때 바꾸되,\n**지금 없는 속도를 있는 것처럼 적지 않는다.**\n\n## 축을 안 옮긴다\n\n`dim` 이 어디든 자료를 옮기지 않는다. `(바깥, 축, 안쪽)` 세 수로 자리를 계산해\n셰이더가 바로 집는다 — 옮기고 되돌리면 버퍼 두 벌이 더 들고, 복소수 옮기기는\n아직 없는 연산이라 그 자리를 만들어야 했을 것이다.\n\n## 기울기\n\n변환은 **선형**이라 역방향이 규약에서 바로 나온다. 정칙 함수의 역방향이\n`conj(f')·g` 이므로 `grad_x[j] = Σ_k e^{+2πijk/n}·g[k]` — **정규화 없는 역변환**이다.\n어려운 자리는 값이 아니라 **어느 쪽 반쪽을 세는가** 다:\n\n* `rfft` 의 역방향은 저장된 반쪽에만 기울기가 온다 — 켤레 짝을 더하면 두 배가 된다.\n* `irfft` 의 역방향은 **가장자리만 한 번, 가운데는 두 번** 센다 — 되살린 켤레 짝이\n  같은 저장 칸에서 왔기 때문이다.\n\n둘 다 **순방향 값은 멀쩡한 채로** 틀릴 수 있다. 코어(numpy)가 먼저 같은 유도를\n지났고 골든이 둘을 따로 묻는다.",
    "symbols": [
     {
@@ -7522,7 +8992,10 @@
   {
    "name": "linalg",
    "title": "linalg",
-   "blurb": "선형대수 — 분해·풀이·노름.",
+   "blurb": {
+    "ko": "선형대수 — 분해·풀이·노름.",
+    "en": "Linear algebra — decompositions, solves, norms."
+   },
    "doc": "",
    "symbols": [
     {
@@ -7786,7 +9259,10 @@
   {
    "name": "serialize",
    "title": "serialize",
-   "blurb": "체크포인트. 형식은 safetensors 다.",
+   "blurb": {
+    "ko": "체크포인트. 형식은 safetensors 다.",
+    "en": "Checkpoints. The format is safetensors."
+   },
    "doc": "체크포인트를 바이트로, 바이트를 체크포인트로 — **safetensors** 형식.\n\n## 왜 이것이 필요한가\n\n`stateDict()` 는 있었는데 **저장할 방법이 없었다.** 탭을 새로고침하면 학습 결과가\n사라진다. 브라우저는 프로세스가 데스크톱보다 훨씬 자주 죽는 자리라 torch 보다\n오히려 더 아쉬운 구멍이었다.\n\n## 왜 우리 형식을 안 만들었나\n\ntorch 의 `save`/`load` 는 pickle 이다. 파이썬 객체를 실행하며 푸는 형식이라\n브라우저로 옮길 수도 없고 옮겨서도 안 된다.\n\nsafetensors 는 머리가 JSON 이고 몸이 연속된 바이트다. **코덱이 이 파일 하나이고,\n그 값으로 파이썬 `borch`·numpy·HF 도구가 같은 파일을 읽는다.** 자체 형식을 만들면\n그것이 안 된다 — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 이 프로젝트의\n이야기 절반이므로, 읽는 쪽이 우리뿐인 형식은 절반을 버리는 것이다.\n\n```\n[8바이트 LE u64: 머리 길이 N][N바이트 JSON 머리][몸: 텐서 바이트가 이어 붙는다]\n```\n\n## dtype 을 정직하게 적는 법\n\nborch 의 `int64`·`bool` 은 **이름표일 뿐 값은 float32 버퍼에 있다**(`dtype.ts`).\n머리에 `I64` 라고 적으면 4 바이트짜리 몸과 어긋나서 **남의 리더가 깨진다.**\n\n그래서 `dtype` 은 언제나 `F32` 로 적고, borch 의 이름표는 `__metadata__` 에 따로\n싣는다. 남이 읽으면 float32 배열이 나오고(맞다), 우리가 읽으면 이름표까지 돌아온다.",
    "symbols": [
     {
@@ -7857,7 +9333,10 @@
   {
    "name": "indexing",
    "title": "indexing",
-   "blurb": "대괄호 자리 — `x[1:3]` 에 해당하는 것.",
+   "blurb": {
+    "ko": "대괄호 자리 — `x[1:3]` 에 해당하는 것.",
+    "en": "The bracket position — what `x[1:3]` would be."
+   },
    "doc": "",
    "symbols": [
     {
@@ -7930,7 +9409,10 @@
   {
    "name": "einsum",
    "title": "einsum",
-   "blurb": "아인슈타인 합 표기.",
+   "blurb": {
+    "ko": "아인슈타인 합 표기.",
+    "en": "Einstein summation."
+   },
    "doc": "`einsum` — 첨자로 적는 축약.\n\n## 무엇까지 하는가\n\n피연산자 **한 개 또는 두 개**, 생략 부호(`...`) 없음, 한 피연산자 안에서 같은 첨자가\n두 번 나오지 않음(대각선 뽑기 없음). 그 밖은 던진다.\n\n**못 하는 것을 조용히 넘기지 않는다.** einsum 은 표기가 짧아서 안 되는 조합을\n넣기 쉽고, 그때 그럴듯한 답이 나오면 어디가 틀렸는지 찾을 길이 없다.\n\n## 어떻게 하는가\n\n새 커널이 없다. 축을 옮기고(`permute`), 접고(`sumDim`), 필요하면 행렬곱으로\n떨어뜨린다 — 전부 이미 있고 이미 골든이 보는 연산들이다. 손으로 쓴 역방향이\n하나도 안 생기는 것이 이 방식의 값이다.",
    "symbols": [
     {
@@ -7946,7 +9428,10 @@
   {
    "name": "device",
    "title": "device",
-   "blurb": "어댑터를 잡고 상태를 묻는 자리.",
+   "blurb": {
+    "ko": "어댑터를 잡고 상태를 묻는 자리.",
+    "en": "Acquiring the adapter, and asking it what it is doing."
+   },
    "doc": "",
    "symbols": [
     {
@@ -8198,7 +9683,10 @@
   {
    "name": "random",
    "title": "random",
-   "blurb": "난수의 씨앗.",
+   "blurb": {
+    "ko": "난수의 씨앗.",
+    "en": "Seeding the random draws."
+   },
    "doc": "",
    "symbols": [
     {
@@ -8245,7 +9733,10 @@
   {
    "name": "autograd",
    "title": "autograd",
-   "blurb": "기울기 스위치.",
+   "blurb": {
+    "ko": "기울기 스위치.",
+    "en": "The gradient switch."
+   },
    "doc": "",
    "symbols": [
     {
@@ -8324,7 +9815,10 @@
   {
    "name": "special",
    "title": "special",
-   "blurb": "특수함수. `torch.special` 자리.",
+   "blurb": {
+    "ko": "특수함수. `torch.special` 자리.",
+    "en": "Special functions. Where `torch.special` would be."
+   },
    "doc": "특수 함수 — 불완전 감마와 폴리감마.\n\n**커널을 여기 따로 두는 이유**는 `n` 이 셰이더 상수이기 때문이다. `polygamma(n, x)`\n는 `n` 마다 다른 셰이더를 굽는데, 단항 표(`kernels.ts` 의 `UNARY`)는 이름 하나에\n셰이더 하나를 매다는 구조라 그 자리에 안 들어간다.\n\n식은 코어(numpy)의 것을 그대로 옮겼다 — 두 벌로 두면 한쪽만 고쳐지는 날이 온다.\n코어 쪽이 torch 와 값·기울기 모두 맞는 것을 먼저 확인했고, 여기는 그 옮김이다.",
    "symbols": [
     {
@@ -8354,7 +9848,10 @@
   {
    "name": "rnn",
    "title": "rnn",
-   "blurb": "순환 신경망 유틸.",
+   "blurb": {
+    "ko": "순환 신경망 유틸.",
+    "en": "Recurrent-network utilities."
+   },
    "doc": "최상위 순환 여덟 — `torch.lstm` · `torch.gru` · `torch.rnn_tanh` · `torch.rnn_relu`\n와 그 `_cell` 짝.\n\n**층(`nn.Recurrent`)과 다른 것은 가중치를 어디서 얻는가뿐이다.** 층은 자기가 들고\n있고 이쪽은 **목록으로 받는다.** torch 도 그 둘을 다 주고, 층이 안에서 부르는 것이\n이 함수 쪽이다.\n\n그래서 걸음 식을 여기 한 벌만 둔다. 층 쪽과 두 벌로 두면 **게이트 순서가 갈리는\n날**이 오고, 그때 모양은 같고 값만 틀린다 — 이 저장소가 셀과 층 사이에서 이미 그\n이유로 식을 공유하고 있다.\n\n## 게이트 순서\n\n`weight_ih` 의 **행 순서**가 규약이다(실측):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (하나)\n\n바꾸면 값만 갈리고 모양은 그대로다.",
    "symbols": [
     {
@@ -8501,7 +9998,10 @@
   {
    "name": "errors",
    "title": "errors",
-   "blurb": "예외 종류. torch 와 같은 이름을 쓴다.",
+   "blurb": {
+    "ko": "예외 종류. torch 와 같은 이름을 쓴다.",
+    "en": "Exception types, under the names torch uses."
+   },
    "doc": "",
    "symbols": [
     {
@@ -8552,7 +10052,10 @@
   {
    "name": "dtype",
    "title": "dtype",
-   "blurb": "자료형.",
+   "blurb": {
+    "ko": "자료형.",
+    "en": "Data types."
+   },
    "doc": "",
    "symbols": [
     {

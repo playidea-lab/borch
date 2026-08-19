@@ -567,7 +567,16 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   overflow-x: auto; white-space: pre;
 }
 
+.section-head {
+  margin: 1.4rem 0 .3rem; padding-top: .7rem;
+  border-top: 1px dashed var(--line-soft);
+  font: 600 .72rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.members > .section-head:first-of-type { border-top: 0; margin-top: .6rem; }
+
 .hits { margin: 0; padding: 0; list-style: none; }
+.hits .why { font-size: .78rem; color: var(--fg-faint); padding: .15rem 0 .3rem; }
 .hits li { padding: .3rem 0; border-bottom: 1px solid var(--line-soft); }
 .hits a { text-decoration: none; font: .86rem/1.5 var(--mono); color: var(--fg-dim); }
 .hits a:hover { color: var(--ember); }
@@ -647,3 +656,8 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 .pager a { text-decoration: none; font-size: .9rem; color: var(--fg-dim); }
 .pager a:hover { color: var(--ember); }
 .pager a b { display: block; color: var(--fg); font-weight: 600; margin-top: .2rem; }
+
+/* 강의 본문의 이름 → API 레퍼런스. 밑줄 대신 점선으로, 읽는 흐름을 안 끊게. */
+a.api-link { text-decoration: none; border-bottom: 1px dashed var(--line); }
+a.api-link:hover { border-bottom-color: var(--ember); }
+a.api-link code { color: var(--ember); }
