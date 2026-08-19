@@ -110,8 +110,14 @@ def _flat(name):
     torch 는 `searchsorted`·`logsumexp` 처럼 밑줄 없이 붙여 쓰고 borch.ts 는
     `searchSorted`·`logSumExp` 로 쓴다. 밑줄만 보고 camel 로 바꾸면 그 둘이 안
     만나서, **있는 이름이 없다고 나온다** — 첫 판이 그렇게 예순 건을 허수로 냈다.
+
+    **끝 밑줄은 남긴다.** 제자리 판과 아닌 것은 다른 연산이다. 전부 지웠더니
+    `t_` 를 넣은 날 검사가 `t` 가 생긴 줄로 읽었고, 그 전에는 `bernoulli_` 가
+    `bernoulli` 에 붙어 "열아홉 개 있다" 는 허수를 냈다. 같은 정규화가 이 세션에서
+    세 번 뜻을 지웠다 — 지우는 것과 맞추는 것은 다른 일이다.
     """
-    return name.replace("_", "").lower()
+    tail = "_" if name.endswith("_") else ""
+    return name.replace("_", "").lower() + tail
 
 
 def _ts_surface():

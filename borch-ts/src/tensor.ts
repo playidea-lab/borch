@@ -127,6 +127,9 @@ function padIndex(
   return idx;
 }
 import * as LA from "./linalg.js";
+// **순환 가져오기다** — `special.ts` 가 `Tensor` 를 쓴다. 쓰는 자리가 메서드
+// 몸통 안이라 모듈이 다 실린 뒤에 불리고, 그래서 돈다. 최상위에서 쓰면 안 된다.
+import { polygamma } from "./special.js";
 import { formatSize, formatTensor } from "./repr.js";
 import {
   argReduce,
@@ -6024,6 +6027,30 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => Tensor.zeros(this.shape));
   }
 
+  /**
+   * 한 값으로 채운 **사본**. `fill_` 의 짝이고 torch 가 둘 다 준다.
+   *
+   * 이 이름이 없던 것은 검사가 `fill_` 을 `fill` 로 읽고 있어서 안 보였다 —
+   * 끝 밑줄을 지우는 정규화가 세 번째로 뜻을 지운 자리다.
+   */
+  fill(value: number): Tensor {
+    return Tensor.full(this.shape, value);
+  }
+
+  /** 다감마 함수의 `n` 차 도함수를 제자리로. 차수가 **첫 인자**다. */
+  polygamma_(n: number): Tensor {
+    return this.mutate(() => polygamma(n, this));
+  }
+
+  /**
+   * 기울기 표식을 켜고 **자기를 돌려준다.** torch 가 이어 쓰는 꼴을 위해 그렇게 한다
+   * (`x.requires_grad_().sum()`).
+   */
+  requiresGrad_(flag = true): Tensor {
+    this.requiresGrad = flag;
+    return this;
+  }
+
   fill_(value: number): Tensor {
     return this.mutate(() => Tensor.full(this.shape, value));
   }
@@ -6092,6 +6119,261 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   cumprod_(dim = 0): Tensor {
     return this.mutate(() => this.cumprod(dim));
+  }
+
+  // ── 커널 표에는 있는데 이름이 없던 것들 ──────────────────────────────
+  //
+  // borch.ts 는 원소별 연산을 **이름마다 메서드로 주는 대신** `binary(이름, 저쪽)`·
+  // `unary(이름)` 표로 준다. 커널이 하나뿐이니 그 편이 짧고, 새 연산을 넣을 때
+  // 메서드를 안 늘려도 된다.
+  //
+  // **그런데 쓰는 사람이 치는 줄은 `x.gcd(y)` 다.** 표를 아는 사람만 `x.binary("gcd", y)`
+  // 를 칠 수 있고, torch 에서 옮겨 온 코드는 그 이름을 모른다. 아래 열하나는 그래서
+  // 있다 — 계산은 이미 있었고 없던 것은 **부르는 법**이다.
+  //
+  // 이 갈래가 `inplace::짝에서::` 40 건 뒤에 숨어 있었다. 갭 표의 까닭이 "별칭" 이라
+  // 적혀 있었는데 별칭인 것은 그중 열뿐이었다.
+
+  /**
+   * 수도 텐서도 받는다.
+   *
+   * torch 는 `x.bitwise_and_(3)` 과 `x.gcd_(y)` 를 둘 다 쓴다 — 텐서만 받게 두면
+   * 앞쪽이 그냥 안 돌고, 그 갈림은 서명에만 있어서 값 검사에 안 걸린다.
+   */
+  private static asTensor(v: Tensor | number): Tensor {
+    return v instanceof Tensor ? v : Tensor.full([], v);
+  }
+
+  /** 최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다. */
+  gcd(other: Tensor | number): Tensor {
+    return this.binary("gcd", Tensor.asTensor(other));
+  }
+
+  /** 최소공배수. **`gcd` 가 0 이면 0 이다**(실측: 0 과 7 의 lcm 은 0). */
+  lcm(other: Tensor | number): Tensor {
+    return this.binary("lcm", Tensor.asTensor(other));
+  }
+
+  /** `other` 쪽으로 한 칸 옆의 부동소수. 간격이 값에 따라 다른 것이 요점이다. */
+  nextafter(other: Tensor | number): Tensor {
+    return this.binary("nextafter", Tensor.asTensor(other));
+  }
+
+  bitwiseAnd(other: Tensor | number): Tensor {
+    return this.binary("bitwise_and", Tensor.asTensor(other));
+  }
+
+  bitwiseOr(other: Tensor | number): Tensor {
+    return this.binary("bitwise_or", Tensor.asTensor(other));
+  }
+
+  bitwiseXor(other: Tensor | number): Tensor {
+    return this.binary("bitwise_xor", Tensor.asTensor(other));
+  }
+
+  bitwiseLeftShift(other: Tensor | number): Tensor {
+    return this.binary("bitwise_left_shift", Tensor.asTensor(other));
+  }
+
+  bitwiseRightShift(other: Tensor | number): Tensor {
+    return this.binary("bitwise_right_shift", Tensor.asTensor(other));
+  }
+
+  /** **0 이 아니면 참으로 보고** 논리곱. 비트 연산과 갈리는 자리가 그것이다. */
+  logicalAnd(other: Tensor | number): Tensor {
+    return this.binary("logical_and", Tensor.asTensor(other));
+  }
+
+  logicalOr(other: Tensor | number): Tensor {
+    return this.binary("logical_or", Tensor.asTensor(other));
+  }
+
+  logicalNot(): Tensor {
+    return this.unary("logical_not");
+  }
+
+  // ── 제자리 판 서른여덟 ───────────────────────────────────────────────
+  //
+  // torch 는 거의 모든 연산에 밑줄 짝을 준다. 여기 있던 것은 `i0_` 하나였고, 나머지
+  // 서른여덟은 **계산이 이미 있는데 밑줄 이름만 없던** 자리다. `mutate` 가 제자리성을
+  // 지키므로 한 줄씩이다.
+  //
+  // 열은 torch 의 **둘째 철자**다(`divide_`=`div_`). 옮기면 같은 질문이 두 번이지만,
+  // 이름이 없으면 그 철자로 쓴 코드가 그냥 안 돈다 — 물음이 겹치는 것과 이름이 없는
+  // 것은 다른 문제다.
+
+  bitwiseAnd_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.bitwiseAnd(other));
+  }
+
+  bitwiseOr_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.bitwiseOr(other));
+  }
+
+  bitwiseXor_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.bitwiseXor(other));
+  }
+
+  bitwiseLeftShift_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.bitwiseLeftShift(other));
+  }
+
+  bitwiseRightShift_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.bitwiseRightShift(other));
+  }
+
+  bitwiseNot_(): Tensor {
+    return this.mutate(() => this.bitwise_not());
+  }
+
+  logicalAnd_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.logicalAnd(other));
+  }
+
+  logicalOr_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.logicalOr(other));
+  }
+
+  logicalXor_(other: Tensor): Tensor {
+    return this.mutate(() => this.logicalXor(other));
+  }
+
+  logicalNot_(): Tensor {
+    return this.mutate(() => this.logicalNot());
+  }
+
+  gcd_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.gcd(other));
+  }
+
+  lcm_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.lcm(other));
+  }
+
+  nextafter_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.nextafter(other));
+  }
+
+  clampMax_(high: number): Tensor {
+    return this.mutate(() => this.clampMax(high));
+  }
+
+  clampMin_(low: number): Tensor {
+    return this.mutate(() => this.clampMin(low));
+  }
+
+  digamma_(): Tensor {
+    return this.mutate(() => this.digamma());
+  }
+
+  erfinv_(): Tensor {
+    return this.mutate(() => this.erfinv());
+  }
+
+  lgamma_(): Tensor {
+    return this.mutate(() => this.lgamma());
+  }
+
+  mvlgamma_(p: number): Tensor {
+    return this.mutate(() => this.mvlgamma(p));
+  }
+
+  floorDivide_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.floorDivide(Tensor.asTensor(other)));
+  }
+
+  fmod_(divisor: number): Tensor {
+    return this.mutate(() => this.fmod(divisor));
+  }
+
+  remainder_(divisor: number): Tensor {
+    return this.mutate(() => this.remainder(divisor));
+  }
+
+  lerp_(end: Tensor, weight: Tensor | number): Tensor {
+    return this.mutate(() => this.lerp(end, weight));
+  }
+
+  nanToNum_(nan = 0, posinf?: number, neginf?: number): Tensor {
+    return this.mutate(() => this.nanToNum(nan, posinf, neginf));
+  }
+
+  put_(index: Tensor, source: Tensor, accumulate = false): Tensor {
+    return this.mutate(() => this.put(index, source, accumulate));
+  }
+
+  renorm_(p: number, dim: number, maxnorm: number): Tensor {
+    return this.mutate(() => this.renorm(p, dim, maxnorm));
+  }
+
+  /**
+   * **짝과 다른 연산이다.** `bernoulli()` 는 자기 값을 확률로 읽는데 이쪽은 자기
+   * 값을 **무시하고** `p` 로 채운다(실측: `[1,4,9,2]` 를 넣어도 `p=0` 이면 전부 0).
+   *
+   * 밑줄만 보고 짝에서 만들면 확률이 0·1 인 자리는 확정이라 값이 맞고 **가운데
+   * 확률에서만 조용히 틀린다.** 코어도 같은 이유로 자동 표 밖에 두었다.
+   */
+  bernoulli_(p = 0.5): Tensor {
+    return this.mutate(
+      () => Tensor.rand(this.shape).binary("lt", Tensor.full([], p)).to(this.dtype));
+  }
+
+  /**
+   * **언제나 거절한다.** `float_power` 의 결과가 배정도인데 되쓸 자리가 없다 —
+   * torch 도 float32 자리에서 같은 이유로 멈춘다(실측).
+   */
+  floatPower_(exponent: Tensor | number): Tensor {
+    void exponent;
+    throw new RuntimeError(
+      "`float_power_` 는 제자리로 쓸 수 없습니다 — 결과가 배정도라 되쓸 곳이 " +
+      "없습니다. `x.floatPower(k)` 로 새 텐서를 받으세요. " +
+      "(torch: the base given to float_power_ has dtype Float but the " +
+      "operation's result requires dtype Double)");
+  }
+
+  // torch 의 둘째 철자들. 계산은 위에 있고 여기서는 이름만 잇는다.
+  //
+  // **수만 받는다** — 짝인 `div_`·`mul_`·`sub_` 가 그렇다. 텐서를 받는 제자리
+  // 산술은 여기 없고, 별칭이 짝보다 넓으면 그것은 별칭이 아니라 새 약속이 된다.
+  divide_(other: number): Tensor {
+    return this.div_(other);
+  }
+
+  trueDivide_(other: number): Tensor {
+    return this.div_(other);
+  }
+
+  multiply_(other: number): Tensor {
+    return this.mul_(other);
+  }
+
+  subtract_(other: number, alpha = 1): Tensor {
+    return this.sub_(other, alpha);
+  }
+
+  /** 2 차원 전치. **모양이 바뀐다** — 정사각으로만 물으면 안 바뀐 채 통과한다. */
+  t_(): Tensor {
+    return this.transpose_();
+  }
+
+  greater_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.binary("gt", Tensor.asTensor(other)));
+  }
+
+  greaterEqual_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.binary("ge", Tensor.asTensor(other)));
+  }
+
+  less_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.binary("lt", Tensor.asTensor(other)));
+  }
+
+  lessEqual_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.binary("le", Tensor.asTensor(other)));
+  }
+
+  notEqual_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.binary("ne", Tensor.asTensor(other)));
   }
 
   /** 같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다. */

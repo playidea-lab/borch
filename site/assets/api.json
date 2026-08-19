@@ -4,7 +4,7 @@
  "english": {
   "done": 619,
   "stale": 0,
-  "missing": 0
+  "missing": 10
  },
  "modules": [
   {
@@ -3174,6 +3174,34 @@
        }
       },
       {
+       "name": "fill",
+       "signature": "fill(value: number): Tensor",
+       "doc": "한 값으로 채운 **사본**. `fill_` 의 짝이고 torch 가 둘 다 준다.\n\n이 이름이 없던 것은 검사가 `fill_` 을 `fill` 로 읽고 있어서 안 보였다 —\n끝 밑줄을 지우는 정규화가 세 번째로 뜻을 지운 자리다.",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
+      },
+      {
+       "name": "polygamma_",
+       "signature": "polygamma_(n: number): Tensor",
+       "doc": "다감마 함수의 `n` 차 도함수를 제자리로. 차수가 **첫 인자**다.",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
+      },
+      {
+       "name": "requiresGrad_",
+       "signature": "requiresGrad_(flag?: boolean): Tensor",
+       "doc": "기울기 표식을 켜고 **자기를 돌려준다.** torch 가 이어 쓰는 꼴을 위해 그렇게 한다\n(`x.requires_grad_().sum()`).",
+       "torch": "requires_grad_",
+       "section": {
+        "ko": "제자리 연산",
+        "en": "In place"
+       }
+      },
+      {
        "name": "fill_",
        "signature": "fill_(value: number): Tensor",
        "doc": "",
@@ -3298,12 +3326,480 @@
        }
       },
       {
+       "name": "gcd",
+       "signature": "gcd(other: Tensor | number): Tensor",
+       "doc": "최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다.",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "lcm",
+       "signature": "lcm(other: Tensor | number): Tensor",
+       "doc": "최소공배수. **`gcd` 가 0 이면 0 이다**(실측: 0 과 7 의 lcm 은 0).",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "nextafter",
+       "signature": "nextafter(other: Tensor | number): Tensor",
+       "doc": "`other` 쪽으로 한 칸 옆의 부동소수. 간격이 값에 따라 다른 것이 요점이다.",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "bitwiseAnd",
+       "signature": "bitwiseAnd(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_and",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "bitwiseOr",
+       "signature": "bitwiseOr(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_or",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "bitwiseXor",
+       "signature": "bitwiseXor(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_xor",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "bitwiseLeftShift",
+       "signature": "bitwiseLeftShift(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_left_shift",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "bitwiseRightShift",
+       "signature": "bitwiseRightShift(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_right_shift",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "logicalAnd",
+       "signature": "logicalAnd(other: Tensor | number): Tensor",
+       "doc": "*0 이 아니면 참으로 보고** 논리곱. 비트 연산과 갈리는 자리가 그것이다.",
+       "torch": "logical_and",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "logicalOr",
+       "signature": "logicalOr(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "logical_or",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "logicalNot",
+       "signature": "logicalNot(): Tensor",
+       "doc": "",
+       "torch": "logical_not",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "bitwiseAnd_",
+       "signature": "bitwiseAnd_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_and_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "bitwiseOr_",
+       "signature": "bitwiseOr_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_or_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "bitwiseXor_",
+       "signature": "bitwiseXor_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_xor_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "bitwiseLeftShift_",
+       "signature": "bitwiseLeftShift_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_left_shift_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "bitwiseRightShift_",
+       "signature": "bitwiseRightShift_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "bitwise_right_shift_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "bitwiseNot_",
+       "signature": "bitwiseNot_(): Tensor",
+       "doc": "",
+       "torch": "bitwise_not_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "logicalAnd_",
+       "signature": "logicalAnd_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "logical_and_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "logicalOr_",
+       "signature": "logicalOr_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "logical_or_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "logicalXor_",
+       "signature": "logicalXor_(other: Tensor): Tensor",
+       "doc": "",
+       "torch": "logical_xor_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "logicalNot_",
+       "signature": "logicalNot_(): Tensor",
+       "doc": "",
+       "torch": "logical_not_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "gcd_",
+       "signature": "gcd_(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "lcm_",
+       "signature": "lcm_(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "nextafter_",
+       "signature": "nextafter_(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "clampMax_",
+       "signature": "clampMax_(high: number): Tensor",
+       "doc": "",
+       "torch": "clamp_max_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "clampMin_",
+       "signature": "clampMin_(low: number): Tensor",
+       "doc": "",
+       "torch": "clamp_min_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "digamma_",
+       "signature": "digamma_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "erfinv_",
+       "signature": "erfinv_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "lgamma_",
+       "signature": "lgamma_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "mvlgamma_",
+       "signature": "mvlgamma_(p: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "floorDivide_",
+       "signature": "floorDivide_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "floor_divide_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "fmod_",
+       "signature": "fmod_(divisor: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "remainder_",
+       "signature": "remainder_(divisor: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "lerp_",
+       "signature": "lerp_(end: Tensor, weight: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "nanToNum_",
+       "signature": "nanToNum_(nan?: number, posinf?: number, neginf?: number): Tensor",
+       "doc": "",
+       "torch": "nan_to_num_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "put_",
+       "signature": "put_(index: Tensor, source: Tensor, accumulate?: boolean): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "renorm_",
+       "signature": "renorm_(p: number, dim: number, maxnorm: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "bernoulli_",
+       "signature": "bernoulli_(p?: number): Tensor",
+       "doc": "**짝과 다른 연산이다.** `bernoulli()` 는 자기 값을 확률로 읽는데 이쪽은 자기\n값을 **무시하고** `p` 로 채운다(실측: `[1,4,9,2]` 를 넣어도 `p=0` 이면 전부 0).\n\n밑줄만 보고 짝에서 만들면 확률이 0·1 인 자리는 확정이라 값이 맞고 **가운데\n확률에서만 조용히 틀린다.** 코어도 같은 이유로 자동 표 밖에 두었다.",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "floatPower_",
+       "signature": "floatPower_(exponent: Tensor | number): Tensor",
+       "doc": "**언제나 거절한다.** `float_power` 의 결과가 배정도인데 되쓸 자리가 없다 —\ntorch 도 float32 자리에서 같은 이유로 멈춘다(실측).",
+       "torch": "float_power_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "divide_",
+       "signature": "divide_(other: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "trueDivide_",
+       "signature": "trueDivide_(other: number): Tensor",
+       "doc": "",
+       "torch": "true_divide_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "multiply_",
+       "signature": "multiply_(other: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "subtract_",
+       "signature": "subtract_(other: number, alpha?: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "t_",
+       "signature": "t_(): Tensor",
+       "doc": "2 차원 전치. **모양이 바뀐다** — 정사각으로만 물으면 안 바뀐 채 통과한다.",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "greater_",
+       "signature": "greater_(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "greaterEqual_",
+       "signature": "greaterEqual_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "greater_equal_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "less_",
+       "signature": "less_(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "lessEqual_",
+       "signature": "lessEqual_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "less_equal_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "notEqual_",
+       "signature": "notEqual_(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "not_equal_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
        "name": "view",
        "signature": "view(...shape: number[]): Tensor",
        "doc": "같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다.",
        "section": {
-        "ko": "제자리 연산",
-        "en": "In place"
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
        },
        "doc_en": "Views the same buffer as a different shape. The same as `reshape`, and in-place operations carry across."
       },
@@ -4996,7 +5492,7 @@
      "doc_en": "Makes one graph node from outside. **A door for places writing kernels in another file.**\n\n`Tensor.make` is private — it is what this class's own operations use, and that is right. But once a\nmodule with **kernels of its own** appears, such as `fft.ts`, that door is needed. Rather than\nrestating the conditions there (two copies of the `gradMode` check and the `requiresGrad` propagation\neventually diverge), it hands over to the same place."
     }
    ],
-   "count": 507,
+   "count": 559,
    "doc_en": "`Tensor` — one GPU buffer, a shape, and one node on the tape.\n\nThe layout is **NCHW** and the dtype is **float32, only.** The sister project\n(`borch_webgpu`) holding NHWC and packing int64 into float32 was a detour around\nTF.js's constraints, and our kernels do not have those constraints. Imitating it\ninherits someone else's detour for no reason."
   },
   {
@@ -11502,5 +11998,5 @@
    "count": 9
   }
  ],
- "total": 1504
+ "total": 1556
 }

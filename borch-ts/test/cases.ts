@@ -3993,6 +3993,92 @@ function addRecent(out: Map<string, Case>): void {
     });
   }
 
+  // ── 짝에서 만든 제자리 판 (`inplace::짝에서::`) ──────────────────────
+  //
+  // torch 는 거의 모든 연산에 밑줄 짝을 준다. 여기 있던 것은 `i0_` 하나였고, 나머지
+  // 서른여덟은 **계산이 이미 있는데 이름만 없던** 자리였다 — 열은 torch 의 둘째
+  // 철자(`divide_`=`div_`)이고, 열하나는 커널 표에만 있어서 `binary("gcd", …)` 로만
+  // 닿았다. 갭 표가 마흔을 통째로 "별칭" 이라 적었는데 별칭인 것은 열뿐이었다.
+  //
+  // **둘은 짝에서 만들면 안 된다.** `bernoulli_(p)` 는 자기 값을 확률로 읽는
+  // `bernoulli()` 와 달리 자기 값을 무시하고 `p` 로 채우고, `float_power_` 는 결과가
+  // 배정도라 torch 도 거절한다.
+  const ints4 = (): Tensor => Tensor.from([6, -4, 3, 9], [4], { dtype: "int64" });
+  const flags4 = (): Tensor => Tensor.from([1, 0, 1, 0], [4], { dtype: "bool" });
+  const other4 = (): Tensor => Tensor.from([1, 1, 0, 0], [4], { dtype: "bool" });
+  const plain4 = (): Tensor => Tensor.from([1, 4, 9, 2], [4]);
+  const twos4 = (): Tensor => Tensor.from([2, 2, 2, 2], [4]);
+  const pos4 = (): Tensor => Tensor.from([2, 3, 4, 5], [4]);
+  const ramp23 = (): Tensor => Tensor.from([0, 1, 2, 3, 4, 5], [2, 3]);
+  const pairs: [string, () => Tensor, (t: Tensor) => Tensor][] = [
+    ["bitwise_and_", ints4, (x) => x.bitwiseAnd_(3)],
+    ["bitwise_or_", ints4, (x) => x.bitwiseOr_(3)],
+    ["bitwise_xor_", ints4, (x) => x.bitwiseXor_(3)],
+    ["bitwise_not_", ints4, (x) => x.bitwiseNot_()],
+    ["bitwise_left_shift_", ints4, (x) => x.bitwiseLeftShift_(1)],
+    ["bitwise_right_shift_", ints4, (x) => x.bitwiseRightShift_(1)],
+    ["logical_and_", flags4, (x) => x.logicalAnd_(other4())],
+    ["logical_or_", flags4, (x) => x.logicalOr_(other4())],
+    ["logical_xor_", flags4, (x) => x.logicalXor_(other4())],
+    ["logical_not_", flags4, (x) => x.logicalNot_()],
+    ["clamp_max_", plain4, (x) => x.clampMax_(4)],
+    ["clamp_min_", plain4, (x) => x.clampMin_(3)],
+    ["digamma_", pos4, (x) => x.digamma_()],
+    ["divide_", plain4, (x) => x.divide_(2)],
+    ["erfinv_", () => Tensor.from([0.0, 0.3, -0.2, 0.4], [4]), (x) => x.erfinv_()],
+    ["floor_divide_", plain4, (x) => x.floorDivide_(2)],
+    ["fmod_", plain4, (x) => x.fmod_(2)],
+    ["gcd_", ints4, (x) => x.gcd_(Tensor.from([2, 2, 3, 3], [4], { dtype: "int64" }))],
+    ["lcm_", ints4, (x) => x.lcm_(Tensor.from([2, 2, 3, 3], [4], { dtype: "int64" }))],
+    ["greater_", plain4, (x) => x.greater_(3)],
+    ["greater_equal_", plain4, (x) => x.greaterEqual_(4)],
+    ["less_", plain4, (x) => x.less_(3)],
+    ["less_equal_", plain4, (x) => x.lessEqual_(4)],
+    ["not_equal_", plain4, (x) => x.notEqual_(4)],
+    ["i0_", plain4, (x) => x.i0_()],
+    ["lgamma_", pos4, (x) => x.lgamma_()],
+    ["lerp_", plain4, (x) => x.lerp_(twos4(), 0.5)],
+    ["mvlgamma_", pos4, (x) => x.mvlgamma_(1)],
+    ["multiply_", plain4, (x) => x.multiply_(3)],
+    ["nan_to_num_",
+      () => Tensor.from([1.0, Number.NaN, Infinity, -Infinity], [4]),
+      (x) => x.nanToNum_()],
+    ["nextafter_", plain4, (x) => x.nextafter_(twos4())],
+    ["put_", plain4,
+      (x) => x.put_(Tensor.from([0, 2], [2], { dtype: "int64" }),
+        Tensor.from([9, 9], [2]))],
+    ["remainder_", plain4, (x) => x.remainder_(2)],
+    ["renorm_", ramp23, (x) => x.renorm_(2, 0, 1.0)],
+    ["subtract_", plain4, (x) => x.subtract_(1)],
+    ["true_divide_", plain4, (x) => x.trueDivide_(2)],
+    // **모양이 바뀌는 제자리 연산.** 정사각으로만 물으면 안 바뀐 채 통과한다.
+    ["t_", ramp23, (x) => x.t_()],
+  ];
+  for (const [name, src, run] of pairs) {
+    out.set(`inplace::짝에서::${name}`, () => {
+      const x = src();
+      run(x);
+      return x;
+    });
+  }
+  // **자기 값을 확률로 안 읽는다** — 입력이 [1,4,9,2] 인데 `p=0` 이면 전부 0 이다.
+  for (const p of [0.0, 1.0]) {
+    out.set(`inplace::짝에서::bernoulli_(p=${p.toFixed(1)})`, () => {
+      const x = plain4();
+      x.bernoulli_(p);
+      return x;
+    });
+  }
+  out.set("inplace::짝에서::float_power_ 는 거절", () => {
+    try {
+      plain4().floatPower_(2);
+    } catch (err) {
+      const said = err instanceof Error ? err.message : String(err);
+      return said.includes("Double") ? "Double" : `다른 문구 <${said}>`;
+    }
+    return "안 던졌다";
+  });
+
   // ── 분포에서 뽑아 채우는 일곱 (`inplace::분포::`) ─────────────────────
   //
   // 값은 못 굳힌다. 굳힐 수 있는 것은 **모양·형이 안 바뀐다**는 것과 **거절**이다.
