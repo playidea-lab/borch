@@ -12,7 +12,7 @@
 import { EXAMPLES } from "./examples.js";
 import { t } from "./i18n.js";
 import {
-  decodeCode, encodeCode, formatBytes, highlight, probeDevice, requestStop,
+  decodeCode, describeError, encodeCode, formatBytes, highlight, probeDevice, requestStop,
   runCode, runPython,
 } from "./runner.js";
 
@@ -320,7 +320,7 @@ async function run() {
     }
   } catch (err) {
     say("");
-    say(String(err && err.stack ? err.stack : err), "err");
+    say(describeError(err), "err");
   } finally {
     running = false;
     runBtn.disabled = false;

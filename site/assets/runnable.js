@@ -17,7 +17,7 @@
  */
 
 import { drawSeries, drawTensor } from "./render.js";
-import { encodeCode, highlight, requestStop, runCode, runPython } from "./runner.js";
+import { describeError, encodeCode, highlight, requestStop, runCode, runPython } from "./runner.js";
 import { t } from "./i18n.js";
 
 const LABEL = {
@@ -158,7 +158,7 @@ function mount(box) {
       write("");
       write(t("run.done", result.ms.toFixed(0)), "ok");
     } catch (err) {
-      write(String(err && err.stack ? err.stack : err), "err");
+      write(describeError(err), "err");
     } finally {
       busy = false;
       runBtn.disabled = false;

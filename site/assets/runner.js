@@ -407,3 +407,25 @@ export function decodeCode(encoded) {
   const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
 }
+
+/**
+ * 오류를 사람이 읽을 수 있는 글로.
+ *
+ * **`err.stack` 만 보여주면 사파리에서 설명이 사라진다.** V8 의 스택은 첫 줄이
+ * `Error: 무엇이 잘못됐다` 라서 그것만 찍어도 읽혔는데, WebKit 의 스택은 **호출
+ * 자리만** 있고 메시지가 없다(실측: `module code@…:12:22`). 그래서 사파리 방문자는
+ * "WebGPU 가 없다" 대신 파일 이름과 줄 번호만 봤다 — 그것도 이 사이트에서 사파리가
+ * 가장 먼저 만나는 오류에서.
+ *
+ * 메시지를 먼저 적고 스택은 뒤에 붙인다. 둘 다 필요하다: 하나는 읽는 사람의 것이고
+ * 하나는 고치는 사람의 것이다.
+ */
+export function describeError(err) {
+  if (!err) return "알 수 없는 오류";
+  const head = err.name && err.message ? `${err.name}: ${err.message}`
+             : String(err.message ?? err);
+  const stack = typeof err.stack === "string" ? err.stack : "";
+  // V8 은 스택 첫 줄이 이미 메시지다 — 두 번 적지 않는다.
+  if (stack && stack.startsWith(head)) return stack;
+  return stack ? `${head}\n${stack}` : head;
+}

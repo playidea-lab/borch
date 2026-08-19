@@ -7,7 +7,7 @@
 
 import { HERO_CODE } from "./examples.js";
 import { t } from "./i18n.js";
-import { highlight, probeDevice, runCode } from "./runner.js";
+import { describeError, highlight, probeDevice, runCode } from "./runner.js";
 
 const codeEl = document.getElementById("hero-code");
 const outEl = document.getElementById("hero-out");
@@ -56,7 +56,7 @@ runBtn.addEventListener("click", async () => {
     say("");
     say(t("run.doneLocal", (performance.now() - t0).toFixed(0)), "ok");
   } catch (err) {
-    say(String(err && err.stack ? err.stack : err), "err");
+    say(describeError(err), "err");
   } finally {
     runBtn.disabled = false;
   }
