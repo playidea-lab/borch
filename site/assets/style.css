@@ -723,25 +723,40 @@ a.api-link code { color: var(--ember-text); }
    보인다. 실제로 그렇게 신고가 왔다: "흰 부분이 위아래로 안 움직이고 출력이 안
    보인다." 스크롤은 되고 있었고, 된다는 표시가 없었을 뿐이다. */
 
-.runnable .out,
-.runnable .canvas-out,
-#console,
-.doc-main pre,
-.sidebar {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+/* **표준 속성은 `::-webkit-scrollbar` 를 모르는 브라우저에만 준다.**
+
+   Chrome 은 `scrollbar-width` 나 `scrollbar-color` 가 지정되면 `::-webkit-scrollbar`
+   규칙을 **통째로 무시한다.** 그런데 표준 속성만으로는 macOS 의 겹침 스크롤바가
+   그대로라 폭이 0 이다. 둘을 같이 적어 두면 뒤엣것이 앞엣것을 끄고 자기는 아무것도
+   안 하는 상태가 된다 — 고치려던 것이 스스로를 취소하고 있었다.
+
+   실측(Chrome 150 · macOS): 같은 상자에 webkit 규칙만 두면 스크롤바가 10px 를
+   차지하고, 표준 속성을 같이 두면 0 이다. 신고("흰 부분이 위아래로 안 움직인다")가
+   고친 뒤에도 그대로였던 이유가 이것이다. */
+@supports not selector(::-webkit-scrollbar) {
+  .runnable .out,
+  .runnable .canvas-out,
+  #console,
+  .doc-main pre,
+  .sidebar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
 }
 .runnable .out::-webkit-scrollbar,
 .runnable .canvas-out::-webkit-scrollbar,
 #console::-webkit-scrollbar,
+.doc-main pre::-webkit-scrollbar,
 .sidebar::-webkit-scrollbar { width: 10px; height: 10px; }
 .runnable .out::-webkit-scrollbar-track,
 .runnable .canvas-out::-webkit-scrollbar-track,
 #console::-webkit-scrollbar-track,
+.doc-main pre::-webkit-scrollbar-track,
 .sidebar::-webkit-scrollbar-track { background: transparent; }
 .runnable .out::-webkit-scrollbar-thumb,
 .runnable .canvas-out::-webkit-scrollbar-thumb,
 #console::-webkit-scrollbar-thumb,
+.doc-main pre::-webkit-scrollbar-thumb,
 .sidebar::-webkit-scrollbar-thumb {
   background: var(--line); border-radius: 5px;
   border: 2px solid transparent; background-clip: content-box;
