@@ -6964,30 +6964,98 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => Tensor.from(data, this.shape, { dtype: this.dtype }));
   }
 
-  /** 지수분포. 평균이 `1/lambd` 다. */
+  /**
+   * **연속 분포는 정수 칸에 답이 없다.** 다섯이 여기서 멈추고 `geometric_`·`random_`
+   * 은 안 멈춘다 — 그 둘은 이산이라 정수 칸에 답이 있다.
+   *
+   * 이름만 보고 "난수는 실수만" 으로 묶으면 그 둘에서 틀린다. 처음 다섯을 넣을 때
+   * 이 문을 안 달았고, 그러면 `zeros(6, int64).exponential_()` 이 **조용히 돌면서**
+   * 정수 칸에 잘린 실수를 넣는다.
+   *
+   * **예외 종류가 torch 안에서도 갈린다**(실측): `normal_`·`uniform_`·`log_normal_`
+   * 은 `NotImplementedError` 이고 `exponential_`·`cauchy_` 는 `RuntimeError` 다.
+   * 하나로 묶으면 셋이 갈리고, 그 갈림은 값이 아니라 예외 이름이라 값으로 대조하는
+   * 검사에는 안 걸린다. 부르는 쪽이 어느 쪽인지 적는다.
+   */
+  private needsFloatDraw(who: string, kind: "runtime" | "unimplemented"): void {
+    if (this.dtype === "float32") return;
+    const said = `"${who}" not implemented for '${this.dtype}' — ` +
+      "연속 분포는 실수 칸에만 뽑습니다.";
+    throw kind === "runtime"
+      ? new RuntimeError(said)
+      : new NotImplementedError(said);
+  }
+
+  /** 지수분포. 평균이 `1/lambd` 다. **`lambd` 는 양수여야 한다.** */
   exponential_(lambd = 1.0): Tensor {
+    this.needsFloatDraw("exponential_", "runtime");
+    if (!(lambd > 0)) {
+      throw new RuntimeError(
+        `exponential_ expects lambda > 0.0, but found lambda=${lambd}`);
+    }
     // **`1 - u` 를 쓴다.** `uniform()` 이 0 을 낼 수 있고 `log(0)` 은 −∞ 다.
     return this.drawInto_((u) => -Math.log(1 - u) / lambd);
   }
 
   /** 코시분포. **평균이 없다** — 꼬리가 두꺼워 표본평균이 안 모인다. */
   cauchy_(median = 0.0, sigma = 1.0): Tensor {
+    this.needsFloatDraw("cauchy_", "runtime");
     return this.drawInto_((u) => median + sigma * Math.tan(Math.PI * (u - 0.5)));
   }
 
   /** 로그정규분포. `mean`·`std` 는 **로그를 취한 뒤의** 값이다(torch 와 같다). */
   logNormal_(mean = 1.0, std = 2.0): Tensor {
+    this.needsFloatDraw("log_normal_", "unimplemented");
     return this.drawInto_(() => Math.exp(mean + std * gauss()));
   }
 
-  /** 기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다. */
+  /** 정규분포로 덮어쓴다. **`std` 는 음수일 수 없다** — 0 이면 평균 그대로다. */
+  normal_(mean = 0.0, std = 1.0): Tensor {
+    this.needsFloatDraw("normal_", "unimplemented");
+    if (!(std >= 0)) {
+      throw new RuntimeError(
+        `normal_ expects std >= 0.0, but found std=${std}`);
+    }
+    return this.drawInto_(() => mean + std * gauss());
+  }
+
+  /** `[from, to)` 의 실수로 덮어쓴다. **`from < to` 여야 한다.** */
+  uniform_(from = 0.0, to = 1.0): Tensor {
+    this.needsFloatDraw("uniform_", "unimplemented");
+    if (!(from < to)) {
+      throw new RuntimeError(
+        `uniform_ expects to return a [from, to) range, but found from=${from} > to=${to}`);
+    }
+    return this.drawInto_((u) => from + u * (to - from));
+  }
+
+  /**
+   * 기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다.
+   *
+   * `p` 는 **열린 구간**이다. 0 이면 영원히 안 나오고 1 이면 늘 첫 번에 나오므로
+   * 둘 다 분포가 아니다.
+   */
   geometric_(p: number): Tensor {
+    if (!(p > 0 && p < 1)) {
+      throw new RuntimeError(
+        `geometric_ expects p to be in (0, 1), but got p=${p}`);
+    }
     return this.drawInto_((u) => Math.floor(Math.log(1 - u) / Math.log(1 - p)) + 1);
   }
 
-  /** `[from, to)` 의 정수로 채운다. `to` 를 안 주면 형이 담을 수 있는 데까지다. */
+  /**
+   * `[from, to)` 의 정수로 채운다.
+   *
+   * **안 주면 f32 가 정확히 셀 수 있는 데까지다**(2²⁴). torch 는 형마다 다르고
+   * int64 에서 2⁶² 인데, **여기 int64 는 f32 칸에 담기므로 그 위를 셀 수가 없다** —
+   * 뽑아 놓아도 이웃한 정수를 구별 못 해 값이 뭉친다. 그 자리는 흉내 내지 않는다.
+   */
   random_(from = 0, to?: number): Tensor {
     const high = to ?? EXACT_INT_LIMIT;
+    if (!(from < high)) {
+      throw new RuntimeError(
+        `random_ expects 'from' to be less than 'to', but got from=${from} >= to=${high}`);
+    }
     return this.drawInto_((u) => from + Math.floor(u * (high - from)));
   }
 

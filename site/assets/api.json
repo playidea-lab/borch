@@ -4,7 +4,7 @@
  "english": {
   "done": 617,
   "stale": 0,
-  "missing": 0
+  "missing": 2
  },
  "modules": [
   {
@@ -3802,12 +3802,12 @@
       {
        "name": "exponential_",
        "signature": "exponential_(lambd?: number): Tensor",
-       "doc": "지수분포. 평균이 `1/lambd` 다.",
+       "doc": "지수분포. 평균이 `1/lambd` 다. **`lambd` 는 양수여야 한다.**",
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
        },
-       "doc_en": "The exponential distribution. Its mean is `1/lambd`."
+       "doc_en": "The exponential distribution. Its mean is `1/lambd`, and **lambd has to be positive**."
       },
       {
        "name": "cauchy_",
@@ -3831,24 +3831,42 @@
        "doc_en": "The log-normal distribution. `mean` and `std` are the values **after taking logs** (as in torch)."
       },
       {
+       "name": "normal_",
+       "signature": "normal_(mean?: number, std?: number): Tensor",
+       "doc": "정규분포로 덮어쓴다. **`std` 는 음수일 수 없다** — 0 이면 평균 그대로다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "uniform_",
+       "signature": "uniform_(from?: number, to?: number): Tensor",
+       "doc": "`[from, to)` 의 실수로 덮어쓴다. **`from < to` 여야 한다.**",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
        "name": "geometric_",
        "signature": "geometric_(p: number): Tensor",
-       "doc": "기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다.",
+       "doc": "기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다.\n\n`p` 는 **열린 구간**이다. 0 이면 영원히 안 나오고 1 이면 늘 첫 번에 나오므로\n둘 다 분포가 아니다.",
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
        },
-       "doc_en": "The geometric distribution. **Being discrete it runs on integer tensors too** — the one that parts from the continuous ones."
+       "doc_en": "The geometric distribution. **Being discrete, it runs on integer tensors too** — that is what separates it from the continuous ones.\n\n`p` is an **open interval**. At 0 the event never happens and at 1 it always happens on the first try, so neither is a distribution."
       },
       {
        "name": "random_",
        "signature": "random_(from?: number, to?: number): Tensor",
-       "doc": "`[from, to)` 의 정수로 채운다. `to` 를 안 주면 형이 담을 수 있는 데까지다.",
+       "doc": "`[from, to)` 의 정수로 채운다.\n\n**안 주면 f32 가 정확히 셀 수 있는 데까지다**(2²⁴). torch 는 형마다 다르고\nint64 에서 2⁶² 인데, **여기 int64 는 f32 칸에 담기므로 그 위를 셀 수가 없다** —\n뽑아 놓아도 이웃한 정수를 구별 못 해 값이 뭉친다. 그 자리는 흉내 내지 않는다.",
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
        },
-       "doc_en": "Fills with integers in `[from, to)`. Without `to`, as far as the type can hold."
+       "doc_en": "Fills with integers from `[from, to)`.\n\n**Left out, the bound is as far as f32 counts exactly** (2^24). torch's depends on the dtype and is 2^62 for int64, but int64 here lives in an f32 cell and cannot count past that — drawn values above it have neighbours that cannot be told apart. That is not imitated."
       },
       {
        "name": "isFloatingPoint",
@@ -4976,7 +4994,7 @@
      "doc_en": "Makes one graph node from outside. **A door for places writing kernels in another file.**\n\n`Tensor.make` is private — it is what this class's own operations use, and that is right. But once a\nmodule with **kernels of its own** appears, such as `fft.ts`, that door is needed. Rather than\nrestating the conditions there (two copies of the `gradMode` check and the `requiresGrad` propagation\neventually diverge), it hands over to the same place."
     }
    ],
-   "count": 505,
+   "count": 507,
    "doc_en": "`Tensor` — one GPU buffer, a shape, and one node on the tape.\n\nThe layout is **NCHW** and the dtype is **float32, only.** The sister project\n(`borch_webgpu`) holding NHWC and packing int64 into float32 was a detour around\nTF.js's constraints, and our kernels do not have those constraints. Imitating it\ninherits someone else's detour for no reason."
   },
   {
@@ -11482,5 +11500,5 @@
    "count": 9
   }
  ],
- "total": 1502
+ "total": 1504
 }

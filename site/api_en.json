@@ -1420,8 +1420,8 @@
   "src": "a22e8701341d"
  },
  "tensor/Tensor.exponential_": {
-  "en": "The exponential distribution. Its mean is `1/lambd`.",
-  "src": "f1945ce82658"
+  "en": "The exponential distribution. Its mean is `1/lambd`, and **lambd has to be positive**.",
+  "src": "13b963d1e359"
  },
  "tensor/Tensor.eye": {
   "en": "The identity matrix. **Not only square** — torch's `eye(n, m)` makes a rectangle.",
@@ -1504,8 +1504,8 @@
   "src": "3db226cad239"
  },
  "tensor/Tensor.geometric_": {
-  "en": "The geometric distribution. **Being discrete it runs on integer tensors too** — the one that parts from the continuous ones.",
-  "src": "84db3a977500"
+  "en": "The geometric distribution. **Being discrete, it runs on integer tensors too** — that is what separates it from the continuous ones.\n\n`p` is an **open interval**. At 0 the event never happens and at 1 it always happens on the first try, so neither is a distribution.",
+  "src": "b76cea48d433"
  },
  "tensor/Tensor.geqrf": {
   "en": "Produces QR **in reflector form.** `householderProduct` stands `Q` up from it.\n\n**With everything below the diagonal already zero it does not reflect** — LAPACK's `dlarfg` puts\n`tau = 0` there and leaves the values alone. The last column of a square matrix is always that\ncase.",
@@ -2052,8 +2052,8 @@
   "src": "7444fe9934e5"
  },
  "tensor/Tensor.random_": {
-  "en": "Fills with integers in `[from, to)`. Without `to`, as far as the type can hold.",
-  "src": "3e7fc6cda897"
+  "en": "Fills with integers from `[from, to)`.\n\n**Left out, the bound is as far as f32 counts exactly** (2^24). torch's depends on the dtype and is 2^62 for int64, but int64 here lives in an f32 cell and cannot count past that — drawn values above it have neighbours that cannot be told apart. That is not imitated.",
+  "src": "5efd6dde7c5e"
  },
  "tensor/Tensor.randperm": {
   "en": "`0..n-1` shuffled. Where `torch.randperm` goes. Fisher–Yates.",

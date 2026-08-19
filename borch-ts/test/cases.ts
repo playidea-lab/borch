@@ -3993,6 +3993,77 @@ function addRecent(out: Map<string, Case>): void {
     });
   }
 
+  // ── 분포에서 뽑아 채우는 일곱 (`inplace::분포::`) ─────────────────────
+  //
+  // 값은 못 굳힌다. 굳힐 수 있는 것은 **모양·형이 안 바뀐다**는 것과 **거절**이다.
+  //
+  // 이 묶음이 갭 표에서 "별칭·파이썬" 으로 덮여 있었고, 그 아래에 **여기 코드가 안
+  // 하던 것 열다섯**이 들어 있었다. 다섯을 넣을 때 `parity.ts` 에는 분포의 중심만
+  // 재는 검사를 넣고 거절은 하나도 안 쟀다 — `normal` 의 `std=0` 만 재면 절반이라고
+  // 적어 놓고 같은 실수를 했다.
+  const drawn = (
+    name: string, fill: (t: Tensor) => Tensor,
+  ): void => {
+    out.set(`inplace::분포::${name} 는 모양과 형을 지킨다`, () => {
+      const x = Tensor.zeros([2, 3]);
+      fill(x);
+      return `(${x.shape.join(", ")}) ${dtypeName(x.dtype)}`;
+    });
+    // **연속 다섯은 정수를 거절하고 `geometric_`·`random_` 은 안 한다.** 이름만
+    // 보고 "난수는 실수만" 으로 묶으면 그 둘에서 틀린다.
+    out.set(`inplace::분포::${name}(int64)`, () => {
+      const x = Tensor.zeros([6]).to("int64");
+      try {
+        fill(x);
+      } catch (err) {
+        return `거절(${err instanceof Error ? err.constructor.name : "?"})`;
+      }
+      return `돈다 ${dtypeName(x.dtype)}`;
+    });
+  };
+  drawn("normal_", (t) => t.normal_(0.0, 2.0));
+  drawn("uniform_", (t) => t.uniform_(-1.0, 3.0));
+  drawn("exponential_", (t) => t.exponential_(2.0));
+  drawn("cauchy_", (t) => t.cauchy_(1.0, 0.5));
+  drawn("log_normal_", (t) => t.logNormal_(0.0, 1.0));
+  drawn("geometric_", (t) => t.geometric_(0.3));
+  drawn("random_", (t) => t.random_(0, 5));
+
+  // **인자의 정의역은 분포마다 다르다** — `p` 는 열린 구간, `lambda` 는 양수,
+  // `from < to`, `std >= 0`. 문구의 조각을 묻는다: 값이 아니라 글자라 구현끼리
+  // 대조해도 안 걸리는 자리다.
+  const refusesArg = (label: string, call: () => Tensor, fragment: string): void => {
+    out.set(`inplace::분포::거절::${label}`, () => {
+      try {
+        call();
+      } catch (err) {
+        const said = err instanceof Error ? err.message : String(err);
+        return said.includes(fragment) ? "멈췄다" : `다른 문구 <${said}>`;
+      }
+      return "안 던졌다";
+    });
+  };
+  const zeros3 = (): Tensor => Tensor.zeros([3]);
+  refusesArg("geometric_(0)", () => zeros3().geometric_(0), "p to be in (0, 1)");
+  refusesArg("geometric_(1)", () => zeros3().geometric_(1), "p to be in (0, 1)");
+  refusesArg("exponential_(0)", () => zeros3().exponential_(0), "lambda > 0.0");
+  refusesArg("uniform_(3,1)", () => zeros3().uniform_(3, 1), "[from, to) range");
+  refusesArg("normal_(0,-1)", () => zeros3().normal_(0, -1), "std >= 0.0");
+  refusesArg("random_(5,2)",
+    () => Tensor.zeros([3]).to("int64").random_(5, 2),
+    "'from' to be less than 'to'");
+
+  // **범위가 형이 정확히 셀 수 있는 데까지다.** float32 는 2²⁴ 를 넘으면 이웃한
+  // 정수를 구별 못 해 값이 뭉친다. int64 쪽은 여기 없다 — torch 는 2⁶² 인데 이쪽의
+  // int64 는 f32 칸에 담기므로 그 위를 셀 수가 없고, 못 세는 것을 흉내 내지 않는다.
+  out.set("inplace::분포::random_(float32) 의 상한", async () => {
+    const x = Tensor.zeros([3000]);
+    x.random_();
+    const got = Array.from(await x.toArray()).reduce((a, b) => Math.max(a, Math.abs(b)), 0);
+    const cap = 1 << 24;
+    return verdict(cap / 2 <= got && got <= cap);
+  });
+
   out.set("stat::trapz(y)", () => curve().trapezoid());
   out.set("stat::trapz(dx=2)", () => curve().trapezoid(undefined, 2.0));
   out.set("stat::trapz(y, x)",
