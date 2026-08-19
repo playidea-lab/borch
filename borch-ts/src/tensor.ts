@@ -6830,6 +6830,70 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       Tensor.full(shape, value));
   }
 
+  /**
+   * 대각선을 한 값으로. **`wrap` 이면 세로로 긴 행렬에서 대각선이 되돌아 온다.**
+   *
+   * 정사각으로만 재면 그 깃발이 아무 일도 안 한다 — numpy 의 `fill_diagonal` 과
+   * 같은 규약이고, torch 가 그것을 그대로 받는다.
+   */
+  fillDiagonal_(value: number, wrap = false): Tensor {
+    const rows = this.shape[0] ?? 0;
+    const cols = this.shape[1] ?? 0;
+    const step = cols + 1;
+    const limit = wrap ? rows * cols : Math.min(rows, cols) * step;
+    const spots: number[] = [];
+    for (let at = 0; at < limit; at += step) {
+      // 되돌아 오는 자리는 **줄을 하나 건너뛴다** — numpy 가 그렇게 센다.
+      if (wrap && at % cols === 0 && at !== 0) at += cols;
+      if (at >= rows * cols) break;
+      spots.push(at);
+    }
+    return this.mutate(() => this.reshape([this.size]).scatterSpots(
+      Tensor.spotsTensor(Float32Array.from(spots)),
+      Tensor.full([spots.length], value), false, "FillDiagonalBackward0",
+    ).reshape(this.shape));
+  }
+
+  /**
+   * 자리마다 새로 뽑아 **덮어쓴다.** 원래 값은 안 본다.
+   *
+   * 여섯이 한 문을 쓴다 — 분포마다 다른 것은 균등난수 하나를 무엇으로 바꾸느냐뿐이다.
+   * 결속은 이 여섯을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가 한 줄기를
+   * 직렬화해야 해서 그런 것이고 이쪽이 그럴 이유는 없다.
+   */
+  private drawInto_(draw: (u: number) => number): Tensor {
+    const data = new Float32Array(this.size);
+    for (let i = 0; i < data.length; i++) data[i] = draw(uniform());
+    return this.mutate(() => Tensor.from(data, this.shape, { dtype: this.dtype }));
+  }
+
+  /** 지수분포. 평균이 `1/lambd` 다. */
+  exponential_(lambd = 1.0): Tensor {
+    // **`1 - u` 를 쓴다.** `uniform()` 이 0 을 낼 수 있고 `log(0)` 은 −∞ 다.
+    return this.drawInto_((u) => -Math.log(1 - u) / lambd);
+  }
+
+  /** 코시분포. **평균이 없다** — 꼬리가 두꺼워 표본평균이 안 모인다. */
+  cauchy_(median = 0.0, sigma = 1.0): Tensor {
+    return this.drawInto_((u) => median + sigma * Math.tan(Math.PI * (u - 0.5)));
+  }
+
+  /** 로그정규분포. `mean`·`std` 는 **로그를 취한 뒤의** 값이다(torch 와 같다). */
+  logNormal_(mean = 1.0, std = 2.0): Tensor {
+    return this.drawInto_(() => Math.exp(mean + std * gauss()));
+  }
+
+  /** 기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다. */
+  geometric_(p: number): Tensor {
+    return this.drawInto_((u) => Math.floor(Math.log(1 - u) / Math.log(1 - p)) + 1);
+  }
+
+  /** `[from, to)` 의 정수로 채운다. `to` 를 안 주면 형이 담을 수 있는 데까지다. */
+  random_(from = 0, to?: number): Tensor {
+    const high = to ?? EXACT_INT_LIMIT;
+    return this.drawInto_((u) => from + Math.floor(u * (high - from)));
+  }
+
   fullLike(value: number): Tensor {
     return Tensor.full(this.shape, value);
   }

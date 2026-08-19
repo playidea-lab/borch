@@ -569,6 +569,42 @@ export async function report(): Promise<string> {
       && near(biMean, 5, 0.2),
     `평균 ${biMean.toFixed(3)}`);
 
+  // **제자리 다섯은 골든이 못 본다.** 값이 난수라 굳힐 수가 없고, 결속은 이 이름들을
+  // 자기 numpy 줄기로 만들어서 케이스가 borch.ts 쪽에 닿지도 않는다. 분포의 자리표
+  // 하나씩을 여기서 재는 것이 이 다섯에 대해 할 수 있는 전부다.
+  const drawn = async (fill: (t: Tensor) => Tensor): Promise<Float32Array> =>
+    fill(Tensor.zeros([N])).toArray();
+  const avg = (v: Float32Array): number => v.reduce((a, b) => a + b, 0) / N;
+
+  const ex = await drawn((t) => t.exponential_(2));
+  want("exponential_ 의 평균이 1/lambd 다",
+    ex.every((v) => v >= 0) && near(avg(ex), 0.5, 0.03),
+    `평균 ${avg(ex).toFixed(4)}`);
+
+  // 코시는 **평균이 없다** — 표본평균으로 재면 실행마다 튄다. 중앙값으로 잰다.
+  const ca = Array.from(await drawn((t) => t.cauchy_(3, 1))).sort((a, b) => a - b);
+  const mid = ca[N >> 1] ?? 0;
+  want("cauchy_ 의 중앙값이 median 이다", near(mid, 3, 0.1),
+    `중앙값 ${mid.toFixed(4)}`);
+
+  // 로그정규는 **로그를 취해야** 정규가 된다 — 그것이 이 이름의 정의다.
+  const ln = await drawn((t) => t.logNormal_(0, 1));
+  const logged = Array.from(ln).map((v) => Math.log(v));
+  const lnMean = logged.reduce((a, b) => a + b, 0) / N;
+  want("log_normal_ 은 로그를 취하면 정규다",
+    ln.every((v) => v > 0) && near(lnMean, 0, 0.05),
+    `로그의 평균 ${lnMean.toFixed(4)}`);
+
+  const ge = await drawn((t) => t.geometric_(0.25));
+  want("geometric_ 의 평균이 1/p 다",
+    ge.every((v) => Number.isInteger(v) && v >= 1) && near(avg(ge), 4, 0.25),
+    `평균 ${avg(ge).toFixed(3)}`);
+
+  const ra = await drawn((t) => t.random_(5, 9));
+  want("random_ 이 [from, to) 의 정수다",
+    ra.every((v) => Number.isInteger(v) && v >= 5 && v < 9)
+      && new Set(ra).size === 4);
+
   want("randnLike 가 모양을 빌린다",
     Tensor.zeros([2, 3]).randnLike().shape.join(",") === "2,3");
 

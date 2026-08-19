@@ -54,6 +54,7 @@ as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
 get_rng_state initial_seed is_contiguous is_distributed is_grad_enabled
 is_inference is_inference_mode_enabled is_storage numpy promote_types
 set_rng_state share_memory_ sparse_dim to_dense tolist typename
+asarray is_nonzero resize_as_
 """.split()
 
 # **아직 판정 안 한 것들.** 이 검사가 처음 돌면서 한꺼번에 나온 자리이고, 하나하나
@@ -88,8 +89,7 @@ ALIASED = {
 # 수를 얼려 두는 것이 이 목록의 일이다. 새로 생긴 채움은 여기 없으므로 곧바로
 # 터지고, 옛것은 **이름으로** 남아 있어 세다 만 것이 아니라는 게 보인다.
 UNJUDGED = """
-asarray cauchy_ embedding exponential_ fill_diagonal_ frombuffer geometric_
-is_nonzero log_normal_ random_ resize_as_
+embedding frombuffer
 """.split()
 
 FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(ALIASED) | set(UNJUDGED)

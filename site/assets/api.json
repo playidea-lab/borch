@@ -3439,6 +3439,62 @@
        }
       },
       {
+       "name": "fillDiagonal_",
+       "signature": "fillDiagonal_(value: number, wrap?: boolean): Tensor",
+       "doc": "대각선을 한 값으로. **`wrap` 이면 세로로 긴 행렬에서 대각선이 되돌아 온다.**\n\n정사각으로만 재면 그 깃발이 아무 일도 안 한다 — numpy 의 `fill_diagonal` 과\n같은 규약이고, torch 가 그것을 그대로 받는다.",
+       "torch": "fill_diagonal_",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "exponential_",
+       "signature": "exponential_(lambd?: number): Tensor",
+       "doc": "지수분포. 평균이 `1/lambd` 다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "cauchy_",
+       "signature": "cauchy_(median?: number, sigma?: number): Tensor",
+       "doc": "코시분포. **평균이 없다** — 꼬리가 두꺼워 표본평균이 안 모인다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "logNormal_",
+       "signature": "logNormal_(mean?: number, std?: number): Tensor",
+       "doc": "로그정규분포. `mean`·`std` 는 **로그를 취한 뒤의** 값이다(torch 와 같다).",
+       "torch": "log_normal_",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "geometric_",
+       "signature": "geometric_(p: number): Tensor",
+       "doc": "기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "random_",
+       "signature": "random_(from?: number, to?: number): Tensor",
+       "doc": "`[from, to)` 의 정수로 채운다. `to` 를 안 주면 형이 담을 수 있는 데까지다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
        "name": "fullLike",
        "signature": "fullLike(value: number): Tensor",
        "doc": "",
@@ -4465,7 +4521,7 @@
      "torch": "make_node"
     }
    ],
-   "count": 493
+   "count": 499
   },
   {
    "name": "nn",
@@ -10614,5 +10670,5 @@
    "count": 9
   }
  ],
- "total": 1473
+ "total": 1479
 }

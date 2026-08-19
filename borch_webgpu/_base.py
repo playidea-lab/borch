@@ -448,10 +448,10 @@ class Tensor:
         return self._draw_("random_", from_, to)
 
     def fill_diagonal_(self, value, wrap=False):
-        from ._base import tensor as _t
-        got = self.numpy().copy()
-        _np.fill_diagonal(got, value, wrap=wrap)
-        return self._write_back(_t(got))
+        """**조립이 저쪽으로 갔다.** 여기 있던 동안 그 이름은 borch.ts 에 없었고,
+        골든이 이 메서드를 지나므로 표는 초록이었다 — TypeScript 쪽에만 없었다."""
+        guarded(handle(self).fillDiagonal_, float(value), bool(wrap))
+        return self
 
     def sparse_dim(self):
         return 0
