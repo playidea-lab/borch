@@ -1919,6 +1919,10 @@
   "en": "A sample from the normal distribution. **With `std` at 0 it is the mean itself** (measured) —\nthat endpoint is the only place that asks whether this name really looks at the standard\ndeviation.\n\ntorch offers two forms: two tensors give a per-slot mean and standard deviation, while two\nnumbers and a shape give the same one everywhere. The first **broadcasts** — a `(2,)` mean\nwith a scalar standard deviation is allowed.",
   "src": "2dc1304b507e"
  },
+ "tensor/Tensor.normal_": {
+  "en": "Overwrites with the normal distribution. **`std` cannot be negative** — at 0 it is the mean itself.",
+  "src": "3b666e30ffc6"
+ },
  "tensor/Tensor.normalize": {
   "en": "Length to 1 along an axis. `eps` stops the division blowing up on a zero vector.",
   "src": "0e3824ffed95"
@@ -2338,6 +2342,10 @@
  "tensor/Tensor.uniform": {
   "en": "Random numbers between 0 and 1. `rrelu` and `gumbelSoftmax` use it.\n\nIt uses the seed `manualSeed` catches — the same seed has to give the same draw for anything\nto reproduce.",
   "src": "b0bce261289d"
+ },
+ "tensor/Tensor.uniform_": {
+  "en": "Overwrites with reals in `[from, to)`. **`from < to` is required.**",
+  "src": "e56907e03a8c"
  },
  "tensor/Tensor.unique": {
   "en": "The distinct values, **ascending.** torch's default is to give them sorted.",

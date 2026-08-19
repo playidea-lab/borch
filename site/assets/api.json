@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. 영어는 site/api_en.json 이 들고 있고, 원문이 바뀌면 낡았다고 말한다.",
  "english": {
-  "done": 617,
+  "done": 619,
   "stale": 0,
-  "missing": 2
+  "missing": 0
  },
  "modules": [
   {
@@ -3837,7 +3837,8 @@
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
-       }
+       },
+       "doc_en": "Overwrites with the normal distribution. **`std` cannot be negative** — at 0 it is the mean itself."
       },
       {
        "name": "uniform_",
@@ -3846,7 +3847,8 @@
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
-       }
+       },
+       "doc_en": "Overwrites with reals in `[from, to)`. **`from < to` is required.**"
       },
       {
        "name": "geometric_",
