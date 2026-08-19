@@ -1,0 +1,214 @@
+"""**결속이 borch.ts 대신 채워 넣는 자리를 센다.**
+
+이 저장소의 골든은 세 구현을 같은 기대값에 대조한다고 적혀 있다. 그런데 케이스가
+`borch_webgpu` 를 지날 때, 그쪽이 borch.ts 위에 무언가를 **스스로 조립하면** 그
+케이스는 borch.ts 를 안 묻는다. 표는 초록이고, 없는 것은 TypeScript 로 쓰는 쪽뿐이다.
+
+한 세션에서 이 모양이 일곱 번 나왔다:
+
+- `trapezoid`·`cumulative_trapezoid` — 조각을 자르고 더하는 몇 줄이 파이썬에 있었다.
+  주석에는 "여기 하나 더 만들면 조립이 두 벌이 된다" 고 적혀 있었는데, **한 벌이
+  아니라 파이썬 쪽에만 있었다.**
+- `bernoulli`·`normal`·`poisson`·`binomial` — numpy 로 만들고 있었다.
+- `ldl_factor_ex` — `_Fields` 를 손으로 세워 `info` 자리에 스칼라를 끼웠다.
+
+그리고 `half`·`float`·`long` 같은 형 바꾸기 열넷이 같은 자리였다. 스물하나가 전부
+"골든은 초록인데 borch.ts 에 이름이 없다" 였고, 전부 **사람이 `--show` 로 한 묶음씩
+펴 보다가** 찾았다. 그것은 규율이고, 규율은 샌다.
+
+## 무엇을 신호로 쓰는가
+
+**torch 에 있는 이름을 결속이 구현하는데 borch.ts 에 그 이름이 없으면** 결속이
+채워 넣고 있는 것이다. 위의 스물하나가 전부 여기 걸린다.
+
+몸통을 읽어 "조립인가" 를 판정하지 않는다 — `ldl_factor_ex` 는 borch.ts 를 부르면서
+동시에 조립했고, `trapezoid` 는 borch.ts 메서드를 여럿 불렀다. 부르느냐가 아니라
+**그 이름이 저쪽에 있느냐**가 갈림이다.
+
+## 왜 목록이 아니라 수인가
+
+목록만 뽑는 도구는 사람이 돌려 봐야 하는 규율이라, 이 검사가 막으려는 그 문제를
+그대로 되풀이한다. 그래서 아래 표에 **까닭과 함께 적힌 것만** 통과시키고, 새로
+생긴 것은 이름을 대며 터진다. `NOT_PORTED`·`KNOWN_ABSENT` 와 같은 꼴이다.
+
+표시:  파이썬 = 파이썬 표면의 것이라 TS 에 대응물이 있을 수 없다
+       설계 = borch.ts 에 두지 **않기로** 한 것 (까닭이 있어야 한다)
+"""
+
+import ast
+import pathlib
+import re
+
+import torch
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# borch.ts 에 없는 것이 **맞는** 이름들. 하나하나 까닭이 있어야 한다.
+#
+# 여기 이름을 더하는 것은 "borch.ts 에 안 만든다" 는 결정이다. 밀린 일이면 여기가
+# 아니라 borch.ts 에 넣어라 — 이 표는 대기열이 아니다.
+# **파이썬 표면이라 저쪽에 있을 수 없는 것들.** 난수 줄기의 직렬화, numpy 왕래,
+# 저장소·희소 들여다보기, 파이썬 형 이름 — 전부 TypeScript 에 대응물이 없다.
+PYTHON_SIDE = """
+as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
+get_rng_state initial_seed is_contiguous is_distributed is_grad_enabled
+is_inference is_inference_mode_enabled is_storage numpy promote_types
+set_rng_state share_memory_ sparse_dim to_dense tolist typename
+""".split()
+
+# **아직 판정 안 한 것들.** 이 검사가 처음 돌면서 한꺼번에 나온 자리이고, 하나하나
+# 두 갈래 중 하나다: borch.ts 에 **다른 철자로 있다**(그러면 결손이 아니다), 또는
+# **없다**(그러면 옮길 일이다).
+#
+# 수를 얼려 두는 것이 이 목록의 일이다. 새로 생긴 채움은 여기 없으므로 곧바로
+# 터지고, 옛것은 **이름으로** 남아 있어 세다 만 것이 아니라는 게 보인다.
+# 판정한 것은 이 목록에서 빼서 위로 올리거나 borch.ts 에 넣어라.
+UNJUDGED = """
+adjoint aminmax asarray block_diag broadcast_tensors broadcast_to cauchy_
+cdist column_stack corrcoef cov dstack embedding empty empty_like
+exponential_ fill_diagonal_ float_power float_power_ floor_divide frombuffer
+full_like geometric_ grid_sampler hstack index_add index_copy index_fill
+is_floating_point is_nonzero is_same_size is_signed isclose isin isneginf
+isposinf isreal kron lerp log_normal_ logical_xor logspace
+max_pool1d_with_indices meshgrid moveaxis nan_to_num nan_to_num_ numel
+randint_like random_ resize_as_ rsub scalar_tensor scatter std_mean swapdims
+take take_along_dim tensordot trapz var_mean vdot vstack
+""".split()
+
+FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(UNJUDGED)
+
+# 결속이 노출하지만 torch 이름이 아닌 것들 — 애초에 후보가 아니다.
+_PRIVATE = re.compile(r"^_")
+
+
+def _flat(name):
+    """철자 차이를 지운다 — 대조하려는 것은 **이름의 존재**이지 철자가 아니다.
+
+    torch 는 `searchsorted`·`logsumexp` 처럼 밑줄 없이 붙여 쓰고 borch.ts 는
+    `searchSorted`·`logSumExp` 로 쓴다. 밑줄만 보고 camel 로 바꾸면 그 둘이 안
+    만나서, **있는 이름이 없다고 나온다** — 첫 판이 그렇게 예순 건을 허수로 냈다.
+    """
+    return name.replace("_", "").lower()
+
+
+def _ts_surface():
+    """borch.ts 가 내는 이름 전부 — 메서드·정적·최상위 함수·클래스.
+
+    **`dist` 가 아니라 소스를 읽는다.** `dist` 는 `.gitignore` 라 pytest 가 도는
+    자리에 없을 수 있고, 없는 것과 이름이 없는 것이 같은 실패로 보이면 이 검사가
+    저 자신이 막으려는 함정에 빠진다.
+    """
+    names = set()
+    src = ROOT / "borch-ts" / "src"
+    method = re.compile(
+        r"^\s+(?:public\s+|private\s+|protected\s+|static\s+|async\s+|get\s+|set\s+|readonly\s+|\*)*"
+        r"([A-Za-z_]\w*)\s*[(<:=]")
+    top = re.compile(
+        r"^export\s+(?:declare\s+)?(?:async\s+)?"
+        r"(?:function|class|const|abstract\s+class)\s+([A-Za-z_]\w*)")
+    for path in sorted(src.rglob("*.ts")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            for pattern in (method, top):
+                hit = pattern.match(line)
+                if hit:
+                    names.add(_flat(hit.group(1)))
+    return names
+
+
+def _touches_borch_ts(node):
+    """이 함수가 borch.ts 손잡이를 **한 번이라도** 부르는가.
+
+    부르면 대개 개명이나 조합이다 — `scatter` 는 저쪽 `scatterSet` 이고 `take` 는
+    `indexSelect` 다. 그 자리는 TypeScript 쪽에 **다른 철자로 있으므로** 결손이
+    아니다. 한 번도 안 부르면 파이썬이 혼자 셈하고 있는 것이고, 그때가 저쪽에
+    그 능력이 아예 없을 확률이 높다.
+
+    **판정이 아니라 분류다.** `lerp` 는 `+`·`-`·`*` 로만 적혀 있어 손잡이가 안
+    보이는데 저쪽에는 서명이 다른 `lerpFrom` 이 있고, `ldl_factor_ex` 는 손잡이를
+    부르면서도 결손이었다. 그래서 이 갈래는 사람이 읽을 순서를 정할 뿐이다.
+    """
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call) and getattr(sub.func, "id", "") == "handle":
+            return True
+        if isinstance(sub, ast.Attribute) and sub.attr in ("numpy", "handle"):
+            return True
+    return False
+
+
+def _binding_bodies():
+    """이름 → borch.ts 손잡이를 부르는가."""
+    out = {}
+    for stem in ("_ops", "_base", "_nn", "_data", "_optim"):
+        path = ROOT / "borch_webgpu" / f"{stem}.py"
+        if not path.exists():
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.setdefault(node.name, _touches_borch_ts(node))
+    return out
+
+
+def _binding_names():
+    """결속이 구현하는 이름 — 모듈 자리 함수와 `Tensor` 메서드."""
+    names = set()
+    for stem in ("_ops", "_base", "_nn", "_data", "_optim"):
+        path = ROOT / "borch_webgpu" / f"{stem}.py"
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not _PRIVATE.match(node.name):
+                    names.add(node.name)
+    return names
+
+
+def _asked_by_golden():
+    """케이스 표가 **철자 그대로 부르는** 이름들.
+
+    골든이 안 묻는 이름은 이 검사의 관심 밖이다 — 그때 결속이 채워 넣는 것은 표를
+    속이지 않는다. 그냥 어디에도 없는 것이고, 그건 다른 이야기다. **초록색을
+    만들어 내는 자리**만 여기 남긴다.
+    """
+    text = (ROOT / "tests" / "cases.py").read_text(encoding="utf-8")
+    return set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", text))
+
+
+def _candidates():
+    ts = _ts_surface()
+    asked = _asked_by_golden()
+    found = set()
+    for name in _binding_names():
+        if not hasattr(torch, name) and not hasattr(torch.Tensor, name):
+            continue                      # torch 이름이 아니면 후보가 아니다
+        if _flat(name) in ts:
+            continue
+        if name not in asked:
+            continue
+        found.add(name)
+    return found
+
+
+def test_binding_does_not_quietly_fill_in_for_borch_ts():
+    """**결속이 채워 넣는 자리는 표에 적힌 것뿐이어야 한다.**
+
+    새 이름이 여기서 터지면 두 갈래다. borch.ts 에 넣을 값이 있으면 넣어라 —
+    골든이 그 이름을 묻기 시작한다. 넣지 않기로 했으면 `FILLED_ON_PURPOSE` 에
+    **까닭과 함께** 적어라. 수만 올리는 것은 이 검사를 끄는 것과 같다.
+    """
+    bodies = _binding_bodies()
+    surprise = sorted(_candidates() - set(FILLED_ON_PURPOSE))
+    alone = [n for n in surprise if not bodies.get(n)]
+    via = [n for n in surprise if bodies.get(n)]
+    assert not surprise, (
+        "결속이 borch.ts 대신 채우고 있다 — 골든은 결속을 지나므로 "
+        f"이것을 못 본다:\n\n  파이썬이 혼자 셈한다 ({len(alone)}):\n    "
+        + "\n    ".join(alone)
+        + f"\n\n  손잡이를 부르며 조립한다 ({len(via)}):\n    " + "\n    ".join(via))
+
+
+def test_the_table_has_no_stale_rows():
+    """**다 옮긴 줄은 지워야 한다.** 안 지우면 다음 사람이 아직 없는 줄로 읽는다."""
+    gone = sorted(set(FILLED_ON_PURPOSE) - _candidates())
+    assert not gone, (
+        "이 이름들은 이제 borch.ts 에 있다 — 표에서 지워라:\n  " + "\n  ".join(gone))
