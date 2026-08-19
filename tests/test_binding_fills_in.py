@@ -83,16 +83,11 @@ ALIASED = {
     "vdot": "vecdot",
 }
 
-# **아직 판정 안 한 것들.** 하나하나 두 갈래 중 하나다: borch.ts 에 다른 철자로
-# 있거나(그러면 `ALIASED` 로), 없거나(그러면 borch.ts 에 넣을 일이다).
-#
-# 수를 얼려 두는 것이 이 목록의 일이다. 새로 생긴 채움은 여기 없으므로 곧바로
-# 터지고, 옛것은 **이름으로** 남아 있어 세다 만 것이 아니라는 게 보인다.
-UNJUDGED = """
-embedding frombuffer
-""".split()
-
-FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(ALIASED) | set(UNJUDGED)
+# `UNJUDGED` 가 여기 있었다 — 처음 돌렸을 때 62 개였고, 62 → 29 → 11 → 2 → 0 으로
+# 갈렸다. 마흔셋은 borch.ts 에 넣었고 열넷은 다른 철자로 이미 있었으며 다섯은
+# 파이썬 표면이었다. **비면 목록을 지운다** — 안 지우면 다음 사람이 아직 밀린 일이
+# 있는 줄로 읽는다.
+FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(ALIASED)
 
 # 결속이 노출하지만 torch 이름이 아닌 것들 — 애초에 후보가 아니다.
 _PRIVATE = re.compile(r"^_")

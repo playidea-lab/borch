@@ -239,7 +239,9 @@ NOT_PORTED = {
     # 남은 아홉은 **저쪽에 그 공장이 없다** — `range`(끝을 포함한다)·`frombuffer`·
     # `asarray`. 앞의 둘은 이름 자체가 없고, `asarray` 는 TS 에서 `Tensor.from` 이
     # 그 자리다. 그리고 `arange` 는 인자를 **하나만** 받는다(torch 는 셋).
-    "make::": (9, "**없음** — `range`·`frombuffer` 공장이 저쪽에 없다"),
+    # 9 → 2. `range`·`frombuffer` 를 저쪽에 넣었고 `arange` 도 인자 셋을 받는다.
+    # 남은 둘은 `asarray` 로, numpy 배열과 파이썬 목록을 받는 자리라 TS 에 없다.
+    "make::": (2, "파이썬 — `asarray` 는 ndarray·목록을 받는다. 저쪽엔 그 둘이 없다"),
     # 47 → 50. `finfo`·`iinfo` 의 **종류**와 인자 없는 기본형. 파이썬 쪽
     # 이야기다 — borch.ts 에는 그 두 이름이 없다.
     "top::": (50, "별칭 — 최상위 제자리 함수. TS 는 메서드로만 준다"),

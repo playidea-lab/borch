@@ -4137,6 +4137,27 @@ function addRecent(out: Map<string, Case>): void {
       () => kinds.map(([, src]) => verdict(fn(src()))).join(" "));
   }
 
+  // 바이트를 그대로 읽는다. 파이썬 쪽은 `bytes` 를 주고 이쪽은 `ArrayBuffer` 다 —
+  // 같은 바이트 열두 개이고, 그것이 이 이름이 묻는 전부다.
+  const rawBytes = (): ArrayBuffer => {
+    const view = new Float32Array([1.0, 2.0, 3.0]);
+    return view.buffer;
+  };
+  out.set("make::frombuffer", () => Tensor.frombuffer(rawBytes()));
+  out.set("make::frombuffer(count=2)",
+    () => Tensor.frombuffer(rawBytes(), "float32", 2));
+  // **`offset` 은 바이트다** — 원소 수로 읽으면 여기서 갈린다.
+  out.set("make::frombuffer(offset=4)",
+    () => Tensor.frombuffer(rawBytes(), "float32", -1, 4));
+
+  // **끝을 포함한다** — `arange` 와 한 칸 다르다.
+  out.set("make::range(0, 4)", () => Tensor.range(0, 4));
+  out.set("make::range(1, 7, 2)", () => Tensor.range(1, 7, 2));
+  out.set("make::range(0, 1, 0.25)", () => Tensor.range(0, 1, 0.25));
+  // 그 한 칸은 **개수를 물어야** 드러난다 — 합이나 평균으로는 안 보인다.
+  out.set("make::range 와 arange 의 개수",
+    () => `${Tensor.range(0, 4).size} ${Tensor.arange(0, 4).size}`);
+
   // ── 최상위 선형대수 (`toplin::`) ────────────────────────────────────
   //
   // **인자 순서가 `linalg` 쪽과 뒤집혀 있다.** 그 자리를 TS 에서도 물어 둔다.

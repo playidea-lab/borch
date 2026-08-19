@@ -539,11 +539,11 @@ def embedding(idx, table):
     **정의 그대로다.** `index_select` 가 하는 일과 같고, 기울기도 그쪽이 이미 안다 —
     같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이
     아니라 있는 것에 이름을 붙이는 것이므로 값이 갈릴 자리가 없다.
+
+    **이름 붙이는 자리가 저쪽으로 갔다.** 세 줄이 여기 있는 동안 borch.ts 에는 그
+    이름이 없었고, 골든이 이 함수를 지나므로 표는 초록이었다.
     """
-    flat = handle(idx).reshape(_js.Array.of(int(handle(idx).size)))
-    picked = handle(table).indexSelect(0, flat)
-    shape = [int(n) for n in handle(idx).shape] + [int(handle(table).shape[1])]
-    return wrap(picked.reshape(_js.Array.from_(shape)))
+    return wrap(_ts.nn.functional.embedding(handle(idx), handle(table)))
 
 
 class Transformer:

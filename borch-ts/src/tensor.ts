@@ -937,10 +937,88 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** `0` 부터 `n-1` 까지. */
-  static arange(n: number): Tensor {
+  /**
+   * `[start, end)` 를 `step` 씩. **끝은 안 들어간다.**
+   *
+   * 하나만 주면 `[0, n)` 이다 — torch 와 같고, 오래 그 꼴 하나뿐이었다. 시작과
+   * 걸음을 못 주는 동안 부르는 쪽이 `arange(n).mul(...).add(...)` 로 흉내 냈는데,
+   * 그것은 반올림이 다르게 쌓이는 다른 계산이다.
+   */
+  static arange(start: number, end?: number, step = 1): Tensor {
+    const [from, to] = end === undefined ? [0, start] : [start, end];
+    const n = Math.max(0, Math.ceil((to - from) / step));
     const data = new Float32Array(n);
-    for (let i = 0; i < n; i++) data[i] = i;
+    for (let i = 0; i < n; i++) data[i] = from + step * i;
     return Tensor.from(data, [n]);
+  }
+
+  /**
+   * `arange` 의 옛 이름인데 **끝을 포함한다**(실측). 그래서 원소가 하나 더 많다.
+   *
+   * torch 도 이 차이 때문에 폐기 예정으로 두었다. 조용히 `arange` 로 넘기면
+   * 마지막 값이 사라지고, 그 한 칸은 합계나 평균으로만 재면 안 보인다.
+   */
+  static range(start: number, end: number, step = 1): Tensor {
+    const n = Math.max(0, Math.floor((end - start) / step) + 1);
+    const data = new Float32Array(n);
+    for (let i = 0; i < n; i++) data[i] = start + step * i;
+    return Tensor.from(data, [n]);
+  }
+
+  /**
+   * 바이트를 **그대로 읽는다.** `offset` 은 바이트 수다 — 원소 수가 아니다.
+   *
+   * `dtype` 은 여기서 **무엇으로 읽을지**를 정한다. 읽고 나서 바꾸는 것과 다르다 —
+   * 같은 바이트가 형에 따라 아주 다른 수가 되므로, 나중에 `to()` 로 고치면 이미
+   * 다르게 읽은 뒤다.
+   *
+   * `complex64` 는 거절한다. 인터리브 저장이라 바이트를 그대로 얹을 수는 있지만,
+   * 그 배치가 약속으로 못 박힌 자리가 아니라서 **읽는 쪽이 무엇을 받았는지 모르게**
+   * 된다 — 그런 이름은 안 놓는 편이 낫다.
+   */
+  static frombuffer(
+    buffer: ArrayBuffer,
+    dtype: DType = "float32",
+    count = -1,
+    offset = 0,
+  ): Tensor {
+    const width = { float32: 4, int64: 8, bool: 1, complex64: 8 }[dtype];
+    if (dtype === "complex64") {
+      throw new RuntimeError(
+        "frombuffer 는 complex64 를 안 읽습니다 — 인터리브 배치가 약속이 아닙니다. " +
+        "실수부와 허수부를 따로 읽어 `Tensor.complex` 로 엮으세요.",
+      );
+    }
+    const room = Math.floor((buffer.byteLength - offset) / width);
+    const n = count < 0 ? room : count;
+    if (n > room) {
+      throw new RuntimeError(
+        `frombuffer: ${n} 개를 달라는데 버퍼에 ${room} 개뿐이다 ` +
+        `(바이트 ${buffer.byteLength}, offset ${offset}, 칸당 ${width} 바이트)`,
+      );
+    }
+    const data = new Float32Array(n);
+    if (dtype === "float32") {
+      data.set(new Float32Array(buffer, offset, n));
+    } else if (dtype === "bool") {
+      const raw = new Uint8Array(buffer, offset, n);
+      for (let i = 0; i < n; i++) data[i] = raw[i] ? 1 : 0;
+    } else {
+      // **int64 는 f32 칸에 담긴다.** 2^24 를 넘으면 이미 못 세므로 거기서 멈춘다 —
+      // 조용히 반올림되느니 낫다. `randint` 가 같은 자리에서 같은 말을 한다.
+      const raw = new BigInt64Array(buffer, offset, n);
+      for (let i = 0; i < n; i++) {
+        const v = raw[i] ?? 0n;
+        if (v > BigInt(EXACT_INT_LIMIT) || v < -BigInt(EXACT_INT_LIMIT)) {
+          throw new RuntimeError(
+            `frombuffer: ${v} 는 float32 로 셀 수 있는 한계(${EXACT_INT_LIMIT})를 ` +
+            "넘는다 — 값이 조용히 반올림된다.",
+          );
+        }
+        data[i] = Number(v);
+      }
+    }
+    return Tensor.from(data, [n], { dtype });
   }
 
   /** 양끝을 포함해 고르게 나눈 값들. */

@@ -2604,6 +2604,27 @@ export function batchNorm(
 }
 
 /**
+ * 표에서 번호대로 행을 고른다. `F.embedding(번호, 표)` 자리다.
+ *
+ * **정의 그대로다** — `indexSelect` 가 하는 일과 같고 기울기도 그쪽이 이미 안다.
+ * 같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이
+ * 아니라 **있는 것에 이름을 붙이는 것**이므로 값이 갈릴 자리가 없다.
+ *
+ * 그런데도 이 이름이 오래 없었다. 결속이 같은 세 줄을 파이썬에 갖고 있었고 골든이
+ * 그쪽을 지나서, TypeScript 로 쓰는 쪽에만 없는 이름이었다 —
+ * `tests/test_binding_fills_in.py` 가 가리킨 자리다.
+ *
+ * **`nn.Embedding` 층은 아직 없다.** 셋 어디에도 없고 골든도 안 묻는다. 그것은 이
+ * 함수를 감싸고 가중치를 들고 있는 자리이지 새 계산이 아니므로, 여기 없다는 것을
+ * 적어 두는 편이 이름만 놓는 것보다 낫다.
+ */
+export function embedding(idx: Tensor, weight: Tensor): Tensor {
+  const dim = weight.shape[1] ?? 1;
+  const picked = weight.indexSelect(0, idx.reshape([idx.size]));
+  return picked.reshape([...idx.shape, dim]);
+}
+
+/**
  * 가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.
  *
  * `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.
@@ -3058,6 +3079,7 @@ export const functional = {
   affineGrid,
   batchNorm,
   ctcLoss,
+  embedding,
   embeddingBag,
   gridSample,
   gumbelSoftmax,

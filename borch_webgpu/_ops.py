@@ -488,10 +488,11 @@ def _resolve_name(name):
 def arange(*args, **kw):
     """`arange(n)` · `arange(a, b)` · `arange(a, b, step)`.
 
-    **borch.ts 의 `arange` 는 개수 하나만 받는다.** 셋을 넘겼더니 첫 인자 0 이 개수로
-    읽혀 빈 텐서가 나왔고, 그 빈 텐서를 `reshape` 하는 자리에서 90 건이 무너졌다 —
-    실패 문구는 `shape '[3,3]' is invalid for input of size 0` 이었고, 원인에서
-    두 칸 떨어진 자리다. 나머지 두 꼴은 여기서 만든다.
+    한동안 **borch.ts 의 `arange` 가 개수 하나만 받았다.** 셋을 넘겼더니 첫 인자 0 이
+    개수로 읽혀 빈 텐서가 나왔고, 그 빈 텐서를 `reshape` 하는 자리에서 90 건이
+    무너졌다 — 실패 문구는 `shape '[3,3]' is invalid for input of size 0` 이었고,
+    원인에서 두 칸 떨어진 자리다. 그 동안 나머지 두 꼴을 여기서 **곱하고 더해서**
+    만들었는데, 그것은 반올림이 다르게 쌓이는 다른 계산이다. 이제 저쪽이 셋을 받는다.
     """
     _no_out(kw)
     if len(args) == 1:
@@ -500,12 +501,7 @@ def arange(*args, **kw):
         (start, stop), step = args, 1
     else:
         start, stop, step = args
-    n = max(0, -(-int(stop - start) // int(step)) if step else 0)
-    out = _ts.Tensor.arange(n)
-    if start or step != 1:
-        out = out.binary("mul", _ts.Tensor.full(_js_list([]), float(step)))
-        out = out.binary("add", _ts.Tensor.full(_js_list([]), float(start)))
-    return _made(out, kw)
+    return _made(_ts.Tensor.arange(start, stop, step), kw)
 
 
 def _shape_of(shape):
@@ -1894,11 +1890,9 @@ def range_top(start, end=None, step=1, **kw):
     """**끝을 포함한다** — `arange` 는 뺀다(실측). 조용히 `arange` 로 넘기면
     원소가 하나 모자란다."""
     _no_out(kw)
-    from ._base import tensor as _t
-
     if end is None:
         start, end = 0, start
-    return _t(_np.arange(start, end + step / 2.0, step, dtype=_np.float32))
+    return _made(_ts.Tensor.range(start, end, step), kw)
 
 
 def empty_strided(size, stride, **kw):
