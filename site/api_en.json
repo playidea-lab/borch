@@ -1619,9 +1619,21 @@
   "en": "Whether the conjugate bit is raised. **Here it is always false.**\n\ntorch's `conj()` does not change the values and **raises one bit** — the actual conjugate is made\nlater when needed (hence the separate `resolve_conj`). `conj` here makes the conjugate on the spot,\nso there is nothing to defer and no bit to raise.\n\n**The name is kept anyway.** Without it, `x.isConj()` stops with \"no such thing\", and that question\ndoes have an answer — false. Having no lazy bit is an implementation's business, not a reason for\nthe question to lose its meaning.",
   "src": "1d0efe0828e6"
  },
+ "tensor/Tensor.isFloatingPoint": {
+  "en": "Whether the type is a floating-point one. **It asks about the type, not the values** — it can be\ntrue with every value an integer.\n\nLooking at `dtype` would tell you, but the name exists in torch and did not exist here. The\nbinding was writing that branch in Python, which leaves nowhere for the TypeScript side to ask.",
+  "src": "fefc4d442752"
+ },
  "tensor/Tensor.isNeg": {
   "en": "Whether the sign bit is raised. Always false, for the same reason as `isConj`.",
   "src": "483d85dd2073"
+ },
+ "tensor/Tensor.isNonzero": {
+  "en": "Whether this single-element tensor's value is non-zero.\n\n**With more than one it stops.** It is the place that keeps Python's `if tensor:` from quietly\nlooking at the first element, which is why torch gives this name separately. It has to look at the\nvalue, so it is asynchronous.",
+  "src": "0541f65f6808"
+ },
+ "tensor/Tensor.isSigned": {
+  "en": "Whether the type can hold negatives. Only `bool` is false.",
+  "src": "2898441e306a"
  },
  "tensor/Tensor.isclose": {
   "en": "Whether each position is **close.** `|a−b| ≤ atol + rtol·|b|`.\n\n**It leans to the right** — it measures against `b`'s magnitude, so swapping the two can change\nthe answer. torch defines it that way.",

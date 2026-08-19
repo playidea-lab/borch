@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. 영어는 site/api_en.json 이 들고 있고, 원문이 바뀌면 낡았다고 말한다.",
  "english": {
-  "done": 614,
+  "done": 617,
   "stale": 0,
-  "missing": 3
+  "missing": 0
  },
  "modules": [
   {
@@ -3858,7 +3858,8 @@
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
-       }
+       },
+       "doc_en": "Whether the type is a floating-point one. **It asks about the type, not the values** — it can be\ntrue with every value an integer.\n\nLooking at `dtype` would tell you, but the name exists in torch and did not exist here. The\nbinding was writing that branch in Python, which leaves nowhere for the TypeScript side to ask."
       },
       {
        "name": "isSigned",
@@ -3868,7 +3869,8 @@
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
-       }
+       },
+       "doc_en": "Whether the type can hold negatives. Only `bool` is false."
       },
       {
        "name": "isNonzero",
@@ -3878,7 +3880,8 @@
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
-       }
+       },
+       "doc_en": "Whether this single-element tensor's value is non-zero.\n\n**With more than one it stops.** It is the place that keeps Python's `if tensor:` from quietly\nlooking at the first element, which is why torch gives this name separately. It has to look at the\nvalue, so it is asynchronous."
       },
       {
        "name": "fullLike",
