@@ -204,6 +204,155 @@ def irfft(input, n=None, dim=-1, norm=None):                    # noqa: A002
     return t._make(out, (t,), back, "FftC2RBackward0")
 
 
+# ── 여러 축 · 에르미트 — **전부 위 넷의 조립이다** ─────────────────────────
+#
+# 새 커널이 하나도 없다. `fft2` 는 축을 하나씩 도는 것이고(실측: `fft2(x)` 와
+# `fft(fft(x, dim=-1), dim=-2)` 가 정확히 같다), 에르미트 갈래도 켤레와 배율로
+# 풀린다(`hfft(c, n) = irfft(conj(c), n)·n`, `ihfft(r) = conj(rfft(r))/n` — 둘 다 실측).
+#
+# **그래서 기울기를 따로 안 쓴다.** 조립이므로 테이프가 그대로 이어진다 — 여기에
+# 역방향을 손으로 적으면 위 넷과 두 벌이 되고, 그 둘이 갈리는 날 값 대조로는 안 걸린다.
+#
+# `norm` 도 축마다 곱해지면 맞는다. `ortho` 는 축마다 `1/√nᵢ` 라 곱이 `1/√Πnᵢ` 이고,
+# `forward` 는 `1/nᵢ` 라 곱이 `1/Πnᵢ` 다 — 셋 다 곱셈이라 축을 나눠 돌아도 같다.
+
+def _axes_and_sizes(t, s, dim, default_last):
+    """`s`·`dim` 을 축 목록과 크기 목록으로 편다. torch 의 기본을 따른다."""
+    rank = t.data.ndim
+    if dim is None:
+        dim = tuple(range(rank)) if s is None else tuple(
+            range(rank - len(s), rank))
+    elif isinstance(dim, int):
+        dim = (dim,)
+    axes = [_axis(d, rank) for d in dim]
+    if s is None:
+        sizes = [t.data.shape[a] for a in axes]
+    else:
+        sizes = [t.data.shape[a] if v is None else int(v)
+                 for a, v in zip(axes, s)]
+    del default_last
+    return axes, sizes
+
+
+def fftn(input, s=None, dim=None, norm=None):                    # noqa: A002
+    """모든(또는 고른) 축의 정변환. **축마다 `fft` 를 한 번씩 돈다.**"""
+    t = _wrap(input)
+    axes, sizes = _axes_and_sizes(t, s, dim, False)
+    for a, n in zip(axes, sizes):
+        t = fft(t, n=n, dim=a, norm=norm)
+    return t
+
+
+def ifftn(input, s=None, dim=None, norm=None):                   # noqa: A002
+    t = _wrap(input)
+    axes, sizes = _axes_and_sizes(t, s, dim, False)
+    for a, n in zip(axes, sizes):
+        t = ifft(t, n=n, dim=a, norm=norm)
+    return t
+
+
+def fft2(input, s=None, dim=(-2, -1), norm=None):                # noqa: A002
+    return fftn(input, s=s, dim=dim, norm=norm)
+
+
+def ifft2(input, s=None, dim=(-2, -1), norm=None):               # noqa: A002
+    return ifftn(input, s=s, dim=dim, norm=norm)
+
+
+def rfftn(input, s=None, dim=None, norm=None):                   # noqa: A002
+    """실수 입력. **마지막 축만 `rfft` 이고 나머지는 `fft`** 다 — 차례가 답을 정한다."""
+    t = _wrap(input)
+    axes, sizes = _axes_and_sizes(t, s, dim, True)
+    t = rfft(t, n=sizes[-1], dim=axes[-1], norm=norm)
+    for a, n in zip(axes[:-1], sizes[:-1]):
+        t = fft(t, n=n, dim=a, norm=norm)
+    return t
+
+
+def irfftn(input, s=None, dim=None, norm=None):                  # noqa: A002
+    """`rfftn` 의 역. **`ifft` 를 먼저 돌고 마지막에 `irfft`** 다."""
+    t = _wrap(input)
+    axes, sizes = _axes_and_sizes(t, s, dim, True)
+    if s is None:
+        # 마지막 축만 반쪽이라 크기를 되돌려 준다 — torch 의 기본과 같다.
+        sizes[-1] = 2 * (t.data.shape[axes[-1]] - 1)
+    for a, n in zip(axes[:-1], sizes[:-1]):
+        t = ifft(t, n=n, dim=a, norm=norm)
+    return irfft(t, n=sizes[-1], dim=axes[-1], norm=norm)
+
+
+def rfft2(input, s=None, dim=(-2, -1), norm=None):               # noqa: A002
+    return rfftn(input, s=s, dim=dim, norm=norm)
+
+
+def irfft2(input, s=None, dim=(-2, -1), norm=None):              # noqa: A002
+    return irfftn(input, s=s, dim=dim, norm=norm)
+
+
+def _flip_norm(norm):
+    """에르미트 갈래는 정·역이 뒤바뀐다 — 정규화 이름도 같이 뒤집는다."""
+    return {"forward": "backward", "backward": "forward"}.get(norm or "backward",
+                                                              norm)
+
+
+def hfft(input, n=None, dim=-1, norm=None):                      # noqa: A002
+    """에르미트 대칭인 복소수 입력 → **실수 출력.**
+
+    `irfft` 의 켤레 관계다(실측: `hfft(c, n) == irfft(conj(c), n)·n`). 배율은
+    `irfft` 가 붙이는 `1/n` 을 되돌리는 것이고, `norm` 은 정·역이 뒤바뀌므로 같이
+    뒤집는다.
+    """
+    from . import _ops                                       # noqa: PLC0415
+
+    t = _wrap(input)
+    axis = _axis(dim, t.data.ndim)
+    length = 2 * (t.data.shape[axis] - 1) if n is None else int(n)
+    return irfft(_ops.conj(t), n=length, dim=axis, norm=_flip_norm(norm))
+
+
+def ihfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
+    """실수 입력 → **에르미트 대칭인 복소수.** `rfft` 의 켤레다."""
+    from . import _ops                                       # noqa: PLC0415
+
+    t = _wrap(input)
+    axis = _axis(dim, t.data.ndim)
+    return _ops.conj(rfft(t, n=n, dim=axis, norm=_flip_norm(norm)))
+
+
+def hfftn(input, s=None, dim=None, norm=None):                   # noqa: A002
+    """마지막 축이 `hfft` 이고 **앞 축은 `fft`** 다.
+
+    **앞뒤를 반대로 짐작했다가 걸렸다.** `rfftn` 의 거울이니 `ifft` 일 것 같은데
+    torch 는 `fft` 다(실측 — 후보를 둘 다 만들어 대 봤다). 모양은 양쪽 다 맞아서
+    값을 안 재면 안 드러난다.
+    """
+    t = _wrap(input)
+    axes, sizes = _axes_and_sizes(t, s, dim, True)
+    if s is None:
+        sizes[-1] = 2 * (t.data.shape[axes[-1]] - 1)
+    for a, n in zip(axes[:-1], sizes[:-1]):
+        t = fft(t, n=n, dim=a, norm=norm)
+    return hfft(t, n=sizes[-1], dim=axes[-1], norm=norm)
+
+
+def ihfftn(input, s=None, dim=None, norm=None):                  # noqa: A002
+    """`ihfft` 를 마지막 축에, **앞 축에는 `ifft`** 를(실측 — `hfftn` 과 짝이다)."""
+    t = _wrap(input)
+    axes, sizes = _axes_and_sizes(t, s, dim, True)
+    t = ihfft(t, n=sizes[-1], dim=axes[-1], norm=norm)
+    for a, n in zip(axes[:-1], sizes[:-1]):
+        t = ifft(t, n=n, dim=a, norm=norm)
+    return t
+
+
+def hfft2(input, s=None, dim=(-2, -1), norm=None):               # noqa: A002
+    return hfftn(input, s=s, dim=dim, norm=norm)
+
+
+def ihfft2(input, s=None, dim=(-2, -1), norm=None):              # noqa: A002
+    return ihfftn(input, s=s, dim=dim, norm=norm)
+
+
 def fftfreq(n, d=1.0, **kw):
     """표본 주파수. `[0, 1, …, n/2-1, -n/2, …, -1] / (n·d)` 다(실측)."""
     half = (n - 1) // 2 + 1

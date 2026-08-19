@@ -523,3 +523,152 @@ export function istft(input: Tensor, nFft: number,
   if (length !== null) out = out.narrow(-1, 0, length);
   return out;
 }
+
+// ── 여러 축 · 에르미트 — **전부 위 넷의 조립이다** ───────────────────────────
+//
+// 새 커널이 없다. `fft2` 는 축을 하나씩 도는 것이고(실측: torch 의 `fft2` 와 정확히
+// 같다) 에르미트 갈래는 켤레와 배율로 풀린다. 그래서 기울기도 따로 안 쓴다 — 테이프가
+// 그대로 이어진다. 여기 역방향을 손으로 적으면 위 넷과 두 벌이 되고, 두 벌은 갈린다.
+//
+// **파이썬이 대신 채우지 않게 여기 둔다.** 결속이 조립하면 골든은 초록이 되는데
+// borch.ts 를 쓰는 쪽에는 그 이름이 여전히 없다 — 이 저장소가 일곱 번 겪은 자리다.
+
+function axesAndSizes(
+  t: Tensor, s: readonly (number | null)[] | null | undefined,
+  dim: readonly number[] | number | null | undefined,
+): [number[], number[]] {
+  const rank = t.shape.length;
+  let dims: readonly number[];
+  if (dim === null || dim === undefined) {
+    dims = s === null || s === undefined
+      ? Array.from({ length: rank }, (_, i) => i)
+      : Array.from({ length: s.length }, (_, i) => rank - s.length + i);
+  } else {
+    dims = typeof dim === "number" ? [dim] : dim;
+  }
+  const axes = dims.map((d) => axisOf(d, rank));
+  const sizes = axes.map((a, i) => {
+    const want = s === null || s === undefined ? null : s[i];
+    return want === null || want === undefined ? (t.shape[a] ?? 0) : want;
+  });
+  return [axes, sizes];
+}
+
+/** 에르미트 갈래는 정·역이 뒤바뀐다 — 정규화 이름도 같이 뒤집는다. */
+function flipNorm(norm?: string | null): string | null | undefined {
+  if (norm === "forward") return "backward";
+  if (norm === "backward" || norm === null || norm === undefined) return "forward";
+  return norm;
+}
+
+export function fftn(input: Tensor, s?: (number | null)[] | null,
+                     dim?: number[] | number | null, norm?: string | null): Tensor {
+  const [axes, sizes] = axesAndSizes(input, s, dim);
+  let out = input;
+  axes.forEach((a, i) => { out = fft(out, sizes[i], a, norm); });
+  return out;
+}
+
+export function ifftn(input: Tensor, s?: (number | null)[] | null,
+                      dim?: number[] | number | null, norm?: string | null): Tensor {
+  const [axes, sizes] = axesAndSizes(input, s, dim);
+  let out = input;
+  axes.forEach((a, i) => { out = ifft(out, sizes[i], a, norm); });
+  return out;
+}
+
+export function fft2(input: Tensor, s?: (number | null)[] | null,
+                     dim: number[] = [-2, -1], norm?: string | null): Tensor {
+  return fftn(input, s, dim, norm);
+}
+
+export function ifft2(input: Tensor, s?: (number | null)[] | null,
+                      dim: number[] = [-2, -1], norm?: string | null): Tensor {
+  return ifftn(input, s, dim, norm);
+}
+
+/** 실수 입력. **마지막 축만 `rfft` 이고 나머지는 `fft`** 다 — 차례가 답을 정한다. */
+export function rfftn(input: Tensor, s?: (number | null)[] | null,
+                      dim?: number[] | number | null, norm?: string | null): Tensor {
+  const [axes, sizes] = axesAndSizes(input, s, dim);
+  const last = axes.length - 1;
+  let out = rfft(input, sizes[last], axes[last], norm);
+  for (let i = 0; i < last; i += 1) out = fft(out, sizes[i], axes[i], norm);
+  return out;
+}
+
+/** `rfftn` 의 역. **`ifft` 를 먼저 돌고 마지막에 `irfft`** 다. */
+export function irfftn(input: Tensor, s?: (number | null)[] | null,
+                       dim?: number[] | number | null, norm?: string | null): Tensor {
+  const [axes, sizes] = axesAndSizes(input, s, dim);
+  const last = axes.length - 1;
+  if (s === null || s === undefined) {
+    sizes[last] = 2 * ((input.shape[axes[last] as number] ?? 1) - 1);
+  }
+  let out = input;
+  for (let i = 0; i < last; i += 1) out = ifft(out, sizes[i], axes[i], norm);
+  return irfft(out, sizes[last], axes[last], norm);
+}
+
+export function rfft2(input: Tensor, s?: (number | null)[] | null,
+                      dim: number[] = [-2, -1], norm?: string | null): Tensor {
+  return rfftn(input, s, dim, norm);
+}
+
+export function irfft2(input: Tensor, s?: (number | null)[] | null,
+                       dim: number[] = [-2, -1], norm?: string | null): Tensor {
+  return irfftn(input, s, dim, norm);
+}
+
+/** 에르미트 대칭인 복소수 → **실수.** `irfft` 의 켤레 관계다(실측). */
+export function hfft(input: Tensor, n?: number | null, dim = -1,
+                     norm?: string | null): Tensor {
+  const axis = axisOf(dim, input.shape.length);
+  const len = n === undefined || n === null
+    ? 2 * ((input.shape[axis] ?? 1) - 1) : n;
+  return irfft(input.conj(), len, axis, flipNorm(norm));
+}
+
+/** 실수 → **에르미트 대칭인 복소수.** `rfft` 의 켤레다. */
+export function ihfft(input: Tensor, n?: number | null, dim = -1,
+                      norm?: string | null): Tensor {
+  const axis = axisOf(dim, input.shape.length);
+  return rfft(input, n, axis, flipNorm(norm)).conj();
+}
+
+/**
+ * 마지막 축이 `hfft` 이고 **앞 축은 `fft`** 다.
+ *
+ * `rfftn` 의 거울이니 `ifft` 일 것 같은데 torch 는 `fft` 다(실측 — 후보를 둘 다
+ * 만들어 대 봤다). **모양은 양쪽 다 맞아서** 값을 안 재면 안 드러난다.
+ */
+export function hfftn(input: Tensor, s?: (number | null)[] | null,
+                      dim?: number[] | number | null, norm?: string | null): Tensor {
+  const [axes, sizes] = axesAndSizes(input, s, dim);
+  const last = axes.length - 1;
+  if (s === null || s === undefined) {
+    sizes[last] = 2 * ((input.shape[axes[last] as number] ?? 1) - 1);
+  }
+  let out = input;
+  for (let i = 0; i < last; i += 1) out = fft(out, sizes[i], axes[i], norm);
+  return hfft(out, sizes[last], axes[last], norm);
+}
+
+export function ihfftn(input: Tensor, s?: (number | null)[] | null,
+                       dim?: number[] | number | null, norm?: string | null): Tensor {
+  const [axes, sizes] = axesAndSizes(input, s, dim);
+  const last = axes.length - 1;
+  let out = ihfft(input, sizes[last], axes[last], norm);
+  for (let i = 0; i < last; i += 1) out = ifft(out, sizes[i], axes[i], norm);
+  return out;
+}
+
+export function hfft2(input: Tensor, s?: (number | null)[] | null,
+                      dim: number[] = [-2, -1], norm?: string | null): Tensor {
+  return hfftn(input, s, dim, norm);
+}
+
+export function ihfft2(input: Tensor, s?: (number | null)[] | null,
+                       dim: number[] = [-2, -1], norm?: string | null): Tensor {
+  return ihfftn(input, s, dim, norm);
+}

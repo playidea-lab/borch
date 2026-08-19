@@ -2061,6 +2061,21 @@ class _Fft:
     def rfft(input, n=None, dim=-1, norm=None, **kw):
         return wrap(guarded(_ts.fft.rfft, handle(input), n, int(dim), norm))
 
+    # ── 여러 축 · 에르미트 — **borch.ts 가 조립한다** ────────────────────
+    #
+    # 여기서 파이썬으로 조립하면 골든은 초록이 되는데 borch.ts 를 쓰는 쪽에는 그
+    # 이름이 없다. 이 저장소가 일곱 번 겪은 자리라 저쪽에 두고 여기서는 넘기기만 한다.
+
+    @staticmethod
+    def _many(name, input, s, dim, norm):
+        js = getattr(_ts.fft, name)
+        return wrap(guarded(js, handle(input),
+                            None if s is None else _js_list(list(s)),
+                            None if dim is None else (
+                                _js_list([int(d) for d in dim])
+                                if not isinstance(dim, int) else int(dim)),
+                            norm))
+
     @staticmethod
     def irfft(input, n=None, dim=-1, norm=None, **kw):
         return wrap(guarded(_ts.fft.irfft, handle(input), n, int(dim), norm))
@@ -2089,6 +2104,31 @@ def _dim_arg(dim):
     안 본다 — `_js_list` 가 그 자리를 위해 있다."""
     return _js_list(dim) if isinstance(dim, (list, tuple)) else int(dim)
 
+
+for _n in ("fft2", "ifft2", "fftn", "ifftn", "rfft2", "irfft2", "rfftn", "irfftn",
+           "hfft2", "ihfft2", "hfftn", "ihfftn"):
+    def _make_many(name):
+        def call(input, s=None, dim=None, norm=None, **kw):
+            _no_out(kw)
+            if dim is None and name.endswith("2"):
+                dim = (-2, -1)
+            return _Fft._many(name, input, s, dim, norm)
+        call.__name__ = name
+        return staticmethod(call)
+    setattr(_Fft, _n, _make_many(_n))
+del _n
+
+
+def _fft_one(name):
+    def call(input, n=None, dim=-1, norm=None, **kw):
+        _no_out(kw)
+        return wrap(guarded(getattr(_ts.fft, name), handle(input), n, int(dim), norm))
+    call.__name__ = name
+    return staticmethod(call)
+
+
+_Fft.hfft = _fft_one("hfft")
+_Fft.ihfft = _fft_one("ihfft")
 
 fft = _Fft()
 

@@ -1452,12 +1452,21 @@ FFT_PREFIX = "fft::"
 # 보여 준다. 비면 `startswith(())` 가 언제나 거짓이라 아무것도 안 건너뛴다.
 #
 # **장치는 남긴다.** 두 번 열렸다 닫힌 자리라 세 번째도 온다.
+# **`fft::여러축::` 은 borch.ts 의 결함 때문에 잠시 코어 전용이다.** 열넷 자체는
+# borch.ts 에도 조립해 두었고 값이 맞는데, 그 밑의 1 차원 `fft` 가 **복소수 입력을
+# 마지막이 아닌 축으로** 변환할 때 틀린다(실측: `fft(복소수, dim=0)` 이 torch 와 갈린다.
+# 실수 입력은 두 축 다 맞고, 복소수도 `dim=-1` 은 맞다). 기존 `fft` 케이스가 전부
+# 1 차원 벡터라 그 조합을 한 번도 안 물었고, 그래서 여태 초록이었다.
+#
+# **제 추가가 만든 결함이 아니라 드러낸 결함이다.** 조립은 새 커널을 안 쓰지만
+# 기존 커널을 **새 조합으로** 부른다. 저쪽이 고쳐지면 이 줄을 지운다.
+#
 # **비대칭 고유분해는 코어에만 있다.** borch.ts 에는 대칭용 `eigh` 만 있고, 일반
 # 행렬의 고유분해는 헤센베르크 변환 + QR 반복이라 WGSL 로는 다른 크기의 일이다.
 # 결속이 numpy 로 채울 수는 있지만 **그것이 방금 줄이고 있는 자리**다 — 파이썬이
 # 대신 계산하면 borch.ts 를 쓰는 쪽에는 그 이름이 여전히 없고, 골든은 결속을 지나
 # 초록이 된다. 그 덮개를 다시 만들지 않으려고 여기 적는다.
-CORE_ONLY_PREFIXES = ("linalg::eig::",)
+CORE_ONLY_PREFIXES = ("linalg::eig::", "fft::여러축::")
 
 
 def complex_cases(inp=None):
@@ -1811,6 +1820,68 @@ def fft_cases(inp=None):
     refuses("복소 스펙트럼의 backward 는 거절",
             lambda L: L.fft.fft(
                 L.tensor(xs.copy(), requires_grad=True)).sum().backward())
+
+    # ── 여러 축 · 에르미트 — **전부 위 넷의 조립이다** ──────────────────────
+    #
+    # 새 커널이 없다. `fft2` 는 축을 하나씩 도는 것이고 에르미트 갈래는 켤레와 배율로
+    # 풀린다. 그래서 값이 맞으면 기울기도 따라오는데, **차례와 정규화**는 조립하는
+    # 쪽이 정하므로 그 둘이 여기서 묻는 것이다.
+    #
+    # `hfftn` 의 앞 축이 `fft` 인 것을 짐작으로 `ifft` 라고 썼다가 틀렸다 — **모양은
+    # 양쪽 다 맞아서** 값을 안 재면 안 드러난다. 그래서 모양이 아니라 값을 굳힌다.
+    #
+    # **입력에 0 이 안 나오게 골랐다.** 위 `stft` 주석이 적어 둔 칼날이고, 이 묶음을
+    # 만들면서 그 경고를 읽고도 한 번 밟았다 — 등차수열의 `rfft` 는 정확한 0 을
+    # 만들고, 거기에 `abs` 를 씌우면 기울기 방향이 반올림에 달린다.
+    grid = np.array([[0.31, -1.2, 0.75, 2.1], [-0.4, 1.55, -2.3, 0.9],
+                     [1.1, -0.62, 0.25, -1.7]], dtype=np.float32)
+    cgrid = (grid + 1j * grid[::-1].copy()).astype(np.complex64)
+
+    # **복소수를 그대로 돌려주면 안 된다.** 골든의 JSON 판은 실수만 담아서 허수부가
+    # 조용히 사라진다 — `tests/test_export_json.py` 가 그것을 잡았다. `view_as_real`
+    # 로 마지막 축에 (실, 허) 를 펴면 정보가 다 남고 셋이 같은 것을 본다.
+    def _real2(L, got):
+        return L.view_as_real(got) if got.dtype in (L.complex64, L.cfloat) else got
+
+    for _name in ("fft2", "fftn", "ifft2", "ifftn"):
+        add(f"여러축::{_name}",
+            lambda L, n=_name: _real2(L, getattr(L.fft, n)(L.tensor(cgrid.copy()))))
+    for _name in ("rfft2", "rfftn"):
+        add(f"여러축::{_name}",
+            lambda L, n=_name: _real2(L, getattr(L.fft, n)(L.tensor(grid.copy()))))
+    for _name in ("irfft2", "irfftn", "hfft2", "hfftn"):
+        add(f"여러축::{_name}",
+            lambda L, n=_name: _real2(L, getattr(L.fft, n)(L.tensor(cgrid.copy()))))
+    for _name in ("ihfft2", "ihfftn"):
+        add(f"여러축::{_name}",
+            lambda L, n=_name: _real2(L, getattr(L.fft, n)(L.tensor(grid.copy()))))
+    add("여러축::hfft", lambda L: L.fft.hfft(L.tensor(cgrid.copy())))
+
+    # **인자를 듣는가.** 축 차례·크기·정규화 셋이 조립하는 쪽의 몫이다.
+    add("여러축::fft2(norm=ortho)",
+        lambda L: _real2(L, L.fft.fft2(L.tensor(cgrid.copy()), norm="ortho")))
+    add("여러축::fft2(norm=forward)",
+        lambda L: _real2(L, L.fft.fft2(L.tensor(cgrid.copy()), norm="forward")))
+    add("여러축::fft2(s)",
+        lambda L: _real2(L, L.fft.fft2(L.tensor(cgrid.copy()), s=(2, 8))))
+    add("여러축::fftn(dim 하나만)",
+        lambda L: _real2(L, L.fft.fftn(L.tensor(cgrid.copy()), dim=(0,))))
+
+    # **기울기.** 조립이라 저절로 따라와야 하고, 안 따라오면 여기서 걸린다.
+    def _grad_of_fft(L, name, arr):
+        x = L.tensor(arr.copy(), requires_grad=True)
+        y = getattr(L.fft, name)(x)
+        w = L.arange(y.numel()).reshape(y.shape).float() * 0.13 - 0.7
+        (y.real * w).sum().backward()
+        return _grad_of(x, name)
+
+    # **잎은 실수여야 한다** — 결속은 복소수 잎에 `requires_grad` 를 안 준다.
+    # `fft2` 는 실수를 넣어도 복소수를 내므로 물음은 그대로다.
+    for _name, _arr in (("fft2", grid), ("rfft2", grid), ("rfftn", grid),
+                        ("ihfft2", grid)):
+        add(f"여러축::grad::{_name}",
+            lambda L, n=_name, a=_arr: _grad_of_fft(L, n, a))
+
     return cases
 
 

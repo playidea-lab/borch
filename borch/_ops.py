@@ -27,6 +27,14 @@ from ._fft import fft as _fft_fft, fftfreq as _fft_fftfreq
 from ._fft import fftshift as _fft_fftshift, ifft as _fft_ifft
 from ._fft import ifftshift as _fft_ifftshift, irfft as _fft_irfft
 from ._fft import istft as _fft_istft, rfft as _fft_rfft
+# 여러 축·에르미트 — 전부 위 넷의 조립이라 몸통도 같은 파일에 있다.
+from ._fft import fft2 as _fft_fft2, fftn as _fft_fftn
+from ._fft import hfft as _fft_hfft, hfft2 as _fft_hfft2
+from ._fft import hfftn as _fft_hfftn, ifft2 as _fft_ifft2
+from ._fft import ifftn as _fft_ifftn, ihfft as _fft_ihfft
+from ._fft import ihfft2 as _fft_ihfft2, ihfftn as _fft_ihfftn
+from ._fft import irfft2 as _fft_irfft2, irfftn as _fft_irfftn
+from ._fft import rfft2 as _fft_rfft2, rfftn as _fft_rfftn
 from ._fft import rfftfreq as _fft_rfftfreq, stft as _fft_stft
 from ._base import bool_ as _bool_dtype, float32 as _float32
 from ._base import float64 as _float64, int64 as _int64
@@ -5958,6 +5966,20 @@ class _Fft(_Namespace):
     rfftfreq = staticmethod(_fft_rfftfreq)
     fftshift = staticmethod(_fft_fftshift)
     ifftshift = staticmethod(_fft_ifftshift)
+    fft2 = staticmethod(_fft_fft2)
+    ifft2 = staticmethod(_fft_ifft2)
+    fftn = staticmethod(_fft_fftn)
+    ifftn = staticmethod(_fft_ifftn)
+    rfft2 = staticmethod(_fft_rfft2)
+    irfft2 = staticmethod(_fft_irfft2)
+    rfftn = staticmethod(_fft_rfftn)
+    irfftn = staticmethod(_fft_irfftn)
+    hfft = staticmethod(_fft_hfft)
+    ihfft = staticmethod(_fft_ihfft)
+    hfft2 = staticmethod(_fft_hfft2)
+    ihfft2 = staticmethod(_fft_ihfft2)
+    hfftn = staticmethod(_fft_hfftn)
+    ihfftn = staticmethod(_fft_ihfftn)
 
 
 fft = _Fft()

@@ -9586,9 +9586,107 @@
      "signature": "export declare function istft(input: Tensor, nFft: number, options?: StftOptions): Tensor",
      "doc": "",
      "members": []
+    },
+    {
+     "kind": "function",
+     "name": "fftn",
+     "signature": "export declare function fftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "ifftn",
+     "signature": "export declare function ifftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "fft2",
+     "signature": "export declare function fft2(input: Tensor, s?: (number | null)[] | null, dim?: number[], norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "ifft2",
+     "signature": "export declare function ifft2(input: Tensor, s?: (number | null)[] | null, dim?: number[], norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "rfftn",
+     "signature": "export declare function rfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
+     "doc": "실수 입력. **마지막 축만 `rfft` 이고 나머지는 `fft`** 다 — 차례가 답을 정한다.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "irfftn",
+     "signature": "export declare function irfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
+     "doc": "`rfftn` 의 역. **`ifft` 를 먼저 돌고 마지막에 `irfft`** 다.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "rfft2",
+     "signature": "export declare function rfft2(input: Tensor, s?: (number | null)[] | null, dim?: number[], norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "irfft2",
+     "signature": "export declare function irfft2(input: Tensor, s?: (number | null)[] | null, dim?: number[], norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "hfft",
+     "signature": "export declare function hfft(input: Tensor, n?: number | null, dim?: number, norm?: string | null): Tensor",
+     "doc": "에르미트 대칭인 복소수 → **실수.** `irfft` 의 켤레 관계다(실측).",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "ihfft",
+     "signature": "export declare function ihfft(input: Tensor, n?: number | null, dim?: number, norm?: string | null): Tensor",
+     "doc": "실수 → **에르미트 대칭인 복소수.** `rfft` 의 켤레다.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "hfftn",
+     "signature": "export declare function hfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
+     "doc": "마지막 축이 `hfft` 이고 **앞 축은 `fft`** 다.\n\n`rfftn` 의 거울이니 `ifft` 일 것 같은데 torch 는 `fft` 다(실측 — 후보를 둘 다\n만들어 대 봤다). **모양은 양쪽 다 맞아서** 값을 안 재면 안 드러난다.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "ihfftn",
+     "signature": "export declare function ihfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "hfft2",
+     "signature": "export declare function hfft2(input: Tensor, s?: (number | null)[] | null, dim?: number[], norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "ihfft2",
+     "signature": "export declare function ihfft2(input: Tensor, s?: (number | null)[] | null, dim?: number[], norm?: string | null): Tensor",
+     "doc": "",
+     "members": []
     }
    ],
-   "count": 20
+   "count": 34
   },
   {
    "name": "linalg",
@@ -10732,5 +10830,5 @@
    "count": 9
   }
  ],
- "total": 1485
+ "total": 1499
 }
