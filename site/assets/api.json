@@ -711,6 +711,100 @@
        }
       },
       {
+       "name": "hstack",
+       "signature": "static hstack(parts: readonly Tensor[]): Tensor",
+       "doc": "1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "vstack",
+       "signature": "static vstack(parts: readonly Tensor[]): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "dstack",
+       "signature": "static dstack(parts: readonly Tensor[]): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "columnStack",
+       "signature": "static columnStack(parts: readonly Tensor[]): Tensor",
+       "doc": "1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다.",
+       "torch": "column_stack",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "blockDiag",
+       "signature": "static blockDiag(parts: readonly Tensor[]): Tensor",
+       "doc": "대각선에 블록을 늘어놓고 나머지는 0.",
+       "torch": "block_diag",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "broadcastTensors",
+       "signature": "static broadcastTensors(parts: readonly Tensor[]): Tensor[]",
+       "doc": "전부 같은 모양이 되도록 늘린다. **사본이지 뷰가 아니다.**",
+       "torch": "broadcast_tensors",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "meshgrid",
+       "signature": "static meshgrid(parts: readonly Tensor[], indexing?: \"ij\" | \"xy\"): Tensor[]",
+       "doc": "격자. **`xy` 는 앞의 두 축이 뒤바뀐 것**이라 한 규칙으로 못 덮는다.\n\n`ij` 로만 재면 그 갈래가 안 보인다 — 정사각 입력에서는 둘이 같은 모양이라\n값까지 봐야 갈린다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "logspace",
+       "signature": "static logspace(start: number, end: number, steps: number, base?: number): Tensor",
+       "doc": "`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "scalarTensor",
+       "signature": "static scalarTensor(value: number): Tensor",
+       "doc": "수 하나짜리 텐서. `full([], v)` 와 같은 것이고 torch 가 이름을 따로 준다.",
+       "torch": "scalar_tensor",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
+       "name": "empty",
+       "signature": "static empty(shape: readonly number[]): Tensor",
+       "doc": "*값을 0 으로 둔다** — torch 는 쓰레기를 주지만 그것을 배우면 안 된다.",
+       "section": {
+        "ko": "축약",
+        "en": "Reductions"
+       }
+      },
+      {
        "name": "variance",
        "signature": "variance(correction?: number): Tensor",
        "doc": "분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면\n값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.",
@@ -3264,6 +3358,87 @@
        }
       },
       {
+       "name": "cdist",
+       "signature": "cdist(other: Tensor, p?: number): Tensor",
+       "doc": "모든 짝 사이의 거리. **브로드캐스팅 하나로 풀린다** — 커널이 안 는다.\n\n`p === 2` 를 따로 두는 것은 빨라서가 아니라 **제곱근이 0 에서 미분이 없어서**다.\n일반 길(`|d|^p` 뒤에 `^(1/p)`)로 가면 같은 자리에서 기울기가 NaN 이 된다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "cov",
+       "signature": "cov(correction?: number): Tensor",
+       "doc": "공분산. **줄이 변수이고 칸이 관측이다** — numpy 와 축이 반대라 헷갈리는 자리다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "kron",
+       "signature": "kron(other: Tensor): Tensor",
+       "doc": "크로네커 곱. **1 차원만 한다** — 그 위는 거절한다.\n\n결속에 있던 판이 축 하나만 보고 있었고(`shape[0]` 두 개), 2 차원을 넣으면 답이\n조용히 틀렸다. 옮기면서 고칠 수도 있었지만, 그러면 여기 없는 능력을 있는 것처럼\n적게 된다 — **틀린 답보다 없는 기능이 낫다**는 것이 이 저장소의 규칙이다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "corrcoef",
+       "signature": "corrcoef(): Tensor",
+       "doc": "공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "tensordot",
+       "signature": "tensordot(other: Tensor, dims?: number | readonly [readonly number[], readonly number[]]): Tensor",
+       "doc": "지정한 축끼리 접어 곱한다. 접을 축을 몰고 **행렬곱 한 번**으로 끝낸다.",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "dims 수를 주면 뒤에서 그만큼, 목록 둘을 주면 각각의 축이다."
+        }
+       ],
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "indexAdd",
+       "signature": "indexAdd(dim: number, index: Tensor, source: Tensor, alpha?: number): Tensor",
+       "doc": "",
+       "torch": "index_add",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "indexCopy",
+       "signature": "indexCopy(dim: number, index: Tensor, source: Tensor): Tensor",
+       "doc": "",
+       "torch": "index_copy",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "indexFill",
+       "signature": "indexFill(dim: number, index: Tensor, value: number): Tensor",
+       "doc": "",
+       "torch": "index_fill",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
        "name": "fullLike",
        "signature": "fullLike(value: number): Tensor",
        "doc": "",
@@ -4290,7 +4465,7 @@
      "torch": "make_node"
     }
    ],
-   "count": 475
+   "count": 493
   },
   {
    "name": "nn",
@@ -10439,5 +10614,5 @@
    "count": 9
   }
  ],
- "total": 1455
+ "total": 1473
 }

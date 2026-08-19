@@ -1783,6 +1783,114 @@ export class Tensor implements Node<Tensor> {
     return Tensor.cat(parts.map((p) => p.unsqueeze(dim)), dim);
   }
 
+  /** 모자란 **앞**축을 1 로 채운다. `atleast_2d` 가 하는 일이다. */
+  private static lift(t: Tensor, rank: number): Tensor {
+    if (t.shape.length >= rank) return t;
+    return t.reshape([...new Array<number>(rank - t.shape.length).fill(1), ...t.shape]);
+  }
+
+  /**
+   * torch 의 `atleast_3d`. **뒤에 축을 붙인다** — 앞이 아니다.
+   *
+   * 1 차원 `(n,)` 은 `(1, n, 1)` 이고 2 차원 `(m, n)` 은 `(m, n, 1)` 이다. 앞에만
+   * 채우면 `dstack` 이 셋째 축이 아니라 마지막 축으로 붙어 모양부터 달라진다.
+   */
+  private static lift3(t: Tensor): Tensor {
+    const shape = t.shape;
+    if (shape.length >= 3) return t;
+    if (shape.length === 2) return t.reshape([shape[0] ?? 1, shape[1] ?? 1, 1]);
+    return t.reshape([1, shape[0] ?? 1, 1]);
+  }
+
+  /** 1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다. */
+  static hstack(parts: readonly Tensor[]): Tensor {
+    return Tensor.cat(parts, (parts[0]?.shape.length ?? 1) === 1 ? 0 : 1);
+  }
+
+  static vstack(parts: readonly Tensor[]): Tensor {
+    return Tensor.cat(parts.map((p) => Tensor.lift(p, 2)), 0);
+  }
+
+  static dstack(parts: readonly Tensor[]): Tensor {
+    return Tensor.cat(parts.map((p) => Tensor.lift3(p)), 2);
+  }
+
+  /** 1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다. */
+  static columnStack(parts: readonly Tensor[]): Tensor {
+    return Tensor.cat(
+      parts.map((p) => (p.shape.length === 1 ? p.reshape([p.shape[0] ?? 0, 1]) : p)),
+      1,
+    );
+  }
+
+  /** 대각선에 블록을 늘어놓고 나머지는 0. */
+  static blockDiag(parts: readonly Tensor[]): Tensor {
+    const mats = parts.map((p) => Tensor.lift(p, 2));
+    const widths = mats.map((m) => m.shape[1] ?? 0);
+    const total = widths.reduce((a, b) => a + b, 0);
+    const lines: Tensor[] = [];
+    let at = 0;
+    mats.forEach((m, i) => {
+      const rows = m.shape[0] ?? 0;
+      const width = widths[i] ?? 0;
+      const pieces: Tensor[] = [];
+      if (at) pieces.push(Tensor.zeros([rows, at]));
+      pieces.push(m);
+      if (total - at - width) pieces.push(Tensor.zeros([rows, total - at - width]));
+      lines.push(pieces.length > 1 ? Tensor.cat(pieces, 1) : m);
+      at += width;
+    });
+    return lines.length > 1 ? Tensor.cat(lines, 0) : (lines[0] ?? Tensor.zeros([0, 0]));
+  }
+
+  /** 전부 같은 모양이 되도록 늘린다. **사본이지 뷰가 아니다.** */
+  static broadcastTensors(parts: readonly Tensor[]): Tensor[] {
+    let shape: number[] = [];
+    for (const p of parts) shape = broadcastShapes(shape, p.shape);
+    return parts.map((p) => p.expand(...shape));
+  }
+
+  /**
+   * 격자. **`xy` 는 앞의 두 축이 뒤바뀐 것**이라 한 규칙으로 못 덮는다.
+   *
+   * `ij` 로만 재면 그 갈래가 안 보인다 — 정사각 입력에서는 둘이 같은 모양이라
+   * 값까지 봐야 갈린다.
+   */
+  static meshgrid(parts: readonly Tensor[], indexing: "ij" | "xy" = "ij"): Tensor[] {
+    if (indexing !== "ij" && indexing !== "xy") {
+      throw new RuntimeError(`indexing 은 'ij' 나 'xy' 다: ${String(indexing)}`);
+    }
+    const order = parts.map((_, i) => i);
+    if (indexing === "xy" && parts.length >= 2) {
+      [order[0], order[1]] = [order[1]!, order[0]!];
+    }
+    const sizes = order.map((i) => parts[i]?.shape[0] ?? 0);
+    const out = order.map((which, place) => {
+      const lifted = new Array<number>(parts.length).fill(1);
+      lifted[place] = sizes[place] ?? 1;
+      return parts[which]!.reshape(lifted).expand(...sizes);
+    });
+    if (indexing === "xy" && parts.length >= 2) {
+      [out[0], out[1]] = [out[1]!, out[0]!];
+    }
+    return out;
+  }
+
+  /** `base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다. */
+  static logspace(start: number, end: number, steps: number, base = 10.0): Tensor {
+    return Tensor.full([], base).binary("pow", Tensor.linspace(start, end, steps));
+  }
+
+  /** 수 하나짜리 텐서. `full([], v)` 와 같은 것이고 torch 가 이름을 따로 준다. */
+  static scalarTensor(value: number): Tensor {
+    return Tensor.full([], value);
+  }
+
+  /** **값을 0 으로 둔다** — torch 는 쓰레기를 주지만 그것을 배우면 안 된다. */
+  static empty(shape: readonly number[]): Tensor {
+    return Tensor.zeros(shape);
+  }
+
   /**
    * 분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면
    * 값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.
@@ -6617,6 +6725,109 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** 마지막 두 축의 켤레 전치. 실수에서는 전치와 같다. */
   adjoint(): Tensor {
     return this.isComplex() ? this.conj().swapaxes(-2, -1) : this.swapaxes(-2, -1);
+  }
+
+  /**
+   * 모든 짝 사이의 거리. **브로드캐스팅 하나로 풀린다** — 커널이 안 는다.
+   *
+   * `p === 2` 를 따로 두는 것은 빨라서가 아니라 **제곱근이 0 에서 미분이 없어서**다.
+   * 일반 길(`|d|^p` 뒤에 `^(1/p)`)로 가면 같은 자리에서 기울기가 NaN 이 된다.
+   */
+  cdist(other: Tensor, p = 2.0): Tensor {
+    const [n, k] = [this.shape[0] ?? 0, this.shape[1] ?? 0];
+    const m = other.shape[0] ?? 0;
+    const diff = this.reshape([n, 1, k]).sub(other.reshape([1, m, k]));
+    if (p === 2.0) return diff.mul(diff).sumDim(2).sqrt();
+    return diff.abs().powScalar(p).sumDim(2).powScalar(1 / p);
+  }
+
+  /**
+   * 공분산. **줄이 변수이고 칸이 관측이다** — numpy 와 축이 반대라 헷갈리는 자리다.
+   */
+  cov(correction = 1): Tensor {
+    const wide = this.shape.length === 1
+      ? this.reshape([1, this.shape[0] ?? 0])
+      : this;
+    const n = wide.shape[1] ?? 0;
+    const centered = wide.sub(wide.mean(1, true));
+    return centered.mm(centered.swapaxes(0, 1))
+      .mul(Tensor.full([], 1 / Math.max(1, n - correction)));
+  }
+
+  /**
+   * 크로네커 곱. **1 차원만 한다** — 그 위는 거절한다.
+   *
+   * 결속에 있던 판이 축 하나만 보고 있었고(`shape[0]` 두 개), 2 차원을 넣으면 답이
+   * 조용히 틀렸다. 옮기면서 고칠 수도 있었지만, 그러면 여기 없는 능력을 있는 것처럼
+   * 적게 된다 — **틀린 답보다 없는 기능이 낫다**는 것이 이 저장소의 규칙이다.
+   */
+  kron(other: Tensor): Tensor {
+    if (this.shape.length !== 1 || other.shape.length !== 1) {
+      throw new RuntimeError(
+        "kron 은 1 차원만 합니다 — 2 차원 이상은 아직 없습니다. " +
+        `(받은 모양: [${this.shape}] 과 [${other.shape}])`,
+      );
+    }
+    const n = this.shape[0] ?? 0;
+    const m = other.shape[0] ?? 0;
+    return this.reshape([n, 1]).mul(other.reshape([1, m])).reshape([n * m]);
+  }
+
+  /** 공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다. */
+  corrcoef(): Tensor {
+    const c = this.cov();
+    const n = c.shape[0] ?? 0;
+    const diag = c.diagonal();
+    const scale = diag.reshape([n, 1]).mul(diag.reshape([1, n]));
+    return c.div(scale.sqrt());
+  }
+
+  /**
+   * 지정한 축끼리 접어 곱한다. 접을 축을 몰고 **행렬곱 한 번**으로 끝낸다.
+   *
+   * @param dims 수를 주면 뒤에서 그만큼, 목록 둘을 주면 각각의 축이다.
+   */
+  tensordot(other: Tensor, dims: number | readonly [readonly number[], readonly number[]] = 2): Tensor {
+    const ash = this.shape;
+    const bsh = other.shape;
+    const [left, right] = typeof dims === "number"
+      ? [
+        Array.from({ length: dims }, (_, i) => ash.length - dims + i),
+        Array.from({ length: dims }, (_, i) => i),
+      ]
+      : [[...dims[0]], [...dims[1]]];
+    const aKeep = ash.map((_, i) => i).filter((i) => !left.includes(i));
+    const bKeep = bsh.map((_, i) => i).filter((i) => !right.includes(i));
+    const aShape = aKeep.map((i) => ash[i] ?? 1);
+    const bShape = bKeep.map((i) => bsh[i] ?? 1);
+    const inner = left.reduce((acc, i) => acc * (ash[i] ?? 1), 1);
+    const rows = aShape.reduce((a, b) => a * b, 1);
+    const cols = bShape.reduce((a, b) => a * b, 1);
+    const am = this.permute([...aKeep, ...left]).reshape([rows, inner]);
+    const bm = other.permute([...right, ...bKeep]).reshape([inner, cols]);
+    return am.mm(bm).reshape([...aShape, ...bShape]);
+  }
+
+  /** 1 차원 번호를 `shape` 모양으로 편다 — `index_*` 셋이 같은 문을 쓴다. */
+  private spreadIndex(index: Tensor, dim: number, shape: readonly number[]): Tensor {
+    const lifted = shape.map((_, d) => (d === dim ? index.size : 1));
+    return index.reshape(lifted).expand(...shape);
+  }
+
+  indexAdd(dim: number, index: Tensor, source: Tensor, alpha = 1): Tensor {
+    const spread = this.spreadIndex(index, dim, source.shape);
+    const src = alpha === 1 ? source : source.mul(Tensor.full([], alpha));
+    return this.scatterAdd(dim, spread, src);
+  }
+
+  indexCopy(dim: number, index: Tensor, source: Tensor): Tensor {
+    return this.scatterSet(dim, this.spreadIndex(index, dim, source.shape), source);
+  }
+
+  indexFill(dim: number, index: Tensor, value: number): Tensor {
+    const shape = this.shape.map((n, d) => (d === dim ? index.size : n));
+    return this.scatterSet(dim, this.spreadIndex(index, dim, shape),
+      Tensor.full(shape, value));
   }
 
   fullLike(value: number): Tensor {

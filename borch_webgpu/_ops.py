@@ -1414,16 +1414,24 @@ def broadcast_shapes(*shapes):
 
 
 def broadcast_tensors(*tensors):
-    shape = _broadcast_shape([tuple(int(n) for n in handle(v).shape) for v in tensors])
-    return tuple(broadcast_to(v, shape) for v in tensors)
+    return tuple(wrap(v) for v in
+                 guarded(_ts.Tensor.broadcastTensors, _handles(tensors)))
+
+
+def _handles(tensors):
+    """텐서 목록을 손잡이 목록으로. 저쪽 정적 메서드들이 **목록 하나**를 받는다.
+
+    **`_js_list` 를 못 쓴다** — 그쪽은 원소마다 `int()` 를 걸어 수 목록만 다룬다.
+    손잡이를 넣으면 `int() argument must be a string…` 으로 터지는데, 그 문구는
+    모양 인자를 잘못 넘겼을 때와 같아서 어디가 문제인지 안 보인다(실측: 열한 건).
+    """
+    return _to_js([handle(wrap(v)) for v in tensors])
 
 
 def hstack(tensors, **kw):
     """1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다."""
     _no_out(kw)
-    ts = list(tensors)
-    dim = 0 if len(handle(ts[0]).shape) == 1 else 1
-    return cat(ts, dim)
+    return wrap(guarded(_ts.Tensor.hstack, _handles(tensors)))
 
 
 def _lift(x, rank):
@@ -1437,7 +1445,7 @@ def _lift(x, rank):
 
 def vstack(tensors, **kw):
     _no_out(kw)
-    return cat([_lift(v, 2) for v in tensors], 0)
+    return wrap(guarded(_ts.Tensor.vstack, _handles(tensors)))
 
 
 def _atleast3(x):
@@ -1462,38 +1470,18 @@ def _atleast3(x):
 
 def dstack(tensors, **kw):
     _no_out(kw)
-    return cat([_atleast3(v) for v in tensors], 2)
+    return wrap(guarded(_ts.Tensor.dstack, _handles(tensors)))
 
 
 def column_stack(tensors, **kw):
     """1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다."""
     _no_out(kw)
-    ts = []
-    for v in tensors:
-        h = handle(v)
-        shape = [int(n) for n in h.shape]
-        ts.append(wrap(guarded(h.reshape, _js_list([shape[0], 1])))
-                  if len(shape) == 1 else wrap(h))
-    return cat(ts, 1)
+    return wrap(guarded(_ts.Tensor.columnStack, _handles(tensors)))
 
 
 def block_diag(*tensors):
     """대각선에 블록을 늘어놓고 나머지는 0."""
-    ts = [_lift(v, 2) for v in tensors]
-    widths = [int(handle(v).shape[1]) for v in ts]
-    total = builtins.sum(widths)
-    lines, at = [], 0
-    for v, w in zip(ts, widths):
-        h = int(handle(v).shape[0])
-        pieces = []
-        if at:
-            pieces.append(zeros(h, at))
-        pieces.append(v)
-        if total - at - w:
-            pieces.append(zeros(h, total - at - w))
-        lines.append(cat(pieces, 1) if len(pieces) > 1 else v)
-        at += w
-    return cat(lines, 0) if len(lines) > 1 else lines[0]
+    return wrap(guarded(_ts.Tensor.blockDiag, _handles(tensors)))
 
 
 # ── 계산 자체가 없던 것들. 전부 있는 연산의 조합이다. ───────────────────────
@@ -1552,33 +1540,19 @@ def randint_like(t, low, high=None, **kw):
 
 
 def scalar_tensor(value, **kw):
-    return _kept(full([], float(value)), kw)
+    return _kept(wrap(guarded(_ts.Tensor.scalarTensor, float(value))), kw)
 
 
 def logspace(start, end, steps, base=10.0, **kw):
     """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
     _no_out(kw)
-    return _kept(pow(full([], float(base)), linspace(start, end, steps)), kw)
+    return _kept(wrap(guarded(_ts.Tensor.logspace, start, end, steps, base)), kw)
 
 
 def meshgrid(*tensors, indexing="ij"):
     """격자. **`xy` 는 앞의 두 축이 뒤바뀐 것**이라 한 규칙으로 못 덮는다."""
-    ts = list(tensors)
-    if indexing not in ("ij", "xy"):
-        raise RuntimeError(f"indexing 은 'ij' 나 'xy' 다: {indexing!r}")
-    order = list(range(len(ts)))
-    if indexing == "xy" and len(ts) >= 2:
-        order[0], order[1] = order[1], order[0]
-    sizes = [_shape_list(ts[i])[0] for i in order]
-    out = []
-    for place, i in enumerate(order):
-        shape = [1] * len(ts)
-        shape[place] = sizes[place]
-        lifted = wrap(guarded(handle(ts[i]).reshape, _js_list(shape)))
-        out.append(broadcast_to(lifted, sizes))
-    if indexing == "xy" and len(ts) >= 2:
-        out[0], out[1] = out[1], out[0]
-    return tuple(out)
+    return tuple(wrap(v) for v in
+                 guarded(_ts.Tensor.meshgrid, _handles(tensors), indexing))
 
 
 def lerp(start, end, weight, **kw):
@@ -2330,12 +2304,10 @@ def vdot(a, b, **kw):
 
 
 def kron(a, b, **kw):
+    """**1 차원만 한다.** 여기 있던 판은 축 하나만 보고 있어서 2 차원을 넣으면 답이
+    조용히 틀렸다 — 저쪽으로 옮기면서 그 자리를 거절로 바꿨다."""
     _no_out(kw)
-    a, b = wrap(a), wrap(b)
-    n, m = _shape_list(a)[0], _shape_list(b)[0]
-    out = (wrap(guarded(handle(a).reshape, _js_list([n, 1])))
-           * wrap(guarded(handle(b).reshape, _js_list([1, m]))))
-    return wrap(guarded(handle(out).reshape, _js_list([n * m])))
+    return wrap(guarded(handle(wrap(a)).kron, handle(wrap(b))))
 
 
 def cross(a, b, dim=-1, **kw):
@@ -2356,26 +2328,12 @@ def cross(a, b, dim=-1, **kw):
 
 def cdist(a, b, p=2.0, **kw):
     """모든 짝 사이의 거리. 브로드캐스팅 하나로 풀린다."""
-    a, b = wrap(a), wrap(b)
-    n, k = _shape_list(a)
-    m = _shape_list(b)[0]
-    diff = (wrap(guarded(handle(a).reshape, _js_list([n, 1, k])))
-            - wrap(guarded(handle(b).reshape, _js_list([1, m, k]))))
-    if p == 2.0:
-        return (diff * diff).sum(dim=2).sqrt()
-    return ((_unary(diff, "abs") ** p).sum(dim=2)) ** (1.0 / p)
+    return wrap(guarded(handle(wrap(a)).cdist, handle(wrap(b)), p))
 
 
 def cov(t, correction=1, **kw):
     """공분산. **줄이 변수이고 칸이 관측이다** — numpy 와 축이 반대라 헷갈린다."""
-    t = wrap(t)
-    shape = _shape_list(t)
-    if len(shape) == 1:
-        t = wrap(guarded(handle(t).reshape, _js_list([1, shape[0]])))
-        shape = [1, shape[0]]
-    n = shape[1]
-    centered = t - t.mean(dim=1, keepdim=True)
-    return (centered @ transpose(centered, 0, 1)) * (1.0 / builtins.max(1, n - correction))
+    return wrap(guarded(handle(wrap(t)).cov, correction))
 
 
 # ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
@@ -2457,43 +2415,20 @@ def geqrf(t, **kw):
 
 def corrcoef(t, **kw):
     """공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다."""
-    c = cov(t)
-    n = _shape_list(c)[0]
-    diag = wrap(guarded(handle(c).diagonal))
-    scale = (wrap(guarded(handle(diag).reshape, _js_list([n, 1])))
-             * wrap(guarded(handle(diag).reshape, _js_list([1, n]))))
-    return c / _unary(scale, "sqrt")
+    return wrap(guarded(handle(wrap(t)).corrcoef))
 
 
 def tensordot(a, b, dims=2, **kw):
-    """지정한 축끼리 접어 곱한다. 접을 축을 몰고 행렬곱 한 번으로 끝낸다."""
-    a, b = wrap(a), wrap(b)
-    ash, bsh = _shape_list(a), _shape_list(b)
-    if isinstance(dims, int):
-        left = list(range(len(ash) - dims, len(ash)))
-        right = list(range(dims))
-    else:
-        left, right = [list(v) for v in dims]
-    a_keep = [i for i in range(len(ash)) if i not in left]
-    b_keep = [i for i in range(len(bsh)) if i not in right]
-    a_shape = [ash[i] for i in a_keep]
-    b_shape = [bsh[i] for i in b_keep]
-    inner = 1
-    for i in left:
-        inner *= ash[i]
-    rows = 1
-    for v in a_shape:
-        rows *= v
-    cols = 1
-    for v in b_shape:
-        cols *= v
-    am = wrap(guarded(handle(wrap(guarded(handle(a).permute,
-                                          _js_list(a_keep + left)))).reshape,
-                      _js_list([rows, inner])))
-    bm = wrap(guarded(handle(wrap(guarded(handle(b).permute,
-                                          _js_list(right + b_keep)))).reshape,
-                      _js_list([inner, cols])))
-    return wrap(guarded(handle(am @ bm).reshape, _js_list(a_shape + b_shape)))
+    """지정한 축끼리 접어 곱한다. 접을 축을 몰고 행렬곱 한 번으로 끝낸다.
+
+    **축 목록은 그대로 넘긴다** — `_js_list` 로 감싸면 안쪽 목록이 `int()` 를 만나
+    터진다. 수 하나인 꼴과 목록 둘인 꼴이 저쪽 서명에 그대로 있다.
+    """
+    dd = dims if isinstance(dims, int) else _to_js(
+        [_js_list([int(v) for v in side]) for side in dims])
+    return wrap(guarded(handle(wrap(a)).tensordot, handle(wrap(b)), dd))
+
+
 
 
 def _trapezoid_x(x):
@@ -2547,24 +2482,18 @@ def scatter_add(t, dim, index, src, **kw):
 
 
 def index_add(t, dim, index, source, alpha=1, **kw):
-    t, source = wrap(t), wrap(source)
-    shape = [int(n) for n in handle(source).shape]
-    spread = _spread_index(index, dim, shape)
-    return scatter_add(t, dim, spread, source if alpha == 1 else source * alpha)
+    return wrap(guarded(handle(wrap(t)).indexAdd, dim, handle(wrap(index)),
+                        handle(wrap(source)), alpha))
 
 
 def index_copy(t, dim, index, source, **kw):
-    t, source = wrap(t), wrap(source)
-    shape = [int(n) for n in handle(source).shape]
-    return scatter(t, dim, _spread_index(index, dim, shape), source)
+    return wrap(guarded(handle(wrap(t)).indexCopy, dim, handle(wrap(index)),
+                        handle(wrap(source))))
 
 
 def index_fill(t, dim, index, value, **kw):
-    t = wrap(t)
-    shape = [int(n) for n in handle(t).shape]
-    shape[dim] = int(handle(index).size)
-    return scatter(t, dim, _spread_index(index, dim, shape),
-                   zeros(*shape) + float(value))
+    return wrap(guarded(handle(wrap(t)).indexFill, dim, handle(wrap(index)),
+                        float(value)))
 
 
 def take(t, index, **kw):

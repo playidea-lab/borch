@@ -88,10 +88,8 @@ ALIASED = {
 # 수를 얼려 두는 것이 이 목록의 일이다. 새로 생긴 채움은 여기 없으므로 곧바로
 # 터지고, 옛것은 **이름으로** 남아 있어 세다 만 것이 아니라는 게 보인다.
 UNJUDGED = """
-asarray block_diag broadcast_tensors cauchy_ cdist column_stack corrcoef cov
-dstack embedding empty exponential_ fill_diagonal_ frombuffer geometric_
-hstack index_add index_copy index_fill is_nonzero kron log_normal_ logspace
-meshgrid random_ resize_as_ scalar_tensor tensordot vstack
+asarray cauchy_ embedding exponential_ fill_diagonal_ frombuffer geometric_
+is_nonzero log_normal_ random_ resize_as_
 """.split()
 
 FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(ALIASED) | set(UNJUDGED)
