@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2 · 밑바닥부터 — borch 튜토리얼</title>
+<meta name="description" content="학습 루프를 날텐서에서 DataLoader 까지 한 겹씩 쌓는다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/02-from-scratch.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/02-from-scratch.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html" class="on">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 2</p>
+    <h1>밑바닥부터</h1>
+    <p class="lead">
+      같은 문제를 아무것도 없는 데서부터: 날텐서와 손으로 쓴 기울기 스텝, 그다음
+      <code>nn.Linear</code>, 그다음 <code>optim</code>, 그다음
+      <code>DataLoader</code>. 한 겹씩 얹을 때마다 방금 직접 본 일을 하던 코드가
+      지워진다.
+    </p>
+    <p>
+      "<code>nn</code> 이 실제로 무엇을 하는가" 에 답하는 튜토리얼이다. 아래에 마법은
+      없고, 끝나면 루프가 앞으로 쓸 모든 학습 루프와 같은 모양이 된다.
+    </p>
+
+    <h2>0 · 문제</h2>
+    <p>
+      <code>y = 2x − 1</code> 위에 잡음이 얹힌 점들에 직선을 맞춘다. 눈으로 확인할 만큼
+      작고, 모든 조각이 실제로 돌아야 할 만큼은 진짜다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 64;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const x = (i / N) * 4 - 2;
+          xs[i] = x;
+          ys[i] = 2 * x - 1 + (Math.random() - 0.5) * 0.4;
+        }
+        window.__fit = { xs, ys, N };
+
+        log("first five x:", Array.from(xs.slice(0, 5)).map((v) => v.toFixed(2)).join(", "));
+        log("first five y:", Array.from(ys.slice(0, 5)).map((v) => v.toFixed(2)).join(", "));
+        log("");
+        log("answer to find: w = 2, b = -1");
+      </script>
+    </div>
+
+    <h2>1 · 손으로</h2>
+    <p>
+      파라미터 둘, 직접 쓴 손실, 직접 적용하는 스텝. borch 가 여기서 하는 일은 미분
+      하나뿐이다 — autograd 가 그것이고, 손으로 쓰고 싶지 않은 유일한 조각이다.
+    </p>
+    <p>
+      갱신을 <code>noGrad</code> 로 감싼 것을 보라. 파라미터를 바꾸는 일은 기울기를
+      구하려는 그 계산의 일부가 아니고, torch 의 옵티마이저도 정확히 이렇게 한다.
+    </p>
+    <p>
+      borch 가 torch 와 갈리는 자리가 하나 있다. torch 라면
+      <code>w -= lr * w.grad</code> 라고 쓰겠지만, 여기서 <code>sub_</code> 와
+      <code>mul_</code> 은 <em>수</em>를 받고 텐서를 받는 제자리 연산은
+      <code>addcmul_</code> 이다. 그래서 스텝이
+      <code>w.addcmul_(w.grad, one, -lr)</code> 이고 이는
+      <code>w += -lr · grad · 1</code> 이다. <code>sub_</code> 에 텐서를 넘기면 예외가
+      안 나고 <strong>조용히 NaN 이 된다</strong> — 이 문단이 생긴 이유다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        let w = keepAlive(Tensor.from([0], [1, 1], { requiresGrad: true }));
+        let b = keepAlive(Tensor.from([0], [1], { requiresGrad: true }));
+
+        const lr = 0.05;
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            if (w.grad) { w.grad = null; b.grad = null; }        // zeroGrad, by hand
+
+            const pred = x.mm(w).add(b);                          // forward, by hand
+            const loss = pred.sub(y).square().mean();             // MSE, by hand
+            loss.backward();
+
+            noGrad(() => {                                        // the step, by hand
+              w.sub_(w.grad.mul(Tensor.full([], lr)));
+              b.sub_(b.grad.mul(Tensor.full([], lr)));
+            });
+
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 50 === 0) log(`step ${String(step).padStart(3)}   loss ${v.toFixed(5)}`);
+          });
+        }
+
+        log("");
+        log("w =", (await w.item()).toFixed(4), " b =", (await b.item()).toFixed(4));
+      </script>
+    </div>
+
+    <h2>2 · nn.Linear 가 파라미터를 들게</h2>
+    <p>
+      층이 <code>weight</code> 와 <code>bias</code> 를 들고 순방향을 안다. 사라지는 것:
+      텐서 둘을 만드는 일, 그 모양을 기억하는 일, <code>x @ w + b</code> 를 적는 일.
+      그대로인 것: 나머지 전부.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const lr = 0.05;
+
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            for (const p of model.parameters()) p.grad = null;
+
+            const loss = model.call(x).sub(y).square().mean();
+            loss.backward();
+
+            noGrad(() => {
+              for (const p of model.parameters()) p.sub_(p.grad.mul(Tensor.full([], lr)));
+            });
+
+            plot("loss", await loss.item());
+          });
+        }
+
+        log("w =", (await model.weight.item()).toFixed(4),
+            " b =", (await model.bias.item()).toFixed(4));
+      </script>
+    </div>
+
+    <h2>3 · optim 이 걸음을 걷게</h2>
+    <p>
+      <code>zeroGrad()</code> 와 <code>step()</code> 이 방금 쓴 두 고리를 대신한다.
+      이제 옵티마이저는 갈아 끼울 수 있는 것이다 — 아래 줄의 <code>SGD</code> 를
+      <code>Adam</code> 으로 바꾸면 곡선의 모양이 달라진다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.05);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        log("w =", (await model.weight.item()).toFixed(4),
+            " b =", (await model.bias.item()).toFixed(4));
+        log("");
+        log("This is the loop from lesson 4. Nothing was hidden — you wrote each piece.");
+      </script>
+    </div>
+
+    <h2>4 · DataLoader 가 배치를 나눠 주게</h2>
+    <p>
+      마지막 조각. 64 점이면 전체를 한 번에 써도 됐지만 진짜 데이터는 안 들어간다.
+      루프 몸통은 하나도 안 바뀐다 — 바뀌는 것은 <code>x</code> 와 <code>y</code> 가
+      어디서 오느냐뿐이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const set = new data.TensorDataset(
+          keepAlive(Tensor.from(xs, [N, 1])),
+          keepAlive(Tensor.from(ys, [N, 1])));
+        const loader = new data.DataLoader(set, { batchSize: 16, shuffle: true });
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.05);
+        const crit = new nn.MSELoss();
+
+        for (let epoch = 0; epoch < 40; epoch++) {
+          for (const [bx, by] of loader) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(bx), by);
+              loss.backward();
+              opt.step();
+              plot("loss", await loss.item());
+            }, () => [bx, by]);
+          }
+        }
+
+        log("w =", (await model.weight.item()).toFixed(4),
+            " b =", (await model.bias.item()).toFixed(4));
+        log("");
+        log("The curve is noisier than block 3 — each step now sees 16 points, not 64.");
+        log("That noise is not a bug; it is most of why mini-batch training generalises.");
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>각 겹이 무엇을 사 주었나.</strong> autograd 는 미분을, 모듈은 파라미터
+      장부를, 옵티마이저는 갱신 규칙을 갈아 끼울 수 있는 것으로, 로더는 배치를 사 주었다.
+      산술은 아무것도 안 바뀌었다 — 1번 블록으로 돌아가면 같은 수가 나온다.
+    </div>
+
+    <div class="pager">
+      <a href="01-quickstart.html">← 1 · 빠른 시작</a>
+      <a href="03-curve-fitting.html" style="text-align:right">다음<b>3 · 곡선 맞추기</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

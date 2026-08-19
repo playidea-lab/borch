@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4 · 이미지 분류기 — borch 튜토리얼</title>
+<meta name="description" content="브라우저 탭에서 CIFAR-10 — 사진을 보고, 작은 CNN 을 학습시키고, 클래스별로 읽는다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/04-image-classifier.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/04-image-classifier.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html" class="on">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 4</p>
+    <h1>이미지 분류기</h1>
+    <p class="lead">
+      이번엔 진짜 데이터셋이다. CIFAR-10, 32×32 사진 열 종류. 이미지를 눈으로 보고,
+      작은 합성곱 신경망을 당신의 GPU 에서 학습시키고, 정확도를 한 수가 아니라
+      클래스별로 읽는다.
+    </p>
+
+    <div class="note-box">
+      <strong>이 튜토리얼은 데이터가 필요하다.</strong> 부분집합은 저장소에 없다 —
+      여기서는 바이너리가 git 밖에 있고, <code>vendor/pyodide</code> 와 같은 규칙이다.
+      한 번 만들면 된다: <code>python3 site/fetch_data.py</code> (CIFAR 바이너리가
+      없으면 <code>--download</code> 를 붙인다). 학습 2,000 장·시험 500 장이고 JPEG 로
+      약 1MB 다. 그래서 <strong>픽셀이 원본과 완전히 같지는 않다</strong> — 아래 정확도는
+      "배우는가" 로 읽어야지 논문의 수와 견주면 안 된다.
+    </div>
+
+    <h2>1 · 데이터부터 본다</h2>
+    <p>
+      모델보다 먼저. 비전 프로젝트에서 잘못되는 것의 절반이 여기서 보인다 — 채널 순서,
+      값 범위, 한 칸 밀린 라벨.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const train = await datasets.cifar10("train", { count: 16 });
+        log("x:", JSON.stringify(train.x.shape), " y:", JSON.stringify(train.y.shape));
+        log("classes:", train.classes.join(", "));
+        log("");
+        log(train.note);
+
+        const labels = Array.from(await train.y.toArray());
+        await show(train.x, {
+          scale: 3,
+          range: [0, 1],
+          labels: labels.map((i) => train.classes[i]),
+        });
+      </script>
+    </div>
+
+    <h2>2 · 작은 합성곱 신경망</h2>
+    <p>
+      합성곱·풀링 두 단, 그리고 선형 머리 — 5강의 CNN 과 같은 모양이고 입력 채널만
+      셋이다. CIFAR 은 더 큰 망이 더 잘하지만, 이것은 보는 동안 학습되도록 고른 크기다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+
+        log(model.describe());
+        log("");
+        log("parameters:", model.parameters().reduce((n, p) => n + p.size, 0), "numbers");
+
+        // `probe` is one of the names borch injects, so this one is called sample.
+        const sample = Tensor.randn([2, 3, 32, 32]);
+        log("a batch of 2 goes in as", JSON.stringify(sample.shape),
+            "and comes out as", JSON.stringify(model.call(sample).shape));
+      </script>
+    </div>
+
+    <h2>3 · 학습</h2>
+    <p>
+      <code>DataLoader</code> 에서 64 장씩, Adam, 교차 엔트로피. 수보다 곡선을 보라 —
+      보고 싶은 것은 기울기이고, 위에서 평평해지면 학습률이 가장 먼저 손볼 것이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const train = await datasets.cifar10("train", { normalize: true });
+        const set = new data.TensorDataset(keepAlive(train.x), keepAlive(train.y));
+        const loader = new data.DataLoader(set, { batchSize: 64, shuffle: true });
+
+        const model = new nn.Sequential(
+          new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+        const opt = new optim.Adam(model.parameters(), 1e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const EPOCHS = 8;
+        for (let epoch = 0; epoch < EPOCHS; epoch++) {
+          if (stopped()) break;
+          let sum = 0, seen = 0;
+          for (const [bx, by] of loader) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(bx), by);
+              loss.backward();
+              opt.step();
+              const v = await loss.item();
+              plot("loss", v);
+              sum += v; seen++;
+            }, () => [bx, by]);
+          }
+          log(`epoch ${epoch + 1}/${EPOCHS}   mean loss ${(sum / seen).toFixed(4)}`);
+        }
+
+        window.__cifar = await save(model.stateDict());
+        log("");
+        log("weights kept for the next blocks:", (window.__cifar.byteLength / 1024).toFixed(0), "KB");
+      </script>
+    </div>
+
+    <h2>4 · 클래스별 정확도</h2>
+    <p>
+      한 수는 어느 클래스를 못 가르는지를 감춘다. 고양이와 개가 흔한 짝이고, 이 크기에서는
+      배와 비행기도 자주 그렇다 — 둘 다 넓고 평평한 배경 위의 작은 물체라서.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__cifar) throw new Error("Run block 3 first — it trains the model.");
+
+        const test = await datasets.cifar10("test", { normalize: true });
+        const model = new nn.Sequential(
+          new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+        model.loadStateDict(load(new Uint8Array(window.__cifar)).tensors);
+
+        const guess = Array.from(await model.call(test.x).argmax(1).toArray());
+        const truth = Array.from(await test.y.toArray());
+
+        const right = new Array(10).fill(0), total = new Array(10).fill(0);
+        for (let i = 0; i < truth.length; i++) {
+          total[truth[i]]++;
+          if (guess[i] === truth[i]) right[truth[i]]++;
+        }
+        const hits = right.reduce((a, b) => a + b, 0);
+        log(`overall: ${(100 * hits / truth.length).toFixed(1)}%  (${hits}/${truth.length})`);
+        log("");
+        test.classes.forEach((name, i) => {
+          const pct = total[i] ? (100 * right[i] / total[i]).toFixed(0) : "—";
+          const bar = "█".repeat(Math.round((right[i] / (total[i] || 1)) * 20));
+          log(`  ${name.padEnd(11)} ${String(pct).padStart(3)}%  ${bar}`);
+        });
+        window.__cifarTest = { guess, truth, test };
+      </script>
+    </div>
+
+    <h2>5 · 실수들</h2>
+    <p>
+      열여섯 장, 모델이 뭐라고 했는지와 함께. 빠른 시작에서 한 것과 같은 동작이고 어느
+      크기에서든 쓸모가 있다 — 실수는 성공보다 데이터에 대해 더 많이 말해 준다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__cifarTest) throw new Error("Run block 4 first.");
+        const { guess, truth, test } = window.__cifarTest;
+
+        const wrong = [];
+        for (let i = 0; i < truth.length && wrong.length < 16; i++) {
+          if (guess[i] !== truth[i]) wrong.push(i);
+        }
+        log(`${wrong.length} shown of ${truth.filter((v, i) => v !== guess[i]).length} mistakes`);
+
+        // Pull those images back out — the tensor is normalised, so undo it to look.
+        const plain = await datasets.cifar10("test");
+        const all = await plain.x.toArray();
+        const flat = new Float32Array(wrong.length * 3 * 32 * 32);
+        wrong.forEach((at, k) => flat.set(all.subarray(at * 3072, at * 3072 + 3072), k * 3072));
+
+        await show(Tensor.from(flat, [wrong.length, 3, 32, 32]), {
+          scale: 3,
+          range: [0, 1],
+          labels: wrong.map((at) => `${test.classes[guess[at]]}?`),
+        });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>이것이 보여주지 않는 것.</strong> 2,000 장에 여덟 에폭은 CIFAR 결과가
+      아니다. 이 저장소의 벤치는 전체 데이터로 ResNet-18 을 돌려 열 에폭에 64.6% 를
+      적는다. 방금 잰 것은 데이터·합성곱·autograd·옵티마이저로 이어지는 사슬 전체가
+      브라우저 탭 안, 당신의 GPU 에서, 설치 없이 돈다는 사실이다.
+    </div>
+
+    <div class="pager">
+      <a href="03-curve-fitting.html">← 3 · 곡선 맞추기</a>
+      <a href="05-adversarial.html" style="text-align:right">다음<b>5 · 적대적 예제</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

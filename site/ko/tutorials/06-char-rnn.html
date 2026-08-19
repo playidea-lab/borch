@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>6 · 문자 RNN — borch 튜토리얼</title>
+<meta name="description" content="순환 신경망이 이름을 한 글자씩 읽고 언어를 맞힌다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/06-char-rnn.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/06-char-rnn.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html" class="on">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 6</p>
+    <h1>문자 RNN</h1>
+    <p class="lead">
+      이미지도 데이터 파일도 없다 — 페이지에 쳐 넣은 단어 몇십 개뿐이다. 순환 신경망이
+      한 글자씩 읽고 어느 언어에서 온 이름인지 맞힌다. 쓸모 있는 것 중 가장 작은 순서
+      문제다.
+    </p>
+
+    <h2>1 · 데이터, 그리고 원-핫 글자</h2>
+    <p>
+      신경망은 글자를 못 읽는다. 수를 읽는다. 원-핫은 글자마다 축을 하나씩 주어
+      "글자끼리 아무 관계 없음" 을 배우게 하는 대신 못 박는다. 실제 시스템은 임베딩을
+      쓰는데, 같은 생각에서 축을 눌러 놓은 것이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const WORDS = {
+          korean: ["kim", "park", "choi", "jung", "kang", "yoon", "lim", "shin",
+                   "hwang", "ahn", "song", "hong", "moon", "seo", "baek"],
+          italian: ["rossi", "russo", "ferrari", "esposito", "bianchi", "romano",
+                    "colombo", "ricci", "marino", "greco", "bruno", "gallo",
+                    "conti", "costa", "giordano"],
+          german: ["muller", "schmidt", "schneider", "fischer", "weber", "meyer",
+                   "wagner", "becker", "schulz", "hoffmann", "koch", "richter",
+                   "klein", "wolf", "neumann"],
+        };
+        const LANGS = Object.keys(WORDS);
+        const ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
+        // One-hot: a word of length L becomes [L, 26].
+        function encode(word) {
+          const out = new Float32Array(word.length * 26);
+          for (let i = 0; i < word.length; i++) {
+            const at = ALPHABET.indexOf(word[i]);
+            if (at >= 0) out[i * 26 + at] = 1;
+          }
+          return out;
+        }
+
+        window.__rnn = { WORDS, LANGS, ALPHABET, encode };
+
+        log("languages:", LANGS.join(", "));
+        log("words per language:", WORDS.korean.length);
+        log("");
+        const sample = "kim";
+        log(`"${sample}" becomes a ${sample.length}x26 tensor:`);
+        await show(Tensor.from(encode(sample), [1, sample.length, 26]),
+                   { scale: 6, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>2 · 순환 셀 하나</h2>
+    <p>
+      <code>nn.RNNCell</code> 은 글자 하나와 지금까지의 은닉 상태를 받아 다음 은닉
+      상태를 준다. 그 위를 도는 고리를 직접 쓴다 — 그 고리가 <em>곧</em> 순환이고, 이
+      크기에서 손으로 적어 보는 것이 요점이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__rnn) throw new Error("Run block 1 first.");
+        const { WORDS, LANGS, encode } = window.__rnn;
+
+        const HIDDEN = 48;
+        const cell = new nn.RNNCell(26, HIDDEN);
+        const head = new nn.Linear(HIDDEN, LANGS.length);
+
+        function forward(word) {
+          const letters = encode(word);
+          let h = Tensor.zeros([1, HIDDEN]);
+          for (let i = 0; i < word.length; i++) {
+            const letter = Tensor.from(letters.subarray(i * 26, i * 26 + 26), [1, 26]);
+            h = cell.call(letter, h);
+          }
+          return head.call(h);
+        }
+
+        window.__rnnModel = { cell, head, forward, HIDDEN };
+
+        const out = forward("kim");
+        log("logits for \"kim\" before training:",
+            Array.from(await out.toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("(one score per language:", LANGS.join(", ") + ")");
+      </script>
+    </div>
+
+    <h2>3 · 학습</h2>
+    <p>
+      한 번에 한 단어. 배치로 안 묶는 이유는 단어 길이가 달라서이고, 채워 맞추는 것은
+      이 크기에 필요 없는 복잡함이다. 그래서 손실이 튄다. 곡선은 그래도 내려간다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__rnnModel) throw new Error("Run block 2 first.");
+        const { WORDS, LANGS, encode } = window.__rnn;
+        const { cell, head, forward } = window.__rnnModel;
+
+        const opt = new optim.Adam([...cell.parameters(), ...head.parameters()], 5e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const samples = [];
+        LANGS.forEach((lang, index) => {
+          for (const word of WORDS[lang]) samples.push({ word, index });
+        });
+
+        for (let epoch = 0; epoch < 60; epoch++) {
+          if (stopped()) break;
+          let sum = 0;
+          for (const { word, index } of samples.slice().sort(() => Math.random() - 0.5)) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const target = Tensor.from([index], [1], { dtype: "int64" });
+              const loss = crit.call(forward(word), target);
+              loss.backward();
+              opt.step();
+              sum += await loss.item();
+            });
+          }
+          plot("loss", sum / samples.length);
+          if (epoch % 15 === 0) log(`epoch ${String(epoch).padStart(2)}   mean loss ${(sum / samples.length).toFixed(4)}`);
+        }
+        log("trained on", samples.length, "words");
+      </script>
+    </div>
+
+    <h2>4 · 본 적 없는 이름을 물어본다</h2>
+    <p>
+      지어낸 것 몇과 목록에 없던 진짜 이름 몇. 45 개를 보고 배운 것이라 글자 패턴을
+      익힌 것이다 — <code>-ini</code>, <code>-mann</code>, 짧고 모음이 적은 것 — 이름이
+      아니라.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__rnnModel) throw new Error("Run blocks 2 and 3 first.");
+        const { LANGS } = window.__rnn;
+        const { forward } = window.__rnnModel;
+
+        const asked = ["nakamura", "bellini", "schwarz", "yang", "moretti",
+                       "zimmermann", "cho", "lombardi", "hofmann"];
+
+        for (const word of asked) {
+          const scores = Array.from(await forward(word).softmax(1).toArray());
+          const best = scores.indexOf(Math.max(...scores));
+          const bars = LANGS.map((lang, i) =>
+            `${lang} ${(scores[i] * 100).toFixed(0).padStart(3)}%`).join("  ");
+          log(`${word.padEnd(12)} → ${LANGS[best].padEnd(8)}   ${bars}`);
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>어디로 더 갈 수 있나.</strong> <code>nn.RNNCell</code> 을
+      <code>nn.LSTMCell</code> 이나 <code>nn.GRUCell</code> 로 바꿔 보라 — 고리 몸통은
+      거의 그대로이고 LSTM 은 짝을 돌려준다. 1번 블록의 목록에 당신의 언어를 더해 보고
+      몇 단어부터 잡아내는지 보라. 둘 다 한 번 고치면 되는 일이고, 그것이 이 페이지가
+      인쇄물이 아니라 편집기인 이유다.
+    </div>
+
+    <div class="pager">
+      <a href="05-adversarial.html">← 5 · 적대적 예제</a>
+      <a href="../playground.html" style="text-align:right">그다음<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

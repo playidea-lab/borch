@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · 적대적 예제 — borch 튜토리얼</title>
+<meta name="description" content="그림에 대한 기울기를 딱 필요한 만큼 밟아 답을 바꾼다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/05-adversarial.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/05-adversarial.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html" class="on">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 5</p>
+    <h1>적대적 예제</h1>
+    <p class="lead">
+      기울기는 물어본 것에 대해 답한다. 가중치 말고 <em>입력</em>에 대해 물으면, 사람
+      눈에는 그대로인 채로 답만 바뀔 만큼 이미지를 밀어낼 수 있다. FGSM 은 그게
+      전부이고 여섯 줄이다.
+    </p>
+
+    <div class="note-box">
+      <strong>CIFAR 부분집합이 필요하다.</strong> <code>python3 site/fetch_data.py</code>
+      를 한 번 돌린다 — <a href="04-image-classifier.html">튜토리얼 4</a> 와 같은
+      데이터다. 이 페이지는 첫 블록에서 그 모델을 직접 학습시킨다(몇 초). 다른 페이지의
+      상태에 기대는 페이지는 직접 열자마자 깨진다.
+    </div>
+
+    <h2>1 · 그림에 대한 기울기</h2>
+    <p>
+      지금까지는 <em>파라미터</em>에 기울기를 표시했다. 대신 입력에 표시하면
+      <code>backward()</code> 가 <code>x.grad</code> 를 채운다 — 픽셀마다 하나씩, 손실을
+      더 나쁘게 만들려면 어느 쪽으로 밀어야 하는지.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        // The same small network as tutorial 4, trained here so this page stands alone.
+        function makeModel() {
+          return new nn.Sequential(
+            new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+            new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+            new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+        }
+
+        const train = await datasets.cifar10("train", { normalize: true });
+        const set = new data.TensorDataset(keepAlive(train.x), keepAlive(train.y));
+        const loader = new data.DataLoader(set, { batchSize: 64, shuffle: true });
+
+        const model = makeModel();
+        const opt = new optim.Adam(model.parameters(), 1e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        for (let epoch = 0; epoch < 6; epoch++) {
+          if (stopped()) break;
+          let sum = 0, seen = 0;
+          for (const [bx, by] of loader) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(bx), by);
+              loss.backward();
+              opt.step();
+              sum += await loss.item(); seen++;
+            }, () => [bx, by]);
+          }
+          plot("loss", sum / seen);
+        }
+        log("trained a classifier to attack.");
+
+        // The gradients from the last training step were allocated inside that step's
+        // scope, which has closed. Accumulating into them would read freed memory, so
+        // borch refuses — clear them before asking for a different gradient.
+        opt.zeroGrad();
+
+        // Now the interesting part: mark the *picture* as requiring a gradient.
+        const test = await datasets.cifar10("test", { count: 8, normalize: true });
+        const pixels = await test.x.toArray();
+        const x = keepAlive(Tensor.from(pixels, [8, 3, 32, 32], { requiresGrad: true }));
+
+        const loss = crit.call(model.call(x), test.y);
+        loss.backward();
+
+        log("");
+        log("loss:", (await loss.item()).toFixed(4));
+        log("x.grad:", x.grad ? JSON.stringify(x.grad.shape) : "(none — nothing flowed)");
+        log("That gradient is the same shape as the image: one number per pixel.");
+
+        window.__fgsm = {
+          pixels, grad: Array.from(await x.grad.toArray()),
+          labels: Array.from(await test.y.toArray()),
+          classes: test.classes, weights: await save(model.stateDict()), makeModel,
+        };
+      </script>
+    </div>
+
+    <h2>2 · 부호 방향으로 한 걸음</h2>
+    <p>
+      FGSM 은 픽셀별 기울기의 <em>방향</em>만 남기고 ε 만큼 간다. ε 이 작으면 눈에 안
+      보이고, 질문은 얼마나 작아도 답이 뒤집히느냐다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__fgsm) throw new Error("Run block 1 first.");
+        const { pixels, labels, grad, classes } = window.__fgsm;
+
+        const model = window.__fgsm.makeModel();
+        model.loadStateDict(load(new Uint8Array(window.__fgsm.weights)).tensors);
+
+        const y = Tensor.from(Float32Array.from(labels), [labels.length], { dtype: "int64" });
+        const clean = Array.from(await model.call(
+          Tensor.from(pixels, [8, 3, 32, 32])).argmax(1).toArray());
+
+        log("  eps    still right   changed answer");
+        for (const eps of [0, 0.01, 0.02, 0.05, 0.1, 0.2]) {
+          const moved = new Float32Array(pixels.length);
+          for (let i = 0; i < pixels.length; i++) {
+            moved[i] = pixels[i] + eps * Math.sign(grad[i]);   // the whole attack
+          }
+          const said = Array.from(await model.call(
+            Tensor.from(moved, [8, 3, 32, 32])).argmax(1).toArray());
+          let right = 0, flipped = 0;
+          for (let i = 0; i < labels.length; i++) {
+            if (said[i] === labels[i]) right++;
+            if (said[i] !== clean[i]) flipped++;
+          }
+          log(`  ${eps.toFixed(2)}      ${String(right).padStart(2)}/8` +
+              `           ${flipped}/8`);
+        }
+      </script>
+    </div>
+
+    <h2>3 · 무엇이 바뀌었는지 보기</h2>
+    <p>
+      세 줄: 원본, 밀어낸 것, 그리고 보이도록 키운 차이. 가운데 줄이 당신 눈에 윗줄과
+      같아 보이는데 모델이 다르게 말한다면, 그것이 이 연습의 요점이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__fgsm) throw new Error("Run block 1 first.");
+        const { pixels, grad } = window.__fgsm;
+
+        const eps = 0.05;
+        const moved = new Float32Array(pixels.length);
+        const diff = new Float32Array(pixels.length);
+        for (let i = 0; i < pixels.length; i++) {
+          moved[i] = pixels[i] + eps * Math.sign(grad[i]);
+          diff[i] = 0.5 + (moved[i] - pixels[i]) * 4;          // amplified, centred
+        }
+
+        // The tensors are normalised to -1..1; show() is told that range.
+        log("original:");
+        await show(Tensor.from(pixels, [8, 3, 32, 32]), { scale: 3, range: [-1, 1] });
+        log(`perturbed (eps = ${eps}):`);
+        await show(Tensor.from(moved, [8, 3, 32, 32]), { scale: 3, range: [-1, 1] });
+        log("the difference, amplified 4x:");
+        await show(Tensor.from(diff, [8, 3, 32, 32]), { scale: 3, range: [0, 1] });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>재주 너머의 의미.</strong> 이 공격은 학습 데이터에 접근할 필요도, 탐색도
+      없다 — 갖고 있는 모델에 역방향 한 번이다. 그리고 전부 읽는 사람의 브라우저에서
+      돈다. 입력에 대한 기울기는 가중치에 대한 기울기와 같은 호출이고, borch 는 그 둘을
+      다르게 다루지 않는다.
+    </div>
+
+    <div class="pager">
+      <a href="04-image-classifier.html">← 4 · 이미지 분류기</a>
+      <a href="06-char-rnn.html" style="text-align:right">다음<b>6 · 문자 RNN</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

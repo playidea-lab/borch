@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1 · Quickstart — borch Tutorials</title>
+<meta name="description" content="One classifier from data to mistakes, running in the page.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/01-quickstart.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/tutorials/01-quickstart.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html" class="on">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 1</p>
+    <h1>Quickstart</h1>
+    <p class="lead">
+      One classifier, start to finish, in five blocks: make the data, look at it, build
+      a model, train it, and find out what it got wrong. Everything runs here — press
+      Run on each block in order, and edit anything you want to poke at.
+    </p>
+
+    <h2>1 · The data</h2>
+    <p>
+      Real datasets arrive as files; this one arrives as a function, so the tutorial
+      cannot break on a download. Each sample is an 8×8 image containing either a
+      vertical or a horizontal bar, with noise on top. The task is to say which.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        // 0 = vertical bar, 1 = horizontal bar. The bar is short and the noise is
+        // loud on purpose — a task nothing ever gets wrong teaches nothing. 0.55 was
+        // picked by measuring: 0.45 gives 96%, 0.75 gives 65%, and 0.55 lands near 91%,
+        // which is a model that plainly works while still leaving mistakes to look at.
+        function makeBatch(count) {
+          const pixels = new Float32Array(count * 64);
+          const labels = new Float32Array(count);
+          for (let i = 0; i < count; i++) {
+            const horizontal = i % 2;
+            const at = 1 + Math.floor(Math.random() * 6);      // where the bar sits
+            const len = 4 + Math.floor(Math.random() * 4);     // how much of it is drawn
+            const from = Math.floor(Math.random() * (8 - len + 1));
+            for (let p = 0; p < 64; p++) pixels[i * 64 + p] = Math.random() * 0.55;
+            for (let k = from; k < from + len; k++) {
+              const idx = horizontal ? at * 8 + k : k * 8 + at;
+              pixels[i * 64 + idx] = 0.55 + Math.random() * 0.45;
+            }
+            labels[i] = horizontal;
+          }
+          return { pixels, labels };
+        }
+        // The later blocks reuse this instead of repeating it.
+        window.makeBatch = makeBatch;
+
+        const batch = makeBatch(8);
+        const x = Tensor.from(batch.pixels, [8, 1, 8, 8]);
+        const y = Tensor.from(batch.labels, [8], { dtype: "int64" });
+
+        log("x:", JSON.stringify(x.shape), " y:", JSON.stringify(y.shape));
+
+        // show() draws tensors. [N,C,H,W] gives you a row of images.
+        await show(x, {
+          scale: 8,
+          labels: Array.from(batch.labels).map((v) => (v ? "horizontal" : "vertical")),
+        });
+      </script>
+    </div>
+
+    <h2>2 · The model</h2>
+    <p>
+      Flatten the 8×8 image, two linear layers with a ReLU between them, two outputs —
+      one score per class. <code>CrossEntropyLoss</code> takes those raw scores, not
+      probabilities, exactly as it does in torch.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Flatten(),
+          new nn.Linear(64, 32), new nn.ReLU(),
+          new nn.Linear(32, 2));
+
+        log(model.describe());
+        log("");
+        log("parameters:", model.parameters().length, "tensors,",
+            model.parameters().reduce((n, p) => n + p.size, 0), "numbers total");
+      </script>
+    </div>
+
+    <h2>3 · Training</h2>
+    <p>
+      The loop is the one from lesson 4: zero the gradients, forward, loss, backward,
+      step — wrapped in a <code>scope</code> so the step's scratch buffers are released.
+      <code>plot()</code> collects the loss and the curve is drawn when the run finishes.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        if (!window.makeBatch) throw new Error("Run block 1 first — it defines makeBatch.");
+
+        const model = new nn.Sequential(
+          new nn.Flatten(), new nn.Linear(64, 32), new nn.ReLU(), new nn.Linear(32, 2));
+        const opt = new optim.Adam(model.parameters(), 3e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const train = window.makeBatch(256);
+        const x = keepAlive(Tensor.from(train.pixels, [256, 1, 8, 8]));
+        const y = keepAlive(Tensor.from(train.labels, [256], { dtype: "int64" }));
+
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 50 === 0) log(`step ${String(step).padStart(3)}   loss ${v.toFixed(4)}`);
+          });
+        }
+
+        // Keep the trained weights so the next blocks can use them.
+        window.__quickstart = await save(model.stateDict());
+        log("");
+        log("trained. weights kept for the next block:", window.__quickstart.byteLength, "bytes");
+
+      </script>
+    </div>
+
+    <h2>4 · How good is it?</h2>
+    <p>
+      On data it has never seen. A number measured on the training set answers a
+      different, easier question — and this model is small enough that the difference
+      is visible if you shrink the training batch above.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        if (!window.__quickstart) throw new Error("Run block 3 first — it trains the model.");
+
+        const model = new nn.Sequential(
+          new nn.Flatten(), new nn.Linear(64, 32), new nn.ReLU(), new nn.Linear(32, 2));
+        model.loadStateDict(load(new Uint8Array(window.__quickstart)).tensors);
+
+        const test = window.makeBatch(400);
+        const x = Tensor.from(test.pixels, [400, 1, 8, 8]);
+
+        const guess = Array.from(await model.call(x).argmax(1).toArray());
+        let right = 0;
+        for (let i = 0; i < 400; i++) if (guess[i] === test.labels[i]) right++;
+        log(`accuracy on 400 unseen samples: ${(right / 4).toFixed(1)}%  (${right}/400)`);
+
+        // Keep this batch — the next block looks at the mistakes in it.
+        window.__testBatch = { test, guess };
+
+      </script>
+    </div>
+
+    <h2>5 · What did it get wrong?</h2>
+    <p>
+      The most useful thing a classifier can show you is its mistakes. If they look
+      obvious to you, the model is missing something learnable; if they look ambiguous
+      to you too, the ceiling is in the data.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        if (!window.__testBatch) throw new Error("Run block 4 first — it makes the test batch.");
+        const { test, guess } = window.__testBatch;
+
+        const wrong = [];
+        for (let i = 0; i < test.labels.length && wrong.length < 16; i++) {
+          if (guess[i] !== test.labels[i]) wrong.push(i);
+        }
+
+        if (!wrong.length) {
+          log("no mistakes in this batch — lower the noise in makeBatch and it gets easier,");
+          log("raise it and the model starts guessing. Both are worth seeing.");
+        } else {
+          log(`${wrong.length} mistakes out of ${test.labels.length}:`);
+          const flat = new Float32Array(wrong.length * 64);
+          wrong.forEach((at, k) => flat.set(test.pixels.subarray(at * 64, at * 64 + 64), k * 64));
+          await show(Tensor.from(flat, [wrong.length, 1, 8, 8]), {
+            scale: 8,
+            labels: wrong.map((at) => `said ${guess[at] ? "horiz" : "vert"}`),
+          });
+          log("");
+          log("Look at them before reading on. If you cannot tell either, the ceiling");
+          log("is in the data, not in the model.");
+        }
+
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>You just did the whole loop.</strong> Data, model, training, evaluation on
+      held-out samples, and a look at the failures — the same five steps a real project
+      has, with nothing installed. The next tutorial takes the same problem apart and
+      rebuilds it without <code>nn</code>, so you can see what those layers are doing.
+    </div>
+
+    <div class="pager">
+      <a href="./">← Overview</a>
+      <a href="02-from-scratch.html" style="text-align:right">Next<b>2 · From scratch</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

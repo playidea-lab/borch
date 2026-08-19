@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1 · 빠른 시작 — borch 튜토리얼</title>
+<meta name="description" content="데이터부터 실수까지, 분류기 하나를 그 페이지에서.">
+<link rel="alternate" hreflang="en" href="../../tutorials/01-quickstart.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/01-quickstart.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html" class="on">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 1</p>
+    <h1>빠른 시작</h1>
+    <p class="lead">
+      분류기 하나를 처음부터 끝까지, 다섯 블록에. 데이터를 만들고, 눈으로 보고, 모델을
+      세우고, 학습시키고, 무엇을 틀렸는지 본다. 전부 여기서 돈다 — 위에서부터 차례로
+      Run 을 누르고, 건드려 보고 싶은 것은 고쳐서 돌리면 된다.
+    </p>
+
+    <h2>1 · 데이터</h2>
+    <p>
+      진짜 데이터셋은 파일로 온다. 이것은 함수로 온다 — 그래야 이 페이지가 내려받기에
+      기대지 않는다. 표본 하나는 8×8 그림이고 그 안에 세로 막대나 가로 막대가 하나
+      있다. 잡음이 얹혀 있고, 문제는 둘 중 어느 쪽이냐다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        // 0 = vertical bar, 1 = horizontal bar. The bar is short and the noise is
+        // loud on purpose — a task nothing ever gets wrong teaches nothing. 0.55 was
+        // picked by measuring: 0.45 gives 96%, 0.75 gives 65%, and 0.55 lands near 91%,
+        // which is a model that plainly works while still leaving mistakes to look at.
+        function makeBatch(count) {
+          const pixels = new Float32Array(count * 64);
+          const labels = new Float32Array(count);
+          for (let i = 0; i < count; i++) {
+            const horizontal = i % 2;
+            const at = 1 + Math.floor(Math.random() * 6);      // where the bar sits
+            const len = 4 + Math.floor(Math.random() * 4);     // how much of it is drawn
+            const from = Math.floor(Math.random() * (8 - len + 1));
+            for (let p = 0; p < 64; p++) pixels[i * 64 + p] = Math.random() * 0.55;
+            for (let k = from; k < from + len; k++) {
+              const idx = horizontal ? at * 8 + k : k * 8 + at;
+              pixels[i * 64 + idx] = 0.55 + Math.random() * 0.45;
+            }
+            labels[i] = horizontal;
+          }
+          return { pixels, labels };
+        }
+        // The later blocks reuse this instead of repeating it.
+        window.makeBatch = makeBatch;
+
+        const batch = makeBatch(8);
+        const x = Tensor.from(batch.pixels, [8, 1, 8, 8]);
+        const y = Tensor.from(batch.labels, [8], { dtype: "int64" });
+
+        log("x:", JSON.stringify(x.shape), " y:", JSON.stringify(y.shape));
+
+        // show() draws tensors. [N,C,H,W] gives you a row of images.
+        await show(x, {
+          scale: 8,
+          labels: Array.from(batch.labels).map((v) => (v ? "horizontal" : "vertical")),
+        });
+      </script>
+    </div>
+
+    <h2>2 · 모델</h2>
+    <p>
+      8×8 을 납작하게 펴고, 선형 두 층 사이에 ReLU 하나, 출력 둘 — 클래스마다 점수
+      하나. <code>CrossEntropyLoss</code> 는 확률이 아니라 그 날점수를 받는다. torch 와
+      같다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Flatten(),
+          new nn.Linear(64, 32), new nn.ReLU(),
+          new nn.Linear(32, 2));
+
+        log(model.describe());
+        log("");
+        log("parameters:", model.parameters().length, "tensors,",
+            model.parameters().reduce((n, p) => n + p.size, 0), "numbers total");
+      </script>
+    </div>
+
+    <h2>3 · 학습</h2>
+    <p>
+      루프는 4강의 그것이다: 기울기를 지우고, 순방향, 손실, 역방향, 한 걸음 —
+      <code>scope</code> 로 감싸서 그 스텝의 중간 버퍼를 놓는다. <code>plot()</code> 이
+      손실을 모으고, 실행이 끝나면 곡선이 그려진다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        if (!window.makeBatch) throw new Error("Run block 1 first — it defines makeBatch.");
+
+        const model = new nn.Sequential(
+          new nn.Flatten(), new nn.Linear(64, 32), new nn.ReLU(), new nn.Linear(32, 2));
+        const opt = new optim.Adam(model.parameters(), 3e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const train = window.makeBatch(256);
+        const x = keepAlive(Tensor.from(train.pixels, [256, 1, 8, 8]));
+        const y = keepAlive(Tensor.from(train.labels, [256], { dtype: "int64" }));
+
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 50 === 0) log(`step ${String(step).padStart(3)}   loss ${v.toFixed(4)}`);
+          });
+        }
+
+        // Keep the trained weights so the next blocks can use them.
+        window.__quickstart = await save(model.stateDict());
+        log("");
+        log("trained. weights kept for the next block:", window.__quickstart.byteLength, "bytes");
+
+      </script>
+    </div>
+
+    <h2>4 · 얼마나 맞히나</h2>
+    <p>
+      본 적 없는 데이터에서. 학습에 쓴 것으로 잰 수는 더 쉬운 다른 질문에 답한다 —
+      위의 학습 배치를 줄이면 그 차이가 눈에 보인다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        if (!window.__quickstart) throw new Error("Run block 3 first — it trains the model.");
+
+        const model = new nn.Sequential(
+          new nn.Flatten(), new nn.Linear(64, 32), new nn.ReLU(), new nn.Linear(32, 2));
+        model.loadStateDict(load(new Uint8Array(window.__quickstart)).tensors);
+
+        const test = window.makeBatch(400);
+        const x = Tensor.from(test.pixels, [400, 1, 8, 8]);
+
+        const guess = Array.from(await model.call(x).argmax(1).toArray());
+        let right = 0;
+        for (let i = 0; i < 400; i++) if (guess[i] === test.labels[i]) right++;
+        log(`accuracy on 400 unseen samples: ${(right / 4).toFixed(1)}%  (${right}/400)`);
+
+        // Keep this batch — the next block looks at the mistakes in it.
+        window.__testBatch = { test, guess };
+
+      </script>
+    </div>
+
+    <h2>5 · 무엇을 틀렸나</h2>
+    <p>
+      분류기가 보여줄 수 있는 것 중 가장 쓸모 있는 것은 자기 실수다. 당신 눈에 뻔해
+      보이면 모델이 아직 배울 것이 남은 것이고, 당신도 헷갈리면 천장은 데이터에 있다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        if (!window.__testBatch) throw new Error("Run block 4 first — it makes the test batch.");
+        const { test, guess } = window.__testBatch;
+
+        const wrong = [];
+        for (let i = 0; i < test.labels.length && wrong.length < 16; i++) {
+          if (guess[i] !== test.labels[i]) wrong.push(i);
+        }
+
+        if (!wrong.length) {
+          log("no mistakes in this batch — lower the noise in makeBatch and it gets easier,");
+          log("raise it and the model starts guessing. Both are worth seeing.");
+        } else {
+          log(`${wrong.length} mistakes out of ${test.labels.length}:`);
+          const flat = new Float32Array(wrong.length * 64);
+          wrong.forEach((at, k) => flat.set(test.pixels.subarray(at * 64, at * 64 + 64), k * 64));
+          await show(Tensor.from(flat, [wrong.length, 1, 8, 8]), {
+            scale: 8,
+            labels: wrong.map((at) => `said ${guess[at] ? "horiz" : "vert"}`),
+          });
+          log("");
+          log("Look at them before reading on. If you cannot tell either, the ceiling");
+          log("is in the data, not in the model.");
+        }
+
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>방금 한 바퀴를 다 돈 것이다.</strong> 데이터·모델·학습·떼어 둔 표본으로
+      평가·실패 들여다보기 — 진짜 프로젝트가 밟는 그 다섯 단계이고, 설치한 것은 없다.
+      다음 튜토리얼은 같은 문제를 뜯어서 <code>nn</code> 없이 다시 세운다.
+    </div>
+
+    <div class="pager">
+      <a href="./">← 길잡이</a>
+      <a href="02-from-scratch.html" style="text-align:right">다음<b>2 · 밑바닥부터</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

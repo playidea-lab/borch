@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3 · Curve fitting — borch Tutorials</title>
+<meta name="description" content="What a hidden layer and a non-linearity actually add, and where a fitted model stops meaning anything.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/03-curve-fitting.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/tutorials/03-curve-fitting.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html" class="on">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 3</p>
+    <h1>Curve fitting</h1>
+    <p class="lead">
+      A straight line cannot bend. This tutorial shows what a hidden layer and a
+      non-linearity actually add, by fitting a curve that a linear model provably cannot
+      reach — and by looking at the fit rather than the loss number.
+    </p>
+
+    <h2>1 · The target, and what a line can do</h2>
+    <p>
+      The target is <code>sin(3x) · x</code> on [−2, 2]. First fit it with a single
+      linear layer, then look at the result. The loss will stop going down and the
+      picture explains why.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 128;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const x = (i / (N - 1)) * 4 - 2;
+          xs[i] = x;
+          ys[i] = Math.sin(3 * x) * x;
+        }
+        window.__curve = { xs, ys, N };
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.Adam(model.parameters(), 0.05);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 400; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        const got = Array.from(await model.call(x).toArray());
+        log("final loss:", (await crit.call(model.call(x), y).item()).toFixed(4));
+        log("");
+        log("truth vs line, every 16th point:");
+        for (let i = 0; i < N; i += 16) {
+          log(`  x ${xs[i].toFixed(2).padStart(5)}   truth ${ys[i].toFixed(2).padStart(6)}` +
+              `   line ${got[i].toFixed(2).padStart(6)}`);
+        }
+      </script>
+    </div>
+
+    <h2>2 · Add one hidden layer</h2>
+    <p>
+      Two linear layers with a <code>Tanh</code> between them. Without the non-linearity
+      this would still be a line — two matrix multiplies collapse into one. The
+      activation is the entire difference, and you can test that claim by deleting it.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__curve) throw new Error("Run block 1 first.");
+        const { xs, ys, N } = window.__curve;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Sequential(
+          new nn.Linear(1, 64), new nn.Tanh(),
+          new nn.Linear(64, 64), new nn.Tanh(),
+          new nn.Linear(64, 1));
+
+        const opt = new optim.Adam(model.parameters(), 0.01);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 1500; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 300 === 0) log(`step ${String(step).padStart(4)}   loss ${v.toFixed(5)}`);
+          });
+        }
+
+        window.__curveModel = await save(model.stateDict());
+        const got = Array.from(await model.call(x).toArray());
+        log("");
+        log("truth vs fit, every 16th point:");
+        for (let i = 0; i < N; i += 16) {
+          log(`  x ${xs[i].toFixed(2).padStart(5)}   truth ${ys[i].toFixed(2).padStart(6)}` +
+              `   fit ${got[i].toFixed(2).padStart(6)}`);
+        }
+      </script>
+    </div>
+
+    <h2>3 · Look at it</h2>
+    <p>
+      Numbers in a column are hard to judge. Draw both curves into an image instead —
+      the truth in one channel, the fit in another, so where they agree the line turns
+      pale and where they disagree it splits into colour.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__curveModel) throw new Error("Run block 2 first.");
+        const { xs, ys, N } = window.__curve;
+
+        const model = new nn.Sequential(
+          new nn.Linear(1, 64), new nn.Tanh(),
+          new nn.Linear(64, 64), new nn.Tanh(),
+          new nn.Linear(64, 1));
+        model.loadStateDict(load(new Uint8Array(window.__curveModel)).tensors);
+
+        const x = Tensor.from(xs, [N, 1]);
+        const fit = Array.from(await model.call(x).toArray());
+
+        // Paint two curves into a [3, H, W] image: truth in red, fit in green.
+        const H = 96, W = N;
+        const canvas = new Float32Array(3 * H * W);
+        const lo = Math.min(...ys, ...fit), hi = Math.max(...ys, ...fit);
+        const row = (v) => Math.max(0, Math.min(H - 1,
+          Math.round((1 - (v - lo) / (hi - lo || 1)) * (H - 1))));
+
+        for (let i = 0; i < W; i++) {
+          canvas[0 * H * W + row(ys[i]) * W + i] = 1;      // red   = truth
+          canvas[1 * H * W + row(fit[i]) * W + i] = 1;     // green = fit
+        }
+
+        log("red = truth, green = fit, yellow = both at the same pixel");
+        await show(Tensor.from(canvas, [3, H, W]), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>4 · Where it fails</h2>
+    <p>
+      Ask it about x it has never seen. Neural networks interpolate; they do not
+      extrapolate, and a fit that looks perfect inside its range can be nonsense one
+      step outside it. This is worth seeing once, early.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__curveModel) throw new Error("Run block 2 first.");
+
+        const model = new nn.Sequential(
+          new nn.Linear(1, 64), new nn.Tanh(),
+          new nn.Linear(64, 64), new nn.Tanh(),
+          new nn.Linear(64, 1));
+        model.loadStateDict(load(new Uint8Array(window.__curveModel)).tensors);
+
+        // `probe` is a name borch injects, so this one is called asked.
+        const asked = [-3, -2.5, -2, 0, 2, 2.5, 3, 4];
+        const out = Array.from(await model.call(Tensor.from(asked, [asked.length, 1])).toArray());
+
+        log("  x        truth      model");
+        asked.forEach((v, i) => {
+          const truth = Math.sin(3 * v) * v;
+          const inside = v >= -2 && v <= 2 ? "" : "   ← outside the training range";
+          log(`  ${v.toFixed(1).padStart(4)}   ${truth.toFixed(3).padStart(8)}` +
+              `   ${out[i].toFixed(3).padStart(8)}${inside}`);
+        });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Two lessons, one page.</strong> A non-linearity is what lets a stack of
+      linear layers bend, and a model is only meaningful inside the range it saw. The
+      second one is not a borch fact — it is true of the same code in torch, which is
+      the point of these being the same code.
+    </div>
+
+    <div class="pager">
+      <a href="02-from-scratch.html">← 2 · From scratch</a>
+      <a href="04-image-classifier.html" style="text-align:right">Next<b>4 · Image classifier</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

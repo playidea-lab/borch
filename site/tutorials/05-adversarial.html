@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 · Adversarial — borch Tutorials</title>
+<meta name="description" content="Take the gradient with respect to the picture and walk it just far enough to change the answer.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/05-adversarial.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/tutorials/05-adversarial.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html" class="on">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 5</p>
+    <h1>Adversarial examples</h1>
+    <p class="lead">
+      Gradients point at whatever you ask them about. Ask about the <em>input</em>
+      instead of the weights and you can walk an image just far enough to change the
+      answer while it still looks the same to you. That is the whole of FGSM, and it is
+      six lines.
+    </p>
+
+    <div class="note-box">
+      <strong>Needs the CIFAR subset.</strong> Run <code>python3 site/fetch_data.py</code>
+      once — the same data as <a href="04-image-classifier.html">tutorial 4</a>. This page
+      trains its own copy of that model in the first block (a few seconds); a page that
+      depended on another page's state would break the moment you opened it directly.
+    </div>
+
+    <h2>1 · A gradient with respect to the picture</h2>
+    <p>
+      Everything so far marked <em>parameters</em> as requiring gradients. Mark the input
+      instead and <code>backward()</code> fills <code>x.grad</code> — one number per
+      pixel saying which way to move it to make the loss worse.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        // The same small network as tutorial 4, trained here so this page stands alone.
+        function makeModel() {
+          return new nn.Sequential(
+            new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+            new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+            new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+        }
+
+        const train = await datasets.cifar10("train", { normalize: true });
+        const set = new data.TensorDataset(keepAlive(train.x), keepAlive(train.y));
+        const loader = new data.DataLoader(set, { batchSize: 64, shuffle: true });
+
+        const model = makeModel();
+        const opt = new optim.Adam(model.parameters(), 1e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        for (let epoch = 0; epoch < 6; epoch++) {
+          if (stopped()) break;
+          let sum = 0, seen = 0;
+          for (const [bx, by] of loader) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(bx), by);
+              loss.backward();
+              opt.step();
+              sum += await loss.item(); seen++;
+            }, () => [bx, by]);
+          }
+          plot("loss", sum / seen);
+        }
+        log("trained a classifier to attack.");
+
+        // The gradients from the last training step were allocated inside that step's
+        // scope, which has closed. Accumulating into them would read freed memory, so
+        // borch refuses — clear them before asking for a different gradient.
+        opt.zeroGrad();
+
+        // Now the interesting part: mark the *picture* as requiring a gradient.
+        const test = await datasets.cifar10("test", { count: 8, normalize: true });
+        const pixels = await test.x.toArray();
+        const x = keepAlive(Tensor.from(pixels, [8, 3, 32, 32], { requiresGrad: true }));
+
+        const loss = crit.call(model.call(x), test.y);
+        loss.backward();
+
+        log("");
+        log("loss:", (await loss.item()).toFixed(4));
+        log("x.grad:", x.grad ? JSON.stringify(x.grad.shape) : "(none — nothing flowed)");
+        log("That gradient is the same shape as the image: one number per pixel.");
+
+        window.__fgsm = {
+          pixels, grad: Array.from(await x.grad.toArray()),
+          labels: Array.from(await test.y.toArray()),
+          classes: test.classes, weights: await save(model.stateDict()), makeModel,
+        };
+      </script>
+    </div>
+
+    <h2>2 · One step along the sign</h2>
+    <p>
+      FGSM keeps only the <em>direction</em> of each pixel's gradient and moves a fixed
+      distance ε along it. Small ε, invisible change; the question is how small ε can be
+      and still flip the answer.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__fgsm) throw new Error("Run block 1 first.");
+        const { pixels, labels, grad, classes } = window.__fgsm;
+
+        const model = window.__fgsm.makeModel();
+        model.loadStateDict(load(new Uint8Array(window.__fgsm.weights)).tensors);
+
+        const y = Tensor.from(Float32Array.from(labels), [labels.length], { dtype: "int64" });
+        const clean = Array.from(await model.call(
+          Tensor.from(pixels, [8, 3, 32, 32])).argmax(1).toArray());
+
+        log("  eps    still right   changed answer");
+        for (const eps of [0, 0.01, 0.02, 0.05, 0.1, 0.2]) {
+          const moved = new Float32Array(pixels.length);
+          for (let i = 0; i < pixels.length; i++) {
+            moved[i] = pixels[i] + eps * Math.sign(grad[i]);   // the whole attack
+          }
+          const said = Array.from(await model.call(
+            Tensor.from(moved, [8, 3, 32, 32])).argmax(1).toArray());
+          let right = 0, flipped = 0;
+          for (let i = 0; i < labels.length; i++) {
+            if (said[i] === labels[i]) right++;
+            if (said[i] !== clean[i]) flipped++;
+          }
+          log(`  ${eps.toFixed(2)}      ${String(right).padStart(2)}/8` +
+              `           ${flipped}/8`);
+        }
+      </script>
+    </div>
+
+    <h2>3 · Look at what changed</h2>
+    <p>
+      Three rows: the original, the perturbed version, and the difference amplified so
+      you can see it at all. If the middle row looks like the top row to you and the
+      model disagrees, that is the point of the exercise.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__fgsm) throw new Error("Run block 1 first.");
+        const { pixels, grad } = window.__fgsm;
+
+        const eps = 0.05;
+        const moved = new Float32Array(pixels.length);
+        const diff = new Float32Array(pixels.length);
+        for (let i = 0; i < pixels.length; i++) {
+          moved[i] = pixels[i] + eps * Math.sign(grad[i]);
+          diff[i] = 0.5 + (moved[i] - pixels[i]) * 4;          // amplified, centred
+        }
+
+        // The tensors are normalised to -1..1; show() is told that range.
+        log("original:");
+        await show(Tensor.from(pixels, [8, 3, 32, 32]), { scale: 3, range: [-1, 1] });
+        log(`perturbed (eps = ${eps}):`);
+        await show(Tensor.from(moved, [8, 3, 32, 32]), { scale: 3, range: [-1, 1] });
+        log("the difference, amplified 4x:");
+        await show(Tensor.from(diff, [8, 3, 32, 32]), { scale: 3, range: [0, 1] });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Why this matters beyond the trick.</strong> The attack needs no access to
+      the training data and no search — one backward pass through a model you have.
+      It also runs entirely in the reader's browser, which is the unusual part: the
+      gradient with respect to an input is the same call as the gradient with respect to
+      a weight, and borch does not treat them differently.
+    </div>
+
+    <div class="pager">
+      <a href="04-image-classifier.html">← 4 · Image classifier</a>
+      <a href="06-char-rnn.html" style="text-align:right">Next<b>6 · Char RNN</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

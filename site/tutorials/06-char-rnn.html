@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>6 · Char RNN — borch Tutorials</title>
+<meta name="description" content="A recurrent network reads names one letter at a time and guesses the language.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/06-char-rnn.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/tutorials/06-char-rnn.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html" class="on">6 · Char RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 6</p>
+    <h1>Character RNN</h1>
+    <p class="lead">
+      No images, no dataset file — a few dozen words typed into the page. A recurrent
+      network reads a word one letter at a time and guesses which language it came from,
+      which is the smallest useful sequence problem there is.
+    </p>
+
+    <h2>1 · The data, and one-hot letters</h2>
+    <p>
+      A network cannot read a letter; it reads numbers. One-hot encoding gives each
+      letter its own axis, so "no relationship between letters" is stated rather than
+      learned. Real systems use embeddings — the same idea with the axes squeezed down.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const WORDS = {
+          korean: ["kim", "park", "choi", "jung", "kang", "yoon", "lim", "shin",
+                   "hwang", "ahn", "song", "hong", "moon", "seo", "baek"],
+          italian: ["rossi", "russo", "ferrari", "esposito", "bianchi", "romano",
+                    "colombo", "ricci", "marino", "greco", "bruno", "gallo",
+                    "conti", "costa", "giordano"],
+          german: ["muller", "schmidt", "schneider", "fischer", "weber", "meyer",
+                   "wagner", "becker", "schulz", "hoffmann", "koch", "richter",
+                   "klein", "wolf", "neumann"],
+        };
+        const LANGS = Object.keys(WORDS);
+        const ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
+        // One-hot: a word of length L becomes [L, 26].
+        function encode(word) {
+          const out = new Float32Array(word.length * 26);
+          for (let i = 0; i < word.length; i++) {
+            const at = ALPHABET.indexOf(word[i]);
+            if (at >= 0) out[i * 26 + at] = 1;
+          }
+          return out;
+        }
+
+        window.__rnn = { WORDS, LANGS, ALPHABET, encode };
+
+        log("languages:", LANGS.join(", "));
+        log("words per language:", WORDS.korean.length);
+        log("");
+        const sample = "kim";
+        log(`"${sample}" becomes a ${sample.length}x26 tensor:`);
+        await show(Tensor.from(encode(sample), [1, sample.length, 26]),
+                   { scale: 6, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>2 · A recurrent cell</h2>
+    <p>
+      <code>nn.RNNCell</code> takes one letter and the running hidden state, and returns
+      the next hidden state. Loop it over the word yourself — that loop <em>is</em> the
+      recurrence, and seeing it written out is the point of doing it at this size.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__rnn) throw new Error("Run block 1 first.");
+        const { WORDS, LANGS, encode } = window.__rnn;
+
+        const HIDDEN = 48;
+        const cell = new nn.RNNCell(26, HIDDEN);
+        const head = new nn.Linear(HIDDEN, LANGS.length);
+
+        function forward(word) {
+          const letters = encode(word);
+          let h = Tensor.zeros([1, HIDDEN]);
+          for (let i = 0; i < word.length; i++) {
+            const letter = Tensor.from(letters.subarray(i * 26, i * 26 + 26), [1, 26]);
+            h = cell.call(letter, h);
+          }
+          return head.call(h);
+        }
+
+        window.__rnnModel = { cell, head, forward, HIDDEN };
+
+        const out = forward("kim");
+        log("logits for \"kim\" before training:",
+            Array.from(await out.toArray()).map((v) => v.toFixed(3)).join(", "));
+        log("(one score per language:", LANGS.join(", ") + ")");
+      </script>
+    </div>
+
+    <h2>3 · Train it</h2>
+    <p>
+      One word at a time — no batching, because words differ in length and padding them
+      is a complication this size does not need. The loss is noisy for the same reason;
+      the curve still finds its way down.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__rnnModel) throw new Error("Run block 2 first.");
+        const { WORDS, LANGS, encode } = window.__rnn;
+        const { cell, head, forward } = window.__rnnModel;
+
+        const opt = new optim.Adam([...cell.parameters(), ...head.parameters()], 5e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const samples = [];
+        LANGS.forEach((lang, index) => {
+          for (const word of WORDS[lang]) samples.push({ word, index });
+        });
+
+        for (let epoch = 0; epoch < 60; epoch++) {
+          if (stopped()) break;
+          let sum = 0;
+          for (const { word, index } of samples.slice().sort(() => Math.random() - 0.5)) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const target = Tensor.from([index], [1], { dtype: "int64" });
+              const loss = crit.call(forward(word), target);
+              loss.backward();
+              opt.step();
+              sum += await loss.item();
+            });
+          }
+          plot("loss", sum / samples.length);
+          if (epoch % 15 === 0) log(`epoch ${String(epoch).padStart(2)}   mean loss ${(sum / samples.length).toFixed(4)}`);
+        }
+        log("trained on", samples.length, "words");
+      </script>
+    </div>
+
+    <h2>4 · Ask it about names it has never seen</h2>
+    <p>
+      Made-up words, and a few real ones that were not in the list. It has 45 examples
+      to go on, so it is learning letter patterns — <code>-ini</code>, <code>-mann</code>,
+      short and vowel-light — not names.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__rnnModel) throw new Error("Run blocks 2 and 3 first.");
+        const { LANGS } = window.__rnn;
+        const { forward } = window.__rnnModel;
+
+        const asked = ["nakamura", "bellini", "schwarz", "yang", "moretti",
+                       "zimmermann", "cho", "lombardi", "hofmann"];
+
+        for (const word of asked) {
+          const scores = Array.from(await forward(word).softmax(1).toArray());
+          const best = scores.indexOf(Math.max(...scores));
+          const bars = LANGS.map((lang, i) =>
+            `${lang} ${(scores[i] * 100).toFixed(0).padStart(3)}%`).join("  ");
+          log(`${word.padEnd(12)} → ${LANGS[best].padEnd(8)}   ${bars}`);
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Where to take it.</strong> Swap <code>nn.RNNCell</code> for
+      <code>nn.LSTMCell</code> or <code>nn.GRUCell</code> — the loop body barely changes,
+      and LSTM returns a pair. Add your own language to the list in block 1 and see how
+      many words it takes before the model picks it up. Both are one edit away, which is
+      the reason these pages are editable rather than printed.
+    </div>
+
+    <div class="pager">
+      <a href="05-adversarial.html">← 5 · Adversarial</a>
+      <a href="../playground.html" style="text-align:right">Then<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

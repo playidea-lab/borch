@@ -50,6 +50,9 @@ def main():
     if not (ROOT / "site" / "assets" / "api.json").exists():
         print("API 목록이 없다 — 레퍼런스가 빈 채로 뜬다.")
         print("  먼저: python3 site/build_api.py")
+    if not (ROOT / "site" / "assets" / "data" / "cifar-train.jpg").exists():
+        print("튜토리얼 데이터가 없다 — 4·5 번이 안 돈다(나머지는 돈다).")
+        print("  먼저: python3 site/fetch_data.py [--download]")
 
     handler = functools.partial(Handler, directory=str(ROOT))
     socketserver.ThreadingTCPServer.allow_reuse_address = True

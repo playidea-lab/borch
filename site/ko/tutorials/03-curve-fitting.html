@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3 · 곡선 맞추기 — borch 튜토리얼</title>
+<meta name="description" content="은닉층과 비선형이 실제로 무엇을 더하는가, 그리고 모델이 뜻을 잃는 자리.">
+<link rel="alternate" hreflang="en" href="../../tutorials/03-curve-fitting.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/03-curve-fitting.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html" class="on">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼 · 3</p>
+    <h1>곡선 맞추기</h1>
+    <p class="lead">
+      직선은 휘지 못한다. 이 튜토리얼은 은닉층과 비선형이 실제로 무엇을 더하는지를,
+      선형 모델이 원리상 닿을 수 없는 곡선으로 보여준다 — 손실 수가 아니라 맞은 모양을
+      보면서.
+    </p>
+
+    <h2>1 · 목표, 그리고 직선이 할 수 있는 것</h2>
+    <p>
+      목표는 [−2, 2] 위의 <code>sin(3x) · x</code> 다. 먼저 선형 한 층으로 맞춰 보고
+      결과를 본다. 손실이 더 안 내려가고, 그 이유를 그림이 설명한다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 128;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const x = (i / (N - 1)) * 4 - 2;
+          xs[i] = x;
+          ys[i] = Math.sin(3 * x) * x;
+        }
+        window.__curve = { xs, ys, N };
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.Adam(model.parameters(), 0.05);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 400; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        const got = Array.from(await model.call(x).toArray());
+        log("final loss:", (await crit.call(model.call(x), y).item()).toFixed(4));
+        log("");
+        log("truth vs line, every 16th point:");
+        for (let i = 0; i < N; i += 16) {
+          log(`  x ${xs[i].toFixed(2).padStart(5)}   truth ${ys[i].toFixed(2).padStart(6)}` +
+              `   line ${got[i].toFixed(2).padStart(6)}`);
+        }
+      </script>
+    </div>
+
+    <h2>2 · 은닉층 하나</h2>
+    <p>
+      선형 두 층 사이에 <code>Tanh</code> 하나. 비선형이 없으면 이것도 여전히
+      직선이다 — 행렬곱 둘은 하나로 접힌다. 활성이 차이의 전부이고, 지워 보면 그 말을
+      확인할 수 있다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__curve) throw new Error("Run block 1 first.");
+        const { xs, ys, N } = window.__curve;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Sequential(
+          new nn.Linear(1, 64), new nn.Tanh(),
+          new nn.Linear(64, 64), new nn.Tanh(),
+          new nn.Linear(64, 1));
+
+        const opt = new optim.Adam(model.parameters(), 0.01);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 1500; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 300 === 0) log(`step ${String(step).padStart(4)}   loss ${v.toFixed(5)}`);
+          });
+        }
+
+        window.__curveModel = await save(model.stateDict());
+        const got = Array.from(await model.call(x).toArray());
+        log("");
+        log("truth vs fit, every 16th point:");
+        for (let i = 0; i < N; i += 16) {
+          log(`  x ${xs[i].toFixed(2).padStart(5)}   truth ${ys[i].toFixed(2).padStart(6)}` +
+              `   fit ${got[i].toFixed(2).padStart(6)}`);
+        }
+      </script>
+    </div>
+
+    <h2>3 · 눈으로 보기</h2>
+    <p>
+      숫자 열은 판단하기 어렵다. 두 곡선을 그림에 그린다 — 참값을 한 채널, 맞춘 것을
+      다른 채널에 넣어서, 겹치는 자리는 옅어지고 갈리는 자리는 색이 갈라지게.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__curveModel) throw new Error("Run block 2 first.");
+        const { xs, ys, N } = window.__curve;
+
+        const model = new nn.Sequential(
+          new nn.Linear(1, 64), new nn.Tanh(),
+          new nn.Linear(64, 64), new nn.Tanh(),
+          new nn.Linear(64, 1));
+        model.loadStateDict(load(new Uint8Array(window.__curveModel)).tensors);
+
+        const x = Tensor.from(xs, [N, 1]);
+        const fit = Array.from(await model.call(x).toArray());
+
+        // Paint two curves into a [3, H, W] image: truth in red, fit in green.
+        const H = 96, W = N;
+        const canvas = new Float32Array(3 * H * W);
+        const lo = Math.min(...ys, ...fit), hi = Math.max(...ys, ...fit);
+        const row = (v) => Math.max(0, Math.min(H - 1,
+          Math.round((1 - (v - lo) / (hi - lo || 1)) * (H - 1))));
+
+        for (let i = 0; i < W; i++) {
+          canvas[0 * H * W + row(ys[i]) * W + i] = 1;      // red   = truth
+          canvas[1 * H * W + row(fit[i]) * W + i] = 1;     // green = fit
+        }
+
+        log("red = truth, green = fit, yellow = both at the same pixel");
+        await show(Tensor.from(canvas, [3, H, W]), { scale: 4, range: [0, 1] });
+      </script>
+    </div>
+
+    <h2>4 · 어디서 무너지나</h2>
+    <p>
+      본 적 없는 x 를 물어본다. 신경망은 사이를 메우지 밖을 잇지 않는다. 범위 안에서
+      완벽해 보이는 맞춤이 한 발짝 밖에서는 아무 말이나 한다. 일찍 한 번 보아 둘 값이
+      있다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__curveModel) throw new Error("Run block 2 first.");
+
+        const model = new nn.Sequential(
+          new nn.Linear(1, 64), new nn.Tanh(),
+          new nn.Linear(64, 64), new nn.Tanh(),
+          new nn.Linear(64, 1));
+        model.loadStateDict(load(new Uint8Array(window.__curveModel)).tensors);
+
+        // `probe` is a name borch injects, so this one is called asked.
+        const asked = [-3, -2.5, -2, 0, 2, 2.5, 3, 4];
+        const out = Array.from(await model.call(Tensor.from(asked, [asked.length, 1])).toArray());
+
+        log("  x        truth      model");
+        asked.forEach((v, i) => {
+          const truth = Math.sin(3 * v) * v;
+          const inside = v >= -2 && v <= 2 ? "" : "   ← outside the training range";
+          log(`  ${v.toFixed(1).padStart(4)}   ${truth.toFixed(3).padStart(8)}` +
+              `   ${out[i].toFixed(3).padStart(8)}${inside}`);
+        });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>한 페이지에 교훈 둘.</strong> 비선형이 있어야 선형 층을 쌓은 것이 휘고,
+      모델은 자기가 본 범위 안에서만 뜻이 있다. 두 번째는 borch 의 사실이 아니라 같은
+      코드를 torch 로 돌려도 참인 것이고, 그것이 이 코드가 같은 코드인 이유다.
+    </div>
+
+    <div class="pager">
+      <a href="02-from-scratch.html">← 2 · 밑바닥부터</a>
+      <a href="04-image-classifier.html" style="text-align:right">다음<b>4 · 이미지 분류기</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

@@ -9,6 +9,7 @@
  * (빈 화면과 안 만든 방출물은 구별이 안 된다.)
  */
 
+import { cifar10 } from "./datasets.js";
 import { t } from "./i18n.js";
 
 /** 방출물의 절대 URL. 상대 경로만 쓴다 — 호스트를 박으면 한 군데서만 맞는다. */
@@ -74,6 +75,10 @@ const bridge = {
   stopped: false,
   log: () => {},
   plot: () => {},
+  // **보여주는 것이 설명보다 짧을 때가 있다.** 이미지 분류를 글로 적는 것보다
+  // 그 이미지를 그리는 편이 빠르다. 받는 쪽이 없으면 조용히 아무 일도 안 한다.
+  show: async () => {},
+  cifar10,
 };
 globalThis.__borch_playground__ = bridge;
 // 파이썬 쪽에서 `js.borchPG` 로 잡는 자리. 던더 이름은 `js` 모듈에서 집기 나쁘다.
@@ -96,6 +101,7 @@ export async function runCode(code, hooks = {}) {
   bridge.stopped = false;
   bridge.log = onLog;
   bridge.plot = onPlot;
+  bridge.show = hooks.onShow ?? (async () => {});
 
   // 콘솔을 가로챈다. 사용자는 `console.log` 를 칠 것이고(문서의 예시가 그렇다),
   // 그것이 브라우저 개발자 도구에만 나오면 이 페이지는 아무것도 안 보여준다.
@@ -121,7 +127,10 @@ export async function runCode(code, hooks = {}) {
       "const __pg = globalThis.__borch_playground__;",
       "const log = (...a) => __pg.log(a.map(v => typeof v === 'string' ? v : JSON.stringify(v)).join(' '));",
       "const plot = (name, value) => __pg.plot(name, value);",
+      "const show = (t, opts) => __pg.show(t, opts);",
       "const stopped = () => __pg.stopped;",
+      // 튜토리얼이 쓰는 데이터. Tensor 를 넘겨 주므로 부르는 쪽은 모양만 신경 쓴다.
+      "const datasets = { cifar10: (split, opts) => __pg.cifar10(Tensor, split, opts) };",
       "",
       code,
     ].join("\n");
@@ -319,6 +328,7 @@ export async function runPython(code, hooks = {}) {
   bridge.stopped = false;
   bridge.log = onLog;
   bridge.plot = onPlot;
+  bridge.show = hooks.onShow ?? (async () => {});
 
   const py = await loadPython((line) => onLog(line, "note"));
   const borch = await loadBorch();
@@ -353,6 +363,15 @@ def log(*args):
 
 def plot(name, value):
     _js.borchPG.plot(name, float(value))
+
+def show(tensor, **options):
+    # 텐서를 그림으로. 자바스크립트 쪽 show 와 같은 것을 부른다.
+    #
+    # 이 파이썬은 JS 템플릿 문자열 안에 있다 — **백틱을 쓰면 안 된다.** 하나만 있어도
+    # 문자열이 거기서 닫히고, 그러면 파일 전체가 파싱에서 죽는다. 증상은 이 줄과
+    # 아무 상관 없는 "Unexpected identifier" 이고, 실행 블록이 통째로 안 뜬다.
+    # tests/browser/runner.html 이 같은 것을 주석으로 적어 두었는데도 밟았다.
+    return _js.borchPG.show(tensor, _js.Object.fromEntries(list(options.items())))
 
 def stopped():
     return bool(_js.borchPG.stopped)

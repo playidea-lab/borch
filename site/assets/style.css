@@ -636,6 +636,13 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   max-height: 20rem; overflow: auto;
 }
 .runnable .out:empty { display: none; }
+.runnable .canvas-out {
+  border-top: 1px solid var(--line-soft);
+  padding: .7rem 1rem; background: var(--bg-soft);
+  overflow-x: auto;
+}
+.runnable .canvas-out:empty { display: none; }
+.runnable .canvas-out canvas { display: block; margin-bottom: .5rem; image-rendering: pixelated; }
 .runnable .out .err { color: var(--bad); }
 .runnable .out .ok { color: var(--good); }
 .runnable .out .note { color: var(--fg-faint); }

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4 · Image classifier — borch Tutorials</title>
+<meta name="description" content="CIFAR-10 in a browser tab: look at the images, train a small CNN, read the accuracy per class.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/04-image-classifier.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/tutorials/04-image-classifier.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html" class="on">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 4</p>
+    <h1>Image classifier</h1>
+    <p class="lead">
+      A real dataset this time: CIFAR-10, ten classes of 32×32 photographs. Look at the
+      images, train a small convolutional network on your own GPU, and read the accuracy
+      per class rather than as one number.
+    </p>
+
+    <div class="note-box">
+      <strong>This tutorial needs data.</strong> The subset is not in the repository —
+      binaries stay out of git here, the same as <code>vendor/pyodide</code>. Build it
+      once with <code>python3 site/fetch_data.py</code> (add <code>--download</code> if
+      you do not already have the CIFAR binaries). It is 2,000 training and 500 test
+      images, JPEG-compressed to about 1MB, so <strong>the pixels are not bit-identical
+      to the original</strong> — read the accuracy below as "does it learn", not as a
+      number to compare against a paper.
+    </div>
+
+    <h2>1 · Look at the data first</h2>
+    <p>
+      Before any model. Half of what goes wrong in a vision project is visible here —
+      wrong channel order, wrong scaling, labels off by one.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const train = await datasets.cifar10("train", { count: 16 });
+        log("x:", JSON.stringify(train.x.shape), " y:", JSON.stringify(train.y.shape));
+        log("classes:", train.classes.join(", "));
+        log("");
+        log(train.note);
+
+        const labels = Array.from(await train.y.toArray());
+        await show(train.x, {
+          scale: 3,
+          range: [0, 1],
+          labels: labels.map((i) => train.classes[i]),
+        });
+      </script>
+    </div>
+
+    <h2>2 · A small convolutional network</h2>
+    <p>
+      Two convolution-pool stages and a linear head — the same shape as the CNN in
+      lesson 5, sized for three input channels. Bigger networks do better on CIFAR; this
+      one is chosen to train while you watch.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Sequential(
+          new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+
+        log(model.describe());
+        log("");
+        log("parameters:", model.parameters().reduce((n, p) => n + p.size, 0), "numbers");
+
+        // `probe` is one of the names borch injects, so this one is called sample.
+        const sample = Tensor.randn([2, 3, 32, 32]);
+        log("a batch of 2 goes in as", JSON.stringify(sample.shape),
+            "and comes out as", JSON.stringify(model.call(sample).shape));
+      </script>
+    </div>
+
+    <h2>3 · Train it</h2>
+    <p>
+      Batches of 64 from a <code>DataLoader</code>, Adam, cross entropy. Watch the loss
+      curve rather than the numbers — what you want to see is a slope, and if it goes
+      flat at the top the learning rate is the first thing to change.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const train = await datasets.cifar10("train", { normalize: true });
+        const set = new data.TensorDataset(keepAlive(train.x), keepAlive(train.y));
+        const loader = new data.DataLoader(set, { batchSize: 64, shuffle: true });
+
+        const model = new nn.Sequential(
+          new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+        const opt = new optim.Adam(model.parameters(), 1e-3);
+        const crit = new nn.CrossEntropyLoss();
+
+        const EPOCHS = 8;
+        for (let epoch = 0; epoch < EPOCHS; epoch++) {
+          if (stopped()) break;
+          let sum = 0, seen = 0;
+          for (const [bx, by] of loader) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(bx), by);
+              loss.backward();
+              opt.step();
+              const v = await loss.item();
+              plot("loss", v);
+              sum += v; seen++;
+            }, () => [bx, by]);
+          }
+          log(`epoch ${epoch + 1}/${EPOCHS}   mean loss ${(sum / seen).toFixed(4)}`);
+        }
+
+        window.__cifar = await save(model.stateDict());
+        log("");
+        log("weights kept for the next blocks:", (window.__cifar.byteLength / 1024).toFixed(0), "KB");
+      </script>
+    </div>
+
+    <h2>4 · Accuracy, per class</h2>
+    <p>
+      One number hides which classes the model cannot tell apart. Cats and dogs are the
+      usual pair; at this size ships and planes often are too, because both are a small
+      object on a large flat background.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__cifar) throw new Error("Run block 3 first — it trains the model.");
+
+        const test = await datasets.cifar10("test", { normalize: true });
+        const model = new nn.Sequential(
+          new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
+          new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
+        model.loadStateDict(load(new Uint8Array(window.__cifar)).tensors);
+
+        const guess = Array.from(await model.call(test.x).argmax(1).toArray());
+        const truth = Array.from(await test.y.toArray());
+
+        const right = new Array(10).fill(0), total = new Array(10).fill(0);
+        for (let i = 0; i < truth.length; i++) {
+          total[truth[i]]++;
+          if (guess[i] === truth[i]) right[truth[i]]++;
+        }
+        const hits = right.reduce((a, b) => a + b, 0);
+        log(`overall: ${(100 * hits / truth.length).toFixed(1)}%  (${hits}/${truth.length})`);
+        log("");
+        test.classes.forEach((name, i) => {
+          const pct = total[i] ? (100 * right[i] / total[i]).toFixed(0) : "—";
+          const bar = "█".repeat(Math.round((right[i] / (total[i] || 1)) * 20));
+          log(`  ${name.padEnd(11)} ${String(pct).padStart(3)}%  ${bar}`);
+        });
+        window.__cifarTest = { guess, truth, test };
+      </script>
+    </div>
+
+    <h2>5 · The mistakes</h2>
+    <p>
+      Sixteen of them, with what the model said. This is the same move as the quickstart
+      and it stays useful at every size — a model's errors tell you more about the data
+      than its successes do.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__cifarTest) throw new Error("Run block 4 first.");
+        const { guess, truth, test } = window.__cifarTest;
+
+        const wrong = [];
+        for (let i = 0; i < truth.length && wrong.length < 16; i++) {
+          if (guess[i] !== truth[i]) wrong.push(i);
+        }
+        log(`${wrong.length} shown of ${truth.filter((v, i) => v !== guess[i]).length} mistakes`);
+
+        // Pull those images back out — the tensor is normalised, so undo it to look.
+        const plain = await datasets.cifar10("test");
+        const all = await plain.x.toArray();
+        const flat = new Float32Array(wrong.length * 3 * 32 * 32);
+        wrong.forEach((at, k) => flat.set(all.subarray(at * 3072, at * 3072 + 3072), k * 3072));
+
+        await show(Tensor.from(flat, [wrong.length, 3, 32, 32]), {
+          scale: 3,
+          range: [0, 1],
+          labels: wrong.map((at) => `${test.classes[guess[at]]}?`),
+        });
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>What this does not show.</strong> Ten epochs on 2,000 images is not a
+      CIFAR result; the repository's own benchmark trains ResNet-18 on the full set and
+      reports 64.6% after ten epochs with augmentation. What you just measured is that
+      the whole chain — data, convolution, autograd, optimizer — works in a browser tab,
+      on your GPU, with nothing installed.
+    </div>
+
+    <div class="pager">
+      <a href="03-curve-fitting.html">← 3 · Curve fitting</a>
+      <a href="05-adversarial.html" style="text-align:right">Next<b>5 · Adversarial</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

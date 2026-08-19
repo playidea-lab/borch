@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>borch 튜토리얼</title>
+<meta name="description" content="끝까지 따라가는 프로젝트 여섯. 모든 블록이 그 자리에서, 당신의 GPU 에서 돈다.">
+<link rel="alternate" hreflang="en" href="../../tutorials/">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">배우기</a>
+      <a href="../tutorials/" class="on" aria-current="page">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../tutorials/" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>튜토리얼</h4>
+    <nav>
+      <a href="./" class="on">길잡이</a>
+      <a href="01-quickstart.html">1 · 빠른 시작</a>
+      <a href="02-from-scratch.html">2 · 밑바닥부터</a>
+      <a href="03-curve-fitting.html">3 · 곡선 맞추기</a>
+      <a href="04-image-classifier.html">4 · 이미지 분류기</a>
+      <a href="05-adversarial.html">5 · 적대적 예제</a>
+      <a href="06-char-rnn.html">6 · 문자 RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">튜토리얼</p>
+    <h1>끝까지 가는 프로젝트 여섯</h1>
+    <p class="lead">
+      <a href="../learn/">배우기</a>가 개념을 하나씩 다룬다면, 이쪽은 문제 하나를
+      처음부터 끝까지 가져간다 — 데이터, 모델, 학습, 그리고 나온 것 들여다보기. 모든
+      블록이 그 페이지에서 당신의 GPU 로 돌고, 돌리기 전에 고칠 수 있다. 설치할 것은 없다.
+    </p>
+
+    <div class="grid c2" style="margin:2rem 0">
+      <a class="tile" href="01-quickstart.html" style="text-decoration:none">
+        <h3>1 · 빠른 시작</h3>
+        <p class="small">다섯 블록에 분류기 하나 — 데이터·모델·학습·정확도·실수까지.
+          여기서 시작한다.</p>
+      </a>
+      <a class="tile" href="02-from-scratch.html" style="text-decoration:none">
+        <h3>2 · 밑바닥부터</h3>
+        <p class="small">날텐서에서 nn, optim, DataLoader 까지 한 겹씩. "nn 이 실제로
+          무엇을 하는가" 에 답한다.</p>
+      </a>
+      <a class="tile" href="03-curve-fitting.html" style="text-decoration:none">
+        <h3>3 · 곡선 맞추기</h3>
+        <p class="small">은닉층이 무엇을 사 주는지 말이 아니라 그림으로. 그리고 모델이
+          뜻을 잃는 자리.</p>
+      </a>
+      <a class="tile" href="04-image-classifier.html" style="text-decoration:none">
+        <h3>4 · 이미지 분류기 <span class="state soon">데이터 필요</span></h3>
+        <p class="small">진짜 CIFAR-10: 사진을 보고, 작은 CNN 을 학습시키고, 한 수가
+          아니라 클래스별로 읽는다.</p>
+      </a>
+      <a class="tile" href="05-adversarial.html" style="text-decoration:none">
+        <h3>5 · 적대적 예제 <span class="state soon">데이터 필요</span></h3>
+        <p class="small">그림에 대한 기울기를 답이 바뀔 만큼만 밟는다. 여섯 줄.</p>
+      </a>
+      <a class="tile" href="06-char-rnn.html" style="text-decoration:none">
+        <h3>6 · 문자 RNN</h3>
+        <p class="small">순환 신경망이 이름을 한 글자씩 읽고 언어를 맞힌다. 페이지에 쳐
+          넣은 45 단어로.</p>
+      </a>
+    </div>
+
+    <h2>데이터가 필요한 둘</h2>
+    <p>
+      튜토리얼 4·5 는 진짜 데이터셋을 쓰고, 이 저장소는 바이너리를 git 밖에 둔다 —
+      <code>vendor/pyodide</code> 와 <code>borch-ts/dist</code> 를 어느 커밋에도 안 넣는
+      그 규칙이다. 한 번 만들면 된다:
+    </p>
+    <pre class="small" style="overflow-x:auto"><code>python3 site/fetch_data.py              # 갖고 있는 CIFAR 바이너리에서
+python3 site/fetch_data.py --download   # 없으면 받아서</code></pre>
+    <p>
+      <code>site/assets/data/</code> 에 약 1MB 를 쓴다: 학습 2,000 장, 시험 500 장, JPEG.
+      <strong>픽셀이 원본과 같지 않다.</strong> "배우는가" 에는 문제없고 논문의 수와
+      견주는 데는 못 쓴다. 수가 나오는 자리마다 그 사실을 적어 두었다.
+    </p>
+
+    <h2>이것이 아닌 것</h2>
+    <p>
+      벤치마크가 아니고 최고 성능도 아니다. 탭 크기의 모델과 2,000 장은 사슬이 끝까지
+      돈다는 것을 말해 줄 뿐이고, 인용할 수는 이 저장소가
+      <a href="../#measured">직접 잰 것</a>이다. 전이학습과 사전학습 가중치는 일부러
+      없고 앞으로도 없다 — 그것을 배우려면 브라우저를 벗어나야 하는 것들이다.
+    </p>
+
+    <div class="pager">
+      <a href="../learn/">← 배우기</a>
+      <a href="01-quickstart.html" style="text-align:right">시작<b>1 · 빠른 시작</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

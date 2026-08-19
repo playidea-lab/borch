@@ -16,6 +16,7 @@
  * 코드가 조용히 달라진다.
  */
 
+import { drawSeries, drawTensor } from "./render.js";
 import { encodeCode, highlight, requestStop, runCode, runPython } from "./runner.js";
 import { t } from "./i18n.js";
 
@@ -54,11 +55,13 @@ function mount(box) {
     </div>
     <div class="edit"><pre><code></code></pre><textarea spellcheck="false"
       autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off"></textarea></div>
-    <pre class="out"></pre>`;
+    <pre class="out"></pre>
+    <div class="canvas-out"></div>`;
 
   const painted = box.querySelector(".edit code");
   const editor = box.querySelector("textarea");
   const out = box.querySelector(".out");
+  const stage = box.querySelector(".canvas-out");
   const runBtn = box.querySelector("button.go");
   const resetBtn = box.querySelector("button.reset");
   const openLink = box.querySelector("a.open");
@@ -108,16 +111,38 @@ function mount(box) {
     out.scrollTop = out.scrollHeight;
   };
 
+  // 한 실행이 찍은 수. `plot()` 이 쌓고, 끝나면 한 번 그린다 — 스텝마다 다시
+  // 그리면 학습보다 그리는 데 시간이 더 든다.
+  let series = [];
+  let seriesName = "";
+
   async function go() {
     if (busy) return;
     busy = true;
     runBtn.disabled = true;
     runBtn.textContent = say("running");
     out.textContent = "";
+    stage.textContent = "";
+    series = [];
+    seriesName = "";
     try {
+      const hooks = {
+        onLog: write,
+        onPlot: (name, value) => {
+          if (!Number.isFinite(value)) return;
+          seriesName = name;
+          series.push(value);
+        },
+        onShow: async (tensor, options) => {
+          // 파이썬에서 오면 옵션이 평범한 객체가 아닐 수 있다. 값만 꺼낸다.
+          const opts = options ? JSON.parse(JSON.stringify(options)) : {};
+          stage.append(await drawTensor(tensor, opts));
+        },
+      };
       const result = lang === "js"
-        ? await runCode(editor.value, { onLog: write })
-        : await runPython(editor.value, { onLog: write });
+        ? await runCode(editor.value, hooks)
+        : await runPython(editor.value, hooks);
+      if (series.length > 1) stage.prepend(drawSeries(series, { name: seriesName }));
       write("");
       write(t("run.done", result.ms.toFixed(0)), "ok");
     } catch (err) {

@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2 · From scratch — borch Tutorials</title>
+<meta name="description" content="Rebuild the training loop from raw tensors up to a DataLoader, one layer at a time.">
+<link rel="alternate" hreflang="ko" href="../ko/tutorials/02-from-scratch.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/">Learn</a>
+      <a href="../tutorials/" class="on" aria-current="page">Tutorials</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/tutorials/02-from-scratch.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Tutorials</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-quickstart.html">1 · Quickstart</a>
+      <a href="02-from-scratch.html" class="on">2 · From scratch</a>
+      <a href="03-curve-fitting.html">3 · Curve fitting</a>
+      <a href="04-image-classifier.html">4 · Image classifier</a>
+      <a href="05-adversarial.html">5 · Adversarial</a>
+      <a href="06-char-rnn.html">6 · Char RNN</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Tutorial · 2</p>
+    <h1>From scratch</h1>
+    <p class="lead">
+      The same problem as the quickstart, built up from nothing: raw tensors and a
+      hand-written gradient step first, then <code>nn.Linear</code>, then
+      <code>optim</code>, then a <code>DataLoader</code>. Each step deletes code that
+      was doing something you have now seen for yourself.
+    </p>
+    <p>
+      This is the tutorial that answers "what is <code>nn</code> actually doing".
+      Nothing below is magic, and by the end the loop looks like every other training
+      loop you will write.
+    </p>
+
+    <h2>0 · The problem</h2>
+    <p>
+      Fit a straight line to points that follow <code>y = 2x − 1</code> with noise on
+      top. Small enough to check by eye, real enough that every piece has to work.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const N = 64;
+        const xs = new Float32Array(N), ys = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const x = (i / N) * 4 - 2;
+          xs[i] = x;
+          ys[i] = 2 * x - 1 + (Math.random() - 0.5) * 0.4;
+        }
+        window.__fit = { xs, ys, N };
+
+        log("first five x:", Array.from(xs.slice(0, 5)).map((v) => v.toFixed(2)).join(", "));
+        log("first five y:", Array.from(ys.slice(0, 5)).map((v) => v.toFixed(2)).join(", "));
+        log("");
+        log("answer to find: w = 2, b = -1");
+      </script>
+    </div>
+
+    <h2>1 · By hand</h2>
+    <p>
+      Two parameters, a loss you write yourself, and a step you apply yourself. The only
+      thing borch does here is compute the derivatives — that is what autograd is, and
+      it is the one piece you would not want to write by hand.
+    </p>
+    <p>
+      Note <code>noGrad</code> around the update: changing a parameter is not part of
+      the computation whose gradient you want, and torch's optimizers do exactly this.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        let w = keepAlive(Tensor.from([0], [1, 1], { requiresGrad: true }));
+        let b = keepAlive(Tensor.from([0], [1], { requiresGrad: true }));
+
+        const lr = 0.05;
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            if (w.grad) { w.grad = null; b.grad = null; }        // zeroGrad, by hand
+
+            const pred = x.mm(w).add(b);                          // forward, by hand
+            const loss = pred.sub(y).square().mean();             // MSE, by hand
+            loss.backward();
+
+            noGrad(() => {                                        // the step, by hand
+              w.sub_(w.grad.mul(Tensor.full([], lr)));
+              b.sub_(b.grad.mul(Tensor.full([], lr)));
+            });
+
+            const v = await loss.item();
+            plot("loss", v);
+            if (step % 50 === 0) log(`step ${String(step).padStart(3)}   loss ${v.toFixed(5)}`);
+          });
+        }
+
+        log("");
+        log("w =", (await w.item()).toFixed(4), " b =", (await b.item()).toFixed(4));
+      </script>
+    </div>
+
+    <h2>2 · Let nn.Linear hold the parameters</h2>
+    <p>
+      The layer keeps <code>weight</code> and <code>bias</code> and knows the forward
+      pass. What disappears: creating the two tensors, remembering their shapes, and
+      writing <code>x @ w + b</code>. What stays the same: everything else.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const lr = 0.05;
+
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            for (const p of model.parameters()) p.grad = null;
+
+            const loss = model.call(x).sub(y).square().mean();
+            loss.backward();
+
+            noGrad(() => {
+              for (const p of model.parameters()) p.sub_(p.grad.mul(Tensor.full([], lr)));
+            });
+
+            plot("loss", await loss.item());
+          });
+        }
+
+        log("w =", (await model.weight.item()).toFixed(4),
+            " b =", (await model.bias.item()).toFixed(4));
+      </script>
+    </div>
+
+    <h2>3 · Let optim take the step</h2>
+    <p>
+      <code>zeroGrad()</code> and <code>step()</code> replace the two loops you wrote.
+      The optimizer is now a thing you can swap: change <code>SGD</code> to
+      <code>Adam</code> on the line below and watch the curve change shape.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const x = keepAlive(Tensor.from(xs, [N, 1]));
+        const y = keepAlive(Tensor.from(ys, [N, 1]));
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.05);
+        const crit = new nn.MSELoss();
+
+        for (let step = 0; step < 200; step++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const loss = crit.call(model.call(x), y);
+            loss.backward();
+            opt.step();
+            plot("loss", await loss.item());
+          });
+        }
+
+        log("w =", (await model.weight.item()).toFixed(4),
+            " b =", (await model.bias.item()).toFixed(4));
+        log("");
+        log("This is the loop from lesson 4. Nothing was hidden — you wrote each piece.");
+      </script>
+    </div>
+
+    <h2>4 · Let a DataLoader hand out batches</h2>
+    <p>
+      The last piece. Full-batch training was fine for 64 points; real data does not fit,
+      so you iterate. The loop body does not change at all — only where <code>x</code>
+      and <code>y</code> come from.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+        if (!window.__fit) throw new Error("Run block 0 first.");
+        const { xs, ys, N } = window.__fit;
+
+        const set = new data.TensorDataset(
+          keepAlive(Tensor.from(xs, [N, 1])),
+          keepAlive(Tensor.from(ys, [N, 1])));
+        const loader = new data.DataLoader(set, { batchSize: 16, shuffle: true });
+
+        const model = new nn.Linear(1, 1);
+        const opt = new optim.SGD(model.parameters(), 0.05);
+        const crit = new nn.MSELoss();
+
+        for (let epoch = 0; epoch < 40; epoch++) {
+          for (const [bx, by] of loader) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const loss = crit.call(model.call(bx), by);
+              loss.backward();
+              opt.step();
+              plot("loss", await loss.item());
+            }, () => [bx, by]);
+          }
+        }
+
+        log("w =", (await model.weight.item()).toFixed(4),
+            " b =", (await model.bias.item()).toFixed(4));
+        log("");
+        log("The curve is noisier than block 3 — each step now sees 16 points, not 64.");
+        log("That noise is not a bug; it is most of why mini-batch training generalises.");
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>What each layer bought.</strong> Autograd bought the derivatives. The
+      module bought parameter bookkeeping. The optimizer bought the update rule as
+      something you can replace. The loader bought batching. None of it changed the
+      arithmetic — you can go back to block 1 and see the same numbers coming out.
+    </div>
+
+    <div class="pager">
+      <a href="01-quickstart.html">← 1 · Quickstart</a>
+      <a href="03-curve-fitting.html" style="text-align:right">Next<b>3 · Curve fitting</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
