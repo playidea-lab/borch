@@ -74,7 +74,7 @@ from ._ops import (                                      # noqa: E402,F401
     # `pooled`·`empty_cache` 는 **torch 에 없는 이름**이다 — 브라우저에만 있는
     # `backend`·`fetch_cached` 와 같은 결이고, `torch.cuda` 를 흉내 내지 않는 쪽을
     # 골랐다(그쪽은 `is_available()` 이 거짓이라 교재 관용구에서 죽은 줄이 된다).
-    dispatches, empty_cache, last_scope, pooled, submits,
+    dispatches, empty_cache, keep_alive, last_scope, pooled, submits,
     sum, swapdims, transpose, where, zeros,
     # torch 가 두 번째 이름으로 주는 것들 — 조합에 이름만 붙인다.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,

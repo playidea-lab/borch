@@ -466,6 +466,14 @@ def _resolve_name(name):
     # 있는 이유는 borch.ts 가 표에서 다는 단항까지 전부
     # `Object.defineProperty(Tensor.prototype, …)` 로 얹기 때문이다.
     if getattr(_PROTO, js_name, None) is None:
+        # **묻는 것과 말하는 것이 같아야 한다.** 여기서 본 것은 `Tensor.prototype`
+        # 이지 borch.ts 전체가 아니다. 모듈 함수로 있는 이름에 대고 "borch.ts 에
+        # 없다" 고 말하면 그것은 거짓이고, 찾는 사람을 없는 것을 찾으러 보낸다.
+        # `keep_alive` 가 정확히 그렇게 걸렸다 — borch.ts 에 있는데 없다고 했다.
+        if getattr(_ts, js_name, None) is not None:
+            raise AttributeError(
+                f"`{js_name}` 은 borch.ts 에 **모듈 함수**로 있고 텐서의 메서드가 "
+                f"아니다 (파이썬 이름 `{name}`). 이 결속이 아직 그것을 잇지 않았다.")
         raise AttributeError(
             f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
 
@@ -601,15 +609,66 @@ class scope:                                             # noqa: N801
     **학습 루프에 이것이 없으면 안 돈다.** 한 스텝이 중간 버퍼를 수천 개 만들고,
     파이썬·자바스크립트 어느 쪽 쓰레기 수집도 GPU 메모리를 제때 안 놓아준다.
     자매도 같은 이유로 같은 이름을 노출한다.
+
+    ## 결과를 들고 나오려면 `keep()`
+
+        with torch.scope() as s:
+            loss = s.keep(criterion(model(x), y))
+        print(loss.item())          # 구역 밖에서도 산다
+
+    **`keep()` 없이 만든 텐서는 블록을 나가는 순간 죽는다.** 쓰면 멈추고, 그게
+    맞다 — 안 그러면 다음 할당이 덮어쓴 값을 조용히 읽는다.
+
+    이것이 없어서 파이썬 쪽에서는 **구역에서 아무것도 못 들고 나왔다**(실측).
+    자매에는 `scope(body, () => [t])` 와 `keepAlive(t)` 가 둘 다 있었는데 이 결속에는
+    어느 쪽도 없었고, 그래서 `with` 를 쓰는 순간 학습 루프의 손실값조차 못 읽었다.
     """
 
     def __enter__(self):
+        # **구역마다 새로 만든다.** 하나를 재사용하면 중첩된 안쪽 구역이 바깥의
+        # 목록에 얹혀서, 바깥이 닫힐 때 이미 죽은 버퍼를 넘기려 든다.
+        self._kept = []
         _ts.device().beginScope()
         return self
 
+    def keep(self, t):
+        """이 구역을 벗어나 **바깥 구역으로 넘긴다.** 준 것을 그대로 돌려준다.
+
+        `keep_alive()` 와 다르다. 이쪽은 바깥 구역이 닫힐 때 놓이고, 저쪽은 어떤
+        구역도 안 놓는다. 중간값에 `keep_alive()` 를 쓰면 스텝마다 쌓인다.
+        """
+        if not isinstance(t, Tensor):
+            raise TypeError(
+                f"scope.keep 은 텐서를 받습니다 — {type(t).__name__} 가 왔습니다")
+        # 호스트에 있는 것은 살릴 것이 없다. 구역은 GPU 버퍼만 놓고, 그쪽 값은
+        # 파이썬이 알아서 가져간다 — `raw` 는 CPU 텐서에서 그냥 던진다.
+        if str(handle(t).device) != "cpu":
+            self._kept.append(t)
+        return t
+
     def __exit__(self, *exc):
-        _ts.device().endScope()
+        # `to_js` 로 진짜 JS 배열을 만든다. 프록시를 그냥 넘기면 저쪽 `new Set(keep)`
+        # 이 우리가 준 것을 못 본 채로 조용히 비어 있는 집합을 만든다.
+        buffers = _to_js([handle(t).raw for t in self._kept])
+        self._kept = []
+        _ts.device().endScope(buffers)
         return False
+
+
+def keep_alive(t):
+    """구역이 닫혀도 **영영** 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다.
+
+    `scope().keep()` 과 **다른 것**이다. 저쪽은 이번 구역만 벗어나 바깥 구역으로
+    넘어가고 바깥이 닫힐 때 놓인다. 이쪽은 어떤 구역도 안 놓으므로, 중간값에 쓰면
+    스텝마다 쌓여서 학습이 메모리로 무너진다.
+
+    호스트에 있는 텐서는 그냥 돌려준다 — 구역은 GPU 버퍼만 놓는다.
+    """
+    if not isinstance(t, Tensor):
+        raise TypeError(
+            f"keep_alive 는 텐서를 받습니다 — {type(t).__name__} 가 왔습니다")
+    _ts.keepAlive(handle(t))
+    return t
 
 
 def memory():

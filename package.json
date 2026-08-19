@@ -33,7 +33,8 @@
     "bench:ts": "uv run --with playwright python borch-ts/test/bench.py",
     "serialize:ts": "uv run --with numpy --with playwright python borch-ts/test/serialize.py",
     "data:ts": "uv run --with playwright python borch-ts/test/data.py",
-    "prepublishOnly": "npm run build:ts"
+    "prepublishOnly": "npm run build:ts",
+    "scope:py": "uv run --with playwright python tests/browser/scope_escape.py"
   },
   "//": [
     "이 패키지는 **borch.ts** 다 — TypeScript 로 쓰고 WGSL 커널로 도는 쪽.",
