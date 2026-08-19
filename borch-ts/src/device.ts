@@ -53,9 +53,19 @@ export type Availability =
   | { ok: true; adapter: string }
   | { ok: false; why: "no-api" | "no-adapter"; message: string };
 
+// **버전을 대는 것만으로는 부족하다.** Safari 18.6 에서 이 문구를 받은 사람이
+// 있었는데, 그는 이미 18+ 였고 localhost 였고 secure context 였다 — 문구가 시키는
+// 것을 전부 한 상태에서 같은 문구를 받았다. 그러면 브라우저 버전을 확인하러 갔다가
+// 아니라는 것만 알고 돌아오고, **다음에 무엇을 할지는 여전히 모른다.**
+//
+// 그 사파리에서 실제로 남은 원인은 기능 플래그가 꺼져 있는 것이었다. 안내문은 대개
+// 맞는 말을 하다가 이렇게 **한 사람에게만 틀린 말**이 되는데, 그 한 사람이 바로 이
+// 문구를 읽는 사람이다. 그래서 켜는 자리를 직접 적는다.
 const NO_API =
-  "WebGPU 가 없다. Chrome/Edge 113+ 또는 Safari 18+ 가 필요하고, " +
-  "리눅스에서는 플래그가 필요할 수 있다. https 또는 localhost 여야 한다.";
+  "WebGPU 가 없다. Chrome/Edge 113+ 또는 Safari 18+ 가 필요하다. " +
+  "**버전이 맞는데도 이 문구가 보이면 꺼져 있는 것이다** — Safari 는 " +
+  "설정 → 고급 → 기능 플래그 → WebGPU, 리눅스 Chrome 은 " +
+  "chrome://flags 의 Unsafe WebGPU. https 또는 localhost 여야 한다.";
 
 const NO_ADAPTER =
   "WebGPU 어댑터를 못 얻었다 — 드라이버 차단 목록, 가상 머신, 또는 GPU 가 없는 " +

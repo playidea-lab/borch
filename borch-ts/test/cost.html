@@ -24,6 +24,7 @@
   <script type="module">
     import { init } from "../dist/src/tensor.js";
     import { report } from "../dist/test/cost.js";
+    import { why } from "./why.js";
 
     const out = document.getElementById("out");
     try {
@@ -33,8 +34,8 @@
       out.textContent = text;
     } catch (err) {
       // 안 돈 것과 통과한 것은 다르다 — 조용히 넘기지 않는다.
-      window.__borchCost = { error: String(err && err.stack ? err.stack : err) };
-      out.textContent = `재지 못했다: ${err && err.stack ? err.stack : err}`;
+      window.__borchCost = { error: String(why(err)) };
+      out.textContent = `재지 못했다: ${why(err)}`;
     }
   </script>
 </body>

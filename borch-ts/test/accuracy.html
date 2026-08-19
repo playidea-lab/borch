@@ -25,6 +25,7 @@
     import { init } from "../dist/src/tensor.js";
     import { Device } from "../dist/src/device.js";
     import { decodeCifar, report } from "../dist/test/accuracy.js";
+    import { why } from "./why.js";
 
     const out = document.getElementById("out");
     const params = new URLSearchParams(location.search);
@@ -59,8 +60,8 @@
       window.__borchAccuracy = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
-      window.__borchAccuracy = { error: String(err && err.stack ? err.stack : err) };
-      out.textContent = `재지 못했다: ${err && err.stack ? err.stack : err}`;
+      window.__borchAccuracy = { error: String(why(err)) };
+      out.textContent = `재지 못했다: ${why(err)}`;
     }
   </script>
 </body>

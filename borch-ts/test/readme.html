@@ -6,6 +6,7 @@
   <script type="module">
     import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/readme.js";
+    import { why } from "./why.js";
 
     const out = document.getElementById("out");
     try {
@@ -14,8 +15,8 @@
       out.textContent = text;
     } catch (err) {
       // **예시가 터지는 것이 이 페이지가 잡으려는 것이다.** 조용히 넘기면 의미가 없다.
-      window.__borchReadme = { error: String(err && err.stack ? err.stack : err) };
-      out.textContent = `예시가 터졌다: ${err && err.stack ? err.stack : err}`;
+      window.__borchReadme = { error: String(why(err)) };
+      out.textContent = `예시가 터졌다: ${why(err)}`;
     }
   </script>
 </body>

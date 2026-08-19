@@ -6,6 +6,7 @@
   <script type="module">
     import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/data.js";
+    import { why } from "./why.js";
 
     const out = document.getElementById("out");
     try {
@@ -15,8 +16,8 @@
       out.textContent = text;
     } catch (err) {
       // 터지는 것도 결과다 — 조용히 넘기면 러너가 영원히 기다린다.
-      window.__borchData = { error: String(err && err.stack ? err.stack : err) };
-      out.textContent = `데이터 적재 점검이 터졌다: ${err && err.stack ? err.stack : err}`;
+      window.__borchData = { error: String(why(err)) };
+      out.textContent = `데이터 적재 점검이 터졌다: ${why(err)}`;
     }
   </script>
 </body>

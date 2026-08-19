@@ -23,6 +23,7 @@
     import { init } from "../dist/src/tensor.js";
     import { dumpForComparison, dumpPieces } from "../dist/test/bench.js";
     import { Device } from "../dist/src/device.js";
+    import { why } from "./why.js";
 
     const out = document.getElementById("out");
     try {
@@ -33,8 +34,8 @@
       window.__borchModel = { adapter: Device.adapterInfo, pieces, ...dump };
       out.textContent = `파라미터 ${dump.shapes.length}개, 손실 ${dump.loss}`;
     } catch (err) {
-      window.__borchModel = { error: String(err && err.stack ? err.stack : err) };
-      out.textContent = `뽑지 못했다: ${err && err.stack ? err.stack : err}`;
+      window.__borchModel = { error: String(why(err)) };
+      out.textContent = `뽑지 못했다: ${why(err)}`;
     }
   </script>
 </body>

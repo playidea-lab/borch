@@ -26,6 +26,7 @@
     // dist 는 `npm run build:ts` 가 만든다. 소스가 아니라 방출물을 부른다 —
     // 브라우저는 TypeScript 를 그대로 못 읽는다.
     import { run, format } from "../dist/test/golden.js";
+    import { why } from "./why.js";
 
     const out = document.getElementById("out");
     // 경로만 상대로 준다. 호스트를 박으면 어디서 서빙하든 한 군데만 맞는다.
@@ -39,8 +40,8 @@
         ? "ok" : "fail";
     } catch (err) {
       // 실패를 조용히 넘기지 않는다 — 안 돈 것과 통과한 것은 다르다.
-      window.__borchReport = { error: String(err) };
-      out.textContent = `돌지 못했다: ${err && err.stack ? err.stack : err}`;
+      window.__borchReport = { error: why(err) };
+      out.textContent = `돌지 못했다: ${why(err)}`;
       out.className = "fail";
     }
   </script>
