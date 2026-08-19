@@ -4919,6 +4919,7 @@ _Slogdet = _named("slogdet", "sign", "logabsdet")
 _QR = _named("linalg_qr", "Q", "R")
 _SVD = _named("linalg_svd", "U", "S", "Vh")
 _Eigh = _named("linalg_eigh", "eigenvalues", "eigenvectors")
+_Eig = _named("linalg_eig", "eigenvalues", "eigenvectors")
 _Lstsq = _named("linalg_lstsq", "solution", "residuals", "rank", "singular_values")
 _LuFactor = _named("linalg_lu_factor", "LU", "pivots")
 _Lu = _named("linalg_lu", "P", "L", "U")
@@ -5334,6 +5335,81 @@ def eigh(t, UPLO="L"):
 
     return _Eigh(t._make(w, (t,), back_values, "EighBackward0"),
                  t._make(v, (t,), back_vectors, "EighBackward0"))
+
+
+def eig(t):
+    """**비대칭 행렬**의 고윳값·고유벡터. 답이 복소수다.
+
+    `eigh` 와 나란히 있지만 다른 함수다 — 저쪽은 대칭 행렬만 받고 한쪽 삼각만
+    읽으며 답이 실수다. 이쪽은 아무 정사각 행렬이나 받고 **회전 행렬처럼 실수
+    고윳값이 없는 것**도 있으므로 답이 늘 복소수다(실측: `[[0,-1],[1,0]]` 이 ±i).
+
+    **이 함수가 여태 없던 까닭이 표에 "복소수 dtype 이 없다" 로 적혀 있었다.**
+    complex64 를 넣은 뒤로 그 말은 거짓이었고, 그동안 `x.eig()` 의 거절 문구는
+    "`linalg.eig` 을 쓰세요" 라고 **없는 것을 가리키고 있었다.**
+
+    ## 기울기
+
+    고윳값 쪽은 `Ā = V⁻ᴴ·diag(λ̄)·Vᴴ`, 고유벡터 쪽은 그 안에 `F ∘ (Vᴴ·V̄)` 가
+    더해지고 `F_ij = 1/(λⱼ − λᵢ)` 다. **고윳값이 겹치면 터진다** — `eigh` 와 같은
+    한계이고 torch 도 같이 터진다.
+
+    입력이 실수면 답도 실수여야 하므로 마지막에 실수부만 취한다. 복소수 기울기
+    규약이 `∂L/∂re + i·∂L/∂im` 이라 그 자리에서 허수부는 뜻이 없다.
+    """
+    t = _mat(t, "eig")
+    # **역방향은 배정도로 센다.** 답은 complex64 로 내지만 그 안의 `1/(λⱼ − λᵢ)` 는
+    # 고윳값이 가까울수록 커져서, 단정도로 세면 3×3 만 되어도 torch 와 갈린다(실측).
+    # 앞의 계산을 배정도로 두고 **내보낼 때만** 깎는다.
+    w64, v64 = _np.linalg.eig(t.data.astype(_np.float64))
+    v64 = _np.ascontiguousarray(v64)
+    w, v = w64.astype(_np.complex64), v64.astype(_np.complex64)
+    vh = _np.conjugate(_T(v64))
+    vinv_h = _np.conjugate(_T(_np.linalg.inv(v64)))
+
+    def _pull(mid):
+        return (_np.real(vinv_h @ mid @ vh).astype(t.data.dtype),)
+
+    def back_values(g):
+        gg = _np.asarray(g, dtype=_np.complex128)
+        mid = _np.zeros_like(v64)
+        idx = _np.arange(w.shape[-1])
+        mid[..., idx, idx] = gg
+        return _pull(mid)
+
+    def back_vectors(g):
+        gg = _np.asarray(g, dtype=_np.complex128)
+        # **위상까지만 정해진다.** 복소수 고유벡터는 `e^{iφ}` 를 곱해도 여전히
+        # 고유벡터라, 그 위상에 기대는 손실은 **값이 정해지지 않는다.** torch 도
+        # 여기서 멈추므로 흉내가 아니라 같은 한계다 — 안 멈추면 우리가 관대한 것이고,
+        # 관대한 것도 갈리는 것이다(여기서 돌던 코드가 torch 에서 멈춘다).
+        #
+        # 판정은 `Vᴴ·V̄` 의 대각이 실수인가다. 허수부가 남으면 그 손실은 위상을 본다.
+        probe = _np.sum(_np.conjugate(v64) * gg, axis=-2)
+        if _np.abs(_np.imag(probe)).max() > 1e-5:
+            raise RuntimeError(
+                "linalg_eig_backward: The eigenvectors in the complex case are "
+                "specified up to multiplication by e^{i phi}. The specified loss "
+                "function depends on this quantity, so it is ill-defined.")
+        # **길이가 1 로 묶여 있다.** LAPACK 이 고유벡터를 단위 길이로 내주므로 자기
+        # 방향으로는 못 움직인다 — 그 성분을 빼지 않으면 없는 자유도로 기울기가
+        # 흐른다. 빼기 전과 후를 torch 에 대 봤고, **대칭 행렬에서는 두 답이 같아서**
+        # 대칭으로만 재면 이 항이 빠진 것을 못 본다(실측).
+        gg = gg - v64 * _np.real(_np.sum(_np.conjugate(v64) * gg, axis=-2))
+        gap = w64[..., None, :] - w64[..., :, None]
+        idx = _np.arange(w.shape[-1])
+        with _np.errstate(divide="ignore", invalid="ignore"):
+            f = _np.where(gap == 0, 0.0, 1.0 / _np.where(gap == 0, 1.0, gap))
+        f[..., idx, idx] = 0.0
+        return _pull(f * (vh @ gg))
+
+    return _Eig(t._make(w, (t,), back_values, "LinalgEigBackward0"),
+                t._make(v, (t,), back_vectors, "LinalgEigBackward0"))
+
+
+def eigvals(t):
+    """`eig` 의 고윳값만. 고유벡터를 안 쓰면 이쪽이 torch 의 이름이다."""
+    return eig(t).eigenvalues
 
 
 def lstsq(a, b):
@@ -5821,6 +5897,7 @@ class _Linalg(_Namespace):
     svd = staticmethod(svd)
     pinv = staticmethod(pinverse)
     matrix_rank = staticmethod(matrix_rank)
+    eig = staticmethod(eig)
     eigh = staticmethod(eigh)
     lstsq = staticmethod(lstsq)
     lu = staticmethod(lu)
@@ -5838,6 +5915,7 @@ class _Linalg(_Namespace):
     cross = staticmethod(cross)
     diagonal = staticmethod(diagonal_linalg)
     svdvals = staticmethod(svdvals)
+    eigvals = staticmethod(eigvals)
     eigvalsh = staticmethod(eigvalsh)
     vector_norm = staticmethod(vector_norm)
     matrix_norm = staticmethod(matrix_norm)

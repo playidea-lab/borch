@@ -334,8 +334,6 @@ SKIPPED = {
     # 복소수. 우리 dtype 은 float32·int64·bool 셋이다.
     "imag": "복소수 dtype 이 없다",
     "view_as_real": "복소수 dtype 이 없다",
-    "eig": "**복소수 dtype 이 없다** — 비대칭 행렬의 고윳값은 복소수로 나온다",
-    "eigvals": "위와 같다. 대칭 행렬 쪽(`eigh`·`eigvalsh`)은 있다",
 
     # 심볼 크기와 그래프 캡처. `DELIBERATE` 의 compile·export 와 같은 이유인데
     # 이름이 그 자리에 안 걸린다.

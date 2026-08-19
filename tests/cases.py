@@ -1452,7 +1452,12 @@ FFT_PREFIX = "fft::"
 # 보여 준다. 비면 `startswith(())` 가 언제나 거짓이라 아무것도 안 건너뛴다.
 #
 # **장치는 남긴다.** 두 번 열렸다 닫힌 자리라 세 번째도 온다.
-CORE_ONLY_PREFIXES = ()
+# **비대칭 고유분해는 코어에만 있다.** borch.ts 에는 대칭용 `eigh` 만 있고, 일반
+# 행렬의 고유분해는 헤센베르크 변환 + QR 반복이라 WGSL 로는 다른 크기의 일이다.
+# 결속이 numpy 로 채울 수는 있지만 **그것이 방금 줄이고 있는 자리**다 — 파이썬이
+# 대신 계산하면 borch.ts 를 쓰는 쪽에는 그 이름이 여전히 없고, 골든은 결속을 지나
+# 초록이 된다. 그 덮개를 다시 만들지 않으려고 여기 적는다.
+CORE_ONLY_PREFIXES = ("linalg::eig::",)
 
 
 def complex_cases(inp=None):
@@ -7661,6 +7666,15 @@ def ndim_cases(inp=None):
 LINALG_PREFIX = "linalg::"
 
 
+def _eig_holds(L, mat):
+    """`A·V = V·diag(λ)` 인가. **부호에 안 기대는 물음**이라 셋이 같이 답한다."""
+    t = L.tensor(mat)
+    w, v = L.linalg.eig(t)
+    left = L.matmul(t.cfloat(), v)
+    right = L.matmul(v, L.diag(w))
+    return f"{float((left - right).abs().max()):.4f}"
+
+
 def linalg_cases(inp=None):
     """선형대수 분해. **양쪽 다 넣었다** — 자매는 CPU 로 읽어와 numpy 로 계산하고,
     처음 부를 때 한 번 느리다고 경고한다.
@@ -8046,6 +8060,9 @@ def linalg_name_cases(inp=None):
     vec3, upper, cube = _LA_VEC3, _LA_UPPER, _LA_CUBE
     sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
     skew = np.array([[4., 99.], [1., 3.]], dtype=np.float32)   # 아래 삼각만 읽어야
+    # `eig` 용. 회전은 **실수 고윳값이 없고**(±i), 일반은 셋 다 실수인데 대칭이 아니다.
+    rot = np.array([[0., -1.], [1., 0.]], dtype=np.float32)
+    gen = np.array([[4., 1., 2.], [0., 3., -1.], [1., 0., 2.]], dtype=np.float32)
 
     cases = [
         # ── 이미 있는 것에 이름 붙이기 ──────────────────────────────────
@@ -8069,6 +8086,32 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.eigvalsh(L.tensor(skew))),
         (LINALG_PREFIX + "name2::eigh(아래삼각만)/값",
          lambda L: L.linalg.eigh(L.tensor(skew))[0]),
+
+        # ── `eig` — 대칭이 아닌 것도 받는다 ──────────────────────────────
+        #
+        # `eigh` 와 나란히 있지만 다른 함수다. 저쪽은 대칭만 받고 한쪽 삼각만 읽으며
+        # 답이 실수인데, 이쪽은 아무 정사각 행렬이나 받고 **답이 늘 복소수**다 —
+        # 회전 행렬처럼 실수 고윳값이 아예 없는 것이 있기 때문이다.
+        #
+        # **차례에 안 기대는 것만 굳힌다.** LAPACK 이 고윳값 차례를 안 정하고
+        # 브라우저의 numpy 는 다른 LAPACK 이다. 그리고 torch 는 **복소수를 정렬
+        # 못 하므로**(실측) 정렬로도 못 피한다 — 대칭함수로 접는다.
+        (LINALG_PREFIX + "eig::eigvals(회전)/크기",
+         lambda L: L.linalg.eigvals(L.tensor(rot)).abs().sort().values),
+        (LINALG_PREFIX + "eig::eigvals(비대칭)/크기",
+         lambda L: L.linalg.eigvals(L.tensor(gen)).abs().sort().values),
+        (LINALG_PREFIX + "eig::eigvals(대칭이어도 복소수형)",
+         lambda L: str(L.linalg.eigvals(L.tensor(sym)).dtype)),
+        # **합은 대각합이다.** 차례와 무관하고, 값이 맞는지를 수학으로 묻는다 —
+        # 고윳값을 아무렇게나 내는 구현은 크기 정렬은 통과해도 여기서 걸린다.
+        (LINALG_PREFIX + "eig::eigvals(비대칭)/합=대각합",
+         lambda L: (f"{float(L.linalg.eigvals(L.tensor(gen)).sum().real):.4f} "
+                    f"{float(L.tensor(gen).trace()):.4f}")),
+        # **고유벡터는 못 굳힌다** — 부호가 안 정해진다(torch 자신도 float32 와
+        # float64 에서 반대 부호를 낸다, 실측). 대신 **정의를 묻는다**: `A·V` 와
+        # `V·diag(λ)` 가 같은가. 부호가 뒤집혀도 양쪽이 같이 뒤집혀 답이 안 변한다.
+        (LINALG_PREFIX + "eig::eig(정의를 지키나)",
+         lambda L: _eig_holds(L, gen)),
 
         # ── 축이 갈리는 자리 ────────────────────────────────────────────
         (LINALG_PREFIX + "name2::linalg.diagonal",
