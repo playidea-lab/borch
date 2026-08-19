@@ -105,6 +105,69 @@ def test_not_api_does_not_claim_what_we_implement():
         "\n\n만들었으면 API 다. 표에서 빼거나, 만든 것을 지워라.")
 
 
+def test_skipped_does_not_claim_what_we_actually_do():
+    """**`안 하기로 함` 에 적힌 이름이 실제로 돌면 그 줄은 거짓이다.**
+
+    `NOT_API` 는 위에서 모순을 잡는데 `SKIPPED` 는 안 잡고 있었다. 잡을 필요가
+    없어 보였던 까닭이 있다 — 분류기는 **우리에게 없는 이름**에만 사유를 묻는다.
+    그래서 우리가 만든 이름의 사유는 아무도 안 읽고, **수는 맞은 채로 문서만
+    거짓이 된다.** 낡은 수는 다시 재면 드러나는데 낡은 사유는 안 드러난다.
+
+    실제로 열둘이 그랬다. `complex`·`real`·`imag`·`conj` 계열의 사유가 여태
+    "복소수 dtype 이 없다" 였는데 `complex64` 를 넣은 지 오래다. 그 줄을 읽고
+    "복소수는 못 하는구나" 로 이해한 사람은 **틀린 것을 배운다.**
+
+    ## 이름이 있다고 다 도는 것은 아니다
+
+    `q_scale`·`int_repr` 처럼 **거절하려고 이름만 둔** 자리가 있다. 그쪽은 사유가
+    여전히 참이다. `hasattr` 로 가르면 그것까지 걸리므로 **불러 본다** — 우리 거절은
+    인자와 무관하게 `BrowserTorchError` 로 멈추므로 그것으로 가른다.
+
+    못 불러 본 이름은 **판정하지 않는다.** 모르는 것을 아는 척하면 이 표가 다시
+    거짓말을 시작한다.
+    """
+    import numpy as np
+
+    import borch
+    from borch import BrowserTorchError
+
+    probe = borch.tensor(np.array([1.0, 2.0], dtype=np.float32))
+
+    def verdict(fn):
+        """`True`=돈다 · `False`=거절한다 · `None`=못 불러 봤다."""
+        seen_type_error = False
+        for args in ((), (probe,), (probe, probe)):
+            try:
+                fn(*args)
+            except BrowserTorchError:
+                return False
+            except TypeError:
+                seen_type_error = True
+            except Exception:                                   # noqa: BLE001
+                continue
+            else:
+                return True
+        return None if seen_type_error else None
+
+    alive = []
+    for space, _theirs, ours in _spaces():
+        for name in _public(ours):
+            full = f"{space}.{name}"
+            reason = _look(SKIPPED, name, full)
+            if not reason:
+                continue
+            got = getattr(ours, name, None)
+            if not callable(got):
+                continue
+            if verdict(got) is True:
+                alive.append(f"{full} — '{reason}'")
+    assert not alive, (
+        "`SKIPPED` 가 **우리가 실제로 하는 것**을 안 한다고 적고 있다:\n  " +
+        "\n  ".join(sorted(alive)) +
+        "\n\n그 줄을 지워라. 사유는 수와 달리 다시 재는 사람이 없어서, 한 번 낡으면\n"
+        "읽는 사람에게 계속 거짓을 준다.")
+
+
 def test_the_tool_still_runs():
     """도구 자체가 도는가. 표를 고치다 문법이 깨지면 여기서 멈춘다."""
     import torch_gap

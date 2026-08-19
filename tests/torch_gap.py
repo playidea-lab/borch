@@ -69,7 +69,11 @@ DELIBERATE = {
     "onnx": "내보내기는 배포의 일이고 여기는 문법 연습이다",
     "quantiz": "양자화는 실제 하드웨어 위에서만 뜻이 있다",
     "sparse": "커리큘럼 밖",
-    "fft": "커리큘럼 밖",
+    # **1 차원 여덟은 한다**(`fft`·`ifft`·`rfft`·`irfft`·`fftfreq`·`rfftfreq`·
+    # `fftshift`·`ifftshift`). 안 하는 것은 2·N 차원과 에르미트 변종 열다섯이다.
+    # 여기 "커리큘럼 밖" 이라고만 적혀 있던 동안 그 여덟은 이미 돌고 있었다 —
+    # 자리째 거절로 적으면 그 자리에서 **하는 것도 안 보인다.**
+    "fft": "1 차원 여덟만 한다 — 2·N 차원과 에르미트 변종은 커리큘럼 밖",
     "special": "커리큘럼 밖",
     "futures": "커리큘럼 밖",
     "package": "커리굴럼 밖",
@@ -269,7 +273,6 @@ SKIPPED = {
     "set_num_interop_threads": "탭 하나 안이다",
     "Stream": "장치 스트림 — 하나뿐이다",
     "Event": "장치 이벤트 — 잴 스트림이 하나다",
-    "get_device": "장치가 하나다",
     "get_device_module": "장치가 하나다",
     "get_default_device": "장치가 하나다",
     "set_default_device": "장치가 하나다",
@@ -329,20 +332,7 @@ SKIPPED = {
     "SparseAdam": "희소 기울기 전용 — 촘촘한 기울기는 torch 도 거절한다",
 
     # 복소수. 우리 dtype 은 float32·int64·bool 셋이다.
-    "complex": "복소수 dtype 이 없다",
-    "polar": "복소수 dtype 이 없다",
-    "real": "복소수 dtype 이 없다",
     "imag": "복소수 dtype 이 없다",
-    "angle": "복소수 dtype 이 없다",
-    "conj": "복소수 dtype 이 없다",
-    "conj_physical": "복소수 dtype 이 없다",
-    "conj_physical_": "복소수 dtype 이 없다",
-    "is_complex": "복소수 dtype 이 없다",
-    "is_conj": "복소수 dtype 이 없다",
-    "is_neg": "켤레·부호 비트 machinery — 복소수와 함께 온다",
-    "resolve_conj": "복소수 dtype 이 없다",
-    "resolve_neg": "복소수 dtype 이 없다",
-    "view_as_complex": "복소수 dtype 이 없다",
     "view_as_real": "복소수 dtype 이 없다",
     "eig": "**복소수 dtype 이 없다** — 비대칭 행렬의 고윳값은 복소수로 나온다",
     "eigvals": "위와 같다. 대칭 행렬 쪽(`eigh`·`eigvalsh`)은 있다",
@@ -359,7 +349,6 @@ SKIPPED = {
     "from_dlpack": "DLPack 교환 — 브라우저 안에 상대가 없다",
     "to_dlpack": "DLPack 교환 — 위와 같다",
     "from_file": "파일 매핑 — 브라우저에 그 파일 계층이 없다",
-    "from_numpy": "numpy 는 코어 쪽 이야기다",
 
     # 디버그 스위치. 우리에게는 켤 비결정성도 이상 검출기도 없다.
     "use_deterministic_algorithms": "고를 비결정 커널이 없다",
