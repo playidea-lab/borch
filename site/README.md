@@ -121,8 +121,17 @@ npm run site              # API 목록을 뽑고 띄운다 · http://127.0.0.1:8
 
 ## 밖으로 내보낼 때
 
-정적 파일이므로 저장소 루트를 그대로 얹으면 어디서든 돈다(GitHub Pages 포함).
-두 가지만 지킨다.
+`.github/workflows/pages.yml` 이 GitHub Pages 로 올린다. **자동으로 안 돈다** —
+`workflow_dispatch` 뿐이다. 이 저장소는 private 이고 공개는 사람이 내리는 결정이라,
+push 에 걸어 두면 다음 커밋이 곧 공개가 된다(`gpu.yml` 이 self-hosted 러너를 안 붙인
+것과 같은 판단이다).
+
+워크플로는 **저장소 모양 그대로** 올리고 뿌리에 `/site/` 로 보내는 한 줄짜리 페이지를
+둔다. 페이지가 `../borch-ts/dist` 와 `../../vendor/pyodide` 를 상대 경로로 부르므로
+`site/` 만 뿌리에 놓으면 그 경로가 뿌리 밖으로 나간다. 모은 결과는 31MB 이고, 그 안에서
+파이썬 모드까지 도는 것을 리허설로 확인했다.
+
+정적 파일이므로 직접 얹어도 된다. 두 가지만 지킨다.
 
 - `borch-ts/dist` 가 함께 올라가야 한다 — `.gitignore` 라 커밋에는 없다.
 - `site/assets/api.json` 은 커밋된다 — 정적 배포에서 생성기를 돌릴 수 없기 때문이다.
