@@ -16,13 +16,14 @@
  * 코드가 조용히 달라진다.
  */
 
-import { highlight, requestStop, runCode, runPython } from "./runner.js";
+import { encodeCode, highlight, requestStop, runCode, runPython } from "./runner.js";
 import { t } from "./i18n.js";
 
 const LABEL = {
   run: { en: "▶ Run", ko: "▶ 실행" },
   running: { en: "running…", ko: "도는 중…" },
   reset: { en: "reset", ko: "되돌리기" },
+  open: { en: "open in playground", ko: "플레이그라운드에서" },
   stop: { en: "■ Stop", ko: "■ 중지" },
 };
 
@@ -47,6 +48,7 @@ function mount(box) {
     <div class="runnable-head">
       <span>${lang === "js" ? "javascript" : "python"}</span>
       <span class="grow"></span>
+      <a class="open" href="#" title="${say("open")}">${say("open")}</a>
       <button class="reset" type="button">${say("reset")}</button>
       <button class="go" type="button">${say("run")}</button>
     </div>
@@ -59,6 +61,7 @@ function mount(box) {
   const out = box.querySelector(".out");
   const runBtn = box.querySelector("button.go");
   const resetBtn = box.querySelector("button.reset");
+  const openLink = box.querySelector("a.open");
 
   const paint = () => {
     painted.innerHTML = highlight(`${editor.value}\n `, lang);
@@ -66,9 +69,18 @@ function mount(box) {
     const rows = editor.value.split("\n").length;
     box.querySelector(".edit").style.height = `${rows * 1.6 * 12.5 + 28}px`;
   };
-  const setCode = (text) => { editor.value = text; paint(); };
+  const setCode = (text) => {
+    editor.value = text;
+    paint();
+    // **지금 화면에 있는 코드**를 넘긴다. 고친 것을 그대로 큰 편집기로 들고 갈 수
+    // 있어야 의미가 있다 — 원본을 넘기면 방금 한 일이 사라진다.
+    openLink.href = `../playground.html#lang=${lang}&code=${encodeCode(editor.value)}`;
+  };
 
-  editor.addEventListener("input", paint);
+  editor.addEventListener("input", () => {
+    paint();
+    openLink.href = `../playground.html#lang=${lang}&code=${encodeCode(editor.value)}`;
+  });
   editor.addEventListener("scroll", () => {
     const layer = painted.parentElement;
     layer.scrollTop = editor.scrollTop;

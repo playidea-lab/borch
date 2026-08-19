@@ -12,7 +12,8 @@
 import { EXAMPLES } from "./examples.js";
 import { t } from "./i18n.js";
 import {
-  formatBytes, highlight, probeDevice, requestStop, runCode, runPython,
+  decodeCode, encodeCode, formatBytes, highlight, probeDevice, requestStop,
+  runCode, runPython,
 } from "./runner.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -354,21 +355,8 @@ $("#share").addEventListener("click", async () => {
   history.replaceState(null, "", frag);
 });
 
-/** UTF-8 을 base64 로. 한글 주석이 들어가므로 그냥 btoa 는 안 된다. */
-function encodeCode(text) {
-  const bytes = new TextEncoder().encode(text);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function decodeCode(encoded) {
-  const b64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-  const bin = atob(b64);
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-}
-
 // **맨 끝에서 연다.** 위쪽의 그래프 상태(`series`)보다 먼저 부르면 그 자리에서
-// 초기화 전 접근으로 터지고, 화면은 그냥 빈 채로 남는다 — 실제로 그렇게 겪었다.
+// 초기화 전 접근으로 터지고, 화면은 그냥 빈 채로 남는다 — 실제로 두 번 겪었다.
+// (두 번째는 파일 끝을 잘라내면서 이 한 줄을 같이 지웠을 때다. 증상은 같았다:
+//  예외도 없이 편집기가 비어 있고 공유 링크에 코드가 안 실린다.)
 boot();

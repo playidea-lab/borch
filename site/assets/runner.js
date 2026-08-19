@@ -367,3 +367,24 @@ function loadScript(src) {
     document.head.append(el);
   });
 }
+
+/* ── 코드를 주소에 싣기 ─────────────────────────────────────────────────
+ *
+ * 플레이그라운드의 공유 링크와 강의의 "플레이그라운드에서 열기" 가 같은 것을 쓴다.
+ * 두 벌로 두면 한쪽만 고쳐지고, 그때 깨지는 것은 **남이 받은 링크**다.
+ */
+
+/** UTF-8 을 주소에 넣을 수 있는 base64 로. 한글 주석이 들어가므로 그냥 btoa 는 안 된다. */
+export function encodeCode(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function decodeCode(encoded) {
+  const b64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}

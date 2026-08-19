@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7 · Data — borch Learn</title>
+<meta name="description" content="Datasets, batching and shuffling, and the transforms that go on images.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/07-data.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/learn/07-data.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · Modules</a>
+      <a href="04-training.html">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving &amp; Python</a>
+      <a href="07-data.html" class="on">7 · Data</a>
+      <a href="08-debugging.html">8 · Debugging</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 7</p>
+    <h1>Data</h1>
+    <p class="lead">
+      Real training reads batches, shuffles them, and holds out a validation split.
+      The names are torch's — <code>TensorDataset</code>, <code>DataLoader</code>,
+      <code>randomSplit</code> — and they live under <code>data</code>, where
+      <code>torch.utils.data</code> would be.
+    </p>
+
+    <h2>A dataset and a loader</h2>
+    <p>
+      <code>TensorDataset</code> takes tensors that share a first dimension and hands
+      back one row at a time. <code>DataLoader</code> turns that into batches, and it is
+      iterable — <code>for (const [x, y] of loader)</code> reads the way the Python does.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.arange(20).reshape([10, 2]));
+        const y = keepAlive(Tensor.arange(10).reshape([10, 1]));
+
+        const set = new data.TensorDataset(x, y);
+        log("rows:", set.length);
+
+        const loader = new data.DataLoader(set, { batchSize: 4, shuffle: false });
+        log("batches:", loader.length);
+
+        for (const [bx, by] of loader) {
+          log(`x ${JSON.stringify(bx.shape)}  y ${JSON.stringify(by.shape)}` +
+              `   first row: ${Array.from(await bx.at(0).toArray()).join(",")}`);
+        }
+      </script>
+    </div>
+
+    <h2>Shuffling, and the last short batch</h2>
+    <p>
+      <code>shuffle</code> reorders every epoch. <code>dropLast</code> decides what
+      happens to the remainder — keep it and the final batch is smaller, which matters
+      the moment anything in your model assumes a fixed batch size.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const set = new data.TensorDataset(keepAlive(Tensor.arange(10).reshape([10, 1])));
+
+        for (const dropLast of [false, true]) {
+          const loader = new data.DataLoader(set, { batchSize: 4, shuffle: true, dropLast });
+          const sizes = [];
+          for (const [batch] of loader) sizes.push(batch.shape[0]);
+          log(`dropLast ${String(dropLast).padEnd(5)} → batches ${sizes.join(", ")}`);
+        }
+      </script>
+    </div>
+
+    <h2>Holding a split back</h2>
+    <p>
+      <code>randomSplit</code> gives you views onto the same data — no copies. Reporting
+      a number measured on rows the model trained on is the most common way to be wrong
+      and feel right.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const set = new data.TensorDataset(keepAlive(Tensor.arange(100).reshape([100, 1])));
+        const [train, val] = data.randomSplit(set, [80, 20]);
+
+        log("train:", train.length, " val:", val.length);
+        log("first five val indices:", val.indices.slice(0, 5).join(", "));
+
+        const loader = new data.DataLoader(train, { batchSize: 32, shuffle: true });
+        log("train batches per epoch:", loader.length);
+      </script>
+    </div>
+
+    <h2>Images</h2>
+    <p>
+      <code>vision</code> is the <code>torchvision.transforms</code> position and holds
+      only transforms — there are no pretrained weights here and there will not be.
+      <code>Normalize</code> takes per-channel mean and standard deviation, and
+      <code>Compose</code> chains transforms in order.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        vision.manualSeed(0);
+
+        // A 2x2 single-channel image, values 0..1 as ToTensor would give them.
+        const img = vision.image([0, 0.25, 0.5, 1], 2, 2, 1);
+
+        const tf = new vision.Compose([
+          new vision.ToTensor(),
+          new vision.Normalize([0.5], [0.5]),   // (x - 0.5) / 0.5  →  -1..1
+        ]);
+
+        const out = tf.apply(img);
+        log("shape:", JSON.stringify(out.shape));
+        log("values:", Array.from(await out.toArray()).map((v) => v.toFixed(2)).join(", "));
+        log("");
+        log("describe:", tf.describe());
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Augmentation is measured, not assumed.</strong> On the CIFAR ResNet-18
+      benchmark this repository reports 64.6% with augmentation on and 59.3% with it off,
+      and both numbers are stated because the second one is worse than the sister
+      implementation's. A number quoted without its condition is not a number.
+    </div>
+
+    <div class="pager">
+      <a href="06-save-load.html">← 6 · Saving & Python</a>
+      <a href="08-debugging.html" style="text-align:right">Next<b>8 · Debugging</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>

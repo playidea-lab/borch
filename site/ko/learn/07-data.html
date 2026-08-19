@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7 · 데이터 — borch 배우기</title>
+<meta name="description" content="데이터셋과 배치·섞기, 그리고 이미지에 거는 변환.">
+<link rel="alternate" hreflang="en" href="../../learn/07-data.html">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../../learn/07-data.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+      <a href="07-data.html" class="on">7 · 데이터</a>
+      <a href="08-debugging.html">8 · 디버깅</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 7</p>
+    <h1>데이터</h1>
+    <p class="lead">
+      진짜 학습은 배치로 읽고, 섞고, 검증용을 떼어 둔다. 이름은 torch 의 것이다 —
+      <code>TensorDataset</code>·<code>DataLoader</code>·<code>randomSplit</code> 이
+      <code>data</code> 아래 있고, 그 자리가 <code>torch.utils.data</code> 다.
+    </p>
+
+    <h2>데이터셋과 로더</h2>
+    <p>
+      <code>TensorDataset</code> 은 첫 축이 같은 텐서들을 받아 한 줄씩 돌려준다.
+      <code>DataLoader</code> 가 그것을 배치로 묶고, 순회할 수 있다 —
+      <code>for (const [x, y] of loader)</code> 가 파이썬과 같은 모양으로 읽힌다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const x = keepAlive(Tensor.arange(20).reshape([10, 2]));
+        const y = keepAlive(Tensor.arange(10).reshape([10, 1]));
+
+        const set = new data.TensorDataset(x, y);
+        log("줄 수:", set.length);
+
+        const loader = new data.DataLoader(set, { batchSize: 4, shuffle: false });
+        log("배치 수:", loader.length);
+
+        for (const [bx, by] of loader) {
+          log(`x ${JSON.stringify(bx.shape)}  y ${JSON.stringify(by.shape)}` +
+              `   첫 줄: ${Array.from(await bx.at(0).toArray()).join(",")}`);
+        }
+      </script>
+    </div>
+
+    <h2>섞기, 그리고 마지막 짧은 배치</h2>
+    <p>
+      <code>shuffle</code> 은 에폭마다 순서를 바꾼다. <code>dropLast</code> 는 남는
+      것을 어떻게 할지 정한다 — 남기면 마지막 배치가 작아지고, 모델 어딘가가 배치
+      크기를 고정으로 가정하는 순간 그것이 문제가 된다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const set = new data.TensorDataset(keepAlive(Tensor.arange(10).reshape([10, 1])));
+
+        for (const dropLast of [false, true]) {
+          const loader = new data.DataLoader(set, { batchSize: 4, shuffle: true, dropLast });
+          const sizes = [];
+          for (const [batch] of loader) sizes.push(batch.shape[0]);
+          log(`dropLast ${String(dropLast).padEnd(5)} → 배치 ${sizes.join(", ")}`);
+        }
+      </script>
+    </div>
+
+    <h2>떼어 두기</h2>
+    <p>
+      <code>randomSplit</code> 은 같은 데이터를 가리키는 뷰를 준다 — 복사가 아니다.
+      학습에 쓴 줄로 잰 수를 보고하는 것이 틀리면서 맞다고 느끼는 가장 흔한 길이다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const set = new data.TensorDataset(keepAlive(Tensor.arange(100).reshape([100, 1])));
+        const [train, val] = data.randomSplit(set, [80, 20]);
+
+        log("학습:", train.length, " 검증:", val.length);
+        log("검증 앞 다섯 자리:", val.indices.slice(0, 5).join(", "));
+
+        const loader = new data.DataLoader(train, { batchSize: 32, shuffle: true });
+        log("에폭당 학습 배치:", loader.length);
+      </script>
+    </div>
+
+    <h2>이미지</h2>
+    <p>
+      <code>vision</code> 이 <code>torchvision.transforms</code> 자리이고 변환만 있다 —
+      사전학습 가중치는 여기 없고 앞으로도 없다. <code>Normalize</code> 는 채널별
+      평균과 표준편차를 받고, <code>Compose</code> 가 순서대로 잇는다.
+    </p>
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        vision.manualSeed(0);
+
+        // 2x2 한 채널 이미지. 값은 ToTensor 가 주는 것과 같은 0..1 이다.
+        const img = vision.image([0, 0.25, 0.5, 1], 2, 2, 1);
+
+        const tf = new vision.Compose([
+          new vision.ToTensor(),
+          new vision.Normalize([0.5], [0.5]),   // (x - 0.5) / 0.5  →  -1..1
+        ]);
+
+        const out = tf.apply(img);
+        log("모양:", JSON.stringify(out.shape));
+        log("값:", Array.from(await out.toArray()).map((v) => v.toFixed(2)).join(", "));
+        log("");
+        log("describe:", tf.describe());
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>늘리기는 가정이 아니라 실측이다.</strong> CIFAR ResNet-18 벤치에서 이
+      저장소는 늘리기를 켠 64.6% 와 끈 59.3% 를 **둘 다** 적는다. 두 번째 수가 자매
+      구현보다 낮기 때문에 더더욱 적는다. 조건 없이 인용된 수는 수가 아니다.
+    </div>
+
+    <div class="pager">
+      <a href="06-save-load.html">← 6 · 저장과 파이썬</a>
+      <a href="08-debugging.html" style="text-align:right">다음<b>8 · 디버깅</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>

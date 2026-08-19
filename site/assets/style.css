@@ -605,6 +605,11 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   color: var(--fg); font: 600 .76rem/1 var(--sans); cursor: pointer;
 }
 .runnable-head button.go { background: var(--ember); border-color: var(--ember); color: #180a02; }
+.runnable-head a.open {
+  color: var(--fg-faint); text-decoration: none;
+  font: 500 .74rem/1 var(--sans); padding: .3rem 0;
+}
+.runnable-head a.open:hover { color: var(--ember); }
 .runnable-head button:hover { filter: brightness(1.08); }
 .runnable-head button[disabled] { opacity: .5; cursor: not-allowed; }
 

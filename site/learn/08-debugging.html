@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8 · Debugging — borch Learn</title>
+<meta name="description" content="Validation errors, held memory, and telling a real GPU from a software one.">
+<link rel="alternate" hreflang="ko" href="../ko/learn/08-debugging.html">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">Learn</a>
+      <a href="../api/">API</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/browsertorch">GitHub</a>
+      <a href="../ko/learn/08-debugging.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Learn</h4>
+    <nav>
+      <a href="./">Overview</a>
+      <a href="01-tensors.html">1 · Tensors</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · Modules</a>
+      <a href="04-training.html">4 · Training</a>
+      <a href="05-cnn.html">5 · Convolution</a>
+      <a href="06-save-load.html">6 · Saving &amp; Python</a>
+      <a href="07-data.html">7 · Data</a>
+      <a href="08-debugging.html" class="on">8 · Debugging</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Learn · 8</p>
+    <h1>Debugging</h1>
+    <p class="lead">
+      WebGPU fails quietly. It does not throw on a bad pipeline — it discards the command
+      buffer and hands you numbers that are merely wrong. This lesson is the set of
+      questions you can ask the device, and every one of them exists because something
+      here went wrong silently first.
+    </p>
+
+    <h2>Is this a real GPU?</h2>
+    <p>
+      A headless browser will hand you a software rasterizer, and it is still an adapter,
+      so nothing throws. Timings measured there belong to the rasterizer, not to this
+      library. <code>probe()</code> answers before anything is initialised and separates
+      "the browser has no WebGPU" from "the driver refused".
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        const found = await probe();
+        log("ok:", found.ok);
+        log(found.ok ? `adapter: ${found.adapter}` : `why: ${found.why} — ${found.message}`);
+
+        await init();
+        log("");
+        log("adapter :", Device.adapterInfo);
+        log("features:", Device.adapterFeatures || "(none reported)");
+        log("");
+        log("If that name mentions llvmpipe, SwiftShader or 'software',");
+        log("any millisecond you measure here is that rasterizer's number.");
+      </script>
+    </div>
+
+    <h2>Did the GPU reject anything?</h2>
+    <p>
+      Validation errors arrive on an event, not as exceptions. The device counts them and
+      keeps the first message, because a broken shader repeats its error on every
+      subsequent dispatch and scrolls the real cause off the screen. A benchmark once
+      reported milliseconds per step while holding an invalid command buffer — that
+      number was not a measurement, it was the wall clock of a model that was not learning.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Linear(8, 1);
+        const x = keepAlive(Tensor.randn([4, 8]));
+        await scope(async () => { await model.call(x).sum().item(); });
+
+        const faults = device().faults;
+        log("validation errors:", faults.count);
+        if (faults.count) log("first:", faults.first);
+        log("device still alive:", device().alive);
+        log("device lost:", device().lost ? JSON.stringify(device().lost) : "no");
+      </script>
+    </div>
+
+    <h2>What is it holding?</h2>
+    <p>
+      Two different questions, so two numbers. <code>memory</code> asks "is this leaking"
+      and deliberately excludes the pool; <code>pooled</code> asks "how large is the
+      footprint" and counts what is waiting to be reused. The pool grows when shapes
+      change — buffers are kept per size, so batch 16's cannot serve batch 32.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        const model = new nn.Linear(64, 64);
+        const show = (label) => {
+          const m = device().memory, p = device().pooled;
+          log(`${label.padEnd(22)} live ${String(m.tensors).padStart(4)} tensors ` +
+              `${(m.bytes / 1024).toFixed(0).padStart(6)} KB   pool ${String(p.count).padStart(3)} ` +
+              `${(p.bytes / 1024).toFixed(0).padStart(6)} KB`);
+        };
+
+        show("at the start");
+
+        // Same shape every step: the pool settles at the working set.
+        for (const batch of [8, 8, 8]) {
+          const x = keepAlive(Tensor.randn([batch, 64]));
+          await scope(async () => { await model.call(x).sum().item(); });
+        }
+        show("after 3 steps of 8");
+
+        // A different shape cannot reuse those buffers.
+        const wide = keepAlive(Tensor.randn([64, 64]));
+        await scope(async () => { await model.call(wide).sum().item(); });
+        show("after one step of 64");
+
+        const freed = device().emptyCache();
+        log("");
+        log(`emptyCache freed ${freed.count} buffers, ${(freed.bytes / 1024).toFixed(0)} KB`);
+      </script>
+    </div>
+
+    <h2>Did a gradient actually flow?</h2>
+    <p>
+      The trap that value-comparing tests cannot see: an operation returns the right
+      numbers and quietly drops the gradient. Both <code>roll</code> and
+      <code>maskedSelect</code> were cut that way on the GPU path while the golden table
+      was entirely green. Asking is cheap — run backward and look at whether
+      <code>.grad</code> arrived at all.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const check = (label, build) => {
+          const x = Tensor.from([1, 2, 3, 4], [4], { requiresGrad: true });
+          build(x).sum().backward();
+          const arrived = x.grad !== null;
+          log(`${label.padEnd(14)} gradient ${arrived ? "arrived" : "DID NOT ARRIVE"}`);
+        };
+
+        check("mul", (x) => x.mul(Tensor.full([], 3)));
+        check("relu", (x) => x.relu());
+        check("reshape", (x) => x.reshape([2, 2]));
+        check("roll", (x) => x.roll(1));
+        log("");
+        log("53 of the conformance cases ask only this question.");
+        log("Values alone cannot answer it — a cut graph still returns the right numbers.");
+      </script>
+    </div>
+
+    <h2>Errors say what torch says</h2>
+    <p>
+      When borch refuses, it refuses with the message torch uses, so the phrase you would
+      paste into a search engine is the same one. That equivalence is tested: 12 error
+      cases and 9 searchable messages.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const shouldFail = (label, body) => {
+          try {
+            body();
+            log(`${label.padEnd(24)} did NOT fail — that is worth knowing`);
+          } catch (err) {
+            log(`${label.padEnd(24)} ${err.constructor.name}: ${err.message.slice(0, 70)}`);
+          }
+        };
+
+        shouldFail("shapes that cannot mul", () =>
+          Tensor.randn([2, 3]).mm(Tensor.randn([4, 5])));
+        shouldFail("index out of range", () =>
+          Tensor.arange(3).at(7));
+        shouldFail("grad on an int tensor", () =>
+          Tensor.from([1, 2], [2], { dtype: "int64", requiresGrad: true }));
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>Where this leaves you.</strong> Green is not the same as correct, and this
+      repository keeps a list of seven places where a passing test could still be lying —
+      it is in the README under "초록색이 거짓일 수 있는 일곱 자리". The device counters
+      above exist because three of them were found the hard way.
+    </div>
+
+    <div class="pager">
+      <a href="07-data.html">← 7 · Data</a>
+      <a href="../playground.html" style="text-align:right">Then<b>Playground</b></a>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="../assets/runnable.js"></script>
+<script type="module" src="../assets/apilink.js"></script>
+</body>
+</html>
