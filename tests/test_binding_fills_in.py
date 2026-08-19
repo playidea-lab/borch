@@ -55,8 +55,12 @@ as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
 get_rng_state initial_seed is_contiguous is_distributed is_grad_enabled
 is_inference is_inference_mode_enabled is_storage numpy promote_types
 set_rng_state share_memory_ sparse_dim to_dense tolist typename
-asarray is_nonzero resize_as_ storage_offset type values
+asarray resize_as_ storage_offset type values
 """.split()
+# `is_floating_point`·`is_signed`·`is_nonzero` 가 여기 있었다. 앞의 둘은 "dtype 속성"
+# 으로, 뒤의 하나는 "파이썬 표면" 으로 적혀 있었는데 **셋 다 torch 의 이름이고 저쪽에
+# 없던 것**이다. `dtype::묻는것::` 아홉을 옮기려다 드러났다 — 케이스를 옮기는 일이
+# 이름의 결손을 찾는 방법이기도 하다는 것이 이 세션에서 여러 번 반복됐다.
 
 # **아직 판정 안 한 것들.** 이 검사가 처음 돌면서 한꺼번에 나온 자리이고, 하나하나
 # 두 갈래 중 하나다: borch.ts 에 **다른 철자로 있다**(그러면 결손이 아니다), 또는
@@ -70,9 +74,7 @@ asarray is_nonzero resize_as_ storage_offset type values
 ALIASED = {
     "broadcast_to": "expand",
     "grid_sampler": "gridSample",
-    "is_floating_point": "dtype 속성",
     "is_same_size": "shape 비교",
-    "is_signed": "dtype 속성",
     "max_pool1d_with_indices": "maxPoolWithIndices",
     "moveaxis": "movedim",
     "numel": "size",

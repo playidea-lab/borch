@@ -4660,6 +4660,126 @@ function addDType(out: Map<string, Case>): void {
       }
     }
   }
+  addDTypeKept(out);
+}
+
+/**
+ * **자리만 옮기는 연산은 형을 그대로 둔다** — `dtype::자리만::`.
+ *
+ * 경계는 값을 만드는가다. 고르기·자르기·이어붙이기·갈아끼우기는 원래 형이 그대로
+ * 나오고, 셈을 하는 것은 승격 규칙을 따른다.
+ *
+ * 이 표가 없어서 결함이 하나 살아 있었다 — 데이터셋이 `int64` 라벨에서 표본을 꺼내니
+ * `float32` 가 나왔는데 **값이 맞아서** 골든 어디에도 안 걸렸다. 값으로 서로를
+ * 대조하는 것만으로는 이름표가 떨어지는 것을 영원히 못 본다.
+ *
+ * **여태 결속을 통해서만 재고 있었다.** 갭 표가 이 묶음을 "파이썬 서명 이야기" 로
+ * 적어 두었는데 그것은 이웃한 `공장::`·`별칭::` 의 사정이었고, 이쪽은 `t.dtype` 하나만
+ * 묻는 순수한 이쪽 성질이다.
+ */
+function addDTypeKept(out: Map<string, Case>): void {
+  const ints = (): Tensor => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => i), [3, 4], { dtype: "int64" });
+  const flags = (): Tensor => Tensor.from(
+    Array.from({ length: 12 }, (_, i) => (i % 2 === 0 ? 1 : 0)), [3, 4],
+    { dtype: "bool" });
+  const pick = (): Tensor => Tensor.from([0, 2], [2], { dtype: "int64" });
+  const spread = (): Tensor => Tensor.from(
+    [0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1, 1], [3, 4], { dtype: "int64" });
+
+  const kept = (fn: (t: Tensor) => Tensor): (t: Tensor) => string =>
+    (t) => {
+      try {
+        return dtypeName(fn(t).dtype);
+      } catch (err) {
+        return `<${err instanceof Error ? err.constructor.name : "?"}>`;
+      }
+    };
+
+  const moves: [string, (t: Tensor) => Tensor][] = [
+    ["reshape", (t) => t.reshape([4, 3])],
+    ["ravel", (t) => t.ravel()],
+    ["squeeze", (t) => t.reshape([1, 12]).squeeze(0)],
+    ["unsqueeze", (t) => t.unsqueeze(0)],
+    ["transpose", (t) => t.swapaxes(0, 1)],
+    ["t", (t) => t.transpose()],
+    ["permute", (t) => t.permute([1, 0])],
+    ["flip", (t) => t.flip(0)],
+    ["select", (t) => t.select(0, 1)],
+    ["narrow", (t) => t.narrow(1, 1, 2)],
+    ["diagonal", (t) => t.diagonal()],
+    ["chunk[0]", (t) => t.chunk(2, 0)[0] ?? t],
+    ["unbind[0]", (t) => t.unbind(0)[0] ?? t],
+    ["tensor_split[0]", (t) => t.tensorSplit(3, 1)[0] ?? t],
+    ["index_select", (t) => t.indexSelect(0, pick())],
+    ["gather", (t) => t.gather(1, spread())],
+    // `take` 는 저쪽에 그 이름이 없다 — 평평하게 편 뒤 고르는 것이 같은 것이다.
+    ["take", (t) => t.reshape([t.size]).indexSelect(0, pick())],
+    ["cat", (t) => Tensor.cat([t, t], 0)],
+    ["stack", (t) => Tensor.stack([t, t], 0)],
+    ["repeat", (t) => t.repeat(2, 1)],
+    ["roll", (t) => t.roll(1, 0)],
+    ["tril", (t) => t.tril()],
+    ["triu", (t) => t.triu()],
+    ["pad", (t) => t.pad(1, 1, 1)],
+    ["as_strided", (t) => t.asStrided([2, 2], [1, 2])],
+    ["diag_embed", (t) => t.diagEmbed()],
+    ["slice_scatter",
+      (t) => t.sliceScatter(Tensor.zeros([3, 2]).to("int64"), 1, 0, 2)],
+    ["select_scatter",
+      (t) => t.selectScatter(Tensor.zeros([4]).to("int64"), 0, 1)],
+    ["scatter", (t) => t.scatterSet(1, spread(), t)],
+    ["sort[0]", (t) => t.sort(1).values],
+  ];
+  for (const [name, fn] of moves) {
+    // **정수와 참거짓 둘 다 묻는다.** 하나만 물으면 "float32 로 떨어뜨리는" 결함이
+    // 나머지 하나에서만 살아남을 수 있다.
+    out.set(`dtype::자리만::${name}(int64)`, () => kept(fn)(ints()));
+    out.set(`dtype::자리만::${name}(bool)`, () => kept(fn)(flags()));
+  }
+  // **`topk` 는 정수만 묻는다.** 참거짓에서는 torch 가 거절하는데 예외 종류가 우리와
+  // 달라, 그것은 형 보존이 아니라 거절 문구의 이야기다.
+  out.set("dtype::자리만::topk[0](int64)",
+    () => kept((t) => t.topk(2, 1).values)(ints()));
+
+  // `maskedSelect` 만 위의 표 밖이다 — **저쪽이 비동기**라서다(결과 길이가 값에
+  // 달렸다). 표에 억지로 끼우면 서른한 줄 전부가 비동기가 된다.
+  for (const [tag, src] of [["int64", ints], ["bool", flags]] as const) {
+    out.set(`dtype::자리만::masked_select(${tag})`, async () => {
+      const t = src();
+      return dtypeName((await t.maskedSelect(t.binary("gt", Tensor.full([], 5)))).dtype);
+    });
+  }
+
+  // ── 묻는 것 셋 — **거짓이 나오는 입력을 먼저 쟀다** ──────────────────
+  //
+  // 늘 참인 술어는 케이스로 물어도 묻는 게 아니다. 셋 다 torch 에서 실제로 거짓이
+  // 나오는 입력이 있고, 그 입력으로 묻는다.
+  const floats = (): Tensor => Tensor.from([1.5, -2.5, 3.0], [3]);
+  const predicates: [string, () => string][] = [
+    ["is_floating_point(float32)", () => verdict(floats().isFloatingPoint())],
+    ["is_floating_point(int64)", () => verdict(ints().isFloatingPoint())],
+    ["is_floating_point(bool)", () => verdict(flags().isFloatingPoint())],
+    ["is_signed(float32)", () => verdict(floats().isSigned())],
+    ["is_signed(int64)", () => verdict(ints().isSigned())],
+    ["is_signed(bool)", () => verdict(flags().isSigned())],
+  ];
+  for (const [label, fn] of predicates) out.set(`dtype::묻는것::${label}`, fn);
+
+  out.set("dtype::묻는것::is_nonzero(0)",
+    async () => verdict(await Tensor.zeros([1]).isNonzero()));
+  out.set("dtype::묻는것::is_nonzero(3)",
+    async () => verdict(await Tensor.full([1], 3).isNonzero()));
+  // 여럿이면 멈춘다 — `if tensor:` 가 조용히 첫 원소를 보는 일을 막는 자리다.
+  out.set("dtype::묻는것::is_nonzero(여럿)은 멈춘다", async () => {
+    try {
+      await floats().isNonzero();
+    } catch (err) {
+      const said = err instanceof Error ? err.message : String(err);
+      return said.includes("ambiguous") ? "멈췄다" : `다른 문구 <${said}>`;
+    }
+    return "안 던졌다";
+  });
 }
 
 /**

@@ -9674,7 +9674,16 @@ def dtype_cases(inp=None):
         ("roll", lambda L, t: t.roll(1, 0)),
         ("tril", lambda L, t: t.tril()),
         ("triu", lambda L, t: t.triu()),
-        ("pad", lambda L, t: F(L).pad(t, (1, 1))),
+        # **이 줄이 오래 죽어 있었다.** `F` 는 다른 다섯 함수 안에만 있는 지역
+        # 헬퍼라 여기서는 `NameError` 가 났고, `outcome` 이 그것을 잡아
+        # `<NameError>` 를 냈다. 골든이 그 값을 정답으로 굳혔고 **셋 다 같은
+        # 파이썬 줄을 지나므로 셋 다 그 값을 내서 표는 초록이었다** — `pad` 는
+        # 한 번도 안 불렸다.
+        #
+        # 셋이 서로를 대조해도 안 걸린 것은, 케이스 본문이 셋에게 **같은 것 하나**
+        # 이기 때문이다. borch.ts 쪽 본문을 TypeScript 로 따로 쓰자 그 자리에서
+        # 바로 드러났다 — 본문이 둘이 되는 것이 이 표의 값어치다.
+        ("pad", lambda L, t: L.nn.functional.pad(t, (1, 1))),
         ("as_strided", lambda L, t: L.as_strided(t, (2, 2), (1, 2))),
         ("diag_embed", lambda L, t: L.diag_embed(t)),
         ("slice_scatter",

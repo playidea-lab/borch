@@ -6991,6 +6991,35 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.drawInto_((u) => from + Math.floor(u * (high - from)));
   }
 
+  /**
+   * 실수 형인가. **묻는 값이 아니라 형이다** — 값이 전부 정수여도 참일 수 있다.
+   *
+   * `dtype` 을 보면 알 수 있지만 그 이름이 torch 에 있고 여기 없었다. 결속이 그
+   * 갈래를 파이썬에서 적고 있었고, 그러면 TypeScript 쪽에는 물을 자리가 없다.
+   */
+  isFloatingPoint(): boolean {
+    return this.dtype === "float32";
+  }
+
+  /** 음수를 담을 수 있는 형인가. `bool` 만 거짓이다. */
+  isSigned(): boolean {
+    return this.dtype !== "bool";
+  }
+
+  /**
+   * 원소 하나짜리인데 그 값이 0 이 아닌가.
+   *
+   * **여럿이면 멈춘다.** 파이썬의 `if tensor:` 가 조용히 첫 원소를 보는 일을 막는
+   * 자리이고, torch 가 그래서 이 이름을 따로 둔다. 값을 봐야 하므로 비동기다.
+   */
+  async isNonzero(): Promise<boolean> {
+    if (this.size !== 1) {
+      throw new RuntimeError(
+        `Boolean value of Tensor with ${this.size} elements is ambiguous`);
+    }
+    return (await this.item()) !== 0;
+  }
+
   fullLike(value: number): Tensor {
     return Tensor.full(this.shape, value);
   }
