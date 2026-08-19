@@ -10,7 +10,7 @@ torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코�
 축소판이 진짜와 조금이라도 다르게 동작하면 학생은 거짓을 배운다. 그래서
 **없는 것은 근사하지 않고 예외를 던진다.** 조용히 다른 값을 내느니 시끄럽게 멈춘다.
 
-지원 범위 밖을 만나면 `BrowserTorchError` 가 나고, 메시지가 "자기 컴퓨터에서 하라"고 말한다.
+지원 범위 밖을 만나면 `BorchError` 가 나고, 메시지가 "자기 컴퓨터에서 하라"고 말한다.
 
 ## 어떻게 보장하는가
 
@@ -33,7 +33,7 @@ import math as _math
 import numpy as _np
 
 from ._base import (
-    BrowserTorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
+    BorchError, Size, _DEFAULT_DTYPE, _LINE_WIDTH, _NP_TO_DTYPE,
     _PRINT_PRECISION, __all__, _float_formatter, _like_torch, _resolve, _tensor_repr,
     _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
     bfloat16, chalf, complex32, float16, half, int16, int32, long,

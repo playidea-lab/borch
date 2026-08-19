@@ -23,7 +23,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import borch
-from borch._base import BrowserTorchError
+from borch._base import BorchError
 from borch._serialize import dump, encode, parse
 
 
@@ -35,7 +35,7 @@ def test_save_refuses_integers_float32_cannot_hold_exactly():
     # 2^24 를 넘는 정수는 f32 에서 이웃한 값과 구별되지 않는다. 몸이 f32 인 것은
     # borch.ts 가 읽을 수 있게 하려는 선택이므로, 그 대가를 조용히 치르면 안 된다.
     big = borch.tensor(np.array([2 ** 24 + 1], dtype=np.int64))
-    with pytest.raises(BrowserTorchError, match="정수가 너무 큽니다"):
+    with pytest.raises(BorchError, match="정수가 너무 큽니다"):
         borch.save({"labels": big}, _tmp("big.bin"))
 
 
@@ -48,13 +48,13 @@ def test_save_accepts_integers_at_the_exact_boundary():
 
 def test_save_refuses_an_object_the_format_cannot_hold():
     # pickle 은 아무거나 담았다. 이 형식은 못 담고, 못 담는 것은 말해야 한다.
-    with pytest.raises(BrowserTorchError, match="저장할 수 없습니다"):
+    with pytest.raises(BorchError, match="저장할 수 없습니다"):
         borch.save({"fn": len}, _tmp("obj.bin"))
 
 
 def test_save_refuses_complex():
     z = borch.tensor(np.array([1 + 2j], dtype=np.complex64))
-    with pytest.raises(BrowserTorchError, match="복소수"):
+    with pytest.raises(BorchError, match="복소수"):
         borch.save({"z": z}, _tmp("z.bin"))
 
 
@@ -62,7 +62,7 @@ def test_save_refuses_two_paths_that_flatten_to_one_name():
     # `{"a": {"b": t}}` 와 `{"a.b": t}` 는 같은 이름으로 펴진다. 하나가 다른 하나를
     # 덮으면 되돌릴 때 두 자리가 같은 값을 갖는데, 그것은 예외보다 나쁘다.
     t = borch.tensor(np.zeros(2, dtype=np.float32))
-    with pytest.raises(BrowserTorchError, match="두 번 나옵니다"):
+    with pytest.raises(BorchError, match="두 번 나옵니다"):
         borch.save({"a": {"b": t}, "a.b": t}, _tmp("dup.bin"))
 
 
@@ -98,7 +98,7 @@ def test_load_ignores_weights_only_and_map_location():
 def test_load_refuses_an_argument_it_does_not_know():
     path = _tmp("kw2.bin")
     borch.save({"w": borch.tensor(np.ones(2, dtype=np.float32))}, path)
-    with pytest.raises(BrowserTorchError, match="모르는 인자"):
+    with pytest.raises(BorchError, match="모르는 인자"):
         borch.load(path, pickle_module=None)
 
 
@@ -116,14 +116,14 @@ def test_a_foreign_safetensors_reads_as_a_flat_dict():
 def test_a_truncated_file_is_refused_not_guessed():
     path = _tmp("short.bin")
     path.write_bytes(b"\x00\x03")
-    with pytest.raises(BrowserTorchError, match="너무 짧습니다"):
+    with pytest.raises(BorchError, match="너무 짧습니다"):
         borch.load(path)
 
 
 def test_a_header_longer_than_the_file_is_refused():
     path = _tmp("liar.bin")
     path.write_bytes((10 ** 6).to_bytes(8, "little") + b"{}")
-    with pytest.raises(BrowserTorchError, match="파일을 넘습니다"):
+    with pytest.raises(BorchError, match="파일을 넘습니다"):
         borch.load(path)
 
 

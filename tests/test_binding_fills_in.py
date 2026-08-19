@@ -134,8 +134,14 @@ def _ts_surface():
     return {_flat(str(name).split(".")[-1]) for name in declared}
 
 
-def _touches_borch_ts(node):
+def _touches_the_ts_side(node):
     """이 함수가 borch.ts 손잡이를 **한 번이라도** 부르는가.
+
+    **이름이 borch.ts 를 밑줄 꼴로 적지 않는다.** 파이썬은 점을 못 쓰므로 그렇게
+    적고 싶어지는데, 그 철자가 곧 은퇴한 파이썬 패키지 이름이라 개명 도구가 그것을
+    결속 이름으로 바꾼다 — 실제로 한 번 바뀌어서, 저쪽을 부르는지 묻는 함수가
+    "결속을 부르는지" 로 읽히게 됐다. **코드는 일관되게 바뀌므로 안 터지고, 틀린
+    것은 뜻뿐이라 아무 검사도 안 운다.** `rename.py` 주석에 같은 이야기가 있다.
 
     부르면 대개 개명이나 조합이다 — `scatter` 는 저쪽 `scatterSet` 이고 `take` 는
     `indexSelect` 다. 그 자리는 TypeScript 쪽에 **다른 철자로 있으므로** 결손이
@@ -163,7 +169,7 @@ def _binding_bodies():
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                out.setdefault(node.name, _touches_borch_ts(node))
+                out.setdefault(node.name, _touches_the_ts_side(node))
     return out
 
 
@@ -208,7 +214,7 @@ def _candidates():
     return found
 
 
-def test_binding_does_not_quietly_fill_in_for_borch_ts():
+def test_binding_does_not_quietly_fill_in():
     """**결속이 채워 넣는 자리는 표에 적힌 것뿐이어야 한다.**
 
     새 이름이 여기서 터지면 두 갈래다. borch.ts 에 넣을 값이 있으면 넣어라 —

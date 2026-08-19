@@ -9,7 +9,7 @@ __all__ = ["Tensor", "tensor", "nn", "optim", "no_grad"]
 _DEFAULT_DTYPE = _np.float32
 
 
-class BrowserTorchError(NotImplementedError):
+class BorchError(NotImplementedError):
     """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
 
 
@@ -23,7 +23,7 @@ def _like_torch(korean: str, torch_phrase: str) -> str:
 
 
 def _unsupported(what: str):
-    raise BrowserTorchError(
+    raise BorchError(
         f"{what} 은(는) 브라우저 축소판에 없습니다.\n"
         "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
         "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다."
@@ -186,7 +186,7 @@ def _resolve(data, dt):
 
 def _no_complex128(what="이 연산"):
     """**배정도 복소수는 만들 수 없다.** `float64` 가 없는 것과 같은 자리다."""
-    raise BrowserTorchError(
+    raise BorchError(
         f"{what} 이(가) complex128 을 만들려 합니다 — 브라우저 축소판에는 "
         "`float64` 가 없고(WGSL 에 `f64` 가 없습니다) 그래서 배정도 복소수도 "
         "없습니다. `complex64` 로 맞추세요.")

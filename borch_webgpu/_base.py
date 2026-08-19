@@ -1023,7 +1023,7 @@ def tensor(data, dtype=None, requires_grad=False):
 # ── 없는 형은 이름째 거절한다 — **코어와 같은 문구로** ────────────────────────
 #
 # 그냥 두면 `AttributeError: borch.ts 텐서에 'half' 이 없다` 가 났다. 코어는
-# `BrowserTorchError: '.half()'(float16) 은(는) 브라우저 축소판에 없습니다` 였고,
+# `BorchError: '.half()'(float16) 은(는) 브라우저 축소판에 없습니다` 였고,
 # 배우는 사람은 그 둘을 보고 **구현마다 다른 것** 으로 읽는다. 값이 아니라 문구를
 # 맞추는 자리이고, 그런 자리는 서로 대조해도 안 걸린다 — 아무도 안 물었기 때문이다.
 _ABSENT_DTYPES = {
@@ -1033,11 +1033,11 @@ _ABSENT_DTYPES = {
 
 
 def _absent_dtype(name, shown):
-    # 예외 **종류**도 같아야 한다 — 코어의 `BrowserTorchError` 를 빌려온다.
+    # 예외 **종류**도 같아야 한다 — 코어의 `BorchError` 를 빌려온다.
     # 브라우저에서는 `borch` 도 `/work` 아래 있으므로 늦게 들여오면 된다
     # (`_core_repr` 이 같은 방식이다).
-    from borch._base import BrowserTorchError
-    raise BrowserTorchError(
+    from borch._base import BorchError
+    raise BorchError(
         f"`.{name}()`({shown}) 은(는) 브라우저 축소판에 없습니다.\n"
         "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
         "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.")

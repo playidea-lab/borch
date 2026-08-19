@@ -135,7 +135,7 @@ RuntimeError: 행렬곱의 모양이 안 맞습니다 (3x4 @ 3x2) — 앞의 열
 (torch: mat1 and mat2 shapes cannot be multiplied (3x4 and 3x2))
 
 >>> torch.nn.LSTM(2, 2)
-BrowserTorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
+BorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
 자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — 축소판은 문법 연습용이고,
 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.
 ```

@@ -493,7 +493,7 @@ def compare(case):
         return None, f"진짜 torch 가 실패: {type(exc).__name__}"
     try:
         n = case.run_nano()
-    except nano.BrowserTorchError as exc:
+    except nano.BorchError as exc:
         return False, f"미지원: {str(exc).splitlines()[0]}"
     except Exception as exc:                                        # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
@@ -513,7 +513,7 @@ def compare(case):
             ok, why = compare_grad(case)
             if not ok:
                 return False, f"기울기: {why}"
-        except nano.BrowserTorchError as exc:
+        except nano.BorchError as exc:
             return False, f"기울기 미지원: {str(exc).splitlines()[0]}"
         except Exception as exc:                                    # noqa: BLE001
             return False, f"기울기 {type(exc).__name__}: {exc}"

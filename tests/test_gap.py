@@ -121,7 +121,7 @@ def test_skipped_does_not_claim_what_we_actually_do():
 
     `q_scale`·`int_repr` 처럼 **거절하려고 이름만 둔** 자리가 있다. 그쪽은 사유가
     여전히 참이다. `hasattr` 로 가르면 그것까지 걸리므로 **불러 본다** — 우리 거절은
-    인자와 무관하게 `BrowserTorchError` 로 멈추므로 그것으로 가른다.
+    인자와 무관하게 `BorchError` 로 멈추므로 그것으로 가른다.
 
     못 불러 본 이름은 **판정하지 않는다.** 모르는 것을 아는 척하면 이 표가 다시
     거짓말을 시작한다.
@@ -129,7 +129,7 @@ def test_skipped_does_not_claim_what_we_actually_do():
     import numpy as np
 
     import borch
-    from borch import BrowserTorchError
+    from borch import BorchError
 
     probe = borch.tensor(np.array([1.0, 2.0], dtype=np.float32))
 
@@ -139,7 +139,7 @@ def test_skipped_does_not_claim_what_we_actually_do():
         for args in ((), (probe,), (probe, probe)):
             try:
                 fn(*args)
-            except BrowserTorchError:
+            except BorchError:
                 return False
             except TypeError:
                 seen_type_error = True

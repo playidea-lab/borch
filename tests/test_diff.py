@@ -987,7 +987,7 @@ def test_unsupported_raises_loudly(call):
     이 목록은 지원 범위가 늘 때마다 줄어들었고, 그때마다 낡은 채로 남아 두 번 깨졌다.
     그래서 지금은 **브라우저에 존재할 수 없는 것만** 남긴다 — 늘어날 일이 없는 항목들이다.
     """
-    with pytest.raises(bt.BrowserTorchError):
+    with pytest.raises(bt.BorchError):
         call()
 
 
@@ -1001,7 +1001,7 @@ def test_sspaddmm_refuses_because_there_is_no_sparse():
     조밀 텐서로 흉내 내면 **모양은 맞고 저장 방식이 다른** 것을 주게 되고, 그것을
     배운 사람은 희소가 무엇인지 잘못 안다.
     """
-    with pytest.raises(bt.BrowserTorchError):
+    with pytest.raises(bt.BorchError):
         bt.sspaddmm(bt.zeros(2, 4), bt.zeros(2, 3), bt.zeros(3, 4))
 
 

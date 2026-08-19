@@ -7636,7 +7636,7 @@ def ndim_cases(inp=None):
     """1차원·3차원 계열. **자매에는 있고 코어에는 거절 stub 이던 자리다.**
 
     비대칭이 이 프로젝트의 약속과 정면으로 어긋났다 — "임포트만 바꾸면 같은 코드"인데,
-    자매에서 돌던 `nn.Conv1d` 가 코어에서 `BrowserTorchError` 로 멈췄다. 이 표가 그
+    자매에서 돌던 `nn.Conv1d` 가 코어에서 `BorchError` 로 멈췄다. 이 표가 그
     비대칭이 다시 벌어지는 것을 막는다.
     """
     inp = golden_inputs() if inp is None else inp

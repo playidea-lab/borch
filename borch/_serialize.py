@@ -42,7 +42,7 @@ import pathlib as _pathlib
 
 import numpy as _np
 
-from ._base import BrowserTorchError
+from ._base import BorchError
 from ._tensor import Tensor
 
 # safetensors 가 정한 자리. 머리 길이를 적는다.
@@ -70,12 +70,12 @@ def _labelled_dtype(array):
 def _as_f32(name, array):
     """몸에 실을 float32 배열. **정수가 안 담기면 거절한다.**"""
     if _np.issubdtype(array.dtype, _np.complexfloating):
-        raise BrowserTorchError(
+        raise BorchError(
             f"'{name}' 이 복소수다 — 아직 저장 못 한다.\n"
             "`view_as_real()` 로 실수 짝을 저장하고 읽을 때 `view_as_complex()` 로 되돌리세요.")
     if _np.issubdtype(array.dtype, _np.integer) and array.size:
         if int(_np.abs(array).max()) > _EXACT_INT:
-            raise BrowserTorchError(
+            raise BorchError(
                 f"'{name}' 의 정수가 너무 큽니다 — 이 형식의 몸은 float32 입니다.\n"
                 f"{_EXACT_INT} 를 넘는 정수는 저장하면 이웃한 값으로 바뀝니다. "
                 "조용히 반올림된 체크포인트는 나중에 원인을 못 찾으므로 여기서 멈춥니다.")
@@ -120,16 +120,16 @@ def encode(tensors, metadata=None):
 def decode(blob):
     """바이트를 `({이름: 배열}, 메타데이터)` 로. **깨진 파일은 조용히 안 지난다.**"""
     if len(blob) < _LENGTH_FIELD:
-        raise BrowserTorchError(f"체크포인트가 너무 짧습니다: {len(blob)} 바이트")
+        raise BorchError(f"체크포인트가 너무 짧습니다: {len(blob)} 바이트")
     head_len = int.from_bytes(blob[:_LENGTH_FIELD], "little")
     body_at = _LENGTH_FIELD + head_len
     if body_at > len(blob):
-        raise BrowserTorchError(
+        raise BorchError(
             f"머리 길이가 파일을 넘습니다: {head_len} (파일 {len(blob)})")
     try:
         header = _json.loads(blob[_LENGTH_FIELD:body_at].decode("utf-8"))
     except Exception as exc:                                    # noqa: BLE001
-        raise BrowserTorchError("체크포인트 머리가 JSON 이 아닙니다") from exc
+        raise BorchError("체크포인트 머리가 JSON 이 아닙니다") from exc
 
     metadata = header.get("__metadata__") or {}
     tensors = {}
@@ -138,7 +138,7 @@ def decode(blob):
             continue
         begin, end = entry["data_offsets"]
         if begin > end or body_at + end > len(blob):
-            raise BrowserTorchError(
+            raise BorchError(
                 f"'{name}' 의 자리가 파일을 넘습니다: [{begin}, {end}]")
         shape = tuple(entry["shape"])
         flat = _np.frombuffer(blob, dtype=_np.float32,
@@ -148,7 +148,7 @@ def decode(blob):
         for dim in shape:
             want *= dim
         if flat.size != want:
-            raise BrowserTorchError(
+            raise BorchError(
                 f"'{name}' 의 몸이 모양과 안 맞습니다: {flat.size} 대 {want}")
         array = flat.reshape(shape).copy()
         label = metadata.get(_DTYPE_KEY + name)
@@ -175,7 +175,7 @@ def _flatten(obj, path, tensors, seen, to_array):
         if name in seen:
             # 서로 다른 자리가 같은 이름으로 펴졌다. 하나가 다른 하나를 덮으면
             # 되돌릴 때 두 자리가 같은 값을 갖는데, 그것은 예외보다 나쁘다.
-            raise BrowserTorchError(
+            raise BorchError(
                 f"'{name}' 이 두 번 나옵니다 — 편 이름이 겹쳐서 저장할 수 없습니다.")
         seen.add(name)
         tensors[name] = to_array(obj)
@@ -191,7 +191,7 @@ def _flatten(obj, path, tensors, seen, to_array):
                       for i, v in enumerate(obj)]}
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return {"t": "j", "v": obj}
-    raise BrowserTorchError(
+    raise BorchError(
         f"{type(obj).__name__} 은(는) 저장할 수 없습니다 — 텐서·사전·목록·수·글자만 됩니다.\n"
         "이 형식은 pickle 이 아니라서 임의의 파이썬 객체를 못 담습니다.")
 
@@ -237,7 +237,7 @@ def parse(where, make, **kw):
     kw.pop("weights_only", None)
     kw.pop("map_location", None)
     if kw:
-        raise BrowserTorchError(f"load 가 모르는 인자입니다: {', '.join(sorted(kw))}")
+        raise BorchError(f"load 가 모르는 인자입니다: {', '.join(sorted(kw))}")
     path, handle = _open_bytes(where)
     blob = handle.read() if handle is not None else path.read_bytes()
     tensors, metadata = decode(blob)

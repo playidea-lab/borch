@@ -30,9 +30,42 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # **밑줄과 붙임표와 점은 다른 것이다.** `borch_ts`(파이썬 패키지)만 바뀌고
 # `borch-ts`(TypeScript 디렉토리)와 `borch.ts`(글에서 부르는 이름)는 그대로 남는다.
 # 이 셋이 눈으로는 비슷해 보이는 것이 애초에 이 개명을 부른 이유다.
+#
+# **그래서 은퇴한 토큰을 새 이름에 쓰면 안 된다.** 파이썬은 점을 못 쓰므로 사람이
+# `borch.ts` 를 식별자로 적을 때 `borch_ts` 라고 쓰게 되는데, 그것이 정확히 은퇴한
+# 패키지 이름이다. 실제로 `_touches_borch_ts`(borch.ts 를 부르는가)가 이 도구를 지나
+# `_touches_borch_webgpu`(결속을 부르는가)가 됐다 — **코드는 일관되게 바뀌어 안
+# 터지고, 틀린 것은 뜻뿐이라 아무 검사도 안 운다.** 새 이름에는 `ts` 나 `the_ts_side`
+# 처럼 표에 없는 낱말을 쓴다.
 RULES = [
     ("borch_ts", "borch_webgpu"),
+    # **철자가 다르면 규칙도 따로다.** `browsertorch` → `borch` 를 돌렸을 때 이
+    # 이름은 안 걸렸다 — 규칙이 소문자였고 클래스는 `BrowserTorchError` 였다.
+    # 소문자에는 낱말 경계가 없으므로(`browsertorch`) 도구가 `BrowserTorch` 를
+    # 유추할 길이 없다. 그래서 **자동으로 만들지 않고 여기 적는다**, 그리고 못
+    # 만드는 대신 `RETIRED` 가 남은 자리를 대문자 무시하고 세어 준다.
+    ("BrowserTorch", "Borch"),
 ]
+
+# **다시는 어느 철자로도 나오면 안 되는 이름들.** `RULES` 가 못 잡은 갈래를 여기서
+# 잡는다 — 대소문자를 무시하고 세되 **고치지는 않는다.** 무엇으로 바꿀지는 철자마다
+# 다르고(`BrowserTorchError` 는 `BorchError` 이지 `Borchtorcherror` 가 아니다),
+# 그 판단을 기계가 하면 조용히 이상한 이름이 생긴다.
+#
+# 이 자리가 있는 까닭: 개명을 돌리고 나서 `BrowserTorchError` 가 37 곳에 남아
+# 있었는데 도구는 "바꿀 것이 없다" 고 답했다. **도구 자신의 규칙 밖에서** 일어난
+# 일이라 도구가 못 봤고, 그것이 이 도구가 막으려던 바로 그 일이다.
+RETIRED = ["browsertorch"]
+
+# **옛 이름을 일부러 적는 자리.** 역사를 이야기하는 문장은 옛 이름을 그대로 불러야
+# 한다 — `test_docs.py` 가 "지난 수를 현재 수로 고치는 것은 역사를 위조하는 것" 이라고
+# 적은 것과 같은 자리다. 그것까지 잡으면 검사가 늑대를 부르고, 늑대를 부르는 검사는
+# 꺼진다.
+#
+# 파일마다 **까닭을 적는다.** 적을 까닭이 없으면 그것은 역사가 아니라 잔재다.
+HISTORY = {
+    "tests/test_site.py": "개명 때 사이트 링크가 왜 안 깨진 채 낡았는지를 적은 문장",
+}
 
 # `.claude`·`.mcp.json` 은 이 기계의 설정이지 프로젝트가 아니다 — 저장소 경로가
 # 적혀 있어서 걸리는데, 바꾸면 남의 도구 설정을 건드리는 것이 된다.
@@ -51,6 +84,32 @@ def targets():
         if p.name in SKIP_FILES or SKIP_DIRS & set(p.relative_to(ROOT).parts):
             continue
         yield p
+
+
+def survivors():
+    """은퇴한 이름이 **어느 철자로든** 남아 있는 자리. 세기만 하고 안 고친다.
+
+    `RULES` 를 다 돌린 뒤에도 남는 것이 여기 걸린다. 대소문자를 무시하는 이유는
+    놓치는 갈래가 늘 대소문자였기 때문이다 — 소문자 규칙 하나로 개명을 돌리고
+    `BrowserTorchError` 37 곳을 남긴 것이 그 예다.
+    """
+    found = []
+    for path in targets():
+        if path.relative_to(ROOT).as_posix() in HISTORY:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for old, fresh in RULES:
+            text = text.replace(old, fresh)
+        low = text.lower()
+        spellings = set()
+        for gone in RETIRED:
+            at = low.find(gone)
+            while at != -1:
+                spellings.add(text[at:at + len(gone)])
+                at = low.find(gone, at + 1)
+        if spellings:
+            found.append((path.relative_to(ROOT), spellings))
+    return found
 
 
 def main(argv):
@@ -73,8 +132,19 @@ def main(argv):
     print(f"{verb} — 파일 {len(touched)}개, 자리 {remaining}곳")
     for rel, hits in touched:
         print(f"  {hits:4d}  {rel}")
+
+    left = survivors()
+    if left:
+        print("\n✘ 은퇴한 이름이 남아 있다 — 규칙이 못 잡은 철자다:")
+        for rel, spellings in left:
+            print(f"  {rel}: {' · '.join(sorted(spellings))}")
+        print("  바꿀 이름을 정해 `RULES` 에 철자 그대로 적어라 — 무엇으로 바꿀지는\n"
+              "  철자마다 다르므로 도구가 정하지 않는다.")
+
     # 확인 모드에서 남은 것이 있으면 종료 코드로 알린다 — CI 가 이것을 볼 수 있다.
-    return 1 if (not apply and touched) else 0
+    # **은퇴한 이름은 `--apply` 뒤에도 실패다** — 바꾸지 못한 것이 남았다는 뜻이라
+    # 성공으로 끝내면 그 순간이 정확히 지난번 놓친 자리가 된다.
+    return 1 if left or (not apply and touched) else 0
 
 
 if __name__ == "__main__":
