@@ -1355,7 +1355,7 @@ def div(a, b, rounding_mode=None, **kw):
 
 def floor_divide(a, b, **kw):
     _no_out(kw)
-    return div(a, b, rounding_mode="floor")
+    return wrap(guarded(handle(wrap(a)).floorDivide, handle(wrap(b))))
 
 
 def remainder(a, b, **kw):
@@ -1373,7 +1373,7 @@ def fmod(a, b, **kw):
 
 
 def rsub(a, b, alpha=1, **kw):
-    return sub(b, a, alpha)
+    return wrap(guarded(handle(wrap(a)).rsub, handle(wrap(b)), alpha))
 
 
 def t(x, **kw):
@@ -1383,7 +1383,7 @@ def t(x, **kw):
 
 
 def adjoint(x, **kw):
-    return transpose(x, -2, -1)
+    return wrap(guarded(handle(wrap(x)).adjoint))
 
 
 def moveaxis(x, source, destination, **kw):
@@ -1582,9 +1582,10 @@ def meshgrid(*tensors, indexing="ij"):
 
 
 def lerp(start, end, weight, **kw):
+    """**무게가 텐서일 수 있다** — 자리마다 다르게 간다. 수만 받으면 그 갈래가 없다."""
     _no_out(kw)
-    start, end = wrap(start), wrap(end)
-    return start + (end - start) * weight
+    w = handle(weight) if isinstance(weight, Tensor) else weight
+    return wrap(guarded(handle(wrap(start)).lerp, handle(wrap(end)), w))
 
 
 def _unary(x, name):
@@ -1592,54 +1593,38 @@ def _unary(x, name):
 
 
 def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
-    """NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다.**"""
+    """NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다.**
+
+    **조립이 저쪽으로 갔다.** 여기 있던 동안 그 이름은 borch.ts 에 없었고, 골든이
+    이 함수를 지나므로 표는 초록이었다 — TypeScript 로 쓰는 쪽에만 없는 이름이었다.
+    `tests/test_binding_fills_in.py` 가 그 자리를 센다.
+    """
     _no_out(kw)
-    t = wrap(t)
-    hi = 3.4028234663852886e38 if posinf is None else posinf
-    lo = -3.4028234663852886e38 if neginf is None else neginf
-    # **`where` 는 첫 인자에서 모양을 가져온다.** 스칼라를 거기 넣으면 결과가
-    # 스칼라가 된다 — 채울 값도 같은 모양으로 펴 놓고 넘긴다.
-    shape = _shape_list(t)
-
-    def spread(v):
-        return zeros(*shape) + float(v)
-
-    out = where(_unary(t, "isnan"), spread(nan), t)
-    out = where(isposinf(t), spread(hi), out)
-    return where(isneginf(t), spread(lo), out)
+    return wrap(guarded(handle(wrap(t)).nanToNum, nan, posinf, neginf))
 
 
 def isposinf(t, **kw):
     _no_out(kw)
-    t = wrap(t)
-    return _unary(t, "isinf") * (t > full([], 0.0))
+    return wrap(guarded(handle(wrap(t)).isposinf))
 
 
 def isneginf(t, **kw):
     _no_out(kw)
-    t = wrap(t)
-    return _unary(t, "isinf") * (t < full([], 0.0))
+    return wrap(guarded(handle(wrap(t)).isneginf))
 
 
 def isreal(t, **kw):
     """실수만 있으므로 전부 참이다. **거짓말이 아니라 사실이다.**"""
-    return ones(*_shape_list(t)) > full([], 0.0)
+    return wrap(guarded(handle(wrap(t)).isreal))
 
 
 def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kw):
-    a, b = wrap(a), wrap(b)
-    return _unary(a - b, "abs") <= (wrap(_unary(b, "abs")) * rtol + atol)
+    return wrap(guarded(handle(wrap(a)).isclose, handle(wrap(b)), rtol, atol))
 
 
 def isin(elements, test_elements, **kw):
     """원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다."""
-    e, t = wrap(elements), wrap(test_elements)
-    n = int(handle(e).size)
-    m = int(handle(t).size)
-    grid = (wrap(guarded(handle(e).reshape, _js_list([n, 1])))
-            == wrap(guarded(handle(t).reshape, _js_list([1, m]))))
-    hit = wrap(guarded(handle(grid).to, "float32")).sum(dim=1)
-    return (hit > full([], 0.0)).reshape(*_shape_list(e))
+    return wrap(guarded(handle(wrap(elements)).isin, handle(wrap(test_elements))))
 
 
 def _nan_extreme(name, better):
@@ -1659,13 +1644,13 @@ fmin = _nan_extreme("fmin", "minimum")
 
 def float_power(a, b, **kw):
     _no_out(kw)
-    return wrap(a) ** b
+    e = handle(b) if isinstance(b, Tensor) else b
+    return wrap(guarded(handle(wrap(a)).floatPower, e))
 
 
 def logical_xor(a, b, **kw):
-    """borch.ts 의 이항 표에 없다 — **다름**으로 만든다."""
-    a, b = wrap(a), wrap(b)
-    return (a != full([], 0.0)) != (b != full([], 0.0))
+    """borch.ts 의 **이항 표**에는 없다 — 그쪽이 다름으로 두 번 물어 만든다."""
+    return wrap(guarded(handle(wrap(a)).logicalXor, handle(wrap(b))))
 
 
 # ── 모양·색인 ───────────────────────────────────────────────────────────────

@@ -63,19 +63,38 @@ set_rng_state share_memory_ sparse_dim to_dense tolist typename
 # 수를 얼려 두는 것이 이 목록의 일이다. 새로 생긴 채움은 여기 없으므로 곧바로
 # 터지고, 옛것은 **이름으로** 남아 있어 세다 만 것이 아니라는 게 보인다.
 # 판정한 것은 이 목록에서 빼서 위로 올리거나 borch.ts 에 넣어라.
+# **다른 철자로 저쪽에 있다** — 결손이 아니다. 옆에 borch.ts 쪽 이름을 적어 둔다.
+# 적어 두지 않으면 다음 사람이 같은 확인을 다시 한다.
+ALIASED = {
+    "broadcast_to": "expand",
+    "grid_sampler": "gridSample",
+    "is_floating_point": "dtype 속성",
+    "is_same_size": "shape 비교",
+    "is_signed": "dtype 속성",
+    "max_pool1d_with_indices": "maxPoolWithIndices",
+    "moveaxis": "movedim",
+    "numel": "size",
+    "scatter": "scatterSet",
+    "swapdims": "swapaxes",
+    "take": "indexSelect(평평하게 편 뒤)",
+    "take_along_dim": "gather",
+    "trapz": "trapezoid",
+    "vdot": "vecdot",
+}
+
+# **아직 판정 안 한 것들.** 하나하나 두 갈래 중 하나다: borch.ts 에 다른 철자로
+# 있거나(그러면 `ALIASED` 로), 없거나(그러면 borch.ts 에 넣을 일이다).
+#
+# 수를 얼려 두는 것이 이 목록의 일이다. 새로 생긴 채움은 여기 없으므로 곧바로
+# 터지고, 옛것은 **이름으로** 남아 있어 세다 만 것이 아니라는 게 보인다.
 UNJUDGED = """
-adjoint aminmax asarray block_diag broadcast_tensors broadcast_to cauchy_
-cdist column_stack corrcoef cov dstack embedding empty empty_like
-exponential_ fill_diagonal_ float_power float_power_ floor_divide frombuffer
-full_like geometric_ grid_sampler hstack index_add index_copy index_fill
-is_floating_point is_nonzero is_same_size is_signed isclose isin isneginf
-isposinf isreal kron lerp log_normal_ logical_xor logspace
-max_pool1d_with_indices meshgrid moveaxis nan_to_num nan_to_num_ numel
-randint_like random_ resize_as_ rsub scalar_tensor scatter std_mean swapdims
-take take_along_dim tensordot trapz var_mean vdot vstack
+asarray block_diag broadcast_tensors cauchy_ cdist column_stack corrcoef cov
+dstack embedding empty exponential_ fill_diagonal_ frombuffer geometric_
+hstack index_add index_copy index_fill is_nonzero kron log_normal_ logspace
+meshgrid random_ resize_as_ scalar_tensor tensordot vstack
 """.split()
 
-FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(UNJUDGED)
+FILLED_ON_PURPOSE = set(PYTHON_SIDE) | set(ALIASED) | set(UNJUDGED)
 
 # 결속이 노출하지만 torch 이름이 아닌 것들 — 애초에 후보가 아니다.
 _PRIVATE = re.compile(r"^_")

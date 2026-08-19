@@ -302,6 +302,14 @@ function numel(shape: readonly number[]): number {
 }
 
 /**
+ * float32 가 담을 수 있는 가장 큰 유한한 값.
+ *
+ * `nanToNum` 이 무한대를 여기로 접는다 — torch 도 안 주면 그 형의 끝값을 쓴다.
+ * `Number.MAX_VALUE` 는 배정도의 끝값이라 f32 버퍼에 넣으면 도로 무한대가 된다.
+ */
+const F32_MAX = 3.4028234663852886e38;
+
+/**
  * torch 의 브로드캐스팅 규칙. 오른쪽부터 맞추고, 1 은 늘어나고, 나머지는 같아야 한다.
  */
 export function broadcastShapes(
@@ -6481,6 +6489,147 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       "MaskedScatterBackward0",
       this.dtype,
     );
+  }
+
+  // ── 결속에만 있던 이름들 ─────────────────────────────────────────────
+  //
+  // 아래는 전부 **torch 에 있고, 결속(`borch_webgpu`)이 파이썬에서 조립하고 있던**
+  // 이름이다. 골든 케이스가 결속을 지나므로 표는 초록이었고, 없는 것은 borch.ts 를
+  // TypeScript 에서 쓰는 쪽뿐이었다 — `tests/test_binding_fills_in.py` 가 그 자리를
+  // 세어 준다. 조립 자체는 옳았으므로 셈은 그대로 옮기고, **이름이 사는 자리**만
+  // 바꾼다. 결속은 이제 넘기기만 한다.
+
+  /** `dim` 을 따라 자른 몫을 **버림 나눗셈**으로. 0 쪽이 아니라 −∞ 쪽으로 내린다. */
+  floorDivide(other: Tensor): Tensor {
+    return this.div(other).unary("floor");
+  }
+
+  /**
+   * 거듭제곱. **torch 는 배정도로 올려서 계산한다** — 우리는 그 형이 없다.
+   *
+   * 값은 `pow` 와 같고 형만 다른데, 형이 없으므로 여기서는 같은 것이다. 그래서
+   * `float_power_` 는 torch 도 float32 자리에서 거절한다 — 되쓸 곳이 없어서다.
+   */
+  floatPower(exponent: Tensor | number): Tensor {
+    const k = exponent instanceof Tensor ? exponent : Tensor.full([], exponent);
+    return this.binary("pow", k);
+  }
+
+  /** `other - alpha * this`. 뺄셈의 좌우가 바뀐 자리다. */
+  rsub(other: Tensor, alpha = 1): Tensor {
+    return other.sub(this.mul(Tensor.full([], alpha)));
+  }
+
+  /**
+   * `this` 에서 `end` 로 `weight` 만큼 간 자리.
+   *
+   * **무게가 텐서일 수 있다.** `lerpFrom` 은 수만 받으므로 자리마다 다른 무게를
+   * 못 준다 — torch 는 준다.
+   */
+  lerp(end: Tensor, weight: Tensor | number): Tensor {
+    const w = weight instanceof Tensor ? weight : Tensor.full([], weight);
+    return this.add(end.sub(this).mul(w));
+  }
+
+  /** 배타적 논리합. **이항 표에 없어서** 0 과 다른지를 두 번 물어 만든다. */
+  logicalXor(other: Tensor): Tensor {
+    const zero = Tensor.full([], 0);
+    return this.binary("ne", zero).binary("ne", other.binary("ne", zero));
+  }
+
+  /**
+   * NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다**(torch 와 같다).
+   *
+   * `where` 로 고른다 — 마스크를 곱하면 `0 × NaN = NaN` 이라 걸러 낸 자리가
+   * 통째로 오염된다. 이 저장소가 세 번 물린 자리다.
+   */
+  nanToNum(nan = 0, posinf?: number, neginf?: number): Tensor {
+    const hi = posinf ?? F32_MAX;
+    const lo = neginf ?? -F32_MAX;
+    // **`x.where(조건, 저쪽)` 은 조건이 참일 때 `x` 를 낸다.** 채울 값이 수신자
+    // 자리에 와야 한다 — 반대로 적으면 NaN 자리에 NaN 이 그대로 남는다(실측:
+    // 골든 다섯이 `최대차 inf` 로 갈렸다).
+    const spread = (v: number): Tensor =>
+      Tensor.zeros(this.shape).add(Tensor.full([], v));
+    let out = spread(nan).where(this.unary("isnan"), this);
+    out = spread(hi).where(this.isposinf(), out);
+    return spread(lo).where(this.isneginf(), out);
+  }
+
+  isposinf(): Tensor {
+    return this.unary("isinf").binary("mul", this.binary("gt", Tensor.full([], 0)));
+  }
+
+  isneginf(): Tensor {
+    return this.unary("isinf").binary("mul", this.binary("lt", Tensor.full([], 0)));
+  }
+
+  /** 실수부만 있는가. **복소수가 아니면 전부 참이고, 그것은 사실이다.** */
+  isreal(): Tensor {
+    if (!this.isComplex()) {
+      return Tensor.ones(this.shape).binary("gt", Tensor.full([], 0));
+    }
+    return this.imag().binary("eq", Tensor.full([], 0));
+  }
+
+  /**
+   * 자리마다 **가까운가.** `|a−b| ≤ atol + rtol·|b|` 다.
+   *
+   * **오른쪽으로 기울어 있다** — `b` 의 크기로 재므로 둘을 바꾸면 답이 달라질 수
+   * 있다. torch 가 그렇게 정의한다.
+   */
+  isclose(other: Tensor, rtol = 1e-5, atol = 1e-8): Tensor {
+    const room = other.abs().mul(Tensor.full([], rtol)).add(Tensor.full([], atol));
+    return this.sub(other).abs().binary("le", room);
+  }
+
+  // `allclose` 는 여기 없다 — **이미 아래에 있고 그쪽이 낫다.** 모양을 먼저 보고
+  // `equalNan` 까지 받는다. 짝이라고 나란히 새로 적었다가 중복으로 걸렸다.
+
+  /** 원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다 — 값을 안 읽는다. */
+  isin(test: Tensor): Tensor {
+    const grid = this.reshape([this.size, 1])
+      .binary("eq", test.reshape([1, test.size]));
+    return grid.to("float32").sumDim(1)
+      .binary("gt", Tensor.full([], 0)).reshape(this.shape);
+  }
+
+  /**
+   * 최소와 최대를 **함께.** 하나만 물으면 다른 하나가 틀려도 안 걸린다 — torch 가
+   * 이 이름을 따로 두는 이유가 그것이다.
+   */
+  aminmax(dim?: number, keepdim = false): { min: Tensor; max: Tensor } {
+    return {
+      min: this.amin(dim, keepdim),
+      max: this.amax(dim, keepdim),
+    };
+  }
+
+  /** 표준편차와 평균을 함께. `aminmax` 와 같은 이유로 한 이름이다. */
+  stdMean(correction = 1): { std: Tensor; mean: Tensor } {
+    return { std: this.std(correction), mean: this.mean() };
+  }
+
+  varMean(correction = 1): { variance: Tensor; mean: Tensor } {
+    return { variance: this.variance(correction), mean: this.mean() };
+  }
+
+  /** 마지막 두 축의 켤레 전치. 실수에서는 전치와 같다. */
+  adjoint(): Tensor {
+    return this.isComplex() ? this.conj().swapaxes(-2, -1) : this.swapaxes(-2, -1);
+  }
+
+  fullLike(value: number): Tensor {
+    return Tensor.full(this.shape, value);
+  }
+
+  /** **모양만 빌린다.** torch 와 달리 값을 0 으로 둔다 — 쓰레기를 배우면 안 된다. */
+  emptyLike(): Tensor {
+    return Tensor.zeros(this.shape);
+  }
+
+  randintLike(low: number, high: number): Tensor {
+    return Tensor.randint(low, high, this.shape);
   }
 
   /**

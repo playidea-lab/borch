@@ -3123,12 +3123,183 @@
        }
       },
       {
+       "name": "floorDivide",
+       "signature": "floorDivide(other: Tensor): Tensor",
+       "doc": "`dim` 을 따라 자른 몫을 **버림 나눗셈**으로. 0 쪽이 아니라 −∞ 쪽으로 내린다.",
+       "torch": "floor_divide",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "floatPower",
+       "signature": "floatPower(exponent: Tensor | number): Tensor",
+       "doc": "거듭제곱. **torch 는 배정도로 올려서 계산한다** — 우리는 그 형이 없다.\n\n값은 `pow` 와 같고 형만 다른데, 형이 없으므로 여기서는 같은 것이다. 그래서\n`float_power_` 는 torch 도 float32 자리에서 거절한다 — 되쓸 곳이 없어서다.",
+       "torch": "float_power",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "rsub",
+       "signature": "rsub(other: Tensor, alpha?: number): Tensor",
+       "doc": "`other - alpha * this`. 뺄셈의 좌우가 바뀐 자리다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "lerp",
+       "signature": "lerp(end: Tensor, weight: Tensor | number): Tensor",
+       "doc": "`this` 에서 `end` 로 `weight` 만큼 간 자리.\n\n**무게가 텐서일 수 있다.** `lerpFrom` 은 수만 받으므로 자리마다 다른 무게를\n못 준다 — torch 는 준다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "logicalXor",
+       "signature": "logicalXor(other: Tensor): Tensor",
+       "doc": "배타적 논리합. **이항 표에 없어서** 0 과 다른지를 두 번 물어 만든다.",
+       "torch": "logical_xor",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "nanToNum",
+       "signature": "nanToNum(nan?: number, posinf?: number, neginf?: number): Tensor",
+       "doc": "NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다**(torch 와 같다).\n\n`where` 로 고른다 — 마스크를 곱하면 `0 × NaN = NaN` 이라 걸러 낸 자리가\n통째로 오염된다. 이 저장소가 세 번 물린 자리다.",
+       "torch": "nan_to_num",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "isposinf",
+       "signature": "isposinf(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "isneginf",
+       "signature": "isneginf(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "isreal",
+       "signature": "isreal(): Tensor",
+       "doc": "실수부만 있는가. **복소수가 아니면 전부 참이고, 그것은 사실이다.**",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "isclose",
+       "signature": "isclose(other: Tensor, rtol?: number, atol?: number): Tensor",
+       "doc": "자리마다 **가까운가.** `|a−b| ≤ atol + rtol·|b|` 다.\n\n**오른쪽으로 기울어 있다** — `b` 의 크기로 재므로 둘을 바꾸면 답이 달라질 수\n있다. torch 가 그렇게 정의한다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "isin",
+       "signature": "isin(test: Tensor): Tensor",
+       "doc": "원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다 — 값을 안 읽는다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "aminmax",
+       "signature": "aminmax(dim?: number, keepdim?: boolean): { min: Tensor; max: Tensor; }",
+       "doc": "최소와 최대를 **함께.** 하나만 물으면 다른 하나가 틀려도 안 걸린다 — torch 가\n이 이름을 따로 두는 이유가 그것이다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "stdMean",
+       "signature": "stdMean(correction?: number): { std: Tensor; mean: Tensor; }",
+       "doc": "표준편차와 평균을 함께. `aminmax` 와 같은 이유로 한 이름이다.",
+       "torch": "std_mean",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "varMean",
+       "signature": "varMean(correction?: number): { variance: Tensor; mean: Tensor; }",
+       "doc": "",
+       "torch": "var_mean",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "adjoint",
+       "signature": "adjoint(): Tensor",
+       "doc": "마지막 두 축의 켤레 전치. 실수에서는 전치와 같다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "fullLike",
+       "signature": "fullLike(value: number): Tensor",
+       "doc": "",
+       "torch": "full_like",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "emptyLike",
+       "signature": "emptyLike(): Tensor",
+       "doc": "*모양만 빌린다.** torch 와 달리 값을 0 으로 둔다 — 쓰레기를 배우면 안 된다.",
+       "torch": "empty_like",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "randintLike",
+       "signature": "randintLike(low: number, high: number): Tensor",
+       "doc": "",
+       "torch": "randint_like",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
        "name": "renorm",
        "signature": "renorm(p: number, dim: number, maxnorm: number): Tensor",
        "doc": "`dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.\n\n조립으로 둔다 — **배율 안에 `x` 가 들어 있어서** 역방향이 `g·s` 가 아니다.\n손으로 적으면 순방향만 맞고 기울기가 조용히 틀린다(코어에서 그렇게 한 번 틀렸다).",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3137,8 +3308,8 @@
        "doc": "평평한 번호를 축별 번호로 푼다. **축마다 텐서 하나씩, 묶음으로 낸다**(실측).\n\n셈이 나눗셈과 나머지뿐이라 값을 안 읽는다.",
        "torch": "unravel_index",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3147,8 +3318,8 @@
        "doc": "여러 행렬을 잇달아 곱한다. `multiDot` 이 같은 것을 목록으로 받는다.",
        "torch": "chain_matmul",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3156,8 +3327,8 @@
        "signature": "ger(other: Tensor): Tensor",
        "doc": "바깥곱의 옛 이름. `outer` 와 같은 것이다.",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3165,8 +3336,8 @@
        "signature": "mv(vec: Tensor): Tensor",
        "doc": "행렬 × 벡터. `mm` 이 하는 일이지만 torch 는 이름을 따로 준다.\n\n벡터를 열 하나로 세웠다가 그 축을 도로 지운다 — 결과가 1차원이어야 한다.",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3175,8 +3346,8 @@
        "doc": "",
        "torch": "as_strided_",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3185,8 +3356,8 @@
        "doc": "",
        "torch": "masked_scatter_",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -3195,8 +3366,8 @@
        "doc": "",
        "torch": "index_put_",
        "section": {
-        "ko": "번호표로 읽고 쓰기",
-        "en": "Indexed read and write"
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
        }
       },
       {
@@ -4119,7 +4290,7 @@
      "torch": "make_node"
     }
    ],
-   "count": 457
+   "count": 475
   },
   {
    "name": "nn",
@@ -10268,5 +10439,5 @@
    "count": 9
   }
  ],
- "total": 1437
+ "total": 1455
 }
