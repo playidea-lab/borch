@@ -47,6 +47,7 @@
 
 <nav class="subnav" aria-label="on this page">
   <div class="wrap">
+    <a href="#start">시작</a>
     <a href="#why">왜</a>
     <a href="#how">구조</a>
     <a href="#python">파이썬</a>
@@ -193,7 +194,7 @@
 </section>
 
 <!-- ── 플레이그라운드 ─────────────────────────────────────────────── -->
-<section id="playground">
+<section id="start">
   <div class="wrap">
     <p class="eyebrow">배우기 · 튜토리얼 · API · Playground</p>
     <h2>들어가는 길 넷, 전부 도는 것</h2>
@@ -203,7 +204,7 @@
       셋 다 설치할 것이 없다.
     </p>
 
-    <div class="grid c3" style="margin-top:2rem">
+    <div class="grid c2" style="margin-top:2rem">
       <a class="tile" href="learn/" style="text-decoration:none">
         <span class="icon">◆</span>
         <h3>배우기 — 여덟 강</h3>
@@ -231,28 +232,11 @@
       </a>
     </div>
 
-    <h3 style="margin-top:2.6rem">아니면 예제로 바로</h3>
-
-    <div class="grid c3" style="margin-top:2rem">
-      <a class="tile" href="playground.html#example=tensor" style="text-decoration:none">
-        <h3>1 · 텐서</h3><p class="small">만들고, 더하고, 곱하고, 읽는다.</p>
-      </a>
-      <a class="tile" href="playground.html#example=autograd" style="text-decoration:none">
-        <h3>2 · Autograd</h3><p class="small">backward() 한 번에 기울기가 흐른다.</p>
-      </a>
-      <a class="tile" href="playground.html#example=linreg" style="text-decoration:none">
-        <h3>3 · 선형회귀</h3><p class="small">y = 3x + 2 를 200 스텝에 찾아낸다.</p>
-      </a>
-      <a class="tile" href="playground.html#example=mlp" style="text-decoration:none">
-        <h3>4 · MLP</h3><p class="small">784 → 128 → 10. README 에 적힌 그 코드.</p>
-      </a>
-      <a class="tile" href="playground.html#example=cnn" style="text-decoration:none">
-        <h3>5 · CNN</h3><p class="small">합성곱·풀링·평탄화가 브라우저 GPU 에서.</p>
-      </a>
-      <a class="tile" href="playground.html#example=bench" style="text-decoration:none">
-        <h3>6 · 재보기</h3><p class="small">이 기계의 GPU 가 512×512 행렬곱에 몇 ms 를 쓰나.</p>
-      </a>
-    </div>
+    <p class="small muted" style="margin-top:1.6rem">
+      넷 다 같은 런타임이다. 강의의 블록, 튜토리얼의 블록, 플레이그라운드의 편집기가
+      같은 코드를 돌린다 — 다른 것은 페이지에서 글이 차지하는 몫과 당신이 차지하는
+      몫의 비율뿐이다.
+    </p>
     <p style="margin-top:1.6rem">
       <a class="btn primary" href="learn/">강의 시작 →</a>
       <a class="btn ghost" href="tutorials/">아니면 만들어 보기</a>
@@ -304,20 +288,10 @@ for step in range(201):
       </div>
     </div>
 
-    <div class="grid c3" style="margin-top:1rem">
-      <a class="tile" href="playground.html#example=py-autograd" style="text-decoration:none">
-        <h3>py · Autograd</h3><p class="small">(w - 5)² 의 기울기. await 이 없다.</p>
-      </a>
-      <a class="tile" href="playground.html#example=py-linreg" style="text-decoration:none">
-        <h3>py · 선형회귀</h3><p class="small">torch 학습 루프 그대로.</p>
-      </a>
-      <a class="tile" href="playground.html#example=py-cnn" style="text-decoration:none">
-        <h3>py · CNN</h3><p class="small">합성곱까지 파이썬으로 부른다.</p>
-      </a>
-    </div>
-
     <p class="small muted" style="margin-top:1rem">
-      처음 한 번은 Pyodide 를 올리느라 몇 초 걸린다. 그 뒤로는 바로 돈다.
+      처음 한 번은 Pyodide 를 올리느라 몇 초 걸리고 그 뒤로는 바로 돈다.
+      <a href="tutorials/">튜토리얼 6강</a>과
+      <a href="playground.html#lang=py">플레이그라운드의 파이썬 모드</a>가 거기서 시작한다.
     </p>
   </div>
 </section>

@@ -51,6 +51,7 @@
 
 <nav class="subnav" aria-label="on this page">
   <div class="wrap">
+    <a href="#start">Start</a>
     <a href="#why">Why</a>
     <a href="#how">How it works</a>
     <a href="#python">Python</a>
@@ -198,7 +199,7 @@
 </section>
 
 <!-- ── Playground ─────────────────────────────────────────────────── -->
-<section id="playground">
+<section id="start">
   <div class="wrap">
     <p class="eyebrow">Learn · Tutorials · API · Playground</p>
     <h2>Four ways in, all of them running</h2>
@@ -208,7 +209,7 @@
       counters. Nothing to install for any of them.
     </p>
 
-    <div class="grid c3" style="margin-top:2rem">
+    <div class="grid c2" style="margin-top:2rem">
       <a class="tile" href="learn/" style="text-decoration:none">
         <span class="icon">◆</span>
         <h3>Learn — eight lessons</h3>
@@ -235,28 +236,11 @@
       </a>
     </div>
 
-    <h3 style="margin-top:2.6rem">Or jump straight into an example</h3>
-
-    <div class="grid c3" style="margin-top:2rem">
-      <a class="tile" href="playground.html#example=tensor" style="text-decoration:none">
-        <h3>1 · Tensors</h3><p class="small">Make them, add them, multiply them, read them.</p>
-      </a>
-      <a class="tile" href="playground.html#example=autograd" style="text-decoration:none">
-        <h3>2 · Autograd</h3><p class="small">One backward() and gradients flow.</p>
-      </a>
-      <a class="tile" href="playground.html#example=linreg" style="text-decoration:none">
-        <h3>3 · Linear regression</h3><p class="small">y = 3x + 2, recovered in 200 steps.</p>
-      </a>
-      <a class="tile" href="playground.html#example=mlp" style="text-decoration:none">
-        <h3>4 · MLP</h3><p class="small">784 → 128 → 10. The code from the README.</p>
-      </a>
-      <a class="tile" href="playground.html#example=cnn" style="text-decoration:none">
-        <h3>5 · CNN</h3><p class="small">Convolution and pooling on the browser's GPU.</p>
-      </a>
-      <a class="tile" href="playground.html#example=bench" style="text-decoration:none">
-        <h3>6 · Measure</h3><p class="small">What your GPU does with a 512×512 matmul.</p>
-      </a>
-    </div>
+    <p class="small muted" style="margin-top:1.6rem">
+      All four are the same runtime. A lesson block, a tutorial block and the
+      playground editor run identical code — the difference is how much of the page
+      is prose and how much is yours.
+    </p>
     <p style="margin-top:1.6rem">
       <a class="btn primary" href="learn/">Start the lessons →</a>
       <a class="btn ghost" href="tutorials/">Or build something</a>
@@ -308,20 +292,10 @@ for step in range(201):
       </div>
     </div>
 
-    <div class="grid c3" style="margin-top:1rem">
-      <a class="tile" href="playground.html#example=py-autograd" style="text-decoration:none">
-        <h3>py · Autograd</h3><p class="small">The gradient of (w - 5)². No await.</p>
-      </a>
-      <a class="tile" href="playground.html#example=py-linreg" style="text-decoration:none">
-        <h3>py · Linear regression</h3><p class="small">A torch training loop as written.</p>
-      </a>
-      <a class="tile" href="playground.html#example=py-cnn" style="text-decoration:none">
-        <h3>py · CNN</h3><p class="small">Convolution, called from Python.</p>
-      </a>
-    </div>
-
     <p class="small muted" style="margin-top:1rem">
-      The first run spends a few seconds loading Pyodide. After that it starts immediately.
+      The first run spends a few seconds loading Pyodide; after that it starts immediately.
+      <a href="tutorials/">Tutorial 6</a> and
+      <a href="playground.html#lang=py">the playground's Python mode</a> both start there.
     </p>
   </div>
 </section>
