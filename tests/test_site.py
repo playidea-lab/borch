@@ -21,6 +21,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GENERATOR = ROOT / "site" / "build_api.py"
 API = ROOT / "site" / "assets" / "api.json"
+INDEX = ROOT / "site" / "assets" / "api-index.json"
 DECL = ROOT / "borch-ts" / "dist" / "src"
 
 
@@ -36,15 +37,19 @@ def test_api_reference_is_not_stale():
     if not API.exists():
         pytest.fail("site/assets/api.json 이 없다 — python3 site/build_api.py")
 
-    before = API.read_text(encoding="utf-8")
+    # **생성기가 만드는 것은 둘이다.** 목록과 이름 색인. 하나만 되돌려 놓았다가
+    # 검사를 돌린 트리에 `api-index.json` 이 고쳐진 채로 남았다 — 검사가 작업 트리를
+    # 건드리고 가면, 다음 사람은 자기가 안 한 변경을 자기 것으로 커밋한다.
+    made = [API, INDEX]
+    before = {p: p.read_text(encoding="utf-8") for p in made if p.exists()}
     proc = subprocess.run([sys.executable, str(GENERATOR)], capture_output=True, text=True)
     assert proc.returncode == 0, f"생성기가 멈췄다:\n{proc.stderr}"
     after = API.read_text(encoding="utf-8")
+    for path, text in before.items():
+        path.write_text(text, encoding="utf-8")
 
-    if before != after:
-        # 되돌려 놓는다 — 검사가 작업 트리를 고쳐 놓고 가면 안 된다.
-        API.write_text(before, encoding="utf-8")
-        old, new = json.loads(before), json.loads(after)
+    if before.get(API) != after:
+        old, new = json.loads(before[API]), json.loads(after)
         pytest.fail(
             "API 레퍼런스가 선언 파일과 다르다 — 항목 "
             f"{old['total']} → {new['total']}.\n"
