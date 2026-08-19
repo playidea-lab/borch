@@ -51,13 +51,14 @@ try:                                                    # pragma: no cover
     import js as _js
 except ImportError as exc:                              # pragma: no cover
     raise ImportError(
-        "borch_webgpu 는 브라우저 안에서만 돈다 — Pyodide 가 아니면 `js` 가 없다.\n"
-        "  네이티브에서는 `borch`(numpy)를 써라.") from exc
+        "borch_webgpu only runs inside a browser — outside Pyodide there is no `js`.\n"
+        "  Natively, use `borch` (numpy).") from exc
 
 if getattr(_js, "borch", None) is None:                 # pragma: no cover
     raise ImportError(
-        "`js.borch` 가 없다 — 페이지가 borch.ts 를 싣고 `await init()` 을 부른 뒤\n"
-        "  전역에 두어야 한다. 조용히 다른 것으로 돌지 않으려고 여기서 멈춘다.")
+        "`js.borch` is missing — the page has to load borch.ts, call `await init()`,\n"
+        "  and put it in the global scope. This stops here rather than quietly "
+        "running something else.")
 
 from ._base import Tensor, tensor                        # noqa: E402,F401
 # **이름 붙은 것을 먼저 들여온다.** 모듈의 `__getattr__` 은 여기 없는 이름만 받으므로,

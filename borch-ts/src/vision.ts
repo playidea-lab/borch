@@ -96,7 +96,7 @@ export class Normalize implements Transform {
   ) {}
 
   apply(x: Image | Tensor): Tensor {
-    if (!(x instanceof Tensor)) throw new Error("Normalize 는 텐서를 받습니다");
+    if (!(x instanceof Tensor)) throw new Error("Normalize takes a tensor");
     const shape = [this.mean.length, 1, 1];
     const m = Tensor.from([...this.mean], shape);
     const s = Tensor.from([...this.std], shape);
@@ -183,8 +183,8 @@ export class RandomCrop implements Transform {
     const [th, tw] = this.size;
     if (img.height < th || img.width < tw) {
       throw new Error(
-        `자를 크기 (${th}, ${tw}) 가 이미지 (${img.height}, ${img.width}) 보다 큽니다.\n` +
-          "(torch: Required crop size is larger than input image size)",
+        `Required crop size (${th}, ${tw}) is larger than input image size ` +
+          `(${img.height}, ${img.width})`,
       );
     }
     const top = nextInt(img.height - th + 1);
@@ -228,7 +228,7 @@ export function augmentBatch(
   const th = opts.crop ?? ph;
   const tw = opts.crop ?? pw;
   if (ph < th || pw < tw) {
-    throw new Error(`자를 크기 (${th}, ${tw}) 가 이미지 (${ph}, ${pw}) 보다 큽니다`);
+    throw new Error(`Required crop size (${th}, ${tw}) is larger than input image size (${ph}, ${pw})`);
   }
   const hflipP = opts.hflipP ?? 0;
   const out = new Float32Array(n * c * th * tw);
@@ -275,8 +275,8 @@ export function normalizeBatch(
 function asImage(x: Image | Tensor, who: string): Image {
   if (x instanceof Tensor) {
     throw new Error(
-      `${who} 는 (H,W,C) 배열을 받습니다 — 텐서가 왔습니다.\n` +
-        "ToTensor 를 뒤로 옮기세요: 장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생깁니다.",
+      `${who} takes an (H,W,C) array — got a tensor.\n` +
+        "Move ToTensor later in the pipeline: a tensor per image is a GPU buffer per image.",
     );
   }
   return x;

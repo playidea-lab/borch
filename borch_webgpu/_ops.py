@@ -317,9 +317,9 @@ def refuse_if_nullary(js_name, fn, count):
         _NULLARY[js_name] = known
     if known:
         raise TypeError(
-            f"borch.ts 의 `{js_name}` 은 인자를 안 받는데 {count} 개를 넘겼다.\n"
-            f"  그대로 두면 조용히 무시되고 **다른 값**이 나온다.\n"
-            f"  이 이름은 `_ops.py` 에 손으로 적어 맞춰야 한다.")
+            f"borch.ts's `{js_name}` takes no arguments, but {count} were passed.\n"
+            f"  Left alone they are silently ignored and **a different value** comes out.\n"
+            f"  This name has to be spelled out by hand in `_ops.py`.")
 
 
 def _arg(a):
@@ -351,8 +351,8 @@ def positional(name, args, kw):
         order = _SIGNATURE.get(name)
         if order is None:
             raise TypeError(
-                f"`{name}` 은 이름 붙은 인자를 안 받는다 (받은 것: {sorted(kw)})\n"
-                f"  받아야 한다면 `_SIGNATURE` 에 자리 순서를 적어라.")
+                f"`{name}` does not take keyword arguments (got: {sorted(kw)})\n"
+                f"  If it should, write the positional order into `_SIGNATURE`.")
         out = list(args)
         for i, key in enumerate(order):
             if key in kw:
@@ -472,17 +472,17 @@ def _resolve_name(name):
         # `keep_alive` 가 정확히 그렇게 걸렸다 — borch.ts 에 있는데 없다고 했다.
         if getattr(_ts, js_name, None) is not None:
             raise AttributeError(
-                f"`{js_name}` 은 borch.ts 에 **모듈 함수**로 있고 텐서의 메서드가 "
-                f"아니다 (파이썬 이름 `{name}`). 이 결속이 아직 그것을 잇지 않았다.")
+                f"`{js_name}` is in borch.ts as a **module function**, not a method on "
+                f"tensors (Python name `{name}`). This binding has not bridged it yet.")
         raise AttributeError(
-            f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
+            f"borch.ts does not have `{js_name}` (Python name `{name}`)")
 
     def call(x, *args, **kw):
         h = handle(x)
         fn = getattr(h, js_name, None)
         if fn is None:
             raise AttributeError(
-                f"borch.ts 에 `{js_name}` 이 없다 (파이썬 이름 `{name}`)")
+                f"borch.ts does not have `{js_name}` (Python name `{name}`)")
         laid = positional(name, args, kw)
         refuse_if_nullary(js_name, fn, len(laid))
         return guarded(fn, *laid)
@@ -639,7 +639,7 @@ class scope:                                             # noqa: N801
         """
         if not isinstance(t, Tensor):
             raise TypeError(
-                f"scope.keep 은 텐서를 받습니다 — {type(t).__name__} 가 왔습니다")
+                f"scope.keep takes a tensor — got {type(t).__name__}")
         # 호스트에 있는 것은 살릴 것이 없다. 구역은 GPU 버퍼만 놓고, 그쪽 값은
         # 파이썬이 알아서 가져간다 — `raw` 는 CPU 텐서에서 그냥 던진다.
         if str(handle(t).device) != "cpu":
@@ -666,7 +666,7 @@ def keep_alive(t):
     """
     if not isinstance(t, Tensor):
         raise TypeError(
-            f"keep_alive 는 텐서를 받습니다 — {type(t).__name__} 가 왔습니다")
+            f"keep_alive takes a tensor — got {type(t).__name__}")
     _ts.keepAlive(handle(t))
     return t
 
@@ -854,7 +854,7 @@ def get_rng_state():
 
 def set_rng_state(state):
     if not isinstance(state, dict) or "numpy" not in state:
-        raise RuntimeError("set_rng_state — `get_rng_state` 가 준 것만 받습니다")
+        raise RuntimeError("set_rng_state — only takes what `get_rng_state` returned")
     _rng.bit_generator.state = state["numpy"]
     _ts.Tensor.dropoutSeed = state["ts"]
     return None
@@ -972,7 +972,7 @@ def get_default_dtype():
 def set_default_dtype(dt):
     """받되 바꾸지 않는다 — 저장이 float32 하나다. 그 밖은 시끄럽게 거절한다."""
     if _dtype_name(dt) != "float32":
-        raise RuntimeError(f"set_default_dtype({dt}) — 저장이 float32 하나입니다")
+        raise RuntimeError(f"set_default_dtype({dt}) — the storage is float32 only")
     return None
 
 
@@ -1116,7 +1116,7 @@ def _no_out(kw):
     `**kw` 를 받는 자리에서만 삼킬 수 있고, 여섯이 실제로 삼키고 있었다."""
     if "out" in kw:
         from borch._base import _unsupported
-        _unsupported("`out=`(미리 만든 텐서에 써 넣기)")
+        _unsupported("`out=` (writing into a tensor you made beforehand)")
 
 
 def randint(low, high=None, size=(), **kw):
@@ -1342,7 +1342,8 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
         return norm(x, 2, dim, keepdim)
     if p == "nuc":
         raise NotImplementedError(
-            "norm('nuc') 는 아직 없다 — 특이값의 합이라 SVD 가 필요하다. 근사하지 않는다")
+            "norm('nuc') is not here yet — it is the sum of singular values and needs an "
+            "SVD. It is not approximated")
     powed = handle(guarded(handle(guarded(h.abs)).powScalar, float(p)))
     total = powed.sum() if dim is None else powed.sumDim(dim, bool(keepdim))
     return wrap(handle(wrap(total)).powScalar(1.0 / float(p)))
@@ -1405,7 +1406,7 @@ def div(a, b, rounding_mode=None, **kw):
         return wrap(guarded(handle(out).unary, "floor"))
     if mode == "trunc":
         return wrap(guarded(handle(out).unary, "trunc"))
-    raise RuntimeError(f"rounding_mode 는 None·'floor'·'trunc' 뿐이다: {mode!r}")
+    raise RuntimeError(f"rounding_mode is one of None, 'floor', 'trunc': {mode!r}")
 
 
 def floor_divide(a, b, **kw):
@@ -1961,13 +1962,13 @@ def empty_strided(size, stride, **kw):
     답이라 사본으로도 같은 답을 내는데, 이쪽은 **걸음 자체가 유일한 답**이다."""
     _no_out(kw)
     raise RuntimeError(
-        "torch.empty_strided — 걸음(stride)이라는 것이 없습니다.")
+        "torch.empty_strided — there is no such thing as a stride here.")
 
 
 def empty_permuted(size, physical_layout, **kw):
     _no_out(kw)
     raise RuntimeError(
-        "torch.empty_permuted — 걸음(stride)이라는 것이 없습니다.")
+        "torch.empty_permuted — there is no such thing as a stride here.")
 
 
 def histogramdd(t, bins=10, **kw):
@@ -2036,8 +2037,8 @@ def float_power_(t, exponent, **kw):
     torch 도 float32 자리에서 같은 이유로 멈춘다(실측)."""
     del t, exponent, kw
     raise RuntimeError(
-        "`float_power_` 는 제자리로 쓸 수 없습니다 — 결과가 배정도라 되쓸 곳이 "
-        "없습니다. `x.float_power(k)` 로 새 텐서를 받으세요. "
+        "`float_power_` cannot be used in place — the result is double precision and "
+        "there is nowhere to put it back. Use `x.float_power(k)` for a new tensor. "
         "(torch: the base given to float_power_ has dtype Float but the "
         "operation's result requires dtype Double)")
 
@@ -2338,7 +2339,7 @@ def resize_as_(input, other, **kw):                             # noqa: A002
 def hash_tensor(*args, **kw):
     """**uint64 도 없고 규격도 없다.** 값을 맞출 수 없는 것에 이름만 놓지 않는다."""
     raise RuntimeError(
-        "torch.hash_tensor — uint64 도, 정해진 해시 규격도 없습니다.")
+        "torch.hash_tensor — there is no uint64 and no settled hash spec.")
 
 
 def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
@@ -2346,8 +2347,8 @@ def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
     조밀 텐서로 흉내 내면 모양은 맞고 저장 방식이 다른 것을 주게 된다."""
     _no_out(kw)
     raise RuntimeError(
-        "torch.sspaddmm — 희소(sparse) 텐서 배치가 없습니다. "
-        "자기 컴퓨터에서 진짜 PyTorch 를 쓰세요.")
+        "torch.sspaddmm — there is no sparse tensor layout here. "
+        "Use real PyTorch on your own machine.")
 
 
 def fill(x, value, **kw):
@@ -2487,7 +2488,7 @@ def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
     from . import _nn
     if padding or dilation != 1 or ceil_mode:
         raise RuntimeError(
-            "max_pool1d_with_indices(padding·dilation·ceil_mode) 은 아직 없다.")
+            "max_pool1d_with_indices(padding, dilation, ceil_mode) is not here yet.")
     return _nn.functional.max_pool1d_with_indices(x, kernel_size, stride)
 
 
@@ -2623,12 +2624,12 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
     if side is not None:
         if side not in ("left", "right"):
             raise RuntimeError(
-                f"side 는 'left' 나 'right' 여야 합니다 ({side!r} 을 받았습니다). "
+                f"side must be 'left' or 'right' (got {side!r}). "
                 f"(torch: torch.searchsorted(): side can only be 'left' or 'right' "
                 f"but got {side})")
         if right and side == "left":
             raise RuntimeError(
-                "side 와 right 가 서로 반대입니다 — 둘 중 하나만 주세요. "
+                "side and right contradict each other — give only one. "
                 "(torch: torch.searchsorted(): side and right can't be set to "
                 "opposites, got side of left while right was True)")
         right = side == "right"
@@ -2814,7 +2815,7 @@ class _Linalg:
 
     def tensorsolve(self, a, b, dims=None):
         if dims is not None:
-            raise RuntimeError("tensorsolve(dims) 는 아직 없다")
+            raise RuntimeError("tensorsolve(dims) is not here yet")
         return wrap(guarded(handle(a).tensorSolve, handle(b)))
 
     def tensorinv(self, a, ind=2):
@@ -2856,7 +2857,7 @@ class _Linalg:
         def call(x, *args, **kw):
             fn = getattr(handle(x), js_name, None)
             if fn is None:
-                raise AttributeError(f"borch.ts 에 `{js_name}` 이 없다 (linalg.{name})")
+                raise AttributeError(f"borch.ts does not have `{js_name}` (linalg.{name})")
             # **이름 붙은 인자를 버리면 안 된다.** `qr(mode="complete")` 와
             # `svd(full_matrices=False)` 가 그 자리인데, 버리면 예외가 아니라
             # **기본값으로 조용히 다른 답**이 나온다 — 값 대조만이 잡을 수 있는 종류다.

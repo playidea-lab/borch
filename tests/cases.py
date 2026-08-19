@@ -6608,7 +6608,7 @@ def refusal_case(call):
         except Exception as exc:                                # noqa: BLE001
             if real:
                 return f"뜻밖의 거절 <{type(exc).__name__}>"
-            mark = "브라우저 축소판에 없습니다"
+            mark = "is not in the browser subset"
             return "기대대로" if mark in str(exc) \
                 else f"다른 문구 <{str(exc).splitlines()[0][:44]}>"
         return "기대대로" if real else "뜻밖의 성공"
@@ -9726,7 +9726,7 @@ def dtype_cases(inp=None):
                 return str(f(L).dtype)
             except Exception as exc:                            # noqa: BLE001
                 text = str(exc)
-                mark = "브라우저 축소판에 없습니다"
+                mark = "is not in the browser subset"
                 return f"거절({mark})" if mark in text \
                     else f"거절(다른 문구: {text.splitlines()[0][:40]})"
         cases.append((f"dtype::형바꾸기::{name}", run))

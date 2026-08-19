@@ -490,7 +490,7 @@ class LBFGS(Optimizer):
             tolerance_grad=tolerance_grad, tolerance_change=tolerance_change,
             history_size=history_size, line_search_fn=line_search_fn))
         if len(self.param_groups) != 1:
-            raise ValueError("LBFGS 는 파라미터 묶음 하나만 받습니다.")
+            raise ValueError("LBFGS takes a single parameter group.")
         self._global = {}
 
     def _flat_grad(self):
@@ -880,7 +880,7 @@ class CyclicLR(_Scheduler):
             elif mode == "exp_range":
                 scale_fn, scale_mode = (lambda i: gamma ** i), "iterations"
             else:
-                raise ValueError(f"CyclicLR: 모르는 mode {mode!r}")
+                raise ValueError(f"CyclicLR: unknown mode {mode!r}")
         self.scale_fn, self.scale_mode = scale_fn, scale_mode
         super().__init__(optimizer, last_epoch)
 

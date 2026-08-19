@@ -54,7 +54,7 @@ def _norm_scale(norm, n, inverse):
     if norm == "ortho":
         return 1.0 / _np.sqrt(n)
     raise RuntimeError(_like_torch(
-        f"모르는 정규화 이름입니다: {norm!r} — backward·forward·ortho 중 하나입니다.",
+        f"unknown normalization name: {norm!r} — one of backward, forward, ortho.",
         f'Invalid normalization mode: "{norm}"'))
 
 
@@ -159,7 +159,7 @@ def rfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
     t = _wrap(input)
     if t.data.dtype.kind == "c":
         raise RuntimeError(_like_torch(
-            "rfft 는 실수 입력만 받습니다 — 복소수에는 `fft` 를 쓰세요.",
+            "rfft takes a real input — use `fft` for a complex one.",
             "rfft expects a real input tensor, but got complex"))
     axis = _axis(dim, t.data.ndim)
     length = t.data.shape[axis] if n is None else int(n)
@@ -412,7 +412,7 @@ def _window_of(window, n_fft, win_length, like):
         return win
     if have > n_fft:
         raise RuntimeError(_like_torch(
-            f"창이 n_fft 보다 깁니다: {have} > {n_fft}",
+            f"the window is longer than n_fft: {have} > {n_fft}",
             "window length should be less than or equal to n_fft"))
     left = (n_fft - have) // 2
     return _ops.pad(win, [left, n_fft - have - left])
@@ -432,12 +432,12 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,     # noqa
     t = _wrap(input)
     if return_complex is None and t.data.dtype.kind != "c":
         raise RuntimeError(_like_torch(
-            "stft 에는 return_complex 를 명시해야 합니다 — 실수 (…, 2) 로 내는 "
-            "옛 길은 torch 에서 폐기 예정입니다.",
+            "stft needs return_complex to be given — the old path that returns a real "
+            "(…, 2) tensor is deprecated in torch.",
             "stft requires the return_complex parameter be given for real inputs"))
     if return_complex is False:
         raise RuntimeError(_like_torch(
-            "return_complex=False 는 없습니다 — torch 에서도 폐기 예정입니다.",
+            "return_complex=False is not here — it is deprecated in torch too.",
             "stft with return_complex=False is deprecated"))
     hop = n_fft // 4 if hop_length is None else int(hop_length)
     win_length = n_fft if win_length is None else int(win_length)
@@ -457,7 +457,7 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,     # noqa
     length = x.data.shape[-1]
     if length < n_fft:
         raise RuntimeError(_like_torch(
-            f"신호가 n_fft 보다 짧습니다: {length} < {n_fft}",
+            f"the signal is shorter than n_fft: {length} < {n_fft}",
             "Expected size of signal to be at least n_fft"))
     count = 1 + (length - n_fft) // hop
     frames = _ops.stack([_ops.narrow(x, -1, k * hop, n_fft)

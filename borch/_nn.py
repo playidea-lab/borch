@@ -165,7 +165,7 @@ class Module:
     def to(self, *a, **k):
         for x in list(a) + list(k.values()):
             if isinstance(x, str) and x != "cpu":
-                _unsupported(f"장치 '{x}'")
+                _unsupported(f"device '{x}'")
         return self
 
     def zero_grad(self):
@@ -191,7 +191,7 @@ class Module:
         unexpected = [k for k in state if k not in own and k not in buffers]
         if strict and (missing or unexpected):
             raise RuntimeError(
-                f"state_dict 가 안 맞습니다. 빠진 것: {missing}, 남는 것: {unexpected}"
+                f"state_dict does not match. missing: {missing}, unexpected: {unexpected}"
             )
         for name, value in state.items():
             if name in buffers:
@@ -215,13 +215,13 @@ class Module:
                 incoming = value.data if isinstance(value, Tensor) else _np.asarray(value)
                 if incoming.shape != target.data.shape:
                     raise RuntimeError(
-                        f"{name} 의 모양이 다릅니다: {incoming.shape} vs {tuple(target.data.shape)}"
+                        f"{name} has a different shape: {incoming.shape} vs {tuple(target.data.shape)}"
                     )
                 target._array = incoming.astype(target._array.dtype).copy()
         return self
 
     def forward(self, *a, **k):
-        raise NotImplementedError("forward 를 구현하세요.")
+        raise NotImplementedError("Implement forward.")
 
     def __call__(self, *a, **k):
         return self.forward(*a, **k)
@@ -553,7 +553,7 @@ class _Loss(Module):
     def __init__(self, reduction="mean", *, weight=None, pos_weight=None):
         super().__init__()
         if weight is not None:
-            _unsupported(f"{type(self).__name__}(weight=…) — 클래스 가중치")
+            _unsupported(f"{type(self).__name__}(weight=…) — class weights")
         if pos_weight is not None:
             _unsupported(f"{type(self).__name__}(pos_weight=…)")
         self.reduction = reduction
@@ -686,8 +686,8 @@ class LayerNorm(Module):
         # **모양이 안 맞으면 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
         if shape[len(shape) - dims:] != self.normalized_shape:
             raise RuntimeError(_like_torch(
-                f"normalized_shape={list(self.normalized_shape)} 인데 입력이 "
-                f"{list(shape)} 입니다.",
+                f"normalized_shape={list(self.normalized_shape)} but the input is "
+                f"{list(shape)}.",
                 f"Given normalized_shape={list(self.normalized_shape)}, expected "
                 f"input with shape [*, "
                 f"{', '.join(str(n) for n in self.normalized_shape)}]"))
@@ -812,7 +812,7 @@ class RNN(_RNNBase):
 
     def __init__(self, *a, nonlinearity="tanh", **k):
         if nonlinearity not in ("tanh", "relu"):
-            raise ValueError("nonlinearity 는 'tanh' 나 'relu' 여야 합니다.")
+            raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
         self.nonlinearity = nonlinearity
         super().__init__(*a, **k)
 
@@ -949,7 +949,7 @@ class RNNCell(RNNCellBase):
 
     def __init__(self, input_size, hidden_size, bias=True, nonlinearity="tanh"):
         if nonlinearity not in ("tanh", "relu"):
-            raise ValueError("nonlinearity 는 'tanh' 나 'relu' 여야 합니다.")
+            raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
         self.nonlinearity = nonlinearity
         super().__init__(input_size, hidden_size, bias)
 
@@ -1038,8 +1038,8 @@ def _install_weights(mod, params, num_layers, has_biases):
     want = per * num_layers
     if len(params) != want:
         raise RuntimeError(_like_torch(
-            f"가중치가 {want} 개여야 하는데 {len(params)} 개입니다 "
-            f"(층 {num_layers} × {per}).",
+            f"expected {want} weights but got {len(params)} "
+            f"({num_layers} layers x {per}).",
             "expected a tuple of tensors of the right length"))
     for layer in range(num_layers):
         chunk = params[layer * per:(layer + 1) * per]
@@ -1059,9 +1059,9 @@ def _rnn_top(cls, x, hx, params, has_biases, num_layers, dropout, train,
     그럴듯한 채로 갈린다(정칙화가 안 걸린 학습). 둘 다 여기서 멈춘다.
     """
     if bidirectional:
-        _unsupported("양방향 순환(bidirectional=True)")
+        _unsupported("bidirectional recurrence (bidirectional=True)")
     if train and dropout:
-        _unsupported(f"층간 드롭아웃(dropout={dropout})")
+        _unsupported(f"dropout between layers (dropout={dropout})")
     first = params[0]
     hidden = first.data.shape[0] // cls.gates
     mod = cls(first.data.shape[1], hidden, num_layers, bias=bool(has_biases),
@@ -1137,7 +1137,7 @@ class MultiheadAttention(Module):
     def __init__(self, embed_dim, num_heads, bias=True, batch_first=False):
         super().__init__()
         if embed_dim % num_heads:
-            raise ValueError(f"embed_dim({embed_dim}) 이 num_heads({num_heads}) 로 안 나뉩니다.")
+            raise ValueError(f"embed_dim({embed_dim}) is not divisible by num_heads({num_heads}).")
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
@@ -1666,7 +1666,7 @@ class _InstanceNorm(Module):
         # 낸다. 버퍼만 등록하고 순방향이 안 쓰면 열쇠만 맞고 값이 틀리는, 더 늦게
         # 발견되는 자리로 옮겨 갈 뿐이다. 그래서 **안 되는 것은 안 된다고 한다.**
         if track_running_stats:
-            _unsupported("InstanceNorm 의 track_running_stats=True")
+            _unsupported("InstanceNorm with track_running_stats=True")
 
     def forward(self, x):
         return instance_norm(x, self.weight, self.bias, self.eps)
@@ -1973,7 +1973,7 @@ class _FractionalMaxPoolND(Module):
         # 크기가 어디서 왔는지 아무도 못 읽는다.
         if (output_size is None) == (output_ratio is None):
             raise ValueError(
-                "FractionalMaxPool 은 output_size 나 output_ratio 중 하나만 받습니다."
+                "FractionalMaxPool takes either output_size or output_ratio, not both."
                 "\n(torch: FractionalMaxPool2d requires specifying either "
                 "an output size, or a pooling ratio)")
         self.kernel_size = kernel_size
@@ -2450,14 +2450,14 @@ class UninitializedParameter(Parameter):
         raise RuntimeError(
             "Can't access the shape of an uninitialized parameter or buffer. "
             "This error usually happens in `load_state_dict` when the parameter "
-            "has not been materialized — 먼저 한 번 지나가게 하세요.")
+            "has not been materialized — run one pass through it first.")
 
     def __repr__(self):
         return "<UninitializedParameter>"
 
     def _refuse(self, *_a, **_k):
         raise ValueError(
-            "Attempted to use an uninitialized parameter — 먼저 한 번 지나가게 하세요.")
+            "Attempted to use an uninitialized parameter — run one pass through it first.")
 
     __add__ = __radd__ = __mul__ = __rmul__ = _refuse
     __sub__ = __rsub__ = __truediv__ = __rtruediv__ = _refuse
@@ -2722,7 +2722,7 @@ class Upsample(Module):
     def forward(self, x):
         if self.size is None and self.scale_factor is None:
             raise RuntimeError(_like_torch(
-                "size 나 scale_factor 중 하나는 주어야 합니다.",
+                "Give either size or scale_factor.",
                 "either size or scale_factor should be defined"))
         return interpolate(x, size=self.size, scale_factor=self.scale_factor,
                            mode=self.mode, align_corners=self.align_corners)

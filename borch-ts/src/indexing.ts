@@ -59,8 +59,8 @@ export function slice(
 ): Slice {
   if (!Number.isInteger(step) || step < 1) {
     throw new RuntimeError(
-      `slice 의 걸음은 1 이상의 정수여야 한다: ${step}` +
-        (step < 0 ? " — 뒤집는 것은 flip() 이다." : ""),
+      `slice step must be a positive integer: ${step}` +
+        (step < 0 ? " — use flip() to reverse." : ""),
     );
   }
   return { kind: "slice", start, end, step };
@@ -115,7 +115,7 @@ export function planAxis(
   if (index === null) return { kind: "whole" };
   if (typeof index === "number") {
     if (!Number.isInteger(index)) {
-      throw new RuntimeError(`축 ${axis} 의 인덱스가 정수가 아니다: ${index}`);
+      throw new RuntimeError(`index for dimension ${axis} is not an integer: ${index}`);
     }
     const at = index < 0 ? index + size : index;
     if (at < 0 || at >= size) {
@@ -138,5 +138,5 @@ export function planAxis(
     });
     return { kind: "picks", indices: picks };
   }
-  throw new RuntimeError(`축 ${axis} 의 인덱스를 못 읽겠다: ${String(index)}`);
+  throw new RuntimeError(`cannot read the index for dimension ${axis}: ${String(index)}`);
 }

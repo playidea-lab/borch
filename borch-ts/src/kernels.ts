@@ -620,8 +620,8 @@ const DERIVED: Record<string, UnarySpec> = {};
 export function f32lit(v: number): string {
   if (!Number.isFinite(v)) {
     throw new Error(
-      `WGSL 은 상수 ${v} 를 f32 로 못 적는다 — 무한대·NaN 은 컴파일 시점에 금지된다.\n` +
-      "  CPU 에서 채워 올려라(`Tensor.full` 이 그 길로 간다).",
+      `WGSL cannot write the constant ${v} as f32 — infinity and NaN are rejected at ` +
+      "compile time.\n  Fill it on the CPU and upload it (Tensor.full takes that path).",
     );
   }
   // **지수 표기에는 소수점을 안 붙인다.** `String(-1e30)` 은 `-1e+30` 인데
@@ -646,7 +646,7 @@ export function hasUnary(name: string): boolean {
 
 function unarySpec(name: string): UnarySpec {
   const op = UNARY[name] ?? DERIVED[name];
-  if (!op) throw new Error(`모르는 단항 연산: ${name}`);
+  if (!op) throw new Error(`unknown unary op: ${name}`);
   return op;
 }
 
@@ -714,7 +714,7 @@ export function binaryForward(
   strideB: readonly number[],
 ): string {
   const op = BINARY[name];
-  if (!op) throw new Error(`모르는 이항 연산: ${name}`);
+  if (!op) throw new Error(`unknown binary op: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
   return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -748,7 +748,7 @@ export function binaryBackward(
   strideB: readonly number[],
 ): string {
   const op = BINARY[name];
-  if (!op) throw new Error(`모르는 이항 연산: ${name}`);
+  if (!op) throw new Error(`unknown binary op: ${name}`);
   const n = shape.reduce((a, b) => a * b, 1);
   return `${op.prelude ?? ""}
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -785,7 +785,7 @@ export function reduceBroadcast(
   small: readonly number[],
 ): string {
   if (full.length !== small.length) {
-    throw new Error(`랭크가 다르다: ${full.length} vs ${small.length}`);
+    throw new Error(`rank mismatch: ${full.length} vs ${small.length}`);
   }
   const rank = full.length;
   const fullStride: number[] = new Array<number>(rank).fill(1);

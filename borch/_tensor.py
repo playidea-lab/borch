@@ -104,8 +104,8 @@ def _no_bool_subtract(dtype, other):
     other_dtype = other.data.dtype if isinstance(other, Tensor) else _np.asarray(other).dtype
     if _np.dtype(dtype).kind == "b" or other_dtype.kind == "b":
         raise RuntimeError(_like_torch(
-            "불리언 텐서에는 뺄셈(`-`)을 쓸 수 없습니다. "
-            "`^`(배타적 논리합)나 `~`(부정)를 쓰세요.",
+            "Subtraction (`-`) is not available on a bool tensor. "
+            "Use `^` (exclusive or) or `~` (not).",
             "Subtraction, the `-` operator, with a bool tensor is not supported. "
             "If you are trying to invert a mask use the `~` or `logical_not()` operator instead."))
 
@@ -155,10 +155,10 @@ class _DataDescriptor:
             return
         if isinstance(value, _np.ndarray):
             raise TypeError(_like_torch(
-                "`.data` 에는 텐서만 넣을 수 있습니다. `torch.tensor(...)` 로 감싸세요.",
+                "`.data` takes a tensor. Wrap it with `torch.tensor(...)`.",
                 "Variable data has to be a tensor, but got numpy.ndarray"))
         raise TypeError(_like_torch(
-            f"`.data` 에는 텐서만 넣을 수 있습니다 ({type(value).__name__} 을 받았습니다).",
+            f"`.data` takes a tensor (got {type(value).__name__}).",
             f"Variable data has to be a tensor, but got {type(value).__name__}"))
 
 
@@ -186,8 +186,8 @@ class Tensor:
 
         if self.requires_grad and self.data.dtype.kind not in "fc":
             raise RuntimeError(
-                "정수 텐서에는 기울기가 흐르지 않습니다. 미분은 실수에서만 정의됩니다 "
-                "— `.float()` 로 바꾸세요."
+                "Gradients do not flow through integer tensors. Differentiation is defined "
+                "on floating point only — convert with `.float()`."
             )
 
     # ---- 기본 정보
@@ -216,8 +216,8 @@ class Tensor:
     def item(self):
         if self.data.size != 1:
             raise RuntimeError(_like_torch(
-                f"값이 {self.data.size}개인 텐서는 하나의 숫자로 바꿀 수 없습니다. "
-                "`.tolist()` 나 인덱싱을 쓰세요.",
+                f"A tensor with {self.data.size} values cannot become a single number. "
+                "Use `.tolist()` or index into it.",
                 f"a Tensor with {self.data.size} elements cannot be converted to Scalar"))
         return self.data.reshape(-1)[0].item()
 
@@ -258,18 +258,18 @@ class Tensor:
     def backward(self, gradient=None, retain_graph=False):
         if not self.requires_grad:
             raise RuntimeError(_like_torch(
-                "requires_grad 가 아닌 텐서에는 backward() 를 부를 수 없습니다.",
+                "backward() cannot be called on a tensor that does not require grad.",
                 "element 0 of tensors does not require grad and does not have a grad_fn"))
         if self._freed:
             raise RuntimeError(_like_torch(
-                "이미 backward() 를 부른 그래프입니다. 한 번 되짚으면 그래프를 놓습니다 — "
-                "다시 계산하거나 `backward(retain_graph=True)` 를 쓰세요.",
+                "This graph has already been walked by backward(). Going back once releases "
+                "it — recompute, or use `backward(retain_graph=True)`.",
                 "Trying to backward through the graph a second time"))
         if gradient is None:
             if self.data.size != 1:
                 raise RuntimeError(_like_torch(
-                    "값이 하나가 아닌 텐서에는 gradient 를 줘야 합니다. "
-                    "보통은 손실을 스칼라로 만든 뒤 부릅니다.",
+                    "A tensor with more than one value needs a gradient. "
+                    "Usually the loss is reduced to a scalar first.",
                     "grad can be implicitly created only for scalar outputs"))
             # **손실은 실수여야 한다.** torch 가 그 자리에서 멈춘다(실측).
             #
@@ -278,8 +278,8 @@ class Tensor:
             # Wirtinger 의 나머지 절반을 정해야 하고, 그것은 안 정한 자리다.
             if self.data.dtype.kind == "c":
                 raise RuntimeError(_like_torch(
-                    "복소수 손실에는 backward() 를 부를 수 없습니다 — "
-                    "`.real`·`.abs()` 로 실수를 만든 뒤 부르세요.",
+                    "backward() cannot be called on a complex loss — make it real with "
+                    "`.real` or `.abs()` first.",
                     "grad can be implicitly created only for real scalar outputs "
                     "but got torch.complex64"))
             gradient = _np.ones_like(self.data)
@@ -290,8 +290,8 @@ class Tensor:
             # 맞으면 조용히 틀린 기울기가 나오고 안 맞으면 `ValueError` 가 원인에서
             # 먼 자리에서 뜬다. torch 는 여기서 `RuntimeError` 로 멈춘다 — 실측했다.
             raise RuntimeError(_like_torch(
-                f"gradient 의 모양 {tuple(seed.shape)} 이 값의 모양 "
-                f"{tuple(self.data.shape)} 과 다릅니다.",
+                f"The gradient shape {tuple(seed.shape)} differs from the value shape "
+                f"{tuple(self.data.shape)}.",
                 f"Mismatch in shape: grad_output[0] has a shape of "
                 f"torch.Size({list(seed.shape)}) and output[0] has a shape of "
                 f"torch.Size({list(self.data.shape)})."))
@@ -416,11 +416,11 @@ class Tensor:
             # 오히려 `numpy` 가 "형이 아니다" 로 멈춘다.
             if isinstance(a, _device):
                 if a.type != "cpu":
-                    _unsupported(f"장치 '{a}'")
+                    _unsupported(f"device '{a}'")
                 continue
             if isinstance(a, str):
                 if a != "cpu":
-                    _unsupported(f"장치 '{a}'")
+                    _unsupported(f"device '{a}'")
                 continue
             if isinstance(a, Tensor):
                 target = a.data.dtype
@@ -451,8 +451,8 @@ class Tensor:
             bad = next((i for i in range(1, min(len(a), len(b)) + 1)
                         if a[-i] != b[-i] and a[-i] != 1 and b[-i] != 1), 1)
             raise RuntimeError(_like_torch(
-                f"모양 {tuple(a)} 과 {tuple(b)} 은 브로드캐스팅되지 않습니다 — "
-                "뒤에서부터 맞춰볼 때 크기가 같거나 한쪽이 1이어야 합니다.",
+                f"Shapes {tuple(a)} and {tuple(b)} do not broadcast — lined up from the "
+                "right, each pair must match or one of them must be 1.",
                 f"The size of tensor a ({a[-bad]}) must match the size of tensor b "
                 f"({b[-bad]}) at non-singleton dimension {len(a) - bad}")) from None
         return self._make(out, (self, o), lambda g: (back_self(g, mine, o.data),
@@ -501,7 +501,7 @@ class Tensor:
 
     def __pow__(self, p):
         if isinstance(p, Tensor):
-            _unsupported("텐서 지수")
+            _unsupported("a tensor exponent")
         return self._make(self.data ** p, (self,), lambda g: (g * p * self.data ** (p - 1),),
                           "PowBackward0")
 
@@ -531,8 +531,9 @@ class Tensor:
             a = "x".join(str(n) for n in self.data.shape[-2:])
             b = "x".join(str(n) for n in o.data.shape[-2:])
             raise RuntimeError(_like_torch(
-                f"행렬곱의 모양이 안 맞습니다 ({a} @ {b}) — "
-                f"앞의 열({self.data.shape[-1]})과 뒤의 행({o.data.shape[-2]})이 같아야 합니다.",
+                f"The matmul shapes do not line up ({a} @ {b}) — the columns on the left "
+                f"({self.data.shape[-1]}) must match the rows on the right "
+                f"({o.data.shape[-2]}).",
                 f"mat1 and mat2 shapes cannot be multiplied ({a} and {b})"))
         def back(g):
             """**1차원은 자리를 하나 빌려 쓴다.**
@@ -567,8 +568,8 @@ class Tensor:
     def _inplace(self, fn, other):
         if self.requires_grad and _grad_mode.enabled:
             raise RuntimeError(
-                "기울기가 필요한 텐서를 제자리에서 바꿀 수 없습니다. "
-                "`with torch.no_grad():` 안에서 하세요."
+                "A tensor that requires grad cannot be changed in place. "
+                "Do it inside `with torch.no_grad():`."
             )
         o = other.data if isinstance(other, Tensor) else other
         self._array = fn(self._array, o).astype(self._array.dtype)
@@ -623,7 +624,7 @@ class Tensor:
         except ValueError:
             want = list(shape)
             raise RuntimeError(_like_torch(
-                f"모양 {want} 은 원소 {self.data.size}개짜리 텐서에 맞지 않습니다.",
+                f"Shape {want} does not fit a tensor of {self.data.size} elements.",
                 f"shape '{want}' is invalid for input of size {self.data.size}")) from None
         return self._make(out, (self,), lambda g: (g.reshape(old),), "ViewBackward0")
 
@@ -635,8 +636,8 @@ class Tensor:
         """
         if not self.data.flags["C_CONTIGUOUS"]:
             raise RuntimeError(_like_torch(
-                "메모리 순서가 어긋난 텐서에는 view() 를 쓸 수 없습니다 — "
-                "`.contiguous().view(...)` 또는 `.reshape(...)` 을 쓰세요.",
+                "view() cannot be used on a tensor whose memory order is broken — use "
+                "`.contiguous().view(...)` or `.reshape(...)`.",
                 "view size is not compatible with input tensor's size and stride "
                 "(at least one dimension spans across two contiguous subspaces). "
                 "Use .reshape(...) instead."))
@@ -733,7 +734,7 @@ class Tensor:
         `if tensor:` 가 조용히 첫 원소를 보는 일을 막는 자리다."""
         if self.data.size != 1:
             raise RuntimeError(_like_torch(
-                f"값이 {self.data.size}개인 텐서의 참거짓은 모호합니다.",
+                f"The truth value of a tensor with {self.data.size} values is ambiguous.",
                 "Boolean value of Tensor with "
                 f"{'no values' if self.data.size == 0 else 'more than one value'}"
                 " is ambiguous"))
@@ -757,7 +758,7 @@ class Tensor:
 
     def __setitem__(self, idx, value):
         if self.requires_grad and _grad_mode.enabled:
-            raise RuntimeError("기울기가 필요한 텐서에는 제자리 대입을 할 수 없습니다.")
+            raise RuntimeError("A tensor that requires grad cannot be assigned into in place.")
         key = tuple(i.data if isinstance(i, Tensor) else i for i in idx) \
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         self.data[key] = value.data if isinstance(value, Tensor) else value
@@ -774,8 +775,8 @@ class Tensor:
     def _inplace(self, fn, what):
         if self.requires_grad and _grad_mode.enabled:
             raise RuntimeError(_like_torch(
-                f"기울기가 필요한 잎 텐서에는 `{what}` 을(를) 쓸 수 없습니다. "
-                "`with torch.no_grad():` 안에서 하거나 제자리가 아닌 연산을 쓰세요.",
+                f"`{what}` cannot be used on a leaf tensor that requires grad. Do it inside "
+                "`with torch.no_grad():`, or use an out-of-place operation.",
                 "a leaf Variable that requires grad is being used in an in-place operation"))
         out = fn()
         got = out.data if isinstance(out, Tensor) else _np.asarray(out)
@@ -1107,8 +1108,9 @@ def _float_power_(self, exponent):
     없으므로 어떤 dtype 에서도 안 된다. 값을 내주면 그 코드가 진짜 torch 에서 깨진다."""
     del exponent
     raise RuntimeError(_like_torch(
-        f"`float_power_` 는 {self.dtype} 자리에 쓸 수 없습니다 — 결과가 배정도라 "
-        "되쓸 곳이 없습니다. `x.float_power(k)` 로 새 텐서를 받으세요.",
+        f"`float_power_` cannot be used on a {self.dtype} slot — the result is double "
+        "precision and there is nowhere to put it back. Use `x.float_power(k)` for a "
+        "new tensor.",
         f"the base given to float_power_ has dtype {str(self.dtype).split('.')[-1].capitalize()} "
         "but the operation's result requires dtype Double"))
 
@@ -1173,7 +1175,7 @@ def _deprecated_by_torch(name, instead):
     def method(self, *args, **kw):
         del self, args, kw
         raise RuntimeError(_like_torch(
-            f"`{name}` 은 torch 1.9 에서 없어졌습니다 — `{instead}` 을(를) 쓰세요.",
+            f"`{name}` was removed in torch 1.9 — use `{instead}`.",
             f"This function was deprecated since version 1.9 and is now removed. "
             f"Please use the `torch.linalg.{instead}` function instead."))
 
@@ -1217,7 +1219,7 @@ def _fill_diagonal_(self, value, wrap=False):
     """대각을 채운다. `wrap` 은 세로로 긴 행렬에서 대각을 **감아 이어 간다**."""
     if self.requires_grad and _grad_mode.enabled:
         raise RuntimeError(_like_torch(
-            "기울기가 필요한 잎 텐서에는 `fill_diagonal_` 을 쓸 수 없습니다.",
+            "`fill_diagonal_` cannot be used on a leaf tensor that requires grad.",
             "a leaf Variable that requires grad is being used in an in-place operation"))
     _np.fill_diagonal(self._array, value, wrap=wrap)
     return self
@@ -1227,8 +1229,8 @@ def _requires_grad_(self, requires_grad=True):
     """**교재의 관용구다** — `x.requires_grad_()` 로 잎을 켠다. 자기를 돌려준다."""
     if requires_grad and self.data.dtype.kind not in "fc":
         raise RuntimeError(
-            "정수 텐서에는 기울기가 흐르지 않습니다. 미분은 실수에서만 정의됩니다 "
-            "— `.float()` 로 바꾸세요.")
+            "Gradients do not flow through integer tensors. Differentiation is defined "
+            "on floating point only — convert with `.float()`.")
     self.requires_grad = bool(requires_grad)
     return self
 
@@ -1291,7 +1293,7 @@ def _is_pinned(self):
 def _is_coalesced(self):
     """희소 전용이라 **조밀 텐서에서는 멈춘다** — torch 도 그렇다(실측)."""
     raise RuntimeError(_like_torch(
-        "조밀 텐서에는 coalesce 상태가 없습니다.",
+        "A dense tensor has no coalesce state.",
         "is_coalesced expected sparse coordinate tensor layout but got Strided"))
 
 
@@ -1367,7 +1369,7 @@ def _set_(self, source=None):
 def _refuse_leaf_inplace(self, name):
     if self.requires_grad and _grad_mode.enabled:
         raise RuntimeError(_like_torch(
-            f"기울기가 필요한 잎 텐서에는 `{name}` 을(를) 쓸 수 없습니다.",
+            f"`{name}` cannot be used on a leaf tensor that requires grad.",
             "a leaf Variable that requires grad is being used in an in-place operation"))
 
 
@@ -1375,7 +1377,7 @@ def _sparse_only(name):
     def method(self, *args, **kw):
         del self, args, kw
         raise NotImplementedError(_like_torch(
-            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 쓸 수 없습니다.",
+            f"`{name}` is for sparse tensors only — not for a dense one.",
             f"Could not run 'aten::{name}' with arguments from the 'CPU' backend"))
 
     method.__name__ = name
@@ -1451,7 +1453,7 @@ class _Layout:
 def _hermitian(self):
     if self.data.ndim != 2:
         raise RuntimeError(_like_torch(
-            f"`.H` 는 행렬(2차원)에만 있습니다 ({self.data.ndim}차원을 받았습니다).",
+            f"`.H` is only on matrices (2-D) — got {self.data.ndim}-D.",
             f"tensor.H is only supported on matrices (2-D tensors). "
             f"Got {self.data.ndim}-D tensor."))
     return self.transpose(0, 1).conj()
@@ -1460,7 +1462,7 @@ def _hermitian(self):
 def _matrix_transpose(self):
     if self.data.ndim < 2:
         raise RuntimeError(_like_torch(
-            "`.mT` 는 2차원 이상에만 있습니다.",
+            "`.mT` is only on 2-D and above.",
             "tensor.mT is only supported on matrices or batches of matrices. "
             f"Got {self.data.ndim}-D tensor."))
     return self.transpose(-2, -1)
@@ -1547,7 +1549,7 @@ def _retain_grad(self):
     """
     if not self.requires_grad:
         raise RuntimeError(_like_torch(
-            "기울기를 안 받는 텐서에는 `retain_grad()` 를 쓸 수 없습니다.",
+            "`retain_grad()` cannot be used on a tensor that does not take gradients.",
             "can't retain_grad on Tensor that has requires_grad=False"))
     if self._parents:
         self._retain = True
@@ -1586,7 +1588,7 @@ def _bind_gone(name, instead):
     def method(self, *args, **kw):
         del self, args, kw
         raise RuntimeError(_like_torch(
-            f"`{name}` 은 torch 에서 없어졌습니다 — `{instead}` 을(를) 쓰세요.",
+            f"`{name}` was removed from torch — use `{instead}`.",
             "This function was deprecated since version 1.9 and is now removed. "
             f"Please use the `torch.{instead}` function instead."))
 
@@ -1659,7 +1661,7 @@ def _needs_sparse(name, layout):
     def method(self, *args, **kw):
         del self, args, kw
         raise RuntimeError(_like_torch(
-            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 없습니다.",
+            f"`{name}` is for sparse tensors only — a dense tensor does not have it.",
             f"{name} expected sparse {layout} but got Strided"))
 
     method.__name__ = name

@@ -169,7 +169,7 @@ function run(input: Tensor, p: DftPlan): Tensor {
 function axisOf(dim: number, rank: number): number {
   const axis = dim < 0 ? dim + rank : dim;
   if (axis < 0 || axis >= rank) {
-    throw new RuntimeError(`축 ${dim} 은 랭크 ${rank} 에 없다.`);
+    throw new RuntimeError(`Dimension ${dim} is out of range for a tensor of rank ${rank}.`);
   }
   return axis;
 }
@@ -510,7 +510,7 @@ export function istft(input: Tensor, nFft: number,
       .padND([k * hop, total - nFft - k * hop]);
     out = out === null ? piece : out.add(piece);
   }
-  if (out === null) throw new RuntimeError("istft: 틀이 하나도 없다");
+  if (out === null) throw new RuntimeError("istft: the input has no frames");
   // **창의 제곱 겹침으로 나눈다.** 그 나눗셈이 없으면 겹친 자리가 창 무게만큼
   // 부풀어 오른다. 0 에 가까운 자리는 1 로 두어 나눗셈을 피한다.
   const envelope = win.mul(win);

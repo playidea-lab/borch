@@ -171,7 +171,7 @@ export function cholesky(a: Mat, n: number): Mat {
       if (i === j) {
         if (s <= 0) {
           throw new Error(
-            "cholesky: 대칭 양정부호가 아니다 (주소행렬식이 0 이하다)",
+            "cholesky: the input is not symmetric positive definite (a leading principal minor is not positive)",
           );
         }
         l[i * n + j] = Math.sqrt(s);

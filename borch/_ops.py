@@ -136,8 +136,8 @@ def _needs_step(step, who):
     """
     if step == 0:
         raise RuntimeError(
-            f"{who}: 걸음(step)이 0 이면 값이 안 움직여 끝이 없습니다. "
-            "(torch: step must be nonzero)")
+            f"{who}: step must be nonzero — with a step of 0 the value never moves "
+            "and the range never ends.")
 
 
 def arange(*args, dtype=None, requires_grad=False):
@@ -231,7 +231,7 @@ def get_rng_state():
 def set_rng_state(state):
     """`get_rng_state` 가 준 것을 되돌린다. 그 짝 말고는 안 받는다."""
     if not isinstance(state, dict):
-        _unsupported("set_rng_state — `get_rng_state` 가 준 것만 받습니다")
+        _unsupported("set_rng_state — it only takes what `get_rng_state` returned")
     _rng.bit_generator.state = state
     return None
 
@@ -301,7 +301,7 @@ def _no_out(kw):
     `tests/test_no_silent_out.py` 가 `**kw` 를 받는 자리마다 이 문이 있는지 본다.
     """
     if "out" in kw:
-        _unsupported("`out=`(미리 만든 텐서에 써 넣기)")
+        _unsupported("`out=` (writing into a tensor you made beforehand)")
 
 
 def randint(low, high, shape, dtype=None, requires_grad=False, **kw):
@@ -447,9 +447,9 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     N, C, H, W = xd.shape
     F, C2, KH, KW = wd.shape
     if C != C2:
-        raise RuntimeError(f"채널이 안 맞습니다: 입력 {C}, 필터 {C2}")
+        raise RuntimeError(f"channels do not match: input {C}, filter {C2}")
     if H < KH or W < KW:
-        raise RuntimeError("필터가 입력보다 큽니다.")
+        raise RuntimeError("the filter is larger than the input.")
 
     cols, OH, OW = _im2col(xd, KH, KW, stride)
     w2 = wd.reshape(F, -1)
@@ -483,7 +483,7 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
     N, C, H, W = x.data.shape
     C2, F, KH, KW = weight.data.shape
     if C != C2:
-        raise RuntimeError(f"채널이 안 맞습니다: 입력 {C}, 필터 {C2}")
+        raise RuntimeError(f"channels do not match: input {C}, filter {C2}")
     sh, sw = _pair(stride)
     ph, pw = _pair(padding)
     OH = (H - 1) * sh + KH
@@ -539,7 +539,7 @@ def conv_transpose3d(x, weight, bias=None, stride=1, padding=0):
     n, c, d, h, w = x.data.shape
     c2, f, kd, kh, kw = weight.data.shape
     if c != c2:
-        raise RuntimeError(f"채널이 안 맞습니다: 입력 {c}, 필터 {c2}")
+        raise RuntimeError(f"channels do not match: input {c}, filter {c2}")
     sd, sh, sw = (stride,) * 3 if isinstance(stride, int) else tuple(stride)
     pd, ph, pw = (padding,) * 3 if isinstance(padding, int) else tuple(padding)
     out_d = (d - 1) * sd + kd
@@ -596,7 +596,7 @@ def group_norm(x, num_groups, weight=None, bias=None, eps=1e-5):
     shape = x.data.shape
     n, c = shape[0], shape[1]
     if c % num_groups:
-        raise RuntimeError(f"채널 {c} 를 {num_groups} 그룹으로 못 나눕니다")
+        raise RuntimeError(f"cannot split {c} channels into {num_groups} groups")
     inner = (c // num_groups) * int(_np.prod(shape[2:], dtype=int))
     out = _norm_flat(x.reshape(n, num_groups, inner), num_groups, eps).reshape(*shape)
     if weight is not None:
@@ -658,7 +658,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
     n, c, d, h, w = x.data.shape
     f, c2, kd, kh, kw = weight.data.shape
     if c != c2:
-        raise RuntimeError(f"채널이 안 맞습니다: 입력 {c}, 필터 {c2}")
+        raise RuntimeError(f"channels do not match: input {c}, filter {c2}")
     sd, sh, sw = (stride, stride, stride) if isinstance(stride, int) else tuple(stride)
     pd, ph, pw = (padding, padding, padding) if isinstance(padding, int) else tuple(padding)
     if pd:
@@ -991,7 +991,7 @@ def _fractional_pool(x, kernel_size, output_size, output_ratio, samples, spatial
     shape = x.data.shape
     if (output_size is None) == (output_ratio is None):
         raise ValueError(
-            "fractional_max_pool 은 output_size 나 output_ratio 중 하나만 받습니다.")
+            "fractional_max_pool takes either output_size or output_ratio, not both.")
     ks = _spread(kernel_size, spatial)
     if output_size is not None:
         sizes = _spread(output_size, spatial)
@@ -1079,12 +1079,12 @@ def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None
     if mode == "bilinear":
         return _interpolate_bilinear(x, size, scale_factor, bool(align_corners))
     if mode != "nearest":
-        _unsupported(f"interpolate(mode={mode!r}) — 최근접과 겹선형만 있습니다")
+        _unsupported(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
     if size is not None:
         n, c, h, w = x.data.shape
         oh, ow = _pair(size)
         if oh % h or ow % w:
-            _unsupported("interpolate(size=) — 배수가 아닌 확대")
+            _unsupported("interpolate(size=) — upsampling by a non-integer factor")
         scale_factor = (oh // h, ow // w)
     sh, sw = _pair(scale_factor)
     xd = x.data
@@ -1793,8 +1793,8 @@ def expand(t, *sizes):
             target.append(have)
         elif have != 1 and int(size) != have:
             raise RuntimeError(_like_torch(
-                f"크기 {have} 인 축은 {size} 로 늘릴 수 없습니다 — expand 는 크기 1 인 "
-                "축만 늘립니다.",
+                f"a dimension of size {have} cannot expand to {size} — expand only grows "
+                "dimensions of size 1.",
                 f"The expanded size of the tensor ({size}) must match the existing size "
                 f"({have}) at non-singleton dimension {i - lead}"))
         else:
@@ -1853,7 +1853,7 @@ def div(a, b, rounding_mode=None):
         out = out.trunc()
     else:
         raise RuntimeError(
-            f"rounding_mode 는 None·'floor'·'trunc' 뿐입니다: {rounding_mode!r}")
+            f"rounding_mode is one of None, 'floor', 'trunc': {rounding_mode!r}")
     kind = result_type(left.data.dtype, _np.asarray(
         right.data if isinstance(right, Tensor) else right).dtype)
     return out if _np.dtype(kind).kind == "f" else out.type(kind)
@@ -2003,7 +2003,7 @@ def meshgrid(*tensors, indexing="ij"):
     """
     ts = [_wrap(v) for v in tensors]
     if indexing not in ("ij", "xy"):
-        raise RuntimeError(f"indexing 은 'ij' 나 'xy' 다: {indexing!r}")
+        raise RuntimeError(f"indexing must be 'ij' or 'xy': {indexing!r}")
     order = list(range(len(ts)))
     if indexing == "xy" and len(ts) >= 2:
         order[0], order[1] = order[1], order[0]
@@ -2121,7 +2121,7 @@ def kron(a, b):
     a, b = _wrap(a), _wrap(b)
     ash, bsh = a.data.shape, b.data.shape
     if len(ash) != 1 or len(bsh) != 1:
-        _unsupported("kron(1 차원이 아닌 것)")
+        _unsupported("kron (anything but 1-D)")
     out = a.reshape(ash[0], 1) * b.reshape(1, bsh[0])
     return out.reshape(ash[0] * bsh[0])
 
@@ -2132,7 +2132,7 @@ def cross(a, b, dim=-1):
     rank = len(a.data.shape)
     axis = dim + rank if dim < 0 else dim
     if a.data.shape[axis] != 3:
-        raise RuntimeError(f"cross 는 축 {dim} 의 길이가 3 이어야 합니다")
+        raise RuntimeError(f"cross needs dimension {dim} to have length 3")
 
     def part(t, i):
         return narrow(t, axis, i, 1)
@@ -2669,7 +2669,7 @@ def igamma(input, other):                                       # noqa: A002
     def back(g):
         if a.requires_grad:
             raise NotImplementedError(_like_torch(
-                "igamma 는 첫 인자로 미분되지 않습니다 — 닫힌 꼴이 없습니다.",
+                "igamma is not differentiable in its first argument — there is no closed form.",
                 "the derivative for 'igamma: input' is not implemented."))
         return (None, _unbroadcast(_np.asarray(g) * slope, x.data.shape)
                 .astype(x.data.dtype))
@@ -2696,7 +2696,7 @@ def polygamma(n, input):                                        # noqa: A002
     k = int(n)
     if k < 0:
         raise RuntimeError(_like_torch(
-            "polygamma 의 n 은 0 이상이어야 합니다.",
+            "polygamma needs n >= 0.",
             "polygamma(n, x) does not support negative n."))
     out = (_polygamma0(t.data) if k == 0 else _polygamma_np(k, t.data))
     nxt = _polygamma_np(k + 1, t.data)
@@ -2927,12 +2927,12 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
     if side is not None:
         if side not in ("left", "right"):
             raise RuntimeError(_like_torch(
-                f"side 는 'left' 나 'right' 여야 합니다 ({side!r} 을 받았습니다).",
+                f"side must be 'left' or 'right' (got {side!r}).",
                 f"torch.searchsorted(): side can only be 'left' or 'right' but "
                 f"got {side}"))
         if right and side == "left":
             raise RuntimeError(_like_torch(
-                "side 와 right 가 서로 반대입니다 — 둘 중 하나만 주세요.",
+                "side and right contradict each other — give only one.",
                 "torch.searchsorted(): side and right can't be set to opposites, "
                 "got side of left while right was True"))
         right = side == "right"
@@ -3412,7 +3412,7 @@ def _no_bool_accumulate(name, dt):
     plain = getattr(dt, "np", dt)
     if _np.dtype(plain) == _np.bool_:
         raise NotImplementedError(_like_torch(
-            f"{name} 은 결과 형이 참거짓일 수 없습니다.",
+            f"{name} cannot have a bool result dtype.",
             f'"{name}_out_cpu" not implemented for \'Bool\''))
 
 
@@ -3694,7 +3694,7 @@ def gelu(t, approximate="none"):
         return _gelu_tanh(_wrap(t))
     if approximate != "none":
         raise ValueError(
-            f"gelu(): approximate 는 'none' 또는 'tanh' 입니다 (받은 것: {approximate!r})")
+            f"gelu(): approximate is 'none' or 'tanh' (got {approximate!r})")
     return _gelu(_wrap(t))
 
 
@@ -3864,7 +3864,7 @@ def glu(t, dim=-1):
     t = _wrap(t)
     n = t.data.shape[dim]
     if n % 2:
-        raise RuntimeError(f"glu 는 축 {dim} 의 길이가 짝수여야 합니다 (지금 {n})")
+        raise RuntimeError(f"glu needs an even length along dimension {dim} (got {n})")
     half = n // 2
     a = narrow(t, dim, 0, half)
     b = narrow(t, dim, half, half)
@@ -4018,8 +4018,8 @@ def _reduce(out, reduction):
     # 모양을 `norm(p)`·`dist(p)` 에서도 봤다.
     if reduction != "mean":
         raise ValueError(_like_torch(
-            f"reduction 은 'none'·'mean'·'sum' 중 하나여야 합니다 "
-            f"({reduction!r} 을 받았습니다).",
+            f"reduction must be one of 'none', 'mean', 'sum' "
+            f"(got {reduction!r}).",
             f"{reduction} is not a valid value for reduction"))
     return out.mean()
 
@@ -4267,7 +4267,7 @@ def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
     """
     t = _mat(x, "unfold", square=False)
     if t.data.ndim != 4:
-        _unsupported("unfold(4차원이 아닌 것)")
+        _unsupported("unfold (anything but 4-D)")
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
     padded = pad(t, (pad_[1], pad_[1], pad_[0], pad_[0]))
@@ -4829,7 +4829,7 @@ def set_default_dtype(dt):
     만드는 텐서가 말과 다른 형으로 나온다. float32 를 주면 조용히 넘어가고 그 밖은
     시끄럽게 거절한다 — 아무 말 없이 무시하는 것이 제일 나쁘다."""
     if getattr(dt, "name", str(dt)) != "float32":
-        _unsupported(f"set_default_dtype({dt}) — 저장이 float32 하나입니다")
+        _unsupported(f"set_default_dtype({dt}) — the storage is float32 only")
     return None
 
 
@@ -4988,9 +4988,9 @@ def _T(a):
 def _mat(t, what, square=True):
     t = _wrap(t)
     if t.data.ndim < 2:
-        _unsupported(f"{what}(2차원 미만)")
+        _unsupported(f"{what} (fewer than 2 dimensions)")
     if square and t.data.shape[-1] != t.data.shape[-2]:
-        _unsupported(f"{what}(정사각이 아닌 것)")
+        _unsupported(f"{what} (a non-square matrix)")
     return t
 
 
@@ -5023,8 +5023,8 @@ def _is_singular(data):
 def _reject_singular(data, what):
     if _is_singular(data):
         raise LinAlgError(
-            f"linalg.{what}: 특이행렬이다 — 역행렬이 없다 (The diagonal element of "
-            "the factorization is zero)")
+            f"linalg.{what}: the matrix is singular — it has no inverse (The diagonal "
+            "element of the factorization is zero)")
 
 
 def _cholesky_checked(data, what):
@@ -5036,7 +5036,8 @@ def _cholesky_checked(data, what):
     if low is None or not _np.all(low[..., _np.arange(low.shape[-1]),
                                       _np.arange(low.shape[-1])] > 0):
         raise LinAlgError(
-            f"linalg.{what}: 대칭 양정부호가 아니다 (matrix is not positive definite)")
+            f"linalg.{what}: the input is not symmetric positive definite (matrix is not "
+            "positive definite)")
     return low
 
 
@@ -5444,7 +5445,7 @@ def lstsq(a, b):
     """
     a, bt = _mat(a, "lstsq", square=False), _wrap(b)
     if a.data.ndim != 2:
-        _unsupported("lstsq(배치)")
+        _unsupported("lstsq (batched)")
     sol, res, rank, sv = _np.linalg.lstsq(a.data, bt.data, rcond=None)
     return _Lstsq(Tensor(_np.ascontiguousarray(sol)), Tensor(_np.asarray(res)),
                   Tensor(_np.asarray(rank, dtype=_np.int64)), Tensor(_np.asarray(sv)))
@@ -5531,7 +5532,7 @@ def _ldl_pack(data):
             # **`abs` 는 이 파일에서 텐서 함수다** — 모듈 전역이 내장을 가린다.
             # 그 자리를 여기서 또 밟았고, `_np.abs` 로 부르는 것이 이 파일의 규칙이다.
             if _np.abs(d) < 1e-12:
-                _unsupported("ldl_factor — 피벗이 필요한 대칭 행렬 (부정부호)")
+                _unsupported("ldl_factor — a symmetric matrix that needs pivoting (indefinite)")
             ld[j, j] = d
             for i in range(j + 1, n):
                 s = sum(ld[i, k] * ld[k, k] * ld[j, k] for k in range(j))
@@ -5676,7 +5677,7 @@ def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
     """`lu_factor` 가 낸 것으로 `A x = b` 를 푼다."""
     lu_t, piv_t, bt = _wrap(lu_data), _wrap(pivots), _wrap(b)
     if not left or adjoint:
-        _unsupported("lu_solve(left=False 또는 adjoint=True)")
+        _unsupported("lu_solve(left=False or adjoint=True)")
     n = lu_t.data.shape[-1]
     low = _np.tril(lu_t.data.astype(_np.float64), -1) + _np.eye(n)
     up = _np.triu(lu_t.data.astype(_np.float64))
@@ -6136,7 +6137,7 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
         # torch 는 반올림한다. 값만 나오고 무게가 없으므로 격자로는 안 흐른다.
         return pick(_np.rint(sy.data).astype(int), _np.rint(sx.data).astype(int))
     if mode != "bilinear":
-        _unsupported(f"grid_sample(mode={mode!r}) — 겹선형과 최근접만 있습니다")
+        _unsupported(f"grid_sample(mode={mode!r}) — only bilinear and nearest are here")
 
     x0 = _np.floor(sx.data).astype(int)
     y0 = _np.floor(sy.data).astype(int)
@@ -7091,7 +7092,7 @@ def sspaddmm(input, mat1, mat2, beta=1, alpha=1):
     거절한다). 여기에는 희소 배치가 없고, 조밀 텐서로 흉내 내면 **모양은 맞고 저장
     방식이 다른** 것을 주게 된다 — 그것을 배운 사람은 희소가 무엇인지 잘못 안다.
     """
-    _unsupported("torch.sspaddmm — 희소(sparse) 텐서 배치가 없습니다")
+    _unsupported("torch.sspaddmm — there is no sparse tensor layout here")
 
 
 def addmm_(input, mat1, mat2, beta=1, alpha=1):
@@ -7306,7 +7307,7 @@ def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
     **`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).
     """
     if B is not None or X is not None:
-        _unsupported("lobpcg(B= 또는 X=) — 일반화 고유값 문제")
+        _unsupported("lobpcg(B= or X=) — the generalised eigenvalue problem")
     vals, vecs = eigh(_wrap(a))
     order = slice(None, None, -1) if largest else slice(None)
     idx = _np.arange(vals.data.shape[-1])[order][:k]
@@ -7636,7 +7637,7 @@ def hash_tensor(*args, **kw):
     torch 가 내는 것은 `uint64` 이고(실측), 어떤 해시인지는 문서에도 없다. 값을
     맞출 수 없는 것을 이름만 놓으면 그 값을 믿고 쓰는 코드가 생긴다.
     """
-    _unsupported("torch.hash_tensor — uint64 도, 정해진 해시 규격도 없습니다")
+    _unsupported("torch.hash_tensor — there is no uint64 and no settled hash spec")
 
 
 # ── 복소수의 이웃, 그리고 생성 몇 ──────────────────────────────────────────
@@ -7712,7 +7713,7 @@ def imag(t):
     t = _wrap(t)
     if not _is_complex(t):
         raise RuntimeError(_like_torch(
-            "실수 텐서에는 허수부가 없습니다.",
+            "A real tensor has no imaginary part.",
             "imag is not implemented for tensors with non-complex dtypes."))
     return t._make(_np.imag(t.data).copy(), (t,),
                    lambda g: (_np.asarray(g).astype(t.data.dtype) * 1j,),
@@ -7826,7 +7827,7 @@ def view_as_real(t):
     t = _wrap(t)
     if not _is_complex(t):
         raise RuntimeError(_like_torch(
-            "실수 텐서에는 쓸 수 없습니다 — 복소수만 됩니다.",
+            "Not available on a real tensor — complex only.",
             "view_as_real is only supported for complex tensors"))
     out = _np.stack([_np.real(t.data), _np.imag(t.data)], axis=-1)
     return t._make(out.astype(_np.float32), (t,),
@@ -7841,7 +7842,7 @@ def view_as_complex(t):
     data = _np.asarray(t.data)
     if data.shape[-1] != 2:
         raise RuntimeError(_like_torch(
-            "마지막 축이 2 여야 합니다.",
+            "The last dimension must be 2.",
             "Tensor must have a last dimension of size 2"))
     out = (data[..., 0] + 1j * data[..., 1]).astype(_np.complex64)
     return t._make(out, (t,),
@@ -7923,13 +7924,13 @@ def empty_strided(size, stride, **kw):
     것이 없으므로 모양만 맞춘 것을 주면 "걸음이 그렇다" 고 믿는 코드가 생긴다.
     """
     _no_out(kw)
-    _unsupported("torch.empty_strided — 걸음(stride)이라는 것이 없습니다")
+    _unsupported("torch.empty_strided — there is no such thing as a stride here")
 
 
 def empty_permuted(size, physical_layout, **kw):
     """`empty_strided` 와 같은 이유로 없다."""
     _no_out(kw)
-    _unsupported("torch.empty_permuted — 걸음(stride)이라는 것이 없습니다")
+    _unsupported("torch.empty_permuted — there is no such thing as a stride here")
 
 
 # ================================================================ 이름 잇기
@@ -8058,8 +8059,8 @@ _CONTINUOUS_REFUSAL = {
 def _refuse_leaf(self, name):
     if self.requires_grad and _grad_mode.enabled:
         raise RuntimeError(_like_torch(
-            f"기울기가 필요한 잎 텐서에는 `{name}` 을(를) 쓸 수 없습니다. "
-            "`with torch.no_grad():` 안에서 하세요.",
+            f"`{name}` cannot be used on a leaf tensor that requires grad. "
+            "Do it inside `with torch.no_grad():`.",
             "a leaf Variable that requires grad is being used in an in-place operation"))
 
 
@@ -8088,7 +8089,7 @@ def _normal_(self, mean=0.0, std=1.0, generator=None):
     del generator
     if std < 0:
         raise RuntimeError(_like_torch(
-            f"normal_ 의 표준편차는 0 이상이어야 합니다 ({std} 을 받았습니다).",
+            f"the standard deviation for normal_ must be >= 0 (got {std}).",
             f"normal expects std >= 0.0, but found std {std}"))
     return _fill_from(self, "normal_", lambda r, s: r.normal(mean, std, s))
 
@@ -8097,7 +8098,7 @@ def _uniform_(self, from_=0.0, to=1.0, generator=None):
     del generator
     if from_ > to:
         raise RuntimeError(_like_torch(
-            f"uniform_ 은 [from, to) 를 받습니다 ({from_}, {to} 을 받았습니다).",
+            f"uniform_ takes [from, to) (got {from_}, {to}).",
             f"uniform_ expects to return a [from, to) range, but found from={from_} > to={to}"))
     return _fill_from(self, "uniform_", lambda r, s: r.uniform(from_, to, s))
 
@@ -8106,7 +8107,7 @@ def _exponential_(self, lambd=1.0, generator=None):
     del generator
     if lambd <= 0:
         raise RuntimeError(_like_torch(
-            f"exponential_ 의 lambda 는 0 보다 커야 합니다 ({lambd} 을 받았습니다).",
+            f"the lambda for exponential_ must be > 0 (got {lambd}).",
             f"exponential_ expects lambda > 0.0, but found lambda={lambd}"))
     return _fill_from(self, "exponential_",
                       lambda r, s: r.exponential(1.0 / lambd, s))
@@ -8128,7 +8129,7 @@ def _geometric_(self, p, generator=None):
     del generator
     if not 0 < p < 1:
         raise RuntimeError(_like_torch(
-            f"geometric_ 의 p 는 (0, 1) 안이어야 합니다 ({p} 을 받았습니다).",
+            f"the p for geometric_ must be in (0, 1) (got {p}).",
             f"geometric_ expects p to be in (0, 1), but got p={p}"))
     return _fill_from(self, "geometric_", lambda r, s: r.geometric(p, s))
 
@@ -8145,7 +8146,7 @@ def _random_(self, from_=0, to=None, generator=None):
         to = {"b": 2, "f": 1 << 24, "i": 1 << (bits - 1), "u": 1 << bits}[kind]
     if from_ >= to:
         raise RuntimeError(_like_torch(
-            f"random_ 의 from 은 to 보다 작아야 합니다 ({from_}, {to} 을 받았습니다).",
+            f"the from for random_ must be less than to (got {from_}, {to}).",
             f"random_ expects 'from' to be less than 'to', but got from={from_} >= to={to}"))
     return _fill_from(self, "random_",
                       lambda r, s: r.integers(from_, to, s))

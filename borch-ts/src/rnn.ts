@@ -81,8 +81,8 @@ function layerWeights(params: readonly Tensor[], layers: number, hasBiases: bool
   const per = hasBiases ? 4 : 2;
   if (params.length !== per * layers) {
     throw new RuntimeError(
-      `가중치가 ${per * layers} 개여야 하는데 ${params.length} 개다 ` +
-        `(층 ${layers} × ${per}).`);
+      `expected ${per * layers} weights but got ${params.length} ` +
+        `(${layers} layers x ${per}).`);
   }
   const out: [Tensor, Tensor, Tensor | null, Tensor | null][] = [];
   for (let k = 0; k < layers; k++) {
@@ -121,10 +121,10 @@ export function rnnApply(
     bidirectional = false, batchFirst = false,
   } = options;
   if (bidirectional) {
-    throw new RuntimeError("양방향 순환(bidirectional=true)은 여기 없다.");
+    throw new RuntimeError("bidirectional recurrence (bidirectional=true) is not here.");
   }
   if (train && dropout) {
-    throw new RuntimeError(`층간 드롭아웃(dropout=${dropout})은 여기 없다.`);
+    throw new RuntimeError(`dropout between layers (dropout=${dropout}) is not here.`);
   }
   const gates = gatesOf(kind);
   const weights = layerWeights(params, numLayers, hasBiases);

@@ -82,7 +82,7 @@ def run():
         torch.definitely_not_a_kernel
         ok.append(_say(False, "없는 이름은 없다고 말한다", "안 멈췄다"))
     except AttributeError as e:
-        ok.append(_say("없다" in str(e) and "definitelyNotAKernel" in str(e),
+        ok.append(_say("does not have" in str(e) and "definitelyNotAKernel" in str(e),
                        "없는 이름은 없다고 말한다", str(e)))
     # `gradMode` 는 `index.ts` 가 내보내고, `Tensor.prototype` 에는 없고, 이 결속이
     # 아직 안 이었다 — 셋을 다 만족하는 이름이라 이 문구가 갈리는 자리를 정확히 짚는다.
@@ -94,7 +94,7 @@ def run():
         torch.grad_mode
         ok.append(_say(False, "모듈 함수는 모듈 함수라고 말한다", "안 멈췄다"))
     except AttributeError as e:
-        ok.append(_say("모듈 함수" in str(e), "모듈 함수는 모듈 함수라고 말한다", str(e)))
+        ok.append(_say("module function" in str(e), "모듈 함수는 모듈 함수라고 말한다", str(e)))
 
     head = "구역 탈출이 돈다" if all(ok) else "**어딘가 안 된다**"
     return "\n".join([head, *_lines])

@@ -296,7 +296,7 @@ export function currentDevice(): DeviceKind | null {
 
 function dev(): Device {
   const d = deviceHolder.current;
-  if (!d) throw new Error("장치가 없다 — 먼저 `await init()` 을 불러라.");
+  if (!d) throw new Error("no device — call await init() first.");
   return d;
 }
 
@@ -327,7 +327,7 @@ export function broadcastShapes(
     if (da !== db && da !== 1 && db !== 1) {
       throw new RuntimeError(
         `The size of tensor a (${da}) ${TORCH.broadcast} b (${db}) at ` +
-          `non-singleton dimension ${i}: [${a}] 와 [${b}]`,
+          `non-singleton dimension ${i}: [${a}] vs [${b}]`,
       );
     }
     out[i] = Math.max(da, db);
@@ -706,7 +706,7 @@ export class Tensor implements Node<Tensor> {
     if (this.gpu === null) {
       throw new RuntimeError(
         `${TORCH.crossDevice}, but found at least two devices, webgpu and cpu! ` +
-          "호스트에 있는 텐서는 연산에 못 쓴다 — `webgpu()` 로 올려라.",
+          "a tensor on the host cannot take part in an operation — move it up with webgpu().",
       );
     }
     // **복소수도 여기서 막힌다 — 같은 문 하나를 두 번 쓴다.**
@@ -720,9 +720,10 @@ export class Tensor implements Node<Tensor> {
     // 아무것도 안 한 연산이 복소수를 조용히 잘못 먹는다.
     if (isComplexDType(this.dtype)) {
       throw new RuntimeError(
-        "이 연산은 complex64 를 아직 안 받는다 — 저장이 칸당 f32 두 개(인터리브)라 " +
-          "복소수를 모르는 커널이 읽으면 조용히 틀린다. " +
-          "`view_as_real` 로 실수 텐서를 만든 뒤 쓰거나, 실수부·허수부를 따로 다뤄라.",
+        "this operation does not take complex64 yet — the storage is two f32 per slot " +
+          "(interleaved), so a kernel that does not know about complex numbers reads it " +
+          "and is quietly wrong. Use view_as_real to get a real tensor, or handle the " +
+          "real and imaginary parts separately.",
       );
     }
     // **죽은 텐서도 여기서 막힌다 — 같은 문 하나를 세 번 쓴다.**
@@ -740,9 +741,10 @@ export class Tensor implements Node<Tensor> {
   private refuseIfDead(): void {
     if (this.gpu === null || dev().age(this.gpu) === this.age) return;
     throw new RuntimeError(
-      "닫힌 구역의 텐서다 — 그 버퍼는 이미 통에 돌아갔고 다른 값이 들어 있다.\n" +
-        "  `scope()` 밖으로 들고 나갈 것은 `keepAlive(t)` 로 표시하거나 " +
-        "`scope(body, () => [t])` 의 둘째 인자로 넘겨라.",
+      "this tensor belongs to a closed scope — its buffer went back to the pool and " +
+        "holds something else now.\n" +
+        "  To carry a tensor out of scope(), mark it with keepAlive(t) or pass it as " +
+        "the second argument of scope(body, () => [t]).",
     );
   }
 
@@ -756,7 +758,7 @@ export class Tensor implements Node<Tensor> {
     if (this.gpu === null) {
       throw new RuntimeError(
         `${TORCH.crossDevice}, but found at least two devices, webgpu and cpu! ` +
-          "호스트에 있는 텐서는 연산에 못 쓴다 — `webgpu()` 로 올려라.",
+          "a tensor on the host cannot take part in an operation — move it up with webgpu().",
       );
     }
     this.refuseIfDead();
@@ -842,16 +844,15 @@ export class Tensor implements Node<Tensor> {
     const flat = data instanceof Float32Array ? data : Float32Array.from(data);
     const shp = shape ?? [flat.length];
     if (numel(shp) !== flat.length) {
-      throw new Error(`모양 [${shp}] 는 원소 ${flat.length}개와 안 맞는다.`);
+      throw new Error(`shape [${shp}] does not match ${flat.length} elements.`);
     }
     // **복소수는 이 문으로 못 들어온다.** 이름표만 `complex64` 로 달면 칸 수는
     // `n` 인데 저장 규약은 `2n` 을 요구하므로, 뒤쪽 절반이 남의 메모리가 된다 —
     // 예외 없이 아무 값이나 읽힌다. 엮는 자리를 하나로 둔다.
     if (dtype === "complex64") {
       throw new RuntimeError(
-        "Tensor.from 으로는 complex64 를 못 만든다 — 저장이 칸당 f32 두 개다. " +
-          "`Tensor.complex(re, im)`·`Tensor.polar(r, θ)` 나 " +
-          "`x.viewAsComplex()` 를 써라.",
+        "Tensor.from cannot make complex64 — the storage is two f32 per slot. Use " +
+          "Tensor.complex(re, im), Tensor.polar(r, theta), or x.viewAsComplex().",
       );
     }
     if (requiresGrad && dtype !== "float32") {
@@ -966,8 +967,8 @@ export class Tensor implements Node<Tensor> {
   private static needsStep(step: number, who: string): void {
     if (step === 0) {
       throw new RuntimeError(
-        `${who}: 걸음(step)이 0 이면 값이 안 움직여 끝이 없습니다. ` +
-        "(torch: step must be nonzero)",
+        `${who}: step must be nonzero — with a step of 0 the value never moves and ` +
+        "the range never ends.",
       );
     }
   }
@@ -1006,16 +1007,17 @@ export class Tensor implements Node<Tensor> {
     const width = { float32: 4, int64: 8, bool: 1, complex64: 8 }[dtype];
     if (dtype === "complex64") {
       throw new RuntimeError(
-        "frombuffer 는 complex64 를 안 읽습니다 — 인터리브 배치가 약속이 아닙니다. " +
-        "실수부와 허수부를 따로 읽어 `Tensor.complex` 로 엮으세요.",
+        "frombuffer does not read complex64 — an interleaved layout is not part of the " +
+        "contract. Read the real and imaginary parts separately and join them with " +
+        "Tensor.complex.",
       );
     }
     const room = Math.floor((buffer.byteLength - offset) / width);
     const n = count < 0 ? room : count;
     if (n > room) {
       throw new RuntimeError(
-        `frombuffer: ${n} 개를 달라는데 버퍼에 ${room} 개뿐이다 ` +
-        `(바이트 ${buffer.byteLength}, offset ${offset}, 칸당 ${width} 바이트)`,
+        `frombuffer: asked for ${n} values but the buffer holds ${room} ` +
+        `(bytes ${buffer.byteLength}, offset ${offset}, ${width} bytes per value)`,
       );
     }
     const data = new Float32Array(n);
@@ -1032,8 +1034,8 @@ export class Tensor implements Node<Tensor> {
         const v = raw[i] ?? 0n;
         if (v > BigInt(EXACT_INT_LIMIT) || v < -BigInt(EXACT_INT_LIMIT)) {
           throw new RuntimeError(
-            `frombuffer: ${v} 는 float32 로 셀 수 있는 한계(${EXACT_INT_LIMIT})를 ` +
-            "넘는다 — 값이 조용히 반올림된다.",
+            `frombuffer: ${v} is past what float32 counts exactly (${EXACT_INT_LIMIT}) — ` +
+            "the value would be quietly rounded.",
           );
         }
         data[i] = Number(v);
@@ -1145,8 +1147,8 @@ export class Tensor implements Node<Tensor> {
     }
     if (Math.max(Math.abs(low), Math.abs(high)) > EXACT_INT_LIMIT) {
       throw new RuntimeError(
-        `randint 의 범위가 float32 로 셀 수 있는 한계(${EXACT_INT_LIMIT})를 넘는다 — ` +
-          "값이 조용히 반올림된다.",
+        `the randint range runs past what float32 counts exactly (${EXACT_INT_LIMIT}) — ` +
+          "values would be quietly rounded.",
       );
     }
     const span = high - low;
@@ -1364,7 +1366,7 @@ export class Tensor implements Node<Tensor> {
   // ── 원소별 ────────────────────────────────────────────────────────────
 
   unary(name: string): Tensor {
-    if (!hasUnary(name)) throw new Error(`모르는 단항 연산: ${name}`);
+    if (!hasUnary(name)) throw new Error(`unknown unary op: ${name}`);
     const n = this.size;
     const out = dev().alloc(n);
     dev().run1d(
@@ -1396,7 +1398,7 @@ export class Tensor implements Node<Tensor> {
    */
   binary(name: string, other: Tensor, dtype?: DType): Tensor {
     const spec = BINARY[name];
-    if (!spec) throw new Error(`모르는 이항 연산: ${name}`);
+    if (!spec) throw new Error(`unknown binary op: ${name}`);
     // **복소수가 끼면 여기서 갈린다.** 이 메서드가 이항 연산의 유일한 문이라
     // `add`·`mul` 뿐 아니라 역전파의 기울기 누적까지 전부 여기를 지난다 — 누적이
     // 실수 커널로 새면 복소수 잎의 기울기가 앞쪽 절반만 더해진다.
@@ -1407,8 +1409,8 @@ export class Tensor implements Node<Tensor> {
       // 나머지는 아래 실수 커널로 가면 안 된다. `buffer` 게터가 막겠지만, 문구가
       // "이 연산은 아직" 이라 어느 연산인지가 안 남는다.
       throw new RuntimeError(
-        `complex64 에는 ${name} 이(가) 아직 없다 — 지금 되는 것은 ` +
-          "add·sub·mul·div 다.",
+        `complex64 does not have ${name} yet — what works now is ` +
+          "add, sub, mul, div.",
       );
     }
     const outType = dtype ?? resultDType(name, this.dtype, other.dtype);
@@ -1490,8 +1492,8 @@ export class Tensor implements Node<Tensor> {
   mm(other: Tensor): Tensor {
     if (this.shape.length !== 2 || other.shape.length !== 2) {
       throw new Error(
-        `mm 은 2차원끼리다: [${this.shape}] × [${other.shape}]. ` +
-          "배치는 아직 없다.",
+        `mm is 2-D by 2-D: [${this.shape}] x [${other.shape}]. ` +
+          "Batching is not here yet.",
       );
     }
     const M = this.shape[0] ?? 0;
@@ -1525,7 +1527,7 @@ export class Tensor implements Node<Tensor> {
   /** 2차원 전치. 지금은 실제로 옮겨 담는다 — 뷰는 T1 이다. */
   transpose(): Tensor {
     if (this.shape.length !== 2) {
-      throw new Error(`transpose 는 아직 2차원만이다: [${this.shape}]`);
+      throw new Error(`transpose is 2-D only for now: [${this.shape}]`);
     }
     const M = this.shape[0] ?? 0;
     const N = this.shape[1] ?? 0;
@@ -1593,7 +1595,7 @@ export class Tensor implements Node<Tensor> {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     if (axis < 0 || axis >= rank) {
-      throw new Error(`축이 범위를 벗어났다: ${dim} (랭크 ${rank})`);
+      throw new Error(`dimension out of range: ${dim} (rank ${rank})`);
     }
     const red = this.shape[axis] ?? 1;
     const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
@@ -1699,7 +1701,7 @@ export class Tensor implements Node<Tensor> {
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
     // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
     // torch 에서 깨진다.
-    this.needsFloat("mean 은 실수에만 있습니다", "mean(): could not infer output dtype. Input dtype must be either a floating point or complex dtype");
+    this.needsFloat("mean is for floating point only", "mean(): could not infer output dtype. Input dtype must be either a floating point or complex dtype");
     const count = dim === undefined
       ? this.size
       : (this.shape[dim < 0 ? dim + this.shape.length : dim] ?? 1);
@@ -1858,9 +1860,9 @@ export class Tensor implements Node<Tensor> {
    * 메모리를 두 배 쓰지만, 손으로 쓴 역방향 하나를 안 만드는 값이 더 크다.
    */
   static cat(parts: readonly Tensor[], dim = 0): Tensor {
-    if (parts.length === 0) throw new Error("cat 에 줄 것이 없다");
+    if (parts.length === 0) throw new Error("cat got nothing to concatenate");
     const first = parts[0];
-    if (!first) throw new Error("cat 에 줄 것이 없다");
+    if (!first) throw new Error("cat got nothing to concatenate");
     const rank = first.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const sizes = parts.map((p) => p.shape[axis] ?? 0);
@@ -1873,7 +1875,7 @@ export class Tensor implements Node<Tensor> {
       acc = acc === null ? padded : acc.add(padded);
       before += size;
     }
-    if (!acc) throw new Error("cat 에 줄 것이 없다");
+    if (!acc) throw new Error("cat got nothing to concatenate");
     return acc;
   }
 
@@ -1957,7 +1959,7 @@ export class Tensor implements Node<Tensor> {
    */
   static meshgrid(parts: readonly Tensor[], indexing: "ij" | "xy" = "ij"): Tensor[] {
     if (indexing !== "ij" && indexing !== "xy") {
-      throw new RuntimeError(`indexing 은 'ij' 나 'xy' 다: ${String(indexing)}`);
+      throw new RuntimeError(`indexing must be 'ij' or 'xy': ${String(indexing)}`);
     }
     const order = parts.map((_, i) => i);
     if (indexing === "xy" && parts.length >= 2) {
@@ -1998,7 +2000,7 @@ export class Tensor implements Node<Tensor> {
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
     // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
     // torch 에서 깨진다.
-    this.needsFloat("variance 는 실수에만 있습니다", "std and var only support floating point and complex dtypes");
+    this.needsFloat("variance is for floating point only", "std and var only support floating point and complex dtypes");
     const n = this.size;
     // **평균을 떼도 기울기가 같다.** 평균을 통과하는 몫은 Σ(x−m) 에 비례하는데
     // 그 합이 정의상 0 이라 통째로 사라진다. 이어두면 큰 항 둘이 상쇄되는 계산이
@@ -2011,7 +2013,7 @@ export class Tensor implements Node<Tensor> {
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
     // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
     // torch 에서 깨진다.
-    this.needsFloat("std 는 실수에만 있습니다", "std and var only support floating point and complex dtypes");
+    this.needsFloat("std is for floating point only", "std and var only support floating point and complex dtypes");
     return this.variance(correction).sqrt();
   }
 
@@ -2020,7 +2022,7 @@ export class Tensor implements Node<Tensor> {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     if (this.shape[axis] !== 1) {
-      throw new Error(`축 ${dim} 의 크기가 1 이 아니다: [${this.shape}]`);
+      throw new Error(`dimension ${dim} is not of size 1: [${this.shape}]`);
     }
     const outShape = [...this.shape];
     outShape.splice(axis, 1);
@@ -2164,7 +2166,7 @@ export class Tensor implements Node<Tensor> {
   expand(...sizes: number[]): Tensor {
     const rank = sizes.length;
     if (rank < this.shape.length) {
-      throw new Error(`expand 는 축을 못 줄인다: [${this.shape}] → [${sizes}]`);
+      throw new Error(`expand cannot shrink a dimension: [${this.shape}] -> [${sizes}]`);
     }
     const own = this.strides();
     const rules: AxisRule[] = [];
@@ -2175,7 +2177,7 @@ export class Tensor implements Node<Tensor> {
       const want = sizes[i] ?? -1;
       const size = want === -1 ? dim : want;
       if (want !== -1 && dim !== 1 && want !== dim) {
-        throw new Error(`축 ${i} 는 ${dim} 이라 ${want} 로 못 늘린다.`);
+        throw new Error(`dimension ${i} is ${dim} and cannot expand to ${want}.`);
       }
       const stride = src >= 0 && dim !== 1 ? (own[src] ?? 1) : 0;
       rules.push({ size, stride, kind: "lin", wrap: size });
@@ -2188,7 +2190,7 @@ export class Tensor implements Node<Tensor> {
   repeat(...times: number[]): Tensor {
     const rank = times.length;
     if (rank < this.shape.length) {
-      throw new Error(`repeat 는 축을 못 줄인다: [${this.shape}] → [${times}]`);
+      throw new Error(`repeat cannot shrink a dimension: [${this.shape}] -> [${times}]`);
     }
     const own = this.strides();
     const rules: AxisRule[] = [];
@@ -2269,7 +2271,7 @@ export class Tensor implements Node<Tensor> {
   diagonal(offset = 0, dim1 = 0, dim2 = 1): Tensor {
     const rank = this.shape.length;
     if (rank < 2) {
-      throw new Error(`diagonal 은 2차원 이상이다: [${this.shape}]`);
+      throw new Error(`diagonal needs two or more dimensions: [${this.shape}]`);
     }
     const a1 = dim1 < 0 ? dim1 + rank : dim1;
     const a2 = dim2 < 0 ? dim2 + rank : dim2;
@@ -2363,7 +2365,7 @@ export class Tensor implements Node<Tensor> {
    */
   rot90(k = 1): Tensor {
     if (this.shape.length !== 2) {
-      throw new Error(`rot90 은 아직 2차원만이다: [${this.shape}]`);
+      throw new Error(`rot90 is 2-D only for now: [${this.shape}]`);
     }
     const turns = ((k % 4) + 4) % 4;
     if (turns === 0) return this.reshape(this.shape);
@@ -2406,7 +2408,7 @@ export class Tensor implements Node<Tensor> {
     const axisSize = this.shape[axis] ?? 0;
     const windows = Math.floor((axisSize - size) / step) + 1;
     if (windows < 1) {
-      throw new Error(`창 ${size}, 걸음 ${step} 로는 길이 ${axisSize} 에서 창이 안 나온다.`);
+      throw new Error(`no window fits: size ${size}, step ${step}, over length ${axisSize}.`);
     }
     const axisStride = own[axis] ?? 1;
     const rules: AxisRule[] = [];
@@ -2429,7 +2431,7 @@ export class Tensor implements Node<Tensor> {
     const axis = dim < 0 ? dim + rank : dim;
     const axisSize = this.shape[axis] ?? 0;
     if (axisSize % parts !== 0) {
-      throw new Error(`축 ${dim} 의 크기 ${axisSize} 는 ${parts} 로 안 나뉜다.`);
+      throw new Error(`dimension ${dim} of size ${axisSize} does not divide into ${parts}.`);
     }
     const each = axisSize / parts;
     const own = this.strides();
@@ -2606,7 +2608,7 @@ export class Tensor implements Node<Tensor> {
 
   private triangleAs(lower: boolean, diagonal: number): Tensor {
     if (this.shape.length !== 2) {
-      throw new Error(`tril/triu 는 2차원이다: [${this.shape}]`);
+      throw new Error(`tril/triu is 2-D: [${this.shape}]`);
     }
     const rows = this.shape[0] ?? 0;
     const cols = this.shape[1] ?? 0;
@@ -2788,7 +2790,7 @@ export class Tensor implements Node<Tensor> {
     if (list.length > this.shape.length) {
       throw new RuntimeError(
         `too many indices for tensor of dimension ${this.shape.length}: ` +
-          `${list.length} 개를 줬다`,
+          `got ${list.length}`,
       );
     }
     let out: Tensor = this;
@@ -2812,9 +2814,9 @@ export class Tensor implements Node<Tensor> {
    * 실수만 받는 자리에서 멈춘다. **torch 가 멈추는 곳에서 멈추는 것이 규칙이다** —
    * 관대한 쪽도 갈리는 것이고, 그 코드는 진짜 torch 에서 나중에 깨진다.
    */
-  private needsFloat(korean: string, phrase: string): void {
+  private needsFloat(what: string, phrase: string): void {
     if (this.dtype !== "float32") {
-      throw new RuntimeError(`${korean} — \`.to("float32")\` 를 먼저 불러라.\n(torch: ${phrase})`);
+      throw new RuntimeError(`${what} — call \`.to("float32")\` first.\n(torch: ${phrase})`);
     }
   }
 
@@ -2946,7 +2948,7 @@ export class Tensor implements Node<Tensor> {
     }
     for (let k = 0; k < n; k++) {
       const len = cur.shape[axis] ?? 0;
-      if (len < 2) throw new Error(`축 ${dim} 가 짧아서 diff 를 더 못 한다.`);
+      if (len < 2) throw new Error(`dimension ${dim} is too short to diff again.`);
       cur = cur.narrow(axis, 1, len - 1).sub(cur.narrow(axis, 0, len - 1));
     }
     return cur;
@@ -2959,7 +2961,7 @@ export class Tensor implements Node<Tensor> {
 
   /** 정수 거듭제곱. 지금은 곱셈을 되풀이한다 — 지수가 작을 때만 쓸 것이다. */
   matrixPower(k: number): Tensor {
-    if (k < 1) throw new Error(`matrix_power 는 아직 1 이상만이다: ${k}`);
+    if (k < 1) throw new Error(`matrix_power supports 1 and up for now: ${k}`);
     // **곱셈을 이어 붙인다** — 그러면 역방향이 저절로 따라온다. 분해로 짜면 미분식을
     // 새로 써야 하고, 그건 틀릴 자리를 하나 더 만드는 것이다.
     //
@@ -3022,7 +3024,7 @@ export class Tensor implements Node<Tensor> {
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
     // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
     // torch 에서 깨진다.
-    this.needsFloat("norm 은 실수에만 있습니다", "linalg.vector_norm: Expected a floating point or complex tensor as input");
+    this.needsFloat("norm is for floating point only", "linalg.vector_norm: Expected a floating point or complex tensor as input");
     return this.square().sum().sqrt();
   }
 
@@ -3729,7 +3731,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const axis = dim < 0 ? dim + rank : dim;
     const n = this.shape[axis] ?? 0;
     if (n % 2 !== 0) {
-      throw new Error(`glu 는 축 ${dim} 의 길이가 짝수여야 한다 (지금 ${n})`);
+      throw new Error(`glu needs an even length along dimension ${dim} (got ${n})`);
     }
     const half = n / 2;
     return this.narrow(axis, 0, half).mul(this.narrow(axis, half, half).sigmoid());
@@ -3869,7 +3871,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const N = this.shape[0] ?? 1;
     const C = this.shape[1] ?? 1;
     if (C % numGroups !== 0) {
-      throw new Error(`채널 ${C} 를 ${numGroups} 그룹으로 못 나눈다`);
+      throw new Error(`cannot split ${C} channels into ${numGroups} groups`);
     }
     const inner = this.size / (N * numGroups);
     return this.reshape([N, numGroups, inner]).layerNorm(-1, eps).reshape(this.shape);
@@ -4157,7 +4159,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   bmm(other: Tensor): Tensor {
     if (this.shape.length !== 3 || other.shape.length !== 3) {
-      throw new Error(`bmm 은 3차원끼리다: [${this.shape}] × [${other.shape}]`);
+      throw new Error(`bmm is 3-D by 3-D: [${this.shape}] x [${other.shape}]`);
     }
     const batch = this.shape[0] ?? 0;
     const parts: Tensor[] = [];
@@ -4327,7 +4329,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     batchFirst = false,
     paddingValue = 0,
   ): Tensor {
-    if (parts.length === 0) throw new Error("pad_sequence 에 줄 것이 없다");
+    if (parts.length === 0) throw new Error("pad_sequence got nothing to pad");
     const longest = Math.max(...parts.map((p) => p.shape[0] ?? 0));
     const padded = parts.map((p) =>
       p.pad(0, 0, longest - (p.shape[0] ?? 0), paddingValue));
@@ -4865,14 +4867,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const rank = this.shape.length;
     if (rank < 2) {
       throw new RuntimeError(
-        `linalg: 2차원 이상이어야 한다 — 지금은 [${this.shape}] 다`,
+        `linalg: needs two or more dimensions — got [${this.shape}]`,
       );
     }
     const rows = this.shape[rank - 2] ?? 0;
     const cols = this.shape[rank - 1] ?? 0;
     if (square && rows !== cols) {
       throw new RuntimeError(
-        `linalg: 정사각 행렬이어야 한다 — 지금은 [${this.shape}] 다`,
+        `linalg: needs a square matrix — got [${this.shape}]`,
       );
     }
     const lead = [...this.shape.slice(0, rank - 2)];
@@ -4927,7 +4929,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return mats.map((a) => {
       if (LA.lu(a, n).singular) {
         throw new LinAlgError(
-          `linalg.${what}: 특이행렬이다 — 역행렬이 없다`,
+          `linalg.${what}: the matrix is singular — it has no inverse`,
         );
       }
       return LA.inverse(a, n);
@@ -5063,7 +5065,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         return LA.cholesky(a, n);
       } catch {
         throw new LinAlgError(
-          "linalg.cholesky: 대칭 양정부호가 아니다 (주소행렬식이 0 이하다)",
+          "linalg.cholesky: the input is not symmetric positive definite (a leading principal minor is not positive)",
         );
       }
     });
@@ -5343,7 +5345,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     b: Tensor, upper: boolean, left = true, unitriangular = false,
   ): Promise<Tensor> {
     const v = await this.asBatch();
-    if (v.batch !== 1) throw new RuntimeError("solve_triangular: 배치는 아직 없다");
+    if (v.batch !== 1) throw new RuntimeError("solve_triangular: batching is not here yet");
     const n = v.rows;
     const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const rhs = LA.fromF32(await b.toArray());
@@ -5447,7 +5449,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** 최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다. */
   async lstsq(b: Tensor): Promise<Tensor> {
     const v = await this.asBatch(false);
-    if (v.batch !== 1) throw new RuntimeError("lstsq: 배치는 아직 없다");
+    if (v.batch !== 1) throw new RuntimeError("lstsq: batching is not here yet");
     const { rows, cols } = v;
     const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const rhs = LA.fromF32(await b.toArray());
@@ -5512,7 +5514,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           d -= (ld[j * n + k] ?? 0) ** 2 * (ld[k * n + k] ?? 0);
         }
         if (Math.abs(d) < 1e-12) {
-          throw new RuntimeError("ldl_factor — 피벗이 필요한 대칭 행렬 (부정부호)");
+          throw new RuntimeError("ldl_factor — this symmetric matrix needs pivoting (it is indefinite)");
         }
         ld[j * n + j] = d;
         for (let i = j + 1; i < n; i++) {
@@ -5555,9 +5557,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   async ldlSolve(b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
     const n = v.rows;
-    if (v.batch !== 1) throw new RuntimeError("ldl_solve: 배치는 아직 없다");
+    if (v.batch !== 1) throw new RuntimeError("ldl_solve: batching is not here yet");
     const ld = v.mats[0];
-    if (!ld) throw new RuntimeError("ldl_solve: 분해가 비었다");
+    if (!ld) throw new RuntimeError("ldl_solve: the factorization is empty");
     const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
     const rhs = LA.fromF32(await b.toArray());
     const out = new Float64Array(n * width);
@@ -5687,7 +5689,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   async luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
-    if (v.batch !== 1) throw new RuntimeError("lu_solve: 배치는 아직 없다");
+    if (v.batch !== 1) throw new RuntimeError("lu_solve: batching is not here yet");
     const n = v.rows;
     const piv = Int32Array.from(await pivots.toArray());
     const width = b.shape.length === 1 ? 1 : (b.shape[b.shape.length - 1] ?? 1);
@@ -5763,7 +5765,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   async luTop(pivot = true, getInfos = false): Promise<{
     LU: Tensor; pivots: Tensor; info?: Tensor;
   }> {
-    if (!pivot) throw new RuntimeError("lu(pivot=false) 는 없다");
+    if (!pivot) throw new RuntimeError("lu(pivot=false) is not here");
     const got = await this.luFactor();
     return getInfos ? { ...got, info: Tensor.zeros([]) } : got;
   }
@@ -5988,7 +5990,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // 실제로 다음 케이스가 엉뚱한 값으로 실패했다.
     if (result.size > this.size) {
       throw new RuntimeError(
-        "제자리 연산이 칸 수를 늘릴 수는 없다 — 버퍼가 그만큼이 아니다.",
+        "an in-place operation cannot grow the element count — the buffer is not that large.",
       );
     }
     if (result.buffer !== this.buffer) {
@@ -6076,7 +6078,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   copyFrom(src: Tensor): Tensor {
     if (src.size !== this.size) {
-      throw new Error(`크기가 다르다: [${this.shape}] ← [${src.shape}]`);
+      throw new Error(`size mismatch: [${this.shape}] <- [${src.shape}]`);
     }
     return this.mutate(() => src);
   }
@@ -6464,8 +6466,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   floatPower_(exponent: Tensor | number): Tensor {
     void exponent;
     throw new RuntimeError(
-      "`float_power_` 는 제자리로 쓸 수 없습니다 — 결과가 배정도라 되쓸 곳이 " +
-      "없습니다. `x.floatPower(k)` 로 새 텐서를 받으세요. " +
+      "`float_power_` cannot be used in place — the result is double precision and " +
+      "there is nowhere to put it back. Use `x.floatPower(k)` for a new tensor. " +
       "(torch: the base given to float_power_ has dtype Float but the " +
       "operation's result requires dtype Double)");
   }
@@ -7281,8 +7283,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   kron(other: Tensor): Tensor {
     if (this.shape.length !== 1 || other.shape.length !== 1) {
       throw new RuntimeError(
-        "kron 은 1 차원만 합니다 — 2 차원 이상은 아직 없습니다. " +
-        `(받은 모양: [${this.shape}] 과 [${other.shape}])`,
+        "kron only does 1-D — two or more dimensions are not here yet. " +
+        `(got shapes [${this.shape}] and [${other.shape}])`,
       );
     }
     const n = this.shape[0] ?? 0;
@@ -7620,7 +7622,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   conv2d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
     if (this.shape.length !== 4 || weight.shape.length !== 4) {
-      throw new Error(`conv2d 는 4차원끼리다: [${this.shape}] × [${weight.shape}]`);
+      throw new Error(`conv2d is 4-D by 4-D: [${this.shape}] x [${weight.shape}]`);
     }
     return this.convND(weight, bias, stride, padding);
   }
@@ -7628,7 +7630,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** 1차원 합성곱. `(N, C, L)`. */
   conv1d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
     if (this.shape.length !== 3 || weight.shape.length !== 3) {
-      throw new Error(`conv1d 는 3차원끼리다: [${this.shape}] × [${weight.shape}]`);
+      throw new Error(`conv1d is 3-D by 3-D: [${this.shape}] x [${weight.shape}]`);
     }
     return this.convND(weight, bias, stride, padding);
   }
@@ -7636,7 +7638,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** 3차원 합성곱. `(N, C, D, H, W)`. */
   conv3d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
     if (this.shape.length !== 5 || weight.shape.length !== 5) {
-      throw new Error(`conv3d 는 5차원끼리다: [${this.shape}] × [${weight.shape}]`);
+      throw new Error(`conv3d is 5-D by 5-D: [${this.shape}] x [${weight.shape}]`);
     }
     return this.convND(weight, bias, stride, padding);
   }
@@ -7924,7 +7926,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   ): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1 || weight.shape.length !== this.shape.length) {
-      throw new Error(`conv: 모양이 안 맞는다: [${this.shape}] × [${weight.shape}]`);
+      throw new Error(`conv: shapes do not match: [${this.shape}] x [${weight.shape}]`);
     }
     const spread = (v: number | readonly number[]): number[] =>
       typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
@@ -8028,7 +8030,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const spatial = this.shape.length - 2;
     if (spatial < 1 || weight.shape.length !== this.shape.length) {
       throw new Error(
-        `convTranspose: 모양이 안 맞는다: [${this.shape}] × [${weight.shape}]`);
+        `convTranspose: shapes do not match: [${this.shape}] x [${weight.shape}]`);
     }
     const spread = (v: number | readonly number[]): number[] =>
       typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
@@ -8112,7 +8114,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** 차원 수에 상관없는 풀링. */
   poolND(kind: "max" | "avg", kernel: number, stride?: number): Tensor {
     const spatial = this.shape.length - 2;
-    if (spatial < 1) throw new Error(`풀링: 모양이 안 맞는다: [${this.shape}]`);
+    if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
     const step = stride ?? kernel;
     const inDims = this.shape.slice(2);
     const p: PoolNDShape = {
@@ -8174,7 +8176,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       // 저쪽 커널은 **배수만** 받는다. 배수가 아니면 조용히 근사하지 않고 멈춘다.
       const [oh, ow] = pair(size);
       if (oh % h || ow % w || oh / h !== ow / w) {
-        throw new RuntimeError("interpolate(size=) — 배수가 아닌 최근접 확대");
+        throw new RuntimeError("interpolate(size=) — nearest upsampling by a non-integer factor");
       }
       return this.upsample(oh / h);
     }
@@ -8284,7 +8286,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   private pool2d(kind: "max" | "avg", kernel: number, stride: number): Tensor {
     if (this.shape.length !== 4) {
-      throw new Error(`풀링은 4차원이다: [${this.shape}]`);
+      throw new Error(`pooling is 4-D: [${this.shape}]`);
     }
     return this.poolND(kind, kernel, stride);
   }
@@ -8421,7 +8423,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (re.shape.length !== im.shape.length
       || re.shape.some((d, i) => d !== im.shape[i])) {
       throw new RuntimeError(
-        `complex 는 모양이 같아야 한다: [${re.shape}] vs [${im.shape}]`,
+        `complex requires matching shapes: [${re.shape}] vs [${im.shape}]`,
       );
     }
     const n = re.size;
@@ -8442,7 +8444,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (abs.shape.length !== angle.shape.length
       || abs.shape.some((d, i) => d !== angle.shape[i])) {
       throw new RuntimeError(
-        `polar 는 모양이 같아야 한다: [${abs.shape}] vs [${angle.shape}]`,
+        `polar requires matching shapes: [${abs.shape}] vs [${angle.shape}]`,
       );
     }
     const n = abs.size;
@@ -8459,8 +8461,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   viewAsReal(): Tensor {
     if (!this.isComplex()) {
       throw new RuntimeError(
-        "view_as_real 은 복소수 텐서에만 쓴다 — 지금 형은 " +
-          `torch.${this.dtype} 다.`,
+        "view_as_real is for complex tensors only — this one is " +
+          `torch.${this.dtype}.`,
       );
     }
     const shape = [...this.shape, 2];
@@ -8477,8 +8479,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const last = this.shape[this.shape.length - 1];
     if (this.isComplex() || last !== 2) {
       throw new RuntimeError(
-        "view_as_complex 는 마지막 축이 2 인 실수 텐서에만 쓴다: " +
-          `[${this.shape}] (형 torch.${this.dtype})`,
+        "view_as_complex is for real tensors whose last dimension is 2: " +
+          `[${this.shape}] (dtype torch.${this.dtype})`,
       );
     }
     const shape = this.shape.slice(0, -1);
@@ -8494,7 +8496,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   private needComplex(what: string): void {
     if (!this.isComplex()) {
       throw new RuntimeError(
-        `${what} 은(는) 복소수 텐서에만 쓴다 — 지금 형은 torch.${this.dtype} 다.`,
+        `${what} is for complex tensors only — this one is torch.${this.dtype}.`,
       );
     }
   }
@@ -8691,8 +8693,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (!same(a.shape, b.shape)) {
       // 복소수끼리 모양이 다른 경우다. 여기는 아직 없다 — 값을 지어내지 않는다.
       throw new RuntimeError(
-        `복소수 ${name} 은 아직 모양이 같아야 한다: [${a.shape}] vs [${b.shape}] ` +
-          "— 복소수끼리의 브로드캐스팅은 없다.",
+        `complex ${name} still requires matching shapes: [${a.shape}] vs [${b.shape}] ` +
+          "— broadcasting between complex tensors is not here.",
       );
     }
     const n = a.size;
@@ -8763,7 +8765,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (!this.requiresGrad) {
       throw new RuntimeError(
         `element 0 of tensors ${TORCH.noGrad} and does not have a grad_fn: ` +
-          "no_grad 안이었거나 흐름을 끊는 연산을 지났다.",
+          "it was made under no_grad, or it passed through an operation that breaks the graph.",
       );
     }
     // **손실은 실수여야 한다.** torch 가 그 자리에서 멈춘다(실측).
@@ -8774,15 +8776,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     if (isComplexDType(this.dtype)) {
       throw new RuntimeError(
         "grad can be implicitly created only for real scalar outputs " +
-          "but got torch.complex64: `.real`·`.abs()` 로 실수를 만든 뒤 불러라.",
+          "but got torch.complex64: make it real with .real or .abs() first.",
       );
     }
     let seed: Tensor;
     if (gradient === undefined) {
       if (this.size !== 1) {
         throw new RuntimeError(
-          `${TORCH.nonScalarBackward}: 지금 모양은 [${this.shape}] 다 — ` +
-            "기울기를 넘기거나 .sum() 을 먼저 불러라.",
+          `${TORCH.nonScalarBackward}: this shape is [${this.shape}] — ` +
+            "pass a gradient, or call .sum() first.",
         );
       }
       seed = Tensor.full([], 1);
@@ -8802,8 +8804,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       retainGraph,
       onSecondPass: () => {
         throw new RuntimeError(
-          `${TORCH.secondBackward}. 다시 흘리려면 ` +
-            "backward(undefined, true) 로 그래프를 남겨라.",
+          `${TORCH.secondBackward}. To flow through it again, ` +
+            "call backward(undefined, true) to keep the graph.",
         );
       },
     });
@@ -8904,7 +8906,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // 내면 그것이 교재의 줄과 안 맞는데도 맞는 것처럼 보인다.
     if (isComplexDType(this.dtype)) {
       throw new RuntimeError(
-        "complex64 의 repr 은 아직 없다 — `viewAsReal()` 로 실수 짝을 찍어라.",
+        "there is no repr for complex64 yet — print the real pair with viewAsReal().",
       );
     }
     const values = Array.from(await this.toArray());
@@ -9003,7 +9005,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   double(): Tensor {
     throw new RuntimeError(
       "Only Tensors of floating point dtype float32 are supported — "
-        + "float64 는 WebGPU 셰이더에 없다",
+        + "float64 is not in WebGPU shaders",
     );
   }
 
@@ -9014,9 +9016,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // 이름만 바꾸면 버퍼 길이와 `size` 가 어긋난 채로 남는다.
     if (dtype === "complex64" || isComplexDType(this.dtype)) {
       throw new RuntimeError(
-        `torch.${this.dtype} → torch.${dtype} 는 이름표 갈이로 안 된다 — ` +
-          "복소수는 저장이 칸당 f32 두 개다. " +
-          "`Tensor.complex(re, im)`·`viewAsComplex()`·`real()` 로 오가라.",
+        `torch.${this.dtype} -> torch.${dtype} is not a relabel — ` +
+          "complex storage is two f32 per slot. " +
+          "Move between them with Tensor.complex(re, im), viewAsComplex(), or real().",
       );
     }
     // **정수·참거짓으로 갈 때는 값도 바꾼다.** 형이 이름표라는 것이 "아무 값이나
@@ -9059,8 +9061,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // 나오면서 허수부가 사라진다 — 없는 것보다 나쁜 답이다.
     if (isComplexDType(this.dtype)) {
       throw new RuntimeError(
-        "complex64 에는 item() 이 없다 — JS 에 복소수 값이 없다. " +
-          "`real()`·`imag()` 로 갈라서 꺼내라.",
+        "complex64 has no item() — JavaScript has no complex value. " +
+          "Split it with real() and imag().",
       );
     }
     if (this.size !== 1) {

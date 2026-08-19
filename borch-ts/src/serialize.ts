@@ -88,8 +88,8 @@ export async function save(
     // 체크포인트가 몇 시간 뒤에 못 읽히는 것이 제일 나쁜 실패다.
     if (t.dtype === "complex64") {
       throw new RuntimeError(
-        `'${name}' 이 complex64 다 — 아직 저장 못 한다. ` +
-          "`viewAsReal()` 로 실수 짝을 저장하고 읽을 때 `viewAsComplex()` 로 되돌려라.",
+        `'${name}' is complex64 — saving that is not supported yet. ` +
+          "Store the real pair with viewAsReal() and restore it with viewAsComplex() on load.",
       );
     }
     const values = await t.toArray();
@@ -132,14 +132,14 @@ export async function save(
  */
 export function load(bytes: Uint8Array): Bundle {
   if (bytes.byteLength < LENGTH_FIELD) {
-    throw new RuntimeError(`체크포인트가 너무 짧다: ${bytes.byteLength} 바이트`);
+    throw new RuntimeError(`checkpoint is too short: ${bytes.byteLength} bytes`);
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const headerLength = Number(view.getBigUint64(0, true));
   const bodyAt = LENGTH_FIELD + headerLength;
   if (!Number.isSafeInteger(headerLength) || bodyAt > bytes.byteLength) {
     throw new RuntimeError(
-      `머리 길이가 파일을 넘는다: ${headerLength} (파일 ${bytes.byteLength})`,
+      `header length runs past the file: ${headerLength} (file ${bytes.byteLength})`,
     );
   }
 
@@ -150,7 +150,7 @@ export function load(bytes: Uint8Array): Bundle {
   try {
     header = JSON.parse(text) as Record<string, unknown>;
   } catch {
-    throw new RuntimeError("체크포인트 머리가 JSON 이 아니다");
+    throw new RuntimeError("checkpoint header is not JSON");
   }
 
   const raw = header.__metadata__;
@@ -163,14 +163,14 @@ export function load(bytes: Uint8Array): Bundle {
     const [begin, end] = entry.data_offsets;
     if (begin > end || bodyAt + end > bytes.byteLength) {
       throw new RuntimeError(
-        `'${name}' 의 자리가 파일을 넘는다: [${begin}, ${end}]`,
+        `'${name}' points past the end of the file: [${begin}, ${end}]`,
       );
     }
     const count = (end - begin) / BYTES_PER_F32;
     const size = entry.shape.reduce((a, b) => a * b, 1);
     if (count !== size) {
       throw new RuntimeError(
-        `'${name}' 의 모양 [${entry.shape}] 는 원소 ${count} 개와 안 맞는다`,
+        `'${name}' has shape [${entry.shape}], which does not match ${count} elements`,
       );
     }
     // **사본을 뜬다.** 원본 바이트 배열이 8 바이트 정렬이 아닐 수 있고, 그때
@@ -196,13 +196,13 @@ function asEntry(name: string, value: unknown): Entry {
     || !Array.isArray(e.data_offsets) || e.data_offsets.length !== 2
     || typeof e.data_offsets[0] !== "number" || typeof e.data_offsets[1] !== "number"
   ) {
-    throw new RuntimeError(`'${name}' 의 머리 항목이 깨졌다`);
+    throw new RuntimeError(`'${name}' has a malformed header entry`);
   }
   if (e.dtype !== "F32") {
     // **근사하지 않는다.** 남이 만든 F16·I64 파일을 float32 로 읽어 주면 값은
     // 나오는데 그 값이 무엇인지는 아무도 모른다.
     throw new RuntimeError(
-      `'${name}' 의 dtype 이 ${String(e.dtype)} 다 — borch 는 F32 만 읽는다`,
+      `'${name}' has dtype ${String(e.dtype)} — borch only reads F32`,
     );
   }
   return { dtype: "F32", shape: e.shape, data_offsets: [e.data_offsets[0], e.data_offsets[1]] };
@@ -210,7 +210,7 @@ function asEntry(name: string, value: unknown): Entry {
 
 function asDType(name: string, label: string): DType {
   if (!(DTYPES as readonly string[]).includes(label)) {
-    throw new RuntimeError(`'${name}' 의 형 이름표가 낯설다: ${label}`);
+    throw new RuntimeError(`'${name}' has an unfamiliar dtype label: ${label}`);
   }
   return label as DType;
 }

@@ -13,20 +13,24 @@ class BorchError(NotImplementedError):
     """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
 
 
-def _like_torch(korean: str, torch_phrase: str) -> str:
+def _like_torch(said: str, torch_phrase: str) -> str:
     """오류 메시지의 규격.
 
-    한국어 설명만 두면 학습자가 검색해서 답을 못 찾고, 영문만 베끼면 이 교재가
-    한국어인 이유가 사라진다. 둘 다 넣는다 — 설명은 읽고, 영문 문구는 검색한다.
+    우리 문장은 **무엇이 왜 막혔는지**를 말하고, torch 의 문구는 **검색되라고**
+    붙인다. 우리 것만 두면 답이 있는 페이지에 가 닿지 못하고, 저쪽 것만 베끼면
+    torch 가 안 겪는 우리 사정(WGSL 에 f64 가 없다 같은 것)을 말할 자리가 없다.
+
+    둘 다 영어다. 사용자가 처음 무언가 깨질 때 만나는 표면이라 그렇다 — 주석은
+    한국어로 남는다.
     """
-    return f"{korean}\n(torch: {torch_phrase})"
+    return f"{said}\n(torch: {torch_phrase})"
 
 
 def _unsupported(what: str):
     raise BorchError(
-        f"{what} 은(는) 브라우저 축소판에 없습니다.\n"
-        "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
-        "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다."
+        f"{what} is not in the browser subset.\n"
+        "Use real PyTorch on your own machine (`uv add torch`) — this subset is for "
+        "practising the syntax, and imitating what is missing teaches the wrong thing."
     )
 
 
@@ -69,7 +73,7 @@ def _refuses_nonfloat_kernel(data, name: str, kernel: str):
     """
     if data.dtype.kind not in "fc":
         raise NotImplementedError(_like_torch(
-            f"{name} 은(는) 실수에만 있습니다. `.float()` 을 먼저 부르세요.",
+            f"{name} is for floating point only. Call `.float()` first.",
             f'"{kernel}" not implemented for '
             f"'{_TYPE_NAMES.get(data.dtype.kind, data.dtype.name)}'"))
 
@@ -142,7 +146,7 @@ class _AbsentDtype(dtype):
 
     @property
     def np(self):
-        _unsupported(f"`torch.{self.name}` (→ `{self._instead}` 로 맞추세요)")
+        _unsupported(f"`torch.{self.name}` (use `{self._instead}` instead)")
 
 
 # **`torch.int` 는 int32 다**(실측 — `torch.long` 이 int64다). 정수 칸을 int64 하나로
@@ -187,9 +191,9 @@ def _resolve(data, dt):
 def _no_complex128(what="이 연산"):
     """**배정도 복소수는 만들 수 없다.** `float64` 가 없는 것과 같은 자리다."""
     raise BorchError(
-        f"{what} 이(가) complex128 을 만들려 합니다 — 브라우저 축소판에는 "
-        "`float64` 가 없고(WGSL 에 `f64` 가 없습니다) 그래서 배정도 복소수도 "
-        "없습니다. `complex64` 로 맞추세요.")
+        f"{what} would make complex128 — the browser subset has no `float64` "
+        "(WGSL has no `f64`), so it has no double-precision complex either. "
+        "Use `complex64`.")
 
 
 

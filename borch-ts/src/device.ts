@@ -513,7 +513,7 @@ export class Device {
     if (bytes > max) {
       // 넘긴 채로 돌리면 WebGPU 는 조용히 일부만 쓴다. 여기서 멈추는 편이 낫다.
       throw new Error(
-        `버퍼가 한계를 넘는다: ${(bytes / 1048576).toFixed(1)}MB > ` +
+        `buffer exceeds the limit: ${(bytes / 1048576).toFixed(1)}MB > ` +
           `${(max / 1048576).toFixed(0)}MB (maxStorageBufferBindingSize)`,
       );
     }
@@ -551,8 +551,8 @@ export class Device {
     for (const [axis, count] of groups.entries()) {
       if (count > cap) {
         throw new Error(
-          `dispatch ${axis} 축이 한계를 넘는다: ${count} > ${cap}. ` +
-            "WebGPU 는 이것을 던지지 않고 조용히 안 한다.",
+          `dispatch on axis ${axis} exceeds the limit: ${count} > ${cap}. ` +
+            "WebGPU does not throw for this — it silently does nothing.",
         );
       }
     }
@@ -814,9 +814,9 @@ export class Device {
     // **사람이 믿는 수가 되는 순간**이 여기다.
     if (this.lost) {
       throw new Error(
-        `WebGPU 장치를 잃었다(${this.lost.reason}) — 이 뒤의 값은 뜻이 없다.\n` +
-          `  ${this.lost.message}\n` +
-          "  장치를 다시 잡으려면 페이지를 새로 열어야 한다.",
+        `the WebGPU device was lost (${this.lost.reason}) — nothing after this means ` +
+          `anything.\n  ${this.lost.message}\n` +
+          "  Reload the page to get a device again.",
       );
     }
     // 빈 텐서를 읽으면 빈 것이 나와야 한다. 버퍼는 최소 한 칸을 잡으므로, 그것을

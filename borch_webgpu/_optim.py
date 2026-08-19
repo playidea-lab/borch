@@ -218,7 +218,7 @@ class LBFGS:
         group = self.param_groups[0]
         if group["line_search_fn"] is not None:
             raise RuntimeError(
-                f"LBFGS(line_search_fn={group['line_search_fn']!r}) 은(는) 아직 여기 없다.")
+                f"LBFGS(line_search_fn={group['line_search_fn']!r}) is not here yet.")
         lr, max_iter = group["lr"], group["max_iter"]
         max_eval = group["max_eval"]
         tol_grad, tol_change = group["tolerance_grad"], group["tolerance_change"]

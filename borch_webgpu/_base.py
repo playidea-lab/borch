@@ -260,7 +260,7 @@ class Tensor:
         """
         raise RuntimeError(
             "Only Tensors of floating point dtype float32 are supported — "
-            "float64 는 WebGPU 셰이더에 없다")
+            "float64 is not in WebGPU shaders")
 
     def long(self):
         return self.to("int64")
@@ -472,7 +472,7 @@ class Tensor:
     def is_nonzero(self):
         if self.numel() != 1:
             raise RuntimeError(
-                f"값이 {self.numel()}개인 텐서의 참거짓은 모호합니다. "
+                f"The truth value of a tensor with {self.numel()} values is ambiguous. "
                 "(torch: Boolean value of Tensor with "
                 f"{'no values' if self.numel() == 0 else 'more than one value'}"
                 " is ambiguous)")
@@ -648,7 +648,7 @@ class Tensor:
             # 그대로 통과하고, 결속을 고칠 때는 `js_name` 이 필요하다.
             raise AttributeError(
                 f"'Tensor' object has no attribute '{name}'"
-                f" — borch.ts 에 `{js_name}` 이 없다")
+                f" — borch.ts does not have `{js_name}`")
         if not callable(got):
             return settle(got)
 
@@ -1000,8 +1000,8 @@ def tensor(data, dtype=None, requires_grad=False):
             # 붙은 **중간 마디**가 되고, torch 의 `requires_grad=True` 텐서는 잎이다.
             # 그 차이는 `.grad` 가 안 쌓이는 것으로만 드러난다 — 값은 다 맞는 채로.
             raise RuntimeError(
-                "complex64 텐서에 requires_grad=True 를 여기서는 못 준다 — "
-                "실수 잎 둘을 만들어 `complex(re, im)` 으로 엮어라.")
+                "requires_grad=True cannot be given to a complex64 tensor here — make two "
+                "real leaves and join them with `complex(re, im)`.")
         parts = _np.asarray(arr, dtype=_np.complex64)
         pair = [_np.ascontiguousarray(half.ravel(), dtype=_np.float32)
                 for half in (parts.real, parts.imag)]
@@ -1038,9 +1038,9 @@ def _absent_dtype(name, shown):
     # (`_core_repr` 이 같은 방식이다).
     from borch._base import BorchError
     raise BorchError(
-        f"`.{name}()`({shown}) 은(는) 브라우저 축소판에 없습니다.\n"
-        "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
-        "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.")
+        f"`.{name}()`({shown}) is not in the browser subset.\n"
+        "Use real PyTorch on your own machine (`uv add torch`) — this subset is for "
+        "practising the syntax, and imitating what is missing teaches the wrong thing.")
 
 
 def _bind_absent(name, shown):
@@ -1059,7 +1059,7 @@ del _dname, _shown
 
 def _deprecated_by_torch(name):
     raise RuntimeError(
-        f"`{name}` 은 torch 1.9 에서 없어졌습니다 — `torch.linalg.{name}` 을 쓰세요. "
+        f"`{name}` was removed in torch 1.9 — use `torch.linalg.{name}`. "
         f"(torch: This function was deprecated since version 1.9 and is now removed. "
         f"Please use the `torch.linalg.{name}` function instead.)")
 
@@ -1088,7 +1088,7 @@ Tensor.is_pinned = lambda self: False
 def _is_coalesced(self):
     del self
     raise RuntimeError(
-        "조밀 텐서에는 coalesce 상태가 없습니다. "
+        "A dense tensor has no coalesce state. "
         "(torch: is_coalesced expected sparse coordinate tensor layout "
         "but got Strided)")
 
@@ -1113,7 +1113,7 @@ def _sparse_only(name):
     def method(self, *args, **kw):
         del self, args, kw
         raise NotImplementedError(
-            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 쓸 수 없습니다. "
+            f"`{name}` is for sparse tensors only — not for a dense one. "
             f"(torch: Could not run 'aten::{name}' with arguments from the 'CPU' backend)")
 
     method.__name__ = name
@@ -1195,7 +1195,7 @@ def _CoreLayout():                                          # noqa: N802
 def _matrix_transpose(self):
     if self.ndim < 2:
         raise RuntimeError(
-            "`.mT` 는 2차원 이상에만 있습니다. "
+            "`.mT` is only on 2-D and above. "
             "(torch: tensor.mT is only supported on matrices or batches of matrices)")
     return self.transpose(-2, -1)
 
@@ -1203,7 +1203,7 @@ def _matrix_transpose(self):
 def _hermitian(self):
     if self.ndim != 2:
         raise RuntimeError(
-            f"`.H` 는 행렬(2차원)에만 있습니다 ({self.ndim}차원을 받았습니다). "
+            f"`.H` is only on matrices (2-D) — got {self.ndim}-D. "
             "(torch: tensor.H is only supported on matrices (2-D tensors))")
     return self.transpose(0, 1).conj()
 
@@ -1272,7 +1272,7 @@ def _retain_grad(self):
     남기므로 여기서는 표시만 세운다."""
     if not self._h.requiresGrad:
         raise RuntimeError(
-            "기울기를 안 받는 텐서에는 `retain_grad()` 를 쓸 수 없습니다. "
+            "`retain_grad()` cannot be used on a tensor that does not take gradients. "
             "(torch: can't retain_grad on Tensor that has requires_grad=False)")
     return None
 
@@ -1289,7 +1289,7 @@ def _gone(name, instead):
     def method(self, *a, **k):
         del self, a, k
         raise RuntimeError(
-            f"`{name}` 은 torch 에서 없어졌습니다 — `torch.{instead}` 을 쓰세요. "
+            f"`{name}` was removed from torch — use `torch.{instead}`. "
             "(torch: This function was deprecated since version 1.9 and is now removed.)")
     method.__name__ = name
     return method
@@ -1320,7 +1320,7 @@ def _needs_sparse(name, layout):
     def method(self, *a, **k):
         del self, a, k
         raise RuntimeError(
-            f"`{name}` 은 희소 텐서 전용입니다 — 조밀 텐서에는 없습니다. "
+            f"`{name}` is for sparse tensors only — a dense tensor does not have it. "
             f"(torch: {name} expected sparse {layout} but got Strided)")
 
     method.__name__ = name
@@ -1343,15 +1343,15 @@ for _n, _layout in _SPARSE_ACCESSOR.items():
     setattr(Tensor, _n, _needs_sparse(_n, _layout))
 for _n in ("to_sparse", "to_sparse_coo", "to_sparse_csr", "to_sparse_csc",
            "to_sparse_bsr", "to_sparse_bsc", "sparse_mask"):
-    setattr(Tensor, _n, _absent_here(_n, "희소 텐서"))
+    setattr(Tensor, _n, _absent_here(_n, "sparse tensors"))
 for _n in ("storage", "storage_type", "untyped_storage"):
-    setattr(Tensor, _n, _absent_here(_n, "저장소 객체 — `.numpy()` 를 쓰세요"))
+    setattr(Tensor, _n, _absent_here(_n, "the storage object — use `.numpy()`"))
 for _n in ("int_repr", "q_scale", "q_zero_point", "qscheme"):
-    setattr(Tensor, _n, _absent_here(_n, "양자화"))
+    setattr(Tensor, _n, _absent_here(_n, "quantisation"))
 for _n in ("cuda", "ipu", "mtia", "xpu"):
-    setattr(Tensor, _n, _absent_here(_n, "그 장치"))
+    setattr(Tensor, _n, _absent_here(_n, "that device"))
 for _n in ("pin_memory", "record_stream"):
-    setattr(Tensor, _n, _absent_here(_n, "고정 메모리·스트림"))
+    setattr(Tensor, _n, _absent_here(_n, "pinned memory and streams"))
 del _n, _layout
 
 

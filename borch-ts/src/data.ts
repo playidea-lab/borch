@@ -63,7 +63,7 @@ export class TensorDataset implements Dataset {
 
   constructor(...tensors: Tensor[]) {
     if (tensors.length === 0) {
-      throw new RuntimeError("TensorDataset 에 텐서가 하나는 있어야 한다");
+      throw new RuntimeError("TensorDataset needs at least one tensor");
     }
     const rows = tensors[0]?.shape[0] ?? 0;
     for (const [i, t] of tensors.entries()) {
@@ -71,8 +71,8 @@ export class TensorDataset implements Dataset {
       // 짧은 쪽이 범위를 넘고, 그것은 학습이 도는 채로 라벨만 밀리는 자리다.
       if (t.shape[0] !== rows) {
         throw new RuntimeError(
-          `TensorDataset 의 텐서들이 표본 수가 다르다: ${i} 번은 ${t.shape[0]}, ` +
-            `0 번은 ${rows}`,
+          `TensorDataset tensors disagree on sample count: index ${i} has ${t.shape[0]}, ` +
+            `index 0 has ${rows}`,
         );
       }
     }
@@ -129,7 +129,7 @@ export class Subset implements Dataset {
   private at(index: number): number {
     const mapped = this.indices[index];
     if (mapped === undefined) {
-      throw new RuntimeError(`Subset 의 번호가 범위를 넘는다: ${index}`);
+      throw new RuntimeError(`Subset index out of range: ${index}`);
     }
     return mapped;
   }
@@ -158,7 +158,7 @@ export class ConcatDataset implements Dataset {
         return (this.datasets[i] as Dataset).get(index - start);
       }
     }
-    throw new RuntimeError(`ConcatDataset 의 번호가 범위를 넘는다: ${index}`);
+    throw new RuntimeError(`ConcatDataset index out of range: ${index}`);
   }
 }
 
@@ -176,7 +176,7 @@ export function randomSplit(
   const total = lengths.reduce((a, b) => a + b, 0);
   if (total !== dataset.length) {
     throw new RuntimeError(
-      `나눈 길이의 합 ${total} 이 데이터셋 길이 ${dataset.length} 와 다르다`,
+      `Sum of input lengths ${total} does not equal the length of the input dataset ${dataset.length}`,
     );
   }
   const order = shuffled(dataset.length);
@@ -235,7 +235,7 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
     this.shuffle = options.shuffle ?? false;
     this.dropLast = options.dropLast ?? false;
     if (this.batchSize < 1 || !Number.isInteger(this.batchSize)) {
-      throw new RuntimeError(`batchSize 는 1 이상의 정수여야 한다: ${this.batchSize}`);
+      throw new RuntimeError(`batchSize must be a positive integer: ${this.batchSize}`);
     }
   }
 
@@ -277,12 +277,12 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
  */
 function stackItems(items: readonly (readonly Tensor[])[]): readonly Tensor[] {
   const first = items[0];
-  if (!first) throw new RuntimeError("빈 배치는 만들 수 없다");
+  if (!first) throw new RuntimeError("cannot collate an empty batch");
   const width = first.length;
   for (const item of items) {
     if (item.length !== width) {
       throw new RuntimeError(
-        `표본마다 텐서 수가 다르다: ${item.length} 과 ${width}`,
+        `samples disagree on tensor count: ${item.length} and ${width}`,
       );
     }
   }

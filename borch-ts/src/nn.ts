@@ -170,13 +170,13 @@ export abstract class Module {
     const listed = this.children().length;
     if (listed !== Object.keys(kids).length) {
       throw new RuntimeError(
-        `${this.constructor.name}: children() 이 ${listed} 개를 대는데 ` +
-          `namedChildren() 은 ${Object.keys(kids).length} 개다.\n` +
-          "  파라미터는 `namedChildren()` 이 모은다 — 어긋난 만큼이 **학습에서 " +
-          "조용히 빠진다**.\n" +
-          "  자식을 평범한 객체나 배열에 담았으면 필드로 꺼내거나 " +
-          "`nn.ModuleList`·`nn.ModuleDict` 에 담고, `children()` 대신 " +
-          "`namedChildren()` 을 덮어써라.",
+        `${this.constructor.name}: children() lists ${listed}, but ` +
+          `namedChildren() finds ${Object.keys(kids).length}.\n` +
+          "  Parameters are gathered by namedChildren() — whatever is missing is " +
+          "**silently left out of training**.\n" +
+          "  If the children sit in a plain object or array, make them fields, or " +
+          "put them in nn.ModuleList / nn.ModuleDict, and override " +
+          "namedChildren() rather than children().",
       );
     }
     const out: Record<string, Tensor> = {};
@@ -222,7 +222,7 @@ export abstract class Module {
     for (const [name, src] of Object.entries(values)) {
       const dst = own[name];
       if (!dst) {
-        if (strict) throw new Error(`load_state_dict: 모르는 이름 '${name}'`);
+        if (strict) throw new Error(`load_state_dict: unexpected key '${name}'`);
         continue;
       }
       noGrad(() => dst.copyFrom(src));
@@ -362,7 +362,7 @@ export class ModuleList extends Module {
 
   /** **부르는 층이 아니다.** 지나가려 하면 여기서 멈춘다 — torch 도 그렇다. */
   override forward(): Tensor {
-    throw new Error("ModuleList 는 부르는 층이 아니다 — 안의 층을 골라 불러라");
+    throw new Error("ModuleList is not callable — pick a module inside it");
   }
 
   append(module: Module): this {
@@ -382,7 +382,7 @@ export class ModuleList extends Module {
 
   at(i: number): Module {
     const got = this.items.at(i);
-    if (!got) throw new Error(`ModuleList 자리 ${i} 가 없다 (길이 ${this.items.length})`);
+    if (!got) throw new Error(`ModuleList has no index ${i} (length ${this.items.length})`);
     return got;
   }
 
@@ -423,12 +423,12 @@ export class ModuleDict extends Module {
   }
 
   override forward(): Tensor {
-    throw new Error("ModuleDict 는 부르는 층이 아니다 — 안의 층을 골라 불러라");
+    throw new Error("ModuleDict is not callable — pick a module inside it");
   }
 
   at(key: string): Module {
     const got = this.items.get(key);
-    if (!got) throw new Error(`ModuleDict 에 '${key}' 가 없다`);
+    if (!got) throw new Error(`ModuleDict has no key '${key}'`);
     return got;
   }
 
@@ -467,7 +467,7 @@ export class ParameterList extends Module {
   }
 
   override forward(): Tensor {
-    throw new Error("ParameterList 는 부르는 층이 아니다");
+    throw new Error("ParameterList is not callable");
   }
 
   append(param: Tensor): this {
@@ -478,7 +478,7 @@ export class ParameterList extends Module {
 
   at(i: number): Tensor {
     const got = this.items.at(i);
-    if (!got) throw new Error(`ParameterList 자리 ${i} 가 없다 (길이 ${this.items.length})`);
+    if (!got) throw new Error(`ParameterList has no index ${i} (length ${this.items.length})`);
     return got;
   }
 
@@ -502,12 +502,12 @@ export class ParameterDict extends Module {
   }
 
   override forward(): Tensor {
-    throw new Error("ParameterDict 는 부르는 층이 아니다");
+    throw new Error("ParameterDict is not callable");
   }
 
   at(key: string): Tensor {
     const got = this.items.get(key);
-    if (!got) throw new Error(`ParameterDict 에 '${key}' 가 없다`);
+    if (!got) throw new Error(`ParameterDict has no key '${key}'`);
     return got;
   }
 
@@ -1154,14 +1154,14 @@ export class FractionalMaxPoolND extends Module {
     super();
     if ((outputSize === null) === (outputRatio === null)) {
       throw new ValueError(
-        "FractionalMaxPool 은 outputSize 나 outputRatio 중 하나만 받는다.");
+        "FractionalMaxPool takes either outputSize or outputRatio, not both.");
     }
     // **받아만 놓고 버리지 않는다.** torch 는 이 깃발이 참이면 `forward` 가 쌍을
     // 내는데, 여기 `forward` 는 텐서를 내기로 되어 있다(`Module` 의 약속). 조용히
     // 값만 주는 대신 멈추고 `pool()` 로 보낸다.
     if (returnIndices) {
       throw new RuntimeError(
-        "returnIndices 는 `pool(x)` 로 받는다 — forward 는 텐서 하나를 낸다.");
+        "returnIndices comes back from pool(x) — forward returns a single tensor.");
     }
   }
 
@@ -1875,7 +1875,7 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
   /** **정답도 받는 층이다.** 지나가려 하면 여기서 멈춘다 — `run(x, target)` 이 그 자리다. */
   override forward(): Tensor {
     throw new Error(
-      "AdaptiveLogSoftmaxWithLoss 는 정답도 받는다 — `run(x, target)` 을 써라",
+      "AdaptiveLogSoftmaxWithLoss also takes the target — use run(x, target)",
     );
   }
 
@@ -2578,7 +2578,7 @@ export function batchNorm(
   const b = bias ?? Tensor.zeros([channels]);
   if (!training) {
     if (!runningMean || !runningVar) {
-      throw new Error("batchNorm: 평가 모드에는 이동 통계가 있어야 한다");
+      throw new Error("batchNorm: eval mode needs running statistics");
     }
     const centered = x.sub(runningMean.reshape(shape));
     const scaled = centered.div(
@@ -3014,7 +3014,7 @@ export class MultiheadAttention extends Module {
       const perHead: Tensor[] = [];
       for (let h = 0; h < this.heads; h++) {
         const take = (t: Tensor | undefined): Tensor => {
-          if (!t) throw new Error("attention: 투영이 없다");
+          if (!t) throw new Error("attention: the projections are missing");
           return t.reshape([batch, len, E]).select(0, b).narrow(1, h * head, head);
         };
         const q = take(parts[0]);

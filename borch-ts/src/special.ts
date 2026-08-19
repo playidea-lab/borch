@@ -163,7 +163,7 @@ function sameShape(a: Tensor, b: Tensor): void {
   if (a.shape.length !== b.shape.length
     || a.shape.some((d, i) => d !== b.shape[i])) {
     throw new RuntimeError(
-      `igamma 는 모양이 같아야 한다: [${a.shape}] vs [${b.shape}]`);
+      `igamma requires matching shapes: [${a.shape}] vs [${b.shape}]`);
   }
 }
 

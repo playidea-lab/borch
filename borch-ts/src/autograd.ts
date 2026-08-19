@@ -95,8 +95,8 @@ export function backward<T>(
 ): void {
   if (!root.requiresGrad) {
     throw new Error(
-      "requiresGrad 가 아닌 텐서에서 backward 를 불렀다. " +
-        "(연산 중 no_grad 안이었거나, 흐름을 끊는 연산을 지났다)",
+      "backward() was called on a tensor that does not require grad. " +
+        "(It was made under no_grad, or it passed through an operation that breaks the graph.)",
     );
   }
   const grads = new Map<Node<T>, T>();
@@ -116,8 +116,8 @@ export function backward<T>(
       // 조용히 틀리는 대신 멈춘다. 부모 하나를 빠뜨린 미분식은 값이 그럴듯해서
       // 골든을 통과하고, 학습이 안 되는 것으로만 드러난다.
       throw new Error(
-        `${node.gradName}: 역방향이 ${parts.length}개를 냈는데 ` +
-          `부모는 ${node.parents.length}개다.`,
+        `${node.gradName}: backward returned ${parts.length} gradients, but the node ` +
+          `has ${node.parents.length} parents.`,
       );
     }
     for (const [i, part] of parts.entries()) {

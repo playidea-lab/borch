@@ -19,7 +19,7 @@ from ._ops import _rng, stack
 
 def _unsupported(what):
     raise RuntimeError(
-        f"{what} 은(는) 아직 여기 없다. 코어 `borch` 나 진짜 PyTorch 를 써라.")
+        f"{what} is not here yet. Use the core `borch` or real PyTorch.")
 
 
 # ---------------------------------------------------------------- utils.data
@@ -133,7 +133,7 @@ class DataLoader:
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
                  num_workers=0, drop_last=False, collate_fn=None):
         if sampler is not None and shuffle:
-            raise ValueError("sampler 와 shuffle 은 같이 쓸 수 없다.")
+            raise ValueError("sampler and shuffle cannot be used together.")
         self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
@@ -272,7 +272,7 @@ async def fetch_cached(url, name=None):
         pass                       # 아직 없다 — 받아온다
     response = await _js.fetch(url)
     if not response.ok:
-        raise RuntimeError(f"내려받기 실패 {response.status}: {url}")
+        raise RuntimeError(f"download failed {response.status}: {url}")
     data = _u8_to_np(_js.Uint8Array.new(await response.arrayBuffer()))
     await _opfs_write(key, data)
     return data
@@ -308,8 +308,8 @@ def decode_cifar10(raw):
     arr = _np.asarray(raw, dtype=_np.uint8)
     if arr.size % _CIFAR_RECORD:
         raise ValueError(
-            f"CIFAR-10 바이너리가 아니다 — {arr.size} 바이트는 "
-            f"{_CIFAR_RECORD} 의 배수가 아니다")
+            f"not a CIFAR-10 binary — {arr.size} bytes is not a multiple of "
+            f"{_CIFAR_RECORD}")
     rows = arr.reshape(-1, _CIFAR_RECORD)
     y = rows[:, 0].astype(_np.int64)
     x = rows[:, 1:].reshape(-1, 3, 32, 32).astype(_np.float32) / 255.0

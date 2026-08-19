@@ -56,7 +56,7 @@ class _Functional:
             fn = getattr(h, js_name, None)
             if fn is None:
                 raise AttributeError(
-                    f"borch.ts 텐서에 `{js_name}` 이 없다 (F.{name})")
+                    f"borch.ts tensors do not have `{js_name}` (F.{name})")
             return guarded(fn, *positional(name, args, kw))
 
         call.__name__ = name
@@ -121,7 +121,7 @@ def _fractional(spatial):
         shape = [int(n) for n in h.shape]
         if (output_size is None) == (output_ratio is None):
             raise ValueError(
-                "fractional_max_pool 은 output_size 나 output_ratio 중 하나만 받습니다.")
+                "fractional_max_pool takes either output_size or output_ratio, not both.")
         if output_size is not None:
             sizes = ([output_size] * spatial if isinstance(output_size, int)
                      else list(output_size))
@@ -309,11 +309,11 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
             oh, ow = (size, size) if isinstance(size, int) else tuple(size)
             ih, iw = int(h.shape[2]), int(h.shape[3])
             if oh % ih or ow % iw or oh // ih != ow // iw:
-                raise RuntimeError("interpolate(size=) — 배수가 아닌 최근접 확대")
+                raise RuntimeError("interpolate(size=) — nearest upsampling by a non-integer factor")
             scale_factor = oh // ih
         return wrap(guarded(h.upsample, scale_factor))
     if mode != "bilinear":
-        raise RuntimeError(f"interpolate(mode={mode!r}) — 최근접과 겹선형만 있습니다")
+        raise RuntimeError(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
     if size is not None:
         oh, ow = (size, size) if isinstance(size, int) else tuple(size)
     else:
@@ -369,10 +369,10 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
                         ("static_k", static_k), ("static_v", static_v)):
         if given is not None:
             raise RuntimeError(
-                f"multi_head_attention_forward({name}=…) 은(는) 아직 여기 없다.")
+                f"multi_head_attention_forward({name}=…) is not here yet.")
     if add_zero_attn or use_separate_proj_weight:
         raise RuntimeError(
-            "multi_head_attention_forward 의 그 갈래는 아직 여기 없다.")
+            "that branch of multi_head_attention_forward is not here yet.")
     n, s = int(handle(query).shape[1]), int(handle(key).shape[0])
     length = int(handle(query).shape[0])
     if is_causal and attn_mask is None:
@@ -451,7 +451,7 @@ def _gelu(x, approximate="none"):
         return wrap(guarded(h.geluTanh))
     if approximate != "none":
         raise ValueError(
-            f"gelu(): approximate 는 'none' 또는 'tanh' 입니다 (받은 것: {approximate!r})")
+            f"gelu(): approximate is 'none' or 'tanh' (got {approximate!r})")
     return wrap(guarded(h.unary, "gelu"))
 
 
@@ -671,7 +671,7 @@ class Module:
 
     def forward(self, *args):
         if self._m is None:
-            raise NotImplementedError(f"{type(self).__name__} 에 forward 가 없다")
+            raise NotImplementedError(f"{type(self).__name__} has no forward")
         return self(*args)
 
     def __repr__(self):
@@ -785,7 +785,7 @@ class Module:
                 if head in own:
                     own[head].load_state_dict(sub, strict)
                 elif strict:
-                    raise RuntimeError(f"load_state_dict: 모르는 이름 '{head}'")
+                    raise RuntimeError(f"load_state_dict: unexpected key '{head}'")
             return
         obj = _js.Object.new()
         for k, v in values.items():
@@ -815,7 +815,7 @@ class Module:
             raise AttributeError(name)
         got = getattr(self._m, camel(name), None)
         if got is None:
-            raise AttributeError(f"borch.ts 층에 `{name}` 이 없다")
+            raise AttributeError(f"the borch.ts layer does not have `{name}`")
         if _ts.isTensor(got):
             return wrap(got)
         return got
@@ -1019,7 +1019,7 @@ class _Holder:
             if head in own:
                 own[head].load_state_dict(sub, strict)
             elif strict:
-                raise RuntimeError(f"load_state_dict: 모르는 이름 '{head}'")
+                raise RuntimeError(f"load_state_dict: unexpected key '{head}'")
         return self
 
     def train(self, mode=True):
@@ -1150,7 +1150,7 @@ class _ParamHolder(_Holder):
             if key in own:
                 own[key]._h.copyFrom(handle(v))
             elif strict:
-                raise RuntimeError(f"load_state_dict: 모르는 이름 '{key}'")
+                raise RuntimeError(f"load_state_dict: unexpected key '{key}'")
         return self
 
     def train(self, mode=True):
@@ -1538,7 +1538,7 @@ class _FractionalMaxPool(_Wrap):
         # 줄이 갈라진다.
         if (output_size is None) == (output_ratio is None):
             raise ValueError(
-                "FractionalMaxPool 은 output_size 나 output_ratio 중 하나만 받습니다.")
+                "FractionalMaxPool takes either output_size or output_ratio, not both.")
         fn = _fractional(dim)
         super().__init__(lambda x: fn(x, kernel_size, output_size, output_ratio,
                                       return_indices, _random_samples))
@@ -1761,7 +1761,7 @@ class _InstanceNorm(Module):
             # 버퍼만 등록하고 순방향이 안 쓰면 **열쇠는 맞고 값이 틀린다.**
             # 평가 모드의 계산이 통째로 달라지는 자리라, 안 되는 것은 안 된다고 한다.
             from borch._base import _unsupported
-            _unsupported("InstanceNorm 의 track_running_stats=True")
+            _unsupported("InstanceNorm with track_running_stats=True")
         self.eps = eps
         if affine:
             self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
@@ -1895,7 +1895,7 @@ def _no_class_weights(who, weight, pos_weight):
     from borch._base import _unsupported
 
     if weight is not None:
-        _unsupported(f"{who}(weight=…) — 클래스 가중치")
+        _unsupported(f"{who}(weight=…) — class weights")
     if pos_weight is not None:
         _unsupported(f"{who}(pos_weight=…)")
 

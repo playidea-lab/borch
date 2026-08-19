@@ -231,10 +231,10 @@ export abstract class Optimizer {
       for (const [b, bank] of this.banks.entries()) {
         for (const [i, slot] of bank.slots.entries()) {
           const saved = state.tensors[`bank${b}.${i}`];
-          if (!saved) throw new RuntimeError(`체크포인트에 bank${b}.${i} 가 없다`);
+          if (!saved) throw new RuntimeError(`the checkpoint has no bank${b}.${i}`);
           if (saved.size !== slot.size) {
             throw new RuntimeError(
-              `bank${b}.${i} 의 크기가 다르다: 저장 ${saved.size}, 지금 ${slot.size}`,
+              `bank${b}.${i} has a different size: saved ${saved.size}, now ${slot.size}`,
             );
           }
           slot.copyFrom(saved);
@@ -280,7 +280,7 @@ export class SGD extends Optimizer {
     const buffers = [param.buffer, grad.buffer];
     if (this.momentum !== 0) {
       const buf = this.buffers[index];
-      if (!buf) throw new Error(`SGD: 파라미터 ${index} 의 버퍼가 없다`);
+      if (!buf) throw new Error(`SGD: no buffer for parameter ${index}`);
       buffers.push(buf.buffer);
     }
     // **그룹이 따로 정했으면 그것을 쓴다.** bias·norm 을 weight decay 에서 빼는 것이
@@ -329,7 +329,7 @@ export class Adam extends Optimizer {
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const m = this.first[index];
     const v = this.second[index];
-    if (!m || !v) throw new Error(`Adam: 파라미터 ${index} 의 상태가 없다`);
+    if (!m || !v) throw new Error(`Adam: no state for parameter ${index}`);
     // 편향 보정은 스텝마다 달라지므로 셰이더에 굽지 않고 작은 버퍼로 넘긴다.
     const corr = Tensor.from([
       1 - this.beta1 ** this.stepCount,
@@ -361,7 +361,7 @@ export class RMSprop extends Optimizer {
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
     const sq = this.squares[index];
-    if (!sq) throw new Error(`RMSprop: 파라미터 ${index} 의 상태가 없다`);
+    if (!sq) throw new Error(`RMSprop: no state for parameter ${index}`);
     const n = param.size;
     const d = device();
     d.run1d(
@@ -390,7 +390,7 @@ abstract class Composed extends Optimizer {
 
   protected at(bank: Tensor[], index: number, what: string): Tensor {
     const got = bank[index];
-    if (!got) throw new Error(`${what}: 파라미터 ${index} 의 상태가 없다`);
+    if (!got) throw new Error(`${what}: no state for parameter ${index}`);
     return got;
   }
 
@@ -778,7 +778,7 @@ export class Adafactor extends Composed {
     if (rank > 1) {
       const row = this.rowVar[index];
       const col = this.colVar[index];
-      if (!row || !col) throw new Error("Adafactor: 행·열 상태가 없다");
+      if (!row || !col) throw new Error("Adafactor: the row/column state is missing");
       const sq = grad.square();
       row.copyFrom(row.add(sq.mean(rank - 1, true).sub(row).mul(blend)));
       col.copyFrom(col.add(sq.mean(rank - 2, true).sub(col).mul(blend)));
@@ -787,7 +787,7 @@ export class Adafactor extends Composed {
       variance = outer.div(row.mean(rank - 2, true).binary("maximum", this.k(one)));
     } else {
       const v = this.variance[index];
-      if (!v) throw new Error("Adafactor: 분산 상태가 없다");
+      if (!v) throw new Error("Adafactor: the variance state is missing");
       v.copyFrom(v.add(grad.square().sub(v).mul(blend)));
       variance = v;
     }

@@ -25,12 +25,12 @@ def pad_sequence(sequences, batch_first=False, padding_value=0.0):
     """
     tensors = [_wrap(s) for s in sequences]
     if not tensors:
-        raise ValueError("빈 목록은 쌓을 수 없습니다.")
+        raise ValueError("An empty list cannot be stacked.")
     rest = tensors[0].data.shape[1:]
     for t in tensors:
         if t.data.shape[1:] != rest:
             raise RuntimeError(_like_torch(
-                f"첫 차원 말고는 모양이 같아야 합니다 — {rest} 와 {t.data.shape[1:]} 가 다릅니다.",
+                f"Every dimension but the first must match — {rest} and {t.data.shape[1:]} differ.",
                 "pad_sequence expects trailing dimensions to match",
             ))
     longest = max(t.data.shape[0] for t in tensors)

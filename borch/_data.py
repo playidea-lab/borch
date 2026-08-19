@@ -82,7 +82,7 @@ class DataLoader:
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
                  num_workers=0, drop_last=False, collate_fn=None):
         if sampler is not None and shuffle:
-            raise ValueError("sampler 와 shuffle 은 같이 쓸 수 없습니다.")
+            raise ValueError("sampler and shuffle cannot be used together.")
         self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
@@ -91,7 +91,7 @@ class DataLoader:
             # 훑는 데이터셋은 길이도 번호도 없다. 섞으라고 하면 여기서 멈춘다 —
             # 조용히 안 섞고 도는 것이 더 나쁘다.
             if shuffle or sampler is not None:
-                raise ValueError("IterableDataset 은 섞을 수 없습니다 — 번호가 없습니다.")
+                raise ValueError("IterableDataset cannot be shuffled — it has no indices.")
             self.sampler = None
         else:
             self.sampler = sampler or (RandomSampler(dataset) if shuffle
@@ -177,7 +177,7 @@ class Sampler:
     """
 
     def __iter__(self):
-        raise NotImplementedError("Sampler 는 `__iter__` 를 채워야 한다")
+        raise NotImplementedError("Sampler must implement `__iter__`")
 
 
 class SubsetRandomSampler(Sampler):
@@ -224,10 +224,10 @@ class IterableDataset(Dataset):
     """
 
     def __iter__(self):
-        raise NotImplementedError("IterableDataset 은 `__iter__` 를 채워야 한다")
+        raise NotImplementedError("IterableDataset must implement `__iter__`")
 
     def __getitem__(self, i):
-        raise TypeError("IterableDataset 은 번호로 못 꺼낸다 — 훑어야 한다")
+        raise TypeError("IterableDataset cannot be indexed — it has to be iterated")
 
 
 class ChainDataset(IterableDataset):
@@ -246,7 +246,7 @@ class StackDataset(Dataset):
 
     def __init__(self, *datasets, **named):
         if datasets and named:
-            raise ValueError("자리로 주거나 이름으로 주거나 둘 중 하나다")
+            raise ValueError("give them positionally or by name, not both")
         self.datasets = named or datasets
 
     def __len__(self):

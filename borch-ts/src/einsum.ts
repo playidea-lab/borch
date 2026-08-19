@@ -25,18 +25,18 @@ interface Plan {
 
 function parse(spec: string, operands: number): Plan {
   if (spec.includes("...")) {
-    throw new Error("einsum: 생략 부호(...)는 아직 없다");
+    throw new Error("einsum: ellipsis (...) is not supported yet");
   }
   const [lhs = "", rhs] = spec.split("->");
   const inputs = lhs.split(",").map((s) => s.trim());
   if (inputs.length !== operands) {
     throw new Error(
-      `einsum: 첨자는 ${inputs.length}개인데 텐서는 ${operands}개다`,
+      `einsum: ${inputs.length} subscript terms but ${operands} operands`,
     );
   }
   for (const term of inputs) {
     if (new Set(term).size !== term.length) {
-      throw new Error(`einsum: 한 항 안에서 첨자가 겹친다 ('${term}') — 아직 없다`);
+      throw new Error(`einsum: repeated subscript inside one term ('${term}') is not supported yet`);
     }
   }
   if (rhs !== undefined) return { inputs, output: rhs.trim() };
@@ -70,15 +70,15 @@ function alignOne(t: Tensor, term: string, output: string): Tensor {
 export function einsum(spec: string, ...operands: Tensor[]): Tensor {
   const plan = parse(spec, operands.length);
   const first = operands[0];
-  if (!first) throw new Error("einsum: 텐서가 없다");
+  if (!first) throw new Error("einsum: no operands given");
   if (operands.length === 1) {
     return alignOne(first, plan.inputs[0] ?? "", plan.output);
   }
   if (operands.length !== 2) {
-    throw new Error(`einsum: 피연산자 ${operands.length}개는 아직 없다 (한둘까지)`);
+    throw new Error(`einsum: ${operands.length} operands are not supported yet (one or two)`);
   }
   const second = operands[1];
-  if (!second) throw new Error("einsum: 둘째 텐서가 없다");
+  if (!second) throw new Error("einsum: the second operand is missing");
   const [ta = "", tb = ""] = plan.inputs;
   const out = plan.output;
 
@@ -89,7 +89,7 @@ export function einsum(spec: string, ...operands: Tensor[]): Tensor {
   const keepA = [...ta].filter((c) => !tb.includes(c) && out.includes(c));
   const keepB = [...tb].filter((c) => !ta.includes(c) && out.includes(c));
   if (batch.length > 0) {
-    throw new Error(`einsum: 배치 첨자(${batch.join("")})는 아직 없다`);
+    throw new Error(`einsum: batch subscripts (${batch.join("")}) are not supported yet`);
   }
 
   const a = reorder(first, ta, [...keepA, ...shrink]);
