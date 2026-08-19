@@ -36,6 +36,7 @@
 """
 
 import ast
+import json
 import pathlib
 import re
 
@@ -54,7 +55,7 @@ as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
 get_rng_state initial_seed is_contiguous is_distributed is_grad_enabled
 is_inference is_inference_mode_enabled is_storage numpy promote_types
 set_rng_state share_memory_ sparse_dim to_dense tolist typename
-asarray is_nonzero resize_as_
+asarray is_nonzero resize_as_ storage_offset type values
 """.split()
 
 # **아직 판정 안 한 것들.** 이 검사가 처음 돌면서 한꺼번에 나온 자리이고, 하나하나
@@ -81,7 +82,15 @@ ALIASED = {
     "take_along_dim": "gather",
     "trapz": "trapezoid",
     "vdot": "vecdot",
+    "t": "transpose (2 차원 전치)",
 }
+# `is_tensor` 가 여기 한 줄 있었다. 선언 목록이 `index.ts` 를 안 훑어서 `isTensor` 가
+# 공개 이름인데도 안 잡히던 것이었고 — 결손이 아니라 **목록의 사각지대**였다 —
+# 생성기가 그 파일을 목록에 넣으면서 사라졌다.
+#
+# 그 사각지대는 **밖에서 보다가** 잡혔다. 생성기 쪽 검사는 "목록이 선언 파일과
+# 같은가" 를 묻지 "선언 파일을 다 봤는가" 는 안 묻는다. 자기 입력을 자기가 검산하는
+# 검사에는 늘 그만한 크기의 사각지대가 남고, 그것은 다른 각도에서만 보인다.
 
 # `UNJUDGED` 가 여기 있었다 — 처음 돌렸을 때 62 개였고, 62 → 29 → 11 → 2 → 0 으로
 # 갈렸다. 마흔셋은 borch.ts 에 넣었고 열넷은 다른 철자로 이미 있었으며 다섯은
@@ -104,27 +113,25 @@ def _flat(name):
 
 
 def _ts_surface():
-    """borch.ts 가 내는 이름 전부 — 메서드·정적·최상위 함수·클래스.
+    """borch.ts 가 **선언하는** 이름 전부.
 
-    **`dist` 가 아니라 소스를 읽는다.** `dist` 는 `.gitignore` 라 pytest 가 도는
-    자리에 없을 수 있고, 없는 것과 이름이 없는 것이 같은 실패로 보이면 이 검사가
-    저 자신이 막으려는 함정에 빠진다.
+    처음에는 소스를 정규식으로 훑었다. 주석에는 "borch.ts 가 내는 이름 전부" 라고
+    적어 놓고, 코드는 **들여쓴 뒤에 여는 괄호가 따라오는 아무 낱말**을 세고 있었다 —
+    지역 변수 `const inner = …` 가 공개 이름 `inner` 로 잡혔다. 정규식이 1323 개를
+    셌고 실제 선언은 845 개였다.
+
+    그래서 **못 보는 자리가 생겼다**: `torch.inner` 는 borch.ts 에 없는데 이 검사가
+    있다고 답했다. 결손을 찾는 검사가 결손을 가리는 꼴이고, 그 원인이 README 의
+    일곱째 항목 그대로다 — 주석이 말하는 것과 코드가 묻는 것이 달랐다.
+
+    이제 `site/assets/api.json` 을 만드는 생성기와 **같은 목록**을 읽는다. 그것은
+    `tsc` 가 낸 선언 파일에서 나오므로 지역 변수가 못 샌다. 그 파일이 낡으면 이
+    검사도 낡는데, 그 자리는 `tests/test_site.py` 가 이미 지킨다 — 검사 둘이
+    한 파일에 걸리는 대신 각자 자기 몫만 본다.
     """
-    names = set()
-    src = ROOT / "borch-ts" / "src"
-    method = re.compile(
-        r"^\s+(?:public\s+|private\s+|protected\s+|static\s+|async\s+|get\s+|set\s+|readonly\s+|\*)*"
-        r"([A-Za-z_]\w*)\s*[(<:=]")
-    top = re.compile(
-        r"^export\s+(?:declare\s+)?(?:async\s+)?"
-        r"(?:function|class|const|abstract\s+class)\s+([A-Za-z_]\w*)")
-    for path in sorted(src.rglob("*.ts")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            for pattern in (method, top):
-                hit = pattern.match(line)
-                if hit:
-                    names.add(_flat(hit.group(1)))
-    return names
+    index = ROOT / "site" / "assets" / "api-index.json"
+    declared = json.loads(index.read_text(encoding="utf-8"))
+    return {_flat(str(name).split(".")[-1]) for name in declared}
 
 
 def _touches_borch_ts(node):

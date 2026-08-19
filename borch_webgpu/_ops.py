@@ -2286,10 +2286,7 @@ def std_mean(t, dim=None, keepdim=False, **kw):
 
 def inner(a, b, **kw):
     _no_out(kw)
-    a, b = wrap(a), wrap(b)
-    if len(_shape_list(a)) > 1:
-        return a @ transpose(b, -2, -1)
-    return (a * b).sum()
+    return wrap(guarded(handle(wrap(a)).inner, handle(wrap(b))))
 
 
 def vdot(a, b, **kw):

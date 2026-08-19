@@ -3487,7 +3487,7 @@
       {
        "name": "fillDiagonal_",
        "signature": "fillDiagonal_(value: number, wrap?: boolean): Tensor",
-       "doc": "대각선을 한 값으로. **`wrap` 이면 세로로 긴 행렬에서 대각선이 되돌아 온다.**\n\n정사각으로만 재면 그 깃발이 아무 일도 안 한다 — numpy 의 `fill_diagonal` 과\n같은 규약이고, torch 가 그것을 그대로 받는다.",
+       "doc": "대각선을 한 값으로.\n\n**`wrap` 은 세로로 긴 행렬에서만 뜻이 있다.** 걸음은 어느 쪽이든 `cols + 1` 이고,\n갈리는 것은 **어디서 멈추느냐**뿐이다 — 끄면 `cols²` 칸에서 멈춰 첫 블록의\n대각선만 칠하고, 켜면 끝까지 가서 아래 블록들의 대각선도 칠한다. numpy 의\n`fill_diagonal` 이 정확히 그 한 줄이고 torch 가 그대로 받는다.\n\n처음에 \"되돌아 오는 자리는 줄을 하나 건너뛴다\" 고 적고 그렇게 짰는데, 그런\n규칙은 없다. 정사각으로만 묻는 케이스 하나뿐이어서 그 갈래는 **아무것도 안\n지나고 있었다** — 세로로 긴 것으로 묻는 케이스를 같이 넣는다.",
        "torch": "fill_diagonal_",
        "section": {
         "ko": "결속에만 있던 이름들",
@@ -3603,6 +3603,15 @@
        "name": "ger",
        "signature": "ger(other: Tensor): Tensor",
        "doc": "바깥곱의 옛 이름. `outer` 와 같은 것이다.",
+       "section": {
+        "ko": "결속에만 있던 이름들",
+        "en": "결속에만 있던 이름들"
+       }
+      },
+      {
+       "name": "inner",
+       "signature": "inner(other: Tensor): Tensor",
+       "doc": "**마지막 축끼리** 접어 곱한다. 1 차원이면 내적이고 그 위는 `a @ bᵀ` 다.\n\n`dot` 과 갈리는 자리가 2 차원이다 — `dot` 은 1 차원만 받는다. 이 이름이 오래\n없었는데도 안 드러난 것은, 검사가 소스를 정규식으로 훑으면서 지역 변수\n`const inner = …` 를 공개 이름으로 세고 있었기 때문이다.",
        "section": {
         "ko": "결속에만 있던 이름들",
         "en": "결속에만 있던 이름들"
@@ -4567,7 +4576,7 @@
      "torch": "make_node"
     }
    ],
-   "count": 501
+   "count": 502
   },
   {
    "name": "nn",
@@ -10723,5 +10732,5 @@
    "count": 9
   }
  ],
- "total": 1484
+ "total": 1485
 }

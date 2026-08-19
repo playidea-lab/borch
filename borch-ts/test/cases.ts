@@ -3947,6 +3947,17 @@ function addRecent(out: Map<string, Case>): void {
   out.set("stat::nonzero_static(fill=-9)",
     async () => await sparse().nonzeroStatic(5, -9));
 
+  // **`wrap` 은 세로로 긴 행렬에서만 뜻이 있다.** 정사각으로만 묻던 동안 이쪽 판이
+  // 없는 규칙(되돌아 올 때 줄을 하나 건너뛴다)을 지어냈는데도 초록이었다. 결속을
+  // 거쳐서도 묻지만, **틀렸던 자리는 이쪽에서 직접** 묻는 편이 낫다.
+  for (const wrap of [false, true]) {
+    out.set(`inplace::짝없이::fill_diagonal_(세로, wrap=${verdict(wrap)})`, () => {
+      const x = Tensor.from(Array.from({ length: 18 }, (_, i) => i), [6, 3]);
+      x.fillDiagonal_(9, wrap);
+      return x;
+    });
+  }
+
   out.set("stat::trapz(y)", () => curve().trapezoid());
   out.set("stat::trapz(dx=2)", () => curve().trapezoid(undefined, 2.0));
   out.set("stat::trapz(y, x)",

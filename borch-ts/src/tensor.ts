@@ -6909,23 +6909,24 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 대각선을 한 값으로. **`wrap` 이면 세로로 긴 행렬에서 대각선이 되돌아 온다.**
+   * 대각선을 한 값으로.
    *
-   * 정사각으로만 재면 그 깃발이 아무 일도 안 한다 — numpy 의 `fill_diagonal` 과
-   * 같은 규약이고, torch 가 그것을 그대로 받는다.
+   * **`wrap` 은 세로로 긴 행렬에서만 뜻이 있다.** 걸음은 어느 쪽이든 `cols + 1` 이고,
+   * 갈리는 것은 **어디서 멈추느냐**뿐이다 — 끄면 `cols²` 칸에서 멈춰 첫 블록의
+   * 대각선만 칠하고, 켜면 끝까지 가서 아래 블록들의 대각선도 칠한다. numpy 의
+   * `fill_diagonal` 이 정확히 그 한 줄이고 torch 가 그대로 받는다.
+   *
+   * 처음에 "되돌아 오는 자리는 줄을 하나 건너뛴다" 고 적고 그렇게 짰는데, 그런
+   * 규칙은 없다. 정사각으로만 묻는 케이스 하나뿐이어서 그 갈래는 **아무것도 안
+   * 지나고 있었다** — 세로로 긴 것으로 묻는 케이스를 같이 넣는다.
    */
   fillDiagonal_(value: number, wrap = false): Tensor {
     const rows = this.shape[0] ?? 0;
     const cols = this.shape[1] ?? 0;
     const step = cols + 1;
-    const limit = wrap ? rows * cols : Math.min(rows, cols) * step;
+    const limit = wrap ? rows * cols : Math.min(rows * cols, cols * cols);
     const spots: number[] = [];
-    for (let at = 0; at < limit; at += step) {
-      // 되돌아 오는 자리는 **줄을 하나 건너뛴다** — numpy 가 그렇게 센다.
-      if (wrap && at % cols === 0 && at !== 0) at += cols;
-      if (at >= rows * cols) break;
-      spots.push(at);
-    }
+    for (let at = 0; at < limit; at += step) spots.push(at);
     return this.mutate(() => this.reshape([this.size]).scatterSpots(
       Tensor.spotsTensor(Float32Array.from(spots)),
       Tensor.full([spots.length], value), false, "FillDiagonalBackward0",
@@ -7030,6 +7031,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** 바깥곱의 옛 이름. `outer` 와 같은 것이다. */
   ger(other: Tensor): Tensor {
     return this.outer(other);
+  }
+
+  /**
+   * **마지막 축끼리** 접어 곱한다. 1 차원이면 내적이고 그 위는 `a @ bᵀ` 다.
+   *
+   * `dot` 과 갈리는 자리가 2 차원이다 — `dot` 은 1 차원만 받는다. 이 이름이 오래
+   * 없었는데도 안 드러난 것은, 검사가 소스를 정규식으로 훑으면서 지역 변수
+   * `const inner = …` 를 공개 이름으로 세고 있었기 때문이다.
+   */
+  inner(other: Tensor): Tensor {
+    if (this.shape.length <= 1) return this.mul(other).sum();
+    return this.mm(other.swapaxes(-2, -1));
   }
 
   /**

@@ -8494,6 +8494,19 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"짝없이::{name}", run))
 
     in_place_new("fill_diagonal_", lambda L, x: x.fill_diagonal_(9))
+
+    # **`wrap` 은 세로로 긴 행렬에서만 뜻이 있다.** 정사각으로만 물으면 그 깃발이
+    # 아무 일도 안 하고, 위의 케이스가 정확히 그랬다 — borch.ts 쪽 판이 없는 규칙
+    # (되돌아 올 때 줄을 하나 건너뛴다)을 지어내고도 초록이었다.
+    tall = np.arange(18, dtype=np.float32).reshape(6, 3)
+    for flag in (False, True):
+        def fill_tall(L, w=flag):
+            x = L.tensor(tall.copy())
+            x.fill_diagonal_(9, w)
+            return x
+        cases.append((INPLACE_PREFIX + f"짝없이::fill_diagonal_(세로, wrap={flag})",
+                      fill_tall))
+
     in_place_new("arctan2_", lambda L, x: x.arctan2_(L.tensor(ones2)))
     in_place_new("polygamma_", lambda L, x: x.abs_().polygamma_(1))
 
