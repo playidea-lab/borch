@@ -29,6 +29,7 @@
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
       <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
       <a href="../playground.html">Playground</a>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/04-training.html" class="lang">English</a>
@@ -110,8 +111,15 @@
       정답이 있는 데이터로 보는 것이 정직하다. <code>y = 3x + 2</code> 를 못 찾는 루프가
       내놓는 다른 수는 아무 뜻도 없다.
     </p>
+    <p>
+      이 블록은 같은 고리를 두 벌 담고 있다. <b>javascript</b> 로 돌린 뒤 <b>python</b> 을
+      눌러 다시 돌려 보면 손실이 마지막 자리까지 같다 — 두 표면이 같은 WGSL 로 내려가기
+      때문이다. <a href="../python.html">파이썬 길</a>에 대해 이 사이트가 하는 주장이
+      그것이고, 믿는 것보다 눌러 보는 편이 싸다.
+    </p>
+
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -142,6 +150,34 @@
         log("");
         log("w =", (await model.weight.item()).toFixed(4), "(3)");
         log("b =", (await model.bias.item()).toFixed(4), "(2)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        N = 128
+        xs = [[(i / N) * 4 - 2] for i in range(N)]
+        ys = [[3 * row[0] + 2] for row in xs]
+        x, y = torch.tensor(xs), torch.tensor(ys)
+
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.1)
+        crit = nn.MSELoss()
+
+        for step in range(201):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                if step % 50 == 0:
+                    print(f"step {step:3d}  loss {loss.item():.6f}")
+
+        print("")
+        print(f"w = {model.weight.item():.4f} (3)")
+        print(f"b = {model.bias.item():.4f} (2)")
       </script>
     </div>
 

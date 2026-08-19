@@ -29,6 +29,7 @@
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
       <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
       <a href="../playground.html">Playground</a>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/08-debugging.html" class="lang">English</a>
@@ -121,26 +122,26 @@
         manualSeed(0);
 
         const model = new nn.Linear(64, 64);
-        const show = (label) => {
+        const report = (label) => {
           const m = device().memory, p = device().pooled;
           log(`${label.padEnd(22)} 살아있음 ${String(m.tensors).padStart(4)}개 ` +
               `${(m.bytes / 1024).toFixed(0).padStart(6)} KB   통 ${String(p.count).padStart(3)}개 ` +
               `${(p.bytes / 1024).toFixed(0).padStart(6)} KB`);
         };
 
-        show("시작할 때");
+        report("시작할 때");
 
         // 매 스텝 같은 모양: 통이 작업 집합에서 멈춘다.
         for (const batch of [8, 8, 8]) {
           const x = keepAlive(Tensor.randn([batch, 64]));
           await scope(async () => { await model.call(x).sum().item(); });
         }
-        show("배치 8 로 세 스텝 뒤");
+        report("배치 8 로 세 스텝 뒤");
 
         // 모양이 다르면 그 버퍼를 못 쓴다.
         const wide = keepAlive(Tensor.randn([64, 64]));
         await scope(async () => { await model.call(wide).sum().item(); });
-        show("배치 64 로 한 스텝 뒤");
+        report("배치 64 로 한 스텝 뒤");
 
         const freed = device().emptyCache();
         log("");

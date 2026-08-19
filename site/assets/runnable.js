@@ -11,6 +11,17 @@
  *       <script type="text/plain">await init(); …</script>
  *     </div>
  *
+ * 한 블록이 **두 언어**를 담을 수 있다. 같은 일을 두 표면으로 적어 두면 읽는
+ * 사람이 눌러서 수를 맞춰 볼 수 있다 — "자릿수까지 같다" 는 말보다 그게 낫다:
+ *
+ *     <div class="runnable" data-lang="js">
+ *       <script type="text/plain" data-lang="js">await init(); …</script>
+ *       <script type="text/plain" data-lang="py">import borch_webgpu as torch …</script>
+ *     </div>
+ *
+ * `data-lang` 이 없는 원본은 바깥 `div` 의 언어로 친다. 바깥 `div` 의 언어가
+ * 처음 보이는 쪽이다.
+ *
  * `<script type="text/plain">` 에 담는 이유는 브라우저가 그 안을 **건드리지 않기**
  * 때문이다. `<pre>` 에 넣으면 `<`·`&` 를 일일이 escape 해야 하고, 한 번 빠뜨리면
  * 코드가 조용히 달라진다.
@@ -28,6 +39,13 @@ const LABEL = {
   stop: { en: "■ Stop", ko: "■ 중지" },
 };
 
+const NAME = { js: "javascript", py: "python" };
+
+/** 큰 편집기의 자리. **페이지가 몇 겹 아래인지로 풀면 안 된다** — `../playground.html`
+ *  은 `learn/` 에서만 맞고 최상위 페이지에서는 사이트 밖을 가리킨다. 이 파일은 언제나
+ *  `site/assets/` 에 있으므로 여기서 재면 어느 페이지에서 불러도 같은 곳이 나온다. */
+const PLAYGROUND = new URL("../playground.html", import.meta.url).href;
+
 const LANG = document.documentElement.lang === "ko" ? "ko" : "en";
 const say = (key) => LABEL[key][LANG];
 
@@ -39,15 +57,28 @@ export function mountRunnables(root = document) {
 }
 
 function mount(box) {
-  const source = box.querySelector('script[type="text/plain"]');
-  if (!source) return;
-  const lang = box.dataset.lang === "py" ? "py" : "js";
-  const original = dedent(source.textContent);
-  source.remove();
+  const sources = [...box.querySelectorAll('script[type="text/plain"]')];
+  if (!sources.length) return;
+  const first = box.dataset.lang === "py" ? "py" : "js";
+
+  // 언어 → 처음 적힌 코드. 두 번째 원본에 `data-lang` 이 없으면 첫 번째와 같은
+  // 칸에 덮어써서 한 벌이 조용히 사라진다 — `test_site.py` 가 그 꼴을 막는다.
+  const original = new Map();
+  for (const el of sources) {
+    original.set(el.dataset.lang === "py" ? "py" : el.dataset.lang === "js" ? "js" : first,
+      dedent(el.textContent));
+    el.remove();
+  }
+  // 지금 편집기에 있는 글. 언어를 오갈 때 고친 것이 남아 있어야 비교가 된다.
+  const draft = new Map(original);
+  let lang = original.has(first) ? first : [...original.keys()][0];
 
   box.innerHTML = `
     <div class="runnable-head">
-      <span>${lang === "js" ? "javascript" : "python"}</span>
+      ${original.size > 1
+        ? [...original.keys()].map((k) => `<button class="tab" type="button" data-lang="${k}"
+            aria-pressed="${k === lang}">${NAME[k]}</button>`).join("")
+        : `<span>${NAME[lang]}</span>`}
       <span class="grow"></span>
       <a class="open" href="#" title="${say("open")}">${say("open")}</a>
       <button class="reset" type="button">${say("reset")}</button>
@@ -77,12 +108,12 @@ function mount(box) {
     paint();
     // **지금 화면에 있는 코드**를 넘긴다. 고친 것을 그대로 큰 편집기로 들고 갈 수
     // 있어야 의미가 있다 — 원본을 넘기면 방금 한 일이 사라진다.
-    openLink.href = `../playground.html#lang=${lang}&code=${encodeCode(editor.value)}`;
+    openLink.href = `${PLAYGROUND}#lang=${lang}&code=${encodeCode(editor.value)}`;
   };
 
   editor.addEventListener("input", () => {
     paint();
-    openLink.href = `../playground.html#lang=${lang}&code=${encodeCode(editor.value)}`;
+    openLink.href = `${PLAYGROUND}#lang=${lang}&code=${encodeCode(editor.value)}`;
   });
   editor.addEventListener("scroll", () => {
     const layer = painted.parentElement;
@@ -101,7 +132,23 @@ function mount(box) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); go(); }
   });
 
-  resetBtn.addEventListener("click", () => { setCode(original); out.textContent = ""; });
+  resetBtn.addEventListener("click", () => { setCode(original.get(lang)); out.textContent = ""; });
+
+  // 언어 탭. 고친 글은 언어별로 남기고, **출력은 지운다** — 자바스크립트가 찍은
+  // 수 위에 python 이라고 적힌 머리띠가 걸리면 그건 틀린 이름표다.
+  for (const tab of box.querySelectorAll("button.tab")) {
+    tab.addEventListener("click", () => {
+      if (tab.dataset.lang === lang) return;
+      draft.set(lang, editor.value);
+      lang = tab.dataset.lang;
+      for (const other of box.querySelectorAll("button.tab")) {
+        other.setAttribute("aria-pressed", String(other.dataset.lang === lang));
+      }
+      setCode(draft.get(lang));
+      out.textContent = "";
+      stage.textContent = "";
+    });
+  }
 
   const write = (text, kind = "") => {
     // **읽던 자리를 뺏지 않는다.** 무조건 맨 아래로 끌면, 위를 보려고 올린 사람이
@@ -167,7 +214,7 @@ function mount(box) {
   }
 
   runBtn.addEventListener("click", go);
-  setCode(original);
+  setCode(draft.get(lang));
 }
 
 /** `<script>` 안의 들여쓰기를 걷어낸다. HTML 들여쓰기가 코드에 섞이면 파이썬이 죽는다. */

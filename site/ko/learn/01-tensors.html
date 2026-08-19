@@ -29,6 +29,7 @@
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
       <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
       <a href="../playground.html">Playground</a>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/01-tensors.html" class="lang">English</a>
@@ -81,7 +82,7 @@
       <code>arange</code>·<code>randn</code>·<code>eye</code>·<code>linspace</code>.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const a = Tensor.from([1, 2, 3, 4, 5, 6], [2, 3]);
@@ -95,6 +96,21 @@
         log("");
         log(await Tensor.arange(6).reshape([2, 3]).repr());
         log(await Tensor.eye(3).repr());
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        a = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+        print(a)
+
+        print("shape", tuple(a.shape))
+        print("numel", a.numel())
+        print("dtype", a.dtype)
+        print("device", a.device)
+
+        print("")
+        print(torch.arange(6).reshape(2, 3))
+        print(torch.eye(3))
       </script>
     </div>
 

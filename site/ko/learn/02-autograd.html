@@ -29,6 +29,7 @@
       <a href="../learn/" class="on" aria-current="page">배우기</a>
       <a href="../tutorials/">튜토리얼</a>
       <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
       <a href="../playground.html">Playground</a>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../../learn/02-autograd.html" class="lang">English</a>
@@ -67,7 +68,7 @@
       <code>d/dw (w − 5)² = 2(w − 5)</code> 이고 <code>w = 3</code> 에서 −4 다.
     </p>
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
 
         const w = Tensor.from([3], [], { requiresGrad: true });
@@ -77,6 +78,17 @@
 
         log("loss  =", await loss.item());
         log("dL/dw =", await w.grad.item(), "  (손으로: 2(3-5) = -4)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        w = torch.tensor(3.0, requires_grad=True)
+        loss = (w - 5.0) ** 2
+
+        loss.backward()
+
+        print("loss  =", loss.item())
+        print("dL/dw =", w.grad.item(), "  (손으로: 2(3-5) = -4)")
       </script>
     </div>
 

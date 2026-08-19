@@ -1,0 +1,263 @@
+<!doctype html>
+<!--
+  borch — the Python surface.
+
+  파이썬은 6강 끝에 얹혀 있었다. 집이 없어서 저장·불러오기 강의에 주차된 것인데,
+  그 결과 사이트는 borch 를 **가장 torch 답지 않은 표면**으로만 가르쳤다. 이 페이지가
+  그 자리다.
+
+  여기 적힌 수는 전부 잰 것이다. 못 잰 것은 적지 않는다.
+
+  한국어 판은 `ko/python.html` 이다. 두 벌이므로 문구를 고치면 같이 고친다.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python — borch</title>
+<link rel="alternate" hreflang="ko" href="ko/python.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Python — borch">
+<meta property="og:description" content="Textbook torch code, running on WebGPU in the tab, with no install.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/python.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="learn/">Learn</a>
+      <a href="tutorials/">Tutorials</a>
+      <a href="api/">API</a>
+      <a href="python.html" class="on" aria-current="page">Python</a>
+      <a href="playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="ko/python.html" class="lang">한국어</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>Python</h4>
+    <nav>
+      <a href="#forwards">It forwards</a>
+      <a href="#changes">What changes</a>
+      <a href="#await">Why no await</a>
+      <a href="#cost">What it costs</a>
+      <a href="#stops">Where it stops</a>
+      <a href="#match">See it match</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">Python</p>
+    <h1>The Python route</h1>
+    <p class="lede">
+      <code>borch_webgpu</code> is borch.ts with a Python surface on it. Textbook
+      training code runs in the tab, on the GPU, with nothing installed and nothing
+      sent anywhere.
+    </p>
+    <p>
+      It is worth being precise about why this page exists. borch is shaped like
+      PyTorch, and the people that shape is for read Python. But the JavaScript
+      surface is the one that carries the awkward parts — <code>await</code> on every
+      read, <code>model.call(x)</code> instead of calling the model. On the Python
+      side most of that is gone, so this is the surface where the resemblance is
+      strongest, and it was the one the site barely showed.
+    </p>
+
+    <h2 id="forwards">It forwards, it does not reimplement</h2>
+    <p>
+      There is no list of supported operations. The module's <code>__getattr__</code>
+      takes the name you asked for, converts <code>snake_case</code> to
+      <code>camelCase</code>, and calls that method on the tensor. If borch.ts does not
+      have it, you get an <code>AttributeError</code> naming both spellings — it does
+      not approximate the answer with numpy.
+    </p>
+    <p>
+      That is a design decision with a consequence worth knowing: the Python surface
+      tracks borch.ts automatically, so it cannot fall behind by forgetting to add a
+      name. What it <em>can</em> do is quietly build something on top, and the
+      repository has a test that counts those places rather than trusting anyone to
+      notice.
+    </p>
+
+    <div class="runnable" data-lang="py">
+      <script type="text/plain">
+        import borch_webgpu as torch
+
+        x = torch.randn(3, 4)
+
+        # the same kernel, reached two ways
+        print("x.exp() == torch.exp(x):", bool((torch.exp(x) == x.exp()).all().item()))
+        print("device:", x.device, "· dtype:", x.dtype)
+
+        # a name borch.ts does not have
+        try:
+            torch.definitely_not_a_kernel(x)
+        except AttributeError as err:
+            print("missing:", err)
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>The message above is in Korean, and that is not a bug in the page.</strong>
+      borch throws in Korean at 133 of its 168 throw sites. Reading English here and
+      Korean the moment something breaks is a real edge of using this library today,
+      so it is better said than discovered.
+    </div>
+
+    <h2 id="changes">What torch code has to change</h2>
+    <p>
+      Five things separate borch from torch. Three of them are artefacts of
+      JavaScript, and on this surface they are simply not there.
+    </p>
+    <div class="scroll-x">
+    <table class="data">
+      <tr><th>torch</th><th>borch.ts</th><th>borch_webgpu</th></tr>
+      <tr>
+        <td class="num">—</td>
+        <td class="num">await init()</td>
+        <td class="num"><strong>nothing</strong></td>
+      </tr>
+      <tr>
+        <td class="num">t.item()</td>
+        <td class="num">await t.item()</td>
+        <td class="num"><strong>t.item()</strong></td>
+      </tr>
+      <tr>
+        <td class="num">model(x)</td>
+        <td class="num">model.call(x)</td>
+        <td class="num"><strong>model(x)</strong></td>
+      </tr>
+      <tr>
+        <td class="num">—</td>
+        <td class="num">scope(async () =&gt; …)</td>
+        <td class="num"><strong>with torch.scope():</strong></td>
+      </tr>
+      <tr>
+        <td class="num">—</td>
+        <td class="num">keepAlive(t)</td>
+        <td class="num"><strong>no equivalent</strong></td>
+      </tr>
+    </table>
+    </div>
+    <p>
+      <code>scope()</code> is the one that stays, and it has to: a training step makes
+      thousands of intermediate buffers, and neither language's garbage collector
+      returns GPU memory in time. In the same 201-step run, dropping the
+      <code>with</code> takes held memory from 1.0MB to 228.9MB.
+    </p>
+
+    <h2 id="await">Why there is no await</h2>
+    <p>
+      WebGPU has no synchronous read. Getting a number off the GPU is a promise, and
+      in JavaScript that promise reaches all the way up to your code as
+      <code>await t.item()</code>. Pyodide's <code>run_sync</code>, on top of
+      WebAssembly's JavaScript Promise Integration, lets the Python frame wait without
+      the caller knowing, so <code>loss.item()</code> is a plain expression again.
+    </p>
+    <p>
+      One condition applies, and it is the reason this works on this site: the page
+      has to enter Python asynchronously. That is a property of how the page starts
+      Pyodide, not something your code does.
+    </p>
+
+    <h2 id="cost">What it costs</h2>
+    <p>
+      Measured on this machine, over localhost, with the browser cache cold: the first
+      Python run pulled <strong>25.1MB</strong> across six files — Pyodide, the Python
+      standard library, the WebAssembly build and a numpy wheel — and took
+      <strong>1,066ms</strong> end to end. The second run took <strong>2ms</strong>.
+      The 25.1MB is the part that will differ on a real connection; the rest is the
+      shape you should expect.
+    </p>
+    <p>
+      All of it is served from the same origin as the page. Nothing is fetched from a
+      CDN and nothing is uploaded, which is the same promise the JavaScript side makes.
+    </p>
+
+    <h2 id="stops">Where it stops</h2>
+    <p>
+      Three honest edges, all of them checked while writing this page.
+    </p>
+    <p>
+      <strong>Nothing leaves a scope.</strong> In JavaScript a tensor made inside
+      <code>scope()</code> can be carried out by marking it with
+      <code>keepAlive(t)</code>, or by returning it from the scope's second argument.
+      Python has neither, so a tensor created inside <code>with torch.scope():</code>
+      cannot be used after the block. In practice this rarely bites — models,
+      optimizer state and data are made before the loop, where nothing frees them —
+      but the ceiling is real, and the error you get if you try names
+      <code>keepAlive</code> as absent from borch.ts, which is not true: it is a module
+      function there, and the forwarder only looks at tensor methods.
+    </p>
+    <p>
+      <strong><code>torch.cuda.is_available()</code> answers False</strong>, on
+      purpose. borch uses the GPU but it is not CUDA, and textbook code branches on
+      that name constantly. The buffer pool is emptied with
+      <code>torch.empty_cache()</code> instead.
+    </p>
+    <p>
+      <strong>Two different memory questions.</strong> <code>torch.memory()</code>
+      answers "is this leaking" and deliberately excludes the pool;
+      <code>torch.pooled()</code> answers "how much is held". A benchmark reading only
+      the first once reported 269.7MB while the pool held 1,699.6MB.
+    </p>
+
+    <h2 id="match">See it match</h2>
+    <p>
+      The claim underneath all of this is that the two surfaces reach the same kernels.
+      Run the block on <b>javascript</b>, then press <b>python</b> and run it again.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain" data-lang="js">
+        await init();
+        manualSeed(0);
+
+        const w = Tensor.from([3], [], { requiresGrad: true });
+        const loss = w.sub(Tensor.full([], 5)).powScalar(2);
+        loss.backward();
+
+        log("loss  =", (await loss.item()).toFixed(6));
+        log("dL/dw =", (await w.grad.item()).toFixed(6));
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        torch.manual_seed(0)
+
+        w = torch.tensor(3.0, requires_grad=True)
+        loss = (w - 5.0) ** 2
+        loss.backward()
+
+        print("loss  =", f"{loss.item():.6f}")
+        print("dL/dw =", f"{w.grad.item():.6f}")
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>The same loop, in the training lesson.</strong> Lesson 4 carries the
+      201-step linear regression in both languages for the same reason — the losses
+      agree to the last digit because there is only one set of kernels underneath.
+    </div>
+
+    <div class="pager">
+      <a href="learn/">← Learn</a>
+      <a href="playground.html#lang=py" style="text-align:right">Next<b>Playground · Python</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="assets/runnable.js"></script>
+<script type="module" src="assets/apilink.js"></script>
+</body>
+</html>

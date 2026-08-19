@@ -290,3 +290,79 @@ def test_share_metadata_is_complete_and_gets_an_address():
     assert "%OG_BASE%" in text, (
         "페이지가 %OG_BASE% 를 쓰는데 배포 워크플로가 그것을 안 채운다 — "
         "그대로 나가면 크롤러가 자리표시자를 주소로 읽는다.")
+
+
+def test_dual_language_blocks_do_not_lose_a_half():
+    """한 블록에 두 언어를 담을 때, 한 벌이 조용히 사라지는 자리를 막는다.
+
+    `runnable.js` 는 원본을 **언어를 열쇠로** 담는다. 두 번째 `<script>` 에
+    `data-lang` 을 안 적으면 바깥 `div` 의 언어로 쳐서 첫 번째 위에 덮어쓰고, 화면에는
+    탭도 안 나온다 — 파이썬을 적어 넣었는데 페이지는 자바스크립트만 보여 주고, 아무도
+    안 터진다. 이 저장소가 이미 두 번 잡은 그 꼴이라 여기서 이름을 대며 멈춘다.
+
+    바깥 `div` 의 `data-lang` 도 본다. 그것이 담긴 언어 중에 없으면 처음 보이는 쪽이
+    없는 언어라, 읽는 사람은 자기가 고른 적 없는 표면을 먼저 만난다.
+    """
+    inner = re.compile(r'<script type="text/plain"([^>]*)>', re.S)
+    wrong = []
+    for page in _pages():
+        text = page.read_text(encoding="utf-8")
+        for m in re.finditer(r'<div class="runnable"([^>]*)>', text):
+            head = text[m.end():m.end() + 400]
+            attrs = m.group(1)
+            outer = "py" if 'data-lang="py"' in attrs else "js"
+            # 이 블록에 속한 <script> 만 — 다음 runnable 전까지.
+            stop = text.find('<div class="runnable"', m.end())
+            body = text[m.end():stop if stop > 0 else len(text)]
+            langs = [("py" if 'data-lang="py"' in a else "js" if 'data-lang="js"' in a else outer)
+                     for a in inner.findall(body)]
+            where = f"{page.relative_to(ROOT)} · {head.strip()[:40]}"
+            if len(langs) != len(set(langs)):
+                wrong.append(f"{where} — 같은 언어가 둘: {langs}")
+            elif langs and outer not in langs:
+                wrong.append(f"{where} — 바깥은 {outer} 인데 담긴 것은 {langs}")
+    assert not wrong, "이중 언어 블록이 한 벌을 잃는다:\n  " + "\n  ".join(wrong)
+
+
+def test_no_block_declares_a_name_the_runner_injects():
+    """실행 블록이 러너가 주입하는 이름을 다시 선언하면 그 블록은 안 돈다.
+
+    러너는 사용자 코드 앞에 `log`·`show` 같은 이름을 펼쳐 놓고 한 모듈로 합친다.
+    블록이 같은 이름을 `const` 로 선언하면 합쳐진 모듈이 **문법 오류**가 되고, 그것은
+    누가 그 블록을 눌러야만 보인다.
+
+    이 저장소에서 세 번 났다. `probe` 로 두 번, `show` 로 한 번 — `show` 는 튜토리얼을
+    붙이며 주입 목록에 이름을 하나 더한 순간 8강의 블록이 조용히 죽은 것이고, 그
+    상태로 커밋됐다. **이름을 더하는 쪽은 이미 있는 블록을 안 본다**는 게 문제의 모양이라,
+    사람 규율이 아니라 여기서 막는다.
+
+    주입 목록은 `runner.js` 에서 읽는다 — 여기 베껴 두면 다음에 이름이 늘 때 이 검사만
+    낡는다.
+    """
+    runner = (SITE / "assets" / "runner.js").read_text(encoding="utf-8")
+    injected = set()
+    for line in runner.splitlines():
+        m = re.search(r'^\s*"const \{(.*)$', line)
+        if m:
+            injected |= {n.strip() for n in m.group(1).split(",") if n.strip()}
+        m = re.search(r'^\s*"\s*([a-zA-Z, ]+)\} = borch;",', line)
+        if m:
+            injected |= {n.strip() for n in m.group(1).split(",") if n.strip()}
+        m = re.search(r'^\s*"const ([a-zA-Z_$][\w$]*) = ', line)
+        if m:
+            injected.add(m.group(1))
+    injected -= {"__pg"}
+    assert len(injected) > 15, f"주입 목록을 못 읽었다 — {sorted(injected)}"
+
+    clash = re.compile(r"^\s*(?:const|let|var|function|class)\s+([a-zA-Z_$][\w$]*)", re.M)
+    wrong = []
+    for page in _pages():
+        text = page.read_text(encoding="utf-8")
+        for m in re.finditer(r'<script type="text/plain"([^>]*)>(.*?)</script>', text, re.S):
+            if 'data-lang="py"' in m.group(1):
+                continue
+            for hit in clash.finditer(m.group(2)):
+                if hit.group(1) in injected:
+                    wrong.append(f"{page.relative_to(ROOT)} — 블록이 `{hit.group(1)}` 를 다시 선언한다")
+    assert not wrong, ("러너가 주입하는 이름을 블록이 덮어쓴다 (그 블록은 문법 오류로 안 돈다):\n  "
+                       + "\n  ".join(sorted(set(wrong))))

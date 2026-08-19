@@ -29,6 +29,7 @@
       <a href="../learn/" class="on" aria-current="page">Learn</a>
       <a href="../tutorials/">Tutorials</a>
       <a href="../api/">API</a>
+      <a href="../python.html">Python</a>
       <a href="../playground.html">Playground</a>
       <a href="https://github.com/playidea-lab/borch">GitHub</a>
       <a href="../ko/learn/04-training.html" class="lang">한국어</a>
@@ -46,7 +47,7 @@
       <a href="03-modules.html">3 · Modules</a>
       <a href="04-training.html" class="on">4 · Training</a>
       <a href="05-cnn.html">5 · Convolution</a>
-      <a href="06-save-load.html">6 · Saving &amp; Python</a>
+      <a href="06-save-load.html">6 · Saving</a>
       <a href="07-data.html">7 · Data</a>
       <a href="08-debugging.html">8 · Debugging</a>
     </nav>
@@ -114,9 +115,16 @@
       if the loop cannot recover <code>y = 3x + 2</code>, nothing else it reports means
       anything.
     </p>
+    <p>
+      This block carries the same loop twice. Run <b>javascript</b>, then press
+      <b>python</b> and run it again: the losses agree to the last digit, because the
+      two surfaces dispatch to the same WGSL. That is the claim this site makes about
+      <a href="../python.html">the Python route</a>, and it is cheaper to check than
+      to believe.
+    </p>
 
     <div class="runnable" data-lang="js">
-      <script type="text/plain">
+      <script type="text/plain" data-lang="js">
         await init();
         manualSeed(0);
 
@@ -147,6 +155,34 @@
         log("");
         log("w =", (await model.weight.item()).toFixed(4), "(3)");
         log("b =", (await model.bias.item()).toFixed(4), "(2)");
+      </script>
+      <script type="text/plain" data-lang="py">
+        import borch_webgpu as torch
+
+        nn, optim = torch.nn, torch.optim
+        torch.manual_seed(0)
+
+        N = 128
+        xs = [[(i / N) * 4 - 2] for i in range(N)]
+        ys = [[3 * row[0] + 2] for row in xs]
+        x, y = torch.tensor(xs), torch.tensor(ys)
+
+        model = nn.Linear(1, 1)
+        opt = optim.SGD(model.parameters(), lr=0.1)
+        crit = nn.MSELoss()
+
+        for step in range(201):
+            with torch.scope():
+                opt.zero_grad()
+                loss = crit(model(x), y)
+                loss.backward()
+                opt.step()
+                if step % 50 == 0:
+                    print(f"step {step:3d}  loss {loss.item():.6f}")
+
+        print("")
+        print(f"w = {model.weight.item():.4f} (3)")
+        print(f"b = {model.bias.item():.4f} (2)")
       </script>
     </div>
 

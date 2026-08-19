@@ -642,6 +642,18 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   color: var(--fg); font: 600 .76rem/1 var(--sans); cursor: pointer;
 }
 .runnable-head button.go { background: var(--ember); border-color: var(--ember); color: #180a02; }
+
+/* 언어 탭. 한 블록이 두 표면을 담을 때만 나온다 — 누른 쪽이 지금 도는 언어다.
+   `aria-pressed` 가 상태의 정본이라 CSS 도 그것을 읽는다. */
+.runnable-head button.tab {
+  padding: .22rem .55rem; border-radius: 5px;
+  border: 1px solid transparent; background: transparent;
+  color: var(--fg-faint); font: 500 .74rem/1 var(--mono);
+}
+.runnable-head button.tab[aria-pressed="true"] {
+  border-color: var(--line); background: var(--surface); color: var(--fg);
+}
+.runnable-head button.tab + button.tab { margin-left: -.35rem; }
 .runnable-head a.open {
   color: var(--fg-faint); text-decoration: none;
   font: 500 .74rem/1 var(--sans); padding: .3rem 0;
