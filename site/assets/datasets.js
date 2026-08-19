@@ -10,6 +10,8 @@
  * 비교하면 안 된다. 이 데이터가 답하는 질문은 "학습이 되는가" 다.
  */
 
+import { t } from "./i18n.js";
+
 const HERE = new URL("./data/", import.meta.url).href;
 const cache = new Map();
 
@@ -72,10 +74,11 @@ async function grab(url, as) {
   if (!res.ok) {
     // **없는 것과 못 읽은 것을 가른다.** 데이터는 `.gitignore` 라 클론만 한 사람에게는
     // 없는 것이 정상이고, 그때 필요한 것은 오류가 아니라 다음에 칠 명령이다.
-    throw new Error(
-      `튜토리얼 데이터가 없다 (${res.status}).\n` +
-      "  저장소 루트에서: python3 site/fetch_data.py\n" +
-      "  (CIFAR 바이너리가 없으면 --download 를 붙인다)");
+    //
+    // 이 문구가 한국어로만 박혀 있었다. 영어 페이지를 연 사람이 데이터를 안 만들었을
+    // 때 **읽을 수 없는 문장**을 받았다 — 데이터가 없는 것은 클론 직후의 정상 상태라
+    // 그 사람이 첫 방문에서 만나는 문장이기도 하다.
+    throw new Error(t("data.missing", res.status));
   }
   return as === "json" ? res.json() : res.blob();
 }

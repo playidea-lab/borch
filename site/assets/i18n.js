@@ -89,6 +89,13 @@ const STRINGS = {
     en: "loading borch_webgpu…", ko: "borch_webgpu 를 싣는 중…" },
   "load.moduleFailed": {
     en: "could not fetch {0} (HTTP {1})", ko: "{0} 를 못 받았다 (HTTP {1})" },
+  "data.missing": {
+    en: "The tutorial data is not here ({0}).\n"
+      + "  From the repository root: python3 site/fetch_data.py\n"
+      + "  (add --download if you do not have the CIFAR binaries)",
+    ko: "튜토리얼 데이터가 없다 ({0}).\n"
+      + "  저장소 루트에서: python3 site/fetch_data.py\n"
+      + "  (CIFAR 바이너리가 없으면 --download 를 붙인다)" },
   "load.scriptFailed": {
     en: "could not load {0}", ko: "못 올렸다: {0}" },
 };

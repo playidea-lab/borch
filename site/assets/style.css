@@ -14,9 +14,13 @@
 
   --fg: #e8ecf3;
   --fg-dim: #a3aec0;
-  --fg-faint: #6b788c;
+  --fg-faint: #7b8799;        /* 5.38:1 — 이 색으로 적힌 것 중에 내용이 있다 */
 
   --ember: #ff7a3d;      /* torch — 이름의 절반 */
+  /* **글자로 쓸 때의 주황은 따로 둔다.** 같은 값을 배경으로도 글자로도 쓰면 한쪽을
+     맞추는 순간 다른 쪽이 깨진다 — 밝은 쪽에서 주황을 글자에 맞게 어둡게 했더니
+     주 버튼(어두운 글자 위 주황)이 4.49 에서 3.93 으로 떨어졌다(실측). */
+  --ember-text: #ff7a3d;
   --gpu: #4fd6c9;        /* WebGPU 쪽 */
   --warn: #f5c451;
   --bad: #ff6b6b;
@@ -42,8 +46,9 @@
     --line-soft: #ebe7e1;
     --fg: #181c22;
     --fg-dim: #55606f;
-    --fg-faint: #8b95a4;
-    --ember: #d1500f;
+    --fg-faint: #646f80;   /* 4.88:1 (전에는 2.90 — AA 미달) */
+    --ember: #d1500f;      /* 배경으로 쓰는 값 — 어두운 글자와 4.49 */
+    --ember-text: #c2490c; /* 글자로 쓰는 값 — 4.73 (전에는 4.14) */
     --gpu: #0f8a80;
   }
 }
@@ -63,6 +68,21 @@ body {
 
 a { color: inherit; }
 
+/* **어디에 있는지 보여야 한다.** 스타일시트에 `:focus` 규칙이 하나 있었는데 그것도
+   테두리를 **지우는** 것이었다. 실행 버튼과 편집기가 가득한 사이트에서 키보드로
+   다니는 사람은 자기 위치를 알 방법이 없었다. */
+:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* 편집기는 테두리가 글자에 겹치므로 상자 그림자로 대신한다. */
+.editor-wrap textarea:focus-visible,
+.runnable .edit textarea:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ember);
+}
+
 code, pre, kbd { font-family: var(--mono); }
 
 /* ── 뼈대 ───────────────────────────────────────────────────────────── */
@@ -76,7 +96,7 @@ section:first-of-type { border-top: 0; }
   font: 600 12px/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--ember);
+  color: var(--ember-text);
   margin: 0 0 1rem;
 }
 
@@ -101,6 +121,16 @@ header.top {
 .top .wrap {
   display: flex; align-items: center; gap: 1.25rem;
   height: 58px;
+}
+/* **차림표가 접히지 않아 모든 페이지가 폰에서 가로로 넘쳤다.** 항목 여섯이 404px 를
+   차지하는데 뷰포트가 390px 이었고, 그래서 본문과 상관없이 어느 페이지든 125px 씩
+   밀려났다(실측). 한 줄에 안 들어가면 아래로 내리고, 그래도 넘치면 가로로 굴린다. */
+@media (max-width: 700px) {
+  .top .wrap { flex-wrap: wrap; height: auto; padding-block: .5rem; gap: .5rem 1rem; }
+  .top nav { width: 100%; margin-left: 0; overflow-x: auto; gap: 1rem; padding-bottom: .15rem; }
+  .top nav a { white-space: nowrap; }
+  /* 머리글 높이가 더는 58px 이 아니므로, 그 수에 붙어 있던 것들을 떼어 놓는다. */
+  .subnav { position: static; }
 }
 .brand {
   font: 700 17px/1 var(--mono);
@@ -145,7 +175,7 @@ header.top {
   color: var(--fg-faint); text-decoration: none;
   font: 500 .82rem/1 var(--sans);
 }
-.subnav a:hover { color: var(--ember); }
+.subnav a:hover { color: var(--ember-text); }
 @media (max-width: 620px) { .subnav .wrap { width: auto; padding-inline: 1.5rem; } }
 
 /* ── 버튼 ───────────────────────────────────────────────────────────── */
@@ -218,7 +248,8 @@ header.top {
 }
 .card-head .grow { margin-left: auto; }
 
-.demo { display: grid; grid-template-columns: 1.15fr 1fr; gap: 0; }
+.demo { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 0; }
+.demo > * { min-width: 0; }
 @media (max-width: 760px) { .demo { grid-template-columns: 1fr; } }
 .demo pre {
   margin: 0; padding: 1.1rem 1.2rem;
@@ -257,10 +288,15 @@ header.top {
 /* ── 격자 ───────────────────────────────────────────────────────────── */
 
 .grid { display: grid; gap: 1rem; }
-.grid.c3 { grid-template-columns: repeat(3, 1fr); }
-.grid.c2 { grid-template-columns: repeat(2, 1fr); }
-@media (max-width: 860px) { .grid.c3 { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 620px) { .grid.c3, .grid.c2 { grid-template-columns: 1fr; } }
+/* **`1fr` 는 내용보다 작아지지 않는다.** 칸 안에 `<pre>` 가 있으면 그 최소폭이
+   트랙을 밀어내고, `overflow-x: auto` 를 걸어도 소용없다 — 줄어들어도 된다고
+   말해 주는 것은 `minmax(0, …)` 와 `min-width: 0` 이다. 랜딩이 390px 에서
+   664px 로 벌어진 것이 이 자리였다. */
+.grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid > * { min-width: 0; }
+@media (max-width: 860px) { .grid.c3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .grid.c3, .grid.c2 { grid-template-columns: minmax(0, 1fr); } }
 
 .tile {
   background: var(--surface);
@@ -270,7 +306,7 @@ header.top {
 }
 .tile h3 { margin-bottom: .5rem; }
 .tile p { margin: 0; font-size: 0.92rem; }
-.tile .icon { font-size: 1.15rem; color: var(--ember); margin-bottom: .6rem; display: block; }
+.tile .icon { font-size: 1.15rem; color: var(--ember-text); margin-bottom: .6rem; display: block; }
 
 /* ── 흐름도 ─────────────────────────────────────────────────────────── */
 
@@ -287,7 +323,7 @@ header.top {
   font: 600 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
   color: var(--fg-faint); width: 6.5rem; flex: none;
 }
-.flow-row.now .flow-tag { color: var(--ember); }
+.flow-row.now .flow-tag { color: var(--ember-text); }
 .node {
   font: .8rem/1 var(--mono);
   padding: .45rem .65rem; border-radius: 7px;
@@ -339,7 +375,7 @@ footer a { color: var(--fg-dim); }
 
 /* ── 코드 강조 (아주 얇게) ──────────────────────────────────────────── */
 
-.tok-key { color: var(--ember); }
+.tok-key { color: var(--ember-text); }
 .tok-str { color: var(--gpu); }
 .tok-num { color: #b9a2ff; }
 .tok-com { color: var(--fg-faint); font-style: italic; }
@@ -480,7 +516,7 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   font-size: .88rem; line-height: 1.45;
 }
 .sidebar a:hover { background: var(--surface); color: var(--fg); }
-.sidebar a.on { background: var(--surface); color: var(--ember); font-weight: 600; }
+.sidebar a.on { background: var(--surface); color: var(--ember-text); font-weight: 600; }
 .sidebar a .n { font-family: var(--mono); font-size: .82rem; }
 .sidebar a .c { float: right; color: var(--fg-faint); font-size: .74rem; }
 
@@ -490,7 +526,8 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   background: var(--surface); color: var(--fg);
   font: .86rem/1 var(--sans);
 }
-#search:focus { outline: none; border-color: var(--ember); }
+#search:focus-visible { outline: none; border-color: var(--ember);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 35%, transparent); }
 
 .doc-main { padding: 2rem 2rem 6rem; min-width: 0; }
 @media (max-width: 620px) { .doc-main { padding: 1.5rem 1.1rem 4rem; } }
@@ -579,7 +616,7 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 .hits .why { font-size: .78rem; color: var(--fg-faint); padding: .15rem 0 .3rem; }
 .hits li { padding: .3rem 0; border-bottom: 1px solid var(--line-soft); }
 .hits a { text-decoration: none; font: .86rem/1.5 var(--mono); color: var(--fg-dim); }
-.hits a:hover { color: var(--ember); }
+.hits a:hover { color: var(--ember-text); }
 .hits .where { color: var(--fg-faint); font-size: .78rem; }
 
 /* ── 실행되는 코드 블록 (Learn 이 쓴다) ────────────────────────────── */
@@ -609,7 +646,7 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   color: var(--fg-faint); text-decoration: none;
   font: 500 .74rem/1 var(--sans); padding: .3rem 0;
 }
-.runnable-head a.open:hover { color: var(--ember); }
+.runnable-head a.open:hover { color: var(--ember-text); }
 .runnable-head button:hover { filter: brightness(1.08); }
 .runnable-head button[disabled] { opacity: .5; cursor: not-allowed; }
 
@@ -673,13 +710,13 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   border-top: 1px solid var(--line-soft);
 }
 .pager a { text-decoration: none; font-size: .9rem; color: var(--fg-dim); }
-.pager a:hover { color: var(--ember); }
+.pager a:hover { color: var(--ember-text); }
 .pager a b { display: block; color: var(--fg); font-weight: 600; margin-top: .2rem; }
 
 /* 강의 본문의 이름 → API 레퍼런스. 밑줄 대신 점선으로, 읽는 흐름을 안 끊게. */
 a.api-link { text-decoration: none; border-bottom: 1px dashed var(--line); }
 a.api-link:hover { border-bottom-color: var(--ember); }
-a.api-link code { color: var(--ember); }
+a.api-link code { color: var(--ember-text); }
 
 /* ── 스크롤되는 자리를 보이게 ─────────────────────────────────────────
    macOS 의 겹침 스크롤바는 폭이 0 이라, 넘치는 상자가 **그냥 잘린 상자**처럼
