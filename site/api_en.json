@@ -1,0 +1,722 @@
+{
+ "autograd/Node": {
+  "en": "A node in the graph. Tensor implements it.",
+  "src": "b4b433a2f73f"
+ },
+ "autograd/Node.backwardFn": {
+  "en": "Takes one output gradient and returns **as many as there are parents.**\n\nA parent that gets nothing is `null`. `null` and \"filled with zeros\" are different —\nstep functions (`sign`, `floor`) **do pass zero through.** The sister project wrote\nthis once as a refusal, and a loss with a step in it ran under torch while stopping\nonly for us.",
+  "src": "ae6a15c09907"
+ },
+ "autograd/Node.freed": {
+  "en": "Whether backward has already passed through this node.\n\ntorch releases the graph once gradient has flowed, because the intermediate values\nare holding memory. A second call is a refusal, not a recomputation.",
+  "src": "c5cfe96fb878"
+ },
+ "autograd/Node.grad": {
+  "en": "Accumulates on leaves only, as in torch.",
+  "src": "94ee184b0bdc"
+ },
+ "autograd/Node.gradName": {
+  "en": "torch's `grad_fn` name. Error messages and the golden `repr::` cases use it.",
+  "src": "c2ab67395eff"
+ },
+ "autograd/Node.parents": {
+  "en": "The inputs this value was made from. Empty at a leaf.",
+  "src": "40e878c0a481"
+ },
+ "autograd/Node.requiresGrad": {
+  "en": "Whether it receives gradient.",
+  "src": "498c3951c7b3"
+ },
+ "autograd/backward": {
+  "en": "Backpropagation. Seeds at `root` and accumulates into the leaves' `grad`.",
+  "src": "1eec993f0865"
+ },
+ "autograd/gradMode": {
+  "en": "Keeps the switch that turns gradient on and off **inside an object.**\n\nIt must not be a module-level variable. On the Python side, splitting a single file\ninto eight broke `no_grad` quietly for exactly this reason — each module got its own\ncopy, and all 374 golden cases passed straight through it. Keeping the value in one\nplace stops that from happening.",
+  "src": "de9ec48f5964"
+ },
+ "autograd/noGrad": {
+  "en": "`torch.no_grad()`. Restores even if an exception is thrown.",
+  "src": "2dd34b1b1efc"
+ },
+ "data/": {
+  "en": "Datasets and loaders — where `torch.utils.data` goes.\n\n## Without this, the story is half untrue\n\nThis repository says \"train in the browser\", and with this empty that training ends\nat **slicing batches by hand.** The accuracy runner inside the repository was in fact\nwriting its own sampling and shuffling — and every user would end up writing the\nsame thing again.\n\n## What was not built\n\n**There is no `sampler` option.** The name exists in torch, but there is nothing\nbehind it here yet. Putting the name down alone repeats what happened with\n`paramGroups` — torch's shape with nothing inside, a place where what the user passes\nis quietly ignored. What is not there is left absent.\n\nThere is no `num_workers` either. Spawning a worker does not carry the GPU handle\nacross to it.\n\n## Two places it parts from torch\n\n**Batches are GPU tensors, so they have to be received inside `scope()`.** The loader\ncannot wrap them for you — the whole point is that the tensor leaves the scope. Leave\nit unwrapped and every batch an epoch makes stays alive.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\n`x` and `y` were made **outside** the scope, so they need no keep-alive mark. What\nthe scope releases are the intermediates made inside it.\n\n**Shuffling follows `manualSeed`.** torch gives the DataLoader its own generator; here\none host stream is used (`random.ts`) — one seed rewinds layer initialisation,\ndropout, the tensor factories and now batch order too. The choice was to not add\nanother door.",
+  "src": "a18136bc5584"
+ },
+ "data/ConcatDataset": {
+  "en": "Several datasets joined into one. Where `torch.utils.data.ConcatDataset` goes.",
+  "src": "8e035efbc780"
+ },
+ "data/DataLoader": {
+  "en": "Hands out batches. Where `torch.utils.data.DataLoader` goes.\n\n**It is a synchronous iterator.** Making a batch is a GPU operation and borch's\nforward is synchronous, so `for (const [x, y] of loader)` works as written — only\nreading values is asynchronous.\n\n`length` is the number of **batches**, not samples, as in torch.\n\n## Batches have to be received inside `scope()`\n\nIt is written at the head of the file too, and it is written again here — this is\n**the place a loader's user hits on their first loop**, and reading one spot of the\ndocumentation before writing code is the normal case.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {          // intermediates made in here are released on the way out\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\nThe loader cannot wrap it for you. The point is that the batch leaves the scope —\nwrap it and `x` and `y` are released before they are ever used. Leave it unwrapped\nand every intermediate an epoch makes stays, and the device fills within a few\nepochs.",
+  "src": "3c17a2a8880d"
+ },
+ "data/Dataset": {
+  "en": "Something that can be fetched by index. Where `torch.utils.data.Dataset` goes.\n\n`gather` **is optional.** With it, the loader pulls a batch in one go; without it, it\nfetches one at a time and stacks. The difference is large for a dataset holding\ntensors — at batch 32 with two tensors, GPU operations drop from 66 to 2.",
+  "src": "1a26b4323c0d"
+ },
+ "data/LoaderOptions.dropLast": {
+  "en": "Drops the last batch if it is short. Layers that need a fixed batch size use it.",
+  "src": "4cc553c3d1b0"
+ },
+ "data/LoaderOptions.shuffle": {
+  "en": "Reshuffles every epoch, as in torch.",
+  "src": "ad9acc44e322"
+ },
+ "data/Subset": {
+  "en": "Sees only part of the original. `randomSplit` produces one.",
+  "src": "18ea40957d71"
+ },
+ "data/Subset.gather": {
+  "en": "**Translates the indices and passes them to the original.** Without this, every\ndataset that has been through `randomSplit` falls onto the slow path — and splitting\ntrain from validation is an ordinary thing to do.",
+  "src": "c10cb2aab596"
+ },
+ "data/TensorDataset": {
+  "en": "A few tensors whose first axis is the sample axis. Where `torch.utils.data.TensorDataset` goes.",
+  "src": "16dbf4da6413"
+ },
+ "data/randomSplit": {
+  "en": "Splits without overlap. Where `torch.utils.data.random_split` goes.\n\n**The parts must sum to the whole.** torch stops there too — a leftover sample\nquietly discarded makes the train/validation ratio differ from the one written down,\nand nobody sees it.\n\nShuffling follows `manualSeed`. The same seed gives the same split.",
+  "src": "a467b4212d8c"
+ },
+ "device/Availability": {
+  "en": "Whether WebGPU can be used. **It answers with a value, not an exception.**\n\n`why` is what makes it worth having — `no-api` (the browser is too old, or this is\nnot a secure context) and `no-adapter` (driver blocklist, virtual machine, headless\nwith no GPU) leave the user with entirely different things to do, and folding them\ninto one exception erases that split.",
+  "src": "4c976bb73d4f"
+ },
+ "device/Device.adapterFeatures": {
+  "en": "Optional features the adapter offers. **`timestamp-query` has to be here for per-kernel timing.**\n\nA wall clock can only measure the whole step, and then there is no way to ask which of\n429 dispatches is expensive — which is exactly where this got stuck.",
+  "src": "09c5fb2cad31"
+ },
+ "device/Device.adapterInfo": {
+  "en": "Which adapter it attached to. A value anyone measuring performance must record alongside.",
+  "src": "ef745e422fd7"
+ },
+ "device/Device.age": {
+  "en": "This buffer's current life. A tensor compares this number at birth against its value at use.",
+  "src": "50f474d73e52"
+ },
+ "device/Device.alive": {
+  "en": "Whether it is still usable. Somewhere a long training loop looks at every step.",
+  "src": "2269e9aa36dc"
+ },
+ "device/Device.alloc": {
+  "en": "**Uploads must not come from the pool.** `writeBuffer` runs at the queue's current\nposition, whereas we stack commands and submit them later — if a dispatch not yet\nsubmitted is about to read a buffer taken from the pool, we would overwrite it.\nAllocating fresh removes the situation entirely.",
+  "src": "a1449d043bab"
+ },
+ "device/Device.byKind": {
+  "en": "Dispatches by kernel kind.\n\nA total alone does not say what to fix next. Whether 1,636 is twenty convs or five\nhundred BatchNorm assemblies calls for different work — this exists to measure that\nsplit.",
+  "src": "7c31e103120c"
+ },
+ "device/Device.copyInto": {
+  "en": "Overwrites one buffer with another. In-place operations use it.\n\nIt is a copy, not a kernel — the result is made in a new buffer and then moved back to\nthe original slot. Reading and writing the original at once leaves the threads\nunordered and the values mixed.",
+  "src": "bb8fb6445e57"
+ },
+ "device/Device.dispatches": {
+  "en": "Dispatches issued so far.\n\nStopping at \"it is slow\" leaves you with no next move. Knowing dispatches per step\nseparates whether the slow part is **the kernel itself or the number of calls** —\nthis design currently builds and submits a fresh command encoder per operation, so a\nlarge count points there.",
+  "src": "8f4f6028fcb6"
+ },
+ "device/Device.emptyCache": {
+  "en": "Empties the pool. Where `torch.cuda.empty_cache()` goes.\n\n**The pool does not shrink on its own.** With repeating shapes, as in a training loop,\nthat is right — remaking them each time is the cost. But when the shape **changes**,\nthe old shape's buffers stay forever. In a browser, where GPU memory is shared between\ntabs, that costs more than it does on a desktop.\n\nA returned buffer may still be referenced by commands not yet submitted, so the\nrelease happens **after** submitting.",
+  "src": "7111624f517c"
+ },
+ "device/Device.endScope": {
+  "en": "Closes the scope and releases what was made inside it.",
+  "src": "d884f75750b1"
+ },
+ "device/Device.faults": {
+  "en": "Validation errors so far.\n\n**Whoever is measuring has to look at this.** An invalid command buffer throws\nnothing and simply does no work, so the wall clock keeps running in that state and\nnumbers come out — something that looks like a measurement comes out.",
+  "src": "36001dc45957"
+ },
+ "device/Device.flush": {
+  "en": "Submits the stacked commands.\n\nIt has to be passed before values are read — reading the result of unsubmitted\ncommands returns the old value.",
+  "src": "e74601e1d8e3"
+ },
+ "device/Device.keep": {
+  "en": "Keeps something alive regardless of scope. Parameters and optimizer state use it.",
+  "src": "ab3f8e120144"
+ },
+ "device/Device.lastScope": {
+  "en": "The tally of the most recently closed scope. It stays here even when closed via `scope()`.\n\n**A non-zero `survived` means something accumulates every step** — in a training loop\nthat is the leak.",
+  "src": "a9490799e1de"
+ },
+ "device/Device.lost": {
+  "en": "The story, if the device was lost; otherwise `null`.\n\nThere is no counterpart in torch — a CUDA context lives with the process. In a\nbrowser another tab or the driver can reclaim our device, and no exception is raised\nwhen it happens.",
+  "src": "c15d4e22e175"
+ },
+ "device/Device.memory": {
+  "en": "The count and bytes of buffers currently held.\n\nA benchmark measuring leaks has to be able to ask this from outside. The sister\nproject's benchmark called `js.tf.memory()` directly, which ties the instrumentation\nto TF.js and makes the same benchmark unrunnable against another implementation — and\nthat is exactly why it could not be run.\n\nWhat sits in `spare` is excluded. A buffer back in the pool waiting for the next step\nis held, but it **is not leaking** — counting it reads something that is not a leak as\none.",
+  "src": "86cf1750c3f1"
+ },
+ "device/Device.nsByKind": {
+  "en": "GPU time in nanoseconds accumulated per kernel kind, when enabled.",
+  "src": "1543b05f1bf3"
+ },
+ "device/Device.pipeline": {
+  "en": "It does not swallow shader compilation errors.\n\n**A failed WGSL compile does not arrive as an exception.** `createShaderModule` simply\nreturns, and dispatching with that pipeline does nothing at all — the result buffer\nstays zero and all the screen says is \"the values differ\". A reduction kernel in this\nvery runner returned zeros that way, with no error visible anywhere. So the\ndiagnostics are pulled out deliberately.",
+  "src": "1137ac2946f7"
+ },
+ "device/Device.pipelineCount": {
+  "en": "Shaders baked so far. Tests look at it to see whether the cache works.",
+  "src": "017de3cad70c"
+ },
+ "device/Device.pooled": {
+  "en": "Buffers in the pool waiting for the next step. **What `memory` deliberately excludes.**\n\nThat one asks \"is it leaking\" and this one asks \"how much is held\". Two different\nquestions need two numbers, and the second one was missing — so **nobody could ask\nabout the real footprint.**\n\nThe pool grows when shapes change. It is split by size, so a buffer that ran at batch\n16 cannot serve batch 32 and simply stays. A benchmark running three batch sizes in\none pass leaves the first two sizes' worth sitting in the pool, and `memory` does not\ncount it.",
+  "src": "cc4727dd5c01"
+ },
+ "device/Device.profile": {
+  "en": "Runs `body` while measuring. **It always turns off afterwards — including on the way out through an exception.**\n\nTurning it on and off must not be left to the caller. While profiling, each dispatch\nopens a pass and the time inflates, and if it leaks out still on, **every measurement\nafter it comes out quietly inflated.** A benchmark measures several batches, so an\nexception in one batch makes the next batch's ms/step a profiled number rather than a\nmeasurement — and it prints on screen looking exactly the same. There should be one\ndoor, and the door should clean up.",
+  "src": "8a729fe434ef"
+ },
+ "device/Device.profileDropped": {
+  "en": "Dispatches **not measured** for want of room. Whoever calls has to report this alongside.\n\nNon-zero means `nsByKind` holds only part of the step while still reading like a total.\nNot writing down what was cut reads as \"everything was measured\", and that is one of\nthe kinds of lie this repository has been counting.",
+  "src": "3ebc1986684f"
+ },
+ "device/Device.run": {
+  "en": "One kernel. `groups` is the **workgroup count**, and the per-axis limit is rechecked\nhere — `kernels.ts` folds the grid, but a hand-called path may appear.",
+  "src": "ac4e6a028976"
+ },
+ "device/Device.run1d": {
+  "en": "Runs one-dimensional work spread over a grid. Paired with the indexing in `kernels.ts`.",
+  "src": "9799e77ef202"
+ },
+ "device/Device.scopeDepth": {
+  "en": "The depth of open scopes. Tests look at it for balance.",
+  "src": "67af21c0919d"
+ },
+ "device/Device.submits": {
+  "en": "Submissions actually issued so far. Whoever is measuring whether batching works looks here.",
+  "src": "ef200bd56890"
+ },
+ "device/Device.sumAll": {
+  "en": "A full sum. It calls the same kernel again until the partial sums come down to one.\n\n**It uses no atomics** — floating-point addition changes value when the order changes,\nand then the same seed run twice gives different training. The slower way is the one\nthat reproduces.",
+  "src": "229439ea9ca7"
+ },
+ "device/Device.synchronize": {
+  "en": "Waits until the submitted work has **actually finished.** Where `torch.cuda.synchronize()` goes.\n\n`flush()` returns having only put things on the queue — time it with that and the wall\nclock has already stopped while the GPU is still working. Until now the way this\nrepository forced completion was to read one value (`item()`), and that **mixes the\nreadback round trip into the measurement.** It is the place where \"am I measuring the\nkernel or the bus\" gets blurred, and this function is what separates them.",
+  "src": "a94fad312801"
+ },
+ "device/DeviceKind": {
+  "en": "Where a tensor is.\n\nWhere torch's `'cuda'` and `'cpu'` go. **There is no index** — WebGPU gives no way to\nenumerate adapters, so there is nothing for `'webgpu:1'` to point at. A string is\nenough.",
+  "src": "0bb06e0e36d3"
+ },
+ "device/InitOptions": {
+  "en": "How the adapter is chosen. Where torch's `CUDA_VISIBLE_DEVICES` goes.",
+  "src": "25c965ab09de"
+ },
+ "device/InitOptions.forceFallbackAdapter": {
+  "en": "Forces the software adapter. Used to exercise the fallback path itself.",
+  "src": "a24872acb133"
+ },
+ "device/InitOptions.powerPreference": {
+  "en": "It defaults to `\"high-performance\"` because this is a **library that measures.** The\nbrowser default may pick the integrated GPU on a laptop, and then the same code\ngives different numbers on the same machine — a number where you do not know what\nwas measured.",
+  "src": "1875e9471ca0"
+ },
+ "device/isAvailable": {
+  "en": "Asks only whether WebGPU can be used. Where `torch.cuda.is_available()` goes.\n\n**Unlike torch's, it is async** — obtaining an adapter is asynchronous and there is\nno way around it. If you need to know why not, use `probe()`.",
+  "src": "2b9c39e11c5e"
+ },
+ "device/probe": {
+  "en": "Asks whether it could attach, without attaching. It does not create a device.\n\n**It does not stand in for `init()`** — `requestDevice` can still refuse after this\npasses, and that still arrives as an exception from `init()`. What this function\nanswers reaches as far as \"is there an adapter\", and since most of what actually\nblocks sits before that, it is worth having on its own.",
+  "src": "894cc9940595"
+ },
+ "dtype/DTYPES": {
+  "en": "Every type name. **The place that decides whether a string arriving from outside is a\ntype** uses this — the label written in a checkpoint header is someone else's text,\nand must not be taken on trust.\n\nIt exports `BY_RANK` directly. Two copies of the list means one of them grows when a\ntype is added.",
+  "src": "50a1fe7d53d3"
+ },
+ "dtype/DType": {
+  "en": "dtypes and the promotion rules.\n\n## Storage is float32, and only that\n\n`int64` is a **label**. WGSL has no 64-bit integer, so there is no way to actually\nhold one, and holding it in a 32-bit integer makes it `int32`, not `int64`. So the\nvalues sit in float32 and the dtype is carried separately — the sister project made\nthe same choice, though its reason (TF.js's cast was broken) differs from this one,\nwhich is that the means of representation simply does not exist.\n\n**The price, written down**: integers above 2²⁴ are not exact in float32. The ranges\nused for indices and counts are far below that, but a large integer stored here\ndrifts quietly.\n\n## Why the split is by category\n\ntorch has categories — `bool < integer < float` — and only promotes **within** them.\nInheriting numpy's rules would make `float32 + int64` a float64, and then a learner\nlearns the wrong rule. There is one width per category here, so the rule comes out\nshorter still.",
+  "src": "a71dd08e9e58"
+ },
+ "dtype/byRank": {
+  "en": "Recovers a type from its rank. Used when a category has to be lifted a step, as in a reduction.",
+  "src": "fceeb943f08c"
+ },
+ "dtype/floatsPerElement": {
+  "en": "How many float32 slots one element occupies.\n\n**This is the one place in this file where `int64` behaves differently.** `int64` is\na label, so its storage stays one float32; `complex64` **really takes two** — real\nand imaginary interleaved.\n\nThat breaks `tensor.ts`'s long-standing invariant, **\"slot count = buffer length\".**\nThe new invariant is `buffer length = size × floatsPerElement(dtype)`, and only code\nthat knows it should touch a complex buffer — a kernel that does not will read the\nfirst half as reals and give a **quietly** wrong answer. The `Tensor.buffer` getter\nguards that door.\n\n**`complex128` does not arrive here.** WGSL has no `f64`, so there is no means at all\nof holding a double-precision complex — the core (numpy) stops at that name for the\nsame reason.",
+  "src": "2db185ac7804"
+ },
+ "dtype/promote": {
+  "en": "The result type of a binary operation.\n\nThere are only four rules.\n1. **If a complex is involved, the result is complex.** Division included — this is\n   read before rule 2 below.\n2. **Division is always float.** Even `int64 / int64` is float32 — torch's `/` is\n   true division, and integer division is a separate call, `//`.\n3. **Subtraction involving a bool is refused.** There is no settled answer to what\n   subtracting false from true means, so torch stops rather than invent one.\n4. Everything else promotes to the higher category.\n\nThe point is that rule 1 sits **before** rule 2. Behind it, `z / z` collapses to\nfloat32, and out comes a tensor that is half right — the real part survives and the\nimaginary part is gone, so the shape and the element count both look plausible.",
+  "src": "0297a11602dc"
+ },
+ "dtype/scalarDType": {
+  "en": "The type corresponding to a Python-side scalar. JavaScript does not distinguish\ninteger from float, so it is decided by the value.",
+  "src": "8af9beebfb5e"
+ },
+ "einsum/": {
+  "en": "`einsum` — contraction written in subscripts.\n\n## How far it goes\n\n**One or two operands**, no ellipsis (`...`), and no subscript repeated within a\nsingle operand (so no diagonal extraction). Anything else throws.\n\n**What it cannot do, it does not quietly wave through.** einsum's notation is short\nenough that an unsupported combination is easy to write, and if a plausible answer\ncomes back there is no way to find where it went wrong.\n\n## How it works\n\nThere is no new kernel. It moves axes (`permute`), folds them (`sumDim`), and drops\nto a matrix multiply where it can — all operations that already exist and that the\ngolden cases already watch. The value of doing it this way is that not one\nhand-written backward appears.",
+  "src": "db013ead2c38"
+ },
+ "errors/IndexError": {
+  "en": "An index past the end.\n\n**Not a `RuntimeError`.** torch uses Python's `IndexError` here, and the golden\ncases froze the kind of exception too, so it has to be that name. Blurring the\nkinds means code catching `except IndexError` stops catching — the kind of an\nexception is part of the API.",
+  "src": "864792689ced"
+ },
+ "errors/LinAlgError": {
+  "en": "Linear algebra with no answer to give — a singular matrix, a Cholesky that is not\npositive definite.\n\n**The name does work.** Code that can meet a singular matrix usually wraps the call\nin `except LinAlgError`, and throwing a plain `RuntimeError` walks straight past\nthat wrapper and kills the program. Same reason `IndexError` is kept separate —\n**the kind of an exception is part of the API.**",
+  "src": "50630a75be3a"
+ },
+ "errors/NotImplementedError": {
+  "en": "A combination that does not exist yet.\n\n**Refusals have kinds too.** torch raises \"this padding parity at this rank is not\nsupported\" as `NotImplementedError`, and that says something different from \"the\nvalue is wrong\" (`RuntimeError`) — the first is something that may exist one day,\nthe second is the caller being wrong.",
+  "src": "1ea082eb0db4"
+ },
+ "errors/RuntimeError": {
+  "en": "Present in Python, absent in JavaScript. The golden cases froze the **kind name**\nof the exception as well (`RuntimeError|message=True`), so the class name is part\nof the answer.",
+  "src": "33e7fdaba1f9"
+ },
+ "errors/TORCH": {
+  "en": "The wording torch itself produces. Kept verbatim so that searching for it works.",
+  "src": "1532991709a7"
+ },
+ "errors/ValueError": {
+  "en": "An argument that makes no sense on its own — two mutually exclusive options given\ntogether, or a value outside the domain.\n\n**It says something different from `RuntimeError`.** Python uses `ValueError` in\nthis position and so does torch (`FractionalMaxPool2d` stops with that kind when\ngiven both a size and a ratio). The golden cases freeze the **kind name** of the\nexception as the answer, so throwing a different name here leaves the binding\nnothing to carry across.",
+  "src": "93d83f477cff"
+ },
+ "fft/": {
+  "en": "`torch.fft` — the discrete Fourier transform, and `stft`/`istft` on top of it.\n\n**There is one kernel.** Forward, inverse, half transforms and the inverses of\nthose three all call the same shader with a different sign and scale. Split apart\nthey become six copies, and the day comes when one of them is fixed differently —\nthat is the kind of ground this repository has repeatedly lost.\n\n## It is O(n²), for all that it is called `fft`\n\nIt runs the DFT directly. Cooley–Tukey is only fast at powers of two, and other\nlengths need Bluestein on the side. **The values are the same either way**, and at\nthis project's ceiling — textbook-sized signals — the difference does not show. If\na day comes when it has to be fast, change it then, but **do not write down speed\nthat is not there today.**\n\n## Axes are not moved\n\nWherever `dim` points, no data is moved. Three numbers — `(outer, axis, inner)` —\nlocate the element and the shader reads it directly. Moving and moving back costs\ntwo more buffers, and moving complex data is an operation that does not exist yet,\nso it would have had to be built for this.\n\n## Gradients\n\nThe transform is **linear**, so the backward falls straight out of the convention.\nThe backward of a holomorphic function is `conj(f')·g`, which gives\n`grad_x[j] = Σ_k e^{+2πijk/n}·g[k]` — **an unnormalised inverse transform.** The\nhard part is not the value but **which half gets counted**:\n\n* `rfft`'s backward receives gradient only on the stored half — adding the\n  conjugate pair doubles it.\n* `irfft`'s backward counts **the edges once and the middle twice**, because the\n  conjugate pair it restored came out of the same stored slot.\n\nEither can be wrong **while the forward values stay perfectly fine**. The core\n(numpy) went through the same derivation first, and the golden cases ask about the\ntwo separately.",
+  "src": "67611b57d0c5"
+ },
+ "fft/fftshift": {
+  "en": "Zero frequency to the middle. **It shifts by `n//2`** (measured — including at odd lengths).",
+  "src": "55ed8def70f5"
+ },
+ "fft/hfft": {
+  "en": "Hermitian-symmetric complex → **real.** The conjugate relation of `irfft` (measured).",
+  "src": "7a88ec90ed73"
+ },
+ "fft/hfftn": {
+  "en": "The last axis is `hfft` and **the axes before it are `fft`.**\n\nBeing the mirror of `rfftn` it looks like it should be `ifft`, but torch uses `fft`\n(measured — both candidates were built and compared). **The shape is right either\nway**, so it does not surface unless the values are measured.",
+  "src": "1699ee530203"
+ },
+ "fft/ifftshift": {
+  "en": "The undo. **Shifting back by `n//2` does not land at odd lengths** — the same amount, the other way.",
+  "src": "63c28fab7d99"
+ },
+ "fft/ihfft": {
+  "en": "Real → **Hermitian-symmetric complex.** The conjugate of `rfft`.",
+  "src": "05ae0b536595"
+ },
+ "fft/irfftn": {
+  "en": "The inverse of `rfftn`. **`ifft` first, `irfft` last.**",
+  "src": "ac10fe28b9d9"
+ },
+ "fft/rfftn": {
+  "en": "Real input. **Only the last axis is `rfft`; the rest are `fft`** — the order decides the answer.",
+  "src": "90f2fb4c1865"
+ },
+ "index/": {
+  "en": "borch — a PyTorch-shaped tensor library running on WebGPU in the browser.\n\n```ts\nimport { init, Tensor, nn, optim, scope, keepAlive } from \"borch\";\n\nawait init();                                  // acquire the WebGPU adapter\n\nconst model = new nn.Sequential(\n  new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));\nconst opt = new optim.SGD(model.parameters(), 0.05, 0.9);\nconst crit = new nn.CrossEntropyLoss();\n\nconst x = keepAlive(Tensor.from(pixels, [32, 784]));\nconst y = keepAlive(Tensor.from(labels, [32], { dtype: \"int64\" }));\n\nfor (let i = 0; i < steps; i++) {\n  await scope(async () => {                    // release one step's intermediates\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n    console.log(await loss.item());\n  });\n}\n```\n\n## What this file does\n\nIt gathers the public surface **into one place.** Without it, users have to point\nat inner paths like `dist/src/tensor.js`, and then the moment we move a file their\ncode breaks. What is written here is the promise; the rest is internal business.\n\n## Where it parts from torch — written down in advance\n\n**`await init()` has to be called first.** Acquiring the WebGPU adapter is\nasynchronous and there is no way around it. Make a tensor without calling it and it\nstops there with a message. Where `torch.cuda.is_available()` goes, use\n`await isAvailable()`, and if you need to know *why* it is unavailable,\n`await probe()` separates `'no-api'` (the browser is too old) from `'no-adapter'`\n(driver blocked, headless).\n\n**`'cpu'` is a place values are held, not a device that computes.** Bring values\ndown to the host with `await t.cpu()` and back up with `t.webgpu()`. A tensor that\nhas come down can be read (`toArray`, `item`, `repr`) but cannot be computed with —\nborch has no CPU kernels. Feed one in and it stops with torch's own wording\n(\"Expected all tensors to be on the same device\"). `t.device` answers where it is.\n\n**Reading values is asynchronous.** `await t.item()`, `await t.toArray()`. It is a\ntrip back for GPU memory. Forward and backward are synchronous.\n\n**Training needs a scope open.** Intermediate buffers made inside `scope()` are\nreleased on the way out. JavaScript's garbage collector does not return GPU memory\nin time, so leaving the thousands one step makes fills the device within a few\nsteps. It is a concept torch does not have, and it sits where TF.js's `tidy` sits.\nAnything that has to survive, such as parameters, is marked with `keepAlive`.\n\n**There are two spellings — the one closer to Python's `with` is recommended.**\n\n```ts\nfor (let i = 0; i < steps; i++) {\n  using s = scope();                 // closes at the end of the block\n  opt.zeroGrad();\n  const loss = crit.call(model.call(x), y);\n  loss.backward();\n  opt.step();\n  console.log(await loss.item());\n}\n```\n\nReleasing is synchronous, so it is `using` and not `await using`. The block is left\nonly after every `await` inside it has finished, which makes the `await loss.item()`\nabove safe (measured). The callback spelling stays as well — it is shorter where you\nwant the value handed straight back.\n\n**Forgetting stops loudly.** Using a tensor carried out of a scope without being\nmarked raises at that point. For a while it did not, and back then **whatever the\nnext allocation had written over it** was read quietly (measured: `[1,2,3,4]` came\nback as `9,9,9,9`).\n\n**A model is called as `model.call(x)`.** JavaScript cannot simply call an object,\nso torch's `model(x)` cannot be carried over as written. Calling `forward` directly\ngives the same value, but `call` is the recommended one — it is where hooks would\nattach if they ever do.",
+  "src": "a931af7ca0d0"
+ },
+ "index/isTensor": {
+  "en": "Whether this is a tensor.\n\nCode wrapping this library from outside needs it — it has to treat a method's result\ndifferently depending on whether it returns a tensor, a number or a shape, and using\n`instanceof` means importing the class, which other languages cannot do. Pyodide's\nPython binding is the first user.",
+  "src": "1be95b22ff71"
+ },
+ "index/setNull": {
+  "en": "Empties one slot **to `null`.**\n\n## Why this is exposed\n\nPython cannot make JavaScript's `null`. Pyodide hands `null` to Python as `None`,\nand sending `None` back the other way produces **`undefined`** — which in JavaScript\nis a different value.\n\nSo `p.grad = None` left the slot on the other side as `undefined`, and `autograd.ts`\nasks whether it is empty with `node.grad === null`. The comparison came out false,\nit tried to accumulate gradient into something that was not there, and what blew up\nwas `Cannot read properties of undefined (reading 'add')` — a long way from the\nPython line.\n\n**Loosening the strict comparison over there is not the fix.** That weakens the TS\ninvariant and leaves the real cause, the conversion, exactly where it was. Put the\nway to make a null on the side that has nulls.",
+  "src": "1659aeb686fb"
+ },
+ "indexing/AxisPlan": {
+  "en": "How one axis is to be read — **a plan, not a value.**\n\nKeeping parsing apart from execution means this file never calls `Tensor` (no\ncycle). Ranges and ordering are all settled here, so the side that executes only\never receives numbers that already hold.",
+  "src": "15125a26c1e4"
+ },
+ "indexing/Slice": {
+  "en": "`x[start:end:step]`. Do not build one directly — use `slice()`.",
+  "src": "e2374ad8cbd7"
+ },
+ "indexing/planAxis": {
+  "en": "A single-axis index, turned into a plan.",
+  "src": "a895b1e59c0c"
+ },
+ "indexing/slice": {
+  "en": "The span to cut. An empty position runs to the end, as in Python.\n\n**A negative step is refused.** Python's `x[::-1]` reverses, but there is a `flip`\nhere that already does that job. Letting two spellings do one thing blurs which is\ncanonical, and that is a place this repository has repeatedly stayed away from.",
+  "src": "19c139f04b1c"
+ },
+ "linalg/LU.sign": {
+  "en": "The sign of the number of row swaps. The determinant's sign comes from here.",
+  "src": "63e68a0d1b99"
+ },
+ "linalg/LuPacked": {
+  "en": "What `lu_factor` produces — `L` and `U` packed into one plate, plus the pivot table.\n\n**The pivot table counts from 1.** That is the LAPACK convention and torch inherited\nit as-is. A 2×2 with no swap gives `[1, 2]`, not `[0, 1]` — count from zero and\n`luSolveFactored` gives a different answer without a sound. Matched by asking real\ntorch.",
+  "src": "419a378cd18f"
+ },
+ "linalg/Mat": {
+  "en": "A square matrix laid out row-major.",
+  "src": "eea66fde901b"
+ },
+ "linalg/cholesky": {
+  "en": "The lower-triangular Cholesky. Throws if the matrix is not symmetric positive definite — it does not quietly return NaN.",
+  "src": "31d74bd05236"
+ },
+ "linalg/choleskyBackward": {
+  "en": "Cholesky's backward.\n\nThe gradient towards `A` when `L = chol(A)`. The derivation is not short, so the\nformula is written out — with `P = Φ(Lᵀ·L̄)`, where `Φ` takes the lower triangle and\nhalves the diagonal, symmetrise `Ā = L⁻ᵀ·P·L⁻¹`. The symmetrisation is needed because\n`A` is symmetric, so its upper and lower triangles share the same degrees of\nfreedom.",
+  "src": "a0a1f0d51c6c"
+ },
+ "linalg/completeBasis": {
+  "en": "Fills `rows × k` orthonormal columns out to `rows × rows`.\n\nIt finds directions orthogonal to the existing columns by Gram–Schmidt. **With more\nthan one dimension left over the answer is not unique** — any rotation inside that\nsubspace is the same factorisation. That is why the golden cases ask in absolute\nvalue, and only measure where exactly one dimension is left.",
+  "src": "6552c748bde2"
+ },
+ "linalg/eigh": {
+  "en": "Eigenvalues and eigenvectors of a symmetric matrix — Jacobi rotations.\n\nEigenvalues come back in **ascending** order, as torch's `linalg.eigh` gives them.",
+  "src": "662492736473"
+ },
+ "linalg/eighGap": {
+  "en": "`F_ij = 1/(λⱼ − λᵢ)`, which enters `eigh`'s eigenvector backward.\n\n**Repeated eigenvalues blow it up.** torch blows up with it, so this is the same\nlimit rather than an imitation. The diagonal is a difference with itself, so it is\nzero by definition rather than a division.",
+  "src": "b31a20d7dbca"
+ },
+ "linalg/lu": {
+  "en": "LU factorisation with partial pivoting.\n\n**Pivoting is not optional.** Without it, a matrix whose first element is zero or\nvery small either blows up the division or loses the digits entirely.",
+  "src": "a71a827037ba"
+ },
+ "linalg/luExpand": {
+  "en": "Unpacks the packed plate into `P`, `L` and `U`.",
+  "src": "a06f2145a649"
+ },
+ "linalg/luSolveFactored": {
+  "en": "Solves `A x = b` using what `lu_factor` produced.",
+  "src": "c036d680bbca"
+ },
+ "linalg/matrixExp": {
+  "en": "The matrix exponential `e^A` — **scaling and squaring.**\n\nTaylor alone does not converge on large matrices. The answer for `A*5` is 4.8e+10,\nand at that point the growing terms overflow first. Bringing the 1-norm of `A/2^s`\nbelow 0.5, running the series, and then squaring `s` times gives the same answer\nsafely — `e^A = (e^{A/2^s})^{2^s}`.",
+  "src": "26884bce92b3"
+ },
+ "linalg/matrixExpAdjointMap": {
+  "en": "Freezes the backward of `e^A` **into a single matrix.**\n\nThe Fréchet derivative has this identity — the upper-right block of\n`expm([[Aᵀ, E],[0, Aᵀ]])` is the derivative in the direction `E`. It is an identity,\nnot an approximation.\n\n**That route is not available here, though.** The `Ḡ` arriving in the backward is on\nthe GPU and this file is CPU — you cannot wait on the GPU from inside a backward. So\nit uses the fact that `Ḡ` enters **linearly**: solve once for each `E_k` with a\nsingle one in one slot, build an `n²×n²` table, and the backward is one matrix\nmultiply.\n\nThe values are exact (each column is a real derivative, not a finite difference).\nThe price is `n²` calls to a `2n×2n` `expm` in the forward, which is cheap at the\nsizes being pushed here.",
+  "src": "26a7ae31482e"
+ },
+ "linalg/matrixRank": {
+  "en": "The count of non-zero singular values. What counts as zero is scaled to the largest singular value.",
+  "src": "e6ee4f5beb6d"
+ },
+ "linalg/mirror": {
+  "en": "Keeps one triangle and mirrors it into the other.\n\n**`eigh` accepts matrices that are not symmetric.** By default torch reads only the\nlower triangle and ignores the upper — `[[4,99],[1,3]]` and `[[4,1],[1,3]]` give the\nsame answer (asked of real torch). Jacobi looks at the whole matrix, so without\nmirroring first, a non-symmetric input diverges quietly here. **It is a difference\nthat never shows as long as you pass something symmetric.**",
+  "src": "cfd47c07ad98"
+ },
+ "linalg/pinverse": {
+  "en": "The Moore–Penrose pseudoinverse. Directions whose singular value is near zero are dropped.",
+  "src": "25ecc555fe4a"
+ },
+ "linalg/qr": {
+  "en": "Householder QR.\n\n**Householder, not Gram–Schmidt.** The two give the same factorisation with\ndifferent signs. LAPACK uses Householder and torch uses LAPACK, so matching the\ngolden `R` down to its signs requires the same method — the golden cases ask about\n`Q` in absolute value, but they ask about `R` as it is.",
+  "src": "48979cd1f5d9"
+ },
+ "linalg/slogdet": {
+  "en": "The sign and the log absolute value, separately. Safer than `log(det)` when the determinant is very small.",
+  "src": "6ffda5c19940"
+ },
+ "linalg/solve": {
+  "en": "Solves `A X = B`. `B` has `m` columns.",
+  "src": "5ff9bba8e120"
+ },
+ "linalg/solveTriangular": {
+  "en": "Solves **knowing** the matrix is triangular. One pass, forward or backward, and it is done.",
+  "src": "adaae441eb60"
+ },
+ "linalg/svd": {
+  "en": "Singular value decomposition. **Rectangular input is accepted.**\n\nIt is obtained from the eigendecomposition of `AᵀA` — the shortest route that holds\nfor small matrices. Singular values come back in **descending** order (as in torch).\nOn large or ill-conditioned matrices this method loses digits, but that is not the\nsize being pushed here.\n\n`u` is **reduced** — `rows × k` (`k = min(rows, cols)`). torch's default,\n`full_matrices=True`, wants `rows × rows`, so `completeBasis` fills the remaining\ncolumns. The two are kept apart because the reduced form is always unique while the\nfilled one is **not** once more than one dimension is left over.",
+  "src": "144f401fbc0c"
+ },
+ "optim/": {
+  "en": "Optimizers and learning-rate schedules.\n\n## Parameters are modified in place\n\nIt does not make a new tensor and swap it in. The handle the model holds and the\nhandle the optimizer sees have to be the same one; swapping splits them and produces\na state where **training runs and the parameters do not move.** In-place modification\nis blocked on a leaf with gradient enabled, so it happens inside `no_grad` — which is\nexactly what torch's optimizers do.\n\n## State is held as tensors\n\nSomething like a momentum buffer **must not hold the gradient tensor itself.** When\nthat gradient is replaced on the next step, the buffer points at the wrong thing —\na place this repository missed while only ever looking at SGD without momentum. So\nthe buffer starts as its own copy.",
+  "src": "33807b83847d"
+ },
+ "optim/ASGD": {
+  "en": "Averaged SGD. **The learning rate decays on its own each step**, and from some point on\nthe parameters are averaged.\n\n`eta` decays as `lr / (1 + lambd·lr·step)^alpha`, and `mu` is the weight of the\naverage. The default `t0` is a million, so in normal training `mu` is always 1 and\n`ax` is a copy of the parameters — the averaging branch only really runs once `t0` is\nlowered.\n\n**The decay is multiplicative.** `param *= (1 − lambd·eta)` happens first, and the\ngradient is subtracted after.",
+  "src": "1b01036c3ecf"
+ },
+ "optim/Adadelta": {
+  "en": "**The learning rate is barely used.** It builds the step size out of the history of its own updates.",
+  "src": "f0c88f34532d"
+ },
+ "optim/Adafactor": {
+  "en": "Adam, but holding the second moment **split into rows and columns.**\n\nAdam holds one variance per parameter, so its memory costs as much as the weights.\nHere only the row means and the column means are held and the outer product restores\nthem — `R + C` where `(R, C)` would have been.\n\n**One-dimensional parameters are not split** — there is only one axis to split, so the\nvariance is held directly. Ask with vectors alone and the whole point of this\noptimization never runs.",
+  "src": "3ad6760a6b35"
+ },
+ "optim/Adafactor.extendState": {
+  "en": "**The base's default cannot be used.** This optimizer's state is not parameter-shaped\nbut folded into rows and columns, and which of the two is held depends on the rank.\nThe slot count matches the parameters (the unused side is filled with `null`), so the\nindexing still works.\n\nThe constructor and `addParamGroup` both pass through this one place — written in two\nplaces, one of them eventually gets fixed alone.",
+  "src": "df9775c30637"
+ },
+ "optim/Adagrad": {
+  "en": "**Keeps adding** squared gradients — it only ever shrinks, never grows.",
+  "src": "9ecfeeb22d6e"
+ },
+ "optim/Adamax": {
+  "en": "Adam with the second moment taken as **the maximum instead of the root mean square.**",
+  "src": "0f03b14af695"
+ },
+ "optim/ChainedScheduler": {
+  "en": "Applies several **at once.** Their factors multiply.",
+  "src": "fb987b33ce2a"
+ },
+ "optim/ConstantLR": {
+  "en": "**Holds it cut until `totalIters`, then returns to the original.** The simplest form of a warm-up.",
+  "src": "423f60f71850"
+ },
+ "optim/CosineAnnealingWarmRestarts": {
+  "en": "Descends as a cosine and then **returns to the start.** Each period is `tMult` times longer.",
+  "src": "f55a545212a6"
+ },
+ "optim/CyclicLR": {
+  "en": "**With more than one group, the bounds become relative.** torch takes `base_lr` and\n`max_lr` as a list per group; here they are single numbers. Following the base's rule,\nthe value computed against the first group is multiplied by each group's baseline\nratio, so group i cycles between `baseLr·rᵢ` and `maxLr·rᵢ`. That is what someone who\nset per-layer learning rates expects, but it **is not the same as torch.** With one\ngroup the ratio is 1 and there is no difference.",
+  "src": "a4ff75b453c1"
+ },
+ "optim/ExponentialLR": {
+  "en": "**It is recursive** — it multiplies the current learning rate. It does not recount from the original.\n\nUsed alone the two produce the same sequence. What diverges is another scheduler\ntouching the same lr — overlapped through `ChainedScheduler`, the recursive form\nstacks on top of the other's result while the closed form overwrites what the other\ndid.",
+  "src": "4c9d81a450db"
+ },
+ "optim/LRScheduler": {
+  "en": "Learning-rate schedules.\n\n**It is all floating-point arithmetic, so the values have to equal torch's exactly** —\nthere is no room for an approximation. So the golden cases froze not one value but\n**the whole trajectory**, and doing that is how the core caught the difference in\n`StepLR`.\n\n**The baseline is `initialLr`, not the lr at construction time.** It is stamped onto\nthe optimizer once, and schedulers built later see the same baseline. Used alone the\ntwo are equal and nothing catches, but chained, the second one takes as its baseline\nwhat the first has already cut.",
+  "src": "445ba50bd59d"
+ },
+ "optim/LRScheduler.current": {
+  "en": "The learning rate now. Where a recursive scheduler reads the value before its own.",
+  "src": "fd91500c3b37"
+ },
+ "optim/LRScheduler.loadStateDict": {
+  "en": "The undo of `stateDict()`. It does not touch the learning rate — the optimizer holds that.",
+  "src": "19fb9b9388b0"
+ },
+ "optim/LRScheduler.restart": {
+  "en": "Makes it step from the beginning again, for when `SequentialLR` hands over.",
+  "src": "98b257d9b1e0"
+ },
+ "optim/LRScheduler.start": {
+  "en": "**Applies epoch zero.** torch does this in the constructor and here it cannot be — a\nTypeScript subclass's fields are filled in **after** `super()` returns, so calling\n`compute` inside the constructor finds things like `factor` still `undefined`.\n\nSo it is called once, right after construction. Something like `ConstantLR`, which\nchanges the value from epoch zero, loses its entire first term without it — measured\nat a maximum difference of 2.0e-01.",
+  "src": "8bab3046dff5"
+ },
+ "optim/LRScheduler.stateDict": {
+  "en": "What resuming needs — **which epoch, and the baselines.**\n\nRestoring the optimizer's `lr` alone is not enough. A scheduler is a thing that\nrecomputes its value from `epoch`, so leaving that at zero and carrying on means\n**the next `step()` puts the learning rate back to its first value** — the optimizer\nside was restored perfectly and one step erases it.\n\nThe baselines travel too. `initialLr` comes from the optimizer, but that is **the value\nthe first scheduler stamped**, and chained schedulers hold the baseline each of them\nsaw.",
+  "src": "847b1aff56cf"
+ },
+ "optim/LinearLR": {
+  "en": "Moves **in a straight line** from the starting factor to the ending factor.\n\nIt meets `ConstantLR` at the end — past `totalIters` both are the original learning\nrate. The last value alone cannot separate them, so the golden cases ask about the\nwhole trace.",
+  "src": "288604a59933"
+ },
+ "optim/MultiStepLR": {
+  "en": "Cuts only at the milestones. **It is recursive** — fixed for the same reason as `StepLR`.\n\nA milestone written twice (`[3, 3]`) multiplies twice at that point — it did under the\nclosed form too, and torch does the same.",
+  "src": "855c3301e6ba"
+ },
+ "optim/MultiplicativeLR": {
+  "en": "**Multiplies as it goes** — the baseline is the current learning rate, not the original.",
+  "src": "31125a9b89e4"
+ },
+ "optim/NAdam": {
+  "en": "Adam with Nesterov's look-ahead attached.\n\n**The momentum coefficient changes each step, and the running product of that sequence\nhas to be carried.** Held constant, the first few steps diverge quietly.",
+  "src": "82c9be511db2"
+ },
+ "optim/OneCycleLR": {
+  "en": "Up and then down. **Close to the default of a modern training recipe.**\n\nThe initial learning rate is `maxLr/divFactor` and the end is that divided again, so\n**the learning rate given to the optimizer is never used** — it is overwritten the\nmoment this is built.",
+  "src": "1279b0cd931b"
+ },
+ "optim/Optimizer.addParamGroup": {
+  "en": "Adds a group later. Where `torch.optim.Optimizer.add_param_group` goes.\n\n**It grows the state bank too.** Without that, the next step blows up with \"no state\nfor parameter N\" — the bank is indexed by the flattened parameter position.\n\nA scheduler already built does not know this group's baseline. torch asks for\n`initial_lr` in the same place — if the scheduler came first, build it again.",
+  "src": "38d4e6f57a5b"
+ },
+ "optim/Optimizer.counters": {
+  "en": "The scalars this optimizer holds. Subclasses override it.\n\n**The bank does not go in here** — the base already holds it, so `stateDict` picks it\nup on its own. What belongs here is the non-tensor things such as `stepCount`, and\nleaving one out means **bias correction restarts from the beginning** on resume. The\nvalues come out slightly different with nothing pointing at where they diverged.",
+  "src": "94f2741fd1ea"
+ },
+ "optim/Optimizer.extendState": {
+  "en": "Grows the state when a group is added.\n\nBy default it adds one **parameter-shaped** slot per registered bank. An optimizer for\nwhich that premise does not hold (`Adafactor` holds variance folded into rows and\ncolumns) overrides here.",
+  "src": "ba805e06afd9"
+ },
+ "optim/Optimizer.grouped": {
+  "en": "What this group set for itself, or the optimizer's default if it set nothing.",
+  "src": "7faa3ec1a4d2"
+ },
+ "optim/Optimizer.loadCounters": {
+  "en": "The undo of the above. Whoever overrode it takes their own back out.",
+  "src": "80f88098e9c1"
+ },
+ "optim/Optimizer.loadStateDict": {
+  "en": "Restores what `stateDict()` gave. Call it **after rebuilding the optimizer with the same arguments.**\n\nIt throws if a bank slot is missing or a size differs. Adding or removing parameters,\nor laying an old checkpoint over a model, can otherwise leave training running with\nvalues shifted by one slot, and that is far worse than an exception.",
+  "src": "790407fef50f"
+ },
+ "optim/Optimizer.lr": {
+  "en": "The learning rate of the group currently being stepped.",
+  "src": "96f6022a20ad"
+ },
+ "optim/Optimizer.paramGroups": {
+  "en": "torch's shape — this is where a scheduler edits `lr`.",
+  "src": "57c320a35897"
+ },
+ "optim/Optimizer.params": {
+  "en": "Every group's parameters, concatenated. The state bank is indexed by this position.",
+  "src": "ea4b6cd178b8"
+ },
+ "optim/Optimizer.state": {
+  "en": "One state bank. **Going through here is what makes it grow when a group is added.**\n\nIt used to be built per optimizer with `params.map(...)`, which leaves the slot for a\nlater-added parameter empty.",
+  "src": "e336159ad16e"
+ },
+ "optim/Optimizer.stateDict": {
+  "en": "Everything needed to carry on training.\n\n**Momentum alone is not enough.** The group's learning rate (a scheduler may already\nhave cut it) and the step counter have to travel with it for the step after a resume\nto give the same number as one that never stopped.\n\nTensors and numbers come back separately — the safetensors body carries tensors and\nthe header carries numbers (`serialize.ts`).",
+  "src": "a4288fdb7823"
+ },
+ "optim/Optimizer.zeroGrad": {
+  "en": "Empties the gradients. **It returns them to `null`** — filling with zeros blurs the leaf test.",
+  "src": "a3dc814623fe"
+ },
+ "optim/ParamGroup": {
+  "en": "One bundle of parameters and the hyperparameters attached to it.\n\n**There used to be no `params`.** The name is torch's `param_groups`, but it was\nalways a single `[{ lr }]` and every scheduler only ever looked at `[0]` — no\nper-layer learning rate, no excluding bias and norm from weight decay, while the name\nsaid otherwise. torch's shape with nothing inside is worse than nothing: a user\ncalling `paramGroups.push(...)` was quietly ignored.",
+  "src": "6f11ab8ebed0"
+ },
+ "optim/ParamGroup.initialLr": {
+  "en": "The value a scheduler takes as its baseline. The first scheduler stamps it once.",
+  "src": "dbd8ecdcdfe5"
+ },
+ "optim/ParamGroup.params": {
+  "en": "The parameters this group steps.",
+  "src": "a795576b1ff3"
+ },
+ "optim/ParamGroup.weightDecay": {
+  "en": "For when this group alone uses a different value. Absent, it is the value given when the optimizer was built.",
+  "src": "ee3085f9bc09"
+ },
+ "optim/ParamGroupInit": {
+  "en": "What goes in when a group is made. Leave `lr` out to use the optimizer's default.",
+  "src": "32025d3a5b74"
+ },
+ "optim/ParamsArg": {
+  "en": "What an optimizer's constructor accepts — a list of tensors or a list of groups.",
+  "src": "0dec45569a90"
+ },
+ "optim/PolynomialLR": {
+  "en": "Descends as `(1 − t/T)^power`. At `power=1` it is a straight line.",
+  "src": "9bff371d1930"
+ },
+ "optim/RAdam": {
+  "en": "Adam, but **without the adaptive step size early on.**\n\nAdam is known to be jumpy at the start because the second moment has few samples and\nits variance is large; this one passes through that stretch like SGD. Drop the\nthreshold (`rho > 5`) and the values become Adam's.",
+  "src": "4df2b8d19927"
+ },
+ "optim/ReduceLROnPlateau": {
+  "en": "Cuts the learning rate when the value stops improving.\n\nUnlike other schedules it **has to be given a value** to move — hence `step(metric)`.",
+  "src": "e41a10154997"
+ },
+ "optim/ReduceLROnPlateau.stateDict": {
+  "en": "The two things a resume needs. **`best` starts at infinity** — which is why putting\nthese numbers in the header needed somewhere to write infinity other than\n`JSON.stringify` (`numbersToMeta` in `serialize.ts`).\n\nWithout restoring them, whatever value arrives right after a resume becomes \"the first,\ntherefore the best\", and the patience counter resets.",
+  "src": "1c7638b7dc0b"
+ },
+ "optim/Rprop": {
+  "en": "Looks at **the sign of the gradient only.** The magnitude is unused, and the step width\ngrows and shrinks per slot.\n\nIf the sign holds, the width is multiplied by `etaPlus`; if it flips, by `etaMinus`.\n**A flipped slot does not take that step at all** — its gradient is set to zero, which\nalso makes the next step's \"previous gradient\" zero. Without those two, inputs whose\nsign never flips produce a difference that is never caught.",
+  "src": "3d39922a7e73"
+ },
+ "optim/SequentialLR": {
+  "en": "**Chains schedulers end to end.** On reaching a milestone it hands over to the next.",
+  "src": "d7ed682bb1f2"
+ },
+ "optim/StepLR": {
+  "en": "Multiplies by `gamma` every `stepSize` epochs.\n\n**It is recursive** — the same reason `ExponentialLR` below writes down. This used to\nbe the closed form `base * gamma ** floor(epoch / stepSize)`.\n\nStepped alone from the beginning, the two produce **the same sequence.** That is why\nthe golden cases, which freeze the whole trace, were green for a long time. What\ndiverges is building a new scheduler on an optimizer whose lr has already moved —\n**resuming training.** At that moment the closed form puts the learning rate back to\nits first value (0.05 to 0.2). No error appears; the loss just jumps once.",
+  "src": "87d3603ddc52"
+ },
+ "random/gauss": {
+  "en": "One sample from the standard normal. Box–Muller.\n\n**Of the two values it produces, one is used and one is thrown away.** Caching the\npair would mean the cache has to be cleared whenever a seed is planted, and if it\nis not, a value from just before the planting appears just after it — a state that\nlooks rewound but whose first number is wrong, which is the hardest kind to find.",
+  "src": "401a3fafe543"
+ },
+ "random/manualSeed": {
+  "en": "Plants the seed and rewinds everything registered with it.\n\n**It turns 0 into 1.** xorshift emits zero forever once its state is zero — nobody\nexpects `manualSeed(0)` to be the call that kills randomness.",
+  "src": "dfda1d1dc2bd"
+ },
+ "random/onSeed": {
+  "en": "Registers something to be rewound when a seed is planted. **It receives the seed value.**\n\nIt was first called with no argument, and the dropout counter always rewound to 1.\nThe promise that the same seed gives the same result still held, but **different\nseeds stopped giving different results** — someone running five seeds to measure\nvariance would not know the dropout masks were identical all five times, and would\nread a number shaken only by weight initialisation as experimental variance.",
+  "src": "c65d3d275e2e"
+ },
+ "random/uniform": {
+  "en": "One sample from the uniform distribution on `[0, 1)`.",
+  "src": "20a317abaf96"
+ },
+ "random/uniformArray": {
+  "en": "An array filled from the uniform distribution on `[-bound, bound]`. Layer initialisation uses it.",
+  "src": "6a56acf1da06"
+ },
+ "rnn/": {
+  "en": "The eight top-level recurrences — `torch.lstm`, `torch.gru`, `torch.rnn_tanh`,\n`torch.rnn_relu`, and their `_cell` counterparts.\n\n**The only difference from the layer (`nn.Recurrent`) is where the weights come\nfrom.** The layer holds its own; this side **receives them as a list.** torch offers\nboth, and what the layer calls internally is this side.\n\nSo the step equations live here in one copy. Two copies, here and in the layer,\nmeans a day when **the gate order diverges**, and then the shape is right and only\nthe values are wrong — this repository already shares the equations between cell\nand layer for that same reason.\n\n## Gate order\n\nThe **row order** of `weight_ih` is the convention (measured):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)\n\nChange it and only the values diverge; the shape stays.",
+  "src": "08cd868490b0"
+ },
+ "rnn/lstm": {
+  "en": "`torch.lstm` — **it spreads three** (`output, h_n, c_n`), rather than bundling them the way the layer does.",
+  "src": "6dde300291f6"
+ },
+ "rnn/rnnApply": {
+  "en": "Several steps. `hx` is `(layer, batch, H)`.\n\n**Bidirectional and inter-layer dropout are refused.** Half-imitating something that\nis not there catches loudly for the first — the shape comes out halved — but\n**dropout diverges with plausible values** (training with no regularisation applied).\nBoth stop here.",
+  "src": "c451e73596f5"
+ },
+ "rnn/rnnStep": {
+  "en": "One step. **All four kinds pass through here.**",
+  "src": "12cb1032d090"
+ },
+ "serialize/": {
+  "en": "Checkpoint to bytes, bytes to checkpoint — the **safetensors** format.\n\n## Why this is needed\n\n`stateDict()` existed, but **there was no way to save it.** Refreshing the tab lost\nthe training. A browser is a place where the process dies far more often than on a\ndesktop, so this gap was felt more sharply here than it is in torch.\n\n## Why no format of our own\n\ntorch's `save`/`load` is pickle. It is a format that unpacks by executing Python\nobjects, which cannot be carried into a browser and should not be.\n\nsafetensors is a JSON header and a body of contiguous bytes. **The codec is this\none file, and for that price Python `borch`, numpy and the HF tools read the same\nfile.** A private format loses that — training in the browser and taking the result\nback to your own machine is half of this project's story, and a format only we can\nread throws that half away.\n\n```\n[8 bytes LE u64: header length N][N bytes of JSON header][body: tensor bytes, concatenated]\n```\n\n## Writing the dtype honestly\n\nborch's `int64` and `bool` are **labels; the values live in a float32 buffer**\n(`dtype.ts`). Writing `I64` in the header contradicts a four-byte body and\n**breaks other people's readers.**\n\nSo `dtype` is always written as `F32`, and borch's label rides separately in\n`__metadata__`. Someone else reads a float32 array (which is true); we read it and\nthe label comes back too.",
+  "src": "d33ef8085fe1"
+ },
+ "serialize/load": {
+  "en": "Bytes, as a checkpoint. **Synchronous** — uploading is one queued write.\n\nIt will not quietly manufacture odd tensors out of a damaged file. Lengths, offsets\nand types are all checked, and it throws when they do not agree — a checkpoint that\nis quietly wrong robs every training run after it of meaning.",
+  "src": "961c2e21db0f"
+ },
+ "serialize/metaToNumbers": {
+  "en": "The undo of the above. Only entries whose prefix matches are returned.",
+  "src": "b112ca6aad92"
+ },
+ "serialize/numbersToMeta": {
+  "en": "Numbers as strings, so they can ride in the header. safetensors' `__metadata__` takes strings only.\n\n**It writes with `JSON.stringify`.** `String(0.1)` is `\"0.1\"` and reading that back\ngives the same double, but `Infinity` becomes `\"Infinity\"`, which `JSON.parse`\nrefuses — and `ReduceLROnPlateau`'s `best` starts at exactly infinity.",
+  "src": "e0dec75d554d"
+ },
+ "serialize/prefixed": {
+  "en": "Puts a tag in front of each name. Used to hold a model and an optimizer **in one file.**\n\n```ts\nconst bytes = await save({\n  ...prefixed(\"model\", model.stateDict()),\n  ...prefixed(\"opt\", opt.stateDict().tensors),\n}, { ...numbersToMeta(\"opt\", opt.stateDict().numbers) });\n```",
+  "src": "d7dd3806bb81"
+ },
+ "serialize/save": {
+  "en": "A checkpoint, as bytes.\n\n**It is async** — the values are on the GPU, so there is a round trip to fetch them\nback. Hand it tensors already brought down to the host (`await t.cpu()`) and that\nround trip is gone.",
+  "src": "e92c8000b70a"
+ },
+ "serialize/unprefixed": {
+  "en": "Takes the tag off. Anything with a different prefix is not returned.",
+  "src": "1eeedec1c73a"
+ },
+ "special/": {
+  "en": "Special functions — the incomplete gamma and the polygammas.\n\n**The reason these kernels live apart** is that `n` is a shader constant.\n`polygamma(n, x)` bakes a different shader per `n`, and the unary table (`UNARY` in\n`kernels.ts`) hangs one shader off one name, so it does not fit there.\n\nThe formulas are carried over from the core (numpy) unchanged — two copies means a\nday when only one gets fixed. The core side was confirmed against torch for both\nvalues and gradients first; this is that carried across.",
+  "src": "02d37639f7a1"
+ },
+ "special/igammac": {
+  "en": "The upper branch, `Q = 1 − P`. **The two sum to exactly 1** (measured).",
+  "src": "3cd286c74fd5"
+ },
+ "vision/": {
+  "en": "Transforms shaped like `torchvision.transforms`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there are things\nthat go quietly wrong at that place — the comment on `ToTensor` below is one of them.\nIt uses **the same rules** as the repository's Python side (`borch_vision.py`). If\nthe rules diverge, the same data becomes different values per library, and that is\ncaught only by comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What arrives here\nin torchvision is a PIL image, and having no PIL, an array stands in its place.\nMaking a tensor per image makes one GPU buffer per image, which looks like it works\nright up until it collapses on memory.",
+  "src": "72d220285982"
+ },
+ "vision/Compose": {
+  "en": "Transforms in sequence. `repr` is several lines with the inside indented, so that shape is matched too.",
+  "src": "e5bf15bb0d54"
+ },
+ "vision/Image": {
+  "en": "An image laid out as `(H, W, C)`. The values are uint8 or float.",
+  "src": "c2e33f58bbcd"
+ },
+ "vision/Image.isByte": {
+  "en": "If uint8, `ToTensor` divides by 255.",
+  "src": "2e8d01124f0e"
+ },
+ "vision/Normalize": {
+  "en": "`(x - mean) / std`, per channel.",
+  "src": "9cb730d16504"
+ },
+ "vision/RandomCrop": {
+  "en": "Pads the edges, then crops at random.",
+  "src": "5380f8f52af7"
+ },
+ "vision/RandomHorizontalFlip": {
+  "en": "Flips left to right. Takes an `(H, W, C)` array.",
+  "src": "c9ead36eca40"
+ },
+ "vision/ToTensor": {
+  "en": "`(H,W,C)` or `(H,W)` → a `(C,H,W)` tensor.\n\n**It divides by 255 only when the input is uint8** — that is torchvision's rule. Pass\na float array and it is carried over undivided. Miss this distinction and data that\nis already in [0,1] gets divided once more and comes out 255× darker, with **no\nexception raised and only the training failing.**",
+  "src": "ae4de2e997fb"
+ },
+ "vision/augmentBatch": {
+  "en": "Augments an `(N,C,H,W)` batch in one pass. **Ours, not torchvision's.**\n\nMaking a tensor per image makes one GPU buffer per image — ten thousand of them for a\nten-thousand-image epoch. Augmenting the whole batch on the CPU and then making\n**one** tensor is the only order that holds, so that order is given a name and\nexported.\n\n**The random draws are per image.** Using one crop and one flip across the whole\nbatch means nothing inside the batch was augmented relative to anything else, and the\npoint of augmentation is gone.",
+  "src": "a5e0ce6add28"
+ },
+ "vision/normalizeBatch": {
+  "en": "`(x - mean) / std` per channel, batch-wide on the CPU — finished before any tensor is made.",
+  "src": "1260ebbe148f"
+ }
+}

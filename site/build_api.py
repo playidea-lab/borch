@@ -30,6 +30,7 @@ TypeScript 컴파일러 API 를 불러야 하는데, 그러면 이 저장소의 
 문서 생성에서 깨진다 — 받아야 하는 것은 `typescript` 뿐이지만 그것이 첫 예외가 된다.
 """
 
+import hashlib
 import json
 import pathlib
 import re
@@ -430,6 +431,52 @@ def _emit(text, pending, current, symbols):
     bag.append(item)
 
 
+# 영어 설명이 사는 곳. **소스가 아니라 여기다** — TSDoc 은 한국어로 남는다.
+#
+# 사이트는 오래 "번역하지 않는다, 번역은 쓰인 날부터 소스와 어긋나니까" 라고 적어
+# 두었다. 그 말이 맞다. 그래서 번역마다 **번역할 때 본 한국어의 해시**를 같이 적고,
+# 원문이 바뀌면 여기가 낡았다고 이름을 대며 말한다. 어긋남을 막을 수는 없지만
+# 어긋난 채로 조용히 있는 것은 막는다.
+EN = ROOT / "site" / "api_en.json"
+
+
+def _key(mod, sym=None, member=None):
+    """설명 하나를 가리키는 열쇠. 모듈·심볼·멤버 세 층을 한 줄로 적는다."""
+    if sym is None:
+        return f"{mod}/"
+    return f"{mod}/{sym}" + (f".{member}" if member else "")
+
+
+def _fingerprint(text):
+    """번역이 본 원문. 앞뒤 공백만 털고 잰다 — 들여쓰기가 바뀌었다고 낡은 건 아니다."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:12]
+
+
+def attach_english(modules):
+    """`doc_en` 을 달고, 낡은 것과 빠진 것을 세어 돌려준다."""
+    table = json.loads(EN.read_text(encoding="utf-8")) if EN.exists() else {}
+    stale, missing, done = [], [], 0
+    for mod in modules:
+        rows = [(_key(mod["name"]), mod)]
+        for sym in mod["symbols"]:
+            rows.append((_key(mod["name"], sym["name"]), sym))
+            for mem in sym["members"]:
+                rows.append((_key(mod["name"], sym["name"], mem["name"]), mem))
+        for key, node in rows:
+            ko = (node.get("doc") or "").strip()
+            if not ko:
+                continue
+            got = table.get(key)
+            if not got:
+                missing.append(key)
+            elif got.get("src") != _fingerprint(ko):
+                stale.append(key)
+            else:
+                node["doc_en"] = got["en"]
+                done += 1
+    return done, stale, missing
+
+
 def main():
     if not DECL.exists():
         raise SystemExit(f"선언 파일이 없다: {DECL}\n  먼저: npm run build:ts")
@@ -454,14 +501,25 @@ def main():
             "count": sum(1 + len(s["members"]) for s in symbols),
         })
 
+    done, stale, missing = attach_english(modules)
+
     payload = {
         "source": "borch-ts/dist/src/*.d.ts",
-        "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다.",
+        "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. "
+                "영어는 site/api_en.json 이 들고 있고, 원문이 바뀌면 낡았다고 말한다.",
+        "english": {"done": done, "stale": len(stale), "missing": len(missing)},
         "modules": modules,
         "total": sum(m["count"] for m in modules),
     }
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n",
                    encoding="utf-8")
+
+    if stale or missing:
+        print(f"  영어 설명 — 붙음 {done} · 낡음 {len(stale)} · 없음 {len(missing)}")
+        for key in stale[:5]:
+            print(f"    낡음: {key}")
+    else:
+        print(f"  영어 설명 — 붙음 {done} (낡거나 빠진 것 없음)")
 
     # **먼저 앉은 것이 이긴다.** `forward` 처럼 여러 클래스에 있는 이름은 첫 자리로
     # 보낸다 — 어느 하나로 보내는 것이 아무 데도 안 보내는 것보다 낫고, 모듈 순서가

@@ -1,6 +1,11 @@
 {
  "source": "borch-ts/dist/src/*.d.ts",
- "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다.",
+ "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. 영어는 site/api_en.json 이 들고 있고, 원문이 바뀌면 낡았다고 말한다.",
+ "english": {
+  "done": 180,
+  "stale": 0,
+  "missing": 434
+ },
  "modules": [
   {
    "name": "index",
@@ -17,7 +22,8 @@
      "signature": "export declare function isTensor(x: unknown): boolean",
      "doc": "이것이 텐서인가.\n\n밖에서 이 라이브러리를 감싸는 쪽이 필요로 한다 — 메서드가 텐서를 주는지 수를\n주는지 모양을 주는지에 따라 다르게 다뤄야 하는데, `instanceof` 를 쓰려면 클래스를\n들여와야 하고 다른 언어에서는 그것이 안 된다. Pyodide 의 파이썬 결속이 첫 사용자다.",
      "members": [],
-     "torch": "is_tensor"
+     "torch": "is_tensor",
+     "doc_en": "Whether this is a tensor.\n\nCode wrapping this library from outside needs it — it has to treat a method's result\ndifferently depending on whether it returns a tensor, a number or a shape, and using\n`instanceof` means importing the class, which other languages cannot do. Pyodide's\nPython binding is the first user."
     },
     {
      "kind": "function",
@@ -25,10 +31,12 @@
      "signature": "export declare function setNull(target: Record<string, unknown>, key: string): void",
      "doc": "자리 하나를 **`null` 로** 비운다.\n\n## 왜 이것이 밖에 있는가\n\n파이썬에서는 JS 의 `null` 을 만들 수 없다. Pyodide 는 `null` 을 파이썬 `None` 으로\n주고, 반대로 `None` 을 보내면 **`undefined`** 가 된다 — JS 에서 그 둘은 다른 값이다.\n\n그래서 `p.grad = None` 이 저쪽 자리를 `undefined` 로 만들었고, `autograd.ts` 는\n비었는지를 `node.grad === null` 로 묻는다. 비교가 거짓이 되어 없는 것에 기울기를\n쌓으려 들었고, 터진 자리는 `Cannot read properties of undefined (reading 'add')`\n였다 — 파이썬 줄에서 한참 떨어진 곳이다.\n\n**저쪽의 엄격한 비교를 느슨하게 바꾸지 않는다.** 그러면 TS 쪽 불변식이 약해지고\n진짜 원인인 변환은 그대로 남는다. null 이 있는 쪽에 만드는 자리를 낸다.",
      "members": [],
-     "torch": "set_null"
+     "torch": "set_null",
+     "doc_en": "Empties one slot **to `null`.**\n\n## Why this is exposed\n\nPython cannot make JavaScript's `null`. Pyodide hands `null` to Python as `None`,\nand sending `None` back the other way produces **`undefined`** — which in JavaScript\nis a different value.\n\nSo `p.grad = None` left the slot on the other side as `undefined`, and `autograd.ts`\nasks whether it is empty with `node.grad === null`. The comparison came out false,\nit tried to accumulate gradient into something that was not there, and what blew up\nwas `Cannot read properties of undefined (reading 'add')` — a long way from the\nPython line.\n\n**Loosening the strict comparison over there is not the fix.** That weakens the TS\ninvariant and leaves the real cause, the conversion, exactly where it was. Put the\nway to make a null on the side that has nulls."
     }
    ],
-   "count": 2
+   "count": 2,
+   "doc_en": "borch — a PyTorch-shaped tensor library running on WebGPU in the browser.\n\n```ts\nimport { init, Tensor, nn, optim, scope, keepAlive } from \"borch\";\n\nawait init();                                  // acquire the WebGPU adapter\n\nconst model = new nn.Sequential(\n  new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));\nconst opt = new optim.SGD(model.parameters(), 0.05, 0.9);\nconst crit = new nn.CrossEntropyLoss();\n\nconst x = keepAlive(Tensor.from(pixels, [32, 784]));\nconst y = keepAlive(Tensor.from(labels, [32], { dtype: \"int64\" }));\n\nfor (let i = 0; i < steps; i++) {\n  await scope(async () => {                    // release one step's intermediates\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n    console.log(await loss.item());\n  });\n}\n```\n\n## What this file does\n\nIt gathers the public surface **into one place.** Without it, users have to point\nat inner paths like `dist/src/tensor.js`, and then the moment we move a file their\ncode breaks. What is written here is the promise; the rest is internal business.\n\n## Where it parts from torch — written down in advance\n\n**`await init()` has to be called first.** Acquiring the WebGPU adapter is\nasynchronous and there is no way around it. Make a tensor without calling it and it\nstops there with a message. Where `torch.cuda.is_available()` goes, use\n`await isAvailable()`, and if you need to know *why* it is unavailable,\n`await probe()` separates `'no-api'` (the browser is too old) from `'no-adapter'`\n(driver blocked, headless).\n\n**`'cpu'` is a place values are held, not a device that computes.** Bring values\ndown to the host with `await t.cpu()` and back up with `t.webgpu()`. A tensor that\nhas come down can be read (`toArray`, `item`, `repr`) but cannot be computed with —\nborch has no CPU kernels. Feed one in and it stops with torch's own wording\n(\"Expected all tensors to be on the same device\"). `t.device` answers where it is.\n\n**Reading values is asynchronous.** `await t.item()`, `await t.toArray()`. It is a\ntrip back for GPU memory. Forward and backward are synchronous.\n\n**Training needs a scope open.** Intermediate buffers made inside `scope()` are\nreleased on the way out. JavaScript's garbage collector does not return GPU memory\nin time, so leaving the thousands one step makes fills the device within a few\nsteps. It is a concept torch does not have, and it sits where TF.js's `tidy` sits.\nAnything that has to survive, such as parameters, is marked with `keepAlive`.\n\n**There are two spellings — the one closer to Python's `with` is recommended.**\n\n```ts\nfor (let i = 0; i < steps; i++) {\n  using s = scope();                 // closes at the end of the block\n  opt.zeroGrad();\n  const loss = crit.call(model.call(x), y);\n  loss.backward();\n  opt.step();\n  console.log(await loss.item());\n}\n```\n\nReleasing is synchronous, so it is `using` and not `await using`. The block is left\nonly after every `await` inside it has finished, which makes the `await loss.item()`\nabove safe (measured). The callback spelling stays as well — it is shorter where you\nwant the value handed straight back.\n\n**Forgetting stops loudly.** Using a tensor carried out of a scope without being\nmarked raises at that point. For a while it did not, and back then **whatever the\nnext allocation had written over it** was read quietly (measured: `[1,2,3,4]` came\nback as `9,9,9,9`).\n\n**A model is called as `model.call(x)`.** JavaScript cannot simply call an object,\nso torch's `model(x)` cannot be carried over as written. Calling `forward` directly\ngives the same value, but `call` is the recommended one — it is where hooks would\nattach if they ever do."
   },
   {
    "name": "tensor",
@@ -8171,7 +8179,8 @@
       {
        "name": "params",
        "signature": "params: Tensor[]",
-       "doc": "이 그룹이 밟는 파라미터."
+       "doc": "이 그룹이 밟는 파라미터.",
+       "doc_en": "The parameters this group steps."
       },
       {
        "name": "lr",
@@ -8183,16 +8192,19 @@
        "signature": "initialLr?: number",
        "doc": "스케줄러가 기준으로 삼는 값. 처음 스케줄러가 한 번만 찍는다.",
        "optional": true,
-       "torch": "initial_lr"
+       "torch": "initial_lr",
+       "doc_en": "The value a scheduler takes as its baseline. The first scheduler stamps it once."
       },
       {
        "name": "weightDecay",
        "signature": "weightDecay?: number",
        "doc": "이 그룹만 다른 값을 쓸 때. 없으면 옵티마이저를 세울 때 준 값이다.",
        "optional": true,
-       "torch": "weight_decay"
+       "torch": "weight_decay",
+       "doc_en": "For when this group alone uses a different value. Absent, it is the value given when the optimizer was built."
       }
-     ]
+     ],
+     "doc_en": "One bundle of parameters and the hyperparameters attached to it.\n\n**There used to be no `params`.** The name is torch's `param_groups`, but it was\nalways a single `[{ lr }]` and every scheduler only ever looked at `[0]` — no\nper-layer learning rate, no excluding bias and norm from weight decay, while the name\nsaid otherwise. torch's shape with nothing inside is worse than nothing: a user\ncalling `paramGroups.push(...)` was quietly ignored."
     },
     {
      "kind": "interface",
@@ -8218,14 +8230,16 @@
        "optional": true,
        "torch": "weight_decay"
       }
-     ]
+     ],
+     "doc_en": "What goes in when a group is made. Leave `lr` out to use the optimizer's default."
     },
     {
      "kind": "type",
      "name": "ParamsArg",
      "signature": "export type ParamsArg = readonly Tensor[] | readonly ParamGroupInit[]",
      "doc": "옵티마이저 생성자가 받는 것 — 텐서 목록이거나 그룹 목록이다.",
-     "members": []
+     "members": [],
+     "doc_en": "What an optimizer's constructor accepts — a list of tensors or a list of groups."
     },
     {
      "kind": "class",
@@ -8237,13 +8251,15 @@
        "name": "paramGroups",
        "signature": "readonly paramGroups: ParamGroup[]",
        "doc": "torch 와 같은 모양 — 스케줄러가 여기 `lr` 을 고친다.",
-       "torch": "param_groups"
+       "torch": "param_groups",
+       "doc_en": "torch's shape — this is where a scheduler edits `lr`."
       },
       {
        "name": "params",
        "signature": "protected readonly params: Tensor[]",
        "doc": "모든 그룹의 파라미터를 이어 붙인 것. 상태 은행이 이 자리로 색인된다.",
-       "protected": true
+       "protected": true,
+       "doc_en": "Every group's parameters, concatenated. The state bank is indexed by this position."
       },
       {
        "name": "constructor",
@@ -8254,7 +8270,8 @@
        "name": "addParamGroup",
        "signature": "addParamGroup(init: ParamGroupInit): void",
        "doc": "그룹을 나중에 더한다. `torch.optim.Optimizer.add_param_group` 자리다.\n\n**상태 은행도 같이 늘린다.** 안 늘리면 다음 스텝에서 \"파라미터 N 의 상태가\n없다\" 로 터진다 — 은행이 평평한 파라미터 자리로 색인되기 때문이다.\n\n이미 세워 둔 스케줄러는 이 그룹의 기준값을 모른다. torch 도 같은 자리에서\n`initial_lr` 을 요구한다 — 스케줄러를 먼저 세웠다면 다시 세워라.",
-       "torch": "add_param_group"
+       "torch": "add_param_group",
+       "doc_en": "Adds a group later. Where `torch.optim.Optimizer.add_param_group` goes.\n\n**It grows the state bank too.** Without that, the next step blows up with \"no state\nfor parameter N\" — the bank is indexed by the flattened parameter position.\n\nA scheduler already built does not know this group's baseline. torch asks for\n`initial_lr` in the same place — if the scheduler came first, build it again."
       },
       {
        "name": "state",
@@ -8266,32 +8283,37 @@
          "tag": "param",
          "text": "value 채울 값. `Rprop` 의 걸음 크기만 0 이 아니다."
         }
-       ]
+       ],
+       "doc_en": "One state bank. **Going through here is what makes it grow when a group is added.**\n\nIt used to be built per optimizer with `params.map(...)`, which leaves the slot for a\nlater-added parameter empty."
       },
       {
        "name": "extendState",
        "signature": "protected extendState(added: readonly Tensor[]): void",
        "doc": "그룹이 늘 때 상태를 같이 늘린다.\n\n기본은 등록된 은행마다 **파라미터 모양** 자리를 더한다. 그 전제가 안 맞는\n옵티마이저(`Adafactor` 는 행·열로 접은 분산을 든다)는 여기를 덮어쓴다.",
        "protected": true,
-       "torch": "extend_state"
+       "torch": "extend_state",
+       "doc_en": "Grows the state when a group is added.\n\nBy default it adds one **parameter-shaped** slot per registered bank. An optimizer for\nwhich that premise does not hold (`Adafactor` holds variance folded into rows and\ncolumns) overrides here."
       },
       {
        "name": "lr",
        "signature": "protected get lr(): number",
        "doc": "지금 밟고 있는 그룹의 학습률.",
-       "protected": true
+       "protected": true,
+       "doc_en": "The learning rate of the group currently being stepped."
       },
       {
        "name": "grouped",
        "signature": "protected grouped(fallback: number): number",
        "doc": "지금 그룹이 따로 정한 값, 없으면 옵티마이저의 기본값.",
-       "protected": true
+       "protected": true,
+       "doc_en": "What this group set for itself, or the optimizer's default if it set nothing."
       },
       {
        "name": "zeroGrad",
        "signature": "zeroGrad(): void",
        "doc": "기울기를 비운다. **`null` 로 되돌린다** — 0 으로 채우면 잎 판정이 흐려진다.",
-       "torch": "zero_grad"
+       "torch": "zero_grad",
+       "doc_en": "Empties the gradients. **It returns them to `null`** — filling with zeros blurs the leaf test."
       },
       {
        "name": "step",
@@ -8302,26 +8324,30 @@
        "name": "counters",
        "signature": "protected counters(): Record<string, number>",
        "doc": "이 옵티마이저가 든 스칼라. 하위 클래스가 덮어쓴다.\n\n**은행은 여기 안 들어간다** — 밑동이 이미 들고 있으므로 `stateDict` 가 알아서\n담는다. 여기 적을 것은 `stepCount` 처럼 텐서가 아닌 것들이고, 빠뜨리면 재개했을\n때 **편향 보정이 처음부터 다시 시작한다.** 값이 조금씩 다르게 나오는데 어디서\n갈렸는지 가리키는 것이 없는 종류다.",
-       "protected": true
+       "protected": true,
+       "doc_en": "The scalars this optimizer holds. Subclasses override it.\n\n**The bank does not go in here** — the base already holds it, so `stateDict` picks it\nup on its own. What belongs here is the non-tensor things such as `stepCount`, and\nleaving one out means **bias correction restarts from the beginning** on resume. The\nvalues come out slightly different with nothing pointing at where they diverged."
       },
       {
        "name": "loadCounters",
        "signature": "protected loadCounters(_values: Record<string, number>): void",
        "doc": "위의 되돌림. 덮어쓴 쪽이 자기 것만 꺼내 간다.",
        "protected": true,
-       "torch": "load_counters"
+       "torch": "load_counters",
+       "doc_en": "The undo of the above. Whoever overrode it takes their own back out."
       },
       {
        "name": "stateDict",
        "signature": "stateDict(): { tensors: Record<string, Tensor>; numbers: Record<string, number>; }",
        "doc": "학습을 이어서 하려면 있어야 하는 전부.\n\n**모멘텀만으로는 부족하다.** 그룹의 학습률(스케줄러가 이미 깎아 놓았을 수 있다)과\n스텝 계수기가 같이 가야 재개한 다음 스텝이 안 끊고 돌린 것과 같은 수를 낸다.\n\n텐서와 수를 갈라 준다 — safetensors 의 몸에는 텐서가, 머리에는 수가 실린다\n(`serialize.ts`).",
-       "torch": "state_dict"
+       "torch": "state_dict",
+       "doc_en": "Everything needed to carry on training.\n\n**Momentum alone is not enough.** The group's learning rate (a scheduler may already\nhave cut it) and the step counter have to travel with it for the step after a resume\nto give the same number as one that never stopped.\n\nTensors and numbers come back separately — the safetensors body carries tensors and\nthe header carries numbers (`serialize.ts`)."
       },
       {
        "name": "loadStateDict",
        "signature": "loadStateDict(state: { tensors: Record<string, Tensor>; numbers: Record<string, number>; }): void",
        "doc": "`stateDict()` 가 준 것을 되돌린다. **옵티마이저를 같은 인자로 다시 세운 뒤** 부른다.\n\n은행의 자리가 없거나 크기가 다르면 던진다. 파라미터가 늘거나 준 모델에 옛\n체크포인트를 얹으면 값이 한 칸씩 밀린 채로 학습이 돌 수 있고, 그것은 예외보다\n훨씬 나쁘다.",
-       "torch": "load_state_dict"
+       "torch": "load_state_dict",
+       "doc_en": "Restores what `stateDict()` gave. Call it **after rebuilding the optimizer with the same arguments.**\n\nIt throws if a bank slot is missing or a size differs. Adding or removing parameters,\nor laying an old checkpoint over a model, can otherwise leave training running with\nvalues shifted by one slot, and that is far worse than an exception."
       },
       {
        "name": "update",
@@ -8441,7 +8467,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "**Keeps adding** squared gradients — it only ever shrinks, never grows."
     },
     {
      "kind": "class",
@@ -8460,7 +8487,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "**The learning rate is barely used.** It builds the step size out of the history of its own updates."
     },
     {
      "kind": "class",
@@ -8497,7 +8525,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Adam with the second moment taken as **the maximum instead of the root mean square.**"
     },
     {
      "kind": "class",
@@ -8534,7 +8563,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Adam with Nesterov's look-ahead attached.\n\n**The momentum coefficient changes each step, and the running product of that sequence\nhas to be carried.** Held constant, the first few steps diverge quietly."
     },
     {
      "kind": "class",
@@ -8571,7 +8601,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Adam, but **without the adaptive step size early on.**\n\nAdam is known to be jumpy at the start because the second moment has few samples and\nits variance is large; this one passes through that stretch like SGD. Drop the\nthreshold (`rho > 5`) and the values become Adam's."
     },
     {
      "kind": "class",
@@ -8608,7 +8639,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Averaged SGD. **The learning rate decays on its own each step**, and from some point on\nthe parameters are averaged.\n\n`eta` decays as `lr / (1 + lambd·lr·step)^alpha`, and `mu` is the weight of the\naverage. The default `t0` is a million, so in normal training `mu` is always 1 and\n`ax` is a copy of the parameters — the averaging branch only really runs once `t0` is\nlowered.\n\n**The decay is multiplicative.** `param *= (1 − lambd·eta)` happens first, and the\ngradient is subtracted after."
     },
     {
      "kind": "class",
@@ -8627,7 +8659,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Looks at **the sign of the gradient only.** The magnitude is unused, and the step width\ngrows and shrinks per slot.\n\nIf the sign holds, the width is multiplied by `etaPlus`; if it flips, by `etaMinus`.\n**A flipped slot does not take that step at all** — its gradient is set to zero, which\nalso makes the next step's \"previous gradient\" zero. Without those two, inputs whose\nsign never flips produce a difference that is never caught."
     },
     {
      "kind": "class",
@@ -8645,7 +8678,8 @@
        "signature": "protected extendState(added: readonly Tensor[]): void",
        "doc": "**밑동의 기본을 못 쓴다.** 이 옵티마이저의 상태는 파라미터 모양이 아니라 행·열로\n접은 것이고, 랭크에 따라 어느 쪽을 드는지도 갈린다. 자리 수는 파라미터와 맞으므로\n(안 쓰는 쪽은 `null` 로 채운다) 색인은 그대로 통한다.\n\n생성자와 `addParamGroup` 이 같은 이 자리를 지난다 — 둘로 나눠 적으면 언젠가\n한쪽만 고친다.",
        "protected": true,
-       "torch": "extend_state"
+       "torch": "extend_state",
+       "doc_en": "**The base's default cannot be used.** This optimizer's state is not parameter-shaped\nbut folded into rows and columns, and which of the two is held depends on the rank.\nThe slot count matches the parameters (the unused side is filled with `null`), so the\nindexing still works.\n\nThe constructor and `addParamGroup` both pass through this one place — written in two\nplaces, one of them eventually gets fixed alone."
       },
       {
        "name": "step",
@@ -8671,7 +8705,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Adam, but holding the second moment **split into rows and columns.**\n\nAdam holds one variance per parameter, so its memory costs as much as the weights.\nHere only the row means and the column means are held and the outer product restores\nthem — `R + C` where `(R, C)` would have been.\n\n**One-dimensional parameters are not split** — there is only one axis to split, so the\nvariance is held directly. Ask with vectors alone and the whole point of this\noptimization never runs."
     },
     {
      "kind": "class",
@@ -8704,7 +8739,8 @@
       {
        "name": "start",
        "signature": "start(): this",
-       "doc": "**0 번째 에폭을 적용한다.** torch 는 이것을 생성자에서 하는데 여기서는 못 한다 —\nTypeScript 의 하위 클래스 필드가 `super()` 가 끝난 **뒤에** 채워지므로, 생성자\n안에서 `compute` 를 부르면 `factor` 같은 것이 아직 `undefined` 다.\n\n그래서 세운 직후 한 번 부른다. `ConstantLR` 처럼 0 번째부터 값을 바꾸는 것은\n이것이 없으면 첫 항이 통째로 갈린다 — 실제로 최대차 2.0e-01 이었다."
+       "doc": "**0 번째 에폭을 적용한다.** torch 는 이것을 생성자에서 하는데 여기서는 못 한다 —\nTypeScript 의 하위 클래스 필드가 `super()` 가 끝난 **뒤에** 채워지므로, 생성자\n안에서 `compute` 를 부르면 `factor` 같은 것이 아직 `undefined` 다.\n\n그래서 세운 직후 한 번 부른다. `ConstantLR` 처럼 0 번째부터 값을 바꾸는 것은\n이것이 없으면 첫 항이 통째로 갈린다 — 실제로 최대차 2.0e-01 이었다.",
+       "doc_en": "**Applies epoch zero.** torch does this in the constructor and here it cannot be — a\nTypeScript subclass's fields are filled in **after** `super()` returns, so calling\n`compute` inside the constructor finds things like `factor` still `undefined`.\n\nSo it is called once, right after construction. Something like `ConstantLR`, which\nchanges the value from epoch zero, loses its entire first term without it — measured\nat a maximum difference of 2.0e-01."
       },
       {
        "name": "step",
@@ -8715,24 +8751,28 @@
        "name": "current",
        "signature": "protected get current(): number",
        "doc": "지금 학습률. 재귀식 스케줄러가 자기 앞의 값을 읽는 자리다.",
-       "protected": true
+       "protected": true,
+       "doc_en": "The learning rate now. Where a recursive scheduler reads the value before its own."
       },
       {
        "name": "restart",
        "signature": "restart(): void",
-       "doc": "`SequentialLR` 이 넘어갈 때 처음부터 다시 밟게 한다."
+       "doc": "`SequentialLR` 이 넘어갈 때 처음부터 다시 밟게 한다.",
+       "doc_en": "Makes it step from the beginning again, for when `SequentialLR` hands over."
       },
       {
        "name": "stateDict",
        "signature": "stateDict(): Record<string, number>",
        "doc": "재개하려면 있어야 하는 것 — **몇 번째 에폭인가와 기준값들.**\n\n옵티마이저의 `lr` 만 되돌리면 안 된다. 스케줄러는 `epoch` 에서 값을 다시 계산하는\n물건이라, 그것을 0 으로 두고 이으면 **다음 `step()` 이 학습률을 처음 값으로\n되돌려 놓는다** — 옵티마이저 쪽은 멀쩡히 복원됐는데 한 스텝 만에 지워진다.\n\n기준값도 같이 간다. `initialLr` 은 옵티마이저에서 오지만 그것은 **처음 세운\n스케줄러가 찍은 값**이고, 이어 붙인 스케줄러들은 자기가 본 기준을 따로 든다.",
-       "torch": "state_dict"
+       "torch": "state_dict",
+       "doc_en": "What resuming needs — **which epoch, and the baselines.**\n\nRestoring the optimizer's `lr` alone is not enough. A scheduler is a thing that\nrecomputes its value from `epoch`, so leaving that at zero and carrying on means\n**the next `step()` puts the learning rate back to its first value** — the optimizer\nside was restored perfectly and one step erases it.\n\nThe baselines travel too. `initialLr` comes from the optimizer, but that is **the value\nthe first scheduler stamped**, and chained schedulers hold the baseline each of them\nsaw."
       },
       {
        "name": "loadStateDict",
        "signature": "loadStateDict(values: Record<string, number>): void",
        "doc": "`stateDict()` 의 되돌림. 학습률은 안 건드린다 — 옵티마이저 쪽이 든다.",
-       "torch": "load_state_dict"
+       "torch": "load_state_dict",
+       "doc_en": "The undo of `stateDict()`. It does not touch the learning rate — the optimizer holds that."
       },
       {
        "name": "compute",
@@ -8740,7 +8780,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Learning-rate schedules.\n\n**It is all floating-point arithmetic, so the values have to equal torch's exactly** —\nthere is no room for an approximation. So the golden cases froze not one value but\n**the whole trajectory**, and doing that is how the core caught the difference in\n`StepLR`.\n\n**The baseline is `initialLr`, not the lr at construction time.** It is stamped onto\nthe optimizer once, and schedulers built later see the same baseline. Used alone the\ntwo are equal and nothing catches, but chained, the second one takes as its baseline\nwhat the first has already cut."
     },
     {
      "kind": "class",
@@ -8759,7 +8800,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Multiplies by `gamma` every `stepSize` epochs.\n\n**It is recursive** — the same reason `ExponentialLR` below writes down. This used to\nbe the closed form `base * gamma ** floor(epoch / stepSize)`.\n\nStepped alone from the beginning, the two produce **the same sequence.** That is why\nthe golden cases, which freeze the whole trace, were green for a long time. What\ndiverges is building a new scheduler on an optimizer whose lr has already moved —\n**resuming training.** At that moment the closed form puts the learning rate back to\nits first value (0.05 to 0.2). No error appears; the loss just jumps once."
     },
     {
      "kind": "class",
@@ -8778,7 +8820,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Cuts only at the milestones. **It is recursive** — fixed for the same reason as `StepLR`.\n\nA milestone written twice (`[3, 3]`) multiplies twice at that point — it did under the\nclosed form too, and torch does the same."
     },
     {
      "kind": "class",
@@ -8797,7 +8840,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "**It is recursive** — it multiplies the current learning rate. It does not recount from the original.\n\nUsed alone the two produce the same sequence. What diverges is another scheduler\ntouching the same lr — overlapped through `ChainedScheduler`, the recursive form\nstacks on top of the other's result while the closed form overwrites what the other\ndid."
     },
     {
      "kind": "class",
@@ -8816,7 +8860,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "**Holds it cut until `totalIters`, then returns to the original.** The simplest form of a warm-up."
     },
     {
      "kind": "class",
@@ -8835,7 +8880,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Moves **in a straight line** from the starting factor to the ending factor.\n\nIt meets `ConstantLR` at the end — past `totalIters` both are the original learning\nrate. The last value alone cannot separate them, so the golden cases ask about the\nwhole trace."
     },
     {
      "kind": "class",
@@ -8854,7 +8900,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Descends as `(1 − t/T)^power`. At `power=1` it is a straight line."
     },
     {
      "kind": "class",
@@ -8873,7 +8920,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "**Multiplies as it goes** — the baseline is the current learning rate, not the original."
     },
     {
      "kind": "class",
@@ -8892,7 +8940,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Descends as a cosine and then **returns to the start.** Each period is `tMult` times longer."
     },
     {
      "kind": "class",
@@ -8911,7 +8960,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "Up and then down. **Close to the default of a modern training recipe.**\n\nThe initial learning rate is `maxLr/divFactor` and the end is that divided again, so\n**the learning rate given to the optimizer is never used** — it is overwritten the\nmoment this is built."
     },
     {
      "kind": "class",
@@ -8930,7 +8980,8 @@
        "doc": "",
        "protected": true
       }
-     ]
+     ],
+     "doc_en": "**With more than one group, the bounds become relative.** torch takes `base_lr` and\n`max_lr` as a list per group; here they are single numbers. Following the base's rule,\nthe value computed against the first group is multiplied by each group's baseline\nratio, so group i cycles between `baseLr·rᵢ` and `maxLr·rᵢ`. That is what someone who\nset per-layer learning rates expects, but it **is not the same as torch.** With one\ngroup the ratio is 1 and there is no difference."
     },
     {
      "kind": "class",
@@ -8959,7 +9010,8 @@
        "doc": "",
        "torch": "get_last_lr"
       }
-     ]
+     ],
+     "doc_en": "**Chains schedulers end to end.** On reaching a milestone it hands over to the next."
     },
     {
      "kind": "class",
@@ -8983,7 +9035,8 @@
        "doc": "",
        "torch": "get_last_lr"
       }
-     ]
+     ],
+     "doc_en": "Applies several **at once.** Their factors multiply."
     },
     {
      "kind": "class",
@@ -9038,7 +9091,8 @@
        "name": "stateDict",
        "signature": "stateDict(): Record<string, number>",
        "doc": "재개에 필요한 둘. **`best` 가 무한대에서 시작한다** — 그래서 이 수들을 머리에\n실을 때 `JSON.stringify` 대신 무한대를 따로 적는 자리가 필요했다\n(`serialize.ts` 의 `numbersToMeta`).\n\n안 되돌리면 재개 직후 어떤 값이 와도 \"처음이라 최고\" 가 되어 참을성이 초기화된다.",
-       "torch": "state_dict"
+       "torch": "state_dict",
+       "doc_en": "The two things a resume needs. **`best` starts at infinity** — which is why putting\nthese numbers in the header needed somewhere to write infinity other than\n`JSON.stringify` (`numbersToMeta` in `serialize.ts`).\n\nWithout restoring them, whatever value arrives right after a resume becomes \"the first,\ntherefore the best\", and the patience counter resets."
       },
       {
        "name": "loadStateDict",
@@ -9051,10 +9105,12 @@
        "signature": "step(metric: number): void",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Cuts the learning rate when the value stops improving.\n\nUnlike other schedules it **has to be given a value** to move — hence `step(metric)`."
     }
    ],
-   "count": 143
+   "count": 143,
+   "doc_en": "Optimizers and learning-rate schedules.\n\n## Parameters are modified in place\n\nIt does not make a new tensor and swap it in. The handle the model holds and the\nhandle the optimizer sees have to be the same one; swapping splits them and produces\na state where **training runs and the parameters do not move.** In-place modification\nis blocked on a leaf with gradient enabled, so it happens inside `no_grad` — which is\nexactly what torch's optimizers do.\n\n## State is held as tensors\n\nSomething like a momentum buffer **must not hold the gradient tensor itself.** When\nthat gradient is replaced on the next step, the buffer points at the wrong thing —\na place this repository missed while only ever looking at SGD without momentum. So\nthe buffer starts as its own copy."
   },
   {
    "name": "data",
@@ -9087,7 +9143,8 @@
        "doc": "",
        "optional": true
       }
-     ]
+     ],
+     "doc_en": "Something that can be fetched by index. Where `torch.utils.data.Dataset` goes.\n\n`gather` **is optional.** With it, the loader pulls a batch in one go; without it, it\nfetches one at a time and stacks. The difference is large for a dataset holding\ntensors — at batch 32 with two tensors, GPU operations drop from 66 to 2."
     },
     {
      "kind": "class",
@@ -9120,7 +9177,8 @@
        "signature": "gather(indices: readonly number[]): readonly Tensor[]",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "A few tensors whose first axis is the sample axis. Where `torch.utils.data.TensorDataset` goes."
     },
     {
      "kind": "class",
@@ -9156,9 +9214,11 @@
       {
        "name": "gather",
        "signature": "gather(indices: readonly number[]): readonly Tensor[]",
-       "doc": "**번호를 옮겨 원본에 넘긴다.** 이것이 없으면 `randomSplit` 을 지난 데이터셋이\n전부 느린 길로 떨어진다 — 학습·검증을 나누는 것이 예사로운 일인데."
+       "doc": "**번호를 옮겨 원본에 넘긴다.** 이것이 없으면 `randomSplit` 을 지난 데이터셋이\n전부 느린 길로 떨어진다 — 학습·검증을 나누는 것이 예사로운 일인데.",
+       "doc_en": "**Translates the indices and passes them to the original.** Without this, every\ndataset that has been through `randomSplit` falls onto the slow path — and splitting\ntrain from validation is an ordinary thing to do."
       }
-     ]
+     ],
+     "doc_en": "Sees only part of the original. `randomSplit` produces one."
     },
     {
      "kind": "class",
@@ -9186,7 +9246,8 @@
        "signature": "get(index: number): readonly Tensor[]",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Several datasets joined into one. Where `torch.utils.data.ConcatDataset` goes."
     },
     {
      "kind": "function",
@@ -9194,7 +9255,8 @@
      "signature": "export declare function randomSplit(dataset: Dataset, lengths: readonly number[]): Subset[]",
      "doc": "겹치지 않게 나눈다. `torch.utils.data.random_split` 자리다.\n\n**합이 전체와 같아야 한다.** torch 도 거기서 멈춘다 — 남는 표본이 조용히 버려지면\n학습·검증 비율이 적어 놓은 것과 달라지고 아무도 못 본다.\n\n섞기는 `manualSeed` 를 따른다. 같은 씨앗이면 같은 나눔이다.",
      "members": [],
-     "torch": "random_split"
+     "torch": "random_split",
+     "doc_en": "Splits without overlap. Where `torch.utils.data.random_split` goes.\n\n**The parts must sum to the whole.** torch stops there too — a leftover sample\nquietly discarded makes the train/validation ratio differ from the one written down,\nand nobody sees it.\n\nShuffling follows `manualSeed`. The same seed gives the same split."
     },
     {
      "kind": "interface",
@@ -9213,14 +9275,16 @@
        "name": "shuffle",
        "signature": "shuffle?: boolean",
        "doc": "에폭마다 다시 섞는다 — torch 와 같다.",
-       "optional": true
+       "optional": true,
+       "doc_en": "Reshuffles every epoch, as in torch."
       },
       {
        "name": "dropLast",
        "signature": "dropLast?: boolean",
        "doc": "마지막 배치가 모자라면 버린다. 배치 크기가 고정이어야 하는 층이 쓴다.",
        "optional": true,
-       "torch": "drop_last"
+       "torch": "drop_last",
+       "doc_en": "Drops the last batch if it is short. Layers that need a fixed batch size use it."
       }
      ]
     },
@@ -9262,10 +9326,12 @@
        "signature": "get length(): number",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Hands out batches. Where `torch.utils.data.DataLoader` goes.\n\n**It is a synchronous iterator.** Making a batch is a GPU operation and borch's\nforward is synchronous, so `for (const [x, y] of loader)` works as written — only\nreading values is asynchronous.\n\n`length` is the number of **batches**, not samples, as in torch.\n\n## Batches have to be received inside `scope()`\n\nIt is written at the head of the file too, and it is written again here — this is\n**the place a loader's user hits on their first loop**, and reading one spot of the\ndocumentation before writing code is the normal case.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {          // intermediates made in here are released on the way out\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\nThe loader cannot wrap it for you. The point is that the batch leaves the scope —\nwrap it and `x` and `y` are released before they are ever used. Leave it unwrapped\nand every intermediate an epoch makes stays, and the device fills within a few\nepochs."
     }
    ],
-   "count": 34
+   "count": 34,
+   "doc_en": "Datasets and loaders — where `torch.utils.data` goes.\n\n## Without this, the story is half untrue\n\nThis repository says \"train in the browser\", and with this empty that training ends\nat **slicing batches by hand.** The accuracy runner inside the repository was in fact\nwriting its own sampling and shuffling — and every user would end up writing the\nsame thing again.\n\n## What was not built\n\n**There is no `sampler` option.** The name exists in torch, but there is nothing\nbehind it here yet. Putting the name down alone repeats what happened with\n`paramGroups` — torch's shape with nothing inside, a place where what the user passes\nis quietly ignored. What is not there is left absent.\n\nThere is no `num_workers` either. Spawning a worker does not carry the GPU handle\nacross to it.\n\n## Two places it parts from torch\n\n**Batches are GPU tensors, so they have to be received inside `scope()`.** The loader\ncannot wrap them for you — the whole point is that the tensor leaves the scope. Leave\nit unwrapped and every batch an epoch makes stays alive.\n\n```ts\nfor (const [x, y] of loader) {\n  await scope(async () => {\n    opt.zeroGrad();\n    const loss = crit.call(model.call(x), y);\n    loss.backward();\n    opt.step();\n  });\n}\n```\n\n`x` and `y` were made **outside** the scope, so they need no keep-alive mark. What\nthe scope releases are the intermediates made inside it.\n\n**Shuffling follows `manualSeed`.** torch gives the DataLoader its own generator; here\none host stream is used (`random.ts`) — one seed rewinds layer initialisation,\ndropout, the tensor factories and now batch order too. The choice was to not add\nanother door."
   },
   {
    "name": "vision",
@@ -9306,9 +9372,11 @@
        "name": "isByte",
        "signature": "readonly isByte: boolean",
        "doc": "uint8 이면 `ToTensor` 가 255 로 나눈다.",
-       "torch": "is_byte"
+       "torch": "is_byte",
+       "doc_en": "If uint8, `ToTensor` divides by 255."
       }
-     ]
+     ],
+     "doc_en": "An image laid out as `(H, W, C)`. The values are uint8 or float."
     },
     {
      "kind": "function",
@@ -9356,7 +9424,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Transforms in sequence. `repr` is several lines with the inside indented, so that shape is matched too."
     },
     {
      "kind": "class",
@@ -9374,7 +9443,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "`(H,W,C)` or `(H,W)` → a `(C,H,W)` tensor.\n\n**It divides by 255 only when the input is uint8** — that is torchvision's rule. Pass\na float array and it is carried over undivided. Miss this distinction and data that\nis already in [0,1] gets divided once more and comes out 255× darker, with **no\nexception raised and only the training failing.**"
     },
     {
      "kind": "class",
@@ -9397,7 +9467,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "`(x - mean) / std`, per channel."
     },
     {
      "kind": "function",
@@ -9428,7 +9499,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Flips left to right. Takes an `(H, W, C)` array."
     },
     {
      "kind": "class",
@@ -9451,7 +9523,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Pads the edges, then crops at random."
     },
     {
      "kind": "function",
@@ -9459,7 +9532,8 @@
      "signature": "export declare function augmentBatch(x: Float32Array, n: number, c: number, h: number, w: number, opts?: { crop?: number; padding?: number; hflipP?: number; fill?: number; }): Float32Array",
      "doc": "`(N,C,H,W)` 배치를 한 번에 늘린다. **torchvision 에 없는 우리 것이다.**\n\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생긴다 — 한 에폭이 만 장이면 만 개다.\n배치를 CPU 에서 다 늘린 뒤 텐서를 **하나** 만드는 것이 감당되는 유일한 순서라,\n그 순서를 이름 붙여 내놓는다.\n\n**뽑기는 장마다 따로 한다.** 배치 전체에 같은 자르기·뒤집기를 쓰면 배치 안에서\n늘어난 것이 없어 augmentation 의 효과가 사라진다.",
      "members": [],
-     "torch": "augment_batch"
+     "torch": "augment_batch",
+     "doc_en": "Augments an `(N,C,H,W)` batch in one pass. **Ours, not torchvision's.**\n\nMaking a tensor per image makes one GPU buffer per image — ten thousand of them for a\nten-thousand-image epoch. Augmenting the whole batch on the CPU and then making\n**one** tensor is the only order that holds, so that order is given a name and\nexported.\n\n**The random draws are per image.** Using one crop and one flip across the whole\nbatch means nothing inside the batch was augmented relative to anything else, and the\npoint of augmentation is gone."
     },
     {
      "kind": "function",
@@ -9467,10 +9541,12 @@
      "signature": "export declare function normalizeBatch(x: Float32Array, n: number, c: number, hw: number, mean: readonly number[], std: readonly number[]): Float32Array",
      "doc": "채널마다 `(x - mean) / std`. CPU 에서 배치째 — 텐서를 만들기 전에 끝낸다.",
      "members": [],
-     "torch": "normalize_batch"
+     "torch": "normalize_batch",
+     "doc_en": "`(x - mean) / std` per channel, batch-wide on the CPU — finished before any tensor is made."
     }
    ],
-   "count": 32
+   "count": 32,
+   "doc_en": "Transforms shaped like `torchvision.transforms`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there are things\nthat go quietly wrong at that place — the comment on `ToTensor` below is one of them.\nIt uses **the same rules** as the repository's Python side (`borch_vision.py`). If\nthe rules diverge, the same data becomes different values per library, and that is\ncaught only by comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What arrives here\nin torchvision is a PIL image, and having no PIL, an array stands in its place.\nMaking a tensor per image makes one GPU buffer per image, which looks like it works\nright up until it collapses on memory."
   },
   {
    "name": "fft",
@@ -9528,14 +9604,16 @@
      "name": "fftshift",
      "signature": "export declare function fftshift(input: Tensor, dim?: number | readonly number[] | null): Tensor",
      "doc": "0 주파수를 가운데로. **`n//2` 만큼 민다**(실측 — 홀수에서도 그렇다).",
-     "members": []
+     "members": [],
+     "doc_en": "Zero frequency to the middle. **It shifts by `n//2`** (measured — including at odd lengths)."
     },
     {
      "kind": "function",
      "name": "ifftshift",
      "signature": "export declare function ifftshift(input: Tensor, dim?: number | readonly number[] | null): Tensor",
      "doc": "되돌리기. **홀수에서 `n//2` 로 되돌리면 안 맞는다** — 반대 방향으로 같은 만큼.",
-     "members": []
+     "members": [],
+     "doc_en": "The undo. **Shifting back by `n//2` does not land at odd lengths** — the same amount, the other way."
     },
     {
      "kind": "interface",
@@ -9650,14 +9728,16 @@
      "name": "rfftn",
      "signature": "export declare function rfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
      "doc": "실수 입력. **마지막 축만 `rfft` 이고 나머지는 `fft`** 다 — 차례가 답을 정한다.",
-     "members": []
+     "members": [],
+     "doc_en": "Real input. **Only the last axis is `rfft`; the rest are `fft`** — the order decides the answer."
     },
     {
      "kind": "function",
      "name": "irfftn",
      "signature": "export declare function irfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
      "doc": "`rfftn` 의 역. **`ifft` 를 먼저 돌고 마지막에 `irfft`** 다.",
-     "members": []
+     "members": [],
+     "doc_en": "The inverse of `rfftn`. **`ifft` first, `irfft` last.**"
     },
     {
      "kind": "function",
@@ -9678,21 +9758,24 @@
      "name": "hfft",
      "signature": "export declare function hfft(input: Tensor, n?: number | null, dim?: number, norm?: string | null): Tensor",
      "doc": "에르미트 대칭인 복소수 → **실수.** `irfft` 의 켤레 관계다(실측).",
-     "members": []
+     "members": [],
+     "doc_en": "Hermitian-symmetric complex → **real.** The conjugate relation of `irfft` (measured)."
     },
     {
      "kind": "function",
      "name": "ihfft",
      "signature": "export declare function ihfft(input: Tensor, n?: number | null, dim?: number, norm?: string | null): Tensor",
      "doc": "실수 → **에르미트 대칭인 복소수.** `rfft` 의 켤레다.",
-     "members": []
+     "members": [],
+     "doc_en": "Real → **Hermitian-symmetric complex.** The conjugate of `rfft`."
     },
     {
      "kind": "function",
      "name": "hfftn",
      "signature": "export declare function hfftn(input: Tensor, s?: (number | null)[] | null, dim?: number[] | number | null, norm?: string | null): Tensor",
      "doc": "마지막 축이 `hfft` 이고 **앞 축은 `fft`** 다.\n\n`rfftn` 의 거울이니 `ifft` 일 것 같은데 torch 는 `fft` 다(실측 — 후보를 둘 다\n만들어 대 봤다). **모양은 양쪽 다 맞아서** 값을 안 재면 안 드러난다.",
-     "members": []
+     "members": [],
+     "doc_en": "The last axis is `hfft` and **the axes before it are `fft`.**\n\nBeing the mirror of `rfftn` it looks like it should be `ifft`, but torch uses `fft`\n(measured — both candidates were built and compared). **The shape is right either\nway**, so it does not surface unless the values are measured."
     },
     {
      "kind": "function",
@@ -9716,7 +9799,8 @@
      "members": []
     }
    ],
-   "count": 34
+   "count": 34,
+   "doc_en": "`torch.fft` — the discrete Fourier transform, and `stft`/`istft` on top of it.\n\n**There is one kernel.** Forward, inverse, half transforms and the inverses of\nthose three all call the same shader with a different sign and scale. Split apart\nthey become six copies, and the day comes when one of them is fixed differently —\nthat is the kind of ground this repository has repeatedly lost.\n\n## It is O(n²), for all that it is called `fft`\n\nIt runs the DFT directly. Cooley–Tukey is only fast at powers of two, and other\nlengths need Bluestein on the side. **The values are the same either way**, and at\nthis project's ceiling — textbook-sized signals — the difference does not show. If\na day comes when it has to be fast, change it then, but **do not write down speed\nthat is not there today.**\n\n## Axes are not moved\n\nWherever `dim` points, no data is moved. Three numbers — `(outer, axis, inner)` —\nlocate the element and the shader reads it directly. Moving and moving back costs\ntwo more buffers, and moving complex data is an operation that does not exist yet,\nso it would have had to be built for this.\n\n## Gradients\n\nThe transform is **linear**, so the backward falls straight out of the convention.\nThe backward of a holomorphic function is `conj(f')·g`, which gives\n`grad_x[j] = Σ_k e^{+2πijk/n}·g[k]` — **an unnormalised inverse transform.** The\nhard part is not the value but **which half gets counted**:\n\n* `rfft`'s backward receives gradient only on the stored half — adding the\n  conjugate pair doubles it.\n* `irfft`'s backward counts **the edges once and the middle twice**, because the\n  conjugate pair it restored came out of the same stored slot.\n\nEither can be wrong **while the forward values stay perfectly fine**. The core\n(numpy) went through the same derivation first, and the golden cases ask about the\ntwo separately."
   },
   {
    "name": "linalg",
@@ -9732,7 +9816,8 @@
      "name": "Mat",
      "signature": "export type Mat = Float64Array",
      "doc": "행 우선으로 늘어놓은 정사각 행렬.",
-     "members": []
+     "members": [],
+     "doc_en": "A square matrix laid out row-major."
     },
     {
      "kind": "function",
@@ -9783,7 +9868,8 @@
       {
        "name": "sign",
        "signature": "readonly sign: number",
-       "doc": "행을 맞바꾼 횟수의 부호. 행렬식의 부호가 여기서 나온다."
+       "doc": "행을 맞바꾼 횟수의 부호. 행렬식의 부호가 여기서 나온다.",
+       "doc_en": "The sign of the number of row swaps. The determinant's sign comes from here."
       },
       {
        "name": "n",
@@ -9802,7 +9888,8 @@
      "name": "lu",
      "signature": "export declare function lu(a: Mat, n: number): LU",
      "doc": "부분 피벗을 쓰는 LU 분해.\n\n**피벗은 선택이 아니다.** 안 하면 첫 원소가 0 이거나 아주 작은 행렬에서 나눗셈이\n터지거나 자릿수가 통째로 날아간다.",
-     "members": []
+     "members": [],
+     "doc_en": "LU factorisation with partial pivoting.\n\n**Pivoting is not optional.** Without it, a matrix whose first element is zero or\nvery small either blows up the division or loses the digits entirely."
     },
     {
      "kind": "function",
@@ -9816,14 +9903,16 @@
      "name": "slogdet",
      "signature": "export declare function slogdet(f: LU): { sign: number; logabs: number; }",
      "doc": "부호와 로그 절댓값을 따로. 행렬식이 아주 작을 때 `log(det)` 보다 안전하다.",
-     "members": []
+     "members": [],
+     "doc_en": "The sign and the log absolute value, separately. Safer than `log(det)` when the determinant is very small."
     },
     {
      "kind": "function",
      "name": "solve",
      "signature": "export declare function solve(f: LU, b: Mat, m: number): Mat",
      "doc": "`A X = B` 를 푼다. `B` 는 열이 `m` 개다.",
-     "members": []
+     "members": [],
+     "doc_en": "Solves `A X = B`. `B` has `m` columns."
     },
     {
      "kind": "function",
@@ -9837,35 +9926,40 @@
      "name": "cholesky",
      "signature": "export declare function cholesky(a: Mat, n: number): Mat",
      "doc": "아래 삼각 콜레스키. 대칭 양정부호가 아니면 던진다 — 조용히 NaN 을 내지 않는다.",
-     "members": []
+     "members": [],
+     "doc_en": "The lower-triangular Cholesky. Throws if the matrix is not symmetric positive definite — it does not quietly return NaN."
     },
     {
      "kind": "function",
      "name": "qr",
      "signature": "export declare function qr(a: Mat, n: number, m: number): { q: Mat; r: Mat; }",
      "doc": "하우스홀더 QR.\n\n**그람-슈미트가 아니라 하우스홀더다.** 둘은 같은 분해를 다른 부호로 낸다. LAPACK 이\n하우스홀더를 쓰고 torch 가 LAPACK 을 쓰므로, 골든의 `R` 과 부호까지 맞추려면\n같은 방식이어야 한다 — `Q` 는 골든이 절댓값으로 묻지만 `R` 은 그대로 묻는다.",
-     "members": []
+     "members": [],
+     "doc_en": "Householder QR.\n\n**Householder, not Gram–Schmidt.** The two give the same factorisation with\ndifferent signs. LAPACK uses Householder and torch uses LAPACK, so matching the\ngolden `R` down to its signs requires the same method — the golden cases ask about\n`Q` in absolute value, but they ask about `R` as it is."
     },
     {
      "kind": "function",
      "name": "mirror",
      "signature": "export declare function mirror(a: Mat, n: number, upper: boolean): Mat",
      "doc": "한쪽 삼각만 남기고 나머지를 거울로 채운다.\n\n**`eigh` 는 대칭이 아닌 것도 받는다.** torch 는 기본으로 아래 삼각만 읽고 위쪽은\n무시한다 — `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의 답이 같다(진짜 torch 에 물었다).\n야코비는 행렬 전체를 보므로, 여기서 먼저 거울을 만들어 주지 않으면 대칭이 아닌\n입력에서 조용히 갈린다. **대칭을 주는 한 안 드러나는 차이다.**",
-     "members": []
+     "members": [],
+     "doc_en": "Keeps one triangle and mirrors it into the other.\n\n**`eigh` accepts matrices that are not symmetric.** By default torch reads only the\nlower triangle and ignores the upper — `[[4,99],[1,3]]` and `[[4,1],[1,3]]` give the\nsame answer (asked of real torch). Jacobi looks at the whole matrix, so without\nmirroring first, a non-symmetric input diverges quietly here. **It is a difference\nthat never shows as long as you pass something symmetric.**"
     },
     {
      "kind": "function",
      "name": "eigh",
      "signature": "export declare function eigh(a: Mat, n: number): { values: Float64Array; vectors: Mat; }",
      "doc": "대칭 행렬의 고윳값·고유벡터 — 야코비 회전.\n\n고윳값을 **오름차순**으로 준다. torch 의 `linalg.eigh` 가 그렇다.",
-     "members": []
+     "members": [],
+     "doc_en": "Eigenvalues and eigenvectors of a symmetric matrix — Jacobi rotations.\n\nEigenvalues come back in **ascending** order, as torch's `linalg.eigh` gives them."
     },
     {
      "kind": "function",
      "name": "svd",
      "signature": "export declare function svd(a: Mat, rows: number, cols?: number): { u: Mat; s: Float64Array; vt: Mat; }",
      "doc": "특이값 분해. **직사각도 받는다.**\n\n`AᵀA` 의 고유분해에서 얻는다 — 작은 행렬에서 통하는 가장 짧은 길이다. 특이값을\n**내림차순**으로 준다(torch 와 같다). 큰 행렬이나 조건수가 나쁜 행렬에서는\n이 방법이 자릿수를 잃는데, 여기서 미는 크기가 아니다.\n\n`u` 는 **축소본**이다 — `rows × k` (`k = min(rows, cols)`). torch 의 기본값인\n`full_matrices=True` 는 `rows × rows` 를 요구하므로 남는 열을 `completeBasis` 가\n채운다. 그 둘을 나눠 둔 이유는 축소본이 늘 유일하고, 채운 쪽은 남는 차원이\n둘 이상이면 **유일하지 않기** 때문이다.",
-     "members": []
+     "members": [],
+     "doc_en": "Singular value decomposition. **Rectangular input is accepted.**\n\nIt is obtained from the eigendecomposition of `AᵀA` — the shortest route that holds\nfor small matrices. Singular values come back in **descending** order (as in torch).\nOn large or ill-conditioned matrices this method loses digits, but that is not the\nsize being pushed here.\n\n`u` is **reduced** — `rows × k` (`k = min(rows, cols)`). torch's default,\n`full_matrices=True`, wants `rows × rows`, so `completeBasis` fills the remaining\ncolumns. The two are kept apart because the reduced form is always unique while the\nfilled one is **not** once more than one dimension is left over."
     },
     {
      "kind": "function",
@@ -9873,14 +9967,16 @@
      "signature": "export declare function completeBasis(u: Mat, rows: number, k: number): Mat",
      "doc": "`rows × k` 인 정규직교 열들을 `rows × rows` 로 채운다.\n\n이미 있는 열에 직교하는 방향을 그람-슈미트로 찾는다. **남는 차원이 둘 이상이면\n답이 유일하지 않다** — 그 부분공간 안에서 어떻게 돌려도 같은 분해다. 골든이\n절댓값으로 묻고 남는 차원이 하나인 자리만 재는 이유가 그것이다.",
      "members": [],
-     "torch": "complete_basis"
+     "torch": "complete_basis",
+     "doc_en": "Fills `rows × k` orthonormal columns out to `rows × rows`.\n\nIt finds directions orthogonal to the existing columns by Gram–Schmidt. **With more\nthan one dimension left over the answer is not unique** — any rotation inside that\nsubspace is the same factorisation. That is why the golden cases ask in absolute\nvalue, and only measure where exactly one dimension is left."
     },
     {
      "kind": "function",
      "name": "pinverse",
      "signature": "export declare function pinverse(a: Mat, rows: number, cols?: number): Mat",
      "doc": "무어-펜로즈 유사역행렬. 특이값이 0 에 가까운 방향은 버린다.",
-     "members": []
+     "members": [],
+     "doc_en": "The Moore–Penrose pseudoinverse. Directions whose singular value is near zero are dropped."
     },
     {
      "kind": "function",
@@ -9888,7 +9984,8 @@
      "signature": "export declare function matrixRank(a: Mat, rows: number, cols?: number): number",
      "doc": "0 이 아닌 특이값의 개수. 무엇을 0 으로 볼지는 가장 큰 특이값에 맞춘다.",
      "members": [],
-     "torch": "matrix_rank"
+     "torch": "matrix_rank",
+     "doc_en": "The count of non-zero singular values. What counts as zero is scaled to the largest singular value."
     },
     {
      "kind": "interface",
@@ -9916,7 +10013,8 @@
        "signature": "readonly cols: number",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "What `lu_factor` produces — `L` and `U` packed into one plate, plus the pivot table.\n\n**The pivot table counts from 1.** That is the LAPACK convention and torch inherited\nit as-is. A 2×2 with no swap gives `[1, 2]`, not `[0, 1]` — count from zero and\n`luSolveFactored` gives a different answer without a sound. Matched by asking real\ntorch."
     },
     {
      "kind": "function",
@@ -9932,7 +10030,8 @@
      "signature": "export declare function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat; }",
      "doc": "겹쳐 담은 것을 `P`·`L`·`U` 셋으로 편다.",
      "members": [],
-     "torch": "lu_expand"
+     "torch": "lu_expand",
+     "doc_en": "Unpacks the packed plate into `P`, `L` and `U`."
     },
     {
      "kind": "function",
@@ -9940,7 +10039,8 @@
      "signature": "export declare function solveTriangular(a: Mat, b: Mat, n: number, m: number, upper: boolean, unit: boolean): Mat",
      "doc": "삼각행렬이라는 것을 **알고** 푼다. 앞으로나 뒤로 한 번이면 끝난다.",
      "members": [],
-     "torch": "solve_triangular"
+     "torch": "solve_triangular",
+     "doc_en": "Solves **knowing** the matrix is triangular. One pass, forward or backward, and it is done."
     },
     {
      "kind": "function",
@@ -9948,7 +10048,8 @@
      "signature": "export declare function matrixExp(a: Mat, n: number): Mat",
      "doc": "행렬 지수 `e^A` — **스케일링과 제곱.**\n\n테일러만으로는 큰 행렬에서 안 모인다. `A*5` 의 답이 4.8e+10 인데 그 자리에서는\n항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤\n`s` 번 제곱하면 같은 답이 안전하게 나온다 — `e^A = (e^{A/2^s})^{2^s}` 다.",
      "members": [],
-     "torch": "matrix_exp"
+     "torch": "matrix_exp",
+     "doc_en": "The matrix exponential `e^A` — **scaling and squaring.**\n\nTaylor alone does not converge on large matrices. The answer for `A*5` is 4.8e+10,\nand at that point the growing terms overflow first. Bringing the 1-norm of `A/2^s`\nbelow 0.5, running the series, and then squaring `s` times gives the same answer\nsafely — `e^A = (e^{A/2^s})^{2^s}`."
     },
     {
      "kind": "function",
@@ -9956,7 +10057,8 @@
      "signature": "export declare function matrixExpAdjointMap(a: Mat, n: number): Mat",
      "doc": "`e^A` 의 역방향을 **행렬 하나로 굳힌다.**\n\n프레셰 도함수에는 이런 항등식이 있다 — `expm([[Aᵀ, E],[0, Aᵀ]])` 의 오른쪽 위\n블록이 `E` 방향의 도함수다. 근사가 아니라 항등식이다.\n\n**그런데 여기서는 그 길로 못 간다.** 역방향에 들어오는 `Ḡ` 는 GPU 에 있고, 이\n파일은 CPU 다 — 역방향 안에서는 GPU 를 기다릴 수가 없다. 그래서 순방향에서\n`Ḡ` 가 **선형으로** 들어간다는 사실을 쓴다: 자리 하나만 1 인 행렬 `E_k` 마다 한 번씩\n구해서 `n²×n²` 짜리 표를 만들어 두면, 역방향은 행렬곱 한 번으로 끝난다.\n\n값은 정확하다(각 열이 진짜 도함수다 — 차분이 아니다). 대가는 순방향에서 `2n×2n`\n짜리 `expm` 을 `n²` 번 부르는 것인데, 여기서 미는 크기에서는 그게 싸다.",
      "members": [],
-     "torch": "matrix_exp_adjoint_map"
+     "torch": "matrix_exp_adjoint_map",
+     "doc_en": "Freezes the backward of `e^A` **into a single matrix.**\n\nThe Fréchet derivative has this identity — the upper-right block of\n`expm([[Aᵀ, E],[0, Aᵀ]])` is the derivative in the direction `E`. It is an identity,\nnot an approximation.\n\n**That route is not available here, though.** The `Ḡ` arriving in the backward is on\nthe GPU and this file is CPU — you cannot wait on the GPU from inside a backward. So\nit uses the fact that `Ḡ` enters **linearly**: solve once for each `E_k` with a\nsingle one in one slot, build an `n²×n²` table, and the backward is one matrix\nmultiply.\n\nThe values are exact (each column is a real derivative, not a finite difference).\nThe price is `n²` calls to a `2n×2n` `expm` in the forward, which is cheap at the\nsizes being pushed here."
     },
     {
      "kind": "function",
@@ -9964,7 +10066,8 @@
      "signature": "export declare function eighGap(values: Float64Array, n: number): Mat",
      "doc": "`eigh` 의 고유벡터 역방향에 들어가는 `F_ij = 1/(λⱼ − λᵢ)`.\n\n**고윳값이 겹치면 터진다.** torch 도 같이 터지므로 흉내가 아니라 같은 한계다.\n대각은 자기 자신과의 차라 나눗셈이 아니라 정의상 0 이다.",
      "members": [],
-     "torch": "eigh_gap"
+     "torch": "eigh_gap",
+     "doc_en": "`F_ij = 1/(λⱼ − λᵢ)`, which enters `eigh`'s eigenvector backward.\n\n**Repeated eigenvalues blow it up.** torch blows up with it, so this is the same\nlimit rather than an imitation. The diagonal is a difference with itself, so it is\nzero by definition rather than a division."
     },
     {
      "kind": "function",
@@ -9972,7 +10075,8 @@
      "signature": "export declare function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat",
      "doc": "`lu_factor` 가 낸 것으로 `A x = b` 를 푼다.",
      "members": [],
-     "torch": "lu_solve_factored"
+     "torch": "lu_solve_factored",
+     "doc_en": "Solves `A x = b` using what `lu_factor` produced."
     },
     {
      "kind": "function",
@@ -9980,7 +10084,8 @@
      "signature": "export declare function choleskyBackward(l: Mat, lbar: Mat, n: number): Mat",
      "doc": "콜레스키의 역방향.\n\n`L = chol(A)` 일 때 `A` 로 가는 기울기다. 유도가 짧지 않아서 식을 그대로 적는다 —\n`P = Φ(Lᵀ·L̄)` 에서 `Φ` 는 아래 삼각을 취하되 대각을 반으로 줄이는 것이고,\n`Ā = L⁻ᵀ·P·L⁻¹` 을 대칭화한다. 대칭화가 필요한 이유는 `A` 가 대칭이라 위·아래\n삼각이 같은 자유도를 공유하기 때문이다.",
      "members": [],
-     "torch": "cholesky_backward"
+     "torch": "cholesky_backward",
+     "doc_en": "Cholesky's backward.\n\nThe gradient towards `A` when `L = chol(A)`. The derivation is not short, so the\nformula is written out — with `P = Φ(Lᵀ·L̄)`, where `Φ` takes the lower triangle and\nhalves the diagonal, symmetrise `Ā = L⁻ᵀ·P·L⁻¹`. The symmetrisation is needed because\n`A` is symmetric, so its upper and lower triangles share the same degrees of\nfreedom."
     }
    ],
    "count": 37
@@ -10017,28 +10122,32 @@
      "name": "save",
      "signature": "export declare function save(tensors: Record<string, Tensor>, metadata?: Record<string, string>): Promise<Uint8Array>",
      "doc": "체크포인트를 바이트로.\n\n**비동기다** — 값이 GPU 에 있으므로 되가져오는 왕복이 든다. 호스트에 내려둔\n텐서(`await t.cpu()`)를 주면 그 왕복이 없다.",
-     "members": []
+     "members": [],
+     "doc_en": "A checkpoint, as bytes.\n\n**It is async** — the values are on the GPU, so there is a round trip to fetch them\nback. Hand it tensors already brought down to the host (`await t.cpu()`) and that\nround trip is gone."
     },
     {
      "kind": "function",
      "name": "load",
      "signature": "export declare function load(bytes: Uint8Array): Bundle",
      "doc": "바이트를 체크포인트로. **동기다** — 올리는 것은 큐에 쓰기 하나다.\n\n깨진 파일에서 조용히 이상한 텐서를 만들지 않는다. 길이·자리·형을 다 확인하고\n안 맞으면 던진다 — 체크포인트가 조용히 틀리면 그 뒤 학습 전체가 뜻을 잃는다.",
-     "members": []
+     "members": [],
+     "doc_en": "Bytes, as a checkpoint. **Synchronous** — uploading is one queued write.\n\nIt will not quietly manufacture odd tensors out of a damaged file. Lengths, offsets\nand types are all checked, and it throws when they do not agree — a checkpoint that\nis quietly wrong robs every training run after it of meaning."
     },
     {
      "kind": "function",
      "name": "prefixed",
      "signature": "export declare function prefixed<T>(prefix: string, entries: Record<string, T>): Record<string, T>",
      "doc": "이름 앞에 꼬리표를 붙인다. 모델과 옵티마이저를 **한 파일에** 담을 때 쓴다.\n\n```ts\nconst bytes = await save({\n  ...prefixed(\"model\", model.stateDict()),\n  ...prefixed(\"opt\", opt.stateDict().tensors),\n}, { ...numbersToMeta(\"opt\", opt.stateDict().numbers) });\n```",
-     "members": []
+     "members": [],
+     "doc_en": "Puts a tag in front of each name. Used to hold a model and an optimizer **in one file.**\n\n```ts\nconst bytes = await save({\n  ...prefixed(\"model\", model.stateDict()),\n  ...prefixed(\"opt\", opt.stateDict().tensors),\n}, { ...numbersToMeta(\"opt\", opt.stateDict().numbers) });\n```"
     },
     {
      "kind": "function",
      "name": "unprefixed",
      "signature": "export declare function unprefixed<T>(prefix: string, entries: Record<string, T>): Record<string, T>",
      "doc": "꼬리표를 뗀다. 앞머리가 다른 것은 안 준다.",
-     "members": []
+     "members": [],
+     "doc_en": "Takes the tag off. Anything with a different prefix is not returned."
     },
     {
      "kind": "function",
@@ -10046,7 +10155,8 @@
      "signature": "export declare function numbersToMeta(prefix: string, numbers: Record<string, number>): Record<string, string>",
      "doc": "수를 머리에 실을 수 있게 문자열로. safetensors 의 `__metadata__` 는 문자열만 받는다.\n\n**`JSON.stringify` 로 적는다.** `String(0.1)` 은 `\"0.1\"` 이고 그것을 다시 읽으면\n같은 배정도 수가 나오지만, `Infinity` 는 `\"Infinity\"` 가 되어 `JSON.parse` 가\n거절한다 — `ReduceLROnPlateau` 의 `best` 가 정확히 무한대에서 시작한다.",
      "members": [],
-     "torch": "numbers_to_meta"
+     "torch": "numbers_to_meta",
+     "doc_en": "Numbers as strings, so they can ride in the header. safetensors' `__metadata__` takes strings only.\n\n**It writes with `JSON.stringify`.** `String(0.1)` is `\"0.1\"` and reading that back\ngives the same double, but `Infinity` becomes `\"Infinity\"`, which `JSON.parse`\nrefuses — and `ReduceLROnPlateau`'s `best` starts at exactly infinity."
     },
     {
      "kind": "function",
@@ -10054,10 +10164,12 @@
      "signature": "export declare function metaToNumbers(prefix: string, metadata: Record<string, string>): Record<string, number>",
      "doc": "위의 되돌림. 앞머리가 맞는 것만 준다.",
      "members": [],
-     "torch": "meta_to_numbers"
+     "torch": "meta_to_numbers",
+     "doc_en": "The undo of the above. Only entries whose prefix matches are returned."
     }
    ],
-   "count": 9
+   "count": 9,
+   "doc_en": "Checkpoint to bytes, bytes to checkpoint — the **safetensors** format.\n\n## Why this is needed\n\n`stateDict()` existed, but **there was no way to save it.** Refreshing the tab lost\nthe training. A browser is a place where the process dies far more often than on a\ndesktop, so this gap was felt more sharply here than it is in torch.\n\n## Why no format of our own\n\ntorch's `save`/`load` is pickle. It is a format that unpacks by executing Python\nobjects, which cannot be carried into a browser and should not be.\n\nsafetensors is a JSON header and a body of contiguous bytes. **The codec is this\none file, and for that price Python `borch`, numpy and the HF tools read the same\nfile.** A private format loses that — training in the browser and taking the result\nback to your own machine is half of this project's story, and a format only we can\nread throws that half away.\n\n```\n[8 bytes LE u64: header length N][N bytes of JSON header][body: tensor bytes, concatenated]\n```\n\n## Writing the dtype honestly\n\nborch's `int64` and `bool` are **labels; the values live in a float32 buffer**\n(`dtype.ts`). Writing `I64` in the header contradicts a four-byte body and\n**breaks other people's readers.**\n\nSo `dtype` is always written as `F32`, and borch's label rides separately in\n`__metadata__`. Someone else reads a float32 array (which is true); we read it and\nthe label comes back too."
   },
   {
    "name": "indexing",
@@ -10094,14 +10206,16 @@
        "signature": "readonly step: number",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "`x[start:end:step]`. Do not build one directly — use `slice()`."
     },
     {
      "kind": "function",
      "name": "slice",
      "signature": "export declare function slice(start?: number | null, end?: number | null, step?: number): Slice",
      "doc": "자를 구간. 비운 자리는 파이썬처럼 끝까지다.\n\n**걸음이 음수면 거절한다.** 파이썬의 `x[::-1]` 은 뒤집기인데, 여기에는 그 일을\n하는 `flip` 이 따로 있다. 두 문으로 같은 일을 하게 두면 어느 쪽이 정본인지가\n흐려지고, 그것은 이 저장소가 반복해서 피해 온 자리다.",
-     "members": []
+     "members": [],
+     "doc_en": "The span to cut. An empty position runs to the end, as in Python.\n\n**A negative step is refused.** Python's `x[::-1]` reverses, but there is a `flip`\nhere that already does that job. Letting two spellings do one thing blurs which is\ncanonical, and that is a place this repository has repeatedly stayed away from."
     },
     {
      "kind": "function",
@@ -10116,7 +10230,8 @@
      "name": "AxisPlan",
      "signature": "export type AxisPlan = { kind: \"int\"; at: number; } | { kind: \"range\"; start: number; length: number; } | { kind: \"picks\"; indices: number[]; } | { kind: \"whole\"; }",
      "doc": "한 축을 어떻게 볼 것인가 — **값이 아니라 계획이다.**\n\n파싱을 실행에서 떼어 두면 이 파일이 `Tensor` 를 안 부른다(순환이 없다). 그리고\n범위·차례를 여기서 다 따지므로, 실행하는 쪽은 이미 맞는 수만 받는다.",
-     "members": []
+     "members": [],
+     "doc_en": "How one axis is to be read — **a plan, not a value.**\n\nKeeping parsing apart from execution means this file never calls `Tensor` (no\ncycle). Ranges and ordering are all settled here, so the side that executes only\never receives numbers that already hold."
     },
     {
      "kind": "function",
@@ -10130,7 +10245,8 @@
        "text": "axis 몇 번째 축인지. 오류 문구에만 쓴다 — 어느 자리가 틀렸는지 안 적으면 랭크가 넷쯤 될 때 사람이 세어 봐야 한다."
       }
      ],
-     "torch": "plan_axis"
+     "torch": "plan_axis",
+     "doc_en": "A single-axis index, turned into a plan."
     }
    ],
    "count": 9
@@ -10152,7 +10268,8 @@
      "members": []
     }
    ],
-   "count": 1
+   "count": 1,
+   "doc_en": "`einsum` — contraction written in subscripts.\n\n## How far it goes\n\n**One or two operands**, no ellipsis (`...`), and no subscript repeated within a\nsingle operand (so no diagonal extraction). Anything else throws.\n\n**What it cannot do, it does not quietly wave through.** einsum's notation is short\nenough that an unsupported combination is easy to write, and if a plausible answer\ncomes back there is no way to find where it went wrong.\n\n## How it works\n\nThere is no new kernel. It moves axes (`permute`), folds them (`sumDim`), and drops\nto a matrix multiply where it can — all operations that already exist and that the\ngolden cases already watch. The value of doing it this way is that not one\nhand-written backward appears."
   },
   {
    "name": "device",
@@ -10168,7 +10285,8 @@
      "name": "DeviceKind",
      "signature": "export type DeviceKind = \"webgpu\" | \"cpu\"",
      "doc": "텐서가 어디에 있는가.\n\ntorch 의 `'cuda'`·`'cpu'` 자리다. **인덱스가 없다** — WebGPU 는 어댑터를 열거하는\n방법을 주지 않으므로 `'webgpu:1'` 이 가리킬 대상이 아예 없다. 문자열로 충분하다.",
-     "members": []
+     "members": [],
+     "doc_en": "Where a tensor is.\n\nWhere torch's `'cuda'` and `'cpu'` go. **There is no index** — WebGPU gives no way to\nenumerate adapters, so there is nothing for `'webgpu:1'` to point at. A string is\nenough."
     },
     {
      "kind": "interface",
@@ -10181,37 +10299,43 @@
        "signature": "powerPreference?: GPUPowerPreference",
        "doc": "기본값이 `\"high-performance\"` 인 것은 이것이 **재는 라이브러리**이기 때문이다.\n브라우저 기본값은 노트북에서 통합 GPU 를 고를 수 있고, 그러면 같은 코드가 같은\n기계에서 다른 수를 낸다 — 무엇을 쟀는지 모르는 수가 나온다.",
        "optional": true,
-       "torch": "power_preference"
+       "torch": "power_preference",
+       "doc_en": "It defaults to `\"high-performance\"` because this is a **library that measures.** The\nbrowser default may pick the integrated GPU on a laptop, and then the same code\ngives different numbers on the same machine — a number where you do not know what\nwas measured."
       },
       {
        "name": "forceFallbackAdapter",
        "signature": "forceFallbackAdapter?: boolean",
        "doc": "소프트웨어 어댑터를 강제한다. 폴백 경로 자체를 시험할 때 쓴다.",
        "optional": true,
-       "torch": "force_fallback_adapter"
+       "torch": "force_fallback_adapter",
+       "doc_en": "Forces the software adapter. Used to exercise the fallback path itself."
       }
-     ]
+     ],
+     "doc_en": "How the adapter is chosen. Where torch's `CUDA_VISIBLE_DEVICES` goes."
     },
     {
      "kind": "type",
      "name": "Availability",
      "signature": "export type Availability = { ok: true; adapter: string; } | { ok: false; why: \"no-api\" | \"no-adapter\"; message: string; }",
      "doc": "WebGPU 를 쓸 수 있는가. **예외가 아니라 값으로 답한다.**\n\n`why` 가 값어치다 — `no-api`(브라우저가 낡았거나 안전한 문맥이 아니다)와\n`no-adapter`(드라이버 차단 목록·가상 머신·GPU 없는 헤드리스)는 쓰는 사람이 할 수\n있는 일이 전혀 다른데, 예외 하나로 뭉치면 그 갈림이 사라진다.",
-     "members": []
+     "members": [],
+     "doc_en": "Whether WebGPU can be used. **It answers with a value, not an exception.**\n\n`why` is what makes it worth having — `no-api` (the browser is too old, or this is\nnot a secure context) and `no-adapter` (driver blocklist, virtual machine, headless\nwith no GPU) leave the user with entirely different things to do, and folding them\ninto one exception erases that split."
     },
     {
      "kind": "function",
      "name": "probe",
      "signature": "export declare function probe(options?: InitOptions): Promise<Availability>",
      "doc": "붙어 보지 않고 붙을 수 있는지만 묻는다. 장치는 안 만든다.\n\n**`init()` 을 대신하지 않는다** — 여기를 지나도 `requestDevice` 가 거절할 수 있고\n그것은 여전히 `init()` 에서 예외로 온다. 이 함수가 답하는 것은 \"어댑터가 있는가\"\n까지이고, 실제로 막히는 자리가 대부분 그 앞이라 그것만으로 값이 있다.",
-     "members": []
+     "members": [],
+     "doc_en": "Asks whether it could attach, without attaching. It does not create a device.\n\n**It does not stand in for `init()`** — `requestDevice` can still refuse after this\npasses, and that still arrives as an exception from `init()`. What this function\nanswers reaches as far as \"is there an adapter\", and since most of what actually\nblocks sits before that, it is worth having on its own."
     },
     {
      "kind": "function",
      "name": "isAvailable",
      "signature": "export declare function isAvailable(options?: InitOptions): Promise<boolean>",
      "doc": "WebGPU 를 쓸 수 있는가만 묻는다. `torch.cuda.is_available()` 자리다.\n\n**torch 와 달리 비동기다** — 어댑터를 얻는 것이 비동기라 피할 길이 없다. 왜 안\n되는지가 필요하면 `probe()` 를 써라.",
-     "members": []
+     "members": [],
+     "doc_en": "Asks only whether WebGPU can be used. Where `torch.cuda.is_available()` goes.\n\n**Unlike torch's, it is async** — obtaining an adapter is asynchronous and there is\nno way around it. If you need to know why not, use `probe()`."
     },
     {
      "kind": "class",
@@ -10227,48 +10351,57 @@
       {
        "name": "lost",
        "signature": "lost: { reason: string; message: string; } | null",
-       "doc": "장치를 잃었으면 그 사연, 아니면 `null`.\n\ntorch 에 대응물이 없다 — CUDA 문맥은 프로세스와 함께 산다. 브라우저에서는 다른\n탭이나 드라이버 사정으로 남이 우리 장치를 회수할 수 있고, 그때 예외는 안 난다."
+       "doc": "장치를 잃었으면 그 사연, 아니면 `null`.\n\ntorch 에 대응물이 없다 — CUDA 문맥은 프로세스와 함께 산다. 브라우저에서는 다른\n탭이나 드라이버 사정으로 남이 우리 장치를 회수할 수 있고, 그때 예외는 안 난다.",
+       "doc_en": "The story, if the device was lost; otherwise `null`.\n\nThere is no counterpart in torch — a CUDA context lives with the process. In a\nbrowser another tab or the driver can reclaim our device, and no exception is raised\nwhen it happens."
       },
       {
        "name": "alive",
        "signature": "get alive(): boolean",
-       "doc": "아직 쓸 수 있는가. 긴 학습 루프가 스텝마다 볼 자리다."
+       "doc": "아직 쓸 수 있는가. 긴 학습 루프가 스텝마다 볼 자리다.",
+       "doc_en": "Whether it is still usable. Somewhere a long training loop looks at every step."
       },
       {
        "name": "faults",
        "signature": "faults: { count: number; first: string; }",
-       "doc": "지금까지 난 검증 오류.\n\n**재는 쪽이 이것을 봐야 한다.** 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도\n안 하므로, 그 상태에서도 벽시계는 돌고 수는 나온다 — 측정처럼 보이는 것이 나온다."
+       "doc": "지금까지 난 검증 오류.\n\n**재는 쪽이 이것을 봐야 한다.** 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도\n안 하므로, 그 상태에서도 벽시계는 돌고 수는 나온다 — 측정처럼 보이는 것이 나온다.",
+       "doc_en": "Validation errors so far.\n\n**Whoever is measuring has to look at this.** An invalid command buffer throws\nnothing and simply does no work, so the wall clock keeps running in that state and\nnumbers come out — something that looks like a measurement comes out."
       },
       {
        "name": "dispatches",
        "signature": "dispatches: number",
-       "doc": "지금까지 보낸 dispatch 수.\n\n\"느리다\" 에서 멈추면 다음에 무엇을 할지 모른다. 스텝당 dispatch 수를 알면 느린\n것이 **커널 자체인지 부르는 횟수인지**가 갈린다 — 지금 이 설계는 연산 하나마다\n명령 인코더를 새로 만들어 제출하므로, 그 수가 크면 원인이 거기다."
+       "doc": "지금까지 보낸 dispatch 수.\n\n\"느리다\" 에서 멈추면 다음에 무엇을 할지 모른다. 스텝당 dispatch 수를 알면 느린\n것이 **커널 자체인지 부르는 횟수인지**가 갈린다 — 지금 이 설계는 연산 하나마다\n명령 인코더를 새로 만들어 제출하므로, 그 수가 크면 원인이 거기다.",
+       "doc_en": "Dispatches issued so far.\n\nStopping at \"it is slow\" leaves you with no next move. Knowing dispatches per step\nseparates whether the slow part is **the kernel itself or the number of calls** —\nthis design currently builds and submits a fresh command encoder per operation, so a\nlarge count points there."
       },
       {
        "name": "byKind",
        "signature": "readonly byKind: Map<string, number>",
        "doc": "커널 종류별 dispatch 수.\n\n총수만으로는 다음에 무엇을 고칠지 모른다. 1,636 개가 conv 스무 번인지 BatchNorm\n조립 오백 번인지에 따라 할 일이 다르다 — 그 갈림을 재려고 둔다.",
-       "torch": "by_kind"
+       "torch": "by_kind",
+       "doc_en": "Dispatches by kernel kind.\n\nA total alone does not say what to fix next. Whether 1,636 is twenty convs or five\nhundred BatchNorm assemblies calls for different work — this exists to measure that\nsplit."
       },
       {
        "name": "submits",
        "signature": "submits: number",
-       "doc": "지금까지 실제로 보낸 제출 수. 묶기가 도는지 재는 쪽이 본다."
+       "doc": "지금까지 실제로 보낸 제출 수. 묶기가 도는지 재는 쪽이 본다.",
+       "doc_en": "Submissions actually issued so far. Whoever is measuring whether batching works looks here."
       },
       {
        "name": "pipeline",
        "signature": "pipeline(signature: string, source: () => string): GPUComputePipeline",
-       "doc": "셰이더 컴파일 오류를 삼키지 않는다.\n\n**WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,\n그 파이프라인으로 dispatch 하면 아무 일도 안 일어난다 — 결과 버퍼가 0 인 채로\n남고 화면에는 \"값이 다르다\"만 뜬다. 실제로 이 러너에서 축약 커널이 그렇게\n0 을 냈고, 그때 아무 오류도 안 보였다. 그래서 진단 정보를 직접 꺼내 본다."
+       "doc": "셰이더 컴파일 오류를 삼키지 않는다.\n\n**WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,\n그 파이프라인으로 dispatch 하면 아무 일도 안 일어난다 — 결과 버퍼가 0 인 채로\n남고 화면에는 \"값이 다르다\"만 뜬다. 실제로 이 러너에서 축약 커널이 그렇게\n0 을 냈고, 그때 아무 오류도 안 보였다. 그래서 진단 정보를 직접 꺼내 본다.",
+       "doc_en": "It does not swallow shader compilation errors.\n\n**A failed WGSL compile does not arrive as an exception.** `createShaderModule` simply\nreturns, and dispatching with that pipeline does nothing at all — the result buffer\nstays zero and all the screen says is \"the values differ\". A reduction kernel in this\nvery runner returned zeros that way, with no error visible anywhere. So the\ndiagnostics are pulled out deliberately."
       },
       {
        "name": "pipelineCount",
        "signature": "get pipelineCount(): number",
-       "doc": "지금까지 구운 셰이더 수. 캐시가 도는지 테스트가 본다."
+       "doc": "지금까지 구운 셰이더 수. 캐시가 도는지 테스트가 본다.",
+       "doc_en": "Shaders baked so far. Tests look at it to see whether the cache works."
       },
       {
        "name": "age",
        "signature": "age(buffer: GPUBuffer): number",
-       "doc": "이 버퍼의 지금 삶. 텐서가 태어날 때와 쓸 때 이 수를 견준다."
+       "doc": "이 버퍼의 지금 삶. 텐서가 태어날 때와 쓸 때 이 수를 견준다.",
+       "doc_en": "This buffer's current life. A tensor compares this number at birth against its value at use."
       },
       {
        "name": "beginScope",
@@ -10290,38 +10423,45 @@
          "text": "놓은 수와 **살아남은 수**. 둘 다 준다 — 살아남은 수가 곧 이 구역이 바깥으로 흘린 것이고, 학습 루프에서 그것이 0 이 아니면 스텝마다 쌓인다."
         }
        ],
-       "torch": "end_scope"
+       "torch": "end_scope",
+       "doc_en": "Closes the scope and releases what was made inside it."
       },
       {
        "name": "lastScope",
        "signature": "lastScope: { freed: number; survived: number; }",
-       "doc": "가장 최근에 닫힌 구역의 셈. `scope()` 로 닫아도 여기 남는다.\n\n**`survived` 가 0 이 아니면 스텝마다 쌓인다** — 학습 루프에서 그것이 누수다."
+       "doc": "가장 최근에 닫힌 구역의 셈. `scope()` 로 닫아도 여기 남는다.\n\n**`survived` 가 0 이 아니면 스텝마다 쌓인다** — 학습 루프에서 그것이 누수다.",
+       "doc_en": "The tally of the most recently closed scope. It stays here even when closed via `scope()`.\n\n**A non-zero `survived` means something accumulates every step** — in a training loop\nthat is the leak."
       },
       {
        "name": "memory",
        "signature": "get memory(): { tensors: number; bytes: number; }",
-       "doc": "지금 잡고 있는 버퍼의 수와 바이트.\n\n벤치가 누수를 재려면 밖에서 이것을 물을 수 있어야 한다. 자매 쪽 벤치는\n`js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 같은 벤치를\n다른 구현으로 못 돌린다 — 실제로 그것 때문에 못 돌렸다.\n\n`spare` 에 든 것은 뺀다. 통에 돌아와 다음 스텝을 기다리는 버퍼는 잡고 있는\n것이 맞지만 **새는 것은 아니다** — 그것을 세면 누수가 아닌 것을 누수로 읽는다."
+       "doc": "지금 잡고 있는 버퍼의 수와 바이트.\n\n벤치가 누수를 재려면 밖에서 이것을 물을 수 있어야 한다. 자매 쪽 벤치는\n`js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 같은 벤치를\n다른 구현으로 못 돌린다 — 실제로 그것 때문에 못 돌렸다.\n\n`spare` 에 든 것은 뺀다. 통에 돌아와 다음 스텝을 기다리는 버퍼는 잡고 있는\n것이 맞지만 **새는 것은 아니다** — 그것을 세면 누수가 아닌 것을 누수로 읽는다.",
+       "doc_en": "The count and bytes of buffers currently held.\n\nA benchmark measuring leaks has to be able to ask this from outside. The sister\nproject's benchmark called `js.tf.memory()` directly, which ties the instrumentation\nto TF.js and makes the same benchmark unrunnable against another implementation — and\nthat is exactly why it could not be run.\n\nWhat sits in `spare` is excluded. A buffer back in the pool waiting for the next step\nis held, but it **is not leaking** — counting it reads something that is not a leak as\none."
       },
       {
        "name": "pooled",
        "signature": "get pooled(): { count: number; bytes: number; }",
-       "doc": "통에서 다음 스텝을 기다리는 버퍼. **`memory` 가 일부러 빼는 그것이다.**\n\n저쪽은 \"새는가\" 를 묻고 이쪽은 \"얼마나 쥐고 있는가\" 를 묻는다. 두 물음이\n다르므로 수도 둘이어야 하는데 뒤엣것이 없었다 — 그래서 **아무도 진짜 발자국을\n못 물었다.**\n\n모양이 바뀌면 통이 자란다. 크기별로 나뉘어 있어서 배치 16 으로 돌던 버퍼는\n배치 32 에 못 쓰이고, 그대로 남는다. 벤치가 세 배치를 한 판에서 도는데 그때\n앞의 두 배치 몫이 통에 그대로 있고 `memory` 는 그것을 안 센다."
+       "doc": "통에서 다음 스텝을 기다리는 버퍼. **`memory` 가 일부러 빼는 그것이다.**\n\n저쪽은 \"새는가\" 를 묻고 이쪽은 \"얼마나 쥐고 있는가\" 를 묻는다. 두 물음이\n다르므로 수도 둘이어야 하는데 뒤엣것이 없었다 — 그래서 **아무도 진짜 발자국을\n못 물었다.**\n\n모양이 바뀌면 통이 자란다. 크기별로 나뉘어 있어서 배치 16 으로 돌던 버퍼는\n배치 32 에 못 쓰이고, 그대로 남는다. 벤치가 세 배치를 한 판에서 도는데 그때\n앞의 두 배치 몫이 통에 그대로 있고 `memory` 는 그것을 안 센다.",
+       "doc_en": "Buffers in the pool waiting for the next step. **What `memory` deliberately excludes.**\n\nThat one asks \"is it leaking\" and this one asks \"how much is held\". Two different\nquestions need two numbers, and the second one was missing — so **nobody could ask\nabout the real footprint.**\n\nThe pool grows when shapes change. It is split by size, so a buffer that ran at batch\n16 cannot serve batch 32 and simply stays. A benchmark running three batch sizes in\none pass leaves the first two sizes' worth sitting in the pool, and `memory` does not\ncount it."
       },
       {
        "name": "emptyCache",
        "signature": "emptyCache(): { count: number; bytes: number; }",
-       "doc": "통을 비운다. `torch.cuda.empty_cache()` 자리다.\n\n**통은 스스로 줄지 않는다.** 학습 루프처럼 모양이 반복되면 그것이 옳다 — 매번\n다시 만들면 그게 비용이다. 그런데 모양이 **바뀌면** 옛 모양의 버퍼가 영영\n남는다. 브라우저는 GPU 메모리를 탭이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.\n\n되돌려 준 버퍼를 아직 안 보낸 명령이 가리킬 수 있으므로 **보내고 나서** 놓는다."
+       "doc": "통을 비운다. `torch.cuda.empty_cache()` 자리다.\n\n**통은 스스로 줄지 않는다.** 학습 루프처럼 모양이 반복되면 그것이 옳다 — 매번\n다시 만들면 그게 비용이다. 그런데 모양이 **바뀌면** 옛 모양의 버퍼가 영영\n남는다. 브라우저는 GPU 메모리를 탭이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.\n\n되돌려 준 버퍼를 아직 안 보낸 명령이 가리킬 수 있으므로 **보내고 나서** 놓는다.",
+       "doc_en": "Empties the pool. Where `torch.cuda.empty_cache()` goes.\n\n**The pool does not shrink on its own.** With repeating shapes, as in a training loop,\nthat is right — remaking them each time is the cost. But when the shape **changes**,\nthe old shape's buffers stay forever. In a browser, where GPU memory is shared between\ntabs, that costs more than it does on a desktop.\n\nA returned buffer may still be referenced by commands not yet submitted, so the\nrelease happens **after** submitting."
       },
       {
        "name": "keep",
        "signature": "keep(buffer: GPUBuffer): void",
-       "doc": "구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다."
+       "doc": "구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다.",
+       "doc_en": "Keeps something alive regardless of scope. Parameters and optimizer state use it."
       },
       {
        "name": "scopeDepth",
        "signature": "get scopeDepth(): number",
        "doc": "열려 있는 구역의 깊이. 테스트가 균형을 본다.",
-       "torch": "scope_depth"
+       "torch": "scope_depth",
+       "doc_en": "The depth of open scopes. Tests look at it for balance."
       },
       {
        "name": "alloc",
@@ -10332,7 +10472,8 @@
          "tag": "param",
          "text": "recycle 통에 있는 것을 꺼내 써도 되는가."
         }
-       ]
+       ],
+       "doc_en": "**Uploads must not come from the pool.** `writeBuffer` runs at the queue's current\nposition, whereas we stack commands and submit them later — if a dispatch not yet\nsubmitted is about to read a buffer taken from the pool, we would overwrite it.\nAllocating fresh removes the situation entirely."
       },
       {
        "name": "upload",
@@ -10342,51 +10483,60 @@
       {
        "name": "run",
        "signature": "run(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], groups: readonly [number, number, number]): void",
-       "doc": "커널 한 번. `groups` 는 **워크그룹 수**이고, 축당 한계를 여기서 다시 확인한다 —\n`kernels.ts` 가 격자를 접어 주지만 손으로 부르는 경로가 생길 수 있다."
+       "doc": "커널 한 번. `groups` 는 **워크그룹 수**이고, 축당 한계를 여기서 다시 확인한다 —\n`kernels.ts` 가 격자를 접어 주지만 손으로 부르는 경로가 생길 수 있다.",
+       "doc_en": "One kernel. `groups` is the **workgroup count**, and the per-axis limit is rechecked\nhere — `kernels.ts` folds the grid, but a hand-called path may appear."
       },
       {
        "name": "run1d",
        "signature": "run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number): void",
-       "doc": "1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다."
+       "doc": "1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다.",
+       "doc_en": "Runs one-dimensional work spread over a grid. Paired with the indexing in `kernels.ts`."
       },
       {
        "name": "sumAll",
        "signature": "sumAll(input: GPUBuffer, n: number): GPUBuffer",
        "doc": "전체 합. 부분합이 하나가 될 때까지 같은 커널을 다시 부른다.\n\n**원자 연산을 안 쓴다** — 부동소수 덧셈은 순서가 바뀌면 값이 달라지고, 그러면\n같은 씨앗으로 두 번 돌린 학습이 갈린다. 느린 쪽이 재현된다.",
-       "torch": "sum_all"
+       "torch": "sum_all",
+       "doc_en": "A full sum. It calls the same kernel again until the partial sums come down to one.\n\n**It uses no atomics** — floating-point addition changes value when the order changes,\nand then the same seed run twice gives different training. The slower way is the one\nthat reproduces."
       },
       {
        "name": "copyInto",
        "signature": "copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void",
        "doc": "버퍼 하나를 다른 버퍼에 덮어쓴다. 제자리 연산이 쓴다.\n\n커널이 아니라 복사다 — 결과를 새 버퍼에 만든 뒤 원래 자리로 옮긴다. 원래\n버퍼를 읽으면서 같이 쓰면 스레드끼리 순서가 없어 값이 섞인다.",
-       "torch": "copy_into"
+       "torch": "copy_into",
+       "doc_en": "Overwrites one buffer with another. In-place operations use it.\n\nIt is a copy, not a kernel — the result is made in a new buffer and then moved back to\nthe original slot. Reading and writing the original at once leaves the threads\nunordered and the values mixed."
       },
       {
        "name": "nsByKind",
        "signature": "readonly nsByKind: Map<string, number>",
        "doc": "켰을 때 커널 종류별로 쌓인 GPU 시간(나노초).",
-       "torch": "ns_by_kind"
+       "torch": "ns_by_kind",
+       "doc_en": "GPU time in nanoseconds accumulated per kernel kind, when enabled."
       },
       {
        "name": "profileDropped",
        "signature": "profileDropped: number",
        "doc": "자리가 없어 **안 잰** dispatch 수. 부르는 쪽이 이것을 같이 적어야 한다.\n\n0 이 아니면 `nsByKind` 는 스텝의 일부만 담은 것이고, 그런데도 \"합\" 처럼 읽힌다.\n잘린 것을 안 적으면 \"전부 쟀다\" 로 읽히는데, 그게 이 저장소가 세어 온 거짓말의\n한 종류다.",
-       "torch": "profile_dropped"
+       "torch": "profile_dropped",
+       "doc_en": "Dispatches **not measured** for want of room. Whoever calls has to report this alongside.\n\nNon-zero means `nsByKind` holds only part of the step while still reading like a total.\nNot writing down what was cut reads as \"everything was measured\", and that is one of\nthe kinds of lie this repository has been counting."
       },
       {
        "name": "profile",
        "signature": "profile<T>(body: () => Promise<T>): Promise<T>",
-       "doc": "`body` 를 재면서 돌린다. **끝나면 반드시 끈다 — 예외로 나가도 끈다.**\n\n켜고 끄기를 부르는 쪽에 맡기면 안 된다. 프로파일 중에는 dispatch 마다 패스를\n여느라 시간이 부풀고, 켜진 채로 새어 나가면 **그 뒤의 모든 측정이 조용히\n부풀어서** 나온다. 벤치는 배치를 여러 번 재므로, 한 배치에서 예외가 나면\n다음 배치의 ms/step 이 측정이 아니라 프로파일된 수가 된다 — 그런데 화면에는\n똑같이 생긴 수로 찍힌다. 문은 하나여야 하고 뒷정리는 문이 해야 한다."
+       "doc": "`body` 를 재면서 돌린다. **끝나면 반드시 끈다 — 예외로 나가도 끈다.**\n\n켜고 끄기를 부르는 쪽에 맡기면 안 된다. 프로파일 중에는 dispatch 마다 패스를\n여느라 시간이 부풀고, 켜진 채로 새어 나가면 **그 뒤의 모든 측정이 조용히\n부풀어서** 나온다. 벤치는 배치를 여러 번 재므로, 한 배치에서 예외가 나면\n다음 배치의 ms/step 이 측정이 아니라 프로파일된 수가 된다 — 그런데 화면에는\n똑같이 생긴 수로 찍힌다. 문은 하나여야 하고 뒷정리는 문이 해야 한다.",
+       "doc_en": "Runs `body` while measuring. **It always turns off afterwards — including on the way out through an exception.**\n\nTurning it on and off must not be left to the caller. While profiling, each dispatch\nopens a pass and the time inflates, and if it leaks out still on, **every measurement\nafter it comes out quietly inflated.** A benchmark measures several batches, so an\nexception in one batch makes the next batch's ms/step a profiled number rather than a\nmeasurement — and it prints on screen looking exactly the same. There should be one\ndoor, and the door should clean up."
       },
       {
        "name": "flush",
        "signature": "flush(): void",
-       "doc": "쌓아 둔 명령을 보낸다.\n\n값을 읽기 전에 반드시 지나야 한다 — 안 보낸 명령의 결과를 읽으면 옛 값이 나온다."
+       "doc": "쌓아 둔 명령을 보낸다.\n\n값을 읽기 전에 반드시 지나야 한다 — 안 보낸 명령의 결과를 읽으면 옛 값이 나온다.",
+       "doc_en": "Submits the stacked commands.\n\nIt has to be passed before values are read — reading the result of unsubmitted\ncommands returns the old value."
       },
       {
        "name": "synchronize",
        "signature": "synchronize(): Promise<void>",
-       "doc": "보낸 일이 **실제로 끝날 때까지** 기다린다. `torch.cuda.synchronize()` 자리다.\n\n`flush()` 는 큐에 넣기만 하고 돌아온다 — 그것으로 시간을 재면 GPU 가 일하는 동안\n벽시계는 이미 멈춰 있다. 지금까지 이 저장소가 완료를 강제한 방법은 값을 하나\n읽는 것(`item()`)이었는데, 그러면 **readback 왕복이 측정에 섞인다.** 재는 것이\n커널인지 버스인지가 흐려지는 자리이고, 그것을 가르는 것이 이 함수다."
+       "doc": "보낸 일이 **실제로 끝날 때까지** 기다린다. `torch.cuda.synchronize()` 자리다.\n\n`flush()` 는 큐에 넣기만 하고 돌아온다 — 그것으로 시간을 재면 GPU 가 일하는 동안\n벽시계는 이미 멈춰 있다. 지금까지 이 저장소가 완료를 강제한 방법은 값을 하나\n읽는 것(`item()`)이었는데, 그러면 **readback 왕복이 측정에 섞인다.** 재는 것이\n커널인지 버스인지가 흐려지는 자리이고, 그것을 가르는 것이 이 함수다.",
+       "doc_en": "Waits until the submitted work has **actually finished.** Where `torch.cuda.synchronize()` goes.\n\n`flush()` returns having only put things on the queue — time it with that and the wall\nclock has already stopped while the GPU is still working. Until now the way this\nrepository forced completion was to read one value (`item()`), and that **mixes the\nreadback round trip into the measurement.** It is the place where \"am I measuring the\nkernel or the bus\" gets blurred, and this function is what separates them."
       },
       {
        "name": "read",
@@ -10396,13 +10546,15 @@
       {
        "name": "adapterInfo",
        "signature": "static adapterInfo: string",
-       "doc": "어느 어댑터에 붙었는가. 성능을 재는 쪽이 반드시 같이 적어야 하는 값이다."
+       "doc": "어느 어댑터에 붙었는가. 성능을 재는 쪽이 반드시 같이 적어야 하는 값이다.",
+       "doc_en": "Which adapter it attached to. A value anyone measuring performance must record alongside."
       },
       {
        "name": "adapterFeatures",
        "signature": "static adapterFeatures: string",
        "doc": "어댑터가 주는 선택 기능들. **`timestamp-query` 가 여기 있어야 커널별 시간을 잰다.**\n\n벽시계로는 스텝 전체밖에 못 재고, 그러면 429 개 dispatch 중 어느 것이 비싼지\n물을 방법이 없다 — 실제로 그 자리에서 막혔다.",
-       "torch": "adapter_features"
+       "torch": "adapter_features",
+       "doc_en": "Optional features the adapter offers. **`timestamp-query` has to be here for per-kernel timing.**\n\nA wall clock can only measure the whole step, and then there is no way to ask which of\n429 dispatches is expensive — which is exactly where this got stuck."
       }
      ]
     }
@@ -10424,7 +10576,8 @@
      "signature": "export declare function manualSeed(value: number): void",
      "doc": "씨앗을 심고 등록된 것들을 되돌린다.\n\n**0 을 1 로 바꾼다.** xorshift 는 상태가 0 이면 영원히 0 을 낸다 — `manualSeed(0)`\n이 난수를 죽이는 것은 아무도 예상하지 않는다.",
      "members": [],
-     "torch": "manual_seed"
+     "torch": "manual_seed",
+     "doc_en": "Plants the seed and rewinds everything registered with it.\n\n**It turns 0 into 1.** xorshift emits zero forever once its state is zero — nobody\nexpects `manualSeed(0)` to be the call that kills randomness."
     },
     {
      "kind": "function",
@@ -10432,21 +10585,24 @@
      "signature": "export declare function onSeed(reset: (seed: number) => void): void",
      "doc": "씨앗을 심을 때 같이 되돌릴 것을 등록한다. **씨앗 값을 받는다.**\n\n처음에는 인자 없이 불렀고 dropout 계수기는 늘 1 로 되돌아갔다. 같은 씨앗에 같은\n결과라는 약속은 지켜지지만 **다른 씨앗에 다른 결과가 안 나온다** — 씨앗을 다섯 개\n돌려 분산을 재는 사람은 dropout 마스크가 다섯 번 다 같은 줄 모르고, 가중치\n초기화만 흔들린 수를 실험 분산으로 읽는다.",
      "members": [],
-     "torch": "on_seed"
+     "torch": "on_seed",
+     "doc_en": "Registers something to be rewound when a seed is planted. **It receives the seed value.**\n\nIt was first called with no argument, and the dropout counter always rewound to 1.\nThe promise that the same seed gives the same result still held, but **different\nseeds stopped giving different results** — someone running five seeds to measure\nvariance would not know the dropout masks were identical all five times, and would\nread a number shaken only by weight initialisation as experimental variance."
     },
     {
      "kind": "function",
      "name": "uniform",
      "signature": "export declare function uniform(): number",
      "doc": "`[0, 1)` 균등분포 하나.",
-     "members": []
+     "members": [],
+     "doc_en": "One sample from the uniform distribution on `[0, 1)`."
     },
     {
      "kind": "function",
      "name": "gauss",
      "signature": "export declare function gauss(): number",
      "doc": "표준정규분포 하나. Box–Muller 다.\n\n**두 값 중 하나만 쓰고 버린다.** 짝을 캐시해 두면 씨앗을 심었을 때 캐시도 같이\n비워야 하고, 안 비우면 심기 직전의 값이 심은 뒤에 나온다 — 되돌린 것처럼 보이는데\n첫 수만 다른 상태가 되고 그것이 가장 찾기 어려운 종류다.",
-     "members": []
+     "members": [],
+     "doc_en": "One sample from the standard normal. Box–Muller.\n\n**Of the two values it produces, one is used and one is thrown away.** Caching the\npair would mean the cache has to be cleared whenever a seed is planted, and if it\nis not, a value from just before the planting appears just after it — a state that\nlooks rewound but whose first number is wrong, which is the hardest kind to find."
     },
     {
      "kind": "function",
@@ -10454,7 +10610,8 @@
      "signature": "export declare function uniformArray(n: number, bound: number): Float32Array",
      "doc": "`[-bound, bound]` 균등분포로 채운 배열. 층 초기화가 쓴다.",
      "members": [],
-     "torch": "uniform_array"
+     "torch": "uniform_array",
+     "doc_en": "An array filled from the uniform distribution on `[-bound, bound]`. Layer initialisation uses it."
     }
    ],
    "count": 5
@@ -10477,37 +10634,44 @@
       {
        "name": "parents",
        "signature": "readonly parents: readonly Node<T>[]",
-       "doc": "이 값을 만든 입력들. 잎이면 비어 있다."
+       "doc": "이 값을 만든 입력들. 잎이면 비어 있다.",
+       "doc_en": "The inputs this value was made from. Empty at a leaf."
       },
       {
        "name": "requiresGrad",
        "signature": "requiresGrad: boolean",
        "doc": "기울기를 받을 것인가.",
-       "torch": "requires_grad"
+       "torch": "requires_grad",
+       "doc_en": "Whether it receives gradient."
       },
       {
        "name": "grad",
        "signature": "grad: T | null",
-       "doc": "잎에만 쌓인다. torch 와 같다."
+       "doc": "잎에만 쌓인다. torch 와 같다.",
+       "doc_en": "Accumulates on leaves only, as in torch."
       },
       {
        "name": "backwardFn",
        "signature": "readonly backwardFn: ((grad: T) => readonly (T | null)[]) | null",
        "doc": "출력 기울기 하나를 받아 **부모 수만큼** 돌려준다.\n\n흘리지 않는 부모 자리는 `null` 이다. `null` 과 \"0 으로 채운 것\" 은 다르다 —\n계단 함수(`sign`·`floor`)는 **0 을 흘린다**. 자매에서 이것을 한 번 거절로\n잘못 적었고, 계단을 낀 손실이 torch 에서는 도는데 우리에게서만 멈췄다.",
-       "torch": "backward_fn"
+       "torch": "backward_fn",
+       "doc_en": "Takes one output gradient and returns **as many as there are parents.**\n\nA parent that gets nothing is `null`. `null` and \"filled with zeros\" are different —\nstep functions (`sign`, `floor`) **do pass zero through.** The sister project wrote\nthis once as a refusal, and a loss with a step in it ran under torch while stopping\nonly for us."
       },
       {
        "name": "gradName",
        "signature": "readonly gradName: string",
        "doc": "torch 의 `grad_fn` 이름. 오류 메시지와 골든의 `repr::` 케이스가 쓴다.",
-       "torch": "grad_name"
+       "torch": "grad_name",
+       "doc_en": "torch's `grad_fn` name. Error messages and the golden `repr::` cases use it."
       },
       {
        "name": "freed",
        "signature": "freed: boolean",
-       "doc": "역전파가 이미 지나간 마디인가.\n\ntorch 는 한 번 흘리고 나면 그래프를 놓아준다 — 중간 값들이 메모리를 붙들고\n있기 때문이다. 두 번째 호출은 거절이지 다시 계산이 아니다."
+       "doc": "역전파가 이미 지나간 마디인가.\n\ntorch 는 한 번 흘리고 나면 그래프를 놓아준다 — 중간 값들이 메모리를 붙들고\n있기 때문이다. 두 번째 호출은 거절이지 다시 계산이 아니다.",
+       "doc_en": "Whether backward has already passed through this node.\n\ntorch releases the graph once gradient has flowed, because the intermediate values\nare holding memory. A second call is a refusal, not a recomputation."
       }
-     ]
+     ],
+     "doc_en": "A node in the graph. Tensor implements it."
     },
     {
      "kind": "const",
@@ -10515,7 +10679,8 @@
      "signature": "export declare const gradMode: { enabled: boolean; }",
      "doc": "기울기를 켜고 끄는 스위치를 **객체 안에** 둔다.\n\n모듈 수준 변수로 두면 안 된다. 파이썬 쪽에서 단일 파일을 8개로 쪼갤 때 정확히\n이것 때문에 `no_grad` 가 조용히 안 먹었다 — 모듈마다 자기 사본이 생겼고, 골든\n374건이 전부 통과하는 채로 지나갔다. 값을 한 군데 두면 그 일이 안 생긴다.",
      "members": [],
-     "torch": "grad_mode"
+     "torch": "grad_mode",
+     "doc_en": "Keeps the switch that turns gradient on and off **inside an object.**\n\nIt must not be a module-level variable. On the Python side, splitting a single file\ninto eight broke `no_grad` quietly for exactly this reason — each module got its own\ncopy, and all 374 golden cases passed straight through it. Keeping the value in one\nplace stops that from happening."
     },
     {
      "kind": "function",
@@ -10523,7 +10688,8 @@
      "signature": "export declare function noGrad<R>(body: () => R): R",
      "doc": "`torch.no_grad()`. 예외가 나도 되돌린다.",
      "members": [],
-     "torch": "no_grad"
+     "torch": "no_grad",
+     "doc_en": "`torch.no_grad()`. Restores even if an exception is thrown."
     },
     {
      "kind": "function",
@@ -10536,7 +10702,8 @@
        "tag": "param",
        "text": "add 기울기 둘을 더하는 법. 한 값이 여러 곳에 쓰였으면 그만큼 더해진다."
       }
-     ]
+     ],
+     "doc_en": "Backpropagation. Seeds at `root` and accumulates into the leaves' `grad`."
     }
    ],
    "count": 10
@@ -10562,7 +10729,8 @@
      "name": "igammac",
      "signature": "export declare function igammac(a: Tensor, x: Tensor): Tensor",
      "doc": "상부 쪽 `Q = 1 − P`. **둘을 더하면 정확히 1 이다**(실측).",
-     "members": []
+     "members": [],
+     "doc_en": "The upper branch, `Q = 1 − P`. **The two sum to exactly 1** (measured)."
     },
     {
      "kind": "function",
@@ -10572,7 +10740,8 @@
      "members": []
     }
    ],
-   "count": 3
+   "count": 3,
+   "doc_en": "Special functions — the incomplete gamma and the polygammas.\n\n**The reason these kernels live apart** is that `n` is a shader constant.\n`polygamma(n, x)` bakes a different shader per `n`, and the unary table (`UNARY` in\n`kernels.ts`) hangs one shader off one name, so it does not fit there.\n\nThe formulas are carried over from the core (numpy) unchanged — two copies means a\nday when only one gets fixed. The core side was confirmed against torch for both\nvalues and gradients first; this is that carried across."
   },
   {
    "name": "rnn",
@@ -10602,7 +10771,8 @@
        "text": "`[다음 h, 다음 c]` — c 는 LSTM 만 쓰고 나머지는 h 를 그대로 넘긴다."
       }
      ],
-     "torch": "rnn_step"
+     "torch": "rnn_step",
+     "doc_en": "One step. **All four kinds pass through here.**"
     },
     {
      "kind": "interface",
@@ -10657,14 +10827,16 @@
      "signature": "export declare function rnnApply(kind: RnnKind, input: Tensor, h0: Tensor, c0: Tensor | null, params: readonly Tensor[], options?: RnnOptions): { output: Tensor; hidden: Tensor; cell: Tensor; }",
      "doc": "여러 걸음. `hx` 는 `(층, 배치, H)` 다.\n\n**양방향과 층간 드롭아웃은 거절한다.** 없는 것을 반쪽으로 흉내 내면, 앞쪽은 모양이\n절반이라 시끄럽게 걸리지만 **드롭아웃 쪽은 값이 그럴듯한 채로 갈린다**(정칙화가\n안 걸린 학습). 둘 다 여기서 멈춘다.",
      "members": [],
-     "torch": "rnn_apply"
+     "torch": "rnn_apply",
+     "doc_en": "Several steps. `hx` is `(layer, batch, H)`.\n\n**Bidirectional and inter-layer dropout are refused.** Half-imitating something that\nis not there catches loudly for the first — the shape comes out halved — but\n**dropout diverges with plausible values** (training with no regularisation applied).\nBoth stop here."
     },
     {
      "kind": "function",
      "name": "lstm",
      "signature": "export declare function lstm(input: Tensor, hx: readonly [Tensor, Tensor], params: readonly Tensor[], options?: RnnOptions): [ Tensor, Tensor, Tensor ]",
      "doc": "`torch.lstm` — **셋을 편다**(`출력, h_n, c_n`). 층 쪽처럼 묶지 않는다.",
-     "members": []
+     "members": [],
+     "doc_en": "`torch.lstm` — **it spreads three** (`output, h_n, c_n`), rather than bundling them the way the layer does."
     },
     {
      "kind": "function",
@@ -10722,7 +10894,8 @@
      "torch": "rnn_relu_cell"
     }
    ],
-   "count": 18
+   "count": 18,
+   "doc_en": "The eight top-level recurrences — `torch.lstm`, `torch.gru`, `torch.rnn_tanh`,\n`torch.rnn_relu`, and their `_cell` counterparts.\n\n**The only difference from the layer (`nn.Recurrent`) is where the weights come\nfrom.** The layer holds its own; this side **receives them as a list.** torch offers\nboth, and what the layer calls internally is this side.\n\nSo the step equations live here in one copy. Two copies, here and in the layer,\nmeans a day when **the gate order diverges**, and then the shape is right and only\nthe values are wrong — this repository already shares the equations between cell\nand layer for that same reason.\n\n## Gate order\n\nThe **row order** of `weight_ih` is the convention (measured):\n\n    LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)\n\nChange it and only the values diverge; the shape stays."
   },
   {
    "name": "errors",
@@ -10738,42 +10911,48 @@
      "name": "RuntimeError",
      "signature": "export declare class RuntimeError extends Error",
      "doc": "파이썬에 있고 JS 에 없는 것. 골든이 예외의 **종류 이름**까지 굳혔으므로\n(`RuntimeError|문구=True`) 클래스 이름이 그대로 답의 일부가 된다.",
-     "members": []
+     "members": [],
+     "doc_en": "Present in Python, absent in JavaScript. The golden cases froze the **kind name**\nof the exception as well (`RuntimeError|message=True`), so the class name is part\nof the answer."
     },
     {
      "kind": "class",
      "name": "IndexError",
      "signature": "export declare class IndexError extends Error",
      "doc": "색인이 범위를 넘은 것.\n\n**`RuntimeError` 가 아니다.** torch 는 여기에 파이썬의 `IndexError` 를 쓰고, 골든이\n예외의 종류까지 굳혔으므로 그 이름이어야 한다. 종류를 뭉뚱그리면 `except IndexError`\n로 잡던 코드가 안 잡힌다 — 예외의 종류도 API 다.",
-     "members": []
+     "members": [],
+     "doc_en": "An index past the end.\n\n**Not a `RuntimeError`.** torch uses Python's `IndexError` here, and the golden\ncases froze the kind of exception too, so it has to be that name. Blurring the\nkinds means code catching `except IndexError` stops catching — the kind of an\nexception is part of the API."
     },
     {
      "kind": "class",
      "name": "NotImplementedError",
      "signature": "export declare class NotImplementedError extends Error",
      "doc": "조합이 아직 없는 것.\n\n**거절도 종류가 있다.** torch 는 \"이 랭크에 이 패딩 짝수는 안 된다\" 를\n`NotImplementedError` 로 내고, 그것은 \"값이 잘못됐다\"(`RuntimeError`)와 다른\n말이다 — 앞은 언젠가 생길 수 있는 것이고 뒤는 부른 쪽이 틀린 것이다.",
-     "members": []
+     "members": [],
+     "doc_en": "A combination that does not exist yet.\n\n**Refusals have kinds too.** torch raises \"this padding parity at this rank is not\nsupported\" as `NotImplementedError`, and that says something different from \"the\nvalue is wrong\" (`RuntimeError`) — the first is something that may exist one day,\nthe second is the caller being wrong."
     },
     {
      "kind": "class",
      "name": "ValueError",
      "signature": "export declare class ValueError extends Error",
      "doc": "인자 자체가 말이 안 되는 것 — 서로 배타인 둘을 같이 주었거나, 정의역 밖이거나.\n\n**`RuntimeError` 와 다른 말이다.** 파이썬은 이 자리에 `ValueError` 를 쓰고 torch 도\n그렇다(`FractionalMaxPool2d` 가 크기와 비율을 둘 다 받으면 그 종류로 멈춘다).\n골든이 예외의 **종류 이름**을 답으로 굳히므로, 여기서 다른 이름을 던지면 결속이\n옮길 것이 없어진다.",
-     "members": []
+     "members": [],
+     "doc_en": "An argument that makes no sense on its own — two mutually exclusive options given\ntogether, or a value outside the domain.\n\n**It says something different from `RuntimeError`.** Python uses `ValueError` in\nthis position and so does torch (`FractionalMaxPool2d` stops with that kind when\ngiven both a size and a ratio). The golden cases freeze the **kind name** of the\nexception as the answer, so throwing a different name here leaves the binding\nnothing to carry across."
     },
     {
      "kind": "class",
      "name": "LinAlgError",
      "signature": "export declare class LinAlgError extends Error",
      "doc": "선형대수가 답을 못 내는 것 — 특이행렬, 양정부호가 아닌 콜레스키.\n\n**이름이 하는 일이 있다.** 특이행렬을 만날 수 있는 코드는 `except LinAlgError` 로\n감싸는 것이 보통인데, 우리가 그냥 `RuntimeError` 를 던지면 그 감싸기를 지나쳐\n프로그램이 죽는다. `IndexError` 를 따로 둔 것과 같은 이유다 — **예외의 종류도 API 다.**",
-     "members": []
+     "members": [],
+     "doc_en": "Linear algebra with no answer to give — a singular matrix, a Cholesky that is not\npositive definite.\n\n**The name does work.** Code that can meet a singular matrix usually wraps the call\nin `except LinAlgError`, and throwing a plain `RuntimeError` walks straight past\nthat wrapper and kills the program. Same reason `IndexError` is kept separate —\n**the kind of an exception is part of the API.**"
     },
     {
      "kind": "const",
      "name": "TORCH",
      "signature": "export declare const TORCH: { readonly matmulShape: \"shapes cannot be multiplied\"; readonly absent: \"은(는) 브라우저 축소판에 없습니다.\"; readonly absentAdvice: string; readonly broadcast: \"must match the size of tensor\"; readonly reshapeSize: \"is invalid for input of size\"; readonly nonScalarBackward: \"grad can be implicitly created only for scalar outputs\"; readonly noGrad: \"does not require grad\"; readonly itemScalar: \"cannot be converted to Scalar\"; readonly crossDevice: \"Expected all tensors to be on the same device\"; readonly gradShape: \"Mismatch in shape\"; readonly secondBackward: string; }",
      "doc": "torch 가 내는 문구. 검색이 통하라고 원문 그대로 둔다.",
-     "members": []
+     "members": [],
+     "doc_en": "The wording torch itself produces. Kept verbatim so that searching for it works."
     }
    ],
    "count": 6
@@ -10792,7 +10971,8 @@
      "name": "DType",
      "signature": "export type DType = \"float32\" | \"int64\" | \"bool\" | \"complex64\"",
      "doc": "dtype 과 승격 규칙.\n\n## 저장은 float32 하나다\n\n`int64` 는 **이름표**다. WGSL 에 64비트 정수가 없으므로 진짜로 담을 방법이 없고,\n32비트 정수로 담으면 그건 `int64` 가 아니라 `int32` 다. 그래서 값은 float32 에\n두고 dtype 만 따로 든다 — 자매가 같은 선택을 했고, 자매 쪽 이유(TF.js 의 cast 가\n깨져서)와 달리 여기 이유는 표현할 수단 자체가 없다는 것이다.\n\n**대가를 적어둔다**: 2²⁴ 를 넘는 정수는 float32 에 정확히 안 담긴다. 색인이나\n개수로 쓰는 범위에서는 한참 아래지만, 큰 정수를 담으면 조용히 어긋난다.\n\n## 왜 범주로 가르는가\n\ntorch 는 `bool < 정수 < 실수` 로 범주를 두고 **그 안에서만** 올린다. numpy 규칙을\n물려받으면 `float32 + int64` 가 float64 가 되는데, 그러면 배우는 사람이 틀린 규칙을\n배운다. 여기 폭이 범주마다 하나뿐이라 규칙이 더 짧아진다.",
-     "members": []
+     "members": [],
+     "doc_en": "dtypes and the promotion rules.\n\n## Storage is float32, and only that\n\n`int64` is a **label**. WGSL has no 64-bit integer, so there is no way to actually\nhold one, and holding it in a 32-bit integer makes it `int32`, not `int64`. So the\nvalues sit in float32 and the dtype is carried separately — the sister project made\nthe same choice, though its reason (TF.js's cast was broken) differs from this one,\nwhich is that the means of representation simply does not exist.\n\n**The price, written down**: integers above 2²⁴ are not exact in float32. The ranges\nused for indices and counts are far below that, but a large integer stored here\ndrifts quietly.\n\n## Why the split is by category\n\ntorch has categories — `bool < integer < float` — and only promotes **within** them.\nInheriting numpy's rules would make `float32 + int64` a float64, and then a learner\nlearns the wrong rule. There is one width per category here, so the rule comes out\nshorter still."
     },
     {
      "kind": "function",
@@ -10800,7 +10980,8 @@
      "signature": "export declare function floatsPerElement(d: DType): number",
      "doc": "원소 하나가 float32 몇 칸을 먹는가.\n\n**여기가 이 파일에서 유일하게 `int64` 와 다른 자리다.** `int64` 는 이름표라 저장이\nfloat32 하나 그대로인데, `complex64` 는 **실제로 두 칸**을 먹는다 — 실수부와\n허수부가 번갈아 놓인다(인터리브).\n\n그래서 `tensor.ts` 의 오랜 불변식 **\"칸 수 = 버퍼 길이\"** 가 깨진다. 새 불변식은\n`버퍼 길이 = size × floatsPerElement(dtype)` 이고, 그것을 아는 코드만 복소수\n버퍼에 닿아야 한다 — 모르는 커널이 닿으면 앞쪽 절반만 실수로 읽고 **조용히**\n틀린 답을 낸다. 그 문을 `Tensor.buffer` 게터가 지킨다.\n\n**`complex128` 은 여기 안 온다.** WGSL 에 `f64` 가 없어서 배정도 복소수를 담을\n수단이 아예 없다 — 코어(numpy)도 같은 이유로 그 이름에서 멈춘다.",
      "members": [],
-     "torch": "floats_per_element"
+     "torch": "floats_per_element",
+     "doc_en": "How many float32 slots one element occupies.\n\n**This is the one place in this file where `int64` behaves differently.** `int64` is\na label, so its storage stays one float32; `complex64` **really takes two** — real\nand imaginary interleaved.\n\nThat breaks `tensor.ts`'s long-standing invariant, **\"slot count = buffer length\".**\nThe new invariant is `buffer length = size × floatsPerElement(dtype)`, and only code\nthat knows it should touch a complex buffer — a kernel that does not will read the\nfirst half as reals and give a **quietly** wrong answer. The `Tensor.buffer` getter\nguards that door.\n\n**`complex128` does not arrive here.** WGSL has no `f64`, so there is no means at all\nof holding a double-precision complex — the core (numpy) stops at that name for the\nsame reason."
     },
     {
      "kind": "function",
@@ -10815,7 +10996,8 @@
      "name": "DTYPES",
      "signature": "export declare const DTYPES: readonly DType[]",
      "doc": "형 이름 전부. **밖에서 들어온 문자열이 형인지 가리는 자리**가 이것을 쓴다 —\n체크포인트 머리에 적힌 이름표는 남이 쓴 글자이므로 믿고 넘기면 안 된다.\n\n`BY_RANK` 를 그대로 내보낸다. 목록을 두 벌 두면 형이 하나 늘 때 한쪽만 는다.",
-     "members": []
+     "members": [],
+     "doc_en": "Every type name. **The place that decides whether a string arriving from outside is a\ntype** uses this — the label written in a checkpoint header is someone else's text,\nand must not be taken on trust.\n\nIt exports `BY_RANK` directly. Two copies of the list means one of them grows when a\ntype is added."
     },
     {
      "kind": "function",
@@ -10831,14 +11013,16 @@
      "signature": "export declare function scalarDType(v: number | boolean): DType",
      "doc": "파이썬 쪽 스칼라에 해당하는 형. JS 에는 정수·실수 구분이 없어 값으로 가른다.",
      "members": [],
-     "torch": "scalar_d_type"
+     "torch": "scalar_d_type",
+     "doc_en": "The type corresponding to a Python-side scalar. JavaScript does not distinguish\ninteger from float, so it is decided by the value."
     },
     {
      "kind": "function",
      "name": "promote",
      "signature": "export declare function promote(a: DType, b: DType, op: \"+\" | \"-\" | \"*\" | \"/\"): DType",
      "doc": "이항 연산의 결과 형.\n\n네 규칙뿐이다.\n1. **복소수가 끼면 결과도 복소수다.** 나눗셈도 마찬가지다 — 아래 2번보다 먼저 본다.\n2. **나눗셈은 언제나 실수다.** `int64 / int64` 도 float32 다 — torch 의 `/` 는\n   참나눗셈이고, 정수 나눗셈을 원하면 `//` 를 따로 부른다.\n3. **뺄셈에 bool 이 끼면 거절한다.** 참에서 거짓을 빼는 것이 무슨 뜻인지 정해진\n   답이 없어서, torch 는 답을 지어내는 대신 멈춘다.\n4. 나머지는 높은 범주로 올린다.\n\n1번을 2번 **앞에** 두는 것이 요점이다. 뒤에 두면 `z / z` 가 float32 로 내려앉고,\n그러면 값이 반쯤 맞는 텐서가 나온다 — 실수부만 남고 허수부가 사라진 것이라\n모양도 원소 수도 그럴듯하다.",
-     "members": []
+     "members": [],
+     "doc_en": "The result type of a binary operation.\n\nThere are only four rules.\n1. **If a complex is involved, the result is complex.** Division included — this is\n   read before rule 2 below.\n2. **Division is always float.** Even `int64 / int64` is float32 — torch's `/` is\n   true division, and integer division is a separate call, `//`.\n3. **Subtraction involving a bool is refused.** There is no settled answer to what\n   subtracting false from true means, so torch stops rather than invent one.\n4. Everything else promotes to the higher category.\n\nThe point is that rule 1 sits **before** rule 2. Behind it, `z / z` collapses to\nfloat32, and out comes a tensor that is half right — the real part survives and the\nimaginary part is gone, so the shape and the element count both look plausible."
     },
     {
      "kind": "function",
@@ -10846,7 +11030,8 @@
      "signature": "export declare function byRank(rank: number): DType",
      "doc": "순위로 형을 되찾는다. 축약처럼 범주를 한 칸 올릴 때 쓴다.",
      "members": [],
-     "torch": "by_rank"
+     "torch": "by_rank",
+     "doc_en": "Recovers a type from its rank. Used when a category has to be lifted a step, as in a reduction."
     },
     {
      "kind": "function",

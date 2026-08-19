@@ -10,6 +10,7 @@
 """
 
 import gzip
+import hashlib
 import json
 import pathlib
 import re
@@ -366,3 +367,50 @@ def test_no_block_declares_a_name_the_runner_injects():
                     wrong.append(f"{page.relative_to(ROOT)} — 블록이 `{hit.group(1)}` 를 다시 선언한다")
     assert not wrong, ("러너가 주입하는 이름을 블록이 덮어쓴다 (그 블록은 문법 오류로 안 돈다):\n  "
                        + "\n  ".join(sorted(set(wrong))))
+
+
+def test_english_api_descriptions_are_not_stale():
+    """영어 설명이 자기가 번역한 원문과 아직 맞는지 본다.
+
+    이 페이지에는 오랫동안 "번역하지 않는다 — 번역은 쓰인 날부터 소스와 어긋난다" 고
+    적혀 있었다. 그 걱정은 옳다. 어긋남을 막을 방법은 없지만, **어긋난 채로 조용히
+    있는 것**은 막을 수 있다.
+
+    그래서 `site/api_en.json` 의 항목마다 번역할 때 본 한국어의 해시를 함께 적는다.
+    소스의 TSDoc 이 바뀌면 해시가 안 맞고, 여기가 이름을 대며 터진다. 고칠 사람이
+    무엇이 바뀌었는지 찾아 헤매지 않도록 열쇠를 그대로 낸다.
+
+    덜 옮긴 것은 실패가 아니다 — 화면이 한국어를 내면서 안 옮겼다고 적으므로 읽는
+    사람이 속지 않는다. 그것까지 막으면 한 번에 614 개를 다 하지 않는 한 아무것도
+    못 들어온다.
+    """
+    api = json.loads((SITE / "assets" / "api.json").read_text(encoding="utf-8"))
+    table_path = ROOT / "site" / "api_en.json"
+    assert table_path.exists(), "site/api_en.json 이 없다 — 영어 설명이 사는 곳이다"
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+
+    def fingerprint(text):
+        return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:12]
+
+    live = {}
+    for mod in api["modules"]:
+        live[f"{mod['name']}/"] = mod.get("doc") or ""
+        for sym in mod["symbols"]:
+            live[f"{mod['name']}/{sym['name']}"] = sym.get("doc") or ""
+            for mem in sym["members"]:
+                live[f"{mod['name']}/{sym['name']}.{mem['name']}"] = mem.get("doc") or ""
+
+    stale, orphan = [], []
+    for key, got in table.items():
+        if key not in live or not live[key].strip():
+            orphan.append(key)
+        elif got.get("src") != fingerprint(live[key]):
+            stale.append(key)
+    assert not stale, ("원문이 바뀐 뒤 영어가 안 따라왔다 — site/api_en.json 을 고치고 "
+                       "src 를 새 해시로 바꿔라:\n  " + "\n  ".join(sorted(stale)[:20]))
+    assert not orphan, ("가리키는 설명이 사라진 영어 항목 — 이름이 바뀌었거나 지워졌다:\n  "
+                        + "\n  ".join(sorted(orphan)[:20]))
+
+    for key, got in table.items():
+        assert got.get("en", "").strip(), f"{key} 의 영어가 비어 있다"
+        assert not re.search(r"[가-힣]", got["en"]), f"{key} 의 영어에 한글이 남아 있다"

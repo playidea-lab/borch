@@ -25,17 +25,45 @@ const S = {
   modules: { en: "Modules", ko: "모듈" },
   inThis: { en: "In this module", ko: "이 모듈 안" },
   koNote: {
-    en: "Descriptions are lifted from the source's own comments, which are written "
-      + "in Korean. They are not translated here — a translation would start drifting "
-      + "from the source the day it was written. Signatures, kinds and the torch name "
-      + "mapping are language-neutral.",
+    // 오래 "번역하지 않는다 — 번역은 쓰인 날부터 소스와 어긋난다" 고 적혀 있던 자리다.
+    // 그 걱정이 맞아서, 번역마다 그때 본 원문의 해시를 같이 적는다. 원문이 바뀌면
+    // 생성기가 이름을 대며 낡았다고 말한다 — 어긋남을 막지는 못해도 조용히 두지는 않는다.
+    en: "Descriptions come from the source's own comments, which are written in "
+      + "Korean. The English here is a translation held beside them, each one stamped "
+      + "with the source it was made from, so the generator says which ones have gone "
+      + "stale instead of letting them drift quietly.",
     ko: "설명문은 소스의 주석을 그대로 옮긴 것이다. 고칠 곳은 이 페이지가 아니라 소스다." },
+  notYet: {
+    en: "Not translated yet — shown in the source's Korean.",
+    ko: "" },
   generated: {
     en: "Generated from borch-ts/dist/src/*.d.ts by site/build_api.py — {0} entries.",
     ko: "site/build_api.py 가 borch-ts/dist/src/*.d.ts 에서 뽑았다 — 항목 {0}개." },
 };
 const say = (key, ...args) => (S[key][LANG] ?? S[key].en)
   .replace(/\{(\d+)\}/g, (m, i) => String(args[Number(i)] ?? m));
+
+/** 이 화면의 언어로 된 설명. **없으면 감추지 않고 한국어를 낸다.**
+ *
+ *  빈 자리를 남기면 그 이름은 설명이 없는 것처럼 읽힌다 — 있는데 아직 안 옮긴 것과
+ *  애초에 없는 것은 다르고, 읽는 사람에게 그 둘은 전혀 다른 정보다. 그래서 원문을
+ *  내고 옆에 표를 단다. */
+const prose = (node) => {
+  const ko = node.doc ?? "";
+  if (LANG !== "en" || !ko) return { text: ko, untranslated: false };
+  return node.doc_en
+    ? { text: node.doc_en, untranslated: false }
+    : { text: ko, untranslated: true };
+};
+
+/** 설명 한 덩이를 그린다. 안 옮긴 것은 그렇다고 적는다. */
+const proseHtml = (node, style = "") => {
+  const { text, untranslated } = prose(node);
+  if (!text) return "";
+  return `<div class="prose"${style ? ` style="${style}"` : ""}>${md(text)}`
+    + (untranslated ? `<p class="small muted">${esc(say("notYet"))}</p>` : "")
+    + "</div>";
+};
 
 const sidebar = document.getElementById("sidebar");
 const main = document.getElementById("doc-main");
@@ -59,10 +87,10 @@ async function boot() {
   for (const mod of api.modules) {
     for (const sym of mod.symbols) {
       index.push({ mod: mod.name, name: sym.name, id: sym.name, kind: sym.kind,
-                   doc: sym.doc ?? "" });
+                   doc: prose(sym).text });
       for (const mem of sym.members) {
         index.push({ mod: mod.name, name: mem.name, id: `${sym.name}.${mem.name}`,
-                     kind: "member", of: sym.name, doc: mem.doc ?? "" });
+                     kind: "member", of: sym.name, doc: prose(mem).text });
       }
     }
   }
@@ -125,7 +153,7 @@ function drawModule(mod) {
     ${mod.doc
         // 소스가 자기 설명을 갖고 있으면 그쪽이 원본이다. 우리 한 줄은 그것이
         // 없을 때만 쓴다 — 둘 다 보이면 같은 말을 두 번 하는 화면이 된다.
-        ? `<div class="prose">${md(mod.doc)}</div>`
+        ? proseHtml(mod)
         : `<p class="lead">${inline(esc(pick(mod.blurb)))}</p>`}
     <p class="small muted" style="margin-top:1rem">${say("generated", api.total)}
       ${LANG === "en" ? `<br>${esc(say("koNote"))}` : ""}</p>`;
@@ -160,7 +188,7 @@ function card(sym) {
       ${sym.torch ? `<span class="torch-hint">torch: <b>${esc(sym.torch)}</b></span>` : ""}
     </h3>
     ${sigs.map((s) => `<pre class="sig"><code>${highlight(s, "js")}</code></pre>`).join("")}
-    ${sym.doc ? `<div class="prose">${md(sym.doc)}</div>` : ""}
+    ${proseHtml(sym)}
     ${tags(sym)}`;
 
   if (sym.members.length) {
@@ -192,7 +220,7 @@ function card(sym) {
           ${mem.torch ? `<span class="torch-hint">torch: <b>${esc(mem.torch)}</b></span>` : ""}
         </h4>
         <div class="sigline">${highlight(mem.signature, "js")}</div>
-        ${mem.doc ? `<div class="prose" style="margin-top:.4rem">${md(mem.doc)}</div>` : ""}
+        ${proseHtml(mem, "margin-top:.4rem")}
         ${tags(mem)}`;
       det.append(el);
     }
