@@ -946,10 +946,27 @@ export class Tensor implements Node<Tensor> {
    */
   static arange(start: number, end?: number, step = 1): Tensor {
     const [from, to] = end === undefined ? [0, start] : [start, end];
+    Tensor.needsStep(step, "arange");
     const n = Math.max(0, Math.ceil((to - from) / step));
     const data = new Float32Array(n);
     for (let i = 0; i < n; i++) data[i] = from + step * i;
     return Tensor.from(data, [n]);
+  }
+
+  /**
+   * 걸음이 0 이면 **여기서 멈춘다.** torch 와 같은 자리다.
+   *
+   * 안 막으면 `(to - from) / 0` 이 Infinity 가 되어 배열을 잡는 자리에서 터지는데,
+   * 그 문구는 메모리가 모자란 것과 구별이 안 된다 — 무엇을 잘못 넣었는지 안 보인다.
+   * 걸음이 0 이면 값이 영원히 안 움직이므로 답이 없는 것이지 큰 것이 아니다.
+   */
+  private static needsStep(step: number, who: string): void {
+    if (step === 0) {
+      throw new RuntimeError(
+        `${who}: 걸음(step)이 0 이면 값이 안 움직여 끝이 없습니다. ` +
+        "(torch: step must be nonzero)",
+      );
+    }
   }
 
   /**
@@ -959,6 +976,7 @@ export class Tensor implements Node<Tensor> {
    * 마지막 값이 사라지고, 그 한 칸은 합계나 평균으로만 재면 안 보인다.
    */
   static range(start: number, end: number, step = 1): Tensor {
+    Tensor.needsStep(step, "range");
     const n = Math.max(0, Math.floor((end - start) / step) + 1);
     const data = new Float32Array(n);
     for (let i = 0; i < n; i++) data[i] = start + step * i;

@@ -1894,6 +1894,26 @@ def make_cases(inp=None):
     add("range(0, 1, 0.25)", lambda L: L.range(0, 1, 0.25))
     add("range 와 arange 의 개수",
         lambda L: f"{L.range(0, 4).numel()} {L.arange(0, 4).numel()}")
+
+    # **걸음이 0 이면 셋 다 멈춰야 한다.** torch 도 멈춘다 — 값이 안 움직이므로 끝이
+    # 없어서다. 안 막으면 `(끝-시작)/0` 이 무한대가 되어 자리를 잡는 데서 터지는데,
+    # 그 문구는 메모리가 모자란 것과 구별이 안 간다.
+    #
+    # **문구의 조각을 묻는다.** 값이 아니라 글자라서 서로 대조해도 안 걸리는 자리이고,
+    # 이 저장소가 그 갈래로 여러 번 물렸다.
+    def refuses_zero_step(name, call):
+        def run(L, f=call):
+            try:
+                f(L)
+            except Exception as exc:                                # noqa: BLE001
+                return ("nonzero" if "nonzero" in str(exc)
+                        else f"다른 문구 <{exc}>")
+            return "안 던졌다"
+
+        add(name, run)
+
+    refuses_zero_step("arange(step=0)=거절", lambda L: L.arange(0, 5, 0))
+    refuses_zero_step("range(step=0)=거절", lambda L: L.range(0, 5, 0))
     return cases
 
 
@@ -8575,9 +8595,15 @@ def inplace_cases(inp=None):
             x = L.tensor(np.zeros(3000, dtype=a.dtype))
             x.random_()
             got = np.abs(np.asarray(x.tolist(), dtype=np.float64)).max()
-            # 표본 3000 이면 상한 근처가 나온다. **자리(2의 거듭제곱)만** 묻는다 —
-            # 정확한 최댓값은 뽑기마다 다르다.
-            return f"2^{int(np.floor(np.log2(got)))}"
+            # **자리를 그대로 물으면 안 된다.** `floor(log2(최댓값))` 은 상한 바로
+            # 아래에 앉으므로 23 과 24 를 오간다 — 3000 번 뽑아 상한에 얼마나
+            # 가까이 갔느냐에 달렸고, 그것은 뽑기운이다. 실제로 골든이 한 번은 24 를
+            # 얼렸고 같은 코드가 23 을 내서 결속만 빨개졌다.
+            #
+            # 묻고 싶은 것은 자릿수 하나가 아니라 **어느 형의 한계인가**다. 상한과
+            # 그 절반 사이에 들면 그 답이 나온다 — 2^53(float64 자리)으로 두었던
+            # 옛 결함은 여기서 그대로 걸리고, 경계에서는 안 흔들린다.
+            return f"{c / 2 <= got <= c}"
         cases.append((INPLACE_PREFIX + f"분포::random_({kind}) 의 상한", ceiling))
 
     for label, call, fragment in (

@@ -4169,6 +4169,24 @@ function addRecent(out: Map<string, Case>): void {
   out.set("make::range 와 arange 의 개수",
     () => `${Tensor.range(0, 4).size} ${Tensor.arange(0, 4).size}`);
 
+  // **걸음이 0 이면 멈춘다.** 안 막으면 `(끝-시작)/0` 이 Infinity 가 되어 배열을
+  // 잡는 자리에서 터지고, 그 문구는 메모리가 모자란 것과 구별이 안 간다.
+  //
+  // 문구의 **조각**을 묻는다 — 값이 아니라 글자라 서로 대조해도 안 걸리는 자리다.
+  const refusesZeroStep = (make: () => Tensor): string => {
+    try {
+      make();
+    } catch (err) {
+      const said = err instanceof Error ? err.message : String(err);
+      return said.includes("nonzero") ? "nonzero" : `다른 문구 <${said}>`;
+    }
+    return "안 던졌다";
+  };
+  out.set("make::arange(step=0)=거절",
+    () => refusesZeroStep(() => Tensor.arange(0, 5, 0)));
+  out.set("make::range(step=0)=거절",
+    () => refusesZeroStep(() => Tensor.range(0, 5, 0)));
+
   // ── 최상위 선형대수 (`toplin::`) ────────────────────────────────────
   //
   // **인자 순서가 `linalg` 쪽과 뒤집혀 있다.** 그 자리를 TS 에서도 물어 둔다.

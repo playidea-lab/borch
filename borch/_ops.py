@@ -119,7 +119,22 @@ def full_like(t, value, dtype=None, requires_grad=False):
     return _made(_np.full_like(t.data, value), dtype, requires_grad)
 
 
+def _needs_step(step, who):
+    """걸음이 0 이면 **여기서 멈춘다.** 셋이 같은 문구로 말해야 하는 자리다.
+
+    안 막으면 numpy 가 `ZeroDivisionError: division by zero` 를 내는데, 그것은
+    torch 의 `step must be nonzero` 와 다른 이야기로 읽힌다 — 나눗셈을 잘못한 것 같지
+    실은 걸음이 0 이면 값이 영원히 안 움직여 답이 없는 것이다.
+    """
+    if step == 0:
+        raise RuntimeError(
+            f"{who}: 걸음(step)이 0 이면 값이 안 움직여 끝이 없습니다. "
+            "(torch: step must be nonzero)")
+
+
 def arange(*args, dtype=None, requires_grad=False):
+    if len(args) == 3:
+        _needs_step(args[2], "arange")
     # **여기만 기본 형을 안 정한다** — numpy 가 인자에서 고르는 것이 torch 와 같다
     # (정수만 넣으면 int64, 하나라도 실수면 실수). `_made` 에 맡기면 그 규칙이 깨진다.
     return _made(_np.arange(*args, dtype=(dtype.np if dtype else None)),
@@ -7871,6 +7886,7 @@ def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
     이 파일에서 아홉 번째 겪는 "모듈 이름이 내장을 가린다" 다.
     """
     _no_out(kw)
+    _needs_step(step, "range")
     if end is None:
         start, end = 0, start
     return _made(_np.arange(start, end + step / 2.0, step, dtype=_DEFAULT_DTYPE),
