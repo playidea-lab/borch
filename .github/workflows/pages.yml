@@ -82,6 +82,16 @@ jobs:
           HTML
           du -sh _site
 
+      # **공유 메타의 주소를 여기서 채운다.** 소셜 크롤러는 상대 경로를 안 따라가고,
+      # 배포 주소를 HTML 에 박아 두면 도메인이 바뀔 때 조용히 낡는다. 자리표시자를
+      # 두고 배포하는 쪽이 아는 값을 넣는다.
+      - name: 공유 메타의 주소 채우기
+        run: |
+          BASE="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          echo "og base: $BASE"
+          grep -rl "%OG_BASE%" _site --include="*.html" | xargs sed -i "s|%OG_BASE%|$BASE|g"
+          test -z "$(grep -rl '%OG_BASE%' _site --include='*.html')" || (echo "자리표시자가 남았다" && exit 1)
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

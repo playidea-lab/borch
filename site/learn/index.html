@@ -6,6 +6,17 @@
 <title>Learn borch</title>
 <meta name="description" content="Six lessons from tensors to convolution. Every code block runs in the page, on your own GPU.">
 <link rel="alternate" hreflang="ko" href="../ko/learn/">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Learn borch">
+<meta property="og:description" content="Six lessons from tensors to convolution. Every code block runs in the page, on your own GPU.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/learn/">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
 </head>
@@ -97,6 +108,12 @@
       Examples that are never run rot, and the first person to find out is a reader.
       Everything here executes against the same library the test suite runs against —
       when a name changes, these pages break where you can see it.
+    </p>
+    <p>
+      <strong>If you would rather build something than read about it,</strong>
+      <a href="../tutorials/">Tutorials</a> takes one problem to the end instead —
+      the same material arrives, in the order a project needs it rather than the order
+      the ideas depend on each other.
     </p>
     <p>
       The wider claim this project makes is narrow and measured: introductory tutorial

@@ -261,3 +261,32 @@ def test_site_links_to_this_repository():
     assert not wrong, (
         "사이트가 다른 저장소를 가리킨다:\n  " + "\n  ".join(wrong[:12]) +
         (f"\n  … 그리고 {len(wrong) - 12} 곳 더" if len(wrong) > 12 else ""))
+
+
+def test_share_metadata_is_complete_and_gets_an_address():
+    """모든 페이지에 공유 메타가 있고, 자리표시자를 채우는 쪽이 존재해야 한다.
+
+    사이트는 "URL 하나가 곧 배포다" 라고 말한다. 그 말이 사실이려면 링크를 붙였을 때
+    무엇이 뜨는지가 그 주장의 일부인데, 여태 아무것도 안 떴다.
+
+    주소는 배포하는 쪽만 안다. 그래서 HTML 에는 `%OG_BASE%` 를 두고 워크플로가
+    채운다 — **두 반쪽이 따로 놀 수 있는 구조**라 여기서 같이 있는지 본다. 자리표시자만
+    있고 채우는 단계가 없으면 크롤러가 `%OG_BASE%/…` 를 그대로 받아 가고, 그 실패는
+    배포한 뒤 남의 타임라인에서만 보인다.
+    """
+    missing = [str(p.relative_to(ROOT)) for p in _pages()
+               if "og:image" not in p.read_text(encoding="utf-8")]
+    assert not missing, "공유 메타가 없는 페이지:\n  " + "\n  ".join(missing)
+
+    image = SITE / "assets" / "og.png"
+    assert image.exists(), "site/assets/og.png 이 없다 — uv run --with pillow python site/make_og.py"
+    size = image.stat().st_size / 1024
+    assert size < 300, f"og.png 이 {size:.0f}KB 다 — 소셜 쪽에서 안 받아 갈 수 있다"
+
+    workflow = ROOT / ".github" / "workflows" / "pages.yml"
+    if not workflow.exists():
+        pytest.skip("배포 워크플로가 없다")
+    text = workflow.read_text(encoding="utf-8")
+    assert "%OG_BASE%" in text, (
+        "페이지가 %OG_BASE% 를 쓰는데 배포 워크플로가 그것을 안 채운다 — "
+        "그대로 나가면 크롤러가 자리표시자를 주소로 읽는다.")
