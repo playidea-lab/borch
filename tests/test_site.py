@@ -450,3 +450,50 @@ def test_vendored_pyodide_matches_its_lock():
     extra = sorted(p.name for p in vendor.iterdir()
                    if f"pyodide/{p.name}" not in want)
     assert not extra, f"잠금에 없는 파일이 vendor/pyodide 에 있다: {extra}"
+
+
+def test_tutorial_sprites_agree_with_their_labels():
+    """스프라이트 그림과 라벨 파일이 서로 맞는가.
+
+    튜토리얼 4·5 는 이 두 짝을 믿고 픽셀을 읽는다 — json 의 `cols`·`tile` 로 자리를
+    계산해서 그림에서 잘라 온다. 둘이 어긋나면 **예외가 아니라 엉뚱한 그림**이 나오고,
+    화면에는 "정확도가 안 오른다" 로만 보인다.
+
+    데이터를 저장소에 넣으면서 생긴 자리다. 예전에는 배포 때마다 다시 만들었으므로
+    그림과 라벨이 늘 같은 실행에서 나왔는데, 이제는 한쪽만 갱신해 커밋하는 것이
+    가능하다.
+
+    JPEG 머리를 직접 읽는다 — Pillow 를 부르면 이 검사 하나 때문에 CI 의 pytest 줄에
+    의존이 하나 는다.
+    """
+    data = SITE / "assets" / "data"
+    wrong = []
+    for name in ("train", "test"):
+        image, meta = data / f"cifar-{name}.jpg", data / f"cifar-{name}.json"
+        if not image.exists() or not meta.exists():
+            wrong.append(f"cifar-{name}: 그림이나 라벨이 없다")
+            continue
+        spec = json.loads(meta.read_text(encoding="utf-8"))
+        count, cols, tile = spec["count"], spec["cols"], spec["tile"]
+        if len(spec["labels"]) != count:
+            wrong.append(f"cifar-{name}: 라벨 {len(spec['labels'])}개인데 count 는 {count}")
+        got = _jpeg_size(image.read_bytes())
+        want = (((count + cols - 1) // cols) * tile, cols * tile)
+        if got != want:
+            wrong.append(f"cifar-{name}: 그림이 {got} 인데 라벨은 {want} 를 말한다")
+    assert not wrong, "튜토리얼 데이터가 서로 어긋난다:\n  " + "\n  ".join(wrong)
+
+
+def _jpeg_size(blob):
+    """JPEG 의 (높이, 너비). SOF 표시를 찾아 읽는다."""
+    i = 2
+    while i < len(blob) - 9:
+        if blob[i] != 0xFF:
+            i += 1
+            continue
+        marker = blob[i + 1]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            return (int.from_bytes(blob[i + 5:i + 7], "big"),
+                    int.from_bytes(blob[i + 7:i + 9], "big"))
+        i += 2 + int.from_bytes(blob[i + 2:i + 4], "big")
+    raise AssertionError("JPEG 에서 크기 표시를 못 찾았다")

@@ -52,10 +52,9 @@ jobs:
 
       # 튜토리얼 4·5 가 쓰는 부분집합. 원본은 `.gitignore` 라 여기서 받아 만든다 —
       # 없이 올리면 그 두 장이 "데이터가 없다" 만 띄우는 페이지가 된다.
-      - name: 튜토리얼 데이터
-        run: |
-          python3 -m pip install --quiet numpy pillow
-          python3 site/fetch_data.py --download
+      # 튜토리얼 데이터(`site/assets/data/`)는 저장소에 있다. 여기서 다시 만들던 때가
+      # 있었고, 그 한 단계가 배포 34분 20초 중 33분 56초를 썼다 — 원본 170MB 를 받아
+      # 6만 장을 처리해서 1.1MB 를 내는 일을 배포마다 되풀이한 것이다.
 
       # Pyodide 는 저장소 안에 있다(`vendor/pyodide/`). 없으면 파이썬 모드가 안 돈다 —
       # 조용히 반쪽만 올리지 않도록 여기서 멈춘다.

@@ -36,6 +36,17 @@ borch 가 묶어 파는 것이 아니다.
 |---|---|---|
 | Pyodide 0.27.2 (MPL-2.0) | `https://cdn.jsdelivr.net/pyodide/v0.27.2/full/` | `https://github.com/pyodide/pyodide` 태그 `0.27.2` |
 
+## 튜토리얼 데이터
+
+| | 출처 | 저장소에 있는 것 |
+|---|---|---|
+| **CIFAR-10** | `https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz` (Krizhevsky, 2009) | `site/assets/data/` — 앞에서부터 2,500 장을 JPEG 스프라이트로 (1.1MB) |
+
+원본이 아니라 **부분집합을 JPEG 으로 다시 인코딩한 것**이라 픽셀이 원본과 같지 않다.
+만드는 코드는 `site/fetch_data.py` 에 있고 무작위가 없어 재현된다. 튜토리얼 4·5 가
+이것을 읽으며, 여기서 나온 정확도를 논문의 수와 비교하면 안 된다는 것은 그 두 장에
+적어 두었다.
+
 MPL-2.0 은 **파일 단위**라 우리 코드로 번지지 않는다. 저 파일들을 고쳐서 실으면 고친
 것을 같은 라이선스로 내놓아야 하는데, 고치지 않는다 — `assets.lock` 이 그것을 검사로
 붙잡고 있다(`tests/test_site.py::test_vendored_pyodide_matches_its_lock`).
