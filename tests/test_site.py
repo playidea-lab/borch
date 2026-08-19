@@ -46,10 +46,16 @@ def test_api_reference_is_not_stale():
         API.write_text(before, encoding="utf-8")
         old, new = json.loads(before), json.loads(after)
         pytest.fail(
-            "API 레퍼런스가 소스보다 낡았다 — 항목 "
+            "API 레퍼런스가 선언 파일과 다르다 — 항목 "
             f"{old['total']} → {new['total']}.\n"
             "  다시 뽑아라: python3 site/build_api.py\n"
-            "  (설명문을 고칠 곳은 이 파일이 아니라 소스의 주석이다.)")
+            "  (설명문을 고칠 곳은 이 파일이 아니라 소스의 주석이다.)\n"
+            "\n"
+            "  **borch-ts/src 를 고치는 중이라면 이것이 정상이다.** 이 검사는 지금\n"
+            "  디스크에 있는 `dist` 와 대조하므로, 커밋 안 한 소스로 빌드해 두었으면\n"
+            "  아직 없는 이름까지 세어 여기서 갈린다. 그 변경을 커밋할 때 목록도\n"
+            "  같이 뽑으면 맞는다 — 사이트가 없는 API 를 보여주지 않게 하려는 것이\n"
+            "  이 검사의 목적이고, 그 시점이 바로 지금이다.")
 
 
 def test_site_examples_name_only_real_modules():
