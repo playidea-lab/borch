@@ -44,6 +44,12 @@ INDEX = ROOT / "site" / "assets" / "api-index.json"
 # 공개 표면. `index.ts` 가 내보내는 것들이고, 순서가 곧 사이드바 순서다.
 # 안쪽 사정(`kernels`·`repr`·`functional`)은 여기 없다 — 그것은 쓰는 사람의 것이 아니다.
 MODULES = [
+    # **패키지 뿌리부터.** `index.ts` 는 대부분 재수출이지만 **거기서만 선언되는 것**이
+    # 있다 — `isTensor` 가 그렇고, 결속이 그것을 쓴다. 이 파일을 안 훑던 동안 그 이름은
+    # 레퍼런스에도 이름 색인에도 없었다. 다른 세션이 자기 검사에서 그 구멍을 먼저 봤다.
+    ("index", "borch",
+     {"ko": "`import … from \"borch\"` 가 바로 주는 것. 나머지는 아래 이름 공간에 있다.",
+      "en": "What `import … from \"borch\"` hands you directly. The rest is in the namespaces below."}),
     ("tensor", "Tensor",
      {"ko": "텐서와 그 위의 연산. `scope`·`keepAlive` 도 여기 있다.",
       "en": "Tensors and the operations on them. `scope` and `keepAlive` live here too."}),
