@@ -414,3 +414,39 @@ def test_english_api_descriptions_are_not_stale():
     for key, got in table.items():
         assert got.get("en", "").strip(), f"{key} 의 영어가 비어 있다"
         assert not re.search(r"[가-힣]", got["en"]), f"{key} 의 영어에 한글이 남아 있다"
+
+
+def test_vendored_pyodide_matches_its_lock():
+    """저장소에 든 Pyodide 여섯 파일이 커밋된 잠금과 같은 바이트인가.
+
+    **이 검사는 파일을 커밋하기 전에는 있을 수 없었다.** 잠금은 오래 있었지만 신선한
+    러너에는 파일이 없었고, 그때 `fetch` 가 받아 온 것으로 잠금을 새로 썼다 — 대조할
+    상대가 자기 자신이었다. 둘 다 저장소에 있는 지금은 네트워크 없이 여기서 돈다.
+
+    무엇을 잡는가: 판올림하면서 잠금만 고치고 파일을 안 바꾼 것, 반대로 파일만 바꾼 것,
+    받다 만 파일. 셋 다 브라우저에서는 "파이썬 모드가 안 뜬다" 하나로만 보인다.
+    """
+    vendor = ROOT / "vendor" / "pyodide"
+    lock = ROOT / "tests" / "browser" / "assets.lock"
+    assert lock.exists(), "tests/browser/assets.lock 이 없다"
+
+    want = {}
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            digest, path = line.split("  ", 1)
+            want[path] = digest
+    assert want, "잠금 파일이 비어 있다"
+
+    wrong = []
+    for path, digest in sorted(want.items()):
+        f = ROOT / "vendor" / path
+        if not f.exists():
+            wrong.append(f"{path}: 없다")
+        elif hashlib.sha256(f.read_bytes()).hexdigest() != digest:
+            wrong.append(f"{path}: 바이트가 잠금과 다르다")
+    assert not wrong, ("저장소의 Pyodide 가 잠금과 어긋난다:\n  " + "\n  ".join(wrong))
+
+    # 잠금에 없는 것이 섞여 들어오면 배포에 실리는데 아무도 안 잰 바이트가 된다.
+    extra = sorted(p.name for p in vendor.iterdir()
+                   if f"pyodide/{p.name}" not in want)
+    assert not extra, f"잠금에 없는 파일이 vendor/pyodide 에 있다: {extra}"

@@ -57,10 +57,14 @@ jobs:
           python3 -m pip install --quiet numpy pillow
           python3 site/fetch_data.py --download
 
-      # Pyodide 는 저장소 안에 있다(`vendor/`). 없으면 파이썬 모드가 안 돈다 —
+      # Pyodide 는 저장소 안에 있다(`vendor/pyodide/`). 없으면 파이썬 모드가 안 돈다 —
       # 조용히 반쪽만 올리지 않도록 여기서 멈춘다.
+      #
+      # 있는지가 아니라 **잠금과 같은 바이트인지**를 본다. 이 워크플로가 한 번도 안 돈 동안
+      # 여기 있던 것은 `test -f` 였고, 그 위의 주석은 "저장소 안에 있다" 였는데 그때
+      # `vendor/` 는 `.gitignore` 에 있었다 — 문지기가 틀린 전제를 겨누고 있었다.
       - name: 벤더 확인
-        run: test -f vendor/pyodide/pyodide.js || (echo "vendor/pyodide 가 없다" && exit 1)
+        run: python3 tests/browser/vendor.py check
 
       - name: 올릴 것 모으기
         run: |

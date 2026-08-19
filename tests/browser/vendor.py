@@ -4,18 +4,24 @@ CDN 은 **테스트 시점에 살아 있어야 하는 의존**이다. 실제로 
 (`ERR_QUIC_PROTOCOL_ERROR`). 그리고 `@4.22.0` 이 언제까지 같은 바이트를 준다는 것은
 정책이지 계약이 아니다 — 그 버전이 사라지거나 바뀌면 오늘의 골든을 재현할 수 없다.
 
-받은 것은 `vendor/` 에 두고 **저장소에는 넣지 않는다**(Pyodide 만 12MB 다. 이 프로젝트가
-파는 것은 17KB 짜리 휠이고, 그 옆에 12MB 바이너리를 이력에 쌓을 이유가 없다).
-대신 **해시를 저장소에 기록**한다. 그러면 오프라인·CDN 장애·바이트 변경이 전부 잡히고
-저장소는 안 커진다. 골든과 같은 모양이다 — 한 번 굳히고, 그 뒤로는 대조한다.
+**받은 것은 이제 저장소에 있다**(`vendor/pyodide/`). 오래 "해시만 둔다" 였고 근거는
+크기였는데, 재 보니 여섯 파일이 팩에서 8.4MB 다 — 이 저장소는 `tests/golden.json`
+하나에 이력 23.9MB 를 쓰고 있다. 그 옆에서 한 번 넣고 안 바뀌는 8.4MB 는 큰 값이
+아니었다. 판올림마다 같은 만큼 영구히 붙는 것이 이 결정이 치르는 값이고, 0.27.2 에서
+올릴 계획이 없어서 치르기로 했다.
 
-    uv run python tests/browser/vendor.py fetch   # 받아서 잠금 파일을 쓴다
+바뀐 것은 **어디에 두는가**뿐이고 잠금 파일은 그대로 쓴다. 오히려 이제야 제 일을 한다 —
+파일과 잠금이 **둘 다 커밋돼 있으므로** 대조가 네트워크 없이 CI 에서 돈다. 예전에는
+신선한 러너에 파일이 없어서 `fetch` 가 받아 온 것으로 잠금을 새로 썼고, 그 뒤 대조는
+자기 자신과 비교하는 것이었다.
+
     uv run python tests/browser/vendor.py check   # 있는 것과 잠금을 대조한다
+    uv run python tests/browser/vendor.py fetch   # 판올림할 때만. 잠금이 다르면 멈춘다
+    uv run python tests/browser/vendor.py fetch --bump   # 잠금을 새로 쓴다
 
 여기서 받는 것들의 라이선스는 [THIRD-PARTY.md](../../THIRD-PARTY.md) 에 있다.
-**Pyodide 는 MPL-2.0 이다** — 우리 코드로 번지지는 않지만, 페이지에 실어 배포하면
-소스를 구할 길을 알려야 한다. 이 저장소는 `vendor/` 를 커밋하지 않으므로 재배포하지
-않지만, 브라우저에 띄우는 쪽은 재배포하게 된다.
+**Pyodide 는 MPL-2.0 이다** — 우리 코드로 번지지는 않지만, 커밋한 이상 **이 저장소도
+재배포자다.** 그래서 THIRD-PARTY.md 에 소스를 구할 길을 적어 둔다.
 """
 
 import hashlib
@@ -70,7 +76,17 @@ def _package_targets(lock_bytes):
     return found
 
 
-def fetch():
+def fetch(bump=False):
+    """받아서 `vendor/` 에 둔다. **잠금이 이미 있으면 대조하고, 다르면 멈춘다.**
+
+    오래 여기서 잠금을 **덮어썼다.** 그러면 받아 온 것이 곧 정답이 되어, 잠금이 지키는
+    것은 "이미 파일을 가진 기계" 뿐이고 하나도 없는 기계에서는 아무것도 안 지켰다.
+    신선한 CI 러너가 정확히 후자라, 커밋된 해시 여섯 개가 거기서는 조용히 새 잠금이
+    됐다 — 검사가 자기 입력을 자기가 정하는 그 모양이다.
+
+    판올림은 `--bump` 로 명시한다. 잠금이 바뀌는 것이 커밋에 남아야 하는 일이라,
+    받는 김에 슬쩍 바뀌면 안 된다.
+    """
     VENDOR.mkdir(exist_ok=True)
     lock, total = {}, 0
     targets = _targets()
@@ -93,9 +109,20 @@ def fetch():
         total += len(data)
         print(f"  {rel}  {len(data) / 1e6:.2f} MB")
 
-    LOCK.write_text("".join(f"{h}  {p}\n" for p, h in sorted(lock.items())), encoding="utf-8")
+    text = "".join(f"{h}  {p}\n" for p, h in sorted(lock.items()))
+    old = _read_lock()
+    if old is not None and not bump:
+        moved = sorted(p for p, h in lock.items() if old.get(p) != h)
+        gone = sorted(p for p in old if p not in lock)
+        if moved or gone:
+            raise SystemExit(
+                "받아온 것이 잠금과 다릅니다 — 덮어쓰지 않았습니다.\n  "
+                + "\n  ".join([f"{p}: 바이트가 다르다" for p in moved]
+                               + [f"{p}: 이제 안 받는다" for p in gone])
+                + "\n\n판올림이라면 `fetch --bump` 로 잠금을 새로 쓰십시오.")
+    LOCK.write_text(text, encoding="utf-8")
     print(f"\n받았다 — {len(lock)}개 · {total / 1e6:.1f} MB → {VENDOR}")
-    print(f"잠금 파일: {LOCK}")
+    print(f"잠금 파일: {LOCK}" + (" (새로 씀)" if bump or old is None else " (그대로)"))
     return 0
 
 
@@ -142,13 +169,13 @@ def ensure():
 def main(argv):
     what = argv[1] if len(argv) > 1 else "check"
     if what == "fetch":
-        return fetch()
+        return fetch(bump="--bump" in argv)
     if what == "check":
         bad = check()
         for why in bad:
             print(f"  ✗ {why}")
         return 1 if bad else 0
-    print("쓰는 법: vendor.py [fetch|check]")
+    print("쓰는 법: vendor.py [check | fetch [--bump]]")
     return 2
 
 

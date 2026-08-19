@@ -28,6 +28,18 @@ borch 가 묶어 파는 것이 아니다.
 | **CPython 표준 라이브러리** (파이썬 쪽만) | PSF License | `python_stdlib.zip` 에 동봉 |
 | **numpy** (파이썬 쪽만) | BSD-3-Clause | 위와 같음 |
 
+**이 저장소가 그 바이너리를 담고 있다** — `vendor/pyodide/` 의 여섯 파일이고,
+`tests/browser/assets.lock` 에 sha256 이 있다. 담고 있다는 것은 재배포한다는 뜻이라
+소스를 구할 길을 여기 적는다:
+
+| | 받은 곳 | 소스 |
+|---|---|---|
+| Pyodide 0.27.2 (MPL-2.0) | `https://cdn.jsdelivr.net/pyodide/v0.27.2/full/` | `https://github.com/pyodide/pyodide` 태그 `0.27.2` |
+
+MPL-2.0 은 **파일 단위**라 우리 코드로 번지지 않는다. 저 파일들을 고쳐서 실으면 고친
+것을 같은 라이선스로 내놓아야 하는데, 고치지 않는다 — `assets.lock` 이 그것을 검사로
+붙잡고 있다(`tests/test_site.py::test_vendored_pyodide_matches_its_lock`).
+
 **`borch.ts` 는 이 표가 비어 있다.** TypeScript 와 WGSL 만이고 실행 시 의존이 없다.
 브라우저의 WebGPU 를 직접 부른다.
 
