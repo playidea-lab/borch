@@ -2544,6 +2544,16 @@
        }
       },
       {
+       "name": "ldlFactorEx",
+       "signature": "ldlFactorEx(): Promise<{ LD: Tensor; pivots: Tensor; info: Tensor; }>",
+       "doc": "`ldlFactor` 에 **`info` 를 하나 더.** `luFactorEx` 와 같은 자리다.\n\n**여기서는 늘 0 이다** — 나쁜 자리를 만나면 `ldlFactor` 가 그 자리에서 거절하므로\n번호로 알릴 것이 안 남는다. 그래도 이름을 둔다: torch 가 주는 이름이고, 없으면\n부르는 쪽이 세 자리 중 하나를 스스로 지어내야 한다 — 결속이 실제로 그러고\n있었다(`_Fields` 를 손으로 세워 `info` 에 0 을 끼웠다). 그러면 골든은 결속을\n지나니 초록이고, 없는 것은 TypeScript 로 쓰는 쪽뿐이다.",
+       "torch": "ldl_factor_ex",
+       "section": {
+        "ko": "선형대수",
+        "en": "Linear algebra"
+       }
+      },
+      {
        "name": "ldlSolve",
        "signature": "ldlSolve(b: Tensor): Promise<Tensor>",
        "doc": "`ldlFactor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다.",
@@ -3661,9 +3671,136 @@
        }
       },
       {
+       "name": "float",
+       "signature": "float(): Tensor",
+       "doc": "torch 의 **이름 있는 형 바꾸기**. `to(형)` 과 같은 일을 다른 이름으로 한다.\n\n이 이름들이 없어서 `x.float()` 이 borch.ts 에서만 안 됐다. 파이썬 두 판은 갖고\n있었고 골든의 그 줄은 \"파이썬 쪽 이야기라 안 옮긴다\" 로 남아 있었는데, 실제로는\n저쪽이 못 하는 것이 아니라 **아무도 안 물어본** 이름이었다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "long",
+       "signature": "long(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "bool",
+       "signature": "bool(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "cfloat",
+       "signature": "cfloat(): Tensor",
+       "doc": "실수를 복소수로. **`to(\"complex64\")` 로는 안 된다** — 복소수는 칸당 f32 두 개라\n이름표 갈이가 막혀 있고, 그 막음이 옳다. 허수부 0 을 붙여 만든다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "typeAs",
+       "signature": "typeAs(other: Tensor): Tensor",
+       "doc": "`other` 와 같은 형으로. torch 의 `type_as`.",
+       "torch": "type_as",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "half",
+       "signature": "half(): Tensor",
+       "doc": "**없는 형들.** 이름을 두는 까닭은 문구다 — 이름이 아예 없으면 `'half' 이 없다`\n가 나오는데 그것은 **오타와 구별이 안 된다.** 파이썬 두 판이 같은 문장으로\n멈추므로 여기서도 같게 한다. 값이 아니라 글자를 맞추는 자리라 서로 대조해도\n안 걸리고, 배우는 사람은 갈린 문구를 보고 **구현마다 다른 것**으로 읽는다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "bfloat16",
+       "signature": "bfloat16(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "chalf",
+       "signature": "chalf(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "cdouble",
+       "signature": "cdouble(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "byte",
+       "signature": "byte(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "char",
+       "signature": "char(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "short",
+       "signature": "short(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "int",
+       "signature": "int(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
+       "name": "double",
+       "signature": "double(): Tensor",
+       "doc": "**배정도는 다른 까닭으로 없다.** 위의 여덟은 우리가 그 칸을 안 두기로 한 것이고,\n이쪽은 WebGPU 셰이더에 `f64` 자체가 없다. 문구도 그래서 다르다 — 파이썬 결속이\n같은 문장으로 멈춘다.",
+       "section": {
+        "ko": "읽기",
+        "en": "Reading values"
+       }
+      },
+      {
        "name": "to",
        "signature": "to(dtype: DType): Tensor",
-       "doc": "형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다.",
+       "doc": "",
        "section": {
         "ko": "읽기",
         "en": "Reading values"
@@ -3982,7 +4119,7 @@
      "torch": "make_node"
     }
    ],
-   "count": 442
+   "count": 457
   },
   {
    "name": "nn",
@@ -10042,7 +10179,7 @@
     {
      "kind": "const",
      "name": "TORCH",
-     "signature": "export declare const TORCH: { readonly matmulShape: \"shapes cannot be multiplied\"; readonly broadcast: \"must match the size of tensor\"; readonly reshapeSize: \"is invalid for input of size\"; readonly nonScalarBackward: \"grad can be implicitly created only for scalar outputs\"; readonly noGrad: \"does not require grad\"; readonly itemScalar: \"cannot be converted to Scalar\"; readonly crossDevice: \"Expected all tensors to be on the same device\"; readonly gradShape: \"Mismatch in shape\"; readonly secondBackward: string; }",
+     "signature": "export declare const TORCH: { readonly matmulShape: \"shapes cannot be multiplied\"; readonly absent: \"은(는) 브라우저 축소판에 없습니다.\"; readonly absentAdvice: string; readonly broadcast: \"must match the size of tensor\"; readonly reshapeSize: \"is invalid for input of size\"; readonly nonScalarBackward: \"grad can be implicitly created only for scalar outputs\"; readonly noGrad: \"does not require grad\"; readonly itemScalar: \"cannot be converted to Scalar\"; readonly crossDevice: \"Expected all tensors to be on the same device\"; readonly gradShape: \"Mismatch in shape\"; readonly secondBackward: string; }",
      "doc": "torch 가 내는 문구. 검색이 통하라고 원문 그대로 둔다.",
      "members": []
     }
@@ -10131,5 +10268,5 @@
    "count": 9
   }
  ],
- "total": 1422
+ "total": 1437
 }
