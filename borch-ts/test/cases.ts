@@ -857,6 +857,41 @@ function addFft(out: Map<string, Case>): void {
   const hann = (n = 8): Tensor => Tensor.hannWindow(n);
   const pair = (fn: () => Tensor): Case => () => fn().viewAsReal();
 
+  // ── 여러 축 · 에르미트 ─────────────────────────────────────────────────
+  //
+  // **이 묶음이 커널의 결함 하나를 잡았다.** 복소수를 마지막이 아닌 축으로 변환할 때
+  // 허수부를 엉뚱한 칸에서 읽고 있었다 — 셰이더가 쓸 때는 `(re, im)` 을 끼워 넣고
+  // 읽을 때는 안쪽 크기만큼 떨어져 있다고 봤는데, **마지막 축에서는 그 둘이 우연히
+  // 같다.** 위의 1 차원 케이스가 전부 통과한 이유이고, 여기 2 차원이 없었으면
+  // 지금도 초록이었을 자리다.
+  const grid2 = [0.31, -1.2, 0.75, 2.1, -0.4, 1.55, -2.3, 0.9,
+                 1.1, -0.62, 0.25, -1.7];
+  const rgrid = (): Tensor => Tensor.from(grid2, [3, 4]);
+  const cgrid = (): Tensor => Tensor.complex(
+    rgrid(), Tensor.from([...grid2].slice(8).concat(grid2.slice(4, 8),
+                                                   grid2.slice(0, 4)), [3, 4]));
+
+  out.set(`${P}여러축::fft2`, pair(() => fft.fft2(cgrid())));
+  out.set(`${P}여러축::fftn`, pair(() => fft.fftn(cgrid())));
+  out.set(`${P}여러축::ifft2`, pair(() => fft.ifft2(cgrid())));
+  out.set(`${P}여러축::ifftn`, pair(() => fft.ifftn(cgrid())));
+  out.set(`${P}여러축::rfft2`, pair(() => fft.rfft2(rgrid())));
+  out.set(`${P}여러축::rfftn`, pair(() => fft.rfftn(rgrid())));
+  out.set(`${P}여러축::irfft2`, () => fft.irfft2(cgrid()));
+  out.set(`${P}여러축::irfftn`, () => fft.irfftn(cgrid()));
+  out.set(`${P}여러축::hfft`, () => fft.hfft(cgrid()));
+  out.set(`${P}여러축::hfft2`, () => fft.hfft2(cgrid()));
+  out.set(`${P}여러축::hfftn`, () => fft.hfftn(cgrid()));
+  out.set(`${P}여러축::ihfft2`, pair(() => fft.ihfft2(rgrid())));
+  out.set(`${P}여러축::ihfftn`, pair(() => fft.ihfftn(rgrid())));
+  out.set(`${P}여러축::fft2(norm=ortho)`,
+          pair(() => fft.fft2(cgrid(), null, [-2, -1], "ortho")));
+  out.set(`${P}여러축::fft2(norm=forward)`,
+          pair(() => fft.fft2(cgrid(), null, [-2, -1], "forward")));
+  out.set(`${P}여러축::fft2(s)`, pair(() => fft.fft2(cgrid(), [2, 8])));
+  out.set(`${P}여러축::fftn(dim 하나만)`,
+          pair(() => fft.fftn(cgrid(), null, [0])));
+
   out.set(`${P}fft(실수)`, pair(() => fft.fft(x())));
   out.set(`${P}fft(복소)`, pair(() => fft.fft(z())));
   out.set(`${P}fft 의 형`, () => dtypeName(fft.fft(x()).dtype));

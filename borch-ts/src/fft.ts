@@ -60,6 +60,13 @@ function shader(p: DftPlan): string {
   const step = p.inComplex ? 2 : 1;
   // **입력 한 칸 집기.** 없는 칸은 0 이고(길이를 늘려 물은 자리), 허미시안이면
   // 반대쪽 짝을 켤레로 되살린다.
+  // **허수부는 실수부 바로 옆이다.** 복소수 저장은 칸마다 `(re, im)` 을 끼워
+  // 넣는다 — 쓰는 쪽이 `Out[o*2]`·`Out[o*2+1]` 로 그렇게 적고 있다.
+  //
+  // 여기 오래 `A[at + inner]` 라고 적혀 있었다. **마지막 축에서는 `inner` 가 1 이라
+  // 우연히 같다.** 그래서 1 차원 케이스는 전부 통과했고, 복소수를 **마지막이 아닌
+  // 축**으로 변환하는 순간 허수부를 엉뚱한 칸에서 읽었다. 실수 입력은 이 줄을
+  // 아예 안 지나므로 두 축 다 맞았다 — 세 조건이 겹쳐야 드러나는 자리였다.
   const fetch = p.hermitian
     ? `
     var xr = 0.0;
@@ -67,11 +74,11 @@ function shader(p: DftPlan): string {
     if (j < ${p.nIn}u) {
       let at = base + j * ${p.inner * step}u;
       xr = A[at];
-      xi = A[at + ${p.inner}u];
+      xi = A[at + 1u];
     } else if (${p.n}u - j < ${p.nIn}u) {
       let at = base + (${p.n}u - j) * ${p.inner * step}u;
       xr = A[at];
-      xi = -A[at + ${p.inner}u];
+      xi = -A[at + 1u];
     }`
     : `
     var xr = 0.0;
@@ -79,7 +86,7 @@ function shader(p: DftPlan): string {
     if (j < ${p.nIn}u) {
       let at = base + j * ${p.inner * step}u;
       xr = A[at];
-      ${p.inComplex ? `xi = A[at + ${p.inner}u];` : ""}
+      ${p.inComplex ? "xi = A[at + 1u];" : ""}
     }`;
   const write = p.realOut
     ? `  Out[o] = re * ${p.scale};`
