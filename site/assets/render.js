@@ -19,12 +19,12 @@ function layout(shape) {
  * 텐서를 캔버스에 그려 돌려준다.
  *
  * @param tensor  borch 텐서 (값 읽기는 여기서 await 한다)
- * @param options `{ scale, labels, max, range }`
+ * @param options `{ scale, labels, max, range, width }`
  *                `range` 는 값의 범위 — 기본은 실제 최소·최대로 늘린다.
  *                정규화된 이미지를 원래대로 보고 싶으면 `[-1, 1]` 처럼 준다.
  */
 export async function drawTensor(tensor, options = {}) {
-  const { scale = 3, labels = null, max = 64, range = null } = options;
+  const { scale = 3, labels = null, max = 64, range = null, width = 720 } = options;
   const shape = tensor.shape;
   const { n, c, h, w } = layout(shape);
   if (c !== 1 && c !== 3) {
@@ -34,7 +34,7 @@ export async function drawTensor(tensor, options = {}) {
   const values = await tensor.toArray();
   const count = Math.min(n, max);
   // 한 줄에 몇 장. 너무 길어지면 접는다.
-  const cols = Math.min(count, Math.max(1, Math.floor(720 / (w * scale + 4))));
+  const cols = Math.min(count, Math.max(1, Math.floor(width / (w * scale + 4))));
   const rows = Math.ceil(count / cols);
   const labelRoom = labels ? 14 : 0;
 

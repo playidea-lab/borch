@@ -104,11 +104,15 @@ function mount(box) {
   resetBtn.addEventListener("click", () => { setCode(original); out.textContent = ""; });
 
   const write = (text, kind = "") => {
+    // **읽던 자리를 뺏지 않는다.** 무조건 맨 아래로 끌면, 위를 보려고 올린 사람이
+    // 다음 줄이 찍히는 순간 도로 내려간다 — 학습 루프처럼 계속 찍는 코드에서는
+    // 올라가는 것이 아예 불가능해진다.
+    const following = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
     const line = document.createElement("div");
     if (kind) line.className = kind;
     line.textContent = text;
     out.append(line);
-    out.scrollTop = out.scrollHeight;
+    if (following) out.scrollTop = out.scrollHeight;
   };
 
   // 한 실행이 찍은 수. `plot()` 이 쌓고, 끝나면 한 번 그린다 — 스텝마다 다시
@@ -122,6 +126,7 @@ function mount(box) {
     runBtn.disabled = true;
     runBtn.textContent = say("running");
     out.textContent = "";
+    out.scrollTop = 0;
     stage.textContent = "";
     series = [];
     seriesName = "";
@@ -136,6 +141,13 @@ function mount(box) {
         onShow: async (tensor, options) => {
           // 파이썬에서 오면 옵션이 평범한 객체가 아닐 수 있다. 값만 꺼낸다.
           const opts = options ? JSON.parse(JSON.stringify(options)) : {};
+          // 몇 장을 한 줄에 놓을지는 **이 칸의 실제 너비**가 정한다. 720 을 박아
+          // 두었더니 좁은 화면에서 오른쪽이 잘렸다.
+          //
+          // **비어 있는 칸의 너비를 재면 안 된다** — `.canvas-out:empty` 는
+          // `display: none` 이라 0 을 준다. 첫 장을 그리기 전이 언제나 그 상태라
+          // 한 줄에 한 장씩 나왔다. 블록 전체의 너비를 재면 그 함정이 없다.
+          if (!opts.width) opts.width = box.clientWidth - 32;
           stage.append(await drawTensor(tensor, opts));
         },
       };

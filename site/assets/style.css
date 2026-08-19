@@ -633,7 +633,14 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   padding: .7rem 1rem; margin: 0;
   font: 12px/1.6 var(--mono); color: var(--fg-dim);
   white-space: pre-wrap; word-break: break-word;
-  max-height: 20rem; overflow: auto;
+  /* **짧은 출력이 슬릿이 되지 않게.** 내용에 맞춰 줄어들다 보면 네 줄짜리 칸이
+     되고, 거기서 맨 아래로 따라가면 첫 줄이 잘린 채 멈춘다 — 읽는 사람에게는
+     "출력이 안 보이고 움직이지도 않는" 상자가 된다(실제 신고). */
+  min-height: 6.5rem;
+  max-height: 28rem;
+  overflow: auto;
+  /* 좁으면 끌어서 늘린다. 얼마나 나올지는 코드를 고치는 사람만 안다. */
+  resize: vertical;
 }
 .runnable .out:empty { display: none; }
 .runnable .canvas-out {
@@ -673,3 +680,39 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 a.api-link { text-decoration: none; border-bottom: 1px dashed var(--line); }
 a.api-link:hover { border-bottom-color: var(--ember); }
 a.api-link code { color: var(--ember); }
+
+/* ── 스크롤되는 자리를 보이게 ─────────────────────────────────────────
+   macOS 의 겹침 스크롤바는 폭이 0 이라, 넘치는 상자가 **그냥 잘린 상자**처럼
+   보인다. 실제로 그렇게 신고가 왔다: "흰 부분이 위아래로 안 움직이고 출력이 안
+   보인다." 스크롤은 되고 있었고, 된다는 표시가 없었을 뿐이다. */
+
+.runnable .out,
+.runnable .canvas-out,
+#console,
+.doc-main pre,
+.sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.runnable .out::-webkit-scrollbar,
+.runnable .canvas-out::-webkit-scrollbar,
+#console::-webkit-scrollbar,
+.sidebar::-webkit-scrollbar { width: 10px; height: 10px; }
+.runnable .out::-webkit-scrollbar-track,
+.runnable .canvas-out::-webkit-scrollbar-track,
+#console::-webkit-scrollbar-track,
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.runnable .out::-webkit-scrollbar-thumb,
+.runnable .canvas-out::-webkit-scrollbar-thumb,
+#console::-webkit-scrollbar-thumb,
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--line); border-radius: 5px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+.runnable .out::-webkit-scrollbar-thumb:hover,
+.runnable .canvas-out::-webkit-scrollbar-thumb:hover,
+#console::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); background-clip: content-box; }
+
+/* 끌어서 늘릴 수 있다는 표시. resize 손잡이는 macOS 에서 거의 안 보인다. */
+.runnable .out { background-image: linear-gradient(135deg, transparent 50%, var(--line-soft) 50%);
+  background-position: bottom right; background-size: 10px 10px; background-repeat: no-repeat; }
