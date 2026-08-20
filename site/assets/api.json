@@ -4,7 +4,7 @@
  "english": {
   "done": 636,
   "stale": 0,
-  "missing": 4
+  "missing": 5
  },
  "modules": [
   {
@@ -3928,6 +3928,72 @@
        }
       },
       {
+       "name": "celu_",
+       "signature": "celu_(alpha?: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "hardtanh_",
+       "signature": "hardtanh_(minVal?: number, maxVal?: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "leakyRelu_",
+       "signature": "leakyRelu_(slope?: number): Tensor",
+       "doc": "",
+       "torch": "leaky_relu_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "rrelu_",
+       "signature": "rrelu_(lower?: number, upper?: number, training?: boolean): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "threshold_",
+       "signature": "threshold_(t: number, value: number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "upsampleNearest",
+       "signature": "upsampleNearest(scale: number): Tensor",
+       "doc": "폐기 예정인 업샘플 두 이름. torch 가 아직 주고 옛 교재가 친다.\n\n**`upsample` 하나로 못 덮는다** — 최근접과 겹선형이 다른 계산이고, 이름이 그\n갈래를 담고 있다. 한쪽으로 몰면 조용히 다른 보간이 된다(이 저장소가\n`Upsample(mode='bilinear')` 에서 이미 한 번 물린 자리다).",
+       "torch": "upsample_nearest",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "upsampleBilinear",
+       "signature": "upsampleBilinear(scale: number): Tensor",
+       "doc": "",
+       "torch": "upsample_bilinear",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
        "name": "nanToNum_",
        "signature": "nanToNum_(nan?: number, posinf?: number, neginf?: number): Tensor",
        "doc": "",
@@ -6359,7 +6425,7 @@
      "doc_en": "Makes one graph node from outside. **A door for places writing kernels in another file.**\n\n`Tensor.make` is private — it is what this class's own operations use, and that is right. But once a\nmodule with **kernels of its own** appears, such as `fft.ts`, that door is needed. Rather than\nrestating the conditions there (two copies of the `gradMode` check and the `requiresGrad` propagation\neventually diverge), it hands over to the same place."
     }
    ],
-   "count": 652,
+   "count": 659,
    "doc_en": "`Tensor` — one GPU buffer, a shape, and one node on the tape.\n\nThe layout is **NCHW** and the dtype is **float32, only.** The sister project\n(`borch_webgpu`) holding NHWC and packing int64 into float32 was a detour around\nTF.js's constraints, and our kernels do not have those constraints. Imitating it\ninherits someone else's detour for no reason."
   },
   {
@@ -12911,5 +12977,5 @@
    "count": 9
   }
  ],
- "total": 1657
+ "total": 1664
 }

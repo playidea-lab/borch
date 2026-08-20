@@ -6459,6 +6459,46 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.alphaDropout(p, training, true));
   }
 
+  // 활성 다섯의 제자리 판. `F.relu_` 처럼 **`F` 쪽에만 있는 밑줄 이름**들이고,
+  // 밑동은 다 여기 있었는데 밑줄 쪽이 없었다.
+  celu_(alpha = 1.0): Tensor {
+    return this.mutate(() => this.celu(alpha));
+  }
+
+  hardtanh_(minVal = -1.0, maxVal = 1.0): Tensor {
+    return this.mutate(() => this.hardtanh(minVal, maxVal));
+  }
+
+  leakyRelu_(slope = 0.01): Tensor {
+    return this.mutate(() => this.leakyRelu(slope));
+  }
+
+  rrelu_(lower = 1 / 8, upper = 1 / 3, training = false): Tensor {
+    return this.mutate(() => this.rrelu(lower, upper, training));
+  }
+
+  threshold_(t: number, value: number): Tensor {
+    return this.mutate(() => this.threshold(t, value));
+  }
+
+  /**
+   * 폐기 예정인 업샘플 두 이름. torch 가 아직 주고 옛 교재가 친다.
+   *
+   * **`upsample` 하나로 못 덮는다** — 최근접과 겹선형이 다른 계산이고, 이름이 그
+   * 갈래를 담고 있다. 한쪽으로 몰면 조용히 다른 보간이 된다(이 저장소가
+   * `Upsample(mode='bilinear')` 에서 이미 한 번 물린 자리다).
+   */
+  upsampleNearest(scale: number): Tensor {
+    return this.upsample(scale);
+  }
+
+  upsampleBilinear(scale: number): Tensor {
+    // **`alignCorners` 를 켠다** — torch 의 `upsample_bilinear` 이 그 기본값이고,
+    // 끄면 같은 배율에서 다른 값이 나온다.
+    return this.interpolateBilinear(
+      (this.shape[2] ?? 1) * scale, (this.shape[3] ?? 1) * scale, true);
+  }
+
   nanToNum_(nan = 0, posinf?: number, neginf?: number): Tensor {
     return this.mutate(() => this.nanToNum(nan, posinf, neginf));
   }
