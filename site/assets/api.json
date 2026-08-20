@@ -4,7 +4,7 @@
  "english": {
   "done": 619,
   "stale": 0,
-  "missing": 11
+  "missing": 17
  },
  "modules": [
   {
@@ -2354,7 +2354,7 @@
       },
       {
        "name": "remainder",
-       "signature": "remainder(divisor: number): Tensor",
+       "signature": "remainder(divisor: Tensor | number): Tensor",
        "doc": "나머지 — **`fmod` 와 부호가 다르다.**\n\ntorch 의 `remainder`(그리고 파이썬·torch 의 `%`)는 **제수**의 부호를 따르고\n`fmod` 는 피제수의 부호를 따른다. `-7` 을 `3` 으로 나눈 나머지가 이쪽은 2 이고\n저쪽은 -1 이다. 둘 다 \"나머지\" 라고 불리는 것이 함정이고, JS 의 `%` 는 `fmod`\n쪽이라 그것을 그대로 쓰면 음수 입력에서만 조용히 갈린다.\n\n잘라내기(`trunc`)냐 내림(`floor`)이냐 하나 차이다.",
        "section": {
         "ko": "addmm 계열",
@@ -3353,12 +3353,224 @@
        }
       },
       {
+       "name": "multiply",
+       "signature": "multiply(other: Tensor): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "absolute",
+       "signature": "absolute(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "absolute_",
+       "signature": "absolute_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "arctan",
+       "signature": "arctan(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "arctan_",
+       "signature": "arctan_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "arctanh",
+       "signature": "arctanh(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "arctanh_",
+       "signature": "arctanh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "fix",
+       "signature": "fix(): Tensor",
+       "doc": "0 쪽으로 자른다. `trunc` 와 같은 것이다 — `floor` 가 아니다.",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "fix_",
+       "signature": "fix_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "negative",
+       "signature": "negative(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "negative_",
+       "signature": "negative_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "trueDivide",
+       "signature": "trueDivide(other: Tensor): Tensor",
+       "doc": "",
+       "torch": "true_divide",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "greater",
+       "signature": "greater(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "greaterEqual",
+       "signature": "greaterEqual(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "greater_equal",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "less",
+       "signature": "less(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "lessEqual",
+       "signature": "lessEqual(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "less_equal",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "notEqual",
+       "signature": "notEqual(other: Tensor | number): Tensor",
+       "doc": "",
+       "torch": "not_equal",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "fmax",
+       "signature": "fmax(other: Tensor): Tensor",
+       "doc": "**NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다. 그 갈림이 이름의 전부다.\n\n커널이 따로 없다. 한쪽이 NaN 이면 다른 쪽을 고르는 것이 정의이고, `where` 가\n그것을 그대로 적는다 — **곱하기로 짜면 `0 × NaN = NaN` 이라 걸러 낸 자리가\n오염된다.** 조립이 오래 결속에만 있었다.",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "fmin",
+       "signature": "fmin(other: Tensor): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "moveaxis",
+       "signature": "moveaxis(src: number, dst: number): Tensor",
+       "doc": "축을 옮긴다. `movedim` 과 같은 것이고 torch 가 둘 다 준다.",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "t",
+       "signature": "t(): Tensor",
+       "doc": "2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다.",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "vdot",
+       "signature": "vdot(other: Tensor): Tensor",
+       "doc": "벡터 내적. **복소수면 왼쪽을 켤레로 본다** — 실수에서는 `dot` 과 같다.",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
+       "name": "broadcastTo",
+       "signature": "broadcastTo(shape: readonly number[]): Tensor",
+       "doc": "늘려서 그 모양으로. `expand` 와 같은 것이고 모양을 **목록으로** 받는다.",
+       "torch": "broadcast_to",
+       "section": {
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
+       }
+      },
+      {
        "name": "gcd",
        "signature": "gcd(other: Tensor | number): Tensor",
        "doc": "최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다.",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3366,8 +3578,8 @@
        "signature": "lcm(other: Tensor | number): Tensor",
        "doc": "최소공배수. **`gcd` 가 0 이면 0 이다**(실측: 0 과 7 의 lcm 은 0).",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3375,8 +3587,8 @@
        "signature": "nextafter(other: Tensor | number): Tensor",
        "doc": "`other` 쪽으로 한 칸 옆의 부동소수. 간격이 값에 따라 다른 것이 요점이다.",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3385,8 +3597,8 @@
        "doc": "",
        "torch": "bitwise_and",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3395,8 +3607,8 @@
        "doc": "",
        "torch": "bitwise_or",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3405,8 +3617,8 @@
        "doc": "",
        "torch": "bitwise_xor",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3415,8 +3627,8 @@
        "doc": "",
        "torch": "bitwise_left_shift",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3425,8 +3637,8 @@
        "doc": "",
        "torch": "bitwise_right_shift",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3435,8 +3647,8 @@
        "doc": "*0 이 아니면 참으로 보고** 논리곱. 비트 연산과 갈리는 자리가 그것이다.",
        "torch": "logical_and",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3445,8 +3657,8 @@
        "doc": "",
        "torch": "logical_or",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3455,8 +3667,8 @@
        "doc": "",
        "torch": "logical_not",
        "section": {
-        "ko": "커널 표에는 있는데 이름이 없던 것들",
-        "en": "커널 표에는 있는데 이름이 없던 것들"
+        "ko": "torch 의 둘째 철자들",
+        "en": "torch 의 둘째 철자들"
        }
       },
       {
@@ -3601,33 +3813,6 @@
        "signature": "clampMin_(low: number): Tensor",
        "doc": "",
        "torch": "clamp_min_",
-       "section": {
-        "ko": "제자리 판 서른여덟",
-        "en": "제자리 판 서른여덟"
-       }
-      },
-      {
-       "name": "digamma_",
-       "signature": "digamma_(): Tensor",
-       "doc": "",
-       "section": {
-        "ko": "제자리 판 서른여덟",
-        "en": "제자리 판 서른여덟"
-       }
-      },
-      {
-       "name": "erfinv_",
-       "signature": "erfinv_(): Tensor",
-       "doc": "",
-       "section": {
-        "ko": "제자리 판 서른여덟",
-        "en": "제자리 판 서른여덟"
-       }
-      },
-      {
-       "name": "lgamma_",
-       "signature": "lgamma_(): Tensor",
-       "doc": "",
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "제자리 판 서른여덟"
@@ -5454,6 +5639,595 @@
        "signature": "frexpExponent(): Tensor",
        "doc": "",
        "torch": "frexp_exponent"
+      },
+      {
+       "name": "neg_",
+       "signature": "neg_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "abs_",
+       "signature": "abs_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "exp_",
+       "signature": "exp_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "log_",
+       "signature": "log_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sqrt_",
+       "signature": "sqrt_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "rsqrt_",
+       "signature": "rsqrt_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "square_",
+       "signature": "square_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "reciprocal_",
+       "signature": "reciprocal_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sin_",
+       "signature": "sin_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "cos_",
+       "signature": "cos_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "tan_",
+       "signature": "tan_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sinh_",
+       "signature": "sinh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "cosh_",
+       "signature": "cosh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "tanh_",
+       "signature": "tanh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "asin_",
+       "signature": "asin_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "acos_",
+       "signature": "acos_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "atan_",
+       "signature": "atan_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "asinh_",
+       "signature": "asinh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "acosh_",
+       "signature": "acosh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "atanh_",
+       "signature": "atanh_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "exp2_",
+       "signature": "exp2_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "log2_",
+       "signature": "log2_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "log10_",
+       "signature": "log10_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "expm1_",
+       "signature": "expm1_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "log1p_",
+       "signature": "log1p_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "relu_",
+       "signature": "relu_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sigmoid_",
+       "signature": "sigmoid_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sign_",
+       "signature": "sign_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "floor_",
+       "signature": "floor_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "ceil_",
+       "signature": "ceil_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "round_",
+       "signature": "round_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "trunc_",
+       "signature": "trunc_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "frac_",
+       "signature": "frac_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "deg2rad_",
+       "signature": "deg2rad_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "rad2deg_",
+       "signature": "rad2deg_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "positive_",
+       "signature": "positive_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "logit_",
+       "signature": "logit_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sinc_",
+       "signature": "sinc_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "erf_",
+       "signature": "erf_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "erfc_",
+       "signature": "erfc_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "sgn_",
+       "signature": "sgn_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "signbit_",
+       "signature": "signbit_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "nanToZero_",
+       "signature": "nanToZero_(): Tensor",
+       "doc": "",
+       "torch": "nan_to_zero_",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "notNan_",
+       "signature": "notNan_(): Tensor",
+       "doc": "",
+       "torch": "not_nan_",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "isnan_",
+       "signature": "isnan_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "isinf_",
+       "signature": "isinf_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "isfinite_",
+       "signature": "isfinite_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "logical_not_",
+       "signature": "logical_not_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "bitwise_not_",
+       "signature": "bitwise_not_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "frexpMantissa_",
+       "signature": "frexpMantissa_(): Tensor",
+       "doc": "",
+       "torch": "frexp_mantissa_",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "frexpExponent_",
+       "signature": "frexpExponent_(): Tensor",
+       "doc": "",
+       "torch": "frexp_exponent_",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "gelu_",
+       "signature": "gelu_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "silu_",
+       "signature": "silu_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "elu_",
+       "signature": "elu_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "hardsigmoid_",
+       "signature": "hardsigmoid_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "hardswish_",
+       "signature": "hardswish_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "logsigmoid_",
+       "signature": "logsigmoid_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "mish_",
+       "signature": "mish_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "relu6_",
+       "signature": "relu6_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "selu_",
+       "signature": "selu_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "softsign_",
+       "signature": "softsign_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "tanhshrink_",
+       "signature": "tanhshrink_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "표가 다는 제자리 판",
+        "en": "표가 다는 제자리 판"
+       }
+      },
+      {
+       "name": "lgamma_",
+       "signature": "lgamma_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "digamma_",
+       "signature": "digamma_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "erfinv_",
+       "signature": "erfinv_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
       }
      ],
      "doc_en": "The types of the methods hung from the table above. Paired with the loop above; fix one\nalone and they fall out of step."
@@ -5519,7 +6293,7 @@
      "doc_en": "Makes one graph node from outside. **A door for places writing kernels in another file.**\n\n`Tensor.make` is private — it is what this class's own operations use, and that is right. But once a\nmodule with **kernels of its own** appears, such as `fft.ts`, that door is needed. Rather than\nrestating the conditions there (two copies of the `gradMode` check and the `requiresGrad` propagation\neventually diverge), it hands over to the same place."
     }
    ],
-   "count": 562,
+   "count": 647,
    "doc_en": "`Tensor` — one GPU buffer, a shape, and one node on the tape.\n\nThe layout is **NCHW** and the dtype is **float32, only.** The sister project\n(`borch_webgpu`) holding NHWC and packing int64 into float32 was a detour around\nTF.js's constraints, and our kernels do not have those constraints. Imitating it\ninherits someone else's detour for no reason."
   },
   {
@@ -12025,5 +12799,5 @@
    "count": 9
   }
  ],
- "total": 1559
+ "total": 1644
 }

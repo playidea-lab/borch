@@ -1597,19 +1597,21 @@ def isin(elements, test_elements, **kw):
     return wrap(guarded(handle(wrap(elements)).isin, handle(wrap(test_elements))))
 
 
-def _nan_extreme(name, better):
-    """`fmax`·`fmin` 은 **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다."""
+def _nan_extreme(name):
+    """`fmax`·`fmin` 은 **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다.
+
+    **조립이 저쪽으로 갔다.** 여기 있는 동안 그 이름은 borch.ts 에 없었고, 골든이
+    이 함수를 지나므로 표는 초록이었다 — TypeScript 쪽에만 없는 이름이었다.
+    """
     def call(a, b, **kw):
-        a, b = wrap(a), wrap(b)
-        picked = wrap(guarded(handle(a).binary, better, handle(b)))
-        out = where(_unary(a, "isnan"), b, picked)
-        return where(_unary(b, "isnan"), a, out)
+        del kw
+        return wrap(guarded(getattr(handle(wrap(a)), name), handle(wrap(b))))
     call.__name__ = name
     return call
 
 
-fmax = _nan_extreme("fmax", "maximum")
-fmin = _nan_extreme("fmin", "minimum")
+fmax = _nan_extreme("fmax")
+fmin = _nan_extreme("fmin")
 
 
 def float_power(a, b, **kw):

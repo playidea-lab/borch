@@ -271,7 +271,13 @@ NOT_PORTED = {
     # 남은 97 은 정말 파이썬이다: `술어::` 23(`is_cuda`·`is_mps`), `저장::` 10
     # (`stride`·`layout`), 묶음 없는 47(사본 의미론·`from_numpy`), `희소::` 5.
     "inplace::": (97, "파이썬 — 뷰·공유·속성·술어·저장 들여다보기"),
-    "method2::": (60, "별칭 — `multiply`=`mul` 처럼 파이썬의 둘째 이름"),
+    # `method2::` 이 여기 있었다 — 60 건, "별칭 — `multiply`=`mul` 처럼 파이썬의
+    # 둘째 이름". 별칭인 것은 그중 일부였고, **아홉은 저쪽에 이름이 아예 없었다**
+    # (`fmax`·`vdot`·`moveaxis`·`t`·`broadcast_to`·비교 넷). 넣고 전부 옮겼다.
+    #
+    # 옮기다가 둘이 더 나왔다. `fmax`·`fmin` 은 결속에만 있던 조립이었고,
+    # `remainder` 는 수만 받아서 `x.remainder(y)` 가 안 돌았다 — **있는데 좁은
+    # 이름**은 없는 이름보다 찾기 어렵다.
     # 48 → 9. 복소수의 이웃 서른아홉을 옮겼다 — `real`·`conj`·`conjPhysical`·
     # `resolveConj`·`resolveNeg`·`angle` 을 세 형에 값과 형으로 물었고, 판정 셋도.
     # 없던 넷(`resolveConj`·`resolveNeg`·`isConj`·`isNeg`)은 만들었다. **게으른

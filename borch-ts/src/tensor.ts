@@ -4288,8 +4288,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    *
    * 잘라내기(`trunc`)냐 내림(`floor`)이냐 하나 차이다.
    */
-  remainder(divisor: number): Tensor {
-    const d = Tensor.full([], divisor);
+  remainder(divisor: Tensor | number): Tensor {
+    // **텐서도 받는다.** torch 는 `x.remainder(y)` 를 쓰고, 수만 받으면 그 줄이
+    // 그냥 안 돈다 — 있는데 좁은 이름은 없는 이름보다 찾기 어렵다(`lerpFrom` 이
+    // 같은 자리였다).
+    const d = Tensor.asTensor(divisor);
     const q = this.div(d).unary("floor").detach();
     return this.sub(q.binary("mul", d));
   }
@@ -6160,6 +6163,124 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   arctan2_(other: Tensor | number): Tensor {
     return this.mutate(() => this.atan2(other));
+  }
+
+  // ── torch 의 둘째 철자들 ─────────────────────────────────────────────
+  //
+  // 계산은 이미 있고 **부르는 철자만** 없던 자리다. 교재와 옮겨 온 코드가 어느 쪽을
+  // 치는지는 저자 취향이라, 한쪽만 있으면 그 코드가 `AttributeError` 로 멈춘다.
+
+  multiply(other: Tensor): Tensor {
+    return this.mul(other);
+  }
+
+  // 단항의 둘째 철자 다섯. 표에 없는 이름이라 루프가 안 달아 준다.
+  absolute(): Tensor {
+    return this.abs();
+  }
+
+  absolute_(): Tensor {
+    return this.mutate(() => this.abs());
+  }
+
+  arctan(): Tensor {
+    return this.atan();
+  }
+
+  arctan_(): Tensor {
+    return this.mutate(() => this.atan());
+  }
+
+  arctanh(): Tensor {
+    return this.atanh();
+  }
+
+  arctanh_(): Tensor {
+    return this.mutate(() => this.atanh());
+  }
+
+  /** 0 쪽으로 자른다. `trunc` 와 같은 것이다 — `floor` 가 아니다. */
+  fix(): Tensor {
+    return this.trunc();
+  }
+
+  fix_(): Tensor {
+    return this.mutate(() => this.trunc());
+  }
+
+  negative(): Tensor {
+    return this.neg();
+  }
+
+  negative_(): Tensor {
+    return this.mutate(() => this.neg());
+  }
+
+  trueDivide(other: Tensor): Tensor {
+    return this.div(other);
+  }
+
+  greater(other: Tensor | number): Tensor {
+    return this.binary("gt", Tensor.asTensor(other));
+  }
+
+  greaterEqual(other: Tensor | number): Tensor {
+    return this.binary("ge", Tensor.asTensor(other));
+  }
+
+  less(other: Tensor | number): Tensor {
+    return this.binary("lt", Tensor.asTensor(other));
+  }
+
+  lessEqual(other: Tensor | number): Tensor {
+    return this.binary("le", Tensor.asTensor(other));
+  }
+
+  notEqual(other: Tensor | number): Tensor {
+    return this.binary("ne", Tensor.asTensor(other));
+  }
+
+  /**
+   * **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다. 그 갈림이 이름의 전부다.
+   *
+   * 커널이 따로 없다. 한쪽이 NaN 이면 다른 쪽을 고르는 것이 정의이고, `where` 가
+   * 그것을 그대로 적는다 — **곱하기로 짜면 `0 × NaN = NaN` 이라 걸러 낸 자리가
+   * 오염된다.** 조립이 오래 결속에만 있었다.
+   */
+  fmax(other: Tensor): Tensor {
+    return this.nanExtreme(other, "maximum");
+  }
+
+  fmin(other: Tensor): Tensor {
+    return this.nanExtreme(other, "minimum");
+  }
+
+  private nanExtreme(other: Tensor, better: string): Tensor {
+    // **`x.where(조건, 저쪽)` 은 조건이 참일 때 `x` 를 낸다.** 이 세션에서 두 번째로
+    // 뒤집어 적었다 — `nanToNum` 이 그 첫 번째였고 골든이 바로 말해 줬다.
+    const picked = this.binary(better, other);
+    const out = other.where(this.unary("isnan"), picked);   // a 가 NaN 이면 b
+    return this.where(other.unary("isnan"), out);           // b 가 NaN 이면 a
+  }
+
+  /** 축을 옮긴다. `movedim` 과 같은 것이고 torch 가 둘 다 준다. */
+  moveaxis(src: number, dst: number): Tensor {
+    return this.movedim(src, dst);
+  }
+
+  /** 2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다. */
+  t(): Tensor {
+    return this.shape.length < 2 ? this : this.transpose();
+  }
+
+  /** 벡터 내적. **복소수면 왼쪽을 켤레로 본다** — 실수에서는 `dot` 과 같다. */
+  vdot(other: Tensor): Tensor {
+    return this.isComplex() ? this.conj().mul(other).sum() : this.dot(other);
+  }
+
+  /** 늘려서 그 모양으로. `expand` 와 같은 것이고 모양을 **목록으로** 받는다. */
+  broadcastTo(shape: readonly number[]): Tensor {
+    return this.expand(...shape);
   }
 
   /** 최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다. */
@@ -9267,6 +9388,80 @@ export interface Tensor {
   i0_(): Tensor;
   frexpMantissa(): Tensor;
   frexpExponent(): Tensor;
+  // ── 표가 다는 제자리 판 ──────────────────────────────────────────────
+  //
+  // 위 루프는 이름마다 **둘**을 단다(`abs` 와 `abs_`). 이 선언에는 오래 앞의 것만
+  // 있었고, 그래서 예순다섯 개가 **런타임에는 있는데 타입에는 없었다** — TypeScript
+  // 로 `x.acosh_()` 를 치면 컴파일이 막히고, 사이트 레퍼런스에도 안 나온다.
+  //
+  // 이 블록 머리에 "위 루프와 짝이고 하나만 고치면 어긋난다" 고 적혀 있었다.
+  // 어긋난 것은 고친 쪽이 아니라 **처음부터 반쪽만 적은 쪽**이었다.
+  neg_(): Tensor;
+  abs_(): Tensor;
+  exp_(): Tensor;
+  log_(): Tensor;
+  sqrt_(): Tensor;
+  rsqrt_(): Tensor;
+  square_(): Tensor;
+  reciprocal_(): Tensor;
+  sin_(): Tensor;
+  cos_(): Tensor;
+  tan_(): Tensor;
+  sinh_(): Tensor;
+  cosh_(): Tensor;
+  tanh_(): Tensor;
+  asin_(): Tensor;
+  acos_(): Tensor;
+  atan_(): Tensor;
+  asinh_(): Tensor;
+  acosh_(): Tensor;
+  atanh_(): Tensor;
+  exp2_(): Tensor;
+  log2_(): Tensor;
+  log10_(): Tensor;
+  expm1_(): Tensor;
+  log1p_(): Tensor;
+  relu_(): Tensor;
+  sigmoid_(): Tensor;
+  sign_(): Tensor;
+  floor_(): Tensor;
+  ceil_(): Tensor;
+  round_(): Tensor;
+  trunc_(): Tensor;
+  frac_(): Tensor;
+  deg2rad_(): Tensor;
+  rad2deg_(): Tensor;
+  positive_(): Tensor;
+  logit_(): Tensor;
+  sinc_(): Tensor;
+  erf_(): Tensor;
+  erfc_(): Tensor;
+  sgn_(): Tensor;
+  signbit_(): Tensor;
+  nanToZero_(): Tensor;
+  notNan_(): Tensor;
+  isnan_(): Tensor;
+  isinf_(): Tensor;
+  isfinite_(): Tensor;
+  logical_not_(): Tensor;
+  bitwise_not_(): Tensor;
+  frexpMantissa_(): Tensor;
+  frexpExponent_(): Tensor;
+  gelu_(): Tensor;
+  silu_(): Tensor;
+  elu_(): Tensor;
+  hardsigmoid_(): Tensor;
+  hardswish_(): Tensor;
+  logsigmoid_(): Tensor;
+  mish_(): Tensor;
+  relu6_(): Tensor;
+  selu_(): Tensor;
+  softsign_(): Tensor;
+  tanhshrink_(): Tensor;
+  lgamma_(): Tensor;
+  digamma_(): Tensor;
+  erfinv_(): Tensor;
+
 }
 
 export { noGrad } from "./autograd.js";

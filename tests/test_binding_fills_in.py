@@ -72,19 +72,19 @@ asarray resize_as_ storage_offset type values
 # **다른 철자로 저쪽에 있다** — 결손이 아니다. 옆에 borch.ts 쪽 이름을 적어 둔다.
 # 적어 두지 않으면 다음 사람이 같은 확인을 다시 한다.
 ALIASED = {
-    "broadcast_to": "expand",
     "grid_sampler": "gridSample",
     "is_same_size": "shape 비교",
     "max_pool1d_with_indices": "maxPoolWithIndices",
-    "moveaxis": "movedim",
     "numel": "size",
     "scatter": "scatterSet",
     "swapdims": "swapaxes",
     "take": "indexSelect(평평하게 편 뒤)",
     "take_along_dim": "gather",
+    # `broadcast_to`·`moveaxis`·`vdot`·`t` 가 여기 있었다. **다른 철자로 있으니
+    # 결손이 아니다** 라고 적어 두었는데, torch 가 주는 그 철자가 저쪽에 없으면
+    # 그 이름으로 쓴 코드는 그냥 안 돈다 — `method2::` 60 을 옮기면서 넷 다 넣었다.
+    # 별칭이라는 판정과 이름이 없다는 사실은 같이 참일 수 있다.
     "trapz": "trapezoid",
-    "vdot": "vecdot",
-    "t": "transpose (2 차원 전치)",
 }
 # `is_tensor` 가 여기 한 줄 있었다. 선언 목록이 `index.ts` 를 안 훑어서 `isTensor` 가
 # 공개 이름인데도 안 잡히던 것이었고 — 결손이 아니라 **목록의 사각지대**였다 —

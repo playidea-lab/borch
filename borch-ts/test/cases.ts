@@ -5548,6 +5548,121 @@ function addInplace(out: Map<string, Case>): void {
     return x;
   });
 
+  // ── 같은 계산에 이름이 둘 (`method2::`) ─────────────────────────────
+  //
+  // `torch.add(x, y)` 와 `x.add(y)`. 이 저장소는 한 방향 고리만 갖고 있었고, 반대가
+  // 없어서 **계산은 다 해 놓고 이름이 한쪽에서만 닿았다.** 교재가 치는 꼴은 메서드
+  // 쪽이고, 그때 나는 것은 `AttributeError` 다.
+  //
+  // **이름이 닿는지만 보면 껍데기도 통과한다** — 값을 물어야 그 이름이 진짜 그 계산에
+  // 닿았는지가 드러난다.
+  const m2a = (): Tensor => Tensor.from([1, 2, 3, 4], [2, 2]);
+  const m2b = (): Tensor => Tensor.from([0.5, 1.5, 2.5, 3.5], [2, 2]);
+  const m2sym = (): Tensor => Tensor.from([4, 1, 1, 3], [2, 2]);
+  const m2neg = (): Tensor => Tensor.from([-1, 2, -3, 0.5], [2, 2]);
+  const vec3a = (): Tensor => Tensor.from([1, 2, 3], [3]);
+  const vec3b = (): Tensor => Tensor.from([4, 5, 6], [3]);
+
+  const named: [string, () => Tensor][] = [
+    ["add", () => m2a().add(m2b())],
+    ["sub", () => m2a().sub(m2b())],
+    ["mul", () => m2a().mul(m2b())],
+    ["div", () => m2a().div(m2b())],
+    ["multiply", () => m2a().multiply(m2b())],
+    ["true_divide", () => m2a().trueDivide(m2b())],
+    ["floor_divide", () => m2a().floorDivide(m2b())],
+    ["remainder", () => m2a().remainder(m2b())],
+    ["fmod", () => m2a().fmod(2.0)],
+    ["lerp", () => m2a().lerp(m2b(), 0.5)],
+    ["greater", () => m2a().greater(m2b())],
+    ["less_equal", () => m2a().lessEqual(m2b())],
+    ["logical_and", () => m2a().logicalAnd(m2b())],
+    ["logical_not", () => m2a().logicalNot()],
+    ["isclose", () => m2a().isclose(m2b())],
+    ["nan_to_num", () => m2a().nanToNum()],
+    ["fmax", () => m2a().fmax(m2b())],
+    ["inner", () => m2a().inner(m2b())],
+    ["count_nonzero", () => m2a().countNonzero()],
+    ["adjoint", () => m2a().adjoint()],
+    ["moveaxis", () => m2a().moveaxis(0, 1)],
+    ["t", () => m2a().t()],
+    ["lgamma", () => m2a().lgamma()],
+    ["digamma", () => m2a().digamma()],
+    ["log_softmax", () => m2a().logSoftmax(1)],
+    ["hardshrink", () => m2a().hardshrink()],
+    ["corrcoef", () => m2a().corrcoef()],
+    ["cov", () => m2a().cov()],
+    ["cross", () => vec3a().cross(vec3b())],
+    ["vdot", () => vec3a().vdot(vec3b())],
+    ["kron", () => vec3a().kron(Tensor.from([4, 5], [2]))],
+    ["broadcast_to", () => Tensor.from([1, 2], [2]).broadcastTo([3, 2])],
+    ["prelu", () => m2neg().prelu(Tensor.from([0.25], [1]))],
+  ];
+  for (const [name, fn] of named) out.set(`method2::${name}`, fn);
+
+  // 값을 읽어야 하는 넷은 따로 — 저쪽이 비동기다.
+  out.set("method2::inverse", async () => m2a().inverse());
+  out.set("method2::pinverse", async () => m2a().pinverse());
+  out.set("method2::qr", async () => (await m2a().qr()).r);
+  out.set("method2::svd", async () => (await m2a().svd()).s);
+  out.set("method2::cholesky", async () => m2sym().cholesky());
+  out.set("method2::slogdet", async () => (await m2a().slogdet()).logabs);
+  out.set("method2::det", async () => m2a().det());
+  out.set("method2::logdet", async () => m2sym().logdet());
+  out.set("method2::matrix_exp", async () => m2a().matrixExp());
+  out.set("method2::matrix_power", async () => m2a().matrixPower(2));
+
+  // **함수로 부른 것과 같아야 한다.** 이름만 닿고 다른 계산이면 여기서 갈린다.
+  out.set("method2::함수와 같은 답", async () => {
+    const x = m2a();
+    const y = m2b();
+    const det = await x.det();
+    const expm = await x.matrixExp();
+    return Tensor.cat([
+      x.add(y).sub(x.add(y)).reshape([4]),
+      x.mul(y).sub(x.mul(y)).reshape([4]),
+      det.sub(det).reshape([1]),
+      expm.sub(expm).reshape([4]),
+    ], 0);
+  });
+
+  // 제자리 단항 열다섯. **`acosh` 는 1 이상, `logit` 은 0..1 안에서만 답이 있다** —
+  // 밖은 양쪽 다 NaN 이고 NaN 은 서로 같다고 못 하므로 물어도 아무것도 안 드러난다.
+  const m2small = (): Tensor => Tensor.from([0.25, 0.5, 0.75, -0.5], [2, 2]);
+  const inplaceUnaries: [string, () => Tensor][] = [
+    ["absolute", () => m2small().absolute_()],
+    ["acosh", () => m2small().abs().add(Tensor.full([], 1)).acosh_()],
+    ["arctan", () => m2small().arctan_()],
+    ["arctanh", () => m2small().arctanh_()],
+    ["asinh", () => m2small().asinh_()],
+    ["atanh", () => m2small().atanh_()],
+    ["deg2rad", () => m2small().deg2rad_()],
+    ["erfc", () => m2small().erfc_()],
+    ["exp2", () => m2small().exp2_()],
+    ["fix", () => m2small().fix_()],
+    ["negative", () => m2small().negative_()],
+    ["rad2deg", () => m2small().rad2deg_()],
+    ["sgn", () => m2small().sgn_()],
+    ["sinc", () => m2small().sinc_()],
+    ["logit", () => m2small().abs().mul(Tensor.full([], 0.8))
+      .add(Tensor.full([], 0.1)).logit_()],
+  ];
+  for (const [name, fn] of inplaceUnaries) {
+    out.set(`method2::제자리::${name}_`, fn);
+  }
+
+  // 잎에 기울기가 켜져 있으면 제자리 연산을 거절한다. **예외의 종류를 묻는다** —
+  // 문구가 아니라 이름이라, 구현끼리 값으로 대조해도 안 걸리는 자리다.
+  out.set("method2::제자리::기울기 켜진 잎은 거절", () => {
+    try {
+      Tensor.from([0.25, 0.5, 0.75, -0.5], [2, 2], { requiresGrad: true })
+        .absolute_();
+    } catch (err) {
+      return err instanceof Error ? err.constructor.name : "?";
+    }
+    return "예외가 안 났다";
+  });
+
   // ── 인자를 받는 제자리 연산 ─────────────────────────────────────────────
   //
   // **모양이 바뀌는 것들이 여기 있다.** `transpose_`·`squeeze_`·`unsqueeze_` 는 값이
