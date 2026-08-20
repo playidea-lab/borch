@@ -4,7 +4,7 @@
  "english": {
   "done": 636,
   "stale": 0,
-  "missing": 0
+  "missing": 2
  },
  "modules": [
   {
@@ -3879,6 +3879,55 @@
        }
       },
       {
+       "name": "dropout_",
+       "signature": "dropout_(p?: number, training?: boolean): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "featureDropout_",
+       "signature": "featureDropout_(p?: number, training?: boolean): Tensor",
+       "doc": "*채널째 떨군다** — `dropout2d` 와 같은 계산이다.",
+       "torch": "feature_dropout_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "alphaDropout_",
+       "signature": "alphaDropout_(p?: number, training?: boolean): Tensor",
+       "doc": "",
+       "torch": "alpha_dropout_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "featureAlphaDropout",
+       "signature": "featureAlphaDropout(p?: number, training?: boolean): Tensor",
+       "doc": "알파 떨구기의 채널 판. `alphaDropout` 에 `perChannel` 을 켠 것이다.",
+       "torch": "feature_alpha_dropout",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
+       "name": "featureAlphaDropout_",
+       "signature": "featureAlphaDropout_(p?: number, training?: boolean): Tensor",
+       "doc": "",
+       "torch": "feature_alpha_dropout_",
+       "section": {
+        "ko": "제자리 판 서른여덟",
+        "en": "제자리 판 서른여덟"
+       }
+      },
+      {
        "name": "nanToNum_",
        "signature": "nanToNum_(nan?: number, posinf?: number, neginf?: number): Tensor",
        "doc": "",
@@ -6310,7 +6359,7 @@
      "doc_en": "Makes one graph node from outside. **A door for places writing kernels in another file.**\n\n`Tensor.make` is private — it is what this class's own operations use, and that is right. But once a\nmodule with **kernels of its own** appears, such as `fft.ts`, that door is needed. Rather than\nrestating the conditions there (two copies of the `gradMode` check and the `requiresGrad` propagation\neventually diverge), it hands over to the same place."
     }
    ],
-   "count": 647,
+   "count": 652,
    "doc_en": "`Tensor` — one GPU buffer, a shape, and one node on the tape.\n\nThe layout is **NCHW** and the dtype is **float32, only.** The sister project\n(`borch_webgpu`) holding NHWC and packing int64 into float32 was a detour around\nTF.js's constraints, and our kernels do not have those constraints. Imitating it\ninherits someone else's detour for no reason."
   },
   {
@@ -12816,5 +12865,5 @@
    "count": 9
   }
  ],
- "total": 1644
+ "total": 1649
 }

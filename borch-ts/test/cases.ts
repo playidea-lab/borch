@@ -510,6 +510,35 @@ function addTopRest(out: Map<string, Case>): void {
   const x = (grad = false): Tensor => Tensor.from(GRID, undefined, { requiresGrad: grad });
   const a = (): Tensor => Tensor.from(SHAPES);
 
+  // ── 최상위 전용 제자리들 ────────────────────────────────────────────
+  //
+  // 난수는 못 굳히지만 **`p=0` 이면 항등이라** 값이 결정적이다. 그리고 `is` 를 따로
+  // 묻는다 — 같은 텐서를 안 돌려주면 이어 부르는 코드가 원본을 못 고친다.
+  const holes23 = (): Tensor => Tensor.from(
+    [-1.0, 0.5, Number.NaN, 0.25, Infinity, 1.0], [2, 3]);
+  const img1234 = (): Tensor => Tensor.from(
+    Array.from({ length: 24 }, (_, i) => i), [1, 2, 3, 4]);
+  const topInplace: [string, () => Tensor, (t: Tensor) => Tensor][] = [
+    ["nan_to_num_", holes23, (v) => v.nanToNum_()],
+    ["dropout_", img1234, (v) => v.dropout_(0.0, true)],
+    ["feature_dropout_", img1234, (v) => v.featureDropout_(0.0, true)],
+    ["alpha_dropout_", img1234, (v) => v.alphaDropout_(0.0, false)],
+    ["feature_alpha_dropout_", img1234, (v) => v.featureAlphaDropout_(0.0, false)],
+  ];
+  for (const [name, src, run] of topInplace) {
+    out.set(`${P}제자리::${name}`, () => {
+      const v = src();
+      run(v);
+      return v;
+    });
+    out.set(`${P}제자리::${name}(같은 텐서)`, () => {
+      const v = src();
+      return verdict(run(v) === v);
+    });
+  }
+  // `feature_dropout` 은 **채널째** 떨군다 — `dropout2d` 와 같은 계산이다.
+  out.set(`${P}feature_dropout(p=0)`, () => img1234().featureDropout(0.0, true));
+
   out.set(`${P}igamma`, () => igamma(a(), Tensor.from(SPOTS)));
   // **한 식으로 못 덮는다** — `x < a+1` 은 급수, 그 밖은 연분수다.
   out.set(`${P}igamma(큰 x)`, () =>

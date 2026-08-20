@@ -6435,6 +6435,30 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.lerp(end, weight));
   }
 
+  // 떨구기 넷의 제자리 판. **`training` 이 거짓이면 항등이고**, 그래서 `p` 를 0 으로
+  // 두면 값이 결정적이라 골든이 굳힐 수 있다 — 난수 자체는 못 굳혀도 이 자리는 된다.
+  dropout_(p = 0.5, training = true): Tensor {
+    return this.mutate(() => this.dropout(p, training));
+  }
+
+  /** **채널째 떨군다** — `dropout2d` 와 같은 계산이다. */
+  featureDropout_(p = 0.5, training = true): Tensor {
+    return this.mutate(() => this.featureDropout(p, training));
+  }
+
+  alphaDropout_(p = 0.5, training = false): Tensor {
+    return this.mutate(() => this.alphaDropout(p, training, false));
+  }
+
+  /** 알파 떨구기의 채널 판. `alphaDropout` 에 `perChannel` 을 켠 것이다. */
+  featureAlphaDropout(p = 0.5, training = false): Tensor {
+    return this.alphaDropout(p, training, true);
+  }
+
+  featureAlphaDropout_(p = 0.5, training = false): Tensor {
+    return this.mutate(() => this.alphaDropout(p, training, true));
+  }
+
   nanToNum_(nan = 0, posinf?: number, neginf?: number): Tensor {
     return this.mutate(() => this.nanToNum(nan, posinf, neginf));
   }
