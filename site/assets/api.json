@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. The English lives in site/api_en.json and says so when its source has moved.",
  "english": {
-  "done": 636,
+  "done": 640,
   "stale": 0,
-  "missing": 5
+  "missing": 1
  },
  "modules": [
   {
@@ -3895,7 +3895,8 @@
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "제자리 판 서른여덟"
-       }
+       },
+       "doc_en": "**Drops whole channels** — the same computation as `dropout2d`."
       },
       {
        "name": "alphaDropout_",
@@ -3915,7 +3916,8 @@
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "제자리 판 서른여덟"
-       }
+       },
+       "doc_en": "The per-channel form of alpha dropout. `alphaDropout` with `perChannel` turned on."
       },
       {
        "name": "featureAlphaDropout_",
@@ -11433,7 +11435,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Changes the size. **It takes an array and returns an array** — not a tensor. Making a tensor\nper image makes one GPU buffer per image (the same reason as `RandomCrop`).\n\nGiven a single number for `size`, it fits **the short side** to that value and keeps the ratio."
     },
     {
      "kind": "class",
@@ -11456,7 +11459,8 @@
        "signature": "describe(): string",
        "doc": ""
       }
-     ]
+     ],
+     "doc_en": "Crops out the middle. **A crop larger than the original is padded with zeros and then cropped** —\ntorchvision does that, and refusing would make the same code diverge between two libraries."
     },
     {
      "kind": "function",
