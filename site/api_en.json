@@ -1087,6 +1087,10 @@
   "en": "Where the brackets go. One door for carrying `x[...]` across — the syntax and the reasoning are in `indexing.ts`.\n\n```ts\nx.at(0)                     // x[0]           the axis disappears\nx.at([null, 1])             // x[:, 1]        null is Python's `:`\nx.at(slice(1, 3))           // x[1:3]         the axis remains\nx.at([0, slice(1, 3)])      // x[0, 1:3]\nx.at(slice(null, null, 2))  // x[::2]\nx.at([[0, 2]])              // x[[0, 2]]      two brackets — numpy's shape\nx.at(idx)                   // x[idx]         an int64 tensor\n```\n\n**The outermost array is always the list of axes.** Give fewer and the remaining axes come\nwhole.\n\n## No values are made here\n\nEverything is handed to existing methods — an integer to `select`, a contiguous span to\n`narrow`, a strided one or an index list to `indexSelect`. There is no new kernel, so **the\ngolden cases already protect those values.** What this method is responsible for is not the\nvalue but **which door it is sent through.**\n\n## Boolean masks are not accepted\n\n`x[mask]` remains `await x.maskedSelect(mask)`. The length of the result **depends on the\nvalues**, so it takes one read off the GPU to know, and making `at()` asynchronous for that\nalone would put an `await` on every other use for no reason. It is the same reason `unique`,\n`nonzero` and `bincount` are asynchronous, and keeping it in the same place is better.",
   "src": "13c4e79a3433"
  },
+ "tensor/Tensor.atan2": {
+  "en": "The two-argument arctangent. **The argument order is `(y, x)`** — reversed, it quietly gives a\ndifferent angle.\n\n`arctan2` is torch's second spelling for the same thing.",
+  "src": "7d35abdf14ce"
+ },
  "tensor/Tensor.atleast2d": {
   "en": "At least two-dimensional. Already two or more, and it is unchanged.",
   "src": "4c5ed803bbbb"
@@ -1119,6 +1123,10 @@
   "en": "Each slot **reads its own value as a probability** and lands on 0 or 1. At `p=0` all zeros,\nat `p=1` all ones.\n\n**The comparison finishes on the device** — once the drawn randomness is uploaded, no value\ncomes back down. The binding (`borch_webgpu`) builds the same name out of numpy, but that is\nbecause `get_rng_state` over there has to serialise one stream, and there is no reason for\nthis side to do the same.",
   "src": "c4beeba4ea0c"
  },
+ "tensor/Tensor.bernoulli_": {
+  "en": "**A different operation from its counterpart.** `bernoulli()` reads its own values as\nprobabilities; this one **ignores** them and fills with `p` (measured: feed it `[1,4,9,2]` and at\n`p=0` it is all zeros).\n\nBuilt from the counterpart on the strength of the underscore alone, the values agree wherever the\nprobability is 0 or 1, because those are certain, and **it is quietly wrong only at the\nprobabilities in between.** The core kept it out of the automatic table for the same reason.",
+  "src": "d9f156c38c14"
+ },
  "tensor/Tensor.bilinear": {
   "en": "`y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. The weight has **three axes.**\n\nIt does not call `einsum` — that side imports this file, so they would bite each other.\nSplit into two steps it writes down with what already exists: first ride `x₂` through `W`\nto make `(B, O, I)`, then fold with `x₁` along the last axis.",
   "src": "2d53ceadd84f"
@@ -1142,6 +1150,10 @@
  "tensor/Tensor.broadcastTensors": {
   "en": "Stretches everything to a common shape. **Copies, not views.**",
   "src": "af3f437cdd75"
+ },
+ "tensor/Tensor.broadcastTo": {
+  "en": "Stretches to that shape. The same as `expand`, taking the shape **as a list.**",
+  "src": "24be47f33525"
  },
  "tensor/Tensor.bucketize": {
   "en": "`searchSorted` **with the receiver flipped.** That is the whole difference between the two names.\n\ntorch has `bucketize(input, boundaries)` taking the values first, so the values are the\nreceiver here too. The computation exists only on the other side — two copies and one of them\ngets fixed alone.",
@@ -1439,6 +1451,10 @@
   "en": "**Drops channels, not elements.**\n\nSitting next to `dropout`, the name reads as \"the N-dimensional one\", and the work is\ndifferent — a whole channel goes to zero or stays whole. Drawing the mask as `(N, C, 1, …)`\nand broadcasting writes that meaning down directly.",
   "src": "4abf9ddd383c"
  },
+ "tensor/Tensor.fill": {
+  "en": "A **copy** filled with one value. The counterpart of `fill_`, and torch offers both.\n\nThis name was missing and invisible because the check read `fill_` as `fill` — the third place\nwhere stripping a trailing underscore erased the meaning.",
+  "src": "7d0400054bb9"
+ },
  "tensor/Tensor.fillDiagonal_": {
   "en": "The diagonal to one value.\n\n**`wrap` only means something on a tall matrix.** The stride is `cols + 1` either way, and all\nthat differs is **where it stops** — off, it stops at `cols²` slots and paints only the first\nblock's diagonal; on, it runs to the end and paints the lower blocks' diagonals too. numpy's\n`fill_diagonal` is exactly that one line and torch takes it as-is.\n\nIt was first written down as \"the wrapped position skips a row\", and coded that way — no such\nrule exists. There was one case and it asked with a square, so that branch was **passing through\nnothing** — a case asking with a tall matrix goes in alongside.",
   "src": "8fcbc233ac58"
@@ -1446,6 +1462,10 @@
  "tensor/Tensor.fillWith": {
   "en": "A **new** tensor of the same shape filled with one value. **Not in place** — torch's `fill` is\nso, and it does something different from `fill_`, one character away (measured).",
   "src": "8ab449a77cb7"
+ },
+ "tensor/Tensor.fix": {
+  "en": "Truncates towards zero. The same as `trunc` — not `floor`.",
+  "src": "76b04bc9f622"
  },
  "tensor/Tensor.flip": {
   "en": "Reverses one axis.",
@@ -1459,6 +1479,10 @@
   "en": "A power. **torch computes it promoted to double** — we do not have that type.\n\nThe value is the same as `pow` and only the type differs, and having no such type they are the\nsame thing here. That is also why torch itself refuses `float_power_` at a float32 slot — there\nis nowhere to write it back.",
   "src": "1c8347113add"
  },
+ "tensor/Tensor.floatPower_": {
+  "en": "**It always refuses.** `float_power`'s result is double precision and there is nowhere to write\nit back — torch stops at a float32 slot for the same reason (measured).",
+  "src": "0ad7bd2ea8ce"
+ },
  "tensor/Tensor.floats": {
   "en": "How many f32 slots the buffer actually holds. For reals it equals `size`; **for complex it is twice that.**\n\nPlaces that only ask \"how many slots of value are there\" — reads, copies, lifetimes — use\nthis. Using `size` directly cuts off the back half of a complex quietly, with the shape and\nthe element count both looking plausible.",
   "src": "b4d92c2fada1"
@@ -1466,6 +1490,10 @@
  "tensor/Tensor.floorDivide": {
   "en": "The quotient along `dim` by **floor division.** It rounds towards −∞, not towards zero.",
   "src": "0982fe8de72d"
+ },
+ "tensor/Tensor.fmax": {
+  "en": "**It skips NaN** — `maximum` carries NaN out with it. That divergence is the whole of the name.\n\nThere is no separate kernel. If one side is NaN the definition is to take the other, and `where`\nwrites that down directly — **written as a multiplication, `0 × NaN = NaN` contaminates the very\nslots that were filtered out.** The assembly lived only in the binding for a long time.",
+  "src": "fa7b1e044823"
  },
  "tensor/Tensor.fmod": {
   "en": "The remainder. **torch's `fmod` follows the sign of the dividend** — unlike Python's `%`.\n\nGradient flows to the dividend as 1. The divisor side is a staircase, so nothing flows.",
@@ -1498,6 +1526,10 @@
  "tensor/Tensor.gaussianNllLoss": {
   "en": "The Gaussian negative log-likelihood.\n\n**The variance is clamped by `eps`.** Unclamped it divides by zero and goes to infinity.",
   "src": "8624cc0fe447"
+ },
+ "tensor/Tensor.gcd": {
+  "en": "The greatest common divisor. **It discards signs** — torch's answer is always non-negative.",
+  "src": "67e9871db3f7"
  },
  "tensor/Tensor.geluTanh": {
   "en": "The `approximate=\"tanh\"` GELU. The table's `gelu` is **the exact form** (erf).\n\nThe maximum difference is around 1e-4, so it is a place where \"near enough, keep one\" almost\ngot through. torch keeps them apart because the tanh one is faster, not because they are the\nsame.",
@@ -1675,6 +1707,10 @@
   "en": "Folds the **last `dims` axes together.** `layerNorm` folds one axis only.\n\ntorch's `LayerNorm(normalized_shape)` decides **how many** axes to fold from the length of that\nshape, and measured with a single axis (`LayerNorm(4)`) the two give the same answer — which is\nwhy it went unseen for a long time. Given `(3, 4)` they diverge.",
   "src": "43a8928f47fa"
  },
+ "tensor/Tensor.lcm": {
+  "en": "The least common multiple. **Zero when `gcd` is zero** (measured: the lcm of 0 and 7 is 0).",
+  "src": "65ca70a18f87"
+ },
  "tensor/Tensor.ldlFactor": {
   "en": "A symmetric matrix as `L D Lᵀ`. **It does not pivot.**\n\ntorch uses LAPACK's Bunch–Kaufman, which swaps positions when it has to. Here only the cases with\nnothing to swap (positive definite and the like) are handled, and a near-zero diagonal is refused\nloudly — carrying on quietly gives a different answer with and without swapping, and both are\nplausible.\n\nThe answer is **packed into one plate** in torch's shape — the diagonal is `D` and below it is\n`L`.",
   "src": "8afd3481b77f"
@@ -1730,6 +1766,10 @@
  "tensor/Tensor.logdet": {
   "en": "`log|det|`. The backward is `A⁻ᵀ` — more stable, with no determinant multiplied in.",
   "src": "3731c649dd6d"
+ },
+ "tensor/Tensor.logicalAnd": {
+  "en": "Logical and, **reading anything non-zero as true.** That is where it parts from the bitwise operation.",
+  "src": "1dabfc2d418e"
  },
  "tensor/Tensor.logicalXor": {
   "en": "Exclusive or. **Absent from the binary table**, so it is built by asking twice whether it differs from zero.",
@@ -1839,6 +1879,10 @@
   "en": "The most frequent value. **On an equal count the smaller value wins, and the index is that\nvalue's last occurrence** (measured: `[4,4,5,5]` gives value 4 at index 1).\n\nMeasured with data that has no ties, that rule never surfaces.",
   "src": "e717bf38629e"
  },
+ "tensor/Tensor.moveaxis": {
+  "en": "Moves an axis. The same as `movedim`, and torch offers both.",
+  "src": "af7430edcae7"
+ },
  "tensor/Tensor.movedim": {
   "en": "Moves an axis to a chosen position. Unlike `swapaxes`, it preserves the order of the rest.",
   "src": "9fd460b19e79"
@@ -1894,6 +1938,10 @@
  "tensor/Tensor.narrow": {
   "en": "Only `length` entries from `start` along one axis.",
   "src": "7e2cbd305a92"
+ },
+ "tensor/Tensor.nextafter": {
+  "en": "The next representable float towards `other`. The point is that the spacing differs with the value.",
+  "src": "c712d563b776"
  },
  "tensor/Tensor.nllLoss": {
   "en": "The negative log-likelihood. `this` must already have been through `log_softmax`.\n\n**The graph breaks easily where the target position is extracted.** Return the value detached\nand no gradient reaches the extracted slot, making the whole classification loss\nnon-differentiable.",
@@ -2007,6 +2055,10 @@
   "en": "Builds from magnitude and angle. Where `torch.polar` goes.",
   "src": "ca86fa61a282"
  },
+ "tensor/Tensor.polygamma_": {
+  "en": "The `n`-th derivative of the digamma function, in place. The order is **the first argument.**",
+  "src": "1584a736d361"
+ },
  "tensor/Tensor.poolND": {
   "en": "Pooling independent of dimensionality.",
   "src": "a66c007e9f2f"
@@ -2094,6 +2146,10 @@
  "tensor/Tensor.repr": {
   "en": "The text `print(t)` prints. **It reads back from the GPU, so it is asynchronous.**\n\nTextbooks print this text verbatim, so this project treats it as a specification too — the reasoning\nis in `src/repr.ts`.",
   "src": "8ffefa36b53f"
+ },
+ "tensor/Tensor.requiresGrad_": {
+  "en": "Raises the gradient flag and **returns itself**, which torch does so it can be chained\n(`x.requires_grad_().sum()`).",
+  "src": "2384cf2c4a7f"
  },
  "tensor/Tensor.reshape": {
   "en": "Views the same buffer as a different shape. The element order does not change, so no kernel is needed.\n\n**`-1` means \"the rest\".** It is the form torch code always uses — `x.reshape(-1)`,\n`x.view(n, -1)` — and it was missing here: the size-matching check caught it and it stopped\nwith `shape '[-1]' is invalid`. It can be used in one position only, and must divide the\nrest evenly.",
@@ -2263,6 +2319,14 @@
   "en": "Swaps two axes. The same as `swapdims` — torch carries both names.",
   "src": "5385bcde74d2"
  },
+ "tensor/Tensor.t": {
+  "en": "Two-dimensional transpose. **One dimension or fewer is left alone** — as in torch.",
+  "src": "f0e486f980eb"
+ },
+ "tensor/Tensor.t_": {
+  "en": "Two-dimensional transpose in place. **The shape changes** — asked with a square alone, it passes\nwithout changing anything.",
+  "src": "68258f4916a9"
+ },
  "tensor/Tensor.tensorInv": {
   "en": "Folds the tensor into a matrix, inverts, and returns the axis order.",
   "src": "0b3f1f166ebe"
@@ -2374,6 +2438,10 @@
  "tensor/Tensor.variance": {
   "en": "Variance. **torch's default is the unbiased estimate (dividing by n-1)** — left at\n`correction=0` the value comes out subtly smaller, and that becomes the place it diverges\nquietly inside a normalisation layer.",
   "src": "84d8c3dc4d10"
+ },
+ "tensor/Tensor.vdot": {
+  "en": "The vector inner product. **For complex it conjugates the left side** — on reals it is `dot`.",
+  "src": "15f9bbe6a69b"
  },
  "tensor/Tensor.vecdot": {
   "en": "The inner product, treating the last axis as a vector.",

@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. 영어는 site/api_en.json 이 들고 있고, 원문이 바뀌면 낡았다고 말한다.",
  "english": {
-  "done": 619,
+  "done": 636,
   "stale": 0,
-  "missing": 17
+  "missing": 0
  },
  "modules": [
   {
@@ -3180,7 +3180,8 @@
        "section": {
         "ko": "제자리 연산",
         "en": "In place"
-       }
+       },
+       "doc_en": "A **copy** filled with one value. The counterpart of `fill_`, and torch offers both.\n\nThis name was missing and invisible because the check read `fill_` as `fill` — the third place\nwhere stripping a trailing underscore erased the meaning."
       },
       {
        "name": "polygamma_",
@@ -3189,7 +3190,8 @@
        "section": {
         "ko": "제자리 연산",
         "en": "In place"
-       }
+       },
+       "doc_en": "The `n`-th derivative of the digamma function, in place. The order is **the first argument.**"
       },
       {
        "name": "requiresGrad_",
@@ -3199,7 +3201,8 @@
        "section": {
         "ko": "제자리 연산",
         "en": "In place"
-       }
+       },
+       "doc_en": "Raises the gradient flag and **returns itself**, which torch does so it can be chained\n(`x.requires_grad_().sum()`)."
       },
       {
        "name": "fill_",
@@ -3332,7 +3335,8 @@
        "section": {
         "ko": "커널 표에는 있는데 이름이 없던 것들",
         "en": "커널 표에는 있는데 이름이 없던 것들"
-       }
+       },
+       "doc_en": "The two-argument arctangent. **The argument order is `(y, x)`** — reversed, it quietly gives a\ndifferent angle.\n\n`arctan2` is torch's second spelling for the same thing."
       },
       {
        "name": "arctan2",
@@ -3422,7 +3426,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "Truncates towards zero. The same as `trunc` — not `floor`."
       },
       {
        "name": "fix_",
@@ -3516,7 +3521,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "**It skips NaN** — `maximum` carries NaN out with it. That divergence is the whole of the name.\n\nThere is no separate kernel. If one side is NaN the definition is to take the other, and `where`\nwrites that down directly — **written as a multiplication, `0 × NaN = NaN` contaminates the very\nslots that were filtered out.** The assembly lived only in the binding for a long time."
       },
       {
        "name": "fmin",
@@ -3534,7 +3540,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "Moves an axis. The same as `movedim`, and torch offers both."
       },
       {
        "name": "t",
@@ -3543,7 +3550,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "Two-dimensional transpose. **One dimension or fewer is left alone** — as in torch."
       },
       {
        "name": "vdot",
@@ -3552,7 +3560,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "The vector inner product. **For complex it conjugates the left side** — on reals it is `dot`."
       },
       {
        "name": "broadcastTo",
@@ -3562,7 +3571,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "Stretches to that shape. The same as `expand`, taking the shape **as a list.**"
       },
       {
        "name": "gcd",
@@ -3571,7 +3581,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "The greatest common divisor. **It discards signs** — torch's answer is always non-negative."
       },
       {
        "name": "lcm",
@@ -3580,7 +3591,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "The least common multiple. **Zero when `gcd` is zero** (measured: the lcm of 0 and 7 is 0)."
       },
       {
        "name": "nextafter",
@@ -3589,7 +3601,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "The next representable float towards `other`. The point is that the spacing differs with the value."
       },
       {
        "name": "bitwiseAnd",
@@ -3649,7 +3662,8 @@
        "section": {
         "ko": "torch 의 둘째 철자들",
         "en": "torch 의 둘째 철자들"
-       }
+       },
+       "doc_en": "Logical and, **reading anything non-zero as true.** That is where it parts from the bitwise operation."
       },
       {
        "name": "logicalOr",
@@ -3899,7 +3913,8 @@
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "제자리 판 서른여덟"
-       }
+       },
+       "doc_en": "**A different operation from its counterpart.** `bernoulli()` reads its own values as\nprobabilities; this one **ignores** them and fills with `p` (measured: feed it `[1,4,9,2]` and at\n`p=0` it is all zeros).\n\nBuilt from the counterpart on the strength of the underscore alone, the values agree wherever the\nprobability is 0 or 1, because those are certain, and **it is quietly wrong only at the\nprobabilities in between.** The core kept it out of the automatic table for the same reason."
       },
       {
        "name": "floatPower_",
@@ -3909,7 +3924,8 @@
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "제자리 판 서른여덟"
-       }
+       },
+       "doc_en": "**It always refuses.** `float_power`'s result is double precision and there is nowhere to write\nit back — torch stops at a float32 slot for the same reason (measured)."
       },
       {
        "name": "divide_",
@@ -3955,7 +3971,8 @@
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "제자리 판 서른여덟"
-       }
+       },
+       "doc_en": "Two-dimensional transpose in place. **The shape changes** — asked with a square alone, it passes\nwithout changing anything."
       },
       {
        "name": "greater_",
