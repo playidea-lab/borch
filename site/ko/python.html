@@ -134,7 +134,7 @@
       <tr>
         <td class="num">—</td>
         <td class="num">keepAlive(t)</td>
-        <td class="num"><strong>대응물 없음</strong></td>
+        <td class="num"><strong>torch.keep_alive(t)</strong></td>
       </tr>
     </table>
     </div>
@@ -175,13 +175,19 @@
       정직한 모서리 셋이고, 전부 이 페이지를 쓰면서 확인한 것이다.
     </p>
     <p>
-      <strong>구역 밖으로 나가는 것이 없다.</strong> 자바스크립트에서는 구역 안에서
-      만든 텐서를 <code>keepAlive(t)</code> 로 표시하거나 구역의 둘째 인자로 돌려
-      내보낼 수 있다. 파이썬에는 둘 다 없어서, <code>with torch.scope():</code> 안에서
-      만든 텐서는 블록 뒤에 못 쓴다. 실제로는 잘 안 물린다 — 모델·옵티마이저 상태·데이터는
-      고리 앞에서 만들고 거기서는 아무도 안 놓기 때문이다. 그래도 천장은 진짜이고,
-      부딪혔을 때 나오는 말은 <code>keepAlive</code> 가 borch.ts 에 없다고 하는데
-      그건 사실이 아니다. 거기 모듈 함수로 있고, 넘기는 쪽이 텐서 메서드만 보는 것이다.
+      <strong>구역 밖으로는 표시한 것만 나간다.</strong> <code>with torch.scope():</code>
+      안에서 만들고 표시를 안 하면 블록 끝에서 놓이고, 그 뒤에 쓰면 멈춘다. 표시가 둘
+      있는데 <b>같은 것이 아니다</b>. <code>torch.keep_alive(t)</code> 는 어떤 구역도
+      안 놓는다는 뜻이고 — 파라미터와 옵티마이저 상태가 원하는 것이 그것이다 —
+      <code>with torch.scope() as s: s.keep(t)</code> 는 바깥 구역에 넘겨서 그쪽이
+      닫힐 때 같이 놓인다. 중간값에 앞의 것을 쓰면 스텝마다 쌓인다.
+      <br><br>
+      이 페이지는 한동안 파이썬에 둘 다 없다고 적고 있었다. 쓸 때는 사실이었고 재서
+      쓴 것이다. 문장을 조용히 갈아 끼우는 대신 무엇이 바뀌었는지 적어 둔다 — 결속에
+      구역은 있는데 문이 없었고, 그때 나오던 말은 <code>keepAlive</code> 가 borch.ts 에
+      없다고 했는데 거짓이었다. 검사하는 명제는 "텐서 메서드인가" 인데 말하는 명제는
+      "borch.ts 에 있는가" 였다. 둘 다 고쳐졌고, 문구도 이제 자기가 어느 쪽을 말하는지
+      밝힌다.
     </p>
     <p>
       <strong><code>torch.cuda.is_available()</code> 은 거짓을 답한다.</strong>

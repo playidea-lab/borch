@@ -146,7 +146,7 @@
       <tr>
         <td class="num">—</td>
         <td class="num">keepAlive(t)</td>
-        <td class="num"><strong>no equivalent</strong></td>
+        <td class="num"><strong>torch.keep_alive(t)</strong></td>
       </tr>
     </table>
     </div>
@@ -190,15 +190,22 @@
       Three honest edges, all of them checked while writing this page.
     </p>
     <p>
-      <strong>Nothing leaves a scope.</strong> In JavaScript a tensor made inside
-      <code>scope()</code> can be carried out by marking it with
-      <code>keepAlive(t)</code>, or by returning it from the scope's second argument.
-      Python has neither, so a tensor created inside <code>with torch.scope():</code>
-      cannot be used after the block. In practice this rarely bites — models,
-      optimizer state and data are made before the loop, where nothing frees them —
-      but the ceiling is real, and the error you get if you try names
-      <code>keepAlive</code> as absent from borch.ts, which is not true: it is a module
-      function there, and the forwarder only looks at tensor methods.
+      <strong>A tensor leaves a scope only if you say so.</strong> Made inside
+      <code>with torch.scope():</code> and left unmarked, it is released at the end of
+      the block and using it afterwards raises. There are two marks, and they are not
+      the same one: <code>torch.keep_alive(t)</code> means no scope ever releases it —
+      that is what parameters and optimizer state want — while
+      <code>with torch.scope() as s: s.keep(t)</code> hands it to the enclosing scope,
+      so it goes when that one closes. Use the first on an intermediate value and it
+      accumulates every step.
+      <br><br>
+      This page said for a while that Python had neither, which was true when it was
+      written and was measured. It is worth saying what changed rather than quietly
+      editing the sentence: the binding had the scope but not the doors, and the error
+      it raised claimed <code>keepAlive</code> was absent from borch.ts, which was
+      false — the check asked whether the name is a tensor method while the message
+      spoke about borch.ts as a whole. Both are fixed, and the message now says which
+      of the two it means.
     </p>
     <p>
       <strong><code>torch.cuda.is_available()</code> answers False</strong>, on
