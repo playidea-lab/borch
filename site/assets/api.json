@@ -4,7 +4,7 @@
  "english": {
   "done": 619,
   "stale": 0,
-  "missing": 10
+  "missing": 11
  },
  "modules": [
   {
@@ -3326,6 +3326,33 @@
        }
       },
       {
+       "name": "atan2",
+       "signature": "atan2(other: Tensor | number): Tensor",
+       "doc": "두 인자를 받는 아크탄젠트. **인자 차례가 `(y, x)` 다** — 뒤집으면 조용히 다른\n각이 나온다.\n\n`arctan2` 는 torch 의 둘째 철자이고 같은 것이다.",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "arctan2",
+       "signature": "arctan2(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
+       "name": "arctan2_",
+       "signature": "arctan2_(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "커널 표에는 있는데 이름이 없던 것들",
+        "en": "커널 표에는 있는데 이름이 없던 것들"
+       }
+      },
+      {
        "name": "gcd",
        "signature": "gcd(other: Tensor | number): Tensor",
        "doc": "최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다.",
@@ -5492,7 +5519,7 @@
      "doc_en": "Makes one graph node from outside. **A door for places writing kernels in another file.**\n\n`Tensor.make` is private — it is what this class's own operations use, and that is right. But once a\nmodule with **kernels of its own** appears, such as `fft.ts`, that door is needed. Rather than\nrestating the conditions there (two copies of the `gradMode` check and the `requiresGrad` propagation\neventually diverge), it hands over to the same place."
     }
    ],
-   "count": 559,
+   "count": 562,
    "doc_en": "`Tensor` — one GPU buffer, a shape, and one node on the tape.\n\nThe layout is **NCHW** and the dtype is **float32, only.** The sister project\n(`borch_webgpu`) holding NHWC and packing int64 into float32 was a detour around\nTF.js's constraints, and our kernels do not have those constraints. Imitating it\ninherits someone else's detour for no reason."
   },
   {
@@ -11998,5 +12025,5 @@
    "count": 9
   }
  ],
- "total": 1556
+ "total": 1559
 }

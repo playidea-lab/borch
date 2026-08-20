@@ -6144,6 +6144,24 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return v instanceof Tensor ? v : Tensor.full([], v);
   }
 
+  /**
+   * 두 인자를 받는 아크탄젠트. **인자 차례가 `(y, x)` 다** — 뒤집으면 조용히 다른
+   * 각이 나온다.
+   *
+   * `arctan2` 는 torch 의 둘째 철자이고 같은 것이다.
+   */
+  atan2(other: Tensor | number): Tensor {
+    return this.binary("atan2", Tensor.asTensor(other));
+  }
+
+  arctan2(other: Tensor | number): Tensor {
+    return this.atan2(other);
+  }
+
+  arctan2_(other: Tensor | number): Tensor {
+    return this.mutate(() => this.atan2(other));
+  }
+
   /** 최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다. */
   gcd(other: Tensor | number): Tensor {
     return this.binary("gcd", Tensor.asTensor(other));
@@ -9172,6 +9190,26 @@ Object.defineProperty(Tensor.prototype, "elu", {
   Object.defineProperty(Tensor.prototype, "abs", {
     value: function (this: Tensor): Tensor {
       return this.isComplex() ? this.complexAbs() : realAbs.call(this);
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * **`bitwise_not` 도 표 뒤에서 다시 단다.** 참거짓이면 논리 부정이다 — `~true` 는
+ * `-2` 가 아니라 `false` 다(실측). 그 갈림이 오래 결속에만 있었고, 커널 주석은
+ * "여기는 정수만 본다" 고 적어 두었다. 그러면 TypeScript 로 부르는 쪽은 **없는 답이
+ * 아니라 틀린 답**을 받는다.
+ *
+ * 클래스 본문에 적었더니 위 루프가 덮었다 — `abs`·`elu` 가 이미 물린 순서 문제이고,
+ * 세 번째다. 표에 이름이 있는 연산을 손으로 고치려면 **표 뒤**여야 한다.
+ */
+{
+  const rawNot = Tensor.prototype.bitwise_not;
+  Object.defineProperty(Tensor.prototype, "bitwise_not", {
+    value: function (this: Tensor): Tensor {
+      return this.dtype === "bool" ? this.logicalNot() : rawNot.call(this);
     },
     writable: true,
     configurable: true,

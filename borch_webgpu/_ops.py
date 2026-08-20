@@ -2304,11 +2304,13 @@ def bitwise_not(x, **kw):
 
     이항 쪽(`and`·`or`·`xor`)은 갈래가 필요 없다. 0/1 에서 비트 셈과 논리 셈이 같은
     답을 내고, 형도 `bool` 끼리면 `bool` 로 남는다. 부정만 다르다.
+
+    **갈림이 저쪽으로 갔다.** 여기 있는 동안 borch.ts 의 커널 주석은 "여기는 정수만
+    본다" 였고, 그러면 TypeScript 로 부르는 사람은 없는 답이 아니라 **틀린 답**을
+    받는다. 자기 형은 자기가 아니까 가르는 자리도 거기다.
     """
     _no_out(kw)
-    x = wrap(x)
-    return _unary(x, "logical_not" if str(handle(x).dtype) == "bool"
-                  else "bitwise_not")
+    return wrap(guarded(handle(wrap(x)).bitwise_not))
 
 
 def var_mean(t, dim=None, keepdim=False, **kw):

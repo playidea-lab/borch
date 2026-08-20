@@ -3614,7 +3614,77 @@ function addRecent(out: Map<string, Case>): void {
     out.set(`bit::${name}`, () => ints().binary(name, rhs()));
   }
 
+  // **메서드 이름으로도 묻는다.** 위의 일곱은 `binary(이름)` 표를 거치는데, torch 에서
+  // 옮겨 온 코드가 치는 줄은 `x.gcd(y)` 다 — 그 이름이 오래 없었다.
+  const asMethod: [string, (a: Tensor, b: Tensor) => Tensor][] = [
+    ["bitwise_and", (a, b) => a.bitwiseAnd(b)],
+    ["bitwise_or", (a, b) => a.bitwiseOr(b)],
+    ["bitwise_xor", (a, b) => a.bitwiseXor(b)],
+    ["bitwise_left_shift", (a, b) => a.bitwiseLeftShift(b)],
+    ["bitwise_right_shift", (a, b) => a.bitwiseRightShift(b)],
+    ["gcd", (a, b) => a.gcd(b)],
+    ["lcm", (a, b) => a.lcm(b)],
+  ];
+  for (const [name, fn] of asMethod) {
+    out.set(`bit::메서드::${name}`, () => fn(ints(), rhs()));
+  }
+
+  out.set("bit::bitwise_not", () => ints().bitwise_not());
+  // **참거짓은 다른 계산이다** — `~True` 는 `-2` 가 아니라 `False` 다. 정수로만
+  // 물으면 이 갈래가 통째로 안 돌아간다.
+  const flags4b = (): Tensor => Tensor.from([1, 1, 0, 0], [4], { dtype: "bool" });
+  const notFlags = (): Tensor => Tensor.from([0, 0, 1, 1], [4], { dtype: "bool" });
+  out.set("bit::bitwise_and(참거짓)", () => flags4b().bitwiseAnd(notFlags()));
+  out.set("bit::bitwise_or(참거짓)", () => flags4b().bitwiseOr(notFlags()));
+  out.set("bit::bitwise_not(참거짓)", () => flags4b().bitwise_not());
+
+  // 제자리 판. **같은 텐서를 돌려줘야** 이어 부르는 코드가 원본을 고친다.
+  const inPlacePairs: [string, (x: Tensor) => Tensor][] = [
+    ["gcd_", (x) => x.gcd_(rhs())],
+    ["lcm_", (x) => x.lcm_(rhs())],
+  ];
+  for (const [name, fn] of inPlacePairs) {
+    out.set(`bit::제자리::${name}`, () => {
+      const x = ints();
+      fn(x);
+      return x;
+    });
+    out.set(`bit::제자리::${name}(같은 텐서)`, () => {
+      const x = ints();
+      return verdict(fn(x) === x);
+    });
+  }
+
   const reals = (): Tensor => Tensor.from([-2.5, 0.5, 1.5, 3.0], [4]);
+  out.set("bit::clamp_max", () => reals().clampMax(1.0));
+  out.set("bit::clamp_min", () => reals().clampMin(0.0));
+  out.set("bit::제자리::clamp_max_", () => {
+    const x = reals();
+    x.clampMax_(1.0);
+    return x;
+  });
+  out.set("bit::제자리::clamp_min_", () => {
+    const x = reals();
+    x.clampMin_(0.0);
+    return x;
+  });
+  out.set("bit::arctan2", () => reals().arctan2(reals().add(Tensor.full([], 1))));
+  // **같은 텐서**에서 그래프를 끊는다. `detach()` 로 잘못 지으면 `===` 가 거짓이
+  // 되고, 원본은 여전히 위쪽에 붙어 있어 역전파가 계속 흐른다.
+  out.set("bit::detach_", () => {
+    const x = Tensor.from([-2.5, 0.5, 1.5, 3.0], [4], { requiresGrad: true });
+    const y = x.mul(Tensor.full([], 2));
+    const z = y.detach_();
+    return `${verdict(z === y)} ${verdict(y.requiresGrad)}`;
+  });
+  // **`fill` 은 `fill_` 과 달리 제자리가 아니다.** 한 글자 차이라 값만 보면
+  // 그럴듯하고, 원본이 그대로인지를 따로 물어야 드러난다.
+  out.set("bit::fill", () => reals().fill(7.0));
+  out.set("bit::fill(원본은 그대로)", () => {
+    const x = reals();
+    x.fill(7.0);
+    return x;
+  });
   out.set("bit::i0", () => reals().i0());
   // 급수가 3.75 에서 갈린다 — 그 너머를 따로 묻는다.
   out.set("bit::i0(큰 값)", () => Tensor.from([4.0, 8.0, 12.0], [3]).i0());
@@ -3633,6 +3703,15 @@ function addRecent(out: Map<string, Case>): void {
   for (const dim of [0, 1]) {
     out.set(`bit::logcumsumexp(dim=${dim})`, () => grid23().logcumsumexp(dim));
   }
+  // **고르지 않은 무게로 센다.** 전부 1 이면 누적의 순서가 상쇄되어 뒤에서부터
+  // 쌓이는 규칙이 안 드러난다.
+  out.set("bit::grad::logcumsumexp", () => {
+    const x = Tensor.from([1.0, 2.0, -1.0, 3.0, 4.0, 0.5], [2, 3],
+      { requiresGrad: true });
+    x.logcumsumexp(1)
+      .mul(Tensor.from([1.0, 2.0, 0.5, 0.5, 3.0, 1.5], [2, 3])).sum().backward();
+    return gradOf(x, "logcumsumexp");
+  });
 
   // 창 함수. **`periodic` 이 기본이고 그것이 길이를 하나 늘린다.**
   const windows: [string, (n: number, p: boolean) => Tensor][] = [
