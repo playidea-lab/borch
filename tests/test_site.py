@@ -1,12 +1,14 @@
-"""사이트가 저장소와 어긋나지 않았는가.
+"""Whether the site has drifted from the repository.
 
-`tests/test_docs.py` 가 문서의 **수**를 붙잡는 것과 같은 자리다. 이쪽이 붙잡는 것은
-**생성물**이다 — `site/assets/api.json` 은 `site/build_api.py` 가 선언 파일에서 뽑은
-것이고, 소스가 자란 뒤 다시 안 뽑으면 사이트가 없는 API 를 보여주거나 새 API 를 빠뜨린다.
+The same place `tests/test_docs.py` occupies for the **numbers** in the documentation.
+What this one holds is the **generated files** — `site/assets/api.json` is what
+`site/build_api.py` pulled out of the declaration files, and left unregenerated after the
+source grows, the site shows an API that does not exist or leaves out one that does.
 
-그 어긋남은 **화면에서 안 보인다.** 목록이 조금 짧은 것과 원래 그만큼인 것이 같은
-모양이라, 사람이 눈으로 찾는 방식은 여기서 특히 안 듣는다(생성기를 쓰다가 실제로 겪었다 —
-파서가 텐서 메서드 422 개 중 18 개만 물고 있었는데 화면은 멀쩡해 보였다).
+That drift **does not show on screen.** An index that is slightly short and an index that
+was always that length have the same shape, so looking for it by eye works particularly
+badly here (which happened while writing the generator — the parser was catching 18 of
+the Tensor's 422 methods and the screen looked fine).
 """
 
 import gzip
@@ -27,24 +29,26 @@ DECL = ROOT / "borch-ts" / "dist" / "src"
 
 
 def test_api_reference_is_not_stale():
-    """`api.json` 이 지금 선언 파일에서 뽑은 것과 같아야 한다.
+    """`api.json` has to equal what the declaration files give right now.
 
-    선언 파일은 `.gitignore` 라 어느 커밋에도 없다 — 없으면 대조할 것이 없으므로
-    건너뛴다. **없는 것을 실패로 만들면** 방출물을 안 만든 체크아웃에서 이 검사가
-    빨개지고, 그러면 사람이 검사를 끄는 법을 배운다.
+    The declaration files are gitignored and so appear in no commit — with none of them
+    there is nothing to compare against, so it skips. **Making absence a failure** turns
+    this red on any checkout that has not built the bundle, and then people learn how to
+    switch checks off.
     """
     if not DECL.exists():
-        pytest.skip(f"선언 파일이 없다({DECL.relative_to(ROOT)}) — 먼저 npm run build:ts")
+        pytest.skip(f"no declaration files ({DECL.relative_to(ROOT)}) — run npm run build:ts first")
     if not API.exists():
-        pytest.fail("site/assets/api.json 이 없다 — python3 site/build_api.py")
+        pytest.fail("site/assets/api.json is missing — python3 site/build_api.py")
 
-    # **생성기가 만드는 것은 둘이다.** 목록과 이름 색인. 하나만 되돌려 놓았다가
-    # 검사를 돌린 트리에 `api-index.json` 이 고쳐진 채로 남았다 — 검사가 작업 트리를
-    # 건드리고 가면, 다음 사람은 자기가 안 한 변경을 자기 것으로 커밋한다.
+    # **The generator writes two files** — the index and the name index. Restoring only
+    # one left `api-index.json` modified in the tree the check had run in; a check that
+    # touches the working tree and leaves means the next person commits a change they
+    # never made as their own.
     made = [API, INDEX]
     before = {p: p.read_text(encoding="utf-8") for p in made if p.exists()}
     proc = subprocess.run([sys.executable, str(GENERATOR)], capture_output=True, text=True)
-    assert proc.returncode == 0, f"생성기가 멈췄다:\n{proc.stderr}"
+    assert proc.returncode == 0, f"the generator stopped:\n{proc.stderr}"
     after = API.read_text(encoding="utf-8")
     for path, text in before.items():
         path.write_text(text, encoding="utf-8")
@@ -52,26 +56,27 @@ def test_api_reference_is_not_stale():
     if before.get(API) != after:
         old, new = json.loads(before[API]), json.loads(after)
         pytest.fail(
-            "API 레퍼런스가 선언 파일과 다르다 — 항목 "
+            "the API reference differs from the declaration files — entries "
             f"{old['total']} → {new['total']}.\n"
-            "  다시 뽑아라: python3 site/build_api.py\n"
-            "  (설명문을 고칠 곳은 이 파일이 아니라 소스의 주석이다.)\n"
+            "  regenerate: python3 site/build_api.py\n"
+            "  (a description is fixed in the source comment, not in this file.)\n"
             "\n"
-            "  **borch-ts/src 를 고치는 중이라면 이것이 정상이다.** 이 검사는 지금\n"
-            "  디스크에 있는 `dist` 와 대조하므로, 커밋 안 한 소스로 빌드해 두었으면\n"
-            "  아직 없는 이름까지 세어 여기서 갈린다. 그 변경을 커밋할 때 목록도\n"
-            "  같이 뽑으면 맞는다 — 사이트가 없는 API 를 보여주지 않게 하려는 것이\n"
-            "  이 검사의 목적이고, 그 시점이 바로 지금이다.")
+            "  **If you are in the middle of editing borch-ts/src this is expected.** This\n"
+            "  check compares against the `dist` on disk right now, so a build made from\n"
+            "  uncommitted source counts names that do not exist yet and diverges here.\n"
+            "  Regenerating the index alongside that commit settles it — keeping the site\n"
+            "  from showing an API that is not there is what this check is for, and that\n"
+            "  moment is exactly now.")
 
 
 def test_site_examples_name_only_real_modules():
-    """사이트가 파이썬 결속을 실을 때 적어 둔 모듈 목록이 실제와 같아야 한다.
+    """The module list the site writes down for loading the Python binding has to match reality.
 
-    `site/assets/runner.js` 는 Pyodide 가상 파일시스템에 얹을 `.py` 를 이름으로 적어
-    둔다. 하나 빠뜨리면 **ImportError 로 시끄럽게** 터지므로 그건 스스로 드러나는데,
-    반대쪽(패키지에서 파일이 사라졌는데 목록에 남은 경우)은 fetch 가 404 를 내고
-    `runner.js` 가 그것을 예외로 바꾼다 — 둘 다 사용자가 Run 을 누른 뒤에야 안다.
-    여기서 미리 본다.
+    `site/assets/runner.js` names the `.py` files it lays onto Pyodide's virtual
+    filesystem. One left out blows up **loudly as an ImportError**, so that side shows
+    itself; the other side — a file gone from the package while the name stays in the
+    list — makes fetch return 404 and `runner.js` turn it into an exception. Both are
+    known only after the user presses Run. This looks first.
     """
     runner = (ROOT / "site" / "assets" / "runner.js").read_text(encoding="utf-8")
     block = runner[runner.index("const PACKAGES = {"):runner.index("let pyodide")]
@@ -86,50 +91,51 @@ def test_site_examples_name_only_real_modules():
         real = {p.stem for p in (ROOT / package).glob("*.py")}
         missing = listed - real
         assert not missing, (
-            f"{package} 에 없는 모듈을 사이트가 싣는다: {sorted(missing)}\n"
-            "  site/assets/runner.js 의 PACKAGES 를 고쳐라.")
+            f"the site loads modules {package} does not have: {sorted(missing)}\n"
+            "  fix PACKAGES in site/assets/runner.js.")
         forgotten = real - listed
         assert not forgotten, (
-            f"{package} 의 모듈을 사이트가 안 싣는다: {sorted(forgotten)}\n"
-            "  site/assets/runner.js 의 PACKAGES 에 넣어라 — 빠지면 브라우저에서 "
-            "ImportError 로 터진다.")
+            f"the site does not load modules {package} has: {sorted(forgotten)}\n"
+            "  add them to PACKAGES in site/assets/runner.js — left out, the browser "
+            "blows up with an ImportError.")
 
-# ── 크기를 대는 자리 ──────────────────────────────────────────────────
+# ── where sizes are claimed ───────────────────────────────────────────
 #
-# **`KB` 도 수다.** `test_docs.py` 가 골든 개수와 패키지 줄 수를 붙잡는데 크기만
-# 빠져 있었고, 그 사이 "ES 모듈 232KB" 가 **3.3 배** 낡았다(실측 770KB). 그 수는
-# README 에서 사이트 두 페이지로 그대로 옮겨 적혔다 — 원천이 낡으면 사본도 낡는다.
+# **`KB` is a number too.** `test_docs.py` holds the golden count and the package line
+# count, and size alone was missing, during which "232KB ES module" went **3.3× stale**
+# (measured at 770KB). That number had been copied from the README into two pages of the
+# site — a stale source makes stale copies.
 #
-# 여기 있는 셋은 전부 **잴 수 있는 것**이다. 못 재는 수는 애초에 이 목록에 없다.
+# All three here are **measurable**. A number that cannot be measured is not on this list.
 SIZE_CLAIMS = (
-    # (문서, 그 줄에 있어야 하는 표시, 실제를 재는 함수 이름)
+    # (document, the marker that line must carry, the name of what measures the truth)
     ("README.md", "ES 모듈", "bundle"),
     ("site/index.html", "ES module", "bundle"),
     ("site/ko/index.html", "ES 모듈", "bundle"),
 )
 
-# 재는 것이 얼마나 어긋나도 되는가. `test_docs.py` 의 줄 수와 같은 5% 다 — 잡으려는
-# 것은 3.3 배 오차이지 커밋 하나가 만드는 몇 킬로바이트가 아니다.
+# How far the measurement may drift. The same 5% as the line counts in `test_docs.py` —
+# what is being caught is a 3.3× error, not the few kilobytes one commit adds.
 SIZE_TOLERANCE = 0.05
 
 KB = re.compile(r"(\d{2,5})\s*KB")
 
 
 def _bundle_sizes():
-    """브라우저가 싣는 ES 모듈의 (압축 전, gzip) 크기를 KB 로."""
+    """The ES module the browser loads, as (raw, gzip) sizes in KB."""
     raw = b"".join(p.read_bytes() for p in sorted(DECL.glob("*.js")))
     return len(raw) / 1024, len(gzip.compress(raw, 9)) / 1024
 
 
 def test_docs_do_not_name_a_stale_bundle_size():
-    """문서가 대는 **크기**가 실제와 크게 어긋나지 않아야 한다.
+    """The **sizes** the documentation claims must not be far from the truth.
 
-    한 줄에 여러 수가 있을 수 있다(압축 전과 gzip). 그중 **아무것도** 실제와 안 맞으면
-    낡은 것이다 — 하나만 맞아도 통과시키면 "232KB(압축 전)" 처럼 **수는 맞고 이름표가
-    틀린** 문장을 놓친다.
+    One line may carry several numbers (raw and gzip). If **none** of them matches
+    reality it is stale — passing on one match alone misses a sentence like "232KB (raw)",
+    where **the number is right and the label is wrong.**
     """
     if not DECL.exists():
-        pytest.skip(f"선언 파일이 없다({DECL.relative_to(ROOT)}) — 먼저 npm run build:ts")
+        pytest.skip(f"no declaration files ({DECL.relative_to(ROOT)}) — run npm run build:ts first")
 
     raw_kb, gzip_kb = _bundle_sizes()
     ok = lambda said: any(abs(said - real) <= real * SIZE_TOLERANCE
@@ -145,21 +151,21 @@ def test_docs_do_not_name_a_stale_bundle_size():
                 continue
             said = [int(hit) for hit in KB.findall(line)]
             if not said:
-                stale.append(f"{rel}:{i}  크기를 안 적었다")
+                stale.append(f"{rel}:{i}  no size written")
             elif not all(ok(v) for v in said):
                 stale.append(
-                    f"{rel}:{i}  {said} KB — 지금은 압축 전 {raw_kb:.0f}KB · "
-                    f"gzip {gzip_kb:.0f}KB")
+                    f"{rel}:{i}  {said} KB — it is now {raw_kb:.0f}KB raw · "
+                    f"{gzip_kb:.0f}KB gzipped")
     assert not stale, (
-        "문서가 대는 방출물 크기가 낡았다:\n  " + "\n  ".join(stale) +
-        "\n\n재서 고쳐라: cat borch-ts/dist/src/*.js | wc -c")
+        "the bundle sizes the documentation claims are stale:\n  " + "\n  ".join(stale) +
+        "\n\nmeasure and fix: cat borch-ts/dist/src/*.js | wc -c")
 
-# ── 페이지들이 서로 맞는가 ─────────────────────────────────────────────
+# ── whether the pages agree with each other ───────────────────────────
 #
-# 사이트는 지금 스무 페이지이고 두 언어다. **손으로 훑는 것은 방식이 아니다** —
-# 실제로 브라우저로 스무 장을 열어 세 가지를 잡았다(랜딩만 앵커를 더 갖고 있었고,
-# 플레이그라운드에 자기 항목이 없었고, 한국어 API 페이지의 이름표가 영어였다).
-# 그 방식은 다음번에 반복되지 않는다.
+# The site is twenty pages in two languages. **Sweeping by hand is not a method** — twenty
+# pages were opened in a browser and three things were caught that way (only the landing
+# carried an extra anchor, the playground had no entry of its own, and the Korean API
+# page's label was in English). That method does not repeat itself next time.
 
 SITE = ROOT / "site"
 HREF = re.compile(r'(?:href|src)="([^"]+)"')
@@ -172,10 +178,10 @@ def _pages():
 
 
 def test_site_has_no_broken_relative_links():
-    """페이지가 가리키는 상대 경로가 실제로 있어야 한다.
+    """Every relative path a page points at has to exist.
 
-    깨진 링크는 **누르기 전까지 안 보인다.** 문서 사이트에서 그것은 없는 페이지가
-    아니라 없는 신뢰다 — 한 번 404 를 만난 사람은 나머지도 의심한다.
+    A broken link **is invisible until it is pressed.** On a documentation site that is
+    not a missing page but missing trust — someone who meets one 404 doubts the rest.
     """
     missing = []
     for page in _pages():
@@ -187,27 +193,27 @@ def test_site_has_no_broken_relative_links():
                 target = target / "index.html"
             if not target.exists():
                 missing.append(f"{page.relative_to(ROOT)} → {raw}")
-    assert not missing, "사이트에 깨진 링크가 있다:\n  " + "\n  ".join(missing)
+    assert not missing, "the site has broken links:\n  " + "\n  ".join(missing)
 
 
 def test_every_page_carries_the_same_global_nav():
-    """전역 차림표는 **모든 페이지에서 한 벌**이어야 한다.
+    """The global nav has to be **one and the same on every page**.
 
-    페이지를 옮길 때 항목이 바뀌면 다른 사이트에 온 것처럼 읽힌다. 지금 어디에
-    있는지는 표시(`class="on"`)로만 갈리고, 그 표시는 **정확히 하나**여야 한다 —
-    둘이면 어디에 있는지 모르는 것이고, 없으면(랜딩만 예외) 차림표에 그 자리가
-    없다는 뜻이다.
+    Entries that change as you move between pages read as arriving at a different site.
+    Where you are is marked only by `class="on"`, and there has to be **exactly one** of
+    those — two means not knowing where you are, and none (the landing excepted) means
+    the nav has no place for that page.
 
-    언어별로 이름표가 다르므로 언어끼리 비교한다.
+    The labels differ per language, so languages are compared among themselves.
     """
     shapes = {}
     problems = []
     for page in _pages():
         text = page.read_text(encoding="utf-8")
         nav = NAV.search(text)
-        assert nav, f"{page.relative_to(ROOT)} 에 전역 차림표가 없다"
+        assert nav, f"{page.relative_to(ROOT)} has no global nav"
         block = nav.group(1)
-        # 언어 전환 고리는 페이지마다 목적지가 다르므로 이름표만 본다.
+        # The language switch points somewhere different per page, so only its label is read.
         labels = tuple(LINK_TEXT.findall(block))
         lang = "ko" if page.relative_to(SITE).as_posix().startswith("ko/") else "en"
         shapes.setdefault(lang, {}).setdefault(labels, []).append(
@@ -216,41 +222,41 @@ def test_every_page_carries_the_same_global_nav():
         marked = block.count('class="on"')
         is_home = page.name == "index.html" and page.parent in (SITE, SITE / "ko")
         if is_home and marked:
-            problems.append(f"{page.relative_to(ROOT)}: 첫 화면인데 차림표에 표시가 있다")
+            problems.append(f"{page.relative_to(ROOT)}: the landing, yet the nav marks a place")
         elif not is_home and marked != 1:
-            problems.append(f"{page.relative_to(ROOT)}: 현재 위치 표시가 {marked} 개")
+            problems.append(f"{page.relative_to(ROOT)}: {marked} marks for the current place")
 
     for lang, found in shapes.items():
         if len(found) > 1:
-            lines = [f"  {labels} ← {len(pages)} 쪽 (예: {pages[0]})"
+            lines = [f"  {labels} ← {len(pages)} pages (e.g. {pages[0]})"
                      for labels, pages in found.items()]
-            problems.append(f"{lang} 페이지들의 차림표가 갈렸다:\n" + "\n".join(lines))
+            problems.append(f"the nav diverges across the {lang} pages:\n" + "\n".join(lines))
 
     assert not problems, "\n".join(problems)
 
 
 def test_site_links_to_this_repository():
-    """사이트가 가리키는 GitHub 주소가 **이 저장소의 주소**여야 한다.
+    """The GitHub address the site points at has to be **this repository's**.
 
-    저장소 이름이 `browsertorch` 에서 `borch` 로 바뀌었을 때 사이트 38 개 파일이 옛
-    주소를 그대로 들고 있었다. `tests/rename.py` 는 소문자 식별자를 바꾸는 도구라
-    URL 안의 이름을 규칙에 넣어 두지 않았고, 링크는 리다이렉트로 **여전히 열렸다** —
-    깨지지 않는 낡음이라 아무도 안 봤다.
+    When the repository was renamed from `browsertorch` to `borch`, thirty-eight files of
+    the site still carried the old address. `tests/rename.py` is a tool for lowercase
+    identifiers and had no rule for a name inside a URL, and the links **still opened**
+    through a redirect — staleness that does not break, so nobody looked.
 
-    그래서 손으로 적은 주소를 손으로 지키지 않는다. `origin` 이 답을 갖고 있으므로
-    거기에 못 박는다. 원격이 없는 체크아웃(압축본·CI 의 일부 모드)에서는 물을 곳이
-    없으므로 건너뛴다.
+    So a hand-written address is not kept by hand. `origin` holds the answer, and this
+    pins to it. A checkout with no remote (an archive, some CI modes) has nowhere to ask,
+    so it skips.
     """
     remote = subprocess.run(["git", "remote", "get-url", "origin"],
                             cwd=ROOT, capture_output=True, text=True)
     if remote.returncode != 0 or not remote.stdout.strip():
-        pytest.skip("origin 이 없다 — 대조할 주소가 없다")
+        pytest.skip("no origin — nothing to compare the address against")
 
     here = remote.stdout.strip().removesuffix(".git").replace("git@github.com:",
                                                              "https://github.com/")
-    # **우리 조직의 주소만 본다.** 사이트는 Pyodide 저장소도 가리키는데(MPL-2.0 이
-    # 소스를 구할 길을 적으라고 한다) 그것은 남의 것이고 여기와 같을 이유가 없다.
-    # 처음에 전부 보게 했다가 정확히 그 고지 링크가 걸렸다.
+    # **Only our own organisation's addresses.** The site also points at the Pyodide
+    # repository (MPL-2.0 asks for a route to the source), which is someone else's and has
+    # no reason to match this one. Checking every address caught exactly that notice link.
     owner = here.rsplit("/", 2)[-2]
     linked = re.compile(rf"https://github\.com/{re.escape(owner)}/[\w.-]+")
     wrong = []
@@ -258,51 +264,54 @@ def test_site_links_to_this_repository():
         for i, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
             for hit in linked.findall(line):
                 if hit.removesuffix(".git") != here:
-                    wrong.append(f"{page.relative_to(ROOT)}:{i}  {hit} — 이 저장소는 {here}")
+                    wrong.append(f"{page.relative_to(ROOT)}:{i}  {hit} — this repository is {here}")
     assert not wrong, (
-        "사이트가 다른 저장소를 가리킨다:\n  " + "\n  ".join(wrong[:12]) +
-        (f"\n  … 그리고 {len(wrong) - 12} 곳 더" if len(wrong) > 12 else ""))
+        "the site points at another repository:\n  " + "\n  ".join(wrong[:12]) +
+        (f"\n  … and {len(wrong) - 12} more" if len(wrong) > 12 else ""))
 
 
 def test_share_metadata_is_complete_and_gets_an_address():
-    """모든 페이지에 공유 메타가 있고, 자리표시자를 채우는 쪽이 존재해야 한다.
+    """Every page has share metadata, and something exists that fills the placeholder.
 
-    사이트는 "URL 하나가 곧 배포다" 라고 말한다. 그 말이 사실이려면 링크를 붙였을 때
-    무엇이 뜨는지가 그 주장의 일부인데, 여태 아무것도 안 떴다.
+    The site says a single URL is the whole deployment. For that to be true, what appears
+    when the link is pasted is part of the claim — and until now nothing appeared.
 
-    주소는 배포하는 쪽만 안다. 그래서 HTML 에는 `%OG_BASE%` 를 두고 워크플로가
-    채운다 — **두 반쪽이 따로 놀 수 있는 구조**라 여기서 같이 있는지 본다. 자리표시자만
-    있고 채우는 단계가 없으면 크롤러가 `%OG_BASE%/…` 를 그대로 받아 가고, 그 실패는
-    배포한 뒤 남의 타임라인에서만 보인다.
+    Only the deploying side knows the address, so the HTML carries `%OG_BASE%` and the
+    workflow fills it — **a shape where the two halves can drift apart**, so this looks
+    for both together. With the placeholder present and no step to fill it, a crawler
+    takes `%OG_BASE%/…` away as written, and that failure is visible only on someone
+    else's timeline after the deploy.
     """
     missing = [str(p.relative_to(ROOT)) for p in _pages()
                if "og:image" not in p.read_text(encoding="utf-8")]
-    assert not missing, "공유 메타가 없는 페이지:\n  " + "\n  ".join(missing)
+    assert not missing, "pages with no share metadata:\n  " + "\n  ".join(missing)
 
     image = SITE / "assets" / "og.png"
-    assert image.exists(), "site/assets/og.png 이 없다 — uv run --with pillow python site/make_og.py"
+    assert image.exists(), "site/assets/og.png is missing — uv run --with pillow python site/make_og.py"
     size = image.stat().st_size / 1024
-    assert size < 300, f"og.png 이 {size:.0f}KB 다 — 소셜 쪽에서 안 받아 갈 수 있다"
+    assert size < 300, f"og.png is {size:.0f}KB — some social crawlers will not fetch it"
 
     workflow = ROOT / ".github" / "workflows" / "pages.yml"
     if not workflow.exists():
-        pytest.skip("배포 워크플로가 없다")
+        pytest.skip("no deploy workflow")
     text = workflow.read_text(encoding="utf-8")
     assert "%OG_BASE%" in text, (
-        "페이지가 %OG_BASE% 를 쓰는데 배포 워크플로가 그것을 안 채운다 — "
-        "그대로 나가면 크롤러가 자리표시자를 주소로 읽는다.")
+        "the pages use %OG_BASE% and the deploy workflow does not fill it — "
+        "shipped as is, a crawler reads the placeholder as the address.")
 
 
 def test_dual_language_blocks_do_not_lose_a_half():
-    """한 블록에 두 언어를 담을 때, 한 벌이 조용히 사라지는 자리를 막는다.
+    """When one block holds two languages, this blocks the place a copy disappears quietly.
 
-    `runnable.js` 는 원본을 **언어를 열쇠로** 담는다. 두 번째 `<script>` 에
-    `data-lang` 을 안 적으면 바깥 `div` 의 언어로 쳐서 첫 번째 위에 덮어쓰고, 화면에는
-    탭도 안 나온다 — 파이썬을 적어 넣었는데 페이지는 자바스크립트만 보여 주고, 아무도
-    안 터진다. 이 저장소가 이미 두 번 잡은 그 꼴이라 여기서 이름을 대며 멈춘다.
+    `runnable.js` stores the sources **keyed by language**. A second `<script>` without
+    `data-lang` counts as the outer `div`'s language, overwrites the first, and no tabs
+    appear on screen — Python was written in and the page shows JavaScript only, with
+    nothing blowing up. It is the shape this repository has already caught twice, so this
+    stops and names it.
 
-    바깥 `div` 의 `data-lang` 도 본다. 그것이 담긴 언어 중에 없으면 처음 보이는 쪽이
-    없는 언어라, 읽는 사람은 자기가 고른 적 없는 표면을 먼저 만난다.
+    The outer `div`'s `data-lang` is checked too. If it is not among the languages held,
+    the side shown first is a language that is not there, and the reader meets a surface
+    they never chose.
     """
     inner = re.compile(r'<script type="text/plain"([^>]*)>', re.S)
     wrong = []
@@ -312,33 +321,34 @@ def test_dual_language_blocks_do_not_lose_a_half():
             head = text[m.end():m.end() + 400]
             attrs = m.group(1)
             outer = "py" if 'data-lang="py"' in attrs else "js"
-            # 이 블록에 속한 <script> 만 — 다음 runnable 전까지.
+            # Only the <script> tags belonging to this block — up to the next runnable.
             stop = text.find('<div class="runnable"', m.end())
             body = text[m.end():stop if stop > 0 else len(text)]
             langs = [("py" if 'data-lang="py"' in a else "js" if 'data-lang="js"' in a else outer)
                      for a in inner.findall(body)]
             where = f"{page.relative_to(ROOT)} · {head.strip()[:40]}"
             if len(langs) != len(set(langs)):
-                wrong.append(f"{where} — 같은 언어가 둘: {langs}")
+                wrong.append(f"{where} — the same language twice: {langs}")
             elif langs and outer not in langs:
-                wrong.append(f"{where} — 바깥은 {outer} 인데 담긴 것은 {langs}")
-    assert not wrong, "이중 언어 블록이 한 벌을 잃는다:\n  " + "\n  ".join(wrong)
+                wrong.append(f"{where} — the outer is {outer} while it holds {langs}")
+    assert not wrong, "a dual-language block loses one of its halves:\n  " + "\n  ".join(wrong)
 
 
 def test_no_block_declares_a_name_the_runner_injects():
-    """실행 블록이 러너가 주입하는 이름을 다시 선언하면 그 블록은 안 돈다.
+    """A runnable block that redeclares a name the runner injects does not run.
 
-    러너는 사용자 코드 앞에 `log`·`show` 같은 이름을 펼쳐 놓고 한 모듈로 합친다.
-    블록이 같은 이름을 `const` 로 선언하면 합쳐진 모듈이 **문법 오류**가 되고, 그것은
-    누가 그 블록을 눌러야만 보인다.
+    The runner spreads names such as `log` and `show` ahead of the user's code and joins
+    it all into one module. A block declaring the same name with `const` makes the joined
+    module **a syntax error**, and that shows only when someone presses that block.
 
-    이 저장소에서 세 번 났다. `probe` 로 두 번, `show` 로 한 번 — `show` 는 튜토리얼을
-    붙이며 주입 목록에 이름을 하나 더한 순간 8강의 블록이 조용히 죽은 것이고, 그
-    상태로 커밋됐다. **이름을 더하는 쪽은 이미 있는 블록을 안 본다**는 게 문제의 모양이라,
-    사람 규율이 아니라 여기서 막는다.
+    It has happened three times here — twice with `probe` and once with `show`. `show`
+    was one name added to the injected list while attaching the tutorials, which quietly
+    killed lesson 8's block, and it was committed that way. **Whoever adds a name does not
+    look at the blocks that already exist** is the shape of the problem, so this blocks it
+    rather than human discipline.
 
-    주입 목록은 `runner.js` 에서 읽는다 — 여기 베껴 두면 다음에 이름이 늘 때 이 검사만
-    낡는다.
+    The injected list is read out of `runner.js` — copied here, this check alone would go
+    stale the next time a name is added.
     """
     runner = (SITE / "assets" / "runner.js").read_text(encoding="utf-8")
     injected = set()
@@ -353,7 +363,7 @@ def test_no_block_declares_a_name_the_runner_injects():
         if m:
             injected.add(m.group(1))
     injected -= {"__pg"}
-    assert len(injected) > 15, f"주입 목록을 못 읽었다 — {sorted(injected)}"
+    assert len(injected) > 15, f"could not read the injected list — {sorted(injected)}"
 
     clash = re.compile(r"^\s*(?:const|let|var|function|class)\s+([a-zA-Z_$][\w$]*)", re.M)
     wrong = []
@@ -364,29 +374,29 @@ def test_no_block_declares_a_name_the_runner_injects():
                 continue
             for hit in clash.finditer(m.group(2)):
                 if hit.group(1) in injected:
-                    wrong.append(f"{page.relative_to(ROOT)} — 블록이 `{hit.group(1)}` 를 다시 선언한다")
-    assert not wrong, ("러너가 주입하는 이름을 블록이 덮어쓴다 (그 블록은 문법 오류로 안 돈다):\n  "
+                    wrong.append(f"{page.relative_to(ROOT)} — a block redeclares `{hit.group(1)}`")
+    assert not wrong, ("blocks overwrite names the runner injects (those blocks die as syntax errors):\n  "
                        + "\n  ".join(sorted(set(wrong))))
 
 
 def test_english_api_descriptions_are_not_stale():
-    """영어 설명이 자기가 번역한 원문과 아직 맞는지 본다.
+    """Whether each English description still matches the source it was made from.
 
-    이 페이지에는 오랫동안 "번역하지 않는다 — 번역은 쓰인 날부터 소스와 어긋난다" 고
-    적혀 있었다. 그 걱정은 옳다. 어긋남을 막을 방법은 없지만, **어긋난 채로 조용히
-    있는 것**은 막을 수 있다.
+    This page read for a long time that it does not translate, because a translation
+    drifts from the source the day it is written. The worry is right. Drift cannot be
+    prevented; **drift being quiet** can.
 
-    그래서 `site/api_en.json` 의 항목마다 번역할 때 본 한국어의 해시를 함께 적는다.
-    소스의 TSDoc 이 바뀌면 해시가 안 맞고, 여기가 이름을 대며 터진다. 고칠 사람이
-    무엇이 바뀌었는지 찾아 헤매지 않도록 열쇠를 그대로 낸다.
+    So every entry in `site/api_en.json` carries a hash of the Korean it was made from.
+    When the source TSDoc moves, the hash stops matching and this blows up naming it. The
+    key is printed as it stands, so whoever fixes it does not have to hunt for what moved.
 
-    덜 옮긴 것은 실패가 아니다 — 화면이 한국어를 내면서 안 옮겼다고 적으므로 읽는
-    사람이 속지 않는다. 그것까지 막으면 한 번에 614 개를 다 하지 않는 한 아무것도
-    못 들어온다.
+    Being partly translated is not a failure — the screen shows the Korean and says it is
+    not carried across, so the reader is not deceived. Failing on that too would let
+    nothing in short of doing all 614 at once.
     """
     api = json.loads((SITE / "assets" / "api.json").read_text(encoding="utf-8"))
     table_path = ROOT / "site" / "api_en.json"
-    assert table_path.exists(), "site/api_en.json 이 없다 — 영어 설명이 사는 곳이다"
+    assert table_path.exists(), "site/api_en.json is missing — it is where the English lives"
     table = json.loads(table_path.read_text(encoding="utf-8"))
 
     def fingerprint(text):
@@ -406,86 +416,89 @@ def test_english_api_descriptions_are_not_stale():
             orphan.append(key)
         elif got.get("src") != fingerprint(live[key]):
             stale.append(key)
-    assert not stale, ("원문이 바뀐 뒤 영어가 안 따라왔다 — site/api_en.json 을 고치고 "
-                       "src 를 새 해시로 바꿔라:\n  " + "\n  ".join(sorted(stale)[:20]))
-    assert not orphan, ("가리키는 설명이 사라진 영어 항목 — 이름이 바뀌었거나 지워졌다:\n  "
+    assert not stale, ("the English did not follow its source — fix site/api_en.json and "
+                       "put the new hash in src:\n  " + "\n  ".join(sorted(stale)[:20]))
+    assert not orphan, ("English entries whose description is gone — renamed or deleted:\n  "
                         + "\n  ".join(sorted(orphan)[:20]))
 
     for key, got in table.items():
-        assert got.get("en", "").strip(), f"{key} 의 영어가 비어 있다"
-        assert not re.search(r"[가-힣]", got["en"]), f"{key} 의 영어에 한글이 남아 있다"
+        assert got.get("en", "").strip(), f"the English for {key} is empty"
+        assert not re.search(r"[가-힣]", got["en"]), f"Hangul remains in the English for {key}"
 
 
 def test_vendored_pyodide_matches_its_lock():
-    """저장소에 든 Pyodide 여섯 파일이 커밋된 잠금과 같은 바이트인가.
+    """Whether the six Pyodide files in the repository are the bytes the committed lock names.
 
-    **이 검사는 파일을 커밋하기 전에는 있을 수 없었다.** 잠금은 오래 있었지만 신선한
-    러너에는 파일이 없었고, 그때 `fetch` 가 받아 온 것으로 잠금을 새로 썼다 — 대조할
-    상대가 자기 자신이었다. 둘 다 저장소에 있는 지금은 네트워크 없이 여기서 돈다.
+    **This check could not exist before the files were committed.** The lock had been
+    there a long time, but a fresh runner had no files, and `fetch` then wrote a new lock
+    from whatever arrived — what it compared against was itself. With both in the
+    repository, it runs here with no network.
 
-    무엇을 잡는가: 판올림하면서 잠금만 고치고 파일을 안 바꾼 것, 반대로 파일만 바꾼 것,
-    받다 만 파일. 셋 다 브라우저에서는 "파이썬 모드가 안 뜬다" 하나로만 보인다.
+    What it catches: a version bump that edited the lock and not the files, the reverse,
+    and a half-finished download. All three appear in the browser as the single sentence
+    "Python mode does not come up".
     """
     vendor = ROOT / "vendor" / "pyodide"
     lock = ROOT / "tests" / "browser" / "assets.lock"
-    assert lock.exists(), "tests/browser/assets.lock 이 없다"
+    assert lock.exists(), "tests/browser/assets.lock is missing"
 
     want = {}
     for line in lock.read_text(encoding="utf-8").splitlines():
         if line.strip():
             digest, path = line.split("  ", 1)
             want[path] = digest
-    assert want, "잠금 파일이 비어 있다"
+    assert want, "the lock file is empty"
 
     wrong = []
     for path, digest in sorted(want.items()):
         f = ROOT / "vendor" / path
         if not f.exists():
-            wrong.append(f"{path}: 없다")
+            wrong.append(f"{path}: missing")
         elif hashlib.sha256(f.read_bytes()).hexdigest() != digest:
-            wrong.append(f"{path}: 바이트가 잠금과 다르다")
-    assert not wrong, ("저장소의 Pyodide 가 잠금과 어긋난다:\n  " + "\n  ".join(wrong))
+            wrong.append(f"{path}: the bytes differ from the lock")
+    assert not wrong, ("the repository's Pyodide differs from the lock:\n  " + "\n  ".join(wrong))
 
-    # 잠금에 없는 것이 섞여 들어오면 배포에 실리는데 아무도 안 잰 바이트가 된다.
+    # Something not in the lock slipping in ships in the deploy as bytes nobody measured.
     extra = sorted(p.name for p in vendor.iterdir()
                    if f"pyodide/{p.name}" not in want)
-    assert not extra, f"잠금에 없는 파일이 vendor/pyodide 에 있다: {extra}"
+    assert not extra, f"vendor/pyodide holds files the lock does not name: {extra}"
 
 
 def test_tutorial_sprites_agree_with_their_labels():
-    """스프라이트 그림과 라벨 파일이 서로 맞는가.
+    """Whether the sprite and its label file agree with each other.
 
-    튜토리얼 4·5 는 이 두 짝을 믿고 픽셀을 읽는다 — json 의 `cols`·`tile` 로 자리를
-    계산해서 그림에서 잘라 온다. 둘이 어긋나면 **예외가 아니라 엉뚱한 그림**이 나오고,
-    화면에는 "정확도가 안 오른다" 로만 보인다.
+    Tutorials 4 and 5 trust this pair to read pixels — they compute positions from the
+    json's `cols` and `tile` and cut them out of the image. Out of step, **it is not an
+    exception but the wrong picture**, and on screen it appears only as "the accuracy does
+    not go up".
 
-    데이터를 저장소에 넣으면서 생긴 자리다. 예전에는 배포 때마다 다시 만들었으므로
-    그림과 라벨이 늘 같은 실행에서 나왔는데, 이제는 한쪽만 갱신해 커밋하는 것이
-    가능하다.
+    This place appeared when the data was committed. It used to be regenerated on every
+    deploy, so the image and the labels always came from one run; now one of them can be
+    updated and committed alone.
 
-    JPEG 머리를 직접 읽는다 — Pillow 를 부르면 이 검사 하나 때문에 CI 의 pytest 줄에
-    의존이 하나 는다.
+    It reads the JPEG header directly — calling Pillow would add a dependency to CI's
+    pytest line for the sake of this one check.
     """
     data = SITE / "assets" / "data"
     wrong = []
     for name in ("train", "test"):
         image, meta = data / f"cifar-{name}.jpg", data / f"cifar-{name}.json"
         if not image.exists() or not meta.exists():
-            wrong.append(f"cifar-{name}: 그림이나 라벨이 없다")
+            wrong.append(f"cifar-{name}: image or labels missing")
             continue
         spec = json.loads(meta.read_text(encoding="utf-8"))
         count, cols, tile = spec["count"], spec["cols"], spec["tile"]
         if len(spec["labels"]) != count:
-            wrong.append(f"cifar-{name}: 라벨 {len(spec['labels'])}개인데 count 는 {count}")
+            wrong.append(f"cifar-{name}: {len(spec['labels'])} labels while count says {count}")
         got = _jpeg_size(image.read_bytes())
         want = (((count + cols - 1) // cols) * tile, cols * tile)
         if got != want:
-            wrong.append(f"cifar-{name}: 그림이 {got} 인데 라벨은 {want} 를 말한다")
-    assert not wrong, "튜토리얼 데이터가 서로 어긋난다:\n  " + "\n  ".join(wrong)
+            wrong.append(f"cifar-{name}: the image is {got} while the labels say {want}")
+    assert not wrong, "the tutorial data disagrees with itself:\n  " + "\n  ".join(wrong)
 
 
 def _jpeg_size(blob):
-    """JPEG 의 (높이, 너비). SOF 표시를 찾아 읽는다."""
+    """A JPEG's (height, width), read by finding the SOF marker."""
     i = 2
     while i < len(blob) - 9:
         if blob[i] != 0xFF:
@@ -496,22 +509,24 @@ def _jpeg_size(blob):
             return (int.from_bytes(blob[i + 5:i + 7], "big"),
                     int.from_bytes(blob[i + 7:i + 9], "big"))
         i += 2 + int.from_bytes(blob[i + 2:i + 4], "big")
-    raise AssertionError("JPEG 에서 크기 표시를 못 찾았다")
+    raise AssertionError("could not find the size marker in the JPEG")
 
 
 def test_the_editors_have_a_way_out_for_the_keyboard():
-    """코드 편집기에서 Tab 은 들여쓰기다. **그러면 나갈 문이 따로 있어야 한다.**
+    """Tab indents in a code editor. **So there has to be a separate way out.**
 
-    없으면 키보드로 들어온 사람이 못 나간다 — Tab 을 눌러도 공백만 늘고 초점은 그대로다.
-    실측으로 두 번 눌러 822→826 자, 초점 그대로였다. 마우스 없이는 탭을 닫는 것 말고
-    방법이 없고, 접근성에서 이름이 붙은 실패다(WCAG 2.1.2 키보드 덫).
+    Without one, someone who arrives by keyboard cannot leave — Tab only grows the spaces
+    and focus does not move. Measured: two presses took 822 characters to 826 with focus
+    unmoved. Without a mouse there is nothing to do but close the tab, and the failure has
+    a name in accessibility (WCAG 2.1.2, keyboard trap).
 
-    이 자리가 오래 안 보였던 이유가 있다. 초점 **표시**는 이미 고쳐져 있었다
-    (`86528b0` — "마우스 없이 못 쓴다"). 보이는 것을 고치면서 **갇히는 것**은 그대로
-    남았다 — 눌러 보지 않으면 안 갈리는 자리다.
+    There is a reason this went unseen. The focus **ring** had already been fixed
+    (`86528b0` — "unusable without a mouse"). The visible part was repaired and **being
+    trapped** stayed — a place nothing separates without pressing the key.
 
-    문은 Escape 다: 한 번 무장하고 다음 Tab 이 나간다. 여기서는 그 세 조각이 코드에
-    있는지만 본다 — 실제로 막히는지·안 막히는지는 브라우저에서 쟀다.
+    The door is Escape: it arms once and the next Tab leaves. Here only the three pieces
+    of that are checked for in the code — whether it is actually prevented or not was
+    measured in a browser.
     """
     wrong = []
     for rel in ("site/assets/runnable.js", "site/assets/playground.js"):
@@ -519,20 +534,20 @@ def test_the_editors_have_a_way_out_for_the_keyboard():
         if 'e.key === "Tab"' not in text:
             continue
         if 'e.key === "Escape"' not in text:
-            wrong.append(f"{rel}: Tab 을 가로채는데 Escape 로 나갈 문이 없다")
+            wrong.append(f"{rel}: it intercepts Tab and has no Escape door out")
         elif '"Tab" && leaving' not in text:
-            wrong.append(f"{rel}: Escape 는 받는데 그 다음 Tab 을 놓아주지 않는다")
-    assert not wrong, "코드 편집기가 키보드를 가둔다:\n  " + "\n  ".join(wrong)
+            wrong.append(f"{rel}: it takes Escape and does not release the Tab after it")
+    assert not wrong, "a code editor traps the keyboard:\n  " + "\n  ".join(wrong)
 
 
 def test_no_korean_hides_where_only_a_screen_reader_looks():
-    """눈에 안 보이는 자리(`aria-label`·`title`·`alt`)에 한국어가 박히지 않았는가.
+    """Whether Korean is hardcoded where the eye never reaches — `aria-label`, `title`, `alt`.
 
-    영문 플레이그라운드의 편집기가 화면 낭독기에게 자기를 "자바스크립트 코드" 라고
-    소개하고 있었다 — `playground.js` 가 언어와 무관하게 그 글자를 박았다. 화면에는
-    안 나오는 자리라 눈으로 보는 검토로는 안 걸린다.
+    The English playground's editor introduced itself to a screen reader as
+    "자바스크립트 코드" — `playground.js` wrote those characters regardless of the page's
+    language. It never appears on screen, so a review by eye cannot catch it.
 
-    영문 쪽만 본다. 한국어 페이지의 한국어는 맞는 말이다.
+    Only the English side is checked. Korean on a Korean page is the right words.
     """
     attr = re.compile(r'(?:aria-label|title|alt|placeholder)="([^"]*)"')
     hangul = re.compile(r"[가-힣]")
@@ -543,9 +558,9 @@ def test_no_korean_hides_where_only_a_screen_reader_looks():
         for value in attr.findall(page.read_text(encoding="utf-8")):
             if hangul.search(value):
                 wrong.append(f"{page.relative_to(ROOT)}: \"{value[:40]}\"")
-    # 스크립트가 박는 것도 본다 — 화면에 안 나오므로 페이지만 봐서는 못 잡는다.
+    # What the scripts write is checked too — it never reaches the page, so sweeping pages misses it.
     setter = re.compile(r'setAttribute\(\s*"(?:aria-label|title)"\s*,\s*"([^"]*[가-힣][^"]*)"')
     for js in sorted((SITE / "assets").glob("*.js")):
         for value in setter.findall(js.read_text(encoding="utf-8")):
-            wrong.append(f"{js.relative_to(ROOT)}: \"{value[:40]}\" — 언어와 무관하게 박힌다")
-    assert not wrong, ("영문 쪽의 안 보이는 자리에 한국어가 있다:\n  " + "\n  ".join(wrong))
+            wrong.append(f"{js.relative_to(ROOT)}: \"{value[:40]}\" — written regardless of language")
+    assert not wrong, ("Korean sits where the eye never reaches, on the English side:\n  " + "\n  ".join(wrong))
