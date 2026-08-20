@@ -21,10 +21,10 @@ const rng = { state: 0x9e3779b9 };
 const resets: ((seed: number) => void)[] = [];
 
 /**
- * 씨앗을 심고 등록된 것들을 되돌린다.
+ * Plants the seed and rewinds everything registered with it.
  *
- * **0 을 1 로 바꾼다.** xorshift 는 상태가 0 이면 영원히 0 을 낸다 — `manualSeed(0)`
- * 이 난수를 죽이는 것은 아무도 예상하지 않는다.
+ * **It turns 0 into 1.** xorshift emits zero forever once its state is zero
+ * — nobody expects `manualSeed(0)` to be the call that kills randomness.
  */
 export function manualSeed(value: number): void {
   const seed = (value >>> 0) || 1;
@@ -33,18 +33,23 @@ export function manualSeed(value: number): void {
 }
 
 /**
- * 씨앗을 심을 때 같이 되돌릴 것을 등록한다. **씨앗 값을 받는다.**
+ * Registers something to be rewound when a seed is planted. **It receives
+ * the seed value.**
  *
- * 처음에는 인자 없이 불렀고 dropout 계수기는 늘 1 로 되돌아갔다. 같은 씨앗에 같은
- * 결과라는 약속은 지켜지지만 **다른 씨앗에 다른 결과가 안 나온다** — 씨앗을 다섯 개
- * 돌려 분산을 재는 사람은 dropout 마스크가 다섯 번 다 같은 줄 모르고, 가중치
- * 초기화만 흔들린 수를 실험 분산으로 읽는다.
+ * It was first called with no argument, and the dropout counter always
+ * rewound to 1. The promise that the same seed gives the same result still
+ * held, but **different seeds stopped giving different results** — someone
+ * running five seeds to measure variance would not know the dropout masks
+ * were identical all five times, and would read a number shaken only by
+ * weight initialisation as experimental variance.
  */
 export function onSeed(reset: (seed: number) => void): void {
   resets.push(reset);
 }
 
-/** `[0, 1)` 균등분포 하나. */
+/**
+ * One sample from the uniform distribution on `[0, 1)`.
+ */
 export function uniform(): number {
   let x = rng.state;
   x ^= x << 13; x >>>= 0;
@@ -55,11 +60,13 @@ export function uniform(): number {
 }
 
 /**
- * 표준정규분포 하나. Box–Muller 다.
+ * One sample from the standard normal. Box–Muller.
  *
- * **두 값 중 하나만 쓰고 버린다.** 짝을 캐시해 두면 씨앗을 심었을 때 캐시도 같이
- * 비워야 하고, 안 비우면 심기 직전의 값이 심은 뒤에 나온다 — 되돌린 것처럼 보이는데
- * 첫 수만 다른 상태가 되고 그것이 가장 찾기 어려운 종류다.
+ * **Of the two values it produces, one is used and one is thrown away.**
+ * Caching the pair would mean the cache has to be cleared whenever a seed
+ * is planted, and if it is not, a value from just before the planting
+ * appears just after it — a state that looks rewound but whose first number
+ * is wrong, which is the hardest kind to find.
  */
 export function gauss(): number {
   // `1 - uniform()` 으로 `(0, 1]` 을 만든다 — 0 이 들어오면 log 가 -∞ 다.
@@ -68,7 +75,10 @@ export function gauss(): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-/** `[-bound, bound]` 균등분포로 채운 배열. 층 초기화가 쓴다. */
+/**
+ * An array filled from the uniform distribution on `[-bound, bound]`. Layer
+ * initialisation uses it.
+ */
 export function uniformArray(n: number, bound: number): Float32Array {
   const data = new Float32Array(n);
   for (let i = 0; i < n; i++) data[i] = (uniform() * 2 - 1) * bound;

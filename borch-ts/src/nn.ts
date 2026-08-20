@@ -1,17 +1,20 @@
 /**
- * 층 — `nn.Module` 의 최소 뼈대.
+ * Layers — the minimal skeleton of `nn.Module`.
  *
- * ## 무엇을 위한 것인가
+ * ## What it is for
  *
- * 단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,
- * 이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서
- * 층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.
+ * Unit comparison looks at one operation at a time. Some things diverge
+ * only once modules, losses and optimizers are wired together, and every
+ * defect this repository caught in an integrated scenario came from exactly
+ * there. So building layers is not a convenience — it is **seeing a place
+ * that could not be seen.**
  *
- * ## 이름이 곧 계약이다
+ * ## The name is the contract
  *
- * `state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이
- * 그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라
- * 배선이 갈린다.
+ * A `state_dict` key is built from **the position index and the name**, as
+ * in `0.weight`. The golden cases put weights in by that name and take
+ * results out by that name, so a divergent name means divergent wiring, not
+ * divergent values.
  */
 
 import { RuntimeError, ValueError } from "./errors.js";
@@ -63,33 +66,46 @@ function fanIn(shape: readonly number[]): number {
   return shape.slice(1).reduce((a, b) => a * b, 1);
 }
 
-/** 층 하나. 값을 지나가게 하고, 자기 파라미터를 이름과 함께 내놓는다. */
+/**
+ * One layer. It passes values through and hands out its parameters with
+ * their names.
+ */
 export abstract class Module {
-  /** 학습 모드인가. `BatchNorm` 처럼 모드에 따라 다르게 구는 층이 본다. */
+  /**
+   * Whether it is in training mode. Layers that behave differently by mode,
+   * such as `BatchNorm`, look at it.
+   */
   training = true;
 
   abstract forward(x: Tensor): Tensor;
 
-  /** 부를 수 있게 — torch 의 `model(x)` 와 같은 자리다. */
+  /**
+   * So it can be called — the same position as torch's `model(x)`.
+   */
   call(x: Tensor): Tensor {
     return this.forward(x);
   }
 
   /**
-   * 이 층이 직접 가진 파라미터. 자식은 `children` 이 준다.
+   * The parameters this layer holds directly. Children come from
+   * `children`.
    *
-   * **기본이 자기 필드를 훑는 것이다.** 전에는 `{}` 를 돌려주고 층마다 덮어쓰게
-   * 했는데, 그러면 밖에서 층을 만드는 사람이 덮어쓰기를 잊는 순간 그 파라미터가
-   * `parameters()` 에 안 나오고 — **예외 없이** 학습만 안 된다. 손실이 안 내려가는데
-   * 어디가 원인인지 가리키는 것이 아무것도 없는 종류다.
+   * **The default is to sweep its own fields.** It used to return `{}` and
+   * have each layer override, and then the moment someone building a layer
+   * from outside forgets the override, that parameter is absent from
+   * `parameters()` and — **with no exception** — training simply does not
+   * happen. The kind where the loss will not come down and nothing points
+   * at why.
    *
-   * 주석에 "TypeScript 에는 속성을 훑어 층을 알아보는 자리가 없다" 고 적혀 있었는데
-   * 그것은 사실이 아니었다. `Object.entries(this)` 가 인스턴스 필드를 준다 —
-   * torch 의 `__setattr__` 이 하는 일과 같은 자리다.
+   * A comment said "TypeScript has no place to recognise layers by sweeping
+   * properties", and that was not true. `Object.entries(this)` gives the
+   * instance fields — the same position torch's `__setattr__` occupies.
    *
-   * **`requiresGrad` 가 표식이다.** 필드에 있는 텐서를 전부 파라미터로 세면 상수나
-   * 마스크까지 옵티마이저가 밟는다. torch 에서 `nn.Parameter` 가 하는 구분을 여기서는
-   * 이 깃발이 한다 — 층은 `claim()` 으로 세우고, 그것이 곧 "이건 파라미터다" 다.
+   * **`requiresGrad` is the mark.** Counting every tensor in a field as a
+   * parameter would have the optimizer stepping constants and masks too.
+   * The distinction torch draws with `nn.Parameter` is drawn here by this
+   * flag — a layer raises it with `claim()`, and that is what "this is a
+   * parameter" means.
    */
   ownParameters(): Record<string, Tensor> {
     const out: Record<string, Tensor> = {};
@@ -104,7 +120,8 @@ export abstract class Module {
   }
 
   /**
-   * 자식을 **이름과 함께** 준다. 기본은 **필드 이름**이다 — torch 와 같다.
+   * Gives the children **with their names.** The default is **the field
+   * name**, as in torch.
    *
    * ```ts
    * class Net extends nn.Module {
@@ -114,13 +131,17 @@ export abstract class Module {
    * }
    * ```
    *
-   * **배열은 안 훑는다.** `layers = [a, b]` 는 자식이 아니다 — torch 도 파이썬 list 를
-   * 등록하지 않고 `nn.ModuleList` 를 요구한다. 배열을 훑으면 "층이 아닌 배열" 과
-   * 구분할 방법이 없고, 그 구분이 없으면 `state_dict` 열쇠가 조용히 바뀐다.
+   * **Arrays are not swept.** `layers = [a, b]` is not a child — torch does
+   * not register a Python list either, and asks for `nn.ModuleList`.
+   * Sweeping arrays leaves no way to tell them from "an array that is not
+   * layers", and without that distinction the `state_dict` keys change
+   * quietly.
    *
-   * 자리 번호로 부르고 싶은 컨테이너(`Sequential`·`ModuleList`)는 여기를 덮어쓴다.
+   * Containers that want to be addressed by position (`Sequential`,
+   * `ModuleList`) override here.
    *
-   * **`state_dict` 의 열쇠가 이 이름이다.** 갈리면 남의 체크포인트를 못 읽는다.
+   * **The `state_dict` keys are these names.** Diverge and you cannot read
+   * anyone else's checkpoint.
    */
   namedChildren(): Record<string, Module> {
     const out: Record<string, Module> = {};
@@ -131,13 +152,15 @@ export abstract class Module {
   }
 
   /**
-   * `print(model)` 이 찍는 글자. torch 의 `__repr__` 과 같은 모양이다.
+   * The text `print(model)` prints. The same shape as torch's `__repr__`.
    *
-   * **자식의 여러 줄도 다시 들여쓴다.** 컨테이너가 컨테이너를 담을 때
-   * (`ModuleList` 안의 `Sequential`) 안쪽이 왼쪽 끝에 붙으면 torch 와 그림이 갈린다 —
-   * 값은 멀쩡하고 글자만 틀리는 종류라 눈으로만 잡힌다.
+   * **A child's several lines are re-indented too.** When a container holds
+   * a container (a `Sequential` inside a `ModuleList`), the inner one
+   * sitting flush left makes the picture differ from torch's — the kind
+   * where the values are fine and only the text is wrong, so only an eye
+   * catches it.
    *
-   * 이름이나 인자를 찍고 싶은 층은 이것을 덮어쓴다.
+   * A layer that wants to print a name or its arguments overrides this.
    */
   describe(): string {
     const kids = Object.entries(this.namedChildren());
@@ -153,7 +176,9 @@ export abstract class Module {
     return lines.join("\n");
   }
 
-  /** `0.weight` 처럼 자리 이름을 앞에 붙인 이름표. */
+  /**
+   * Labels with the position name prefixed, as in `0.weight`.
+   */
   namedParameters(prefix = ""): Record<string, Tensor> {
     // **`children()` 만 덮어쓰면 그 자식은 안 배운다.**
     //
@@ -194,11 +219,12 @@ export abstract class Module {
   }
 
   /**
-   * 파라미터를 구역 밖에서도 살려 둔다.
+   * Keeps parameters alive outside a scope.
    *
-   * 층을 학습 구역 **안에서** 세우면 그 구역이 닫힐 때 가중치가 놓인다. 밖에서
-   * 세우는 것이 정석이지만, 정석을 안 지켰을 때 조용히 이상해지는 것보다 여기서
-   * 못 박아 두는 편이 낫다.
+   * Build a layer **inside** a training scope and its weights are released
+   * when that scope closes. Building outside is the correct way, but
+   * nailing it down here is better than going quietly strange when the
+   * correct way is not followed.
    */
   protected claim(...params: Tensor[]): void {
     for (const p of params) {
@@ -208,10 +234,11 @@ export abstract class Module {
   }
 
   /**
-   * 밖에서 가중치를 넣는다.
+   * Puts weights in from outside.
    *
-   * **값만 옮기고 텐서를 바꿔치지 않는다.** 바꿔치면 옵티마이저가 들고 있던 것과
-   * 다른 텐서가 되어, 학습이 도는데 파라미터가 안 움직이는 상태가 된다.
+   * **It moves values only; it does not swap the tensor.** Swapping makes
+   * it a different tensor from the one the optimizer holds, and then
+   * training runs while the parameters do not move.
    */
   loadStateDict(values: Readonly<Record<string, Tensor>>, strict = true): void {
     // **버퍼도 받는다.** 내보내는 것과 받는 것이 다르면 자기가 저장한 파일을
@@ -234,15 +261,17 @@ export abstract class Module {
   }
 
   /**
-   * 학습은 안 하지만 저장·복원되는 값. torch 의 `register_buffer` 다.
+   * A value that is not trained but is saved and restored. torch's
+   * `register_buffer`.
    *
-   * **전에는 이런 것이 없었다.** `BatchNormND` 가 자기 `stateDict` 를 손으로 적어
-   * 이동 통계를 실어 보내는 길만 있었고, 그래서 버퍼는 **그 층의 특례**였다.
-   * 마스크·위치표·정규화 상수를 들고 다니는 모델은 전부 이 문법을 쓰는데 쓸 수가
-   * 없었다.
+   * **There used to be no such thing.** The only route was `BatchNormND`
+   * writing its own `stateDict` by hand to carry the running statistics,
+   * which made buffers **that layer's special case.** Every model carrying
+   * masks, position tables or normalisation constants uses this idiom, and
+   * it was unavailable.
    *
-   * `persistent=false` 면 `stateDict` 에서 빠진다 — 다시 만들 수 있는 캐시를
-   * 체크포인트에 안 싣는 자리다.
+   * With `persistent=false` it drops out of `stateDict` — the place for a
+   * cache that can be rebuilt rather than checkpointed.
    */
   registerBuffer(name: string, value: Tensor, persistent = true): void {
     this.bufferNames.set(name, persistent);
@@ -255,10 +284,11 @@ export abstract class Module {
   private readonly bufferNames = new Map<string, boolean>();
 
   /**
-   * `namedParameters` 와 **정확히 버퍼만큼 다른** 목록.
+   * A list differing from `namedParameters` by **exactly the buffers.**
    *
-   * 자기 것은 등록한 표에서, 자식 것은 자식에게 물어 모은다. `stateDict` 를 손으로
-   * 적는 층(`BatchNormND`)은 이것도 같이 덮어써야 셋이 안 어긋난다.
+   * Its own come from the registered table and its children's by asking the
+   * children. A layer that writes `stateDict` by hand (`BatchNormND`) has
+   * to override this too, or the three fall out of step.
    */
   namedBuffers(persistentOnly = false): Record<string, Tensor> {
     const out: Record<string, Tensor> = {};
@@ -292,16 +322,20 @@ export abstract class Module {
   }
 }
 
-/** 층을 줄줄이 세운 것. 자리 번호가 곧 이름이다. */
+/**
+ * Layers stood in a row. The position index is the name.
+ */
 export class Sequential extends Module {
   private readonly layers: Module[];
 
   /**
-   * **층을 그냥 나열한다** — `new Sequential(a, b, c)`. torch 가 그 모양이다.
+   * **Layers are simply listed** — `new Sequential(a, b, c)`. That is
+   * torch's shape.
    *
-   * 배열 하나를 받게 두었더니 `index.ts` 에 적은 첫 예시부터 틀렸다. 쓰는 사람이
-   * torch 코드를 옮겨 적을 때 대괄호를 빼먹는 것이 기본값이고, 그 기본값이 맞는
-   * 쪽이어야 한다. 배열도 그대로 받는다 — 이미 그렇게 쓰던 자리가 있다.
+   * Taking a single array made the very first example in `index.ts` wrong.
+   * Someone copying torch code across leaves the brackets off by default,
+   * and the default should be the one that is right. An array is still
+   * accepted — there is already code written that way.
    */
   constructor(...layers: readonly (Module | readonly Module[])[]) {
     super();
@@ -313,11 +347,12 @@ export class Sequential extends Module {
   }
 
   /**
-   * **자리 번호로 부른다** — `0.weight`. torch 의 `Sequential` 이 그 모양이고
-   * 골든이 그 이름으로 가중치를 넣는다.
+   * **Addressed by position index** — `0.weight`. That is torch's
+   * `Sequential`'s shape, and the golden cases put weights in by that name.
    *
-   * 기본 구현은 필드 이름을 쓰는데 우리 층은 배열(`layers`) 안에 있어 거기 안 걸린다.
-   * 그러면 `state_dict` 가 통째로 비므로 여기를 덮어써야 한다.
+   * The default implementation uses field names, and our layers live inside
+   * an array (`layers`) which that does not catch. That would leave
+   * `state_dict` entirely empty, so this has to be overridden.
    */
   override namedChildren(): Record<string, Module> {
     const out: Record<string, Module> = {};
@@ -335,11 +370,11 @@ export class Sequential extends Module {
 }
 
 /**
- * 층 목록. 번호가 곧 이름이다 — `layers.0.weight`.
+ * A list of layers. The index is the name — `layers.0.weight`.
  *
- * `Sequential` 과 다른 점은 **부르지 않는다**는 것이다. 어떤 순서로 어떻게 쓸지는
- * 가진 쪽이 정하고, 이쪽은 파라미터가 보이게만 한다. 층 수가 정해지지 않은 모델이
- * 이것을 쓴다.
+ * What differs from `Sequential` is that it **does not call them.** In what
+ * order and how they are used is up to the holder; this side only makes the
+ * parameters visible. Models whose layer count is not fixed use it.
  */
 export class ModuleList extends Module {
   private readonly items: Module[];
@@ -353,14 +388,20 @@ export class ModuleList extends Module {
     return this.items;
   }
 
-  /** 자리 번호로 부른다. `Sequential` 과 같은 이유다 — 층이 배열 안에 있다. */
+  /**
+   * Addressed by position index. Same reason as `Sequential` — the layers
+   * live in an array.
+   */
   override namedChildren(): Record<string, Module> {
     const out: Record<string, Module> = {};
     for (const [i, child] of this.items.entries()) out[String(i)] = child;
     return out;
   }
 
-  /** **부르는 층이 아니다.** 지나가려 하면 여기서 멈춘다 — torch 도 그렇다. */
+  /**
+   * **It is not a layer you call.** Trying to pass through stops here — as
+   * in torch.
+   */
   override forward(): Tensor {
     throw new Error("ModuleList is not callable — pick a module inside it");
   }
@@ -405,7 +446,10 @@ function sortedEntries<T>(obj: Readonly<Record<string, T>>): [string, T][] {
   return Object.entries(obj).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** 이름 붙은 층 묶음. 준 이름이 그대로 `stateDict` 열쇠가 된다. */
+/**
+ * A named bundle of layers. The name you give becomes the `stateDict` key
+ * as-is.
+ */
 export class ModuleDict extends Module {
   private readonly items = new Map<string, Module>();
 
@@ -447,11 +491,12 @@ export class ModuleDict extends Module {
 }
 
 /**
- * 학습되는 텐서 목록. **이것이 없으면 대신할 방법이 없다.**
+ * A list of trained tensors. **Without this there is no substitute.**
  *
- * 층에 안 붙은 파라미터는 `ownParameters` 를 손으로 적지 않는 한 아무 데도 안
- * 잡힌다. 안 잡히면 옵티마이저가 못 보고, 못 보면 안 갱신하고, 그런데 **손실은
- * 내려간다** — 남은 파라미터가 대신 맞추기 때문이다. 예외도 경고도 없다.
+ * A parameter not attached to a layer is caught nowhere unless
+ * `ownParameters` is written by hand. Uncaught means the optimizer cannot
+ * see it, unseen means it is not updated, and yet **the loss comes down** —
+ * the remaining parameters compensate. No exception, no warning.
  */
 export class ParameterList extends Module {
   private readonly items: Tensor[];
@@ -487,7 +532,10 @@ export class ParameterList extends Module {
   }
 }
 
-/** 이름 붙은 파라미터 묶음. `ParameterList` 와 같은 이유로 있다. */
+/**
+ * A named bundle of parameters. It exists for the same reason as
+ * `ParameterList`.
+ */
 export class ParameterDict extends Module {
   private readonly items = new Map<string, Tensor>();
 
@@ -523,7 +571,7 @@ export class ParameterDict extends Module {
 }
 
 /**
- * `nn.Parameter` 자리. **새 잎을 하나 세운다.**
+ * Where `nn.Parameter` goes. **It stands up a new leaf.**
  *
  * ```ts
  * class Net extends nn.Module {
@@ -532,18 +580,22 @@ export class ParameterDict extends Module {
  * }
  * ```
  *
- * ## torch 와 갈리는 자리 둘 — 재봤다
+ * ## Two places it parts from torch — measured
  *
- * **저장을 안 나눠 갖는다.** torch 의 `nn.Parameter(t)` 는 `t` 와 같은 저장을 보므로
- * 한쪽을 고치면 다른 쪽도 바뀌는데, 우리에게는 뷰가 없어서 **값을 복사한다.** 뷰를
- * 거절하는 것과 같은 이유이고, 파이썬 결속도 같은 자리에서 같은 선택을 했다 —
- * 두 GPU 구현이 서로 갈리는 것이 torch 와 갈리는 것보다 나쁘다.
+ * **Storage is not shared.** torch's `nn.Parameter(t)` sees the same
+ * storage as `t`, so editing one changes the other; having no views, we
+ * **copy the values.** It is the same reason views are refused, and the
+ * Python binding made the same choice at the same place — two GPU
+ * implementations diverging from each other is worse than diverging from
+ * torch.
  *
- * **`requiresGrad` 만으로도 파라미터가 된다.** torch 는 `Parameter` 로 감싼 것만
- * `named_parameters()` 에 넣고 평범한 `requires_grad=True` 텐서는 안 넣는다(실측).
- * 여기서는 `ownParameters()` 가 깃발을 보므로 둘 다 들어온다. 규칙을 torch 쪽으로
- * 바꾸면 `claim()` 으로 세워 둔 지금 코드가 **조용히 파라미터를 잃는다** — 갈림을
- * 적어 두는 쪽이 싸다. `parity.ts` 가 이 둘을 값으로 붙잡고 있다.
+ * **`requiresGrad` alone makes something a parameter.** torch puts only
+ * what is wrapped in `Parameter` into `named_parameters()` and leaves an
+ * ordinary `requires_grad=True` tensor out (measured). Here
+ * `ownParameters()` looks at the flag, so both come in. Moving the rule
+ * towards torch would make today's code, which raises the flag with
+ * `claim()`, **quietly lose parameters** — writing the divergence down is
+ * cheaper. `parity.ts` pins these two by value.
  */
 export const Parameter = function (t: Tensor, requiresGrad = true): Tensor {
   const p = t.clone().detach();
@@ -552,10 +604,15 @@ export const Parameter = function (t: Tensor, requiresGrad = true): Tensor {
   return p;
 } as unknown as { new (t: Tensor, requiresGrad?: boolean): Tensor };
 
-/** `y = x·Wᵀ + b`. 가중치는 `(출력, 입력)` 이다 — torch 와 같다. */
+/**
+ * `y = x·Wᵀ + b`. The weight is `(out, in)`, as in torch.
+ */
 export class Linear extends Module {
   readonly weight: Tensor;
-  /** **없을 수 있다.** `AdaptiveLogSoftmaxWithLoss` 의 꼬리 층이 치우침을 안 쓴다. */
+  /**
+   * **It may be absent.** The tail layer of `AdaptiveLogSoftmaxWithLoss`
+   * uses no bias.
+   */
   readonly bias: Tensor | null;
 
   constructor(inFeatures: number, outFeatures: number, bias = true) {
@@ -582,10 +639,11 @@ export class Linear extends Module {
   }
 
   /**
-   * 파이썬이 찍는 그대로.
+   * Exactly what Python prints.
    *
-   * **게으른 층이 굳으면 이 글자가 답이 된다** — 그 물건은 그때부터 `Linear` 이고,
-   * 사용자가 `print(model)` 로 보는 것이 이것이다.
+   * **When a lazy layer solidifies, this text is the answer** — from then
+   * on the thing is a `Linear`, and this is what the user sees from
+   * `print(model)`.
    */
   override describe(): string {
     const [out, inF] = [this.weight.shape[0] ?? 0, this.weight.shape[1] ?? 0];
@@ -595,14 +653,18 @@ export class Linear extends Module {
 }
 
 /**
- * 차원 수에 상관없는 합성곱 층. `spatial` 이 공간 축의 수다.
+ * A convolution layer independent of dimensionality. `spatial` is the
+ * number of spatial axes.
  *
- * `Conv1d`·`Conv2d`·`Conv3d` 가 그 수만 다르다 — 클래스를 셋 세우면 그중 하나만
- * 고치는 날이 온다.
+ * `Conv1d`, `Conv2d` and `Conv3d` differ only in that number — stand up
+ * three classes and a day comes when only one of them is fixed.
  */
 export class ConvND extends Module {
   readonly weight: Tensor;
-  /** 편향이 없을 수도 있다 — 뒤에 정규화가 오면 편향이 상수항으로 흡수된다. */
+  /**
+   * The bias may be absent — with normalisation following, the bias is
+   * absorbed as a constant term.
+   */
   readonly bias: Tensor | null;
 
   constructor(
@@ -824,7 +886,9 @@ export class Tanh extends Module {
   }
 }
 
-/** 받은 것을 그대로 낸다. `Sequential` 의 자리 채우개로 쓴다. */
+/**
+ * Returns what it was given. Used as a placeholder in a `Sequential`.
+ */
 export class Identity extends Module {
   override forward(x: Tensor): Tensor {
     return x;
@@ -841,7 +905,10 @@ export class LeakyReLU extends Module {
   }
 }
 
-/** 음수 쪽이 지수로 눕는다. **α 를 안 흔들면 표의 무인자 판과 못 가른다.** */
+/**
+ * The negative side lies down exponentially. **Without varying α it cannot
+ * be told apart from the argument-free entry in the table.**
+ */
 export class ELU extends Module {
   constructor(private readonly alpha = 1.0) {
     super();
@@ -853,10 +920,12 @@ export class ELU extends Module {
 }
 
 /**
- * **`approximate` 는 받는 척이 아니다** — `"tanh"` 는 다른 식이고 값이 다르다.
+ * **`approximate` is not accepted for show** — `"tanh"` is a different
+ * formula and a different value.
  *
- * 최대차가 1e-4 언저리라 이 프로젝트의 허용 오차 언저리이고, 그래서 "거의 같으니
- * 하나로 둔다" 가 통할 뻔한 자리다. 골든이 둘을 따로 묻는다.
+ * The maximum difference is around 1e-4, which is near this project's
+ * tolerance, and so it is a place where "near enough, keep one" almost got
+ * through. The golden cases ask about the two separately.
  */
 export class GELU extends Module {
   constructor(private readonly approximate: "none" | "tanh" = "none") {
@@ -902,9 +971,10 @@ export class LogSoftmax extends Module {
 }
 
 /**
- * 음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
+ * **Learns** the slope on the negative side. The only one in this family
+ * with a parameter.
  *
- * `weight` 라는 이름이 `stateDict` 열쇠가 되므로 torch 와 같아야 한다.
+ * The name `weight` becomes a `stateDict` key, so it has to match torch.
  */
 export class PReLU extends Module {
   readonly weight: Tensor;
@@ -925,10 +995,12 @@ export class PReLU extends Module {
 }
 
 /**
- * 채널을 그룹으로 묶어 정규화. **배치가 작을 때 BatchNorm 대신 쓴다.**
+ * Normalises with the channels bundled into groups. **Used instead of
+ * BatchNorm when the batch is small.**
  *
- * BatchNorm 은 배치 통계를 쓰므로 배치가 1~2 면 통계가 못 미덥다. 이쪽은 표본 하나
- * 안에서 묶으므로 배치 크기와 무관하다.
+ * BatchNorm uses batch statistics, so with a batch of 1–2 those statistics
+ * cannot be trusted. This one bundles within a single sample, so it is
+ * independent of batch size.
  */
 export class GroupNorm extends Module {
   readonly weight: Tensor;
@@ -957,10 +1029,11 @@ export class GroupNorm extends Module {
 }
 
 /**
- * 표본마다·채널마다 따로. **기본이 파라미터 없음이다** — torch 가 그렇다.
+ * Per sample and per channel. **The default is no parameters** — as in
+ * torch.
  *
- * `BatchNorm` 과 반대라 헷갈리는 자리이고, 기본을 뒤집으면 `stateDict` 열쇠가
- * 통째로 갈린다.
+ * It is the opposite of `BatchNorm`, which makes it a confusing place, and
+ * flipping the default changes every `stateDict` key.
  */
 export class InstanceNormND extends Module {
   constructor(private readonly eps = 1e-5) {
@@ -972,7 +1045,10 @@ export class InstanceNormND extends Module {
   }
 }
 
-/** **평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다. */
+/**
+ * **It does not subtract the mean.** That is the only difference from
+ * `LayerNorm`.
+ */
 export class RMSNorm extends Module {
   readonly weight: Tensor;
 
@@ -996,10 +1072,12 @@ export class RMSNorm extends Module {
 }
 
 /**
- * 전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `ConvND` 와 뒤집혀 있다.
+ * Transposed convolution. **The weight is `(in, out, …)`** — flipped
+ * relative to `ConvND`.
  *
- * 정사각 커널이면 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다. `stateDict` 열쇠는
- * `weight`·`bias` 로 같으므로, 모양만 보고 넣으면 조용히 틀린다.
+ * With a square kernel the shape still matches when flipped, so only the
+ * values diverge. The `stateDict` keys are the same, `weight` and `bias`,
+ * so putting them in by shape alone is quietly wrong.
  */
 export class ConvTransposeND extends Module {
   readonly weight: Tensor;
@@ -1033,10 +1111,11 @@ export class ConvTransposeND extends Module {
 }
 
 /**
- * 학습 때만 자리를 떨군다. **평가 모드에서는 항등이다.**
+ * Drops slots only while training. **In eval mode it is the identity.**
  *
- * `training` 은 `Module` 이 들고 있고 `eval()` 이 컨테이너를 뚫고 내려가 끈다 —
- * 그 전파가 끊기면 학습은 멀쩡하고 추론만 틀린다.
+ * `training` is held by `Module`, and `eval()` reaches down through
+ * containers to turn it off — break that propagation and training is fine
+ * while only inference is wrong.
  */
 export class Dropout extends Module {
   constructor(private readonly p = 0.5) {
@@ -1049,17 +1128,21 @@ export class Dropout extends Module {
 }
 
 /**
- * 어텐션의 알맹이. **`MultiheadAttention` 이 안에서 하던 계산을 이름으로 낸다.**
+ * The core of attention. **The computation `MultiheadAttention` was doing
+ * inside, given a name.**
  *
- * 층은 있는데 이 함수가 없었다. 층을 안 쓰고 어텐션을 손으로 짜는 코드가 이 이름을
- * 부르고, 요즘 트랜스포머 코드의 기본형이 그것이다.
+ * The layer existed and this function did not. Code that writes attention
+ * by hand rather than using the layer calls this name, and that is the
+ * basic form of modern transformer code.
  *
- * **가림막은 곱하는 것이 아니라 더하는 것이다.** 큰 음수를 더해 softmax 가 0 을
- * 내게 하는 것이지 0 을 곱하는 것이 아니다 — 곱하면 softmax 가 이미 정규화한 뒤라
- * 남은 자리가 1 로 안 돌아간다.
+ * **A mask is added, not multiplied.** A large negative number is added so
+ * that softmax produces zero — it is not a multiplication by zero, because
+ * multiplying after softmax has already normalised leaves the remaining
+ * slots not summing back to 1.
  *
- * 배치 축이 있으면 표본마다 따로 돈다. `mm` 이 2 차원끼리라 그렇고, 묶음 행렬곱이
- * 생기면 그때 여기를 고치면 된다.
+ * With a batch axis it runs per sample. That is because `mm` is
+ * two-dimensional; when a batched matrix multiply exists, this is the place
+ * to change.
  */
 export function scaledDotProductAttention(
   query: Tensor,
@@ -1110,7 +1193,9 @@ export class MaxPool2d extends Module {
   }
 }
 
-/** 배치 축만 남기고 납작하게. */
+/**
+ * Flattens, keeping only the batch axis.
+ */
 export class Flatten extends Module {
   override forward(x: Tensor): Tensor {
     const batch = x.shape[0] ?? 1;
@@ -1118,7 +1203,9 @@ export class Flatten extends Module {
   }
 }
 
-/** `Flatten` 의 반대. 축 하나를 여러 축으로 편다. */
+/**
+ * The opposite of `Flatten`. Spreads one axis into several.
+ */
 export class Unflatten extends Module {
   constructor(private readonly dim: number,
               private readonly sizes: readonly number[]) {
@@ -1131,17 +1218,20 @@ export class Unflatten extends Module {
 }
 
 /**
- * 창 자리를 표본이 흔드는 최대 풀링.
+ * Max pooling whose window positions are shaken by a sample.
  *
- * **표본은 호스트에서 뽑는다.** 창 자리를 셰이더에 구워야 해서 CPU 에 값이 있어야
- * 하는데, GPU 난수를 읽어 오는 것은 비동기다 — `forward` 는 동기여야 하므로
- * `random.ts` 의 줄기를 쓴다. `manualSeed` 가 그 줄기도 잡는다.
+ * **The sample is drawn on the host.** The window positions have to be
+ * baked into the shader, so the values must be on the CPU, and reading GPU
+ * randomness back is asynchronous — `forward` has to be synchronous, so it
+ * uses the stream in `random.ts`. `manualSeed` catches that stream too.
  *
- * `randomSamples` 를 주면 그것을 쓴다. torch 의 `_random_samples` 자리이고, 값을
- * 굳혀 대조하려면 이 길이 필요하다 — 안 주면 셋의 난수기가 달라 값이 안 맞는다.
+ * Pass `randomSamples` and it uses those. It is where torch's
+ * `_random_samples` goes, and it is needed to freeze values for comparison
+ * — without it the three implementations' generators differ and the values
+ * do not match.
  *
- * **`outputSize` 와 `outputRatio` 는 둘 중 하나만** 받는다. 둘 다 주거나 둘 다
- * 안 주면 멈춘다 — torch 가 그렇다.
+ * **`outputSize` and `outputRatio` are one or the other.** Giving both, or
+ * neither, stops — as in torch.
  */
 export class FractionalMaxPoolND extends Module {
   constructor(private readonly spatial: number,
@@ -1221,7 +1311,10 @@ export class AvgPool2d extends Module {
   }
 }
 
-/** p-노름 풀링. **첫 인자가 `normType` 이다** — 커널이 아니다(torch 가 그렇다). */
+/**
+ * p-norm pooling. **The first argument is `normType`**, not the kernel
+ * (that is torch's shape).
+ */
 export class LPPool1d extends Module {
   constructor(private readonly normType: number,
               private readonly kernel: number,
@@ -1238,13 +1331,16 @@ export class LPPool2d extends LPPool1d {}
 export class LPPool3d extends LPPool1d {}
 
 /**
- * 뒤쪽 축들을 평균 0, 분산 1 로. **`normalizedShape` 가 접는 축의 개수를 정한다.**
+ * Trailing axes to mean 0, variance 1. **`normalizedShape` decides how many
+ * axes are folded.**
  *
- * 축 하나짜리(`new LayerNorm(4)`)로만 재면 "마지막 축을 접는다" 와 답이 같아서
- * 이 규칙이 안 보인다. `[3, 4]` 를 주면 뒤 두 축을 **한 덩어리로** 접는다.
+ * Measured only with a single axis (`new LayerNorm(4)`), the answer matches
+ * "fold the last axis" and the rule stays invisible. Given `[3, 4]` it
+ * folds the last two axes **as one block.**
  *
- * 기본이 파라미터 있음이다 — `InstanceNorm` 과 반대라 헷갈리는 자리이고, 기본을
- * 뒤집으면 `stateDict` 열쇠가 통째로 갈린다.
+ * The default is with parameters — the opposite of `InstanceNorm`, which
+ * makes it a confusing place, and flipping the default changes every
+ * `stateDict` key.
  */
 export class LayerNorm extends Module {
   readonly weight: Tensor | null = null;
@@ -1294,10 +1390,11 @@ export class LayerNorm extends Module {
 }
 
 /**
- * 확대. **첫 자리는 `size` 다** — torch 가 그렇다.
+ * Enlargement. **The first position is `size`**, as in torch.
  *
- * 배율을 첫 자리에 두면 `new Upsample(2)` 가 늘리는 것과 "출력을 2 로" 사이에서
- * 갈리고, 모양이 그럴듯해 값으로만 걸린다.
+ * Putting the scale factor first makes `new Upsample(2)` ambiguous between
+ * doubling and "output of 2", and the shape is plausible enough that only
+ * values catch it.
  */
 export class Upsample extends Module {
   constructor(private readonly size: number | readonly number[] | null = null,
@@ -1417,7 +1514,10 @@ export class GRUCell extends RNNCellBase {
   }
 }
 
-/** **혼자 둘을 돌려준다** — `(h, c)` 다. 셋을 한 모양으로 두면 기억 칸이 사라진다. */
+/**
+ * **Alone in returning two** — `(h, c)`. Forcing the three into one shape
+ * loses the memory cell.
+ */
 export class LSTMCell extends RNNCellBase {
   constructor(inputSize: number, hidden: number, hasBias = true) {
     super(inputSize, hidden, 4, hasBias);
@@ -1477,7 +1577,10 @@ export class Fold extends Module {
   }
 }
 
-/** 두 입력을 **한꺼번에** 섞는다. 가중치가 `(out, in1, in2)` 세 축이다. */
+/**
+ * Mixes two inputs **at once.** The weight has three axes, `(out, in1,
+ * in2)`.
+ */
 export class Bilinear extends Module {
   readonly weight: Tensor;
   readonly bias: Tensor;
@@ -1523,7 +1626,10 @@ export class LocalResponseNorm extends Module {
   }
 }
 
-/** `(N, C, H, W)` 의 **채널 방향** softmax. `softmax(dim=1)` 과 같다. */
+/**
+ * Softmax **along the channels** of `(N, C, H, W)`. The same as
+ * `softmax(dim=1)`.
+ */
 export class Softmax2d extends Module {
   override forward(x: Tensor): Tensor { return x.softmax(1); }
   override describe(): string { return "Softmax2d()"; }
@@ -1571,7 +1677,9 @@ export class UpsamplingBilinear2d extends UpsamplingBase {
   constructor(scale = 2) { super("UpsamplingBilinear2d", scale, "bilinear"); }
 }
 
-/** 가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 층이다. */
+/**
+ * One row per bag. Selecting from the table **and combining** is one layer.
+ */
 export class EmbeddingBag extends Module {
   readonly weight: Tensor;
 
@@ -1592,10 +1700,11 @@ export class EmbeddingBag extends Module {
   }
 
   /**
-   * 1 차원 번호 줄을 `offsets` 로 잘라 가방을 만든다.
+   * Cuts a one-dimensional index run into bags with `offsets`.
    *
-   * **가방 길이가 제각각인 자리가 이 이름의 이유다.** 2 차원 입력은 길이가 같은
-   * 가방만 되고, 실제로 쓰는 쪽(장바구니·문장)은 길이가 다르다.
+   * **Bags of differing lengths are the reason this name exists.** A
+   * two-dimensional input only allows bags of equal length, and the actual
+   * uses (shopping carts, sentences) have differing lengths.
    */
   callOffsets(idx: Tensor, offsets: readonly number[]): Tensor {
     return embeddingBag(idx, this.weight, offsets, this.mode);
@@ -1678,11 +1787,16 @@ export class LazyModule extends Module {
   private built: Module | null = null;
 
   constructor(
-    /** 굳기 전에 찍을 글자. `describe()` 가 쓴다. */
+    /**
+     * The text to print before it solidifies. `describe()` uses it.
+     */
     readonly label: string,
     /** 알아낸 크기로 진짜 층을 만든다. */
     private readonly build: (inferred: number) => Module,
-    /** 입력에서 무엇을 읽을지. 선형은 마지막 축, 나머지는 채널이다. */
+    /**
+     * What to read off the input. Linear reads the last axis; the rest read
+     * channels.
+     */
     private readonly read: (x: Tensor) => number,
   ) {
     super();
@@ -1794,15 +1908,18 @@ export class LazyInstanceNorm3d extends LazyNormBase {
 // 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
 
 /**
- * 어휘가 아주 클 때의 softmax. **자주 나오는 글자를 싸게 낸다.**
+ * Softmax for a very large vocabulary. **It makes frequent tokens cheap.**
  *
- * 글자를 빈도순으로 묶어, 앞쪽 뭉치는 머리에서 바로 내고 뒤쪽 뭉치는 **머리가 그
- * 뭉치를 고른 확률 × 뭉치 안의 확률**로 낸다. 뒤쪽일수록 중간 차원을 `divValue` 로
- * 나눠 좁힌다 — 드문 글자에 자리를 덜 쓴다.
+ * Tokens are bundled by frequency; the leading bundle is produced straight
+ * from the head, and the trailing bundles as **the probability the head
+ * picked that bundle × the probability within it**. The further back, the
+ * narrower the intermediate dimension gets, divided by `divValue` — less
+ * room spent on rare tokens.
  *
- * **기본값이 `divValue=4`·`headBias=false`** 다(재봤다: `tests/probe_asm.py`).
- * 중간 차원은 `inFeatures / divValue**(i+1)` 을 내림한 것이고 **0 이 될 수 있다** —
- * torch 도 거기서 빈 층을 만들고 넘어가므로 막지 않는다.
+ * **The defaults are `divValue=4` and `headBias=false`** (measured:
+ * `tests/probe_asm.py`). The intermediate dimension is `inFeatures /
+ * divValue**(i+1)` floored and **can reach 0** — torch makes an empty layer
+ * there and carries on, so this does not block it either.
  */
 export class AdaptiveLogSoftmaxWithLoss extends Module {
   readonly cutoffs: number[];
@@ -1846,10 +1963,11 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
   }
 
   /**
-   * 모든 글자의 로그확률 `(N, nClasses)`.
+   * The log probability of every token, `(N, nClasses)`.
    *
-   * 뭉치 안의 확률에 **머리가 그 뭉치를 고른 로그확률을 더한다** — 곱셈이 로그에서
-   * 덧셈이고, 그래서 행 전체의 합이 1 로 남는다.
+   * To the probability within a bundle it **adds the log probability that
+   * the head picked that bundle** — multiplication is addition in logs,
+   * which is what leaves the whole row summing to 1.
    */
   logProb(x: Tensor): Tensor {
     const head = this.head.call(x).logSoftmax(1);
@@ -1864,7 +1982,10 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
     return Tensor.cat(parts, 1);
   }
 
-  /** `{ output, loss }` — 정답 자리의 로그확률과 그 평균의 음수. */
+  /**
+   * `{ output, loss }` — the log probability at the target position and the
+   * negative of its mean.
+   */
   run(x: Tensor, target: Tensor): { output: Tensor; loss: Tensor } {
     const lp = this.logProb(x);
     const rows = target.reshape([target.size, 1]);
@@ -1872,7 +1993,10 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
     return { output, loss: output.mean().neg() };
   }
 
-  /** **정답도 받는 층이다.** 지나가려 하면 여기서 멈춘다 — `run(x, target)` 이 그 자리다. */
+  /**
+   * **This layer takes the target too.** Trying to pass through stops here
+   * — `run(x, target)` is the place.
+   */
   override forward(): Tensor {
     throw new Error(
       "AdaptiveLogSoftmaxWithLoss also takes the target — use run(x, target)",
@@ -1885,20 +2009,23 @@ export class AdaptiveLogSoftmaxWithLoss extends Module {
 }
 
 /**
- * 소리와 글자를 **자리를 맞추지 않고** 잇는 손실.
+ * A loss that joins audio to text **without aligning positions.**
  *
- * `logProbs` 는 `(T, N, C)` — **시간이 앞이다.** 표본마다 길이가 다르고 그것이 이
- * 손실의 요점이라, 길이 두 벌을 함께 받는다.
+ * `logProbs` is `(T, N, C)` — **time first.** Each sample has its own
+ * length and that is the point of this loss, so it receives two sets of
+ * lengths alongside.
  *
- * ## 값이 0 이고 기울기만 있는 항을 하나 더한다
+ * ## It adds one term whose value is zero and whose gradient is not
  *
- * torch 가 `logProbs` 로 흘리는 기울기는 참도함수가 아니다 — 유한차분은 `-γ` 인데
- * torch 는 `exp(logProbs) - γ` 를 낸다(실측: `tests/probe_ctc3.py`). 쓰는 자리에서는
- * 앞에 `logSoftmax` 가 있어서 둘이 같은 답이 되지만(그 역방향의 고정점이다),
- * `logProbs` 를 바로 잎으로 두면 수가 갈린다. 맞추되 **왜 맞추는지**를 적는다.
+ * The gradient torch flows into `logProbs` is not the true derivative —
+ * finite differences give `-γ` while torch produces `exp(logProbs) - γ`
+ * (measured: `tests/probe_ctc3.py`). At the place it is used there is a
+ * `logSoftmax` in front, which makes the two the same answer (it is a fixed
+ * point of that backward), but with `logProbs` as a leaf directly the
+ * numbers diverge. Matched — with **why it is matched** written down.
  *
- * @param reduction `"mean"` 은 표본마다 **제 표적 길이로 나눈 뒤** 평균한다 —
- *   그냥 평균이 아니다.
+ * @param reduction `"mean"` divides each sample **by its own target
+ *   length** before averaging — not a plain mean.
  */
 export function ctcLoss(
   logProbs: Tensor,
@@ -1961,7 +2088,9 @@ export class CTCLoss {
     return this.forward(logProbs, targets, inputLengths, targetLengths);
   }
 
-  /** torch 의 `extra_repr` 가 아무것도 안 낸다 — 그래서 비어 있다. */
+  /**
+   * torch's `extra_repr` produces nothing here — hence empty.
+   */
   describe(): string { return "CTCLoss()"; }
 }
 
@@ -2187,7 +2316,10 @@ export class TripletMarginLoss {
   describe(): string { return "TripletMarginLoss()"; }
 }
 
-/** 거리 함수를 받는 삼중항. 기본값이 쌍별 거리라 위와 같은 답이 나온다. */
+/**
+ * A triplet loss taking a distance function. The default is the pairwise
+ * distance, so it gives the same answer as the one above.
+ */
 export class TripletMarginWithDistanceLoss {
   constructor(
     readonly distanceFunction: ((a: Tensor, b: Tensor) => Tensor) | null = null,
@@ -2259,7 +2391,10 @@ export class MultiLabelMarginLoss {
   describe(): string { return "MultiLabelMarginLoss()"; }
 }
 
-/** 짝지어진 두 줄 사이의 거리. **`eps` 는 차에 더한다** — 텐서 쪽에 적었다. */
+/**
+ * The distance between two paired rows. **`eps` is added to the
+ * difference** — written down on the tensor side.
+ */
 export class PairwiseDistance {
   constructor(readonly p = 2.0, readonly eps = 1e-6, readonly keepdim = false) {
   }
@@ -2290,18 +2425,22 @@ export class CosineSimilarity {
 }
 
 /**
- * 패딩 층 열다섯 개의 뿌리.
+ * The root of fifteen padding layers.
  *
- * **셋(1·2·3 차원) × 다섯(reflect·replicate·zero·constant·circular)이 한 기계에서
- * 나온다.** 갈리는 것은 모드 이름과 짝의 개수뿐이라, 손으로 열다섯 벌을 적으면
- * 실제로 다른 두 가지를 열다섯 자리에 흩어 놓는 것이 된다.
+ * **Three (1-, 2-, 3-dimensional) × five (reflect, replicate, zero,
+ * constant, circular) come out of one machine.** All that differs is the
+ * mode name and the number of pairs, so writing fifteen copies by hand
+ * scatters two genuinely different things across fifteen places.
  */
 export class PadNd extends Module {
   readonly padding: number[];
 
   constructor(
-    /** 찍을 이름. **`constructor.name` 에 안 기댄다** — 묶는 도구가 이름을 줄이면
-     * 그때부터 조용히 다른 글자가 나오고, 골든은 우리 빌드만 본다. */
+    /**
+     * The name to print. **It does not lean on `constructor.name`** — the
+     * moment a bundler shortens names, different text comes out quietly,
+     * and the golden cases only ever see our build.
+     */
     readonly label: string,
     padding: number | readonly number[],
     readonly mode: PadMode,
@@ -2319,11 +2458,12 @@ export class PadNd extends Module {
   }
 
   /**
-   * 파이썬이 찍는 그대로.
+   * Exactly what Python prints.
    *
-   * **`ConstantPad` 만 이름을 붙여 찍는다** — 나머지는 짝만 찍는다. 진짜 torch 가
-   * 그렇고 골든이 글자를 굳혔으므로 그 차이가 답의 일부다. 값도 파이썬 꼴이라
-   * 정수여도 소수점을 단다(`value=7.0`).
+   * **Only `ConstantPad` prints with the name attached** — the rest print
+   * only the pairs. Real torch does that and the golden cases froze the
+   * text, so the difference is part of the answer. The value is in Python's
+   * form too, so an integer still carries a decimal point (`value=7.0`).
    */
   override describe(): string {
     const pairs = `(${this.padding.join(", ")})`;
@@ -2428,10 +2568,11 @@ function gridBase(n: number, alignCorners: boolean): number[] {
 }
 
 /**
- * `theta` 가 그리는 표본 격자. `(N, 2, 3)` → `(N, H, W, 2)`.
+ * The sampling grid `theta` draws. `(N, 2, 3)` → `(N, H, W, 2)`.
  *
- * 마지막 축은 **`(x, y)` 순서다** — 모양의 `(H, W)` 와 뒤집혀 있다. 정사각에서는
- * 뒤집어 적어도 답이 같아서 직사각으로 물어야 드러난다.
+ * The last axis is in **`(x, y)` order** — flipped relative to the shape's
+ * `(H, W)`. On a square it gives the same answer written either way, so it
+ * only surfaces when asked with a rectangle.
  */
 export function affineGrid(
   theta: Tensor,
@@ -2479,10 +2620,12 @@ function gridReflect(v: Tensor, n: number, alignCorners: boolean): Tensor {
 }
 
 /**
- * 격자가 가리키는 자리에서 값을 떠 온다. `affineGrid` 의 짝이다.
+ * Lifts values from where the grid points. The counterpart of `affineGrid`.
  *
- * **자리 번호는 상수, 무게는 텐서다.** 내림한 정수는 미분이 없고 그 나머지가 무게가
- * 되므로, 무게만 그래프에 두면 입력과 격자 양쪽으로 기울기가 흐른다.
+ * **The positions are constants and the weights are tensors.** A floored
+ * integer has no derivative and its remainder becomes the weight, so
+ * keeping only the weights in the graph lets gradient flow to both the
+ * input and the grid.
  */
 export function gridSample(
   x: Tensor,
@@ -2552,14 +2695,17 @@ export function gridSample(
 }
 
 /**
- * `BatchNormND` 의 함수 꼴. **층이 이것을 부른다** — 식을 한 벌만 둔다.
+ * The function form of `BatchNormND`. **The layer calls this** — one copy
+ * of the formula.
  *
- * **학습이면 이동 통계를 제자리에서 고친다.** torch 가 그렇고, 넘긴 텐서가 갱신되어
- * 돌아온다. 새것을 돌려주면 부르는 쪽의 버퍼가 안 움직여서 학습은 도는데 평가 모드의
- * 값만 틀린다.
+ * **In training it modifies the running statistics in place.** torch does,
+ * and the tensor you hand in comes back updated. Returning a new one leaves
+ * the caller's buffer unmoved, so training runs and only eval-mode values
+ * are wrong.
  *
- * **분산을 두 가지로 쓴다.** 정규화는 편향추정, 이동 통계 갱신은 불편추정이다.
- * 하나로 합치면 평가 모드에서만 갈린다.
+ * **It uses variance two ways.** Normalisation uses the biased estimate;
+ * the running-statistics update uses the unbiased one. Merge them and it
+ * diverges in eval mode only.
  */
 export function batchNorm(
   x: Tensor,
@@ -2604,19 +2750,24 @@ export function batchNorm(
 }
 
 /**
- * 표에서 번호대로 행을 고른다. `F.embedding(번호, 표)` 자리다.
+ * Selects rows from a table by index. Where `F.embedding(indices, table)`
+ * goes.
  *
- * **정의 그대로다** — `indexSelect` 가 하는 일과 같고 기울기도 그쪽이 이미 안다.
- * 같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이
- * 아니라 **있는 것에 이름을 붙이는 것**이므로 값이 갈릴 자리가 없다.
+ * **It is the definition itself** — the same thing `indexSelect` does, and
+ * that side already knows the gradient. An index appearing several times
+ * accumulates into that row several times. This is **naming something that
+ * exists**, not imitating something that does not, so there is no place for
+ * the values to diverge.
  *
- * 그런데도 이 이름이 오래 없었다. 결속이 같은 세 줄을 파이썬에 갖고 있었고 골든이
- * 그쪽을 지나서, TypeScript 로 쓰는 쪽에만 없는 이름이었다 —
- * `tests/test_binding_fills_in.py` 가 가리킨 자리다.
+ * And yet this name was missing for a long time. The binding held the same
+ * three lines in Python and the golden cases went through that side, so it
+ * was a name absent only for those writing TypeScript — the place
+ * `tests/test_binding_fills_in.py` points at.
  *
- * **`nn.Embedding` 층은 아직 없다.** 셋 어디에도 없고 골든도 안 묻는다. 그것은 이
- * 함수를 감싸고 가중치를 들고 있는 자리이지 새 계산이 아니므로, 여기 없다는 것을
- * 적어 두는 편이 이름만 놓는 것보다 낫다.
+ * **There is no `nn.Embedding` layer yet.** None of the three has it and
+ * the golden cases do not ask. It would be a place that wraps this function
+ * and holds the weights rather than a new computation, so writing down that
+ * it is absent is better than putting the name there alone.
  */
 export function embedding(idx: Tensor, weight: Tensor): Tensor {
   const dim = weight.shape[1] ?? 1;
@@ -2625,10 +2776,12 @@ export function embedding(idx: Tensor, weight: Tensor): Tensor {
 }
 
 /**
- * 가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.
+ * One row per bag. Selecting from the table **and combining** is one
+ * function.
  *
- * `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.
- * `perSampleWeights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.
+ * Given `offsets` it cuts a one-dimensional index run into bags — the place
+ * where bag lengths differ. `perSampleWeights` is used by torch only when
+ * `mode='sum'`.
  */
 export function embeddingBag(
   idx: Tensor,
@@ -2668,17 +2821,20 @@ export function embeddingBag(
 }
 
 /**
- * 무작위로 하나를 고르되 **미분이 흐르게** 고른다.
+ * Picks one at random **while letting derivatives through.**
  *
- * 범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로
- * 부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.
+ * Drawing one category is not differentiable, so Gumbel noise is added and
+ * `softmax` smooths it. The smaller `tau`, the more it concentrates on one
+ * side.
  *
- * `hard=true` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —
- * `hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.
- * 그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다.
+ * With `hard=true` the answer is 0/1 but **the gradient is the smooth
+ * one's** — the common `hard - soft.detach() + soft` trick, where the value
+ * is hard and the derivative is soft. Keeping those two apart is what this
+ * function means.
  *
- * @param noise 이미 뽑아 둔 Gumbel 잡음. 안 주면 여기서 뽑는다 — 골든은 값을 못
- *   묻고 성질만 묻지만, 부르는 쪽이 정해진 잡음으로 재현하고 싶을 때가 있다.
+ * @param noise Gumbel noise already drawn. Undrawn, it is drawn here — the
+ *   golden cases can only ask about properties rather than values, but a
+ *   caller sometimes wants to reproduce with fixed noise.
  */
 export function gumbelSoftmax(
   logits: Tensor,
@@ -2750,12 +2906,14 @@ export class BatchNormND extends Module {
   }
 
   /**
-   * **이동 통계도 함께 나간다.** 빠지면 평가 모드에서만 조용히 틀린다.
+   * **The running statistics go out too.** Left out, it is quietly wrong in
+   * eval mode only.
    *
-   * 이름이 `runningMean` 인 필드를 `running_mean` 이라는 열쇠로 내야 해서
-   * `registerBuffer` 를 못 쓴다(그쪽은 필드 이름이 곧 열쇠다). 대신 **목록은
-   * 여기 하나만 두고** `stateDict` 는 밑절미와 같은 식으로 파생시킨다 — 셋이
-   * 어긋나는 것이 이 층에서 이미 두 번 났다.
+   * A field named `runningMean` has to leave under the key `running_mean`,
+   * which rules out `registerBuffer` (there the field name is the key).
+   * Instead **the list lives here alone** and `stateDict` derives from it
+   * the same way the base does — the three falling out of step has already
+   * happened twice in this layer.
    */
   override namedBuffers(persistentOnly = false): Record<string, Tensor> {
     void persistentOnly;                      // 이 층에는 안 싣는 버퍼가 없다
@@ -2801,13 +2959,16 @@ export class BatchNormND extends Module {
 }
 
 /**
- * 순환망 — `RNN`·`LSTM`·`GRU` 를 게이트 수만 바꿔 한 클래스로.
+ * Recurrent networks — `RNN`, `LSTM` and `GRU` as one class differing only
+ * in gate count.
  *
- * 입력은 `(길이, 배치, 특징)` 이다 — torch 의 기본이고 `batch_first` 가 아니다.
+ * Input is `(length, batch, features)` — torch's default, not
+ * `batch_first`.
  *
- * **시간 축은 순차적이라 펼 수가 없다.** 한 걸음의 출력이 다음 걸음의 입력이라
- * 병렬로 돌 자리가 없고, 그래서 걸음마다 커널을 부른다. 짧은 시퀀스에서 도는 값이며,
- * 길어지면 걸음당 호출 비용이 계산을 덮는다.
+ * **The time axis is sequential and cannot be unrolled.** One step's output
+ * is the next step's input, so there is nowhere to run in parallel, and a
+ * kernel is called per step. It holds for short sequences; longer, and the
+ * per-step call cost buries the computation.
  */
 export type RNNKind = "RNN" | "LSTM" | "GRU";
 
@@ -2845,7 +3006,9 @@ export class Recurrent extends Module {
     return this.run(x).output;
   }
 
-  /** 출력 전체와 마지막 상태를 같이 낸다. */
+  /**
+   * Produces the full output and the final state together.
+   */
   run(x: Tensor): { output: Tensor; hidden: Tensor; cell: Tensor } {
     const [steps = 0, batch = 0] = x.shape;
     const H = this.hidden;
@@ -2898,18 +3061,19 @@ function slice(g: Tensor, k: number, H: number): Tensor {
  * 0 과 -inf 이고, "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
  */
 /**
- * 어텐션의 함수 꼴. 가중치를 밖에서 받는다.
+ * The function form of attention. Weights come from outside.
  *
- * **입력이 `(L, N, E)` 다 — 길이가 앞이다.** torch 의 같은 이름이 그렇고, 배치를
- * 앞에 두고 부르면 조용히 다른 축을 섞는다.
+ * **Input is `(L, N, E)` — length first.** torch's function of the same
+ * name is, and calling it with batch first quietly mixes the wrong axes.
  *
- * **가림막은 더하는 실수다.** 참·거짓 표를 여기서 안 받는다 — `-inf` 를 더해
- * softmax 가 0 을 내게 하는 것이지 0 을 곱하는 것이 아니고, 곱하면 이미 정규화한
- * 뒤라 남은 자리가 1 로 안 돌아간다. 참·거짓을 실수로 바꾸는 일은 torch 의 계약을
- * 흉내내는 자리(파이썬 결속)에서 한다.
+ * **The mask is an added float.** A boolean table is not accepted here —
+ * `-inf` is added so that softmax produces zero, rather than multiplying by
+ * zero, and multiplying after normalisation leaves the remaining slots not
+ * summing back to 1. Turning booleans into floats happens where torch's
+ * contract is imitated (the Python binding).
  *
- * @returns 출력 `(L, N, E)` 과 가중치. `averageWeights` 면 `(N, L, S)`, 아니면
- *   머리마다 `(N, H, L, S)` 다.
+ * @returns the output `(L, N, E)` and the weights. With `averageWeights`
+ *   they are `(N, L, S)`, otherwise `(N, H, L, S)`, one per head.
  */
 export function multiHeadAttentionForward(
   query: Tensor,
@@ -3031,7 +3195,10 @@ export class MultiheadAttention extends Module {
       .reshape([batch, len, E]);
   }
 
-  /** 앞만 보게 하는 마스크. 위 삼각을 -inf 로 채운다. */
+  /**
+   * A mask that only lets it look backwards. Fills the upper triangle with
+   * -inf.
+   */
   static causalMask(len: number): Tensor {
     const data = new Float32Array(len * len);
     for (let i = 0; i < len; i++) {
@@ -3042,10 +3209,12 @@ export class MultiheadAttention extends Module {
 }
 
 /**
- * 로짓과 정답 번호에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다.
+ * Straight from logits and target indices. `log_softmax` and `nll_loss`
+ * joined.
  *
- * **`reduction` 이 없었다** — 층 쪽에도 같은 구멍이 있었다. 교재는 함수보다 층을
- * 더 많이 쓰므로 이쪽이 더 자주 닿는 자리다.
+ * **There was no `reduction`** — the layer side had the same hole.
+ * Textbooks use layers more than functions, so this is the more frequently
+ * touched side.
  */
 export class CrossEntropyLoss {
   constructor(readonly reduction: Reduction = "mean") {}

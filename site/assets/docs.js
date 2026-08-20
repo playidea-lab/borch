@@ -6,8 +6,8 @@
  * right for the first week only, and this repository has already caught four stale
  * numbers.
  *
- * The descriptions are the source's TSDoc, which is Korean. The English beside them
- * lives in `site/api_en.json`, each entry stamped with a fingerprint of the Korean it
+ * The descriptions are the source's TSDoc, which is English. The Korean beside them
+ * lives in `site/api_ko.json`, each entry stamped with a fingerprint of the English it
  * was made from, so the generator names the ones whose source has moved. Signatures,
  * kinds and the torch name mapping are language-neutral and identical on both pages.
  */
@@ -29,19 +29,18 @@ const S = {
   indexGone: {
     en: "Could not read the API index — run <code>python3 site/build_api.py</code> first.",
     ko: "API 목록을 못 읽었다 — <code>python3 site/build_api.py</code> 를 먼저 돌린다." },
-  koNote: {
+  sourceNote: {
     // This place read "not translated here — a translation starts drifting from the
     // source the day it is written" for a long time. The worry was right, so every
-    // translation carries a hash of the Korean it was made from, and the generator names
+    // translation carries a hash of the source it was made from, and the generator names
     // the stale ones. Drift is not prevented; it is prevented from being quiet.
-    en: "Descriptions come from the source's own comments, which are written in "
-      + "Korean. The English here is a translation held beside them, each one stamped "
-      + "with the source it was made from, so the generator says which ones have gone "
-      + "stale instead of letting them drift quietly.",
-    ko: "설명문은 소스의 주석을 그대로 옮긴 것이다. 고칠 곳은 이 페이지가 아니라 소스다." },
+    en: "Descriptions are the source's own comments. Fix one in the source, not on this "
+      + "page.",
+    ko: "설명문은 소스의 주석에서 나온다. 소스가 영어라 여기 한국어는 그 옆에 둔 번역이고, "
+      + "번역마다 그때 본 원문이 함께 적혀 있어 낡으면 생성기가 이름을 댄다." },
   notYet: {
-    en: "Not translated yet — shown in the source's Korean.",
-    ko: "" },
+    en: "",
+    ko: "아직 안 옮겼다 — 소스의 영어를 그대로 보여준다." },
   generated: {
     en: "Generated from borch-ts/dist/src/*.d.ts by site/build_api.py — {0} entries.",
     ko: "site/build_api.py 가 borch-ts/dist/src/*.d.ts 에서 뽑았다 — 항목 {0}개." },
@@ -49,17 +48,17 @@ const S = {
 const say = (key, ...args) => (S[key][LANG] ?? S[key].en)
   .replace(/\{(\d+)\}/g, (m, i) => String(args[Number(i)] ?? m));
 
-/** The description in this screen's language. **Missing, it shows the Korean rather than hiding it.**
+/** The description in this screen's language. **Missing, it shows the source rather than hiding it.**
  *
  *  A blank leaves the name reading as though it has no description — and "written but
  *  not yet carried across" and "never written" are entirely different facts for a
  *  reader. So the source text appears with a mark beside it. */
 const prose = (node) => {
-  const ko = node.doc ?? "";
-  if (LANG !== "en" || !ko) return { text: ko, untranslated: false };
-  return node.doc_en
-    ? { text: node.doc_en, untranslated: false }
-    : { text: ko, untranslated: true };
+  const src = node.doc ?? "";
+  if (LANG !== "ko" || !src) return { text: src, untranslated: false };
+  return node.doc_ko
+    ? { text: node.doc_ko, untranslated: false }
+    : { text: src, untranslated: true };
 };
 
 /** Draws one description, saying so when it has not been carried across. */
@@ -166,7 +165,7 @@ function drawModule(mod) {
         ? proseHtml(mod)
         : `<p class="lead">${inline(esc(pick(mod.blurb)))}</p>`}
     <p class="small muted" style="margin-top:1rem">${say("generated", api.total)}
-      ${LANG === "en" ? `<br>${esc(say("koNote"))}` : ""}</p>`;
+      <br>${esc(say("sourceNote"))}</p>`;
   main.append(head);
 
   for (const sym of mod.symbols) main.append(card(sym));

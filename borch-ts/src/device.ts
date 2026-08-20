@@ -23,31 +23,40 @@ const BYTES_PER_F32 = 4;
 const MAX_REPORTED_ERRORS = 3;
 
 /**
- * 텐서가 어디에 있는가.
+ * Where a tensor is.
  *
- * torch 의 `'cuda'`·`'cpu'` 자리다. **인덱스가 없다** — WebGPU 는 어댑터를 열거하는
- * 방법을 주지 않으므로 `'webgpu:1'` 이 가리킬 대상이 아예 없다. 문자열로 충분하다.
+ * Where torch's `'cuda'` and `'cpu'` go. **There is no index** — WebGPU
+ * gives no way to enumerate adapters, so there is nothing for `'webgpu:1'`
+ * to point at. A string is enough.
  */
 export type DeviceKind = "webgpu" | "cpu";
 
-/** 어댑터를 어떻게 고를 것인가. torch 의 `CUDA_VISIBLE_DEVICES` 자리다. */
+/**
+ * How the adapter is chosen. Where torch's `CUDA_VISIBLE_DEVICES` goes.
+ */
 export interface InitOptions {
   /**
-   * 기본값이 `"high-performance"` 인 것은 이것이 **재는 라이브러리**이기 때문이다.
-   * 브라우저 기본값은 노트북에서 통합 GPU 를 고를 수 있고, 그러면 같은 코드가 같은
-   * 기계에서 다른 수를 낸다 — 무엇을 쟀는지 모르는 수가 나온다.
+   * It defaults to `"high-performance"` because this is a **library that
+   * measures.** The browser default may pick the integrated GPU on a
+   * laptop, and then the same code gives different numbers on the same
+   * machine — a number where you do not know what was measured.
    */
   powerPreference?: GPUPowerPreference;
-  /** 소프트웨어 어댑터를 강제한다. 폴백 경로 자체를 시험할 때 쓴다. */
+  /**
+   * Forces the software adapter. Used to exercise the fallback path itself.
+   */
   forceFallbackAdapter?: boolean;
 }
 
 /**
- * WebGPU 를 쓸 수 있는가. **예외가 아니라 값으로 답한다.**
+ * Whether WebGPU can be used. **It answers with a value, not an
+ * exception.**
  *
- * `why` 가 값어치다 — `no-api`(브라우저가 낡았거나 안전한 문맥이 아니다)와
- * `no-adapter`(드라이버 차단 목록·가상 머신·GPU 없는 헤드리스)는 쓰는 사람이 할 수
- * 있는 일이 전혀 다른데, 예외 하나로 뭉치면 그 갈림이 사라진다.
+ * `why` is what makes it worth having — `no-api` (the browser is too old,
+ * or this is not a secure context) and `no-adapter` (driver blocklist,
+ * virtual machine, headless with no GPU) leave the user with entirely
+ * different things to do, and folding them into one exception erases that
+ * split.
  */
 export type Availability =
   | { ok: true; adapter: string }
@@ -86,11 +95,14 @@ function askAdapter(options: InitOptions): Promise<GPUAdapter | null> {
 }
 
 /**
- * 붙어 보지 않고 붙을 수 있는지만 묻는다. 장치는 안 만든다.
+ * Asks whether it could attach, without attaching. It does not create a
+ * device.
  *
- * **`init()` 을 대신하지 않는다** — 여기를 지나도 `requestDevice` 가 거절할 수 있고
- * 그것은 여전히 `init()` 에서 예외로 온다. 이 함수가 답하는 것은 "어댑터가 있는가"
- * 까지이고, 실제로 막히는 자리가 대부분 그 앞이라 그것만으로 값이 있다.
+ * **It does not stand in for `init()`** — `requestDevice` can still refuse
+ * after this passes, and that still arrives as an exception from `init()`.
+ * What this function answers reaches as far as "is there an adapter", and
+ * since most of what actually blocks sits before that, it is worth having
+ * on its own.
  */
 export async function probe(options: InitOptions = {}): Promise<Availability> {
   if (!("gpu" in navigator)) return { ok: false, why: "no-api", message: NO_API };
@@ -100,10 +112,12 @@ export async function probe(options: InitOptions = {}): Promise<Availability> {
 }
 
 /**
- * WebGPU 를 쓸 수 있는가만 묻는다. `torch.cuda.is_available()` 자리다.
+ * Asks only whether WebGPU can be used. Where `torch.cuda.is_available()`
+ * goes.
  *
- * **torch 와 달리 비동기다** — 어댑터를 얻는 것이 비동기라 피할 길이 없다. 왜 안
- * 되는지가 필요하면 `probe()` 를 써라.
+ * **Unlike torch's, it is async** — obtaining an adapter is asynchronous
+ * and there is no way around it. If you need to know why not, use
+ * `probe()`.
  */
 export async function isAvailable(options: InitOptions = {}): Promise<boolean> {
   return (await probe(options)).ok;
@@ -208,40 +222,49 @@ export class Device {
   }
 
   /**
-   * 장치를 잃었으면 그 사연, 아니면 `null`.
+   * The story, if the device was lost; otherwise `null`.
    *
-   * torch 에 대응물이 없다 — CUDA 문맥은 프로세스와 함께 산다. 브라우저에서는 다른
-   * 탭이나 드라이버 사정으로 남이 우리 장치를 회수할 수 있고, 그때 예외는 안 난다.
+   * There is no counterpart in torch — a CUDA context lives with the
+   * process. In a browser another tab or the driver can reclaim our device,
+   * and no exception is raised when it happens.
    */
   lost: { reason: string; message: string } | null = null;
 
-  /** 아직 쓸 수 있는가. 긴 학습 루프가 스텝마다 볼 자리다. */
+  /**
+   * Whether it is still usable. Somewhere a long training loop looks at
+   * every step.
+   */
   get alive(): boolean {
     return this.lost === null;
   }
 
   /**
-   * 지금까지 난 검증 오류.
+   * Validation errors so far.
    *
-   * **재는 쪽이 이것을 봐야 한다.** 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도
-   * 안 하므로, 그 상태에서도 벽시계는 돌고 수는 나온다 — 측정처럼 보이는 것이 나온다.
+   * **Whoever is measuring has to look at this.** An invalid command buffer
+   * throws nothing and simply does no work, so the wall clock keeps running
+   * in that state and numbers come out — something that looks like a
+   * measurement comes out.
    */
   faults: { count: number; first: string } = { count: 0, first: "" };
 
   /**
-   * 지금까지 보낸 dispatch 수.
+   * Dispatches issued so far.
    *
-   * "느리다" 에서 멈추면 다음에 무엇을 할지 모른다. 스텝당 dispatch 수를 알면 느린
-   * 것이 **커널 자체인지 부르는 횟수인지**가 갈린다 — 지금 이 설계는 연산 하나마다
-   * 명령 인코더를 새로 만들어 제출하므로, 그 수가 크면 원인이 거기다.
+   * Stopping at "it is slow" leaves you with no next move. Knowing
+   * dispatches per step separates whether the slow part is **the kernel
+   * itself or the number of calls** — this design currently builds and
+   * submits a fresh command encoder per operation, so a large count points
+   * there.
    */
   dispatches = 0;
 
   /**
-   * 커널 종류별 dispatch 수.
+   * Dispatches by kernel kind.
    *
-   * 총수만으로는 다음에 무엇을 고칠지 모른다. 1,636 개가 conv 스무 번인지 BatchNorm
-   * 조립 오백 번인지에 따라 할 일이 다르다 — 그 갈림을 재려고 둔다.
+   * A total alone does not say what to fix next. Whether 1,636 is twenty
+   * convs or five hundred BatchNorm assemblies calls for different work —
+   * this exists to measure that split.
    */
   readonly byKind = new Map<string, number>();
 
@@ -263,16 +286,21 @@ export class Device {
    */
   private encoder: GPUCommandEncoder | null = null;
   private pass: GPUComputePassEncoder | null = null;
-  /** 지금까지 실제로 보낸 제출 수. 묶기가 도는지 재는 쪽이 본다. */
+  /**
+   * Submissions actually issued so far. Whoever is measuring whether
+   * batching works looks here.
+   */
   submits = 0;
 
   /**
-   * 셰이더 컴파일 오류를 삼키지 않는다.
+   * It does not swallow shader compilation errors.
    *
-   * **WGSL 컴파일 실패는 예외로 오지 않는다.** `createShaderModule` 은 그냥 돌아오고,
-   * 그 파이프라인으로 dispatch 하면 아무 일도 안 일어난다 — 결과 버퍼가 0 인 채로
-   * 남고 화면에는 "값이 다르다"만 뜬다. 실제로 이 러너에서 축약 커널이 그렇게
-   * 0 을 냈고, 그때 아무 오류도 안 보였다. 그래서 진단 정보를 직접 꺼내 본다.
+   * **A failed WGSL compile does not arrive as an exception.**
+   * `createShaderModule` simply returns, and dispatching with that pipeline
+   * does nothing at all — the result buffer stays zero and all the screen
+   * says is "the values differ". A reduction kernel in this very runner
+   * returned zeros that way, with no error visible anywhere. So the
+   * diagnostics are pulled out deliberately.
    */
   pipeline(signature: string, source: () => string): GPUComputePipeline {
     // 서명의 첫 토막이 커널 종류다(`cnt:...`, `u:relu:...`). 모양까지 세면 종류가
@@ -303,7 +331,9 @@ export class Device {
     return pipeline;
   }
 
-  /** 지금까지 구운 셰이더 수. 캐시가 도는지 테스트가 본다. */
+  /**
+   * Shaders baked so far. Tests look at it to see whether the cache works.
+   */
   get pipelineCount(): number {
     return this.pipelines.size;
   }
@@ -349,7 +379,10 @@ export class Device {
    */
   private readonly ages = new WeakMap<GPUBuffer, number>();
 
-  /** 이 버퍼의 지금 삶. 텐서가 태어날 때와 쓸 때 이 수를 견준다. */
+  /**
+   * This buffer's current life. A tensor compares this number at birth
+   * against its value at use.
+   */
   age(buffer: GPUBuffer): number {
     return this.ages.get(buffer) ?? 0;
   }
@@ -370,12 +403,13 @@ export class Device {
   }
 
   /**
-   * 구역을 닫고 그 안에서 만든 것을 놓는다.
+   * Closes the scope and releases what was made inside it.
    *
-   * @param keep 살려 둘 것. 바깥 구역이 있으면 그쪽으로 넘긴다 — 안 넘기면 바깥이
-   *   닫힐 때 아무도 안 놓아준다.
-   * @returns 놓은 수와 **살아남은 수**. 둘 다 준다 — 살아남은 수가 곧 이 구역이
-   *   바깥으로 흘린 것이고, 학습 루프에서 그것이 0 이 아니면 스텝마다 쌓인다.
+   * @param keep what to keep alive. With an enclosing scope it is handed
+   *   there — unhanded, nobody releases it when the outer one closes.
+   * @returns the number released and **the number that survived**. Both are
+   *   given — the survivors are what this scope let out, and in a training
+   *   loop a non-zero count means something accumulates every step.
    */
   endScope(keep: readonly GPUBuffer[] = []): { freed: number; survived: number } {
     const frame = this.scopes.pop();
@@ -418,21 +452,26 @@ export class Device {
   }
 
   /**
-   * 가장 최근에 닫힌 구역의 셈. `scope()` 로 닫아도 여기 남는다.
+   * The tally of the most recently closed scope. It stays here even when
+   * closed via `scope()`.
    *
-   * **`survived` 가 0 이 아니면 스텝마다 쌓인다** — 학습 루프에서 그것이 누수다.
+   * **A non-zero `survived` means something accumulates every step** — in a
+   * training loop that is the leak.
    */
   lastScope: { freed: number; survived: number } = { freed: 0, survived: 0 };
 
   /**
-   * 지금 잡고 있는 버퍼의 수와 바이트.
+   * The count and bytes of buffers currently held.
    *
-   * 벤치가 누수를 재려면 밖에서 이것을 물을 수 있어야 한다. 자매 쪽 벤치는
-   * `js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 같은 벤치를
-   * 다른 구현으로 못 돌린다 — 실제로 그것 때문에 못 돌렸다.
+   * A benchmark measuring leaks has to be able to ask this from outside.
+   * The sister project's benchmark called `js.tf.memory()` directly, which
+   * ties the instrumentation to TF.js and makes the same benchmark
+   * unrunnable against another implementation — and that is exactly why it
+   * could not be run.
    *
-   * `spare` 에 든 것은 뺀다. 통에 돌아와 다음 스텝을 기다리는 버퍼는 잡고 있는
-   * 것이 맞지만 **새는 것은 아니다** — 그것을 세면 누수가 아닌 것을 누수로 읽는다.
+   * What sits in `spare` is excluded. A buffer back in the pool waiting for
+   * the next step is held, but it **is not leaking** — counting it reads
+   * something that is not a leak as one.
    */
   get memory(): { tensors: number; bytes: number } {
     const { count, bytes } = this.pooled;
@@ -440,15 +479,17 @@ export class Device {
   }
 
   /**
-   * 통에서 다음 스텝을 기다리는 버퍼. **`memory` 가 일부러 빼는 그것이다.**
+   * Buffers in the pool waiting for the next step. **What `memory`
+   * deliberately excludes.**
    *
-   * 저쪽은 "새는가" 를 묻고 이쪽은 "얼마나 쥐고 있는가" 를 묻는다. 두 물음이
-   * 다르므로 수도 둘이어야 하는데 뒤엣것이 없었다 — 그래서 **아무도 진짜 발자국을
-   * 못 물었다.**
+   * That one asks "is it leaking" and this one asks "how much is held". Two
+   * different questions need two numbers, and the second one was missing —
+   * so **nobody could ask about the real footprint.**
    *
-   * 모양이 바뀌면 통이 자란다. 크기별로 나뉘어 있어서 배치 16 으로 돌던 버퍼는
-   * 배치 32 에 못 쓰이고, 그대로 남는다. 벤치가 세 배치를 한 판에서 도는데 그때
-   * 앞의 두 배치 몫이 통에 그대로 있고 `memory` 는 그것을 안 센다.
+   * The pool grows when shapes change. It is split by size, so a buffer
+   * that ran at batch 16 cannot serve batch 32 and simply stays. A
+   * benchmark running three batch sizes in one pass leaves the first two
+   * sizes' worth sitting in the pool, and `memory` does not count it.
    */
   get pooled(): { count: number; bytes: number } {
     let count = 0;
@@ -461,13 +502,16 @@ export class Device {
   }
 
   /**
-   * 통을 비운다. `torch.cuda.empty_cache()` 자리다.
+   * Empties the pool. Where `torch.cuda.empty_cache()` goes.
    *
-   * **통은 스스로 줄지 않는다.** 학습 루프처럼 모양이 반복되면 그것이 옳다 — 매번
-   * 다시 만들면 그게 비용이다. 그런데 모양이 **바뀌면** 옛 모양의 버퍼가 영영
-   * 남는다. 브라우저는 GPU 메모리를 탭이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.
+   * **The pool does not shrink on its own.** With repeating shapes, as in a
+   * training loop, that is right — remaking them each time is the cost. But
+   * when the shape **changes**, the old shape's buffers stay forever. In a
+   * browser, where GPU memory is shared between tabs, that costs more than
+   * it does on a desktop.
    *
-   * 되돌려 준 버퍼를 아직 안 보낸 명령이 가리킬 수 있으므로 **보내고 나서** 놓는다.
+   * A returned buffer may still be referenced by commands not yet
+   * submitted, so the release happens **after** submitting.
    */
   emptyCache(): { count: number; bytes: number } {
     const freed = this.pooled;
@@ -490,22 +534,29 @@ export class Device {
   private made = 0;
   private madeBytes = 0;
 
-  /** 구역과 무관하게 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다. */
+  /**
+   * Keeps something alive regardless of scope. Parameters and optimizer
+   * state use it.
+   */
   keep(buffer: GPUBuffer): void {
     this.kept.add(buffer);
   }
 
-  /** 열려 있는 구역의 깊이. 테스트가 균형을 본다. */
+  /**
+   * The depth of open scopes. Tests look at it for balance.
+   */
   get scopeDepth(): number {
     return this.scopes.length;
   }
 
   /**
-   * @param recycle 통에 있는 것을 꺼내 써도 되는가.
+   * **Uploads must not come from the pool.** `writeBuffer` runs at the
+   * queue's current position, whereas we stack commands and submit them
+   * later — if a dispatch not yet submitted is about to read a buffer taken
+   * from the pool, we would overwrite it. Allocating fresh removes the
+   * situation entirely.
    *
-   * **올리기는 꺼내 쓰면 안 된다.** `writeBuffer` 는 큐의 지금 자리에서 도는데, 우리는
-   * 명령을 쌓아 두었다가 나중에 보낸다 — 통에서 꺼낸 버퍼를 아직 안 보낸 dispatch 가
-   * 읽을 참이면 그것을 덮어쓰게 된다. 새로 만들면 그 자리가 아예 없다.
+   * @param recycle whether something from the pool may be taken.
    */
   alloc(count: number, recycle = true): GPUBuffer {
     const bytes = count * BYTES_PER_F32;
@@ -539,8 +590,9 @@ export class Device {
   }
 
   /**
-   * 커널 한 번. `groups` 는 **워크그룹 수**이고, 축당 한계를 여기서 다시 확인한다 —
-   * `kernels.ts` 가 격자를 접어 주지만 손으로 부르는 경로가 생길 수 있다.
+   * One kernel. `groups` is the **workgroup count**, and the per-axis limit
+   * is rechecked here — `kernels.ts` folds the grid, but a hand-called path
+   * may appear.
    */
   run(
     pipeline: GPUComputePipeline,
@@ -573,17 +625,22 @@ export class Device {
     this.byKind.set(this.current, (this.byKind.get(this.current) ?? 0) + 1);
   }
 
-  /** 1차원 작업을 격자로 펴서 돌린다. `kernels.ts` 의 인덱싱과 짝이다. */
+  /**
+   * Runs one-dimensional work spread over a grid. Paired with the indexing
+   * in `kernels.ts`.
+   */
   run1d(pipeline: GPUComputePipeline, buffers: readonly GPUBuffer[], n: number): void {
     const g = grid1d(n);
     this.run(pipeline, buffers, [g.x, g.y, 1]);
   }
 
   /**
-   * 전체 합. 부분합이 하나가 될 때까지 같은 커널을 다시 부른다.
+   * A full sum. It calls the same kernel again until the partial sums come
+   * down to one.
    *
-   * **원자 연산을 안 쓴다** — 부동소수 덧셈은 순서가 바뀌면 값이 달라지고, 그러면
-   * 같은 씨앗으로 두 번 돌린 학습이 갈린다. 느린 쪽이 재현된다.
+   * **It uses no atomics** — floating-point addition changes value when the
+   * order changes, and then the same seed run twice gives different
+   * training. The slower way is the one that reproduces.
    */
   sumAll(input: GPUBuffer, n: number): GPUBuffer {
     let src = input;
@@ -619,10 +676,11 @@ export class Device {
   }
 
   /**
-   * 버퍼 하나를 다른 버퍼에 덮어쓴다. 제자리 연산이 쓴다.
+   * Overwrites one buffer with another. In-place operations use it.
    *
-   * 커널이 아니라 복사다 — 결과를 새 버퍼에 만든 뒤 원래 자리로 옮긴다. 원래
-   * 버퍼를 읽으면서 같이 쓰면 스레드끼리 순서가 없어 값이 섞인다.
+   * It is a copy, not a kernel — the result is made in a new buffer and
+   * then moved back to the original slot. Reading and writing the original
+   * at once leaves the threads unordered and the values mixed.
    */
   copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
@@ -651,30 +709,37 @@ export class Device {
    * 남는다. 절대값을 재려면 끄고 벤치를 쓴다.
    */
   private profiling = false;
-  /** 켰을 때 커널 종류별로 쌓인 GPU 시간(나노초). */
+  /**
+   * GPU time in nanoseconds accumulated per kernel kind, when enabled.
+   */
   readonly nsByKind = new Map<string, number>();
   private querySet: GPUQuerySet | null = null;
   private queryUsed = 0;
   private queryKinds: string[] = [];
   /**
-   * 자리가 없어 **안 잰** dispatch 수. 부르는 쪽이 이것을 같이 적어야 한다.
+   * Dispatches **not measured** for want of room. Whoever calls has to
+   * report this alongside.
    *
-   * 0 이 아니면 `nsByKind` 는 스텝의 일부만 담은 것이고, 그런데도 "합" 처럼 읽힌다.
-   * 잘린 것을 안 적으면 "전부 쟀다" 로 읽히는데, 그게 이 저장소가 세어 온 거짓말의
-   * 한 종류다.
+   * Non-zero means `nsByKind` holds only part of the step while still
+   * reading like a total. Not writing down what was cut reads as
+   * "everything was measured", and that is one of the kinds of lie this
+   * repository has been counting.
    */
   profileDropped = 0;
   /** 질의 집합의 크기. 한 제출에 이보다 많이 재면 나머지는 안 잰다. */
   private static readonly MAX_QUERIES = 4096;
 
   /**
-   * `body` 를 재면서 돌린다. **끝나면 반드시 끈다 — 예외로 나가도 끈다.**
+   * Runs `body` while measuring. **It always turns off afterwards —
+   * including on the way out through an exception.**
    *
-   * 켜고 끄기를 부르는 쪽에 맡기면 안 된다. 프로파일 중에는 dispatch 마다 패스를
-   * 여느라 시간이 부풀고, 켜진 채로 새어 나가면 **그 뒤의 모든 측정이 조용히
-   * 부풀어서** 나온다. 벤치는 배치를 여러 번 재므로, 한 배치에서 예외가 나면
-   * 다음 배치의 ms/step 이 측정이 아니라 프로파일된 수가 된다 — 그런데 화면에는
-   * 똑같이 생긴 수로 찍힌다. 문은 하나여야 하고 뒷정리는 문이 해야 한다.
+   * Turning it on and off must not be left to the caller. While profiling,
+   * each dispatch opens a pass and the time inflates, and if it leaks out
+   * still on, **every measurement after it comes out quietly inflated.** A
+   * benchmark measures several batches, so an exception in one batch makes
+   * the next batch's ms/step a profiled number rather than a measurement —
+   * and it prints on screen looking exactly the same. There should be one
+   * door, and the door should clean up.
    */
   async profile<T>(body: () => Promise<T>): Promise<T> {
     this.profiling = true;
@@ -774,9 +839,10 @@ export class Device {
   }
 
   /**
-   * 쌓아 둔 명령을 보낸다.
+   * Submits the stacked commands.
    *
-   * 값을 읽기 전에 반드시 지나야 한다 — 안 보낸 명령의 결과를 읽으면 옛 값이 나온다.
+   * It has to be passed before values are read — reading the result of
+   * unsubmitted commands returns the old value.
    */
   flush(): void {
     if (this.pass) {
@@ -790,12 +856,16 @@ export class Device {
   }
 
   /**
-   * 보낸 일이 **실제로 끝날 때까지** 기다린다. `torch.cuda.synchronize()` 자리다.
+   * Waits until the submitted work has **actually finished.** Where
+   * `torch.cuda.synchronize()` goes.
    *
-   * `flush()` 는 큐에 넣기만 하고 돌아온다 — 그것으로 시간을 재면 GPU 가 일하는 동안
-   * 벽시계는 이미 멈춰 있다. 지금까지 이 저장소가 완료를 강제한 방법은 값을 하나
-   * 읽는 것(`item()`)이었는데, 그러면 **readback 왕복이 측정에 섞인다.** 재는 것이
-   * 커널인지 버스인지가 흐려지는 자리이고, 그것을 가르는 것이 이 함수다.
+   * `flush()` returns having only put things on the queue — time it with
+   * that and the wall clock has already stopped while the GPU is still
+   * working. Until now the way this repository forced completion was to
+   * read one value (`item()`), and that **mixes the readback round trip
+   * into the measurement.** It is the place where "am I measuring the
+   * kernel or the bus" gets blurred, and this function is what separates
+   * them.
    */
   async synchronize(): Promise<void> {
     this.flush();
@@ -853,14 +923,19 @@ export class Device {
   /** 워크그룹 크기. 커널과 장치가 같은 값을 봐야 한다. */
   static readonly workgroup = WORKGROUP;
 
-  /** 어느 어댑터에 붙었는가. 성능을 재는 쪽이 반드시 같이 적어야 하는 값이다. */
+  /**
+   * Which adapter it attached to. A value anyone measuring performance must
+   * record alongside.
+   */
   static adapterInfo = "(아직 안 붙음)";
 
   /**
-   * 어댑터가 주는 선택 기능들. **`timestamp-query` 가 여기 있어야 커널별 시간을 잰다.**
+   * Optional features the adapter offers. **`timestamp-query` has to be
+   * here for per-kernel timing.**
    *
-   * 벽시계로는 스텝 전체밖에 못 재고, 그러면 429 개 dispatch 중 어느 것이 비싼지
-   * 물을 방법이 없다 — 실제로 그 자리에서 막혔다.
+   * A wall clock can only measure the whole step, and then there is no way
+   * to ask which of 429 dispatches is expensive — which is exactly where
+   * this got stuck.
    */
   static adapterFeatures = "";
 }

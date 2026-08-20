@@ -777,8 +777,9 @@ ${indexPair(shape, strideA, strideB)}
  * 스레드 하나가 결과 한 칸을 맡아 자기 몫을 **정해진 순서로** 훑는다. 원자 덧셈을
  * 안 쓰므로 두 번 돌리면 같은 값이 나온다.
  *
- * @param full 기울기의 모양
- * @param small 접어서 만들 모양. 랭크가 같고 각 축은 1 이거나 `full` 과 같다.
+ * @param full the gradient's shape
+ * @param small the shape to fold down to. Same rank, and each axis is
+ *   either 1 or equal to `full`.
  */
 export function reduceBroadcast(
   full: readonly number[],
@@ -1236,7 +1237,8 @@ ${sourceIndex(rules, offset, "gid", "src")}
  * 자르기·전치·`select`·`permute` 가 전부 이 조건을 만족한다. `repeat`·`expand`·
  * `flip`·`roll` 은 아니고, 그쪽은 훑는 길로 간다.
  *
- * @returns 걸음 내림차순으로 정렬한 축들, 또는 조건에 안 맞으면 `null`.
+ * @returns the axes sorted by descending stride, or `null` where the
+ *   conditions do not hold.
  */
 function invertibleAxes(
   rules: readonly AxisRule[],
@@ -1963,9 +1965,11 @@ export function convTiledGrid(s: ConvNDShape): [number, number, number] {
  * 순방향·역방향 셋이 **같은 구조에 색인만 다르다.** 뼈대를 세 번 베껴 적으면 그중
  * 하나만 고치는 날이 오고, 그 하나는 기울기 쪽일 것이다 — 값 검사가 못 보는 쪽.
  *
- * @param loadA 행 `arow`, 안쪽 `kk` 에서 왼쪽 타일 원소를 내는 WGSL(식 하나).
- * @param loadB 안쪽 `kk`, 열 `col` 에서 오른쪽 타일 원소를 내는 WGSL 블록. `v` 에 담는다.
- * @param emit 행 `f`, 열 `col`, 값 `v` 를 쓰는 WGSL 블록.
+ * @param loadA WGSL (a single expression) giving the left tile's element at
+ *   row `arow`, inner `kk`.
+ * @param loadB a WGSL block giving the right tile's element at inner `kk`,
+ *   column `col`. It lands in `v`.
+ * @param emit a WGSL block writing value `v` at row `f`, column `col`.
  */
 function tiledGemm(opts: {
   readonly M: number;

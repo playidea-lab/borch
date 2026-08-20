@@ -379,24 +379,29 @@ def test_no_block_declares_a_name_the_runner_injects():
                        + "\n  ".join(sorted(set(wrong))))
 
 
-def test_english_api_descriptions_are_not_stale():
-    """Whether each English description still matches the source it was made from.
+def test_korean_api_descriptions_are_not_stale():
+    """Whether each Korean description still matches the source it was made from.
 
     This page read for a long time that it does not translate, because a translation
     drifts from the source the day it is written. The worry is right. Drift cannot be
     prevented; **drift being quiet** can.
 
-    So every entry in `site/api_en.json` carries a hash of the Korean it was made from.
+    The direction turned over when the source comments became English. It used to hold an
+    English translation of a Korean source; it now holds a Korean translation of an
+    English one, which is the more useful direction — the source changes in English from
+    here on, so the side at risk of going stale is the Korean.
+
+    So every entry in `site/api_ko.json` carries a hash of the English it was made from.
     When the source TSDoc moves, the hash stops matching and this blows up naming it. The
     key is printed as it stands, so whoever fixes it does not have to hunt for what moved.
 
-    Being partly translated is not a failure — the screen shows the Korean and says it is
+    Being partly translated is not a failure — the screen shows the source and says it is
     not carried across, so the reader is not deceived. Failing on that too would let
-    nothing in short of doing all 614 at once.
+    nothing in short of doing all of them at once.
     """
     api = json.loads((SITE / "assets" / "api.json").read_text(encoding="utf-8"))
-    table_path = ROOT / "site" / "api_en.json"
-    assert table_path.exists(), "site/api_en.json is missing — it is where the English lives"
+    table_path = ROOT / "site" / "api_ko.json"
+    assert table_path.exists(), "site/api_ko.json is missing — it is where the Korean lives"
     table = json.loads(table_path.read_text(encoding="utf-8"))
 
     def fingerprint(text):
@@ -416,14 +421,13 @@ def test_english_api_descriptions_are_not_stale():
             orphan.append(key)
         elif got.get("src") != fingerprint(live[key]):
             stale.append(key)
-    assert not stale, ("the English did not follow its source — fix site/api_en.json and "
+    assert not stale, ("the Korean did not follow its source — fix site/api_ko.json and "
                        "put the new hash in src:\n  " + "\n  ".join(sorted(stale)[:20]))
-    assert not orphan, ("English entries whose description is gone — renamed or deleted:\n  "
+    assert not orphan, ("Korean entries whose description is gone — renamed or deleted:\n  "
                         + "\n  ".join(sorted(orphan)[:20]))
 
     for key, got in table.items():
-        assert got.get("en", "").strip(), f"the English for {key} is empty"
-        assert not re.search(r"[가-힣]", got["en"]), f"Hangul remains in the English for {key}"
+        assert got.get("ko", "").strip(), f"the Korean for {key} is empty"
 
 
 def test_vendored_pyodide_matches_its_lock():
@@ -564,3 +568,47 @@ def test_no_korean_hides_where_only_a_screen_reader_looks():
         for value in setter.findall(js.read_text(encoding="utf-8")):
             wrong.append(f"{js.relative_to(ROOT)}: \"{value[:40]}\" — written regardless of language")
     assert not wrong, ("Korean sits where the eye never reaches, on the English side:\n  " + "\n  ".join(wrong))
+
+
+def test_the_english_reference_carries_no_korean():
+    """Nothing Korean reaches the English API page — descriptions, tags or section names.
+
+    The descriptions were carried across and reported as clean while **the `@param` texts
+    stayed Korean**, and the page shipped that way. The count that was reported measured
+    `.prose` elements; tags render elsewhere, so the check had quietly chosen an input
+    that could not see them. That is the third time in one day a check picked its own
+    input, and it is why this one walks the whole file rather than one field of it.
+
+    Section names are here for the same reason. They come from the `// ── … ──` markers in
+    the source, and a marker with no entry in `SECTION_EN` falls back to the Korean — so a
+    new section added upstream puts Korean on the English page without anything failing.
+    """
+    api = json.loads((SITE / "assets" / "api.json").read_text(encoding="utf-8"))
+    hangul = re.compile(r"[가-힣]")
+    wrong = []
+
+    def walk(node, where):
+        if isinstance(node, dict):
+            name = node.get("name", "")
+            here = f"{where}/{name}" if name else where
+            if hangul.search(node.get("doc") or ""):
+                wrong.append(f"{here}: the description is Korean")
+            for tag in node.get("tags") or []:
+                if hangul.search(tag.get("text", "")):
+                    wrong.append(f"{here}: @{tag.get('tag')} is Korean")
+            section = node.get("section")
+            if isinstance(section, dict) and hangul.search(section.get("en", "")):
+                wrong.append(f"{here}: section \"{section['ko']}\" has no English name "
+                             "— add it to SECTION_EN in site/build_api.py")
+            for key, value in node.items():
+                if key not in ("section", "tags"):
+                    walk(value, here)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, where)
+
+    walk(api["modules"], "")
+    seen = sorted(set(wrong))
+    assert not seen, ("Korean reaches the English API reference:\n  "
+                      + "\n  ".join(seen[:15])
+                      + (f"\n  … and {len(seen) - 15} more" if len(seen) > 15 else ""))

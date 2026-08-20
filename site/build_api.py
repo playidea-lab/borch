@@ -119,6 +119,11 @@ SECTION_EN = {
     "CTC": "CTC", "복소수": "Complex", "역전파": "Backward",
     "장치 옮기기": "Moving between devices", "읽기": "Reading values",
     "복소수 커널": "Complex kernels",
+    "torch 의 둘째 철자들": "torch's second spellings",
+    "결속에만 있던 이름들": "Names that existed only in the binding",
+    "제자리 판 서른여덟": "The thirty-eight in-place forms",
+    "커널 표에는 있는데 이름이 없던 것들": "In the kernel tables, with no name to type",
+    "표가 다는 제자리 판": "In-place forms the tables attach",
 }
 
 # The start of a declaration — things like `export declare class Tensor ... {`.
@@ -448,13 +453,18 @@ def _emit(text, pending, current, symbols):
     bag.append(item)
 
 
-# Where the English descriptions live. **Here, not in the source** — the TSDoc stays Korean.
+# Where the Korean descriptions live. **Here, not in the source** — the TSDoc is English.
 #
-# The site read for a long time that it does not translate, because a translation drifts
-# from the source the day it is written. That is right. So every translation carries **a
-# hash of the Korean it was made from**, and when the source moves this says so by name.
-# Drift cannot be prevented; being quiet about it can.
-EN = ROOT / "site" / "api_en.json"
+# It used to be the other way round. The source was Korean, this file held the English,
+# and the fingerprint caught an English translation whose Korean source had moved. Once
+# the comments became English the direction had to turn over, and turning it over is the
+# more useful direction: the source will change in English from now on, so the side at
+# risk of going stale is the Korean.
+#
+# The mechanism is unchanged. Every entry carries **a hash of the English it was made
+# from**, and when the source moves this says so by name. Drift cannot be prevented; being
+# quiet about it can.
+KO = ROOT / "site" / "api_ko.json"
 
 
 def _key(mod, sym=None, member=None):
@@ -465,13 +475,13 @@ def _key(mod, sym=None, member=None):
 
 
 def _fingerprint(text):
-    """The source the translation saw. Only the outer whitespace is stripped — changed indentation does not make it stale."""
+    """The source the translation saw. Only the outer whitespace is stripped — changed wrapping does not make it stale."""
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:12]
 
 
-def attach_english(modules):
-    """Attaches `doc_en`, and returns counts of the stale and the missing."""
-    table = json.loads(EN.read_text(encoding="utf-8")) if EN.exists() else {}
+def attach_korean(modules):
+    """Attaches `doc_ko`, and returns counts of the stale and the missing."""
+    table = json.loads(KO.read_text(encoding="utf-8")) if KO.exists() else {}
     stale, missing, done = [], [], 0
     for mod in modules:
         rows = [(_key(mod["name"]), mod)]
@@ -480,16 +490,16 @@ def attach_english(modules):
             for mem in sym["members"]:
                 rows.append((_key(mod["name"], sym["name"], mem["name"]), mem))
         for key, node in rows:
-            ko = (node.get("doc") or "").strip()
-            if not ko:
+            src = (node.get("doc") or "").strip()
+            if not src:
                 continue
             got = table.get(key)
             if not got:
                 missing.append(key)
-            elif got.get("src") != _fingerprint(ko):
+            elif got.get("src") != _fingerprint(src):
                 stale.append(key)
             else:
-                node["doc_en"] = got["en"]
+                node["doc_ko"] = got["ko"]
                 done += 1
     return done, stale, missing
 
@@ -518,13 +528,13 @@ def main():
             "count": sum(1 + len(s["members"]) for s in symbols),
         })
 
-    done, stale, missing = attach_english(modules)
+    done, stale, missing = attach_korean(modules)
 
     payload = {
         "source": "borch-ts/dist/src/*.d.ts",
-        "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. "
-                "The English lives in site/api_en.json and says so when its source has moved.",
-        "english": {"done": done, "stale": len(stale), "missing": len(missing)},
+        "note": "The descriptions are the source's own TSDoc; fix them in the source. "
+                "The Korean lives in site/api_ko.json and says so when its source has moved.",
+        "korean": {"done": done, "stale": len(stale), "missing": len(missing)},
         "modules": modules,
         "total": sum(m["count"] for m in modules),
     }
@@ -532,11 +542,11 @@ def main():
                    encoding="utf-8")
 
     if stale or missing:
-        print(f"  English descriptions — attached {done} · stale {len(stale)} · missing {len(missing)}")
+        print(f"  Korean descriptions — attached {done} · stale {len(stale)} · missing {len(missing)}")
         for key in stale[:5]:
             print(f"    stale: {key}")
     else:
-        print(f"  English descriptions — attached {done} (none stale, none missing)")
+        print(f"  Korean descriptions — attached {done} (none stale, none missing)")
 
     # **First seated wins.** A name living in several classes, such as `forward`, goes to
     # the first place — sending it somewhere beats sending it nowhere, and the module order

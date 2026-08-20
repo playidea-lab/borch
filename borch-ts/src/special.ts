@@ -1,12 +1,15 @@
 /**
- * 특수 함수 — 불완전 감마와 폴리감마.
+ * Special functions — the incomplete gamma and the polygammas.
  *
- * **커널을 여기 따로 두는 이유**는 `n` 이 셰이더 상수이기 때문이다. `polygamma(n, x)`
- * 는 `n` 마다 다른 셰이더를 굽는데, 단항 표(`kernels.ts` 의 `UNARY`)는 이름 하나에
- * 셰이더 하나를 매다는 구조라 그 자리에 안 들어간다.
+ * **The reason these kernels live apart** is that `n` is a shader constant.
+ * `polygamma(n, x)` bakes a different shader per `n`, and the unary table
+ * (`UNARY` in `kernels.ts`) hangs one shader off one name, so it does not
+ * fit there.
  *
- * 식은 코어(numpy)의 것을 그대로 옮겼다 — 두 벌로 두면 한쪽만 고쳐지는 날이 온다.
- * 코어 쪽이 torch 와 값·기울기 모두 맞는 것을 먼저 확인했고, 여기는 그 옮김이다.
+ * The formulas are carried over from the core (numpy) unchanged — two
+ * copies means a day when only one gets fixed. The core side was confirmed
+ * against torch for both values and gradients first; this is that carried
+ * across.
  */
 
 import { NotImplementedError, RuntimeError } from "./errors.js";
@@ -189,7 +192,9 @@ export function igamma(a: Tensor, x: Tensor): Tensor {
   }, "IgammaBackward0");
 }
 
-/** 상부 쪽 `Q = 1 − P`. **둘을 더하면 정확히 1 이다**(실측). */
+/**
+ * The upper branch, `Q = 1 − P`. **The two sum to exactly 1** (measured).
+ */
 export function igammac(a: Tensor, x: Tensor): Tensor {
   return Tensor.ones(x.shape).sub(igamma(a, x));
 }

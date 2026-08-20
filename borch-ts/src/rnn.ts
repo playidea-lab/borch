@@ -1,22 +1,24 @@
 /**
- * 최상위 순환 여덟 — `torch.lstm` · `torch.gru` · `torch.rnn_tanh` · `torch.rnn_relu`
- * 와 그 `_cell` 짝.
+ * The eight top-level recurrences — `torch.lstm`, `torch.gru`,
+ * `torch.rnn_tanh`, `torch.rnn_relu`, and their `_cell` counterparts.
  *
- * **층(`nn.Recurrent`)과 다른 것은 가중치를 어디서 얻는가뿐이다.** 층은 자기가 들고
- * 있고 이쪽은 **목록으로 받는다.** torch 도 그 둘을 다 주고, 층이 안에서 부르는 것이
- * 이 함수 쪽이다.
+ * **The only difference from the layer (`nn.Recurrent`) is where the
+ * weights come from.** The layer holds its own; this side **receives them
+ * as a list.** torch offers both, and what the layer calls internally is
+ * this side.
  *
- * 그래서 걸음 식을 여기 한 벌만 둔다. 층 쪽과 두 벌로 두면 **게이트 순서가 갈리는
- * 날**이 오고, 그때 모양은 같고 값만 틀린다 — 이 저장소가 셀과 층 사이에서 이미 그
- * 이유로 식을 공유하고 있다.
+ * So the step equations live here in one copy. Two copies, here and in the
+ * layer, means a day when **the gate order diverges**, and then the shape
+ * is right and only the values are wrong — this repository already shares
+ * the equations between cell and layer for that same reason.
  *
- * ## 게이트 순서
+ * ## Gate order
  *
- * `weight_ih` 의 **행 순서**가 규약이다(실측):
+ * The **row order** of `weight_ih` is the convention (measured):
  *
- *     LSTM  i, f, g, o          GRU  r, z, n          RNN  (하나)
+ *     LSTM  i, f, g, o          GRU  r, z, n          RNN  (just one)
  *
- * 바꾸면 값만 갈리고 모양은 그대로다.
+ * Change it and only the values diverge; the shape stays.
  */
 
 import { RuntimeError } from "./errors.js";
@@ -40,9 +42,10 @@ function gate(z: Tensor, k: number, H: number): Tensor {
 }
 
 /**
- * 한 걸음. **네 종류가 전부 여기를 지난다.**
+ * One step. **All four kinds pass through here.**
  *
- * @returns `[다음 h, 다음 c]` — c 는 LSTM 만 쓰고 나머지는 h 를 그대로 넘긴다.
+ * @returns `[next h, next c]` — only LSTM uses c; the rest pass h straight
+ *   through.
  */
 export function rnnStep(
   kind: RnnKind, x: Tensor, h: Tensor, c: Tensor,
@@ -106,11 +109,12 @@ export interface RnnOptions {
 }
 
 /**
- * 여러 걸음. `hx` 는 `(층, 배치, H)` 다.
+ * Several steps. `hx` is `(layer, batch, H)`.
  *
- * **양방향과 층간 드롭아웃은 거절한다.** 없는 것을 반쪽으로 흉내 내면, 앞쪽은 모양이
- * 절반이라 시끄럽게 걸리지만 **드롭아웃 쪽은 값이 그럴듯한 채로 갈린다**(정칙화가
- * 안 걸린 학습). 둘 다 여기서 멈춘다.
+ * **Bidirectional and inter-layer dropout are refused.** Half-imitating
+ * something that is not there catches loudly for the first — the shape
+ * comes out halved — but **dropout diverges with plausible values**
+ * (training with no regularisation applied). Both stop here.
  */
 export function rnnApply(
   kind: RnnKind, input: Tensor, h0: Tensor, c0: Tensor | null,
@@ -155,7 +159,10 @@ export function rnnApply(
   };
 }
 
-/** `torch.lstm` — **셋을 편다**(`출력, h_n, c_n`). 층 쪽처럼 묶지 않는다. */
+/**
+ * `torch.lstm` — **it spreads three** (`output, h_n, c_n`), rather than
+ * bundling them the way the layer does.
+ */
 export function lstm(input: Tensor, hx: readonly [Tensor, Tensor],
                      params: readonly Tensor[], options: RnnOptions = {}):
   [Tensor, Tensor, Tensor] {

@@ -1,9 +1,10 @@
 /**
- * `Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.
+ * `Tensor` — one GPU buffer, a shape, and one node on the tape.
  *
- * 레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가
- * NHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리
- * 커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다.
+ * The layout is **NCHW** and the dtype is **float32, only.** The sister
+ * project (`borch_webgpu`) holding NHWC and packing int64 into float32 was
+ * a detour around TF.js's constraints, and our kernels do not have those
+ * constraints. Imitating it inherits someone else's detour for no reason.
  */
 
 import { backward as tapeBackward, gradMode, type Node } from "./autograd.js";
@@ -25,10 +26,14 @@ import {
  */
 const SINGULAR_INFO = 2;
 
-/** `F.pad` 가 받는 네 가지. */
+/**
+ * The four things `F.pad` accepts.
+ */
 export type PadMode = "constant" | "reflect" | "replicate" | "circular";
 
-/** 손실이 접는 방식. **`KLDivLoss` 만 넷째(`batchmean`)를 더 받는다.** */
+/**
+ * How a loss folds. **Only `KLDivLoss` takes a fourth (`batchmean`).**
+ */
 export type Reduction = "none" | "mean" | "sum";
 
 /**
@@ -241,7 +246,10 @@ function accumulated(from: DType): DType {
   return from === "bool" ? "int64" : from;
 }
 
-/** `at()` 의 축 하나에 넣을 수 있는 것. 문법은 `indexing.ts` 에 적혀 있다. */
+/**
+ * What can go into one axis of `at()`. The syntax is written down in
+ * `indexing.ts`.
+ */
 export type AtIndex = number | null | Slice | Tensor | readonly number[];
 
 /** 계획 하나를 실제 연산으로. **여기서 값을 만들지 않는다** — 있는 문으로 보낸다. */
@@ -274,10 +282,12 @@ function applyPlan(t: Tensor, axis: number, plan: AxisPlan): Tensor {
 const scalarCache = new Map<number, GPUBuffer>();
 
 /**
- * WebGPU 어댑터를 잡는다. 두 번째부터는 이미 잡은 것을 돌려준다.
+ * Acquires the WebGPU adapter. From the second call on it returns the one
+ * already acquired.
  *
- * **`options` 는 첫 부름에서만 듣는다.** 장치는 하나이고 이미 만들어진 뒤에는 고를
- * 것이 없다 — 조용히 무시하느니 여기 적어 둔다.
+ * **`options` is heard on the first call only.** There is one device, and
+ * once it is made there is nothing left to choose — better written here
+ * than quietly ignored.
  */
 export async function init(options: InitOptions = {}): Promise<Device> {
   if (!deviceHolder.current) deviceHolder.current = await Device.create(options);
@@ -285,10 +295,11 @@ export async function init(options: InitOptions = {}): Promise<Device> {
 }
 
 /**
- * 지금 붙어 있는 장치, 안 붙었으면 `null`. `torch.accelerator` 자리다.
+ * The device currently attached, or `null` if none. Where
+ * `torch.accelerator` goes.
  *
- * **`dev()` 와 달리 안 던진다** — 붙었는지 묻는 것이 목적이라 그 물음 자체가 실패하면
- * 안 된다.
+ * **Unlike `dev()` it does not throw** — its purpose is to ask whether one
+ * is attached, and that question itself must not fail.
  */
 export function currentDevice(): DeviceKind | null {
   return deviceHolder.current ? "webgpu" : null;
@@ -313,7 +324,8 @@ function numel(shape: readonly number[]): number {
 const F32_MAX = 3.4028234663852886e38;
 
 /**
- * torch 의 브로드캐스팅 규칙. 오른쪽부터 맞추고, 1 은 늘어나고, 나머지는 같아야 한다.
+ * torch's broadcasting rule. Aligned from the right, 1 stretches, and the
+ * rest must match.
  */
 export function broadcastShapes(
   a: readonly number[],
@@ -336,10 +348,11 @@ export function broadcastShapes(
 }
 
 /**
- * `shape` 를 `out` 랭크에 오른쪽 맞춤으로 놓았을 때의 스트라이드.
+ * The strides when `shape` is placed right-aligned against `out`'s rank.
  *
- * **늘어난 축은 0 이다** — 같은 값을 계속 읽는다. 실제로 복제해서 늘리면 메모리를
- * 쓰고, conv 벤치에서 im2col 이 융합 커널에 진 이유가 정확히 그것이었다.
+ * **A stretched axis is 0** — it reads the same value over and over.
+ * Actually replicating to stretch costs memory, and that is exactly why
+ * im2col lost to the fused kernel in the conv benchmark.
  */
 export function alignStrides(
   shape: readonly number[],
@@ -618,18 +631,21 @@ function absentDType(name: string, shown: string): never {
 
 export class Tensor implements Node<Tensor> {
   /**
-   * **`readonly` 가 아니다** — `mutate` 하나가 고친다.
+   * **Not `readonly`** — one place, `mutate`, edits it.
    *
-   * 모양을 바꾸는 제자리 연산이 있다(`transpose_`·`squeeze_`·`unsqueeze_`). 그것들은
-   * 값이 아니라 보는 틀을 고치므로, 자리를 그대로 두고 모양만 갈아 끼워야 한다.
-   * 그 한 자리 말고는 아무 데서도 안 바뀐다.
+   * There are in-place operations that change the shape (`transpose_`,
+   * `squeeze_`, `unsqueeze_`). Those edit the frame you view through rather
+   * than the values, so the slot stays and only the shape is swapped.
+   * Nowhere but that one place changes it.
    */
   shape: readonly number[];
   /**
-   * **`readonly` 가 아니다** — `shape` 와 같은 이유이고, 같은 한 자리만 고친다.
+   * **Not `readonly`** — the same reason as `shape`, and the same one place
+   * edits it.
    *
-   * `as_strided_` 는 칸 수까지 바꾼다. 다른 제자리 연산들은 틀만 바꿔서 오랫동안
-   * "칸 수는 안 변한다" 가 참이었는데, 그것이 참이 아닌 이름이 하나 생겼다.
+   * `as_strided_` changes even the slot count. Other in-place operations
+   * only change the frame, so "the slot count does not change" was true for
+   * a long time, and then a name appeared for which it is not.
    */
   size: number;
   /**
@@ -650,12 +666,14 @@ export class Tensor implements Node<Tensor> {
   grad: Tensor | null = null;
   freed = false;
   /**
-   * **이름표다.** 값은 언제나 float32 버퍼에 있다 — 자세한 사정은 `src/dtype.ts`.
+   * **A label.** The values are always in a float32 buffer — the details
+   * are in `src/dtype.ts`.
    */
   readonly dtype: DType;
   /**
-   * 그래프의 위쪽. **`detach_` 만 이것을 바꾼다** — 그래서 `readonly` 가 아니다.
-   * 다른 자리에서 고치면 이미 만든 마디의 역방향이 조용히 달라진다.
+   * Upstream in the graph. **Only `detach_` changes this** — hence not
+   * `readonly`. Edited anywhere else, the backward of an already-made node
+   * changes quietly.
    */
   parents: readonly Tensor[];
   backwardFn: ((grad: Tensor) => readonly (Tensor | null)[]) | null;
@@ -692,15 +710,17 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 값이 든 GPU 버퍼. **연산이 값에 닿는 유일한 문이다.**
+   * The GPU buffer holding the values. **The only door through which an
+   * operation touches them.**
    *
-   * 이 게터가 곧 장치 검사다. 연산 진입점은 176 군데이고 거기에 하나씩 가드를 다는
-   * 것은 될 일이 아니지만, 그 전부가 결국 여기를 지난다 — 저장소 안 75 곳, 옵티마이저
-   * 6 곳, `nn` 1 곳. 그래서 호스트에 있는 텐서를 연산에 넣으면 어느 연산이든 여기서
-   * 멈추고, 문구는 torch 와 같은 것이 나온다.
+   * This getter is the device check. There are 176 operation entry points
+   * and hanging a guard on each is not a thing that gets done, but all of
+   * them pass through here in the end — 75 places inside the repository, 6
+   * in the optimizers, 1 in `nn`. So feeding a host-side tensor into any
+   * operation stops here, with torch's own wording.
    *
-   * **어느 연산이었는지는 안 적힌다.** 그것을 적으려면 176 곳을 고쳐야 하고, 스택
-   * 추적이 이미 그 자리를 가리킨다.
+   * **Which operation it was is not recorded.** Recording that would mean
+   * editing 176 places, and the stack trace already points at it.
    */
   get buffer(): GPUBuffer {
     if (this.gpu === null) {
@@ -749,10 +769,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 값이 든 버퍼 — **복소수 검사 없이.** 복소수를 아는 코드만 쓴다.
+   * The buffer holding the values — **without the complex check.** Only
+   * code that knows complex uses it.
    *
-   * 장치 검사는 그대로 한다. 두 게터의 차이는 복소수 한 줄뿐이고, 그 한 줄이 곧
-   * "이 코드가 인터리브 저장을 안다" 는 선언이다.
+   * The device check still happens. The difference between the two getters
+   * is one line about complex, and that one line is the declaration "this
+   * code knows the interleaved layout".
    */
   get raw(): GPUBuffer {
     if (this.gpu === null) {
@@ -766,22 +788,26 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 버퍼가 실제로 든 f32 칸 수. 실수는 `size` 와 같고 **복소수는 그 두 배다.**
+   * How many f32 slots the buffer actually holds. For reals it equals
+   * `size`; **for complex it is twice that.**
    *
-   * 읽기·복사·수명처럼 "값이 몇 칸인가" 만 묻는 자리가 이것을 쓴다. `size` 를 그대로
-   * 쓰면 복소수의 뒤쪽 절반이 조용히 잘린다 — 모양도 원소 수도 그럴듯한 채로.
+   * Places that only ask "how many slots of value are there" — reads,
+   * copies, lifetimes — use this. Using `size` directly cuts off the back
+   * half of a complex quietly, with the shape and the element count both
+   * looking plausible.
    */
   get floats(): number {
     return this.size * floatsPerElement(this.dtype);
   }
 
   /**
-   * 값이 어디에 있는가. torch 의 `t.device` 자리다.
+   * Where the values are. Where torch's `t.device` goes.
    *
-   * **`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다.** borch 에 CPU 커널은
-   * 없다 — `cpu()` 로 내린 텐서는 읽고(`toArray`·`item`·`repr`) 다시 올릴 수 있을
-   * 뿐이고, 연산에 넣으면 위의 게터가 torch 와 같은 문구로 멈춘다. 부분 구현이지만
-   * 실패가 조용하지 않다.
+   * **`'cpu'` is a place values are held, not a device that computes.**
+   * borch has no CPU kernels — a tensor brought down with `cpu()` can only
+   * be read (`toArray`, `item`, `repr`) and put back up, and feeding it to
+   * an operation stops at the getter above with torch's own wording. It is
+   * a partial implementation, but the failure is not quiet.
    */
   get device(): DeviceKind {
     return this.gpu === null ? "cpu" : "webgpu";
@@ -808,10 +834,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `make` 의 공개 문. **자기 커널을 가진 다른 모듈**(`fft.ts`)이 여기로 들어온다.
+   * The public door onto `make`. **Another module with kernels of its own**
+   * (`fft.ts`) enters here.
    *
-   * `make` 자체를 공개하지 않는 이유는 이름이 너무 흔해서다 — 밖에서 `Tensor.make`
-   * 를 보면 무엇을 만드는지가 안 읽힌다. 파일 끝의 `makeNode` 가 이 자리를 감싼다.
+   * `make` itself is not exported because the name is too common — seen
+   * from outside, `Tensor.make` does not read as making anything in
+   * particular. `makeNode` at the end of the file wraps this.
    */
   static node(
     buffer: GPUBuffer,
@@ -827,9 +855,11 @@ export class Tensor implements Node<Tensor> {
   // ── 만들기 ────────────────────────────────────────────────────────────
 
   /**
-   * @param options 위치 인자가 아니라 이름으로 받는다. 넷째 자리에 `device` 가 붙을
-   *   참이었는데, `from(data, shape, false, "int64", "cpu")` 는 읽는 사람이 셋째와
-   *   넷째를 세어야 하는 줄이다. npm 에 아직 안 나간 지금이 고칠 수 있는 때다.
+   * @param options taken by name rather than by position. A `device` was
+   *   about to attach in fourth place, and `from(data, shape, false,
+   *   "int64", "cpu")` is a line whose reader has to count the third and
+   *   fourth arguments. Not yet published to npm is the moment this can be
+   *   fixed.
    */
   static from(
     data: ArrayLike<number>,
@@ -899,21 +929,26 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 값으로 채우되 **캐시를 안 탄다 — 자기 버퍼를 갖는다.**
+   * Filled with a value but **without the cache — it gets its own buffer.**
    *
-   * **제자리로 고쳐질 것은 반드시 이쪽이어야 한다.** `full` 은 원소 하나짜리를 값으로
-   * 캐시하므로 `zeros([1])` 을 두 번 부르면 **같은 버퍼**가 온다. 그 자체는 맞다 —
-   * 상수는 읽기만 하니까. 문제는 상수가 아닌 것이 그 문을 지날 때다:
+   * **Anything that will be modified in place has to come this way.**
+   * `full` caches single-element tensors by value, so calling `zeros([1])`
+   * twice returns **the same buffer.** That in itself is right — constants
+   * are only read. The problem is something that is not a constant passing
+   * through that door:
    *
-   * - `Adam` 의 m·v 가 크기 1 파라미터에서 같은 버퍼가 되어, WebGPU 가 "writable
-   *   storage buffer aliasing" 으로 **명령 버퍼째** 무효로 만든다
-   * - `SGD` 의 모멘텀 버퍼가 프로그램 전체가 쓰는 0 상수를 덮어쓴다
-   * - `nn.PReLU()` 는 기본이 파라미터 하나라 가중치가 곧 전역 0.25 상수이고,
-   *   옵티마이저가 학습 중에 그것을 고친다
-   * - `BatchNorm(1)` 의 이동 통계가 전역 0·1 상수를 덮어쓴다
+   * - `Adam`'s m and v become the same buffer at a size-1 parameter, and
+   *   WebGPU invalidates **the whole command buffer** for "writable storage
+   *   buffer aliasing"
+   * - `SGD`'s momentum buffer overwrites the zero constant the entire
+   *   program uses
+   * - `nn.PReLU()` defaults to a single parameter, so its weight *is* the
+   *   global 0.25 constant, and the optimizer edits it during training
+   * - `BatchNorm(1)`'s running statistics overwrite the global 0 and 1
+   *   constants
    *
-   * 앞의 하나만 예외로 터지고 나머지는 **조용히 틀린다.** 그래서 파라미터·옵티마이저
-   * 상태·이동 통계는 값이 무엇이든 여기로 온다.
+   * Only the first throws; the rest are **quietly wrong.** So parameters,
+   * optimizer state and running statistics come here whatever their value.
    */
   static owned(shape: readonly number[], value = 0): Tensor {
     const data = new Float32Array(numel(shape));
@@ -933,7 +968,10 @@ export class Tensor implements Node<Tensor> {
    * 단위 행렬. **CPU 에서 만들어 올린다** — 만드는 일은 한 번뿐이고, 이걸 위해
    * 셰이더를 하나 더 굽는 것은 얻는 것보다 비싸다.
    */
-  /** 단위행렬. **정사각만이 아니다** — torch 의 `eye(n, m)` 은 직사각을 만든다. */
+  /**
+   * The identity matrix. **Not only square** — torch's `eye(n, m)` makes a
+   * rectangle.
+   */
   static eye(n: number, m: number = n): Tensor {
     const data = new Float32Array(n * m);
     for (let i = 0; i < Math.min(n, m); i++) data[i * m + i] = 1;
@@ -942,11 +980,12 @@ export class Tensor implements Node<Tensor> {
 
   /** `0` 부터 `n-1` 까지. */
   /**
-   * `[start, end)` 를 `step` 씩. **끝은 안 들어간다.**
+   * `[start, end)` in steps of `step`. **The end is excluded.**
    *
-   * 하나만 주면 `[0, n)` 이다 — torch 와 같고, 오래 그 꼴 하나뿐이었다. 시작과
-   * 걸음을 못 주는 동안 부르는 쪽이 `arange(n).mul(...).add(...)` 로 흉내 냈는데,
-   * 그것은 반올림이 다르게 쌓이는 다른 계산이다.
+   * Given one argument it is `[0, n)`, as in torch, and for a long time
+   * that was the only form. While start and step could not be given,
+   * callers imitated it with `arange(n).mul(...).add(...)`, which is a
+   * different computation whose rounding accumulates differently.
    */
   static arange(start: number, end?: number, step = 1): Tensor {
     const [from, to] = end === undefined ? [0, start] : [start, end];
@@ -974,10 +1013,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `arange` 의 옛 이름인데 **끝을 포함한다**(실측). 그래서 원소가 하나 더 많다.
+   * The old name for `arange`, except that it **includes the end**
+   * (measured). So it has one element more.
    *
-   * torch 도 이 차이 때문에 폐기 예정으로 두었다. 조용히 `arange` 로 넘기면
-   * 마지막 값이 사라지고, 그 한 칸은 합계나 평균으로만 재면 안 보인다.
+   * torch marked it deprecated over this same difference. Quietly
+   * forwarding to `arange` loses the last value, and that one slot is
+   * invisible if you only measure sums or means.
    */
   static range(start: number, end: number, step = 1): Tensor {
     Tensor.needsStep(step, "range");
@@ -988,15 +1029,17 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 바이트를 **그대로 읽는다.** `offset` 은 바이트 수다 — 원소 수가 아니다.
+   * Reads the bytes **as they are.** `offset` is in bytes, not elements.
    *
-   * `dtype` 은 여기서 **무엇으로 읽을지**를 정한다. 읽고 나서 바꾸는 것과 다르다 —
-   * 같은 바이트가 형에 따라 아주 다른 수가 되므로, 나중에 `to()` 로 고치면 이미
-   * 다르게 읽은 뒤다.
+   * `dtype` here decides **what to read them as.** That differs from
+   * converting after reading — the same bytes become very different numbers
+   * depending on the type, so fixing it later with `to()` comes after they
+   * have already been read as something else.
    *
-   * `complex64` 는 거절한다. 인터리브 저장이라 바이트를 그대로 얹을 수는 있지만,
-   * 그 배치가 약속으로 못 박힌 자리가 아니라서 **읽는 쪽이 무엇을 받았는지 모르게**
-   * 된다 — 그런 이름은 안 놓는 편이 낫다.
+   * `complex64` is refused. The storage is interleaved so the bytes could
+   * be laid on directly, but that arrangement is not nailed down as a
+   * promise, which would leave **the reader not knowing what they
+   * received** — better not to offer the name.
    */
   static frombuffer(
     buffer: ArrayBuffer,
@@ -1044,7 +1087,9 @@ export class Tensor implements Node<Tensor> {
     return Tensor.from(data, [n], { dtype });
   }
 
-  /** 양끝을 포함해 고르게 나눈 값들. */
+  /**
+   * Evenly divided values, both ends included.
+   */
   static linspace(start: number, end: number, count: number): Tensor {
     const data = new Float32Array(count);
     // 마지막 값을 계산으로 내면 반올림이 쌓여 end 에 정확히 안 닿는다. 못 박는다.
@@ -1076,7 +1121,9 @@ export class Tensor implements Node<Tensor> {
     return Tensor.from(data, [n]);
   }
 
-  /** 삼각창. 가운데가 1 이고 양끝이 0 이다. */
+  /**
+   * The triangular window. 1 in the middle, 0 at both ends.
+   */
   static bartlettWindow(n: number, periodic = true): Tensor {
     return Tensor.window(n, periodic, (k, total) =>
       1 - Math.abs((2 * k) / (total - 1) - 1));
@@ -1087,7 +1134,9 @@ export class Tensor implements Node<Tensor> {
       0.5 - 0.5 * Math.cos((2 * Math.PI * k) / (total - 1)));
   }
 
-  /** `alpha - beta·cos`. torch 의 기본은 0.54/0.46 이다. */
+  /**
+   * `alpha - beta·cos`. torch's defaults are 0.54/0.46.
+   */
   static hammingWindow(
     n: number, periodic = true, alpha = 0.54, beta = 0.46,
   ): Tensor {
@@ -1102,7 +1151,9 @@ export class Tensor implements Node<Tensor> {
     });
   }
 
-  /** `I₀(β√(1-((k-h)/h)²)) / I₀(β)`. torch 의 기본 `beta` 는 12.0 이다. */
+  /**
+   * `I₀(β√(1-((k-h)/h)²)) / I₀(β)`. torch's default `beta` is 12.0.
+   */
   static kaiserWindow(n: number, periodic = true, beta = 12.0): Tensor {
     return Tensor.window(n, periodic, (k, total) => {
       const half = (total - 1) / 2;
@@ -1112,15 +1163,18 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `[0, 1)` 균등분포. `torch.rand` 자리이고 **쓰는 사람이 쓸 문은 이쪽이다.**
+   * Uniform on `[0, 1)`. Where `torch.rand` goes, and **the door a user
+   * should use.**
    *
-   * **호스트에서 만들어 한 번에 올린다.** 그래야 `randn`·`randint`·`randperm` 과 같은
-   * 줄기에서 나오고 `manualSeed` 하나가 넷을 함께 되돌린다.
+   * **Made on the host and uploaded in one go.** That is what puts it on
+   * the same stream as `randn`, `randint` and `randperm`, so one
+   * `manualSeed` rewinds all four.
    *
-   * 난수가 나오는 문이 하나 더 있다 — `Tensor.uniform` 은 GPU 커널이고 dropout
-   * 계수기를 쓴다. 그쪽은 **활성값만 한 표본을 스텝마다 뽑는 자리**(dropout·`rrelu`·
-   * gumbel)의 것이라 업로드를 피하려고 따로 있다. 둘 다 `manualSeed` 가 되돌리지만
-   * **같은 줄기는 아니다.**
+   * There is one more door randomness comes out of — `Tensor.uniform` is a
+   * GPU kernel and uses the dropout counter. That one belongs to places
+   * drawing **a sample the size of the activations every step** (dropout,
+   * `rrelu`, gumbel) and exists separately to avoid the upload.
+   * `manualSeed` rewinds both, but **they are not the same stream.**
    */
   static rand(shape: readonly number[]): Tensor {
     const data = new Float32Array(numel(shape));
@@ -1128,7 +1182,9 @@ export class Tensor implements Node<Tensor> {
     return Tensor.from(data, shape);
   }
 
-  /** 표준정규분포. `torch.randn` 자리다. */
+  /**
+   * The standard normal. Where `torch.randn` goes.
+   */
   static randn(shape: readonly number[]): Tensor {
     const data = new Float32Array(numel(shape));
     for (let i = 0; i < data.length; i++) data[i] = gauss();
@@ -1136,10 +1192,11 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `[low, high)` 의 정수. **위끝은 안 들어간다** — torch 와 같다.
+   * Integers in `[low, high)`. **The upper end is excluded**, as in torch.
    *
-   * 형은 `int64` 로 붙지만 값은 float32 버퍼에 있다(`dtype.ts`). 2^24 를 넘는
-   * 정수는 그 안에서 이미 못 세므로 거기서 멈춘다 — 조용히 반올림되느니 낫다.
+   * The type comes back as `int64` while the values sit in a float32 buffer
+   * (`dtype.ts`). Integers above 2^24 cannot be counted there already, so
+   * it stops at that point — better than rounding quietly.
    */
   static randint(low: number, high: number, shape: readonly number[]): Tensor {
     if (!(high > low)) {
@@ -1157,7 +1214,9 @@ export class Tensor implements Node<Tensor> {
     return Tensor.from(data, shape, { dtype: "int64" });
   }
 
-  /** `0..n-1` 을 섞은 것. `torch.randperm` 자리다. Fisher–Yates. */
+  /**
+   * `0..n-1` shuffled. Where `torch.randperm` goes. Fisher–Yates.
+   */
   static randperm(n: number): Tensor {
     const data = new Float32Array(n);
     for (let i = 0; i < n; i++) data[i] = i;
@@ -1171,12 +1230,14 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 정규분포 표본. **`std` 가 0 이면 평균 그대로다**(실측) — 그 끝값이 이 이름이
-   * 표준편차를 실제로 보고 있는지 묻는 유일한 자리다.
+   * A sample from the normal distribution. **With `std` at 0 it is the mean
+   * itself** (measured) — that endpoint is the only place that asks whether
+   * this name really looks at the standard deviation.
    *
-   * torch 는 두 꼴을 준다: 텐서 둘을 주면 자리마다 다른 평균·표준편차이고, 수 둘과
-   * 모양을 주면 전부 같다. 앞쪽이 **브로드캐스트한다** — `(2,)` 평균에 스칼라
-   * 표준편차를 줘도 된다.
+   * torch offers two forms: two tensors give a per-slot mean and standard
+   * deviation, while two numbers and a shape give the same one everywhere.
+   * The first **broadcasts** — a `(2,)` mean with a scalar standard
+   * deviation is allowed.
    */
   static normal(
     mean: number | Tensor = 0,
@@ -1193,22 +1254,26 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 자리마다 **자기 값을 확률로 읽어** 0 이나 1 을 놓는다. `p=0` 이면 전부 0,
-   * `p=1` 이면 전부 1 이다.
+   * Each slot **reads its own value as a probability** and lands on 0 or 1.
+   * At `p=0` all zeros, at `p=1` all ones.
    *
-   * **비교가 장치 위에서 끝난다** — 뽑은 난수를 한 번 올리고 나면 값이 안 내려온다.
-   * 결속(`borch_webgpu`)은 같은 이름을 numpy 로 만드는데, 그쪽은 `get_rng_state` 가
-   * 한 줄기를 직렬화해야 해서 그런 것이지 이쪽이 그럴 이유는 없다.
+   * **The comparison finishes on the device** — once the drawn randomness
+   * is uploaded, no value comes back down. The binding (`borch_webgpu`)
+   * builds the same name out of numpy, but that is because `get_rng_state`
+   * over there has to serialise one stream, and there is no reason for this
+   * side to do the same.
    */
   bernoulli(): Tensor {
     return Tensor.rand(this.shape).binary("lt", this).to(this.dtype);
   }
 
   /**
-   * 자리마다 그 평균의 푸아송 표본. **평균이 0 이면 0 이다.**
+   * A Poisson sample at each slot's own mean. **A mean of 0 gives 0.**
    *
-   * Knuth 의 곱셈 꼴이라 **값마다 도는 횟수가 다르다** — 자리별로 갈리는 반복은
-   * 셰이더로 못 옮기므로 여기서 한 번 읽는다. `histc`·`mode` 와 같은 자리다.
+   * It is Knuth's multiplicative form, so **the number of iterations
+   * differs per value** — a loop that diverges per slot cannot be moved
+   * into a shader, so it reads once here. The same place as `histc` and
+   * `mode`.
    */
   async poisson(): Promise<Tensor> {
     const lam = Array.from(await this.toArray());
@@ -1224,9 +1289,11 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `this` 번 시행에서 성공한 횟수. **확률이 0 이면 0, 1 이면 시행 횟수 그대로다.**
+   * The number of successes in `this` trials. **At probability 0 it is 0;
+   * at 1 it is the trial count itself.**
    *
-   * 시행 횟수가 값이라 도는 횟수도 값이다 — `poisson` 과 같은 이유로 읽는다.
+   * The trial count is a value, so the iteration count is a value too —
+   * read for the same reason as `poisson`.
    */
   async binomial(prob: Tensor): Promise<Tensor> {
     const shape = broadcastShapes(this.shape, prob.shape);
@@ -1273,10 +1340,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 모든 짝. **하나만 주면 그냥 그것이다**(실측) — 1차원으로 남는다.
+   * Every pair. **Given only one it is just that** (measured) — it stays
+   * one-dimensional.
    *
-   * 값을 안 읽는다. 어느 칸이 어디로 가는지는 **개수만으로** 정해지므로 번호표로
-   * 뽑아 모은다 — 읽었으면 이것도 비동기가 됐다.
+   * It does not read the values. Which slot goes where is decided **by the
+   * counts alone**, so it gathers by index — reading would have made this
+   * asynchronous too.
    */
   static cartesianProd(...tensors: readonly Tensor[]): Tensor {
     if (tensors.length === 1) return tensors[0]!.reshape([tensors[0]!.size]);
@@ -1293,7 +1362,10 @@ export class Tensor implements Node<Tensor> {
     return Tensor.stack(columns, 1);
   }
 
-  /** `r` 개씩 고른 조합. **순서는 없고**, 중복 허용이 따로 있다. */
+  /**
+   * Combinations of `r` at a time. **Order does not matter**, and
+   * with-replacement is separate.
+   */
   static combinations(t: Tensor, r = 2, withReplacement = false): Tensor {
     const n = t.size;
     const rows: number[][] = [];
@@ -1319,10 +1391,13 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 판데르몬드 행렬. **기본은 차수가 줄어드는 쪽이다** — 마지막 열이 1 이다(실측).
+   * The Vandermonde matrix. **The default is decreasing powers** — the last
+   * column is 1 (measured).
    *
-   * 거듭제곱을 `pow` 로 짜지 않는다. WGSL 의 `pow` 는 `exp2(y·log2(x))` 라 **밑이
-   * 음수면 답이 없고**, 판데르몬드는 음수 입력이 예사다. 누적곱으로 세면 정확하다.
+   * The powers are not written with `pow`. WGSL's `pow` is
+   * `exp2(y·log2(x))`, so **a negative base has no answer**, and negative
+   * inputs are ordinary for a Vandermonde. Counting with a running product
+   * is exact.
    */
   static vander(x: Tensor, N?: number, increasing = false): Tensor {
     const n = x.size;
@@ -1353,12 +1428,17 @@ export class Tensor implements Node<Tensor> {
     return Tensor.ones(this.shape);
   }
 
-  /** `torch.rand_like`. 모양만 빌린다 — 값도 형도 안 물려받는다. */
+  /**
+   * `torch.rand_like`. It borrows the shape only — neither the values nor
+   * the type are inherited.
+   */
   randLike(): Tensor {
     return Tensor.rand(this.shape);
   }
 
-  /** `torch.randn_like`. */
+  /**
+   * `torch.randn_like`.
+   */
   randnLike(): Tensor {
     return Tensor.randn(this.shape);
   }
@@ -1393,8 +1473,9 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * @param dtype 결과의 형. 안 주면 산술 승격 규칙을 따른다. 비교 연산처럼 형이
-   *   입력과 무관한 것은 여기서 못 박는다.
+   * @param dtype the result's type. Left out, it follows the arithmetic
+   *   promotion rules. Where the type is independent of the inputs, as in a
+   *   comparison, it is pinned here.
    */
   binary(name: string, other: Tensor, dtype?: DType): Tensor {
     const spec = BINARY[name];
@@ -1455,11 +1536,13 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * @param alpha 상대 쪽에 먼저 곱하는 값 — `this + alpha·other` 다.
+   * An argument torch offers that was missing here. Without it the caller
+   * writes it out as `x.add(y.mul(a))` for the same answer, while **the
+   * in-place form (`add_`) already had it** — so two names were taking
+   * different things.
    *
-   * torch 가 주는 인자인데 여기 없었다. 없으면 부르는 쪽이 `x.add(y.mul(a))` 로
-   * 풀어 쓰게 되고 답은 같은데, **제자리 판(`add_`)에는 이미 있어서** 두 이름이
-   * 서로 다른 것을 받고 있었다.
+   * @param alpha what the other side is multiplied by first — `this +
+   *   alpha·other`.
    */
   add(other: Tensor, alpha = 1): Tensor {
     return this.binary("add", alpha === 1 ? other : other.mul(Tensor.full([], alpha)));
@@ -1472,11 +1555,13 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * @param roundingMode `null` 이면 참나눗셈, `"trunc"`·`"floor"` 는 정수 쪽.
+   * **The type diverges.** True division is always float, but truncating or
+   * flooring **comes back as the input's type** (measured: `int64 / int64`
+   * with `trunc` is int64). Match only the value and leave the type float,
+   * and it diverges later wherever indexing wants an integer.
    *
-   * **형이 갈린다.** 참나눗셈은 언제나 실수인데, 자르거나 내리면 **입력의 형으로
-   * 돌아온다**(실측: `int64 / int64` 에 `trunc` 를 주면 int64 다). 값만 맞추고 형을
-   * 실수로 두면 그 뒤 색인이 정수를 요구하는 자리에서 갈린다.
+   * @param roundingMode `null` is true division; `"trunc"` and `"floor"` go
+   *   to the integer side.
    */
   div(other: Tensor, roundingMode: "trunc" | "floor" | null = null): Tensor {
     const out = this.binary("div", other);
@@ -1488,7 +1573,10 @@ export class Tensor implements Node<Tensor> {
 
   // ── 행렬곱 ────────────────────────────────────────────────────────────
 
-  /** 2차원만. 배치 행렬곱은 T1 이다 — 없는 기능이 틀린 답보다 낫다. */
+  /**
+   * Two-dimensional only. Batched matrix multiply is T1 — a missing feature
+   * beats a wrong answer.
+   */
   mm(other: Tensor): Tensor {
     if (this.shape.length !== 2 || other.shape.length !== 2) {
       throw new Error(
@@ -1524,7 +1612,10 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 2차원 전치. 지금은 실제로 옮겨 담는다 — 뷰는 T1 이다. */
+  /**
+   * Two-dimensional transpose. For now it actually moves the data — views
+   * are T1.
+   */
   transpose(): Tensor {
     if (this.shape.length !== 2) {
       throw new Error(`transpose is 2-D only for now: [${this.shape}]`);
@@ -1545,18 +1636,22 @@ export class Tensor implements Node<Tensor> {
 
   /** 전부 더해 스칼라 하나로. `backward()` 의 출발점이다. */
   /**
-   * 전부 더한다. `dtype` 을 주면 **더하기 전에** 그 형으로 바꾼다.
+   * Adds everything. Given `dtype` it converts **before** adding.
    *
-   * **이웃 전부가 그 인자를 받는데 이것만 안 받았다.** `mean`·`prod`·`nansum` 은
-   * `(dim?, keepdim, dtype?)` 이고 `cumsum`·`cumprod` 도 받는다. 축 있는 쪽인
-   * `sumDim` 도 받는다. 축약 중 **가장 많이 불리는 이름 하나만** 빠져 있었고,
-   * 그래서 `torch.sum(x, dtype=torch.float32)` 을 옮길 자리가 없었다.
+   * **Every neighbour took that argument and only this one did not.**
+   * `mean`, `prod` and `nansum` are `(dim?, keepdim, dtype?)`, and `cumsum`
+   * and `cumprod` take it too. `sumDim`, the axis-taking side, takes it.
+   * **The single most-called name among the reductions** was the one
+   * missing it, so there was nowhere to carry `torch.sum(x,
+   * dtype=torch.float32)` across to.
    *
-   * 넷 중 하나만 안 듣는 것이 하나도 안 듣는 것보다 나쁘다 — 규칙을 세울 수가
-   * 없어서다. 같은 자리를 `norm` 이 이미 한 번 보여 줬다.
+   * One of four not listening is worse than none of them listening —
+   * because no rule can be formed. `norm` had already shown this same place
+   * once.
    *
-   * **순서가 값을 정한다.** 먼저 바꾸고 더한다 — `[1.7, −2.3, 0.9]` 를 int64 로
-   * 접으면 먼저 깎을 때 −1, 나중에 깎을 때 0 이다. torch 는 앞쪽이다.
+   * **The order decides the value.** Convert first, then add — folding
+   * `[1.7, −2.3, 0.9]` to int64 gives −1 truncating first and 0 truncating
+   * last. torch does the former.
    */
   sum(dtype?: DType): Tensor {
     if (dtype !== undefined) return this.castFirst(dtype).sum().to(dtype);
@@ -1710,10 +1805,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 그래프에서 뗀 사본. 버퍼는 **공유한다** — 값을 읽기만 할 자리에 쓴다.
+   * A copy cut from the graph. The buffer is **shared** — for places that
+   * will only read the value.
    *
-   * `logsumexp` 가 최대값을 뗄 때 쓴다. 안 떼면 `m` 이 자기 기울기를 갖고, 수식상
-   * 그 몫이 정확히 상쇄되긴 하지만 부동소수에서는 큰 것끼리 빼는 꼴이 된다.
+   * `logsumexp` uses it to detach the maximum. Undetached, `m` carries its
+   * own gradient, and although that share cancels exactly on paper, in
+   * floating point it becomes a subtraction of large numbers.
    */
   detach(): Tensor {
     // **형을 물려준다.** 안 물려주면 `x.to("int64").detach().dtype` 이 float32 다 —
@@ -1725,10 +1822,11 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * **같은 텐서**에서 그래프를 끊는다. torch 의 `detach_` 다.
+   * Cuts the graph at **the same tensor.** torch's `detach_`.
    *
-   * `detach()` 는 새것을 내므로 원본은 여전히 위쪽에 붙어 있다 — 그 둘을 같은 것으로
-   * 보면 `y.detach_()` 뒤에도 `y` 를 지나 역전파가 계속 흐른다.
+   * `detach()` produces a new one, so the original is still attached
+   * upstream — treating the two as the same means backpropagation keeps
+   * flowing through `y` even after `y.detach_()`.
    */
   detach_(): Tensor {
     this.requiresGrad = false;
@@ -1738,11 +1836,13 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `log(Σ exp(x))`. **최대값을 빼고 계산한다** — 그냥 쓰면 x 가 89 를 넘는 순간
-   * float32 의 exp 가 inf 가 되고 그 뒤가 전부 inf 다.
+   * `log(Σ exp(x))`. **Computed with the maximum subtracted** — used
+   * plainly, the moment x passes 89 float32's exp becomes inf and
+   * everything after it is inf.
    *
-   * 조립으로 둔다. 역방향은 이미 있는 연산들의 미분에서 나오므로 새 미분식을 손으로
-   * 쓰지 않는다 — 그 자리가 이번 주에 가장 자주 틀린 자리였다.
+   * Left as an assembly. The backward falls out of the derivatives of
+   * operations that already exist, so no new derivative is written by hand
+   * — that was the most frequently wrong place this week.
    */
   logsumexp(dim?: number, keepdim = false): Tensor {
     // **정수·참거짓도 받고 float32 를 낸다**(실측). 실수로 올려 두면 아래 조립이
@@ -1760,10 +1860,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 누적 `logsumexp`. **넘치지 않게** 센다 — 축의 최대값을 빼고 더한 뒤 되돌린다.
+   * A cumulative `logsumexp`. Counted **without overflowing** — the axis
+   * maximum is subtracted, added, and restored.
    *
-   * `logsumexp` 와 같은 자리로 조립한다. 최대값을 떼 두었으므로 역방향은 조립에서
-   * 그대로 나오고, 손으로 쓴 미분식이 하나 줄었다.
+   * Assembled from the same place as `logsumexp`. With the maximum
+   * detached, the backward falls straight out of the assembly, and one
+   * hand-written derivative is gone.
    */
   logcumsumexp(dim: number): Tensor {
     const big = this.amax(dim, true).detach();
@@ -1771,9 +1873,11 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 다변량 로그감마. `log Γ_p(x) = p(p−1)/4 · log π + Σᵢ log Γ(x + (1−i)/2)`.
+   * The multivariate log-gamma. `log Γ_p(x) = p(p−1)/4 · log π + Σᵢ log Γ(x
+   * + (1−i)/2)`.
    *
-   * `p` 가 1 이면 `lgamma` 와 같다 — 그 값으로만 물으면 합이 도는지 안 보인다.
+   * At `p` of 1 it equals `lgamma` — asked with that value alone, whether
+   * the sum runs is invisible.
    */
   mvlgamma(p: number): Tensor {
     let out = this.lgamma();
@@ -1784,27 +1888,32 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 가수와 지수. `x = 가수 × 2^지수` 이고 가수는 [0.5, 1) 이다.
+   * The mantissa and the exponent. `x = mantissa × 2^exponent`, with the
+   * mantissa in [0.5, 1).
    *
-   * torch 는 지수를 int32 로 내는데 여기 저장은 f32 하나뿐이라 값으로만 맞춘다.
+   * torch returns the exponent as int32, and storage here is f32 only, so
+   * it matches by value.
    */
   frexp(): { mantissa: Tensor; exponent: Tensor } {
     return { mantissa: this.frexpMantissa(), exponent: this.frexpExponent() };
   }
 
   /**
-   * 같은 꼴을 한 값으로 채운 **새** 텐서. **제자리가 아니다** — torch 의 `fill` 이
-   * 그렇고, 이름이 한 글자 다른 `fill_` 과 하는 일이 다르다(실측).
+   * A **new** tensor of the same shape filled with one value. **Not in
+   * place** — torch's `fill` is so, and it does something different from
+   * `fill_`, one character away (measured).
    */
   fillWith(value: number): Tensor {
     return Tensor.full(this.shape, value);
   }
 
   /**
-   * `‖x − y‖_p`. 조립이라 역방향이 저절로 따라온다.
+   * `‖x − y‖_p`. An assembly, so the backward follows on its own.
    *
-   * **`p` 를 오래 안 받았다** — 언제나 L2 였고, `dist(a, b, 3)` 이 그럴듯한 크기의
-   * 다른 값을 냈다. 코어에도 같은 자리가 있었고 둘 다 값 대조로만 드러났다.
+   * **It did not take `p` for a long time** — it was always L2, and
+   * `dist(a, b, 3)` produced a different value of plausible magnitude. The
+   * core had the same place, and both surfaced only through comparing
+   * values.
    */
   dist(other: Tensor, p = 2): Tensor {
     const diff = this.sub(other);
@@ -1816,14 +1925,19 @@ export class Tensor implements Node<Tensor> {
     return diff.abs().powScalar(p).sum().powScalar(1 / p);
   }
 
-  /** NaN 을 0 으로 보고 더한다. NaN 자리로는 기울기가 안 간다. */
+  /**
+   * Adds, treating NaN as 0. No gradient goes to a NaN slot.
+   */
   nansum(dim?: number, keepdim = false, dtype?: DType): Tensor {
     if (dtype !== undefined) return this.castFirst(dtype).nansum(dim, keepdim).to(dtype);
     const clean = this.unary("nanToZero");
     return dim === undefined ? clean.sum() : clean.sumDim(dim, keepdim);
   }
 
-  /** NaN 을 빼고 평균낸다. **개수도 NaN 을 빼고 센다** — 그것이 mean 과 다른 점이다. */
+  /**
+   * Averages excluding NaN. **The count excludes NaN too** — that is what
+   * differs from mean.
+   */
   nanmean(dim?: number, keepdim = false): Tensor {
     const total = this.nansum(dim, keepdim);
     const present = this.unary("notNan");
@@ -1833,7 +1947,9 @@ export class Tensor implements Node<Tensor> {
     return total.div(count);
   }
 
-  /** 크기 1 인 축을 끼워 넣는다. */
+  /**
+   * Inserts an axis of size 1.
+   */
   unsqueeze(dim: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank + 1 : dim;
@@ -1842,22 +1958,29 @@ export class Tensor implements Node<Tensor> {
     return this.reshape(shape);
   }
 
-  /** 크기 1 인 축을 **전부** 뺀다. 인자 없는 `squeeze()` 다. */
+  /**
+   * Removes **every** axis of size 1. The argument-free `squeeze()`.
+   */
   squeezeAll(): Tensor {
     return this.reshape(this.shape.filter((d) => d !== 1));
   }
 
-  /** 값이 같은 새 텐서. 그래프는 이어진다 — 그것이 `detach` 와 다른 점이다. */
+  /**
+   * A new tensor with the same values. The graph stays connected — that is
+   * what differs from `detach`.
+   */
   clone(): Tensor {
     return this.unary("positive");
   }
 
   /**
-   * 축 하나를 따라 이어 붙인다.
+   * Joins along one axis.
    *
-   * **새 커널이 없다.** 각자를 상대 크기만큼 덧대고 더하면 된다 — 덧댄 자리는 0 이고
-   * 겹치지 않으므로 합이 곧 이어 붙인 것이다. 역방향도 `pad` 의 것이 그대로 쓰인다.
-   * 메모리를 두 배 쓰지만, 손으로 쓴 역방향 하나를 안 만드는 값이 더 크다.
+   * **There is no new kernel.** Padding each by the other's size and adding
+   * does it — the padded region is zero and they do not overlap, so the sum
+   * is the concatenation. The backward is `pad`'s, used as-is. It costs
+   * twice the memory, and not making one more hand-written backward is
+   * worth more.
    */
   static cat(parts: readonly Tensor[], dim = 0): Tensor {
     if (parts.length === 0) throw new Error("cat got nothing to concatenate");
@@ -1879,7 +2002,9 @@ export class Tensor implements Node<Tensor> {
     return acc;
   }
 
-  /** 새 축을 만들어 쌓는다. `cat` 에 축을 하나 끼워 넣은 것과 같다. */
+  /**
+   * Stacks by making a new axis. The same as `cat` with an axis inserted.
+   */
   static stack(parts: readonly Tensor[], dim = 0): Tensor {
     return Tensor.cat(parts.map((p) => p.unsqueeze(dim)), dim);
   }
@@ -1903,7 +2028,10 @@ export class Tensor implements Node<Tensor> {
     return t.reshape([1, shape[0] ?? 1, 1]);
   }
 
-  /** 1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다. */
+  /**
+   * One-dimensional inputs are joined end to end; above that,
+   * **column-wise.**
+   */
   static hstack(parts: readonly Tensor[]): Tensor {
     return Tensor.cat(parts, (parts[0]?.shape.length ?? 1) === 1 ? 0 : 1);
   }
@@ -1916,7 +2044,10 @@ export class Tensor implements Node<Tensor> {
     return Tensor.cat(parts.map((p) => Tensor.lift3(p)), 2);
   }
 
-  /** 1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다. */
+  /**
+   * Stands a one-dimensional input up **as a single column** and joins.
+   * That is where it parts from `hstack`.
+   */
   static columnStack(parts: readonly Tensor[]): Tensor {
     return Tensor.cat(
       parts.map((p) => (p.shape.length === 1 ? p.reshape([p.shape[0] ?? 0, 1]) : p)),
@@ -1924,7 +2055,9 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 대각선에 블록을 늘어놓고 나머지는 0. */
+  /**
+   * Blocks laid along the diagonal, zero elsewhere.
+   */
   static blockDiag(parts: readonly Tensor[]): Tensor {
     const mats = parts.map((p) => Tensor.lift(p, 2));
     const widths = mats.map((m) => m.shape[1] ?? 0);
@@ -1944,7 +2077,9 @@ export class Tensor implements Node<Tensor> {
     return lines.length > 1 ? Tensor.cat(lines, 0) : (lines[0] ?? Tensor.zeros([0, 0]));
   }
 
-  /** 전부 같은 모양이 되도록 늘린다. **사본이지 뷰가 아니다.** */
+  /**
+   * Stretches everything to a common shape. **Copies, not views.**
+   */
   static broadcastTensors(parts: readonly Tensor[]): Tensor[] {
     let shape: number[] = [];
     for (const p of parts) shape = broadcastShapes(shape, p.shape);
@@ -1952,10 +2087,11 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 격자. **`xy` 는 앞의 두 축이 뒤바뀐 것**이라 한 규칙으로 못 덮는다.
+   * A grid. **`xy` has the first two axes swapped**, so one rule cannot
+   * cover both.
    *
-   * `ij` 로만 재면 그 갈래가 안 보인다 — 정사각 입력에서는 둘이 같은 모양이라
-   * 값까지 봐야 갈린다.
+   * Measured only with `ij`, that branch is invisible — on square input the
+   * two have the same shape, and only the values separate them.
    */
   static meshgrid(parts: readonly Tensor[], indexing: "ij" | "xy" = "ij"): Tensor[] {
     if (indexing !== "ij" && indexing !== "xy") {
@@ -1977,24 +2113,34 @@ export class Tensor implements Node<Tensor> {
     return out;
   }
 
-  /** `base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다. */
+  /**
+   * Evenly spaced in powers of `base`. It uses `linspace` as the exponent.
+   */
   static logspace(start: number, end: number, steps: number, base = 10.0): Tensor {
     return Tensor.full([], base).binary("pow", Tensor.linspace(start, end, steps));
   }
 
-  /** 수 하나짜리 텐서. `full([], v)` 와 같은 것이고 torch 가 이름을 따로 준다. */
+  /**
+   * A tensor of one number. The same as `full([], v)`, given its own name
+   * by torch.
+   */
   static scalarTensor(value: number): Tensor {
     return Tensor.full([], value);
   }
 
-  /** **값을 0 으로 둔다** — torch 는 쓰레기를 주지만 그것을 배우면 안 된다. */
+  /**
+   * **It leaves the values at 0** — torch gives you garbage, and that is
+   * not a thing to learn.
+   */
   static empty(shape: readonly number[]): Tensor {
     return Tensor.zeros(shape);
   }
 
   /**
-   * 분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면
-   * 값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.
+   * Variance. **torch's default is the unbiased estimate (dividing by
+   * n-1)** — left at `correction=0` the value comes out subtly smaller, and
+   * that becomes the place it diverges quietly inside a normalisation
+   * layer.
    */
   variance(correction = 1): Tensor {
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
@@ -2017,7 +2163,9 @@ export class Tensor implements Node<Tensor> {
     return this.variance(correction).sqrt();
   }
 
-  /** 크기 1 인 축을 뺀다. */
+  /**
+   * Removes an axis of size 1.
+   */
   squeeze(dim: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2096,11 +2244,14 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 같은 버퍼를 다른 모양으로 본다. 원소 순서가 안 바뀌므로 커널이 필요 없다.
+   * Views the same buffer as a different shape. The element order does not
+   * change, so no kernel is needed.
    *
-   * **`-1` 은 "나머지" 다.** torch 코드가 `x.reshape(-1)`·`x.view(n, -1)` 로 늘 쓰는
-   * 꼴인데 여기 없었다 — 곱해서 크기를 맞추는 검사에 걸려 `shape '[-1]' is invalid`
-   * 로 멈췄다. 한 자리에만 쓸 수 있고, 나머지로 나누어떨어져야 한다.
+   * **`-1` means "the rest".** It is the form torch code always uses —
+   * `x.reshape(-1)`, `x.view(n, -1)` — and it was missing here: the
+   * size-matching check caught it and it stopped with `shape '[-1]' is
+   * invalid`. It can be used in one position only, and must divide the rest
+   * evenly.
    */
   reshape(want: readonly number[]): Tensor {
     const hole = want.indexOf(-1);
@@ -2143,7 +2294,9 @@ export class Tensor implements Node<Tensor> {
     return this.reshape([this.size]);
   }
 
-  /** 축 하나를 여러 축으로 편다. */
+  /**
+   * Spreads one axis into several.
+   */
   unflatten(dim: number, sizes: readonly number[]): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2151,7 +2304,9 @@ export class Tensor implements Node<Tensor> {
     return this.reshape(shape);
   }
 
-  /** 적어도 2차원으로. 이미 2차원 이상이면 그대로. */
+  /**
+   * At least two-dimensional. Already two or more, and it is unchanged.
+   */
   atleast2d(): Tensor {
     if (this.shape.length >= 2) return this;
     if (this.shape.length === 1) return this.reshape([1, this.shape[0] ?? 0]);
@@ -2159,9 +2314,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 크기 1 인 축을 늘린다. `-1` 은 "그대로 두라"는 뜻이다.
+   * Stretches axes of size 1. `-1` means "leave this one alone".
    *
-   * 앞에 축을 더 붙일 수도 있다 — 그 축들은 걸음이 0 이라 **복제하지 않는다.**
+   * Axes can also be added in front — those axes have stride 0, so
+   * **nothing is replicated.**
    */
   expand(...sizes: number[]): Tensor {
     const rank = sizes.length;
@@ -2186,7 +2342,10 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, outShape, "ExpandBackward0");
   }
 
-  /** 축마다 정수 배로 되풀이한다. `expand` 와 달리 실제로 여러 벌이 된다. */
+  /**
+   * Repeats an integer number of times per axis. Unlike `expand`, it really
+   * does become several copies.
+   */
   repeat(...times: number[]): Tensor {
     const rank = times.length;
     if (rank < this.shape.length) {
@@ -2210,7 +2369,9 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, outShape, "RepeatBackward0");
   }
 
-  /** 축 둘을 맞바꾼다. `swapdims` 와 같다 — torch 가 이름을 둘 다 갖는다. */
+  /**
+   * Swaps two axes. The same as `swapdims` — torch carries both names.
+   */
   swapaxes(a: number, b: number): Tensor {
     const rank = this.shape.length;
     const i = a < 0 ? a + rank : a;
@@ -2228,7 +2389,9 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, order.map((src) => this.shape[src] ?? 1), "TransposeBackward0");
   }
 
-  /** 축 하나에서 한 자리를 고르고 그 축을 없앤다. */
+  /**
+   * Picks one position along an axis and removes that axis.
+   */
   select(dim: number, index: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2259,14 +2422,17 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 대각선. `offset` 이 양수면 위쪽, 음수면 아래쪽 대각선이다.
+   * The diagonal. A positive `offset` takes the one above, a negative one
+   * the diagonal below.
    *
-   * **어느 두 축을 볼지가 갈린다.** `torch.diagonal` 은 앞의 두 축(`0, 1`)이고
-   * `torch.linalg.diagonal` 은 마지막 두 축(`-2, -1`)이다 — 3 차원을 주면 `(2,3,4)`
-   * 가 각각 `(4,2)` 와 `(2,3)` 으로 갈린다. 이름이 비슷해 같은 것으로 읽기 쉬운데
-   * 모양부터 다르다. 그래서 축을 인자로 받는다.
+   * **Which two axes are read diverges.** `torch.diagonal` takes the first
+   * two (`0, 1`) and `torch.linalg.diagonal` the last two (`-2, -1`) —
+   * given three dimensions, `(2,3,4)` becomes `(4,2)` and `(2,3)`
+   * respectively. The names are close enough to read as the same thing
+   * while even the shape differs. So the axes are taken as arguments.
    *
-   * **뽑은 축은 뒤로 간다.** 남은 축이 앞이고 대각선이 마지막이다 — torch 가 그렇다.
+   * **The extracted axis goes to the back.** The remaining axes come first
+   * and the diagonal last — as in torch.
    */
   diagonal(offset = 0, dim1 = 0, dim2 = 1): Tensor {
     const rank = this.shape.length;
@@ -2298,10 +2464,11 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 벡터를 대각선에 놓은 정사각 행렬.
+   * A square matrix with the vector laid on its diagonal.
    *
-   * @param offset 어느 대각선인가. 0 이 아니면 **행렬이 그만큼 커진다** —
-   *   `n+|offset|` 변이고, 그래서 커널을 다시 부르는 대신 큰 판에 넣고 옮긴다.
+   * @param offset which diagonal. Non-zero, **the matrix grows by that
+   *   much** — its side is `n+|offset|`, so rather than calling the kernel
+   *   again it is placed on the larger plate and moved.
    */
   diagflat(offset = 0): Tensor {
     if (offset !== 0) {
@@ -2335,7 +2502,9 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 축 하나를 거꾸로. */
+  /**
+   * Reverses one axis.
+   */
   flip(dim: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2358,10 +2527,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 2차원 평면 안에서 90° 씩 돌린다.
+   * Rotates by 90° within a two-dimensional plane.
    *
-   * `k=1` 이면 `out[i][j] = in[j][C-1-i]` 다 — 축을 바꾸면서 한쪽을 뒤집는 것이라,
-   * 규칙 표로 그대로 적힌다.
+   * At `k=1` it is `out[i][j] = in[j][C-1-i]` — swapping the axes while
+   * reversing one, which writes down directly as a rule table.
    */
   rot90(k = 1): Tensor {
     if (this.shape.length !== 2) {
@@ -2396,10 +2565,13 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 미끄러지는 창. 걸음이 창 크기보다 작으면 창끼리 겹친다.
+   * A sliding window. With a step smaller than the window, the windows
+   * overlap.
    *
-   * **겹치면 역방향에서 쌓인다** — 길이 5 를 `unfold(0, 3, 1)` 로 펴면 기울기가
-   * `[1,2,3,2,1]` 이다. 안 더하면 전부 1 이 되고, 값 검사만으로는 안 걸린다.
+   * **Overlaps accumulate in the backward** — spreading a length of 5 with
+   * `unfold(0, 3, 1)` gives a gradient of `[1,2,3,2,1]`. Without the
+   * addition they would all be 1, and a value check alone does not catch
+   * it.
    */
   unfold(dim: number, size: number, step: number): Tensor {
     const rank = this.shape.length;
@@ -2425,7 +2597,9 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, outShape, "UnfoldBackward0");
   }
 
-  /** 축 하나를 같은 크기 조각으로 나눈다. 조각마다 새 텐서다. */
+  /**
+   * Divides one axis into equally sized pieces. Each piece is a new tensor.
+   */
   split(dim: number, parts: number): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2450,10 +2624,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * **나머지를 앞에서부터 나눠 갖는다.** 10 을 4 로 쪼개면 3·3·2·2 다(실측).
+   * **The remainder is shared out from the front.** Splitting 10 into 4
+   * gives 3·3·2·2 (measured).
    *
-   * `chunk` 와 다르다 — 그쪽은 앞을 크게 채우고 마지막이 남는 것을 받는다. 나눠
-   * 떨어지는 크기로만 재면 두 함수가 같아 보인다.
+   * Different from `chunk` — that one fills the front pieces fully and the
+   * last takes what is left. Measured only at sizes that divide evenly, the
+   * two functions look the same.
    */
   tensorSplit(sections: number | readonly number[], dim = 0): Tensor[] {
     const rank = this.shape.length;
@@ -2474,7 +2650,10 @@ export class Tensor implements Node<Tensor> {
     return this.splitAt(cuts, axis);
   }
 
-  /** 조각 **크기 목록**으로 쪼갠다. `tensorSplit` 은 자르는 **자리**를 받는다. */
+  /**
+   * Splits by **a list of piece sizes.** `tensorSplit` takes the
+   * **positions** to cut at.
+   */
   splitWithSizes(sizes: readonly number[], dim = 0): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2507,7 +2686,10 @@ export class Tensor implements Node<Tensor> {
     return this.split(0, parts);
   }
 
-  /** 축을 원하는 자리로 옮긴다. `swapaxes` 와 달리 나머지 순서를 지킨다. */
+  /**
+   * Moves an axis to a chosen position. Unlike `swapaxes`, it preserves the
+   * order of the rest.
+   */
   movedim(src: number, dst: number): Tensor {
     const rank = this.shape.length;
     const from = src < 0 ? src + rank : src;
@@ -2517,7 +2699,9 @@ export class Tensor implements Node<Tensor> {
     return this.permute(order);
   }
 
-  /** 축 순서를 통째로 바꾼다. */
+  /**
+   * Reorders the axes wholesale.
+   */
   permute(order: readonly number[]): Tensor {
     const own = this.strides();
     const rules: AxisRule[] = order.map((s) => ({
@@ -2529,7 +2713,9 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, order.map((s) => this.shape[s] ?? 1), "PermuteBackward0");
   }
 
-  /** 축 하나에서 `start` 부터 `length` 개만. */
+  /**
+   * Only `length` entries from `start` along one axis.
+   */
   narrow(dim: number, start: number, length: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2545,9 +2731,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 축 하나를 자리이동. **끝에서 빠진 것이 앞으로 돌아온다.**
+   * Shifts one axis. **What falls off the end comes back at the front.**
    *
-   * `out[i] = in[(i - shift) mod n]` 이라, 규칙 표의 `mod` 에 자리이동을 얹으면 된다.
+   * It is `out[i] = in[(i - shift) mod n]`, so it is the rule table's `mod`
+   * with a shift laid on top.
    */
   roll(shift: number, dim = 0): Tensor {
     const rank = this.shape.length;
@@ -2565,12 +2752,17 @@ export class Tensor implements Node<Tensor> {
     return this.viewAs(rules, 0, this.shape, "RollBackward0");
   }
 
-  /** `repeat` 과 같은 일이되 torch 가 이름을 둘 다 갖는다. */
+  /**
+   * The same work as `repeat`, but torch carries both names.
+   */
   tile(...times: number[]): Tensor {
     return this.repeat(...times);
   }
 
-  /** 축 하나를 크기로 나눈다. `split` 은 조각 **크기**, `chunk` 는 조각 **수**다. */
+  /**
+   * Divides one axis by size. `split` takes the piece **size**, `chunk` the
+   * piece **count**.
+   */
   splitSize(dim: number, size: number): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2589,7 +2781,9 @@ export class Tensor implements Node<Tensor> {
     return this.splitSize(axis, Math.ceil(axisSize / parts));
   }
 
-  /** 축 하나를 따라 낱개로 뜯는다. 그 축이 사라진다. */
+  /**
+   * Tears an axis apart into singles. That axis disappears.
+   */
   unbind(dim = 0): Tensor[] {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2597,7 +2791,9 @@ export class Tensor implements Node<Tensor> {
     return Array.from({ length: size }, (_, i) => this.select(axis, i));
   }
 
-  /** 아래 삼각. `diagonal` 위쪽을 0 으로 만든다. */
+  /**
+   * The lower triangle. Zeroes everything above `diagonal`.
+   */
   tril(diagonal = 0): Tensor {
     return this.triangleAs(true, diagonal);
   }
@@ -2640,15 +2836,18 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 대각선의 합. */
+  /**
+   * The sum of the diagonal.
+   */
   trace(): Tensor {
     return this.diagonal().sum();
   }
 
   /**
-   * 2차원이면 대각선을 뽑고, 1차원이면 대각선에 놓는다 — torch 의 `diag` 다.
+   * Two-dimensional, it extracts the diagonal; one-dimensional, it lays one
+   * out — torch's `diag`.
    *
-   * @param diagonal 어느 대각선인가. 양수는 위쪽, 음수는 아래쪽.
+   * @param diagonal which diagonal. Positive is above, negative below.
    */
   diag(diagonal = 0): Tensor {
     return this.shape.length === 2
@@ -2656,7 +2855,9 @@ export class Tensor implements Node<Tensor> {
       : this.diagflat(diagonal);
   }
 
-  /** 축 하나를 누적한다. */
+  /**
+   * Accumulates along one axis.
+   */
   cumsum(dim = 0, dtype?: DType): Tensor {
     if (dtype !== undefined) {
       noBoolAccumulate("cumsum", dtype);
@@ -2714,7 +2915,10 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 축 하나를 색인 텐서가 가리키는 대로 고른다. 색인은 float32 에 담겨 온다. */
+  /**
+   * Selects along one axis as an index tensor points. The indices arrive
+   * held in float32.
+   */
   gather(dim: number, index: Tensor): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2755,32 +2959,38 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 대괄호 자리. `x[...]` 를 옮겨 적는 문 하나다 — 문법과 이유는 `indexing.ts`.
+   * Where the brackets go. One door for carrying `x[...]` across — the
+   * syntax and the reasoning are in `indexing.ts`.
    *
    * ```ts
-   * x.at(0)                     // x[0]           축이 사라진다
-   * x.at([null, 1])             // x[:, 1]        null 이 파이썬의 `:` 다
-   * x.at(slice(1, 3))           // x[1:3]         축이 남는다
+   * x.at(0)                     // x[0]           the axis disappears
+   * x.at([null, 1])             // x[:, 1]        null is Python's `:`
+   * x.at(slice(1, 3))           // x[1:3]         the axis remains
    * x.at([0, slice(1, 3)])      // x[0, 1:3]
    * x.at(slice(null, null, 2))  // x[::2]
-   * x.at([[0, 2]])              // x[[0, 2]]      대괄호 둘 — numpy 와 같은 모양
-   * x.at(idx)                   // x[idx]         int64 텐서
+   * x.at([[0, 2]])              // x[[0, 2]]      two brackets — numpy's shape
+   * x.at(idx)                   // x[idx]         an int64 tensor
    * ```
    *
-   * **맨 바깥 배열은 언제나 축 목록이다.** 적게 주면 남은 축은 통째로 온다.
+   * **The outermost array is always the list of axes.** Give fewer and the
+   * remaining axes come whole.
    *
-   * ## 값은 여기서 안 만든다
+   * ## No values are made here
    *
-   * 전부 있는 메서드로 넘긴다 — 정수는 `select`, 이어진 구간은 `narrow`, 걸음이
-   * 있거나 번호표면 `indexSelect`. 새 커널이 없으므로 **골든이 이미 그 값들을
-   * 지키고 있다.** 이 메서드가 지는 책임은 값이 아니라 **어느 문으로 보내는가**다.
+   * Everything is handed to existing methods — an integer to `select`, a
+   * contiguous span to `narrow`, a strided one or an index list to
+   * `indexSelect`. There is no new kernel, so **the golden cases already
+   * protect those values.** What this method is responsible for is not the
+   * value but **which door it is sent through.**
    *
-   * ## 참·거짓 마스크는 안 받는다
+   * ## Boolean masks are not accepted
    *
-   * `x[mask]` 는 `await x.maskedSelect(mask)` 로 남는다. 결과의 길이가 **값에 달려
-   * 있어서** GPU 에서 한 번 읽어야 알 수 있고, 그것 하나 때문에 `at()` 을 비동기로
-   * 만들면 나머지 모든 쓰임이 이유 없이 `await` 를 달게 된다. `unique`·`nonzero`·
-   * `bincount` 가 비동기인 것과 같은 이유이고, 같은 자리에 두는 편이 낫다.
+   * `x[mask]` remains `await x.maskedSelect(mask)`. The length of the
+   * result **depends on the values**, so it takes one read off the GPU to
+   * know, and making `at()` asynchronous for that alone would put an
+   * `await` on every other use for no reason. It is the same reason
+   * `unique`, `nonzero` and `bincount` are asynchronous, and keeping it in
+   * the same place is better.
    */
   at(index: AtIndex | readonly AtIndex[]): Tensor {
     const list: readonly AtIndex[] = Array.isArray(index)
@@ -2821,19 +3031,25 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * **정렬된** 경계(`this`) 안에서 `values` 의 각 값이 들어갈 자리.
+   * Where each of `values` would go inside the **sorted** boundaries
+   * (`this`).
    *
-   * `torch.searchsorted(sorted_sequence, values)` 이고, 받는 쪽이 경계라 여기서는
-   * 경계의 메서드다. 답은 `int64` 이고 모양은 `values` 를 따른다.
+   * It is `torch.searchsorted(sorted_sequence, values)`, and since the
+   * receiver is the boundaries, here it is a method on the boundaries. The
+   * answer is `int64` and its shape follows `values`.
    *
-   * **동점을 어느 쪽으로 보낼지가 이 함수의 절반이다.** 기본은 왼쪽 — 같은 값이
-   * 이미 있으면 그 **앞**에 선다(나보다 작은 것의 수). `right` 를 주면 뒤에 선다.
-   * 파이썬 쪽은 이것을 `right`(참거짓)와 `side`(글자) **두 이름으로** 받는데,
-   * 그 둘을 맞춰 보는 일은 거기서 한다 — 여기는 하나만 안다.
+   * **Which way a tie goes is half of this function.** The default is left
+   * — where the same value already exists, it stands **before** it (the
+   * count of things smaller than me). Given `right` it stands after. The
+   * Python side takes this under **two names**, `right` (boolean) and
+   * `side` (string), and reconciling those two happens there — this side
+   * knows only one.
    *
-   * 정렬돼 있는지는 **안 확인한다.** torch 도 안 한다(확인하려면 O(n) 을 더 도는데,
-   * 그 값을 치를 자리면 애초에 이 함수를 안 쓴다). 안 정렬된 것을 주면 답이
-   * 조용히 뜻을 잃는 것이 아니라 — 이진 탐색이 그냥 어떤 자리를 낸다.
+   * **It does not check that the input is sorted.** torch does not either
+   * (checking costs another O(n) pass, and anywhere you would pay that you
+   * would not be using this function). Given something unsorted the answer
+   * does not quietly lose meaning — the binary search simply produces some
+   * position.
    */
   searchSorted(values: Tensor, right = false): Tensor {
     const nSeq = this.size;
@@ -2855,16 +3071,21 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `searchSorted` 와 **받는 쪽이 뒤집힌 것**. 그것이 두 이름의 차이 전부다.
+   * `searchSorted` **with the receiver flipped.** That is the whole
+   * difference between the two names.
    *
-   * torch 가 `bucketize(input, boundaries)` 로 값 쪽을 먼저 받아서, 여기서도 값이
-   * 수신자다. 계산은 저쪽 하나뿐이다 — 두 벌로 두면 한쪽만 고쳐진다.
+   * torch has `bucketize(input, boundaries)` taking the values first, so
+   * the values are the receiver here too. The computation exists only on
+   * the other side — two copies and one of them gets fixed alone.
    */
   bucketize(boundaries: Tensor, right = false): Tensor {
     return boundaries.searchSorted(this, right);
   }
 
-  /** 축 하나를 색인 **벡터**가 고른다. `gather` 와 달리 색인이 자리마다 다르지 않다. */
+  /**
+   * An index **vector** selects along one axis. Unlike `gather`, the index
+   * does not differ per slot.
+   */
   indexSelect(dim: number, index: Tensor): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2910,7 +3131,10 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 자리마다 되풀이한다. `[a,b]` 를 2 번씩이면 `[a,a,b,b]` 다 — `tile` 과 다르다. */
+  /**
+   * Repeats per slot. `[a,b]` twice each gives `[a,a,b,b]` — different from
+   * `tile`.
+   */
   repeatInterleave(times: number, dim = 0): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -2926,14 +3150,17 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 이웃 차. `n` 번 되풀이하면 그만큼 짧아진다.
+   * The difference between neighbours. Repeated `n` times it shortens by
+   * that much.
    *
-   * @param prepend 차를 구하기 **전에** 앞에 이어 붙일 것.
-   * @param append 뒤에 이어 붙일 것.
+   * Prepending one makes the result **the same length** as the input — the
+   * place used to avoid losing the first slot of a time series. The point
+   * is that the prepend happens **before** the difference rather than
+   * after; appending changes the last difference instead.
    *
-   * 하나를 붙이면 결과가 입력과 **같은 길이**가 된다 — 시계열에서 첫 칸을 잃지
-   * 않으려고 쓰는 자리다. 붙이는 것이 차를 구한 뒤가 아니라 **전**이라는 것이 요점이고,
-   * 뒤에 붙이면 마지막 차가 달라진다.
+   * @param prepend what to join on the front **before** the difference is
+   *   taken.
+   * @param append what to join on the end.
    */
   diff(n = 1, dim = 0, prepend?: Tensor, append?: Tensor): Tensor {
     const rank = this.shape.length;
@@ -2954,12 +3181,18 @@ export class Tensor implements Node<Tensor> {
     return cur;
   }
 
-  /** 참인 자리를 값으로 덮는다. **덮은 자리로는 기울기가 안 간다.** */
+  /**
+   * Overwrites the true positions with a value. **No gradient goes to an
+   * overwritten slot.**
+   */
   maskedFill(mask: Tensor, value: number): Tensor {
     return Tensor.full(this.shape, value).where(mask, this);
   }
 
-  /** 정수 거듭제곱. 지금은 곱셈을 되풀이한다 — 지수가 작을 때만 쓸 것이다. */
+  /**
+   * An integer power. For now it repeats the multiplication — for small
+   * exponents only.
+   */
   matrixPower(k: number): Tensor {
     if (k < 1) throw new Error(`matrix_power supports 1 and up for now: ${k}`);
     // **곱셈을 이어 붙인다** — 그러면 역방향이 저절로 따라온다. 분해로 짜면 미분식을
@@ -2981,7 +3214,10 @@ export class Tensor implements Node<Tensor> {
     return out.reshape(this.shape);
   }
 
-  /** 조건 자리마다 이쪽 아니면 저쪽. torch 의 메서드 형태는 `x.where(조건, 다른쪽)` 이다. */
+  /**
+   * This side or that, per position of the condition. torch's method form
+   * is `x.where(cond, other)`.
+   */
   where(cond: Tensor, other: Tensor): Tensor {
     const n = this.size;
     const out = dev().alloc(n);
@@ -3012,14 +3248,18 @@ export class Tensor implements Node<Tensor> {
     );
   }
 
-  /** 전부 곱한다. */
+  /**
+   * Multiplies everything.
+   */
   prod(dim?: number, keepdim = false, dtype?: DType): Tensor {
     if (dtype !== undefined) return this.castFirst(dtype).prod(dim, keepdim).to(dtype);
     if (dim === undefined) return this.flat().reduceOver("prod", 0, false);
     return this.reduceOver("prod", dim, keepdim);
   }
 
-  /** L2 노름. */
+  /**
+   * The L2 norm.
+   */
   norm(): Tensor {
     // **torch 가 멈추는 자리에서 멈춘다**(실측). 나눗셈·제곱근이 정수 칸에
     // 답이 안 들어간다 — numpy 처럼 조용히 실수로 올리면 그 코드가 진짜
@@ -3028,22 +3268,28 @@ export class Tensor implements Node<Tensor> {
     return this.square().sum().sqrt();
   }
 
-  /** 두 벡터의 안쪽 곱. */
+  /**
+   * The inner product of two vectors.
+   */
   dot(other: Tensor): Tensor {
     return this.mul(other).sum();
   }
 
-  /** 두 벡터의 바깥 곱. 브로드캐스팅으로 나온다 — 새 커널이 필요 없다. */
+  /**
+   * The outer product of two vectors. It falls out of broadcasting — no new
+   * kernel needed.
+   */
   outer(other: Tensor): Tensor {
     return this.reshape([this.size, 1]).mul(other.reshape([1, other.size]));
   }
 
   /**
-   * 위아래로 자른다.
+   * Cuts above and below.
    *
-   * **`maximum`·`minimum` 위에 얹으면 안 된다.** 그 둘은 동점에서 기울기를 반씩
-   * 나누는데(torch 가 그렇다) `clamp` 는 경계에서 온전히 흘린다. 얹어 두었더니
-   * `x` 가 정확히 경계에 앉은 자리에서만 기울기가 절반이 됐다.
+   * **It must not be laid on top of `maximum` and `minimum`.** Those two
+   * split the gradient in half at a tie (torch does), while `clamp` passes
+   * it whole at the boundary. Laid on top, the gradient halved exactly
+   * where `x` sat on the boundary.
    */
   clamp(low: number, high: number): Tensor {
     const lo = f32lit(low), hi = f32lit(high);
@@ -3054,12 +3300,14 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 상수 지수.
+   * A constant exponent.
    *
-   * **정수 지수는 곱셈으로 간다.** WGSL 의 `pow(x, y)` 는 `exp2(y·log2(x))` 라 밑이
-   * 음수면 답이 없고, 실제로 `|x|` 를 쓴 것 같은 값이 나온다. 짝수 지수에서는 값이
-   * 우연히 맞아서 `method::pow` 는 통과했고, `grad::pow2` 에서 부호가 뒤집힌 채로
-   * 잡혔다 — 값은 맞고 기울기만 틀리는 그 종류다.
+   * **Integer exponents go through multiplication.** WGSL's `pow(x, y)` is
+   * `exp2(y·log2(x))`, so a negative base has no answer, and what actually
+   * comes out looks like `|x|` was used. At even exponents the value
+   * happens to be right, so `method::pow` passed and it was caught at
+   * `grad::pow2` with the sign flipped — the kind where the value is right
+   * and only the gradient is wrong.
    */
   powScalar(k: number): Tensor {
     if (Number.isInteger(k) && k >= 0 && k <= MAX_UNROLLED_POWER) {
@@ -3072,7 +3320,10 @@ export class Tensor implements Node<Tensor> {
     return this.binary("pow", Tensor.full([], k));
   }
 
-  /** `exp(x) / Σ exp(x)`. **최대값을 빼고 계산한다** — 안 그러면 큰 값에서 넘친다. */
+  /**
+   * `exp(x) / Σ exp(x)`. **Computed with the maximum subtracted** —
+   * otherwise it overflows at large values.
+   */
   softmax(dim = 0): Tensor {
     const m = this.amax(dim, true).detach();
     const e = this.sub(m).exp();
@@ -3080,8 +3331,9 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `log(softmax(x))`. **`softmax` 를 구해 로그를 취하지 않는다** — 작은 확률에서
-   * 0 이 되어 로그가 -inf 가 된다. 빼기로 바로 쓰면 그 자리가 없다.
+   * `log(softmax(x))`. **It does not compute `softmax` and take the log** —
+   * small probabilities become 0 and the log becomes -inf. Written directly
+   * as a subtraction, that place does not exist.
    */
   logSoftmax(dim = 0): Tensor {
     return this.sub(this.logsumexp(dim, true));
@@ -3102,7 +3354,9 @@ export class Tensor implements Node<Tensor> {
     return out.reshape(shape);
   }
 
-  /** 최대·최소가 **어디에** 있는가. 동점이면 먼저 나온 자리다. */
+  /**
+   * **Where** the maximum or minimum is. On a tie, the first position.
+   */
   argmax(dim = 0, keepdim = false): Tensor {
     return this.liftAxis(this.argReduceOver("max", dim), dim, keepdim);
   }
@@ -3112,12 +3366,13 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 값과 번호를 함께. torch 의 `x.max(dim)` 이다.
+   * The value and the index together. torch's `x.max(dim)`.
    *
-   * `amax` 와 `argmax` 로 따로 부르면 되기는 하는데, torch 코드가 쓰는 모양은
-   * 이쪽이고 **둘이 같은 자리를 가리키는지**가 여기서만 확인된다. `amax` 는 동점을
-   * 고르게 나누고 `argmax` 는 먼저 나온 자리 하나를 고르는데, 값을 번호로 다시
-   * 뽑아 오면 나누는 일이 없다 — torch 의 `max(dim)` 이 그쪽이다.
+   * Calling `amax` and `argmax` separately does work, but this is the shape
+   * torch code uses, and **whether the two point at the same place** is
+   * confirmed only here. `amax` splits a tie evenly and `argmax` picks the
+   * first single position, and re-fetching the value by index does no
+   * splitting — torch's `max(dim)` is the latter.
    */
   max(dim = 0, keepdim = false): { values: Tensor; indices: Tensor } {
     return this.pickReduce("max", dim, keepdim);
@@ -3170,17 +3425,20 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 0 이 아닌 것의 개수. **축을 받는다** — 전체 축약만 되던 자리다.
+   * The count of non-zeros. **It takes an axis** — this used to be a full
+   * reduction only.
    *
-   * 축이 없으면 `x.countNonzero(1)` 이 인자를 조용히 버리고 스칼라를 내는데,
-   * 그 스칼라는 어디에나 브로드캐스팅된다.
+   * Without the axis, `x.countNonzero(1)` quietly discards the argument and
+   * produces a scalar, and that scalar broadcasts against anything.
    */
   countNonzero(dim?: number): Tensor {
     const flags = this.binary("ne", Tensor.full([], 0));
     return dim === undefined ? flags.sum() : flags.sumDim(dim);
   }
 
-  /** 전부 참인가 / 하나라도 참인가. 0/1 로 답한다. */
+  /**
+   * Whether all are true, or whether any is. It answers 0/1.
+   */
   all(dim?: number, keepdim = false): Tensor {
     return this.boolReduce("amin", dim, keepdim);
   }
@@ -3200,24 +3458,28 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `padND(mode="constant")` 의 날 이름. **마지막 축부터 (앞, 뒤) 순이다.**
+   * The raw name for `padND(mode="constant")`. **From the last axis, in
+   * (before, after) order.**
    *
-   * 같은 계산에 이름이 둘인 자리라 **여기서 계산하지 않고** 넘긴다 — 한쪽만
-   * 맞는 것이 이 저장소에서 세 번 나왔다.
+   * It is a place where one computation has two names, so it **does not
+   * compute here** and hands over — only one of the two being right has
+   * happened three times in this repository.
    */
   constantPadNd(pad: readonly number[], value = 0): Tensor {
     return this.padND(pad, "constant", value);
   }
 
   /**
-   * 양자화를 **실수 위에서 흉내 낸다** — `clamp(round(x/s) + z)` 뒤 되돌린다.
+   * Imitates quantisation **on floats** — `clamp(round(x/s) + z)` and back.
    *
-   * **양자화 dtype 이 필요 없다.** 이름 때문에 오래 거절 쪽으로 세어 두었는데
-   * 재보니 torch 도 실수 텐서를 받아 실수를 낸다.
+   * **No quantised dtype is needed.** The name had it counted as a refusal
+   * for a long time, and measuring showed torch takes a float tensor and
+   * produces a float too.
    *
-   * **기울기는 범위 안에서만 1 이다**(실측). 반올림은 계단이라 도함수가 거의
-   * 어디서나 0 인데, 그대로 두면 이 층 아래로 학습이 아예 안 간다 — torch 는 그
-   * 자리를 "곧바로 통과" 로 둔다.
+   * **The gradient is 1 only inside the range** (measured). Rounding is a
+   * staircase whose derivative is zero almost everywhere, and left as-is no
+   * training goes below this layer at all — torch leaves that place as a
+   * straight-through.
    */
   fakeQuantizePerTensorAffine(scale: number, zeroPoint: number,
                               quantMin: number, quantMax: number): Tensor {
@@ -3235,7 +3497,9 @@ export class Tensor implements Node<Tensor> {
                                                    Tensor.zeros(this.shape)));
   }
 
-  /** 칸마다 다른 눈금으로. 축 하나를 따라 눈금이 바뀐다. */
+  /**
+   * A different scale per slot. The scale varies along one axis.
+   */
   fakeQuantizePerChannelAffine(scale: Tensor, zeroPoint: Tensor, axis: number,
                                quantMin: number, quantMax: number): Tensor {
     const line = new Array<number>(this.shape.length).fill(1);
@@ -3254,17 +3518,22 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 양자화된 텐서를 실수로. **우리에게는 언제나 항등이다.**
+   * A quantised tensor back to float. **For us it is always the identity.**
    *
-   * "지금 통과하는 항등" 과 다른 이유는 양자화 dtype 이 **영원히 없다**는 것이
-   * 이미 정해져 있어서다 — 받을 수 있는 입력이 실수뿐이고 실수에서 torch 도
-   * 항등이다(실측). **미분되지 않는다** — torch 가 `backward` 에서 멈춘다.
+   * The reason this differs from "an identity that happens to pass today"
+   * is that having no quantised dtype is **already settled as permanent** —
+   * the only input it can take is float, and on floats torch is the
+   * identity too (measured). **It is not differentiable** — torch stops at
+   * `backward`.
    */
   dequantize(): Tensor {
     return new Tensor(this.raw, this.shape, { dtype: this.dtype });
   }
 
-  /** 축 하나의 앞뒤에 상수를 덧댄다. 여러 축이면 축마다 부른다. */
+  /**
+   * Pads a constant before and after one axis. For several axes, call it
+   * per axis.
+   */
   pad(dim: number, before: number, after: number, value = 0): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -3301,7 +3570,9 @@ export class Tensor implements Node<Tensor> {
   // 색인 하나로 둘을 만든다. 어디서 왔는지를 정리해 두면 펴는 것은 모으기이고
   // 되접는 것은 그 자리로 더해 넣기라, 한쪽의 역방향이 곧 다른 쪽이다.
 
-  /** 창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`. */
+  /**
+   * Spreads windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
+   */
   unfoldIm2col(kernel: number | [number, number], dilation = 1, padding = 0,
                stride = 1): Tensor {
     const [n, c, h, w] = this.shape as [number, number, number, number];
@@ -3317,7 +3588,10 @@ export class Tensor implements Node<Tensor> {
       .reshape([n, rows, cols]);
   }
 
-  /** 편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다. */
+  /**
+   * Folds the spread back. **Overlapping positions are added** — that is
+   * what this function means.
+   */
   fold(outputSize: number | [number, number], kernel: number | [number, number],
        dilation = 1, padding = 0, stride = 1): Tensor {
     const n = this.shape[0] ?? 1;
@@ -3342,11 +3616,12 @@ export class Tensor implements Node<Tensor> {
   // ── 나머지 층이 쓰는 것들 ─────────────────────────────────────────────
 
   /**
-   * `y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. 가중치가 **세 축**이다.
+   * `y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. The weight has **three axes.**
    *
-   * `einsum` 을 안 부른다 — 그쪽이 이 파일을 들여오므로 서로 물게 된다. 두 걸음으로
-   * 나누면 이미 있는 것들로 적힌다: 먼저 `x₂` 를 `W` 에 태워 `(B, O, I)` 를 만들고,
-   * 그 다음 `x₁` 과 마지막 축에서 접는다.
+   * It does not call `einsum` — that side imports this file, so they would
+   * bite each other. Split into two steps it writes down with what already
+   * exists: first ride `x₂` through `W` to make `(B, O, I)`, then fold with
+   * `x₁` along the last axis.
    */
   bilinear(other: Tensor, weight: Tensor, bias: Tensor | null = null): Tensor {
     const [o, i, j] = weight.shape as [number, number, number];
@@ -3357,11 +3632,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 이웃 채널로 나눈다.
+   * Divides by neighbouring channels.
    *
-   * **창이 한쪽으로 치우쳐 있다.** 채널 `c` 의 창은 `[c − n//2, c + n − 1 − n//2]`
-   * 이고 `size=2` 면 `{c−1, c}` 다 — 가운데를 잡으면 값이 한 칸씩 밀리는데 크기가
-   * 같아서 모양으로는 안 보인다.
+   * **The window is off-centre.** Channel `c`'s window is `[c − n//2, c + n
+   * − 1 − n//2]`, so at `size=2` it is `{c−1, c}` — centring it shifts the
+   * values by one slot, and the size being the same means the shape does
+   * not show it.
    */
   localResponseNorm(size: number, alpha = 1e-4, beta = 0.75, k = 1.0): Tensor {
     const c = this.shape[1] ?? 1;
@@ -3382,9 +3658,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 0..1 사이 난수. `rrelu`·`gumbelSoftmax` 가 쓴다.
+   * Random numbers between 0 and 1. `rrelu` and `gumbelSoftmax` use it.
    *
-   * `manualSeed` 가 잡는 그 씨앗을 쓴다 — 같은 씨앗에 같은 뽑기가 나와야 재현이 된다.
+   * It uses the seed `manualSeed` catches — the same seed has to give the
+   * same draw for anything to reproduce.
    */
   static uniform(shape: readonly number[], lower = 0, upper = 1): Tensor {
     const n = numel(shape);
@@ -3400,11 +3677,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 축 하나에서 가장 큰 자리만 1 인 표.
+   * A table with 1 only at the largest position along one axis.
    *
-   * **동점을 `eq` 로 가르면 안 된다** — 같은 값이 둘이면 1 이 둘 나오고, 그러면
-   * `gumbelSoftmax(hard=true)` 의 답이 one-hot 이 아니게 된다. 난수에서는 거의 안
-   * 일어나지만 "거의" 는 보장이 아니다. 번호를 골라 그 자리에만 놓는다.
+   * **A tie must not be settled with `eq`** — two equal values give two
+   * ones, and then `gumbelSoftmax(hard=true)`'s answer is not one-hot. It
+   * almost never happens with random numbers, but "almost" is not a
+   * guarantee. It picks the index and places at that slot alone.
    */
   oneHotAlong(indices: Tensor, dim: number): Tensor {
     const shape = [...this.shape];
@@ -3415,10 +3693,10 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 음수 쪽 기울기를 뽑아 쓴다.
+   * Draws the negative-side slope and uses it.
    *
-   * **평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.
-   * 난수가 끼는 것은 학습 모드뿐이다.
+   * **In eval mode it settles at the middle** — with the defaults, `(1/8 +
+   * 1/3)/2 = 0.2292`. Randomness enters in training mode only.
    */
   rrelu(lower = 1 / 8, upper = 1 / 3, training = false): Tensor {
     if (!training) return this.leakyRelu((lower + upper) / 2);
@@ -3437,12 +3715,14 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 겹선형 확대.
+   * Bilinear enlargement.
    *
-   * **`alignCorners` 가 값을 바꾼다.** 참이면 양 끝을 못 박고 그 사이를 고르게
-   * 나누고, 거짓이면 칸의 가운데를 기준으로 잰다. `UpsamplingBilinear2d` 는 참이고
-   * `Upsample(mode='bilinear')` 의 기본값은 거짓이라, 이름만 보고 별명으로 두면
-   * 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다.
+   * **`alignCorners` changes the values.** True pins both ends and divides
+   * evenly between them; false measures from the centre of a cell.
+   * `UpsamplingBilinear2d` is true and `Upsample(mode='bilinear')` defaults
+   * to false, so treating them as aliases on the strength of the names
+   * misaligns the edges — the interior is close enough that an eye does not
+   * separate them.
    */
   interpolateBilinear(outH: number, outW: number, alignCorners: boolean): Tensor {
     const h = this.shape[2] ?? 1;
@@ -3469,10 +3749,13 @@ export class Tensor implements Node<Tensor> {
   // 역방향은 그 반대라, 이미 있는 것의 조합이다.
 
   /**
-   * `(N, C·r², H, W)` → `(N, C, H·r, W·r)`. 채널을 잘라 공간에 심는다.
+   * `(N, C·r², H, W)` → `(N, C, H·r, W·r)`. Cuts channels and plants them
+   * in space.
    *
-   * **엇갈리는 순서가 값의 전부다.** 채널을 `(C, r, r)` 로 갈라 두 `r` 을 각각 `H` 와
-   * `W` 뒤에 끼워 넣는다. 순서를 바꾸면 모양은 같고 그림만 뒤섞인다.
+   * **The interleaving order is the whole of the value.** The channels
+   * split into `(C, r, r)` and the two `r`s are inserted after `H` and
+   * after `W` respectively. Change the order and the shape is the same
+   * while the picture is scrambled.
    */
   pixelShuffle(upscaleFactor: number): Tensor {
     const r = upscaleFactor;
@@ -3482,7 +3765,9 @@ export class Tensor implements Node<Tensor> {
       .reshape([n, c / (r * r), h * r, w * r]);
   }
 
-  /** `pixelShuffle` 의 역. 공간을 잘라 채널에 쌓는다. */
+  /**
+   * The inverse of `pixelShuffle`. Cuts space and stacks it into channels.
+   */
   pixelUnshuffle(downscaleFactor: number): Tensor {
     const r = downscaleFactor;
     const [n, c, h, w] = this.shape as [number, number, number, number];
@@ -3492,10 +3777,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 채널을 묶음으로 갈라 **엇갈려 다시 놓는다.**
+   * Splits channels into groups and **interleaves them back.**
    *
-   * `[0,1,2,3]` 을 두 묶음으로 섞으면 `[0,2,1,3]` 이다 — 묶음별 합성곱 뒤에 정보가
-   * 묶음 안에만 갇히는 것을 푸는 자리라, 엇갈리는 방향이 값의 전부다.
+   * Shuffling `[0,1,2,3]` in two groups gives `[0,2,1,3]` — it is the place
+   * that releases information trapped inside groups after a grouped
+   * convolution, so the direction of the interleave is the whole of the
+   * value.
    */
   channelShuffle(groups: number): Tensor {
     const [n, c] = this.shape as [number, number];
@@ -3509,11 +3796,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * **원소가 아니라 채널을 떨군다.**
+   * **Drops channels, not elements.**
    *
-   * 이름이 `dropout` 옆에 있어서 "N 차원용" 으로 읽기 쉬운데 하는 일이 다르다 —
-   * 한 채널을 통째로 0 으로 만들거나 통째로 남긴다. 마스크를 `(N, C, 1, …)` 로 뽑아
-   * 브로드캐스트하면 그 뜻이 그대로 적힌다.
+   * Sitting next to `dropout`, the name reads as "the N-dimensional one",
+   * and the work is different — a whole channel goes to zero or stays
+   * whole. Drawing the mask as `(N, C, 1, …)` and broadcasting writes that
+   * meaning down directly.
    */
   featureDropout(p = 0.5, training = true): Tensor {
     if (!training || p === 0) return this;
@@ -3525,10 +3813,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * SELU 와 함께 쓰는 dropout. **떨군 자리에 0 을 안 넣는다.**
+   * The dropout used with SELU. **It does not put zeros where it drops.**
    *
-   * 음의 상수를 넣고 전체에 아핀 변환을 걸어 평균과 분산을 지킨다 — 0 을 넣으면
-   * SELU 의 자기정규화가 깨지는데, 값이 그럴듯해서 학습이 도는 동안은 안 보인다.
+   * It puts a negative constant and applies an affine transform over the
+   * whole so that mean and variance are preserved — zeros break SELU's
+   * self-normalisation, and the values are plausible enough that nothing
+   * shows while training runs.
    */
   alphaDropout(p = 0.5, training = false, perChannel = false): Tensor {
     if (!training || p === 0) return this;
@@ -3549,13 +3839,15 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `F.pad` 의 자리 — **마지막 축부터 (앞, 뒤) 순으로** 받는다.
+   * Where `F.pad` goes — taken **from the last axis, in (before, after)
+   * order.**
    *
-   * **짝의 개수와 랭크가 맞물린다.** 짝이 하나면 2·3 차원, 둘이면 3·4 차원, 셋이면
-   * 4·5 차원이라야 한다 — torch 가 그 밖을 거절한다. 아무 랭크나 받으면 축을 잘못
-   * 잡고도 통과한다.
+   * **The pair count and the rank interlock.** One pair needs rank 2 or 3,
+   * two pairs rank 3 or 4, three pairs rank 4 or 5 — torch refuses anything
+   * else. Accepting any rank lets a wrong axis pass.
    *
-   * 상수는 이미 있는 커널이 짧아서 그쪽으로 보내고, 나머지 셋은 색인으로 간다.
+   * Constant goes to the existing kernel because that is shorter; the other
+   * three go through indexing.
    */
   padND(padding: readonly number[], mode: PadMode = "constant", value = 0): Tensor {
     const rank = this.shape.length;
@@ -3594,11 +3886,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 기울기가 완만한 왼쪽.
+   * A gentle slope on the left.
    *
-   * `max(x, slope·x)` 로 두었더니 **x 가 정확히 0 인 자리에서 틀렸다.** 그 자리는 두
-   * 항이 동점이고 `maximum` 은 동점에서 반씩 나누므로 (1 + slope)/2 가 나오는데,
-   * torch 는 slope 를 준다 — `x > 0` 하나로 가르지 동점이라는 개념이 없다.
+   * Written as `max(x, slope·x)` it was **wrong exactly where x is 0.**
+   * There the two terms tie and `maximum` splits a tie in half, giving (1 +
+   * slope)/2, while torch gives the slope — it splits on `x > 0` alone and
+   * has no notion of a tie.
    */
   leakyRelu(slope = 0.01): Tensor {
     const s = f32lit(slope);
@@ -3609,10 +3902,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * 음수 쪽이 지수로 눕는다. **α 를 받는다** — 표의 `elu` 는 α=1 로 구워져 있다.
+   * The negative side lies down exponentially. **It takes α** — the table's
+   * `elu` is baked at α=1.
    *
-   * `nn.ELU(0.5)` 가 torch 에 있는 꼴이라, 인자 없는 판만 두면 그 줄이 멈춘다.
-   * α=1 에서는 표의 것과 값이 같으므로 **α 를 안 흔들면 둘을 못 가른다.**
+   * `nn.ELU(0.5)` is a form that exists in torch, so keeping only the
+   * argument-free version stops that line. At α=1 the value equals the
+   * table's, so **without varying α the two cannot be told apart.**
    */
   elu(alpha = 1.0): Tensor {
     const a = f32lit(alpha);
@@ -3623,10 +3918,12 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * `approximate="tanh"` 쪽 GELU. 표의 `gelu` 는 **정확형**(erf)이다.
+   * The `approximate="tanh"` GELU. The table's `gelu` is **the exact form**
+   * (erf).
    *
-   * 최대차가 1e-4 언저리라 "거의 같으니 하나로 둔다" 가 통할 뻔한 자리다. torch 가
-   * 둘을 나눠 둔 이유는 tanh 쪽이 빠르기 때문이지 같아서가 아니다.
+   * The maximum difference is around 1e-4, so it is a place where "near
+   * enough, keep one" almost got through. torch keeps them apart because
+   * the tanh one is faster, not because they are the same.
    */
   geluTanh(): Tensor {
     return this.unary(unaryWith("geluTanh", () => ({
@@ -3644,9 +3941,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * ELU 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.
+   * Unlike ELU it **divides** the negative side by α before taking the
+   * exponential.
    *
-   * α=1 이면 ELU 와 같은 값이라, α 를 안 주고 재면 둘을 못 가른다.
+   * At α=1 the value equals ELU's, so measuring without giving α cannot
+   * tell them apart.
    */
   celu(alpha = 1.0): Tensor {
     const a = f32lit(alpha);
@@ -3656,7 +3955,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     })));
   }
 
-  /** |x| > λ 면 그대로, 아니면 0. **경계는 0 쪽이다**(`>` 이지 `>=` 가 아니다). */
+  /**
+   * |x| > λ passes through, otherwise 0. **The boundary goes to the zero side** (`>`, not `>=`).
+   */
   hardshrink(lambd = 0.5): Tensor {
     const l = f32lit(lambd);
     return this.unary(unaryWith(`hardshrink<${l}>`, () => ({
@@ -3665,7 +3966,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     })));
   }
 
-  /** λ 만큼 **원점 쪽으로 당긴다.** `hardshrink` 와 달리 값이 이어진다. */
+  /**
+   * Pulls **towards the origin** by λ. Unlike `hardshrink` the values stay
+   * continuous.
+   */
   softshrink(lambd = 0.5): Tensor {
     const l = f32lit(lambd);
     return this.unary(unaryWith(`softshrink<${l}>`, () => ({
@@ -3684,9 +3988,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * (1/β)·log(1+e^{βx}). **βx 가 threshold 를 넘으면 그냥 x 다.**
+   * (1/β)·log(1+e^{βx}). **Past the threshold, βx is simply x.**
    *
-   * 그 갈래를 빼면 큰 입력에서 `exp` 가 넘치고, 그 뒤 기울기가 전부 NaN 이 된다.
+   * Leave that branch out and `exp` overflows on large inputs, and every
+   * gradient after it is NaN.
    */
   softplus(beta = 1.0, threshold = 20.0): Tensor {
     const b = f32lit(beta);
@@ -3697,7 +4002,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     })));
   }
 
-  /** x > t 면 그대로, 아니면 `value`. **경계는 value 쪽이다.** */
+  /**
+   * x > t passes through, otherwise `value`. **The boundary goes to the
+   * value side.**
+   */
   threshold(t: number, value: number): Tensor {
     const th = f32lit(t);
     const v = f32lit(value);
@@ -3708,13 +4016,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 음수 쪽 기울기가 **학습된다.**
+   * The negative-side slope is **learned.**
    *
-   * **정확히 0 은 음수 쪽이다.** 순방향은 어느 쪽으로 놓아도 0 이라 안 보이는데
-   * 기울기는 갈린다 — torch 는 `x > 0` 일 때만 1 을 준다. 코어에서 `x < 0` 으로
-   * 갈랐다가 그 한 점에서 최대차 3.75 를 냈다.
+   * **Exactly zero belongs to the negative side.** The forward is 0 either
+   * way so nothing shows, while the gradient diverges — torch gives 1 only
+   * where `x > 0`. Splitting on `x < 0` in the core produced a maximum
+   * difference of 3.75 at that single point.
    *
-   * 가중치가 학습되므로 이항으로 엮는다 — 상수로 구우면 기울기가 안 흐른다.
+   * The weight is learned, so it is wired as a binary operation — baked as
+   * a constant, no gradient flows.
    */
   prelu(weight: Tensor): Tensor {
     // `gt` 의 기울기는 0 이다 — 가림막이 기울기를 나르면 안 된다.
@@ -3725,7 +4035,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mul(pos).add(this.mul(weight).mul(neg));
   }
 
-  /** 축을 반으로 갈라 `a · σ(b)`. 활성함수 중 유일하게 원소별이 아니다. */
+  /**
+   * Splits the axis in half and gives `a · σ(b)`. The only activation that
+   * is not elementwise.
+   */
   glu(dim = -1): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -3737,20 +4050,26 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.narrow(axis, 0, half).mul(this.narrow(axis, half, half).sigmoid());
   }
 
-  /** softmax(−x). **부호를 빠뜨리면 softmax 와 같아진다** — 값으로만 갈린다. */
+  /**
+   * softmax(−x). **Miss the sign and it becomes softmax** — only the values
+   * separate them.
+   */
   softmin(dim = -1): Tensor {
     return this.neg().softmax(dim);
   }
 
   /**
-   * 자리를 골라 떨구고 **살아남은 값을 `1/(1-p)` 로 키운다.**
+   * Picks slots to drop and **scales the survivors by `1/(1-p)`.**
    *
-   * 키우는 것이 요점이다 — 그래야 학습 때의 기댓값이 추론 때와 같고, 빼먹으면 두
-   * 모드의 크기가 안 맞는다. `p=1` 은 따로 가른다: `1/(1-p)` 가 0 으로 나누기가 되어
-   * NaN 이 나오고, NaN 은 자기 자신과도 달라서 그 뒤로 아무 비교도 통과 못 한다.
+   * The scaling is the point — it is what makes the expectation during
+   * training match inference, and leaving it out makes the two modes differ
+   * in magnitude. `p=1` is branched separately: `1/(1-p)` becomes a
+   * division by zero and produces NaN, and NaN differs even from itself, so
+   * no comparison after it passes.
    *
-   * **부를 때마다 다른 자리를 떨군다.** 씨앗을 하나 올려 가며 쓴다 — 한 번 뽑아
-   * 캐시하면 매 스텝 같은 자리가 죽고, 그것은 dropout 이 아니다.
+   * **It drops different slots on every call.** The seed is advanced as it
+   * goes — drawn once and cached, the same slots die every step, and that
+   * is not dropout.
    */
   dropout(p = 0.5, training = true): Tensor {
     if (!training || p === 0) return this;
@@ -3770,16 +4089,24 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mul(new Tensor(mask, this.shape));
   }
 
-  /** dropout 이 쓰는 씨앗. 부를 때마다 오른다 — 같은 자리를 두 번 떨구지 않으려고. */
+  /**
+   * The seed dropout uses. It rises on every call, so as not to drop the
+   * same slots twice.
+   */
   static dropoutSeed = 1;
 
-  /** 축을 따라 길이를 1 로. `eps` 는 0 벡터에서 나눗셈이 터지는 것을 막는다. */
+  /**
+   * Length to 1 along an axis. `eps` stops the division blowing up on a
+   * zero vector.
+   */
   normalize(dim = 1, eps = 1e-12): Tensor {
     const len = this.square().sumDim(dim, true).sqrt();
     return this.div(len.binary("maximum", Tensor.full([], eps)));
   }
 
-  /** 두 묶음의 방향이 얼마나 같은가. */
+  /**
+   * How closely two bundles point the same way.
+   */
   cosineSimilarity(other: Tensor, dim = 1, eps = 1e-8): Tensor {
     const dotted = this.mul(other).sumDim(dim, false);
     const la = this.square().sumDim(dim, false).sqrt();
@@ -3788,11 +4115,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 절대 오차.
+   * Absolute error.
    *
-   * **`reduction` 이 여기 없었다.** 드물게 쓰는 손실 열셋은 전부 받고 있었는데
-   * 제일 많이 쓰는 넷이 안 받았다 — 나중에 쓴 것이 torch 서명을 따랐고 처음 쓴 것이
-   * 안 고쳐졌다. 튜토리얼이 기본값만 쓰니 표도 안 물었다.
+   * **`reduction` was missing here.** Thirteen rarely-used losses all took
+   * it and the four most used did not — the ones written later followed
+   * torch's signature and the ones written first were never fixed. The
+   * tutorials use the default, so the table never asked either.
    */
   l1Loss(target: Tensor, reduction: Reduction = "mean"): Tensor {
     return this.sub(target).abs().reduceAs(reduction);
@@ -3802,17 +4130,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * 작을 때는 제곱, 클 때는 절대값. **원점에서 미분이 이어진다** — 그것이 이 손실을
    * 쓰는 이유이므로 `beta` 를 경계로 두 식을 붙인다.
    */
-  /** 제곱 오차. */
+  /**
+   * Squared error.
+   */
   mseLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
     return this.sub(target).square().reduceAs(reduction);
   }
 
   /**
-   * 로짓을 그대로 받는 이진 교차엔트로피.
+   * Binary cross-entropy taking logits directly.
    *
-   * **`sigmoid` 를 먼저 구해서 로그를 취하지 않는다.** 그러면 확신이 큰 자리에서
-   * `log(0)` 이 되어 손실이 무한대가 된다. `max(x,0) − x·y + log(1+exp(−|x|))` 는
-   * 같은 값을 넘침 없이 낸다 — 이 함수가 따로 있는 이유가 그것이다.
+   * **It does not compute `sigmoid` first and take the log.** That gives
+   * `log(0)` where the model is confident and the loss becomes infinite.
+   * `max(x,0) − x·y + log(1+exp(−|x|))` gives the same value without
+   * overflow — that is why this function exists separately.
    */
   bceWithLogits(target: Tensor, reduction: Reduction = "mean"): Tensor {
     const zero = Tensor.full([], 0);
@@ -3822,8 +4153,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 마지막 축들을 평균 0, 분산 1 로. **분산은 편향추정(n 으로 나눔)이다** —
-   * torch 의 `layer_norm` 이 그렇고, `var()` 의 기본과 다르다.
+   * Trailing axes to mean 0, variance 1. **The variance is the biased
+   * estimate (divided by n)** — that is torch's `layer_norm`, and it
+   * differs from `var()`'s default.
    */
   layerNorm(dim = -1, eps = 1e-5): Tensor {
     const m = this.mean(dim, true);
@@ -3833,11 +4165,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **뒤쪽 `dims` 개 축을 한꺼번에** 접는다. `layerNorm` 은 축 하나만 접는다.
+   * Folds the **last `dims` axes together.** `layerNorm` folds one axis
+   * only.
    *
-   * torch 의 `LayerNorm(normalized_shape)` 이 접는 축의 **개수**를 그 모양의 길이로
-   * 정하는데, 축 하나짜리(`LayerNorm(4)`)로만 재면 둘이 같은 답을 낸다 — 그래서
-   * 오래 안 보였다. `(3, 4)` 를 주면 갈린다.
+   * torch's `LayerNorm(normalized_shape)` decides **how many** axes to fold
+   * from the length of that shape, and measured with a single axis
+   * (`LayerNorm(4)`) the two give the same answer — which is why it went
+   * unseen for a long time. Given `(3, 4)` they diverge.
    */
   layerNormOver(dims = 1, eps = 1e-5): Tensor {
     if (dims <= 1) return this.layerNorm(-1, eps);
@@ -3848,24 +4182,29 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 배치 축을 따라 정규화. 학습 모드 — 이동 통계를 안 쓰고 이 배치로 센다.
+   * Normalises along the batch axis. Training mode — it does not use
+   * running statistics and counts from this batch.
    *
-   * `layer_norm` 과 접는 축만 다르다. 축이 다르면 접는 축을 바꾸면 되지, 함수를
-   * 따로 세울 일이 아니다.
+   * It differs from `layer_norm` only in which axis is folded. A different
+   * axis means changing the folded axis, not standing up a separate
+   * function.
    */
   batchNorm(dim = 0, eps = 1e-5): Tensor {
     return this.layerNorm(dim, eps);
   }
 
   /**
-   * 채널을 그룹으로 묶어 정규화.
+   * Normalises with the channels bundled into groups.
    *
-   * `layerNorm` 과 **접는 구간만** 다르다. 그룹 수가 1 이면 채널 전체가 한 묶음이라
-   * LayerNorm 이고, 채널 수와 같으면 채널마다 따로라 InstanceNorm 이다 — 셋은 서로의
-   * 특수한 경우이고 묶는 규칙이 틀리면 셋 중 둘이 같아진다.
+   * It differs from `layerNorm` **only in the span it folds.** With one
+   * group the whole channel set is one bundle, which is LayerNorm; with as
+   * many groups as channels it is per channel, which is InstanceNorm — the
+   * three are special cases of one another, and a wrong bundling rule makes
+   * two of the three identical.
    *
-   * 묶는 구간을 마지막 축 하나로 눕혀 놓고 접는다. 그러면 `layerNorm` 의 식을 그대로
-   * 쓰므로 정규화 식이 한 군데에만 있다.
+   * The bundled span is laid down onto a single last axis and folded. That
+   * way `layerNorm`'s formula is used directly, and the normalisation
+   * formula lives in one place.
    */
   groupNorm(numGroups: number, eps = 1e-5): Tensor {
     const N = this.shape[0] ?? 1;
@@ -3877,17 +4216,23 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.reshape([N, numGroups, inner]).layerNorm(-1, eps).reshape(this.shape);
   }
 
-  /** 표본마다·채널마다 따로. 그룹 수를 채널 수로 준 `groupNorm` 이다. */
+  /**
+   * Per sample and per channel. `groupNorm` with the group count set to the
+   * channel count.
+   */
   instanceNorm(eps = 1e-5): Tensor {
     return this.groupNorm(this.shape[1] ?? 1, eps);
   }
 
   /**
-   * **평균을 안 뺀다.** 그것이 `layerNorm` 과의 유일한 차이다.
+   * **It does not subtract the mean.** That is the only difference from
+   * `layerNorm`.
    *
-   * 기본 eps 가 `1e-5` 가 아니라 f32 의 기계 엡실론이다 — torch 가 그렇다. 다른
-   * 정규화 층에 맞춰 `1e-5` 로 적었더니 순방향은 허용 오차 안이고 **기울기만**
-   * 최대차 2.26e-02 로 갈렸다. 분산이 작은 자리에서 증폭된다.
+   * The default eps is f32's machine epsilon rather than `1e-5` — as in
+   * torch. Written as `1e-5` to match the other normalisation layers, the
+   * forward stayed inside tolerance and **only the gradient** diverged, at
+   * a maximum difference of 2.26e-02. It is amplified where the variance is
+   * small.
    */
   rmsNorm(dims = 1, eps = 1.1920928955078125e-7): Tensor {
     const rank = this.shape.length;
@@ -3898,7 +4243,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return out.reshape(this.shape);
   }
 
-  /** `x @ Wᵀ`. torch 의 `F.linear` 는 가중치를 (출력, 입력) 으로 받는다. */
+  /**
+   * `x @ Wᵀ`. torch's `F.linear` takes the weight as (out, in).
+   */
   linear(weight: Tensor): Tensor {
     return this.mm(weight.transpose());
   }
@@ -3932,10 +4279,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **`smoothL1Loss` 와 δ=1 에서만 같다.**
+   * **It equals `smoothL1Loss` only at δ=1.**
    *
-   * 실제 관계는 `huber(δ) = δ · smoothL1(β=δ)` 다. 기본값으로만 재면 둘을 같은
-   * 함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.
+   * The real relation is `huber(δ) = δ · smoothL1(β=δ)`. Measured at the
+   * defaults alone, treating them as one function passes, so the golden
+   * cases ask with δ varied.
    */
   huberLoss(target: Tensor, delta = 1.0, reduction: Reduction = "mean"): Tensor {
     const d = this.sub(target);
@@ -3947,10 +4295,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `target · (log target − this)`. **이쪽은 이미 로그**여야 한다.
+   * `target · (log target − this)`. **This side must already be in logs.**
    *
-   * **`reduction` 이 넷이다.** `mean` 은 원소 수로 나누고 `batchmean` 은 배치 크기로
-   * 나눈다 — 수학적 정의에 맞는 것은 뒤쪽이고, torch 자신도 바꾸겠다고 경고한다.
+   * **There are four reductions.** `mean` divides by the element count and
+   * `batchmean` by the batch size — the latter is the one that matches the
+   * mathematical definition, and torch itself warns that it intends to
+   * change.
    */
   klDiv(
     target: Tensor, reduction: Reduction | "batchmean" = "mean", logTarget = false,
@@ -3965,10 +4315,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 포아송 음의 로그가능도.
+   * The Poisson negative log-likelihood.
    *
-   * **스털링 보정은 `target > 1` 일 때만 더한다** — 조건 없이 늘 더하면 target 이
-   * 작은 자리에서만 틀린다(실측으로 확인했다).
+   * **Stirling's correction is added only where `target > 1`** — added
+   * unconditionally it is wrong only where the target is small (confirmed
+   * by measurement).
    */
   poissonNllLoss(
     target: Tensor, logInput = true, full = false, eps = 1e-8,
@@ -3989,9 +4340,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 가우스 음의 로그가능도.
+   * The Gaussian negative log-likelihood.
    *
-   * **분산을 `eps` 로 자른다.** 안 자르면 0 으로 나눠 무한대가 된다.
+   * **The variance is clamped by `eps`.** Unclamped it divides by zero and
+   * goes to infinity.
    */
   gaussianNllLoss(
     target: Tensor, variance: Tensor, full = false, eps = 1e-6,
@@ -4007,7 +4359,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return out.reduceAs(reduction);
   }
 
-  /** `max(0, −y·(x₁ − x₂) + margin)`. */
+  /**
+   * `max(0, −y·(x₁ − x₂) + margin)`.
+   */
   marginRankingLoss(
     other: Tensor, target: Tensor, margin = 0.0, reduction: Reduction = "mean",
   ): Tensor {
@@ -4015,7 +4369,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       .binary("add", Tensor.full([], margin)).unary("relu").reduceAs(reduction);
   }
 
-  /** `y=1` 이면 `1 − cos`, `y=−1` 이면 `max(0, cos − margin)`. */
+  /**
+   * `1 − cos` at `y=1`, and `max(0, cos − margin)` at `y=−1`.
+   */
   cosineEmbeddingLoss(
     other: Tensor, target: Tensor, margin = 0.0, reduction: Reduction = "mean",
   ): Tensor {
@@ -4027,12 +4383,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `y=1` 이면 `x` 그대로, `y=−1` 이면 `max(0, margin − x)`.
+   * `x` itself at `y=1`, and `max(0, margin − x)` at `y=−1`.
    *
-   * **둘로 가르는 것이 아니라 둘을 더한다.** torch 는 `y ≠ 1` 인 자리에 여백 항을,
-   * `y ≠ −1` 인 자리에 `x` 를 놓고 **합한다** — ±1 에서는 한쪽만 켜져 평소 식과
-   * 같지만 `y=0` 에서는 **둘 다** 켜진다. `y > 0` 으로 갈라 놓았더니 거기서 조용히
-   * 갈렸고, `sign()` 은 0 을 만든다.
+   * **It is not a split between the two but a sum of them.** torch puts the
+   * margin term where `y ≠ 1` and `x` where `y ≠ −1` and **adds them** — at
+   * ±1 only one is on and it matches the usual formula, but at `y=0`
+   * **both** are on. Split on `y > 0` it diverged quietly there, and
+   * `sign()` does produce 0.
    */
   hingeEmbeddingLoss(
     target: Tensor, margin = 1.0, reduction: Reduction = "mean",
@@ -4044,17 +4401,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return marginPart.add(this.mul(notNeg)).reduceAs(reduction);
   }
 
-  /** `log(1 + e^{−y·x})`. `softplus` 로 가면 큰 값에서 안 넘친다. */
+  /**
+   * `log(1 + e^{−y·x})`. Going through `softplus` keeps it from overflowing
+   * at large values.
+   */
   softMarginLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
     return target.mul(this).neg().softplus().reduceAs(reduction);
   }
 
   /**
-   * 짝지어진 두 줄 사이의 거리.
+   * The distance between two paired rows.
    *
-   * **`eps` 는 결과가 아니라 차에 더한다.** `p=1` 로 차가 정확히 1.0 인 자리를
-   * 물으면 1.0000020 이 나온다(= 1 + 2·1e-6) — 결과에 더한다고 읽으면 1.000001 이
-   * 되어 자릿수 하나가 갈린다. 실측으로 확인했다.
+   * **`eps` is added to the difference, not to the result.** Asked at `p=1`
+   * where the difference is exactly 1.0, it gives 1.0000020 (= 1 + 2·1e-6)
+   * — read as added to the result it would be 1.000001, one digit out.
+   * Confirmed by measurement.
    */
   pairwiseDistance(other: Tensor, p = 2.0, eps = 1e-6, keepdim = false): Tensor {
     const diff = this.sub(other).binary("add", Tensor.full([], eps));
@@ -4062,7 +4423,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return keepdim ? out.reshape([...out.shape, 1]) : out;
   }
 
-  /** 한 묶음 안의 **모든 짝** 사이 거리. 위 삼각만 준다. */
+  /**
+   * The distance between **every pair** within one bundle. It gives the
+   * upper triangle only.
+   */
   pdist(p = 2.0): Tensor {
     const n = this.shape[0] ?? 0;
     const rows: number[] = [];
@@ -4075,7 +4439,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return pick(rows).sub(pick(cols)).vectorNorm(p, 1);
   }
 
-  /** `max(0, d(a,p) − d(a,n) + margin)`. */
+  /**
+   * `max(0, d(a,p) − d(a,n) + margin)`.
+   */
   tripletMarginLoss(
     positive: Tensor, negative: Tensor, margin = 1.0, p = 2.0, eps = 1e-6,
     swap = false, reduction: Reduction = "mean",
@@ -4088,7 +4454,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       .reduceAs(reduction);
   }
 
-  /** 자리마다 독립인 이진 분류를 **반 전체로 평균**한다. */
+  /**
+   * Independent binary classification per slot, **averaged over the whole
+   * class set.**
+   */
   multilabelSoftMarginLoss(
     target: Tensor, reduction: Reduction = "mean",
   ): Tensor {
@@ -4099,10 +4468,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 정답 자리와 나머지 사이의 여백.
+   * The margin between the target position and the rest.
    *
-   * **반의 개수로 나눈다** — 견준 짝의 수가 아니다. 정답 자리도 분모에 들어간다는
-   * 뜻이고, 짝의 수로 나누면 반이 셋일 때 3/2 배가 나온다.
+   * **It divides by the number of classes**, not the number of pairs
+   * compared. That means the target position is in the denominator too, and
+   * dividing by the pair count gives 3/2 times too much with three classes.
    */
   multiMarginLoss(
     target: Tensor, p = 1, margin = 1.0, weight: Tensor | null = null,
@@ -4123,15 +4493,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **표적이 자리 목록이고 −1 이 끝을 뜻한다.**
+   * **The target is a list of positions, and −1 marks the end.**
    *
-   * `[3, 0, -1, 1]` 은 "3 번과 0 번이 정답" 이라는 뜻이고 뒤의 1 은 안 읽는다. 그
-   * 규약을 안 지키면 −1 을 반의 하나로 세거나 끝난 뒤를 계속 읽는다.
+   * `[3, 0, -1, 1]` means "3 and 0 are correct", and the trailing 1 is not
+   * read. Break that convention and you either count −1 as one of the
+   * classes or keep reading past the end.
    *
-   * 어디까지 읽을지는 **누적합**으로 정한다 — `−1` 을 만난 뒤로는 전부 꺼진다. 그
-   * 뒤 정답 자리를 0/1 로 흩어 담으면 CPU 로 읽어 올 일이 없다. 덮어쓰기가 아니라
-   * **모아 더하기**로 담는 이유는, 끝난 뒤의 자리가 clamp 되어 앞의 1 을 지울 수
-   * 있기 때문이다.
+   * How far to read is decided by **a cumulative sum** — everything after a
+   * `−1` is switched off. Scattering the target positions as 0/1 after that
+   * means never reading back to the CPU. The reason it scatters by
+   * **accumulating** rather than overwriting is that a slot past the end,
+   * clamped, could otherwise erase a 1 in front of it.
    */
   multilabelMarginLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
     const rows = this.shape[0] ?? 0;
@@ -4152,10 +4524,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 배치 행렬곱. `(B, N, K) × (B, K, M)`.
+   * Batched matrix multiply. `(B, N, K) × (B, K, M)`.
    *
-   * 배치를 풀어 `mm` 을 되풀이한 뒤 쌓는다 — 배치 커널을 따로 두면 `mm` 과 두 벌을
-   * 고치게 된다. 배치가 커지면 그때 커널을 세울 자리다.
+   * It unpacks the batch, repeats `mm`, and stacks — a separate batched
+   * kernel would mean fixing two copies alongside `mm`. When batches grow
+   * large, that is the place to stand a kernel up.
    */
   bmm(other: Tensor): Tensor {
     if (this.shape.length !== 3 || other.shape.length !== 3) {
@@ -4201,42 +4574,57 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
   }
 
-  /** `β·this + α·(mat1 @ mat2)`. `this` 는 결과 모양으로 퍼진다. */
+  /**
+   * `β·this + α·(mat1 @ mat2)`. `this` spreads to the result's shape.
+   */
   addmm(mat1: Tensor, mat2: Tensor, beta = 1, alpha = 1): Tensor {
     return this.blend(mat1.mm(mat2), beta, alpha);
   }
 
   /**
-   * **배치를 합친다** — 곱한 뒤 배치 축을 더해 2차원을 낸다.
+   * **It merges the batch** — multiplies, then sums the batch axis to give
+   * two dimensions.
    *
-   * `baddbmm` 과 이름이 한 글자 다르고 결과 차수가 다르다. 배치가 1 이면 둘이 같아
-   * 보이므로 케이스는 배치를 둘 이상으로 둔다.
+   * One character from `baddbmm` and a different result rank. With a batch
+   * of 1 the two look the same, so the cases keep the batch above one.
    */
   addbmm(batch1: Tensor, batch2: Tensor, beta = 1, alpha = 1): Tensor {
     return this.blend(batch1.bmm(batch2).sumDim(0), beta, alpha);
   }
 
-  /** **배치를 지킨다.** `addbmm` 과 여기서 갈린다. */
+  /**
+   * **It keeps the batch.** That is where it parts from `addbmm`.
+   */
   baddbmm(batch1: Tensor, batch2: Tensor, beta = 1, alpha = 1): Tensor {
     return this.blend(batch1.bmm(batch2), beta, alpha);
   }
 
-  /** `β·this + α·(mat @ vec)`. 결과가 1차원이다. */
+  /**
+   * `β·this + α·(mat @ vec)`. The result is one-dimensional.
+   */
   addmv(mat: Tensor, vec: Tensor, beta = 1, alpha = 1): Tensor {
     return this.blend(mat.mv(vec), beta, alpha);
   }
 
-  /** `β·this + α·(vec1 ⊗ vec2)`. 바깥곱이라 결과가 2차원이다. */
+  /**
+   * `β·this + α·(vec1 ⊗ vec2)`. An outer product, so the result is
+   * two-dimensional.
+   */
   addr(vec1: Tensor, vec2: Tensor, beta = 1, alpha = 1): Tensor {
     return this.blend(vec1.outer(vec2), beta, alpha);
   }
 
-  /** `this + value·(t1 · t2)`. **`beta` 가 없다** — `this` 의 계수는 늘 1 이다. */
+  /**
+   * `this + value·(t1 · t2)`. **There is no `beta`** — `this`'s coefficient
+   * is always 1.
+   */
   addcmul(tensor1: Tensor, tensor2: Tensor, value = 1): Tensor {
     return this.blend(tensor1.mul(tensor2), 1, value);
   }
 
-  /** `this + value·(t1 / t2)`. 옵티마이저가 갱신을 적을 때 쓰는 꼴이다. */
+  /**
+   * `this + value·(t1 / t2)`. The form optimizers use to write an update.
+   */
   addcdiv(tensor1: Tensor, tensor2: Tensor, value = 1): Tensor {
     return this.blend(tensor1.div(tensor2), 1, value);
   }
@@ -4270,9 +4658,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 나머지. **torch 의 `fmod` 는 피제수의 부호를 따른다** — 파이썬의 `%` 와 다르다.
+   * The remainder. **torch's `fmod` follows the sign of the dividend** —
+   * unlike Python's `%`.
    *
-   * 기울기는 피제수로 1 이 흐른다. 제수 쪽은 계단이라 안 흐른다.
+   * Gradient flows to the dividend as 1. The divisor side is a staircase,
+   * so nothing flows.
    */
   fmod(divisor: number): Tensor {
     const d = Tensor.full([], divisor);
@@ -4281,14 +4671,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 나머지 — **`fmod` 와 부호가 다르다.**
+   * The remainder — **with a different sign from `fmod`.**
    *
-   * torch 의 `remainder`(그리고 파이썬·torch 의 `%`)는 **제수**의 부호를 따르고
-   * `fmod` 는 피제수의 부호를 따른다. `-7` 을 `3` 으로 나눈 나머지가 이쪽은 2 이고
-   * 저쪽은 -1 이다. 둘 다 "나머지" 라고 불리는 것이 함정이고, JS 의 `%` 는 `fmod`
-   * 쪽이라 그것을 그대로 쓰면 음수 입력에서만 조용히 갈린다.
+   * torch's `remainder` (and Python's and torch's `%`) follows the sign of
+   * **the divisor** while `fmod` follows the dividend. The remainder of
+   * `-7` divided by `3` is 2 on this side and -1 on that. Both being called
+   * "the remainder" is the trap, and JavaScript's `%` is the `fmod` one, so
+   * using it directly diverges quietly on negative inputs only.
    *
-   * 잘라내기(`trunc`)냐 내림(`floor`)이냐 하나 차이다.
+   * The whole difference is truncation (`trunc`) versus flooring (`floor`).
    */
   remainder(divisor: Tensor | number): Tensor {
     // **텐서도 받는다.** torch 는 `x.remainder(y)` 를 쓰고, 수만 받으면 그 줄이
@@ -4299,7 +4690,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.sub(q.binary("mul", d));
   }
 
-  /** 아래로만 자른다. torch 의 `clamp(min=…)` 이다. */
+  /**
+   * Cuts from below only. torch's `clamp(min=…)`.
+   */
   clampMin(low: number): Tensor {
     const lo = f32lit(low);
     return this.unary(unaryWith(`clampMin<${lo}>`, () => ({
@@ -4308,7 +4701,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     })));
   }
 
-  /** 위로만 자른다. torch 의 `clamp(max=…)` 이다. */
+  /**
+   * Cuts from above only. torch's `clamp(max=…)`.
+   */
   clampMax(high: number): Tensor {
     const hi = f32lit(high);
     return this.unary(unaryWith(`clampMax<${hi}>`, () => ({
@@ -4318,11 +4713,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 길이가 다른 것들을 한 배치에 담는다.
+   * Puts things of differing lengths into one batch.
    *
-   * 기본은 `(가장 긴 길이, 개수, …)` 이고, `batchFirst` 면 앞의 둘이 바뀐다.
-   * **기울기가 각 조각으로 되돌아간다** — 덧댄 자리는 0 이므로 `pad` 의 역방향이
-   * 잘라내 준다.
+   * The default is `(longest length, count, …)`, and with `batchFirst` the
+   * first two swap. **Gradient returns to each piece** — the padded region
+   * is zero, so `pad`'s backward trims it away.
    */
   static padSequence(
     parts: readonly Tensor[],
@@ -4337,7 +4732,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return batchFirst ? stacked : stacked.swapaxes(0, 1);
   }
 
-  /** 번호를 자리 표시로. `n` 칸 중 자기 자리만 1 이다. */
+  /**
+   * An index as a position marker. One of `n` slots, 1 at its own.
+   */
   oneHot(classes: number): Tensor {
     const flat = this.reshape([this.size, 1]);
     const ids = Tensor.arange(classes).reshape([1, classes]);
@@ -4346,10 +4743,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 음의 로그가능도. `this` 는 이미 `log_softmax` 를 지난 것이어야 한다.
+   * The negative log-likelihood. `this` must already have been through
+   * `log_softmax`.
    *
-   * **정답 자리를 뽑는 곳에서 그래프가 끊기기 쉽다.** 값만 떼어 돌려주면 뽑은 자리로
-   * 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.
+   * **The graph breaks easily where the target position is extracted.**
+   * Return the value detached and no gradient reaches the extracted slot,
+   * making the whole classification loss non-differentiable.
    */
   nllLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
     // **접기 전에 표본별 값을 만든다.** 뽑자마자 평균을 내면 `reduction: "none"`
@@ -4359,7 +4758,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return each.reduceAs(reduction);
   }
 
-  /** 로짓에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다. */
+  /**
+   * Straight from logits. `log_softmax` and `nll_loss` joined.
+   */
   crossEntropy(target: Tensor, reduction: Reduction = "mean"): Tensor {
     return this.logSoftmax(-1).nllLoss(target, reduction);
   }
@@ -4370,7 +4771,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // 하므로 값을 한 번 읽어 와야 하고, 그래서 전부 비동기다. 자매도 같은 이유로
   // 여기서 CPU 를 왕복한다.
 
-  /** 참인 자리만 골라 1차원으로. **기울기가 고른 자리로 흐른다.** */
+  /**
+   * Picks the true positions into one dimension. **Gradient flows to the
+   * picked positions.**
+   */
   async maskedSelect(mask: Tensor): Promise<Tensor> {
     const m = await mask.toArray();
     const picks: number[] = [];
@@ -4378,7 +4782,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.flat().indexSelect(0, Tensor.from(picks, [picks.length]));
   }
 
-  /** 0 이 아닌 자리의 좌표. 자리는 값이 아니라 기울기가 없다. */
+  /**
+   * The coordinates of the non-zeros. Positions are not values, so there is
+   * no gradient.
+   */
   async nonzero(): Promise<Tensor> {
     const values = await this.toArray();
     const rank = Math.max(1, this.shape.length);
@@ -4400,17 +4807,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.from(rows, [count, rank], { dtype: "int64" });
   }
 
-  /** `nonzero` 와 같다 — torch 가 이름을 둘 다 갖는다. */
+  /**
+   * The same as `nonzero` — torch carries both names.
+   */
   async argwhere(): Promise<Tensor> {
     return this.nonzero();
   }
 
   /**
-   * 0 이 아닌 자리를 **정해진 개수만큼.** 모자라면 채우고 넘치면 자른다.
+   * The non-zero positions, **a fixed number of them.** Short, it pads;
+   * over, it cuts.
    *
-   * `nonzero` 는 결과 크기가 값에 달려 GPU 를 한 번 읽어야 하는데, 이쪽은 크기를 미리
-   * 주므로 그 왕복이 **원리상** 필요 없다 — 그 자리를 위해 있는 이름이다. 여기서는
-   * 아직 읽는다(어느 자리가 0 이 아닌지는 값이라서). 커널로 옮길 자리다.
+   * `nonzero`'s result size depends on the values and so needs one read off
+   * the GPU, whereas this one is given the size up front and **in
+   * principle** needs no such round trip — that is the name's whole reason.
+   * Here it still reads (which positions are non-zero is a value). A place
+   * to move into a kernel.
    */
   async nonzeroStatic(size: number, fillValue = -1): Promise<Tensor> {
     const found = await this.nonzero();
@@ -4424,10 +4836,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 칸마다 몇 개인가. **`min === max` 면 자료의 범위를 쓴다**(실측).
+   * How many in each bucket. **With `min === max` it uses the data's own
+   * range** (measured).
    *
-   * 범위를 주면 **밖은 버린다** — 양끝 칸으로 몰아넣지 않는다. 전부 범위 안인 자료로
-   * 재면 그 규칙이 안 드러난다.
+   * Given a range it **discards what falls outside** — it does not pile
+   * them into the end buckets. Measured with data entirely inside the
+   * range, that rule never surfaces.
    */
   async histc(bins = 100, min = 0, max = 0): Promise<Tensor> {
     const values = Array.from(await this.toArray());
@@ -4436,10 +4850,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `histc` 와 같은 셈에 **경계까지.**
+   * The same count as `histc`, **plus the boundaries.**
    *
-   * `bins` 에 텐서를 주면 그것이 곧 경계다 — 칸 너비가 다를 수 있고, 그러면
-   * `density` 가 칸마다 다른 값으로 나눈다.
+   * Given a tensor for `bins`, that is the boundaries — the bucket widths
+   * may differ, and then `density` divides by a different value per bucket.
    */
   async histogram(
     bins: number | Tensor = 100,
@@ -4463,7 +4877,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** 축이 여럿인 히스토그램. `this` 는 `(표본 수, 차원)` 이다. */
+  /**
+   * A histogram over several axes. `this` is `(samples, dimensions)`.
+   */
   async histogramdd(bins: number | readonly number[] = 10): Promise<{
     hist: Tensor; bin_edges: Tensor[];
   }> {
@@ -4497,10 +4913,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 가장 자주 나온 값. **같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**
-   * (실측: `[4,4,5,5]` 가 값 4 · 자리 1 을 준다).
+   * The most frequent value. **On an equal count the smaller value wins,
+   * and the index is that value's last occurrence** (measured: `[4,4,5,5]`
+   * gives value 4 at index 1).
    *
-   * 비긴 자리가 없는 자료로 재면 그 규칙이 안 드러난다.
+   * Measured with data that has no ties, that rule never surfaces.
    */
   async mode(dim = -1, keepdim = false): Promise<{
     values: Tensor; indices: Tensor;
@@ -4518,9 +4935,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * NaN 을 **빼고** 센 중앙값. `median` 은 NaN 이 하나만 있어도 NaN 을 낸다(실측).
+   * The median counted **excluding** NaN. `median` returns NaN if there is
+   * even one (measured).
    *
-   * 짝수 개면 **아래를 고른다** — 평균을 내지 않는다.
+   * With an even count it **takes the lower** — it does not average.
    */
   async nanmedian(dim?: number, keepdim = false): Promise<
     Tensor | { values: Tensor; indices: Tensor }
@@ -4612,10 +5030,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.
+   * The central difference. **One per axis, returned as a bundle** — no
+   * axis given, it is all of them.
    *
-   * `edgeOrder` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측: `x²`
-   * 에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다).
+   * At `edgeOrder` 1 the ends use a one-sided difference; at 2 they are
+   * fitted with a quadratic (measured: on `x²`, 2 gives the exact
+   * derivative and 1 is off at both ends).
    */
   async gradient(spacing: number | readonly number[] = 1, dim?: number | readonly number[],
     edgeOrder = 1): Promise<Tensor[]> {
@@ -4659,23 +5079,30 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 이웃한 두 점의 **평균에 간격을 곱해** 더한다. 사다리꼴 적분이다.
+   * Adds **the mean of each neighbouring pair times the spacing.**
+   * Trapezoidal integration.
    *
-   * 오래 여기 없었다. 결속이 파이썬에서 같은 몇 줄로 조립하고 있었고, 주석에는
-   * "여기 하나 더 만들면 조립이 두 벌이 된다" 고 적혀 있었다. 그 말이 놓친 것은
-   * **borch.ts 를 TypeScript 에서 쓰는 쪽에는 이 이름이 아예 없다**는 것이다 —
-   * 조립이 한 벌이었던 게 아니라 파이썬 쪽에만 있었다.
+   * It was absent here for a long time. The binding was assembling the same
+   * few lines in Python, and the comment said "making one more here would
+   * be a second copy of the assembly". What that missed is that **the name
+   * did not exist at all for anyone using borch.ts from TypeScript** — the
+   * assembly was not one copy; it was only on the Python side.
    *
-   * 조각 자르기와 더하기뿐이라 **기울기가 저절로 흐른다.** 손으로 적을 것이 없다.
+   * It is only slicing and adding, so **the gradient flows on its own.**
+   * There is nothing to write by hand.
    *
-   * @param x 자리를 직접 준다. 안 주면 간격이 `dx` 로 고르다.
+   * @param x the positions given directly. Left out, the spacing is uniform
+   *   at `dx`.
    */
   trapezoid(x?: Tensor, dx = 1, dim = -1): Tensor {
     const { pieces, axis } = this.trapezoidPieces(x, dx, dim);
     return pieces.sumDim(axis);
   }
 
-  /** 누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다. */
+  /**
+   * The cumulative version. **The last value must equal `trapezoid`** —
+   * that is the check.
+   */
   cumulativeTrapezoid(x?: Tensor, dx = 1, dim = -1): Tensor {
     const { pieces, axis } = this.trapezoidPieces(x, dx, dim);
     return pieces.cumsum(axis);
@@ -4695,7 +5122,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return { pieces: both.mul(step).mul(Tensor.full([], 0.5)), axis };
   }
 
-  /** 서로 다른 값을 **오름차순으로**. torch 의 기본이 정렬해서 주는 것이다. */
+  /**
+   * The distinct values, **ascending.** torch's default is to give them
+   * sorted.
+   */
   async unique(): Promise<Tensor> {
     const values = Array.from(await this.toArray());
     const seen = [...new Set(values)].sort((a, b) => a - b);
@@ -4703,11 +5133,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **이어진** 중복만 줄인다. `unique` 와 달리 정렬하지 않는다 — `[1,1,2,2,1]` 이
-   * `[1,2,1]` 이 된다(실측). 정렬된 입력으로만 재면 둘이 같아 보인다.
+   * Collapses **consecutive** duplicates only. Unlike `unique` it does not
+   * sort — `[1,1,2,2,1]` becomes `[1,2,1]` (measured). Measured with sorted
+   * input alone, the two look the same.
    *
-   * 결과의 **길이가 값에 달렸으므로** 여기서 한 번 읽는다. `unique`·`bincount` 와
-   * 같은 자리이고, 그래서 이 셋만 비동기다.
+   * The result's **length depends on the values**, so it reads once here.
+   * The same place as `unique` and `bincount`, which is why those three
+   * alone are asynchronous.
    */
   async uniqueConsecutive(
     returnInverse = false,
@@ -4774,13 +5206,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   /** 정수 값마다 몇 번 나왔는가. 길이는 가장 큰 값이 정한다. */
   /**
-   * 칸마다 몇 번 나왔는가.
+   * How many times each bucket appears.
    *
-   * @param weights 주면 개수 대신 **무게를 더한다.**
-   * @param minlength 결과의 최소 길이. 안 나온 칸까지 자리를 잡아 둔다.
+   * **The type diverges** (measured): without weights it is `int64`; with
+   * weights it is the weights' type — counting and summing are different
+   * jobs.
    *
-   * **형이 갈린다**(실측): 무게 없이는 `int64`, 무게가 있으면 그 무게의 형이다 —
-   * 개수를 세는 것과 값을 더하는 것이 다른 일이기 때문이다.
+   * @param weights given, it **adds the weights** rather than counting.
+   * @param minlength the result's minimum length. It reserves slots for
+   *   buckets that never appeared.
    */
   async bincount(weights?: Tensor, minlength = 0): Promise<Tensor> {
     const values = await this.toArray();
@@ -4798,8 +5232,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 분위수. **선형 보간이다** — torch 의 기본이 그렇고, 가장 가까운 값을 고르는 것과
-   * 다르다.
+   * Quantiles. **Linear interpolation** — that is torch's default, and it
+   * differs from picking the nearest value.
    */
   async quantile(q: number | readonly number[]): Promise<Tensor> {
     return this.quantileOver(Array.from(await this.toArray()), q);
@@ -4833,10 +5267,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * NaN 을 빼고 센 분위수.
+   * Quantiles counted excluding NaN.
    *
-   * **NaN 을 빼면 자리가 밀린다.** 그래서 성한 칸만 모은 작은 텐서를 만들어 그 위에서
-   * 되짚는다 — 원래 자리로 돌아가는 길은 `indexSelect` 가 이미 미분되므로 이어진다.
+   * **Removing NaN shifts the positions.** So a small tensor of the intact
+   * slots is built and the work is retraced on that — the way back to the
+   * original positions is `indexSelect`, which is already differentiable,
+   * so it stays connected.
    */
   async nanquantile(q: number | readonly number[]): Promise<Tensor> {
     const values = Array.from(await this.toArray());
@@ -4936,7 +5372,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     });
   }
 
-  /** 행렬식. 역방향은 `det·A⁻ᵀ` 다. */
+  /**
+   * The determinant. The backward is `det·A⁻ᵀ`.
+   */
   async det(): Promise<Tensor> {
     const v = await this.asBatch();
     const vals = v.mats.map((a) => LA.det(LA.lu(a, v.rows)));
@@ -4948,7 +5386,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           .mul(gb.mul(Tensor.from([vals[b]!], [])))), "DetBackward0");
   }
 
-  /** `log|det|`. 역방향은 `A⁻ᵀ` — 행렬식이 곱해지지 않아 더 안정적이다. */
+  /**
+   * `log|det|`. The backward is `A⁻ᵀ` — more stable, with no determinant
+   * multiplied in.
+   */
   async logdet(): Promise<Tensor> {
     const v = await this.asBatch();
     const vals = v.mats.map((a) => {
@@ -4962,7 +5403,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         Tensor.fromMat(invTs[b]!, [v.rows, v.rows]).mul(gb)), "LogdetBackward0");
   }
 
-  /** 부호와 로그 절댓값을 따로. 행렬식이 아주 작아도 자릿수가 안 날아간다. */
+  /**
+   * The sign and the log absolute value, separately. No digits are lost
+   * even when the determinant is very small.
+   */
   async slogdet(): Promise<{ sign: Tensor; logabs: Tensor }> {
     const v = await this.asBatch();
     const parts = v.mats.map((a) => LA.slogdet(LA.lu(a, v.rows)));
@@ -4977,7 +5421,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** 역행렬. 역방향은 `-A⁻ᵀ·Ḡ·A⁻ᵀ` 다. */
+  /**
+   * The inverse. The backward is `-A⁻ᵀ·Ḡ·A⁻ᵀ`.
+   */
   async inverse(): Promise<Tensor> {
     const v = await this.asBatch();
     const invs = Tensor.invAll(v.mats, v.rows, "inv");
@@ -4989,7 +5435,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       }), "InverseBackward0");
   }
 
-  /** `inv` 와 같은데 **안 던진다** — 대신 `info` 에 0 이 아닌 수를 담는다. */
+  /**
+   * The same as `inv` except that it **does not throw** — it puts a
+   * non-zero number in `info` instead.
+   */
   async invEx(): Promise<{ inverse: Tensor; info: Tensor }> {
     const v = await this.asBatch();
     try {
@@ -5004,13 +5453,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 유사역행렬. **기울기가 있다** — 항이 셋이다.
+   * The pseudoinverse. **It has a gradient** — in three terms.
    *
    *     Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)
    *
-   * 뒤의 두 항은 **정사각 정칙에서 0 이 된다.** 그때는 `I − AP` 와 `I − PA` 가 둘 다
-   * 0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을
-   * 빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다 — 골든이 직사각으로도 묻는다.
+   * The last two terms **go to zero for a square invertible matrix.** There
+   * `I − AP` and `I − PA` are both zero, only the first term remains, and
+   * that first term is the same formula as the inverse's gradient. So
+   * leaving the two out is right on squares and wrong only on rectangles —
+   * the golden cases ask with rectangles too.
    */
   async pinverse(): Promise<Tensor> {
     const v = await this.asBatch(false);
@@ -5051,10 +5502,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * GPU 를 기다릴 수가 없으므로 그 값이 미리 있어야 한다.
    */
   /**
-   * @param upper 참이면 위 삼각을 준다 — `L` 대신 `Lᵀ` 다.
+   * **Written with a flip.** `Lᵀ` is `L` transposed and transposition is
+   * already differentiable, so the factorisation is not written twice — the
+   * same formula in two copies eventually gets fixed in one of them.
    *
-   * **뒤집기로 짠다.** `Lᵀ` 는 `L` 의 전치이고 전치는 이미 미분되므로, 분해를 두 벌
-   * 쓰지 않는다 — 같은 식을 두 벌로 두면 언젠가 한쪽만 고쳐진다.
+   * @param upper true gives the upper triangle — `Lᵀ` instead of `L`.
    */
   async cholesky(upper = false): Promise<Tensor> {
     if (upper) return (await this.cholesky()).transpose();
@@ -5086,7 +5538,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       }), "CholeskyBackward0");
   }
 
-  /** `cholesky` 의 안 던지는 쪽. */
+  /**
+   * The non-throwing side of `cholesky`.
+   */
   async choleskyEx(): Promise<{ L: Tensor; info: Tensor }> {
     const v = await this.asBatch();
     try {
@@ -5101,10 +5555,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `A x = b`. 역방향은 `b` 로는 `A⁻ᵀ·Ḡ`, `A` 로는 `-A⁻ᵀ·Ḡ·xᵀ` 다.
+   * `A x = b`. The backward is `A⁻ᵀ·Ḡ` towards `b` and `-A⁻ᵀ·Ḡ·xᵀ` towards
+   * `A`.
    *
-   * `b` 가 `A` 보다 축이 하나 적으면 **벡터 묶음**으로 본다 — torch 의 규칙이다.
-   * 역방향의 바깥곱이 그 구분에 걸린다.
+   * When `b` has one axis fewer than `A` it is read as **a bundle of
+   * vectors** — torch's rule. The backward's outer product hangs on that
+   * distinction.
    */
   async solve(b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
@@ -5147,7 +5603,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
   }
 
-  /** `solve` 의 안 던지는 쪽. */
+  /**
+   * The non-throwing side of `solve`.
+   */
   async solveEx(b: Tensor): Promise<{ result: Tensor; info: Tensor }> {
     const v = await this.asBatch();
     try {
@@ -5162,15 +5620,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * QR 분해. **`reduced` 에는 기울기가 있다.**
+   * QR factorisation. **`reduced` has a gradient.**
    *
    *     N = Qᵀ·Q̄ − R̄·Rᵀ
    *     Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ
    *
-   * 아래 삼각만 남기는 자리가 이 유도의 전부다 — `QᵀQ = I` 를 미분하면 `Qᵀ·dQ` 가
-   * 반대칭이 되고, 위쪽은 아래쪽의 거울이라 따로 셀 것이 없다.
+   * Keeping only the lower triangle is the whole of this derivation —
+   * differentiating `QᵀQ = I` makes `Qᵀ·dQ` antisymmetric, and the upper
+   * half is the lower half's mirror, so there is nothing separate to count.
    *
-   * `complete` 는 `Q` 에 남는 열이 있어 유도가 다르다. 그쪽은 값만 낸다.
+   * `complete` has leftover columns in `Q` and a different derivation. That
+   * side returns values only.
    */
   async qr(mode: "reduced" | "complete" = "reduced"): Promise<{ q: Tensor; r: Tensor }> {
     const v = await this.asBatch(false);
@@ -5220,15 +5680,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 특이값 분해.
+   * Singular value decomposition.
    *
-   * **특잇값에는 기울기가 있고 `U`·`Vh` 에는 없다.** `dS = diag(Uᵀ·dA·V)` 라 특잇값
-   * 쪽은 `Ā = U·diag(Ḡ)·Vᵀ` 한 줄이고 겹침 문제도 없다. 벡터 쪽은 `1/(sᵢ²−sⱼ²)` 가
-   * 들어가 특잇값이 겹치면 터지는데, 그 자리는 안 넣었다.
+   * **The singular values have a gradient and `U` and `Vh` do not.** Since
+   * `dS = diag(Uᵀ·dA·V)`, the singular-value side is the single line `Ā =
+   * U·diag(Ḡ)·Vᵀ` with no degeneracy problem. The vector side brings in
+   * `1/(sᵢ²−sⱼ²)` and blows up when singular values coincide, and that part
+   * was left out.
    *
-   * `fullMatrices`(기본 참)는 `U` 를 `rows×rows` 로 채운다 — torch 의 기본값이다.
-   * 채우는 방향은 남는 차원이 둘 이상이면 유일하지 않다(`completeBasis` 참고).
-   * **역방향에 쓰는 것은 채우기 전의 축소본이다.**
+   * `fullMatrices` (true by default) fills `U` out to `rows×rows` — torch's
+   * default. The direction of the fill is not unique once more than one
+   * dimension is left over (see `completeBasis`). **What the backward uses
+   * is the reduced form, before the fill.**
    */
   async svd(fullMatrices = true): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
     const v = await this.asBatch(false);
@@ -5259,10 +5722,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다.
+   * Eigenvalues and eigenvectors of a symmetric matrix. The eigenvalues are
+   * ascending.
    *
-   * **한쪽 삼각만 읽는다** — 기본은 아래쪽이다. 야코비는 행렬 전체를 보므로 먼저
-   * 거울을 만들어 넘긴다. 자세한 것은 `linalg.ts` 의 `mirror` 에 적었다.
+   * **It reads one triangle only** — the lower by default. Jacobi looks at
+   * the whole matrix, so it is mirrored first and then handed over. The
+   * details are written down at `mirror` in `linalg.ts`.
    */
   async eigh(uplo: "L" | "U" = "L"): Promise<{ values: Tensor; vectors: Tensor }> {
     const v = await this.asBatch();
@@ -5299,21 +5764,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** 특잇값만. `svd` 의 가운데다. */
+  /**
+   * The singular values only. The middle of `svd`.
+   */
   async svdvals(): Promise<Tensor> {
     return (await this.svd(false)).s;
   }
 
-  /** 대칭 행렬의 고윳값만. */
+  /**
+   * The eigenvalues of a symmetric matrix only.
+   */
   async eigvalsh(uplo: "L" | "U" = "L"): Promise<Tensor> {
     return (await this.eigh(uplo)).values;
   }
 
   /**
-   * 행렬로 보고 재는 노름. **갈래마다 다른 수다.**
+   * The norm measured treating it as a matrix. **A different number per
+   * branch.**
    *
-   * 기본은 프로베니우스, `2` 는 최대 특잇값, `nuc` 는 특잇값의 합, `1` 은 열 절댓값
-   * 합의 최대, `inf` 는 행 쪽이다. 특잇값이 필요한 셋만 CPU 를 왕복한다.
+   * The default is Frobenius; `2` is the largest singular value; `nuc` the
+   * sum of singular values; `1` the maximum column absolute sum; and `inf`
+   * the row equivalent. Only the three that need singular values make a CPU
+   * round trip.
    */
   async matrixNorm(ord: number | string = "fro"): Promise<Tensor> {
     if (ord === "nuc" || ord === 2 || ord === -2) {
@@ -5328,7 +5800,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return (ord as number) > 0 ? sums.amax(-1, false) : sums.amin(-1, false);
   }
 
-  /** 조건수. 기본은 특잇값의 비다. */
+  /**
+   * The condition number. By default the ratio of singular values.
+   */
   async cond(p: number | string | null = null): Promise<Tensor> {
     if (p === null || p === 2 || p === -2) {
       const s = await this.svdvals();
@@ -5340,7 +5814,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return (await this.matrixNorm(p)).mul(await inv.matrixNorm(p));
   }
 
-  /** 삼각행렬이라는 것을 알고 푼다. */
+  /**
+   * Solves knowing the matrix is triangular.
+   */
   async solveTriangular(
     b: Tensor, upper: boolean, left = true, unitriangular = false,
   ): Promise<Tensor> {
@@ -5361,11 +5837,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 행렬 지수 `e^A`. **기울기가 있다.**
+   * The matrix exponential `e^A`. **It has a gradient.**
    *
-   * 역방향은 `linalg.ts` 의 `matrixExpAdjointMap` 이 순방향에서 굳혀 둔 표를 쓴다 —
-   * 왜 표인지는 거기 적었다(짧게: `Ḡ` 가 GPU 에 있고 `expm` 은 CPU 다).
-   * **기울기가 필요할 때만 만든다.** 표 하나에 `expm` 이 `n²` 번이라 공짜가 아니다.
+   * The backward uses the table `matrixExpAdjointMap` in `linalg.ts` froze
+   * during the forward — why a table is written down there (briefly: `Ḡ` is
+   * on the GPU and `expm` is CPU). **It is built only when the gradient is
+   * wanted.** One table is `n²` calls to `expm`, which is not free.
    */
   async matrixExp(): Promise<Tensor> {
     const v = await this.asBatch();
@@ -5380,12 +5857,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
           .mm(gb.reshape([n * n, 1])).reshape([n, n])), "MatrixExpBackward0");
   }
 
-  /** 마지막 축을 벡터로 보고 내적. */
+  /**
+   * The inner product, treating the last axis as a vector.
+   */
   vecdot(other: Tensor, dim = -1): Tensor {
     return this.mul(other).sumDim(dim, false);
   }
 
-  /** 3 차원 벡터의 외적. 축을 셋으로 갈라 조합한다. */
+  /**
+   * The cross product of three-dimensional vectors. It splits into three
+   * axes and recombines.
+   */
   cross(other: Tensor, dim = -1): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -5398,10 +5880,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 벡터로 보고 재는 노름. **행렬을 줘도 통째로 편다** — `matrixNorm` 과 갈리는 자리다.
+   * The norm measured treating it as a vector. **Given a matrix it flattens
+   * the whole thing** — where it parts from `matrixNorm`.
    *
-   * `ord=0` 은 0 이 아닌 것의 개수, `±Infinity` 는 절댓값의 최대·최소다. 거듭제곱
-   * 식에 넣으면 안 되는 갈래라 따로 적는다.
+   * `ord=0` is the count of non-zeros, and `±Infinity` the maximum and
+   * minimum absolute value. Branches that must not go through the power
+   * formula, so they are written separately.
    */
   vectorNorm(ord = 2, dim?: number): Tensor {
     const flat = dim === undefined && this.shape.length > 1
@@ -5425,7 +5909,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.stack(cols, 1);
   }
 
-  /** 텐서를 행렬로 접어 풀고 다시 편다. */
+  /**
+   * Folds the tensor into a matrix, solves, and spreads it back.
+   */
   async tensorSolve(b: Tensor): Promise<Tensor> {
     const n = b.size;
     const folded = this.reshape([n, this.size / n]);
@@ -5433,7 +5919,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return x.reshape(this.shape.slice(b.shape.length));
   }
 
-  /** 텐서를 행렬로 접어 뒤집고 축 순서를 돌려준다. */
+  /**
+   * Folds the tensor into a matrix, inverts, and returns the axis order.
+   */
   async tensorInv(ind = 2): Promise<Tensor> {
     const lead = this.shape.slice(0, ind);
     const n = lead.reduce((a, b) => a * b, 1);
@@ -5446,7 +5934,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.from(v.mats.map((a) => LA.matrixRank(a, v.rows, v.cols)), v.lead);
   }
 
-  /** 최소제곱해. 정사각이고 정칙이면 `solve` 와 같은 답이다. */
+  /**
+   * The least-squares solution. Square and invertible, it gives the same
+   * answer as `solve`.
+   */
   async lstsq(b: Tensor): Promise<Tensor> {
     const v = await this.asBatch(false);
     if (v.batch !== 1) throw new RuntimeError("lstsq: batching is not here yet");
@@ -5458,7 +5949,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.fromMat(sol, b.shape.length === 1 ? [cols] : [cols, width]);
   }
 
-  /** 한 장에 겹쳐 담은 `L`·`U` 와 **1 부터 세는** 교환표. */
+  /**
+   * `L` and `U` packed into one plate, plus a pivot table **counting from
+   * 1.**
+   */
   async luFactor(): Promise<{ LU: Tensor; pivots: Tensor }> {
     const v = await this.asBatch(false);
     const k = Math.min(v.rows, v.cols);
@@ -5472,8 +5966,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `luFactor` 에 **`info` 를 하나 더.** 던지는 대신 번호로 알린다 — 0 이면 잘 됐고,
-   * `k` 면 `k` 번째 피벗이 0 이라 특이행렬이다(1 부터 센다).
+   * `luFactor` **plus one `info`.** Instead of throwing, it reports by
+   * number — 0 means it went well, and `k` means the `k`-th pivot is zero
+   * and the matrix is singular (counting from 1).
    */
   async luFactorEx(): Promise<{ LU: Tensor; pivots: Tensor; info: Tensor }> {
     const v = await this.asBatch(false);
@@ -5494,14 +5989,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 대칭 행렬을 `L D Lᵀ` 로. **피벗을 안 한다.**
+   * A symmetric matrix as `L D Lᵀ`. **It does not pivot.**
    *
-   * torch 는 LAPACK 의 Bunch-Kaufman 을 쓰고 그것은 필요하면 자리를 바꾼다. 여기서는
-   * 바꿀 일이 없는 자리(양의 정부호 같은 것)만 다루고, 대각이 0 에 가까우면 시끄럽게
-   * 거절한다 — 조용히 이어 가면 바꾼 것과 안 바꾼 것이 다른 답을 내는데 둘 다
-   * 그럴듯하다.
+   * torch uses LAPACK's Bunch–Kaufman, which swaps positions when it has
+   * to. Here only the cases with nothing to swap (positive definite and the
+   * like) are handled, and a near-zero diagonal is refused loudly —
+   * carrying on quietly gives a different answer with and without swapping,
+   * and both are plausible.
    *
-   * 답은 torch 와 같은 모양으로 **한 장에 겹쳐 담는다** — 대각이 `D`, 그 아래가 `L`.
+   * The answer is **packed into one plate** in torch's shape — the diagonal
+   * is `D` and below it is `L`.
    */
   async ldlFactor(): Promise<{ LD: Tensor; pivots: Tensor }> {
     const v = await this.asBatch();
@@ -5539,13 +6036,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `ldlFactor` 에 **`info` 를 하나 더.** `luFactorEx` 와 같은 자리다.
+   * `ldlFactor` **plus one `info`.** The same place as `luFactorEx`.
    *
-   * **여기서는 늘 0 이다** — 나쁜 자리를 만나면 `ldlFactor` 가 그 자리에서 거절하므로
-   * 번호로 알릴 것이 안 남는다. 그래도 이름을 둔다: torch 가 주는 이름이고, 없으면
-   * 부르는 쪽이 세 자리 중 하나를 스스로 지어내야 한다 — 결속이 실제로 그러고
-   * 있었다(`_Fields` 를 손으로 세워 `info` 에 0 을 끼웠다). 그러면 골든은 결속을
-   * 지나니 초록이고, 없는 것은 TypeScript 로 쓰는 쪽뿐이다.
+   * **Here it is always 0** — meeting a bad position makes `ldlFactor`
+   * refuse on the spot, so nothing is left to report by number. The name is
+   * kept anyway: torch offers it, and without it the caller has to invent
+   * one of the three slots themselves — which the binding was actually
+   * doing (standing up `_Fields` by hand and slotting a 0 into `info`).
+   * Then the golden cases go through the binding and are green, and what is
+   * missing is only for whoever writes TypeScript.
    */
   async ldlFactorEx(): Promise<{ LD: Tensor; pivots: Tensor; info: Tensor }> {
     const v = await this.asBatch();
@@ -5553,7 +6052,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return { ...got, info: Tensor.zeros(v.lead).to("int64") };
   }
 
-  /** `ldlFactor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다. */
+  /**
+   * Solves using the factorisation `ldlFactor` produced. Three passes: `L y
+   * = b`, `D z = y`, `Lᵀ x = z`.
+   */
   async ldlSolve(b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
     const n = v.rows;
@@ -5583,10 +6085,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * QR 을 **반사자 꼴로** 낸다. `householderProduct` 가 그것으로 `Q` 를 세운다.
+   * Produces QR **in reflector form.** `householderProduct` stands `Q` up
+   * from it.
    *
-   * **대각 아래가 전부 0 이면 반사를 안 한다** — LAPACK 의 `dlarfg` 가 그 자리에서
-   * `tau = 0` 을 놓고 값을 그대로 둔다. 정사각의 마지막 열이 늘 그 자리다.
+   * **With everything below the diagonal already zero it does not reflect**
+   * — LAPACK's `dlarfg` puts `tau = 0` there and leaves the values alone.
+   * The last column of a square matrix is always that case.
    */
   async geqrf(): Promise<{ a: Tensor; tau: Tensor }> {
     const v = await this.asBatch(false);
@@ -5628,10 +6132,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 반사자들을 곱해 `Q` 를 세운다. `geqrf` 의 짝이다.
+   * Multiplies the reflectors to stand `Q` up. The counterpart of `geqrf`.
    *
-   * `v_i` 는 대각이 1 이고 그 아래가 `A[i+1:, i]` 다 — 대각의 1 은 **저장 안 하는
-   * 약속**이라, 그 자리를 읽어 쓰면 분해가 담아 둔 `R` 을 반사자로 착각한다.
+   * `v_i` has 1 on the diagonal and `A[i+1:, i]` below it — the 1 on the
+   * diagonal is **a promise not to store it**, so reading that slot
+   * mistakes the `R` the factorisation put there for a reflector.
    */
   async householderProduct(tau: Tensor): Promise<Tensor> {
     const v = await this.asBatch(false);
@@ -5665,7 +6170,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.fromBatch(outs, this.shape);
   }
 
-  /** `P`·`L`·`U` 셋으로 펴서. 겹쳐 담은 것보다 읽기 쉽다. */
+  /**
+   * Spread into `P`, `L` and `U`. Easier to read than the packed plate.
+   */
   async lu(): Promise<{ P: Tensor; L: Tensor; U: Tensor }> {
     const v = await this.asBatch(false);
     const { rows, cols } = v;
@@ -5680,12 +6187,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   /** `luFactor` 가 낸 것으로 `A x = b` 를 푼다. */
   /**
-   * 인수분해한 것으로 `A x = b` 를 푼다. **`this` 가 LU 다** — `linalg.lu_solve(LU,
-   * pivots, B)` 의 자리 배치이고, torch 의 `Tensor.lu_solve` 와는 수신자가 다르다.
+   * Solves `A x = b` with the factorisation. **`this` is the LU** — the
+   * argument order of `linalg.lu_solve(LU, pivots, B)`, and a different
+   * receiver from torch's `Tensor.lu_solve`.
    *
-   * 그래서 **이름에서 torch 주장을 뺐다.** 전에는 이것이 `luSolve` 였는데, torch 를
-   * 옮겨 적는 사람이 `b.lu_solve(LU, piv)` 를 쓰면 `LU` 가 `pivots` 자리에 들어간다 —
-   * 이름도 인자 개수도 맞아서 **그 자리에서는 안 걸리고** 값만 틀린다.
+   * So **the torch claim was taken out of the name.** This used to be
+   * `luSolve`, and someone carrying torch across writing `b.lu_solve(LU,
+   * piv)` puts `LU` into the `pivots` slot — the name and the argument
+   * count both match, so **nothing catches at that point** and only the
+   * value is wrong.
    */
   async luSolveFactored(pivots: Tensor, b: Tensor): Promise<Tensor> {
     const v = await this.asBatch();
@@ -5716,27 +6226,34 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `A x = b` 를 **촐레스키 인수로** 푼다. `A = L Lᵀ` (또는 `Uᵀ U`).
+   * Solves `A x = b` **from the Cholesky factor.** `A = L Lᵀ` (or `Uᵀ U`).
    *
-   * `A` 를 다시 세워 `solve` 로 보낸다. 삼각 대입 두 번이 더 싸지만, 그 길로 적으면
-   * 역방향을 손으로 써야 하고 **인수 쪽 기울기가 조용히 빠진다.**
+   * It rebuilds `A` and sends it to `solve`. Two triangular substitutions
+   * would be cheaper, but written that way the backward has to be
+   * hand-written and **the gradient towards the factor goes missing
+   * quietly.**
    */
   async choleskySolve(factor: Tensor, upper = false): Promise<Tensor> {
     const low = Tensor.asLower(factor, upper);
     return low.mm(low.transpose()).solve(this);
   }
 
-  /** 촐레스키 인수에서 **원래 행렬의 역행렬**을 낸다. 인수의 역이 아니다. */
+  /**
+   * From a Cholesky factor it produces **the original matrix's inverse**,
+   * not the factor's.
+   */
   async choleskyInverse(upper = false): Promise<Tensor> {
     const low = Tensor.asLower(this, upper);
     return low.mm(low.transpose()).inverse();
   }
 
   /**
-   * **둘을 준다** — 해와, 넘긴 계수 행렬의 **사본**(실측).
+   * **It gives two** — the solution, and a **copy** of the coefficient
+   * matrix handed in (measured).
    *
-   * `solveTriangular` 와 같은 계산인데 인자 순서가 뒤집혀 있고 **기본 `upper` 가
-   * 참이다.** 그 둘을 놓치면 다른 삼각을 풀고도 값이 그럴듯하게 나온다.
+   * The same computation as `solveTriangular` with the argument order
+   * flipped and **`upper` defaulting to true.** Miss those two and you
+   * solve a different triangle with a plausible-looking value.
    */
   async triangularSolve(
     a: Tensor,
@@ -5756,11 +6273,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `(LU, pivots)`. **`lu()` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로 펴 주고
-   * 이쪽은 **겹쳐 담은 한 판과 교환 목록**이다(실측).
+   * `(LU, pivots)`. **It produces something different from `lu()`** — that
+   * one spreads into `P·L·U` and this one gives **one packed plate and a
+   * swap list** (measured).
    *
-   * `getInfos` 면 셋째로 정보 코드가 붙는다. 우리는 늘 0 이다 — 특이 행렬을 만나면
-   * 그 자리에서 던지지 조용히 코드로 알리지 않는다.
+   * With `getInfos` an info code is attached third. Ours is always 0 —
+   * meeting a singular matrix it throws on the spot rather than reporting
+   * quietly by code.
    */
   async luTop(pivot = true, getInfos = false): Promise<{
     LU: Tensor; pivots: Tensor; info?: Tensor;
@@ -5771,31 +6290,35 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `torch.Tensor.lu_solve` — **수신자가 오른쪽 변 `b` 다.**
+   * `torch.Tensor.lu_solve` — **the receiver is the right-hand side `b`.**
    *
-   * torch 가 `b.lu_solve(LU, piv)` 이므로 여기도 그렇다. 인수를 수신자로 받는 쪽은
-   * `luSolveFactored` 이고, 그것이 `linalg.lu_solve` 의 자리 배치다.
+   * torch has `b.lu_solve(LU, piv)`, so it is the same here. The side that
+   * takes the factorisation as receiver is `luSolveFactored`, which is
+   * `linalg.lu_solve`'s argument order.
    */
   async luSolve(luData: Tensor, pivots: Tensor): Promise<Tensor> {
     return luData.luSolveFactored(pivots, this);
   }
 
   /**
-   * 옛 이름. 결속이 이것을 부르고 있어서 남긴다 — 위임 한 줄이다.
+   * The old name. Kept because the binding calls it — one line of
+   * delegation.
    *
-   * `luSolve` 가 인수를 수신자로 받던 시절에 그 반대편을 가리키려고 만든 이름인데,
-   * 이제 `luSolve` 자체가 torch 와 같은 자리이므로 **`Top` 이 가리킬 반대편이 없다.**
-   * 결속이 `luSolve` 로 옮겨 가면 지워도 된다.
+   * It was made to point at the opposite side back when `luSolve` took the
+   * factorisation as receiver, and now that `luSolve` itself sits where
+   * torch does, **there is no opposite side for `Top` to point at.** Once
+   * the binding moves to `luSolve` it can be deleted.
    */
   async luSolveTop(luData: Tensor, pivots: Tensor): Promise<Tensor> {
     return this.luSolve(luData, pivots);
   }
 
   /**
-   * 겹쳐 담은 한 판을 `P·L·U` 로 편다.
+   * Spreads one packed plate into `P·L·U`.
    *
-   * **끄면 `null` 이 아니라 빈 텐서가 온다**(실측: 모양이 `[0]` 이다). `null` 로 두면
-   * 받는 쪽이 그것으로 갈라 쓰게 되고, 그것은 torch 코드가 아니다.
+   * **Turned off, what comes back is an empty tensor rather than `null`**
+   * (measured: its shape is `[0]`). Returning `null` makes the receiving
+   * side branch on it, and that is not torch code.
    */
   async luUnpack(
     pivots: Tensor,
@@ -5822,19 +6345,23 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** `householderProduct` 의 다른 이름. torch 가 둘을 준다. */
+  /**
+   * Another name for `householderProduct`. torch offers both.
+   */
   async orgqr(tau: Tensor): Promise<Tensor> {
     return this.householderProduct(tau);
   }
 
   /**
-   * **Q 를 안 세우고** `C` 에 곱한다 — 여기서는 세워서 곱한다. 값이 같고 이 크기에서
-   * 아끼는 것이 없다.
+   * Multiplies into `C` **without standing Q up** — here it stands it up
+   * and multiplies. The value is the same and nothing is saved at this
+   * size.
    *
-   * **`orgqr` 과 다른 Q 다.** 그쪽은 `m×k` 로 **자른** Q 를 주는데, 이쪽은 자르지
-   * 않은 `m×m` 을 쓴다 — 반사자들은 `Rᵐ` 위의 사상이고, 자르면 그 사상의 일부만
-   * 곱하게 된다. 세로로 긴 행렬에서 답이 통째로 갈린다(실측). 정사각으로만 재면
-   * 둘이 같아서 안 보인다.
+   * **It is a different Q from `orgqr`'s.** That one gives a Q **cut** to
+   * `m×k`, while this uses the uncut `m×m` — the reflectors are maps on
+   * `Rᵐ`, and cutting multiplies by only part of that map. The answer
+   * diverges entirely on a tall matrix (measured). Measured on squares
+   * alone, the two are the same and nothing shows.
    */
   async ormqr(
     tau: Tensor,
@@ -5875,14 +6402,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 대칭 행렬의 **끝쪽 고유쌍 `k` 개.**
+   * The **`k` extreme eigenpairs** of a symmetric matrix.
    *
-   * **torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게
-   * 얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이
-   * 정확해로 7e-6 안까지 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 허용 오차
-   * 한참 아래다. 값은 같고 비용만 다르다.
+   * **torch is iterative and we are exact.** That side iterates to get a
+   * few cheaply out of a large sparse matrix; we have no sparse and the
+   * sizes are small. Measuring showed torch's answer converges to within
+   * 7e-6 of the exact one and wobbles by about that much with the seed
+   * (measured) — far below tolerance. The value is the same and only the
+   * cost differs.
    *
-   * **`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).
+   * **`largest` decides the order too** — true gives largest first, false
+   * smallest first (measured).
    */
   async lobpcg(k = 1, largest = true): Promise<{
     eigenvalues: Tensor; eigenvectors: Tensor;
@@ -5899,14 +6429,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 무작위 사영으로 얻는 **저계수 SVD.** `(U, S, V)` 이고 **V 는 전치가 아니다.**
+   * **A low-rank SVD** obtained by random projection. `(U, S, V)`, and **V
+   * is not transposed.**
    *
-   * **정확히 저계수인 입력에서만 답이 안 흔들린다.** torch 는 무작위 행렬로 사영하는데,
-   * 계수가 `q` 를 넘으면 씨앗에 따라 특이값이 0.5 씩 움직인다(실측). 계수가 `q` 이하면
-   * 씨앗을 바꿔도 7e-7 안이다 — 물을 수 있는 자리는 그쪽뿐이다.
+   * **The answer is stable only on input that is exactly low-rank.** torch
+   * projects with a random matrix, and once the rank exceeds `q` the
+   * singular values move by around 0.5 depending on the seed (measured). At
+   * rank `q` or below, changing the seed stays within 7e-7 — that is the
+   * only place worth asking.
    *
-   * 우리는 사영을 안 한다. 전체 SVD 를 구해 앞의 `q` 개를 자른다 — 정확히 저계수인
-   * 자리에서는 같은 답이고, 넘치는 자리에서는 **torch 보다 정확한** 답이다.
+   * We do not project. The full SVD is computed and the first `q` taken —
+   * the same answer where the input is exactly low-rank, and **more
+   * accurate than torch** where it is not.
    */
   async svdLowrank(q = 6, niter = 2, M: Tensor | null = null): Promise<{
     U: Tensor; S: Tensor; V: Tensor;
@@ -5933,9 +6467,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 저계수 PCA. **`center=false` 면 `svdLowrank` 와 같은 것이다**(실측).
+   * Low-rank PCA. **With `center=false` it is the same thing as
+   * `svdLowrank`** (measured).
    *
-   * 가운데 맞추기가 이 함수와 저쪽의 차이 전부다. 참으로만 재면 그 갈래가 안 보인다.
+   * Centring is the whole difference between this function and that one.
+   * Measured at true alone, that branch never surfaces.
    */
   async pcaLowrank(q?: number, center = true, niter = 2): Promise<{
     U: Tensor; S: Tensor; V: Tensor;
@@ -6033,23 +6569,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 한 값으로 채운 **사본**. `fill_` 의 짝이고 torch 가 둘 다 준다.
+   * A **copy** filled with one value. The counterpart of `fill_`, and torch
+   * offers both.
    *
-   * 이 이름이 없던 것은 검사가 `fill_` 을 `fill` 로 읽고 있어서 안 보였다 —
-   * 끝 밑줄을 지우는 정규화가 세 번째로 뜻을 지운 자리다.
+   * This name was missing and invisible because the check read `fill_` as
+   * `fill` — the third place where stripping a trailing underscore erased
+   * the meaning.
    */
   fill(value: number): Tensor {
     return Tensor.full(this.shape, value);
   }
 
-  /** 다감마 함수의 `n` 차 도함수를 제자리로. 차수가 **첫 인자**다. */
+  /**
+   * The `n`-th derivative of the digamma function, in place. The order is
+   * **the first argument.**
+   */
   polygamma_(n: number): Tensor {
     return this.mutate(() => polygamma(n, this));
   }
 
   /**
-   * 기울기 표식을 켜고 **자기를 돌려준다.** torch 가 이어 쓰는 꼴을 위해 그렇게 한다
-   * (`x.requires_grad_().sum()`).
+   * Raises the gradient flag and **returns itself**, which torch does so it
+   * can be chained (`x.requires_grad_().sum()`).
    */
   requiresGrad_(flag = true): Tensor {
     this.requiresGrad = flag;
@@ -6064,17 +6605,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.clamp(low, high));
   }
 
-  /** `clamp_` 와 같다 — torch 가 이름을 둘 다 갖는다. */
+  /**
+   * The same as `clamp_` — torch carries both names.
+   */
   clip_(low: number, high: number): Tensor {
     return this.clamp_(low, high);
   }
 
   /**
-   * 다른 텐서의 값을 이 버퍼로 옮긴다. **텐서를 바꿔치지 않는다.**
+   * Moves another tensor's values into this buffer. **It does not swap the
+   * tensor.**
    *
-   * 옵티마이저가 파라미터의 손잡이를 들고 있으므로, 가중치를 넣을 때 새 텐서를
-   * 만들어 갈아끼우면 옵티마이저가 다른 것을 보게 된다 — 학습이 도는데 파라미터가
-   * 안 움직이는 상태다. 그래서 자리는 그대로 두고 값만 옮긴다.
+   * The optimizer holds the parameter's handle, so making a new tensor and
+   * swapping it in when putting weights in leaves the optimizer looking at
+   * something else — a state where training runs and the parameters do not
+   * move. So the slot stays and only the values move.
    */
   copyFrom(src: Tensor): Tensor {
     if (src.size !== this.size) {
@@ -6083,14 +6628,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => src);
   }
 
-  /** `this ← (1-t)·this + t·other`. 이동 통계가 쓴다. */
+  /**
+   * `this ← (1-t)·this + t·other`. Running statistics use it.
+   */
   lerpFrom(other: Tensor, t: number): Tensor {
     return this.mutate(() =>
       this.binary("mul", Tensor.full([], 1 - t))
         .add(other.binary("mul", Tensor.full([], t))));
   }
 
-  /** 표의 단항을 제자리로. `abs_` 같은 이름들이 이리로 온다. */
+  /**
+   * The table's unary operations, in place. Names like `abs_` come here.
+   */
   inplaceUnary(name: string): Tensor {
     return this.mutate(() => this.unary(name));
   }
@@ -6150,10 +6699,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 두 인자를 받는 아크탄젠트. **인자 차례가 `(y, x)` 다** — 뒤집으면 조용히 다른
-   * 각이 나온다.
+   * The two-argument arctangent. **The argument order is `(y, x)`** —
+   * reversed, it quietly gives a different angle.
    *
-   * `arctan2` 는 torch 의 둘째 철자이고 같은 것이다.
+   * `arctan2` is torch's second spelling for the same thing.
    */
   atan2(other: Tensor | number): Tensor {
     return this.binary("atan2", Tensor.asTensor(other));
@@ -6201,7 +6750,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.atanh());
   }
 
-  /** 0 쪽으로 자른다. `trunc` 와 같은 것이다 — `floor` 가 아니다. */
+  /**
+   * Truncates towards zero. The same as `trunc` — not `floor`.
+   */
   fix(): Tensor {
     return this.trunc();
   }
@@ -6243,11 +6794,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다. 그 갈림이 이름의 전부다.
+   * **It skips NaN** — `maximum` carries NaN out with it. That divergence
+   * is the whole of the name.
    *
-   * 커널이 따로 없다. 한쪽이 NaN 이면 다른 쪽을 고르는 것이 정의이고, `where` 가
-   * 그것을 그대로 적는다 — **곱하기로 짜면 `0 × NaN = NaN` 이라 걸러 낸 자리가
-   * 오염된다.** 조립이 오래 결속에만 있었다.
+   * There is no separate kernel. If one side is NaN the definition is to
+   * take the other, and `where` writes that down directly — **written as a
+   * multiplication, `0 × NaN = NaN` contaminates the very slots that were
+   * filtered out.** The assembly lived only in the binding for a long time.
    */
   fmax(other: Tensor): Tensor {
     return this.nanExtreme(other, "maximum");
@@ -6265,37 +6818,57 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.where(other.unary("isnan"), out);           // b 가 NaN 이면 a
   }
 
-  /** 축을 옮긴다. `movedim` 과 같은 것이고 torch 가 둘 다 준다. */
+  /**
+   * Moves an axis. The same as `movedim`, and torch offers both.
+   */
   moveaxis(src: number, dst: number): Tensor {
     return this.movedim(src, dst);
   }
 
-  /** 2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다. */
+  /**
+   * Two-dimensional transpose. **One dimension or fewer is left alone** —
+   * as in torch.
+   */
   t(): Tensor {
     return this.shape.length < 2 ? this : this.transpose();
   }
 
-  /** 벡터 내적. **복소수면 왼쪽을 켤레로 본다** — 실수에서는 `dot` 과 같다. */
+  /**
+   * The vector inner product. **For complex it conjugates the left side** —
+   * on reals it is `dot`.
+   */
   vdot(other: Tensor): Tensor {
     return this.isComplex() ? this.conj().mul(other).sum() : this.dot(other);
   }
 
-  /** 늘려서 그 모양으로. `expand` 와 같은 것이고 모양을 **목록으로** 받는다. */
+  /**
+   * Stretches to that shape. The same as `expand`, taking the shape **as a
+   * list.**
+   */
   broadcastTo(shape: readonly number[]): Tensor {
     return this.expand(...shape);
   }
 
-  /** 최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다. */
+  /**
+   * The greatest common divisor. **It discards signs** — torch's answer is
+   * always non-negative.
+   */
   gcd(other: Tensor | number): Tensor {
     return this.binary("gcd", Tensor.asTensor(other));
   }
 
-  /** 최소공배수. **`gcd` 가 0 이면 0 이다**(실측: 0 과 7 의 lcm 은 0). */
+  /**
+   * The least common multiple. **Zero when `gcd` is zero** (measured: the
+   * lcm of 0 and 7 is 0).
+   */
   lcm(other: Tensor | number): Tensor {
     return this.binary("lcm", Tensor.asTensor(other));
   }
 
-  /** `other` 쪽으로 한 칸 옆의 부동소수. 간격이 값에 따라 다른 것이 요점이다. */
+  /**
+   * The next representable float towards `other`. The point is that the
+   * spacing differs with the value.
+   */
   nextafter(other: Tensor | number): Tensor {
     return this.binary("nextafter", Tensor.asTensor(other));
   }
@@ -6320,7 +6893,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.binary("bitwise_right_shift", Tensor.asTensor(other));
   }
 
-  /** **0 이 아니면 참으로 보고** 논리곱. 비트 연산과 갈리는 자리가 그것이다. */
+  /**
+   * Logical and, **reading anything non-zero as true.** That is where it
+   * parts from the bitwise operation.
+   */
   logicalAnd(other: Tensor | number): Tensor {
     return this.binary("logical_and", Tensor.asTensor(other));
   }
@@ -6441,7 +7017,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.dropout(p, training));
   }
 
-  /** **채널째 떨군다** — `dropout2d` 와 같은 계산이다. */
+  /**
+   * **Drops whole channels** — the same computation as `dropout2d`.
+   */
   featureDropout_(p = 0.5, training = true): Tensor {
     return this.mutate(() => this.featureDropout(p, training));
   }
@@ -6450,7 +7028,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.alphaDropout(p, training, false));
   }
 
-  /** 알파 떨구기의 채널 판. `alphaDropout` 에 `perChannel` 을 켠 것이다. */
+  /**
+   * The per-channel form of alpha dropout. `alphaDropout` with `perChannel`
+   * turned on.
+   */
   featureAlphaDropout(p = 0.5, training = false): Tensor {
     return this.alphaDropout(p, training, true);
   }
@@ -6512,11 +7093,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **짝과 다른 연산이다.** `bernoulli()` 는 자기 값을 확률로 읽는데 이쪽은 자기
-   * 값을 **무시하고** `p` 로 채운다(실측: `[1,4,9,2]` 를 넣어도 `p=0` 이면 전부 0).
+   * **A different operation from its counterpart.** `bernoulli()` reads its
+   * own values as probabilities; this one **ignores** them and fills with
+   * `p` (measured: feed it `[1,4,9,2]` and at `p=0` it is all zeros).
    *
-   * 밑줄만 보고 짝에서 만들면 확률이 0·1 인 자리는 확정이라 값이 맞고 **가운데
-   * 확률에서만 조용히 틀린다.** 코어도 같은 이유로 자동 표 밖에 두었다.
+   * Built from the counterpart on the strength of the underscore alone, the
+   * values agree wherever the probability is 0 or 1, because those are
+   * certain, and **it is quietly wrong only at the probabilities in
+   * between.** The core kept it out of the automatic table for the same
+   * reason.
    */
   bernoulli_(p = 0.5): Tensor {
     return this.mutate(
@@ -6524,8 +7109,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **언제나 거절한다.** `float_power` 의 결과가 배정도인데 되쓸 자리가 없다 —
-   * torch 도 float32 자리에서 같은 이유로 멈춘다(실측).
+   * **It always refuses.** `float_power`'s result is double precision and
+   * there is nowhere to write it back — torch stops at a float32 slot for
+   * the same reason (measured).
    */
   floatPower_(exponent: Tensor | number): Tensor {
     void exponent;
@@ -6556,7 +7142,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.sub_(other, alpha);
   }
 
-  /** 2 차원 전치. **모양이 바뀐다** — 정사각으로만 물으면 안 바뀐 채 통과한다. */
+  /**
+   * Two-dimensional transpose in place. **The shape changes** — asked with
+   * a square alone, it passes without changing anything.
+   */
   t_(): Tensor {
     return this.transpose_();
   }
@@ -6581,7 +7170,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.binary("ne", Tensor.asTensor(other)));
   }
 
-  /** 같은 버퍼를 다른 모양으로 본다. `reshape` 와 같고, 제자리 연산이 번진다. */
+  /**
+   * Views the same buffer as a different shape. The same as `reshape`, and
+   * in-place operations carry across.
+   */
   view(...shape: number[]): Tensor {
     return this.reshape(shape);
   }
@@ -6589,11 +7181,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── 정렬 계열 ─────────────────────────────────────────────────────────
 
   /**
-   * 축 하나를 정렬해 값과 자리를 낸다.
+   * Sorts one axis and produces the values and the positions.
    *
-   * **기울기가 값을 따라간다.** 뽑아 온 자리로만 흘리고 나머지는 0 인데, 값만 떼어
-   * 돌려주면 그 자리로 기울기가 안 가고 분류 손실이 통째로 미분 불가가 된다.
-   * 코어가 `topk`·`sort` 에서 겪었고, 자매도 리뷰 전까지 같은 상태였다.
+   * **The gradient follows the values.** It flows only to the positions
+   * taken and is zero elsewhere, and returning the values detached means no
+   * gradient reaches those positions and the whole classification loss
+   * becomes non-differentiable. The core went through this with `topk` and
+   * `sort`, and the sister project was in the same state until review.
    */
   sort(dim = 0, descending = false): { values: Tensor; indices: Tensor } {
     const rank = this.shape.length;
@@ -6618,12 +7212,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** 정렬한 자리만. 값이 필요 없을 때 쓴다. */
+  /**
+   * The sorted positions only. Used when the values are not needed.
+   */
   argsort(dim = 0, descending = false): Tensor {
     return this.sort(dim, descending).indices;
   }
 
-  /** 가장 큰 `k` 개. `sort` 의 앞부분이다 — torch 도 내림차순으로 준다. */
+  /**
+   * The largest `k`. The front of `sort` — torch gives them descending too.
+   */
   topk(k: number, dim = 0): { values: Tensor; indices: Tensor } {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -6635,7 +7233,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `k` 번째로 작은 값. **1 부터 센다** — torch 가 그렇다.
+   * The `k`-th smallest value. **Counting from 1**, as in torch.
    */
   kthvalue(k: number, dim = 0, keepdim = false):
     { values: Tensor; indices: Tensor } {
@@ -6649,12 +7247,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 중앙값. **짝수 개일 때 아래쪽을 준다** — torch 가 두 값을 평균내지 않는다.
+   * The median. **With an even count it gives the lower** — torch does not
+   * average the two.
    *
-   * **NaN 이 하나라도 있으면 NaN 이다**(실측). 정렬은 NaN 을 한쪽 끝으로 밀어내므로
-   * 그냥 골라 오면 **NaN 을 건너뛰고** 멀쩡한 값이 나온다 — 그것이 `nanmedian` 이고
-   * 이쪽은 아니다. 코어에도 같은 결함이 있었고, 둘을 나란히 묻는 케이스를 넣으면서
-   * 양쪽이 같이 걸렸다.
+   * **One NaN anywhere makes it NaN** (measured). Sorting pushes NaN to one
+   * end, so simply picking **skips the NaN** and returns an intact value —
+   * that is `nanmedian`, and this is not. The core had the same defect, and
+   * adding a case that asks the two side by side caught both at once.
    */
   median(dim?: number, keepdim = false): { values: Tensor; indices: Tensor } {
     const spoil = (got: { values: Tensor; indices: Tensor }, axis?: number):
@@ -6695,12 +7294,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** 정렬만 하고 자리는 안 준다. */
+  /**
+   * Sorts only; it does not give positions.
+   */
   msort(): Tensor {
     return this.sort(0, false).values;
   }
 
-  /** 누적 최대·최소. **동점이면 나중 자리**를 준다 — torch 가 그렇다. */
+  /**
+   * The cumulative maximum and minimum. **On a tie it gives the later
+   * position** — as in torch.
+   */
   cummax(dim = 0): { values: Tensor; indices: Tensor } {
     return this.cumExtremeOver("max", dim);
   }
@@ -6773,16 +7377,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 번호가 가리키는 자리에 **더한다.** 겹치면 쌓인다.
+   * **Adds** at the positions the indices point to. Overlaps accumulate.
    *
-   * `gather` 의 반대다. 한쪽만 있으면 "꺼낼 수는 있는데 되돌려 넣을 수가 없는"
-   * 상태이고, 임베딩이나 원-핫을 손으로 만드는 코드가 그 자리를 바로 만난다.
+   * The opposite of `gather`. With only one of them you can take out and
+   * not put back, and code hand- building embeddings or one-hots meets that
+   * immediately.
    */
   scatterAdd(dim: number, index: Tensor, src: Tensor): Tensor {
     return this.scatterWith(dim, index, src, "add");
   }
 
-  /** 번호가 가리키는 자리에 **덮어쓴다.** 겹치면 마지막에 쓴 것이 남는다. */
+  /**
+   * **Overwrites** at the positions the indices point to. On an overlap,
+   * the last write stands.
+   */
   scatterSet(dim: number, index: Tensor, src: Tensor): Tensor {
     return this.scatterWith(dim, index, src, "set");
   }
@@ -6868,10 +7476,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 번호표가 가리키는 칸을 읽어 `shape` 로 낸다.
+   * Reads the slots the index table points at and produces `shape`.
    *
-   * **겹치는 번호로는 기울기가 쌓인다** — 한 칸을 두 번 읽었으면 두 번 온다. 안
-   * 겹치는 걸음으로만 재면 그 쌓임이 안 보인다.
+   * **Overlapping indices accumulate gradient** — a slot read twice
+   * receives twice. Measured with non-overlapping steps alone, that
+   * accumulation never shows.
    */
   gatherSpots(spots: Tensor, shape: readonly number[]): Tensor {
     const n = spots.size;
@@ -6901,7 +7510,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
   }
 
-  /** 번호표 자리에 `src` 를 써 넣은 **사본.** */
+  /**
+   * A **copy** with `src` written at the index table's positions.
+   */
   scatterSpots(
     spots: Tensor,
     src: Tensor,
@@ -6951,7 +7562,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return new Tensor(out, this.shape);
   }
 
-  /** 평평한 저장소를 **다른 걸음으로** 읽는다. torch 는 뷰지만 여기서는 사본이다. */
+  /**
+   * Reads flat storage **with different strides.** torch gives a view; here
+   * it is a copy.
+   */
   asStrided(
     size: readonly number[],
     stride: readonly number[],
@@ -6972,7 +7586,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       "AsStridedScatterBackward0");
   }
 
-  /** `select` 가 꺼내던 한 장을 **갈아끼운 사본.** */
+  /**
+   * A **copy** with the plate `select` would have taken swapped out.
+   */
   selectScatter(src: Tensor, dim: number, index: number): Tensor {
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
@@ -6982,7 +7598,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       "SelectScatterBackward0");
   }
 
-  /** `x[..., start:end:step]` 자리를 **갈아끼운 사본.** */
+  /**
+   * A **copy** with the `x[..., start:end:step]` region swapped out.
+   */
   sliceScatter(
     src: Tensor,
     dim = 0,
@@ -7000,7 +7618,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       "SliceScatterBackward0");
   }
 
-  /** 대각선 자리를 **갈아끼운 사본.** */
+  /**
+   * A **copy** with the diagonal swapped out.
+   */
   diagonalScatter(src: Tensor, offset = 0, dim1 = 0, dim2 = 1): Tensor {
     const rank = this.shape.length;
     const d1 = dim1 < 0 ? dim1 + rank : dim1;
@@ -7010,7 +7630,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       "DiagonalScatterBackward0");
   }
 
-  /** 마지막 축을 **대각선으로 펴서** 축을 하나 늘린다. `diagonal` 의 반대다. */
+  /**
+   * **Spreads the last axis onto a diagonal**, adding an axis. The opposite
+   * of `diagonal`.
+   */
   diagEmbed(offset = 0, dim1 = -2, dim2 = -1): Tensor {
     const n = (this.shape[this.shape.length - 1] ?? 0) + Math.abs(offset);
     const rank = this.shape.length + 1;
@@ -7028,9 +7651,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **평평하게 펴서** 번호대로 넣는다 — 축이라는 개념이 없다. `take` 의 반대다.
+   * **Flattens** and writes by index — there is no notion of an axis. The
+   * opposite of `take`.
    *
-   * 번호가 값으로 오므로 CPU 가 만드는 번호표와 같은 문을 그대로 쓴다.
+   * The indices arrive as values, so it uses the same door as a CPU-built
+   * index table.
    */
   put(index: Tensor, source: Tensor, accumulate = false): Tensor {
     return this.scatterSpots(index.reshape([index.size]),
@@ -7039,10 +7664,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 축마다 번호 텐서를 하나씩 받아 그 자리에 넣는다.
+   * Takes one index tensor per axis and writes at those positions.
    *
-   * 축별 번호를 **평평한 번호 하나로 접는다** — 그러면 `put` 과 같은 문이 된다.
-   * 접는 셈이 텐서 산술이라 커널이 안 늘어난다.
+   * The per-axis indices are **folded into one flat index** — which makes
+   * it the same door as `put`. The folding is tensor arithmetic, so no
+   * kernel is added.
    */
   indexPut(
     indices: readonly Tensor[],
@@ -7081,7 +7707,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return new Tensor(out, this.shape, { dtype: this.dtype });
   }
 
-  /** `scatter` 와 같은 자리지만 **덮어쓰는 대신 합친다.** */
+  /**
+   * The same place as `scatter`, but **combining instead of overwriting.**
+   */
   scatterReduce(
     dim: number,
     index: Tensor,
@@ -7107,7 +7735,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.reduceSpots(spots, src.reshape([src.size]), reduce, includeSelf);
   }
 
-  /** 번호가 가리키는 **줄**을 합친다. `scatterReduce` 와 달리 번호가 줄 단위다. */
+  /**
+   * Combines the **rows** the indices point at. Unlike `scatterReduce`, the
+   * indices are per row.
+   */
   indexReduce(
     dim: number,
     index: Tensor,
@@ -7138,10 +7769,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 가면이 참인 자리에 `source` 를 **평평한 차례대로** 채운다.
+   * Fills `source` **in flat order** into the positions where the mask is
+   * true.
    *
-   * 어느 값이 어디로 가는지가 가면의 **값**에 달렸는데도 결과 모양은 정해져 있다 —
-   * 그래서 값을 읽어 오지 않고 자리마다 "앞에 참이 몇이었나" 를 세는 커널로 푼다.
+   * Which value goes where depends on the mask's **values** while the
+   * result shape is fixed — so rather than reading the values back, it is
+   * solved with a kernel that counts, per position, how many trues came
+   * before.
    */
   maskedScatter(mask: Tensor, source: Tensor): Tensor {
     const n = this.size;
@@ -7190,49 +7824,63 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // 세어 준다. 조립 자체는 옳았으므로 셈은 그대로 옮기고, **이름이 사는 자리**만
   // 바꾼다. 결속은 이제 넘기기만 한다.
 
-  /** `dim` 을 따라 자른 몫을 **버림 나눗셈**으로. 0 쪽이 아니라 −∞ 쪽으로 내린다. */
+  /**
+   * The quotient along `dim` by **floor division.** It rounds towards −∞,
+   * not towards zero.
+   */
   floorDivide(other: Tensor): Tensor {
     return this.div(other).unary("floor");
   }
 
   /**
-   * 거듭제곱. **torch 는 배정도로 올려서 계산한다** — 우리는 그 형이 없다.
+   * A power. **torch computes it promoted to double** — we do not have that
+   * type.
    *
-   * 값은 `pow` 와 같고 형만 다른데, 형이 없으므로 여기서는 같은 것이다. 그래서
-   * `float_power_` 는 torch 도 float32 자리에서 거절한다 — 되쓸 곳이 없어서다.
+   * The value is the same as `pow` and only the type differs, and having no
+   * such type they are the same thing here. That is also why torch itself
+   * refuses `float_power_` at a float32 slot — there is nowhere to write it
+   * back.
    */
   floatPower(exponent: Tensor | number): Tensor {
     const k = exponent instanceof Tensor ? exponent : Tensor.full([], exponent);
     return this.binary("pow", k);
   }
 
-  /** `other - alpha * this`. 뺄셈의 좌우가 바뀐 자리다. */
+  /**
+   * `other - alpha * this`. The place where subtraction's sides are
+   * swapped.
+   */
   rsub(other: Tensor, alpha = 1): Tensor {
     return other.sub(this.mul(Tensor.full([], alpha)));
   }
 
   /**
-   * `this` 에서 `end` 로 `weight` 만큼 간 자리.
+   * The position `weight` of the way from `this` to `end`.
    *
-   * **무게가 텐서일 수 있다.** `lerpFrom` 은 수만 받으므로 자리마다 다른 무게를
-   * 못 준다 — torch 는 준다.
+   * **The weight may be a tensor.** `lerpFrom` takes numbers only, so it
+   * cannot give a different weight per position — torch can.
    */
   lerp(end: Tensor, weight: Tensor | number): Tensor {
     const w = weight instanceof Tensor ? weight : Tensor.full([], weight);
     return this.add(end.sub(this).mul(w));
   }
 
-  /** 배타적 논리합. **이항 표에 없어서** 0 과 다른지를 두 번 물어 만든다. */
+  /**
+   * Exclusive or. **Absent from the binary table**, so it is built by
+   * asking twice whether it differs from zero.
+   */
   logicalXor(other: Tensor): Tensor {
     const zero = Tensor.full([], 0);
     return this.binary("ne", zero).binary("ne", other.binary("ne", zero));
   }
 
   /**
-   * NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다**(torch 와 같다).
+   * NaN and infinities to finite numbers. **Unspecified, they are f32's
+   * extremes** (as in torch).
    *
-   * `where` 로 고른다 — 마스크를 곱하면 `0 × NaN = NaN` 이라 걸러 낸 자리가
-   * 통째로 오염된다. 이 저장소가 세 번 물린 자리다.
+   * It selects with `where` — multiplying by a mask gives `0 × NaN = NaN`,
+   * which contaminates the very slots that were filtered out. A place this
+   * repository has been bitten by three times.
    */
   nanToNum(nan = 0, posinf?: number, neginf?: number): Tensor {
     const hi = posinf ?? F32_MAX;
@@ -7255,7 +7903,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.unary("isinf").binary("mul", this.binary("lt", Tensor.full([], 0)));
   }
 
-  /** 실수부만 있는가. **복소수가 아니면 전부 참이고, 그것은 사실이다.** */
+  /**
+   * Whether there is only a real part. **Non-complex, everything is true,
+   * and that is a fact.**
+   */
   isreal(): Tensor {
     if (!this.isComplex()) {
       return Tensor.ones(this.shape).binary("gt", Tensor.full([], 0));
@@ -7264,10 +7915,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 자리마다 **가까운가.** `|a−b| ≤ atol + rtol·|b|` 다.
+   * Whether each position is **close.** `|a−b| ≤ atol + rtol·|b|`.
    *
-   * **오른쪽으로 기울어 있다** — `b` 의 크기로 재므로 둘을 바꾸면 답이 달라질 수
-   * 있다. torch 가 그렇게 정의한다.
+   * **It leans to the right** — it measures against `b`'s magnitude, so
+   * swapping the two can change the answer. torch defines it that way.
    */
   isclose(other: Tensor, rtol = 1e-5, atol = 1e-8): Tensor {
     const room = other.abs().mul(Tensor.full([], rtol)).add(Tensor.full([], atol));
@@ -7277,7 +7928,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // `allclose` 는 여기 없다 — **이미 아래에 있고 그쪽이 낫다.** 모양을 먼저 보고
   // `equalNan` 까지 받는다. 짝이라고 나란히 새로 적었다가 중복으로 걸렸다.
 
-  /** 원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다 — 값을 안 읽는다. */
+  /**
+   * Whether each element is in that list. It falls out of broadcasting
+   * alone — no values are read.
+   */
   isin(test: Tensor): Tensor {
     const grid = this.reshape([this.size, 1])
       .binary("eq", test.reshape([1, test.size]));
@@ -7286,8 +7940,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 최소와 최대를 **함께.** 하나만 물으면 다른 하나가 틀려도 안 걸린다 — torch 가
-   * 이 이름을 따로 두는 이유가 그것이다.
+   * The minimum and maximum **together.** Asking for one alone would not
+   * catch the other being wrong — that is why torch gives this name
+   * separately.
    */
   aminmax(dim?: number, keepdim = false): { min: Tensor; max: Tensor } {
     return {
@@ -7296,7 +7951,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
-  /** 표준편차와 평균을 함께. `aminmax` 와 같은 이유로 한 이름이다. */
+  /**
+   * The standard deviation and mean together. One name for the same reason
+   * as `aminmax`.
+   */
   stdMean(correction = 1): { std: Tensor; mean: Tensor } {
     return { std: this.std(correction), mean: this.mean() };
   }
@@ -7305,16 +7963,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return { variance: this.variance(correction), mean: this.mean() };
   }
 
-  /** 마지막 두 축의 켤레 전치. 실수에서는 전치와 같다. */
+  /**
+   * The conjugate transpose of the last two axes. On reals it is the
+   * transpose.
+   */
   adjoint(): Tensor {
     return this.isComplex() ? this.conj().swapaxes(-2, -1) : this.swapaxes(-2, -1);
   }
 
   /**
-   * 모든 짝 사이의 거리. **브로드캐스팅 하나로 풀린다** — 커널이 안 는다.
+   * The distance between every pair. **It falls out of broadcasting alone**
+   * — no kernel is added.
    *
-   * `p === 2` 를 따로 두는 것은 빨라서가 아니라 **제곱근이 0 에서 미분이 없어서**다.
-   * 일반 길(`|d|^p` 뒤에 `^(1/p)`)로 가면 같은 자리에서 기울기가 NaN 이 된다.
+   * `p === 2` is kept separate not because it is faster but because **the
+   * square root has no derivative at zero.** Down the general path (`|d|^p`
+   * then `^(1/p)`) the gradient becomes NaN at that same place.
    */
   cdist(other: Tensor, p = 2.0): Tensor {
     const [n, k] = [this.shape[0] ?? 0, this.shape[1] ?? 0];
@@ -7325,7 +7988,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 공분산. **줄이 변수이고 칸이 관측이다** — numpy 와 축이 반대라 헷갈리는 자리다.
+   * Covariance. **Rows are variables and columns are observations** — the
+   * axes are the opposite of numpy's, which makes it a confusing place.
    */
   cov(correction = 1): Tensor {
     const wide = this.shape.length === 1
@@ -7338,11 +8002,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 크로네커 곱. **1 차원만 한다** — 그 위는 거절한다.
+   * The Kronecker product. **One-dimensional only** — above that it
+   * refuses.
    *
-   * 결속에 있던 판이 축 하나만 보고 있었고(`shape[0]` 두 개), 2 차원을 넣으면 답이
-   * 조용히 틀렸다. 옮기면서 고칠 수도 있었지만, 그러면 여기 없는 능력을 있는 것처럼
-   * 적게 된다 — **틀린 답보다 없는 기능이 낫다**는 것이 이 저장소의 규칙이다.
+   * The version in the binding was looking at one axis only (two
+   * `shape[0]`s), and given two dimensions the answer was quietly wrong. It
+   * could have been fixed while carrying it across, but that writes down a
+   * capability that is not here as though it were — **a missing feature
+   * beats a wrong answer** is this repository's rule.
    */
   kron(other: Tensor): Tensor {
     if (this.shape.length !== 1 || other.shape.length !== 1) {
@@ -7356,7 +8023,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.reshape([n, 1]).mul(other.reshape([1, m])).reshape([n * m]);
   }
 
-  /** 공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다. */
+  /**
+   * The covariance divided by the standard deviations. **The diagonal comes
+   * out 1** — that is the check.
+   */
   corrcoef(): Tensor {
     const c = this.cov();
     const n = c.shape[0] ?? 0;
@@ -7366,9 +8036,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 지정한 축끼리 접어 곱한다. 접을 축을 몰고 **행렬곱 한 번**으로 끝낸다.
+   * Folds and multiplies along the named axes. It herds the folded axes and
+   * finishes with **one matrix multiply.**
    *
-   * @param dims 수를 주면 뒤에서 그만큼, 목록 둘을 주면 각각의 축이다.
+   * @param dims a number means that many from the end; two lists mean the
+   *   axes of each.
    */
   tensordot(other: Tensor, dims: number | readonly [readonly number[], readonly number[]] = 2): Tensor {
     const ash = this.shape;
@@ -7414,16 +8086,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 대각선을 한 값으로.
+   * The diagonal to one value.
    *
-   * **`wrap` 은 세로로 긴 행렬에서만 뜻이 있다.** 걸음은 어느 쪽이든 `cols + 1` 이고,
-   * 갈리는 것은 **어디서 멈추느냐**뿐이다 — 끄면 `cols²` 칸에서 멈춰 첫 블록의
-   * 대각선만 칠하고, 켜면 끝까지 가서 아래 블록들의 대각선도 칠한다. numpy 의
-   * `fill_diagonal` 이 정확히 그 한 줄이고 torch 가 그대로 받는다.
+   * **`wrap` only means something on a tall matrix.** The stride is `cols +
+   * 1` either way, and all that differs is **where it stops** — off, it
+   * stops at `cols²` slots and paints only the first block's diagonal; on,
+   * it runs to the end and paints the lower blocks' diagonals too. numpy's
+   * `fill_diagonal` is exactly that one line and torch takes it as-is.
    *
-   * 처음에 "되돌아 오는 자리는 줄을 하나 건너뛴다" 고 적고 그렇게 짰는데, 그런
-   * 규칙은 없다. 정사각으로만 묻는 케이스 하나뿐이어서 그 갈래는 **아무것도 안
-   * 지나고 있었다** — 세로로 긴 것으로 묻는 케이스를 같이 넣는다.
+   * It was first written down as "the wrapped position skips a row", and
+   * coded that way — no such rule exists. There was one case and it asked
+   * with a square, so that branch was **passing through nothing** — a case
+   * asking with a tall matrix goes in alongside.
    */
   fillDiagonal_(value: number, wrap = false): Tensor {
     const rows = this.shape[0] ?? 0;
@@ -7473,7 +8147,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       : new NotImplementedError(said);
   }
 
-  /** 지수분포. 평균이 `1/lambd` 다. **`lambd` 는 양수여야 한다.** */
+  /**
+   * The exponential distribution. Its mean is `1/lambd`, and **lambd has to
+   * be positive**.
+   */
   exponential_(lambd = 1.0): Tensor {
     this.needsFloatDraw("exponential_", "runtime");
     if (!(lambd > 0)) {
@@ -7484,19 +8161,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.drawInto_((u) => -Math.log(1 - u) / lambd);
   }
 
-  /** 코시분포. **평균이 없다** — 꼬리가 두꺼워 표본평균이 안 모인다. */
+  /**
+   * The Cauchy distribution. **It has no mean** — the tails are heavy
+   * enough that the sample mean does not converge.
+   */
   cauchy_(median = 0.0, sigma = 1.0): Tensor {
     this.needsFloatDraw("cauchy_", "runtime");
     return this.drawInto_((u) => median + sigma * Math.tan(Math.PI * (u - 0.5)));
   }
 
-  /** 로그정규분포. `mean`·`std` 는 **로그를 취한 뒤의** 값이다(torch 와 같다). */
+  /**
+   * The log-normal distribution. `mean` and `std` are the values **after
+   * taking logs** (as in torch).
+   */
   logNormal_(mean = 1.0, std = 2.0): Tensor {
     this.needsFloatDraw("log_normal_", "unimplemented");
     return this.drawInto_(() => Math.exp(mean + std * gauss()));
   }
 
-  /** 정규분포로 덮어쓴다. **`std` 는 음수일 수 없다** — 0 이면 평균 그대로다. */
+  /**
+   * Overwrites with the normal distribution. **`std` cannot be negative** —
+   * at 0 it is the mean itself.
+   */
   normal_(mean = 0.0, std = 1.0): Tensor {
     this.needsFloatDraw("normal_", "unimplemented");
     if (!(std >= 0)) {
@@ -7506,7 +8192,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.drawInto_(() => mean + std * gauss());
   }
 
-  /** `[from, to)` 의 실수로 덮어쓴다. **`from < to` 여야 한다.** */
+  /**
+   * Overwrites with reals in `[from, to)`. **`from < to` is required.**
+   */
   uniform_(from = 0.0, to = 1.0): Tensor {
     this.needsFloatDraw("uniform_", "unimplemented");
     if (!(from < to)) {
@@ -7517,10 +8205,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 기하분포. **이산이라 정수 텐서에서도 돈다** — 연속인 것들과 갈리는 하나다.
+   * The geometric distribution. **Being discrete, it runs on integer
+   * tensors too** — that is what separates it from the continuous ones.
    *
-   * `p` 는 **열린 구간**이다. 0 이면 영원히 안 나오고 1 이면 늘 첫 번에 나오므로
-   * 둘 다 분포가 아니다.
+   * `p` is an **open interval**. At 0 the event never happens and at 1 it
+   * always happens on the first try, so neither is a distribution.
    */
   geometric_(p: number): Tensor {
     if (!(p > 0 && p < 1)) {
@@ -7531,11 +8220,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `[from, to)` 의 정수로 채운다.
+   * Fills with integers from `[from, to)`.
    *
-   * **안 주면 f32 가 정확히 셀 수 있는 데까지다**(2²⁴). torch 는 형마다 다르고
-   * int64 에서 2⁶² 인데, **여기 int64 는 f32 칸에 담기므로 그 위를 셀 수가 없다** —
-   * 뽑아 놓아도 이웃한 정수를 구별 못 해 값이 뭉친다. 그 자리는 흉내 내지 않는다.
+   * **Left out, the bound is as far as f32 counts exactly** (2^24). torch's
+   * depends on the dtype and is 2^62 for int64, but int64 here lives in an
+   * f32 cell and cannot count past that — drawn values above it have
+   * neighbours that cannot be told apart. That is not imitated.
    */
   random_(from = 0, to?: number): Tensor {
     const high = to ?? EXACT_INT_LIMIT;
@@ -7547,25 +8237,31 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 실수 형인가. **묻는 값이 아니라 형이다** — 값이 전부 정수여도 참일 수 있다.
+   * Whether the type is a floating-point one. **It asks about the type, not
+   * the values** — it can be true with every value an integer.
    *
-   * `dtype` 을 보면 알 수 있지만 그 이름이 torch 에 있고 여기 없었다. 결속이 그
-   * 갈래를 파이썬에서 적고 있었고, 그러면 TypeScript 쪽에는 물을 자리가 없다.
+   * Looking at `dtype` would tell you, but the name exists in torch and did
+   * not exist here. The binding was writing that branch in Python, which
+   * leaves nowhere for the TypeScript side to ask.
    */
   isFloatingPoint(): boolean {
     return this.dtype === "float32";
   }
 
-  /** 음수를 담을 수 있는 형인가. `bool` 만 거짓이다. */
+  /**
+   * Whether the type can hold negatives. Only `bool` is false.
+   */
   isSigned(): boolean {
     return this.dtype !== "bool";
   }
 
   /**
-   * 원소 하나짜리인데 그 값이 0 이 아닌가.
+   * Whether this single-element tensor's value is non-zero.
    *
-   * **여럿이면 멈춘다.** 파이썬의 `if tensor:` 가 조용히 첫 원소를 보는 일을 막는
-   * 자리이고, torch 가 그래서 이 이름을 따로 둔다. 값을 봐야 하므로 비동기다.
+   * **With more than one it stops.** It is the place that keeps Python's
+   * `if tensor:` from quietly looking at the first element, which is why
+   * torch gives this name separately. It has to look at the value, so it is
+   * asynchronous.
    */
   async isNonzero(): Promise<boolean> {
     if (this.size !== 1) {
@@ -7579,7 +8275,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.full(this.shape, value);
   }
 
-  /** **모양만 빌린다.** torch 와 달리 값을 0 으로 둔다 — 쓰레기를 배우면 안 된다. */
+  /**
+   * **It borrows the shape only.** Unlike torch it leaves the values at 0 —
+   * garbage is not a thing to learn.
+   */
   emptyLike(): Tensor {
     return Tensor.zeros(this.shape);
   }
@@ -7589,10 +8288,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.
+   * Pulls **each slice along `dim` down below `maxnorm`** in norm.
    *
-   * 조립으로 둔다 — **배율 안에 `x` 가 들어 있어서** 역방향이 `g·s` 가 아니다.
-   * 손으로 적으면 순방향만 맞고 기울기가 조용히 틀린다(코어에서 그렇게 한 번 틀렸다).
+   * Left as an assembly — **the scale has `x` inside it**, so the backward
+   * is not `g·s`. Written by hand, the forward is right and the gradient
+   * quietly wrong (which is how it went wrong once in the core).
    */
   renorm(p: number, dim: number, maxnorm: number): Tensor {
     const rank = this.shape.length;
@@ -7612,9 +8312,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 평평한 번호를 축별 번호로 푼다. **축마다 텐서 하나씩, 묶음으로 낸다**(실측).
+   * Unpacks a flat index into per-axis indices. **One tensor per axis,
+   * returned as a bundle** (measured).
    *
-   * 셈이 나눗셈과 나머지뿐이라 값을 안 읽는다.
+   * The arithmetic is division and remainder only, so no values are read.
    */
   unravelIndex(shape: readonly number[]): Tensor[] {
     const st = rowStrides(shape);
@@ -7623,24 +8324,31 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       .remainder(size));
   }
 
-  /** 여러 행렬을 잇달아 곱한다. `multiDot` 이 같은 것을 목록으로 받는다. */
+  /**
+   * Multiplies several matrices in sequence. `multiDot` takes the same
+   * thing as a list.
+   */
   static chainMatmul(...matrices: readonly Tensor[]): Tensor {
     let out = matrices[0]!;
     for (let i = 1; i < matrices.length; i++) out = out.mm(matrices[i]!);
     return out;
   }
 
-  /** 바깥곱의 옛 이름. `outer` 와 같은 것이다. */
+  /**
+   * The old name for the outer product. The same as `outer`.
+   */
   ger(other: Tensor): Tensor {
     return this.outer(other);
   }
 
   /**
-   * **마지막 축끼리** 접어 곱한다. 1 차원이면 내적이고 그 위는 `a @ bᵀ` 다.
+   * Folds and multiplies **along the last axes.** One-dimensional it is the
+   * inner product; above that it is `a @ bᵀ`.
    *
-   * `dot` 과 갈리는 자리가 2 차원이다 — `dot` 은 1 차원만 받는다. 이 이름이 오래
-   * 없었는데도 안 드러난 것은, 검사가 소스를 정규식으로 훑으면서 지역 변수
-   * `const inner = …` 를 공개 이름으로 세고 있었기 때문이다.
+   * Two dimensions is where it parts from `dot` — `dot` takes one dimension
+   * only. This name was missing for a long time without surfacing, because
+   * the check sweeping the source with a regular expression was counting
+   * the local variable `const inner = …` as a public name.
    */
   inner(other: Tensor): Tensor {
     if (this.shape.length <= 1) return this.mul(other).sum();
@@ -7648,9 +8356,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 행렬 × 벡터. `mm` 이 하는 일이지만 torch 는 이름을 따로 준다.
+   * Matrix × vector. The work `mm` does, but torch gives it a name of its
+   * own.
    *
-   * 벡터를 열 하나로 세웠다가 그 축을 도로 지운다 — 결과가 1차원이어야 한다.
+   * It stands the vector up as a single column and then removes that axis
+   * again — the result has to be one-dimensional.
    */
   mv(vec: Tensor): Tensor {
     return this.mm(vec.reshape([vec.size, 1])).reshape([this.shape[0] ?? 0]);
@@ -7679,10 +8389,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── 합성곱·풀링 ───────────────────────────────────────────────────────
 
   /**
-   * 2차원 합성곱. `this` 는 `(N, C, H, W)`, 커널은 `(O, C, KH, KW)` 다 — **NCHW** 다.
+   * Two-dimensional convolution. `this` is `(N, C, H, W)` and the kernel
+   * `(O, C, KH, KW)` — **NCHW.**
    *
-   * 자매는 NHWC 를 들고 다녔는데 그것은 TF.js 의 conv 가 그 배치에서만 빨라서였다.
-   * 여기서는 커널을 우리가 쓰므로 torch 와 같은 배치를 그대로 쓴다.
+   * The sister project carried NHWC around, and that was because TF.js's
+   * conv was fast only in that layout. Here we write the kernels ourselves,
+   * so torch's layout is used as-is.
    */
   conv2d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
     if (this.shape.length !== 4 || weight.shape.length !== 4) {
@@ -7691,7 +8403,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.convND(weight, bias, stride, padding);
   }
 
-  /** 1차원 합성곱. `(N, C, L)`. */
+  /**
+   * One-dimensional convolution. `(N, C, L)`.
+   */
   conv1d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
     if (this.shape.length !== 3 || weight.shape.length !== 3) {
       throw new Error(`conv1d is 3-D by 3-D: [${this.shape}] x [${weight.shape}]`);
@@ -7699,7 +8413,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.convND(weight, bias, stride, padding);
   }
 
-  /** 3차원 합성곱. `(N, C, D, H, W)`. */
+  /**
+   * Three-dimensional convolution. `(N, C, D, H, W)`.
+   */
   conv3d(weight: Tensor, bias: Tensor | null = null, stride = 1, padding = 0): Tensor {
     if (this.shape.length !== 5 || weight.shape.length !== 5) {
       throw new Error(`conv3d is 5-D by 5-D: [${this.shape}] x [${weight.shape}]`);
@@ -7817,10 +8533,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 표본 하나의 `-log P(표적 | 소리)`.
+   * One sample's `-log P(target | audio)`.
    *
-   * @param lp `(T, C)` 로그 확률.
-   * @param labels 표적 글자들.
+   * @param lp `(T, C)` log probabilities.
+   * @param labels the target tokens.
    */
   static ctcOne(
     lp: Tensor, labels: readonly number[], nTime: number, blank: number,
@@ -7881,16 +8597,19 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 창 자리를 표본이 흔드는 최대 풀링.
+   * Max pooling whose window positions are shaken by a sample.
    *
-   * **표본은 평면마다 다르다** — torch 의 `_random_samples` 가 `(N, C, 축)` 이라
-   * 창이 평면마다 갈린다. 그래서 평면 수만큼 돈다. 비싼 대신 torch 와 같다.
+   * **The sample differs per plane** — torch's `_random_samples` is `(N, C,
+   * axis)`, so the windows diverge per plane. Hence it loops over the
+   * planes. Expensive, and the same as torch.
    *
-   * **축 순서가 차원마다 다르다.** ATen 의 2차원판은 표본을 (너비, 높이) 로 읽고
-   * 3차원판은 (깊이, 높이, 너비) 로 읽는다 — 두 함수가 서로 어긋나 있고, 여기서
-   * 흉내내는 것은 그 어긋남이다.
+   * **The axis order differs by dimensionality.** ATen's 2-D version reads
+   * the sample as (width, height) and the 3-D version as (depth, height,
+   * width) — the two functions are out of step with each other, and what is
+   * imitated here is that inconsistency.
    *
-   * @param samples 평면마다의 표본. `samples[plane][i]` 이고 `i` 는 위 순서다.
+   * @param samples the sample per plane. It is `samples[plane][i]`, and `i`
+   *   follows the order above.
    */
   fractionalMaxPool(
     kernel: number,
@@ -7928,10 +8647,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 자리표가 가리키는 칸에 값을 놓고 나머지는 0 으로 둔다.
+   * Places values at the slots the indices point at and leaves the rest
+   * zero.
    *
-   * 풀링이 버린 자투리는 되살릴 수 없어서 출력 크기를 밖에서 정한다. 기본은
-   * `(n-1)·stride - 2·padding + kernel` 이고, `outSize` 로 직접 줄 수도 있다.
+   * What pooling discarded cannot be brought back, so the output size is
+   * given from outside. The default is `(n-1)·stride - 2·padding + kernel`,
+   * and `outSize` can name it directly.
    */
   maxUnpool(
     indices: Tensor,
@@ -7977,10 +8698,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 차원 수에 상관없는 합성곱. `conv1d`·`conv2d`·`conv3d` 가 전부 이리로 온다.
+   * Convolution independent of dimensionality. `conv1d`, `conv2d` and
+   * `conv3d` all come here.
    *
-   * 공간 축이 하나면 1차원, 둘이면 2차원이다 — 차원마다 함수를 따로 두면 세 벌이
-   * 되고 그중 하나만 고치는 날이 온다. 자매가 실제로 그 상태였다.
+   * One spatial axis is 1-D and two is 2-D — a separate function per
+   * dimensionality makes three copies, and a day comes when only one of
+   * them is fixed. The sister project was in exactly that state.
    */
   convND(
     weight: Tensor,
@@ -8075,15 +8798,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 차원 수에 상관없는 전치 합성곱.
+   * Transposed convolution independent of dimensionality.
    *
-   * **새 커널이 없다.** 전치 합성곱의 순방향은 보통 합성곱이 입력 쪽으로 흘리는
-   * 것과 같은 계산이라 `convNDGradInputTiled` 를 그대로 쓴다. 역방향도 마찬가지로
-   * 뒤집힌다 — 입력 쪽 기울기가 보통 합성곱의 순방향이고, 가중치 쪽은 같은 커널에
-   * 두 인자를 바꿔 넣은 것이다. 같은 계산을 두 벌 두면 한쪽만 고쳐지는 날이 온다.
+   * **There is no new kernel.** A transposed convolution's forward is the
+   * same computation as an ordinary convolution's flow towards its input,
+   * so `convNDGradInputTiled` is used as-is. The backward flips likewise —
+   * the input-side gradient is an ordinary convolution's forward, and the
+   * weight side is the same kernel with two arguments exchanged. The same
+   * computation in two copies means a day when one of them is fixed.
    *
-   * **가중치 축이 `convND` 와 뒤집혀 있다** — `(입력, 출력, …)` 다. 정사각 커널이면
-   * 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다.
+   * **The weight axes are flipped relative to `convND`** — `(in, out, …)`.
+   * With a square kernel the shape still matches when flipped, so only the
+   * values diverge.
    */
   convTransposeND(
     weight: Tensor,
@@ -8175,7 +8901,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return result;
   }
 
-  /** 차원 수에 상관없는 풀링. */
+  /**
+   * Pooling independent of dimensionality.
+   */
   poolND(kind: "max" | "avg", kernel: number, stride?: number): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
@@ -8221,11 +8949,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `size`·`scaleFactor`·`mode` 를 한자리에서 받는 확대. `Upsample` 층이 이것이다.
+   * Enlargement taking `size`, `scaleFactor` and `mode` in one place. The
+   * `Upsample` layer is this.
    *
-   * **`mode` 를 받아만 놓고 안 쓰는 것이 이 함수가 있는 이유다.** 최근접과 겹선형은
-   * 커널이 아예 다른데, 골라 주지 않으면 겹선형을 달라고 해도 최근접이 나온다 —
-   * 예외가 아니라 조용히 다른 값이다.
+   * **Taking `mode` and then not using it is the reason this function
+   * exists.** Nearest and bilinear are entirely different kernels, and
+   * without dispatching on it, asking for bilinear gives you nearest — not
+   * an exception, a quietly different value.
    */
   interpolate(size: number | readonly number[] | null = null,
               scaleFactor: number | null = null,
@@ -8249,7 +8979,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.interpolateBilinear(oh, ow, alignCorners);
   }
 
-  /** 최근접 이웃으로 확대. `Upsample`·`interpolate` 가 이것이다. */
+  /**
+   * Nearest-neighbour enlargement. `Upsample` and `interpolate` are this.
+   */
   upsample(scale: number): Tensor {
     const spatial = this.shape.length - 2;
     const inDims = this.shape.slice(2);
@@ -8286,17 +9018,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 출력 크기를 정해 놓고 접는다. 창 크기가 입력에서 나온다.
+   * Folds to a fixed output size. The window size comes out of the input.
    *
-   * **나눠떨어지지 않아도 된다.** 예전에는 거절했는데, torch 는 창을 자리마다 다르게
-   * 잡는다 — 거절은 흉내의 한 방식이 아니라 다른 규칙이었다. 시작은 내림, 끝은
-   * 올림이고, 8 을 3 으로 줄이면 창이 3·3·2 다.
+   * **It does not have to divide evenly.** It used to refuse, and torch
+   * takes a different window per position — the refusal was not a form of
+   * imitation but a different rule. The start floors and the end ceils, so
+   * reducing 8 to 3 gives windows of 3·3·2.
    *
-   * 축을 하나씩 접는다. 창이 직사각형이라 축별로 나눠 해도 같은 값이다 — 평균은 각
-   * 줄의 길이가 같아서 평균의 평균이 전체 평균이고, 최댓값은 원래 그렇다.
+   * It folds one axis at a time. The window is rectangular, so doing it per
+   * axis gives the same value — each row has the same length, which makes
+   * the mean of means the overall mean, and the maximum is that way anyway.
    *
-   * 전용 커널을 안 쓴다. 창이 자리마다 다르면 셰이더에 상수로 구울 것이 없고,
-   * 적응형은 대개 마지막 한 번이라 스텝마다 도는 자리가 아니다.
+   * No dedicated kernel is used. With a window that differs per position
+   * there is nothing to bake into the shader as a constant, and adaptive
+   * pooling is usually a single final call rather than something running
+   * per step.
    */
   adaptivePool(kind: "max" | "avg", outSize: number | readonly number[]): Tensor {
     const spatial = this.shape.length - 2;
@@ -8319,16 +9055,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return out;
   }
 
-  /** 예전 이름. `adaptivePool("avg", …)` 와 같다 — 부르던 자리가 있어 남긴다. */
+  /**
+   * The old name. The same as `adaptivePool("avg", …)` — kept because there
+   * are callers.
+   */
   adaptiveAvgPool(outSize: number): Tensor {
     return this.adaptivePool("avg", outSize);
   }
 
   /**
-   * `p` 승의 합을 `p` 제곱근한 것.
+   * The `p`-th root of the sum of `p`-th powers.
    *
-   * **torch 의 조립을 그대로 따른다** — 평균 풀링을 쓰고 창 크기를 곱해 합으로
-   * 되돌린 뒤 제곱근을 취한다. 부호와 `relu` 가 끼는 것도 그쪽 구현 그대로다.
+   * **It follows torch's assembly exactly** — average pooling, multiplied
+   * by the window size to get back to a sum, then the root. The sign
+   * handling and the `relu` in the middle are that implementation's too.
    */
   lpPool(normType: number, kernel: number, stride?: number): Tensor {
     const spatial = this.shape.length - 2;
@@ -8339,7 +9079,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return signed.mul(Tensor.full([], count)).powScalar(1 / normType);
   }
 
-  /** 겹치지 않는 창의 최대값. `this` 는 `(N, C, H, W)`. */
+  /**
+   * The maximum of non-overlapping windows. `this` is `(N, C, H, W)`.
+   */
   maxPool2d(kernel = 2, stride?: number): Tensor {
     return this.pool2d("max", kernel, stride ?? kernel);
   }
@@ -8362,12 +9104,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * 필요 없다 — 대신 중간 텐서가 몇 개 생기고, 그게 지금 치르는 값이다.
    */
   /**
-   * 융합 배치 정규화. 통계·정규화·크기·치우침을 커널 셋으로 끝낸다.
+   * Fused batch normalisation. Statistics, normalisation, scale and shift
+   * in three kernels.
    *
-   * 조립판은 층 하나에 dispatch 가 스무 개 넘게 들었고 ResNet 한 스텝의 1,636 개
-   * 중 태반이 거기서 나왔다(실측). 여기서는 순방향 둘, 역방향 둘이다.
+   * The assembled version cost over twenty dispatches for one layer, and
+   * most of a ResNet step's 1,636 came from there (measured). Here it is
+   * two forward and two backward.
    *
-   * @returns 정규화 결과와, 이동 통계를 갱신할 평균·분산.
+   * @returns the normalised result, and the mean and variance for updating
+   *   the running statistics.
    */
   batchNormFused(
     weight: Tensor, bias: Tensor, eps = 1e-5,
@@ -8459,7 +9204,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // `conj` 자신은 `conj(g)` 다. 셋이 다른 규칙이고 실수 입력으로는 셋 다 구분이
   // 안 된다 — 켤레가 실수에서 항등이기 때문이다.
 
-  /** 이 텐서가 복소수인가. `torch.is_complex` 자리다. */
+  /**
+   * Whether this tensor is complex. Where `torch.is_complex` goes.
+   */
   isComplex(): boolean {
     return isComplexDType(this.dtype);
   }
@@ -8478,10 +9225,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 실수부와 허수부를 엮는다. `torch.complex` 자리다.
+   * Weaves a real and an imaginary part together. Where `torch.complex`
+   * goes.
    *
-   * 역방향은 받은 복소 기울기를 **그대로 갈라 준다** — 규약이 곧
-   * `(∂L/∂re, ∂L/∂im)` 이라 꺼내는 것 말고 할 일이 없다. 이 자리가 규약의 정의다.
+   * The backward **splits the incoming complex gradient as it is** — the
+   * convention *is* `(∂L/∂re, ∂L/∂im)`, so there is nothing to do but take
+   * it apart. This place is the definition of the convention.
    */
   static complex(re: Tensor, im: Tensor): Tensor {
     if (re.shape.length !== im.shape.length
@@ -8503,7 +9252,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
   }
 
-  /** 크기와 편각으로 만든다. `torch.polar` 자리다. */
+  /**
+   * Builds from magnitude and angle. Where `torch.polar` goes.
+   */
   static polar(abs: Tensor, angle: Tensor): Tensor {
     if (abs.shape.length !== angle.shape.length
       || abs.shape.some((d, i) => d !== angle.shape[i])) {
@@ -8518,9 +9269,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 복소수를 **실수 짝으로 본다** — 모양 끝에 2 가 붙는다. 버퍼를 안 옮긴다.
+   * **Views a complex as a pair of reals** — a 2 is appended to the shape.
+   * The buffer is not moved.
    *
-   * 인터리브 저장이 이 한 줄을 위해 있다고 해도 된다. torch 에서도 뷰다.
+   * It would be fair to say the interleaved storage exists for this one
+   * line. It is a view in torch too.
    */
   viewAsReal(): Tensor {
     if (!this.isComplex()) {
@@ -8538,7 +9291,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
   }
 
-  /** 실수 짝을 복소수로 본다. `viewAsReal` 의 반대이고 역시 뷰다. */
+  /**
+   * Views a pair of reals as a complex. The opposite of `viewAsReal`, and a
+   * view likewise.
+   */
   viewAsComplex(): Tensor {
     const last = this.shape[this.shape.length - 1];
     if (this.isComplex() || last !== 2) {
@@ -8566,10 +9322,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 실수부. **기울기는 `g + 0i` 로 돌아간다.**
+   * The real part. **Gradient returns as `g + 0i`.**
    *
-   * torch 에서 이것은 스트라이드 뷰인데 여기서는 **복사**다 — 우리 텐서는 모양만
-   * 들고 스트라이드를 안 들어서 칸 걸러 보는 틀을 만들 수가 없다. 값은 같다.
+   * In torch this is a strided view; here it is **a copy** — our tensors
+   * carry only a shape and no strides, so there is no way to build a frame
+   * that reads every other slot. The values are the same.
    */
   real(): Tensor {
     // **`real` 과 `imag` 는 규칙이 다르다.** torch 는 실수 텐서에 `real` 을 주면
@@ -8590,8 +9347,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 허수부. **기울기는 `0 + gi` 다** — `−gi` 로 적으면 부호만 뒤집힌 채 그럴듯하게
-   * 돈다. torch 를 재보면 `z.imag` 의 기울기가 `0+1j` 다.
+   * The imaginary part. **The gradient is `0 + gi`** — written as `−gi` it
+   * runs plausibly with only the sign flipped. Measuring torch, the
+   * gradient of `z.imag` is `0+1j`.
    */
   imag(): Tensor {
     this.needComplex("imag");
@@ -8627,11 +9385,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 켤레. **정칙이 아니라 역방향이 `conj(g)`** 다 — `conj(f')·g` 꼴이 아니다.
+   * The conjugate. **Not holomorphic, so the backward is `conj(g)`** — not
+   * of the form `conj(f')·g`.
    *
-   * **torch 와 갈리는 자리다.** torch 의 `conj` 는 게을러서 켤레 비트만 세우고
-   * 값을 안 뒤집는다(그래서 `is_conj` 가 참이고 `view_as_real` 이 거절한다).
-   * 우리 것은 즉시 뒤집으므로 그 상태가 아예 없다 — 값은 같다.
+   * **A place it parts from torch.** torch's `conj` is lazy and raises a
+   * conjugate bit without flipping the values (which is why `is_conj` is
+   * true and `view_as_real` refuses). Ours flips immediately, so that state
+   * does not exist at all — the values are the same.
    */
   conjPhysical(): Tensor {
     if (!this.isComplex()) return this;
@@ -8649,37 +9409,47 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 켤레 비트가 서 있는가. **여기서는 언제나 거짓이다.**
+   * Whether the conjugate bit is raised. **Here it is always false.**
    *
-   * torch 의 `conj()` 는 값을 안 바꾸고 **비트 하나를 세운다** — 실제 켤레는 나중에
-   * 필요할 때 만든다(그래서 `resolve_conj` 가 따로 있다). 여기 `conj` 는 그 자리에서
-   * 켤레를 만들므로 미룰 것이 없고, 세울 비트도 없다.
+   * torch's `conj()` does not change the values and **raises one bit** —
+   * the actual conjugate is made later when needed (hence the separate
+   * `resolve_conj`). `conj` here makes the conjugate on the spot, so there
+   * is nothing to defer and no bit to raise.
    *
-   * **그래도 이름을 둔다.** 없으면 `x.isConj()` 가 "그런 것 없다" 로 멈추는데, 그
-   * 물음의 답은 있다 — 거짓이다. 게으른 비트가 없다는 것은 구현의 사정이지
-   * 물음이 뜻을 잃는 이유가 아니다.
+   * **The name is kept anyway.** Without it, `x.isConj()` stops with "no
+   * such thing", and that question does have an answer — false. Having no
+   * lazy bit is an implementation's business, not a reason for the question
+   * to lose its meaning.
    */
   isConj(): boolean {
     return false;
   }
 
-  /** 부호 비트가 서 있는가. `isConj` 와 같은 이유로 언제나 거짓이다. */
+  /**
+   * Whether the sign bit is raised. Always false, for the same reason as
+   * `isConj`.
+   */
   isNeg(): boolean {
     return false;
   }
 
   /**
-   * 미뤄 둔 켤레를 실제 값으로. **여기서는 자기 자신이다** — 미뤄 둔 것이 없다.
+   * A deferred conjugate made real. **Here it is itself** — nothing was
+   * deferred.
    *
-   * torch 에서는 `conj()` 가 세운 비트를 여기서 갚는다. 우리 `conj` 는 이미 갚고
-   * 오므로 갚을 것이 없고, 그래서 이것은 항등이다. 항등인 것과 **없는 것은 다르다** —
-   * torch 코드가 켤레를 넘기기 전에 이 줄을 넣는 것은 흔한 관용구다.
+   * In torch this repays the bit `conj()` raised. Our `conj` arrives
+   * already repaid, so there is nothing to repay and this is the identity.
+   * Being the identity and **being absent are different** — putting this
+   * line in before handing a conjugate on is a common idiom in torch code.
    */
   resolveConj(): Tensor {
     return this;
   }
 
-  /** 미뤄 둔 부호 뒤집기를 실제 값으로. `resolveConj` 와 같은 이유로 항등이다. */
+  /**
+   * A deferred negation made real. The identity, for the same reason as
+   * `resolveConj`.
+   */
   resolveNeg(): Tensor {
     return this;
   }
@@ -8699,11 +9469,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 복소수의 크기. **결과가 실수이고 기울기가 `z/|z|`** 다 — 켤레가 **안** 붙는다.
+   * The magnitude of a complex. **The result is real and the gradient is
+   * `z/|z|`** — with **no** conjugate attached.
    *
-   * 실수 `abs` 는 단항 표에 있고 이쪽으로 안 온다. `abs()` 가 형을 보고 갈라 준다 —
-   * **공개인 이유가 그것이다.** 갈라 주는 자리가 클래스 밖(단항 표를 얹은 뒤)이라
-   * 비공개면 못 부른다.
+   * The real `abs` is in the unary table and does not come here. `abs()`
+   * looks at the type and dispatches — **that is why this is public.** The
+   * dispatch happens outside the class (after the unary table is laid on),
+   * so a private one could not be called.
    */
   complexAbs(): Tensor {
     const n = this.size;
@@ -8719,7 +9491,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     );
   }
 
-  /** 편각. 복소수는 `atan2(im, re)`, 실수는 음수에 π 다(형은 언제나 실수). */
+  /**
+   * The argument. For a complex, `atan2(im, re)`; for a real, π on
+   * negatives (the type is always real).
+   */
   angle(): Tensor {
     if (!this.isComplex()) {
       return this.binary("lt", Tensor.full([], 0), "float32")
@@ -8802,24 +9577,28 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── 역전파 ────────────────────────────────────────────────────────────
 
   /**
-   * @param retainGraph 참이면 그래프를 놓지 않는다. torch 와 같이 **기본은 놓는 것**이다 —
-   *   중간 값들이 메모리를 붙들고 있어서, 안 놓으면 학습 루프에서 계속 쌓인다.
+   * @param retainGraph true keeps the graph. As in torch, **the default is
+   *   to release it** — the intermediate values hold memory, and unreleased
+   *   they accumulate through a training loop.
    */
   /**
-   * 기울기를 흘린다.
+   * Flows gradient.
    *
-   * **인자 차례가 torch 와 같다** — `backward(gradient, retainGraph)`. 전에는 첫
-   * 자리가 `retainGraph` 였고, 그래서 `y.backward(onesLike(y))` 를 옮겨 적을 수가
-   * 없었다. 야코비안-벡터 곱을 부르는 흔한 줄인데다, **코어(numpy)는 처음부터 받고
-   * 있었다** — 셋 중 이쪽만 못 받았다.
+   * **The argument order matches torch** — `backward(gradient,
+   * retainGraph)`. It used to have `retainGraph` first, which made
+   * `y.backward(onesLike(y))` impossible to carry across. It is a common
+   * line for a Jacobian-vector product, and **the core (numpy) had taken it
+   * from the start** — this was the only one of the three that could not.
    *
-   * 첫 자리를 바꿔도 깨지는 호출부가 없었다. 저장소 어디에서도 `backward` 에 인자를
-   * 넘기지 않고 있었는데, 넘길 수 있는 것이 `retainGraph` 뿐이라 아무도 안 쓴 것이다.
+   * Changing the first position broke no call site. Nowhere in the
+   * repository passed an argument to `backward` at all, because the only
+   * thing that could be passed was `retainGraph`, and nobody used it.
    *
-   * @param gradient 씨앗. 안 주면 스칼라에만 1 이 놓인다. 주면 **모양이 같아야
-   *   한다** — 브로드캐스팅으로 맞춰 주지 않는다. 어긋난 씨앗은 값이 그럴듯한 채로
-   *   틀린 기울기를 내고, 그것은 학습이 안 되는 것으로만 드러난다.
-   * @param retainGraph 그래프를 남겨 다시 흘릴 수 있게 한다.
+   * @param gradient the seed. Left out, a 1 is placed on a scalar only.
+   *   Given, **its shape has to match** — it is not reconciled by
+   *   broadcasting. A mismatched seed gives a wrong gradient with plausible
+   *   values, and that surfaces only as training failing to work.
+   * @param retainGraph keeps the graph so it can be flowed through again.
    */
   backward(gradient?: Tensor, retainGraph = false): void {
     // **이 검사가 맨 앞이다.** torch 를 재보니 비스칼라이면서 requiresGrad 가 아닌
@@ -8878,12 +9657,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── 장치 옮기기 ───────────────────────────────────────────────────────
 
   /**
-   * 값을 호스트로 내린다. torch 의 `t.cpu()` 자리이고 **비동기다** — GPU 메모리를
-   * 되가져오는 왕복이라 피할 길이 없다.
+   * Brings the values down to the host. Where torch's `t.cpu()` goes, and
+   * **asynchronous** — a round trip to fetch GPU memory back, with no way
+   * around it.
    *
-   * **그래프를 끊는다.** torch 의 `.cpu()` 는 미분되지만 여기서는 그럴 수가 없다 —
-   * 호스트에 커널이 없으므로 역방향이 지나갈 길이 없다. 이어 붙여 두고 조용히 0 을
-   * 흘리느니 끊는다.
+   * **It cuts the graph.** torch's `.cpu()` is differentiable and here it
+   * cannot be — there are no host kernels, so there is no path for a
+   * backward to take. Better cut than left attached and quietly flowing
+   * zeros.
    */
   async cpu(): Promise<Tensor> {
     if (this.gpu === null) return this;
@@ -8895,10 +9676,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 값을 GPU 로 올린다. torch 의 `t.cuda()` 자리다.
+   * Puts the values up on the GPU. Where torch's `t.cuda()` goes.
    *
-   * **`cpu()` 와 달리 동기다.** 올리는 것은 큐에 쓰기 하나여서 기다릴 것이 없다 —
-   * 짝이 안 맞아 보이지만, 없는 왕복을 만들어 대칭을 꾸미는 것보다 낫다.
+   * **Unlike `cpu()` it is synchronous.** Uploading is one queued write and
+   * there is nothing to wait for — it looks asymmetric, and that is better
+   * than inventing a round trip to dress up the symmetry.
    */
   webgpu(): Tensor {
     if (this.host === null) return this;
@@ -8908,12 +9690,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // ── 읽기 ──────────────────────────────────────────────────────────────
 
   /**
-   * 값을 평평한 f32 배열로.
+   * The values as a flat f32 array.
    *
-   * **복소수는 인터리브 그대로 나온다** — 길이가 `size` 가 아니라 `2 × size` 이고
-   * `[re, im, re, im, …]` 이다. 실수부만 원하면 `real()` 을, 짝으로 원하면
-   * `viewAsReal()` 을 먼저 불러라. 여기서 실수부만 골라 주면 길이가 그럴듯해져서
-   * 값을 잃은 것이 안 보인다.
+   * **A complex comes out interleaved as it is stored** — the length is `2
+   * × size` rather than `size`, and it reads `[re, im, re, im, …]`. For the
+   * real part alone call `real()` first; for pairs, `viewAsReal()`. Picking
+   * out the real part here would make the length plausible and hide that
+   * values were lost.
    */
   async toArray(): Promise<Float32Array> {
     // 이미 호스트에 있으면 왕복이 없다. **사본을 준다** — 안쪽 저장을 그대로 내보내면
@@ -8923,10 +9706,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 모양과 값이 **정확히** 같은가. 허용 오차가 없다 — 그것이 `allclose` 와 다른 점이다.
+   * Whether the shape and values are **exactly** equal. There is no
+   * tolerance — that is what differs from `allclose`.
    *
-   * GPU 에서 읽어 온다. 판정 하나를 위해 왕복하는 것이 아깝지만, CPU 에 사본을 들고
-   * 있다가 비교하면 GPU 에서 무슨 일이 있었는지를 못 본다.
+   * It reads back from the GPU. Making a round trip for one verdict is a
+   * shame, but holding a CPU copy and comparing that cannot see what
+   * happened on the GPU.
    */
   async equal(other: Tensor): Promise<boolean> {
     if (this.shape.length !== other.shape.length ||
@@ -8939,10 +9724,12 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   /** 허용 오차 안에서 같은가. torch 의 기본값과 같다. */
   /**
-   * @param equalNan 참이면 **NaN 끼리를 같다고 본다.** 기본은 거짓이라 안 같다.
+   * The golden harness does **not** turn this on — turned on, NaN passes
+   * where NaN must not. Having the argument and turning it on are different
+   * places: whether to is the caller's decision.
    *
-   * 골든 하네스는 이것을 **안 켠다** — 켜면 NaN 이 통과하면 안 되는 자리에서
-   * 통과한다. 그것과 이 인자를 갖는 것은 다른 자리다: 켤지 말지는 부르는 쪽이 정한다.
+   * @param equalNan true treats **NaN as equal to NaN.** The default is
+   *   false, so they are not.
    */
   async allclose(other: Tensor, rtol = 1e-5, atol = 1e-8,
                  equalNan = false): Promise<boolean> {
@@ -8959,10 +9746,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * `print(t)` 가 찍는 글자. **GPU 에서 읽어 오므로 비동기다.**
+   * The text `print(t)` prints. **It reads back from the GPU, so it is
+   * asynchronous.**
    *
-   * 교재가 이 글자를 그대로 싣기 때문에 이 프로젝트는 이것도 명세로 본다 —
-   * 자세한 이유는 `src/repr.ts` 에 있다.
+   * Textbooks print this text verbatim, so this project treats it as a
+   * specification too — the reasoning is in `src/repr.ts`.
    */
   async repr(): Promise<string> {
     // **복소수는 아직 못 찍는다.** `1.+2.j` 꼴을 torch 와 글자까지 맞추려면 그쪽
@@ -8983,18 +9771,23 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     });
   }
 
-  /** `torch.Size([2, 2])`. 모양도 찍히는 것이라 명세다. */
+  /**
+   * `torch.Size([2, 2])`. The shape is printed too, so it is a
+   * specification.
+   */
   sizeRepr(): string {
     return formatSize(this.shape);
   }
 
   /** 형을 바꾼다. 값은 그대로다 — 저장이 float32 하나이므로 옮길 것이 없다. */
   /**
-   * torch 의 **이름 있는 형 바꾸기**. `to(형)` 과 같은 일을 다른 이름으로 한다.
+   * torch's **named type conversions.** The same work as `to(type)` under a
+   * different name.
    *
-   * 이 이름들이 없어서 `x.float()` 이 borch.ts 에서만 안 됐다. 파이썬 두 판은 갖고
-   * 있었고 골든의 그 줄은 "파이썬 쪽 이야기라 안 옮긴다" 로 남아 있었는데, 실제로는
-   * 저쪽이 못 하는 것이 아니라 **아무도 안 물어본** 이름이었다.
+   * Without these names, `x.float()` failed in borch.ts alone. Both Python
+   * versions had them and the golden line stood as "a Python-side matter,
+   * not carried across", when in fact it was not that the other side could
+   * not — it was a name **nobody had asked about.**
    */
   float(): Tensor {
     return this.to("float32");
@@ -9009,8 +9802,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 실수를 복소수로. **`to("complex64")` 로는 안 된다** — 복소수는 칸당 f32 두 개라
-   * 이름표 갈이가 막혀 있고, 그 막음이 옳다. 허수부 0 을 붙여 만든다.
+   * Real to complex. **`to("complex64")` will not do it** — a complex is
+   * two f32 per slot, so relabelling is blocked, and that block is right.
+   * It is built by attaching a zero imaginary part.
    */
   cfloat(): Tensor {
     if (isComplexDType(this.dtype)) return this;
@@ -9018,16 +9812,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return Tensor.complex(re, Tensor.zeros(this.shape));
   }
 
-  /** `other` 와 같은 형으로. torch 의 `type_as`. */
+  /**
+   * To the same type as `other`. torch's `type_as`.
+   */
   typeAs(other: Tensor): Tensor {
     return other.dtype === "complex64" ? this.cfloat() : this.to(other.dtype);
   }
 
   /**
-   * **없는 형들.** 이름을 두는 까닭은 문구다 — 이름이 아예 없으면 `'half' 이 없다`
-   * 가 나오는데 그것은 **오타와 구별이 안 된다.** 파이썬 두 판이 같은 문장으로
-   * 멈추므로 여기서도 같게 한다. 값이 아니라 글자를 맞추는 자리라 서로 대조해도
-   * 안 걸리고, 배우는 사람은 갈린 문구를 보고 **구현마다 다른 것**으로 읽는다.
+   * **Types that do not exist.** The names are kept for the message — with
+   * no name at all you get `'half' does not exist`, and that **cannot be
+   * told apart from a typo.** Both Python versions stop with the same
+   * sentence, so this one matches. It is a place matching text rather than
+   * values, so comparing them against each other catches nothing, and a
+   * learner reading divergent wording reads it as **differing per
+   * implementation.**
    */
   half(): Tensor {
     return absentDType("half", "float16");
@@ -9062,9 +9861,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * **배정도는 다른 까닭으로 없다.** 위의 여덟은 우리가 그 칸을 안 두기로 한 것이고,
-   * 이쪽은 WebGPU 셰이더에 `f64` 자체가 없다. 문구도 그래서 다르다 — 파이썬 결속이
-   * 같은 문장으로 멈춘다.
+   * **Double precision is absent for a different reason.** The eight above
+   * are slots we chose not to have; this one is that WebGPU shaders have no
+   * `f64` at all. The wording differs accordingly — the Python binding
+   * stops with the same sentence.
    */
   double(): Tensor {
     throw new RuntimeError(
@@ -9208,7 +10008,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
  * 열 개 가까운 커널이 같은 머리를 갖는데, 손으로 열 번 적으면 그중 하나가 다르게
  * 적히는 날이 온다 — 이 저장소가 이미 그 종류로 여러 번 물렸다.
  *
- * @param names 바인딩 이름들. **마지막이 출력**이고 그것만 쓰기 가능이다.
+ * @param names the binding names. **The last is the output** and only it is
+ *   writable.
  */
 function complexShader(n: number, names: readonly string[], body: string): string {
   const decls = names.map((nm, i) => {
@@ -9403,7 +10204,10 @@ Object.defineProperty(Tensor.prototype, "elu", {
   });
 }
 
-/** 표에서 단 메서드들의 타입. 위 루프와 짝이고, 하나만 고치면 어긋난다. */
+/**
+ * The types of the methods hung from the table above. Paired with the loop
+ * above; fix one alone and they fall out of step.
+ */
 export interface Tensor {
   neg(): Tensor;
   abs(): Tensor;
@@ -9533,50 +10337,56 @@ export interface Tensor {
 export { noGrad } from "./autograd.js";
 
 /**
- * 열어 둔 구역 하나. `using` 이 블록 끝에서 닫는다.
+ * One open scope. `using` closes it at the end of the block.
  *
  * @see scope
  */
 export interface Scope extends Disposable {
   /**
-   * 이 구역이 닫혀도 살려 둔다. 콜백 꼴의 둘째 인자와 같은 일이다.
+   * Keeps something alive past this scope's close. The same work as the
+   * callback form's second argument.
    *
-   * `keepAlive(t)` 와 다른 점은 **매이는 곳**이다. 저쪽은 영영 살리고 이쪽은
-   * 바깥 구역으로 넘긴다 — 바깥이 닫히면 같이 놓인다.
+   * What differs from `keepAlive(t)` is **where it is tied.** That one
+   * keeps it alive forever; this hands it to the enclosing scope — closing
+   * that releases it too.
    */
   keep(t: Tensor): Tensor;
 }
 
 /**
- * 구역 하나를 열고 닫는다. 안에서 만든 GPU 버퍼는 나갈 때 놓는다.
+ * Opens and closes one scope. GPU buffers made inside are released on the
+ * way out.
  *
- * **학습 루프에 이것이 없으면 안 돈다.** 한 스텝이 중간 버퍼를 수천 개 만들고,
- * 자바스크립트의 쓰레기 수집은 GPU 메모리를 제때 안 놓아준다.
+ * **A training loop does not run without this.** One step makes thousands
+ * of intermediate buffers, and JavaScript's garbage collector does not
+ * return GPU memory in time.
  *
- * ## 두 가지 꼴 — 같은 기계다
+ * ## Two spellings — the same machine
  *
  * ```ts
- * await scope(async () => {           // 콜백
+ * await scope(async () => {           // callback
  *   ...
  *   return await loss.item();
  * });
  *
  * {
- *   using s = scope();                // 블록. torch 의 `with` 에 가깝다
+ *   using s = scope();                // block. closer to torch's `with`
  *   ...
  *   await loss.item();
- * }                                   // 여기서 닫힌다
+ * }                                   // closes here
  * ```
  *
- * **블록 꼴이 `await` 뒤에 닫힌다.** 비동기 함수 안에서 블록을 벗어나는 시점은
- * 그 안의 `await` 이 전부 끝난 뒤이고, 놓는 일(`endScope`) 자체는 동기라
- * `await using` 이 아니라 `using` 으로 된다 — 그쪽이 지원도 넓다.
+ * **The block form closes after the `await`s.** Inside an async function,
+ * the block is left only after every `await` in it has finished, and
+ * releasing (`endScope`) is itself synchronous, so `using` works rather
+ * than `await using` — and that one is more widely supported.
  *
- * **콜백 꼴을 안 없앤다.** 두 꼴이 같은 `beginScope`/`endScope` 위에 서므로
- * 갈릴 자리가 없고, 값을 그대로 돌려받는 자리(`const loss = await scope(...)`)는
- * 콜백 쪽이 짧다.
+ * **The callback form is not removed.** Both stand on the same
+ * `beginScope`/`endScope`, so there is nowhere for them to diverge, and
+ * where you want the value handed straight back (`const loss = await
+ * scope(...)`) the callback is shorter.
  *
- * @param keep 구역 밖으로 들고 나갈 텐서. 나머지는 놓는다.
+ * @param keep the tensors to carry out of the scope. The rest are released.
  */
 export function scope(): Scope;
 export function scope<T>(
@@ -9612,7 +10422,10 @@ export function scope<T>(
   })();
 }
 
-/** 구역이 닫혀도 살려 둔다. 파라미터와 옵티마이저 상태가 쓴다. */
+/**
+ * Keeps something alive past a scope's close. Parameters and optimizer
+ * state use it.
+ */
 export function keepAlive(t: Tensor): Tensor {
   // 호스트에 있는 것은 살릴 것이 없다 — 구역은 GPU 버퍼만 놓고, `Float32Array` 는
   // 자바스크립트의 쓰레기 수집이 알아서 가져간다. `keepAlive(await t.cpu())` 는
@@ -9622,18 +10435,23 @@ export function keepAlive(t: Tensor): Tensor {
   return t;
 }
 
-/** 놓은 버퍼 수를 세는 자리. 벤치가 누수를 본다. */
+/**
+ * Where released buffers are counted. Benchmarks watch leaks here.
+ */
 export function device(): Device {
   return dev();
 }
 
 /**
- * 그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**
+ * Makes one graph node from outside. **A door for places writing kernels in
+ * another file.**
  *
- * `Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데
- * `fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을
- * 다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)
- * 같은 자리로 넘긴다.
+ * `Tensor.make` is private — it is what this class's own operations use,
+ * and that is right. But once a module with **kernels of its own** appears,
+ * such as `fft.ts`, that door is needed. Rather than restating the
+ * conditions there (two copies of the `gradMode` check and the
+ * `requiresGrad` propagation eventually diverge), it hands over to the same
+ * place.
  */
 export function makeNode(
   buffer: GPUBuffer,

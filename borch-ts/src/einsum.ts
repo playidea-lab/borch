@@ -1,19 +1,23 @@
 /**
- * `einsum` — 첨자로 적는 축약.
+ * `einsum` — contraction written in subscripts.
  *
- * ## 무엇까지 하는가
+ * ## How far it goes
  *
- * 피연산자 **한 개 또는 두 개**, 생략 부호(`...`) 없음, 한 피연산자 안에서 같은 첨자가
- * 두 번 나오지 않음(대각선 뽑기 없음). 그 밖은 던진다.
+ * **One or two operands**, no ellipsis (`...`), and no subscript repeated
+ * within a single operand (so no diagonal extraction). Anything else
+ * throws.
  *
- * **못 하는 것을 조용히 넘기지 않는다.** einsum 은 표기가 짧아서 안 되는 조합을
- * 넣기 쉽고, 그때 그럴듯한 답이 나오면 어디가 틀렸는지 찾을 길이 없다.
+ * **What it cannot do, it does not quietly wave through.** einsum's
+ * notation is short enough that an unsupported combination is easy to
+ * write, and if a plausible answer comes back there is no way to find where
+ * it went wrong.
  *
- * ## 어떻게 하는가
+ * ## How it works
  *
- * 새 커널이 없다. 축을 옮기고(`permute`), 접고(`sumDim`), 필요하면 행렬곱으로
- * 떨어뜨린다 — 전부 이미 있고 이미 골든이 보는 연산들이다. 손으로 쓴 역방향이
- * 하나도 안 생기는 것이 이 방식의 값이다.
+ * There is no new kernel. It moves axes (`permute`), folds them (`sumDim`),
+ * and drops to a matrix multiply where it can — all operations that already
+ * exist and that the golden cases already watch. The value of doing it this
+ * way is that not one hand-written backward appears.
  */
 
 import type { Tensor } from "./tensor.js";

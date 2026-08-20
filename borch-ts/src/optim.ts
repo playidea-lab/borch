@@ -1,18 +1,22 @@
 /**
- * 옵티마이저와 학습률 스케줄.
+ * Optimizers and learning-rate schedules.
  *
- * ## 파라미터를 제자리에서 고친다
+ * ## Parameters are modified in place
  *
- * 새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는
- * 손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안
- * 움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로
- * `no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.
+ * It does not make a new tensor and swap it in. The handle the model holds
+ * and the handle the optimizer sees have to be the same one; swapping
+ * splits them and produces a state where **training runs and the parameters
+ * do not move.** In-place modification is blocked on a leaf with gradient
+ * enabled, so it happens inside `no_grad` — which is exactly what torch's
+ * optimizers do.
  *
- * ## 상태를 텐서로 든다
+ * ## State is held as tensors
  *
- * 모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서
- * 그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀
- * 없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다.
+ * Something like a momentum buffer **must not hold the gradient tensor
+ * itself.** When that gradient is replaced on the next step, the buffer
+ * points at the wrong thing — a place this repository missed while only
+ * ever looking at SGD without momentum. So the buffer starts as its own
+ * copy.
  */
 
 import { adamStep, rmspropStep, sgdStep } from "./kernels.js";
@@ -20,32 +24,47 @@ import { RuntimeError } from "./errors.js";
 import { device, keepAlive, noGrad, Tensor } from "./tensor.js";
 
 /**
- * 파라미터 묶음 하나와 거기 걸린 하이퍼파라미터.
+ * One bundle of parameters and the hyperparameters attached to it.
  *
- * **전에는 `params` 가 없었다.** 이름은 torch 의 `param_groups` 인데 언제나
- * `[{ lr }]` 하나였고 스케줄러가 전부 `[0]` 만 봤다 — 층별 학습률도, bias·norm 에
- * weight decay 를 빼는 것도 안 되는데 이름은 된다고 말하고 있었다. 모양만 torch 인
- * 것이 없는 것보다 나쁘다: 쓰는 사람이 `paramGroups.push(...)` 를 쓰면 조용히
- * 무시됐다.
+ * **There used to be no `params`.** The name is torch's `param_groups`, but
+ * it was always a single `[{ lr }]` and every scheduler only ever looked at
+ * `[0]` — no per-layer learning rate, no excluding bias and norm from
+ * weight decay, while the name said otherwise. torch's shape with nothing
+ * inside is worse than nothing: a user calling `paramGroups.push(...)` was
+ * quietly ignored.
  */
 export interface ParamGroup {
-  /** 이 그룹이 밟는 파라미터. */
+  /**
+   * The parameters this group steps.
+   */
   params: Tensor[];
   lr: number;
-  /** 스케줄러가 기준으로 삼는 값. 처음 스케줄러가 한 번만 찍는다. */
+  /**
+   * The value a scheduler takes as its baseline. The first scheduler stamps
+   * it once.
+   */
   initialLr?: number;
-  /** 이 그룹만 다른 값을 쓸 때. 없으면 옵티마이저를 세울 때 준 값이다. */
+  /**
+   * For when this group alone uses a different value. Absent, it is the
+   * value given when the optimizer was built.
+   */
   weightDecay?: number;
 }
 
-/** 그룹을 만들 때 넣는 것. `lr` 을 비우면 옵티마이저의 기본값을 쓴다. */
+/**
+ * What goes in when a group is made. Leave `lr` out to use the optimizer's
+ * default.
+ */
 export interface ParamGroupInit {
   params: readonly Tensor[];
   lr?: number;
   weightDecay?: number;
 }
 
-/** 옵티마이저 생성자가 받는 것 — 텐서 목록이거나 그룹 목록이다. */
+/**
+ * What an optimizer's constructor accepts — a list of tensors or a list of
+ * groups.
+ */
 export type ParamsArg = readonly Tensor[] | readonly ParamGroupInit[];
 
 function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
@@ -53,10 +72,15 @@ function isGroups(arg: ParamsArg): arg is readonly ParamGroupInit[] {
 }
 
 export abstract class Optimizer {
-  /** torch 와 같은 모양 — 스케줄러가 여기 `lr` 을 고친다. */
+  /**
+   * torch's shape — this is where a scheduler edits `lr`.
+   */
   readonly paramGroups: ParamGroup[] = [];
 
-  /** 모든 그룹의 파라미터를 이어 붙인 것. 상태 은행이 이 자리로 색인된다. */
+  /**
+   * Every group's parameters, concatenated. The state bank is indexed by
+   * this position.
+   */
   protected readonly params: Tensor[] = [];
 
   /** 파라미터 자리 → 그룹 번호. */
@@ -97,13 +121,15 @@ export abstract class Optimizer {
   }
 
   /**
-   * 그룹을 나중에 더한다. `torch.optim.Optimizer.add_param_group` 자리다.
+   * Adds a group later. Where `torch.optim.Optimizer.add_param_group` goes.
    *
-   * **상태 은행도 같이 늘린다.** 안 늘리면 다음 스텝에서 "파라미터 N 의 상태가
-   * 없다" 로 터진다 — 은행이 평평한 파라미터 자리로 색인되기 때문이다.
+   * **It grows the state bank too.** Without that, the next step blows up
+   * with "no state for parameter N" — the bank is indexed by the flattened
+   * parameter position.
    *
-   * 이미 세워 둔 스케줄러는 이 그룹의 기준값을 모른다. torch 도 같은 자리에서
-   * `initial_lr` 을 요구한다 — 스케줄러를 먼저 세웠다면 다시 세워라.
+   * A scheduler already built does not know this group's baseline. torch
+   * asks for `initial_lr` in the same place — if the scheduler came first,
+   * build it again.
    */
   addParamGroup(init: ParamGroupInit): void {
     const group = this.attach(init);
@@ -111,12 +137,14 @@ export abstract class Optimizer {
   }
 
   /**
-   * 상태 은행 하나. **여기를 지나야 그룹이 늘 때 같이 는다.**
+   * One state bank. **Going through here is what makes it grow when a group
+   * is added.**
    *
-   * 옛날에는 옵티마이저마다 `params.map(...)` 으로 직접 만들었고, 그러면 나중에
-   * 더해진 파라미터의 자리가 비어 있게 된다.
+   * It used to be built per optimizer with `params.map(...)`, which leaves
+   * the slot for a later-added parameter empty.
    *
-   * @param value 채울 값. `Rprop` 의 걸음 크기만 0 이 아니다.
+   * @param value the value to fill with. Only `Rprop`'s step size is
+   *   non-zero.
    */
   protected state(shapes: readonly Tensor[], value = 0): Tensor[] {
     // **`Tensor.zeros`·`Tensor.full` 을 쓰면 안 된다.** 원소 하나짜리는 값으로
@@ -135,10 +163,11 @@ export abstract class Optimizer {
   }
 
   /**
-   * 그룹이 늘 때 상태를 같이 늘린다.
+   * Grows the state when a group is added.
    *
-   * 기본은 등록된 은행마다 **파라미터 모양** 자리를 더한다. 그 전제가 안 맞는
-   * 옵티마이저(`Adafactor` 는 행·열로 접은 분산을 든다)는 여기를 덮어쓴다.
+   * By default it adds one **parameter-shaped** slot per registered bank.
+   * An optimizer for which that premise does not hold (`Adafactor` holds
+   * variance folded into rows and columns) overrides here.
    */
   protected extendState(added: readonly Tensor[]): void {
     for (const { slots, value } of this.banks) {
@@ -146,17 +175,25 @@ export abstract class Optimizer {
     }
   }
 
-  /** 지금 밟고 있는 그룹의 학습률. */
+  /**
+   * The learning rate of the group currently being stepped.
+   */
   protected get lr(): number {
     return this.paramGroups[this.currentGroup]?.lr ?? this.defaultLr;
   }
 
-  /** 지금 그룹이 따로 정한 값, 없으면 옵티마이저의 기본값. */
+  /**
+   * What this group set for itself, or the optimizer's default if it set
+   * nothing.
+   */
   protected grouped(fallback: number): number {
     return this.paramGroups[this.currentGroup]?.weightDecay ?? fallback;
   }
 
-  /** 기울기를 비운다. **`null` 로 되돌린다** — 0 으로 채우면 잎 판정이 흐려진다. */
+  /**
+   * Empties the gradients. **It returns them to `null`** — filling with
+   * zeros blurs the leaf test.
+   */
   zeroGrad(): void {
     for (const p of this.params) p.grad = null;
   }
@@ -175,30 +212,35 @@ export abstract class Optimizer {
   }
 
   /**
-   * 이 옵티마이저가 든 스칼라. 하위 클래스가 덮어쓴다.
+   * The scalars this optimizer holds. Subclasses override it.
    *
-   * **은행은 여기 안 들어간다** — 밑동이 이미 들고 있으므로 `stateDict` 가 알아서
-   * 담는다. 여기 적을 것은 `stepCount` 처럼 텐서가 아닌 것들이고, 빠뜨리면 재개했을
-   * 때 **편향 보정이 처음부터 다시 시작한다.** 값이 조금씩 다르게 나오는데 어디서
-   * 갈렸는지 가리키는 것이 없는 종류다.
+   * **The bank does not go in here** — the base already holds it, so
+   * `stateDict` picks it up on its own. What belongs here is the non-tensor
+   * things such as `stepCount`, and leaving one out means **bias correction
+   * restarts from the beginning** on resume. The values come out slightly
+   * different with nothing pointing at where they diverged.
    */
   protected counters(): Record<string, number> {
     return {};
   }
 
-  /** 위의 되돌림. 덮어쓴 쪽이 자기 것만 꺼내 간다. */
+  /**
+   * The undo of the above. Whoever overrode it takes their own back out.
+   */
   protected loadCounters(_values: Record<string, number>): void {
     /* 스칼라가 없는 옵티마이저는 할 일이 없다 */
   }
 
   /**
-   * 학습을 이어서 하려면 있어야 하는 전부.
+   * Everything needed to carry on training.
    *
-   * **모멘텀만으로는 부족하다.** 그룹의 학습률(스케줄러가 이미 깎아 놓았을 수 있다)과
-   * 스텝 계수기가 같이 가야 재개한 다음 스텝이 안 끊고 돌린 것과 같은 수를 낸다.
+   * **Momentum alone is not enough.** The group's learning rate (a
+   * scheduler may already have cut it) and the step counter have to travel
+   * with it for the step after a resume to give the same number as one that
+   * never stopped.
    *
-   * 텐서와 수를 갈라 준다 — safetensors 의 몸에는 텐서가, 머리에는 수가 실린다
-   * (`serialize.ts`).
+   * Tensors and numbers come back separately — the safetensors body carries
+   * tensors and the header carries numbers (`serialize.ts`).
    */
   stateDict(): { tensors: Record<string, Tensor>; numbers: Record<string, number> } {
     const tensors: Record<string, Tensor> = {};
@@ -217,11 +259,13 @@ export abstract class Optimizer {
   }
 
   /**
-   * `stateDict()` 가 준 것을 되돌린다. **옵티마이저를 같은 인자로 다시 세운 뒤** 부른다.
+   * Restores what `stateDict()` gave. Call it **after rebuilding the
+   * optimizer with the same arguments.**
    *
-   * 은행의 자리가 없거나 크기가 다르면 던진다. 파라미터가 늘거나 준 모델에 옛
-   * 체크포인트를 얹으면 값이 한 칸씩 밀린 채로 학습이 돌 수 있고, 그것은 예외보다
-   * 훨씬 나쁘다.
+   * It throws if a bank slot is missing or a size differs. Adding or
+   * removing parameters, or laying an old checkpoint over a model, can
+   * otherwise leave training running with values shifted by one slot, and
+   * that is far worse than an exception.
    */
   loadStateDict(state: {
     tensors: Record<string, Tensor>;
@@ -400,7 +444,9 @@ abstract class Composed extends Optimizer {
   }
 }
 
-/** 기울기 제곱을 **계속 더한다** — 줄기만 하고 안 는다. */
+/**
+ * **Keeps adding** squared gradients — it only ever shrinks, never grows.
+ */
 export class Adagrad extends Composed {
   private readonly sums: Tensor[];
   private stepCount = 0;
@@ -432,7 +478,10 @@ export class Adagrad extends Composed {
   }
 }
 
-/** **학습률이 거의 안 쓰인다.** 보폭을 갱신량의 이력에서 스스로 만든다. */
+/**
+ * **The learning rate is barely used.** It builds the step size out of the
+ * history of its own updates.
+ */
 export class Adadelta extends Composed {
   private readonly squares: Tensor[];
   private readonly deltas: Tensor[];
@@ -457,7 +506,10 @@ export class Adadelta extends Composed {
   }
 }
 
-/** Adam 의 2차 모멘트를 **제곱평균 대신 최댓값**으로 둔 것. */
+/**
+ * Adam with the second moment taken as **the maximum instead of the root
+ * mean square.**
+ */
 export class Adamax extends Composed {
   private readonly first: Tensor[];
   private readonly inf: Tensor[];
@@ -494,10 +546,11 @@ export class Adamax extends Composed {
 }
 
 /**
- * Adam 에 네스테로프의 앞보기를 붙인 것.
+ * Adam with Nesterov's look-ahead attached.
  *
- * **모멘텀 계수가 스텝마다 바뀌고, 그 수열의 누적곱을 들고 다녀야 한다.** 상수로
- * 두면 초반 몇 스텝이 조용히 갈린다.
+ * **The momentum coefficient changes each step, and the running product of
+ * that sequence has to be carried.** Held constant, the first few steps
+ * diverge quietly.
  */
 export class NAdam extends Composed {
   private readonly first: Tensor[];
@@ -552,10 +605,11 @@ export class NAdam extends Composed {
 }
 
 /**
- * Adam 인데 **초반에는 적응 보폭을 안 쓴다.**
+ * Adam, but **without the adaptive step size early on.**
  *
- * 2차 모멘트의 표본이 적을 때 분산이 커서 초반이 튀는 것이 Adam 의 알려진 성질이고,
- * 이쪽은 그 구간을 SGD 처럼 지나간다. 경계(`rho > 5`)를 빼면 값이 Adam 과 같아진다.
+ * Adam is known to be jumpy at the start because the second moment has few
+ * samples and its variance is large; this one passes through that stretch
+ * like SGD. Drop the threshold (`rho > 5`) and the values become Adam's.
  */
 export class RAdam extends Composed {
   private readonly first: Tensor[];
@@ -603,13 +657,16 @@ export class RAdam extends Composed {
 }
 
 /**
- * 평균 내는 SGD. **걸음마다 학습률이 스스로 줄고**, 어느 시점부터 파라미터를 평균낸다.
+ * Averaged SGD. **The learning rate decays on its own each step**, and from
+ * some point on the parameters are averaged.
  *
- * `eta` 는 `lr / (1 + lambd·lr·step)^alpha` 로 줄고 `mu` 가 평균의 무게다. 기본 `t0`
- * 이 100만이라 보통 학습에서는 `mu` 가 늘 1 이고 `ax` 는 파라미터의 사본이다 —
- * 평균 갈래는 `t0` 을 낮춰야 실제로 돈다.
+ * `eta` decays as `lr / (1 + lambd·lr·step)^alpha`, and `mu` is the weight
+ * of the average. The default `t0` is a million, so in normal training `mu`
+ * is always 1 and `ax` is a copy of the parameters — the averaging branch
+ * only really runs once `t0` is lowered.
  *
- * **감쇠가 곱셈이다.** `param *= (1 − lambd·eta)` 를 먼저 하고 그다음 기울기를 뺀다.
+ * **The decay is multiplicative.** `param *= (1 − lambd·eta)` happens
+ * first, and the gradient is subtracted after.
  */
 export class ASGD extends Composed {
   private readonly ax: Tensor[];
@@ -655,12 +712,14 @@ export class ASGD extends Composed {
 }
 
 /**
- * 기울기의 **부호만** 본다. 크기는 안 쓰고 걸음 폭을 칸마다 따로 키우고 줄인다.
+ * Looks at **the sign of the gradient only.** The magnitude is unused, and
+ * the step width grows and shrinks per slot.
  *
- * 부호가 그대로면 폭에 `etaPlus` 를 곱하고, 뒤집히면 `etaMinus` 를 곱한다.
- * **뒤집힌 칸은 그 걸음을 아예 안 간다** — 기울기를 0 으로 만들어 두고, 그래서 다음
- * 걸음의 "이전 기울기" 도 0 이 된다. 그 둘이 없으면 부호가 안 바뀌는 입력으로는
- * 영원히 안 걸리는 차이가 생긴다.
+ * If the sign holds, the width is multiplied by `etaPlus`; if it flips, by
+ * `etaMinus`. **A flipped slot does not take that step at all** — its
+ * gradient is set to zero, which also makes the next step's "previous
+ * gradient" zero. Without those two, inputs whose sign never flips produce
+ * a difference that is never caught.
  */
 export class Rprop extends Composed {
   private readonly prev: Tensor[];
@@ -697,13 +756,15 @@ export class Rprop extends Composed {
 }
 
 /**
- * Adam 인데 2차 모멘트를 **행과 열로 쪼개 든다.**
+ * Adam, but holding the second moment **split into rows and columns.**
  *
- * Adam 은 파라미터마다 분산을 하나씩 들어 기억이 가중치만큼 든다. 여기서는 행 평균과
- * 열 평균만 들고 그 바깥곱으로 되살린다 — `(R, C)` 자리에 `R + C` 만 쓴다.
+ * Adam holds one variance per parameter, so its memory costs as much as the
+ * weights. Here only the row means and the column means are held and the
+ * outer product restores them — `R + C` where `(R, C)` would have been.
  *
- * **1 차원 파라미터는 안 쪼갠다** — 쪼갤 축이 하나뿐이라 그냥 분산을 든다. 벡터로만
- * 물으면 이 최적화의 요점이 통째로 안 돌아간다.
+ * **One-dimensional parameters are not split** — there is only one axis to
+ * split, so the variance is held directly. Ask with vectors alone and the
+ * whole point of this optimization never runs.
  */
 export class Adafactor extends Composed {
   private readonly rowVar: (Tensor | null)[] = [];
@@ -720,12 +781,13 @@ export class Adafactor extends Composed {
   }
 
   /**
-   * **밑동의 기본을 못 쓴다.** 이 옵티마이저의 상태는 파라미터 모양이 아니라 행·열로
-   * 접은 것이고, 랭크에 따라 어느 쪽을 드는지도 갈린다. 자리 수는 파라미터와 맞으므로
-   * (안 쓰는 쪽은 `null` 로 채운다) 색인은 그대로 통한다.
+   * **The base's default cannot be used.** This optimizer's state is not
+   * parameter-shaped but folded into rows and columns, and which of the two
+   * is held depends on the rank. The slot count matches the parameters (the
+   * unused side is filled with `null`), so the indexing still works.
    *
-   * 생성자와 `addParamGroup` 이 같은 이 자리를 지난다 — 둘로 나눠 적으면 언젠가
-   * 한쪽만 고친다.
+   * The constructor and `addParamGroup` both pass through this one place —
+   * written in two places, one of them eventually gets fixed alone.
    */
   protected override extendState(added: readonly Tensor[]): void {
     for (const p of added) {
@@ -800,15 +862,17 @@ export class Adafactor extends Composed {
 }
 
 /**
- * 학습률 스케줄.
+ * Learning-rate schedules.
  *
- * **실수 연산뿐이라 torch 와 값이 그대로 같아야 한다** — 근사가 낄 자리가 없다.
- * 그래서 골든이 한 값이 아니라 **궤적 전체**를 굳혔고, 코어가 그렇게 하다가 `StepLR`
- * 의 차이를 잡았다.
+ * **It is all floating-point arithmetic, so the values have to equal
+ * torch's exactly** — there is no room for an approximation. So the golden
+ * cases froze not one value but **the whole trajectory**, and doing that is
+ * how the core caught the difference in `StepLR`.
  *
- * **기준은 `initialLr` 이지 세울 때의 lr 이 아니다.** 옵티마이저에 한 번만 찍히고,
- * 나중에 세워지는 스케줄러들도 같은 기준을 본다. 혼자 쓰면 둘이 같아서 안 걸리는데,
- * 이어 붙이면 두 번째 것이 첫 번째가 이미 깎아 둔 값을 기준으로 잡는다.
+ * **The baseline is `initialLr`, not the lr at construction time.** It is
+ * stamped onto the optimizer once, and schedulers built later see the same
+ * baseline. Used alone the two are equal and nothing catches, but chained,
+ * the second one takes as its baseline what the first has already cut.
  */
 export abstract class LRScheduler {
   protected epoch = 0;
@@ -843,12 +907,14 @@ export abstract class LRScheduler {
   }
 
   /**
-   * **0 번째 에폭을 적용한다.** torch 는 이것을 생성자에서 하는데 여기서는 못 한다 —
-   * TypeScript 의 하위 클래스 필드가 `super()` 가 끝난 **뒤에** 채워지므로, 생성자
-   * 안에서 `compute` 를 부르면 `factor` 같은 것이 아직 `undefined` 다.
+   * **Applies epoch zero.** torch does this in the constructor and here it
+   * cannot be — a TypeScript subclass's fields are filled in **after**
+   * `super()` returns, so calling `compute` inside the constructor finds
+   * things like `factor` still `undefined`.
    *
-   * 그래서 세운 직후 한 번 부른다. `ConstantLR` 처럼 0 번째부터 값을 바꾸는 것은
-   * 이것이 없으면 첫 항이 통째로 갈린다 — 실제로 최대차 2.0e-01 이었다.
+   * So it is called once, right after construction. Something like
+   * `ConstantLR`, which changes the value from epoch zero, loses its entire
+   * first term without it — measured at a maximum difference of 2.0e-01.
    */
   start(): this {
     this.epoch = 0;
@@ -861,26 +927,35 @@ export abstract class LRScheduler {
     this.apply(this.compute(this.epoch));
   }
 
-  /** 지금 학습률. 재귀식 스케줄러가 자기 앞의 값을 읽는 자리다. */
+  /**
+   * The learning rate now. Where a recursive scheduler reads the value
+   * before its own.
+   */
   protected get current(): number {
     return this.opt.paramGroups[0]?.lr ?? 0;
   }
 
-  /** `SequentialLR` 이 넘어갈 때 처음부터 다시 밟게 한다. */
+  /**
+   * Makes it step from the beginning again, for when `SequentialLR` hands
+   * over.
+   */
   restart(): void {
     this.apply(this.base);
     this.start();
   }
 
   /**
-   * 재개하려면 있어야 하는 것 — **몇 번째 에폭인가와 기준값들.**
+   * What resuming needs — **which epoch, and the baselines.**
    *
-   * 옵티마이저의 `lr` 만 되돌리면 안 된다. 스케줄러는 `epoch` 에서 값을 다시 계산하는
-   * 물건이라, 그것을 0 으로 두고 이으면 **다음 `step()` 이 학습률을 처음 값으로
-   * 되돌려 놓는다** — 옵티마이저 쪽은 멀쩡히 복원됐는데 한 스텝 만에 지워진다.
+   * Restoring the optimizer's `lr` alone is not enough. A scheduler is a
+   * thing that recomputes its value from `epoch`, so leaving that at zero
+   * and carrying on means **the next `step()` puts the learning rate back
+   * to its first value** — the optimizer side was restored perfectly and
+   * one step erases it.
    *
-   * 기준값도 같이 간다. `initialLr` 은 옵티마이저에서 오지만 그것은 **처음 세운
-   * 스케줄러가 찍은 값**이고, 이어 붙인 스케줄러들은 자기가 본 기준을 따로 든다.
+   * The baselines travel too. `initialLr` comes from the optimizer, but
+   * that is **the value the first scheduler stamped**, and chained
+   * schedulers hold the baseline each of them saw.
    */
   stateDict(): Record<string, number> {
     const out: Record<string, number> = { epoch: this.epoch };
@@ -888,7 +963,10 @@ export abstract class LRScheduler {
     return out;
   }
 
-  /** `stateDict()` 의 되돌림. 학습률은 안 건드린다 — 옵티마이저 쪽이 든다. */
+  /**
+   * The undo of `stateDict()`. It does not touch the learning rate — the
+   * optimizer holds that.
+   */
   loadStateDict(values: Record<string, number>): void {
     if (values.epoch !== undefined) this.epoch = values.epoch;
     for (const i of this.bases.keys()) {
@@ -901,15 +979,18 @@ export abstract class LRScheduler {
 }
 
 /**
- * `stepSize` 에폭마다 `gamma` 를 곱한다.
+ * Multiplies by `gamma` every `stepSize` epochs.
  *
- * **재귀식이다** — 아래 `ExponentialLR` 이 적어 둔 것과 같은 이유다. 여기는
- * `base * gamma ** floor(epoch / stepSize)` 라는 닫힌 식이었다.
+ * **It is recursive** — the same reason `ExponentialLR` below writes down.
+ * This used to be the closed form `base * gamma ** floor(epoch /
+ * stepSize)`.
  *
- * 혼자 처음부터 밟으면 두 방식이 **같은 수열**을 낸다. 그래서 자취를 통째로 굳혀
- * 둔 골든이 오래 초록이었다. 갈리는 것은 lr 이 이미 옮겨진 옵티마이저 위에
- * 스케줄러를 새로 세울 때 — **이어서 학습할 때**다. 닫힌 식은 그 순간 학습률을
- * 처음 값으로 되돌려 놓는다(0.05 를 0.2 로). 오류는 안 나고 손실만 한 번 튄다.
+ * Stepped alone from the beginning, the two produce **the same sequence.**
+ * That is why the golden cases, which freeze the whole trace, were green
+ * for a long time. What diverges is building a new scheduler on an
+ * optimizer whose lr has already moved — **resuming training.** At that
+ * moment the closed form puts the learning rate back to its first value
+ * (0.05 to 0.2). No error appears; the loss just jumps once.
  */
 export class StepLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly stepSize: number,
@@ -924,10 +1005,11 @@ export class StepLR extends LRScheduler {
 }
 
 /**
- * 이정표에서만 깎는다. **재귀식이다** — `StepLR` 과 같은 이유로 고쳤다.
+ * Cuts only at the milestones. **It is recursive** — fixed for the same
+ * reason as `StepLR`.
  *
- * 이정표가 겹쳐 적히면(`[3, 3]`) 그 자리에서 두 번 곱한다 — 닫힌 식으로 세던
- * 때도 그랬고 torch 도 그렇다.
+ * A milestone written twice (`[3, 3]`) multiplies twice at that point — it
+ * did under the closed form too, and torch does the same.
  */
 export class MultiStepLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly milestones: readonly number[],
@@ -942,11 +1024,13 @@ export class MultiStepLR extends LRScheduler {
 }
 
 /**
- * **재귀식이다** — 지금 학습률에 곱한다. 원래 학습률에서 다시 세지 않는다.
+ * **It is recursive** — it multiplies the current learning rate. It does
+ * not recount from the original.
  *
- * 혼자 쓰면 두 방식이 같은 수열을 낸다. 갈리는 것은 다른 스케줄러가 같은 lr 을 함께
- * 만질 때다 — `ChainedScheduler` 로 겹치면 재귀식은 서로의 결과 위에 쌓이고 닫힌
- * 식은 남이 한 일을 덮어쓴다.
+ * Used alone the two produce the same sequence. What diverges is another
+ * scheduler touching the same lr — overlapped through `ChainedScheduler`,
+ * the recursive form stacks on top of the other's result while the closed
+ * form overwrites what the other did.
  */
 export class ExponentialLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly gamma: number) {
@@ -958,7 +1042,10 @@ export class ExponentialLR extends LRScheduler {
   }
 }
 
-/** `totalIters` 까지 **깎아 두었다가 원래대로 돌아온다.** 워밍업의 가장 단순한 꼴. */
+/**
+ * **Holds it cut until `totalIters`, then returns to the original.** The
+ * simplest form of a warm-up.
+ */
 export class ConstantLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly factor = 1 / 3,
               private readonly totalIters = 5) {
@@ -973,10 +1060,12 @@ export class ConstantLR extends LRScheduler {
 }
 
 /**
- * 시작 배율에서 끝 배율까지 **직선으로** 옮겨간다.
+ * Moves **in a straight line** from the starting factor to the ending
+ * factor.
  *
- * `ConstantLR` 과 끝에서 만난다 — `totalIters` 를 지나면 둘 다 원래 학습률이다.
- * 마지막 값만 보면 둘을 못 가르므로 골든이 자취를 통째로 묻는다.
+ * It meets `ConstantLR` at the end — past `totalIters` both are the
+ * original learning rate. The last value alone cannot separate them, so the
+ * golden cases ask about the whole trace.
  */
 export class LinearLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly startFactor = 1 / 3,
@@ -992,7 +1081,9 @@ export class LinearLR extends LRScheduler {
   }
 }
 
-/** `(1 − t/T)^power` 로 내린다. `power=1` 이면 직선이다. */
+/**
+ * Descends as `(1 − t/T)^power`. At `power=1` it is a straight line.
+ */
 export class PolynomialLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly totalIters = 5,
               private readonly power = 1.0) {
@@ -1007,7 +1098,10 @@ export class PolynomialLR extends LRScheduler {
   }
 }
 
-/** **곱해 나간다** — 기준이 원래 학습률이 아니라 지금 학습률이다. */
+/**
+ * **Multiplies as it goes** — the baseline is the current learning rate,
+ * not the original.
+ */
 export class MultiplicativeLR extends LRScheduler {
   constructor(opt: Optimizer, private readonly fn: (epoch: number) => number) {
     super(opt);
@@ -1018,7 +1112,10 @@ export class MultiplicativeLR extends LRScheduler {
   }
 }
 
-/** 코사인으로 내리다가 **처음으로 되돌린다.** 주기가 `tMult` 배씩 길어진다. */
+/**
+ * Descends as a cosine and then **returns to the start.** Each period is
+ * `tMult` times longer.
+ */
 export class CosineAnnealingWarmRestarts extends LRScheduler {
   private tI: number;
   private tCur = -1;
@@ -1041,10 +1138,11 @@ export class CosineAnnealingWarmRestarts extends LRScheduler {
 }
 
 /**
- * 올렸다가 내린다. **현대 학습 레시피의 기본값에 가깝다.**
+ * Up and then down. **Close to the default of a modern training recipe.**
  *
- * 초기 학습률은 `maxLr/divFactor` 이고 끝은 그것을 다시 나눈 값이라, **옵티마이저에
- * 준 학습률이 아예 안 쓰인다** — 세우는 순간 덮어쓴다.
+ * The initial learning rate is `maxLr/divFactor` and the end is that
+ * divided again, so **the learning rate given to the optimizer is never
+ * used** — it is overwritten the moment this is built.
  */
 export class OneCycleLR extends LRScheduler {
   private readonly initial: number;
@@ -1085,11 +1183,13 @@ export class OneCycleLR extends LRScheduler {
  * `mode` 셋 중 `expRange` 만 기준이 **주기가 아니라 걸음**이다. 거기가 갈리는 자리다.
  */
 /**
- * **그룹이 여럿이면 경계가 상대값이 된다.** torch 는 `base_lr`·`max_lr` 을 그룹마다
- * 목록으로 받는데 여기서는 수 하나다. 밑동의 규칙대로 첫 그룹 기준으로 계산한 값에
- * 각 그룹의 기준 비율이 곱해지므로, 그룹 i 는 `baseLr·rᵢ` 와 `maxLr·rᵢ` 사이를 돈다.
- * 층별 학습률을 준 사람이 기대하는 쪽이지만, torch 와 **같은 것은 아니다.**
- * 그룹이 하나면 비율이 1 이라 차이가 없다.
+ * **With more than one group, the bounds become relative.** torch takes
+ * `base_lr` and `max_lr` as a list per group; here they are single numbers.
+ * Following the base's rule, the value computed against the first group is
+ * multiplied by each group's baseline ratio, so group i cycles between
+ * `baseLr·rᵢ` and `maxLr·rᵢ`. That is what someone who set per-layer
+ * learning rates expects, but it **is not the same as torch.** With one
+ * group the ratio is 1 and there is no difference.
  */
 export class CyclicLR extends LRScheduler {
   private readonly down: number;
@@ -1121,7 +1221,10 @@ export class CyclicLR extends LRScheduler {
   }
 }
 
-/** 스케줄러를 **이어 붙인다.** 이정표에 닿으면 다음 것으로 넘어간다. */
+/**
+ * **Chains schedulers end to end.** On reaching a milestone it hands over
+ * to the next.
+ */
 export class SequentialLR {
   private epoch = 0;
 
@@ -1148,7 +1251,9 @@ export class SequentialLR {
   }
 }
 
-/** 여럿을 **동시에** 건다. 각자의 배율이 곱해진다. */
+/**
+ * Applies several **at once.** Their factors multiply.
+ */
 export class ChainedScheduler {
   constructor(private readonly schedulers: LRScheduler[]) {}
 
@@ -1184,9 +1289,10 @@ export class LambdaLR extends LRScheduler {
 }
 
 /**
- * 값이 나아지지 않으면 학습률을 줄인다.
+ * Cuts the learning rate when the value stops improving.
  *
- * 다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다.
+ * Unlike other schedules it **has to be given a value** to move — hence
+ * `step(metric)`.
  */
 export class ReduceLROnPlateau {
   private best = Infinity;
@@ -1200,11 +1306,14 @@ export class ReduceLROnPlateau {
   ) {}
 
   /**
-   * 재개에 필요한 둘. **`best` 가 무한대에서 시작한다** — 그래서 이 수들을 머리에
-   * 실을 때 `JSON.stringify` 대신 무한대를 따로 적는 자리가 필요했다
-   * (`serialize.ts` 의 `numbersToMeta`).
+   * The two things a resume needs. **`best` starts at infinity** — which is
+   * why putting these numbers in the header needed somewhere to write
+   * infinity other than `JSON.stringify` (`numbersToMeta` in
+   * `serialize.ts`).
    *
-   * 안 되돌리면 재개 직후 어떤 값이 와도 "처음이라 최고" 가 되어 참을성이 초기화된다.
+   * Without restoring them, whatever value arrives right after a resume
+   * becomes "the first, therefore the best", and the patience counter
+   * resets.
    */
   stateDict(): Record<string, number> {
     return { best: this.best, bad: this.bad };
