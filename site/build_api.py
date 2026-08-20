@@ -1,33 +1,40 @@
-"""`borch-ts/dist/src/*.d.ts` 에서 API 레퍼런스를 뽑는다.
+"""Pulls the API reference out of `borch-ts/dist/src/*.d.ts`.
 
-    npm run build:ts        # 선언 파일부터 만든다
+    npm run build:ts        # the declaration files come first
     python3 site/build_api.py
 
-`site/assets/api.json` 이 나오고 `site/api/` 가 그것을 읽는다.
+It produces `site/assets/api.json`, and `site/api/` reads it.
 
-## 왜 뽑는가 — 손으로 적으면 낡는다
+## Why it is generated — written by hand, it goes stale
 
-이 저장소는 문서의 수가 낡는 것을 이미 네 번 잡았고(`b00e693`·`b3d7453`·`e41c043`,
-그리고 `2709`), 네 번 다 **사람이 눈으로** 찾았다. API 목록은 그보다 훨씬 크다 —
-텐서 메서드만 수백 개다. 손으로 적은 목록은 첫 주에만 맞는다.
+This repository has already caught four stale numbers in its own documentation
+(`b00e693`, `b3d7453`, `e41c043` and `2709`), and all four were found **by eye**. The API
+index is far larger than that — the tensor methods alone run to hundreds. An index
+written by hand is right for the first week.
 
-선언 파일은 `tsc` 가 소스에서 만들고 **TSDoc 주석을 그대로 남긴다.** 그래서 설명문의
-원본은 언제나 소스이고, 여기서는 옮기지 않는다. 설명이 틀렸으면 소스를 고쳐야 한다 —
-그것이 이 방향의 요점이다.
+The declaration files are made from the source by `tsc` and **keep the TSDoc comments as
+they are.** So the original of every description is always the source, and nothing is
+transcribed here. A wrong description has to be fixed in the source — that direction is
+the point.
 
-## 설명문은 한국어다
+## The descriptions are Korean, and the English sits beside them
 
-소스 주석이 한국어라 뽑은 설명도 한국어다. **번역본을 여기서 지어내지 않는다** —
-지으면 소스와 갈리기 시작하고, 갈린 뒤에는 어느 쪽이 사실인지 아무도 모른다.
-영어 페이지는 시그니처·분류·torch 이름 대응을 보여주고(그쪽은 언어 중립이다)
-설명문이 소스에서 온 한국어라고 화면에 적는다.
+The source comments are Korean, so the descriptions pulled out are Korean. The English
+lives in `site/api_en.json`, not here and not in the source, and every entry carries a
+fingerprint of the Korean it was made from. The fear this file used to record — that a
+translation drifts from the source the day it is written — is right, and the fingerprint
+is the answer to it: drift is not prevented, it is prevented from being quiet.
 
-## 무엇을 안 하는가
+Signatures, kinds and the torch name mapping are language-neutral and identical on both
+pages.
 
-타입 검사기가 아니다. 선언 파일은 이미 `tsc` 가 만든 것이라 문법이 맞다고 보고,
-여기서는 **괄호 깊이만 세어** 선언 하나의 끝을 찾는다. 파서를 제대로 쓰려면
-TypeScript 컴파일러 API 를 불러야 하는데, 그러면 이 저장소의 런타임 의존성 0 이
-문서 생성에서 깨진다 — 받아야 하는 것은 `typescript` 뿐이지만 그것이 첫 예외가 된다.
+## What it does not do
+
+It is not a type checker. The declaration files were made by `tsc` and so are assumed to
+be syntactically sound; here **only bracket depth is counted** to find where a
+declaration ends. A proper parser would mean calling the TypeScript compiler API, and
+that breaks this repository's zero runtime dependencies at documentation time — one
+package, `typescript`, but it would be the first exception.
 """
 
 import hashlib
@@ -38,16 +45,17 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DECL = ROOT / "borch-ts" / "dist" / "src"
 OUT = ROOT / "site" / "assets" / "api.json"
-# 이름 하나로 자리를 찾는 작은 표. 강의 본문의 `code` 가 이것을 보고 링크가 된다 —
-# 350KB 짜리 본문을 강의마다 싣게 할 수는 없다.
+# A small table finding a place from one name. `code` in the lesson prose reads it and
+# becomes a link — a 350KB body cannot be loaded on every lesson page.
 INDEX = ROOT / "site" / "assets" / "api-index.json"
 
-# 공개 표면. `index.ts` 가 내보내는 것들이고, 순서가 곧 사이드바 순서다.
-# 안쪽 사정(`kernels`·`repr`·`functional`)은 여기 없다 — 그것은 쓰는 사람의 것이 아니다.
+# The public surface — what `index.ts` exports, in the order the sidebar shows.
+# Internal business (`kernels`, `repr`, `functional`) is not here; it is not the user's.
 MODULES = [
-    # **패키지 뿌리부터.** `index.ts` 는 대부분 재수출이지만 **거기서만 선언되는 것**이
-    # 있다 — `isTensor` 가 그렇고, 결속이 그것을 쓴다. 이 파일을 안 훑던 동안 그 이름은
-    # 레퍼런스에도 이름 색인에도 없었다. 다른 세션이 자기 검사에서 그 구멍을 먼저 봤다.
+    # **Start at the package root.** `index.ts` is mostly re-exports, but **some things are
+    # declared only there** — `isTensor` is one, and the binding uses it. While this file
+    # went unswept, that name was in neither the reference nor the name index. Another
+    # session saw the hole first, in a check of its own.
     ("index", "borch",
      {"ko": "`import … from \"borch\"` 가 바로 주는 것. 나머지는 아래 이름 공간에 있다.",
       "en": "What `import … from \"borch\"` hands you directly. The rest is in the namespaces below."}),
@@ -95,8 +103,9 @@ MODULES = [
     ("dtype", "dtype", {"ko": "자료형.", "en": "Data types."}),
 ]
 
-# 소스가 스스로 나눠 둔 구획의 영어 이름. **번역이 있는 것만 옮긴다** — 없으면
-# 소스가 쓴 이름을 그대로 보여준다. 여기서 지어내면 소스와 갈리기 시작한다.
+# English names for the sections the source divided itself into. **Only the ones with a
+# translation are carried across** — otherwise the source's own name is shown. Inventing
+# one here is where drift from the source begins.
 SECTION_EN = {
     "만들기": "Creating", "원소별": "Elementwise", "행렬곱": "Matrix products",
     "축약": "Reductions", "모양": "Shape", "창 펴기": "Windows",
@@ -112,31 +121,33 @@ SECTION_EN = {
     "복소수 커널": "Complex kernels",
 }
 
-# 선언의 시작. `export declare class Tensor ... {` 같은 것들.
+# The start of a declaration — things like `export declare class Tensor ... {`.
 TOP = re.compile(
     r"^export\s+(?:declare\s+)?(class|abstract class|function|interface|type|const|enum)\s+"
     r"([A-Za-z_$][\w$]*)")
-# **재수출은 선언이 아니다.** `export { x } from "./y.js"` 와 `export * as nn from …` 가
-# 그것이고, 걸러내지 않으면 `export` 라는 이름의 심볼이 목록에 앉는다(실제로 앉았다).
+# **A re-export is not a declaration.** `export { x } from "./y.js"` and
+# `export * as nn from …` are those, and unfiltered a symbol named `export` sits in the
+# index (which it did).
 REEXPORT = re.compile(r"^export\s*[{*]")
-# 클래스·인터페이스 안의 한 칸. `add(other: Tensor, alpha?: number): Tensor;`
-# 꾸밈말이 여럿 붙는다(`static readonly`), 그리고 물음표가 붙는 칸도 있다
-# (`initialLr?: number`). **둘 다 처음에 빠뜨렸고 증상은 조용한 누락이었다** —
-# `Module.claim` 과 선택 속성 전부가 목록에서 사라져 있었다.
+# One slot inside a class or interface: `add(other: Tensor, alpha?: number): Tensor;`
+# Several modifiers attach (`static readonly`), and some slots carry a question mark
+# (`initialLr?: number`). **Both were missed at first and the symptom was a quiet
+# absence** — `Module.claim` and every optional property had vanished from the index.
 MEMBER = re.compile(
     r"^\s+(?:(?:static|readonly|get|set|protected|abstract|override|async)\s+)*"
     r"([A-Za-z_$][\w$]*)\??\s*(\(|:|<)")
-# 안쪽 것. 선언 파일에도 남지만 쓰는 사람의 것이 아니다.
+# Internal. It survives into the declaration file but it is not the user's.
 #
-# **`protected` 는 뺐다가 되돌렸다.** 층을 직접 만드는 사람이 부르는 자리가 거기
-# 있다 — `Module.claim()` 이 그것이고, 그것 없이 만든 파라미터는 `parameters()` 에
-# 안 나오고 **예외 없이** 학습만 안 된다. 확장 표면도 표면이라 목록에 둔다.
+# **`protected` was taken out and put back.** A place someone building their own layer
+# calls lives there — `Module.claim()` — and a parameter made without it is absent from
+# `parameters()`, with **no exception** and only the training failing. An extension
+# surface is a surface, so it stays in the index.
 PRIVATE = re.compile(r"^\s+private\s")
 PROTECTED = re.compile(r"^\s+protected\s")
 
 
 def _depth(line, depth):
-    """괄호 깊이. 문자열 안의 괄호는 안 센다 — 선언 파일에도 `\"constant\"` 가 있다."""
+    """Bracket depth. Brackets inside strings are not counted — declaration files contain `\"constant\"` too."""
     out = depth
     quote = None
     prev = ""
@@ -158,10 +169,10 @@ TAG = re.compile(r"^@(param|returns?|throws|see|example)\s*(.*)$")
 
 
 def _split_tags(text):
-    """본문과 `@param`·`@returns` 를 가른다.
+    """Separates the body from `@param` and `@returns`.
 
-    떼지 않으면 설명 첫 줄이 `@param alpha …` 로 시작하는 항목이 생긴다 — 화면에서
-    그것은 설명이 아니라 표에 들어가야 하는 것이다.
+    Left attached, entries appear whose description begins `@param alpha …` — and on
+    screen that is not a description but something that belongs in a table.
     """
     body, tags = [], []
     cur = None
@@ -182,7 +193,7 @@ def _split_tags(text):
 
 
 def _doc(block):
-    """`/** ... */` 를 사람이 읽는 줄들로. 마크다운은 그대로 둔다 — 화면에서 얇게 그린다."""
+    """`/** ... */` into lines a person reads. The markdown is left alone — the screen draws it thinly."""
     lines = []
     for raw in block:
         line = raw.strip()
@@ -200,14 +211,15 @@ def _doc(block):
 
 
 def _torch_name(name):
-    """camelCase → snake_case. **대응의 힌트이지 동등하다는 말이 아니다.**
+    """camelCase → snake_case. **A hint at the correspondence, not a claim of equality.**
 
-    이 저장소가 torch 이름을 그대로 쓰되 자바스크립트 관습으로 적었으므로 기계적으로
-    되돌릴 수 있다. 아닌 것들(`call`·`scope`·`keepAlive`)은 `OURS` 에서 뺀다.
+    This repository uses torch's names written in JavaScript convention, so the mapping
+    reverses mechanically. The ones that are not (`call`, `scope`, `keepAlive`) are
+    excluded through `OURS`.
 
-    **대문자로 시작하는 것에는 안 단다.** 클래스와 타입은 torch 에서도 대문자
-    그대로다 — `Linear` 에 `linear` 를, `PadMode` 에 `pad_mode` 를 달면 없는 이름을
-    있다고 적는 것이 된다(실제로 그렇게 나왔다).
+    **Nothing is attached to a name starting with a capital.** Classes and types keep
+    their capitals in torch too — attaching `linear` to `Linear`, or `pad_mode` to
+    `PadMode`, writes down a name that does not exist (which is what came out).
     """
     if not name[:1].islower():
         return ""
@@ -215,7 +227,7 @@ def _torch_name(name):
     return snake if snake != name else ""
 
 
-# torch 에 없는 이름들. 힌트를 달면 거짓말이 된다.
+# Names torch does not have. A hint attached to these would be a lie.
 OURS = {"scope", "keepAlive", "call", "describe", "init", "probe", "isAvailable",
         "currentDevice", "webgpu", "emptyCache", "pooled", "dispatches", "faults",
         "lastScope", "pipelineCount", "synchronize", "adapterInfo"}
@@ -223,23 +235,26 @@ OURS = {"scope", "keepAlive", "call", "describe", "init", "probe", "isAvailable"
 
 SECTION = re.compile(r"^\s*// ── (.+?) ─")
 TS_CLASS = re.compile(r"^export\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)")
-# **인터페이스도 몸통을 연다.** `tensor.ts` 끝의 `export interface Tensor` 가 미러된
-# 이름들을 담는데, 이것을 안 보면 그 55 개가 **바로 앞 구획의 이름을 뒤집어쓴다**
-# (실측: 전부 "복소수 커널" 로 나왔다). 구획은 여기서 끊긴다 — 미러된 것들은
-# 저자가 나눠 둔 자리가 아니라 자동으로 붙는 이름이기 때문이다.
+# **An interface opens a body too.** The `export interface Tensor` at the end of
+# `tensor.ts` holds the mirrored names, and unread, those fifty-five **inherit the name
+# of the section just above** (measured: every one came out as "complex kernels"). The
+# section ends here — the mirrored names are not a place the author divided but names
+# that attach automatically.
 TS_IFACE = re.compile(r"^export\s+interface\s+([A-Za-z_$][\w$]*)")
 TS_MEMBER = re.compile(r"^  (?:(?:static|readonly|get|set|protected|override|async|abstract)\s+)*"
                        r"([A-Za-z_$][\w$]*)\??\s*[(<:]")
 
 
 def sections_of(name):
-    """`(클래스, 멤버) → 구획 이름`. **소스가 이미 나눠 둔 것을 그대로 쓴다.**
+    """`(class, member) → section name`. **What the source already divided is used as it is.**
 
-    `tensor.ts` 에는 `// ── 축약 ──` 같은 구획이 스물넷 있다. 그것이 이 표면을 쓴
-    사람의 분류이고, 우리가 다시 나누면 그 사람의 판단을 우리 짐작으로 덮는 것이다.
+    `tensor.ts` carries twenty-four sections such as `// ── 축약 ──`. That is the
+    classification of the person who wrote this surface, and dividing it again covers
+    their judgement with our guess.
 
-    **선언 파일에는 안 남는다** — `tsc` 는 TSDoc 만 옮기고 줄 주석은 버린다. 그래서
-    여기서만 소스를 읽는다. 설명문의 원본이 소스인 것과 같은 이유다.
+    **It does not survive into the declaration files** — `tsc` carries the TSDoc and drops
+    line comments. So this is the one place that reads the source. The same reason the
+    original of every description is the source.
     """
     path = ROOT / "borch-ts" / "src" / f"{name}.ts"
     if not path.exists():
@@ -255,7 +270,7 @@ def sections_of(name):
         klass = TS_CLASS.match(line) or TS_IFACE.match(line)
         if klass:
             current_class = klass.group(1)
-            # 클래스가 새로 열리면 앞 구획은 그 클래스의 것이 아니다.
+            # A new class opening means the previous section is not that class's.
             current_section = ""
             continue
         member = TS_MEMBER.match(line)
@@ -265,27 +280,28 @@ def sections_of(name):
 
 
 def parse(path):
-    """선언 파일 하나 → (모듈 설명, 심볼들).
+    """One declaration file → (module description, symbols).
 
-    **깊이는 줄마다 꼭 한 번만 갱신한다.** 처음에는 가지마다 따로 갱신했는데, 어느
-    가지가 `continue` 로 빠져나가면 그 줄의 괄호가 안 세어져서 그 뒤로 깊이가 통째로
-    어긋났다 — 증상은 예외가 아니라 **조용히 적게 나오는 목록**이었다(텐서 메서드
-    수백 개가 18 개로 나왔다). 없는 것과 못 찾은 것이 같은 모양이라 눈에 안 띈다.
+    **The depth is updated exactly once per line.** It was first updated inside each
+    branch, and a branch leaving through `continue` left that line's brackets uncounted,
+    which threw the depth out for everything after — the symptom was not an exception but
+    **an index quietly coming up short** (hundreds of tensor methods arrived as eighteen).
+    Absent and not-found have the same shape, so nothing draws the eye.
     """
     lines = path.read_text(encoding="utf-8").splitlines()
     module_doc = ""
     symbols = []
-    pending = []          # 바로 위에 붙은 주석
-    depth = 0             # 줄 **시작** 시점의 괄호 깊이
-    current = None        # 지금 들어가 있는 클래스·인터페이스
-    buffer = []           # 여러 줄에 걸친 선언
+    pending = []          # the comment attached just above
+    depth = 0             # bracket depth at the **start** of the line
+    current = None        # the class or interface currently open
+    buffer = []           # a declaration spanning several lines
     skip_to = -1
 
     for i, line in enumerate(lines):
         if i <= skip_to:
             continue
         stripped = line.strip()
-        after = _depth(line, depth)          # 이 줄을 지난 뒤의 깊이
+        after = _depth(line, depth)          # the depth after this line
 
         if stripped.startswith("/**"):
             block, j = [line], i
@@ -294,7 +310,7 @@ def parse(path):
                 block.append(lines[j])
             skip_to = j
             nxt = lines[j + 1].strip() if j + 1 < len(lines) else ""
-            # 파일 맨 앞의 주석이 import 나 재수출 앞에 있으면 모듈 설명이다.
+            # A comment at the head of the file, ahead of imports or re-exports, is the module description.
             if (not symbols and not module_doc and depth == 0
                     and (nxt.startswith("import") or nxt.startswith("export {"))):
                 module_doc = _doc(block)
@@ -326,9 +342,9 @@ def parse(path):
             entry = _top_entry(kind, name, stripped, pending, symbols)
             pending = []
             if after > 0 and ("class" in kind or kind == "interface"):
-                current = entry              # 몸통으로 들어간다
+                current = entry              # step into the body
             elif not stripped.endswith(";"):
-                buffer = [stripped]          # 시그니처가 다음 줄로 이어진다
+                buffer = [stripped]          # the signature continues onto the next line
             depth = after
             continue
 
@@ -358,8 +374,8 @@ def parse(path):
 
 
 def _top_entry(kind, name, stripped, pending, symbols):
-    """최상위 심볼 하나. 같은 이름이 두 번 나오면(`class` 와 `interface`) 합친다 —
-    torch 도 그 둘을 나눠 보여주지 않는다."""
+    """One top-level symbol. A name appearing twice (as `class` and as `interface`) is merged —
+    torch does not show those two apart either."""
     sig = stripped.rstrip("{").strip().rstrip(";")
     same = next((s for s in symbols if s["name"] == name), None)
     if same:
@@ -385,12 +401,13 @@ def _top_entry(kind, name, stripped, pending, symbols):
 
 
 def _emit(text, pending, current, symbols):
-    """모은 선언 한 줄을 심볼 또는 멤버로 넣는다."""
+    """Files one gathered declaration line as a symbol or a member."""
     text = re.sub(r"\s+", " ", text).strip().rstrip(";").rstrip("{").strip()
     if not text or text.startswith(("}", "//")):
         return
-    # **여러 줄에 걸친 최상위 선언이 여기로 온다.** 그때 첫 낱말은 `export` 이므로
-    # 그것을 이름으로 삼으면 모듈마다 `export` 라는 심볼이 하나씩 앉는다(실제로 앉았다).
+    # **A top-level declaration spanning several lines arrives here.** Its first word is
+    # `export`, so taking that as the name seats one symbol called `export` per module
+    # (which it did).
     top = TOP.match(text)
     if top and current is None:
         entry = _top_entry(top.group(1), top.group(2), text, pending, symbols)
@@ -398,7 +415,7 @@ def _emit(text, pending, current, symbols):
         return
     name = re.sub(r"^(?:(?:static|readonly|get|set|abstract|declare|export|protected|override|async) )+", "", text)
     name = re.split(r"[(:<;=\s]", name, maxsplit=1)[0].strip()
-    # 선택 속성의 물음표는 시그니처에 남기고 이름에서는 뗀다 — 이름은 검색어다.
+    # An optional property's question mark stays in the signature and comes off the name — the name is a search term.
     optional = name.endswith("?")
     name = name.rstrip("?")
     if not name or name.startswith(("#", "[", '"')):
@@ -419,7 +436,7 @@ def _emit(text, pending, current, symbols):
     bag = current["members"] if current is not None else symbols
     old = next((m for m in bag if m["name"] == name), None)
     if old:
-        # **오버로드는 버리지 않는다.** `scope()` 는 꼴이 둘이고 둘 다 쓴다.
+        # **Overloads are not discarded.** `scope()` has two shapes and both are used.
         sigs = old.setdefault("overloads", [])
         if item["signature"] != old["signature"] and item["signature"] not in sigs:
             sigs.append(item["signature"])
@@ -431,29 +448,29 @@ def _emit(text, pending, current, symbols):
     bag.append(item)
 
 
-# 영어 설명이 사는 곳. **소스가 아니라 여기다** — TSDoc 은 한국어로 남는다.
+# Where the English descriptions live. **Here, not in the source** — the TSDoc stays Korean.
 #
-# 사이트는 오래 "번역하지 않는다, 번역은 쓰인 날부터 소스와 어긋나니까" 라고 적어
-# 두었다. 그 말이 맞다. 그래서 번역마다 **번역할 때 본 한국어의 해시**를 같이 적고,
-# 원문이 바뀌면 여기가 낡았다고 이름을 대며 말한다. 어긋남을 막을 수는 없지만
-# 어긋난 채로 조용히 있는 것은 막는다.
+# The site read for a long time that it does not translate, because a translation drifts
+# from the source the day it is written. That is right. So every translation carries **a
+# hash of the Korean it was made from**, and when the source moves this says so by name.
+# Drift cannot be prevented; being quiet about it can.
 EN = ROOT / "site" / "api_en.json"
 
 
 def _key(mod, sym=None, member=None):
-    """설명 하나를 가리키는 열쇠. 모듈·심볼·멤버 세 층을 한 줄로 적는다."""
+    """The key naming one description — module, symbol and member on one line."""
     if sym is None:
         return f"{mod}/"
     return f"{mod}/{sym}" + (f".{member}" if member else "")
 
 
 def _fingerprint(text):
-    """번역이 본 원문. 앞뒤 공백만 털고 잰다 — 들여쓰기가 바뀌었다고 낡은 건 아니다."""
+    """The source the translation saw. Only the outer whitespace is stripped — changed indentation does not make it stale."""
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:12]
 
 
 def attach_english(modules):
-    """`doc_en` 을 달고, 낡은 것과 빠진 것을 세어 돌려준다."""
+    """Attaches `doc_en`, and returns counts of the stale and the missing."""
     table = json.loads(EN.read_text(encoding="utf-8")) if EN.exists() else {}
     stale, missing, done = [], [], 0
     for mod in modules:
@@ -479,7 +496,7 @@ def attach_english(modules):
 
 def main():
     if not DECL.exists():
-        raise SystemExit(f"선언 파일이 없다: {DECL}\n  먼저: npm run build:ts")
+        raise SystemExit(f"no declaration files: {DECL}\n  first: npm run build:ts")
 
     modules = []
     for name, title, blurb in MODULES:
@@ -493,7 +510,7 @@ def main():
                 mark = marks.get((sym["name"], member["name"]))
                 if mark:
                     member["section"] = {"ko": mark, "en": SECTION_EN.get(mark, mark)}
-        # 이름만 있고 설명도 시그니처도 없는 것은 버린다 — 목록만 부풀린다.
+        # A name with neither description nor signature is dropped — it only pads the index.
         symbols = [s for s in symbols if s["signature"]]
         modules.append({
             "name": name, "title": title, "blurb": blurb,
@@ -506,7 +523,7 @@ def main():
     payload = {
         "source": "borch-ts/dist/src/*.d.ts",
         "note": "설명문은 소스의 TSDoc 을 그대로 옮긴 것이다. 고칠 곳은 소스다. "
-                "영어는 site/api_en.json 이 들고 있고, 원문이 바뀌면 낡았다고 말한다.",
+                "The English lives in site/api_en.json and says so when its source has moved.",
         "english": {"done": done, "stale": len(stale), "missing": len(missing)},
         "modules": modules,
         "total": sum(m["count"] for m in modules),
@@ -515,15 +532,15 @@ def main():
                    encoding="utf-8")
 
     if stale or missing:
-        print(f"  영어 설명 — 붙음 {done} · 낡음 {len(stale)} · 없음 {len(missing)}")
+        print(f"  English descriptions — attached {done} · stale {len(stale)} · missing {len(missing)}")
         for key in stale[:5]:
-            print(f"    낡음: {key}")
+            print(f"    stale: {key}")
     else:
-        print(f"  영어 설명 — 붙음 {done} (낡거나 빠진 것 없음)")
+        print(f"  English descriptions — attached {done} (none stale, none missing)")
 
-    # **먼저 앉은 것이 이긴다.** `forward` 처럼 여러 클래스에 있는 이름은 첫 자리로
-    # 보낸다 — 어느 하나로 보내는 것이 아무 데도 안 보내는 것보다 낫고, 모듈 순서가
-    # 곧 중요도 순서다(Tensor 가 맨 앞).
+    # **First seated wins.** A name living in several classes, such as `forward`, goes to
+    # the first place — sending it somewhere beats sending it nowhere, and the module order
+    # is the order of importance (Tensor first).
     index = {}
     for mod in modules:
         for sym in mod["symbols"]:
@@ -533,8 +550,8 @@ def main():
                                  f"{mod['name']}.{sym['name']}.{member['name']}")
     INDEX.write_text(json.dumps(index, ensure_ascii=False, sort_keys=True) + "\n",
                      encoding="utf-8")
-    print(f"{OUT.relative_to(ROOT)} — 모듈 {len(modules)}개 · 항목 {payload['total']}개")
-    print(f"{INDEX.relative_to(ROOT)} — 이름 {len(index)}개")
+    print(f"{OUT.relative_to(ROOT)} — {len(modules)} modules · {payload['total']} entries")
+    print(f"{INDEX.relative_to(ROOT)} — {len(index)} names")
     for m in modules:
         print(f"  {m['name']:<12} {m['count']:>5}")
 

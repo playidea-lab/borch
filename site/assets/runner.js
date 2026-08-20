@@ -1,23 +1,24 @@
 /**
- * 이 페이지에서 borch 를 싣고 사용자 코드를 돌리는 자리.
+ * Where this page loads borch and runs the user's code.
  *
- * 히어로의 작은 데모와 플레이그라운드가 **같은 것을 쓴다** — 두 벌로 두면 한쪽만
- * 고쳐지고, 랜딩에서 도는 코드가 플레이그라운드에서 안 도는 상태가 조용히 생긴다.
+ * The hero's small demo and the playground **use the same thing** — kept as two copies,
+ * one of them gets fixed and a state quietly appears where code that runs on the
+ * landing does not run in the playground.
  *
- * 싣는 것은 `borch-ts/dist` 다. 그것은 `.gitignore` 라 어느 커밋에도 없으므로,
- * 없을 때 "먼저 npm run build:ts" 라고 말해 주는 것이 이 파일의 일 중 하나다.
- * (빈 화면과 안 만든 방출물은 구별이 안 된다.)
+ * What it loads is `borch-ts/dist`, which is gitignored and therefore in no commit, so
+ * saying "run npm run build:ts first" when it is absent is one of this file's jobs.
+ * (A blank screen and an unbuilt bundle are indistinguishable.)
  */
 
 import { cifar10 } from "./datasets.js";
 import { t } from "./i18n.js";
 
-/** 방출물의 절대 URL. 상대 경로만 쓴다 — 호스트를 박으면 한 군데서만 맞는다. */
+/** The bundle's absolute URL. Relative paths only — a pinned host is right in one place. */
 export const BORCH_URL = new URL("../../borch-ts/dist/src/index.js", import.meta.url).href;
 
 let cached = null;
 
-/** borch 모듈을 한 번만 싣는다. */
+/** Loads the borch module once. */
 export async function loadBorch() {
   if (cached) return cached;
   try {
@@ -29,11 +30,11 @@ export async function loadBorch() {
 }
 
 /**
- * WebGPU 가 있는가 — **없으면 폴백하지 않는다.**
+ * Whether WebGPU is there — **and it does not fall back.**
  *
- * 이 저장소가 TF.js 판을 걷어낸 이유가 그것이다. 조용히 WebGL·소프트웨어로
- * 내려가면 거기서 잰 수를 GPU 의 수로 읽게 된다. 여기서도 같은 규칙을 지킨다:
- * 안 되면 왜 안 되는지 말하고 멈춘다.
+ * That is why this repository removed the TF.js version. Sliding quietly down to WebGL
+ * or software means numbers measured there get read as the GPU's. The same rule holds
+ * here: when it cannot, it says why and stops.
  */
 export async function probeDevice() {
   const borch = await loadBorch();
@@ -42,7 +43,7 @@ export async function probeDevice() {
   return { ok: false, why: result.why, message: result.message };
 }
 
-/** 지금 잡고 있는 장치의 수를 읽는다. 초기화 전이면 null. */
+/** Reads the counters of the device currently held. Null before initialisation. */
 export function readStats(borch) {
   try {
     if (!borch.currentDevice()) return null;
@@ -70,28 +71,29 @@ export function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 실행 중인 코드가 들여다보는 자리. 중지 버튼이 여기에 표시를 남긴다. */
+/** What running code looks into. The stop button leaves its mark here. */
 const bridge = {
   stopped: false,
   log: () => {},
   plot: () => {},
-  // **보여주는 것이 설명보다 짧을 때가 있다.** 이미지 분류를 글로 적는 것보다
-  // 그 이미지를 그리는 편이 빠르다. 받는 쪽이 없으면 조용히 아무 일도 안 한다.
+  // **Showing is sometimes shorter than explaining.** Drawing the image beats writing
+  // about an image classification. With no receiver it quietly does nothing.
   show: async () => {},
   cifar10,
 };
 globalThis.__borch_playground__ = bridge;
-// 파이썬 쪽에서 `js.borchPG` 로 잡는 자리. 던더 이름은 `js` 모듈에서 집기 나쁘다.
+// What Python reaches through `js.borchPG`. A dunder name is awkward to pick up from the `js` module.
 globalThis.borchPG = bridge;
 
 /**
- * 사용자 코드를 돌린다.
+ * Runs the user's code.
  *
- * ES 모듈로 만들어 `import()` 로 건다 — `new Function` 은 최상위 `await` 과
- * `import` 를 못 받는데, borch 의 첫 줄이 `await init()` 이라 그 둘이 필요하다.
+ * It is built as an ES module and hung on `import()` — `new Function` takes neither
+ * top-level `await` nor `import`, and borch's first line is `await init()`, which needs
+ * both.
  *
- * @param code   사용자가 친 자바스크립트
- * @param hooks  {onLog, onPlot} — 출력과 그래프를 받는 쪽
+ * @param code   the JavaScript the user typed
+ * @param hooks  {onLog, onPlot} — where output and plots are received
  */
 export async function runCode(code, hooks = {}) {
   const borch = await loadBorch();
@@ -103,8 +105,8 @@ export async function runCode(code, hooks = {}) {
   bridge.plot = onPlot;
   bridge.show = hooks.onShow ?? (async () => {});
 
-  // 콘솔을 가로챈다. 사용자는 `console.log` 를 칠 것이고(문서의 예시가 그렇다),
-  // 그것이 브라우저 개발자 도구에만 나오면 이 페이지는 아무것도 안 보여준다.
+  // The console is intercepted. The user will type `console.log` (the documentation's
+  // examples do), and if that only reaches devtools this page shows nothing at all.
   const real = { log: console.log, warn: console.warn, error: console.error };
   const relay = (kind) => (...args) => {
     real[kind](...args);
@@ -120,7 +122,7 @@ export async function runCode(code, hooks = {}) {
   try {
     const source = [
       `import * as borch from ${JSON.stringify(BORCH_URL)};`,
-      // 문서의 예시가 그대로 붙게 이름을 펼쳐 둔다.
+      // The names are spread out so the documentation's examples paste in as they are.
       "const { init, Tensor, nn, optim, data, vision, fft, scope, keepAlive,",
       "        noGrad, manualSeed, einsum, slice, save, load, isAvailable, probe,",
       "        currentDevice, device, Device } = borch;",
@@ -129,7 +131,7 @@ export async function runCode(code, hooks = {}) {
       "const plot = (name, value) => __pg.plot(name, value);",
       "const show = (t, opts) => __pg.show(t, opts);",
       "const stopped = () => __pg.stopped;",
-      // 튜토리얼이 쓰는 데이터. Tensor 를 넘겨 주므로 부르는 쪽은 모양만 신경 쓴다.
+      // The data the tutorials use. Tensor is handed over, so the caller only thinks about shapes.
       "const datasets = { cifar10: (split, opts) => __pg.cifar10(Tensor, split, opts) };",
       "",
       code,
@@ -153,7 +155,7 @@ export async function runCode(code, hooks = {}) {
   };
 }
 
-/** 중지 표시. 실행 중인 루프가 `stopped()` 로 이것을 본다. */
+/** The stop flag. A running loop watches it through `stopped()`. */
 export function requestStop() {
   bridge.stopped = true;
 }
@@ -165,15 +167,16 @@ function render(v) {
 }
 
 /**
- * 아주 얇은 코드 강조. 라이브러리를 받지 않는다 — 이 저장소가 런타임 의존성 0 을
- * 지키는 것과 같은 이유이고, 여기 필요한 것은 다섯 색뿐이다.
+ * A very thin syntax highlight. No library is fetched — the same reason this repository
+ * keeps its runtime dependencies at zero, and what is needed here is five colours.
  *
- * **파서가 아니다.** 정규식 하나로 훑으므로 중첩된 것까지는 안 본다. 여는 자리가
- * 왼쪽부터 잡히므로 흔한 경우는 맞고, 틀려도 색이 하나 어긋날 뿐 코드는 안 바뀐다 —
- * 이것은 편집기가 아니라 **표시**다. 진짜 파서가 필요해지면 그때 받아 온다.
+ * **It is not a parser.** One regular expression sweeps it, so nesting is not seen.
+ * Openers are caught from the left, which is right in the common case, and when it is
+ * wrong one colour is off and the code is unchanged — this is **display**, not an
+ * editor. The day a real parser is needed, one gets fetched.
  */
 
-/** 언어마다 다른 것은 셋뿐이다: 주석 기호, 문자열의 꼴, 예약어. */
+/** Only three things differ per language: the comment marker, the shape of strings, and the keywords. */
 const LANGS = {
   js: {
     comment: "\\/\\/[^\\n]*",
@@ -187,8 +190,9 @@ const LANGS = {
   },
   py: {
     comment: "#[^\\n]*",
-    // **삼중 따옴표가 먼저다.** 홑따옴표 규칙이 먼저 물면 여는 자리에서 끊기고,
-    // 그 뒤가 전부 문자열 색으로 흐른다 — docstring 하나에 화면이 다 물든다.
+    // **Triple quotes come first.** Let the single-quote rule bite first and it stops at
+    // the opener, and everything after it runs in the string colour — one docstring
+    // stains the whole screen.
     string: '[frbu]{0,2}"""[\\s\\S]*?"""'
       + "|[frbu]{0,2}'''[\\s\\S]*?'''"
       + '|[frbu]{0,2}"(?:[^"\\\\\\n]|\\\\.)*"'
@@ -203,15 +207,16 @@ const LANGS = {
   },
 };
 
-/** 정규식은 언어마다 한 번만 만든다 — 글쇠 하나마다 다시 만들 이유가 없다. */
+/** The regular expression is built once per language — no reason to rebuild it on every keystroke. */
 const PATTERNS = new Map();
 
 function patternFor(lang) {
   const hit = PATTERNS.get(lang);
   if (hit) return hit;
   const spec = LANGS[lang] ?? LANGS.js;
-  // 다섯 무리를 한 번에 훑는다. **주석·문자열이 앞에** 있어야 그 안의 예약어가
-  // 따로 물리지 않는다 — 같은 자리에서 겨루면 앞에 적힌 쪽이 이긴다.
+  // All five groups are swept at once. **Comments and strings have to come first** so
+  // that keywords inside them are not caught separately — competing at the same position,
+  // whichever is written first wins.
   const re = new RegExp(
     [
       "(" + spec.comment + ")",
@@ -241,24 +246,26 @@ export function highlight(code, lang = "js") {
   });
 }
 
-/* ── 파이썬 쪽 — Pyodide 위에서 borch.ts 를 부른다 ──────────────────────
+/* ── the Python side — calling borch.ts on Pyodide ──────────────────────
  *
- * 같은 커널 위에 파이썬 표면을 얹는 것이 `borch_webgpu` 다. 여기서 하는 일은
- * `tests/browser/runner.html` 이 하던 것과 같다: borch.ts 를 먼저 올려 어댑터를
- * 잡고 전역에 두면, 결속이 `js.borch` 로 그것을 집는다.
+ * `borch_webgpu` is the Python surface laid over the same kernels. What happens here is
+ * what `tests/browser/runner.html` does: borch.ts goes up first, acquires the adapter and
+ * sits on the global, and the binding picks it up through `js.borch`.
  *
- * Pyodide 도 numpy 도 **저장소 안(`vendor/`)에서 온다.** CDN 은 그 시점에 살아
- * 있어야 하는 의존이고 이 저장소는 실제로 한 번 끊겨 봤다.
+ * Pyodide and numpy both **come from inside the repository (`vendor/`).** A CDN is a
+ * dependency that has to be alive at that moment, and this repository has had one go
+ * down.
  */
 
 const PYODIDE_DIR = new URL("../../vendor/pyodide/", import.meta.url).href;
 
 /**
- * 가상 파일시스템에 얹을 파이썬 패키지들. 빠뜨린 모듈은 ImportError 로 시끄럽게
- * 터진다 — 조용히 반쪽만 실리는 것보다 낫다.
+ * The Python packages laid onto the virtual filesystem. A module left out blows up
+ * loudly as an ImportError — better than half of it loading quietly.
  *
- * **코어(`borch`)도 같이 얹는다.** 결속이 GPU 로 안 도는 자리(순수 파이썬 유틸)를
- * 코어에서 빌려 쓴다 — 없으면 `No module named 'borch'` 로 멈춘다(실측).
+ * **The core (`borch`) goes on too.** The binding borrows from the core wherever it does
+ * not run on the GPU (pure-Python utilities) — without it, it stops with
+ * `No module named 'borch'` (measured).
  */
 const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
@@ -269,7 +276,7 @@ const PACKAGES = {
 
 let pyodide = null;
 
-/** Pyodide + numpy + borch_webgpu 를 한 번만 올린다. */
+/** Brings up Pyodide, numpy and borch_webgpu once. */
 export async function loadPython(say = () => {}) {
   if (pyodide) return pyodide;
 
@@ -279,7 +286,7 @@ export async function loadPython(say = () => {}) {
 
   say(t("load.borchTs"));
   await borch.init();
-  // 결속이 여기를 본다. 없으면 그쪽이 조용히 다른 것으로 안 돌고 멈춘다.
+  // The binding looks here. Without it, that side stops rather than quietly running on something else.
   globalThis.borch = borch;
 
   say(t("load.pyodide"));
@@ -297,14 +304,14 @@ export async function loadPython(say = () => {}) {
     for (const name of modules) {
       jobs.push((async () => {
         const res = await fetch(`${repo}${pkg}/${name}.py`);
-        // fetch 는 404 에 예외를 안 던진다. 확인 안 하면 오류 페이지의 HTML 이 그대로
-        // 파이썬 파일로 써지고, 터지는 자리는 원인에서 아주 멀다.
+        // fetch does not throw on a 404. Unchecked, an error page's HTML gets written as
+        // a Python file, and where it blows up is a long way from the cause.
         if (!res.ok) throw new Error(t("load.moduleFailed", `${pkg}/${name}.py`, res.status));
         py.FS.writeFile(`/work/${pkg}/${name}.py`, await res.text());
       })());
     }
   }
-  // torchvision 자리의 transforms. 예시가 아직 안 쓰지만 결속이 임포트할 수 있다.
+  // The transforms that stand where torchvision would. No example uses them yet, but the binding may import them.
   jobs.push((async () => {
     const res = await fetch(`${repo}borchvision.py`);
     if (res.ok) py.FS.writeFile("/work/borchvision.py", await res.text());
@@ -321,7 +328,7 @@ if "/work" not in sys.path:
   return py;
 }
 
-/** 파이썬 코드를 돌린다. `await` 도 `scope()` 도 안 나온다 — 결속이 감춘다. */
+/** Runs Python code. Neither `await` nor `scope()` appears — the binding hides them. */
 export async function runPython(code, hooks = {}) {
   const onLog = hooks.onLog ?? (() => {});
   const onPlot = hooks.onPlot ?? (() => {});
@@ -333,7 +340,7 @@ export async function runPython(code, hooks = {}) {
   const py = await loadPython((line) => onLog(line, "note"));
   const borch = await loadBorch();
 
-  // print 가 개발자 도구로만 가면 이 페이지는 아무것도 안 보여준다.
+  // With print reaching devtools only, this page shows nothing at all.
   py.setStdout({ batched: (line) => onLog(line) });
   py.setStderr({ batched: (line) => onLog(line, "err") });
 
@@ -354,7 +361,7 @@ export async function runPython(code, hooks = {}) {
   };
 }
 
-/** 자바스크립트 쪽의 `log`·`plot`·`stopped` 를 파이썬에서도 같은 이름으로. */
+/** The JavaScript side's `log`, `plot` and `stopped`, under the same names in Python. */
 const PY_PRELUDE = `
 import js as _js
 
@@ -365,12 +372,13 @@ def plot(name, value):
     _js.borchPG.plot(name, float(value))
 
 def show(tensor, **options):
-    # 텐서를 그림으로. 자바스크립트 쪽 show 와 같은 것을 부른다.
+    # A tensor as a picture. It calls the same thing the JavaScript side's show does.
     #
-    # 이 파이썬은 JS 템플릿 문자열 안에 있다 — **백틱을 쓰면 안 된다.** 하나만 있어도
-    # 문자열이 거기서 닫히고, 그러면 파일 전체가 파싱에서 죽는다. 증상은 이 줄과
-    # 아무 상관 없는 "Unexpected identifier" 이고, 실행 블록이 통째로 안 뜬다.
-    # tests/browser/runner.html 이 같은 것을 주석으로 적어 두었는데도 밟았다.
+    # This Python sits inside a JS template literal — **no backticks.** One of them closes
+    # the string right there and the whole file dies in parsing. The symptom is an
+    # "Unexpected identifier" with nothing to do with this line, and not a single runnable
+    # block appears. tests/browser/runner.html had written the same warning in a comment
+    # and it was stepped on anyway.
     return _js.borchPG.show(tensor, _js.Object.fromEntries(list(options.items())))
 
 def stopped():
@@ -387,13 +395,14 @@ function loadScript(src) {
   });
 }
 
-/* ── 코드를 주소에 싣기 ─────────────────────────────────────────────────
+/* ── carrying code in the address ───────────────────────────────────────
  *
- * 플레이그라운드의 공유 링크와 강의의 "플레이그라운드에서 열기" 가 같은 것을 쓴다.
- * 두 벌로 두면 한쪽만 고쳐지고, 그때 깨지는 것은 **남이 받은 링크**다.
+ * The playground's share link and the lessons' "open in playground" use the same code.
+ * Kept as two copies, one gets fixed, and what breaks then is **a link someone else
+ * received.**
  */
 
-/** UTF-8 을 주소에 넣을 수 있는 base64 로. 한글 주석이 들어가므로 그냥 btoa 는 안 된다. */
+/** UTF-8 into a URL-safe base64. Korean comments go through it, so plain btoa will not do. */
 export function encodeCode(text) {
   const bytes = new TextEncoder().encode(text);
   let bin = "";
@@ -409,23 +418,23 @@ export function decodeCode(encoded) {
 }
 
 /**
- * 오류를 사람이 읽을 수 있는 글로.
+ * An error as something a person can read.
  *
- * **`err.stack` 만 보여주면 사파리에서 설명이 사라진다.** V8 의 스택은 첫 줄이
- * `Error: 무엇이 잘못됐다` 라서 그것만 찍어도 읽혔는데, WebKit 의 스택은 **호출
- * 자리만** 있고 메시지가 없다(실측: `module code@…:12:22`). 그래서 사파리 방문자는
- * "WebGPU 가 없다" 대신 파일 이름과 줄 번호만 봤다 — 그것도 이 사이트에서 사파리가
- * 가장 먼저 만나는 오류에서.
+ * **Showing `err.stack` alone loses the explanation in Safari.** V8's stack begins with
+ * `Error: what went wrong`, so printing that alone still read; WebKit's stack has **the
+ * call sites only** and no message (measured: `module code@…:12:22`). So a Safari visitor
+ * saw a filename and a line number instead of "there is no WebGPU" — and at the first
+ * error Safari meets on this site, at that.
  *
- * 메시지를 먼저 적고 스택은 뒤에 붙인다. 둘 다 필요하다: 하나는 읽는 사람의 것이고
- * 하나는 고치는 사람의 것이다.
+ * The message is written first and the stack appended. Both are needed: one belongs to
+ * the person reading and one to the person fixing.
  */
 export function describeError(err) {
-  if (!err) return "알 수 없는 오류";
+  if (!err) return t("run.unknownError");
   const head = err.name && err.message ? `${err.name}: ${err.message}`
              : String(err.message ?? err);
   const stack = typeof err.stack === "string" ? err.stack : "";
-  // V8 은 스택 첫 줄이 이미 메시지다 — 두 번 적지 않는다.
+  // In V8 the stack's first line is already the message — it is not written twice.
   if (stack && stack.startsWith(head)) return stack;
   return stack ? `${head}\n${stack}` : head;
 }

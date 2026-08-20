@@ -40,6 +40,7 @@ const STRINGS = {
     en: "stop requested — the loop halts where it checks stopped().",
     ko: "중지를 걸었다 — 루프가 stopped() 를 보는 자리에서 멈춘다." },
 
+  "run.unknownError": { en: "unknown error", ko: "알 수 없는 오류" },
   "draw.rank": {
     en: "show() draws [H,W], [C,H,W] or [N,C,H,W] — this was [{0}].",
     ko: "show() 는 [H,W]·[C,H,W]·[N,C,H,W] 를 그린다 — 받은 것은 [{0}] 다." },
