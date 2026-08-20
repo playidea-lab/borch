@@ -306,8 +306,8 @@ export async function loadPython(say = () => {}) {
   }
   // torchvision 자리의 transforms. 예시가 아직 안 쓰지만 결속이 임포트할 수 있다.
   jobs.push((async () => {
-    const res = await fetch(`${repo}borch_vision.py`);
-    if (res.ok) py.FS.writeFile("/work/borch_vision.py", await res.text());
+    const res = await fetch(`${repo}borchvision.py`);
+    if (res.ok) py.FS.writeFile("/work/borchvision.py", await res.text());
   })());
   await Promise.all(jobs);
 

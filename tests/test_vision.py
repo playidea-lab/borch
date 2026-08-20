@@ -1,4 +1,4 @@
-"""`borch_vision` 에서 **골든이 못 보는 부분**을 본다.
+"""`borchvision` 에서 **골든이 못 보는 부분**을 본다.
 
 골든은 진짜 torchvision 과 값을 맞춰보는데, 무작위 변환은 그럴 수가 없다 — torch 의
 난수기를 우리가 못 쓰기 때문이다. 그래서 골든은 확률을 0·1 로 못 박거나 자를 자리가
@@ -21,7 +21,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 import borch as BT                                            # noqa: E402
-import borch_vision as V                                      # noqa: E402
+import borchvision as V                                      # noqa: E402
 
 V.use(BT)
 

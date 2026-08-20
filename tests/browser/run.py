@@ -130,7 +130,7 @@ def main():
             f"L = importlib.import_module({args.lib!r})\n"
             # 늘리기의 뽑기도 씨앗을 박는다. 안 그러면 같은 명령이 매번 다른 답을 내고,
             # 두 조건의 차이인지 뽑기의 차이인지 못 가른다.
-            f"import borch_vision as V; V.use(L); V.manual_seed(0)\n"
+            f"import borchvision as V; V.use(L); V.manual_seed(0)\n"
             f"tr = await bench.cifar_from(L, '/cifar-batch1.bin', 'cifar-batch1.bin')\n"
             f"te = await bench.cifar_from(L, '/cifar-batch-test.bin', 'cifar-test.bin')\n"
             f"cap = {args.images}\n"

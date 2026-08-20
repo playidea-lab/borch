@@ -11111,7 +11111,7 @@
     "ko": "이미지 변환. `torchvision.transforms` 자리.",
     "en": "Image transforms. Where `torchvision.transforms` would be."
    },
-   "doc": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borch_vision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다.",
+   "doc": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다.",
    "symbols": [
     {
      "kind": "interface",
@@ -11317,7 +11317,7 @@
     }
    ],
    "count": 32,
-   "doc_en": "Transforms shaped like `torchvision.transforms`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there are things\nthat go quietly wrong at that place — the comment on `ToTensor` below is one of them.\nIt uses **the same rules** as the repository's Python side (`borch_vision.py`). If\nthe rules diverge, the same data becomes different values per library, and that is\ncaught only by comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What arrives here\nin torchvision is a PIL image, and having no PIL, an array stands in its place.\nMaking a tensor per image makes one GPU buffer per image, which looks like it works\nright up until it collapses on memory."
+   "doc_en": "Transforms shaped like `torchvision.transforms`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there are things\nthat go quietly wrong at that place — the comment on `ToTensor` below is one of them.\nIt uses **the same rules** as the repository's Python side (`borchvision.py`). If\nthe rules diverge, the same data becomes different values per library, and that is\ncaught only by comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What arrives here\nin torchvision is a PIL image, and having no PIL, an array stands in its place.\nMaking a tensor per image makes one GPU buffer per image, which looks like it works\nright up until it collapses on memory."
   },
   {
    "name": "fft",

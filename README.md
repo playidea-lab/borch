@@ -50,20 +50,20 @@ npm run build:ts && npm run site      # http://127.0.0.1:8123/site/
 ## 설치
 
 순수 파이썬 휠 하나다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
-`borch` 패키지와 `borch_vision` 모듈이 들어 있다.
+`borch` 패키지와 `borchvision` 모듈이 들어 있다.
 
 ```bash
-uv add ./borch-1.4.0-py3-none-any.whl        # 릴리스에서 받은 파일
+uv add ./pyborch-1.4.0-py3-none-any.whl        # 릴리스에서 받은 파일
 ```
 
 브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
 
 ```js
 // 파일 이름을 그대로 써야 한다 — micropip 이 이름에서 패키지명과 버전을 읽는다.
-py.FS.writeFile("/borch-1.4.0-py3-none-any.whl", new Uint8Array(wheelBytes));
+py.FS.writeFile("/pyborch-1.4.0-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
-await micropip.install("emfs:/borch-1.4.0-py3-none-any.whl")
+await micropip.install("emfs:/pyborch-1.4.0-py3-none-any.whl")
 `);
 ```
 
@@ -419,7 +419,7 @@ uv run --with playwright python tests/browser/run.py \
 산다 — 그 부호 하나가 이 결속의 읽기 경로에서 `-0.0` 을 잃고 있던 것을 잡았다.
 `-0.0 == 0.0` 이라 값 대조로는 영영 안 걸렸을 자리다.
 
-## torchvision — `transforms` 만 (`borch_vision`)
+## torchvision — `transforms` 만 (`borchvision`)
 
 파이토치 입문 튜토리얼의 **첫 열 줄이 torchvision** 이다.
 
@@ -432,8 +432,8 @@ datasets.MNIST(root, transform=transforms.ToTensor())
 코어 안에 넣으면 진짜 torch 에 **없는 자리**를 만들게 된다.
 
 ```python
-import borch_vision as torchvision
-from borch_vision import transforms
+import borchvision as torchvision
+from borchvision import transforms
 ```
 
 | 있는 것 | `Compose` · `ToTensor` · `Normalize` · `RandomHorizontalFlip` · `RandomCrop` |

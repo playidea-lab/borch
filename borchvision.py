@@ -6,8 +6,8 @@
 `borch.transforms` 가 되는데 그건 진짜 torch 에 **없는 자리**다. 구조를 그대로
 흉내 내는 것이 이 프로젝트의 요점인데, 없는 자리를 만들면 그 요점이 먼저 깨진다.
 
-    import borch_vision as torchvision
-    from borch_vision import transforms
+    import borchvision as torchvision
+    from borchvision import transforms
 
 ## 어느 라이브러리의 텐서를 만드는가
 
@@ -244,7 +244,7 @@ def augment_batch(x, crop=None, padding=0, hflip_p=0.0, fill=0.0):
 
 
 class _Transforms:
-    """`from borch_vision import transforms` 를 위한 자리. torchvision 의
+    """`from borchvision import transforms` 를 위한 자리. torchvision 의
     모듈 구조를 그대로 두려고 이름만 빌린다."""
 
 

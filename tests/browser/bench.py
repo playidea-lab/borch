@@ -15,7 +15,7 @@ import gc as _gc
 import js
 import numpy as np
 
-import borch_vision as vision
+import borchvision as vision
 
 CIFAR_TRAIN_IMAGES = 50000
 # CIFAR-10 의 통상값. 정규화를 빼면 첫 에폭이 눈에 띄게 느리게 붙는다.

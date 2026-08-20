@@ -42,7 +42,7 @@ def _torch_model():
     # `bench.py` 는 Pyodide 안에서 도는 파일이라 `js` 를 들여온다. 여기서는 모델을
     # 만드는 부분만 필요하므로 그 줄만 뺀다 — 모델 코드는 한 글자도 안 바꾼다.
     src = src.replace("import js\n", "").replace(
-        "import borch_vision as vision\n", "")
+        "import borchvision as vision\n", "")
     module = importlib.util.module_from_spec(spec)
     exec(compile(src, str(path), "exec"), module.__dict__)  # noqa: S102
     return module.resnet18(torch)

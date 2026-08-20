@@ -1,5 +1,15 @@
 [project]
-name = "borch"
+# **배포 이름과 임포트 이름은 다른 것이다.** 여기 적는 것은 `pip install` 이 받는
+# 이름이고, 코드가 부르는 이름은 아래 `packages` 의 `borch` 그대로다 —
+# `pillow`→`PIL`, `beautifulsoup4`→`bs4` 와 같은 자리다.
+#
+# `borch` 를 못 쓴다. PyPI 의 그 이름은 **남의 것**이고(Desupervised, "Probabilistic
+# programming using pytorch", 0.1.6) 하필 도메인이 인접하다. 그래서 `pip install
+# borch` 를 친 사람이 이쪽으로 오게 만들 방법은 없고, 문서로만 갈라 말할 수 있다.
+#
+# npm 쪽은 `borch` 가 비어 있어서 그대로 쓴다. 두 곳의 이름이 갈리는 것은 이
+# 사정 때문이지 설계가 아니다.
+name = "pyborch"
 version = "1.4.0"
 description = "numpy 위에 얹은 PyTorch 모양의 얇은 층 — 설치 없이 브라우저에서 문법 연습"
 requires-python = ">=3.10"
@@ -18,12 +28,12 @@ build-backend = "hatchling.build"
 # `borch` 는 패키지가 되었다(예전에는 파일 하나였다). 3천 줄이 넘어가면서
 # "한 파일이라 읽힌다"는 명분이 먼저 없어졌다 — 이유는 README 에 적었다.
 #
-# `borch_vision` 도 넣는다. 안 넣으면 휠로 설치한 사람에게는 **모듈이 아예
+# `borchvision` 도 넣는다. 안 넣으면 휠로 설치한 사람에게는 **모듈이 아예
 # 없다** — 저장소에서는 되고 설치본에서는 안 되는, 아무도 안 보다가 사용자만 만나는 종류다.
 # `borch_webgpu` 는 여기 없다. 브라우저 전용이고, 그 밑에 깔리는 borch.ts 는
 # 페이지가 ES 모듈로 싣는다(npm 쪽 `borch`).
 packages = ["borch"]
-only-include = ["borch", "borch_vision.py"]
+only-include = ["borch", "borchvision.py"]
 
 [tool.hatch.build]
-include = ["borch", "borch_vision.py"]
+include = ["borch", "borchvision.py"]

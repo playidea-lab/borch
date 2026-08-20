@@ -39,6 +39,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # 처럼 표에 없는 낱말을 쓴다.
 RULES = [
     ("borch_ts", "borch_webgpu"),
+    # **`torchvision` 에는 밑줄이 없다.** 이 프로젝트의 요점이 torch 의 구조를 그대로
+    # 두는 것인데, `borch_vision` 은 대응하는 자리에 없는 밑줄을 하나 넣고 있었다.
+    # `import borchvision as torchvision` 이 되어야 그 요점이 지켜진다.
+    #
+    # 배포 이름(`[project] name`)은 안 건드린다 — 그것은 별개의 문제이고, 지금
+    # PyPI 의 `borch` 는 남의 것이다(Desupervised, 확률 프로그래밍). 모듈 이름과
+    # 배포 이름을 같이 움직이면 무엇이 무엇 때문에 바뀌었는지 안 보인다.
+    ("borch_vision", "borchvision"),
     # **철자가 다르면 규칙도 따로다.** `browsertorch` → `borch` 를 돌렸을 때 이
     # 이름은 안 걸렸다 — 규칙이 소문자였고 클래스는 `BrowserTorchError` 였다.
     # 소문자에는 낱말 경계가 없으므로(`browsertorch`) 도구가 `BrowserTorch` 를

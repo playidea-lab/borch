@@ -7362,12 +7362,12 @@ def _vision(L):
     global _BT_VISION
     if _BT_VISION is None:
         try:                                    # 브라우저에서는 /work 가 경로에 있다
-            import borch_vision as mod
+            import borchvision as mod
         except ImportError:                     # 네이티브에서는 저장소 루트를 짚는다
             import importlib.util
             import pathlib
-            path = pathlib.Path(__file__).resolve().parent.parent / "borch_vision.py"
-            spec = importlib.util.spec_from_file_location("borch_vision", path)
+            path = pathlib.Path(__file__).resolve().parent.parent / "borchvision.py"
+            spec = importlib.util.spec_from_file_location("borchvision", path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
         _BT_VISION = mod
@@ -7391,7 +7391,7 @@ def _as_tensor(L, arr):
 
 
 def vision_cases(inp=None):
-    """`borch_vision` — torchvision 의 `transforms` 만.
+    """`borchvision` — torchvision 의 `transforms` 만.
 
     **무작위 변환은 뽑기를 대조할 수 없다.** torch 의 난수기를 우리가 못 쓰기 때문이다.
     그래서 확률을 0 이나 1 로 못 박거나, 자를 자리가 하나뿐이게 만들어 **결정적인

@@ -71,7 +71,7 @@ jobs:
           cp -r site borch-ts/dist borch borch_webgpu _site/
           mkdir -p _site/borch-ts && mv _site/dist _site/borch-ts/dist
           mkdir -p _site/vendor && cp -r vendor/pyodide _site/vendor/pyodide
-          cp borch_vision.py THIRD-PARTY.md LICENSE _site/
+          cp borchvision.py THIRD-PARTY.md LICENSE _site/
           # 뿌리에서 사이트로 보낸다. 상대 경로를 안 건드리는 가장 싼 방법이다.
           cat > _site/index.html <<'HTML'
           <!doctype html>
