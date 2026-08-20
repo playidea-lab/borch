@@ -39,6 +39,11 @@ const STRINGS = {
     en: "stop requested — the loop halts where it checks stopped().",
     ko: "중지를 걸었다 — 루프가 stopped() 를 보는 자리에서 멈춘다." },
 
+  "editor.nameJs": { en: "JavaScript code", ko: "자바스크립트 코드" },
+  "editor.namePy": { en: "Python code", ko: "파이썬 코드" },
+  "editor.hint": {
+    en: "Tab indents; press Escape then Tab to leave.",
+    ko: "Tab 은 들여쓰기이고, 나가려면 Escape 를 누른 뒤 Tab 을 누른다." },
   "editor.opened": {
     en: "{0} — ⌘/Ctrl + Enter to run.", ko: "{0} — ⌘/Ctrl + Enter 로 돌린다." },
   "editor.fromLink": {

@@ -65,7 +65,11 @@ function setLang(next, { keepCode = false } = {}) {
   fillPicker();
   surface.textContent = t(next === "js" ? "editor.surfaceJs" : "editor.surfacePy");
   filename.textContent = t(next === "js" ? "editor.fileJs" : "editor.filePy");
-  editor.setAttribute("aria-label", next === "js" ? "자바스크립트 코드" : "파이썬 코드");
+  // **여기 한국어가 박혀 있었다.** 영문 페이지의 편집기가 화면 낭독기에게 자기를
+  // 한국어로 소개하고 있었다 — 눈으로는 안 보이는 자리라 아무도 못 봤다.
+  const name = t(next === "js" ? "editor.nameJs" : "editor.namePy");
+  editor.setAttribute("aria-label", `${name}. ${t("editor.hint")}`);
+  editor.setAttribute("title", t("editor.hint"));
   repaint();
   if (!keepCode) {
     const ex = EXAMPLES[lang][0];
@@ -172,8 +176,16 @@ window.addEventListener("hashchange", () => {
   load(ex);
 });
 
-// 탭이 초점을 옮기면 코드 편집기가 아니다.
+// 탭이 초점을 옮기면 코드 편집기가 아니다. **그런데 나갈 문은 있어야 한다.**
+//
+// 없으면 키보드로 들어온 사람이 못 나간다 — Tab 이 공백만 늘린다. Escape 로 한 번
+// 무장하고 다음 Tab 이 나간다. 강의 블록(`runnable.js`)과 같은 문이라 두 편집기의
+// 손짓이 같다.
+let leaving = false;
 editor.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { leaving = true; return; }
+  if (e.key === "Tab" && leaving) { leaving = false; return; }
+  if (e.key !== "Tab") leaving = false;
   if (e.key === "Tab") {
     e.preventDefault();
     const { selectionStart: s, selectionEnd: t, value } = editor;

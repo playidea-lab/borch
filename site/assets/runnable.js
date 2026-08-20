@@ -37,6 +37,11 @@ const LABEL = {
   reset: { en: "reset", ko: "되돌리기" },
   open: { en: "open in playground", ko: "플레이그라운드에서" },
   stop: { en: "■ Stop", ko: "■ 중지" },
+  editorHint: {
+    en: "Code editor. Tab indents; press Escape then Tab to leave.",
+    ko: "코드 편집기. Tab 은 들여쓰기이고, 나가려면 Escape 를 누른 뒤 Tab 을 누른다." },
+  // 강의 블록은 자기가 무엇인지 말할 이름이 따로 없어 위 문장이 이름을 겸한다.
+  // 플레이그라운드는 "자바스크립트 코드" 같은 이름이 이미 있어 지시만 붙인다.
 };
 
 const NAME = { js: "javascript", py: "python" };
@@ -84,8 +89,9 @@ function mount(box) {
       <button class="reset" type="button">${say("reset")}</button>
       <button class="go" type="button">${say("run")}</button>
     </div>
-    <div class="edit"><pre><code></code></pre><textarea spellcheck="false"
-      autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off"></textarea></div>
+    <div class="edit"><pre tabindex="-1"><code></code></pre><textarea spellcheck="false"
+      autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off"
+      aria-label="${say("editorHint")}" title="${say("editorHint")}"></textarea></div>
     <pre class="out"></pre>
     <div class="canvas-out"></div>`;
 
@@ -120,7 +126,19 @@ function mount(box) {
     layer.scrollTop = editor.scrollTop;
     layer.scrollLeft = editor.scrollLeft;
   });
+  // **Tab 은 여기서 들여쓰기라, 나갈 문을 따로 내야 한다.**
+  //
+  // 안 내면 키보드로 편집기에 들어온 사람이 못 나간다 — Tab 을 아무리 눌러도 공백만
+  // 늘어난다(실측: 두 번 눌러 822→826 자, 초점 그대로). 마우스 없이는 탭을 닫는
+  // 것 말고 방법이 없고, 이것은 접근성에서 이름이 붙은 실패다(WCAG 2.1.2 키보드 덫).
+  //
+  // Escape 로 한 번 무장하고 다음 Tab 이 나간다 — CodeMirror·Monaco 가 쓰는 문이라
+  // 코드 편집기를 만져 본 사람에게는 이미 아는 손짓이다. 다른 키를 치면 도로 잠긴다.
+  let leaving = false;
   editor.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { leaving = true; return; }
+    if (e.key === "Tab" && leaving) { leaving = false; return; }   // 기본 동작 = 초점 이동
+    if (e.key !== "Tab") leaving = false;
     if (e.key === "Tab") {
       e.preventDefault();
       const { selectionStart: s, selectionEnd: t2, value } = editor;

@@ -497,3 +497,55 @@ def _jpeg_size(blob):
                     int.from_bytes(blob[i + 7:i + 9], "big"))
         i += 2 + int.from_bytes(blob[i + 2:i + 4], "big")
     raise AssertionError("JPEG 에서 크기 표시를 못 찾았다")
+
+
+def test_the_editors_have_a_way_out_for_the_keyboard():
+    """코드 편집기에서 Tab 은 들여쓰기다. **그러면 나갈 문이 따로 있어야 한다.**
+
+    없으면 키보드로 들어온 사람이 못 나간다 — Tab 을 눌러도 공백만 늘고 초점은 그대로다.
+    실측으로 두 번 눌러 822→826 자, 초점 그대로였다. 마우스 없이는 탭을 닫는 것 말고
+    방법이 없고, 접근성에서 이름이 붙은 실패다(WCAG 2.1.2 키보드 덫).
+
+    이 자리가 오래 안 보였던 이유가 있다. 초점 **표시**는 이미 고쳐져 있었다
+    (`86528b0` — "마우스 없이 못 쓴다"). 보이는 것을 고치면서 **갇히는 것**은 그대로
+    남았다 — 눌러 보지 않으면 안 갈리는 자리다.
+
+    문은 Escape 다: 한 번 무장하고 다음 Tab 이 나간다. 여기서는 그 세 조각이 코드에
+    있는지만 본다 — 실제로 막히는지·안 막히는지는 브라우저에서 쟀다.
+    """
+    wrong = []
+    for rel in ("site/assets/runnable.js", "site/assets/playground.js"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        if 'e.key === "Tab"' not in text:
+            continue
+        if 'e.key === "Escape"' not in text:
+            wrong.append(f"{rel}: Tab 을 가로채는데 Escape 로 나갈 문이 없다")
+        elif '"Tab" && leaving' not in text:
+            wrong.append(f"{rel}: Escape 는 받는데 그 다음 Tab 을 놓아주지 않는다")
+    assert not wrong, "코드 편집기가 키보드를 가둔다:\n  " + "\n  ".join(wrong)
+
+
+def test_no_korean_hides_where_only_a_screen_reader_looks():
+    """눈에 안 보이는 자리(`aria-label`·`title`·`alt`)에 한국어가 박히지 않았는가.
+
+    영문 플레이그라운드의 편집기가 화면 낭독기에게 자기를 "자바스크립트 코드" 라고
+    소개하고 있었다 — `playground.js` 가 언어와 무관하게 그 글자를 박았다. 화면에는
+    안 나오는 자리라 눈으로 보는 검토로는 안 걸린다.
+
+    영문 쪽만 본다. 한국어 페이지의 한국어는 맞는 말이다.
+    """
+    attr = re.compile(r'(?:aria-label|title|alt|placeholder)="([^"]*)"')
+    hangul = re.compile(r"[가-힣]")
+    wrong = []
+    for page in _pages():
+        if page.relative_to(SITE).as_posix().startswith("ko/"):
+            continue
+        for value in attr.findall(page.read_text(encoding="utf-8")):
+            if hangul.search(value):
+                wrong.append(f"{page.relative_to(ROOT)}: \"{value[:40]}\"")
+    # 스크립트가 박는 것도 본다 — 화면에 안 나오므로 페이지만 봐서는 못 잡는다.
+    setter = re.compile(r'setAttribute\(\s*"(?:aria-label|title)"\s*,\s*"([^"]*[가-힣][^"]*)"')
+    for js in sorted((SITE / "assets").glob("*.js")):
+        for value in setter.findall(js.read_text(encoding="utf-8")):
+            wrong.append(f"{js.relative_to(ROOT)}: \"{value[:40]}\" — 언어와 무관하게 박힌다")
+    assert not wrong, ("영문 쪽의 안 보이는 자리에 한국어가 있다:\n  " + "\n  ".join(wrong))
