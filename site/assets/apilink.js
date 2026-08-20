@@ -1,22 +1,24 @@
 /**
- * 강의 본문의 이름을 API 레퍼런스로 잇는다.
+ * Links names in lesson prose to the API reference.
  *
- * 읽다가 `keepAlive` 를 만난 사람이 그 자리에서 시그니처를 볼 수 있어야 한다.
- * 손으로 링크를 걸면 이름이 바뀔 때 조용히 엉뚱한 자리를 가리키므로, **생성된
- * 목록에 있는 이름만** 잇는다 — 없는 이름은 그냥 코드 글씨로 남는다.
+ * Someone who meets `keepAlive` while reading should be able to see its signature
+ * from there. Hand-written links point quietly at the wrong place once a name
+ * changes, so **only names present in the generated index** are linked — anything
+ * else stays plain code type.
  *
- * 실행되는 코드 블록 안은 건드리지 않는다. 거기는 편집기이지 글이 아니다.
+ * Inside a runnable block nothing is touched. That is an editor, not prose.
  */
 
 const INDEX_URL = new URL("./api-index.json", import.meta.url).href;
 const API_BASE = new URL("../api/", document.baseURI).href;
 
-// 이름만 있는 `code` 만 본다. `model.call(x)` 같은 조각은 이름이 아니다.
-// **빈 괄호는 붙어 있어도 이름이다** — 글에서는 `backward()`·`keepAlive()` 로 적는
-// 것이 자연스럽고, 그것이 정확히 읽는 사람이 누르고 싶은 것이다.
+// Only `code` that is a bare name. A fragment like `model.call(x)` is not a name.
+// **Empty parentheses still leave it a name** — prose naturally writes `backward()`
+// and `keepAlive()`, and that is exactly what a reader wants to click.
 const BARE = /^([A-Za-z_$][\w$]*)(?:\(\))?$/;
 
-// 너무 흔해서 링크가 방해가 되는 것들. 글에서 이 낱말은 대개 API 이야기가 아니다.
+// Too common for a link to be anything but noise. In prose these words are usually
+// not about the API at all.
 const SKIP = new Set(["call", "forward", "step", "shape", "size", "data", "get", "set",
                       "params", "lr", "name", "value", "training", "describe"]);
 
@@ -24,7 +26,7 @@ const SKIP = new Set(["call", "forward", "step", "shape", "size", "data", "get",
   let index;
   try {
     const res = await fetch(INDEX_URL);
-    if (!res.ok) return;                       // 목록이 없으면 그냥 안 잇는다
+    if (!res.ok) return;                       // no index, no links — that is all
     index = await res.json();
   } catch {
     return;

@@ -1,39 +1,43 @@
 /**
- * 텐서를 눈에 보이게 그린다 — 이미지와 곡선.
+ * Draws tensors so they can be seen — images and curves.
  *
- * **튜토리얼이 이것 없이는 성립하지 않는다.** 분류기가 무엇을 틀렸는지 글로 적는
- * 것보다 그 이미지를 보여주는 편이 짧고, 손실이 내려간다는 말보다 내려가는 선이
- * 정확하다. 강의의 실행 블록과 플레이그라운드가 같은 것을 쓴다.
+ * **The tutorials do not hold up without this.** Showing the image a classifier got
+ * wrong is shorter than describing it, and a line coming down is more exact than the
+ * sentence "the loss goes down". The lesson blocks and the playground use the same
+ * code.
  */
 
-/** 텐서 모양을 (장수, 채널, 높이, 너비) 로 편다. 못 펴면 무엇이 문제인지 말한다. */
+import { t } from "./i18n.js";
+
+/** Spreads a tensor's shape into (count, channels, height, width), saying what is wrong if it cannot. */
 function layout(shape) {
   if (shape.length === 4) return { n: shape[0], c: shape[1], h: shape[2], w: shape[3] };
   if (shape.length === 3) return { n: 1, c: shape[0], h: shape[1], w: shape[2] };
   if (shape.length === 2) return { n: 1, c: 1, h: shape[0], w: shape[1] };
   throw new Error(
-    `show() 는 [H,W]·[C,H,W]·[N,C,H,W] 를 그린다 — 받은 것은 [${shape}] 다.`);
+    t("draw.rank", shape));
 }
 
 /**
- * 텐서를 캔버스에 그려 돌려준다.
+ * Draws a tensor onto a canvas and returns it.
  *
- * @param tensor  borch 텐서 (값 읽기는 여기서 await 한다)
+ * @param tensor  a borch tensor (reading its values is awaited here)
  * @param options `{ scale, labels, max, range, width }`
- *                `range` 는 값의 범위 — 기본은 실제 최소·최대로 늘린다.
- *                정규화된 이미지를 원래대로 보고 싶으면 `[-1, 1]` 처럼 준다.
+ *                `range` is the value span — by default it stretches to the real
+ *                minimum and maximum. To see a normalised image as it was, pass
+ *                something like `[-1, 1]`.
  */
 export async function drawTensor(tensor, options = {}) {
   const { scale = 3, labels = null, max = 64, range = null, width = 720 } = options;
   const shape = tensor.shape;
   const { n, c, h, w } = layout(shape);
   if (c !== 1 && c !== 3) {
-    throw new Error(`채널이 1 이나 3 이어야 그린다 — 받은 것은 ${c} 다.`);
+    throw new Error(t("draw.channels", c));
   }
 
   const values = await tensor.toArray();
   const count = Math.min(n, max);
-  // 한 줄에 몇 장. 너무 길어지면 접는다.
+  // How many per row. It wraps once the row grows too long.
   const cols = Math.min(count, Math.max(1, Math.floor(width / (w * scale + 4))));
   const rows = Math.ceil(count / cols);
   const labelRoom = labels ? 14 : 0;
@@ -50,8 +54,9 @@ export async function drawTensor(tensor, options = {}) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
 
-  // 값의 범위. **한 장씩 늘리지 않는다** — 장마다 다르게 늘리면 밝기가 서로
-  // 달라져서 비교가 안 된다. 비교하라고 나란히 그리는 것이므로 전체로 늘린다.
+  // The value span. **Not stretched per image** — stretching each one differently
+  // leaves them at different brightnesses and nothing can be compared. They are drawn
+  // side by side in order to be compared, so the span covers all of them.
   let lo = 0, hi = 1;
   if (range) {
     [lo, hi] = range;
@@ -76,7 +81,7 @@ export async function drawTensor(tensor, options = {}) {
       tile.data[p * 4 + 2] = b;
       tile.data[p * 4 + 3] = 255;
     }
-    // createImageData 는 바로 못 키운다. 한 번 그려서 키운다.
+    // createImageData cannot scale directly, so it is drawn once and then scaled.
     const small = document.createElement("canvas");
     small.width = w;
     small.height = h;
@@ -99,7 +104,7 @@ export async function drawTensor(tensor, options = {}) {
   return canvas;
 }
 
-/** 수의 흐름을 선으로. 손실 곡선이 첫 사용자다. */
+/** A run of numbers as a line. The loss curve is its first user. */
 export function drawSeries(series, options = {}) {
   const { width = 520, height = 120, name = "" } = options;
   const canvas = document.createElement("canvas");
@@ -118,7 +123,7 @@ export function drawSeries(series, options = {}) {
 
   if (series.length < 2) {
     ctx.fillStyle = faint;
-    ctx.fillText("아직 그릴 것이 없다", 10, height / 2);
+    ctx.fillText(t("draw.empty"), 10, height / 2);
     return canvas;
   }
 
