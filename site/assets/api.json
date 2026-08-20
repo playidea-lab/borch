@@ -4,7 +4,7 @@
  "english": {
   "done": 636,
   "stale": 0,
-  "missing": 2
+  "missing": 4
  },
  "modules": [
   {
@@ -11347,6 +11347,52 @@
      "doc_en": "Pads the edges, then crops at random."
     },
     {
+     "kind": "class",
+     "name": "Resize",
+     "signature": "export declare class Resize implements Transform",
+     "doc": "크기를 바꾼다. **배열을 받아 배열을 낸다** — 텐서가 아니다. 장당 텐서를 만들면\nGPU 버퍼가 장당 하나씩 생긴다(`RandomCrop` 과 같은 이유).\n\n`size` 가 수 하나면 **짧은 변**을 그 값으로 맞추고 비율을 지킨다.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\")",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "CenterCrop",
+     "signature": "export declare class CenterCrop implements Transform",
+     "doc": "가운데를 잘라낸다. **자를 크기가 원본보다 크면 0 으로 채운 뒤 자른다** —\ntorchvision 이 그렇게 하고, 거절하면 같은 코드가 두 라이브러리에서 갈린다.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
      "kind": "function",
      "name": "augmentBatch",
      "signature": "export declare function augmentBatch(x: Float32Array, n: number, c: number, h: number, w: number, opts?: { crop?: number; padding?: number; hflipP?: number; fill?: number; }): Float32Array",
@@ -11365,7 +11411,7 @@
      "doc_en": "`(x - mean) / std` per channel, batch-wide on the CPU — finished before any tensor is made."
     }
    ],
-   "count": 32,
+   "count": 40,
    "doc_en": "Transforms shaped like `torchvision.transforms`.\n\n## Why this is inside a tensor library\n\nRunning training requires a place where images become tensors, and there are things\nthat go quietly wrong at that place — the comment on `ToTensor` below is one of them.\nIt uses **the same rules** as the repository's Python side (`borchvision.py`). If\nthe rules diverge, the same data becomes different values per library, and that is\ncaught only by comparing values.\n\n## An image is an array, not a tensor\n\n`RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What arrives here\nin torchvision is a PIL image, and having no PIL, an array stands in its place.\nMaking a tensor per image makes one GPU buffer per image, which looks like it works\nright up until it collapses on memory."
   },
   {
@@ -12865,5 +12911,5 @@
    "count": 9
   }
  ],
- "total": 1649
+ "total": 1657
 }

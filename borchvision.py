@@ -243,11 +243,127 @@ def augment_batch(x, crop=None, padding=0, hflip_p=0.0, fill=0.0):
     return pieces
 
 
+# --- 크기 바꾸기 ------------------------------------------------------------
+#
+# **안티에일리어싱을 하는 쪽으로 갔다.** torchvision 의 `Resize` 는 기본이
+# `antialias=True` 이고, 끈 것과 켠 것의 차이가 8×8→4×4 에서 최대 0.0301 이다(실측).
+# 0 이 아니므로 "bilinear" 라고만 적으면 어느 쪽인지 안 정해진 것이고, 켠 것으로
+# 학습한 모델에 끈 것을 넣으면 입력이 다르다.
+#
+# 규칙은 PIL·torch 가 쓰는 것 그대로다. 출력 화소마다 입력에서 볼 범위를
+# `support = max(1, 축소배율)` 로 넓히고, 삼각 필터로 가중치를 매겨 합이 1 이 되게
+# 나눈다. 확대일 때는 support 가 1 이라 보통의 겹선형과 같아진다 — 그래서 갈래가
+# 하나로 족하다.
+#
+# 경계 규칙을 두 가지로 재봤다(`floor(center - support)` 와 `+0.5` 를 더한 것).
+# **모든 케이스에서 답이 같다** — 넓힌 자리에서 삼각 필터가 0 이기 때문이다.
+# torch 의 C 구현과 같은 쪽(`+0.5`)을 쓴다.
+
+
+def _aa_weights(src, dst):
+    """출력 자리마다 (읽기 시작점, 가중치). 축 하나에 대한 것이다 — 분리 가능하다."""
+    scale = src / dst
+    support = max(1.0, scale)
+    rows = []
+    for i in range(dst):
+        center = (i + 0.5) * scale
+        lo = int(max(0, _np.floor(center - support + 0.5)))
+        hi = int(min(src, _np.ceil(center + support + 0.5)))
+        w = _np.array([max(0.0, 1.0 - abs((j + 0.5 - center) / support))
+                       for j in range(lo, hi)], dtype=_np.float64)
+        total = w.sum()
+        rows.append((lo, w / total if total else w))
+    return rows
+
+
+def _resize_axis(arr, axis, dst, mode):
+    """한 축만 바꾼다. 가로·세로를 따로 지나는 것이 이 필터가 분리 가능하다는 뜻이다."""
+    src = arr.shape[axis]
+    if src == dst:
+        return arr
+    if mode == "nearest":
+        pick = (_np.arange(dst) * (src / dst)).astype(int)
+        return _np.take(arr, pick, axis=axis)
+    out = _np.empty(arr.shape[:axis] + (dst,) + arr.shape[axis + 1:], dtype=_np.float64)
+    moved = _np.moveaxis(arr, axis, 0)
+    dest = _np.moveaxis(out, axis, 0)
+    for i, (lo, w) in enumerate(_aa_weights(src, dst)):
+        chunk = moved[lo:lo + len(w)]
+        dest[i] = (chunk * w.reshape((-1,) + (1,) * (chunk.ndim - 1))).sum(axis=0)
+    return out
+
+
+def _short_side(h, w, size):
+    """짧은 변을 `size` 로. 긴 변은 비율을 지킨다 — torchvision 의 `Resize(int)` 다."""
+    short, long = min(h, w), max(h, w)
+    if short == size:
+        return h, w
+    new_long = int(size * long / short)
+    return (size, new_long) if h < w else (new_long, size)
+
+
+class Resize:
+    """`(H,W,C)` 배열의 크기를 바꾼다. **텐서가 아니라 배열을 받는다** — torchvision
+    에서 이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를
+    대신한다(`RandomCrop` 과 같은 규칙).
+
+    `size` 가 정수면 **짧은 변**을 그 값으로 맞추고 비율을 지킨다. 둘을 주면 그대로다.
+
+    `interpolation` 은 `"bilinear"`(기본, 안티에일리어싱 포함)와 `"nearest"` 다.
+    torchvision 의 기본과 같은 값을 낸다 — 실측으로 붙였다.
+    """
+
+    def __init__(self, size, interpolation="bilinear"):
+        self.size = int(size) if isinstance(size, int) else tuple(size)
+        if interpolation not in ("bilinear", "nearest"):
+            raise ValueError(
+                f"interpolation is 'bilinear' or 'nearest' — got {interpolation!r}")
+        self.interpolation = interpolation
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        h, w = img.shape[0], img.shape[1]
+        th, tw = (_short_side(h, w, self.size) if isinstance(self.size, int)
+                  else self.size)
+        out = _resize_axis(_np.asarray(img, dtype=_np.float64), 0, th, self.interpolation)
+        out = _resize_axis(out, 1, tw, self.interpolation)
+        return _np.ascontiguousarray(out)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(size={self.size}, interpolation={self.interpolation})"
+
+
+class CenterCrop:
+    """가운데를 잘라낸다. **자를 크기가 원본보다 크면 0 으로 채운 뒤 자른다** —
+    torchvision 이 그렇게 하고, 거절하면 같은 코드가 갈린다."""
+
+    def __init__(self, size):
+        self.size = (int(size), int(size)) if isinstance(size, int) else tuple(size)
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        th, tw = self.size
+        h, w = img.shape[0], img.shape[1]
+        pad_h, pad_w = max(0, th - h), max(0, tw - w)
+        if pad_h or pad_w:
+            pads = [(pad_h // 2, pad_h - pad_h // 2),
+                    (pad_w // 2, pad_w - pad_w // 2)] + [(0, 0)] * (img.ndim - 2)
+            img = _np.pad(img, pads)
+            h, w = img.shape[0], img.shape[1]
+        top = int(round((h - th) / 2.0))
+        left = int(round((w - tw) / 2.0))
+        return _np.ascontiguousarray(_crop(img, 0, top, th, 1, left, tw))
+
+    def __repr__(self):
+        return f"{type(self).__name__}(size={self.size})"
+
+
 class _Transforms:
     """`from borchvision import transforms` 를 위한 자리. torchvision 의
     모듈 구조를 그대로 두려고 이름만 빌린다."""
 
 
 transforms = _Transforms()
-for _name in ("Compose", "ToTensor", "Normalize", "RandomHorizontalFlip", "RandomCrop"):
+for _name in ("Compose", "ToTensor", "Normalize", "RandomHorizontalFlip",
+              "RandomCrop", "Resize", "CenterCrop"):
     setattr(transforms, _name, globals()[_name])

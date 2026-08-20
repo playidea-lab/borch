@@ -1326,12 +1326,39 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::Crop(패딩1)",
     () => asTensor(new vision.RandomCrop([7, 6], 1).apply(u8()) as vision.Image));
 
+  // 크기 바꾸기. **실수 이미지로 한다** — uint8 로 하면 `ToTensor` 가 255 로 나누는
+  // 자리가 파이썬 판과 순서 때문에 갈린다(저쪽은 텐서를 받아 먼저 나뉜다).
+  const f = () => pic("vis_f", false);
+  // **`ToTensor` 를 거친다** — 파이썬 쪽 케이스가 `ToTensor(Resize(...))` 이고,
+  // 그것이 (H,W,C) 를 (C,H,W) 로 돌린다. 옆의 `asTensor` 는 전치를 안 하는
+  // 다른 헬퍼다(그 케이스들은 파이썬 쪽도 전치를 안 한다).
+  const toTensor = (img: vision.Image): Tensor =>
+    new vision.ToTensor().apply(img) as Tensor;
+  out.set("vision::Resize(줄임·겹선형)", () =>
+    toTensor(new vision.Resize([4, 3]).apply(f()) as vision.Image));
+  out.set("vision::Resize(늘림·겹선형)", () =>
+    toTensor(new vision.Resize([11, 9]).apply(f()) as vision.Image));
+  out.set("vision::Resize(짧은변)", () =>
+    toTensor(new vision.Resize(4).apply(f()) as vision.Image));
+  out.set("vision::Resize(최근접)", () =>
+    toTensor(new vision.Resize([4, 3], "nearest").apply(f()) as vision.Image));
+  // **자를 자리가 홀수인 것을 넣는다.** 파이썬의 round 는 절반을 짝수로 보내고
+  // `Math.round` 는 위로 올린다 — 그 차이로 여기가 한 칸 어긋나 최대 0.837 이
+  // 갈렸다(실측). 짝수만 시험하면 그 자리가 통째로 안 걸린다.
+  out.set("vision::CenterCrop(짝수)", () =>
+    toTensor(new vision.CenterCrop([4, 4]).apply(f()) as vision.Image));
+  out.set("vision::CenterCrop(홀수)", () =>
+    toTensor(new vision.CenterCrop([5, 3]).apply(f()) as vision.Image));
+  out.set("vision::CenterCrop(원본보다 큼)", () =>
+    toTensor(new vision.CenterCrop([13, 11]).apply(f()) as vision.Image));
+
   // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
   const reprs: [string, () => vision.Transform][] = [
     ["ToTensor", () => new vision.ToTensor()],
     ["Normalize", () => new vision.Normalize(mean, std)],
     ["RandomHorizontalFlip", () => new vision.RandomHorizontalFlip(0.5)],
     ["RandomCrop", () => new vision.RandomCrop(32, 4)],
+    ["CenterCrop", () => new vision.CenterCrop(24)],
     ["Compose", () => new vision.Compose([
       new vision.ToTensor(), new vision.Normalize([0.5], [0.5]),
     ])],

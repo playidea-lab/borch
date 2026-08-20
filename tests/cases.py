@@ -7417,6 +7417,32 @@ def vision_cases(inp=None):
         out = T.RandomHorizontalFlip(p=p)(_pil_position(L, img_u8))
         return _as_tensor(L, out)
 
+    def resize(L, size, interpolation):
+        # **torchvision 의 기본은 안티에일리어싱이 켜진 것이다.** 끈 것과의 차이가
+        # 8×8→4×4 에서 최대 0.0301 이라(실측) 어느 쪽인지 안 정하면 스펙이 빈다.
+        # 우리는 켠 쪽으로 갔고, 그 주장을 여기서 진짜 torchvision 에 대조한다.
+        # **실수 이미지를 쓴다.** uint8 로 하면 순서 때문에 255 가 갈린다 — 진짜
+        # torchvision 은 텐서를 받으므로 `ToTensor` 가 먼저 나눠 주고, 우리 것은
+        # 배열을 받으므로 `Resize` 가 먼저이고 그 결과가 float 이라 `ToTensor` 가
+        # 안 나눈다. 실측으로 최대차 247 이 났고, 그것은 크기 조정이 틀린 것이
+        # 아니라 케이스가 두 파이프라인을 다르게 엮은 것이었다.
+        T = _vision(L)
+        if _is_real_torch(L):
+            from torchvision.transforms import InterpolationMode
+            mode = (InterpolationMode.BILINEAR if interpolation == "bilinear"
+                    else InterpolationMode.NEAREST)
+            return T.Resize(size, interpolation=mode, antialias=True)(
+                _as_tensor(L, T.ToTensor()(img_f)))
+        return T.ToTensor()(T.Resize(size, interpolation)(img_f))
+
+    def center_crop(L, size):
+        # 자를 크기가 원본보다 큰 갈래를 같이 본다 — torchvision 은 0 으로 채우고,
+        # 거절하면 같은 코드가 두 라이브러리에서 갈린다.
+        T = _vision(L)
+        if _is_real_torch(L):
+            return T.CenterCrop(size)(_as_tensor(L, T.ToTensor()(img_f)))
+        return T.ToTensor()(T.CenterCrop(size)(img_f))
+
     def crop(L, size, padding):
         # 자를 자리가 **하나뿐**이 되게 크기를 맞춘다. 그래야 뽑기와 무관하게 결정적이다.
         T = _vision(L)
@@ -7436,6 +7462,18 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "Crop(패딩없음)", lambda L: crop(L, (5, 4), 0)),
         # 패딩을 준 뒤 크기를 딱 맞추면 자를 자리가 하나다 — 패딩 자체가 대조된다.
         (VISION_PREFIX + "Crop(패딩1)", lambda L: crop(L, (7, 6), 1)),
+        # 크기 바꾸기. **줄이는 쪽과 늘리는 쪽을 둘 다 본다** — 안티에일리어싱은
+        # 줄일 때만 일하므로 늘리는 케이스만 있으면 그 규칙이 통째로 안 걸린다.
+        (VISION_PREFIX + "Resize(줄임·겹선형)", lambda L: resize(L, (4, 3), "bilinear")),
+        (VISION_PREFIX + "Resize(늘림·겹선형)", lambda L: resize(L, (11, 9), "bilinear")),
+        (VISION_PREFIX + "Resize(짧은변)", lambda L: resize(L, 4, "bilinear")),
+        (VISION_PREFIX + "Resize(최근접)", lambda L: resize(L, (4, 3), "nearest")),
+        # **자를 자리가 홀수인 것을 고른다.** 파이썬의 round 는 절반을 짝수로 보내고
+        # JS 는 위로 올린다 — 그 차이로 TypeScript 판이 한 칸 어긋나 최대 0.837 이
+        # 갈렸다(실측). 짝수만 시험하면 그 자리가 통째로 안 걸린다.
+        (VISION_PREFIX + "CenterCrop(짝수)", lambda L: center_crop(L, (4, 4))),
+        (VISION_PREFIX + "CenterCrop(홀수)", lambda L: center_crop(L, (5, 3))),
+        (VISION_PREFIX + "CenterCrop(원본보다 큼)", lambda L: center_crop(L, (13, 11))),
     ]
 
     # 표현(T3). 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을
@@ -7445,6 +7483,7 @@ def vision_cases(inp=None):
         ("Normalize", lambda T: T.Normalize(mean, std)),
         ("RandomHorizontalFlip", lambda T: T.RandomHorizontalFlip(p=0.5)),
         ("RandomCrop", lambda T: T.RandomCrop(32, padding=4)),
+        ("CenterCrop", lambda T: T.CenterCrop(24)),
         ("Compose", lambda T: T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])),
     )
     for name, build in reprs:
