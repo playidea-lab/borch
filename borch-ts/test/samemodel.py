@@ -60,7 +60,7 @@ def _close(name, got, want, bad):
     if np.any(gap > tol):
         at = int(np.argmax(gap - tol))
         bad.append(f"{name}: [{at}] {got[at]:.9g} ≠ {want[at]:.9g} "
-                   f"(최대차 {gap.max():.3e})")
+                   f"(max diff {gap.max():.3e})")
 
 
 def _piece_module(torch, name, shapes):
@@ -222,7 +222,7 @@ def main(argv):
         worst = int(np.argmax(gap - tol))
         if np.any(gap > tol):
             bad.append(f"{name}: [{worst}] {got[worst]} ≠ {want[worst]} "
-                       f"(최대차 {gap.max():.3e})")
+                       f"(max diff {gap.max():.3e})")
         else:
             print(f"  {name} 일치 (최대차 {gap.max():.3e})")
 

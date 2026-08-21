@@ -1,15 +1,16 @@
-"""`torch.nn` 자리. **여기도 이름을 옮겨 적는 것이 대부분이다.**
+"""Where `torch.nn` sits. **Mostly transcribing names here too.**
 
-두 갈래다.
+Two branches.
 
-`nn.functional.relu(x)` 는 borch.ts 에서 `x.relu()` 다 — torch 자신이 그 둘을 같은
-것으로 두므로 첫 인자를 받아 메서드로 넘기면 끝난다. `__getattr__` 하나가 그 일을
-전부 한다.
+`nn.functional.relu(x)` is `x.relu()` in borch.ts — torch itself treats the two
+as the same thing, so taking the first argument and forwarding to its method is
+the whole job. One `__getattr__` does all of it.
 
-`nn.Linear(6, 8)` 은 borch.ts 의 클래스다. 이쪽은 이름이 갈리는 자리가 있어서
-(`BatchNorm2d` 는 저쪽에서 `BatchNormND`) 표를 둔다. 그리고 torch 에 있고 borch.ts 에
-층으로는 없는 것들(`Softmax`·`ELU`·`L1Loss` …)은 **텐서 메서드를 한 줄 감싼 층**으로
-만든다 — 없는 것을 근사하는 것이 아니라, 있는 것에 이름을 붙이는 것이다.
+`nn.Linear(6, 8)` is a class in borch.ts. Some names diverge there
+(`BatchNorm2d` is `BatchNormND` over the wall), so this side keeps a table. And
+the ones torch has that borch.ts does not have as layers — `Softmax`, `ELU`,
+`L1Loss` and the rest — are built as **a layer wrapping one tensor method**:
+not approximating what is missing, but naming what is there.
 """
 
 import collections as _collections
@@ -23,25 +24,29 @@ from ._base import (
     Tensor, _js_floats, _js_list, guarded, handle, settle, tensor, wrap,
 )
 from ._ops import _arg, camel, positional
-# **모듈째 든다.** `manual_seed` 가 `_ops._rng` 를 **새 생성기로 갈아끼우므로**,
-# 이름으로 들여오면 그 갈아끼움이 여기까지 안 온다 — 씨앗을 심어도 이 층만 안 바뀐다.
-# 같은 갈래로 한 번 당한 자리다.
+# **The module is held, not the name.** `manual_seed` **swaps `_ops._rng` for a
+# new generator**, so importing it by name means that swap never reaches here —
+# seeding changes everything except this layer. This place was caught by that
+# once already.
 from . import _ops as _ops_mod
 
 _ts = _js.borch
 
 
 class _Functional:
-    """`nn.functional`. 첫 인자의 메서드로 넘긴다 — torch 의 규칙 그대로다."""
+    """`nn.functional`. Forwarded to the first argument's method — torch's own
+    rule."""
 
     def __getattr__(self, name):
-        # 모듈 쪽에 손으로 쓴 것은 여기서도 같은 것을 쓴다 — `F.pad` 가 그 예다.
+        # What was hand-written on the module is used here as well — `F.pad` is
+        # one.
         from . import _ops
         if name == "embedding":
             return embedding
-        # **이름이나 인자가 borch.ts 와 다른 것들.** 규칙으로 못 넘긴다:
-        # `rms_norm` 은 torch 가 모양을 받고 저쪽은 축 개수를 받으며,
-        # `conv_transpose2d` 는 저쪽에 차원별 이름이 없고 `convTransposeND` 하나다.
+        # **Ones whose name or arguments differ from borch.ts's.** The rule
+        # cannot forward them: `rms_norm` takes a shape in torch and a count of
+        # dimensions over there, and `conv_transpose2d` has no per-dimension
+        # name over there — there is only `convTransposeND`.
         if name in _HAND_WRITTEN:
             return _HAND_WRITTEN[name]
         if name in ("pad", "clamp", "flip", "pow", "split", "chunk",
@@ -64,7 +69,7 @@ class _Functional:
 
 
 def _rms_norm(x, normalized_shape, weight=None, eps=None):
-    """torch 는 **모양**을 받고 borch.ts 는 **축 개수**를 받는다."""
+    """torch takes **a shape** and borch.ts takes **a count of dimensions**."""
     dims = len(normalized_shape) if isinstance(normalized_shape, (list, tuple)) else 1
     out = wrap(handle(x).rmsNorm(dims) if eps is None
                else handle(x).rmsNorm(dims, eps))
@@ -72,13 +77,15 @@ def _rms_norm(x, normalized_shape, weight=None, eps=None):
 
 
 def _conv_transpose(x, weight, bias=None, stride=1, padding=0):
-    """차원별 이름이 저쪽엔 없다 — `convTransposeND` 하나가 전부를 한다."""
+    """There are no per-dimension names over there — `convTransposeND` does all
+    of them."""
     return wrap(handle(x).convTransposeND(
         handle(weight), handle(bias) if bias is not None else None, stride, padding))
 
 
 def _pool_fn(kind, adaptive):
-    """풀링 하나. **차원별 이름이 저쪽엔 없다** — `poolND` 하나가 전부를 한다."""
+    """One pooling. **No per-dimension names over there** — `poolND` does all of
+    them."""
     def call(x, size, stride=None, return_indices=False, **kw):
         h = handle(x)
         if return_indices:
@@ -90,10 +97,12 @@ def _pool_fn(kind, adaptive):
 
 
 def _pool_with_indices(x, size, stride=None, adaptive=False, **kw):
-    """값과 **이긴 자리**를 함께 낸다. 자리는 평면 안의 평평한 번호다.
+    """Hands back the values together with **where each one won.** The index is
+    a flat position inside the plane.
 
-    저쪽은 `{values, indices}` 를 돌려주므로 이름으로 꺼내 튜플로 바꾼다 — torch 가
-    튜플을 주고 교재 코드가 `out, idx = ...` 로 푼다.
+    Over there it comes as `{values, indices}`, so it is read out by name and
+    turned into a tuple — torch gives a tuple and textbook code unpacks it as
+    `out, idx = ...`.
     """
     h = handle(x)
     got = (h.adaptiveMaxPoolWithIndices(size) if adaptive
@@ -102,18 +111,20 @@ def _pool_with_indices(x, size, stride=None, adaptive=False, **kw):
 
 
 def _unpool(x, indices, kernel_size, stride=None, padding=0, output_size=None):
-    """자리표가 가리키는 칸으로 값을 되돌린다. 나머지는 0 이다."""
+    """Put the values back into the slots the index map points at. The rest are
+    zero."""
     return wrap(handle(x).maxUnpool(
         handle(indices), kernel_size, stride, padding,
         _js_list(list(output_size)) if output_size is not None else None))
 
 
 def _fractional(spatial):
-    """창 자리를 표본이 흔드는 최대 풀링.
+    """Max pooling whose window positions are jittered by samples.
 
-    **표본을 파이썬에서 만든다.** 창 자리는 CPU 에서 정해야 셰이더에 구울 수 있고,
-    borch.ts 쪽에서 GPU 난수를 읽어 오려면 기다려야 한다. numpy 가 이미 여기 있으므로
-    이쪽에서 뽑아 넘긴다 — `manual_seed` 도 그 난수를 잡는다.
+    **The samples are drawn in Python.** Window positions have to be settled on
+    the CPU to be baked into a shader, and reading GPU random numbers back from
+    borch.ts would mean waiting. numpy is already here, so they are drawn on
+    this side and passed across — and `manual_seed` reaches that generator.
     """
     def call(x, kernel_size, output_size=None, output_ratio=None,
              return_indices=False, _random_samples=None, **kw):
@@ -154,7 +165,8 @@ def _fractional_indices(spatial):
 
 
 def _ints(v):
-    """텐서로 와도 되고 목록으로 와도 된다. 파이썬 정수 목록으로 편다."""
+    """It may arrive as a tensor or as a list. Unrolled into a list of Python
+    integers."""
     if isinstance(v, Tensor):
         return [int(round(x)) for x in _np.asarray(v.numpy()).reshape(-1)]
     return [int(x) for x in _np.asarray(v).reshape(-1)]
@@ -162,7 +174,8 @@ def _ints(v):
 
 def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
               reduction="mean", zero_infinity=False):
-    """표적은 `(N, S)` 로도 오고 이어붙인 1차원으로도 온다 — torch 가 둘 다 받는다."""
+    """The target arrives as `(N, S)` or as a concatenated 1-D tensor — torch
+    takes both."""
     lens = _ints(target_lengths)
     flat = _np.asarray(targets.numpy() if isinstance(targets, Tensor) else targets)
     if flat.ndim == 1:
@@ -184,28 +197,31 @@ def _lp_pool(x, norm_type, kernel_size, stride=None, **kw):
 
 def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
           scale=None):
-    """borch.ts 쪽은 자유 함수라 텐서 메서드로 안 간다."""
+    """A free function over there, so it does not go through a tensor method."""
     return wrap(_js.borch.nn.scaledDotProductAttention(
         handle(query), handle(key), handle(value),
         handle(attn_mask) if attn_mask is not None else None, bool(is_causal)))
 
 
-# ── 손실과 거리 ─────────────────────────────────────────────────────────
+# ── losses and distances ────────────────────────────────────────────────
 #
-# **자리 순서를 손으로 적는다.** 일반 길(`positional`)은 빈 자리를 `None` 으로 메우는데,
-# torch 의 손실은 `reduction` 이 가운데 있고 `delta`·`margin` 이 뒤에 있어서 하나만
-# 이름으로 주면 앞자리에 구멍이 생긴다. 그 구멍이 저쪽의 기본값을 지운다.
+# **The positional order is written out by hand.** The general path
+# (`positional`) fills empty slots with `None`, and torch's losses put
+# `reduction` in the middle with `delta` and `margin` behind it — so naming just
+# one of them opens a hole in front of it. That hole erases the other side's
+# default.
 
 def _lay_out(order, args, kw):
-    """이름으로 받은 것을 **자리로 편다.** 빈 자리는 비워서 넘긴다.
+    """Unroll what arrived by name **into positions.** Empty slots cross as
+    empty.
 
-    **가운데가 비면 멈추면 안 된다.** 처음에 그렇게 적었더니
-    `huber_loss(x, y, reduction="none")` 이 `delta` 자리에서 끊겨 `reduction` 을
-    통째로 잃었다 — 예외가 아니라 **기본값으로 조용히 다른 답**이었고, 열세 케이스가
-    한꺼번에 그 모양으로 갈렸다.
+    **A hole in the middle must not stop it.** Written that way at first,
+    `huber_loss(x, y, reduction="none")` cut off at the `delta` slot and lost
+    `reduction` entirely — not an exception but **a quietly different answer
+    from the default**, and thirteen cases diverged that way at once.
 
-    빈 자리는 `None` 으로 둔다. Pyodide 가 그것을 `undefined` 로 넘기므로 저쪽의
-    기본값이 그대로 산다. 뒤에 남는 것은 잘라낸다.
+    Empty slots stay `None`. Pyodide passes that as `undefined`, so the other
+    side's default survives. Anything trailing is trimmed.
     """
     got = dict(zip(order, args))
     got.update(kw)
@@ -216,7 +232,7 @@ def _lay_out(order, args, kw):
 
 
 def _loss(js_name, order):
-    """torch 의 인자를 **borch.ts 의 자리 순서**로 옮긴다."""
+    """Move torch's arguments into **borch.ts's positional order.**"""
     def call(x, *args, **kw):
         return guarded(getattr(handle(x), js_name), *_lay_out(order, args, kw))
 
@@ -248,8 +264,9 @@ _LOSSES = {
     "multilabel_margin_loss": ("multilabelMarginLoss", ("target", "reduction")),
     "pairwise_distance": ("pairwiseDistance", ("x2", "p", "eps", "keepdim")),
     "pdist": ("pdist", ("p",)),
-    # 자리 옮기기. 이름만 갈린다.
-    # 창 펴기와 나머지. **`F.unfold` 는 im2col 이다** — `Tensor.unfold` 와 다르다.
+    # Repositioning. Only the names differ.
+    # Window unrolling and the rest. **`F.unfold` is im2col** — a different thing
+    # from `Tensor.unfold`.
     "unfold": ("unfoldIm2col", ("kernel_size", "dilation", "padding", "stride")),
     "fold": ("fold", ("output_size", "kernel_size", "dilation", "padding",
                       "stride")),
@@ -258,15 +275,17 @@ _LOSSES = {
     "pixel_shuffle": ("pixelShuffle", ("upscale_factor",)),
     "pixel_unshuffle": ("pixelUnshuffle", ("downscale_factor",)),
     "channel_shuffle": ("channelShuffle", ("groups",)),
-    # **채널째 떨구는 것들.** 저쪽은 이름 하나(`featureDropout`)이고 랭크는 안 따진다 —
-    # 랭크 검사는 `dropout1d` 만 하므로 아래에서 따로 단다.
+    # **The ones that drop whole channels.** Over there it is one name,
+    # `featureDropout`, and it does not check the rank — only `dropout1d` checks
+    # it, so that check is attached separately below.
     "dropout2d": ("featureDropout", ("p", "training")),
     "dropout3d": ("featureDropout", ("p", "training")),
 }
 
 
 def _dropout1d(x, p=0.5, training=True, **kw):
-    """**4 차원을 거절한다.** torch 가 그렇고, 이름에 공간 축의 수가 들어 있다."""
+    """**Refuses 4-D.** torch does, and the name carries the number of spatial
+    dimensions."""
     rank = len(handle(x).shape)
     if rank not in (2, 3):
         raise RuntimeError(
@@ -286,7 +305,8 @@ def _alpha_dropout(per_channel):
 
 def _triplet_with_distance(anchor, positive, negative, distance_function=None,
                            margin=1.0, swap=False, reduction="mean"):
-    """거리 함수를 받는 삼중항. 층 쪽에 있는 것을 함수 이름으로도 낸다."""
+    """The triplet that takes a distance function. What lives on the layer side
+    is offered under a function name as well."""
     layer = _ts.nn.TripletMarginWithDistanceLoss.new(
         distance_function, float(margin), bool(swap), reduction)
     return wrap(guarded(layer.call, handle(anchor), handle(positive),
@@ -295,16 +315,18 @@ def _triplet_with_distance(anchor, positive, negative, distance_function=None,
 
 def _interpolate(x, size=None, scale_factor=2, mode="nearest",
                  align_corners=None, **kw):
-    """**`mode` 를 받아만 놓고 안 쓰던 자리다.**
+    """**A place that accepted `mode` and never used it.**
 
-    일반 길은 `upsample` 로 넘기는데 그쪽은 최근접뿐이라, 겹선형을 달라고 해도
-    최근접이 나왔다 — 예외가 아니라 조용히 다른 값이다. `F.pad` 가 같은 모양으로
-    한 번 걸렸고, 그때와 마찬가지로 골든에 그 갈래를 묻는 케이스가 생기고서 드러났다.
+    The general path forwards to `upsample`, which does nearest only, so asking
+    for bilinear produced nearest — not an exception but a quietly different
+    value. `F.pad` was caught in the same shape once, and like that time it only
+    surfaced once the golden gained a case asking for that branch.
     """
     h = handle(x)
     if mode == "nearest":
-        # **`size` 를 받아만 놓고 안 쓰던 자리다** — 저쪽 `upsample` 은 배수만 받는다.
-        # `mode` 를 흘린 것과 같은 갈래이고, 같은 모양으로 조용히 다른 값이 됐다.
+        # **A place that accepted `size` and never used it** — `upsample` over
+        # there takes a factor only. The same branch as the dropped `mode`, and
+        # quietly a different value in the same shape.
         if size is not None:
             oh, ow = (size, size) if isinstance(size, int) else tuple(size)
             ih, iw = int(h.shape[2]), int(h.shape[3])
@@ -324,7 +346,8 @@ def _interpolate(x, size=None, scale_factor=2, mode="nearest",
 
 def _upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None,
               **kw):
-    """`interpolate` 의 옛 이름. torch 가 폐기 경고를 내면서도 계속 받는다."""
+    """`interpolate`'s old name. torch warns that it is deprecated and keeps
+    taking it."""
     return _interpolate(x, size, scale_factor, mode, align_corners)
 
 
@@ -333,17 +356,21 @@ def _upsample_nearest(x, size=None, scale_factor=None):
 
 
 def _upsample_bilinear(x, size=None, scale_factor=None):
-    """**`align_corners=True` 다.** `interpolate(mode='bilinear')` 의 기본값은 거짓이라,
-    이름만 보고 별명으로 두면 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다."""
+    """**This is `align_corners=True`.** The default for
+    `interpolate(mode='bilinear')` is false, so aliasing on the name alone
+    misaligns the edges — the interior stays close enough that the eye does not
+    separate them."""
     return _interpolate(x, size, scale_factor, "bilinear", True)
 
 
 def _additive_mask(mask, like_shape=None):
-    """참·거짓 표를 **더하는 실수**로 바꾼다.
+    """Turn a boolean table into **a float that gets added.**
 
-    torch 는 두 가지를 받는다 — 참인 자리를 가리는 불리언과, 점수에 그냥 더하는 실수.
-    borch.ts 쪽은 더하는 것만 받으므로 여기서 맞춘다. **0 을 곱하는 것이 아니다** —
-    softmax 가 이미 정규화한 뒤라 곱하면 남은 자리가 1 로 안 돌아간다.
+    torch takes two kinds — a boolean that masks the true positions, and a float
+    added straight onto the scores. borch.ts takes only the additive kind, so it
+    is converted here. **Not by multiplying with zero** — softmax has already
+    normalised, and multiplying leaves the remaining positions not summing back
+    to one.
     """
     if mask is None:
         return None
@@ -364,7 +391,8 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
                  q_proj_weight=None, k_proj_weight=None, v_proj_weight=None,
                  static_k=None, static_v=None, average_attn_weights=True,
                  is_causal=False, **kw):
-    """`MultiheadAttention` 이 안에서 하는 계산. **안 하는 갈래는 시끄럽게 거절한다.**"""
+    """The computation `MultiheadAttention` performs inside. **Branches it does
+    not do are refused loudly.**"""
     for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
                         ("static_k", static_k), ("static_v", static_v)):
         if given is not None:
@@ -403,7 +431,8 @@ def _grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
 
 def _batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
                 training=False, momentum=0.1, eps=1e-5, **kw):
-    """층의 함수 꼴. **학습이면 이동 통계를 제자리에서 고친다** — torch 가 그렇다."""
+    """The function form of the layer. **In training it edits the running
+    statistics in place** — torch does that."""
     return wrap(_ts.nn.batchNorm(
         handle(x),
         handle(running_mean) if running_mean is not None else None,
@@ -425,16 +454,19 @@ def _embedding_bag(idx, weight, offsets=None, mode="mean",
 
 
 def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1, **kw):
-    """**무작위지만 미분이 흐른다.** `hard` 여도 기울기는 부드러운 쪽 것을 쓴다."""
+    """**Random, and gradients still flow.** Even with `hard`, the gradient
+    taken is the soft one's."""
     return wrap(_ts.nn.gumbelSoftmax(handle(logits), float(tau), bool(hard),
                                      int(dim), None))
 
 
 def _functional_inplace(name):
-    """`F.relu_(x)` — **계산은 밑줄 없는 쪽이 하고** 결과를 이 버퍼로 옮긴다.
+    """`F.relu_(x)` — **the version without the underscore does the computation**
+    and the result is copied into this buffer.
 
-    코어와 같은 자리, 같은 이유다. 식을 두 벌로 두면 언젠가 갈리고 값이 그럴듯해서
-    안 보인다. 기울기가 켜진 잎은 torch 처럼 거절한다.
+    The same place and the same reason as the core. Two copies of the expression
+    diverge eventually and the values stay plausible enough that nobody sees it.
+    A leaf with gradients on is refused, as torch does.
     """
     def call(x, *args, **kw):
         x._refuse_inplace_on_leaf(name + "_")
@@ -445,7 +477,8 @@ def _functional_inplace(name):
 
 
 def _gelu(x, approximate="none"):
-    """**두 식이다.** 표의 `gelu` 는 정확형(erf)이고 `"tanh"` 는 다른 커널이다."""
+    """**Two expressions.** The table's `gelu` is the exact form (erf) and
+    `"tanh"` is a different kernel."""
     h = handle(x)
     if approximate == "tanh":
         return wrap(guarded(h.geluTanh))
@@ -456,12 +489,14 @@ def _gelu(x, approximate="none"):
 
 
 def _elu(x, alpha=1.0, inplace=False):
-    """**α 를 받는다.** 일반 길로 가면 표의 무인자 판으로 가서 α 가 사라진다."""
+    """**Takes an alpha.** On the general path it reaches the table's
+    no-argument version and the alpha disappears."""
     return wrap(guarded(handle(x).elu, float(alpha)))
 
 
 def _bilinear(x1, x2, weight, bias=None):
-    """가중치를 밖에서 받는 꼴. 층 쪽과 같은 텐서 메서드로 간다."""
+    """The form that takes its weights from outside. It goes to the same tensor
+    method the layer does."""
     return wrap(guarded(handle(x1).bilinear, handle(x2), handle(weight),
                         handle(bias) if bias is not None else None))
 
@@ -498,8 +533,8 @@ _HAND_WRITTEN = {
     "lp_pool1d": _lp_pool,
     "lp_pool2d": _lp_pool,
     "lp_pool3d": _lp_pool,
-    # 이긴 자리를 함께 내는 판. torch 는 같은 계산에 이름을 둘 준다 —
-    # `return_indices=True` 와 `*_with_indices` 다.
+    # The versions that also hand back where each one won. torch gives the same
+    # computation two names — `return_indices=True` and `*_with_indices`.
     "max_pool1d_with_indices": _pool_with_indices,
     "max_pool2d_with_indices": _pool_with_indices,
     "max_pool3d_with_indices": _pool_with_indices,
@@ -512,8 +547,9 @@ _HAND_WRITTEN = {
     "max_unpool1d": _unpool,
     "max_unpool2d": _unpool,
     "max_unpool3d": _unpool,
-    # `max_pool*d` 는 `return_indices` 를 받아야 해서 일반 길로 못 간다 — 일반 길은
-    # 인자를 저쪽 메서드에 그대로 넘기고, 저쪽 `maxPool2d` 는 그 이름을 모른다.
+    # `max_pool*d` has to accept `return_indices`, so it cannot take the general
+    # path — that path forwards arguments to the method over there verbatim, and
+    # `maxPool2d` does not know that name.
     "max_pool1d": _pool_fn("max", False),
     "max_pool2d": _pool_fn("max", False),
     "max_pool3d": _pool_fn("max", False),
@@ -534,26 +570,29 @@ functional = _Functional()
 
 
 def embedding(idx, table):
-    """`F.embedding(번호, 표)` — 표에서 번호대로 행을 고른다.
+    """`F.embedding(indices, table)` — pick rows out of the table by index.
 
-    **정의 그대로다.** `index_select` 가 하는 일과 같고, 기울기도 그쪽이 이미 안다 —
-    같은 번호가 여러 번 나오면 그 행으로 여러 번 더해진다. 없는 것을 흉내 내는 것이
-    아니라 있는 것에 이름을 붙이는 것이므로 값이 갈릴 자리가 없다.
+    **The definition itself.** The same work `index_select` does, and the
+    gradient is already known over there: an index appearing several times
+    accumulates into that row several times. Naming what exists rather than
+    imitating what does not, so there is nowhere for the values to diverge.
 
-    **이름 붙이는 자리가 저쪽으로 갔다.** 세 줄이 여기 있는 동안 borch.ts 에는 그
-    이름이 없었고, 골든이 이 함수를 지나므로 표는 초록이었다.
+    **The naming moved over there.** While these three lines lived here, borch.ts
+    had no such name, and the golden goes through this function, so the table was
+    green.
     """
     return wrap(_ts.nn.functional.embedding(handle(idx), handle(table)))
 
 
 class Transformer:
-    """torch 의 `nn.Transformer` 는 여기 없다. **마스크 만드는 자리 하나만** 있다.
+    """torch's `nn.Transformer` is not here. **Only the mask-making place is.**
 
-    `generate_square_subsequent_mask` 는 층이 아니라 정의가 정해진 함수다 — 위쪽
-    삼각을 `-inf` 로, 나머지를 0 으로. 값이 실수라는 것이 요점이고, 참·거짓으로
-    뭉뚱그리면 어텐션 안에서 갈린다(골든 케이스 이름이 그렇게 적혀 있다).
+    `generate_square_subsequent_mask` is a function with a settled definition
+    rather than a layer — the upper triangle `-inf` and the rest zero. The point
+    is that the values are floats; rounding them into booleans diverges inside
+    the attention, which is what the golden case names record.
 
-    나머지(인코더·디코더)는 없다. 없는 것을 흉내 내지 않는다.
+    The rest — encoder, decoder — is absent. Nothing missing is imitated.
     """
 
     @staticmethod
@@ -567,7 +606,8 @@ class Transformer:
 
 
 class _Rnn:
-    """`nn.utils.rnn`. 지금 여기 있는 것은 `pad_sequence` 하나다."""
+    """`nn.utils.rnn`. What is here right now is `pad_sequence`, and nothing
+    else."""
 
     @staticmethod
     def pad_sequence(parts, batch_first=False, padding_value=0.0):
@@ -583,55 +623,63 @@ utils = _Utils()
 
 
 class Module:
-    """층 하나. **감싸는 쪽과 상속하는 쪽 둘 다 된다.**
+    """One layer. **It works both wrapped and subclassed.**
 
-    감쌀 때는 borch.ts 의 층을 하나 받는다(`Module(js_layer)`).
+    Wrapping takes one borch.ts layer: `Module(js_layer)`.
 
-    **상속도 받아야 한다.** torch 코드가 가장 흔히 하는 일이 이것이다 —
-    `class Net(nn.Module)` 를 쓰고 `__init__` 에서 층을 속성으로 붙인 뒤 `forward` 를
-    적는다. 골든의 케이스들이 전부 `nn.Sequential` 로만 모델을 세워서 이 자리를 한
-    번도 안 물었고, 벤치가 진짜 ResNet 을 세우다 `Module.__init__() missing 1
-    required positional argument` 로 걸렸다.
+    **Subclassing has to work too.** It is the most common thing torch code
+    does — write `class Net(nn.Module)`, attach layers as attributes in
+    `__init__`, and write `forward`. Every golden case built its model out of
+    `nn.Sequential` alone, so this was never asked, and the benchmark building a
+    real ResNet caught it with
+    `Module.__init__() missing 1 required positional argument`.
 
-    상속한 쪽은 `_m` 이 없다. 파라미터와 `state_dict` 는 **속성에 붙은 층들을 훑어**
-    모은다 — torch 도 그렇게 한다.
+    A subclassed one has no `_m`. Parameters and `state_dict` come from **walking
+    the layers attached as attributes**
+    — torch does the same.
     """
 
     def __init__(self, module=None):
         object.__setattr__(self, "_m", module)
 
-    # ── 상속한 쪽이 속성으로 붙인 층들 ────────────────────────────────────
+    # ── the layers a subclass attached as attributes ──────────────────────
 
     def _children(self):
-        """속성에 붙은 층과 텐서를 **붙인 순서대로** 준다.
+        """The layers and tensors attached as attributes, **in the order they
+        were attached.**
 
-        이름 규칙이 torch 와 같아야 한다 — `state_dict` 의 열쇠가 `conv1.weight`
-        처럼 속성 이름으로 만들어지고, 골든이 그 이름으로 가중치를 넣는다.
+        The naming rule has to match torch's — a `state_dict` key is built from
+        the attribute name, as in `conv1.weight`, and the golden loads weights
+        by those names.
         """
         got = []
         for key, value in vars(self).items():
             if key.startswith("_"):
                 continue
-            # **`_Holder` 를 빠뜨리면 컨테이너가 컨테이너 노릇을 못 한다.** 그 클래스들이
-            # 있는 이유가 "맨 리스트는 안 보인다" 인데, 여기 안 적으면 컨테이너 자신이
-            # 안 보이게 되어 같은 자리로 돌아온다.
+            # **Leave `_Holder` out and a container stops acting like one.**
+            # Those classes exist because "a bare list is invisible", and
+            # omitting them here makes the container itself invisible, which
+            # lands back in the same place.
             if isinstance(value, (Module, _Wrap, _Sequential, _Holder, Tensor)):
                 got.append((key, value))
         return got
 
-    # ── 버퍼 ──────────────────────────────────────────────────────────────
+    # ── buffers ───────────────────────────────────────────────────────────
     #
-    # **버퍼가 `BatchNorm` 의 특례로만 있었다.** borch.ts 쪽 `BatchNormND` 가 이동
-    # 통계를 자기 `stateDict` 에 실어 보내는 길만 있었고, `register_buffer` 자체가
-    # 없어서 **사용자가 버퍼를 가진 모델을 못 썼다** — 마스크·위치표·정규화 상수를
-    # 들고 다니는 모델이 전부 이 문법을 쓰는데 `AttributeError` 로 막혔다.
+    # **Buffers existed only as a special case of `BatchNorm`.** The only path
+    # was `BatchNormND` over there carrying its running statistics in its own
+    # `stateDict`; `register_buffer` did not exist, so **a user could not have a
+    # model with buffers** — masks, positional tables, normalisation constants
+    # all use that call, and all of them stopped at an `AttributeError`.
 
     def register_buffer(self, name, value, persistent=True):
-        """학습은 안 하지만 저장·복원되는 값. 속성으로도 붙는다.
+        """A value that is not trained but is saved and restored. It is attached
+        as an attribute too.
 
-        속성으로 붙으면 `_children()` 이 텐서로 알아보고 `state_dict` 에 실린다 —
-        그래서 저장 쪽에 따로 적을 것이 없다. `requiresGrad` 가 거짓이라
-        `parameters()`·`named_parameters()` 는 이것을 안 집는다.
+        Attached that way, `_children()` recognises it as a tensor and it rides
+        in `state_dict` — so there is nothing to write on the saving side.
+        `requiresGrad` is false, so `parameters()` and `named_parameters()` do
+        not pick it up.
         """
         self.__dict__.setdefault("_buffers", {})[name] = value
         if not persistent:
@@ -641,11 +689,12 @@ class Module:
         object.__setattr__(self, name, value)
 
     def named_buffers(self, persistent_only=False):
-        """`(이름, 버퍼)` 짝.
+        """`(name, buffer)` pairs.
 
-        감싼 층은 **빼기로 낸다** — `state_dict` 에서 `named_parameters` 를 뺀
-        나머지가 버퍼다. borch.ts 에 목록을 하나 더 두면 그것이 세 번째 목록이 되고,
-        이 저장소가 반복해서 겪은 실패가 "같은 것의 목록이 둘" 이다.
+        For a wrapped layer they come **by subtraction** — `state_dict` minus
+        `named_parameters` is the buffers. Keeping another list in borch.ts would
+        make it a third list, and "two lists of the same thing" is a failure this
+        repository has met repeatedly.
         """
         if self._m is None:
             skip = self.__dict__.get("_nonpersistent", set()) if persistent_only else ()
@@ -664,7 +713,7 @@ class Module:
         return [b for _, b in self.named_buffers()]
 
     def __call__(self, *args):
-        # 상속한 쪽은 자기 `forward` 를 갖는다. 감싼 쪽만 JS 로 넘긴다.
+        # A subclass has its own `forward`. Only a wrapper forwards to JS.
         if self._m is None:
             return self.forward(*args)
         return guarded(self._m.call, *[_arg(a) for a in args])
@@ -675,11 +724,12 @@ class Module:
         return self(*args)
 
     def __repr__(self):
-        """**찍는 것도 borch.ts 에 물어본다.**
+        """**How it prints is asked of borch.ts too.**
 
-        층이 자기를 어떻게 찍는지는 값과 같은 자격의 답이다 — 교재가 `print(model)`
-        을 하고 골든이 그 글자를 굳혔다. 파이썬 쪽에서 다시 조립하면 두 벌이 되고,
-        두 벌은 어긋난다. 저쪽에 `describe` 가 없으면 클래스 이름만 준다.
+        How a layer prints itself is an answer with the same standing as a value
+        — textbooks call `print(model)` and the golden froze those strings.
+        Assembling it again in Python makes two copies, and two copies drift.
+        Where there is no `describe` over there, only the class name comes back.
         """
         if self._m is None:
             return f"{type(self).__name__}()"
@@ -690,38 +740,44 @@ class Module:
         if self._m is None:
             out = []
             for _, m in self._children():
-                # **속성에 바로 붙은 파라미터도 파라미터다.**
+                # **A parameter attached directly as an attribute is a
+                # parameter too.**
                 #
-                # `state_dict` 는 이 갈래를 처음부터 갖고 있었는데 여기만 없었다. 그래서
-                # `PReLU`·`GroupNorm` 처럼 **자식 층이 아니라 텐서를 속성으로 가진**
-                # 것들이 파라미터를 하나도 안 내놨다. `_params_of` 가 `hasattr(t,
-                # "parameters")` 로 묻는데 텐서에는 그런 것이 없어서 조용히 빈 목록이
-                # 된다 — 예외도 경고도 없고 **학습만 안 된다.** 이 파일 아래쪽
-                # "컨테이너" 주석이 경고하는 바로 그 모양인데, 그 자리를 자기가 밟고
-                # 있었다.
+                # `state_dict` had this branch from the beginning and only this
+                # place did not. So things holding **a tensor rather than a
+                # child layer** as an attribute — `PReLU`, `GroupNorm` — offered
+                # no parameters at all. `_params_of` asks
+                # `hasattr(t, "parameters")`, a tensor has no such thing, and the
+                # list comes back quietly empty: no exception, no warning, and
+                # **it simply does not learn.** Exactly the shape the "containers"
+                # comment further down warns about — while standing in it.
                 if isinstance(m, Tensor):
                     if bool(m._h.requiresGrad):
                         out.append(m)
                     continue
                 out.extend(_params_of(m))
             return out
-        # JS 배열은 파이썬에서 바로 못 돈다 — `to_py` 로 목록을 받아야 한다.
+        # A JS array cannot be iterated directly from Python — `to_py` has to
+        # hand back a list.
         return [wrap(p) for p in self._m.parameters().to_py()]
 
     def state_dict(self):
         if self._m is None:
             out = {}
-            # **텐서 속성이라고 다 실리는 것이 아니다.**
+            # **Not every tensor attribute rides along.**
             #
-            # 전에는 속성에 붙은 `Tensor` 를 전부 실었다. torch 는 등록을 지난 것만
-            # 싣는다 — `self.t = torch.ones(3)` 은 파라미터도 버퍼도 아니고
-            # `state_dict` 에도 안 들어간다. `register_buffer` 라는 API 가 있는
-            # 이유가 그것이다. 중간값을 속성에 얹어 둔 모델이 그것을 체크포인트에
-            # 실어 보내고 있었고, 받는 쪽은 torch 라면 "남는 열쇠" 로 거절한다.
+            # Every `Tensor` attached as an attribute used to. torch carries only
+            # what went through registration — `self.t = torch.ones(3)` is
+            # neither a parameter nor a buffer and does not appear in
+            # `state_dict`. That is why the `register_buffer` API exists. A model
+            # parking an intermediate value on an attribute was shipping it in
+            # its checkpoint, and a receiver running torch refuses it as an
+            # unexpected key.
             #
-            # 기울기를 받는 잎은 계속 싣는다 — "깃발만 세운 텐서도 파라미터로
-            # 센다" 는 **이미 적어 둔 갈림**이고 parity 가 값으로 붙잡고 있다.
-            # 여기서 같이 조이면 그쪽 규칙이 조용히 뒤집힌다.
+            # Leaves that take gradients still ride along — "a tensor with only
+            # the flag raised counts as a parameter" is **a divergence already
+            # written down** and parity holds it by value. Tightening it here too
+            # would quietly reverse that rule.
             registered = self.__dict__.get("_buffers", {})
             skip = self.__dict__.get("_nonpersistent", set())
             for name, m in self._children():
@@ -738,24 +794,30 @@ class Module:
         return {str(k): wrap(getattr(got, k)) for k in _js.Object.keys(got)}
 
     def named_parameters(self):
-        """`(이름, 텐서)` 짝. torch 코드가 `dict(...)` 로 받아 이름으로 꺼낸다.
+        """`(name, tensor)` pairs. torch code takes them through `dict(...)` and
+        looks names up.
 
-        `state_dict` 와 **같은 이름 규칙**을 쓴다 — `0.weight` 처럼 자리 번호가 앞에
-        붙는다. 실제로 그 이름으로 꺼내는 케이스가 있어서 규칙이 맞아야 한다.
+        **The same naming rule** as `state_dict` — a positional number in front,
+        as in `0.weight`. Cases do look weights up by those names, so the rule
+        has to match.
 
-        **그런데 같은 목록은 아니다.** 여기는 `return list(self.state_dict().items())`
-        한 줄이었다. 파라미터만 있는 층에서는 두 목록이 같아서 오래 안 보였는데,
-        `state_dict` 에는 버퍼도 들어간다 — `BatchNorm` 을 물으면 `running_mean`·
-        `running_var`·`num_batches_tracked` 가 **파라미터 행세를 하고** 나왔다.
-        그것을 옵티마이저에 넘기는 코드는 이동 통계를 학습하려 든다.
+        **It is not the same list, though.** This was one line:
+        `return list(self.state_dict().items())`. On a layer holding only
+        parameters the two lists are identical, which hid it for a long time, but
+        `state_dict` carries buffers too — asked of `BatchNorm` it produced
+        `running_mean`, `running_var` and `num_batches_tracked` **posing as
+        parameters.** Code handing that to an optimiser sets out to train the
+        running statistics.
 
-        골든이 `Linear` 로만 물었기 때문에 안 보였다. 버퍼를 가진 층으로 물으니
-        한 번에 나왔다 — `container::BatchNorm/named_parameters 열쇠`.
+        It stayed hidden because the golden only ever asked `Linear`. Asking a
+        layer with buffers produced it immediately —
+        `container::BatchNorm/named_parameters keys`.
         """
         if self._m is None:
             out = []
             for name, m in self._children():
-                # 속성에 바로 붙은 텐서는 `parameters()` 와 같은 잣대로 가른다.
+                # A tensor attached directly as an attribute is judged by the
+                # same measure `parameters()` uses.
                 if isinstance(m, Tensor):
                     if bool(m._h.requiresGrad):
                         out.append((name, m))
@@ -767,15 +829,17 @@ class Module:
 
     def load_state_dict(self, values, strict=True):
         if self._m is None:
-            # 이름 앞머리로 갈라 자식에게 넘긴다 — `conv1.weight` → `conv1` 의 `weight`.
+            # Split on the leading name and hand it to the child —
+            # `conv1.weight` becomes `weight` on `conv1`.
             own = dict(self._children())
             groups = {}
             for key, v in values.items():
                 head, _, rest = key.partition(".")
                 if not rest and isinstance(own.get(head), Tensor):
-                    # **`no_grad` 안에서 옮긴다.** 파라미터는 기울기를 받는 잎이고,
-                    # 잎을 제자리에서 고치는 것은 거절된다(torch 도 그렇다). borch.ts
-                    # 쪽 `loadStateDict` 는 이미 감싸는데 이 갈래만 안 감싸고 있었다.
+                    # **Copied inside `no_grad`.** A parameter is a leaf that
+                    # takes gradients, and editing a leaf in place is refused, as
+                    # it is in torch. `loadStateDict` over there already wraps
+                    # it; only this branch did not.
                     from ._ops import no_grad
                     with no_grad():
                         own[head]._h.copyFrom(handle(v))
@@ -805,11 +869,12 @@ class Module:
         return self.train(False)
 
     def __getattr__(self, name):
-        """`bn.weight` 처럼 층이 들고 있는 것을 그대로 넘긴다.
+        """Forward what the layer holds, such as `bn.weight`.
 
-        **`_m` 을 여기서 다시 물으면 안 된다.** `_Wrap` 처럼 `_m` 이 없는 하위 클래스가
-        오면 `__getattr__` 이 자기 자신을 부르고 무한 재귀가 된다 — 실패는 CNN 학습
-        케이스에서 `RecursionError` 로 나왔고, 원인에서 한참 떨어진 자리다.
+        **`_m` must not be asked for again here.** A subclass without one — a
+        `_Wrap` — makes `__getattr__` call itself and recurse forever. The
+        failure came out of a CNN training case as `RecursionError`, a long way
+        from its cause.
         """
         if name.startswith("_") or self._m is None:
             raise AttributeError(name)
@@ -822,27 +887,31 @@ class Module:
 
 
 def _layer(js_name, *args):
-    """저쪽 층을 감싼다.
+    """Wrap a layer from over there.
 
-    **여기서 나오는 것은 전부 `Module` 한 클래스다.** 그래서
-    `type(model.fc).__name__` 이 늘 `Module` 이고, torch 는 그 자리에서 `Linear` 라고
-    말한다. 이름별 클래스를 찍어 주면 되지만 borch.ts 쪽에 차원별 이름이 없어서
-    (`BatchNorm2d` 가 저쪽엔 `BatchNormND` 하나다) 반만 맞는 이름이 나온다 —
-    반만 맞는 이름은 `Module` 보다 더 헷갈린다. 저쪽 이름을 먼저 갈라야 하는 일이다.
+    **Everything produced here is the one class `Module`.** So
+    `type(model.fc).__name__` is always `Module` where torch says `Linear`.
+    Minting a class per name would fix it, except borch.ts has no per-dimension
+    names — `BatchNorm2d` is just `BatchNormND` over there — so the names would
+    come out half right, and a half-right name confuses more than `Module` does.
+    Splitting the names over there has to come first.
     """
     return Module(getattr(_ts.nn, js_name).new(*args))
 
 
 class _Wrap:
-    """borch.ts 에 층으로는 없고 **텐서 메서드로는 있는** 것들.
+    """The ones borch.ts does not have as layers and **does have as tensor
+    methods.**
 
-    `nn.Softmax(dim)` 은 `x.softmax(dim)` 이다. 없는 것을 근사하는 것이 아니라
-    있는 것에 torch 의 이름을 붙이는 것이므로, 값은 같은 자리에서 나온다.
+    `nn.Softmax(dim)` is `x.softmax(dim)`. Naming what exists with torch's name
+    rather than approximating what does not, so the values come from the same
+    place.
 
-    **`Module` 을 상속하지 않는다.** 상속했더니 `_m` 이 없는데 `Module` 의 메서드가
-    그것을 찾았고, `__getattr__` 이 다시 자기를 불러 무한 재귀가 됐다 — CNN 학습
-    케이스에서 `RecursionError` 로 나왔고 원인에서 한참 떨어진 자리였다.
-    파라미터가 없는 층이라 `Module` 에서 물려받을 것도 없다.
+    **It does not subclass `Module`.** Subclassing it meant `Module`'s methods
+    looked for an `_m` that was not there, `__getattr__` called itself, and it
+    recursed forever — surfacing as `RecursionError` in a CNN training case, a
+    long way from the cause. These layers have no parameters, so there is
+    nothing to inherit from `Module` anyway.
     """
 
     __slots__ = ("_fn",)
@@ -862,8 +931,8 @@ class _Wrap:
     def state_dict(self):
         return {}
 
-    # 파라미터가 없는 층이라 빈 목록이다. **없으면 `AttributeError` 가 난다** —
-    # torch 는 `nn.ReLU().named_parameters()` 에 빈 것을 준다.
+    # No parameters, so an empty list. **Absent, it raises `AttributeError`** —
+    # torch answers `nn.ReLU().named_parameters()` with an empty one.
     def named_parameters(self):
         return []
 
@@ -881,15 +950,16 @@ class _Wrap:
 
 
 class _Sequential:
-    """**파이썬 쪽에서 엮는다.**
+    """**Chained on the Python side.**
 
-    borch.ts 의 `Sequential` 에 넘기려면 층마다 JS 쪽 물건이 있어야 하는데,
-    `Softmax`·`Flatten` 같은 것은 텐서 메서드를 감싼 파이썬 층이라 그것이 없다.
-    JS 에 `Lambda` 같은 자리를 만들어 넣을 수도 있지만, 그러면 파라미터가 없는
-    층 때문에 커널 쪽 표면이 는다. 엮는 일은 파이썬이 해도 값이 같다.
+    Handing it to borch.ts's `Sequential` would require a JavaScript object per
+    layer, and things like `Softmax` and `Flatten` are Python layers wrapping a
+    tensor method, so they have none. A `Lambda` slot could be added over there,
+    but then the kernel-side surface grows because of layers with no parameters.
+    Chaining in Python produces the same values.
 
-    이름 규칙은 borch.ts 와 맞춘다 — `0.weight` 처럼 자리 번호가 앞에 붙고,
-    골든이 그 이름으로 가중치를 넣고 꺼낸다.
+    The naming rule matches borch.ts's — a positional number in front, as in
+    `0.weight`, and the golden loads and reads weights by those names.
     """
 
     __slots__ = ("layers",)
@@ -949,34 +1019,42 @@ def _state_of(m):
 
 
 def _named_of(m):
-    """`(이름, 파라미터)` 짝. **`_state_of` 와 정확히 버퍼만큼 다르다.**
+    """`(name, parameter)` pairs. **It differs from `_state_of` by exactly the
+    buffers.**
 
-    둘을 한 줄로 쓰면 버퍼가 파라미터가 된다. 그래서 함수가 둘이다.
+    Written as one function, the buffers become parameters. That is why there
+    are two.
     """
     return m.named_parameters() if hasattr(m, "named_parameters") else []
 
 
 def _buffers_of(m, persistent_only=False):
-    """`(이름, 버퍼)` 짝. 셋째 목록이고, 앞의 둘의 차이가 정확히 이것이다."""
+    """`(name, buffer)` pairs. The third list, and exactly the difference
+    between the other two."""
     if not hasattr(m, "named_buffers"):
         return []
     return m.named_buffers(persistent_only)
 
 
-# ── 컨테이너 ────────────────────────────────────────────────────────────────
+# ── containers ──────────────────────────────────────────────────────────────
 #
-# **여기가 조용히 틀리는 자리다.** 맨 리스트에 층이나 파라미터를 담아 속성으로 붙이면
-# `Module._children()` 이 그것을 못 알아본다 — `parameters()` 가 안 내놓고, 옵티마이저가
-# 못 보고, 그런데 **손실은 내려간다**(남은 파라미터가 대신 맞춘다). 예외도 경고도 없다.
+# **This is where things go quietly wrong.** Put layers or parameters in a bare
+# list, attach it as an attribute, and `Module._children()` does not recognise
+# it — `parameters()` does not offer them, the optimiser never sees them, and
+# **the loss still falls** because the remaining parameters compensate. No
+# exception, no warning.
 #
-# torch 도 똑같이 못 알아보고, 그래서 torch 에 이 네 클래스가 있다.
+# torch fails to recognise it in exactly the same way, which is why torch has
+# these four classes.
 
 def Parameter(value, requires_grad=True):
-    """학습되는 텐서. torch 는 `Tensor` 의 하위 클래스인데 여기서는 **잎 텐서**다.
+    """A tensor that is trained. In torch it is a subclass of `Tensor`; here it
+    is **a leaf tensor.**
 
-    borch.ts 에 `Parameter` 라는 것이 따로 없다 — 기울기를 받는 잎이면 그것이
-    파라미터다. 값을 CPU 로 한 번 돌려 새 잎으로 세우는데, 모델을 세울 때 한 번씩만
-    도는 자리라 학습 루프의 비용이 아니다.
+    borch.ts has no separate `Parameter` — a leaf that takes gradients is a
+    parameter. The value makes one trip to the CPU and comes back as a new leaf,
+    which runs once per layer at construction and is not a cost inside the
+    training loop.
     """
     from ._base import tensor as _t
 
@@ -985,10 +1063,12 @@ def Parameter(value, requires_grad=True):
 
 
 class _Holder:
-    """컨테이너 넷이 나눠 쓰는 살림. **이름 규칙이 여기 한 군데 있어야 한다.**
+    """The housekeeping the four containers share. **The naming rule has to
+    live in one place.**
 
-    `state_dict` 열쇠는 `layers.0.weight` 처럼 자리 이름을 앞에 붙여 만드는데, 그
-    규칙이 컨테이너마다 따로 적히면 하나가 갈렸을 때 어디서 갈렸는지 못 찾는다.
+    A `state_dict` key is built by putting the slot name in front, as in
+    `layers.0.weight`, and writing that rule out per container means that when
+    one of them drifts there is no finding where.
     """
 
     def parameters(self):
@@ -1033,11 +1113,12 @@ class _Holder:
 
 
 def _ordered(mapping):
-    """torch 의 순서 규칙. **평범한 dict 는 열쇠를 정렬해서 넣는다.**
+    """torch's ordering rule. **A plain dict has its keys sorted on the way in.**
 
-    `OrderedDict` 로 주면 넣은 순서를 지키고 그냥 `dict` 면 정렬한다. 안 맞추면
-    `named_parameters` 의 순서가 갈리고 그것이 곧 `state_dict` 의 순서다 — 골든이
-    실제로 이 자리를 잡았다(`{"w":…, "b":…}` 에 torch 는 `ws.b ws.w` 를 냈다).
+    An `OrderedDict` keeps insertion order and a plain `dict` is sorted. Not
+    matching that diverges the order of `named_parameters`, which is the order of
+    `state_dict` — and the golden did catch this: given `{"w":…, "b":…}`, torch
+    produced `ws.b ws.w`.
     """
     import collections as _c
 
@@ -1048,9 +1129,10 @@ def _ordered(mapping):
 
 
 class _ModuleList(_Holder):
-    """층 목록. 번호가 곧 이름이다 — `layers.0.weight`.
+    """A list of layers. The index is the name — `layers.0.weight`.
 
-    `append` 가 없으면 층 수가 정해지지 않은 모델을 쓸 방법이 없다.
+    Without `append` there is no way to write a model whose layer count is not
+    fixed in advance.
     """
 
     def __init__(self, mods=()):
@@ -1088,7 +1170,7 @@ class _ModuleList(_Holder):
 
 
 class _ModuleDict(_Holder):
-    """이름 붙은 층 묶음. 준 이름이 그대로 `state_dict` 열쇠가 된다."""
+    """Named layers. The name given becomes the `state_dict` key."""
 
     def __init__(self, mods=None):
         self.mods = dict(_ordered(mods))
@@ -1126,7 +1208,8 @@ class _ModuleDict(_Holder):
 
 
 class _ParamHolder(_Holder):
-    """파라미터를 직접 담는 쪽. 잎이 텐서라 `_Holder` 의 순회를 못 쓴다."""
+    """The one holding parameters directly. Its leaves are tensors, so
+    `_Holder`'s walk does not apply."""
 
     def parameters(self):
         return [p for _, p in self._entries()]
@@ -1134,13 +1217,14 @@ class _ParamHolder(_Holder):
     def state_dict(self):
         return dict(self._entries())
 
-    # **잎이 텐서라 `_Holder` 의 것을 못 쓴다.** 저쪽은 자식에게 `named_parameters` 를
-    # 다시 묻는데 텐서에는 그것이 없어서 빈 목록이 된다 — 예외 없이 파라미터가 통째로
-    # 사라진다. `parameters()` 가 바로 위에서 같은 이유로 재정의돼 있다.
+    # **Its leaves are tensors, so `_Holder`'s version does not work.** That one
+    # asks each child for `named_parameters` again, a tensor has no such thing,
+    # and the list comes back empty — every parameter disappears without an
+    # exception. `parameters()` just above is overridden for the same reason.
     def named_parameters(self):
         return list(self._entries())
 
-    # 담고 있는 것이 전부 파라미터다 — 버퍼는 하나도 없다.
+    # Everything it holds is a parameter — there are no buffers at all.
     def named_buffers(self, persistent_only=False):
         return []
 
@@ -1158,7 +1242,7 @@ class _ParamHolder(_Holder):
 
 
 class _ParameterList(_ParamHolder):
-    """`Parameter` 목록. **이것이 없으면 대신할 방법이 없다.**"""
+    """A list of `Parameter`s. **Without it there is no substitute.**"""
 
     def __init__(self, params=()):
         self.params = list(params)
@@ -1188,7 +1272,7 @@ class _ParameterList(_ParamHolder):
 
 
 class _ParameterDict(_ParamHolder):
-    """이름 붙은 `Parameter` 묶음."""
+    """Named `Parameter`s."""
 
     def __init__(self, params=None):
         self.params = dict(_ordered(params))
@@ -1256,10 +1340,12 @@ ASMoutput = _collections.namedtuple("ASMoutput", ["output", "loss"])
 
 
 class _AdaptiveLogSoftmax(Module):
-    """`forward` 가 정답도 받고 **답을 둘 낸다** — 정답 자리의 로그확률과 손실.
+    """`forward` takes the target as well and **produces two answers** — the log
+    probability at the target and the loss.
 
-    borch.ts 쪽은 `forward` 를 막고 `run(x, target)` 을 둔다. 다른 층과 모양이 달라서
-    그냥 지나가면 안 되는 것을 그 자리에서 알리려는 것이다.
+    Over there `forward` is blocked and `run(x, target)` stands in its place, so
+    that a layer shaped unlike the others says so where it is called rather than
+    passing through.
     """
 
     def __call__(self, x, target):
@@ -1289,10 +1375,11 @@ def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
     return _layer("Conv3d", cin, cout, k, stride, padding, bias)
 
 
-# ── 되풀이의 한 걸음 ────────────────────────────────────────────────────
+# ── one step of a recurrence ────────────────────────────────────────────
 #
-# **`call` 이 아니라 `step` 으로 간다.** 저쪽 `Module.call(x)` 은 인자 하나짜리라
-# 상태를 못 받는다. `LSTMCell` 은 상태가 짝이고 답도 짝이라 그 자리도 여기서 푼다.
+# **It goes through `step`, not `call`.** `Module.call(x)` over there takes one
+# argument and cannot receive state. `LSTMCell` has a pair of states and answers
+# with a pair, so that is unpacked here as well.
 
 class _Cell(Module):
     _pairs = False
@@ -1304,8 +1391,8 @@ class _Cell(Module):
         if hx is None:
             got = settle(self._m.step(handle(x)))
         else:
-            # **`_js_list` 는 정수 목록 전용이다** — 텐서를 넣으면 `int()` 에서 멈춘다.
-            # 짝은 `Array.of` 로 만든다.
+            # **`_js_list` is for lists of integers only** — a tensor stops it
+            # at `int()`. The pair is built with `Array.of`.
             got = settle(self._m.step(
                 handle(x), _js.Array.of(handle(hx[0]), handle(hx[1]))))
         return (got[0], got[1])
@@ -1329,11 +1416,11 @@ GRUCell = _cell("GRUCell")
 LSTMCell = _cell("LSTMCell", pairs=True)
 
 
-# ── 나머지 층 ───────────────────────────────────────────────────────────
+# ── the remaining layers ────────────────────────────────────────────────
 #
-# **인자가 둘 이상인 층은 `_layer` 로 못 간다.** 감싼 쪽의 `__call__` 이 저쪽
-# `call(x)` 로 넘기는데 `Bilinear` 는 둘을, `EmbeddingBag(offsets)` 은 목록을 받는다.
-# 그 둘만 손으로 잇는다.
+# **A layer taking more than one argument cannot go through `_layer`.** The
+# wrapper's `__call__` forwards to `call(x)` over there, while `Bilinear` takes
+# two and `EmbeddingBag(offsets)` takes a list. Those two are wired by hand.
 
 class _Bilinear(Module):
     def __call__(self, x1, x2):
@@ -1364,9 +1451,10 @@ def EmbeddingBag(num, dim, mode="mean", **kw):
 
 def _misc_layer(name):
     def make(*args, **kw):
-        # **파이썬 튜플을 그대로 넘기면 안 된다.** 저쪽에서 잠깐 빌린 프록시가 되어
-        # 곧 버려지고, 실패는 나중에 `borrowed proxy was automatically destroyed` 로
-        # 나온다 — `Fold((4,4), 2)` 가 그 자리였다.
+        # **A Python tuple must not cross as-is.** Over there it becomes a
+        # briefly borrowed proxy that is discarded soon after, and the failure
+        # arrives later as `borrowed proxy was automatically destroyed` —
+        # `Fold((4,4), 2)` was that place.
         laid = [_js_list(list(a)) if isinstance(a, (list, tuple)) else a
                 for a in args]
         if "scale_factor" in kw:
@@ -1382,7 +1470,7 @@ for _misc in ("Unfold", "Fold", "LocalResponseNorm", "Softmax2d", "RReLU",
     globals()[_misc] = _misc_layer(_misc)
 
 
-# ── 자리 옮기기·채널째 dropout ──────────────────────────────────────────
+# ── repositioning, and channel-wise dropout ─────────────────────────────
 
 for _shuffle in ("PixelShuffle", "PixelUnshuffle", "ChannelShuffle",
                  "Dropout1d", "Dropout2d", "Dropout3d", "AlphaDropout",
@@ -1390,11 +1478,12 @@ for _shuffle in ("PixelShuffle", "PixelUnshuffle", "ChannelShuffle",
     globals()[_shuffle] = (lambda name: lambda *a: _layer(name, *a))(_shuffle)
 
 
-# ── 게으른 층 열셋 ──────────────────────────────────────────────────────
+# ── the thirteen lazy layers ────────────────────────────────────────────
 #
-# 전부 borch.ts 쪽에 있다. **굳는 자리도 저쪽이다** — 프로토타입을 갈아 끼우므로
-# 파이썬 쪽 감싼 물건은 그대로 두고 속만 바뀐다. `__repr__` 이 `describe()` 를
-# 물으므로 굳기 전후의 글자도 저절로 따라온다.
+# All of them live in borch.ts. **They materialise over there too** — the
+# prototype is swapped, so the Python wrapper stays and only its insides change.
+# `__repr__` asks `describe()`, so the printed form before and after follows on
+# its own.
 
 for _lazy in ("LazyLinear",
               *(f"Lazy{k}{d}d" for k in ("Conv", "ConvTranspose", "BatchNorm",
@@ -1402,10 +1491,11 @@ for _lazy in ("LazyLinear",
     globals()[_lazy] = (lambda name: lambda *a: _layer(name, *a))(_lazy)
 
 
-# ── 손실 층 ─────────────────────────────────────────────────────────────
+# ── loss layers ─────────────────────────────────────────────────────────
 #
-# 전부 borch.ts 쪽에 있다. 여기서는 **인자 순서만 옮긴다** — torch 는 `reduction` 을
-# 가운데 두고 저쪽은 뒤에 두므로, 이름으로 받아 자리로 편다.
+# All of them live in borch.ts. What happens here is **moving the argument
+# order** — torch puts `reduction` in the middle and the other side puts it at
+# the end, so it arrives by name and is unrolled into position.
 
 _LOSS_LAYERS = {
     "HuberLoss": ("delta", "reduction"),
@@ -1439,11 +1529,12 @@ for _loss_name, _loss_order in _LOSS_LAYERS.items():
     globals()[_loss_name] = _loss_layer(_loss_name, _loss_order)
 
 
-# ── 패딩 층 열다섯 ──────────────────────────────────────────────────────
+# ── the fifteen padding layers ──────────────────────────────────────────
 #
-# 전부 borch.ts 쪽에 있다. 여기서는 이름을 잇고 **파이썬의 `int`/튜플을 JS 가 읽을
-# 수 있는 것으로 바꾸는 일**만 한다 — 파이썬 튜플을 그대로 넘기면 저쪽에서
-# `typeof padding === "number"` 도 아니고 배열도 아닌 프록시가 된다.
+# All of them live in borch.ts. What happens here is joining the names and
+# **turning Python's `int` or tuple into something JavaScript can read** — a
+# Python tuple crossing as-is becomes a proxy over there that is neither
+# `typeof padding === "number"` nor an array.
 
 def _pad_arg(padding):
     return padding if isinstance(padding, int) else _js_list(list(padding))
@@ -1477,7 +1568,8 @@ def ReLU():
 
 
 def _max_pool_layer(js_name):
-    """`return_indices` 를 켜면 답이 둘이 된다 — 값과 이긴 자리."""
+    """With `return_indices` on there are two answers — the values and where
+    each one won."""
     def make(k=2, stride=None, return_indices=False):
         if return_indices:
             return _Wrap(lambda x: _pool_with_indices(x, k, stride))
@@ -1491,23 +1583,26 @@ MaxPool3d = _max_pool_layer("maxPool3d")
 
 
 def _spread(v, n):
-    """수 하나면 축마다 같은 값으로, 목록이면 그대로. 코어의 같은 이름과 같은 규칙이다."""
+    """A single number spreads across the dimensions; a list is taken as it is.
+    The same rule as the core's name of the same spelling."""
     return (v,) * n if isinstance(v, int) else tuple(v)
 
 
 class _MaxUnpool(_Wrap):
-    """`MaxPool` 이 고른 자리로 값을 되돌린다.
+    """Put values back into the positions `MaxPool` chose.
 
-    **`forward` 가 인자를 둘 받는다** — 값과 자리표. 다른 층과 모양이 달라 `Sequential`
-    에 그냥 못 넣는데 torch 도 같다. 자리표는 값과 함께 흘러야 하고, 층 안에 숨기면
-    같은 층을 두 번 쓸 때 남의 자리표를 쓰게 된다.
+    **`forward` takes two arguments** — the values and the index map. Shaped
+    unlike the other layers, it does not drop into a `Sequential`, and torch is
+    the same. The index map has to travel with the values; hidden inside the
+    layer, using the same layer twice means using somebody else's map.
     """
 
     def __init__(self, dim, kernel_size, stride=None, padding=0):
         super().__init__(lambda x, indices, output_size=None: _unpool(
             x, indices, kernel_size, stride, padding, output_size))
         self.dim = dim
-        # **축마다 펴서 든다** — torch 가 그렇게 들고 `repr` 에 그 튜플이 그대로 나온다.
+        # **Held unrolled per dimension** — torch holds it that way and `repr`
+        # prints that tuple verbatim.
         self.kernel_size = _spread(kernel_size, dim)
         self.stride = _spread(kernel_size if stride is None else stride, dim)
         self.padding = _spread(padding, dim)
@@ -1529,13 +1624,14 @@ MaxUnpool3d = _unpool_layer(3)
 
 
 class _FractionalMaxPool(_Wrap):
-    """**`repr` 이 비어 있다** — torch 의 `extra_repr` 가 아무것도 안 낸다(재봤다)."""
+    """**The `repr` is empty** — torch's `extra_repr` produces nothing
+    (measured)."""
 
     def __init__(self, dim, kernel_size, output_size=None, output_ratio=None,
                  return_indices=False, _random_samples=None):
-        # **둘 중 하나만 받는다** — torch 는 생성자에서 멈춘다. 안쪽 `_fractional` 도
-        # 같은 것을 보지만 그쪽은 **부를 때** 멈추고, 그러면 층을 만든 줄과 멈추는
-        # 줄이 갈라진다.
+        # **Only one of the two** — torch stops in the constructor. The inner
+        # `_fractional` checks the same thing but stops **when called**, which
+        # separates the line that built the layer from the line that stops.
         if (output_size is None) == (output_ratio is None):
             raise ValueError(
                 "FractionalMaxPool takes either output_size or output_ratio, not both.")
@@ -1549,7 +1645,8 @@ class _FractionalMaxPool(_Wrap):
 
 
 class _CTCLoss(_Wrap):
-    """`forward` 가 인자를 넷 받는다 — 로그확률, 표적, 두 길이."""
+    """`forward` takes four arguments — log probabilities, targets, and two
+    lengths."""
 
     def __init__(self, blank=0, reduction="mean", zero_infinity=False):
         super().__init__(lambda lp, t, il, tl: _ctc_loss(
@@ -1577,7 +1674,8 @@ def Flatten(start_dim=1, end_dim=-1):
 
 
 def Identity(*args, **kw):
-    """torch 는 아무 인자나 받아 버린다(실측) — `Identity(64, unused=True)` 가 돈다."""
+    """torch accepts any arguments at all (measured) — `Identity(64,
+    unused=True)` runs."""
     return _layer("Identity")
 
 
@@ -1610,14 +1708,16 @@ def AvgPool2d(k=2, stride=None):
     return _layer("AvgPool2d", k, stride)
 
 
-# ── 여덟은 이제 borch.ts 의 층을 그대로 부른다 ──────────────────────────────
+# ── eight now call borch.ts's layers directly ───────────────────────────────
 #
-# 전에는 여기서 텐서 메서드를 감싸 만들었다. 그러면 **규칙이 두 벌**이 되고, 실제로
-# 그 두 벌이 갈렸다 — `Softmax()` 의 기본 축은 `-1` 이 아니라 랭크마다 다른데(실측:
-# 1→0, 2→1, 3→**0**, 4→1) 양쪽 다 `-1` 로 두고 있었다. 랭크 2 로만 물으면 `dim=1` 과
-# `dim=-1` 이 같은 축이라 그 갈림이 안 보인다.
+# These used to be built here by wrapping a tensor method. That makes **two
+# copies of the rule**, and the two did diverge: `Softmax()`'s default dimension
+# is not `-1` but varies with rank (measured: 1→0, 2→1, 3→**0**, 4→1), and both
+# sides had it as `-1`. Asked only at rank 2, `dim=1` and `dim=-1` are the same
+# dimension and the divergence stays invisible.
 #
-# 저쪽에 층이 생겼으니 여기서는 이름만 옮긴다. 규칙이 한 벌이면 갈릴 자리가 없다.
+# The layers exist over there now, so this only moves the names. One copy of the
+# rule leaves nowhere to diverge.
 
 def Softmax(dim=None):
     return _layer("Softmax", dim)
@@ -1632,7 +1732,7 @@ def LeakyReLU(negative_slope=0.01):
 
 
 def ELU(alpha=1.0):
-    """**α 를 받는다.** 전에는 안 받아서 `nn.ELU(0.5)` 가 그 줄에서 멈췄다."""
+    """**Takes an alpha.** It did not, and `nn.ELU(0.5)` stopped on that line."""
     return _layer("ELU", alpha)
 
 
@@ -1641,7 +1741,8 @@ def SiLU():
 
 
 def GELU(approximate="none"):
-    """**`approximate='tanh'` 는 다른 식이다** — 받는 척이 아니라 값이 갈린다."""
+    """**`approximate='tanh'` is a different expression** — not merely accepted,
+    the values differ."""
     return _layer("GELU", approximate)
 
 
@@ -1653,10 +1754,11 @@ def Tanh():
     return _layer("Tanh")
 
 
-# ── 활성함수 층. 전부 borch.ts 의 메서드 하나를 감싼다. ─────────────────────
+# ── activation layers. Each wraps one borch.ts method. ──────────────────────
 #
-# 인자 없는 것은 `unary` 표를 그대로 부르고, 인자를 받는 것은 그 인자를 상수로
-# 구운 커널로 간다 — 어느 쪽이든 파이썬은 이름만 옮긴다.
+# The ones without arguments call the `unary` table directly; the ones with
+# arguments go to a kernel with that argument baked in as a constant — either
+# way Python only moves the name.
 
 def _unary_layer(name):
     return lambda: _Wrap(lambda x, n=name: wrap(handle(x).unary(n)))
@@ -1705,10 +1807,11 @@ def GLU(dim=-1):
 
 
 class PReLU(Module):
-    """음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
+    """The negative slope is **learned.** The only one in this family with a
+    parameter.
 
-    `_Wrap` 이 아니라 `Module` 인 이유가 그것이다 — `weight` 가 `named_parameters`
-    에 잡혀야 하고, 그 이름이 `state_dict` 열쇠가 된다.
+    That is why it is a `Module` rather than a `_Wrap` — `weight` has to appear
+    in `named_parameters`, and that name becomes the `state_dict` key.
     """
 
     def __init__(self, num_parameters=1, init=0.25):
@@ -1722,7 +1825,8 @@ class PReLU(Module):
 
 
 class GroupNorm(Module):
-    """채널을 그룹으로 묶어 정규화. 가중치가 붙으므로 `_Wrap` 이 아니라 `Module` 이다."""
+    """Normalise with the channels gathered into groups. It carries weights, so
+    a `Module` rather than a `_Wrap`."""
 
     def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
         super().__init__()
@@ -1743,23 +1847,26 @@ class GroupNorm(Module):
 
 
 class _InstanceNorm(Module):
-    """표본마다·채널마다 따로. **기본이 `affine=False` 다** — torch 가 그렇다.
+    """Per sample and per channel. **The default is `affine=False`**, as it is
+    in torch.
 
-    전에는 `lambda num_features=0, eps=1e-5, **kw: ...` 였다. `**kw` 가 `affine` 과
-    `track_running_stats` 를 통째로 삼켜서, `affine=True` 로 세운 층이 **파라미터를
-    하나도 안 갖고** 조용히 돌았다 — 정규화는 되는데 배우는 것이 없고, 손실은
-    나머지 층이 대신 맞춰서 내려간다. 예외도 경고도 없는 자리다.
+    This used to be `lambda num_features=0, eps=1e-5, **kw: ...`. That `**kw`
+    swallowed `affine` and `track_running_stats` whole, so a layer built with
+    `affine=True` ran quietly **with no parameters at all** — the normalisation
+    happens, nothing is learned, and the loss falls because the remaining layers
+    compensate. No exception and no warning.
 
-    `_Wrap` 이 아니라 `Module` 인 이유가 그것이다. 가중치가 `named_parameters` 에
-    잡혀야 하고, 그 이름이 `state_dict` 열쇠가 된다.
+    That is why it is a `Module` rather than a `_Wrap`. The weights have to
+    appear in `named_parameters`, and those names become `state_dict` keys.
     """
 
     def __init__(self, num_features=0, eps=1e-5, momentum=0.1, affine=False,
                  track_running_stats=False):
         super().__init__()
         if track_running_stats:
-            # 버퍼만 등록하고 순방향이 안 쓰면 **열쇠는 맞고 값이 틀린다.**
-            # 평가 모드의 계산이 통째로 달라지는 자리라, 안 되는 것은 안 된다고 한다.
+            # Registering the buffers without the forward pass using them makes
+            # **the keys right and the values wrong.** Evaluation mode computes
+            # something else entirely there, so what does not work says so.
             from borch._base import _unsupported
             _unsupported("InstanceNorm with track_running_stats=True")
         self.eps = eps
@@ -1780,7 +1887,8 @@ InstanceNorm1d = InstanceNorm2d = InstanceNorm3d = _InstanceNorm
 
 
 class RMSNorm(Module):
-    """**평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다."""
+    """**The mean is not subtracted.** That is the only difference from
+    `LayerNorm`."""
 
     def __init__(self, normalized_shape, eps=None, elementwise_affine=True):
         super().__init__()
@@ -1798,7 +1906,8 @@ class RMSNorm(Module):
 
 
 class _ConvTransposeND(Module):
-    """전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `Conv2d` 와 뒤집혀 있다."""
+    """Transposed convolution. **The weights are `(in, out, …)`** — reversed
+    from `Conv2d`'s."""
 
     nd = 2
 
@@ -1837,8 +1946,9 @@ class ConvTranspose3d(_ConvTransposeND):
 
 
 class Dropout(Module):
-    """학습 때만 떨군다. **`_Wrap` 이 아니라 `Module` 인 이유가 모드다** —
-    `_Wrap` 은 `training` 을 안 들고, 그러면 `eval()` 이 내려가도 계속 떨군다."""
+    """Drops only while training. **It is a `Module` rather than a `_Wrap`
+    because of the mode** — a `_Wrap` does not carry `training`, so it keeps
+    dropping after `eval()`."""
 
     def __init__(self, p=0.5):
         super().__init__()
@@ -1854,11 +1964,13 @@ class Dropout(Module):
 
 
 def LayerNorm(normalized_shape, eps=1e-5, elementwise_affine=True, bias=True):
-    """**`normalized_shape` 는 접는 축의 개수를 정한다** — 전에는 통째로 버렸다.
+    """**`normalized_shape` decides how many dimensions are folded** — it used
+    to be discarded entirely.
 
-    `LayerNorm(4)` 로만 재면 이 갈림이 안 보인다(마지막 축 하나를 접는 것과 답이
-    같다). 게다가 `_Wrap` 이라 **파라미터가 없었다** — torch 의 기본은 `weight`·
-    `bias` 를 학습하는 것이고, 없으면 그 층은 조용히 안 배운다.
+    Measured only with `LayerNorm(4)` the divergence is invisible: the answer
+    matches folding the last dimension alone. On top of that it was a `_Wrap`,
+    so **it had no parameters** — torch's default learns `weight` and `bias`, and
+    without them the layer quietly does not learn.
     """
     shape = ([normalized_shape] if isinstance(normalized_shape, int)
              else list(normalized_shape))
@@ -1870,27 +1982,32 @@ def Unflatten(dim, sizes):
 
 
 def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None):
-    """**첫 자리는 `size` 다**(torch 가 그렇다). 전에는 배율이 첫 자리였고 `mode` 는
-    받아만 놓고 안 썼다 — 겹선형을 달라고 해도 최근접이 조용히 나왔다."""
+    """**The first position is `size`**, as it is in torch. It used to be the
+    scale factor, and `mode` was accepted and unused — asking for bilinear
+    quietly produced nearest."""
     return _layer("Upsample", _arg(size) if size is not None else None,
                   scale_factor, mode, align_corners)
 
 
-# **접는 방식은 손실의 일부다 — 층 쪽에도 있어야 한다.** 함수 쪽만 고치면
-# `nn.MSELoss(reduction="sum")` 이 `TypeError` 로 멈춘다. 실제로 그 상태였고,
-# 교재 코드는 함수보다 층을 더 많이 쓴다.
+# **The reduction is part of the loss — it has to exist on the layer side too.**
+# Fixing only the function side leaves `nn.MSELoss(reduction="sum")` stopping
+# with a `TypeError`. It was in that state, and textbook code uses the layers
+# more than the functions.
 #
-# `NLLLoss`·`CrossEntropyLoss` 는 아직 없다 — borch.ts 의 `nllLoss`·`crossEntropy` 가
-# 스칼라만 내므로 여기서 `none` 을 만들 수 없다. 없는 것을 만드는 대신 멈춘다.
+# `NLLLoss` and `CrossEntropyLoss` are not here yet — `nllLoss` and
+# `crossEntropy` in borch.ts produce a scalar only, so `none` cannot be built
+# here. Rather than invent what is missing, it stops.
 def _no_class_weights(who, weight, pos_weight):
-    """**`weight`·`pos_weight` 는 여기 없다.** 받아 두고 안 쓰면 손실이 조용히 달라진다.
+    """**`weight` and `pos_weight` are not here.** Accepted and unused, the loss
+    quietly becomes a different one.
 
-    torch 는 그 둘을 버퍼로 등록해 `state_dict` 에 실어 보내고, 무엇보다 `mean` 의
-    나눗셈을 바꾼다 — 표본 수가 아니라 **가중치의 합**으로 나눈다. 무시하면 값이
-    달라지고, 그 값으로 고른 학습률이 따라 틀린다.
+    torch registers both as buffers and ships them in `state_dict`, and above all
+    changes the division in `mean` — dividing by **the sum of the weights**
+    rather than the sample count. Ignored, the value differs, and a learning rate
+    chosen against that value is wrong with it.
 
-    `TypeError` 로 막혀 있었는데 그것은 오타를 냈을 때와 같은 화면이라 "이
-    라이브러리에 없다" 를 안 말해 준다.
+    It used to stop with a `TypeError`, which is the same screen a typo produces
+    and does not say "this library does not have it".
     """
     from borch._base import _unsupported
 
@@ -1929,18 +2046,21 @@ def CrossEntropyLoss(reduction="mean", *, weight=None):
 
 
 class _Recurrent(Module):
-    """**torch 의 순환망은 튜플을 준다** — `(출력, 마지막상태)`.
+    """**torch's recurrent networks hand back a tuple** — `(output, final
+    state)`.
 
-    borch.ts 의 `forward` 는 출력만 주고 `run()` 이 셋을 함께 준다. LSTM 은 상태가
-    둘(`h`, `c`)이라 `(출력, (h, c))` 이고, 나머지는 `(출력, h)` 다. 모양까지 맞춘다 —
-    torch 의 마지막 상태는 `(층수, 배치, 은닉)` 이라 축이 하나 더 있다.
+    borch.ts's `forward` gives the output only and `run()` gives all three. LSTM
+    has two states (`h`, `c`), so `(output, (h, c))`; the rest are
+    `(output, h)`. The shapes are matched too — torch's final state is
+    `(layers, batch, hidden)`, one dimension more.
     """
 
     def __call__(self, x, *rest):
         got = self._m.run(handle(x))
         out, h = wrap(got.output), wrap(got.hidden)
-        # **축을 셋으로 맞춘다.** torch 의 마지막 상태는 `(층수, 배치, 은닉)` 이다.
-        # 처음에 무조건 하나를 더 붙였더니 넷이 됐다 — 이미 셋이면 그대로 둔다.
+        # **Brought to three dimensions.** torch's final state is
+        # `(layers, batch, hidden)`. Adding one unconditionally at first made it
+        # four — already three, it is left alone.
         if h.ndim == 2:
             h = wrap(h._h.unsqueeze(0))
         if self._m.kind == "LSTM":
@@ -1961,11 +2081,14 @@ RNN, LSTM, GRU = _recurrent("RNN"), _recurrent("LSTM"), _recurrent("GRU")
 
 
 class _Attention(Module):
-    """torch 의 어텐션은 `(질의, 키, 값)` 셋을 받고 `(출력, 가중치)` 를 준다.
+    """torch's attention takes three — `(query, key, value)` — and gives back
+    `(output, weights)`.
 
-    **계산은 `multi_head_attention_forward` 가 한다.** 전에는 borch.ts 의 `attend` 를
-    불렀는데, 그쪽은 자기 주의(self-attention) 전용이고 배치가 앞이라 셋을 따로 준
-    자리에서 답이 갈렸다 — 골든의 "층과 같은 답" 케이스가 최대차 1.26e-01 로 잡았다.
+    **The computation is `multi_head_attention_forward`'s.** It used to call
+    borch.ts's `attend`, which is for self-attention only and puts the batch
+    first, so the answers diverged wherever the three were given separately —
+    the golden's "same answer as the layer" case caught it at a maximum
+    difference of 1.26e-01.
     """
 
     def __init__(self, module, heads, batch_first=False):
@@ -1978,7 +2101,8 @@ class _Attention(Module):
         from ._ops import transpose as _t
         k = q if k is None else k
         v = q if v is None else v
-        # **함수 꼴은 길이가 앞이다.** `batch_first` 면 여기서 뒤집어 넘긴다.
+        # **The function form puts length first.** With `batch_first` it is
+        # transposed here before crossing.
         if self._batch_first:
             q, k, v = (_t(t, 0, 1) for t in (q, k, v))
         out, weights = _mha_forward(

@@ -1,11 +1,12 @@
-"""`utils.data`·내려받기 캐시·저장/불러오기.
+"""`utils.data`, the download cache, and save/load.
 
-자매(`borch_webgpu/_data.py`)에서 옮겨왔다. 옮기면서 바뀐 것은 **한 줄**이다 —
-`backend()` 가 TF.js 대신 borch.ts 의 어댑터를 답한다. 나머지는 numpy 와 브라우저
-API 만 쓰므로 밑바닥이 무엇이든 같다.
+Carried over from the sister library. **One line** changed on the way:
+`backend()` answers with borch.ts's adapter rather than TF.js's. The rest uses
+only numpy and browser APIs, so it is the same whatever sits underneath.
 
-데이터는 **CPU(numpy)에 둔다.** CIFAR-10 을 통째로 GPU 에 올리면 614MB 이고 배치
-하나는 3MB 다. 매 배치 올리는 쪽이 싸고, GPU 메모리를 모델에 남긴다.
+Data stays **on the CPU, in numpy.** All of CIFAR-10 on the GPU is 614MB; one
+batch is 3MB. Uploading per batch is cheaper and leaves the GPU memory for the
+model.
 """
 
 import numpy as _np
@@ -93,8 +94,8 @@ class RandomSampler:
 
 
 class WeightedRandomSampler:
-    """드문 것을 더 자주 뽑는다. 1000명 중 10명이 환자인 데이터에서 배치에 환자가
-    한 명도 없는 일을 막는다."""
+    """Draw the rare thing more often. Stops a batch from containing no patients
+    at all when 10 of every 1000 rows are patients."""
 
     def __init__(self, weights, num_samples, replacement=True, generator=None):
         self.weights = _np.asarray(
@@ -124,10 +125,11 @@ def random_split(dataset, lengths, generator=None):
 
 
 class DataLoader:
-    """배치마다 GPU 로 올린다. 셔플은 CPU 에서 번호만 섞는다.
+    """Upload one batch at a time. Shuffling moves indices on the CPU only.
 
-    `TensorDataset` 은 numpy 째로 잘라 한 번에 올린다(빠른 길). 그 밖의 Dataset 은
-    한 칸씩 꺼내 `stack` 으로 모은다 — 코어와 같은 방식이고 느리지만 무엇이든 받는다.
+    `TensorDataset` is sliced in numpy and uploaded in one go — the fast path.
+    Any other Dataset is read a row at a time and gathered with `stack`, the
+    same way the core does it: slower, but it takes anything.
     """
 
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
@@ -167,10 +169,11 @@ class DataLoader:
 
 
 def default_convert(data):
-    """numpy 를 텐서로 바꾸고 **나머지는 손대지 않는다.**
+    """Turn numpy into tensors and **leave everything else alone.**
 
-    코어와 같은 규칙이다. 함정 둘도 같다 — **튜플이 리스트가 되고**(torch 자신의 하위
-    호환이다), **파이썬 수는 안 바뀐다.** 둘 다 진짜 torch 를 돌려 확인했다.
+    The same rule the core follows, including both of its traps: **tuples come
+    back as lists** (torch's own backwards compatibility) and **Python numbers
+    are not converted.** Both were checked against real torch.
     """
     if isinstance(data, Tensor):
         return data
@@ -180,10 +183,10 @@ def default_convert(data):
         made = {k: default_convert(v) for k, v in data.items()}
         try:
             return type(data)(made)
-        except TypeError:                  # 생성자가 딕트를 안 받는 것들
+        except TypeError:                  # constructors that do not take a dict
             return made
     if isinstance(data, tuple):
-        if hasattr(data, "_fields"):       # 네임드튜플은 자리 이름이 있다
+        if hasattr(data, "_fields"):       # a namedtuple names its positions
             return type(data)(*(default_convert(d) for d in data))
         return [default_convert(d) for d in data]
     if isinstance(data, list):
@@ -196,14 +199,15 @@ def default_convert(data):
 
 
 def get_worker_info():
-    """**언제나 `None`** — 브라우저에는 일꾼 프로세스가 없다. torch 도 주 프로세스에서는
-    `None` 이므로, 이것은 흉내가 아니라 사실이다."""
+    """**Always `None`** — a browser has no worker processes. torch answers
+    `None` in the main process too, so this is the fact rather than a pretence."""
     return None
 
 
-# `torch.utils.data` 와 `torch.nn.utils` 는 **다른 `utils`** 다. 이름이 같아서
-# 한쪽이 다른 쪽을 덮으면 `nn.utils.rnn.pad_sequence` 나 `utils.data.DataLoader`
-# 중 하나가 조용히 사라진다. 여기 것은 최상위 쪽이고, `nn` 쪽은 `_nn.py` 에 있다.
+# `torch.utils.data` and `torch.nn.utils` are **different `utils`**. They share
+# a name, so letting one shadow the other makes either `nn.utils.rnn.pad_sequence`
+# or `utils.data.DataLoader` quietly disappear. This is the top-level one; the
+# `nn` one lives in `_nn.py`.
 class _UtilsData:
     Dataset = Dataset
     TensorDataset = TensorDataset
@@ -225,7 +229,7 @@ class _Utils:
 utils = _Utils()
 
 
-# ---------------------------------------------------------------- 내려받기·캐시
+# ------------------------------------------------------------ download and cache
 
 def _u8_to_np(view):
     out = _np.empty(int(view.length), dtype=_np.uint8)
@@ -256,20 +260,20 @@ async def _opfs_write(name, arr):
 
 
 async def fetch_cached(url, name=None):
-    """받아서 OPFS 에 넣고, 다음부터는 넣어둔 것을 쓴다.
+    """Fetch it, put it in OPFS, and use the stored copy from then on.
 
-    **비동기다.** OPFS 에 동기 API 가 없다(워커 안에서만 있다). 다만 이것은 학습
-    루프가 아니라 **준비 단계에서 한 번** 부르는 것이라, 스텝을 동기로 유지한다는
-    약속은 그대로다.
+    **Asynchronous.** OPFS has no synchronous API outside a worker. This is
+    called once during setup rather than inside a training loop, so the promise
+    that a step stays synchronous is untouched.
 
-    URL 은 부르는 쪽이 준다. 데이터셋 주소를 라이브러리에 박아두면 그것이 사라졌을 때
-    라이브러리를 고쳐야 한다.
+    The caller supplies the URL. A dataset address baked into a library means
+    editing the library on the day that address stops existing.
     """
     key = name or url.rsplit("/", 1)[-1]
     try:
         return await _opfs_read(key)
     except Exception:                                                # noqa: BLE001
-        pass                       # 아직 없다 — 받아온다
+        pass                       # not there yet — fetch it
     response = await _js.fetch(url)
     if not response.ok:
         raise RuntimeError(f"download failed {response.status}: {url}")
@@ -279,31 +283,32 @@ async def fetch_cached(url, name=None):
 
 
 async def cache_put(name, data):
-    """받아온 바이트를 캐시에 직접 넣는다.
+    """Put bytes you already have straight into the cache.
 
-    **CIFAR-10 원본(`cs.toronto.edu`)은 CORS 헤더를 주지 않는다**(실측: 브라우저가
-    차단한다). 그래서 `fetch_cached` 로는 못 받는다. 사용자가 파일을 골라 넣거나
-    CORS 를 주는 미러에서 받은 바이트를 여기로 넣으면 그다음은 같다.
+    **The original CIFAR-10 host (`cs.toronto.edu`) sends no CORS header** —
+    measured: the browser blocks it. So `fetch_cached` cannot reach it. Bytes
+    a user picked from disk, or fetched from a mirror that does send the
+    header, go in here and everything after that is the same.
     """
     await _opfs_write(name, _np.asarray(data, dtype=_np.uint8))
 
 
 async def cache_get(name):
-    """캐시에 있는 바이트. 없으면 None."""
+    """The bytes in the cache, or None."""
     try:
         return await _opfs_read(name)
     except Exception:                                                # noqa: BLE001
         return None
 
 
-_CIFAR_RECORD = 1 + 3 * 32 * 32          # 라벨 1바이트 + 픽셀 3072바이트
+_CIFAR_RECORD = 1 + 3 * 32 * 32          # 1 label byte + 3072 pixel bytes
 
 
 def decode_cifar10(raw):
-    """CIFAR-10 의 바이너리 한 덩이를 (x, y) 로 푼다.
+    """Unpack one CIFAR-10 binary chunk into (x, y).
 
-    한 장이 3073 바이트다 — 라벨 1 바이트에 R·G·B 가 각각 1024 바이트씩 이어 붙는다.
-    그 순서가 곧 (3, 32, 32) 이라 torch 의 NCHW 와 같다.
+    One image is 3073 bytes — a label byte followed by 1024 bytes each of R, G
+    and B. That order is already (3, 32, 32), which is torch's NCHW.
     """
     arr = _np.asarray(raw, dtype=_np.uint8)
     if arr.size % _CIFAR_RECORD:
@@ -316,14 +321,16 @@ def decode_cifar10(raw):
     return x, y
 
 
-# `save`·`load` 는 여기 있었다 — pickle 한 겹이었다. **`_serialize.py` 로 옮겼고
-# 형식이 safetensors 로 바뀌었다.** 코어와 같은 코덱을 부르므로 이제 한쪽이 쓴
-# 파일을 다른 쪽이 읽는다 — borch.ts 가 그 형식을 고른 이유가 그것인데, 파이썬 쪽
-# 둘이 pickle 을 쓰는 동안 그 문장이 사실이 아니었다.
+# `save` and `load` used to live here as a thin layer over pickle. **They moved
+# to `_serialize.py` and the format became safetensors.** They call the core's
+# codec now, so a file one side writes is a file the other side reads — which is
+# why borch.ts chose that format, and which was not true while both Python
+# libraries were using pickle.
 
 
 class _Cuda:
-    """이 라이브러리는 GPU 를 쓰지만 **CUDA 는 아니다.** 흉내 내면 교훈이 사라진다."""
+    """This library uses a GPU but it is **not CUDA.** Pretending otherwise
+    takes the lesson with it."""
 
     @staticmethod
     def is_available():
@@ -342,15 +349,18 @@ cuda = _Cuda()
 
 
 def backend():
-    """지금 붙어 있는 어댑터. **옮겨오면서 바뀐 유일한 줄이다.**
+    """Whichever adapter is actually attached. **The one line that changed on
+    the way over.**
 
-    자매는 여기서 `tf.getBackend()` 를 물어 `'webgpu'` 라는 문자열을 냈다. 이쪽은
-    TF.js 를 안 거치므로 물을 것이 없고, 대신 borch.ts 가 실제로 붙은 어댑터를
-    답한다(`apple / metal-3` 처럼). 재는 쪽이 반드시 같이 적어야 하는 값이다 —
-    헤드리스 브라우저는 GPU 가 없으면 **말없이** 소프트웨어 래스터라이저를 준다.
+    The sister library asked `tf.getBackend()` here and produced the string
+    `'webgpu'`. This one does not go through TF.js, so there is nothing to ask;
+    it answers with the adapter borch.ts really attached to, such as
+    `apple / metal-3`. Anyone measuring has to record it: a headless browser
+    with no GPU hands back a software rasteriser **without saying so.**
 
-    골든 하네스가 `hasattr(lib, "backend")` 로 브라우저 구현을 알아본다. 그래서 이
-    이름은 표면일 뿐 아니라 **어느 케이스를 받을지**를 정한다.
+    The golden harness recognises a browser implementation by
+    `hasattr(lib, "backend")`. So this name is not only surface — it decides
+    **which cases the library is given.**
     """
     from ._ops import _ts
 

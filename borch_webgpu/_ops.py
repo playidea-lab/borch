@@ -1,17 +1,20 @@
-"""파이썬 이름을 borch.ts 메서드로 넘긴다 — **목록 없이.**
+"""Forward Python names to borch.ts methods — **without a list.**
 
-손으로 이름 192 개를 적으면 그중 하나가 다른 연산을 부르는 날이 오고, 그것은 값
-대조로만 보인다. 표를 읽어 다는 방법도 있지만 그러려면 `index.ts` 가 커널 표를
-내보내야 하고, 그건 안쪽 사정을 공개 표면에 올리는 것이다.
+Writing 192 names by hand means a day arrives when one of them calls a
+different operation, and only comparing values shows it. Reading them off a
+table is possible, but that would require `index.ts` to export the kernel
+table, which puts an internal matter on the public surface.
 
-그래서 **모듈의 `__getattr__`** 을 쓴다(PEP 562). `L.exp(x)` 가 오면 그때
-`x.exp()` 로 넘기고, borch.ts 에 없으면 `AttributeError` 로 멈춘다. 없는 것을
-근사하지 않는다 — 골든이 그 자리를 실패로 세고, 그 수가 곧 이 결속의 진도다.
+So **the module's `__getattr__`** does it (PEP 562). `L.exp(x)` arrives and is
+forwarded as `x.exp()`; absent from borch.ts, it stops with `AttributeError`.
+Nothing missing is approximated — the golden counts that place as a failure, and
+that count is this binding's progress.
 
-이름 규칙 하나만 다르다. 파이썬은 `masked_select`, JS 는 `maskedSelect` 다.
+One naming rule differs. Python writes `masked_select`, JavaScript writes
+`maskedSelect`.
 """
 
-import builtins                    # `max`·`sum` 을 이름 가림 없이 부르려고
+import builtins                    # to reach `max` and `sum` unshadowed
 import numpy as _np
 
 import js as _js
@@ -23,16 +26,19 @@ from ._base import (
 )
 
 _ts = _js.borch
-# borch.ts 텐서의 프로토타입. **이름이 있는지 인스턴스 없이 묻는 유일한 자리**라
-# 여기서 한 번만 잡는다 — `__getattr__` 이 아무 이름에나 답하지 않게 하는 데 쓴다.
+# The prototype of a borch.ts tensor. **The only place a name can be asked about
+# without an instance**, so it is taken once here — used to stop `__getattr__`
+# from answering any name at all.
 _PROTO = _ts.Tensor.prototype
 
-# 두 언어에서 철자가 아예 다른 것들. 규칙으로 안 되는 것만 적는다.
+# The ones spelled differently in the two languages. Only what the rule cannot
+# reach is written out.
 _RENAME = {
-    # **`linalg.lu_solve` 는 인수가 받는다.** borch.ts 의 `luSolve` 는 torch 의
-    # `Tensor.lu_solve` 라 오른쪽 변이 받으므로, 그냥 camel 로 넘기면 수신자가
-    # 뒤바뀐다 — 이름도 인자 개수도 맞아서 값만 틀린다. 인수가 받는 쪽은
-    # `luSolveFactored` 로 따로 있다.
+    # **`linalg.lu_solve` is received by the factorisation.** borch.ts's
+    # `luSolve` is torch's `Tensor.lu_solve`, received by the right-hand side, so
+    # forwarding it through plain camel case swaps the receiver — the name and
+    # the argument count both match and only the values are wrong. The version
+    # the factorisation receives is separate, as `luSolveFactored`.
     "lu_solve": "luSolveFactored",
     "adaptive_avg_pool2d": "adaptiveAvgPool",
     "adaptive_avg_pool1d": "adaptiveAvgPool",
@@ -48,13 +54,14 @@ _RENAME = {
     "negative": "neg",
     "swapdims": "transpose",
     "interpolate": "upsample",
-    # 연산 표의 이름이 파이썬과 같은 것들. `camel` 을 씌우면 오히려 없는 이름이 된다.
+    # Ones whose name in the operation table already matches Python's. Putting
+    # `camel` over them produces a name that does not exist.
     "logical_not": "logical_not",
     "logical_and": "logical_and",
     "logical_or": "logical_or",
     "logical_xor": "logical_xor",
-    # 비트 연산도 표의 이름이 파이썬과 같다. `camel` 을 씌우면 `bitwiseAnd` 라는
-    # 없는 이름이 된다.
+    # The bitwise ones match the table's names too. Camel case would produce
+    # `bitwiseAnd`, which does not exist.
     "bitwise_and": "bitwise_and",
     "bitwise_or": "bitwise_or",
     "bitwise_xor": "bitwise_xor",
@@ -63,24 +70,28 @@ _RENAME = {
     "bitwise_right_shift": "bitwise_right_shift",
     "matmul": "mm",
     "var": "variance",
-    # **`fill` 은 여기 없다.** 별칭은 밑줄을 뗀 뒤에 찾으므로 여기 적으면 `fill_` 까지
-    # 따라와 `fillWith_` 라는 없는 이름이 된다 — `fill_` 은 제자리라 다른 문이다.
+    # **`fill` is not here.** Aliases are looked up after the underscore is
+    # stripped, so listing it would carry `fill_` along into `fillWith_`, which
+    # does not exist — `fill_` is in place and goes through a different door.
     "arctan2": "atan2",
 }
 
-# **이름 붙은 인자를 자리로 바꾼다.**
+# **Keyword arguments become positions.**
 #
-# torch 코드는 `clamp(x, min=-0.5, max=0.5)` 처럼 이름으로 부르는 자리가 많은데,
-# JS 에는 그런 것이 없다. 처음에 `**kw` 를 그냥 버렸더니 `clamp(x, undefined,
-# undefined)` 가 셰이더로 내려가 WGSL 이 파싱에서 멈췄다 — 실패 72 건이 그것이었다.
+# torch code calls by name in many places — `clamp(x, min=-0.5, max=0.5)` — and
+# JavaScript has no such thing. Discarding `**kw` at first sent
+# `clamp(x, undefined, undefined)` down into a shader and WGSL stopped at
+# parsing: that was 72 failures.
 #
-# 그래서 자리 이름을 적어 둔다. borch.ts 쪽 **인자 순서**이고, torch 의 이름을 그
-# 자리에 놓는다. 여기 없는 함수는 이름 붙은 인자를 안 받는다는 뜻이다.
+# So the slot names are written down. The **argument order** is borch.ts's, with
+# torch's names placed into those slots. A function absent from here is one that
+# takes no keyword arguments.
 _SIGNATURE = {
     "clamp": ("min", "max"),
     "clip": ("min", "max"),
-    # **`dtype` 이 셋째 자리다.** torch 의 서명 그대로다 — 넣기 전에 형을 바꾸라는
-    # 뜻이고, 그 순서가 값을 바꾼다(실수를 정수로 접을 때).
+    # **`dtype` is the third slot**, exactly as in torch's signature — it means
+    # convert before reducing, and that order changes the values when floats are
+    # folded into integers.
     "sum": ("dim", "keepdim", "dtype"),
     "mean": ("dim", "keepdim", "dtype"),
     "prod": ("dim", "keepdim", "dtype"),
@@ -107,7 +118,7 @@ _SIGNATURE = {
     "squeeze": ("dim",),
     "unsqueeze": ("dim",),
     "flatten": ("start_dim", "end_dim"),
-    # 활성함수의 인자. `F.celu(x, alpha=0.5)` 처럼 이름으로 부르는 자리가 많다.
+    # Activation arguments. Many places call by name — `F.celu(x, alpha=0.5)`.
     "celu": ("alpha",),
     "hardshrink": ("lambd",),
     "softshrink": ("lambd",),
@@ -115,18 +126,19 @@ _SIGNATURE = {
     "softplus": ("beta", "threshold"),
     "softmin": ("dim",),
     "glu": ("dim",),
-    # 분해의 갈래. **버리면 예외가 아니라 조용히 다른 답이 나온다** —
-    # `qr(mode="complete")` 가 축소본을, `svd(full_matrices=False)` 가 완전본을 낸다.
+    # The branches of a factorisation. **Discarded, the result is not an
+    # exception but quietly a different answer** — `qr(mode="complete")` produces
+    # the reduced form and `svd(full_matrices=False)` produces the full one.
     "qr": ("mode",),
     "svd": ("full_matrices",),
-    # 조합층의 이름 붙은 인자들.
+    # Keyword arguments of the composite layers.
     "vector_norm": ("ord", "dim"),
     "matrix_norm": ("ord",),
     "vander": ("N",),
     "vecdot": ("other", "dim"),
     "eigvalsh": ("UPLO",),
     "solve_triangular": ("b", "upper", "left", "unitriangular"),
-    # 정규화·전치 합성곱. borch.ts 쪽 인자 순서다.
+    # Normalisation and transposed convolution. borch.ts's argument order.
     "group_norm": ("num_groups", "eps"),
     "instance_norm": ("eps",),
     "dropout": ("p", "training"),
@@ -138,8 +150,9 @@ _SIGNATURE = {
     "roll": ("shifts", "dims"),
     "norm": ("p", "dim", "keepdim"),
     "diff": ("n", "dim", "prepend", "append"),
-    # 이름이 갈리는 자리 — 파이썬은 `rounding_mode`, JS 는 `roundingMode` 다.
-    # `_SIGNATURE` 는 **torch 의 이름**을 적고 자리는 borch.ts 의 것을 따른다.
+    # Where the names diverge — Python has `rounding_mode` and JavaScript has
+    # `roundingMode`. `_SIGNATURE` writes **torch's name** and follows borch.ts's
+    # positions.
     "div": ("other", "rounding_mode"),
     "dist": ("other", "p"),
     "bincount": ("weights", "minlength"),
@@ -173,8 +186,9 @@ _SIGNATURE = {
     "layer_norm": ("dim", "eps"),
     "leaky_relu": ("negative_slope",),
     "one_hot": ("num_classes",),
-    # **손실은 전부 `reduction` 을 받는다.** 흔한 넷이 오래 안 받고 있었다 —
-    # 드문 손실 열셋은 처음부터 받았는데, 튜토리얼이 기본값만 쓰니 아무도 안 물었다.
+    # **Every loss takes `reduction`.** The four common ones did not for a long
+    # time, while the thirteen rare ones did from the start — the tutorials use
+    # the default, so nobody asked.
     "smooth_l1_loss": ("target", "beta", "reduction"),
     "l1_loss": ("target", "reduction"),
     "mse_loss": ("target", "reduction"),
@@ -187,8 +201,9 @@ _SIGNATURE = {
     "max": ("dim", "keepdim"),
     "min": ("dim", "keepdim"),
     "aminmax": ("dim",),
-    # 참거짓 축약과 개수 세기. **오래 축 자체가 없었다** — 인자를 주면 조용히
-    # 버려지고 전체 축약이 나왔다.
+    # Boolean reductions and counting. **The dimension itself was missing for a
+    # long time** — passing one had it quietly discarded and the whole tensor
+    # reduced.
     "all": ("dim", "keepdim"),
     "any": ("dim", "keepdim"),
     "count_nonzero": ("dim",),
@@ -206,7 +221,8 @@ _SIGNATURE = {
     "sub_": ("other", "alpha"),
     "add": ("other", "alpha"),
     "sub": ("other", "alpha"),
-    # 모양·색인. borch.ts 쪽 인자 순서이고, torch 의 이름을 그 자리에 놓는다.
+    # Shape and indexing. borch.ts's argument order, with torch's names placed
+    # into those slots.
     "as_strided": ("size", "stride", "storage_offset"),
     "as_strided_": ("size", "stride", "storage_offset"),
     "as_strided_scatter": ("src", "size", "stride", "storage_offset"),
@@ -225,8 +241,8 @@ _SIGNATURE = {
     "scatter_reduce": ("dim", "index", "src", "reduce", "include_self"),
     "put": ("index", "source", "accumulate"),
     "renorm": ("p", "dim", "maxnorm"),
-    # addmm 계열. torch 에서 `beta`·`alpha`·`value` 는 **이름으로만** 받는 자리라
-    # (`*` 뒤에 있다) 케이스가 늘 이름으로 부른다.
+    # The addmm family. In torch `beta`, `alpha` and `value` are **keyword-only**
+    # (they sit after the `*`), so the cases always call them by name.
     "addmm": ("mat1", "mat2", "beta", "alpha"),
     "addmm_": ("mat1", "mat2", "beta", "alpha"),
     "addbmm": ("batch1", "batch2", "beta", "alpha"),
@@ -241,7 +257,7 @@ _SIGNATURE = {
     "addcmul_": ("tensor1", "tensor2", "value"),
     "addcdiv": ("tensor1", "tensor2", "value"),
     "addcdiv_": ("tensor1", "tensor2", "value"),
-    # 최상위 선형대수. borch.ts 쪽 인자 순서다.
+    # Top-level linear algebra. borch.ts's argument order.
     "cholesky_solve": ("input2", "upper"),
     "cholesky_inverse": ("upper",),
     "triangular_solve": ("A", "upper", "transpose", "unitriangular"),
@@ -250,7 +266,7 @@ _SIGNATURE = {
     "lobpcg": ("k", "largest"),
     "svd_lowrank": ("q", "niter", "M"),
     "pca_lowrank": ("q", "center", "niter"),
-    # 통계. borch.ts 쪽 인자 순서다.
+    # Statistics. borch.ts's argument order.
     "histc": ("bins", "min", "max"),
     "histogram": ("bins", "range", "weight", "density"),
     "histogramdd": ("bins",),
@@ -260,25 +276,30 @@ _SIGNATURE = {
     "nonzero_static": ("size", "fill_value"),
 }
 
-# **목록을 통째로 받는 자리들.** `permute([0,2,1])` 은 JS 쪽이 배열 하나를 받는데,
-# 파이썬은 `permute(0, 2, 1)` 로도 부른다. 흩어진 인자를 하나로 모아야 한다 —
-# 안 모으면 `order.map is not a function` 이 난다.
+# **Places that take a whole list.** `permute([0,2,1])` reaches JavaScript as a
+# single array, while Python also calls it as `permute(0, 2, 1)`. The scattered
+# arguments have to be gathered — ungathered, it raises
+# `order.map is not a function`.
 _GATHERS = frozenset(("permute", "reshape", "view", "broadcast_to"))
 
-# **가변 인자로 받는 것들.** borch.ts 가 `expand(...sizes)` 라 배열이 아니라 흩어진
-# 수를 원한다 — `_GATHERS` 와 정확히 반대다. 파이썬은 둘 다로 부르므로 여기서 편다.
+# **Ones that take variadic arguments.** borch.ts writes `expand(...sizes)` and
+# wants scattered numbers rather than an array — exactly the opposite of
+# `_GATHERS`. Python calls it both ways, so it is unrolled here.
 _SPREADS = frozenset(("expand", "tile", "repeat"))
 
 
 def camel(name):
-    """`masked_select` → `maskedSelect`. 밑줄 뒤 첫 글자를 올린다.
+    """`masked_select` becomes `maskedSelect`. The letter after an underscore is
+    raised.
 
-    **끝의 밑줄은 살린다.** `zero_` 는 제자리 연산이라는 뜻이고 borch.ts 도 같은
-    이름을 쓴다 — 그냥 나누면 `zero` 가 되어 없는 이름이 된다.
+    **A trailing underscore survives.** `zero_` means an in-place operation and
+    borch.ts uses the same name — split naively it becomes `zero`, which does not
+    exist.
 
-    **별칭은 밑줄을 뗀 뒤에 찾는다.** `absolute` 는 표에 있는데 `absolute_` 는 없어서
-    별칭이 안 걸리고 `absolute_` 가 그대로 나갔다 — borch.ts 에는 `abs_` 만 있으므로
-    없는 이름이 된다. 제자리 판은 별칭도 같이 따라가야 한다.
+    **Aliases are looked up after the underscore is stripped.** `absolute` is in
+    the table and `absolute_` is not, so the alias did not fire and `absolute_`
+    went across unchanged — borch.ts has only `abs_`, so that name does not
+    exist. An in-place version has to follow its alias too.
     """
     tail = "_" if name.endswith("_") and not name.endswith("__") else ""
     bare = name[:-1] if tail else name
@@ -288,24 +309,28 @@ def camel(name):
     return head + "".join(p[:1].upper() + p[1:] for p in rest) + tail
 
 
-# borch.ts 쪽이 인자를 **선언조차 안 한** 이름들. 한 번 물어보고 기억한다.
+# Names whose borch.ts side **does not even declare** an argument. Asked once
+# and remembered.
 _NULLARY = {}
 
 
 def refuse_if_nullary(js_name, fn, count):
-    """넘기는 인자를 저쪽이 **안 받으면 멈춘다.**
+    """**Stop when the other side does not accept an argument being passed.**
 
-    이 결속의 구조적 구멍이었다. JS 는 남는 인자를 조용히 버리므로, borch.ts 의
-    `sum()` 에 `sum(dim=1)` 을 넘기면 **축을 무시한 전체 합이 값으로 나온다.**
-    예외도 경고도 없다.
+    This was a structural hole in the binding. JavaScript discards surplus
+    arguments silently, so handing `sum(dim=1)` to borch.ts's `sum()` produces
+    **a full sum that ignores the dimension, as a value.** No exception and no
+    warning.
 
-    골든도 못 봤다. `grad::sum(dim)` 케이스가 있었지만 그것은 결과를 스칼라로 접고
-    기울기만 봤는데, `sum(dim=1).sum()` 과 `sum().sum()` 의 기울기가 **둘 다 전부
-    1** 이라 축을 틀려도 답이 같았다. 이름만 케이스였다.
+    The golden could not see it either. There was a `grad::sum(dim)` case, but it
+    folded the result to a scalar and looked only at the gradient — and the
+    gradients of `sum(dim=1).sum()` and `sum().sum()` are **both all ones**, so
+    the wrong dimension gave the same answer. It was a case in name only.
 
-    그래서 이름 하나를 고치는 대신 부류를 막는다. 인자 목록이 비었다고 **소스에
-    적혀 있는** 것만 걸린다 — 기본값이 있는 것은(`softmax(dim = -1)`) 목록에
-    이름이 남으므로 여기 안 걸린다. 재보니 이 표에서 걸리는 것은 넷이었다.
+    So rather than fix one name, the class is blocked. Only what **the source
+    itself says** has an empty argument list is caught — anything with a default
+    (`softmax(dim = -1)`) keeps the name in the list and does not appear here.
+    Measured, four of this table were caught.
     """
     if not count:
         return
@@ -323,27 +348,31 @@ def refuse_if_nullary(js_name, fn, count):
 
 
 def _arg(a):
-    """텐서면 손잡이로, 목록이면 JS 배열로, 나머지는 그대로."""
+    """A tensor becomes its handle, a list becomes a JS array, the rest goes
+    through unchanged."""
     if isinstance(a, Tensor):
         return a._h
     if isinstance(a, (list, tuple)):
         return _js_list(a)
-    # **형 이름은 벗겨서 넘긴다.** `_DType` 은 `str` 을 물려받는데 그 `str()` 이
-    # `torch.float32` 라, 그대로 넘기면 borch.ts 가 모르는 이름을 받는다 —
-    # 저쪽은 `"float32"` 만 안다. 축약에 `dtype=` 이 붙으면서 처음 지나는 길이다.
+    # **A dtype name is unwrapped before crossing.** `_DType` subclasses `str`
+    # and that `str()` is `torch.float32`, so passing it through hands borch.ts a
+    # name it does not know — over there only `"float32"` exists. This path was
+    # first taken when reductions gained `dtype=`.
     if isinstance(a, _DType):
         return a.plain
     return a
 
 
 def positional(name, args, kw):
-    """이름 붙은 인자를 **자리로 편다.**
+    """**Unroll keyword arguments into positions.**
 
-    JS 에는 이름 붙은 인자가 없다. 버리면 `undefined` 가 셰이더까지 내려가고, WGSL 은
-    그것을 파싱에서 거절한다 — 조용히 틀리지는 않지만 원인이 한참 멀리서 나온다.
+    JavaScript has no keyword arguments. Discarded, an `undefined` travels down
+    into a shader and WGSL refuses it at parsing — not quietly wrong, but the
+    cause surfaces a long way away.
 
-    뒤에 붙는 `undefined` 는 잘라낸다. borch.ts 의 기본값(`stride = kernel`)이
-    살아나야 하는데, `undefined` 를 명시로 넘기면 그 자리가 안 채워진다.
+    Trailing `undefined`s are trimmed. borch.ts's defaults (`stride = kernel`)
+    have to survive, and passing `undefined` explicitly leaves that slot
+    unfilled.
     """
     if not kw:
         out = list(args)
@@ -361,17 +390,20 @@ def positional(name, args, kw):
                 out[i] = kw[key]
     while out and out[-1] is None:
         out.pop()
-    # 흩어진 축 번호를 배열 하나로 모은다. `permute(0, 2, 1)` → `permute([0,2,1])`.
+    # Gather scattered dimension numbers into one array:
+    # `permute(0, 2, 1)` becomes `permute([0,2,1])`.
     if name in _GATHERS and all(isinstance(a, int) for a in out):
         out = [list(out)]
-    # 반대로, 배열 하나로 온 것을 흩뿌린다. `expand([2,3])` → `expand(2, 3)`.
+    # And the reverse — scatter what arrived as one array:
+    # `expand([2,3])` becomes `expand(2, 3)`.
     elif name in _SPREADS and len(out) == 1 and isinstance(out[0], (list, tuple)):
         out = list(out[0])
     return [_arg(a) for a in out]
 
 
-# borch.ts 에서 **이항 표에만 있는 것들.** 메서드로는 안 달려 있고
-# `x.binary("maximum", y)` 로 부른다 — 표에서 자동으로 메서드가 되는 것은 단항뿐이다.
+# Ones that live **only in borch.ts's binary table.** They are not attached as
+# methods and are called as `x.binary("maximum", y)` — only the unary table
+# becomes methods automatically.
 _BINARY_ONLY = frozenset((
     "maximum", "minimum", "atan2", "hypot", "copysign", "logaddexp",
     "logaddexp2", "xlogy", "heaviside", "ldexp", "pow",
@@ -383,8 +415,9 @@ _BINARY_ONLY = frozenset((
 ))
 
 
-# 이름은 두되 **쓰려 하면 멈추는** 형들. 코어와 같은 표이고 같은 까닭이다 —
-# 이름이 없으면 `dtype=torch.half` 가 오타와 같은 문구로 멈춘다.
+# dtypes that keep a name and **stop when used.** The core's table and the
+# core's reason — without the name, `dtype=torch.half` stops with the wording a
+# typo produces.
 _ABSENT_DTYPE_NAMES = {
     "double": ("float64", "float32"), "float64": ("float64", "float32"),
     "int": ("int32", "int64"), "int32": ("int32", "int64"),
@@ -396,12 +429,14 @@ _ABSENT_DTYPE_NAMES = {
 
 
 def __getattr__(name):
-    """모듈에 없는 이름은 **첫 인자의 메서드**로 넘긴다.
+    """A name the module does not have is forwarded to **the first argument's
+    method.**
 
-    `torch.exp(x)` 와 `x.exp()` 가 같은 것이라는 torch 의 규칙을 그대로 쓴다.
+    torch's own rule that `torch.exp(x)` and `x.exp()` are the same thing.
 
-    **`out=` 도 여기서 붙인다.** 손으로 쓴 이름만 감쌌더니 `exp`·`matmul` 처럼 이
-    문으로 나오는 것들이 빠졌다 — 이름이 두 곳에서 나오면 한 곳만 고쳐진다.
+    **`out=` is attached here too.** Wrapping only the hand-written names left
+    out everything coming through this door — `exp`, `matmul` and the rest. A
+    name produced in two places gets fixed in one.
     """
     got = _resolve_name(name)
     if callable(got) and not name.startswith("_"):
@@ -418,33 +453,41 @@ def __getattr__(name):
 def _resolve_name(name):
     if name.startswith("_"):
         raise AttributeError(name)
-    # dtype 이름들. `bool` 을 모듈 전역에 두면 파이썬 내장을 가리므로 여기서 준다.
+    # The dtype names. Putting `bool` in the module globals shadows the Python
+    # builtin, so it is served from here.
     if name in ("bool", "float32", "int64"):
         from ._base import _DType
         return _DType(name)
-    # **형 별칭은 형이지 함수가 아니다.** 이 셋은 Tensor 의 메서드이기도 해서 아래로
-    # 흘리면 `x.float()` 로 넘기는 함수가 나왔고, `dtype=torch.float` 이 그 함수를
-    # 받아 엉뚱한 자리에서 멈췄다. 코어가 같은 자리를 같은 이유로 겪었다.
+    # **A dtype alias is a dtype, not a function.** These three are also Tensor
+    # methods, so letting them fall through produced a function forwarding to
+    # `x.float()`, and `dtype=torch.float` received that function and stopped
+    # somewhere unrelated. The core met the same place for the same reason.
     #
-    # 셋 중 하나만 진짜 형이다. `torch.double` 은 float64 이고 WebGPU 셰이더에 배정도가
-    # 없다. `torch.int` 는 **int32** 이고(long 이 int64다) 정수 칸을 int64 하나로 모았다.
-    # 이름은 두되 쓰려 할 때 멈춘다 — 없는 것과 오타는 다른 말이어야 한다.
+    # Only one of the three is a real dtype here. `torch.double` is float64 and
+    # WebGPU shaders have no double precision. `torch.int` is **int32** (long is
+    # int64) and the integer slots were gathered into int64 alone. The names stay
+    # and stop when used — "absent" and "misspelled" have to say different
+    # things.
     if name == "float":
         from ._base import _DType
         return _DType("float32")
     if name in _ABSENT_DTYPE_NAMES:
         from borch._base import _AbsentDtype
         return _AbsentDtype(*_ABSENT_DTYPE_NAMES[name])
-    # `max`·`min` 도 같은 이유로 여기서 준다 — 위에 적은 그대로다.
+    # `max` and `min` are served from here for the same reason, exactly as
+    # written above.
     if name in _EXTREME:
         return _EXTREME[name]
-    # 비교의 다른 이름들 — 표에 있는 이름으로 넘긴다.
+    # The other spellings of the comparisons — forwarded under the table's
+    # name.
     if name in _COMPARE_ALIAS:
         return __getattr__(_COMPARE_ALIAS[name])
-    # **제자리 판은 파이썬 텐서의 문을 지나야 한다.** 여기서 곧장 JS 손잡이로 가면
-    # 두 가지가 어긋난다 — borch.ts 에 제자리 판이 없는 이름(`gcd_`·`clampMax_`)에서
-    # 멈추고, 있는 이름도 **새 파이썬 텐서**를 돌려줘서 `torch.detach_(y) is y` 가
-    # 거짓이 된다. 그 두 일을 하는 곳이 `Tensor.__getattr__` 이므로 그리로 넘긴다.
+    # **An in-place version has to go through the Python tensor's door.** Going
+    # straight to the JS handle from here breaks two things: it stops on names
+    # borch.ts has no in-place version of (`gcd_`, `clampMax_`), and even for the
+    # ones it has it returns **a new Python tensor**, making
+    # `torch.detach_(y) is y` false. `Tensor.__getattr__` is where both of those
+    # are handled, so it is forwarded there.
     if name.endswith("_") and not name.endswith("__"):
         def call(x, *args, **kw):
             return getattr(wrap(x), name)(*args, **kw)
@@ -459,17 +502,20 @@ def _resolve_name(name):
         call.__name__ = name
         return call
 
-    # **여기서 미리 묻는다 — 부를 때가 아니라.** 안 물으면 `__getattr__` 이 아무
-    # 이름에나 함수를 내주고, 그러면 `hasattr(torch, "compile")` 이 **늘 참**이다.
-    # 기능을 있는지 보고 갈라 쓰는 코드(`if hasattr(torch, "compile"): …`)가 없는
-    # 쪽으로 들어가서, 오류는 한참 뒤 부르는 자리에서 난다. 프로토타입에 물을 수
-    # 있는 이유는 borch.ts 가 표에서 다는 단항까지 전부
-    # `Object.defineProperty(Tensor.prototype, …)` 로 얹기 때문이다.
+    # **Asked here, not when it is called.** Unasked, `__getattr__` hands out a
+    # function for any name at all, and then `hasattr(torch, "compile")` is
+    # **always true.** Code branching on a feature's existence
+    # (`if hasattr(torch, "compile"): …`) takes the wrong branch and the error
+    # arrives much later at the call. The prototype can be asked because borch.ts
+    # attaches everything, down to the unary names from the table, through
+    # `Object.defineProperty(Tensor.prototype, …)`.
     if getattr(_PROTO, js_name, None) is None:
-        # **묻는 것과 말하는 것이 같아야 한다.** 여기서 본 것은 `Tensor.prototype`
-        # 이지 borch.ts 전체가 아니다. 모듈 함수로 있는 이름에 대고 "borch.ts 에
-        # 없다" 고 말하면 그것은 거짓이고, 찾는 사람을 없는 것을 찾으러 보낸다.
-        # `keep_alive` 가 정확히 그렇게 걸렸다 — borch.ts 에 있는데 없다고 했다.
+        # **What is asked and what is said have to match.** What was looked at
+        # here is `Tensor.prototype`, not all of borch.ts. Saying "borch.ts does
+        # not have it" about a name that exists as a module function is false,
+        # and it sends whoever is looking off after something that is not there.
+        # `keep_alive` was caught exactly that way — present in borch.ts and
+        # reported absent.
         if getattr(_ts, js_name, None) is not None:
             raise AttributeError(
                 f"`{js_name}` is in borch.ts as a **module function**, not a method on "
@@ -491,16 +537,18 @@ def _resolve_name(name):
     return call
 
 
-# ── 첫 인자가 텐서가 아닌 것들. 여기만 손으로 적는다. ────────────────────
+# ── ones whose first argument is not a tensor. Only these are written out. ──
 
 def arange(*args, **kw):
     """`arange(n)` · `arange(a, b)` · `arange(a, b, step)`.
 
-    한동안 **borch.ts 의 `arange` 가 개수 하나만 받았다.** 셋을 넘겼더니 첫 인자 0 이
-    개수로 읽혀 빈 텐서가 나왔고, 그 빈 텐서를 `reshape` 하는 자리에서 90 건이
-    무너졌다 — 실패 문구는 `shape '[3,3]' is invalid for input of size 0` 이었고,
-    원인에서 두 칸 떨어진 자리다. 그 동안 나머지 두 꼴을 여기서 **곱하고 더해서**
-    만들었는데, 그것은 반올림이 다르게 쌓이는 다른 계산이다. 이제 저쪽이 셋을 받는다.
+    For a while **borch.ts's `arange` took a count only.** Passing three had the
+    first argument, 0, read as the count and produced an empty tensor, and 90
+    cases collapsed where that empty tensor met a `reshape` — the failure read
+    `shape '[3,3]' is invalid for input of size 0`, two steps from the cause.
+    During that time the other two forms were built here **by multiplying and
+    adding**, which is a different computation whose rounding accumulates
+    differently. The other side takes all three now.
     """
     _no_out(kw)
     if len(args) == 1:
@@ -513,23 +561,25 @@ def arange(*args, **kw):
 
 
 def _shape_of(shape):
-    """`zeros(2, 3)` 와 `zeros([2, 3])` 을 둘 다 받는다 — torch 가 그렇다."""
+    """Takes both `zeros(2, 3)` and `zeros([2, 3])` — as torch does."""
     if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
         return _js_list(shape[0])
     return _js_list(shape)
 
 
 def _dtype_to_make(dt):
-    """공장 함수가 받은 형에서 **borch.ts 가 아는 이름**을 꺼낸다.
+    """Take **the name borch.ts knows** out of the dtype a factory received.
 
-    `_DType` 은 문자열을 물려받았지만 `str()` 이 `torch.` 를 붙이므로 그대로 쓰면
-    안 된다 — 속 이름은 `plain` 이다. 이름만 있고 칸은 없는 형(코어의
-    `_AbsentDtype`)은 **여기서 제 문구로 멈춘다.** `.np` 를 읽는 것이 그 문이다.
+    `_DType` subclasses a string, but its `str()` prefixes `torch.`, so it cannot
+    be used as-is — the inner name is `plain`. A dtype that has a name and no
+    storage (the core's `_AbsentDtype`) **stops here with its own wording**, and
+    reading `.np` is that door.
 
-    **이름이 `_dtype_name` 이면 안 된다.** 이 파일에 그 이름이 이미 있고(승격표가
-    쓴다), 그쪽은 이름만 꺼내는 자리라 멈추면 안 된다. 처음에 같은 이름으로 썼더니
-    파이썬이 뒤의 정의를 택해 **조용히 다른 함수가 불렸다** — 오류도 경고도 없이
-    `dtype=torch.int` 가 통과했다.
+    **It must not be named `_dtype_name`.** That name already exists in this
+    file (the promotion table uses it), and that one only extracts a name and
+    must not stop. Written under the same name at first, Python took the later
+    definition and **a different function was quietly called** — with no error
+    and no warning, `dtype=torch.int` went through.
     """
     from ._base import _DType
 
@@ -542,10 +592,12 @@ def _dtype_to_make(dt):
 
 
 def _kept(t, kw):
-    """**이미 만들어진 우리 텐서**에 `dtype=`·`requires_grad=` 를 건다.
+    """Apply `dtype=` and `requires_grad=` to **a tensor of ours that already
+    exists.**
 
-    `_made` 와 규칙이 같고 받는 것만 다르다 — 저쪽은 JS 손잡이, 이쪽은 우리 텐서다.
-    규칙을 두 벌 쓰지 않으려고 판정은 여기 한 줄로 모은다.
+    The same rules as `_made` and a different input — that one takes a JS handle
+    and this one takes our tensor. The decision is gathered into one line here so
+    the rules are not written twice.
     """
     dt = kw.get("dtype")
     if dt is not None:
@@ -556,15 +608,17 @@ def _kept(t, kw):
 
 
 def _made(out, kw):
-    """공장 함수가 받은 `dtype=`·`requires_grad=` 를 **실제로 적용한다.**
+    """**Actually apply** the `dtype=` and `requires_grad=` a factory received.
 
-    **여기 오기 전까지 그 둘은 `**kw` 로 조용히 버려지고 있었다.**
-    `zeros(2, dtype=torch.int64)` 가 float32 를 냈다 — 값은 0 이라 맞고 형만 틀리니
-    값 대조로는 안 걸린다. 골든에 `zeros(..., dtype=)` 꼴이 하나도 없어서 아무도
-    안 물었다. 형 별칭을 케이스로 못 박다가 드러났다.
+    **Until this existed, both were quietly discarded into `**kw`.**
+    `zeros(2, dtype=torch.int64)` produced float32 — the values are zero and
+    therefore right, only the dtype is wrong, so comparing values does not catch
+    it. The golden had no `zeros(..., dtype=)` case at all, so nobody asked. It
+    surfaced while pinning the dtype aliases as cases.
 
-    **한 자리에 모으는 것이 요점이다.** `zeros`·`ones`·`full`·`eye`·`linspace` 가
-    같은 결함을 각자 갖고 있었고, 다섯 벌로 두면 다음에도 한쪽만 고쳐진다.
+    **Gathering it into one place is the point.** `zeros`, `ones`, `full`, `eye`
+    and `linspace` each carried the same defect, and left as five copies the next
+    fix reaches one of them.
     """
     t = wrap(out)
     dt = kw.get("dtype")
@@ -604,51 +658,58 @@ def stack(parts, dim=0):
 
 
 class scope:                                             # noqa: N801
-    """`with L.scope():` — 이 안에서 만든 GPU 버퍼를 나갈 때 놓는다.
+    """`with L.scope():` — GPU buffers made inside are released on the way out.
 
-    **학습 루프에 이것이 없으면 안 돈다.** 한 스텝이 중간 버퍼를 수천 개 만들고,
-    파이썬·자바스크립트 어느 쪽 쓰레기 수집도 GPU 메모리를 제때 안 놓아준다.
-    자매도 같은 이유로 같은 이름을 노출한다.
+    **A training loop does not run without it.** One step makes thousands of
+    intermediate buffers, and neither Python's nor JavaScript's garbage
+    collection releases GPU memory in time. The sister library exposes the same
+    name for the same reason.
 
-    ## 결과를 들고 나오려면 `keep()`
+    ## To carry a result out, use `keep()`
 
         with torch.scope() as s:
             loss = s.keep(criterion(model(x), y))
-        print(loss.item())          # 구역 밖에서도 산다
+        print(loss.item())          # alive outside the scope
 
-    **`keep()` 없이 만든 텐서는 블록을 나가는 순간 죽는다.** 쓰면 멈추고, 그게
-    맞다 — 안 그러면 다음 할당이 덮어쓴 값을 조용히 읽는다.
+    **A tensor made without `keep()` dies the moment the block ends.** Using it
+    stops, and that is right — otherwise it quietly reads whatever the next
+    allocation wrote over it.
 
-    이것이 없어서 파이썬 쪽에서는 **구역에서 아무것도 못 들고 나왔다**(실측).
-    자매에는 `scope(body, () => [t])` 와 `keepAlive(t)` 가 둘 다 있었는데 이 결속에는
-    어느 쪽도 없었고, 그래서 `with` 를 쓰는 순간 학습 루프의 손실값조차 못 읽었다.
+    Without this, Python **could carry nothing out of a scope** (measured). The
+    sister library had both `scope(body, () => [t])` and `keepAlive(t)`; this
+    binding had neither, so using `with` made even a training loop's loss
+    unreadable.
     """
 
     def __enter__(self):
-        # **구역마다 새로 만든다.** 하나를 재사용하면 중첩된 안쪽 구역이 바깥의
-        # 목록에 얹혀서, 바깥이 닫힐 때 이미 죽은 버퍼를 넘기려 든다.
+        # **A fresh one per scope.** Reusing a single list puts a nested inner
+        # scope's entries on the outer one's, and closing the outer scope tries
+        # to hand over buffers that are already dead.
         self._kept = []
         _ts.device().beginScope()
         return self
 
     def keep(self, t):
-        """이 구역을 벗어나 **바깥 구역으로 넘긴다.** 준 것을 그대로 돌려준다.
+        """Leave this scope and **pass into the enclosing one.** Hands back what
+        it was given.
 
-        `keep_alive()` 와 다르다. 이쪽은 바깥 구역이 닫힐 때 놓이고, 저쪽은 어떤
-        구역도 안 놓는다. 중간값에 `keep_alive()` 를 쓰면 스텝마다 쌓인다.
+        Different from `keep_alive()`. This one is released when the enclosing
+        scope closes; that one is released by no scope at all. Using
+        `keep_alive()` on an intermediate value accumulates it every step.
         """
         if not isinstance(t, Tensor):
             raise TypeError(
                 f"scope.keep takes a tensor — got {type(t).__name__}")
-        # 호스트에 있는 것은 살릴 것이 없다. 구역은 GPU 버퍼만 놓고, 그쪽 값은
-        # 파이썬이 알아서 가져간다 — `raw` 는 CPU 텐서에서 그냥 던진다.
+        # Nothing on the host needs keeping. A scope releases GPU buffers only,
+        # and Python collects those values on its own — `raw` simply throws on a
+        # CPU tensor.
         if str(handle(t).device) != "cpu":
             self._kept.append(t)
         return t
 
     def __exit__(self, *exc):
-        # `to_js` 로 진짜 JS 배열을 만든다. 프록시를 그냥 넘기면 저쪽 `new Set(keep)`
-        # 이 우리가 준 것을 못 본 채로 조용히 비어 있는 집합을 만든다.
+        # `to_js` makes a real JS array. Passed as a proxy, `new Set(keep)` over
+        # there quietly builds an empty set without seeing what was given.
         buffers = _to_js([handle(t).raw for t in self._kept])
         self._kept = []
         _ts.device().endScope(buffers)
@@ -656,13 +717,16 @@ class scope:                                             # noqa: N801
 
 
 def keep_alive(t):
-    """구역이 닫혀도 **영영** 살려 둔다. 파라미터와 옵티마이저 상태가 이것을 쓴다.
+    """Keep it alive **forever**, whatever scope closes. Parameters and optimiser
+    state use this.
 
-    `scope().keep()` 과 **다른 것**이다. 저쪽은 이번 구역만 벗어나 바깥 구역으로
-    넘어가고 바깥이 닫힐 때 놓인다. 이쪽은 어떤 구역도 안 놓으므로, 중간값에 쓰면
-    스텝마다 쌓여서 학습이 메모리로 무너진다.
+    **A different thing** from `scope().keep()`. That one leaves the current
+    scope for the enclosing one and is released when the enclosing one closes.
+    This one is released by no scope, so using it on an intermediate value
+    accumulates every step until training collapses on memory.
 
-    호스트에 있는 텐서는 그냥 돌려준다 — 구역은 GPU 버퍼만 놓는다.
+    A tensor on the host is handed straight back — a scope releases GPU buffers
+    only.
     """
     if not isinstance(t, Tensor):
         raise TypeError(
@@ -672,83 +736,95 @@ def keep_alive(t):
 
 
 def memory():
-    """지금 잡고 있는 것. **벤치가 누수를 재는 자리다.**
+    """What is held right now. **Where the benchmark measures leaks.**
 
-    자매는 `js.tf.memory()` 를 직접 불렀는데, 그러면 계측이 TF.js 에 묶여서 다른
-    구현으로는 같은 벤치를 못 돌린다. 라이브러리에 물으면 누가 밑에 있든 답한다.
+    The sister library called `js.tf.memory()` directly, which ties the
+    measurement to TF.js and makes the same benchmark unrunnable against another
+    implementation. Asked of the library, it answers whatever is underneath.
     """
     got = _ts.device().memory
     return {"tensors": int(got.tensors), "bytes": int(got.bytes)}
 
 
 def pooled():
-    """놓은 뒤 통에서 다음 쓰임을 기다리는 버퍼. **`memory()` 가 일부러 빼는 그것이다.**
+    """Buffers released and waiting in the pool for their next use. **Exactly
+    what `memory()` leaves out on purpose.**
 
-    두 함수가 **다른 것을 묻는다.** 저쪽은 "새는가" 이고 이쪽은 "얼마나 쥐고
-    있는가" 다. 통에 든 버퍼는 쥐고 있는 것이 맞지만 새는 것은 아니라서, 누수를
-    재는 수에 넣으면 누수가 아닌 것이 누수로 읽힌다.
+    The two functions **ask different questions.** That one asks "is it leaking";
+    this one asks "how much is held". A pooled buffer is held and is not leaking,
+    so counting it as a leak reads something that is not a leak as one.
 
-    그래서 저쪽이 통을 빼는 것은 옳은데, **이쪽이 없어서 아무도 진짜 발자국을 못
-    물었다.** 실측으로 벤치가 배치 셋을 한 판에서 돌 때 `memory()` 는 269.7MB 라고
-    답했고 통에는 1,699.6MB 가 있었다.
+    Leaving the pool out over there is right, and **without this nobody could ask
+    the real footprint.** Measured, with the benchmark running three batch sizes
+    in one session, `memory()` answered 269.7MB while the pool held 1,699.6MB.
     """
     got = _ts.device().pooled
     return {"count": int(got.count), "bytes": int(got.bytes)}
 
 
 def empty_cache():
-    """통을 비우고 돌려준 만큼을 `{"count", "bytes"}` 로 답한다.
+    """Empty the pool and answer with what came back as `{"count", "bytes"}`.
 
-    **`torch.cuda.empty_cache()` 가 아니다.** 그 이름을 안 쓴 이유가 둘이다.
+    **This is not `torch.cuda.empty_cache()`.** Two reasons for not using that
+    name.
 
-    하나는 원칙이다 — 이 라이브러리는 GPU 를 쓰지만 CUDA 가 아니고, `cuda` 이름은
-    `is_available()` 이 거짓을 답하는 자리로 남겨 두었다.
+    One is principle — this library uses a GPU and is not CUDA, and the `cuda`
+    name is kept as the place where `is_available()` answers false.
 
-    다른 하나가 더 실질적이다. 교재 코드는 저 함수를 이렇게 쓴다.
+    The other is more practical. Textbook code uses that function like this.
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    `is_available()` 이 거짓이므로 그 안은 **영영 안 불린다.** 호환을 노린 이름이
-    정작 호환 코드에서 죽은 줄이 되는 것이라, 이름만 맞고 효과가 없다. 여기
-    `backend()`·`cache_get`·`fetch_cached` 처럼 브라우저에만 있는 이름들과 같은 결로 둔다.
+    `is_available()` is false, so the inside is **never called.** A name chosen
+    for compatibility becomes a dead line inside compatibility code — the name
+    matches and has no effect. It is kept in the same grain as `backend()`,
+    `cache_get` and `fetch_cached`, the names that exist only in a browser.
 
-    ## 언제 부르나 — **보통은 부를 일이 없다**
+    ## When to call it — **usually never**
 
-    같은 모양을 되풀이하는 학습에서는 통이 작업 집합에서 멈춘다(실측: 열 스텝 동안
-    49 → 49). 매번 새로 만들면 그것이 곧 비용이므로, 그때 통은 옳은 일을 한다.
+    In training that repeats the same shapes the pool settles at the working set
+    (measured: 49 to 49 over ten steps). Making them fresh each time is the cost,
+    so the pool is doing the right thing there.
 
-    자라는 것은 **모양이 바뀔 때**다. 통이 크기별로 나뉘어 있어서 배치 16 의 버퍼는
-    배치 32 에 못 쓰인다.
+    It grows **when the shapes change.** The pool is split by size, so a batch-16
+    buffer cannot serve batch 32.
 
-        배치를 바꿔 다시 돌릴 때 · 학습(큰 배치) → 평가(작은 배치) 로 넘어갈 때 ·
-        데이터셋을 한 번 크게 올려 두고 작은 모양으로 학습할 때
+        re-running with a different batch size · moving from training (large
+        batches) to evaluation (small ones) · uploading a dataset once, large,
+        and training on small shapes
 
-    브라우저는 GPU 메모리를 탭들이 나눠 쓰는 자리라 그 값이 데스크톱보다 크다.
+    In a browser the tabs share GPU memory, so that matters more than it does on
+    a desktop.
     """
     freed = _ts.device().emptyCache()
     return {"count": int(freed.count), "bytes": int(freed.bytes)}
 
 
-# ── 비용을 재는 자리 셋. `memory()` 와 같은 이유로 여기 있다 ─────────────────
+# ── the three that measure cost. Here for `memory()`'s reason ───────────────
 #
-# **골든은 값만 본다.** 스텝마다 버퍼를 흘려도, 커널을 두 배로 걸어도 값은 맞으므로
-# 표가 전부 초록이다. 그 자리를 묻는 검사(`tests/browser/cost.py`)가 밖에서 이 수를
-# 읽을 수 있어야 하고, 저쪽 손잡이를 직접 파고들게 두면 계측이 borch.ts 의 안쪽
-# 모양에 묶인다 — `memory()` 를 만들 때 배운 것과 같다.
+# **The golden looks only at values.** Leaking a buffer every step, or
+# dispatching twice as many kernels, leaves the values right and the whole table
+# green. The check that asks about that (`tests/browser/cost.py`) has to be able
+# to read these numbers from outside, and letting it dig into the handle over
+# there ties the measurement to borch.ts's internal shape — the lesson from
+# building `memory()`.
 
 def dispatches():
-    """지금까지 건 커널 호출 수. **차이만 뜻이 있다** — 절대값은 세션에 달렸다."""
+    """How many kernel dispatches so far. **Only differences mean anything** —
+    the absolute number depends on the session."""
     return int(_ts.device().dispatches)
 
 
 def submits():
-    """큐에 보낸 횟수. 스텝당 하나가 아니면 중간에 GPU 를 기다리는 자리가 있다."""
+    """How many submissions to the queue. More than one per step means something
+    in the middle is waiting on the GPU."""
     return int(_ts.device().submits)
 
 
 def last_scope():
-    """가장 최근에 닫힌 구역의 셈. **`survived` 가 0 이 아니면 그것이 누수다.**"""
+    """The count from the most recently closed scope. **A non-zero `survived` is
+    the leak.**"""
     got = _ts.device().lastScope
     return {"freed": int(got.freed), "survived": int(got.survived)}
 
@@ -756,8 +832,9 @@ def last_scope():
 class no_grad:                                           # noqa: N801
     """`with L.no_grad():`.
 
-    borch.ts 의 `noGrad` 는 **함수를 받는다**(`noGrad(() => …)`). 파이썬은 `with` 를
-    쓰므로 여기서 모양을 바꾼다 — 안쪽 스위치를 직접 여닫는다.
+    borch.ts's `noGrad` **takes a function** — `noGrad(() => …)`. Python uses
+    `with`, so the shape is changed here by opening and closing the underlying
+    switch directly.
     """
 
     def __enter__(self):
@@ -770,7 +847,8 @@ class no_grad:                                           # noqa: N801
 
 
 class enable_grad:                                       # noqa: N801
-    """`no_grad` 안에서 **다시 켠다.** 중첩이 되어야 하므로 이전 값을 되돌린다."""
+    """**Turn it back on** inside `no_grad`. It has to nest, so the previous
+    value is restored."""
 
     def __enter__(self):
         self._prev = bool(_ts.gradMode.enabled)
@@ -783,7 +861,8 @@ class enable_grad:                                       # noqa: N801
 
 
 class set_grad_enabled:                                  # noqa: N801
-    """켤지 끌지를 값으로 받는다. 부르는 순간 바뀌고, `with` 를 나가면 되돌아온다."""
+    """Takes on or off as a value. It changes at the call and is restored on the
+    way out of the `with`."""
 
     def __init__(self, mode):
         self._prev = bool(_ts.gradMode.enabled)
@@ -802,8 +881,9 @@ def is_grad_enabled():
 
 
 class inference_mode:                                    # noqa: N801
-    """**여기서는 `no_grad` 와 같다.** 진짜 torch 는 안에서 만든 텐서에 표를 붙이는데,
-    그 표를 흉내내면 "왜 이 텐서를 못 쓰나" 하는 오류를 우리가 만들어 내는 셈이다."""
+    """**The same as `no_grad` here.** Real torch marks the tensors made inside,
+    and imitating that mark would mean manufacturing our own "why can I not use
+    this tensor" errors."""
 
     def __init__(self, mode=True):
         self._mode = bool(mode)
@@ -821,7 +901,8 @@ class inference_mode:                                    # noqa: N801
 
 
 def is_inference(t):
-    """**늘 거짓이다** — 그 표를 안 붙이므로 없다고 말하는 것이 사실이다."""
+    """**Always false** — the mark is never attached, so saying it is absent is
+    the fact."""
     return False
 
 
@@ -829,7 +910,7 @@ def is_inference_mode_enabled():
     return False
 
 
-# ── 난수 상태 ───────────────────────────────────────────────────────────────
+# ── random state ────────────────────────────────────────────────────────────
 
 _LAST_SEED = [0]
 
@@ -845,9 +926,10 @@ def seed():
 
 
 def get_rng_state():
-    """**두 생성기의 상태를 함께 담는다.** numpy 쪽은 `randn`·`randperm` 이 쓰고
-    borch.ts 쪽 씨앗은 층 초기화와 dropout 이 쓴다 — 하나만 담으면 되돌려도
-    나머지가 안 돌아간다."""
+    """**Carries the state of both generators.** `randn` and `randperm` use the
+    numpy one, while layer initialisation and dropout use the seed over in
+    borch.ts — carrying one of them means restoring leaves the other where it
+    was."""
     return {"numpy": dict(_rng.bit_generator.state),
             "ts": int(_ts.Tensor.dropoutSeed)}
 
@@ -860,14 +942,14 @@ def set_rng_state(state):
     return None
 
 
-# ── 살펴보기 ────────────────────────────────────────────────────────────────
+# ── introspection ───────────────────────────────────────────────────────────
 
 def is_tensor(x):
     return isinstance(x, Tensor)
 
 
 def is_storage(x):
-    """**늘 거짓이다.** 저장(Storage) 이라는 층을 우리는 안 둔다."""
+    """**Always false.** There is no Storage layer here."""
     return False
 
 
@@ -917,24 +999,25 @@ def promote_types(a, b):
     return _base._DType(best)
 
 
-# 형의 **범주**. `can_cast` 은 이것만 본다 — 정밀도는 자유고 범주가 좁아지는 쪽만
-# 막힌다(실측: `float64 → float32` 는 참이다). 순서표로 짰더니 복소수가 빠져 있어서
-# **복소수끼리도 거짓**이었다. 코어가 같은 자리를 같이 고쳤다.
+# A dtype's **category.** `can_cast` looks at nothing else — precision is free
+# and only narrowing the category is blocked (measured: `float64 → float32` is
+# true). Written as an ordering table, complex was left out and **even complex to
+# complex was false.** The core fixed the same place alongside.
 _CATEGORY_OF = {"bool": 0, "int64": 1, "float32": 2, "float64": 2, "complex64": 3}
 
 
 def can_cast(from_type, to_type):
-    """**범주만 본다** — bool < 정수 < 실수 < 복소수."""
+    """**Category only** — bool < integer < float < complex."""
     a, b = (_CATEGORY_OF.get(_dtype_name(t), 2) for t in (from_type, to_type))
     return a <= b
 
 
 def _out(result, out, name="op"):
-    """torch 의 `out=` 규약. **코어와 같은 규칙이고 같은 문구다.**
+    """torch's `out=` convention. **The core's rules and the core's wording.**
 
-    저쪽은 numpy 배열을 되쓰고 이쪽은 borch.ts 버퍼를 되쓴다. 모양이 다르면 칸 수가
-    달라지므로 `copyFrom` 으로는 안 되고 **손잡이를 갈아 끼운다**(`_set_` 이 같은
-    까닭으로 그렇게 한다).
+    That side writes back into a numpy array and this one into a borch.ts buffer.
+    A different shape means a different element count, so `copyFrom` cannot do it
+    and **the handle is swapped** — `_set_` does the same for the same reason.
     """
     if out is None:
         return result
@@ -970,15 +1053,17 @@ def get_default_dtype():
 
 
 def set_default_dtype(dt):
-    """받되 바꾸지 않는다 — 저장이 float32 하나다. 그 밖은 시끄럽게 거절한다."""
+    """Accepted and not acted on — the storage is float32 throughout. Anything
+    else is refused loudly."""
     if _dtype_name(dt) != "float32":
         raise RuntimeError(f"set_default_dtype({dt}) — the storage is float32 only")
     return None
 
 
 class finfo:
-    """`torch.finfo`. **클래스여야 한다** — 감싸는 함수를 두면 값은 같은데 종류가
-    달라지고, 이름만 보는 검사는 그 차이를 못 본다. 코어와 같은 자리다."""
+    """`torch.finfo`. **It has to be a class** — a wrapper function gives the
+    same values with a different type, and a check that looks only at names
+    cannot see the difference. The same place as the core's."""
 
     def __init__(self, dt=None):
         info = _np.finfo(_np.float32)
@@ -993,7 +1078,7 @@ class finfo:
 
 
 class iinfo:
-    """`finfo` 와 같은 까닭으로 클래스다."""
+    """A class for `finfo`'s reason."""
 
     def __init__(self, dt=None):
         info = _np.iinfo(_np.int64)
@@ -1011,14 +1096,16 @@ def linspace(start, end, count, **kw):
     return _made(_ts.Tensor.linspace(start, end, count), kw)
 
 
-# ── 창 함수 ─────────────────────────────────────────────────────────────────
+# ── window functions ───────────────────────────────────────────────────────
 #
-# 텐서를 받지 않고 **개수를 받는다** — 첫 인자의 메서드로 넘기는 길이 안 통하므로
-# 여기 손으로 적는다. borch.ts 쪽이 CPU 에서 만들고, `periodic` 의 규약도 저쪽에 있다.
+# They take **a count**, not a tensor — forwarding to the first argument's
+# method does not reach them, so they are written out here. borch.ts builds them
+# on the CPU, and the `periodic` convention lives over there too.
 
-# 다섯 다 `**kw` 로 `dtype=`·`requires_grad=` 를 **삼키고 있었다.** 공장 열넷을
-# `_made` 로 모을 때 이 다섯이 목록 밖에 있었다 — 고친 것이 갈래가 아니라 목록이면
-# 같은 결함이 옆자리에 남는다. 코어도 같은 자리에서 같이 삼키고 있었다.
+# All five were **swallowing** `dtype=` and `requires_grad=` into `**kw`. When
+# fourteen factories were gathered under `_made`, these five were outside the
+# list — fix a list rather than a branch and the same defect survives next door.
+# The core was swallowing them in the same place.
 def bartlett_window(n, periodic=True, **kw):
     return _made(_ts.Tensor.bartlettWindow(n, periodic), kw)
 
@@ -1037,34 +1124,41 @@ def blackman_window(n, periodic=True, **kw):
 
 
 def kaiser_window(n, periodic=True, beta=12.0, **kw):
-    """**`beta` 는 자리 인자다** — torch 가 `kaiser_window(n, periodic, beta)` 로 받는다."""
+    """**`beta` is positional** — torch takes
+    `kaiser_window(n, periodic, beta)`."""
     return _made(_ts.Tensor.kaiserWindow(n, periodic, beta), kw)
 
 
-# **난수는 한 흐름에서 나온다.** 처음에는 부를 때마다 `default_rng(0)` 을 새로
-# 만들었다. 골든이 난수를 오류 케이스에서만 써서(던지는지만 본다) 값이 늘 같아도
-# 안 걸렸는데, 그 상태로는 셔플하는 `DataLoader` 가 **매 에폭 같은 순서**를 낸다.
-# 부르는 쪽에서 보면 셔플을 켰는데 안 섞이는 것이고, 아무 예외도 안 난다.
+# **The random numbers come from one stream.** At first every call built a fresh
+# `default_rng(0)`. The golden uses random numbers only in error cases — it looks
+# at whether they throw — so identical values were never caught, and in that
+# state a shuffling `DataLoader` produces **the same order every epoch.** From
+# the caller's side shuffling is on and nothing shuffles, and nothing raises.
 _rng = _np.random.default_rng(0)
 
 
 def manual_seed(seed):
-    """씨앗을 다시 심는다. torch 와 같은 이름·같은 뜻이다.
+    """Re-seed. torch's name and torch's meaning.
 
-    **저쪽에도 심어야 한다.** 여기 numpy 생성기는 `randn`·`randperm` 이 쓰고, 층
-    초기화와 dropout 은 borch.ts 안의 다른 생성기가 쓴다 — 이쪽만 심으면 `randn` 은
-    재현되고 가중치는 매번 달라진다. "같은 씨앗에 같은 결과" 를 확인하는 사람이 가장
-    먼저 보는 것이 그 둘인데, 앞의 것만 재현되니 먹는 줄 알고 넘어간다.
+    **The other side has to be seeded too.** The numpy generator here is used by
+    `randn` and `randperm`, while layer initialisation and dropout use a
+    different generator inside borch.ts — seeding only this one makes `randn`
+    reproducible and the weights different every run. Those two are the first
+    things somebody checking "same seed, same result" looks at, and with the
+    first one reproducing they conclude it works and move on.
 
-    세 구현이 같은 갈래의 결함을 하나씩 갖고 있었고 게으른 층 케이스가 셋 다 잡았다.
+    All three implementations carried one defect of this kind, and the lazy-layer
+    cases caught all three.
     """
     global _rng
     _rng = _np.random.default_rng(seed)
     _ts.nn.manualSeed(int(seed))
-    # **코어의 생성기에도 심는다.** 분포에서 뽑아 채우는 일곱(`uniform_` 등)은 규칙이
-    # 두 벌이 되지 않도록 코어의 것을 빌려 쓰는데, 그러면 뽑는 것도 코어의 `_rng` 다.
-    # 여기만 심으면 `randn` 은 재현되고 `x.uniform_()` 은 매번 다르다 — 위 주석이
-    # 말하는 그 결함이 **생성기가 하나 늘 때마다** 다시 들어온다.
+    # **The core's generator is seeded as well.** The seven that draw from a
+    # distribution (`uniform_` and the rest) borrow the core's rules so there are
+    # not two copies of them, which means they draw from the core's `_rng` too.
+    # Seeding only here makes `randn` reproducible and `x.uniform_()` different
+    # every time — the defect the comment above describes comes back **every time
+    # a generator is added.**
     from borch import manual_seed as _core_seed
     _core_seed(int(seed))
     _LAST_SEED[0] = int(seed)
@@ -1072,7 +1166,8 @@ def manual_seed(seed):
 
 
 class Generator:
-    """`random_split(..., generator=g)` 처럼 흐름을 따로 두고 싶을 때."""
+    """For keeping a separate stream, as in
+    `random_split(..., generator=g)`."""
 
     def __init__(self, device=None):
         self.seed = 0
@@ -1090,11 +1185,12 @@ def _shaped(shape):
 
 
 def randn(*shape, **kw):
-    """정규분포 난수. **borch.ts 에는 없어서 여기서 만든다.**
+    """Normal random numbers. **borch.ts has none, so they are made here.**
 
-    골든에서 이것을 쓰는 자리는 오류 케이스뿐이고, 거기서는 값을 안 보고 **던지는지**만
-    본다(`L.randn(3, 4) @ L.randn(3, 2)`). 값을 묻는 케이스가 생기면 그때는 borch.ts
-    쪽에 제대로 넣어야 한다 — 여기 있는 것은 CPU 를 한 번 거친다.
+    The golden uses this only in error cases, where it looks at **whether it
+    throws** rather than at values (`L.randn(3, 4) @ L.randn(3, 2)`). Once a case
+    asks about values, this belongs in borch.ts properly — what is here goes
+    through the CPU once.
     """
     _no_out(kw)
     from ._base import tensor as _t
@@ -1112,8 +1208,8 @@ def rand(*shape, **kw):
 
 
 def _no_out(kw):
-    """`out=` 을 **조용히 안 삼킨다.** 코어와 같은 문이고 같은 까닭이다 —
-    `**kw` 를 받는 자리에서만 삼킬 수 있고, 여섯이 실제로 삼키고 있었다."""
+    """`out=` is **not swallowed quietly.** The core's gate for the core's
+    reason — only a place taking `**kw` can swallow it, and six of them were."""
     if "out" in kw:
         from borch._base import _unsupported
         _unsupported("`out=` (writing into a tensor you made beforehand)")
@@ -1136,7 +1232,8 @@ def randperm(n, **kw):
 
 
 def einsum(spec, *operands):
-    """borch.ts 의 `einsum` 은 자유 함수이고 **피연산자를 흩어서** 받는다."""
+    """borch.ts's `einsum` is a free function and takes the operands
+    **spread**."""
     return guarded(_ts.einsum, spec, *[handle(t) for t in operands])
 
 
@@ -1146,22 +1243,25 @@ def as_tensor(data, dtype=None):
 
 
 def from_numpy(arr):
-    """**값은 나르고 메모리는 못 나눈다.** torch 는 numpy 배열과 저장을 공유해서
-    한쪽을 고치면 다른 쪽도 바뀌는데, 여기는 값이 GPU 버퍼에 있어 그럴 자리가 없다 —
-    뷰 전파를 거절하는 것과 같은 이유다.
+    """**The values carry across; the memory cannot be shared.** torch shares
+    storage with the numpy array, so editing one changes the other, and here the
+    values live in a GPU buffer with nowhere for that to happen — the reason view
+    propagation is refused.
 
-    그래서 `tensor()` 와 같아진다. 거절하지 않는 이유는 교재가 이 이름을 **텐서를
-    만드는 데** 쓰지 별칭을 만드는 데 안 쓰기 때문이고, 그래도 갈림은 갈림이라
-    골든에 자리를 만들어 두었다.
+    So it comes out the same as `tensor()`. It is not refused because textbooks
+    use this name **to make a tensor**, not to make an alias; a divergence is
+    still a divergence, so the golden has a place for it.
     """
     from ._base import tensor as _t
     return _t(arr)
 
 
 def matrix_power(x, n):
-    """**음수 지수는 역행렬의 거듭제곱이다.** borch.ts 는 1 이상만 한다.
+    """**A negative exponent is a power of the inverse.** borch.ts does 1 and
+    up.
 
-    `A^-2 = (A^-1)^2` 라, 뒤집고 나서 양수로 부르면 된다. 0 은 단위행렬이다.
+    `A^-2 = (A^-1)^2`, so invert and then call with a positive one. Zero is the
+    identity.
     """
     h = handle(x)
     if n == 0:
@@ -1173,26 +1273,30 @@ def matrix_power(x, n):
 
 
 def quantile(x, q, dim=None, **kw):
-    """`q` 는 수 하나일 수도 목록일 수도 있다 — borch.ts 는 늘 목록을 받는다."""
+    """`q` may be one number or a list — borch.ts always takes a list."""
     _no_out(kw)
     one = isinstance(q, (int, float))
     qs = [float(v) for v in ([q] if one else q)]
     out = guarded(handle(x).quantile, _to_js(qs))
-    # **수 하나를 주면 스칼라가 나온다.** torch 가 그렇다 — 목록으로 물었을 때만
-    # 축이 생긴다. borch.ts 는 늘 목록이라 여기서 접는다.
+    # **One number gives a scalar.** That is what torch does — an axis appears
+    # only when asked with a list. borch.ts is always a list, so it is folded
+    # here.
     return wrap(out._h.reshape(_js_list([]))) if one else out
 
 
 def numel(x, **kw):
-    """원소 수. borch.ts 에서는 `size` 라는 **속성**이라 이름도 꼴도 다르다."""
+    """The element count. In borch.ts it is a **property** called `size` — a
+    different name and a different shape."""
     return int(handle(x).size)
 
 
 def _reduce_all(name):
-    """축을 **안 준** 축약. torch 는 평평하게 편 뒤 하나를 낸다.
+    """A reduction with **no axis given.** torch flattens and produces one
+    value.
 
-    borch.ts 쪽은 축이 기본값 0 이라 그대로 넘기면 **열마다 하나씩** 나온다. 모양이
-    달라서 값 대조에서 걸리기는 하지만, 걸리기 전까지는 "되는데 좀 이상한" 상태다.
+    Over in borch.ts the axis defaults to 0, so forwarded as-is it produces **one
+    per column.** The shape differs, so a value comparison does catch it, but
+    until it does the state is "works, slightly odd".
     """
     def call(x, dim=None, keepdim=False, **kw):
         dim = kw.get("dim", dim)
@@ -1210,18 +1314,20 @@ argmin = _reduce_all("argmin")
 
 
 def _extreme(name):
-    """`max`·`min` 의 **세 얼굴.** torch 는 인자에 따라 다른 것을 낸다.
+    """The **three faces** of `max` and `min`. torch produces different things
+    depending on the arguments.
 
-    - `max(x)` → 전부의 최댓값 **하나** (짝이 아니다)
-    - `max(x, dim)` → `(값, 번호)` 짝
-    - `max(x, other)` → **칸마다**의 최댓값
+    - `max(x)` → **one** overall maximum (not a pair)
+    - `max(x, dim)` → a `(values, indices)` pair
+    - `max(x, other)` → the **elementwise** maximum
 
-    셋이 한 이름에 붙어 있는 것이 헷갈리는 자리인데, 그것이 torch 의 계약이므로
-    여기서 정리하면 안 된다. 정리하면 교재 코드가 안 돈다.
+    Three things under one name is a confusing place, and it is torch's contract,
+    so it must not be tidied here. Tidying it stops textbook code from running.
 
-    세 번째 갈래가 없었고, 첫 번째는 짝을 냈다. 골든이 세 갈래를 따로 묻고서야
-    드러났다 — `x.max()` 를 스칼라로 바꿀 때만 시끄럽고, 비교에 쓰면 칸마다 비교가
-    되어 조용히 다른 답이다.
+    The third branch was missing and the first returned a pair. It surfaced only
+    once the golden asked about the three branches separately — it is loud only
+    when `x.max()` is converted to a scalar, and used in a comparison it becomes
+    an elementwise comparison and quietly a different answer.
     """
     pair = {"max": "amax", "min": "amin"}[name]
     elementwise = {"max": "maximum", "min": "minimum"}[name]
@@ -1229,35 +1335,40 @@ def _extreme(name):
     def call(x, dim=None, keepdim=False, other=None, **kw):
         dim = kw.get("dim", dim)
         other = kw.get("other", other)
-        if isinstance(dim, Tensor):                # `max(x, other)` 꼴
+        if isinstance(dim, Tensor):                # the `max(x, other)` form
             dim, other = None, dim
         h = handle(x)
         if other is not None:
             return wrap(guarded(h.binary, elementwise, handle(other)))
         if dim is None:
             return wrap(guarded(getattr(h, pair)))
-        # 축 하나면 짝이다. `guarded` 가 이미 자리에 이름을 붙여 주므로 다시 안 묶는다.
+        # One axis means a pair. `guarded` already names the fields, so it is
+        # not wrapped again.
         return guarded(getattr(h, name), dim, bool(kw.get("keepdim", keepdim)))
     call.__name__ = name
     return call
 
 
-# **모듈 전역에 `max`·`min` 을 두면 안 된다.** 이 파일 안에서 파이썬 내장을 가리고,
-# 그러면 `max(a, b)` 로 크기를 재던 자리가 텐서 함수를 부른다 — 증상은 GPU 버퍼
-# 할당이 통째로 죽는 것이었고(`createBuffer` 실패 128 건), 원인에서 아주 멀다.
-# `bool` 에서 같은 것을 겪고 그 자리에 적어 두었는데도 다시 밟았다.
+# **`max` and `min` must not live at module scope.** They would shadow the
+# Python builtins inside this file, and then a place sizing something with
+# `max(a, b)` calls a tensor function — the symptom was GPU buffer allocation
+# dying wholesale (128 `createBuffer` failures), a very long way from the cause.
+# The same thing happened with `bool` and was written down there, and it was
+# stepped on again anyway.
 #
-# 아래 `__getattr__` 이 이 이름들을 내준다. 밖에서는 `L.max(x)` 로 보이고 안에서는
-# 내장이 그대로 산다.
+# `__getattr__` below hands these names out. From outside it looks like
+# `L.max(x)`, and inside the builtins stay alive.
 _EXTREME = {"max": _extreme("max"), "min": _extreme("min")}
 
 
 def flatten(x, start_dim=0, end_dim=-1, **kw):
-    """축을 접는다. **borch.ts 에는 없어서 `reshape` 로 만든다** — 정의 그대로다.
+    """Fold axes. **borch.ts has none, so it is built from `reshape`** — the
+    definition, directly.
 
-    **기본이 `start_dim=0` 이다.** `nn.Flatten` 층은 배치를 남기느라 1 부터 접지만
-    `torch.flatten` 함수는 0 부터다. 층의 기본값을 함수에 옮겨 적었더니 `flatten(x)`
-    가 배치를 남겨서 모양이 달랐다.
+    **The default is `start_dim=0`.** The `nn.Flatten` layer folds from 1 to
+    leave the batch, but the `torch.flatten` function starts at 0. Copying the
+    layer's default onto the function made `flatten(x)` leave the batch, and the
+    shape differed.
     """
     h = handle(x)
     shape = [int(n) for n in h.shape]
@@ -1273,7 +1384,8 @@ def flatten(x, start_dim=0, end_dim=-1, **kw):
 
 
 def squeeze(x, dim=None, **kw):
-    """`dim` 이 없으면 torch 는 **길이 1 인 축을 전부** 없앤다. borch.ts 는 하나씩이다."""
+    """With no `dim`, torch removes **every axis of length 1.** borch.ts does
+    one at a time."""
     h = handle(x)
     dim = kw.get("dim", dim)
     if dim is not None:
@@ -1283,17 +1395,20 @@ def squeeze(x, dim=None, **kw):
 
 
 def sum(x, dim=None, keepdim=False, dtype=None, **kw):   # noqa: A001
-    """borch.ts 는 전체 합(`sum()`)과 축 합(`sumDim`)을 **다른 이름**으로 둔다.
+    """borch.ts keeps the total sum (`sum()`) and the axis sum (`sumDim`) under
+    **different names.**
 
-    이 자리가 조용히 틀렸다. `sum(dim=1)` 이 `sum()` 으로 가서 축을 무시한 스칼라를
-    냈고, 예외가 없으니 아무도 몰랐다 — 랭크 6 케이스 하나가 모양으로 걸릴 때까지.
+    This place was quietly wrong. `sum(dim=1)` went to `sum()` and produced a
+    scalar with the axis ignored, and with no exception nobody knew — until one
+    rank-6 case caught it on shape.
     """
     dim = kw.get("dim", dim)
     keepdim = kw.get("keepdim", keepdim)
     dtype = kw.get("dtype", dtype)
     h = handle(x)
-    # **`dtype=` 는 전체 합에도 붙는다.** borch.ts 쪽 `sum()` 은 그 인자를 안 받으므로
-    # 여기서 앞뒤로 형을 바꿔 준다 — 규칙은 같다: 넣기 전에 바꾸고 결과도 못 박는다.
+    # **`dtype=` applies to the total sum too.** borch.ts's `sum()` does not
+    # take the argument, so the dtype is changed on both sides here — the same
+    # rule: convert before going in, and pin the result as well.
     if dtype is not None:
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
         cast = wrap(guarded(h.to, name.replace("torch.", "")))
@@ -1305,16 +1420,19 @@ def sum(x, dim=None, keepdim=False, dtype=None, **kw):   # noqa: A001
 
 
 def norm(x, p=2, dim=None, keepdim=False, **kw):
-    """borch.ts 의 `norm()` 은 **전체** L2 하나뿐이다. 축과 차수는 여기서 만든다.
+    """borch.ts's `norm()` is one **whole-tensor** L2 and nothing else. The axis
+    and the order are built here.
 
-    넘겨봐야 조용히 버려지던 자리다 — `norm(dim=1)` 이 전체 노름을 냈다.
+    Passing them only had them quietly discarded — `norm(dim=1)` produced the
+    whole-tensor norm.
     """
     p = kw.get("p", p)
     dim = kw.get("dim", dim)
     keepdim = kw.get("keepdim", keepdim)
-    # **`dtype=` 은 조용히 버리지 않는다.** torch 는 그 형으로 바꾼 뒤 계산하는데
-    # 여기서 물을 수 있는 것은 float32 뿐이라, 다른 형이 오면 멈추는 것이 답이다 —
-    # float32 를 돌려주면 "배정도로 쟀다" 고 믿는 코드가 생긴다.
+    # **`dtype=` is not discarded quietly.** torch converts and then computes,
+    # and float32 is the only thing that can be asked for here, so stopping on
+    # any other dtype is the answer — handing back float32 creates code that
+    # believes it measured in double precision.
     if kw.get("dtype") is not None:
         x = wrap(x).to(_dtype_to_make(kw["dtype"]))
     h = handle(x)
@@ -1328,9 +1446,10 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
     if p == float("inf"):
         got = guarded(h.abs)
         return wrap(got.max() if dim is None else got.amax(dim, bool(keepdim)))
-    # 아래 셋은 코어가 조용히 2-노름을 내던 자리를 고치면서 같이 열었다. 코어만
-    # 고치면 **셋이 서로 갈린다** — 골든은 세 구현에 같은 것을 묻는 자리라, 한쪽만
-    # 답할 수 있으면 그 케이스를 아예 못 넣는다.
+    # The three below were opened alongside fixing the place where the core
+    # quietly produced the 2-norm. Fixing the core alone makes **the three
+    # diverge** — the golden asks all three implementations the same thing, so a
+    # case only one of them can answer cannot go in at all.
     if p == float("-inf"):
         got = guarded(h.abs)
         return wrap(got.min() if dim is None else got.amin(dim, bool(keepdim)))
@@ -1350,11 +1469,12 @@ def norm(x, p=2, dim=None, keepdim=False, **kw):
 
 
 def transpose(x, dim0=None, dim1=None, **kw):
-    """borch.ts 의 `transpose()` 는 **2차원 전용**이고 축을 안 받는다.
+    """borch.ts's `transpose()` is **2-D only** and takes no axes.
 
-    torch 는 어느 랭크에서든 두 축을 바꾼다. 축을 넘기면 버려지던 자리인데, 랭크 2
-    에서는 답이 우연히 같고 랭크 3 이상에서는 borch.ts 가 던져서 조용히 틀리지는
-    않았다. 그래도 `x.transpose(1, 2)` 는 torch 코드가 늘 하는 일이라 맞춰 준다.
+    torch swaps two axes at any rank. Passing axes had them discarded; at rank 2
+    the answer happens to match and at rank 3 and up borch.ts throws, so it was
+    never quietly wrong. Still, `x.transpose(1, 2)` is something torch code does
+    all the time, so it is matched here.
     """
     dim0 = kw.get("dim0", dim0)
     dim1 = kw.get("dim1", dim1)
@@ -1373,13 +1493,15 @@ def swapdims(x, dim0=None, dim1=None, **kw):
     return transpose(x, dim0, dim1, **kw)
 
 
-# ── torch 가 **두 번째 이름**으로 주는 것들 ─────────────────────────────────
+# ── the ones torch offers under a **second name** ───────────────────────────
 #
-# 전부 이미 있는 것의 조합이다. borch.ts 쪽에 이름을 늘리지 않는다 — 계산이 늘어나는
-# 것이 아니라 파이썬 코드가 부르는 철자가 늘어나는 것이라, 파이썬 쪽 일이다.
+# All of them are combinations of what already exists. No names are added over
+# in borch.ts — this is not more computation, it is more spellings that Python
+# code calls, so it is Python's job.
 
 def add(a, b, alpha=1, **kw):
-    """`a + alpha·b`. **`alpha` 가 연산자에 없어서** 별칭이 아니라 함수다."""
+    """`a + alpha·b`. A function rather than an alias **because the operator has
+    no `alpha`.**"""
     _no_out(kw)
     alpha = kw.get("alpha", alpha)
     return wrap(a) + (b if alpha == 1 else wrap(b) * alpha)
@@ -1415,14 +1537,15 @@ def floor_divide(a, b, **kw):
 
 
 def remainder(a, b, **kw):
-    """**부호가 나누는 쪽을 따른다.** `fmod` 와 갈리는 자리가 그것이다."""
+    """**The sign follows the divisor.** That is where it parts from `fmod`."""
     _no_out(kw)
     a, b = wrap(a), wrap(b)
     return a - wrap(guarded(handle(a / b).unary, "floor")) * b
 
 
 def fmod(a, b, **kw):
-    """**부호가 나뉘는 쪽을 따른다.** C 의 규칙이고 `remainder` 와 반대다."""
+    """**The sign follows the dividend.** C's rule, and the opposite of
+    `remainder`."""
     _no_out(kw)
     a, b = wrap(a), wrap(b)
     return a - wrap(guarded(handle(a / b).unary, "trunc")) * b
@@ -1433,7 +1556,8 @@ def rsub(a, b, alpha=1, **kw):
 
 
 def t(x, **kw):
-    """2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다."""
+    """A 2-D transpose. **1-D and below are left alone** — that is what torch
+    does."""
     h = handle(x)
     return wrap(h) if len(h.shape) < 2 else transpose(x, 0, 1)
 
@@ -1447,12 +1571,12 @@ def moveaxis(x, source, destination, **kw):
 
 
 def broadcast_to(x, shape, **kw):
-    """borch.ts 쪽 이름은 `expand` 다 — 축을 **흩어서** 받는다."""
+    """The name over in borch.ts is `expand` — it takes the axes **spread**."""
     return wrap(guarded(handle(x).expand, *[int(n) for n in shape]))
 
 
 def _broadcast_shape(shapes):
-    """오른쪽 맞춤으로 축마다 큰 쪽을 고른다 — numpy 와 같은 규칙이다."""
+    """Right-aligned, taking the larger of each axis — numpy's rule."""
     rank = builtins.max(len(s) for s in shapes)
     out = []
     for i in range(rank):
@@ -1475,23 +1599,27 @@ def broadcast_tensors(*tensors):
 
 
 def _handles(tensors):
-    """텐서 목록을 손잡이 목록으로. 저쪽 정적 메서드들이 **목록 하나**를 받는다.
+    """A list of tensors to a list of handles. The static methods over there
+    take **one list.**
 
-    **`_js_list` 를 못 쓴다** — 그쪽은 원소마다 `int()` 를 걸어 수 목록만 다룬다.
-    손잡이를 넣으면 `int() argument must be a string…` 으로 터지는데, 그 문구는
-    모양 인자를 잘못 넘겼을 때와 같아서 어디가 문제인지 안 보인다(실측: 열한 건).
+    **`_js_list` cannot be used** — it puts `int()` on every element and handles
+    lists of numbers only. Handles put through it blow up with
+    `int() argument must be a string…`, and that wording is the same as passing a
+    bad shape argument, so it does not show where the problem is (measured:
+    eleven of them).
     """
     return _to_js([handle(wrap(v)) for v in tensors])
 
 
 def hstack(tensors, **kw):
-    """1 차원은 이어 붙이고 그 위는 **열 방향**으로 붙인다."""
+    """1-D concatenates; above that it joins **along the columns.**"""
     _no_out(kw)
     return wrap(guarded(_ts.Tensor.hstack, _handles(tensors)))
 
 
 def _lift(x, rank):
-    """모자란 앞축을 1 로 채운다. `atleast_2d`·`atleast_3d` 가 하는 일이다."""
+    """Pad the missing leading axes with 1. What `atleast_2d` and `atleast_3d`
+    do."""
     h = handle(x)
     shape = [int(n) for n in h.shape]
     if len(shape) >= rank:
@@ -1505,11 +1633,11 @@ def vstack(tensors, **kw):
 
 
 def _atleast3(x):
-    """torch 의 `atleast_3d`. **뒤에 축을 붙인다** — 앞이 아니다.
+    """torch's `atleast_3d`. **The axis goes on the end** — not the front.
 
-    1 차원 `(n,)` 은 `(1, n, 1)` 이 되고 2 차원 `(m, n)` 은 `(m, n, 1)` 이다. 앞에만
-    채우면 `(1, 3, 4)` 가 되어 `dstack` 이 세 번째 축이 아니라 마지막 축으로 붙는다 —
-    모양이 `(1, 3, 8)` 로 나와서 걸렸다.
+    1-D `(n,)` becomes `(1, n, 1)` and 2-D `(m, n)` becomes `(m, n, 1)`. Padding
+    the front only gives `(1, 3, 4)`, and then `dstack` joins along the last axis
+    instead of the third — the shape came out `(1, 3, 8)` and that caught it.
     """
     h = handle(x)
     shape = [int(n) for n in h.shape]
@@ -1530,29 +1658,33 @@ def dstack(tensors, **kw):
 
 
 def column_stack(tensors, **kw):
-    """1 차원을 **열 하나로 세워** 붙인다. `hstack` 과 여기서 갈린다."""
+    """1-D is **stood up as a single column** and joined. Where it parts from
+    `hstack`."""
     _no_out(kw)
     return wrap(guarded(_ts.Tensor.columnStack, _handles(tensors)))
 
 
 def block_diag(*tensors):
-    """대각선에 블록을 늘어놓고 나머지는 0."""
+    """Blocks laid along the diagonal and zeros everywhere else."""
     return wrap(guarded(_ts.Tensor.blockDiag, _handles(tensors)))
 
 
-# ── 계산 자체가 없던 것들. 전부 있는 연산의 조합이다. ───────────────────────
+# ── the ones with no computation of their own. All combinations of existing
+# operations. ───────────────────────────────────────────────────────────────
 
 def _shape_list(x):
     return [int(n) for n in handle(x).shape]
 
 
-# **모양을 빌리는 공장도 `dtype=`·`requires_grad=` 를 들어야 한다.** 위의 여섯과
-# 같은 결함이 여기 남아 있었다 — `zeros` 만 고치고 `zeros_like` 를 두면 반쪽이다.
-# 코어도 같은 자리를 같이 고쳤고, 셋이 어긋나면 골든이 잡는다.
+# **A factory that borrows a shape has to hear `dtype=` and `requires_grad=`
+# too.** The defect from the six above survived here — fixing `zeros` and leaving
+# `zeros_like` is half of it. The core fixed the same place alongside, and the
+# golden catches the three drifting apart.
 
-# **넷은 아예 없었다.** 모듈 `__getattr__` 이 borch.ts 쪽으로 넘기고 있었는데 저쪽에는
-# `fullLike` 이 없고, 있는 것도 이름 붙은 인자를 안 받는다. 이름이 있는 것처럼 보이고
-# 부르면 멈추는 자리라, 코어와 같은 표면을 여기 적는다.
+# **Four were absent entirely.** The module `__getattr__` was forwarding to
+# borch.ts, which has no `fullLike`, and the ones it does have take no named
+# arguments. A place that looks like it has the name and stops when called, so
+# the core's surface is written out here.
 
 def empty(*shape, **kw):
     _no_out(kw)
@@ -1600,19 +1732,21 @@ def scalar_tensor(value, **kw):
 
 
 def logspace(start, end, steps, base=10.0, **kw):
-    """`base` 의 거듭제곱으로 고르게. `linspace` 를 지수로 쓴다."""
+    """Evenly spaced as powers of `base`. `linspace` supplies the exponents."""
     _no_out(kw)
     return _kept(wrap(guarded(_ts.Tensor.logspace, start, end, steps, base)), kw)
 
 
 def meshgrid(*tensors, indexing="ij"):
-    """격자. **`xy` 는 앞의 두 축이 뒤바뀐 것**이라 한 규칙으로 못 덮는다."""
+    """A grid. **`xy` has the first two axes swapped**, so one rule cannot cover
+    both."""
     return tuple(wrap(v) for v in
                  guarded(_ts.Tensor.meshgrid, _handles(tensors), indexing))
 
 
 def lerp(start, end, weight, **kw):
-    """**무게가 텐서일 수 있다** — 자리마다 다르게 간다. 수만 받으면 그 갈래가 없다."""
+    """**The weight may be a tensor** — different at every position. Taking a
+    number only loses that branch."""
     _no_out(kw)
     w = handle(weight) if isinstance(weight, Tensor) else weight
     return wrap(guarded(handle(wrap(start)).lerp, handle(wrap(end)), w))
@@ -1623,11 +1757,12 @@ def _unary(x, name):
 
 
 def nan_to_num(t, nan=0.0, posinf=None, neginf=None, **kw):
-    """NaN 과 무한대를 유한한 수로. **안 주면 f32 의 끝값이다.**
+    """NaN and infinities to finite numbers. **Given nothing, f32's extremes.**
 
-    **조립이 저쪽으로 갔다.** 여기 있던 동안 그 이름은 borch.ts 에 없었고, 골든이
-    이 함수를 지나므로 표는 초록이었다 — TypeScript 로 쓰는 쪽에만 없는 이름이었다.
-    `tests/test_binding_fills_in.py` 가 그 자리를 센다.
+    **The assembly moved over there.** While it lived here the name did not exist
+    in borch.ts, and since the golden goes through this function the table was
+    green — a name missing only for the people writing TypeScript.
+    `tests/test_binding_fills_in.py` counts that place.
     """
     _no_out(kw)
     return wrap(guarded(handle(wrap(t)).nanToNum, nan, posinf, neginf))
@@ -1644,7 +1779,7 @@ def isneginf(t, **kw):
 
 
 def isreal(t, **kw):
-    """실수만 있으므로 전부 참이다. **거짓말이 아니라 사실이다.**"""
+    """Everything is real, so all of it is true. **Not a lie — a fact.**"""
     return wrap(guarded(handle(wrap(t)).isreal))
 
 
@@ -1653,15 +1788,16 @@ def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kw):
 
 
 def isin(elements, test_elements, **kw):
-    """원소가 그 목록에 있는가. 브로드캐스팅 하나로 풀린다."""
+    """Is the element in that list. One broadcast solves it."""
     return wrap(guarded(handle(wrap(elements)).isin, handle(wrap(test_elements))))
 
 
 def _nan_extreme(name):
-    """`fmax`·`fmin` 은 **NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다.
+    """`fmax` and `fmin` **skip NaN** — `maximum` carries NaN out with it.
 
-    **조립이 저쪽으로 갔다.** 여기 있는 동안 그 이름은 borch.ts 에 없었고, 골든이
-    이 함수를 지나므로 표는 초록이었다 — TypeScript 쪽에만 없는 이름이었다.
+    **The assembly moved over there.** While it lived here the name did not exist
+    in borch.ts, and since the golden goes through this function the table was
+    green — a name missing only on the TypeScript side.
     """
     def call(a, b, **kw):
         del kw
@@ -1681,18 +1817,21 @@ def float_power(a, b, **kw):
 
 
 def logical_xor(a, b, **kw):
-    """borch.ts 의 **이항 표**에는 없다 — 그쪽이 다름으로 두 번 물어 만든다."""
+    """Not in borch.ts's **binary table** — it is built by asking that side for
+    inequality twice."""
     return wrap(guarded(handle(wrap(a)).logicalXor, handle(wrap(b))))
 
 
-# ── 모양·색인 ───────────────────────────────────────────────────────────────
+# ── shape and indexing ──────────────────────────────────────────────────────
 #
-# 손으로 적는 것은 세 종류다 — **텐서를 안 받는 것**(삼각 자리표), **텐서 목록을
-# 받는 것**(`index_put` 의 색인들, `cartesian_prod`), 그리고 **묶음으로 답하는
-# 것**(쪼개기·`unravel_index`). 나머지는 `__getattr__` 이 그냥 넘긴다.
+# Three kinds are written by hand — **the ones taking no tensor** (triangular
+# index tables), **the ones taking a list of tensors** (`index_put`'s indices,
+# `cartesian_prod`), and **the ones answering with a tuple** (the splits,
+# `unravel_index`). `__getattr__` simply forwards the rest.
 #
-# 텐서 목록이 왜 따로인가: `_arg` 는 목록을 `_js_list` 로 보내는데 그쪽이 `int()` 를
-# 씌운다. 텐서가 담긴 목록이 거기 들어가면 정수 변환에서 멈춘다.
+# Why a list of tensors is separate: `_arg` sends lists through `_js_list`,
+# which puts `int()` over them. A list holding tensors stops at the integer
+# conversion.
 
 def _js_tensors(seq):
     return _js.Array.from_([handle(t) for t in seq])
@@ -1711,15 +1850,15 @@ def index_put_(t, indices, values, accumulate=False, **kw):
 
 
 def unravel_index(indices, shape, **kw):
-    """**축마다 텐서 하나씩, 묶음으로 낸다**(실측)."""
+    """**One tensor per axis, returned as a tuple** (measured)."""
     got = guarded(handle(indices).unravelIndex, _js_list(shape))
     return tuple(wrap(p) for p in got)
 
 
 def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None,
                        **kw):
-    """**이어진** 중복만 줄인다. 길이가 값에 달려 borch.ts 쪽이 비동기다 —
-    `settle` 이 그 약속을 여기서 기다린다."""
+    """Collapses **consecutive** duplicates only. The length depends on the
+    values, so borch.ts is asynchronous here — `settle` awaits that promise."""
     got = guarded(handle(t).uniqueConsecutive, return_inverse, return_counts,
                   dim)
     return tuple(got) if isinstance(got, list) else got
@@ -1734,7 +1873,8 @@ def split_with_sizes(t, split_sizes, dim=0, **kw):
 
 
 def tril_indices(row, col, offset=0, **kw):
-    """**`(2, 개수)` 짜리 표다** — 자리 쌍이 아니라 행 줄과 열 줄로 나뉘어 온다."""
+    """**A `(2, count)` table** — not pairs of positions but a row of rows and a
+    row of columns."""
     return wrap(_ts.Tensor.trilIndices(row, col, offset))
 
 
@@ -1760,87 +1900,99 @@ def chain_matmul(*matrices, **kw):
     return wrap(_ts.Tensor.chainMatmul(*[handle(m) for m in mats]))
 
 
-# ── 최상위 선형대수 ─────────────────────────────────────────────────────────
+# ── top-level linear algebra ────────────────────────────────────────────────
 #
-# 손으로 적는 것은 **`linalg` 쪽과 이름이 겹치는 둘**이다. `camel` 이 `lu` 를
-# `lu` 로, `lu_solve` 를 `luSolve` 로 넘기는데 borch.ts 의 그 이름들은 `linalg` 쪽
-# 것이라 다른 답을 낸다 — 최상위는 `luTop`·`luSolveTop` 이다.
+# The two written by hand are **the ones whose names collide with `linalg`'s.**
+# `camel` forwards `lu` as `lu` and `lu_solve` as `luSolve`, and those names in
+# borch.ts belong to `linalg` and give different answers — the top-level ones are
+# `luTop` and `luSolveTop`.
 
 def lu(a, pivot=True, get_infos=False, **kw):
-    """`(LU, pivots)`. **`linalg.lu` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로
-    펴 주고 이쪽은 겹쳐 담은 한 판과 교환 목록이다(실측)."""
+    """`(LU, pivots)`. **A different thing from `linalg.lu`** — that one spreads
+    it into `P`, `L` and `U`, and this one is a single packed matrix plus the
+    list of swaps (measured)."""
     got = guarded(handle(a).luTop, pivot, get_infos)
     return tuple(got) if get_infos else (got.LU, got.pivots)
 
 
 def lu_solve(b, lu_data, lu_pivots, **kw):
-    """**`linalg.lu_solve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다."""
+    """**The argument order is reversed from `linalg.lu_solve`** — `b` comes
+    first here."""
     _no_out(kw)
     return wrap(guarded(handle(b).luSolveTop, handle(lu_data),
                         handle(lu_pivots)))
 
 
 def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True, **kw):
-    """**끄면 `None` 이 아니라 빈 텐서가 온다**(실측: 모양이 `(0,)` 이다)."""
+    """**Turned off it gives an empty tensor, not `None`** (measured: the shape
+    is `(0,)`)."""
     _no_out(kw)
     got = guarded(handle(lu_data).luUnpack, handle(lu_pivots), unpack_data,
                   unpack_pivots)
     return (got.P, got.L, got.U)
 
 
-# ── 통계 ────────────────────────────────────────────────────────────────────
+# ── statistics ──────────────────────────────────────────────────────────────
 #
-# 손으로 적는 것은 **난수 넷**과 **거절 셋**, 그리고 조립인 `trapz` 다. 나머지는
-# `__getattr__` 이 첫 인자의 메서드로 넘긴다.
+# Written by hand: **four random ones**, **three refusals**, and `trapz`, which
+# is assembled. `__getattr__` forwards the rest to the first argument's method.
 #
-# **난수의 값은 골든이 못 굳힌다** — borch.ts 의 난수 줄기와 torch 의 것이 다르다.
-# 그런데 끝값은 결정적이다(`std=0`·`p=0`·`p=1`), 그 자리를 골든이 묻는다.
+# **The golden cannot pin random values** — borch.ts's random stream and torch's
+# are different. The extremes are deterministic though (`std=0`, `p=0`, `p=1`),
+# and that is what the golden asks about.
 
 def trapz(y, x=None, dx=1.0, dim=-1, **kw):
-    """`trapezoid` 의 옛 이름. 같은 것이다(실측)."""
+    """The old name for `trapezoid`. The same thing (measured)."""
     return trapezoid(y, x, dx, dim, **kw)
 
 
-# ── 복소수, 그리고 생성 몇 ─────────────────────────────────────────────────
+# ── complex numbers, and a few factories ────────────────────────────────────
 #
-# 한동안 이 자리는 **"복소수가 없어도 답이 있는 이름들"** 이었다 — 실수에서 `conj`
-# 계열이 항등이라 `_alias` 하나로 다 됐고, `is_complex` 는 `return False` 로 못
-# 박혀 있었다. borch.ts 에 복소수가 생기면서 그 답들이 **틀린 답**이 됐다.
+# For a while this was **"the names that have an answer even without complex
+# numbers"** — over the reals the `conj` family is the identity, so one `_alias`
+# covered them all, and `is_complex` was pinned to `return False`. Complex
+# numbers arriving in borch.ts turned those answers into **wrong answers.**
 #
-# **"지금 통과하는 항등" 이 범위가 넓어질 때 제일 먼저 무너진다** — 코어에서
-# `conj_physical` 이 정확히 그렇게 무너졌고, 여기는 그 이름이 여섯 개였다.
+# **An identity that passes today is the first thing to break when the domain
+# widens** — `conj_physical` broke exactly that way in the core, and here there
+# were six such names.
 
 def _alias(t, **kw):
-    """항등. **형과 그래프를 지키려면 `to(자기 형)` 이 가장 짧다** — borch.ts 의
-    `to` 는 형이 같으면 자기 자신을 돌려주므로 커널도 안 돈다."""
+    """The identity. **`to(its own dtype)` is the shortest way to keep both the
+    dtype and the graph** — borch.ts's `to` hands back the same tensor when the
+    dtype matches, so no kernel runs."""
     t = wrap(t)
     return t
 
 
 def _is_cplx(t):
-    """이 손잡이가 복소수인가. **`str()` 을 거친다** — `dtype` 은 JS 문자열이다."""
+    """Is this handle complex. **It goes through `str()`** — `dtype` is a JS
+    string."""
     return str(handle(t).dtype) == "complex64"
 
 
 def complex(re, im, **kw):
-    """실수부와 허수부를 엮는다.
+    """Weave a real part and an imaginary part together.
 
-    **이 이름이 파이썬 내장 `complex` 를 가린다.** 이 파일 안에서 복소수 판정에
-    `_is_cplx` 를 쓰는 이유가 그것이다 — 코어(`borch/_ops.py`)가 같은 자리에서
-    같은 선택을 했고, 셋째로 이름을 가리는 내장이다(`abs`·`bool`·`max`·`range`).
+    **This name shadows the Python builtin `complex`.** That is why `_is_cplx` is
+    used for the complex test inside this file — the core (`borch/_ops.py`) made
+    the same choice in the same place, and this is the third builtin whose name
+    gets shadowed (`abs`, `bool`, `max`, `range`).
     """
     _no_out(kw)
     return wrap(_ts.Tensor.complex(handle(re), handle(im)))
 
 
 def polar(abs, angle, **kw):                                    # noqa: A002
-    """크기와 편각으로. 인자 이름이 torch 의 것이라 내장 `abs` 를 가린다."""
+    """From a magnitude and an angle. The parameter name is torch's, so it
+    shadows the builtin `abs`."""
     _no_out(kw)
     return wrap(_ts.Tensor.polar(handle(abs), handle(angle)))
 
 
 def view_as_real(t, **kw):
-    """복소수를 실수 짝으로. **뷰다** — borch.ts 의 저장이 인터리브라서 그렇다."""
+    """Complex to pairs of reals. **A view** — borch.ts stores them
+    interleaved."""
     return wrap(guarded(handle(t).viewAsReal))
 
 
@@ -1849,12 +2001,14 @@ def view_as_complex(t, **kw):
 
 
 def real(t, **kw):
-    """실수부. **실수 텐서에서는 자기 자신**이고 형도 그대로다(실측)."""
+    """The real part. **On a real tensor it is the tensor itself**, dtype
+    included (measured)."""
     return wrap(guarded(handle(t).real)) if _is_cplx(t) else _alias(t)
 
 
 def imag(t, **kw):
-    """허수부. **실수 텐서에서는 torch 자신이 거절한다**(실측) — 우리 한계가 아니다."""
+    """The imaginary part. **torch itself refuses on a real tensor** (measured)
+    — not a limit of ours."""
     if not _is_cplx(t):
         raise RuntimeError(
             "imag is not implemented for tensors with non-complex dtypes.")
@@ -1862,10 +2016,11 @@ def imag(t, **kw):
 
 
 def conj(t, **kw):
-    """켤레. 실수에서는 항등이다.
+    """The conjugate. Over the reals, the identity.
 
-    **torch 와 갈린다.** torch 의 `conj` 는 게을러서 켤레 비트만 세우는데 우리는
-    값을 바로 뒤집는다 — 그래서 아래 `is_conj` 가 언제나 거짓이다. 값은 같다.
+    **A divergence from torch.** torch's `conj` is lazy and only raises the
+    conjugate bit, while this flips the values immediately — which is why
+    `is_conj` below is always false. The values are the same.
     """
     return wrap(guarded(handle(t).conjPhysical)) if _is_cplx(t) else _alias(t)
 
@@ -1881,7 +2036,8 @@ def conj_physical_(t, **kw):
 
 
 def resolve_conj(t, **kw):
-    """켤레 표시를 굳힌다. **우리에게는 그 표시가 아예 없어서** 언제나 항등이다."""
+    """Materialise the conjugate flag. **There is no such flag here at all**, so
+    it is always the identity."""
     return _alias(t)
 
 
@@ -1890,7 +2046,8 @@ def resolve_neg(t, **kw):
 
 
 def angle(t, **kw):
-    """편각. 복소수는 `atan2(허수, 실수)`, **실수는 음수에 π** 이고 형은 언제나 실수다."""
+    """The angle. Complex is `atan2(imag, real)`; **real gives π for negatives**,
+    and the dtype is always real."""
     if _is_cplx(t):
         return wrap(guarded(handle(t).angle))
     import math
@@ -1913,7 +2070,8 @@ def is_neg(t, **kw):
 
 
 def asarray(obj, dtype=None, copy=None, **kw):
-    """**텐서를 주면 사본이 아니다**(실측). `copy=True` 여야 사본이다."""
+    """**Given a tensor it is not a copy** (measured). `copy=True` makes it
+    one."""
     from ._base import tensor as _t
 
     if isinstance(obj, Tensor) and dtype is None and not copy:
@@ -1921,23 +2079,27 @@ def asarray(obj, dtype=None, copy=None, **kw):
     if isinstance(obj, Tensor):
         got = obj.to(dtype) if dtype is not None else obj
         return _t(got.numpy().copy()) if copy else got
-    # **`copy=False` 를 numpy 에 그대로 넘기면 안 된다.** numpy 2 에서 그것은
-    # "베끼지 마라" 는 명령이라 목록처럼 베낄 수밖에 없는 것에서 던진다 — 기본값
-    # `None`("되면 안 베낀다")과 다르다. 여기서는 참일 때만 말한다.
+    # **`copy=False` must not be handed to numpy as-is.** In numpy 2 it is an
+    # order not to copy, so it throws on anything that can only be copied, such
+    # as a list — different from the default `None` ("avoid copying if
+    # possible"). It is mentioned here only when true.
     arr = _np.array(obj, copy=True) if copy else _np.asarray(obj)
     return _t(arr, dtype)
 
 
 def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False, **kw):
-    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측).
+    """Read the bytes as they are. **`offset` is a byte count** — not an element
+    count (measured).
 
-    형을 가리는 일은 `_dtype_to_make` 가 한다. **여기만 자기 갈래를 따로 적고
-    있었고**, 그 갈래가 `_DType` 이 아닌 것을 만나면 조용히 float32 로 떨어졌다 —
-    `frombuffer(buf, dtype=torch.half)` 가 **아무 말 없이 float32 를 냈다.**
-    이름만 있고 칸이 없는 형은 멈춰야 하고, 그 문이 이미 저 함수 안에 있다.
+    Choosing the dtype is `_dtype_to_make`'s job. **This was the one place
+    writing out its own branch**, and that branch fell quietly to float32 on
+    anything that was not a `_DType` — `frombuffer(buf, dtype=torch.half)`
+    **produced float32 without a word.** A dtype that has a name and no storage
+    has to stop, and that gate already lives inside that function.
 
-    `dtype=` 은 여기서 **바이트를 무엇으로 읽을지**를 정하므로 `_made` 에 안 맡긴다 —
-    나중에 형을 바꾸면 이미 다르게 읽은 뒤다. 기울기만 맡긴다.
+    `dtype=` decides **what the bytes are read as** here, so it is not left to
+    `_made` — converting the dtype afterwards is after they have already been
+    read as something else. Only the gradient is left to it.
     """
     from ._base import tensor as _t
 
@@ -1949,8 +2111,8 @@ def frombuffer(buffer, dtype=None, count=-1, offset=0, requires_grad=False, **kw
 
 
 def range_top(start, end=None, step=1, **kw):
-    """**끝을 포함한다** — `arange` 는 뺀다(실측). 조용히 `arange` 로 넘기면
-    원소가 하나 모자란다."""
+    """**The end is included** — `arange` excludes it (measured). Forwarded
+    quietly to `arange`, one element goes missing."""
     _no_out(kw)
     if end is None:
         start, end = 0, start
@@ -1958,8 +2120,9 @@ def range_top(start, end=None, step=1, **kw):
 
 
 def empty_strided(size, stride, **kw):
-    """**걸음을 표현할 수 없어서 없다.** `as_strided` 와 다른 자리다 — 그쪽은 값이
-    답이라 사본으로도 같은 답을 내는데, 이쪽은 **걸음 자체가 유일한 답**이다."""
+    """**Absent because strides cannot be expressed.** A different place from
+    `as_strided` — there the values are the answer, so a copy gives the same
+    answer, and here **the strides themselves are the only answer.**"""
     _no_out(kw)
     raise RuntimeError(
         "torch.empty_strided — there is no such thing as a stride here.")
@@ -1972,11 +2135,12 @@ def empty_permuted(size, physical_layout, **kw):
 
 
 def histogramdd(t, bins=10, **kw):
-    """축이 여럿인 히스토그램.
+    """A histogram over several axes.
 
-    **경계가 텐서 목록으로 온다.** borch.ts 가 JS 배열로 주는데 `settle` 은 그 안까지
-    안 들어가서, 그대로 두면 파이썬 쪽에 JS 손잡이가 남는다 — 받는 쪽이 `.shape` 도
-    `._h` 도 못 쓴다. 여기서 하나씩 감싼다.
+    **The edges arrive as a list of tensors.** borch.ts hands over a JS array and
+    `settle` does not reach inside it, so left alone JS handles stay on the
+    Python side — the receiver can use neither `.shape` nor `._h`. They are
+    wrapped one at a time here.
     """
     _no_out(kw)
     from ._base import _Fields
@@ -1992,10 +2156,11 @@ def histogramdd(t, bins=10, **kw):
 
 
 def normal(mean=0.0, std=1.0, size=None, **kw):
-    """정규분포 표본. **`std` 가 0 이면 평균 그대로다.**
+    """A normal sample. **With `std` at 0 it is the mean itself.**
 
-    `dtype=`·`requires_grad=` 는 `**kw` 가 삼키고 있었다 — 공장을 `_made` 로 모을 때
-    두 번 다 목록 밖이었다. `out=` 도 같은 `**kw` 가 삼키고 있었다.
+    `dtype=` and `requires_grad=` were being swallowed by `**kw` — both times the
+    factories were gathered under `_made`, this one was outside the list. `out=`
+    was being swallowed by the same `**kw`.
     """
     _no_out(kw)
     from ._base import tensor as _t
@@ -2010,7 +2175,8 @@ def normal(mean=0.0, std=1.0, size=None, **kw):
 
 
 def bernoulli(t, **kw):
-    """자리마다 그 확률로 1. **0 이면 전부 0, 1 이면 전부 1.**"""
+    """A 1 at each position with that probability. **0 gives all zeros, 1 gives
+    all ones.**"""
     from ._base import tensor as _t
 
     p = _np.asarray(wrap(t).numpy(), dtype=_np.float64)
@@ -2018,11 +2184,14 @@ def bernoulli(t, **kw):
 
 
 def bernoulli_(t, p=0.5, generator=None, **kw):
-    """**짝과 다른 연산이다.** `bernoulli()` 는 자기 값을 확률로 읽는데 이쪽은 자기
-    값을 **무시하고** `p` 로 채운다(실측: `[0,1,0,1]` 을 넣어도 매번 다르다).
+    """**A different operation from its partner.** `bernoulli()` reads its own
+    values as probabilities, while this one **ignores** its values and fills from
+    `p` (measured: `[0,1,0,1]` going in still comes out different every time).
 
-    밑줄만 보고 짝에서 만들면 확률이 0·1 인 자리는 확정이라 값이 맞고 **가운데
-    확률에서만 조용히 틀린다.** 코어에서도 같은 이유로 자동 표 밖에 뒀다.
+    Built from the partner on the strength of the trailing underscore, positions
+    with probability 0 or 1 are certain and their values match, so it is
+    **quietly wrong only at the probabilities in between.** The core kept it out
+    of the automatic table for the same reason.
     """
     del generator, kw
     from ._base import tensor as _t
@@ -2033,8 +2202,9 @@ def bernoulli_(t, p=0.5, generator=None, **kw):
 
 
 def float_power_(t, exponent, **kw):
-    """**언제나 거절한다.** `float_power` 의 결과가 배정도인데 되쓸 자리가 없다.
-    torch 도 float32 자리에서 같은 이유로 멈춘다(실측)."""
+    """**Always refuses.** `float_power` produces double precision and there is
+    nowhere to write it back. torch stops for the same reason on a float32
+    destination (measured)."""
     del t, exponent, kw
     raise RuntimeError(
         "`float_power_` cannot be used in place — the result is double precision and "
@@ -2059,16 +2229,18 @@ def binomial(count, prob, **kw):
     return _t(_rng.binomial(n.astype(_np.int64), p).astype(_np.float32))
 
 
-# ── 짧은 시간 변환 ────────────────────────────────────────────────────────
+# ── short-time transforms ───────────────────────────────────────────────────
 #
-# **오래 거절이었다.** 거절문에 "복소수 규약(Wirtinger)을 안 재서" 라고 적혀 있었고
-# 그 이유가 맞았다 — 저장이 아니라 규약이 막고 있었다. 재서 못 박고 나니 열렸다.
+# **A refusal for a long time.** The refusal said "the complex convention
+# (Wirtinger) has not been measured", and the reason was right — what blocked it
+# was the convention, not the storage. Measuring and pinning it opened the door.
 
 def _stft_options(hop_length, win_length, window, center, pad_mode,
                   normalized, onesided, return_complex, length=None):
-    """borch.ts 의 `StftOptions` 로. **없는 것은 안 넣는다** — `undefined` 와
-    `null` 이 저쪽에서 다른 뜻이라(기본값 대 "명시적으로 없음"), 파이썬의 `None` 을
-    그대로 넘기면 `return_complex` 강제 검사가 안 걸린다."""
+    """Into borch.ts's `StftOptions`. **What is absent is left out** — over
+    there `undefined` and `null` mean different things (the default versus
+    "explicitly none"), so forwarding Python's `None` as-is means the
+    `return_complex` requirement never fires."""
     kw = {}
     if hop_length is not None:
         kw["hopLength"] = int(hop_length)
@@ -2092,7 +2264,8 @@ def _stft_options(hop_length, win_length, window, center, pad_mode,
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,
          center=True, pad_mode="reflect", normalized=False, onesided=None,
          return_complex=None, **kw):
-    """짧은 시간 푸리에 변환. **`return_complex` 를 안 주면 거절한다**(실측)."""
+    """The short-time Fourier transform. **It refuses without `return_complex`**
+    (measured)."""
     return wrap(guarded(
         _ts.stft, handle(input), int(n_fft),
         _stft_options(hop_length, win_length, window, center, pad_mode,
@@ -2108,8 +2281,9 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,
                       normalized, onesided, None, length)))
 
 
-# **`torch.fft` 는 이름 공간이다.** borch.ts 쪽도 모듈이라 그대로 넘기면 되는데,
-# 파이썬의 `None` 기본값과 이름 붙은 인자를 자리로 푸는 일이 남는다.
+# **`torch.fft` is a namespace.** It is a module over in borch.ts too, so it can
+# be forwarded as-is; what remains is unpacking Python's `None` defaults and
+# named arguments into positions.
 class _Fft:
     @staticmethod
     def fft(input, n=None, dim=-1, norm=None, **kw):
@@ -2123,10 +2297,11 @@ class _Fft:
     def rfft(input, n=None, dim=-1, norm=None, **kw):
         return wrap(guarded(_ts.fft.rfft, handle(input), n, int(dim), norm))
 
-    # ── 여러 축 · 에르미트 — **borch.ts 가 조립한다** ────────────────────
+    # ── multi-axis and Hermitian — **borch.ts assembles them** ─────────────
     #
-    # 여기서 파이썬으로 조립하면 골든은 초록이 되는데 borch.ts 를 쓰는 쪽에는 그
-    # 이름이 없다. 이 저장소가 일곱 번 겪은 자리라 저쪽에 두고 여기서는 넘기기만 한다.
+    # Assembled in Python here the golden goes green and the name does not exist
+    # for anyone using borch.ts. This repository has hit that seven times, so it
+    # lives over there and this side only forwards.
 
     @staticmethod
     def _many(name, input, s, dim, norm):
@@ -2162,8 +2337,8 @@ class _Fft:
 
 
 def _dim_arg(dim):
-    """축 하나면 수로, 여럿이면 JS 배열로. 파이썬 목록을 그냥 넘기면 저쪽이 배열로
-    안 본다 — `_js_list` 가 그 자리를 위해 있다."""
+    """One axis as a number, several as a JS array. A Python list forwarded
+    as-is is not seen as an array over there — `_js_list` exists for that."""
     return _js_list(dim) if isinstance(dim, (list, tuple)) else int(dim)
 
 
@@ -2194,16 +2369,17 @@ _Fft.ihfft = _fft_one("ihfft")
 
 fft = _Fft()
 
-# **`torch.device` 는 코어의 것을 빌린다.** 순수한 값 물건이라(형과 번호 둘) 여기서
-# 다시 쓸 것이 없다 — 두 벌로 두면 `repr` 이 갈리는 날이 오고, 골든이 그 글자를
-# 굳혀 두었다.
+# **`torch.device` is borrowed from the core.** It is a pure value object (a
+# kind and an index) with nothing to rewrite here — kept as two copies, the day
+# comes when the `repr`s diverge, and the golden has pinned those characters.
 from borch._base import device                            # noqa: E402,F401
 
 
-# ── 최상위 순환 여덟 ───────────────────────────────────────────────────────
+# ── the eight top-level recurrent ones ──────────────────────────────────────
 #
-# **`__getattr__` 이 못 넘긴다.** 그쪽은 첫 인자의 메서드로 보내는데, 이 여덟은
-# borch.ts 에서도 자유 함수다(가중치를 목록으로 받는다). 손으로 적는다.
+# **`__getattr__` cannot forward them.** It sends things to the first argument's
+# method, and these eight are free functions in borch.ts too (they take the
+# weights as a list). Written by hand.
 
 def _rnn_options(has_biases, num_layers, dropout, train, bidirectional,
                  batch_first):
@@ -2219,7 +2395,8 @@ def _rnn_params(params):
 
 def lstm(input, hx, params, has_biases, num_layers, dropout, train,     # noqa: A002
          bidirectional, batch_first=False, **kw):
-    """`(출력, h_n, c_n)` — **셋을 편다.** 층 쪽은 `(출력, (h, c))` 로 묶는다."""
+    """`(output, h_n, c_n)` — **all three spread.** The layer side groups them as
+    `(output, (h, c))`."""
     got = guarded(_ts.lstm, handle(input),
                   _js.Array.from_([handle(hx[0]), handle(hx[1])]),
                   _rnn_params(params),
@@ -2269,13 +2446,15 @@ rnn_tanh_cell = _cell_one("rnnTanhCell")
 rnn_relu_cell = _cell_one("rnnReluCell")
 
 
-# ── 최상위에 남아 있던 이름들 ─────────────────────────────────────────────
+# ── the names that were left at top level ───────────────────────────────────
 #
-# **이름으로 세면 틀린다.** `fake_quantize_*` 는 이름이 양자화인데 실수를 받아
-# 실수를 내고, `dequantize` 는 실수에서 항등이다 — 재고 나서야 거절이 아닌 줄 알았다.
+# **Counting by name gets it wrong.** `fake_quantize_*` is named for
+# quantisation and takes reals and produces reals, and `dequantize` is the
+# identity over the reals — only measuring showed they were not refusals.
 
 def igamma(input, other, **kw):                                 # noqa: A002
-    """정규화된 하부 불완전 감마. **기울기가 `x` 쪽에만 있다**(실측)."""
+    """The regularised lower incomplete gamma. **The gradient exists on the `x`
+    side only** (measured)."""
     _no_out(kw)
     return wrap(guarded(_ts.igamma, handle(input), handle(other)))
 
@@ -2286,7 +2465,8 @@ def igammac(input, other, **kw):                                # noqa: A002
 
 
 def polygamma(n, input, **kw):                                  # noqa: A002
-    """**`n` 이 첫 자리다** — 텐서가 둘째다. torch 의 서명이 그렇다."""
+    """**`n` comes first** — the tensor is second. That is torch's
+    signature."""
     _no_out(kw)
     return wrap(guarded(_ts.polygamma, int(n), handle(input)))
 
@@ -2311,16 +2491,19 @@ def fake_quantize_per_channel_affine(input, scale, zero_point,  # noqa: A002
 
 
 def dequantize(input, **kw):                                    # noqa: A002
-    """실수에서는 항등. 양자화 dtype 이 **영원히 없어서** 그것이 완전한 답이다."""
+    """The identity over the reals. There will **never** be a quantised dtype, so
+    that is the complete answer."""
     return wrap(guarded(handle(input).dequantize))
 
 
 def resize_as_(input, other, **kw):                             # noqa: A002
-    """`other` 의 모양으로 제자리에서. **늘어난 칸의 값은 정해지지 않는다**(실측).
+    """In place, to `other`'s shape. **The values in the added cells are
+    undefined** (measured).
 
-    **`copyFrom` 으로는 안 된다** — 그것은 칸 수가 같아야 하는데 이 연산은 칸 수를
-    바꾸는 것이 전부다. 제자리성은 파이썬 쪽 손잡이를 갈아 끼워서 지킨다: 부르는
-    쪽이 쥔 객체는 그대로고 밑에 깔린 버퍼만 바뀐다.
+    **`copyFrom` cannot do it** — that needs the same element count, and changing
+    the element count is the whole of this operation. In-placeness is kept by
+    swapping the handle on the Python side: the object the caller holds stays,
+    and only the buffer underneath changes.
     """
     x = wrap(input)
     want = wrap(other).shape
@@ -2337,14 +2520,16 @@ def resize_as_(input, other, **kw):                             # noqa: A002
 
 
 def hash_tensor(*args, **kw):
-    """**uint64 도 없고 규격도 없다.** 값을 맞출 수 없는 것에 이름만 놓지 않는다."""
+    """**No uint64 and no specification.** A name is not put down for something
+    whose values cannot be matched."""
     raise RuntimeError(
         "torch.hash_tensor — there is no uint64 and no settled hash spec.")
 
 
 def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
-    """**희소 텐서 전용이라 없다.** 코어와 같은 자리, 같은 이유로 거절한다 —
-    조밀 텐서로 흉내 내면 모양은 맞고 저장 방식이 다른 것을 주게 된다."""
+    """**Sparse-only, so it is absent.** The core's place and the core's reason
+    for refusing — imitated with a dense tensor, the shape matches and what comes
+    back has a different storage layout."""
     _no_out(kw)
     raise RuntimeError(
         "torch.sspaddmm — there is no sparse tensor layout here. "
@@ -2352,31 +2537,36 @@ def sspaddmm(input, mat1, mat2, beta=1, alpha=1, **kw):
 
 
 def fill(x, value, **kw):
-    """**제자리가 아니다.** `fill_` 과 이름이 한 글자 다르고 하는 일이 다르다 —
-    이쪽은 새 텐서를 내고 원본은 그대로다(실측).
+    """**Not in place.** One character apart from `fill_` and a different job —
+    this one produces a new tensor and leaves the original alone (measured).
 
-    별칭 표로 넘기면 `fill_` 까지 같은 이름으로 끌려가므로 여기 손으로 적는다.
+    Sent through the alias table, `fill_` gets dragged under the same name too,
+    so it is written by hand here.
     """
     return wrap(guarded(handle(x).fillWith, float(value)))
 
 
 def bitwise_not(x, **kw):
-    """**참거짓이면 논리 부정이다.** 정수면 `~x` 라 `~1 == -2` 인데, 참에 그것을
-    적용하면 torch 는 거짓을 준다(실측) — 두 갈래가 값에서 아예 다르다.
+    """**On booleans it is logical negation.** On integers it is `~x`, so
+    `~1 == -2`, and applied to true torch gives false (measured) — the two
+    branches differ outright in value.
 
-    이항 쪽(`and`·`or`·`xor`)은 갈래가 필요 없다. 0/1 에서 비트 셈과 논리 셈이 같은
-    답을 내고, 형도 `bool` 끼리면 `bool` 로 남는다. 부정만 다르다.
+    The binary ones (`and`, `or`, `xor`) need no branch. Over 0/1 the bitwise and
+    logical computations give the same answer, and `bool` with `bool` stays
+    `bool`. Only negation differs.
 
-    **갈림이 저쪽으로 갔다.** 여기 있는 동안 borch.ts 의 커널 주석은 "여기는 정수만
-    본다" 였고, 그러면 TypeScript 로 부르는 사람은 없는 답이 아니라 **틀린 답**을
-    받는다. 자기 형은 자기가 아니까 가르는 자리도 거기다.
+    **The branch moved over there.** While it lived here, borch.ts's kernel
+    comment said "this only looks at integers", which means somebody calling from
+    TypeScript gets **a wrong answer** rather than no answer. That side knows its
+    own dtype, so the branch belongs there.
     """
     _no_out(kw)
     return wrap(guarded(handle(wrap(x)).bitwise_not))
 
 
 def var_mean(t, dim=None, keepdim=False, **kw):
-    """**둘을 한 번에 준다.** 하나만 물으면 다른 하나가 틀려도 안 걸린다."""
+    """**Both at once.** Asking for one leaves the other free to be wrong
+    uncaught."""
     _no_out(kw)
     t = wrap(t)
     return (t.var(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
@@ -2399,8 +2589,9 @@ def vdot(a, b, **kw):
 
 
 def kron(a, b, **kw):
-    """**1 차원만 한다.** 여기 있던 판은 축 하나만 보고 있어서 2 차원을 넣으면 답이
-    조용히 틀렸다 — 저쪽으로 옮기면서 그 자리를 거절로 바꿨다."""
+    """**1-D only.** The version that lived here looked at one axis, so 2-D
+    input gave a quietly wrong answer — moving it over there turned that place
+    into a refusal."""
     _no_out(kw)
     return wrap(guarded(handle(wrap(a)).kron, handle(wrap(b))))
 
@@ -2419,22 +2610,25 @@ def cross(a, b, dim=-1, **kw):
                 part(a, 0) * part(b, 1) - part(a, 1) * part(b, 0)], axis)
 
 
-# ── 수치 계열. **급수로 세는 셋은 WGSL 에 있고 나머지는 조합이다.** ─────────
+# ── the numeric family. **The three computed as series live in WGSL and the
+# rest are combinations.** ──────────────────────────────────────────────────
 
 def cdist(a, b, p=2.0, **kw):
-    """모든 짝 사이의 거리. 브로드캐스팅 하나로 풀린다."""
+    """The distance between every pair. One broadcast solves it."""
     return wrap(guarded(handle(wrap(a)).cdist, handle(wrap(b)), p))
 
 
 def cov(t, correction=1, **kw):
-    """공분산. **줄이 변수이고 칸이 관측이다** — numpy 와 축이 반대라 헷갈린다."""
+    """Covariance. **Rows are variables and columns are observations** — the
+    axes are the reverse of numpy's, which is confusing."""
     return wrap(guarded(handle(wrap(t)).cov, correction))
 
 
-# ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
+# ── the names that exist only at torch's top level ──────────────────────────
 #
-# 최상위 쪽은 날 ATen 이라 **인자 순서가 다르고 열거형이 정수다.** 같은 계산인데
-# 부르는 법이 다른 것이라, 계산은 `nn.functional` 한 벌만 두고 여기서 자리만 옮긴다.
+# The top level is raw ATen, so **the argument order differs and the enums are
+# integers.** The same computation called a different way, so the computation is
+# kept as one copy in `nn.functional` and only the positions move here.
 
 def _inplace_from(name, fn_name=None):
     def call(x, *args, **kw):
@@ -2447,8 +2641,9 @@ def _inplace_from(name, fn_name=None):
 
 
 def nan_to_num_(x, *args, **kw):
-    """**`nan_to_num` 은 `F` 가 아니라 모듈 쪽에 있다.** 이름만 보고 `F` 에서 찾으면
-    없다고 멈춘다 — 최상위 이름이 전부 `F` 에도 있는 것은 아니다."""
+    """**`nan_to_num` lives on the module, not on `F`.** Going by the name and
+    looking in `F` stops with "absent" — not every top-level name exists on `F`
+    as well."""
     x._refuse_inplace_on_leaf("nan_to_num_")
     return x._write_back(nan_to_num(x, *args, **kw))
 
@@ -2460,14 +2655,16 @@ feature_dropout_ = _inplace_from("feature_dropout_", "dropout2d")
 
 
 def feature_dropout(x, p=0.5, train=True):
-    """**채널째 떨군다** — `F.dropout2d` 와 같은 계산이다(실측)."""
+    """**Drops whole channels** — the same computation as `F.dropout2d`
+    (measured)."""
     from . import _nn
     return _nn.functional.dropout2d(x, p, train)
 
 
 def batch_norm(x, weight, bias, running_mean, running_var, training=False,
                momentum=0.1, eps=1e-5, cudnn_enabled=False):
-    """**`F.batch_norm` 과 인자 순서가 다르다** — 여기서는 가중치가 통계보다 앞이다."""
+    """**A different argument order from `F.batch_norm`** — the weights come
+    before the statistics here."""
     from . import _nn
     return _nn.functional.batch_norm(x, running_mean, running_var, weight, bias,
                                      training, momentum, eps)
@@ -2475,7 +2672,8 @@ def batch_norm(x, weight, bias, running_mean, running_var, training=False,
 
 def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
                  align_corners=False):
-    """**열거형이 정수다.** 0·1 이 `bilinear`·`nearest`, 채우기는 0·1·2 다."""
+    """**The enums are integers.** 0 and 1 are `bilinear` and `nearest`, and the
+    padding is 0, 1 and 2."""
     from . import _nn
     modes = ("bilinear", "nearest", "bicubic")
     pads = ("zeros", "border", "reflection")
@@ -2494,7 +2692,8 @@ def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
 
 def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
              reduction=1, zero_infinity=False):
-    """**`reduction` 이 정수다** — 0·1·2 가 `none`·`mean`·`sum` 이다."""
+    """**`reduction` is an integer** — 0, 1 and 2 are `none`, `mean` and
+    `sum`."""
     from . import _nn
     kinds = ("none", "mean", "sum")
     return _nn.functional.ctc_loss(log_probs, targets, input_lengths,
@@ -2503,21 +2702,25 @@ def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
 
 
 def geqrf(t, **kw):
-    """반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다."""
+    """QR in reflector form. The partner to `linalg.householder_product`, so it
+    exists at top level too."""
     _no_out(kw)
     return guarded(handle(t).geqrf)
 
 
 def corrcoef(t, **kw):
-    """공분산을 표준편차로 나눈 것. **대각선이 1 이 된다** — 그것이 검산이다."""
+    """Covariance divided by the standard deviations. **The diagonal becomes
+    1** — that is the check."""
     return wrap(guarded(handle(wrap(t)).corrcoef))
 
 
 def tensordot(a, b, dims=2, **kw):
-    """지정한 축끼리 접어 곱한다. 접을 축을 몰고 행렬곱 한 번으로 끝낸다.
+    """Fold the named axes together and multiply. The folded axes are herded
+    together and one matmul finishes it.
 
-    **축 목록은 그대로 넘긴다** — `_js_list` 로 감싸면 안쪽 목록이 `int()` 를 만나
-    터진다. 수 하나인 꼴과 목록 둘인 꼴이 저쪽 서명에 그대로 있다.
+    **The axis lists are forwarded as they are** — wrapped in `_js_list` the
+    inner lists meet `int()` and blow up. Both the single-number form and the
+    two-lists form are in the signature over there.
     """
     dd = dims if isinstance(dims, int) else _to_js(
         [_js_list([int(v) for v in side]) for side in dims])
@@ -2527,36 +2730,42 @@ def tensordot(a, b, dims=2, **kw):
 
 
 def _trapezoid_x(x):
-    """자리 텐서를 손잡이로. **`None` 은 그대로 넘긴다** — Pyodide 가 `undefined` 로
-    바꿔 주고, 저쪽 서명의 기본값이 바로 그 자리다."""
+    """Positional tensors to handles. **`None` is forwarded as-is** — Pyodide
+    turns it into `undefined`, which is exactly the default in the signature over
+    there."""
     return None if x is None else handle(wrap(x))
 
 
 def trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
-    """사다리꼴 적분. 이웃한 두 점의 평균에 간격을 곱해 더한다.
+    """Trapezoidal integration. The mean of each neighbouring pair times the
+    spacing, summed.
 
-    **조립이 여기 있었다.** 조각을 자르고 더하는 몇 줄이었고, borch.ts 쪽 주석에는
-    "여기 하나 더 만들면 조립이 두 벌이 된다" 고 적혀 있었다. 그 말이 놓친 것은
-    borch.ts 를 TypeScript 에서 쓰는 쪽에는 이 이름이 **아예 없었다**는 것이다 —
-    한 벌이 아니라 파이썬 쪽에만 있었다. 이름을 저쪽에 놓고 여기서는 넘긴다.
+    **The assembly used to be here.** A few lines slicing and adding, and the
+    comment over in borch.ts said "building another one here makes two copies of
+    the assembly". What that missed is that for anyone using borch.ts from
+    TypeScript this name **did not exist at all** — it was not one copy, it was
+    Python-only. The name goes over there and this side forwards.
     """
     return wrap(guarded(handle(wrap(y)).trapezoid,
                         _trapezoid_x(x), kw.get("dx", dx), dim))
 
 
 def cumulative_trapezoid(y, x=None, dx=1.0, dim=-1, **kw):
-    """누적판. **마지막 값이 `trapezoid` 와 같아야 한다** — 그것이 검산이다."""
+    """The cumulative version. **The last value has to equal `trapezoid`** —
+    that is the check."""
     return wrap(guarded(handle(wrap(y)).cumulativeTrapezoid,
                         _trapezoid_x(x), kw.get("dx", dx), dim))
 
 
-# ── 색인으로 **쓰는** 쪽. 읽는 쪽(`gather`)의 반대다. ───────────────────────
+# ── the **writing** side of indexing. The opposite of the reading side
+# (`gather`). ───────────────────────────────────────────────────────────────
 
 def _spread_index(index, dim, shape):
-    """1 차원 번호를 `shape` 모양으로 편다.
+    """Spread 1-D indices into `shape`.
 
-    `index_add` 류는 번호가 **줄**을 가리키는데 커널은 칸마다의 번호를 받는다.
-    축 하나에 놓고 나머지로 늘리면 그 둘이 같은 것이 된다 — 새 커널이 필요 없다.
+    The `index_add` family's indices point at **rows**, and the kernel takes an
+    index per element. Placed on one axis and broadcast across the rest, the two
+    become the same thing — no new kernel needed.
     """
     lifted = [1] * len(shape)
     lifted[dim] = int(handle(index).size)
@@ -2564,7 +2773,8 @@ def _spread_index(index, dim, shape):
 
 
 def scatter(t, dim, index, src, **kw):
-    """번호가 가리키는 자리에 **덮어쓴다.** 겹치면 마지막에 쓴 것이 남는다."""
+    """**Overwrites** at the positions the indices point at. On a collision the
+    last write survives."""
     t = wrap(t)
     if not isinstance(src, Tensor):
         src = zeros(*[int(n) for n in handle(index).shape]) + float(src)
@@ -2572,7 +2782,8 @@ def scatter(t, dim, index, src, **kw):
 
 
 def scatter_add(t, dim, index, src, **kw):
-    """번호가 가리키는 자리에 **더한다.** 겹치면 쌓인다 — `scatter` 와 여기서 갈린다."""
+    """**Adds** at the positions the indices point at. Collisions accumulate —
+    where it parts from `scatter`."""
     return wrap(guarded(handle(t).scatterAdd, dim, handle(index), handle(src)))
 
 
@@ -2592,7 +2803,7 @@ def index_fill(t, dim, index, value, **kw):
 
 
 def take(t, index, **kw):
-    """**평평하게 펴서** 뽑는다 — 축이라는 개념이 없다."""
+    """Takes from **the flattened tensor** — it has no notion of an axis."""
     h = handle(t)
     flat = wrap(guarded(h.reshape, _js_list([int(h.size)])))
     picked = wrap(guarded(handle(flat).indexSelect, 0,
@@ -2609,14 +2820,17 @@ def take_along_dim(t, indices, dim=None, **kw):
 
 
 def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
-    """정렬된 것 안에서 들어갈 자리. **동점의 어느 쪽인지를 두 인자가 함께 정한다.**
+    """Where a value would be inserted into something sorted. **Which side of a
+    tie is decided by two arguments together.**
 
-    커널이 필요 없다 — "나보다 작은 것이 몇 개인가" 를 세면 그것이 자리다.
+    No kernel is needed — count "how many are smaller than me" and that is the
+    position.
 
-    torch 는 같은 것을 두 이름으로 받는다 — 참거짓 `right` 와 문자열 `side` 다.
-    여기에는 `right` 만 있었고 `side` 는 `**kw` 로 들어가 **조용히 버려졌다.** 코어도
-    같았고, `bucketize(right=True)` 는 양쪽 다 처음부터 맞았다. 인자가 하나씩만
-    어긋나서 값이 그럴듯해 보인다.
+    torch takes the same thing under two names — the boolean `right` and the
+    string `side`. Only `right` existed here and `side` went into `**kw` and was
+    **quietly discarded.** The core was the same, and `bucketize(right=True)` was
+    right on both sides from the start. Only one argument each is off, so the
+    values look plausible.
     """
     _no_out(kw)
     side = kw.get("side", side)
@@ -2645,7 +2859,8 @@ def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
 
 
 def bucketize(values, boundaries, right=False, **kw):
-    """`searchsorted` 와 **인자 순서가 뒤집혀 있다.** 그것이 두 이름의 차이 전부다."""
+    """**The argument order is reversed from `searchsorted`.** That is the whole
+    difference between the two names."""
     _no_out(kw)
     return searchsorted(boundaries, values, right=kw.get("right", right))
 
@@ -2658,29 +2873,31 @@ true_divide = div
 concat = cat
 concatenate = cat
 
-# 비교의 다른 이름들. 표에 있는 이름으로 넘긴다.
+# The comparisons' other names. Forwarded under the name in the table.
 _COMPARE_ALIAS = {"greater": "gt", "greater_equal": "ge",
                   "less": "lt", "less_equal": "le", "not_equal": "ne"}
 
 
 def where(cond, a, b):
-    """torch 는 `where(조건, 참, 거짓)`, borch.ts 는 `참.where(조건, 거짓)` 이다.
-    자리를 바꾸지 않으면 참·거짓이 뒤집힌 값이 나온다 — 값 대조로만 보인다."""
+    """torch is `where(condition, true, false)` and borch.ts is
+    `true.where(condition, false)`. Without the reorder the true and false
+    branches come out swapped — visible only by comparing values."""
     return guarded(handle(a).where, handle(cond), handle(b))
 
 
 def layer_norm(x, shape=None, weight=None, bias=None, eps=1e-5, **kw):
-    """torch 는 **정규화할 모양**을 받고 borch.ts 는 축을 받는다.
+    """torch takes **the shape to normalise over** and borch.ts takes an axis.
 
-    `(마지막 축의 길이,)` 처럼 뒤에서부터 세는 것이 torch 의 규칙이므로, 받은 모양의
-    길이만큼 뒤에서 센 축이 시작점이다. 그대로 넘기면 축 4 를 랭크 2 에 물어보게 된다.
+    torch's rule counts from the back, as in `(length of the last axis,)`, so the
+    starting axis is as many from the end as the given shape is long. Forwarded
+    as-is it asks for axis 4 on a rank-2 tensor.
     """
     dim = -len(shape) if isinstance(shape, (list, tuple)) and shape else -1
     return guarded(handle(x).layerNorm, dim, kw.get("eps", eps))
 
 
 def repeat_interleave(x, repeats, dim=None, **kw):
-    """`dim` 이 없으면 torch 는 **평평하게 편 뒤** 되풀이한다."""
+    """With no `dim`, torch repeats **after flattening.**"""
     h = handle(x)
     if dim is None:
         h = h.reshape(_js_list([int(h.size)]))
@@ -2689,7 +2906,8 @@ def repeat_interleave(x, repeats, dim=None, **kw):
 
 
 def flip(x, dims=None, **kw):
-    """torch 는 축 **목록**을 받고 borch.ts 는 하나씩 받는다. 차례로 뒤집는다."""
+    """torch takes **a list** of axes and borch.ts takes one at a time. Flipped
+    in turn."""
     dims = kw.get("dims", dims)
     if isinstance(dims, int):
         dims = [dims]
@@ -2700,45 +2918,51 @@ def flip(x, dims=None, **kw):
 
 
 def pow(x, exponent):                                    # noqa: A001
-    """지수가 수면 `powScalar` 다 — 정수 지수를 곱셈으로 풀어 부호를 지킨다."""
+    """A numeric exponent means `powScalar` — an integer exponent is expanded
+    into multiplications, which keeps the sign."""
     if isinstance(exponent, Tensor):
         return guarded(handle(x).binary, "pow", exponent._h)
     return guarded(handle(x).powScalar, exponent)
 
 
 def pad(x, pairs, mode="constant", value=0.0, **kw):
-    """torch 의 `F.pad` 는 **마지막 축부터** 짝을 받는다 — `(왼, 오, 위, 아래, …)`.
+    """torch's `F.pad` takes pairs **from the last axis** —
+    `(left, right, top, bottom, …)`.
 
-    **`mode` 를 받아만 놓고 안 쓰던 자리다.** 인자에는 있는데 아래로 안 내려가서
-    `reflect` 를 달라고 해도 상수 패딩이 나왔다 — 예외가 아니라 **조용히 다른 값**이라,
-    골든에 그 모드를 묻는 케이스가 생기고 나서야 드러났다. JS 가 남는 인자를 버리는
-    것과 같은 종류인데 이번에는 파이썬 쪽에서 버렸다.
+    **A place that accepted `mode` and never used it.** It was in the parameters
+    and never went any further down, so asking for `reflect` produced constant
+    padding — not an exception but **quietly a different value**, and it surfaced
+    only once the golden had a case asking for that mode. The same kind of thing
+    as JS discarding surplus arguments, discarded on the Python side this time.
     """
     value = kw.get("value", value)
     return wrap(guarded(handle(x).padND, _js_list(list(pairs)), mode, float(value)))
 
 
 def split(x, size, dim=0):
-    """**인자 순서가 뒤집혀 있다.** torch 는 `split(조각크기, 축)`, borch.ts 는
-    `splitSize(축, 조각크기)` 다. 그대로 넘기면 축 자리에 크기가 들어가 엉뚱한 데서
-    터진다 — `축 2 의 크기 0 는 undefined 로 안 나뉜다` 가 그것이었다."""
+    """**The argument order is reversed.** torch is `split(size, axis)` and
+    borch.ts is `splitSize(axis, size)`. Forwarded as-is the size lands in the
+    axis slot and it blows up somewhere unrelated — that was
+    `axis 2 of size 0 is not divisible by undefined`."""
     return [wrap(t) for t in handle(x).splitSize(dim, size)]
 
 
 def chunk(x, chunks, dim=0):
-    """**`split` 이 아니다.** 그쪽은 나눠떨어져야 하고 `chunk` 는 아니다 —
-    torch 는 3 을 2 로 쪼개면 2·1 을 주고, 2 를 5 로 쪼개면 **조각이 둘**이다(실측).
+    """**Not `split`.** That one has to divide evenly and `chunk` does not —
+    torch splitting 3 into 2 gives 2 and 1, and splitting 2 into 5 gives **two
+    pieces** (measured).
 
-    borch.ts 에 `chunk` 가 제대로 있는데 여기서 `split` 으로 넘기고 있었다. 나눠
-    떨어지는 크기로만 재면 두 함수가 같아 보인다.
+    borch.ts has `chunk` properly and this was forwarding to `split`. Measured
+    only at sizes that divide evenly, the two functions look the same.
     """
     return [wrap(t) for t in handle(x).chunk(chunks, dim)]
 
 
 def clamp(x, min=None, max=None):                        # noqa: A002
-    """**한쪽만 주는 것이 흔하다.** borch.ts 는 `clamp(low, high)` 로 둘 다 받고,
-    한쪽에 `undefined` 를 넘기면 그것이 셰이더 안까지 내려가 WGSL 이 거절한다.
-    그래서 여기서 `clampMin`·`clampMax` 로 갈라 준다."""
+    """**Giving only one side is common.** borch.ts takes both as
+    `clamp(low, high)`, and an `undefined` on one side travels all the way into
+    the shader and WGSL refuses it. So it is split into `clampMin` and
+    `clampMax` here."""
     h = handle(x)
     if min is not None and max is not None:
         return guarded(h.clamp, min, max)
@@ -2753,14 +2977,15 @@ clip = clamp
 
 
 def aminmax(x, **kw):
-    """최소와 최대를 함께. borch.ts 는 둘을 따로 갖고 있어서 여기서 묶는다."""
+    """The minimum and the maximum together. borch.ts keeps them separately, so
+    they are paired here."""
     _no_out(kw)
     h = handle(x)
     return _MinMax(wrap(h.amin()), wrap(h.amax()))
 
 
 class _MinMax:
-    """`aminmax` 의 답. torch 는 `.min` 과 `.max` 라고 부른다."""
+    """`aminmax`'s answer. torch calls them `.min` and `.max`."""
 
     __slots__ = ("min", "max")
 
@@ -2775,15 +3000,18 @@ class _MinMax:
         return (self.min, self.max)[i]
 
 
-# **`torch.linalg` 는 이름 공간이다.** 대부분 텐서 메서드로 있고, 값에 따라 크기가
-# 정해지는 것들(`cholesky`·`svd`·`eigh`)은 비동기라 `settle` 이 기다린다.
+# **`torch.linalg` is a namespace.** Most of it exists as tensor methods, and the
+# ones whose sizes depend on the values (`cholesky`, `svd`, `eigh`) are
+# asynchronous, so `settle` waits on them.
 class _Linalg:
-    # 특이행렬을 만나는 코드가 `except linalg.LinAlgError` 로 감싼다. 여기 없으면
-    # 그 감싸기가 이름을 못 찾고 프로그램이 죽는다 — 값보다 먼저 필요한 것이다.
+    # Code that meets a singular matrix wraps it in
+    # `except linalg.LinAlgError`. Without this here that wrapper cannot find the
+    # name and the program dies — needed before any value is.
     LinAlgError = _LinAlgError
 
     def lstsq(self, a, b):
-        """torch 는 `.solution` 이 든 물건을 준다 — borch.ts 는 답을 바로 준다."""
+        """torch gives an object holding `.solution` — borch.ts gives the answer
+        directly."""
         from ._base import _Fields
         got = settle(handle(a).lstsq(handle(b)))
         out = _Fields.__new__(_Fields)
@@ -2795,10 +3023,11 @@ class _Linalg:
         return matrix_power(a, n)
 
     def multi_dot(self, mats):
-        """**첫 인자가 텐서가 아니라 목록이다** — 아래의 일반 길로 못 간다.
+        """**The first argument is a list, not a tensor** — it cannot take the
+        general path below.
 
-        묶는 순서는 값을 안 바꾼다(곱셈이 결합적이라). 바뀌는 것은 셈의 개수뿐이라
-        여기서는 순서대로 곱한다.
+        The grouping does not change the value (multiplication is associative).
+        Only the operation count changes, so they are multiplied in order here.
         """
         out = wrap(mats[0])
         for m in mats[1:]:
@@ -2806,10 +3035,11 @@ class _Linalg:
         return out
 
     def diagonal(self, a, offset=0, dim1=-2, dim2=-1):
-        """**`torch.diagonal` 과 기본 축이 다르다.**
+        """**The default axes differ from `torch.diagonal`'s.**
 
-        이쪽은 마지막 두 축이고 저쪽은 앞의 두 축이다. 일반 길로 보내면 borch.ts 의
-        기본값(`0, 1`)이 쓰여서 3 차원에서 조용히 다른 모양이 나온다.
+        This one is the last two axes and that one is the first two. Sent down
+        the general path, borch.ts's defaults (`0, 1`) are used and 3-D quietly
+        gives a different shape.
         """
         return wrap(guarded(handle(a).diagonal, offset, dim1, dim2))
 
@@ -2821,10 +3051,11 @@ class _Linalg:
     def tensorinv(self, a, ind=2):
         return wrap(guarded(handle(a).tensorInv, ind))
 
-    # ── `_ex`·LDL·반사자 ────────────────────────────────────────────────
+    # ── `_ex`, LDL and reflectors ──────────────────────────────────────────
     #
-    # 일반 길로 못 간다 — 인자가 텐서 여럿이거나(`ldl_solve`) 이름 붙은 자리를 여럿
-    # 돌려준다. 자리 이름은 `guarded` 가 붙여 준다.
+    # They cannot take the general path — the arguments are several tensors
+    # (`ldl_solve`) or they return several named fields. `guarded` supplies the
+    # field names.
 
     def lu_factor_ex(self, a, pivot=True, check_errors=False):
         return guarded(handle(a).luFactorEx)
@@ -2833,12 +3064,14 @@ class _Linalg:
         return guarded(handle(a).ldlFactor)
 
     def ldl_factor_ex(self, a, hermitian=False, check_errors=False):
-        """`ldl_factor` 에 `info` 를 붙인 것. 여기서는 늘 0 이다 — 나쁜 자리는 거절한다.
+        """`ldl_factor` with `info` attached. It is always 0 here — the bad cases
+        are refused.
 
-        **자리 셋을 손으로 세우고 있었다.** `_Fields` 를 직접 만들어 `LD`·`pivots` 는
-        borch.ts 것을 넣고 `info` 에 numpy 스칼라를 끼웠는데, 그러면 이 이름이
-        borch.ts 에 없다는 것이 골든에 안 걸린다 — 케이스가 전부 여기를 지나서다.
-        `trapezoid` 와 같은 자리라 같게 고친다.
+        **The three fields were being stood up by hand.** A `_Fields` was built
+        directly, with borch.ts's values for `LD` and `pivots` and a numpy scalar
+        wedged into `info`, and then the golden cannot catch that this name is
+        missing from borch.ts — every case goes through here. The same place as
+        `trapezoid`, fixed the same way.
         """
         return guarded(handle(a).ldlFactorEx)
 
@@ -2849,8 +3082,9 @@ class _Linalg:
         return wrap(guarded(handle(a).householderProduct, handle(tau)))
 
     def __getattr__(self, name):
-        # torch 가 줄여 부르는 것들. `pinv` 는 오래 비어 있었는데 골든이 늘 긴 이름
-        # (`L.pinverse`)으로만 물어서 안 드러났다 — 부르는 철자가 하나 늘자 나왔다.
+        # torch's abbreviations. `pinv` was empty for a long time and never
+        # surfaced because the golden always asked under the long name
+        # (`L.pinverse`) — it appeared as soon as one more spelling called it.
         js_name = camel({"inv": "inverse", "pinv": "pinverse",
                          "matmul": "mm", "matrix_rank": "matrixRank"}.get(name, name))
 
@@ -2858,9 +3092,11 @@ class _Linalg:
             fn = getattr(handle(x), js_name, None)
             if fn is None:
                 raise AttributeError(f"borch.ts does not have `{js_name}` (linalg.{name})")
-            # **이름 붙은 인자를 버리면 안 된다.** `qr(mode="complete")` 와
-            # `svd(full_matrices=False)` 가 그 자리인데, 버리면 예외가 아니라
-            # **기본값으로 조용히 다른 답**이 나온다 — 값 대조만이 잡을 수 있는 종류다.
+            # **Named arguments must not be discarded.**
+            # `qr(mode="complete")` and `svd(full_matrices=False)` are the
+            # places, and discarded they give not an exception but **quietly a
+            # different answer under the defaults** — the kind only a value
+            # comparison catches.
             return guarded(fn, *positional(name, args, kw))
 
         call.__name__ = name

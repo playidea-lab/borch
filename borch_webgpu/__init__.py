@@ -1,50 +1,59 @@
-"""borch_webgpu — **borch.ts 위에 얹은 얇은 결속(binding).**
+"""borch_webgpu — **a thin binding on top of borch.ts.**
 
-`import borch_webgpu as torch` 로 쓰고, 밑에서 직접 쓴 WGSL 커널이 돈다.
+Used as `import borch_webgpu as torch`, with hand-written WGSL kernels running
+underneath.
 
-## 이 이름은 한 번 주인이 바뀌었다
+## This name changed hands once
 
-전에는 같은 이름이 TF.js 판이었다. 그쪽은 **5,307 줄**이었는데, TF.js 가 주는 것이
-원시 연산 104 개뿐이라 autograd 테이프와 `nn.Module` 과 옵티마이저를 파이썬으로
-다시 구현해야 했기 때문이다. 이쪽은 **7,036 줄**이다 — borch.ts 에 그것이 이미 다
-있어서 파이썬이 할 일이 이름을 바꿔 끼우는 것뿐이다.
+It used to belong to the TF.js implementation. That one was **5,307 lines**,
+because TF.js supplies 104 primitive operations and nothing else, so the
+autograd tape, `nn.Module` and the optimisers all had to be rebuilt in Python.
+This one is **7,036 lines** — borch.ts already has all of it, so Python's job
+is swapping names across.
 
-`_data.py` 는 양쪽에서 거의 같다 — 저쪽에서 그대로 옮겨왔고 numpy 와 OPFS 위라
-밑바닥과 상관이 없다. 줄어든 것은 전부 그 밖에서 줄었다.
+`_data.py` is nearly identical in both. It came over unchanged, sits on numpy
+and OPFS, and does not care what is underneath. Everything that shrank shrank
+elsewhere.
 
-이름은 사용자가 보는 것을 말한다: 브라우저에서, GPU 로. 그 뜻이 안 바뀌었으므로
-이름도 안 바꿨고, 갈아탄 것은 밑바닥이다. 재보니 같은 벤치에서 배치 64 기준
-154.7ms → 123.4ms 였고, 골든 859 건이 양쪽에 같은 질문을 했다.
+The name describes what a user sees: in a browser, on the GPU. That meaning did
+not change, so the name did not either; what was swapped is the floor.
+Measured on the same benchmark at batch 64 it went 154.7ms to 123.4ms, and 859
+golden cases asked both sides the same questions.
 
-이름 바꿔 끼우는 것마저 손으로 안 적는다. 모듈과 텐서의 `__getattr__` 이
-`masked_select` 를 `maskedSelect` 로 바꿔 넘기고, 없으면 멈춘다. **넘기는 인자를
-저쪽이 안 받으면 그것도 멈춘다** — JS 는 남는 인자를 조용히 버리므로, 그 확인이
-없던 동안 `sum(dim=1)` 이 축을 무시한 전체 합을 값으로 냈다.
+Even the name-swapping is not written by hand. `__getattr__` on the module and
+on the tensor turns `masked_select` into `maskedSelect` and stops when there is
+no such name. **It also stops when the other side does not accept an argument
+being passed** — JavaScript discards surplus arguments silently, and while that
+check was missing `sum(dim=1)` produced a full sum that ignored the dimension.
 
-## 동기로 도는 이유 — 이건 재봤다
+## Why it is synchronous — this was measured
 
-WebGPU 에 동기 읽기가 없다. borch.ts 의 `toArray()` 는 약속을 돌려준다. 그대로
-얹으면 `await loss.item()` 이 되고, 그러면 **"튜토리얼 코드를 임포트만 바꿔
-돌린다"** 는 이 프로젝트의 유일한 주장이 깨진다.
+WebGPU has no synchronous read. borch.ts's `toArray()` returns a promise. Laid
+down as-is that becomes `await loss.item()`, and then **"tutorial code runs by
+changing only the import"** — the one claim this project makes — is broken.
 
-Pyodide 의 `run_sync` 가 그 자리를 메운다(JSPI 위에 선다). 실측했다 —
-`tests/browser/sync_probe.py` 가 `[2,4,6]` 을 낸다. **조건이 하나 있다:** 파이썬에
-들어올 때 비동기 진입(`runPythonAsync`)이어야 한다. 동기 진입이면
-`RuntimeError: No suspender` 로 멈추는데, 라이브러리의 한계가 아니라 그 스택에
-중단할 자리가 없어서다. 러너는 이미 비동기로 들어간다.
+Pyodide's `run_sync` fills that gap, standing on JSPI. Measured:
+`tests/browser/sync_probe.py` produces `[2,4,6]`. **One condition:** Python has
+to be entered asynchronously (`runPythonAsync`). Enter synchronously and it
+stops with `RuntimeError: No suspender`, which is not a limit of the library
+but the absence of anywhere on that stack to suspend. The runners already enter
+asynchronously.
 
-## 브라우저 안에서만 돈다
+## It only runs inside a browser
 
-`js.borch` 를 부른다. 네이티브 CPython 에서 임포트하면 바로 멈춘다 — 조용히 다른
-것으로 폴백하면 "GPU 로 돌렸다" 고 착각하게 되고, 그건 이 프로젝트가 가장 싫어하는
-종류다. 코어(`borch`, numpy)가 네이티브 쪽 답이다.
+It reaches for `js.borch`. Importing it under native CPython stops immediately —
+falling back to something else quietly would let somebody believe they ran on a
+GPU, which is the kind of thing this project dislikes most. The core (`borch`,
+on numpy) is the native answer.
 
-## 지금 어디까지인가
+## Where it stands
 
-골든 **1830 건 전부**를 지난다. 코어(numpy)는 그중 1777 건을 보는데, 나머지 53 건은
-코어가 일부러 거절하는 것들(1·3 차원 합성곱, 랭크 7·8)이라 안 묻는다.
+It passes **all 1830 golden cases**. The core (numpy) sees 1777 of them; the
+other 53 are things the core refuses on purpose (1-D and 3-D convolution, rank
+7 and 8), so it is not asked.
 
-경계는 골든이 붙잡는다. 없는 것을 근사해서 초록을 만들지 않는다.
+The golden holds the boundary. Nothing missing gets approximated into a green
+tick.
 """
 
 try:                                                    # pragma: no cover
@@ -61,9 +70,10 @@ if getattr(_js, "borch", None) is None:                 # pragma: no cover
         "running something else.")
 
 from ._base import Tensor, tensor                        # noqa: E402,F401
-# **이름 붙은 것을 먼저 들여온다.** 모듈의 `__getattr__` 은 여기 없는 이름만 받으므로,
-# `linalg`·`einsum` 처럼 첫 인자가 텐서가 아닌 것들이 그쪽으로 새면 안 된다 —
-# 실제로 `linalg` 가 함수로 잡혀서 `linalg.cholesky` 가 통째로 실패했다.
+# **Named things are imported first.** The module's `__getattr__` only receives
+# names that are not here, so things whose first argument is not a tensor —
+# `linalg`, `einsum` — must not leak through to it. `linalg` did get caught as a
+# function once, and `linalg.cholesky` failed outright.
 from ._ops import (                                      # noqa: E402,F401
     aminmax, arange, argmax, argmin, as_tensor, cat, chunk, clamp, clip, einsum, eye,
     from_numpy,
@@ -71,72 +81,84 @@ from ._ops import (                                      # noqa: E402,F401
     full, linalg, linspace, matrix_power, memory, no_grad, norm, numel,
     ones, pow,
     quantile, rand, randn, repeat_interleave, scope, split, squeeze, stack,
-    # 비용을 재는 자리. `memory` 와 한 묶음이고 `tests/browser/cost.py` 가 쓴다.
-    # `pooled`·`empty_cache` 는 **torch 에 없는 이름**이다 — 브라우저에만 있는
-    # `backend`·`fetch_cached` 와 같은 결이고, `torch.cuda` 를 흉내 내지 않는 쪽을
-    # 골랐다(그쪽은 `is_available()` 이 거짓이라 교재 관용구에서 죽은 줄이 된다).
+    # Where cost gets measured. One group with `memory`, used by
+    # `tests/browser/cost.py`. `pooled` and `empty_cache` are **names torch does
+    # not have** — the same grain as `backend` and `fetch_cached`, which exist
+    # only in a browser. Imitating `torch.cuda` was the other option and was
+    # rejected: `is_available()` is false there, so the textbook idiom around it
+    # becomes a dead line.
     dispatches, empty_cache, keep_alive, last_scope, pooled, submits,
     sum, swapdims, transpose, where, zeros,
-    # torch 가 두 번째 이름으로 주는 것들 — 조합에 이름만 붙인다.
+    # Names torch offers as a second spelling — a name over a combination.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,
     column_stack, concat, concatenate, div, divide, dstack, floor_divide, fmod,
     hstack, moveaxis, mul, multiply, remainder, row_stack, rsub, sub, subtract, t,
     true_divide, vstack,
-    # 계산 자체가 없던 것들.
+    # Things where the computation itself was missing.
     cross, empty, empty_like, float_power, fmax, fmin, full_like, inner,
     isclose, isin, isneginf, ones_like, zeros_like,
     isposinf, isreal, kron, lerp, logical_xor, logspace, meshgrid, nan_to_num,
     rand_like, randint_like, randn_like, scalar_tensor, std_mean, var_mean, vdot,
-    # 색인으로 쓰는 쪽.
+    # The indexing side.
     bucketize, index_add, index_copy, index_fill, scatter, scatter_add,
     searchsorted, take, take_along_dim,
-    # 수치 계열. `lgamma`·`digamma`·`erfinv` 는 WGSL 쪽에 있어 `__getattr__` 이 넘긴다.
+    # The numeric family. `lgamma`, `digamma` and `erfinv` live on the WGSL side,
+    # so `__getattr__` passes those across.
     cdist, corrcoef, cov, cumulative_trapezoid, tensordot, trapezoid,
-    # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
+    # QR in reflector form. The counterpart to `linalg.householder_product`, so
+    # it sits at the top level too.
     geqrf,
-    # 창 함수. 텐서가 아니라 **개수**를 받으므로 `__getattr__` 이 못 넘긴다.
+    # Window functions. They take **a count**, not a tensor, so `__getattr__`
+    # cannot pass them across.
     bartlett_window, blackman_window, hamming_window, hann_window, kaiser_window,
-    # 참거짓과 정수에서 하는 일이 다른 것, 그리고 제자리가 아닌 `fill`.
+    # Things that do different work on bool and on int, plus the out-of-place `fill`.
     bitwise_not, fill,
-    # 모양·색인. **`as_strided` 는 torch 에서 뷰지만 우리는 사본이다.**
+    # Shape and indexing. **`as_strided` is a view in torch and a copy here.**
     cartesian_prod, chain_matmul, combinations, index_put, index_put_,
     split_with_sizes, tensor_split, tril_indices, triu_indices,
     unique_consecutive, unravel_index, vander,
-    # **희소 전용이라 없다.** 이름은 두고 그 자리에서 멈춘다.
+    # **Sparse-only, so absent.** The name stays and stops where it is called.
     sspaddmm,
-    # 최상위 선형대수. **`linalg` 쪽과 이름이 겹치는 셋만 손으로 적혀 있다** —
-    # 나머지는 `__getattr__` 이 첫 인자의 메서드로 넘긴다.
+    # Top-level linear algebra. **Only the three whose names collide with the
+    # `linalg` namespace are written out** — `__getattr__` passes the rest to the
+    # first argument's method.
     lu, lu_solve, lu_unpack,
-    # 통계. 난수 넷은 값이 아니라 **끝값**으로 굳는다. 뒤의 둘은 이름만 두고 거절한다.
+    # Statistics. Four of the random ones are frozen by **their bounds** rather
+    # than their values. The last two keep a name and refuse.
     bernoulli, binomial, hash_tensor, histogramdd, normal, poisson, trapz,
-    # 푸리에. `fft` 는 이름 공간이고 `stft`·`istft` 는 최상위다 — torch 와 같은 자리.
+    # Fourier. `fft` is a namespace; `stft` and `istft` are top level — the same
+    # places torch puts them.
     fft, istft, stft,
-    # 최상위 순환 여덟. 층(`nn.LSTM`)과 같은 계산인데 가중치를 목록으로 받는다.
+    # The eight top-level recurrent ones. The same computation as the layers
+    # (`nn.LSTM`) but taking the weights as a list.
     gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,
     rnn_tanh_cell,
-    # 최상위에 남아 있던 나머지. `device` 가 제일 큰데, 튜토리얼 절반의 첫 줄이다.
+    # What was left at the top level. `device` is the biggest of them — it is the
+    # first line of half the tutorials.
     constant_pad_nd, dequantize, device, fake_quantize_per_channel_affine,
     fake_quantize_per_tensor_affine, igamma, igammac, polygamma, resize_as_,
-    # 복소수. `imag` 는 실수에서 거절인데 **torch 자신이 그렇게 한다**(실측).
+    # Complex. `imag` refuses on a real tensor, and **torch itself does that**
+    # (measured).
     #
-    # **`complex` 는 파이썬 내장을 가린다.** 그래도 이 이름으로 내보내는 이유는
-    # `torch.complex(re, im)` 이 torch 의 이름이기 때문이다 — 여기는 `torch` 의
-    # 자리이지 파이썬의 자리가 아니다. `_ops.py` 안에서는 그 가림이 실제로 문제라
-    # 복소수 판정을 `_is_cplx` 로 따로 둔다.
+    # **`complex` shadows a Python builtin.** It is exported under that name
+    # anyway because `torch.complex(re, im)` is torch's name, and this is torch's
+    # place rather than Python's. Inside `_ops.py` the shadowing is a real
+    # problem, so the complex test lives separately as `_is_cplx`.
     angle, asarray, complex, conj, conj_physical, conj_physical_,
     empty_permuted, empty_strided, frombuffer, imag, is_complex, is_conj,
     is_neg, polar, real, resolve_conj, resolve_neg, view_as_complex,
     view_as_real, range_top as range,
-    # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
+    # **Names that exist only at the top level.** Some have a different signature
+    # from their `F` counterpart, so they are moved rather than aliased.
     alpha_dropout_, batch_norm, ctc_loss, dropout_, feature_alpha_dropout_,
     feature_dropout, feature_dropout_, grid_sampler, max_pool1d_with_indices,
     nan_to_num_,
-    # 기울기 모드.
+    # Gradient mode.
     enable_grad, inference_mode, is_grad_enabled, is_inference,
     is_inference_mode_enabled, set_grad_enabled,
-    # 난수 상태.
+    # Random state.
     get_rng_state, initial_seed, seed, set_rng_state,
-    # 살펴보기.
+    # Introspection.
     can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     set_default_dtype, typename,
@@ -153,15 +175,17 @@ from ._serialize import load, save                       # noqa: E402,F401
 from ._ops import __getattr__                            # noqa: E402,F401
 from . import _nn as nn, _optim as optim                 # noqa: E402,F401
 
-# dtype 은 borch.ts 에서 float32 저장 위의 이름표다. 여기서도 이름으로 두되,
-# 보이는 이름은 torch 의 것이다 — 골든이 `torch.float32` 를 답으로 굳혔다.
+# In borch.ts a dtype is a label over float32 storage. It stays a label here
+# too, but the name shown is torch's — the golden froze `torch.float32` as the
+# answer.
 from ._base import _DType                                # noqa: E402
 
-# ── `out=` — 코어와 같은 표, 같은 규칙 ──────────────────────────────────────
+# ── `out=` — the core's table, the core's rules ─────────────────────────────
 #
-# 표를 두 벌 적지 않는다. 코어의 것을 그대로 쓰고, 여기서는 **우리에게 있는 이름만**
-# 감싼다 — 없는 이름은 감쌀 것이 없다. 표가 갈리면 셋이 다른 답을 내고, 그것은 골든이
-# 잡기 전에는 안 보인다.
+# The table is not written twice. The core's is used as-is and only **the names
+# we actually have** are wrapped here; a name that is missing has nothing to
+# wrap. Let the tables diverge and three implementations give three answers,
+# which is invisible until the golden catches it.
 def _wrap_out_names():
     from borch import _TAKES_OUT, _TAKES_OUT_TUPLE
     from ._ops import _out
@@ -184,22 +208,25 @@ _wrap_out_names()
 
 
 def install(name="borch_webgpu", modules=None):
-    """`from <name>.nn import Linear` 이 통하게 하위 경로를 심는다.
+    """Register submodule paths so `from <name>.nn import Linear` works.
 
-    **기본은 심지 않는 것이다.** `import borch_webgpu as torch` 로 `torch.nn.Linear` 는
-    그냥 닿는다 — 속성 접근이라 별칭이면 된다. 교재 코드의 대부분이 그 모양이다.
+    **Not registering is the default.** With `import borch_webgpu as torch`,
+    `torch.nn.Linear` already resolves — it is attribute access, and an alias is
+    enough. Most textbook code is shaped that way.
 
-    안 닿는 것은 `from … import` 다. 그것은 `sys.modules` 에 등록된 **경로**를 보고,
-    별칭은 그 파일 안의 이름 하나일 뿐이라 거기까지 못 간다. 경계는 재봤고
-    `tests/test_alias.py` 가 값으로 붙잡고 있다.
+    What does not resolve is `from … import`. That consults the **path**
+    registered in `sys.modules`, and an alias is one name inside one file, which
+    does not reach that far. The boundary was measured and `tests/test_alias.py`
+    holds it by value.
 
-    **이름은 기본이 자기 이름이다.** `torch` 로 심으면 남의 라이브러리가 하는
-    `import torch` 까지 축소판을 받아서, 섞인 환경에서는 원인을 못 찾는 오류가 된다.
-    자기 이름으로 심으면 하위 경로가 열리면서 남의 코드는 안 건드린다.
+    **The name defaults to this module's own.** Registering as `torch` means
+    another library's `import torch` receives the subset too, and in a mixed
+    environment that becomes an error nobody can trace. Registering under its
+    own name opens the submodule paths without touching anyone else's code.
 
-    코어의 `install()` 과 같은 모양이고 같은 이유다 — 하위 경로를 손으로 적으면
-    어긋난다. 코어는 실제로 어긋나서 `from torch.optim.lr_scheduler import StepLR` 이
-    교재 본문에서 멈춘 적이 있다.
+    The same shape as the core's `install()`, for the same reason: submodule
+    paths written by hand drift apart. The core's did drift, and
+    `from torch.optim.lr_scheduler import StepLR` stopped inside a textbook.
     """
     import sys
 
@@ -218,27 +245,32 @@ def install(name="borch_webgpu", modules=None):
 
 float32 = _DType("float32")
 int64 = _DType("int64")
-# **`bool` 은 모듈 전역에 두지 않는다.** 파이썬 내장을 가려서 `isinstance(x, bool)` 이
-# 깨지고, 그 자리가 `_DType` 의 `__repr__` 로 새어 나왔다. 골든은 `L.bool` 로 부르므로
-# 모듈의 `__getattr__` 이 그 이름만 골라 준다 — `_ops.__getattr__` 이 그 일을 한다.
+# **`bool` does not go in the module globals.** It shadows the Python builtin,
+# `isinstance(x, bool)` breaks, and that leaked out through `_DType.__repr__`.
+# The golden calls it as `L.bool`, so the module's `__getattr__` picks that one
+# name out — `_ops.__getattr__` does the work.
 bool_ = _DType("bool")
 complex64 = _DType("complex64")
 cfloat = complex64
-# **`complex128` 은 이름조차 안 둔다.** 코어는 이름을 두고 그 자리에서 멈추는데,
-# 거기는 numpy 가 승격으로 그것을 **만들 수 있어서** 막을 문이 필요했다. 여기는
-# borch.ts 가 `float64` 자체를 안 들어서 그 승격이 일어날 길이 없다 — 없는 문을
-# 세워 두면 다음 사람이 그 문이 무언가를 막고 있다고 읽는다.
+# **`complex128` does not even keep a name.** The core keeps one and stops
+# there, because numpy can **actually produce** it by promotion and a door was
+# needed. Here borch.ts does not carry `float64` at all, so that promotion has
+# no path — and a door standing in front of nothing reads, to the next person,
+# as a door holding something back.
 
-# ── torch 최상위의 수 상수 다섯 ────────────────────────────────────────────
+# ── torch's five top-level numeric constants ───────────────────────────────
 #
-# 코어(`borch._base`)와 **같은 값**이다. 이쪽은 borch.ts 를 안 거친다 — 파이썬
-# 값이라 GPU 에 물어볼 것이 없고, 물으면 저쪽에 그 이름이 없어서 `AttributeError`
-# 가 난다(실제로 그렇게 났다).
+# **The same values** as the core's (`borch._base`). This side does not go
+# through borch.ts: they are Python values, so there is nothing to ask the GPU,
+# and asking raises `AttributeError` because the name is not over there — which
+# is what happened.
 #
-# 커버리지 표가 이 다섯을 못 보고 있었다. `tests/torch_gap.py` 가 `callable` 인
-# 이름만 세는데 이것들은 값이라 분모에도 분자에도 안 들어갔다.
+# The coverage table could not see these five. `tests/torch_gap.py` counts names
+# that are `callable`, and values landed in neither the numerator nor the
+# denominator.
 from math import e, inf, nan, pi                        # noqa: E402,F401
 
-# torch 도 그냥 `None` 이다 — `x[:, None]` 과 같은 뜻이라는 표시다.
+# torch has it as plain `None` too — a marker that it means the same as
+# `x[:, None]`.
 newaxis = None
 
