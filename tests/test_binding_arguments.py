@@ -52,17 +52,11 @@ BINDING = ROOT / "borch_webgpu" / "_optim.py"
 # one-prose-reason problem this repository keeps finding, and it very nearly went in
 # here: the first version of this table was keyed by name and hid exactly that.
 OWED = {
-    ("RMSprop", "weight_decay"):
-        "the call passes it and borch.ts's constructor takes four arguments, so "
-        "JavaScript discards it — fixable in borch.ts alone, like Adam was",
-    ("Adagrad", "weight_decay"):
-        "accepted and never passed; borch.ts has no weightDecay on this optimizer yet",
-    ("Adadelta", "weight_decay"): "as above",
-    ("Adamax", "weight_decay"): "as above",
-    ("NAdam", "weight_decay"):
-        "as above — and this is the one an arity check cannot see, since the call "
-        "passes six into six and the sixth is momentumDecay",
-    ("RAdam", "weight_decay"): "as above",
+    # **Empty, and it was six.** Every row came out with the fix that made it false:
+    # borch.ts gained `weightDecay` on eight optimizers (`414af4d`) and the five call
+    # sites here now pass it. The table stays because the next dropped argument needs
+    # somewhere to be written down, and an empty one says "nothing is owed" where a
+    # deleted one says nothing at all.
 }
 
 # Call sites with no fixed argument list to compare. **Not a skip — a reason.**
