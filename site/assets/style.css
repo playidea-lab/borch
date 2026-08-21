@@ -1,6 +1,7 @@
-/* borch 설명 페이지 · 플레이그라운드 — 의존성 0.
-   저장소의 원칙을 스타일시트에도 적용한다: 폰트도 스크립트도 밖에서 안 받는다.
-   받으면 오프라인에서 페이지가 반쯤 뜨고, 그 상태는 "느리다" 와 구별이 안 된다. */
+/* borch's explanation pages and playground — zero dependencies.
+   The repository's principle applies to the stylesheet too: no font and no script is
+   fetched from outside. Fetching one makes the page load halfway when offline, and
+   that state is indistinguishable from "slow". */
 
 :root {
   color-scheme: dark;
@@ -14,14 +15,15 @@
 
   --fg: #e8ecf3;
   --fg-dim: #a3aec0;
-  --fg-faint: #7b8799;        /* 5.38:1 — 이 색으로 적힌 것 중에 내용이 있다 */
+  --fg-faint: #7b8799;        /* 5.38:1 — some of what is written in this colour is content */
 
-  --ember: #ff7a3d;      /* torch — 이름의 절반 */
-  /* **글자로 쓸 때의 주황은 따로 둔다.** 같은 값을 배경으로도 글자로도 쓰면 한쪽을
-     맞추는 순간 다른 쪽이 깨진다 — 밝은 쪽에서 주황을 글자에 맞게 어둡게 했더니
-     주 버튼(어두운 글자 위 주황)이 4.49 에서 3.93 으로 떨어졌다(실측). */
+  --ember: #ff7a3d;      /* torch — half the name */
+  /* **The orange used as text is kept separate.** Using one value for both background
+     and text means fixing one side breaks the other the moment you do it — darkening
+     the orange for text in the light theme dropped the primary button (dark text on
+     orange) from 4.49 to 3.93 (measured). */
   --ember-text: #ff7a3d;
-  --gpu: #4fd6c9;        /* WebGPU 쪽 */
+  --gpu: #4fd6c9;        /* the WebGPU side */
   --warn: #f5c451;
   --bad: #ff6b6b;
   --good: #5ed49a;
@@ -46,9 +48,9 @@
     --line-soft: #ebe7e1;
     --fg: #181c22;
     --fg-dim: #55606f;
-    --fg-faint: #646f80;   /* 4.88:1 (전에는 2.90 — AA 미달) */
-    --ember: #d1500f;      /* 배경으로 쓰는 값 — 어두운 글자와 4.49 */
-    --ember-text: #c2490c; /* 글자로 쓰는 값 — 4.73 (전에는 4.14) */
+    --fg-faint: #646f80;   /* 4.88:1 (2.90 before — below AA) */
+    --ember: #d1500f;      /* the value used as a background — 4.49 against dark text */
+    --ember-text: #c2490c; /* the value used as text — 4.73 (4.14 before) */
     --gpu: #0f8a80;
   }
 }
@@ -68,15 +70,15 @@ body {
 
 a { color: inherit; }
 
-/* **어디에 있는지 보여야 한다.** 스타일시트에 `:focus` 규칙이 하나 있었는데 그것도
-   테두리를 **지우는** 것이었다. 실행 버튼과 편집기가 가득한 사이트에서 키보드로
-   다니는 사람은 자기 위치를 알 방법이 없었다. */
+/* **Where you are has to be visible.** The stylesheet had exactly one `:focus` rule
+   and it was **removing** the outline. On a site full of run buttons and editors,
+   somebody navigating by keyboard had no way to know where they were. */
 :focus-visible {
   outline: 2px solid var(--ember);
   outline-offset: 2px;
   border-radius: 4px;
 }
-/* 편집기는 테두리가 글자에 겹치므로 상자 그림자로 대신한다. */
+/* In the editor an outline overlaps the text, so a box shadow stands in for it. */
 .editor-wrap textarea:focus-visible,
 .runnable .edit textarea:focus-visible {
   outline: none;
@@ -85,7 +87,7 @@ a { color: inherit; }
 
 code, pre, kbd { font-family: var(--mono); }
 
-/* ── 뼈대 ───────────────────────────────────────────────────────────── */
+/* ── Skeleton ──────────────────────────────────────────────────────────── */
 
 .wrap { width: min(var(--page), calc(100% - 3rem)); margin-inline: auto; }
 
@@ -110,7 +112,7 @@ p.lead { font-size: 1.08rem; color: var(--fg-dim); max-width: 46rem; }
 .muted { color: var(--fg-faint); }
 .small { font-size: 0.86rem; }
 
-/* ── 상단 바 ────────────────────────────────────────────────────────── */
+/* ── Top bar ───────────────────────────────────────────────────────────── */
 
 header.top {
   position: sticky; top: 0; z-index: 40;
@@ -122,14 +124,16 @@ header.top {
   display: flex; align-items: center; gap: 1.25rem;
   height: 58px;
 }
-/* **차림표가 접히지 않아 모든 페이지가 폰에서 가로로 넘쳤다.** 항목 여섯이 404px 를
-   차지하는데 뷰포트가 390px 이었고, 그래서 본문과 상관없이 어느 페이지든 125px 씩
-   밀려났다(실측). 한 줄에 안 들어가면 아래로 내리고, 그래도 넘치면 가로로 굴린다. */
+/* **The menu did not wrap, so every page overflowed horizontally on a phone.** Six
+   items took 404px against a 390px viewport, so every page pushed out by 125px
+   regardless of its content (measured). It drops to the next line when it does not
+   fit, and scrolls horizontally when even that overflows. */
 @media (max-width: 700px) {
   .top .wrap { flex-wrap: wrap; height: auto; padding-block: .5rem; gap: .5rem 1rem; }
   .top nav { width: 100%; margin-left: 0; overflow-x: auto; gap: 1rem; padding-bottom: .15rem; }
   .top nav a { white-space: nowrap; }
-  /* 머리글 높이가 더는 58px 이 아니므로, 그 수에 붙어 있던 것들을 떼어 놓는다. */
+  /* The header is no longer 58px tall, so whatever was pinned to that number is
+     detached from it. */
   .subnav { position: static; }
 }
 .brand {
@@ -146,22 +150,23 @@ header.top {
 .top nav { margin-left: auto; display: flex; align-items: center; gap: 1.4rem; }
 .top nav a { color: var(--fg-dim); text-decoration: none; font-size: 0.9rem; }
 .top nav a:hover { color: var(--fg); }
-/* 지금 어디에 있는지. 차림표가 모든 페이지에서 같으므로 이 표시가 유일한 단서다. */
+/* Where you are now. The menu is identical on every page, so this mark is the only clue. */
 .top nav a.on { color: var(--fg); font-weight: 600; }
 .top nav a.on::after {
   content: ""; display: block; height: 2px; margin-top: 4px;
   background: var(--ember); border-radius: 2px;
 }
-/* 언어 전환은 목차의 한 항목이 아니다 — 테두리로 갈라 둔다. */
+/* The language switch is not one entry in the list — a border keeps it apart. */
 .top nav a.lang {
   padding: .25rem .6rem; border: 1px solid var(--line); border-radius: 7px;
   font-size: .82rem;
 }
 .top nav a.lang:hover { border-color: var(--fg-faint); }
 
-/* ── 페이지 안 이동 ─────────────────────────────────────────────────
-   전역 차림표와 **다른 것**이라는 게 보여야 한다. 한 줄 아래, 더 작게, 밑줄 없이.
-   이것이 전역 차림표처럼 보이면 페이지마다 차림표가 바뀌는 것처럼 읽힌다. */
+/* ── In-page navigation ─────────────────────────────────────────────────────
+   It has to look like **a different thing** from the global menu. One line lower,
+   smaller, no underline. Looking like the global menu makes it read as though the
+   menu changes from page to page. */
 
 .subnav {
   position: sticky; top: 58px; z-index: 30;
@@ -178,7 +183,7 @@ header.top {
 .subnav a:hover { color: var(--ember-text); }
 @media (max-width: 620px) { .subnav .wrap { width: auto; padding-inline: 1.5rem; } }
 
-/* ── 버튼 ───────────────────────────────────────────────────────────── */
+/* ── Buttons ───────────────────────────────────────────────────────────── */
 
 .btn {
   display: inline-flex; align-items: center; gap: 0.5rem;
@@ -205,7 +210,7 @@ header.top {
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 .btn.mono { font-family: var(--mono); font-size: 0.86rem; }
 
-/* ── 히어로 ─────────────────────────────────────────────────────────── */
+/* ── Hero ──────────────────────────────────────────────────────────────── */
 
 .hero { padding: 5rem 0 4rem; position: relative; overflow: hidden; }
 .hero::before {
@@ -230,7 +235,7 @@ header.top {
   font: 0.86rem/1 var(--mono); color: var(--fg-faint);
 }
 
-/* ── 데모 카드 (히어로 · 플레이그라운드 공용) ───────────────────────── */
+/* ── Demo card (shared by the hero and the playground) ─────────────────── */
 
 .card {
   background: var(--surface);
@@ -273,7 +278,7 @@ header.top {
 .out .note { color: var(--fg-faint); }
 .out .ok { color: var(--good); }
 
-/* 장치 배지 */
+/* the device badge */
 .badge {
   display: inline-flex; align-items: center; gap: .45rem;
   padding: .28rem .6rem; border-radius: 999px;
@@ -285,13 +290,13 @@ header.top {
 .badge.on .led { background: var(--good); box-shadow: 0 0 10px var(--good); }
 .badge.off .led { background: var(--bad); }
 
-/* ── 격자 ───────────────────────────────────────────────────────────── */
+/* ── Grid ──────────────────────────────────────────────────────────────── */
 
 .grid { display: grid; gap: 1rem; }
-/* **`1fr` 는 내용보다 작아지지 않는다.** 칸 안에 `<pre>` 가 있으면 그 최소폭이
-   트랙을 밀어내고, `overflow-x: auto` 를 걸어도 소용없다 — 줄어들어도 된다고
-   말해 주는 것은 `minmax(0, …)` 와 `min-width: 0` 이다. 랜딩이 390px 에서
-   664px 로 벌어진 것이 이 자리였다. */
+/* **`1fr` does not shrink below its content.** With a `<pre>` in the cell, its
+   minimum width pushes the track out and `overflow-x: auto` does nothing about it —
+   what says shrinking is allowed is `minmax(0, …)` plus `min-width: 0`. This is the
+   place where the landing page opened out from 390px to 664px. */
 .grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid > * { min-width: 0; }
@@ -308,7 +313,7 @@ header.top {
 .tile p { margin: 0; font-size: 0.92rem; }
 .tile .icon { font-size: 1.15rem; color: var(--ember-text); margin-bottom: .6rem; display: block; }
 
-/* ── 흐름도 ─────────────────────────────────────────────────────────── */
+/* ── Flow diagram ──────────────────────────────────────────────────────── */
 
 .flow { display: grid; gap: .9rem; }
 .flow-row {
@@ -333,7 +338,7 @@ header.top {
 .flow-row.now .node.hot { border-color: color-mix(in srgb, var(--ember) 55%, transparent); color: var(--fg); }
 .arrow { color: var(--fg-faint); font-family: var(--mono); }
 
-/* ── 표 ─────────────────────────────────────────────────────────────── */
+/* ── Tables ────────────────────────────────────────────────────────────── */
 
 table.data {
   width: 100%; border-collapse: collapse;
@@ -349,13 +354,13 @@ table.data td.num { font-family: var(--mono); }
 table.data tr td strong { color: var(--fg); }
 .scroll-x { overflow-x: auto; }
 
-/* 상태 표시 */
+/* status marks */
 .state { font: .74rem/1 var(--mono); padding: .22rem .5rem; border-radius: 5px; border: 1px solid var(--line); }
 .state.now { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
 .state.soon { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .state.never { color: var(--fg-faint); }
 
-/* ── 각주 ───────────────────────────────────────────────────────────── */
+/* ── Footnotes ─────────────────────────────────────────────────────────── */
 
 .note-box {
   border-left: 2px solid var(--ember);
@@ -373,7 +378,7 @@ footer {
 }
 footer a { color: var(--fg-dim); }
 
-/* ── 코드 강조 (아주 얇게) ──────────────────────────────────────────── */
+/* ── Code highlighting (very thin) ─────────────────────────────────────── */
 
 .tok-key { color: var(--ember-text); }
 .tok-str { color: var(--gpu); }
@@ -381,10 +386,11 @@ footer a { color: var(--fg-dim); }
 .tok-com { color: var(--fg-faint); font-style: italic; }
 .tok-fn  { color: #8fb8ff; }
 
-/* ── 플레이그라운드 ─────────────────────────────────────────────────── */
+/* ── Playground ────────────────────────────────────────────────────────── */
 
-/* 창 높이에 맞춘다 — 패널이 각자 스크롤하고 페이지 자체는 안 움직인다.
-   안 그러면 아래의 계측 수가 화면 밖으로 밀리는데, 그것은 실행 결과의 절반이다. */
+/* Sized to the window — the panels scroll individually and the page itself does not
+   move. Otherwise the instrumentation numbers below get pushed off screen, and they
+   are half of what a run produces. */
 body.pg { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
@@ -411,9 +417,9 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .editor-pane { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line-soft); }
 .editor-wrap { position: relative; flex: 1; min-height: 0; }
 
-/* **두 층의 지표가 하나여야 한다.** 글꼴·크기·줄 높이·여백·탭 폭 중 하나라도
-   어긋나면 색이 글자에서 미끄러지고, 그 어긋남은 아래로 갈수록 커진다. 그래서
-   여기서 한 번에 정하고 둘 다 물려받는다. */
+/* **The two layers have to share one metric.** Any mismatch in family, size, line
+   height, padding or tab width slides the colour off the letters, and the mismatch
+   grows the further down you go. So it is set once here and both inherit it. */
 .editor-wrap textarea,
 .editor-wrap #highlight {
   position: absolute; inset: 0;
@@ -422,8 +428,9 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   border: 0;
   font: 13px/1.65 var(--mono);
   tab-size: 2;
-  /* 줄을 접지 않는다 — 접히는 자리가 두 층에서 다르면 그 아래가 통째로 밀린다.
-     대신 가로로 흐르고, 스크롤은 아래에서 맞춘다. */
+  /* No wrapping — if the two layers break lines in different places, everything
+     below shifts as a block. It flows horizontally instead, and the scroll is
+     synchronised below. */
   white-space: pre;
   overflow: auto;
   overflow-wrap: normal;
@@ -432,8 +439,8 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   z-index: 1;
   outline: none; resize: none;
   background: transparent;
-  color: transparent;              /* 글자는 아래 층이 그린다 */
-  caret-color: var(--fg);          /* 커서는 여기 것이 보여야 한다 */
+  color: transparent;              /* the layer below draws the text */
+  caret-color: var(--fg);          /* and this layer's caret has to stay visible */
 }
 .editor-wrap textarea::selection { background: color-mix(in srgb, var(--ember) 30%, transparent); }
 .editor-wrap #highlight {
@@ -476,13 +483,13 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #chart { display: block; width: 100%; height: 120px; flex: none; border-top: 1px solid var(--line-soft); background: var(--bg-soft); }
 
 @media (max-width: 900px) {
-  /* 세로로 쌓이면 한 화면에 안 들어간다 — 그때는 페이지가 스크롤해야 한다. */
+  /* Stacked vertically it does not fit one screen — then the page has to scroll. */
   body.pg { height: auto; overflow: visible; }
   .editor-wrap { min-height: 20rem; }
   #console { min-height: 12rem; }
 }
 
-/* ══ 문서 껍데기 — API 레퍼런스와 Learn 이 같이 쓴다 ═══════════════════ */
+/* ══ The document shell — the API reference and Learn share it ═══════════ */
 
 .docs {
   display: grid;
@@ -534,7 +541,7 @@ body.pg main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .doc-main > header { margin-bottom: 2rem; }
 .doc-main h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); }
 
-/* ── 심볼 카드 ─────────────────────────────────────────────────────── */
+/* ── Symbol cards ──────────────────────────────────────────────────────── */
 
 .symbol {
   border-top: 1px solid var(--line-soft);
@@ -619,7 +626,7 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 .hits a:hover { color: var(--ember-text); }
 .hits .where { color: var(--fg-faint); font-size: .78rem; }
 
-/* ── 실행되는 코드 블록 (Learn 이 쓴다) ────────────────────────────── */
+/* ── Runnable code blocks (Learn uses these) ───────────────────────────── */
 
 .runnable {
   border: 1px solid var(--line);
@@ -643,8 +650,9 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 }
 .runnable-head button.go { background: var(--ember); border-color: var(--ember); color: #180a02; }
 
-/* 언어 탭. 한 블록이 두 표면을 담을 때만 나온다 — 누른 쪽이 지금 도는 언어다.
-   `aria-pressed` 가 상태의 정본이라 CSS 도 그것을 읽는다. */
+/* Language tabs. They appear only when one block holds both surfaces — whichever is
+   pressed is the language that runs. `aria-pressed` is the authority on that state,
+   so the CSS reads it too. */
 .runnable-head button.tab {
   padding: .22rem .55rem; border-radius: 5px;
   border: 1px solid transparent; background: transparent;
@@ -682,13 +690,15 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
   padding: .7rem 1rem; margin: 0;
   font: 12px/1.6 var(--mono); color: var(--fg-dim);
   white-space: pre-wrap; word-break: break-word;
-  /* **짧은 출력이 슬릿이 되지 않게.** 내용에 맞춰 줄어들다 보면 네 줄짜리 칸이
-     되고, 거기서 맨 아래로 따라가면 첫 줄이 잘린 채 멈춘다 — 읽는 사람에게는
-     "출력이 안 보이고 움직이지도 않는" 상자가 된다(실제 신고). */
+  /* **A short output must not become a slit.** Shrinking to fit its content gives a
+     four-line box, and following that to the bottom stops with the first line cut off
+     — to the reader it becomes a box where "the output is invisible and nothing
+     moves" (an actual report). */
   min-height: 6.5rem;
   max-height: 28rem;
   overflow: auto;
-  /* 좁으면 끌어서 늘린다. 얼마나 나올지는 코드를 고치는 사람만 안다. */
+  /* Too narrow, and it is dragged larger. Only the person editing the code knows how
+     much will come out. */
   resize: vertical;
 }
 .runnable .out:empty { display: none; }
@@ -703,7 +713,7 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 .runnable .out .ok { color: var(--good); }
 .runnable .out .note { color: var(--fg-faint); }
 
-/* ── 강의 본문 ─────────────────────────────────────────────────────── */
+/* ── Lesson prose ──────────────────────────────────────────────────────── */
 
 .lesson { max-width: 46rem; }
 .lesson h2 { margin-top: 2.6rem; font-size: 1.45rem; }
@@ -725,26 +735,30 @@ table.tags td.t { font-family: var(--mono); color: var(--fg-faint); white-space:
 .pager a:hover { color: var(--ember-text); }
 .pager a b { display: block; color: var(--fg); font-weight: 600; margin-top: .2rem; }
 
-/* 강의 본문의 이름 → API 레퍼런스. 밑줄 대신 점선으로, 읽는 흐름을 안 끊게. */
+/* A name in the lesson prose → the API reference. A dotted line rather than an
+   underline, so it does not break the reading. */
 a.api-link { text-decoration: none; border-bottom: 1px dashed var(--line); }
 a.api-link:hover { border-bottom-color: var(--ember); }
 a.api-link code { color: var(--ember-text); }
 
-/* ── 스크롤되는 자리를 보이게 ─────────────────────────────────────────
-   macOS 의 겹침 스크롤바는 폭이 0 이라, 넘치는 상자가 **그냥 잘린 상자**처럼
-   보인다. 실제로 그렇게 신고가 왔다: "흰 부분이 위아래로 안 움직이고 출력이 안
-   보인다." 스크롤은 되고 있었고, 된다는 표시가 없었을 뿐이다. */
+/* ── Making a scrollable place visible ──────────────────────────────────────
+   macOS's overlay scrollbars are 0 wide, so an overflowing box looks like **a box
+   that is simply cut off**. A report came in saying exactly that: "the white part does
+   not move up or down and the output is invisible." It was scrolling; there was only
+   no sign that it could. */
 
-/* **표준 속성은 `::-webkit-scrollbar` 를 모르는 브라우저에만 준다.**
+/* **The standard properties go only to browsers that do not know
+   `::-webkit-scrollbar`.**
 
-   Chrome 은 `scrollbar-width` 나 `scrollbar-color` 가 지정되면 `::-webkit-scrollbar`
-   규칙을 **통째로 무시한다.** 그런데 표준 속성만으로는 macOS 의 겹침 스크롤바가
-   그대로라 폭이 0 이다. 둘을 같이 적어 두면 뒤엣것이 앞엣것을 끄고 자기는 아무것도
-   안 하는 상태가 된다 — 고치려던 것이 스스로를 취소하고 있었다.
+   When `scrollbar-width` or `scrollbar-color` is set, Chrome **ignores the
+   `::-webkit-scrollbar` rules entirely.** And the standard properties alone leave
+   macOS's overlay scrollbars as they are, 0 wide. Writing both puts the second one in
+   the position of switching off the first and doing nothing itself — the fix was
+   cancelling itself.
 
-   실측(Chrome 150 · macOS): 같은 상자에 webkit 규칙만 두면 스크롤바가 10px 를
-   차지하고, 표준 속성을 같이 두면 0 이다. 신고("흰 부분이 위아래로 안 움직인다")가
-   고친 뒤에도 그대로였던 이유가 이것이다. */
+   Measured (Chrome 150, macOS): on the same box, the webkit rules alone give a
+   scrollbar taking 10px, and adding the standard properties gives 0. This is why the
+   report ("the white part does not move up or down") stood after the fix. */
 @supports not selector(::-webkit-scrollbar) {
   .runnable .out,
   .runnable .canvas-out,
@@ -777,6 +791,7 @@ a.api-link code { color: var(--ember-text); }
 .runnable .canvas-out::-webkit-scrollbar-thumb:hover,
 #console::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); background-clip: content-box; }
 
-/* 끌어서 늘릴 수 있다는 표시. resize 손잡이는 macOS 에서 거의 안 보인다. */
+/* A sign that it can be dragged larger. The resize handle is nearly invisible on
+   macOS. */
 .runnable .out { background-image: linear-gradient(135deg, transparent 50%, var(--line-soft) 50%);
   background-position: bottom right; background-size: 10px 10px; background-repeat: no-repeat; }
