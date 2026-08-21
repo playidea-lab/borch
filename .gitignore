@@ -4,61 +4,70 @@ __pycache__/
 .coverage
 dist/
 
-# 가상환경과 도구 설정. 지금까지는 이 기계의 전역 설정이 막아주고 있었는데,
-# 공개하면 클론하는 사람에게는 그 보호가 없다 — 여기 적어야 모두에게 적용된다.
+# Virtual environments and tool settings. Until now this machine's global settings
+# were blocking them, and once public, somebody cloning has no such protection —
+# written here, it applies to everybody.
 .venv/
 .claude/
 .mcp.json
 
-# typescript 하나뿐이지만 그 의존 트리가 통째로 들어온다. **package-lock.json 은
-# 커밋한다** — 무엇이 이 기계에 들어왔는지가 저장소에 남아야 한다.
+# Only typescript, but its whole dependency tree comes in with it. **package-lock.json
+# is committed** — what came onto this machine has to stay in the repository.
 node_modules/
 borch-ts/dist/
 
-# 골든은 생성물이다 — 1단계(네이티브 + torch)가 굳히고 2단계가 읽는다.
+# The golden is generated — stage 1 (native plus torch) freezes it and stage 2 reads it.
 tests/golden.npz
 #
-# **`tests/golden.json` 은 여기 없다. 일부러다.**
-# npz 는 우리 도구가 만들고 우리 도구가 읽는다. JSON 은 반대로 **우리 도구를 못 돌리는
-# 쪽이 읽으라고** 만든 것이라, 무시하면 존재 이유가 사라진다 — 받는 쪽이 파이썬과
-# 진짜 torch 를 깔아야 한다면 그건 언어 중립이 아니다. 290KB 이고, 낡으면 매니페스트
-# 해시가 갈린다(tests/test_export_json.py 가 그것을 붙잡는다).
+# **`tests/golden.json` is not here. Deliberately.**
+# The npz is made by our tools and read by our tools. The JSON is the opposite — it is
+# made **for somebody who cannot run our tools to read**, so ignoring it removes its
+# reason to exist: if the receiving side has to install Python and real torch, that is
+# not language-neutral. It is 290KB, and when it goes stale the manifest hash diverges
+# (tests/test_export_json.py catches that).
 
-# 진짜 torch 에 규약을 물어보는 일회용 스크립트들.
+# One-off scripts that ask real torch about a convention.
 #
-# **버리는 것이 맞다.** 물어서 얻은 답은 골든에 굳고 이유는 주석에 남으므로, 물어본
-# 절차까지 저장소에 둘 이유가 없다 — 남겨 두면 다음 사람이 "이건 왜 있지" 를 묻는
-# 파일이 하나씩 는다. 다시 물어야 하면 다시 쓰는 것이 싸다.
+# **Discarding them is right.** The answer gets frozen into the golden and the reason
+# stays in a comment, so there is no cause to keep the asking procedure in the
+# repository too — kept, it adds one more file for the next person to ask "why is this
+# here" about. Writing it again is cheap if it has to be asked again.
 tests/probe_*.py
 tests/browser/probe_*.py
 tests/fix_*.py
 
-# CIFAR-10 원본. 브라우저는 CORS 때문에 직접 못 받으므로 로컬로 받아 서빙한다.
+# The CIFAR-10 originals. The browser cannot fetch them directly because of CORS, so
+# they are fetched locally and served.
 cifar-10-*
 cifar-batch*.bin
 cifar-fake.bin
 
-# 바깥에서 받아온 것. **Pyodide 만 저장소에 둔다** — 아래 `!` 가 그것이다.
+# Fetched from outside. **Only Pyodide is kept in the repository** — the `!` below is that.
 #
-# 오래 "해시만 둔다" 였다. 그 결정의 근거는 크기였는데, 재 보니 여섯 파일이 팩에서
-# 8.4MB 다(작업 트리 26MB). 이 저장소의 이력은 `tests/golden.json` 하나가 23.9MB 를
-# 쓰고 있고 `.git` 이 127MB 다 — 한 번 넣고 안 바뀌는 8.4MB 를 "쌓을 이유가 없다" 고
-# 말하기는 어려웠다. 판올림마다 같은 만큼 붙는 것이 이 결정의 값인데, 0.27.2 에서
-# 올릴 계획이 없다.
+# For a long time it was "keep the hash only". The basis for that decision was size,
+# and measured, the six files are 8.4MB in the pack (26MB in the working tree). In this
+# repository's history `tests/golden.json` alone takes 23.9MB and `.git` is 127MB — it
+# was hard to say there is "no reason to accumulate" 8.4MB that goes in once and does
+# not change. The price of this decision is the same amount again per version bump, and
+# there is no plan to move off 0.27.2.
 #
-# 얻는 것: clone 하면 파이썬 모드가 그냥 돈다(끊긴 심링크로 한 번 물렸다), 배포와
-# 테스트에 네트워크 의존이 없다, 커밋이 실린 바이트를 온전히 정한다.
+# What it buys: cloning makes Python mode simply work (a broken symlink bit us once),
+# deployment and tests have no network dependency, and a commit fully determines the
+# bytes that are served.
 #
-# TF.js 두 파일은 여기 남는다 — 손으로 쓴 WGSL 로 갈아치우면서 안 받는 것이 됐다.
+# The two TF.js files stay excluded here — hand-written WGSL replaced them, so they are
+# no longer fetched.
 vendor/*
 !vendor/pyodide/
 
-# 튜토리얼이 쓰는 데이터 부분집합(`site/assets/data/`)은 **저장소에 있다.**
+# The data subset the tutorials use (`site/assets/data/`) **is in the repository.**
 #
-# 여기 "site/fetch_data.py 가 만든다 — vendor/ 와 같은 자리다" 라고 적혀 있었는데,
-# vendor/ 가 옮겨 가면서 그 근거가 없어졌다. 그리고 재 보니 값이 컸다: 배포 한 판이
-# 34분 20초였고 그중 **33분 56초**가 이것을 다시 만드는 데 갔다 — 토론토대에서 원본
-# 170MB 를 받아 6만 장을 처리해서 **1.1MB** 를 낸다. 무작위가 없어 같은 입력이면 같은
-# 바이트이고(재생성해서 확인했다), CIFAR-10 은 안 바뀐다.
+# This used to say "site/fetch_data.py makes it — the same arrangement as vendor/", and
+# that basis disappeared when vendor/ moved. Measured, the price was also large: one
+# deployment took 34 minutes 20 seconds and **33 minutes 56 seconds** of it went to
+# rebuilding this — fetching 170MB of originals from Toronto and processing 60,000
+# images to produce **1.1MB**. There is no randomness, so the same input gives the same
+# bytes (confirmed by regenerating), and CIFAR-10 does not change.
 #
-# 원본 배치(`cifar-batch*.bin`, 29MB)는 계속 제외다 — 그것이 커야 이 부분집합이 있다.
+# The original batches (`cifar-batch*.bin`, 29MB) stay excluded — this subset exists
+# precisely because those are large.
