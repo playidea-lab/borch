@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3053 golden cases pass**, and that is a surface check rather than a
+> is that **3058 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -584,8 +584,8 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **all 3053 golden cases** — nothing in the table is skipped on this side
-alone. The core covers 3000 cases, and the remaining 53 are ones the core refuses
+It passes **all 3058 golden cases** — nothing in the table is skipped on this side
+alone. The core covers 3005 cases, and the remaining 53 are ones the core refuses
 on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of it.
 
 > That number said 2930 until this translation. The phrasing around it was
@@ -593,15 +593,15 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2655 cases. The remaining 398 are **two different
+borch.ts itself has written TS bodies for 2655 cases. The remaining 403 are **two different
 things, and counting them as one hides the second**. 360 are **deliberately not
 carried across** — the binding (`borch-webgpu`) already goes through borch.ts's kernels on
 those cases, so **the values are verified**, and what a TS body would add is not a
 value but this side's surface: names and argument order. A good many of them ask
 about a Python name alias, so carrying them across would ask the same question
-twice. The other 38 are **owed**: the `borchvision` transforms that arrived after
+twice. The other 43 are **owed**: the `borchvision` transforms that arrived after
 borch.ts's `vision.ts` was written, which has seven of the twenty-one. Those are a
-backlog rather than a decision, and calling all 398 deliberate would make the
+backlog rather than a decision, and calling all 403 deliberate would make the
 backlog invisible by counting it as a choice. The runner keeps printing the total
 rather than letting it shrink quietly.
 
@@ -1039,8 +1039,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3053 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3000 cases, leaving out the 53 that are
+And **3058 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3005 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are
