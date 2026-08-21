@@ -1,4 +1,4 @@
-"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""A piece of borch, split out. __init__ gathers the public names."""
 
 import math as _math
 
@@ -10,18 +10,20 @@ _DEFAULT_DTYPE = _np.float32
 
 
 class BorchError(NotImplementedError):
-    """축소판이 지원하지 않는 것. 근사하지 않고 여기서 멈춘다."""
+    """Something the subset does not support. It stops here rather than
+    approximating."""
 
 
 def _like_torch(said: str, torch_phrase: str) -> str:
-    """오류 메시지의 규격.
+    """The shape of an error message.
 
-    우리 문장은 **무엇이 왜 막혔는지**를 말하고, torch 의 문구는 **검색되라고**
-    붙인다. 우리 것만 두면 답이 있는 페이지에 가 닿지 못하고, 저쪽 것만 베끼면
-    torch 가 안 겪는 우리 사정(WGSL 에 f64 가 없다 같은 것)을 말할 자리가 없다.
+    Our sentence says **what is blocked and why**, and torch's wording is
+    attached **so that it can be searched for.** Ours alone never reaches the
+    page that holds the answer, and copying theirs alone leaves nowhere to say
+    the things torch never meets (that WGSL has no f64, for instance).
 
-    둘 다 영어다. 사용자가 처음 무언가 깨질 때 만나는 표면이라 그렇다 — 주석은
-    한국어로 남는다.
+    Both are English. It is the surface a user meets the first time something
+    breaks.
     """
     return f"{said}\n(torch: {torch_phrase})"
 
@@ -34,42 +36,46 @@ def _unsupported(what: str):
     )
 
 
-# torch 가 오류 문구에서 쓰는 형 이름. **복소수가 빠져 있었다** —
-# `out=` 의 형 거절이 그 자리에서 `KeyError` 로 터지며 알려 주었다.
+# The dtype names torch uses in its error messages. **Complex was missing** —
+# `out=`'s dtype refusal announced it by blowing up with a `KeyError` there.
 _TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float",
                "c": "ComplexFloat"}
 
 
 def _needs_float(data, korean: str, torch_phrase: str):
-    """**torch 가 멈추는 자리에서 우리도 멈춘다.**
+    """**We stop where torch stops.**
 
-    평균·분산·노름은 나눗셈과 제곱근이라 정수 칸에 답이 안 들어간다. numpy 는 조용히
-    float64 로 올려 값을 내주는데, 그 값을 받은 사람은 torch 에서 같은 줄이 `RuntimeError`
-    로 멈추는 것을 나중에야 안다 — 이 저장소의 첫 줄이 거절하는 종류다.
+    Mean, variance and norm are division and square roots, so the answer does not
+    fit in an integer cell. numpy quietly promotes to float64 and hands back a
+    value, and whoever receives that value finds out later that the same line
+    stops with a `RuntimeError` in torch — the kind this repository's first line
+    refuses.
 
-    빠져나가는 것이 numpy 쪽이라 자리마다 따로 막아야 한다. 한 곳에 모아 두면 어느
-    함수가 이 규칙 아래 있는지가 목록으로 보인다.
+    What leaks is numpy, so each place has to be blocked separately. Gathered
+    here, which functions live under this rule reads as a list.
     """
     if data.dtype.kind not in "fc":
         raise RuntimeError(_like_torch(korean, torch_phrase))
 
 
 def _refuses_bool(data, korean: str, torch_phrase: str, kind=RuntimeError):
-    """참·거짓만 거절하는 자리. `argmax`·`median` 이 그렇다(실측)."""
+    """The places that refuse booleans only. `argmax` and `median` are like that
+    (measured)."""
     if data.dtype.kind == "b":
         raise kind(_like_torch(korean, torch_phrase))
 
 
 def _refuses_nonfloat_kernel(data, name: str, kernel: str):
-    """torch 의 **커널 구멍**을 그대로 흉내 내는 자리.
+    """The places that imitate a **hole in torch's kernels** exactly.
 
-    규칙이 아니다 — `logsumexp` 는 정수를 받는데 `logcumsumexp` 는 안 받는다(실측).
-    torch 가 CPU 커널을 그 형으로 안 만들어 둔 것뿐이고, 그래서 `RuntimeError` 가
-    아니라 `NotImplementedError` 로 나온다.
+    Not a rule — `logsumexp` takes integers and `logcumsumexp` does not
+    (measured). torch simply did not build the CPU kernel for that dtype, which
+    is why it comes out as `NotImplementedError` rather than `RuntimeError`.
 
-    **그래도 흉내 낸다.** 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨지고,
-    관대한 것도 갈리는 것이다. 커널 이름을 문구에 넣는 것은 torch 가 그렇게 하기
-    때문이고, 검색이 통하는 쪽이 그 문구다.
+    **It is imitated anyway.** Handing back a value here means that code breaks
+    against real torch, and being more permissive is still diverging. The kernel
+    name goes into the wording because torch does that, and that wording is the
+    one a search finds.
     """
     if data.dtype.kind not in "fc":
         raise NotImplementedError(_like_torch(
@@ -100,44 +106,52 @@ float64 = dtype("float64", _np.float64)
 int64 = dtype("int64", _np.int64)
 long = int64
 bool_ = dtype("bool", _np.bool_)
-# **복소수는 float32 둘이다.** 하드웨어 타입이 아니라 배치 규약이고(실측: 원소당
-# 8 바이트, `view_as_real` 이 마지막 축에 `(re, im)`), 그래서 GPU 쪽에서도 표현된다.
+# **A complex number is two float32s.** A layout convention rather than a
+# hardware type (measured: 8 bytes per element, `view_as_real` giving `(re, im)`
+# on the last axis), which is why it is representable on the GPU side too.
 complex64 = dtype("complex64", _np.complex64)
 cfloat = complex64
-# **`complex128` 은 영원히 없다.** WGSL 에 `f64` 가 없어서 `float64` 가 없고, 그러면
-# 배정도 복소수도 없다. 이름만 두는 이유는 **승격이 그것을 만들기 때문**이다 —
-# `complex64 + float64` 가 torch 에서 `complex128` 이라(실측), 그 자리에서 멈추려면
-# 무엇을 만들려다 멈췄는지 말할 수 있어야 한다.
+# **There will never be a `complex128`.** WGSL has no `f64`, so there is no
+# `float64`, and then there is no double-precision complex either. The name is
+# kept **because promotion produces it** — `complex64 + float64` is `complex128`
+# in torch (measured), and stopping there means being able to say what it was
+# about to build.
 complex128 = dtype("complex128", _np.complex128)
 cdouble = complex128
 
-# ── torch 가 최상위에 두는 수 상수 다섯 ────────────────────────────────────
+# ── the five numeric constants torch keeps at top level ─────────────────────
 #
-# **커버리지 표가 구조적으로 못 보던 자리다.** `tests/torch_gap.py` 는 `callable`
-# 인 이름만 세는데 이 다섯은 부를 수 있는 것이 아니라 **값**이다. 그래서 분모에도
-# 분자에도 안 들어갔고, "torch 79% · 검토 대상 0" 이라는 수가 이것들이 없는 채로
-# 나왔다. 세는 잣대가 못 보는 자리는 아무리 세도 안 보인다.
+# **A place the coverage table structurally could not see.**
+# `tests/torch_gap.py` counts names that are `callable`, and these five are
+# **values** rather than things that can be called. So they entered neither the
+# numerator nor the denominator, and the number "torch 79% · 0 to review" came
+# out with them missing. A place the measure cannot see stays invisible however
+# much is counted.
 #
-# 다 교재가 실제로 쓰는 이름이다 — `torch.clamp(x, min=-torch.inf)`,
-# `x[:, torch.newaxis]`, `torch.pi`. numpy 의 같은 이름을 그대로 가리키므로
-# 값이 갈릴 자리도 없다.
+# All of them are names textbooks actually use — `torch.clamp(x,
+# min=-torch.inf)`, `x[:, torch.newaxis]`, `torch.pi`. They point straight at
+# numpy's names of the same spelling, so there is nowhere for the values to
+# diverge.
 e = _math.e
 pi = _math.pi
 inf = _math.inf
 nan = _math.nan
-# torch 도 이것이 그냥 `None` 이다 — `x[:, None]` 과 같은 뜻이라는 표시다.
+# In torch this is plain `None` too — a sign that it means the same as
+# `x[:, None]`.
 newaxis = None
 
 
 class _AbsentDtype(dtype):
-    """torch 와 **이름은 같은데 이 축소판에 칸이 없는** 형.
+    """A dtype **whose name torch shares and which has no storage in this
+    subset.**
 
-    이름을 아예 안 두면 `dtype=torch.int` 가 `AttributeError` 로 멈추는데, 그 문구는
-    **오타와 구별이 안 된다.** 이름은 두고 쓰려 할 때 무엇이 없는지 말한다 —
-    `complex128` 이 같은 이유로 이름만 있다.
+    Leaving the name out entirely makes `dtype=torch.int` stop with an
+    `AttributeError`, and that wording is **indistinguishable from a typo.** The
+    name is kept and says what is missing when it is used — `complex128` exists
+    as a name for the same reason.
 
-    부모의 `__init__` 을 안 부른다. 부모는 `self.np` 를 값으로 심는데 여기서는 그
-    자리가 **읽을 때 멈추는 문**이어야 한다.
+    The parent's `__init__` is not called. The parent plants `self.np` as a
+    value, and here that place has to be **a gate that stops on read.**
     """
 
     def __init__(self, name, instead):
@@ -149,13 +163,15 @@ class _AbsentDtype(dtype):
         _unsupported(f"`torch.{self.name}` (use `{self._instead}` instead)")
 
 
-# **`torch.int` 는 int32 다**(실측 — `torch.long` 이 int64다). 정수 칸을 int64 하나로
-# 모았으므로 int32 는 없다. 그래도 이름은 둔다: 교재가 `dtype=torch.int` 를 쓰고,
-# 그때 "없다" 와 "오타다" 는 다른 말이어야 한다.
+# **`torch.int` is int32** (measured — `torch.long` is int64). The integer
+# storage is gathered into int64 alone, so there is no int32. The name is kept
+# anyway: textbooks write `dtype=torch.int`, and at that moment "absent" and
+# "a typo" have to be different sentences.
 int32 = _AbsentDtype("int32", "int64")
-# 같은 까닭으로 이름만 두는 나머지. **반정밀은 WGSL 에 없고**(f16 확장은 기기마다
-# 다르다) 좁은 정수는 int64 하나로 모았다. 이름을 안 두면 `dtype=torch.half` 가
-# `'function' object has no attribute 'np'` 로 멈추는데, 그건 오타와 같은 문구다.
+# The rest kept as names for the same reason. **Half precision does not exist in
+# WGSL** (the f16 extension varies by device) and the narrow integers are gathered
+# into int64. Without the name, `dtype=torch.half` stops with
+# `'function' object has no attribute 'np'`, which is a typo's wording.
 float16 = _AbsentDtype("float16", "float32")
 bfloat16 = _AbsentDtype("bfloat16", "float32")
 int16 = _AbsentDtype("int16", "int64")
@@ -171,10 +187,12 @@ _NP_TO_DTYPE = {_np.dtype("float32"): float32, _np.dtype("float64"): float64,
 
 
 def _resolve(data, dt):
-    """진짜 torch 의 규칙을 따른다 — 정수만 있으면 int64, 하나라도 실수면 float32.
+    """Follows real torch's rule — integers alone give int64, and one float
+    anywhere gives float32.
 
-    **파이썬 `complex` 가 섞이면 complex64 다**(실측: `torch.tensor([1+1j])` 가
-    `complex64`). numpy 에 맡기면 `complex128` 이 되고, 그것은 우리에게 없다.
+    **A Python `complex` in the mix gives complex64** (measured:
+    `torch.tensor([1+1j])` is `complex64`). Left to numpy it becomes
+    `complex128`, and there is no such thing here.
     """
     if dt is not None:
         return dt.np
@@ -188,8 +206,9 @@ def _resolve(data, dt):
     return _np.float32
 
 
-def _no_complex128(what="이 연산"):
-    """**배정도 복소수는 만들 수 없다.** `float64` 가 없는 것과 같은 자리다."""
+def _no_complex128(what="This operation"):
+    """**A double-precision complex cannot be made.** The same place as there
+    being no `float64`."""
     raise BorchError(
         f"{what} would make complex128 — the browser subset has no `float64` "
         "(WGSL has no `f64`), so it has no double-precision complex either. "
@@ -197,11 +216,12 @@ def _no_complex128(what="이 연산"):
 
 
 
-# ---------------------------------------------------------------- 표현(repr)
+# ---------------------------------------------------------------------- repr
 #
-# 학습자가 가장 많이 하는 일이 print(tensor) 다. 진짜와 다르게 찍히면 교재의 예시와
-# 화면이 안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다.
-# torch/_tensor_str.py 의 규칙을 따른다.
+# The thing a learner does most is print(tensor). Printed differently from the
+# real thing, the screen stops matching the textbook's example, and every time
+# that happens they suspect they did something wrong.
+# Follows the rules in torch/_tensor_str.py.
 
 _PRINT_PRECISION = 4
 _LINE_WIDTH = 80
@@ -216,23 +236,27 @@ def set_printoptions(precision=None, linewidth=None):
 
 
 def _nonfinite_str(v):
-    """`nan`·`inf`·`-inf`. **점을 안 붙인다** — torch 도 그렇다(실측)."""
+    """`nan`, `inf` and `-inf`. **No trailing dot** — torch is the same
+    (measured)."""
     return "nan" if _np.isnan(v) else ("inf" if v > 0 else "-inf")
 
 
 def _integral_str(v):
-    """정수 판. 유한하지 않은 값은 점 없이 그대로 간다.
+    """The integer form. Non-finite values pass through without the dot.
 
-    **여기가 한동안 `nan.` 을 찍고 있었다.** `f"{v:.0f}."` 가 `nan` 에도 점을 붙여서,
-    `tensor([nan, 1.])` 이 `tensor([nan., 1.])` 로 나왔다. 소수 판은 `f"{nan:.4f}"`
-    가 이미 `nan` 이라 이 자리만 갈렸고, 그래서 nan 이 낀 **정수** 텐서를 찍을 때만
-    드러났다 — 복소수를 붙이며 실수부에 nan 을 넣어 보다가 잡혔다.
+    **This printed `nan.` for a while.** `f"{v:.0f}."` attached the dot to `nan`
+    as well, so `tensor([nan, 1.])` came out as `tensor([nan., 1.])`. The decimal
+    form was unaffected because `f"{nan:.4f}"` is already `nan`, so only this
+    place diverged, and it surfaced only when printing an **integer** tensor with
+    a nan in it — caught while adding complex numbers and trying a nan in the
+    real part.
     """
     return _nonfinite_str(v) if not _np.isfinite(v) else f"{v:.0f}."
 
 
 def _float_formatter(arr):
-    """torch 의 규칙: 값이 전부 정수면 `1.`, 아니면 소수 네 자리, 범위가 넓으면 지수."""
+    """torch's rule: all-integer values give `1.`, otherwise four decimal
+    places, and a wide range gives exponents."""
     finite = arr[_np.isfinite(arr)]
     nonzero = finite[finite != 0]
     if nonzero.size == 0:
@@ -248,11 +272,12 @@ def _float_formatter(arr):
 
 
 def _field_width(arr, fmt):
-    """오른쪽 정렬 폭.
+    """The right-aligned width.
 
-    **유한한 값만 센다** — torch 가 그렇다(실측). `nan` 을 폭에 넣으면 정수 판에서
-    폭이 3 이 되어 `1.` 이 ` 1.` 로 밀리는데, torch 는 `tensor([nan, 1.])` 이다.
-    유한하지 않은 값은 폭보다 길면 그냥 삐져나온다.
+    **Only finite values are counted** — torch is the same (measured). Counting
+    `nan` towards the width makes it 3 in the integer form and pushes `1.` out to
+    ` 1.`, while torch gives `tensor([nan, 1.])`. A non-finite value longer than
+    the width simply overflows it.
     """
     return max((len(fmt(v)) for v in _np.asarray(arr).reshape(-1)
                 if _np.isfinite(v)), default=0)
@@ -263,19 +288,23 @@ def _tensor_str(data):
         return "[]" if data.ndim else "[]"
     if data.dtype.kind == "f":
         fmt = _float_formatter(data)
-        # torch 는 원소를 같은 너비로 오른쪽 정렬한다 — 음수가 섞이면 양수 앞에 자리가 생긴다.
+        # torch right-aligns the elements to one width — with negatives in the
+        # mix, room appears in front of the positives.
         width = _field_width(data, fmt)
         padded = lambda v, f=fmt, w=width: f(v).rjust(w)
         body = _np.array2string(
             data, formatter={"float_kind": padded}, separator=", ",
             max_line_width=_LINE_WIDTH - 8, threshold=1000)
     elif data.dtype.kind == "c":
-        # **실수부와 허수부를 따로 잰다**(실측). `[1+2j, -0.5-1j]` 에서 실수부는 소수
-        # 네 자리를 요구하고 허수부는 정수라, torch 가 `1.0000+2.j` 를 찍는다 — 한
-        # 형식으로 재면 `1.0000+2.0000j` 가 되어 글자가 갈린다.
+        # **The real and imaginary parts are measured separately** (measured).
+        # In `[1+2j, -0.5-1j]` the real part demands four decimal places and the
+        # imaginary part is integral, so torch prints `1.0000+2.j` — measured
+        # under one format it becomes `1.0000+2.0000j` and the characters
+        # diverge.
         #
-        # **자리맞춤은 실수부에만 건다**(실측). 허수부는 안 밀고 부호는 값의 부호를
-        # 그대로 쓴다 — 그래서 `1.-0.j` 처럼 **음의 0** 도 부호가 산다.
+        # **The padding applies to the real part only** (measured). The
+        # imaginary part is not pushed and the sign is the value's own sign — so
+        # a **negative zero** keeps its sign, as in `1.-0.j`.
         re_fmt = _float_formatter(data.real)
         im_fmt = _float_formatter(data.imag)
         width = _field_width(data.real, re_fmt)
@@ -284,11 +313,13 @@ def _tensor_str(data):
             im = mf(v.imag)
             return f"{rf(v.real).rjust(w)}{im if im.startswith('-') else '+' + im}j"
 
-        # **줄바꿈 자리도 명세다.** torch 는 한 줄에 들어갈 개수를 글자 수가 아니라
-        # **폭**으로 센다 — `floor((linewidth − 7) / (실수폭 + 허수폭 + 3))`. numpy 는
-        # 실제 글자 길이로 끊으므로, 같은 자리에서 끊기게 예산을 되계산해 넘긴다.
-        # 실수 경로의 `_LINE_WIDTH - 8` 을 그대로 쓰면 12 개짜리가 6+6 이 아니라
-        # 5+5+2 로 접혀서, 값이 전부 맞는데 글자가 갈린다.
+        # **Where the line breaks is part of the specification too.** torch
+        # counts how many fit on a line by **width** rather than by characters —
+        # `floor((linewidth − 7) / (real width + imag width + 3))`. numpy breaks
+        # by actual character length, so the budget is recomputed and handed over
+        # to make it break in the same place. Using the real path's
+        # `_LINE_WIDTH - 8` as-is folds twelve elements as 5+5+2 rather than 6+6,
+        # and then every value is right and the characters diverge.
         im_width = _field_width(data.imag, im_fmt)
         per_line = max(1, (_LINE_WIDTH - 7) // (width + im_width + 3))
         budget = per_line * (width + im_width + 4)
@@ -298,7 +329,8 @@ def _tensor_str(data):
     else:
         body = _np.array2string(data, separator=", ",
                                 max_line_width=_LINE_WIDTH - 8, threshold=1000)
-    # numpy 는 이어지는 줄을 한 칸 들여쓴다. torch 는 "tensor(" 만큼(8칸) 들여쓴다.
+    # numpy indents continuation lines by one. torch indents by the width of
+    # "tensor(" — eight.
     return body.replace("\n ", "\n" + " " * 8)
 
 
@@ -306,10 +338,12 @@ def _tensor_repr(t):
     parts = [_tensor_str(t.data)]
     dt = t.data.dtype
     plain = dt in (_np.dtype("float32"), _np.dtype("int64"), _np.dtype("bool"))
-    # **complex64 는 값이 있으면 형을 안 찍는다**(실측). 끝의 `j` 가 이미 복소수라고
-    # 말하고 있어서 torch 도 생략한다. **빈 텐서에는 그 단서가 없어서 찍는다** —
-    # `tensor([], dtype=torch.complex64)`. 규칙이 형이 아니라 **단서의 유무**에 걸려
-    # 있는 자리라, 형 목록에만 넣어 두면 빈 것에서 갈린다.
+    # **complex64 does not print its dtype when there are values** (measured).
+    # The trailing `j` already says it is complex, so torch omits it. **An empty
+    # tensor has no such clue, so it is printed** —
+    # `tensor([], dtype=torch.complex64)`. The rule hangs on **whether the clue
+    # is there** rather than on the dtype, so put into a list of dtypes alone it
+    # diverges on the empty case.
     if dt == _np.dtype("complex64") and t.data.size > 0:
         plain = True
     if not plain:
@@ -324,20 +358,23 @@ def _tensor_repr(t):
 # ---------------------------------------------------------------- Size
 
 class device:                                                   # noqa: N801
-    """`torch.device` — **장치를 가리키는 이름표.**
+    """`torch.device` — **a label naming a device.**
 
-    이 이름이 오래 없었고, 그것이 이 목록에서 제일 큰 구멍이었다:
+    This name was absent for a long time, and it was the largest gap on the
+    list:
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
 
-    **튜토리얼 절반의 첫 줄**이고, 이름이 없으면 거기서 `AttributeError` 로 멈춘다.
-    `cuda.is_available()` 이 거짓이라 실제로 만들어지는 것은 `cpu` 인데도 그렇다.
+    It is **the first line of half the tutorials**, and without the name it
+    stops there with an `AttributeError` — even though `cuda.is_available()` is
+    false and what actually gets built is `cpu`.
 
-    **만드는 것과 쓰는 것을 가른다.** `torch.device("cuda")` 는 **하드웨어가 없어도
-    만들어진다**(실측 — torch 도 그렇다). 거기서 멈추면 위의 삼항식이 통째로 못
-    돌고, 그러면 학습자는 자기 코드가 틀렸다고 읽는다. 멈추는 자리는 그 장치로
-    **텐서를 옮길 때**이고, 그때 나오는 문구가 원인을 가리킨다.
+    **Making one and using one are separated.** `torch.device("cuda")` **is built
+    even with no such hardware** (measured — torch is the same). Stopping there
+    means the ternary above cannot run at all, and then the learner reads it as
+    their own code being wrong. The place to stop is **moving a tensor** to that
+    device, and the wording there names the cause.
     """
 
     __slots__ = ("type", "index")
@@ -361,9 +398,10 @@ class device:                                                   # noqa: N801
         return self.type if self.index is None else f"{self.type}:{self.index}"
 
     def __eq__(self, other):
-        # **문자열과는 안 같다**(실측: `torch.device("cpu") == "cpu"` 가 거짓).
-        # 관대하게 참을 주면 `if d == "cpu":` 가 여기서는 도는데 진짜 torch 에서는
-        # 안 돈다 — 관대한 것도 갈리는 것이고, 이쪽은 **조건문의 방향**을 바꾼다.
+        # **Not equal to a string** (measured: `torch.device("cpu") == "cpu"` is
+        # false). Answering true out of leniency makes `if d == "cpu":` run here
+        # and not against real torch — being more permissive is still diverging,
+        # and this kind changes **which way a conditional goes.**
         return (isinstance(other, device) and self.type == other.type
                 and self.index == other.index)
 

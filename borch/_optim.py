@@ -1,4 +1,4 @@
-"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""A piece of borch, split out. __init__ gathers the public names."""
 
 import math as _math
 
@@ -17,10 +17,12 @@ from ._base import (
 # ================================================================ optim
 
 class Optimizer:
-    """torch 의 옵티마이저는 `param_groups` 라는 목록을 들고 있다.
+    """A torch optimiser carries a list called `param_groups`.
 
-    학습률을 읽고 쓰는 표준 경로가 `opt.param_groups[0]["lr"]` 이고, 스케줄러도 그것을
-    고친다. `opt.lr` 로 두면 짧지만 **남의 코드가 안 돌고, 스케줄러를 직접 못 쓴다.**
+    The standard path for reading and writing the learning rate is
+    `opt.param_groups[0]["lr"]`, and the schedulers change it there too. Keeping
+    it as `opt.lr` is shorter and **stops other people's code from running and
+    makes the schedulers unusable.**
     """
 
     def __init__(self, params, defaults):
@@ -46,10 +48,12 @@ class Optimizer:
         return self.state.setdefault(id(p), {})
 
     def state_dict(self):
-        """torch 와 같은 모양 — 6장이 가르치는 "이어서 학습하기"가 이것에 걸려 있다.
+        """torch's shape — the "resume training" chapter 6 teaches hangs on
+        this.
 
-        Adam 은 파라미터마다 보폭을 기억한다. 그 기억을 버리고 이어 학습하면
-        손실이 한 번 튀었다가 다시 내려간다 — 오류는 안 나고 곡선만 이상해진다.
+        Adam remembers a step size per parameter. Discarding that memory and
+        resuming makes the loss jump once and then come back down — no error, and
+        a curve that looks odd.
         """
         order = {id(p): i for i, p in enumerate(self.params)}
         return {
@@ -106,7 +110,7 @@ class Adam(Optimizer):
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay))
 
-    decoupled = False          # AdamW 는 True — 감쇠를 기울기가 아니라 가중치에 직접 건다
+    decoupled = False          # True for AdamW — the decay applies to the weights directly rather than to the gradient
 
     def step(self):
         for group in self.param_groups:
@@ -133,7 +137,8 @@ class Adam(Optimizer):
 
 
 class AdamW(Adam):
-    """Adam 과 같은데 가중치 감쇠를 **기울기가 아니라 가중치에 직접** 건다."""
+    """The same as Adam with the weight decay applied **to the weights directly
+    rather than to the gradient.**"""
 
     decoupled = True
 
@@ -163,11 +168,11 @@ class RMSprop(Optimizer):
 
 
 class Adagrad(Optimizer):
-    """기울기 제곱을 **계속 더한다** — 줄기만 하고 안 는다.
+    """**Keeps adding** the squared gradients — it only shrinks, never grows.
 
-    `RMSprop` 은 같은 자리에 지수이동평균을 두어 옛것을 잊는데, 이쪽은 안 잊는다.
-    그래서 오래 돌리면 보폭이 0 으로 수렴한다 — 그것이 이 옵티마이저의 성질이고
-    결함이 아니다.
+    `RMSprop` puts an exponential moving average in the same place and forgets
+    the old ones; this one does not forget. So run long enough the step size
+    converges to zero — that is this optimiser's nature and not a defect.
     """
 
     def __init__(self, params, lr=0.01, lr_decay=0.0, weight_decay=0.0, eps=1e-10):
@@ -192,9 +197,11 @@ class Adagrad(Optimizer):
 
 
 class Adadelta(Optimizer):
-    """**학습률이 거의 안 쓰인다.** 보폭을 갱신량의 이력에서 스스로 만든다.
+    """**The learning rate is barely used.** The step size is built from the
+    history of the updates themselves.
 
-    그래서 기본 `lr` 이 1.0 이다 — 다른 옵티마이저와 같은 값을 주면 엉뚱하게 크다.
+    Which is why the default `lr` is 1.0 — given the value another optimiser
+    takes, it is wildly large.
     """
 
     def __init__(self, params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):
@@ -221,7 +228,8 @@ class Adadelta(Optimizer):
 
 
 class Adamax(Optimizer):
-    """Adam 의 2차 모멘트를 **제곱평균 대신 최댓값**으로 둔 것. 무한 노름 판이다."""
+    """Adam's second moment kept as **a maximum rather than a mean of squares.**
+    The infinity-norm version."""
 
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
@@ -249,10 +257,12 @@ class Adamax(Optimizer):
 
 
 class NAdam(Optimizer):
-    """Adam 에 네스테로프의 앞보기를 붙인 것.
+    """Adam with Nesterov's look-ahead attached.
 
-    **모멘텀 계수가 스텝마다 바뀐다** — `momentum_decay` 로 서서히 커지는 수열이고,
-    그 수열의 **누적곱**을 들고 다녀야 한다. 상수로 두면 초반 몇 스텝이 조용히 갈린다.
+    **The momentum coefficient changes every step** — a sequence that grows
+    slowly by `momentum_decay`, and **the running product** of that sequence has
+    to be carried along. Kept as a constant, the first few steps quietly
+    diverge.
     """
 
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8,
@@ -291,11 +301,12 @@ class NAdam(Optimizer):
 
 
 class RAdam(Optimizer):
-    """Adam 인데 초반에는 **적응 보폭을 안 쓴다.**
+    """Adam that **does not use the adaptive step size** early on.
 
-    2차 모멘트의 표본이 적을 때 분산이 커서 초반 몇 스텝이 튀는 것이 Adam 의 알려진
-    성질이고, 이쪽은 그 구간을 SGD 처럼 지나간다. 경계(`rho > 5`)를 빠뜨리면 값이
-    Adam 과 같아지므로 골든이 다섯 스텝을 밟는다.
+    With few samples of the second moment the variance is large and the first few
+    steps jump, which is a known property of Adam, and this one crosses that
+    stretch like SGD. Leaving the boundary out (`rho > 5`) makes the values equal
+    Adam's, so the golden walks five steps.
     """
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
@@ -328,19 +339,23 @@ class RAdam(Optimizer):
                     denom = _np.sqrt(st["exp_avg_sq"] / (1 - b2 ** t)) + group["eps"]
                     p._array = p.data - group["lr"] * mh * rect / denom
                 else:
-                    # 적응 보폭을 안 쓴다 — 여기가 SGD 처럼 도는 구간이다.
+                    # No adaptive step size — this is the stretch that runs like
+                    # SGD.
                     p._array = p.data - group["lr"] * mh
 
 
 class ASGD(Optimizer):
-    """평균 내는 SGD. **걸음마다 학습률이 줄고**, 어느 시점부터 파라미터를 평균낸다.
+    """Averaged SGD. **The learning rate shrinks every step**, and from some
+    point the parameters are averaged.
 
-    `eta` 는 `lr / (1 + lambd·lr·step)^alpha` 로 스스로 줄고, `mu` 가 평균의 무게다.
-    기본 `t0` 이 100만이라 보통 학습에서는 `mu` 가 1 이고 `ax` 가 그냥 파라미터의
-    사본이다 — 평균이 실제로 도는 것은 `t0` 을 낮춰야 보인다.
+    `eta` shrinks on its own as `lr / (1 + lambd·lr·step)^alpha`, and `mu` is the
+    weight of the average. The default `t0` is a million, so in ordinary training
+    `mu` is 1 and `ax` is simply a copy of the parameters — seeing the averaging
+    actually run means lowering `t0`.
 
-    **감쇠가 곱셈이다.** `param *= (1 - lambd·eta)` 를 먼저 하고 그다음에 기울기를
-    뺀다. 기울기에 더하는 꼴(`weight_decay`)과 다른 자리이고, 둘 다 있으면 둘 다 건다.
+    **The decay is multiplicative.** `param *= (1 - lambd·eta)` comes first and
+    the gradient is subtracted after. A different place from the additive form
+    (`weight_decay`), and with both present both apply.
     """
 
     def __init__(self, params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6,
@@ -365,7 +380,8 @@ class ASGD(Optimizer):
                     g = g + group["weight_decay"] * p.data
                 eta, mu = st["eta"], st["mu"]
                 p._array = p.data * (1 - lambd * eta) - eta * g
-                # `mu` 가 1 이면 평균이 아니라 **사본**이다 — 더하면 두 배가 된다.
+                # `mu` of 1 makes it **a copy** rather than an average — adding
+                # would double it.
                 st["ax"] = (p.data.copy() if mu == 1
                             else st["ax"] + (p.data - st["ax"]) * mu)
                 step = st["step"]
@@ -374,12 +390,14 @@ class ASGD(Optimizer):
 
 
 class Rprop(Optimizer):
-    """기울기의 **부호만** 본다. 크기는 안 쓰고 걸음 폭을 칸마다 따로 키우고 줄인다.
+    """Looks at **the sign only.** The magnitude goes unused and the step width
+    grows and shrinks per element.
 
-    부호가 그대로면 폭을 `etas[1]` 배로 키우고, 뒤집히면 `etas[0]` 배로 줄인다.
-    **뒤집힌 칸은 그 걸음을 아예 안 간다** — 기울기를 0 으로 만들어 두고, 그래서 다음
-    걸음의 "이전 기울기" 도 0 이 된다. 그 두 줄이 없으면 값이 그럴듯하게 다르고,
-    부호가 안 바뀌는 입력으로는 영원히 안 걸린다.
+    A sign that holds grows the width by `etas[1]`, and a sign that flips shrinks
+    it by `etas[0]`. **An element whose sign flipped does not take that step at
+    all** — its gradient is set to zero, and so the next step's "previous
+    gradient" is zero too. Without those two lines the values are plausibly
+    different, and an input whose signs never flip never catches it.
     """
 
     def __init__(self, params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50)):
@@ -408,15 +426,17 @@ class Rprop(Optimizer):
 
 
 class Adafactor(Optimizer):
-    """Adam 인데 2차 모멘트를 **행과 열로 쪼개 든다.**
+    """Adam that carries the second moment **split into rows and columns.**
 
-    Adam 은 파라미터마다 분산을 하나씩 들어서 기억이 가중치만큼 든다. 여기서는
-    행 평균과 열 평균만 들고 그 바깥곱으로 되살린다 — `(R, C)` 자리에 `R + C` 만
-    쓴다. 큰 언어모델을 메모리에 얹으려고 나온 방법이다.
+    Adam carries one variance per parameter, so the memory costs as much as the
+    weights. Here only a row mean and a column mean are carried and the rest is
+    revived from their outer product — `R + C` where `(R, C)` would go. The
+    method exists to fit large language models into memory.
 
-    **1 차원 파라미터는 안 쪼갠다** — 쪼갤 축이 하나뿐이라 그냥 분산을 든다. 상태
-    열쇠부터 갈린다(`variance` 대 `row_var`·`col_var`). 1 차원으로만 물으면 이
-    최적화의 요점이 통째로 안 돌아간다.
+    **A 1-D parameter is not split** — there is only one axis to split, so the
+    variance is carried plainly. The divergence starts at the state keys
+    (`variance` versus `row_var` and `col_var`). Asked in 1-D only, the whole
+    point of this optimisation never runs.
     """
 
     def __init__(self, params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3),
@@ -468,16 +488,17 @@ class Adafactor(Optimizer):
 
 
 class LBFGS(Optimizer):
-    """준뉴턴법. **`step` 이 닫힘(closure)을 받는다** — 한 번 부르는 동안 손실을
-    여러 번 다시 재기 때문이다.
+    """A quasi-Newton method. **`step` takes a closure** — because it re-measures
+    the loss several times within one call.
 
-    다른 옵티마이저는 기울기 한 벌로 한 걸음을 가는데, 이쪽은 안에서 `max_iter` 번
-    돌면서 매번 손실과 기울기를 다시 묻는다. 그래서 학습 루프의 모양이 다르고,
-    닫힘을 안 주면 아무것도 못 한다.
+    Other optimisers take one step per set of gradients; this one loops
+    `max_iter` times inside and asks for the loss and the gradients again each
+    time. So the training loop has a different shape, and without a closure it
+    can do nothing.
 
-    **직선 탐색은 아직 없다.** `line_search_fn="strong_wolfe"` 는 시끄럽게 거절한다 —
-    조용히 고정 보폭으로 가면 수렴이 다르게 나오고, 그 차이는 값이 아니라 곡선에서만
-    보인다.
+    **There is no line search yet.** `line_search_fn="strong_wolfe"` is refused
+    loudly — going quietly with a fixed step size makes the convergence come out
+    differently, and that difference shows in the curve rather than in a value.
     """
 
     def __init__(self, params, lr=1.0, max_iter=20, max_eval=None,
@@ -550,7 +571,8 @@ class LBFGS(Optimizer):
                     old_stps.append(s)
                     ro.append(1.0 / ys)
                     h_diag = ys / float(y @ y)
-                # 두 겹 되돌이 — 헤세 역행렬을 안 만들고 방향만 낸다.
+                # The two-loop recursion — it produces a direction without
+                # building the inverse Hessian.
                 al = [0.0] * len(old_dirs)
                 q = -flat
                 for i in range(len(old_dirs) - 1, -1, -1):
@@ -571,7 +593,7 @@ class LBFGS(Optimizer):
 
             self._add_step(t, d)
             if n_iter != max_iter:
-                # 마지막 되돌이에서는 다시 안 잰다 — torch 도 그렇다.
+                # No re-measure on the last iteration — torch is the same.
                 loss = float(closure())
                 flat = self._flat_grad()
                 evals += 1
@@ -590,17 +612,20 @@ class LBFGS(Optimizer):
 
 
 class _Scheduler:
-    """스케줄러는 `optimizer.param_groups` 의 lr 을 고친다. 에폭마다 한 번 부른다."""
+    """A scheduler changes the lr in `optimizer.param_groups`. Called once per
+    epoch."""
 
     def __init__(self, optimizer, last_epoch=-1):
         self.optimizer = optimizer
-        # **기준은 `initial_lr` 이지 지금 lr 이 아니다.** 옵티마이저에 한 번만 찍히고
-        # (`setdefault`), 그 뒤에 세워지는 스케줄러들도 **같은** 기준을 본다.
+        # **The baseline is `initial_lr`, not the current lr.** It is stamped
+        # onto the optimiser once (`setdefault`), and schedulers built afterwards
+        # see **the same** baseline.
         #
-        # 처음에는 세울 때의 lr 을 기준으로 삼았다. 혼자 쓰면 둘이 같아서 안 걸리는데,
-        # 스케줄러를 이어 붙이면 두 번째 것이 첫 번째가 이미 깎아 둔 값을 기준으로
-        # 잡는다 — `SequentialLR` 이 이정표에서 0.2 로 돌아가야 하는 자리에서 0.05 로
-        # 이어졌고, 최대차 1.5e-01 이었다.
+        # At first the lr at construction time was the baseline. Used alone the
+        # two are equal and nothing catches it, and chaining schedulers makes the
+        # second take as its baseline what the first had already cut —
+        # `SequentialLR` continued at 0.05 where it should have returned to 0.2
+        # at the milestone, a max diff of 1.5e-01.
         for group in optimizer.param_groups:
             group.setdefault("initial_lr", group["lr"])
         self.base_lrs = [g["initial_lr"] for g in optimizer.param_groups]
@@ -619,17 +644,20 @@ class _Scheduler:
         return [g["lr"] for g in self.optimizer.param_groups]
 
     def state_dict(self):
-        """**옵티마이저는 안 담는다** — torch 도 그렇다. 담으면 서로를 물고 돈다.
+        """**The optimiser is not carried** — torch is the same. Carried, the two
+        hold each other in a cycle.
 
-        이어 붙인 학습에서 옵티마이저만 되돌리고 스케줄러를 새로 세우면 학습률이
-        **처음 값으로 돌아간다.** 반쯤 식혀 놓은 학습이 다시 뜨거워지는 것이고,
-        손실은 내려가던 것이 한 번 올라갔다 다시 내려온다 — 오류는 안 난다.
-        골든이 이 자리를 `opt::StepLR/이어서 학습하기` 로 붙잡는다.
+        In resumed training, restoring the optimiser alone and building a fresh
+        scheduler sends the learning rate **back to its first value.** Training
+        that had been half cooled goes hot again, and a loss that was descending
+        rises once and comes back down — with no error. The golden holds this
+        place as `opt::StepLR/이어서 학습하기`.
 
-        하위 클래스가 자기 상태를 더 들어도 여기 적을 것이 없다. `__dict__` 에서
-        옵티마이저만 빼고 통째로 담으므로 `T_cur` 같은 것이 저절로 따라온다 —
-        이름을 따로 나열하면 스케줄러를 하나 더할 때마다 그 목록을 갱신해야 하고,
-        잊으면 **그 스케줄러만 조용히 안 이어진다.**
+        A subclass carrying more state of its own needs nothing written here.
+        Everything in `__dict__` except the optimiser is carried, so things like
+        `T_cur` follow along on their own — listing the names instead means
+        updating that list for every scheduler added, and forgetting leaves
+        **that one scheduler quietly unable to resume.**
         """
         return {k: v for k, v in self.__dict__.items() if k != "optimizer"}
 
@@ -639,16 +667,19 @@ class _Scheduler:
 
 
 class StepLR(_Scheduler):
-    """step_size 에폭마다 gamma 를 곱한다. 4장의 "멀리서는 성큼, 가까이서는 조심".
+    """Multiply by gamma every step_size epochs. Chapter 4's "big strides far
+    out, careful up close".
 
-    **재귀식이다** — 아래 `ExponentialLR` 이 적어 둔 것과 같은 이유다. 여기만
-    `base * gamma ** (last_epoch // step_size)` 라는 닫힌 식이었다.
+    **Recursive** — the reason `ExponentialLR` below writes down. This was the
+    one place with a closed form,
+    `base * gamma ** (last_epoch // step_size)`.
 
-    혼자 처음부터 돌리면 두 방식이 **같은 수열**을 낸다. 그래서 `StepLR/자취` 가
-    오래 초록이었다. 갈리는 것은 lr 이 이미 옮겨진 옵티마이저 위에 스케줄러를
-    새로 세울 때 — 즉 **이어서 학습할 때**다. 닫힌 식은 그 순간 학습률을 처음
-    값으로 되돌려 놓는다(0.05 를 0.2 로). 반쯤 식힌 학습이 다시 뜨거워지고,
-    오류는 안 난다. `opt::StepLR/이어서 학습하기` 가 이 자리를 붙잡는다.
+    Run alone from the start the two produce **the same sequence.** Which is why
+    `StepLR/자취` was green for a long time. They diverge when a fresh scheduler
+    is built on an optimiser whose lr has already moved — that is, **when
+    resuming.** At that moment the closed form puts the learning rate back to its
+    first value (0.05 to 0.2). Half-cooled training goes hot again, with no
+    error. `opt::StepLR/이어서 학습하기` holds this place.
     """
 
     def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1):
@@ -663,10 +694,10 @@ class StepLR(_Scheduler):
 
 
 class MultiStepLR(_Scheduler):
-    """이정표에서만 깎는다. **재귀식이다** — `StepLR` 과 같은 이유로 고쳤다.
+    """Cuts at the milestones only. **Recursive** — fixed for `StepLR`'s reason.
 
-    이정표가 겹쳐 적히면(`[3, 3]`) 그 자리에서 두 번 곱한다 — torch 가 그렇고,
-    닫힌 식으로 세던 때도 그랬으므로 여기서도 개수를 센다.
+    A milestone written twice (`[3, 3]`) multiplies twice at that point — torch
+    does that, and so did the closed form, so the count is taken here too.
     """
 
     def __init__(self, optimizer, milestones, gamma=0.1, last_epoch=-1):
@@ -682,11 +713,13 @@ class MultiStepLR(_Scheduler):
 
 
 class ExponentialLR(_Scheduler):
-    """**재귀식이다** — 지금 학습률에 곱한다. 원래 학습률에서 다시 세지 않는다.
+    """**Recursive** — it multiplies the current learning rate. It does not
+    recompute from the original one.
 
-    혼자 쓰면 두 방식이 같은 수열을 낸다. 갈리는 것은 **다른 스케줄러가 같은 lr 을
-    함께 만질 때**다 — `ChainedScheduler` 로 둘을 겹치면 재귀식은 서로의 결과 위에
-    쌓이고 닫힌 식은 남이 한 일을 덮어쓴다. torch 가 재귀식이고, 그래서 여기도 그렇다.
+    Used alone the two produce the same sequence. They diverge **when another
+    scheduler touches the same lr** — overlapped through `ChainedScheduler`, the
+    recursive form stacks on the other's result and the closed form overwrites
+    what the other did. torch is recursive, and so is this.
     """
 
     def __init__(self, optimizer, gamma, last_epoch=-1):
@@ -700,7 +733,8 @@ class ExponentialLR(_Scheduler):
 
 
 class CosineAnnealingLR(_Scheduler):
-    """T_max 에폭에 걸쳐 코사인 곡선으로 내린다. 끝에서 부드럽게 멎는다."""
+    """Descends along a cosine over T_max epochs. It settles smoothly at the
+    end."""
 
     def __init__(self, optimizer, T_max, eta_min=0.0, last_epoch=-1):
         self.T_max, self.eta_min = T_max, eta_min
@@ -722,14 +756,16 @@ class LambdaLR(_Scheduler):
 
 
 class ConstantLR(_Scheduler):
-    """`total_iters` 까지 **깎아 두었다가 원래대로 돌아온다.** 워밍업의 가장 단순한 꼴."""
+    """**Held down until `total_iters` and then back to normal.** The simplest
+    form of a warm-up."""
 
     def __init__(self, optimizer, factor=1.0 / 3, total_iters=5, last_epoch=-1):
         self.factor, self.total_iters = factor, total_iters
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        # 재귀식. 깎는 것도 되돌리는 것도 **그 순간 한 번씩만** 한다.
+        # Recursive. Both the cut and the restore happen **once each, at that
+        # moment.**
         groups = self.optimizer.param_groups
         if self.last_epoch == 0:
             return [g["lr"] * self.factor for g in groups]
@@ -739,10 +775,11 @@ class ConstantLR(_Scheduler):
 
 
 class LinearLR(_Scheduler):
-    """시작 배율에서 끝 배율까지 **직선으로** 옮겨간다.
+    """Moves **in a straight line** from the starting factor to the ending one.
 
-    `ConstantLR` 과 끝에서 만난다 — `total_iters` 를 지나면 둘 다 원래 학습률이다.
-    그래서 마지막 값만 보면 둘을 못 가르고, 골든이 자취를 통째로 묻는다.
+    It meets `ConstantLR` at the end — past `total_iters` both are the original
+    learning rate. So the last value alone cannot tell them apart, and the golden
+    asks for the whole trace.
     """
 
     def __init__(self, optimizer, start_factor=1.0 / 3, end_factor=1.0,
@@ -759,7 +796,7 @@ class LinearLR(_Scheduler):
 
 
 class PolynomialLR(_Scheduler):
-    """`(1 - t/T)^power` 로 내린다. `power=1` 이면 직선이다."""
+    """Descends as `(1 - t/T)^power`. `power=1` is a straight line."""
 
     def __init__(self, optimizer, total_iters=5, power=1.0, last_epoch=-1):
         self.total_iters, self.power = total_iters, power
@@ -769,15 +806,17 @@ class PolynomialLR(_Scheduler):
         groups = self.optimizer.param_groups
         if self.last_epoch == 0 or self.last_epoch > self.total_iters:
             return [g["lr"] for g in groups]
-        # 재귀식이라 **한 스텝의 비율**을 곱한다. `t == total_iters` 에서 0 이 된다.
+        # Being recursive it multiplies **one step's ratio.** It reaches 0 at
+        # `t == total_iters`.
         decay = ((1.0 - self.last_epoch / self.total_iters)
                  / (1.0 - (self.last_epoch - 1) / self.total_iters)) ** self.power
         return [g["lr"] * decay for g in groups]
 
 
 class MultiplicativeLR(_Scheduler):
-    """**곱해 나간다** — `LambdaLR` 처럼 배율을 받지만 기준이 원래 학습률이 아니라
-    지금 학습률이다. 그 차이 때문에 같은 람다를 줘도 결과가 다르다."""
+    """**It multiplies through** — it takes a factor like `LambdaLR` and its
+    baseline is the current learning rate rather than the original one. That
+    difference makes the same lambda give a different result."""
 
     def __init__(self, optimizer, lr_lambda, last_epoch=-1):
         self.lr_lambda = lr_lambda
@@ -791,7 +830,8 @@ class MultiplicativeLR(_Scheduler):
 
 
 class CosineAnnealingWarmRestarts(_Scheduler):
-    """코사인으로 내리다가 **처음으로 되돌린다.** 주기가 `T_mult` 배씩 길어진다."""
+    """Descends along a cosine and then **restarts.** Each period is `T_mult`
+    times longer."""
 
     def __init__(self, optimizer, T_0, T_mult=1, eta_min=0.0, last_epoch=-1):
         self.T_0, self.T_mult, self.eta_min = T_0, T_mult, eta_min
@@ -806,7 +846,7 @@ class CosineAnnealingWarmRestarts(_Scheduler):
     def step(self):
         self.last_epoch += 1
         self.T_cur = self.T_cur + 1
-        # 주기를 다 쓰면 되돌리고 다음 주기를 늘린다.
+        # At the end of a period it restarts and lengthens the next one.
         while self.T_cur >= self.T_i:
             self.T_cur -= self.T_i
             self.T_i *= self.T_mult
@@ -815,11 +855,12 @@ class CosineAnnealingWarmRestarts(_Scheduler):
 
 
 class OneCycleLR(_Scheduler):
-    """올렸다가 내린다. **현대 학습 레시피의 기본값에 가깝다.**
+    """Up and then down. **Close to the default in a modern training recipe.**
 
-    torch 의 기본은 코사인 모양이고 올라가는 구간이 전체의 30% 다. 초기 학습률은
-    `max_lr/div_factor` 이고 끝은 `초기/final_div_factor` 라, **옵티마이저에 준
-    학습률이 아예 안 쓰인다** — 세우는 순간 덮어쓴다.
+    torch's default is a cosine shape with the rising stretch at 30% of the
+    whole. The initial learning rate is `max_lr/div_factor` and the end is
+    `initial/final_div_factor`, so **the learning rate given to the optimiser
+    goes entirely unused** — it is overwritten at construction.
     """
 
     def __init__(self, optimizer, max_lr, total_steps, pct_start=0.3,
@@ -827,9 +868,10 @@ class OneCycleLR(_Scheduler):
         self.max_lr, self.total_steps, self.pct_start = max_lr, total_steps, pct_start
         self.initial_lr = max_lr / div_factor
         self.min_lr = self.initial_lr / final_div_factor
-        # **torch 의 셈을 그대로 쓴다.** `pct_start × total_steps − 1` 이지
-        # `pct_start × (total_steps − 1)` 이 아니다 — 뒤엣것으로 적었더니 정점이
-        # 반 스텝쯤 밀려 최대차 7.6e-02 가 났다.
+        # **torch's arithmetic, as written.** It is
+        # `pct_start × total_steps − 1`, not `pct_start × (total_steps − 1)` —
+        # written the latter way the peak shifted by about half a step and gave a
+        # max diff of 7.6e-02.
         self.up = float(pct_start * total_steps) - 1
         self.down = total_steps - self.up - 1
         super().__init__(optimizer, last_epoch)
@@ -842,24 +884,28 @@ class OneCycleLR(_Scheduler):
         else:
             frac = (t - self.up) / max(1e-12, self.down)
             lo, hi = self.max_lr, self.min_lr
-        # 코사인 보간 — 양 끝에서 기울기가 0 이다.
+        # Cosine interpolation — the slope is zero at both ends.
         scale = (1 - _math.cos(_math.pi * frac)) / 2
         return [lo + (hi - lo) * scale for _ in self.base_lrs]
 
 
 class CyclicLR(_Scheduler):
-    """학습률을 **오르내리게** 한다. 안장점을 빠져나오라고 일부러 흔드는 방식이다.
+    """Makes the learning rate **rise and fall.** A deliberate shake to get out
+    of a saddle point.
 
-    `step_size_up` 만큼 올라갔다가 `step_size_down` 만큼 내려온다. 안 주면 올라간
-    만큼 내려온다 — **오르내림이 같으면 그 인자가 있는지도 안 보인다.**
+    It rises for `step_size_up` and falls for `step_size_down`. Given nothing it
+    falls as far as it rose — **with the rise and fall equal, that argument's
+    existence is invisible.**
 
-    `mode` 셋:
-      `triangular`  — 봉우리 높이가 늘 같다
-      `triangular2` — 한 주기마다 높이가 절반이 된다
-      `exp_range`   — 높이에 `gamma^걸음` 을 곱한다 (주기가 아니라 **걸음**이다)
+    Three `mode`s:
+      `triangular`  — the peaks are always the same height
+      `triangular2` — the height halves every period
+      `exp_range`   — the height is multiplied by `gamma^step` (by **step**, not
+                      by period)
 
-    마지막 것의 기준이 걸음이라는 게 갈리는 자리다. `scale_mode` 가 `cycle` 이면
-    주기 번호를 넣고 `iterations` 면 걸음 수를 넣는데, `exp_range` 만 후자다.
+    That the last one counts by step is where they diverge. A `scale_mode` of
+    `cycle` supplies the period number and `iterations` supplies the step count,
+    and `exp_range` alone uses the latter.
     """
 
     def __init__(self, optimizer, base_lr, max_lr, step_size_up=2000,
@@ -889,7 +935,8 @@ class CyclicLR(_Scheduler):
         ratio = self.up / total
         cycle = _math.floor(1 + self.last_epoch / total)
         x = 1 + self.last_epoch / total - cycle
-        # 올라가는 구간과 내려오는 구간의 기울기가 다르다 — 위 함정이 이것이다.
+        # The rising and falling stretches have different slopes — the trap
+        # described above.
         rise = x / ratio if x <= ratio else (x - 1) / (ratio - 1)
         scale = self.scale_fn(cycle if self.scale_mode == "cycle"
                               else self.last_epoch)
@@ -899,7 +946,8 @@ class CyclicLR(_Scheduler):
         height = (self.max_lr - self.base_lr) * self._shape()
         lr = self.base_lr + height
         if self.cycle_momentum:
-            # **모멘텀은 반대로 간다** — 학습률이 높을 때 낮다.
+            # **The momentum goes the other way** — low where the learning rate
+            # is high.
             span = (self.max_momentum - self.base_momentum) * self._shape()
             for group in self.optimizer.param_groups:
                 if "momentum" in group:
@@ -908,10 +956,11 @@ class CyclicLR(_Scheduler):
 
 
 class SequentialLR:
-    """스케줄러를 **이어 붙인다.** 이정표에 닿으면 다음 것으로 넘어간다.
+    """**Chains schedulers.** At a milestone it hands over to the next one.
 
-    `_Scheduler` 를 안 물려받는다 — 자기 `get_lr` 이 없고 남의 것을 골라 부르는
-    일이라, 물려받으면 생성자가 `step()` 을 한 번 부르며 순서가 어긋난다.
+    It does not inherit `_Scheduler` — it has no `get_lr` of its own and its job
+    is choosing whose to call, so inheriting means the constructor calls `step()`
+    once and the order goes wrong.
     """
 
     def __init__(self, optimizer, schedulers, milestones, last_epoch=-1):
@@ -919,8 +968,9 @@ class SequentialLR:
         self.schedulers = list(schedulers)
         self.milestones = list(milestones)
         self.last_epoch = 0
-        # **세우는 순간 첫 스케줄러의 값으로 되돌린다.** 각 스케줄러가 만들어질 때
-        # 한 번씩 lr 을 고쳐 놓았으므로, 그대로 두면 마지막 것의 값에서 시작한다.
+        # **At construction it returns to the first scheduler's value.** Each
+        # scheduler changed the lr once as it was built, so left alone it starts
+        # from the last one's value.
         for group, base in zip(optimizer.param_groups, self.schedulers[0].base_lrs):
             group["lr"] = base
         self.schedulers[0].last_epoch = -1
@@ -935,9 +985,10 @@ class SequentialLR:
         idx, start = self._which()
         sch = self.schedulers[min(idx, len(self.schedulers) - 1)]
         if self.last_epoch == start:
-            # **넘어가는 순간 기준 학습률로 되돌리고** 새 스케줄러를 처음부터 밟는다.
-            # 앞 스케줄러가 깎아 둔 값에서 이어지지 않는다 — torch 가 그 자리에서
-            # 닫힌 식을 쓰기 때문이고, 닫힌 식의 기준은 `initial_lr` 이다.
+            # **At the handover it returns to the baseline learning rate** and
+            # walks the new scheduler from the start. It does not continue from
+            # what the previous scheduler had cut — torch uses a closed form at
+            # that point, and a closed form's baseline is `initial_lr`.
             for group, base in zip(self.optimizer.param_groups, sch.base_lrs):
                 group["lr"] = base
             sch.last_epoch = -1
@@ -948,7 +999,7 @@ class SequentialLR:
 
 
 class ChainedScheduler:
-    """여럿을 **동시에** 건다. 각자의 배율이 곱해진다."""
+    """Applies several **at once.** Their factors multiply together."""
 
     def __init__(self, schedulers):
         self.schedulers = list(schedulers)
@@ -963,8 +1014,9 @@ class ChainedScheduler:
 
 
 class ReduceLROnPlateau:
-    """**좋아지지 않을 때** 내린다. 다른 것들과 달리 `step(metric)` 으로 값을 받는다 —
-    6장의 조기 종료와 같은 발상이고, 멈추는 대신 보폭을 줄인다."""
+    """Descends **when things stop improving.** Unlike the others it takes a
+    value, as `step(metric)` — the same idea as chapter 6's early stopping,
+    shrinking the step instead of stopping."""
 
     def __init__(self, optimizer, mode="min", factor=0.1, patience=10,
                  threshold=1e-4, min_lr=0.0):
@@ -1012,8 +1064,8 @@ class _LRScheduler(_Namespace):
     CyclicLR = CyclicLR
     SequentialLR = SequentialLR
     ChainedScheduler = ChainedScheduler
-    # torch 가 기반 클래스를 이 이름으로 내놓는다. 상속해서 자기 스케줄러를 만드는
-    # 코드가 이것을 부른다.
+    # torch exposes the base class under this name. Code that subclasses it to
+    # build its own scheduler calls this.
     LRScheduler = _Scheduler
 
 

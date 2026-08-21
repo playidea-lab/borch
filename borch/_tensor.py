@@ -173,7 +173,7 @@ class Tensor:
         # 이고, 그 결과도 여기를 지나 텐서가 된다. 자리마다 막으면 새 연산이 생길
         # 때마다 빠뜨린다.
         if self._array.dtype == _np.complex128:
-            _no_complex128("이 연산")
+            _no_complex128("This tensor's dtype")
         # no_grad 는 **연산의 결과**가 그래프를 안 갖게 할 뿐, 직접 만든 잎의 requires_grad 를
         # 끄지는 않는다. torch 도 그렇다 — 여기서 끄면 no_grad 블록 안에서 만든 파라미터가
         # 학습 대상에서 조용히 빠진다.
