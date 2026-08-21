@@ -1,12 +1,20 @@
-"""실패한 골든 케이스를 **사유별로** 묶는다.
+"""Groups failed golden cases **by reason.**
 
     uv run --with playwright python tests/browser/why_failing.py --lib borch_webgpu --headed
 
-새 구현을 얹는 중에 필요한 것은 실패 목록이 아니라 **실패의 종류**다. 617 줄을 눈으로
-읽으면 어디부터 손대야 하는지가 안 보이고, 종류로 묶으면 "이 하나를 고치면 몇 건이
-열리는가" 가 보인다.
+While laying a new implementation on, what is needed is not a list of failures but **the
+kinds of failure.** Reading 617 lines by eye does not show where to start; grouped by kind it
+shows "fixing this one thing opens how many".
 
-`run.py --lib …` 이 이미 대조를 하므로 그것을 그대로 쓰고 결과만 다시 센다.
+`run.py --lib …` already does the comparison, so it is used as it is and only the results are
+counted again.
+
+**The probe words below are a contract with two other files.** `golden.py` writes the
+`max diff` / `shape … vs …` / `expected …, got …` lines, and `borch_webgpu` raises the
+`does not have` messages. When either side's wording moves, this bucketing goes quiet without
+failing — a check that catches nothing looks exactly like one that passes. That already
+happened once: the regex here was still matching the Korean error text after `borch_webgpu`
+had been translated.
 """
 
 import argparse
@@ -16,28 +24,32 @@ import sys
 
 import run as runner
 
-# `이름: 종류 — 설명` 또는 `이름: 기대 여야 하는데 실제`.
+# `name: kind — detail`, or `name: expected …, got …`.
 KIND = re.compile(r"^(?P<name>.+?): (?P<rest>.*)$", re.S)
+# The second alternative covers all three shapes `borch_webgpu` raises: "borch.ts does not
+# have `x`", "borch.ts tensors do not have `x`", and "the borch.ts layer does not have `x`".
+# The leading `the ` is optional and matters — the layer message carries it and the other two
+# do not, and requiring adjacency to the dash silently dropped that whole message.
 ERRORS = re.compile(
     r"AttributeError — (?:'(?P<obj>[^']+)' object has no attribute '(?P<attr>[^']+)'"
-    r"|borch\.ts (?:텐서)?에 `(?P<js>[^`]+)`)")
+    r"|(?:the )?borch\.ts(?: tensors| layer)? do(?:es)? not have `(?P<js>[^`]+)`)")
 
 
 def bucket(why):
-    """실패 하나를 한 낱말로 줄인다. 같은 원인은 같은 낱말이 되어야 한다."""
+    """Reduces one failure to one phrase. The same cause has to become the same phrase."""
     m = KIND.match(why)
     rest = m.group("rest") if m else why
     hit = ERRORS.search(rest)
     if hit:
         if hit.group("js"):
-            return f"borch.ts 에 없다: {hit.group('js')}"
-        return f"파이썬 결속에 없다: {hit.group('obj')}.{hit.group('attr')}"
+            return f"not in borch.ts: {hit.group('js')}"
+        return f"not in the Python binding: {hit.group('obj')}.{hit.group('attr')}"
     for probe, label in (
-        ("최대차", "값이 갈렸다"),
-        ("모양", "모양이 갈렸다"),
-        ("여야 하는데", "답이 갈렸다(문자열)"),
-        ("JsException", "borch.ts 가 던졌다"),
-        ("TypeError", "파이썬 쪽 형이 안 맞는다"),
+        ("max diff", "the values diverged"),
+        ("shape", "the shapes diverged"),
+        ("expected", "the answers diverged (string)"),
+        ("JsException", "borch.ts threw"),
+        ("TypeError", "a Python-side type does not fit"),
     ):
         if probe in rest:
             return label
@@ -49,27 +61,27 @@ def main(argv):
     ap.add_argument("--lib", default="borch_webgpu")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--samples", type=int, default=0,
-                    help="사유마다 본보기를 몇 줄 보여줄지")
+                    help="how many example lines to show per reason")
     args = ap.parse_args(argv)
 
     result, _ = runner.run(args.lib, args.headed)
     if result.get("error"):
-        print("러너가 터졌다:\n" + result["error"], file=sys.stderr)
+        print("the runner blew up:\n" + result["error"], file=sys.stderr)
         return 1
 
     bad = result["bad"]
     total = result["total"]
-    print(f"{args.lib} — {total - len(bad)}/{total} 통과, {len(bad)} 실패\n")
+    print(f"{args.lib} — {total - len(bad)}/{total} passed, {len(bad)} failed\n")
 
     groups = collections.defaultdict(list)
     for why in bad:
         groups[bucket(why)].append(why)
 
-    print("실패 사유별:")
+    print("by reason for failure:")
     for label, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         print(f"  {len(items):4d}  {label}")
-        # **본보기를 몇 개 보여준다.** 종류만 세면 "RuntimeError 84 건" 에서 멈추고,
-        # 그 84 건이 한 가지 원인인지 여덟 가지인지를 모른다.
+        # **A few examples are shown.** Counting kinds alone stops at "RuntimeError, 84" and
+        # cannot say whether those 84 are one cause or eight.
         if args.samples:
             for one in items[:args.samples]:
                 print(f"          {one[:150]}")

@@ -9,9 +9,9 @@ comparing against stale golden answers after the table changed, or by comparing 
 inputs have diverged. Both are states where **a pass comes out and nothing was compared.** So
 those two are built on purpose to see whether they are caught.
 
-Korean literals below (`낡았다`, `입력이 골든과 다르다`, `GPU 검증 오류`, and the `흐름`
-words) are **the wording `golden.py` and `cases.py` print.** They are keys, not prose, and
-they move when those files do.
+The literals matched below are **the wording `golden.py` and `cases.py` print.** They are
+keys, not prose, and they move only when those files do — the `흐름` words are still Korean
+because `cases.py` still writes them.
 """
 
 import importlib.util
@@ -47,7 +47,7 @@ def test_check_rejects_stale_golden(tmp_path, monkeypatch):
     path = tmp_path / "golden.npz"
     golden.dump(path)
     monkeypatch.setattr(golden.cases_mod, "manifest_hash", lambda cases: "the-hash-after-the-table-changed")
-    with pytest.raises(SystemExit, match="낡았다"):
+    with pytest.raises(SystemExit, match="are stale"):
         golden.check(golden.load_borch(), path)
 
 
@@ -60,7 +60,7 @@ def test_check_rejects_mismatched_inputs(tmp_path, monkeypatch):
     path = tmp_path / "golden.npz"
     golden.dump(path)
     monkeypatch.setattr(golden.cases_mod, "input_fingerprint", lambda inp: "a-different-input-fingerprint")
-    with pytest.raises(SystemExit, match="입력이 골든과 다르다"):
+    with pytest.raises(SystemExit, match="inputs differ from the golden"):
         golden.check(golden.load_borch(), path)
 
 
@@ -89,7 +89,7 @@ def test_check_names_the_case_that_raised_a_gpu_fault(tmp_path):
         return state["n"]
 
     bad, _ = golden.check(golden.load_borch(), path, faults=counter)
-    hits = [line for line in bad if "GPU 검증 오류" in line]
+    hits = [line for line in bad if "GPU validation errors" in line]
     assert len(hits) == 1, f"there should be one and there are {len(hits)}:\n  " + "\n  ".join(bad)
 
     # **Which case it is, is the point.** The first call is outside the loop (the baseline), so

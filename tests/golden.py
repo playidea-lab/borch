@@ -1,17 +1,17 @@
-"""골든 파일 하네스 — 진짜 torch 가 없는 곳에서 대조한다.
+"""The golden-file harness — compares where real torch is not.
 
-GPU 경로는 브라우저에서만 돌고, 진짜 torch 는 브라우저에 없다. 셋을 한 프로세스에서
-나란히 부를 수 없으므로 둘로 나눈다.
+The GPU path runs only in a browser, and real torch is not in a browser. The three cannot be
+called side by side in one process, so it is split in two.
 
-    1단계(네이티브)  uv run --with numpy --with torch python tests/golden.py dump
-    2단계(어디서든)  uv run --with numpy python tests/golden.py check
+    stage 1 (native)    uv run --with numpy --with torch python tests/golden.py dump
+    stage 2 (anywhere)  uv run --with numpy python tests/golden.py check
 
-2단계는 대조할 라이브러리를 골라 받는다. 지금은 borch 뿐이고, GPU 백엔드가
-생기면 같은 자리에 그것을 넣는다 — 그때 하네스는 안 고친다.
+Stage two takes the library to compare. Today that is borch only, and a GPU backend goes into
+the same place when there is one — the harness is not edited then.
 
-골든에 값만 담지 않는다. **케이스 목록의 해시**와 **입력의 지문**을 같이 담아, 표가
-바뀌었거나 입력이 달라졌으면 통과가 아니라 실패가 나오게 한다. 대조하지 않은 것을
-대조했다고 말하는 것이 안 하는 것보다 나쁘다.
+The golden file holds more than values. **The case list's hash** and **the inputs'
+fingerprint** go in with them, so that a changed table or changed inputs produce a failure
+rather than a pass. Saying something was compared when it was not is worse than not comparing.
 """
 
 import importlib.util
@@ -27,17 +27,17 @@ _cases_spec = importlib.util.spec_from_file_location("bt_cases", _here / "cases.
 cases_mod = importlib.util.module_from_spec(_cases_spec)
 _cases_spec.loader.exec_module(cases_mod)
 
-# 넓은 표면 하네스와 같은 허용치. 비트 동등(T4)은 이 프로젝트의 명시적 비목표다.
+# The same tolerance as the wide-surface harness. Bit equality (T4) is this project's explicit non-goal.
 ATOL = RTOL = 1e-4
 _PREFIX = "case::"
 _INPUT_PREFIX = "input::"
 
 
 def load_borch():
-    """저장소 루트의 `borch` 를 들여온다.
+    """Imports the `borch` at the repository root.
 
-    예전에는 파일 하나를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다 —
-    `__init__.py` 만 실행해도 상대 임포트가 패키지 문맥을 요구하기 때문이다.
+    It used to pick up one file by path. Once it became a package that stopped working —
+    executing `__init__.py` alone still leaves the relative imports needing a package context.
     """
     root = str(_here.parent)
     if root not in sys.path:
@@ -47,7 +47,7 @@ def load_borch():
 
 
 def dump(path=DEFAULT_PATH):
-    """1단계 — 진짜 torch 의 기대값을 굳힌다. 여기서만 torch 가 필요하다."""
+    """Stage one — freezes real torch's expected values. torch is needed here only."""
     import torch as real
 
     inp = cases_mod.golden_inputs()
@@ -56,15 +56,15 @@ def dump(path=DEFAULT_PATH):
     for name, fn in cases:
         try:
             got = fn(real)
-            # dtype 케이스는 값이 아니라 **형 이름**을 묻는다. 문자열 그대로 굳힌다.
+            # A dtype case asks about **the type name**, not a value. Frozen as the string it is.
             data[_PREFIX + name] = (np.array(got) if isinstance(got, str)
                                     else cases_mod.to_numpy(got))
         except Exception as exc:                                    # noqa: BLE001
             broken.append(f"{name}: {type(exc).__name__}: {exc}")
     if broken:
-        # 진짜 torch 가 못 하는 것은 기대값이 아니라 **틀린 케이스**다. 굳히면 안 된다.
-        raise SystemExit("진짜 torch 에서 실패한 케이스가 있다:\n  " + "\n  ".join(broken))
-    # 키별 지문도 같이 굳힌다 — 갈렸을 때 **어느 입력이** 갈렸는지 말해주기 위해서다.
+        # What real torch cannot do is not an expected value but **a wrong case.** It must not be frozen.
+        raise SystemExit("some cases failed under real torch:\n  " + "\n  ".join(broken))
+    # A per-key fingerprint is frozen too — so that a divergence can say **which input** diverged.
     for key, digest in cases_mod.input_fingerprints(inp).items():
         data[_INPUT_PREFIX + key] = np.array(digest)
     np.savez(path,
@@ -75,17 +75,19 @@ def dump(path=DEFAULT_PATH):
 
 
 def check(lib, path=DEFAULT_PATH, faults=None):
-    """2단계 — 골든과 대조한다. (갈린 곳 목록, 케이스 수).
+    """Stage two — compares against the golden answers. (a list of divergences, a case count).
 
-    `faults` 는 **지금까지 난 GPU 검증 오류 수**를 돌려주는 함수다(안 주면 안 본다).
+    `faults` is a function returning **the GPU validation error count so far** (not looked at
+    when absent).
 
-    WebGPU 의 검증 오류는 예외가 아니다. 무효한 명령 버퍼는 조용히 아무것도 안 하고,
-    그래서 **범인은 통과하고 뒤에 줄 선 케이스가 대신 빨개진다.** 세 번 겪었다 —
-    `as_strided_` 의 초과 복사, 옵티마이저 상태의 버퍼 공유, 그리고 아무것도 안 고르는
-    `index_select` 가 0 으로 나누는 셰이더를 굽던 자리.
+    A WebGPU validation error is not an exception. An invalid command buffer quietly does
+    nothing, so **the culprit passes and a case queued behind it turns red instead.** That
+    happened three times — `as_strided_`'s over-copy, a shared buffer in optimizer state, and
+    an `index_select` selecting nothing while compiling a shader that divided by zero.
 
-    케이스마다 수를 재면 **그 자리를 이름으로 짚을 수 있다.** 셋 다 원인에서 한두 칸
-    떨어진 자리를 보며 시작했고, 그 거리가 이 검사의 값어치다.
+    Reading the count per case is what makes it possible to **name that place.** All three
+    started out looking one or two slots away from the cause, and that distance is what this
+    check is worth.
     """
     z = np.load(path, allow_pickle=False)
     inp = cases_mod.golden_inputs()
@@ -93,19 +95,20 @@ def check(lib, path=DEFAULT_PATH, faults=None):
 
     if str(z["__manifest__"]) != cases_mod.manifest_hash(cases):
         raise SystemExit(
-            "골든이 낡았다 — 케이스 표가 바뀌었다. dump 를 다시 돌려라.")
+            "the golden answers are stale — the case table changed. Run dump again.")
     if str(z["__inputs__"]) != cases_mod.input_fingerprint(inp):
         mine = cases_mod.input_fingerprints(inp)
         drifted = [k for k, d in mine.items()
                    if _INPUT_PREFIX + k not in z or str(z[_INPUT_PREFIX + k]) != d]
         detail = ", ".join(
-            f"{k}(여기서는 {inp[k].dtype} {inp[k].shape})" for k in drifted) or "(어느 것인지 못 짚었다)"
+            f"{k} (here {inp[k].dtype} {inp[k].shape})" for k in drifted) or "(could not name which)"
         raise SystemExit(
-            "입력이 골든과 다르다 — 이 상태의 비교는 대조가 아니다.\n"
-            f"  갈린 입력: {detail}")
+            "the inputs differ from the golden ones — a comparison in this state is not a comparison.\n"
+            f"  diverged inputs: {detail}")
 
-    # 두 라이브러리의 범위가 갈린다. 자매 쪽에만 있는 것은 자매만 대조한다 —
-    # 코어가 일부러 거절하는 것을 코어에게 물으면 그건 검사가 아니라 오답이다.
+    # The two libraries' scopes diverge. What exists in the sister library alone is compared
+    # there alone — asking the core about what it deliberately refuses is not a check but a
+    # wrong answer.
     is_webgpu = hasattr(lib, "backend")
     bad, skipped = [], 0
     seen_faults = faults() if faults else 0
@@ -113,9 +116,9 @@ def check(lib, path=DEFAULT_PATH, faults=None):
         if name.startswith(cases_mod.WEBGPU_PREFIX) and not is_webgpu:
             skipped += 1
             continue
-        # **반대 방향의 갈림.** 코어에만 있는 것(복소수)은 자매가 건너뛴다 —
-        # 범위가 양쪽으로 갈리기 시작했고, 한쪽 방향만 적어 두면 나머지 절반이
-        # "구현이 빠졌다" 로 보인다.
+        # **The divergence in the other direction.** What exists in the core alone (complex) is
+        # skipped by the sister library — the scopes have begun to diverge both ways, and
+        # writing down one direction only makes the other half look like a missing implementation.
         if is_webgpu and name.startswith(cases_mod.CORE_ONLY_PREFIXES):
             skipped += 1
             continue
@@ -127,22 +130,22 @@ def check(lib, path=DEFAULT_PATH, faults=None):
             bad.append(f"{name}: {type(exc).__name__} — {str(exc).splitlines()[0][:60]}")
             continue
         finally:
-            # **값이 맞아도 검증 오류를 냈으면 빨갛다.** 이 케이스는 통과할 수 있어도
-            # 명령 버퍼가 무효가 된 채 다음으로 넘어간다.
+            # **A right value with a validation error is still red.** This case may pass while
+            # the command buffer moves on to the next one invalidated.
             if faults:
                 now = faults()
                 if now > seen_faults:
-                    bad.append(f"{name}: GPU 검증 오류 {now - seen_faults}건 "
-                               f"(값과 무관하게 여기서 났다)")
+                    bad.append(f"{name}: {now - seen_faults} GPU validation errors "
+                               f"(raised here, regardless of the value)")
                     seen_faults = now
         if want.dtype.kind == "U" or got.dtype.kind == "U":
             if str(want) != str(got):
-                bad.append(f"{name}: {want} 여야 하는데 {got}")
+                bad.append(f"{name}: expected {want}, got {got}")
             continue
         if want.shape != got.shape:
-            bad.append(f"{name}: 모양 {want.shape} vs {got.shape}")
+            bad.append(f"{name}: shape {want.shape} vs {got.shape}")
         elif not np.allclose(want, got, atol=ATOL, rtol=RTOL):
-            bad.append(f"{name}: 최대차 {np.abs(want - got).max():.2e}")
+            bad.append(f"{name}: max diff {np.abs(want - got).max():.2e}")
     return bad, len(cases) - skipped
 
 
@@ -150,22 +153,22 @@ def main(argv):
     what = argv[1] if len(argv) > 1 else "check"
     if what == "dump":
         count, path = dump()
-        print(f"골든을 굳혔다 — 케이스 {count}개 → {path}")
+        print(f"froze the golden answers — {count} cases → {path}")
         return 0
     if what == "check":
         if not DEFAULT_PATH.exists():
-            print(f"골든이 없다: {DEFAULT_PATH}\n"
-                  "  먼저: uv run --with numpy --with torch python tests/golden.py dump")
+            print(f"no golden answers: {DEFAULT_PATH}\n"
+                  "  first: uv run --with numpy --with torch python tests/golden.py dump")
             return 1
         bad, total = check(load_borch())
-        print(f"골든 대조 — 케이스 {total}개")
-        print(f"  일치 {total - len(bad)}/{total}")
+        print(f"golden comparison — {total} cases")
+        print(f"  agreeing {total - len(bad)}/{total}")
         if bad:
-            print("\n갈린 곳:")
+            print("\nwhere it diverged:")
             for why in bad:
                 print(f"  ✗ {why}")
         return 1 if bad else 0
-    print("쓰는 법: golden.py [dump|check]")
+    print("usage: golden.py [dump|check]")
     return 2
 
 
