@@ -1,100 +1,113 @@
-# borch-webgpu — 설계
+# borch-webgpu — the design
 
-> 자매 라이브러리다. 코어 `borch` 를 대체하지 않고, 코어가 안 가는 곳을 간다.
-> 왜 별도 배포판인지는 [ROADMAP.md 의 ADR-001](ROADMAP.md) 에 있다.
+> The sister library. It does not replace the core `borch`; it goes where the core
+> does not. Why it is a separate distribution is in
+> [ADR-001 in ROADMAP.md](ROADMAP.md).
 >
-> **처음 쓸 때는 코드가 없었다.** 착수 전에 확정할 것을 확정하고, **확정할 수 없는 것을
-> 확정할 수 없다고 적어두기 위한** 문서였다. 지금은 코드가 있고 `borch_webgpu.py`
-> 가 그것이다 — 그래서 아래의 전제들에는 잰 값이 붙어 있고, **재본 뒤 뒤집힌 것도
-> 그대로 남겨 두었다.** 예측이 맞은 자리보다 틀린 자리가 더 쓸모 있다.
+> **There was no code when this was first written.** It was a document for settling
+> what could be settled before starting, and **for writing down what could not be
+> settled as unsettled.** There is code now and `borch_webgpu.py` is it — so the
+> assumptions below carry measured values, and **the ones that were overturned by
+> measuring are left in place.** A prediction that was wrong is more use than one
+> that was right.
 
 ---
 
-## 목표
+## The goal
 
-**CIFAR-10 ResNet-18 급 학습이 브라우저에서 에폭 몇 분 안에 돈다.**
+**CIFAR-10 ResNet-18 scale training runs in a browser in a few minutes per epoch.**
 
-ADR-001 의 계산에 따라 이는 지금 대비 **약 300배**를 요구한다. 그 배수가 이 문서의
-모든 결정을 지배한다 — 300배를 못 낼 설계는 여기서 탈락시킨다.
+By ADR-001's arithmetic that demands **about 300×** over where things stand. That
+factor governs every decision in this document — a design that cannot produce 300×
+is eliminated here.
 
-### 비목표
+### Non-goals
 
-| | 왜 |
+| | why |
 |---|---|
-| 코어를 대체하는 것 | 코어는 문법 연습용으로 남는다. 이쪽은 "돌려보는" 쪽이다 |
-| torch 표면 전부 | 커리큘럼 + CIFAR 급 모델이 쓰는 것만 |
-| 비트 동등 | 코어와 같은 이유로 비목표다 |
-| 추론 최적화 | 학습이 목적이다. 추론만 필요하면 ONNX Runtime Web 이 이미 있다 |
+| replacing the core | the core stays the place to practise syntax. This one is the place to run things |
+| all of torch's surface | the curriculum plus what a CIFAR-scale model uses, and nothing more |
+| bit equivalence | a non-goal for the core's reason |
+| inference optimisation | training is the point. For inference alone, ONNX Runtime Web already exists |
 
 ---
 
-## 1. 미검증 전제 — **여기부터 재고 시작한다**
+## 1. Unverified assumptions — **measuring starts here**
 
-이 설계 전체가 아래 사실들에 걸려 있는데, **아직 재지 않았다.**
-착수 전 첫 작업(S0)은 코드를 쓰는 것이 아니라 이것들을 재는 것이다.
+This whole design hangs on the facts below, and **they have not been measured.**
+The first task before starting (S0) is not writing code but measuring them.
 
-### A1. TF.js WebGPU 백엔드의 동기 읽기
+### A1. Synchronous reads on the TF.js WebGPU backend
 
-`tf.Tensor.dataSync()` 가 WebGPU 백엔드에서 **실제로 동작하는가, 그리고 얼마나 비싼가.**
+Does `tf.Tensor.dataSync()` **actually work on the WebGPU backend, and how
+expensive is it.**
 
-WebGPU 에는 동기 readback API 가 없다(`mapAsync` 뿐이다). 그래서 TF.js 가 이를
-어떻게 처리하는지 — 지원하지 않는지, 경고와 함께 지원하는지, 내부적으로 블록하는지 —
-가 **파이썬 API 가 동기로 남을 수 있는지를 그대로 결정한다.**
+WebGPU has no synchronous readback API (only `mapAsync`). So how TF.js handles that
+— not supporting it, supporting it with a warning, blocking internally — **decides
+outright whether the Python API can stay synchronous.**
 
-- 동작한다면 → `loss.item()` 이 지금 모양 그대로 남는다. **최선.**
-- 안 되거나 치명적으로 느리면 → 3절의 동기화 대안으로 간다.
+- If it works → `loss.item()` stays exactly as it is. **The best case.**
+- If it does not, or is fatally slow → section 3's synchronisation alternatives.
 
-> 이것이 이 문서에서 가장 중요한 한 줄이다. 다른 모든 설계는 이 답이 나온 뒤 확정된다.
+> This is the most important line in this document. Every other design decision is
+> settled after this answer arrives.
 
-### A2. TF.js WebGPU 의 **학습** 경로 성숙도
+### A2. How mature TF.js WebGPU's **training** path is
 
-TF.js 의 WebGPU 백엔드는 추론 쪽이 먼저 여물었다. 학습에 필요한 것들이
-WebGPU 커널로 실제 존재하는지, 아니면 CPU/WebGL 로 조용히 폴백하는지를 확인한다.
-폴백이 일어나면 **매 스텝 GPU↔CPU 왕복이 생기고 300배는 사라진다.**
+TF.js's WebGPU backend matured on the inference side first. What has to be checked
+is whether the things training needs exist as actual WebGPU kernels, or fall back
+quietly to CPU or WebGL. A fallback means **a GPU-to-CPU round trip every step and
+the 300× disappears.**
 
-재야 할 것: `conv2dBackpropInput` · `conv2dBackpropFilter` · `batchNorm` 역방향 ·
-`maxPoolBackprop` · 큰 축 리덕션.
+To be measured: `conv2dBackpropInput`, `conv2dBackpropFilter`, `batchNorm`
+backward, `maxPoolBackprop`, and reductions over a large axis.
 
-### A3. 실효 처리량
+### A3. Effective throughput
 
-GEMM·conv 벤치로 **실제 GFLOPS** 를 잰다. ADR-001 의 표에서 어느 줄에
-해당하는지가 여기서 정해진다.
+Measure **actual GFLOPS** with GEMM and conv benchmarks. Which row of ADR-001's
+table this lands on is settled here.
 
-### 중단 기준
+### The stopping condition
 
-S0 에서 **CIFAR ResNet-18 1에폭 추정치가 5분을 넘으면 중단하고 전략을 다시 고른다.**
-적어두는 이유는 명확하다 — 안 적으면 "조금만 더 튜닝하면" 으로 몇 달이 간다.
+If S0's **estimate for one CIFAR ResNet-18 epoch exceeds five minutes, stop and
+choose a different strategy.** The reason for writing it down is plain — unwritten,
+"just a little more tuning" runs for months.
 
 ---
 
-## 1.5 S0 결과 — **쟀다. 판정: 조건부 계속**
+## 1.5 The S0 results — **measured. Verdict: continue, conditionally**
 
-측정 환경: Apple Silicon(WebGPU `metal-3`) · Chrome · TF.js 4.22.0 · 백엔드 `webgpu`.
-어댑터가 `shader-f16` 과 `subgroups` 를 지원한다. **기계 한 대, 층 크기 하나, 버전 하나의
-결과다** — 다른 GPU 에서 다시 재야 한다.
+The measuring environment: Apple Silicon (WebGPU `metal-3`), Chrome, TF.js 4.22.0,
+backend `webgpu`. The adapter supports `shader-f16` and `subgroups`. **These are the
+results from one machine, one layer size and one version** — they have to be
+measured again on another GPU.
 
-### A1 — `dataSync()` 는 **동작한다**
+### A1 — `dataSync()` **works**
 
-| | 같은 계산(1024³ matmul → sum → 스칼라) |
+| | the same computation (1024³ matmul → sum → scalar) |
 |---|---|
 | `dataSync()` | **3.35 ms** |
 | `await data()` | 1.72 ms |
 
-동기 읽기가 던지지 않고, 비동기 대비 **+1.6 ms** 다. 학습 한 스텝에 한 번(`loss.item()`)
-부르므로 스텝이 수십 ms 인 곳에서 **무시할 수 있다.**
+The synchronous read does not throw, and costs **+1.6 ms** against the asynchronous
+one. It is called once per training step (`loss.item()`), so where a step is tens
+of milliseconds it is **negligible.**
 
-> **결론: 파이썬 API 는 동기로 남는다.** 3절의 대안 2·3·4 는 쓸 일이 없다.
-> 이 문서에서 가장 중요했던 미지수가 가장 좋은 쪽으로 답했다.
+> **Conclusion: the Python API stays synchronous.** Alternatives 2, 3 and 4 in
+> section 3 will not be needed. The most important unknown in this document
+> answered in the best possible direction.
 
-### A2 — 학습 커널은 **전부 있다**
+### A2 — the training kernels are **all there**
 
-`conv2d` 순방향 · `conv2d` 의 입력·필터 기울기 · `maxPool` 기울기 · `batchNorm` 기울기 ·
-`moments` 로 분해한 BN 기울기 — 다섯 전부 예외 없이 돌았고 기울기 모양과 유한성이 맞았다.
-TF.js 는 커널이 없으면 조용히 폴백하지 않고 던지므로, 안 던졌다는 것이 곧 답이다.
+`conv2d` forward, `conv2d`'s input and filter gradients, `maxPool`'s gradient,
+`batchNorm`'s gradient, and the BN gradient decomposed through `moments` — all five
+ran without an exception and their gradient shapes and finiteness were right. TF.js
+throws rather than falling back quietly when a kernel is missing, so not throwing
+is the answer.
 
-### A3 — 처리량, 그리고 **이 측정의 핵심 발견**
+### A3 — throughput, and **this measurement's central finding**
 
-GEMM 은 빠르다.
+GEMM is fast.
 
 | | GFLOPS |
 |---|---|
@@ -102,382 +115,430 @@ GEMM 은 빠르다.
 | matmul 1024² | 2,399 |
 | matmul 2048² | 3,084 |
 
-**그런데 conv 는 순방향만 빠르다.** (층 크기: 입력 `128×32×32×64`, 필터 `3×3×64→64`, same)
+**And conv is fast on the forward pass alone.** (Layer size: input
+`128×32×32×64`, filter `3×3×64→64`, same padding)
 
 | | GFLOPS | |
 |---|---|---|
-| conv2d 순방향 | **2,306** | 정상 |
-| `tf.grad` 의 dx (`Conv2DBackpropInput`) | **88** | 순방향의 1/26 |
-| `tf.grad` 의 dw (`Conv2DBackpropFilter`) | **130** | 순방향의 1/18 |
-| 순+역 묶어서 | **271** | |
+| conv2d forward | **2,306** | normal |
+| `tf.grad`'s dx (`Conv2DBackpropInput`) | **88** | 1/26 of the forward |
+| `tf.grad`'s dw (`Conv2DBackpropFilter`) | **130** | 1/18 of the forward |
+| forward and backward together | **271** | |
 
-**TF.js 의 WebGPU conv 역방향 커널이 사실상 최적화되어 있지 않다.** 이것은 A2 가 못 잡는
-종류다 — 던지지 않고, 그냥 느리다.
+**TF.js's WebGPU conv backward kernels are effectively unoptimised.** This is the
+kind A2 cannot catch — it does not throw, it is simply slow.
 
-### 그리고 고칠 수 있다 — 역방향을 **순방향 conv 로 다시 쓴다**
+### And it can be fixed — rewrite the backward **as a forward conv**
 
-| | `tf.grad` | 다시 쓴 것 | 배수 | 수치 일치 |
+| | `tf.grad` | rewritten | factor | numerical agreement |
 |---|---|---|---|---|
-| dx (커널 공간반전 + 입출력 채널 교환) | 88 | **2,917** | **33×** | 상대차 1.3e-06 |
-| dw (배치↔채널 교환, dY 를 필터로) | 130 | **807** | **6.2×** | 상대차 1.5e-05 |
+| dx (kernel spatially reversed, input and output channels swapped) | 88 | **2,917** | **33×** | relative difference 1.3e-06 |
+| dw (batch and channel swapped, dY as the filter) | 130 | **807** | **6.2×** | relative difference 1.5e-05 |
 
-둘 다 값을 대조하고 적었다. dw 의 1.5e-05 는 13만 개 누산의 **순서 차이**이고,
-T4(비트 동등)가 비목표인 것과 같은 자리다 — 넓은 표면 하네스의 허용치(1e-4) 안이다.
+Both were written down with the values compared. dw's 1.5e-05 is **an ordering
+difference** across 130,000 accumulations, the same place as T4 (bit equivalence)
+being a non-goal — and inside the wide-surface harness's tolerance (1e-4).
 
-### 판정
+### The verdict
 
-에폭당 84 TFLOPs(conv·matmul 만 센 값) 기준:
+Against 84 TFLOPs per epoch (counting conv and matmul alone):
 
-| | 실효 | 1에폭 | |
+| | effective | one epoch | |
 |---|---|---|---|
-| `tf.grad` 를 그대로 쓰면 | 271 GFLOPS | **5.1분** | 중단 기준에 걸린다 |
-| 역방향을 다시 쓰면 | ~1,500 GFLOPS | **~1분** | 통과 |
-| 위의 절반만 나와도 | ~750 GFLOPS | ~1.9분 | 통과 |
+| using `tf.grad` as it is | 271 GFLOPS | **5.1 min** | hits the stopping condition |
+| rewriting the backward | ~1,500 GFLOPS | **~1 min** | passes |
+| even at half of that | ~750 GFLOPS | ~1.9 min | passes |
 
-> **계속한다. 단 조건이 붙는다 — conv 의 역방향은 `tf.grad` 에 맡기지 않고 직접 짠다.**
-> 이건 부담이 아니라 원래 하려던 일이다. 이 라이브러리는 자기 autograd 를 갖는다(4절).
+> **Continue, with a condition — conv's backward is written here rather than left
+> to `tf.grad`.** That is not a burden but the plan all along. This library has its
+> own autograd (section 4).
 
-**남은 불확실성 셋.** (1) 84 TFLOPs 는 conv·matmul 만 센 값이라 BN·ReLU·잔차 덧셈 같은
-대역폭 묶인 연산이 빠져 있다 — 실제 에폭은 이보다 길다. (2) 층 크기 하나에서만 쟀다.
-특성맵이 작아지는 뒤쪽 층(8×8)에서 같은 수법이 통하는지는 안 봤다. (3) dx·dw 를 따로 잰
-합(184 ms)이 묶어 잰 값(107 ms)보다 크다 — 측정에 흔들림이 있다는 뜻이므로 위 배수는
-방향이지 정밀값이 아니다.
+**Three uncertainties remain.** (1) The 84 TFLOPs counts conv and matmul alone, so
+the bandwidth-bound operations — BN, ReLU, the residual additions — are missing; a
+real epoch is longer than this. (2) It was measured at one layer size. Whether the
+same trick holds in the later layers, where the feature maps shrink to 8×8, has not
+been looked at. (3) Measuring dx and dw separately sums to 184 ms, which is more
+than measuring them together (107 ms) — meaning the measurement has jitter, so the
+factors above are a direction rather than a precise value.
 
-### 취소된 항목 — 헤드리스 WebGPU
+### A cancelled item — headless WebGPU
 
-한때 "헤드리스에서 WebGPU 가 뜨는가"를 미지수로 적어뒀다. **전제가 틀려서 지운다.**
+"Does WebGPU come up headless" was written down as an unknown for a while. **It is
+removed because its premise was wrong.**
 
-그 미지수는 6절이 "2단계는 CI 에서 헤드리스로 돌아야 한다"고 가정한 데서 나왔는데,
-그 가정에 근거가 없었다. 이 물건은 **사용자 PC 의 진짜 GPU** 에서 돈다. GPU 없는
-리눅스 러너에서 SwiftShader 로 통과해봐야 아무도 쓰지 않는 소프트웨어 경로를 검증한
-것이고, 드라이버가 다르니 진짜 GPU 에서의 정확성을 보장하지도 않는다.
+That unknown came from section 6 assuming "stage 2 has to run headless in CI", and
+that assumption had nothing behind it. This thing runs on **the real GPU in a
+user's machine.** Passing under SwiftShader on a Linux runner with no GPU verifies
+a software path nobody uses, and with a different driver it does not guarantee
+correctness on a real GPU either.
 
-검증은 **진짜 GPU 가 달린 기계**에서 한다(6절). 헤드리스 가부는 그래서 안 걸린다.
+Verification happens on **a machine with a real GPU** (section 6). Whether headless
+works is therefore not a gate.
 
 ---
 
-## 1.6 S3 결과 — 직접 짠 역방향은 값을 했다. 이제 **전치**가 병목이다
+## 1.6 The S3 results — the hand-written backward earned its keep. Now **the transposes** are the bottleneck
 
-골든 141/141(값·기울기·학습), CNN 학습이 GPU 위에서 torch 와 맞는다.
-같은 층(`128×64×32×32`, `3×3` 64→64)에서 잰 것:
+Golden 141/141 (values, gradients, training), and CNN training matches torch on the
+GPU. Measured on the same layer (`128×64×32×32`, `3×3` 64→64):
 
-| | 이 라이브러리 | S0 의 원시 측정 |
+| | this library | S0's raw measurement |
 |---|---|---|
-| conv 순방향 | 279 GFLOPS | **2,306** (원시 `tf.conv2d`) |
-| conv **역방향**(직접 짠 것) | **~1,086** | ~105 (`tf.grad`) |
-| 순+역 합 | **553** | 271 (`tf.grad` 경로) |
+| conv forward | 279 GFLOPS | **2,306** (raw `tf.conv2d`) |
+| conv **backward** (hand-written) | **~1,086** | ~105 (`tf.grad`) |
+| forward and backward together | **553** | 271 (the `tf.grad` path) |
 
-**역방향은 목표대로 됐다 — `tf.grad` 대비 약 10배다.** 1.5절의 판정 근거가 실제 코드에서
-확인됐다.
+**The backward came out as intended — about 10× `tf.grad`.** Section 1.5's basis
+for continuing was confirmed in real code.
 
-**그런데 순방향이 원시 대비 8배 느리다.** 원인은 계산이 아니라 **레이아웃**이다.
-torch 는 NCHW, TF.js 는 NHWC 라 conv 마다 33.5MB 짜리 전치를 두 번 훑는다
-(34.6ms 중 30.4ms). 역방향이 빠른 것은 전치된 입력을 클로저가 들고 있어 다시 안 돌기
-때문이다.
+**And the forward is 8× slower than the raw one.** The cause is **layout** rather
+than computation. torch is NCHW and TF.js is NHWC, so every conv walks a 33.5MB
+transpose twice (30.4ms of 34.6ms). The backward is fast because a closure holds
+the already-transposed input and does not walk it again.
 
-에폭 추정은 84 TFLOPs ÷ 553 GFLOPS ≈ **2.5분** — 중단 기준(5분) 안이다. 그래서 계속한다.
+The epoch estimate is 84 TFLOPs ÷ 553 GFLOPS ≈ **2.5 minutes** — inside the
+stopping condition (5 minutes). So it continues.
 
-> **S4 의 첫 항목**: 4차원 텐서를 **내부적으로 NHWC 로 들고**, 전치를 API 경계
-> (`tensor()`·`numpy()`)에서만 한다. 전치가 사라지면 순방향이 원시 속도에 가까워지고,
-> 합이 1,000 GFLOPS 를 넘어 에폭이 1.5분 아래로 내려간다. 대신 BatchNorm 의 채널 축과
-> `reshape`·`flatten` 이 레이아웃을 알아야 하므로 조용히 틀릴 자리가 는다 —
-> 골든이 141개로 자란 뒤에 손대는 것이 순서다.
+> **S4's first item**: carry 4-D tensors **internally as NHWC** and transpose only
+> at the API boundary (`tensor()` and `numpy()`). With the transposes gone the
+> forward approaches the raw speed, the combined figure passes 1,000 GFLOPS and the
+> epoch falls under 1.5 minutes. In exchange, BatchNorm's channel axis and
+> `reshape`/`flatten` have to know about the layout, so the places that can be
+> quietly wrong increase — touching it after the golden has grown to 141 is the
+> right order.
 
-### 측정 방법 주의
+### A note on how it was measured
 
-처음에 156 GFLOPS 가 나왔는데 **재는 법이 틀렸다.** 반복마다 기울기 33.5MB 를 CPU 로
-읽어오고 있었고(183.5ms), 그건 계산이 아니라 전송이다. S0 과 같이 여러 번 큐에 넣고
-끝에서 한 번만 동기화해야 커널 속도가 나온다. 위 표는 그렇게 다시 잰 값이다.
+The first figure was 156 GFLOPS and **the measuring was wrong.** It was reading
+33.5MB of gradients back to the CPU every iteration (183.5ms), and that is transfer
+rather than computation. As in S0, the work has to be queued many times and
+synchronised once at the end for the kernel speed to come out. The table above is
+the re-measured version.
 
 ---
 
-## 1.7 S4 — **목표에 닿았다.** ResNet-18 이 브라우저에서 학습한다
+## 1.7 S4 — **the goal was reached.** ResNet-18 trains in a browser
 
-파라미터 11,173,962 개짜리 CIFAR 판 ResNet-18 을 실제로 세워 학습 스텝을 쟀다.
-추정이 아니라 **BN·ReLU·잔차 덧셈까지 전부 도는 진짜 스텝**이다
-(`tests/browser/bench.py`).
+A CIFAR-flavoured ResNet-18 with 11,173,962 parameters was actually stood up and
+its training step measured. Not an estimate but **a real step with BN, ReLU and the
+residual additions all running** (`tests/browser/bench.py`).
 
-| 배치 | ms/스텝 | 1에폭 | 스텝당 누수 |
+| batch | ms/step | one epoch | leaked per step |
 |---|---|---|---|
-| 16 | 122.1 | 6.36분 | 0.0 |
-| 32 | 163.2 | 4.25분 | 0.0 |
-| 64 | 239.0 | 3.11분 | 0.0 |
-| 128 | 393.8 | 2.57분 | 0.0 |
-| **256** | **726.4** | **2.37분** | 0.0 |
+| 16 | 122.1 | 6.36 min | 0.0 |
+| 32 | 163.2 | 4.25 min | 0.0 |
+| 64 | 239.0 | 3.11 min | 0.0 |
+| 128 | 393.8 | 2.57 min | 0.0 |
+| **256** | **726.4** | **2.37 min** | 0.0 |
 
-**ADR-001 이 요구한 300배가 나왔다.** 지금 상태로 20에폭이 약 50분이다 —
-브라우저 탭에서 실제로 돌려볼 만한 시간이다.
+**The 300× ADR-001 demanded came out.** As it stands, 20 epochs is about 50 minutes
+— a length of time somebody would actually run in a browser tab.
 
-기록해 둘 것 둘.
+Two things to record.
 
-- **추정은 낙관적이었다.** 층 하나의 FLOPs 로 나눈 값은 2.5분이었는데 실제는 2.37~3.1분
-  이다. 배치가 커야 그 근처에 가고, 대역폭 묶인 연산이 FLOPs 계산에서 빠져 있었다.
-  방향은 맞았지만 **추정으로 판정하지 않은 것이 옳았다.**
-- **배치가 클수록 효율이 오른다**(16→256 에서 에폭 6.36→2.37분). 작은 배치에서는
-  커널 하나하나가 GPU 를 못 채운다.
+- **The estimate was optimistic.** Dividing by one layer's FLOPs gave 2.5 minutes
+  and the reality is 2.37–3.1. Only a large batch approaches it, and the
+  bandwidth-bound operations were missing from the FLOPs arithmetic. The direction
+  was right, and **not deciding on an estimate was the correct call.**
+- **A larger batch is more efficient** (an epoch goes from 6.36 to 2.37 minutes
+  between 16 and 256). At small batches the individual kernels cannot fill the GPU.
 
-### NHWC 리팩터 — **했다.** 2.37분 → 1.9분
+### The NHWC refactor — **done.** 2.37 minutes → 1.9
 
-한때 "목표에 닿았으니 미룬다"고 적었는데, 뒤집었다. 골든이 143개로 자란 뒤라
-안전망이 있었고, 실제로 그 안전망이 다섯 번 걸렸다.
+"The goal is reached, so this is deferred" stood written for a while, and it was
+reversed. The golden had grown to 143 by then, so there was a net, and that net
+caught five things.
 
-**레이아웃을 텐서가 들고 다닌다.** 4차원 텐서는 속으로 NHWC 일 수 있고, `shape` 는
-언제나 torch 순서로 답한다. conv·풀링·BatchNorm·활성·잔차 덧셈이 전부 NHWC 로 이어지고,
-전치는 **들어올 때와 나갈 때 한 번씩**이다.
+**A tensor carries its layout.** A 4-D tensor may be NHWC internally, and `shape`
+always answers in torch's order. conv, pooling, BatchNorm, the activations and the
+residual additions all chain in NHWC, and
+the transpose happens **once on the way in and once on the way out**.
 
-| 배치 | 전치할 때 | 레이아웃을 들 때 |
+| batch | transposing | carrying the layout |
 |---|---|---|
-| 64 | 3.11분 | **1.98분** (−36%) |
-| 128 | 2.57분 | **1.95분** |
-| 256 | 2.37분 | **1.89분** |
+| 64 | 3.11 min | **1.98 min** (−36%) |
+| 128 | 2.57 min | **1.95 min** |
+| 256 | 2.37 min | **1.89 min** |
 
-지킨 규칙 셋.
+Three rules held.
 
-- **레이아웃을 모르는 연산은 먼저 되돌린다**(`_canonical`). 느릴 수는 있어도 틀리지
-  않는다. 되돌리는 비용은 재보니 눈에 안 띈다(1.89 → 1.97분, 그 연산들이 뜨거운 길에
-  없기 때문이다)
-- **이항 연산은 짝을 맞춘다**(`_align`). 4차원끼리면 한쪽을 바꾸고, 짝이 4차원이
-  아니면 둘 다 되돌린다 — 1차원 편향은 마지막 축에 붙는데 그 축이 레이아웃마다 다르다
-- **BatchNorm 은 역전파를 손으로 썼다.** 조립하면 레이아웃마다 축이 달라지고 커널도 는다
+- **An operation that does not know about layout converts back first**
+  (`_canonical`). It can be slow and it cannot be wrong. Measured, the cost of
+  converting back is invisible (1.89 → 1.97 minutes, because those operations are
+  not on the hot path)
+- **A binary operation aligns its pair** (`_align`). Two 4-D tensors means changing
+  one; a partner that is not 4-D means converting both back — a 1-D bias attaches
+  to the last axis, and which axis that is depends on the layout
+- **BatchNorm's backward is written by hand.** Assembled, the axes differ per layout
+  and the kernel count grows
 
-**손잡이를 물려주는 자리마다 레이아웃도 물려줘야 한다.** `detach()` 가 그것을 빠뜨려
-속 모양이 밖으로 샜다 — 골든이 다섯 개로 바로 잡았다.
+**Wherever a handle is passed on, the layout has to be passed with it.**
+`detach()` left it out and the internal shape leaked outward — the golden caught it
+with five cases immediately.
 
-### 데이터 적재 — 배관도 놓았고, **숫자를 안 바꾼다**
+### Data loading — the plumbing is in, and **it does not change the numbers**
 
-`utils.data`(TensorDataset·DataLoader) · `fetch_cached`(OPFS 캐시) · `decode_cifar10`.
+`utils.data` (TensorDataset and DataLoader), `fetch_cached` (an OPFS cache), and
+`decode_cifar10`.
 
-- **데이터는 CPU 에 둔다.** CIFAR-10 을 통째로 GPU 에 올리면 614MB 이고, 배치 하나는
-  3.1MB 다. 매 배치 올리는 쪽이 싸고 GPU 메모리를 모델에 남긴다
-- **적재만 비동기다.** OPFS 에 동기 API 가 없다(워커 안에서만 있다). 준비 단계에서
-  한 번 `await` 하고, **학습 루프는 동기 그대로**다
-- 데이터셋 주소는 부르는 쪽이 준다. 라이브러리에 박아두면 그 주소가 사라졌을 때
-  라이브러리를 고쳐야 한다
+- **The data stays on the CPU.** All of CIFAR-10 on the GPU is 614MB and one batch
+  is 3.1MB. Uploading per batch is cheaper and leaves the GPU memory to the model
+- **Only the loading is asynchronous.** OPFS has no synchronous API (only inside a
+  worker). One `await` during preparation, and **the training loop stays
+  synchronous**
+- The dataset's address comes from the caller. Baked into the library, the library
+  has to be edited when that address disappears
 
-**업로드 비용은 잰 결과 0 이다.** 배치 128 에서 같은 텐서를 반복하면 400.8ms/스텝,
-DataLoader 로 매번 새로 올리면 399.4ms/스텝 — 3.1MB 전송은 400ms 스텝 옆에서 안 보인다.
-**데이터 적재가 1.7절의 결론을 바꾸지 않는다.**
+**The upload cost measured as zero.** At batch 128, repeating the same tensor gives
+400.8ms/step and re-uploading through the DataLoader gives 399.4ms/step — a 3.1MB
+transfer is invisible beside a 400ms step. **Data loading does not change section
+1.7's conclusion.**
 
-검증한 것: 디코더(합성 바이트로 모양·dtype·값·길이검사), OPFS 왕복, fetch 후 재호출이
-캐시에서 같은 바이트를 주는 것, DataLoader 의 배치 나누기(마지막 남는 배치 포함).
+What was verified: the decoder (shape, dtype, values and length checks on synthetic
+bytes), the OPFS round trip, a second call after a fetch giving the same bytes from
+the cache, and the DataLoader's batching (the final short batch included).
 
-### 진짜 CIFAR-10 으로 돈다 — **손실이 내려간다**
+### It runs on real CIFAR-10 — **the loss goes down**
 
-합성 데이터로는 확인할 수 없던 것이다. 무작위 픽셀에 무작위 라벨이면 배울 것이 없어서
-손실이 안 내려가고, 그러면 "학습이 도는가"는 영영 미확인으로 남는다.
+This could not be confirmed with synthetic data. Random pixels with random labels
+have nothing to learn, so the loss does not fall, and then "does it train" stays
+unconfirmed forever.
 
-`data_batch_1` (10,000장)을 넣고 ResNet-18 을 배치 128 로 60스텝:
+`data_batch_1` (10,000 images) fed to ResNet-18 at batch 128 for 60 steps:
 
 ```
-적재 108ms · x (10000, 3, 32, 32) [0.00, 1.00]
-라벨 분포  [1005, 974, 1032, 1016, 999, 937, 1030, 1001, 1025, 981]
-           ↑ 네이티브에서 잰 것과 **완전히 일치** — 브라우저 디코드가 맞다
+load 108ms · x (10000, 3, 32, 32) [0.00, 1.00]
+label distribution  [1005, 974, 1032, 1016, 999, 937, 1030, 1001, 1025, 981]
+           ↑ **exactly matching** what was measured natively — the browser decode is right
 
-손실 2.4894 → 1.7222   (무작위 추측은 ln 10 = 2.303)
-곡선 [2.49, 3.70, 2.29, 2.33, 2.02, 1.95, 1.83, 1.92, 1.92]
+loss 2.4894 → 1.7222   (random guessing is ln 10 = 2.303)
+curve [2.49, 3.70, 2.29, 2.33, 2.02, 1.95, 1.83, 1.92, 1.92]
 ```
 
-초반에 3.70 까지 튀는 것은 학습률이 큰 시작에서 흔한 모양이고, 그 뒤로 추측선 아래까지
-내려간다. **배운다.**
+The early jump to 3.70 is the usual shape at the start with a large learning rate,
+and after it the curve falls below the guessing line. **It learns.**
 
-> **CORS — 쟀다. 원본은 못 받는다.**
+> **CORS — measured. The originals cannot be fetched.**
 >
 > ```
-> 대조군 jsdelivr : OK status=200 type=cors
-> CIFAR 원본      : No 'Access-Control-Allow-Origin' header  ← 차단
+> control, jsdelivr : OK status=200 type=cors
+> CIFAR original    : No 'Access-Control-Allow-Origin' header  ← blocked
 > ```
 >
-> `cs.toronto.edu` 는 CORS 헤더를 주지 않아 **브라우저에서 직접 받을 수 없다.**
-> (대조군이 통과했으므로 검사 자체는 유효하다.)
+> `cs.toronto.edu` sends no CORS header, so it **cannot be fetched directly from a
+> browser.** (The control passed, so the check itself is valid.)
 >
-> 그래서 `cache_put(name, bytes)` 를 열어뒀다 — 사용자가 파일을 골라 넣거나 CORS 를
-> 주는 미러에서 받은 바이트를 넣으면 그다음은 `fetch_cached` 와 같다.
-> **주소를 라이브러리에 박지 않은 이유가 이것이다.**
+> Which is why `cache_put(name, bytes)` is exposed — the user picks a file, or puts
+> in bytes fetched from a mirror that does send CORS, and everything after that is
+> the same as `fetch_cached`. **This is why the address is not baked into the
+> library.**
 
 ---
 
-## 2. 왜 TF.js 인가
+## 2. Why TF.js
 
-**컴파일이 없다.** Pyodide 의 JS FFI 로 `js.tf` 를 직접 부르면 이쪽도
-`py3-none-any` 순수 파이썬 휠로 남는다. Rust/wasm 백엔드나 직접 짠 WGSL 커널과 달리
-**Pyodide ABI·emscripten 버전에 묶이지 않는다** — 코어가 지키는 성질을
-자매 라이브러리도 지킨다.
+**There is no compilation.** Calling `js.tf` directly through Pyodide's JS FFI
+keeps this side a `py3-none-any` pure-Python wheel too. Unlike a Rust/wasm backend
+or hand-written WGSL kernels, **it is not tied to a Pyodide ABI or an emscripten
+version** — the sister library keeps the property the core keeps.
 
-빌리는 것: WebGPU 백엔드, 커널 다수, 자동미분(`tf.variableGrads`), 메모리 관리.
-짜야 하는 것: torch 의미론, 파이썬 API, 그리고 4절이 말하는 층 전부.
+What is borrowed: the WebGPU backend, many kernels, automatic differentiation
+(`tf.variableGrads`), memory management. What has to be written: torch's semantics,
+the Python API, and every layer section 4 names.
 
-**대가는 의미론이다.** TF.js 의 연산 규칙은 torch 와 다르고, 이 프로젝트의 존재 이유가
-바로 그 차이를 없애는 것이다. 5절이 그 목록이다.
+**The price is the semantics.** TF.js's operation rules differ from torch's, and
+erasing that difference is this project's reason to exist. Section 5 is the
+list.
 
 ---
 
-## 3. async 를 어디에 가두는가
+## 3. Where async gets confined
 
-**연산은 원래 동기다.** `queue.submit()` 은 promise 를 안 돌려준다. 비동기가
-필요한 지점은 **값을 볼 때 한 곳**뿐이다 — `.item()` · `print()` · `.tolist()`.
-학습 루프 한 스텝에서 그건 보통 `loss.item()` 한 번이다.
+**Operations are synchronous by nature.** `queue.submit()` returns no promise. The
+one point that needs asynchrony is **looking at a value** — `.item()`, `print()`,
+`.tolist()`. In one step of a training loop that is usually a single
+`loss.item()`.
 
-우선순위:
+In order of preference:
 
-| | 조건 | 결과 |
+| | condition | result |
 |---|---|---|
-| **1. `dataSync()`** | A1 이 참 | 파이썬 API 가 **완전히 동기**. 코어와 같은 코드 |
-| 2. Worker + `Atomics.wait` | COOP/COEP 헤더를 걸 수 있을 때 | 완전 동기. 단 GPU 는 **다른 스레드**여야 한다 — 같은 워커에 두면 promise 를 풀 이벤트 루프가 블록돼 데드락 |
-| 3. JSPI | Chromium 계열 | 완전 동기. Safari·Firefox 미지원이라 **주 경로로는 못 쓴다** |
-| 4. `await loss.item()` | 언제나 | 루프에 `await` 한 줄이 남는다. 최종 폴백 |
+| **1. `dataSync()`** | A1 holds | the Python API is **fully synchronous.** The same code as the core |
+| 2. a Worker plus `Atomics.wait` | when COOP/COEP headers can be set | fully synchronous. And the GPU has to be on **another thread** — on the same worker, the event loop that would resolve the promise is blocked and it deadlocks |
+| 3. JSPI | Chromium-family | fully synchronous. Unsupported on Safari and Firefox, so **it cannot be the main path** |
+| 4. `await loss.item()` | always | one `await` stays in the loop. The final fallback |
 
-> 손실을 한 스텝 늦게 보고해 블록을 피하는 파이프라이닝은 **쓰지 않는다.**
-> 값이 조용히 한 칸 밀리는 것이고, 이 프로젝트가 하지 않겠다고 한 종류다.
+> Pipelining — reporting the loss one step late to avoid blocking — **is not
+> used.** It is a value quietly shifted by one, which is the kind of thing this
+> project said it would not do.
 
 ---
 
-## 4. 코어를 얼마나 재사용할 수 있나 — **생각보다 적다**
+## 4. How much of the core can be reused — **less than expected**
 
-착수 전에 알아야 할 사실이다. 코어는 numpy 에 **강결합**돼 있어서
-"백엔드만 갈아끼우기"가 안 된다. 실제 코드에서:
+A fact worth knowing before starting. The core is **tightly coupled** to numpy, so
+"just swap the backend" does not work. In the actual code:
 
-- `conv2d` 가 `_np.lib.stride_tricks.sliding_window_view` 로 im2col 을 한다
-- `BatchNorm2d.forward` 가 `x.data.var(axis=(0, 2, 3), ddof=1)` 를 직접 부른다
-- `max_pool2d` 가 `_np.ogrid` 와 `_np.add.at` 으로 흩뿌린다
-- `Tensor._binary` 가 `.data.dtype` 으로 갈라 `_np.add` 등을 부른다
-- 옵티마이저가 `p._array = p.data - lr * g` 로 numpy 배열을 직접 갱신한다
+- `conv2d` does im2col with `_np.lib.stride_tricks.sliding_window_view`
+- `BatchNorm2d.forward` calls `x.data.var(axis=(0, 2, 3), ddof=1)` directly
+- `max_pool2d` scatters with `_np.ogrid` and `_np.add.at`
+- `Tensor._binary` branches on `.data.dtype` and calls `_np.add` and the rest
+- the optimisers update the numpy array directly with `p._array = p.data - lr * g`
 
-이걸 백엔드 추상으로 걷어내려면 **코어를 리팩터해야 하고, 그건 ADR-001 위반**이다
-(코어에 추상화를 심는 것). 그래서 결론은:
+Pulling that out into a backend abstraction means **refactoring the core, and that
+violates ADR-001** (planting an abstraction in the core). So the conclusion is:
 
-> **텐서 연산과 그것에 직접 붙은 층은 재구현한다. 코어는 안 건드린다.**
-> 이것이 "백엔드"가 아니라 "자매 라이브러리"인 이유다.
+> **The tensor operations and the layers attached directly to them are
+> reimplemented. The core is not touched.** This is why it is a "sister library"
+> rather than a "backend".
 
-### 재사용 / 재구현
+### Reused / reimplemented
 
-| 재사용 (그대로) | 재구현 |
+| reused as is | reimplemented |
 |---|---|
-| 스케줄러 6종 — 파이썬 실수 연산뿐 | `Tensor` 와 autograd |
-| `Dataset` · `Subset` · `ConcatDataset` · 샘플러 | 원소별 · 리덕션 · 모양 조작 |
-| `Optimizer` 의 `param_groups`·`state_dict` 색인 규약 | `conv2d` · 풀링 · `BatchNorm` · `LayerNorm` |
-| `Module` 트리 구조 (`_params`/`_buffers`/이름 규약) | 옵티마이저의 `step()` 수식 |
-| 오류 메시지 규격 (`_like_torch`) | `DataLoader._collate` (텐서 연산에 걸림) |
+| the six schedulers — Python float arithmetic and nothing else | `Tensor` and autograd |
+| `Dataset`, `Subset`, `ConcatDataset`, the samplers | elementwise, reductions, shape manipulation |
+| `Optimizer`'s `param_groups` and `state_dict` indexing conventions | `conv2d`, pooling, `BatchNorm`, `LayerNorm` |
+| `Module`'s tree structure (`_params`/`_buffers`/the naming conventions) | the optimisers' `step()` formulas |
+| the error message specification (`_like_torch`) | `DataLoader._collate` (it hangs on tensor operations) |
 
-**파라미터 초기화는 코어의 numpy 경로를 그대로 쓰고 GPU 로 올린다.** torch 와 같은
-분포·같은 `manual_seed` 의미를 이미 코어가 구현해뒀고, TF.js 의 RNG 로 바꾸면
-그게 깨진다. 초기화는 한 번뿐이라 비용도 없다.
-
----
-
-## 5. torch 의미론 — 갈릴 곳 목록
-
-코어가 피 흘려 알아낸 것들이다. TF.js 위에서 **전부 다시 확인해야 한다.**
-
-- **dtype 승격** — torch 는 범주(bool < 정수 < 실수)로 가르고 범주 안에서만 올린다.
-  TF.js 는 암묵 승격 자체를 대부분 거부한다. 112건 표를 다시 돌려야 한다
-- **BatchNorm 의 분산 두 개** — 정규화는 편향(ddof=0), `running_var` 갱신은 비편향(ddof=1).
-  둘 다 편향으로 두면 2.6% 어긋난다. 코어가 이걸로 오래 틀려 있었다
-- **`median`** — torch 는 짝수일 때 가운데 둘 중 **작은 쪽**. 평균을 내면 조용히 다르다
-- **conv 패딩** — torch 는 정수 패딩, TF.js 는 `same`/`valid` 문자열 중심
-- **마스크 두 종류** — 불리언은 가리고, 실수는 **더한다**
-- **누산 순서** — float32 리덕션은 순서로 갈린다. T4(비트 동등)는 여기서도 비목표다
+**Parameter initialisation uses the core's numpy path as it is and uploads to the
+GPU.** The core already implements torch's distribution and torch's `manual_seed`
+meaning, and switching to TF.js's RNG breaks that. Initialisation happens once, so
+there is no cost either.
 
 ---
 
-## 6. 검증 — **한 프로세스에서 3자 대조가 안 된다**
+## 5. torch's semantics — the list of places that will diverge
 
-이게 하네스 설계의 핵심 제약이다.
+These were learned the hard way by the core. **Every one of them has to be
+confirmed again** on TF.js.
 
-- 진짜 **torch 는 브라우저에 없다**
-- **GPU 경로는 네이티브 CPython 에 없다**
+- **dtype promotion** — torch splits by category (bool < integer < float) and
+  promotes within a category alone. TF.js refuses most implicit promotion outright.
+  The 112-case table has to be run again
+- **BatchNorm's two variances** — the biased one (ddof=0) for the normalisation and
+  the unbiased one (ddof=1) for updating `running_var`. Biased in both places is off
+  by 2.6%. The core was wrong about this for a long time
+- **`median`** — with an even count torch takes **the smaller** of the middle two.
+  Averaging is quietly different
+- **conv padding** — torch takes integer padding and TF.js is built around the
+  `same`/`valid` strings
+- **two kinds of mask** — a boolean one masks and a float one **adds**
+- **accumulation order** — a float32 reduction diverges by order. T4 (bit
+  equivalence) is a non-goal here too
 
-따라서 지금처럼 한 프로세스에서 `torch vs borch` 를 나란히 부르는 방식이
-GPU 에는 통하지 않는다. **골든 파일로 두 단계**로 나눈다.
+---
+
+## 6. Verification — **a three-way comparison does not fit in one process**
+
+This is the central constraint on the harness design.
+
+- real **torch is not in the browser**
+- **the GPU path is not in native CPython**
+
+So the current arrangement — calling `torch vs borch` side by side in one process —
+does not work for the GPU. It splits into **two stages around a golden file**.
 
 ```
-1단계 (네이티브)   기존 하네스를 돌려 torch 의 기대값을 케이스 이름별로 굳힌다
-                  → golden.npz  (+ 케이스 목록의 해시)
+stage 1 (native)    run the existing harness and freeze torch's expected values by
+                    case name → golden.npz  (plus a hash of the case list)
 
-2단계 (브라우저)   Pyodide 에 golden 을 싣고 GPU 경로를 돌려 대조한다
-                  케이스 해시가 다르면 실패 — 골든이 낡았다는 뜻이다
+stage 2 (browser)   load the golden into Pyodide, run the GPU path and compare
+                    a different case hash fails — it means the golden is stale
 ```
 
-### 기존 하네스에서 바꿔야 할 것
+### What has to change in the existing harness
 
-- `_wide_cases()` 는 이미 `lambda L: ...` 로 **라이브러리를 인자로 받는다.**
-  3자화가 그대로 된다 — 이 형태가 확장 경로다
-- `build_cases()` 는 `run_real`/`run_nano` 두 closure 를 따로 든다.
-  같은 `lambda L` 형태로 통일해야 3자가 된다
-- `compare_grad()` 가 `real.tensor`/`nano.tensor` 를 몽키패치해 잎을 수집한다.
-  이 수법도 라이브러리 인자 형태로 일반화해야 한다
+- `_wide_cases()` already **takes the library as an argument** through
+  `lambda L: ...`. Making it three-way works as is — this shape is the path forward
+- `build_cases()` holds two separate closures, `run_real` and `run_nano`. They have
+  to be unified into the same `lambda L` shape for a third to fit
+- `compare_grad()` monkeypatches `real.tensor`/`nano.tensor` to collect leaves. That
+  trick has to be generalised into the library-argument shape too
 
-### 브라우저 러너 — **진짜 GPU 가 달린 기계에서 돈다**
+### The browser runner — **it runs on a machine with a real GPU**
 
-2단계는 브라우저가 필요하고, 그 브라우저는 **사용자가 실제로 쓰는 것과 같은 GPU**
-위에 있어야 한다. GitHub 호스팅 러너에는 GPU 가 없어서 SwiftShader 로 떨어지는데,
-그건 아무 사용자도 지나지 않는 경로다 — 거기서 통과해도 증명되는 것이 없다.
+Stage 2 needs a browser, and that browser has to sit on **the same kind of GPU users
+actually have**. GitHub-hosted runners have no GPU and fall back to SwiftShader,
+which is a path no user ever takes — passing there proves nothing.
 
-그래서 **self-hosted 러너**를 쓴다. 개발 기계를 러너로 등록하면 진짜 GPU 위에서
-자동으로 돈다. 러너 등록은 저장소 설정과 토큰이 필요하므로 사람이 한다.
+So a **self-hosted runner** is used. Registering the development machine as a runner
+makes it run automatically on a real GPU. Registering a runner needs repository
+settings and a token, so a person does it.
 
-> **창을 띄워야 한다(`--headed`).** 실측이다 — Playwright 의 헤드리스 Chromium 에서는
-> `navigator.gpu` 가 없어 TF.js 가 **WebGL 로 조용히 떨어진다.** 러너가 백엔드를
-> 확인하고 `webgpu` 가 아니면 멈추게 해둔 이유가 그것이다. 안 막으면 "GPU 로 돌렸다"고
-> 착각한 채 WebGL 숫자를 보게 된다.
+> **The window has to be shown (`--headed`).** This is measured — Playwright's
+> headless Chromium has no `navigator.gpu`, so TF.js **falls back to WebGL
+> silently.** That is why the runner checks the backend and stops when it is not
+> `webgpu`. Without that block you look at WebGL numbers believing you ran on the
+> GPU.
 
-기존 CI(네이티브 pytest)는 그대로 둔다. 코어 borch 는 numpy 뿐이라
-브라우저가 애초에 필요 없다 — 새 축은 **GPU 경로에만** 붙는다.
+The existing CI (native pytest) stays as it is. The core borch is numpy alone, so it
+never needed a browser — the new axis attaches **to the GPU path only**.
 
 ---
 
-## 7. 메모리 — TF.js 는 수동 해제다
+## 7. Memory — TF.js frees by hand
 
-TF.js 텐서는 `dispose()` 로 직접 놓아야 하고, 파이썬 GC 의 비결정적 타이밍에
-맡기면 GPU 메모리가 샌다. `__del__` 에 거는 것으로는 부족하다.
+A TF.js tensor has to be released explicitly with `dispose()`, and leaving it to the
+non-deterministic timing of Python's GC leaks GPU memory. Hanging it on `__del__` is
+not enough.
 
-**코어에 이미 맞는 갈고리가 있다.** `backward()` 가 끝나면 그래프를 놓는다
-(`_freed` · `retain_graph`). 중간 버퍼의 수명을 **정확히 그 지점에 묶는다** —
-역전파가 끝나는 순간 그래프의 중간 텐서를 전부 dispose 한다.
+**The core already has the right hook.** When `backward()` finishes it releases the
+graph (`_freed`, `retain_graph`). The lifetime of the intermediate buffers is tied
+**exactly to that point** — the moment backward ends, every intermediate tensor in
+the graph is disposed.
 
-- 파라미터 · 버퍼 · 옵티마이저 상태 → 명시적으로 **보존**
-- 그래프 중간값 → `backward()` 시점에 일괄 해제
-- `no_grad()` 안의 값 → 블록을 나갈 때 해제
+- parameters, buffers, optimiser state → explicitly **kept**
+- graph intermediates → released together at `backward()`
+- values inside `no_grad()` → released on leaving the block
 
-> **이 문단의 마지막 줄은 틀렸다.** 원래 "이 규칙이면 스코프를 사용자 API 에 노출하지
-> 않아도 된다"고 적었는데, 재보니 아니었다.
+> **The last line of this paragraph was wrong.** It originally said "with this rule
+> the scope does not have to be exposed in the user API", and measuring again showed
+> otherwise.
 >
-> 파이썬 GC 는 `Tensor` 가 든 손잡이만 놓아준다. 그런데 **역전파 클로저가 붙들고 있는
-> 중간 버퍼**(gelu 의 `1+erf`, gather 의 원-핫 같은 것)는 `Tensor` 가 아니고,
-> 그래프를 훑어서 찾을 수도 없다. 실측으로 학습 스텝당 **92.7개**가 남았다.
+> Python's GC only releases the handle a `Tensor` holds. But the **intermediate
+> buffers held by the backward closures** (gelu's `1+erf`, gather's one-hot and the
+> like) are not `Tensor`s, and walking the graph does not find them either. Measured,
+> **92.7 of them** were left per training step.
 >
-> 그래서 스코프를 노출한다. 코어와 다른 한 줄이 생기지만 새는 것보다 낫고,
-> 스코프를 두르면 스텝당 누수가 **0** 이다(실측).
+> So the scope is exposed. It costs one line of difference from the core, which
+> beats leaking, and with the scope wrapped around it the leak per step is **0**
+> (measured).
 >
 > ```python
 > with torch.scope():
 >     opt.zero_grad(); crit(model(x), y).backward(); opt.step()
 > ```
 >
-> 파라미터와 옵티마이저 상태는 `tf.keep` 으로 살려두므로 스코프를 나가도 남는다.
+> Parameters and optimiser state are held alive with `tf.keep`, so they survive
+> leaving the scope.
 
 ---
 
-## 8. 단계
+## 8. Stages
 
-| | 내용 | 나가는 것 |
+| | content | what comes out |
 |---|---|---|
-| ~~**S0**~~ | ~~A1·A2·A3 을 잰다~~ | **완료 — 1.5절. 조건부 계속** |
-| **S1** | ~~골든 파일 하네스~~ 완료 + 브라우저 러너 | 빈 백엔드로 러너가 도는 것 |
-| ~~**S2**~~ | ~~`Tensor` + autograd + 원소별·리덕션·matmul~~ | **완료 — 골든 124/124, MLP 학습이 돈다, 스텝당 누수 0** |
-| ~~**S3**~~ | ~~`conv2d`·풀링·`BatchNorm`~~ | **완료 — 골든 141/141, CNN 학습이 돈다. 아래 1.6절** |
-| ~~**S4**~~ | ~~ResNet-18, 성능, 데이터 적재~~ | **목표 달성 — 2.37분/에폭. 1.7절** |
+| ~~**S0**~~ | ~~measure A1, A2, A3~~ | **done — section 1.5. Conditional go-ahead** |
+| **S1** | ~~golden-file harness~~ done + browser runner | the runner turning with an empty backend |
+| ~~**S2**~~ | ~~`Tensor` + autograd + elementwise, reductions, matmul~~ | **done — golden 124/124, MLP training runs, 0 leak per step** |
+| ~~**S3**~~ | ~~`conv2d`, pooling, `BatchNorm`~~ | **done — golden 141/141, CNN training runs. Section 1.6 above** |
+| ~~**S4**~~ | ~~ResNet-18, performance, data loading~~ | **target met — 2.37 min/epoch. Section 1.7** |
 
-**S1 이 S2 보다 먼저인 것은 의도다.** 코어가 배운 교훈이 그거다 —
-"검사가 없었을 뿐이지 맞다는 근거는 없었다."
+**S1 coming before S2 is deliberate.** That is the lesson the core learned —
+"there was merely no check; there was never evidence that it was right."
 
 ---
 
-## 9. 열린 질문
+## 9. Open questions
 
-- **f16** — WebGPU 의 `shader-f16` 은 선택 기능이다. 쓰면 처리량이 크게 오르지만
-  혼합정밀도는 코어의 의도적 거절 목록에 있다. 자매 라이브러리에서는 허용할 것인가?
-  (S4 에서 300배에 못 닿으면 이 답이 강제된다)
-- **패키지 이름** — `borch[webgpu]` extras 는 인덱스 해석이 필요하고,
-  이 저장소는 아직 private 이라 PyPI 에 없다. **저장소 공개가 선행 조건이다**
-- **API 이름** — `import borch_webgpu as torch` 로 갈 것인가,
-  코어와 같은 이름을 쓰되 별도 import 로 갈 것인가
+- **f16** — WebGPU's `shader-f16` is an optional feature. Using it raises throughput
+  considerably, but mixed precision is on the core's list of deliberate refusals.
+  Should the sister library allow it? (Falling short of 300× in S4 would force this
+  answer)
+- **the package name** — `borch[webgpu]` extras need index resolution, and this
+  repository is still private, so it is not on PyPI. **Making the repository public
+  is a precondition**
+- **the API name** — go with `import borch_webgpu as torch`, or use the same name as
+  the core through a separate import
