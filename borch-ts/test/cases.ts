@@ -707,7 +707,10 @@ function addNamedCasts(out: Map<string, Case>): void {
 
   // 파이썬 쪽 판정이 문구의 **조각**을 본다. 여기서도 같은 조각을 확인하고 같은
   // 낱말을 돌려준다 — 문장 전체를 굳히면 한 글자만 바뀌어도 갈린다.
-  const MARK = "브라우저 축소판에 없습니다";
+  // **파이썬 쪽 `tests/cases.py` 와 같은 조각이어야 한다.** 여기가 갈리면 양쪽이 각자
+  // 자기 문장만 확인하고, 스물한 건이 전부 초록인 채로 서로 다른 말을 하게 된다 —
+  // 실제로 그랬다. 굳혀진 답이 `기대대로` 라는 판정 낱말이라 문장이 벌어져도 안 움직인다.
+  const MARK = "is not in the browser subset";
   const weRefuse = (name: string, body: () => unknown): void => {
     out.set(`${P}${name}=우리는거절`, () => {
       try {
@@ -1931,6 +1934,24 @@ function addUnpool(out: Map<string, Case>): void {
     return got.values.maxUnpool(got.indices, 2, undefined, 0, [5, 5]);
   });
 
+  // ── 층 ────────────────────────────────────────────────────────────────
+  //
+  // **계산은 위에서 이미 다 재고 있었고 층 이름이 없었다.** `되돌리기::` 여섯 건이
+  // 텐서 메서드로 돌고 있었는데, `nn.MaxUnpool2d` 라는 이름은 아무도 안 물었다.
+  //
+  // `MaxUnpool` 은 인자가 둘이라 `Sequential` 에 못 들어간다 — 자리가 값과 나란히
+  // 흘러야 하고, 층 안에 숨기면 같은 층을 두 번 쓸 때 남의 자리를 쓴다. torch 도 같은
+  // 모양이고, 그래서 여기도 `forward` 가 아니라 `place(x, indices)` 다.
+  out.set("unpool::층::MaxPool2d → MaxUnpool2d", () => {
+    const pool = new nn.MaxPool2d(2, undefined, true);
+    const got = pool.pick(plane());
+    return new nn.MaxUnpool2d(2).place(got.values, got.indices);
+  });
+
+  // `returnIndices` 가 **반환형을 바꾸는** 자리라 층이 그것을 보고 골라야 한다.
+  out.set("unpool::층::AdaptiveMaxPool2d 자리",
+    () => new nn.AdaptiveMaxPool2d(2, true).pick(plane()).indices);
+
   out.set("unpool::grad::자리 판의 풀링", () => {
     const x = grid([1, 1, 4, 4]);
     x.requiresGrad = true;
@@ -3075,6 +3096,13 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     ["Rprop", (ps) => new optim.Rprop(ps, 0.05)],
     // **2 차원 가중치라야 Adafactor 의 요점이 돈다** — 여기 `0.weight` 가 (8, 6) 이다.
     ["Adafactor", (ps) => new optim.Adafactor(ps, 0.05)],
+    // **감쇠가 물어야 `AdamW` 가 `Adam` 과 갈린다.** 둘을 가르는 것은 감쇠가 놓이는
+    // 자리 하나뿐이다 — 모멘트가 보기 전의 기울기냐(`Adam`), 갱신 뒤의 가중치냐
+    // (`AdamW`). `weightDecay=0` 이면 두 갈래가 다 사라져 같은 옵티마이저가 되므로,
+    // 기본값으로 만든 케이스는 어느 구현으로도 통과한다.
+    ["Adam(weight_decay)",
+      (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+    ["AdamW", (ps) => new optim.AdamW(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {

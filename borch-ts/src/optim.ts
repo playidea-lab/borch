@@ -344,12 +344,20 @@ export class Adam extends Optimizer {
   private readonly second: Tensor[];
   private stepCount = 0;
 
+  /**
+   * **`AdamW` is this class with the decay moved.** Coupled, it goes onto the
+   * gradient before the moments see it; decoupled, onto the weights after the
+   * update. That one placement is the whole difference between the two names.
+   */
+  protected readonly decoupled: boolean = false;
+
   constructor(
     params: ParamsArg,
     lr: number,
     private readonly beta1 = 0.9,
     private readonly beta2 = 0.999,
     private readonly eps = 1e-8,
+    private readonly weightDecay = 0,
   ) {
     super(params, lr);
     this.first = this.state(this.params);
@@ -379,14 +387,66 @@ export class Adam extends Optimizer {
       1 - this.beta1 ** this.stepCount,
       1 - this.beta2 ** this.stepCount,
     ], [2]);
+
+    // **커널은 안 건드린다.** 두 감쇠가 다 텐서 연산으로 적히기 때문이다.
+    //
+    // 붙은 쪽은 모멘트가 보기 전의 기울기에 더한다 — `g + λ·p`.
+    //
+    // 떨어진 쪽은 갱신 **뒤에** 원래 가중치에 걸린다: `p − lr·m̂/(√v̂+ε) − lr·λ·p`.
+    // 그것은 `p·(1 − lr·λ) − lr·m̂/(√v̂+ε)` 와 같은 수이므로, **먼저 줄여 놓고**
+    // 여느 때처럼 한 걸음 가면 된다. 모멘트는 기울기에서 나오므로 미리 줄인 것이
+    // 그쪽을 흔들지 않는다.
+    //
+    // 커널에 인자를 하나 더 굽는 쪽도 됐지만, 그러면 `weightDecay` 값마다 파이프라인이
+    // 하나씩 는다 — 굽는 이름에 그 수가 들어가기 때문이다.
+    const decay = this.grouped(this.weightDecay);
+    let g = grad;
+    if (decay !== 0) {
+      noGrad(() => {
+        if (this.decoupled) {
+          param.copyFrom(param.mul(Tensor.full([], 1 - this.lr * decay)));
+        } else {
+          g = grad.add(param.mul(Tensor.full([], decay)));
+        }
+      });
+    }
+
     const n = param.size;
     const d = device();
     d.run1d(
       d.pipeline(`adam:${n}:${this.lr}:${this.beta1}:${this.beta2}:${this.eps}`,
         () => adamStep(n, this.lr, this.beta1, this.beta2, this.eps)),
-      [param.buffer, grad.buffer, m.buffer, v.buffer, corr.buffer],
+      [param.buffer, g.buffer, m.buffer, v.buffer, corr.buffer],
       n,
     );
+  }
+}
+
+/**
+ * Adam with the weight decay applied **to the weights rather than to the
+ * gradient.** `torch.optim.AdamW`.
+ *
+ * Coupled decay reaches the moments, so it is scaled by them and a parameter
+ * with a large gradient history gets decayed less. Decoupled decay does not,
+ * which is the correction the AdamW paper is about — and it is why the two
+ * names cannot be one class with a flag the caller sets by accident.
+ *
+ * **The default is 0.01, not 0.** torch's is too. Left at zero the two
+ * optimizers are the same one, so a default of zero would make the name mean
+ * nothing until somebody passed an argument.
+ */
+export class AdamW extends Adam {
+  protected override readonly decoupled = true;
+
+  constructor(
+    params: ParamsArg,
+    lr = 1e-3,
+    beta1 = 0.9,
+    beta2 = 0.999,
+    eps = 1e-8,
+    weightDecay = 0.01,
+  ) {
+    super(params, lr, beta1, beta2, eps, weightDecay);
   }
 }
 
