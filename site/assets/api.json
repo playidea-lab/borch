@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 2
+  "missing": 4
  },
  "modules": [
   {
@@ -10639,8 +10639,14 @@
      "doc": "",
      "members": [
       {
+       "name": "decoupled",
+       "signature": "protected readonly decoupled: boolean",
+       "doc": "**`AdamW` is this class with the decay moved.** Coupled, it goes onto the\ngradient before the moments see it; decoupled, onto the weights after the\nupdate. That one placement is the whole difference between the two names.",
+       "protected": true
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, beta1?: number, beta2?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
        "doc": ""
       },
       {
@@ -10666,6 +10672,19 @@
        "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
        "doc": "",
        "protected": true
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "AdamW",
+     "signature": "export declare class AdamW extends Adam",
+     "doc": "Adam with the weight decay applied **to the weights rather than to the\ngradient.** `torch.optim.AdamW`.\n\nCoupled decay reaches the moments, so it is scaled by them and a parameter\nwith a large gradient history gets decayed less. Decoupled decay does not,\nwhich is the correction the AdamW paper is about — and it is why the two\nnames cannot be one class with a flag the caller sets by accident.\n\n**The default is 0.01, not 0.** torch's is too. Left at zero the two\noptimizers are the same one, so a default of zero would make the name mean\nnothing until somebody passed an argument.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
+       "doc": ""
       }
      ]
     },
@@ -11399,7 +11418,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 147,
+   "count": 150,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -13431,5 +13450,5 @@
    "count": 9
   }
  ],
- "total": 1727
+ "total": 1730
 }

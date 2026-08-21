@@ -3093,6 +3093,13 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     ["Rprop", (ps) => new optim.Rprop(ps, 0.05)],
     // **2 차원 가중치라야 Adafactor 의 요점이 돈다** — 여기 `0.weight` 가 (8, 6) 이다.
     ["Adafactor", (ps) => new optim.Adafactor(ps, 0.05)],
+    // **감쇠가 물어야 `AdamW` 가 `Adam` 과 갈린다.** 둘을 가르는 것은 감쇠가 놓이는
+    // 자리 하나뿐이다 — 모멘트가 보기 전의 기울기냐(`Adam`), 갱신 뒤의 가중치냐
+    // (`AdamW`). `weightDecay=0` 이면 두 갈래가 다 사라져 같은 옵티마이저가 되므로,
+    // 기본값으로 만든 케이스는 어느 구현으로도 통과한다.
+    ["Adam(weight_decay)",
+      (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+    ["AdamW", (ps) => new optim.AdamW(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {

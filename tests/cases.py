@@ -3484,6 +3484,13 @@ _OPTIMIZERS = [
     # so it goes down the path that splits into rows and columns. Asked in 1-D only, that path
     # never runs at all.
     ("Adafactor", {"lr": 0.05}),
+    # **`weight_decay` has to bite, or `AdamW` is `Adam`.** The one thing that separates them is
+    # where the decay lands — on the gradient before the moments (`Adam`), or on the weights
+    # after the update (`AdamW`). At `weight_decay=0` both branches vanish and the two are the
+    # same optimizer, so a case built on the default would pass against either implementation.
+    # It is large here for the same reason the others take five steps: to be visible.
+    ("Adam(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
+    ("AdamW", {"lr": 0.05, "weight_decay": 0.1}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.
@@ -3540,7 +3547,9 @@ def opt_cases(inp=None):
 
     def trained(L, name, args):
         m = model_of(L)
-        opt = getattr(L.optim, name)(m.parameters(), **args)
+        # The branch is written in the name in parentheses — the class name is what comes
+        # before it, the same rule `lr_trace` uses for the schedulers.
+        opt = getattr(L.optim, name.split("(")[0])(m.parameters(), **args)
         crit = L.nn.CrossEntropyLoss()
         x, y = L.tensor(xin), L.tensor(yin)
         for _ in range(5):
