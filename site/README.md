@@ -1,178 +1,195 @@
-# site — 설명 페이지와 플레이그라운드
+# site — the explainer pages and the playground
 
-`borch` 가 무엇인지 30초 안에 보여주고, 그 자리에서 한 번 돌려 보게 하는 정적
-페이지다. 빌드 도구도 프레임워크도 없다 — 브라우저가 그냥 읽는 HTML·CSS·ES
-모듈이고, 저장소의 런타임 의존성 0 원칙을 이 페이지도 지킨다.
+Static pages that show what `borch` is in thirty seconds and let you run it once on the
+spot. No build tool and no framework — HTML, CSS and ES modules the browser simply reads,
+so this page keeps the repository's zero-runtime-dependency rule too.
 
 ```bash
-npm run build:ts          # 브라우저는 TypeScript 를 그대로 못 읽는다
-npm run site              # API 목록을 뽑고 띄운다 · http://127.0.0.1:8123/site/
+npm run build:ts          # a browser cannot read TypeScript as it is
+npm run site              # extracts the API list and serves it · http://127.0.0.1:8123/site/
 ```
 
-한국어는 그 아래 `/ko/` 다.
+Korean is below that, at `/ko/`.
 
-`python3 -m http.server` 로 **저장소 루트를** 얹어도 된다. `site/` 만 얹으면 안 된다 —
-페이지가 `../borch-ts/dist`(그리고 파이썬 모드에서 `../vendor/pyodide`, `../borch*/`)를
-부르기 때문이다.
+`python3 -m http.server` works too, as long as it serves **the repository root.** Serving
+`site/` alone does not — the pages call `../borch-ts/dist` (and, in Python mode,
+`../vendor/pyodide` and `../borch*/`).
 
-## 무엇이 어디에 있나
+## What is where
 
-| 자리 | 하는 일 |
+| Place | What it does |
 |---|---|
-| `index.html` | 랜딩. 히어로의 데모가 실제로 돈다 |
-| `learn/` | 강의 여덟(개념). **모든 코드 블록이 그 자리에서 돈다** |
-| `tutorials/` | 프로젝트 여섯. 따라가면 끝나는 것 |
-| `api/` | API 레퍼런스. 목록은 `assets/api.json` 에서 온다 |
-| `playground.html` | 큰 편집기 · 손실 곡선 · GPU 계측 |
-| `ko/` | 위 넷의 한국어 판. 같은 자산을 `../assets/` 로 쓴다 |
+| `index.html` | The landing page. The hero's demo really runs |
+| `learn/` | Eight lessons (concepts). **Every code block runs where it stands** |
+| `tutorials/` | Six projects. Things that finish if you follow them |
+| `api/` | The API reference. The list comes from `assets/api.json` |
+| `playground.html` | A large editor · a loss curve · GPU instrumentation |
+| `ko/` | The Korean edition of the four above. Uses the same assets through `../assets/` |
 | `build_api.py` | `borch-ts/dist/src/*.d.ts` → `assets/api.json` |
-| `fetch_data.py` | CIFAR 부분집합 → `assets/data/`(gitignore). 튜토리얼 4·5 가 쓴다 |
-| `assets/runner.js` | borch 를 싣고 사용자 코드를 돌리는 자리. **모든 페이지가 같은 것을 쓴다** |
-| `assets/runnable.js` | 강의·튜토리얼의 실행되는 코드 블록 |
-| `assets/render.js` | 텐서를 그림과 곡선으로 (`show`·손실 곡선) |
-| `assets/datasets.js` | 스프라이트 한 장을 텐서로 되읽는다 |
-| `assets/docs.js` | API 레퍼런스 화면(검색·사이드바) |
-| `assets/examples.js` | 플레이그라운드 예시. 자바스크립트 여섯, 파이썬 다섯 — 각각 `{en, ko}` |
-| `assets/i18n.js` | 코드가 만드는 문구의 두 언어 |
-| `assets/playground.js` · `assets/home.js` | 각 화면의 배선 |
-| `assets/style.css` | 밝은 쪽·어두운 쪽 둘 다. 폰트도 밖에서 안 받는다 |
-| `serve.py` | 루트를 얹고 페이지를 연다 |
+| `fetch_data.py` | A CIFAR subset → `assets/data/` (gitignored). Tutorials 4 and 5 use it |
+| `assets/runner.js` | Where borch is loaded and user code is run. **Every page uses the same one** |
+| `assets/runnable.js` | The runnable code blocks in the lessons and tutorials |
+| `assets/render.js` | Tensors as pictures and curves (`show`, the loss curve) |
+| `assets/datasets.js` | Reads one sprite sheet back into a tensor |
+| `assets/docs.js` | The API reference screen (search, sidebar) |
+| `assets/examples.js` | The playground examples. Six JavaScript, five Python — each `{en, ko}` |
+| `assets/i18n.js` | The two languages for wording the code produces |
+| `assets/playground.js` · `assets/home.js` | The wiring for each screen |
+| `assets/style.css` | Both the light and the dark side. No fonts fetched from outside either |
+| `serve.py` | Serves the root and opens the page |
 
-## 길잡이 구조 (IA)
+## Information architecture
 
-**전역 차림표는 모든 페이지에서 한 벌이다** — `배우기 · API · Playground · GitHub · 언어`.
-지금 어디에 있는지는 밑줄 하나로 표시한다(`.top nav a.on`).
+**The global menu is one set on every page** — `Learn · API · Playground · GitHub · language`.
+Where you are is marked with a single underline (`.top nav a.on`).
 
-한동안 랜딩만 `Why · How` 앵커를 더 달고 있었는데, 그러면 Learn 에서 Playground 로 갈 때
-**차림표가 바뀌는 것처럼 보인다.** 전역 이동과 페이지 안 이동은 다른 것이므로 층을 갈랐다:
+For a while the landing page alone carried extra `Why · How` anchors, and that made **the menu
+look like it changed** on the way from Learn to Playground. Global navigation and in-page
+navigation are different things, so the layers were separated:
 
-| 층 | 무엇 | 어디에 |
+| Layer | What | Where |
 |---|---|---|
-| 전역 | Learn · API · Playground · GitHub · 언어 | 모든 페이지 상단, 같은 순서 |
-| 페이지 안 | 랜딩의 절 목록 | 상단 바로 아래 얇은 줄(`.subnav`) |
-| 페이지 안 | 강의 목록 · 모듈 목록 | 왼쪽 사이드바 |
+| Global | Learn · API · Playground · GitHub · language | The top of every page, in the same order |
+| In-page | The landing page's section list | A thin strip just under the top bar (`.subnav`) |
+| In-page | The lesson list · the module list | The left sidebar |
 
-사이드바에 API·Playground 링크를 또 두었다가 뺐다 — 전역 차림표와 같은 곳을 가리키는
-두 번째 길은 도움이 아니라 선택지를 늘리는 것이다.
+API and Playground links went into the sidebar too and then came out — a second road to the
+same place as the global menu is not help, it is one more choice.
 
-## 두 언어를 어떻게 두는가
+## How the two languages are kept
 
-**본문은 HTML 두 벌이고, 코드가 만드는 문구만 `i18n.js` 한 곳에 있다.**
+**The prose is two sets of HTML, and only the wording the code produces lives in one place,
+`i18n.js`.**
 
-본문까지 자바스크립트로 끼워 넣으면 자바스크립트가 꺼진 브라우저와 링크 미리보기에서
-빈 페이지가 된다. 설명 페이지가 그렇게 되면 존재 이유가 없다. 대신 **두 벌이 어긋날 수
-있다**는 비용을 진다 — 문구를 고칠 때 `index.html` 과 `ko/index.html` 을 같이 고친다.
+Injecting the prose with JavaScript too would give a blank page to a browser with JavaScript
+off, and to a link preview. An explainer page in that state has no reason to exist. The cost
+taken instead is that **the two sets can drift** — changing wording means changing
+`index.html` and `ko/index.html` together.
 
-어느 언어인지는 `<html lang>` 이 정한다. 경로(`/ko/`)와 같이 가지만 경로를 읽지는
-않는다 — 그러면 파일을 옮기는 순간 문구가 조용히 영어로 돌아간다.
+Which language it is, is decided by `<html lang>`. That travels with the path (`/ko/`) but does
+not read the path — reading it would silently revert the wording to English the moment a file
+moves.
 
-**예시 코드는 두 언어에서 같아야 한다.** 갈리는 것은 주석과 찍는 문구뿐이다. 코드가
-갈리면 "자바스크립트와 파이썬이 같은 값을 낸다" 는 이 페이지의 주장이 거짓이 된다.
+**The example code has to be identical in both languages.** What differs is the comments and
+the printed wording, nothing else. If the code differs, this page's claim — that JavaScript and
+Python give the same values — becomes false.
 
-## API 레퍼런스는 손으로 안 적는다
+## The API reference is not written by hand
 
-`build_api.py` 가 선언 파일(`.d.ts`)에서 뽑는다. `tsc` 가 TSDoc 주석을 그대로 남기므로
-**설명문의 원본은 언제나 소스**이고, 설명이 틀렸으면 고칠 곳은 소스다.
+`build_api.py` extracts it from the declaration files (`.d.ts`). `tsc` keeps the TSDoc comments
+as they are, so **the original of every description is always the source**, and a wrong
+description is fixed in the source.
 
-수백 개짜리 목록을 손으로 적으면 첫 주에만 맞는다. 이 저장소가 낡은 수를 네 번 잡았고
-네 번 다 사람이 눈으로 찾았다 — 그보다 훨씬 큰 것을 같은 방식으로 관리할 수는 없다.
+A list of hundreds written by hand is right for the first week only. This repository has caught
+four stale numbers and all four were found by eye — something far larger cannot be managed the
+same way.
 
-`tests/test_site.py` 가 `assets/api.json` 이 지금 소스에서 뽑은 것과 같은지 본다.
-소스를 고치고 다시 안 뽑으면 거기서 멈춘다. 선언 파일이 없는 체크아웃에서는 건너뛴다.
+`tests/test_site.py` checks that `assets/api.json` equals what is extracted from the source
+right now. Edit the source without re-extracting and it stops there. On a checkout with no
+declaration files it skips.
 
-> 생성기를 쓰면서 실제로 겪은 것: 괄호 깊이를 가지마다 따로 세다가 **텐서 메서드 422 개
-> 중 18 개만** 물었다. 화면은 멀쩡했다 — 없는 것과 못 찾은 것이 같은 모양이다. 꾸밈말
-> (`protected`)과 선택 속성(`initialLr?`)을 빠뜨렸을 때도 증상은 같았고, 80 개가 조용히
-> 빠져 있었다.
+> What actually happened while using the generator: counting bracket depth separately per
+> branch caught **18 of the 422 tensor methods.** The screen looked fine — what is absent and
+> what was not found look the same. Leaving out a modifier (`protected`) and an optional
+> property (`initialLr?`) had the same symptom, and 80 names were quietly missing.
 
-## 데이터는 git 밖에 둔다
+## The data is kept outside git
 
-튜토리얼 4·5 만 진짜 데이터셋을 쓴다. 원본은 배치당 29MB 이고 커밋 안 된다 —
-`vendor/pyodide`·`borch-ts/dist` 와 같은 규칙이다. `fetch_data.py` 가 2,000+500 장을
-스프라이트 한 장으로 만들어 `assets/data/` 에 약 1MB 로 남기고, 그 폴더도 `.gitignore` 다.
-배포 워크플로는 `--download` 로 같은 것을 CI 에서 만든다.
+Only tutorials 4 and 5 use a real dataset. The original is 29MB per batch and is not committed
+— the same rule as `vendor/pyodide` and `borch-ts/dist`. `fetch_data.py` turns 2,000+500 images
+into one sprite sheet and leaves about 1MB in `assets/data/`, and that folder is gitignored too.
+The deploy workflow builds the same thing in CI with `--download`.
 
-**JPEG 라 픽셀이 원본과 같지 않다.** 재서 골랐다 — 같은 2,000 장이 원본 5.9MB ·
-PNG 4.1MB · JPEG 0.84MB 다. 튜토리얼이 답하는 질문은 "배우는가" 이지 정확도의 절대값이
-아니고, 그 사실을 수가 나오는 페이지마다 적어 두었다. 값이 정확해야 하는 자리(골든)에는
-이 파일을 쓰지 않는다.
+**Being JPEG, the pixels are not identical to the original.** That was chosen by measuring —
+the same 2,000 images are 5.9MB as originals, 4.1MB as PNG and 0.84MB as JPEG. The question a
+tutorial answers is "does it learn", not the absolute value of an accuracy, and that fact is
+written on every page where a number appears. Where a value has to be exact (the golden
+answers), this file is not used.
 
-## 강의·튜토리얼은 읽는 것이 아니라 도는 것이다
+## The lessons and tutorials are run, not read
 
-`learn/` 의 코드 블록은 `<script type="text/plain">` 에 담고 `assets/runnable.js` 가
-편집기와 Run 버튼으로 바꾼다. 읽는 사람은 고쳐서 돌릴 수 있다.
+The code blocks in `learn/` sit in `<script type="text/plain">` and `assets/runnable.js` turns
+them into an editor with a Run button. Whoever is reading can edit and run.
 
-**두 언어의 코드는 같아야 한다.** 갈리는 것은 주석과 찍는 문구뿐이다 — 코드가 갈리면
-"자바스크립트와 파이썬이, 그리고 두 언어 판이 같은 값을 낸다" 는 주장이 거짓이 된다.
+**The code has to be identical in both languages.** What differs is the comments and the printed
+wording — if the code differs, the claim that JavaScript and Python, and the two language
+editions, give the same values becomes false.
 
-## 도는 방식
+## How it runs
 
-**자바스크립트 모드** — 사용자 코드를 ES 모듈(Blob)로 만들어 `import()` 로 건다.
-`new Function` 은 최상위 `await` 과 `import` 를 못 받는데 borch 의 첫 줄이
-`await init()` 이라 그 둘이 필요하다.
+**JavaScript mode** — user code is made into an ES module (a Blob) and hung on `import()`.
+`new Function` accepts neither top-level `await` nor `import`, and borch's first line is
+`await init()`, so both are needed.
 
-**파이썬 모드** — `tests/browser/runner.html` 이 하던 것과 같다. borch.ts 를 먼저
-올려 어댑터를 잡고 `globalThis.borch` 에 두면, Pyodide 안의 `borch_webgpu` 가
-`js.borch` 로 그것을 집는다. Pyodide·numpy·파이썬 패키지 전부 이 저장소에서 온다.
+**Python mode** — the same thing `tests/browser/runner.html` used to do. borch.ts loads first,
+gets the adapter, and goes into `globalThis.borch`, from where `borch_webgpu` inside Pyodide
+picks it up as `js.borch`. Pyodide, numpy and every Python package come from this repository.
 
-**문법 강조** — 색을 칠한 `<pre>` 를 뒤에 깔고, 위의 `textarea` 는 글자를 투명하게
-두고 커서만 보인다. 입력·선택·되돌리기·한글 조합은 전부 브라우저의 것이라 흉내 낼
-것이 없다. 두 층의 글꼴·줄 높이·여백·탭 폭은 CSS 에서 **한 번에** 정해 둘 다 물려받는다 —
-하나라도 어긋나면 색이 글자에서 미끄러지고 아래로 갈수록 벌어진다.
+**Syntax highlighting** — a coloured `<pre>` lies underneath and the `textarea` above it keeps
+its letters transparent, showing only the caret. Typing, selection, undo and Hangul composition
+all belong to the browser, so there is nothing to imitate. The two layers' font, line height,
+padding and tab width are set **once** in CSS and inherited by both — one of them out of step
+and the colour slides off the letters, widening further down.
 
-두 모드 모두 **네트워크로 나가지 않는다.** 계산은 탭 안의 GPU 에서 나고 값도 거기 머문다.
+Neither mode **goes out over the network.** The computation happens on the GPU in the tab and
+the values stay there.
 
-## 손보는 자리
+## Where to make changes
 
-- **예시를 고치면** `assets/examples.js` 하나만 고친다. 랜딩의 링크는 `#example=<id>` 로
-  같은 목록을 가리킨다.
-- **API 설명을 고치려면** `borch-ts/src/*.ts` 의 주석을 고치고 `npm run docs:api` 를 돌린다.
-  `assets/api.json` 을 직접 고치면 다음 생성에서 사라지고, 검사가 그 전에 멈춘다.
-- **예제를 넣으면 눌러서 돌려 본다.** 강의 여섯을 쓰면서 `max()`·`t()`·`at(null, 2)`·
-  `load()` 네 자리가, 튜토리얼 여섯을 쓰면서 `sub_(텐서)` 가 조용히 NaN 이 되는 것과
-  `probe` 가 주입된 이름이라는 것이 드러났다. 전부 눌러 보고서야 나왔다.
-- **생성 스크립트로 페이지를 다시 찍으면 손으로 고친 것이 덮인다.** 실제로 `probe`
-  수정이 그렇게 한 번 사라졌다 — 다시 찍은 뒤에는 눌러서 확인한다.
-- **수치를 고칠 때**는 "잰 것" 절만 고치지 말고 어디서 잰 수인지 함께 적는다. 이 페이지가
-  인용하는 수는 전부 `README.md`·`BORCH-TS.md` 에 근거가 있다.
-- **없는 기능을 있는 것처럼 적지 않는다.** "지금 있는 것 · 아직 없는 것" 표가 그 약속이고,
-  Models·Hub·WASM 폴백은 지금 없다고 적혀 있다.
+- **To change an example**, change `assets/examples.js` and nothing else. The landing page's
+  links point at the same list through `#example=<id>`.
+- **To change an API description**, change the comment in `borch-ts/src/*.ts` and run
+  `npm run docs:api`. Editing `assets/api.json` directly loses it at the next extraction, and a
+  check stops before that.
+- **After adding an example, press the button and run it.** Writing six lessons surfaced four
+  places — `max()`, `t()`, `at(null, 2)`, `load()` — and writing six tutorials surfaced
+  `sub_(tensor)` turning quietly into NaN, and `probe` being an injected name. All of it came
+  out only from pressing the button.
+- **Re-emitting a page with a generation script overwrites what was fixed by hand.** The `probe`
+  fix really did disappear that way once — after re-emitting, press and check.
+- **When changing a number**, do not change the "measured" section alone; write down where the
+  number was measured. Every number quoted on these pages has its grounds in `README.md` or
+  `BORCH-TS.md`.
+- **Do not write an absent feature as though it were there.** The "what exists now · what does
+  not yet" table is that promise, and Models, Hub and the WASM fallback are written as absent.
 
-## 이 폴더는 누가 고치는가
+## Who edits this folder
 
-`site/` 는 이 사이트를 든 세션이 든다. 다른 세션이 여기 적힌 **수**(골든 개수·방출물
-크기)를 고쳐야 할 때가 있는데, 그때 순서가 중요하다.
+`site/` belongs to whichever session is holding this site. Another session sometimes needs to
+change a **number** written here (a golden count, an artifact size), and the order matters then.
 
-**원천을 먼저 커밋한다.** 케이스를 늘렸으면 그 케이스를, 소스를 늘렸으면 그 소스를
-먼저 올린다. 그러면 사이트는 잠깐 **낡은** 상태가 되고, `tests/test_docs.py` 의 실패
-메시지가 정확히 그 상황을 설명한다. 사이트 쪽 줄은 그 다음에 따라간다.
+**Commit the origin first.** If cases were added, land the cases; if source was added, land the
+source. The site is then briefly **stale**, and `tests/test_docs.py`'s failure message describes
+exactly that situation. The site's line follows afterwards.
 
-**반대로 하지 않는다.** 아직 없는 수를 사이트에 먼저 적으면 사이트가 **거짓말**을 하게
-되고, 검사는 똑같이 빨간데 이번에는 낡아서가 아니라 틀려서 빨갛다. 그 둘은 다르다 —
-낡은 수는 언젠가 맞춰지지만 틀린 수는 읽은 사람이 그대로 인용한다.
+**Not the other way round.** Writing a number into the site before it exists makes the site
+**lie**, and the check is equally red — this time not because it is stale but because it is
+wrong. Those are different: a stale number gets corrected eventually, while a wrong number gets
+quoted by whoever read it.
 
-**대신 눌러 주는 것은 한 번까지다.** 쓰기 범위 밖이라 못 고치는 경우 이 폴더를 든
-세션에게 부탁할 수 있다. 다만 그것이 반복되면 그건 부탁이 아니라 **권한 범위를 사람이
-정할 일**이다. 대신 누르는 사람이 늘어나면 누가 무엇을 승인했는지 아무도 모르게 된다.
-(이 문단은 실제로 그 요청을 두 번 받고 사용자와 확인한 결과다.)
+**Pressing the button on someone's behalf is a one-time thing.** A session that cannot make a
+change because it is outside its write scope can ask the session holding this folder. But if
+that repeats, it is not a favour — it is **a scope decision for a person to make.** As the
+number of people pressing on others' behalf grows, nobody knows any more who approved what.
+(This paragraph is the result of receiving that request twice and checking with the user.)
 
-## 밖으로 내보낼 때
+## Publishing it
 
-`.github/workflows/pages.yml` 이 GitHub Pages 로 올린다. **자동으로 안 돈다** —
-`workflow_dispatch` 뿐이다. 이 저장소는 private 이고 공개는 사람이 내리는 결정이라,
-push 에 걸어 두면 다음 커밋이 곧 공개가 된다(`gpu.yml` 이 self-hosted 러너를 안 붙인
-것과 같은 판단이다).
+`.github/workflows/pages.yml` puts it on GitHub Pages. **It does not run automatically** — it is
+`workflow_dispatch` only. This repository is private and going public is a decision a person
+makes, so hanging it on push would make the next commit a publication (the same judgement that
+kept `gpu.yml` off a self-hosted runner).
 
-워크플로는 **저장소 모양 그대로** 올리고 뿌리에 `/site/` 로 보내는 한 줄짜리 페이지를
-둔다. 페이지가 `../borch-ts/dist` 와 `../../vendor/pyodide` 를 상대 경로로 부르므로
-`site/` 만 뿌리에 놓으면 그 경로가 뿌리 밖으로 나간다. 모은 결과는 31MB 이고, 그 안에서
-파이썬 모드까지 도는 것을 리허설로 확인했다.
+The workflow uploads **the repository shape as it is** and puts a one-line page at the root that
+sends you to `/site/`. The pages call `../borch-ts/dist` and `../../vendor/pyodide` by relative
+path, so putting `site/` alone at the root sends those paths outside the root. The collected
+result is 31MB, and a rehearsal confirmed Python mode runs inside it.
 
-정적 파일이므로 직접 얹어도 된다. 두 가지만 지킨다.
+They are static files, so hosting them yourself works. Two things to keep:
 
-- `borch-ts/dist` 가 함께 올라가야 한다 — `.gitignore` 라 커밋에는 없다.
-- `site/assets/api.json` 은 커밋된다 — 정적 배포에서 생성기를 돌릴 수 없기 때문이다.
-  대신 `tests/test_site.py` 가 낡지 않았는지 본다.
-- 파이썬 모드를 살리려면 `vendor/pyodide/`(26MB)와 `borch/`·`borch_webgpu/` 도 함께 간다.
-  Pyodide 는 MPL-2.0 이라 소스를 구할 길을 페이지에 적어야 하고, 그 문구가
-  플레이그라운드 아래에 있다.
+- `borch-ts/dist` has to go up with it — it is gitignored and so is not in the commit.
+- `site/assets/api.json` is committed, because a static deploy cannot run the generator.
+  `tests/test_site.py` checks it has not gone stale instead.
+- To keep Python mode alive, `vendor/pyodide/` (26MB) and `borch/` and `borch_webgpu/` go too.
+  Pyodide is MPL-2.0, so the way to obtain its source has to be on the page, and that wording is
+  under the playground.
