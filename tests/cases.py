@@ -1,11 +1,11 @@
-"""대조 케이스 표 — **torch 를 임포트하지 않는다.**
+"""The comparison case table — **it does not import torch.**
 
-골든 2단계는 브라우저에서 도는데 거기에는 진짜 torch 가 없다. 케이스 표가 torch 를
-끌고 오면 그쪽에서는 임포트조차 안 된다. 그래서 표만 여기 떼어 두고, 어느 라이브러리를
-넣을지는 부르는 쪽이 정한다 — 케이스는 전부 `lambda L: ...` 로 라이브러리를 인자로 받는다.
+Golden stage two runs in a browser and there is no real torch there. A case table that drags
+torch in could not even be imported on that side. So the table alone sits here and the caller
+decides which library goes in — every case takes it as an argument, as `lambda L: ...`.
 
-`conformance.py` 와 `golden.py` 가 **같은 표**를 본다. 두 벌로 두면 언젠가 갈리고,
-그때 갈린 쪽이 어느 쪽인지 아무도 모른다.
+`conformance.py` and `golden.py` read **the same table.** Kept in two copies they diverge
+eventually, and then nobody knows which copy diverged.
 """
 
 import collections
@@ -15,23 +15,26 @@ import numpy as np
 
 
 def golden_inputs():
-    """케이스가 쓰는 입력. 뽑는 **순서**가 값을 정하므로 건드리지 않는다."""
+    """The inputs the cases use. The **order** they are drawn in decides the values, so it is left alone."""
     rng = np.random.default_rng(0)
     x1 = rng.standard_normal(6).astype(np.float32)
     xp = np.abs(x1) + 0.2
     x2 = rng.standard_normal((3, 4)).astype(np.float32)
     img = rng.standard_normal((2, 3, 4, 4)).astype(np.float32)
-    # dtype 을 반드시 적는다. numpy 의 기본 정수는 C 의 `long` 을 따르는데, 그게
-    # 64비트 맥·리눅스에서는 int64 지만 **wasm32(Pyodide)에서는 int32** 다.
-    # 안 적으면 브라우저와 네이티브가 다른 입력을 만들고, 골든 대조가 대조가 아니게 된다.
-    # (실측으로 걸렸다 — 입력 지문 검사가 잡아준 첫 건이다.)
+    # The dtype is always written down. numpy's default integer follows C's `long`, which is
+    # int64 on 64-bit macOS and Linux but **int32 on wasm32 (Pyodide)**.
+    # Left out, the browser and the native side build different inputs and the golden
+    # comparison stops being a comparison.
+    # (Caught by measurement — the first thing the input fingerprint check ever found.)
     idx2 = np.array([[0, 2], [1, 3], [2, 0]], dtype=np.int64)
-    # erf·gelu 의 꼬리. xp 는 양수 0.2 이상만 보고 x1 은 대략 [-2, 2] 라,
-    # 자릿수가 날아가는 두 자리(원점 근처와 큰 |x|)를 아무도 안 보고 있었다.
+    # The tails of erf and gelu. xp only sees positives from 0.2 up and x1 is roughly [-2, 2],
+    # so the two places where digits are lost (near the origin and at large |x|) had nobody
+    # looking at them.
     tail = np.array([-8., -6., -4., -1., -1e-3, 0., 1e-3, 1., 4., 6., 8.], dtype=np.float32)
 
-    # 학습 케이스용. 가중치를 고정해 넣어야 세 라이브러리가 **같은 자리에서 출발**한다 —
-    # 각자 초기화하면 무엇이 갈렸는지가 아니라 초기화가 갈렸는지를 보게 된다.
+    # For the training cases. Planting fixed weights is what makes the three libraries
+    # **start from the same place** — initialising separately shows whether the initialisation
+    # diverged rather than what diverged.
     train_x = rng.standard_normal((24, 6)).astype(np.float32)
     train_y = rng.integers(0, 3, 24).astype(np.int64)
     w0 = (rng.standard_normal((8, 6)) * 0.3).astype(np.float32)
@@ -39,11 +42,11 @@ def golden_inputs():
     w1 = (rng.standard_normal((3, 8)) * 0.3).astype(np.float32)
     b1 = (rng.standard_normal(3) * 0.1).astype(np.float32)
 
-    # 합성곱용. img 는 (2,3,4,4) 라 3채널 → 4채널 3×3 필터가 맞는다.
+    # For the convolutions. img is (2,3,4,4), so a 3-channel → 4-channel 3×3 filter fits.
     cw = (rng.standard_normal((4, 3, 3, 3)) * 0.3).astype(np.float32)
     cb = (rng.standard_normal(4) * 0.1).astype(np.float32)
 
-    # CNN 학습용 — (8,1,8,8) → conv → pool → flatten(64) → 3
+    # For CNN training — (8,1,8,8) → conv → pool → flatten(64) → 3
     cnn_x = rng.standard_normal((8, 1, 8, 8)).astype(np.float32)
     cnn_y = rng.integers(0, 3, 8).astype(np.int64)
     ck = (rng.standard_normal((4, 1, 3, 3)) * 0.3).astype(np.float32)
@@ -51,25 +54,27 @@ def golden_inputs():
     fw = (rng.standard_normal((3, 64)) * 0.2).astype(np.float32)
     fb = (rng.standard_normal(3) * 0.1).astype(np.float32)
 
-    # 순환·어텐션용. (T=5, N=2, I=3) 과 (B=2, T=5, E=4).
+    # For recurrence and attention. (T=5, N=2, I=3) and (B=2, T=5, E=4).
     seq_x = rng.standard_normal((5, 2, 3)).astype(np.float32)
     attn_x = rng.standard_normal((2, 5, 4)).astype(np.float32)
 
-    # ── 여기부터는 원래 케이스 함수 **안에서** 만들던 것들이다 ──────────────
+    # ── from here on are the ones that used to be built **inside** the case functions ──
     #
-    # 옮긴 이유: 케이스 안에서 만들면 `golden.json` 에 안 실리고, 그러면 파이썬이
-    # 아닌 구현은 **기대값은 있는데 입력이 없는** 상태가 된다. 실제로 borch.ts 가
-    # 그 이유 하나로 87건에서 막혔다 — numpy 의 난수기를 다시 만들지 않는 한 방법이
-    # 없고, 그것을 다시 만들면 틀렸을 때 조용히 틀린다.
+    # Why they moved: built inside a case they do not go into `golden.json`, and then an
+    # implementation that is not Python is left **with the expected value but no input.**
+    # borch.ts really did get stuck on 87 cases for that one reason — there is no way round it
+    # short of rebuilding numpy's random generator, and rebuilding that fails quietly when it
+    # fails.
     #
-    # **각자 자기 시드를 그대로 쓰고 맨 뒤에 붙인다.** 위의 `rng` 를 더 소비하면
-    # x1 이하가 통째로 갈리기 때문이다 — 이 함수의 docstring 이 경고하는 그것이다.
-    # 값이 한 자리도 안 바뀌므로 기존 기대값도 안 바뀐다.
+    # **Each keeps its own seed and is appended at the end.** Consuming more of the `rng` above
+    # would shift everything from x1 down — which is what this function's docstring warns
+    # about. Not one digit moves, so the existing expected values do not move either.
     ck1 = (np.random.default_rng(13).standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
     vol5 = np.random.default_rng(17).standard_normal((1, 2, 4, 4, 4)).astype(np.float32)
     ck3 = (np.random.default_rng(19).standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
 
-    # 고랭크 배터리. 축이 뒤바뀌면 값보다 **모양**에서 먼저 걸리도록 한 축만 3 이다.
+    # The high-rank battery. Exactly one axis is 3 so that a transposed axis is caught by
+    # **shape** before value.
     high = {}
     for r in (6, 7, 8):
         shape = [2] * r
@@ -78,7 +83,8 @@ def golden_inputs():
     v7 = np.random.default_rng(107).standard_normal([2] * 7).astype(np.float32)
     v8 = np.random.default_rng(108).standard_normal([2] * 8).astype(np.float32)
 
-    # 1·3차원 계열. **한 rng 를 순서대로 쓴다** — 순서가 값을 정하므로 그대로 옮긴다.
+    # The 1-D and 3-D family. **One rng, used in order** — the order decides the values, so it
+    # is carried over as it is.
     nd = np.random.default_rng(41)
     nd_seq = nd.standard_normal((2, 3, 8)).astype(np.float32)
     nd_k1 = (nd.standard_normal((4, 3, 3)) * 0.3).astype(np.float32)
@@ -86,22 +92,23 @@ def golden_inputs():
     nd_k3 = (nd.standard_normal((3, 2, 3, 3, 3)) * 0.3).astype(np.float32)
     nd_img = nd.standard_normal((2, 3, 4, 4)).astype(np.float32)
 
-    # 변환용 이미지. uint8 과 실수를 **둘 다** 둔다 — ToTensor 가 uint8 일 때만
-    # 255 로 나누는 것이 요점이라, 한쪽만 있으면 그 규칙을 안 보게 된다.
-    # 순환·어텐션의 고정 가중치.
+    # Images for the transforms. **Both** uint8 and float are kept — that ToTensor divides by
+    # 255 only for uint8 is the whole point, and with one of them missing that rule goes
+    # unwatched.
+    # The fixed weights for recurrence and attention.
     #
-    # 원래는 `mod.named_parameters()` 를 돌면서 그 자리에서 뽑았다. 그러면 torch 가
-    # 있어야 모양을 알 수 있어서 이 함수(numpy 만 쓰는 1단계)에 못 들어온다. 그래서
-    # **모양을 여기 적는다** — 틀리면 `load_state_dict` 가 굳히기 단계에서 시끄럽게
-    # 죽으므로 조용히 틀리지 않는다.
+    # This used to walk `mod.named_parameters()` and take the shapes on the spot. That needs
+    # torch to be present to know the shapes, which keeps it out of this function (stage one,
+    # numpy only). So **the shapes are written down here** — wrong, and `load_state_dict` dies
+    # loudly at the freezing step, so they do not go wrong quietly.
     #
-    # 뽑는 **순서**가 값을 정한다. torch 의 `named_parameters()` 순서 그대로다:
-    # weight_ih, weight_hh, bias_ih, bias_hh.
+    # The **order** they are drawn in decides the values. It is torch's `named_parameters()`
+    # order as it stands: weight_ih, weight_hh, bias_ih, bias_hh.
     def _fixed(seed, shapes):
         r = np.random.default_rng(seed)
         return [(r.standard_normal(s) * 0.2).astype(np.float32) for s in shapes]
 
-    # RNN(3,4)·LSTM(3,4)·GRU(3,4) 는 게이트 수만 다르다 — 1·4·3 배다.
+    # RNN(3,4), LSTM(3,4) and GRU(3,4) differ only in gate count — 1, 4 and 3 times.
     rnn_w = {}
     for kind, gates in (("RNN", 1), ("LSTM", 4), ("GRU", 3)):
         h = 4 * gates
@@ -111,15 +118,17 @@ def golden_inputs():
     # MultiheadAttention(4, 2): in_proj_weight, in_proj_bias, out_proj.weight, out_proj.bias
     mha = _fixed(11, [(12, 4), (12,), (4, 4), (4,)])
 
-    # 활성함수가 **꺾이는 자리.** 난수로는 절대 안 나오는 값들이라 손으로 적는다 —
-    # `hardtanh` 의 ±1, `relu6` 의 0·6, `hardsigmoid`·`hardswish` 의 ±3,
-    # shrink 계열의 ±0.5. 꺾이는 점을 안 넣으면 그 점에서 규칙이 갈려도 안 걸린다.
+    # Where the activations **bend.** These values never come out of a random draw, so they are
+    # written by hand — ±1 for `hardtanh`, 0 and 6 for `relu6`, ±3 for `hardsigmoid` and
+    # `hardswish`, ±0.5 for the shrink family. Without the bending points, a rule that diverges
+    # exactly there is not caught.
     kinks = np.array([-6., -3., -1., -0.5, -1e-3, 0., 1e-3, 0.5, 1., 3., 6.],
                      dtype=np.float32)
 
-    # 전치 합성곱의 가중치. **`conv2d` 와 축 순서가 다르다** — `(입력, 출력, …)` 이다.
-    # 그 순서를 뒤집으면 모양은 맞는데 값이 통째로 달라지고, 그것이 이 층에서 가장
-    # 흔한 실수다. 입력 채널은 각각 `nd_seq`(3)·`img`(3)·`nd_vol`(2) 에 맞춘다.
+    # The transposed convolution's weights. **The axis order differs from `conv2d`'s** — it is
+    # `(in, out, …)`. Reversed, the shape still fits and the values are wholly different, and
+    # that is the most common mistake at this layer. The input channels match `nd_seq` (3),
+    # `img` (3) and `nd_vol` (2) respectively.
     tc = np.random.default_rng(53)
     tw1 = (tc.standard_normal((3, 4, 3)) * 0.3).astype(np.float32)
     tw2 = (tc.standard_normal((3, 4, 3, 3)) * 0.3).astype(np.float32)
@@ -127,15 +136,16 @@ def golden_inputs():
     tb = (tc.standard_normal(4) * 0.1).astype(np.float32)
     tb3 = (tc.standard_normal(3) * 0.1).astype(np.float32)
 
-    # 최상위 순환용. **`rnn_top_cases` 안에서 뽑던 것을 그대로 옮겼다** — 케이스
-    # 안에서 만들면 `golden.json` 에 안 실리고, 그러면 borch.ts 는 기대값은 있는데
-    # 입력이 없어서 서른다섯 건을 못 묻는다. 위 `nd_*` 가 같은 이유로 여기 왔다.
+    # For the top-level recurrence. **Moved out of `rnn_top_cases` unchanged** — built inside
+    # a case it does not go into `golden.json`, and then borch.ts has the expected value with
+    # no input and cannot ask thirty-five of them. The `nd_*` above came here for the same
+    # reason.
     #
-    # **뽑는 차례가 값을 정한다.** 시드도 차례도 원래 그대로여야 기존 기대값이 안
-    # 흔들리는데, 흔들려도 **아무 검사도 안 빨개진다** — 다시 굳히면 torch 가 새
-    # 입력에 맞는 새 답을 내고 셋 다 거기에 맞기 때문이다. 그래서 옮기기 전
-    # `golden.json` 의 `rnntop::` 서른다섯 건을 떼어 두었다가 옮긴 뒤와 바이트로
-    # 대조했다. **다시 굳혀서 초록인 것은 증거가 아니다.**
+    # **The draw order decides the values.** Seed and order both have to stay as they were or
+    # the existing expected values shift, and if they shift **nothing turns red** — re-freezing
+    # makes torch produce new answers for the new inputs and all three agree with those. So
+    # before the move, the thirty-five `rnntop::` entries in `golden.json` were set aside and
+    # compared byte for byte afterwards. **Green after re-freezing is not evidence.**
     rt = np.random.default_rng(11)
     _T, _B, _I, _H = 3, 2, 4, 5
     top = {"x": rt.normal(size=(_T, _B, _I)).astype(np.float32)}
@@ -194,9 +204,10 @@ def golden_inputs():
 
 
 def wide_cases(inp=None):
-    """교재 범위 밖이지만 튜토리얼·실무에서 흔한 것들.
+    """Outside the textbook's range but common in the tutorials and in practice.
 
-    이름만 있고 값이 다르면 그것도 거짓이라, 있는 것은 전부 값으로 대조한다.
+    A name that exists with a different value is a lie too, so everything present is compared
+    by value.
     """
     inp = golden_inputs() if inp is None else inp
     x1, xp, x2 = inp["x1"], inp["xp"], inp["x2"]
@@ -257,8 +268,8 @@ def wide_cases(inp=None):
         ("F.gelu(꼬리)", lambda L: L.nn.functional.gelu(L.tensor(tail))),
     ]
 
-    # 합성곱·풀링·정규화 — S3 가 더한 것들. 스트라이드 2 를 같이 보는 것은 의도다.
-    # 역방향에서 기울기 사이에 0 을 끼우는 경로가 거기서만 돈다.
+    # Convolution, pooling, normalisation — what S3 added. Looking at stride 2 alongside is
+    # deliberate. The backward path that inserts zeros between gradients runs only there.
     cw, cb = inp["cw"], inp["cb"]
     cases += [
         ("F.conv2d", lambda L: L.nn.functional.conv2d(
@@ -269,11 +280,13 @@ def wide_cases(inp=None):
             L.tensor(img), L.tensor(cw), L.tensor(cb), 2, 1)),
         ("F.max_pool2d", lambda L: L.nn.functional.max_pool2d(L.tensor(img), 2)),
         ("BatchNorm2d(학습)", lambda L: L.nn.BatchNorm2d(3)(L.tensor(img))),
-        # **저장·복원 뒤의 평가 모드.** running 통계가 state_dict 에서 빠지면 여기서만
-        # 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
+        # **Eval mode after saving and restoring.** If the running statistics fall out of the
+        # state_dict it diverges here and nowhere else — training looks fine and only inference
+        # is wrong, the defect the core actually had.
         ("BatchNorm2d(저장→복원→eval)", lambda L: _bn_roundtrip(L, img)),
         ("median(dim).indices", lambda L: L.median(L.tensor(x2), dim=1).indices),
-        # 3단계에서 더한 수학·모양·비교. 값만 보는 것들이라 여기 둔다.
+        # The maths, shapes and comparisons added at stage 3. They only look at values, so
+        # they sit here.
         ("eye", lambda L: L.eye(3)),
         ("full", lambda L: L.full((2, 3), 2.5)),
         ("zeros_like", lambda L: L.zeros_like(L.tensor(x2))),
@@ -300,7 +313,8 @@ def wide_cases(inp=None):
         ("tile", lambda L: L.tile(L.tensor(x1), (2,))),
         ("movedim", lambda L: L.movedim(L.tensor(x2), 0, 1)),
         ("as_tensor", lambda L: L.as_tensor(x1)),
-        # 길이가 다른 것을 한 배치에 담는 자리. 교재 ch05 가 이 경로를 그대로 쓴다.
+        # Where things of different lengths go into one batch. Textbook ch05 uses this path
+        # as it stands.
         ("pad_sequence", lambda L: _pad(L)),
         ("pad_sequence(batch_first)", lambda L: _pad(L, batch_first=True)),
         ("pad_sequence(채움값)", lambda L: _pad(L, batch_first=True, padding_value=-1.0)),
@@ -311,7 +325,7 @@ def wide_cases(inp=None):
 
 
 def _pad(L, **kwargs):
-    """길이 3·1·2 짜리 셋을 쌓는다. 채운 자리가 어디인지 눈으로 보이는 최소 크기."""
+    """Stacks three of lengths 3, 1 and 2. The smallest size at which the padded slots are visible."""
     parts = [L.tensor(np.array(v, dtype=np.float32))
              for v in ([1., 2., 3.], [4.], [5., 6.])]
     return L.nn.utils.rnn.pad_sequence(parts, **kwargs)
@@ -319,7 +333,7 @@ def _pad(L, **kwargs):
 
 def _bn_roundtrip(L, img):
     trained = L.nn.BatchNorm2d(3)
-    trained(L.tensor(img))                      # running 통계가 갱신된다
+    trained(L.tensor(img))                      # the running statistics update
     fresh = L.nn.BatchNorm2d(3)
     fresh.load_state_dict(trained.state_dict())
     fresh.eval()
@@ -327,10 +341,11 @@ def _bn_roundtrip(L, img):
 
 
 def _grad_of(leaf, name):
-    """잎에 기울기가 **실제로 도착했는지** 확인하고 꺼낸다.
+    """Checks a gradient **actually arrived** at the leaf, and hands it back.
 
-    안 왔으면(None) 그래프가 끊긴 것이다. 그냥 두면 대조 단계에서 엉뚱한 오류가 나고,
-    코어가 겪은 그대로 "학습은 도는데 가중치가 안 움직이는" 상태를 못 잡는다.
+    If it did not (None) the graph is cut. Left alone, that produces an unrelated error at the
+    comparison step, and the state the core had — "training runs but the weights do not move" —
+    goes uncaught.
     """
     if leaf.grad is None:
         raise RuntimeError(f"{name}: 기울기가 잎에 도착하지 않았다 — 그래프가 끊겼다")
@@ -338,12 +353,14 @@ def _grad_of(leaf, name):
 
 
 def grad_cases(inp=None):
-    """**기울기**를 대조한다.
+    """Compares **gradients.**
 
-    순방향만 맞고 역방향이 틀리면 "학습은 돌아가고 손실도 내려가는데 값이 다른" 상태가
-    된다. 코어가 BatchNorm 으로 오래 겪은 종류이고, 값 대조만으로는 안 잡힌다.
+    A right forward pass with a wrong backward pass gives the state where "training runs and
+    the loss goes down and the values differ". The core had that kind for a long time with
+    BatchNorm, and a value comparison alone does not catch it.
 
-    각 케이스는 잎을 만들어 스칼라로 접고 `backward()` 를 부른 뒤 **잎의 기울기**를 준다.
+    Each case builds a leaf, folds to a scalar, calls `backward()` and hands back **the leaf's
+    gradient.**
     """
     inp = golden_inputs() if inp is None else inp
     x1, xp, x2 = inp["x1"], inp["xp"], inp["x2"]
@@ -365,7 +382,7 @@ def grad_cases(inp=None):
             return _grad_of(a if w == "a" else b, n)
         cases.append((f"grad::{name}/{which}", run))
 
-    # 원소별 — 양수만 받는 것은 xp 로 준다
+    # Element-wise — the ones that only take positives are given xp
     for name, fn in [("exp", lambda L, x: L.exp(x)), ("abs", lambda L, x: L.abs(x)),
                      ("sin", lambda L, x: L.sin(x)), ("cos", lambda L, x: L.cos(x)),
                      ("tan", lambda L, x: L.tan(x)), ("sinh", lambda L, x: L.sinh(x)),
@@ -378,19 +395,21 @@ def grad_cases(inp=None):
                      ("reciprocal", lambda L, x: L.reciprocal(x))]:
         unary(name, fn, xp)
 
-    # 형 변환. **여기에 조용히 틀린 자리가 있었다.**
+    # Type conversion. **There was a quietly wrong place here.**
     #
-    # `.float()` 과 `.double()` 이 결과에 `requires_grad=True` 를 붙여놓고 부모를 안 달았다.
-    # 그래서 `backward()` 는 예외 없이 잘 돌고 원래 텐서의 `.grad` 만 `None` 으로 남았다 —
-    # 경고도 예외도 없이. `x.float()` 는 튜토리얼에 흔하니 조용히 학습이 안 되는 자리였다.
-    # 다른 열두 군데(tril·diag·einsum·cumprod 등)도 기울기가 없지만 그쪽은 결과가
-    # `requires_grad=False` 라 `backward()` 가 **거절한다** — 없는 것과 틀린 것의 차이다.
+    # `.float()` and `.double()` put `requires_grad=True` on the result without attaching the
+    # parent. So `backward()` ran without an exception and only the original tensor's `.grad`
+    # stayed `None` — no warning, no exception. `x.float()` is common in the tutorials, so this
+    # was a place where training silently did not happen. Twelve other places (tril, diag,
+    # einsum, cumprod and so on) carry no gradient either, but there the result is
+    # `requires_grad=False` and `backward()` **refuses** — the difference between absent and
+    # wrong.
     unary("float()", lambda L, x: x.float())
 
-    # `.double()` 은 같은 `_cast` 를 지나므로 산수는 위에서 이미 대조된다. 여기서 남은
-    # 질문은 **브라우저 쪽이 이것을 거절하는가**다. 배정도가 없는 것이 문서화된
-    # 한계이고(TF.js 도 그랬고 WGSL 의 f32 도 그렇다), 그 한계가 조용히 넓어지지
-    # 않는지를 붙잡는다.
+    # `.double()` goes through the same `_cast`, so the arithmetic is already compared above.
+    # The question left here is **whether the browser side refuses it.** Having no double
+    # precision is a documented limit (it was for TF.js and it is for WGSL's f32), and this
+    # holds that limit to not widening quietly.
     def double_grad(L):
         x = L.tensor(x1, requires_grad=True)
         x.double().sum().backward()
@@ -398,12 +417,13 @@ def grad_cases(inp=None):
 
     cases.append(("grad::double()=브라우저는거절", _as_expected(double_grad)))
 
-    # torch 는 흘리는데 코어가 안 흘리던 열두 자리. 전부 결과가 `requires_grad=False`
-    # 라 `backward()` 가 거절했으므로 **조용히 틀리지는 않았지만**, 없는 것과 있는 것의
-    # 차이는 남는다. 이제 흘린다.
+    # Twelve places where torch flows a gradient and the core did not. In all of them the
+    # result was `requires_grad=False` so `backward()` refused, which means **it was never
+    # quietly wrong** — but the difference between absent and present remains. They flow now.
     #
-    # 자리마다 다른 가중치를 곱해서 받는다. 그냥 `sum()` 이면 기울기가 전부 1 이라
-    # `movedim` 이 축을 뒤바꿔도, `tile` 이 조각을 엉뚱하게 겹쳐도 통과한다.
+    # Each slot is taken with a different weight multiplied in. A plain `sum()` makes every
+    # gradient 1, and then `movedim` transposing an axis, or `tile` overlapping pieces wrongly,
+    # both pass.
     mat = np.arange(1, 10, dtype=np.float32).reshape(3, 3)
     mat2 = np.array([[2., 0., 1.], [1., 3., 2.], [0., 1., 4.]], dtype=np.float32)
     vec = np.array([1., 2., 3., 4.], dtype=np.float32)
@@ -430,7 +450,7 @@ def grad_cases(inp=None):
         flows(f"einsum(ij,jk->ik)/{'ab'[who]}",
               lambda L, a, b: L.einsum("ij,jk->ik", a, b), mat, mat2, which=who)
     flows("cumprod", lambda L, x: L.cumprod(x, 0), vec)
-    # 0 이 섞인 입력. 흔한 유도는 여기서 나눗셈이 터져 조용히 nan 을 흘린다.
+    # Input with zeros mixed in. The common derivation divides here and flows a quiet nan.
     flows("cumprod(0포함)", lambda L, x: L.cumprod(x, 0), zeroed)
     flows("cumprod(2차원)", lambda L, x: L.cumprod(x, 1), mat)
     flows("tile", lambda L, x: L.tile(x, (2,)), vec)
@@ -438,16 +458,16 @@ def grad_cases(inp=None):
     flows("movedim", lambda L, x: L.movedim(x, 0, 1), mat)
     flows("repeat_interleave", lambda L, x: L.repeat_interleave(x, 3), vec)
     flows("repeat_interleave(dim)", lambda L, x: L.repeat_interleave(x, 2, 0), mat)
-    # **꺾이는 자리에서 흘리는가.**
+    # **Does it flow where the function bends?**
     #
-    # torch 의 relu 는 입력이 정확히 0 이면 기울기를 0 으로 준다 — `x > 0` 이지
-    # `x >= 0` 이 아니다. 위의 `x1` 은 무작위 정규분포라 0 이 한 번도 안 나오고,
-    # 그래서 이 자리를 골든 798 건 중 아무도 안 보고 있었다. borch.ts 가 거기서 1 을
-    # 흘리고 있었는데 ResNet 을 진짜 torch 와 맞춰보다 드러났다(입력 기울기 최대차 1.5e-2).
+    # torch's relu gives a gradient of 0 when the input is exactly 0 — it is `x > 0`, not
+    # `x >= 0`. The `x1` above is a random normal draw so 0 never comes up, and so nobody among
+    # the 798 golden cases was looking at this place. borch.ts was flowing 1 there, and it
+    # surfaced only while matching a ResNet against real torch (input gradient, max diff 1.5e-2).
     #
-    # **가중치를 자리마다 다르게 주는 것이 조건이다.** 그냥 `sum()` 이면 0 자리의
-    # 기울기가 1 이든 0 이든 합계만 달라져서 다른 자리에 묻힌다 — `flows` 가 자리마다
-    # 다른 가중치를 곱하는 이유가 이것이고, 여기서는 그것이 검사 자체다.
+    # **Giving each slot a different weight is the condition.** A plain `sum()` changes only the
+    # total whether the zero slot's gradient is 1 or 0, so it is buried among the others — that
+    # is why `flows` multiplies a different weight per slot, and here it is the check itself.
     edge = np.array([-1., 0., 1., 0.], dtype=np.float32)
     flows("relu(0에서)", lambda L, x: L.relu(x), edge)
 
@@ -458,7 +478,7 @@ def grad_cases(inp=None):
         flows(f"pad_sequence/{'ab'[who]}",
               lambda L, a, b: L.nn.utils.rnn.pad_sequence([a, b]), vec, short, which=who)
 
-    # 활성 — 학습 경로가 실제로 지나는 곳
+    # Activations — where the training path actually goes
     for name, fn in [("relu", lambda L, x: L.relu(x)),
                      ("sigmoid", lambda L, x: L.sigmoid(x)),
                      ("gelu", lambda L, x: L.nn.functional.gelu(x)),
@@ -468,7 +488,7 @@ def grad_cases(inp=None):
                      ("pow2", lambda L, x: x ** 2), ("neg", lambda L, x: -x)]:
         unary(name, fn)
 
-    # 축약·모양
+    # Reductions and shapes
     unary("sum", lambda L, x: x.sum(), x2)
     unary("sum(dim)", lambda L, x: x.sum(dim=1), x2)
     unary("mean", lambda L, x: x.mean(), x2)
@@ -481,8 +501,9 @@ def grad_cases(inp=None):
     unary("norm", lambda L, x: L.norm(x), x2)
     unary("normalize", lambda L, x: L.nn.functional.normalize(x, dim=1), x2)
 
-    # 뽑기·손실 — **여기가 그래프를 끊기 쉬운 자리다.** 값만 떼어 돌려주면 뽑은 자리로
-    # 기울기가 안 가고, 분류 손실이 통째로 미분 불가가 된다. 실제로 그렇게 났다.
+    # Sampling and losses — **this is where a graph is easy to cut.** Handing back the value
+    # alone sends no gradient to where the pick was made, and the classification losses become
+    # non-differentiable whole. That really happened.
     idx2, targets = inp["idx2"], np.array([0, 1, 2], dtype=np.int64)
     unary("gather", lambda L, x: L.gather(x, 1, L.tensor(idx2)), x2)
     unary("nll_loss", lambda L, x: L.nn.functional.nll_loss(
@@ -490,9 +511,10 @@ def grad_cases(inp=None):
     unary("cross_entropy",
           lambda L, x: L.nn.functional.cross_entropy(x, L.tensor(targets)), x2)
 
-    # 뽑기·자르기 계열 — **여기가 그래프를 끊기 가장 쉬운 자리다.** 값만 떼어 돌려주면
-    # 뽑은 자리로 기울기가 안 가고 학습이 조용히 멈춘다. 코어가 ROADMAP 11번에서
-    # topk·sort 로 겪었고, 이 라이브러리도 리뷰 전까지 같은 상태였다.
+    # The sampling and slicing family — **this is the easiest place of all to cut a graph.**
+    # Handing back the value alone sends no gradient to where the pick was made and training
+    # stops quietly. The core had it with topk and sort at ROADMAP item 11, and this library
+    # was in the same state until review.
     unary("topk", lambda L, x: L.topk(x, 3).values)
     unary("sort", lambda L, x: L.sort(x).values)
     unary("sort(내림차순)", lambda L, x: L.sort(x, descending=True).values)
@@ -505,7 +527,8 @@ def grad_cases(inp=None):
     unary("pad", lambda L, x: L.nn.functional.pad(x, (1, 1)), x2)
     unary("prod", lambda L, x: L.prod(x), xp)
 
-    # 인덱싱 — torch 코드가 가장 자주 하는 일이고, 자르기와 같은 이유로 그래프를 잇는다.
+    # Indexing — what torch code does most often, and joined to the graph for the same reason
+    # as slicing.
     unary("idx[0]", lambda L, x: x[0], x2)
     unary("idx[-1]", lambda L, x: x[-1], x2)
     unary("idx[1:3]", lambda L, x: x[1:3])
@@ -514,18 +537,19 @@ def grad_cases(inp=None):
     unary("idx[0:2, 1:3]", lambda L, x: x[0:2, 1:3], x2)
     unary("idx[목록]", lambda L, x: x[[2, 0]], x2)
 
-    # 이어 붙이기·쌓기 — DataLoader 의 collate 가 이것 위에 선다
+    # Concatenation and stacking — the DataLoader's collate stands on these
     unary("cat", lambda L, x: L.cat([x, x * 2]))
     unary("cat(dim=1)", lambda L, x: L.cat([x, x * 2], 1), x2)
     unary("stack", lambda L, x: L.stack([x, x * 3]))
     unary("stack(dim=1)", lambda L, x: L.stack([x, x * 3], 1), x2)
 
-    # 메서드 형태 — torch 코드는 `x.exp()` 와 `torch.exp(x)` 를 섞어 쓴다
+    # The method form — torch code mixes `x.exp()` and `torch.exp(x)`
     unary("메서드 x.abs()", lambda L, x: x.abs())
     unary("메서드 x.exp()", lambda L, x: x.exp())
     unary("메서드 x.sqrt()", lambda L, x: x.sqrt(), xp)
 
-    # 층 래퍼 — functional 판이 이미 있던 것들을 감쌌다. 값과 기울기 둘 다 본다.
+    # Layer wrappers — wrapping the ones that already had a functional edition. Both value and
+    # gradient are looked at.
     unary("LayerNorm", lambda L, x: L.nn.LayerNorm(4)(x), x2)
     unary("F.layer_norm", lambda L, x: L.nn.functional.layer_norm(x, (4,)), x2)
     unary("BatchNorm1d", lambda L, x: L.nn.BatchNorm1d(4)(x), x2)
@@ -537,15 +561,17 @@ def grad_cases(inp=None):
     unary("SiLU(층)", lambda L, x: L.nn.SiLU()(x))
     unary("Identity", lambda L, x: L.nn.Identity()(x))
     unary("Unflatten", lambda L, x: L.nn.Unflatten(0, (3, 2))(x))
-    # **손실은 두 자리에 다른 값을 줘야 한다.** `binary` 의 기본값이 양쪽 다 `x1`
-    # 이라 `l1_loss(x, x)` 처럼 예측과 표적이 같았고, 그러면 기울기가 **전부 0** 이다 —
-    # 부호가 뒤집힌 구현도, 개수로 안 나눈 구현도 0 을 낸다. 굳은 답이 한 값뿐인
-    # 케이스를 세다가 여덟 자리가 그렇게 걸렸다.
+    # **A loss has to be given two different values.** `binary`'s default was `x1` on both
+    # sides, so it was `l1_loss(x, x)` — prediction equal to target — and then the gradient is
+    # **all zeros**: an implementation with the sign flipped and one that never divides by the
+    # count both give zero. Eight places were caught this way while counting cases whose frozen
+    # answer held a single value.
     binary("L1Loss(층)", lambda L, a, b: L.nn.L1Loss()(a, b), "a", x1, -x1)
     binary("SmoothL1Loss(층)", lambda L, a, b: L.nn.SmoothL1Loss()(a, b), "a", x1, xp)
     binary("BCEWithLogitsLoss", lambda L, a, b: L.nn.BCEWithLogitsLoss()(a, b), "a")
 
-    # Embedding — 같은 번호가 여러 번 나오면 그 행에 기울기가 **쌓여야** 한다.
+    # Embedding — when the same index appears more than once, that row's gradient has to
+    # **accumulate.**
     def emb_grad(L):
         w = L.tensor(inp["w0"][:5], requires_grad=True)      # (5, 6)
         idx = L.tensor(np.array([0, 2, 0, 4], dtype=np.int64))
@@ -554,7 +580,7 @@ def grad_cases(inp=None):
 
     cases.append(("grad::embedding(중복 번호)", emb_grad))
 
-    # 수학·모양 — 각각 TF.js 대응은 있지만 역전파를 붙여야 했던 것들
+    # Maths and shapes — each had a TF.js counterpart, but backward had to be attached
     unary("where", lambda L, x: L.where(x > 0, x, x * 0.1))
     unary("masked_fill", lambda L, x: x.masked_fill(x > 0, -1.0))
     unary("clone", lambda L, x: x.clone())
@@ -565,7 +591,7 @@ def grad_cases(inp=None):
     unary("var", lambda L, x: x.var())
     unary("std", lambda L, x: x.std())
 
-    # 이항 — 양쪽 잎 모두 본다. 한쪽만 보면 반대쪽 끊김을 못 잡는다.
+    # Binary — both leaves are looked at. Looking at one side alone misses a cut on the other.
     for which in ("a", "b"):
         binary("add", lambda L, a, b: a + b, which)
         binary("sub", lambda L, a, b: a - b, which)
@@ -574,7 +600,8 @@ def grad_cases(inp=None):
         binary("maximum", lambda L, a, b: L.maximum(a, b), which, x1, -x1)
         binary("minimum", lambda L, a, b: L.minimum(a, b), which, x1, -x1)
         binary("matmul", lambda L, a, b: a @ b, which, x2, x2.T.copy())
-        # **예측과 표적을 다르게 준다** — 같으면 기울기가 전부 0 이라 아무것도 안 묻는다.
+        # **Prediction and target are given different values** — equal, the gradient is all
+        # zeros and nothing is being asked.
         binary("l1_loss", lambda L, a, b: L.nn.functional.l1_loss(a, b), which, x1, -x1)
         binary("mse_loss", lambda L, a, b: L.nn.functional.mse_loss(a, b), which, x1, xp)
         binary("smooth_l1_loss",
@@ -582,8 +609,9 @@ def grad_cases(inp=None):
         binary("cosine_similarity",
                lambda L, a, b: L.nn.functional.cosine_similarity(a, b), which, x2, x2 * 2)
 
-    # 합성곱 — **역방향을 직접 짠 자리다.** 입력·가중치·편향 셋 다 본다.
-    # 스트라이드 2 를 같이 보는 것은 의도다 — 기울기 사이에 0 을 끼우는 경로가 거기서만 돈다.
+    # Convolution — **where backward is written by hand.** Input, weight and bias, all three.
+    # Looking at stride 2 alongside is deliberate — the path that inserts zeros between
+    # gradients runs only there.
     img, cw, cb = inp["img"], inp["cw"], inp["cb"]
 
     def conv_grad(label, which, stride, padding, use_bias):
@@ -603,22 +631,23 @@ def grad_cases(inp=None):
 
     unary("max_pool2d", lambda L, x: L.nn.functional.max_pool2d(x, 2), img)
 
-    # **평균 풀링의 역방향을 아무도 안 묻고 있었다.**
+    # **Nobody was asking about average pooling's backward pass.**
     #
-    # `F.avg_pool2d` 는 순방향만 표에 있었다. 그런데 borch.ts 에서 평균 풀링의 역방향이
-    # **아예 안 도는** 것을 통합 시험에서 잡았다 — 쓰지 않는 바인딩이 레이아웃에서
-    # 빠지면서 커맨드 버퍼가 통째로 무효가 됐는데, WebGPU 는 그걸 예외로 안 던진다.
-    # 손실은 ln 10 에 앉아 있었고 ms/step 은 계속 나왔다. 표가 이것을 물었다면
-    # 통합까지 갈 일이 아니었다.
+    # `F.avg_pool2d` was in the table for its forward pass only. And then an integration run
+    # caught average pooling's backward **not running at all** in borch.ts — an unused binding
+    # dropped out of the layout and invalidated the whole command buffer, which WebGPU does not
+    # throw for. The loss sat at ln 10 and the ms/step kept coming. Had the table asked this,
+    # it would not have taken an integration run.
     #
-    # 최댓값 풀링과 갈리는 지점이 핵심이다. max 는 이긴 자리 하나에만 흘리고 avg 는
-    # 창의 모든 자리에 1/n 씩 나눈다. 둘을 바꿔 구현해도 순방향은 멀쩡하다.
+    # Where it parts from max pooling is the point. max flows to the one winning slot and avg
+    # divides 1/n across every slot in the window. Implement one as the other and the forward
+    # pass still looks fine.
     def pool_grad(name, fn, arr=img):
         def run(L, f=fn, a=arr, n=name):
             x = L.tensor(a, requires_grad=True)
             out = f(L, x)
-            # 자리마다 다른 가중치. 균일하게 접으면 avg 든 max 든 **입력 기울기의 합이
-            # 같아서** 나누는 방식이 틀려도 통과한다.
+            # A different weight per slot. Folded uniformly, avg and max give **the same sum
+            # of input gradients**, so a wrong way of dividing still passes.
             out = out * L.arange(out.numel()).reshape(out.shape).float()
             out.sum().backward()
             return _grad_of(x, n)
@@ -631,8 +660,8 @@ def grad_cases(inp=None):
               lambda L, x: L.nn.functional.adaptive_avg_pool2d(x, 1))
     pool_grad("max_pool2d(가중치)", lambda L, x: L.nn.functional.max_pool2d(x, 2))
 
-    # BatchNorm — 평균·분산이 그래프 안에 있어야 한다. 밖으로 빼면 입력 기울기가
-    # 어긋나고 weight 에는 **아예 안 온다**(None). 그래서 둘 다 본다.
+    # BatchNorm — the mean and variance have to be inside the graph. Taken outside, the input
+    # gradient is off and the weight gets **nothing at all** (None). So both are looked at.
     def bn_grad(which):
         def run(L, w=which):
             x = L.tensor(img, requires_grad=True)
@@ -644,15 +673,17 @@ def grad_cases(inp=None):
     for which in ("x", "weight"):
         bn_grad(which)
 
-    # **위의 `sum()` 이 BatchNorm 역방향의 절반을 가린다.**
+    # **The `sum()` above hides half of BatchNorm's backward pass.**
     #
-    # 입력 기울기는 세 항으로 되어 있다. 곧바로 오는 항 하나와, 평균·분산이 입력에
-    # 의존하기 때문에 생기는 보정항 둘이다. 그런데 상류 기울기가 **전부 1** 이면
-    # 그 보정항 둘이 정확히 상쇄된다 — 위 케이스의 기대값이 4.7e-10 인 것이 그
-    # 상쇄의 흔적이고, 즉 저 케이스는 보정항을 아예 안 묻고 있다.
+    # The input gradient has three terms: one arriving directly, and two correction terms that
+    # exist because the mean and variance depend on the input. When the upstream gradient is
+    # **all ones**, those two corrections cancel exactly — the expected value of 4.7e-10 in the
+    # case above is the trace of that cancellation, which is to say the case is not asking
+    # about the corrections at all.
     #
-    # 보정항을 빼먹은 구현(평균·분산을 상수 취급하는 흔한 실수)은 위를 통과하고
-    # 아래에서 걸린다. 자리마다 다른 가중치로 접으면 상쇄가 깨진다.
+    # An implementation that leaves the corrections out (the common mistake of treating mean
+    # and variance as constants) passes above and is caught below. Folding with a different
+    # weight per slot breaks the cancellation.
     def bn_grad_weighted(which):
         def run(L, w=which):
             x = L.tensor(img, requires_grad=True)
@@ -667,23 +698,24 @@ def grad_cases(inp=None):
     for which in ("x", "weight"):
         bn_grad_weighted(which)
 
-    # ── 씨앗을 직접 주는 역방향 (야코비안-벡터 곱) ────────────────────────
+    # ── backward with the seed given directly (a Jacobian-vector product) ──
     #
-    # `y.backward(v)` 는 `(∂y/∂x)ᵀ v` 를 준다. 위의 케이스들은 전부 `.sum()` 으로
-    # 접고 부르는데, 그것은 **v 가 전부 1 인 특수한 경우**다.
+    # `y.backward(v)` gives `(∂y/∂x)ᵀ v`. The cases above all fold with `.sum()` before calling,
+    # and that is **the special case where v is all ones.**
     #
-    # **씨앗을 균일하게 두면 이 케이스가 아무것도 안 잰다.** `backward(ones)` 는
-    # `sum().backward()` 와 같은 답이라, 씨앗을 통째로 무시하는 구현도 통과한다.
-    # 그래서 여기서는 자리마다 다른 값을 준다.
+    # **A uniform seed makes this case measure nothing.** `backward(ones)` gives the same answer
+    # as `sum().backward()`, so an implementation that ignores the seed entirely passes. So a
+    # different value goes into each slot here.
     #
-    # borch.ts 만 이것을 못 받고 있었다 — 첫 인자가 `retain_graph` 였다. 코어는
-    # 처음부터 받았고 골든이 안 물어서 그 갈림이 안 보였다.
+    # borch.ts alone was not accepting it — its first argument was `retain_graph`. The core
+    # accepted it from the start, and the golden cases did not ask, so that divergence was
+    # invisible.
     def seeded_backward(name, fn, arr, shape_of, which="x", arr2=None):
         def run(L, f=fn, a=arr, s=shape_of, w=which, b=arr2, n=name):
             x = L.tensor(a, requires_grad=True)
             args = [x] if b is None else [x, L.tensor(b, requires_grad=True)]
             y = f(L, *args)
-            # 1, 2, 3 … 을 출력 모양으로 놓는다. 대칭이 없어야 씨앗이 실제로 쓰인다.
+            # 1, 2, 3 … laid out in the output's shape. Without symmetry the seed is really used.
             seed = np.arange(1, int(np.prod(s)) + 1, dtype=np.float32).reshape(s)
             y.backward(L.tensor(seed))
             return _grad_of(args[0] if w == "x" else args[1], n)
@@ -693,17 +725,19 @@ def grad_cases(inp=None):
     seeded_backward("square", lambda L, x: x * x, x1, (6,))
     seeded_backward("mul/a", lambda L, a, b: a * b, x1, (6,), "x", x1)
     seeded_backward("mul/b", lambda L, a, b: a * b, x1, (6,), "b", x1)
-    # 출력 모양이 입력과 다른 자리. 씨앗의 모양을 출력에서 가져오는지가 여기서 갈린다.
+    # Where the output shape differs from the input's. Whether the seed's shape is taken from
+    # the output is what parts here.
     seeded_backward("matmul", lambda L, x: L.matmul(x, x.t()), x2, (3, 3))
     seeded_backward("reshape", lambda L, x: x.reshape(2, 3), x1, (2, 3))
-    # 스칼라에 씨앗을 주는 것도 torch 가 받는다 — 값이 그만큼 배가 된다.
+    # torch accepts a seed on a scalar too — the value is multiplied by that much.
     seeded_backward("scalar", lambda L, x: (x * x).sum(), x1, ())
 
-    # ── 거절하는 자리 — **셋이 같은 문구로** ──────────────────────────────
+    # ── where it refuses — **all three with the same wording** ──
     #
-    # `_as_expected` 와 다르다. 저쪽은 브라우저가 **일부러** torch 와 다른 자리이고,
-    # 이쪽은 셋 다 torch 와 같아야 하는 자리다. 값을 굳힐 수 없으니 문구의 조각을
-    # 굳힌다 — 통과해 버리면 "안 던졌다" 가 답이 되어 갈린다.
+    # Different from `_as_expected`. That one is where the browser is **deliberately** unlike
+    # torch; this is where all three have to match torch. The value cannot be frozen, so a
+    # fragment of the wording is frozen instead — let it pass and "it did not throw" becomes the
+    # answer, and they diverge.
     def refuses(name, fragment, fn):
         def run(L, f=fn, frag=fragment):
             try:
@@ -713,36 +747,38 @@ def grad_cases(inp=None):
             return "안 던졌다"
         cases.append((f"grad::거절::{name}", run))
 
-    # **차례가 있다.** 비스칼라이면서 requires_grad 가 아니면 torch 는 "스칼라가
-    # 아니다" 가 아니라 이쪽으로 거절한다 — 실측한 값이다. borch.ts 만 반대 차례였고
-    # 골든이 그 조합을 안 물어서 안 보였다.
+    # **There is an order.** Non-scalar and not requires_grad, and torch refuses on this side
+    # rather than with "not a scalar" — measured. borch.ts alone had the order reversed, and the
+    # golden cases did not ask that combination, so it was invisible.
     refuses("requires_grad 를 먼저 본다",
             "does not require grad",
             lambda L: L.tensor(x1).backward())
     refuses("씨앗 없는 비스칼라",
             "grad can be implicitly created only for scalar outputs",
             lambda L: L.tensor(x1, requires_grad=True).backward())
-    # 어긋난 씨앗을 브로드캐스팅으로 맞춰 주면 안 된다. 맞춰 주면 값이 그럴듯한 채로
-    # 틀린 기울기가 나오고, 그것은 학습이 안 되는 것으로만 드러난다. 코어는 여기를
-    # 안 보고 있어서 numpy 의 `ValueError` 가 원인에서 먼 자리에 떴다.
+    # A mismatched seed must not be fixed up by broadcasting. Fixed up, a plausible-looking
+    # value comes out with a wrong gradient, and that shows up only as training not working.
+    # The core was not looking here, so numpy's `ValueError` surfaced a long way from the cause.
     def bad_seed(L):
         y = L.tensor(x1, requires_grad=True) * 2
         y.backward(L.tensor(np.ones(7, dtype=np.float32)))
 
     refuses("씨앗 모양이 어긋남", "Mismatch in shape", bad_seed)
 
-    # ── 접히는 자리 — **동점이 있어야 열린다** ────────────────────────────
+    # ── where it folds — **it only opens up when there are ties** ──
     #
-    # `max()` 가 [3,5,5,1,5] 를 5 로 접으면 그 5 를 만든 자리가 셋이다. 되돌릴 때
-    # 어디로 가는가 — **값이 전부 다르면 이 물음이 안 열린다.** "고른 자리 하나로
-    # 준다" 와 "값이 같은 칸에 나눈다" 가 같은 답을 내기 때문이다. 표의 기울기
-    # 케이스는 오래 서로 다른 값만 써서, 절반만 맞는 구현이 통과했다.
+    # `max()` folding [3,5,5,1,5] to 5 leaves three slots that made that 5. Where does it go on
+    # the way back — **with all values distinct the question does not open**, because "give it
+    # to the one slot chosen" and "spread over the equal-valued slots" give the same answer. The
+    # table's gradient cases used distinct values for a long time, so an implementation that was
+    # half right passed.
     #
-    # torch 의 규칙은 셋이다 — 번호를 **건네는** 연산은 고른 자리 하나로,
-    # **안 건네는** 연산은 값이 같은 칸에 고르게, **정렬 자리**로 접는 연산은
-    # 그 자리들로. 여기에는 셋이 다 답할 수 있는 것만 넣는다. 나머지 절반(코어만
-    # 맞출 수 있는 `median` 의 동점·`mode`·`quantile`·`i0`)은 `tests/test_fold_grad.py`
-    # 에 있고, borch.ts 가 따라오면 이리로 옮긴다.
+    # torch's rule is three-part — an operation that **hands back an index** goes to the one
+    # slot it chose, one that **does not** spreads evenly over the equal-valued slots, and one
+    # that folds onto **sorted positions** goes to those positions. Only what all three can
+    # answer goes in here. The other half (`median`'s ties, `mode`, `quantile` and `i0`, which
+    # only the core gets right) is in `tests/test_fold_grad.py`, and moves here when borch.ts
+    # catches up.
     tied = np.array([3.0, 5.0, 5.0, 1.0, 5.0], dtype=np.float32)
     step = np.array([0.5, -1.0, 2.0], dtype=np.float32)
 
@@ -758,24 +794,26 @@ def grad_cases(inp=None):
     folds("min() 동점 없음", lambda L, x: x.min())
     folds("amax() 동점 셋", lambda L, x: x.amax())
     folds("amin() 동점 없음", lambda L, x: x.amin())
-    # `max(dim=0)` 은 번호를 건네므로 **반대 규칙**이다. 같은 자료로 나란히 물어야
-    # 둘이 다르다는 것이 케이스로 남는다.
+    # `max(dim=0)` hands back an index, so it is **the opposite rule.** Asking side by side on
+    # the same data is what leaves the difference between them recorded as a case.
     folds("max(dim=0) 은 한 자리로", lambda L, x: x.max(dim=0)[0])
-    # 노름은 `p` 가 규칙을 통째로 바꾼다. `inf` 는 최대 절댓값이라 동점이 열리고,
-    # 유한한 `p` 는 모든 칸에 흐른다.
+    # For a norm, `p` changes the rule outright. `inf` is the maximum absolute value so ties
+    # open up, and a finite `p` flows to every slot.
     folds("norm(inf)", lambda L, x: x.norm(float("inf")))
     folds("norm(-inf)", lambda L, x: x.norm(float("-inf")))
     folds("norm(3)", lambda L, x: x.norm(3))
-    # 계단 함수의 도함수는 **0 이고, 0 은 없는 것이 아니다.** 그래프를 안 이으면
-    # `backward()` 가 멈추는데 torch 는 안 멈춘다.
+    # A step function's derivative is **zero, and zero is not the same as absent.** Without the
+    # graph joined, `backward()` stops, and torch does not stop.
     folds("angle() 은 0 을 흘린다", lambda L, x: x.angle(), step)
 
-    # 아래는 처음에 `tests/test_fold_grad.py` 에만 있었다. borch.ts 가 그때 답을 못
-    # 해서 셋을 함께 묻는 자리에 못 올렸던 것들이고, 이제 셋 다 답한다.
+    # The ones below were in `tests/test_fold_grad.py` alone at first. borch.ts could not
+    # answer them then, so they could not go where all three are asked at once; all three answer
+    # now.
     #
-    # **`median` 과 `quantile` 이 같은 값을 내면서 다른 것을 떠받친다.** [1,5,5,5] 의
-    # 중앙값도 0.5 분위수도 5 인데, median 은 5 인 칸 **셋 전부**에 ⅓ 씩 주고
-    # quantile 은 정렬해서 쓴 **두 자리**에 ½ 씩 준다. 값만 재면 둘이 같아 보인다.
+    # **`median` and `quantile` give the same value while standing on different things.** The
+    # median of [1,5,5,5] is 5 and so is its 0.5 quantile, but median gives ⅓ to **all three**
+    # slots holding 5 while quantile gives ½ to **the two positions** it used after sorting.
+    # Measured by value alone the two look the same.
     even = np.array([1.0, 5.0, 5.0, 5.0], dtype=np.float32)
     dup = np.array([1.0, 1.0, 2.0, 2.0, 2.0], dtype=np.float32)
     nan_tie = np.array([1.0, np.nan, 5.0, 5.0, 5.0], dtype=np.float32)
@@ -791,11 +829,13 @@ def grad_cases(inp=None):
     folds("quantile(0.3) 보간", lambda L, x: x.quantile(0.3))
     folds("quantile(0.5) 짝수는 둘로", lambda L, x: x.quantile(0.5), even)
     folds("quantile(0.75) 짝수", lambda L, x: x.quantile(0.75), even)
-    # 도함수가 `i1` 이다. 이 자리는 borch.ts 가 **0 을 흘리고 있었고**, 그 주석이
-    # 코어의 구멍을 근거로 대고 있었다 — 한쪽이 다른 쪽을 베낀 것이다. 값이 0 인
-    # 기울기와 기울기가 없는 것은 다른 말인데, 베낄 때 뒤가 앞으로 바뀌었다.
+    # Its derivative is `i1`. borch.ts was **flowing a zero** here, and its comment cited the
+    # core's hole as its grounds — one side had copied the other. A gradient whose value is zero
+    # and a gradient that is absent are different statements, and in the copying the second
+    # turned into the first.
     folds("i0() 의 도함수는 i1", lambda L, x: x.i0(), step)
-    # 접히지 않는 이웃. 같은 자료로 나란히 물어야 규칙이 다르다는 것이 남는다.
+    # The neighbour that does not fold. Asking side by side on the same data is what leaves the
+    # difference in rule recorded.
     folds("topk(3) 는 셋 다", lambda L, x: x.topk(3)[0])
     folds("sort() 는 전부 하나씩", lambda L, x: x.sort()[0])
     folds("cummax(0) 은 늦은 자리를", lambda L, x: x.cummax(0)[0])
@@ -805,9 +845,9 @@ def grad_cases(inp=None):
 
 ACT_PREFIX = "act::"
 
-# `(함수 이름, 층 이름)` — 인자 없이 기본값으로 부를 수 있는 것들.
-# 함수 꼴과 층 꼴이 **같은 값**을 내야 한다. 층이 다른 함수를 부르는 실수는 값으로만
-# 잡히고, 한 줄짜리 감싸개일수록 그 실수를 눈으로 못 본다.
+# `(function name, layer name)` — the ones callable with no arguments, on their defaults.
+# The function form and the layer form have to give **the same value.** A layer calling the
+# wrong function is caught by value alone, and the thinner the wrapper the less the eye sees it.
 _ACTS = [
     ("celu", "CELU"),
     ("hardshrink", "Hardshrink"),
@@ -826,14 +866,15 @@ _ACTS = [
 
 
 def act_cases(inp=None):
-    """활성함수 열일곱. **꺾이는 자리에서 묻는다.**
+    """Seventeen activations. **Asked where they bend.**
 
-    이 저장소가 `relu` 로 배운 것이 여기 그대로 적용된다 — 난수 입력은 특별한 값을
-    안 준다. 정확히 0, 정확히 ±1, 정확히 ±3, 정확히 6 은 뽑히지 않는데 활성함수는
-    바로 그 점에서 꺾인다. 그래서 입력을 손으로 적었다(`kinks`).
+    What this repository learned from `relu` applies here unchanged — a random input gives no
+    special values. Exactly 0, exactly ±1, exactly ±3 and exactly 6 are never drawn, and those
+    are precisely where the activations bend. So the input is written by hand (`kinks`).
 
-    함수 꼴과 층 꼴을 **둘 다** 묻는다. 층은 함수를 감싼 한 줄이라 틀릴 데가 없어
-    보이지만, 틀리는 방식이 하나 있다 — 다른 함수를 부르는 것. 그것은 값으로만 잡힌다.
+    **Both** the function form and the layer form are asked. A layer is a one-line wrapper over
+    a function and looks like it has nowhere to go wrong, but there is one way — calling a
+    different function. That is caught by value alone.
     """
     inp = golden_inputs() if inp is None else inp
     k = inp["kinks"]
@@ -841,25 +882,26 @@ def act_cases(inp=None):
     cases = []
 
     def add(name, fn, arr=k):
-        """값과 기울기를 짝으로 단다. 활성함수는 **기울기가 본체다.**"""
+        """Attaches value and gradient as a pair. For an activation, **the gradient is the substance.**"""
         cases.append((ACT_PREFIX + name, lambda L, f=fn, a=arr: f(L, L.tensor(a))))
 
         def grad(L, f=fn, a=arr, n=name):
             x = L.tensor(a, requires_grad=True)
             out = f(L, x)
-            # 자리마다 다른 가중치를 곱해 접는다 — 그냥 `sum()` 이면 기울기가 전부
-            # 1 이라 어느 자리가 틀렸는지 값에 안 남는다.
+            # Folded with a different weight per slot — a plain `sum()` makes every gradient
+            # 1, and then which slot is wrong leaves no trace in the value.
             (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
             return _grad_of(x, n)
         cases.append((ACT_PREFIX + f"grad::{name}", grad))
 
-    # 인자 없는 것들 — 함수 꼴은 값·기울기, 층 꼴은 값.
+    # The ones with no arguments — the function form gives value and gradient, the layer form value.
     for fname, cls in _ACTS:
         add(f"F.{fname}", lambda L, x, f=fname: getattr(L.nn.functional, f)(x))
         cases.append((ACT_PREFIX + f"nn.{cls}",
                       lambda L, c=cls, a=k: getattr(L.nn, c)()(L.tensor(a))))
 
-    # 인자를 받는 것들. **기본값만 물으면 그 인자가 아예 안 쓰여도 통과한다.**
+    # The ones that take arguments. **Asking only about the default lets an argument that is
+    # never used at all pass.**
     add("F.hardtanh(범위)", lambda L, x: L.nn.functional.hardtanh(x, -0.5, 0.5))
     add("F.softplus(beta)", lambda L, x: L.nn.functional.softplus(x, beta=2.0))
     add("F.celu(alpha)", lambda L, x: L.nn.functional.celu(x, alpha=0.5))
@@ -871,18 +913,20 @@ def act_cases(inp=None):
     cases.append((ACT_PREFIX + "nn.Hardtanh(범위)",
                   lambda L: L.nn.Hardtanh(-0.5, 0.5)(L.tensor(k))))
 
-    # `softmin` 은 `softmax(-x)` 다. **부호를 빠뜨리면 softmax 와 같아지고**, 그것은
-    # 이름만 다른 같은 함수라 값으로만 갈린다.
+    # `softmin` is `softmax(-x)`. **Leave the sign out and it becomes softmax**, which is the
+    # same function under another name and so parts only by value.
     add("F.softmin", lambda L, x: L.nn.functional.softmin(x, dim=-1), x2)
     cases.append((ACT_PREFIX + "nn.Softmin",
                   lambda L: L.nn.Softmin(dim=-1)(L.tensor(x2))))
 
-    # `glu` 는 축을 반으로 갈라 한쪽을 게이트로 쓴다 — 원소별이 아닌 유일한 자리다.
+    # `glu` splits an axis in half and uses one half as a gate — the only place here that is
+    # not element-wise.
     add("F.glu", lambda L, x: L.nn.functional.glu(x, dim=-1), x1)
     cases.append((ACT_PREFIX + "nn.GLU", lambda L: L.nn.GLU(dim=-1)(L.tensor(x1))))
 
-    # `prelu` 는 **학습되는 기울기**를 갖는다. 층 꼴에서 그것이 파라미터로 잡혀야
-    # 하는데, 그 자리가 방금 컨테이너에서 본 등록 문제와 같은 기계다.
+    # `prelu` has **a learned slope.** In the layer form that has to be picked up as a
+    # parameter, and that place is the same machinery as the registration problem just seen in
+    # the containers.
     add("F.prelu",
         lambda L, x: L.nn.functional.prelu(
             x, L.tensor(np.array([0.25], dtype=np.float32))))
@@ -890,24 +934,25 @@ def act_cases(inp=None):
     cases.append((ACT_PREFIX + "nn.PReLU/파라미터 이름",
                   lambda L: " ".join(n for n, _ in L.nn.PReLU().named_parameters())))
 
-    # ── 결속이 메꾸고 있던 여덟. **이름은 껍데기인데 인자는 진짜다.** ──────
+    # ── the eight the binding was filling in. **The name is a shell and the arguments are real.** ──
     #
-    # borch.ts 에 층이 없어서 결속이 텐서 메서드 위에 factory 로 만들어 두었고,
-    # 케이스가 전부 결속을 지나므로 **표가 그 없음을 구조적으로 못 봤다.** 옮기면서
-    # 셋이 인자를 갖고 있는 것이 드러났다.
+    # borch.ts had no layer, so the binding built one as a factory over the tensor methods, and
+    # every case goes through the binding — so **the table structurally could not see that
+    # absence.** Moving them over revealed that three of them take arguments.
     for cls, fn in (("SiLU", "silu"), ("Sigmoid", "sigmoid"), ("Tanh", "tanh"),
                     ("GELU", "gelu")):
         add(f"F.{fn}", lambda L, x, f=fn: getattr(L.nn.functional, f)(x))
         cases.append((ACT_PREFIX + f"nn.{cls}",
                       lambda L, c=cls, a=k: getattr(L.nn, c)()(L.tensor(a))))
 
-    # **`approximate='tanh'` 는 다른 식이다.** 최대차가 1e-4 언저리라 "거의 같으니
-    # 하나로 둔다" 가 통할 뻔한 자리이고, 기본값만 물으면 그 인자가 없어도 통과한다.
+    # **`approximate='tanh'` is a different formula.** The max difference is around 1e-4, so
+    # "they are near enough, keep one" very nearly went through here, and asking only about the
+    # default lets the argument be missing entirely.
     add("F.gelu(tanh)",
         lambda L, x: L.nn.functional.gelu(x, approximate="tanh"))
     cases.append((ACT_PREFIX + "nn.GELU(tanh)",
                   lambda L: L.nn.GELU("tanh")(L.tensor(k))))
-    # 둘이 **정말 다른가** — 같은 값이면 위의 두 케이스는 한 함수를 두 번 묻는 것이다.
+    # Are the two **really different** — equal, and the two cases above ask one function twice.
     cases.append((ACT_PREFIX + "GELU 두 꼴은 다르다",
                   lambda L: str(bool(
                       (L.nn.functional.gelu(L.tensor(k))
@@ -923,15 +968,16 @@ def act_cases(inp=None):
     cases.append((ACT_PREFIX + "nn.LeakyReLU(기울기)",
                   lambda L: L.nn.LeakyReLU(0.2)(L.tensor(k))))
     cases.append((ACT_PREFIX + "nn.Identity", lambda L: L.nn.Identity()(L.tensor(k))))
-    # torch 의 `Identity` 는 **아무 인자나 받아 버린다**(실측). 자리 채우개로 쓰는
-    # 층이라, 갈아 끼운 층의 인자를 그대로 둔 채 이름만 바꾸는 것이 예사다.
+    # torch's `Identity` **swallows any argument at all** (measured). It is a placeholder
+    # layer, so swapping a layer out and leaving its arguments in place while changing the name
+    # is routine.
     cases.append((ACT_PREFIX + "nn.Identity(인자를 삼킨다)",
                   lambda L: L.nn.Identity(64, unused=True)(L.tensor(k))))
 
-    # ── `Softmax()` 의 기본 축은 **`-1` 이 아니다** ────────────────────────
+    # ── `Softmax()`'s default axis is **not `-1`** ──
     #
-    # 랭크마다 다르다(실측: 1→0, 2→1, 3→**0**, 4→1). 랭크 2 로만 물으면 `dim=1` 과
-    # `dim=-1` 이 같은 축이라 이 규칙이 안 보이고, 셋 다 `-1` 로 두고 있었다.
+    # It differs by rank (measured: 1→0, 2→1, 3→**0**, 4→1). Asked at rank 2 only, `dim=1` and
+    # `dim=-1` are the same axis and this rule is invisible; all three had it as `-1`.
     ranked = np.arange(24, dtype=np.float32).reshape(2, 3, 4) * 0.1
     for cls in ("Softmax", "LogSoftmax"):
         cases.append((ACT_PREFIX + f"nn.{cls}(dim 지정)",
@@ -950,20 +996,23 @@ NUM_PREFIX = "num::"
 
 
 def numeric_cases(inp=None):
-    """수치 계열. **조합되는 것과 급수로 세는 것이 섞여 있다.**
+    """The numerical family. **Things that compose and things counted by a series, mixed.**
 
-    앞의 묶음들은 있는 연산을 엮으면 끝났다. 여기 `lgamma`·`digamma`·`erfinv` 는
-    닫힌 식이 없어서 근사식을 적어야 하고, 그러면 **얼마나 맞는가**가 곧 답이다 —
-    이 저장소의 허용 오차(1e-4)를 지나야 하고 그것이 이 케이스들의 값어치다.
+    The groups above finished once the existing operations were wired together. Here `lgamma`,
+    `digamma` and `erfinv` have no closed form, so an approximation has to be written, and then
+    **how close it gets** is the answer — it has to clear this repository's tolerance (1e-4),
+    and that is what these cases are worth.
 
-    `cdist`·`corrcoef`·`cov` 는 통계 쪽에서 늘 부르는 것들이고 전부 조합이다.
+    `cdist`, `corrcoef` and `cov` are what the statistics side calls constantly, and they all
+    compose.
     """
     inp = golden_inputs() if inp is None else inp
-    x1, x2 = inp["x1"], inp["xp"]                       # xp 는 양수만
+    x1, x2 = inp["x1"], inp["xp"]                       # xp is positives only
     mat = inp["x2"]                                     # (3, 4)
     other = (mat * 0.5 + 1.0).astype(np.float32)
-    # 감마 계열은 **양수에서만** 본다. 음의 정수에서 발산하는 것이 정의라, 그 자리를
-    # 케이스로 두면 무한대 비교가 되고 근사식의 품질과 상관없는 것을 묻게 된다.
+    # The gamma family is asked **on positives only.** Diverging at the negative integers is the
+    # definition, so making a case of that place turns it into a comparison of infinities and
+    # asks about something unrelated to the approximation's quality.
     gam = np.array([0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.5], dtype=np.float32)
     unit = np.array([-0.9, -0.5, -0.1, 0.0, 0.1, 0.5, 0.9], dtype=np.float32)
     cases = []
@@ -981,7 +1030,7 @@ def numeric_cases(inp=None):
             return _grad_of(x, n)
         cases.append((NUM_PREFIX + f"grad::{name}", grad))
 
-    # ── 조합되는 것들. ─────────────────────────────────────────────────────
+    # ── the ones that compose. ──
     add("cdist", lambda L: L.cdist(L.tensor(mat), L.tensor(other)))
     add("corrcoef", lambda L: L.corrcoef(L.tensor(mat)))
     add("cov", lambda L: L.cov(L.tensor(mat)))
@@ -991,7 +1040,7 @@ def numeric_cases(inp=None):
     add("trapezoid(dx)", lambda L: L.trapezoid(L.tensor(x2), dx=0.5))
     add("cumulative_trapezoid", lambda L: L.cumulative_trapezoid(L.tensor(x2)))
 
-    # ── 급수로 세는 것들. **여기서는 얼마나 맞는가가 답이다.** ───────────────
+    # ── the ones counted by a series. **Here, how close it gets is the answer.** ──
     with_grad("lgamma", lambda L, x: L.lgamma(x), gam)
     with_grad("digamma", lambda L, x: L.digamma(x), gam)
     with_grad("erfinv", lambda L, x: L.erfinv(x), unit)
@@ -1002,32 +1051,34 @@ BIT_PREFIX = "bit::"
 
 
 def bit_cases(inp=None):
-    """비트·정수 수학·창 함수.
+    """Bitwise, integer maths, window functions.
 
-    ## 음수가 이 묶음의 전부다
+    ## Negatives are the whole of this group
 
-    비트 연산을 양수로만 물으면 세 벌의 구현이 전부 통과하고도 서로 다를 수 있다.
+    Ask the bit operations on positives only and all three implementations pass while still
+    differing from each other.
 
-    - **오른쪽 시프트는 산술이다.** `-3 >> 5` 가 `-1` 이지 큰 양수가 아니다(실측).
-      논리 시프트로 적으면 음수에서만 갈린다.
-    - **`gcd` 는 늘 0 이상이다.** `gcd(-3, 5)` 가 `1` 이다 — 부호를 안 버리면 음수가
-      나온다.
-    - **0 이 섞여야 한다.** `lcm(0, 7)` 은 0 이고, 그 자리를 안 물으면 `|a·b|/gcd` 가
-      0 으로 나누는 것을 아무도 못 본다.
-    - **참거짓은 다른 계산이다.** `~True` 는 `-2` 가 아니라 `False` 다. 정수로만
-      물으면 이 갈래가 통째로 안 돌아간다.
+    - **The right shift is arithmetic.** `-3 >> 5` is `-1`, not a large positive (measured).
+      Written as a logical shift it parts on negatives alone.
+    - **`gcd` is always non-negative.** `gcd(-3, 5)` is `1` — keep the sign and a negative comes
+      out.
+    - **Zero has to be in there.** `lcm(0, 7)` is 0, and without asking that, nobody sees
+      `|a·b|/gcd` dividing by zero.
+    - **Booleans are a different computation.** `~True` is `False`, not `-2`. Asked on integers
+      only, that whole branch never runs.
 
-    ## 창 함수는 `periodic` 이 요점이다
+    ## For the window functions, `periodic` is the point
 
-    기본값이 참이고, 그것이 **길이를 하나 늘린다** — `N+1` 짜리 대칭 창을 만들어
-    마지막을 버린다(실측). 거짓으로만 재면 두 갈래가 같은 함수처럼 보인다.
-    `n == 1` 도 따로 묻는다. 나누는 자리가 0 이 되는 유일한 크기다.
+    It defaults to true, and it **adds one to the length** — a symmetric window of `N+1` is
+    built and the last element dropped (measured). Measured only as false, the two branches look
+    like the same function. `n == 1` is asked separately too; it is the only size at which the
+    divisor becomes zero.
 
-    ## `frexp` 와 `fill` 이 여기 있는 이유
+    ## Why `frexp` and `fill` are here
 
-    `frexp` 는 지수를 **int32** 로 내고(실측), `fill` 은 이름이 한 글자 다른 `fill_`
-    과 달리 **제자리가 아니다**. 둘 다 값만 보면 그럴듯해서, 원본이 그대로인지·형이
-    무엇인지를 따로 물어야 드러난다.
+    `frexp` returns its exponent as **int32** (measured), and `fill`, unlike `fill_` one letter
+    away, is **not in place.** Both look plausible by value alone, and only surface by asking
+    separately whether the original is unchanged and what the type is.
     """
     ints = np.array([12, 10, -3, 0], dtype=np.int64)
     rhs = np.array([10, 3, 5, 7], dtype=np.int64)
@@ -1046,14 +1097,14 @@ def bit_cases(inp=None):
             lambda L, n=name: getattr(L.tensor(ints), n)(L.tensor(rhs)))
 
     add("bitwise_not", lambda L: L.bitwise_not(L.tensor(ints)))
-    # 참거짓 갈래. 여기서만 논리 연산으로 돈다.
+    # The boolean branch. Only here does it run as a logical operation.
     add("bitwise_and(참거짓)",
         lambda L: L.bitwise_and(L.tensor(flags), L.tensor(~flags)))
     add("bitwise_or(참거짓)",
         lambda L: L.bitwise_or(L.tensor(flags), L.tensor(~flags)))
     add("bitwise_not(참거짓)", lambda L: L.bitwise_not(L.tensor(flags)))
 
-    # 제자리 판. **같은 텐서를 돌려줘야** 이어 부르는 코드가 원본을 고친다.
+    # The in-place edition. **It has to hand back the same tensor** for chained code to edit the original.
     for name in ("gcd_", "lcm_"):
         def run(L, n=name):
             x = L.tensor(ints.copy())
@@ -1081,7 +1132,7 @@ def bit_cases(inp=None):
     add("arctan2",
         lambda L: L.arctan2(L.tensor(reals), L.tensor(reals + 1.0)))
     add("i0", lambda L: L.i0(L.tensor(reals)))
-    # 큰 쪽 갈래. 급수가 3.75 에서 바뀌므로 그 너머를 따로 묻는다.
+    # The large branch. The series changes at 3.75, so beyond that is asked separately.
     add("i0(큰 값)",
         lambda L: L.i0(L.tensor(np.array([4.0, 8.0, 12.0], dtype=np.float32))))
     for p in (2, 3):
@@ -1101,8 +1152,8 @@ def bit_cases(inp=None):
         lambda L: L.nextafter(L.tensor(np.array([1.0, 2.0], dtype=np.float32)),
                               L.tensor(np.array([2.0, 1.0], dtype=np.float32))))
 
-    # **축을 가로로도 세로로도 묻는다.** 정사각이 아닌 것으로 물어야 축이 바뀌었을 때
-    # 모양에서 먼저 걸린다.
+    # **The axis is asked both across and down.** Asking with a non-square shape is what makes a
+    # swapped axis fail on shape first.
     for dim in (0, 1):
         add(f"logcumsumexp(dim={dim})",
             lambda L, d=dim: L.logcumsumexp(L.tensor(grid), d))
@@ -1110,8 +1161,8 @@ def bit_cases(inp=None):
     def logcumsumexp_grad(L):
         x = L.tensor(grid, requires_grad=True)
         out = L.logcumsumexp(x, 1)
-        # **고르지 않은 무게로 센다.** 전부 1 이면 누적의 순서가 상쇄되어
-        # 뒤에서부터 쌓이는 규칙이 안 드러난다.
+        # **Counted with uneven weights.** All ones and the accumulation order cancels out, so
+        # the rule about building up from the back never shows.
         (out * L.tensor(np.array([[1.0, 2.0, 0.5], [0.5, 3.0, 1.5]],
                                  dtype=np.float32))).sum().backward()
         return _grad_of(x, "logcumsumexp")
@@ -1121,8 +1172,8 @@ def bit_cases(inp=None):
     add("fill", lambda L: L.fill(L.tensor(reals), 7.0))
 
     def fill_leaves_source(L):
-        """**`fill` 은 제자리가 아니다.** 원본을 돌려주므로, 제자리로 잘못 짓면
-        7 로 채워진 것이 나온다."""
+        """**`fill` is not in place.** It hands back the original, so building it as in-place
+        gives back something filled with 7."""
         x = L.tensor(reals.copy())
         L.fill(x, 7.0)
         return x
@@ -1130,8 +1181,8 @@ def bit_cases(inp=None):
     add("fill(원본은 그대로)", fill_leaves_source)
 
     def detach_in_place(L):
-        """**같은 텐서**에서 그래프를 끊는다. `detach()` 로 잘못 지으면 `is` 가
-        거짓이 되고, 원본은 여전히 위쪽에 붙어 있어 역전파가 계속 흐른다."""
+        """Cuts the graph at **the same tensor.** Built as `detach()` by mistake, `is` becomes
+        false and the original is still attached upstream, so backpropagation keeps flowing."""
         x = L.tensor(reals, requires_grad=True)
         y = x * 2
         z = L.detach_(y)
@@ -1145,7 +1196,7 @@ def bit_cases(inp=None):
         for periodic in (True, False):
             add(f"{name}(6, periodic={periodic})",
                 lambda L, n=name, p=periodic: getattr(L, n)(6, p))
-        # 나누는 자리가 0 이 되는 유일한 크기.
+        # The only size at which the divisor becomes zero.
         add(f"{name}(1)", lambda L, n=name: getattr(L, n)(1))
     add("hamming_window(alpha, beta)",
         lambda L: L.hamming_window(6, True, 0.5, 0.5))
@@ -1157,39 +1208,43 @@ SPOT_PREFIX = "spot::"
 
 
 def shape_index_cases(inp=None):
-    """모양·색인. 저장소의 **어느 칸을 볼 것인가**를 묻는 이름들.
+    """Shapes and indexing. The names that ask **which slot of the storage to look at.**
 
-    ## `as_strided` 는 torch 에서 뷰이고 우리는 사본이다
+    ## `as_strided` is a view in torch and a copy for us
 
-    torch 는 저장소 하나를 여러 틀로 보므로 그 결과에 쓰면 원본이 바뀐다. borch.ts 의
-    텐서는 GPU 버퍼를 하나씩 가져서 그 뷰가 표현이 안 되고, 코어만 진짜 뷰를 내면 세
-    구현이 갈린다 — **값으로는 안 보이고 쓸 때만 보이는** 갈림이라 제일 나쁘다. 셋 다
-    사본으로 맞췄고, 그래서 여기 케이스는 **읽기만** 묻는다. 쓰는 쪽은
-    `as_strided_scatter` 가 맡는다.
+    torch sees one storage through several frames, so writing to the result changes the
+    original. A borch.ts tensor holds one GPU buffer each and cannot express that view, and if
+    the core alone returned a real view the three implementations would diverge — **a divergence
+    invisible by value and visible only on write**, which is the worst kind. All three were
+    settled on a copy, so the cases here ask about **reading** only. The writing side is
+    `as_strided_scatter`'s job.
 
-    ## 무엇을 물어야 갈리는가
+    ## What has to be asked for it to part
 
-    - **겹치는 걸음**을 물어야 기울기가 쌓이는지 보인다. 안 겹치는 걸음으로만 재면
-      한 칸에 한 번씩 오므로 쌓기를 빼먹어도 통과한다.
-    - **`step`** 이 1 이 아니어야 `slice_scatter` 가 건너뛰는 자리를 안 건드리는지
-      드러난다.
-    - **`offset`** 이 0 이 아니어야 `diagonal_scatter`·`diag_embed` 의 밀림이 보인다.
-    - **배치 축**이 있어야 대각선이 맨 뒤로 가는 규약이 드러난다. 2차원으로만 재면
-      남는 축이 없어 순서를 못 묻는다.
-    - **나눠떨어지지 않는 크기**여야 `tensor_split` 이 나머지를 앞에서부터 나눠 갖는
-      것이 보인다. 떨어지는 크기로 재면 `chunk` 와 같은 함수처럼 보인다.
-    - **겹치는 번호**여야 `index_put`·`put` 의 `accumulate` 두 갈래가 갈린다.
-    - **항등원이 아닌 밑판**이어야 `include_self` 가 보인다. 1 로 채운 판에 곱하기를
-      하면 켜나 끄나 같은 답이다(실측).
-    - **이미 작은 조각**이 섞여야 `renorm` 이 안 건드리는 조건이 드러난다. 그리고
-      **깎인 조각의 기울기**를 물어야 배율 안에 `x` 가 들어 있다는 것이 보인다 —
-      순방향만으로는 `g·s` 로 적은 틀린 역방향이 통과한다.
+    - **Overlapping strides** are what make gradient accumulation visible. Measured with
+      non-overlapping strides only, each slot is reached once and leaving the accumulation out
+      still passes.
+    - **`step`** has to be other than 1 for `slice_scatter`'s not touching the skipped slots to
+      show.
+    - **`offset`** has to be other than 0 for the shift in `diagonal_scatter` and `diag_embed`
+      to be visible.
+    - **A batch axis** is what reveals the convention that the diagonal goes to the back.
+      Measured in 2-D only there is no axis left over, so the order cannot be asked.
+    - **A size that does not divide evenly** is what shows `tensor_split` handing the remainder
+      out from the front. With a size that divides, it looks like the same function as `chunk`.
+    - **Repeated indices** are what part `index_put`'s and `put`'s two `accumulate` branches.
+    - **A base that is not the identity** is what makes `include_self` visible. Multiplying into
+      a plate filled with 1 gives the same answer either way (measured).
+    - **A row that is already small** has to be mixed in for `renorm`'s leave-alone condition to
+      show. And **the gradient of a scaled row** has to be asked for the `x` inside the scale
+      factor to be visible — from the forward pass alone, a wrong backward written as `g·s`
+      passes.
     """
     grid = np.arange(12, dtype=np.float32).reshape(3, 4)
     line = np.arange(10, dtype=np.float32)
     trio = np.array([1.0, -2.0, 3.0], dtype=np.float32)
     duo = np.array([4.0, 5.0], dtype=np.float32)
-    # **고르지 않은 무게.** 전부 1 이면 자리마다 다른 몫이 상쇄되어 안 보인다.
+    # **Uneven weights.** All ones and the differing share per slot cancels out of sight.
     weight = np.array([[1.0, 2.0, 0.5, 3.0], [2.0, 0.5, 1.5, 1.0],
                        [0.25, 3.0, 2.0, 0.75]], dtype=np.float32)
     cases = []
@@ -1207,19 +1262,19 @@ def shape_index_cases(inp=None):
 
         cases.append((SPOT_PREFIX + f"grad::{name}", run))
 
-    # ── 걸음 ────────────────────────────────────────────────────────────
+    # ── strides ──
     add("as_strided", lambda L: L.as_strided(L.tensor(grid), (2, 2), (1, 2)))
     add("as_strided(offset)",
         lambda L: L.as_strided(L.tensor(grid), (2, 2), (1, 2), 3))
     add("as_strided(겹침)",
         lambda L: L.as_strided(L.tensor(grid), (3, 3), (1, 1)))
     grad("as_strided", lambda L, x: L.as_strided(x, (3, 4), (1, 3)))
-    # 겹치는 걸음의 기울기 — 한 칸으로 여러 번 온다.
+    # The gradient of overlapping strides — one slot is reached several times.
     grad("as_strided(겹침)", lambda L, x: L.as_strided(x, (3, 3), (1, 1)),
          np.arange(1, 10, dtype=np.float32).reshape(3, 3))
 
     def as_strided_in_place(L):
-        """**모양까지 따라가야 한다.** 값만 옮기면 정사각으로 물었을 때만 통과한다."""
+        """**The shape has to follow too.** Carrying the values alone passes only when asked on a square."""
         x = L.tensor(grid.copy())
         got = L.as_strided_(x, (2, 3), (1, 2))
         return f"{got is x} {tuple(x.shape)}"
@@ -1230,15 +1285,15 @@ def shape_index_cases(inp=None):
         lambda L: L.as_strided_scatter(L.tensor(grid), L.zeros(2, 2),
                                        (2, 2), (1, 2), 3))
 
-    # ── 갈아끼우기 ──────────────────────────────────────────────────────
+    # ── scatter ──
     add("select_scatter",
         lambda L: L.select_scatter(L.tensor(grid), L.zeros(4), 0, 1))
     add("slice_scatter",
         lambda L: L.slice_scatter(L.tensor(grid), L.zeros(3, 2), 1, 1, 3))
     add("slice_scatter(step=2)",
         lambda L: L.slice_scatter(L.tensor(grid), L.zeros(3, 2), 1, 0, 4, 2))
-    # **길이가 offset 을 따라 변한다.** (3,4) 에서 0·1 은 세 칸이고 -1 은 두 칸이다 —
-    # 셋 다 세 칸으로 주면 torch 가 그 자리에서 거절한다.
+    # **The length changes with the offset.** On a (3,4), offsets 0 and 1 give three slots and
+    # -1 gives two — give all three of them three and torch refuses on the spot.
     for off, k in ((-1, 2), (0, 3), (1, 3)):
         add(f"diagonal_scatter(offset={off})",
             lambda L, o=off, n=k: L.diagonal_scatter(L.tensor(grid),
@@ -1250,7 +1305,7 @@ def shape_index_cases(inp=None):
          lambda L, x: L.diagonal_scatter(x, L.zeros(3), 1))
 
     def scatter_src_grad(name, fn, src, w=weight):
-        """넣은 값 쪽 기울기. **넣은 자리로만** 흘러야 한다."""
+        """The gradient towards the inserted values. It has to flow **only to where they went.**"""
         def run(L, f=fn, s=src, n=name):
             v = L.tensor(np.asarray(s, dtype=np.float32), requires_grad=True)
             out = f(L, L.tensor(grid), v)
@@ -1273,20 +1328,20 @@ def shape_index_cases(inp=None):
     for off in (-1, 0, 1):
         add(f"diag_embed(1차, offset={off})",
             lambda L, o=off: L.diag_embed(L.tensor(trio), o))
-    # **배치 축이 있어야** 대각선 축이 맨 뒤로 가는 규약이 드러난다.
+    # **A batch axis is what reveals** the convention that the diagonal axis goes to the back.
     add("diag_embed(2차)", lambda L: L.diag_embed(L.tensor(grid)))
     add("diag_embed(dim1=0, dim2=1)",
         lambda L: L.diag_embed(L.tensor(grid), 0, 0, 1))
     grad("diag_embed", lambda L, x: L.diag_embed(x),
          np.arange(1, 49, dtype=np.float32).reshape(3, 4, 4))
 
-    # ── 쪼개기 ──────────────────────────────────────────────────────────
+    # ── splitting ──
     for k in (3, 4, 5):
-        # 10 을 4 로 쪼개면 3·3·2·2 다 — 나머지를 **앞에서부터** 나눠 갖는다.
+        # Splitting 10 into 4 gives 3, 3, 2, 2 — the remainder is handed out **from the front.**
         add(f"tensor_split({k})",
             lambda L, n=k: L.cat(list(L.tensor_split(L.tensor(line), n))))
-        # **조각 크기 자체를 묻는다.** 이어 붙이면 나머지를 어떻게 나눴는지가
-        # 사라진다 — 3·3·2·2 든 2·2·3·3 이든 이어 붙인 값은 같다.
+        # **The piece sizes themselves are asked.** Concatenated, how the remainder was divided
+        # disappears — 3·3·2·2 and 2·2·3·3 concatenate to the same values.
         add(f"tensor_split({k}, 조각 크기)",
             lambda L, n=k: L.tensor(np.asarray(
                 [float(p.shape[0]) for p in L.tensor_split(L.tensor(line), n)],
@@ -1297,11 +1352,11 @@ def shape_index_cases(inp=None):
         lambda L: L.tensor_split(L.tensor(grid), 3, dim=1)[1])
     add("split_with_sizes",
         lambda L: L.split_with_sizes(L.tensor(line), [2, 3, 5])[1])
-    # (3,4) 를 3 으로 쪼개면 2·1·1 이라 가운데 조각이 (3,1) 이다.
+    # Splitting a (3,4) into 3 gives 2, 1, 1, so the middle piece is (3,1).
     grad("tensor_split", lambda L, x: L.tensor_split(x, 3, dim=1)[1],
          np.array([[1.0], [3.0], [5.0]], dtype=np.float32))
 
-    # ── 번호 풀기·이어진 중복 ────────────────────────────────────────────
+    # ── unravelling indices, consecutive repeats ──
     add("unravel_index",
         lambda L: L.cat(L.unravel_index(
             L.tensor(np.array([0, 5, 11], dtype=np.int64)), (3, 4))))
@@ -1319,7 +1374,7 @@ def shape_index_cases(inp=None):
         lambda L: L.unique_consecutive(L.tensor(rows), return_counts=True,
                                        dim=0)[1])
 
-    # ── 가면·평평한 넣기 ────────────────────────────────────────────────
+    # ── masks, flat insertion ──
     mask = np.array([[True, False, True, False],
                      [False, True, False, True],
                      [True, True, False, False]])
@@ -1334,14 +1389,14 @@ def shape_index_cases(inp=None):
                      feed)
 
     def masked_scatter_in_place(L):
-        """**메서드로만 있다** — `torch.masked_scatter_` 라는 최상위 이름은 없다."""
+        """**It exists as a method only** — there is no top-level name `torch.masked_scatter_`."""
         x = L.tensor(grid.copy())
         got = x.masked_scatter_(L.tensor(mask), L.tensor(feed))
         return f"{got is x} {float(x[0, 0].item())}"
 
     add("제자리::masked_scatter_", masked_scatter_in_place)
 
-    # **번호가 겹친다** — 0 이 두 번 나온다. 여기서만 두 갈래가 갈린다.
+    # **The indices overlap** — 0 appears twice. Only here do the two branches part.
     flat_idx = np.array([0, 0, 5], dtype=np.int64)
     flat_val = np.array([-1.0, -2.0, -3.0], dtype=np.float32)
     for acc in (False, True):
@@ -1369,13 +1424,13 @@ def shape_index_cases(inp=None):
 
     add("제자리::index_put_", index_put_in_place)
 
-    # ── 줄이며 넣기 ─────────────────────────────────────────────────────
+    # ── reducing while inserting ──
     #
-    # **밑판이 2.5 다.** 1 이면 곱하기에서 항등원이라 `include_self` 가 안 보이고,
-    # 0 이면 더하기에서 같은 일이 난다.
+    # **The base is 2.5.** At 1 it is the identity for multiplication and `include_self` is
+    # invisible; at 0 the same happens for addition.
     base = np.full((3, 4), 2.5, dtype=np.float32)
     lines = np.array([0, 0, 2], dtype=np.int64)
-    # `index_reduce` 에 `sum` 은 없다 — 그 자리는 `index_add` 다(실측).
+    # `index_reduce` has no `sum` — that place is `index_add` (measured).
     for red in ("prod", "mean", "amax", "amin"):
         for inc in (True, False):
             add(f"index_reduce({red}, include_self={inc})",
@@ -1390,18 +1445,19 @@ def shape_index_cases(inp=None):
                     L.tensor(base), 1, L.tensor(dup), L.tensor(grid), r,
                     include_self=s))
 
-    # ── renorm ─────────────────────────────────────────────────────────
+    # ── renorm ──
     #
-    # 첫 줄은 이미 작아서 **안 건드려야** 한다. 나머지 둘은 깎인다.
+    # The first row is already small and has to be **left alone.** The other two are scaled.
     tall = np.array([[3.0, 4.0], [6.0, 8.0], [30.0, 40.0]], dtype=np.float32)
     for p in (1, 2, 3):
         add(f"renorm(p={p})",
             lambda L, q=p: L.renorm(L.tensor(tall), q, 0, 5.0))
     add("renorm(dim=1)", lambda L: L.renorm(L.tensor(tall), 2, 1, 5.0))
-    # **깎인 줄의 기울기.** 배율 안에 x 가 있어서 `g·s` 로 적으면 여기서 갈린다.
+    # **The gradient of a scaled row.** x is inside the scale factor, so writing it as `g·s`
+    # parts here.
     grad("renorm", lambda L, x: L.renorm(x, 2, 0, 5.0))
 
-    # ── 조합·만들기 ─────────────────────────────────────────────────────
+    # ── composition and construction ──
     add("cartesian_prod(둘)",
         lambda L: L.cartesian_prod(L.tensor(trio), L.tensor(duo)))
     add("cartesian_prod(하나)", lambda L: L.cartesian_prod(L.tensor(trio)))
@@ -1418,14 +1474,14 @@ def shape_index_cases(inp=None):
             lambda L, o=off: L.tril_indices(3, 4, o))
         add(f"triu_indices(offset={off})",
             lambda L, o=off: L.triu_indices(3, 4, o))
-    # **음수가 섞인 입력이다.** WGSL 의 `pow` 는 밑이 음수면 답이 없어서, 거듭제곱으로
-    # 짜면 여기서 NaN 이 된다 — 양수로만 재면 그 갈래가 안 보인다.
+    # **The input has negatives mixed in.** WGSL's `pow` has no answer for a negative base, so
+    # writing this as a power gives NaN here — measured on positives only, that branch is invisible.
     add("vander", lambda L: L.vander(L.tensor(trio)))
     add("vander(N=2)", lambda L: L.vander(L.tensor(trio), 2))
     add("vander(increasing)", lambda L: L.vander(L.tensor(trio), None, True))
     add("vander(N=5)", lambda L: L.vander(L.tensor(trio), 5))
 
-    # ── 행렬 ────────────────────────────────────────────────────────────
+    # ── matrices ──
     m1 = np.arange(6, dtype=np.float32).reshape(2, 3)
     m2 = np.arange(12, dtype=np.float32).reshape(3, 4)
     m3 = np.arange(8, dtype=np.float32).reshape(4, 2)
@@ -1435,7 +1491,8 @@ def shape_index_cases(inp=None):
     add("mv", lambda L: L.mv(L.tensor(grid),
                              L.tensor(np.array([1., 0., 0., 2.],
                                                dtype=np.float32))))
-    # `mv` 는 1차원이 낀 행렬곱이다 — 그 역방향이 코어에서 축 하나를 놓치고 있었다.
+    # `mv` is a matrix multiply with a 1-D operand in it — its backward pass was dropping an
+    # axis in the core.
     grad("mv", lambda L, x: L.mv(x, L.tensor(
         np.array([1., 0., 0., 2.], dtype=np.float32))),
         np.array([1.0, 2.0, 0.5], dtype=np.float32))
@@ -1445,51 +1502,63 @@ def shape_index_cases(inp=None):
 CPLX_PREFIX = "cplx::"
 FFT_PREFIX = "fft::"
 
-# **코어만 보는 케이스.** `WEBGPU_PREFIX` 와 정확히 반대 방향이다.
+# **Cases the core alone sees.** Exactly the opposite direction from `WEBGPU_PREFIX`.
 #
-# 복소수가 셋 다에 생기면서 한 번 비었고 `fft` 가 도로 채웠다가 **다시 비었다** —
-# 코어 → borch.ts → 결속 순으로 좁혀지는 동안 이 목록이 "어디까지 왔는가" 를 수로
-# 보여 준다. 비면 `startswith(())` 가 언제나 거짓이라 아무것도 안 건너뛴다.
+# It emptied once when complex arrived in all three, `fft` refilled it, and it **emptied again**
+# — as things narrow in the order core → borch.ts → binding, this list shows "how far along we
+# are" as a number. Empty, `startswith(())` is always false and nothing is skipped.
 #
-# **장치는 남긴다.** 두 번 열렸다 닫힌 자리라 세 번째도 온다.
-# **비대칭 고유분해는 코어에만 있다.** borch.ts 에는 대칭용 `eigh` 만 있고, 일반
-# 행렬의 고유분해는 헤센베르크 변환 + QR 반복이라 WGSL 로는 다른 크기의 일이다.
-# 결속이 numpy 로 채울 수는 있지만 **그것이 방금 줄이고 있는 자리**다 — 파이썬이
-# 대신 계산하면 borch.ts 를 쓰는 쪽에는 그 이름이 여전히 없고, 골든은 결속을 지나
-# 초록이 된다. 그 덮개를 다시 만들지 않으려고 여기 적는다.
+# **The device entries stay.** That place has opened and closed twice, so a third time is coming.
+# **The asymmetric eigendecomposition is in the core alone.** borch.ts has only the symmetric
+# `eigh`, and the eigendecomposition of a general matrix is a Hessenberg reduction plus QR
+# iteration, which is a different size of job in WGSL.
+#
+# **That last reason was measured false and is kept as written rather than corrected.** The
+# borch-ts session landed `linalg.eig` (1313c41) after finding `borch-ts/src/linalg.ts` has no
+# WGSL in it at all — zero matches for wgsl, dispatch, createBuffer, GPUDevice or dev(), and 55
+# for Float64Array. It is host-side Float64Array code, and `eigh` there is Jacobi rotations, so
+# QR iteration sits directly beside it. Whether `linalg::eig::` still belongs in this list is
+# that session's call; the reason above is not grounds for it any more.
+#
+# The binding could fill it in with numpy, but **that is the very thing being narrowed** — if
+# Python computes it instead, the name is still absent for anyone using borch.ts, and the golden
+# cases go green through the binding. This is written down so that cover is not built again.
 CORE_ONLY_PREFIXES = ("linalg::eig::",)
 
 
 def complex_cases(inp=None):
-    """복소수 — **1 단계는 코어(numpy)만이다.**
+    """Complex numbers — **stage one is the core (numpy) alone.**
 
-    자매(borch.ts)에는 아직 저장이 없어서 이 케이스들은 지금 브라우저에서 안 돈다.
-    그래서 `webgpu::` 와 반대 방향의 자리다 — 이쪽은 **코어만 보는** 표이고,
-    borch.ts 가 인터리브 저장을 갖추면 그때 같이 초록이 된다.
+    The sister library (borch.ts) has no storage for them yet, so these cases do not run in a
+    browser today. That makes this the opposite direction from `webgpu::` — this is a table
+    **the core alone sees**, and it goes green alongside once borch.ts has interleaved storage.
 
-    ## 규약이 실측으로 못 박혀 있다
+    ## The convention is pinned by measurement
 
-    **torch 는 복소 손실에 `backward()` 를 거절한다**(실측). 손실이 늘 실수라면
-    Wirtinger 규약이 이것으로 정리된다 —
+    **torch refuses `backward()` on a complex loss** (measured). If the loss is always real, the
+    Wirtinger convention settles to this —
 
         z.grad = ∂L/∂re + i·∂L/∂im
 
-    실측이 그것을 받친다(z = 1+2j): `z.real → 1+0j`, **`z.imag → 0+1j`**(−1j 가
-    아니다), `|z|² → 2+4j`, `(z·z̄).real → 2+4j`.
+    and measurement backs it (z = 1+2j): `z.real → 1+0j`, **`z.imag → 0+1j`** (not −1j),
+    `|z|² → 2+4j`, `(z·z̄).real → 2+4j`.
 
-    ## 켤레가 붙는 자리와 안 붙는 자리
+    ## Where the conjugate attaches and where it does not
 
-    이 규약에서 **정칙 함수의 역방향은 `conj(f'(z))·g`** 다. 곱셈·나눗셈이 그 자리이고,
-    실수에서는 켤레가 항등이라 **실수 입력으로는 있는지 없는지 알 수 없다.**
+    Under this convention **a holomorphic function's backward pass is `conj(f'(z))·g`.**
+    Multiplication and division are that case, and over the reals the conjugate is the identity,
+    so **with real inputs there is no telling whether it is there.**
 
-    반대로 `abs` 는 실수를 내므로 정칙이 아니고 켤레가 **안** 붙는다 — `z/|z|` 다.
-    `conj` 자신은 `conj(g)` 다. 셋을 한 표에서 물어야 어느 규칙이 어디에 붙는지가 갈린다.
+    Conversely `abs` returns a real, so it is not holomorphic and the conjugate does **not**
+    attach — it is `z/|z|`. `conj` itself is `conj(g)`. Asking all three in one table is what
+    parts which rule attaches where.
 
-    ## 기울기를 실수 잎에서 받는다
+    ## The gradient is taken at real leaves
 
-    복소수 잎을 직접 만들지 않고 `complex(re, im)` 으로 엮은 뒤 **실수 잎 둘의
-    기울기**를 본다. 그것이 규약의 반대 방향이고, 값이 `(∂L/∂re, ∂L/∂im)` 로 나뉘어
-    나와서 **어느 쪽이 틀렸는지가 보인다** — 복소수 하나로 받으면 둘이 섞인다.
+    Rather than building a complex leaf directly, they are woven with `complex(re, im)` and
+    **the gradients of the two real leaves** are looked at. That is the convention's other
+    direction, and the value comes out split as `(∂L/∂re, ∂L/∂im)`, so **which side is wrong is
+    visible** — taken as one complex number the two are mixed together.
     """
     re = np.array([1.0, -3.0], dtype=np.float32)
     im = np.array([2.0, 0.5], dtype=np.float32)
@@ -1502,7 +1571,7 @@ def complex_cases(inp=None):
         return L.complex(L.tensor(re), L.tensor(im))
 
     def grad(name, fn):
-        """`re`·`im` 두 잎의 기울기를 이어 붙여 하나로 굳힌다."""
+        """Concatenates the gradients of the two leaves `re` and `im` and freezes them as one."""
         def run(L, f=fn, n=name):
             r = L.tensor(re.copy(), requires_grad=True)
             i = L.tensor(im.copy(), requires_grad=True)
@@ -1511,7 +1580,7 @@ def complex_cases(inp=None):
 
         cases.append((CPLX_PREFIX + f"grad::{name}", run))
 
-    # ── 만들기·꺼내기 ───────────────────────────────────────────────────
+    # ── construction and extraction ──
     add("complex(re, im)", lambda L: L.view_as_real(z(L)))
     add("complex 의 형", lambda L: str(z(L).dtype))
     add("polar",
@@ -1522,18 +1591,18 @@ def complex_cases(inp=None):
         lambda L: L.view_as_real(L.view_as_complex(L.view_as_real(z(L)))))
     add("real", lambda L: L.real(z(L)))
     add("imag", lambda L: L.imag(z(L)))
-    # **`conj_physical` 로 묻는다.** torch 의 `conj` 는 **게으르다** — 켤레 비트만
-    # 세워 두고 값을 안 뒤집어서, `view_as_real` 이 "풀지 않은 켤레" 라며 거절한다
-    # (실측). 우리 것은 즉시 뒤집으므로 그 상태가 없다. 그 갈림은 README 의
-    # "torch 와 갈리는 자리" 에 적었고, 여기서는 **값**을 물으려는 것이므로 둘 다
-    # 값을 내는 이름으로 묻는다.
+    # **Asked through `conj_physical`.** torch's `conj` is **lazy** — it raises the conjugate
+    # bit and does not flip the values, so `view_as_real` refuses with "unresolved conjugate"
+    # (measured). Ours flips immediately, so that state does not exist. That divergence is in the
+    # README under "where it parts from torch"; here the intent is to ask about **the value**, so
+    # both sides are asked through a name that produces one.
     add("conj_physical", lambda L: L.view_as_real(L.conj_physical(z(L))))
     add("angle", lambda L: L.angle(z(L)))
     add("abs", lambda L: z(L).abs())
     add("abs 의 형", lambda L: str(z(L).abs().dtype))
     add("is_complex", lambda L: str(L.is_complex(z(L))))
 
-    # ── 산술 ────────────────────────────────────────────────────────────
+    # ── arithmetic ──
     add("z * z", lambda L: L.view_as_real(z(L) * z(L)))
     add("z + z", lambda L: L.view_as_real(z(L) + z(L)))
     add("z / z", lambda L: L.view_as_real(z(L) / z(L)))
@@ -1543,26 +1612,28 @@ def complex_cases(inp=None):
             lambda L, k=other: str(
                 (z(L) + L.tensor(np.array([1], dtype=k))).dtype))
 
-    # ── 기울기 — **켤레가 붙는 자리와 안 붙는 자리** ────────────────────
+    # ── gradients — **where the conjugate attaches and where it does not** ──
     grad("z.real", lambda L, w: L.real(w))
-    # **`0+1j` 다.** `−1j` 로 적으면 부호만 뒤집힌 채 그럴듯하게 돈다.
+    # **It is `0+1j`.** Written as `−1j` it runs plausibly with only the sign reversed.
     grad("z.imag", lambda L, w: L.imag(w))
     grad("abs(z)", lambda L, w: w.abs())
     grad("abs(z) 제곱", lambda L, w: w.abs() * w.abs())
-    # 곱셈·나눗셈이 **켤레가 붙는** 자리다.
+    # Multiplication and division are **where the conjugate attaches.**
     grad("(z*z).real", lambda L, w: L.real(w * w))
     grad("(z*conj(z)).real", lambda L, w: L.real(w * L.conj_physical(w)))
     grad("view_as_real 합", lambda L, w: L.view_as_real(w))
 
-    # ── 찍기 ────────────────────────────────────────────────────────────
+    # ── printing ──
     #
-    # **글자가 명세다.** 복소수의 `repr` 은 실수의 것을 조금 고친 게 아니라 규칙이
-    # 하나 더 있다 — **실수부와 허수부를 따로 잰다.** `[1+2j, -0.5-1j]` 에서 실수부는
-    # 소수 네 자리를 요구하고 허수부는 정수라, torch 가 `1.0000+2.j` 를 찍는다.
-    # 한 형식으로 재면 `1.0000+2.0000j` 가 되는데, 값은 전부 맞는 채로 글자만 갈린다.
+    # **The characters are the specification.** A complex `repr` is not the real one lightly
+    # adjusted; it has one more rule — **the real part and the imaginary part are measured
+    # separately.** In `[1+2j, -0.5-1j]` the real part needs four decimals and the imaginary part
+    # is integral, so torch prints `1.0000+2.j`. Measured under one format it becomes
+    # `1.0000+2.0000j` — every value right and the characters different.
     #
-    # 세 줄로 그 규칙을 가른다: 실수부만 소수인 것, 허수부만 소수인 것, 그리고 형
-    # 이름이 붙는 자리(빈 텐서에는 `j` 라는 단서가 없어서 torch 가 형을 찍는다).
+    # Three rows part that rule: real part decimal only, imaginary part decimal only, and the
+    # place where the type name appears (an empty tensor has no `j` as a clue, so torch prints
+    # the type).
     def shown(fn):
         return lambda L, f=fn: repr(f(L))
 
@@ -1574,49 +1645,51 @@ def complex_cases(inp=None):
     add("repr::둘 다 정수", shown(lambda L: cx(L, [1 + 2j, -3 - 1j])))
     add("repr::2 차원", shown(lambda L: cx(L, [[1 + 2j, -0.5 - 1j],
                                               [3 + 0j, 0 + 4j]])))
-    # **음의 0 은 부호가 산다** — 허수부를 절댓값으로 찍으면 여기서만 갈린다.
+    # **A negative zero keeps its sign** — print the imaginary part as an absolute value and it
+    # parts here and nowhere else.
     add("repr::음의 0 허수부", shown(lambda L: cx(L, [complex(1.0, -0.0)])))
-    # **부호를 옮기는 길 자체를 묻는다** — repr 을 안 거친다.
+    # **The path that carries the sign is asked directly** — no repr involved.
     #
-    # 위의 `repr::음의 0 허수부` 가 이 결함을 처음 잡았는데, 그 케이스가 빨개지면
-    # 화면에는 "글자가 다르다" 로 보인다. 원인은 두 칸 떨어져 있었다 — 결속의
-    # `_read` 가 `np.asarray(JsProxy, dtype=float32)` 로 값을 받으면서 **음의 0 을
-    # 0 으로 만들고** 있었다(JS 쪽에서는 `Object.is(x, -0)` 이 참인 채로 왔다).
+    # `cplx::repr::음의 0 허수부` above caught this defect first, and when that case turns red
+    # the screen says "the characters differ". The cause was two slots away — the binding's
+    # `_read` was taking values as `np.asarray(JsProxy, dtype=float32)` and **turning negative
+    # zero into zero** (on the JS side it arrived with `Object.is(x, -0)` still true).
     #
-    # **값 대조로는 영영 못 잡는다** — `-0.0 == 0.0` 이기 때문이다. 그래서 부호
-    # 비트를 답으로 굳힌다. 회귀하면 "변환이 부호를 잃었다" 로 곧장 읽힌다.
+    # **A value comparison can never catch it** — because `-0.0 == 0.0`. So the sign bit is
+    # frozen as the answer. A regression reads immediately as "the conversion lost the sign".
     #
-    # 복소수가 아니라 **실수** 텐서로 묻는다. 그 결함은 복소수가 생기기 전부터 거기
-    # 있었고 복소수 repr 이 우연히 드러냈을 뿐이라, 실수로 물어야 자리가 맞는다.
-    # 답을 **글자로** 낸다. 하네스는 답에 `.detach()` 를 부르므로 배열을 그냥 주면
-    # 굳히는 자리에서 멈추고, 부호는 어차피 두 값뿐이라 글자가 더 읽힌다.
+    # Asked on a **real** tensor rather than a complex one. The defect was there before complex
+    # numbers existed and the complex repr merely happened to expose it, so asking on a real is
+    # what puts it in the right place. The answer comes out **as characters.** The harness calls
+    # `.detach()` on an answer, so handing back an array stops at the freezing step, and with
+    # only two possible signs the characters read better anyway.
     def signbits(L):
         bits = np.signbit(to_numpy(L.tensor([-0.0, 0.0, -1.5, 1.5])))
         return "".join("-" if b else "+" for b in bits)
 
     add("read::음의 0 이 변환을 건넌다", signbits)
 
-    # 빈 것에는 `j` 가 없어서 형 이름이 붙는다(실측). 값이 있으면 안 붙는다.
+    # An empty one has no `j`, so the type name appears (measured). With values it does not.
     add("repr::빈 것", shown(lambda L: cx(L, [])))
-    # 한 줄에 몇 개가 들어가는지도 글자다. torch 는 글자 수가 아니라 **폭**으로 센다.
+    # How many fit on a line is characters too. torch counts by **width**, not by character count.
     add("repr::줄바꿈",
         shown(lambda L: cx(L, [complex(k, 0.5) for k in range(12)])))
     add("repr::grad_fn 이 붙는다",
         shown(lambda L: L.complex(L.tensor(re, requires_grad=True),
                                   L.tensor(im, requires_grad=True))))
-    # **실수 쪽에서 같이 드러난 자리.** 정수 판의 서식이 `nan` 에도 점을 붙여서
-    # `tensor([nan., 1.])` 이 나왔다 — 소수 판은 `f"{nan:.4f}"` 가 이미 `nan` 이라
-    # 안 갈렸고, 그래서 nan 이 낀 **정수** 텐서에서만 났다.
+    # **A place that surfaced on the real side alongside.** The integer edition's formatting put
+    # a dot on `nan` too, giving `tensor([nan., 1.])` — the decimal edition did not part, because
+    # `f"{nan:.4f}"` is already `nan`, so it happened only on an **integer** tensor with a nan in it.
     add("repr::nan 낀 정수 텐서",
         shown(lambda L: L.tensor(np.array([float("nan"), 1.0], dtype=np.float32))))
 
-    # ── 거절 ────────────────────────────────────────────────────────────
+    # ── refusals ──
     def refuses_complex_loss(L):
-        """**복소 손실은 거절해야 한다.** 위 규약 전체가 이것 위에 서 있다.
+        """**A complex loss has to be refused.** The whole convention above stands on this.
 
-        손실이 실수라는 것이 `z.grad = ∂L/∂re + i·∂L/∂im` 의 전제다. 거절을 안 하면
-        규약이 정의되지 않은 자리에 그럴듯한 숫자가 들어가고, 값 케이스는 전부
-        초록인 채로 남는다 — **전제를 케이스로 묻지 않으면 전제가 아니라 희망이다.**
+        That the loss is real is the premise of `z.grad = ∂L/∂re + i·∂L/∂im`. Without the
+        refusal, a plausible number goes into a place the convention does not define, and every
+        value case stays green — **a premise not asked as a case is not a premise but a hope.**
         """
         r = L.tensor(re.copy(), requires_grad=True)
         i = L.tensor(im.copy(), requires_grad=True)
@@ -1631,30 +1704,33 @@ def complex_cases(inp=None):
 
 
 def fft_cases(inp=None):
-    """푸리에 변환 — `torch.fft` 와 `stft`.
+    """Fourier transforms — `torch.fft` and `stft`.
 
-    **복소수 위에 선다.** 이 이름들은 오래 거절이었고 거절문에 "복소수 규약을 안
-    정했다" 고 적혀 있었다. 그 이유가 정확했기 때문에 규약이 정해진 날 문이 열렸다 —
-    "저장이 없다" 로 적어 두었으면 저장이 생긴 뒤에도 아무도 다시 안 물었을 것이다.
+    **They stand on the complex numbers.** These names were refusals for a long time and the
+    refusal said "the complex convention is not settled". Because that reason was accurate, the
+    door opened the day the convention was settled — written as "there is no storage", nobody
+    would have asked again after storage arrived.
 
-    ## 값보다 기울기가 요점이다
+    ## The gradient matters more than the value
 
-    변환은 선형이라 순방향은 맞히기 쉽다. 어려운 자리는 **어느 쪽 반쪽을 세는가** 다 —
+    The transform is linear, so the forward pass is easy to get right. The hard place is **which
+    half gets counted** —
 
-    * `rfft` 의 역방향은 저장된 반쪽에만 기울기가 온다. 켤레 짝을 더하면 두 배가 된다.
-    * `irfft` 의 역방향은 **가장자리만 한 번, 가운데는 두 번** 세야 한다. 되살린
-      켤레 짝이 같은 저장 칸에서 왔기 때문이다.
+    * `rfft`'s backward pass brings a gradient only to the stored half. Add the conjugate pair
+      and it doubles.
+    * `irfft`'s backward pass has to count **the edges once and the middle twice**, because the
+      restored conjugate pair came from the same stored slot.
 
-    둘은 서로 반대 방향의 실수이고, **둘 다 순방향 값은 멀쩡하다.**
+    The two are mistakes in opposite directions, and **both leave the forward value intact.**
 
-    ## `abs` 의 칼날을 피한 입력
+    ## An input that dodges `abs`'s blade
 
-    `stft(…).abs()` 케이스의 신호가 고르지 않은 수인 데는 이유가 있다. 경사 신호
-    (`arange/8 − 1`)는 나이퀴스트 칸이 **정확히 0** 이 되는데, 거기서 `abs` 는
-    미분 불가능하고 부호가 구현의 반올림에 달린다 — 우리는 float64 로 누산해서
-    +1 을, torch 는 float32 FFT 라 0 을 골랐다. **규칙이 갈린 것이 아니라 케이스가
-    칼날 위에 서 있던 것**이고, 그런 케이스를 굳히면 골든이 부동소수 우연을 명세로
-    박제한다. 0 인 칸이 없는 신호로 바꾸니 열여섯 자리가 전부 맞았다.
+    There is a reason the signal in the `stft(…).abs()` case is not a regular ramp. A ramp
+    (`arange/8 − 1`) makes the Nyquist bin **exactly 0**, and `abs` is not differentiable there
+    and its sign depends on the implementation's rounding — we accumulate in float64 and chose
+    +1, torch has a float32 FFT and chose 0. **The rules did not part; the case was standing on
+    the blade**, and freezing such a case would stuff a floating-point accident into the golden
+    answers as a specification. Changed to a signal with no zero bin, all sixteen places agreed.
     """
     sig = np.array([0.3, -1.2, 0.7, 2.1, -0.4, 1.5, -2.3, 0.9,
                     1.1, -0.6, 0.25, -1.7, 2.4, 0.05, -0.8, 1.35],
@@ -1674,10 +1750,10 @@ def fft_cases(inp=None):
         return L.complex(L.tensor(xs.copy()), L.tensor(ys.copy()))
 
     def pair(fn):
-        """복소수 답은 실수 짝으로 묻는다 — 골든 파일이 실수만 담는다."""
+        """A complex answer is asked as a real pair — the golden file holds reals only."""
         return lambda L, f=fn: L.view_as_real(f(L))
 
-    # ── 값 ──────────────────────────────────────────────────────────────
+    # ── values ──
     add("fft(실수)", pair(lambda L: L.fft.fft(x(L))))
     add("fft(복소)", pair(lambda L: L.fft.fft(z(L))))
     add("fft 의 형", lambda L: str(L.fft.fft(x(L)).dtype))
@@ -1686,8 +1762,9 @@ def fft_cases(inp=None):
     add("rfft", pair(lambda L: L.fft.rfft(x(L))))
     add("irfft(rfft)", lambda L: L.fft.irfft(L.fft.rfft(x(L))))
     add("irfft 의 형", lambda L: str(L.fft.irfft(L.fft.rfft(x(L))).dtype))
-    # **홀수 길이를 따로 묻는다.** `irfft` 는 n 을 안 주면 `2*(m-1)` 이라 짝수만
-    # 나온다 — 홀수는 n 을 줘야만 나오고, 되살리는 켤레 짝의 개수가 거기서 갈린다.
+    # **Odd lengths are asked separately.** Without an n, `irfft` gives `2*(m-1)`, so only even
+    # lengths come out — an odd one comes out only when n is given, and the number of restored
+    # conjugate pairs parts there.
     add("irfft(n=5)", lambda L: L.fft.irfft(L.fft.rfft(x(L)), n=5))
     add("irfft(n=7)", lambda L: L.fft.irfft(L.fft.rfft(x(L)), n=7))
     for norm in ("forward", "backward", "ortho"):
@@ -1702,14 +1779,14 @@ def fft_cases(inp=None):
     for n in (5, 6):
         add(f"fftfreq({n})", lambda L, k=n: L.fft.fftfreq(k))
         add(f"rfftfreq({n})", lambda L, k=n: L.fft.rfftfreq(k))
-        # **홀수에서 갈린다.** `fftshift` 는 `n//2` 만큼 미는데 되돌리려면
-        # `(n+1)//2` 여야 한다 — 짝수만 물으면 둘이 같아서 안 보인다.
+        # **It parts on odd lengths.** `fftshift` rolls by `n//2` and undoing it needs
+        # `(n+1)//2` — asked on even lengths only, the two are equal and invisible.
         add(f"fftshift({n})", lambda L, k=n: L.fft.fftshift(L.fft.fftfreq(k)))
         add(f"ifftshift(fftshift({n}))",
             lambda L, k=n: L.fft.ifftshift(L.fft.fftshift(L.fft.fftfreq(k))))
     add("fftfreq(6, d=0.5)", lambda L: L.fft.fftfreq(6, 0.5))
 
-    # ── 기울기 ──────────────────────────────────────────────────────────
+    # ── gradients ──
     def grad(name, fn):
         def run(L, f=fn, n=name):
             leaf = L.tensor(xs.copy(), requires_grad=True)
@@ -1720,11 +1797,11 @@ def fft_cases(inp=None):
 
     grad("fft 실수부", lambda L, t: L.real(L.fft.fft(t)))
     grad("fft 크기", lambda L, t: L.fft.fft(t).abs())
-    # **켤레 짝을 더하면 두 배가 된다.** 실측이 `[4, 0, 1, 0, 1, 0]` 이다.
+    # **Adding the conjugate pair doubles it.** Measured: `[4, 0, 1, 0, 1, 0]`.
     grad("rfft 실수부", lambda L, t: L.real(L.fft.rfft(t)))
     grad("rfft 허수부", lambda L, t: L.imag(L.fft.rfft(t)))
     grad("rfft 크기", lambda L, t: L.fft.rfft(t).abs())
-    # **가장자리를 두 번 세면 여기서 갈린다.**
+    # **Counting the edges twice parts here.**
     grad("irfft(rfft)", lambda L, t: L.fft.irfft(L.fft.rfft(t)))
     grad("irfft 가중", lambda L, t: L.fft.irfft(L.fft.rfft(t))
          * L.tensor(np.arange(6, dtype=np.float32)))
@@ -1747,7 +1824,7 @@ def fft_cases(inp=None):
     add("stft 기본 hop",
         pair(lambda L: L.stft(s(L), 8, window=hann(L), return_complex=True)))
     add("stft 창 없이", pair(lambda L: L.stft(s(L), 8, 4, return_complex=True)))
-    # 창이 짧으면 **가운데에 놓고 양쪽을 0 으로 채운다**(실측). 왼쪽 정렬이면 갈린다.
+    # A short window is **centred with zeros padded on both sides** (measured). Left-aligned, it parts.
     add("stft win_length=6",
         pair(lambda L: L.stft(s(L), 8, 4, 6, hann(L, 6), return_complex=True)))
     add("stft onesided=False",
@@ -1792,7 +1869,7 @@ def fft_cases(inp=None):
                                       return_complex=True),
                                8, 4, window=hann(L), length=16))
 
-    # ── 거절 ────────────────────────────────────────────────────────────
+    # ── refusals ──
     def refuses(name, body):
         def run(L, f=body):
             try:
@@ -1804,33 +1881,36 @@ def fft_cases(inp=None):
         add(name, run)
 
     refuses("rfft(복소)는 거절", lambda L: L.fft.rfft(z(L)))
-    # **`return_complex` 를 안 주면 torch 가 멈춘다**(실측). 기본값을 정해 주면
-    # 곧 폐기될 모양(실수 `(…, 2)`)을 가르치게 된다.
+    # **torch stops without `return_complex`** (measured). Choosing a default for it would teach
+    # a shape that is about to be retired (a real `(…, 2)`).
     refuses("stft 는 return_complex 를 요구",
             lambda L: L.stft(s(L), 8, 4, window=hann(L)))
     refuses("복소 스펙트럼의 backward 는 거절",
             lambda L: L.fft.fft(
                 L.tensor(xs.copy(), requires_grad=True)).sum().backward())
 
-    # ── 여러 축 · 에르미트 — **전부 위 넷의 조립이다** ──────────────────────
+    # ── several axes, and Hermitian — **all of it assembled from the four above** ──
     #
-    # 새 커널이 없다. `fft2` 는 축을 하나씩 도는 것이고 에르미트 갈래는 켤레와 배율로
-    # 풀린다. 그래서 값이 맞으면 기울기도 따라오는데, **차례와 정규화**는 조립하는
-    # 쪽이 정하므로 그 둘이 여기서 묻는 것이다.
+    # There is no new kernel. `fft2` walks the axes one at a time and the Hermitian branch
+    # resolves into a conjugate and a scale. So a right value brings the gradient with it, and
+    # what is asked here is **order and normalisation**, since those are the assembler's to decide.
     #
-    # `hfftn` 의 앞 축이 `fft` 인 것을 짐작으로 `ifft` 라고 썼다가 틀렸다 — **모양은
-    # 양쪽 다 맞아서** 값을 안 재면 안 드러난다. 그래서 모양이 아니라 값을 굳힌다.
+    # `hfftn`'s leading axis was guessed as `ifft` and written wrongly — it is `fft`. **The shape
+    # fits either way**, so without measuring the value it does not surface. Which is why the
+    # value is frozen and not the shape.
     #
-    # **입력에 0 이 안 나오게 골랐다.** 위 `stft` 주석이 적어 둔 칼날이고, 이 묶음을
-    # 만들면서 그 경고를 읽고도 한 번 밟았다 — 등차수열의 `rfft` 는 정확한 0 을
-    # 만들고, 거기에 `abs` 를 씌우면 기울기 방향이 반올림에 달린다.
+    # **The input was chosen so no zero appears.** That is the blade the `stft` comment above
+    # records, and this group was built by someone who read that warning and stepped on it anyway
+    # — an arithmetic sequence's `rfft` produces an exact zero, and putting `abs` over it leaves
+    # the gradient's direction to the rounding.
     grid = np.array([[0.31, -1.2, 0.75, 2.1], [-0.4, 1.55, -2.3, 0.9],
                      [1.1, -0.62, 0.25, -1.7]], dtype=np.float32)
     cgrid = (grid + 1j * grid[::-1].copy()).astype(np.complex64)
 
-    # **복소수를 그대로 돌려주면 안 된다.** 골든의 JSON 판은 실수만 담아서 허수부가
-    # 조용히 사라진다 — `tests/test_export_json.py` 가 그것을 잡았다. `view_as_real`
-    # 로 마지막 축에 (실, 허) 를 펴면 정보가 다 남고 셋이 같은 것을 본다.
+    # **A complex number must not be handed back as it is.** The golden answers' JSON edition
+    # holds reals only, so the imaginary part disappears quietly — `tests/test_export_json.py`
+    # caught that. Spreading (re, im) onto the last axis with `view_as_real` keeps every bit of
+    # the information and lets all three look at the same thing.
     def _real2(L, got):
         return L.view_as_real(got) if got.dtype in (L.complex64, L.cfloat) else got
 
@@ -1848,7 +1928,7 @@ def fft_cases(inp=None):
             lambda L, n=_name: _real2(L, getattr(L.fft, n)(L.tensor(grid.copy()))))
     add("여러축::hfft", lambda L: L.fft.hfft(L.tensor(cgrid.copy())))
 
-    # **인자를 듣는가.** 축 차례·크기·정규화 셋이 조립하는 쪽의 몫이다.
+    # **Does it listen to its arguments?** Axis order, size and normalisation are the assembler's three.
     add("여러축::fft2(norm=ortho)",
         lambda L: _real2(L, L.fft.fft2(L.tensor(cgrid.copy()), norm="ortho")))
     add("여러축::fft2(norm=forward)",
@@ -1858,7 +1938,8 @@ def fft_cases(inp=None):
     add("여러축::fftn(dim 하나만)",
         lambda L: _real2(L, L.fft.fftn(L.tensor(cgrid.copy()), dim=(0,))))
 
-    # **기울기.** 조립이라 저절로 따라와야 하고, 안 따라오면 여기서 걸린다.
+    # **Gradients.** Being assembled, they should follow of their own accord, and where they do
+    # not this catches it.
     def _grad_of_fft(L, name, arr):
         x = L.tensor(arr.copy(), requires_grad=True)
         y = getattr(L.fft, name)(x)
@@ -1866,8 +1947,8 @@ def fft_cases(inp=None):
         (y.real * w).sum().backward()
         return _grad_of(x, name)
 
-    # **잎은 실수여야 한다** — 결속은 복소수 잎에 `requires_grad` 를 안 준다.
-    # `fft2` 는 실수를 넣어도 복소수를 내므로 물음은 그대로다.
+    # **The leaf has to be real** — the binding does not give `requires_grad` to a complex leaf.
+    # `fft2` returns a complex from a real input, so the question is unchanged.
     for _name, _arr in (("fft2", grid), ("rfft2", grid), ("rfftn", grid),
                         ("ihfft2", grid)):
         add(f"여러축::grad::{_name}",
