@@ -1,7 +1,9 @@
-"""구역 밖으로 텐서를 들고 나오는 두 길이 **다르게** 도는지 잰다.
+"""Measures whether the two ways of carrying a tensor out of a scope behave
+**differently.**
 
-거절하는 쪽도 같이 본다 — `keep` 없이 만든 것이 살아 있으면 구역이 일을 안 하는
-것이고, 그러면 학습 루프가 메모리로 무너진다.
+The refusing side is checked alongside — something made without `keep` staying
+alive means the scope is not doing its job, and then a training loop collapses on
+memory.
 """
 
 import borch_webgpu as torch
@@ -15,7 +17,7 @@ def _say(ok, name, note=""):
 
 
 def _usable(t):
-    """이 텐서를 아직 쓸 수 있는가. 죽었으면 저쪽이 멈춘다."""
+    """Is this tensor still usable. Dead, the other side stops."""
     try:
         t.sum().item()
         return True
@@ -26,75 +28,87 @@ def _usable(t):
 def run():
     ok = []
 
-    # 1) 아무것도 안 하면 죽어야 한다. 이것이 참이어야 나머지가 뜻을 갖는다.
+    # 1) With nothing done it has to die. The rest means nothing unless this is
+    #    true.
     with torch.scope():
         loose = torch.randn(4)
-    ok.append(_say(not _usable(loose), "keep 없이 만든 것은 구역 뒤에 죽는다"))
+    ok.append(_say(not _usable(loose),
+                   "something made without keep dies after the scope"))
 
-    # 2) scope.keep — 이번 구역을 벗어난다.
+    # 2) scope.keep — it leaves this scope.
     with torch.scope() as s:
         carried = s.keep(torch.randn(4))
-    ok.append(_say(_usable(carried), "scope.keep 은 구역 밖에서 산다"))
+    ok.append(_say(_usable(carried), "scope.keep survives outside the scope"))
 
-    # 3) keep_alive — 영구.
+    # 3) keep_alive — permanent.
     with torch.scope():
         forever = torch.keep_alive(torch.randn(4))
-    ok.append(_say(_usable(forever), "keep_alive 는 구역 밖에서 산다"))
+    ok.append(_say(_usable(forever), "keep_alive survives outside the scope"))
 
-    # 4) 준 것을 그대로 돌려주는가. 자매가 그렇고, 아니면 `x = keep_alive(x)` 가
-    #    다른 텐서를 가리키게 된다.
+    # 4) Does it hand back what it was given. The sister library does, and
+    #    otherwise `x = keep_alive(x)` ends up pointing at a different tensor.
     t = torch.randn(4)
-    ok.append(_say(torch.keep_alive(t) is t, "keep_alive 는 준 것을 그대로 돌려준다"))
+    ok.append(_say(torch.keep_alive(t) is t,
+                   "keep_alive hands back what it was given"))
     with torch.scope() as s:
         u = torch.randn(4)
-        ok.append(_say(s.keep(u) is u, "scope.keep 도 준 것을 그대로 돌려준다"))
+        ok.append(_say(s.keep(u) is u,
+                       "scope.keep hands back what it was given too"))
         s.keep(u)
 
-    # 5) **둘의 차이.** 안쪽에서 살린 것을 바깥이 닫을 때 어떻게 되는가.
+    # 5) **The difference between the two.** What happens to something kept
+    #    inside when the outer scope closes.
     with torch.scope():
         with torch.scope() as inner:
             promoted = inner.keep(torch.randn(4))
             permanent = torch.keep_alive(torch.randn(4))
         both = _usable(promoted) and _usable(permanent)
-        ok.append(_say(both, "중첩: 안쪽을 나온 직후에는 둘 다 산다"))
+        ok.append(_say(both,
+                       "nested: just after leaving the inner one, both survive"))
     ok.append(_say(not _usable(promoted),
-                   "바깥이 닫히면 scope.keep 한 것은 놓인다"))
+                   "when the outer closes, what scope.keep held is released"))
     ok.append(_say(_usable(permanent),
-                   "바깥이 닫혀도 keep_alive 한 것은 산다"))
+                   "even when the outer closes, what keep_alive held survives"))
 
-    # 6) 호스트에 있는 텐서를 거절하지 않는다 — 살릴 것이 없을 뿐이다.
+    # 6) A tensor on the host is not refused — there is simply nothing to keep.
     try:
         with torch.scope() as s:
             s.keep(torch.randn(4).cpu())
-        ok.append(_say(True, "CPU 텐서를 줘도 멈추지 않는다"))
+        ok.append(_say(True, "a CPU tensor does not stop it"))
     except Exception as e:
-        ok.append(_say(False, "CPU 텐서를 줘도 멈추지 않는다", str(e)))
+        ok.append(_say(False, "a CPU tensor does not stop it", str(e)))
 
-    # 7) 텐서가 아닌 것은 거절한다.
+    # 7) Anything that is not a tensor is refused.
     try:
         torch.keep_alive(3)
-        ok.append(_say(False, "텐서가 아니면 거절한다", "안 거절했다"))
+        ok.append(_say(False, "a non-tensor is refused", "it did not refuse"))
     except TypeError:
-        ok.append(_say(True, "텐서가 아니면 거절한다"))
+        ok.append(_say(True, "a non-tensor is refused"))
 
-    # 8) **문구가 참인가.** 없는 이름과, borch.ts 에 모듈 함수로 있는 이름을 가른다.
+    # 8) **Is the wording true.** It separates a name that does not exist from a
+    #    name that exists in borch.ts as a module function.
     try:
         torch.definitely_not_a_kernel
-        ok.append(_say(False, "없는 이름은 없다고 말한다", "안 멈췄다"))
+        ok.append(_say(False, "an absent name is reported as absent",
+                       "it did not stop"))
     except AttributeError as e:
         ok.append(_say("does not have" in str(e) and "definitelyNotAKernel" in str(e),
-                       "없는 이름은 없다고 말한다", str(e)))
-    # `gradMode` 는 `index.ts` 가 내보내고, `Tensor.prototype` 에는 없고, 이 결속이
-    # 아직 안 이었다 — 셋을 다 만족하는 이름이라 이 문구가 갈리는 자리를 정확히 짚는다.
+                       "an absent name is reported as absent", str(e)))
+    # `gradMode` is exported by `index.ts`, is absent from `Tensor.prototype`, and
+    # has not been bridged by this binding yet — a name satisfying all three, so it
+    # points exactly at where this wording parts.
     #
-    # 처음에 `make_node` 로 잡았다가 틀렸다. 그것은 `tensor.ts` 에 있지만 `index.ts`
-    # 가 안 내보내므로 `js.borch` 에서 안 보이고, 그러면 "없다" 가 **맞는 말**이다.
-    # 결속이 보는 borch.ts 는 공개된 표면이지 소스 전체가 아니다.
+    # `make_node` was chosen first and it was wrong. That one is in `tensor.ts` and
+    # `index.ts` does not export it, so it is invisible from `js.borch`, and then
+    # "absent" is **the true statement.** The borch.ts the binding sees is the
+    # published surface rather than the whole source.
     try:
         torch.grad_mode
-        ok.append(_say(False, "모듈 함수는 모듈 함수라고 말한다", "안 멈췄다"))
+        ok.append(_say(False, "a module function is reported as one",
+                       "it did not stop"))
     except AttributeError as e:
-        ok.append(_say("module function" in str(e), "모듈 함수는 모듈 함수라고 말한다", str(e)))
+        ok.append(_say("module function" in str(e),
+                       "a module function is reported as one", str(e)))
 
-    head = "구역 탈출이 돈다" if all(ok) else "**어딘가 안 된다**"
+    head = "scope escape works" if all(ok) else "**something does not work**"
     return "\n".join([head, *_lines])

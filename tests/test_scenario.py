@@ -1,4 +1,4 @@
-"""통합 시나리오를 양쪽에서 돌려 숫자를 대조한다."""
+"""Runs the integration scenario on both sides and compares the numbers."""
 
 import pathlib
 import subprocess
@@ -16,17 +16,20 @@ TOLERANCE = 1e-4
 
 
 def test_scenario_matches_real_torch():
-    """같은 코드, 임포트만 다르게. 나온 숫자가 **허용 오차 안에서** 같아야 한다.
+    """The same code with a different import. The numbers have to match **within
+    tolerance.**
 
-    MLP 학습·CNN(BatchNorm 포함)·LSTM·트랜스포머 인코더·저장과 불러오기를 한 번에 지난다.
+    It passes through MLP training, a CNN (BatchNorm included), an LSTM, a
+    transformer encoder, and saving and loading, all in one go.
 
-    문자열로 견주지 않는다. 비트 동등은 명시적 비목표이고(ROADMAP), 실제로 맥과 리눅스의
-    BLAS 가 소수점 여섯 자리에서 갈려 CI 만 빨갛게 뜬 적이 있다.
+    It does not compare as strings. Bit equivalence is an explicit non-goal
+    (ROADMAP), and macOS's and Linux's BLAS really did part at the sixth decimal
+    place and turn CI alone red.
     """
     real_out, nano_out = _run("real"), _run("nano")
-    assert real_out, "시나리오가 아무 값도 안 냈다"
+    assert real_out, "the scenario produced no values at all"
     for key, value in real_out.items():
-        assert key in nano_out, f"{key} 가 borch 쪽에 없다"
+        assert key in nano_out, f"{key} is absent on the borch side"
         expected, got = float(value), float(nano_out[key])
         assert abs(expected - got) <= TOLERANCE * max(1.0, abs(expected)), (
-            f"{key} 가 갈렸다 — torch {expected} · borch {got}")
+            f"{key} diverged — torch {expected} · borch {got}")
