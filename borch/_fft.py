@@ -1,32 +1,35 @@
-"""`torch.fft` — 이산 푸리에 변환.
+"""`torch.fft` — the discrete Fourier transform.
 
-**복소수 위에 선다.** 이 이름들이 오래 없었던 이유는 저장이 아니라 규약이었고
-(`stft` 의 거절문이 그렇게 적혀 있었다), 규약이 정해진 지금 그 문이 열린다.
+**It stands on complex numbers.** These names were absent for a long time because
+of the convention rather than the storage (`stft`'s refusal said as much), and
+with the convention settled that door opens.
 
-## 기울기 — 유도해서 실측과 맞췄다
+## Gradients — derived, then matched against measurement
 
-푸리에 변환은 **선형**이다. `y = F·x` 이고 `F[k,j] = e^{-2πijk/n}` 이므로, 복소수
-기울기 규약(`z.grad = ∂L/∂re + i·∂L/∂im`)에서 정칙 함수의 역방향이 `conj(f')·g`
-라는 규칙이 그대로 걸린다 —
+The Fourier transform is **linear**. `y = F·x` with `F[k,j] = e^{-2πijk/n}`, so
+under the complex gradient convention (`z.grad = ∂L/∂re + i·∂L/∂im`) the rule
+that a holomorphic function's backward is `conj(f')·g` applies directly —
 
     grad_x[j] = Σ_k conj(F[k,j]) · g[k] = Σ_k e^{+2πijk/n} · g[k]
 
-즉 **정규화 없는 역변환**이다. 그래서 순방향과 역방향이 같은 기계를 쓴다. 실측이
-그것을 받친다: `fft(x).real.sum()` 의 기울기가 `[n, 0, 0, …]` 이다(x 가 실수일 때
-`Σ_k Re(X_k) = n·x_0` 이므로).
+which is **the unnormalised inverse.** So forward and backward use the same
+machinery. Measurement backs it: the gradient of `fft(x).real.sum()` is
+`[n, 0, 0, …]` (for real x, since `Σ_k Re(X_k) = n·x_0`).
 
-`rfft` 는 저장된 반쪽에만 기울기가 오므로 **켤레 짝을 더하지 않는다** — 실측:
-n=6 에서 `rfft(x).real.sum()` 의 기울기가 `[4, 0, 1, 0, 1, 0]` 이고, 이것은
-`Re(Σ_{k=0}^{3} e^{2πijk/6})` 이다. 반쪽을 두 배로 세면 `[8, …]` 이 나온다.
+`rfft` receives gradient on the stored half only, so it **does not add the
+conjugate partner** — measured: at n=6 the gradient of `rfft(x).real.sum()` is
+`[4, 0, 1, 0, 1, 0]`, which is `Re(Σ_{k=0}^{3} e^{2πijk/6})`. Counting the half
+twice gives `[8, …]`.
 
-`irfft` 는 반대로 **가장자리만 한 번, 가운데는 두 번** 세어야 한다 — 허미시안
-대칭으로 되살린 켤레 짝이 같은 저장 칸에서 왔기 때문이다. `k=0` 과 (짝수 n 의)
-`k=n/2` 만 무게가 1 이고 나머지가 2 다.
+`irfft` is the reverse and has to count **the edges once and the middle twice** —
+because the conjugate partners revived by Hermitian symmetry came from the same
+stored cells. Only `k=0` and (for even n) `k=n/2` carry weight 1; the rest carry
+2.
 
 ## `norm`
 
-`None` 은 `"backward"` 와 같다(실측). 정변환에 1, 역변환에 1/n. `"forward"` 는
-반대, `"ortho"` 는 양쪽에 1/√n.
+`None` is the same as `"backward"` (measured). 1 on the forward transform and
+1/n on the inverse. `"forward"` is the reverse, and `"ortho"` is 1/√n on both.
 """
 
 import numpy as _np
@@ -38,15 +41,17 @@ _TENSOR_ARGS = (Tensor,)
 
 
 def _wrap(t):
-    """텐서가 아니면 텐서로. `_ops` 에 같은 이름이 있지만 **거기서 들여오면 순환**이라
-    (그쪽이 이 파일을 들여온다) 한 줄을 여기 다시 둔다."""
+    """To a tensor if it is not one. `_ops` has the same name, and **importing
+    from there is a cycle** (that side imports this file), so one line is
+    repeated here."""
     return t if isinstance(t, _TENSOR_ARGS) else Tensor(_np.asarray(t))
 
 _TWO_PI = 2.0 * _np.pi
 
 
 def _norm_scale(norm, n, inverse):
-    """`norm` 이름 → 곱할 값. 이름이 틀리면 멈춘다 — 조용히 1 을 쓰면 값이 갈린다."""
+    """A `norm` name to the factor. A wrong name stops — quietly using 1 makes
+    the values diverge."""
     if norm is None or norm == "backward":
         return (1.0 / n) if inverse else 1.0
     if norm == "forward":
@@ -63,7 +68,8 @@ def _axis(dim, rank):
 
 
 def _resize(arr, n, axis):
-    """축 하나를 길이 `n` 으로. 짧으면 **0 으로 채우고** 길면 자른다(실측)."""
+    """One axis to length `n`. Shorter is **zero-padded** and longer is trimmed
+    (measured)."""
     have = arr.shape[axis]
     if have == n:
         return arr
@@ -77,22 +83,24 @@ def _resize(arr, n, axis):
 
 
 def _dft(arr, n, axis, sign, scale, out_bins=None, hermitian=False):
-    """정규화 없는 DFT 한 판. **모든 이름이 이것 하나를 쓴다.**
+    """One unnormalised DFT. **Every name here uses this one.**
 
-    `sign` 이 −1 이면 정변환, +1 이면 역변환이다. `hermitian` 이면 저장된 반쪽을
-    켤레로 되살려 길이 `n` 을 만든다(`irfft` 와 그 역방향).
+    `sign` of −1 is the forward transform and +1 the inverse. With `hermitian`,
+    the stored half is revived by conjugation into length `n` (`irfft` and its
+    backward).
 
-    numpy 의 `fft` 를 부르지 않고 손으로 도는 이유는 **자리마다 다른 조합이 필요해서**
-    다 — 반쪽 입력, 반쪽 출력, 부호, 배율이 이름마다 다르게 붙는다. numpy 로는 그
-    조합마다 앞뒤로 자르고 붙이는 코드가 붙고, 그쪽이 오히려 틀리기 쉽다.
+    It loops by hand rather than calling numpy's `fft` because **each place needs
+    a different combination** — half input, half output, sign and scale attach
+    differently for every name. Through numpy each combination gains code that
+    trims and joins on both ends, and that is the easier way to be wrong.
     """
     data = _np.asarray(arr)
     moved = _np.moveaxis(data, axis, -1)
     have = moved.shape[-1]
     flat = moved.reshape(-1, have)
     if hermitian:
-        # 저장된 반쪽 → 길이 n. `X[n-k] = conj(X[k])` 이고 0 과 (짝수 n 의) n/2 는
-        # 자기 자신이라 안 접힌다.
+        # The stored half to length n. `X[n-k] = conj(X[k])`, and 0 and (for
+        # even n) n/2 are their own partners and do not fold.
         full = _np.zeros((flat.shape[0], n), dtype=_np.complex128)
         take = min(have, n // 2 + 1)
         full[:, :take] = flat[:, :take]
@@ -115,12 +123,13 @@ def _dft(arr, n, axis, sign, scale, out_bins=None, hermitian=False):
 
 
 def _leaf(t):
-    """복소수든 실수든 numpy 배열로. 형은 여기서 안 본다."""
+    """To a numpy array, complex or real. The dtype is not examined here."""
     return _np.asarray(_wrap(t).data)
 
 
 def fft(input, n=None, dim=-1, norm=None):                      # noqa: A002
-    """정변환. 실수를 넣어도 **복소수가 나온다**(실측)."""
+    """The forward transform. Real input still gives **complex output**
+    (measured)."""
     t = _wrap(input)
     axis = _axis(dim, t.data.ndim)
     length = t.data.shape[axis] if n is None else int(n)
@@ -128,7 +137,8 @@ def fft(input, n=None, dim=-1, norm=None):                      # noqa: A002
     out = _dft(t.data, length, axis, -1.0, scale).astype(_np.complex64)
 
     def back(g, ax=axis, ln=length, sc=scale):
-        # **정규화 없는 역변환.** 배율은 순방향의 것이 그대로 곱해진다 — 선형이라.
+        # **The unnormalised inverse.** The forward scale multiplies through
+        # unchanged — it is linear.
         got = _dft(_np.asarray(g), ln, ax, +1.0, sc)
         got = _resize(got, t.data.shape[ax], ax)
         return (got.astype(_np.complex64)
@@ -138,7 +148,7 @@ def fft(input, n=None, dim=-1, norm=None):                      # noqa: A002
 
 
 def ifft(input, n=None, dim=-1, norm=None):                     # noqa: A002
-    """역변환. `norm=None` 이면 1/n 이 붙는다(실측)."""
+    """The inverse. With `norm=None` a 1/n is attached (measured)."""
     t = _wrap(input)
     axis = _axis(dim, t.data.ndim)
     length = t.data.shape[axis] if n is None else int(n)
@@ -155,7 +165,8 @@ def ifft(input, n=None, dim=-1, norm=None):                     # noqa: A002
 
 
 def rfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
-    """실수 정변환. **저장은 `n//2+1` 칸뿐**이다 — 나머지는 켤레라 안 든다."""
+    """The real forward transform. **Only `n//2+1` cells are stored** — the rest
+    are conjugates and are not carried."""
     t = _wrap(input)
     if t.data.dtype.kind == "c":
         raise RuntimeError(_like_torch(
@@ -168,8 +179,9 @@ def rfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
     out = _dft(t.data, length, axis, -1.0, scale, out_bins=bins).astype(_np.complex64)
 
     def back(g, ax=axis, ln=length, sc=scale, m=bins):
-        # **켤레 짝을 안 더한다.** 저장된 반쪽에만 기울기가 오고, 안 저장된 반쪽은
-        # 애초에 손실에 안 들어갔다. 더하면 실측(`[4,0,1,0,1,0]`)의 두 배가 나온다.
+        # **The conjugate partner is not added.** Gradient arrives on the stored
+        # half only, and the unstored half never entered the loss to begin with.
+        # Adding it gives twice the measured `[4,0,1,0,1,0]`.
         got = _dft(_np.asarray(g), ln, ax, +1.0, sc, out_bins=ln)
         got = _resize(_np.real(got), t.data.shape[ax], ax)
         return (got.astype(_np.float32),)
@@ -178,7 +190,7 @@ def rfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
 
 
 def irfft(input, n=None, dim=-1, norm=None):                    # noqa: A002
-    """반쪽 스펙트럼 → 실수. `n` 을 안 주면 `2*(m-1)` 이다(실측)."""
+    """A half spectrum to reals. Without `n` it is `2*(m-1)` (measured)."""
     t = _wrap(input)
     axis = _axis(dim, t.data.ndim)
     have = t.data.shape[axis]
@@ -188,9 +200,11 @@ def irfft(input, n=None, dim=-1, norm=None):                    # noqa: A002
                         out_bins=length, hermitian=True)).astype(_np.float32)
 
     def back(g, ax=axis, ln=length, sc=scale, m=have):
-        # **가장자리는 한 번, 가운데는 두 번.** 되살린 켤레 짝이 같은 저장 칸에서
-        # 왔으므로 그 칸에 기울기가 두 번 도착한다. `k=0` 과 짝수 n 의 `k=n/2` 만
-        # 자기 켤레라 한 번이다 — 그 둘을 두 번 세면 가장자리만 두 배로 틀린다.
+        # **The edges once and the middle twice.** The revived conjugate
+        # partners came from the same stored cells, so gradient arrives at those
+        # cells twice. Only `k=0` and, for even n, `k=n/2` are their own
+        # conjugates and arrive once — counting those two twice is wrong by a
+        # factor of two at the edges alone.
         got = _dft(_np.asarray(g), ln, ax, -1.0, sc, out_bins=ln)
         got = _resize(got, m, ax)
         weight = _np.full(m, 2.0)
@@ -204,20 +218,25 @@ def irfft(input, n=None, dim=-1, norm=None):                    # noqa: A002
     return t._make(out, (t,), back, "FftC2RBackward0")
 
 
-# ── 여러 축 · 에르미트 — **전부 위 넷의 조립이다** ─────────────────────────
+# ── multi-axis and Hermitian — **all assembled from the four above** ────────
 #
-# 새 커널이 하나도 없다. `fft2` 는 축을 하나씩 도는 것이고(실측: `fft2(x)` 와
-# `fft(fft(x, dim=-1), dim=-2)` 가 정확히 같다), 에르미트 갈래도 켤레와 배율로
-# 풀린다(`hfft(c, n) = irfft(conj(c), n)·n`, `ihfft(r) = conj(rfft(r))/n` — 둘 다 실측).
+# Not one new kernel. `fft2` is looping the axes one at a time (measured:
+# `fft2(x)` and `fft(fft(x, dim=-1), dim=-2)` are exactly equal), and the
+# Hermitian branch resolves into a conjugate and a scale
+# (`hfft(c, n) = irfft(conj(c), n)·n`, `ihfft(r) = conj(rfft(r))/n` — both
+# measured).
 #
-# **그래서 기울기를 따로 안 쓴다.** 조립이므로 테이프가 그대로 이어진다 — 여기에
-# 역방향을 손으로 적으면 위 넷과 두 벌이 되고, 그 둘이 갈리는 날 값 대조로는 안 걸린다.
+# **So no gradients are written here.** Being assembled, the tape carries
+# through — writing a backward by hand here makes two copies alongside the four
+# above, and the day they diverge a value comparison does not catch it.
 #
-# `norm` 도 축마다 곱해지면 맞는다. `ortho` 는 축마다 `1/√nᵢ` 라 곱이 `1/√Πnᵢ` 이고,
-# `forward` 는 `1/nᵢ` 라 곱이 `1/Πnᵢ` 다 — 셋 다 곱셈이라 축을 나눠 돌아도 같다.
+# `norm` comes out right multiplied per axis too. `ortho` is `1/√nᵢ` per axis, so
+# the product is `1/√Πnᵢ`, and `forward` is `1/nᵢ`, so the product is `1/Πnᵢ` —
+# all three are multiplications, so splitting the axes gives the same answer.
 
 def _axes_and_sizes(t, s, dim, default_last):
-    """`s`·`dim` 을 축 목록과 크기 목록으로 편다. torch 의 기본을 따른다."""
+    """Unpack `s` and `dim` into a list of axes and a list of sizes. Follows
+    torch's defaults."""
     rank = t.data.ndim
     if dim is None:
         dim = tuple(range(rank)) if s is None else tuple(
@@ -235,7 +254,8 @@ def _axes_and_sizes(t, s, dim, default_last):
 
 
 def fftn(input, s=None, dim=None, norm=None):                    # noqa: A002
-    """모든(또는 고른) 축의 정변환. **축마다 `fft` 를 한 번씩 돈다.**"""
+    """The forward transform over every (or the chosen) axis. **One `fft` per
+    axis.**"""
     t = _wrap(input)
     axes, sizes = _axes_and_sizes(t, s, dim, False)
     for a, n in zip(axes, sizes):
@@ -260,7 +280,8 @@ def ifft2(input, s=None, dim=(-2, -1), norm=None):               # noqa: A002
 
 
 def rfftn(input, s=None, dim=None, norm=None):                   # noqa: A002
-    """실수 입력. **마지막 축만 `rfft` 이고 나머지는 `fft`** 다 — 차례가 답을 정한다."""
+    """Real input. **`rfft` on the last axis and `fft` on the rest** — the order
+    decides the answer."""
     t = _wrap(input)
     axes, sizes = _axes_and_sizes(t, s, dim, True)
     t = rfft(t, n=sizes[-1], dim=axes[-1], norm=norm)
@@ -270,11 +291,12 @@ def rfftn(input, s=None, dim=None, norm=None):                   # noqa: A002
 
 
 def irfftn(input, s=None, dim=None, norm=None):                  # noqa: A002
-    """`rfftn` 의 역. **`ifft` 를 먼저 돌고 마지막에 `irfft`** 다."""
+    """The inverse of `rfftn`. **`ifft` first and `irfft` last.**"""
     t = _wrap(input)
     axes, sizes = _axes_and_sizes(t, s, dim, True)
     if s is None:
-        # 마지막 축만 반쪽이라 크기를 되돌려 준다 — torch 의 기본과 같다.
+        # Only the last axis is a half, so its size is restored — the same as
+        # torch's default.
         sizes[-1] = 2 * (t.data.shape[axes[-1]] - 1)
     for a, n in zip(axes[:-1], sizes[:-1]):
         t = ifft(t, n=n, dim=a, norm=norm)
@@ -290,17 +312,18 @@ def irfft2(input, s=None, dim=(-2, -1), norm=None):              # noqa: A002
 
 
 def _flip_norm(norm):
-    """에르미트 갈래는 정·역이 뒤바뀐다 — 정규화 이름도 같이 뒤집는다."""
+    """The Hermitian branch swaps forward and inverse — the normalisation name
+    flips with it."""
     return {"forward": "backward", "backward": "forward"}.get(norm or "backward",
                                                               norm)
 
 
 def hfft(input, n=None, dim=-1, norm=None):                      # noqa: A002
-    """에르미트 대칭인 복소수 입력 → **실수 출력.**
+    """Hermitian-symmetric complex input to **real output.**
 
-    `irfft` 의 켤레 관계다(실측: `hfft(c, n) == irfft(conj(c), n)·n`). 배율은
-    `irfft` 가 붙이는 `1/n` 을 되돌리는 것이고, `norm` 은 정·역이 뒤바뀌므로 같이
-    뒤집는다.
+    The conjugate relation of `irfft` (measured:
+    `hfft(c, n) == irfft(conj(c), n)·n`). The scale undoes the `1/n` `irfft`
+    attaches, and `norm` flips along with the swapped forward and inverse.
     """
     from . import _ops                                       # noqa: PLC0415
 
@@ -311,7 +334,8 @@ def hfft(input, n=None, dim=-1, norm=None):                      # noqa: A002
 
 
 def ihfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
-    """실수 입력 → **에르미트 대칭인 복소수.** `rfft` 의 켤레다."""
+    """Real input to **Hermitian-symmetric complex.** The conjugate of
+    `rfft`."""
     from . import _ops                                       # noqa: PLC0415
 
     t = _wrap(input)
@@ -320,11 +344,12 @@ def ihfft(input, n=None, dim=-1, norm=None):                     # noqa: A002
 
 
 def hfftn(input, s=None, dim=None, norm=None):                   # noqa: A002
-    """마지막 축이 `hfft` 이고 **앞 축은 `fft`** 다.
+    """`hfft` on the last axis and **`fft` on the ones before it.**
 
-    **앞뒤를 반대로 짐작했다가 걸렸다.** `rfftn` 의 거울이니 `ifft` 일 것 같은데
-    torch 는 `fft` 다(실측 — 후보를 둘 다 만들어 대 봤다). 모양은 양쪽 다 맞아서
-    값을 안 재면 안 드러난다.
+    **Guessed backwards, and caught.** As the mirror of `rfftn` it looks like it
+    should be `ifft`, and torch uses `fft` (measured — both candidates were built
+    and compared). The shape matches either way, so without measuring the values
+    it does not surface.
     """
     t = _wrap(input)
     axes, sizes = _axes_and_sizes(t, s, dim, True)
@@ -336,7 +361,8 @@ def hfftn(input, s=None, dim=None, norm=None):                   # noqa: A002
 
 
 def ihfftn(input, s=None, dim=None, norm=None):                  # noqa: A002
-    """`ihfft` 를 마지막 축에, **앞 축에는 `ifft`** 를(실측 — `hfftn` 과 짝이다)."""
+    """`ihfft` on the last axis and **`ifft` on the ones before it** (measured —
+    the partner of `hfftn`)."""
     t = _wrap(input)
     axes, sizes = _axes_and_sizes(t, s, dim, True)
     t = ihfft(t, n=sizes[-1], dim=axes[-1], norm=norm)
@@ -354,7 +380,8 @@ def ihfft2(input, s=None, dim=(-2, -1), norm=None):              # noqa: A002
 
 
 def fftfreq(n, d=1.0, **kw):
-    """표본 주파수. `[0, 1, …, n/2-1, -n/2, …, -1] / (n·d)` 다(실측)."""
+    """The sample frequencies. `[0, 1, …, n/2-1, -n/2, …, -1] / (n·d)`
+    (measured)."""
     half = (n - 1) // 2 + 1
     out = _np.empty(n, dtype=_np.float32)
     out[:half] = _np.arange(half)
@@ -363,7 +390,8 @@ def fftfreq(n, d=1.0, **kw):
 
 
 def rfftfreq(n, d=1.0, **kw):
-    """`rfft` 가 내는 칸의 주파수. 음수가 없고 길이가 `n//2+1` 이다."""
+    """The frequencies of the cells `rfft` produces. No negatives, and length
+    `n//2+1`."""
     return Tensor(_np.arange(n // 2 + 1, dtype=_np.float32) / (n * d))
 
 
@@ -381,30 +409,37 @@ def _roll(t, dim, by):
 
 
 def fftshift(input, dim=None):                                  # noqa: A002
-    """0 주파수를 가운데로. **`n//2` 만큼 민다**(실측 — 홀수에서도 그렇다)."""
+    """Zero frequency to the middle. **Shifted by `n//2`** (measured — odd
+    lengths included)."""
     return _roll(input, dim, lambda n: n // 2)
 
 
 def ifftshift(input, dim=None):                                 # noqa: A002
-    """`fftshift` 의 반대. **홀수에서 `n//2` 로 되돌리면 안 맞는다** — `(n+1)//2` 다."""
+    """The reverse of `fftshift`. **Undoing it with `n//2` is wrong at odd
+    lengths** — it is `(n+1)//2`."""
     return _roll(input, dim, lambda n: -(n // 2))
 
 
-# ---------------------------------------------------------------- 짧은 시간 변환
+# ------------------------------------------------------- short-time transforms
 #
-# **`stft` 는 새 커널이 아니라 조립이다.** 자르고(틀 나누기) · 창을 곱하고 · `rfft`.
-# 셋 다 이미 미분되는 이름이라, 이렇게 쌓으면 **기울기가 저절로 맞는다** — 실측으로
-# 확인했다(`stft(x).abs().sum()` 의 기울기가 torch 와 같다).
+# **`stft` is an assembly, not a new kernel.** Slice (into frames), multiply by
+# the window, `rfft`. All three are already differentiable names, so stacked this
+# way **the gradient comes out right on its own** — confirmed by measurement (the
+# gradient of `stft(x).abs().sum()` matches torch).
 #
-# 손으로 커널을 쓰면 순방향은 금방 맞는데 역방향이 창과 겹침을 다 통과해야 해서,
-# 틀리면 값은 그럴듯하고 학습만 안 된다. 조립이 그 자리를 아예 없앤다.
+# Writing the kernel by hand, the forward pass comes out right quickly and the
+# backward has to travel through the window and the overlap, so getting it wrong
+# leaves plausible values and training that does not train. Assembly removes that
+# place entirely.
 
 def _window_of(window, n_fft, win_length, like):
-    """창을 `n_fft` 길이로. **짧으면 가운데에 놓고 양쪽을 0 으로 채운다**(실측)."""
+    """The window to length `n_fft`. **Shorter is centred and zero-padded on
+    both sides** (measured)."""
     from . import _ops
 
     if window is None:
-        # torch 는 여기서 경고를 낸다(사각창은 스펙트럼이 샌다). 값은 같다.
+        # torch warns here (a rectangular window leaks across the spectrum). The
+        # values are the same.
         return _ops.ones([n_fft])
     win = _wrap(window)
     have = win.data.shape[-1]
@@ -421,11 +456,12 @@ def _window_of(window, n_fft, win_length, like):
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,     # noqa: A002
          center=True, pad_mode="reflect", normalized=False, onesided=None,
          return_complex=None):
-    """짧은 시간 푸리에 변환. 결과는 `(…, 칸, 틀)` 이다 — **틀이 마지막**이다.
+    """The short-time Fourier transform. The result is `(…, bins, frames)` —
+    **frames last.**
 
-    **`return_complex` 를 안 주면 거절한다.** torch 가 실수 입력에서 그렇게 한다
-    (실측) — 실수 `(…, 2)` 로 내는 옛 길이 폐기 예정이라, 기본값을 정해 주면 곧
-    사라질 모양을 가르치게 된다.
+    **It refuses without `return_complex`.** torch does the same on real input
+    (measured) — the old path producing a real `(…, 2)` is slated for removal, so
+    choosing a default here would teach a shape that is about to disappear.
     """
     from . import _ops
 
@@ -446,7 +482,7 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,     # noqa
 
     x = t
     if center:
-        # **`n_fft//2` 씩 양쪽**, 기본은 반사다(실측).
+        # **`n_fft//2` on each side**, reflected by default (measured).
         pad = n_fft // 2
         flat = x.data.ndim == 1
         if flat:
@@ -466,15 +502,15 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,     # noqa
     spec = rfft(frames, dim=-1) if onesided else fft(frames, dim=-1)
     if normalized:
         spec = spec * (1.0 / _np.sqrt(n_fft))
-    # `(…, 틀, 칸)` → `(…, 칸, 틀)`. torch 가 칸을 앞에 둔다.
+    # `(…, frames, bins)` → `(…, bins, frames)`. torch puts the bins first.
     return _ops.swapaxes(spec, -1, -2)
 
 
 def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa: A002
           center=True, normalized=False, onesided=None, length=None,
           return_complex=False):
-    """`stft` 의 되돌리기. **창의 제곱 겹침으로 나눈다** — 그 나눗셈이 없으면
-    겹친 자리가 창 무게만큼 부풀어 오른다.
+    """The inverse of `stft`. **Divided by the overlapped window squared** —
+    without that division the overlapped regions swell by the window weight.
     """
     from . import _ops
 
@@ -484,7 +520,7 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa:
     if onesided is None:
         onesided = t.data.shape[-2] == n_fft // 2 + 1
     count = t.data.shape[-1]
-    spec = _ops.swapaxes(t, -1, -2)                        # (…, 틀, 칸)
+    spec = _ops.swapaxes(t, -1, -2)                        # (…, frames, bins)
     frames = irfft(spec, n=n_fft, dim=-1) if onesided else fft(spec, dim=-1)
     if normalized:
         frames = frames * _np.sqrt(n_fft)
@@ -492,8 +528,9 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa:
     frames = frames * win
 
     total = n_fft + hop * (count - 1)
-    # **겹쳐 더하기.** 틀마다 자리를 맞춰 0 으로 두르고 전부 더한다 — 조각을
-    # 흩뿌리는 커널 없이 되고, 역방향이 그대로 따라온다.
+    # **Overlap-add.** Each frame is zero-padded into position and all of them
+    # are summed — this works without a kernel that scatters pieces, and the
+    # backward follows along.
     pieces, envelope = [], _np.zeros(total, dtype=_np.float32)
     wsq = _np.asarray(win.data) ** 2
     for k in range(count):
@@ -503,7 +540,7 @@ def istft(input, n_fft, hop_length=None, win_length=None, window=None,   # noqa:
     out = pieces[0]
     for piece in pieces[1:]:
         out = out + piece
-    # 0 으로 나누지 않는다. torch 도 그 자리를 비워 두지 않는다.
+    # No division by zero. torch does not leave that place empty either.
     safe = _np.where(_np.abs(envelope) < 1e-11, 1.0, envelope)
     out = out / Tensor(safe.astype(_np.float32))
     if center:

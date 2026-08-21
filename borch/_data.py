@@ -1,4 +1,4 @@
-"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""A piece of borch, split out. __init__ gathers the public names."""
 
 import math as _math
 
@@ -47,8 +47,8 @@ class SequentialSampler:
 
 
 class WeightedRandomSampler:
-    """드문 것을 더 자주 뽑는다. 1000명 중 10명이 환자인 데이터에서 배치에 환자가
-    한 명도 없는 일을 막는다 — 5장이 가르치는 그것이다."""
+    """Draws the rare ones more often. With 10 patients in 1000 it stops a batch
+    from containing no patient at all — what chapter 5 teaches."""
 
     def __init__(self, weights, num_samples, replacement=True, generator=None):
         self.weights = _np.asarray(
@@ -88,8 +88,8 @@ class DataLoader:
         self.drop_last = drop_last
         self.collate_fn = collate_fn
         if isinstance(dataset, IterableDataset):
-            # 훑는 데이터셋은 길이도 번호도 없다. 섞으라고 하면 여기서 멈춘다 —
-            # 조용히 안 섞고 도는 것이 더 나쁘다.
+            # An iterable dataset has neither a length nor indices. Asked to
+            # shuffle, it stops here — running on quietly unshuffled is worse.
             if shuffle or sampler is not None:
                 raise ValueError("IterableDataset cannot be shuffled — it has no indices.")
             self.sampler = None
@@ -98,7 +98,8 @@ class DataLoader:
                                        else SequentialSampler(dataset))
 
     def __iter__(self):
-        # **훑는 데이터셋은 번호를 안 쓴다.** 샘플러가 낼 번호가 없으므로 그대로 흘린다.
+        # **An iterable dataset uses no indices.** There are none for a sampler
+        # to produce, so it is simply streamed.
         source = (self.dataset if isinstance(self.dataset, IterableDataset)
                   else (self.dataset[i] for i in self.sampler))
         batch = []
@@ -115,12 +116,13 @@ class DataLoader:
         return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
     def _collate(self, batch):
-        """**`default_collate` 에 맡긴다.**
+        """**Left to `default_collate`.**
 
-        여기 있던 `zip(*batch)` 는 표본이 늘 튜플이라고 가정했다. `TensorDataset` 만
-        보면 참이지만 `IterableDataset` 은 맨 텐서를 흘릴 수 있고, 그러면 `zip` 이
-        텐서 자체를 훑으려다 `len() of unsized object` 로 죽는다 — 원인에서 두 칸
-        떨어진 자리다.
+        The `zip(*batch)` that used to be here assumed a sample is always a
+        tuple. True looking at `TensorDataset` alone, but an `IterableDataset`
+        may stream bare tensors, and then `zip` tries to iterate the tensor
+        itself and dies with `len() of unsized object` — two places away from
+        the cause.
         """
         return self.collate_fn(batch) if self.collate_fn else default_collate(batch)
 
@@ -163,17 +165,19 @@ class Subset(Dataset):
 
 
 class Sampler:
-    """샘플러의 밑동. **없으면 자기 샘플러를 못 만든다.**
+    """The base of a sampler. **Without it there is no writing your own.**
 
-    `RandomSampler`·`SequentialSampler` 는 이미 있었는데 이 기반 클래스가 없었다.
-    그러면 "번호를 이 순서로 뽑아라" 를 직접 정하는 길이 아예 막힌다 — 층 수를 늘리는
-    것과 달리 **대신할 방법이 없는** 종류다.
+    `RandomSampler` and `SequentialSampler` already existed and this base class
+    did not. That closes off deciding "draw the indices in this order" entirely —
+    unlike adding another layer type, this is the kind with **no way around it.**
 
-    `__iter__` 하나만 채우면 `DataLoader` 가 받는다. torch 도 그 계약이다.
+    Filling in `__iter__` alone is enough for `DataLoader` to accept it. That is
+    torch's contract too.
 
-    **`data_source` 를 안 받는다.** torch 는 예전에 받았고 지금은 뺐다 —
-    `super().__init__(source)` 를 쓰면 그쪽에서 `TypeError` 가 난다. 여기서 받아
-    주면 우리에게서만 도는 코드가 생기고, 그게 이 라이브러리가 가장 하면 안 되는 것이다.
+    **It does not take `data_source`.** torch used to and no longer does —
+    `super().__init__(source)` raises `TypeError` over there. Accepting it here
+    creates code that runs only against us, and that is the thing this library
+    must least do.
     """
 
     def __iter__(self):
@@ -181,7 +185,8 @@ class Sampler:
 
 
 class SubsetRandomSampler(Sampler):
-    """준 번호들 안에서만 섞는다. 교차검증의 접기마다 쓰는 것이 이것이다."""
+    """Shuffles within the given indices only. What each fold of a
+    cross-validation uses."""
 
     def __init__(self, indices, generator=None):
         self.indices = list(indices)
@@ -196,7 +201,8 @@ class SubsetRandomSampler(Sampler):
 
 
 class BatchSampler(Sampler):
-    """번호를 **묶어서** 준다. 배치 크기를 샘플러 쪽에서 정하고 싶을 때."""
+    """Hands out indices **in groups.** For deciding the batch size on the
+    sampler side."""
 
     def __init__(self, sampler, batch_size, drop_last=False):
         self.sampler, self.batch_size, self.drop_last = sampler, batch_size, drop_last
@@ -217,10 +223,11 @@ class BatchSampler(Sampler):
 
 
 class IterableDataset(Dataset):
-    """번호로 꺼내는 것이 아니라 **흘려보내는** 데이터셋.
+    """A dataset that is **streamed** rather than indexed.
 
-    끝을 모르는 것(스트림, 큰 파일)이 이 모양이다. `__len__` 도 `__getitem__` 도
-    없으므로 `DataLoader` 가 섞을 수 없다 — 섞으려 하면 그 자리에서 멈춘다.
+    Things with no known end (a stream, a large file) take this shape. With
+    neither `__len__` nor `__getitem__`, `DataLoader` cannot shuffle it — asked
+    to, it stops right there.
     """
 
     def __iter__(self):
@@ -231,7 +238,8 @@ class IterableDataset(Dataset):
 
 
 class ChainDataset(IterableDataset):
-    """흘려보내는 것들을 **이어 붙인다.** `ConcatDataset` 의 훑는 판이다."""
+    """**Concatenates** streamed ones. The iterable counterpart of
+    `ConcatDataset`."""
 
     def __init__(self, datasets):
         self.datasets = list(datasets)
@@ -242,7 +250,8 @@ class ChainDataset(IterableDataset):
 
 
 class StackDataset(Dataset):
-    """같은 길이의 데이터셋 여럿을 **나란히** 묶는다. 하나를 꺼내면 튜플이 나온다."""
+    """Zips several equal-length datasets **side by side.** Taking one out gives
+    a tuple."""
 
     def __init__(self, *datasets, **named):
         if datasets and named:
@@ -260,9 +269,11 @@ class StackDataset(Dataset):
 
 
 def default_collate(batch):
-    """표본 목록을 배치로 접는다. **`DataLoader` 가 말없이 하던 일에 이름을 준다.**
+    """Folds a list of samples into a batch. **Names what `DataLoader` was doing
+    without saying so.**
 
-    직접 부르는 자리가 있다 — 자기 `collate_fn` 을 쓰면서 일부만 기본대로 접고 싶을 때.
+    There is a reason to call it directly — using your own `collate_fn` and
+    wanting part of it folded the default way.
     """
     first = batch[0]
     if isinstance(first, (tuple, list)):
@@ -276,17 +287,21 @@ def default_collate(batch):
 
 
 def default_convert(data):
-    """numpy 를 텐서로 바꾸고 **나머지는 손대지 않는다.** `default_collate` 의 짝이다.
+    """Converts numpy to tensors and **leaves the rest alone.** The partner to
+    `default_collate`.
 
-    접기 전에 원소 하나를 텐서로 만드는 자리다. 자기 `collate_fn` 을 쓰는 코드가
-    맨 앞에서 이것을 부르고 나머지를 직접 접는다.
+    This is where one element becomes a tensor before folding. Code with its own
+    `collate_fn` calls this first and folds the rest itself.
 
-    함정이 둘이다. 둘 다 torch 를 실제로 돌려 확인했다(`tests/probe_data.py`).
+    Two traps. Both were checked by running real torch
+    (`tests/probe_data.py`).
 
-    - **튜플이 리스트가 된다.** `(a, b)` 를 넣으면 `[텐서, 텐서]` 가 나온다 —
-      torch 자신이 남긴 하위 호환이다. 네임드튜플만 제 자리를 지킨다.
-    - **파이썬 수는 안 바뀐다.** `3` 은 `3` 으로 나온다. `default_collate` 는 수를
-      텐서로 접지만 이쪽은 안 그런다 — 이름이 비슷해서 같을 것 같은데 아니다.
+    - **A tuple becomes a list.** `(a, b)` goes in and `[tensor, tensor]` comes
+      out — backward compatibility torch left itself. Only a namedtuple keeps its
+      type.
+    - **Python numbers are untouched.** `3` comes out as `3`. `default_collate`
+      folds numbers into tensors and this one does not — the similar names
+      suggest they match, and they do not.
     """
     if isinstance(data, Tensor):
         return data
@@ -296,10 +311,10 @@ def default_convert(data):
         made = {k: default_convert(v) for k, v in data.items()}
         try:
             return type(data)(made)
-        except TypeError:                  # 생성자가 딕트를 안 받는 것들
+        except TypeError:                  # the ones whose constructor takes no dict
             return made
     if isinstance(data, tuple):
-        if hasattr(data, "_fields"):       # 네임드튜플은 자리 이름이 있다
+        if hasattr(data, "_fields"):       # a namedtuple has field names
             return type(data)(*(default_convert(d) for d in data))
         return [default_convert(d) for d in data]
     if isinstance(data, list):
@@ -312,15 +327,16 @@ def default_convert(data):
 
 
 def get_worker_info():
-    """**언제나 `None` 이다** — 여기에 일꾼 프로세스가 없다.
+    """**Always `None`** — there are no worker processes here.
 
-    torch 에서도 주 프로세스에서는 `None` 이고, `num_workers>0` 으로 띄운 일꾼 안에서만
-    정보를 준다. 이쪽의 `DataLoader` 는 `num_workers` 를 받되 한 프로세스에서 돈다 —
-    브라우저에는 fork 가 없고, 코어도 그쪽과 같은 답을 내야 한다.
+    In torch it is `None` in the main process too, and gives information only
+    inside a worker started with `num_workers>0`. This `DataLoader` accepts
+    `num_workers` and runs in one process — a browser has no fork, and the core
+    has to give the same answer as that side.
 
-    그래서 이 답은 흉내가 아니라 사실이다: 여기는 일꾼이 아니다. `IterableDataset` 이
-    이것을 물어 조각을 나누는 코드는 `None` 자리에서 "혼자 다 한다" 로 갈라지고, 그
-    갈래가 정확히 여기서 맞는 갈래다.
+    So this answer is a fact rather than an imitation: this is not a worker. Code
+    where an `IterableDataset` asks this to split its shards branches at `None`
+    into "do it all alone", and that is exactly the right branch here.
     """
     return None
 

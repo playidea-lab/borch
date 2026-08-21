@@ -1,4 +1,4 @@
-"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""A piece of borch, split out. __init__ gathers the public names."""
 
 import math as _math
 
@@ -17,11 +17,13 @@ from ._nn import (
 # ================================================================ nn.utils.rnn
 
 def pad_sequence(sequences, batch_first=False, padding_value=0.0):
-    """길이가 제각각인 텐서들을 가장 긴 것에 맞춰 채워 하나로 쌓는다.
+    """Pad tensors of differing lengths up to the longest and stack them into
+    one.
 
-    길이가 다른 것들을 한 배치에 담으려면 어딘가는 채워야 한다. 채운 자리가
-    진짜 값처럼 보이면 안 되므로 `padding_value` 가 무엇이었는지 기억해야 하고,
-    그래서 진짜 torch 도 이 함수와 마스크를 짝으로 쓴다.
+    Putting different lengths into one batch means padding somewhere. The padded
+    positions must not look like real values, so what `padding_value` was has to
+    be remembered — which is why real torch uses this function and a mask as a
+    pair.
     """
     tensors = [_wrap(s) for s in sequences]
     if not tensors:
@@ -41,8 +43,9 @@ def pad_sequence(sequences, batch_first=False, padding_value=0.0):
     if not batch_first:
         padded = padded.swapaxes(0, 1)
 
-    # 역방향은 **채운 자리를 도로 떼어내는** 것이다. 채운 값은 입력에서 온 것이 아니므로
-    # 그 자리의 기울기는 아무에게도 안 간다.
+    # The backward pass is **taking the padding back off.** The padded values
+    # did not come from the input, so the gradient at those positions goes to
+    # nobody.
     def back(g):
         gg = _np.asarray(g)
         if not batch_first:
