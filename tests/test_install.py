@@ -1,12 +1,13 @@
-"""`install()` — `import torch` 가 이 축소판을 집게 만드는 자리.
+"""`install()` — the place that makes `import torch` pick up this subset.
 
-**커버리지 0% 였다.** 175개 테스트 어디도 이 함수를 안 지났고, 그런데 이 함수의
-docstring 은 "경로를 손으로 적으면 어긋난다 — 실제로 어긋났다"로 시작한다. 한 번 물린
-자리를 고쳐놓고 검사를 안 붙였다는 뜻이다.
+**Coverage was 0%.** None of the 175 tests passed through this function, and its
+docstring opens with "writing the paths by hand drifts — and it did". Which means
+a place that had bitten once was fixed and left without a check.
 
-무는 방식이 특이해서 값 대조로는 안 잡힌다. 물건은 다 있는데 **import 경로가 없어서**
-`from torch.optim.lr_scheduler import StepLR` 이 교재 본문에서 멈추는 식이다.
-그래서 여기서 묻는 것은 값이 아니라 **경로가 서는가**다.
+The way it bites is unusual and a value comparison does not catch it. Everything
+exists and **the import path does not**, so
+`from torch.optim.lr_scheduler import StepLR` stops in the body of a textbook.
+So what is asked here is not a value but **whether the paths stand up.**
 """
 
 import pathlib
@@ -23,26 +24,28 @@ import borch as bt                                            # noqa: E402
 
 @pytest.fixture
 def modules():
-    """진짜 `sys.modules` 를 안 건드린다 — 테스트가 서로를 오염시키면 그때부터
-    통과·실패가 실행 순서에 달린다."""
+    """The real `sys.modules` is left alone — once tests contaminate each other,
+    passing and failing depend on the running order."""
     return {}
 
 
 def test_install_registers_the_nested_paths(modules):
-    """`torch.nn` 만이 아니라 **`torch.optim.lr_scheduler` 까지** 서야 한다.
+    """Not `torch.nn` alone — **`torch.optim.lr_scheduler` too** has to stand up.
 
-    한 겹만 도는 구현은 이 검사를 통과하지 못한다 — 옛날에 갈렸던 자리가 정확히 거기다.
+    An implementation that walks one level does not pass this check — and that is
+    exactly where it drifted before.
     """
     registered = bt.install("torch", modules)
 
     assert "torch.nn" in registered
     assert "torch.optim" in registered
-    assert "torch.optim.lr_scheduler" in registered, "두 겹 아래가 안 섰다"
-    assert "torch.utils.data" in registered, "utils 아래도 서야 한다"
+    assert "torch.optim.lr_scheduler" in registered, "two levels down did not stand up"
+    assert "torch.utils.data" in registered, "under utils has to stand up too"
 
 
 def test_registered_paths_hold_the_real_namespaces(modules):
-    """경로만 서고 **엉뚱한 것이 들어 있으면** 더 나쁘다 — import 는 되고 값이 틀린다."""
+    """A path that stands up **holding the wrong thing** is worse — the import
+    works and the value is wrong."""
     bt.install("torch", modules)
 
     assert modules["torch.nn"] is bt.nn
@@ -52,24 +55,26 @@ def test_registered_paths_hold_the_real_namespaces(modules):
 
 
 def test_install_does_not_plant_the_root(modules):
-    """뿌리는 **부르는 쪽이 심는다.** 여기서 심으면 모듈 객체를 두 곳이 쥐게 된다."""
+    """The root is planted **by the caller.** Planted here, two places would hold
+    the module object."""
     bt.install("torch", modules)
     assert "torch" not in modules
 
 
 def test_install_takes_a_different_root_name(modules):
-    """이름을 바꿔 심을 수 있어야 한다 — `torch` 로 심는 것이 위험한 자리가 있고,
-    README 가 그때 다른 이름을 쓰라고 안내한다."""
+    """It has to be plantable under a different name — there are places where
+    planting as `torch` is risky, and the README points at another name there."""
     registered = bt.install("bt", modules)
     assert "bt.nn" in registered
     assert all(path.startswith("bt.") for path in registered)
 
 
 def test_install_finds_every_namespace_rather_than_a_written_list():
-    """**목록을 두지 않는다**는 것이 이 함수의 요점이다.
+    """**Keeping no list** is this function's point.
 
-    새 하위 모듈을 만들면 손 안 대고 따라와야 한다. 하나 만들어 붙여보고 확인한다 —
-    이것이 안 되면 다음에 `lr_scheduler` 같은 것이 또 빠진다.
+    A new submodule has to follow along untouched. One is built and attached to
+    confirm it — without this, the next thing like `lr_scheduler` goes missing
+    again.
     """
     modules = {}
 
