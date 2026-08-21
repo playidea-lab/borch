@@ -514,7 +514,7 @@ import borchvision as torchvision
 from borchvision import transforms
 ```
 
-| what is here | `Compose`, `ToTensor`, `Normalize`, `RandomHorizontalFlip`, `RandomCrop` |
+| what is here | `Compose`, `ToTensor`, `Normalize`, `RandomHorizontalFlip`, `RandomCrop`, `Resize`, `CenterCrop` — plus `augment_batch`, which torchvision does not have |
 |---|---|
 | **`datasets`** | absent. The fetching side is blocked — `cs.toronto.edu` sends no CORS header (measured). And torch's `download=True` keeps the download and reuses it, while Pyodide's filesystem is gone on a refresh. **Once the bytes are in hand it already works** (`fetch_cached`, `cache_put`, `TensorDataset`) |
 | **`ops`** | absent. `nms` is short in numpy, so "it is large" would be a false reason; the real one is that nobody stands in front of it — detection needs a pre-trained backbone and COCO-scale data to reach the end |
