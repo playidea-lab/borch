@@ -75,19 +75,60 @@ def require_fresh_golden(root=ROOT):
 
     두 단계라 잊기 쉽고, 첫 단계는 진짜 torch 를 요구해서 아무 데서나 못 돈다.
     잊었을 때 **다른 것을 의심하기 전에** 멈추는 편이 낫다.
+
+    ## mtime 은 사실이 아니라 대리물이다
+
+    처음에는 시각만 봤다. 그런데 `cases.py` 의 **주석만** 고쳐도 시각은 움직인다 —
+    다른 세션이 그 파일을 영어로 옮기자 러너가 멈췄고, 골든은 멀쩡했다. 케이스 이름도
+    값도 그대로였는데 시각 하나 때문에 "다시 뽑아라" 가 나온 것이다.
+
+    거짓 경보를 그냥 두면 사람이 그 경고를 지나치는 법을 배우고, 그러면 **진짜일 때도
+    지나친다.** 그래서 시각이 어긋나면 거기서 멈추지 않고 **이름 표를 실제로 대조한다**
+    (`manifest`). 같으면 시각만 움직인 것이므로 지나간다.
+
+    **값까지는 안 본다.** 그것은 `tests/test_committed_golden.py` 의 일이고 진짜 torch
+    없이도 도는데, 여기서 두 벌로 두면 언젠가 갈린다.
     """
     cases = root / "tests" / "cases.py"
     exported = root / "tests" / "golden.json"
     if not exported.exists():
         raise SystemExit(f"골든이 없다: {exported}")
-    if cases.stat().st_mtime > exported.stat().st_mtime:
-        raise SystemExit(
-            "골든이 케이스 표보다 낡았다 — 러너는 `tests/golden.json` 을 읽는다.\n"
-            "  먼저: uv run --with numpy --with torch --with torchvision "
-            "python tests/golden.py dump\n"
-            "  그다음: uv run --with numpy python tests/export_json.py\n"
-            "  (이대로 돌리면 새 케이스가 `이름이 골든에 없다` 로 나오는데, 그것은\n"
-            "   이름을 틀렸을 때와 **같은 문구**라 원인이 안 보인다.)")
+    if cases.stat().st_mtime <= exported.stat().st_mtime:
+        return
+    if _names_still_match(root, exported):
+        return
+    raise SystemExit(
+        "골든이 케이스 표보다 낡았다 — 러너는 `tests/golden.json` 을 읽는다.\n"
+        "  먼저: uv run --with numpy --with torch --with torchvision "
+        "python tests/golden.py dump\n"
+        "  그다음: uv run --with numpy python tests/export_json.py\n"
+        "  (이대로 돌리면 새 케이스가 `이름이 골든에 없다` 로 나오는데, 그것은\n"
+        "   이름을 틀렸을 때와 **같은 문구**라 원인이 안 보인다.)")
+
+
+def _names_still_match(root, exported):
+    """굳혀 둔 이름 표가 지금 `cases.py` 가 내는 것과 같은가.
+
+    **못 재면 못 잰다고 답한다.** `cases.py` 를 들여오려면 numpy 가 있어야 하고 이
+    러너는 그것 없이도 도는 자리가 있다. 그때 "같다" 로 답하면 이 갈래가 검사를 끄는
+    스위치가 된다 — 없는 확신을 만드는 쪽보다 시끄러운 쪽이 낫다.
+    """
+    import json
+    import sys
+
+    try:
+        doc = json.loads(exported.read_text(encoding="utf-8"))
+        stamped = doc.get("manifest")
+        if not stamped:
+            return False
+        sys.path.insert(0, str(root))
+        try:
+            from tests import cases as cases_mod
+        except ImportError:
+            import cases as cases_mod
+        return stamped == cases_mod.manifest_hash(cases_mod.golden_cases())
+    except Exception:
+        return False
 
 
 class _Quiet(http.server.SimpleHTTPRequestHandler):
