@@ -228,145 +228,174 @@ is not right** is the one rule this repository has repeated, and each of the
 places below **actually bit.** They are where to look first when writing a new
 case or chasing a defect.
 
-**목록에 들어오려면 틀렸던 케이스를 이름으로 댈 수 있어야 한다.** 지금 일곱이 다
-그렇다 — `norm(p)`·`nn.Softmax()`·`edge::grad::max(동점)` 처럼. 이름을 못 대는 항목은
-교훈이 아니라 예감이고, 그런 것이 쌓이면 이 절은 쓰레기통이 된다. 횟수를 적어 두는
-것도 같은 일을 한다 — 읽는 사람이 얼마나 믿을지를 그 수로 정한다.
+**Getting onto this list requires being able to name the case that was wrong.**
+All seven can — `norm(p)`, `nn.Softmax()`, `edge::grad::max(동점)`. An item that
+cannot name one is a hunch rather than a lesson, and enough of those turn this
+section into a bin. Recording the number of times does the same job — it is what
+tells a reader how much to trust the entry.
 
-**같은 계산에 이름이 둘이면 한쪽만 맞을 수 있다** (5회). `norm(p)` 은 틀렸는데
-`linalg.vector_norm(p)` 은 맞았고, `searchsorted(side=)` 는 버려졌는데
-`bucketize(right=)` 는 맞았고, `F.upsample_bilinear` 는 도는데
-`Upsample(mode='bilinear')` 은 조용히 최근접이었고, `max_pool2d` 와
-`max_pool2d_with_indices` 도 그랬다. 맞는 쪽만 물으면 틀린 쪽은 표에서 없는 것과
-같다.
+**One computation under two names can be right on one side only** (5 times).
+`norm(p)` was wrong while `linalg.vector_norm(p)` was right; `searchsorted(side=)`
+was discarded while `bucketize(right=)` was right; `F.upsample_bilinear` worked
+while `Upsample(mode='bilinear')` was quietly nearest-neighbour; and `max_pool2d`
+and `max_pool2d_with_indices` were the same story. Ask only the right one and the
+wrong one may as well not be in the table.
 
-**두 이름이 인자 차례까지 다를 수 있다**는 것이 그 갈래의 사나운 쪽이다.
-`torch.polygamma(n, x)` 와 `x.polygamma(n)`, `torch.lu_solve(b, LU, piv)` 와
-`b.lu_solve(LU, piv)` 가 그렇다. 앞의 것은 표로 기계적으로 이어 붙였다가 `TypeError`
-로 걸렸는데 **그건 운이었다** — 인자가 정수와 텐서라 종류가 달랐을 뿐이고, 같은
-종류였으면 뒤바뀐 차례로 계산한 수가 나와 케이스가 그것을 굳혔을 것이다.
+**The two names can differ down to the argument order**, which is the vicious
+end of that branch. `torch.polygamma(n, x)` against `x.polygamma(n)`, and
+`torch.lu_solve(b, LU, piv)` against `b.lu_solve(LU, piv)`. The first was wired up
+mechanically from a table and caught by a `TypeError` — and **that was luck.** The
+arguments happened to be an integer and a tensor, so the types differed; had they
+been the same type, a number computed in the reversed order would have come out
+and a case would have pinned it.
 
-**대칭이 있는 입력은 대칭을 깨는 결함을 가린다** (여러 번). 값이 전부 다르면 접힘의
-세 규칙이 같은 답을 내고, 창과 보폭이 같으면 보폭을 흘려도 답이 같고, 상삼각과
-하삼각이 같은 대각행렬은 `upper` 를 안 묻는다. **입력을 고르는 것이 케이스의 절반이다.**
+**Symmetric input hides the defects that break symmetry** (several times). With
+all values distinct, three different folding rules give the same answer; with the
+window equal to the stride, dropping the stride gives the same answer; and a
+diagonal matrix whose upper and lower triangles match never asks about `upper`.
+**Choosing the input is half of writing the case.**
 
-**정의역이 있는 인자는 전부 넣어 봐야 한다** (2회). `if p == 1: … else: L2` 처럼
-`else` 가 한 값의 이름을 달고 나머지를 삼키면, 인자를 흔들었을 때 답은 변하므로
-"인자가 쓰인다" 는 검사를 통과한다. 변한 답이 틀렸을 뿐이다.
+**An argument with a domain has to be tried across all of it** (twice). When an
+`else` wears one value's name and swallows the rest — `if p == 1: … else: L2` —
+shaking the argument does change the answer, so a check for "the argument is used"
+passes. The changed answer is simply wrong.
 
-**NaN 이 있을 수 있는 자리에서 마스크는 곱하는 것이 아니라 고르는 것이다** (3회).
-`0 × NaN = NaN` 이라 마스크 곱셈은 걸러 낸 자리를 통째로 오염시킨다. `where` 를 쓴다.
-코어의 `median`, borch.ts 의 `median`, 그리고 `nanmedian` 에서 한 번 더 물렸다.
+**Where NaN is possible, a mask selects rather than multiplies** (3 times).
+`0 × NaN = NaN`, so multiplying by a mask contaminates the very positions it
+filtered out. Use `where`. It bit in the core's `median`, in borch.ts's `median`,
+and once more in `nanmedian`.
 
-**주석이 말하는 것과 코드가 묻는 것이 다르면, 그 주석은 다음 사람을 안 지킨다** (1회).
-`values_of` 에는 "텐서인지를 먼저 묻는다" 고 적혀 있었는데 실제로는
-`hasattr(got, "numpy")` 로 물었다. 우리 쪽 쌍은 못 찾은 이름을 값으로 넘기므로 참이라고
-답하고 torch 의 namedtuple 은 안 넘기니, **같은 헬퍼가 라이브러리마다 다른 갈래를 타고
-있었다.** 그 상태로 오래 초록이었다 — 아무도 그 텐서에서 `.values` 를 꺼낼 일이 없었기
-때문이고, 희소용 `Tensor.values` 를 만들자 `reduce::grad::cummax` 가 터졌다.
-주석은 검사가 아니라 **의도의 기록**이다. 의도를 지키려면 코드가 그것을 묻게 해야 한다.
+**When what a comment says and what the code asks differ, that comment does not
+protect the next person** (once). `values_of` said "it asks whether it is a tensor
+first" and actually asked with `hasattr(got, "numpy")`. Our pair forwards an
+unfound name as a value and so answers true, while torch's namedtuple does not —
+so **the same helper was taking a different branch per library.** It stayed green
+in that state for a long time, because nobody had reason to pull `.values` off
+that tensor, and building the sparse `Tensor.values` blew up
+`reduce::grad::cummax`. A comment is not a check; it is **a record of intent.**
+Keeping the intent means making the code ask for it.
 
-**셋이 서로를 대조하므로, 한쪽이 다른 쪽의 구멍을 베끼면 표는 초록이다** (1회지만
-가장 위험하다). borch.ts 의 `i0` 은 기울기를 0 으로 두고 **"코어도 그래프를 끊고
-있어서 맞춘 것"** 이라고 주석에 적혀 있었다. 둘이 일치했고 torch 와는 갈렸다.
-게다가 베낄 때 나빠졌다 — 끊긴 그래프는 멈추지만 `0` 은 안 멈춘다. **기울기가 0 인
-것과 기울기가 없는 것은 다른 말이다.**
+**The three compare against each other, so one copying another's hole leaves the
+table green** (once, and the most dangerous of them). borch.ts's `i0` left the
+gradient at 0, and its comment said **"matched, because the core cuts the graph
+too".** The two agreed and both diverged from torch. And it got worse in the
+copying — a cut graph stops and a `0` does not. **A gradient of zero and no
+gradient are different statements.**
 
-**눈가림을 막으려고 넣은 장치가 다른 모양에서 눈가림을 만든다** (1회지만 위 다섯과
-성격이 다르다 — 앞의 것들은 케이스를 쓰는 사람의 실수인데 이것은 **검사 장치 자신의**
-실수다). 기울기 케이스를 그냥 `sum()` 으로 접으면 상류가 전부 1 이라 어느 자리가
-안 움직였는지 안 남는다. 그래서 자리마다 다른 가중치를 곱하는데, 그 가중치를
-`arange` 로 만들면 **첫 몫이 0** 이다. 출력이 한 칸인 케이스는 그 하나가 전부라
-기울기가 통째로 0 이 되고, **기울기를 아예 안 흘리는 구현도 통과한다.**
-`edge::grad::max(동점)` 이 `[0,1,0,0]` 대신 `[0,0,0,0]` 을 굳히고 있었다.
+**Machinery added to stop one blindfold creates a blindfold in another shape**
+(once, and different in kind from the five above — those are mistakes by whoever
+writes a case, and this one is **the checking machinery's own**). Folding a
+gradient case with a plain `sum()` makes everything upstream 1, so nothing records
+which position failed to move. So a different weight is multiplied in per
+position — and building those weights with `arange` makes **the first share 0.**
+A case whose output is one cell has that one share as the whole of it, so the
+gradient becomes 0 throughout and **an implementation that flows no gradient at
+all passes.** `edge::grad::max(동점)` was pinning `[0,0,0,0]` instead of
+`[0,1,0,0]`.
 
-곁들여, 검사 자체가 한쪽 편을 드는 자리도 세 번 나왔다: **평범한 텐서도
-`.values`·`.indices` 를 갖는다**(희소용). 튜플인지 먼저 보지 않으면 텐서의 첫
-원소를 집고, 그러면 없는 결함이 무더기로 보인다. 그 셋과 위의 `arange` 는 방향이
-반대다 — **저쪽은 없는 결함을 보여 주고 이쪽은 있는 결함을 감춘다.**
+Alongside, three more places where the check itself took a side: **an ordinary
+tensor has `.values` and `.indices` too** (for the sparse layout). Without asking
+whether it is a tuple first, it picks up the tensor's first element, and then a
+heap of defects that do not exist appear. Those three and the `arange` above point
+opposite ways — **that one shows defects that are not there and this one hides
+defects that are.**
 
-그리고 위 다섯과 **증상이 반대인** 자리가 하나 있다. 다섯은 결함이 안 보이는
-쪽인데, 이쪽은 **빨강이 엉뚱한 이름을 달고 나온다** — 케이스가 공유 상태를 건드리면
-그 뒤에 오는 케이스들이 대신 빨개진다. `tensor()` 가 사본을 안 뜨던 동안 케이스
-하나가 입력 배열을 1 만큼 올렸고, torch 는 사본을 떠서 안 샜기 때문에 **코어에서만**
-열여섯 자리가 틀렸다. 하나씩 돌리면 전부 통과해서 원인이 자기 자리에 없었다.
-처방도 다르다 — 케이스를 더 넣는 것이 아니라 **격리하는 것**이다.
+And one place has **the opposite symptom** from the five. The five are the side
+where a defect is invisible; this one is where **the red carries the wrong name** —
+a case touching shared state turns the cases behind it red instead. While
+`tensor()` was not taking a copy, one case raised its input array by 1, and
+because torch does take a copy and did not leak, sixteen places were wrong **in
+the core alone.** Run one at a time they all passed, so the cause was not at its
+own address. The remedy differs too — not more cases but **isolation.**
 
 ---
 
-## 얼마나 빠른가
+## How fast it is
 
-브라우저(Pyodide) 기준 실측이다.
+Measured in a browser (Pyodide).
 
-| | 시간 |
+| | time |
 |---|---|
-| MLP 학습 1스텝 (256×64) | 3.3ms |
-| conv2d 순방향 (32×1×28²) | 1.9ms |
-| **MNIST CNN 학습 1에폭** | **약 2분** |
+| one MLP training step (256×64) | 3.3ms |
+| conv2d forward (32×1×28²) | 1.9ms |
+| **one MNIST CNN training epoch** | **about 2 minutes** |
 
-네이티브에서는 torch 와 비슷하거나 빠르다 — 둘 다 BLAS 를 부르고, 작은 텐서에서는
-torch 의 디스패처 오버헤드가 더 크다. 느려지는 것은 wasm 탓이고, 그중에서도
-큰 행렬곱만 유독 나쁘다(Pyodide 의 BLAS 가 SIMD·멀티스레드를 못 쓴다).
+Natively it is comparable to torch or faster — both call BLAS, and on small
+tensors torch's dispatcher overhead is the larger cost. What makes it slow is
+wasm, and within that, large matrix multiplication alone is unusually bad
+(Pyodide's BLAS cannot use SIMD or multiple threads).
 
-**MNIST 급까지는 브라우저에서 실제로 학습된다.** 그 위는 자기 컴퓨터나 원격 장비다 —
-또는 아래의 GPU 배포판이다.
+**Up to MNIST scale, training really happens in a browser.** Above that it is your
+own machine or remote hardware — or the GPU distribution below.
 
-## 그 위가 필요하면 — `borch-webgpu`
+## If you need more than that — `borch-webgpu`
 
-이것(코어)은 **numpy 위에서 MNIST 급까지**다. 그 경계를 넘고 싶으면 별도 배포판이 있다.
+This one (the core) is **up to MNIST scale, on numpy.** Crossing that boundary is
+a separate distribution's job.
 
-| | 코어 `borch` | `borch-webgpu` |
+| | the core `borch` | `borch-webgpu` |
 |---|---|---|
-| 무엇 위에 | numpy | borch.ts (직접 쓴 WGSL) |
-| 휠 | 순수 파이썬 42KB | 휠에 없다(브라우저 전용, borch.ts 는 페이지가 싣는다) |
-| 어디서 | 어디서나 | **브라우저 안에서만** |
-| 천장 | MNIST 급 | **CIFAR ResNet-18 이 에폭 약 1.6분** (실측) |
-| 읽히는가 | 그것이 전부다 | 아니다. 성능이 목적이다 |
-| 제자리 연산 | `x.add_(1)` 도, **뷰를 통한 전파도** 된다 | `x.add_(1)` 은 되고, **뷰 전파는 거절한다** |
+| built on | numpy | borch.ts (hand-written WGSL) |
+| wheel | pure Python, 42KB | not in a wheel (browser-only; the page loads borch.ts) |
+| where | anywhere | **in a browser only** |
+| ceiling | MNIST scale | **CIFAR ResNet-18 at about 1.6 min/epoch** (measured) |
+| readable | that is the whole of it | no. performance is the point |
+| in-place | `x.add_(1)`, **and propagation through a view** | `x.add_(1)` works and **propagation through a view is refused** |
 
-### 그래서 몇 %인가
+### So what percentage
 
-천장을 **속도로만** 말해왔다. "에폭 2분"은 맞지만 "그래서 몇 %"는 오래 아무도 안 물었다.
-잰 값은 아래와 같다 — CIFAR-10 학습 1만 장, **학습에 안 쓴** 시험 1만 장, ResNet-18,
-10 에폭, 배치 128.
+The ceiling had only ever been described **by speed.** "Two minutes an epoch" is
+true, and "so what percentage" went unasked for a long time. What was measured is
+below — CIFAR-10 with 10,000 training images, 10,000 test images **not used in
+training**, ResNet-18, 10 epochs, batch 128.
 
-> **이 표는 TF.js 바닥에서 잰 것이다.** 그 뒤 같은 이름의 패키지가 borch.ts 위로
-> 옮겨갔고, 아직 다시 안 쟀다. 그때 골든이 두 바닥에서 같은 값을 냈으므로 크게
-> 달라질 이유는 없지만, **재지 않은 것을 잰 것처럼 적지 않는다.**
+> **This table was measured on the TF.js foundation.** The package of the same
+> name has since moved onto borch.ts and it has not been measured again. The golden
+> gave the same values on both foundations at the time, so there is no reason to
+> expect a large change — and **what has not been measured is not written down as
+> though it had been.**
 
-| 10 에폭 뒤 | 늘리기 없음 | 늘리기 있음 |
+| after 10 epochs | no augmentation | with augmentation |
 |---|---|---|
-| 학습 정확도 | 80.9% | 64.8% |
-| **시험 정확도** | 59.9% | **60.4%** |
-| **둘의 차이(과적합)** | **+21.0%** | **+4.3%** |
-| 가장 좋았던 시험 | 61.4% (8에폭) | 62.2% (9에폭) |
+| training accuracy | 80.9% | 64.8% |
+| **test accuracy** | 59.9% | **60.4%** |
+| **the gap (overfitting)** | **+21.0%** | **+4.3%** |
+| best test | 61.4% (8 epochs) | 62.2% (9 epochs) |
 
-**학습 정확도만 봤으면 늘리기가 해롭다고 결론냈을 것이다**(80.9% → 64.8%). 시험 정확도만
-봤어도 거의 같아서(59.9% vs 60.4%) 아무 일도 없는 줄 알았을 것이다. 둘을 같이 봐야
-보이는 것이 **과적합이 21.0%에서 4.3%로 줄었다**는 것이고, 늘리기가 하라고 있는 일이
-정확히 그것이다. 늘리기 없는 쪽은 8 에폭에서 시험 정확도가 꺾여 내려간다.
+**Looking at the training accuracy alone would have concluded that augmentation
+hurts** (80.9% → 64.8%). Looking at the test accuracy alone, they are near enough
+identical (59.9% against 60.4%) to conclude that nothing happened. What only
+appears when both are read together is that **the overfitting fell from 21.0% to
+4.3%**, and that is precisely the job augmentation is there to do. Without it, the
+test accuracy turns over and falls after 8 epochs.
 
-두 조건은 **각자 새 페이지에서** 돌린다. 한 세션에 이어 돌리면 둘째 모델은 난수기가
-진행된 뒤라 초기 가중치가 달라지고, 재려는 것이 늘리기의 효과인데 초기값 차이가 섞인다.
+The two conditions are run **each on a fresh page.** Run one after the other in one
+session, the second model starts after the generator has advanced, so its initial
+weights differ — and the thing being measured is the effect of augmentation, with a
+difference in initialisation mixed into it.
 
 ```bash
-# cifar-batch1.bin(학습)과 cifar-batch-test.bin(시험)이 저장소 루트에 있어야 한다.
-# 원본은 CORS 로 못 받으므로 직접 가져다 둔다 — 아래 transforms 절 참고.
+# cifar-batch1.bin (training) and cifar-batch-test.bin (test) have to be at the repository root.
+# The originals cannot be fetched because of CORS, so they are put there by hand — see the transforms section below.
 uv run --with playwright python tests/browser/run.py \
     --lib borch_webgpu --headed --accuracy --epochs 10 --augment off
 uv run --with playwright python tests/browser/run.py \
     --lib borch_webgpu --headed --accuracy --epochs 10 --augment on
 ```
 
-> 이 수는 **1만 장으로 10 에폭**을 돌린 값이다. CIFAR 전체(5만 장)나 더 긴 학습의 값이
-> 아니고, 발표된 ResNet-18 수치와 비교할 것도 아니다. 여기서 말하려는 것은 절대 수치가
-> 아니라 **재는 자리가 생겼다**는 것과 늘리기가 실제로 듣는다는 것이다.
+> These are numbers from **10 epochs over 10,000 images.** They are not numbers
+> for the whole of CIFAR (50,000) or for a longer run, and they are not for
+> comparing against published ResNet-18 figures. What they are here to say is not
+> the absolute number but that **there is now a place to measure**, and that
+> augmentation does actually work.
 
-**코어를 대체하지 않는다.** 왜 하나로 합치지 않았는지는 [ROADMAP 의 ADR-001](ROADMAP.md)
-에 적었다 — 요약하면 휠의 성질이 전염되고, 브라우저·드라이버 실패가 `import` 로 올라오고,
-"임포트만 바꾸면 같은 코드"라는 약속이 `device`·비동기와 양립하지 않기 때문이다.
+**It does not replace the core.** Why the two were not merged is written in
+[ADR-001 in the ROADMAP](ROADMAP.md) — in short, a wheel's properties are
+contagious, browser and driver failures rise up to the `import`, and the promise
+of "the same code with one import changed" is not compatible with `device` and
+asynchrony.
 
-설계와 실측은 [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md) 에 있다.
+The design and the measurements are in [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md).
 
 ## 지원 범위
 
