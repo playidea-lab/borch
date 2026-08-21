@@ -51,6 +51,8 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
 import enum as _enum
+import sys as _sys
+import types as _types
 import warnings as _warnings
 
 import numpy as _np
@@ -1068,12 +1070,149 @@ class RandomErasing:
                 f"ratio={self.ratio}, value={self.value}, inplace={self.inplace})")
 
 
-class _Transforms:
-    """The slot for `from borchvision import transforms`. The name alone is
-    borrowed so that torchvision's module structure stays intact."""
+# --- transforms.functional -------------------------------------------------
+#
+# **The same arithmetic, called without building an object.** Every function here
+# hands the work to the class above or to the helper the class uses — none of them
+# reimplements anything. That is the point: two copies of `Resize`'s filter would
+# agree on the day they were written and not on some later one.
+#
+# torchvision's own division is the reverse — the classes call the functions. Ours
+# goes the other way because the classes were here first, and turning them inside out
+# to match would be a rewrite of working code for the shape of the call graph, which
+# nobody can see from outside.
+#
+# **What it is for**: a tutorial writes `F.hflip(x)` as often as it writes
+# `RandomHorizontalFlip()`, and until now that line stopped with an `AttributeError`
+# on a namespace that did not exist.
 
 
-transforms = _Transforms()
+def hflip(img):
+    """Left to right, with no draw in it."""
+    return _np.ascontiguousarray(_flip(_require_hwc(img, "hflip"), 1))
+
+
+def vflip(img):
+    return _np.ascontiguousarray(_flip(_require_hwc(img, "vflip"), 0))
+
+
+def crop(img, top, left, height, width):
+    """**Not `RandomCrop` without the draw** — the position is given, and it may
+    fall outside the picture, which numpy would answer with a smaller array rather
+    than an error."""
+    img = _require_hwc(img, "crop")
+    h, w = img.shape[0], img.shape[1]
+    if top < 0 or left < 0 or top + height > h or left + width > w:
+        raise ValueError(
+            f"The crop ({top}, {left}, {height}, {width}) leaves the image {(h, w)}.\n"
+            "  numpy would answer a shorter array here rather than stopping, and the "
+            "batch that follows would refuse to stack for a reason pointing elsewhere.")
+    return _np.ascontiguousarray(_crop(img, 0, top, height, 1, left, width))
+
+
+def center_crop(img, output_size):
+    return CenterCrop(output_size)(img)
+
+
+def pad(img, padding, fill=0, padding_mode="constant"):
+    return Pad(padding, fill, padding_mode)(img)
+
+
+def resize(img, size, interpolation="bilinear", max_size=None, antialias=True):
+    return Resize(size, interpolation, max_size, antialias)(img)
+
+
+def resized_crop(img, top, left, height, width, size, interpolation="bilinear",
+                 antialias=True):
+    """Crop, then resize — `RandomResizedCrop` with the draw already made."""
+    return resize(crop(img, top, left, height, width), size, interpolation,
+                  antialias=antialias)
+
+
+def normalize(tensor, mean, std, inplace=False):
+    return Normalize(mean, std, inplace)(tensor)
+
+
+def to_tensor(pic):
+    return ToTensor()(pic)
+
+
+def rgb_to_grayscale(img, num_output_channels=1):
+    return _to_gray(_require_hwc(img, "rgb_to_grayscale"), num_output_channels,
+                    "rgb_to_grayscale")
+
+
+def to_grayscale(img, num_output_channels=1):
+    """**torchvision keeps both names** — this one is the PIL path's and
+    `rgb_to_grayscale` is the tensor path's. They compute the same thing here, and
+    the second name is kept because tutorials written against PIL call it."""
+    return rgb_to_grayscale(img, num_output_channels)
+
+
+def five_crop(img, size):
+    return FiveCrop(size)(img)
+
+
+def ten_crop(img, size, vertical_flip=False):
+    return TenCrop(size, vertical_flip)(img)
+
+
+def erase(img, i, j, h, w, v, inplace=False):
+    """Blank one rectangle of a **tensor**. `RandomErasing` with the draw made.
+
+    `i` and `j` are torchvision's names and they are top and left in that order —
+    kept rather than renamed, because a tutorial passing them positionally is the
+    only way anybody calls this.
+    """
+    out = img if inplace else (
+        img.copy() if isinstance(img, _np.ndarray) else img.clone())
+    out[..., i:i + h, j:j + w] = v
+    return out
+
+
+def get_dimensions(img):
+    """`[channels, height, width]` — **and `get_image_size` is not this reversed.**"""
+    img = _require_hwc(img, "get_dimensions")
+    return [img.shape[2] if img.ndim == 3 else 1, img.shape[0], img.shape[1]]
+
+
+def get_image_size(img):
+    """`[width, height]`. **Width first**, which is the opposite order to every other
+    size in this file — torchvision inherits it from PIL, where a size is `(w, h)`.
+    Copying the shape here instead would be right in shape and swapped in meaning on
+    any picture that is not square."""
+    channels_h_w = get_dimensions(img)
+    return [channels_h_w[2], channels_h_w[1]]
+
+
+def get_image_num_channels(img):
+    return get_dimensions(img)[0]
+
+
+# --- the namespaces, and why they are modules ------------------------------
+#
+# `transforms` used to be an instance of a class with the name borrowed. That was
+# enough for `from borchvision import transforms`, and it is **not** enough for the
+# line tutorials actually write:
+#
+#     import torchvision.transforms.functional as F
+#
+# `import a.b.c` walks `sys.modules` for each dotted name, and an attribute holding an
+# object is not a module however much it looks like one. So both are real modules and
+# both are registered — after which all four spellings work, including
+# `from borchvision.transforms import functional as F`.
+#
+# `borchvision` is a single file rather than a package, so nothing else would create
+# those entries. Registering them by hand is the only way a file can carry a
+# namespace path, and the alternative — telling people to spell the import
+# differently here — is the kind of difference that makes the imitation worthless.
+
+transforms = _types.ModuleType("borchvision.transforms")
+functional = _types.ModuleType("borchvision.transforms.functional")
+transforms.functional = functional
+_sys.modules["borchvision.transforms"] = transforms
+_sys.modules["borchvision.transforms.functional"] = functional
+
 for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
               "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
@@ -1081,3 +1220,12 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "RandomResizedCrop", "RandomVerticalFlip", "Resize", "TenCrop",
               "ToTensor"):
     setattr(transforms, _name, globals()[_name])
+
+# `InterpolationMode` is in both, because torchvision has it in both — it is defined
+# in `functional` and re-exported by `transforms`, and a name counted in one namespace
+# and missing from the other is a gap that is not one.
+for _name in ("InterpolationMode", "center_crop", "crop", "erase", "five_crop",
+              "get_dimensions", "get_image_num_channels", "get_image_size", "hflip",
+              "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",
+              "ten_crop", "to_grayscale", "to_tensor", "vflip"):
+    setattr(functional, _name, globals()[_name])

@@ -427,9 +427,10 @@ NOT_PORTED = {
     # `padding` 기본값), `ae60832` 에서 고쳐져 넷 다 답을 냈다. 한 수로 적었다면
     # 그 넷은 백로그로 계산돼 아무도 손대지 않았을 것이다.
     #
-    # 남은 38 은 순수한 밀린 일이다. `borchvision` 이 스물둘을 들고 `vision.ts` 는
-    # 일곱만 든다. 열다섯이 저쪽에 없으니 그 케이스들은 물을 자리가 없다.
-    "vision::": (38, "아직 — 열다섯이 `vision.ts` 에 없다 (값 24 · repr 14)"),
+    # 남은 43 은 순수한 밀린 일이다. `borchvision` 이 스물하나를 들고 `vision.ts` 는
+    # 일곱만 든다. 열넷이 저쪽에 없고, 거기에 `transforms.functional` 의 다섯이
+    # 붙는다 — 저쪽에는 그 네임스페이스 자체가 없다.
+    "vision::": (43, "아직 — 열다섯이 `vision.ts` 에 없다 (값 29 · repr 14)"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

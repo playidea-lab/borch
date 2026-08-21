@@ -77,6 +77,23 @@ def _shared():
             yield name, getattr(V.transforms, name), theirs
 
 
+def _shared_functions():
+    """The same question of `transforms.functional`.
+
+    **A function's arguments are worse than a class's**, not better: a class is usually
+    built with keywords and called with one thing, while `F.pad(img, [1, 2], 0.5)` is
+    positional from end to end. Every argument there is decided by where it sits.
+    """
+    import torchvision.transforms.functional as TF
+    # **`_`-led names are the module's own furniture**, not its surface — a module
+    # object carries `__loader__` and `__spec__`, and both have signatures.
+    for name in sorted(n for n in dir(V.transforms.functional)
+                       if not n.startswith("_") and not n[0].isupper()):
+        theirs = getattr(TF, name, None)
+        if theirs is not None:
+            yield name, getattr(V.transforms.functional, name), theirs
+
+
 def test_every_transform_takes_torchs_arguments_in_torchs_order():
     """Same names, same order, or a written reason.
 
@@ -103,6 +120,28 @@ def test_every_transform_takes_torchs_arguments_in_torchs_order():
         "correctly shaped picture. If the difference is meant, put it in `DELIBERATE` "
         "with the reason — a difference nobody wrote down cannot be told from one "
         "nobody noticed.")
+
+
+def test_every_function_takes_torchs_arguments_in_torchs_order():
+    """`transforms.functional`, by the same rule.
+
+    The names are compared rather than the defaults, deliberately. torchvision's
+    `interpolation` default is an `InterpolationMode` and ours is the string it wraps —
+    the same filter, spelled for a library that takes both, and the golden repr cases
+    are what hold the spelling.
+    """
+    wrong = []
+    for name, ours, theirs in _shared_functions():
+        if name in DELIBERATE:
+            continue
+        mine, torchs = _arguments(ours), _arguments(theirs)
+        if mine != torchs:
+            wrong.append(f"{name}\n      ours  : {', '.join(mine)}\n"
+                         f"      torch : {', '.join(torchs)}")
+    assert not wrong, (
+        "functions whose argument list is not torchvision's:\n    " + "\n    ".join(wrong)
+        + "\n\nThese are called positionally more often than the classes are, so a "
+        "parameter in the wrong place lands a value in the wrong argument silently.")
 
 
 def test_no_deliberate_row_explains_a_transform_that_matches():
