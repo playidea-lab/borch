@@ -17,13 +17,18 @@ they are.** So the original of every description is always the source, and nothi
 transcribed here. A wrong description has to be fixed in the source — that direction is
 the point.
 
-## The descriptions are Korean, and the English sits beside them
+## The descriptions are English, and the Korean sits beside them
 
-The source comments are Korean, so the descriptions pulled out are Korean. The English
-lives in `site/api_en.json`, not here and not in the source, and every entry carries a
-fingerprint of the Korean it was made from. The fear this file used to record — that a
+The source comments are English, so the descriptions pulled out are English. The Korean
+lives in `site/api_ko.json`, not here and not in the source, and every entry carries a
+fingerprint of the English it was made from. The fear this file used to record — that a
 translation drifts from the source the day it is written — is right, and the fingerprint
 is the answer to it: drift is not prevented, it is prevented from being quiet.
+
+The roles used to be the other way round, and the table turned over rather than being
+rewritten (`feb5e5d`). Which direction is the original matters here: the original is
+whatever `tsc` copies out of the source, and the translation is whatever a fingerprint
+has to guard.
 
 Signatures, kinds and the torch name mapping are language-neutral and identical on both
 pages.
