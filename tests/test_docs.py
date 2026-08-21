@@ -1,26 +1,29 @@
-"""문서에 적힌 **개수**가 실제와 같은지 본다.
+"""Checks that the **counts** written in the documentation match reality.
 
-골든이 늘 때마다 문서의 수가 낡는다. 이 저장소는 그것을 이미 세 번 잡았고
-(`b00e693` 골든 수, `b3d7453` 세 수치, `e41c043` 그중 하나는 설치를 깨뜨렸다)
-세 번 다 사람이 눈으로 찾아 고쳤다. **세 번 실패한 방식은 방식이 문제다.**
+Every time the golden cases grow, the numbers in the documentation go stale. This
+repository has already caught that three times (`b00e693` the golden count, `b3d7453`
+three figures, `e41c043` one of which broke installation) and all three times a person
+found and fixed it by eye. **A method that has failed three times is the problem.**
 
-여기서 묻는 것은 정확히 하나다: **README 가** 말하는 케이스 수가 표가 실제로 담는
-수와 같은가.
+Exactly one thing is asked here: does the case count **the README** states equal what the
+table actually holds.
 
-**설계 문서는 안 본다.** 처음에 전부 보게 했더니 열 곳이 걸렸는데, 그중 일곱이
-낡은 것이 아니라 **그때의 기록**이었다 — `BORCH-TS.md` 의 "relu 가 골든 798 건을
-그대로 통과했다" 는 798 이 맞다. 845 로 고치면 낡은 수를 고치는 것이 아니라 역사를
-위조하는 것이고, 그건 낡은 수보다 나쁘다. `WEBGPU-DESIGN.md` 의 "골든 141/141" 도
-S3 단계가 그때 도달한 지점이다.
+**Design documents are not read.** Reading everything caught ten places at first, and
+seven of them were not stale but **a record of that moment** — `BORCH-TS.md`'s "relu
+passed all 798 golden cases as it stood" is right at 798. Changing it to 845 is not
+fixing a stale number but forging history, which is worse than a stale number.
+`WEBGPU-DESIGN.md`'s "golden 141/141" is where stage S3 stood at the time.
 
-그래서 경계를 **문서의 종류**로 긋는다. README 는 지금을 말하는 자리이므로 늘
-현재여야 하고, 설계·이력 문서는 그때를 말하는 자리이므로 손대면 안 된다. 시제를
-정규식으로 가르려던 첫 시도는 그 구분을 못 했다.
+So the line is drawn by **kind of document.** The README is a place that speaks of now and
+has to be current; design and history documents speak of then and must not be touched. A
+first attempt at separating tense with a regular expression could not make that
+distinction.
 
-**설명 페이지(`site/`)도 지금을 말하는 자리다.** 남에게 보이는 첫 화면이라 오히려
-README 보다 낡으면 안 되는데, 여기서 안 보면 아무도 안 본다 — 사이트 문구는 골든을
-늘리는 사람의 시야 밖에 있다. 이 저장소가 세 번 겪은 것과 **같은 방식의 실패**이므로
-같은 그물을 씌운다. 영어 판이 있으므로 `N golden cases` 꼴도 함께 잡는다.
+**The explainer pages (`site/`) speak of now too.** They are the first screen anyone else
+sees, so they can afford staleness even less than the README — and unread here, nobody
+reads them: the site's wording is outside the field of view of whoever adds golden cases.
+It is **the same shape of failure** this repository has had three times, so the same net
+goes over it. There is an English edition, so the `N golden cases` form is caught too.
 """
 
 import pathlib
@@ -29,42 +32,46 @@ import re
 import cases as cases_mod
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# 케이스 수를 말하는 자리들. `골든 845건` · `골든 1020/1020` 같은 모양을 찾는다.
+# Places that state a case count. It looks for shapes such as `골든 845건` and `골든 1020/1020`.
 #
-# **세 자리로 못 박아 두었다가 표가 1000 을 넘는 순간 조용해졌다.** 아무것도 안
-# 잡는 검사는 통과하는 검사처럼 보이고, 그것이 낡은 수보다 나쁘다 — 낡은 수는
-# 언젠가 눈에 띄지만 안 도는 검사는 안 띈다. 자릿수를 넉넉히 잡는다.
+# **Pinned at three digits, it went quiet the moment the table passed a thousand.** A check
+# that catches nothing looks exactly like a check that passes, and that is worse than a
+# stale number — a stale number is noticed eventually; a check that does not run is not.
+# The digit range is left generous.
 COUNT = re.compile(
     r"골든\s*\*{0,2}(\d{3,5})\s*(?:건|/\s*\d{3,5})"
-    # 사이트는 기본이 영어다. `<strong>` 같은 표시는 앞뒤로 흘려보낸다.
+    # The site is English by default. Markup such as `<strong>` is let through on either side.
     r"|(\d{3,5})\s*golden\s*cases")
-# **`골든` 을 앞에 안 단 자리도 있다.** "53 건을 빼고 2709 건을 본다" 가 그것이고,
-# 위 그물이 접두사를 요구해서 통째로 빠져나갔다 — 골든이 2263 에서 2953 으로 가는
-# 동안 그 한 줄만 옛날 수를 들고 남아 있었다. 사이트 세션이 눈으로 찾아 줬다.
-# **파생된 수도 수다.** 여기서 세 값 중 하나여야 한다는 규칙은 똑같이 적용된다.
+# **Some places do not put `골든` in front.** "53 건을 빼고 2709 건을 본다" is one, and the
+# net above required the prefix so it slipped through entirely — while the golden cases went
+# from 2263 to 2953, that one line kept its old number. A site session found it by eye.
+# **A derived number is a number.** The rule that it must be one of the three values applies
+# to it identically.
 DERIVED = re.compile(r"(\d{3,5})\s*건을\s*본다")
 
-# **지금을 말하는 자리들.** 설계·이력 문서는 여기 없다 — 위의 docstring 참고.
+# **Places that speak of now.** Design and history documents are not here — see the docstring above.
 LIVE_DOCS = ("README.md", "site/index.html", "site/ko/index.html")
 
 
 def _hit(found):
-    """`findall` 이 준 하나에서 수를 꺼낸다.
+    """Pulls the number out of one thing `findall` returned.
 
-    **그물이 여럿이면 꼴이 달라진다.** 묶음이 하나인 정규식은 문자열을 주고, 갈래를
-    나눈 정규식은 **빈 칸이 섞인 튜플**을 준다. 둘을 한 고리에서 쓰려면 여기서 맞춰야
-    한다 — 안 맞추면 튜플이 그대로 비교에 들어가 **아무 수와도 안 같아지고**, 그러면
-    낡은 수를 전부 낡았다고 외치거나(운이 좋으면) 조용히 지나간다(운이 나쁘면).
+    **Several nets mean several shapes.** A regular expression with one group gives a
+    string; one with alternatives gives **a tuple with blanks in it.** Using both in one loop
+    means reconciling here — unreconciled, the tuple goes into the comparison as it stands
+    and **equals no number at all**, which either shouts that every number is stale (if you
+    are lucky) or passes quietly (if you are not).
     """
     return found if isinstance(found, str) else next((g for g in found if g), "")
 
 
 def _counts():
-    """(전체, 코어가 보는 수, 결속이 보는 수).
+    """(the whole, what the core sees, what the binding sees).
 
-    **셋이 된 것은 범위가 양쪽으로 갈렸기 때문이다.** 자매 전용(1·3 차원 합성곱처럼
-    코어가 일부러 거절하는 것)은 코어가 건너뛰고, 코어 전용(복소수)은 결속이
-    건너뛴다. 둘 중 하나만 세면 나머지 절반이 "구현이 빠졌다" 로 보인다.
+    **There are three because the scope split in both directions.** What is sister-only (1-D
+    and 3-D convolution, which the core deliberately refuses) is skipped by the core, and
+    what is core-only (complex) is skipped by the binding. Counting only one of them makes
+    the other half look like a missing implementation.
     """
     names = [n for n, _ in cases_mod.golden_cases(cases_mod.golden_inputs())]
     core = [n for n in names if not n.startswith(cases_mod.WEBGPU_PREFIX)]
@@ -73,22 +80,24 @@ def _counts():
 
 
 def test_docs_do_not_name_a_stale_golden_count():
-    """문서가 대는 케이스 수는 **지금 있는 수**여야 한다.
+    """The case count the documentation states has to be **the count that exists now.**
 
-    실제로 쓰이는 수는 셋이다 — 표 전체, 코어가 자매 전용을 뺀 수, 결속이 코어
-    전용을 뺀 수. 그 셋 중 아무것도 아닌 수가 `골든 N건` 자리에 있으면 낡은 것이다.
+    Three numbers are actually in use — the whole table, the core's count with sister-only
+    removed, and the binding's with core-only removed. A number in a `골든 N건` position that
+    is none of those three is stale.
 
-    **셋을 다 받으면 그물이 성겨진다.** 실제로 복소수를 넣던 날 전체가 2263 에서
-    2287 로 늘었는데 결속이 보는 수가 정확히 2263 이 되어, 낡은 문장 하나가 우연히
-    맞는 수를 들고 통과할 뻔했다. 수가 맞아도 그 문장은 "전부를 지난다" 였고 그건
-    더 이상 사실이 아니었다 — 수를 세는 검사는 문장을 안 읽는다는 것을 적어 둔다.
+    **Accepting all three loosens the net.** On the day complex went in, the whole grew from
+    2263 to 2287 while the binding's count became exactly 2263, and one stale sentence very
+    nearly passed carrying a number that happened to be right. The number was right and the
+    sentence said "it passes all of them", which was no longer true — a check that counts
+    numbers does not read sentences, and that is written down here.
     """
     total, core, bind = _counts()
     allowed = {str(total), str(core), str(bind)}
     stale = []
     for rel in LIVE_DOCS:
         path = ROOT / rel
-        # 사이트는 없을 수도 있다(체크아웃에 따라). 없는 것을 실패로 만들지 않는다.
+        # The site may be absent (depending on the checkout). Absence is not made a failure.
         if not path.exists():
             continue
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -96,23 +105,23 @@ def test_docs_do_not_name_a_stale_golden_count():
                 hit = _hit(found)
                 if hit not in allowed:
                     stale.append(
-                        f"{rel}:{i}  '{hit}' — 지금은 {total}(전체) / "
-                        f"{core}(코어) / {bind}(결속)")
+                        f"{rel}:{i}  '{hit}' — it is now {total} (whole) / "
+                        f"{core} (core) / {bind} (binding)")
     assert not stale, (
-        "지금을 말하는 문서의 골든 수가 낡았다:\n  " + "\n  ".join(stale) +
-        "\n\nREADME 와 `site/` 는 지금을 말하는 자리다. 그때를 이야기해야 하는 "
-        "문장이면 수를 빼고 쓰거나 설계 문서로 옮겨라 — 지난 수를 현재 수로 고치는 "
-        "것은 낡은 수를 고치는 것이 아니라 역사를 위조하는 것이다.")
+        "the golden counts in documents that speak of now are stale:\n  " + "\n  ".join(stale) +
+        "\n\nThe README and `site/` speak of now. A sentence that has to speak of then should "
+        "be written without the number, or moved into a design document — changing a past "
+        "number to the current one is not fixing a stale number but forging history.")
 
 
-# `2,358 줄` 처럼 패키지 크기를 말하는 자리. 천 단위 쉼표를 쓰든 안 쓰든 잡는다.
+# Places stating a package's size, such as `2,358 줄`. Caught with or without thousands separators.
 LINES = re.compile(r"\*{0,2}(\d{1,3}(?:,\d{3})*)\s*줄\*{0,2}")
-# 세는 대상. 지금 저장소에 있는 패키지만 — 지워진 것의 크기는 이력의 몫이다.
+# What is counted. Only packages present in the repository now — a deleted one's size belongs to history.
 PACKAGES = {"borch", "borch_webgpu"}
 
 
 def _package_lines():
-    """패키지 이름 → 줄 수."""
+    """package name → line count."""
     out = {}
     for name in PACKAGES:
         total = 0
@@ -122,33 +131,35 @@ def _package_lines():
     return out
 
 
-# **이력의 수.** 지금 세어서 확인할 수 없는 것들이라 여기 적어 둔다. 각각 무엇인지
-# 안 적으면 다음 사람에게는 그냥 마법 숫자가 된다.
+# **Numbers from history.** They cannot be verified by counting now, so they are written
+# here. Without saying what each one is, they are magic numbers to the next person.
 HISTORICAL = {
-    "5,307": "45be321 에서 지운 TF.js 판 borch_webgpu",
-    "3,300": "borch 를 파일 하나에서 패키지로 쪼갠 시점의 크기 (8177e1d)",
+    "5,307": "the TF.js borch_webgpu, deleted in 45be321",
+    "3,300": "borch's size when it was split from one file into a package (8177e1d)",
 }
 
-# **어긋남을 얼마까지 봐주는가.** 잡으려는 것은 2.6 배 오차이지 세 줄이 아니다.
-# 정확한 수를 요구하면 `_ops.py` 한 줄을 고칠 때마다 문서가 깨지고, 그러면 이 검사가
-# 지켜야 할 것을 지키는 대신 통과시키는 법을 배우게 만든다.
+# **How far a drift is tolerated.** What is being caught is a 2.6× error, not three lines.
+# Demanding an exact number breaks the documentation every time a line of `_ops.py` changes,
+# and then this check teaches people how to make it pass instead of guarding what it guards.
 TOLERANCE = 0.05
 
 
 def test_docs_do_not_name_a_stale_line_count():
-    """문서가 대는 **줄 수**가 실제와 크게 어긋나지 않아야 한다.
+    """The **line counts** the documentation states must not be far from reality.
 
-    골든 수에 이 장치를 달면서 줄 수에는 안 달았고, 바로 그 자리에서 두 번 틀렸다.
-    한 번은 여덟 파일 중 다섯만 세어 5,307 을 **2,312** 라고 적었고, 한 번은
-    `_data.py` 를 들여오기 전의 추정 **900** 을 다시 안 세고 옮겼다. 그 둘이 나란히
-    놓여 "2,312 줄이 900 줄이 되었다" 는 문장을 만들었는데, 실제로는 5,307 이
-    2,361 이 된 것이다 — 방향은 맞고 크기가 2.6 배 틀렸다.
+    This machinery went onto the golden count and not onto the line counts, and that is
+    exactly where it went wrong twice. Once it counted five of eight files and wrote 5,307 as
+    **2,312**; once it carried across an estimate of **900** from before `_data.py` arrived,
+    without recounting. Side by side those two made the sentence "2,312 lines became 900
+    lines", when in fact 5,307 became 2,361 — the direction was right and the magnitude was
+    off by 2.6×.
 
-    둘 다 커밋 메시지와 README 에 동시에 들어갔다. **눈으로 세는 것은 방식이 아니다.**
+    Both went into a commit message and the README at the same time. **Counting by eye is not
+    a method.**
 
-    경계는 골든 수와 같다. README 와 패키지 docstring 은 지금을 말하는 자리라
-    현재여야 하고, 설계 문서(`BORCH-TS.md`·`WEBGPU-DESIGN.md`)는 그때를 적은 자리라
-    안 본다.
+    The boundary is the golden count's. The README and the package docstrings speak of now
+    and have to be current; the design documents (`BORCH-TS.md`, `WEBGPU-DESIGN.md`) record
+    then and are not read.
     """
     sizes = _package_lines()
     stale = []
@@ -159,14 +170,14 @@ def test_docs_do_not_name_a_stale_line_count():
                 if hit in HISTORICAL:
                     continue
                 said = int(hit.replace(",", ""))
-                # 문장에 섞이는 작은 수까지 잡으면 노이즈가 된다.
+                # Catching the small numbers that appear inside sentences turns this to noise.
                 if said < 100:
                     continue
                 if any(abs(said - real) <= real * TOLERANCE for real in sizes.values()):
                     continue
-                stale.append(f"{rel}:{i}  '{hit} 줄' — 지금은 " +
+                stale.append(f"{rel}:{i}  '{hit} 줄' — it is now " +
                              ", ".join(f"{k} {v:,}" for k, v in sorted(sizes.items())))
     assert not stale, (
-        "문서의 줄 수가 실제와 어긋난다:\n  " + "\n  ".join(stale) +
-        "\n\n세어서 고쳐라. 그때를 말하는 수라면 `HISTORICAL` 에 무엇인지와 함께 "
-        "적어라 — 이력을 현재 수로 고치는 것은 낡은 수를 고치는 것이 아니다.")
+        "the line counts in the documentation differ from reality:\n  " + "\n  ".join(stale) +
+        "\n\nCount and fix. If it is a number about then, write it into `HISTORICAL` along "
+        "with what it is — changing history to the current number is not fixing a stale number.")
