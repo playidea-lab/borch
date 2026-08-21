@@ -7971,12 +7971,15 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "F.adjust_gamma", photo(lambda F, x: F.adjust_gamma(x, 2.2))),
         (VISION_PREFIX + "F.adjust_gamma(with gain)",
          photo(lambda F, x: F.adjust_gamma(x, 0.5, 0.5))),
-        # **The uint8 branch, where the truncation lives.** Every blend ends in a cast
-        # back, and doing the arithmetic one precision wider moves a value across that
-        # boundary — measured: float64 instead of float32 puts one pixel of this exact
-        # case one step out.
+        # **The uint8 branch, where the truncation lives**, at a factor that actually
+        # reaches it. Every blend ends in a cast back, and one precision wider moves
+        # values across that boundary — but not at every factor: this case was 1.7 and
+        # float64 changed **nothing** on this picture there, so the case named in
+        # `_working_dtype`'s docstring held no evidence for what the docstring claimed.
+        # 0.1 moves four pixels of this same picture. Found by the sister library, who
+        # deleted every narrowing in their port and watched ten cases stay green.
         (VISION_PREFIX + "F.adjust_saturation(uint8)",
-         photo(lambda F, x: F.adjust_saturation(x, 1.7), on_bytes=True)),
+         photo(lambda F, x: F.adjust_saturation(x, 0.1), on_bytes=True)),
         (VISION_PREFIX + "F.adjust_hue(uint8)",
          photo(lambda F, x: F.adjust_hue(x, 0.25), on_bytes=True)),
     ]
@@ -8076,6 +8079,114 @@ def vision_cases(inp=None):
          wrapper(lambda T: T.RandomAdjustSharpness(2.0, p=1.0))),
     ]
 
+    # --- resampling on a grid -------------------------------------------------
+    #
+    # **The first thing in this file that reads the input between its pixels.** Every
+    # transform before it moved, copied or rewrote whole pixels; these ask for a
+    # position that is not a pixel and interpolate. So the cases go after the
+    # convention rather than the result: `align_corners=False`, the half-pixel offset
+    # in the grid, and half-to-even rounding in the nearest mode. Getting any of the
+    # three wrong shifts the whole picture by half a pixel, which reads as softness
+    # rather than as an error.
+
+    def geom(call, on_bytes=False):
+        def run(L):
+            T = _vision(L)
+            F = T.functional
+            src = img_u8 if on_bytes else img_f
+            if _is_real_torch(L):
+                from torchvision.transforms import InterpolationMode
+                x = L.tensor(np.ascontiguousarray(src.transpose(2, 0, 1)))
+                out = call(F, x, {"nearest": InterpolationMode.NEAREST,
+                                  "bilinear": InterpolationMode.BILINEAR})
+                return L.tensor(np.ascontiguousarray(
+                    np.asarray(out.detach().numpy(), dtype=np.float32)))
+            out = call(F, src, {"nearest": "nearest", "bilinear": "bilinear"})
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).transpose(2, 0, 1)))
+        return run
+
+    cases += [
+        (VISION_PREFIX + "F.rotate(bilinear)",
+         geom(lambda F, x, M: F.rotate(x, 30, M["bilinear"]))),
+        # **Nearest is not the easy one.** A quarter turn puts every sampled position
+        # exactly halfway between two pixels, and half-to-even is what torch does
+        # there — `floor(x + 0.5)` disagrees on all of them at once.
+        (VISION_PREFIX + "F.rotate(nearest)",
+         geom(lambda F, x, M: F.rotate(x, 90, M["nearest"]))),
+        (VISION_PREFIX + "F.rotate(a straight angle)",
+         geom(lambda F, x, M: F.rotate(x, 180, M["bilinear"]))),
+        # `expand` grows the output to hold the corners. The 1e-4 truncation inside the
+        # size computation is what stops a corner at 1e-15 above an integer from
+        # ceiling to a whole extra pixel, so a quarter turn is asked as well as a
+        # slanted one.
+        (VISION_PREFIX + "F.rotate(expand)",
+         geom(lambda F, x, M: F.rotate(x, 30, M["bilinear"], expand=True))),
+        (VISION_PREFIX + "F.rotate(expand, quarter turn)",
+         geom(lambda F, x, M: F.rotate(x, 90, M["bilinear"], expand=True))),
+        # **The fill is sampled, not decided.** A mask of ones goes through the same
+        # grid, so a bilinear edge pixel is part picture and part fill in the
+        # proportion the interpolation used — deciding it from the coordinates gives a
+        # hard edge up to a pixel out.
+        (VISION_PREFIX + "F.rotate(filled)",
+         geom(lambda F, x, M: F.rotate(x, 30, M["bilinear"], fill=[0.5, 0.25, 0.75]))),
+        (VISION_PREFIX + "F.rotate(filled, nearest)",
+         geom(lambda F, x, M: F.rotate(x, 30, M["nearest"], fill=[0.5, 0.25, 0.75]))),
+        # An explicit centre arrives as an **offset from the middle**, not as a pixel
+        # position. Passing the middle itself shifts the picture by half its own size.
+        (VISION_PREFIX + "F.rotate(off centre)",
+         geom(lambda F, x, M: F.rotate(x, 30, M["bilinear"], center=[1, 2]))),
+        (VISION_PREFIX + "F.rotate(uint8)",
+         geom(lambda F, x, M: F.rotate(x, 30, M["bilinear"]), on_bytes=True)),
+        # `affine` one part at a time, then all four together — the four compose into
+        # one matrix, and a sign error in any one of them survives the other three.
+        (VISION_PREFIX + "F.affine(turned)",
+         geom(lambda F, x, M: F.affine(x, 30, [0, 0], 1.0, [0, 0], M["bilinear"]))),
+        (VISION_PREFIX + "F.affine(shifted)",
+         geom(lambda F, x, M: F.affine(x, 0, [1, 2], 1.0, [0, 0], M["bilinear"]))),
+        (VISION_PREFIX + "F.affine(scaled)",
+         geom(lambda F, x, M: F.affine(x, 0, [0, 0], 1.5, [0, 0], M["bilinear"]))),
+        (VISION_PREFIX + "F.affine(sheared)",
+         geom(lambda F, x, M: F.affine(x, 0, [0, 0], 1.0, [10, 20], M["bilinear"]))),
+        (VISION_PREFIX + "F.affine(all four)",
+         geom(lambda F, x, M: F.affine(x, 15, [1, -1], 0.8, [5, -5], M["bilinear"]))),
+        (VISION_PREFIX + "F.affine(all four, nearest)",
+         geom(lambda F, x, M: F.affine(x, 15, [1, -1], 0.8, [5, -5], M["nearest"]))),
+        (VISION_PREFIX + "F.affine(uint8)",
+         geom(lambda F, x, M: F.affine(x, 15, [1, -1], 0.8, [5, -5], M["bilinear"]),
+              on_bytes=True)),
+    ]
+
+    def turned(build):
+        """A drawn transform with its range pinned to one value — then the draw has one
+        answer and the frozen picture is about the resampling rather than the dice."""
+        def run(L):
+            T = _vision(L)
+            if _is_real_torch(L):
+                from torchvision.transforms import InterpolationMode
+                x = L.tensor(np.ascontiguousarray(img_f.transpose(2, 0, 1)))
+                out = build(T, InterpolationMode.BILINEAR)(x)
+                return L.tensor(np.ascontiguousarray(
+                    np.asarray(out.detach().numpy(), dtype=np.float32)))
+            out = build(T, "bilinear")(img_f)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).transpose(2, 0, 1)))
+        return run
+
+    cases += [
+        (VISION_PREFIX + "RandomRotation(pinned)",
+         turned(lambda T, m: T.RandomRotation((30, 30), interpolation=m))),
+        (VISION_PREFIX + "RandomRotation(pinned, expand)",
+         turned(lambda T, m: T.RandomRotation((30, 30), interpolation=m, expand=True))),
+        (VISION_PREFIX + "RandomAffine(pinned)",
+         turned(lambda T, m: T.RandomAffine((20, 20), interpolation=m))),
+        # **The fill goes per channel before the call**, which happens in the class
+        # rather than in `affine` — a single number handed through undone is a
+        # different picture on three channels.
+        (VISION_PREFIX + "RandomAffine(pinned, filled)",
+         turned(lambda T, m: T.RandomAffine((20, 20), interpolation=m, fill=0.5))),
+    ]
+
     # Representation (T3). This project treats `repr` as specification too — the tutorials do
     # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
@@ -8121,6 +8232,16 @@ def vision_cases(inp=None):
         ("RandomAdjustSharpness", lambda T: T.RandomAdjustSharpness(2)),
         ("RandomAutocontrast", lambda T: T.RandomAutocontrast()),
         ("RandomEqualize", lambda T: T.RandomEqualize()),
+        # **Two classes, two rules for dropping a field.** `RandomRotation` omits
+        # `center` and `fill` when they are `None`; `RandomAffine` omits a field when
+        # it equals its default. Both are torchvision's, and only the pair shows it.
+        ("RandomRotation", lambda T: T.RandomRotation(30)),
+        ("RandomRotation(expanded, off centre)",
+         lambda T: T.RandomRotation((-10, 10), expand=True, center=(1, 2), fill=5)),
+        ("RandomAffine", lambda T: T.RandomAffine(30)),
+        ("RandomAffine(everything)",
+         lambda T: T.RandomAffine(0, translate=(0.1, 0.2), scale=(0.8, 1.2),
+                                  shear=(5, 10))),
     )
     for name, build in reprs:
         cases.append((VISION_PREFIX + f"repr::{name}",

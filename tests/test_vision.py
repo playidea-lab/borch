@@ -625,3 +625,71 @@ def test_totensor_says_what_to_do_when_a_group_of_crops_arrives():
     out = V.Compose([V.FiveCrop(2),
                      V.Lambda(lambda crops: [V.ToTensor()(c) for c in crops])])(img)
     assert len(out) == 5 and out[0].shape == (3, 2, 2)
+
+
+# --- resampling on a grid ---------------------------------------------------
+
+
+def test_rotation_and_affine_draw_a_new_angle_each_call():
+    """The golden pins the range to one value, so **nothing there can see the draw.**"""
+    V.manual_seed(0)
+    img = np.arange(300, dtype=np.float32).reshape(10, 10, 3)
+    for transform in (V.RandomRotation(45), V.RandomAffine(45)):
+        seen = {transform(img).tobytes() for _ in range(40)}
+        assert len(seen) > 1, f"{transform} gave one result over forty draws"
+
+
+def test_expand_grows_the_picture_to_torchvisions_sizes():
+    """**The obvious expectation is wrong and the golden is right.**
+
+    A quarter turn of a 5x4 picture gives 5x6, not 4x5 — the corner arithmetic and its
+    ceil/floor pair land there, and torchvision agrees. I wrote 4x5 from the geometry
+    and this test failed, which is the only reason the number in the docstring above
+    is measured rather than assumed.
+    """
+    img = np.zeros((5, 4, 3), dtype=np.float32)
+    F = V.transforms.functional
+    assert F.rotate(img, 90, expand=True).shape == (5, 6, 3)
+    assert F.rotate(img, 180, expand=True).shape == (5, 4, 3)
+    assert F.rotate(img, 30, expand=True).shape[:2] > (5, 4)
+    assert F.rotate(img, 30).shape == (5, 4, 3)
+
+
+def test_a_centre_is_an_offset_from_the_middle_not_a_pixel():
+    """torch's convention: `(0, 0)` is the middle of the picture. Passing the middle
+    itself as a centre would shift the picture by half its own size, and **the shift is
+    exactly the kind that looks like a different crop rather than a wrong argument.**"""
+    img = np.arange(300, dtype=np.float32).reshape(10, 10, 3)
+    F = V.transforms.functional
+    assert np.array_equal(F.rotate(img, 30, "bilinear"),
+                          F.rotate(img, 30, "bilinear", center=[5, 5]))
+    assert not np.array_equal(F.rotate(img, 30, "bilinear"),
+                              F.rotate(img, 30, "bilinear", center=[0, 0]))
+
+
+def test_the_fill_is_sampled_alongside_the_picture():
+    """A mask of ones goes through the same grid, so a **bilinear** edge pixel is part
+    picture and part fill. Deciding inside-ness from the coordinates gives a hard edge,
+    and the tell is that no pixel is ever strictly between the fill and the picture."""
+    img = np.ones((9, 9, 3), dtype=np.float32)
+    out = V.transforms.functional.rotate(img, 30, "bilinear", fill=[0.0, 0.0, 0.0])
+    between = (out > 1e-6) & (out < 1.0 - 1e-6)
+    assert between.any(), (
+        "every pixel is either the picture or the fill — the mask is being decided "
+        "rather than sampled, and the edge is up to a pixel out")
+
+
+def test_nearest_rounds_halves_to_even():
+    """A quarter turn lands **every** sampled position exactly halfway between two
+    pixels. `floor(x + 0.5)` and half-to-even disagree on all of them at once, so this
+    is the angle where the rounding rule is the whole answer rather than a corner
+    case."""
+    img = np.arange(25, dtype=np.float32).reshape(5, 5, 1)
+    turned = V.transforms.functional.rotate(img, 90, "nearest")
+    assert np.array_equal(turned, np.rot90(img, 1))
+
+
+def test_affine_refuses_a_scale_that_is_not_positive():
+    with pytest.raises(ValueError, match="positive"):
+        V.transforms.functional.affine(np.zeros((4, 4, 3), dtype=np.float32),
+                                       0, [0, 0], 0.0, [0, 0])
