@@ -344,3 +344,35 @@ def test_normalize_inplace_is_a_no_op_and_the_input_survives():
     assert np.allclose(x, 1.0), (
         "the input was written through. `inplace` is documented as a no-op because the "
         "sister library's tensors are immutable — making it real here parts the two.")
+
+
+def test_random_crop_takes_its_arguments_in_torchvisions_order():
+    """**`RandomCrop(32, 4, True)` set `fill=True` here and `pad_if_needed=True` there.**
+
+    The list was `(size, padding, fill)` against torchvision's
+    `(size, padding, pad_if_needed, fill, padding_mode)`, so a positional call landed on
+    a different parameter and returned a correctly shaped picture either way. Nothing
+    raised, and no count of names could see it — `tests/test_torch_signatures.py` asks
+    the general question, and this pins the one that was wrong.
+    """
+    assert V.RandomCrop(2, 1, True).pad_if_needed is True
+
+
+def test_random_crop_pads_a_picture_smaller_than_the_crop_when_asked():
+    """`pad_if_needed` pads **both sides**, so a shortfall of one makes the picture two
+    larger — torchvision's arithmetic, not a rounding of it. Without the flag the same
+    call refuses."""
+    V.manual_seed(0)
+    img = np.arange(20, dtype=np.float32).reshape(5, 4, 1)
+    assert V.RandomCrop((6, 5), pad_if_needed=True)(img).shape == (6, 5, 1)
+    with pytest.raises(ValueError, match="larger than the image"):
+        V.RandomCrop((6, 5))(img)
+
+
+def test_random_crops_padding_mode_reaches_the_padding_it_adds():
+    """The mode is not decoration: `edge` and `constant` put different numbers at the
+    border, and a `padding_mode` accepted and dropped leaves zeros that look deliberate."""
+    img = np.arange(20, dtype=np.float32).reshape(5, 4, 1)
+    V.manual_seed(0)
+    edged = V.RandomCrop((7, 6), padding=1, padding_mode="edge")(img)
+    assert np.array_equal(edged, V.Pad(1, padding_mode="edge")(img))

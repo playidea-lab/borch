@@ -506,17 +506,45 @@ class RandomVerticalFlip:
 
 
 class RandomCrop:
-    """Pad the edges and then crop at random. `RandomHorizontalFlip`'s place."""
+    """Pad the edges and then crop at random. `RandomHorizontalFlip`'s place.
 
-    def __init__(self, size, padding=0, fill=0):
+    **The argument list is torchvision's, and it was not.** This took
+    `(size, padding, fill)` while torchvision takes
+    `(size, padding, pad_if_needed, fill, padding_mode)`, so `RandomCrop(32, 4, True)`
+    set `fill=True` here and `pad_if_needed=True` there — the same line, quietly
+    meaning two things, with the right shape coming out either way. Found by
+    comparing every constructor against torchvision's rather than by anything going
+    wrong; `tests/test_torch_signatures.py` now asks that question on every run.
+
+    `padding` defaults to `None` rather than `0` for the same reason: the default
+    repr read `padding=0` against torchvision's `padding=None`, and the golden case
+    passed a padding so it never looked at the default.
+
+    `pad_if_needed` pads a picture smaller than the crop instead of refusing — **on
+    both sides**, so a shortfall of two makes the picture four wider, which is
+    torchvision's arithmetic and not a rounding of it.
+    """
+
+    def __init__(self, size, padding=None, pad_if_needed=False, fill=0,
+                 padding_mode="constant"):
         self.size = _pair(size, "RandomCrop")
-        self.padding = int(padding)
+        self.padding = padding
+        self.pad_if_needed = pad_if_needed
         self.fill = fill
+        self.padding_mode = padding_mode
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
-        img = _pad_hw(img, 0, 1, self.padding, self.fill)
+        if self.padding is not None:
+            img = Pad(self.padding, self.fill, self.padding_mode)(img)
         th, tw = self.size
+        h, w = img.shape[0], img.shape[1]
+        # Width first and then height, each on its own — torchvision pads them in two
+        # separate steps and the second reads the width the first produced.
+        if self.pad_if_needed and w < tw:
+            img = Pad([tw - w, 0], self.fill, self.padding_mode)(img)
+        if self.pad_if_needed and img.shape[0] < th:
+            img = Pad([0, th - img.shape[0]], self.fill, self.padding_mode)(img)
         h, w = img.shape[0], img.shape[1]
         if h < th or w < tw:
             raise ValueError(

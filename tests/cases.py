@@ -7842,6 +7842,11 @@ def vision_cases(inp=None):
         ("Normalize", lambda T: T.Normalize(mean, std)),
         ("RandomHorizontalFlip", lambda T: T.RandomHorizontalFlip(p=0.5)),
         ("RandomCrop", lambda T: T.RandomCrop(32, padding=4)),
+        # **The default form, because the padded one could not see it.** With a padding
+        # given, both sides print the number and agree; left at its default ours printed
+        # `padding=0` against torchvision's `padding=None`, and the only case in the
+        # table passed a padding.
+        ("RandomCrop(the default)", lambda T: T.RandomCrop(32)),
         ("CenterCrop", lambda T: T.CenterCrop(24)),
         ("Compose", lambda T: T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])),
         # **`Resize` was missing from this list, and not by oversight.** Its repr printed
