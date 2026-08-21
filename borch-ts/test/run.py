@@ -427,10 +427,20 @@ NOT_PORTED = {
     # `padding` 기본값), `ae60832` 에서 고쳐져 넷 다 답을 냈다. 한 수로 적었다면
     # 그 넷은 백로그로 계산돼 아무도 손대지 않았을 것이다.
     #
-    # 남은 57 은 순수한 밀린 일이다. `borchvision` 이 스물둘을 들고 `vision.ts` 는
-    # 일곱만 든다. 열넷이 저쪽에 없고, 거기에 `transforms.functional` 의 다섯이
-    # 붙는다 — 저쪽에는 그 네임스페이스 자체가 없다.
-    "vision::": (57, "아직 — 열다섯이 `vision.ts` 에 없다 (값 41 · repr 16)"),
+    # **57 → 19.** 열셋을 옮겼다: `Grayscale`·`RandomGrayscale`·`RandomVerticalFlip`·
+    # `Pad`·`Lambda`·`RandomApply`·`RandomChoice`·`RandomOrder`·`FiveCrop`·`TenCrop`·
+    # `LinearTransformation`·`RandomResizedCrop`·`RandomErasing`. 이제 파이썬 쪽이
+    # 스물하나를 들고 `vision.ts` 가 스물을 든다.
+    #
+    # 남은 19 도 나눠 적는다. 성격이 둘로 갈린다:
+    #
+    #   ColorJitter 넷      — 변환 하나가 없다 (값 2 · repr 2)
+    #   transforms.F 열다섯 — **네임스페이스 자체가 없다** (값 15)
+    #
+    # 앞의 넷은 클래스 하나를 쓰면 닫히고, 뒤의 열다섯은 `vision.ts` 에 새 모듈이
+    # 생겨야 한다. 한 수로 적으면 "열아홉 남았다" 로 읽히고 그 둘이 같은 크기의
+    # 일처럼 보인다.
+    "vision::": (19, "아직 — `ColorJitter` 넷 · `transforms.functional` 열다섯 (값 17 · repr 2)"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

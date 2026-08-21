@@ -9,7 +9,7 @@
 
 import {
   device, type DType, init, keepAlive, manualSeed, nn, noGrad, optim, scope,
-  slice, Tensor,
+  slice, Tensor, vision,
 } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -709,6 +709,23 @@ export async function report(): Promise<string> {
   // 옮겨 적는 사람이 첫 인자에서 걸린다. 여기 적어 두어 다음에 정리할 때 안 잊는다.
   want("SmoothL1Loss 의 첫 인자는 reduction 이다",
     new nn.SmoothL1Loss("none").call(lx(), ly()).size > 1);
+
+  // ── vision: 타입이 넓어져 생긴 자리 ──────────────────────────────────
+  //
+  // **골든이 이것을 못 묻는다.** `Transform` 이 `FiveCrop`·`TenCrop` 때문에 배열도
+  // 받도록 넓어졌고, 그러자 `Compose([new FiveCrop(3), new ToTensor()])` 가 타입
+  // 검사를 통과한다. 파이썬 쪽에는 대응물이 없어 — 저쪽 `ToTensor` 는 numpy 배열을
+  // 받고 튜플은 다른 식으로 죽는다 — 골든에 물어볼 케이스 자체가 없다.
+  //
+  // 막기 전에는 `shape [,,] does not match 0 elements` 로 터졌다(실측). 터지긴
+  // 하니 "거절한다" 는 맞지만 무엇을 잘못했는지는 안 적힌 사고였다. 여기가
+  // **TS 표면**을 묻는 자리라서 여기 둔다.
+  const pic = vision.image(new Float64Array(12), 2, 2, 3, false);
+  wantThrow("ToTensor 는 여러 장을 거절한다", "it received 5 of them",
+    () => new vision.ToTensor().apply(new vision.FiveCrop([1, 1]).apply(pic)));
+  wantThrow("Compose 안에서도 같은 자리에서 멈춘다", "Lambda",
+    () => new vision.Compose([new vision.FiveCrop([1, 1]), new vision.ToTensor()])
+      .apply(pic));
 
   // **검증 오류가 하나라도 났으면 위의 초록은 못 믿는다.** WebGPU 는 무효한 명령
   // 버퍼를 조용히 버리므로, 값이 안 바뀐 것을 "통과" 로 읽는 검사가 생길 수 있다.

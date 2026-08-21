@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 7
+  "missing": 23
  },
  "modules": [
   {
@@ -11695,6 +11695,13 @@
      "members": []
     },
     {
+     "kind": "type",
+     "name": "Subject",
+     "signature": "export type Subject = Image | Tensor | readonly Image[]",
+     "doc": "What a transform can be handed, and what it can hand back.\n\nThe array is `FiveCrop` and `TenCrop`, which turn one picture into several.\ntorchvision has the same shape and says so in its own documentation: the\ntuple has to be taken apart by a `Lambda` before anything else can read it.\nEvery other transform refuses an array loudly rather than picking the first.",
+     "members": []
+    },
+    {
      "kind": "interface",
      "name": "Transform",
      "signature": "export interface Transform",
@@ -11702,7 +11709,7 @@
      "members": [
       {
        "name": "apply",
-       "signature": "apply(x: Image | Tensor): Image | Tensor",
+       "signature": "apply(x: Subject): Subject",
        "doc": ""
       },
       {
@@ -11725,7 +11732,7 @@
       },
       {
        "name": "apply",
-       "signature": "apply(x: Image | Tensor): Image | Tensor",
+       "signature": "apply(x: Subject): Subject",
        "doc": ""
       },
       {
@@ -11738,13 +11745,100 @@
     },
     {
      "kind": "class",
+     "name": "Lambda",
+     "signature": "export declare class Lambda implements Transform",
+     "doc": "Wraps a function so it can stand inside a `Compose`.\n\nIt looks like nothing, and it is the only place a learner's own function can\nenter the pipeline — without it a one-line `x * 2` has to become a class.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(fn: (x: Subject) => Subject)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomApply",
+     "signature": "export declare class RandomApply extends RandomTransforms",
+     "doc": "Applies the whole list, or none of it, with probability `p`.\n\n**All of them or none** — not each with its own draw. One draw decides the\nlot, which is what makes it different from putting a `p` on each transform.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[], p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomChoice",
+     "signature": "export declare class RandomChoice extends RandomTransforms",
+     "doc": "Draws **one** of the list and applies it. `p` weights the draw.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[], weights?: readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomOrder",
+     "signature": "export declare class RandomOrder extends RandomTransforms",
+     "doc": "Applies every one of them, in a shuffled order.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(transforms: readonly Transform[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Subject",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
      "name": "ToTensor",
      "signature": "export declare class ToTensor implements Transform",
      "doc": "`(H,W,C)` or `(H,W)` → a `(C,H,W)` tensor.\n\n**It divides by 255 only when the input is uint8** — that is\ntorchvision's rule. Pass a float array and it is carried over undivided.\nMiss this distinction and data that is already in [0,1] gets divided once\nmore and comes out 255× darker, with **no exception raised and only the\ntraining failing.**",
      "members": [
       {
        "name": "apply",
-       "signature": "apply(x: Image | Tensor): Tensor",
+       "signature": "apply(x: Subject): Tensor",
        "doc": ""
       },
       {
@@ -11810,6 +11904,105 @@
       }
      ],
      "doc_ko": "좌우로 뒤집는다. `(H, W, C)` 배열을 받는다."
+    },
+    {
+     "kind": "class",
+     "name": "RandomVerticalFlip",
+     "signature": "export declare class RandomVerticalFlip implements Transform",
+     "doc": "Flips top to bottom. `RandomHorizontalFlip`'s place, on the other axis.\n\n**The default is 0.5 here as well, and that is worth saying out loud.** A\nvertical flip is wrong for most photographs — an upside-down cat is not a cat\nthe model will meet — so this is the one transform whose default is usually\nnot what is wanted. torchvision keeps 0.5 anyway, and so does this.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "type",
+     "name": "PaddingMode",
+     "signature": "export type PaddingMode = \"constant\" | \"edge\" | \"reflect\" | \"symmetric\"",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "Pad",
+     "signature": "export declare class Pad implements Transform",
+     "doc": "Pads the four sides. **The order is left, top, right, bottom** — which is\nnot numpy's order, and not the order the two-element form reads as.\n\n`paddingMode` is `constant` (the default, filled with `fill`), `edge`,\n`reflect` or `symmetric` — the same four numpy has, with the same meanings.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(padding: number | readonly number[], fill?: number | readonly number[], paddingMode?: PaddingMode)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Grayscale",
+     "signature": "export declare class Grayscale implements Transform",
+     "doc": "`torchvision.transforms.Grayscale`. Three channels to one.\n\n`numOutputChannels=3` gives it back as three equal ones — which is what a\npre-trained three-channel model needs.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numOutputChannels?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomGrayscale",
+     "signature": "export declare class RandomGrayscale implements Transform",
+     "doc": "Grayscale with probability `p`. **The channel count does not change** — a\nthree-channel image comes back as three equal channels, so the batch that\nfollows still stacks.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Image | Tensor): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     },
     {
      "kind": "class",
@@ -11916,9 +12109,136 @@
      "members": [],
      "torch": "normalize_batch",
      "doc_ko": "채널마다 `(x - mean) / std`. CPU 에서 배치째 — 텐서를 만들기 전에 끝낸다."
+    },
+    {
+     "kind": "class",
+     "name": "LinearTransformation",
+     "signature": "export declare class LinearTransformation implements Transform",
+     "doc": "Flattens, subtracts the mean, multiplies by a matrix, puts the shape back.\n\nThis is where whitening (ZCA/PCA) is applied: the matrix and the mean are\nworked out **beforehand** from the training set, and this only applies them.\nIt takes a `(...,C,H,W)` tensor, so it runs after `ToTensor`.\n\n**The matrix arrives as numbers, where torchvision takes a tensor.** That is\nforced, not preferred: `repr` prints the matrix, WebGPU has no synchronous\nread, and `describe()` is not async. Taking a tensor here would mean a `repr`\nthat cannot say what it holds. It is the same reason an `Image` in this file\nis an array — the thing is being described, not computed on, until it is.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(rows: readonly (readonly number[])[], mean: readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomResizedCrop",
+     "signature": "export declare class RandomResizedCrop implements Transform",
+     "doc": "Crop a random area of a random shape, then resize it to `size`. **The\nImageNet recipe**, and the reason a tutorial's accuracy moves when it is left\nout.\n\n`scale` is the fraction of the area to keep and `ratio` the width-to-height\nrange. Ten draws are made, and if none of them fits inside the picture it\nfalls back to a centre crop — torchvision does exactly that, fallback\nincluded, because without it the draw can fail on a thin picture and there is\nnothing to return.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], scale?: readonly [number, number], ratio?: readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(img: Image): [number, number, number, number]",
+       "doc": "Where and how big. **Ten draws, then a centre crop.** Kept separate because\nit is the only part that draws.",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomErasing",
+     "signature": "export declare class RandomErasing implements Transform",
+     "doc": "Blank out a random rectangle of a **tensor** — this one runs after\n`ToTensor`, unlike every other transform in this file.\n\nThat is torchvision's position for it and not a choice made here: the erased\nvalue is `0` on a normalised image, which means the channel mean, and that\nonly has a meaning once the picture is numbers rather than pixels.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number, scale?: readonly [number, number], ratio?: readonly [number, number], value?: number | readonly number[] | \"random\", inplace?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(h: number, w: number): [number, number, number, number] | null",
+       "doc": "`[top, left, height, width]`, or `null` when ten draws all missed.\n\n**The rectangle has to be strictly smaller than the picture** on both\nsides. torchvision's condition is `<` rather than `<=`, so an erase\ncovering the whole picture never happens, and on a small picture the ten\ndraws can all miss — that is the `null`.",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "FiveCrop",
+     "signature": "export declare class FiveCrop implements Transform",
+     "doc": "The four corners and the centre — **five pictures out of one.**\n\nWhat comes back is a list, not a picture, so `ToTensor` cannot simply follow\nit. torchvision's own documentation says the same and hands the tuple on with\na `Lambda`. That is why `Lambda` exists in this file at all.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): readonly Image[]",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TenCrop",
+     "signature": "export declare class TenCrop implements Transform",
+     "doc": "`FiveCrop`, and then five more from the flipped picture. Ten out of one.\n\n`verticalFlip` flips top to bottom instead of left to right.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(size: number | readonly [number, number], verticalFlip?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): readonly Image[]",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 40,
+   "count": 95,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -13466,5 +13786,5 @@
    "count": 9
   }
  ],
- "total": 1730
+ "total": 1785
 }

@@ -1363,6 +1363,103 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::CenterCrop(원본보다 큼)", () =>
     toTensor(new vision.CenterCrop([13, 11]).apply(f()) as vision.Image));
 
+  // ImageNet 조리법. **뽑기가 한 답만 갖도록 못 박는다** — 넓이는 전체, 비율은
+  // 그림 자신의 것. 그러면 자를 자리가 하나뿐이라 비교되는 것은 뒤따르는 크기
+  // 바꾸기와 자를 곳을 고르는 반올림이다.
+  const pinned = (filter: "bilinear" | "nearest") =>
+    new vision.RandomResizedCrop([3, 2], [1.0, 1.0], [0.8, 0.8], filter);
+  out.set("vision::RandomResizedCrop(pinned to the whole image)", () =>
+    toTensor(pinned("bilinear").apply(f()) as vision.Image));
+  // **같은 자르기를 다른 거르개로.** `interpolation` 을 받아 놓고 크기 바꾸기로
+  // 넘기지 않으면 위 케이스는 그대로 통과한다. 여기서 둘이 0.5006 갈린다(실측).
+  out.set("vision::RandomResizedCrop(nearest)", () =>
+    toTensor(pinned("nearest").apply(f()) as vision.Image));
+
+  // 백색화. **뒤집는 행렬을 쓴다** — 단위행렬은 곱셈이 무엇을 하든, 아무것도
+  // 안 해도 통과시킨다.
+  out.set("vision::LinearTransformation", () => {
+    const n = inp.shapeOf("vis_f").reduce((a, b) => a * b, 1);
+    const rows = Array.from({ length: n }, (_, i) =>
+      Array.from({ length: n }, (_, j) => (j === n - 1 - i ? 1 : 0)));
+    return new vision.LinearTransformation(rows, new Array<number>(n).fill(0.5))
+      .apply(toTensor(f()));
+  });
+
+  // 지우기 둘. **둘 다 그림을 그대로 돌려준다** — 확률 0 과, 열 번이 다 빗나가는
+  // 자리다. 뒤쪽이 정작 틀리게 써지는 가지다: 열 번이 다 빗나갔을 때 "마지막으로
+  // 계산한 것"을 지우는 구현은 다른 케이스를 전부 통과한다.
+  out.set("vision::RandomErasing(p=0)", () =>
+    new vision.RandomErasing(0.0).apply(toTensor(f())) as Tensor);
+  out.set("vision::RandomErasing(ten draws all miss)", () =>
+    new vision.RandomErasing(1.0, [0.99, 1.0], [1.0, 1.0]).apply(toTensor(f())) as Tensor);
+
+  // 여러 장이 나오는 둘. **쌓아서 비교한다** — 하나씩 대면 잘라낸 조각이 엉뚱한
+  // 칸에 들어가도 안 걸린다. 파이썬 쪽 `crops` 도 같은 이유로 쌓는다.
+  const stacked = (parts: readonly vision.Image[]): Tensor =>
+    Tensor.stack(parts.map(toTensor));
+  out.set("vision::FiveCrop", () =>
+    stacked(new vision.FiveCrop([3, 2]).apply(f()) as readonly vision.Image[]));
+  out.set("vision::TenCrop", () =>
+    stacked(new vision.TenCrop([3, 2]).apply(f()) as readonly vision.Image[]));
+  out.set("vision::TenCrop(vertical)", () =>
+    stacked(new vision.TenCrop([3, 2], true).apply(f()) as readonly vision.Image[]));
+
+  // 세로 뒤집기. 확률을 못 박아 뽑기와 무관하게 만든다.
+  out.set("vision::VerticalFlip(p=1)", () =>
+    toTensor(new vision.RandomVerticalFlip(1.0).apply(f()) as vision.Image));
+  out.set("vision::VerticalFlip(p=0)", () =>
+    toTensor(new vision.RandomVerticalFlip(0.0).apply(f()) as vision.Image));
+
+  // 덧대기. **네 모드를 다 묻는다** — `reflect` 와 `symmetric` 은 가장자리를 한 번
+  // 더 쓰느냐로만 갈리고, 그 한 칸이 두 이름의 차이 전부다. 한쪽만 시험하면
+  // 둘을 맞바꿔 놔도 통과한다.
+  out.set("vision::Pad(all sides)", () =>
+    toTensor(new vision.Pad(2).apply(f()) as vision.Image));
+  out.set("vision::Pad(four sides)", () =>
+    toTensor(new vision.Pad([1, 2, 3, 4]).apply(f()) as vision.Image));
+  out.set("vision::Pad(edge)", () =>
+    toTensor(new vision.Pad(1, 0, "edge").apply(f()) as vision.Image));
+  out.set("vision::Pad(reflect)", () =>
+    toTensor(new vision.Pad(1, 0, "reflect").apply(f()) as vision.Image));
+  out.set("vision::Pad(symmetric)", () =>
+    toTensor(new vision.Pad(1, 0, "symmetric").apply(f()) as vision.Image));
+  // **채널별 색으로 덧댄다.** 파이썬 쪽은 이것을 numpy 의 `constant_values` 로 못
+  // 넘긴다 — 그 인자는 축마다 읽히므로 세 색이 채널 축을 칠한다. uint8 케이스라
+  // 저쪽은 진짜 PIL 이미지를 받고, 여기는 전치 없이 (H,W,C) 로 나온다.
+  out.set("vision::Pad(a colour per channel)", () =>
+    asTensor(new vision.Pad(1, [1, 2, 3]).apply(u8()) as vision.Image));
+
+  // 학습자의 함수가 파이프라인에 들어가는 유일한 자리.
+  out.set("vision::Lambda", () =>
+    toTensor(new vision.Lambda((x) => {
+      const img = x as vision.Image;
+      return { ...img, data: img.data.map((v) => v * 2) };
+    }).apply(f()) as vision.Image));
+
+  // 감싸개 셋. **하나짜리 목록으로 묻는다** — 뽑기를 비교할 수 없으므로 뽑을
+  // 것이 하나뿐이거나 확률이 0/1 인 자리만 결정적이다. 뽑기 자체가 제대로 도는지는
+  // pytest 가 분포로 본다.
+  out.set("vision::RandomApply(p=1)", () =>
+    toTensor(new vision.RandomApply([new vision.Pad(1)], 1.0).apply(f()) as vision.Image));
+  out.set("vision::RandomApply(p=0)", () =>
+    toTensor(new vision.RandomApply([new vision.Pad(1)], 0.0).apply(f()) as vision.Image));
+  out.set("vision::RandomChoice(one to choose from)", () =>
+    toTensor(new vision.RandomChoice([new vision.Pad(1)]).apply(f()) as vision.Image));
+  out.set("vision::RandomOrder(one to order)", () =>
+    toTensor(new vision.RandomOrder([new vision.Pad(1)]).apply(f()) as vision.Image));
+
+  // 흑백. **세 채널 형태가 모델이 원하는 것**이고, 채널 수가 안 바뀌는 것이 요점이다.
+  //
+  // 그리고 이 파일에서 **실수 화소로 산술을 하는 첫 변환**이다. 나머지는 화소를
+  // 옮기기만 해서 float64 로 계산해도 값이 안 갈렸다. 여기는 갈린다 — `vision.ts`
+  // 의 `toGray` 주석에 numpy 의 승격 규칙과 함께 적어 뒀다.
+  out.set("vision::Grayscale(one channel)", () =>
+    toTensor(new vision.Grayscale().apply(f()) as vision.Image));
+  out.set("vision::Grayscale(three channels)", () =>
+    toTensor(new vision.Grayscale(3).apply(f()) as vision.Image));
+  out.set("vision::RandomGrayscale(p=1)", () =>
+    toTensor(new vision.RandomGrayscale(1.0).apply(f()) as vision.Image));
+
   // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
   const reprs: [string, () => vision.Transform][] = [
     ["ToTensor", () => new vision.ToTensor()],
@@ -1378,6 +1475,25 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     // repr 이 다른 그 변환이 골든에 케이스가 없던 유일한 변환이었다.
     ["Resize", () => new vision.Resize(4)],
     ["Resize(a pair)", () => new vision.Resize([4, 3])],
+    ["RandomResizedCrop", () => new vision.RandomResizedCrop(4)],
+    ["RandomErasing", () => new vision.RandomErasing()],
+    ["LinearTransformation", () => new vision.LinearTransformation(
+      [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0])],
+    ["FiveCrop", () => new vision.FiveCrop(3)],
+    ["TenCrop", () => new vision.TenCrop([3, 2], true)],
+    ["RandomVerticalFlip", () => new vision.RandomVerticalFlip(0.5)],
+    ["Pad", () => new vision.Pad(2)],
+    ["Pad(four sides)", () => new vision.Pad([1, 2, 3, 4], 1, "reflect")],
+    ["Lambda", () => new vision.Lambda((x) => x)],
+    ["RandomApply", () => new vision.RandomApply([new vision.ToTensor()], 0.3)],
+    ["RandomChoice", () => new vision.RandomChoice([
+      new vision.ToTensor(), new vision.CenterCrop(2),
+    ])],
+    ["RandomOrder", () => new vision.RandomOrder([
+      new vision.ToTensor(), new vision.CenterCrop(2),
+    ])],
+    ["Grayscale", () => new vision.Grayscale(3)],
+    ["RandomGrayscale", () => new vision.RandomGrayscale(0.1)],
     ["Compose", () => new vision.Compose([
       new vision.ToTensor(), new vision.Normalize([0.5], [0.5]),
     ])],
