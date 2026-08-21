@@ -1349,6 +1349,10 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     toTensor(new vision.Resize(4).apply(f()) as vision.Image));
   out.set("vision::Resize(최근접)", () =>
     toTensor(new vision.Resize([4, 3], "nearest").apply(f()) as vision.Image));
+  // **상한이 실제로 문다.** 5×4 를 짧은 변 8 로 늘리면 긴 변이 10 인데 9 로 잘리고
+  // 짧은 변이 7 로 따라 준다 — 두 나눗셈이 다 버림이라야 (9, 7) 이다.
+  out.set("vision::Resize(long side capped)", () =>
+    toTensor(new vision.Resize(8, "bilinear", 9).apply(f()) as vision.Image));
   // **자를 자리가 홀수인 것을 넣는다.** 파이썬의 round 는 절반을 짝수로 보내고
   // `Math.round` 는 위로 올린다 — 그 차이로 여기가 한 칸 어긋나 최대 0.837 이
   // 갈렸다(실측). 짝수만 시험하면 그 자리가 통째로 안 걸린다.
@@ -1365,7 +1369,15 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     ["Normalize", () => new vision.Normalize(mean, std)],
     ["RandomHorizontalFlip", () => new vision.RandomHorizontalFlip(0.5)],
     ["RandomCrop", () => new vision.RandomCrop(32, 4)],
+    // **기본값을 따로 묻는다.** 위의 것은 `padding=4` 를 주므로 기본이 무엇으로
+    // 찍히는지를 한 번도 안 본다 — 그래서 `padding=0` 과 torchvision 의 `None` 이
+    // 갈린 채로 남아 있었다. 인자를 준 케이스는 그 인자의 기본값을 못 잰다.
+    ["RandomCrop(the default)", () => new vision.RandomCrop(32)],
     ["CenterCrop", () => new vision.CenterCrop(24)],
+    // **네 칸 전부 찍는다.** 여기가 두 칸이었고 파이썬 쪽도 두 칸이라 양쪽이 맞았다 —
+    // repr 이 다른 그 변환이 골든에 케이스가 없던 유일한 변환이었다.
+    ["Resize", () => new vision.Resize(4)],
+    ["Resize(a pair)", () => new vision.Resize([4, 3])],
     ["Compose", () => new vision.Compose([
       new vision.ToTensor(), new vision.Normalize([0.5], [0.5]),
     ])],

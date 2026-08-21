@@ -18,6 +18,7 @@
  * image, which looks like it works right up until it collapses on memory.
  */
 
+import { RuntimeError } from "./errors.js";
 import { Tensor } from "./tensor.js";
 
 /**
@@ -187,16 +188,22 @@ export class RandomHorizontalFlip implements Transform {
 export class RandomCrop implements Transform {
   private readonly size: [number, number];
 
+  /**
+   * @param padding **`null` is the default, not `0`** — torchvision's is `None`
+   *   and its repr prints that word. They pad identically, so the difference
+   *   lives only in the printed line, and the golden's repr case passed
+   *   `padding=4` and therefore never printed a default.
+   */
   constructor(
     size: number | readonly [number, number],
-    private readonly padding = 0,
+    private readonly padding: number | null = null,
     private readonly fill = 0,
   ) {
     this.size = typeof size === "number" ? [size, size] : [size[0], size[1]];
   }
 
   apply(x: Image | Tensor): Image {
-    const img = padded(asImage(x, "RandomCrop"), this.padding, this.fill);
+    const img = padded(asImage(x, "RandomCrop"), this.padding ?? 0, this.fill);
     const [th, tw] = this.size;
     if (img.height < th || img.width < tw) {
       throw new Error(
@@ -219,7 +226,8 @@ export class RandomCrop implements Transform {
 
   describe(): string {
     // 파이썬 쪽이 `size` 를 튜플로 정규화해서 들고 있으므로 그 모양으로 찍는다.
-    return `RandomCrop(size=(${this.size[0]}, ${this.size[1]}), padding=${this.padding})`;
+    return `RandomCrop(size=(${this.size[0]}, ${this.size[1]}), `
+      + `padding=${this.padding === null ? "None" : this.padding})`;
   }
 }
 
@@ -257,13 +265,34 @@ function aaWeights(src: number, dst: number): { at: number; w: Float64Array }[] 
   return rows;
 }
 
-/** 짧은 변을 `size` 로. 긴 변은 비율을 지킨다 — torchvision 의 `Resize(int)` 다. */
-function shortSide(h: number, w: number, size: number): [number, number] {
+/**
+ * 짧은 변을 `size` 로. 긴 변은 비율을 지킨다 — torchvision 의 `Resize(int)` 다.
+ *
+ * **`maxSize` 는 비율 대신이 아니라 비율 뒤에 온다.** 먼저 짧은 변을 `size` 로 맞춰
+ * 긴 변을 구하고, 그것이 상한을 넘을 때만 긴 변을 상한으로 자른 뒤 짧은 변이 따라
+ * 줄어든다. 두 번의 나눗셈이 **둘 다 버림**이다 — 반올림하면 5×4 를
+ * `Resize(8, maxSize=9)` 로 줄일 때 (9, 7) 이 아니라 (9, 8) 이 나온다.
+ */
+function shortSide(
+  h: number, w: number, size: number, maxSize: number | null,
+): [number, number] {
   const short = Math.min(h, w);
   const long = Math.max(h, w);
-  if (short === size) return [h, w];
-  const grown = Math.trunc((size * long) / short);
-  return h < w ? [size, grown] : [grown, size];
+  let newShort = size;
+  let newLong = short === size ? long : Math.trunc((size * long) / short);
+  if (maxSize !== null && newLong > maxSize) {
+    // **여기서 던진다, 만들 때가 아니라.** torchvision 도 크기를 셈하는 안쪽에서
+    // 멈추므로 `Resize(4, max_size=4)` 는 세워지고 그림을 받을 때 선다. repr 케이스는
+    // 변환을 세우기만 하고 안 부르므로, 앞당겨 던지면 어느 쪽이 갈렸는지가 바뀐다.
+    if (maxSize <= size) {
+      throw new RuntimeError(
+        `max_size = ${maxSize} must be strictly greater than size = ${size} — ` +
+        "the short side is set to size first, so a cap at or below it has nothing to cap.");
+    }
+    newShort = Math.trunc((maxSize * newShort) / newLong);
+    newLong = maxSize;
+  }
+  return h < w ? [newShort, newLong] : [newLong, newShort];
 }
 
 /** `(H, W, C)` 로 늘어놓은 것의 한 축만 바꾼다. */
@@ -329,15 +358,38 @@ function resizeCols(
  * value and keeps the ratio.
  */
 export class Resize implements Transform {
+  /**
+   * @param maxSize a cap on the long side. **Only meaningful with a single
+   *   number**, where `size` is the short side — given an explicit pair there is
+   *   nothing left to cap, and torchvision refuses that combination too.
+   * @param antialias **`false` is refused rather than accepted and ignored.**
+   *   There is one filter here and it antialiases; off differs from on by up to
+   *   0.0301 at 8×8→4×4 (measured), so taking the argument and dropping it would
+   *   hand back the other image without saying so.
+   */
   constructor(
     private readonly size: number | readonly [number, number],
     private readonly interpolation: "bilinear" | "nearest" = "bilinear",
-  ) {}
+    private readonly maxSize: number | null = null,
+    antialias = true,
+  ) {
+    if (maxSize !== null && typeof size !== "number") {
+      throw new RuntimeError(
+        "max_size means something only when the size is the short side (a single number).\n" +
+        "(torch: max_size should only be passed if size is int or sequence of length 1)");
+    }
+    if (!antialias) {
+      throw new RuntimeError(
+        "Resize(antialias=false) is not in the browser subset — there is one filter here " +
+        "and it antialiases. Turning it off changes the values by up to 0.0301 (measured), " +
+        "so accepting the argument and ignoring it would hand back a different image.");
+    }
+  }
 
   apply(x: Image | Tensor): Image {
     const img = asImage(x, "Resize");
     const [th, tw] = typeof this.size === "number"
-      ? shortSide(img.height, img.width, this.size)
+      ? shortSide(img.height, img.width, this.size, this.maxSize)
       : [this.size[0], this.size[1]];
     const nearest = this.interpolation === "nearest";
     let data = img.data;
@@ -354,9 +406,16 @@ export class Resize implements Transform {
     return { data, height: h, width: w, channels: img.channels, isByte: img.isByte };
   }
 
+  /**
+   * **Four fields, not two.** torchvision has always printed `max_size` and
+   * `antialias`; this printed two and agreed with the Python side, which printed
+   * two as well — so the transform whose repr differed was the one the golden
+   * had no case for. The check's coverage decided which defect could exist.
+   */
   describe(): string {
     const size = typeof this.size === "number" ? this.size : `(${this.size.join(", ")})`;
-    return `Resize(size=${size}, interpolation=${this.interpolation})`;
+    return `Resize(size=${size}, interpolation=${this.interpolation}, `
+      + `max_size=${this.maxSize === null ? "None" : this.maxSize}, antialias=True)`;
   }
 }
 
