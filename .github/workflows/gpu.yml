@@ -1,36 +1,39 @@
-# GPU 경로 검증 — **self-hosted 러너**에서 돈다.
+# GPU path verification — runs on a **self-hosted runner**.
 #
-# GitHub 호스팅 러너에는 GPU 가 없다. WebGPU 가 SwiftShader 로 떨어지고, 그건 실제
-# 사용자가 지나지 않는 소프트웨어 경로라 거기서 통과해도 증명되는 것이 없다.
-# 그래서 진짜 GPU 가 달린 기계를 러너로 등록해서 쓴다.
+# GitHub-hosted runners have no GPU. WebGPU falls back to SwiftShader, a software path
+# no real user takes, so passing there proves nothing. Which is why a machine with a
+# real GPU is registered as a runner.
 #
-# **창을 띄워야 한다(`--headed`).** 실측이다 — 헤드리스 Chromium 에는 `navigator.gpu`
-# 가 없거나 소프트웨어 어댑터를 준다. 러너가 어댑터를 확인해 적으므로 조용히 틀린
-# 결과를 보지는 않지만, 화면 세션이 있는 사용자 프로세스로 러너를 돌려야 잡이 통과한다.
+# **The window has to be shown (`--headed`).** This is measured — headless Chromium
+# either has no `navigator.gpu` or hands back a software adapter. The runner checks the
+# adapter and writes it down, so a quietly wrong result is not on the table, but the
+# job only passes when the runner runs as a user process with a display session.
 #
-# 기존 `test.yml`(네이티브 pytest)은 건드리지 않는다. 코어 borch 는 numpy 뿐이라
-# 브라우저가 애초에 필요 없다 — 이 워크플로는 GPU 경로에만 붙는다.
+# The existing `test.yml` (native pytest) is left alone. The core borch is numpy alone,
+# so it never needed a browser — this workflow attaches to the GPU path only.
 #
-# ## 왜 자동으로 안 도는가 — `push` 트리거를 뗐다
+# ## Why it does not run automatically — the `push` trigger was removed
 #
-# **self-hosted 러너를 붙이지 않기로 했다.** 러너를 등록하면 그 기계는 push 가 있을
-# 때마다 이 파일에 적힌 것을 받아서 실행한다 — 파일에 무엇이 적혔든지. 그러면 이
-# 저장소에 push 할 수 있는 사람은 그 랩 기계에서 임의 코드를 돌릴 수 있게 되고,
-# `.github/workflows` 쓰기 권한이 곧 그 기계에서의 실행 권한이 된다. 그 기계는 다른
-# 사람의 작업도 돌리는 곳이다.
+# **The decision was not to attach a self-hosted runner.** Registering a runner means
+# that machine takes whatever this file says on every push and runs it — whatever it
+# says. Then anybody who can push to this repository can run arbitrary code on that lab
+# machine, and write access to `.github/workflows` becomes execution rights on it. That
+# machine also runs other people's work.
 #
-# 그래서 이 파일은 **적어 둔 절차**이지 자동 검증이 아니다. `push` 에 걸어 두었을
-# 때는 돌 곳이 없는 실행이 아홉 건 큐에 서서, 안 도는 것을 "대기 중" 으로 보이게
-# 하고 있었다 — 거짓 초록보다 낫지도 않은 거짓 신호다.
+# So this file is **a procedure written down** rather than an automatic check. While it
+# was on `push`, nine runs with nowhere to run queued up and made something that was not
+# running look like it was "pending" — a false signal, no better than a false green.
 #
-# ## 그러면 GPU 경로는 어떻게 확인하는가
+# ## Then how is the GPU path checked
 #
-# 사람이 부른다. 개발 기계에서 그대로 치거나(아래 명령이 전부다), GPU 서버가 있으면
-# 그쪽으로 보낸다 — 실제로 cq 워커에 올려 RTX 4090 에서 골든 845 건 × 두 구현을
-# 돌렸고, 그때 Apple Metal 과 값이 같은 것을 확인했다. 그 경로는 이미 인증된 통로를
-# 쓰므로 저장소에 실행 권한을 열지 않는다.
+# A person calls it. Typed directly on the development machine (the commands below are
+# all of it), or sent to a GPU server when there is one — it was actually put on a cq
+# worker and run on an RTX 4090 over 845 golden cases × two implementations, and the
+# values matched Apple Metal. That route uses an already authenticated channel, so it
+# opens no execution rights on the repository.
 #
-# 러너를 붙일 이유가 생기면 그때 이 트리거를 되돌린다. 붙이는 것은 사람이 한다.
+# When there is a reason to attach a runner, this trigger comes back. Attaching it is
+# a person's job.
 
 name: gpu
 
@@ -45,44 +48,47 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      # 진짜 torch 가 필요한 유일한 단계다. 여기서 기대값을 굳힌다.
+      # The only step that needs real torch. The expected values are frozen here.
       #
-      # **torchvision 이 있어야 한다.** vision 케이스 14 건이 진짜 torchvision 을
-      # 부르고(그것이 그 케이스들의 값어치다 — 우리 변환을 우리 기대값에 맞추면
-      # 아무것도 증명 못 한다), 없으면 dump 가 그 14 건을 실패로 세고 멈춘다.
-      - name: 골든을 굳힌다
+      # **torchvision has to be here.** 14 vision cases call real torchvision (which is
+      # what those cases are worth — matching our transforms against our own expected
+      # values proves nothing), and without it dump counts those 14 as failures and stops.
+      - name: freeze the golden
         run: uv run --with numpy --with torch --with torchvision python tests/golden.py dump
 
-      # borch.ts 는 골든을 JSON 으로 읽는다. npz 와 갈리지 않게 여기서 다시 뽑는다.
-      - name: 골든을 JSON 으로 뽑는다
+      # borch.ts reads the golden as JSON. It is exported again here so it cannot
+      # diverge from the npz.
+      - name: export the golden as JSON
         run: uv run --with numpy python tests/export_json.py
 
-      # Pyodide 를 받아 두고 해시로 잠근다. 이미 있으면 대조만 한다.
-      # (CDN 이 테스트 시점에 살아 있어야 하는 의존이었고, 실제로 한 번 끊겼다.)
-      - name: 바깥 자산을 준비한다
+      # Fetches Pyodide and locks it by hash. Already present, it only compares.
+      # (It was a dependency on a CDN being alive at test time, and it did break once.)
+      - name: prepare the outside assets
         run: uv run python tests/browser/vendor.py check
 
-      - name: 브라우저를 준비한다
+      - name: prepare the browser
         run: uv run --with playwright playwright install chromium
 
-      # 코어와 GPU 경로 둘 다 본다. 같은 골든을 쓰므로 갈리면 어느 쪽인지 바로 나온다.
-      - name: 코어를 골든과 대조한다
+      # Both the core and the GPU path are looked at. They use the same golden, so a
+      # divergence says immediately which side it is on.
+      - name: compare the core against the golden
         run: uv run --with playwright python tests/browser/run.py --lib borch --headed
 
-      - name: GPU 경로를 골든과 대조한다
+      - name: compare the GPU path against the golden
         run: uv run --with playwright python tests/browser/run.py --lib borch_webgpu --headed
 
-      # borch.ts — 위의 파이썬 결속이 얹혀 있는 바로 그 층이다. 같은 골든을 자기
-      # 언어로 다시 묻는다. 브라우저가 TS 를 못 읽으므로 먼저 JS 로 내보낸다.
+      # borch.ts — the very layer the Python binding above sits on. It asks the same
+      # golden again in its own language. The browser cannot read TS, so it is emitted
+      # as JS first.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: borch.ts 를 컴파일한다
+      - name: install borch.ts's toolchain
         run: npm ci
 
-      - name: borch.ts 를 빌드한다
+      - name: build borch.ts
         run: npm run build:ts
 
-      - name: borch.ts 를 골든과 대조한다
+      - name: compare borch.ts against the golden
         run: uv run --with playwright python borch-ts/test/run.py --headed

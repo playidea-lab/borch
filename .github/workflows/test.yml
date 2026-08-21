@@ -1,4 +1,4 @@
-name: 진짜 torch 와 대조
+name: compared against real torch
 
 on: [push, pull_request]
 
@@ -8,22 +8,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # **선언 파일을 만들어야 사이트 검사가 문다.** `borch-ts/dist` 는 `.gitignore`
-      # 라 체크아웃에 없고, 없으면 `tests/test_site.py` 가 skip 으로 지나간다 —
-      # 통과처럼 보이지만 아무것도 안 본 것이다. 실제로 그 상태로 한 번 올라갔다.
+      # **The site check only bites once the declaration files exist.** `borch-ts/dist`
+      # is in `.gitignore`, so it is not in the checkout, and without it
+      # `tests/test_site.py` passes by skipping — it looks like a pass and it looked at
+      # nothing. That state actually went up once.
       #
-      # 받는 것은 typescript 와 @webgpu/types 둘뿐이라(런타임 의존성은 여전히 0)
-      # 이 단계가 무는 것에 비해 싸다.
+      # Only two things are taken, typescript and @webgpu/types (runtime dependencies
+      # are still zero), so this step is cheap for what it bites.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
       - run: npm ci
       - run: npm run build:ts
-      # **torchvision 이 있어야 한다.** pytest 가 골든을 그 자리에서 굳히는데(npz 는
-      # 커밋 안 한다 — 진짜 torch 로 다시 뽑는 것이 요점이다), vision 케이스 14 건이
-      # 진짜 torchvision 을 부른다. 우리 변환을 우리 기대값에 맞추면 아무것도 증명
-      # 못 하므로 그것이 그 케이스들의 값어치다. 없으면 dump 가 14 건을 실패로 세고
-      # 멈춰서, transforms 가 들어온 뒤로 이 잡이 매 push 마다 빨갰다.
-      - name: 값 대조
+      # **torchvision has to be here.** pytest freezes the golden on the spot (the npz
+      # is not committed — extracting it again with real torch is the point), and 14
+      # vision cases call real torchvision. Matching our transforms against our own
+      # expected values would prove nothing, which is what those cases are worth.
+      # Without it, dump counts those 14 as failures and stops, and this job was red on
+      # every push from the moment transforms arrived.
+      - name: compare the values
         run: uv run --with pytest --with numpy --with torch --with torchvision --quiet pytest tests/ -q

@@ -1,23 +1,25 @@
-# 설명 페이지·강의·API 레퍼런스·플레이그라운드를 GitHub Pages 에 올린다.
+# Publishes the explanation pages, the lessons, the API reference and the playground
+# to GitHub Pages.
 #
-# ## 자동으로 안 돈다 — `workflow_dispatch` 뿐이다
+# ## It does not run automatically — `workflow_dispatch` only
 #
-# **이 저장소는 private 이고, 공개하는 것은 사람이 내리는 결정이다.** push 에 걸어
-# 두면 다음 커밋이 곧 공개가 된다. `gpu.yml` 이 self-hosted 러너를 안 붙인 것과 같은
-# 판단이다 — 자동화가 사람의 결정을 대신 내리게 두지 않는다.
+# **This repository is private, and going public is a decision a person makes.** On
+# push, the next commit *is* the publication. Same judgement as `gpu.yml` not attaching
+# a self-hosted runner — automation is not left to make a person's decision for them.
 #
-# 올릴 준비가 됐으면 Actions 에서 손으로 돌린다. 그 전에 저장소 설정에서 Pages 를
-# 켜야 하고(Settings → Pages → Source: GitHub Actions), private 저장소의 Pages 는
-# 유료 요금제를 요구한다.
+# When it is ready to go up, it is run by hand from Actions. Before that, Pages has to
+# be enabled in the repository settings (Settings → Pages → Source: GitHub Actions), and
+# Pages on a private repository requires a paid plan.
 #
-# ## 왜 저장소 모양 그대로 올리는가
+# ## Why it goes up in the repository's own shape
 #
-# 페이지가 `../borch-ts/dist` 와 `../../vendor/pyodide` 를 상대 경로로 부른다.
-# `site/` 만 뿌리에 올리면 그 경로들이 뿌리 밖으로 나가서 전부 404 가 된다.
-# 그래서 저장소 모양을 지키고, 뿌리에는 `/site/` 로 보내는 한 줄짜리 페이지를 둔다.
-# 경로를 배포용으로 다시 쓰는 것보다 이쪽이 고칠 자리가 적다.
+# The pages call `../borch-ts/dist` and `../../vendor/pyodide` by relative path. Putting
+# `site/` alone at the root sends those paths outside the root and every one of them
+# 404s. So the repository's shape is kept, and the root holds a one-line page that sends
+# the visitor to `/site/`. That leaves fewer places to fix than rewriting the paths for
+# deployment.
 
-name: 사이트 배포 (손으로)
+name: deploy the site (by hand)
 
 on:
   workflow_dispatch:
@@ -42,37 +44,38 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      # 방출물은 `.gitignore` 라 어느 커밋에도 없다. 여기서 만든다.
+      # The emitted files are in `.gitignore`, so they are in no commit. Built here.
       - run: npm run build:ts
 
-      # **API 목록을 다시 뽑는다.** 커밋된 것이 있지만 그것이 낡았을 수 있고,
-      # 낡은 목록으로 배포하면 사이트가 없는 API 를 보여준다. `tests/test_site.py`
-      # 가 같은 것을 검사하지만, 배포는 검사를 안 거치고도 눌릴 수 있다.
+      # **The API list is extracted again.** A committed one exists and it may be
+      # stale, and deploying with a stale list shows an API the site does not have.
+      # `tests/test_site.py` checks the same thing, and a deployment can be pressed
+      # without going through the checks.
       - run: python3 site/build_api.py
 
-      # 튜토리얼 4·5 가 쓰는 부분집합. 원본은 `.gitignore` 라 여기서 받아 만든다 —
-      # 없이 올리면 그 두 장이 "데이터가 없다" 만 띄우는 페이지가 된다.
-      # 튜토리얼 데이터(`site/assets/data/`)는 저장소에 있다. 여기서 다시 만들던 때가
-      # 있었고, 그 한 단계가 배포 34분 20초 중 33분 56초를 썼다 — 원본 170MB 를 받아
-      # 6만 장을 처리해서 1.1MB 를 내는 일을 배포마다 되풀이한 것이다.
+      # The tutorial data (`site/assets/data/`) is in the repository. There was a time
+      # when it was rebuilt here, and that one step took 33 minutes 56 seconds of a
+      # 34 minute 20 second deployment — fetching 170MB of originals and processing
+      # 60,000 images to produce 1.1MB, repeated on every deployment.
 
-      # Pyodide 는 저장소 안에 있다(`vendor/pyodide/`). 없으면 파이썬 모드가 안 돈다 —
-      # 조용히 반쪽만 올리지 않도록 여기서 멈춘다.
+      # Pyodide is inside the repository (`vendor/pyodide/`). Without it Python mode
+      # does not run — this stops here rather than quietly publishing half a site.
       #
-      # 있는지가 아니라 **잠금과 같은 바이트인지**를 본다. 이 워크플로가 한 번도 안 돈 동안
-      # 여기 있던 것은 `test -f` 였고, 그 위의 주석은 "저장소 안에 있다" 였는데 그때
-      # `vendor/` 는 `.gitignore` 에 있었다 — 문지기가 틀린 전제를 겨누고 있었다.
-      - name: 벤더 확인
+      # It looks at **whether the bytes match the lock**, not at whether the files
+      # exist. While this workflow had never run, what stood here was `test -f`, and the
+      # comment above it said "inside the repository" while `vendor/` was in
+      # `.gitignore` — the gatekeeper was aimed at a false premise.
+      - name: check the vendored assets
         run: python3 tests/browser/vendor.py check
 
-      - name: 올릴 것 모으기
+      - name: gather what goes up
         run: |
           mkdir -p _site
           cp -r site borch-ts/dist borch borch_webgpu _site/
           mkdir -p _site/borch-ts && mv _site/dist _site/borch-ts/dist
           mkdir -p _site/vendor && cp -r vendor/pyodide _site/vendor/pyodide
           cp borchvision.py THIRD-PARTY.md LICENSE _site/
-          # 뿌리에서 사이트로 보낸다. 상대 경로를 안 건드리는 가장 싼 방법이다.
+          # Sends the root to the site. The cheapest way that touches no relative path.
           cat > _site/index.html <<'HTML'
           <!doctype html>
           <html lang="en">
@@ -85,15 +88,16 @@ jobs:
           HTML
           du -sh _site
 
-      # **공유 메타의 주소를 여기서 채운다.** 소셜 크롤러는 상대 경로를 안 따라가고,
-      # 배포 주소를 HTML 에 박아 두면 도메인이 바뀔 때 조용히 낡는다. 자리표시자를
-      # 두고 배포하는 쪽이 아는 값을 넣는다.
-      - name: 공유 메타의 주소 채우기
+      # **The share metadata's address is filled in here.** Social crawlers do not
+      # follow relative paths, and baking the deployment address into the HTML goes
+      # quietly stale when the domain changes. A placeholder is left, and the side doing
+      # the deploying fills in the value it knows.
+      - name: fill in the share metadata's address
         run: |
           BASE="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
           echo "og base: $BASE"
           grep -rl "%OG_BASE%" _site --include="*.html" | xargs sed -i "s|%OG_BASE%|$BASE|g"
-          test -z "$(grep -rl '%OG_BASE%' _site --include='*.html')" || (echo "자리표시자가 남았다" && exit 1)
+          test -z "$(grep -rl '%OG_BASE%' _site --include='*.html')" || (echo "a placeholder is left" && exit 1)
 
       - uses: actions/upload-pages-artifact@v3
         with:
