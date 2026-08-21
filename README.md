@@ -593,7 +593,7 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2352 cases. The remaining 608 are
+borch.ts itself has written TS bodies for 2629 cases. The remaining 362 are
 **deliberately not carried across** — the binding (`borch-webgpu`) already goes
 through borch.ts's kernels on those cases, so **the values are verified**, and what
 a TS body would add is not a value but this side's surface: names and argument
@@ -601,12 +601,12 @@ order. A good many of them ask about a Python name alias, so carrying them acros
 would ask the same question twice. The runner keeps printing that number rather
 than letting it shrink quietly.
 
-> **Those last two figures are not verified from here.** The count comes from the
-> browser runner, so confirming it needs `borch-ts/test/missing.py` under
-> playwright. They are carried across as written rather than re-derived, because a
-> grep over `cases.ts` gives 401 — `cases.ts` builds names programmatically and a
-> text search cannot see them, which is the same reason `test_docs.py` parses
-> rather than greps.
+> Those two figures said 2352 and 608 until they were measured. **Confirming them
+> does not need a browser** — the case table registers names without running them,
+> so loading `borch-ts/dist/test/cases.js` in node and counting the map is enough,
+> and `tests/test_site.py` now does exactly that whenever `dist` exists. A text
+> search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 784
+> against the real 2629, because the names are built programmatically.
 
 ### Six places where it diverges from torch
 

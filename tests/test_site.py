@@ -14,8 +14,10 @@ the Tensor's 422 methods and the screen looked fine).
 import gzip
 import hashlib
 import json
+import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -238,6 +240,74 @@ def test_a_page_quoting_a_heading_quotes_one_that_exists():
     assert not broken, (
         "a page quotes a heading that is not there:\n  " + "\n  ".join(broken) +
         "\n\nfix both ends together, or drop the row if the sentence went away.")
+
+
+# ── how many cases borch.ts has a body for ────────────────────────────
+#
+# The README states two numbers about the TypeScript side: how many golden cases have a
+# TS body, and how many deliberately do not. They were carried across from a browser run
+# and said 2352 and 608 while the truth was 2629 and 362 — the README even recorded that
+# they were unverified, which is honest and is not a check.
+#
+# **They do not need a browser.** The case table registers names without running any of
+# them, so loading the compiled module in node and counting the map answers it. A text
+# search does not: `out.set(` appears 784 times against 2629 real names, because the
+# names are built programmatically.
+TS_CASES = ROOT / "borch-ts" / "dist" / "test" / "cases.js"
+GOLDEN_JSON = ROOT / "tests" / "golden.json"
+WRITTEN = re.compile(r"written TS bodies for (\d[\d,]*) cases")
+REMAINING = re.compile(r"The remaining (\d[\d,]*) are")
+
+COUNT_CASES = """
+import fs from "node:fs";
+const doc = JSON.parse(fs.readFileSync(process.env.GOLDEN, "utf8"));
+const { cases, Inputs } = await import(process.env.CASES);
+const names = [...cases(new Inputs(doc.inputs)).keys()];
+const mine = names.filter((n) => doc.cases[n] !== undefined).length;
+console.log(JSON.stringify({ written: names.length, golden: Object.keys(doc.cases).length,
+                             unknown: names.length - mine }));
+"""
+
+
+def test_the_readme_counts_the_typescript_bodies_correctly():
+    """Both numbers, and that they still add up to the golden.
+
+    Counting only the written half lets the other drift, and the two are a partition:
+    written plus deliberately-absent is every golden case. A case registered on the TS
+    side under a name the golden does not have is checked too — it is the silent
+    disappearance `borch-ts/test/cases.ts` warns about, seen from the other end.
+    """
+    if not TS_CASES.exists():
+        pytest.skip(f"no {TS_CASES.relative_to(ROOT)} — run npm run build:ts first")
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+
+    out = subprocess.run([node, "--input-type=module", "-e", COUNT_CASES],
+                         capture_output=True, text=True, cwd=ROOT,
+                         env={**os.environ, "GOLDEN": str(GOLDEN_JSON),
+                              "CASES": TS_CASES.as_uri()})
+    assert out.returncode == 0, f"could not load the case table:\n{out.stderr[-2000:]}"
+    got = json.loads(out.stdout)
+
+    assert got["unknown"] == 0, (
+        f"{got['unknown']} TS cases carry a name tests/golden.json does not have — "
+        "the answer for those is nowhere, and the runner passes them by in silence.")
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    said_written = WRITTEN.search(readme)
+    said_remaining = REMAINING.search(readme)
+    assert said_written and said_remaining, (
+        "the README stopped stating the TS body counts in the shape this reads — "
+        "fix the patterns above, or drop this test if the claim went away.")
+
+    written = int(said_written.group(1).replace(",", ""))
+    remaining = int(said_remaining.group(1).replace(",", ""))
+    real_remaining = got["golden"] - got["written"]
+    assert (written, remaining) == (got["written"], real_remaining), (
+        f"the README says {written} written and {remaining} remaining; measured "
+        f"{got['written']} and {real_remaining} against {got['golden']} golden cases.\n"
+        "  measure: node --input-type=module -e '…' (this test prints the command it ran)")
 
 
 def test_the_documents_still_carry_the_markers_this_file_looks_for():
