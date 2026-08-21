@@ -5,7 +5,7 @@
   Nothing is sent to a server; there is nowhere to send it. This page is a static
   file and user code runs as a Blob module inside the same tab.
 
-  한국어 판은 `ko/playground.html` 이다. 두 벌이므로 문구를 고치면 같이 고친다.
+  The Korean edition is `ko/playground.html`. They are two sets, so wording changes go into both.
 -->
 <html lang="en">
 <head>
@@ -13,9 +13,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>borch Playground</title>
 <link rel="alternate" hreflang="ko" href="ko/playground.html">
-<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
-     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
-     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="en_US">

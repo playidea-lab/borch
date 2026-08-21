@@ -8,9 +8,9 @@
   The hero demo only runs if the build exists — `npm run build:ts`. If it does
   not, the page says so on screen. It never sits there blank.
 
-  두 언어는 **두 벌의 파일**이다. 문구를 고치면 이 파일과 `ko/index.html` 을 같이
-  고친다 — 코드로 짜맞추면 본문이 HTML 밖으로 나가고, 그러면 자바스크립트가 꺼진
-  브라우저와 링크 미리보기에서 빈 페이지가 된다.
+  The two languages are **two sets of files.** Changing wording means changing this file and
+  `ko/index.html` together — assembling it in code would move the prose out of the HTML, and
+  then a browser with JavaScript off, and a link preview, both get a blank page.
 -->
 <html lang="en">
 <head>
@@ -19,9 +19,10 @@
 <title>borch — Machine Learning, native to the Web</title>
 <meta name="description" content="A PyTorch-like tensor library that runs on WebGPU in the browser. Learn, train and run with nothing to install.">
 <link rel="alternate" hreflang="ko" href="ko/">
-<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
-     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
-     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<!-- What shows up when the link is pasted somewhere. The image is made by `site/make_og.py`.
+     `%OG_BASE%` is replaced with the real address by the deploy workflow — a social crawler
+     does not follow a relative path, and hard-coding the deployed address here would go
+     stale quietly the day the domain changes. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="borch">
 <meta property="og:locale" content="en_US">
