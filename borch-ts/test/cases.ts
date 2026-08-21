@@ -707,7 +707,10 @@ function addNamedCasts(out: Map<string, Case>): void {
 
   // 파이썬 쪽 판정이 문구의 **조각**을 본다. 여기서도 같은 조각을 확인하고 같은
   // 낱말을 돌려준다 — 문장 전체를 굳히면 한 글자만 바뀌어도 갈린다.
-  const MARK = "브라우저 축소판에 없습니다";
+  // **파이썬 쪽 `tests/cases.py` 와 같은 조각이어야 한다.** 여기가 갈리면 양쪽이 각자
+  // 자기 문장만 확인하고, 스물한 건이 전부 초록인 채로 서로 다른 말을 하게 된다 —
+  // 실제로 그랬다. 굳혀진 답이 `기대대로` 라는 판정 낱말이라 문장이 벌어져도 안 움직인다.
+  const MARK = "is not in the browser subset";
   const weRefuse = (name: string, body: () => unknown): void => {
     out.set(`${P}${name}=우리는거절`, () => {
       try {

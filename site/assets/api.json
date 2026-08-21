@@ -13354,7 +13354,7 @@
     {
      "kind": "const",
      "name": "TORCH",
-     "signature": "export declare const TORCH: { readonly matmulShape: \"shapes cannot be multiplied\"; readonly absent: \"은(는) 브라우저 축소판에 없습니다.\"; readonly absentAdvice: string; readonly broadcast: \"must match the size of tensor\"; readonly reshapeSize: \"is invalid for input of size\"; readonly nonScalarBackward: \"grad can be implicitly created only for scalar outputs\"; readonly noGrad: \"does not require grad\"; readonly itemScalar: \"cannot be converted to Scalar\"; readonly crossDevice: \"Expected all tensors to be on the same device\"; readonly gradShape: \"Mismatch in shape\"; readonly secondBackward: string; }",
+     "signature": "export declare const TORCH: { readonly matmulShape: \"shapes cannot be multiplied\"; readonly absent: \"is not in the browser subset.\"; readonly absentAdvice: string; readonly broadcast: \"must match the size of tensor\"; readonly reshapeSize: \"is invalid for input of size\"; readonly nonScalarBackward: \"grad can be implicitly created only for scalar outputs\"; readonly noGrad: \"does not require grad\"; readonly itemScalar: \"cannot be converted to Scalar\"; readonly crossDevice: \"Expected all tensors to be on the same device\"; readonly gradShape: \"Mismatch in shape\"; readonly secondBackward: string; }",
      "doc": "The wording torch itself produces. Kept verbatim so that searching for it\nworks.",
      "members": [],
      "doc_ko": "torch 가 내는 문구. 검색이 통하라고 원문 그대로 둔다."

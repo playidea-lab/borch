@@ -86,12 +86,22 @@ export class LinAlgError extends Error {
 export const TORCH = {
   matmulShape: "shapes cannot be multiplied",
   // **이 축소판에 칸이 없는 것.** torch 의 문구가 아니라 우리 문구인데, 여기 두는
-  // 까닭은 같다 — 파이썬 두 판이 같은 문장으로 멈추고, 골든이 그 **조각**을 찾는다.
+  // 까닭은 같다 — 세 구현이 같은 문장으로 멈추고, 골든이 그 **조각**을 찾는다.
   // 자리마다 손으로 적으면 구현마다 다른 문장이 생기고, 배우는 사람은 그것을 다른
-  // 규칙으로 읽는다. 값이 아니라 글자라 상호 대조로는 안 걸린다.
-  absent: "은(는) 브라우저 축소판에 없습니다.",
-  absentAdvice: "자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — "
-    + "축소판은 문법 연습용이고, 없는 것을 흉내 내면 틀린 것을 배우게 됩니다.",
+  // 규칙으로 읽는다.
+  //
+  // **이 두 줄이 한국어였고, 그래서 스물한 케이스가 거짓으로 초록이었다.** 파이썬
+  // 쪽(`borch/_base.py` 의 `_unsupported`)이 영어로 옮겨졌는데 이쪽은 안 옮겨졌다.
+  // 골든이 굳혀 둔 답은 `기대대로` 라는 **판정 낱말**이고, 케이스는 각자 자기 쪽
+  // 문장 조각이 들어 있는지만 본다 — 그래서 두 문장이 아무리 벌어져도 양쪽이 각자
+  // 자기와 일치하며 스물한 건이 전부 통과한다. 상호 대조가 아니라 자기 대조였다.
+  //
+  // 문장은 `_base.py` 에서 **그대로 옮겨 적었다.** 유도하면 또 갈린다.
+  // 앞에 공백을 넣지 않는다 — 부르는 자리(`tensor.ts`)가 이미 한 칸 띄우고 있어서
+  // 넣으면 두 칸이 된다. 파이썬은 `f"{what} is not in the browser subset."` 한 칸이다.
+  absent: "is not in the browser subset.",
+  absentAdvice: "Use real PyTorch on your own machine (`uv add torch`) — this subset "
+    + "is for practising the syntax, and imitating what is missing teaches the wrong thing.",
   broadcast: "must match the size of tensor",
   reshapeSize: "is invalid for input of size",
   nonScalarBackward: "grad can be implicitly created only for scalar outputs",
