@@ -6,6 +6,21 @@ decides which library goes in — every case takes it as an argument, as `lambda
 
 `conformance.py` and `golden.py` read **the same table.** Kept in two copies they diverge
 eventually, and then nobody knows which copy diverged.
+
+## The case names stay as they are, Korean included
+
+1,447 of the 2,991 names carry Korean, and translating them is **not** part of putting
+this repository into English. A case name is a key, not prose — no user of the library
+ever reads one; the reader is whoever is looking at a golden diff. The same distinction
+is written down in `tests/test_messages.py`, which forbids Korean anywhere in the Python
+library and then names two case names it is quoting on purpose.
+
+Renaming one is a golden regeneration and a manifest move, and `borch-ts/test/cases.ts`
+mirrors every name: a name that differs there by one character does not fail, it makes
+the case **disappear**. Two guards catch a rename that forgets the rest —
+`test_committed_golden.py` compares the manifest hash against the committed
+`golden.json`, and the borch-ts runner has a staleness check of its own — so this is a
+decision about what is worth doing, not about what is safe.
 """
 
 import collections
