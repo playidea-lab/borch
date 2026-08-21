@@ -1,4 +1,4 @@
-"""The README's Python examples are **run**, not read.
+"""The documentation's Python examples are **run**, not read.
 
 `borch-ts/test/readme.ts` already does this for the TypeScript side, and its first
 paragraph gives the reason: an example in a document is a claim about what the code does,
@@ -124,6 +124,46 @@ def test_the_readme_autograd_example_prints_what_its_comment_claims():
     got = buffer.getvalue().strip()
     assert got == said, (
         f"README.md:{line} — the example claims it prints {said!r} and it prints {got!r}")
+
+
+# ── the same message, quoted in a second document ─────────────────────
+#
+# ROADMAP.md records what the matmul message looked like when it was Korean, and then
+# says "the same call today gives:" and quotes the English one. The first block is
+# history and must not move — this file's neighbour, `test_docs.py`, has a rule saying
+# changing a past number to the current one is forging the record. The second is
+# **present tense**, and present tense rots.
+#
+# It also makes that sentence live in two documents at once, which is the shape that
+# already failed here: `test_site.py` records a bundle size copied from the README into
+# two site pages, where a stale source produced stale copies. The README's copy is
+# checked by the session block above; this checks the other one against the same source
+# of truth rather than against the README, so neither document is the original.
+TODAY = "the same call today gives:"
+
+
+def test_the_roadmap_quotes_the_message_the_library_emits_today():
+    """The present-tense half of a document whose other half is deliberately frozen."""
+    text = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
+    after = text.split(TODAY)
+    assert len(after) == 2, (
+        f"ROADMAP.md no longer says {TODAY!r} — the quote it introduces is the thing this "
+        "checks, so a rewrite has to bring this pattern with it.")
+    quoted = re.search(r"```\n(.*?)```", after[1].replace("> ", ""), re.S)
+    assert quoted, "ROADMAP.md stopped quoting a message under that sentence"
+
+    import borch
+
+    try:
+        borch.randn(3, 4) @ borch.randn(3, 2)
+    except Exception as exc:                                        # noqa: BLE001
+        got = str(exc)
+    else:
+        raise AssertionError("the matmul no longer refuses — the whole passage is stale")
+
+    assert quoted.group(1).strip() == got.strip(), (
+        "ROADMAP.md quotes a message the library does not emit:\n"
+        f"  says: {quoted.group(1).strip()}\n  does: {got.strip()}")
 
 
 if __name__ == "__main__":
