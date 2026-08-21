@@ -1,8 +1,8 @@
 """Counts the names real torch has that **we do not**.
 
-    uv run --with numpy --with torch python tests/torch_gap.py
-    uv run --with numpy --with torch python tests/torch_gap.py --extra   # the other direction
-    uv run --with numpy --with torch python tests/torch_gap.py --show nn # one namespace, all of it
+    uv run --with numpy --with torch --with torchvision python tests/torch_gap.py
+    uv run --with numpy --with torch --with torchvision python tests/torch_gap.py --extra
+    uv run --with numpy --with torch --with torchvision python tests/torch_gap.py --show nn
 
 `tests/conformance.py` asks whether **what is there is right**. This file asks **what is
 not there**. They are different questions, and measuring only the first gives 100% while
@@ -28,6 +28,31 @@ The first three are judgements and the last is a defect. A machine cannot tell t
 apart, so the first three are written into the tables below — **whatever is not written
 is what wants reviewing.**
 
+## torchvision is counted here too, and was not for a long time
+
+`transforms` and `transforms.functional` were **not on the namespace list**, so every name
+absent from `borchvision` was absent from the measure as well: no count, and no reason
+demanded of it. The number in circulation, "7 of 41", was arrived at by hand, which is the
+method this whole file exists to replace.
+
+That shape has now cost this repository four times — a helper list that lost to new shapes,
+a file simply not in `test_messages.py`'s list, a README row nothing compared name by name,
+and this. **What is off the list has no rule.**
+
+`transforms.functional` is counted against an empty namespace on our side. It could have
+been left out on the grounds that it does not exist here, and that is exactly the move that
+hid it: absent from the list reads as zero to review, and absent from *us* while present in
+the list reads as thirty-six to review. The second is the true sentence.
+
+**And the number counts names, not signatures.** `Grayscale` present with the wrong luma
+weights counts the same as `Grayscale`; so does `Pad` present without `padding_mode`. This
+is not hypothetical — measured on the borch.ts side, `MaxPool2d` was present taking
+`(kernel)` alone against the core's `return_indices`, and `InstanceNorm` took `(eps?)`
+against five arguments. **A name comparison finds absent names and cannot find a name that
+lies about what it accepts.** What holds signatures here is the golden cases and the
+arguments they pass, not this count — so quoting "21 of 41" as coverage is quoting the wrong
+number for that question.
+
 ## Filling in this table is dangerous work
 
 **Every name written down raises our percentage.** So the work slides, by its nature,
@@ -48,7 +73,13 @@ import sys
 
 import torch
 
+try:                                            # the vision half needs one more package
+    import torchvision
+except ImportError:                             # pragma: no cover - measured by test_gap
+    torchvision = None
+
 import borch
+import borchvision
 
 # ------------------------------------------------------------- tables
 #
@@ -206,6 +237,7 @@ NOT_API = {
     # bare names, `"Optimizer"` swallowed `torch.optim.Optimizer` (real API, and we built
     # it) and `"Tensor"` swallowed `torch.Tensor`. `test_gap.py` caught it.
     "nn.functional.Tensor": "an imported label — not F's API",
+    "transforms.functional.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Tensor": "an imported label — not that namespace's API",
     "optim.lr_scheduler.Optimizer": "an imported label — not that namespace's API",
     "ScalingType": "an imported label — an fp8 scaling kind",
@@ -441,9 +473,36 @@ SKIPPED = {
     "grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
     "scaled_grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
     "scaled_mm": "fp8 GEMM — that hardware is not here",
+
+    # torchvision. **Only what is declined for good is written here** — everything else
+    # absent from `transforms` is the to-do list, and it should read as one.
+    #
+    # The two PIL names are the load-bearing pair. This library's stand-in for a PIL image
+    # is an (H,W,C) array, and every transform says so at its door (`_require_hwc`).
+    "transforms.ToPILImage": "there is no PIL here — an (H,W,C) array stands in for a PIL "
+                             "image, and handing back a real one would mean depending on "
+                             "Pillow to return the thing this library does without",
+    "transforms.PILToTensor": "it takes a PIL image, and nothing here produces one — "
+                              "`ToTensor` is the same journey from the array that does "
+                              "stand in",
+    # **Measured rather than judged**: `torch.uint8` is an `_AbsentDtype` in the core, so
+    # the conversion this class exists for has no destination.
+    "transforms.ConvertImageDtype": "uint8 has no storage in this subset, so float-to-uint8 "
+                                    "with its x255 has nothing to convert into — and "
+                                    "`ToTensor` already does the divide the other way",
 }
 
 # The namespaces looked at. (display name, torch's side, ours)
+class _Empty:
+    """**A namespace we do not have, standing where it would be.**
+
+    `transforms.functional` has no counterpart here. Left out of the list it counts as
+    nothing to review; put in as an empty namespace it counts as thirty-six. The filter
+    below drops a `None`, and that is the behaviour this class exists to avoid inheriting —
+    an absent namespace is a measurement, not a reason to stop measuring.
+    """
+
+
 def _spaces():
     got = [("torch", torch, borch),
            ("Tensor", torch.Tensor, borch.Tensor),
@@ -453,6 +512,9 @@ def _spaces():
            ("optim.lr_scheduler", torch.optim.lr_scheduler, borch.optim.lr_scheduler),
            ("linalg", torch.linalg, borch.linalg),
            ("utils.data", torch.utils.data, borch.utils.data)]
+    if torchvision is not None:
+        got += [("transforms", torchvision.transforms, borchvision.transforms),
+                ("transforms.functional", torchvision.transforms.functional, _Empty())]
     return [(name, a, b) for name, a, b in got if b is not None]
 
 

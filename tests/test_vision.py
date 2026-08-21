@@ -115,3 +115,264 @@ def test_normalize_accepts_numpy_and_tensor_alike():
     arr = np.random.default_rng(0).random((3, 4, 4)).astype(np.float32)
     norm = V.Normalize((0.5, 0.4, 0.3), (0.2, 0.3, 0.4))
     assert np.allclose(norm(arr), norm(BT.tensor(arr)).numpy(), atol=1e-6)
+
+
+# --- the fourteen that arrived later ----------------------------------------
+#
+# The same division as above. The golden cases hold the values against real torchvision
+# wherever the draw can be pinned, and **what is left over is the draw itself** — whether it
+# happens, whether it happens once or per call, and whether the branch nobody pins is right.
+
+
+def test_vertical_flip_with_half_probability_produces_both_outcomes():
+    """The horizontal flip's check, on the other axis. **It is not a copy for its own sake:**
+    a vertical flip written on the width axis passes every value case on a square picture,
+    and this marked image is 4x4 — so the mark's position is what separates them."""
+    V.manual_seed(0)
+    flip = V.RandomVerticalFlip(p=0.5)
+    top_marked = np.zeros((4, 4, 3), dtype=np.uint8)
+    top_marked[0, :, :] = 255
+    seen = {bool(flip(top_marked)[-1, 0, 0] == 255) for _ in range(60)}
+    assert seen == {True, False}, f"sixty draws and only one side came out: {seen}"
+
+
+def test_random_apply_takes_all_of_them_or_none():
+    """**All or none, never one.** That is the whole difference between `RandomApply` and
+    putting a `p` on each transform, and one draw per transform would pass a value case
+    pinned at 0 or 1 while failing here."""
+    V.manual_seed(0)
+    both = V.RandomApply([V.Pad(1), V.Pad(2)], p=0.5)
+    sizes = {both(np.zeros((4, 4, 3), dtype=np.float32)).shape[0] for _ in range(60)}
+    assert sizes == {4, 10}, (
+        f"sixty draws gave sizes {sorted(sizes)} — 4 is none of them applied and 10 is "
+        "both. Anything between means the list was drawn for one at a time.")
+
+
+def test_random_choice_honours_its_weights():
+    """A weight of zero has to mean never. torchvision's weights are relative and numpy's
+    have to sum to 1, so this is where the normalisation in between is checked."""
+    V.manual_seed(0)
+    pick = V.RandomChoice([V.Pad(1), V.Pad(3)], p=[1, 0])
+    sizes = {pick(np.zeros((4, 4, 3), dtype=np.float32)).shape[0] for _ in range(40)}
+    assert sizes == {6}, f"the zero-weighted transform was chosen: {sorted(sizes)}"
+
+
+def test_random_order_applies_every_one_exactly_once():
+    """Shuffling must not drop or repeat. Two pads of different sizes are used because
+    **their sum is the same whatever the order** — so the shape says every one ran, and
+    nothing else in this test can say it."""
+    V.manual_seed(0)
+    shuffled = V.RandomOrder([V.Pad(1), V.Pad(2)])
+    sizes = {shuffled(np.zeros((4, 4, 3), dtype=np.float32)).shape[0] for _ in range(40)}
+    assert sizes == {10}, f"a transform was skipped or repeated: {sorted(sizes)}"
+
+
+def test_padding_of_two_numbers_is_left_right_then_top_bottom():
+    """**The two-element form is the one that misreads.** It is (left/right, top/bottom),
+    not (left, top) — and read the wrong way the picture still comes back, one axis too
+    tall. The golden cases pin the four-element form, where both readings agree."""
+    out = V.Pad((1, 2))(np.zeros((4, 4, 3), dtype=np.float32))
+    assert out.shape == (8, 6, 3), (
+        f"(1, 2) gave {out.shape[:2]} — expected 4+2+2 tall and 4+1+1 wide")
+
+
+def test_grayscale_of_three_channels_gives_three_equal_ones():
+    """`num_output_channels=3` is what a three-channel model needs, and the failure it hides
+    is a broadcast that leaves the three channels **different** — which still trains, worse."""
+    img = np.stack([np.full((4, 4), v, dtype=np.float32) for v in (0.1, 0.5, 0.9)], axis=2)
+    out = V.Grayscale(3)(img)
+    assert out.shape == (4, 4, 3)
+    assert np.allclose(out[:, :, 0], out[:, :, 1]) and np.allclose(out[:, :, 1], out[:, :, 2])
+
+
+def test_random_resized_crop_visits_more_than_one_place():
+    """With room to move, always cropping the same place is not augmentation — `RandomCrop`'s
+    check, on the transform that draws **both** the size and the position."""
+    V.manual_seed(0)
+    crop = V.RandomResizedCrop(4)
+    seen = {crop(_MARKED.astype(np.float32)).tobytes() for _ in range(60)}
+    assert len(seen) > 1, "sixty crops and one distinct result — the draw is dead"
+
+
+def test_random_resized_crop_falls_back_to_the_centre():
+    """**Ten draws can all miss**, and then torchvision centre-crops rather than failing. A
+    ratio no draw can satisfy is how that branch is reached on purpose; without it the
+    fallback is only ever exercised by accident."""
+    V.manual_seed(0)
+    crop = V.RandomResizedCrop((2, 2), scale=(1.0, 1.0), ratio=(100.0, 100.0))
+    out = crop(np.zeros((8, 4, 3), dtype=np.float32))
+    assert out.shape == (2, 2, 3)
+
+
+def test_random_erasing_blanks_one_rectangle_and_leaves_the_rest():
+    """What is erased is **a rectangle**, and it holds the value asked for. A version that
+    erases the whole image, or fills with something else, passes both golden cases — one is
+    pinned at p=0 and the other at the branch where nothing is erased."""
+    V.manual_seed(0)
+    x = np.ones((3, 8, 8), dtype=np.float32)
+    out = V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0), value=0.0)(x)
+    blanked = out == 0.0
+    assert blanked.any(), "p=1 erased nothing"
+    assert not blanked.all(), "the whole picture was erased"
+    # The same rows and columns in every channel — that is what makes it a rectangle.
+    rows, cols = np.where(blanked[0])
+    assert blanked.sum() == blanked[0].sum() * 3
+    assert blanked[0].sum() == (rows.max() - rows.min() + 1) * (cols.max() - cols.min() + 1)
+
+
+def test_random_erasing_leaves_the_original_alone():
+    """`inplace=False` is the default and it has to be true. Erasing into the caller's tensor
+    changes **the dataset**, not the batch — the same picture arrives already blanked next
+    epoch, and nothing ever raises."""
+    V.manual_seed(0)
+    x = np.ones((3, 8, 8), dtype=np.float32)
+    V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0), value=0.0)(x)
+    assert (x == 1.0).all(), "the input was erased in place while inplace was False"
+
+
+def test_random_erasing_moves_the_rectangle_around():
+    V.manual_seed(0)
+    x = np.ones((3, 8, 8), dtype=np.float32)
+    erase = V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0), value=0.0)
+    seen = {erase(x).tobytes() for _ in range(40)}
+    assert len(seen) > 1, "forty erasures in the same place — the draw is dead"
+
+
+def test_manual_seed_reaches_the_transforms_that_arrived_later():
+    """The seed is one generator for the whole module, and a transform that reaches for its
+    own would reproduce **within itself** and diverge here."""
+    def draw():
+        V.manual_seed(11)
+        crop = V.RandomResizedCrop(4)
+        erase = V.RandomErasing(p=0.5, value=0.0)
+        img = _MARKED.astype(np.float32)
+        return [(crop(img).tobytes(),
+                 erase(np.ones((3, 6, 6), dtype=np.float32)).tobytes())
+                for _ in range(10)]
+
+    assert draw() == draw()
+
+
+def test_resize_refuses_a_filter_it_does_not_have():
+    """The five filters it cannot resample with **keep their names** and say so. Left out
+    entirely, `InterpolationMode.BICUBIC` stops with an `AttributeError`, and that wording
+    is the one a typo produces."""
+    assert V.InterpolationMode.BICUBIC.value == "bicubic"
+    with pytest.raises(ValueError, match="does not resample here"):
+        V.Resize(4, interpolation=V.InterpolationMode.BICUBIC)
+
+
+def test_resize_takes_the_enum_and_the_string_alike():
+    """Both spellings are written in the wild — torchvision's documentation passes the enum
+    and its tutorials pass the string."""
+    img = np.zeros((8, 6, 3), dtype=np.float32)
+    a = V.Resize((4, 3), interpolation="bilinear")(img)
+    b = V.Resize((4, 3), interpolation=V.InterpolationMode.BILINEAR)(img)
+    assert np.array_equal(a, b)
+
+
+# --- arguments the cases above pass over ------------------------------------
+#
+# Prompted by a measurement from another session: on the borch.ts side `MaxPool2d` was
+# present taking `(kernel)` alone against the core's `return_indices`, `InstanceNorm` took
+# `(eps?)` against five, and `Adam` was missing `weight_decay` — three names present and
+# narrower than they look, none of them visible to a count of names. **What finds that is a
+# case whose arguments exercise the parameter**, so these are the arguments the golden cases
+# do not reach.
+
+
+def test_erasing_takes_a_value_for_each_channel():
+    """A sequence fills channel by channel. Handed straight through it would broadcast into
+    one number for all three, which on a normalised image is **a colour rather than the
+    channel means** — and no shape says so."""
+    V.manual_seed(0)
+    out = V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0),
+                          value=[0.1, 0.2, 0.3])(np.ones((3, 8, 8), dtype=np.float32))
+    for channel, want in enumerate((0.1, 0.2, 0.3)):
+        blanked = out[channel][out[channel] != 1.0]
+        assert blanked.size and np.allclose(blanked, want), (
+            f"channel {channel} was filled with {set(blanked.tolist()) or 'nothing'}, not {want}")
+
+
+def test_erasing_with_random_fills_the_rectangle_with_noise():
+    """`value="random"` is a different branch, not a different number — one draw per pixel."""
+    V.manual_seed(0)
+    out = V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0),
+                          value="random")(np.ones((3, 8, 8), dtype=np.float32))
+    blanked = out[out != 1.0]
+    assert blanked.size > 1 and len(set(blanked.tolist())) > 1, (
+        "the rectangle came out one repeated value — that is a constant, not noise")
+
+
+def test_erasing_refuses_a_value_that_is_not_one_per_channel():
+    with pytest.raises(ValueError, match="channels"):
+        V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0),
+                        value=[0.1, 0.2])(np.ones((3, 8, 8), dtype=np.float32))
+
+
+def test_a_size_of_one_number_or_a_one_element_list_means_both_sides():
+    """torchvision spreads `[3]` over both sides, and a copied line uses that form. Read as
+    a pair it would be a size of one dimension and stop somewhere else entirely."""
+    img = np.zeros((5, 4, 3), dtype=np.float32)
+    assert V.FiveCrop(2)(img)[0].shape == V.FiveCrop([2])(img)[0].shape == (2, 2, 3)
+    assert V.Pad([1])(img).shape == (7, 6, 3)
+
+
+def test_grayscale_of_a_single_channel_image_passes_it_through():
+    """A one-channel picture is already grey. The luma sum reaches for three channels, so
+    without the branch this is an `IndexError` on the very input that needs no work."""
+    img = np.full((5, 4, 1), 0.25, dtype=np.float32)
+    out = V.Grayscale()(img)
+    assert out.shape == (5, 4, 1) and np.allclose(out, 0.25)
+
+
+def test_normalize_inplace_is_a_no_op_and_the_input_survives():
+    """**The one argument in this file that is accepted and does nothing.** Found by
+    auditing constructor arguments that never reach `__call__`, after another session
+    found the same shape in `borch_webgpu`'s optimizers — `weight_decay` handed to a JS
+    call that discards surplus arguments, so five optimizers trained without it and
+    nothing raised.
+
+    Here the values are identical either way, so the argument stays and the docstring
+    says what it does. This is what stops that sentence from rotting: if somebody makes
+    `inplace` real on the core alone, the sister library cannot follow and the two
+    libraries part on the same line — so it fails here first.
+    """
+    x = np.ones((3, 2, 2), dtype=np.float32)
+    out = V.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)(x)
+    assert np.allclose(out, 1.0), "the returned value must be normalised either way"
+    assert np.allclose(x, 1.0), (
+        "the input was written through. `inplace` is documented as a no-op because the "
+        "sister library's tensors are immutable — making it real here parts the two.")
+
+
+def test_random_crop_takes_its_arguments_in_torchvisions_order():
+    """**`RandomCrop(32, 4, True)` set `fill=True` here and `pad_if_needed=True` there.**
+
+    The list was `(size, padding, fill)` against torchvision's
+    `(size, padding, pad_if_needed, fill, padding_mode)`, so a positional call landed on
+    a different parameter and returned a correctly shaped picture either way. Nothing
+    raised, and no count of names could see it — `tests/test_torch_signatures.py` asks
+    the general question, and this pins the one that was wrong.
+    """
+    assert V.RandomCrop(2, 1, True).pad_if_needed is True
+
+
+def test_random_crop_pads_a_picture_smaller_than_the_crop_when_asked():
+    """`pad_if_needed` pads **both sides**, so a shortfall of one makes the picture two
+    larger — torchvision's arithmetic, not a rounding of it. Without the flag the same
+    call refuses."""
+    V.manual_seed(0)
+    img = np.arange(20, dtype=np.float32).reshape(5, 4, 1)
+    assert V.RandomCrop((6, 5), pad_if_needed=True)(img).shape == (6, 5, 1)
+    with pytest.raises(ValueError, match="larger than the image"):
+        V.RandomCrop((6, 5))(img)
+
+
+def test_random_crops_padding_mode_reaches_the_padding_it_adds():
+    """The mode is not decoration: `edge` and `constant` put different numbers at the
+    border, and a `padding_mode` accepted and dropped leaves zeros that look deliberate."""
+    img = np.arange(20, dtype=np.float32).reshape(5, 4, 1)
+    V.manual_seed(0)
+    edged = V.RandomCrop((7, 6), padding=1, padding_mode="edge")(img)
+    assert np.array_equal(edged, V.Pad(1, padding_mode="edge")(img))

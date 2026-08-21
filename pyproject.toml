@@ -19,7 +19,14 @@ license = { text = "Apache-2.0" }
 
 [project.optional-dependencies]
 # Real torch is needed for the comparison checks alone. Using it needs numpy only.
-dev = ["pytest", "torch"]
+#
+# **torchvision has been needed here since the vision cases landed and was not
+# written down.** `tests/cases.py` imports it to freeze the golden answers, and
+# `tests/torch_gap.py` now counts `transforms` against it — so the dump and the gap
+# report both stopped without it while the list said torch alone was enough. An
+# undeclared dependency is the same failure as a namespace off the list: it works on
+# the machine that happens to have it.
+dev = ["pytest", "torch", "torchvision"]
 
 [build-system]
 requires = ["hatchling"]

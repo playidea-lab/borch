@@ -50,6 +50,9 @@ that diverges rather than the values. The places where the probability is pinned
 at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
+import enum as _enum
+import warnings as _warnings
+
 import numpy as _np
 
 _rng = _np.random.default_rng()
@@ -79,13 +82,129 @@ def manual_seed(seed):
     _rng = _np.random.default_rng(seed)
 
 
+class InterpolationMode(_enum.Enum):
+    """torchvision's names for the filters. **Two of the seven resample here.**
+
+    The names of the other five are kept rather than left out, for the reason
+    `torch.int32` keeps its name in the core: leaving it out makes
+    `InterpolationMode.BICUBIC` stop with an `AttributeError`, and that wording is
+    **indistinguishable from a typo.** Kept, it can say what is absent.
+    """
+
+    NEAREST = "nearest"
+    NEAREST_EXACT = "nearest-exact"
+    BILINEAR = "bilinear"
+    BICUBIC = "bicubic"
+    BOX = "box"
+    HAMMING = "hamming"
+    LANCZOS = "lanczos"
+
+
+_RESAMPLES = ("bilinear", "nearest")
+
+
+def _interpolation(value):
+    """A string or an `InterpolationMode`, into the one string we resample with.
+
+    Both spellings are taken because both are written. torchvision's own
+    documentation passes `InterpolationMode.BILINEAR`, and its tutorials pass
+    `"bilinear"` — a copied line has to run either way.
+    """
+    name = value.value if isinstance(value, InterpolationMode) else value
+    if name not in _RESAMPLES:
+        raise ValueError(
+            f"interpolation {name!r} does not resample here — "
+            f"{' or '.join(_RESAMPLES)} does.\n"
+            "  The other filters are PIL's, and each is a different kernel to write;\n"
+            "  none of them is what an introductory tutorial passes.")
+    return name
+
+def _pair(size, who):
+    """One number into `(h, w)`, a pair through as it is.
+
+    torchvision takes a one-element sequence as well and spreads it over both —
+    `FiveCrop([3])` is `(3, 3)`. It is written out because a copied line uses it.
+    """
+    if isinstance(size, int):
+        return (int(size), int(size))
+    seq = tuple(int(v) for v in size)
+    if len(seq) == 1:
+        return (seq[0], seq[0])
+    if len(seq) != 2:
+        raise ValueError(
+            f"{who} takes a size of one or two numbers — it received {len(seq)}.\n"
+            "(torch: Please provide only two dimensions (h, w) for size)")
+    return seq
+
+
+def _pad_sides(padding):
+    """`(left, top, right, bottom)` — **torchvision's order, which is not numpy's.**
+
+    One number is all four sides, two are (left/right, top/bottom), four are the
+    sides one by one. The two-element form is the one that misreads: it is not
+    (left, top).
+    """
+    if isinstance(padding, int):
+        return (padding,) * 4
+    seq = tuple(int(v) for v in padding)
+    if len(seq) == 1:
+        return seq * 4
+    if len(seq) == 2:
+        return (seq[0], seq[1], seq[0], seq[1])
+    if len(seq) != 4:
+        raise ValueError(
+            f"padding is one, two or four numbers — it received {len(seq)}.\n"
+            "(torch: Padding must be an int or a 1, 2, or 4 element tuple)")
+    return seq
+
+
+def _to_numpy(x):
+    """A tensor of either library, or an array, into numpy — for the transforms
+    that are **given** tensors as arguments rather than as the image."""
+    if isinstance(x, _np.ndarray):
+        return x
+    take = getattr(x, "numpy", None)
+    return take() if callable(take) else _np.asarray(x)
+
+
+def _warn_min_max(scale, ratio):
+    """torchvision **warns** when a range arrives the wrong way round and goes on.
+
+    Both `RandomResizedCrop` and `RandomErasing` do it, and both keep running. The
+    line between warning and refusing is theirs to draw, not ours — a refusal here
+    stops code that runs over there, and this file's whole claim is that the same
+    code does the same thing.
+    """
+    if scale[0] > scale[1] or ratio[0] > ratio[1]:
+        _warnings.warn("Scale and ratio should be of kind (min, max)")
+
+
+def _antialias(value):
+    """`antialias=False` is refused rather than accepted and ignored.
+
+    The two are not the same picture — up to 0.0301 apart at 8×8→4×4 (measured,
+    and written out in the resizing section below). Accepting the argument and
+    resampling the other way anyway would be the quiet kind of wrong: the code
+    says one thing, the pixels are another, and nothing raises.
+    """
+    if value is True:
+        return True
+    raise ValueError(
+        f"antialias={value!r} is not resampled here — only the antialiased filter is.\n"
+        "  torchvision's own default is True, and off differs by up to 0.0301 "
+        "at 8x8 to 4x4 (measured).")
+
 # --- the skeleton: the axes arrive as arguments -----------------------------
 # The per-image transforms handle (H,W,C) and the batch ones (N,C,H,W). Writing
 # the same job twice because the positions differ eventually diverges, so they take
 # **which axis** the height and the width are and share one copy.
+#
+# **The two flips are one function for that same reason.** Horizontal and vertical
+# differ only in which axis is handed over, and a `_vflip` written next to this one
+# would be the same line under a second name — two places to fix on the day it moves.
 
-def _hflip(arr, w_axis):
-    return _np.flip(arr, axis=w_axis)
+def _flip(arr, axis):
+    return _np.flip(arr, axis=axis)
 
 
 def _crop(arr, h_axis, top, height, w_axis, left, width):
@@ -115,6 +234,108 @@ class Compose:
     def __repr__(self):
         inner = "".join(f"\n    {t}" for t in self.transforms)
         return f"{type(self).__name__}({inner}\n)"
+
+
+class Lambda:
+    """Wraps a function so it can stand inside a `Compose`.
+
+    It looks like nothing, and it is the only place a learner's own function can
+    enter the pipeline — without it a one-line `x * 2` has to become a class.
+    """
+
+    def __init__(self, lambd):
+        if not callable(lambd):
+            raise TypeError(
+                f"Lambda takes a callable — it received "
+                f"{type(lambd).__name__!r}.\n"
+                "(torch: Argument lambd should be callable)")
+        self.lambd = lambd
+
+    def __call__(self, x):
+        return self.lambd(x)
+
+    def __repr__(self):
+        # **The function is not printed.** torchvision prints an empty pair of
+        # brackets here, and a lambda's repr carries a memory address — printing it
+        # would make the same pipeline print differently on every run.
+        return f"{type(self).__name__}()"
+
+
+class _RandomTransforms:
+    """What `RandomApply`, `RandomChoice` and `RandomOrder` share — the list, and
+    how the list prints."""
+
+    def __init__(self, transforms):
+        if isinstance(transforms, str) or not hasattr(transforms, "__len__"):
+            raise TypeError(
+                f"{type(self).__name__} takes a sequence of transforms — it "
+                f"received {type(transforms).__name__!r}.\n"
+                "(torch: Argument transforms should be a sequence)")
+        self.transforms = transforms
+
+    def __repr__(self):
+        inner = "".join(f"\n    {t}" for t in self.transforms)
+        return f"{type(self).__name__}({inner}\n)"
+
+
+class RandomApply(_RandomTransforms):
+    """Applies the whole list, or none of it, with probability `p`.
+
+    **All of them or none** — not each with its own draw. One draw decides the
+    lot, which is what makes it different from putting a `p` on each transform.
+    """
+
+    def __init__(self, transforms, p=0.5):
+        super().__init__(transforms)
+        self.p = p
+
+    def __call__(self, x):
+        if _rng.random() >= self.p:
+            return x
+        for t in self.transforms:
+            x = t(x)
+        return x
+
+    def __repr__(self):
+        inner = "".join(f"\n    {t}" for t in self.transforms)
+        return f"{type(self).__name__}(\n    p={self.p}{inner}\n)"
+
+
+class RandomChoice(_RandomTransforms):
+    """Draws **one** of the list and applies it. `p` weights the draw."""
+
+    def __init__(self, transforms, p=None):
+        super().__init__(transforms)
+        if p is not None and (isinstance(p, str) or not hasattr(p, "__len__")):
+            raise TypeError(
+                f"p is a sequence of weights, one per transform — it received "
+                f"{type(p).__name__!r}.\n"
+                "(torch: Argument p should be a sequence)")
+        self.p = p
+
+    def __call__(self, x):
+        # **The weights are normalised here and are not in torch.** torch's
+        # `random.choices` takes relative weights, numpy's `choice` takes a
+        # distribution that sums to 1. Handing the weights straight through makes
+        # `p=[1, 1]` stop rather than mean "evenly".
+        weights = None
+        if self.p is not None:
+            weights = _np.asarray(self.p, dtype=_np.float64)
+            weights = weights / weights.sum()
+        i = int(_rng.choice(len(self.transforms), p=weights))
+        return self.transforms[i](x)
+
+    def __repr__(self):
+        return f"{super().__repr__()}(p={self.p})"
+
+
+class RandomOrder(_RandomTransforms):
+    """Applies every one of them, in a shuffled order."""
+
+    def __call__(self, x):
+        for i in _rng.permutation(len(self.transforms)):
+            x = self.transforms[int(i)](x)
+        return x
 
 
 class ToTensor:
@@ -149,6 +370,25 @@ class Normalize:
     It takes numpy as well because there is a place that normalises a whole batch
     at once (see `augment_batch`). To avoid writing the same arithmetic twice, the
     axes are lined up and one formula is kept.
+
+    **`inplace` is accepted and does nothing, and that is written here because it
+    was true before it was written.** An audit for constructor arguments that never
+    reach `__call__` found exactly one in this file, and it was this — the same
+    shape as `borch_webgpu`'s optimizers taking `weight_decay` and handing it to a
+    JS call that discards surplus arguments.
+
+    It is kept rather than refused, and the distinction from `antialias=False` next
+    door is the whole reason. Ignoring `antialias` silently would give **different
+    pixels**; ignoring `inplace` gives **the same values and one more allocation** —
+    torchvision documents it as an optimisation, and `x = Normalize(..., inplace=
+    True)(x)` returns exactly what the out-of-place form returns. Refusing it would
+    stop a copied tutorial line for nothing.
+
+    It cannot be honoured either. The core's tensors could be written through, but
+    the sister library's cannot — a TF.js tensor is immutable, which `borch/_tensor.py`
+    already records as where the two part. Doing it on one and not the other would
+    make the same line mean two things. `tests/test_vision.py` pins the no-op so this
+    paragraph cannot quietly stop being true.
     """
 
     def __init__(self, mean, std, inplace=False):
@@ -173,6 +413,53 @@ class Normalize:
         return f"{type(self).__name__}(mean={self.mean}, std={self.std})"
 
 
+class LinearTransformation:
+    """Flattens, subtracts the mean, multiplies by a matrix, puts the shape back.
+
+    This is where whitening (ZCA/PCA) is applied: the matrix and the mean are
+    worked out **beforehand** from the training set, and this only applies them.
+    It takes tensors and numpy arrays alike, for `Normalize`'s reason.
+    """
+
+    def __init__(self, transformation_matrix, mean_vector):
+        m = _np.asarray(_to_numpy(transformation_matrix), dtype=_np.float32)
+        v = _np.asarray(_to_numpy(mean_vector), dtype=_np.float32)
+        if m.ndim != 2 or m.shape[0] != m.shape[1]:
+            raise ValueError(
+                f"transformation_matrix should be square — it received {m.shape}.\n"
+                "(torch: transformation_matrix should be square)")
+        if v.ndim != 1 or v.shape[0] != m.shape[0]:
+            raise ValueError(
+                f"mean_vector should be as long as one side of the matrix "
+                f"{m.shape} — it received {v.shape}.\n"
+                "(torch: mean_vector should have the same length)")
+        self.transformation_matrix = m
+        self.mean_vector = v
+
+    def __call__(self, x):
+        shape = tuple(x.shape)
+        if len(shape) < 3:
+            raise ValueError(
+                f"LinearTransformation takes (...,C,H,W) — it received {shape}")
+        n = int(shape[-3] * shape[-2] * shape[-1])
+        if n != self.transformation_matrix.shape[0]:
+            raise ValueError(
+                f"The image flattens to {n} and the matrix is "
+                f"{self.transformation_matrix.shape[0]} wide — they do not meet.\n"
+                "(torch: Input tensor and transformation matrix have incompatible shape)")
+        if isinstance(x, _np.ndarray):
+            flat = x.reshape(-1, n) - self.mean_vector
+            return (flat @ self.transformation_matrix).reshape(shape)
+        L = _backend()
+        flat = x.reshape(-1, n) - L.tensor(self.mean_vector)
+        return (flat @ L.tensor(self.transformation_matrix)).reshape(shape)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(transformation_matrix="
+                f"{self.transformation_matrix.tolist()}"
+                f", mean_vector={self.mean_vector.tolist()})")
+
+
 class RandomHorizontalFlip:
     """Flip left to right. **It takes a (H,W,C) numpy array** — what arrives at
     this position in torchvision is a PIL image, and with no PIL here an array
@@ -190,24 +477,74 @@ class RandomHorizontalFlip:
         img = _require_hwc(img, type(self).__name__)
         if _rng.random() >= self.p:
             return img
-        return _np.ascontiguousarray(_hflip(img, 1))
+        return _np.ascontiguousarray(_flip(img, 1))
+
+    def __repr__(self):
+        return f"{type(self).__name__}(p={self.p})"
+
+
+class RandomVerticalFlip:
+    """Flip top to bottom. `RandomHorizontalFlip`'s place, on the other axis.
+
+    **The default is 0.5 here as well, and that is worth saying out loud.** A
+    vertical flip is wrong for most photographs — an upside-down cat is not a cat
+    the model will meet — so this is the one transform where the default is
+    usually not what is wanted. torchvision keeps 0.5 anyway, and so does this.
+    """
+
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        if _rng.random() >= self.p:
+            return img
+        return _np.ascontiguousarray(_flip(img, 0))
 
     def __repr__(self):
         return f"{type(self).__name__}(p={self.p})"
 
 
 class RandomCrop:
-    """Pad the edges and then crop at random. `RandomHorizontalFlip`'s place."""
+    """Pad the edges and then crop at random. `RandomHorizontalFlip`'s place.
 
-    def __init__(self, size, padding=0, fill=0):
-        self.size = (int(size), int(size)) if isinstance(size, int) else tuple(size)
-        self.padding = int(padding)
+    **The argument list is torchvision's, and it was not.** This took
+    `(size, padding, fill)` while torchvision takes
+    `(size, padding, pad_if_needed, fill, padding_mode)`, so `RandomCrop(32, 4, True)`
+    set `fill=True` here and `pad_if_needed=True` there — the same line, quietly
+    meaning two things, with the right shape coming out either way. Found by
+    comparing every constructor against torchvision's rather than by anything going
+    wrong; `tests/test_torch_signatures.py` now asks that question on every run.
+
+    `padding` defaults to `None` rather than `0` for the same reason: the default
+    repr read `padding=0` against torchvision's `padding=None`, and the golden case
+    passed a padding so it never looked at the default.
+
+    `pad_if_needed` pads a picture smaller than the crop instead of refusing — **on
+    both sides**, so a shortfall of two makes the picture four wider, which is
+    torchvision's arithmetic and not a rounding of it.
+    """
+
+    def __init__(self, size, padding=None, pad_if_needed=False, fill=0,
+                 padding_mode="constant"):
+        self.size = _pair(size, "RandomCrop")
+        self.padding = padding
+        self.pad_if_needed = pad_if_needed
         self.fill = fill
+        self.padding_mode = padding_mode
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
-        img = _pad_hw(img, 0, 1, self.padding, self.fill)
+        if self.padding is not None:
+            img = Pad(self.padding, self.fill, self.padding_mode)(img)
         th, tw = self.size
+        h, w = img.shape[0], img.shape[1]
+        # Width first and then height, each on its own — torchvision pads them in two
+        # separate steps and the second reads the width the first produced.
+        if self.pad_if_needed and w < tw:
+            img = Pad([tw - w, 0], self.fill, self.padding_mode)(img)
+        if self.pad_if_needed and img.shape[0] < th:
+            img = Pad([0, th - img.shape[0]], self.fill, self.padding_mode)(img)
         h, w = img.shape[0], img.shape[1]
         if h < th or w < tw:
             raise ValueError(
@@ -219,6 +556,116 @@ class RandomCrop:
 
     def __repr__(self):
         return f"{type(self).__name__}(size={self.size}, padding={self.padding})"
+
+
+class Pad:
+    """Pad the four sides. **The order is left, top, right, bottom** — which is
+    not numpy's order, and not the order the two-element form reads as.
+
+    One number pads all four sides; two are (left/right, top/bottom); four are
+    the sides one by one. `padding_mode` is `constant` (the default, filled with
+    `fill`), `edge`, `reflect` or `symmetric` — the same four numpy has, with the
+    same meanings, so the arithmetic is numpy's and not ours.
+    """
+
+    def __init__(self, padding, fill=0, padding_mode="constant"):
+        if padding_mode not in ("constant", "edge", "reflect", "symmetric"):
+            raise ValueError(
+                f"padding_mode is constant, edge, reflect or symmetric — "
+                f"got {padding_mode!r}.\n"
+                "(torch: Padding mode should be either constant, edge, reflect or symmetric)")
+        _pad_sides(padding)                     # stops here rather than at the first call
+        self.padding = padding
+        self.fill = fill
+        self.padding_mode = padding_mode
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        left, top, right, bottom = _pad_sides(self.padding)
+        pads = [(top, bottom), (left, right)] + [(0, 0)] * (img.ndim - 2)
+        if self.padding_mode != "constant":
+            return _np.pad(img, pads, mode=self.padding_mode)
+        # **A per-channel fill cannot go through `constant_values`.** That argument
+        # is read per axis, so a three-colour fill given there paints the channel
+        # axis instead of the colours. Each channel is padded with its own number.
+        if isinstance(self.fill, (tuple, list)):
+            if img.ndim != 3 or len(self.fill) != img.shape[2]:
+                raise ValueError(
+                    f"fill has {len(self.fill)} numbers and the image has "
+                    f"{img.shape[2] if img.ndim == 3 else 1} channels")
+            planes = [_np.pad(img[:, :, c], pads[:2], constant_values=self.fill[c])
+                      for c in range(img.shape[2])]
+            return _np.ascontiguousarray(_np.stack(planes, axis=2))
+        return _np.pad(img, pads, constant_values=self.fill)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(padding={self.padding}, fill={self.fill}, "
+                f"padding_mode={self.padding_mode})")
+
+
+# **The weights are TensorFlow's, and torchvision says so in a comment.** Not
+# ITU-R 601-2's 299/587/114 exactly — 0.2989 is the rounded one, and torchvision
+# went with it. Rewriting them "properly" moves every grayscale pixel.
+_LUMA = (0.2989, 0.587, 0.114)
+
+
+def _to_gray(img, num_output_channels, who):
+    if num_output_channels not in (1, 3):
+        raise ValueError(
+            f"num_output_channels is 1 or 3 — got {num_output_channels!r}.\n"
+            "(torch: num_output_channels should be either 1 or 3)")
+    arr = img if img.ndim == 3 else img[:, :, None]
+    if arr.shape[2] not in (1, 3):
+        raise TypeError(
+            f"{who} takes a 1- or 3-channel image — it received "
+            f"{arr.shape[2]} channels.")
+    if arr.shape[2] == 3:
+        lum = (arr[:, :, 0] * _LUMA[0] + arr[:, :, 1] * _LUMA[1]
+               + arr[:, :, 2] * _LUMA[2])
+        # **`astype` truncates, and that is the point.** torch's `.to(dtype)`
+        # truncates too, so a uint8 image comes out the same on both sides. PIL's
+        # `convert("L")` rounds instead, which is where our uint8 answer and a PIL
+        # answer part by one — measured, and written down rather than smoothed over.
+        one = lum.astype(arr.dtype)[:, :, None]
+    else:
+        one = arr.copy()
+    if num_output_channels == 3:
+        return _np.ascontiguousarray(_np.repeat(one, 3, axis=2))
+    return _np.ascontiguousarray(one)
+
+
+class Grayscale:
+    """Three channels to one. `num_output_channels=3` gives it back as three
+    equal ones — which is what a pre-trained three-channel model needs."""
+
+    def __init__(self, num_output_channels=1):
+        self.num_output_channels = num_output_channels
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        return _to_gray(img, self.num_output_channels, type(self).__name__)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(num_output_channels={self.num_output_channels})"
+
+
+class RandomGrayscale:
+    """Grayscale with probability `p`. **The channel count does not change** —
+    a three-channel image comes back as three equal channels, so the batch that
+    follows still stacks."""
+
+    def __init__(self, p=0.1):
+        self.p = p
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        if _rng.random() >= self.p:
+            return img
+        channels = img.shape[2] if img.ndim == 3 else 1
+        return _to_gray(img, channels, type(self).__name__)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(p={self.p})"
 
 
 def _require_hwc(img, who):
@@ -262,7 +709,7 @@ def augment_batch(x, crop=None, padding=0, hflip_p=0.0, fill=0.0):
     pieces = _np.empty((n, x.shape[1], th, tw), dtype=x.dtype)
     for i in range(n):
         one = _crop(out[i], 1, int(tops[i]), th, 2, int(lefts[i]), tw)
-        pieces[i] = _hflip(one, 2) if flips[i] else one
+        pieces[i] = _flip(one, 2) if flips[i] else one
     return pieces
 
 
@@ -321,14 +768,27 @@ def _resize_axis(arr, axis, dst, mode):
     return out
 
 
-def _short_side(h, w, size):
+def _short_side(h, w, size, max_size=None):
     """The short side to `size`. The long side keeps the ratio — torchvision's
-    `Resize(int)`."""
+    `Resize(int)`.
+
+    `max_size` caps the long side afterwards. It exists because the ratio-keeping
+    form has no upper bound: one panorama gives one enormous tensor, and the cap is
+    how torchvision's detection recipes stop that.
+    """
     short, long = min(h, w), max(h, w)
-    if short == size:
+    new_short, new_long = size, int(size * long / short)
+    if max_size is not None:
+        if max_size <= size:
+            raise ValueError(
+                f"max_size={max_size} has to be larger than the short side {size}.\n"
+                "(torch: max_size must be strictly greater than the requested size "
+                "for the smaller edge size)")
+        if new_long > max_size:
+            new_short, new_long = int(max_size * new_short / new_long), max_size
+    if (new_short, new_long) == (short, long):
         return h, w
-    new_long = int(size * long / short)
-    return (size, new_long) if h < w else (new_long, size)
+    return (new_short, new_long) if h < w else (new_long, new_short)
 
 
 class Resize:
@@ -344,24 +804,36 @@ class Resize:
     measurement.
     """
 
-    def __init__(self, size, interpolation="bilinear"):
+    def __init__(self, size, interpolation="bilinear", max_size=None,
+                 antialias=True):
         self.size = int(size) if isinstance(size, int) else tuple(size)
-        if interpolation not in ("bilinear", "nearest"):
+        self.interpolation = _interpolation(interpolation)
+        if max_size is not None and not isinstance(self.size, int):
             raise ValueError(
-                f"interpolation is 'bilinear' or 'nearest' — got {interpolation!r}")
-        self.interpolation = interpolation
+                "max_size means something only when the size is the short side "
+                "(a single number).\n"
+                "(torch: max_size should only be passed if size specifies the length "
+                "of the smaller edge)")
+        self.max_size = max_size
+        self.antialias = _antialias(antialias)
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
         h, w = img.shape[0], img.shape[1]
-        th, tw = (_short_side(h, w, self.size) if isinstance(self.size, int)
-                  else self.size)
+        th, tw = (_short_side(h, w, self.size, self.max_size)
+                  if isinstance(self.size, int) else self.size)
         out = _resize_axis(_np.asarray(img, dtype=_np.float64), 0, th, self.interpolation)
         out = _resize_axis(out, 1, tw, self.interpolation)
         return _np.ascontiguousarray(out)
 
     def __repr__(self):
-        return f"{type(self).__name__}(size={self.size}, interpolation={self.interpolation})"
+        # **Four fields, not two.** torchvision prints `max_size` and `antialias`
+        # here as well, and while this printed two the golden table simply left
+        # `repr::Resize` out — the one place a repr was treated as unspecifiable
+        # because it did not match.
+        return (f"{type(self).__name__}(size={self.size}, "
+                f"interpolation={self.interpolation}, max_size={self.max_size}, "
+                f"antialias={self.antialias})")
 
 
 class CenterCrop:
@@ -370,7 +842,7 @@ class CenterCrop:
     diverge."""
 
     def __init__(self, size):
-        self.size = (int(size), int(size)) if isinstance(size, int) else tuple(size)
+        self.size = _pair(size, "CenterCrop")
 
     def __call__(self, img):
         img = _require_hwc(img, type(self).__name__)
@@ -390,12 +862,222 @@ class CenterCrop:
         return f"{type(self).__name__}(size={self.size})"
 
 
+class FiveCrop:
+    """The four corners and the centre — **five images out of one.**
+
+    What comes back is a tuple, not an image, so `ToTensor` cannot simply follow
+    it. torchvision's own documentation says the same and hands the tuple on with
+    a `Lambda`. That is why `Lambda` exists in this file at all.
+    """
+
+    def __init__(self, size):
+        self.size = _pair(size, "FiveCrop")
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        th, tw = self.size
+        h, w = img.shape[0], img.shape[1]
+        if th > h or tw > w:
+            raise ValueError(
+                f"The crop size {self.size} is larger than the image {(h, w)}.\n"
+                "(torch: Requested crop size is bigger than input size)")
+        corners = ((0, 0), (0, w - tw), (h - th, 0), (h - th, w - tw))
+        out = [_np.ascontiguousarray(_crop(img, 0, top, th, 1, left, tw))
+               for top, left in corners]
+        # **The centre is `CenterCrop`'s, not another rounding written here.** The
+        # halves land differently at odd sizes, and two roundings that agree today
+        # are two places to fix on the day they stop.
+        out.append(CenterCrop(self.size)(img))
+        return tuple(out)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(size={self.size})"
+
+
+class TenCrop:
+    """`FiveCrop`, and then five more from the flipped image. Ten out of one.
+
+    `vertical_flip` flips top to bottom instead of left to right.
+    """
+
+    def __init__(self, size, vertical_flip=False):
+        self.size = _pair(size, "TenCrop")
+        self.vertical_flip = vertical_flip
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        first = FiveCrop(self.size)(img)
+        turned = _flip(img, 0 if self.vertical_flip else 1)
+        return first + FiveCrop(self.size)(_np.ascontiguousarray(turned))
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(size={self.size}, "
+                f"vertical_flip={self.vertical_flip})")
+
+
+class RandomResizedCrop:
+    """Crop a random area of a random shape, then resize it to `size`. **The
+    ImageNet recipe**, and the reason a tutorial's accuracy moves when it is left
+    out.
+
+    `scale` is the fraction of the area to keep and `ratio` the width-to-height
+    range. Ten draws are made, and if none of them fits inside the image it falls
+    back to a centre crop — torchvision does exactly that, fallback included,
+    because without it the draw can fail on a thin image and there is nothing to
+    return.
+    """
+
+    def __init__(self, size, scale=(0.08, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0),
+                 interpolation="bilinear", antialias=True):
+        self.size = _pair(size, "RandomResizedCrop")
+        # **A warning and not a refusal**, because torchvision warns here and carries
+        # on. Refusing stops a line that runs over there, and "imitate the structure"
+        # includes imitating where it lets you through.
+        _warn_min_max(scale, ratio)
+        self.scale = scale
+        self.ratio = ratio
+        self.interpolation = _interpolation(interpolation)
+        self.antialias = _antialias(antialias)
+
+    def get_params(self, img):
+        """Where and how big. **Ten draws, then a centre crop.** Kept as a method
+        of its own because it is the only part that draws — the pytest side calls
+        it directly to see the distribution."""
+        h, w = img.shape[0], img.shape[1]
+        area = h * w
+        log_ratio = (_np.log(self.ratio[0]), _np.log(self.ratio[1]))
+        for _ in range(10):
+            target = area * _rng.uniform(self.scale[0], self.scale[1])
+            aspect = float(_np.exp(_rng.uniform(log_ratio[0], log_ratio[1])))
+            cw = int(round(float(_np.sqrt(target * aspect))))
+            ch = int(round(float(_np.sqrt(target / aspect))))
+            if 0 < cw <= w and 0 < ch <= h:
+                top = int(_rng.integers(0, h - ch + 1))
+                left = int(_rng.integers(0, w - cw + 1))
+                return top, left, ch, cw
+        in_ratio = float(w) / float(h)
+        if in_ratio < min(self.ratio):
+            cw, ch = w, int(round(w / min(self.ratio)))
+        elif in_ratio > max(self.ratio):
+            ch, cw = h, int(round(h * max(self.ratio)))
+        else:
+            cw, ch = w, h
+        return (h - ch) // 2, (w - cw) // 2, ch, cw
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        top, left, ch, cw = self.get_params(img)
+        piece = _np.ascontiguousarray(_crop(img, 0, top, ch, 1, left, cw))
+        return Resize(self.size, self.interpolation)(piece)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(size={self.size}, "
+                f"scale={tuple(round(s, 4) for s in self.scale)}, "
+                f"ratio={tuple(round(r, 4) for r in self.ratio)}, "
+                f"interpolation={self.interpolation}, antialias={self.antialias})")
+
+
+class RandomErasing:
+    """Blank out a random rectangle of a **tensor** — this one runs after
+    `ToTensor`, unlike every other transform in this file.
+
+    That is torchvision's position for it and not a choice made here: the erased
+    value is `0` on a normalised image, which means the channel mean, and that
+    only has a meaning once the image is numbers rather than pixels.
+
+    `value` is a number, one number per channel, or `"random"` for normal noise.
+    Unless `inplace`, the tensor is cloned first — a backend without `clone` and
+    slice assignment cannot run this, and it says so rather than half-erasing.
+    """
+
+    def __init__(self, p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0,
+                 inplace=False):
+        if isinstance(value, str) and value != "random":
+            raise ValueError(
+                f"value as a string is only 'random' — got {value!r}.\n"
+                "(torch: If value is str, it should be 'random')")
+        _warn_min_max(scale, ratio)
+        if scale[0] < 0 or scale[1] > 1:
+            raise ValueError(
+                f"scale is a fraction of the area, between 0 and 1 — got {tuple(scale)}.\n"
+                "(torch: Scale should be between 0 and 1)")
+        if p < 0 or p > 1:
+            raise ValueError(
+                f"p is a probability, between 0 and 1 — got {p!r}.\n"
+                "(torch: Random erasing probability should be between 0 and 1)")
+        self.p = p
+        self.scale = scale
+        self.ratio = ratio
+        self.value = value
+        self.inplace = inplace
+
+    def get_params(self, shape):
+        """`(top, left, height, width)`, or `None` when ten draws all missed.
+
+        **The rectangle has to be strictly smaller than the image** on both sides.
+        torchvision's condition is `<` rather than `<=`, so an erase covering the
+        whole image never happens, and on a small image the ten draws can all miss
+        — that is the `None`.
+        """
+        _, h, w = shape[-3], shape[-2], shape[-1]
+        area = h * w
+        log_ratio = (_np.log(self.ratio[0]), _np.log(self.ratio[1]))
+        for _ in range(10):
+            erase = area * _rng.uniform(self.scale[0], self.scale[1])
+            aspect = float(_np.exp(_rng.uniform(log_ratio[0], log_ratio[1])))
+            eh = int(round(float(_np.sqrt(erase * aspect))))
+            ew = int(round(float(_np.sqrt(erase / aspect))))
+            if not (eh < h and ew < w):
+                continue
+            return (int(_rng.integers(0, h - eh + 1)),
+                    int(_rng.integers(0, w - ew + 1)), eh, ew)
+        return None
+
+    def __call__(self, x):
+        if _rng.random() >= self.p:
+            return x
+        shape = tuple(x.shape)
+        if len(shape) < 3:
+            raise ValueError(
+                f"RandomErasing takes (...,C,H,W) — it received {shape}.\n"
+                "  It runs after `ToTensor`, not before it.")
+        found = self.get_params(shape)
+        if found is None:
+            return x
+        top, left, eh, ew = found
+        channels = shape[-3]
+        if self.value == "random":
+            fill = _rng.standard_normal((channels, eh, ew)).astype(_np.float32)
+        elif isinstance(self.value, (tuple, list)):
+            if len(self.value) not in (1, channels):
+                raise ValueError(
+                    f"value has {len(self.value)} numbers and the image has "
+                    f"{channels} channels.\n"
+                    "(torch: If value is a sequence, it should have either a single "
+                    "value or (number of input channels))")
+            fill = _np.asarray(self.value, dtype=_np.float32).reshape(-1, 1, 1)
+        else:
+            fill = float(self.value)
+        out = x if self.inplace else (
+            x.copy() if isinstance(x, _np.ndarray) else x.clone())
+        out[..., top:top + eh, left:left + ew] = fill
+        return out
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(p={self.p}, scale={self.scale}, "
+                f"ratio={self.ratio}, value={self.value}, inplace={self.inplace})")
+
+
 class _Transforms:
     """The slot for `from borchvision import transforms`. The name alone is
     borrowed so that torchvision's module structure stays intact."""
 
 
 transforms = _Transforms()
-for _name in ("Compose", "ToTensor", "Normalize", "RandomHorizontalFlip",
-              "RandomCrop", "Resize", "CenterCrop"):
+for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
+              "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
+              "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
+              "RandomGrayscale", "RandomHorizontalFlip", "RandomOrder",
+              "RandomResizedCrop", "RandomVerticalFlip", "Resize", "TenCrop",
+              "ToTensor"):
     setattr(transforms, _name, globals()[_name])
