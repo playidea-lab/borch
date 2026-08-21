@@ -85,11 +85,34 @@ def test_the_committed_manifest_matches_the_case_table(doc):
     them. It says nothing about what the cases return — that is the test below.
     """
     now = cases_mod.manifest_hash(cases_mod.golden_cases())
-    assert doc["manifest"] == now, (
+    if doc["manifest"] == now:
+        return
+
+    # **A hash says something moved; the names say what.** During a rename pass that is the
+    # difference between re-exporting blindly and knowing whether the move was the one you
+    # meant. The third branch matters as much as the other two: `manifest_hash` folds the names
+    # in sequence, so reordering a list changes the hash while both sets stay identical — and
+    # without saying so, the message would list nothing and read as a bug in this test.
+    have = set(doc["cases"])
+    want = {name for name, _ in cases_mod.golden_cases()}
+    added, gone = sorted(want - have), sorted(have - want)
+    if added or gone:
+        detail = ""
+        if added:
+            detail += (f"\n  in the table and not in the golden ({len(added)}): "
+                       + ", ".join(added[:8]) + ("…" if len(added) > 8 else ""))
+        if gone:
+            detail += (f"\n  in the golden and not in the table ({len(gone)}): "
+                       + ", ".join(gone[:8]) + ("…" if len(gone) > 8 else ""))
+    else:
+        detail = "\n  the same names in a different order — the table was reordered, not edited"
+
+    raise AssertionError(
         "the committed tests/golden.json does not match tests/cases.py.\n"
         f"  committed {doc['manifest'][:16]}…\n"
-        f"  computed  {now[:16]}…\n"
-        "  Re-export: uv run --with numpy --with torch python tests/golden.py dump\n"
+        f"  computed  {now[:16]}…"
+        + detail +
+        "\n  Re-export: uv run --with numpy --with torch python tests/golden.py dump\n"
         "             uv run --with numpy python tests/export_json.py\n"
         "  (Until then the two disagree, and every other golden test round-trips through a\n"
         "   temporary file, so none of them would notice.)")
