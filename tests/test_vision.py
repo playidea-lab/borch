@@ -324,3 +324,23 @@ def test_grayscale_of_a_single_channel_image_passes_it_through():
     img = np.full((5, 4, 1), 0.25, dtype=np.float32)
     out = V.Grayscale()(img)
     assert out.shape == (5, 4, 1) and np.allclose(out, 0.25)
+
+
+def test_normalize_inplace_is_a_no_op_and_the_input_survives():
+    """**The one argument in this file that is accepted and does nothing.** Found by
+    auditing constructor arguments that never reach `__call__`, after another session
+    found the same shape in `borch_webgpu`'s optimizers — `weight_decay` handed to a JS
+    call that discards surplus arguments, so five optimizers trained without it and
+    nothing raised.
+
+    Here the values are identical either way, so the argument stays and the docstring
+    says what it does. This is what stops that sentence from rotting: if somebody makes
+    `inplace` real on the core alone, the sister library cannot follow and the two
+    libraries part on the same line — so it fails here first.
+    """
+    x = np.ones((3, 2, 2), dtype=np.float32)
+    out = V.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)(x)
+    assert np.allclose(out, 1.0), "the returned value must be normalised either way"
+    assert np.allclose(x, 1.0), (
+        "the input was written through. `inplace` is documented as a no-op because the "
+        "sister library's tensors are immutable — making it real here parts the two.")

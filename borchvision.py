@@ -357,6 +357,25 @@ class Normalize:
     It takes numpy as well because there is a place that normalises a whole batch
     at once (see `augment_batch`). To avoid writing the same arithmetic twice, the
     axes are lined up and one formula is kept.
+
+    **`inplace` is accepted and does nothing, and that is written here because it
+    was true before it was written.** An audit for constructor arguments that never
+    reach `__call__` found exactly one in this file, and it was this — the same
+    shape as `borch_webgpu`'s optimizers taking `weight_decay` and handing it to a
+    JS call that discards surplus arguments.
+
+    It is kept rather than refused, and the distinction from `antialias=False` next
+    door is the whole reason. Ignoring `antialias` silently would give **different
+    pixels**; ignoring `inplace` gives **the same values and one more allocation** —
+    torchvision documents it as an optimisation, and `x = Normalize(..., inplace=
+    True)(x)` returns exactly what the out-of-place form returns. Refusing it would
+    stop a copied tutorial line for nothing.
+
+    It cannot be honoured either. The core's tensors could be written through, but
+    the sister library's cannot — a TF.js tensor is immutable, which `borch/_tensor.py`
+    already records as where the two part. Doing it on one and not the other would
+    make the same line mean two things. `tests/test_vision.py` pins the no-op so this
+    paragraph cannot quietly stop being true.
     """
 
     def __init__(self, mean, std, inplace=False):
