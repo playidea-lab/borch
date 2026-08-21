@@ -1110,6 +1110,39 @@ export class ConvTransposeND extends Module {
   }
 }
 
+/* ── 차원을 고정한 이름들 ───────────────────────────────────────────────
+ *
+ * `ConvTransposeND` 는 `spatial` 을 **인자로** 받는다. torch 는 그 수를 이름에 넣으
+ * 므로, 여기서는 그 자리 하나를 고정하는 것이 곧 torch 의 이름이다.
+ *
+ * 값은 이미 증명돼 있다 — 골든 `norm::nn.ConvTranspose{1,2,3}d` 세 건이 `ND` 판으로
+ * 돌고 있었다. 없던 것은 계산이 아니라 이름이다.
+ */
+
+/** `torch.nn.ConvTranspose1d`. */
+export class ConvTranspose1d extends ConvTransposeND {
+  constructor(inC: number, outC: number, kernel: number,
+              stride = 1, padding = 0, bias = true) {
+    super(inC, outC, kernel, 1, stride, padding, bias);
+  }
+}
+
+/** `torch.nn.ConvTranspose2d`. */
+export class ConvTranspose2d extends ConvTransposeND {
+  constructor(inC: number, outC: number, kernel: number,
+              stride = 1, padding = 0, bias = true) {
+    super(inC, outC, kernel, 2, stride, padding, bias);
+  }
+}
+
+/** `torch.nn.ConvTranspose3d`. */
+export class ConvTranspose3d extends ConvTransposeND {
+  constructor(inC: number, outC: number, kernel: number,
+              stride = 1, padding = 0, bias = true) {
+    super(inC, outC, kernel, 3, stride, padding, bias);
+  }
+}
+
 /**
  * Drops slots only while training. **In eval mode it is the identity.**
  *
@@ -3153,6 +3186,45 @@ export class Recurrent extends Module {
       hidden: h.reshape([1, batch, H]),
       cell: c.reshape([1, batch, H]),
     };
+  }
+}
+
+/* ── 종류를 고정한 이름들 ───────────────────────────────────────────────
+ *
+ * `Recurrent` 는 종류를 **인자로** 받고 torch 는 그것을 이름으로 가른다. 그래서 이
+ * 셋은 인자 하나를 고정한 것이고, 그것이 곧 torch 가 쓰는 이름이다.
+ *
+ * 값은 이미 증명돼 있다 — 골든 `seq::{RNN,LSTM,GRU}/{출력,마지막상태}` 여섯 건이
+ * `Recurrent` 로 돌고 있었다. 없던 것은 계산이 아니라 이름이고, **순환망 교재는
+ * `nn.LSTM(...)` 으로 시작하므로** 그 첫 줄에서 멈추고 있었다.
+ *
+ * **torch 의 인자 전부를 받지는 않는다.** 저쪽은 `numLayers`·`batchFirst`·양방향·
+ * 층간 드롭아웃도 받는데 여기 밑동은 한 층·시간 우선뿐이다. 받아 놓고 안 쓰면
+ * 거짓말이 되므로 **아예 안 받는다** — 코어가 `InstanceNorm` 의
+ * `track_running_stats` 에서 같은 자리를 같은 방법으로 지킨다.
+ */
+
+/** `torch.nn.RNN` — one layer, time-first. */
+export class RNN extends Recurrent {
+  constructor(inputSize: number, hidden: number) {
+    super(inputSize, hidden, "RNN");
+  }
+}
+
+/**
+ * `torch.nn.LSTM` — one layer, time-first. It carries two states, so `cell`
+ * comes back alongside `hidden`.
+ */
+export class LSTM extends Recurrent {
+  constructor(inputSize: number, hidden: number) {
+    super(inputSize, hidden, "LSTM");
+  }
+}
+
+/** `torch.nn.GRU` — one layer, time-first. */
+export class GRU extends Recurrent {
+  constructor(inputSize: number, hidden: number) {
+    super(inputSize, hidden, "GRU");
   }
 }
 

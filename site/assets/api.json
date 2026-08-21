@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 657,
+  "done": 663,
   "stale": 0,
   "missing": 2
  },
@@ -7473,6 +7473,48 @@
     },
     {
      "kind": "class",
+     "name": "ConvTranspose1d",
+     "signature": "export declare class ConvTranspose1d extends ConvTransposeND",
+     "doc": "`torch.nn.ConvTranspose1d`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.ConvTranspose1d`."
+    },
+    {
+     "kind": "class",
+     "name": "ConvTranspose2d",
+     "signature": "export declare class ConvTranspose2d extends ConvTransposeND",
+     "doc": "`torch.nn.ConvTranspose2d`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.ConvTranspose2d`."
+    },
+    {
+     "kind": "class",
+     "name": "ConvTranspose3d",
+     "signature": "export declare class ConvTranspose3d extends ConvTransposeND",
+     "doc": "`torch.nn.ConvTranspose3d`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.ConvTranspose3d`."
+    },
+    {
+     "kind": "class",
      "name": "Dropout",
      "signature": "export declare class Dropout extends Module",
      "doc": "Drops slots only while training. **In eval mode it is the identity.**\n\n`training` is held by `Module`, and `eval()` reaches down through\ncontainers to turn it off — break that propagation and training is fine\nwhile only inference is wrong.",
@@ -10081,6 +10123,48 @@
      ]
     },
     {
+     "kind": "class",
+     "name": "RNN",
+     "signature": "export declare class RNN extends Recurrent",
+     "doc": "`torch.nn.RNN` — one layer, time-first.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inputSize: number, hidden: number)",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.RNN` — 한 층, 시간 우선."
+    },
+    {
+     "kind": "class",
+     "name": "LSTM",
+     "signature": "export declare class LSTM extends Recurrent",
+     "doc": "`torch.nn.LSTM` — one layer, time-first. It carries two states, so `cell`\ncomes back alongside `hidden`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inputSize: number, hidden: number)",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.LSTM` — 한 층, 시간 우선. 상태를 둘 들고 있어서 `hidden` 과 함께\n`cell` 도 나온다."
+    },
+    {
+     "kind": "class",
+     "name": "GRU",
+     "signature": "export declare class GRU extends Recurrent",
+     "doc": "`torch.nn.GRU` — one layer, time-first.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(inputSize: number, hidden: number)",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.GRU` — 한 층, 시간 우선."
+    },
+    {
      "kind": "function",
      "name": "multiHeadAttentionForward",
      "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, numHeads: number, inWeight: Tensor, inBias: Tensor | null, outWeight: Tensor, outBias: Tensor | null, attnMask?: Tensor | null, keyPaddingMask?: Tensor | null, averageWeights?: boolean): { output: Tensor; weights: Tensor; }",
@@ -10197,7 +10281,7 @@
      "members": []
     }
    ],
-   "count": 625,
+   "count": 637,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -13214,5 +13298,5 @@
    "count": 9
   }
  ],
- "total": 1696
+ "total": 1708
 }

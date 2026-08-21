@@ -499,9 +499,25 @@
   "ko": "로짓과 정답 번호에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다.\n\n**`reduction` 이 없었다** — 층 쪽에도 같은 구멍이 있었다. 교재는 함수보다 층을\n더 많이 쓰므로 이쪽이 더 자주 닿는 자리다.",
   "src": "35444e3f6259"
  },
+ "nn/ConvTranspose1d": {
+  "ko": "`torch.nn.ConvTranspose1d`.",
+  "src": "37dffc30885a"
+ },
+ "nn/ConvTranspose2d": {
+  "ko": "`torch.nn.ConvTranspose2d`.",
+  "src": "f55574d2468b"
+ },
+ "nn/ConvTranspose3d": {
+  "ko": "`torch.nn.ConvTranspose3d`.",
+  "src": "3711c2869c8d"
+ },
  "nn/Dropout": {
   "ko": "학습 때만 자리를 떨군다. **평가 모드에서는 항등이다.**\n\n`training` 은 `Module` 이 들고 있고 `eval()` 이 컨테이너를 뚫고 내려가 끈다 —\n그 전파가 끊기면 학습은 멀쩡하고 추론만 틀린다.",
   "src": "2b469b94f563"
+ },
+ "nn/GRU": {
+  "ko": "`torch.nn.GRU` — 한 층, 시간 우선.",
+  "src": "d7152920e836"
  },
  "nn/ELU": {
   "ko": "음수 쪽이 지수로 눕는다. **α 를 안 흔들면 표의 무인자 판과 못 가른다.**",
@@ -546,6 +562,10 @@
  "nn/LSTMCell": {
   "ko": "*혼자 둘을 돌려준다** — `(h, c)` 다. 셋을 한 모양으로 두면 기억 칸이 사라진다.",
   "src": "eaf7477aadc6"
+ },
+ "nn/LSTM": {
+  "ko": "`torch.nn.LSTM` — 한 층, 시간 우선. 상태를 둘 들고 있어서 `hidden` 과 함께\n`cell` 도 나온다.",
+  "src": "75e6d901cc59"
  },
  "nn/LayerNorm": {
   "ko": "뒤쪽 축들을 평균 0, 분산 1 로. **`normalizedShape` 가 접는 축의 개수를 정한다.**\n\n축 하나짜리(`new LayerNorm(4)`)로만 재면 \"마지막 축을 접는다\" 와 답이 같아서\n이 규칙이 안 보인다. `[3, 4]` 를 주면 뒤 두 축을 **한 덩어리로** 접는다.\n\n기본이 파라미터 있음이다 — `InstanceNorm` 과 반대라 헷갈리는 자리이고, 기본을\n뒤집으면 `stateDict` 열쇠가 통째로 갈린다.",
@@ -682,6 +702,10 @@
  "nn/RMSNorm": {
   "ko": "*평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다.",
   "src": "14a975d7086d"
+ },
+ "nn/RNN": {
+  "ko": "`torch.nn.RNN` — 한 층, 시간 우선.",
+  "src": "60779f49bf86"
  },
  "nn/RNNKind": {
   "ko": "순환망 — `RNN`·`LSTM`·`GRU` 를 게이트 수만 바꿔 한 클래스로.\n\n입력은 `(길이, 배치, 특징)` 이다 — torch 의 기본이고 `batch_first` 가 아니다.\n\n**시간 축은 순차적이라 펼 수가 없다.** 한 걸음의 출력이 다음 걸음의 입력이라\n병렬로 돌 자리가 없고, 그래서 걸음마다 커널을 부른다. 짧은 시퀀스에서 도는 값이며,\n길어지면 걸음당 호출 비용이 계산을 덮는다.",

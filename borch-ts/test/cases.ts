@@ -1253,8 +1253,11 @@ function addEdge(out: Map<string, Case>): void {
  * torch 와 같아야 `state_dict` 로 넣을 수 있다는 것도 여기서 걸린다.
  */
 function addSeq(out: Map<string, Case>, inp: Inputs): void {
+  // **torch 의 이름을 지나간다.** 밑동은 `Recurrent(in, hidden, kind)` 하나인데,
+  // 그것만 부르면 `nn.LSTM` 이라는 이름을 아무도 안 재게 된다 — 교재의 첫 줄이 그것이다.
+  const KINDS = { RNN: nn.RNN, LSTM: nn.LSTM, GRU: nn.GRU } as const;
   const build = (kind: nn.RNNKind): nn.Recurrent => {
-    const m = new nn.Recurrent(3, 4, kind);
+    const m = new KINDS[kind](3, 4);
     const low = kind.toLowerCase();
     m.loadStateDict({
       weight_ih_l0: inp.get(`${low}_wih`), weight_hh_l0: inp.get(`${low}_whh`),
@@ -3019,8 +3022,10 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
   ] as const) {
     out.set(`norm::nn.ConvTranspose${nd}`, () => {
       const w = inp.get(wk);
-      const layer = new nn.ConvTransposeND(
-        w.shape[0] ?? 1, w.shape[1] ?? 1, w.shape[2] ?? 1, spatial);
+      // 차원을 고정한 이름을 지나간다 — `ND` 판만 부르면 그 셋을 아무도 안 잰다.
+      const Cls = { 1: nn.ConvTranspose1d, 2: nn.ConvTranspose2d,
+        3: nn.ConvTranspose3d }[spatial] ?? nn.ConvTranspose2d;
+      const layer = new Cls(w.shape[0] ?? 1, w.shape[1] ?? 1, w.shape[2] ?? 1);
       layer.loadStateDict({ weight: w, bias: inp.get(bk) });
       return layer.call(inp.get(key));
     });
