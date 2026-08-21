@@ -217,9 +217,35 @@ def _asked_by_golden():
     A name the golden cases never ask about is outside this check's interest — the binding
     filling that one in deceives no table. It is simply absent everywhere, and that is a
     different story. Only **the places that manufacture green** stay here.
+
+    **It reads the calls, not the characters.** This used to grep the raw text for
+    `name(`, which also matched prose: a comment reading "moves with the seed (measured…)"
+    put `seed` into this set, and `seed` is a torch name the binding has and borch.ts does
+    not, so the check reported a filling-in that no case performs. It surfaced while
+    `cases.py` was being translated, which is the fourth time in this repository that
+    editing a file has changed what a check greps out of it.
+
+    **Attribute references count, not only calls.** Taking calls alone dropped `values`,
+    which the cases reach as `x.mode().values` — a name that is asked and never called. That
+    turned a live row of `FILLED_ON_PURPOSE` into a stale one, which is the opposite error and
+    just as quiet. Both are collected.
+
+    Parsing costs nothing here and the result stays a subset — 1,078 real references against
+    1,248 text matches, the extra 170 being words in comments, local helper names and keywords
+    like `and` and `None`. Nothing a case actually asks about is lost.
     """
-    text = (ROOT / "tests" / "cases.py").read_text(encoding="utf-8")
-    return set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", text))
+    tree = ast.parse((ROOT / "tests" / "cases.py").read_text(encoding="utf-8"))
+    asked = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                asked.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                asked.add(func.attr)
+        if isinstance(node, ast.Attribute):
+            asked.add(node.attr)
+    return asked
 
 
 def _candidates():

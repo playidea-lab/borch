@@ -212,13 +212,13 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
       () => inp.get("img").conv2d(inp.get("cw"), inp.get("cb"), 2, 1)],
     ["F.max_pool2d", () => inp.get("img").maxPool2d(2)],
     ["F.avg_pool2d", () => inp.get("img").avgPool2d(2)],
-    ["BatchNorm2d(학습)", () => new nn.BatchNormND(3).forward(inp.get("img"))],
+    ["BatchNorm2d(학습)", () => new nn.BatchNorm2d(3).call(inp.get("img"))],
     // **저장·복원 뒤의 평가 모드.** 이동 통계가 state_dict 에서 빠지면 여기서만
     // 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
     ["BatchNorm2d(저장→복원→eval)", () => {
-      const trained = new nn.BatchNormND(3);
-      trained.forward(inp.get("img")); // 이동 통계가 갱신된다
-      const fresh = new nn.BatchNormND(3);
+      const trained = new nn.BatchNorm2d(3);
+      trained.call(inp.get("img")); // 이동 통계가 갱신된다
+      const fresh = new nn.BatchNorm2d(3);
       fresh.loadStateDict(trained.stateDict());
       fresh.eval();
       return fresh.forward(inp.get("img"));
@@ -3654,16 +3654,21 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
 
   add("F.avg_pool1d", (x) => x.poolND("avg", 2, 2), "nd_seq");
   add("F.avg_pool3d", (x) => x.poolND("avg", 2, 2), "nd_vol");
-  out.set("pool::nn.AvgPool1d", () => inp.get("nd_seq").poolND("avg", 2, 2));
-  out.set("pool::nn.AvgPool3d", () => inp.get("nd_vol").poolND("avg", 2, 2));
+  // **`nn.` 이 붙은 케이스는 층을 지나가야 한다.** 바로 위 `F.` 짝이 이미 텐서
+  // 메서드를 재고 있으므로, 여기서 같은 메서드를 부르면 두 케이스가 같은 것을 두 번
+  // 묻고 층 이름은 아무도 안 재는 상태가 된다 — 실제로 그랬다.
+  out.set("pool::nn.AvgPool1d",
+    () => new nn.AvgPool1d(2, 2).call(inp.get("nd_seq")));
+  out.set("pool::nn.AvgPool3d",
+    () => new nn.AvgPool3d(2, 2).call(inp.get("nd_vol")));
 
   add("F.adaptive_avg_pool1d(4)", (x) => x.adaptivePool("avg", 4), "nd_seq");
   add("F.adaptive_avg_pool1d(3)", (x) => x.adaptivePool("avg", 3), "nd_seq");
   add("F.adaptive_avg_pool3d", (x) => x.adaptivePool("avg", 2), "nd_vol");
   out.set("pool::nn.AdaptiveAvgPool1d",
-    () => inp.get("nd_seq").adaptivePool("avg", 4));
+    () => new nn.AdaptiveAvgPool1d(4).call(inp.get("nd_seq")));
   out.set("pool::nn.AdaptiveAvgPool3d",
-    () => inp.get("nd_vol").adaptivePool("avg", 2));
+    () => new nn.AdaptiveAvgPool3d(2).call(inp.get("nd_vol")));
 
   add("F.adaptive_max_pool1d", (x) => x.adaptivePool("max", 4), "nd_seq");
   add("F.adaptive_max_pool2d", (x) => x.adaptivePool("max", 2), "img");
@@ -5010,9 +5015,9 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
       m.loadStateDict({ weight: nd("nd_k1"), bias: Tensor.zeros([4]) });
       return m.forward(nd("nd_seq"));
     }],
-    ["nn.MaxPool1d", () => nd("nd_seq").maxPool1d(2)],
-    ["nn.MaxPool3d", () => nd("nd_vol").maxPool3d(2)],
-    ["nn.BatchNorm3d", () => new nn.BatchNormND(2).forward(nd("nd_vol"))],
+    ["nn.MaxPool1d", () => new nn.MaxPool1d(2).call(nd("nd_seq"))],
+    ["nn.MaxPool3d", () => new nn.MaxPool3d(2).call(nd("nd_vol"))],
+    ["nn.BatchNorm3d", () => new nn.BatchNorm3d(2).call(nd("nd_vol"))],
     ["nn.Upsample", () => nd("nd_img").upsample(2)],
     // **`mode` 를 받아만 놓고 안 쓰던 자리다** — 겹선형을 달라고 해도 최근접이
     // 나왔다. 예외가 아니라 조용히 다른 값이다.
@@ -5035,7 +5040,7 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
     ["max_pool1d", "nd_seq", (x) => x.maxPool1d(2)],
     ["max_pool3d", "nd_vol", (x) => x.maxPool3d(2)],
     ["interpolate", "nd_img", (x) => x.upsample(2)],
-    ["BatchNorm3d", "nd_vol", (x) => new nn.BatchNormND(2).forward(x)],
+    ["BatchNorm3d", "nd_vol", (x) => new nn.BatchNorm3d(2).call(x)],
   ];
   for (const [name, src, fn] of grads) {
     out.set(`ndim::grad::${name}`, () => {
@@ -5079,7 +5084,7 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   out.set("webgpu::F.max_pool3d", () => vol().maxPool3d(2));
   out.set("webgpu::Upsample(최근접)", () => inp.get("img").upsample(2));
   out.set("webgpu::BatchNorm3d(학습)",
-    () => new nn.BatchNormND(2).forward(vol()));
+    () => new nn.BatchNorm3d(2).call(vol()));
 
   out.set("webgpu::grad::Upsample", () => {
     const x = inp.get("img", true);
@@ -5093,7 +5098,7 @@ function addNdim(out: Map<string, Case>, inp: Inputs): void {
   });
   out.set("webgpu::grad::BatchNorm3d", () => {
     const x = vol(true);
-    new nn.BatchNormND(2).forward(x).sum().backward();
+    new nn.BatchNorm3d(2).call(x).sum().backward();
     return gradOf(x, "BatchNorm3d");
   });
   for (const [which, tag] of [["x", "x"], ["w", "w"]] as const) {

@@ -1193,6 +1193,38 @@ export class MaxPool2d extends Module {
   }
 }
 
+/* ── 차원이 다른 짝들 ────────────────────────────────────────────────────
+ *
+ * **계산은 이미 있었고 층 이름만 없었다.** `x.maxPool1d(2)` 는 되는데
+ * `new nn.MaxPool1d(2)` 는 안 되는 상태였다 — 교재를 그대로 따라 치면 거기서 멈춘다.
+ *
+ * 골든이 `ndim::nn.MaxPool1d` 로 값을 이미 붙잡고 있는데, borch.ts 쪽 케이스가 층이
+ * 아니라 **텐서 메서드로** 답하고 있었다. 그래서 값은 증명돼 있고 이름은 없었다.
+ * 케이스도 층을 지나가게 같이 고친다 — 안 그러면 이 이름들을 아무도 안 재게 된다.
+ */
+
+/** `torch.nn.MaxPool1d`. */
+export class MaxPool1d extends Module {
+  constructor(private readonly kernel = 2, private readonly stride?: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.maxPool1d(this.kernel, this.stride);
+  }
+}
+
+/** `torch.nn.MaxPool3d`. */
+export class MaxPool3d extends Module {
+  constructor(private readonly kernel = 2, private readonly stride?: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.maxPool3d(this.kernel, this.stride);
+  }
+}
+
 /**
  * Flattens, keeping only the batch axis.
  */
@@ -1308,6 +1340,62 @@ export class AvgPool2d extends Module {
 
   override forward(x: Tensor): Tensor {
     return x.avgPool2d(this.kernel, this.stride);
+  }
+}
+
+/**
+ * `torch.nn.AvgPool1d`. **It goes through `poolND`** — `avgPool2d` is a
+ * two-dimensional kernel, and this one has a different number of remaining
+ * axes, so it cannot use that path.
+ */
+export class AvgPool1d extends Module {
+  constructor(private readonly kernel: number,
+              private readonly stride?: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.poolND("avg", this.kernel, this.stride);
+  }
+}
+
+/** `torch.nn.AvgPool3d`. */
+export class AvgPool3d extends Module {
+  constructor(private readonly kernel: number,
+              private readonly stride?: number) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.poolND("avg", this.kernel, this.stride);
+  }
+}
+
+/**
+ * `torch.nn.AdaptiveAvgPool1d`. **It takes the output size**, not the kernel.
+ *
+ * It fixes the size and works the kernel backwards from it, so the argument
+ * means the opposite of what it means above. Confusing the two gives a
+ * different size quietly, which is why the name is separated by `Adaptive`.
+ */
+export class AdaptiveAvgPool1d extends Module {
+  constructor(private readonly outSize: number | readonly number[]) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.adaptivePool("avg", this.outSize);
+  }
+}
+
+/** `torch.nn.AdaptiveAvgPool3d`. It takes the output size. */
+export class AdaptiveAvgPool3d extends Module {
+  constructor(private readonly outSize: number | readonly number[]) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.adaptivePool("avg", this.outSize);
   }
 }
 
@@ -2957,6 +3045,25 @@ export class BatchNormND extends Module {
       this.bias, this.training, this.momentum, this.eps);
   }
 }
+
+/**
+ * `torch.nn.BatchNorm2d`. **It inherits `BatchNormND` unchanged.**
+ *
+ * Rank is not consulted, so the number in the name does not change the
+ * computation — everything but the channel axis is reduced, which makes
+ * (N,C,H,W) and (N,C,D,H,W) the same code. The core (`borch/_nn.py`) writes
+ * the same reason at the same place, and three implementations giving one
+ * answer is what this table is worth.
+ *
+ * **torch diverges here** — it rejects a 3-D input to `BatchNorm2d`. Adding
+ * that check to borch.ts alone would split it from the core, so if it goes in
+ * it is a change to all three, not something to slip in while standing this
+ * name up.
+ */
+export class BatchNorm2d extends BatchNormND {}
+
+/** `torch.nn.BatchNorm3d`. The computation is the same, for the reason above. */
+export class BatchNorm3d extends BatchNormND {}
 
 /**
  * Recurrent networks — `RNN`, `LSTM` and `GRU` as one class differing only
