@@ -1594,6 +1594,25 @@ export class Tensor implements Node<Tensor> {
           `(${M}x${K} and ${K2}x${N})`,
       );
     }
+    // **복소수는 실수 행렬곱 넷으로 쪼갠다.**
+    //
+    //   `(A + iB)(C + iD) = (AC − BD) + i(AD + BC)`
+    //
+    // 커널을 새로 안 쓴다 — `sum`·`diagflat` 이 같은 자리를 같은 방법으로 지난다.
+    // 역방향도 공짜다: `real`·`imag`·`complex` 와 실수 `mm` 이 전부 자기 역방향을
+    // 알고 있어서 이 식이 그대로 그래프가 된다.
+    //
+    // 한쪽만 복소수인 경우도 여기로 온다 — 실수 쪽의 허수부는 0 이라 두 곱이
+    // 사라지지만, 그것을 특수화하는 것은 재보고 할 일이다. 맞는 것이 먼저다.
+    if (this.isComplex() || other.isComplex()) {
+      const a = this.isComplex() ? this : this.asComplexRe();
+      const b = other.isComplex() ? other : other.asComplexRe();
+      const [ar, ai] = [a.real(), a.imag()];
+      const [br, bi] = [b.real(), b.imag()];
+      return Tensor.complex(
+        ar.mm(br).sub(ai.mm(bi)),
+        ar.mm(bi).add(ai.mm(br)));
+    }
     const out = dev().alloc(M * N);
     dev().run(
       dev().pipeline(`mm:${M}:${K}:${N}`, () => matmul(M, K, N)),
@@ -2479,6 +2498,12 @@ export class Tensor implements Node<Tensor> {
       const k = Math.abs(offset);
       const wide = this.padND([k, 0]).diagflat();
       return wide.roll(-k, offset > 0 ? 0 : 1);
+    }
+    // **복소수는 실수 둘로 쪼갠다.** 대각에 놓는 일은 값을 안 건드리므로 실수부와
+    // 허수부에 따로 걸면 그대로다 — 새 커널이 필요 없다(`sum` 이 같은 자리를 같은
+    // 방법으로 지난다). `linalg.eig` 의 `V·diag(λ)` 가 이 길로 들어온다.
+    if (this.isComplex()) {
+      return Tensor.complex(this.real().diagflat(), this.imag().diagflat());
     }
     const n = this.size;
     const out = dev().alloc(n * n);
@@ -5776,6 +5801,67 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    */
   async eigvalsh(uplo: "L" | "U" = "L"): Promise<Tensor> {
     return (await this.eigh(uplo)).values;
+  }
+
+  /**
+   * Eigenvalues and eigenvectors of **any square matrix.** `linalg.eig`.
+   *
+   * This is not `eigh` with the symmetry requirement lifted; it is a different
+   * function. `eigh` reads one triangle and answers in reals. This one reads
+   * the whole matrix and **always answers in complex** — a rotation matrix has
+   * no real eigenvalue at all, so the return type cannot depend on the input.
+   *
+   * Eigenvectors stand in **columns**: `V[:, k]` belongs to `values[k]`, which
+   * is what makes `A·V = V·diag(λ)` hold.
+   *
+   * **The sign is not fixed and cannot be.** torch itself returns opposite
+   * signs in float32 and float64 (measured). Anything depending on the sign of
+   * an eigenvector is depending on something no implementation promises.
+   *
+   * There is no backward. The derivative of an eigendecomposition is undefined
+   * where eigenvalues repeat, and a quietly wrong gradient is worse than an
+   * absent one — the same line `qr` and `svd` draw here.
+   */
+  async eig(): Promise<{ values: Tensor; vectors: Tensor }> {
+    const v = await this.asBatch();
+    const n = v.rows;
+    const wRe: LA.Mat[] = [];
+    const wIm: LA.Mat[] = [];
+    const vRe: LA.Mat[] = [];
+    const vIm: LA.Mat[] = [];
+    for (const a of v.mats) {
+      const got = LA.eig(a, n);
+      wRe.push(got.re);
+      wIm.push(got.im);
+      vRe.push(got.vecRe);
+      vIm.push(got.vecIm);
+    }
+    return {
+      values: Tensor.complex(
+        Tensor.fromBatch(wRe, [...v.lead, n]), Tensor.fromBatch(wIm, [...v.lead, n])),
+      vectors: Tensor.complex(
+        Tensor.fromBatch(vRe, [...v.lead, n, n]),
+        Tensor.fromBatch(vIm, [...v.lead, n, n])),
+    };
+  }
+
+  /**
+   * The eigenvalues of any square matrix. `linalg.eigvals` — the front half of
+   * `eig`, and **it skips the eigenvectors** rather than computing and dropping
+   * them.
+   */
+  async eigvals(): Promise<Tensor> {
+    const v = await this.asBatch();
+    const n = v.rows;
+    const re: LA.Mat[] = [];
+    const im: LA.Mat[] = [];
+    for (const a of v.mats) {
+      const got = LA.eigvals(a, n);
+      re.push(got.re);
+      im.push(got.im);
+    }
+    return Tensor.complex(
+      Tensor.fromBatch(re, [...v.lead, n]), Tensor.fromBatch(im, [...v.lead, n]));
   }
 
   /**
