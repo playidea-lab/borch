@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 640,
+  "done": 641,
   "stale": 0,
-  "missing": 1
+  "missing": 0
  },
  "modules": [
   {
@@ -3978,12 +3978,13 @@
       {
        "name": "upsampleNearest",
        "signature": "upsampleNearest(scale: number): Tensor",
-       "doc": "폐기 예정인 업샘플 두 이름. torch 가 아직 주고 옛 교재가 친다.\n\n**`upsample` 하나로 못 덮는다** — 최근접과 겹선형이 다른 계산이고, 이름이 그\n갈래를 담고 있다. 한쪽으로 몰면 조용히 다른 보간이 된다(이 저장소가\n`Upsample(mode='bilinear')` 에서 이미 한 번 물린 자리다).",
+       "doc": "The two deprecated upsampling names. torch still offers them and older textbooks\ntype them.\n\n**`upsample` alone cannot cover both** — nearest and bilinear are different\ncomputations, and the names carry that split. Folding them into one becomes a\nquietly different interpolation (a place this repository has already been bitten\nonce, at `Upsample(mode='bilinear')`).",
        "torch": "upsample_nearest",
        "section": {
         "ko": "제자리 판 서른여덟",
         "en": "The thirty-eight in-place forms"
-       }
+       },
+       "doc_ko": "폐기 예정인 업샘플 두 이름. torch 가 아직 주고 옛 교재가 친다.\n\n**`upsample` 하나로 못 덮는다** — 최근접과 겹선형이 다른 계산이고, 이름이 그\n갈래를 담고 있다. 한쪽으로 몰면 조용히 다른 보간이 된다(이 저장소가\n`Upsample(mode='bilinear')` 에서 이미 한 번 물린 자리다)."
       },
       {
        "name": "upsampleBilinear",

@@ -7063,11 +7063,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
-   * 폐기 예정인 업샘플 두 이름. torch 가 아직 주고 옛 교재가 친다.
+   * The two deprecated upsampling names. torch still offers them and older textbooks
+   * type them.
    *
-   * **`upsample` 하나로 못 덮는다** — 최근접과 겹선형이 다른 계산이고, 이름이 그
-   * 갈래를 담고 있다. 한쪽으로 몰면 조용히 다른 보간이 된다(이 저장소가
-   * `Upsample(mode='bilinear')` 에서 이미 한 번 물린 자리다).
+   * **`upsample` alone cannot cover both** — nearest and bilinear are different
+   * computations, and the names carry that split. Folding them into one becomes a
+   * quietly different interpolation (a place this repository has already been bitten
+   * once, at `Upsample(mode='bilinear')`).
    */
   upsampleNearest(scale: number): Tensor {
     return this.upsample(scale);

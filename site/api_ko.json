@@ -2439,6 +2439,10 @@
   "ko": "최근접 이웃으로 확대. `Upsample`·`interpolate` 가 이것이다.",
   "src": "4ad4c34de310"
  },
+ "tensor/Tensor.upsampleNearest": {
+  "ko": "폐기 예정인 업샘플 두 이름. torch 가 아직 주고 옛 교재가 친다.\n\n**`upsample` 하나로 못 덮는다** — 최근접과 겹선형이 다른 계산이고, 이름이 그\n갈래를 담고 있다. 한쪽으로 몰면 조용히 다른 보간이 된다(이 저장소가\n`Upsample(mode='bilinear')` 에서 이미 한 번 물린 자리다).",
+  "src": "ac0cc03df809"
+ },
  "tensor/Tensor.vander": {
   "ko": "판데르몬드 행렬. **기본은 차수가 줄어드는 쪽이다** — 마지막 열이 1 이다(실측).\n\n거듭제곱을 `pow` 로 짜지 않는다. WGSL 의 `pow` 는 `exp2(y·log2(x))` 라 **밑이\n음수면 답이 없고**, 판데르몬드는 음수 입력이 예사다. 누적곱으로 세면 정확하다.",
   "src": "fb9526ed3bd8"
