@@ -51,6 +51,17 @@ def _every_torch_name():
     return got
 
 
+def _api(namespace, space):
+    """`_public` **minus the names the tables say are not API.**
+
+    The report subtracts them — `transforms.functional.Tensor` is an imported label and
+    a row says so — and a README count taken from `_public` raw would be one larger than
+    the number the tool prints. Two denominators for one question is how a figure ends up
+    right in one place and wrong in another with nobody able to say which.
+    """
+    return {n for n in _public(namespace) if not _look(NOT_API, n, f"{space}.{n}")}
+
+
 def test_every_namespace_meant_to_be_counted_is_counted():
     """**A namespace off the list has no rule.**
 
@@ -81,12 +92,33 @@ def test_the_readme_transform_count_is_the_measured_one():
     without torch, and this pair cannot be measured without real torchvision to count
     against. A number nobody can measure is the kind that goes stale.
     """
-    theirs, ours = _public(torchvision.transforms), _public(borchvision.transforms)
+    theirs, ours = _api(torchvision.transforms, "transforms"), _public(borchvision.transforms)
     row = (ROOT / "README.md").read_text(encoding="utf-8")
     said = re.search(r"\*\*(\d+) of the (\d+) names `torchvision.transforms` carries", row)
     assert said is not None, (
         "the README's torchvision row no longer states its two numbers in the form this\n"
         "  check reads. Reword the check with it rather than dropping it.")
+    assert (int(said.group(1)), int(said.group(2))) == (len(theirs & ours), len(theirs)), (
+        f"the README says {said.group(1)} of {said.group(2)}; measured is "
+        f"{len(theirs & ours)} of {len(theirs)}.")
+
+
+def test_the_readme_functional_count_is_the_measured_one():
+    """The same for `transforms.functional`, and it is a **second** claim rather than a
+    second number in the first one.
+
+    Written as one sentence covering both namespaces, one of the two could go stale
+    while the sentence stayed true of the other — and a reader has no way to tell which
+    half they are reading. Two claims, two checks.
+    """
+    theirs = _api(torchvision.transforms.functional, "transforms.functional")
+    ours = _public(borchvision.transforms.functional)
+    row = (ROOT / "README.md").read_text(encoding="utf-8")
+    said = re.search(
+        r"holds (\d+) of the (\d+) names `torchvision.transforms.functional` carries", row)
+    assert said is not None, (
+        "the README's `transforms.functional` claim no longer states its two numbers in "
+        "the form this check reads. Reword the check with it rather than dropping it.")
     assert (int(said.group(1)), int(said.group(2))) == (len(theirs & ours), len(theirs)), (
         f"the README says {said.group(1)} of {said.group(2)}; measured is "
         f"{len(theirs & ours)} of {len(theirs)}.")

@@ -7622,6 +7622,19 @@ def _vision(L):
     return _BT_VISION.transforms
 
 
+def _size_input(L):
+    """The picture the size questions are asked of, in each side's own format.
+
+    Real torchvision reads a **tensor**'s trailing axes and ours reads an array's
+    leading ones, so handing both the same object would ask two different questions
+    and call the disagreement a defect.
+    """
+    from_inputs = golden_inputs()["vis_f"]
+    if _is_real_torch(L):
+        return L.tensor(np.ascontiguousarray(from_inputs.transpose(2, 0, 1)))
+    return from_inputs
+
+
 def _pil_position(L, arr):
     """What arrives here from torchvision is **a PIL image**, and we have no PIL, so an (H,W,C)
     array stands in its place. The same picture is given in each side's own format — compared
@@ -7860,6 +7873,53 @@ def vision_cases(inp=None):
          on_float(lambda T: T.RandomChoice([T.Pad(1)]))),
         (VISION_PREFIX + "RandomOrder(one to order)", on_float(lambda T: T.RandomOrder([T.Pad(1)]))),
         (VISION_PREFIX + "Lambda", on_float(lambda T: T.Lambda(lambda x: x * 2))),
+    ]
+
+    # --- transforms.functional ------------------------------------------------
+    #
+    # The functions hand their work to the classes above, so most of their values are
+    # already frozen through those. **What is asked here is what the classes cannot
+    # reach**: a crop at a position nobody drew, an erase that actually erases, and a
+    # size whose order is the opposite of every other size in the file.
+
+    def fn(call):
+        """A `functional` call, in each side's own format — `on_float`'s rule."""
+        def run(L):
+            T = _vision(L)
+            F = T.functional
+            if _is_real_torch(L):
+                return call(F, _as_tensor(L, T.ToTensor()(img_f)))
+            return T.ToTensor()(call(F, img_f))
+        return run
+
+    def erase_case(L):
+        # **The first case in this table where anything is erased.** `RandomErasing`'s
+        # two are the branch pinned at p=0 and the branch where ten draws all miss — an
+        # implementation that erased the wrong rectangle, or filled it with the wrong
+        # number, passes both.
+        T = _vision(L)
+        x = _as_tensor(L, T.ToTensor()(img_f))
+        v = np.full((3, 2, 2), 0.25, dtype=np.float32)
+        return T.functional.erase(x, 1, 1, 2, 2,
+                                  L.tensor(v) if _is_real_torch(L) else v)
+
+    cases += [
+        # A crop at a position **given rather than drawn**. Every crop in the table above
+        # goes through a draw pinned to one answer; this is the only one where the four
+        # numbers are the case.
+        (VISION_PREFIX + "F.crop", fn(lambda F, x: F.crop(x, 1, 1, 3, 2))),
+        (VISION_PREFIX + "F.resized_crop",
+         fn(lambda F, x: F.resized_crop(x, 1, 0, 3, 4, [2, 2]))),
+        # `Pad`'s two-element form, which is (left/right, top/bottom) and reads as
+        # (left, top). The class's case gives four numbers, where both readings agree.
+        (VISION_PREFIX + "F.pad(two numbers)", fn(lambda F, x: F.pad(x, [1, 2], 0.5))),
+        (VISION_PREFIX + "F.erase", erase_case),
+        # **`get_image_size` is width first** and everything else here is height first.
+        # Frozen as text so a swap is a different string rather than a plausible pair.
+        (VISION_PREFIX + "F.sizes",
+         lambda L: f"{_vision(L).functional.get_dimensions(_size_input(L))} "
+                   f"{_vision(L).functional.get_image_size(_size_input(L))} "
+                   f"{_vision(L).functional.get_image_num_channels(_size_input(L))}"),
     ]
 
     # Representation (T3). This project treats `repr` as specification too — the tutorials do

@@ -39,10 +39,11 @@ That shape has now cost this repository four times — a helper list that lost t
 a file simply not in `test_messages.py`'s list, a README row nothing compared name by name,
 and this. **What is off the list has no rule.**
 
-`transforms.functional` is counted against an empty namespace on our side. It could have
-been left out on the grounds that it does not exist here, and that is exactly the move that
-hid it: absent from the list reads as zero to review, and absent from *us* while present in
-the list reads as thirty-six to review. The second is the true sentence.
+`transforms.functional` was counted against an **empty** namespace at first, because we had
+none. It could have been left out on the grounds that it did not exist, and that is exactly
+the move that hid it: absent from the list reads as zero to review, and absent from *us*
+while present in the list reads as thirty-six to review. The second was the true sentence,
+and it is what put the namespace on the to-do list it has now come off.
 
 **And the number counts names, not signatures.** `Grayscale` present with the wrong luma
 weights counts the same as `Grayscale`; so does `Pad` present without `padding_mode`. This
@@ -490,19 +491,18 @@ SKIPPED = {
     "transforms.ConvertImageDtype": "uint8 has no storage in this subset, so float-to-uint8 "
                                     "with its x255 has nothing to convert into — and "
                                     "`ToTensor` already does the divide the other way",
+    # The same three, under the names `transforms.functional` gives them. **Written out
+    # rather than wildcarded**: `*_pil_image` would also catch a name torchvision has not
+    # invented yet, and a row matching something nobody has read is how a reason ends up
+    # attached to the wrong thing.
+    "transforms.functional.to_pil_image": "there is no PIL here — as `ToPILImage`",
+    "transforms.functional.pil_to_tensor": "it takes a PIL image and nothing here makes "
+                                           "one — as `PILToTensor`",
+    "transforms.functional.convert_image_dtype": "uint8 has no storage in this subset — "
+                                                 "as `ConvertImageDtype`",
 }
 
 # The namespaces looked at. (display name, torch's side, ours)
-class _Empty:
-    """**A namespace we do not have, standing where it would be.**
-
-    `transforms.functional` has no counterpart here. Left out of the list it counts as
-    nothing to review; put in as an empty namespace it counts as thirty-six. The filter
-    below drops a `None`, and that is the behaviour this class exists to avoid inheriting —
-    an absent namespace is a measurement, not a reason to stop measuring.
-    """
-
-
 def _spaces():
     got = [("torch", torch, borch),
            ("Tensor", torch.Tensor, borch.Tensor),
@@ -514,7 +514,8 @@ def _spaces():
            ("utils.data", torch.utils.data, borch.utils.data)]
     if torchvision is not None:
         got += [("transforms", torchvision.transforms, borchvision.transforms),
-                ("transforms.functional", torchvision.transforms.functional, _Empty())]
+                ("transforms.functional", torchvision.transforms.functional,
+                 borchvision.transforms.functional)]
     return [(name, a, b) for name, a, b in got if b is not None]
 
 

@@ -376,3 +376,56 @@ def test_random_crops_padding_mode_reaches_the_padding_it_adds():
     V.manual_seed(0)
     edged = V.RandomCrop((7, 6), padding=1, padding_mode="edge")(img)
     assert np.array_equal(edged, V.Pad(1, padding_mode="edge")(img))
+
+
+# --- transforms.functional --------------------------------------------------
+
+
+def test_the_functional_namespace_answers_every_spelling_of_the_import():
+    """**This is why it is a module and not an attribute.**
+
+    `import torchvision.transforms.functional as F` is the line tutorials write, and
+    `import a.b.c` walks `sys.modules` for each dotted name — an attribute holding an
+    object satisfies none of it, however much it looks like a namespace from inside.
+    All four spellings are asked because a package gives all four for free and a
+    hand-registered pair only gives what it was given.
+    """
+    import borchvision.transforms.functional as one
+    from borchvision.transforms import functional as two
+    from borchvision import transforms as three
+    import borchvision as four
+
+    assert one is two is three.functional is four.transforms.functional
+
+
+def test_get_image_size_is_width_first_and_get_dimensions_is_not():
+    """**The one size in this file that is not height first.** torchvision inherits it
+    from PIL, where a size is `(w, h)`, and returning the shape here instead would be
+    right in length and swapped in meaning on any picture that is not square — which is
+    why the picture in this test is 5 by 4."""
+    img = np.zeros((5, 4, 3), dtype=np.float32)
+    assert V.transforms.functional.get_image_size(img) == [4, 5]
+    assert V.transforms.functional.get_dimensions(img) == [3, 5, 4]
+    assert V.transforms.functional.get_image_num_channels(img) == 3
+
+
+def test_functional_crop_refuses_to_leave_the_picture():
+    """numpy answers an out-of-range slice with **a shorter array**, not an error. Left
+    to it, the batch that follows fails to stack and the message points at the stacking
+    rather than at the crop."""
+    img = np.zeros((5, 4, 3), dtype=np.float32)
+    assert V.transforms.functional.crop(img, 1, 1, 3, 2).shape == (3, 2, 3)
+    with pytest.raises(ValueError, match="leaves the image"):
+        V.transforms.functional.crop(img, 3, 0, 4, 4)
+
+
+def test_functional_and_the_class_are_one_implementation():
+    """The functions delegate rather than reimplement. Two copies of the resize filter
+    would agree the day they were written and not on some later one, so what is checked
+    is that they are **the same answer**, not that both are close to torch."""
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    F = V.transforms.functional
+    assert np.array_equal(F.resize(img, [3, 2]), V.Resize((3, 2))(img))
+    assert np.array_equal(F.center_crop(img, [3, 2]), V.CenterCrop((3, 2))(img))
+    assert np.array_equal(F.pad(img, 1, 0.5), V.Pad(1, 0.5)(img))
+    assert np.array_equal(F.rgb_to_grayscale(img, 3), V.Grayscale(3)(img))
