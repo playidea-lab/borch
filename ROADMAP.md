@@ -82,36 +82,53 @@ uv run --with pytest --with numpy --with torch pytest tests/     # everything
 
 ---
 
-## 순서
+## The order it happened in
 
-### 1. ~~T2 — 오류를 진짜와 맞춘다~~ · **완료**
+### 1. ~~T2 — match the errors to the real thing~~ · **done**
 
-메시지 규격을 정했다 — **한국어 설명 + torch 의 정규 영문 문구**.
+A message specification was settled — **a Korean explanation plus torch's
+canonical English phrase.**
 
 ```
 행렬곱의 모양이 안 맞습니다 (3x4 @ 3x2) — 앞의 열(4)과 뒤의 행(3)이 같아야 합니다.
 (torch: mat1 and mat2 shapes cannot be multiplied (3x4 and 3x2))
 ```
 
-한국어만 두면 검색해서 답을 못 찾고, 영문만 베끼면 이 교재가 한국어인 이유가 사라진다.
-**둘 다 넣는다** — 설명은 읽고, 영문은 검색한다.
+Korean alone leaves nowhere to search for the answer; copying the English alone
+removes the reason this material is in Korean. **Both go in** — the explanation is
+read and the English is searched for.
 
-그리고 이 작업이 **메시지가 아닌 결함 둘**을 드러냈다.
+> **This half was reversed later.** The messages are English throughout now, and
+> `tests/test_messages.py` holds the rule as "the Python library carries no
+> Korean". The shape survived — our sentence plus torch's phrase, through
+> `_like_torch(said, torch_phrase)` — and the language of the first half changed.
+> The block above is what the message actually looked like at the time and is left
+> as it stands; the same call today gives:
+>
+> ```
+> The matmul shapes do not line up (3x4 @ 3x2) — the columns on the left (4) must match the rows on the right (3).
+> (torch: mat1 and mat2 shapes cannot be multiplied (3x4 and 3x2))
+> ```
 
-- `.item()` 이 원소 3개짜리에서 **조용히 첫 값을 돌려주고 있었다.** 이 프로젝트가
-  하지 않겠다고 한 바로 그 짓이다
-- `backward()` 를 두 번 불러도 그냥 통과했다. torch 는 그래프를 놓고 예외를 낸다
+And this work turned up **two defects that were not about messages.**
 
-둘 다 고쳤고, 그래프 해제와 `retain_graph=True` 를 구현했다.
+- `.item()` on a three-element tensor was **quietly returning the first value.**
+  Precisely the thing this project said it would not do
+- Calling `backward()` twice simply passed. torch releases the graph and raises
 
-### 2. ~~T3 — `repr` 을 맞춘다~~ · **완료**
+Both were fixed, along with implementing graph release and `retain_graph=True`.
 
-torch 의 규칙을 따랐다 — 값이 전부 정수면 `1.`, 아니면 **소수 네 자리**, 범위가 넓으면 지수.
-원소는 **같은 너비로 오른쪽 정렬**(음수가 섞이면 양수 앞에 자리가 생긴다),
-이어지는 줄은 `tensor(` 만큼 **8칸** 들여쓴다. 기본이 아닌 dtype 은 접미사로 붙인다.
+### 2. ~~T3 — match `repr`~~ · **done**
 
-그리고 비잎 노드는 `requires_grad=True` 가 아니라 **`grad_fn=<MulBackward0>`** 으로 찍는다.
-학습자가 "이 텐서는 그래프 안에 있다"를 눈으로 아는 자리다.
+torch's rules were followed — all-integer values give `1.`, otherwise **four
+decimal places**, and a wide range gives exponents. Elements are **right-aligned
+to one width** (with negatives in the mix, room appears in front of the
+positives), and continuation lines are indented **eight columns**, the width of
+`tensor(`. A non-default dtype is attached as a suffix.
+
+And a non-leaf node prints **`grad_fn=<MulBackward0>`** rather than
+`requires_grad=True`. That is where a learner sees that a tensor is inside the
+graph.
 
 ```
 >>> torch.tensor([-1.5, 2.0, -0.25])
@@ -120,261 +137,312 @@ tensor([-1.5000,  2.0000, -0.2500])
 tensor([2.], grad_fn=<MulBackward0>)
 ```
 
-### 3. ~~dtype 승격표를 전부 덮는다~~ · **완료**
+### 3. ~~cover the whole dtype promotion table~~ · **done**
 
-4개 dtype × 4개 연산 × (텐서·스칼라) = **112건**을 전부 훑었고, 처음엔 54건이 갈렸다.
+4 dtypes × 4 operations × (tensor, scalar) = **112 cases** were walked, and 54 of
+them diverged at first.
 
-원인 하나가 대부분이었다 — torch 는 **범주**(bool < 정수 < 실수)로 먼저 가르고
-**그 범주 안에서만** 올린다. 낮은 범주는 높은 것을 끌어올리지 않는다.
+One cause accounted for most of them — torch splits by **category** first
+(bool < integer < float) and promotes **within that category alone.** A lower
+category does not pull a higher one up.
 
 ```
 float32 + int64   torch: float32     numpy: float64
 int64 / int64     torch: float32     numpy: float64
-bool - bool       torch: RuntimeError (`~` 를 쓰라고 안내)
+bool - bool       torch: RuntimeError (it points at `~`)
 ```
 
-나눗셈은 정수끼리여도 기본 실수형을 내고, 뺄셈은 불리언에서 거부한다.
-지금 112/112.
+Division gives the default floating point dtype even between integers, and
+subtraction refuses on booleans. 112/112 at the time.
 
-### 4. ~~view 의미론~~ · **완료 (그리고 이 항목은 틀린 전제였다)**
+### 4. ~~view semantics~~ · **done (and this item rested on a false premise)**
 
-여기 "우리는 복사한다, 구현 비용이 크다"고 적어뒀었다. **재보지 않고 코드만 읽고 쓴 말이었고,
-틀렸다.** numpy 의 reshape·swapaxes·슬라이스가 이미 뷰를 주고 우리는 그것을 그대로 들고
-있으므로, 저장소 공유는 처음부터 되고 있었다.
+This used to say "we copy, and implementing it would be expensive". **That was
+written from reading the code without measuring, and it was wrong.** numpy's
+reshape, swapaxes and slices already give views and we hold them as they are, so
+shared storage had been working from the start.
 
 ```python
 a = torch.zeros(4); b = a.view(2, 2); b[0, 0] = 9
-a          # [9., 0., 0., 0.]  — torch 와 같다
+a          # [9., 0., 0., 0.]  — the same as torch
 ```
 
-실제로 갈린 것은 하나뿐이었다. torch 의 `view` 는 **메모리 순서가 어긋난 텐서를 거부**하고
-`reshape` 을 쓰라고 안내한다 — 둘의 차이가 거기에 있다. 그것을 맞췄다.
+Exactly one thing actually diverged. torch's `view` **refuses a tensor whose
+memory order is off** and points at `reshape` — that is where the two differ. It
+was matched.
 
-저장소 공유 13가지(뷰 8종 · `clone` 은 독립 · `detach` 는 공유 · 팬시 인덱싱은 사본 ·
-`view`/`reshape` 의 차이)를 검사기에 넣었다. 13/13.
+Thirteen storage-sharing facts went into the checker (eight kinds of view, `clone`
+independent, `detach` shared, fancy indexing a copy, and the `view`/`reshape`
+difference). 13/13.
 
-**교훈**: 로드맵에 "안 된다"를 적을 때도 재보고 적어야 한다. 안 재고 적으면
-있지도 않은 일을 몇 시간 계획하게 된다.
+**The lesson**: writing "this cannot be done" into a roadmap also has to be
+measured first. Written unmeasured, it costs hours of planning work that does not
+exist.
 
-### 5. ~~`nn.RNN`~~ · **완료**
+### 5. ~~`nn.RNN`~~ · **done**
 
-시간 방향이 파이썬 반복문이다. **그 느림이 곧 30장의 내용이기도 하다** —
-순환은 앞을 끝내야 뒤를 볼 수 있어서 병렬화가 안 되고, 트랜스포머가 나온 이유가 그것이다.
+Time is a Python loop. **That slowness is itself the content of chapter 30** —
+recurrence cannot be parallelised because the earlier step has to finish before
+the later one is visible, and that is why the transformer exists.
 
-`num_layers` · `batch_first` · `nonlinearity` · `bias` · `h_0` 전부 맞고,
-파라미터 이름을 torch 와 같게 둬서 `state_dict` 키가 맞는다(저장·불러오기가 통한다).
-`stack`·`cat` 의 역전파도 이 김에 제대로 고쳤다 — RNN 이 그 위에 서 있다.
+`num_layers`, `batch_first`, `nonlinearity`, `bias` and `h_0` all match, and the
+parameter names are torch's so the `state_dict` keys match (saving and loading
+cross over). The backward passes of `stack` and `cat` were properly fixed along
+the way — the RNN stands on them.
 
-### 6. `LSTM`·`GRU`·트랜스포머 인코더 · **완료**
+### 6. `LSTM`, `GRU` and the transformer encoder · **done**
 
-커리큘럼이 요구하는 범위를 넘어선다. **그건 알고 넣는다** — 이 물건 자체로 쓸 만하게
-만들려는 것이고, 그 결정은 기록해 둔다.
+This goes past what the curriculum asks for. **That is known and it goes in
+anyway** — the aim is for this thing to be usable in its own right, and the
+decision is recorded.
 
-넣으면서 지킨 선:
+The lines held while adding them:
 
-- **파라미터 이름과 배치를 torch 와 같게.** LSTM 의 게이트 순서는 `i, f, g, o`,
-  torch 는 Q·K·V 가중치를 `in_proj_weight` (3E, E) 하나로 묶어 든다.
-  순서나 배치가 다르면 값은 그럴듯한데 체크포인트가 안 통하고, 그건 조용히 틀리는 종류다
-- **GRU 의 `n` 게이트에서 `r` 은 편향까지 포함한 은닉 항에 곱한다.** 편향을 밖에 두면
-  미세하게 어긋나고 눈에 안 띈다
-### 7. 디코더와 `nn.Transformer` · **완료**
+- **Parameter names and layout as torch's.** LSTM's gate order is `i, f, g, o`,
+  and torch carries the Q, K and V weights bundled into one `in_proj_weight`
+  (3E, E). A different order or layout leaves the values plausible and the
+  checkpoints incompatible, and that is the quiet kind of wrong
+- **In GRU's `n` gate, `r` multiplies the hidden term including its bias.**
+  Keeping the bias outside makes it slightly off, and that goes unnoticed
+### 7. The decoder and `nn.Transformer` · **done**
 
-인코더까지가 교재 범위라 거절하려 했는데, 넣기로 했다. 디코더 층은 인코더 층과
-**가운데 하나만 다르다** — `multihead_attn` 이 자기 자신이 아니라 인코더 출력을 본다.
+The textbook's range stops at the encoder and this was nearly refused on that
+basis; it went in. The decoder layer differs from the encoder layer in **one
+thing, in the middle** — `multihead_attn` looks at the encoder's output rather
+than at itself.
 
-그 김에 마스크 의미를 제대로 고쳤다. torch 의 마스크는 두 가지다.
+The meaning of the masks was properly fixed along the way. torch's masks come in
+two kinds.
 
-- **불리언** — True 인 자리를 가린다(-inf)
-- **실수** — 점수에 **더한다.** `generate_square_subsequent_mask` 가 주는 0/-inf 가 그것이다
+- **boolean** — the True positions are masked (-inf)
+- **float** — **added** to the scores. The 0/-inf `generate_square_subsequent_mask`
+  gives is this
 
-전에는 실수 마스크를 "0 이 아니면 가림"으로 뭉뚱그렸다. 인과 마스크는 우연히 맞지만
-**가중치를 조절하는 마스크에서 어긋난다** — 그 경우를 테스트로 박아뒀다.
+A float mask used to be lumped in as "mask where it is not 0". A causal mask
+happens to come out right that way and **a mask that adjusts the weights does
+not** — that case is pinned in a test.
 
-### 8. 통합 리뷰에서 나온 것 · **완료**
+### 8. What the integration review turned up · **done**
 
-튜토리얼처럼 쓴 코드를 양쪽에서 통째로 돌려봤다(MLP 학습·CNN·LSTM·트랜스포머·저장/불러오기).
-6개 중 2개가 갈렸고, **둘 다 단위 대조가 못 잡던 종류**였다.
+Code written the way a tutorial writes it was run whole on both sides (MLP
+training, a CNN, an LSTM, a transformer, saving and loading). Two of the six
+diverged, and **both were the kind the unit comparisons could not catch.**
 
-- **BatchNorm 역방향이 틀렸다.** 평균·분산을 numpy 로 빼서 상수처럼 썼더니 x → mean → y
-  로 흐르는 길이 끊겼다. 입력 기울기가 1.17 어긋나고 **weight 기울기는 아예 안 왔다**(None).
-  순방향만 대조하고 있었기 때문에 오래 남았다 — **"학습이 돌아가고 손실도 내려가는데 값이 다른"**
-  가장 나쁜 종류다
-- **`p.data = ndarray` 를 받아주고 있었다.** torch 는 거부한다. 관대한 것도 갈리는 것이고,
-  브라우저에서 되던 코드가 자기 컴퓨터에서 깨진다
+- **BatchNorm's backward was wrong.** Taking the mean and variance out through
+  numpy and using them as constants cut the path x → mean → y. The input gradient
+  was off by 1.17 and **the weight gradient never arrived at all** (None). It
+  survived a long time because only the forward pass was being compared — the
+  worst kind, **"training runs, the loss goes down, and the values differ"**
+- **`p.data = ndarray` was being accepted.** torch refuses it. Being more
+  permissive is still diverging, and code that ran in the browser breaks on the
+  user's own machine
 
-그 검사를 다섯 층에 걸어뒀다 — **가중치에 기울기가 실제로 도착하는가.**
-그래프가 끊기면 `None` 으로 드러난다. 그리고 그 검사가 **또 하나를 잡았다**:
-BatchNorm 의 `running_mean`·`running_var` 가 `state_dict` 에 없었다.
-저장했다 불러오면 **평가 모드가 초기값으로 돌아간다** — 학습은 멀쩡해 보이고 추론만 틀린다.
-버퍼(`register_buffer`) 개념을 들여와 고쳤다.
+That check went onto five layers — **does the gradient actually arrive at the
+weights.** A cut graph shows up as `None`. And that check **caught one more**:
+BatchNorm's `running_mean` and `running_var` were not in `state_dict`. Saving and
+loading sends **evaluation mode back to the initial values** — training looks fine
+and only inference is wrong. It was fixed by bringing in the buffer concept
+(`register_buffer`).
 
-통합 시나리오는 `tests/scenario.py` 로 남겼다. 단위 대조가 연산 하나씩만 보는 반면
-이쪽은 **조각이 엮였을 때**를 본다 — 세 결함 전부 그 자리에서 나왔다.
+The integration scenario stayed as `tests/scenario.py`. Where the unit comparisons
+look at one operation at a time, this looks at **the pieces wired together** — all
+three defects came out of that.
 
-### 9. 학습 루프에 필요한 것들 · **완료**
+### 9. What a training loop needs · **done**
 
-"예제로 학습을 돌리려면 DataLoader·옵티마이저·스케줄러는 있어야 하지 않나"에서 출발했다.
-**이름은 다 있었는데 쓰는 법이 달랐다** — 16가지를 재보니 13개가 갈렸다.
+It started from "running a training example needs a DataLoader, an optimiser and a
+scheduler, surely". **The names were all there and the way to use them differed** —
+measuring sixteen things found thirteen divergences.
 
-가장 큰 것은 `param_groups` 였다. torch 에서 학습률을 읽고 쓰는 표준 경로가
-`opt.param_groups[0]["lr"]` 이고 스케줄러도 그것을 고친다. 우리는 `opt.lr` 이었고,
-그러면 **남의 코드가 안 돌고 남의 스케줄러를 못 쓴다.**
+The largest was `param_groups`. torch's standard path for reading and writing the
+learning rate is `opt.param_groups[0]["lr"]`, and the schedulers change it there.
+Ours was `opt.lr`, and then **other people's code does not run and other people's
+schedulers cannot be used.**
 
-그리고 **내 테스트가 그 차이를 덮고 있었다.** StepLR 대조가 torch 는 `param_groups[0]["lr"]`,
-nano 는 `.lr` 로 읽고 있었다 — 양쪽을 같은 식으로 읽지 않으면 검사가 아니라 합리화다.
-지금은 같은 헬퍼로 읽고, **한 값이 아니라 궤적 전체**를 본다.
+And **my own test was covering that difference.** The StepLR comparison read
+`param_groups[0]["lr"]` on torch and `.lr` on nano — reading the two sides
+differently is not a check, it is a rationalisation. They read through one helper
+now, and it looks at **the whole trajectory rather than one value.**
 
-더한 것: `AdamW`·`RMSprop`, 스케줄러 6종(`ReduceLROnPlateau` 포함),
-옵티마이저 `state_dict`(6장의 "이어서 학습하기"가 여기 걸려 있다),
-`WeightedRandomSampler`(5장이 가르치는데 없었다) · `Subset` · `ConcatDataset` ·
-`Generator`(`random_split` 을 고정하는 것) · `sin`/`cos`(10장 위치 인코딩) ·
-`F.mse_loss`·`F.one_hot`.
+What was added: `AdamW` and `RMSprop`, six schedulers (`ReduceLROnPlateau`
+included), the optimiser `state_dict` (chapter 6's "resume training" hangs on it),
+`WeightedRandomSampler` (chapter 5 teaches it and it was missing), `Subset`,
+`ConcatDataset`, `Generator` (what pins `random_split`), `sin` and `cos` (chapter
+10's positional encoding), `F.mse_loss` and `F.one_hot`.
 
-**범위는 교재가 정했다.** 교재·랩이 언급하는 이름을 전부 뽑아 없는 것만 채웠고,
-남은 것은 `amp`·`backends`·`float16` — 전부 GPU 장이고 의도적 거절이다.
+**The textbook decided the range.** Every name the textbook and the labs mention
+was pulled out and only the missing ones filled in; what is left is `amp`,
+`backends` and `float16` — all of them the GPU chapter, and all of them deliberate
+refusals.
 
-### 10. 넓은 표면 · **완료**
+### 10. The wide surface · **done**
 
-흔히 쓰는 144개를 훑으니 **56개(38%)** 뿐이었다. 88개를 채워 100% 가 됐다 —
-수학 원소별 함수, 비교, `split`·`chunk`·`gather`·`flip`·`roll` 같은 모양 조작,
-`topk`·`sort`·`unique`·`cumsum`, 선형대수, `nn.functional` 25종, 활성·손실 층 15종.
+Walking the 144 commonly used ones found only **56 of them (38%).** Filling in 88
+brought it to 100% — elementwise maths, comparisons, shape manipulation such as
+`split`, `chunk`, `gather`, `flip` and `roll`, `topk`, `sort`, `unique` and
+`cumsum`, linear algebra, 25 of `nn.functional`, and 15 activation and loss
+layers.
 
-**이름만 맞추고 끝내지 않았다.** 있는 것을 전부 값으로 대조했고 셋이 갈렸다.
+**Matching the names was not the end of it.** Everything present was compared by
+value and three diverged.
 
-- `median` — torch 는 원소가 짝수일 때 **가운데 둘 중 작은 쪽**을 준다. numpy 는 평균을 낸다
-- `cumsum`·`cumprod` — torch 는 `dim` 이 **필수**다. 기본값을 두면 남의 코드가 다르게 돈다
+- `median` — with an even element count torch gives **the smaller of the middle
+  two.** numpy takes their mean
+- `cumsum` and `cumprod` — torch makes `dim` **required.** Given a default,
+  other people's code runs differently
 
-미분이 정의되지 않는 것들(`sign`·`floor`·`ceil`·`round`)은 기울기를 0 으로 둔다 —
-torch 도 그렇게 한다. 계단 함수의 미분은 거의 모든 곳에서 0 이기 때문이다.
+The ones with no defined derivative (`sign`, `floor`, `ceil`, `round`) get a
+gradient of 0 — torch does the same, because a step function's derivative is 0
+almost everywhere.
 
-### 11. 리뷰 — 넓힌 뒤의 사각지대 · **완료**
+### 11. The review — the blind spot after widening · **done**
 
-88개를 더한 직후의 리뷰다. **값은 맞는데 기울기를 안 본 것**이 다시 나왔다.
+The review immediately after adding the 88. **Right values with the gradient
+unexamined** turned up again.
 
-- `topk`·`sort` 가 **그래프를 끊고 있었다.** 값만 떼어 돌려주니 뽑은 자리로 기울기가
-  안 갔다 — top-k 샘플링이나 정렬을 끼운 손실에서 **학습이 조용히 멈춘다**
-- `no_grad` 안에서 만든 **잎**의 `requires_grad` 를 꺼버렸다. torch 는 켜둔다.
-  그 블록 안에서 만든 파라미터가 학습 대상에서 빠지는 종류의 차이다
+- `topk` and `sort` **were cutting the graph.** Handing back the values alone
+  meant no gradient reached the positions taken — in top-k sampling or in a loss
+  with a sort in it, **training quietly stops**
+- The `requires_grad` of a **leaf** made inside `no_grad` was being turned off.
+  torch leaves it on. It is the kind of difference where a parameter made inside
+  that block drops out of training
 
-커버리지를 재보니 `BatchNorm1d`·`AdaptiveAvgPool2d`·활성 층 4종·`ConcatDataset`·
-`WeightedRandomSampler` 가 **한 번도 안 돌아본 채** 있었다. 전부 통과했지만
-**검사가 없었을 뿐이지 맞다는 근거는 없었다** — BatchNorm2d 가 그렇게 오래 틀려 있었다.
+Measuring the coverage found `BatchNorm1d`, `AdaptiveAvgPool2d`, four activation
+layers, `ConcatDataset` and `WeightedRandomSampler` **never once walked.** They
+all passed, and **there was no evidence they were right beyond there being no
+check** — BatchNorm2d had been wrong that long for that reason.
 
-그리고 "도는가"가 아니라 "맞는가"를 묻게 고쳤다. `WeightedRandomSampler` 는
-길이만 보던 것을 **가중치 큰 쪽이 실제로 더 자주 뽑히는지**로 바꿨다.
+And the questions were changed from "does it run" to "is it right".
+`WeightedRandomSampler` used to be checked on length alone and is now checked on
+**whether the heavier weights really are drawn more often.**
 
 ---
 
-## 로드맵이 비었다
+## The roadmap is empty
 
-여섯 항목이 전부 닫혔다. 다음을 정할 때 참고할 것:
+All the items are closed. What to keep in view when deciding what comes next:
 
-- **커리큘럼이 요구하지 않는 것은 넣지 않는다.** 표면이 늘면 조용히 틀릴 자리가 는다
-- **재보고 적는다.** 4번은 "안 된다"고 적었는데 이미 되고 있었다
-- 남은 자연스러운 후보: `torch.compile` 같은 것 말고, **학습자가 실제로 만나는 것** —
-  `nn.functional` 의 나머지, `Tensor.scatter_`·`gather`, 옵티마이저 몇 종
+- **What the curriculum does not ask for does not go in.** More surface means more
+  places to be quietly wrong
+- **Measure, then write.** Item 4 said "this cannot be done" and it was already
+  working
+- The natural candidates left are not things like `torch.compile` but **what a
+  learner actually meets** — the rest of `nn.functional`, `Tensor.scatter_` and
+  `gather`, a few more optimisers
 
 ---
 
-## 하지 않을 것
+## What will not be done
 
-| | 왜 |
+| | why |
 |---|---|
-| **CUDA · 분산 · 혼합정밀도** | 브라우저에 없다. 흉내 내면 교훈이 사라진다 |
-| **사전학습 가중치** | 받아오는 것 자체가 배울 점이다 |
-| **JIT · `torch.compile`** | 범위 밖 |
-| **속도** | 아래 참고 |
+| **CUDA, distributed, mixed precision** | not in a browser. Imitating them loses the lesson |
+| **pre-trained weights** | fetching them is itself the thing to learn |
+| **JIT and `torch.compile`** | out of range |
+| **speed** | see below |
 
-### 속도 — 실측
+### Speed — measured
 
-처음에 "네이티브 torch 보다 수백 배 느리다"고 적었는데 **재보니 틀렸다.**
-행렬곱은 양쪽 다 BLAS 를 부르고, 작은 텐서에서는 torch 의 디스패처 오버헤드가 더 커서
-오히려 borch 가 빠르다.
+This first said "hundreds of times slower than native torch", and **measuring
+showed that wrong.** Matrix multiplication calls BLAS on both sides, and on small
+tensors torch's dispatcher overhead is the larger cost, so borch is the faster
+one.
 
-| | torch (CPU) | borch (네이티브) | borch (브라우저) |
+| | torch (CPU) | borch (native) | borch (browser) |
 |---|---|---|---|
 | matmul 512² | 0.28ms | 0.13ms | 82.4ms |
-| 작은 연산 50회 | 0.15ms | 0.17ms | 0.74ms |
-| MLP 학습 1스텝 | 0.36ms | 0.18ms | 3.34ms |
-| conv2d 순방향 | 0.22ms | 0.44ms | 1.88ms |
-| conv2d 역방향 | 3.97ms | 1.11ms | 6.49ms |
-| **MNIST CNN 학습 1배치** | — | — | **65.7ms** |
+| 50 small operations | 0.15ms | 0.17ms | 0.74ms |
+| one MLP training step | 0.36ms | 0.18ms | 3.34ms |
+| conv2d forward | 0.22ms | 0.44ms | 1.88ms |
+| conv2d backward | 3.97ms | 1.11ms | 6.49ms |
+| **one MNIST CNN training batch** | — | — | **65.7ms** |
 
-**MNIST CNN 1에폭이 브라우저에서 약 2분이다.** 학습이 실제로 된다.
+**One MNIST CNN epoch is about two minutes in a browser.** Training really
+happens.
 
-느려지는 원인은 구현이 아니라 wasm 이다. Pyodide 의 BLAS 는 wasm 빌드라 SIMD·멀티스레드를
-못 쓰고, 그래서 **큰 행렬곱만 유독 나쁘다**(294×). 실습이 실제로 하는 크기에서는 5~10× 이고,
-그건 체감되지 않는다.
+What makes it slow is wasm rather than the implementation. Pyodide's BLAS is a
+wasm build and cannot use SIMD or multiple threads, so **large matrix
+multiplication alone is unusually bad** (294×). At the sizes the exercises
+actually use it is 5–10×, and that is not felt.
 
-경계선은 **"MNIST 급까지"** 다. CIFAR·ResNet 급은 자기 컴퓨터나 원격 장비이고,
-그것이 8장(GPU)이 가르치는 내용이기도 하다.
+The boundary is **"up to MNIST scale".** CIFAR and ResNet scale belong on your own
+machine or on remote hardware, and that is itself what chapter 8 (GPUs) teaches.
 
-### 빠른 런타임을 목표로 삼지 않는 이유
+### Why a fast runtime is not the goal
 
-빠르게 만들려면 Rust/C++ 로 다시 써서 wasm 으로 컴파일해야 한다.
-그 순간 **읽을 수 있는 교육용 구현**이라는 성질을 잃는다 — 그게 이 프로젝트의 전부인데.
+Making it fast would mean rewriting in Rust or C++ and compiling to wasm. At that
+moment it loses being **a readable educational implementation** — which is the
+whole of this project.
 
-그리고 그 자리에는 이미 ONNX Runtime Web 과 WebGPU 가 있다(추론 전용).
-브라우저에서 진짜로 학습을 돌려야 한다면, 답은 borch 가 아니라 원격 장비다.
+And that spot is already occupied by ONNX Runtime Web and WebGPU (inference only).
+If training really has to run in a browser, the answer is remote hardware rather
+than borch.
 
-**둘 다는 못 가진다.** 읽히는 구현이거나 빠른 런타임이거나.
-borch 는 전자다.
+**You cannot have both.** Either a readable implementation or a fast runtime.
+borch is the former.
 
 ---
 
-## ADR-001: 천장은 자매 라이브러리가 올린다
+## ADR-001: the ceiling is raised by a sister library
 
-- **상태**: 승인
-- **맥락**
+- **status**: accepted
+- **context**
 
-  로드맵 열한 항목이 전부 닫힌 뒤, 다음 수를 정해야 했다. 요구는 **CIFAR·ResNet 급
-  학습을 브라우저에서 돌리는 것**이고, 이는 바로 위 절이 "경계선은 MNIST 급까지"라고
-  적어둔 것과 정면으로 부딪힌다.
+  With all eleven roadmap items closed, the next move had to be decided. The
+  requirement is **running CIFAR and ResNet scale training in a browser**, and
+  that collides head-on with the section just above, which writes down "the
+  boundary is up to MNIST scale".
 
-  재보면 요구 배수가 나온다. 지금 실효 처리량은 MNIST CNN 1에폭 2분에서 역산해
-  **약 3 GFLOPS** 다. CIFAR-10 ResNet-18 은 학습 스텝이 이미지당 약 1.7 GFLOPs,
-  5만 장이면 **에폭당 84 TFLOPs** — 지금 속도로 **7.7시간**이다.
-  에폭 몇 분으로 만들려면 **300배**가 필요하다.
+  Measuring gives the factor required. The effective throughput now, worked back
+  from two minutes per MNIST CNN epoch, is **about 3 GFLOPS.** CIFAR-10 ResNet-18
+  is about 1.7 GFLOPs per image per training step, and at 50,000 images that is
+  **84 TFLOPs per epoch** — **7.7 hours** at this speed. Bringing an epoch down to
+  a few minutes needs **300×.**
 
-  | | 1에폭 |
+  | | one epoch |
   |---|---|
-  | 지금 (3 GFLOPS) | 7.7시간 |
-  | wasm SIMD (×4) | 1.9시간 |
-  | WebGPU 나이브 셰이더 | ~14분 |
-  | WebGPU 튜닝 (~1 TFLOPS) | ~1.4분 |
+  | now (3 GFLOPS) | 7.7 hours |
+  | wasm SIMD (×4) | 1.9 hours |
+  | a naive WebGPU shader | ~14 minutes |
+  | tuned WebGPU (~1 TFLOPS) | ~1.4 minutes |
 
-  wasm SIMD 는 3~5배다. **300배의 1%를 채우고 끝난다.** 즉 이 요구는 GPU 없이는
-  어떤 방법으로도 닿지 않는다.
+  wasm SIMD is 3–5×. **It covers 1% of the 300× and stops there.** Which is to say
+  this requirement is unreachable by any route without a GPU.
 
-- **결정**
+- **decision**
 
-  코어 `borch` 는 **"MNIST 급까지"와 순수 파이썬 17KB 휠을 그대로 유지한다.**
-  천장을 올리는 일은 **별도 배포판**(`borch-webgpu`)이 맡는다.
-  설계는 [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md) 에 있다.
+  The core `borch` **keeps "up to MNIST scale" and the pure-Python 17KB wheel as
+  they are.** Raising the ceiling is **a separate distribution's** job
+  (`borch-webgpu`). The design is in [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md).
 
-- **근거**
+- **rationale**
 
-  - **휠의 성질은 전염된다.** 코어에 백엔드를 넣으면 `py3-none-any` 가 아니게 되고,
-    네이티브에서 진짜 torch 와 대조하는 지금의 검증 경로부터 아키텍처 종속이 된다
-  - **실패 모드가 올라온다.** WebGPU 는 브라우저·드라이버별로 깨진다. 코어에 있으면
-    "문법 연습하러 온 학습자가 드라이버 때문에 import 부터 실패"가 가능해진다
-  - **하네스가 2자에서 3자가 된다.** 그 부담을 T1 100% 를 유지 중인 코어 위에 얹으면
-    100% 가 먼저 깨진다
-  - **약속이 깨진다.** 코어가 파는 것은 "임포트만 바꾸면 같은 코드"다. `device` 개념과
-    비동기 읽기는 그 약속과 양립하지 않는다
+  - **A wheel's properties are contagious.** A backend in the core stops it being
+    `py3-none-any`, and the present verification route — comparing against real
+    torch natively — becomes architecture-dependent first
+  - **The failure modes move upstream.** WebGPU breaks per browser and per driver.
+    In the core, "a learner who came to practise syntax fails at the import
+    because of a driver" becomes possible
+  - **The harness goes from two-way to three-way.** Laying that load on a core
+    holding T1 at 100% breaks the 100% first
+  - **A promise breaks.** What the core sells is "the same code with one import
+    changed". A `device` concept and asynchronous reads are not compatible with
+    that promise
 
-- **대안**
+- **alternatives**
 
-  | 고려한 것 | 왜 안 골랐나 |
+  | what was considered | why it was not chosen |
   |---|---|
-  | 코어에 백엔드를 넣는다 | 위 근거 네 가지 |
-  | libtorch 를 wasm 으로 포팅한다 | person-years 를 들여 표면 1,800개를 사는데, **속도는 못 산다.** 병목이 라이브러리가 아니라 wasm 이라 MKL·FBGEMM 이 없는 곳에서는 옮겨도 빨라지지 않는다 |
-  | 현행 유지 | 천장이 안 올라간다. 요구를 안 푼다 |
+  | put the backend in the core | the four rationale points above |
+  | port libtorch to wasm | person-years buys 1,800 names of surface and **buys no speed.** The bottleneck is wasm rather than the library, so moving it where there is no MKL or FBGEMM does not make it faster |
+  | leave things as they are | the ceiling does not rise. It does not answer the requirement |
 
-- **결과**
+- **consequences**
 
-  - 바로 위 "하지 않을 것 · 속도" 항목은 이제 **코어에 한정된 말**이다
-  - **코어에 `device` 개념·비동기 API·GPU 코드가 들어오면 이 ADR 위반이다.**
-    적어두지 않으면 언젠가 누가 그걸 한다 — 이 문서가 존재하는 이유다
-  - 코어의 다음 할 일은 바뀌지 않는다: 적합성 표 확장, 커버리지 사각지대,
-    그리고 배포(저장소 공개)
+  - The "what will not be done · speed" section just above is now **a statement
+    about the core alone**
+  - **A `device` concept, an asynchronous API or GPU code entering the core is a
+    violation of this ADR.** Left unwritten, somebody eventually does it — which is
+    why this document exists
+  - The core's next tasks are unchanged: widening the conformance table, the
+    coverage blind spots, and shipping (making the repository public)
