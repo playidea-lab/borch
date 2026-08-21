@@ -44,6 +44,15 @@ been left out on the grounds that it does not exist here, and that is exactly th
 hid it: absent from the list reads as zero to review, and absent from *us* while present in
 the list reads as thirty-six to review. The second is the true sentence.
 
+**And the number counts names, not signatures.** `Grayscale` present with the wrong luma
+weights counts the same as `Grayscale`; so does `Pad` present without `padding_mode`. This
+is not hypothetical — measured on the borch.ts side, `MaxPool2d` was present taking
+`(kernel)` alone against the core's `return_indices`, and `InstanceNorm` took `(eps?)`
+against five arguments. **A name comparison finds absent names and cannot find a name that
+lies about what it accepts.** What holds signatures here is the golden cases and the
+arguments they pass, not this count — so quoting "21 of 41" as coverage is quoting the wrong
+number for that question.
+
 ## Filling in this table is dangerous work
 
 **Every name written down raises our percentage.** So the work slides, by its nature,
