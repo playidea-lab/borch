@@ -6694,7 +6694,7 @@ def norm_cases(inp=None):
     cases.append((NORM_PREFIX + "nn.GroupNorm/파라미터 이름",
                   lambda L: " ".join(n for n, _ in L.nn.GroupNorm(3, 3).named_parameters())))
 
-    # ── InstanceNorm. 표본마다·채널마다 따로 정규화한다. ────────────────────
+    # ── InstanceNorm. Normalises separately per sample and per channel. ──
     add("F.instance_norm", lambda L, x: L.nn.functional.instance_norm(x), img)
     for nd, arr in (("1d", seq), ("2d", img), ("3d", vol)):
         chan = arr.shape[1]
@@ -6702,20 +6702,21 @@ def norm_cases(inp=None):
                       lambda L, n=nd, c=chan, a=arr:
                       getattr(L.nn, f"InstanceNorm{n}")(c)(L.tensor(a))))
 
-    # ── RMSNorm. 평균을 안 뺀다 — 그것이 LayerNorm 과의 유일한 차이다. ──────
+    # ── RMSNorm. It does not subtract the mean — the only difference from LayerNorm. ──
     add("F.rms_norm", lambda L, x: L.nn.functional.rms_norm(x, (4,)), img)
     cases.append((NORM_PREFIX + "nn.RMSNorm",
                   lambda L: L.nn.RMSNorm(4)(L.tensor(img))))
 
-    # ── LayerNorm 의 `normalized_shape` 는 **접는 축의 개수**다 ──────────────
+    # ── LayerNorm's `normalized_shape` is **how many axes are folded** ──
     #
-    # 축 하나짜리(`LayerNorm(4)`)로만 재면 "마지막 축을 접는다" 와 답이 같아서 이
-    # 규칙이 안 보인다. 실제로 셋 다 그렇게 적혀 있었고, 결속은 모양을 **통째로**
-    # 버리고 있었다. 축 둘을 주면 평균과 분산이 12 칸에서 나온다.
+    # Measured with a single axis (`LayerNorm(4)`) it gives the same answer as "fold the last
+    # axis", so this rule is invisible. All three really were written that way, and the binding
+    # was discarding the shape **outright.** Give it two axes and the mean and variance come from
+    # 12 slots.
     cases.append((NORM_PREFIX + "nn.LayerNorm(축 하나)",
                   lambda L: L.nn.LayerNorm(4)(L.tensor(img))))
     add("nn.LayerNorm(축 둘)", lambda L, x: L.nn.LayerNorm((4, 4))(x), img)
-    # **모양이 안 맞으면 torch 는 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
+    # **torch stops on a shape that does not fit.** Being lenient folds the wrong axis quietly.
     def layer_norm_mismatch(L):
         try:
             L.nn.LayerNorm((3, 4))(L.tensor(img))
@@ -6724,8 +6725,8 @@ def norm_cases(inp=None):
             return type(exc).__name__
 
     cases.append((NORM_PREFIX + "nn.LayerNorm(모양 불일치)", layer_norm_mismatch))
-    # 파라미터가 붙어야 학습이 간다. `elementwise_affine=False` 면 이름이 통째로
-    # 사라지는데, 그것은 값이 아니라 `state_dict` 열쇠의 이야기다.
+    # A parameter has to be attached for training to move. With `elementwise_affine=False` the
+    # names disappear entirely, and that is a story about `state_dict` keys rather than values.
     cases.append((NORM_PREFIX + "nn.LayerNorm/파라미터 이름",
                   lambda L: " ".join(
                       n for n, _ in L.nn.LayerNorm(4).named_parameters())))
@@ -6734,7 +6735,7 @@ def norm_cases(inp=None):
                       n for n, _ in L.nn.LayerNorm(
                           4, elementwise_affine=False).named_parameters()) or "없음"))
 
-    # ── 전치 합성곱. ───────────────────────────────────────────────────────
+    # ── the transposed convolution. ──
     add("F.conv_transpose1d",
         lambda L, x: L.nn.functional.conv_transpose1d(x, L.tensor(tw1)), seq)
     add("F.conv_transpose2d",
@@ -6749,7 +6750,7 @@ def norm_cases(inp=None):
     add("F.conv_transpose3d",
         lambda L, x: L.nn.functional.conv_transpose3d(x, L.tensor(tw3)), vol)
 
-    # 가중치 쪽 기울기도 본다. **입력 쪽만 보면 축이 뒤집힌 것을 놓친다.**
+    # The weight-side gradient is looked at too. **Looking at the input side alone misses reversed axes.**
     def weight_grad(L):
         w = L.tensor(tw2, requires_grad=True)
         out = L.nn.functional.conv_transpose2d(L.tensor(img), w)
@@ -6770,15 +6771,19 @@ def norm_cases(inp=None):
 
 
 def refusal_case(call):
-    """**torch 는 해내고 우리 셋은 거절하는** 자리의 판정 함수.
+    """The verdict function for places **torch manages and all three of ours refuse.**
 
-    값을 물으면 영원히 갈리므로 "각자 문서대로 굴었는가" 를 묻는다. 우리 쪽은
-    거절 문구가 규격(`브라우저 축소판에 없습니다`)이어야 하고, torch 는 성공해야
-    한다. 이름과 접두어는 부르는 쪽이 짓는다 — 이 규칙만 여기 있다.
+    Asked by value it would part forever, so what is asked is "did each behave as its own
+    documentation says". Our side's refusal wording has to be the specified one (`is not in the
+    browser subset`) and torch has to succeed. The name and prefix are the caller's to write —
+    only this rule lives here.
 
-    **`hasattr` 로는 못 가른다.** 결속은 모듈 `__getattr__` 이 아무 이름에나 답하므로
-    `hasattr(borch_webgpu, "compile")` 이 참이다. 모듈의 `__name__` 은 그 모듈에 박힌
-    것이라 `import borch as torch` 로도 안 바뀐다.
+    The Korean strings this returns are **expected values inside `golden.json`**, not prose. They
+    move only by re-exporting.
+
+    **`hasattr` cannot tell them apart.** The binding's module `__getattr__` answers to any name,
+    so `hasattr(borch_webgpu, "compile")` is true. A module's `__name__` is fixed into that
+    module and does not change under `import borch as torch` either.
     """
     def run(L, f=call):
         real = getattr(L, "__name__", "") == "torch"
@@ -6798,49 +6803,52 @@ CONTAINER_PREFIX = "container::"
 
 
 def container_cases(inp=None):
-    """합성 구조를 뚫고 **파라미터가 보이는가.**
+    """**Are the parameters visible** through a composite structure?
 
-    이 표에서 가장 늦게 생긴 자리이고, 늦은 이유가 이 케이스들의 값어치다.
+    The latest place to arrive in this table, and the reason it was late is what these cases are
+    worth.
 
-    ## 왜 이것이 다른 케이스와 종류가 다른가
+    ## Why this is a different kind from the other cases
 
-    나머지 케이스는 **값**을 묻는다 — `exp` 가 틀리면 숫자가 다르고 바로 보인다.
-    여기서 묻는 것은 **순회**다. `parameters()` 가 어떤 파라미터를 안 내놓으면
-    옵티마이저가 그것을 못 보고, 못 보면 안 갱신하고, 안 갱신해도 **손실은 내려간다**
-    (남은 파라미터가 대신 맞춘다). 예외도 경고도 없다. 이 저장소가 반복해서 잡아온
-    결함의 모양 그대로인데, 그 자리를 여태 아무도 안 물었다.
+    The other cases ask about **values** — a wrong `exp` gives a different number and it shows
+    immediately. What is asked here is **traversal.** If `parameters()` leaves a parameter out,
+    the optimizer does not see it, and not seeing it does not update it, and not updating it
+    **still lets the loss come down** (the remaining parameters compensate). No exception and no
+    warning. Exactly the shape of defect this repository keeps catching, and nobody had asked
+    that place until now.
 
-    ## 어떻게 묻는가 — 이름과 값을 **둘 다**
+    ## How it is asked — **both** the name and the value
 
-    이름만 물으면 등록은 됐는데 갱신이 안 되는 경우를 놓친다. 값만 물으면 이름이
-    `layers.0.weight` 가 아니라 `0.weight` 로 나와도 통과한다 — 그러면
-    `load_state_dict` 가 남의 체크포인트를 못 읽는다.
+    Asking the name alone misses the case where it registers and is not updated. Asking the value
+    alone passes even when the name comes out as `0.weight` rather than `layers.0.weight` — and
+    then `load_state_dict` cannot read somebody else's checkpoint.
 
-    그래서 자리마다 둘을 짝으로 둔다: `named_parameters` 의 **이름 목록**과, SGD 를
-    몇 스텝 돌린 뒤의 **파라미터 값**. 등록이 빠지면 값이 출발점 그대로 남아 갈린다.
+    So each place carries a pair: `named_parameters`'s **list of names**, and the **parameter
+    values** after a few steps of SGD. A missing registration leaves the value at its starting
+    point and parts.
 
-    ## 왜 여기가 비어 있었나
+    ## Why this was empty
 
-    표의 모든 모델이 `nn.Sequential` 로 세워져 있었다. 그것 하나만 물으면 torch 코드가
-    가장 흔히 하는 일 — `nn.Module` 을 상속하고 층을 속성으로 붙이는 것 — 이 한 번도
-    안 걸린다. 실제로 벤치가 진짜 ResNet 을 세우다 `Module.__init__() missing 1
-    required positional argument` 로 멈춰서야 알았다.
+    Every model in the table was built with `nn.Sequential`. Asking about that alone never once
+    catches what torch code most commonly does — subclass `nn.Module` and attach layers as
+    attributes. It came out only when the benchmark tried to build a real ResNet and stopped with
+    `Module.__init__() missing 1 required positional argument`.
     """
     inp = golden_inputs() if inp is None else inp
     xin, yin = inp["train_x"], inp["train_y"]
     w0, b0, w1, b1 = inp["w0"], inp["b0"], inp["w1"], inp["b1"]
-    # 손으로 만드는 선형층용 — `(6, 8)` 로 눕혀 `x @ w` 가 되게 한다. 전치를 케이스
-    # 안에서 하면 그 전치가 틀렸는지 순회가 틀렸는지 못 가른다.
+    # For a hand-built linear layer — laid out as `(6, 8)` so that `x @ w` works. Transposing
+    # inside the case would leave it impossible to tell a wrong transpose from a wrong traversal.
     flat_w = w0.T.copy()
 
     cases = []
 
     def add(name, build, load, forward, want_names):
-        """자리 하나에 **이름·값** 두 케이스를 단다.
+        """Attaches two cases to one place — **name and value.**
 
-        `build(L)` 이 모델을 세우고, `load(L, m)` 이 고정 가중치를 넣고,
-        `forward(L, m, x)` 가 출력을 낸다. 셋을 나눈 것은 컨테이너마다 값을 넣는
-        방법이 다르기 때문이다(`load_state_dict` 가 닿는 자리와 안 닿는 자리).
+        `build(L)` stands the model up, `load(L, m)` puts the fixed weights in, and
+        `forward(L, m, x)` produces the output. They are separated because the way values go in
+        differs per container (places `load_state_dict` reaches and places it does not).
         """
         def names(L):
             m = build(L)
@@ -6854,9 +6862,9 @@ def container_cases(inp=None):
             for _ in range(3):
                 opt.zero_grad()
                 out = forward(L, m, x)
-                # 출력 모양이 자리마다 달라서 손실을 하나로 못 쓴다. 자리마다 다른
-                # 가중치를 곱해 접는다 — 그냥 `sum()` 이면 기울기가 전부 1 이라
-                # 어느 자리가 안 움직였는지가 값에 안 남는다.
+                # The output shape differs per place, so one loss will not do for all. It is
+                # folded with a different weight per place — a plain `sum()` makes every gradient
+                # 1, and then which place did not move leaves no trace in the value.
                 w = L.arange(out.numel()).reshape(out.shape).float()
                 (out * w).sum().backward()
                 opt.step()
@@ -6866,7 +6874,7 @@ def container_cases(inp=None):
         cases.append((CONTAINER_PREFIX + f"{name}/학습",
                       lambda L: dict(trained(L).named_parameters())[want_names]))
 
-    # ── 상속한 Module. **torch 코드가 가장 흔히 하는 일이다.** ────────────────
+    # ── a subclassed Module. **What torch code most commonly does.** ──
     def build_subclass(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -6882,7 +6890,7 @@ def container_cases(inp=None):
         lambda L, m, x: m.fc2(L.relu(m.fc1(x))),
         "fc1.weight")
 
-    # ── ModuleList. 층 수가 변하는 모델이 전부 이것을 쓴다. ──────────────────
+    # ── ModuleList. Every model with a varying layer count uses it. ──
     def build_list(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -6897,8 +6905,9 @@ def container_cases(inp=None):
         lambda L, m, x: m.layers[1](L.relu(m.layers[0](x))),
         "layers.0.weight")
 
-    # **`append` 로 세운 것도 같은 이름이 나와야 한다.** 층 수가 정해지지 않은
-    # 모델을 쓰는 법이 이것뿐이고, 생성자로 넣은 것과 갈리면 그 자리에서 갈린다.
+    # **One built with `append` has to give the same names.** It is the only way to write a
+    # model whose layer count is not fixed, and if it parts from one built through the
+    # constructor, it parts right there.
     def build_appended(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -6915,7 +6924,7 @@ def container_cases(inp=None):
         lambda L, m, x: m.layers[1](L.relu(m.layers[0](x))),
         "layers.1.weight")
 
-    # ── ModuleDict. 이름으로 갈래를 고르는 모델이 쓴다. ─────────────────────
+    # ── ModuleDict. Used by models that select a branch by name. ──
     def build_dict(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -6931,12 +6940,13 @@ def container_cases(inp=None):
         lambda L, m, x: m.blocks["up"](L.relu(m.blocks["down"](x))),
         "blocks.down.weight")
 
-    # ── ParameterList. **여기가 조용히 틀리는 자리다.** ──────────────────────
+    # ── ParameterList. **This is where it goes quietly wrong.** ──
     #
-    # 맨 리스트에 `Parameter` 를 담아 속성으로 붙이면 `__setattr__` 이 그것을
-    # `Parameter` 로도 `Module` 로도 못 알아본다 — 어느 목록에도 안 들어가고,
-    # `parameters()` 가 안 내놓고, 옵티마이저가 못 본다. torch 도 똑같이 못 알아보고
-    # **그래서 `ParameterList` 가 존재한다.** 그것이 없으면 이 자리에 올바른 방법이 없다.
+    # Put `Parameter`s in a bare list and attach it as an attribute, and `__setattr__` recognises
+    # it as neither a `Parameter` nor a `Module` — it goes into no list, `parameters()` does not
+    # produce it, and the optimizer does not see it. torch fails to recognise it in exactly the
+    # same way, and **that is why `ParameterList` exists.** Without it there is no correct way to
+    # do this.
     def build_plist(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -6946,7 +6956,7 @@ def container_cases(inp=None):
         return Net()
 
     add("ParameterList", build_plist,
-        lambda L, m: None,                       # 세울 때 이미 고정값이 들어갔다
+        lambda L, m: None,                       # the fixed values went in at construction
         lambda L, m, x: x @ m.ws[0] + m.ws[1],
         "ws.0")
 
@@ -6964,35 +6974,37 @@ def container_cases(inp=None):
         lambda L, m, x: x @ m.ws["w"] + m.ws["b"],
         "ws.w")
 
-    # ── `state_dict` 의 열쇠. 이름이 갈리면 남의 체크포인트를 못 읽는다. ─────
+    # ── `state_dict`'s keys. A parted name cannot read somebody else's checkpoint. ──
     cases.append((CONTAINER_PREFIX + "상속/state_dict 열쇠",
                   lambda L: " ".join(sorted(build_subclass(L).state_dict()))))
     cases.append((CONTAINER_PREFIX + "ModuleDict/state_dict 열쇠",
                   lambda L: " ".join(sorted(build_dict(L).state_dict()))))
 
-    # **버퍼를 가진 층으로도 물어야 한다.** 위의 둘은 `Linear` 뿐이라 파라미터만 나온다 —
-    # `state_dict` 에는 학습 안 하는 버퍼도 들어가는데, 그 갈래를 한 번도 안 물었다.
-    # 버퍼를 가진 층은 `BatchNorm` 이고, 거기서 갈리면 **평가 모드에서만** 틀리거나
-    # 아예 체크포인트를 못 읽는다. 골든이 안 보던 표면이라 여기 적는다.
+    # **It has to be asked with a layer that has buffers too.** The two above are `Linear` only,
+    # so only parameters come out — a `state_dict` also carries buffers that are not trained, and
+    # that branch had never once been asked. The layer with buffers is `BatchNorm`, and parting
+    # there is wrong **in eval mode only**, or else the checkpoint cannot be read at all. A
+    # surface the golden cases were not looking at, so it is written down here.
     cases.append((CONTAINER_PREFIX + "BatchNorm/state_dict 열쇠",
                   lambda L: " ".join(sorted(L.nn.BatchNorm2d(3).state_dict()))))
 
-    # **`named_parameters` 는 `state_dict` 가 아니다.** 정확히 버퍼만큼 다르다.
-    # 두 목록을 한 줄로 쓰면 버퍼가 파라미터 행세를 하고, 그것을 옵티마이저에 넘기는
-    # 코드가 이동 통계를 학습하려 든다. `Linear` 로만 물으면 둘이 같아서 안 보인다.
+    # **`named_parameters` is not `state_dict`.** It differs by exactly the buffers. Write the
+    # two lists as one line and a buffer passes itself off as a parameter, and code handing that
+    # to an optimizer tries to train the running statistics. Asked with `Linear` alone the two are
+    # equal and it is invisible.
     cases.append((CONTAINER_PREFIX + "BatchNorm/named_parameters 열쇠",
                   lambda L: " ".join(sorted(
                       n for n, _ in L.nn.BatchNorm2d(3).named_parameters()))))
 
-    # ── **버퍼를 가진 자리는 BatchNorm 뿐이 아니다.** ────────────────────────
+    # ── **BatchNorm is not the only place with buffers.** ──
     #
-    # 위의 둘을 고치고 나서 같은 질문을 나머지 버퍼 표면에 그대로 물었다. 한 자리를
-    # 고치고 "버퍼는 봤다" 로 넘어가면, 같은 결함이 남은 자리에 그대로 남는다 —
-    # 이 저장소가 `launch` 를 여섯만 옮기고 여섯을 남겼을 때 겪은 모양이다.
+    # After fixing the two above, the same question was put to the remaining buffer surface. Fix
+    # one place and move on with "buffers are covered" and the same defect stays in the rest — the
+    # shape this repository met when `launch` moved six and left six.
 
-    # `register_buffer` 는 층이 아니라 **사용자가 쓰는 문법**이다. 마스크·위치표·
-    # 정규화 상수를 들고 다니는 모델이 전부 이것을 쓴다. 없으면 그런 모델은
-    # 임포트만 바꿔서는 안 돈다.
+    # `register_buffer` is not a layer but **a syntax the user writes.** Every model carrying a
+    # mask, a positional table or a normalisation constant uses it. Without it, such a model does
+    # not run on an import change alone.
     def buffer_keys(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -7003,7 +7015,7 @@ def container_cases(inp=None):
 
     cases.append((CONTAINER_PREFIX + "register_buffer/state_dict 열쇠", buffer_keys))
 
-    # 등록한 버퍼는 **파라미터가 아니다.** 여기가 갈리면 옵티마이저가 마스크를 학습한다.
+    # A registered buffer is **not a parameter.** Part here and the optimizer trains the mask.
     def buffer_not_param(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -7015,8 +7027,8 @@ def container_cases(inp=None):
     cases.append((CONTAINER_PREFIX + "register_buffer/named_parameters 열쇠",
                   buffer_not_param))
 
-    # `persistent=False` 는 **저장에서 빠진다.** 캐시성 버퍼를 체크포인트에 안 싣는
-    # 자리이고, 이것을 무시하면 남의 체크포인트와 열쇠가 어긋난다.
+    # `persistent=False` **drops out of saving.** It is where a cache-like buffer is kept out of
+    # the checkpoint, and ignoring it puts the keys out of step with somebody else's checkpoint.
     def buffer_nonpersistent(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -7028,29 +7040,29 @@ def container_cases(inp=None):
     cases.append((CONTAINER_PREFIX + "register_buffer(persistent=False)",
                   buffer_nonpersistent))
 
-    # `buffers()`·`named_buffers()` 는 파라미터와 **짝을 이루는 목록**이다.
+    # `buffers()` and `named_buffers()` are **the list that pairs with** the parameters.
     cases.append((CONTAINER_PREFIX + "BatchNorm/named_buffers 열쇠",
                   lambda L: " ".join(sorted(
                       n for n, _ in L.nn.BatchNorm2d(3).named_buffers()))))
 
-    # **`InstanceNorm` 의 기본값은 `BatchNorm` 과 반대다** — `affine=False`,
-    # `track_running_stats=False`. 그래서 기본으로 세우면 열쇠가 하나도 없고,
-    # 켜면 파라미터와 버퍼가 동시에 생긴다. 기본값을 뒤집으면 두 경우가 다 갈린다.
+    # **`InstanceNorm`'s defaults are the opposite of `BatchNorm`'s** — `affine=False`,
+    # `track_running_stats=False`. So built on its defaults it has no keys at all, and switched on
+    # it gains a parameter and a buffer at once. Invert the defaults and both cases part.
     cases.append((CONTAINER_PREFIX + "InstanceNorm(기본)/state_dict 열쇠",
                   lambda L: " ".join(sorted(L.nn.InstanceNorm2d(3).state_dict()))))
     cases.append((CONTAINER_PREFIX + "InstanceNorm(affine)/state_dict 열쇠",
                   lambda L: " ".join(sorted(
                       L.nn.InstanceNorm2d(3, affine=True).state_dict()))))
-    # **아래 셋은 torch 에 있고 우리에게 없다.** 값을 물으면 영원히 갈리므로
-    # "안 된다고 말하는가" 를 묻는다.
+    # **The three below are in torch and not in ours.** Asked by value they would part forever,
+    # so what is asked is "does it say it cannot".
     #
-    # 버퍼만 등록하고 순방향이 안 쓰면 **열쇠는 맞고 값이 틀리는** 더 나쁜 자리로
-    # 옮겨 갈 뿐이다. `track_running_stats=True` 는 평가 모드의 계산이 통째로
-    # 달라지고, 손실의 `weight` 는 `mean` 의 나눗셈이 표본 수가 아니라 **가중치 합**
-    # 으로 바뀐다 — 받아만 두면 손실 값이 조용히 달라진다.
+    # Registering the buffer without the forward pass using it only moves it to the worse place
+    # where **the keys fit and the value is wrong.** `track_running_stats=True` changes the eval
+    # computation outright, and a loss's `weight` turns `mean`'s division from the sample count
+    # into **the sum of the weights** — accepted and ignored, the loss value quietly differs.
     #
-    # 셋 다 `TypeError` 로 막혀 있었다. 그것은 오타를 냈을 때와 같은 화면이라
-    # "이 라이브러리에 없다" 를 안 말해 준다.
+    # All three were blocked with a `TypeError`. That is the same screen as a typo and does not
+    # say "this library does not have it".
     cases.append((CONTAINER_PREFIX + "InstanceNorm(추적)=우리는거절",
                   refusal_case(
                       lambda L: L.nn.InstanceNorm2d(3, track_running_stats=True))))
@@ -7060,7 +7072,7 @@ def container_cases(inp=None):
                   refusal_case(
                       lambda L: L.nn.BCEWithLogitsLoss(pos_weight=L.ones(3)))))
 
-    # 열쇠가 맞아도 **값이 안 건너가면** 소용없다. 버퍼 왕복을 값으로 묻는다.
+    # Keys fitting is no use if **the values do not cross.** The buffer round trip is asked by value.
     def buffer_roundtrip(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -7074,21 +7086,22 @@ def container_cases(inp=None):
 
     cases.append((CONTAINER_PREFIX + "버퍼 값이 왕복한다", buffer_roundtrip))
 
-    # **등록 안 한 텐서 속성은 버퍼가 아니다.**
+    # **A tensor attribute that was not registered is not a buffer.**
     #
-    # torch 는 `self.t = torch.ones(3)` 를 어느 목록에도 안 넣는다 — 파라미터도
-    # 버퍼도 아니고 `state_dict` 에도 안 실린다. 버퍼가 되려면 `register_buffer` 를
-    # 지나야 한다는 것이 그 API 가 있는 이유다.
+    # torch puts `self.t = torch.ones(3)` into no list — neither a parameter nor a buffer, and not
+    # in `state_dict`. That becoming a buffer requires going through `register_buffer` is the
+    # reason that API exists.
     #
-    # 기울기를 받는 잎은 이 물음 밖이다 — 그쪽은 "깃발만 세운 텐서도 파라미터로
-    # 센다" 로 **이미 갈림이 적혀 있고** parity 가 값으로 붙잡고 있다. 여기서 묻는
-    # 것은 기울기를 안 받는, 그래서 버퍼처럼 생긴 속성이다.
+    # A leaf that takes gradients is outside this question — there, **the divergence is already
+    # written down** as "a tensor with only the flag raised counts as a parameter", and parity
+    # holds it by value. What is asked here is an attribute that takes no gradient and therefore
+    # looks like a buffer.
     def unregistered_keys(L):
         class Net(L.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.fc = L.nn.Linear(6, 8)
-                self.plain = L.ones(3)          # 등록 안 했다
+                self.plain = L.ones(3)          # not registered
         return " ".join(sorted(Net().state_dict()))
 
     cases.append((CONTAINER_PREFIX + "등록 안 한 텐서 속성/state_dict 열쇠",
@@ -7104,16 +7117,17 @@ def container_cases(inp=None):
     cases.append((CONTAINER_PREFIX + "등록 안 한 텐서 속성/named_buffers 열쇠",
                   unregistered_buffers))
 
-    # ── `eval()` 이 컨테이너를 **뚫고** 내려가는가. ─────────────────────────
+    # ── does `eval()` go **all the way down** through the containers? ──
     #
-    # 안 내려가면 학습은 멀쩡해 보이고 **추론만 틀린다.** 가장 늦게 발견되는 종류다.
+    # If it does not, training looks fine and **only inference is wrong.** The kind that is found
+    # latest of all.
     #
-    # BatchNorm 으로 묻는다. 갓 세운 것은 `running_mean=0`·`running_var=1` 이라
-    # 평가 모드의 출력이 입력과 거의 같고, 학습 모드는 배치 통계로 정규화해서
-    # 눈에 띄게 다른 값이 된다 — `eval()` 이 안 내려가면 그 차이가 값에 남는다.
+    # Asked with BatchNorm. Freshly built it has `running_mean=0` and `running_var=1`, so the eval
+    # output is nearly the input, while training mode normalises by the batch statistics and gives
+    # a noticeably different value — if `eval()` does not go down, that difference stays in the value.
     #
-    # 원래 `Dropout` 으로 쓰려 했는데 borch.ts 에 없다(난수 커널이 없다). 여기서
-    # 그것을 우회한 것이 아니라, 이 케이스가 묻는 것이 순회이지 Dropout 이 아니다.
+    # `Dropout` was intended at first and borch.ts does not have it (no random kernel). That is not
+    # working around it here; what this case asks about is traversal, not Dropout.
     def eval_through(L):
         class Net(L.nn.Module):
             def __init__(self):
@@ -7133,21 +7147,22 @@ _TRAIN_STEPS = 5
 
 
 def train_cases(inp=None):
-    """**학습이 도는가** — 조각이 엮였을 때를 본다.
+    """**Does training run** — looked at with the pieces wired together.
 
-    단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,
-    코어가 통합 시나리오에서 잡은 결함 셋은 전부 그 자리에서 나왔다.
+    A unit comparison looks at one operation at a time. Some things part only when modules, losses
+    and optimizers are wired together, and all three defects the core caught in integration
+    scenarios came from that place.
 
-    스텝을 적게(5) 두는 것은 의도다. 학습은 차이를 증폭시키므로, 길게 돌리면 무엇이
-    틀렸는지가 아니라 float32 가 갈라진 것을 보게 된다 — T4 는 비목표다.
+    Keeping the step count small (5) is deliberate. Training amplifies differences, so running it
+    long shows float32 having parted rather than what is wrong — T4 is a non-goal.
     """
     inp = golden_inputs() if inp is None else inp
     xin, yin = inp["train_x"], inp["train_y"]
     weights = {"0.weight": inp["w0"], "0.bias": inp["b0"],
                "2.weight": inp["w1"], "2.bias": inp["b1"]}
 
-    # 모멘텀을 **따로 본다.** 모멘텀 없는 SGD 만 보고 있었더니, 버퍼가 첫 스텝에
-    # grad 의 손잡이를 물고 있다가 두 번째 스텝에서 터지는 것을 못 잡았다.
+    # Momentum is **looked at separately.** Looking only at SGD without momentum missed the buffer
+    # holding a handle to grad at the first step and blowing up at the second.
     _OPTS = {"SGD": {}, "SGD(모멘텀)": {"momentum": 0.9}, "Adam": {}, "RMSprop": {}}
 
     def trained(L, opt_name):
@@ -7170,12 +7185,13 @@ def train_cases(inp=None):
     for opt_name in ("SGD", "SGD(모멘텀)", "Adam"):
         cases.append((f"train::{opt_name}/손실",
                       lambda L, o=opt_name: loss_of(L, trained(L, o))))
-        # 가중치까지 본다. 손실만 보면 **파라미터가 안 움직여도** 비슷해 보일 수 있다.
+        # The weights are looked at too. Looking at the loss alone can look similar **even when
+        # the parameters do not move.**
         cases.append((f"train::{opt_name}/0.weight",
                       lambda L, o=opt_name: dict(trained(L, o).named_parameters())["0.weight"]))
 
-    # CNN — 합성곱·풀링이 학습 루프 안에서 엮였을 때. 코어가 잡은 결함 셋이 전부
-    # 이렇게 엮인 자리에서 나왔고, 단위 대조는 그것을 못 봤다.
+    # CNN — convolution and pooling wired into a training loop. All three defects the core caught
+    # came from a place wired like this, and the unit comparison could not see them.
     cnn_x, cnn_y = inp["cnn_x"], inp["cnn_y"]
     cnn_w = {"0.weight": inp["ck"], "0.bias": inp["ckb"],
              "4.weight": inp["fw"], "4.bias": inp["fb"]}
@@ -7199,8 +7215,8 @@ def train_cases(inp=None):
     cases.append(("train::CNN/conv.weight",
                   lambda L: dict(cnn_trained(L).named_parameters())["0.weight"]))
 
-    # 스케줄러는 **파이썬 실수 연산뿐**이라 torch 와 값이 그대로 같아야 한다.
-    # 한 값이 아니라 **궤적 전체**를 본다 — 코어가 그렇게 하다가 StepLR 의 차이를 잡았다.
+    # A scheduler is **Python float arithmetic only**, so its values have to be exactly torch's.
+    # Not one value but **the whole trajectory** — doing that is how the core caught StepLR's difference.
     def lr_traj(L, make, steps=6):
         p = L.tensor([1.0], requires_grad=True)
         opt = L.optim.SGD([p], lr=1.0)
@@ -7233,14 +7249,15 @@ def train_cases(inp=None):
 
     cases.append(("sched::ReduceLROnPlateau", plateau))
 
-    # 순환·트랜스포머 — 가중치를 고정해 넣어야 세 라이브러리가 같은 자리에서 출발한다.
-    # 파라미터 **이름**이 torch 와 같아야 state_dict 로 넣을 수 있다는 것도 여기서 걸린다.
+    # Recurrence and transformers — the weights have to be planted for the three libraries to
+    # start from the same place. That the parameter **names** must match torch's for a state_dict
+    # to load is caught here too.
     seq_x = inp["seq_x"]
 
     def recurrent(L, kind, batch_first=False):
         mod = getattr(L.nn, kind)(3, 4, batch_first=batch_first)
-        # 가중치가 `golden_inputs()` 에서 온다 — 그래야 JSON 으로 나가고 파이썬이
-        # 아닌 구현도 **같은 자리에서 출발**할 수 있다.
+        # The weights come from `golden_inputs()` — that is what sends them out in the JSON so
+        # an implementation that is not Python can **start from the same place.**
         low = kind.lower()
         fixed = {f"{n}_l0": L.tensor(inp[f"{low}_{k}"])
                  for n, k in (("weight_ih", "wih"), ("weight_hh", "whh"),
@@ -7265,12 +7282,12 @@ def train_cases(inp=None):
         return mod(x, x, x, attn_mask=mask(L) if mask else None, need_weights=False)[0]
 
     cases.append(("seq::MultiheadAttention", lambda L: attention(L)))
-    # 인과 마스크는 **실수**다(0/-inf). "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
+    # A causal mask is **float** (0/-inf). Lump it as "non-zero means masked" and it parts here.
     cases.append(("seq::MultiheadAttention(인과 마스크)",
                   lambda L: attention(L, lambda LL: LL.nn.Transformer
                                       .generate_square_subsequent_mask(5))))
 
-    # RMSprop — 옵티마이저 중 유일하게 골든이 안 보던 것
+    # RMSprop — the one optimizer the golden cases were not looking at
     cases.append(("train::RMSprop/0.weight", lambda L: dict(
         trained(L, "RMSprop").named_parameters())["0.weight"]))
     return cases
@@ -7280,14 +7297,15 @@ WEBGPU_PREFIX = "webgpu::"
 
 
 def webgpu_cases(inp=None):
-    """**브라우저 구현에만 있는 것들.**
+    """**The things only the browser implementation has.**
 
-    코어는 이것들을 일부러 거절한다 — 커리큘럼이 안 쓰고, 표면이 늘면 조용히 틀릴
-    자리가 늘기 때문이다. 브라우저 쪽은 헌장이 달라서(성능·실전 모델) 넣는다.
+    The core refuses these deliberately — the curriculum does not use them, and a growing surface
+    grows the places that can be quietly wrong. The browser side has a different charter
+    (performance, real models) and puts them in.
 
-    기대값은 **진짜 torch** 로 굳힌다. 코어는 이 케이스들을 건너뛴다 — 두 구현의
-    범위가 갈리고, 하네스가 그것을 표현해야 한다. 하네스는 `hasattr(lib, "backend")`
-    로 브라우저 쪽을 알아본다.
+    The expected values are frozen with **real torch.** The core skips these cases — the two
+    implementations' scopes diverge and the harness has to express that. The harness recognises
+    the browser side by `hasattr(lib, "backend")`.
     """
     inp = golden_inputs() if inp is None else inp
     seq = inp["seq_x"].transpose(1, 2, 0).copy()          # (N=2, C=3, L=5)
@@ -7322,8 +7340,8 @@ def webgpu_cases(inp=None):
 
     cases.append((WEBGPU_PREFIX + "grad::Upsample", upsample_grad))
 
-    # 3차원 계열. conv3d 의 역방향만 `tf.grad` 를 타서 느리지만, **느린 것은 틀린 것이
-    # 아니다** — 값이 맞는지는 여기서 붙잡고, 느리다는 사실은 코드가 경고로 알린다.
+    # The 3-D family. Only conv3d's backward pass rides `tf.grad` and is slow, and **slow is not
+    # wrong** — whether the value is right is held here, and the code itself warns that it is slow.
     vol = inp["vol5"]
     ck3 = inp["ck3"]
 
@@ -7353,11 +7371,12 @@ def webgpu_cases(inp=None):
         (WEBGPU_PREFIX + "grad::BatchNorm3d", bn3d_grad),
     ]
 
-    # conv3d 를 굳히다가 `tf.pad` 가 랭크 5 에서 **모양만 맞고 값이 깨지는** 것을 잡았다.
-    # 예외를 안 던지므로 부르는 쪽은 아무것도 모른다. conv3d 는 고쳤지만, 같은 함수를
-    # 부르는 자리가 거기만은 아니다 — 자르기의 역방향이 잘려나간 자리를 0 으로 도로
-    # 메울 때 `pad` 를 쓴다. 그 입력이 랭크 5 면 **틀린 기울기가 조용히 나온다.**
-    # 그러니 눈으로 훑어 "없더라" 하지 말고, 걸릴 자리를 세워 두고 물어본다.
+    # Freezing conv3d caught `tf.pad` at rank 5 giving **the right shape with broken values.** It
+    # throws nothing, so the caller knows nothing. conv3d was fixed, and that is not the only place
+    # calling the same function — slicing's backward pass uses `pad` to fill the cut-away region
+    # back with zeros. If that input is rank 5, **a wrong gradient comes out quietly.** So rather
+    # than sweeping by eye and concluding "there is none", a place that would be caught is stood
+    # up and asked.
     def slice5_grad(kind):
         def run(L, k=kind):
             x = L.tensor(vol, requires_grad=True)
@@ -7367,8 +7386,8 @@ def webgpu_cases(inp=None):
                 out = L.unbind(x, 2)[1]
             else:
                 out = L.split(x, 2, dim=3)[0]
-            # 가중치를 다르게 줘야 어느 자리가 0 이어야 하는지가 값으로 드러난다 —
-            # 그냥 sum() 이면 기울기가 전부 1 이라 자리가 뒤바뀌어도 안 걸린다.
+            # The weights have to differ for which slot ought to be 0 to show in the value —
+            # a plain sum() makes every gradient 1, and then swapped slots are not caught.
             (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
             return _grad_of(x, f"랭크5 {k}")
         return run
@@ -7376,12 +7395,13 @@ def webgpu_cases(inp=None):
     for kind in ("narrow", "unbind", "split"):
         cases.append((WEBGPU_PREFIX + f"grad::랭크5 {kind}", slice5_grad(kind)))
 
-    # `pad_sequence` 의 **기울기**. 값은 코어와 자매가 같아서 공용 케이스 4건이 보지만,
-    # 기울기는 자매에만 있다. 코어 쪽은 numpy 로 자리를 메워 맨 텐서를 돌려주므로 그래프가
-    # 끊긴다 — 실측하면 `backward()` 가 "requires_grad 가 아닌 텐서" 라며 거절한다.
-    # 진짜 torch 는 미분되므로 그건 코어의 구멍이고, 이 케이스를 자매 전용으로 둔 것은
-    # 그 구멍을 덮으려는 것이 아니라 **자매가 안 끊는다는 사실을 붙잡아 두려는** 것이다.
-    # (조용히 틀리는 것이 아니라 시끄럽게 거절하는 쪽이라 급한 불은 아니다.)
+    # `pad_sequence`'s **gradient.** The values agree between the core and the sister library, so
+    # the four shared cases see them, and the gradient exists on the sister side only. The core
+    # fills the padding with numpy and hands back a bare tensor, so the graph is cut — measured,
+    # `backward()` refuses with "a tensor that is not requires_grad". Real torch differentiates it,
+    # so that is a hole in the core, and keeping this case sister-only is not there to cover that
+    # hole but **to hold on to the fact that the sister side does not cut.**
+    # (It refuses loudly rather than being quietly wrong, so it is not urgent.)
     def pad_sequence_grad(L):
         a = L.tensor(np.array([[1., 2.], [3., 4.]], dtype=np.float32), requires_grad=True)
         b = L.tensor(np.array([[5., 6.]], dtype=np.float32), requires_grad=True)
@@ -7393,44 +7413,46 @@ def webgpu_cases(inp=None):
     cases += _highrank_battery(HIGH_RANKS, inp)
     cases += _rank_ceiling_cases(CEILING_RANKS, inp)
 
-    # `F.pad` 는 공개 API 로 `tf.pad` 에 닿는 **또 하나의 문**이다. 자르기의 역방향만
-    # 고치고 이쪽을 안 봤더니, 같은 버그가 사용자가 직접 부르는 경로에 그대로 남아 있었다.
-    # 랭크 6 이상은 배터리가 본다. 여기는 그 아래 둘이다.
+    # `F.pad` is **another door** onto `tf.pad` through the public API. Fixing slicing's backward
+    # pass alone and not looking here left the same bug intact on the path a user calls directly.
+    # Rank 6 and above is covered by the battery. These are the two below that.
     for rank, src in (("랭크4", img), ("랭크5", vol)):
         cases.append((WEBGPU_PREFIX + f"F.pad({rank})",
                       lambda L, s=src: L.nn.functional.pad(L.tensor(s), (1, 2))))
-        # 0 이 아닌 값으로도 채운다. 고랭크에서는 0 과 다른 코드가 도므로
-        # (`zeros` 대신 `fill`), 0 만 재면 그쪽은 아무도 안 지나간 채 남는다.
+        # Filled with a value other than 0 too. At high rank a different code path runs for 0
+        # (`fill` rather than `zeros`), so measuring 0 alone leaves that one untravelled.
         cases.append((WEBGPU_PREFIX + f"F.pad({rank}, 값)",
                       lambda L, s=src: L.nn.functional.pad(
                           L.tensor(s), (2, 1, 1, 0), value=-1.5)))
     return cases
 
 
-# 자매가 **torch 와 값이 같다고 주장하는** 랭크. 배터리 전부를 통과해야 여기 든다.
+# The ranks at which the sister library **claims its values equal torch's.** It goes in here only
+# after passing the whole battery.
 HIGH_RANKS = (6,)
-# 그 위. TF.js 커널이 없어 **일부 연산만 거절되는** 구간이라 따로 본다 — 자세한 사정은
-# `_rank_ceiling_cases` 에 적었다.
+# Above that. A band where **only some operations are refused** for want of a TF.js kernel, so it
+# is looked at separately — the details are written in `_rank_ceiling_cases`.
 CEILING_RANKS = (7, 8)
 
 
 def _as_expected(fn):
-    """**torch 는 되고 브라우저 구현은 거절하는** 자리를 골든에 담는 방법.
+    """How to hold a place **torch manages and the browser implementation refuses** in the golden
+    answers.
 
-    골든은 진짜 torch 로 굳는데, 이 자리는 브라우저 쪽이 torch 와 **일부러 다르다.**
-    그래서 값을 물으면 영원히 갈린 채로 남는다. 값 대신 "문서에 적은 대로 굴었는가"를
-    묻는다 — torch 는 성공이, 브라우저 쪽은 거절이 정답이라 양쪽 다 제대로면 같은
-    답이 나온다.
+    The golden answers are frozen with real torch, and here the browser side is **deliberately
+    unlike** torch. So asking by value would leave it parted forever. Instead of the value it asks
+    "did it behave as its documentation says" — success is right for torch and refusal is right
+    for the browser side, so both behaving properly gives the same answer.
 
-    브라우저 쪽이 어느 날 조용히 값을 돌려주기 시작하면 (그 값이 맞든 틀리든) 여기서
-    갈린다. **그 일이 실제로 났다** — TF.js 판을 걷어내니 랭크 7·8 을 거절하던 일곱
-    자리가 전부 값을 냈고, 이 장치가 그것을 일곱 건의 "뜻밖의 성공" 으로 보고했다.
-    그때 한 일은 한계를 **의도적으로** 다시 적는 것이었지 케이스를 지우는 것이 아니었다.
-    저절로 넓어지면 안 된다는 것이 이 함수가 있는 이유다.
+    If the browser side quietly starts returning a value one day (right or wrong), it parts here.
+    **That really happened** — pulling out the TF.js edition made all seven places that refused
+    rank 7 and 8 produce values, and this device reported it as seven "unexpected successes". What
+    was done then was to rewrite the limit **deliberately**, not to delete the cases. That it must
+    not widen of its own accord is why this function exists.
     """
     def run(L):
-        # 밑바닥이 GPU 버퍼라 뷰로 나눠 갖지 않는다. 배정도도 없다. 두 이유가
-        # 여기 모이는 몇 자리를 만든다.
+        # The floor is a GPU buffer, so it is not shared out as views. There is no double
+        # precision either. Those two reasons make the few places that gather here.
         must_reject = hasattr(L, "backend")
         try:
             fn(L)
@@ -7441,22 +7463,23 @@ def _as_expected(fn):
 
 
 def _rank_ceiling_cases(ranks, inp):
-    """랭크 7 이상 — **되는 것과 안 되는 것이 갈리는 구간.**
+    """Rank 7 and above — **the band where what works and what does not part.**
 
-    **이 표는 한 번 갈아엎었다.** 원래는 TF.js 의 천장을 못 박는 자리였다 — 재보니
-    랭크 7 부터 `GPU for rank 7 is not yet supported` 를 던지는데 전부가 아니라
-    일부여서(원소별·permute·reshape 는 돌고 축 축약과 `fill` 이 없다), "랭크 7 은
-    된다"도 "안 된다"도 둘 다 거짓이었다. 그래서 되는 쪽은 값으로, 안 되는 쪽은
-    `_as_expected` 로 거절 자체를 굳혔다.
+    **This table was rebuilt once.** It used to pin TF.js's ceiling — measured, it threw
+    `GPU for rank 7 is not yet supported` from rank 7 up, and not for everything but for some
+    (element-wise, permute and reshape ran; axis reductions and `fill` did not), so "rank 7 works"
+    and "rank 7 does not" were both false. So the working side was frozen by value and the
+    non-working side had the refusal itself frozen through `_as_expected`.
 
-    TF.js 를 걷어내면서 그 천장이 사라졌다. 손으로 쓴 WGSL 에는 랭크 한계가 없고,
-    거절하던 일곱 자리가 **전부 값을 낸다.** 그래서 전부 값으로 다시 적었다 —
-    `_as_expected` 의 주석이 미리 적어둔 그대로다: "TF.js 가 나중에 고랭크 커널을
-    채워도 갈린다. 그때는 한계를 **의도적으로** 다시 적으라는 뜻이지 저절로 넓어지면
-    안 된다."
+    Pulling out TF.js removed that ceiling. Hand-written WGSL has no rank limit, and the seven
+    places that refused **all produce values.** So they were all rewritten by value — exactly as
+    `_as_expected`'s comment had written in advance: "it parts if TF.js later fills in the
+    high-rank kernels. That means rewriting the limit **deliberately** then, and it must not widen
+    of its own accord."
 
-    **거절이 값으로 바뀌는 것은 공짜가 아니다.** 안 던진다는 것과 맞는 값이라는 것은
-    다른 말이고, 예전 표는 앞의 것만 물을 수 있었다. 이제 진짜 torch 의 값과 맞춘다.
+    **A refusal turning into a value is not free.** Not throwing and being the right value are
+    different statements, and the old table could ask only the first. Now it is matched against
+    real torch's value.
     """
     cases = []
     for r in ranks:
@@ -7485,7 +7508,7 @@ def _rank_ceiling_cases(ranks, inp):
             (x * x + x).sum().backward()
             return x.grad
 
-        # TF.js 가 거절하던 셋. 지금은 값을 낸다.
+        # The three TF.js refused. They produce values now.
         cases += [
             (WEBGPU_PREFIX + f"{tag} 합(축)",
              lambda L, a=v, ax=axis: L.tensor(a).sum(dim=ax)),
@@ -7494,14 +7517,16 @@ def _rank_ceiling_cases(ranks, inp):
             (WEBGPU_PREFIX + f"grad::{tag} 원소별", elemwise_grad),
         ]
 
-    # **여기 적힌 이력을 지우지 않는다.** TF.js 시절 경계는 연산 이름에도 입력 랭크에도
-    # 깔끔하게 안 걸렸다 — 랭크 7 은 순방향도 기울기도 되고 랭크 8 은 값은 나오는데
-    # 기울기가 없었다. 그래서 넷을 따로 적었고, 그 자리가 지금은 넷 다 값을 낸다.
+    # **The history written here is not deleted.** The TF.js-era boundary fell cleanly on neither
+    # the operation name nor the input rank — rank 7 worked for both the forward pass and the
+    # gradient, and rank 8 produced a value with no gradient. So four were written down separately,
+    # and all four of those places produce values now.
     #
-    # 처음에는 "랭크 8 을 unbind 하면 결과가 랭크 7 이라 거절될 것"이라고 적었다가
-    # 물어보니 순방향이 통과했다. 앞서 본 실패는 순방향이 아니라 **기울기**의 것이었고,
-    # 나는 실패 이름에 붙은 `grad::` 를 안 읽고 원인을 지어냈다. 짐작으로 경계를 적으면
-    # 그 짐작이 문서가 된다는 것이 이 네 줄이 남은 이유다.
+    # It was written at first as "unbinding a rank 8 gives a rank 7 result, so it will be refused",
+    # and asking showed the forward pass passed. The failure seen earlier had been the **gradient's**
+    # and not the forward pass's, and the `grad::` on the failing name went unread while a cause
+    # was invented. That writing a boundary from a guess turns the guess into documentation is why
+    # these four lines remain.
     v7 = inp["rank7_unbind"]
     v8 = inp["rank8_unbind"]
 
@@ -7531,18 +7556,19 @@ def _is_real_torch(L):
 
 
 def _vision(L):
-    """`L` 에 짝지어지는 torchvision 을 준다 — 진짜 torch 면 **진짜 torchvision** 이다.
+    """Hands back the torchvision that pairs with `L` — for real torch, **real torchvision.**
 
-    이것이 이 표의 값어치다. 우리 변환을 우리 기대값에 대조하면 아무것도 증명 못 한다.
+    That is what this table is worth. Comparing our transforms against our own expectations proves
+    nothing.
     """
     if _is_real_torch(L):
         from torchvision import transforms as real
         return real
     global _BT_VISION
     if _BT_VISION is None:
-        try:                                    # 브라우저에서는 /work 가 경로에 있다
+        try:                                    # in the browser, /work is on the path
             import borchvision as mod
-        except ImportError:                     # 네이티브에서는 저장소 루트를 짚는다
+        except ImportError:                     # natively, point at the repository root
             import importlib.util
             import pathlib
             path = pathlib.Path(__file__).resolve().parent.parent / "borchvision.py"
@@ -7550,14 +7576,14 @@ def _vision(L):
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
         _BT_VISION = mod
-    _BT_VISION.use(L)                           # 어느 라이브러리의 텐서를 만들지는 여기서
+    _BT_VISION.use(L)                           # which library's tensors get built is decided here
     return _BT_VISION.transforms
 
 
 def _pil_position(L, arr):
-    """torchvision 에서 이 자리에 오는 것은 **PIL 이미지**이고, 우리에게는 PIL 이 없어서
-    (H,W,C) 배열이 그 자리를 대신한다. 같은 그림을 각자의 형식으로 준다 — 형식을 맞추지
-    않고 비교하면 그건 대조가 아니라 우연이다."""
+    """What arrives here from torchvision is **a PIL image**, and we have no PIL, so an (H,W,C)
+    array stands in its place. The same picture is given in each side's own format — compared
+    without matching the formats it is not a comparison but a coincidence."""
     if _is_real_torch(L):
         from PIL import Image
         return Image.fromarray(arr)
@@ -7565,17 +7591,19 @@ def _pil_position(L, arr):
 
 
 def _as_tensor(L, arr):
-    """골든은 `.detach().numpy()` 로 값을 꺼낸다. PIL·배열로 나온 것을 그 규격에 맞춘다."""
+    """The golden harness takes values out with `.detach().numpy()`. This brings what came out as
+    a PIL image or an array into that shape."""
     return L.tensor(np.ascontiguousarray(np.asarray(arr, dtype=np.float32)))
 
 
 def vision_cases(inp=None):
-    """`borchvision` — torchvision 의 `transforms` 만.
+    """`borchvision` — torchvision's `transforms` only.
 
-    **무작위 변환은 뽑기를 대조할 수 없다.** torch 의 난수기를 우리가 못 쓰기 때문이다.
-    그래서 확률을 0 이나 1 로 못 박거나, 자를 자리가 하나뿐이게 만들어 **결정적인
-    자리만** 묻는다. 뽑기 자체가 제대로 도는지는 pytest 가 분포로 본다 —
-    여기서 "무작위니까 대조 못 한다"고 넘기면 그게 안 본 것을 봤다고 적는 짓이다.
+    **A random transform's draw cannot be compared.** We cannot use torch's random generator. So
+    the probability is pinned at 0 or 1, or the crop is made to have only one possible position,
+    and **only the deterministic places** are asked. Whether the drawing itself works properly is
+    looked at by pytest as a distribution — passing over it here as "it is random, so it cannot be
+    compared" would be writing down that something unlooked-at was looked at.
     """
     inp = golden_inputs() if inp is None else inp
     img_u8 = inp["vis_u8"]                                       # (H,W,C)
@@ -7597,14 +7625,15 @@ def vision_cases(inp=None):
         return _as_tensor(L, out)
 
     def resize(L, size, interpolation):
-        # **torchvision 의 기본은 안티에일리어싱이 켜진 것이다.** 끈 것과의 차이가
-        # 8×8→4×4 에서 최대 0.0301 이라(실측) 어느 쪽인지 안 정하면 스펙이 빈다.
-        # 우리는 켠 쪽으로 갔고, 그 주장을 여기서 진짜 torchvision 에 대조한다.
-        # **실수 이미지를 쓴다.** uint8 로 하면 순서 때문에 255 가 갈린다 — 진짜
-        # torchvision 은 텐서를 받으므로 `ToTensor` 가 먼저 나눠 주고, 우리 것은
-        # 배열을 받으므로 `Resize` 가 먼저이고 그 결과가 float 이라 `ToTensor` 가
-        # 안 나눈다. 실측으로 최대차 247 이 났고, 그것은 크기 조정이 틀린 것이
-        # 아니라 케이스가 두 파이프라인을 다르게 엮은 것이었다.
+        # **torchvision's default has antialiasing on.** The difference from having it off is
+        # at most 0.0301 going 8×8→4×4 (measured), so leaving it undecided leaves a hole in the
+        # specification. We went with it on, and that claim is compared here against real
+        # torchvision.
+        # **A float image is used.** With uint8 the 255 parts because of the order — real
+        # torchvision takes a tensor so `ToTensor` divides first, and ours takes an array so
+        # `Resize` comes first and its result is float, so `ToTensor` does not divide. Measured, a
+        # max difference of 247 came out, and that was not the resizing being wrong but the case
+        # wiring two pipelines differently.
         T = _vision(L)
         if _is_real_torch(L):
             from torchvision.transforms import InterpolationMode
@@ -7615,22 +7644,23 @@ def vision_cases(inp=None):
         return T.ToTensor()(T.Resize(size, interpolation)(img_f))
 
     def center_crop(L, size):
-        # 자를 크기가 원본보다 큰 갈래를 같이 본다 — torchvision 은 0 으로 채우고,
-        # 거절하면 같은 코드가 두 라이브러리에서 갈린다.
+        # The branch where the crop is larger than the original is looked at alongside —
+        # torchvision pads with 0, and refusing makes the same code part between two libraries.
         T = _vision(L)
         if _is_real_torch(L):
             return T.CenterCrop(size)(_as_tensor(L, T.ToTensor()(img_f)))
         return T.ToTensor()(T.CenterCrop(size)(img_f))
 
     def crop(L, size, padding):
-        # 자를 자리가 **하나뿐**이 되게 크기를 맞춘다. 그래야 뽑기와 무관하게 결정적이다.
+        # The size is set so that there is **only one** place to crop. That makes it deterministic
+        # regardless of the draw.
         T = _vision(L)
         out = T.RandomCrop(size, padding=padding)(_pil_position(L, img_u8))
         return _as_tensor(L, out)
 
     cases = [
-        # ToTensor 의 핵심은 **uint8 일 때만 255 로 나눈다**는 것이다. 실수를 한 번 더
-        # 나누면 예외 없이 255 배 어두워지고 학습만 조용히 안 된다.
+        # ToTensor's crux is that it **divides by 255 only for uint8.** Divide a float once more
+        # and it is 255 times darker with no exception, and only the training quietly fails.
         (VISION_PREFIX + "ToTensor(uint8)", lambda L: _vision(L).ToTensor()(img_u8)),
         (VISION_PREFIX + "ToTensor(실수)", lambda L: _vision(L).ToTensor()(img_f)),
         (VISION_PREFIX + "ToTensor(2차원)", lambda L: _vision(L).ToTensor()(gray)),
@@ -7639,24 +7669,25 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "Flip(p=1)", lambda L: flip(L, 1.0)),
         (VISION_PREFIX + "Flip(p=0)", lambda L: flip(L, 0.0)),
         (VISION_PREFIX + "Crop(패딩없음)", lambda L: crop(L, (5, 4), 0)),
-        # 패딩을 준 뒤 크기를 딱 맞추면 자를 자리가 하나다 — 패딩 자체가 대조된다.
+        # Pad and then size it exactly and there is one place to crop — the padding itself is
+        # what gets compared.
         (VISION_PREFIX + "Crop(패딩1)", lambda L: crop(L, (7, 6), 1)),
-        # 크기 바꾸기. **줄이는 쪽과 늘리는 쪽을 둘 다 본다** — 안티에일리어싱은
-        # 줄일 때만 일하므로 늘리는 케이스만 있으면 그 규칙이 통째로 안 걸린다.
+        # Resizing. **Both shrinking and enlarging are looked at** — antialiasing works only when
+        # shrinking, so with enlarging cases alone that rule is never engaged.
         (VISION_PREFIX + "Resize(줄임·겹선형)", lambda L: resize(L, (4, 3), "bilinear")),
         (VISION_PREFIX + "Resize(늘림·겹선형)", lambda L: resize(L, (11, 9), "bilinear")),
         (VISION_PREFIX + "Resize(짧은변)", lambda L: resize(L, 4, "bilinear")),
         (VISION_PREFIX + "Resize(최근접)", lambda L: resize(L, (4, 3), "nearest")),
-        # **자를 자리가 홀수인 것을 고른다.** 파이썬의 round 는 절반을 짝수로 보내고
-        # JS 는 위로 올린다 — 그 차이로 TypeScript 판이 한 칸 어긋나 최대 0.837 이
-        # 갈렸다(실측). 짝수만 시험하면 그 자리가 통째로 안 걸린다.
+        # **A crop position that is odd is chosen.** Python's round sends a half to the even side
+        # and JS rounds up — that difference put the TypeScript edition one slot out and parted a
+        # maximum of 0.837 (measured). Tested at even sizes only, that place is never engaged.
         (VISION_PREFIX + "CenterCrop(짝수)", lambda L: center_crop(L, (4, 4))),
         (VISION_PREFIX + "CenterCrop(홀수)", lambda L: center_crop(L, (5, 3))),
         (VISION_PREFIX + "CenterCrop(원본보다 큼)", lambda L: center_crop(L, (13, 11))),
     ]
 
-    # 표현(T3). 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을
-    # 하고, 거기서 다르면 학습자는 다른 것을 배운다.
+    # Representation (T3). This project treats `repr` as specification too — the tutorials do
+    # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
         ("ToTensor", lambda T: T.ToTensor()),
         ("Normalize", lambda T: T.Normalize(mean, std)),
@@ -7672,23 +7703,24 @@ def vision_cases(inp=None):
 
 
 def _highrank_battery(ranks, inp):
-    """랭크가 올라갈 때 **어디서 무너지는지** 본다.
+    """Looks at **where it breaks down** as the rank rises.
 
-    처음에는 랭크 6 만 손으로 적었다. 그런데 랭크 5 에서 셋, 랭크 6 에서 하나가
-    나왔고 전부 "고쳤다"고 생각한 다음에 나왔다. 그러니 랭크마다 케이스를 베껴 적는
-    방식은 다음 랭크를 물을 때 또 베끼게 된다 — 랭크를 인자로 받게 만들어 둔다.
+    Rank 6 alone was written by hand at first. Then three came out at rank 5 and one at rank 6, and
+    all of them after "it is fixed" had been concluded. So copying the cases out per rank means
+    copying them again for the next rank — it is built to take the rank as an argument.
 
-    무엇을 묻는가: 값이 통째로 나오는 것부터 묻는다. 스칼라로 줄이면 자리가 뒤바뀌어도
-    합이 같아 통과하기 때문이다. 기울기도 `sum()` 대신 자리마다 다른 가중치를 곱해
-    받는다 — 그냥 `sum()` 이면 기울기가 전부 1 이라 0 이 엉뚱한 자리에 박혀도 안 걸린다.
+    What is asked: the whole value first. Reduced to a scalar, swapped positions give the same sum
+    and pass. The gradient too is taken with a different weight per slot rather than `sum()` — a
+    plain `sum()` makes every gradient 1, and then a 0 nailed into the wrong slot is not caught.
 
-    TF.js 가 정말 못 하는 랭크가 있으면 답은 조용히 틀린 값이 아니라 **거절**이어야
-    하고, 그것도 여기서 드러난다 — 골든은 진짜 torch 로 굳으므로 torch 가 내는 값과
-    다르면 그것이 예외든 틀린 수든 갈린 것으로 잡힌다.
+    If there is a rank TF.js genuinely cannot do, the answer has to be **a refusal** rather than a
+    quietly wrong value, and that surfaces here too — the golden answers are frozen with real
+    torch, so anything differing from torch's value is caught as parted, exception or wrong number
+    alike.
     """
     cases = []
     for r in ranks:
-        # 축이 뒤바뀌면 값보다 **모양**에서 먼저 걸리도록 한 축만 3 으로 둔다.
+        # Exactly one axis is 3 so that a transposed axis is caught by **shape** before value.
         shape = [2] * r
         axis = r // 2
         shape[axis] = 3
@@ -7720,8 +7752,8 @@ def _highrank_battery(ranks, inp):
              lambda L, a=v, ax=axis: L.tensor(a).sum(dim=ax)),
             (WEBGPU_PREFIX + f"{tag} permute",
              lambda L, a=v, p=tuple(reversed(range(r))): L.tensor(a).permute(*p)),
-            # 랭크를 내리는 reshape 과 올리는 reshape 을 둘 다 본다. `_dilate` 때
-            # 걸린 것이 reshape 과 pad 가 붙은 자리였으므로 따로 떼어 묻는다.
+            # Both a rank-lowering and a rank-raising reshape are looked at. What was caught
+            # during `_dilate` was where reshape and pad meet, so it is asked separately.
             (WEBGPU_PREFIX + f"{tag} reshape(내림)",
              lambda L, a=v, s=tuple(shape[:-2]) + (shape[-2] * shape[-1],):
              L.tensor(a).reshape(*s)),
@@ -7746,15 +7778,16 @@ def _pool3d_leaf(L, vol):
 
 FLOW_PREFIX = "flow::"
 
-# **기울기가 흐르는지만 묻는 표.**
+# **A table that asks only whether a gradient flows.**
 #
-# 값만 대조하는 검사는 그래프가 끊긴 것을 못 본다 — 값은 맞기 때문이다. 실제로
-# 자매의 `roll` 과 `masked_select` 가 그렇게 조용히 끊겨 있었고, 골든 746건이 전부
-# 초록인 채였다. 두 라이브러리에 같은 것을 물어 갈리는지 보는 것이 그것을 잡는 길이다.
+# A check that compares values alone cannot see a cut graph — because the value is right. The
+# sister library's `roll` and `masked_select` really were cut that quietly, with all 746 golden
+# cases green. Asking both libraries the same thing and seeing whether they part is the way to
+# catch it.
 #
-# 여기 담긴 것은 **셋 다 흘려야 하는 것들**이다. 흐르지 않는 것(`nonzero`·`quantile`·
-# `argsort`·`signbit` 등)은 값이 모양에 달렸거나 계단이라 torch 도 안 흘리거나,
-# 우리가 일부러 안 넣은 것이라 여기 없다.
+# What is held here is **what all three have to flow.** The ones that do not (`nonzero`,
+# `quantile`, `argsort`, `signbit` and so on) are absent — their value depends on the shape, or
+# they are staircases so torch does not flow either, or we left them out deliberately.
 _FLOW_OPS = (
     "exp", "log", "sqrt", "abs", "sin", "tanh", "sigmoid", "relu", "erf", "erfc",
     "sinc", "sum", "mean", "prod", "norm", "amax", "amin", "nansum", "nanmean",
@@ -7767,10 +7800,11 @@ _FLOW_OPS = (
 
 
 def flow_cases(inp=None):
-    """각 연산이 **기울기를 흘리는가**. 값이 아니라 그 사실을 굳힌다.
+    """Whether each operation **flows a gradient.** That fact is frozen rather than the value.
 
-    `requires_grad` 하나를 문자열로 답한다 — 값을 묻는 다른 표와 겹치지 않게 하고,
-    "흐른다고 했는데 안 흐른다"가 딱 하나의 이유로 갈리게 하기 위해서다.
+    It answers with `requires_grad` alone, as a string — to keep it from overlapping the tables
+    that ask about values, and so that "it said it flows and it does not" parts for exactly one
+    reason.
     """
     vec = np.array([0.5, 2.0, 1.5, 3.0], dtype=np.float32)
     mat = np.arange(1, 10, dtype=np.float32).reshape(3, 3)
@@ -7830,9 +7864,9 @@ def flow_cases(inp=None):
         fn, arr = calls[name]
 
         def run(L):
-            """**두 가지를 함께 답한다.** `requires_grad` 만 물으면 부족하다 —
-            `.float()` 은 True 라고 말해놓고 `.grad` 를 `None` 으로 남겼고, 그 검사만
-            있었으면 통과했을 것이다. 되짚어서 기울기가 실제로 생겼는지까지 본다.
+            """**Two things answered together.** `requires_grad` alone is not enough — `.float()`
+            said True and left `.grad` as `None`, and with only that check it would have passed.
+            It goes backwards and looks at whether a gradient really appeared.
             """
             x = L.tensor(arr, requires_grad=True)
             out = fn(L, x)
@@ -7851,11 +7885,11 @@ NDIM_PREFIX = "ndim::"
 
 
 def ndim_cases(inp=None):
-    """1차원·3차원 계열. **자매에는 있고 코어에는 거절 stub 이던 자리다.**
+    """The 1-D and 3-D family. **Where the sister library had them and the core had a refusing stub.**
 
-    비대칭이 이 프로젝트의 약속과 정면으로 어긋났다 — "임포트만 바꾸면 같은 코드"인데,
-    자매에서 돌던 `nn.Conv1d` 가 코어에서 `BorchError` 로 멈췄다. 이 표가 그
-    비대칭이 다시 벌어지는 것을 막는다.
+    The asymmetry ran straight against this project's promise — "the same code with only the
+    import changed", while `nn.Conv1d` ran on the sister side and stopped with a `BorchError` on
+    the core. This table stops that asymmetry opening again.
     """
     inp = golden_inputs() if inp is None else inp
     seq, k1 = inp["nd_seq"], inp["nd_k1"]
@@ -7882,13 +7916,13 @@ def ndim_cases(inp=None):
     )
     cases = [(NDIM_PREFIX + name, fn) for name, fn, _ in calls]
 
-    # 모듈 쪽. 가중치는 밖에서 넣어 **양쪽이 같은 자리에서 출발**하게 한다 —
-    # 각자 초기화하면 무엇이 갈렸는지가 아니라 초기화가 갈렸는지를 보게 된다.
+    # The module side. The weights go in from outside so that **both start from the same place** —
+    # initialising separately shows whether the initialisation parted rather than what parted.
     def conv1d_module(L):
         m = L.nn.Conv1d(3, 4, 3, padding=1)
-        # **`load_state_dict` 로 넣는다.** `m.weight.data[...] = ndarray` 는 torch 가
-        # 거절한다(`can't assign a numpy.ndarray to a torch.FloatTensor`) — 셋 다
-        # 통하는 길은 이것뿐이고, 마침 이 라이브러리가 맞춰둔 표면이기도 하다.
+        # **Put in through `load_state_dict`.** torch refuses `m.weight.data[...] = ndarray`
+        # (`can't assign a numpy.ndarray to a torch.FloatTensor`) — this is the only path all
+        # three take, and it happens to be the surface this library has aligned.
         m.load_state_dict({"weight": L.tensor(k1),
                            "bias": L.tensor(np.zeros(4, dtype=np.float32))})
         return m(L.tensor(seq))
@@ -7900,17 +7934,18 @@ def ndim_cases(inp=None):
         (NDIM_PREFIX + "nn.BatchNorm3d", lambda L: L.nn.BatchNorm3d(2)(L.tensor(vol))),
         (NDIM_PREFIX + "nn.Upsample",
          lambda L: L.nn.Upsample(scale_factor=2)(L.tensor(img))),
-        # **`mode` 를 받아만 놓고 안 쓰던 자리다.** 겹선형을 달라고 해도 최근접이
-        # 나왔다 — 예외가 아니라 조용히 다른 값이다. 계산은 `F.upsample_bilinear`
-        # 로는 이미 돌고 있었으니, 같은 계산에 이름이 둘인데 한쪽만 되던 꼴이다.
+        # **A place where `mode` was accepted and unused.** Asking for bilinear gave nearest —
+        # not an exception, a quietly different value. The computation already ran through
+        # `F.upsample_bilinear`, so it was one computation under two names with only one working.
         (NDIM_PREFIX + "nn.Upsample(겹선형)",
          lambda L: L.nn.Upsample(scale_factor=2, mode="bilinear")(L.tensor(img))),
-        # **첫 자리는 `size` 다**(torch 가 그렇다). 배율을 첫 자리에 두면 같은 줄이
-        # 늘리는 것과 줄이는 것으로 갈리는데 모양이 그럴듯해 값으로만 걸린다.
-        # **12 는 기본값(배율 2 → 8)과 다른 정수 배수다.** 처음에 8 로 물었는데 입력이 4×4 라
-        # `Upsample(8)` 과 기본값 `scale_factor=2` 가 **같은 답**이었다 — 첫 자리를
-        # 배율로 읽는 구현도 통과했다. 크기와 배율이 갈리는 수로 물어야 묻는 것이 되는데,
-        # **정수 배수여야 한다** — 6 으로 물었더니 1.5 배라 셋 다 거절했다.
+        # **The first position is `size`** (torch has it so). Put the scale factor first and the
+        # same line parts into enlarging and shrinking, with a plausible shape, caught by value alone.
+        # **12 is an integer multiple that differs from the default (scale 2 → 8).** It was asked
+        # as 8 at first, and with a 4×4 input `Upsample(8)` gave **the same answer** as the default
+        # `scale_factor=2` — an implementation reading the first position as a scale factor passed
+        # too. It has to be asked at a number where size and scale part, and **it has to be an
+        # integer multiple** — asked as 6 it is 1.5×, and all three refused.
         (NDIM_PREFIX + "nn.Upsample(첫 자리는 size)",
          lambda L: L.nn.Upsample(12)(L.tensor(img))),
         (NDIM_PREFIX + "nn.AvgPool2d", lambda L: L.nn.AvgPool2d(2)(L.tensor(img))),
@@ -7922,15 +7957,15 @@ def ndim_cases(inp=None):
          lambda L: L.nn.Unflatten(1, (1, 3))(L.tensor(img.reshape(2, 3, 16)))),
     ]
 
-    # 메서드로만 있던 것들의 **함수 형태**. torch 는 둘 다 주는데 코어는 한쪽만
-    # 있었고, 자매와 맞춰보다 드러났다.
+    # The **function form** of things that existed as methods only. torch gives both and the core
+    # had one side, and it surfaced while matching against the sister library.
     mask = np.array([[True, False, True, False]] * 2)
     flat = np.arange(8, dtype=np.float32).reshape(2, 4)
     cases += [
         (NDIM_PREFIX + "torch.matmul",
          lambda L: L.matmul(L.tensor(flat), L.tensor(flat.T.copy()))),
-        # **모양을 튜플 하나로 받는다.** `torch.reshape(x, 4, 2)` 는 torch 가 거절한다 —
-        # 메서드(`x.reshape(4, 2)`)와 함수의 서명이 다르다.
+        # **The shape comes as a single tuple.** torch refuses `torch.reshape(x, 4, 2)` — the
+        # method (`x.reshape(4, 2)`) and the function have different signatures.
         (NDIM_PREFIX + "torch.reshape", lambda L: L.reshape(L.tensor(flat), (4, 2))),
         (NDIM_PREFIX + "torch.unsqueeze", lambda L: L.unsqueeze(L.tensor(flat), 1)),
         (NDIM_PREFIX + "torch.masked_fill",
@@ -7967,7 +8002,7 @@ LINALG_PREFIX = "linalg::"
 
 
 def _eig_holds(L, mat):
-    """`A·V = V·diag(λ)` 인가. **부호에 안 기대는 물음**이라 셋이 같이 답한다."""
+    """Is `A·V = V·diag(λ)`? **A question that does not lean on the sign**, so all three answer together."""
     t = L.tensor(mat)
     w, v = L.linalg.eig(t)
     left = L.matmul(t.cfloat(), v)
@@ -7976,15 +8011,16 @@ def _eig_holds(L, mat):
 
 
 def linalg_cases(inp=None):
-    """선형대수 분해. **양쪽 다 넣었다** — 자매는 CPU 로 읽어와 numpy 로 계산하고,
-    처음 부를 때 한 번 느리다고 경고한다.
+    """Linear-algebra decompositions. **Both sides have them** — the sister library reads back to
+    the CPU and computes with numpy, warning once on the first call that it is slow.
 
-    기울기는 닫힌 꼴이 있는 것만 있다(`det`·`logdet`·`inverse`·`solve`·`cholesky`·
-    `matrix_power`). `qr`·`svd`·`pinverse`·`lstsq` 는 값만 준다 — torch 는 미분하는데
-    우리는 안 한다. 유도가 까다롭고 틀리면 조용히 틀리므로, 없는 것을 시끄럽게 둔다.
+    Gradients exist only where there is a closed form (`det`, `logdet`, `inverse`, `solve`,
+    `cholesky`, `matrix_power`). `qr`, `svd`, `pinverse` and `lstsq` give values only — torch
+    differentiates them and we do not. The derivation is awkward and goes quietly wrong when it is
+    wrong, so their absence is kept loud.
     """
     mat = np.array([[4., 1.], [2., 3.]], dtype=np.float32)
-    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)      # 대칭 양정부호
+    sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)      # symmetric positive definite
     vec = np.array([1., 2.], dtype=np.float32)
 
     cases = [
@@ -8001,20 +8037,22 @@ def linalg_cases(inp=None):
         (LINALG_PREFIX + "solve", lambda L: L.linalg.solve(L.tensor(mat), L.tensor(vec))),
         (LINALG_PREFIX + "matrix_rank",
          lambda L: L.linalg.matrix_rank(L.tensor(mat))),
-        # torch 의 `linalg.lstsq` 는 해 말고도 잔차·랭크를 같이 준다. `.solution` 으로
-        # 물어야 셋이 같은 것을 비교한다 — 우리 것도 그 이름을 갖게 했다.
+        # torch's `linalg.lstsq` returns the residuals and rank alongside the solution. It has to
+        # be asked through `.solution` for the three to compare the same thing — ours was given
+        # that name too.
         (LINALG_PREFIX + "lstsq",
          lambda L: L.linalg.lstsq(L.tensor(mat), L.tensor(vec)).solution),
         (LINALG_PREFIX + "eigh/고윳값", lambda L: L.linalg.eigh(L.tensor(sym))[0]),
-        # `torch.linalg` 이름으로도 닿아야 한다 — 튜토리얼이 그쪽을 쓴다.
+        # It has to be reachable under the `torch.linalg` name too — the tutorials use that side.
         (LINALG_PREFIX + "linalg.det", lambda L: L.linalg.det(L.tensor(mat))),
         (LINALG_PREFIX + "linalg.inv", lambda L: L.linalg.inv(L.tensor(mat))),
         (LINALG_PREFIX + "qr/R", lambda L: L.linalg.qr(L.tensor(mat))[1]),
     ]
 
-    # **부호 규약이 구현마다 다르다.** QR 의 Q 와 SVD 의 U·Vh 는 열 부호를 뒤집어도
-    # 같은 분해이므로 절댓값으로 묻는다 — 부호까지 맞추라고 하면 numpy 와 LAPACK 의
-    # 규약 차이를 재는 것이지 우리 구현을 재는 것이 아니다.
+    # **The sign convention differs per implementation.** QR's Q and SVD's U and Vh are the same
+    # decomposition with a column's sign flipped, so they are asked by absolute value — demanding
+    # the sign match would measure the convention difference between numpy and LAPACK rather than
+    # our implementation.
     cases += [
         (LINALG_PREFIX + "qr/|Q|", lambda L: L.linalg.qr(L.tensor(mat))[0].abs()),
         (LINALG_PREFIX + "svd/|U|", lambda L: L.linalg.svd(L.tensor(mat))[0].abs()),
@@ -8054,8 +8092,8 @@ def linalg_cases(inp=None):
     return cases
 
 
-# 배치·직사각용 입력. **손으로 적는다** — 난수는 특이행렬도 행 교환도 안 만들고,
-# 여기서 재려는 것이 바로 그 두 자리다.
+# Inputs for the batched and rectangular cases. **Written by hand** — a random draw makes neither
+# a singular matrix nor a row swap, and those two places are exactly what is being measured here.
 _LA_BATCH = np.array([[[4., 1.], [2., 3.]],
                       [[2., 0.], [1., 5.]],
                       [[3., -1.], [1., 2.]]], dtype=np.float32)
@@ -8068,43 +8106,44 @@ _LA_BATCH_RHS = np.array([[[1., 0.], [2., 1.]],
                           [[2., 2.], [0., 1.]]], dtype=np.float32)
 _LA_RECT = np.array([[1., 2.], [3., 4.], [5., 7.]], dtype=np.float32)
 _LA_SYM3 = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]], dtype=np.float32)
-# 첫 원소가 두 번째 행보다 작다 → 부분 피벗이 행을 바꾼다. 안 바꾸는 행렬만 물으면
-# pivots 가 항등이라 **1 부터 세는지 0 부터 세는지 구분이 안 된다.**
+# The first element is smaller than the second row's → partial pivoting swaps a row. Asked only
+# with matrices that do not swap, the pivots are the identity and **counting from 1 cannot be told
+# apart from counting from 0.**
 _LA_PIVOT = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
 _LA_SINGULAR = np.array([[1., 2.], [2., 4.]], dtype=np.float32)
 
 
 def linalg_struct_cases(inp=None):
-    """`linalg` 의 **구조** — 배치·직사각·이름·`_ex`·LU.
+    """`linalg`'s **structure** — batching, rectangles, names, `_ex` and LU.
 
-    앞의 `linalg_cases` 는 2 차원 정사각 하나만 묻는다. 그런데 torch 의 `linalg` 는
-    **전부 배치**다: `det((3,2,2))` 이 `(3,)` 을 내고 `inv`·`solve`·`cholesky`·
-    `slogdet`·`matrix_rank` 가 다 그렇다. 한 장만 묻는 골든은 배치를 못 본다.
+    The `linalg_cases` above ask about one 2-D square only. And torch's `linalg` is **batched
+    throughout**: `det((3,2,2))` gives `(3,)`, and so do `inv`, `solve`, `cholesky`, `slogdet` and
+    `matrix_rank`. Golden cases that ask about one sheet cannot see the batching.
 
-    ## 이름으로도 물어야 한다
+    ## It has to be asked by name too
 
-    torch 는 이 결과들을 이름 붙은 튜플로 준다 — `slogdet(A).logabsdet`,
-    `qr(A).Q`, `lu_factor(A).pivots`, `inv_ex(A).info`. 자리로만 맞춰 놓으면 값이
-    맞는데도 교재 코드가 속성 접근에서 멈춘다. `lstsq` 가 `.solution` 으로 이미
-    같은 자리를 겪었다.
+    torch returns these results as named tuples — `slogdet(A).logabsdet`, `qr(A).Q`,
+    `lu_factor(A).pivots`, `inv_ex(A).info`. Matched by position alone, the values are right and
+    textbook code stops at the attribute access. `lstsq` already met the same place through
+    `.solution`.
 
-    ## `_ex` 는 안 던지는 쪽이다
+    ## `_ex` is the side that does not throw
 
-    `inv` 는 특이행렬에서 `LinAlgError` 를 던지고 `inv_ex` 는 `info` 에 0 이 아닌
-    수를 담아 조용히 돌아온다. **둘 다 있어야 한다** — 던지는 쪽이 없으면 특이행렬이
-    NaN 으로 새고, 안 던지는 쪽이 없으면 배치에서 한 장이 특이일 때 전부가 죽는다.
+    `inv` throws a `LinAlgError` on a singular matrix and `inv_ex` returns quietly with a non-zero
+    number in `info`. **Both have to exist** — without the throwing side a singular matrix leaks
+    out as NaN, and without the non-throwing side one singular sheet kills a whole batch.
 
-    ## 피벗은 1 부터 센다
+    ## The pivots count from 1
 
-    `lu_factor` 의 `pivots` 가 LAPACK 규약이라 **1 부터 시작한다.** 교환이 없는
-    행렬에서는 `[1, 2]` 이지 `[0, 1]` 이 아니다. 이것을 0 부터 세면 `lu_solve` 가
-    조용히 다른 답을 낸다 — 그래서 행을 실제로 바꾸는 행렬로도 묻는다.
+    `lu_factor`'s `pivots` follow the LAPACK convention and **start at 1.** On a matrix with no
+    swaps it is `[1, 2]` and not `[0, 1]`. Counted from 0, `lu_solve` quietly gives a different
+    answer — which is why a matrix that really does swap a row is asked too.
     """
     bat, sym, vec = _LA_BATCH, _LA_BATCH_SYM, _LA_BATCH_VEC
     rhs, rect, sym3 = _LA_BATCH_RHS, _LA_RECT, _LA_SYM3
 
     cases = [
-        # ── 배치 ────────────────────────────────────────────────────────
+        # ── batched ──
         (LINALG_PREFIX + "batch::det", lambda L: L.linalg.det(L.tensor(bat))),
         (LINALG_PREFIX + "batch::inv", lambda L: L.linalg.inv(L.tensor(bat))),
         (LINALG_PREFIX + "batch::solve(벡터)",
@@ -8127,15 +8166,16 @@ def linalg_struct_cases(inp=None):
          lambda L: L.linalg.eigh(L.tensor(sym))[0]),
         (LINALG_PREFIX + "batch::pinv", lambda L: L.linalg.pinv(L.tensor(bat))),
         (LINALG_PREFIX + "batch::logdet", lambda L: L.logdet(L.tensor(sym))),
-        # 3×3 도 묻는다 — 2×2 는 야코비 회전이 한 번뿐이라 쓸어담기 반복을 안 지난다.
+        # 3×3 is asked too — a 2×2 has only one Jacobi rotation and never goes through the
+        # sweep iteration.
         (LINALG_PREFIX + "3x3::eigh/값", lambda L: L.linalg.eigh(L.tensor(sym3))[0]),
         (LINALG_PREFIX + "3x3::svd/S", lambda L: L.linalg.svd(L.tensor(sym3))[1]),
         (LINALG_PREFIX + "3x3::det", lambda L: L.linalg.det(L.tensor(sym3))),
         (LINALG_PREFIX + "3x3::inv", lambda L: L.linalg.inv(L.tensor(sym3))),
 
-        # ── 직사각 ──────────────────────────────────────────────────────
-        # 정사각만 되면 `qr`·`svd`·`pinv` 는 쓸 자리의 절반을 못 받는다 —
-        # 최소제곱이 바로 그 절반이다.
+        # ── rectangular ──
+        # Square-only leaves `qr`, `svd` and `pinv` unable to take half the places they are used —
+        # and least squares is exactly that half.
         (LINALG_PREFIX + "rect::qr/R", lambda L: L.linalg.qr(L.tensor(rect))[1]),
         (LINALG_PREFIX + "rect::qr/|Q|",
          lambda L: L.linalg.qr(L.tensor(rect))[0].abs()),
@@ -8155,7 +8195,7 @@ def linalg_struct_cases(inp=None):
                                   ).solution),
     ]
 
-    # ── 이름으로 묻기 ───────────────────────────────────────────────────
+    # ── asking by name ──
     named = (
         ("slogdet.sign", lambda L: L.linalg.slogdet(L.tensor(bat)).sign),
         ("slogdet.logabsdet", lambda L: L.linalg.slogdet(L.tensor(bat)).logabsdet),
@@ -8169,7 +8209,7 @@ def linalg_struct_cases(inp=None):
     )
     cases += [(LINALG_PREFIX + f"name::{n}", f) for n, f in named]
 
-    # ── `_ex` — 던지는 대신 info 를 준다 ────────────────────────────────
+    # ── `_ex` — info instead of a throw ──
     mat2 = np.array([[4., 1.], [2., 3.]], dtype=np.float32)
     ex = (
         ("inv_ex/값", lambda L: L.linalg.inv_ex(L.tensor(mat2)).inverse),
@@ -8192,11 +8232,11 @@ def linalg_struct_cases(inp=None):
     cases += [(LINALG_PREFIX + f"ex::{n}", f) for n, f in ex]
 
     def catches(L):
-        """**`except torch.linalg.LinAlgError` 가 잡는가.**
+        """**Does `except torch.linalg.LinAlgError` catch it?**
 
-        예외의 클래스 이름은 양쪽이 다를 수 있다(진짜 torch 는 `_LinAlgError` 다).
-        이름을 맞추라고 하면 남의 사정을 재는 것이므로, 사용자가 실제로 쓰는 것 —
-        그 이름으로 잡히는지 — 를 묻는다.
+        The exception's class name may differ between the two (real torch's is `_LinAlgError`).
+        Demanding the names match would measure somebody else's business, so what is asked is what
+        a user actually writes — whether it is caught under that name.
         """
         try:
             L.linalg.inv(L.tensor(_LA_SINGULAR))
@@ -8208,7 +8248,7 @@ def linalg_struct_cases(inp=None):
 
     cases.append((LINALG_PREFIX + "ex::inv(특이)가 던지는 것", catches))
 
-    # ── LU — 이미 안에서 구하던 것을 밖으로 ─────────────────────────────
+    # ── LU — bringing out what was already being computed inside ──
     lu_inputs = (("교환없음", mat2), ("교환", _LA_PIVOT))
     for tag, arr in lu_inputs:
         cases += [
@@ -8232,10 +8272,11 @@ def linalg_struct_cases(inp=None):
 
     cases.append((LINALG_PREFIX + "lu::lu_solve(교환)", lu_solve))
 
-    # ── `_ex`·LDL·반사자 ────────────────────────────────────────────────
+    # ── `_ex`, LDL and reflectors ──
     #
-    # `lu_factor_ex` 는 던지는 대신 **`info` 로 알린다.** 0 이면 잘 됐고, `k` 면
-    # `k` 번째 피벗이 0 이다(1 부터 센다). 특이행렬로도 물어야 그 수가 드러난다.
+    # `lu_factor_ex` **reports through `info`** instead of throwing. 0 means it went well and `k`
+    # means the `k`-th pivot is 0 (counting from 1). It has to be asked with a singular matrix too
+    # for that number to show.
     lin4 = np.array([[2.0, 1.0, 0.5, -1.0], [1.0, 3.0, -0.5, 0.25],
                      [0.5, -0.5, 2.5, 0.75], [-1.0, 0.25, 0.75, 4.0]],
                     dtype=np.float32)
@@ -8252,7 +8293,7 @@ def linalg_struct_cases(inp=None):
     cases.append((LINALG_PREFIX + "ex::lu_factor_ex/특이행렬 info",
                   lambda L: L.linalg.lu_factor_ex(L.tensor(singular2)).info))
 
-    # LDL 은 **대칭**에만 뜻이 있다. `lin4` 는 대칭으로 지었다.
+    # LDL means something only on a **symmetric** matrix. `lin4` is built symmetric.
     for field in ("LD", "pivots"):
         cases.append((LINALG_PREFIX + f"ex::ldl_factor/{field}",
                       lambda L, f=field: getattr(
@@ -8268,11 +8309,12 @@ def linalg_struct_cases(inp=None):
 
     cases.append((LINALG_PREFIX + "ex::ldl_solve", ldl_solve))
 
-    # **반사자 꼴 QR.** `geqrf` 가 담고 `householder_product` 가 `Q` 로 편다.
+    # **QR in reflector form.** `geqrf` holds it and `householder_product` unfolds it into `Q`.
     #
-    # **정사각으로도 물어야 한다.** LAPACK 은 대각 아래가 전부 0 이면 반사를 안 하고
-    # (`tau = 0`) 값을 그대로 두는데, 정사각의 마지막 열이 늘 그 자리다. 직사각으로만
-    # 물으면 그 열이 안 나와서, 거기서 부호를 뒤집어도 안 걸린다 — 실제로 그랬다.
+    # **It has to be asked on a square too.** LAPACK does not reflect when everything below the
+    # diagonal is 0 (`tau = 0`) and leaves the values as they are, and a square's last column is
+    # always that place. Asked on rectangles only, that column never comes up, and flipping its
+    # sign there is not caught — which really happened.
     for tag, arr in (("정사각", lin4), ("직사각", rect53)):
         cases.append((LINALG_PREFIX + f"ex::geqrf/{tag}/a",
                       lambda L, a=arr: L.geqrf(L.tensor(a))[0]))
@@ -8285,9 +8327,9 @@ def linalg_struct_cases(inp=None):
 
         cases.append((LINALG_PREFIX + f"ex::householder_product/{tag}", product))
 
-    # ── 배치의 기울기 ───────────────────────────────────────────────────
-    # **값이 맞는데 기울기가 안 맞는 자리가 여기다.** 역방향 식이 `.T` 로 적혀 있으면
-    # 2 차원에서는 맞고 배치에서는 축을 통째로 뒤집어 조용히 틀린다.
+    # ── the batched gradients ──
+    # **This is where the value is right and the gradient is not.** A backward formula written with
+    # `.T` is right in 2-D and, batched, reverses the axes outright and is quietly wrong.
     bgrads = (
         ("det", lambda L, x: L.linalg.det(x), bat),
         ("logdet", lambda L, x: L.logdet(x), sym),
@@ -8331,41 +8373,44 @@ _LA_CUBE = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
 
 
 def linalg_name_cases(inp=None):
-    """`linalg` 의 **조합층** — 있는 것에 이름을 붙이는 자리와, 갈래가 있는 노름.
+    """`linalg`'s **composition layer** — the places that name what already exists, and the norms
+    with branches.
 
-    앞의 둘이 구조였다면 이쪽은 표면이다. 대부분 이미 있는 것의 조합이라 계산이
-    새로 필요한 것은 `matrix_exp` 하나뿐이다. 그래도 **조합이 자명하지 않은 자리**가
-    셋 있다.
+    Where the two above were structure, this is surface. Most of it composes what already exists,
+    so the only one needing new computation is `matrix_exp`. There are still three places where
+    **the composition is not obvious.**
 
-    ## 노름은 갈래가 값을 바꾼다
+    ## A norm's branch changes the value
 
-    `matrix_norm` 의 기본은 프로베니우스인데 `ord=2` 는 최대 특잇값, `nuc` 는 특잇값의
-    합, `1` 은 열 절댓값 합의 최대, `inf` 는 행 쪽이다 — **전부 다른 수**다. 골든이
-    rank 2 인 행렬로 묻는 이유가 그것이다. rank 1 을 주면 프로베니우스·2·핵 노름이
-    우연히 같아져서 셋을 구분 못 한다.
+    `matrix_norm` defaults to Frobenius, and `ord=2` is the largest singular value, `nuc` their
+    sum, `1` the largest column absolute-value sum, and `inf` the row side — **all different
+    numbers.** That is why the golden case asks with a rank-2 matrix. Give it rank 1 and the
+    Frobenius, 2 and nuclear norms happen to coincide, and the three cannot be told apart.
 
-    ## `linalg.diagonal` 은 `torch.diagonal` 과 **기본 축이 다르다**
+    ## `linalg.diagonal`'s **default axes differ** from `torch.diagonal`'s
 
-    `linalg` 쪽은 마지막 두 축을 보고(`dim1=-2, dim2=-1`) `torch` 쪽은 앞의 두 축을
-    본다. 3 차원을 주면 `(2,3,4)` 가 각각 `(2,3)` 과 `(4,2)` 로 갈린다 — 이름이 비슷해
-    같은 것으로 읽기 쉬운데 모양부터 다르다.
+    The `linalg` side looks at the last two axes (`dim1=-2, dim2=-1`) and the `torch` side at the
+    first two. Given a 3-D, a `(2,3,4)` parts into `(2,3)` and `(4,2)` — the names are similar
+    enough to read as the same thing, and even the shape differs.
 
-    ## `eigh` 는 **아래 삼각만 읽는다**
+    ## `eigh` **reads the lower triangle only**
 
-    `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의 답이 같다(실측). 대칭이 아닌 것을 주면
-    위쪽은 무시하고 아래쪽을 거울로 삼는다. 행렬 전체를 보는 구현은 여기서 갈리는데,
-    **대칭을 주는 한 안 드러난다** — 그래서 일부러 안 대칭인 것을 묻는다.
+    `[[4,99],[1,3]]` and `[[4,1],[1,3]]` give the same answer (measured). Give it something
+    non-symmetric and it ignores the upper part and mirrors the lower. An implementation reading
+    the whole matrix parts here, and **it stays hidden as long as symmetric input is given** — so
+    a deliberately non-symmetric one is asked.
     """
     mat, rect, sym3 = _LA_MAT, _LA_RECT, _LA_SYM3
     vec3, upper, cube = _LA_VEC3, _LA_UPPER, _LA_CUBE
     sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
-    skew = np.array([[4., 99.], [1., 3.]], dtype=np.float32)   # 아래 삼각만 읽어야
-    # `eig` 용. 회전은 **실수 고윳값이 없고**(±i), 일반은 셋 다 실수인데 대칭이 아니다.
+    skew = np.array([[4., 99.], [1., 3.]], dtype=np.float32)   # the lower triangle only should be read
+    # For `eig`. The rotation has **no real eigenvalues** (±i), and the general one has three real
+    # ones while not being symmetric.
     rot = np.array([[0., -1.], [1., 0.]], dtype=np.float32)
     gen = np.array([[4., 1., 2.], [0., 3., -1.], [1., 0., 2.]], dtype=np.float32)
 
     cases = [
-        # ── 이미 있는 것에 이름 붙이기 ──────────────────────────────────
+        # ── naming what already exists ──
         (LINALG_PREFIX + "name2::matmul",
          lambda L: L.linalg.matmul(L.tensor(mat), L.tensor(mat))),
         (LINALG_PREFIX + "name2::vecdot",
@@ -8381,39 +8426,43 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.eigvalsh(L.tensor(sym))),
         (LINALG_PREFIX + "name2::eigvalsh(3x3)",
          lambda L: L.linalg.eigvalsh(L.tensor(sym3))),
-        # **아래 삼각만 읽는가.** 위쪽에 99 를 넣어도 답이 안 바뀌어야 한다.
+        # **Does it read the lower triangle only?** Putting 99 in the upper part must not change the answer.
         (LINALG_PREFIX + "name2::eigvalsh(아래삼각만)",
          lambda L: L.linalg.eigvalsh(L.tensor(skew))),
         (LINALG_PREFIX + "name2::eigh(아래삼각만)/값",
          lambda L: L.linalg.eigh(L.tensor(skew))[0]),
 
-        # ── `eig` — 대칭이 아닌 것도 받는다 ──────────────────────────────
+        # ── `eig` — it takes non-symmetric matrices too ──
         #
-        # `eigh` 와 나란히 있지만 다른 함수다. 저쪽은 대칭만 받고 한쪽 삼각만 읽으며
-        # 답이 실수인데, 이쪽은 아무 정사각 행렬이나 받고 **답이 늘 복소수**다 —
-        # 회전 행렬처럼 실수 고윳값이 아예 없는 것이 있기 때문이다.
+        # It sits beside `eigh` and is a different function. That one takes symmetric matrices only,
+        # reads one triangle, and gives a real answer; this one takes any square matrix and **its
+        # answer is always complex** — because some, like a rotation matrix, have no real
+        # eigenvalues at all.
         #
-        # **차례에 안 기대는 것만 굳힌다.** LAPACK 이 고윳값 차례를 안 정하고
-        # 브라우저의 numpy 는 다른 LAPACK 이다. 그리고 torch 는 **복소수를 정렬
-        # 못 하므로**(실측) 정렬로도 못 피한다 — 대칭함수로 접는다.
+        # **Only what does not lean on the order is frozen.** LAPACK does not fix the eigenvalue
+        # order and the browser's numpy is a different LAPACK. And torch **cannot sort complex
+        # numbers** (measured), so sorting is no escape either — it is folded through symmetric
+        # functions.
         (LINALG_PREFIX + "eig::eigvals(회전)/크기",
          lambda L: L.linalg.eigvals(L.tensor(rot)).abs().sort().values),
         (LINALG_PREFIX + "eig::eigvals(비대칭)/크기",
          lambda L: L.linalg.eigvals(L.tensor(gen)).abs().sort().values),
         (LINALG_PREFIX + "eig::eigvals(대칭이어도 복소수형)",
          lambda L: str(L.linalg.eigvals(L.tensor(sym)).dtype)),
-        # **합은 대각합이다.** 차례와 무관하고, 값이 맞는지를 수학으로 묻는다 —
-        # 고윳값을 아무렇게나 내는 구현은 크기 정렬은 통과해도 여기서 걸린다.
+        # **The sum is the trace.** Independent of the order, and it asks by mathematics whether
+        # the values are right — an implementation producing eigenvalues in any order passes a
+        # magnitude sort and is caught here.
         (LINALG_PREFIX + "eig::eigvals(비대칭)/합=대각합",
          lambda L: (f"{float(L.linalg.eigvals(L.tensor(gen)).sum().real):.4f} "
                     f"{float(L.tensor(gen).trace()):.4f}")),
-        # **고유벡터는 못 굳힌다** — 부호가 안 정해진다(torch 자신도 float32 와
-        # float64 에서 반대 부호를 낸다, 실측). 대신 **정의를 묻는다**: `A·V` 와
-        # `V·diag(λ)` 가 같은가. 부호가 뒤집혀도 양쪽이 같이 뒤집혀 답이 안 변한다.
+        # **The eigenvectors cannot be frozen** — their sign is undetermined (torch itself gives
+        # opposite signs in float32 and float64, measured). **The definition is asked** instead:
+        # are `A·V` and `V·diag(λ)` equal. A flipped sign flips both sides together and the answer
+        # does not change.
         (LINALG_PREFIX + "eig::eig(정의를 지키나)",
          lambda L: _eig_holds(L, gen)),
 
-        # ── 축이 갈리는 자리 ────────────────────────────────────────────
+        # ── where the axes part ──
         (LINALG_PREFIX + "name2::linalg.diagonal",
          lambda L: L.linalg.diagonal(L.tensor(cube))),
         (LINALG_PREFIX + "name2::torch.diagonal(다른 축)",
@@ -8421,7 +8470,7 @@ def linalg_name_cases(inp=None):
         (LINALG_PREFIX + "name2::linalg.diagonal(offset)",
          lambda L: L.linalg.diagonal(L.tensor(mat), offset=1)),
 
-        # ── 노름의 갈래 ────────────────────────────────────────────────
+        # ── the norm's branches ──
         (LINALG_PREFIX + "name2::vector_norm",
          lambda L: L.linalg.vector_norm(L.tensor(vec3))),
         (LINALG_PREFIX + "name2::vector_norm(행렬을 통째로)",
@@ -8447,7 +8496,7 @@ def linalg_name_cases(inp=None):
                       lambda L, p=pv: L.linalg.cond(L.tensor(mat), p)))
 
     cases += [
-        # ── 조합이 한 줄이 아닌 것들 ────────────────────────────────────
+        # ── the ones whose composition is not one line ──
         (LINALG_PREFIX + "name2::multi_dot",
          lambda L: L.linalg.multi_dot([L.tensor(mat), L.tensor(mat), L.tensor(mat)])),
         (LINALG_PREFIX + "name2::multi_dot(둘)",
@@ -8464,7 +8513,7 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.solve_triangular(
              L.tensor(np.array([[2., 0.], [1., 3.]], dtype=np.float32)),
              L.tensor(np.array([[1.], [2.]], dtype=np.float32)), upper=False)),
-        # **대각을 안 본다.** 안 지키면 값이 조용히 달라지는 갈래다.
+        # **It does not look at the diagonal.** Break that and it is a branch whose value quietly differs.
         (LINALG_PREFIX + "name2::solve_triangular(단위대각)",
          lambda L: L.linalg.solve_triangular(
              L.tensor(upper), L.tensor(np.array([[1.], [3.]], dtype=np.float32)),
@@ -8477,9 +8526,9 @@ def linalg_name_cases(inp=None):
          lambda L: L.linalg.tensorinv(
              L.tensor(np.eye(4, dtype=np.float32).reshape(2, 2, 2, 2)), ind=2)),
 
-        # ── 닫힌 식이 없는 것 하나 ──────────────────────────────────────
-        # **스케일링과 제곱이 필요하다.** 테일러만으로는 큰 행렬에서 안 모인다 —
-        # `A*5` 의 답이 4.8e+10 이라 항이 커지는 쪽이 먼저 넘친다.
+        # ── the one with no closed form ──
+        # **Scaling and squaring are needed.** Taylor alone does not converge on a large matrix —
+        # `A*5`'s answer is 4.8e+10, so the growing terms overflow first.
         (LINALG_PREFIX + "name2::matrix_exp(멱영)",
          lambda L: L.linalg.matrix_exp(
              L.tensor(np.array([[0., 1.], [0., 0.]], dtype=np.float32)))),
@@ -8498,34 +8547,35 @@ def linalg_name_cases(inp=None):
 
 
 def linalg_grad_cases(inp=None):
-    """**분해의 기울기.** torch 는 이것들을 전부 미분하는데 우리는 값만 냈다.
+    """**The decompositions' gradients.** torch differentiates all of these and we produced values only.
 
-    오래 안 넣은 이유가 있었다 — 유도가 까다롭고 틀리면 조용히 틀린다. 값은 맞고
-    학습만 미묘하게 갈리는 종류다. 그래서 골든이 있는 것이고, 여기서는 골든이
-    바로 그 일을 한다: **진짜 torch 가 낸 수와 자리마다 맞춘다.**
+    There was a reason they went so long unwritten — the derivation is awkward and goes quietly
+    wrong when it is wrong. The kind where the value is right and only the training parts subtly.
+    That is what the golden answers are for, and here they do exactly that job: **matched slot by
+    slot against the numbers real torch produced.**
 
-    ## 안전한 둘과 미묘한 셋
+    ## Two safe ones and three subtle ones
 
-    특잇값과 고윳값은 각각 `U diag(ḡ) Vᵀ` 와 `V diag(ḡ) Vᵀ` 로 끝난다 — 겹침 문제가
-    없고 유도가 한 줄이다.
+    The singular values and the eigenvalues end at `U diag(ḡ) Vᵀ` and `V diag(ḡ) Vᵀ` — no
+    degeneracy problem and a one-line derivation.
 
-    나머지 셋은 다르다. **고유벡터**는 `1/(λᵢ-λⱼ)` 가 들어가서 고윳값이 겹치면
-    터진다(torch 도 같이 터진다 — 흉내가 아니라 같은 한계다). **QR** 은 아래삼각을
-    거울로 접는 자리의 규약이 갈리기 쉽고, **유사역행렬**은 항이 셋이라 하나를
-    빠뜨려도 정사각에서는 맞고 직사각에서만 틀린다. 그래서 셋 다 **직사각으로도**
-    묻는다.
+    The other three are different. **The eigenvectors** carry a `1/(λᵢ-λⱼ)` and blow up when
+    eigenvalues coincide (torch blows up alongside — not an imitation but the same limit). **QR**
+    has a convention that parts easily where the lower triangle is mirrored, and **the
+    pseudo-inverse** has three terms, so leaving one out is right on a square and wrong only on a
+    rectangle. So all three are asked **on rectangles too.**
 
-    ## 행렬 지수는 자기 자신으로 미분한다
+    ## The matrix exponential differentiates through itself
 
-    `e^A` 의 프레셰 도함수는 블록 행렬 하나로 나온다 — `expm([[Aᵀ, Ḡ],[0, Aᵀ]])` 의
-    오른쪽 위가 답이다. 근사가 아니라 항등식이라, 순방향에 쓴 급수를 그대로 다시
-    쓰면 기울기가 따라온다.
+    `e^A`'s Fréchet derivative comes out of a single block matrix — the upper right of
+    `expm([[Aᵀ, Ḡ],[0, Aᵀ]])` is the answer. An identity rather than an approximation, so reusing
+    the series from the forward pass brings the gradient with it.
     """
     mat, rect, sym3 = _LA_MAT, _LA_RECT, _LA_SYM3
     sym = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
 
     grads = (
-        # 안전한 둘.
+        # The two safe ones.
         ("svdvals", lambda L, x: L.linalg.svdvals(x), mat),
         ("svd/S", lambda L, x: L.linalg.svd(x)[1], mat),
         ("svd/S(직사각)",
@@ -8533,16 +8583,17 @@ def linalg_grad_cases(inp=None):
         ("eigvalsh", lambda L, x: L.linalg.eigvalsh(x), sym),
         ("eigh/값", lambda L, x: L.linalg.eigh(x)[0], sym),
         ("eigh/값(3x3)", lambda L, x: L.linalg.eigh(x)[0], sym3),
-        # 미묘한 셋.
+        # The three subtle ones.
         #
-        # **고유벡터는 제곱해서 묻는다.** 열 부호를 뒤집어도 같은 고유분해라 어느
-        # 쪽을 고를지는 구현이 정하고, 야코비 회전과 LAPACK 이 실제로 다르게 고른다.
-        # 값 케이스는 절댓값으로 물어서 그 차이를 덮고 있었는데, 기울기는 부호에
-        # 민감해서 그대로 드러났다(2×2 에서 정확히 부호만 뒤집혀 나왔다).
+        # **The eigenvectors are asked squared.** Flipping a column's sign is the same
+        # eigendecomposition, so which one is chosen is the implementation's to decide, and Jacobi
+        # rotations and LAPACK really do choose differently. The value cases ask by absolute value
+        # and were covering that difference, and the gradient is sign-sensitive so it came straight
+        # out (on a 2×2, exactly the sign was reversed).
         #
-        # `V∘V` 는 부호를 뒤집어도 그대로다. 그래서 이 손실의 기울기는 **부호 규약과
-        # 무관하게 정해진다** — 양쪽이 같은 답을 낼 수 있는 질문으로 바꾼 것이지,
-        # 어려워서 피한 것이 아니다. dropout 을 성질로 물은 것과 같은 자리다.
+        # `V∘V` is unchanged by a flipped sign. So this loss's gradient is **determined regardless
+        # of the sign convention** — the question was changed into one both sides can answer, not
+        # dodged for being hard. The same place as asking dropout by property.
         ("eigh/벡터²", lambda L, x: L.linalg.eigh(x)[1] ** 2, sym),
         ("eigh/벡터²(3x3)", lambda L, x: L.linalg.eigh(x)[1] ** 2, sym3),
         ("qr/R", lambda L, x: L.linalg.qr(x)[1], mat),
@@ -8550,10 +8601,10 @@ def linalg_grad_cases(inp=None):
         ("qr/R(직사각)", lambda L, x: L.linalg.qr(x)[1], rect),
         ("qr/Q(직사각)", lambda L, x: L.linalg.qr(x)[0], rect),
         ("pinv", lambda L, x: L.linalg.pinv(x), mat),
-        # **직사각이 진짜 시험이다.** 정사각에서는 빠뜨린 항이 0 이 되어 안 드러난다.
+        # **The rectangle is the real test.** On a square the missing term becomes 0 and does not show.
         ("pinv(직사각)", lambda L, x: L.linalg.pinv(x), rect),
         ("pinv(3x3)", lambda L, x: L.linalg.pinv(x), sym3),
-        # 자기 자신으로 미분하는 것.
+        # The one that differentiates through itself.
         ("matrix_exp", lambda L, x: L.linalg.matrix_exp(x), mat),
         ("matrix_exp(3x3)", lambda L, x: L.linalg.matrix_exp(x), sym3),
         ("matrix_exp(작은 값)", lambda L, x: L.linalg.matrix_exp(x), mat * 0.1),
@@ -8569,8 +8620,8 @@ def linalg_grad_cases(inp=None):
             return _grad_of(x, n)
         cases.append((LINALG_PREFIX + f"grad2::{name}", run))
 
-    # 값과 기울기를 **한 번에** 묻는 자리 하나. 분해를 쓰고 그 위에 손실을 얹는
-    # 모양이 실제 코드가 하는 일이고, 조각으로 물으면 이어 붙는지를 못 본다.
+    # One place asking value and gradient **together.** Using a decomposition and putting a loss
+    # over it is what real code does, and asked in pieces there is no seeing whether they join up.
     def chained(L):
         x = L.tensor(mat, requires_grad=True)
         s = L.linalg.svdvals(x)
@@ -8591,24 +8642,25 @@ _INPLACE_UNARY = ("abs_", "sqrt_", "exp_", "log_", "sin_", "cos_", "tan_", "tanh
 
 
 def inplace_cases(inp=None):
-    """제자리 연산. **두 구현이 일부러 갈리는 자리다.**
+    """In-place operations. **Where the two implementations part deliberately.**
 
-    갈리는 것은 하나뿐이다 — 뷰를 통한 전파. torch 와 코어는 저장소를 공유해서
-    `b = a.view(2,2); b.add_(10)` 이 `a` 까지 바꾸고, 브라우저 쪽은 GPU 버퍼를 뷰로
-    나눠 갖지 않아 그럴 수 없어 거절한다. (TF.js 판일 때도 결론이 같았는데 이유는
-    달랐다 — 그쪽은 텐서가 불변이었다.) 나머지(자기 자신 고치기)는 양쪽이 같다.
+    Only one thing parts — propagation through a view. torch and the core share storage, so
+    `b = a.view(2,2); b.add_(10)` changes `a` too, and the browser side does not share out GPU
+    buffers as views and cannot, so it refuses. (The conclusion was the same in the TF.js edition
+    for a different reason — there the tensors were immutable.) The rest, editing itself, is the
+    same on both sides.
 
-    그 갈림을 여기서 못 박는다. 브라우저 쪽이 어느 날 조용히 값을 돌려주기 시작하면
-    (그 값이 맞든 틀리든) 빌드가 깨진다.
+    That divergence is pinned here. If the browser side quietly starts returning a value one day
+    (right or wrong), the build breaks.
     """
     plain = np.array([1., 4., 9., 2.], dtype=np.float32)
-    small = np.array([0.5, 0.8, 0.3, 0.9], dtype=np.float32)   # 정의역이 좁은 것들용
+    small = np.array([0.5, 0.8, 0.3, 0.9], dtype=np.float32)   # for the ones with a narrow domain
 
     def run(name, call, arr):
         def go(L, f=call, a=arr):
             x = L.tensor(a.copy())
             f(x)
-            return x               # **되돌려받은 것이 아니라 원본을 본다**
+            return x               # **looks at the original, not at what came back**
         return (INPLACE_PREFIX + name, go)
 
     cases = [
@@ -8618,13 +8670,13 @@ def inplace_cases(inp=None):
         run("mul_", lambda x: x.mul_(2), plain),
         run("div_", lambda x: x.div_(2), plain),
         run("pow_", lambda x: x.pow_(2), plain),
-        # `neg_` 는 인자가 없어서 아래 `_INPLACE_UNARY` 루프가 만든다. 여기 한 번 더
-        # 있었고, 이름이 같아 루프 것이 이것을 덮고 있었다.
+        # `neg_` takes no argument and is built by the `_INPLACE_UNARY` loop below. It was here a
+        # second time, and having the same name, the loop's was covering this one.
         run("zero_", lambda x: x.zero_(), plain),
         run("fill_", lambda x: x.fill_(7), plain),
         run("clamp_", lambda x: x.clamp_(2, 5), plain),
         run("clip_", lambda x: x.clip_(2, 5), plain),
-        # **이어 부르기가 진짜 시험이다.** 되돌려준 것이 자기 자신이어야 이어진다.
+        # **Chaining is the real test.** What comes back has to be itself for a chain to work.
         run("이어 부르기", lambda x: x.mul_(2).add_(1).clamp_(0, 10), plain),
     ]
     for name in _INPLACE_UNARY:
@@ -8632,7 +8684,7 @@ def inplace_cases(inp=None):
                                 "sqrt_", "rsqrt_", "log1p_") else plain
         cases.append(run(name, lambda x, n=name: getattr(x, n)(), arr))
 
-    # 뷰 전파 — **브라우저 쪽만 거절한다.**
+    # View propagation — **the browser side alone refuses.**
     def view_propagates(L):
         a = L.arange(4).float()
         a.view(2, 2).add_(10)
@@ -8641,15 +8693,15 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "뷰 전파=브라우저는거절",
                   _as_expected(view_propagates)))
 
-    # **같은 뿌리에서 나오는 둘째 갈림.** 뷰가 없으면 비연속이 될 자리도 없어서
-    # `is_contiguous()` 가 브라우저에서 늘 참이다. 코어는 numpy 가 전치를 뷰로 주므로
-    # torch 처럼 거짓이 된다.
+    # **A second divergence from the same root.** With no views there is nowhere to become
+    # non-contiguous, so `is_contiguous()` is always true in the browser. The core is false as
+    # torch is, because numpy gives a transpose as a view.
     #
-    # 거절이 아니라 **다른 값**이라 `_as_expected` 로는 못 담는다 — 어느 쪽인지를
-    # 값으로 답한다. `from_numpy` 의 공유와 같은 꼴이다.
+    # It is **a different value** rather than a refusal, so `_as_expected` cannot hold it — which
+    # side it is, is answered as the value. The same shape as `from_numpy`'s sharing.
     def transposed_is_not_contiguous(L):
         got = L.tensor(plain.reshape(2, 2).copy()).t().is_contiguous()
-        views = not hasattr(L, "backend")       # 브라우저 쪽만 뷰가 없다
+        views = not hasattr(L, "backend")       # the browser side alone has no views
         if got == (not views):
             return "기대대로"
         return "뜻밖에 연속" if got else "뜻밖에 비연속"
@@ -8657,7 +8709,7 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "전치는 비연속=브라우저는뷰가없다",
                   transposed_is_not_contiguous))
 
-    # 잎에 기울기가 켜져 있으면 **양쪽 다** 거절한다.
+    # With gradients on at the leaf, **both sides** refuse.
     def leaf_refuses(L):
         x = L.tensor(plain, requires_grad=True)
         try:
@@ -8668,12 +8720,12 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "잎 제자리 수정=거절", leaf_refuses))
 
-    # `no_grad` 안에서는 잎도 고칠 수 있다 — 옵티마이저가 실제로 그렇게 한다.
+    # Inside `no_grad` a leaf can be edited — an optimizer really does that.
     def under_no_grad(L):
-        # **`.copy()` 가 여기 없었다.** 코어의 `tensor()` 가 그때 배열을 공유해서
-        # 이 한 줄이 `plain` 을 1 만큼 올렸고, 뒤에 오는 케이스들이 코어에서만
-        # 틀렸다. 이제 `tensor()` 가 사본을 뜨지만 **케이스도 자기 몫을 한다** —
-        # 공유 입력을 제자리에서 고치는 케이스는 순서에 기대게 된다.
+        # **`.copy()` was missing here.** The core's `tensor()` shared the array at the time, so
+        # this one line raised `plain` by 1 and the cases after it were wrong on the core alone.
+        # `tensor()` copies now, and **the case does its part too** — a case that edits a shared
+        # input in place comes to depend on the order.
         x = L.tensor(plain.copy(), requires_grad=True)
         with L.no_grad():
             x.add_(1)
@@ -8681,21 +8733,22 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "no_grad 안에서는 된다", under_no_grad))
 
-    # ── 짝은 있는데 밑줄 판이 없던 마흔한 개 ──────────────────────────────
+    # ── the forty-one with a counterpart and no underscore edition ──
     #
-    # `x.add_(1)` 은 **학습 루프의 관용구다** — `p.data.add_(-lr * g)` 를 안 쓰는
-    # 교재가 드물다. 그런데 마흔한 개가 빠져 있었다. 짝(`x.add`)은 전부 있었고
-    # 잇는 관용구도 있었으니, 없던 것은 **잇는 줄** 하나씩이었다.
+    # `x.add_(1)` is **the training loop's idiom** — a textbook that does not write
+    # `p.data.add_(-lr * g)` is rare. And forty-one were missing. The counterparts (`x.add`) were
+    # all there and the chaining idiom was there, so what was missing was **one joining line** each.
     #
-    # **둘은 짝에서 만들면 안 된다.** 밑줄이 붙었다고 같은 연산이 아니다 —
-    # `bernoulli_(p)` 는 자기 값을 확률로 읽는 `bernoulli()` 와 달리 자기 값을
-    # 무시하고 `p` 로 채우고, `float_power_` 는 결과가 배정도라 torch 도 거절한다.
-    # 마흔한 개를 전부 torch 와 대조해서 그 둘만 갈렸다.
+    # **Two of them must not be made from the counterpart.** An underscore does not make it the
+    # same operation — `bernoulli_(p)` ignores its own value and fills with `p`, unlike
+    # `bernoulli()` which reads its own value as the probability, and `float_power_`'s result is
+    # double precision so torch refuses it too. All forty-one were compared against torch and only
+    # those two parted.
     ints = np.array([6, -4, 3, 9])
     flags = np.array([True, False, True, False])
     other = np.array([True, True, False, False])
     twos = np.array([2., 2., 2., 2.], dtype=np.float32)
-    pos = np.array([2., 3., 4., 5.], dtype=np.float32)      # 정의역이 양수인 것들
+    pos = np.array([2., 3., 4., 5.], dtype=np.float32)      # for the ones whose domain is positive
     grid = np.arange(6, dtype=np.float32).reshape(2, 3)
 
     derived = (
@@ -8737,7 +8790,7 @@ def inplace_cases(inp=None):
         ("renorm_", lambda L, x: x.renorm_(2, 0, 1.0), grid),
         ("subtract_", lambda L, x: x.subtract_(1), plain),
         ("true_divide_", lambda L, x: x.true_divide_(2), plain),
-        # **모양이 바뀌는 제자리 연산.** 정사각으로만 물으면 안 바뀐 채 통과한다.
+        # **In-place operations that change the shape.** Asked on a square only, they pass unchanged.
         ("t_", lambda L, x: x.t_(), grid),
     )
     for name, call, src in derived:
@@ -8747,9 +8800,9 @@ def inplace_cases(inp=None):
             return x
         cases.append((INPLACE_PREFIX + f"짝에서::{name}", go))
 
-    # `bernoulli_` 는 무작위라 값을 못 굳힌다 — **확률이 0·1 이면 확정**이므로
-    # 그 두 끝만 묻는다. 자기 값을 확률로 읽지 **않는다**는 것이 여기서 드러난다:
-    # 입력이 [1,4,9,2] 인데 `p=0` 이면 전부 0 이다.
+    # `bernoulli_` is random and its value cannot be frozen — **at probability 0 or 1 it is
+    # determined**, so only those two ends are asked. That it does **not** read its own value as
+    # the probability shows here: the input is [1,4,9,2] and at `p=0` it is all zeros.
     for p in (0.0, 1.0):
         def bern(L, prob=p):
             x = L.tensor(plain.copy())
@@ -8766,12 +8819,12 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "짝에서::float_power_ 는 거절", refuses_float_power))
 
-    # ── 모듈에만 있고 메서드가 없던 이름들 ────────────────────────────────
+    # ── the names that existed on the module and not as a method ──
     #
-    # torch 는 거의 모든 연산을 **둘 다** 준다 — `torch.igamma(x, y)` 와
-    # `x.igamma(y)`. 우리는 모듈 쪽만 있는 자리가 열셋이었고, **교재가 쓰는 쪽은
-    # 메서드다.** 결속의 주석에 같은 이야기가 이미 적혀 있었는데(`borch.t(x)` 는
-    # 되고 `x.t()` 는 안 되던 자리) 그쪽만 메꾸고 코어는 안 메꿨다.
+    # torch gives nearly every operation **both ways** — `torch.igamma(x, y)` and `x.igamma(y)`.
+    # We had thirteen places with the module side only, and **the side the textbook uses is the
+    # method.** The binding's comments already told the same story (`borch.t(x)` worked and
+    # `x.t()` did not) and only that side was filled in, not the core.
     grid2 = np.array([[1.5, -2.5], [0.5, 1.0]], dtype=np.float32)
     ones2 = np.ones_like(grid2)
 
@@ -8781,8 +8834,9 @@ def inplace_cases(inp=None):
     method_form("arctan2", lambda L: L.tensor(grid2).arctan2(L.tensor(ones2)))
     method_form("igamma", lambda L: L.tensor(grid2).abs().igamma(L.tensor(ones2)))
     method_form("igammac", lambda L: L.tensor(grid2).abs().igammac(L.tensor(ones2)))
-    # **인자가 뒤집혀 있다** — 모듈은 `polygamma(n, x)`, 메서드는 `x.polygamma(n)`.
-    # 표로 그냥 붙였다가 걸렸다. 안 걸렸으면 차수와 입력이 뒤바뀐 채 값이 나왔다.
+    # **The arguments are reversed** — the module is `polygamma(n, x)` and the method is
+    # `x.polygamma(n)`. Attaching it from a table straight through was caught. Uncaught, a value
+    # would have come out with the order and the input swapped.
     method_form("polygamma(1)", lambda L: L.tensor(grid2).abs().polygamma(1))
     method_form("polygamma(2)", lambda L: L.tensor(grid2).abs().polygamma(2))
 
@@ -8795,9 +8849,9 @@ def inplace_cases(inp=None):
 
     in_place_new("fill_diagonal_", lambda L, x: x.fill_diagonal_(9))
 
-    # **`wrap` 은 세로로 긴 행렬에서만 뜻이 있다.** 정사각으로만 물으면 그 깃발이
-    # 아무 일도 안 하고, 위의 케이스가 정확히 그랬다 — borch.ts 쪽 판이 없는 규칙
-    # (되돌아 올 때 줄을 하나 건너뛴다)을 지어내고도 초록이었다.
+    # **`wrap` means something only on a tall matrix.** Asked on a square, the flag does nothing,
+    # and the case above did exactly that — the borch.ts edition invented a rule that does not
+    # exist (skip a row on wrapping) and was still green.
     tall = np.arange(18, dtype=np.float32).reshape(6, 3)
     for flag in (False, True):
         def fill_tall(L, w=flag):
@@ -8810,20 +8864,21 @@ def inplace_cases(inp=None):
     in_place_new("arctan2_", lambda L, x: x.arctan2_(L.tensor(ones2)))
     in_place_new("polygamma_", lambda L, x: x.abs_().polygamma_(1))
 
-    # ── 분포에서 뽑아 채우는 일곱 — **값 말고 물을 수 있는 것** ──────────
+    # ── the seven that draw from a distribution and fill — **what can be asked instead of the value** ──
     #
-    # 난수기가 셋 다 달라서 값은 못 굳힌다(`randn` 에서 이미 받아들인 자리다).
-    # 표에 넣을 수 있는 것은 둘뿐이다:
+    # All three random generators differ, so the values cannot be frozen (a place already accepted
+    # at `randn`). Only two things can go in the table:
     #
-    #   **모양·형이 안 바뀐다** — torch 가 답을 내므로 표의 성격이 그대로다.
-    #   이미 `keep::`·`resize_as_::` 가 같은 꼴로 모양을 굳히고 있다.
+    #   **The shape and type do not change** — torch produces an answer, so the table's character
+    #   is unchanged. `keep::` and `resize_as_::` already freeze shapes in the same way.
     #
-    #   **거절** — torch 의 규칙이 분포마다 다르고 예외 종류까지 다르다. 값이
-    #   아니라 문구라 셋이 갈리기 쉬운 자리다.
+    #   **Refusals** — torch's rule differs per distribution, down to the exception type. Being
+    #   wording rather than a value, this is a place where the three part easily.
     #
-    # 분포가 정말 그 분포인가(평균·분산·서로 다른 값이 여럿인가)는 여기 없다.
-    # 그 답은 torch 가 아니라 **우리가 정한 술어**에서 나오므로 표에 있어도 torch 를
-    # 안 재고, 표본 수와 허용 오차를 고르는 일이라 `tests/test_random_fill.py` 다.
+    # Whether the distribution really is that distribution (its mean, its variance, whether several
+    # distinct values appear) is not here. That answer comes from **a predicate we chose** rather
+    # than from torch, so it would not measure torch even sitting in the table, and it is a matter
+    # of choosing a sample count and a tolerance — that is `tests/test_random_fill.py`.
     draws = (
         ("normal_", lambda L, x: x.normal_(0.0, 2.0)),
         ("uniform_", lambda L, x: x.uniform_(-1.0, 3.0)),
@@ -8841,8 +8896,9 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"분포::{name} 는 모양과 형을 지킨다",
                       shape_kept))
 
-    # **연속 다섯은 정수를 거절하고 `geometric_`·`random_` 은 안 한다.** 이름만 보고
-    # "난수는 실수만" 으로 묶으면 그 둘에서 틀린다 — 이산이라 정수 칸에 답이 있다.
+    # **The five continuous ones refuse integers and `geometric_` and `random_` do not.** Group
+    # them by name as "random means floats" and those two are wrong — being discrete, they have an
+    # answer in an integer slot.
     def on_int(L, name, arg=()):
         x = L.tensor(np.zeros(6, dtype=np.int64))
         try:
@@ -8857,8 +8913,8 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"분포::{name}(int64)",
                       lambda L, n=name, a=arg: on_int(L, n, a)))
 
-    # 인자의 정의역. **분포마다 다르다** — `p` 는 열린 구간, `lambda` 는 양수,
-    # `from < to`, `std >= 0`.
+    # The arguments' domains. **They differ per distribution** — `p` is an open interval, `lambda`
+    # is positive, `from < to`, `std >= 0`.
     def refuses_arg(L, call, fragment):
         try:
             call(L)
@@ -8866,23 +8922,23 @@ def inplace_cases(inp=None):
             return "멈췄다" if fragment in str(exc) else f"다른 문구 <{exc}>"
         return "안 던졌다"
 
-    # **범위가 형이 정확히 셀 수 있는 데까지다.** float32 는 2^24 를 넘으면 이웃한
-    # 정수를 구별 못 해서 값이 뭉친다 — torch 도 거기서 끊는다. 2^53(float64 의 자리)
-    # 으로 두고 있었고, 모양·형만 묻는 케이스는 그것을 못 봤다.
+    # **The range goes as far as the type counts exactly.** float32 past 2^24 cannot tell
+    # neighbouring integers apart and the values clump — torch cuts off there too. It was left at
+    # 2^53 (float64's place), and cases asking about shape and type alone could not see it.
     for kind, arr, cap in (("float32", np.zeros(1, dtype=np.float32), 1 << 24),
                            ("int64", np.zeros(1, dtype=np.int64), 1 << 62)):
         def ceiling(L, a=arr, c=cap):
             x = L.tensor(np.zeros(3000, dtype=a.dtype))
             x.random_()
             got = np.abs(np.asarray(x.tolist(), dtype=np.float64)).max()
-            # **자리를 그대로 물으면 안 된다.** `floor(log2(최댓값))` 은 상한 바로
-            # 아래에 앉으므로 23 과 24 를 오간다 — 3000 번 뽑아 상한에 얼마나
-            # 가까이 갔느냐에 달렸고, 그것은 뽑기운이다. 실제로 골든이 한 번은 24 를
-            # 얼렸고 같은 코드가 23 을 내서 결속만 빨개졌다.
+            # **The position itself must not be asked.** `floor(log2(max))` sits just below the
+            # ceiling and moves between 23 and 24 — it depends on how close 3,000 draws came to
+            # the ceiling, which is luck. The golden answers really did freeze 24 once while the
+            # same code gave 23, and only the binding turned red.
             #
-            # 묻고 싶은 것은 자릿수 하나가 아니라 **어느 형의 한계인가**다. 상한과
-            # 그 절반 사이에 들면 그 답이 나온다 — 2^53(float64 자리)으로 두었던
-            # 옛 결함은 여기서 그대로 걸리고, 경계에서는 안 흔들린다.
+            # What is meant to be asked is not one digit but **which type's limit it is.** Landing
+            # between the ceiling and its half gives that answer — the old defect of leaving it at
+            # 2^53 (float64's place) is caught here as it was, and it does not shake at the boundary.
             return f"{c / 2 <= got <= c}"
         cases.append((INPLACE_PREFIX + f"분포::random_({kind}) 의 상한", ceiling))
 
@@ -8898,14 +8954,14 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"분포::거절::{label}",
                       lambda L, c=call, f=fragment: refuses_arg(L, c, f)))
 
-    # ── torch 가 **속성**으로 주는 것들 ──────────────────────────────────
+    # ── the ones torch gives as **attributes** ──
     #
-    # 괄호가 없다. 함수로만 두면 `x.real` 이 텐서가 아니라 **묶인 메서드**를 돌려주고
-    # 예외도 안 난다 — `if x.imag:` 가 참으로 지나간다. 셋 다 그 상태였다.
+    # No parentheses. Left as functions, `x.real` returns **a bound method** rather than a tensor
+    # and raises nothing — `if x.imag:` passes as true. All three were in that state.
     #
-    # `x.device` 는 **문자열이 아니라 객체**여야 한다. `x.device.type` 이 교재가
-    # 장치를 확인할 때 치는 줄이다. 값은 구현마다 다르므로(`cpu` 대 `webgpu`)
-    # 여기서는 **꼴만** 묻는다.
+    # `x.device` has to be **an object and not a string.** `x.device.type` is the line a textbook
+    # writes to check the device. The value differs per implementation (`cpu` against `webgpu`), so
+    # only **the form** is asked here.
     cases.append((INPLACE_PREFIX + "속성::x.device 는 객체다",
                   lambda L: f"{type(L.tensor(grid2).device).__name__} "
                             f"{isinstance(L.tensor(grid2).device.type, str)}"))
@@ -8921,9 +8977,9 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "속성::x.imag 는 실수에서 멈춘다", imag_refuses))
 
-    # 짝이 없거나 잰 뒤 목록에서 흘린 셋. `resize_as_` 는 짝(`resize_as`)이 아예 없어
-    # 파생표로는 못 만든다 — 표에 이름을 적는 것과 그 표가 그것을 만들 수 있는 것은
-    # 다른 일이다.
+    # The three with no counterpart, or dropped from the list after being measured. `resize_as_`
+    # has no counterpart (`resize_as`) at all and cannot be made from a derived table — writing a
+    # name into a table and that table being able to build it are different things.
     line2 = np.array([1.5, -2.5], dtype=np.float32)
 
     def reduced(name, call):
@@ -8945,35 +9001,35 @@ def inplace_cases(inp=None):
     def resized(L):
         x = L.tensor(grid2.copy())
         got = x.resize_as_(L.tensor(np.zeros((1, 4), dtype=np.float32)))
-        # **제자리여야 한다** — 새 텐서를 돌려주면 이름이 거짓말한다.
+        # **It has to be in place** — returning a new tensor makes the name a lie.
         return f"{tuple(x.shape)} {got is x}"
 
     cases.append((INPLACE_PREFIX + "짝없이::resize_as_ 는 제자리다", resized))
 
-    # ── torch 가 속성으로 주는 술어 스무 개 ──────────────────────────────
+    # ── the twenty predicates torch gives as attributes ──
     #
-    # 대부분 답이 하나로 정해져 있다. **그래도 이름이 있어야 한다** — 없으면
-    # `if x.is_cuda:` 가 `AttributeError` 로 멈추는데, torch 에서는 그냥 거짓으로
-    # 지나가는 줄이다. 늘 거짓인 술어를 넣는 것이 얕다는 기준은 **거짓이 나오는
-    # 입력이 있는가**를 묻는 것이었지, 이름이 있는가를 묻는 것이 아니다.
+    # Most have one determined answer. **The name still has to exist** — without it, `if x.is_cuda:`
+    # stops with an `AttributeError`, where in torch it is a line that simply passes as false. The
+    # standard for calling an always-false predicate shallow was **whether there is an input that
+    # produces false**, not whether the name exists.
     #
-    # `is_cpu` 는 **일부러 갈린다** — 브라우저 쪽 값은 GPU 버퍼에 있다. 참이라고
-    # 하면 그것을 보고 갈래를 고르는 코드가 틀린 길로 간다.
+    # `is_cpu` **parts deliberately** — the browser side's values live in a GPU buffer. Saying true
+    # sends code that branches on it down the wrong path.
     for label in ("is_cuda", "is_mps", "is_sparse", "is_quantized", "is_nested",
                   "is_meta", "is_mkldnn", "is_vulkan", "is_xla", "is_xpu",
                   "is_ipu", "is_maia", "is_mtia", "is_sparse_csr",
                   "retains_grad"):
         cases.append((INPLACE_PREFIX + f"술어::{label}",
                       lambda L, n=label: str(getattr(L.tensor(grid2), n))))
-    # **`is_leaf` 만 진짜 계산이다.** 연산에서 나온 텐서는 거짓이고, 거짓이면
-    # `.grad` 가 안 쌓인다 — 값이 하나로 정해진 나머지와 성격이 다르다.
+    # **`is_leaf` alone is a real computation.** A tensor that came out of an operation is false,
+    # and false means `.grad` does not accumulate — a different character from the rest, whose
+    # answer is fixed.
     cases.append((INPLACE_PREFIX + "술어::is_leaf(잎)",
                   lambda L: str(L.tensor(grid2, requires_grad=True).is_leaf)))
     cases.append((INPLACE_PREFIX + "술어::is_leaf(파생)",
                   lambda L: str((L.tensor(grid2, requires_grad=True) * 2).is_leaf)))
-    # **이 둘만 메서드다** — 괄호가 있다.
-    # **이 둘만 메서드다** — 괄호가 있다. 속성으로 두면 `x.is_neg` 가 참거짓이
-    # 아니라 묶인 메서드를 돌려주고, 그것은 참으로 지나간다.
+    # **These two alone are methods** — they have parentheses. Left as attributes, `x.is_neg`
+    # returns a bound method rather than a boolean, and that passes as true.
     for label in ("is_pinned", "is_neg"):
         cases.append((INPLACE_PREFIX + f"술어::{label}() 는 메서드",
                       lambda L, n=label: str(getattr(L.tensor(grid2), n)())))
@@ -8989,18 +9045,19 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "술어::is_coalesced 는 조밀에서 멈춘다",
                   coalesced_refuses))
 
-    # ── 짝이 없는 제자리 판 여덟 ──────────────────────────────────────────
+    # ── the eight in-place editions with no counterpart ──
     #
-    # 다섯은 torch 가 해내고 셋은 희소 전용이라 **torch 도 조밀 텐서에서 멈춘다.**
-    # 이름만 보고 "제자리니까 다 만든다" 로 묶으면 뒤의 셋에서 우리가 더 관대해진다.
+    # torch manages five and three are sparse-only, so **torch stops on a dense tensor too.** Group
+    # them by name as "they are in place, so build them all" and we become more lenient than torch
+    # on the last three.
     reduced("apply_", lambda L, x: x.apply_(lambda v: v * 2))
     reduced("map_", lambda L, x: x.map_(L.tensor(np.ones(2, dtype=np.float32)),
                                         lambda a, b: a + b))
     reduced("map2_", lambda L, x: x.map2_(L.tensor(np.ones(2, dtype=np.float32)),
                                           L.tensor(np.full(2, 2.0, dtype=np.float32)),
                                           lambda a, b, c: a + b + c))
-    # **키우는 쪽은 안 묻는다** — torch 가 정해지지 않은 값을 준다. 줄이는 쪽과
-    # 모양만 바꾸는 쪽은 답이 있다.
+    # **The growing direction is not asked** — torch gives undetermined values. The shrinking
+    # direction and the shape-only direction have answers.
     reduced("resize_(줄임)", lambda L, x: x.resize_(1))
     reduced("resize_(모양만)", lambda L, x: x.resize_(1, 2))
     reduced("set_", lambda L, x: x.set_(L.tensor(np.zeros(3, dtype=np.float32))))
@@ -9017,11 +9074,11 @@ def inplace_cases(inp=None):
             return "안 던졌다"
         cases.append((INPLACE_PREFIX + f"짝없이::{gone} 는 희소 전용", sparse_only))
 
-    # ── 저장을 들여다보는 것들 ────────────────────────────────────────────
+    # ── the ones that look into the storage ──
     #
-    # 값이 아니라 **어떻게 놓여 있는가**를 묻는다. `stride` 는 전치하면 바뀌고,
-    # 그것이 뷰라는 사실 자체다 — **브라우저 쪽은 뷰가 없어 안 바뀐다**(뷰 전파를
-    # 거절하는 것과 같은 뿌리라 그 자리 옆에 따로 뒀다).
+    # They ask **how it is laid out** rather than the value. `stride` changes under a transpose,
+    # and that is the fact of its being a view — **the browser side has no views so it does not
+    # change** (the same root as refusing view propagation, so it is kept beside that place).
     wide = np.arange(6, dtype=np.float32).reshape(2, 3)
     for label, call in (
         ("stride()", lambda L: L.tensor(wide).stride()),
@@ -9037,8 +9094,8 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"저장::{label}", lambda L, f=call: str(f(L))))
 
     def stride_after_transpose(L):
-        """**전치하면 걸음이 바뀐다** — 코어는 numpy 뷰라 `(1, 3)` 이고 브라우저는
-        뷰가 없어 `(3, 1)` 그대로다. 어느 쪽인지를 값으로 답한다."""
+        """**Transposing changes the strides** — the core is a numpy view and gives `(1, 3)`, and
+        the browser has no views and stays at `(3, 1)`. Which one it is, is answered as the value."""
         got = L.tensor(wide).t().stride()
         views = not hasattr(L, "backend")
         return "기대대로" if (got == (1, 3)) == views else f"뜻밖에 {got}"
@@ -9046,11 +9103,11 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "저장::전치한 걸음=브라우저는뷰가없다",
                   stride_after_transpose))
 
-    # ── 전치의 세 이름 ────────────────────────────────────────────────────
+    # ── the three names for transposing ──
     #
-    # `H` 는 **2차원 전용**이고 `mT`·`mH` 는 마지막 두 축만 바꿔 묶음에도 쓴다.
-    # 셋의 차이는 **켤레를 취하는가**인데, 실수에서는 셋이 같은 답이라
-    # **복소수로 물어야** 드러난다.
+    # `H` is **2-D only** and `mT` and `mH` swap the last two axes, so they work on batches too.
+    # The difference between the three is **whether they conjugate**, and over the reals all three
+    # give the same answer, so **it has to be asked on complex numbers** to show.
     cplx = np.array([[1 + 2j, 3 - 1j]], dtype=np.complex64)
     for label, call in (
         ("H", lambda L: L.tensor(wide).H),
@@ -9058,12 +9115,14 @@ def inplace_cases(inp=None):
     ):
         cases.append((INPLACE_PREFIX + f"전치::{label}", call))
 
-    # **복소수는 브라우저 쪽이 거절한다** — borch.ts 의 전치가 인터리브 저장을 아직
-    # 모른다. 셋의 차이(켤레를 취하는가)는 복소수에서만 드러나므로, 값을 못 물으면
-    # 그 차이 자체를 못 묻는다. 거절이 답인 자리라 `_as_expected` 로 둔다.
+    # **The browser side refuses complex** — borch.ts's transpose does not know interleaved
+    # storage yet. The difference between the three (whether they conjugate) shows only on complex
+    # numbers, so with the value unaskable the difference itself cannot be asked. A place where
+    # refusal is the answer, so it goes through `_as_expected`.
     #
-    # torch 는 켤레를 **비트로만** 세워서 `numpy()` 가 멈춘다 — `resolve_conj()` 로
-    # 풀어야 값이 보이고, 우리 쪽은 이미 뒤집어 담으므로 그 호출이 항등이다.
+    # torch raises the conjugate **as a bit only**, so `numpy()` stops — it has to be resolved with
+    # `resolve_conj()` for the value to be visible, and our side already stores it flipped, so that
+    # call is the identity.
     for label, call in (
         ("H(복소수)", lambda L: L.tensor(cplx).H.resolve_conj()),
         ("mT(복소수) 는 켤레를 안 한다", lambda L: L.tensor(cplx).mT.resolve_conj()),
@@ -9081,7 +9140,7 @@ def inplace_cases(inp=None):
 
     cases.append((INPLACE_PREFIX + "전치::H 는 1차원에서 멈춘다", h_needs_a_matrix))
 
-    # ── `new_*` — 형을 **물려받아** 만든다 ────────────────────────────────
+    # ── `new_*` — built **inheriting** the type ──
     for label, call in (
         ("new_zeros", lambda L: L.tensor(wide).new_zeros((2,))),
         ("new_ones", lambda L: L.tensor(wide).new_ones(2, 2)),
@@ -9091,22 +9150,22 @@ def inplace_cases(inp=None):
             L.tensor(np.zeros((3, 2), dtype=np.float32)))),
         ("view_as", lambda L: L.tensor(wide).view_as(
             L.tensor(np.zeros((3, 2), dtype=np.float32)))),
-        # **브로드캐스팅을 되돌린다** — 역전파가 안에서 하는 일과 같다.
+        # **Undoes a broadcast** — the same thing backpropagation does inside.
         ("sum_to_size", lambda L: L.tensor(wide).sum_to_size(2, 1)),
     ):
         cases.append((INPLACE_PREFIX + f"새로::{label}", call))
-    # **값이 정해지지 않는다** — torch 가 쓰레기값을 준다. 모양과 형만 묻는다.
+    # **The value is undetermined** — torch gives garbage. Only the shape and type are asked.
     cases.append((INPLACE_PREFIX + "새로::new_empty 는 모양만",
                   lambda L: f"{tuple(L.tensor(wide).new_empty((2, 3)).shape)} "
                             f"{L.tensor(wide).new_empty((2, 3)).dtype}"))
 
-    # ── `retain_grad` — **잎에서는 멈추고, 파생에는 기울기를 남긴다** ──────
+    # ── `retain_grad` — **it stops at a leaf and keeps the gradient on a derived tensor** ──
     #
-    # 거절만 맞추면 반쪽이다. 이름이 하려는 일은 파생 텐서의 `.grad` 를 남기는 것이고,
-    # 그것을 안 하면 거절만 흉내 내는 꼴이 된다.
+    # Getting only the refusal right is half of it. What the name is for is keeping a derived
+    # tensor's `.grad`, and without that it is a shape that imitates the refusal alone.
     def retain_refuses(L):
-        """**가르는 것은 잎인가가 아니라 `requires_grad` 다.** 기울기를 받는 잎에는
-        그냥 지나간다 — 이미 쌓이므로 청할 것이 없어서다."""
+        """**What decides is `requires_grad`, not whether it is a leaf.** On a leaf that takes
+        gradients it simply passes — they already accumulate, so there is nothing to ask for."""
         try:
             L.tensor(wide).retain_grad()
         except Exception as exc:                                # noqa: BLE001
@@ -9119,14 +9178,14 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "기울기::잎에 부르면 지나간다",
                   lambda L: str(L.tensor(wide, requires_grad=True).retain_grad())))
 
-    # `retain_grad` 뒤에 **값이 실제로 남는가**는 `tests/test_fold_grad.py` 에 있다 —
-    # borch.ts 가 파생 텐서의 `.grad` 를 안 내줘서 셋을 함께 못 묻는다.
+    # Whether a value is **really kept** after `retain_grad` is in `tests/test_fold_grad.py` —
+    # borch.ts does not hand out a derived tensor's `.grad`, so the three cannot be asked together.
     cases.append((INPLACE_PREFIX + "기울기::grad_fn 의 형 이름",
                   lambda L: type((L.tensor(wide, requires_grad=True) * 2).grad_fn).__name__))
     cases.append((INPLACE_PREFIX + "기울기::잎의 grad_fn 은 없다",
                   lambda L: str(L.tensor(wide, requires_grad=True).grad_fn)))
 
-    # ── torch 가 스스로 거절하는 둘 ───────────────────────────────────────
+    # ── the two torch refuses of its own accord ──
     for gone in ("eig", "symeig"):
         def deprecated_op(L, n=gone):
             try:
@@ -9137,7 +9196,7 @@ def inplace_cases(inp=None):
             return "안 던졌다"
         cases.append((f"dtype::없는이름::{gone}(폐기됨)", deprecated_op))
 
-    # 값이 아니라 **참거짓**을 내는 셋. `is_same_size` 는 모양만 본다.
+    # The three that return **a boolean** rather than a value. `is_same_size` looks at shape alone.
     for label, call in (
         ("is_same_size(같음)",
          lambda L: L.tensor(grid2).is_same_size(L.tensor(ones2))),
@@ -9145,7 +9204,7 @@ def inplace_cases(inp=None):
          lambda L: L.tensor(grid2).is_same_size(L.tensor(np.zeros((3, 3), dtype=np.float32)))),
         ("is_inference", lambda L: L.tensor(grid2).is_inference()),
         ("is_distributed", lambda L: L.tensor(grid2).is_distributed()),
-        # **교재의 관용구다** — `x.requires_grad_()` 로 잎을 켜고 자기를 돌려받는다.
+        # **The textbook's idiom** — `x.requires_grad_()` turns a leaf on and hands itself back.
         ("requires_grad_ 가 자기를 돌려준다",
          lambda L: L.tensor(grid2).requires_grad_(True).requires_grad),
         ("share_memory_ 가 자기를 돌려준다",
@@ -9154,35 +9213,36 @@ def inplace_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"묻는꼴::{label}",
                       lambda L, f=call: str(f(L))))
 
-    # **`tensor()` 는 사본을 뜬다 — 공유하면 사용자의 배열이 조용히 바뀐다.**
+    # **`tensor()` copies — sharing would quietly change the user's array.**
     #
-    # 이 케이스는 위의 마흔한 개를 넣다가 나왔다. 케이스 하나가 입력을 `.copy()` 없이
-    # 받아 `add_(1)` 을 했는데 **torch 는 사본을 떠서 안 샜고 코어만 샜다.** 그래서
-    # 그 뒤 케이스 열여섯이 코어에서만 틀렸고, 원인이 자기 자리에 없어서 한참
-    # 헤맸다. 두 라이브러리가 갈리면 결함이 **엉뚱한 이름으로** 나온다.
+    # This case came out of putting in the forty-one above. One case took its input without
+    # `.copy()` and did `add_(1)`, and **torch copied so nothing leaked and the core alone leaked.**
+    # So sixteen cases after it were wrong on the core alone, and the cause was not in its own place,
+    # which cost a long search. When two libraries part, a defect surfaces **under the wrong name.**
     def copies_input(L):
         src = np.array([1., 4., 9., 2.], dtype=np.float32)
         L.tensor(src).add_(1)
-        return L.tensor(src)          # 원본이 그대로여야 한다
+        return L.tensor(src)          # the original has to be unchanged
 
     cases.append((INPLACE_PREFIX + "tensor() 는 사본을 뜬다", copies_input))
 
     def from_numpy_value(L):
-        """값은 셋 다 나른다."""
+        """All three carry the values."""
         return L.from_numpy(np.array([1., 4., 9., 2.], dtype=np.float32))
 
     cases.append((INPLACE_PREFIX + "from_numpy 는 값을 나른다", from_numpy_value))
 
     def from_numpy_aliasing(L):
-        """**공유는 브라우저에 없다.** 값이 GPU 버퍼에 있어서 호스트 배열과 저장을
-        나눠 가질 자리가 없다 — 뷰 전파를 거절하는 것과 같은 이유다. 거절 대신
-        사본이 되므로 `_as_expected` 로는 못 담고, 어느 쪽인지를 값으로 답한다.
+        """**There is no sharing in the browser.** The values live in a GPU buffer, so there is
+        nowhere to share storage with a host array — the same reason view propagation is refused.
+        It becomes a copy rather than a refusal, so `_as_expected` cannot hold it, and which side
+        it is, is answered as the value.
 
-        브라우저 쪽이 어느 날 공유하기 시작하면 (그럴 수 없지만) 여기서 갈린다."""
+        If the browser side starts sharing one day (it cannot), it parts here."""
         src = np.array([1., 4., 9., 2.], dtype=np.float32)
         L.from_numpy(src).add_(1)
         shared = bool(src[0] != 1.0)
-        must_copy = hasattr(L, "backend")        # 브라우저 쪽만 참이다
+        must_copy = hasattr(L, "backend")        # true on the browser side alone
         if shared == (not must_copy):
             return "기대대로"
         return "뜻밖의 공유" if shared else "뜻밖의 사본"
@@ -9190,12 +9250,13 @@ def inplace_cases(inp=None):
     cases.append((INPLACE_PREFIX + "from_numpy 의 공유=브라우저는사본",
                   from_numpy_aliasing))
 
-    # ── `nn.Parameter` — 하나는 맞고 하나는 갈린다 ─────────────────────────
+    # ── `nn.Parameter` — one thing agrees and one parts ──
     #
-    # 셋 다 **새 물건**을 내고 **원본의 깃발을 안 건드린다** — 그건 torch 와 같다.
-    # 갈리는 것은 저장이다: torch 와 코어는 나눠 갖고 브라우저 둘은 사본이다.
-    # 위의 `from_numpy` 와 같은 자리이고 같은 이유다(GPU 버퍼는 호스트와 저장을
-    # 나눌 수 없다). 갈림을 값으로 답하게 두면 어느 날 한쪽이 바뀔 때 걸린다.
+    # All three produce **a new object** and **leave the original's flag alone** — that matches
+    # torch. What parts is the storage: torch and the core share it and both browser sides copy.
+    # The same place as `from_numpy` above and for the same reason (a GPU buffer cannot share
+    # storage with the host). Leaving the divergence answered as a value catches it the day one
+    # side changes.
     def parameter_leaves_source(L):
         t = L.tensor(np.array([1., 2., 3.], dtype=np.float32))
         p = L.nn.Parameter(t)
@@ -9209,7 +9270,7 @@ def inplace_cases(inp=None):
         p = L.nn.Parameter(t, requires_grad=False)
         p.add_(1)
         shared = bool(float(t.numpy()[0]) != 1.0)
-        must_copy = hasattr(L, "backend")        # 브라우저 쪽만 참이다
+        must_copy = hasattr(L, "backend")        # true on the browser side alone
         if shared == (not must_copy):
             return "기대대로"
         return "뜻밖의 공유" if shared else "뜻밖의 사본"
@@ -9223,10 +9284,11 @@ SHAPE_PREFIX = "shape::"
 
 
 def shape_cases(inp=None):
-    """모양 바꾸기의 나머지.
+    """The rest of reshaping.
 
-    **메서드로 부른다.** `expand`·`repeat`·`ravel`·`select`·`unfold`·`expand_as` 는
-    torch 에 모듈 함수가 없고 메서드로만 있다 — 부르는 법이 하나뿐이라 그쪽으로 묻는다.
+    **Called as methods.** `expand`, `repeat`, `ravel`, `select`, `unfold` and `expand_as` have no
+    module function in torch and exist as methods only — there is one way to call them, so that is
+    the way they are asked.
     """
     mat = np.arange(6, dtype=np.float32).reshape(2, 3)
     square = np.arange(9, dtype=np.float32).reshape(3, 3)
@@ -9234,9 +9296,9 @@ def shape_cases(inp=None):
     col = mat[:, :1].copy()
     flat6 = np.arange(6, dtype=np.float32)
     pair = np.array([1., 2.], dtype=np.float32)
-    # **랭크 3.** 축을 바꾸는 것을 2차원으로만 물으면 `(0,1)` 밖의 자리를 못 본다 —
-    # 2차원에서는 어느 두 축을 골라도 답이 하나뿐이라, 축 인자를 통째로 버리는
-    # 구현도 통과한다. 축 길이를 전부 다르게 두어 모양에서 먼저 걸리게 한다.
+    # **Rank 3.** Asked in 2-D only, an axis swap never sees a position outside `(0,1)` — in 2-D
+    # any two axes give the same one answer, so an implementation discarding the axis arguments
+    # entirely passes. The axis lengths are all different so it is caught by shape first.
     cube = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
 
     calls = (
@@ -9252,12 +9314,13 @@ def shape_cases(inp=None):
         ("transpose(랭크3, 0과2)", lambda t: t.transpose(0, 2), cube),
         ("transpose(랭크3, 음수축)", lambda t: t.transpose(-1, -3), cube),
         ("swapdims(랭크3)", lambda t: t.swapdims(0, 1), cube),
-        # **자기 역이 아닌 순열.** 표의 `permute` 는 전부 `(1,0)` 아니면 축 뒤집기였고
-        # 둘 다 자기 역이라, **순열을 거꾸로 적용하는 구현이 전부 통과**했다. 랭크 3
-        # 에서 `(1,2,0)` 의 역은 `(2,0,1)` 이고 모양부터 갈린다([3,4,2] 대 [4,2,3]).
+        # **A permutation that is not its own inverse.** The table's `permute` cases were all
+        # `(1,0)` or an axis reversal, both of which are their own inverse, so **an implementation
+        # applying the permutation backwards passed every one.** At rank 3, `(1,2,0)`'s inverse is
+        # `(2,0,1)` and the shape parts first ([3,4,2] against [4,2,3]).
         #
-        # 역방향은 더 그렇다 — 되돌릴 때는 **역순열**을 써야 하는데, 순열이 자기
-        # 역이면 앞뒤가 같은 것을 쓰고도 맞는 답이 나온다.
+        # The backward pass more so — undoing it needs **the inverse permutation**, and when the
+        # permutation is its own inverse, using the same one both ways still gives the right answer.
         ("permute(비가역)", lambda t: t.permute(1, 2, 0), cube),
         ("permute(비가역의 역)", lambda t: t.permute(2, 0, 1), cube),
         ("select", lambda t: t.select(0, 1), mat),
@@ -9277,7 +9340,7 @@ def shape_cases(inp=None):
     cases = [(SHAPE_PREFIX + name, lambda L, f=fn, a=arr: f(L.tensor(a)))
              for name, fn, arr in calls]
 
-    # 나누는 것들 — 조각마다 이름을 붙인다. 하나만 보면 나머지가 안 걸린다.
+    # The splitting ones — each piece is named. Looking at one leaves the rest uncaught.
     for name, parts in (("hsplit", 3), ("vsplit", 2)):
         for i in range(parts):
             cases.append((SHAPE_PREFIX + f"{name}[{i}]",
@@ -9286,8 +9349,9 @@ def shape_cases(inp=None):
     cases.append((SHAPE_PREFIX + "atleast_2d",
                   lambda L: L.atleast_2d(L.tensor(np.float32(1.)))))
 
-    # 기울기. **`expand` 와 `unfold` 가 여기서 갈린다** — expand 는 늘린 축을 도로
-    # 합치고, unfold 는 겹친 창만큼 쌓는다(실측: 길이 5 를 3·1 로 펴면 [1,2,3,2,1]).
+    # Gradients. **`expand` and `unfold` part here** — expand sums the stretched axis back
+    # together, and unfold stacks by the window overlap (measured: unfolding a length 5 by 3·1
+    # gives [1,2,3,2,1]).
     grads = (
         ("expand", lambda t: t.expand(2, 3), col),
         ("repeat", lambda t: t.repeat(2, 1), mat),
@@ -9298,8 +9362,9 @@ def shape_cases(inp=None):
         ("unfold(겹침)", lambda t: t.unfold(0, 3, 1), line),
         ("select", lambda t: t.select(0, 1), mat),
         ("swapaxes", lambda t: t.swapaxes(0, 1), mat),
-        # **되돌릴 때는 역순열을 쓴다.** 순열이 자기 역이면 앞뒤로 같은 것을 써도
-        # 답이 맞아서, 표에 있던 `(1,0)`·축 뒤집기로는 그 자리가 안 열렸다.
+        # **Undoing it uses the inverse permutation.** When the permutation is its own inverse,
+        # using the same one both ways gives the right answer, so the table's `(1,0)` and axis
+        # reversals never opened that place.
         ("permute(비가역)", lambda t: t.permute(1, 2, 0), cube),
     )
     for name, fn, arr in grads:
@@ -9316,24 +9381,26 @@ REDUCE_PREFIX = "reduce::"
 
 
 def reduce_cases(inp=None):
-    """축약의 나머지 — `amax`·`nansum`·`logsumexp`·`cummax`·`kthvalue` 등.
+    """The rest of the reductions — `amax`, `nansum`, `logsumexp`, `cummax`, `kthvalue` and so on.
 
-    **동점을 일부러 넣는다.** `amax` 는 동점일 때 기울기를 고르게 나누고(실측:
-    [1,3,3,2] → [0,.5,.5,0]) `cummax` 는 나중 자리를 준다. 동점 없는 입력으로 재면
-    그 규칙을 하나도 안 보게 되고, 값은 맞는데 학습이 미묘하게 갈리는 자리가 남는다.
+    **Ties are put in deliberately.** `amax` spreads the gradient evenly on a tie (measured:
+    [1,3,3,2] → [0,.5,.5,0]) and `cummax` gives it to the later position. Measured on input with no
+    ties, none of those rules is seen, and what is left is a place where the value is right and the
+    training parts subtly.
     """
-    tie = np.array([1., 3., 3., 2.], dtype=np.float32)          # 동점이 있다
+    tie = np.array([1., 3., 3., 2.], dtype=np.float32)          # there is a tie
     mat = np.array([[1., 5., 3.], [4., 2., 6.]], dtype=np.float32)
     withnan = np.array([1., np.nan, 3., 5.], dtype=np.float32)
     zeros_in = np.array([0., 1., 0., 2.], dtype=np.float32)
     weights = np.arange(1, 5, dtype=np.float32)
 
     def values_of(L, got):
-        # **`hasattr(got, "numpy")` 로 물으면 안 된다.** 우리 쪽 쌍은 못 찾은 이름을
-        # 값으로 넘기므로 `numpy` 에도 참이라고 답하고, 그러면 이 함수가 쌍을 그대로
-        # 돌려준다 — torch 의 namedtuple 은 안 넘기니 **같은 헬퍼가 라이브러리마다
-        # 다른 갈래를 탄다.** 그 상태로도 오래 초록이었다가, `Tensor.values`(희소용)
-        # 가 생기자 쌍에 곱셈을 한 결과에서 `.values` 가 메서드로 잡히며 터졌다.
+        # **It must not ask with `hasattr(got, "numpy")`.** Our pair passes an unfound name
+        # through as a value, so it answers true to `numpy` too, and then this function hands the
+        # pair straight back — torch's namedtuple does not pass it through, so **the same helper
+        # takes a different branch per library.** It stayed green in that state for a long time and
+        # then broke once `Tensor.values` (for sparse) arrived and `.values` resolved to a method on
+        # the result of multiplying the pair.
         return got if isinstance(got, L.Tensor) else got.values
 
     cases = []
@@ -9368,17 +9435,19 @@ def reduce_cases(inp=None):
     add("dist", lambda L, x=None: L.dist(x if x is not None else L.tensor(tie),
                                          L.tensor(np.zeros(4, dtype=np.float32))), tie)
 
-    # **축을 받는 것은 값으로 물어야 한다.** 기울기로만 물으면 축을 통째로 무시해도
-    # 통과한다 — `sum(dim=1).sum()` 과 `sum().sum()` 의 기울기가 둘 다 전부 1 이라
-    # 답이 같기 때문이다. `grad::sum(dim)` 이라는 이름의 케이스가 이미 있었고, 그
-    # 이름 때문에 아무도 다시 안 봤다.
+    # **The ones that take an axis have to be asked by value.** Asked by gradient alone, ignoring
+    # the axis entirely passes — the gradients of `sum(dim=1).sum()` and `sum().sum()` are both all
+    # ones, so the answers agree. A case named `grad::sum(dim)` already existed, and because of that
+    # name nobody looked again.
     #
-    # 그 사이 `borch_webgpu` 는 `sum(dim=1)` 에 **축을 무시한 스칼라**를 내고 있었다.
-    # borch.ts 가 전체 합과 축 합을 다른 이름으로 두는데 JS 가 남는 인자를 조용히
-    # 버려서다. 랭크 6 케이스 하나가 모양으로 걸릴 때까지 792 건이 전부 초록이었다.
+    # In the meantime `borch_webgpu` was returning **a scalar with the axis ignored** for
+    # `sum(dim=1)`. borch.ts keeps the whole sum and the axis sum under different names and JS
+    # quietly discards a surplus argument. All 792 were green until one rank-6 case was caught by
+    # shape.
     #
-    # **메서드로 묻는다.** 모듈 함수 `L.sum` 은 코어에도 자매에도 없다 — torch 에는
-    # 있으므로 그것대로 구멍이지만 이 케이스가 잡으려는 것과 다른 이야기다.
+    # **Asked as a method.** The module function `L.sum` is in neither the core nor the sister
+    # library — torch has it, so that is a hole of its own, and a different story from what this
+    # case is trying to catch.
     add("sum(dim)", lambda L, x=None: (x if x is not None else L.tensor(mat)).sum(dim=1), mat)
     add("sum(dim0)", lambda L, x=None: (x if x is not None else L.tensor(mat)).sum(dim=0), mat)
     add("sum(dim,keepdim)",
@@ -9387,13 +9456,13 @@ def reduce_cases(inp=None):
     add("norm(p=1,dim)",
         lambda L, x=None: (x if x is not None else L.tensor(mat)).norm(p=1, dim=0), mat)
 
-    # 번호를 주는 것들 — 값만 보면 번호가 틀려도 통과한다.
+    # The ones that give an index — by value alone, a wrong index passes.
     for name, fn in (("cummax", lambda L: L.cummax(L.tensor(tie), 0)),
                      ("cummin", lambda L: L.cummin(L.tensor(tie), 0)),
                      ("kthvalue", lambda L: L.kthvalue(L.tensor(tie), 2))):
         cases.append((REDUCE_PREFIX + f"{name} 번호", lambda L, f=fn: f(L).indices))
 
-    # 기울기가 없는 것들. 값만 굳힌다.
+    # The ones with no gradient. The value alone is frozen.
     cases += [
         (REDUCE_PREFIX + "quantile", lambda L: L.quantile(L.tensor(tie), 0.5)),
         (REDUCE_PREFIX + "quantile(여럿)",
@@ -9402,8 +9471,8 @@ def reduce_cases(inp=None):
          lambda L: L.nanquantile(L.tensor(withnan), 0.5)),
         (REDUCE_PREFIX + "nonzero", lambda L: L.nonzero(L.tensor(zeros_in))),
         (REDUCE_PREFIX + "argwhere", lambda L: L.argwhere(L.tensor(zeros_in))),
-        # **색인으로 묻는다.** torch 의 `aminmax` 는 `.min`·`.max` 로 부르고 우리 것은
-        # `.values`·`.indices` 라 이름이 안 맞는다 — 자리로 물으면 양쪽 다 통한다.
+        # **Asked by index.** torch's `aminmax` is reached through `.min` and `.max` and ours
+        # through `.values` and `.indices`, so the names do not fit — asked by position, both work.
         (REDUCE_PREFIX + "aminmax/최소", lambda L: L.aminmax(L.tensor(tie))[0]),
         (REDUCE_PREFIX + "aminmax/최대", lambda L: L.aminmax(L.tensor(tie))[1]),
     ]
@@ -9412,9 +9481,10 @@ def reduce_cases(inp=None):
 
 MATH_PREFIX = "math::"
 
-# 새로 붙인 수학 함수들. **입력 범위가 함수마다 다르다** — `acos` 는 [-1,1] 밖에서
-# NaN 이고, NaN 은 자기 자신과도 달라서 대조가 통과할 수가 없다. 그래서 정의역 안에서만
-# 묻는다. 밖에서 무엇을 하는지는 별개 질문이고, 여기서 섞으면 둘 다 못 본다.
+# The newly attached maths functions. **The input range differs per function** — `acos` is NaN
+# outside [-1,1], and NaN differs from itself, so a comparison cannot pass. So they are asked
+# within their domain only. What they do outside is a separate question, and mixing it in here
+# means seeing neither.
 _MATH_DOMAIN = {
     "acos": "unit", "asin": "unit", "atanh": "unit", "logit": "unit",
     "arccos": "unit", "arcsin": "unit", "arctanh": "unit",
@@ -9430,18 +9500,19 @@ _MATH_BINARY = ("atan2", "hypot", "copysign", "logaddexp", "logaddexp2")
 
 
 def math_cases(inp=None):
-    """삼각·지수·로그의 나머지. 값과 기울기를 **둘 다** 묻는다.
+    """The rest of the trigonometric, exponential and logarithmic functions. Value and gradient are
+    **both** asked.
 
-    기울기를 같이 묻는 이유가 있다. 값만 맞고 그래프가 끊긴 함수는 값 검사를 통과하고,
-    이 저장소는 그런 것을 이미 열넷 찾았다.
+    There is a reason the gradient is asked alongside. A function whose value is right and whose
+    graph is cut passes a value check, and this repository has already found fourteen of them.
     """
     plain = np.array([0.5, 2.0, -1.5, 3.0], dtype=np.float32)
-    unit = np.array([0.2, 0.6, -0.9, 0.45], dtype=np.float32)      # (-1, 1) 안
+    unit = np.array([0.2, 0.6, -0.9, 0.45], dtype=np.float32)      # within (-1, 1)
     big = np.array([1.5, 2.5, 3.0, 1.2], dtype=np.float32)          # > 1
     pos = np.array([0.5, 2.0, 1.5, 3.0], dtype=np.float32)
     other = np.array([1.0, 2.0, -3.0, 0.5], dtype=np.float32)
-    logit_in = np.array([0.2, 0.6, 0.35, 0.45], dtype=np.float32)   # (0, 1) 안
-    weights = np.arange(1, 5, dtype=np.float32)                     # 자리마다 다른 가중치
+    logit_in = np.array([0.2, 0.6, 0.35, 0.45], dtype=np.float32)   # within (0, 1)
+    weights = np.arange(1, 5, dtype=np.float32)                     # a different weight per slot
 
     def pick(name):
         kind = _MATH_DOMAIN.get(name)
@@ -9473,14 +9544,14 @@ def math_cases(inp=None):
 
             cases.append((MATH_PREFIX + f"grad::{name}/{'ab'[who]}", bgrad))
 
-    # `x·log(y)` — **x 가 0 인 자리가 있어야 이 함수를 시험하는 것이다.**
+    # `x·log(y)` — **there has to be a slot where x is 0 for this to be testing the function.**
     zeros_in = np.array([0.0, 2.0, 0.0, 3.0], dtype=np.float32)
     ypos = np.array([1.0, 2.0, 0.5, 4.0], dtype=np.float32)
     cases.append((MATH_PREFIX + "xlogy(x에 0 포함)",
                   lambda L: L.xlogy(L.tensor(zeros_in), L.tensor(ypos))))
 
-    # 계단 함수는 **0 을 흘린다.** 전에는 그래프를 끊어 `backward()` 가 거절했는데
-    # torch 는 0 을 준다 — 없는 것과 0 인 것은 다르다.
+    # A step function **flows a 0.** It used to cut the graph so `backward()` refused, and torch
+    # gives 0 — absent and zero are different.
     for name in ("sign", "floor", "ceil", "round", "trunc", "fix"):
         def zgrad(L, n=name):
             x = L.tensor(plain, requires_grad=True)
@@ -9489,7 +9560,7 @@ def math_cases(inp=None):
 
         cases.append((MATH_PREFIX + f"grad::{name}(0이어야)", zgrad))
 
-    # 값만 있고 기울기가 없는 것들 — 참·거짓이거나 계단이다.
+    # The ones with a value and no gradient — booleans or staircases.
     cases.append((MATH_PREFIX + "signbit", lambda L: L.signbit(L.tensor(plain))))
     cases.append((MATH_PREFIX + "heaviside",
                   lambda L: L.heaviside(L.tensor(np.array([-1., 0., 1., 0.], dtype=np.float32)),
@@ -9502,12 +9573,13 @@ def math_cases(inp=None):
     def sgn_grad(L):
         x = L.tensor(plain, requires_grad=True)
         L.sgn(x).sum().backward()
-        # **`clone()` 이 필요하다.** torch 의 sgn 기울기는 ZeroTensor(게으른 0 텐서)라
-        # `.numpy()` 가 거절한다 — 곱셈으로는 안 풀리고(`* 1.0` 도 ZeroTensor 다),
-        # 복제해야 진짜 버퍼가 생긴다. 값은 0 이다.
+        # **`clone()` is needed.** torch's sgn gradient is a ZeroTensor (a lazy zero tensor) and
+        # `.numpy()` refuses it — multiplication does not resolve it (`* 1.0` is a ZeroTensor too)
+        # and cloning is what produces a real buffer. The value is 0.
         #
-        # 이 자리를 처음에는 "torch 가 sgn 역전파를 거절한다"고 읽고 거절 케이스로
-        # 굳혔다. 틀렸다 — 예외는 `backward()` 가 아니라 결과를 찍던 쪽에서 났다.
+        # This place was read at first as "torch refuses to backpropagate sgn" and frozen as a
+        # refusal case. That was wrong — the exception came from printing the result, not from
+        # `backward()`.
         return x.grad.detach().clone()
 
     cases.append((MATH_PREFIX + "grad::sgn(0이어야)", sgn_grad))
@@ -9516,14 +9588,15 @@ def math_cases(inp=None):
 
 METHOD_PREFIX = "method::"
 
-# `x.f(...)` 로 부를 수 있어야 하는 것들과, 그때 줄 인자.
+# The ones that have to be callable as `x.f(...)`, and the arguments to give them.
 #
-# **표면이 늘면 조용히 틀릴 자리가 는다** — 이 저장소가 그것을 네 번 겪었다. 그래서
-# 이름을 붙이는 것과 그 이름에 케이스를 세우는 것을 한 번에 한다. 케이스 없는 표면은
-# 안 넣는다는 것이 이번에 기능을 늘리기로 하면서 붙인 유일한 조건이다.
+# **A growing surface grows the places that can be quietly wrong** — this repository has met that
+# four times. So attaching a name and standing a case on that name happen together. That no surface
+# goes in without a case is the one condition attached to deciding to grow the functionality here.
 #
-# `x.f(...)` 와 `torch.f(x, ...)` 가 같은지도 torch 에게 물어보고 담았다. 하나가
-# 달랐다 — `where` 는 인자 순서가 뒤집혀서, 그냥 붙였으면 `x` 가 조건 자리로 갔다.
+# Whether `x.f(...)` and `torch.f(x, ...)` agree was also asked of torch before being written down.
+# One differed — `where` has its arguments reversed, and attached straight through, `x` would have
+# gone into the condition's place.
 _METHOD_ARGS = {
     "ceil": (), "cos": (), "cosh": (), "erf": (), "floor": (), "isfinite": (),
     "isinf": (), "isnan": (), "neg": (), "reciprocal": (), "relu": (), "round": (),
@@ -9533,19 +9606,19 @@ _METHOD_ARGS = {
     "softmax": (0,), "narrow": (0, 0, 2), "flip": ((0,),),
     "tile": ((2,),), "topk": (2,), "sort": (), "median": (),
 }
-# 양수만 받는 것 — 음수를 주면 NaN 이 나오고 NaN 은 자기 자신과도 다르다.
+# The ones that take positives only — a negative gives NaN, and NaN differs from itself.
 _METHOD_ARGS_POS = {"log2": (), "log10": (), "rsqrt": ()}
-# 짝이 필요한 것. 상대는 같은 모양의 다른 벡터다.
+# The ones that need a partner. The partner is a different vector of the same shape.
 _METHOD_ARGS_PAIR = {"eq": (), "ne": (), "lt": (), "le": (), "gt": (), "ge": (),
                      "maximum": (), "minimum": (), "dot": (), "outer": ()}
-# 행렬이어야 하는 것.
+# The ones that need a matrix.
 _METHOD_ARGS_MAT = {"diag": (), "trace": (), "tril": (), "triu": ()}
 
 
 def method_cases(inp=None):
-    """모듈 함수를 **메서드로도** 부를 수 있는가. 값까지 대조한다.
+    """Can a module function be called **as a method too?** The value is compared as well.
 
-    이름만 있고 값이 다르면 그것도 거짓이다 — 이 표는 `hasattr` 을 묻지 않는다.
+    A name that exists with a different value is a lie too — this table does not ask `hasattr`.
     """
     pos = np.array([0.5, 2.0, 1.5, 3.0], dtype=np.float32)
     vec = np.array([0.5, 2.0, -1.5, 3.0], dtype=np.float32)
@@ -9554,17 +9627,19 @@ def method_cases(inp=None):
     mask = np.array([True, False, True, False])
 
     def values_of(L, got):
-        """(값, 번호) 를 주는 것들은 값 쪽만 본다 — 번호는 동점에서 갈릴 수 있다.
+        """The ones returning (value, index) are looked at on the value side — the index can part
+        on a tie.
 
-        `getattr(got, "values", got)` 로 쓰면 안 된다. **진짜 torch 텐서에는 `.values`
-        가 메서드로 있어서**(희소 텐서용) 텐서 대신 그 메서드가 나온다 — 굳히기가
-        `'builtin_function_or_method' object has no attribute 'detach'` 로 터지며
-        알려줬다. 텐서인지를 먼저 묻는다.
+        It must not be written as `getattr(got, "values", got)`. **A real torch tensor has
+        `.values` as a method** (for sparse tensors), so that method comes out instead of the
+        tensor — the freezing step said so by blowing up with
+        `'builtin_function_or_method' object has no attribute 'detach'`. Whether it is a tensor is
+        asked first.
 
-        **묻는 방법이 오래 틀려 있었다.** `hasattr(got, "numpy")` 로 물었는데 우리
-        쪽 쌍은 못 찾은 이름을 값으로 넘기므로 참이라고 답한다 — torch 의 namedtuple
-        은 안 넘기니 같은 헬퍼가 라이브러리마다 다른 갈래를 탔다. 그 라이브러리의
-        `Tensor` 인지로 물으면 셋이 같은 갈래를 탄다.
+        **The way of asking was wrong for a long time.** It asked `hasattr(got, "numpy")`, and our
+        pair passes an unfound name through as a value so it answers true — torch's namedtuple does
+        not pass it through, so the same helper took a different branch per library. Asking whether
+        it is that library's `Tensor` makes all three take the same branch.
         """
         return got if isinstance(got, L.Tensor) else got.values
 
@@ -9584,17 +9659,17 @@ def method_cases(inp=None):
     for name, args in _METHOD_ARGS_MAT.items():
         cases.append((METHOD_PREFIX + name, call(name, args, mat)))
 
-    # 여럿을 돌려주는 것들은 조각마다 이름을 붙인다 — 하나만 보면 나머지가 안 걸린다.
+    # The ones returning several things name each piece — looking at one leaves the rest uncaught.
     for name, args in (("chunk", (2,)), ("split", (2,)), ("unbind", ())):
         for piece in (0, 1):
             cases.append((
                 METHOD_PREFIX + f"{name}[{piece}]",
                 lambda L, n=name, a=args, p=piece: getattr(L.tensor(vec), n)(*a)[p]))
 
-    # `where` — **인자 순서가 함수와 뒤집힌 유일한 자리다.**
+    # `where` — **the only place whose argument order is reversed from the function's.**
     cases.append((METHOD_PREFIX + "where",
                   lambda L: L.tensor(vec).where(L.tensor(mask), L.tensor(other))))
-    # 참·거짓을 돌려주는 것들. 값이 아니라 **판정**을 굳힌다.
+    # The ones returning a boolean. **A predicate** is frozen rather than a value.
     cases.append((METHOD_PREFIX + "equal",
                   lambda L: str(bool(L.tensor(vec).equal(L.tensor(vec))))))
     cases.append((METHOD_PREFIX + "equal(다른 것)",
@@ -9602,10 +9677,10 @@ def method_cases(inp=None):
     cases.append((METHOD_PREFIX + "allclose",
                   lambda L: str(bool(L.tensor(vec).allclose(L.tensor(vec))))))
 
-    # 행렬곱 계열은 모양이 달라 따로 준다.
-    # `movedim` 은 **네 조합을 다 묻는다.** 전에는 `(0, 0)` 하나였는데 그건 항등이라
-    # 아무것도 안 물은 것과 같았고, 그 뒤에 숨어 있던 자매의 `movedim(0, -1)` 이
-    # 조용히 항등으로 굴고 있었다(`list.insert(-1, …)` 은 맨 뒤가 아니다).
+    # The matmul family has different shapes and is given separately.
+    # `movedim` **asks all four combinations.** It used to be `(0, 0)` alone, which is the identity
+    # and so asked nothing, and hiding behind it the sister library's `movedim(0, -1)` was quietly
+    # behaving as the identity (`list.insert(-1, …)` is not the end).
     for src, dst in ((0, -1), (-1, 0), (0, 1), (1, 0)):
         cases.append((METHOD_PREFIX + f"movedim({src},{dst})",
                       lambda L, s=src, d=dst: L.tensor(mat).movedim(s, d)))
@@ -9614,7 +9689,8 @@ def method_cases(inp=None):
     cases.append((METHOD_PREFIX + "gather",
                   lambda L: L.tensor(mat).gather(1, L.tensor(
                       np.array([[0, 2], [1, 0], [2, 1]], dtype=np.int64)))))
-    # 기울기도 본다. 메서드로 불렀다고 그래프가 끊기면 값만 보는 검사는 통과한다.
+    # The gradient is looked at too. A graph cut by being called as a method still passes a check
+    # that looks only at values.
     def method_grad(L):
         x = L.tensor(vec, requires_grad=True)
         (x.square() * L.arange(4).float()).sum().backward()
@@ -9628,20 +9704,20 @@ EDGE_PREFIX = "edge::"
 
 
 def edge_cases(inp=None):
-    """**꺾이는 자리.** 나머지 표가 구조적으로 못 보는 곳을 모아 둔다.
+    """**Where things bend.** The places the rest of the tables structurally cannot see, gathered.
 
-    다른 표의 입력은 거의 다 `default_rng` 가 뽑은 정규분포다. 그것은 좋은 기본값이지만
-    한 가지를 못 한다 — **특별한 값이 한 번도 안 나온다.** 정확히 0, 정확히 같은 두 수,
-    정확히 경계값, 정확히 .5. 함수가 꺾이는 자리가 전부 거기에 있다.
+    Nearly every other table's input is a normal draw from `default_rng`. That is a good default and
+    it cannot do one thing — **a special value never once comes up.** Exactly 0, exactly two equal
+    numbers, exactly a boundary value, exactly .5. Every place a function bends is there.
 
-    `relu` 가 그래서 뚫렸다. 입력이 정확히 0 일 때 torch 는 기울기를 0 으로 주는데
-    (`x > 0` 이지 `x >= 0` 이 아니다) borch.ts 는 1 을 흘렸고, 골든 798 건이 전부
-    통과했다. relu 케이스의 입력에 0 이 없었기 때문이다. 그 하나를 고치는 것으로는
-    부족하다 — 같은 이유로 안 보이는 자리가 이만큼 더 있다.
+    That is how `relu` was breached. At an input of exactly 0 torch gives a gradient of 0 (it is
+    `x > 0`, not `x >= 0`) and borch.ts flowed 1, and all 798 golden cases passed — because the relu
+    case's input had no 0 in it. Fixing that one is not enough — there are this many more places
+    invisible for the same reason.
 
-    **여기서는 답을 추측하지 않는다.** 동점에서 torch 가 기울기를 나눠 주는지 한쪽에만
-    주는지, `round(0.5)` 가 0 인지 1 인지는 우리가 정할 것이 아니다. 진짜 torch 가
-    무엇을 하든 그것이 답이고, 이 표는 그 답을 묻기만 한다.
+    **The answers are not guessed here.** Whether torch divides the gradient on a tie or gives it to
+    one side, whether `round(0.5)` is 0 or 1, is not ours to decide. Whatever real torch does is the
+    answer, and this table only asks for it.
     """
     cases = []
 
@@ -9649,13 +9725,13 @@ def edge_cases(inp=None):
         cases.append((EDGE_PREFIX + name, fn))
 
     def grad(name, fn, arr, which=0):
-        """자리마다 다른 가중치로 접는다 — 균일하게 접으면 꺾인 자리가 묻힌다.
+        """Folded with a different weight per slot — folded uniformly, the bending place is buried.
 
-        **가중치가 1 부터다.** `arange` 로 시작했더니 첫 자리의 몫이 0 이었고, 출력이
-        한 칸인 케이스는 그 하나가 전부라 **기울기가 통째로 0** 이 됐다. 균일 접기를
-        피하려고 넣은 장치가 그 케이스를 아무것도 안 묻는 상태로 만든 것이다 —
-        `edge::grad::max(동점)` 이 `[0,1,0,0]` 대신 `[0,0,0,0]` 을 굳히고 있었고,
-        기울기를 아예 안 흘리는 구현도 통과했다.
+        **The weights start at 1.** Starting from `arange` made the first slot's share 0, and a case
+        whose output is a single slot has that one as the whole of it, so **the gradient became
+        entirely 0.** A device put in to avoid uniform folding turned that case into one asking
+        nothing — `edge::grad::max(동점)` was freezing `[0,0,0,0]` instead of `[0,1,0,0]`, and an
+        implementation flowing no gradient at all passed.
         """
         def run(L, f=fn, a=arr, n=name, w=which):
             leaves = [L.tensor(x.copy(), requires_grad=True) for x in a]
@@ -9666,17 +9742,17 @@ def edge_cases(inp=None):
             return _grad_of(leaves[w], n)
         cases.append((EDGE_PREFIX + "grad::" + name, run))
 
-    # 정확히 0 을 품은 입력. 이 표의 거의 모든 케이스가 이것을 쓴다.
+    # Input holding exactly 0. Nearly every case in this table uses it.
     z = np.array([-2., -1., 0., 1., 2., 0.], dtype=np.float32)
-    # 정확히 같은 값이 겹친 짝. 동점에서 기울기가 어디로 가는가를 묻는다.
+    # A pair with exactly equal values. It asks where the gradient goes on a tie.
     ta = np.array([1., 2., 3., 2.], dtype=np.float32)
-    tb = np.array([1., 5., 3., 0.], dtype=np.float32)      # 자리 0·2 가 동점
-    # .5 로 끝나는 값들 — 반올림 규칙(짝수로 붙이기)이 여기서만 드러난다.
+    tb = np.array([1., 5., 3., 0.], dtype=np.float32)      # slots 0 and 2 are tied
+    # Values ending in .5 — the rounding rule (ties to even) shows only here.
     half = np.array([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], dtype=np.float32)
-    # 부호가 섞인 나눗셈. `%` 의 부호 규칙이 언어마다 갈리는 자리다.
+    # Division with mixed signs. Where `%`'s sign rule parts between languages.
     neg = np.array([-7., -3., 3., 7.], dtype=np.float32)
 
-    # ── 0 에서 꺾이는 것들 ─────────────────────────────────────────────────
+    # ── the ones that bend at 0 ──
     for name, fn in (
         ("abs", lambda L, x: L.abs(x)),
         ("sign", lambda L, x: L.sign(x)),
@@ -9689,17 +9765,18 @@ def edge_cases(inp=None):
         value(f"{name}(0포함)", lambda L, f=fn, a=z: f(L, L.tensor(a)))
         grad(f"{name}(0포함)", fn, (z,))
 
-    # ── 경계에 정확히 닿는 clamp ───────────────────────────────────────────
-    # 입력에 -1 과 1 이 그대로 있다. 자르는 쪽과 흘리는 쪽의 경계가 `<` 인지 `<=` 인지가
-    # 여기서만 갈린다.
+    # ── clamp landing exactly on the boundary ──
+    # The input holds -1 and 1 exactly. Whether the boundary between clipping and passing through
+    # is `<` or `<=` parts only here.
     value("clamp(경계에서)", lambda L: L.clamp(L.tensor(z), min=-1., max=1.))
     grad("clamp(경계에서)", lambda L, x: L.clamp(x, min=-1., max=1.), (z,))
     grad("clamp(위만)", lambda L, x: L.clamp(x, max=1.), (z,))
     grad("clamp(아래만)", lambda L, x: L.clamp(x, min=-1.), (z,))
 
-    # ── 동점 ───────────────────────────────────────────────────────────────
-    # **torch 는 동점에서 기울기를 나눠 준다.** maximum 의 두 입력이 같으면 각각 절반씩
-    # 받는다. 한쪽에 몰아주는 구현은 순방향이 완벽히 같으므로 값 대조로는 절대 안 잡힌다.
+    # ── ties ──
+    # **torch divides the gradient on a tie.** When maximum's two inputs are equal, each takes half.
+    # An implementation giving it all to one side has a perfectly identical forward pass, so a value
+    # comparison can never catch it.
     value("maximum(동점)", lambda L: L.maximum(L.tensor(ta), L.tensor(tb)))
     value("minimum(동점)", lambda L: L.minimum(L.tensor(ta), L.tensor(tb)))
     for who in (0, 1):
@@ -9708,23 +9785,24 @@ def edge_cases(inp=None):
         grad(f"minimum(동점)/{'ab'[who]}",
              lambda L, a, b: L.minimum(a, b), (ta, tb), which=who)
 
-    # 접는 쪽의 동점 — 최댓값이 두 자리에 있을 때 어디로 흘리는가.
-    # (`max`·`min`·`argmax` 는 두 라이브러리에 **메서드로만** 있다. torch 에는 모듈
-    #  함수도 있으니 그 자체가 갈림이지만, 여기서 묻는 것은 동점이므로 메서드로 쓴다.)
+    # A tie on the folding side — where it flows when the maximum is in two slots.
+    # (`max`, `min` and `argmax` exist in both libraries **as methods only.** torch has module
+    #  functions too, so that is a divergence in itself, but what is asked here is the tie, so they
+    #  are used as methods.)
     dup = np.array([1., 3., 2., 3.], dtype=np.float32)
     value("max(동점).indices", lambda L: L.tensor(dup).max(dim=0).indices)
     value("min(동점).indices", lambda L: L.tensor(-dup).min(dim=0).indices)
     value("argmax(동점)", lambda L: L.tensor(dup).argmax())
     grad("max(동점)", lambda L, x: x.max(dim=0).values.reshape(1), (dup,))
 
-    # 정렬의 동점 — 같은 값끼리의 **순서**가 안정적인가. 답이 갈리면 indices 가 갈린다.
+    # A tie in sorting — is **the order** among equal values stable. A parted answer parts the indices.
     value("sort(동점).values", lambda L: L.sort(L.tensor(dup)).values)
     value("sort(동점).indices", lambda L: L.sort(L.tensor(dup)).indices)
     value("topk(동점).indices", lambda L: L.topk(L.tensor(dup), 3).indices)
 
-    # 창 안에 같은 값이 둘 있는 풀링. **`maximum` 과 답이 다르다** — torch 의 풀링은
-    # 이긴 자리 하나를 골라 거기로만 흘리고 나누지 않는다. 풀링을 `maximum` 위에
-    # 얹어 구현하면(세 라이브러리 중 둘이 그랬다) 여기서만 갈린다.
+    # Pooling with two equal values in one window. **The answer differs from `maximum`'s** —
+    # torch's pooling picks one winning slot and flows only there, without dividing. Implement
+    # pooling over `maximum` (two of the three libraries did) and it parts only here.
     tied_img = np.array([[[[1., 1., 2., 0.],
                            [1., 0., 2., 2.],
                            [3., 3., 0., 1.],
@@ -9739,19 +9817,19 @@ def edge_cases(inp=None):
 
     cases.append((EDGE_PREFIX + "grad::max_pool2d(동점)", pooled_tie))
 
-    # ── 반올림 규칙 ────────────────────────────────────────────────────────
-    # **torch 는 .5 를 짝수로 붙인다** — round(0.5)=0, round(1.5)=2, round(2.5)=2.
-    # 흔한 구현(`floor(x+0.5)`)은 전부 위로 올려서 조용히 갈린다.
+    # ── the rounding rule ──
+    # **torch ties .5 to even** — round(0.5)=0, round(1.5)=2, round(2.5)=2. The common
+    # implementation (`floor(x+0.5)`) rounds every one up and parts quietly.
     value("round(.5에서)", lambda L: L.round(L.tensor(half)))
     value("floor(정수에서)", lambda L: L.floor(L.tensor(z)))
     value("ceil(정수에서)", lambda L: L.ceil(L.tensor(z)))
     value("trunc(음수)", lambda L: L.trunc(L.tensor(half)))
     value("frac(음수)", lambda L: L.frac(L.tensor(half)))
 
-    # ── 나머지의 부호 ──────────────────────────────────────────────────────
-    # **torch 의 `%` 는 나누는 수의 부호를 따른다** — `-7 % 3` 이 2 이지 -1 이 아니다.
-    # JS 의 `%` 는 반대로 나뉘는 수의 부호를 따르므로(-1), 그것을 그대로 쓰면 음수에서만
-    # 갈린다. 양수 입력으로는 절대 안 드러나고, 두 규칙 다 "나머지"라고 불린다.
+    # ── the remainder's sign ──
+    # **torch's `%` follows the divisor's sign** — `-7 % 3` is 2, not -1. JS's `%` follows the
+    # dividend's instead (-1), so using it as it stands parts on negatives alone. It never shows on
+    # positive input, and both rules are called "the remainder".
     value("%(음수)", lambda L: L.tensor(neg) % 3.)
     value("%(음수로 나누기)", lambda L: L.tensor(neg) % -3.)
 
@@ -9759,14 +9837,16 @@ def edge_cases(inp=None):
 
 
 def _no_duplicate_names(cases):
-    """이름이 겹치면 멈춘다. **겹치면 조용히 하나가 먹힌다.**
+    """A duplicated name stops it. **Duplicated, one is quietly eaten.**
 
-    `dump` 는 목록이라 둘 다 돌리고 나중 것이 앞의 답을 덮는데, `export_json` 은
-    사전이라 케이스 수가 하나 줄어든다 — 그 어긋남으로 처음 알았다(2724 대 2723).
-    러너는 "골든에 없는 이름" 은 세지만 "골든에 두 번 있는 이름" 은 못 센다.
+    `dump` is a list so it runs both and the later one overwrites the earlier's answer, while
+    `export_json` is a dictionary so the case count drops by one — that mismatch is how it was first
+    noticed (2724 against 2723). The runner counts "a name not in the golden answers" and cannot
+    count "a name in the golden answers twice".
 
-    덮이는 쪽이 진 케이스는 **아무도 안 돌린다.** 이름을 짓다 부주의로 겹치는 것이
-    실제로 났고(값 케이스와 `add` 가 만드는 값 케이스), 그때 표는 초록이었다.
+    The case that loses by being overwritten is **run by nobody.** Carelessly duplicating a name
+    while writing one really happened (a value case and the value case `add` builds), and the table
+    was green at the time.
     """
     seen, dup = set(), []
     for name, _ in cases:
@@ -9779,7 +9859,7 @@ def _no_duplicate_names(cases):
 
 
 def golden_cases(inp=None):
-    """골든이 다루는 전부 — 값·기울기·학습·dtype·표현."""
+    """Everything the golden answers cover — values, gradients, training, dtypes, representations."""
     inp = golden_inputs() if inp is None else inp
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
@@ -9811,7 +9891,7 @@ _PY_SCALARS = [("파이썬 int", 2), ("파이썬 float", 2.0), ("파이썬 bool"
 
 
 def _dtype_tensor(L, name):
-    """양쪽에서 **같은 뜻의** dtype 을 고른다. 이름이 갈리는 것은 bool 뿐이다."""
+    """Picks a dtype **meaning the same thing** on both sides. bool is the only name that parts."""
     kind = getattr(L, "bool", None) if name == "bool" else getattr(L, name)
     if name == "bool":
         kind = getattr(L, "bool_", None) or L.bool
@@ -9819,14 +9899,15 @@ def _dtype_tensor(L, name):
 
 
 def dtype_cases(inp=None):
-    """dtype 승격 — torch 는 **범주**(bool < 정수 < 실수)로 가르고 그 안에서만 올린다.
+    """dtype promotion — torch sorts by **category** (bool < integer < float) and promotes within it.
 
-    numpy 규칙을 물려받으면 `float32 + int64` 가 float64 가 되고, 학습자는 틀린 규칙을
-    배운다. 코어는 이 표를 112건으로 덮는데, 여기는 **float64 가 빠진 3종**이다 —
-    TF.js 에 배정도가 없어서 있을 수가 없다.
+    Inherit numpy's rule and `float32 + int64` becomes float64, and the learner learns the wrong
+    rule. The core covers this table with 112 cases, and here are **the 3 kinds with float64 taken
+    out** — TF.js has no double precision, so they cannot exist.
 
-    결과는 dtype 이름 문자열이다. 값이 아니라 **어떤 형이 나오는가**를 묻는다.
-    거부하는 조합(불리언 뺄셈)은 **예외 종류**를 답으로 적는다 — 거부하는 것도 명세다.
+    The result is the dtype's name as a string. It asks **which type comes out** rather than the
+    value. A combination that is refused (boolean subtraction) has **the exception type** written
+    down as the answer — refusing is specification too.
     """
 
     def outcome(fn):
@@ -9853,16 +9934,18 @@ def dtype_cases(inp=None):
                         lambda: eval(f"p {o} s", {},                 # noqa: S307
                                      {"p": _dtype_tensor(L, x), "s": v}))))
 
-    # ── 자리만 옮기는 것은 **형을 지킨다** ──────────────────────────────
+    # ── the ones that only move positions **keep the type** ──
     #
-    # 이 표가 없어서 결함이 하나 살아 있었다. 자매의 데이터셋이 `int64` 라벨에서 한
-    # 표본을 꺼내니 `float32` 가 나왔는데, **값이 맞아서** 골든 어디에도 안 걸렸다 —
-    # 모양 연산 뒤의 형을 묻는 케이스가 하나도 없었기 때문이다.
+    # A defect survived for want of this table. Taking one sample out of the sister library's
+    # dataset at an `int64` label gave `float32`, and **the value was right** so nothing in the
+    # golden answers caught it — there was not one case asking about the type after a shape
+    # operation.
     #
-    # 경계는 **값을 만드는가**다. 자리만 옮기는 것(고르기·자르기·이어붙이기·
-    # 갈아끼우기)은 원래 형이 그대로 나오고, 셈을 하는 것은 승격 규칙을 따른다.
-    # 축약(`sum`·`amax`·`cumsum`)은 torch 에서도 형을 지키지만 **여기 표에 없다** —
-    # `bool` 의 합은 `int64` 라 규칙이 하나 더 있고, 그것은 따로 잴 자리다.
+    # The boundary is **whether it produces a value.** The ones that only move positions (selecting,
+    # slicing, concatenating, scattering) give back the original type, and the ones that compute
+    # follow the promotion rules. Reductions (`sum`, `amax`, `cumsum`) keep the type in torch too and
+    # are **not in this table** — a sum of `bool` is `int64`, which is one more rule, and that is a
+    # place to measure separately.
     ints = np.arange(12, dtype=np.int64).reshape(3, 4)
     flags = (ints % 2 == 0)
     pick = np.array([0, 2], dtype=np.int64)
@@ -9892,15 +9975,15 @@ def dtype_cases(inp=None):
         ("roll", lambda L, t: t.roll(1, 0)),
         ("tril", lambda L, t: t.tril()),
         ("triu", lambda L, t: t.triu()),
-        # **이 줄이 오래 죽어 있었다.** `F` 는 다른 다섯 함수 안에만 있는 지역
-        # 헬퍼라 여기서는 `NameError` 가 났고, `outcome` 이 그것을 잡아
-        # `<NameError>` 를 냈다. 골든이 그 값을 정답으로 굳혔고 **셋 다 같은
-        # 파이썬 줄을 지나므로 셋 다 그 값을 내서 표는 초록이었다** — `pad` 는
-        # 한 번도 안 불렸다.
+        # **This line was dead for a long time.** `F` is a local helper inside five other
+        # functions, so here it raised a `NameError`, and `outcome` caught it and produced
+        # `<NameError>`. The golden answers froze that value as the right one, and **all three go
+        # through the same Python line so all three produced it and the table was green** — `pad`
+        # was never once called.
         #
-        # 셋이 서로를 대조해도 안 걸린 것은, 케이스 본문이 셋에게 **같은 것 하나**
-        # 이기 때문이다. borch.ts 쪽 본문을 TypeScript 로 따로 쓰자 그 자리에서
-        # 바로 드러났다 — 본문이 둘이 되는 것이 이 표의 값어치다.
+        # That comparing the three against each other did not catch it is because the case body is
+        # **one and the same thing** for all three. Writing the borch.ts-side body separately in
+        # TypeScript exposed it on the spot — the body becoming two is what this table is worth.
         ("pad", lambda L, t: L.nn.functional.pad(t, (1, 1))),
         ("as_strided", lambda L, t: L.as_strided(t, (2, 2), (1, 2))),
         ("diag_embed", lambda L, t: L.diag_embed(t)),
@@ -9912,33 +9995,35 @@ def dtype_cases(inp=None):
         ("sort[0]", lambda L, t: t.sort(1)[0]),
     )
     for name, fn in moves:
-        # **정수와 참거짓 둘 다 묻는다.** 하나만 물으면 "float32 로 떨어뜨리는" 결함이
-        # 나머지 하나에서만 살아남을 수 있다.
+        # **Both integer and boolean are asked.** Ask one and a defect that "drops to float32"
+        # can survive in the other alone.
         cases.append((f"dtype::자리만::{name}(int64)",
                       lambda L, f=fn: outcome(lambda: f(L, L.tensor(ints)))))
         cases.append((f"dtype::자리만::{name}(bool)",
                       lambda L, f=fn: outcome(lambda: f(L, L.tensor(flags)))))
-    # **`topk` 는 정수만 묻는다.** 참거짓에서는 torch 가 거절하는데 우리와 **예외
-    # 종류**가 다르고(RuntimeError vs TypeError), 그것은 형 보존이 아니라 거절 문구의
-    # 이야기다. 한 표에 두 질문을 섞으면 어느 쪽이 빨간지 못 읽는다.
+    # **`topk` is asked on integers only.** On booleans torch refuses and **the exception type**
+    # differs from ours (RuntimeError against TypeError), and that is a story about refusal wording
+    # rather than type preservation. Mix two questions into one table and there is no reading which
+    # of them is red.
     cases.append(("dtype::자리만::topk[0](int64)",
                   lambda L: outcome(lambda: L.tensor(ints).topk(2, 1)[0])))
 
-    # ── 형 바꾸는 이름 열넷 — **없는 것은 거절 문구까지 같아야 한다** ────────
+    # ── the fourteen type-changing names — **what is absent has to refuse in the same words** ──
     #
-    # 값이 아니라 **거절이 어떻게 나오는가**를 묻는 자리다. 그런 자리는 셋이 서로를
-    # 대조해도 안 걸린다 — 아무도 안 물으면 각자 다른 말을 하고, 배우는 사람은 그것을
-    # **구현마다 다른 것**으로 읽는다. 실제로 그랬다: 코어는 `AttributeError: 'Tensor'
-    # object has no attribute 'half'`(오타와 구별이 안 된다), 결속은 `borch.ts 텐서에
-    # `half` 이 없다` 였다.
+    # A place asking **how the refusal comes out** rather than the value. Such places are not caught
+    # by the three comparing each other — unasked, each says something different, and the learner
+    # reads that as **something that differs per implementation.** It really was so: the core gave
+    # `AttributeError: 'Tensor' object has no attribute 'half'` (indistinguishable from a typo) and
+    # the binding gave "borch.ts 텐서에 `half` 이 없다". Those are the messages as they stood then;
+    # both have since been rewritten, and the quote is kept as the record of what was measured.
     #
-    # `half`·`bfloat16` 은 튜토리얼의 혼합정밀도 절에서 **실제로 치는 줄**이다.
-    # `.int()` 는 더 나빴다 — 둘 다 **말없이 int64** 를 줬다. torch 는 int32 이고,
-    # 우리에게 그 칸이 없으면 다른 칸을 대신 주는 것이 아니라 멈추는 편이 낫다.
+    # `half` and `bfloat16` are **lines actually typed** in the tutorials' mixed-precision section.
+    # `.int()` was worse — both **silently gave int64.** torch gives int32, and when we do not have
+    # that slot it is better to stop than to hand over a different slot instead.
     floats = np.array([1.5, -2.5, 3.0], dtype=np.float32)
 
     def casts(name, call):
-        """있는 형은 **이름**을, 없는 형은 **거절 문구의 조각**을 답으로 굳힌다."""
+        """A type that exists freezes **its name**, and one that does not freezes **a fragment of the refusal wording.**"""
         def run(L, f=call):
             try:
                 return str(f(L).dtype)
@@ -9950,11 +10035,12 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::형바꾸기::{name}", run))
 
     def we_refuse(name, call, group="형바꾸기"):
-        """형바꾸기 자리의 거절 케이스. 판정은 `refusal_case` 하나가 한다 —
-        같은 규칙이 두 벌이면 한쪽만 고쳐지고, 이 저장소는 그 자리를 여러 번 밟았다.
+        """The refusal cases at the type-changing places. One `refusal_case` makes the verdict —
+        two copies of the same rule leave one of them fixed, and this repository has stepped on that
+        place several times.
 
-        `group` 은 자리 이름이다. 형 별칭(`dtype=torch.int`)도 **코어까지 거절하는**
-        같은 규칙이라 판정을 두 벌 쓰지 않고 이름만 갈라 쓴다.
+        `group` is the name of the place. A type alias (`dtype=torch.int`) follows the same rule
+        that **the core refuses too**, so the verdict is not written twice; only the name differs.
         """
         cases.append((f"dtype::{group}::{name}=우리는거절", refusal_case(call)))
 
@@ -9965,11 +10051,12 @@ def dtype_cases(inp=None):
                  "short", "int"):
         we_refuse(name, lambda L, n=name: getattr(L.tensor(floats), n)())
 
-    # ── 묻는 것 셋 — **거짓이 나오는 입력을 먼저 쟀다** ──────────────────
+    # ── the three asked — **an input producing false was measured first** ──
     #
-    # 늘 참인 술어는 케이스로 물어도 묻는 게 아니다. 넷 중 셋은 형과 값에서 답이
-    # 나오고 torch 에서 실제로 거짓이 나온다. 넷째(`is_contiguous`)는 브라우저에
-    # 뷰가 없어서 갈리므로 `inplace::` 의 뷰 자리 옆에 뒀다.
+    # An always-true predicate is not being asked even when it has a case. Three of the four have an
+    # answer in the type and the value and really produce false in torch. The fourth
+    # (`is_contiguous`) parts because the browser has no views, so it is kept beside `inplace::`'s
+    # view place.
     for label, call in (
         ("is_floating_point(float32)", lambda L: L.tensor(floats).is_floating_point()),
         ("is_floating_point(int64)", lambda L: L.tensor(ints).is_floating_point()),
@@ -9983,7 +10070,7 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::묻는것::{label}",
                       lambda L, f=call: str(f(L))))
 
-    # 여럿이면 멈춘다 — `if tensor:` 가 조용히 첫 원소를 보는 일을 막는 자리다.
+    # With several it stops — the place that stops `if tensor:` quietly looking at the first element.
     def nonzero_many(L):
         try:
             L.tensor(floats).is_nonzero()
@@ -9993,14 +10080,15 @@ def dtype_cases(inp=None):
 
     cases.append(("dtype::묻는것::is_nonzero(여럿)은 멈춘다", nonzero_many))
 
-    # ── 이름만 보면 "없는 게 맞다" 인데 조밀 텐서에는 답이 있는 여섯 ─────────
+    # ── the six that read as "rightly absent" by name and have an answer on a dense tensor ──
     #
-    # 희소·장치·양자화라 전부 거절이라고 세었다가 재보니 torch 가 서른셋 중 **열넷**을
-    # 조밀 텐서에서 그냥 해냈다. 그중 여섯은 희소·양자화 기계가 필요한 것이 아니라
-    # **"이 텐서는 조밀하다"·"CPU 다"** 라는 답이 있는 것이다.
+    # Sparse, device and quantisation, all counted as refusals, and measuring showed torch simply
+    # managing **fourteen** of thirty-three on a dense tensor. Six of those need no sparse or
+    # quantisation machinery but have an answer — **"this tensor is dense" and "it is on the CPU".**
     #
-    # 이름으로 세고 거절 케이스를 굳혔으면 **없는 결함을 못 박고**, 나중에 누가 그
-    # 이름을 구현할 때 초록이던 케이스가 빨개진다 — 검사가 기능을 막는 자리가 된다.
+    # Counting by name and freezing a refusal case would **pin down a defect that is not there**,
+    # and later, when somebody implements that name, a green case turns red — the check becomes a
+    # place that blocks the functionality.
     for label, call in (
         ("dense_dim", lambda L: L.tensor(floats).dense_dim()),
         ("sparse_dim", lambda L: L.tensor(floats).sparse_dim()),
@@ -10014,22 +10102,24 @@ def dtype_cases(inp=None):
     ):
         cases.append((f"dtype::조밀에도답::{label}", call))
 
-    # ── 없는 이름은 셋이 **같은 말**로 멈춘다 ──────────────────────────────
+    # ── an absent name stops in **the same words** across the three ──
     #
-    # 나머지 스물일곱(희소·저장소·양자화)은 진짜로 없다. 그런데 거절 문구가 갈려
-    # 있었다 — 코어는 파이썬의 표준 문구, 결속은 `borch.ts 텐서에 X 이 없다` 였다.
-    # 진짜 torch 도 표준 문구를 쓰므로 거기에 맞췄다.
+    # The other twenty-seven (sparse, storage, quantisation) really are absent. And the refusal
+    # wording had parted — the core used Python's standard wording and the binding used
+    # "borch.ts 텐서에 X 이 없다". Real torch uses the standard wording too, so it was matched to
+    # that. The quoted message is as it stood then; it has since been rewritten.
     #
-    # **스물일곱을 하나씩 안 굳힌다.** 그러면 누가 희소를 구현할 때 그만큼이 빨개진다.
-    # 대표 셋만 물어 **대체 경로가 같은 말을 하는지**를 본다.
+    # **The twenty-seven are not frozen one by one.** That would turn that many red when somebody
+    # implements sparse. Three representatives are asked, to see **whether the fallback path says
+    # the same thing.**
     def missing_name(L, name):
-        """**torch 가 그 이름을 가졌다면 무엇을 하든 기대대로다.**
+        """**If torch has the name, whatever it does is as expected.**
 
-        처음에는 "torch 는 해낸다" 로만 갈랐는데, `coalesce` 는 조밀 텐서에서
-        `RuntimeError` 로 멈추고 `int_repr` 은 `NotImplementedError` 로 멈춘다 —
-        **이름은 있고 그 입력에서 안 될 뿐이다.** 우리가 묻는 것은 "torch 에 있고
-        우리에게 없는 이름을 물었을 때 우리 셋이 같은 말을 하는가" 이므로, torch
-        쪽에서는 `AttributeError` 만 뜻밖이다.
+        It sorted at first on "torch manages it", and `coalesce` stops on a dense tensor with a
+        `RuntimeError` and `int_repr` with a `NotImplementedError` — **the name exists and it merely
+        does not work on that input.** What we are asking is "when a name torch has and we do not is
+        asked, do our three say the same thing", so on torch's side only an `AttributeError` is
+        unexpected.
         """
         real = getattr(L, "__name__", "") == "torch"
         try:
@@ -10043,9 +10133,9 @@ def dtype_cases(inp=None):
             return "기대대로" if real else f"다른 종류 <{type(exc).__name__}>"
         return "기대대로" if real else "뜻밖의 성공"
 
-    # **torch 가 1.9 에서 없앤 둘.** 이름은 남아 있고 부르면 멈춘다. "torch 에 있는
-    # 이름" 으로 세면 구현해야 할 것으로 보이는데, 구현하면 **우리가 더 관대해진다** —
-    # 그 코드가 진짜 torch 에서 깨진다.
+    # **The two torch removed in 1.9.** The names remain and calling them stops. Counted as "names
+    # torch has" they look like something to implement, and implementing them makes **us more
+    # lenient** — that code breaks on real torch.
     for gone in ("lstsq", "solve"):
         def deprecated(L, n=gone):
             try:
@@ -10056,24 +10146,24 @@ def dtype_cases(inp=None):
             return "안 던졌다"
         cases.append((f"dtype::없는이름::{gone}(폐기됨)", deprecated))
 
-    # **`coalesce`·`untyped_storage`·`int_repr` 는 이제 여기 없다.** 셋 다 이름을
-    # 갖고 이유를 대며 거절하도록 고쳤기 때문이다 — 이 검사는 **정말로 이름이 없는**
-    # 자리를 봐야 한다. `NOT_API` 가 공개 API 가 아니라고 적어 둔 둘을 쓴다.
+    # **`coalesce`, `untyped_storage` and `int_repr` are no longer here.** All three were changed to
+    # have the name and refuse with a reason — this check has to look at places where **the name
+    # really is absent.** It uses the two `NOT_API` records as not being public API.
     for name in ("narrow_copy", "unsafe_chunk"):
         cases.append((f"dtype::없는이름::{name}",
                       lambda L, n=name: missing_name(L, n)))
 
     square2 = np.array([[1.5, 0.0], [0.0, -2.5]], dtype=np.float32)
 
-    # ── 이름은 있고 **이 텐서에는 안 맞는** 것들 ──────────────────────────
+    # ── the ones whose name exists and **does not fit this tensor** ──
     #
-    # 오래 `'Tensor' object has no attribute 'coalesce'` 를 냈는데, 그것은 **오타와
-    # 구별이 안 된다.** torch 는 "희소 배치를 기대했는데 Strided 를 받았다" 고
-    # 말한다 — 이름은 있고 이 텐서에 안 맞는다는 뜻이다.
+    # It gave `'Tensor' object has no attribute 'coalesce'` for a long time, and that is
+    # **indistinguishable from a typo.** torch says "expected a sparse layout and got Strided" —
+    # meaning the name exists and does not fit this tensor.
     #
-    # 셋으로 갈린다: **희소 접근자**는 배치를 탓하고, **희소를 만드는 쪽**과
-    # **저장소·양자화**는 그 기능이 여기 없다고 말한다. torch 는 앞의 것만 거절하고
-    # 뒤의 것은 해낸다 — 우리가 갈리는 자리가 서로 다르다.
+    # It splits three ways: **the sparse accessors** blame the layout, and **the sparse constructors**
+    # and **storage and quantisation** say the functionality is not here. torch refuses only the
+    # first and manages the rest — the places we part are different ones.
     def refuses_with(L, name, fragment, arg=()):
         try:
             getattr(L.tensor(square2), name)(*arg)
@@ -10086,14 +10176,14 @@ def dtype_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"희소::{name} 는 배치를 탓한다",
                       lambda L, n=name: refuses_with(L, n, "but got Strided")))
 
-    # 아래는 **torch 가 해내는** 자리다. 우리에게 희소 텐서·저장소 객체가 없어서
-    # 갈리고, 그것은 배치 탓이 아니라 **없는 기능**이다.
+    # Below are the places **torch manages.** They part because we have no sparse tensors and no
+    # storage object, and that is not the layout's fault but **absent functionality.**
     for name in ("to_sparse", "to_sparse_csr", "sparse_mask", "untyped_storage"):
         def absent_here(L, n=name):
-            """**torch 는 해내고 우리는 멈춘다.** 값을 물으면 영원히 갈리므로
-            "각자 문서대로 굴었는가" 를 묻는다 — 처음에 서로 다른 문자열을
-            돌려주게 썼다가, 그러면 골든이 torch 의 답을 굳혀서 우리는 영영
-            빨간 것을 확인했다."""
+            """**torch manages it and we stop.** Asked by value it would part forever, so what is
+            asked is "did each behave as its own documentation says" — written at first to hand back
+            different strings on each side, which showed that the golden answers then froze torch's
+            answer and left us red forever."""
             real = getattr(L, "__name__", "") == "torch"
             try:
                 getattr(L.tensor(square2), n)(
@@ -10103,8 +10193,8 @@ def dtype_cases(inp=None):
             return "기대대로" if real else "뜻밖의 성공"
         cases.append((INPLACE_PREFIX + f"없는기능::{name}=우리는거절", absent_here))
 
-    # `int_repr`·`cuda` 는 **torch 도 멈춘다** — 앞의 넷과 갈래가 다르다. 한 묶음으로
-    # 두면 "torch 가 해내는가" 가 이름마다 다른데 판정은 하나가 되어 안 맞는다.
+    # `int_repr` and `cuda` **stop torch too** — a different branch from the four above. Kept in one
+    # group, "does torch manage it" differs per name while the verdict is single, and it does not fit.
     for name in ("int_repr", "cuda"):
         def both_refuse(L, n=name):
             try:
@@ -10115,8 +10205,8 @@ def dtype_cases(inp=None):
         cases.append((INPLACE_PREFIX + f"없는기능::{name} 는 양쪽 다 멈춘다",
                       both_refuse))
 
-    # `is_set_to` 는 **늘 거짓이 아니다** — 뷰는 참이고 사본은 거짓이라, 이 술어가
-    # `tensor()` 의 사본 여부를 묻는 이름이기도 하다.
+    # `is_set_to` is **not always false** — a view is true and a copy is false, so this predicate is
+    # also a name for asking whether `tensor()` copies.
     cases.append((INPLACE_PREFIX + "술어::is_set_to(자기)",
                   lambda L: str(L.tensor(square2).is_set_to(L.tensor(square2)))))
 
@@ -10128,64 +10218,68 @@ def dtype_cases(inp=None):
     cases.append((INPLACE_PREFIX + "술어::is_shared()",
                   lambda L: str(L.tensor(square2).is_shared())))
 
-    # `double` 은 **일부러 갈린다** — 코어에는 float64 가 있고 브라우저 쪽에는
-    # WebGPU 셰이더에 배정도가 없다. 거절이 답인 자리라 `_as_expected` 를 쓴다.
+    # `double` **parts deliberately** — the core has float64 and the browser side has no double
+    # precision in a WebGPU shader. A place where refusal is the answer, so `_as_expected` is used.
     cases.append(("dtype::형바꾸기::double=브라우저는거절",
                   _as_expected(lambda L: L.tensor(floats).double())))
 
-    # ── 형 **별칭**은 형이지 함수가 아니다 ────────────────────────────────
+    # ── a type **alias** is a type, not a function ──
     #
-    # `torch.float`·`torch.double`·`torch.int`·`torch.bool` 은 dtype 이다. 그런데 이
-    # 넷은 Tensor 의 메서드 이름이기도 해서, 메서드를 모듈 함수로도 내는 고리가
-    # 같은 이름을 **함수로** 채우고 있었다. 그래서 교재에 흔한
-    # `zeros(2, dtype=torch.float)` 이 `'function' object has no attribute 'np'` 로
-    # 멈췄다 — 가리키는 형은 멀쩡히 있는데 이름만 가려져 있었다.
+    # `torch.float`, `torch.double`, `torch.int` and `torch.bool` are dtypes. And those four are also
+    # names of Tensor methods, so the loop that exposes methods as module functions was filling the
+    # same names **with functions.** So `zeros(2, dtype=torch.float)`, common in the textbook,
+    # stopped with `'function' object has no attribute 'np'` — the type it names was perfectly
+    # present and only the name was covered.
     #
-    # **이름만 물으면 안 잡힌다.** 있는지만 보는 검사는 함수가 앉아 있어도 통과한다
-    # (커버리지 표가 실제로 그랬다). 그래서 **써 본다** — 그 형으로 텐서를 만들고
-    # 나온 형의 이름을 굳힌다. 함수가 앉아 있으면 그 자리에서 멈춘다.
+    # **Asking for the name alone does not catch it.** A check that looks only at existence passes
+    # with a function sitting there (the coverage table really did). So **it is used** — a tensor is
+    # built with that type and the resulting type's name is frozen. With a function sitting there it
+    # stops on the spot.
     for _alias in ("float", "bool"):
         cases.append((f"dtype::별칭::dtype={_alias} 로 만든다",
                       lambda L, a=_alias: str(L.zeros(2, dtype=getattr(L, a)).dtype)))
 
-    # **`torch.int` 는 int32 다**(`long` 이 int64 다). 정수 칸을 int64 하나로 모았으므로
-    # 그 형은 없다 — 그래도 이름은 **int32 를 가리켜야** 한다. 이름을 아예 안 두면
-    # `dtype=torch.int` 가 오타와 같은 문구로 멈춘다. 만들기는 셋 다 갈리므로
-    # (torch 는 되고 우리 둘은 거절) 여기서는 **무엇을 가리키는지**만 굳힌다.
+    # **`torch.int` is int32** (`long` is int64). The integer slots were gathered into int64 alone,
+    # so that type is absent — the name still has to **point at int32.** With no name at all,
+    # `dtype=torch.int` stops with the same wording as a typo. Building one parts across all three
+    # (torch manages it and our two refuse), so only **what it points at** is frozen here.
     cases.append(("dtype::별칭::int 은 int32 를 가리킨다",
                   lambda L: str(L.int)))
-    # 만드는 쪽. **코어까지** 거절하는 자리라 `_as_expected` 가 아니라 `we_refuse` 다.
+    # The constructing side. A place **the core refuses too**, so it is `we_refuse` rather than `_as_expected`.
     we_refuse("dtype=int", lambda L: L.zeros(2, dtype=L.int), group="별칭")
-    # `double` 은 코어에는 있고 브라우저 쪽에만 없다 — 위 `형바꾸기::double` 과 같은 갈림.
+    # `double` is in the core and absent on the browser side alone — the same divergence as
+    # `dtype::형바꾸기::double=브라우저는거절` above.
     cases.append(("dtype::별칭::dtype=double=브라우저는거절",
                   _as_expected(lambda L: L.zeros(2, dtype=L.double))))
 
-    # ── 공장 함수가 `dtype=` 을 **실제로 쓰는가** ──────────────────────────
+    # ── does a factory function **actually use** `dtype=` ──
     #
-    # 위 별칭을 못 박다가 드러났다: 결속의 `zeros`·`ones`·`full`·`eye`·`linspace` 가
-    # `**kw` 를 통째로 버리고 있었다. `zeros(2, dtype=int64)` 가 float32 를 냈고
-    # **값은 0 이라 맞아서** 값 대조로는 안 걸렸다. 골든에 `zeros(..., dtype=)` 꼴이
-    # 하나도 없었기 때문이다 — 안 물은 것은 안 맞는다.
+    # It surfaced while pinning the aliases above: the binding's `zeros`, `ones`, `full`, `eye` and
+    # `linspace` were discarding `**kw` outright. `zeros(2, dtype=int64)` gave float32, and **the
+    # value being 0 it was right**, so a value comparison did not catch it. Because the golden
+    # answers had not one case of the form `zeros(..., dtype=)` — what is not asked is not right.
     #
-    # `ones` 를 같이 묻는 이유는 다섯이 **한 문**을 지나는지 보기 위해서다. 하나만
-    # 물으면 그 하나만 고친 판이 통과한다.
+    # `ones` is asked alongside to see whether the five go through **one door.** Asking one alone
+    # lets an edition that fixed only that one pass.
     cases.append(("dtype::별칭::zeros(dtype=int64)",
                   lambda L: str(L.zeros(2, dtype=L.int64).dtype)))
     cases.append(("dtype::별칭::ones(dtype=int64)",
                   lambda L: str(L.ones(2, dtype=L.int64).dtype)))
-    # `requires_grad` 도 같은 `**kw` 에 같이 버려지고 있었다.
+    # `requires_grad` was being discarded into the same `**kw` alongside.
     cases.append(("dtype::별칭::zeros(requires_grad=True)",
                   lambda L: str(L.zeros(2, requires_grad=True).requires_grad)))
 
-    # ── 공장 열넷이 **같은 두 인자**를 듣는가 ────────────────────────────
+    # ── do the fourteen factories listen to **the same two arguments** ──
     #
-    # 위를 못 박고 나서 전수로 쟀더니 공장마다 답이 달랐다. `zeros` 는 둘 다 들었고,
-    # `zeros_like` 는 `dtype=` 을 **받아 놓고 안 썼으며**(값은 맞고 형만 틀리다),
-    # `rand` 는 `requires_grad=` 를 아예 안 받아 `rand(3, requires_grad=True)` 가
-    # 멈췄다. **되는 것과 안 되는 것이 섞여 있으면 배우는 사람이 규칙을 못 세운다.**
+    # After pinning the above, an exhaustive measurement showed the answer differing per factory.
+    # `zeros` listened to both, `zeros_like` **accepted `dtype=` and did not use it** (the value
+    # right and the type wrong), and `rand` did not accept `requires_grad=` at all, so
+    # `rand(3, requires_grad=True)` stopped. **With some working and some not, a learner cannot
+    # form a rule.**
     #
-    # `requires_grad` 쪽이 더 나쁘다. 형이 틀리면 언젠가 눈에 띄지만, 기울기가 안 붙은
-    # 잎은 **손실이 내려가는 동안 그 파라미터만 조용히 안 움직인다** — 오류가 없다.
+    # The `requires_grad` side is worse. A wrong type is noticed eventually, and a leaf with no
+    # gradient attached leaves **that parameter alone quietly unmoving while the loss comes down**
+    # — with no error.
     _like = np.array([1.0, 2.0], dtype=np.float32)
     _factories = (
         ("zeros", lambda L, k: L.zeros(2, **k)),
@@ -10193,8 +10287,8 @@ def dtype_cases(inp=None):
         ("empty", lambda L, k: L.empty(2, **k)),
         ("full", lambda L, k: L.full((2,), 3.0, **k)),
         ("eye", lambda L, k: L.eye(2, **k)),
-        # **정수 텐서는 기울기를 못 받는다**(torch 가 거절한다). `arange(4)` 는
-        # int64 라 실수로 물어야 한다 — 형과 기울기를 한 입력으로 묻는 값이다.
+        # **An integer tensor cannot take gradients** (torch refuses). `arange(4)` is int64, so it
+        # has to be asked as a float — the value of asking type and gradient from one input.
         ("arange", lambda L, k: L.arange(4.0, **k)),
         ("linspace", lambda L, k: L.linspace(0.0, 1.0, 3, **k)),
         ("logspace", lambda L, k: L.logspace(0.0, 1.0, 3, **k)),
@@ -10203,9 +10297,9 @@ def dtype_cases(inp=None):
         ("ones_like", lambda L, k: L.ones_like(L.tensor(_like), **k)),
         ("empty_like", lambda L, k: L.empty_like(L.tensor(_like), **k)),
         ("full_like", lambda L, k: L.full_like(L.tensor(_like), 2.0, **k)),
-        # **`randn_like` 는 형을 못 묻는다.** 정규분포는 정수 칸에 못 뽑아서(torch 가
-        # 거절한다) 남는 것이 float64 인데 브라우저 쪽에는 배정도가 없다 — 셋이
-        # 갈리는 자리라 값으로 굳힐 수 없다. 기울기만 묻는다.
+        # **`randn_like`'s type cannot be asked.** A normal draw cannot go into an integer slot
+        # (torch refuses), so what is left is float64, and the browser side has no double precision
+        # — a place where the three part, so it cannot be frozen by value. The gradient alone is asked.
         ("randn_like", lambda L, k: L.randn_like(L.tensor(_like), **k), None),
     )
     for _spec in _factories:
@@ -10217,19 +10311,19 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::공장::{_name}(requires_grad=True)",
                       lambda L, f=_call: str(f(L, {"requires_grad": True}).requires_grad)))
 
-    # **모양도 같이 묻는다.** 형만 물으면 `eye(n, m)` 의 둘째 인자가 없어도 통과한다.
+    # **The shape is asked alongside.** Asking the type alone passes even with `eye(n, m)`'s second argument missing.
     cases.append(("dtype::공장::eye(2, 3) 은 직사각이다",
                   lambda L: str(tuple(L.eye(2, 3).shape))))
 
-    # ── 위의 열넷 **밖에 남은 공장들** ──────────────────────────────────────
+    # ── **the factories left outside** the fourteen above ──
     #
-    # 열넷을 한 문으로 모으고 나서 같은 잣대를 나머지에 대 봤다. **고친 것은 목록
-    # 이었지 결함의 갈래가 아니었다** — `**kw` 로 인자를 삼키는 모양이 창 함수
-    # 다섯과 번호 만드는 넷에 그대로 남아 있었다.
+    # After gathering the fourteen behind one door, the same yardstick was held to the rest. **What
+    # was fixed was a list and not a class of defect** — the shape of swallowing arguments into
+    # `**kw` was still there in the five window functions and the four that build indices.
     #
-    # 창 함수 쪽이 더 나쁘다. `hann_window(8, requires_grad=True)` 가 조용히
-    # 기울기 없는 잎을 주면, 그것을 학습시키는 코드는 오류 없이 **그 창만 안
-    # 움직인다.** 위 주석이 "더 나쁘다" 고 적어 둔 바로 그 갈래다.
+    # The window functions are worse. If `hann_window(8, requires_grad=True)` quietly gives a leaf
+    # with no gradient, code training it has no error and **that window alone does not move.**
+    # Exactly the branch the comment above calls "worse".
     _rest = (
         ("hann_window", lambda L, k: L.hann_window(8, **k), None),
         ("hamming_window", lambda L, k: L.hamming_window(8, **k), None),
@@ -10241,8 +10335,8 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::공장::{_name}(requires_grad=True)",
                       lambda L, f=_call: str(f(L, {"requires_grad": True}).requires_grad)))
 
-    # 번호를 만드는 넷. **기울기는 물을 수 없다**(정수라 torch 가 거절한다) —
-    # 형만 묻는다. `dtype=` 을 삼키면 여기서 갈린다.
+    # The four that build indices. **The gradient cannot be asked** (they are integers and torch
+    # refuses) — the type alone is asked. Swallow `dtype=` and it parts here.
     _int_makers = (
         ("randint", lambda L, k: L.randint(0, 5, (4,), **k)),
         ("randperm", lambda L, k: L.randperm(4, **k)),
@@ -10253,61 +10347,67 @@ def dtype_cases(inp=None):
         cases.append((f"dtype::공장::{_name}(dtype=int64)",
                       lambda L, f=_call: str(f(L, {"dtype": L.int64}).dtype)))
 
-    # ── 목록을 grep 으로 만들면 **아닌 것이 섞인다** ────────────────────────
+    # ── a list built with grep **has things in it that do not belong** ──
     #
-    # `**kw` 를 들고 있는 함수를 훑어 넷을 후보로 적었는데, torch 서명을 하나씩
-    # 보니 둘뿐이었다. `empty_strided` 는 이미 거절하고(걸음이라는 것이 없다),
-    # `bernoulli`·`poisson` 은 **torch 자신이 그 두 인자를 안 받는다** — 삼킬 것이
-    # 애초에 없다. 갈래가 같아 보인다고 몰아서 고치는 것이 이 표가 막는 일이다.
+    # Sweeping for functions carrying `**kw` produced four candidates, and reading torch's
+    # signatures one by one left two. `empty_strided` already refuses (there is no such thing as a
+    # stride), and `bernoulli` and `poisson` **do not take those two arguments in torch itself** —
+    # there is nothing to swallow to begin with. Fixing things in a batch because the branch looks
+    # the same is what this table prevents.
     #
-    # `normal` 은 **`dtype=` 을 못 묻는다.** 정규분포는 정수 칸에 못 뽑고 남는 것이
-    # float64 인데 브라우저 쪽에 배정도가 없다 — `randn_like` 와 같은 사정이다.
+    # `normal`'s **`dtype=` cannot be asked.** A normal draw cannot go into an integer slot and what
+    # is left is float64, and the browser side has no double precision — the same situation as
+    # `randn_like`.
     cases.append(("dtype::공장::normal(requires_grad=True)",
                   lambda L: str(L.normal(0.0, 1.0, (2,), requires_grad=True).requires_grad)))
 
     def _buf():
-        # **쓰기 가능한 버퍼여야 한다** — torch 가 읽기 전용 `bytes` 에 경고를 낸다.
+        # **It has to be a writable buffer** — torch warns on read-only `bytes`.
         return bytearray(np.array([1.5, -2.5, 3.0], dtype=np.float32).tobytes())
 
     cases.append(("dtype::공장::frombuffer(requires_grad=True)",
                   lambda L: str(L.frombuffer(_buf(), dtype=L.float32,
                                              requires_grad=True).requires_grad)))
 
-    # **`hasattr` 이 거절을 삼킨다.** `_AbsentDtype.np` 는 멈추라고 열어 둔 문인데
-    # `hasattr(dtype, "np")` 가 그 예외를 먹고 거짓을 답한다 — 그러면 numpy 갈래로
-    # 떨어져서 우리가 설계한 문구 대신 numpy 의 `TypeError` 가 나온다. 멈추기는
-    # 하므로 값이 틀리진 않지만, **없는 것과 오타가 같은 화면이 되는** 그 자리다.
-    # `_np_of` 가 바로 이 함정을 주석으로 적어 두었고, `frombuffer` 만 목록 밖이었다.
+    # **`hasattr` swallows the refusal.** `_AbsentDtype.np` is a door held open to stop on, and
+    # `hasattr(dtype, "np")` eats that exception and answers false — and then it falls into the
+    # numpy branch and numpy's `TypeError` comes out instead of the wording we designed. It does
+    # stop, so the value is not wrong, and it is the place where **absent and a typo become the same
+    # screen.** `_np_of` had written that very trap down in a comment, and only `frombuffer` was
+    # outside the list.
     cases.append(("dtype::없는형::frombuffer(dtype=half)=우리는거절",
                   refusal_case(lambda L: L.frombuffer(_buf(), dtype=L.half))))
 
-    # **축약 중 `norm` 만 `dtype=` 을 안 들었다.** `sum`·`mean`·`prod` 는 듣는데
-    # 하나만 안 들으면 규칙이 없는 것과 같다. torch 는 **먼저 형을 바꾸고 계산한다** —
-    # 계산한 뒤 바꾸면 정밀도가 이미 깎인 뒤라 값이 다르다.
-    # 물을 수 있는 형이 float64 뿐이다 — 기본값(float32)으로 물으면 답이 같아서
-    # 아무것도 안 묻는 케이스가 된다. 그런데 브라우저 쪽에는 배정도가 없으므로
-    # **셋이 갈린다.** 값 대신 "각자 문서대로 굴었는가" 를 묻는다.
+    # **Among the reductions, only `norm` was not listening to `dtype=`.** `sum`, `mean` and `prod`
+    # listen, and with one not listening there might as well be no rule. torch **converts the type
+    # first and then computes** — converting after computing has already lost precision and the
+    # value differs.
+    # The only type that can be asked is float64 — asked on the default (float32) the answers agree
+    # and the case asks nothing. And the browser side has no double precision, so **the three part.**
+    # Instead of the value, "did each behave as its own documentation says" is asked.
     cases.append(("dtype::공장::x.norm(dtype=float64)=브라우저는거절",
                   _as_expected(lambda L: L.tensor(np.float32([1.0, 2.0, 3.0]))
                                .norm(dtype=L.float64))))
 
-    # ── `out=` — 미리 만든 텐서에 써 넣기 ────────────────────────────────
+    # ── `out=` — writing into a tensor made in advance ──
     #
-    # **규약은 진짜 torch 에서 받아 적었다**(짐작 아님). 다섯 가지가 관측된다:
-    # 목적지에 쓰고 **같은 객체**를 돌려준다 · 모양이 다르면 오류가 아니라 **다시
-    # 잡는다** · 형은 `can_cast`(범주만, 정밀도는 자유) · 입력이든 목적지든
-    # **기울기를 요구하면 멈춘다** · 축약은 `dim` 없이 못 받는다.
+    # **The convention was taken down from real torch** (not guessed). Five things are observed: it
+    # writes into the destination and returns **the same object** · a differing shape is not an
+    # error but **a resize** · the type follows `can_cast` (category only, precision free) · it
+    # stops when **either the input or the destination requires gradients** · a reduction cannot
+    # take it without `dim`.
     #
-    # 절약은 우리에게 안 일어난다 — 계산한 뒤 옮긴다. 그래도 **목적지가 바뀌는 것과
-    # 돌아오는 것이 같은 객체라는 것은 사실**이라 그 둘은 지킨다.
+    # The saving does not happen for us — we compute and then move. **That the destination changes
+    # and that what comes back is the same object are still facts**, so those two are kept.
     _o_a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     _o_b = np.array([4.0, 5.0, 6.0], dtype=np.float32)
 
     def _wrote(L, fn, shape=(3,), dt=None):
-        """**같은 객체를 돌려주는가**와 **목적지가 바뀌었는가**를 함께 본다.
+        """Looks at **whether the same object comes back** and **whether the destination changed**,
+        together.
 
-        값은 반올림한다 — `exp` 는 GPU 와 CPU 의 마지막 자리가 갈리고, 여기서 묻는
-        것은 정밀도가 아니라 `out=` 이 목적지에 썼는가다.
+        The value is rounded — `exp` parts in the last digit between GPU and CPU, and what is asked
+        here is not precision but whether `out=` wrote into the destination.
         """
         dst = L.zeros(shape) if dt is None else L.zeros(shape, dtype=getattr(L, dt))
         got = fn(L, dst)
@@ -10328,18 +10428,18 @@ def dtype_cases(inp=None):
                   lambda L: _wrote(L, lambda L2, o: L2.matmul(
                       L2.tensor(np.eye(3, dtype=np.float32)),
                       L2.tensor(np.eye(3, dtype=np.float32)), out=o), (3, 3))))
-    # **번호를 내는 것들은 목적지도 정수여야 한다** — 실수 칸에 넣으면 형 규칙이 막는다.
+    # **The ones that produce indices need an integer destination too** — put into a float slot, the type rule blocks it.
     cases.append(("dtype::out::searchsorted(out=)",
                   lambda L: _wrote(L, lambda L2, o: L2.searchsorted(
                       L2.tensor(_o_a), L2.tensor(np.float32([2.5])), out=o),
                       (1,), "int64")))
 
-    # **정수 결과를 실수 칸에 넣는 것은 된다** — 범주가 넓어지는 쪽이다.
+    # **An integer result into a float slot is allowed** — the widening direction of the category.
     cases.append(("dtype::out::int 결과를 float 칸에",
                   lambda L: _wrote(L, lambda L2, o: L2.add(
                       L2.tensor(np.array([1, 2, 3])), L2.tensor(np.array([1, 1, 1])), out=o))))
 
-    # 거절 셋. 값을 굳히면 문구까지 맞춰야 하므로 **종류만** 본다.
+    # Three refusals. Freezing the value would mean matching the wording too, so **the kind alone** is looked at.
     def _refused(L, fn):
         try:
             fn(L)
@@ -10360,7 +10460,7 @@ def dtype_cases(inp=None):
                       L2.tensor(_o_a), L2.tensor(_o_b),
                       out=L2.zeros(3, requires_grad=True)))))
 
-    # **모양이 다르면 다시 잡는다** — 오류가 아니다. 경고는 문구가 길어 모양만 본다.
+    # **A differing shape is resized** — not an error. The warning's wording is long, so only the shape is looked at.
     def _resized(L):
         dst = L.zeros(7)
         L.add(L.tensor(_o_a), L.tensor(_o_b), out=dst)
@@ -10368,27 +10468,29 @@ def dtype_cases(inp=None):
 
     cases.append(("dtype::out::모양이 다르면 다시 잡는다", _resized))
 
-    # ── 이름은 있고 **칸이 없는** 형 넷 ──────────────────────────────────
+    # ── the four types whose **name exists and slot does not** ──
     #
-    # `torch.half`·`bfloat16`·`short`·`chalf` 는 dtype 인데 우리 쪽에서는 Tensor
-    # 메서드에서 파생된 **함수**였다. `dtype=torch.half` 가
-    # `'function' object has no attribute 'np'` 로 멈췄고 그건 오타와 같은 문구다.
-    # 형 자체는 없으므로 별칭이 아니라 **가리키는 것을 말하고 쓰면 멈추는** 이름이다.
+    # `torch.half`, `bfloat16`, `short` and `chalf` are dtypes, and on our side they were
+    # **functions** derived from Tensor methods. `dtype=torch.half` stopped with
+    # `'function' object has no attribute 'np'`, which is the same wording as a typo. The type
+    # itself is absent, so it is not an alias but a name that **says what it points at and stops
+    # when used.**
     for _name in ("half", "bfloat16", "short", "chalf"):
         cases.append((f"dtype::별칭::{_name} 이 가리키는 형",
                       lambda L, n=_name: str(getattr(L, n))))
         we_refuse(f"dtype={_name}",
                   lambda L, n=_name: L.zeros(2, dtype=getattr(L, n)), group="별칭")
 
-    # ── 없는 이름은 `hasattr` 에도 없어야 한다 ────────────────────────────
+    # ── an absent name has to be absent to `hasattr` too ──
     #
-    # 위의 `we_refuse` 가 `hasattr` 로 못 갈랐던 이유가 그대로 **사용자의 결함**이다.
-    # 결속의 모듈 `__getattr__` 이 아무 이름에나 함수를 내주면 `hasattr(torch,
-    # "compile")` 이 참이고, 있는지 보고 갈라 쓰는 코드가 **없는 쪽으로 들어간다** —
-    # 오류는 한참 뒤 부르는 자리에서 난다. 검사 장치를 막았던 것이 사용자도 막는다.
+    # The reason `we_refuse` above could not sort by `hasattr` is itself **the user's defect.** If
+    # the binding's module `__getattr__` hands out a function for any name, `hasattr(torch,
+    # "compile")` is true and code branching on existence **goes down the absent path** — the error
+    # comes much later, at the call site. What blocked the test apparatus blocks the user too.
     #
-    # 셋이 갈리는 자리라 값을 그대로 못 굳힌다. 진짜 torch 는 참, 우리 둘은 거짓이
-    # **답인** 자리이므로 "각자 문서대로 굴었는가"로 접는다 — `we_refuse` 와 같은 꼴.
+    # A place where the three part, so the value cannot be frozen as it is. Real torch true and our
+    # two false is **the answer**, so it folds into "did each behave as its own documentation says"
+    # — the same shape as `we_refuse`.
     def absent(name):
         def run(L, n=name):
             real = getattr(L, "__name__", "") == "torch"
@@ -10398,8 +10500,8 @@ def dtype_cases(inp=None):
                 f"뜻밖에 있다({n})" if has else f"뜻밖에 없다({n})")
         cases.append((f"dtype::없는이름::hasattr({name})", run))
 
-    # torch 에는 있고 우리 둘에는 없는 것으로 골랐다(실측). `cuda` 는 우리도 갖고
-    # 있어서 뺐다 — 있는 이름으로 물으면 이 검사는 아무것도 안 묻는다.
+    # Chosen as names torch has and our two do not (measured). `cuda` was taken out because we have
+    # it too — asked with a name that exists, this check asks nothing.
     for name in ("compile", "vmap", "autocast", "jit", "sparse_coo_tensor"):
         absent(name)
     return cases
@@ -10418,11 +10520,13 @@ def _backward_twice(L):
     y.backward()
 
 
-# 학습자가 실제로 만나는 실패들. 같은 조건에서 **같은 종류의 예외**가 나야 하고,
-# 메시지에는 torch 의 정규 영문 문구가 들어 있어야 한다 — 그래야 검색이 통한다.
+# The failures a learner actually meets. **The same kind of exception** has to come out under the
+# same conditions, and the message has to carry torch's canonical English phrase — that is what makes
+# a search work.
 #
-# 코어의 12건 중 10건이다. 빠진 둘(인덱스 범위 초과 · leaf 제자리 수정)은 메시지가
-# 아니라 **기능이 없어서** 못 덮는다. 없는 기능은 AttributeError 로 시끄럽게 죽는다.
+# Ten of the core's twelve. The two missing (index out of range, in-place edit of a leaf) cannot be
+# covered **for want of the functionality** rather than the message. Absent functionality dies loudly
+# as an AttributeError.
 _ERROR_CASES = [
     ("행렬곱 모양 불일치", lambda L: L.randn(3, 4) @ L.randn(3, 2),
      "shapes cannot be multiplied"),
@@ -10449,7 +10553,7 @@ _ERROR_CASES = [
 
 
 def error_cases(inp=None):
-    """T2 — 같은 조건에서 같은 예외가, 검색 가능한 문구와 함께 나는가."""
+    """T2 — does the same exception come out under the same conditions, with a searchable phrase."""
 
     def outcome(L, fn, phrase):
         try:
@@ -10484,10 +10588,11 @@ _REPR_CASES = [
 
 
 def repr_cases(inp=None):
-    """T3 — `print(t)` 가 진짜와 같은가.
+    """T3 — is `print(t)` the same as the real thing?
 
-    학습자가 가장 많이 하는 일이 print(tensor) 다. 다르게 찍히면 교재의 예시와 화면이
-    안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다. 값이 아니라 **글자**를 본다.
+    What a learner does most often is print(tensor). Printed differently, the screen does not match
+    the textbook's example, and they doubt what they did wrong every time. **The characters** are
+    looked at, not the value.
     """
 
     def ns(L):
@@ -10500,16 +10605,16 @@ def repr_cases(inp=None):
 
 
 def to_numpy(t):
-    """어느 라이브러리의 텐서든 numpy 로.
+    """Any library's tensor into numpy.
 
-    진짜 torch 와 borch 는 둘 다 `.detach().numpy()` 가 통한다. GPU 백엔드도
-    그 두 이름만 맞추면 하네스를 안 고쳐도 된다 — `numpy()` 안에서 읽어오면 된다.
+    Real torch and borch both take `.detach().numpy()`. A GPU backend needs only those two names to
+    fit and the harness need not be edited — it can read back inside `numpy()`.
     """
     return np.asarray(t.detach().numpy())
 
 
 def manifest_hash(cases):
-    """케이스 이름 목록의 해시. 표가 바뀐 뒤 낡은 골든으로 대조하는 것을 막는다."""
+    """A hash of the case-name list. Stops a comparison against stale golden answers after the table changes."""
     h = hashlib.sha256()
     for name, _ in cases:
         h.update(name.encode("utf-8"))
@@ -10518,10 +10623,10 @@ def manifest_hash(cases):
 
 
 def input_fingerprints(inp):
-    """입력 배열의 **키별** 지문. dtype·모양·바이트를 전부 문다.
+    """A **per-key** fingerprint of the input arrays. It bites on dtype, shape and bytes alike.
 
-    통짜 해시 하나만 두면 "입력이 다르다"까지만 알고 **어느 것이** 다른지는 모른다.
-    그러면 갈렸을 때 사람이 처음부터 뒤져야 한다 — 실제로 한 번 그랬다.
+    With one fingerprint over the whole thing, you know only "the inputs differ" and not **which**
+    one. Then a person has to search from the beginning when it parts — which really happened once.
     """
     out = {}
     for key in sorted(inp):
@@ -10535,11 +10640,11 @@ def input_fingerprints(inp):
 
 
 def input_fingerprint(inp):
-    """입력 전체의 지문.
+    """A fingerprint of all the inputs.
 
-    numpy 의 `default_rng` 는 버전이 달라도 같은 수를 주기로 되어 있다. 그 약속에
-    검사를 안 걸어두면, 어긋났을 때 **다른 입력끼리 조용히 비교**하게 된다 —
-    그러면 하네스가 통과 도장을 찍는데 아무것도 대조하지 않은 셈이 된다.
+    numpy's `default_rng` promises the same numbers across versions. Without a check on that
+    promise, breaking it leaves **different inputs quietly compared** — and then the harness stamps
+    a pass having compared nothing.
     """
     h = hashlib.sha256()
     for key, digest in sorted(input_fingerprints(inp).items()):
