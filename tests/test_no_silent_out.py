@@ -1,34 +1,36 @@
-"""**`out=` 을 조용히 삼키는 자리가 없어야 한다.**
+"""**Nothing may swallow `out=` quietly.**
 
-torch 는 198 개 이름에서 `out=` 을 받아 미리 만든 텐서에 결과를 써 넣는다. 우리는
-그것을 안 한다 — 우리가 하면 계산해서 사본을 넣게 되고, `out=` 의 존재 이유인
-**할당을 안 하는 것**은 일어나지 않는다. 절약을 흉내 내면 없는 것을 배우게 된다.
+torch takes `out=` at 198 names and writes the result into a tensor made in advance. We do
+not — doing it would mean computing and then putting a copy in, and **not allocating**, which
+is why `out=` exists, would not happen. Imitating the saving teaches something that is not
+there.
 
-안 하는 것 자체는 괜찮다. **문제는 어떻게 안 하느냐다.**
+Not doing it is fine in itself. **The problem is how it is not done.**
 
-    torch.randint(0, 5, (4,), out=buf)    # torch: buf 에 쓴다
-    borch.randint(0, 5, (4,), out=buf)    # 우리: buf 는 0 인 채로 남았다
+    torch.randint(0, 5, (4,), out=buf)    # torch: writes into buf
+    borch.randint(0, 5, (4,), out=buf)    # ours: buf was left at zero
 
-여섯이 이랬다 — `range`·`randperm`·`randint`·`rand_like`·`randn_like`·
-`searchsorted`. 오류가 없으니 다음 줄로 가고, 틀린 값은 한참 뒤에 드러난다.
-나머지 190 여 자리는 `**kw` 가 없어서 파이썬이 `TypeError` 로 멈춰 준다 —
-**우연히 안전했던 것**이고, `**kw` 를 하나 더 다는 날 그 우연이 끝난다.
+Six were like this — `range`, `randperm`, `randint`, `rand_like`, `randn_like`,
+`searchsorted`. With no error it goes to the next line, and the wrong value surfaces much
+later. The other 190-odd have no `**kw`, so Python stops them with a `TypeError` — **safe by
+accident**, and that accident ends the day one more `**kw` is added.
 
-## 이 검사가 묻는 것
+## What this check asks
 
-torch 가 `out=` 을 받는 이름 중 우리에게도 있는 것마다: 그 함수가 `out` 을 이름으로
-받지 않으면서 `**kw` 를 받는다면, 본문에 `_no_out` 이 있어야 한다. 없으면 삼킨다.
+For every name torch takes `out=` for that we also have: if that function does not take `out`
+by name and does take `**kw`, its body has to contain `_no_out`. Without it, it swallows.
 
-`out=` 을 실제로 지원하기로 결정하면 이 검사는 지운다. 그때까지는 **안 하는 방식이
-일관되다**는 것을 지킨다.
+If `out=` is ever really supported, this check gets deleted. Until then it guards that **the
+way it is not done is consistent.**
 
-## 목록을 docstring 에서 뽑는다 — 조금 넓다
+## The list comes from the docstrings — slightly wide
 
-torch 의 C 함수는 서명을 들여다볼 수 없어서 docstring 의 `out=None` 으로 고른다.
-`rand_like`·`randn_like` 는 거기 적혀 있는데 **실제 오버로드는 안 받는다** — 케이스를
-쓰다가 torch 쪽 `TypeError` 로 알았다. 그래서 이 검사는 몇 자리를 더 잡는데, 그쪽으로
-넓은 것은 안전하다: 문을 하나 더 다는 것뿐이고 torch 도 거절하는 인자다. 반대로
-좁으면 삼키는 자리가 남는다.
+torch's C functions do not expose their signatures, so they are picked from `out=None` in the
+docstrings. `rand_like` and `randn_like` are written there while **the actual overload does
+not take it** — found while writing cases, through a `TypeError` on torch's side. So this
+check catches a few extra places, and in that direction
+being wide is safe: it is one more door, and it is an argument torch refuses too. Narrow,
+and a place that swallows is left behind.
 """
 
 import ast
@@ -54,7 +56,7 @@ def _torch_names_taking_out():
 
 
 def _functions_with_varkw(path):
-    """파일 안 모듈 자리 함수 → (`**kw` 이름, `_no_out` 을 부르는가)."""
+    """The file's module-level functions → (the `**kw` name, whether it calls `_no_out`)."""
     found = {}
     for node in ast.parse(path.read_text()).body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -68,18 +70,19 @@ def _functions_with_varkw(path):
 
 
 def test_no_function_can_swallow_out():
-    """`**kw` 로 `out=` 을 받는 자리에는 반드시 문이 있어야 한다."""
+    """Anywhere `out=` can arrive through `**kw` must have the door."""
     taking_out = _torch_names_taking_out()
     naked = []
     for pkg in ("borch", "borch_webgpu"):
         for path in sorted((ROOT / pkg).rglob("*.py")):
             for name, guarded in _functions_with_varkw(path).items():
-                # `range_top` 은 모듈에서 `range` 로 나간다 — torch 의 그 이름이다
+                # `range_top` leaves the module as `range` — torch's name for it
                 torch_name = "range" if name == "range_top" else name
                 if torch_name in taking_out and not guarded:
                     naked.append(f"{path.relative_to(ROOT)} — {name}(**kw)")
     assert not naked, (
-        "`out=` 을 조용히 삼킬 수 있는 자리:\n  " + "\n  ".join(sorted(naked)) + "\n\n"
-        "본문 첫 줄에 `_no_out(kw)` 를 넣어라. 삼키면 오류 없이 목적지가 안 바뀌고,\n"
-        "그 값은 한참 뒤에 엉뚱한 자리에서 드러난다."
+        "places that could swallow `out=` quietly:\n  " + "\n  ".join(sorted(naked)) + "\n\n"
+        "Put `_no_out(kw)` on the body's first line. Swallowed, the destination is not\n"
+        "written with no error at all, and that value surfaces much later somewhere\n"
+        "unrelated."
     )

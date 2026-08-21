@@ -1,29 +1,30 @@
-"""**같은 이름의 `def` 가 모듈 자리에 둘 있으면 하나는 안 불린다.**
+"""**Two module-level `def`s of the same name mean one of them is never called.**
 
-파이썬은 나중 것을 택하고 **아무 말도 안 한다.** 오류도 경고도 없다. 그래서 앞의
-정의를 고치면 아무 일도 안 일어나고, 뒤의 정의를 안 보고 고친 사람은 자기 수정이
-왜 안 먹는지를 한참 쫓는다.
+Python takes the later one and **says nothing.** No error, no warning. So editing the
+earlier definition does nothing at all, and whoever edited it without seeing the later one
+spends a long time chasing why their fix has no effect.
 
-## 잡은 것
+## What it caught
 
-`borch_webgpu/_ops.py` 에 `_dtype_name` 을 새로 쓰다가 물렸다. 같은 파일 아래쪽에
-같은 이름이 이미 있었고(승격표가 쓰는 것), 파이썬이 그쪽을 택했다. 새로 쓴 것은
-"이름만 있고 칸은 없는 형" 을 만나면 멈추게 되어 있었는데 **한 줄도 안 불렸고**,
-`dtype=torch.int` 가 조용히 통과했다. 브라우저 대조가 "뜻밖의 성공" 으로 잡아 줄
-때까지 몰랐다.
+Writing a new `_dtype_name` in `borch_webgpu/_ops.py` was bitten by it. The same name
+already existed further down the same file (the one the promotion table uses) and Python
+took that one. The new one was written to stop on "a type that is a label with no slot", and
+**not one line of it was ever called**; `dtype=torch.int` passed quietly. Nobody knew until
+the browser comparison caught it as an unexpected pass.
 
-훑어보니 코어에 셋이 더 있었다. 둘(`_pair`·`matmul`)은 몸이 같아 해가 없었지만,
-`vander` 는 **서로 다른 두 함수**였다 — 하나는 차수가 커지고 하나는 줄어든다.
-그리고 그 갈림이 "클래스 몸이 먼저 정의된 쪽을 잡는다" 는 **정의 차례**에 기대고
-있었다. 값은 맞았지만(torch 도 `vander` 와 `linalg.vander` 를 갈라 놓았다) 읽는
-사람에게는 뒤가 앞을 덮는 것으로 보인다. 이름을 갈라 그 기댐을 없앴다.
+Sweeping found three more in the core. Two (`_pair`, `matmul`) had identical bodies and were
+harmless, but `vander` was **two different functions** — one where the degree grows and one
+where it shrinks. And that divergence leaned on **definition order**, on the class body
+taking whichever was defined first. The values were right (torch separates `vander` from
+`linalg.vander` too), and to a reader it looks like the later one covering the earlier. The
+names were separated to remove that dependence.
 
-## 왜 ruff 를 안 쓰나
+## Why not ruff
 
-`F811` 이 이것을 잡기는 한다. 그런데 지역 인자가 수입한 이름을 가리는 자리
-(`def call(t, ...)`)와 재수입까지 같이 잡아서, 이 저장소에서 서른 건 넘게 나온다.
-그만큼 걸리면 목록이 생기고 목록은 안 읽힌다. **위험한 것은 모듈 자리의 `def` 둘**
-뿐이라 그것만 본다.
+`F811` does catch this. But it also catches a local argument shadowing an imported name
+(`def call(t, ...)`) and re-imports, which comes to over thirty in this repository. That many
+hits makes a list, and lists do not get read. **What is dangerous is two module-level
+`def`s**, so that alone is looked at.
 """
 
 import ast
@@ -39,7 +40,7 @@ def _sources():
 
 
 def test_no_module_level_name_is_defined_twice():
-    """모듈 자리의 `def` 는 파일마다 이름이 한 번씩만 나와야 한다."""
+    """A module-level `def` may use each name once per file."""
     twice = []
     for path in _sources():
         seen = collections.defaultdict(list)
@@ -51,8 +52,9 @@ def test_no_module_level_name_is_defined_twice():
                 where = "·".join(str(n) for n in lines)
                 twice.append(f"{path.relative_to(ROOT)}:{where} — def {name}")
     assert not twice, (
-        "모듈 자리에 같은 이름의 `def` 가 둘 이상이다:\n  " + "\n  ".join(twice) + "\n\n"
-        "파이썬은 나중 것을 택하고 아무 말도 안 한다 — 앞의 것을 고치면 아무 일도\n"
-        "안 일어난다. 이름을 가르거나 하나를 지워라. **몸이 같아 보여도** 지우기 전에\n"
-        "클래스 몸이 앞의 것을 잡고 있지 않은지 보라(`vander` 가 그랬다)."
+        "two or more module-level `def`s share a name:\n  " + "\n  ".join(twice) + "\n\n"
+        "Python takes the later one and says nothing — editing the earlier one does\n"
+        "nothing at all. Separate the names or delete one. **Even where the bodies look\n"
+        "identical**, check first whether a class body is holding the earlier one\n"
+        "(`vander` was)."
     )
