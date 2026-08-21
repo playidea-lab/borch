@@ -62,10 +62,12 @@
 
     <h2>Save and load</h2>
     <p>
-      <code>save</code> takes a record of named tensors and returns bytes;
-      <code>load</code> takes the bytes back. Nothing touches the filesystem — in a
-      browser there isn't one, so what you get is an <code>ArrayBuffer</code> you can
-      download, put in IndexedDB, or hand straight back to <code>load</code>.
+      <code>save</code> takes whatever you hand it — a state dict, or a whole nested
+      object with the model, the optimizer and an epoch number in it — and returns
+      bytes; <code>load</code> gives that structure back. Nothing touches the
+      filesystem — in a browser there isn't one, so what you get is an
+      <code>ArrayBuffer</code> you can download, put in IndexedDB, or hand straight
+      back to <code>load</code>.
     </p>
 
     <div class="runnable" data-lang="js">
@@ -85,13 +87,17 @@
         const fresh = new nn.Sequential(new nn.Linear(4, 3), new nn.ReLU());
         log("fresh model output:", (await fresh.call(x).sum().item()).toFixed(4));
 
-        // bytes → state. load() gives { tensors, metadata } — the state dict is the
-        // first half, and the metadata is where a training step counter would live.
-        const bundle = load(new Uint8Array(bytes));
-        log("metadata keys:", Object.keys(bundle.metadata).join(", ") || "(none)");
-        fresh.loadStateDict(bundle.tensors);
+        // bytes → state. You get back exactly what you saved.
+        fresh.loadStateDict(load(new Uint8Array(bytes)));
         log("after loading:     ", (await fresh.call(x).sum().item()).toFixed(4));
         log("original:          ", before.toFixed(4));
+
+        // The textbook idiom is a nested checkpoint, and it round trips as it is —
+        // numbers and strings ride along with the tensors.
+        const opt = new optim.Adam(model.parameters(), 0.01);
+        const whole = await save({ model: model.stateDict(), opt: opt.stateDict(), epoch: 3 });
+        const ck = load(new Uint8Array(whole));
+        log("checkpoint keys:", Object.keys(ck).join(", "), "· epoch:", ck.epoch);
       </script>
     </div>
 

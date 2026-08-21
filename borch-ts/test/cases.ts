@@ -27,7 +27,7 @@ import * as nn from "../src/nn.js";
 import * as rnn from "../src/rnn.js";
 import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
-import { load, save } from "../src/serialize.js";
+import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import { LinAlgError } from "../src/errors.js";
 import { noGrad, Tensor } from "../src/tensor.js";
@@ -3168,9 +3168,17 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   // 형식이 서로 다르므로(torch 는 pickle, 이쪽은 safetensors) **바이트가 아니라
   // 왕복을 묻는다.** 파이썬 쪽은 임시 파일을 거치고 여기는 바이트 그대로인데,
   // 묻는 것은 같다 — 쓴 것을 되읽으면 같은 것이 나오는가.
+  /** 되읽은 것에서 텐서 표를 꺼낸다. 나무는 `Savable` 이라 좁혀야 쓴다. */
+  const asTensors = (got: Savable): Record<string, Tensor> => {
+    if (got === null || typeof got !== "object" || Array.isArray(got)
+        || got instanceof Tensor) {
+      throw new Error("되읽은 것이 텐서 표가 아니다");
+    }
+    return got as Record<string, Tensor>;
+  };
+
   out.set("opt::save/load 가 state_dict 를 왕복한다", async () => {
-    const got = load(await save(model().stateDict()));
-    const w = got.tensors["0.weight"];
+    const w = asTensors(load(await save(model().stateDict())))["0.weight"];
     if (!w) throw new Error("0.weight 가 없다");
     return w;
   });
@@ -3179,8 +3187,38 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     const bytes = await save(model().stateDict());
     const dst = new nn.Sequential(
       new nn.Linear(6, 8), new nn.ReLU(), new nn.Linear(8, 3));
-    dst.loadStateDict(load(bytes).tensors);
+    dst.loadStateDict(asTensors(load(bytes)));
     return dst.forward(inp.get("train_x"));
+  });
+
+  // **교재의 관용구는 중첩이다.** `{model: …, opt: …, epoch: 3}` 를 통째로 저장한다.
+  // 평평한 텐서 표만 되면 그 코드가 안 돈다 — 오래 안 됐다.
+  out.set("opt::save/load 가 중첩을 왕복한다", async () => {
+    const m = model();
+    const opt = new optim.Adam(m.parameters(), 0.05);
+    const sd = opt.stateDict();
+    const bytes = await save({
+      model: m.stateDict(), opt: sd, epoch: 3, note: "half way",
+    });
+    const got = load(bytes);
+    if (got === null || typeof got !== "object" || Array.isArray(got)
+        || got instanceof Tensor) {
+      throw new Error("되읽은 것이 사전이 아니다");
+    }
+    const keys = Object.keys(got).sort().join(" ");
+    return `${keys} epoch=${String(got.epoch)} note=${String(got.note)}`;
+  });
+
+  // **`stateDict` 의 열쇠에는 이미 점이 들어 있다**(`0.weight`). 편 이름을 점으로
+  // 다시 쪼개 되돌리면 `{model: {0: {weight: …}}}` 가 나온다 — 값은 다 있는데 구조가
+  // 달라서, 되읽은 것을 `loadStateDict` 에 넣으면 그때 터진다.
+  out.set("opt::중첩 안의 점 찍힌 열쇠가 안 쪼개진다", async () => {
+    const got = load(await save({ model: model().stateDict() }));
+    if (got === null || typeof got !== "object" || Array.isArray(got)
+        || got instanceof Tensor) {
+      throw new Error("되읽은 것이 사전이 아니다");
+    }
+    return Object.keys(asTensors(got.model as Savable)).sort().join(" ");
   });
 
   /** 학습률의 자취. **옵티마이저를 실제로 밟는다** — 순서가 값을 정한다. */

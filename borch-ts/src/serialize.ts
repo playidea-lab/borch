@@ -72,7 +72,7 @@ interface Entry {
  * fetch them back. Hand it tensors already brought down to the host (`await
  * t.cpu()`) and that round trip is gone.
  */
-export async function save(
+export async function encode(
   tensors: Record<string, Tensor>,
   metadata: Record<string, string> = {},
 ): Promise<Uint8Array> {
@@ -137,7 +137,7 @@ export async function save(
  * not agree — a checkpoint that is quietly wrong robs every training run
  * after it of meaning.
  */
-export function load(bytes: Uint8Array): Bundle {
+export function decode(bytes: Uint8Array): Bundle {
   if (bytes.byteLength < LENGTH_FIELD) {
     throw new RuntimeError(`checkpoint is too short: ${bytes.byteLength} bytes`);
   }
@@ -194,6 +194,129 @@ export function load(bytes: Uint8Array): Bundle {
   return { tensors, metadata };
 }
 
+// ── 중첩 ────────────────────────────────────────────────────────────────────
+//
+// **교재의 관용구는 중첩이다** — `{model: …, opt: …, epoch: 3}` 를 통째로 저장한다.
+// 평평한 텐서 표만 되면 그 코드가 안 돈다.
+//
+// 파일 형식은 그대로다. 구조를 나무로 적어 `borch.tree` 라는 메타데이터 열쇠에 싣고,
+// 텐서는 지금까지처럼 평평하게 눕힌다. **파이썬 `_serialize.py` 와 같은 스킴이고,
+// 그것이 요점이다** — 두 벌로 두면 한쪽만 고쳐지고 그때 한쪽이 쓴 파일을 다른 쪽이
+// 못 읽는다. 나무가 없는 파일(남이 만든 safetensors)은 평평한 표로 준다.
+
+/** `borch.tree` — 구조를 적는 자리. 파이썬 쪽과 **같은 글자여야 한다.** */
+const TREE_KEY = "borch.tree";
+
+/** What this format can hold. It is not pickle, so not any object at all. */
+export type Savable =
+  | Tensor | null | boolean | number | string | Savable[] | { [key: string]: Savable };
+
+/** 나무의 마디. `T`=텐서 · `d`=사전 · `l`=배열 · `j`=그냥 값. */
+type Node =
+  | { t: "T"; v: string }
+  | { t: "d"; v: Record<string, Node> }
+  | { t: "l"; v: Node[] }
+  | { t: "j"; v: null | boolean | number | string };
+
+// 파이썬 쪽에는 `u`(튜플)도 있다. **JS 에는 그 자리가 없다** — 배열 하나뿐이라
+// 쓸 일이 없고, 읽을 때는 받아서 배열로 준다(아래). 안 그러면 파이썬이 쓴 파일에서
+// 튜플이 든 것만 조용히 못 읽힌다.
+
+function flatten(
+  obj: Savable, path: string[], tensors: Record<string, Tensor>, seen: Set<string>,
+): Node {
+  if (obj instanceof Tensor) {
+    const name = path.join(".") || "tensor";
+    if (seen.has(name)) {
+      // 서로 다른 자리가 같은 이름으로 펴졌다. 하나가 다른 하나를 덮으면 되돌릴 때
+      // 두 자리가 같은 값을 갖는데, 그것은 예외보다 나쁘다.
+      throw new RuntimeError(
+        `'${name}' appears twice — the flattened names collide and cannot be stored.`);
+    }
+    seen.add(name);
+    tensors[name] = obj;
+    return { t: "T", v: name };
+  }
+  if (Array.isArray(obj)) {
+    return { t: "l", v: obj.map((v, i) => flatten(v, [...path, String(i)], tensors, seen)) };
+  }
+  if (obj === null || typeof obj === "boolean" || typeof obj === "number"
+      || typeof obj === "string") {
+    return { t: "j", v: obj };
+  }
+  if (typeof obj === "object") {
+    const v: Record<string, Node> = {};
+    for (const [k, child] of Object.entries(obj)) {
+      v[k] = flatten(child, [...path, k], tensors, seen);
+    }
+    return { t: "d", v };
+  }
+  throw new RuntimeError(
+    `${typeof obj} cannot be stored — only tensors, objects, arrays, numbers and strings.\n` +
+    "This format is not pickle, so it cannot hold arbitrary objects.");
+}
+
+function unflatten(node: Node, tensors: Record<string, Tensor>): Savable {
+  if (node.t === "T") {
+    const t = tensors[node.v];
+    if (!t) throw new RuntimeError(`the tree names '${node.v}', which the file does not hold`);
+    return t;
+  }
+  if (node.t === "d") {
+    const out: Record<string, Savable> = {};
+    for (const [k, child] of Object.entries(node.v)) out[k] = unflatten(child, tensors);
+    return out;
+  }
+  // 파이썬이 쓴 튜플(`u`)도 여기로 온다 — JS 에는 그 자리가 없어 배열로 준다.
+  if (node.t === "l" || (node as { t: string }).t === "u") {
+    return (node.v as Node[]).map((child) => unflatten(child, tensors));
+  }
+  return node.v;
+}
+
+/**
+ * A checkpoint, as bytes — **it takes nesting as it is.** This is where
+ * `torch.save` sits.
+ *
+ * ```ts
+ * const bytes = await save({ model: m.stateDict(), opt: o.stateDict(), epoch: 3 });
+ * ```
+ *
+ * **It is async** — the values are on the GPU, so there is a round trip to fetch
+ * them back.
+ *
+ * Hand it a flat table of tensors and it behaves as it did before — that is one
+ * case of nesting too. One tree rides along in the file, though, so **the bytes
+ * differ from before.** Older files still read.
+ */
+export async function save(
+  obj: Savable, metadata: Record<string, string> = {},
+): Promise<Uint8Array> {
+  const tensors: Record<string, Tensor> = {};
+  const tree = flatten(obj, [], tensors, new Set());
+  return encode(tensors, { ...metadata, [TREE_KEY]: JSON.stringify(tree) });
+}
+
+/**
+ * Bytes, as a checkpoint — with the structure it was saved under. This is where
+ * `torch.load` sits.
+ *
+ * **A file with no tree comes back as a flat table.** Someone else's safetensors is
+ * like that, and so is a file borch.ts wrote before it had this layer.
+ */
+export function load(bytes: Uint8Array): Savable {
+  const { tensors, metadata } = decode(bytes);
+  const tree = metadata[TREE_KEY];
+  if (tree === undefined) return tensors;
+  let node: Node;
+  try {
+    node = JSON.parse(tree) as Node;
+  } catch {
+    throw new RuntimeError(`checkpoint has a '${TREE_KEY}' that is not JSON`);
+  }
+  return unflatten(node, tensors);
+}
+
 /** 머리에 든 것이 우리가 아는 모양인가. 아니면 그 이름을 대고 던진다. */
 function asEntry(name: string, value: unknown): Entry {
   const e = value as Partial<Entry> | null;
@@ -232,11 +355,15 @@ function isStringMap(v: unknown): v is Record<string, string> {
  * **in one file.**
  *
  * ```ts
- * const bytes = await save({
+ * const bytes = await encode({
  *   ...prefixed("model", model.stateDict()),
  *   ...prefixed("opt", opt.stateDict().tensors),
  * }, { ...numbersToMeta("opt", opt.stateDict().numbers) });
  * ```
+ *
+ * **This is a tool for using the flat codec directly.** `save` takes nesting as it
+ * is, so no tag is needed — write `save({ model: …, opt: … })` and names cannot
+ * collide.
  */
 export function prefixed<T>(
   prefix: string, entries: Record<string, T>,

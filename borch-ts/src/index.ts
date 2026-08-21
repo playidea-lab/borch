@@ -116,10 +116,12 @@ export { slice } from "./indexing.js";
 export type { Slice } from "./indexing.js";
 // 체크포인트. **형식은 safetensors 다** — 파이썬 `borch`·numpy·HF 도구가 같은 파일을
 // 읽는다. torch 의 `save`/`load` 는 pickle 이라 옮길 수도 옮겨서도 안 된다.
+// `save`/`load` 는 **중첩을 그대로** 오간다 — torch·파이썬 `borch` 와 같은 자리다.
+// `encode`/`decode` 는 그 밑의 코덱이고, 평평한 텐서 표와 바이트만 다룬다.
 export {
-  load, metaToNumbers, numbersToMeta, prefixed, save, unprefixed,
+  decode, encode, load, metaToNumbers, numbersToMeta, prefixed, save, unprefixed,
 } from "./serialize.js";
-export type { Bundle } from "./serialize.js";
+export type { Bundle, Savable } from "./serialize.js";
 // **밖에서 여닫을 수 있어야 한다.** `noGrad(fn)` 은 함수를 받는 모양이라 파이썬의
 // `with` 로 옮길 수가 없다 — 결속이 스위치를 직접 쥔다.
 export { gradMode } from "./autograd.js";

@@ -10,8 +10,8 @@
  */
 
 import {
-  init, keepAlive, load, manualSeed, metaToNumbers, nn, numbersToMeta, optim,
-  prefixed, save, scope, Tensor, unprefixed,
+  decode, encode, init, keepAlive, load, manualSeed, metaToNumbers, nn,
+  numbersToMeta, optim, prefixed, save, scope, Tensor, unprefixed,
 } from "../src/index.js";
 
 interface Check { name: string; ok: boolean; note: string }
@@ -96,6 +96,30 @@ export async function sample(): Promise<number[]> {
   return Array.from(bytes);
 }
 
+/**
+ * 중첩된 표본 하나. **나무 스킴이 두 벌이 됐고, 이것이 그 둘을 맞대는 유일한 자리다.**
+ *
+ * `serialize.ts` 와 파이썬 `_serialize.py` 가 같은 마디 종류(`T`/`d`/`l`/`j`)를 같은
+ * 글자(`borch.tree`)에 적기로 되어 있는데, 그 약속을 지금까지 아무도 안 쟀다. 한쪽만
+ * 고쳐지면 **한쪽이 쓴 체크포인트를 다른 쪽이 못 읽는다** — 그때 나오는 것은 예외가
+ * 아니라 구조가 다른 사전이라 더 늦게 들킨다.
+ *
+ * 위의 `sample` 로는 안 보인다. 그쪽은 최상위가 텐서 사전이라 나무가 있으나 없으나
+ * 같은 것이 나온다 — **평평한 것만 물으면 나무는 한 번도 안 밟힌다.**
+ */
+export async function sampleNested(): Promise<number[]> {
+  await init();
+  const bytes = await save({
+    model: { "fc.weight": Tensor.from([1.5, -2.25], [2]) },
+    steps: [Tensor.from([7], [1]), 3],
+    epoch: 5,
+    note: "nested",
+    done: false,
+    nothing: null,
+  });
+  return Array.from(bytes);
+}
+
 export async function report(): Promise<string> {
   await init();
   const data = inputs();
@@ -107,8 +131,10 @@ export async function report(): Promise<string> {
     flags: Tensor.from([1, 0], [2], { dtype: "bool" }),
     empty: Tensor.from(new Float32Array(0), [0]),
   };
-  const bytes = await save(original, { note: "borch 체크포인트" });
-  const back = load(bytes);
+  // **코덱을 직접 부른다.** `save`/`load` 는 그 위에 나무를 얹은 자리이고, 이 문단이
+  // 묻는 것은 밑의 바이트다 — 나무까지 끼면 무엇이 깨졌는지가 흐려진다.
+  const bytes = await encode(original, { note: "borch 체크포인트" });
+  const back = decode(bytes);
 
   want("이름이 그대로 온다",
     Object.keys(back.tensors).sort().join(",") === "empty,flags,labels,weight",
@@ -132,8 +158,8 @@ export async function report(): Promise<string> {
   want("머리가 8 바이트에 맞춰진다", (8 + headerLength) % 8 === 0,
     `머리 ${headerLength}`);
   want("두 번 저장하면 같은 바이트다",
-    same(new Float32Array((await save(original)).buffer.slice(0)),
-      new Float32Array((await save(original)).buffer.slice(0))));
+    same(new Float32Array((await encode(original)).buffer.slice(0)),
+      new Float32Array((await encode(original)).buffer.slice(0))));
 
   // 깨진 파일은 조용히 이상한 텐서가 되면 안 된다.
   for (const [name, broken] of [
@@ -141,7 +167,7 @@ export async function report(): Promise<string> {
     ["몸이 모자란 파일", bytes.subarray(0, bytes.length - 4)],
   ] as [string, Uint8Array][]) {
     let threw = false;
-    try { load(broken); } catch { threw = true; }
+    try { decode(broken); } catch { threw = true; }
     want(`${name}을 거절한다`, threw);
   }
 
@@ -149,7 +175,8 @@ export async function report(): Promise<string> {
   const trained = build();
   await train(trained, data, 3);
   const restored = build();
-  restored.model.loadStateDict(load(await save(trained.model.stateDict())).tensors);
+  restored.model.loadStateDict(
+    decode(await encode(trained.model.stateDict())).tensors);
   want("모델 state_dict 가 바이트를 건넌다",
     same(await trained.model.parameters()[0]!.toArray(),
       await restored.model.parameters()[0]!.toArray()));
@@ -163,7 +190,7 @@ export async function report(): Promise<string> {
   const first = build();
   const early = await train(first, data, 5);
   const optState = first.opt.stateDict();
-  const checkpoint = await save(
+  const checkpoint = await encode(
     {
       ...prefixed("model", first.model.stateDict()),
       ...prefixed("opt", optState.tensors),
@@ -175,7 +202,7 @@ export async function report(): Promise<string> {
   );
 
   const second = build();
-  const read = load(checkpoint);
+  const read = decode(checkpoint);
   second.model.loadStateDict(unprefixed("model", read.tensors));
   second.opt.loadStateDict({
     tensors: unprefixed("opt", read.tensors),
@@ -207,6 +234,62 @@ export async function report(): Promise<string> {
   want("재개한 스케줄러가 통으로 돌린 것과 같은 학습률에 있다",
     second.opt.paramGroups[0]!.lr === straightKit.opt.paramGroups[0]!.lr,
     `이음 ${second.opt.paramGroups[0]!.lr} / 통 ${straightKit.opt.paramGroups[0]!.lr}`);
+
+  // ── 중첩으로 같은 일 하기 ─────────────────────────────────────────────
+  //
+  // 위의 재개는 이름에 꼬리표를 붙여 평평하게 눕히고 숫자는 메타데이터로 뺐다. 그것이
+  // 이 층이 생기기 전의 유일한 길이었고, **교재에 그렇게 안 적혀 있다** — 교재는
+  // `{model: …, opt: …, epoch: 3}` 을 통째로 저장한다.
+  //
+  // 같은 궤적이 나와야 한다. 안 나오면 나무가 무언가를 흘린 것이고, **여기서 안 물으면
+  // 그 흘림은 골든이 못 본다** — 골든은 열쇠 이름과 곁의 값만 보지 학습을 안 잇는다.
+  const third = build();
+  const early3 = await train(third, data, 5);
+  const state3 = third.opt.stateDict();
+  const nested = await save({
+    model: third.model.stateDict(),
+    opt: { tensors: state3.tensors, numbers: state3.numbers },
+    sched: third.sched.stateDict(),
+    epoch: 5,
+    note: "half way",
+  });
+
+  const fourth = build();
+  const back3 = load(nested) as {
+    model: Record<string, Tensor>;
+    opt: { tensors: Record<string, Tensor>; numbers: Record<string, number> };
+    sched: Record<string, number>;
+    epoch: number;
+    note: string;
+  };
+  fourth.model.loadStateDict(back3.model);
+  fourth.opt.loadStateDict(back3.opt);
+  fourth.sched.loadStateDict(back3.sched);
+  const resumed3 = await train(fourth, data, 5);
+
+  const joined3 = [...early3, ...resumed3];
+  want("중첩으로 저장한 재개도 통으로 돌린 것과 비트까지 같다",
+    joined3.length === straight.length && joined3.every((v, i) => v === straight[i]),
+    `${joined3.length} 스텝`);
+  // 텐서가 아닌 것도 같이 실린다 — 그것이 평평한 표와 갈리는 자리다.
+  want("나무가 숫자와 글자를 같이 나른다",
+    back3.epoch === 5 && back3.note === "half way",
+    `epoch=${String(back3.epoch)} note=${String(back3.note)}`);
+
+  // **점 찍힌 열쇠를 다시 쪼개면 안 된다.** `stateDict` 의 이름에는 이미 점이 있다
+  // (`fc1.weight`). 편 이름을 점으로 되쪼개 되돌리면 값은 다 있는데 구조가 달라진다.
+  const dotted = load(await save({ model: third.model.stateDict() })) as
+    { model: Record<string, Tensor> };
+  want("중첩 안의 점 찍힌 열쇠가 안 쪼개진다",
+    Object.keys(dotted.model).includes("fc1.weight"),
+    Object.keys(dotted.model).sort().join(" "));
+
+  // 나무가 없는 파일 — 남이 만든 safetensors 다. 평평한 표로 와야 한다.
+  const foreign = load(await encode({ w: Tensor.from([1, 2], [2]) })) as
+    Record<string, Tensor>;
+  want("나무 없는 파일은 평평한 표로 온다",
+    foreign.w !== undefined && foreign.w.shape.join(",") === "2",
+    Object.keys(foreign).join(","));
 
   // 무한대는 JSON 이 못 적는다. `ReduceLROnPlateau` 의 `best` 가 거기서 시작한다.
   const plateau = new optim.ReduceLROnPlateau(build().opt);

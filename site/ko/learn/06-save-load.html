@@ -61,8 +61,9 @@
 
     <h2>저장하고 불러오기</h2>
     <p>
-      <code>save</code> 는 이름 붙은 텐서 묶음을 받아 바이트를 주고, <code>load</code> 가
-      그것을 되돌린다. 파일시스템은 안 건드린다 — 브라우저에는 없다. 받는 것은
+      <code>save</code> 는 주는 것을 그대로 받아 바이트를 준다 — state dict 하나든,
+      모델과 옵티마이저와 에폭 수가 든 중첩된 객체 통째든. <code>load</code> 가 그
+      구조를 되돌린다. 파일시스템은 안 건드린다 — 브라우저에는 없다. 받는 것은
       <code>ArrayBuffer</code> 이고, 내려받든 IndexedDB 에 넣든 그대로 <code>load</code> 에
       돌려주든 쓰는 쪽 마음이다.
     </p>
@@ -83,13 +84,17 @@
         const fresh = new nn.Sequential(new nn.Linear(4, 3), new nn.ReLU());
         log("새 모델의 출력:", (await fresh.call(x).sum().item()).toFixed(4));
 
-        // 바이트 → 상태. load() 는 { tensors, metadata } 를 준다 — 앞쪽이 state dict 이고,
-        // 뒤쪽은 학습 스텝 수 같은 것이 들어갈 자리다.
-        const bundle = load(new Uint8Array(bytes));
-        log("metadata 열쇠:", Object.keys(bundle.metadata).join(", ") || "(없음)");
-        fresh.loadStateDict(bundle.tensors);
+        // 바이트 → 상태. 저장한 것이 그대로 온다.
+        fresh.loadStateDict(load(new Uint8Array(bytes)));
         log("불러온 뒤:      ", (await fresh.call(x).sum().item()).toFixed(4));
         log("원래 값:        ", before.toFixed(4));
+
+        // 교재의 관용구는 중첩된 체크포인트이고, 그것이 그대로 왕복한다 —
+        // 숫자와 글자도 텐서와 함께 간다.
+        const opt = new optim.Adam(model.parameters(), 0.01);
+        const whole = await save({ model: model.stateDict(), opt: opt.stateDict(), epoch: 3 });
+        const ck = load(new Uint8Array(whole));
+        log("체크포인트 열쇠:", Object.keys(ck).join(", "), "· epoch:", ck.epoch);
       </script>
     </div>
 

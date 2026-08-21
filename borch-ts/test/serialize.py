@@ -57,7 +57,9 @@ def main(argv):
     print(f"어댑터: {result.get('adapter', '(모름)')}")
     print(result["text"])
     ok = "전부 통과" in result["text"]
-    return 0 if ok and cross_language(result.get("sample")) else 1
+    if not (ok and cross_language(result.get("sample"))):
+        return 1
+    return 0 if cross_tree(result.get("nested")) else 1
 
 
 def cross_language(sample):
@@ -131,7 +133,8 @@ def cross_library(blob):
 
     path = pathlib.Path(tempfile.mkdtemp()) / "from_browser.bin"
     path.write_bytes(blob)
-    got = borch.load(path)          # 나무가 없는 파일이다 — 평평한 사전으로 온다
+    # 최상위가 텐서 사전이라 나무가 있으나 없으나 같은 것이 나온다.
+    got = borch.load(path)
     if "fc.weight" not in got:
         print(f"**borch 가 못 읽었다** — 열쇠 {sorted(got)}", file=_sys.stderr)
         return False
@@ -140,6 +143,58 @@ def cross_library(blob):
         print(f"**borch 가 읽은 값이 다르다** — {first}", file=_sys.stderr)
         return False
     print(f"  ✓ 파이썬 borch 가 브라우저의 파일을 읽는다 — fc.weight[0]={first}")
+    return True
+
+
+def cross_tree(nested):
+    """브라우저가 쓴 **중첩** 파일을 파이썬 `borch` 가 구조 그대로 읽는가.
+
+    나무 스킴(`borch.tree`, 마디 `T`/`d`/`l`/`j`)이 이제 두 벌 있다 — `serialize.ts`
+    와 `_serialize.py`. 같은 글자를 쓰기로 되어 있는데 **그 약속을 아무도 안 쟀다.**
+    한쪽만 고쳐지면 한쪽이 쓴 체크포인트를 다른 쪽이 못 읽고, 그때 나오는 것은 예외가
+    아니라 **구조가 다른 사전**이라 훨씬 늦게 들킨다.
+
+    위의 `cross_library` 로는 안 보인다. 그 표본은 최상위가 텐서 사전이라 나무가
+    있으나 없으나 같은 것이 나온다 — 평평한 것만 물으면 나무는 한 번도 안 밟힌다.
+    """
+    import pathlib
+    import sys as _sys
+    import tempfile
+
+    if not nested:
+        print("중첩 표본이 없다 — 페이지가 sampleNested() 를 안 내보냈다",
+              file=_sys.stderr)
+        return False
+
+    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    import borch
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "nested_from_browser.bin"
+    path.write_bytes(bytes(bytearray(nested)))
+    got = borch.load(path)
+
+    def fail(said):
+        print(f"**{said}**", file=_sys.stderr)
+        return False
+
+    if not isinstance(got, dict) or sorted(got) != [
+            "done", "epoch", "model", "note", "nothing", "steps"]:
+        return fail(f"열쇠가 다르다 — {sorted(got) if isinstance(got, dict) else type(got)}")
+    if not isinstance(got["model"], dict) or "fc.weight" not in got["model"]:
+        # 점을 다시 쪼갰으면 여기서 `{"fc": {"weight": …}}` 가 나온다.
+        return fail(f"중첩이 안 왔다 — model={got['model']}")
+    if not isinstance(got["steps"], list) or len(got["steps"]) != 2:
+        return fail(f"배열이 안 왔다 — steps={got['steps']}")
+    if float(got["steps"][0].data.reshape(-1)[0]) != 7.0 or got["steps"][1] != 3:
+        return fail(f"배열 안이 다르다 — {got['steps']}")
+    if (got["epoch"], got["note"], got["done"], got["nothing"]) != (
+            5, "nested", False, None):
+        return fail("텐서가 아닌 값들이 다르다 — "
+                    f"{got['epoch']} {got['note']} {got['done']} {got['nothing']}")
+    if float(got["model"]["fc.weight"].data.reshape(-1)[0]) != 1.5:
+        return fail(f"값이 다르다 — {got['model']['fc.weight'].data}")
+
+    print("  ✓ 파이썬 borch 가 브라우저의 **중첩** 파일을 구조 그대로 읽는다")
     return True
 
 

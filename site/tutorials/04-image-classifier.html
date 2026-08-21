@@ -183,7 +183,7 @@
           new nn.Conv2d(3, 16, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
           new nn.Conv2d(16, 32, 3, 1, 1), new nn.ReLU(), new nn.MaxPool2d(2),
           new nn.Flatten(), new nn.Linear(32 * 8 * 8, 10));
-        model.loadStateDict(load(new Uint8Array(window.__cifar)).tensors);
+        model.loadStateDict(load(new Uint8Array(window.__cifar)));
 
         const guess = Array.from(await model.call(test.x).argmax(1).toArray());
         const truth = Array.from(await test.y.toArray());

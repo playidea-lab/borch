@@ -943,9 +943,21 @@
   "ko": "체크포인트를 바이트로, 바이트를 체크포인트로 — **safetensors** 형식.\n\n## 왜 이것이 필요한가\n\n`stateDict()` 는 있었는데 **저장할 방법이 없었다.** 탭을 새로고침하면 학습 결과가\n사라진다. 브라우저는 프로세스가 데스크톱보다 훨씬 자주 죽는 자리라 torch 보다\n오히려 더 아쉬운 구멍이었다.\n\n## 왜 우리 형식을 안 만들었나\n\ntorch 의 `save`/`load` 는 pickle 이다. 파이썬 객체를 실행하며 푸는 형식이라\n브라우저로 옮길 수도 없고 옮겨서도 안 된다.\n\nsafetensors 는 머리가 JSON 이고 몸이 연속된 바이트다. **코덱이 이 파일 하나이고,\n그 값으로 파이썬 `borch`·numpy·HF 도구가 같은 파일을 읽는다.** 자체 형식을 만들면\n그것이 안 된다 — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 이 프로젝트의\n이야기 절반이므로, 읽는 쪽이 우리뿐인 형식은 절반을 버리는 것이다.\n\n```\n[8바이트 LE u64: 머리 길이 N][N바이트 JSON 머리][몸: 텐서 바이트가 이어 붙는다]\n```\n\n## dtype 을 정직하게 적는 법\n\nborch 의 `int64`·`bool` 은 **이름표일 뿐 값은 float32 버퍼에 있다**(`dtype.ts`).\n머리에 `I64` 라고 적으면 4 바이트짜리 몸과 어긋나서 **남의 리더가 깨진다.**\n\n그래서 `dtype` 은 언제나 `F32` 로 적고, borch 의 이름표는 `__metadata__` 에 따로\n싣는다. 남이 읽으면 float32 배열이 나오고(맞다), 우리가 읽으면 이름표까지 돌아온다.",
   "src": "0e536ae5bc4d"
  },
- "serialize/load": {
+ "serialize/Savable": {
+  "ko": "이 형식이 담을 수 있는 것. pickle 이 아니므로 아무 객체나는 안 된다.",
+  "src": "15ed4498020b"
+ },
+ "serialize/decode": {
   "ko": "바이트를 체크포인트로. **동기다** — 올리는 것은 큐에 쓰기 하나다.\n\n깨진 파일에서 조용히 이상한 텐서를 만들지 않는다. 길이·자리·형을 다 확인하고\n안 맞으면 던진다 — 체크포인트가 조용히 틀리면 그 뒤 학습 전체가 뜻을 잃는다.",
   "src": "eabd980d980f"
+ },
+ "serialize/encode": {
+  "ko": "체크포인트를 바이트로.\n\n**비동기다** — 값이 GPU 에 있으므로 되가져오는 왕복이 든다. 호스트에 내려둔\n텐서(`await t.cpu()`)를 주면 그 왕복이 없다.",
+  "src": "0f93180ef19e"
+ },
+ "serialize/load": {
+  "ko": "바이트를 체크포인트로 — 저장할 때의 구조 그대로. `torch.load` 자리다.\n\n**나무가 없는 파일은 평평한 표로 준다.** 남이 만든 safetensors 가 그렇고,\nborch.ts 가 이 층을 갖기 전에 쓴 파일도 그렇다.",
+  "src": "a06d806041b8"
  },
  "serialize/metaToNumbers": {
   "ko": "위의 되돌림. 앞머리가 맞는 것만 준다.",
@@ -956,12 +968,12 @@
   "src": "8c36a8b1af21"
  },
  "serialize/prefixed": {
-  "ko": "이름 앞에 꼬리표를 붙인다. 모델과 옵티마이저를 **한 파일에** 담을 때 쓴다.\n\n```ts\nconst bytes = await save({\n  ...prefixed(\"model\", model.stateDict()),\n  ...prefixed(\"opt\", opt.stateDict().tensors),\n}, { ...numbersToMeta(\"opt\", opt.stateDict().numbers) });\n```",
-  "src": "faaa9cef9541"
+  "ko": "이름 앞에 꼬리표를 붙인다. 모델과 옵티마이저를 **한 파일에** 담을 때 쓴다.\n\n```ts\nconst bytes = await encode({\n  ...prefixed(\"model\", model.stateDict()),\n  ...prefixed(\"opt\", opt.stateDict().tensors),\n}, { ...numbersToMeta(\"opt\", opt.stateDict().numbers) });\n```\n\n**평평한 코덱을 직접 쓸 때의 도구다.** `save` 는 중첩을 그대로 받으므로 꼬리표가\n필요 없다 — `save({ model: …, opt: … })` 로 쓰면 이름이 겹칠 일이 없다.",
+  "src": "2e20384db52f"
  },
  "serialize/save": {
-  "ko": "체크포인트를 바이트로.\n\n**비동기다** — 값이 GPU 에 있으므로 되가져오는 왕복이 든다. 호스트에 내려둔\n텐서(`await t.cpu()`)를 주면 그 왕복이 없다.",
-  "src": "0f93180ef19e"
+  "ko": "체크포인트를 바이트로 — **중첩을 그대로 받는다.** `torch.save` 자리다.\n\n```ts\nconst bytes = await save({ model: m.stateDict(), opt: o.stateDict(), epoch: 3 });\n```\n\n**비동기다** — 값이 GPU 에 있으므로 되가져오는 왕복이 든다.\n\n평평한 텐서 표를 주면 예전처럼 동작한다 — 그것도 중첩의 한 경우다. 다만 파일에\n나무가 하나 더 실리므로 **바이트는 예전과 다르다.** 예전 파일은 그대로 읽힌다.",
+  "src": "61f9170bc95e"
  },
  "serialize/unprefixed": {
   "ko": "꼬리표를 뗀다. 앞머리가 다른 것은 안 준다.",

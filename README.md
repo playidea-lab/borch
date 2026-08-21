@@ -777,26 +777,40 @@ loader.length;    // 표본 수가 아니라 **배치 수**. torch 와 같다
 옮겨서도 안 된다. 대신 이쪽을 들면 **파이썬 `borch`·numpy·HF 도구가 같은 파일을
 읽는다** — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 그것으로 열린다.
 
-```ts
-import { save, load, prefixed, unprefixed, numbersToMeta, metaToNumbers } from "borch";
+**중첩을 그대로 담는다** — 교재의 관용구가 그것이고, torch·파이썬 `borch` 와 같은
+모양이다. 텐서가 아닌 것(숫자·글자·참거짓·`null`·배열)도 같이 간다.
 
-const state = opt.stateDict();
-const bytes = await save(
-  { ...prefixed("model", model.stateDict()), ...prefixed("opt", state.tensors) },
-  { ...numbersToMeta("opt", state.numbers),
-    ...numbersToMeta("sched", sched.stateDict()) },
-);
+```ts
+import { save, load } from "borch";
+
+const bytes = await save({
+  model: model.stateDict(),
+  opt: opt.stateDict(),
+  sched: sched.stateDict(),
+  epoch: 5,
+});
 // bytes 는 Uint8Array — IndexedDB 에 넣든 파일로 내리든 쓰는 쪽 몫이다
 ```
 
 되돌릴 때는 **모델·옵티마이저·스케줄러를 같은 인자로 다시 세운 뒤** 얹는다.
 
 ```ts
-const read = load(bytes);
-model.loadStateDict(unprefixed("model", read.tensors));
-opt.loadStateDict({ tensors: unprefixed("opt", read.tensors),
-                    numbers: metaToNumbers("opt", read.metadata) });
-sched.loadStateDict(metaToNumbers("sched", read.metadata));
+const ck = load(bytes);
+model.loadStateDict(ck.model);
+opt.loadStateDict(ck.opt);
+sched.loadStateDict(ck.sched);
+```
+
+구조는 머리의 `borch.tree` 에 JSON 으로 적히고 텐서는 지금까지처럼 평평하게 눕는다 —
+**파이썬 쪽과 같은 스킴이라 서로의 체크포인트를 읽는다.** 나무가 없는 파일(남이 만든
+safetensors)을 주면 평평한 텐서 표로 온다.
+
+밑의 코덱이 필요하면 `encode`/`decode` 가 그 자리다. 평평한 `Record<string, Tensor>`
+와 문자열 메타데이터만 다루고, 이름을 겹치지 않게 눕히는 `prefixed`·`unprefixed` 와
+숫자를 메타데이터로 옮기는 `numbersToMeta`·`metaToNumbers` 가 같이 있다.
+
+```ts
+const { tensors, metadata } = decode(bytes);
 ```
 
 **가중치만 되돌리면 안 된다.** 모멘텀·스텝 계수기·스케줄러의 에폭이 같이 가야 재개한

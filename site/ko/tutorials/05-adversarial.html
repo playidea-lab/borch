@@ -148,7 +148,7 @@
         const { pixels, labels, grad, classes } = window.__fgsm;
 
         const model = window.__fgsm.makeModel();
-        model.loadStateDict(load(new Uint8Array(window.__fgsm.weights)).tensors);
+        model.loadStateDict(load(new Uint8Array(window.__fgsm.weights)));
 
         const y = Tensor.from(Float32Array.from(labels), [labels.length], { dtype: "int64" });
         const clean = Array.from(await model.call(
