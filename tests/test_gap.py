@@ -15,6 +15,7 @@ Three things are looked at.
 """
 
 import pathlib
+import re
 import sys
 
 import pytest
@@ -23,6 +24,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
 torch = pytest.importorskip("torch")
+# **The vision half is not optional to this file.** The rows written for
+# `transforms` only match while those namespaces are on the list, so with
+# torchvision absent every one of them reads as a dead row and this file goes red
+# for a reason that is about the environment rather than the tables. Skipping is
+# the honest answer; `pyproject.toml`'s dev extra installs it.
+pytest.importorskip("torchvision")
+
+import torchvision  # noqa: E402
+
+sys.path.insert(0, str(ROOT))
+import borchvision  # noqa: E402
 
 from torch_gap import (  # noqa: E402
     DELIBERATE, NOT_API, SKIPPED, _look, _public, _spaces,
@@ -37,6 +49,47 @@ def _every_torch_name():
             got.add(name)
             got.add(f"{space}.{name}")
     return got
+
+
+def test_every_namespace_meant_to_be_counted_is_counted():
+    """**A namespace off the list has no rule.**
+
+    `transforms` and `transforms.functional` were absent from `_spaces()` for the whole
+    life of `borchvision`, so no name inside them was counted and none was asked for a
+    reason. The count in circulation was made by hand.
+
+    Nothing above would have noticed. Every check in this file reads `_spaces()`, so a
+    namespace missing from it is missing from the checks too — the tables stay consistent
+    and the measure is silent. **This is the only check that can speak about what is not
+    being measured**, which is why it names the namespaces literally rather than deriving
+    them.
+    """
+    listed = {space for space, _theirs, _ours in _spaces()}
+    want = {"torch", "Tensor", "nn", "nn.functional", "optim", "optim.lr_scheduler",
+            "linalg", "utils.data", "transforms", "transforms.functional"}
+    assert want <= listed, (
+        f"namespaces that should be counted are off the list: {sorted(want - listed)}\n"
+        "  A namespace not in `_spaces()` is not counted and not asked for reasons. If one\n"
+        "  was removed on purpose, remove it from this check too — deliberately, with the\n"
+        "  reason written down.")
+
+
+def test_the_readme_transform_count_is_the_measured_one():
+    """The README says **"21 of the 41"**, and here is where those two numbers are.
+
+    It is not in `test_docs.py` with the other README numbers because that file runs
+    without torch, and this pair cannot be measured without real torchvision to count
+    against. A number nobody can measure is the kind that goes stale.
+    """
+    theirs, ours = _public(torchvision.transforms), _public(borchvision.transforms)
+    row = (ROOT / "README.md").read_text(encoding="utf-8")
+    said = re.search(r"\*\*(\d+) of the (\d+) names `torchvision.transforms` carries", row)
+    assert said is not None, (
+        "the README's torchvision row no longer states its two numbers in the form this\n"
+        "  check reads. Reword the check with it rather than dropping it.")
+    assert (int(said.group(1)), int(said.group(2))) == (len(theirs & ours), len(theirs)), (
+        f"the README says {said.group(1)} of {said.group(2)}; measured is "
+        f"{len(theirs & ours)} of {len(theirs)}.")
 
 
 def test_no_table_entry_matches_nothing():
