@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 6
+  "missing": 7
  },
  "modules": [
   {
@@ -11819,8 +11819,14 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(size: number | readonly [number, number], padding?: number, fill?: number)",
-       "doc": ""
+       "signature": "constructor(size: number | readonly [number, number], padding?: number | null, fill?: number)",
+       "doc": "",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "padding **`null` is the default, not `0`** — torchvision's is `None` and its repr prints that word. They pad identically, so the difference lives only in the printed line, and the golden's repr case passed `padding=4` and therefore never printed a default."
+        }
+       ]
       },
       {
        "name": "apply",
@@ -11843,8 +11849,18 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\")",
-       "doc": ""
+       "signature": "constructor(size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean)",
+       "doc": "",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "maxSize a cap on the long side. **Only meaningful with a single number**, where `size` is the short side — given an explicit pair there is nothing left to cap, and torchvision refuses that combination too."
+        },
+        {
+         "tag": "param",
+         "text": "antialias **`false` is refused rather than accepted and ignored.** There is one filter here and it antialiases; off differs from on by up to 0.0301 at 8×8→4×4 (measured), so taking the argument and dropping it would hand back the other image without saying so."
+        }
+       ]
       },
       {
        "name": "apply",
@@ -11854,7 +11870,7 @@
       {
        "name": "describe",
        "signature": "describe(): string",
-       "doc": ""
+       "doc": "**Four fields, not two.** torchvision has always printed `max_size` and\n`antialias`; this printed two and agreed with the Python side, which printed\ntwo as well — so the transform whose repr differed was the one the golden\nhad no case for. The check's coverage decided which defect could exist."
       }
      ],
      "doc_ko": "크기를 바꾼다. **배열을 받아 배열을 낸다** — 텐서가 아니다. 장당 텐서를 만들면\nGPU 버퍼가 장당 하나씩 생긴다(`RandomCrop` 과 같은 이유).\n\n`size` 가 수 하나면 **짧은 변**을 그 값으로 맞추고 비율을 지킨다."
