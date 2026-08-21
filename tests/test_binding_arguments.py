@@ -46,17 +46,23 @@ BINDING = ROOT / "borch_webgpu" / "_optim.py"
 
 # What is known to be wrong and not yet fixable here. Each row is removed by the fix,
 # and `test_no_owed_row_describes_something_that_now_works` fails if one is left behind.
+# **Keyed by the argument, not the optimizer.** Keyed by optimizer, a row for
+# `Adagrad`'s `weight_decay` would excuse `Adagrad` — every other argument it drops
+# would go unlooked-at behind a reason written about one of them. That is the
+# one-prose-reason problem this repository keeps finding, and it very nearly went in
+# here: the first version of this table was keyed by name and hid exactly that.
 OWED = {
-    "RMSprop": "the call passes weight_decay and borch.ts's constructor takes four "
-               "arguments, so JavaScript discards it — fixable in borch.ts alone, like "
-               "Adam was",
-    "Adagrad": "weight_decay is accepted and never passed; borch.ts has no weightDecay "
-               "on this optimizer yet",
-    "Adadelta": "as above",
-    "Adamax": "as above",
-    "NAdam": "as above — and this is the one an arity check cannot see, since the call "
-             "passes six into six and the sixth is momentumDecay",
-    "RAdam": "as above",
+    ("RMSprop", "weight_decay"):
+        "the call passes it and borch.ts's constructor takes four arguments, so "
+        "JavaScript discards it — fixable in borch.ts alone, like Adam was",
+    ("Adagrad", "weight_decay"):
+        "accepted and never passed; borch.ts has no weightDecay on this optimizer yet",
+    ("Adadelta", "weight_decay"): "as above",
+    ("Adamax", "weight_decay"): "as above",
+    ("NAdam", "weight_decay"):
+        "as above — and this is the one an arity check cannot see, since the call "
+        "passes six into six and the sixth is momentumDecay",
+    ("RAdam", "weight_decay"): "as above",
 }
 
 # Call sites with no fixed argument list to compare. **Not a skip — a reason.**
@@ -130,20 +136,38 @@ def _call_sites():
         yield m.group(1), call.group(1), params, passed
 
 
+_NAMES = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _mentions(expr):
+    """The identifiers in an argument expression — `betas[0]` mentions `betas`.
+
+    **Whole names, not substrings.** Asking whether `"lr" in "lr_decay"` says yes, so a
+    call handing `lr_decay` to the slot `lr` belongs in would have read as correct. That
+    is the same failure this file exists to catch, one level up in the instrument: a
+    comparison loose enough to agree with the thing it is checking.
+    """
+    return set(_NAMES.findall(expr))
+
+
 def _dropped(ts_params, py_params, passed):
-    """Which Python parameters do not reach the constructor."""
-    lost = []
+    """`{argument: what is wrong with it}` — per argument, so a reason about one of
+    them cannot excuse the rest."""
+    lost = {}
     if len(passed) > len(ts_params):
-        lost.append(f"passes {len(passed)} arguments into {len(ts_params)}")
+        # The surplus is charged to the last argument passed, which is the one falling
+        # off the end into nothing.
+        lost[py_params[-1]] = (f"the call passes {len(passed)} arguments into "
+                               f"{len(ts_params)}, so JavaScript discards the last")
     for name in py_params[1:]:                                  # `params` is positional
         want = _camel(name)
         if want in ts_params:
             at = ts_params.index(want)
             got = passed[at] if at < len(passed) else "(nothing)"
-            if name not in got:
-                lost.append(f"`{name}` belongs at position {at} and the call has {got}")
-        elif not any(name in expr for expr in passed):
-            lost.append(f"`{name}` is accepted and never passed")
+            if name not in _mentions(got):
+                lost[name] = f"belongs at position {at} and the call has {got}"
+        elif not any(name in _mentions(expr) for expr in passed):
+            lost[name] = "is accepted and never passed"
     return lost
 
 
@@ -152,16 +176,17 @@ def test_no_optimizer_drops_an_argument_it_accepts():
     ctors = _constructors()
     surprises = []
     for name, ts_name, py_params, passed in _call_sites():
-        if name in NOT_COMPARABLE or name in OWED:
+        if name in NOT_COMPARABLE:
             continue
         ts_params = ctors.get(ts_name)
         assert ts_params is not None, (
             f"{name} forwards to borch.ts's {ts_name} and this file could not read that "
             "constructor. A call site with nothing to compare against is a call site with "
             "no rule — fix the parsing rather than letting it pass.")
-        lost = _dropped(ts_params, py_params, passed)
-        if lost:
-            surprises.append(f"{name} -> {ts_name}: " + "; ".join(lost))
+        for argument, wrong in _dropped(ts_params, py_params, passed).items():
+            if (name, argument) in OWED:
+                continue
+            surprises.append(f"{name} -> {ts_name}: `{argument}` {wrong}")
     assert not surprises, (
         "optimizers accepting arguments that never reach borch.ts:\n    "
         + "\n    ".join(surprises) +
@@ -178,16 +203,16 @@ def test_no_owed_row_describes_something_that_now_works():
     gains the argument and the call passes it, the row has to go with the fix.
     """
     ctors = _constructors()
-    stale = []
-    for name, ts_name, py_params, passed in _call_sites():
-        if name not in OWED:
-            continue
-        ts_params = ctors.get(ts_name)
-        if ts_params is not None and not _dropped(ts_params, py_params, passed):
-            stale.append(name)
+    live = {name: _dropped(ctors[ts_name], py_params, passed)
+            for name, ts_name, py_params, passed in _call_sites()
+            if name not in NOT_COMPARABLE and ts_name in ctors}
+    stale = [f"{name}.{argument}" for (name, argument) in OWED
+             if argument not in live.get(name, {})]
     assert not stale, (
-        f"`OWED` still names optimizers that now pass everything they accept: {stale}\n"
-        "  Take the rows out — the defect is fixed and the row now describes nothing.")
+        f"`OWED` names arguments that now reach borch.ts: {sorted(stale)}\n"
+        "  Take the rows out — the defect is fixed and the row now describes nothing. A "
+        "row outliving its defect reads as \"known, accepted\" to the next person, which "
+        "is how six wrong reasons survived in `tests/torch_gap.py`.")
 
 
 def test_every_call_site_is_either_compared_or_explained():
