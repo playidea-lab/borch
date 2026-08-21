@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 649,
+  "done": 657,
   "stale": 0,
   "missing": 2
  },
@@ -7519,6 +7519,44 @@
     },
     {
      "kind": "class",
+     "name": "MaxPool1d",
+     "signature": "export declare class MaxPool1d extends Module",
+     "doc": "`torch.nn.MaxPool1d`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(kernel?: number, stride?: number | undefined)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.MaxPool1d`."
+    },
+    {
+     "kind": "class",
+     "name": "MaxPool3d",
+     "signature": "export declare class MaxPool3d extends Module",
+     "doc": "`torch.nn.MaxPool3d`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(kernel?: number, stride?: number | undefined)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.MaxPool3d`."
+    },
+    {
+     "kind": "class",
      "name": "Flatten",
      "signature": "export declare class Flatten extends Module",
      "doc": "Flattens, keeping only the batch axis.",
@@ -7617,6 +7655,82 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "class",
+     "name": "AvgPool1d",
+     "signature": "export declare class AvgPool1d extends Module",
+     "doc": "`torch.nn.AvgPool1d`. **It goes through `poolND`** — `avgPool2d` is a\ntwo-dimensional kernel, and this one has a different number of remaining\naxes, so it cannot use that path.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(kernel: number, stride?: number | undefined)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.AvgPool1d`. **`poolND` 로 간다** — `avgPool2d` 는 2 차원 전용 커널이고,\n이쪽은 남는 축 수가 달라서 같은 자리로 못 들어간다."
+    },
+    {
+     "kind": "class",
+     "name": "AvgPool3d",
+     "signature": "export declare class AvgPool3d extends Module",
+     "doc": "`torch.nn.AvgPool3d`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(kernel: number, stride?: number | undefined)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.AvgPool3d`."
+    },
+    {
+     "kind": "class",
+     "name": "AdaptiveAvgPool1d",
+     "signature": "export declare class AdaptiveAvgPool1d extends Module",
+     "doc": "`torch.nn.AdaptiveAvgPool1d`. **It takes the output size**, not the kernel.\n\nIt fixes the size and works the kernel backwards from it, so the argument\nmeans the opposite of what it means above. Confusing the two gives a\ndifferent size quietly, which is why the name is separated by `Adaptive`.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(outSize: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.AdaptiveAvgPool1d`. **출력 크기를 받는다** — 커널이 아니다.\n\n크기를 정하고 커널을 역산하는 쪽이라 인자의 뜻이 위의 것들과 반대다. 그것을\n헷갈리면 조용히 다른 크기가 나오므로 이름이 `Adaptive` 로 갈라져 있다."
+    },
+    {
+     "kind": "class",
+     "name": "AdaptiveAvgPool3d",
+     "signature": "export declare class AdaptiveAvgPool3d extends Module",
+     "doc": "`torch.nn.AdaptiveAvgPool3d`. It takes the output size.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(outSize: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      }
+     ],
+     "doc_ko": "`torch.nn.AdaptiveAvgPool3d`. 출력 크기를 받는다."
     },
     {
      "kind": "class",
@@ -9879,6 +9993,22 @@
      ]
     },
     {
+     "kind": "class",
+     "name": "BatchNorm2d",
+     "signature": "export declare class BatchNorm2d extends BatchNormND",
+     "doc": "`torch.nn.BatchNorm2d`. **It inherits `BatchNormND` unchanged.**\n\nRank is not consulted, so the number in the name does not change the\ncomputation — everything but the channel axis is reduced, which makes\n(N,C,H,W) and (N,C,D,H,W) the same code. The core (`borch/_nn.py`) writes\nthe same reason at the same place, and three implementations giving one\nanswer is what this table is worth.\n\n**torch diverges here** — it rejects a 3-D input to `BatchNorm2d`. Adding\nthat check to borch.ts alone would split it from the core, so if it goes in\nit is a change to all three, not something to slip in while standing this\nname up.",
+     "members": [],
+     "doc_ko": "`torch.nn.BatchNorm2d`. **`BatchNormND` 를 그대로 물려받는다.**\n\n차수를 안 따지므로 이름의 숫자가 계산을 안 바꾼다 — 채널 축만 남기고 나머지를\n전부 줄이니 (N,C,H,W) 든 (N,C,D,H,W) 든 같은 코드다. 코어(`borch/_nn.py`)가 같은\n자리에 같은 이유를 적어 두었고, 셋이 같은 답을 내는 것이 이 표의 값어치다.\n\n**torch 는 여기서 갈린다** — 저쪽은 `BatchNorm2d` 에 3 차원을 주면 거절한다.\n그 검사를 borch.ts 에만 넣으면 코어와 갈리므로, 넣는다면 세 구현을 함께 고칠\n일이지 이 이름을 세우면서 지나가며 할 일이 아니다."
+    },
+    {
+     "kind": "class",
+     "name": "BatchNorm3d",
+     "signature": "export declare class BatchNorm3d extends BatchNormND",
+     "doc": "`torch.nn.BatchNorm3d`. The computation is the same, for the reason above.",
+     "members": [],
+     "doc_ko": "`torch.nn.BatchNorm3d`. 위와 같은 이유로 계산이 같다."
+    },
+    {
      "kind": "type",
      "name": "RNNKind",
      "signature": "export type RNNKind = \"RNN\" | \"LSTM\" | \"GRU\"",
@@ -10067,7 +10197,7 @@
      "members": []
     }
    ],
-   "count": 605,
+   "count": 625,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -13084,5 +13214,5 @@
    "count": 9
   }
  ],
- "total": 1676
+ "total": 1696
 }
