@@ -1,109 +1,122 @@
-# 남의 것 — 무엇에 기대고, 무엇을 지켜야 하나
+# Other people's work — what this leans on, and what has to be honoured
 
-borch 는 Apache-2.0 이다. 여기 적은 것은 **실행할 때 필요한 남의 코드**와
-그 조건이다. 라이선스는 기억으로 적지 않고 **받은 파일에서 직접 확인했다**.
+borch is Apache-2.0. What follows is **the code of other people's that is needed
+at run time**, and its terms. The licences are not written from memory —
+**each was read out of the file that was downloaded.**
 
-> **이 저장소는 아래 것들을 재배포하지 않는다.** `vendor/` 는 `.gitignore` 에 있고,
-> 커밋되는 것은 sha256 몇 줄(`tests/browser/assets.lock`)뿐이다.
-> 다만 **브라우저에 띄우는 쪽은 재배포하게 된다** — 그때 아래 조건이 적용된다.
-
----
-
-## 코어 `borch`
-
-| | 라이선스 | 확인 |
-|---|---|---|
-| **numpy** | BSD-3-Clause | 휠 안 `numpy-2.0.2.dist-info/LICENSE.txt` |
-
-이게 전부다. 순수 파이썬 휠 하나에 의존은 numpy 뿐이다.
-
-브라우저에서 쓰려면 Pyodide 가 필요하지만, 그건 **호스트 페이지가 싣는 것**이지
-borch 가 묶어 파는 것이 아니다.
-
-## 브라우저 `borch-webgpu` · `borch.ts`
-
-| | 라이선스 | 확인 |
-|---|---|---|
-| **Pyodide** (파이썬 쪽만) | **MPL-2.0** | pyodide/pyodide 0.27.2 의 `LICENSE` |
-| **CPython 표준 라이브러리** (파이썬 쪽만) | PSF License | `python_stdlib.zip` 에 동봉 |
-| **numpy** (파이썬 쪽만) | BSD-3-Clause | 위와 같음 |
-
-**이 저장소가 그 바이너리를 담고 있다** — `vendor/pyodide/` 의 여섯 파일이고,
-`tests/browser/assets.lock` 에 sha256 이 있다. 담고 있다는 것은 재배포한다는 뜻이라
-소스를 구할 길을 여기 적는다:
-
-| | 받은 곳 | 소스 |
-|---|---|---|
-| Pyodide 0.27.2 (MPL-2.0) | `https://cdn.jsdelivr.net/pyodide/v0.27.2/full/` | `https://github.com/pyodide/pyodide` 태그 `0.27.2` |
-
-## 튜토리얼 데이터
-
-| | 출처 | 저장소에 있는 것 |
-|---|---|---|
-| **CIFAR-10** | `https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz` (Krizhevsky, 2009) | `site/assets/data/` — 앞에서부터 2,500 장을 JPEG 스프라이트로 (1.1MB) |
-
-원본이 아니라 **부분집합을 JPEG 으로 다시 인코딩한 것**이라 픽셀이 원본과 같지 않다.
-만드는 코드는 `site/fetch_data.py` 에 있고 무작위가 없어 재현된다. 튜토리얼 4·5 가
-이것을 읽으며, 여기서 나온 정확도를 논문의 수와 비교하면 안 된다는 것은 그 두 장에
-적어 두었다.
-
-MPL-2.0 은 **파일 단위**라 우리 코드로 번지지 않는다. 저 파일들을 고쳐서 실으면 고친
-것을 같은 라이선스로 내놓아야 하는데, 고치지 않는다 — `assets.lock` 이 그것을 검사로
-붙잡고 있다(`tests/test_site.py::test_vendored_pyodide_matches_its_lock`).
-
-**`borch.ts` 는 이 표가 비어 있다.** TypeScript 와 WGSL 만이고 실행 시 의존이 없다.
-브라우저의 WebGPU 를 직접 부른다.
-
-여기 **TensorFlow.js 가 있었다**(Apache-2.0, Copyright 2024 Google LLC). 파이썬 쪽
-GPU 구현이 그 위에 서 있었고, `tf.min.js` 와 `tf-backend-webgpu.min.js` 를 CDN 에서
-받아 페이지가 실었다. 손으로 쓴 WGSL 로 갈아치우면서 **의존이 통째로 없어졌다** —
-재배포하는 쪽이 지켜야 할 조건도 그만큼 줄었다.
+> **This repository does not redistribute any of the below.** `vendor/` is in
+> `.gitignore`, and what gets committed is a few lines of sha256
+> (`tests/browser/assets.lock`).
+> **Whoever puts it in a browser does redistribute them**, though — and the terms
+> below apply then.
 
 ---
 
-## 지켜야 하는 것
+## The core `borch`
 
-### MPL-2.0 (Pyodide) — **소스를 구할 길을 알려야 한다**
+| | licence | how it was confirmed |
+|---|---|---|
+| **numpy** | BSD-3-Clause | `numpy-2.0.2.dist-info/LICENSE.txt` inside the wheel |
 
-이것 하나가 성질이 다르다. MPL 은 **파일 단위 약한 카피레프트**다.
+That is all of it. One pure-Python wheel, and numpy is the only dependency.
 
-- 우리 코드로 **번지지 않는다.** Apache-2.0 인 borch 와 한 페이지에 있어도
-  borch 가 MPL 이 되지 않는다("Larger Work" 조항)
-- 그러나 **Pyodide 를 실행 형태로 배포하면**(= 페이지에서 `pyodide.asm.wasm` 등을
-  서빙하면) 그 파일들의 **소스 형태를 구할 방법을 받는 사람에게 알려야 한다**(§3.2)
+Using it in a browser needs Pyodide, and that is **something the host page
+loads** rather than something borch ships.
 
-실무적으로는 배포물 옆에 이 줄을 두면 된다:
+## The browser side: `borch-webgpu` and `borch.ts`
 
-> 이 페이지는 Pyodide (https://github.com/pyodide/pyodide) 를 포함하며,
-> Mozilla Public License 2.0 을 따릅니다. 소스는 위 주소에서 받을 수 있습니다.
+| | licence | how it was confirmed |
+|---|---|---|
+| **Pyodide** (the Python side only) | **MPL-2.0** | `LICENSE` in pyodide/pyodide 0.27.2 |
+| **The CPython standard library** (the Python side only) | PSF License | enclosed in `python_stdlib.zip` |
+| **numpy** (the Python side only) | BSD-3-Clause | as above |
 
-### PSF · BSD-3-Clause — 표시를 남긴다
+**This repository does hold those binaries** — six files under
+`vendor/pyodide/`, with their sha256 in `tests/browser/assets.lock`. Holding them
+means redistributing them, so where to obtain the source is written here:
 
-저작권 표시와 라이선스 전문을 함께 둔다. 추가 의무는 없다.
+| | downloaded from | source |
+|---|---|---|
+| Pyodide 0.27.2 (MPL-2.0) | `https://cdn.jsdelivr.net/pyodide/v0.27.2/full/` | `https://github.com/pyodide/pyodide` tag `0.27.2` |
+
+## The tutorial data
+
+| | origin | what is in the repository |
+|---|---|---|
+| **CIFAR-10** | `https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz` (Krizhevsky, 2009) | `site/assets/data/` — the first 2,500 images as a JPEG sprite (1.1MB) |
+
+It is **a subset re-encoded as JPEG** rather than the original, so the pixels are
+not the original's. The code that builds it is `site/fetch_data.py`, and with no
+randomness in it, it reproduces. Tutorials 4 and 5 read it, and that an accuracy
+obtained here must not be compared against the numbers in a paper is written down
+in both of those.
+
+MPL-2.0 works **per file**, so it does not spread into our code. Modifying those
+files and shipping them would mean releasing the modifications under the same
+licence, and they are not modified — `assets.lock` holds that as a check
+(`tests/test_site.py::test_vendored_pyodide_matches_its_lock`).
+
+**`borch.ts`'s row in this table is empty.** TypeScript and WGSL and nothing
+else, with no run-time dependency. It calls the browser's WebGPU directly.
+
+**TensorFlow.js used to be here** (Apache-2.0, Copyright 2024 Google LLC). The
+Python side's GPU implementation stood on it, and the page loaded `tf.min.js` and
+`tf-backend-webgpu.min.js` from a CDN. Replacing it with hand-written WGSL
+**removed the dependency entirely** — and with it, that much of what a
+redistributor has to honour.
 
 ---
 
-## 데이터
+## What has to be honoured
 
-**CIFAR-10** 은 이 저장소에 없다(`.gitignore`). 받아서 쓰는 쪽은 관례대로 인용한다.
+### MPL-2.0 (Pyodide) — **the source has to be findable**
+
+This one is different in kind from the rest. MPL is **weak copyleft, per file.**
+
+- It **does not spread** into our code. Sitting on one page with borch, which is
+  Apache-2.0, does not make borch MPL (the "Larger Work" clause)
+- But **distributing Pyodide in executable form** (that is, serving
+  `pyodide.asm.wasm` and the rest from a page) means **telling the recipient how
+  to obtain those files in source form** (§3.2)
+
+In practice, putting this line next to what is distributed is enough:
+
+> This page includes Pyodide (https://github.com/pyodide/pyodide), which is
+> licensed under the Mozilla Public License 2.0. The source is available at the
+> address above.
+
+### PSF and BSD-3-Clause — keep the notice
+
+Keep the copyright notice together with the full licence text. Nothing further is
+required.
+
+---
+
+## The data
+
+**CIFAR-10** is not in this repository (`.gitignore`). Whoever downloads and uses
+it cites it as convention has it.
 
 > Krizhevsky, A. *Learning Multiple Layers of Features from Tiny Images.* 2009.
 
-명시적 라이선스가 붙어 있지 않으므로, 연구·학습 용도를 벗어나 재배포할 계획이면
-출처를 먼저 확인하는 편이 안전하다.
+No explicit licence is attached to it, so anyone planning to redistribute beyond
+research and study is safer checking with the source first.
 
-## PyTorch 와의 관계
+## The relationship to PyTorch
 
-borch 는 PyTorch(BSD-3-Clause)의 **코드를 가져오지 않았다.** API 모양만 맞췄고,
-값 대조는 진짜 torch 를 **테스트에서만** 부른다(`dev` 추가 의존).
+borch **took no code** from PyTorch (BSD-3-Clause). It matched the shape of the
+API, and the value comparisons call real torch **in the tests alone** (a `dev`
+extra).
 
-이름과 `sys.modules["torch"] = borch` 에 대해서는 README 가 이미 경고를 달고
-있다. 상표 문제로 번질 수 있는 자리라, 공개 배포 전에 한 번 짚어보는 편이 좋다.
+The README already carries a warning about the name and about
+`sys.modules["torch"] = borch`. It is a place that can turn into a trademark
+question, so it is worth going over once before any public distribution.
 
 ---
 
-## 이 문서의 한계
+## What this document is not
 
-여기 적은 것은 **파일에서 확인한 사실**과 각 라이선스 조문이 말하는 바다.
-법률 자문이 아니다 — 특히 MPL-2.0 항목은 실제 배포 형태에 따라 달라지므로,
-공개 전에 라이선스를 보는 사람에게 한 번 확인받는 것이 맞다.
+What is written here is **what was confirmed in the files** and what each
+licence's text says. It is not legal advice — the MPL-2.0 item in particular
+depends on the actual form of distribution, so having somebody who reads licences
+check it before release is the right thing to do.

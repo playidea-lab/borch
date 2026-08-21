@@ -12,9 +12,24 @@ a name there differing from a key here by one character makes that case
 disappear silently. `borch-ts/test/run.py` does hold a staleness check — and it
 needs a browser, so it fires in CI and not while somebody edits `cases.py`.
 
-So renaming a case, or changing a string a case returns, is caught nowhere
-locally. It was assumed to be caught; a rename was tried against the suite and
-passed green. This is that missing half, and it is one line of arithmetic.
+## What was open was the step between the two files, not the file
+
+The committed golden is **not** unguarded in general, and saying so would be the
+same overreach this file exists to catch. Measured, both ways round:
+
+- rename in `cases.py` **and regenerate** — loud. Renaming one key in the
+  committed file fails three tests in `test_case_names.py`, and
+  `test_alias_rows.py` reads it too.
+- rename in `cases.py` **without regenerating** — silent. Nothing looks at the
+  two together, so the table and the answers drift apart in green.
+
+A rename tried against the suite passed green, and that was the second state
+rather than a refutation of the first. The second is the dangerous one: a partial
+rename is exactly where somebody stops for the night. This closes that half, and
+it is one line of arithmetic.
+
+The distinction was found by another session measuring the claim after I stated
+it too broadly — which is the defect this file guards against, one level up.
 """
 
 import json

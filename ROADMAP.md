@@ -1,75 +1,83 @@
-# borch — 어디까지 갈 것인가
+# borch — how far this goes
 
-> 이름은 처음에 `minitorch` 였다가 `nanotorch` 를 거쳐 여기 왔다. 앞의 둘은 이미 있는
-> 프로젝트와 부딪혔고(`edutorch` 도 마찬가지였다), 셋 다 **"작은 + 교육용 + torch"** 라는
-> 같은 자리를 겨눴기 때문이다. 우리가 남들과 다른 점은 크기나 목적이 아니라
-> **브라우저에서 돈다**는 것이고, 이름은 그것을 말해야 한다 — 한계까지 함께.
+> The name was `minitorch` first, then `nanotorch`, before arriving here. The
+> first two collided with existing projects (`edutorch` did too), because all
+> three aimed at the same spot — **"small + educational + torch".** What sets this
+> apart from the others is not its size or its purpose but that **it runs in a
+> browser**, and the name should say so — limits included.
 
-"PyTorch 를 재현한다"는 목표는 측정할 수 없다. 대신 **적합성(conformance)** 으로 바꾼다.
+"Reproduce PyTorch" is not a measurable goal. It is replaced with
+**conformance.**
 
 ---
 
-## 먼저, 재현이 왜 목표가 될 수 없는가
+## First: why reproduction cannot be the goal
 
-### 분모가 1,800이다
+### The denominator is 1,800
 
-| | 개수 |
+| | count |
 |---|---|
 | `torch.*` | 1,025 |
 | `torch.nn.*` | 182 |
-| `torch.Tensor` 메서드 | 604 |
-| ATen 커널 (순·역방향 각각) | 863 |
+| `torch.Tensor` methods | 604 |
+| ATen kernels (forward and backward each) | 863 |
 
-우리가 실제로 쓰는 것은 **95개** — 5% 다. 나머지 95% 는 아무도 안 쓰는데
-틀릴 수는 있는 표면이다.
+What is actually used is **95 of them** — 5%. The other 95% is surface nobody uses
+and that can still be wrong.
 
-### 비트 동등은 도달할 수 없다
+### Bit equivalence is unreachable
 
 ```
-float32 10만 개 합산
+summing 100,000 float32s
   numpy  -90.82513427734375
   torch  -90.82499694824219
-  차이    1.373e-04          ← float32 eps 의 1,000배
+  diff    1.373e-04          ← 1,000× float32's eps
 ```
 
-합산 **순서**만으로 이만큼 벌어진다. 맞추려면 torch 의 reduction 커널 순서를 재현해야 하고,
-그 순서는 SIMD 폭과 스레드 수에 따라 또 달라진다. 쫓을 수 있는 목표가 아니다.
+The **order** of summation alone opens that gap. Matching it would mean
+reproducing torch's reduction kernel order, and that order changes again with the
+SIMD width and the thread count. It is not a goal that can be chased.
 
-### 완전 재현은 이 프로젝트의 원칙을 뒤집는다
+### Full reproduction inverts this project's principle
 
-borch 의 원칙은 **"없는 기능이 틀린 답보다 낫다"** 이다.
-재현을 쫓으면 거절 목록이 줄고 **조용히 틀릴 수 있는 표면이 커진다.**
-검증이 비례해서 자라지 않으면, 커버리지가 늘수록 위험해진다.
+borch's principle is **"an absent feature beats a wrong answer".** Chasing
+reproduction shrinks the refusal list and **grows the surface that can be quietly
+wrong.** Unless the verification grows in proportion, more coverage means more
+danger.
 
 ---
 
-## 그래서 목표는 이것이다
+## So the goal is this
 
-> **커리큘럼이 쓰는 범위 안에서, 진짜 torch 와 같은 값·같은 오류·같은 표현.**
+> **Within the range the curriculum uses: real torch's values, real torch's
+> errors, real torch's printed form.**
 
-### 충실도 등급
+### Fidelity grades
 
-| 등급 | 뜻 | 목표 | 지금 |
+| grade | meaning | target | at the time |
 |---|---|---|---|
-| **T1 값** | `allclose(1e-5)` 로 값·모양·기울기가 같음 | 지원 범위 **100%** | **100%** (132/132) |
-| **T2 오류** | 같은 예외 종류 + 검색 가능한 메시지 | 주요 오류 | **12/12 · 9/9** |
-| **T3 표현** | `print(t)` · `repr` 이 같음 | 흔한 것 | **15/15** |
-| **T4 비트** | 동일 비트 | **비목표** | — |
+| **T1 values** | values, shapes and gradients equal under `allclose(1e-5)` | **100%** of the supported range | **100%** (132/132) |
+| **T2 errors** | the same exception type plus a searchable message | the main errors | **12/12 · 9/9** |
+| **T3 printed form** | `print(t)` and `repr` identical | the common ones | **15/15** |
+| **T4 bits** | identical bits | **a non-goal** | — |
 
-T4 를 비목표로 명시하는 것이 이 문서의 핵심이다. 적어두지 않으면 언젠가 누가 쫓는다.
+Writing T4 down as a non-goal is the heart of this document. Left unwritten,
+somebody eventually chases it.
 
-### 어떻게 재는가
+### How it is measured
 
-두 겹이다.
+Two layers.
 
-- `tests/test_diff.py` — 손으로 쓴 76개. 특정 함정을 겨냥한다
-- `tests/conformance.py` — **표에서 생성**한 132개. 모양·dtype·인자를 곱해 뽑는다
+- `tests/test_diff.py` — 76 written by hand. They aim at specific traps
+- `tests/conformance.py` — 132 **generated from a table.** Shapes, dtypes and
+  arguments multiplied out
 
-두 번째가 확장 경로다. 연산을 표에 한 줄 더하면 케이스 수십 개가 늘어난다.
+The second is the route to growing it. One more row in the table adds dozens of
+cases.
 
 ```bash
-uv run --with numpy --with torch python tests/conformance.py     # 점수
-uv run --with pytest --with numpy --with torch pytest tests/     # 전부
+uv run --with numpy --with torch python tests/conformance.py     # the score
+uv run --with pytest --with numpy --with torch pytest tests/     # everything
 ```
 
 ---
