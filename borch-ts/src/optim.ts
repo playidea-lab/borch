@@ -756,6 +756,186 @@ export class Rprop extends Composed {
 }
 
 /**
+ * A quasi-Newton method. **`step` takes a closure, and here it is async.**
+ *
+ * ## Why this one is different
+ *
+ * Every other optimizer walks one step from one set of gradients. This one loops
+ * up to `maxIter` times inside a single step, asking for the loss and the
+ * gradients again each time. **In torch too, this is the only name that takes a
+ * closure** — the shape of the training loop is genuinely different.
+ *
+ * Being async is a second mark on top of that. Each iteration **reads scalars to
+ * branch** — the gradient threshold, the curvature `y·s`, the directional
+ * derivative `g·d`, the change in loss. They are all conditions of an `if` or a
+ * `break`, so they cannot stay on the GPU, and reading a value is async here.
+ *
+ * **There was one way to remove those reads, and the golden closed it.** Drop the
+ * early termination and run a fixed `maxIter` and this becomes synchronous — but
+ * one of the `opt::LBFGS` cases asks precisely whether it stops near the tolerance.
+ * What you get that way is not a synchronous LBFGS; it is **a different algorithm.**
+ *
+ * ## It is slow, and that is a property of the algorithm
+ *
+ * One `step()` costs something like a hundred GPU-to-host round trips (twenty
+ * iterations × five scalars). Running a quasi-Newton method in a browser is that
+ * kind of work, not a flaw in this implementation. Use `Adam` for a large model;
+ * use this name to solve **a small problem precisely.**
+ *
+ * **There is no line search.** Pass `lineSearchFn` and it stops loudly — taking a
+ * fixed step size quietly converges differently, and that difference shows up in
+ * the curve, not in a value.
+ */
+export class LBFGS extends Optimizer {
+  private readonly history: {
+    dirs: Tensor[]; stps: Tensor[]; ro: number[];
+  } = { dirs: [], stps: [], ro: [] };
+  private d: Tensor | null = null;
+  private t = 0;
+  private hDiag = 1;
+  private prevFlat: Tensor | null = null;
+  private prevLoss = 0;
+  private iterations = 0;
+
+  constructor(
+    params: ParamsArg,
+    lr = 1,
+    private readonly maxIter = 20,
+    maxEval: number | null = null,
+    private readonly toleranceGrad = 1e-7,
+    private readonly toleranceChange = 1e-9,
+    private readonly historySize = 100,
+    lineSearchFn: string | null = null,
+  ) {
+    super(params, lr);
+    if (lineSearchFn !== null) {
+      throw new RuntimeError(
+        `LBFGS(lineSearchFn=${JSON.stringify(lineSearchFn)}) is not implemented — ` +
+        "taking a fixed step size instead would converge differently.");
+    }
+    if (this.paramGroups.length !== 1) {
+      throw new RuntimeError("LBFGS takes a single parameter group.");
+    }
+    this.maxEval = maxEval ?? Math.floor((this.maxIter * 5) / 4);
+  }
+
+  private readonly maxEval: number;
+
+  /**
+   * **Nothing reaches here.** The base `step()` calls this once per parameter, and
+   * this class overrides that `step()` whole — a step does not divide by parameter.
+   * The slot is filled because the base demands it; being called means the override
+   * came undone.
+   */
+  protected update(): void {
+    throw new RuntimeError(
+      "LBFGS has no per-parameter update — step(closure) takes its direction " +
+      "from the concatenated gradient. Reaching here means step() was not overridden.");
+  }
+
+  /** 파라미터의 기울기를 **한 줄로 이어** 본다. 없는 자리는 0 이다. */
+  private flatGrad(): Tensor {
+    return Tensor.cat(
+      this.params.map((p) => (p.grad ?? Tensor.zeros(p.shape)).reshape([p.size])), 0);
+  }
+
+  /** 한 줄짜리 방향을 파라미터 모양으로 잘라 더한다. */
+  private addStep(size: number, direction: Tensor): void {
+    let at = 0;
+    noGrad(() => {
+      for (const p of this.params) {
+        const piece = direction.narrow(0, at, p.size).reshape(p.shape);
+        p.copyFrom(p.add(piece.mul(Tensor.full([], size))));
+        at += p.size;
+      }
+    });
+  }
+
+  /**
+   * @param closure Re-evaluates the loss and fills the gradients. **Without it
+   *   nothing can happen.**
+   * @returns The loss measured on entry, as torch does — not the last one.
+   */
+  override async step(closure?: () => Tensor): Promise<Tensor> {
+    if (!closure) {
+      throw new RuntimeError(
+        "LBFGS.step needs a closure — await opt.step(() => loss()). " +
+        "It re-evaluates the loss several times within a single step.");
+    }
+    const orig = closure();
+    let loss = await orig.item();
+    let evals = 1;
+    let flat = this.flatGrad();
+    if (await flat.abs().max(0).values.item() <= this.toleranceGrad) return orig;
+
+    let iter = 0;
+    while (iter < this.maxIter) {
+      iter += 1;
+      this.iterations += 1;
+      if (this.iterations === 1) {
+        this.d = flat.neg();
+        this.history.dirs = [];
+        this.history.stps = [];
+        this.history.ro = [];
+        this.hDiag = 1;
+      } else {
+        const prev = this.prevFlat ?? flat;
+        const y = flat.sub(prev);
+        const s = (this.d ?? flat).mul(Tensor.full([], this.t));
+        const ys = await y.mul(s).sum().item();
+        if (ys > 1e-10) {
+          if (this.history.dirs.length === this.historySize) {
+            this.history.dirs.shift();
+            this.history.stps.shift();
+            this.history.ro.shift();
+          }
+          this.history.dirs.push(keepAlive(y));
+          this.history.stps.push(keepAlive(s));
+          this.history.ro.push(1 / ys);
+          this.hDiag = ys / await y.mul(y).sum().item();
+        }
+        // 두 겹 되돌이 — 헤세 역행렬을 안 만들고 방향만 낸다.
+        const n = this.history.dirs.length;
+        const al = new Array<number>(n).fill(0);
+        let q = flat.neg();
+        for (let i = n - 1; i >= 0; i--) {
+          al[i] = await this.history.stps[i]!.mul(q).sum().item() * this.history.ro[i]!;
+          q = q.sub(this.history.dirs[i]!.mul(Tensor.full([], al[i]!)));
+        }
+        let r = q.mul(Tensor.full([], this.hDiag));
+        for (let i = 0; i < n; i++) {
+          const be = await this.history.dirs[i]!.mul(r).sum().item() * this.history.ro[i]!;
+          r = r.add(this.history.stps[i]!.mul(Tensor.full([], al[i]! - be)));
+        }
+        this.d = r;
+      }
+
+      this.prevFlat = keepAlive(flat.clone());
+      this.prevLoss = loss;
+      this.t = this.iterations === 1
+        ? Math.min(1, 1 / await flat.abs().sum().item()) * this.lr
+        : this.lr;
+      const gtd = await flat.mul(this.d ?? flat).sum().item();
+      if (gtd > -this.toleranceChange) break;
+
+      this.addStep(this.t, this.d ?? flat);
+      if (iter !== this.maxIter) {
+        // 마지막 되돌이에서는 다시 안 잰다 — torch 도 그렇다.
+        loss = await closure().item();
+        flat = this.flatGrad();
+        evals += 1;
+        if (await flat.abs().max(0).values.item() <= this.toleranceGrad) break;
+      }
+      if (iter === this.maxIter || evals >= this.maxEval) break;
+      const moved = await (this.d ?? flat).mul(Tensor.full([], this.t)).abs().max(0).values.item();
+      if (moved <= this.toleranceChange) break;
+      if (Math.abs(loss - this.prevLoss) < this.toleranceChange) break;
+    }
+    return orig;
+  }
+}
+
+/**
  * Adam, but holding the second moment **split into rows and columns.**
  *
  * Adam holds one variance per parameter, so its memory costs as much as the

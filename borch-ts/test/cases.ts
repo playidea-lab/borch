@@ -27,6 +27,7 @@ import * as nn from "../src/nn.js";
 import * as rnn from "../src/rnn.js";
 import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
+import { load, save } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import { LinAlgError } from "../src/errors.js";
 import { noGrad, Tensor } from "../src/tensor.js";
@@ -3080,6 +3081,108 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       .forward(trained(make).forward(inp.get("train_x")), inp.get("train_y")));
   }
 
+  // ── 옵티마이저의 `state_dict` — 이어서 학습하기가 여기 걸려 있다 ─────
+  //
+  // 모델 가중치만 저장하고 옵티마이저를 안 저장하면, 이어 붙인 학습이 **모멘텀과
+  // 2 차 모먼트를 잃은 채로** 다시 시작한다. 예외는 안 나고 손실 곡선만 한 번 튄다.
+  //
+  // **열쇠 이름이 아니라 값을 묻는다.** torch 는 `{state, param_groups}` 이고
+  // 이쪽은 은행 구조라 모양이 다르다 — 모양을 물으면 영원히 갈리는데, 정작 중요한
+  // "끊었다 이으면 안 끊은 것과 같은가" 는 모양과 무관하게 물을 수 있다.
+  const stepOnce = (m: nn.Sequential, o: optim.Optimizer): void => {
+    o.zeroGrad();
+    new nn.CrossEntropyLoss()
+      .forward(m.forward(inp.get("train_x")), inp.get("train_y")).backward();
+    o.step();
+  };
+  const resume = (make: (ps: Tensor[]) => optim.Optimizer, carry = true): Tensor => {
+    const m = model();
+    const opt = make(m.parameters());
+    for (let i = 0; i < 3; i++) stepOnce(m, opt);
+    const saved = opt.stateDict();
+    // **새 옵티마이저에 얹는다.** 같은 것에 도로 넣으면 아무것도 안 물은 것이 된다.
+    const fresh = make(m.parameters());
+    if (carry) fresh.loadStateDict(saved);
+    for (let i = 0; i < 2; i++) stepOnce(m, fresh);
+    const w = m.namedParameters()["0.weight"];
+    if (!w) throw new Error("0.weight 가 없다");
+    return w;
+  };
+  // `SGD(momentum=0)` 은 상태가 없어서 저장을 통째로 빼먹어도 지난다 — 상태를 가진
+  // 것으로 물어야 한다.
+  const resumable: [string, (ps: Tensor[]) => optim.Optimizer][] = [
+    ["SGD", (ps) => new optim.SGD(ps, 0.1, 0.9)],
+    ["Adam", (ps) => new optim.Adam(ps, 0.05)],
+    ["RMSprop", (ps) => new optim.RMSprop(ps, 0.05)],
+  ];
+  for (const [name, make] of resumable) {
+    out.set(`opt::${name}/이어서 학습하기`, () => resume(make));
+  }
+  // **위의 셋이 정말 무언가를 옮겼는가.** `loadStateDict` 가 빈 일을 해도 위 셋은
+  // 통과할 수 있다 — 그래서 **둘의 차이**를 답으로 굳힌다. 얹기가 아무 일도 안 하는
+  // 구현에서는 이것이 0 이 되고, 그때 위의 셋은 초록인 채로 아무것도 안 재고 있다.
+  out.set("opt::상태를 안 옮기면 갈린다", () => {
+    const make = (ps: Tensor[]): optim.Optimizer => new optim.Adam(ps, 0.05);
+    return resume(make, true).sub(resume(make, false));
+  });
+
+  // **스케줄러도 이어져야 한다.** 옵티마이저만 되돌리고 스케줄러를 새로 세우면
+  // 학습률이 **처음 값으로 돌아간다** — 반쯤 식혀 놓은 학습이 다시 뜨거워진다.
+  //
+  // **글자로 돌려준다.** 학습률의 자취는 수열이라, 갈렸을 때 어느 칸에서 갈렸는지가
+  // 그대로 보여야 한다 — 텐서로 주면 "최대차 1.5e-01" 만 남는다.
+  const schedResume = (carry: boolean): string => {
+    const m = model();
+    const opt = new optim.SGD(m.parameters(), 0.2);
+    const sch = new optim.StepLR(opt, 2, 0.5);
+    const seen: string[] = [];
+    const lrNow = (): string => {
+      const group = opt.paramGroups[0];
+      return `${Number((group?.lr ?? 0).toFixed(6))}`;
+    };
+    for (let i = 0; i < 4; i++) {
+      seen.push(lrNow());
+      opt.step();
+      sch.step();
+    }
+    const saved = sch.stateDict();
+    const fresh = new optim.StepLR(opt, 2, 0.5);
+    if (carry) fresh.loadStateDict(saved);
+    for (let i = 0; i < 4; i++) {
+      seen.push(lrNow());
+      opt.step();
+      fresh.step();
+    }
+    return seen.join(" ");
+  };
+  out.set("opt::StepLR/이어서 학습하기", () => schedResume(true));
+  // 얹기가 빈 일이면 두 자취가 같아지고, 그러면 위 케이스는 아무것도 안 재고 있다.
+  out.set("opt::스케줄러 상태를 안 옮기면 갈린다",
+    () => `${schedResume(true)} | ${schedResume(false)}`);
+
+  // ── `save`/`load` — 위의 것들이 쓸모가 있으려면 파일이 되어야 한다 ────
+  //
+  // `stateDict()` 를 셋 다 맞춰 놓고도 그것을 **쓸 방법이 없으면** 이어서 학습하기는
+  // 한 세션 안의 이야기다. 탭을 새로고침하면 사라진다.
+  //
+  // 형식이 서로 다르므로(torch 는 pickle, 이쪽은 safetensors) **바이트가 아니라
+  // 왕복을 묻는다.** 파이썬 쪽은 임시 파일을 거치고 여기는 바이트 그대로인데,
+  // 묻는 것은 같다 — 쓴 것을 되읽으면 같은 것이 나오는가.
+  out.set("opt::save/load 가 state_dict 를 왕복한다", async () => {
+    const got = load(await save(model().stateDict()));
+    const w = got.tensors["0.weight"];
+    if (!w) throw new Error("0.weight 가 없다");
+    return w;
+  });
+  // 되읽은 것이 **정말 쓸 수 있는가.** 열쇠와 값이 맞아도 그대로 못 얹으면 소용없다.
+  out.set("opt::되읽은 것을 그대로 얹을 수 있다", async () => {
+    const bytes = await save(model().stateDict());
+    const dst = new nn.Sequential(
+      new nn.Linear(6, 8), new nn.ReLU(), new nn.Linear(8, 3));
+    dst.loadStateDict(load(bytes).tensors);
+    return dst.forward(inp.get("train_x"));
+  });
+
   /** 학습률의 자취. **옵티마이저를 실제로 밟는다** — 순서가 값을 정한다. */
   const trace = (
     make: (o: optim.Optimizer) => { step: () => void },
@@ -3194,6 +3297,85 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   };
   out.set("opt::Adafactor/2차원", matrixWalk([3, 4]));
   out.set("opt::Adafactor/3차원", matrixWalk([2, 3, 4]));
+
+  // **원소 하나짜리 텐서는 값으로 캐시된다** — `Tensor.owned` 가 있는 까닭이다.
+  // 옵티마이저 상태는 그 버퍼에 제자리로 쓰므로, 크기 1 파라미터에서 둘이 만나면
+  // 프로그램 전체가 쓰는 상수가 조용히 덮어써진다. 그래서 **학습을 시킨 뒤에** 같은
+  // 상수로 곱해 본다. 답은 자명하고, 그 자명한 답이 이 결함을 잡는다.
+  //
+  // 파이썬 쪽 짝과 같은 이유로 **한 걸음으로는 못 잡고**(Rprop 의 첫 걸음은 폭을 안
+  // 바꾼다), 상수도 0·1 을 함께 본다(상태 은행이 0 에서 시작한다), 그리고 전용 커널을
+  // 쓰는 `SGD`·`Adam`·`RMSprop` 을 꼭 섞는다 — 그 셋은 공통 밑동 밖이다.
+  out.set("opt::크기 1 파라미터가 상수를 안 더럽힌다", () => {
+    const makers: ((ps: Tensor[]) => optim.Optimizer)[] = [
+      (ps) => new optim.Rprop(ps, 0.05),
+      (ps) => new optim.Adafactor(ps, 0.05),
+      (ps) => new optim.ASGD(ps, 0.05),
+      (ps) => new optim.Adagrad(ps, 0.05),
+      (ps) => new optim.SGD(ps, 0.05, 0.9),
+      (ps) => new optim.Adam(ps, 0.05),
+      (ps) => new optim.RMSprop(ps, 0.05),
+    ];
+    for (const make of makers) {
+      const p = Tensor.from([0.5], [1], { requiresGrad: true });
+      const opt = make([p]);
+      for (let i = 0; i < 3; i++) {
+        opt.zeroGrad();
+        p.grad = Tensor.from([0.1 * (i + 1)], [1]);
+        opt.step();
+      }
+    }
+    const probe = Tensor.from([1, 2], [2]);
+    return Tensor.cat([0, 1, 0.05].map((k) => probe.mul(Tensor.full([], k))), 0);
+  });
+
+  // **이 여섯만 케이스 본문이 비동기다.** `LBFGS.step` 이 한 걸음 안에서 스칼라를
+  // 읽어 분기하기 때문이다(`optim.ts` 의 설명 참조). 골든 러너는 본문을 `await`
+  // 하므로 여기서만 `async` 를 써도 나머지는 그대로다.
+  const lbfgs = (steps: number, make: (ps: Tensor[]) => optim.LBFGS) => async () => {
+    const p = start();
+    const opt = make([p]);
+    const seen: Tensor[] = [];
+    for (let i = 0; i < steps; i++) {
+      // **닫힘이 기울기를 넣어 준다** — 미분하지 않는다. 그러면 반복마다 `flat` 이
+      // 그대로라 이력이 안 쌓이고, 남는 것은 첫 반복의 경사하강과 보폭 규칙뿐이다.
+      // 파이썬 쪽 주석이 말하는 바로 그 반쪽이고, 여기서도 같은 반쪽을 잰다.
+      await opt.step(() => {
+        p.grad = Tensor.from([0.1, -0.3, 0.2], [3]);
+        return p.mul(p).sum();
+      });
+      seen.push(p.detach().clone());
+    }
+    return Tensor.stack(seen);
+  };
+  out.set("opt::LBFGS/기본값", lbfgs(3, (ps) => new optim.LBFGS(ps, 0.1)));
+  out.set("opt::LBFGS/max_iter", lbfgs(3, (ps) => new optim.LBFGS(ps, 0.1, 3)));
+  out.set("opt::LBFGS/history_size",
+    lbfgs(3, (ps) => new optim.LBFGS(ps, 0.5, 5, null, 1e-7, 1e-9, 2)));
+
+  // 자리마다 곡률이 다른 이차식 — 준뉴턴법이 이기는 모양이고, 이력이 실제로 찬다.
+  const curve = () => Tensor.from([1, 4, 9], [3]);
+  const lbfgsReal = (steps: number, make: (ps: Tensor[]) => optim.LBFGS) => async () => {
+    const p = start();
+    const w = curve();
+    const opt = make([p]);
+    const seen: Tensor[] = [];
+    for (let i = 0; i < steps; i++) {
+      await opt.step(() => {
+        p.grad = null;
+        const out = p.mul(p).mul(w).sum();
+        out.backward();
+        return out;
+      });
+      seen.push(p.detach().clone());
+    }
+    return Tensor.stack(seen);
+  };
+  out.set("opt::LBFGS/진짜 기울기", lbfgsReal(3, (ps) => new optim.LBFGS(ps, 0.1)));
+  out.set("opt::LBFGS/이력이 밀려난다",
+    lbfgsReal(2, (ps) => new optim.LBFGS(ps, 0.5, 8, null, 1e-7, 1e-9, 2)));
+  out.set("opt::LBFGS/문턱 근처에서 멈춘다",
+    lbfgsReal(2, (ps) => new optim.LBFGS(ps, 0.3, 12, null, 1e-7, 1e-3)));
 
   // **오르내림을 다르게, 주기를 여러 번.** 같은 폭에 한 주기만 밟으면 `stepSizeDown`
   // 도 `triangular2` 도 있는지 안 보인다.

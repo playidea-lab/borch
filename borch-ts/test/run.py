@@ -368,7 +368,15 @@ NOT_PORTED = {
     # `step()` 안에서 GPU 위의 수를 볼 수가 없다. 결속은 `run_sync` 가 있어서 된다.
     # 넣으려면 `async step(closure)` 가 되어야 하고, 그러면 저쪽에서 **혼자만
     # 비동기인 옵티마이저**가 된다.
-    "opt::": (17, "**없음**(LBFGS — 동기 step 으로는 못 쓴다) · 이어서 학습은 결속이 밟는다"),
+    # **적혀 있던 까닭이 둘 다 틀렸다.** "LBFGS 는 동기 step 으로는 못 쓴다" 는
+    # 사실이지만 결론이 틀렸다 — `step` 을 비동기로 두면 된다(`optim.ts` 의 LBFGS).
+    # "이어서 학습은 결속이 밟는다" 는 아예 사실이 아니었다: borch.ts 에 옵티마이저
+    # `stateDict`·`loadStateDict` 가 있고, 열네 건이 그대로 옮겨졌다.
+    #
+    # 남은 둘은 **직렬화가 평평하다**. borch.ts 의 `save`/`load` 는 `Record<string,
+    # Tensor>` 만 받는다 — 중첩도, 숫자도, 문자열도 없다. 파이썬 쪽 `borch.tree` 에
+    # 해당하는 층이 없으니 "중첩을 왕복한다" 는 질문이 성립하지 않는다.
+    "opt::": (2, "**아직**(중첩 직렬화 — borch.ts 의 save/load 는 평평한 텐서 표만 받는다)"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }
