@@ -124,25 +124,27 @@ def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
 
 
 def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0, eps=1e-10):
-    return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, eps))
+    return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, weight_decay, eps))
 
 
 def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):
-    return _Opt(_ts.optim.Adadelta.new(_params(params), lr, rho, eps))
+    return _Opt(_ts.optim.Adadelta.new(_params(params), lr, rho, eps, weight_decay))
 
 
 def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
-    return _Opt(_ts.optim.Adamax.new(_params(params), lr, betas[0], betas[1], eps))
+    return _Opt(_ts.optim.Adamax.new(_params(params), lr, betas[0], betas[1], eps,
+                                     weight_decay))
 
 
 def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
           momentum_decay=4e-3):
     return _Opt(_ts.optim.NAdam.new(_params(params), lr, betas[0], betas[1], eps,
-                                    momentum_decay))
+                                    weight_decay, momentum_decay))
 
 
 def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
-    return _Opt(_ts.optim.RAdam.new(_params(params), lr, betas[0], betas[1], eps))
+    return _Opt(_ts.optim.RAdam.new(_params(params), lr, betas[0], betas[1], eps,
+                                    weight_decay))
 
 
 def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0):
