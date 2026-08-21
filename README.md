@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3098 golden cases pass**, and that is a surface check rather than a
+> is that **3122 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -514,7 +514,7 @@ import borchvision as torchvision
 from borchvision import transforms
 ```
 
-| what is here | **28 of the 41 names `torchvision.transforms` carries.** Composition — `Compose`, `Lambda`, `RandomApply`, `RandomChoice`, `RandomOrder`. Tensors — `ToTensor`, `Normalize`, `LinearTransformation`. Geometry — `Resize`, `CenterCrop`, `RandomCrop`, `RandomResizedCrop`, `FiveCrop`, `TenCrop`, `Pad`, `InterpolationMode`. Augmentation — `RandomHorizontalFlip`, `RandomVerticalFlip`, `Grayscale`, `RandomGrayscale`, `RandomErasing`, `ColorJitter`, `RandomInvert`, `RandomPosterize`, `RandomSolarize`, `RandomAutocontrast`, `RandomEqualize`, `RandomAdjustSharpness`. Plus `augment_batch`, which torchvision does not have. **`transforms.functional` holds 29 of the 37 names `torchvision.transforms.functional` carries** — `crop`, `center_crop`, `resized_crop`, `five_crop`, `ten_crop`, `pad`, `resize`, `hflip`, `vflip`, `rgb_to_grayscale`, `to_grayscale`, `normalize`, `to_tensor`, `erase`, `get_dimensions`, `get_image_size`, `get_image_num_channels`, `InterpolationMode`, and the photometric `adjust_brightness`, `adjust_contrast`, `adjust_saturation`, `adjust_hue`, `adjust_gamma`, and the pixel rewrites `invert`, `posterize`, `solarize`, `autocontrast`, `equalize`, `adjust_sharpness` — so `import borchvision.transforms.functional as F` is a line that runs. **What is absent carries a reason** in `tests/torch_gap.py`, and what carries none is the to-do list |
+| what is here | **30 of the 41 names `torchvision.transforms` carries.** Composition — `Compose`, `Lambda`, `RandomApply`, `RandomChoice`, `RandomOrder`. Tensors — `ToTensor`, `Normalize`, `LinearTransformation`. Geometry — `Resize`, `CenterCrop`, `RandomCrop`, `RandomResizedCrop`, `FiveCrop`, `TenCrop`, `Pad`, `InterpolationMode`, `RandomRotation`, `RandomAffine`. Augmentation — `RandomHorizontalFlip`, `RandomVerticalFlip`, `Grayscale`, `RandomGrayscale`, `RandomErasing`, `ColorJitter`, `RandomInvert`, `RandomPosterize`, `RandomSolarize`, `RandomAutocontrast`, `RandomEqualize`, `RandomAdjustSharpness`. Plus `augment_batch`, which torchvision does not have. **`transforms.functional` holds 31 of the 37 names `torchvision.transforms.functional` carries** — `crop`, `center_crop`, `resized_crop`, `five_crop`, `ten_crop`, `pad`, `resize`, `hflip`, `vflip`, `rgb_to_grayscale`, `to_grayscale`, `normalize`, `to_tensor`, `erase`, `get_dimensions`, `get_image_size`, `get_image_num_channels`, `InterpolationMode`, and the photometric `adjust_brightness`, `adjust_contrast`, `adjust_saturation`, `adjust_hue`, `adjust_gamma`, and the pixel rewrites `invert`, `posterize`, `solarize`, `autocontrast`, `equalize`, `adjust_sharpness`, and the grid resampling `rotate`, `affine` — so `import borchvision.transforms.functional as F` is a line that runs. **What is absent carries a reason** in `tests/torch_gap.py`, and what carries none is the to-do list |
 |---|---|
 | **`datasets`** | absent. The fetching side is blocked — `cs.toronto.edu` sends no CORS header (measured). And torch's `download=True` keeps the download and reuses it, while Pyodide's filesystem is gone on a refresh. **Once the bytes are in hand it already works** (`fetch_cached`, `cache_put`, `TensorDataset`) |
 | **`ops`** | absent. `nms` is short in numpy, so "it is large" would be a false reason; the real one is that nobody stands in front of it — detection needs a pre-trained backbone and COCO-scale data to reach the end |
@@ -584,8 +584,8 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **all 3098 golden cases** — nothing in the table is skipped on this side
-alone. The core covers 3045 cases, and the remaining 53 are ones the core refuses
+It passes **all 3122 golden cases** — nothing in the table is skipped on this side
+alone. The core covers 3069 cases, and the remaining 53 are ones the core refuses
 on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of it.
 
 > That number said 2930 until this translation. The phrasing around it was
@@ -593,17 +593,18 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2693 cases. The remaining 405 are **two different
+borch.ts itself has written TS bodies for 2693 cases. The remaining 429 are **two different
 things, and counting them as one hides the second**. 360 are **deliberately not
 carried across** — the binding (`borch-webgpu`) already goes through borch.ts's kernels on
 those cases, so **the values are verified**, and what a TS body would add is not a
 value but this side's surface: names and argument order. A good many of them ask
 about a Python name alias, so carrying them across would ask the same question
-twice. The other 45 are **owed**: the `borchvision` work that arrived after
+twice. The other 69 are **owed**: the `borchvision` work that arrived after
 borch.ts's `vision.ts` was written. `vision.ts` now carries twenty of the
-twenty-one transforms; what is left is `ColorJitter` and the
+thirty transforms; what is left is `ColorJitter`, the six pixel rewrites with
+their wrappers, the two that resample on a grid, and the
 `transforms.functional` namespace, which does not exist on the TS side at all.
-Those are a backlog rather than a decision, and calling all 405 deliberate would
+Those are a backlog rather than a decision, and calling all 429 deliberate would
 make the backlog invisible by counting it as a choice. The runner keeps printing
 the total rather than letting it shrink quietly.
 
@@ -1041,8 +1042,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3098 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3045 cases, leaving out the 53 that are
+And **3122 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3069 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are

@@ -51,6 +51,7 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
 import enum as _enum
+import math as _math
 import sys as _sys
 import types as _types
 import warnings as _warnings
@@ -1104,9 +1105,17 @@ def _working_dtype(dtype):
     """**float32 for an integer picture, and the picture's own float otherwise.**
 
     torch promotes `uint8 * python float` to float32, and the blend below then
-    truncates back to uint8. Doing the arithmetic in float64 instead moves a value
-    across the truncation boundary — measured, one pixel of one case at
-    `adjust_saturation(1.7)`, which is the whole difference and enough to fail.
+    truncates back to uint8. Doing the arithmetic in float64 instead moves values
+    across that truncation boundary — **about 1% of pixels on uint8 input**, measured
+    over 300 random pictures at four factors.
+
+    That sentence used to name `adjust_saturation(1.7)` on the golden's byte picture as
+    its evidence, and **on that picture at that factor nothing differs at all.** The
+    sister library read the docstring, wrote a float32 chain on the strength of it, and
+    then found that deleting every narrowing in their port left all ten of their cases
+    green. A comment that says "measured" is read as evidence by everyone downstream of
+    it; this one was pointing at a case that did not contain any. The factor was the
+    problem and not the picture — the same picture parts at 0.1.
 
     **The deciding question is whether a narrowing cast comes after the arithmetic.**
     If it does, the working dtype chooses the output and no tolerance covers picking
@@ -1542,6 +1551,347 @@ class RandomAdjustSharpness(_RandomPixelOp):
                 f",p={self.p})")
 
 
+# --- resampling on a grid ---------------------------------------------------
+#
+# **Rotation, shear, scale and translation are one operation**, and this is it. A
+# grid of positions is built in the output's coordinates, mapped back through the
+# inverse of the transform, and the input is read at wherever that lands — which is
+# almost never a pixel centre, so it is interpolated.
+#
+# Written once because torchvision writes it once. `rotate` is `affine` with only an
+# angle, and giving each its own sampler would give two answers to the same question
+# on the day one of them was edited.
+
+
+def _grid_sample(img, grid, mode):
+    """torch's `grid_sample` with `align_corners=False` and zero padding, on `(H,W,C)`.
+
+    **`align_corners=False` is the whole of the coordinate convention** and it is not
+    a detail: it puts -1 and 1 at the *outer edges* of the border pixels rather than
+    at their centres, so the un-normalising is `((g + 1) * size - 1) / 2`. With the
+    other convention every resampled pixel is half a pixel out, which looks like a
+    slightly soft image rather than like a bug.
+    """
+    h, w = img.shape[0], img.shape[1]
+    work = _working_dtype(img.dtype)
+    src = img.astype(work)
+    x = ((grid[..., 0] + 1.0) * w - 1.0) / 2.0
+    y = ((grid[..., 1] + 1.0) * h - 1.0) / 2.0
+
+    def read(yy, xx):
+        """The input at integer positions, **zero outside** — torch's `padding_mode`."""
+        inside = (xx >= 0) & (xx < w) & (yy >= 0) & (yy < h)
+        out = _np.zeros(xx.shape + (src.shape[2],), dtype=work)
+        cy = _np.clip(yy, 0, h - 1).astype(_np.intp)
+        cx = _np.clip(xx, 0, w - 1).astype(_np.intp)
+        out[inside] = src[cy[inside], cx[inside]]
+        return out
+
+    if mode == "nearest":
+        # **Half goes to even**, which is `rint` here and `nearbyint` in torch. Python's
+        # `round` agrees; numpy's `floor(x + 0.5)` does not, and the disagreement shows
+        # only on positions landing exactly halfway — which a 90-degree rotation
+        # produces on every pixel.
+        return read(_np.rint(y).astype(_np.intp), _np.rint(x).astype(_np.intp))
+
+    x0, y0 = _np.floor(x), _np.floor(y)
+    fx, fy = x - x0, y - y0
+    x0i, y0i = x0.astype(_np.intp), y0.astype(_np.intp)
+    corners = ((y0i, x0i, (1 - fy) * (1 - fx)), (y0i, x0i + 1, (1 - fy) * fx),
+               (y0i + 1, x0i, fy * (1 - fx)), (y0i + 1, x0i + 1, fy * fx))
+    out = _np.zeros(x.shape + (src.shape[2],), dtype=work)
+    for yy, xx, weight in corners:
+        out += read(yy, xx) * weight[..., None]
+    return out
+
+
+def _grid_transform(img, grid, mode, fill):
+    """Sample, and paint the outside with `fill`.
+
+    **The mask is sampled alongside the picture** rather than the outside being
+    computed. torchvision appends a channel of ones, resamples it with everything
+    else, and reads the result as "how much of this pixel came from inside" — so a
+    bilinear edge pixel is a blend of picture and fill in the same proportion the
+    interpolation used. Deciding inside-ness from the coordinates instead gives a
+    hard edge that is wrong by up to one whole pixel.
+    """
+    sampled = _grid_sample(img, grid, mode)
+    if fill is None:
+        painted = sampled
+    else:
+        ones = _np.ones(img.shape[:2] + (1,), dtype=img.dtype)
+        mask = _grid_sample(ones, grid, mode)
+        values = _np.asarray(fill if isinstance(fill, (tuple, list)) else [float(fill)],
+                             dtype=_working_dtype(img.dtype))
+        if values.size == 1:
+            values = _np.repeat(values, sampled.shape[2])
+        if mode == "nearest":
+            painted = _np.where(mask < 0.5, values, sampled)
+        else:
+            painted = sampled * mask + (1.0 - mask) * values
+    if _np.dtype(img.dtype).kind != "f":
+        painted = _np.clip(_np.round(painted), 0, _bound(img.dtype))
+    return painted.astype(img.dtype)
+
+
+def _affine_grid(matrix, w, h, ow, oh, work):
+    """The output's pixel centres, mapped back through `matrix`, in [-1,1].
+
+    The half-pixel offset (`d = 0.5`) is torch's and it is what makes the grid line up
+    with pixel centres rather than corners.
+    """
+    theta = _np.asarray(matrix, dtype=work).reshape(2, 3)
+    xs = _np.linspace(-ow * 0.5 + 0.5, ow * 0.5 + 0.5 - 1, ow, dtype=work)
+    ys = _np.linspace(-oh * 0.5 + 0.5, oh * 0.5 + 0.5 - 1, oh, dtype=work)
+    base = _np.empty((oh, ow, 3), dtype=work)
+    base[..., 0] = xs[None, :]
+    base[..., 1] = ys[:, None]
+    base[..., 2] = 1.0
+    rescaled = theta.T / _np.asarray([0.5 * w, 0.5 * h], dtype=work)
+    return base.reshape(-1, 3) @ rescaled
+
+
+def _inverse_affine_matrix(center, angle, translate, scale, shear):
+    """The six numbers, **inverted** — the grid maps output positions back to input
+    ones, so what goes in is the inverse of the transform being described."""
+    rot = _math.radians(angle)
+    sx, sy = _math.radians(shear[0]), _math.radians(shear[1])
+    cx, cy = center
+    tx, ty = translate
+    a = _math.cos(rot - sy) / _math.cos(sy)
+    b = -_math.cos(rot - sy) * _math.tan(sx) / _math.cos(sy) - _math.sin(rot)
+    c = _math.sin(rot - sy) / _math.cos(sy)
+    d = -_math.sin(rot - sy) * _math.tan(sx) / _math.cos(sy) + _math.cos(rot)
+    matrix = [x / scale for x in (d, -b, 0.0, -c, a, 0.0)]
+    matrix[2] += matrix[0] * (-cx - tx) + matrix[1] * (-cy - ty)
+    matrix[5] += matrix[3] * (-cx - tx) + matrix[4] * (-cy - ty)
+    matrix[2] += cx
+    matrix[5] += cy
+    return matrix
+
+
+def _affine_output_size(matrix, w, h):
+    """How big the picture has to be to hold the whole rotated one — `expand=True`.
+
+    **The truncation to 1e-4 is carried rather than justified.** torchvision's comment
+    says it avoids ceiling a corner at 1e-15 up to a whole pixel, and I could not
+    reproduce that: sweeping 36 picture sizes by 360 whole degrees, the answer is the
+    same with the truncation and without it, every time. So it is here because
+    removing it would be a change to a ported formula on the strength of one sweep,
+    not because a case was found — and that sentence is the honest one.
+
+    What the sizes are is measured, though, and it is not the obvious thing: a quarter
+    turn of a 4x5 picture comes out **6 wide**, not 5. torchvision does that too, and
+    the golden holds it.
+    """
+    pts = _np.array([[-0.5 * w, -0.5 * h, 1.0], [-0.5 * w, 0.5 * h, 1.0],
+                     [0.5 * w, 0.5 * h, 1.0], [0.5 * w, -0.5 * h, 1.0]],
+                    dtype=_np.float32)
+    moved = pts @ _np.asarray(matrix, dtype=_np.float32).reshape(2, 3).T
+    lo = moved.min(axis=0) + _np.asarray([w * 0.5, h * 0.5], dtype=_np.float32)
+    hi = moved.max(axis=0) + _np.asarray([w * 0.5, h * 0.5], dtype=_np.float32)
+    tol = 1e-4
+    cmax = _np.ceil(_np.trunc(hi / tol) * tol)
+    cmin = _np.floor(_np.trunc(lo / tol) * tol)
+    size = cmax - cmin
+    return int(size[0]), int(size[1])
+
+
+def _center_offset(center, w, h):
+    """torch's centre convention: **(0, 0) is the middle of the picture**, so an
+    explicit centre arrives as an offset from it rather than as a pixel position. The
+    default is `[0, 0]` and not `[w/2, h/2]` — the grid is already centred, and passing
+    the middle as a centre shifts the picture by half its own size."""
+    if center is None:
+        return [0.0, 0.0]
+    return [1.0 * (c - s * 0.5) for c, s in zip(center, (w, h))]
+
+
+def _shear_pair(shear):
+    if isinstance(shear, (int, float)):
+        return [float(shear), 0.0]
+    values = [float(s) for s in shear]
+    if len(values) == 1:
+        return [values[0], values[0]]
+    if len(values) != 2:
+        raise ValueError(
+            f"shear is one or two numbers — it received {len(values)}.\n"
+            f"(torch: Shear should be a sequence containing two values. Got {shear})")
+    return values
+
+
+def rotate(img, angle, interpolation="nearest", expand=False, center=None, fill=None):
+    """Turn the picture about its centre. **Counter-clockwise for a positive angle**,
+    which is PIL's direction and the opposite of what a screen's y-axis suggests.
+
+    `expand` grows the output to hold the whole rotated picture; without it the
+    corners go outside and are lost.
+
+    **The angle is negated on the way in** and torchvision's own comment says why —
+    `rotate` and `affine` disagree about which way is positive, and the negation here
+    is what makes them agree from outside.
+    """
+    img = _require_hwc(img, "rotate")
+    mode = _interpolation(interpolation)
+    h, w = img.shape[0], img.shape[1]
+    matrix = _inverse_affine_matrix(_center_offset(center, w, h), -angle,
+                                    [0.0, 0.0], 1.0, [0.0, 0.0])
+    ow, oh = _affine_output_size(matrix, w, h) if expand else (w, h)
+    grid = _affine_grid(matrix, w, h, ow, oh, _working_dtype(img.dtype))
+    return _grid_transform(img, grid.reshape(oh, ow, 2), mode, fill)
+
+
+def affine(img, angle, translate, scale, shear, interpolation="nearest", fill=None,
+           center=None):
+    """Rotate, shear, scale and shift in one resampling. **One pass and not four** —
+    four would interpolate four times and blur what a single grid keeps sharp."""
+    img = _require_hwc(img, "affine")
+    mode = _interpolation(interpolation)
+    if scale <= 0:
+        raise ValueError(
+            f"scale is a positive number — got {scale}.\n"
+            "(torch: Argument scale should be positive)")
+    h, w = img.shape[0], img.shape[1]
+    matrix = _inverse_affine_matrix(_center_offset(center, w, h), angle,
+                                    [1.0 * t for t in translate], scale,
+                                    _shear_pair(shear))
+    grid = _affine_grid(matrix, w, h, w, h, _working_dtype(img.dtype))
+    return _grid_transform(img, grid.reshape(h, w, 2), mode, fill)
+
+
+def _setup_angle(x, name):
+    """A number `d` means `[-d, d]`; a pair is taken as it is."""
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        if x < 0:
+            raise ValueError(
+                f"{name} as a single number must be positive — got {x}.\n"
+                f"(torch: If {name} is a single number, it must be positive.)")
+        x = [-x, x]
+    elif not (isinstance(x, (tuple, list)) and len(x) == 2):
+        raise TypeError(
+            f"{name} is a single number or a pair — got {x!r}.\n"
+            f"(torch: {name} should be a sequence of length 2.)")
+    return [float(d) for d in x]
+
+
+class RandomRotation:
+    """A turn drawn from `degrees`. **The fill is spelled per channel before the
+    call** because torchvision does that in its `forward` and not in `rotate` — a
+    single number there becomes one per channel, and passing it through undone gives
+    a different picture on a three-channel image."""
+
+    def __init__(self, degrees, interpolation="nearest", expand=False, center=None,
+                 fill=0):
+        self.degrees = _setup_angle(degrees, "degrees")
+        self.interpolation = _interpolation(interpolation)
+        self.expand = expand
+        self.center = center
+        self.fill = fill
+
+    def get_params(self):
+        return float(_rng.uniform(self.degrees[0], self.degrees[1]))
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        channels = img.shape[2] if img.ndim == 3 else 1
+        fill = ([float(self.fill)] * channels if isinstance(self.fill, (int, float))
+                else [float(f) for f in self.fill])
+        return rotate(img, self.get_params(), self.interpolation, self.expand,
+                      self.center, fill)
+
+    def __repr__(self):
+        # **`center` and `fill` are printed only when they are set**, which is
+        # torchvision's own shape here and not the same rule as `RandomAffine`'s two
+        # classes down — that one drops a field when it equals its default, and this
+        # one drops it when it is `None`.
+        out = (f"{type(self).__name__}(degrees={self.degrees}"
+               f", interpolation={self.interpolation}, expand={self.expand}")
+        if self.center is not None:
+            out += f", center={self.center}"
+        if self.fill is not None:
+            out += f", fill={self.fill}"
+        return out + ")"
+
+
+class RandomAffine:
+    """A rotation, a shift, a scaling and a shear, each drawn from its own range and
+    **applied in one resampling.**
+
+    `translate` is a *fraction* of the picture's width and height rather than a number
+    of pixels, so the same transform means the same thing on any size.
+    """
+
+    def __init__(self, degrees, translate=None, scale=None, shear=None,
+                 interpolation="nearest", fill=0, center=None):
+        self.degrees = _setup_angle(degrees, "degrees")
+        if translate is not None:
+            for t in translate:
+                if not 0.0 <= t <= 1.0:
+                    raise ValueError(
+                        f"translate is a fraction of the picture, between 0 and 1 — "
+                        f"got {tuple(translate)}.\n"
+                        "(torch: translation values should be between 0 and 1)")
+        self.translate = translate
+        if scale is not None:
+            for s in scale:
+                if s < 0:
+                    raise ValueError(
+                        f"scale values should be positive — got {tuple(scale)}.\n"
+                        "(torch: scale values should be positive)")
+        self.scale = scale
+        self.shear = _setup_angle(shear, "shear") if shear is not None else None
+        self.interpolation = _interpolation(interpolation)
+        self.fill = fill
+        self.center = center
+
+    def get_params(self, size):
+        """`(angle, (tx, ty), scale, (shear_x, shear_y))`. **The shift is drawn in
+        pixels and rounded**, so a fraction that works out to less than half a pixel
+        draws zero rather than a fraction of one."""
+        angle = float(_rng.uniform(self.degrees[0], self.degrees[1]))
+        if self.translate is not None:
+            max_dx = float(self.translate[0] * size[0])
+            max_dy = float(self.translate[1] * size[1])
+            shift = (int(round(float(_rng.uniform(-max_dx, max_dx)))),
+                     int(round(float(_rng.uniform(-max_dy, max_dy)))))
+        else:
+            shift = (0, 0)
+        scale = 1.0 if self.scale is None else float(
+            _rng.uniform(self.scale[0], self.scale[1]))
+        shear_x = shear_y = 0.0
+        if self.shear is not None:
+            shear_x = float(_rng.uniform(self.shear[0], self.shear[1]))
+            if len(self.shear) == 4:
+                shear_y = float(_rng.uniform(self.shear[2], self.shear[3]))
+        return angle, shift, scale, (shear_x, shear_y)
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        channels = img.shape[2] if img.ndim == 3 else 1
+        fill = ([float(self.fill)] * channels if isinstance(self.fill, (int, float))
+                else [float(f) for f in self.fill])
+        angle, shift, scale, shear = self.get_params(
+            (img.shape[1], img.shape[0]))          # torch asks for (w, h) here
+        return affine(img, angle, shift, scale, shear, self.interpolation, fill,
+                      self.center)
+
+    def __repr__(self):
+        out = f"{type(self).__name__}(degrees={self.degrees}"
+        if self.translate is not None:
+            out += f", translate={self.translate}"
+        if self.scale is not None:
+            out += f", scale={self.scale}"
+        if self.shear is not None:
+            out += f", shear={self.shear}"
+        if self.interpolation != "nearest":
+            out += f", interpolation={self.interpolation}"
+        if self.fill != 0:
+            out += f", fill={self.fill}"
+        if self.center is not None:
+            out += f", center={self.center}"
+        return out + ")"
+
+
 # --- transforms.functional -------------------------------------------------
 #
 # **The same arithmetic, called without building an object.** Every function here
@@ -1689,9 +2039,11 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
               "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
               "RandomGrayscale", "RandomHorizontalFlip", "RandomOrder",
-              "ColorJitter", "RandomAdjustSharpness", "RandomAutocontrast",
+              "ColorJitter", "RandomAdjustSharpness", "RandomAffine",
+              "RandomAutocontrast",
               "RandomEqualize", "RandomInvert", "RandomPosterize",
-              "RandomResizedCrop", "RandomSolarize", "RandomVerticalFlip", "Resize",
+              "RandomResizedCrop", "RandomRotation", "RandomSolarize",
+              "RandomVerticalFlip", "Resize",
               "TenCrop", "ToTensor"):
     setattr(transforms, _name, globals()[_name])
 
@@ -1701,7 +2053,7 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
 for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
               "adjust_gamma", "adjust_hue", "adjust_saturation",
               "adjust_sharpness", "autocontrast", "equalize", "invert",
-              "posterize", "solarize",
+              "affine", "posterize", "rotate", "solarize",
               "center_crop", "crop", "erase", "five_crop",
               "get_dimensions", "get_image_num_channels", "get_image_size", "hflip",
               "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",
