@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 663,
+  "done": 673,
   "stale": 0,
   "missing": 2
  },
@@ -7548,14 +7548,27 @@
      "doc": "",
      "members": [
       {
+       "name": "returnIndices",
+       "signature": "readonly returnIndices: boolean",
+       "doc": "",
+       "torch": "return_indices"
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(kernel?: number)",
-       "doc": ""
+       "signature": "constructor(kernel?: number, stride?: number | undefined, returnIndices?: boolean)",
+       "doc": "**`returnIndices` was missing until the layer that consumes them arrived.**\nThe name was here, the argument was not, and that is invisible from a name\ncount — `MaxUnpool` is what makes the positions worth asking for.",
+       "doc_ko": "**그것을 받아먹는 층이 생길 때까지 `returnIndices` 가 없었다.** 이름은 여기\n있었고 인자가 없었으며, 그것은 이름을 세는 것으로는 안 보인다 — 자리를 물어볼\n값어치를 만드는 것이 `MaxUnpool` 이다."
       },
       {
        "name": "forward",
        "signature": "forward(x: Tensor): Tensor",
        "doc": ""
+      },
+      {
+       "name": "pick",
+       "signature": "pick(x: Tensor): { values: Tensor; indices: Tensor; }",
+       "doc": "The values and the positions that produced them. `MaxUnpool2d` takes both.",
+       "doc_ko": "값과 그 값을 낸 자리. `MaxUnpool2d` 가 둘 다 받는다."
       }
      ]
     },
@@ -7596,6 +7609,126 @@
       }
      ],
      "doc_ko": "`torch.nn.MaxPool3d`."
+    },
+    {
+     "kind": "class",
+     "name": "AdaptiveMaxPool1d",
+     "signature": "export declare class AdaptiveMaxPool1d extends Module",
+     "doc": "Adaptive max pooling. **It takes `returnIndices`, which the average side\ndoes not** — and the argument changes what comes back.\n\nThe underlying `adaptiveMaxPoolWithIndices` always returns both, so the layer\nhas to choose. Accepting the argument and returning the pair regardless would\nbe an argument taken and dropped, and the caller would meet the difference as\na shape error somewhere else.\n\n`forward` is the plain half so this fits in a `Sequential`; ask `pick()` when\nthe positions are wanted. `MaxUnpool` is the layer that consumes them.",
+     "members": [
+      {
+       "name": "outSize",
+       "signature": "protected readonly outSize: number | readonly number[]",
+       "doc": "",
+       "protected": true,
+       "torch": "out_size"
+      },
+      {
+       "name": "returnIndices",
+       "signature": "readonly returnIndices: boolean",
+       "doc": "",
+       "torch": "return_indices"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(outSize: number | readonly number[], returnIndices?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(x: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "pick",
+       "signature": "pick(x: Tensor): { values: Tensor; indices: Tensor; }",
+       "doc": "The values and the positions that produced them.",
+       "doc_ko": "값과 그 값을 낸 자리."
+      }
+     ],
+     "doc_ko": "적응형 최대 풀링. **`returnIndices` 를 받는다 — 평균 쪽에는 없는 인자다.**\n그리고 그 인자가 돌아오는 것을 바꾼다.\n\n밑동의 `adaptiveMaxPoolWithIndices` 는 언제나 둘 다 주므로 층이 골라야 한다.\n인자를 받아 놓고 그대로 짝을 돌려주면 받아 놓고 버린 것이 되고, 부르는 쪽은 그\n차이를 엉뚱한 자리의 모양 오류로 만난다.\n\n`forward` 는 값만 주는 쪽이라 `Sequential` 에 들어간다. 자리가 필요하면 `pick()`\n을 부른다 — 그것을 받아먹는 층이 `MaxUnpool` 이다."
+    },
+    {
+     "kind": "class",
+     "name": "AdaptiveMaxPool2d",
+     "signature": "export declare class AdaptiveMaxPool2d extends AdaptiveMaxPool1d",
+     "doc": "`torch.nn.AdaptiveMaxPool2d`.",
+     "members": [],
+     "doc_ko": "`torch.nn.AdaptiveMaxPool2d`."
+    },
+    {
+     "kind": "class",
+     "name": "AdaptiveMaxPool3d",
+     "signature": "export declare class AdaptiveMaxPool3d extends AdaptiveMaxPool1d",
+     "doc": "`torch.nn.AdaptiveMaxPool3d`.",
+     "members": [],
+     "doc_ko": "`torch.nn.AdaptiveMaxPool3d`."
+    },
+    {
+     "kind": "class",
+     "name": "MaxUnpool1d",
+     "signature": "export declare class MaxUnpool1d extends Module",
+     "doc": "Puts values back where `MaxPool` chose. `torch.nn.MaxUnpool1d`.\n\n**It needs two inputs, so `forward` is not the way in** — call `place()`.\nThe positions have to travel beside the values; hiding them inside the layer\nmeans using somebody else's the second time the layer is applied. torch has\nthe same shape for the same reason, and it is why this one cannot go into a\n`Sequential`.",
+     "members": [
+      {
+       "name": "kernel",
+       "signature": "protected readonly kernel: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "stride",
+       "signature": "protected readonly stride?: number | undefined",
+       "doc": "",
+       "protected": true,
+       "optional": true
+      },
+      {
+       "name": "padding",
+       "signature": "protected readonly padding: number",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(kernel: number, stride?: number | undefined, padding?: number)",
+       "doc": ""
+      },
+      {
+       "name": "place",
+       "signature": "place(x: Tensor, indices: Tensor, outSize?: readonly number[]): Tensor",
+       "doc": "",
+       "tags": [
+        {
+         "tag": "param",
+         "text": "outSize the shape to restore. Pooling is not injective — a window that ran off the edge leaves an ambiguity only the caller can settle."
+        }
+       ]
+      },
+      {
+       "name": "forward",
+       "signature": "forward(_x: Tensor): Tensor",
+       "doc": "*There is no one-argument form.** Reaching here means the positions were lost.",
+       "doc_ko": "**인자 하나짜리 꼴은 없다.** 여기 왔다면 자리를 잃어버린 것이다."
+      }
+     ],
+     "doc_ko": "`MaxPool` 이 고른 자리에 값을 도로 놓는다. `torch.nn.MaxUnpool1d`.\n\n**입력이 둘이라 `forward` 가 들어가는 문이 아니다** — `place()` 를 부른다.\n자리는 값과 나란히 흘러야 하고, 층 안에 숨기면 같은 층을 두 번째로 쓸 때 남의\n자리를 쓴다. torch 도 같은 이유로 같은 모양이고, 그래서 이 층만 `Sequential` 에\n못 들어간다."
+    },
+    {
+     "kind": "class",
+     "name": "MaxUnpool2d",
+     "signature": "export declare class MaxUnpool2d extends MaxUnpool1d",
+     "doc": "`torch.nn.MaxUnpool2d`.",
+     "members": [],
+     "doc_ko": "`torch.nn.MaxUnpool2d`."
+    },
+    {
+     "kind": "class",
+     "name": "MaxUnpool3d",
+     "signature": "export declare class MaxUnpool3d extends MaxUnpool1d",
+     "doc": "`torch.nn.MaxUnpool3d`.",
+     "members": [],
+     "doc_ko": "`torch.nn.MaxUnpool3d`."
     },
     {
      "kind": "class",
@@ -10281,7 +10414,7 @@
      "members": []
     }
    ],
-   "count": 637,
+   "count": 656,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -13298,5 +13431,5 @@
    "count": 9
   }
  ],
- "total": 1708
+ "total": 1727
 }

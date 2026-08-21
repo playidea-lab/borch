@@ -1217,12 +1217,24 @@ export function scaledDotProductAttention(
 }
 
 export class MaxPool2d extends Module {
-  constructor(private readonly kernel = 2) {
+  /**
+   * **`returnIndices` was missing until the layer that consumes them arrived.**
+   * The name was here, the argument was not, and that is invisible from a name
+   * count — `MaxUnpool` is what makes the positions worth asking for.
+   */
+  constructor(private readonly kernel = 2,
+              private readonly stride?: number,
+              readonly returnIndices = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.maxPool2d(this.kernel);
+    return x.maxPool2d(this.kernel, this.stride);
+  }
+
+  /** The values and the positions that produced them. `MaxUnpool2d` takes both. */
+  pick(x: Tensor): { values: Tensor; indices: Tensor } {
+    return x.maxPoolWithIndices(this.kernel, this.stride);
   }
 }
 
@@ -1257,6 +1269,78 @@ export class MaxPool3d extends Module {
     return x.maxPool3d(this.kernel, this.stride);
   }
 }
+
+/**
+ * Adaptive max pooling. **It takes `returnIndices`, which the average side
+ * does not** — and the argument changes what comes back.
+ *
+ * The underlying `adaptiveMaxPoolWithIndices` always returns both, so the layer
+ * has to choose. Accepting the argument and returning the pair regardless would
+ * be an argument taken and dropped, and the caller would meet the difference as
+ * a shape error somewhere else.
+ *
+ * `forward` is the plain half so this fits in a `Sequential`; ask `pick()` when
+ * the positions are wanted. `MaxUnpool` is the layer that consumes them.
+ */
+export class AdaptiveMaxPool1d extends Module {
+  constructor(protected readonly outSize: number | readonly number[],
+              readonly returnIndices = false) {
+    super();
+  }
+
+  override forward(x: Tensor): Tensor {
+    return x.adaptiveMaxPoolWithIndices(this.outSize).values;
+  }
+
+  /** The values and the positions that produced them. */
+  pick(x: Tensor): { values: Tensor; indices: Tensor } {
+    return x.adaptiveMaxPoolWithIndices(this.outSize);
+  }
+}
+
+/** `torch.nn.AdaptiveMaxPool2d`. */
+export class AdaptiveMaxPool2d extends AdaptiveMaxPool1d {}
+
+/** `torch.nn.AdaptiveMaxPool3d`. */
+export class AdaptiveMaxPool3d extends AdaptiveMaxPool1d {}
+
+/**
+ * Puts values back where `MaxPool` chose. `torch.nn.MaxUnpool1d`.
+ *
+ * **It needs two inputs, so `forward` is not the way in** — call `place()`.
+ * The positions have to travel beside the values; hiding them inside the layer
+ * means using somebody else's the second time the layer is applied. torch has
+ * the same shape for the same reason, and it is why this one cannot go into a
+ * `Sequential`.
+ */
+export class MaxUnpool1d extends Module {
+  constructor(protected readonly kernel: number,
+              protected readonly stride?: number,
+              protected readonly padding = 0) {
+    super();
+  }
+
+  /**
+   * @param outSize the shape to restore. Pooling is not injective — a window
+   *   that ran off the edge leaves an ambiguity only the caller can settle.
+   */
+  place(x: Tensor, indices: Tensor, outSize?: readonly number[]): Tensor {
+    return x.maxUnpool(indices, this.kernel, this.stride, this.padding, outSize);
+  }
+
+  /** **There is no one-argument form.** Reaching here means the positions were lost. */
+  override forward(_x: Tensor): Tensor {
+    throw new RuntimeError(
+      "MaxUnpool needs the positions MaxPool chose — call place(x, indices), " +
+      "not forward(x). It cannot sit in a Sequential for that reason.");
+  }
+}
+
+/** `torch.nn.MaxUnpool2d`. */
+export class MaxUnpool2d extends MaxUnpool1d {}
+
+/** `torch.nn.MaxUnpool3d`. */
+export class MaxUnpool3d extends MaxUnpool1d {}
 
 /**
  * Flattens, keeping only the batch axis.

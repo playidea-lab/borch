@@ -455,6 +455,22 @@
   "ko": "`{ output, loss }` — 정답 자리의 로그확률과 그 평균의 음수.",
   "src": "053c9a6cc321"
  },
+ "nn/AdaptiveMaxPool1d": {
+  "ko": "적응형 최대 풀링. **`returnIndices` 를 받는다 — 평균 쪽에는 없는 인자다.**\n그리고 그 인자가 돌아오는 것을 바꾼다.\n\n밑동의 `adaptiveMaxPoolWithIndices` 는 언제나 둘 다 주므로 층이 골라야 한다.\n인자를 받아 놓고 그대로 짝을 돌려주면 받아 놓고 버린 것이 되고, 부르는 쪽은 그\n차이를 엉뚱한 자리의 모양 오류로 만난다.\n\n`forward` 는 값만 주는 쪽이라 `Sequential` 에 들어간다. 자리가 필요하면 `pick()`\n을 부른다 — 그것을 받아먹는 층이 `MaxUnpool` 이다.",
+  "src": "0ed12fdd96eb"
+ },
+ "nn/AdaptiveMaxPool1d.pick": {
+  "ko": "값과 그 값을 낸 자리.",
+  "src": "75de571d64a8"
+ },
+ "nn/AdaptiveMaxPool2d": {
+  "ko": "`torch.nn.AdaptiveMaxPool2d`.",
+  "src": "186f3c6fd923"
+ },
+ "nn/AdaptiveMaxPool3d": {
+  "ko": "`torch.nn.AdaptiveMaxPool3d`.",
+  "src": "71f0b1681bff"
+ },
  "nn/BatchNormND.namedBuffers": {
   "ko": "**이동 통계도 함께 나간다.** 빠지면 평가 모드에서만 조용히 틀린다.\n\n이름이 `runningMean` 인 필드를 `running_mean` 이라는 열쇠로 내야 해서\n`registerBuffer` 를 못 쓴다(그쪽은 필드 이름이 곧 열쇠다). 대신 **목록은\n여기 하나만 두고** `stateDict` 는 밑절미와 같은 식으로 파생시킨다 — 셋이\n어긋나는 것이 이 층에서 이미 두 번 났다.",
   "src": "5ab9aba10bc6"
@@ -595,9 +611,33 @@
   "ko": "`torch.nn.MaxPool1d`.",
   "src": "472084d4ed3e"
  },
+ "nn/MaxPool2d.constructor": {
+  "ko": "**그것을 받아먹는 층이 생길 때까지 `returnIndices` 가 없었다.** 이름은 여기\n있었고 인자가 없었으며, 그것은 이름을 세는 것으로는 안 보인다 — 자리를 물어볼\n값어치를 만드는 것이 `MaxUnpool` 이다.",
+  "src": "cb0fbef22d37"
+ },
+ "nn/MaxPool2d.pick": {
+  "ko": "값과 그 값을 낸 자리. `MaxUnpool2d` 가 둘 다 받는다.",
+  "src": "e019ff4b4e29"
+ },
  "nn/MaxPool3d": {
   "ko": "`torch.nn.MaxPool3d`.",
   "src": "21fe85629e73"
+ },
+ "nn/MaxUnpool1d": {
+  "ko": "`MaxPool` 이 고른 자리에 값을 도로 놓는다. `torch.nn.MaxUnpool1d`.\n\n**입력이 둘이라 `forward` 가 들어가는 문이 아니다** — `place()` 를 부른다.\n자리는 값과 나란히 흘러야 하고, 층 안에 숨기면 같은 층을 두 번째로 쓸 때 남의\n자리를 쓴다. torch 도 같은 이유로 같은 모양이고, 그래서 이 층만 `Sequential` 에\n못 들어간다.",
+  "src": "e39e0bc740e2"
+ },
+ "nn/MaxUnpool1d.forward": {
+  "ko": "**인자 하나짜리 꼴은 없다.** 여기 왔다면 자리를 잃어버린 것이다.",
+  "src": "0277e0526ddb"
+ },
+ "nn/MaxUnpool2d": {
+  "ko": "`torch.nn.MaxUnpool2d`.",
+  "src": "218acb08eaf9"
+ },
+ "nn/MaxUnpool3d": {
+  "ko": "`torch.nn.MaxUnpool3d`.",
+  "src": "9b00648ba8eb"
  },
  "nn/Module": {
   "ko": "층 하나. 값을 지나가게 하고, 자기 파라미터를 이름과 함께 내놓는다.",

@@ -1931,6 +1931,24 @@ function addUnpool(out: Map<string, Case>): void {
     return got.values.maxUnpool(got.indices, 2, undefined, 0, [5, 5]);
   });
 
+  // ── 층 ────────────────────────────────────────────────────────────────
+  //
+  // **계산은 위에서 이미 다 재고 있었고 층 이름이 없었다.** `되돌리기::` 여섯 건이
+  // 텐서 메서드로 돌고 있었는데, `nn.MaxUnpool2d` 라는 이름은 아무도 안 물었다.
+  //
+  // `MaxUnpool` 은 인자가 둘이라 `Sequential` 에 못 들어간다 — 자리가 값과 나란히
+  // 흘러야 하고, 층 안에 숨기면 같은 층을 두 번 쓸 때 남의 자리를 쓴다. torch 도 같은
+  // 모양이고, 그래서 여기도 `forward` 가 아니라 `place(x, indices)` 다.
+  out.set("unpool::층::MaxPool2d → MaxUnpool2d", () => {
+    const pool = new nn.MaxPool2d(2, undefined, true);
+    const got = pool.pick(plane());
+    return new nn.MaxUnpool2d(2).place(got.values, got.indices);
+  });
+
+  // `returnIndices` 가 **반환형을 바꾸는** 자리라 층이 그것을 보고 골라야 한다.
+  out.set("unpool::층::AdaptiveMaxPool2d 자리",
+    () => new nn.AdaptiveMaxPool2d(2, true).pick(plane()).indices);
+
   out.set("unpool::grad::자리 판의 풀링", () => {
     const x = grid([1, 1, 4, 4]);
     x.requiresGrad = true;
