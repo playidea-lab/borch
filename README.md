@@ -608,32 +608,36 @@ than letting it shrink quietly.
 > text search cannot see them, which is the same reason `test_docs.py` parses
 > rather than greps.
 
-### torch 와 갈리는 여섯 자리
+### Six places where it diverges from torch
 
-첫 열 줄에서 전부 만나므로 미리 적는다.
+All six turn up in the first ten lines, so they are written down in advance.
 
-| | 왜 |
+| | why |
 |---|---|
-| `await init()` 을 먼저 | WebGPU 어댑터를 잡는 것이 비동기다 |
-| `await loss.item()` | GPU 메모리를 도로 가져온다. 순방향·역방향은 동기다 |
-| `using s = scope()` 로 감싼다 | JS 의 쓰레기 수집이 GPU 메모리를 제때 안 놓는다. 한 스텝이 중간 버퍼를 수천 개 만든다 |
-| `model.call(x)` | JS 는 객체를 그냥 못 부른다 |
-| `'cpu'` 로는 연산이 안 된다 | 값을 내려두는 자리이지 커널이 있는 장치가 아니다 (아래 절) |
-| `await opt.step(closure)` | **`LBFGS` 만** 그렇다. 한 걸음 안에서 스칼라를 읽어 분기한다 (바로 아래) |
+| `await init()` first | acquiring a WebGPU adapter is asynchronous |
+| `await loss.item()` | it brings GPU memory back. The forward and backward passes are synchronous |
+| wrap in `using s = scope()` | JS's garbage collection does not release GPU memory in time. One step makes thousands of intermediate buffers |
+| `model.call(x)` | JS cannot simply call an object |
+| `'cpu'` does not compute | it is where values are put down, not a device with kernels on it (see below) |
+| `await opt.step(closure)` | **`LBFGS` alone.** It reads a scalar and branches inside one step (just below) |
 
-**`LBFGS` 는 느리고, 그것은 알고리즘의 성질이다.** 다른 옵티마이저는 기울기 한 벌로
-한 걸음을 가지만 이쪽은 안에서 `maxIter` 번 돌면서 매번 손실과 기울기를 다시 묻고,
-되돌이마다 **스칼라를 읽어 분기한다** — 기울기 문턱, 곡률 `y·s`, 방향 미분, 손실 변화.
-전부 `if` 와 `break` 의 조건이라 GPU 위에 둘 수 없고, 값을 읽는 것은 여기서 비동기다.
-한 번의 `step()` 이 스텝당 백 번 안팎의 GPU→호스트 왕복을 낸다.
+**`LBFGS` is slow, and that is a property of the algorithm.** Other optimisers
+take one step per set of gradients; this one loops `maxIter` times inside, asking
+for the loss and the gradients again each time, and **reads a scalar and branches**
+on every iteration — the gradient threshold, the curvature `y·s`, the directional
+derivative, the change in loss. All of them are conditions on an `if` or a `break`,
+so they cannot live on the GPU, and reading a value is asynchronous here. One
+`step()` produces on the order of a hundred GPU-to-host round trips.
 
-조기 종료를 버리고 고정 횟수로 돌면 동기로 만들 수 있지만, 그렇게 만든 것은 동기
-LBFGS 가 아니라 **다른 알고리즘**이다. 큰 모델에는 `Adam` 을 쓰고, 이 이름은 **작은
-문제를 정확히** 풀 때 쓴다. 직선 탐색(`lineSearchFn`)은 없고, 주면 시끄럽게 멈춘다.
+Dropping the early exit and running a fixed number of iterations would make it
+synchronous, and what that produces is not a synchronous LBFGS but **a different
+algorithm.** Use `Adam` on a large model; this name is for solving **a small
+problem exactly.** There is no line search (`lineSearchFn`), and passing one stops
+loudly.
 
 ```ts
 const opt = new optim.LBFGS([p], 0.1);
-await opt.step(() => {                  // 닫힘이 손실을 다시 재고 기울기를 채운다
+await opt.step(() => {                  // the closure re-measures the loss and fills the gradients
   p.grad = null;
   const loss = crit.call(model.call(x), y);
   loss.backward();
@@ -641,14 +645,16 @@ await opt.step(() => {                  // 닫힘이 손실을 다시 재고 기
 });
 ```
 
-`scope()` 는 torch 에 없다 — TF.js 의 `tidy` 와 같은 자리이고 이유도 같다. 파라미터처럼
-살아남아야 하는 것은 `keepAlive` 로 표시한다 — **안 감싸면 몇 스텝 만에 장치가 찬다.**
+`scope()` does not exist in torch — it is TF.js's `tidy`'s place, for TF.js's
+reason. Anything that has to survive, such as a parameter, is marked with
+`keepAlive` — **without the wrapper the device fills up within a few steps.**
 
-**꼴이 둘이고 같은 기계다.** 파이썬의 `with` 에 가까운 쪽을 권한다.
+**Two forms, one machine.** The one closer to Python's `with` is the recommended
+one.
 
 ```ts
 for (let i = 0; i < steps; i++) {
-  using s = scope();              // 블록 끝에서 닫힌다
+  using s = scope();              // it closes at the end of the block
   opt.zeroGrad();
   const loss = crit.call(model.call(x), y);
   loss.backward();
@@ -656,89 +662,100 @@ for (let i = 0; i < steps; i++) {
   console.log(await loss.item());
 }
 
-const loss = await scope(async () => { … });   // 값을 그대로 받는 자리는 이쪽이 짧다
+const loss = await scope(async () => { … });   // shorter where the value is taken directly
 ```
 
-놓는 일이 동기라 `await using` 이 아니라 **`using`** 이다 — 지원도 그쪽이 넓다.
-블록을 벗어나는 시점은 안의 `await` 이 전부 끝난 뒤이므로 위의 `await loss.item()` 은
-안전하다(실측). 구역 밖으로 들고 나갈 것은 `s.keep(t)` 로 표시한다.
+Releasing is synchronous, so it is **`using`** rather than `await using` — and
+that one is more widely supported. The block is left only after every `await`
+inside it has finished, so the `await loss.item()` above is safe (measured).
+Anything to be carried out of the scope is marked with `s.keep(t)`.
 
-**둘 중 하나를 까먹으면 시끄럽게 멈춘다.** 한동안 안 그랬다. 구역이 닫힐 때 버퍼는
-파괴되지 않고 통에 돌아가므로(그것이 통이 있는 이유다), 표시를 안 하고 밖으로 들고
-나간 텐서는 **다음 할당이 덮어쓴 값을 조용히 읽었다** — 재봤더니 `[1,2,3,4]` 가
-`9,9,9,9` 로 읽혔다. WebGPU 도 이것은 안 막아 준다. 유효한 버퍼를 유효하게 읽는
-것이니까. 이제 버퍼가 통에 돌아갈 때 **삶의 횟수**가 하나 오르고, 옛 텐서가 값에
-닿으려 하면 그 자리에서 멈춘다.
+**Forgetting either of the two stops loudly.** It did not for a while. A buffer
+returning to the pool when a scope closes is not destroyed — that is what the pool
+is for — so a tensor carried out unmarked **quietly read whatever the next
+allocation wrote over it.** Measured, `[1,2,3,4]` read back as `9,9,9,9`. WebGPU
+does not block this either, because it is a valid read of a valid buffer. Now a
+buffer returning to the pool raises **a generation count**, and an old tensor
+reaching for its values stops right there.
 
-> 이 라이브러리의 첫 문장이 「조용히 다른 값을 내느니 시끄럽게 멈춘다」인데, 그
-> 반대가 핵심 학습 루프에 있었다. 골든이 못 보는 자리였다 — 케이스마다 페이지가
-> 깨끗해서 통이 휘저어질 일이 없다.
+> This library's opening sentence is "it stops loudly rather than quietly
+> producing a different value", and the opposite of that was sitting in the core
+> training loop. It was a place the golden cannot see — each case gets a clean
+> page, so the pool never gets stirred.
 
-**그 자리를 골든이 못 본다.** 스텝마다 버퍼를 하나씩 흘려도, 커널을 두 배로 걸어도
-값은 똑같이 맞으므로 표는 전부 초록이다. 그래서 값이 아니라 **세는 것**을 묻는 검사가
-따로 있다 — `npm run cost:ts` 가 스텝당 dispatch 수·제출 수·구역이 안 놓고 내보낸
-버퍼 수를 굳힌 값과 대조한다.
+**The golden cannot see that place.** Leaking one buffer per step, or dispatching
+twice as many kernels, leaves the values equally right and the whole table green.
+So there is a separate check that asks about **counts** rather than values —
+`npm run cost:ts` compares the dispatches per step, the submissions, and the
+buffers a scope let out without releasing, against pinned figures.
 
-세는 것이라 **어댑터와 무관하다.** 벤치(`bench:ts`)는 벽시계를 재므로 소프트웨어
-래스터라이저에서 답을 거부하는데(그 수는 라이브러리의 수가 아니라 그 래스터라이저의
-수다), 이쪽은 코드 경로가 정하는 수라 어디서 돌려도 같다 — **벤치가 못 도는 자리에서
-도는 것**이 이 검사의 값어치다.
+Being counts, it is **independent of the adapter.** The benchmark (`bench:ts`)
+measures wall-clock time and therefore refuses to answer on a software rasteriser
+(that number is the rasteriser's rather than the library's), and these numbers are
+decided by the code path and come out the same wherever they run — **running where
+the benchmark cannot** is what this check is worth.
 
-결속 쪽에도 같은 잣대가 있다:
+The binding side has the same measure:
 
 ```bash
 uv run --with playwright python tests/browser/run.py --lib borch_webgpu --cost
 ```
 
-**두 길이 같은 수를 낸다** — 같은 모델·같은 배치에서 스텝당 dispatch 53, 제출 1.
-결속이 커널을 더 걸지 않는다는 뜻이고, 갈리면 그 자체가 답이다. 결속 쪽에는 자리가
-하나 더 있다 — **파이썬 객체가 JS 손잡이를 쥔다.** 그래서 `gc.collect()` 를 앞뒤로
-부르고 잰다.
+**The two paths give the same numbers** — 53 dispatches and 1 submission per step
+on the same model and batch. Which is to say the binding dispatches no extra
+kernels, and a divergence is itself the answer. The binding has one more place to
+watch — **a Python object holds a JS handle** — so `gc.collect()` is called on
+either side of the measurement.
 
-### 장치를 다루는 자리
+### Where devices are handled
 
-`torch.cuda.is_available()` 자리는 이렇다. **비동기다** — 어댑터를 얻는 것이 비동기라
-피할 길이 없다.
+This is `torch.cuda.is_available()`'s place. **It is asynchronous** — acquiring an
+adapter is asynchronous and there is no way around it.
 
 ```ts
 import { init, isAvailable, probe, currentDevice, Tensor } from "borch";
 
-if (!(await isAvailable())) { /* 이 브라우저에서는 못 쓴다 */ }
+if (!(await isAvailable())) { /* not usable in this browser */ }
 
-const p = await probe();          // 왜 안 되는지까지 필요하면
+const p = await probe();          // when the reason is needed too
 if (!p.ok) console.log(p.why);    // 'no-api' | 'no-adapter'
 
-await init({ powerPreference: "high-performance" });   // 기본값이 이것이다
-currentDevice();                  // 'webgpu' — 안 붙었으면 null
+await init({ powerPreference: "high-performance" });   // this is the default
+currentDevice();                  // 'webgpu' — null if it never attached
 ```
 
-`why` 를 가르는 것이 요점이다. `no-api` 는 브라우저가 낡았거나 https 가 아닌 것이고
-`no-adapter` 는 드라이버 차단 목록·가상 머신·GPU 없는 헤드리스다 — 쓰는 사람이 할 수
-있는 일이 서로 다른데 예외 하나로 뭉치면 그 갈림이 사라진다.
+Splitting `why` is the point. `no-api` means an old browser or a page that is not
+https; `no-adapter` means a driver blocklist, a virtual machine, or headless with
+no GPU — what the user can do about them differs, and one exception covering both
+loses that split.
 
-텐서가 어디 있는지는 `t.device` 가 답하고, `await t.cpu()` 로 내리고 `t.webgpu()` 로
-올린다. **`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다** — borch 에 CPU 커널은
-없다. 내려온 텐서는 읽을 수는 있어도(`toArray`·`item`·`repr`) 연산에 넣으면 torch 와
-같은 문구로 멈춘다.
+`t.device` says where a tensor is; `await t.cpu()` brings it down and `t.webgpu()`
+puts it back. **`'cpu'` is a container holding values rather than a device that
+computes** — borch has no CPU kernels. A tensor brought down can be read
+(`toArray`, `item`, `repr`) and putting it into an operation stops with torch's
+wording.
 
 ```ts
 const g = Tensor.from([1, 2, 3, 4], [2, 2]);   // 'webgpu'
 const c = await g.cpu();                        // 'cpu'
-await c.item();                                 // 된다 — 읽기다
+await c.item();                                 // works — it is a read
 c.sum();                                        // RuntimeError:
                                                 // Expected all tensors to be on
                                                 // the same device, ...
-c.webgpu().sum();                               // 다시 된다
+c.webgpu().sum();                               // works again
 ```
 
-내리는 것만 비동기인 것은 그쪽만 왕복이기 때문이다. 올리는 것은 큐에 쓰기 하나다.
+Only bringing a tensor down is asynchronous, because only that direction is a
+round trip. Putting one back is a single write to the queue.
 
-`torch.cuda.synchronize()` 자리는 `await device().synchronize()` 다. 지금까지 완료를
-강제하는 방법은 값을 하나 읽는 것이었는데 그러면 **readback 왕복이 측정에 섞인다.**
+`torch.cuda.synchronize()`'s place is `await device().synchronize()`. Until it
+existed, forcing completion meant reading one value, and then **the readback round
+trip mixes into the measurement.**
 
-### 층을 직접 만들 때
+### Writing your own layer
 
-**필드에 두면 등록된다.** torch 가 `__setattr__` 로 하는 일과 같은 자리다.
+**Putting it in a field registers it.** The same place as what torch does in
+`__setattr__`.
 
 ```ts
 class Net extends nn.Module {
@@ -748,15 +765,16 @@ class Net extends nn.Module {
     return this.fc2.call(this.fc1.call(x).relu());
   }
 }
-new Net().parameters();       // 넷 다 나온다
+new Net().parameters();       // all four come out
 new Net().namedParameters();  // fc1.weight, fc1.bias, fc2.weight, fc2.bias
 ```
 
-텐서를 직접 파라미터로 둘 때는 `claim()` 으로 세운다 — torch 의 `nn.Parameter` 자리다.
-안 세운 텐서 필드는 상수로 보고 옵티마이저가 안 밟는다. **배열은 안 훑는다**(torch 도
-파이썬 list 를 등록하지 않는다) — `nn.ModuleList` 를 쓴다.
+Standing a tensor up as a parameter directly is done with `claim()` — torch's
+`nn.Parameter`'s place. A tensor field left unclaimed is treated as a constant and
+the optimiser does not step it. **Arrays are not walked** (torch does not register
+a Python list either) — use `nn.ModuleList`.
 
-### 파라미터 그룹
+### Parameter groups
 
 ```ts
 const opt = new optim.SGD([
@@ -766,81 +784,92 @@ const opt = new optim.SGD([
 opt.addParamGroup({ params: extra.parameters(), lr: 5e-4 });
 ```
 
-스케줄러는 그룹 전부를 몰고 그룹 사이 비율을 지킨다 — torch 가 `base_lrs` 를 그룹마다
-드는 것과 같은 결과다.
+A scheduler drives every group and preserves the ratios between them — the same
+result as torch carrying a `base_lrs` per group.
 
-### 난수
+### Random numbers
 
-`manualSeed` 하나가 텐서 팩토리·층 초기화·dropout 을 같이 되돌린다.
+One `manualSeed` resets the tensor factories, the layer initialisation and dropout
+together.
 
 ```ts
 manualSeed(42);
-Tensor.randn([2, 3]);           // 표준정규
+Tensor.randn([2, 3]);           // standard normal
 Tensor.rand([4]);               // [0, 1)
-Tensor.randint(0, 10, [8]);     // [low, high) 정수, int64
+Tensor.randint(0, 10, [8]);     // integers in [low, high), int64
 Tensor.randperm(64);
 t.randnLike();
 ```
 
-### `nn.functional` — `F.` 로 적힌 줄
+### `nn.functional` — the lines written as `F.`
 
-torch 는 같은 연산을 두 이름으로 갖는다. `x.relu()` 도 되고 `F.relu(x)` 도 되며,
-교재 코드는 층을 쓸 때 앞쪽을, 손실·합성곱을 직접 부를 때 뒤쪽을 쓴다. borch 에는
-앞쪽만 있어서 `F.` 로 적힌 줄을 통째로 다시 써야 했다.
+torch carries the same operation under two names. `x.relu()` works and so does
+`F.relu(x)`, and textbook code uses the first when using layers and the second when
+calling a loss or a convolution directly. borch had the first alone, so every line
+written as `F.` had to be rewritten wholesale.
 
 ```ts
 import { nn } from "borch";
-const F = nn.functional;                 // torch.nn.functional 과 같은 경로다
+const F = nn.functional;                 // the same path as torch.nn.functional
 
 F.relu(x);
 F.conv2d(x, weight, bias);
 F.crossEntropy(logits, target);
 ```
 
-**메서드를 안 없앤다.** torch 가 둘 다 갖고 있으므로 우리도 둘 다 갖는다 —
-`x.relu()` 로 적힌 코드가 이 변경으로 멈출 이유가 없다. `Tensor` 가 작아지지도
-않는다. 없던 문을 내는 것이지 있던 것을 치우는 것이 아니다.
+**The methods are not removed.** torch has both, so this has both — there is no
+reason for code written as `x.relu()` to stop because of this change. `Tensor` does
+not get smaller either. This opens a door that was not there rather than clearing
+away one that was.
 
-**이름이 같은데 연산이 다른 다섯은 안 낸다.** `F.layer_norm`·`F.rms_norm`·`F.pad`·
-`F.upsample` 은 torch 와 인자 규약이 다르고, `F.batch_norm` 은 `Tensor.batchNorm`
-(축만 바꾼 `layerNorm`)이 아니라 층 쪽 자유 함수로 나간다. 이름으로 이으면 조용히
-다른 연산이 걸리므로, 없는 것은 없다고 둔다.
+**The five that share a name and are a different operation are not exposed.**
+`F.layer_norm`, `F.rms_norm`, `F.pad` and `F.upsample` have a different argument
+convention from torch's, and `F.batch_norm` goes out as the layer side's free
+function rather than as `Tensor.batchNorm` (which is `layerNorm` with the axes
+swapped). Wiring them by name attaches a quietly different operation, so what is
+absent is left absent.
 
-### 대괄호 자리 — `x[...]`
+### The square-bracket place — `x[...]`
 
-**자바스크립트는 `[]` 를 오버로드할 수 없다.** 그래서 torch 의 대괄호 한 줄이 여기서는
-`select`·`narrow`·`indexSelect`… 열다섯 갈래로 흩어지고, 옮겨 적는 사람이 줄마다
-어느 것인지 골라야 했다. `at()` 이 그 갈래를 문 하나로 좁힌다.
+**JavaScript cannot overload `[]`.** So one line of torch's square brackets scatters
+here across fifteen branches — `select`, `narrow`, `indexSelect` and the rest — and
+whoever transcribes the code had to choose which one per line. `at()` narrows those
+branches to one door.
 
 ```ts
-x.at(0)                     // x[0]           축이 사라진다
-x.at([null, 1])             // x[:, 1]        null 이 파이썬의 `:` 다
-x.at(slice(1, 3))           // x[1:3]         축이 남는다
+x.at(0)                     // x[0]           the axis disappears
+x.at([null, 1])             // x[:, 1]        null is Python's `:`
+x.at(slice(1, 3))           // x[1:3]         the axis stays
 x.at([0, slice(1, 3)])      // x[0, 1:3]
 x.at(slice(null, null, 2))  // x[::2]
-x.at([[0, 2]])              // x[[0, 2]]      대괄호 둘 — numpy 와 같은 모양
-x.at(idx)                   // x[idx]         int64 텐서
+x.at([[0, 2]])              // x[[0, 2]]      two brackets — numpy's shape
+x.at(idx)                   // x[idx]         an int64 tensor
 ```
 
-**슬라이스가 함수인 이유**: `x.at([1, 3])` 이 "축 0 은 1, 축 1 은 3" 인지 "1:3 을
-자른다" 인지 배열만으로는 안 갈린다. 파이썬의 `x[1:3]` 도 실은 `x[slice(1, 3)]` 로
-풀리므로 같은 이름을 쓴다 — 새로 배울 것이 아니라 원래 그 자리에 있던 이름이다.
+**Why a slice is a function**: an array alone cannot separate `x.at([1, 3])`
+meaning "1 on axis 0 and 3 on axis 1" from "cut 1:3". Python's `x[1:3]` also
+resolves to `x[slice(1, 3)]`, so the same name is used — not something new to
+learn but the name that was there all along.
 
-**맨 바깥 배열은 언제나 축 목록이다.** 적게 주면 남은 축은 통째로 온다. 번호표로
-고르려면 한 겹 더 싼다 — numpy 의 `x[0, 1]` 과 `x[[0, 1]]` 이 갈리는 것과 같다.
+**The outermost array is always a list of axes.** Give fewer and the remaining
+axes come through whole. Selecting by index means one more layer of wrapping — the
+same split as numpy's `x[0, 1]` against `x[[0, 1]]`.
 
-`at()` 은 값을 안 만든다. 전부 기존 메서드로 넘기므로 **골든이 이미 그 값들을
-지킨다** — 이 메서드가 지는 책임은 어느 문으로 보내는가뿐이다. 기존 메서드는 그대로
-있고, 없애는 것이 아니라 문을 하나 더 낸 것이다.
+`at()` produces no values. It forwards everything to the existing methods, so
+**the golden already guards those values** — the only thing this method is
+responsible for is which door it sends you through. The existing methods are
+untouched; this adds a door rather than removing one.
 
-**참·거짓 마스크는 안 받는다.** `x[mask]` 는 `await x.maskedSelect(mask)` 로 남는다 —
-결과의 길이가 값에 달려 있어 GPU 에서 한 번 읽어야 알 수 있고, 그것 하나 때문에
-`at()` 을 비동기로 만들면 나머지 모든 쓰임이 이유 없이 `await` 를 달게 된다.
+**It does not take a boolean mask.** `x[mask]` stays as
+`await x.maskedSelect(mask)` — the result's length depends on the values and needs
+one read back from the GPU, and making `at()` asynchronous for that one case would
+put an `await` on every other use for no reason.
 
-### 데이터 먹이기
+### Feeding it data
 
-`torch.utils.data` 자리다. **배치는 GPU 텐서라 `scope()` 안에서 받아야 한다** —
-적재기가 대신 감쌀 수 없다. 텐서가 구역 밖으로 나가는 것이 목적이기 때문이다.
+`torch.utils.data`'s place. **A batch is a GPU tensor, so it has to be received
+inside a `scope()`** — the loader cannot wrap it for you, because the point is for
+the tensors to leave the scope.
 
 ```ts
 const set = new data.TensorDataset(images, labels);
@@ -848,7 +877,7 @@ const [train, valid] = data.randomSplit(set, [800, 200]);
 const loader = new data.DataLoader(train, { batchSize: 32, shuffle: true });
 
 for (let epoch = 0; epoch < 10; epoch++) {
-  for (const [x, y] of loader) {           // 동기 반복자다
+  for (const [x, y] of loader) {           // a synchronous iterator
     await scope(async () => {
       opt.zeroGrad();
       const loss = crit.call(model.call(x), y);
@@ -857,25 +886,30 @@ for (let epoch = 0; epoch < 10; epoch++) {
     });
   }
 }
-loader.length;    // 표본 수가 아니라 **배치 수**. torch 와 같다
+loader.length;    // **the batch count**, not the sample count. As in torch
 ```
 
-섞기는 `manualSeed` 를 따른다 — torch 는 적재기에 별도 generator 를 두는데 여기서는
-호스트 줄기 하나를 쓴다. 씨앗 하나가 층 초기화·dropout·텐서 팩토리에 이어 배치
-순서까지 되돌린다. 에폭마다 다시 섞는 것은 torch 와 같다.
+The shuffle follows `manualSeed` — torch keeps a separate generator on the loader
+and this uses the one host stream. One seed resets the layer initialisation,
+dropout, the tensor factories and the batch order with them. Reshuffling each epoch
+is as in torch.
 
-**`sampler` 와 `num_workers` 는 없다.** 앞은 지금 받쳐 줄 것이 없어서이고(이름만
-놓으면 넣은 것이 조용히 무시된다), 뒤는 워커로 GPU 손잡이가 안 건너가서다. 있는
-것은 `shuffle`·`dropLast`·`Subset`·`randomSplit`·`ConcatDataset` 이다.
+**`sampler` and `num_workers` are absent.** The first because there is nothing to
+back it yet (putting down the name alone means what you pass is quietly ignored),
+the second because a GPU handle does not cross into a worker. What is here is
+`shuffle`, `dropLast`, `Subset`, `randomSplit` and `ConcatDataset`.
 
-### 저장하고 이어서 하기
+### Saving and resuming
 
-**형식은 safetensors 다.** torch 의 `save`/`load` 는 pickle 이라 브라우저로 옮길 수도
-옮겨서도 안 된다. 대신 이쪽을 들면 **파이썬 `borch`·numpy·HF 도구가 같은 파일을
-읽는다** — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 그것으로 열린다.
+**The format is safetensors.** torch's `save`/`load` is pickle, which cannot be
+carried into a browser and should not be. Carrying this one instead means
+**Python `borch`, numpy and the HF tools read the same file** — and that is what
+opens the path from training in a browser to taking the result to your own
+machine.
 
-**중첩을 그대로 담는다** — 교재의 관용구가 그것이고, torch·파이썬 `borch` 와 같은
-모양이다. 텐서가 아닌 것(숫자·글자·참거짓·`null`·배열)도 같이 간다.
+**It carries the nesting as it is** — that is the textbook idiom, and the same
+shape as torch's and Python `borch`'s. Non-tensors travel with it too (numbers,
+strings, booleans, `null`, arrays).
 
 ```ts
 import { save, load } from "borch";
@@ -886,10 +920,11 @@ const bytes = await save({
   sched: sched.stateDict(),
   epoch: 5,
 });
-// bytes 는 Uint8Array — IndexedDB 에 넣든 파일로 내리든 쓰는 쪽 몫이다
+// bytes is a Uint8Array — putting it in IndexedDB or downloading it is the caller's job
 ```
 
-되돌릴 때는 **모델·옵티마이저·스케줄러를 같은 인자로 다시 세운 뒤** 얹는다.
+Restoring means **standing the model, the optimiser and the scheduler back up
+with the same arguments** and then loading onto them.
 
 ```ts
 const ck = load(bytes);
@@ -898,130 +933,157 @@ opt.loadStateDict(ck.opt);
 sched.loadStateDict(ck.sched);
 ```
 
-구조는 머리의 `borch.tree` 에 JSON 으로 적히고 텐서는 지금까지처럼 평평하게 눕는다 —
-**파이썬 쪽과 같은 스킴이라 서로의 체크포인트를 읽는다.** 나무가 없는 파일(남이 만든
-safetensors)을 주면 평평한 텐서 표로 온다.
+The structure is written as JSON into the header's `borch.tree` and the tensors
+lie flat as before — **the same scheme as the Python side, so the two read each
+other's checkpoints.** A file with no tree (somebody else's safetensors) comes back
+as a flat table of tensors.
 
-밑의 코덱이 필요하면 `encode`/`decode` 가 그 자리다. 평평한 `Record<string, Tensor>`
-와 문자열 메타데이터만 다루고, 이름을 겹치지 않게 눕히는 `prefixed`·`unprefixed` 와
-숫자를 메타데이터로 옮기는 `numbersToMeta`·`metaToNumbers` 가 같이 있다.
+If the codec underneath is what is wanted, `encode`/`decode` is its place. It
+handles a flat `Record<string, Tensor>` and string metadata alone, and comes with
+`prefixed`/`unprefixed` for flattening names without collisions and
+`numbersToMeta`/`metaToNumbers` for moving numbers into the metadata.
 
 ```ts
 const { tensors, metadata } = decode(bytes);
 ```
 
-**가중치만 되돌리면 안 된다.** 모멘텀·스텝 계수기·스케줄러의 에폭이 같이 가야 재개한
-다음 스텝이 안 끊고 돌린 것과 같은 수를 낸다. `npm run serialize:ts` 가 그것을 비트
-단위로 확인한다 — 열 스텝을 통으로 돌린 궤적과 다섯에서 끊었다 이은 궤적이 정확히
-같아야 통과하고, 같은 러너가 그 파일을 **numpy 로만** 다시 뜯어 본다.
+**Restoring the weights alone is not enough.** The momentum, the step counters and
+the scheduler's epoch have to travel with them for the step after resuming to
+produce the same numbers as a run that was never interrupted.
+`npm run serialize:ts` confirms that bit for bit — the trajectory of ten steps run
+straight through and the trajectory of five, interrupted and resumed, have to be
+exactly equal to pass, and the same runner opens that file again **with numpy
+alone.**
 
-값은 언제나 float32 로 나간다. borch 의 `int64`·`bool` 은 이름표라 머리의
-`__metadata__` 에 실린다 — 4 바이트짜리 몸에 `I64` 라고 적으면 남의 리더가 깨진다.
+Values always go out as float32. borch's `int64` and `bool` are labels and ride in
+the header's `__metadata__` — writing `I64` against a four-byte body breaks
+somebody else's reader.
 
-### 어디서 도는가
+### Where it runs
 
-WebGPU 가 필요하다. **없으면 폴백하지 않고 거절한다.** 여기 있던 TF.js 판은 WebGPU 를
-못 얻으면 WebGL 로 조용히 내려갔고, 그 때문에 한동안 **CPU 소프트웨어 경로에서 잰
-성능 수치**를 GPU 의 것으로 읽었다. 조용히 느려지느니 안 도는 편이 낫다.
+WebGPU is required. **Without it, it refuses rather than falling back.** The TF.js
+version that stood here dropped quietly to WebGL when it could not get WebGPU, and
+because of that, performance figures **measured on a CPU software path** were read
+as the GPU's for a while. Not running beats quietly getting slower.
 
-`--headed` 로만 잰다. 헤드리스 브라우저는 소프트웨어 래스터라이저(SwiftShader)를
-주는데 **예외를 안 던지고 수만 이상해진다.** 그래서 러너가 어댑터를 먼저 찍고,
-벤치와 정확도는 소프트웨어 어댑터에서 아예 거부한다.
+Measurements are taken under `--headed` only. A headless browser gives a software
+rasteriser (SwiftShader) that **throws no exception and simply produces strange
+numbers.** So the runner prints the adapter first, and the benchmark and the
+accuracy run refuse outright on a software adapter.
 
-### 얼마나 되나
+### How much it does
 
-Apple Metal 과 NVIDIA(RTX 4090) 두 벤더에서 **골든이 전건 같다** — 손으로 쓴
-WGSL 이 Metal 전용이 아니라는 뜻이다. (4090 쪽은 그때의 표로 쟀다. 표가 자란 뒤로는
-그 기계를 못 써서 다시 안 쟀고, 안 잰 것을 잰 것처럼 적지 않는다.)
-벤치의 ResNet-18 자체도 진짜 torch 와 순방향·손실·역방향이 맞는 것을 확인했다.
+**The golden matches on every case** across two vendors, Apple Metal and NVIDIA
+(RTX 4090) — which is to say the hand-written WGSL is not Metal-only. (The 4090
+figures were measured against the table as it stood then. That machine has not been
+available since the table grew, so it has not been measured again, and what has not
+been measured is not written down as though it had been.) The benchmark's
+ResNet-18 itself was also confirmed to match real torch on the forward pass, the
+loss and the backward pass.
 
-**TF.js 판을 지운 근거가 이 표다.** 같은 기계·같은 벤치에서 나란히 잰 기록이고,
-지금은 왼쪽 열이 없다.
+**This table is the evidence for deleting the TF.js version.** It is a record
+measured side by side on the same machine and the same benchmark, and the left
+column no longer exists.
 
-| CIFAR ResNet-18, 배치 64 | TF.js 판 (지금은 없다) | **borch.ts** | **borch_webgpu** |
+| CIFAR ResNet-18, batch 64 | the TF.js version (now gone) | **borch.ts** | **borch_webgpu** |
 |---|---|---|---|
 | ms/step | 154.9 | **118.5** | 123.4 |
-| 에폭 | 2.02분 | **1.55분** | 1.61분 |
-| 시험 정확도 (10 에폭, 늘리기 켬) | 60.4% | **64.6%** | 안 쟀다 |
+| epoch | 2.02 min | **1.55 min** | 1.61 min |
+| test accuracy (10 epochs, augmentation on) | 60.4% | **64.6%** | not measured |
 
-오른쪽 두 열은 **같은 커널**이다. 차이 4.9ms 가 파이썬을 한 번 지나는 값이고,
-그것이 이 결속의 값을 재는 유일한 수다.
+The right two columns are **the same kernels.** The 4.9ms difference is the cost of
+one trip through Python, and it is the only number that measures what this binding
+costs.
 
-> 정확도는 **늘리기를 켠 조건**이다. 끈 조건은 59.3% 로 자매보다 낮다. 한동안
-> 65.5% / 62.4% 로 적혀 있었는데, 그때는 벤치 모델의 지름길 층 여섯이 학습되지
-> 않은 상태였다 — 그 얼어붙음이 규제처럼 굴고 있었다. 자세한 것은
-> [BORCH-TS.md](BORCH-TS.md) 의 T3 정확도 절에 있다.
+> The accuracy is **with augmentation on.** With it off the figure is 59.3%, below
+> the sister library's. It read 65.5% / 62.4% for a while, and at that time six of
+> the benchmark model's shortcut layers were not being trained — that freezing was
+> acting as regularisation. The details are in the T3 accuracy section of
+> [BORCH-TS.md](BORCH-TS.md).
 
-설계와 실측 근거는 [BORCH-TS.md](BORCH-TS.md) 에 있다.
+The design and the evidence behind the measurements are in
+[BORCH-TS.md](BORCH-TS.md).
 
-## 일부러 지원하지 않는 것
+## What is deliberately not supported
 
-`CUDA` · 사전학습 가중치 · 혼합정밀도 · 분산 · `torch.compile`
+`CUDA`, pre-trained weights, mixed precision, distributed training,
+`torch.compile`
 
-**거절 목록이 긴 것이 의도다.** GPU·저장된 모델·사전학습은 브라우저를 벗어나야 배우는 것들이고,
-여기서 흉내 내면 그 교훈이 사라진다.
+**A long refusal list is the intent.** GPUs, saved models and pre-training are
+learned by leaving the browser, and imitating them here loses the lesson.
 
-## 적합성
+## Conformance
 
-목표는 "PyTorch 재현"이 아니라 **커리큘럼이 쓰는 범위 안에서의 동등성**이다.
-왜 그렇게 잡았는지와 앞으로의 순서는 [ROADMAP.md](ROADMAP.md) 에 있다.
+The goal is not "reproduce PyTorch" but **equivalence within the range the
+curriculum uses.** Why it was set that way, and what comes next, is in
+[ROADMAP.md](ROADMAP.md).
 
-| 등급 | 지금 |
+| grade | where it stands |
 |---|---|
-| **T1 값·기울기** (`allclose 1e-5`) | **100%** — 생성 케이스 132개 |
-| **T2 오류 동등** | **12/12** — 예외 종류 · 검색 가능한 메시지 9/9 |
-| **T3 표현(`repr`) 동등** | **15/15** |
-| **dtype 승격** | **112/112** — 4 dtype × 4 연산 × 텐서·스칼라 |
-| **저장소 공유** (view·slice) | **13/13** |
-| **통합 시나리오** | **6/6** — 같은 코드를 임포트만 바꿔 돌린 결과 |
-| **넓은 표면** (수학·모양·functional) | **67/67** |
-| **흔한 API 이름** | **144/144** |
-| T4 비트 동등 | **명시적 비목표** |
+| **T1 values and gradients** (`allclose 1e-5`) | **100%** — 132 generated cases |
+| **T2 error equivalence** | **12/12** — exception types, and 9/9 searchable messages |
+| **T3 printed form (`repr`) equivalence** | **15/15** |
+| **dtype promotion** | **112/112** — 4 dtypes × 4 operations × tensor and scalar |
+| **shared storage** (views and slices) | **13/13** |
+| **integration scenarios** | **6/6** — the same code run with one import changed |
+| **the wide surface** (maths, shapes, functional) | **67/67** |
+| **common API names** | **144/144** |
+| T4 bit equivalence | **an explicit non-goal** |
 
-그중 **53건은 값이 아니라 "기울기가 흐르는가"만 묻는다.** 값만 대조하는 검사는
-그래프가 끊긴 것을 못 본다 — 값은 맞기 때문이다. 실제로 GPU 쪽의 `roll` 과
-`masked_select` 가 그렇게 조용히 끊겨 있었고 그때 골든은 전부 초록이었다.
+**53 of them ask whether the gradient flows rather than what the value is.** A
+check comparing values alone cannot see a cut graph — because the values are
+right. The GPU side's `roll` and `masked_select` really were cut that way, and the
+golden was entirely green at the time.
 
-그리고 **골든 2991건**이 세 구현을 **같은 기대값**에 대조한다. 코어는 브라우저
-전용(1·3 차원 합성곱처럼 코어가 일부러 거절하는 것) 53 건을 빼고 2938 건을 본다 —
-없는 것을 물으면 그건 검사가 아니라 오답이다. 진짜 torch 를 브라우저에 넣을 수
-없어서, 네이티브에서 기대값을 굳혀 브라우저로 들고 간다.
+And **2991 golden cases** compare all three implementations against **the same
+expected values.** The core covers 2938 cases, leaving out the 53 that are
+browser-only (things the core refuses on purpose, such as 1-D and 3-D
+convolutions) — asking about something that is not there is a wrong answer rather
+than a check. Real torch cannot be put into a browser, so the expected values are
+pinned natively and carried in.
 
 ```bash
-uv run --with numpy --with torch python tests/golden.py dump   # 1단계: 굳힌다
-uv run --with numpy python tests/golden.py check               # 2단계: 대조한다
-uv run --with numpy python tests/export_json.py                # 3단계: 밖으로 뽑는다
+uv run --with numpy --with torch python tests/golden.py dump   # stage 1: pin them
+uv run --with numpy python tests/golden.py check               # stage 2: compare
+uv run --with numpy python tests/export_json.py                # stage 3: export
 ```
 
-3단계가 `tests/golden.json`(722KB)을 만든다. **파이썬이 아닌 구현도 이 기대값을 쓸 수
-있게** 하려는 것이다 — 진짜 torch 를 돌려 얻은 숫자가 이 저장소에서 가장 비싼 자산인데,
-파이썬 안에만 두면 다음 구현은 검증 없이 자란다.
+Stage 3 produces `tests/golden.json` (722KB). The point is **making the expected
+values usable by an implementation that is not Python** — the numbers obtained by
+running real torch are this repository's most expensive asset, and kept inside
+Python alone, the next implementation grows without verification.
 
-**케이스 본문은 안 들어 있다.** `lambda L: L.amax(...)` 는 기계적으로 다른 언어가 되지
-않는다. 받는 쪽은 같은 이름의 케이스를 자기 언어로 쓰고, 그 답을 여기서 맞춘다 —
-비싼 절반(숫자)은 건너가고 싼 절반(호출 한 줄)은 다시 쓴다. borch.ts 가 실제로 그렇게
-쓰고 1779 건을 지난다.
+**The case bodies are not in it.** `lambda L: L.amax(...)` does not become another
+language mechanically. The receiving side writes a case of the same name in its own
+language and matches its answer here — the expensive half (the numbers) crosses and
+the cheap half (one call) is rewritten. borch.ts does exactly that and passes 1779
+cases.
 
-**이름이 안 맞으면 러너가 그것을 센다.** 한동안 안 셌는데, 그때 골든에 없는 이름
-일곱을 들고 있으면서 골든의 다른 일곱을 안 쓴 상태가 "859 중 859, 0 건 남음" 으로
-보였다 — 개수가 같아서 맞물렸다.
+**When a name does not match, the runner counts it.** It did not for a while, and
+during that time, holding seven names not in the golden while leaving seven of the
+golden's own unused looked like "859 of 859, 0 remaining" — the counts matched and
+cancelled out.
 
 ```bash
 uv run --with numpy --with torch python tests/conformance.py
 ```
 
-## 라이선스
+## Licence
 
 Apache-2.0 · PI Lab
 
-의존은 numpy(BSD-3-Clause) 하나다. 순수 파이썬 휠이라 다른 것을 묶어 팔지 않는다.
+numpy (BSD-3-Clause) is the only dependency. It is a pure-Python wheel and ships
+nothing else bundled with it.
 
-> **브라우저에 띄우는 쪽은 Pyodide 를 함께 서빙하게 된다.** Pyodide 는 MPL-2.0 이고,
-> 실행 형태로 배포하면 **소스를 구할 길을 알려야 한다**(MPL §3.2). 우리 코드로 번지지는
-> 않는다 — 파일 단위 약한 카피레프트라 borch 는 Apache-2.0 그대로다.
-> 페이지 어딘가에 이 한 줄을 두면 된다:
+> **Whoever puts it in a browser serves Pyodide alongside it.** Pyodide is
+> MPL-2.0, and distributing it in executable form means **telling the recipient how
+> to obtain the source** (MPL §3.2). It does not spread into our code — weak
+> copyleft works per file, so borch stays Apache-2.0. One line somewhere on the
+> page is enough:
 >
-> > 이 페이지는 [Pyodide](https://github.com/pyodide/pyodide) 를 포함하며 Mozilla Public
-> > License 2.0 을 따릅니다. 소스는 해당 저장소에서 받을 수 있습니다.
+> > This page includes [Pyodide](https://github.com/pyodide/pyodide), which is
+> > licensed under the Mozilla Public License 2.0. The source is available from
+> > that repository.
 >
-> 무엇에 기대고 무엇을 지켜야 하는지는 [THIRD-PARTY.md](THIRD-PARTY.md) 에 정리했다.
+> What this leans on and what has to be honoured is collected in
+> [THIRD-PARTY.md](THIRD-PARTY.md).
