@@ -48,10 +48,20 @@ PAGES = [
 # 소프트웨어 어댑터에서 몇 분이 든다 — 이 검사가 재려는 것(이름이 바뀌어 터지는가)에
 # 비해 값이 안 맞는다. 그 페이지의 `load` 자리는 같은 한 줄이고 위 넷이 그것을 본다.
 
-# 출력에 이것이 보이면 실패다. 페이지가 예외를 잡아 화면에 적기 때문에, 던지는 것과
-# 조용한 것이 **둘 다 출력 문자열**로 온다 — 그래서 글자로 본다.
+# **먼저 구조로 본다.** 페이지가 예외를 잡아 화면에 적으므로(`runnable.js` 의
+# `write(describeError(err), "err")`) 던진 줄은 `class="err"` 를 달고 온다. 글자가
+# 아니라 그 표시를 세면 문구가 바뀌어도, 페이지 언어가 달라도 안 죽는다.
+#
+# 처음에는 글자로만 봤고 목록에 `"실패"` 가 들어 있었다. **그 패턴은 죽어 있었다** —
+# `describeError` 가 내는 것은 `err.name: err.message` 이고 거기 그 낱말이 올 자리가
+# 없다. 죽은 패턴은 화면에서 드문 패턴과 구별이 안 된다.
+ERROR_CLASS = "div.err"
+
+# 글자 쪽은 **그물이지 문이 아니다.** 안 던지고 잘못 도는 자리를 잡으려는 것이고,
+# 여기 없는 문구가 나온다고 통과가 되는 것은 아니다 — 그 문은 위의 `div.err` 가
+# 지킨다.
 BAD = ("is not a function", "undefined is not", "Cannot read", "TypeError",
-       "ReferenceError", "Error:", "실패", "throw")
+       "ReferenceError", "Error:", "throw")
 
 TIMEOUT_MS = 300_000
 
@@ -74,15 +84,22 @@ def run_page(page, path):
             continue
         go.click()
         pressed += 1
-        # 단추 글자가 "실행" 으로 돌아오면 끝난 것이다(`runnable.js`).
-        page.wait_for_function(
-            "el => !el.textContent.match(/도는 중|running/i)",
-            arg=go, timeout=TIMEOUT_MS)
+        # **단추가 다시 눌리게 되면 끝난 것이다**(`runnable.js` 의 `runBtn.disabled`).
+        #
+        # 처음에는 단추 **글자**가 "도는 중" 에서 돌아오는 것을 봤다. 그 낱말은 저쪽
+        # 파일의 것이고 이 파일이 그 철자를 알고 있어야 하는데, **아무도 그 둘을 붙잡고
+        # 있지 않다.** 저쪽이 문구를 고치면 여기는 틀렸다고 말하지 못하고 **영원히
+        # 기다린다** — 값이 틀리는 것보다 나쁘다, 무엇을 기다리는지가 화면에 안 나오니까.
+        # `disabled` 는 같은 사실을 문구 없이 말한다.
+        page.wait_for_function("el => !el.disabled", arg=go, timeout=TIMEOUT_MS)
         out = block.query_selector("pre.out, .out")
         text = (out.inner_text() if out else "").strip()
         if not text:
             said.append(f"블록 {i} 가 아무것도 안 냈다")
             continue
+        # **표시가 먼저다.** 페이지가 예외를 잡아 적은 줄이 여기 걸린다.
+        for line in (out.query_selector_all(ERROR_CLASS) if out else []):
+            said.append(f"블록 {i} — {line.inner_text().strip().splitlines()[0][:120]}")
         for bad in BAD:
             if bad in text:
                 said.append(f"블록 {i} — {text.splitlines()[0][:120]}")

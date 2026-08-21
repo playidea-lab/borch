@@ -5618,6 +5618,9 @@ function addLinalgNames(out: Map<string, Case>): void {
   const cube = () => Tensor.arange(24).reshape([2, 3, 4]);
   // 위쪽에 99 를 넣어도 답이 안 바뀌어야 한다 — 아래 삼각만 읽는지 묻는 자리.
   const skew = () => Tensor.from([4, 99, 1, 3], [2, 2]);
+  // `eig` 용. 회전은 **실수 고윳값이 없고**(±i), 일반은 셋 다 실수인데 대칭이 아니다.
+  const rot = () => Tensor.from([0, -1, 1, 0], [2, 2]);
+  const gen = () => Tensor.from([4, 1, 2, 0, 3, -1, 1, 0, 2], [3, 3]);
 
   const value: [string, () => Promise<Tensor>][] = [
     ["name2::matmul", async () => mat().mm(mat())],
@@ -5630,6 +5633,15 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["name2::eigvalsh(3x3)", async () => sym3().eigvalsh()],
     ["name2::eigvalsh(아래삼각만)", async () => skew().eigvalsh()],
     ["name2::eigh(아래삼각만)/값", async () => (await skew().eigh()).values],
+
+    // ── `eig` — 대칭이 아닌 것도 받는다 ────────────────────────────────
+    //
+    // **차례에 안 기댄다.** LAPACK 이 고윳값 차례를 안 정하고, torch 는 복소수를
+    // 정렬조차 못 한다(파이썬 쪽 실측). 그래서 대칭함수로 접어 묻는다.
+    ["eig::eigvals(회전)/크기",
+      async () => (await rot().eigvals()).abs().sort().values],
+    ["eig::eigvals(비대칭)/크기",
+      async () => (await gen().eigvals()).abs().sort().values],
 
     ["name2::linalg.diagonal", async () => cube().diagonal(0, -2, -1)],
     ["name2::torch.diagonal(다른 축)", async () => cube().diagonal(0, 0, 1)],
@@ -5683,6 +5695,30 @@ function addLinalgNames(out: Map<string, Case>): void {
     ["-2", -2], ["1", 1], ["inf", Infinity]] as const) {
     out.set(`linalg::name2::cond(p=${tag})`, async () => mat().cond(pv));
   }
+  // **답이 늘 복소수다.** 대칭 행렬을 줘도 그렇다 — 회전 행렬처럼 실수 고윳값이
+  // 아예 없는 것이 있어서, 반환형이 입력에 따라 달라질 수가 없다.
+  out.set("linalg::eig::eigvals(대칭이어도 복소수형)",
+    async () => `torch.${(await sym().eigvals()).dtype}`);
+
+  // **합은 대각합이다.** 차례와 무관하고 값이 맞는지를 수학으로 묻는다 — 고윳값을
+  // 아무렇게나 내는 구현은 크기 정렬은 통과해도 여기서 걸린다.
+  out.set("linalg::eig::eigvals(비대칭)/합=대각합", async () => {
+    const sum = await (await gen().eigvals()).sum().real().item();
+    const tr = await gen().trace().item();
+    return `${sum.toFixed(4)} ${tr.toFixed(4)}`;
+  });
+
+  // **고유벡터는 못 굳힌다** — 부호가 안 정해진다(torch 자신도 float32 와 float64
+  // 에서 반대 부호를 낸다). 대신 정의를 묻는다: `A·V` 와 `V·diag(λ)` 가 같은가.
+  // 부호가 뒤집혀도 양쪽이 같이 뒤집혀 답이 안 변한다.
+  out.set("linalg::eig::eig(정의를 지키나)", async () => {
+    const a = gen();
+    const { values, vectors } = await a.eig();
+    const left = a.cfloat().mm(vectors);
+    const right = vectors.mm(values.diagflat());
+    return (await left.sub(right).abs().max(0).values.max(0).values.item()).toFixed(4);
+  });
+
   addLinalgGrads(out);
 }
 

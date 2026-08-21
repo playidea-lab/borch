@@ -16,15 +16,15 @@ TOLERANCE = 1e-4
 
 
 def test_scenario_matches_real_torch():
-    """The same code with a different import. The numbers have to match **within
-    tolerance.**
+    """The same code with only the import changed. The numbers that come out have to agree
+    **within tolerance.**
 
-    It passes through MLP training, a CNN (BatchNorm included), an LSTM, a
-    transformer encoder, and saving and loading, all in one go.
+    It passes through MLP training, a CNN (with BatchNorm), an LSTM, a transformer encoder,
+    and saving and loading, in one run.
 
-    It does not compare as strings. Bit equivalence is an explicit non-goal
-    (ROADMAP), and macOS's and Linux's BLAS really did part at the sixth decimal
-    place and turn CI alone red.
+    They are not compared as strings. Bit equality is an explicit non-goal (ROADMAP), and
+    macOS's and Linux's BLAS did once diverge at the sixth decimal and turn CI red on its
+    own.
     """
     real_out, nano_out = _run("real"), _run("nano")
     assert real_out, "the scenario produced no values at all"

@@ -3,14 +3,13 @@
     uv run python tests/case_surface.py            # module functions (L.exp …)
     uv run python tests/case_surface.py --methods  # methods (x.sum() …)
 
-The question to ask when starting a new implementation is not "how wide is
-torch's surface" but **"what does this table call".** That list is the condition
-for passing, and counting it decides where to start — attaching the most-called
-first grows the number of passing cases quickest.
+The question to ask when standing up a new implementation is not "how wide is torch's
+surface" but **"what does this table call"**. That list is the condition for passing, and
+counting it settles where to start — attaching the most-called ones first makes the number
+of passing cases rise fastest.
 
-Counting by **number of cases** rather than by number of calls is the point. A
-hundred calls to `mul` inside one case opens one case, and one call each across
-ten cases opens ten.
+The point is counting **cases**, not calls. `mul` called a hundred times inside one case
+opens one; called once in each of ten cases, it opens ten.
 """
 
 import collections
@@ -20,10 +19,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent
 
-# Places like `L.exp(...)` and `L.nn.functional.relu(...)`.
+# Places such as `L.exp(...)` and `L.nn.functional.relu(...)`.
 MODULE = re.compile(r"\bL\.((?:[a-z_][a-z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*)")
-# `x.sum()` and `a.masked_select(...)` — the receiver is conventionally one
-# character or short.
+# `x.sum()`, `a.masked_select(...)` — the receiver's name is short by convention.
 METHOD = re.compile(r"\b[a-z][a-z0-9_]{0,3}\.([a-z_][a-z0-9_]*)\s*\(")
 
 
@@ -32,8 +30,8 @@ def main(argv):
     want_methods = "--methods" in argv
     pattern = METHOD if want_methods else MODULE
 
-    # A case is not read as one line — many span several, so everything from the
-    # line holding a case name to the next case name is read as one block.
+    # A case is not read as one line — many span several, so everything from the line
+    # carrying a case name up to the next case name is read as one piece.
     seen = collections.Counter()
     for name in pattern.findall(text):
         seen[name] += 1

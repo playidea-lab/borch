@@ -1,14 +1,16 @@
-// conv 도 WGSL 로 TF.js 만큼 나오는가.
+// Does conv reach TF.js in WGSL too?
 //
-// **지금 이 파일은 안 돈다** — `wgsl_bench.js` 와 같은 이유다. TF.js 기준선을
-// 부르는데 그 벤더 파일을 더는 안 받는다. 결론을 낸 방법으로 남긴다.
+// **This file does not run at present** — the same reason as `wgsl_bench.js`. It calls a TF.js
+// baseline and that vendor file is no longer fetched. Kept as the method that reached the
+// conclusion.
 //
-// 행렬곱은 잰 결과 우리 커널이 TF.js 의 115~217% 였다(wgsl_bench.js). conv 는 그
-// 결과가 그대로 오는지가 관건이다 — im2col 로 펴서 행렬곱에 태우면 오고, 안 오면
-// 어디서 새는지 봐야 한다. ResNet-18(CIFAR) 이 **실제로 쓰는 모양**으로만 잰다.
+// For the matrix multiply, measurement put our kernel at 115-217% of TF.js (wgsl_bench.js).
+// For conv the question is whether that result carries over — flattening with im2col and
+// riding the matrix multiply carries it, and if it does not, where it leaks has to be found.
+// Measured only in **the shapes ResNet-18 (CIFAR) actually uses.**
 //
-// 두 조각을 따로 잰다: im2col 자체와 그 뒤의 행렬곱. 합쳐서만 재면 느릴 때 어느
-// 쪽이 범인인지 못 짚는다.
+// Two pieces are measured separately: im2col itself and the matrix multiply after it. Measured
+// only together, a slow result cannot say which of the two is the culprit.
 
 const IM2COL_WGSL = `
 struct P {
@@ -20,13 +22,13 @@ struct P {
 @group(0) @binding(1) var<storage, read_write> Cols: array<f32>;
 @group(0) @binding(2) var<uniform> p: P;
 
-// 출력 한 칸 = (n, oh, ow) 한 자리의 (C·KH·KW) 벡터 중 하나.
+// One output slot = one entry of the (C·KH·KW) vector at one (n, oh, ow).
 //
-// **격자 보폭 반복문을 쓴다.** 칸마다 스레드 하나씩 띄우면 워크그룹이
-// 차원당 워크그룹 한계 65,535 를 넘는다 — 64채널 3×3 에 배치 64 면
-// 589,824개가 필요하다. 넘으면 **조용히 안 돈다.** 처음 재봤을 때 여섯 중 다섯이
-// 값이 틀렸고, 유일하게 맞은 스템은 채널이 3이라 27,648개로 한계 아래였다.
-// 속도만 보고 있었으면 "TF.js 대비 144%" 를 그대로 믿었을 자리다.
+// **A grid-stride loop is used.** One thread per slot puts the workgroup count past the
+// per-dimension limit of 65,535 — 64 channels, 3×3, batch 64 needs 589,824. Past it, **it
+// quietly does not run.** In the first measurement five of six had wrong values, and the one
+// that was right was the stem, whose 3 channels made 27,648, under the limit. Looking at speed
+// alone, "144% of TF.js" would have been believed as it stood.
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>,
         @builtin(num_workgroups) nwg: vec3<u32>) {
@@ -36,8 +38,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
   let stride = nwg.x * 64u;
 
   for (var idx = gid.x; idx < total; idx = idx + stride) {
-    let r = idx / inner;                        // 어느 (n, oh, ow)
-    let c = idx % inner;                        // 그 안의 몇 번째
+    let r = idx / inner;                        // which (n, oh, ow)
+    let c = idx % inner;                        // which entry within it
 
     let ow = r % p.OW;
     let oh = (r / p.OW) % p.OH;
@@ -58,9 +60,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
   }
 }`;
 
-// 행렬곱은 wgsl_bench.js 에서 이긴 그 커널과 같은 설계다 — 누산기를 이름 붙인
-// 스칼라 16개로 **펼쳐서** 둔다. array 에 넣고 변수로 인덱싱하면 레지스터에서
-// 떨어져 24배 느려진다(실측).
+// The matrix multiply is the same design as the kernel that won in wgsl_bench.js — the
+// accumulators are **unrolled** into sixteen named scalars. Put in an array and indexed by a
+// variable they fall out of the registers and get 24 times slower (measured).
 const unrolled = () => {
   const decl = [], zero = [], fma = [], store = [];
   for (let i = 0; i < 4; i++) {
@@ -127,14 +129,16 @@ ${U4.fma}
 ${U4.store}
 }`;
 
-// 융합 conv — **im2col 을 따로 돌리지 않는다.**
+// Fused conv — **im2col is not run separately.**
 //
-// im2col 이 진 이유는 계산이 아니라 메모리다. 3×3 이면 입력을 9배로 부풀려 쓰고
-// 다시 읽는다(64→64 층에서 151MB). TF.js 가 그 왕복이 없는 이유는 conv 커널이
-// 입력을 직접 읽기 때문이고, 여기서 같은 것을 한다 — 위 행렬곱 커널에서 **A 조각을
-// 싣는 줄만** 바꿔 그 자리에서 (n, oh, ow, c, kh, kw) 를 풀어 입력에서 바로 읽는다.
+// im2col lost on memory, not on arithmetic. At 3×3 it writes the input out ninefold and reads
+// it back (151MB at a 64→64 layer). TF.js has no such round trip because its conv kernel reads
+// the input directly, and the same is done here — **only the lines that load A's piece** in
+// the matrix-multiply kernel above change, unpacking (n, oh, ow, c, kh, kw) on the spot and
+// reading straight from the input.
 //
-// 나머지(타일 크기, 누산기 16개를 펼쳐 두는 것, 공유메모리 재사용)는 그대로다.
+// The rest (the tile size, the sixteen unrolled accumulators, the shared-memory reuse) is
+// unchanged.
 const FUSED_WGSL = `
 struct P {
   N: u32, C: u32, H: u32, W: u32,
@@ -147,8 +151,8 @@ struct P {
 @group(0) @binding(2) var<storage, read_write> Out: array<f32>;
 @group(0) @binding(3) var<uniform> p: P;
 
-var<workgroup> As: array<f32, 1024>;            // 64 행 × 16
-var<workgroup> Bs: array<f32, 1024>;            // 16 × 64 열
+var<workgroup> As: array<f32, 1024>;            // 64 rows × 16
+var<workgroup> Bs: array<f32, 1024>;            // 16 × 64 columns
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
@@ -164,11 +168,11 @@ ${U4.zero}
     for (var s = 0u; s < 4u; s = s + 1u) {
       let idx = s * 256u + tid;
 
-      // --- A 조각: im2col 색인을 **여기서** 푼다. 중간 버퍼가 없다.
-      let ar = idx / 16u;                       // 0..63, 출력 행 안의 자리
-      let ak = idx % 16u;                       // 0..15, K 타일 안의 자리
-      let arow = wid.y * 64u + ar;              // 전체 행 = (n, oh, ow)
-      let acol = t * 16u + ak;                  // 전체 열 = (c, kh, kw)
+      // --- A's piece: the im2col index is unpacked **here.** No intermediate buffer.
+      let ar = idx / 16u;                       // 0..63, position within the output row
+      let ak = idx % 16u;                       // 0..15, position within the K tile
+      let arow = wid.y * 64u + ar;              // the full row = (n, oh, ow)
+      let acol = t * 16u + ak;                  // the full column = (c, kh, kw)
       var av = 0.0;
       if (arow < p.M && acol < p.K) {
         let ow = arow % p.OW;
@@ -185,7 +189,7 @@ ${U4.zero}
       }
       As[idx] = av;
 
-      // --- B 조각: 가중치는 이미 (K, F) 라 그대로 읽는다.
+      // --- B's piece: the weights are already (K, F), so they are read as they are.
       let bk = idx / 64u;
       let bc = idx % 64u;
       let brow = t * 16u + bk;
@@ -211,16 +215,18 @@ ${U4.fma}
 ${U4.store.replace(/d\.M/g, "p.M").replace(/d\.N/g, "p.F").replace(/C\[/g, "Out[")}
 }`;
 
-// 융합 conv, **모양을 상수로 구워 넣은 판.**
+// Fused conv, **with the shapes baked in as constants.**
 //
-// 앞의 융합 커널은 채널이 늘수록 im2col 판보다도 느려졌다(512→512 에서 절반).
-// 원인은 읽기 패턴이 아니라 **나눗셈**이다. `p.OW`·`p.KW`·`p.C` 가 유니폼 값이라
-// 컴파일러가 나눗셈을 곱셈·시프트로 못 바꾸고, GPU 에는 정수 나눗셈 하드웨어가 없다.
-// 타일을 실을 때마다 원소당 나눗셈·나머지 7번을 다시 하고, 512채널 3×3 이면 타일이
-// 288번이다. im2col 은 같은 나눗셈을 **원소당 한 번만** 하고 펴놓은 것을 모두가 읽었다.
+// The fused kernel above got slower than the im2col edition as channels grew (half the speed
+// at 512→512). The cause is not the read pattern but **division.** `p.OW`, `p.KW` and `p.C`
+// are uniform values, so the compiler cannot turn the divisions into multiplies and shifts,
+// and a GPU has no integer division hardware. Every tile load redoes seven divisions and
+// remainders per element, and 512 channels at 3×3 means 288 tiles. im2col did the same
+// divisions **once per element** and everyone read the flattened result.
 //
-// 그래서 모양을 셰이더 문자열에 박는다. 모양마다 컴파일이 한 번 더 들지만 — 진짜
-// 라이브러리도 모양 서명으로 셰이더를 캐시한다 — 나눗셈이 전부 상수 접기로 사라진다.
+// So the shapes go into the shader string. Each shape costs one more compilation — a real
+// library caches shaders by a shape signature too — and every division disappears into
+// constant folding.
 const fusedSpecialised = (s) => `
 struct P { N: u32, M: u32, K: u32, F: u32 };
 @group(0) @binding(0) var<storage, read> X: array<f32>;
@@ -258,7 +264,7 @@ ${U4.zero}
       let acol = t * 16u + ak;
       var av = 0.0;
       if (arow < p.M && acol < p.K) {
-        // 제수가 전부 상수라 여기 나눗셈은 곱셈·시프트로 접힌다.
+        // Every divisor is a constant, so these divisions fold into multiplies and shifts.
         let ow = arow % OW;
         let oh = (arow / OW) % OH;
         let n  = arow / OHW;
@@ -339,14 +345,14 @@ window.wgslConv = async function (cases, iters) {
   const mmPipe = pipe(device, MATMUL_WGSL);
   const fuPipe = pipe(device, FUSED_WGSL);
   const maxWg = lim.maxComputeWorkgroupsPerDimension;
-  const lines = [`한계: 차원당 워크그룹 ${maxWg.toLocaleString()}개`, ""];
+  const lines = [`limit: ${maxWg.toLocaleString()} workgroups per dimension`, ""];
 
   for (const cs of cases) {
     const { N, C, H, W, F, KH, KW, S, P } = cs;
     const OH = Math.floor((H + 2 * P - KH) / S) + 1;
     const OW = Math.floor((W + 2 * P - KW) / S) + 1;
-    const M = N * OH * OW;           // im2col 의 행
-    const K = C * KH * KW;           // 안쪽 차원
+    const M = N * OH * OW;           // im2col's rows
+    const K = C * KH * KW;           // the inner dimension
     const flops = 2 * M * K * F;
 
     const x = new Float32Array(N * C * H * W);
@@ -354,7 +360,7 @@ window.wgslConv = async function (cases, iters) {
     for (let i = 0; i < x.length; i++) x[i] = ((i * 37) % 19) / 19 - 0.5;
     for (let i = 0; i < w.length; i++) w[i] = ((i * 53) % 23) / 23 - 0.5;
 
-    // --- TF.js 기준선. NHWC 로 넣어야 빠른 길을 탄다(실측: NCHW 는 1/7).
+    // --- The TF.js baseline. It takes the fast path only in NHWC (measured: NCHW is 1/7).
     const xNHWC = tf.tensor(x, [N, C, H, W]).transpose([0, 2, 3, 1]);
     const wHWIO = tf.tensor(w, [F, C, KH, KW]).transpose([2, 3, 1, 0]);
     let ref;
@@ -373,7 +379,7 @@ window.wgslConv = async function (cases, iters) {
     xNHWC.dispose();
     wHWIO.dispose();
 
-    // --- 우리 커널. im2col 과 행렬곱을 따로 잰다.
+    // --- Our kernels. im2col and the matrix multiply are measured separately.
     const mk = (n, usage) => device.createBuffer({ size: n * 4, usage });
     const bufX = mk(x.length, U().STORAGE | U().COPY_DST);
     const bufCols = mk(M * K, U().STORAGE | U().COPY_SRC);
@@ -383,8 +389,8 @@ window.wgslConv = async function (cases, iters) {
       [N, C, H, W, KH, KW, OH, OW, S, S, P, P]));
     const imBind = bindOf(device, imPipe, [bufX, bufCols, bufP]);
 
-    // 가중치는 (F, C·KH·KW) 로 두고 전치해서 (K, F) 로 쓴다 — 행렬곱이 B 를
-    // 행 우선으로 읽으므로 여기서 한 번만 맞춰두면 된다.
+    // The weights are held as (F, C·KH·KW) and transposed to (K, F) — the matrix multiply
+    // reads B row-major, so lining it up once here is enough.
     const wT = new Float32Array(K * F);
     for (let f = 0; f < F; f++) for (let k = 0; k < K; k++) wT[k * F + f] = w[f * K + k];
     const bufW = mk(K * F, U().STORAGE | U().COPY_DST);
@@ -399,7 +405,7 @@ window.wgslConv = async function (cases, iters) {
       const pass = enc.beginComputePass();
       pass.setPipeline(imPipe);
       pass.setBindGroup(0, imBind);
-      // 한계 안으로 자른다 — 남는 것은 셰이더의 격자 보폭 반복문이 가져간다.
+      // Clamped under the limit — the shader's grid-stride loop takes the remainder.
       pass.dispatchWorkgroups(Math.min(Math.ceil(M * K / 64), maxWg));
       pass.end();
       device.queue.submit([enc.finish()]);
@@ -411,9 +417,9 @@ window.wgslConv = async function (cases, iters) {
       pass.setBindGroup(0, mmBind);
       const gx = Math.ceil(F / 64);
       const gy = Math.ceil(M / 64);
-      // 행렬곱은 워크그룹 하나가 64×64 를 덮어 한계에 여유가 크다. 그래도 넘으면
-      // **조용히 안 도므로** 짐작하지 않고 확인한다.
-      if (gx > maxWg || gy > maxWg) throw new Error(`행렬곱 dispatch 가 한계를 넘는다: ${gx}×${gy}`);
+      // For the matrix multiply one workgroup covers 64×64, so there is plenty of headroom.
+      // Past the limit it still **quietly does not run**, so it is checked rather than assumed.
+      if (gx > maxWg || gy > maxWg) throw new Error(`the matmul dispatch is past the limit: ${gx}×${gy}`);
       pass.dispatchWorkgroups(gx, gy);
       pass.end();
       device.queue.submit([enc.finish()]);
@@ -432,12 +438,12 @@ window.wgslConv = async function (cases, iters) {
     await device.queue.onSubmittedWorkDone();
     const mmMs = (performance.now() - t0) / iters;
 
-    // 값 대조. 우리 출력은 (M, F) = (N·OH·OW, F) 이고 TF.js 는 NHWC 라 같은 순서다.
+    // Value comparison. Our output is (M, F) = (N·OH·OW, F) and TF.js is NHWC, the same order.
     const got = await readBack(device, bufOut, M * F);
     let diff = 0;
     for (let i = 0; i < got.length; i++) diff = Math.max(diff, Math.abs(got[i] - ref[i]));
 
-    // --- 융합 커널. 중간 버퍼 없이 입력에서 바로 읽는다.
+    // --- The fused kernel. Reads straight from the input with no intermediate buffer.
     const bufFP = device.createBuffer({ size: 64, usage: U().UNIFORM | U().COPY_DST });
     device.queue.writeBuffer(bufFP, 0, new Uint32Array(
       [N, C, H, W, KH, KW, OH, OW, S, S, P, P, M, K, F, 0]));
@@ -465,7 +471,7 @@ window.wgslConv = async function (cases, iters) {
       fuDiff = Math.max(fuDiff, Math.abs(fuGot[i] - ref[i]));
     }
 
-    // --- 모양을 구워 넣은 융합. 셰이더 컴파일 시간은 재는 구간 밖에 둔다.
+    // --- The shape-baked fusion. Shader compilation is kept outside the measured window.
     const t1 = performance.now();
     const spPipe = pipe(device, fusedSpecialised({ ...cs, OH, OW }));
     const compileMs = performance.now() - t1;
@@ -500,17 +506,17 @@ window.wgslConv = async function (cases, iters) {
     lines.push(
       `${cs.name}  (N=${N} C=${C} ${H}×${W} → F=${F} ${KH}×${KW} s${S} p${P})` +
       `\n  TF.js conv   ${cs.tfMs.toFixed(2).padStart(7)} ms  ${g(cs.tfMs).toFixed(0).padStart(5)} GFLOPS` +
-      `\n  우리 합계    ${ours.toFixed(2).padStart(7)} ms  ${g(ours).toFixed(0).padStart(5)} GFLOPS` +
-      `  (TF.js 대비 ${(cs.tfMs / ours * 100).toFixed(0)}%)` +
-      `\n    im2col     ${imMs.toFixed(2).padStart(7)} ms  (합계의 ${(imMs / ours * 100).toFixed(0)}%)` +
-      `\n    행렬곱     ${mmMs.toFixed(2).padStart(7)} ms  ${g(mmMs).toFixed(0).padStart(5)} GFLOPS` +
-      `\n    ${diff < 1e-3 ? "최대차 " + diff.toExponential(1) : "값 틀림! 최대차 " + diff.toExponential(1)}` +
-      `\n  우리 융합    ${fuMs.toFixed(2).padStart(7)} ms  ${g(fuMs).toFixed(0).padStart(5)} GFLOPS` +
-      `  (TF.js 대비 ${(cs.tfMs / fuMs * 100).toFixed(0)}%)` +
-      `\n    ${fuDiff < 1e-3 ? "최대차 " + fuDiff.toExponential(1) : "값 틀림! 최대차 " + fuDiff.toExponential(1)}` +
-      `\n  융합+상수    ${spMs.toFixed(2).padStart(7)} ms  ${g(spMs).toFixed(0).padStart(5)} GFLOPS` +
-      `  (TF.js 대비 ${(cs.tfMs / spMs * 100).toFixed(0)}%)  컴파일 ${compileMs.toFixed(0)}ms` +
-      `\n    ${spDiff < 1e-3 ? "최대차 " + spDiff.toExponential(1) : "값 틀림! 최대차 " + spDiff.toExponential(1)}`
+      `\n  ours, total  ${ours.toFixed(2).padStart(7)} ms  ${g(ours).toFixed(0).padStart(5)} GFLOPS` +
+      `  (${(cs.tfMs / ours * 100).toFixed(0)}% of TF.js)` +
+      `\n    im2col     ${imMs.toFixed(2).padStart(7)} ms  (${(imMs / ours * 100).toFixed(0)}% of the total)` +
+      `\n    matmul     ${mmMs.toFixed(2).padStart(7)} ms  ${g(mmMs).toFixed(0).padStart(5)} GFLOPS` +
+      `\n    ${diff < 1e-3 ? "max diff " + diff.toExponential(1) : "WRONG VALUES! max diff " + diff.toExponential(1)}` +
+      `\n  ours, fused  ${fuMs.toFixed(2).padStart(7)} ms  ${g(fuMs).toFixed(0).padStart(5)} GFLOPS` +
+      `  (${(cs.tfMs / fuMs * 100).toFixed(0)}% of TF.js)` +
+      `\n    ${fuDiff < 1e-3 ? "max diff " + fuDiff.toExponential(1) : "WRONG VALUES! max diff " + fuDiff.toExponential(1)}` +
+      `\n  fused+const  ${spMs.toFixed(2).padStart(7)} ms  ${g(spMs).toFixed(0).padStart(5)} GFLOPS` +
+      `  (${(cs.tfMs / spMs * 100).toFixed(0)}% of TF.js)  compile ${compileMs.toFixed(0)}ms` +
+      `\n    ${spDiff < 1e-3 ? "max diff " + spDiff.toExponential(1) : "WRONG VALUES! max diff " + spDiff.toExponential(1)}`
     );
 
     [bufX, bufCols, bufP, bufW, bufOut, bufD, bufFP, bufFOut, bufSOut, bufSP]

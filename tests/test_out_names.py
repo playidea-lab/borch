@@ -1,25 +1,27 @@
-"""**`out=` 을 받는 이름 표가 낡지도 짧지도 않은가.**
+"""**Whether the table of names taking `out=` is neither stale nor short.**
 
-`borch/__init__.py` 의 `_TAKES_OUT` 에 적힌 이름만 `out=` 을 받는다. 코어는 torch 에
-기대지 않으므로 표는 손으로 적혀 있고, 그 표를 torch 에 대 보는 것이 여기다.
+Only the names written into `_TAKES_OUT` in `borch/__init__.py` take `out=`. The core does
+not lean on torch, so the table is written by hand, and holding that table up against torch
+is what happens here.
 
-## 왜 docstring 으로 못 만드나
+## Why it cannot be built from the docstrings
 
-torch 의 C 함수는 서명을 들여다볼 수 없어서 처음에는 docstring 의 `out=None` 으로
-골랐다. 그 목록은 **넓다** — `rand_like`·`zeros_like`·`ones_like`·`median`·
-`nanmedian`·`where`·`std_mean`·`var_mean`·`hamming_window` 는 거기 적혀 있는데 실제
-오버로드는 `out=` 을 안 받는다. aten 스키마도 마찬가지로 `rand_like` 에 out 변종이
-있다고 말한다 — 파이썬 층에서 막힐 뿐이다.
+torch's C functions do not expose their signatures, so the first version picked them from
+`out=None` in the docstrings. That list is **wide** — `rand_like`, `zeros_like`, `ones_like`,
+`median`, `nanmedian`, `where`, `std_mean`, `var_mean` and `hamming_window` are all written
+there while the actual overload takes no `out=`. The aten schema says the same, that
+`rand_like` has an out variant — it is only blocked at the Python layer.
 
-그래서 **실제로 불러 본다.** 인자를 몇 가지 꼴로 만들어 보고, 통하는 꼴을 찾으면
-같은 인자에 `out=` 을 붙여 다시 부른다. `TypeError` 면 안 받는 것이고, 다른 오류는
-**받은 뒤** 난 것이므로 받는 것으로 센다.
+So it **actually calls them.** It builds arguments in a few shapes, and once a shape works it
+calls again with `out=` added to the same arguments. A `TypeError` means it is not taken; any
+other error came **after** it was taken, so it counts as taken.
 
-## 인자를 못 만든 이름
+## Names whose arguments could not be built
 
-몇은 어떤 꼴로도 안 통한다(`from_file`·`hspmm`·`sparse_compressed_tensor` 처럼
-우리에게 없거나 특별한 것들). 그런 이름은 **판정을 안 한다** — 모르는 것을 아는 척
-하면 표가 거짓말을 시작한다. 우리에게 없는 이름이면 어차피 표에 못 들어간다.
+Some work in no shape at all (`from_file`, `hspmm`, `sparse_compressed_tensor` and others we
+do not have or that are special). Those names are **not judged** — pretending to know what is
+unknown is where the table starts lying. A name we do not have cannot enter the table
+anyway.
 """
 
 import inspect
@@ -41,7 +43,7 @@ PATTERNS = [
     (_M, _V), (_V, 2), (_M, _I), (0.0, 1.0, 3), (_P, _P), (_B,), (_M, 1),
     (2, 3), (_M, 0, True),
 ]
-# 꼴로 안 잡히는 것들은 손으로 준다. 여기 없고 꼴로도 안 되면 **판정을 안 한다.**
+# The ones no shape catches are given by hand. Absent here and uncaught by a shape, it is **not judged.**
 HAND = {
     "addbmm": (_M, _B, _B), "addmv": (_V, _M, _V), "baddbmm": (_B, _B, _B),
     "gather": (_M, 0, torch.zeros(3, 3, dtype=torch.int64)),
@@ -54,7 +56,7 @@ HAND = {
 
 
 def _classify(name):
-    """('단일'|'여럿'|'안 받음'|None). None 은 **판정 못 함**이다."""
+    """('single' | 'several' | 'not taken' | None). None means **could not be judged.**"""
     fn = getattr(torch, name)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -72,10 +74,10 @@ def _classify(name):
             try:
                 fn(*args, out=dst)
             except TypeError:
-                return "안 받음"
+                return "not taken"
             except Exception:                               # noqa: BLE001
                 pass
-            return "여럿" if many else "단일"
+            return "several" if many else "single"
     return None
 
 
@@ -91,32 +93,32 @@ def _candidates():
 
 
 def test_the_out_table_is_not_stale():
-    """표에 적힌 이름은 torch 에서 실제로 `out=` 을 받아야 한다."""
+    """A name written into the table has to actually take `out=` in torch."""
     wrong = []
     for name in sorted(borch._TAKES_OUT | borch._TAKES_OUT_TUPLE):
-        want = "여럿" if name in borch._TAKES_OUT_TUPLE else "단일"
+        want = "several" if name in borch._TAKES_OUT_TUPLE else "single"
         got = _classify(name)
         if got is not None and got != want:
-            wrong.append(f"{name} — 표는 {want}, torch 는 {got}")
+            wrong.append(f"{name} — the table says {want}, torch says {got}")
     assert not wrong, (
-        "`_TAKES_OUT` 이 낡았다:\n  " + "\n  ".join(wrong) + "\n\n"
-        "그 이름을 표에서 빼라 — 우리가 torch 보다 관대하면, 여기서 도는 코드가\n"
-        "자기 컴퓨터에서 멈춘다. 관대한 것도 갈리는 것이다."
+        "`_TAKES_OUT` is stale:\n  " + "\n  ".join(wrong) + "\n\n"
+        "Take that name out of the table — where we are more lenient than torch, code that\n"
+        "runs here stops on someone's own machine. Being lenient is diverging too."
     )
 
 
 def test_the_out_table_is_not_short():
-    """torch 가 `out=` 을 받고 우리에게도 있는 이름은 표에 있어야 한다."""
+    """A name torch takes `out=` for, which we also have, has to be in the table."""
     missing = []
     for name in _candidates():
         if not hasattr(borch, name):
             continue
         if name in borch._TAKES_OUT or name in borch._TAKES_OUT_TUPLE:
             continue
-        if _classify(name) in ("단일", "여럿"):
+        if _classify(name) in ("single", "several"):
             missing.append(name)
     assert not missing, (
-        "`out=` 을 받아야 하는데 표에 없다: " + ", ".join(missing) + "\n\n"
-        "표에 넣어라. 빠진 이름은 `_no_out` 이 거절하는데, torch 에서는 되므로\n"
-        "**교재의 그 줄이 여기서만 멈춘다.**"
+        "these should take `out=` and are not in the table: " + ", ".join(missing) + "\n\n"
+        "Add them. A missing name is refused by `_no_out` while torch accepts it, so\n"
+        "**that line of the textbook stops here and nowhere else.**"
     )

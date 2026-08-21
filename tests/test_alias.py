@@ -1,16 +1,16 @@
-"""`import borch as torch` **만으로** 어디까지 되는가.
+"""How far `import borch as torch` gets **on its own.**
 
-README 는 두 길을 적어 둔다 — `sys.modules["torch"] = borch` 로 심는 것과, 별칭만
-쓰는 것. 그리고 심는 쪽을 "강력하고 위험하다" 고 적는다: 그 뒤로는 **남의 라이브러리가
-하는 `import torch` 도** 축소판을 받아서, 다른 코드가 섞인 곳에서는 원인을 못 찾는
-오류가 된다.
+The README writes down two routes — planting it with `sys.modules["torch"] = borch`, and
+using an alias alone. And it calls the planting one "powerful and dangerous": after it,
+**someone else's library doing `import torch`** receives the subset too, and in code that
+mixes libraries that becomes an error with no findable cause.
 
-그러면 안전한 쪽만으로 충분한지가 문제다. 별칭은 **그 파일 안의 이름** 하나를 만들
-뿐이고, `from X.Y import Z` 는 `sys.modules` 에 등록된 **경로**를 본다. 그 둘이
-다르므로 "별칭이면 다 된다" 는 확인 없이 할 말이 아니다.
+So whether the safe route is enough is the question. An alias makes one name **inside that
+file**, while `from X.Y import Z` looks at the **path** registered in `sys.modules`. Those
+two differ, so "the alias does everything" is not something to say without checking.
 
-여기서 그 경계를 못 박는다. 되는 것과 안 되는 것을 값으로 적어 두면, 문서가 어느
-쪽을 권해야 하는지가 취향이 아니라 사실이 된다.
+That boundary is pinned here. Writing down what works and what does not, as values, makes
+which route the documentation should recommend a fact rather than a taste.
 """
 
 import importlib
@@ -20,7 +20,7 @@ import pytest
 
 
 def test_alias_alone_reaches_the_namespaces():
-    """`torch.nn.Linear` 는 별칭만으로 닿는다 — 속성 접근이기 때문이다."""
+    """`torch.nn.Linear` is reachable with the alias alone — it is attribute access."""
     import borch as torch
 
     assert torch.nn.Linear is not None
@@ -30,14 +30,14 @@ def test_alias_alone_reaches_the_namespaces():
 
 
 def test_submodule_import_needs_the_path_planted():
-    """**`from borch.nn import Linear` 는 별칭만으로는 안 된다.**
+    """**`from borch.nn import Linear` does not work with the alias alone.**
 
-    이름 공간이 진짜 모듈이 아니라 `_Namespace` 객체라서 `sys.modules` 에 경로가
-    없다. 파이썬은 `from a.b import c` 에서 `a.b` 를 먼저 모듈로 찾으므로 거기서
-    멈춘다.
+    The namespace is a `_Namespace` object rather than a real module, so no path for it is
+    registered in `sys.modules`. Python looks for `a.b` as a module first in
+    `from a.b import c`, and stops there.
 
-    이것이 `install()` 이 있는 이유이고, 교재가 `from torch.optim.lr_scheduler
-    import StepLR` 을 쓰는 한 별칭만으로는 부족하다는 뜻이다.
+    That is why `install()` exists, and it means the alias alone is not enough as long as
+    textbooks write `from torch.optim.lr_scheduler import StepLR`.
     """
     for path in [k for k in sys.modules if k.startswith("borch.")]:
         del sys.modules[path]
@@ -47,11 +47,11 @@ def test_submodule_import_needs_the_path_planted():
 
 
 def test_install_makes_the_submodule_import_work():
-    """심으면 된다. **어느 이름으로 심을지는 부르는 쪽이 정한다.**
+    """Planting works. **Which name it is planted under is the caller's decision.**
 
-    `torch` 로 심으면 남의 `import torch` 까지 가로채므로, 섞이는 자리에서는
-    자기 이름으로 심는 것이 안전하다 — 그러면 `from borch.nn import Linear` 가
-    통하면서 남의 코드는 안 건드린다.
+    Planting as `torch` intercepts someone else's `import torch` too, so where libraries mix,
+    planting under its own name is safer — then `from borch.nn import Linear`
+    works while leaving other people's code alone.
     """
     import borch
 
@@ -63,11 +63,11 @@ def test_install_makes_the_submodule_import_work():
 
 
 def test_core_install_defaults_to_torch_and_that_is_the_dangerous_one():
-    """**코어의 기본값은 `torch` 다.** 그것이 남의 `import torch` 를 가로챈다.
+    """**The core's default is `torch`.** That is what intercepts someone else's `import torch`.
 
-    기본값을 여기 적어 두는 이유는, 그 위험이 문서에만 있고 코드에는 없으면 다음에
-    고치는 사람이 기본값을 무심코 바꾸기 때문이다. 바꿀 거면 이 검사를 같이 고쳐야
-    하고, 그때 무엇을 바꾸는지가 눈에 들어온다.
+    The default is written down here because a danger that lives only in the documentation
+    and not in the code gets changed absent-mindedly by whoever edits next. Changing it means
+    changing this check too, and at that moment what is being changed comes into view.
     """
     import inspect
 

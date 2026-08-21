@@ -1,19 +1,19 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>구역 밖으로 텐서를 들고 나올 수 있는가</title>
+<title>Can a tensor be carried out of a scope</title>
 <body>
-<pre id="out">재는 중…</pre>
+<pre id="out">measuring…</pre>
 <script src="/vendor/pyodide/pyodide.js"></script>
 <script type="module">
   /*
-   * 묻는 것: **파이썬에서 `with torch.scope():` 를 나온 뒤에도 텐서를 쓸 수 있는가.**
+   * The question: **can a tensor still be used after leaving `with torch.scope():` in Python.**
    *
-   * borch.ts 에는 `keepAlive(t)` 와 `scope(body, () => [t])` 가 둘 다 있는데 결속에는
-   * 어느 쪽도 없었다. 그래서 학습 루프에서 손실값조차 못 읽었다.
+   * borch.ts has both `keepAlive(t)` and `scope(body, () => [t])` and the binding had
+   * neither, so a training loop could not even read its loss.
    *
-   * 그리고 둘은 **같은 것이 아니다.** `keepAlive` 는 `Device.keep` 을 불러 어떤
-   * 구역도 안 놓는 집합에 넣고, `endScope(keep)` 은 바깥 구역으로 넘긴다. 하나만
-   * 이으면 새거나 못 쓰거나 둘 중 하나가 된다 — 그래서 여기서 그 차이를 잰다.
+   * And the two **are not the same.** `keepAlive` calls `Device.keep` and puts it in the
+   * set no scope ever releases, while `endScope(keep)` hands it to the enclosing scope.
+   * Bridging only one leaks or leaves it unusable — so the difference is measured here.
    */
   const out = document.getElementById("out");
   const lines = [];
@@ -30,14 +30,14 @@
     const borch = await import("/borch-ts/dist/src/index.js");
     await borch.init();
     globalThis.borch = borch;
-    say(`어댑터: ${borch.Device.adapterInfo}`);
+    say(`adapter: ${borch.Device.adapterInfo}`);
 
     const py = await loadPyodide({ indexURL: "/vendor/pyodide/" });
     await py.loadPackage("numpy");
 
     const grab = async (url) => {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`파일을 못 받았다: ${url} (HTTP ${res.status})`);
+      if (!res.ok) throw new Error(`could not fetch: ${url} (HTTP ${res.status})`);
       return res;
     };
     for (const pkg of Object.keys(PACKAGES)) {
@@ -61,7 +61,7 @@ cases.run()
   } catch (err) {
     const detail = err && err.stack ? err.stack : String(err);
     window.__scopeEscape = { error: detail };
-    say(`재지 못했다: ${detail}`);
+    say(`could not measure: ${detail}`);
   }
 </script>
 </body>

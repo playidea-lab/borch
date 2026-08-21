@@ -28,6 +28,37 @@ INDEX = ROOT / "site" / "assets" / "api-index.json"
 DECL = ROOT / "borch-ts" / "dist" / "src"
 
 
+def _stale_dist():
+    """The reason `dist` is out of date, or `None`.
+
+    **The rule is not restated here.** `borch-ts/test/run.py` already decides what "stale"
+    means for the golden runner, and a second copy of a freshness rule is a rule that
+    diverges — the day the two disagree, one runner stops and the other does not, and the
+    difference reads as a defect in whatever was being changed.
+
+    It is loaded under its own name, and its directory goes on `sys.path` only for the
+    load. Left there, `run`, `bench`, `cost` and `serialize` would all resolve to that tree
+    for the rest of the session, and `tests/browser` has files of every one of those names.
+    """
+    import importlib.util                                            # noqa: PLC0415
+
+    here = str(ROOT / "borch-ts" / "test")
+    sys.path.insert(0, here)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "bt_ts_runner", ROOT / "borch-ts" / "test" / "run.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        if here in sys.path:
+            sys.path.remove(here)
+    try:
+        mod.require_fresh_dist(ROOT)
+    except SystemExit as exc:
+        return str(exc)
+    return None
+
+
 def test_api_reference_is_not_stale():
     """`api.json` has to equal what the declaration files give right now.
 
@@ -35,11 +66,27 @@ def test_api_reference_is_not_stale():
     there is nothing to compare against, so it skips. **Making absence a failure** turns
     this red on any checkout that has not built the bundle, and then people learn how to
     switch checks off.
+
+    **A stale `dist` is separated out before the counts are compared.** Without that, one
+    message covers two opposite causes: source ahead of `dist` (pulled or rebased without
+    building) and `dist` ahead of the committed index (mid-edit of the source). Both print
+    the same "entries N → M" line, and the reader chases whichever they thought of first.
+    That really happened — a breaking change to borch.ts's save/load landed, a session
+    rebased onto it without rebuilding, and 1671 → 1664 read as an index regression when
+    the index was correct and the bundle was three commits old.
+
+    The golden runner has stopped on this since it cost two people a day each. The rule is
+    borrowed rather than rewritten; see `_stale_dist`.
     """
     if not DECL.exists():
         pytest.skip(f"no declaration files ({DECL.relative_to(ROOT)}) — run npm run build:ts first")
     if not API.exists():
         pytest.fail("site/assets/api.json is missing — python3 site/build_api.py")
+    stale = _stale_dist()
+    if stale:
+        pytest.fail(
+            "the bundle is older than the source, so the counts below would be measured\n"
+            "against an API that no longer exists:\n\n  " + stale.replace("\n", "\n  "))
 
     # **The generator writes two files** — the index and the name index. Restoring only
     # one left `api-index.json` modified in the tree the check had run in; a check that

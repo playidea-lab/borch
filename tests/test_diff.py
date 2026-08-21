@@ -1,10 +1,11 @@
-"""borch 와 진짜 torch 를 값으로 대조한다.
+"""Compares borch against real torch by value.
 
-이 파일이 borch 의 존재 근거다. 흉내가 조금이라도 다르게 동작하면 그것을 배우는
-사람은 거짓을 배운다. "돌아간다"로는 부족하고 **같은 숫자가 나와야** 한다.
+This file is borch's reason to exist. If the imitation behaves even slightly differently,
+whoever learns from it learns something false. "It runs" is not enough — **the same numbers
+have to come out.**
 
-같은 입력을 양쪽에 넣고 값과 모양을 비교한다. 무작위로 초기화되는 층은 한쪽의 가중치를
-복사해 심어 비교 가능하게 만든다.
+The same input goes into both sides and values and shapes are compared. Layers initialised at
+random get one side's weights copied in so that a comparison is possible.
 
     uv run --with pytest --with numpy --with torch pytest tests/
 """
@@ -16,7 +17,7 @@ import numpy as np
 import pytest
 import torch as real
 
-# 예전에는 `borch.py` 를 경로로 집어 들였다. 패키지가 되면서 그 방법이 안 통한다.
+# It used to pick up `borch.py` by path. Once it became a package, that stopped working.
 _root = pathlib.Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
@@ -27,31 +28,31 @@ TOL = 1e-4
 
 
 def same(a, b, tol=TOL, what=""):
-    """양쪽 텐서의 값과 모양이 같은가."""
+    """Are both tensors equal in value and in shape?"""
     an = a.detach().numpy() if isinstance(a, real.Tensor) else a.data
     bn = b.detach().numpy() if isinstance(b, real.Tensor) else b.data
-    assert an.shape == bn.shape, f"{what} 모양이 다르다: {an.shape} vs {bn.shape}"
+    assert an.shape == bn.shape, f"{what} shape differs: {an.shape} vs {bn.shape}"
     assert np.allclose(an, bn, atol=tol, rtol=tol), (
-        f"{what} 값이 다르다\n  진짜: {an}\n  축소판: {bn}"
+        f"{what} value differs\n  torch: {an}\n  borch: {bn}"
     )
 
 
 def pair(data, requires_grad=False):
-    """같은 데이터로 양쪽 텐서를 만든다."""
+    """Makes both tensors from the same data."""
     arr = np.asarray(data, dtype=np.float32)
     return (real.tensor(arr, requires_grad=requires_grad),
             bt.tensor(arr, requires_grad=requires_grad))
 
 
 def grads_match(fn_real, fn_mini, data, what=""):
-    """같은 계산의 기울기가 같은가. fn 은 텐서를 받아 스칼라를 돌려준다."""
+    """Are the gradients of the same computation equal? `fn` takes a tensor and returns a scalar."""
     r, m = pair(data, requires_grad=True)
     fn_real(r).backward()
     fn_mini(m).backward()
-    same(r.grad, m.grad, what=f"{what} 기울기")
+    same(r.grad, m.grad, what=f"{what} gradient")
 
 
-# ---------------------------------------------------------------- 축약
+# ------------------------------------------------------------- reductions
 
 @pytest.mark.parametrize("dim", [None, 0, 1])
 @pytest.mark.parametrize("keepdim", [False, True])
@@ -95,7 +96,7 @@ def test_mean_backward():
 
 
 def test_max_backward_goes_to_one_place():
-    """최댓값 자리에만 기울기가 간다 — 나눠 가지면 학습이 미묘하게 달라진다."""
+    """The gradient goes only to the maximum's slot — shared out, training differs subtly."""
     grads_match(lambda t: t.max(dim=1).values.sum(),
                 lambda t: t.max(dim=1).values.sum(), [[1.0, 7.0], [9.0, 2.0]], "max")
 
@@ -106,14 +107,14 @@ def test_std_unbiased_both_ways():
     same(r.std(unbiased=True), m.std(unbiased=True), what="std(unbiased=True)")
 
 
-# ---------------------------------------------------------------- 모양·인덱싱
+# --------------------------------------------------------- shape, indexing
 
 def test_indexing_backward():
     grads_match(lambda t: t[0].sum(), lambda t: t[0].sum(), [[1.0, 2.0], [3.0, 4.0]], "t[0]")
 
 
 def test_fancy_indexing_backward():
-    """같은 자리를 두 번 고르면 기울기가 더해져야 한다."""
+    """Picking the same slot twice has to add the gradients."""
     idx = [0, 0, 1]
     grads_match(lambda t: t[idx].sum(), lambda t: t[idx].sum(),
                 [[1.0, 2.0], [3.0, 4.0]], "t[[0,0,1]]")
@@ -139,13 +140,13 @@ def test_transpose_and_matmul_backward():
     mb = bt.tensor([[1.0, 0.0], [0.5, 2.0]])
     (r @ rb.T).sum().backward()
     (m @ mb.T).sum().backward()
-    same(r.grad, m.grad, what="matmul+transpose 기울기")
+    same(r.grad, m.grad, what="matmul+transpose gradient")
 
 
 def test_batched_matmul():
     a = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     b = np.arange(8, dtype=np.float32).reshape(2, 4, 1)
-    same(real.tensor(a) @ real.tensor(b), bt.tensor(a) @ bt.tensor(b), what="배치 matmul")
+    same(real.tensor(a) @ real.tensor(b), bt.tensor(a) @ bt.tensor(b), what="batched matmul")
 
 
 def test_squeeze_unsqueeze():
@@ -159,15 +160,15 @@ def test_permute():
     same(real.tensor(a).permute(2, 0, 1), bt.tensor(a).permute(2, 0, 1), what="permute")
 
 
-# ---------------------------------------------------------------- 브로드캐스팅
+# ------------------------------------------------------------ broadcasting
 
 def test_broadcast_bias_backward():
-    """(N,D) + (D,) 의 기울기는 (D,) 로 접혀야 한다."""
+    """The gradient of (N,D) + (D,) has to fold back down to (D,)."""
     rb = real.tensor([1.0, 1.0], requires_grad=True)
     mb = bt.tensor([1.0, 1.0], requires_grad=True)
     (real.tensor([[1.0, 2.0], [3.0, 4.0]]) + rb).sum().backward()
     (bt.tensor([[1.0, 2.0], [3.0, 4.0]]) + mb).sum().backward()
-    same(rb.grad, mb.grad, what="브로드캐스트 bias 기울기")
+    same(rb.grad, mb.grad, what="broadcast bias gradient")
 
 
 def test_broadcast_column_backward():
@@ -175,10 +176,10 @@ def test_broadcast_column_backward():
     mb = bt.tensor([[1.0], [2.0]], requires_grad=True)
     (rb * real.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
     (mb * bt.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
-    same(rb.grad, mb.grad, what="열 브로드캐스트 기울기")
+    same(rb.grad, mb.grad, what="column broadcast gradient")
 
 
-# ---------------------------------------------------------------- 함수
+# --------------------------------------------------------------- functions
 
 @pytest.mark.parametrize("fn", ["sigmoid", "relu", "tanh", "exp", "log", "sqrt", "abs"])
 def test_elementwise(fn):
@@ -193,9 +194,9 @@ def test_elementwise_backward(fn):
 
 
 def test_sigmoid_extreme():
-    """큰 음수·양수에서 터지지 않는가."""
+    """Does it blow up at large negatives and positives?"""
     data = [-1000.0, -50.0, 0.0, 50.0, 1000.0]
-    same(real.sigmoid(real.tensor(data)), bt.sigmoid(bt.tensor(data)), what="sigmoid 극단값")
+    same(real.sigmoid(real.tensor(data)), bt.sigmoid(bt.tensor(data)), what="sigmoid at the extremes")
 
 
 def test_softmax_and_backward():
@@ -241,7 +242,7 @@ def test_int_tensor_refuses_grad():
         bt.tensor([1, 2, 3], requires_grad=True)
 
 
-# ---------------------------------------------------------------- 층
+# ------------------------------------------------------------------ layers
 
 def copy_linear(src, dst):
     dst.weight.data = bt.tensor(src.weight.detach().numpy().copy())
@@ -253,11 +254,11 @@ def test_linear_forward_and_backward():
     copy_linear(rl, ml)
     x = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
     ro, mo = rl(real.tensor(x)), ml(bt.tensor(x))
-    same(ro, mo, what="Linear 출력")
+    same(ro, mo, what="Linear output")
     ro.sum().backward()
     mo.sum().backward()
-    same(rl.weight.grad, ml.weight.grad, what="Linear weight 기울기")
-    same(rl.bias.grad, ml.bias.grad, what="Linear bias 기울기")
+    same(rl.weight.grad, ml.weight.grad, what="Linear weight gradient")
+    same(rl.bias.grad, ml.bias.grad, what="Linear bias gradient")
 
 
 def test_embedding_forward_and_backward():
@@ -266,10 +267,10 @@ def test_embedding_forward_and_backward():
     ids = [[0, 2, 2]]
     ro = rl(real.tensor(ids))
     mo = ml(bt.tensor(ids))
-    same(ro, mo, what="Embedding 출력")
+    same(ro, mo, what="Embedding output")
     ro.sum().backward()
     mo.sum().backward()
-    same(rl.weight.grad, ml.weight.grad, what="Embedding 기울기 (같은 번호는 더해져야 한다)")
+    same(rl.weight.grad, ml.weight.grad, what="Embedding gradient (the same index has to add up)")
 
 
 def test_layernorm():
@@ -279,9 +280,11 @@ def test_layernorm():
 
 
 def test_batchnorm_backward():
-    """순방향만 맞고 역방향이 틀린 채로 오래 있었다 — 평균·분산을 그래프 밖에서 계산했다.
+    """The forward pass was right and the backward pass wrong for a long time — the mean and
+    variance were computed outside the graph.
 
-    학습은 돌아가고 손실도 내려가는데 값만 다르다. 순방향만 대조하면 안 잡힌다.
+    Training runs and the loss goes down; only the values differ. Comparing the forward pass
+    alone does not catch it.
     """
     rl, ml = real.nn.BatchNorm2d(2), bt.nn.BatchNorm2d(2)
     copy_state(rl, ml)
@@ -289,9 +292,9 @@ def test_batchnorm_backward():
     rx, mx = real.tensor(x, requires_grad=True), bt.tensor(x, requires_grad=True)
     rl(rx).sum().backward()
     ml(mx).sum().backward()
-    same(rx.grad, mx.grad, tol=1e-4, what="BatchNorm 입력 기울기")
-    same(rl.weight.grad, ml.weight.grad, tol=1e-4, what="BatchNorm weight 기울기")
-    same(rl.bias.grad, ml.bias.grad, tol=1e-4, what="BatchNorm bias 기울기")
+    same(rx.grad, mx.grad, tol=1e-4, what="BatchNorm input gradient")
+    same(rl.weight.grad, ml.weight.grad, tol=1e-4, what="BatchNorm weight gradient")
+    same(rl.bias.grad, ml.bias.grad, tol=1e-4, what="BatchNorm bias gradient")
     assert np.allclose(rl.running_mean.numpy(), ml.running_mean, atol=1e-5)
     assert np.allclose(rl.running_var.numpy(), ml.running_var, atol=1e-4)
 
@@ -304,7 +307,7 @@ def test_batchnorm_backward():
     (lambda L: L.nn.Embedding(5, 3), None),
 ])
 def test_every_layer_passes_gradient_to_its_weights(layer, shape):
-    """층마다 **가중치에 기울기가 실제로 도착하는가.** None 이면 그래프가 끊긴 것이다."""
+    """Per layer, **does a gradient actually arrive at the weight?** `None` means the graph is cut."""
     rl, ml = layer(real), layer(bt)
     copy_state(rl, ml)
     if shape is None:
@@ -315,14 +318,14 @@ def test_every_layer_passes_gradient_to_its_weights(layer, shape):
     rl(rx).sum().backward()
     ml(mx).sum().backward()
     for (name, rp), (_, mp) in zip(rl.named_parameters(), ml.named_parameters()):
-        assert rp.grad is not None, f"진짜 torch 도 {name} 기울기가 없다 — 케이스가 틀렸다"
-        assert mp.grad is not None, f"{name} 에 기울기가 안 왔다 — 그래프가 끊겼다"
-        same(rp.grad, mp.grad, tol=1e-4, what=f"{name} 기울기")
+        assert rp.grad is not None, f"real torch has no {name} gradient either — the case is wrong"
+        assert mp.grad is not None, f"no gradient arrived at {name} — the graph is cut"
+        same(rp.grad, mp.grad, tol=1e-4, what=f"{name} gradient")
 
 
 def test_data_assignment_rejects_ndarray():
-    """torch 는 `p.data = ndarray` 를 거부한다. 받아주면 브라우저에서 되던 코드가
-    자기 컴퓨터에서 깨진다 — 관대한 것도 갈리는 것이다."""
+    """torch refuses `p.data = ndarray`. Accepting it breaks code that worked in the browser
+    on the person's own machine — being lenient is a divergence too."""
     for lib in (real, bt):
         p = lib.nn.Linear(2, 2).weight
         with pytest.raises(TypeError):
@@ -332,9 +335,9 @@ def test_data_assignment_rejects_ndarray():
 def test_batchnorm_train_and_eval():
     rl, ml = real.nn.BatchNorm2d(2), bt.nn.BatchNorm2d(2)
     x = np.arange(2 * 2 * 3 * 3, dtype=np.float32).reshape(2, 2, 3, 3)
-    same(rl(real.tensor(x)), ml(bt.tensor(x)), tol=1e-3, what="BatchNorm2d (학습 모드)")
+    same(rl(real.tensor(x)), ml(bt.tensor(x)), tol=1e-3, what="BatchNorm2d (train mode)")
     rl.eval(); ml.eval()
-    same(rl(real.tensor(x)), ml(bt.tensor(x)), tol=1e-3, what="BatchNorm2d (평가 모드)")
+    same(rl(real.tensor(x)), ml(bt.tensor(x)), tol=1e-3, what="BatchNorm2d (eval mode)")
 
 
 def test_dropout_eval_is_identity():
@@ -360,8 +363,8 @@ def test_conv2d_backward():
     rw, mw = real.tensor(w, requires_grad=True), bt.tensor(w, requires_grad=True)
     real.nn.functional.conv2d(rx, rw).sum().backward()
     bt.conv2d(mx, mw).sum().backward()
-    same(rx.grad, mx.grad, tol=1e-3, what="conv2d 입력 기울기")
-    same(rw.grad, mw.grad, tol=1e-3, what="conv2d 필터 기울기")
+    same(rx.grad, mx.grad, tol=1e-3, what="conv2d input gradient")
+    same(rw.grad, mw.grad, tol=1e-3, what="conv2d filter gradient")
 
 
 def test_max_pool2d_and_backward():
@@ -372,7 +375,7 @@ def test_max_pool2d_and_backward():
     same(ro, mo, what="max_pool2d")
     ro.sum().backward()
     mo.sum().backward()
-    same(rx.grad, mx.grad, what="max_pool2d 기울기")
+    same(rx.grad, mx.grad, what="max_pool2d gradient")
 
 
 def copy_rnn(src, dst):
@@ -391,7 +394,7 @@ def test_rnn_forward(kwargs):
     x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
     ro, rh = rr(real.tensor(x))
     no, nh = nr(bt.tensor(x))
-    same(ro, no, what=f"RNN 출력 {kwargs}")
+    same(ro, no, what=f"RNN output {kwargs}")
     same(rh, nh, what=f"RNN h_n {kwargs}")
 
 
@@ -407,18 +410,18 @@ def test_rnn_backward():
     rx, nx = real.tensor(x, requires_grad=True), bt.tensor(x, requires_grad=True)
     rr(rx)[0].sum().backward()
     nr(nx)[0].sum().backward()
-    same(rx.grad, nx.grad, tol=1e-4, what="RNN 입력 기울기")
-    same(rr.weight_hh_l0.grad, nr.weight_hh_l0.grad, tol=1e-4, what="RNN weight_hh 기울기")
+    same(rx.grad, nx.grad, tol=1e-4, what="RNN input gradient")
+    same(rr.weight_hh_l0.grad, nr.weight_hh_l0.grad, tol=1e-4, what="RNN weight_hh gradient")
 
 
 def test_rnn_initial_hidden():
-    """h_0 를 직접 주면 그것부터 시작해야 한다."""
+    """Given `h_0` directly, it has to start from there."""
     rr, nr = real.nn.RNN(3, 4), bt.nn.RNN(3, 4)
     copy_rnn(rr, nr)
     x = np.zeros((2, 1, 3), dtype=np.float32)
     h0 = np.ones((1, 1, 4), dtype=np.float32) * 0.5
     same(rr(real.tensor(x), real.tensor(h0))[0], nr(bt.tensor(x), bt.tensor(h0))[0],
-         what="RNN 초기 은닉 상태")
+         what="RNN initial hidden state")
 
 
 def test_stack_and_cat_backward():
@@ -428,23 +431,23 @@ def test_stack_and_cat_backward():
     rb = real.tensor([3.0, 4.0], requires_grad=True)
     (bt.stack([a, b]) * bt.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
     (real.stack([ra, rb]) * real.tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
-    same(ra.grad, a.grad, what="stack 기울기")
+    same(ra.grad, a.grad, what="stack gradient")
 
     c = bt.tensor([1.0], requires_grad=True)
     rc = real.tensor([1.0], requires_grad=True)
     bt.cat([c, c * 2]).sum().backward()
     real.cat([rc, rc * 2]).sum().backward()
-    same(rc.grad, c.grad, what="cat 기울기")
+    same(rc.grad, c.grad, what="cat gradient")
 
 
 def copy_state(src, dst):
-    """torch 쪽 상태를 그대로 심는다. 초기값이 같아야 값을 비교할 수 있다.
+    """Plants torch's state as it is. Values can only be compared if the initial values match.
 
-    파라미터만이 아니라 **버퍼도** 옮긴다 — BatchNorm 의 running_mean 이 그것이고,
-    빠뜨리면 평가 모드에서만 값이 갈린다.
+    Not just the parameters but **the buffers too** — BatchNorm's `running_mean` is one, and
+    leaving it out makes the values diverge in eval mode only.
     """
     assert list(src.state_dict().keys()) == list(dst.state_dict().keys()), (
-        f"state_dict 키가 다르다\n  torch {list(src.state_dict())}\n  nano  {list(dst.state_dict())}")
+        f"state_dict keys differ\n  torch {list(src.state_dict())}\n  borch {list(dst.state_dict())}")
     own = dict(dst.named_parameters())
     buffers = dict(dst.named_buffers())
     for key, value in src.state_dict().items():
@@ -467,12 +470,12 @@ def test_recurrent_forward(cls, kwargs):
     x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
     ro, rs = rr(real.tensor(x))
     no, ns = nr(bt.tensor(x))
-    same(ro, no, what=f"{cls} 출력 {kwargs}")
+    same(ro, no, what=f"{cls} output {kwargs}")
     if cls == "LSTM":
         same(rs[0], ns[0], what="LSTM h_n")
         same(rs[1], ns[1], what="LSTM c_n")
     else:
-        same(rs, ns, what=f"{cls} 마지막 상태")
+        same(rs, ns, what=f"{cls} final state")
 
 
 @pytest.mark.parametrize("cls", ["RNN", "LSTM", "GRU"])
@@ -483,24 +486,24 @@ def test_recurrent_backward(cls):
     rx, nx = real.tensor(x, requires_grad=True), bt.tensor(x, requires_grad=True)
     rr(rx)[0].sum().backward()
     nr(nx)[0].sum().backward()
-    same(rx.grad, nx.grad, tol=1e-4, what=f"{cls} 입력 기울기")
-    same(rr.weight_hh_l0.grad, nr.weight_hh_l0.grad, tol=1e-4, what=f"{cls} weight_hh 기울기")
+    same(rx.grad, nx.grad, tol=1e-4, what=f"{cls} input gradient")
+    same(rr.weight_hh_l0.grad, nr.weight_hh_l0.grad, tol=1e-4, what=f"{cls} weight_hh gradient")
 
 
 def test_lstm_gate_order():
-    """게이트 순서(i, f, g, o)가 틀리면 값은 그럴듯한데 학습이 안 된다."""
+    """With the gate order (i, f, g, o) wrong the values look plausible and training does not work."""
     rr, nr = real.nn.LSTM(2, 3), bt.nn.LSTM(2, 3)
     copy_state(rr, nr)
     x = np.ones((1, 1, 2), dtype=np.float32)
-    same(rr(real.tensor(x))[1][1], nr(bt.tensor(x))[1][1], what="LSTM c_n (게이트 순서)")
+    same(rr(real.tensor(x))[1][1], nr(bt.tensor(x))[1][1], what="LSTM c_n (gate order)")
 
 
 def test_gru_bias_inside_reset_gate():
-    """n 게이트에서 r 은 편향까지 포함한 은닉 항에 곱해진다. 밖에 두면 미세하게 어긋난다."""
+    """In the n gate, r multiplies the hidden term including its bias. Left outside, it drifts slightly."""
     rr, nr = real.nn.GRU(2, 3), bt.nn.GRU(2, 3)
     copy_state(rr, nr)
     x = np.random.default_rng(2).standard_normal((4, 1, 2)).astype(np.float32)
-    same(rr(real.tensor(x))[0], nr(bt.tensor(x))[0], what="GRU 출력")
+    same(rr(real.tensor(x))[0], nr(bt.tensor(x))[0], what="GRU output")
 
 
 @pytest.mark.parametrize("batch_first", [True, False])
@@ -512,8 +515,8 @@ def test_multihead_attention(batch_first):
         (2, 5, 8) if batch_first else (5, 2, 8)).astype(np.float32)
     ro, rw = rm(real.tensor(x), real.tensor(x), real.tensor(x))
     no, nw = nm(bt.tensor(x), bt.tensor(x), bt.tensor(x))
-    same(ro, no, what="MHA 출력")
-    same(rw, nw, what="MHA 가중치(헤드 평균)")
+    same(ro, no, what="MHA output")
+    same(rw, nw, what="MHA weights (averaged over heads)")
 
 
 def test_multihead_attention_mask():
@@ -524,9 +527,9 @@ def test_multihead_attention_mask():
     mask = np.triu(np.ones((5, 5), dtype=bool), 1)
     _, rw = rm(real.tensor(x), real.tensor(x), real.tensor(x), attn_mask=real.tensor(mask))
     _, nw = nm(bt.tensor(x), bt.tensor(x), bt.tensor(x), attn_mask=bt.tensor(mask))
-    same(rw, nw, what="MHA 인과 마스크")
+    same(rw, nw, what="MHA causal mask")
     upper = np.triu(np.ones((5, 5)), 1).astype(bool)
-    assert np.abs(nw.data[0][upper]).max() < 1e-6, "가려진 자리는 0이어야 한다"
+    assert np.abs(nw.data[0][upper]).max() < 1e-6, "a masked slot has to be 0"
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -555,7 +558,7 @@ def test_encoder_layer_mask(mode):
     mask = np.triu(np.ones((5, 5), dtype=bool), 1)
     same(rl(real.tensor(x), src_mask=real.tensor(mask)),
          nl(bt.tensor(x), src_mask=bt.tensor(mask)), tol=1e-4,
-         what=f"EncoderLayer 마스크 ({mode})")
+         what=f"EncoderLayer mask ({mode})")
 
 
 def test_transformer_encoder_stack():
@@ -566,7 +569,7 @@ def test_transformer_encoder_stack():
     re_.eval()
     ne.eval()
     x = np.random.default_rng(0).standard_normal((2, 5, 8)).astype(np.float32)
-    same(re_(real.tensor(x)), ne(bt.tensor(x)), tol=1e-4, what="TransformerEncoder 3층")
+    same(re_(real.tensor(x)), ne(bt.tensor(x)), tol=1e-4, what="TransformerEncoder, 3 layers")
 
 
 def test_encoder_backward():
@@ -579,9 +582,9 @@ def test_encoder_backward():
     rx, nx = real.tensor(x, requires_grad=True), bt.tensor(x, requires_grad=True)
     rl(rx).sum().backward()
     nl(nx).sum().backward()
-    same(rx.grad, nx.grad, tol=1e-4, what="EncoderLayer 입력 기울기")
+    same(rx.grad, nx.grad, tol=1e-4, what="EncoderLayer input gradient")
     same(rl.self_attn.in_proj_weight.grad, nl.self_attn.in_proj_weight.grad, tol=1e-4,
-         what="in_proj_weight 기울기")
+         what="in_proj_weight gradient")
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"norm_first": True}])
@@ -603,21 +606,21 @@ def test_decoder_layer(kwargs):
 def test_square_subsequent_mask():
     r = real.nn.Transformer.generate_square_subsequent_mask(4).numpy()
     n = bt.nn.Transformer.generate_square_subsequent_mask(4).data
-    assert np.array_equal(np.isneginf(r), np.isneginf(n)), "가려지는 자리가 같아야 한다"
+    assert np.array_equal(np.isneginf(r), np.isneginf(n)), "the masked slots have to be the same"
     assert np.array_equal(np.nan_to_num(r, neginf=0.0), np.nan_to_num(n, neginf=0.0))
 
 
 def test_float_mask_is_added_not_thresholded():
-    """실수 마스크는 점수에 **더한다.** 0 이 아니면 가린다고 뭉뚱그리면 여기서 갈린다."""
+    """A float mask is **added** to the scores. Lumping "non-zero means masked" together diverges here."""
     rm = real.nn.MultiheadAttention(8, 2, batch_first=True)
     nm = bt.nn.MultiheadAttention(8, 2, batch_first=True)
     copy_state(rm, nm)
     x = np.random.default_rng(0).standard_normal((1, 4, 8)).astype(np.float32)
     bias = np.zeros((4, 4), dtype=np.float32)
-    bias[0, 1] = -2.0                    # 가리는 게 아니라 **낮추는** 마스크
+    bias[0, 1] = -2.0                    # a mask that **lowers** rather than hides
     _, rw = rm(real.tensor(x), real.tensor(x), real.tensor(x), attn_mask=real.tensor(bias))
     _, nw = nm(bt.tensor(x), bt.tensor(x), bt.tensor(x), attn_mask=bt.tensor(bias))
-    same(rw, nw, what="실수 마스크(가중치 조절)")
+    same(rw, nw, what="float mask (weight adjustment)")
 
 
 def test_decoder_layer_causal_mask():
@@ -633,7 +636,7 @@ def test_decoder_layer_causal_mask():
             tgt_mask=real.nn.Transformer.generate_square_subsequent_mask(4)),
          nl(bt.tensor(tgt), bt.tensor(mem),
             tgt_mask=bt.nn.Transformer.generate_square_subsequent_mask(4)),
-         tol=1e-4, what="DecoderLayer 인과 마스크")
+         tol=1e-4, what="DecoderLayer causal mask")
 
 
 def test_full_transformer():
@@ -663,11 +666,12 @@ def test_transformer_backward():
     rs, ns = real.tensor(src, requires_grad=True), bt.tensor(src, requires_grad=True)
     rt(rs, real.tensor(tgt)).sum().backward()
     nt(ns, bt.tensor(tgt)).sum().backward()
-    same(rs.grad, ns.grad, tol=1e-4, what="Transformer 입력 기울기")
+    same(rs.grad, ns.grad, tol=1e-4, what="Transformer input gradient")
 
 
-# 커버리지를 재보니 아래 층들은 **한 번도 안 돌아본 채** 있었다. 전부 통과했지만,
-# 검사가 없었을 뿐이지 맞다는 근거는 없었다 — BatchNorm2d 가 그렇게 오래 틀려 있었다.
+# Measuring coverage showed the layers below had **never once been exercised.** They all
+# passed, but there was no evidence they were right — only that nothing asked. BatchNorm2d
+# was wrong for that long in exactly this way.
 
 @pytest.mark.parametrize("mode", ["train", "eval"])
 def test_batchnorm1d(mode):
@@ -690,7 +694,7 @@ def test_batchnorm1d_backward_and_running():
     rx, mx = real.tensor(x, requires_grad=True), bt.tensor(x, requires_grad=True)
     rl(rx).sum().backward()
     ml(mx).sum().backward()
-    same(rx.grad, mx.grad, tol=1e-4, what="BatchNorm1d 기울기")
+    same(rx.grad, mx.grad, tol=1e-4, what="BatchNorm1d gradient")
 
 
 @pytest.mark.parametrize("build,shape", [
@@ -730,34 +734,34 @@ def test_nll_loss_layer():
     ("sort", lambda L, t: L.sort(t).values, np.array([3., 1., 4., 1., 5., 9.], dtype=np.float32)),
 ])
 def test_selection_keeps_gradient(name, build, data):
-    """뽑기만 하고 그래프를 끊으면 학습이 조용히 멈춘다 — top-k 샘플링이 그 자리다."""
+    """Picking and then cutting the graph stops training silently — top-k sampling is that place."""
     weights = np.arange(1.0, 4.0, dtype=np.float32)
     rt, mt = real.tensor(data, requires_grad=True), bt.tensor(data, requires_grad=True)
     rv, mv = build(real, rt), build(bt, mt)
     w = weights if rv.shape[0] == 3 else np.arange(1.0, rv.shape[0] + 1.0, dtype=np.float32)
     (rv * real.tensor(w)).sum().backward()
     (mv * bt.tensor(w)).sum().backward()
-    same(rt.grad, mt.grad, what=f"{name} 기울기")
+    same(rt.grad, mt.grad, what=f"{name} gradient")
 
 
 def test_no_grad_does_not_disable_leaves():
-    """no_grad 는 **연산 결과**가 그래프를 안 갖게 할 뿐이다.
-    직접 만든 잎까지 끄면 그 안에서 만든 파라미터가 학습에서 조용히 빠진다."""
+    """`no_grad` only keeps **the result of an operation** from having a graph.
+    Turning off hand-made leaves too drops parameters built inside it out of training, silently."""
     for lib in (real, bt):
         with lib.no_grad():
             leaf = lib.tensor([1.0], requires_grad=True)
             derived = lib.tensor([2.0], requires_grad=True) * 2
-        assert leaf.requires_grad is True, f"{lib.__name__}: 잎은 켜져 있어야 한다"
-        assert derived.requires_grad is False, f"{lib.__name__}: 연산 결과는 꺼져야 한다"
+        assert leaf.requires_grad is True, f"{lib.__name__}: a leaf has to stay on"
+        assert derived.requires_grad is False, f"{lib.__name__}: the result of an operation has to be off"
 
 
 def test_weighted_sampler_actually_weights():
-    """가중치가 큰 쪽이 실제로 더 자주 뽑혀야 한다. 도는 것만으로는 근거가 없다."""
+    """The heavier-weighted side really has to be drawn more often. That it runs is no evidence."""
     weights = [1.0, 1.0, 8.0]
     for lib in (real, bt):
         picks = list(lib.utils.data.WeightedRandomSampler(weights, 2000))
         share = picks.count(2) / len(picks)
-        assert 0.6 < share < 0.9, f"{lib.__name__}: 세 번째가 {share:.2f} 비율로 뽑혔다"
+        assert 0.6 < share < 0.9, f"{lib.__name__}: the third was drawn at a share of {share:.2f}"
 
 
 def test_concat_dataset():
@@ -778,7 +782,7 @@ def test_minmax_result_unpacks_both_ways():
         assert indices.tolist() == result[1].tolist() == result.indices.tolist()
 
 
-# ---------------------------------------------------------------- 손실
+# ------------------------------------------------------------------ losses
 
 def test_mse_loss():
     p, t = [[1.0], [2.0]], [[1.5], [1.0]]
@@ -826,7 +830,7 @@ def test_sgd_multi_step(momentum):
     copy_linear(rl, ml)
     _train(rl, real.tensor, real.optim.SGD(rl.parameters(), lr=0.05, momentum=momentum))
     _train(ml, bt.tensor, bt.optim.SGD(ml.parameters(), lr=0.05, momentum=momentum))
-    same(rl.weight, ml.weight, what=f"SGD(momentum={momentum}) 다섯 스텝 뒤 가중치")
+    same(rl.weight, ml.weight, what=f"weights after five steps of SGD(momentum={momentum})")
 
 
 def test_adam_multi_step():
@@ -834,12 +838,13 @@ def test_adam_multi_step():
     copy_linear(rl, ml)
     _train(rl, real.tensor, real.optim.Adam(rl.parameters(), lr=0.01), steps=10)
     _train(ml, bt.tensor, bt.optim.Adam(ml.parameters(), lr=0.01), steps=10)
-    same(rl.weight, ml.weight, what="Adam 열 스텝 뒤 가중치")
+    same(rl.weight, ml.weight, what="weights after ten steps of Adam")
 
 
 def _lr(opt):
-    """학습률을 읽는 표준 경로. 양쪽에서 같은 식으로 읽어야 차이가 드러난다 —
-    전에는 torch 만 param_groups 로 읽고 nano 는 `.lr` 로 읽어, **테스트가 차이를 덮고 있었다.**"""
+    """The standard path for reading the learning rate. Read the same way on both sides or a
+    difference stays hidden — torch used to be read through `param_groups` and borch through
+    `.lr`, and **the test was covering the difference up.**"""
     return opt.param_groups[0]["lr"]
 
 
@@ -851,13 +856,13 @@ def _lr(opt):
     (lambda L, o: L.optim.lr_scheduler.LambdaLR(o, lambda e: 1 / (1 + e)), 5),
 ])
 def test_scheduler_trajectory(make, steps):
-    """한 값이 아니라 **궤적 전체**를 본다. 마지막만 맞고 중간이 다른 경우가 있다."""
+    """Not one value but **the whole trajectory.** The last one can match while the middle differs."""
     ro = real.optim.SGD(real.nn.Linear(2, 1).parameters(), lr=1.0)
     mo = bt.optim.SGD(bt.nn.Linear(2, 1).parameters(), lr=1.0)
     rs, ms = make(real, ro), make(bt, mo)
     for epoch in range(steps):
-        assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"{epoch}에폭에서 갈렸다: {_lr(ro)} vs {_lr(mo)}"
-        ro.step()          # torch 는 optimizer 를 먼저 부르라고 경고한다
+        assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"diverged at epoch {epoch}: {_lr(ro)} vs {_lr(mo)}"
+        ro.step()          # torch warns that the optimizer must be called first
         mo.step()
         rs.step()
         ms.step()
@@ -871,7 +876,7 @@ def test_reduce_on_plateau():
     for metric in [1.0, 1.0, 1.0, 1.0, 0.1, 0.1, 0.1, 0.1]:
         rs.step(metric)
         ms.step(metric)
-        assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"metric={metric} 에서 갈렸다"
+        assert abs(_lr(ro) - _lr(mo)) < 1e-9, f"diverged at metric={metric}"
 
 
 @pytest.mark.parametrize("name,kwargs", [
@@ -888,12 +893,12 @@ def test_optimizer_trajectory(name, kwargs):
     mo = getattr(bt.optim, name)(ml.parameters(), **kwargs)
     _train(rl, real.tensor, ro, steps=8)
     _train(ml, bt.tensor, mo, steps=8)
-    same(rl.weight, ml.weight, tol=1e-5, what=f"{name}{kwargs} 여덟 스텝")
+    same(rl.weight, ml.weight, tol=1e-5, what=f"{name}{kwargs}, eight steps")
 
 
 def test_optimizer_state_dict_roundtrip():
-    """Adam 은 파라미터마다 보폭을 기억한다. 그 기억을 버리고 이어 학습하면
-    손실이 한 번 튄다 — 오류는 안 나고 곡선만 이상해진다(6장)."""
+    """Adam remembers a step size per parameter. Throwing that memory away and continuing to
+    train makes the loss jump once — no error, just a curve that looks odd (chapter 6)."""
     ml = bt.nn.Linear(2, 1)
     mo = bt.optim.Adam(ml.parameters(), lr=0.01)
     _train(ml, bt.tensor, mo, steps=5)
@@ -910,10 +915,10 @@ def test_optimizer_state_dict_roundtrip():
     _train(ml, bt.tensor, mo, steps=1)
     for restored, continued in zip(after_restored, [p.data for p in ml.parameters()]):
         assert np.allclose(restored, continued, atol=1e-6), (
-            "불러온 optimizer 가 이어서 같은 걸음을 걷지 않는다")
+            "the loaded optimizer does not go on taking the same step")
 
 
-# ---------------------------------------------------------------- 저장·불러오기
+# ---------------------------------------------------------- save and load
 
 def test_state_dict_roundtrip(tmp_path):
     m = bt.nn.Sequential(bt.nn.Linear(3, 2), bt.nn.ReLU(), bt.nn.Linear(2, 1))
@@ -925,7 +930,7 @@ def test_state_dict_roundtrip(tmp_path):
 
     fresh = bt.nn.Sequential(bt.nn.Linear(3, 2), bt.nn.ReLU(), bt.nn.Linear(2, 1))
     fresh.load_state_dict(bt.load(str(path)))
-    same(before, fresh(x), what="저장하고 불러온 모델의 출력")
+    same(before, fresh(x), what="output of a saved and loaded model")
 
 
 def test_state_dict_keys_match_real():
@@ -941,7 +946,7 @@ def test_load_state_dict_rejects_wrong_shape():
         m.load_state_dict(bad)
 
 
-# ---------------------------------------------------------------- 데이터
+# -------------------------------------------------------------------- data
 
 def test_dataloader_batches_match():
     x = np.arange(20, dtype=np.float32).reshape(10, 2)
@@ -954,10 +959,10 @@ def test_dataloader_batches_match():
 
     rb = list(rd)
     mb = list(md)
-    assert len(rb) == len(mb) == 4, "10개를 3씩 나누면 마지막 자투리까지 네 묶음"
+    assert len(rb) == len(mb) == 4, "ten split by three is four batches, counting the remainder"
     for (rx, ry), (mx, my) in zip(rb, mb):
-        same(rx, mx, what="배치 x")
-        same(ry, my, what="배치 y")
+        same(rx, mx, what="batch x")
+        same(ry, my, what="batch y")
 
 
 def test_dataloader_len():
@@ -973,7 +978,7 @@ def test_sampler_and_shuffle_conflict():
         bt.utils.data.DataLoader(ds, sampler=sampler, shuffle=True)
 
 
-# ---------------------------------------------------------------- 거절
+# ------------------------------------------------------------- refusals
 
 @pytest.mark.parametrize("call", [
     lambda: bt.zeros(2).to("cuda"),
@@ -982,24 +987,27 @@ def test_sampler_and_shuffle_conflict():
     lambda: bt.nn.Module().to("mps"),
 ])
 def test_unsupported_raises_loudly(call):
-    """없는 것은 근사하지 않고 멈춘다. 조용히 다른 값을 내느니 여기서 끝낸다.
+    """What is absent stops rather than approximating. Better to end here than to give a
+    different value quietly.
 
-    이 목록은 지원 범위가 늘 때마다 줄어들었고, 그때마다 낡은 채로 남아 두 번 깨졌다.
-    그래서 지금은 **브라우저에 존재할 수 없는 것만** 남긴다 — 늘어날 일이 없는 항목들이다.
+    This list shrank every time the supported range grew, and twice it broke by being left
+    stale. So now it keeps **only what cannot exist in a browser** — entries that will never
+    grow.
     """
     with pytest.raises(bt.BorchError):
         call()
 
 
 def test_sspaddmm_refuses_because_there_is_no_sparse():
-    """**희소 텐서가 없어서 거절한다.**
+    """**Refused because there are no sparse tensors.**
 
-    위 목록에 안 넣는다 — 그쪽은 "브라우저에 존재할 수 없는 것" 만 담는 자리이고,
-    희소는 존재할 수 있다. 언젠가 희소 배치가 생기면 이 검사가 그때 빨개져서
-    `sspaddmm` 을 진짜로 구현하라고 말할 것이다.
+    Not put in the list above — that place holds only "what cannot exist in a browser", and
+    sparse can exist. If a sparse arrangement is ever built, this check will turn red then and
+    say to implement `sspaddmm` for real.
 
-    조밀 텐서로 흉내 내면 **모양은 맞고 저장 방식이 다른** 것을 주게 되고, 그것을
-    배운 사람은 희소가 무엇인지 잘못 안다.
+    Imitating it with a dense tensor would hand over something **whose shape is right and
+    whose storage is different**, and whoever learns from that has the wrong idea of what
+    sparse is.
     """
     with pytest.raises(bt.BorchError):
         bt.sspaddmm(bt.zeros(2, 4), bt.zeros(2, 3), bt.zeros(3, 4))
@@ -1026,18 +1034,20 @@ def test_inplace_on_grad_tensor_raises():
 
 
 def test_the_three_transposes_differ_only_on_complex():
-    """`H`·`mT`·`mH` 는 **켤레를 취하는가**로 갈린다 — 실수에서는 셋이 같은 답이다.
+    """`H`, `mT` and `mH` differ by **whether they conjugate** — over the reals all three give
+    the same answer.
 
-    골든에는 이 셋이 `_as_expected` 로 들어가 있다. borch.ts 가 복소수 전치를 아직
-    거절해서 값을 셋에 함께 못 묻기 때문인데, **그렇게 감싸는 순간 코어의 값 검사가
-    사라진다** — `mH` 가 `mT` 를 돌려줘도 "브라우저가 거절했는가" 는 그대로 참이다.
-    실제로 `mH` 를 켤레 없이 만들어 보니 골든이 초록이었다. 그 절반이 여기 있다.
+    In the golden cases these three go in as `_as_expected`, because borch.ts still refuses a
+    complex transpose and the value cannot be asked of all three together. **The moment they
+    are wrapped that way the core's value check disappears** — `mH` returning `mT` leaves "did
+    the browser refuse?" true all the same. Building `mH` without the conjugate really did
+    leave the golden cases green. That missing half is here.
     """
     raw = np.array([[1 + 2j, 3 - 1j]], dtype=np.complex64)
     for name in ("H", "mT", "mH"):
         want = getattr(real.tensor(raw), name).resolve_conj().numpy()
         got = np.asarray(getattr(bt.tensor(raw), name).resolve_conj().tolist())
         assert np.array_equal(got, want), f"{name}: {got} != {want}"
-    # **셋이 서로 다르다는 것**까지 못 박는다 — 같은 함수를 세 번 묻는 것이 아니다.
+    # Pins **that the three differ from each other** too — this is not asking one function thrice.
     x = bt.tensor(raw)
-    assert x.mT.tolist() != x.mH.resolve_conj().tolist(), "mT 와 mH 가 같다"
+    assert x.mT.tolist() != x.mH.resolve_conj().tolist(), "mT and mH are the same"

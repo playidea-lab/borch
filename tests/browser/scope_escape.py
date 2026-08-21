@@ -1,11 +1,10 @@
-"""Can Python carry a tensor out of a scope — measured in a browser.
+"""Whether Python can carry a tensor out of a scope — measured in a browser.
 
     npm run build:ts
     uv run --with playwright python tests/browser/scope_escape.py --headed
 
-It looks at values and lifetimes alone, so **it holds on a software adapter
-too** — the device does not change the rule for releasing a buffer. Which is why
-no window has to be opened.
+It looks only at values and lifetimes, so it **holds on a software adapter too** — the
+device does not change the rule for releasing buffers. So no window has to be opened.
 """
 
 import sys
@@ -21,8 +20,7 @@ def main(argv):
     sys.stdout.reconfigure(line_buffering=True)
     dist = runner.ROOT / "borch-ts" / "dist" / "src" / "index.js"
     if not dist.exists():
-        print(f"no build output: {dist}\n  first: npm run build:ts",
-              file=sys.stderr)
+        print(f"no build: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
     port, stop = runner.serve(runner.ROOT)
@@ -44,8 +42,11 @@ def main(argv):
         print(f"could not measure: {result['error']}", file=sys.stderr)
         return 1
     print(result["text"])
-    warn_if_software(result.get("adapter"), "the lifetime rules")
-    return 0 if result["text"].startswith("scope escape works") else 1
+    warn_if_software(result.get("adapter"), "lifetime rules")
+    # **This sentence is a contract with another file.** `scope_escape_cases.py` prints it,
+    # and the wording is what decides the exit code — change one side alone and this returns
+    # 1 while everything passes. That file is still Korean; the literal moves when it does.
+    return 0 if result["text"].startswith("구역 탈출이 돈다") else 1
 
 
 if __name__ == "__main__":

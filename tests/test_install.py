@@ -1,13 +1,12 @@
-"""`install()` — the place that makes `import torch` pick up this subset.
+"""`install()` — where `import torch` is made to pick up this subset.
 
-**Coverage was 0%.** None of the 175 tests passed through this function, and its
-docstring opens with "writing the paths by hand drifts — and it did". Which means
-a place that had bitten once was fixed and left without a check.
+**Coverage was 0%.** None of the 175 tests passed through this function, and yet its
+docstring opens with "writing the paths by hand goes out of step — and it did". Somewhere
+that had bitten once was fixed with no check attached.
 
-The way it bites is unusual and a value comparison does not catch it. Everything
-exists and **the import path does not**, so
-`from torch.optim.lr_scheduler import StepLR` stops in the body of a textbook.
-So what is asked here is not a value but **whether the paths stand up.**
+The way it bites is unusual and a value comparison does not catch it. Everything is present
+and **the import path is not**, so `from torch.optim.lr_scheduler import StepLR` stops in the
+middle of a textbook. So what is asked here is not values but **whether the paths stand.**
 """
 
 import pathlib
@@ -24,28 +23,27 @@ import borch as bt                                            # noqa: E402
 
 @pytest.fixture
 def modules():
-    """The real `sys.modules` is left alone — once tests contaminate each other,
-    passing and failing depend on the running order."""
+    """It does not touch the real `sys.modules` — once tests contaminate each other, passing
+    and failing depend on the order they run in."""
     return {}
 
 
 def test_install_registers_the_nested_paths(modules):
-    """Not `torch.nn` alone — **`torch.optim.lr_scheduler` too** has to stand up.
+    """Not just `torch.nn` but **`torch.optim.lr_scheduler` too** has to stand.
 
-    An implementation that walks one level does not pass this check — and that is
-    exactly where it drifted before.
+    An implementation that walks one level does not pass this — that is exactly where it once
+    went wrong.
     """
     registered = bt.install("torch", modules)
 
     assert "torch.nn" in registered
     assert "torch.optim" in registered
-    assert "torch.optim.lr_scheduler" in registered, "two levels down did not stand up"
-    assert "torch.utils.data" in registered, "under utils has to stand up too"
+    assert "torch.optim.lr_scheduler" in registered, "two levels down did not stand"
+    assert "torch.utils.data" in registered, "below utils has to stand too"
 
 
 def test_registered_paths_hold_the_real_namespaces(modules):
-    """A path that stands up **holding the wrong thing** is worse — the import
-    works and the value is wrong."""
+    """A path standing with **the wrong thing inside it** is worse — the import works and the value is wrong."""
     bt.install("torch", modules)
 
     assert modules["torch.nn"] is bt.nn
@@ -55,15 +53,14 @@ def test_registered_paths_hold_the_real_namespaces(modules):
 
 
 def test_install_does_not_plant_the_root(modules):
-    """The root is planted **by the caller.** Planted here, two places would hold
-    the module object."""
+    """The root is **planted by the caller.** Planting it here leaves two places holding the module object."""
     bt.install("torch", modules)
     assert "torch" not in modules
 
 
 def test_install_takes_a_different_root_name(modules):
-    """It has to be plantable under a different name — there are places where
-    planting as `torch` is risky, and the README points at another name there."""
+    """It has to be plantable under another name — there are places where planting as `torch`
+    is dangerous, and the README points at another name for those."""
     registered = bt.install("bt", modules)
     assert "bt.nn" in registered
     assert all(path.startswith("bt.") for path in registered)
@@ -72,9 +69,8 @@ def test_install_takes_a_different_root_name(modules):
 def test_install_finds_every_namespace_rather_than_a_written_list():
     """**Keeping no list** is this function's point.
 
-    A new submodule has to follow along untouched. One is built and attached to
-    confirm it — without this, the next thing like `lr_scheduler` goes missing
-    again.
+    A new submodule has to follow without anyone touching this. One is built and attached to
+    confirm — without that, the next thing like `lr_scheduler` goes missing again.
     """
     modules = {}
 

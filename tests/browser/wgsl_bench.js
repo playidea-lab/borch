@@ -1,18 +1,20 @@
-// WGSL 을 직접 쓰면 TF.js 만큼 나오는가 — 그것만 재는 파일이다.
+// Does writing WGSL directly match TF.js — this file measures that and nothing else.
 //
-// **지금 이 파일은 안 돈다.** 답이 "그렇다" 로 나와서 borch.ts 를 썼고, 그 뒤
-// TF.js 판을 지우면서 벤더 파일(`vendor/tf.min.js`)도 안 받는다 — 기준선이 없다.
-// 남겨 둔 것은 결론이 아니라 **결론을 낸 방법** 때문이다. 다시 돌리려면
-// `tests/browser/vendor.py` 에 TF.js 를 되돌리면 된다(이력에 있다).
+// **This file does not run at present.** The answer came out "yes", borch.ts was written, and
+// deleting the TF.js edition after that stopped the vendor file (`vendor/tf.min.js`) being
+// fetched — there is no baseline. What is kept is not the conclusion but **the method that
+// reached it.** To run it again, put TF.js back into `tests/browser/vendor.py` (it is in the
+// history).
 //
-// 왜 이것을 재는가. 지금 자매 라이브러리는 TF.js 커널 위에 서 있고, 헤드라인
-// ("ResNet-18 에폭 2분")도 거기서 나온다. WGSL 을 직접 쓰면 NCHW 강제도 CPU 왕복도
-// 사라지지만, **행렬곱이 느려지면 그 헤드라인이 통째로 없어진다.** 그 하나가 방향을
-// 정하므로 논쟁 대신 잰다.
+// Why measure this. The sister library stands on TF.js kernels today, and the headline ("a
+// ResNet-18 epoch in 2 minutes") comes from there. Writing WGSL directly removes both the
+// forced NCHW and the CPU round trip, but **if the matrix multiply gets slower that headline
+// disappears whole.** That one thing decides the direction, so it is measured rather than
+// argued.
 //
-// 재는 것 셋: TF.js `matMul`, 순진한 WGSL(스레드 하나가 출력 하나), 타일링 WGSL
-// (16×16 워크그룹 공유메모리). **값이 맞는지 먼저 보고** 시간을 잰다 — 빠르고 틀린
-// 커널은 아무 값어치가 없다.
+// Three things are measured: TF.js `matMul`, naive WGSL (one thread per output), and tiled
+// WGSL (a 16×16 workgroup with shared memory). **The values are checked first** and then the
+// time — a fast, wrong kernel is worth nothing.
 
 const TILE = 16;
 
@@ -35,8 +37,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   C[row * d.N + col] = acc;
 }`;
 
-// 타일링. 각 워크그룹이 A·B 의 16×16 조각을 공유메모리로 끌어와 재사용한다 —
-// 순진한 판은 같은 값을 전역 메모리에서 몇 번이고 다시 읽는다.
+// Tiled. Each workgroup pulls a 16×16 piece of A and B into shared memory and reuses it —
+// the naive edition rereads the same value from global memory again and again.
 const TILED_WGSL = `
 struct Dims { M: u32, K: u32, N: u32, _pad: u32 };
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -69,13 +71,14 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
   if (row < d.M && col < d.N) { C[row * d.N + col] = acc; }
 }`;
 
-// 레지스터 블로킹. 스레드 하나가 출력 **4×4** 를 맡는다.
+// Register blocking. One thread takes **4×4** outputs.
 //
-// 단순 타일링만으로는 TF.js 의 20~26% 밖에 안 나왔다(실측). 차이는 스레드당 출력
-// 개수에서 온다 — 하나만 맡으면 공유메모리에서 읽은 값을 한 번 쓰고 버리는데,
-// 4×4 를 맡으면 A 조각 4개와 B 조각 4개를 읽어 곱셈 16번에 쓴다. 산술 강도가 4배다.
-// **이 판이 천장인지 바닥인지를 갈라야** "WGSL 로 가도 되는가"에 답할 수 있다.
-const RT = 4;                                   // 스레드당 출력 한 변
+// Plain tiling alone reached only 20-26% of TF.js (measured). The difference comes from the
+// outputs per thread — taking one means a value read from shared memory is used once and
+// thrown away, while taking 4×4 means reading four pieces of A and four of B and using them
+// across sixteen multiplies. Four times the arithmetic intensity.
+// **Telling whether this edition is the ceiling or the floor** is what answers "can we go WGSL".
+const RT = 4;                                   // outputs per thread, per side
 const BLOCKED_WGSL = `
 struct Dims { M: u32, K: u32, N: u32, _pad: u32 };
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -83,7 +86,7 @@ struct Dims { M: u32, K: u32, N: u32, _pad: u32 };
 @group(0) @binding(2) var<storage, read_write> C: array<f32>;
 @group(0) @binding(3) var<uniform> d: Dims;
 
-const TS = ${TILE * RT}u;                       // 워크그룹이 맡는 출력 한 변 (64)
+const TS = ${TILE * RT}u;                       // the output side a workgroup takes (64)
 var<workgroup> As: array<f32, ${TILE * RT * TILE}>;   // 64 × 16
 var<workgroup> Bs: array<f32, ${TILE * TILE * RT}>;   // 16 × 64
 
@@ -99,7 +102,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
 
   let tiles = (d.K + T - 1u) / T;
   for (var t = 0u; t < tiles; t = t + 1u) {
-    // A 조각 (64×16) 과 B 조각 (16×64) 을 워크그룹 256 스레드가 나눠 싣는다.
+    // The workgroup's 256 threads share the load of A's piece (64×16) and B's (16×64).
     for (var r = 0u; r < R; r = r + 1u) {
       let ar = lid.y * R + r;
       let arow = wid.y * TS + ar;
@@ -136,15 +139,16 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
   }
 }`;
 
-// 레지스터 블로킹, **완전히 펼친 판.**
+// Register blocking, **fully unrolled.**
 //
-// 앞의 4×4 판은 오히려 4배 느렸다(값은 맞았다). 원인 가설: 누산기를 `array<f32,16>`
-// 으로 두고 `acc[i * R + j]` 처럼 **변수로 인덱싱**했는데, WGSL 에서 그러면 레지스터에
-// 못 두고 메모리로 떨어진다. 그러면 블로킹의 목적인 재사용이 통째로 사라진다.
+// The 4×4 edition above was four times slower instead (the values were right). Hypothesis: the
+// accumulator was an `array<f32,16>` **indexed by a variable**, as `acc[i * R + j]`, and in
+// WGSL that cannot stay in registers and falls into memory. Which loses the reuse that is
+// blocking's whole purpose.
 //
-// 그래서 여기서는 누산기 16개를 **이름 붙은 스칼라**로 두고 곱셈 16개를 손으로 펼친다.
-// 읽기는 나쁘지만, 이 파일의 목적은 읽히는 것이 아니라 **850 이 내 한계인지
-// WebGPU 의 한계인지 가르는 것**이다.
+// So here the sixteen accumulators are **named scalars** and the sixteen multiplies are
+// unrolled by hand. It reads badly, but this file's purpose is not to be read — it is to
+// **tell whether 850 is my limit or WebGPU's.**
 const unrolled = () => {
   const decl = [];
   const zero = [];
@@ -172,9 +176,9 @@ struct Dims { M: u32, K: u32, N: u32, _pad: u32 };
 @group(0) @binding(2) var<storage, read_write> C: array<f32>;
 @group(0) @binding(3) var<uniform> d: Dims;
 
-// 워크그룹 16×16 스레드가 출력 64×64 를 맡는다. K 는 16 씩 민다.
-var<workgroup> As: array<f32, 1024>;            // 64 행 × 16
-var<workgroup> Bs: array<f32, 1024>;            // 16 × 64 열
+// A workgroup of 16×16 threads takes a 64×64 output. K advances by 16.
+var<workgroup> As: array<f32, 1024>;            // 64 rows × 16
+var<workgroup> Bs: array<f32, 1024>;            // 16 × 64 columns
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
@@ -188,17 +192,17 @@ ${U4.zero}
 
   let tiles = (d.K + 15u) / 16u;
   for (var t = 0u; t < tiles; t = t + 1u) {
-    // 256 스레드가 1024 칸을 넷씩 나눠 싣는다. 한 번에 한 줄씩 훑어 인접 스레드가
-    // 인접 주소를 읽게 둔다 — 합쳐진 읽기가 흩어진 읽기보다 훨씬 싸다.
+    // 256 threads load 1024 slots, four each. Sweeping one row at a time keeps adjacent
+    // threads on adjacent addresses — a coalesced read is far cheaper than a scattered one.
     for (var s = 0u; s < 4u; s = s + 1u) {
       let idx = s * 256u + tid;                 // 0..1023
-      let ar = idx / 16u;                       // A 조각의 행 (0..63)
+      let ar = idx / 16u;                       // the row in A's piece (0..63)
       let ak = idx % 16u;
       let arow = wid.y * 64u + ar;
       let acol = t * 16u + ak;
       As[idx] = select(0.0, A[arow * d.K + acol], arow < d.M && acol < d.K);
 
-      let bk = idx / 64u;                       // B 조각의 행 (0..15)
+      let bk = idx / 64u;                       // the row in B's piece (0..15)
       let bc = idx % 64u;
       let brow = t * 16u + bk;
       let bcol = wid.x * 64u + bc;
@@ -256,13 +260,13 @@ async function runWgsl(device, pipeline, A, B, M, K, N, iters, perThread = 1) {
     const pass = enc.beginComputePass();
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bind);
-    const span = TILE * perThread;              // 워크그룹 하나가 덮는 출력 한 변
+    const span = TILE * perThread;              // the output side one workgroup covers
     pass.dispatchWorkgroups(Math.ceil(N / span), Math.ceil(M / span));
     pass.end();
     device.queue.submit([enc.finish()]);
   };
 
-  dispatch();                                   // 워밍업 — 셰이더 컴파일을 시간에서 뺀다
+  dispatch();                                   // warm-up — keeps shader compilation out of the time
   await device.queue.onSubmittedWorkDone();
 
   const t0 = performance.now();
@@ -270,7 +274,7 @@ async function runWgsl(device, pipeline, A, B, M, K, N, iters, perThread = 1) {
   await device.queue.onSubmittedWorkDone();
   const ms = (performance.now() - t0) / iters;
 
-  // 값을 읽어온다 — 맞는지 봐야 시간이 뜻을 가진다.
+  // Reads the values back — the time only means something once they are checked.
   const read = device.createBuffer({ size: bytes(M * N), usage: U.COPY_DST | U.MAP_READ });
   const enc = device.createCommandEncoder();
   enc.copyBufferToBuffer(bufC, 0, read, 0, bytes(M * N));
@@ -287,14 +291,14 @@ async function timeTfMatmul(A, B, M, K, N, iters) {
   const a = tf.tensor(A, [M, K]);
   const b = tf.tensor(B, [K, N]);
   let c = tf.matMul(a, b);
-  await c.data();                               // 워밍업
+  await c.data();                               // warm-up
   const ref = await c.data();
   c.dispose();
 
   const t0 = performance.now();
   for (let i = 0; i < iters; i++) {
     const r = tf.matMul(a, b);
-    if (i === iters - 1) await r.data();        // 마지막에만 동기화한다
+    if (i === iters - 1) await r.data();        // synchronises on the last one only
     r.dispose();
   }
   const ms = (performance.now() - t0) / iters;
@@ -311,10 +315,11 @@ function maxDiff(x, y) {
 
 window.wgslBench = async function (shapes, iters) {
   const adapter = await navigator.gpu.requestAdapter();
-  // **한계를 최대로 올려서 받는다.** 기본 maxStorageBufferBindingSize 는 128MB 이고,
-  // 그것을 넘는 버퍼는 조용히 안 돈다 — 처음 재봤을 때 65536×576 행렬(151MB)에서
-  // 24만 GFLOPS 라는 물리적으로 불가능한 수가 나왔고, 값도 틀려 있었다(최대차 1.9).
-  // 값을 같이 안 봤으면 그 수를 믿을 뻔했다.
+  // **The limits are requested at their maximum.** The default maxStorageBufferBindingSize is
+  // 128MB, and a buffer past it quietly does not run — the first measurement gave a physically
+  // impossible 240,000 GFLOPS on a 65536×576 matrix (151MB), and the values were wrong too (a
+  // maximum difference of 1.9). Without looking at the values alongside, that number was very
+  // nearly believed.
   const lim = adapter.limits;
   const device = await adapter.requestDevice({
     requiredLimits: {
@@ -328,19 +333,19 @@ window.wgslBench = async function (shapes, iters) {
   const blocked2 = makePipeline(device, BLOCKED2_WGSL);
 
   const lines = [
-    `한계: 저장버퍼 ${(lim.maxStorageBufferBindingSize / 2 ** 20).toFixed(0)}MB` +
-    `  워크그룹메모리 ${(lim.maxComputeWorkgroupStorageSize / 1024).toFixed(0)}KB`,
+    `limits: storage buffer ${(lim.maxStorageBufferBindingSize / 2 ** 20).toFixed(0)}MB` +
+    `  workgroup memory ${(lim.maxComputeWorkgroupStorageSize / 1024).toFixed(0)}KB`,
     "",
   ];
   for (const [M, K, N] of shapes) {
     const need = Math.max(M * K, K * N, M * N) * 4;
     if (need > lim.maxStorageBufferBindingSize) {
-      lines.push(`${M}×${K}×${N}  건너뜀 — 버퍼 ${(need / 2 ** 20).toFixed(0)}MB 가 한계를 넘는다`);
+      lines.push(`${M}×${K}×${N}  skipped — a ${(need / 2 ** 20).toFixed(0)}MB buffer is past the limit`);
       continue;
     }
     const A = new Float32Array(M * K);
     const B = new Float32Array(K * N);
-    // 값은 작게 둔다 — float32 누적 오차로 대조가 흐려지면 안 된다.
+    // The values are kept small — float32 accumulation error must not blur the comparison.
     for (let i = 0; i < A.length; i++) A[i] = ((i * 37) % 19) / 19 - 0.5;
     for (let i = 0; i < B.length; i++) B[i] = ((i * 53) % 23) / 23 - 0.5;
 
@@ -349,18 +354,18 @@ window.wgslBench = async function (shapes, iters) {
 
     const t = await timeTfMatmul(A, B, M, K, N, iters);
     const runs = [
-      ["WGSL 순진   ", await runWgsl(device, naive, A, B, M, K, N, iters)],
-      ["WGSL 타일링 ", await runWgsl(device, tiled, A, B, M, K, N, iters)],
-      ["WGSL 4×4블록", await runWgsl(device, blocked, A, B, M, K, N, iters, RT)],
-      ["WGSL 펼침   ", await runWgsl(device, blocked2, A, B, M, K, N, iters, RT)],
+      ["WGSL naive   ", await runWgsl(device, naive, A, B, M, K, N, iters)],
+      ["WGSL tiled   ", await runWgsl(device, tiled, A, B, M, K, N, iters)],
+      ["WGSL 4×4block", await runWgsl(device, blocked, A, B, M, K, N, iters, RT)],
+      ["WGSL unrolled", await runWgsl(device, blocked2, A, B, M, K, N, iters, RT)],
     ];
     const rows = runs.map(([label, r]) => {
       const diff = maxDiff(r.out, t.ref);
-      // **값이 틀리면 시간은 뜻이 없다.** 눈에 띄게 적는다.
-      const verdict = diff < 1e-3 ? `최대차 ${diff.toExponential(1)}`
-                                  : `값 틀림! 최대차 ${diff.toExponential(1)}`;
+      // **A wrong value makes the time meaningless.** Written where it will be noticed.
+      const verdict = diff < 1e-3 ? `max diff ${diff.toExponential(1)}`
+                                  : `WRONG VALUES! max diff ${diff.toExponential(1)}`;
       return `\n  ${label} ${r.ms.toFixed(2).padStart(8)} ms  ${g(r.ms).toFixed(0).padStart(6)} GFLOPS` +
-             `  (TF.js 대비 ${(t.ms / r.ms * 100).toFixed(0)}%)  ${verdict}`;
+             `  (${(t.ms / r.ms * 100).toFixed(0)}% of TF.js)  ${verdict}`;
     });
     lines.push(
       `${M}×${K}×${N}` +

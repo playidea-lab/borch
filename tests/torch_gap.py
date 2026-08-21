@@ -1,42 +1,47 @@
-"""진짜 torch 가 가진 이름 중 **우리에게 없는 것**을 센다.
+"""Counts the names real torch has that **we do not**.
 
     uv run --with numpy --with torch python tests/torch_gap.py
-    uv run --with numpy --with torch python tests/torch_gap.py --extra   # 반대 방향
-    uv run --with numpy --with torch python tests/torch_gap.py --show nn # 한 자리만 전부
+    uv run --with numpy --with torch python tests/torch_gap.py --extra   # the other direction
+    uv run --with numpy --with torch python tests/torch_gap.py --show nn # one namespace, all of it
 
-`tests/conformance.py` 는 **있는 것이 맞는가**를 묻는다. 이 파일은 **무엇이 없는가**를
-묻는다. 둘은 다른 질문이고, 앞의 것만 재면 100% 가 나오면서 표면이 얼마나 좁은지는
-안 보인다 — 실제로 그렇게 읽힐 뻔했다.
+`tests/conformance.py` asks whether **what is there is right**. This file asks **what is
+not there**. They are different questions, and measuring only the first gives 100% while
+saying nothing about how narrow the surface is — which is very nearly how it was read.
 
-## 없는 것이 다 같은 종류가 아니다
+## What is missing is not all of one kind
 
-**넷**으로 갈린다. 이 구분이 이 파일의 요점이다.
+It divides in **four**, and that division is this file's point.
 
-- **애초에 API 가 아니다** — `AliasDb`·`ClassType`·`boolean_dispatch`·`ByteStorage`.
-  이름이 밑줄 없이 공개돼 있을 뿐 부를 것이 아니다. TorchScript IR 내부, 디스패처
-  내부, torch 가 스스로 버린 옛 클래스가 여기 든다.
-- **일부러 거절한다** — `cuda`·`compile`·분산·양자화. 브라우저에 존재할 수 없거나,
-  그것을 배우려면 브라우저를 벗어나야 하는 것들이다. 흉내 내면 교훈이 사라진다.
-- **커리큘럼 밖이다** — `torch.fft`·`torch.sparse`·`torch.onnx`. 넣을 수는 있지만
-  입문 튜토리얼이 안 부른다. 표면이 늘면 조용히 틀릴 자리가 는다.
-- **그냥 없다** — 있어야 하는데 아무도 안 물어서 없는 것. **이 목록이 값어치다.**
-  실제로 `torch.sum` 이 여기 있었다(메서드로만 있고 모듈 함수가 없었다).
+- **Not API to begin with** — `AliasDb`, `ClassType`, `boolean_dispatch`, `ByteStorage`.
+  Public only in that the name has no underscore; not a thing to call. TorchScript IR
+  internals, dispatcher internals and old classes torch itself threw away live here.
+- **Deliberately declined** — `cuda`, `compile`, distribution, quantisation. Things that
+  cannot exist in a browser, or that have to be learned outside one. Imitating them
+  loses the lesson.
+- **Outside the curriculum** — `torch.fft`, `torch.sparse`, `torch.onnx`. They could go
+  in, but an introductory tutorial does not call them, and a wider surface is more room
+  to be quietly wrong.
+- **Simply absent** — it should be there and nobody asked. **This list is the one worth
+  having.** `torch.sum` was on it (it existed as a method with no module-level function).
 
-앞의 셋은 판단이고 마지막 하나는 결함이다. 기계는 넷을 못 가르므로 아래 표에
-앞의 셋을 적어 둔다 — **적히지 않은 것이 곧 검토 대상이다.**
+The first three are judgements and the last is a defect. A machine cannot tell the four
+apart, so the first three are written into the tables below — **whatever is not written
+is what wants reviewing.**
 
-## 이 표를 채우는 것은 위험한 일이다
+## Filling in this table is dangerous work
 
-**이름 하나를 적을 때마다 우리 비율이 올라간다.** 그러니 이 작업은 태생적으로
-"수를 예쁘게 만들기" 로 미끄러진다. 막는 것은 하나뿐이다 — **각 줄이 사유를 갖고,
-그 사유가 확인 가능해야 한다.** 사유를 못 적겠으면 그것은 빈자리다.
+**Every name written down raises our percentage.** So the work slides, by its nature,
+towards "making the number look good". There is one thing stopping it — **every line
+carries a reason, and the reason has to be checkable.** A line whose reason cannot be
+written is a gap.
 
-**기계로 가르려다 한 번 크게 틀렸다.** "`__module__` 이 `torch._C` 로 시작하면
-내부 타입" 이라는 규칙이 그럴듯해 보였는데, `linalg` 의 `eig`·`eigvals`·`ldl_factor`
-일곱과 `F.elu_`·`hardtanh_`·`leaky_relu_` 를 통째로 삼켰다. **전부 진짜 API 다** —
-torch 의 함수 대부분이 C 에 산다. 그 규칙을 넣었으면 `linalg` 가 83% 에서 100% 로
-뛰고 남은 진짜 빈자리 일곱이 목록에서 사라졌을 것이다. **우리에게 유리한 쪽으로
-빗나가는 자동 규칙은 규칙이 없느니만 못하다.** 그래서 아래는 손으로 읽어 적었다.
+**Trying to divide them by machine went badly wrong once.** The rule "anything whose
+`__module__` starts with `torch._C` is an internal type" looked plausible and swallowed
+`linalg`'s `eig`, `eigvals` and `ldl_factor` — seven of them — along with `F.elu_`,
+`hardtanh_` and `leaky_relu_`. **All of those are real API**; most of torch's functions
+live in C. With that rule in, `linalg` would have jumped from 83% to 100% and the seven
+real gaps would have vanished from the list. **An automatic rule that misses in our
+favour is worse than no rule.** So what follows was read and written by hand.
 """
 
 import sys
@@ -45,391 +50,400 @@ import torch
 
 import borch
 
-# ---------------------------------------------------------------- 표
+# ------------------------------------------------------------- tables
 #
-# 세 표 다 **맞춤법**은 같다:
-#   "이름"     — 그 이름 하나
-#   "앞머리*"  — 그것으로 시작하는 이름들
-#   "*꼬리"    — 그것으로 끝나는 이름들
+# All three tables share the same **spelling**:
+#   "name"     — that one name
+#   "prefix*"  — names beginning with it
+#   "*suffix"  — names ending with it
 #
-# 부분 문자열은 안 쓴다. 앞의 판에서 `key in full` 로 걸러서 `"special"` 같은 키가
-# 엉뚱한 이름을 삼킬 수 있었다 — 사고는 안 났지만 넓었다.
+# Substrings are not used. An earlier version filtered with `key in full`, which let a key
+# like `"special"` swallow unrelated names — nothing went wrong, but it was wide.
 
-# **이름 공간 통째로.** 자리 이름의 앞머리로 건다.
+# **A whole namespace.** Matched on the prefix of the namespace's name.
 DELIBERATE = {
-    "cuda": "브라우저에 CUDA 가 없다. 흉내 내면 GPU 를 배우는 교훈이 사라진다",
-    "mps": "같은 이유",
-    "xpu": "같은 이유",
-    "mtia": "같은 이유",
-    "distributed": "한 탭 안이다. 분산을 배우려면 여러 기계로 나가야 한다",
-    "compile": "TorchDynamo 는 CPython 바이트코드를 고쳐 쓴다. wasm 에 못 얹는다",
-    "jit": "같은 이유",
-    "export": "같은 이유",
-    "fx": "같은 이유",
-    "onnx": "내보내기는 배포의 일이고 여기는 문법 연습이다",
-    "quantiz": "양자화는 실제 하드웨어 위에서만 뜻이 있다",
-    "sparse": "커리큘럼 밖",
-    # **1 차원 여덟은 한다**(`fft`·`ifft`·`rfft`·`irfft`·`fftfreq`·`rfftfreq`·
-    # `fftshift`·`ifftshift`). 안 하는 것은 2·N 차원과 에르미트 변종 열다섯이다.
-    # 여기 "커리큘럼 밖" 이라고만 적혀 있던 동안 그 여덟은 이미 돌고 있었다 —
-    # 자리째 거절로 적으면 그 자리에서 **하는 것도 안 보인다.**
-    "fft": "1 차원 여덟만 한다 — 2·N 차원과 에르미트 변종은 커리큘럼 밖",
-    "special": "커리큘럼 밖",
-    "futures": "커리큘럼 밖",
-    "package": "커리굴럼 밖",
-    "profiler": "커리큘럼 밖",
-    "utils.tensorboard": "커리큘럼 밖",
-    "backends": "고를 백엔드가 하나다",
-    "multiprocessing": "브라우저에 프로세스가 없다",
+    "cuda": "there is no CUDA in a browser. Imitating it loses the lesson about GPUs",
+    "mps": "same reason",
+    "xpu": "same reason",
+    "mtia": "same reason",
+    "distributed": "this is one tab. Learning distribution means leaving for several machines",
+    "compile": "TorchDynamo rewrites CPython bytecode. It does not sit on wasm",
+    "jit": "same reason",
+    "export": "same reason",
+    "fx": "same reason",
+    "onnx": "exporting is deployment's job and this is grammar practice",
+    "quantiz": "quantisation means something only on real hardware",
+    "sparse": "outside the curriculum",
+    # **The eight one-dimensional ones are done** (`fft`, `ifft`, `rfft`, `irfft`,
+    # `fftfreq`, `rfftfreq`, `fftshift`, `ifftshift`). What is not done is 2-D, N-D and the
+    # fifteen Hermitian variants. While this read only "outside the curriculum", those
+    # eight were already running — declining a whole namespace hides **what is done there
+    # too.**
+    "fft": "only the eight one-dimensional ones — 2-D, N-D and the Hermitian variants are outside the curriculum",
+    "special": "outside the curriculum",
+    "futures": "outside the curriculum",
+    "package": "outside the curriculum",
+    "profiler": "outside the curriculum",
+    "utils.tensorboard": "outside the curriculum",
+    "backends": "there is one backend to choose",
+    "multiprocessing": "a browser has no processes",
 }
 
-# torch 가 형마다 하나씩 두었던 옛 클래스들. 목록이 닫혀 있어 여기 편다 —
-# 꼬리 와일드카드로 잡으면 `torch.Tensor` 자체가 걸린다.
+# The old per-type classes torch used to carry. The list is closed, so it is spelled out
+# here — a suffix wildcard would catch `torch.Tensor` itself.
 #
-# **둘이 같은 목록이 아니다.** 복소수와 양자화 형에는 `Storage` 만 있고 `Tensor` 는
-# 없다 — 하나로 적었더니 죽은 줄 일곱이 생겼고 `test_gap.py` 가 잡았다.
+# **The two are not the same list.** The complex and quantised types have a `Storage` and
+# no `Tensor` — written as one, seven dead rows appeared and `test_gap.py` caught them.
 _OLD_STORAGE = ("BFloat16", "Bool", "Byte", "Char", "ComplexDouble", "ComplexFloat",
                 "Double", "Float", "Half", "Int", "Long", "QInt32", "QInt8",
                 "QUInt2x4", "QUInt4x2", "QUInt8", "Short")
 _OLD_TENSOR = ("BFloat16", "Bool", "Byte", "Char", "Double", "Float", "Half",
                "Int", "Long", "Short")
 
-# TorchScript 의 타입 이름들. 이것도 닫힌 목록이다.
+# TorchScript's type names. This list is closed too.
 _IR_TYPES = ("Any", "Await", "Bool", "Class", "Complex", "DeviceObj", "Dict", "Enum",
              "Float", "Future", "Int", "Interface", "List", "None", "Number",
              "Optional", "PyObject", "RRef", "StreamObj", "String", "SymBool",
              "SymInt", "Tensor", "Tuple", "Union")
 
 
-# **애초에 API 가 아닌 이름.** 밑줄 없이 공개돼 있을 뿐 부를 것이 아니다.
+# **Names that are not API to begin with.** Public only in having no underscore; not things to call.
 NOT_API = {
-    **{f"{d}Storage": "형별 Storage 클래스 — torch 가 폐기했다" for d in _OLD_STORAGE},
-    **{f"{d}Tensor": "형별 Tensor 클래스 — torch 가 폐기했다 (FloatTensor …)"
+    **{f"{d}Storage": "a per-type Storage class — torch deprecated it" for d in _OLD_STORAGE},
+    **{f"{d}Tensor": "a per-type Tensor class — torch deprecated it (FloatTensor …)"
        for d in _OLD_TENSOR},
-    **{f"{t}Type": "TorchScript 타입 체계 (AnyType·ListType·TensorType …)"
+    **{f"{t}Type": "the TorchScript type system (AnyType, ListType, TensorType …)"
        for t in _IR_TYPES},
-    "Type": "TorchScript 타입 체계",
-    # TorchScript 의 IR 과 타입 체계. `torch.jit` 이 쓰는 내부 물건이 최상위에도
-    # 이름을 냈다. `DELIBERATE` 의 "jit" 은 자리 이름에만 걸려서 여기까지 안 온다.
-    "AliasDb": "TorchScript IR 내부",
-    "Argument": "TorchScript IR 내부",
-    "ArgumentSpec": "TorchScript IR 내부",
-    "CompleteArgumentSpec": "TorchScript IR 내부",
-    "Block": "TorchScript IR 내부",
-    "CallStack": "TorchScript IR 내부",
-    "Capsule": "TorchScript IR 내부",
-    "Code": "TorchScript IR 내부",
-    "CompilationUnit": "TorchScript IR 내부",
-    "ConcreteModuleType": "TorchScript IR 내부",
-    "ConcreteModuleTypeBuilder": "TorchScript IR 내부",
-    "DeepCopyMemoTable": "TorchScript IR 내부",
-    "ErrorReport": "TorchScript IR 내부",
-    "ExecutionPlan": "TorchScript IR 내부",
-    "FileCheck": "TorchScript 테스트 도구",
-    "FunctionSchema": "TorchScript IR 내부",
-    "Gradient": "TorchScript IR 내부",
-    "Graph": "TorchScript IR 내부",
-    "GraphExecutorState": "TorchScript IR 내부",
-    "IODescriptor": "TorchScript IR 내부",
-    "InferredType": "TorchScript IR 내부",
-    "JITException": "TorchScript IR 내부",
-    "LiteScriptModule": "TorchScript IR 내부",
-    "LockingLogger": "TorchScript IR 내부",
-    "LoggerBase": "TorchScript IR 내부",
-    "NoopLogger": "TorchScript IR 내부",
-    "Node": "TorchScript IR 내부",
-    "OperatorInfo": "TorchScript IR 내부",
-    "PyTorchFileReader": "직렬화 내부",
-    "PyTorchFileWriter": "직렬화 내부",
-    "SerializationStorageContext": "직렬화 내부",
-    "DeserializationStorageContext": "직렬화 내부",
-    "StaticModule": "TorchScript IR 내부",
-    "Tag": "TorchScript IR 내부",
-    "TracingState": "TorchScript IR 내부",
-    "Use": "TorchScript IR 내부",
-    "Value": "TorchScript IR 내부",
-    "FatalError": "TorchScript IR 내부",
-    "AggregationType": "프로파일러 집계 종류 — 잴 프로파일러가 없다",
-    "Script*": "TorchScript 객체 (ScriptModule·ScriptFunction …)",
-    "import_ir_module": "TorchScript IR 내부",
-    "import_ir_module_from_buffer": "TorchScript IR 내부",
-    "merge_type_from_type_comment": "TorchScript IR 내부",
-    "parse_ir": "TorchScript IR 내부",
-    "parse_schema": "TorchScript IR 내부",
-    "parse_type_comment": "TorchScript IR 내부",
-    "unify_type_list": "TorchScript IR 내부",
-    "fork": "TorchScript 비동기 실행",
-    "wait": "TorchScript 비동기 실행",
-    "ThroughputBenchmark": "TorchScript 벤치 도구",
-    "BenchmarkConfig": "TorchScript 벤치 도구",
-    "BenchmarkExecutionStats": "TorchScript 벤치 도구",
+    "Type": "the TorchScript type system",
+    # TorchScript's IR and type system. Internal things `torch.jit` uses put names at the
+    # top level too. `DELIBERATE`'s "jit" matches only namespace names and does not reach here.
+    "AliasDb": "TorchScript IR internals",
+    "Argument": "TorchScript IR internals",
+    "ArgumentSpec": "TorchScript IR internals",
+    "CompleteArgumentSpec": "TorchScript IR internals",
+    "Block": "TorchScript IR internals",
+    "CallStack": "TorchScript IR internals",
+    "Capsule": "TorchScript IR internals",
+    "Code": "TorchScript IR internals",
+    "CompilationUnit": "TorchScript IR internals",
+    "ConcreteModuleType": "TorchScript IR internals",
+    "ConcreteModuleTypeBuilder": "TorchScript IR internals",
+    "DeepCopyMemoTable": "TorchScript IR internals",
+    "ErrorReport": "TorchScript IR internals",
+    "ExecutionPlan": "TorchScript IR internals",
+    "FileCheck": "a TorchScript testing tool",
+    "FunctionSchema": "TorchScript IR internals",
+    "Gradient": "TorchScript IR internals",
+    "Graph": "TorchScript IR internals",
+    "GraphExecutorState": "TorchScript IR internals",
+    "IODescriptor": "TorchScript IR internals",
+    "InferredType": "TorchScript IR internals",
+    "JITException": "TorchScript IR internals",
+    "LiteScriptModule": "TorchScript IR internals",
+    "LockingLogger": "TorchScript IR internals",
+    "LoggerBase": "TorchScript IR internals",
+    "NoopLogger": "TorchScript IR internals",
+    "Node": "TorchScript IR internals",
+    "OperatorInfo": "TorchScript IR internals",
+    "PyTorchFileReader": "serialisation internals",
+    "PyTorchFileWriter": "serialisation internals",
+    "SerializationStorageContext": "serialisation internals",
+    "DeserializationStorageContext": "serialisation internals",
+    "StaticModule": "TorchScript IR internals",
+    "Tag": "TorchScript IR internals",
+    "TracingState": "TorchScript IR internals",
+    "Use": "TorchScript IR internals",
+    "Value": "TorchScript IR internals",
+    "FatalError": "TorchScript IR internals",
+    "AggregationType": "a profiler aggregation kind — there is no profiler to measure with",
+    "Script*": "a TorchScript object (ScriptModule, ScriptFunction …)",
+    "import_ir_module": "TorchScript IR internals",
+    "import_ir_module_from_buffer": "TorchScript IR internals",
+    "merge_type_from_type_comment": "TorchScript IR internals",
+    "parse_ir": "TorchScript IR internals",
+    "parse_schema": "TorchScript IR internals",
+    "parse_type_comment": "TorchScript IR internals",
+    "unify_type_list": "TorchScript IR internals",
+    "fork": "TorchScript async execution",
+    "wait": "TorchScript async execution",
+    "ThroughputBenchmark": "a TorchScript benchmarking tool",
+    "BenchmarkConfig": "a TorchScript benchmarking tool",
+    "BenchmarkExecutionStats": "a TorchScript benchmarking tool",
 
-    # 형별 Storage·Tensor 클래스. torch 가 스스로 버린 것들이다 —
-    # `torch.FloatTensor(...)` 는 지금 쓰면 경고가 난다.
+    # The per-type Storage and Tensor classes. torch threw them away itself —
+    # `torch.FloatTensor(...)` warns if used today.
     #
-    # **`"*Tensor"` 로 적으면 안 된다.** 그렇게 두었더니 `torch.Tensor` 자체를
-    # 삼켰다 — 이 라이브러리의 한복판인 이름이다. `test_gap.py` 가 잡았다.
-    # 꼬리 와일드카드는 진짜 이름을 삼키는 쪽으로만 빗나가므로 안 쓴다.
-    "Storage": "형별 Storage 클래스 — torch 가 폐기했다",
-    "StorageBase": "형별 Storage 클래스 — torch 가 폐기했다",
-    "TypedStorage": "형별 Storage 클래스 — torch 가 폐기했다",
-    "UntypedStorage": "형별 Storage 클래스 — torch 가 폐기했다",
-    "set_default_tensor_type": "형별 Tensor 클래스와 함께 폐기됐다",
+    # **It must not be written as `"*Tensor"`.** Written that way it swallowed
+    # `torch.Tensor` itself — the name at the centre of this library. `test_gap.py` caught
+    # it. A suffix wildcard only ever misses in the direction of swallowing real names, so
+    # it is not used.
+    "Storage": "a per-type Storage class — torch deprecated it",
+    "StorageBase": "a per-type Storage class — torch deprecated it",
+    "TypedStorage": "a per-type Storage class — torch deprecated it",
+    "UntypedStorage": "a per-type Storage class — torch deprecated it",
+    "set_default_tensor_type": "deprecated along with the per-type Tensor classes",
 
-    # 디스패처 내부. 연산을 어느 백엔드로 보낼지 고르는 자리이고,
-    # 우리에게는 고를 백엔드가 없다.
-    "DispatchKey": "디스패처 내부",
-    "DispatchKeySet": "디스패처 내부",
-    "ExcludeDispatchKeyGuard": "디스패처 내부",
-    "DisableTorchFunction": "디스패처 내부",
-    "DisableTorchFunctionSubclass": "디스패처 내부",
-    "boolean_dispatch": "디스패처 내부",
-    "handle_torch_function": "디스패처 내부",
-    "has_torch_function": "디스패처 내부",
-    "has_torch_function_unary": "디스패처 내부",
-    "has_torch_function_variadic": "디스패처 내부",
-    "assert_int_or_pair": "인자 검사 도구 — F 안에서만 쓴다",
-    "factory_kwargs": "층이 device·dtype 를 넘길 때 쓰는 내부 도구",
-    "swap_in_optimizer_params_and_state": "옵티마이저 내부 도구",
-    "argument_validation": "DataPipe 내부 도구",
-    "functional_datapipe": "DataPipe 내부 도구",
-    "classproperty": "파이썬 도우미 — 연산이 아니다",
+    # Dispatcher internals. The place that chooses which backend an operation goes to, and
+    # we have no backend to choose.
+    "DispatchKey": "dispatcher internals",
+    "DispatchKeySet": "dispatcher internals",
+    "ExcludeDispatchKeyGuard": "dispatcher internals",
+    "DisableTorchFunction": "dispatcher internals",
+    "DisableTorchFunctionSubclass": "dispatcher internals",
+    "boolean_dispatch": "dispatcher internals",
+    "handle_torch_function": "dispatcher internals",
+    "has_torch_function": "dispatcher internals",
+    "has_torch_function_unary": "dispatcher internals",
+    "has_torch_function_variadic": "dispatcher internals",
+    "assert_int_or_pair": "an argument-checking tool — used only inside F",
+    "factory_kwargs": "an internal tool layers use to pass device and dtype along",
+    "swap_in_optimizer_params_and_state": "an optimizer internal tool",
+    "argument_validation": "a DataPipe internal tool",
+    "functional_datapipe": "a DataPipe internal tool",
+    "classproperty": "a Python helper — not an operation",
 
-    # 다른 자리에서 들어온 이름표. **자리를 붙여 적는다** — 이름만 적었더니
-    # `"Optimizer"` 가 `torch.optim.Optimizer`(진짜 API 이고 우리가 만들었다)까지
-    # 삼켰고 `"Tensor"` 가 `torch.Tensor` 를 삼켰다. `test_gap.py` 가 잡았다.
-    "nn.functional.Tensor": "들여온 이름표 — F 의 API 가 아니다",
-    "optim.lr_scheduler.Tensor": "들여온 이름표 — 그 자리의 API 가 아니다",
-    "optim.lr_scheduler.Optimizer": "들여온 이름표 — 그 자리의 API 가 아니다",
-    "ScalingType": "들여온 이름표 — fp8 스케일링 종류",
-    "SwizzleType": "들여온 이름표 — fp8 배치 종류",
+    # Labels imported from elsewhere. **Written with their namespace attached** — written as
+    # bare names, `"Optimizer"` swallowed `torch.optim.Optimizer` (real API, and we built
+    # it) and `"Tensor"` swallowed `torch.Tensor`. `test_gap.py` caught it.
+    "nn.functional.Tensor": "an imported label — not F's API",
+    "optim.lr_scheduler.Tensor": "an imported label — not that namespace's API",
+    "optim.lr_scheduler.Optimizer": "an imported label — not that namespace's API",
+    "ScalingType": "an imported label — an fp8 scaling kind",
+    "SwizzleType": "an imported label — an fp8 layout kind",
 
-    # 함수화(functionalization) 패스가 쓰는 변종. 사용자가 부르는 이름이 아니다 —
-    # 같은 일을 하는 진짜 이름이 따로 있다(`view_copy` 옆에 `view`).
+    # The variants the functionalisation pass uses. Not names a user calls — a real name
+    # doing the same work sits beside each (`view` next to `view_copy`).
     #
-    # **`"*_copy"` 로 적으면 안 된다.** 그렇게 두었더니 `index_copy` 를 삼켰는데
-    # 그것은 함수화 변종이 아니라 진짜 연산이고 우리가 이미 만들어 두었다. 목록이
-    # 길어도 손으로 적는다 — 여기서 넓은 그물은 우리에게 유리한 쪽으로만 빗나간다.
-    "alias_copy": "함수화 패스용 변종 — 진짜 이름은 `alias` 다",
-    "as_strided_copy": "함수화 패스용 변종 — 진짜 이름은 `as_strided` 다",
-    "ccol_indices_copy": "함수화 패스용 변종 (희소 레이아웃)",
-    "col_indices_copy": "함수화 패스용 변종 (희소 레이아웃)",
-    "crow_indices_copy": "함수화 패스용 변종 (희소 레이아웃)",
-    "row_indices_copy": "함수화 패스용 변종 (희소 레이아웃)",
-    "indices_copy": "함수화 패스용 변종 (희소 레이아웃)",
-    "values_copy": "함수화 패스용 변종 (희소 레이아웃)",
-    "detach_copy": "함수화 패스용 변종 — 진짜 이름은 `detach` 다",
-    "diagonal_copy": "함수화 패스용 변종 — 진짜 이름은 `diagonal` 다",
-    "expand_copy": "함수화 패스용 변종 — 진짜 이름은 `expand` 다",
-    "narrow_copy": "함수화 패스용 변종 — 진짜 이름은 `narrow` 다",
-    "permute_copy": "함수화 패스용 변종 — 진짜 이름은 `permute` 다",
-    "select_copy": "함수화 패스용 변종 — 진짜 이름은 `select` 다",
-    "slice_copy": "함수화 패스용 변종 — 진짜 이름은 자르기다",
-    "split_copy": "함수화 패스용 변종 — 진짜 이름은 `split` 이다",
-    "split_with_sizes_copy": "함수화 패스용 변종 — 진짜 이름은 `split` 이다",
-    "squeeze_copy": "함수화 패스용 변종 — 진짜 이름은 `squeeze` 다",
-    "t_copy": "함수화 패스용 변종 — 진짜 이름은 `t` 다",
-    "transpose_copy": "함수화 패스용 변종 — 진짜 이름은 `transpose` 다",
-    "unbind_copy": "함수화 패스용 변종 — 진짜 이름은 `unbind` 다",
-    "unfold_copy": "함수화 패스용 변종 — 진짜 이름은 `unfold` 다",
-    "unsqueeze_copy": "함수화 패스용 변종 — 진짜 이름은 `unsqueeze` 다",
-    "view_copy": "함수화 패스용 변종 — 진짜 이름은 `view` 다",
-    "view_as_real_copy": "함수화 패스용 변종 (복소수)",
-    "view_as_complex_copy": "함수화 패스용 변종 (복소수)",
-    "unsafe_chunk": "함수화 패스용 변종 — 진짜 이름은 `chunk` 다",
-    "unsafe_split": "함수화 패스용 변종 — 진짜 이름은 `split` 이다",
-    "unsafe_split_with_sizes": "함수화 패스용 변종 — 진짜 이름은 `split` 이다",
-    "slice_inverse": "함수화 패스용 변종 — 되돌리기용 내부 연산",
+    # **It must not be written as `"*_copy"`.** Written that way it swallowed `index_copy`,
+    # which is not a functionalisation variant but a real operation we had already built.
+    # Long as the list is, it is written by hand — a wide net here only ever misses in our
+    # favour.
+    "alias_copy": "a functionalisation-pass variant — the real name is `alias`",
+    "as_strided_copy": "a functionalisation-pass variant — the real name is `as_strided`",
+    "ccol_indices_copy": "a functionalisation-pass variant (sparse layout)",
+    "col_indices_copy": "a functionalisation-pass variant (sparse layout)",
+    "crow_indices_copy": "a functionalisation-pass variant (sparse layout)",
+    "row_indices_copy": "a functionalisation-pass variant (sparse layout)",
+    "indices_copy": "a functionalisation-pass variant (sparse layout)",
+    "values_copy": "a functionalisation-pass variant (sparse layout)",
+    "detach_copy": "a functionalisation-pass variant — the real name is `detach`",
+    "diagonal_copy": "a functionalisation-pass variant — the real name is `diagonal`",
+    "expand_copy": "a functionalisation-pass variant — the real name is `expand`",
+    "narrow_copy": "a functionalisation-pass variant — the real name is `narrow`",
+    "permute_copy": "a functionalisation-pass variant — the real name is `permute`",
+    "select_copy": "a functionalisation-pass variant — the real name is `select`",
+    "slice_copy": "a functionalisation-pass variant — the real name is slicing",
+    "split_copy": "a functionalisation-pass variant — the real name is `split`",
+    "split_with_sizes_copy": "a functionalisation-pass variant — the real name is `split`",
+    "squeeze_copy": "a functionalisation-pass variant — the real name is `squeeze`",
+    "t_copy": "a functionalisation-pass variant — the real name is `t`",
+    "transpose_copy": "a functionalisation-pass variant — the real name is `transpose`",
+    "unbind_copy": "a functionalisation-pass variant — the real name is `unbind`",
+    "unfold_copy": "a functionalisation-pass variant — the real name is `unfold`",
+    "unsqueeze_copy": "a functionalisation-pass variant — the real name is `unsqueeze`",
+    "view_copy": "a functionalisation-pass variant — the real name is `view`",
+    "view_as_real_copy": "a functionalisation-pass variant (complex)",
+    "view_as_complex_copy": "a functionalisation-pass variant (complex)",
+    "unsafe_chunk": "a functionalisation-pass variant — the real name is `chunk`",
+    "unsafe_split": "a functionalisation-pass variant — the real name is `split`",
+    "unsafe_split_with_sizes": "a functionalisation-pass variant — the real name is `split`",
+    "slice_inverse": "a functionalisation-pass variant — an internal op for undoing",
 
-    # ATen 의 밑단 진입점. 위에 사용자가 부르는 이름이 따로 있다
-    # (`native_layer_norm` 위에 `layer_norm`).
-    "native_*": "ATen 밑단 진입점 — 위에 부르는 이름이 따로 있다",
-    "batch_norm_*": "ATen 밑단 진입점 (통계 조각·역방향 조각)",
-    "affine_grid_generator": "ATen 밑단 진입점 — 위가 `affine_grid` 다",
-    "grid_sampler_2d": "ATen 밑단 진입점 — 위가 `grid_sample` 이다",
-    "grid_sampler_3d": "ATen 밑단 진입점 — 위가 `grid_sample` 이다",
-    "norm_except_dim": "ATen 밑단 진입점 — `weight_norm` 이 쓴다",
-    "embedding_renorm_": "ATen 밑단 진입점 — `Embedding(max_norm=)` 이 쓴다",
-    "convolution": "ATen 밑단 진입점 — 위가 `conv1d/2d/3d` 다",
-    "init_num_threads": "런타임 내부",
-    "thread_safe_generator": "런타임 내부",
-    "get_file_path": "런타임 내부",
-    "sym_fresh_size": "심볼 크기 내부",
+    # ATen's lower entry points. A name the user calls sits above each
+    # (`layer_norm` above `native_layer_norm`).
+    "native_*": "a lower ATen entry point — a name to call sits above it",
+    "batch_norm_*": "a lower ATen entry point (statistics and backward pieces)",
+    "affine_grid_generator": "a lower ATen entry point — `affine_grid` sits above it",
+    "grid_sampler_2d": "a lower ATen entry point — `grid_sample` sits above it",
+    "grid_sampler_3d": "a lower ATen entry point — `grid_sample` sits above it",
+    "norm_except_dim": "a lower ATen entry point — `weight_norm` uses it",
+    "embedding_renorm_": "a lower ATen entry point — `Embedding(max_norm=)` uses it",
+    "convolution": "a lower ATen entry point — `conv1d/2d/3d` sit above it",
+    "init_num_threads": "runtime internals",
+    "thread_safe_generator": "runtime internals",
+    "get_file_path": "runtime internals",
+    "sym_fresh_size": "symbolic-size internals",
 }
 
-# **진짜 API 인데 안 한다.** 여기 적힌 것은 결함이 아니라 판단이다.
+# **Real API, and declined.** What is written here is a judgement, not a defect.
 SKIPPED = {
-    # 장치·정밀도.
+    # Devices and precision.
     #
-    # **"GPU 가 f32 하나뿐" 이라고 적혀 있었는데 그건 하드웨어 이야기가 아니다.**
-    # WebGPU 에는 `shader-f16` 이 있고 이 기계(Apple metal-3)에도 있다(실측). 없는
-    # 것은 하드웨어가 아니라 **우리 셰이더가 f32 만 쓴다는 우리 결정**이다. 못 하는
-    # 것과 안 하는 것을 같은 문장으로 적으면 다음 사람이 검토를 멈춘다.
+    # **This read "the GPU has f32 and nothing else", which is not a fact about hardware.**
+    # WebGPU has `shader-f16` and so does this machine (Apple metal-3, measured). What is
+    # absent is not the hardware but **our decision that our shaders use f32 only.** Writing
+    # cannot and will-not in the same sentence stops the next person reviewing it.
     #
-    # 반정밀을 **안 하기로 한 까닭**(재고 정한 것):
+    # **Why half precision is declined** (decided after measuring):
     #
-    # - `shader-f16` 은 **선택 기능**이다. 있는 기기와 없는 기기가 갈리므로, 열면
-    #   같은 프로그램이 기계마다 다른 답을 낸다 — 골든이 굳힐 답이 없어진다.
-    #   `float64` 와 다른 자리다. 그쪽은 **언제나** 없어서 갈림을 답으로 굳혔다.
-    # - float32 로 흉내 내는 것은 안 된다. 반정밀의 교훈은 **넘침과 반올림**인데
-    #   (65600 → inf, 1+0.0005 → 1), f32 로 세면 둘 다 안 일어난다.
-    # - `bfloat16` 은 numpy 에도 WGSL 에도 **밑바탕이 없다.** 소프트웨어로 흉내 내면
-    #   속도는 f32 이고 정밀도만 나쁜 물건이 된다 — 배울 것이 없다.
+    # - `shader-f16` is an **optional feature.** Machines that have it and machines that do
+    #   not diverge, so opening it makes the same program answer differently per machine —
+    #   and the golden cases lose an answer to freeze. `float64` is a different place: it is
+    #   **always** absent, so the divergence itself was frozen as the answer.
+    # - Imitating it in float32 does not work. Half precision's lesson is **overflow and
+    #   rounding** (65600 → inf, 1+0.0005 → 1), and counted in f32 neither happens.
+    # - `bfloat16` has **no substrate** in numpy or in WGSL. Imitated in software it becomes
+    #   a thing with f32's speed and worse precision — there is nothing to learn from it.
     #
-    # **되돌릴 수 있는 쪽으로 골랐다.** 나중에 붙이는 것은 더하기이고, 붙였다가
-    # 빼는 것은 남의 코드를 깨는 일이다. 붙일 때 다시 재야 할 것은 위의 첫 줄이다 —
-    # `shader-f16` 이 사실상 어디에나 있게 되었는가.
-    "autocast": "혼합정밀 — 우리 셰이더가 f32 만 쓴다(하드웨어가 아니라 결정)",
-    "autocast_*": "혼합정밀 — 위와 같다",
-    "clear_autocast_cache": "혼합정밀 — 위와 같다",
-    "get_autocast_*": "혼합정밀 — 위와 같다",
-    "set_autocast_*": "혼합정밀 — 위와 같다",
-    "is_autocast_*": "혼합정밀 — 위와 같다",
-    "GradScaler": "혼합정밀의 손실 스케일 — 위와 같다",
-    "get_num_threads": "탭 하나 안이라 고를 스레드 수가 없다",
-    "set_num_threads": "탭 하나 안이라 고를 스레드 수가 없다",
-    "get_num_interop_threads": "탭 하나 안이다",
-    "set_num_interop_threads": "탭 하나 안이다",
-    "Stream": "장치 스트림 — 하나뿐이다",
-    "Event": "장치 이벤트 — 잴 스트림이 하나다",
-    "get_device_module": "장치가 하나다",
-    "get_default_device": "장치가 하나다",
-    "set_default_device": "장치가 하나다",
-    "is_vulkan_available": "브라우저에서 고를 백엔드가 아니다",
-    "cudnn_is_acceptable": "cuDNN 이 없다",
-    "AcceleratorError": "가속기가 하나다",
-    "OutOfMemoryError": "장치 메모리 오류를 우리가 구분해 내지 않는다",
-    "DataParallel": "여러 장치용 — 탭 하나 안이다",
-    "SyncBatchNorm": "분산 학습용 — 탭 하나 안이다",
-    "DistributedSampler": "분산 학습용 — 탭 하나 안이다",
+    # **Chosen in the reversible direction.** Adding it later is an addition; adding and
+    # then removing it breaks someone else's code. What has to be measured again when it is
+    # added is the first line above — whether `shader-f16` has become effectively
+    # universal.
+    "autocast": "mixed precision — our shaders use f32 only (a decision, not the hardware)",
+    "autocast_*": "mixed precision — as above",
+    "clear_autocast_cache": "mixed precision — as above",
+    "get_autocast_*": "mixed precision — as above",
+    "set_autocast_*": "mixed precision — as above",
+    "is_autocast_*": "mixed precision — as above",
+    "GradScaler": "mixed precision's loss scaling — as above",
+    "get_num_threads": "inside one tab there is no thread count to choose",
+    "set_num_threads": "inside one tab there is no thread count to choose",
+    "get_num_interop_threads": "it is inside one tab",
+    "set_num_interop_threads": "it is inside one tab",
+    "Stream": "device streams — there is one",
+    "Event": "device events — there is one stream to measure",
+    "get_device_module": "there is one device",
+    "get_default_device": "there is one device",
+    "set_default_device": "there is one device",
+    "is_vulkan_available": "not a backend a browser chooses",
+    "cudnn_is_acceptable": "there is no cuDNN",
+    "AcceleratorError": "there is one accelerator",
+    "OutOfMemoryError": "we do not separate out device memory errors",
+    "DataParallel": "for several devices — this is one tab",
+    "SyncBatchNorm": "for distributed training — this is inside one tab",
+    "DistributedSampler": "for distributed training — this is inside one tab",
 
-    # 벤더 커널. 그 하드웨어가 있어야 뜻이 있다.
-    "cudnn_*": "NVIDIA 커널 — 브라우저에 없다",
-    "miopen_*": "AMD 커널 — 브라우저에 없다",
-    "mkldnn_*": "Intel 커널 — 브라우저에 없다",
-    "fbgemm_*": "양자화 GEMM 커널 — 실제 하드웨어 위에서만 뜻이 있다",
-    "q_per_channel_axis": "양자화된 텐서의 눈금 — 그 dtype 이 없다",
-    "q_per_channel_scales": "양자화된 텐서의 눈금 — 그 dtype 이 없다",
-    "q_per_channel_zero_points": "양자화된 텐서의 눈금 — 그 dtype 이 없다",
-    "q_scale": "양자화된 텐서의 눈금 — 그 dtype 이 없다",
-    "q_zero_point": "양자화된 텐서의 눈금 — 그 dtype 이 없다",
-    "qscheme": "양자화 방식 — 그 dtype 이 없다",
-    "int_repr": "양자화된 텐서의 정수 표현 — 그 dtype 이 없다",
-    "choose_qparams_optimized": "양자화 눈금 고르기 — 실 하드웨어 위에서만 뜻이 있다",
-    "fused_moving_avg_obs_fake_quant": "양자화 관찰자 — 실 하드웨어 위에서만 뜻이 있다",
+    # Vendor kernels. They mean something only where that hardware is.
+    "cudnn_*": "an NVIDIA kernel — not in a browser",
+    "miopen_*": "an AMD kernel — not in a browser",
+    "mkldnn_*": "an Intel kernel — not in a browser",
+    "fbgemm_*": "a quantised GEMM kernel — it means something only on real hardware",
+    "q_per_channel_axis": "a quantised tensor's scale — that dtype does not exist here",
+    "q_per_channel_scales": "a quantised tensor's scale — that dtype does not exist here",
+    "q_per_channel_zero_points": "a quantised tensor's scale — that dtype does not exist here",
+    "q_scale": "a quantised tensor's scale — that dtype does not exist here",
+    "q_zero_point": "a quantised tensor's scale — that dtype does not exist here",
+    "qscheme": "a quantisation scheme — that dtype does not exist here",
+    "int_repr": "a quantised tensor's integer representation — that dtype does not exist here",
+    "choose_qparams_optimized": "choosing a quantisation scale — it means something only on real hardware",
+    "fused_moving_avg_obs_fake_quant": "a quantisation observer — it means something only on real hardware",
 
-    # 희소 텐서. `DELIBERATE` 의 "sparse" 는 자리 이름에만 걸린다.
-    "smm": "희소 행렬곱 — 커리큘럼 밖",
-    "spmm": "희소 행렬곱 — 커리큘럼 밖",
-    "hsmm": "희소 행렬곱 — 커리큘럼 밖",
-    "dsmm": "희소 행렬곱 — 커리큘럼 밖",
-    "hspmm": "희소 행렬곱 — 커리큘럼 밖",
-    "saddmm": "희소 행렬곱 — 커리큘럼 밖",
-    "sspaddmm": "희소 행렬곱 — 커리큘럼 밖",
-    "segment_reduce": "희소·불규칙 묶음용 — 커리큘럼 밖",
-    "resize_as_sparse_": "희소 텐서 전용 — 위와 같다",
-    # **이름만 보면 `nn.ParameterDict` 의 짝 같은데 아니다.** 재보니 생성자가
-    # `torch._C.ScriptModule` 하나만 받고 `nn` 아래에는 없다 — TorchScript 내부다.
-    # 사전처럼 쓰려고 만들면 이름은 같고 물건이 다른 것을 주게 된다.
-    "BufferDict": "TorchScript 내부 — 생성자가 ScriptModule 을 받는다",
-    # **torch 자신이 못 만든다.** 실수 텐서로 부르면 `NotImplementedError` 다(실측) —
-    # 양자화 dtype 이 있어야 자리가 잡힌다. 우리가 인색해서 없는 것이 아니다.
-    "empty_quantized": "양자화된 빈 텐서 — torch 도 그 dtype 없이는 못 만든다",
+    # Sparse tensors. `DELIBERATE`'s "sparse" matches namespace names only.
+    "smm": "sparse matrix products — outside the curriculum",
+    "spmm": "sparse matrix products — outside the curriculum",
+    "hsmm": "sparse matrix products — outside the curriculum",
+    "dsmm": "sparse matrix products — outside the curriculum",
+    "hspmm": "sparse matrix products — outside the curriculum",
+    "saddmm": "sparse matrix products — outside the curriculum",
+    "sspaddmm": "sparse matrix products — outside the curriculum",
+    "segment_reduce": "for sparse and ragged bundles — outside the curriculum",
+    "resize_as_sparse_": "sparse tensors only — as above",
+    # **By its name it looks like `nn.ParameterDict`'s counterpart, and it is not.**
+    # Measured, its constructor takes a single `torch._C.ScriptModule` and it does not live
+    # under `nn` — it is TorchScript internals. Built as a dictionary, it would hand over
+    # something with the same name and a different nature.
+    "BufferDict": "TorchScript internals — the constructor takes a ScriptModule",
+    # **torch itself cannot make one.** Called with a float tensor it raises
+    # `NotImplementedError` (measured) — it needs a quantised dtype to stand on. Its absence
+    # here is not us being stingy.
+    "empty_quantized": "an empty quantised tensor — torch cannot make one without that dtype either",
 
-    # 고를 것이 하나뿐인 자리. **이름을 두면 고를 수 있는 것처럼 보인다.**
+    # Places with one thing to choose. **Keeping the name makes it look choosable.**
     #
-    # `layout` 과 `memory_format` 은 형(type)이고, 그 형의 값이 각각 `strided` 와
-    # `contiguous_format` 하나씩이다. 하나뿐인 값을 고르는 인자를 두면 "고르면
-    # 달라지는구나" 를 가르치게 되는데, 여기서는 안 달라진다.
-    "layout": "고를 배치가 `strided` 하나뿐이다",
-    "memory_format": "고를 배치가 `contiguous_format` 하나뿐이다",
-    "prepare_multiprocessing_environment": "탭 하나 안에 프로세스가 없다",
-    # **torch 자신이 촘촘한 기울기를 거절한다** — 실측한 문구가
-    # "SparseAdam does not support dense gradients, please consider Adam instead" 다.
-    # 여기 희소 텐서가 없으므로 이 옵티마이저가 받을 수 있는 입력이 하나도 없다.
-    # 만들어 두면 언제나 거절만 하는 물건이 되고, 그것은 있다고 세는 것보다 나쁘다.
-    "SparseAdam": "희소 기울기 전용 — 촘촘한 기울기는 torch 도 거절한다",
+    # `layout` and `memory_format` are types, and each has exactly one value — `strided`
+    # and `contiguous_format`. An argument choosing among one value teaches that choosing
+    # changes something, and here it does not.
+    "layout": "`strided` is the only layout to choose",
+    "memory_format": "`contiguous_format` is the only layout to choose",
+    "prepare_multiprocessing_environment": "inside one tab there are no processes",
+    # **torch itself refuses a dense gradient** — the measured wording is
+    # "SparseAdam does not support dense gradients, please consider Adam instead". With no
+    # sparse tensors here, there is no input this optimizer could accept. Built, it would be
+    # a thing that only ever refuses, which is worse than counting it as present.
+    "SparseAdam": "sparse gradients only — torch refuses a dense one too",
 
-    # 복소수. 우리 dtype 은 float32·int64·bool 셋이다.
-    "imag": "복소수 dtype 이 없다",
-    "view_as_real": "복소수 dtype 이 없다",
+    # Complex. Our dtypes are three: float32, int64 and bool.
+    "imag": "there is no complex dtype here",
+    "view_as_real": "there is no complex dtype here",
 
-    # 심볼 크기와 그래프 캡처. `DELIBERATE` 의 compile·export 와 같은 이유인데
-    # 이름이 그 자리에 안 걸린다.
-    "Sym*": "심볼 크기 — 그래프 캡처용, wasm 에 못 얹는다",
-    "sym_*": "심볼 크기 — 위와 같다",
-    "cond": "제어 흐름 캡처 연산 — export 용이다",
-    "while_loop": "제어 흐름 캡처 연산 — export 용이다",
-    "vmap": "functorch 의 자동 배치 — 커리큘럼 밖",
+    # Symbolic sizes and graph capture. The same reason as `DELIBERATE`'s compile and
+    # export, but the names do not match there.
+    "Sym*": "symbolic sizes — for graph capture, and they do not sit on wasm",
+    "sym_*": "symbolic sizes — as above",
+    "cond": "a control-flow capture op — it is for export",
+    "while_loop": "a control-flow capture op — it is for export",
+    "vmap": "functorch's auto-batching — outside the curriculum",
 
-    # 밖과 주고받기. 브라우저 안에는 넘겨줄 상대가 없다.
-    "from_dlpack": "DLPack 교환 — 브라우저 안에 상대가 없다",
-    "to_dlpack": "DLPack 교환 — 위와 같다",
-    "from_file": "파일 매핑 — 브라우저에 그 파일 계층이 없다",
+    # Exchange with the outside. Inside a browser there is nobody to hand to.
+    "from_dlpack": "DLPack exchange — there is nobody to exchange with inside a browser",
+    "to_dlpack": "DLPack exchange — as above",
+    "from_file": "file mapping — a browser has no such file layer",
 
-    # 디버그 스위치. 우리에게는 켤 비결정성도 이상 검출기도 없다.
-    "use_deterministic_algorithms": "고를 비결정 커널이 없다",
-    "are_deterministic_algorithms_enabled": "위와 같다",
-    "is_deterministic_algorithms_warn_only_enabled": "위와 같다",
-    "get_deterministic_debug_mode": "위와 같다",
-    "set_deterministic_debug_mode": "위와 같다",
-    "is_anomaly_enabled": "이상 검출기가 없다",
-    "set_anomaly_enabled": "이상 검출기가 없다",
-    "is_anomaly_check_nan_enabled": "이상 검출기가 없다",
-    "set_warn_always": "경고 정책 스위치 — 커리큘럼 밖",
-    "is_warn_always_enabled": "경고 정책 스위치 — 커리큘럼 밖",
-    "set_flush_denormal": "비정규수 처리 스위치 — WGSL 이 안 내준다",
-    "get_float32_matmul_precision": "TF32 스위치 — 그 하드웨어가 없다",
-    "set_float32_matmul_precision": "TF32 스위치 — 그 하드웨어가 없다",
+    # Debug switches. We have neither nondeterminism to turn on nor an anomaly detector.
+    "use_deterministic_algorithms": "there is no nondeterministic kernel to choose",
+    "are_deterministic_algorithms_enabled": "as above",
+    "is_deterministic_algorithms_warn_only_enabled": "as above",
+    "get_deterministic_debug_mode": "as above",
+    "set_deterministic_debug_mode": "as above",
+    "is_anomaly_enabled": "there is no anomaly detector",
+    "set_anomaly_enabled": "there is no anomaly detector",
+    "is_anomaly_check_nan_enabled": "there is no anomaly detector",
+    "set_warn_always": "a warning-policy switch — outside the curriculum",
+    "is_warn_always_enabled": "a warning-policy switch — outside the curriculum",
+    "set_flush_denormal": "a subnormal-handling switch — WGSL does not offer it",
+    "get_float32_matmul_precision": "a TF32 switch — that hardware is not here",
+    "set_float32_matmul_precision": "a TF32 switch — that hardware is not here",
 
-    # torch 가 스스로 폐기했거나 접은 것.
-    "symeig": "torch 가 폐기했다 — `eigh` 로 대체됐다",
-    "frobenius_norm": "torch 가 폐기했다 — `linalg.matrix_norm` 으로 대체됐다",
-    "nuclear_norm": "torch 가 폐기했다 — `linalg.matrix_norm(ord='nuc')` 이다",
-    "range": "torch 가 폐기했다 — `arange` 를 쓴다",
-    "Container": "torch 가 폐기했다 — `Sequential` 로 대체됐다",
-    "NLLLoss2d": "torch 가 폐기했다 — `NLLLoss` 가 그 모양을 받는다",
-    "CrossMapLRN2d": "옛 층 — `LocalResponseNorm` 이 그 자리다",
-    "IterDataPipe": "torch 가 접은 DataPipes 실험",
-    "MapDataPipe": "torch 가 접은 DataPipes 실험",
-    "DFIterDataPipe": "torch 가 접은 DataPipes 실험",
-    "DataChunk": "torch 가 접은 DataPipes 실험",
-    "guaranteed_datapipes_determinism": "torch 가 접은 DataPipes 실험",
-    "non_deterministic": "torch 가 접은 DataPipes 실험",
-    "runtime_validation": "torch 가 접은 DataPipes 실험",
-    "runtime_validation_disabled": "torch 가 접은 DataPipes 실험",
-    "Future": "TorchScript 비동기 실행의 약속 — 탭 하나 안이다",
-    "conv_tbc": "옛 레이아웃(시간-배치-채널) 합성곱 — 부르는 코드가 없다",
+    # Things torch deprecated or folded itself.
+    "symeig": "torch deprecated it — `eigh` replaced it",
+    "frobenius_norm": "torch deprecated it — `linalg.matrix_norm` replaced it",
+    "nuclear_norm": "torch deprecated it — it is `linalg.matrix_norm(ord='nuc')`",
+    "range": "torch deprecated it — use `arange`",
+    "Container": "torch deprecated it — `Sequential` replaced it",
+    "NLLLoss2d": "torch deprecated it — `NLLLoss` takes that shape",
+    "CrossMapLRN2d": "an old layer — `LocalResponseNorm` stands there now",
+    "IterDataPipe": "torch's folded DataPipes experiment",
+    "MapDataPipe": "torch's folded DataPipes experiment",
+    "DFIterDataPipe": "torch's folded DataPipes experiment",
+    "DataChunk": "torch's folded DataPipes experiment",
+    "guaranteed_datapipes_determinism": "torch's folded DataPipes experiment",
+    "non_deterministic": "torch's folded DataPipes experiment",
+    "runtime_validation": "torch's folded DataPipes experiment",
+    "runtime_validation_disabled": "torch's folded DataPipes experiment",
+    "Future": "a TorchScript async promise — this is one tab",
+    "conv_tbc": "an old-layout (time-batch-channel) convolution — no code calls it",
 
-    # **최상위의 날 ATen 손실들.** 이름은 `F` 와 같은데 **같은 함수가 아니다** —
-    # 기본 reduction 이 `none` 이고 `reduction` 이 문자열이 아니라 정수다(0·1·2).
-    # `torch.kl_div(a, b)` 는 `[2,2]` 를 내고 `F.kl_div(a, b)` 는 스칼라를 낸다.
+    # **The raw ATen losses at the top level.** They share `F`'s names and **are not the
+    # same functions** — their default reduction is `none` and `reduction` is an integer
+    # rather than a string (0, 1, 2). `torch.kl_div(a, b)` gives `[2,2]` and
+    # `F.kl_div(a, b)` gives a scalar.
     #
-    # 그래서 `F` 의 것을 최상위에 별명으로 걸면 **모양부터 갈린다.** 튜토리얼이
-    # 부르는 것은 `F` 쪽이고, 이쪽은 ATen 이 이름을 낸 것뿐이다. 재서 확인했다 —
-    # 같은 함수인 것은 `pairwise_distance` 와 `pdist` 둘뿐이고 그 둘은 냈다.
-    # **자리를 붙여 적는다.** 이름만 적으면 `F` 쪽 같은 이름까지 삼킨다 — `F.kl_div`
-    # 는 우리가 만들었고 `F.ctc_loss` 는 진짜 빈자리다.
+    # So aliasing `F`'s version at the top level **diverges at the shape.** What the
+    # tutorials call is `F`'s, and this side is only ATen having put a name out. Measured:
+    # the only two that are the same function are `pairwise_distance` and `pdist`, and both
+    # are offered. **Written with the namespace attached** — as bare names they would
+    # swallow `F`'s identically named ones, and `F.kl_div` we built while `F.ctc_loss` is a
+    # real gap.
     "torch.binary_cross_entropy_with_logits":
-        "최상위는 날 ATen 연산 — 기본 reduction 이 none 이고 인자가 정수다",
-    "torch.cosine_embedding_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
-    "torch.hinge_embedding_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
-    "torch.kl_div": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
-    "torch.margin_ranking_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
-    "torch.poisson_nll_loss": "최상위는 날 ATen 연산 — 기본값이 아예 없다",
-    "torch.triplet_margin_loss": "최상위는 날 ATen 연산 — F 쪽과 서명이 다르다",
+        "the top-level one is the raw ATen op — its default reduction is none and its argument is an integer",
+    "torch.cosine_embedding_loss": "the top-level one is the raw ATen op — its signature differs from F's",
+    "torch.hinge_embedding_loss": "the top-level one is the raw ATen op — its signature differs from F's",
+    "torch.kl_div": "the top-level one is the raw ATen op — its signature differs from F's",
+    "torch.margin_ranking_loss": "the top-level one is the raw ATen op — its signature differs from F's",
+    "torch.poisson_nll_loss": "the top-level one is the raw ATen op — it has no defaults at all",
+    "torch.triplet_margin_loss": "the top-level one is the raw ATen op — its signature differs from F's",
 
-    # 아직 안 굳은 것.
-    "LinearCrossEntropyLoss": "torch 에 갓 들어온 것 — 굳으면 본다",
-    "LinearCrossEntropyOptions": "위와 같다",
-    "linear_cross_entropy": "위 층의 함수 짝 — 같이 굳으면 같이 본다",
-    "Muon": "torch 에 갓 들어온 옵티마이저 — 굳으면 본다",
-    "grouped_mm": "fp8·묶음 GEMM — 그 하드웨어가 없다",
-    "scaled_grouped_mm": "fp8·묶음 GEMM — 그 하드웨어가 없다",
-    "scaled_mm": "fp8 GEMM — 그 하드웨어가 없다",
+    # Not settled yet.
+    "LinearCrossEntropyLoss": "newly arrived in torch — looked at once it settles",
+    "LinearCrossEntropyOptions": "as above",
+    "linear_cross_entropy": "the functional counterpart of the layer above — looked at when they settle together",
+    "Muon": "an optimizer newly arrived in torch — looked at once it settles",
+    "grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
+    "scaled_grouped_mm": "fp8 and grouped GEMM — that hardware is not here",
+    "scaled_mm": "fp8 GEMM — that hardware is not here",
 }
 
-# 볼 자리. (보이는 이름, torch 쪽, 우리 쪽)
+# The namespaces looked at. (display name, torch's side, ours)
 def _spaces():
     got = [("torch", torch, borch),
            ("Tensor", torch.Tensor, borch.Tensor),
@@ -443,19 +457,21 @@ def _spaces():
 
 
 def _public(obj):
-    """공개 이름만 — **부를 수 있는 것**으로 좁힌다.
+    """Public names only — narrowed to **what can be called.**
 
-    분모를 세 번 고쳤고 그 과정을 남긴다.
+    The denominator was fixed three times, and the path is left here.
 
-    1. `dir()` 그대로 → torch 표면 1,013 개. `Callable`·`Optional`(typing 임포트)과
-       `AnyType`·`ArgumentSpec`(C 확장 내부 타입)이 API 로 세어졌다.
-    2. `__all__` → 최상위에서 더 나빠졌다. torch 의 최상위 `__all__` 은 손으로 고른
-       공개 목록이 아니라 C 내부 타입까지 담은 생성물이라 905 개가 나오고, 겹치는
-       것이 3 개로 떨어졌다. **분모가 거짓이면 비율도 거짓이다.**
-    3. 지금 — 부를 수 있는 것(함수·클래스)만, 그리고 남의 모듈에서 들어온 이름은 뺀다.
+    1. `dir()` as it stands → a torch surface of 1,013. `Callable` and `Optional` (typing
+       imports) and `AnyType` and `ArgumentSpec` (internal types of the C extension) were
+       counted as API.
+    2. `__all__` → worse at the top level. torch's top-level `__all__` is not a hand-picked
+       public list but something generated that carries internal C types too, giving 905,
+       and the overlap fell to 3. **A false denominator makes a false percentage.**
+    3. Now — only what is callable (functions and classes), and names imported from other
+       modules are excluded.
 
-    그래도 완벽하지 않다. 이 수는 "표면의 몇 %" 라고 자랑할 값이 아니라 **어느 자리가
-    비었는지 짚는 데** 쓰는 값이다.
+    It is still not perfect. This number is not one to boast "what percentage of the
+    surface" with; it is one for **pointing at which places are empty.**
     """
     out = set()
     for name in dir(obj):
@@ -464,7 +480,7 @@ def _public(obj):
         thing = getattr(obj, name, None)
         if thing is None or not callable(thing):
             continue
-        # 남의 모듈에서 들어온 이름(typing 등)은 그 자리의 API 가 아니다.
+        # A name imported from another module (typing and the like) is not that namespace's API.
         home = getattr(thing, "__module__", "") or ""
         if home and not (home.startswith("torch") or home.startswith("borch")):
             continue
@@ -473,16 +489,17 @@ def _public(obj):
 
 
 def _props(obj):
-    """**부를 수 없는 공개 이름** — 속성과 dtype 상수.
+    """**Public names that cannot be called** — attributes and dtype constants.
 
-    `_public` 은 `callable` 만 센다. 그래서 `x.real`·`x.mT`·`x.is_cuda` 처럼
-    **괄호 없이 쓰는 이름**이 분모에도 분자에도 안 들어간다. 그 상태로 나온
-    "Tensor 표면 100%" 는 *메서드의* 100% 이지 표면의 100% 가 아니다.
+    `_public` counts only what is `callable`. So names **used without parentheses**, such as
+    `x.real`, `x.mT` and `x.is_cuda`, appear in neither the numerator nor the denominator.
+    The "100% of the Tensor surface" produced in that state is 100% *of the methods*, not of
+    the surface.
 
-    갈라 세는 이유는 두 물음이 다르기 때문이다. 메서드가 없으면 `AttributeError`
-    가 나고, 속성이 없으면 **같은 예외가 나는데 고치는 자리가 다르다** — 앞의 것은
-    함수를 만들고 뒤의 것은 `@property` 를 만든다. 한 수로 합치면 어느 쪽인지
-    안 보인다.
+    They are counted apart because the two questions differ. A missing method raises
+    `AttributeError`, and a missing attribute **raises the same exception with a different
+    place to fix** — the first wants a function written and the second a `@property`.
+    Merged into one number, which of the two it is cannot be seen.
     """
     import types as _types
 
@@ -493,9 +510,10 @@ def _props(obj):
         thing = getattr(obj, name, None)
         if callable(thing):
             continue
-        # **모듈은 이 물음의 대상이 아니다.** `torch.math`·`torch.sys` 는 torch 가
-        # 자기 임포트를 안 숨긴 것뿐이고, `torch.nn.init` 처럼 진짜 하위 자리는
-        # 위의 자리별 표가 따로 본다. 안 거르면 잡음이 신호를 덮는다.
+        # **Modules are not what this question is about.** `torch.math` and `torch.sys` are
+        # just torch not hiding its own imports, and a real sub-namespace such as
+        # `torch.nn.init` is covered by the per-namespace table above. Unfiltered, the noise
+        # buries the signal.
         if isinstance(thing, _types.ModuleType):
             continue
         out.add(name)
@@ -503,20 +521,21 @@ def _props(obj):
 
 
 def _look(table, name, full=None):
-    """표에서 사유를 찾는다. **자리 붙은 이름 → 이름 → 와일드카드** 순이다.
+    """Finds the reason in the tables. In the order **namespaced name → name → wildcard.**
 
-    순서가 두 번 문제였다.
+    The order was a problem twice.
 
-    `"*Tensor"` 가 `"Tensor"` 보다 앞에 적혀 있었더니 `nn.functional.Tensor` 가
-    "형별 Tensor 클래스 — torch 가 폐기했다" 로 설명됐다. 갈래는 맞았지만 **사유가
-    거짓이었다** — 그것은 그냥 들여온 이름표다.
+    With `"*Tensor"` written ahead of `"Tensor"`, `nn.functional.Tensor` was explained as
+    "a per-type Tensor class — torch deprecated it". The category was right and **the reason
+    was false** — it is simply an imported label.
 
-    그 다음엔 이름만 적은 `"Optimizer"` 가 `torch.optim.Optimizer` 까지 삼켰다.
-    그쪽은 진짜 API 이고 우리가 이미 만들어 두었다 — `test_gap.py` 가 그 모순을
-    잡았다. 그래서 자리를 붙여 적을 수 있게 했다.
+    Then a bare `"Optimizer"` swallowed `torch.optim.Optimizer` as well. That one is real
+    API and we had already built it — `test_gap.py` caught the contradiction. So names can
+    now be written with their namespace attached.
 
-    이 표에서 가장 나쁜 것이 그 모양이다. 안 세는 것은 눈에 띄지만 **틀린 이유로
-    안 세는 것**은 안 띄고, 다음에 읽는 사람이 그 거짓을 믿는다.
+    That shape is the worst thing in this table. Something not counted draws the eye;
+    something **not counted for a false reason** does not, and the next person to read it
+    believes the falsehood.
     """
     if full and full in table:
         return table[full]
@@ -533,46 +552,51 @@ def _look(table, name, full=None):
 
 
 def _why(space, name):
-    """왜 없어도 되는지. 없으면 None — **그것이 곧 검토 대상이다.**
+    """Why it is all right for this to be absent. None where there is no reason — **and that
+    is exactly what wants reviewing.**
 
-    돌려주는 것은 `(갈래, 사유)` 다. 갈래를 안 나누면 "API 가 아니라 안 센다" 와
-    "API 인데 안 한다" 가 한 수로 뭉개지고, 그 둘은 읽는 사람에게 다른 말이다.
+    It returns `(category, reason)`. Without the category, "not API, so not counted" and
+    "API, and declined" collapse into one number, and to a reader those say different
+    things.
 
-    **최상위도 자리를 붙인다**(`torch.kl_div`). 안 붙였더니 최상위만 두고 싶은 판단이
-    `nn.functional` 의 같은 이름까지 삼켰다 — 그쪽 `kl_div` 는 우리가 만들었고
-    `ctc_loss` 는 아직 진짜 빈자리다.
+    **The top level carries its namespace too** (`torch.kl_div`). Without it, a judgement
+    meant for the top level alone swallowed `nn.functional`'s identically named one — that
+    `kl_div` we built, and `ctc_loss` there is still a real gap.
     """
     full = f"{space}.{name}"
     for key, reason in DELIBERATE.items():
         if full.startswith(key) or name.startswith(key):
-            return ("자리", reason)
+            return ("namespace", reason)
     found = _look(NOT_API, name, full)
     if found:
-        return ("API 아님", found)
+        return ("not API", found)
     found = _look(SKIPPED, name, full)
     if found:
-        return ("안 함", found)
+        return ("declined", found)
     return None
 
 
 def props_report():
-    """**괄호 없이 쓰는 이름**만 따로 센다.
+    """Counts **the names used without parentheses**, separately.
 
-    이 파일의 본 계산은 `callable` 만 본다. 그래서 커버리지 표가 "Tensor 표면
-    100%" 라고 말할 때 그것은 **메서드의** 100% 이고, `x.real`·`x.mT`·`x.is_cuda`
-    같은 이름은 분모에도 분자에도 없었다. 없는 줄도 몰랐다는 뜻이다.
+    This file's main reckoning counts only what is `callable`. So when the coverage table said "100%
+    of the Tensor surface", that was 100% **of the methods**, and names such as `x.real`,
+    `x.mT` and `x.is_cuda` were in neither the numerator nor the denominator — nobody even
+    knew they were missing.
 
-    표에 사유를 안 붙인다 — 붙이면 또 "수를 예쁘게 만드는 자리" 가 된다. 여기서는
-    **무엇이 없는지 보이기만** 하고, 판단은 사람이 위의 두 표에 적는다.
+    No reasons are attached to this table — attaching them would make it "the place where
+    the number gets made to look good" again. Here it only **shows what is absent**, and the
+    judgement is written by a person into the two tables above.
     """
     for space, theirs, ours in _spaces():
         a, b = _props(theirs), _props(ours)
-        # 위의 두 표가 이미 설명한 것은 여기서 다시 안 묻는다 — 자리째 거절한
-        # 이름 공간, API 가 아닌 것, 안 하기로 한 것. 남는 것이 곧 물음이다.
+        # What the two tables above already explain is not asked again here — namespaces
+        # declined whole, things that are not API, things declined. What remains is the
+        # question.
         gap = sorted(n for n in a - b if _why(space, n) is None)
-        print(f"\n{space} — 부를 수 없는 공개 이름 {len(a)}개 중 {len(a & b)}개 있다")
+        print(f"\n{space} — {len(a & b)} of {len(a)} non-callable public names present")
         if gap:
-            print(f"  사유 없이 없는 것 {len(gap)}: " + ", ".join(gap))
+            print(f"  absent with no reason, {len(gap)}: " + ", ".join(gap))
     return 0
 
 
@@ -586,7 +610,7 @@ def main(argv):
 
     total_missing = total_have = 0
     for space, theirs, ours in _spaces():
-        # `--show nn` 은 그 자리만 본다. 전부 찍으면 찾던 줄이 묻힌다.
+        # `--show nn` looks at that namespace alone. Printing everything buries the line you came for.
         if show not in (None, "all") and space != show:
             continue
         a, b = _public(theirs), _public(ours)
@@ -595,32 +619,33 @@ def main(argv):
         unexplained = [n for n, why in judged if why is None]
 
         if extra:
-            print(f"\n{space} — torch 에 없는데 우리에게 있는 것 {len(gap)}개")
+            print(f"\n{space} — {len(gap)} we have that torch does not")
             for n in gap:
                 print(f"  + {n}")
             continue
 
-        # **분모에서 빼는 것은 "API 가 아닌 것" 뿐이다.**
+        # **The only thing removed from the denominator is "the ones that are not API".**
         #
-        # 안 하기로 한 것은 남긴다. 우리가 고른 것이므로 비용을 져야 한다 — 빼 주면
-        # 표에 이름을 적을 때마다 비율이 올라가고, 그러면 이 표가 "수를 예쁘게
-        # 만드는 자리" 가 된다. 남겨 두면 적어도 그 유혹이 없어진다.
-        not_api = {n for n, why in judged if why and why[0] == "API 아님"}
-        skipped = [(n, why[1]) for n, why in judged if why and why[0] == "안 함"]
-        by_space = [n for n, why in judged if why and why[0] == "자리"]
+        # What was declined stays in. We chose it, so we carry the cost — removed, every
+        # name written into the table raises the percentage, and then the table becomes the
+        # place where the number gets made to look good. Left in, at least that temptation
+        # is gone.
+        not_api = {n for n, why in judged if why and why[0] == "not API"}
+        skipped = [(n, why[1]) for n, why in judged if why and why[0] == "declined"]
+        by_space = [n for n, why in judged if why and why[0] == "namespace"]
         api = a - not_api
         covered = len(api & b)
 
         total_have += covered
         total_missing += len(unexplained)
-        print(f"\n{space} — API {len(api)}개 중 {covered}개 있다 "
+        print(f"\n{space} — {covered} of {len(api)} API names present "
               f"({covered * 100 // max(1, len(api))}%)")
-        parts = [f"API 아니라 안 셈 {len(not_api)}"]
+        parts = [f"not API, uncounted {len(not_api)}"]
         if by_space:
-            parts.append(f"자리째 거절 {len(by_space)}")
+            parts.append(f"namespace declined {len(by_space)}")
         if skipped:
-            parts.append(f"안 하기로 함 {len(skipped)}")
-        print("  " + " · ".join(parts) + f" · **검토 대상 {len(unexplained)}**")
+            parts.append(f"declined {len(skipped)}")
+        print("  " + " · ".join(parts) + f" · **wants reviewing {len(unexplained)}**")
         if show in (space, "all"):
             for n, reason in skipped:
                 print(f"    – {n}: {reason}")
@@ -628,13 +653,13 @@ def main(argv):
                 print(f"    ? {n}")
         elif unexplained:
             head = ", ".join(unexplained[:8])
-            more = f" … 외 {len(unexplained) - 8}" if len(unexplained) > 8 else ""
+            more = f" … and {len(unexplained) - 8} more" if len(unexplained) > 8 else ""
             print(f"    {head}{more}")
 
     if not extra:
-        print(f"\n합계 — 겹치는 이름 {total_have}개, 설명 안 된 빈자리 {total_missing}개")
-        print("  `--show <자리>` 로 그 자리를 전부 편다. `--show all` 은 전부.")
-        print("  `–` 는 안 하기로 한 것(사유가 붙는다), `?` 는 검토 대상이다.")
+        print(f"\ntotal — {total_have} names in common, {total_missing} gaps with no reason")
+        print("  `--show <namespace>` spreads that namespace out. `--show all` spreads everything.")
+        print("  `–` is declined (a reason is attached); `?` wants reviewing.")
     return 0
 
 
