@@ -3403,11 +3403,12 @@ def nansum(t, dim=None, keepdim=False, dtype=None):
 
 
 def nanmean(t, dim=None, keepdim=False, dtype=None):
-    """nan 을 **빼고** 낸 평균 — 세는 개수도 nan 이 아닌 것만이다.
+    """A mean taken **excluding** nan — the count excludes them too.
 
-    **`dtype=` 이 정수 거절을 안 풀어 준다.** `mean` 은 풀어 주는데 이쪽은 안 풀린다
-    (실측: `torch.tensor([3,1,4]).nanmean(dtype=torch.float32)` 이 멈춘다). 규칙이
-    아니라 torch 의 비대칭이고, 관대한 쪽으로 갈리는 것도 갈리는 것이라 따라간다.
+    **`dtype=` does not lift the integer refusal.** `mean` lifts it and this does
+    not (measured: `torch.tensor([3,1,4]).nanmean(dtype=torch.float32)` stops). An
+    asymmetry in torch rather than a rule, and diverging towards the permissive
+    side is still diverging, so it is followed.
     """
     t = _wrap(t)
     _needs_float(
@@ -3417,8 +3418,9 @@ def nanmean(t, dim=None, keepdim=False, dtype=None):
     clean, bad = _nan_mask(t)
     count = (~bad).sum(axis=dim, keepdims=keepdim)
     total = clean.sum(axis=dim, keepdims=keepdim)
-    # **numpy 의 승격 규칙을 그대로 두면 안 된다.** float32 를 int64 로 나누면
-    # numpy 는 float64 로 올리는데 torch 는 float32 를 낸다 — 값은 같고 형만 갈린다.
+    # **numpy's promotion rule must not be left alone.** Dividing a float32 by an
+    # int64, numpy promotes to float64 and torch gives float32 — the values match
+    # and the dtype diverges.
     out = total / count.astype(total.dtype)
 
     def back(g):
@@ -3431,7 +3433,8 @@ def nanmean(t, dim=None, keepdim=False, dtype=None):
 
 
 def _expand_reduced(g, shape, dim, keepdim):
-    """축약으로 접힌 축을 되살려 원래 모양에 퍼질 수 있게 한다."""
+    """Revive the axis a reduction folded so that it can spread back over the
+    original shape."""
     gg = _np.asarray(g)
     if dim is None:
         return _np.broadcast_to(gg, shape)
@@ -3441,10 +3444,12 @@ def _expand_reduced(g, shape, dim, keepdim):
 
 
 def logsumexp(t, dim=None, keepdim=False):
-    """`log(sum(exp(x)))` 를 **넘치지 않게** 센다 — 큰 값을 빼고 더한다."""
+    """`log(sum(exp(x)))` computed **without overflow** — the maximum is
+    subtracted before summing."""
     t = _wrap(t)
-    # **정수·참거짓도 받고 float32 를 낸다**(실측). 그냥 두면 두 자리가 틀린다 —
-    # numpy 가 정수를 float64 로 올리고, 참거짓은 `-` 를 거절해 아래 뺄셈에서 멈춘다.
+    # **It takes integers and booleans too and produces float32** (measured).
+    # Left alone two places are wrong — numpy promotes integers to float64, and
+    # booleans refuse `-` and stop at the subtraction below.
     if t.data.dtype.kind not in "fc":
         t = _wrap(t.data.astype(_DEFAULT_DTYPE))
     big = _np.max(t.data, axis=dim, keepdims=True)
@@ -3460,13 +3465,15 @@ def logsumexp(t, dim=None, keepdim=False):
 
 
 def _cum_extreme(t, dim, pick, name):
-    """누적 최대·최소. 값과 **번호**를 준다 — torch 와 같은 모양이다."""
+    """A running maximum or minimum. It gives the values and **the indices** —
+    torch's shape."""
     t = _wrap(t)
     idx = pick(t.data, axis=dim)
     out = _np.take_along_axis(t.data, idx, axis=dim)
 
     def back(g):
-        # 기울기는 **뽑힌 자리로만** 간다. 같은 자리가 여러 번 뽑혔으면 그만큼 쌓인다.
+        # The gradient goes **only to the chosen positions.** A position chosen
+        # several times accumulates that many times.
         z = _np.zeros_like(t.data)
         _np.add.at(z, _index_for(idx, dim, t.data.ndim), _np.asarray(g))
         return (z,)
@@ -3475,17 +3482,20 @@ def _cum_extreme(t, dim, pick, name):
 
 
 def _index_for(idx, dim, ndim):
-    """`np.add.at` 에 줄 색인 — 축마다 좌표를 만들어 튜플로 준다."""
+    """The index to give `np.add.at` — coordinates per axis, handed over as a
+    tuple."""
     grid = _np.indices(idx.shape)
     return tuple(idx if a == dim % ndim else grid[a] for a in range(ndim))
 
 
 def _running_idx(better):
-    """누적 최대·최소의 **번호**를 낸다. 축을 따라 한 칸씩 간다.
+    """Produce **the indices** of the running maximum or minimum. It walks the
+    axis one cell at a time.
 
-    벡터화로 짜보다 접었다. torch 는 동점일 때 **나중 자리**를 준다(실측:
-    [1,3,3,2] 의 cummax 번호가 [0,1,2,2] — i=2 에서 1 이 아니라 2 다). 그 규칙은
-    `>=` 한 글자에 담기는데, 억지로 벡터화하면 그 한 글자가 안 보이는 곳으로 숨는다.
+    A vectorised version was attempted and abandoned. On a tie torch gives **the
+    later position** (measured: the cummax indices of [1,3,3,2] are [0,1,2,2] — at
+    i=2 it is 2, not 1). That rule fits in the one character `>=`, and forcing a
+    vectorisation hides that character somewhere it cannot be seen.
     """
     def make(d, axis):
         moved = _np.moveaxis(d, axis, 0)
@@ -3510,7 +3520,7 @@ def cummin(t, dim):
 
 
 def kthvalue(t, k, dim=-1, keepdim=False):
-    """**k 번째로 작은** 값. torch 는 1 부터 센다."""
+    """The **k-th smallest** value. torch counts from 1."""
     t = _wrap(t)
     order = _np.argsort(t.data, axis=dim, kind="stable")
     at = _np.take(order, k - 1, axis=dim)
@@ -3530,22 +3540,26 @@ def kthvalue(t, k, dim=-1, keepdim=False):
 
 
 def msort(t):
-    """**첫 축을 따라** 정렬한다. `sort(dim=0)` 의 값 쪽과 같다."""
+    """Sort **along the first axis.** The same as the values side of
+    `sort(dim=0)`."""
     return sort(_wrap(t), dim=0).values
 
 
 def diff(t, n=1, dim=-1, prepend=None, append=None):
-    """이웃한 것의 차. `x[1:] - x[:-1]` 을 n 번 한다.
+    """The difference between neighbours. `x[1:] - x[:-1]`, n times.
 
-    **자르기로 짠다** — 자르기가 이미 그래프를 이으므로 역방향을 새로 쓸 것이 없다.
+    **Built from slicing** — slicing already carries the graph, so there is no
+    backward to write.
 
-    **참·거짓은 뺄셈이 아니라 XOR 이다.** torch 가 `[T, F, T]` 에서 `[T, T]` 를
-    주는데(실측) 그것은 이웃이 다른가를 묻는 것이다. 여기서는 `-` 가 불리언을 거절해
-    아예 멈추고 있었다 — 인색한 것도 갈리는 것이다.
+    **For booleans it is XOR rather than subtraction.** torch gives `[T, T]` from
+    `[T, F, T]` (measured), which asks whether the neighbours differ. Here `-`
+    refused booleans and it stopped outright — being stingier is still
+    diverging.
 
-    **앞뒤로 붙이면 길이가 안 줄어든다.** `prepend`·`append` 는 차를 구하기 **전에**
-    이어 붙이는 것이라, 하나를 붙이면 결과가 입력과 같은 길이가 된다 — 시계열에서
-    첫 칸을 잃지 않으려고 쓰는 자리다.
+    **Appending at either end keeps the length.** `prepend` and `append`
+    concatenate **before** the difference is taken, so adding one makes the
+    result the same length as the input — used in time series so the first cell
+    is not lost.
     """
     out = _wrap(t)
     if prepend is not None or append is not None:
@@ -3566,12 +3580,13 @@ def diff(t, n=1, dim=-1, prepend=None, append=None):
 
 
 def dist(a, b, p=2):
-    """두 텐서 사이의 거리 — `norm(a - b, p)` 다."""
+    """The distance between two tensors — `norm(a - b, p)`."""
     return norm(_wrap(a) - _wrap(b), p=p)
 
 
 def quantile(t, q, dim=None, keepdim=False):
-    """분위수. torch 의 기본은 **선형 보간**이고 numpy 와 같다."""
+    """Quantiles. torch's default is **linear interpolation**, the same as
+    numpy's."""
     t = _wrap(t)
     _needs_float(
         t.data,
@@ -3581,22 +3596,25 @@ def quantile(t, q, dim=None, keepdim=False):
     qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
     out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim)
 
-    # **기울기는 보간에 쓰인 두 자리로 나뉜다** — 정확히 맞아떨어지면 한 자리다
-    # (실측: [3,5,5,1,5] 의 quantile(0.3) 기울기가 [0.8, 0.2, 0, 0, 0]).
+    # **The gradient splits across the two positions used in the interpolation** —
+    # landing exactly gives one position (measured: the quantile(0.3) gradient of
+    # [3,5,5,1,5] is [0.8, 0.2, 0, 0, 0]).
     #
-    # `median` 과 규칙이 다르다. `median` 은 **값이 같은 칸 전부**에 나누는데
-    # `quantile` 은 **정렬한 자리**로 나눈다 — [1,5,5,5] 에서 median 은 세 5 에
-    # ⅓ 씩 주고 quantile(0.5) 는 앞의 두 5 에 ½ 씩 준다. 동점이 없는 자료로 재면
-    # 둘이 같은 답을 내므로 이 갈림이 안 보인다.
+    # A different rule from `median`'s. `median` splits across **every cell
+    # holding the same value** and `quantile` splits across **the sorted
+    # positions** — on [1,5,5,5], median gives ⅓ to each of the three 5s and
+    # quantile(0.5) gives ½ to the first two. Measured on data with no ties the
+    # two give the same answer and this split is invisible.
     #
-    # 여기에도 `Tensor(...)` 만 있어서 그래프가 조용히 끊겨 있었다.
+    # Here too there was only a bare `Tensor(...)` and the graph was quietly
+    # cut.
     data = _np.asarray(t.data, dtype=_np.float64)
     lines = data.reshape(1, -1) if dim is None else \
         _np.moveaxis(data, dim, -1).reshape(-1, data.shape[dim])
     order = _np.argsort(lines, axis=-1, kind="stable")
     n = lines.shape[-1]
     rows = _np.arange(lines.shape[0])
-    # q 하나마다 무게판을 한 장 만든다. 스칼라 q 면 한 장이다.
+    # One weight array per q. A scalar q gives one.
     qs = _np.atleast_1d(_np.asarray(qq, dtype=_np.float64))
     sheets = _np.zeros((qs.size,) + lines.shape, dtype=_np.float64)
     for k, one in enumerate(qs):
@@ -3608,7 +3626,8 @@ def quantile(t, q, dim=None, keepdim=False):
 
     def back(g):
         gg = _np.asarray(g, dtype=_np.float64)
-        # q 가 벡터면 결과의 맨 앞 축이 q 다. 판마다 그 몫을 실어 더한다.
+        # With a vector q the result's leading axis is q. Each array carries its
+        # share and they are summed.
         parts = gg.reshape(qs.size, -1) if _np.ndim(qq) else gg.reshape(1, -1)
         total = (sheets * parts[:, :, None]).sum(axis=0)
         if dim is None:
@@ -3628,7 +3647,8 @@ def nanquantile(t, q, dim=None, keepdim=False):
 
 
 def nonzero(t):
-    """0 이 아닌 자리의 좌표. **모양이 값에 달렸다** — 그래서 기울기가 없다."""
+    """The coordinates of the non-zero positions. **The shape depends on the
+    values** — which is why there is no gradient."""
     return Tensor(_np.stack(_np.nonzero(_wrap(t).data), axis=-1).astype(_np.int64))
 
 
@@ -3637,11 +3657,13 @@ def argwhere(t):
 
 
 def _no_bool_accumulate(name, dt):
-    """누적에 `dtype=bool` 은 torch 가 거절한다(실측 — `NotImplementedError` 다).
+    """torch refuses `dtype=bool` on a cumulative operation (measured — a
+    `NotImplementedError`).
 
-    **`sum(dtype=bool)` 은 되는데 `cumsum(dtype=bool)` 은 안 된다.** 규칙이 아니라
-    torch 가 그 커널을 안 만든 것이고, 관대한 쪽으로 갈리는 것도 갈리는 것이라
-    따라간다 — 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨진다.
+    **`sum(dtype=bool)` works and `cumsum(dtype=bool)` does not.** torch simply
+    did not build that kernel rather than there being a rule, and diverging
+    towards the permissive side is still diverging, so it is followed — handing
+    back a value here means that code breaks against real torch.
     """
     plain = getattr(dt, "np", dt)
     if _np.dtype(plain) == _np.bool_:
@@ -3653,9 +3675,10 @@ def _no_bool_accumulate(name, dt):
 def cumsum(t, dim, dtype=None):
     t = _wrap(t)
     if dtype is not None:
-        # **넣기 전에 바꾼다.** 실측: 실수 `[1.7, −2.3, 0.9]` 에 `dtype=int64` 를 주면
-        # `[1, −1, −1]` 이다 — 먼저 깎은 `[1, −2, 0]` 의 누적합이다. 접고 나서
-        # 깎으면 `[1, 0, 0]` 이 나온다.
+        # **Converted before going in.** Measured: the float `[1.7, −2.3, 0.9]`
+        # with `dtype=int64` gives `[1, −1, −1]` — the running sum of the
+        # truncated `[1, −2, 0]`. Truncated after folding it comes out
+        # `[1, 0, 0]`.
         _no_bool_accumulate("cumsum", dtype)
         return cumsum(t.to(dtype), dim).to(dtype)
     return t._make(_np.cumsum(t.data, axis=dim), (t,),
@@ -3664,17 +3687,20 @@ def cumsum(t, dim, dtype=None):
 
 
 def cumprod(t, dim, dtype=None):
-    """누적 곱. 역방향을 **나눗셈 없이** 쓴다.
+    """A running product. Its backward is written **without division.**
 
-    **`dtype` 을 인자로 안 적고 몸통에만 썼다가 무한 재귀가 났다.** 이 파일이
-    `_base` 의 `dtype` 을 전역으로 들여오고 있어서, 없는 인자가 **참인 전역**으로
-    잡혔다 — `NameError` 가 아니라 `RecursionError` 로 나온다. 이름을 가리는 것이
-    이 저장소에서 열한 번째 자리다.
+    **Writing `dtype` in the body without declaring it as a parameter caused
+    infinite recursion.** This file imports `_base`'s `dtype` into module scope,
+    so the missing argument resolved to **a truthy global** — it surfaces as a
+    `RecursionError` rather than a `NameError`. The eleventh shadowed name in
+    this repository.
 
-    흔한 유도는 `dL/dx_k = (1/x_k) * sum_{j>=k} g_j y_j` 인데, 입력에 0 이 있으면
-    거기서 나눗셈이 터져 조용히 `nan` 이 흐른다. 예외도 안 난다. 그래서 각 k 마다
-    `x_k` 를 뺀 곱을 직접 쌓는다 — 길이의 제곱만큼 걸리지만 `cumprod` 는 학습 경로의
-    안쪽이 아니고, **0 이 섞였을 때 답이 맞는 쪽**이 이 저장소의 기준이다.
+    The common derivation is `dL/dx_k = (1/x_k) * sum_{j>=k} g_j y_j`, and with a
+    0 in the input that division blows up there and a `nan` flows quietly. No
+    exception either. So the product with `x_k` left out is built directly for
+    each k — it costs the square of the length, and `cumprod` is not on the inner
+    training path, and **the side that is right when a 0 is in the mix** is this
+    repository's standard.
     """
     t = _wrap(t)
     if dtype is not None:
@@ -3688,7 +3714,7 @@ def cumprod(t, dim, dtype=None):
         grad = _np.zeros_like(x, dtype=_np.result_type(x.dtype, _np.float32))
         prefix = _np.ones_like(x[0])                 # x_0 … x_{k-1}
         for k in range(x.shape[0]):
-            run = prefix.copy()                      # j=k 일 때의 곱 (x_k 를 뺀 것)
+            run = prefix.copy()                      # the product at j=k (with x_k left out)
             acc = gg[k] * run
             for j in range(k + 1, x.shape[0]):
                 run = run * x[j]
@@ -3705,8 +3731,9 @@ def count_nonzero(t, dim=None):
 
 
 def _pick(t, idx, dim, op):
-    """뽑은 값에 **기울기 길을 남긴다.** 뽑기만 하고 끊으면 학습이 조용히 멈춘다 —
-    top-k 샘플링이나 정렬을 끼운 손실에서 그 일이 난다."""
+    """**Leave a gradient path** on the values taken. Taking them and cutting the
+    path makes training quietly stop — that happens in top-k sampling and in a
+    loss with a sort in it."""
     values = _np.take_along_axis(t.data, idx, axis=dim)
     shape = t.data.shape
 
@@ -3719,18 +3746,19 @@ def _pick(t, idx, dim, op):
 
 
 def _order(data, dim, descending):
-    """정렬 번호. **동점끼리의 순서가 답의 일부다.**
+    """The sort indices. **The order among ties is part of the answer.**
 
-    오름차순으로 정렬한 뒤 뒤집으면 같은 값끼리의 순서까지 뒤집혀서, torch 가 앞에
-    두는 쪽(번호가 작은 쪽)이 뒤로 간다. 부호를 뒤집어 안정 정렬하면 유지된다.
-    numpy 의 기본 정렬은 quicksort 라 안정적이지 않으므로 오름차순도 명시한다 —
-    지금 맞는 것은 우연이고, 입력이 길어지면 갈린다.
+    Sorting ascending and then reversing reverses the order among equal values as
+    well, so the one torch puts first (the smaller index) goes last. Negating and
+    sorting stably keeps it. numpy's default sort is quicksort and is not stable,
+    so the ascending case is specified too — it being right today is an accident,
+    and it diverges as the input grows.
     """
     return _np.argsort(-data if descending else data, axis=dim, kind="stable")
 
 
 def topk(t, k, dim=-1, largest=True):
-    """상위 k개의 (값, 번호). 32장의 top-k 샘플링이 이것이다."""
+    """The top k as (values, indices). Chapter 32's top-k sampling is this."""
     t = _wrap(t)
     order = _order(t.data, dim, largest)
     idx = _np.take(order, _np.arange(k), axis=dim)
@@ -3752,7 +3780,7 @@ def unique(t, sorted=True, return_counts=False):
     return (Tensor(values), Tensor(counts)) if return_counts else Tensor(values)
 
 
-# ---------------------------------------------------------------- 선형대수
+# -------------------------------------------------------------- linear algebra
 
 def mm(a, b): return _wrap(a) @ _wrap(b)
 def bmm(a, b): return _wrap(a) @ _wrap(b)
@@ -3767,7 +3795,8 @@ def outer(a, b):
 
 
 def _diagonal_scatter(shape, g):
-    """대각선 위에 `g` 를 얹은 영행렬. `diag`·`trace` 의 역방향이 같은 모양이다."""
+    """A zero matrix with `g` laid on the diagonal. The backwards of `diag` and
+    `trace` have the same shape."""
     z = _np.zeros(shape, dtype=_np.asarray(g).dtype)
     n = min(shape)
     z[_np.arange(n), _np.arange(n)] = g
@@ -3775,18 +3804,19 @@ def _diagonal_scatter(shape, g):
 
 
 def diag(t, diagonal=0):
-    """1차원이면 대각행렬을 만들고, 2차원이면 대각선을 뽑는다 — 방향이 반대라
-    역방향도 반대다.
+    """1-D builds a diagonal matrix and 2-D takes the diagonal — opposite
+    directions, so opposite backwards.
 
-    **`diagonal` 은 어느 대각선인가다.** 양수는 위쪽, 음수는 아래쪽. 안 받으면
-    `x.diag(1)` 이 `TypeError` 로 멈춘다 — 시끄럽게 멈추는 쪽이라 값은 안 갈렸다.
+    **`diagonal` says which diagonal.** Positive is above and negative below.
+    Without it, `x.diag(1)` stops with a `TypeError` — the loud kind, so no value
+    diverged.
     """
     t = _wrap(t)
     k = int(diagonal)
     out = _np.diag(t.data, k)
     if t.data.ndim == 1:
         def back(g):
-            # 만든 행렬에서 그 대각선만 도로 뽑는다.
+            # Only that diagonal is taken back out of the matrix built.
             return (_np.diagonal(_np.asarray(g), k).copy(),)
     else:
         def back(g):
@@ -3807,14 +3837,18 @@ def trace(t):
 
 
 def einsum(equation, *operands):
-    """역방향도 einsum 이다 — 출력 첨자를 항의 자리에 바꿔 넣으면 그 항의 기울기가 나온다.
+    """The backward is an einsum too — swapping the output subscripts into that
+    term's slot produces that term's gradient.
 
-    한 가지 걸리는 자리가 있다. 어떤 첨자가 **그 항에만** 있고 출력에도 다른 항에도
-    없으면(`ij->i` 의 `j`), einsum 은 없던 축을 만들지 못한다. 그럴 때는 그 축만큼의
-    1 로 채운 항을 하나 더 끼워 넣는다 — 값은 안 바뀌고 축만 생긴다.
+    One place snags. When a subscript appears **in that term alone** and in
+    neither the output nor any other term (the `j` of `ij->i`), einsum cannot
+    create an axis that was not there. In that case one more term filled with 1s
+    of that axis's length is inserted — the value does not change and the axis
+    appears.
 
-    `...` 과 한 항 안의 반복 첨자(`ii->i`)는 이 규칙이 그대로 안 통한다. 그래서 **틀린
-    기울기를 주는 대신 기울기를 안 준다** — 그 경우 `backward()` 가 거절한다.
+    `...` and a subscript repeated within one term (`ii->i`) do not follow this
+    rule directly. So **rather than give a wrong gradient it gives none** — in
+    that case `backward()` refuses.
     """
     ops = [_wrap(o) for o in operands]
     out = _np.einsum(equation, *[o.data for o in ops])
@@ -3872,7 +3906,7 @@ def elu(t, alpha=1.0):
 
 
 def silu(t):
-    """x·σ(x). Swish 라고도 한다."""
+    """x·σ(x). Also called Swish."""
     t = _wrap(t)
     sig = 1.0 / (1.0 + _np.exp(-_np.clip(t.data, -60, 60)))
     return t._make(t.data * sig, (t,),
@@ -3880,11 +3914,13 @@ def silu(t):
 
 
 def _gelu_tanh(t):
-    """`approximate="tanh"` 쪽 — 0.5·x·(1 + tanh(√(2/π)·(x + 0.044715·x³))).
+    """The `approximate="tanh"` side —
+    0.5·x·(1 + tanh(√(2/π)·(x + 0.044715·x³))).
 
-    **정확형과 값이 다르다.** 최대차가 1e-4 쯤이라 이 프로젝트의 허용 오차 언저리이고,
-    그래서 "거의 같으니 하나로 둔다" 가 통할 뻔한 자리다. torch 가 둘을 나눠 둔 이유는
-    tanh 쪽이 빠르기 때문이지 같아서가 아니다 — 골든이 둘을 따로 묻는다.
+    **Its values differ from the exact form's.** The max diff is around 1e-4,
+    which sits near this project's tolerance, so "near enough, keep one" nearly
+    worked here. torch keeps the two apart because the tanh side is faster, not
+    because they are equal — the golden asks about them separately.
     """
     d = _np.asarray(t.data, dtype=_np.float64)
     root = _math.sqrt(2.0 / _math.pi)
@@ -3901,16 +3937,19 @@ def _gelu_tanh(t):
 
 
 def _gelu(t):
-    """torch 의 기본 gelu(정확형)와 같은 식 — 0.5·x·(1 + erf(x/√2)).
+    """The same formula as torch's default gelu (the exact form) —
+    0.5·x·(1 + erf(x/√2)).
 
-    순·역방향 모두 `np.vectorize` 였다. 원소마다 파이썬을 부르는 것이라
-    8×32×2048 한 번에 197ms 가 걸렸고, numpy 원소별로 바꾸니 9.9ms 다(실측, 20배).
-    진짜 torch 와의 최대차는 4.77e-07 로 바꾸기 전과 **같다**
-    (x ∈ [-8, 8] 에 꼬리를 더한 4.6만 점, allclose(1e-5) 전부 통과).
+    Both the forward and the backward were `np.vectorize`. Calling Python per
+    element, one 8×32×2048 pass took 197ms, and switching to elementwise numpy
+    takes 9.9ms (measured, 20×). The max diff against real torch is 4.77e-07, **the
+    same** as before the change (46,000 points over x ∈ [-8, 8] plus the tails,
+    all passing allclose(1e-5)).
 
-    **`nn` 쪽에 있던 것을 여기로 옮겼다.** 트랜스포머 층이 이것을 쓰지만 `gelu` 도
-    쓰고, `gelu` 는 이 위쪽에 있다. 파일 하나일 때는 순서가 안 보였는데 쪼개려니
-    아래에서 위를 부르는 모양이 드러났다 — 층위가 뒤집혀 있던 것을 바로잡는다.
+    **Moved here from `nn`.** The transformer layers use it and so does `gelu`,
+    and `gelu` is above this. As one file the ordering was invisible, and
+    splitting revealed the shape of something below calling something above — the
+    inverted layering is corrected.
     """
     d = _np.asarray(t.data, dtype=_np.float64)
     ope = _one_plus_erf64(d / _math.sqrt(2.0))
@@ -3932,14 +3971,16 @@ def gelu(t, approximate="none"):
     return _gelu(_wrap(t))
 
 
-# ── 활성함수 열일곱 ─────────────────────────────────────────────────────────
+# ── the seventeen activations ───────────────────────────────────────────────
 #
-# **꺾이는 점에서 어느 쪽을 고르는지가 전부다.** 식은 문서에 있지만 `x == 0`,
-# `x == ±3`, `x == 6` 처럼 정확히 경계인 자리에서 torch 가 무엇을 주는지는 재봐야
-# 안다 — 난수 입력은 그 점을 절대 안 준다. 골든의 `kinks` 가 그 점들이다.
+# **Which side is chosen at a kink is the whole of it.** The formulas are in the
+# documentation, and what torch gives exactly on a boundary — `x == 0`,
+# `x == ±3`, `x == 6` — has to be measured; random input never produces those
+# points. The golden's `kinks` are those points.
 #
-# 상수는 torch 의 것을 그대로 적는다. 근사치를 쓰면 값이 5 자리쯤에서 갈리고,
-# 그것은 "거의 맞는" 상태라 오래 안 걸린다.
+# The constants are torch's, written out. An approximation diverges around the
+# fifth digit, and that is a "nearly right" state which goes uncaught for a long
+# time.
 _SELU_ALPHA = 1.6732632423543772848170429916717
 _SELU_SCALE = 1.0507009873554804934193349852946
 
@@ -3949,9 +3990,11 @@ def _sigmoid_of(d):
 
 
 def celu(t, alpha=1.0):
-    """CELU. `ELU` 와 달리 음수 쪽을 α 로 **나눈 뒤** 지수를 취한다.
+    """CELU. Unlike `ELU` it **divides** the negative side by α before taking the
+    exponential.
 
-    α=1 이면 ELU 와 같은 값이 나온다 — 그래서 α 를 안 주고 재면 둘을 못 가른다.
+    At α=1 it gives ELU's values — so measured without giving α, the two cannot be
+    told apart.
     """
     t = _wrap(t)
     pick = t.data > 0
@@ -3962,7 +4005,8 @@ def celu(t, alpha=1.0):
 
 
 def hardshrink(t, lambd=0.5):
-    """|x| > λ 면 그대로, 아니면 0. **경계에서는 0 이다**(`>` 이지 `>=` 가 아니다)."""
+    """The value where |x| > λ and 0 otherwise. **On the boundary it is 0**
+    (`>`, not `>=`)."""
     t = _wrap(t)
     keep = _np.abs(t.data) > lambd
     return t._make(_np.where(keep, t.data, 0.0), (t,),
@@ -3970,7 +4014,7 @@ def hardshrink(t, lambd=0.5):
 
 
 def hardsigmoid(t):
-    """구간별 직선으로 시그모이드를 흉내 낸다. 꺾이는 점이 ±3 이다."""
+    """Imitates a sigmoid with piecewise straight lines. The kinks are at ±3."""
     t = _wrap(t)
     d = t.data
     out = _np.clip(d / 6.0 + 0.5, 0.0, 1.0)
@@ -3980,7 +4024,7 @@ def hardsigmoid(t):
 
 
 def hardswish(t):
-    """x·hardsigmoid(x). 모바일 쪽에서 swish 대신 쓰는 것."""
+    """x·hardsigmoid(x). Used instead of swish on mobile."""
     t = _wrap(t)
     d = t.data
     out = _np.where(d <= -3.0, 0.0, _np.where(d >= 3.0, d, d * (d + 3.0) / 6.0))
@@ -3997,7 +4041,8 @@ def hardtanh(t, min_val=-1.0, max_val=1.0):
 
 
 def logsigmoid(t):
-    """log σ(x). **큰 음수에서 곧장 계산하면 log(0) 이 된다** — 안정형으로 쓴다."""
+    """log σ(x). **Computed directly at large negatives it becomes log(0)** — the
+    stable form is used."""
     t = _wrap(t)
     d = t.data
     out = -(_np.logaddexp(0.0, -d))
@@ -4007,9 +4052,11 @@ def logsigmoid(t):
 
 
 def softplus(t, beta=1.0, threshold=20.0):
-    """(1/β)·log(1+e^{βx}). **βx 가 threshold 를 넘으면 그냥 x 다** — 넘치지 않게.
+    """(1/β)·log(1+e^{βx}). **Past the threshold, βx is simply x** — so it does
+    not overflow.
 
-    그 갈래를 빠뜨리면 큰 입력에서 `inf` 가 나오고, 그 뒤 기울기가 전부 NaN 이 된다.
+    Without that branch, large input produces `inf` and every gradient after it
+    becomes NaN.
     """
     t = _wrap(t)
     d = t.data
@@ -4033,7 +4080,8 @@ def mish(t):
 
 
 def relu6(t):
-    """clamp(x, 0, 6). **경계에서 기울기가 0 이다** — 양쪽 다."""
+    """clamp(x, 0, 6). **The gradient is 0 on the boundaries** — both of
+    them."""
     t = _wrap(t)
     d = t.data
     inside = (d > 0.0) & (d < 6.0)
@@ -4053,7 +4101,8 @@ def selu(t):
 
 
 def softshrink(t, lambd=0.5):
-    """λ 만큼 **원점 쪽으로 당긴다.** `hardshrink` 와 달리 값이 이어진다."""
+    """**Pulls towards the origin** by λ. Unlike `hardshrink` the values stay
+    continuous."""
     t = _wrap(t)
     d = t.data
     out = _np.where(d > lambd, d - lambd, _np.where(d < -lambd, d + lambd, 0.0))
@@ -4081,7 +4130,8 @@ def tanhshrink(t):
 
 
 def threshold(t, threshold, value):                      # noqa: A002
-    """x > threshold 면 그대로, 아니면 `value`. **경계는 value 쪽이다.**"""
+    """The value where x > threshold and `value` otherwise. **The boundary goes
+    to value.**"""
     t = _wrap(t)
     keep = t.data > threshold
     return t._make(_np.where(keep, t.data, value), (t,), lambda g: (g * keep,),
@@ -4089,12 +4139,14 @@ def threshold(t, threshold, value):                      # noqa: A002
 
 
 def softmin(t, dim=-1):
-    """softmax(−x). **부호를 빠뜨리면 softmax 와 같아진다** — 값으로만 갈린다."""
+    """softmax(−x). **Without the negation it becomes softmax** — it diverges
+    only in the values."""
     return softmax(-_wrap(t), dim=dim)
 
 
 def glu(t, dim=-1):
-    """축을 반으로 갈라 `a · σ(b)`. 활성함수 중 유일하게 원소별이 아니다."""
+    """Split the axis in half and take `a · σ(b)`. The only activation that is
+    not elementwise."""
     t = _wrap(t)
     n = t.data.shape[dim]
     if n % 2:
@@ -4106,18 +4158,21 @@ def glu(t, dim=-1):
 
 
 def prelu(t, weight):
-    """음수 쪽 기울기가 **학습된다.** 가중치가 하나면 전 채널이 나눠 쓴다.
+    """The slope on the negative side is **learned.** With one weight, every
+    channel shares it.
 
-    **정확히 0 은 음수 쪽이다.** 순방향은 어느 쪽으로 놓아도 0 이라 안 보이는데,
-    기울기는 갈린다 — torch 는 `x > 0` 일 때만 1 을 주고 `x == 0` 에는 w 를 준다.
-    처음에 `x < 0` 으로 갈랐더니 그 한 점에서 최대차 3.75 가 났고, 골든의 `kinks`
-    입력에 0 이 들어 있어서 잡혔다. 난수 입력이었으면 영원히 안 걸렸다.
+    **Exactly 0 belongs to the negative side.** The forward pass is 0 either way
+    so it is invisible there, and the gradient parts — torch gives 1 only where
+    `x > 0` and gives w at `x == 0`. Split with `x < 0` at first, that single
+    point gave a max diff of 3.75, and the golden's `kinks` input contains a 0, so
+    it was caught. With random input it would never have been.
     """
     t, weight = _wrap(t), _wrap(weight)
     d = t.data
     w = weight.data
     if w.size != 1:
-        # 채널마다 다른 기울기 — 채널 축(1번)에 맞춰 편다.
+        # A different slope per channel — spread to line up with the channel
+        # axis (1).
         shape = [1] * d.ndim
         shape[1 if d.ndim > 1 else 0] = w.size
         w = w.reshape(shape)
@@ -4147,11 +4202,12 @@ def log_softmax(t, dim=-1):
 
 
 def dropout(t, p=0.5, training=True):
-    """살아남은 값을 `1/(1-p)` 로 키운다 — **그래야 학습과 추론의 크기가 맞는다.**
+    """The surviving values are scaled by `1/(1-p)` — **so that the magnitudes
+    match between training and inference.**
 
-    `p=1` 을 따로 가른다. 안 가르면 `1/(1-p)` 가 0 으로 나누기가 되어 NaN 이 나오고,
-    NaN 은 자기 자신과도 달라서 그 뒤로는 무엇을 비교해도 통과할 수 없다. torch 는
-    그 자리에서 0 을 준다.
+    `p=1` is branched separately. Without that, `1/(1-p)` becomes a division by
+    zero and produces NaN, and NaN differs even from itself, so nothing compared
+    after it can pass. torch gives 0 at that point.
     """
     if not training or p == 0:
         return _wrap(t)
@@ -4163,8 +4219,9 @@ def dropout(t, p=0.5, training=True):
 
 
 def avg_pool2d(x, kernel_size, stride=None):
-    """**축마다 다른 창을 받는다.** `adaptive_avg_pool2d` 가 세로·가로를 다르게 줄일 수
-    있어야 해서다 — 정사각만 받으면 그 위에 못 얹는다."""
+    """**It takes a different window per axis.** Because
+    `adaptive_avg_pool2d` has to be able to reduce the height and the width
+    differently — taking squares only leaves nothing to build it on."""
     kh, kw = _pair(kernel_size)
     sh, sw = _pair(stride if stride is not None else kernel_size)
     xd = x.data
@@ -4188,7 +4245,8 @@ def avg_pool2d(x, kernel_size, stride=None):
 
 
 def _pool_all(x):
-    """AdaptiveAvgPool2d(1) 만 지원한다 — 흔한 것은 그것뿐이고, 나머지는 거절한다."""
+    """AdaptiveAvgPool2d(1) alone is supported — that is the only common one and
+    the rest are refused."""
     return x.mean(dim=2).mean(dim=2).reshape(x.data.shape[0], x.data.shape[1], 1, 1)
 
 
@@ -4226,30 +4284,34 @@ def l1_loss(pred, target, reduction="mean"):
 
 
 def smooth_l1_loss(pred, target, beta=1.0, reduction="mean"):
-    """작은 오차는 제곱, 큰 오차는 절댓값. 이상치에 덜 흔들린다."""
+    """Squared for small errors and absolute for large ones. Less shaken by
+    outliers."""
     diff = _wrap(pred) - _wrap(target)
     small = _np.abs(diff.data) < beta
     return _reduce(where(Tensor(small), 0.5 * diff * diff / beta,
                          diff.abs() - 0.5 * beta), reduction)
 
 
-# ---------------------------------------------------------------- 손실
+# ---------------------------------------------------------------------- losses
 #
-# **접는 방식이 손실의 일부다.** torch 의 손실은 전부 `reduction` 을 받고, 그 값에
-# 따라 원소별·평균·합이 된다. 한 자리에 모아 두면 열셋이 같은 규칙을 쓴다 — 손실마다
-# 적으면 열세 자리에서 어긋날 수 있는데 실제로 갈리는 것은 여기 세 줄뿐이다.
+# **How it folds is part of the loss.** Every torch loss takes `reduction`, and
+# by its value becomes elementwise, a mean or a sum. Gathered in one place,
+# thirteen of them use the same rule — written per loss there are thirteen places
+# that can drift, and what actually differs is the three lines here.
 
 def _reduce(out, reduction):
     if reduction == "none":
         return out
     if reduction == "sum":
         return out.sum()
-    # **모르는 값을 평균으로 삼키지 않는다.** `else: return out.mean()` 이었는데,
-    # 그러면 `reduction="MEAN"` 같은 오타가 조용히 통과해 그대로 학습된다 — 사람이
-    # 대문자로 적어 놓고 자기가 고른 것이 쓰이는 줄 안다. torch 는 멈춘다(실측).
+    # **An unknown value is not swallowed as the mean.** It used to be
+    # `else: return out.mean()`, and then a typo like `reduction="MEAN"` passes
+    # quietly and training goes on with it — somebody writes it in capitals and
+    # believes what they chose is being used. torch stops (measured).
     #
-    # `else` 가 한 값의 이름을 달고 정의역의 나머지를 전부 삼키는 꼴이고, 같은
-    # 모양을 `norm(p)`·`dist(p)` 에서도 봤다.
+    # It is the shape of an `else` wearing one value's name and swallowing the
+    # rest of the domain, and the same shape turned up in `norm(p)` and
+    # `dist(p)`.
     if reduction != "mean":
         raise ValueError(_like_torch(
             f"reduction must be one of 'none', 'mean', 'sum' "
@@ -4259,10 +4321,11 @@ def _reduce(out, reduction):
 
 
 def huber_loss(pred, target, reduction="mean", delta=1.0):
-    """**`SmoothL1Loss` 와 δ=1 에서만 같다.**
+    """**It equals `SmoothL1Loss` at δ=1 alone.**
 
-    실제 관계는 `huber(δ) = δ · smooth_l1(β=δ)` 다. 기본값으로만 재면 둘을 같은
-    함수로 두고도 통과하므로, 골든이 δ 를 바꿔 묻는다.
+    The actual relation is `huber(δ) = δ · smooth_l1(β=δ)`. Measured at the
+    defaults only, treating the two as one function still passes, so the golden
+    asks with δ changed.
     """
     diff = _wrap(pred) - _wrap(target)
     small = _np.abs(diff.data) < delta
@@ -4271,11 +4334,13 @@ def huber_loss(pred, target, reduction="mean", delta=1.0):
 
 
 def kl_div(pred, target, reduction="mean", log_target=False):
-    """`target · (log target − pred)`. `pred` 는 **이미 로그**여야 한다.
+    """`target · (log target − pred)`. `pred` has to be **already logged.**
 
-    **`reduction` 이 넷이다.** `mean` 은 원소 수로 나누고 `batchmean` 은 배치 크기로
-    나눈다 — 수학적 정의에 맞는 것은 뒤쪽이고, torch 자신도 "다음 주 버전에서 바꾸겠다"
-    고 경고를 낸다. 지금 값을 맞춰야 하므로 지금 규칙을 따른다.
+    **`reduction` has four settings here.** `mean` divides by the element count
+    and `batchmean` by the batch size — the latter is what matches the
+    mathematical definition, and torch itself warns that it will change in a
+    coming release. The present values have to match, so the present rule is
+    followed.
     """
     p, t = _wrap(pred), _wrap(target)
     out = (t.exp() * (t - p)) if log_target else (t * (t.log() - p))
@@ -4286,10 +4351,11 @@ def kl_div(pred, target, reduction="mean", log_target=False):
 
 def poisson_nll_loss(pred, target, log_input=True, full=False, eps=1e-8,
                      reduction="mean"):
-    """포아송 음의 로그가능도.
+    """The Poisson negative log likelihood.
 
-    **스털링 보정은 `target > 1` 일 때만 더한다.** 조건 없이 늘 더하면 target 이 작은
-    자리에서만 틀린다 — 실측으로 확인했다(target 이 0·0.5·1 이면 차이가 0 이다).
+    **The Stirling correction is added only where `target > 1`.** Added
+    unconditionally it is wrong only where the target is small — confirmed by
+    measurement (at targets of 0, 0.5 and 1 the difference is 0).
     """
     p, t = _wrap(pred), _wrap(target)
     out = (p.exp() - t * p) if log_input else (p - t * (p + eps).log())
@@ -4302,10 +4368,11 @@ def poisson_nll_loss(pred, target, log_input=True, full=False, eps=1e-8,
 
 
 def gaussian_nll_loss(pred, target, var, full=False, eps=1e-6, reduction="mean"):
-    """가우스 음의 로그가능도.
+    """The Gaussian negative log likelihood.
 
-    **분산을 `eps` 로 자른다.** 안 자르면 0 으로 나눠 무한대가 된다 — `var=1e-9` 에
-    기본 `eps=1e-6` 이면 잘린 값으로 124993 이 나온다(실측).
+    **The variance is clamped by `eps`.** Unclamped it divides by zero and becomes
+    infinite — at `var=1e-9` with the default `eps=1e-6` the clamped value gives
+    124993 (measured).
     """
     p, t, v = _wrap(pred), _wrap(target), _wrap(var)
     safe = clamp(v, min=eps)
@@ -4323,7 +4390,7 @@ def margin_ranking_loss(input1, input2, target, margin=0.0, reduction="mean"):
 
 
 def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction="mean"):
-    """`y=1` 이면 `1 − cos`, `y=−1` 이면 `max(0, cos − margin)`."""
+    """`1 − cos` at `y=1` and `max(0, cos − margin)` at `y=−1`."""
     a, b, t = _wrap(input1), _wrap(input2), _wrap(target)
     cos = cosine_similarity(a, b, dim=1)
     same = Tensor((t.data > 0).astype(cos.data.dtype))
@@ -4331,14 +4398,16 @@ def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction="mean"):
 
 
 def hinge_embedding_loss(pred, target, margin=1.0, reduction="mean"):
-    """`y=1` 이면 `x` 그대로, `y=−1` 이면 `max(0, margin − x)`.
+    """`x` itself at `y=1` and `max(0, margin − x)` at `y=−1`.
 
-    **둘로 가르는 것이 아니라 둘을 더한다.** torch 는 `y ≠ 1` 인 자리에 여백 항을,
-    `y ≠ −1` 인 자리에 `x` 를 놓고 **합한다** — ±1 에서는 한쪽만 켜져 평소 식과 같지만
-    `y=0` 에서는 **둘 다** 켜진다(실측: `x=−1` 에 1.0, `x=2` 에 2.0).
+    **The two are added rather than branched between.** torch puts the margin term
+    where `y ≠ 1` and `x` where `y ≠ −1` and **sums them** — at ±1 only one is on
+    and it matches the usual formula, and at `y=0` **both** are on (measured: 1.0
+    at `x=−1` and 2.0 at `x=2`).
 
-    `y > 0` 으로 갈라 놓았더니 여기서 조용히 갈렸다. 손실이 ±1 만 받는다고 적혀 있어도
-    실제로 오는 값이 그것뿐이라는 보장은 없고, `sign()` 은 0 을 만든다.
+    Branched on `y > 0` it diverged quietly here. The loss being documented as
+    taking ±1 alone is no guarantee that the values arriving are only those, and
+    `sign()` produces 0.
     """
     p, t = _wrap(pred), _wrap(target)
     dt = p.data.dtype
@@ -4348,17 +4417,19 @@ def hinge_embedding_loss(pred, target, margin=1.0, reduction="mean"):
 
 
 def soft_margin_loss(pred, target, reduction="mean"):
-    """`log(1 + e^{−y·x})`. 로그·지수를 그대로 쓰면 큰 값에서 넘치므로 `softplus` 로 간다."""
+    """`log(1 + e^{−y·x})`. The log and the exponential used directly overflow at
+    large values, so it goes through `softplus`."""
     p, t = _wrap(pred), _wrap(target)
     return _reduce(softplus(-t * p), reduction)
 
 
 def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
-    """짝지어진 두 줄 사이의 거리.
+    """The distance between two paired rows.
 
-    **`eps` 는 결과가 아니라 차에 더한다.** `p=1` 로 차가 정확히 1.0 인 자리를
-    물으면 1.0000020 이 나온다(= 1 + 2·1e-6) — 결과에 더한다고 읽으면 1.000001 이
-    되어 자릿수 하나가 갈린다. 실측으로 확인했다.
+    **`eps` is added to the difference, not to the result.** Asked at `p=1` where
+    the difference is exactly 1.0, it gives 1.0000020 (= 1 + 2·1e-6) — read as
+    added to the result it would be 1.000001 and a digit diverges. Confirmed by
+    measurement.
     """
     a, b = _wrap(x1), _wrap(x2)
     diff = (a - b) + eps
@@ -4366,7 +4437,8 @@ def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
 
 
 def pdist(x, p=2.0):
-    """한 묶음 안의 **모든 짝** 사이 거리. 위 삼각만 준다."""
+    """The distance between **every pair** within one batch. It gives the upper
+    triangle only."""
     t = _wrap(x)
     n = t.data.shape[0]
     rows = [i for i in range(n) for _ in range(i + 1, n)]
@@ -4379,8 +4451,8 @@ def triplet_margin_loss(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
                         swap=False, reduction="mean"):
     """`max(0, d(a,p) − d(a,n) + margin)`.
 
-    `swap` 은 `d(a,n)` 대신 `min(d(a,n), d(p,n))` 을 쓴다 — 음성이 양성에 더 가까우면
-    그쪽이 더 어려운 짝이기 때문이다.
+    `swap` uses `min(d(a,n), d(p,n))` instead of `d(a,n)` — when the negative is
+    closer to the positive, that is the harder pair.
     """
     a, pos, neg = _wrap(anchor), _wrap(positive), _wrap(negative)
     dp = pairwise_distance(a, pos, p=p, eps=eps)
@@ -4393,7 +4465,8 @@ def triplet_margin_loss(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
 def triplet_margin_with_distance_loss(anchor, positive, negative,
                                       distance_function=None, margin=1.0,
                                       swap=False, reduction="mean"):
-    """거리 함수를 받는 삼중항. 기본값은 쌍별 거리라 위와 같은 답이 나온다."""
+    """A triplet loss taking a distance function. The default is the pairwise
+    distance, so it gives the same answer as the one above."""
     a, pos, neg = _wrap(anchor), _wrap(positive), _wrap(negative)
     dist = distance_function or (lambda u, v: pairwise_distance(u, v))
     dp, dn = dist(a, pos), dist(a, neg)
@@ -4403,7 +4476,8 @@ def triplet_margin_with_distance_loss(anchor, positive, negative,
 
 
 def multilabel_soft_margin_loss(pred, target, weight=None, reduction="mean"):
-    """자리마다 독립인 이진 분류를 **반 전체로 평균**한다."""
+    """An independent binary classification per position, **averaged over the
+    whole class set.**"""
     p, t = _wrap(pred), _wrap(target)
     each = t * logsigmoid(p) + (1 - t) * logsigmoid(-p)
     if weight is not None:
@@ -4412,10 +4486,11 @@ def multilabel_soft_margin_loss(pred, target, weight=None, reduction="mean"):
 
 
 def multi_margin_loss(pred, target, p=1, margin=1.0, weight=None, reduction="mean"):
-    """정답 자리와 나머지 사이의 여백.
+    """The margin between the correct position and the rest.
 
-    **반의 개수로 나눈다** — 견준 짝의 수가 아니다. 정답 자리도 분모에 들어간다는
-    뜻이고, 짝의 수로 나누면 클래스가 셋일 때 3/2 배가 나온다.
+    **Divided by the class count** — not by the number of pairs compared. That
+    means the correct position enters the denominator too, and dividing by the
+    pair count gives 3/2 times the value at three classes.
     """
     x, t = _wrap(pred), _wrap(target)
     n, classes = x.data.shape
@@ -4424,17 +4499,18 @@ def multi_margin_loss(pred, target, p=1, margin=1.0, weight=None, reduction="mea
     each = relu(margin - correct + x) ** p
     if weight is not None:
         each = each * _wrap(weight)[t.data.astype(_np.intp)].unsqueeze(1)
-    # 정답 자리는 `margin` 이 그대로 남으므로 빼 준다.
+    # At the correct position `margin` survives intact, so it is subtracted.
     keep = _np.ones((n, classes), dtype=x.data.dtype)
     keep[idx, t.data.astype(_np.intp)] = 0.0
     return _reduce((each * Tensor(keep)).sum(dim=1) / classes, reduction)
 
 
 def multilabel_margin_loss(pred, target, reduction="mean"):
-    """**표적이 자리 목록이고 −1 이 끝을 뜻한다.**
+    """**The target is a list of positions and −1 marks the end.**
 
-    `[3, 0, -1, 1]` 은 "3 번과 0 번이 정답" 이라는 뜻이고 뒤의 1 은 안 읽는다. 그
-    규약을 안 지키면 −1 을 반의 하나로 세거나 끝난 뒤를 계속 읽는다.
+    `[3, 0, -1, 1]` means "3 and 0 are correct" and the trailing 1 is not read.
+    Without that convention, −1 gets counted as one of the classes or reading
+    continues past the end.
     """
     x, t = _wrap(pred), _wrap(target)
     rows, classes = x.data.shape
@@ -4454,18 +4530,21 @@ def multilabel_margin_loss(pred, target, reduction="mean"):
     return _reduce(out.reshape(1) / classes, reduction)
 
 
-# ---------------------------------------------------------------- 창 펴기
+# ------------------------------------------------------------ unfolding windows
 #
-# **`unfold` 와 `fold` 는 서로의 역이 아니다.** `unfold` 는 창을 열로 펴고 `fold` 는
-# 그것을 되접는데 **겹친 자리를 더한다** — 4×4 를 2×2 창으로 펴서 그대로 되접으면
-# 가운데가 네 번 세어져 원본이 안 나온다. 합치는 것이 규약이다.
+# **`unfold` and `fold` are not each other's inverse.** `unfold` spreads the
+# windows into columns and `fold` folds them back **adding where they overlap** —
+# spreading a 4×4 with a 2×2 window and folding it straight back counts the middle
+# four times and does not give the original. Summing is the convention.
 #
-# 그래서 색인 하나로 둘을 만든다. 어느 자리에서 왔는지를 정리해 두면 `unfold` 는
-# 그 자리를 모으는 것이고 `fold` 는 그 자리로 **더해 넣는 것**이라, 한쪽의 역방향이
-# 곧 다른 쪽이 된다. 패딩에서 쓴 것과 같은 기계다.
+# So both are built from one index. With where each cell came from written down,
+# `unfold` is gathering from those positions and `fold` is **adding into** them,
+# which makes one's backward the other. The same machine as the one used in the
+# padding.
 
 def _window_index(shape, kernel, dilation, padding, stride):
-    """`(C·kh·kw, L)` 자리표. 값은 **패딩된** 입력의 평평한 자리다."""
+    """A `(C·kh·kw, L)` index table. The values are flat positions in the
+    **padded** input."""
     c, h, w = shape
     kh, kw = kernel
     dh, dw = dilation
@@ -4491,13 +4570,14 @@ def _window_index(shape, kernel, dilation, padding, stride):
 
 
 def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
-    """창을 열로 편다. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
+    """Spread the windows into columns. `(N, C, H, W)` → `(N, C·kh·kw, L)`.
 
-    **이름이 이미 있는 것과 부딪힌다.** `Tensor.unfold(dim, size, step)` 은 한 축을
-    창으로 미는 **뷰**이고 이것은 im2col 이다 — torch 도 이름이 같고 하는 일이 다르다
-    (`torch.Tensor.unfold` 대 `torch.nn.functional.unfold`). 모듈 자리에 같은 이름으로
-    두었더니 앞의 것을 덮어서 `shape::unfold` 케이스 셋이 한꺼번에 무너졌다.
-    여기서는 이름을 갈라 두고 `F.unfold` 쪽에만 이것을 건다.
+    **The name collides with an existing one.** `Tensor.unfold(dim, size, step)`
+    is a **view** sliding a window along one axis and this is im2col — torch has
+    the same collision (`torch.Tensor.unfold` versus
+    `torch.nn.functional.unfold`). Put into the module slot under the same name it
+    covered the former and three `shape::unfold` cases collapsed at once. Here the
+    names are kept apart and this is attached to `F.unfold` alone.
     """
     t = _mat(x, "unfold", square=False)
     if t.data.ndim != 4:
@@ -4512,7 +4592,8 @@ def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
 
 
 def fold(x, output_size, kernel_size, dilation=1, padding=0, stride=1):
-    """편 것을 되접는다. **겹친 자리는 더한다** — 그것이 이 함수의 뜻이다."""
+    """Fold what was spread back. **Overlaps are added** — that is what this
+    function means."""
     t = _wrap(x)
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
@@ -4535,21 +4616,22 @@ def fold(x, output_size, kernel_size, dilation=1, padding=0, stride=1):
     return t._make(made, (t,), back, "FoldBackward0")
 
 
-# ---------------------------------------------------------------- 나머지 층
+# --------------------------------------------------------- the rest of the layers
 
 def bilinear(input1, input2, weight, bias=None):
-    """`y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. 가중치가 **세 축**이다."""
+    """`y[o] = x₁ᵀ·W[o]·x₂ + b[o]`. The weights have **three axes.**"""
     a, b_, w = _wrap(input1), _wrap(input2), _wrap(weight)
     out = einsum("bi,oij,bj->bo", a, w, b_)
     return out + _wrap(bias) if bias is not None else out
 
 
 def local_response_norm(x, size, alpha=1e-4, beta=0.75, k=1.0):
-    """이웃 채널로 나눈다.
+    """Divide by the neighbouring channels.
 
-    **창이 한쪽으로 치우쳐 있다.** 채널 `c` 의 창은 `[c − n//2, c + n − 1 − n//2]`
-    이고, `size=2` 면 `{c−1, c}` 이지 `{c, c+1}` 이 아니다 — 재서 확인했다.
-    가운데를 잡으면 값이 한 칸씩 밀리는데 크기가 같아서 모양으로는 안 보인다.
+    **The window is lopsided.** Channel `c`'s window is
+    `[c − n//2, c + n − 1 − n//2]`, and at `size=2` that is `{c−1, c}` rather than
+    `{c, c+1}` — confirmed by measurement. Centred, the values shift by one cell,
+    and with the same size it is invisible in the shape.
     """
     t = _wrap(x)
     left = size // 2
@@ -4568,7 +4650,8 @@ def local_response_norm(x, size, alpha=1e-4, beta=0.75, k=1.0):
 
 
 def _roll_channels(t, shift):
-    """채널 축을 `shift` 만큼 민다. 밖에서 들어온 자리는 뒤에서 0 으로 지운다."""
+    """Shift the channel axis by `shift`. What wrapped in from outside is erased
+    to 0 afterwards."""
     if shift == 0:
         return t
     rolled = _np.roll(t.data, -shift, axis=1)
@@ -4578,10 +4661,11 @@ def _roll_channels(t, shift):
 
 
 def rrelu(x, lower=1.0 / 8, upper=1.0 / 3, training=False, inplace=False):
-    """음수 쪽 기울기를 뽑아 쓴다.
+    """The slope on the negative side is drawn at random.
 
-    **평가 모드에서는 가운데로 정해진다** — 기본값이면 `(1/8 + 1/3)/2 = 0.2292` 다.
-    학습 때만 `[lower, upper]` 에서 뽑으므로, 난수가 끼는 자리는 그쪽뿐이다.
+    **In evaluation mode it is fixed to the midpoint** — at the defaults,
+    `(1/8 + 1/3)/2 = 0.2292`. It is drawn from `[lower, upper]` during training
+    alone, so that is the only place randomness enters.
     """
     t = _wrap(x)
     if not training:
@@ -4590,18 +4674,21 @@ def rrelu(x, lower=1.0 / 8, upper=1.0 / 3, training=False, inplace=False):
     return where(Tensor((t.data > 0).astype(t.data.dtype)), t, t * Tensor(slope))
 
 
-# ---------------------------------------------------------------- 자리 옮기기
+# ------------------------------------------------------------------ rearrangement
 #
-# 셋 다 **값을 안 바꾸고 자리만 바꾼다.** 그래서 순방향이 `reshape` + 축 바꾸기이고
-# 역방향은 그 반대다 — 우리 `transpose`·`reshape` 가 이미 그 일을 하므로 여기는
-# 조합이다. 입력을 `arange` 로 두면 어느 자리가 어디로 갔는지가 답에 그대로 나온다.
+# All three **move the positions without changing the values.** So the forward is
+# a `reshape` plus an axis swap and the backward is the reverse — our `transpose`
+# and `reshape` already do that job, so this is an assembly. With `arange` as the
+# input, where each position went reads straight off the answer.
 
 def pixel_shuffle(x, upscale_factor):
-    """`(N, C·r², H, W)` → `(N, C, H·r, W·r)`. 채널을 잘라 공간에 심는다.
+    """`(N, C·r², H, W)` → `(N, C, H·r, W·r)`. The channels are cut up and planted
+    into space.
 
-    **엇갈리는 순서가 값의 전부다.** 채널을 `(C, r, r)` 로 갈라 두 `r` 을 각각 `H` 와
-    `W` 뒤에 끼워 넣는다 — `(N, C, H, r, W, r)` 로 세운 뒤 붙이는 것이 그 뜻이다.
-    순서를 바꾸면 모양은 같고 그림만 뒤섞인다.
+    **The interleaving order is the whole of the value.** The channels are split
+    into `(C, r, r)` and the two `r`s inserted behind `H` and `W` respectively —
+    standing it up as `(N, C, H, r, W, r)` and then joining is what that means.
+    Reordered, the shape matches and only the picture is scrambled.
     """
     t = _wrap(x)
     r = upscale_factor
@@ -4611,7 +4698,8 @@ def pixel_shuffle(x, upscale_factor):
 
 
 def pixel_unshuffle(x, downscale_factor):
-    """`pixel_shuffle` 의 역. 공간을 잘라 채널에 쌓는다."""
+    """The inverse of `pixel_shuffle`. Space is cut up and stacked into the
+    channels."""
     t = _wrap(x)
     r = downscale_factor
     n, c, h, w = t.data.shape
@@ -4620,10 +4708,11 @@ def pixel_unshuffle(x, downscale_factor):
 
 
 def channel_shuffle(x, groups):
-    """채널을 묶음으로 갈라 **엇갈려 다시 놓는다.**
+    """Split the channels into groups and **lay them back interleaved.**
 
-    `[0,1,2,3]` 을 두 묶음으로 섞으면 `[0,2,1,3]` 이다 — 묶음별 합성곱 뒤에 정보가
-    묶음 안에만 갇히는 것을 푸는 자리라, 엇갈리는 방향이 값의 전부다.
+    `[0,1,2,3]` shuffled into two groups is `[0,2,1,3]` — this is where the
+    information being trapped inside its group after a grouped convolution gets
+    released, so the direction of the interleaving is the whole of the value.
     """
     t = _wrap(x)
     n, c = t.data.shape[0], t.data.shape[1]
@@ -4633,17 +4722,21 @@ def channel_shuffle(x, groups):
     return out.reshape(n, c, *rest)
 
 
-# ---------------------------------------------------------------- 채널째 dropout
+# ------------------------------------------------------- channel-wise dropout
 #
-# **원소가 아니라 채널을 떨군다.** 이름이 `Dropout` 옆에 있어서 "2 차원용" 으로 읽기
-# 쉬운데 하는 일이 다르다 — 한 채널을 통째로 0 으로 만들거나 통째로 남긴다.
+# **It drops channels rather than elements.** The name sitting next to `Dropout`
+# makes it easy to read as "the 2-D one" and it does a different job — a channel
+# is zeroed as a whole or kept as a whole.
 #
-# `AlphaDropout` 은 거기에 더해 **0 을 안 넣는다.** SELU 와 함께 쓰라고 만든 것이라
-# 떨군 자리에 음의 상수를 넣고 전체에 아핀 변환을 걸어 평균과 분산을 지킨다. 0 을
-# 넣으면 SELU 의 자기정규화가 깨지는데, 값이 그럴듯해서 학습이 도는 동안은 안 보인다.
+# `AlphaDropout` additionally **does not insert 0.** Built to be used with SELU,
+# it puts a negative constant at the dropped positions and applies an affine
+# transformation over the whole thing to preserve the mean and the variance.
+# Inserting 0 breaks SELU's self-normalisation, and the values are plausible, so
+# it is invisible while training runs.
 
 def _channel_mask(t, p):
-    """채널마다 하나씩 뽑은 0/1. 공간 축은 1 로 두어 브로드캐스트한다."""
+    """One 0/1 drawn per channel. The spatial axes are left at 1 and
+    broadcast."""
     shape = t.data.shape[:2] + (1,) * (t.data.ndim - 2)
     return (_rng.random(shape) > p).astype(t.data.dtype)
 
@@ -4676,12 +4769,14 @@ def dropout3d(x, p=0.5, training=True, inplace=False):
     return _feature_dropout(x, p, training, "dropout3d")
 
 
-# SELU 의 고정점. `alpha_dropout` 이 떨군 자리에 넣는 값이 여기서 나온다.
+# SELU's fixed point. The value `alpha_dropout` inserts at a dropped position
+# comes from here.
 _ALPHA_PRIME = -1.7580993408473766
 
 
 def _alpha_affine(p):
-    """떨군 자리를 상수로 채운 뒤 평균과 분산을 되돌리는 아핀 계수 `(a, b)`."""
+    """The affine coefficients `(a, b)` that restore the mean and the variance
+    after the dropped positions are filled with a constant."""
     a = ((1 - p) * (1 + p * _ALPHA_PRIME ** 2)) ** -0.5
     return a, -a * p * _ALPHA_PRIME
 
@@ -4696,7 +4791,7 @@ def alpha_dropout(x, p=0.5, training=False, inplace=False):
 
 
 def feature_alpha_dropout(x, p=0.5, training=False, inplace=False):
-    """채널째 떨구는 `alpha_dropout`."""
+    """`alpha_dropout` dropping whole channels."""
     t = _wrap(x)
     if not training or p == 0:
         return t
@@ -4706,17 +4801,20 @@ def feature_alpha_dropout(x, p=0.5, training=False, inplace=False):
 
 
 def _pad_index(mode, size, before, after):
-    """출력 자리마다 **입력의 어느 자리를 읽는지.** `-1` 은 채운 자리다.
+    """For each output position, **which input position it reads.** `-1` marks a
+    padded position.
 
-    네 모드가 여기서만 갈린다. 아래 세 줄이 규약의 전부이고, 진짜 torch 에 물어
-    자리마다 맞췄다(`[0,1,2]` 를 앞 2·뒤 1 로 늘린 것):
+    The four modes part here and nowhere else. The three lines below are the whole
+    convention, matched position by position against real torch (`[0,1,2]`
+    extended by 2 in front and 1 behind):
 
-        reflect    2 1 [0 1 2] 1   ← 가장자리를 거울로 **하되 가장자리는 안 겹친다**
-        replicate  0 0 [0 1 2] 2   ← 가장자리를 늘인다
-        circular   1 2 [0 1 2] 0   ← 반대편에서 가져온다
+        reflect    2 1 [0 1 2] 1   ← mirrored at the edge, **without repeating the edge itself**
+        replicate  0 0 [0 1 2] 2   ← the edge is stretched
+        circular   1 2 [0 1 2] 0   ← taken from the opposite side
 
-    색인 하나로 정리해 두면 순방향은 `take` 이고 역방향은 **같은 색인으로 모아
-    더하기**다. 모드마다 역방향을 따로 적으면 네 번 틀릴 자리가 생긴다.
+    Written down as one index, the forward is a `take` and the backward is
+    **gathering and adding through the same index.** Writing a backward per mode
+    creates four places to get it wrong.
     """
     idx = []
     for i in range(-before, size + after):
@@ -4737,11 +4835,12 @@ def _pad_index(mode, size, before, after):
 
 
 def pad(x, padding, mode="constant", value=0.0):
-    """마지막 차원부터 (앞, 뒤) 순으로 받는다 — torch 의 규칙이다.
+    """Taken from the last dimension in (before, after) order — torch's rule.
 
-    **짝의 개수와 랭크가 맞물린다.** 짝이 하나면 2·3 차원, 둘이면 3·4 차원, 셋이면
-    4·5 차원이라야 한다 — torch 가 그 밖을 `NotImplementedError` 로 거절한다. 아무
-    랭크나 받으면 축을 잘못 잡고도 통과하므로 여기서 같이 막는다.
+    **The pair count and the rank are interlocked.** One pair needs rank 2 or 3,
+    two pairs rank 3 or 4, and three pairs rank 4 or 5 — torch refuses anything
+    else with a `NotImplementedError`. Accepting any rank lets a wrongly chosen
+    axis pass, so it is blocked here alongside.
     """
     x = _wrap(x)
     rank = x.data.ndim
@@ -4776,8 +4875,9 @@ def pad(x, padding, mode="constant", value=0.0):
 
     def back(g):
         gg = _np.asarray(g)
-        # 뒤에서부터 되짚는다. 읽어 온 자리마다 **모아 더한다** — 거울과 감기는
-        # 한 입력을 여러 번 읽으므로 덮어쓰면 그만큼이 사라진다.
+        # Traced back from the end. Each position read from is **gathered and
+        # added** — mirroring and wrapping read one input several times, so
+        # overwriting loses that much.
         for axis, idx, size in reversed(steps):
             shape = list(gg.shape)
             shape[axis] = size
@@ -4805,8 +4905,9 @@ def cosine_similarity(a, b, dim=1, eps=1e-8):
 
 
 def tril(t, diagonal=0):
-    """아래 삼각만 남긴다. 역방향은 **같은 자리만 통과시키는** 것이다 — 지운 자리는
-    출력에 안 나타났으니 기울기도 0 이다."""
+    """Keep the lower triangle alone. The backward **passes the same positions
+    through** — the erased positions never appeared in the output, so their
+    gradient is 0 too."""
     t = _wrap(t)
     return t._make(_np.tril(t.data, k=diagonal), (t,),
                    lambda g: (_np.tril(_np.asarray(g), k=diagonal),), "TrilBackward0")
@@ -4819,11 +4920,13 @@ def triu(t, diagonal=0):
 
 
 def allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
-    """**`equal_nan` 을 받는다.** 기본은 거짓이라 NaN 끼리도 안 같다(실측).
+    """**It takes `equal_nan`.** The default is false, so NaN does not even equal
+    NaN (measured).
 
-    골든 하네스는 이 인자를 **안 켠다** — 켜면 NaN 이 통과하면 안 되는 자리에서
-    통과한다. 그것과 이것은 다른 자리다: 여기는 torch 가 주는 인자를 우리도 주는
-    것이고, 켤지 말지는 부르는 쪽이 정한다.
+    The golden harness **does not turn this on** — turned on, a NaN passes
+    somewhere it must not. That and this are different places: here torch offers
+    an argument and so do we, and whether to turn it on is the caller's
+    decision.
     """
     return bool(_np.allclose(_wrap(a).data, _wrap(b).data, rtol=rtol, atol=atol,
                              equal_nan=bool(equal_nan)))
@@ -4838,37 +4941,42 @@ def isfinite(t):
 
 
 def bincount(t, weights=None, minlength=0):
-    """칸마다 몇 번 나왔는가. **무게를 주면 개수 대신 무게를 더한다.**
+    """How many times each cell occurred. **Given weights it sums the weights
+    rather than the counts.**
 
-    형이 갈린다(실측): 무게 없이는 `int64`, 무게가 있으면 그 무게의 형이다 —
-    개수를 세는 것과 값을 더하는 것이 다른 일이기 때문이다.
+    The dtype parts (measured): `int64` without weights and the weights' dtype
+    with them — because counting and summing values are different jobs.
     """
     t = _wrap(t)
     _refuses_bool(t.data, "bincount does not take booleans.",
                   '"bincount_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
-    # `intp` 다 — wasm32 에서 int64 를 주면 거절한다. 위 `repeat_interleave` 참고.
+    # `intp` — on wasm32, handing it int64 is refused. See `repeat_interleave`
+    # above.
     w = None if weights is None else _np.asarray(_wrap(weights).data)
     out = _np.bincount(t.data.astype(_np.intp), weights=w,
                        minlength=int(minlength))
-    # numpy 는 무게가 있으면 언제나 float64 를 준다. 무게의 형으로 되돌린다.
+    # numpy always gives float64 when there are weights. It is restored to the
+    # weights' dtype.
     if w is not None:
         return Tensor(out.astype(w.dtype))
     return Tensor(out)
 
 
-# `save`·`load` 는 여기 있었다 — pickle 한 겹이었다. **`_serialize.py` 로 옮겼고
-# 형식이 safetensors 로 바뀌었다.**
+# `save` and `load` used to be here — one layer over pickle. **They moved to
+# `_serialize.py` and the format became safetensors.**
 #
-# 옮긴 이유는 셋이 갈려 있었기 때문이다. borch.ts 는 처음부터 safetensors 였고,
-# 그 파일의 첫 문단이 그 형식을 고른 이유로 "**파이썬 `borch`·numpy·HF 도구가 같은
-# 파일을 읽는다**" 를 든다. 그런데 파이썬 쪽이 pickle 을 쓰고 있었으므로 그 문장은
-# 사실이 아니었다 — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 막혀 있었고,
-# 그 길이 이 프로젝트가 그 형식을 고른 유일한 이유다.
+# The move happened because the three had diverged. borch.ts was safetensors from
+# the start, and that file's opening paragraph gives as its reason for the format
+# that "**Python `borch`, numpy and the HF tools read the same file**". And the
+# Python side was using pickle, so that sentence was not true — the path from
+# training in a browser to carrying it to your own machine was blocked, and that
+# path is this project's only reason for choosing the format.
 #
-# 잃는 것도 있다. pickle 은 아무 파이썬 객체나 담았고 safetensors 는 텐서·수·글자만
-# 담는다. 그 밖의 것은 이제 **거절**한다 — 조용히 못 담는 것보다 낫고, 애초에 남이
-# 읽을 수 있어야 한다는 것이 이 형식의 조건이다.
+# Something is lost too. pickle carried any Python object and safetensors carries
+# tensors, numbers and strings. Anything else is now **refused** — better than
+# quietly failing to carry it, and being readable by somebody else is this
+# format's condition to begin with.
 
 
 class no_grad:
@@ -4889,7 +4997,8 @@ class no_grad:
 
 
 class enable_grad:                                       # noqa: N801
-    """`no_grad` 안에서 **다시 켠다.** 중첩이 되어야 하므로 이전 값을 되돌린다."""
+    """**Turn it back on** inside `no_grad`. It has to nest, so the previous
+    value is restored."""
 
     def __enter__(self):
         self._prev = _grad_mode.enabled
@@ -4908,7 +5017,8 @@ class enable_grad:                                       # noqa: N801
 
 
 class set_grad_enabled:                                  # noqa: N801
-    """켤지 끌지를 **값으로** 받는다. `with` 로도 쓰고 그냥 불러도 된다."""
+    """Takes on or off **as a value.** It works as a `with` and as a plain
+    call."""
 
     def __init__(self, mode):
         self._prev = _grad_mode.enabled
@@ -4934,12 +5044,13 @@ def is_grad_enabled():
 
 
 class inference_mode:                                    # noqa: N801
-    """**여기서는 `no_grad` 와 같다.**
+    """**The same as `no_grad` here.**
 
-    진짜 torch 에서 이것은 더 세다 — 안에서 만든 텐서에 표를 붙여 나중에 autograd
-    에 못 들어가게 막는다. 그 표를 흉내내면 "왜 이 텐서를 못 쓰나" 하는 오류를
-    우리가 만들어 내는 셈이라, 여기서는 기울기만 끈다. `is_inference` 가 늘 거짓인
-    이유가 그것이다 — 그 표를 안 붙이므로 없다고 말하는 것이 사실이다.
+    In real torch this is stronger — it marks the tensors made inside so that they
+    cannot enter autograd later. Imitating that mark would mean manufacturing our
+    own "why can I not use this tensor" errors, so only the gradient is turned off
+    here. That is why `is_inference` is always false — the mark is never attached,
+    so saying it is absent is the fact.
     """
 
     def __init__(self, mode=True):
@@ -4964,7 +5075,8 @@ class inference_mode:                                    # noqa: N801
 
 
 def is_inference(t):
-    """**늘 거짓이다.** 위에 적은 대로 그 표를 안 붙이므로 없다고 말한다."""
+    """**Always false.** As written above, the mark is never attached, so it says
+    so."""
     return False
 
 
@@ -4972,18 +5084,19 @@ def is_inference_mode_enabled():
     return False
 
 
-# ── 살펴보기 ────────────────────────────────────────────────────────────────
+# ── introspection ───────────────────────────────────────────────────────────
 #
-# 값을 안 바꾸고 **묻기만 하는** 것들. 교재 코드가 분기에 쓰는 자리라, 없으면
-# 계산이 다 맞아도 그 줄에서 멈춘다.
+# The ones that **only ask** and change no value. Textbook code branches on them,
+# so without them the arithmetic is all right and it stops at that line.
 
 def is_tensor(x):
     return isinstance(x, Tensor)
 
 
 def is_storage(x):
-    """**늘 거짓이다.** 저장(Storage) 이라는 층을 우리는 안 둔다 — numpy 배열이
-    그 자리이고, 그것을 Storage 라고 부르면 없는 API 를 있다고 말하는 것이 된다."""
+    """**Always false.** There is no Storage layer here — the numpy array is that
+    place, and calling it a Storage would be claiming an API that does not
+    exist."""
     return False
 
 
@@ -4996,8 +5109,8 @@ def is_signed(x):
 
 
 def is_nonzero(x):
-    """**원소가 하나여야 한다.** torch 는 아니면 던진다 — 여러 개일 때 무엇이 참인지가
-    정해져 있지 않기 때문이다."""
+    """**There has to be exactly one element.** torch throws otherwise — with
+    several there is no defined answer to what is true."""
     data = _wrap(x).data
     if data.size != 1:
         raise RuntimeError(
@@ -5010,12 +5123,13 @@ def is_same_size(a, b):
 
 
 def is_distributed(x):
-    """**늘 거짓이다.** 탭 하나 안이라 나눌 자리가 없다."""
+    """**Always false.** Inside one tab there is nothing to distribute across."""
     return False
 
 
 def typename(x):
-    """`torch.FloatTensor` 처럼 옛 이름을 낸다. 텐서가 아니면 파이썬 형 이름이다."""
+    """Gives the old-style name, as in `torch.FloatTensor`. For a non-tensor it
+    is the Python type's name."""
     if not isinstance(x, Tensor):
         return type(x).__name__
     kinds = {"float32": "FloatTensor", "float64": "DoubleTensor",
@@ -5027,12 +5141,14 @@ _PROMOTE_ORDER = ("bool", "int64", "float32", "float64")
 
 
 def promote_types(a, b):
-    """둘을 담을 수 있는 형.
+    """The dtype that can hold both.
 
-    **산수가 쓰는 규칙을 그대로 쓴다.** 여기 따로 순서표를 두었더니 복소수를 몰라서
-    `float32 + complex64` 가 float32 로 나왔다 — 산수는 그 자리를 맞게 하고 있었는데
-    같은 물음에 답하는 함수가 **두 벌**이라 한쪽만 맞았다. 값 대조로는 안 걸린다.
-    이 함수를 부르는 사람이 형만 묻기 때문이다.
+    **It uses the rule the arithmetic uses.** A separate ordering table here did
+    not know about complex, so `float32 + complex64` came out float32 — the
+    arithmetic had that place right and there were **two copies** of the function
+    answering the same question, so only one of them was. A value comparison does
+    not catch it, because whoever calls this function asks about the dtype
+    alone.
     """
     from ._tensor import result_type                       # noqa: PLC0415
 
@@ -5040,14 +5156,15 @@ def promote_types(a, b):
 
 
 def can_cast(from_type, to_type):
-    """**범주만 본다** — bool < 정수 < 실수 < 복소수.
+    """**Category only** — bool < integer < float < complex.
 
-    정밀도는 자유롭다: `float64 → float32` 는 참이다(실측). 값이 깎이는데도 참인 것이
-    뜻밖이지만 torch 가 그렇고, 여덟 짝을 다 재서 확인했다. 거짓인 것은 **범주가
-    좁아지는 쪽**뿐이다 — 실수를 정수 칸에, 정수를 불리언 칸에 넣는 것.
+    Precision is free: `float64 → float32` is true (measured). It is surprising
+    that it is true when values are cut, and torch is like that, confirmed across
+    all eight pairs. What is false is **narrowing the category** alone — a float
+    into an integer cell, an integer into a boolean cell.
 
-    전에는 이름 순서표를 봤는데 그 표에 복소수가 없어서 **복소수끼리도 거짓**이었다.
-    `out=` 을 만들면서 드러났다.
+    It used to look at a table ordered by name, and that table had no complex, so
+    **even complex to complex was false.** It surfaced while building `out=`.
     """
     from ._tensor import _category                         # noqa: PLC0415
 
@@ -5059,20 +5176,23 @@ def get_default_dtype():
 
 
 def set_default_dtype(dt):
-    """**받되 바꾸지 않는다.** 우리 저장은 float32 하나이고, 바꾼 척하면 그다음에
-    만드는 텐서가 말과 다른 형으로 나온다. float32 를 주면 조용히 넘어가고 그 밖은
-    시끄럽게 거절한다 — 아무 말 없이 무시하는 것이 제일 나쁘다."""
+    """**Accepted and not acted on.** The storage here is float32 throughout, and
+    pretending to change it makes the next tensor built come out in a dtype other
+    than the one claimed. float32 passes quietly and anything else is refused
+    loudly — ignoring it without a word is the worst of the three."""
     if getattr(dt, "name", str(dt)) != "float32":
         _unsupported(f"set_default_dtype({dt}) — the storage is float32 only")
     return None
 
 
 class finfo:
-    """`torch.finfo` 가 주는 것. numpy 가 이미 아는 수를 이름만 바꿔 낸다.
+    """What `torch.finfo` gives. Numbers numpy already knows, under different
+    names.
 
-    **클래스여야 한다.** torch 의 것은 타입이라 `isinstance` 로 물을 수 있다. 감싸는
-    함수를 두면 값은 같은데 종류가 달라지고, 이름이 있는지만 보는 검사는 그 차이를
-    못 본다 — 형 별칭이 함수로 앉아 있던 것과 같은 자리다.
+    **It has to be a class.** torch's is a type and can be asked with
+    `isinstance`. A wrapper function gives the same values with a different type,
+    and a check that only looks at whether the name exists cannot see the
+    difference — the same place as the dtype aliases sitting as functions.
     """
 
     def __init__(self, dt=None):
@@ -5095,7 +5215,7 @@ class finfo:
 
 
 class iinfo:
-    """`finfo` 와 같은 까닭으로 클래스다."""
+    """A class for `finfo`'s reason."""
 
     def __init__(self, dt):
         info = _np.iinfo(getattr(dt, "np", _np.int64))
@@ -5112,40 +5232,45 @@ class iinfo:
 
 
 class _Namespace:
-    """torch 의 하위 모듈 자리(`torch.nn`, `torch.optim.lr_scheduler` …).
+    """A submodule slot of torch (`torch.nn`, `torch.optim.lr_scheduler`, …).
 
-    파이썬 모듈이 아니라 객체지만, `install()` 이 이것을 훑어 `sys.modules` 에 심어주면
-    `from torch.optim.lr_scheduler import StepLR` 같은 import 가 그대로 통한다.
-    상속만이 표시다 — 여기 들어오지 않은 자리는 import 경로가 안 생긴다.
+    An object rather than a Python module, and once `install()` walks it and
+    plants it into `sys.modules`, an import such as
+    `from torch.optim.lr_scheduler import StepLR` goes straight through.
+    Inheritance is the only mark — a place that did not come in here gets no
+    import path.
     """
 
 
-# ---------------------------------------------------------------- 선형대수(분해)
+# ------------------------------------------------- linear algebra (factorisations)
 #
-# numpy 가 다 해준다. **기울기는 닫힌 꼴이 있는 것만 넣는다** — `det`·`logdet`·
-# `inverse`·`solve`·`cholesky` 가 그렇고, 이 다섯은 유도해서 torch 와 대조했다
-# (콜레스키는 최대차 2.8e-17).
+# numpy does all of it. **Gradients go in only where there is a closed form** —
+# `det`, `logdet`, `inverse`, `solve` and `cholesky` are those, and the five were
+# derived and compared against torch (Cholesky at a max diff of 2.8e-17).
 #
-# `qr`·`svd`·`pinverse`·`lstsq` 는 값만 준다. torch 는 이것들도 미분하는데 우리는 안 한다 —
-# 유도가 까다롭고(특히 특잇값이 겹칠 때) 틀리면 조용히 틀린다. `backward()` 가 거절하므로
-# 없다는 것이 시끄럽게 드러난다.
+# `qr`, `svd`, `pinverse` and `lstsq` give values alone. torch differentiates
+# these too and this does not — the derivation is delicate (especially with
+# repeated singular values) and getting it wrong is wrong quietly. `backward()`
+# refuses, so the absence surfaces loudly.
 
 class LinAlgError(RuntimeError):
-    """torch 의 `linalg.LinAlgError`.
+    """torch's `linalg.LinAlgError`.
 
-    **이름이 하는 일이 있다.** 특이행렬을 만난 코드가 `except linalg.LinAlgError` 로
-    감싸는데, 우리가 다른 것을 던지면 그 감싸기를 지나쳐 프로그램이 죽는다.
-    numpy 는 `ValueError` 밑에 두지만 torch 는 `RuntimeError` 밑이라 이쪽을 따른다.
+    **The name does a job.** Code that meets a singular matrix wraps it in
+    `except linalg.LinAlgError`, and throwing something else means passing that
+    wrapper by and the program dies. numpy puts it under `ValueError` and torch
+    under `RuntimeError`, and this follows torch.
     """
 
 
 def _named(kind, *fields):
-    """이름 붙은 결과를 만든다.
+    """Build a named result.
 
-    **torch 의 linalg 는 자리로도 이름으로도 물을 수 있다** — `slogdet(A)[1]` 과
-    `slogdet(A).logabsdet` 이 같은 것이다. 자리만 맞춰 두면 값이 맞는데도 교재
-    코드가 속성 접근에서 멈춘다. `lstsq` 가 `.solution` 으로 그 자리를 이미 겪었고,
-    그때 클래스를 손으로 하나 적었다 — 그것을 여덟 번 더 적는 대신 여기서 찍는다.
+    **torch's linalg can be asked positionally or by name** — `slogdet(A)[1]` and
+    `slogdet(A).logabsdet` are the same thing. Matching the positions alone, the
+    values are right and textbook code stops at the attribute access. `lstsq` had
+    already been through that with `.solution`, and a class was written by hand at
+    the time — rather than write it eight more times, they are stamped out here.
     """
     class _R:
         __slots__ = fields
@@ -5188,15 +5313,17 @@ _LdlFactor = _named("linalg_ldl_factor", "LD", "pivots")
 _LdlFactorEx = _named("linalg_ldl_factor_ex", "LD", "pivots", "info")
 _Geqrf = _named("geqrf", "a", "tau")
 _Frexp = _named("frexp", "mantissa", "exponent")
-# 통계의 답들. `histogram` 과 `histogramdd` 의 인자 이름이 `range` 라 그 안에서는
-# 파이썬 내장이 가려진다 — 이 파일에서 아홉 번째 겪는 일이라 별칭을 미리 둔다.
+# The statistics results. `histogram` and `histogramdd` have a parameter named
+# `range`, which shadows the Python builtin inside them — the ninth time in this
+# file, so an alias is put down in advance.
 _Histogram = _named("histogram", "hist", "bin_edges")
 _HistogramDD = _named("histogramdd", "hist", "bin_edges")
 _Mode = _named("mode", "values", "indices")
 _NanMedian = _named("nanmedian", "values", "indices")
 _builtin_range = range
-# 최상위 선형대수의 답들. **`triangular_solve` 는 둘을 주는데 둘째가 계수 행렬의
-# 사본이다**(실측) — 쓸모가 없어 보이지만 torch 가 그렇게 주므로 자리를 맞춘다.
+# The top-level linear algebra results. **`triangular_solve` gives two things and
+# the second is a copy of the coefficient matrix** (measured) — it looks useless,
+# and torch gives it that way, so the positions are matched.
 _TriangularSolve = _named("triangular_solve", "solution", "cloned_coefficient")
 _LuInfos = _named("lu", "LU", "pivots", "info")
 _LuUnpack = _named("lu_unpack", "P", "L", "U")
@@ -5204,18 +5331,20 @@ _Lobpcg = _named("lobpcg", "eigenvalues", "eigenvectors")
 _SvdLowrank = _named("svd_lowrank", "U", "S", "V")
 
 
-# ---- 배치
+# ---- batching
 #
-# **torch 의 `linalg` 는 전부 배치다.** `det((3,2,2))` 이 `(3,)` 을 내고 `inv`·`solve`·
-# `cholesky`·`slogdet`·`matrix_rank` 가 다 그렇다. 앞의 `_mat` 은 2 차원이 아니면
-# 거절했는데, 그건 흉내가 아니라 없는 것이었다 — 배치는 실제 코드가 늘 쓰는 모양이다.
+# **Every torch `linalg` function is batched.** `det((3,2,2))` gives `(3,)`, and
+# so do `inv`, `solve`, `cholesky`, `slogdet` and `matrix_rank`. The earlier
+# `_mat` refused anything that was not 2-D, and that was an absence rather than an
+# imitation — batching is the shape real code always uses.
 #
-# numpy 의 `linalg` 도 마지막 두 축을 행렬로 보고 앞을 배치로 돈다. 그래서 순방향은
-# 거의 그대로 열리고, **손이 가는 곳은 역방향이다.** 전치를 `.T` 로 적으면 2 차원에서만
-# 맞고 배치에서는 축을 통째로 뒤집어 조용히 틀린다. 아래는 전부 `_T` 를 쓴다.
+# numpy's `linalg` also treats the last two axes as the matrix and loops the rest
+# as a batch. So the forward opens up almost as it is and **the work is in the
+# backward.** A transpose written as `.T` is right at 2-D alone and reverses every
+# axis in a batch, quietly wrong. Everything below uses `_T`.
 
 def _T(a):
-    """마지막 두 축만 바꾼다. 배치 축은 그대로 둔다."""
+    """Swap the last two axes alone. The batch axes stay where they are."""
     return _np.swapaxes(a, -1, -2)
 
 
@@ -5229,7 +5358,7 @@ def _mat(t, what, square=True):
 
 
 def _guard(what, fn, *args, **kw):
-    """numpy 가 특이행렬에서 던지는 것을 우리 이름으로 바꿔 단다."""
+    """Re-label what numpy throws on a singular matrix under our name."""
     try:
         return fn(*args, **kw)
     except _np.linalg.LinAlgError as exc:
@@ -5237,16 +5366,17 @@ def _guard(what, fn, *args, **kw):
 
 
 def _is_singular(data):
-    """특이한가 — **판정을 우리가 한다.**
+    """Is it singular — **the decision is ours.**
 
-    numpy 에 맡기면 답이 numpy 가 **무엇으로 빌드됐는지**에 달린다. 같은 입력
-    `[[1,2],[2,4]]` 에 네이티브 numpy 는 `LinAlgError` 를 던지고 Pyodide 안의
-    numpy 는 조용히 지나갔다 — `inv` 도 `cholesky` 도 그랬다(실측). 그러면 "특이
-    행렬에서 무엇이 나는가" 가 **사용자의 브라우저에 달린다.** 그건 라이브러리가
-    정할 일이지 밑에 깔린 LAPACK 이 정할 일이 아니다.
+    Left to numpy, the answer depends on **what numpy was built against.** On the
+    same input `[[1,2],[2,4]]`, native numpy threw a `LinAlgError` and numpy
+    inside Pyodide passed quietly — for `inv` and for `cholesky` alike (measured).
+    Then "what happens on a singular matrix" **depends on the user's browser.**
+    That is the library's to decide and not the underlying LAPACK's.
 
-    부분 피벗 LU 의 대각에 정확히 0 이 있으면 특이다 — LAPACK 이 쓰는 것과 같은
-    기준이고, 셈이 우리 것이라 어디서 돌든 같은 답이 나온다.
+    An exact 0 on the diagonal of the partially pivoted LU means singular — the
+    same criterion LAPACK uses, and the arithmetic being ours it gives the same
+    answer wherever it runs.
     """
     packed, _ = _lu_pack(data)
     k = min(packed.shape[-2], packed.shape[-1])
@@ -5262,7 +5392,8 @@ def _reject_singular(data, what):
 
 
 def _cholesky_checked(data, what):
-    """콜레스키. **양정부호 확인도 우리가 한다** — 위와 같은 이유다."""
+    """Cholesky. **The positive-definiteness check is ours too** — the reason
+    above."""
     try:
         low = _np.linalg.cholesky(data)
     except _np.linalg.LinAlgError:
@@ -5275,9 +5406,11 @@ def _cholesky_checked(data, what):
     return low
 
 
-# **역행렬은 역방향에서 구한다.** 앞의 판에서는 순방향에서 미리 구했는데, 그러면
-# `det(특이행렬)` 이 0 을 못 내고 던진다 — torch 는 멀쩡히 0 을 낸다. 미분할 수 없는
-# 것은 미분할 때 말하면 되고, 값을 묻는 사람까지 막을 이유가 없다.
+# **The inverse is computed in the backward.** The earlier version computed it
+# ahead of time in the forward, and then `det(a singular matrix)` cannot give 0 and
+# throws — torch gives 0 quite happily. What cannot be differentiated can say so
+# at the point of differentiation, and there is no reason to block somebody asking
+# for a value as well.
 
 def det(t):
     t = _mat(t, "det")
@@ -5285,7 +5418,8 @@ def det(t):
 
     def back(g):
         inv_t = _T(_guard("det", _np.linalg.inv, t.data))
-        # 행렬식은 배치마다 스칼라다 — 행렬에 곱하려면 축 둘을 세워 줘야 한다.
+        # The determinant is a scalar per batch — multiplying it into a matrix
+        # needs two axes stood up.
         return ((_np.asarray(g) * out)[..., None, None] * inv_t,)
 
     return t._make(_np.asarray(out, dtype=t.data.dtype), (t,), back, "DetBackward0")
@@ -5312,7 +5446,7 @@ def slogdet(t):
 
 
 def inverse(t):
-    """역행렬. 기울기는 `-A⁻ᵀ G A⁻ᵀ` 다."""
+    """The inverse. Its gradient is `-A⁻ᵀ G A⁻ᵀ`."""
     t = _mat(t, "inverse")
     _reject_singular(t.data, "inv")
     out = _guard("inv", _np.linalg.inv, t.data)
@@ -5322,10 +5456,12 @@ def inverse(t):
 
 
 def inv_ex(t, check_errors=False):
-    """`inv` 와 같은데 **안 던진다** — 대신 `info` 에 0 이 아닌 수를 담는다.
+    """The same as `inv` and **it does not throw** — it puts a non-zero number in
+    `info` instead.
 
-    배치에서 이 구분이 살아난다. 스무 장 중 한 장이 특이일 때 던지는 쪽은 전부를
-    죽이고, 이쪽은 어느 장이 상했는지를 `info` 로 알려 준다.
+    The distinction earns its keep in a batch. With one of twenty matrices
+    singular, the throwing side kills all of them and this says which one is bad
+    through `info`.
     """
     t = _mat(t, "inv_ex")
     try:
@@ -5336,7 +5472,7 @@ def inv_ex(t, check_errors=False):
         if check_errors:
             raise
         out = _np.full_like(t.data, _np.inf)
-        # LAPACK 은 몇 번째 주피벗이 0 인지를 담는다. 여기서는 "상했다" 만 말한다.
+        # LAPACK records which leading pivot is zero. This says only "bad".
         info = _np.full(t.data.shape[:-2], _SINGULAR_INFO, dtype=_np.int32)
         return _InvEx(Tensor(out), Tensor(info))
     return _InvEx(t._make(out, (t,),
@@ -5344,19 +5480,22 @@ def inv_ex(t, check_errors=False):
                           "InverseBackward0"), Tensor(info))
 
 
-# LAPACK 이 특이행렬에서 담는 값과 자릿수를 맞춘다. 실측: 2×2 특이행렬에 2 였다.
+# Matched to the magnitude LAPACK records on a singular matrix. Measured: 2 for a
+# 2×2 singular matrix.
 _SINGULAR_INFO = 2
 
 
 def solve(a, b):
-    """`A x = b` 를 푼다. 역행렬을 만들어 곱하는 것보다 정확하고 빠르다.
+    """Solve `A x = b`. More accurate and faster than building the inverse and
+    multiplying.
 
-    `b` 가 `A` 보다 축이 하나 적으면 **벡터 묶음**으로 본다. 역방향의 바깥곱이 그
-    구분에 걸린다.
+    When `b` has one axis fewer than `A` it is read as **a batch of vectors.** The
+    outer product in the backward hangs on that distinction.
 
-    **numpy 에 맡기면 안 되는 자리다.** numpy 2.0 이 규칙을 바꿔서, 이제 `b` 가
-    1 차원일 때만 벡터 묶음으로 본다 — `A(3,2,2)` 에 `b(3,2)` 를 주면 행렬로 읽고
-    차원이 안 맞다고 던진다. torch 는 옛 규칙 그대로다. 그래서 축을 여기서 세운다.
+    **A place that must not be left to numpy.** numpy 2.0 changed the rule and now
+    reads a batch of vectors only when `b` is 1-D — given `A(3,2,2)` and `b(3,2)`
+    it reads a matrix and throws about mismatched dimensions. torch keeps the old
+    rule. So the axis is stood up here.
     """
     a = _mat(a, "solve")
     _reject_singular(a.data, "solve")
@@ -5382,7 +5521,7 @@ def solve(a, b):
 
 
 def solve_ex(a, b, check_errors=False):
-    """`solve` 의 안 던지는 쪽."""
+    """`solve`'s non-throwing side."""
     a = _mat(a, "solve_ex")
     try:
         out = solve(a, b)
@@ -5402,8 +5541,9 @@ def _cholesky_raw(data, upper):
 
 
 def cholesky(t, upper=False):
-    """`A = L Lᵀ` 의 아래삼각 `L`. **기울기가 있다** — Murray 알고리즘을 유도해
-    torch 와 대조했고 최대차가 2.8e-17 이었다."""
+    """The lower triangle `L` of `A = L Lᵀ`. **It has a gradient** — Murray's
+    algorithm was derived and compared against torch at a max diff of
+    2.8e-17."""
     t = _mat(t, "cholesky")
     low = _cholesky_checked(t.data.astype(_np.float64), "cholesky")
     idx = _np.arange(low.shape[-1])
@@ -5414,7 +5554,8 @@ def cholesky(t, upper=False):
             gg = _T(gg)
         bar = _T(low) @ gg
         half = _np.tril(bar).copy()
-        # 대각만 반으로. 배치에서는 `diag_indices_from` 이 축을 잘못 잡는다.
+        # The diagonal alone is halved. In a batch `diag_indices_from` picks the
+        # wrong axes.
         half[..., idx, idx] *= 0.5
         low_inv = _np.linalg.inv(low)
         sym = _T(low_inv) @ half @ low_inv
@@ -5425,7 +5566,8 @@ def cholesky(t, upper=False):
 
 
 def cholesky_ex(t, upper=False, check_errors=False):
-    """`cholesky` 의 안 던지는 쪽. 양정부호가 아니면 `info` 가 0 이 아니다."""
+    """`cholesky`'s non-throwing side. `info` is non-zero when it is not positive
+    definite."""
     t = _mat(t, "cholesky_ex")
     try:
         out = cholesky(t, upper=upper)
@@ -5439,8 +5581,9 @@ def cholesky_ex(t, upper=False, check_errors=False):
 
 
 def matrix_power(t, n):
-    """**곱셈을 이어 붙여 만든다** — 그러면 역방향이 저절로 따라온다.
-    분해로 짜면 미분식을 새로 써야 하고, 그건 틀릴 자리를 하나 더 만드는 것이다."""
+    """**Built by chaining multiplications** — the backward then follows on its
+    own. Built from a factorisation there would be a new derivative to write, and
+    that is one more place to get it wrong."""
     t = _mat(t, "matrix_power")
     if n < 0:
         return matrix_power(inverse(t), -n)
@@ -5453,32 +5596,39 @@ def matrix_power(t, n):
     return out
 
 
-# ---- 분해의 기울기
+# ---- the gradients of the factorisations
 #
-# 오래 안 넣었다. 이유가 있었다 — 유도가 까다롭고 틀리면 **조용히** 틀린다. 값은
-# 맞고 학습만 미묘하게 갈리는 종류라, 없는 것을 시끄럽게 두는 편이 나았다.
+# They went in late, for a reason — the derivations are delicate and getting one
+# wrong is wrong **quietly.** The kind where the values are right and only the
+# training diverges subtly, so leaving the absence loud was better.
 #
-# 이제 넣는다. 바뀐 것은 유도가 쉬워진 것이 아니라 **대조할 것이 생긴 것**이다.
-# 골든이 진짜 torch 의 수를 자리마다 들고 있어서, 틀리면 조용히가 아니라 크게 틀린다.
+# They go in now. What changed is not that the derivations got easier but that
+# **there is something to compare against.** The golden holds real torch's numbers
+# position by position, so getting one wrong is wrong loudly rather than
+# quietly.
 
 def qr(t, mode="reduced"):
-    """QR 분해. **기울기가 있다.**
+    """The QR factorisation. **It has a gradient.**
 
         N = Qᵀ·Q̄ − R̄·Rᵀ
         Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ
 
-    아래 삼각만 남기는 자리가 이 유도의 전부다. `QᵀQ = I` 를 미분하면 `C = Qᵀ·dQ` 가
-    **반대칭**이 되고, `dR·R⁻¹` 이 위삼각이라는 것과 겹치면 `C` 의 자유도가 아래
-    삼각에만 남는다. 위쪽은 그 거울이라 따로 셀 것이 없다.
+    Keeping the lower triangle alone is the whole of this derivation.
+    Differentiating `QᵀQ = I` makes `C = Qᵀ·dQ` **antisymmetric**, and overlaid
+    with `dR·R⁻¹` being upper triangular, `C`'s freedom is left in the lower
+    triangle alone. The upper side is its mirror and there is nothing separate to
+    compute.
 
-    **`R⁻ᵀ` 를 `R⁻¹` 로 잘못 풀면 여기서 조용히 틀린다.** 실제로 그렇게 틀렸고, 후보
-    여덟 개가 전부 안 맞아서 유도를 의심했는데 유도가 아니라 전치가 문제였다.
-    `X·R⁻ᵀ` 는 `solve(R, Xᵀ)ᵀ` 이지 `solve(Rᵀ, Xᵀ)ᵀ` 가 아니다.
+    **Resolving `R⁻ᵀ` as `R⁻¹` by mistake is quietly wrong here.** It really was
+    wrong that way, and with all eight candidates failing to match the derivation
+    came under suspicion when the trouble was the transpose rather than the
+    derivation. `X·R⁻ᵀ` is `solve(R, Xᵀ)ᵀ`, not `solve(Rᵀ, Xᵀ)ᵀ`.
     """
     t = _mat(t, "qr", square=False)
     q, r = _np.linalg.qr(t.data, mode=mode)
     if mode != "reduced" or t.data.shape[-2] < t.data.shape[-1]:
-        # 완전본은 `Q` 에 남는 열이 있고 그쪽으로는 정보가 안 흐른다 — 유도가 다르다.
+        # The complete form leaves extra columns in `Q` and no information flows
+        # towards them — a different derivation.
         return _QR(Tensor(_np.ascontiguousarray(q)), Tensor(_np.ascontiguousarray(r)))
 
     def back_from(gq, gr):
@@ -5501,11 +5651,14 @@ def _svd_raw(data, full_matrices):
 
 
 def svd(t, full_matrices=True):
-    """특잇값 분해. torch 와 같이 (U, S, Vh) 순서로 돌려준다.
+    """The singular value decomposition. Returned in (U, S, Vh) order as in
+    torch.
 
-    **특잇값에는 기울기가 있고 `U`·`Vh` 에는 없다.** `dS = diag(Uᵀ dA V)` 라 특잇값
-    쪽은 한 줄이고 겹침 문제도 없다. 벡터 쪽은 `1/(sᵢ²−sⱼ²)` 가 들어가서 특잇값이
-    겹치면 터지는데, 그 자리는 안 넣었다 — 없는 것이 시끄러운 편이 낫다.
+    **The singular values have a gradient and `U` and `Vh` do not.**
+    `dS = diag(Uᵀ dA V)`, so the singular value side is one line with no
+    repeated-value trouble. The vector side carries a `1/(sᵢ²−sⱼ²)` and blows up
+    where singular values repeat, and that place is left out — the absence being
+    loud is better.
     """
     t = _mat(t, "svd", square=False)
     u, s, vh = _svd_raw(t.data, full_matrices)
@@ -5523,14 +5676,16 @@ def svd(t, full_matrices=True):
 
 
 def pinverse(t, rcond=1e-15):
-    """유사역행렬. **기울기가 있다** — 항이 셋이다.
+    """The pseudo-inverse. **It has a gradient** — in three terms.
 
         Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)
 
-    **뒤의 두 항은 정사각 정칙에서 0 이 된다** — 그때는 `I − AP` 와 `I − PA` 가 둘 다
-    0 이라 첫 항만 남고, 그 첫 항은 역행렬의 기울기와 같은 식이다. 그래서 둘을
-    빠뜨려도 **정사각에서는 맞고 직사각에서만 틀린다.** 실제로 그렇게 틀렸고, 정사각
-    케이스는 그동안 통과하고 있었다 — 골든이 직사각으로도 묻는 이유가 그것이다.
+    **The last two terms vanish for a square non-singular matrix** — there
+    `I − AP` and `I − PA` are both 0 and only the first term survives, and that
+    first term is the inverse's gradient formula. So leaving the two out is
+    **right on squares and wrong on rectangles alone.** It really was wrong that
+    way, and the square cases had been passing all along — which is why the golden
+    asks with rectangles too.
     """
     t = _mat(t, "pinverse", square=False)
     p = _np.linalg.pinv(t.data, rcond=rcond)
@@ -5555,15 +5710,19 @@ def matrix_rank(t, tol=None):
 
 
 def eigh(t, UPLO="L"):
-    """대칭 행렬의 고윳값·고유벡터. **둘 다 기울기가 있다.**
+    """The eigenvalues and eigenvectors of a symmetric matrix. **Both have
+    gradients.**
 
-    **한쪽 삼각만 읽는다.** 기본은 아래쪽이라 `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의
-    답이 같다(진짜 torch 에 물어서 확인했다). 대칭을 주는 한 안 드러나는 규약이라,
-    행렬 전체를 보는 구현과 여기서 조용히 갈린다.
+    **It reads one triangle only.** The default is the lower one, so
+    `[[4,99],[1,3]]` and `[[4,1],[1,3]]` give the same answer (confirmed by asking
+    real torch). A convention that never surfaces as long as symmetric input is
+    given, so an implementation looking at the whole matrix diverges from this
+    quietly.
 
-    고윳값 쪽은 `Ā = V·diag(ḡ)·Vᵀ` 로 한 줄이다. 고유벡터 쪽은
-    `Ā = V·(F ∘ (Vᵀ·Ḡ))·Vᵀ` 이고 `F_ij = 1/(λⱼ − λᵢ)` 다 — **고윳값이 겹치면 터진다.**
-    torch 도 같이 터지므로 흉내가 아니라 같은 한계다.
+    The eigenvalue side is one line, `Ā = V·diag(ḡ)·Vᵀ`. The eigenvector side is
+    `Ā = V·(F ∘ (Vᵀ·Ḡ))·Vᵀ` with `F_ij = 1/(λⱼ − λᵢ)` — **it blows up where
+    eigenvalues repeat.** torch blows up alongside, so this is the same limit
+    rather than an imitation.
     """
     t = _mat(t, "eigh")
     w, v = _np.linalg.eigh(t.data, UPLO=UPLO)
@@ -5581,14 +5740,17 @@ def eigh(t, UPLO="L"):
         gg = _np.asarray(g)
         gap = w[..., None, :] - w[..., :, None]
         idx = _np.arange(w.shape[-1])
-        # 대각은 0 으로 둔다 — 자기 자신과의 차라 나눗셈이 아니라 정의상 안 흐른다.
+        # The diagonal is left at 0 — it is a difference with itself, so nothing
+        # flows there by definition rather than by division.
         with _np.errstate(divide="ignore", invalid="ignore"):
             f = _np.where(gap == 0, 0.0, 1.0 / _np.where(gap == 0, 1.0, gap))
         f[..., idx, idx] = 0.0
         raw = v @ (f * (vt @ gg)) @ vt
-        # **대칭화가 빠지면 안 된다.** `A` 가 대칭이라 위·아래 삼각이 같은 자유도를
-        # 나눠 갖는데, 날 식은 그것을 한쪽에 몰아준다. 대각은 맞고 비대각만 갈려서
-        # 값 대조 없이는 안 보인다 — 실측으로 골랐다.
+        # **The symmetrisation must not be left out.** `A` being symmetric, the
+        # upper and lower triangles share the same freedom, and the raw formula
+        # piles it onto one side. The diagonal is right and only the off-diagonal
+        # parts, so it is invisible without a value comparison — chosen by
+        # measurement.
         return ((raw + _T(raw)) * 0.5,)
 
     return _Eigh(t._make(w, (t,), back_values, "EighBackward0"),
@@ -5596,29 +5758,36 @@ def eigh(t, UPLO="L"):
 
 
 def eig(t):
-    """**비대칭 행렬**의 고윳값·고유벡터. 답이 복소수다.
+    """The eigenvalues and eigenvectors of **a non-symmetric matrix.** The answer
+    is complex.
 
-    `eigh` 와 나란히 있지만 다른 함수다 — 저쪽은 대칭 행렬만 받고 한쪽 삼각만
-    읽으며 답이 실수다. 이쪽은 아무 정사각 행렬이나 받고 **회전 행렬처럼 실수
-    고윳값이 없는 것**도 있으므로 답이 늘 복소수다(실측: `[[0,-1],[1,0]]` 이 ±i).
+    It sits next to `eigh` and is a different function — that one takes symmetric
+    matrices only, reads one triangle, and its answer is real. This takes any
+    square matrix, and since some of them **have no real eigenvalues at all, a
+    rotation matrix for instance**, its answer is always complex (measured:
+    `[[0,-1],[1,0]]` gives ±i).
 
-    **이 함수가 여태 없던 까닭이 표에 "복소수 dtype 이 없다" 로 적혀 있었다.**
-    complex64 를 넣은 뒤로 그 말은 거짓이었고, 그동안 `x.eig()` 의 거절 문구는
-    "`linalg.eig` 을 쓰세요" 라고 **없는 것을 가리키고 있었다.**
+    **The reason this function was absent was written in the table as "there is no
+    complex dtype".** That stopped being true once complex64 went in, and all the
+    while `x.eig()`'s refusal message said "use `linalg.eig`" and **pointed at
+    something that did not exist.**
 
-    ## 기울기
+    ## The gradient
 
-    고윳값 쪽은 `Ā = V⁻ᴴ·diag(λ̄)·Vᴴ`, 고유벡터 쪽은 그 안에 `F ∘ (Vᴴ·V̄)` 가
-    더해지고 `F_ij = 1/(λⱼ − λᵢ)` 다. **고윳값이 겹치면 터진다** — `eigh` 와 같은
-    한계이고 torch 도 같이 터진다.
+    The eigenvalue side is `Ā = V⁻ᴴ·diag(λ̄)·Vᴴ`, and the eigenvector side adds
+    `F ∘ (Vᴴ·V̄)` inside it with `F_ij = 1/(λⱼ − λᵢ)`. **It blows up where
+    eigenvalues repeat** — `eigh`'s limit, and torch blows up alongside.
 
-    입력이 실수면 답도 실수여야 하므로 마지막에 실수부만 취한다. 복소수 기울기
-    규약이 `∂L/∂re + i·∂L/∂im` 이라 그 자리에서 허수부는 뜻이 없다.
+    Real input has to give a real answer, so only the real part is taken at the
+    end. The complex gradient convention is `∂L/∂re + i·∂L/∂im`, so the imaginary
+    part means nothing at that point.
     """
     t = _mat(t, "eig")
-    # **역방향은 배정도로 센다.** 답은 complex64 로 내지만 그 안의 `1/(λⱼ − λᵢ)` 는
-    # 고윳값이 가까울수록 커져서, 단정도로 세면 3×3 만 되어도 torch 와 갈린다(실측).
-    # 앞의 계산을 배정도로 두고 **내보낼 때만** 깎는다.
+    # **The backward is computed in double precision.** The answer comes out as
+    # complex64, and the `1/(λⱼ − λᵢ)` inside it grows as the eigenvalues come
+    # closer, so computed in single precision it diverges from torch at 3×3
+    # already (measured). The arithmetic ahead of it stays double and it is cut
+    # **only on the way out.**
     w64, v64 = _np.linalg.eig(t.data.astype(_np.float64))
     v64 = _np.ascontiguousarray(v64)
     w, v = w64.astype(_np.complex64), v64.astype(_np.complex64)
@@ -5637,22 +5806,27 @@ def eig(t):
 
     def back_vectors(g):
         gg = _np.asarray(g, dtype=_np.complex128)
-        # **위상까지만 정해진다.** 복소수 고유벡터는 `e^{iφ}` 를 곱해도 여전히
-        # 고유벡터라, 그 위상에 기대는 손실은 **값이 정해지지 않는다.** torch 도
-        # 여기서 멈추므로 흉내가 아니라 같은 한계다 — 안 멈추면 우리가 관대한 것이고,
-        # 관대한 것도 갈리는 것이다(여기서 돌던 코드가 torch 에서 멈춘다).
+        # **It is determined only up to a phase.** A complex eigenvector is still
+        # an eigenvector multiplied by `e^{iφ}`, so a loss that leans on that
+        # phase **has no defined value.** torch stops here too, so this is the
+        # same limit rather than an imitation — not stopping would make us the
+        # permissive one, and being more permissive is still diverging (code that
+        # ran here stops against torch).
         #
-        # 판정은 `Vᴴ·V̄` 의 대각이 실수인가다. 허수부가 남으면 그 손실은 위상을 본다.
+        # The test is whether the diagonal of `Vᴴ·V̄` is real. A surviving
+        # imaginary part means that loss looks at the phase.
         probe = _np.sum(_np.conjugate(v64) * gg, axis=-2)
         if _np.abs(_np.imag(probe)).max() > 1e-5:
             raise RuntimeError(
                 "linalg_eig_backward: The eigenvectors in the complex case are "
                 "specified up to multiplication by e^{i phi}. The specified loss "
                 "function depends on this quantity, so it is ill-defined.")
-        # **길이가 1 로 묶여 있다.** LAPACK 이 고유벡터를 단위 길이로 내주므로 자기
-        # 방향으로는 못 움직인다 — 그 성분을 빼지 않으면 없는 자유도로 기울기가
-        # 흐른다. 빼기 전과 후를 torch 에 대 봤고, **대칭 행렬에서는 두 답이 같아서**
-        # 대칭으로만 재면 이 항이 빠진 것을 못 본다(실측).
+        # **The length is pinned at 1.** LAPACK gives the eigenvectors at unit
+        # length, so they cannot move along their own direction — without
+        # subtracting that component the gradient flows into a freedom that does
+        # not exist. Before and after subtracting were both compared against
+        # torch, and **on a symmetric matrix the two answers agree**, so measured
+        # on symmetric input alone the missing term is invisible (measured).
         gg = gg - v64 * _np.real(_np.sum(_np.conjugate(v64) * gg, axis=-2))
         gap = w64[..., None, :] - w64[..., :, None]
         idx = _np.arange(w.shape[-1])
@@ -5666,16 +5840,18 @@ def eig(t):
 
 
 def eigvals(t):
-    """`eig` 의 고윳값만. 고유벡터를 안 쓰면 이쪽이 torch 의 이름이다."""
+    """`eig`'s eigenvalues alone. Where the eigenvectors are not used, this is
+    torch's name."""
     return eig(t).eigenvalues
 
 
 def lstsq(a, b):
-    """최소제곱 해. **값만 준다.**
+    """The least-squares solution. **Values alone.**
 
-    `.solution` 으로 물어야 한다 — torch 는 해 말고 잔차·랭크·특잇값도 같이 준다.
-    그냥 텐서를 돌려주면 torch 코드가 `.solution` 에서 멈추고, 그건 "값이 맞는데
-    안 통하는" 자리가 된다.
+    It has to be asked through `.solution` — torch gives the residuals, the rank
+    and the singular values alongside the solution. Handing back a bare tensor
+    makes torch code stop at `.solution`, and that becomes a place where "the
+    value is right and it does not work".
     """
     a, bt = _mat(a, "lstsq", square=False), _wrap(b)
     if a.data.ndim != 2:
@@ -5687,14 +5863,16 @@ def lstsq(a, b):
 
 # ---- LU
 #
-# LU 분해는 이미 `det`·`inv`·`solve` 밑에서 돌고 있었다. 밖으로 안 낸 것뿐이다.
+# The LU factorisation was already running underneath `det`, `inv` and `solve`.
+# It simply was not exposed.
 #
-# **피벗은 1 부터 센다.** LAPACK 규약이고 torch 가 그대로 물려받았다 — 교환이 없는
-# 2×2 에서 `pivots` 가 `[1, 2]` 이지 `[0, 1]` 이 아니다. 0 부터 세면 `lu_solve` 가
-# 아무 소리 없이 다른 답을 낸다. 실측해서 맞췄다.
+# **The pivots count from 1.** LAPACK's convention, inherited by torch — on a 2×2
+# with no swaps `pivots` is `[1, 2]` rather than `[0, 1]`. Counting from 0 makes
+# `lu_solve` give a different answer without a sound. Matched by measurement.
 
 def _lu_pack(data):
-    """부분 피벗 LU. `LU` 한 장과 **1 부터 세는** 교환표를 준다."""
+    """Partially pivoted LU. One packed `LU` matrix and a swap table **counting
+    from 1.**"""
     a = data.astype(_np.float64).copy()
     n, m = a.shape[-2], a.shape[-1]
     k = min(n, m)
@@ -5704,7 +5882,7 @@ def _lu_pack(data):
         mat = flat[b]
         for col in range(k):
             best = col + int(_np.argmax(_np.abs(mat[col:, col])))
-            piv[b, col] = best + 1                      # ← LAPACK 은 1 부터 센다
+            piv[b, col] = best + 1                      # ← LAPACK counts from 1
             if best != col:
                 mat[[col, best]] = mat[[best, col]]
             pivot = mat[col, col]
@@ -5716,18 +5894,21 @@ def _lu_pack(data):
 
 
 def lu_factor(t):
-    """`LU` 한 장에 겹쳐 담은 분해와 교환표. 값만 준다."""
+    """The factorisation packed into one `LU` matrix, plus the swap table. Values
+    alone."""
     t = _mat(t, "lu_factor", square=False)
     lu_data, piv = _lu_pack(t.data)
     return _LuFactor(Tensor(lu_data.astype(t.data.dtype)), Tensor(piv))
 
 
 def lu_factor_ex(t, pivot=True, check_errors=False):
-    """`lu_factor` 에 **`info` 를 하나 더 붙인 것.** 던지는 대신 번호로 알린다.
+    """`lu_factor` with **one more field, `info`.** It reports through a number
+    rather than throwing.
 
-    0 이면 잘 됐고, `k` 면 `k` 번째 피벗이 0 이라 특이행렬이다(1 부터 센다). 실측:
-    `[[1,2],[2,4]]` 이 2 를 낸다. 던지는 판(`lu_factor`)과 갈라 둔 이유는 배치로 풀
-    때 한 장이 나빠도 나머지를 이어 가려는 것이다.
+    0 means it went well, and `k` means the `k`-th pivot is 0 and the matrix is
+    singular (counting from 1). Measured: `[[1,2],[2,4]]` gives 2. It is kept apart
+    from the throwing version (`lu_factor`) so that solving a batch can carry on
+    with the rest when one matrix is bad.
     """
     t = _mat(t, "lu_factor_ex", square=False)
     if not pivot:
@@ -5746,14 +5927,16 @@ def lu_factor_ex(t, pivot=True, check_errors=False):
 
 
 def _ldl_pack(data):
-    """대칭 행렬의 `L D Lᵀ`. **피벗을 안 한다.**
+    """`L D Lᵀ` for a symmetric matrix. **It does not pivot.**
 
-    torch 는 LAPACK 의 Bunch-Kaufman 을 쓰고 그것은 필요하면 자리를 바꾼다. 여기서는
-    양의 정부호처럼 바꿀 일이 없는 자리만 다루고, 대각이 0 에 가까우면 **시끄럽게
-    거절한다** — 조용히 이어 가면 자리를 안 바꾼 것과 바꾼 것이 다른 답을 내는데
-    둘 다 그럴듯하다.
+    torch uses LAPACK's Bunch-Kaufman, which swaps where it needs to. This handles
+    only the cases with nothing to swap, such as positive definite ones, and
+    **refuses loudly** when a diagonal entry comes near 0 — carrying on quietly,
+    the swapped and unswapped versions give different answers and both are
+    plausible.
 
-    답은 torch 와 같은 모양으로 **한 장에 겹쳐 담는다** — 대각이 `D`, 그 아래가 `L`.
+    The answer is **packed into one matrix** in torch's shape — `D` on the diagonal
+    and `L` below it.
     """
     a = data.astype(_np.float64)
     n = a.shape[-1]
@@ -5763,28 +5946,31 @@ def _ldl_pack(data):
         mat, ld = flat[b], out[b]
         for j in range(n):
             d = mat[j, j] - sum(ld[j, k] ** 2 * ld[k, k] for k in range(j))
-            # **`abs` 는 이 파일에서 텐서 함수다** — 모듈 전역이 내장을 가린다.
-            # 그 자리를 여기서 또 밟았고, `_np.abs` 로 부르는 것이 이 파일의 규칙이다.
+            # **`abs` is a tensor function in this file** — the module scope
+            # shadows the builtin. That place was stepped on again here, and
+            # calling `_np.abs` is this file's rule.
             if _np.abs(d) < 1e-12:
                 _unsupported("ldl_factor — a symmetric matrix that needs pivoting (indefinite)")
             ld[j, j] = d
             for i in range(j + 1, n):
                 s = sum(ld[i, k] * ld[k, k] * ld[j, k] for k in range(j))
                 ld[i, j] = (mat[i, j] - s) / d
-    # 교환표는 1 부터 센 항등이다 — 자리를 안 바꿨으므로.
+    # The swap table is the identity counting from 1 — nothing was swapped.
     piv = _np.tile(_np.arange(1, n + 1, dtype=_np.int32), flat.shape[0], )
     return out.reshape(a.shape), piv.reshape(data.shape[:-2] + (n,))
 
 
 def ldl_factor(t, hermitian=False):
-    """대칭 행렬을 `L D Lᵀ` 로. 한 장에 겹쳐 담은 `LD` 와 교환표를 준다."""
+    """A symmetric matrix as `L D Lᵀ`. It gives the packed `LD` and the swap
+    table."""
     t = _mat(t, "ldl_factor")
     ld, piv = _ldl_pack(t.data)
     return _LdlFactor(Tensor(ld.astype(t.data.dtype)), Tensor(piv))
 
 
 def ldl_factor_ex(t, hermitian=False, check_errors=False):
-    """`ldl_factor` 에 `info` 를 붙인 것. 여기서는 늘 0 이다 — 나쁜 자리는 거절한다."""
+    """`ldl_factor` with `info` attached. It is always 0 here — the bad cases are
+    refused."""
     t = _mat(t, "ldl_factor_ex")
     ld, piv = _ldl_pack(t.data)
     shape = t.data.shape[:-2]
@@ -5793,7 +5979,8 @@ def ldl_factor_ex(t, hermitian=False, check_errors=False):
 
 
 def ldl_solve(ld, pivots, b, hermitian=False):
-    """`ldl_factor` 가 낸 분해로 푼다. `L y = b`, `D z = y`, `Lᵀ x = z` 세 번이다."""
+    """Solve using the factorisation `ldl_factor` produced. Three steps:
+    `L y = b`, `D z = y`, `Lᵀ x = z`."""
     ld = _mat(ld, "ldl_solve")
     packed = _np.asarray(ld.data, dtype=_np.float64)
     rhs = _np.asarray(_wrap(b).data, dtype=_np.float64)
@@ -5812,10 +5999,11 @@ def ldl_solve(ld, pivots, b, hermitian=False):
 
 
 def geqrf(t):
-    """QR 을 **반사자 꼴로** 낸다. `householder_product` 가 그것으로 `Q` 를 세운다.
+    """QR **in reflector form.** `householder_product` builds `Q` out of it.
 
-    LAPACK 의 두 단계를 그대로 흉내낸다 — `geqrf` 가 반사자를 담고, 그것을 `Q` 로
-    펴는 것은 따로다. `Q` 를 안 만들고 곱하기만 하는 코드가 있어서 갈라 둔 것이다.
+    It imitates LAPACK's two stages exactly — `geqrf` holds the reflectors and
+    spreading them into `Q` is separate. They are kept apart because some code
+    multiplies by `Q` without ever building it.
     """
     t = _mat(t, "geqrf", square=False)
     a = _np.asarray(t.data, dtype=_np.float64)
@@ -5826,10 +6014,12 @@ def geqrf(t):
         mat = flat[b]
         for j in range(min(m, n)):
             x = mat[j:, j].copy()
-            # **대각 아래가 전부 0 이면 반사를 안 한다** — LAPACK 의 `dlarfg` 가
-            # 그 자리에서 `tau = 0` 을 놓고 값을 그대로 둔다. 정사각의 마지막 열이
-            # 늘 그 자리인데, 거기서 부호를 뒤집었더니 `Q` 의 마지막 열이 통째로
-            # 반대가 됐다. 직사각으로만 물으면 그 열이 안 나와서 안 보인다.
+            # **With everything below the diagonal at 0 there is no reflection** —
+            # LAPACK's `dlarfg` puts `tau = 0` there and leaves the values alone.
+            # The last column of a square matrix is always that place, and
+            # flipping the sign there flipped `Q`'s last column wholesale. Asked
+            # with rectangles alone that column never appears and it is
+            # invisible.
             if _np.linalg.norm(x[1:]) == 0:
                 continue
             norm = _np.linalg.norm(x)
@@ -5847,11 +6037,12 @@ def geqrf(t):
 
 
 def householder_product(t, tau):
-    """반사자들을 곱해 `Q` 를 세운다. `geqrf` 의 짝이다.
+    """Multiply the reflectors together to build `Q`. `geqrf`'s partner.
 
-    `H_i = I − τ_i v_i v_iᵀ` 를 차례로 곱한다. `v_i` 는 대각이 1 이고 그 아래가
-    `A[i+1:, i]` 다 — 대각의 1 은 **저장 안 하는 약속**이라, 그 자리를 읽어 쓰면
-    분해가 담아 둔 `R` 을 반사자로 착각한다.
+    `H_i = I − τ_i v_i v_iᵀ` are multiplied in turn. `v_i` has 1 on the diagonal
+    and `A[i+1:, i]` below it — the 1 on the diagonal is **an agreement not to
+    store it**, so reading that cell and using it mistakes the `R` the
+    factorisation packed there for a reflector.
     """
     t = _mat(t, "householder_product", square=False)
     a = _np.asarray(t.data, dtype=_np.float64)
@@ -5873,7 +6064,7 @@ def householder_product(t, tau):
 
 
 def lu(t, pivot=True):
-    """`P L U` 셋으로 펴서 준다. 겹쳐 담은 것보다 읽기 쉽다."""
+    """Spread into `P`, `L` and `U`. Easier to read than the packed form."""
     t = _mat(t, "lu", square=False)
     if not pivot:
         _unsupported("lu(pivot=False)")
@@ -5889,7 +6080,8 @@ def lu(t, pivot=True):
         low[diag, diag] = 1.0
         ls.append(low)
         us.append(_np.triu(flat_lu[b])[:k, :])
-        # 교환을 되짚어 순열 행렬을 세운다. `piv` 는 1 부터 세므로 하나 뺀다.
+        # The swaps are traced back to build the permutation matrix. `piv` counts
+        # from 1, so one is subtracted.
         order = _np.arange(n)
         for col in range(k):
             src = int(flat_piv[b, col]) - 1
@@ -5908,7 +6100,7 @@ def lu(t, pivot=True):
 
 
 def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
-    """`lu_factor` 가 낸 것으로 `A x = b` 를 푼다."""
+    """Solve `A x = b` with what `lu_factor` produced."""
     lu_t, piv_t, bt = _wrap(lu_data), _wrap(pivots), _wrap(b)
     if not left or adjoint:
         _unsupported("lu_solve(left=False or adjoint=True)")
@@ -5926,41 +6118,44 @@ def lu_solve(lu_data, pivots, b, left=True, adjoint=False):
     return Tensor(_np.linalg.solve(up, y).astype(bt.data.dtype))
 
 
-# ---- 조합층
+# ---- the composite layers
 #
-# 대부분 이미 있는 것에 이름을 붙이는 자리다. 계산이 새로 필요한 것은 `matrix_exp`
-# 하나뿐인데, 그 하나가 닫힌 식이 없다.
+# Mostly places attaching a name to something that already exists. The one that
+# needs new computation is `matrix_exp`, and that one has no closed form.
 
 def vecdot(a, b, dim=-1):
     return (_wrap(a) * _wrap(b)).sum(dim=dim)
 
 
 def diagonal_linalg(t, offset=0, dim1=-2, dim2=-1):
-    """**`torch.diagonal` 과 기본 축이 다르다.**
+    """**The default axes differ from `torch.diagonal`'s.**
 
-    이쪽은 마지막 두 축(`-2, -1`)을 보고 저쪽은 앞의 두 축(`0, 1`)을 본다. 3 차원을
-    주면 `(2,3,4)` 가 각각 `(2,3)` 과 `(4,2)` 로 갈린다 — 이름이 비슷해 같은 것으로
-    읽기 쉬운데 모양부터 다르다. 그래서 기본값을 손으로 적어 둔다.
+    This looks at the last two axes (`-2, -1`) and that one at the first two
+    (`0, 1`). Given 3-D input, `(2,3,4)` comes out as `(2,3)` on one side and
+    `(4,2)` on the other — the similar names make them easy to read as the same
+    thing and they differ starting at the shape. So the defaults are written out
+    by hand.
     """
     return diagonal(t, offset=offset, dim1=dim1, dim2=dim2)
 
 
 def svdvals(t):
-    """특잇값만. `svd` 의 가운데다."""
+    """The singular values alone. The middle of `svd`."""
     return svd(t, full_matrices=False).S
 
 
 def eigvalsh(t, UPLO="L"):
-    """대칭 행렬의 고윳값만."""
+    """The eigenvalues alone, for a symmetric matrix."""
     return eigh(t, UPLO=UPLO).eigenvalues
 
 
 def vector_norm(t, ord=2, dim=None, keepdim=False):
-    """벡터로 보고 재는 노름. **행렬을 줘도 통째로 편다** — 그것이 `matrix_norm` 과
-    갈리는 자리다.
+    """A norm measured over the elements as a vector. **Given a matrix it
+    flattens the whole thing** — where it parts from `matrix_norm`.
 
-    `ord=0` 은 0 이 아닌 것의 개수이고, `±inf` 는 절댓값의 최대·최소다 — 거듭제곱
-    식에 넣으면 안 되는 갈래라 따로 적는다.
+    `ord=0` is the count of non-zeros and `±inf` are the largest and smallest
+    absolute values — branches that must not go into the power formula, so they
+    are written out separately.
     """
     x = _wrap(t).abs()
     if dim is None and x.data.ndim > 1:
@@ -5978,16 +6173,18 @@ def vector_norm(t, ord=2, dim=None, keepdim=False):
     return (x ** ord).sum(dim=dim, keepdim=keepdim) ** (1.0 / ord)
 
 
-# 특잇값이 필요한 갈래. 나머지는 행·열의 절댓값 합으로 끝난다.
+# The branches that need singular values. The rest finish with a sum of absolute
+# values over the rows or the columns.
 _SPECTRAL = ("nuc", 2, -2)
 
 
 def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
-    """행렬로 보고 재는 노름. **갈래마다 다른 수다.**
+    """A norm measured over the matrix. **A different number per branch.**
 
-    기본은 프로베니우스이고, `2` 는 최대 특잇값, `nuc` 는 특잇값의 합, `1` 은 열
-    절댓값 합의 최대, `inf` 는 행 쪽이다. rank 1 행렬을 주면 앞의 셋이 우연히 같아져
-    구분이 안 되므로 골든은 rank 2 로 묻는다.
+    The default is Frobenius; `2` is the largest singular value, `nuc` the sum of
+    the singular values, `1` the largest column-wise sum of absolute values, and
+    `inf` the row-wise one. Given a rank-1 matrix the first three happen to
+    coincide and cannot be told apart, so the golden asks at rank 2.
     """
     x = _wrap(t)
     if dim != (-2, -1):
@@ -5999,11 +6196,14 @@ def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
         return (amax if ord == 2 else amin)(s, dim=-1, keepdim=keepdim)
     if ord == "fro":
         return (x * x).sum(dim=(-2, -1), keepdim=keepdim) ** 0.5
-    # 1 은 열 방향(행을 더한다), inf 는 행 방향(열을 더한다). 부호는 최대·최소를 가른다.
+    # 1 works column-wise (summing the rows) and inf row-wise (summing the
+    # columns). The sign selects the maximum or the minimum.
     #
-    # **`abs(ord)` 라고 쓰면 안 된다.** 이 모듈에 `abs` 가 있어서 파이썬 내장을 가리고,
-    # 정수를 텐서로 알고 `'int' object has no attribute 'abs'` 로 멈춘다. 이 저장소가
-    # 같은 함정을 `bool`·`max`·`min` 에서 이미 세 번 밟았다 — 네 번째다.
+    # **It must not be written `abs(ord)`.** This module has an `abs` shadowing
+    # the Python builtin, and it takes the integer for a tensor and stops with
+    # `'int' object has no attribute 'abs'`. This repository has stepped on the
+    # same trap three times already with `bool`, `max` and `min` — this is the
+    # fourth.
     axis = -2 if ord in (1, -1) else -1
     sums = x.abs().sum(dim=axis, keepdim=True)
     pick = amax if ord > 0 else amin
@@ -6012,7 +6212,8 @@ def matrix_norm(t, ord="fro", dim=(-2, -1), keepdim=False):
 
 
 def cond(t, p=None):
-    """조건수. 기본은 `‖A‖₂·‖A⁻¹‖₂` 이고 그것은 특잇값의 비다."""
+    """The condition number. The default is `‖A‖₂·‖A⁻¹‖₂`, which is the ratio of
+    the singular values."""
     x = _mat(t, "cond")
     if p is None or p == 2:
         s = svdvals(x)
@@ -6024,8 +6225,9 @@ def cond(t, p=None):
 
 
 def multi_dot(mats):
-    """행렬 여럿을 이어 곱한다. **묶는 순서가 값을 안 바꾼다** — 곱셈이 결합적이라
-    그렇다. 바뀌는 것은 셈의 개수뿐이라, 여기서는 순서대로 곱한다."""
+    """Multiply several matrices together. **The grouping does not change the
+    value** — multiplication is associative. Only the operation count changes, so
+    they are multiplied in order here."""
     out = _wrap(mats[0])
     for m in mats[1:]:
         out = out @ _wrap(m)
@@ -6033,14 +6235,17 @@ def multi_dot(mats):
 
 
 def _vander_increasing(x, N=None):
-    """`linalg.vander` 의 판. **열이 커지는 차수**이고 마지막 열이 최고차다.
+    """`linalg.vander`'s version. **The powers increase across the columns** and
+    the last column is the highest.
 
-    torch 도 둘을 갈라 놓았다 — `torch.vander` 는 줄어드는 쪽이 기본이고
-    `torch.linalg.vander` 는 늘어나는 쪽이다. 값이 뒤집힌 **서로 다른 두 함수**다.
+    torch keeps the two apart as well — `torch.vander` defaults to decreasing and
+    `torch.linalg.vander` to increasing. **Two different functions** whose values
+    are reversed.
 
-    **이름을 가른 이유.** 전에는 둘 다 `vander` 였고, 아래 클래스 몸이 *먼저
-    정의된* 쪽을 잡는 것으로 갈렸다. 정의 차례에 기대는 배선인데 그 기댐이 어디에도
-    안 적혀 있어서, 읽는 사람에게는 뒤의 정의가 앞의 것을 덮는 것으로 보인다.
+    **Why the names were split.** Both used to be `vander`, and which one the class
+    body below caught turned on *which was defined first.* Wiring that leans on
+    definition order, with the dependence written down nowhere, so to a reader the
+    later definition looks like it covers the earlier one.
     """
     v = _wrap(x)
     n = v.data.shape[-1] if N is None else N
@@ -6049,10 +6254,12 @@ def _vander_increasing(x, N=None):
 
 
 def solve_triangular(a, b, upper, left=True, unitriangular=False):
-    """삼각행렬이라는 것을 **알고 푼다.** 앞으로·뒤로 한 번씩이면 끝난다.
+    """Solve **knowing** the matrix is triangular. One forward and one backward
+    sweep finish it.
 
-    `unitriangular` 는 **대각을 안 보고 1 로 친다** — 안 지키면 값이 조용히 달라지는
-    갈래다. `left=False` 는 `X A = B` 를 푸는 것이라 양쪽을 전치해 같은 길로 보낸다.
+    `unitriangular` **ignores the diagonal and treats it as 1** — a branch whose
+    values change quietly when it is not honoured. `left=False` solves `X A = B`,
+    so both sides are transposed and sent down the same path.
     """
     at, bt = _mat(a, "solve_triangular"), _wrap(b)
     tri = _np.triu(at.data) if upper else _np.tril(at.data)
@@ -6067,7 +6274,7 @@ def solve_triangular(a, b, upper, left=True, unitriangular=False):
 
 
 def tensorsolve(a, b, dims=None):
-    """텐서를 행렬로 접어 풀고 다시 편다."""
+    """Fold the tensor into a matrix, solve, and spread it back."""
     at, bt = _wrap(a), _wrap(b)
     if dims is not None:
         _unsupported("tensorsolve(dims)")
@@ -6084,14 +6291,16 @@ def tensorinv(a, ind=2):
     return Tensor(out.reshape(at.data.shape[ind:] + lead))
 
 
-# 스케일링·제곱에서 무엇을 "작다" 로 볼지. 1-노름이 이 아래면 테일러가 빨리 모인다.
+# What counts as "small" for scaling and squaring. Below this 1-norm the Taylor
+# series converges quickly.
 _EXP_SMALL = 0.5
-# 그 조건에서 필요한 항의 개수. 0.5^18/18! 은 배정도의 바닥보다 한참 아래다.
+# How many terms that condition needs. 0.5^18/18! is far below double
+# precision's floor.
 _EXP_TERMS = 18
 
 
 def _expm_raw(a):
-    """스케일링·제곱 + 테일러. 배정도로 센다."""
+    """Scaling and squaring plus Taylor. Computed in double precision."""
     n = a.shape[-1]
     norm = _np.abs(a).sum(axis=-2).max() if a.size else 0.0
     squarings = max(0, int(_np.ceil(_np.log2(norm / _EXP_SMALL)))) if norm > _EXP_SMALL \
@@ -6108,19 +6317,22 @@ def _expm_raw(a):
 
 
 def matrix_exp(t):
-    """행렬 지수 `e^A`. **스케일링과 제곱으로 간다.**
+    """The matrix exponential `e^A`. **It goes by scaling and squaring.**
 
-    테일러만으로는 큰 행렬에서 안 모인다 — `A*5` 의 답이 4.8e+10 인데, 그 자리에서는
-    항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤
-    `s` 번 제곱하면 같은 답이 안전하게 나온다(`e^A = (e^{A/2^s})^{2^s}`).
+    Taylor alone does not converge on a large matrix — the answer for `A*5` is
+    4.8e+10, and there the growing terms overflow first. Lowering the 1-norm of
+    `A/2^s` below 0.5, running the series and then squaring `s` times gives the
+    same answer safely (`e^A = (e^{A/2^s})^{2^s}`).
 
-    **기울기는 자기 자신으로 구한다.** `e^A` 의 프레셰 도함수에는 이런 항등식이 있다:
+    **The gradient is obtained from the function itself.** The Fréchet derivative
+    of `e^A` carries this identity:
 
-        expm([[Aᵀ, Ḡ], [0, Aᵀ]]) 의 오른쪽 위 블록 = Ā
+        the upper-right block of expm([[Aᵀ, Ḡ], [0, Aᵀ]]) = Ā
 
-    근사가 아니라 항등식이다. 그래서 순방향에 쓴 급수를 **그대로 다시 부르면**
-    기울기가 따라온다 — 미분식을 새로 유도해 적을 자리가 없다. 그것이 이 방법을
-    고른 이유다. 유도한 식은 틀릴 수 있고 틀리면 조용하다.
+    An identity rather than an approximation. So **calling the same series the
+    forward used** brings the gradient with it — there is nowhere to derive and
+    write a new derivative. That is why this method was chosen. A derived formula
+    can be wrong, and wrong quietly.
     """
     x = _mat(t, "matrix_exp")
     a = x.data.astype(_np.float64)
@@ -6139,7 +6351,8 @@ def matrix_exp(t):
 
 
 class _Linalg(_Namespace):
-    """`torch.linalg` 자리. 같은 구현을 가리키므로 갈릴 자리가 없다."""
+    """The `torch.linalg` slot. It points at the same implementation, so there is
+    nowhere to diverge."""
 
     LinAlgError = LinAlgError
     det = staticmethod(det)
@@ -6167,7 +6380,7 @@ class _Linalg(_Namespace):
     ldl_solve = staticmethod(ldl_solve)
     householder_product = staticmethod(householder_product)
     norm = staticmethod(norm)
-    # 조합층.
+    # The composite layers.
     matmul = staticmethod(matmul)
     vecdot = staticmethod(vecdot)
     cross = staticmethod(cross)
@@ -6190,8 +6403,8 @@ linalg = _Linalg()
 
 
 class _Fft(_Namespace):
-    """`torch.fft`. 몸통은 `borch/_fft.py` 에 있다 — 이 파일이 이미 크고, 그쪽은
-    `_tensor` 말고는 아무것도 안 들여와서 따로 설 수 있다."""
+    """`torch.fft`. The body lives in `borch/_fft.py` — this file is already large
+    and that one imports nothing but `_tensor`, so it can stand on its own."""
 
     fft = staticmethod(_fft_fft)
     ifft = staticmethod(_fft_ifft)
@@ -6237,13 +6450,15 @@ class _Cuda(_Namespace):
 cuda = _Cuda()
 
 
-# ── 제자리 활성과 `upsample` 별칭 ────────────────────────────────────────────
+# ── the in-place activations and the `upsample` aliases ─────────────────────
 #
-# torch 의 `F.relu_(x)` 는 `x` 를 **제 버퍼에서** 고친다. 학습 루프에서 중간 텐서를
-# 안 만들려고 쓰는 자리이고, 교재 코드에서는 `nn.ReLU(inplace=True)` 와 짝이다.
+# torch's `F.relu_(x)` changes `x` **in its own buffer.** Used in a training loop
+# to avoid building an intermediate tensor, and in textbook code it pairs with
+# `nn.ReLU(inplace=True)`.
 #
-# **계산은 밑줄 없는 쪽이 한다.** 여기서는 그 결과를 제 버퍼에 되쓰기만 한다 —
-# 같은 식을 두 벌로 두면 언젠가 갈리고, 값이 그럴듯해서 안 보인다.
+# **The version without the underscore does the computation.** This only writes
+# the result back into its own buffer — two copies of the same formula eventually
+# diverge, and the values are plausible enough to be invisible.
 
 _FUNCTIONAL_INPLACE = ("relu", "celu", "elu", "selu", "hardtanh", "leaky_relu",
                        "threshold", "rrelu")
@@ -6257,8 +6472,9 @@ def _make_functional_inplace(name):
         return x._inplace(lambda: fn(x, *args, **kw), name + "_")
 
     call.__name__ = name + "_"
-    call.__doc__ = (f"`F.{name}` 을 제자리로. 계산은 그쪽이 하고 여기서는 제 버퍼에 "
-                    "되쓴다. 기울기가 켜진 잎은 torch 처럼 거절한다.")
+    call.__doc__ = (f"`F.{name}` in place. That side does the computation and "
+                    "this writes it back into its own buffer. A leaf with "
+                    "gradients on is refused as torch does.")
     return call
 
 
@@ -6266,22 +6482,25 @@ for _nm in _FUNCTIONAL_INPLACE:
     globals()[_nm + "_"] = _make_functional_inplace(_nm)
 
 
-# ── 공간 변환기 ────────────────────────────────────────────────────────────
+# ── the spatial transformer ─────────────────────────────────────────────────
 #
-# `affine_grid` 가 "출력의 이 칸은 입력의 어디를 보는가" 를 적은 격자를 만들고,
-# `grid_sample` 이 그 자리에서 값을 떠 온다. 둘이 짝이고, 사이에 놓인 `theta` 가
-# 학습된다 — 모델이 스스로 자르고 돌리고 확대하는 법을 배우는 구조다.
+# `affine_grid` builds a grid recording "where in the input does this output cell
+# look", and `grid_sample` fetches the values from those positions. The two are a
+# pair, and the `theta` between them is learned — the structure by which a model
+# learns to crop, rotate and zoom on its own.
 #
-# **격자 좌표를 미분 가능한 텐서로 둔다.** 그러면 입력 쪽 기울기와 격자(따라서
-# `theta`) 쪽 기울기가 둘 다 저절로 나온다. 자리 번호(내림한 정수)만 상수다 —
-# torch 도 거기서는 안 흘린다.
+# **The grid coordinates are kept as differentiable tensors.** Then the gradient
+# towards the input and the gradient towards the grid (and so towards `theta`)
+# both come out on their own. Only the position indices (the floored integers) are
+# constants — torch does not flow there either.
 
 def _grid_base(n, align_corners):
-    """`[-1, 1]` 위의 표본 자리. **`align_corners` 가 이것을 바꾼다.**
+    """The sample positions over `[-1, 1]`. **`align_corners` changes this.**
 
-    참이면 양 끝을 못 박고(`-1`, `1`) 그 사이를 고르게 나눈다. 거짓이면 칸의
-    **가운데**를 잡는다(`(2i+1)/n − 1`) — 끝 칸의 절반이 밖으로 나간다.
-    `interpolate` 와 같은 갈림이고, 값이 안쪽에서는 비슷해 눈으로는 안 갈린다.
+    True pins both ends (`-1`, `1`) and divides evenly between them. False takes
+    **the centre** of each cell (`(2i+1)/n − 1`) — half of the end cell falls
+    outside. The same split as `interpolate`'s, and the values are similar enough
+    in the interior that the eye does not part them.
     """
     if align_corners:
         return (_np.linspace(-1.0, 1.0, n, dtype=_np.float32) if n > 1
@@ -6290,16 +6509,19 @@ def _grid_base(n, align_corners):
 
 
 def affine_grid(theta, size, align_corners=False):
-    """`theta` 가 그리는 표본 격자. `(N, 2, 3)` 을 받아 `(N, H, W, 2)` 를 낸다.
+    """The sampling grid `theta` draws. It takes `(N, 2, 3)` and gives
+    `(N, H, W, 2)`.
 
-    마지막 축은 **`(x, y)` 순서다** — 모양의 `(H, W)` 와 뒤집혀 있다. 뒤집어 적으면
-    가로세로가 같은 정사각 입력에서는 답이 같아서 안 보이고, 직사각에서 드러난다.
+    The last axis is in **`(x, y)` order** — reversed from the shape's `(H, W)`.
+    Written reversed, a square input gives the same answer and it is invisible; it
+    surfaces on a rectangle.
     """
     theta = _wrap(theta)
     n, _, h, w = tuple(int(v) for v in size)
     xs = _grid_base(w, align_corners)
     ys = _grid_base(h, align_corners)
-    # 균질좌표 `(x, y, 1)` — 이동까지 한 번의 곱으로 끝낸다.
+    # Homogeneous coordinates `(x, y, 1)` — the translation finishes in the same
+    # multiplication.
     base = _np.stack([_np.broadcast_to(xs[None, :], (h, w)),
                       _np.broadcast_to(ys[:, None], (h, w)),
                       _np.ones((h, w), dtype=_np.float32)], axis=-1)
@@ -6309,17 +6531,19 @@ def affine_grid(theta, size, align_corners=False):
 
 
 def _grid_denorm(g, n, align_corners):
-    """`[-1, 1]` 을 입력의 칸 번호로 되돌린다. `_grid_base` 의 반대다."""
+    """Turn `[-1, 1]` back into the input's cell indices. The inverse of
+    `_grid_base`."""
     if align_corners:
         return (g + 1.0) * ((n - 1) / 2.0)
     return ((g + 1.0) * n - 1.0) * 0.5
 
 
 def _grid_reflect(v, n, align_corners):
-    """범위 밖을 **되접는다.** 되접는 구간이 `align_corners` 로 갈린다.
+    """**Reflect** what falls outside the range. The interval reflected across
+    differs by `align_corners`.
 
-    참이면 `[0, n−1]`, 거짓이면 `[−0.5, n−0.5]` 다(실측). 되접은 뒤 한 번 더 자른다 —
-    거짓 쪽 구간이 실제 칸 밖까지 걸쳐 있기 때문이다.
+    True gives `[0, n−1]` and false `[−0.5, n−0.5]` (measured). It is clamped once
+    more after reflecting — the false interval reaches past the actual cells.
     """
     lo, hi = (0.0, n - 1.0) if align_corners else (-0.5, n - 0.5)
     if hi <= lo:
@@ -6331,11 +6555,14 @@ def _grid_reflect(v, n, align_corners):
 
 def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
                 align_corners=False):
-    """격자가 가리키는 자리에서 값을 떠 온다. `affine_grid` 의 짝이다.
+    """Fetch the values at the positions the grid points at. `affine_grid`'s
+    partner.
 
-    **자리 번호는 상수, 무게는 텐서다.** 내림한 정수는 미분이 없고 그 나머지가
-    무게가 되므로, 무게만 그래프에 두면 입력과 격자 양쪽으로 기울기가 흐른다 —
-    공간 변환기가 `theta` 를 배우는 길이 그것이다.
+    **The position indices are constants and the weights are tensors.** The
+    floored integers have no derivative and their remainders become the weights,
+    so keeping the weights alone in the graph flows gradient towards both the
+    input and the grid — that is the path by which a spatial transformer learns
+    `theta`.
     """
     x, grid = _wrap(x), _wrap(grid)
     n, c, h, w = x.data.shape
@@ -6357,8 +6584,9 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
     chan = _np.arange(c).reshape(1, c, 1, 1)
 
     def pick(iy, ix):
-        """한 모서리를 떠 온다. **범위 밖은 0 으로 두되 번호는 잘라서 넘긴다** —
-        안 자르면 엉뚱한 자리를 읽는다."""
+        """Fetch one corner. **What falls outside is left at 0 and the index is
+        clamped before being passed on** — unclamped it reads a stray
+        position."""
         inside = ((ix >= 0) & (ix < w) & (iy >= 0) & (iy < h))
         cy = _np.clip(iy, 0, h - 1)
         cx = _np.clip(ix, 0, w - 1)
@@ -6368,7 +6596,8 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
         return got * Tensor(inside[:, None].astype(x.data.dtype))
 
     if mode == "nearest":
-        # torch 는 반올림한다. 값만 나오고 무게가 없으므로 격자로는 안 흐른다.
+        # torch rounds. Only a value comes out and there is no weight, so nothing
+        # flows towards the grid.
         return pick(_np.rint(sy.data).astype(int), _np.rint(sx.data).astype(int))
     if mode != "bilinear":
         _unsupported(f"grid_sample(mode={mode!r}) — only bilinear and nearest are here")
@@ -6386,15 +6615,18 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
 
 def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
                training=False, momentum=0.1, eps=1e-5):
-    """`BatchNorm*d` 의 함수 꼴. **층이 이것을 부른다** — 식을 한 벌만 둔다.
+    """The function form of `BatchNorm*d`. **The layer calls this** — one copy of
+    the formula.
 
-    **`training` 이면 running 통계를 제자리에서 고친다.** torch 가 그렇다 — 넘긴
-    텐서가 갱신되어 돌아온다. 새것을 돌려주면 부르는 쪽의 버퍼가 안 움직이고,
-    학습은 도는데 평가 모드의 값만 틀린다.
+    **With `training` on, the running statistics are changed in place.** torch does
+    that — the tensors handed in come back updated. Handing back new ones leaves
+    the caller's buffers unmoved, and training runs while only the evaluation-mode
+    values are wrong.
 
-    **분산을 두 가지로 쓴다.** 정규화는 편향(ddof=0), `running_var` 갱신은
-    비편향(ddof=1) 이다. 둘 다 편향으로 두면 값이 2.6% 어긋난다 — 이 저장소가
-    오래 겪은 자리이고 그래서 여기 적어 둔다.
+    **Two different variances are used.** The normalisation uses the biased one
+    (ddof=0) and the `running_var` update the unbiased one (ddof=1). Biased in both
+    places, the values are off by 2.6% — a place this repository lived with for a
+    long time, which is why it is written down here.
     """
     x = _wrap(x)
     rank = x.data.ndim
@@ -6405,8 +6637,9 @@ def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
         return v.data if isinstance(v, Tensor) else v
 
     if training:
-        # 평균·분산을 **그래프 안에서** 낸다. numpy 로 빼서 상수처럼 쓰면 x → mean → y
-        # 로 흐르는 길이 끊겨 기울기가 틀리고, weight 에는 아예 안 간다.
+        # The mean and the variance are computed **inside the graph.** Taken out
+        # through numpy and used as constants, the path x → mean → y is cut, the
+        # gradient is wrong, and nothing reaches weight at all.
         mean = x.mean(dim=0)
         for _ in range(rank - 2):
             mean = mean.mean(dim=1)
@@ -6435,10 +6668,12 @@ def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
 
 def embedding_bag(idx, weight, offsets=None, mode="mean", per_sample_weights=None,
                   **_):
-    """가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.
+    """One row per bag. Selecting from the table and **combining** is all one
+    function.
 
-    `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.
-    `per_sample_weights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.
+    Given `offsets`, a 1-D row of indices is cut into bags — the case where the
+    bags have differing lengths. `per_sample_weights` is used in torch under
+    `mode='sum'` alone.
     """
     picked = embedding(idx, weight)
     if per_sample_weights is not None:
@@ -6460,14 +6695,16 @@ def embedding_bag(idx, weight, offsets=None, mode="mean", per_sample_weights=Non
 
 
 def gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
-    """무작위로 하나를 고르되 **미분이 흐르게** 고른다.
+    """Choose one at random **in a way the gradient can flow through.**
 
-    범주 하나를 뽑는 것은 미분이 안 되는 일이라, Gumbel 잡음을 더해 `softmax` 로
-    부드럽게 만든다. `tau` 가 작을수록 한쪽으로 몰린다.
+    Drawing one category is not differentiable, so Gumbel noise is added and
+    `softmax` smooths it. The smaller `tau` is, the more it concentrates on one
+    side.
 
-    `hard=True` 면 답은 0/1 이지만 **기울기는 부드러운 쪽 것을 쓴다** —
-    `hard - soft.detach() + soft` 라는 흔한 수법이고, 값은 hard 이고 미분은 soft 다.
-    그 둘을 갈라 두지 않으면 이 함수의 뜻이 없어진다.
+    With `hard=True` the answer is 0/1 and **the gradient is the smooth one's** —
+    the familiar `hard - soft.detach() + soft` trick, whose value is hard and whose
+    derivative is soft. Without keeping those two apart this function means
+    nothing.
     """
     logits = _wrap(logits)
     u = _rng.random(logits.data.shape).astype(logits.data.dtype)
@@ -6482,7 +6719,8 @@ def gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
 
 
 def upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None):
-    """`interpolate` 의 옛 이름. torch 가 폐기 경고를 내면서도 계속 받는다."""
+    """`interpolate`'s old name. torch warns that it is deprecated and goes on
+    accepting it."""
     return interpolate(x, size, scale_factor, mode, align_corners)
 
 
@@ -6491,19 +6729,20 @@ def upsample_nearest(x, size=None, scale_factor=None):
 
 
 def upsample_bilinear(x, size=None, scale_factor=None):
-    """**`align_corners=True` 다.** `interpolate(mode='bilinear')` 의 기본값은 거짓이라,
-    이름만 보고 별명으로 두면 가장자리가 어긋난다 — 안쪽은 비슷해서 눈으로는 안 갈린다."""
+    """**`align_corners=True`.** `interpolate(mode='bilinear')` defaults to false,
+    so making one an alias of the other by name alone puts the edges off — the
+    interior is similar enough that the eye does not part them."""
     return interpolate(x, size, scale_factor, mode="bilinear", align_corners=True)
 
 
-# ── 비트 연산과 정수 수학 ───────────────────────────────────────────────────
+# ── bitwise operations and integer maths ────────────────────────────────────
 #
-# **`bool` 에서는 논리 연산이 된다.** torch 가 dtype 을 보고 가른다 —
-# `bitwise_and(참거짓)` 은 `logical_and` 이고 `bitwise_not(참거짓)` 은 `logical_not` 이다.
-# 정수로만 물으면 그 갈래가 통째로 안 돌아간다.
+# **On `bool` they become logical operations.** torch branches on the dtype —
+# `bitwise_and` on booleans is `logical_and` and `bitwise_not` on booleans is
+# `logical_not`. Asked with integers alone that branch never runs at all.
 #
-# 기울기는 없다. 비트는 계단이라 흘릴 것이 없고, torch 도 정수 dtype 에는 기울기를
-# 안 만든다.
+# There is no gradient. Bits are steps and there is nothing to flow, and torch
+# does not build gradients for integer dtypes either.
 
 def _bitwise(name, op, bool_op=None):
     def call(a, b):
@@ -6550,14 +6789,16 @@ def lcm_(a, b):
 
 
 def nextafter(a, b):
-    """`a` 에서 `b` 쪽으로 **표현 가능한 다음 수.** 한 ulp 만큼만 움직인다."""
+    """**The next representable number** from `a` towards `b`. It moves by one
+    ulp and no more."""
     a, b = _wrap(a), _wrap(b)
     return a._make(_np.nextafter(a.data, b.data), (a,), lambda g: (g,),
                    "NextafterBackward0")
 
 
 def frexp(x):
-    """`x = 가수 × 2^지수`. **지수는 int32 다** — torch 가 그렇다(실측)."""
+    """`x = mantissa × 2^exponent`. **The exponent is int32** — torch does that
+    (measured)."""
     x = _wrap(x)
     mantissa, exponent = _np.frexp(x.data)
     return _Frexp(Tensor(mantissa.astype(x.data.dtype)),
@@ -6565,20 +6806,23 @@ def frexp(x):
 
 
 def logcumsumexp(x, dim):
-    """누적 `logsumexp`. **넘치지 않게** 센다 — 큰 값을 빼고 더한 뒤 되돌린다."""
+    """A running `logsumexp`. Computed **without overflow** — the maximum is
+    subtracted, summed and restored."""
     x = _wrap(x)
-    # **`logsumexp` 는 정수를 받는데 이쪽은 안 받는다**(실측). 규칙이 아니라 torch 의
-    # 커널 구멍이지만, 여기서 값을 내주면 그 코드가 진짜 torch 에서 깨진다.
+    # **`logsumexp` takes integers and this does not** (measured). A hole in
+    # torch's kernels rather than a rule, and handing back a value here means that
+    # code breaks against real torch.
     _refuses_nonfloat_kernel(x.data, "logcumsumexp", "logcumsumexp_out_cpu")
     data = x.data
     big = _np.max(data, axis=dim, keepdims=True)
     shifted = _np.exp(data - big)
     total = _np.cumsum(shifted, axis=dim)
     out = _np.log(total) + big
-    soft = shifted / total          # 각 자리가 누적합에서 차지하는 몫
+    soft = shifted / total          # each position's share of the running sum
 
     def back(g):
-        # 뒤에서부터 쌓인다 — 자리 `i` 는 `i` 이후의 모든 누적항에 들어간다.
+        # It accumulates from the back — position `i` enters every running term
+        # from `i` onwards.
         gg = _np.asarray(g)
         flipped = _np.flip(_np.cumsum(_np.flip(gg / total, axis=dim), axis=dim),
                            axis=dim)
@@ -6611,14 +6855,15 @@ def arctan2(a, b):
 
 
 def fill(x, value):
-    """**제자리가 아니다.** `fill_` 과 이름이 한 글자 다르고 하는 일이 다르다 —
-    이쪽은 새 텐서를 내고 원본은 그대로다(실측)."""
+    """**Not in place.** One character apart from `fill_` and a different job —
+    this one produces a new tensor and leaves the original alone (measured)."""
     x = _wrap(x)
     return Tensor(_np.full_like(x.data, value))
 
 
 def detach_(x):
-    """**같은 텐서**에서 그래프를 끊는다. `detach()` 는 새것을 내고 이쪽은 제자리다."""
+    """Cut the graph on **the same tensor.** `detach()` produces a new one and
+    this is in place."""
     x = _wrap(x)
     x.requires_grad = False
     x._parents = ()
@@ -6627,18 +6872,21 @@ def detach_(x):
 
 
 def _i1(x):
-    """1 차 변형 베셀 함수 — `i0` 의 도함수다. numpy 가 `i0` 만 주므로 급수로 짠다.
+    """The order-1 modified Bessel function — the derivative of `i0`. numpy gives
+    `i0` alone, so it is built as a series.
 
-    급수는 `i1(x) = Σ (x/2)^(2k+1) / (k! (k+1)!)` 이고, 항을 앞 항에 곱해 이어 가면
-    계승이 넘치지 않는다. **항이 전부 양수라 서로 지우지 않으므로** 자릿수를 잃는
-    자리가 없다 — 부호는 홀함수라 마지막에 붙인다.
+    The series is `i1(x) = Σ (x/2)^(2k+1) / (k! (k+1)!)`, and carrying each term
+    forward by multiplying the previous one keeps the factorials from overflowing.
+    **Every term is positive and they do not cancel**, so there is nowhere to lose
+    digits — the sign is attached at the end, the function being odd.
 
-    근사가 아니라 수렴이다. torch 와 [-30, 30] 을 촘촘히 대조해 float32 안에서
-    상대오차 1e-6 아래임을 확인했다(`tests/test_bessel.py`).
+    Convergence rather than an approximation. Compared densely against torch over
+    [-30, 30] and confirmed to stay under a relative error of 1e-6 within float32
+    (`tests/test_bessel.py`).
     """
     a = _np.abs(_np.asarray(x, dtype=_np.float64))
     half = a / 2.0
-    term = half.copy()                     # k=0 항
+    term = half.copy()                     # the k=0 term
     total = term.copy()
     for k in _builtin_range(1, 400):
         term = term * (half * half) / (k * (k + 1.0))
@@ -6649,11 +6897,12 @@ def _i1(x):
 
 
 def i0(x):
-    """0 차 변형 베셀 함수. `kaiser_window` 가 이것 위에 선다."""
+    """The order-0 modified Bessel function. `kaiser_window` stands on it."""
     x = _wrap(x)
     data = _np.asarray(x.data)
-    # 도함수는 `i1` 이다. 여기에는 `Tensor(...)` 만 있어서 그래프가 조용히 끊겨
-    # 있었고, `backward()` 를 부르기 전까지는 값 검사로 안 드러났다.
+    # Its derivative is `i1`. Here there was only a bare `Tensor(...)` and the
+    # graph was quietly cut, and until `backward()` was called no value check
+    # showed it.
     return x._make(_np.i0(data).astype(x.data.dtype), (x,),
                    lambda g: (_np.asarray(g) * _i1(data),), "I0Backward0")
 
@@ -6664,7 +6913,8 @@ def i0_(x):
 
 
 def mvlgamma(x, p):
-    """다변량 로그감마. `log Γ_p(x) = p(p−1)/4 · log π + Σ log Γ(x + (1−i)/2)`."""
+    """The multivariate log gamma.
+    `log Γ_p(x) = p(p−1)/4 · log π + Σ log Γ(x + (1−i)/2)`."""
     x = _wrap(x)
     out = _np.full_like(x.data, p * (p - 1) / 4.0 * _math.log(_math.pi))
     for i in range(1, p + 1):
@@ -6672,19 +6922,22 @@ def mvlgamma(x, p):
     return Tensor(out.astype(x.data.dtype))
 
 
-# ── 창 함수 ─────────────────────────────────────────────────────────────────
+# ── window functions ────────────────────────────────────────────────────────
 #
-# **`periodic` 이 기본이고 그것이 길이를 하나 늘린다.** torch 는 참이면 `N+1` 짜리
-# 대칭 창을 만들어 마지막을 버린다(실측: `hann_window(5)` 가 대칭 6 의 앞 다섯과
-# 정확히 같다). 거짓으로만 물으면 그 규칙이 안 드러난다.
+# **`periodic` is the default and it adds one to the length.** When true, torch
+# builds a symmetric window of `N+1` and discards the last (measured:
+# `hann_window(5)` equals the first five of the symmetric 6 exactly). Asked with
+# false alone that rule never surfaces.
 
 def _window(n, periodic, shape, dt=None, requires_grad=False):
-    """다섯이 나눠 쓰는 문. **`dtype=`·`requires_grad=` 도 여기서 받는다.**
+    """The gate the five share. **`dtype=` and `requires_grad=` are taken here
+    too.**
 
-    다섯 다 `**kw` 로 그 둘을 **삼키고 있었다.** 형이 틀리는 것보다 나쁜 쪽은
-    기울기다 — `hann_window(8, requires_grad=True)` 가 조용히 기울기 없는 잎을
-    주면, 그 창을 학습시키는 코드는 오류 없이 **그것만 안 움직인다.**
-    공장 열넷을 `_made` 로 모은 것과 같은 이유이고, 그때 이 다섯이 밖에 있었다.
+    All five were **swallowing** the two into `**kw`. The gradient side is worse
+    than the dtype — `hann_window(8, requires_grad=True)` quietly giving a leaf
+    with no gradient means code training that window runs without an error and
+    **that one thing does not move.** The reason fourteen factories were gathered
+    under `_made`, and these five were outside at the time.
     """
     if n <= 0:
         return _made(_np.zeros(0, dtype=_DEFAULT_DTYPE), dt, requires_grad)
@@ -6733,11 +6986,12 @@ def kaiser_window(window_length, periodic=True, beta=12.0, dtype=None,
     return _window(window_length, periodic, shape, dtype, requires_grad)
 
 
-# ── torch 최상위에만 있는 이름들 ────────────────────────────────────────────
+# ── the names that exist only at torch's top level ──────────────────────────
 #
-# torch 는 `nn.functional` 의 것을 최상위에도 두는데, **서명이 같지 않다.** 최상위
-# 쪽은 날 ATen 연산이라 인자 순서가 다르고 열거형이 정수다. 같은 계산인데 부르는
-# 법이 다른 것이라, 계산은 한 벌만 두고 여기서 자리만 옮긴다.
+# torch keeps some of `nn.functional`'s at the top level too, and **the signatures
+# do not match.** The top-level ones are raw ATen operations, so the argument order
+# differs and the enums are integers. The same computation called a different way,
+# so the computation is kept as one copy and only the positions move here.
 
 def nan_to_num_(x, nan=0.0, posinf=None, neginf=None):
     x = _wrap(x)
@@ -6750,7 +7004,8 @@ def dropout_(x, p=0.5, train=True):
 
 
 def feature_dropout(x, p=0.5, train=True):
-    """**채널째 떨군다** — `F.dropout2d` 와 같은 계산이다(실측). 최상위에만 있는 이름이다."""
+    """**Drops whole channels** — the same computation as `F.dropout2d`
+    (measured). A name that exists at the top level alone."""
     return dropout2d(x, p, train)
 
 
@@ -6772,10 +7027,12 @@ def feature_alpha_dropout_(x, p=0.5, train=True):
 
 def batch_norm_aten(x, weight, bias, running_mean, running_var, training,
                     momentum, eps, cudnn_enabled=False):
-    """**`F.batch_norm` 과 인자 순서가 다르다.** 여기서는 가중치가 통계보다 **앞**이다.
+    """**A different argument order from `F.batch_norm`.** Here the weights come
+    **before** the statistics.
 
-    같은 계산인데 자리가 뒤바뀐 것이라, 그대로 넘기면 가중치를 평균으로 쓴다 —
-    예외가 아니라 그럴듯하게 다른 값이다.
+    The same computation with the positions swapped, so forwarded as-is the
+    weights get used as the mean — not an exception but a plausibly different
+    value.
     """
     return batch_norm(x, running_mean, running_var, weight, bias, training,
                       momentum, eps)
@@ -6783,8 +7040,9 @@ def batch_norm_aten(x, weight, bias, running_mean, running_var, training,
 
 def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
                  align_corners=False):
-    """**열거형이 정수다.** 0·1 이 `bilinear`·`nearest` 이고, 채우기는 0·1·2 가
-    `zeros`·`border`·`reflection` 이다. 이름으로 받는 쪽은 `F.grid_sample` 이다."""
+    """**The enums are integers.** 0 and 1 are `bilinear` and `nearest`, and for
+    the padding 0, 1 and 2 are `zeros`, `border` and `reflection`. The side that
+    takes them by name is `F.grid_sample`."""
     modes = ("bilinear", "nearest", "bicubic")
     pads = ("zeros", "border", "reflection")
     return grid_sample(x, grid, modes[int(interpolation_mode)],
@@ -6793,30 +7051,34 @@ def grid_sampler(x, grid, interpolation_mode=0, padding_mode=0,
 
 def ctc_loss_aten(log_probs, targets, input_lengths, target_lengths, blank=0,
                   reduction=1, zero_infinity=False):
-    """**`reduction` 이 정수다** — 0·1·2 가 `none`·`mean`·`sum` 이다.
+    """**`reduction` is an integer** — 0, 1 and 2 are `none`, `mean` and `sum`.
 
-    이름으로 받는 쪽은 `F.ctc_loss` 이고, 그쪽 기본값은 `"mean"` 이다. 여기 기본값
-    `1` 이 그것과 같은 자리를 가리킨다.
+    The side that takes it by name is `F.ctc_loss`, whose default is `"mean"`. The
+    default `1` here points at the same place.
     """
     kinds = ("none", "mean", "sum")
     return ctc_loss(log_probs, targets, input_lengths, target_lengths, blank,
                     kinds[int(reduction)], zero_infinity)
 
 
-# ── 모양·색인 ───────────────────────────────────────────────────────────────
+# ── shape and indexing ──────────────────────────────────────────────────────
 #
-# **`as_strided` 는 torch 에서 뷰다.** 우리는 사본을 낸다.
+# **`as_strided` is a view in torch.** This produces a copy.
 #
-# torch 는 저장소 하나를 여러 틀로 보는 구조라 `as_strided` 결과에 쓰면 원본이 바뀐다.
-# borch.ts 의 텐서는 GPU 버퍼를 **하나씩 가지므로** 그 뷰가 표현이 안 되고, 여기서만
-# 진짜 뷰를 내면 세 구현이 갈린다 — 값으로는 안 보이고 **쓸 때만** 보이는 갈림이라
-# 제일 나쁜 종류다. 셋 다 사본으로 맞춘다.
+# torch is built around viewing one storage through several frames, so writing
+# into an `as_strided` result changes the original. A borch.ts tensor **holds its
+# own GPU buffer**, so that view is not representable, and producing a real view
+# here alone makes the three implementations diverge — a divergence invisible in
+# the values and visible **only on a write**, which is the worst kind. All three
+# are matched as copies.
 #
-# 읽기만 하는 쓰임(창 내기, 대각선 훑기)은 그대로 돌고, 뷰에 쓰는 코드는 torch 에서도
-# 드물다. 대신 `as_strided_scatter` 가 "그 자리에 써 넣기" 를 제대로 한다.
+# The read-only uses (making windows, walking a diagonal) run unchanged, and code
+# that writes into the view is rare even in torch. `as_strided_scatter` does
+# "write into those positions" properly instead.
 
 def _strided_flat(size, stride, offset):
-    """걸음이 가리키는 **평평한 번호표**를 만든다. 모양은 `size` 다."""
+    """Build the **flat index table** the strides point at. Its shape is
+    `size`."""
     size = tuple(int(s) for s in size)
     stride = tuple(int(s) for s in stride)
     flat = _np.full(size, int(offset), dtype=_np.int64)
@@ -6828,13 +7090,15 @@ def _strided_flat(size, stride, offset):
 
 
 def as_strided(t, size, stride, storage_offset=0):
-    """평평한 저장소를 **다른 걸음으로** 읽는다. 겹쳐도 되고 건너뛰어도 된다."""
+    """Read a flat storage **with different strides.** They may overlap and they
+    may skip."""
     t = _wrap(t)
     flat = _strided_flat(size, stride, storage_offset)
     out = t.data.reshape(-1)[flat]
 
     def back(g):
-        # 겹치는 자리로는 **쌓인다** — 한 칸을 두 번 읽었으면 기울기도 두 번 온다.
+        # Overlapping positions **accumulate** — a cell read twice receives
+        # gradient twice.
         acc = _np.zeros(t.data.size, dtype=_np.asarray(g).dtype)
         _np.add.at(acc, flat.reshape(-1), _np.asarray(g).reshape(-1))
         return (acc.reshape(t.data.shape),)
@@ -6849,20 +7113,22 @@ def as_strided_(t, size, stride, storage_offset=0):
 
 
 def _marks(shape):
-    """`shape` 짜리 판의 **평평한 번호표.** 어느 칸이 저장소 어디인가를 담는다."""
+    """The **flat index table** of an array of shape `shape`. It records where in
+    the storage each cell sits."""
     return _np.arange(int(_np.prod(shape)) if shape else 1,
                       dtype=_np.int64).reshape(shape)
 
 
 def _scatter_into(t, src, spots, name):
-    """`t` 의 사본에서 `spots` 가 가리키는 **평평한 자리**에 `src` 를 넣는다.
+    """Put `src` into the **flat positions** `spots` points at, in a copy of `t`.
 
-    `select_scatter`·`slice_scatter`·`diagonal_scatter`·`as_strided_scatter` 가
-    전부 이 꼴이고, 다른 것은 **어느 자리인가**뿐이다.
+    `select_scatter`, `slice_scatter`, `diagonal_scatter` and `as_strided_scatter`
+    all take this shape, and the only difference is **which positions.**
 
-    **쓰기와 되읽기가 같은 번호표를 쓴다.** 자리를 두 벌로 적으면 순방향은 맞는데
-    기울기만 어긋나는 자리가 생기고, 그 어긋남은 값이 그럴듯해서 안 보인다 —
-    대각선처럼 축 순서가 뒤집히는 자리가 특히 그렇다.
+    **The write and the read-back use the same index table.** Written as two
+    copies there is room for the forward to be right and the gradient alone to
+    drift, and that drift is invisible because the values are plausible —
+    especially where the axis order is reversed, as it is on a diagonal.
     """
     t, src = _wrap(t), _wrap(src)
     flat = _np.asarray(spots).reshape(-1)
@@ -6883,30 +7149,34 @@ def _scatter_into(t, src, spots, name):
 
 
 def as_strided_scatter(t, src, size, stride, storage_offset=0):
-    """`as_strided` 가 보던 자리에 **써 넣은 사본**을 낸다."""
+    """Produce a copy **written into** at the positions `as_strided` was
+    viewing."""
     return _scatter_into(t, src, _strided_flat(size, stride, storage_offset),
                          "AsStridedScatterBackward0")
 
 
 def select_scatter(t, src, dim, index):
-    """`select` 가 꺼내던 한 장을 **갈아끼운 사본.**"""
+    """A copy with the slice `select` was taking **swapped out.**"""
     spots = _marks(_wrap(t).data.shape)[(slice(None),) * dim + (int(index),)]
     return _scatter_into(t, src, spots, "SelectScatterBackward0")
 
 
 def slice_scatter(t, src, dim=0, start=None, end=None, step=1):
-    """`x[..., start:end:step]` 자리를 **갈아끼운 사본.** `step` 이 요점이다 —
-    1 로만 재면 건너뛰는 자리를 아무도 안 본다."""
+    """A copy with the `x[..., start:end:step]` positions **swapped out.** `step`
+    is the point — measured at 1 alone, nobody looks at the skipped
+    positions."""
     spots = _marks(_wrap(t).data.shape)[
         (slice(None),) * dim + (slice(start, end, step),)]
     return _scatter_into(t, src, spots, "SliceScatterBackward0")
 
 
 def diagonal_scatter(t, src, offset=0, dim1=0, dim2=1):
-    """대각선 자리를 **갈아끼운 사본.** `offset` 이 0 이 아니면 자리가 밀린다.
+    """A copy with the diagonal positions **swapped out.** A non-zero `offset`
+    shifts them.
 
-    자리를 `_np.diagonal` 로 뽑는다 — 그쪽이 **대각선 축을 맨 뒤로 보내는** 규약을
-    갖고 있고 torch 도 같다. 손으로 색인을 짜면 배치 축이 있을 때 순서가 갈린다.
+    The positions are taken with `_np.diagonal` — that side has the convention of
+    **sending the diagonal axis to the back** and torch does the same. Written by
+    hand, the order diverges once there is a batch axis.
     """
     spots = _np.diagonal(_marks(_wrap(t).data.shape), offset=offset,
                          axis1=dim1, axis2=dim2)
@@ -6914,10 +7184,12 @@ def diagonal_scatter(t, src, offset=0, dim1=0, dim2=1):
 
 
 def diag_embed(t, offset=0, dim1=-2, dim2=-1):
-    """마지막 축을 **대각선으로 펴서** 축을 하나 늘린다. `diagonal` 의 반대다."""
+    """**Spread the last axis onto a diagonal**, adding an axis. The inverse of
+    `diagonal`."""
     t = _wrap(t)
-    # `abs` 는 이 파일에서 **텐서 함수**다 — 파이썬 내장이 가려져 있다. `_np.abs` 가
-    # 이 파일의 규칙이고, 그것을 잊으면 `'int' object has no attribute 'abs'` 로 온다.
+    # `abs` is **a tensor function** in this file — the Python builtin is
+    # shadowed. `_np.abs` is this file's rule, and forgetting it arrives as
+    # `'int' object has no attribute 'abs'`.
     n = t.data.shape[-1] + int(_np.abs(offset))
     rank = t.data.ndim + 1
     d1, d2 = dim1 % rank, dim2 % rank
@@ -6937,10 +7209,12 @@ def diag_embed(t, offset=0, dim1=-2, dim2=-1):
 
 
 def tensor_split(t, indices_or_sections, dim=0):
-    """**나머지를 앞에서부터 나눠 갖는다.** 10 을 4 로 쪼개면 3·3·2·2 다(실측).
+    """**The remainder is shared out from the front.** Splitting 10 into 4 gives
+    3, 3, 2, 2 (measured).
 
-    `chunk` 와 다르다 — 그쪽은 앞을 크게 채우고 마지막이 남는 것을 받는다. 나눠
-    떨어지는 크기로만 재면 두 함수가 같아 보인다.
+    Different from `chunk` — that one fills the front large and the last piece
+    takes what is left. Measured at sizes that divide evenly the two functions look
+    the same.
     """
     t = _wrap(t)
     if isinstance(indices_or_sections, (list, tuple)):
@@ -6957,7 +7231,8 @@ def tensor_split(t, indices_or_sections, dim=0):
 
 
 def _split_at(t, cuts, dim):
-    """자르는 **자리 목록**으로 쪼갠다. 각 조각이 기울기를 제 자리로 되돌린다."""
+    """Split by a **list of cut positions.** Each piece returns its gradient to
+    its own place."""
     out, prev = [], 0
     for stop in list(cuts) + [t.data.shape[dim]]:
         out.append(narrow(t, dim, prev, max(0, stop - prev)))
@@ -6966,7 +7241,7 @@ def _split_at(t, cuts, dim):
 
 
 def split_with_sizes(t, split_sizes, dim=0):
-    """조각 **크기 목록**으로 쪼갠다. `split` 이 목록을 받는 꼴과 같은 것이다."""
+    """Split by a **list of piece sizes.** The same as `split` taking a list."""
     t = _wrap(t)
     cuts, at = [], 0
     for s in list(split_sizes)[:-1]:
@@ -6976,15 +7251,17 @@ def split_with_sizes(t, split_sizes, dim=0):
 
 
 def unravel_index(indices, shape):
-    """평평한 번호를 축별 번호로 푼다. **축마다 텐서 하나씩, 묶음으로 낸다**(실측)."""
+    """Unpack a flat index into per-axis indices. **One tensor per axis, returned
+    as a tuple** (measured)."""
     idx = _as_index(indices)
     return tuple(Tensor(part.astype(_np.int64))
                  for part in _np.unravel_index(idx, tuple(int(s) for s in shape)))
 
 
 def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None):
-    """**이어진** 중복만 줄인다. `unique` 와 달리 정렬하지 않는다 — `[1,1,2,2,1]`
-    이 `[1,2,1]` 이 된다(실측). 정렬된 입력으로만 재면 둘이 같아 보인다."""
+    """Collapses **consecutive** duplicates only. Unlike `unique` it does not
+    sort — `[1,1,2,2,1]` becomes `[1,2,1]` (measured). Measured on sorted input
+    alone the two look the same."""
     t = _wrap(t)
     data = t.data
     if dim is None:
@@ -7013,10 +7290,12 @@ def unique_consecutive(t, return_inverse=False, return_counts=False, dim=None):
 
 
 def masked_scatter(t, mask, source):
-    """가면이 참인 자리에 `source` 를 **평평한 차례대로** 채운다.
+    """Fill the positions where the mask is true from `source`, **in flat
+    order.**
 
-    자리마다 어느 값이 오는지가 요점이다 — 참인 자리 수만큼 앞에서부터 가져온다.
-    모양이 맞는 원천으로만 재면 그 차례가 안 드러난다.
+    Which value lands where is the point — as many taken from the front as there
+    are true positions. Measured with a source of matching shape alone, that order
+    never surfaces.
     """
     t, source = _wrap(t), _wrap(source)
     m = _np.broadcast_to(_np.asarray(mask.data if isinstance(mask, Tensor)
@@ -7039,10 +7318,11 @@ def masked_scatter_(t, mask, source):
 
 
 def index_put(t, indices, values, accumulate=False):
-    """축마다 번호 텐서를 하나씩 받아 그 자리에 넣는다.
+    """Take one index tensor per axis and write into those positions.
 
-    **번호가 겹칠 때 갈린다** — `accumulate` 면 쌓이고, 아니면 마지막에 쓴 것이
-    남는다. 안 겹치는 번호로 재면 두 갈래가 같은 답을 낸다.
+    **They part where the indices collide** — with `accumulate` they add and
+    otherwise the last write survives. Measured with non-colliding indices the two
+    branches give the same answer.
     """
     t, values = _wrap(t), _wrap(values)
     where = tuple(_as_index(i) for i in indices)
@@ -7071,7 +7351,8 @@ def index_put_(t, indices, values, accumulate=False):
 
 
 def put(t, index, source, accumulate=False):
-    """**평평하게 펴서** 번호대로 넣는다 — 축이라는 개념이 없다. `take` 의 반대다."""
+    """Write by index into **the flattened tensor** — it has no notion of an
+    axis. The inverse of `take`."""
     t, source = _wrap(t), _wrap(source)
     idx = _as_index(index).reshape(-1)
     out = t.data.copy().reshape(-1)
@@ -7093,7 +7374,8 @@ def put(t, index, source, accumulate=False):
     return t._make(out, (t, source), back, "PutBackward0")
 
 
-# 줄이며 넣는 것들의 셈법. `include_self` 가 **원래 값을 첫 항으로 넣는가**다.
+# The arithmetic of the reducing writes. `include_self` decides **whether the
+# original value enters as the first term.**
 _REDUCE_OPS = {
     "sum": (0.0, _np.add),
     "prod": (1.0, _np.multiply),
@@ -7103,7 +7385,8 @@ _REDUCE_OPS = {
 
 
 def _reduce_into(out, where, values, reduce, include_self):
-    """`out[where]` 에 `values` 를 `reduce` 로 합친다. 자리가 겹치면 쌓인다."""
+    """Combine `values` into `out[where]` through `reduce`. Colliding positions
+    accumulate."""
     if reduce == "mean":
         total = _np.zeros(out.shape, dtype=out.dtype)
         count = _np.zeros(out.shape, dtype=out.dtype)
@@ -7113,7 +7396,8 @@ def _reduce_into(out, where, values, reduce, include_self):
         if include_self:
             total = total + out
             count = count + 1.0
-        # **안 닿은 자리는 그대로다.** 0 으로 나누지 않도록 그 자리를 갈라 둔다.
+        # **Untouched positions stay as they are.** They are branched out so that
+        # nothing divides by zero.
         merged = _np.where(touched, total / _np.where(count == 0, 1.0, count), out)
         out[...] = merged
         return
@@ -7128,10 +7412,12 @@ def _reduce_into(out, where, values, reduce, include_self):
 
 
 def index_reduce(t, dim, index, source, reduce, include_self=True):
-    """번호가 가리키는 **줄**을 합친다. `include_self` 가 원래 값을 첫 항으로 넣는다.
+    """Combine the **rows** the indices point at. `include_self` puts the original
+    value in as the first term.
 
-    **더하기·곱하기로만 재면 그 깃발이 안 보인다** — 1 로 채운 판에 곱하기를 하면
-    켜나 끄나 같은 답이다(실측). 평균과 최소가 그 갈림을 보여 준다.
+    **Measured with add and multiply alone that flag is invisible** — multiplying
+    into an array filled with 1s gives the same answer on or off (measured). Mean
+    and minimum show the split.
     """
     t, source = _wrap(t), _wrap(source)
     out = t.data.copy()
@@ -7141,10 +7427,11 @@ def index_reduce(t, dim, index, source, reduce, include_self=True):
 
 
 def scatter_reduce(t, dim, index, src, reduce, include_self=True):
-    """`scatter` 와 같은 자리지만 **덮어쓰는 대신 합친다.**
+    """`scatter`'s place, **combining instead of overwriting.**
 
-    `sum`·`prod`·`amax`·`amin`·`mean` 이고, `mean` 은 `include_self` 면 원래 값도
-    한 항으로 세어 나눈다(실측).
+    The reductions are `sum`, `prod`, `amax`, `amin` and `mean`, and with
+    `include_self` the `mean` counts the original value as one term in the divisor
+    too (measured).
     """
     t, src = _wrap(t), _wrap(src)
     idx = _as_index(index)
@@ -7157,19 +7444,22 @@ def scatter_reduce(t, dim, index, src, reduce, include_self=True):
 
 
 def renorm(t, p, dim, maxnorm):
-    """`dim` 을 따라 잘라 본 **각 조각의 노름을 `maxnorm` 아래로** 끌어내린다.
+    """Pull **each slice's norm below `maxnorm`**, slicing along `dim`.
 
-    이미 작은 조각은 **안 건드린다** — 전부 크게 만들면 그 조건이 안 드러난다.
+    A slice that is already small is **left alone** — made all large, that
+    condition never surfaces.
 
-    **배율이 상수가 아니다.** `x` 가 배율 안에도 들어 있어서, 기울기를 `g·s` 로만
-    적으면 순방향은 맞고 역방향만 틀린다 — 값이 그럴듯해서 안 보이는 자리다.
-    깎인 조각에서만 갈리므로, 전부 작은 입력으로 재면 그것도 안 드러난다.
+    **The scale is not a constant.** `x` appears inside the scale as well, so
+    writing the gradient as `g·s` alone leaves the forward right and the backward
+    wrong — a place invisible because the values are plausible. It diverges on the
+    clipped slices alone, so measured with everything small that too never
+    surfaces.
     """
     t = _wrap(t)
     x = t.data
     axes = tuple(a for a in range(x.ndim) if a != (dim % x.ndim))
     norms = _np.sum(_np.abs(x) ** p, axis=axes, keepdims=True) ** (1.0 / p)
-    # torch 는 0 으로 나누지 않으려고 아주 작은 수를 더한다.
+    # torch adds a very small number so that nothing divides by zero.
     cut = norms > maxnorm
     scale = _np.where(cut, maxnorm / (norms + 1e-7), 1.0)
 
@@ -7185,7 +7475,8 @@ def renorm(t, p, dim, maxnorm):
 
 
 def cartesian_prod(*tensors):
-    """모든 짝. **하나만 주면 그냥 그것이다**(실측) — 1차원으로 남는다."""
+    """Every pair. **Given one it is simply that one** (measured) — it stays
+    1-D."""
     arrays = [_wrap(a).data.reshape(-1) for a in tensors]
     if len(arrays) == 1:
         return Tensor(arrays[0].copy())
@@ -7194,7 +7485,8 @@ def cartesian_prod(*tensors):
 
 
 def combinations(t, r=2, with_replacement=False):
-    """`r` 개씩 고른 조합. **순서는 없고**, 중복 허용이 따로 있다."""
+    """Combinations of `r`. **Order does not count**, and repetition is a
+    separate option."""
     from itertools import combinations as _comb, combinations_with_replacement
 
     flat = _wrap(t).data.reshape(-1)
@@ -7206,8 +7498,9 @@ def combinations(t, r=2, with_replacement=False):
 
 
 def tril_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
-    """아래 삼각의 자리들. **`(2, 개수)` 짜리 int64 표다**(실측) — 자리 쌍이 아니라
-    행 줄과 열 줄로 나뉘어 온다."""
+    """The positions of the lower triangle. **A `(2, count)` int64 table**
+    (measured) — not pairs of positions but a row of rows and a row of
+    columns."""
     r, c = _np.tril_indices(int(row), int(offset), int(col))
     return _made(_np.stack([r, c]).astype(_np.int64), dtype, requires_grad)
 
@@ -7218,7 +7511,8 @@ def triu_indices(row, col, offset=0, dtype=None, requires_grad=False, **kw):
 
 
 def vander(x, N=None, increasing=False):
-    """판데르몬드 행렬. **기본은 차수가 줄어드는 쪽이다** — 마지막 열이 1 이다(실측)."""
+    """The Vandermonde matrix. **The default has the powers decreasing** — the
+    last column is 1 (measured)."""
     x = _wrap(x)
     n = x.data.shape[0] if N is None else int(N)
     powers = _np.arange(n, dtype=_np.float64)
@@ -7229,7 +7523,8 @@ def vander(x, N=None, increasing=False):
 
 
 def chain_matmul(*matrices):
-    """여러 행렬을 잇달아 곱한다. `linalg.multi_dot` 이 같은 것을 목록으로 받는다."""
+    """Multiply several matrices in succession. `linalg.multi_dot` takes the same
+    thing as a list."""
     mats = list(matrices[0]) if len(matrices) == 1 and \
         isinstance(matrices[0], (list, tuple)) else list(matrices)
     out = _wrap(mats[0])
@@ -7239,36 +7534,39 @@ def chain_matmul(*matrices):
 
 
 def ger(a, b):
-    """바깥곱의 옛 이름. `outer` 와 같은 것이다."""
+    """The old name for the outer product. The same as `outer`."""
     return outer(a, b)
 
 
 def mv(mat, vec):
-    """행렬 × 벡터. `matmul` 이 하는 일이지만 torch 는 이름을 따로 준다."""
+    """Matrix times vector. `matmul` does the job and torch gives it its own
+    name."""
     return matmul(_wrap(mat), _wrap(vec))
 
 
-# ── addmm 계열 ──────────────────────────────────────────────────────────────
+# ── the addmm family ────────────────────────────────────────────────────────
 #
-# 여덟이 전부 한 꼴이다 — `β·input + α·(무슨 곱)`. 다른 것은 **곱이 무엇인가**뿐이라
-# 그 하나만 넘긴다.
+# All eight take one shape — `β·input + α·(some product)`. The only difference is
+# **which product**, so that alone is passed in.
 #
-# **`beta` 가 0 이면 `input` 을 아예 안 본다.** `0 · input` 이 아니다 — torch 는 그
-# 자리에서 `input` 을 읽지도 않아서, NaN 을 넣어도 결과가 멀쩡하고 기울기도 0 이다
-# (실측). `0 * input` 으로 적으면 NaN 이 번지고, 그 차이는 평범한 입력으로는 절대
-# 안 보인다.
+# **At `beta` of 0, `input` is not looked at at all.** It is not `0 · input` —
+# torch does not even read `input` there, so a NaN in it leaves the result sound
+# and the gradient 0 (measured). Written as `0 * input` the NaN spreads, and that
+# difference is never visible with ordinary input.
 
 def _blend(base, product, beta, alpha):
     """`β·base + α·product`.
 
-    **`β == 0` 은 값만 안 보고 그래프에는 남는다.** 둘 다여야 한다 —
+    **`β == 0` skips the value and stays in the graph.** It has to be both —
 
-    - `base * 0` 으로 적으면 NaN 을 넣었을 때 결과가 NaN 이 된다. torch 는 멀쩡하다.
-    - 그렇다고 그래프에서 빼면 `base.grad` 가 0 이 아니라 **없다.** torch 는 0 을 준다
-      (실측). 빼 두면 `backward()` 가 "requires_grad 가 아니다" 로 멈춘다.
+    - written as `base * 0`, a NaN in it makes the result NaN. torch stays sound.
+    - and taken out of the graph, `base.grad` is **absent** rather than 0. torch
+      gives 0 (measured). Taken out, `backward()` stops with "does not require
+      grad".
 
-    두 요구가 반대 방향이라 한쪽만 맞추기 쉽고, 평범한 입력으로는 **어느 쪽도** 안
-    보인다 — NaN 을 넣어야 첫째가, 기울기를 물어야 둘째가 드러난다.
+    The two requirements pull in opposite directions, so it is easy to satisfy
+    one, and with ordinary input **neither** is visible — a NaN surfaces the first
+    and asking for the gradient surfaces the second.
     """
     scaled = product if alpha == 1 else product * alpha
     if beta != 0:
@@ -7279,52 +7577,57 @@ def _blend(base, product, beta, alpha):
 
 
 def addmm(input, mat1, mat2, beta=1, alpha=1):
-    """`β·input + α·(mat1 @ mat2)`. `input` 은 결과 모양으로 퍼진다(실측)."""
+    """`β·input + α·(mat1 @ mat2)`. `input` broadcasts to the result's shape
+    (measured)."""
     return _blend(_wrap(input), matmul(_wrap(mat1), _wrap(mat2)), beta, alpha)
 
 
 def addbmm(input, batch1, batch2, beta=1, alpha=1):
-    """**배치를 합친다** — 곱한 뒤 배치 축을 더해 2차원을 낸다.
+    """**It folds the batch** — it multiplies and then sums the batch axis into a
+    2-D result.
 
-    `baddbmm` 과 이름이 한 글자 다르고 결과 차수가 다르다. 배치가 1 이면 둘이 같아
-    보이므로 케이스는 배치를 둘 이상으로 둔다.
+    One character apart from `baddbmm` and a different result rank. At a batch of 1
+    the two look the same, so the cases keep the batch above one.
     """
     product = matmul(_wrap(batch1), _wrap(batch2)).sum(0)
     return _blend(_wrap(input), product, beta, alpha)
 
 
 def baddbmm(input, batch1, batch2, beta=1, alpha=1):
-    """**배치를 지킨다.** `addbmm` 과 여기서 갈린다."""
+    """**It keeps the batch.** Where it parts from `addbmm`."""
     return _blend(_wrap(input), matmul(_wrap(batch1), _wrap(batch2)),
                   beta, alpha)
 
 
 def addmv(input, mat, vec, beta=1, alpha=1):
-    """`β·input + α·(mat @ vec)`. 결과가 1차원이다."""
+    """`β·input + α·(mat @ vec)`. The result is 1-D."""
     return _blend(_wrap(input), mv(_wrap(mat), _wrap(vec)), beta, alpha)
 
 
 def addr(input, vec1, vec2, beta=1, alpha=1):
-    """`β·input + α·(vec1 ⊗ vec2)`. 바깥곱이라 결과가 2차원이다."""
+    """`β·input + α·(vec1 ⊗ vec2)`. An outer product, so the result is 2-D."""
     return _blend(_wrap(input), outer(_wrap(vec1), _wrap(vec2)), beta, alpha)
 
 
 def addcmul(input, tensor1, tensor2, value=1):
-    """`input + value·(t1 · t2)`. **`beta` 가 없다** — `input` 의 계수는 늘 1 이다."""
+    """`input + value·(t1 · t2)`. **There is no `beta`** — `input`'s coefficient
+    is always 1."""
     return _blend(_wrap(input), _wrap(tensor1) * _wrap(tensor2), 1, value)
 
 
 def addcdiv(input, tensor1, tensor2, value=1):
-    """`input + value·(t1 / t2)`. 옵티마이저가 갱신을 적을 때 쓰는 꼴이다."""
+    """`input + value·(t1 / t2)`. The form an optimiser writes its update in."""
     return _blend(_wrap(input), _wrap(tensor1) / _wrap(tensor2), 1, value)
 
 
 def sspaddmm(input, mat1, mat2, beta=1, alpha=1):
-    """**희소 텐서 전용이라 없다.**
+    """**Sparse-only, so it is absent.**
 
-    torch 의 이것은 희소 COO 를 받아 희소를 낸다(실측: `to_sparse()` 를 안 거치면
-    거절한다). 여기에는 희소 배치가 없고, 조밀 텐서로 흉내 내면 **모양은 맞고 저장
-    방식이 다른** 것을 주게 된다 — 그것을 배운 사람은 희소가 무엇인지 잘못 안다.
+    torch's version takes a sparse COO tensor and produces a sparse one (measured:
+    without going through `to_sparse()` it refuses). There is no sparse layout
+    here, and imitating it with a dense tensor hands back something **whose shape
+    matches and whose storage differs** — and whoever learns from that learns the
+    wrong thing about what sparse is.
     """
     _unsupported("torch.sspaddmm — there is no sparse tensor layout here")
 
@@ -7369,63 +7672,72 @@ def addcdiv_(input, tensor1, tensor2, value=1):
                           "addcdiv_")
 
 
-# ── 최상위 선형대수 ─────────────────────────────────────────────────────────
+# ── top-level linear algebra ────────────────────────────────────────────────
 #
-# **`linalg` 쪽과 인자 순서가 다르다.** torch 는 옛 이름들을 최상위에 남겨 뒀는데,
-# 그것들은 대개 **오른쪽 변을 먼저** 받는다 — `lu_solve(b, LU, piv)` 대 `linalg.
-# lu_solve(LU, piv, b)`. 같은 계산인데 부르는 법만 다른 것이라, 계산은 한 벌만 두고
-# 자리만 옮긴다. 그 옮김이 맞는지는 값으로만 확인된다.
+# **The argument order differs from `linalg`'s.** torch left the old names at the
+# top level, and they mostly take **the right-hand side first** —
+# `lu_solve(b, LU, piv)` versus `linalg.lu_solve(LU, piv, b)`. The same computation
+# called a different way, so the computation is kept as one copy and only the
+# positions move. Whether that move is right is confirmed by values alone.
 
 def _mT(t):
-    """마지막 두 축을 맞바꾼다.
+    """Swap the last two axes.
 
-    **`transpose` 는 이 파일에서 모듈 함수가 아니라 메서드다.** 게다가
-    `triangular_solve` 의 셋째 인자 이름이 `transpose` 라 그 안에서는 그 이름이
-    인자에 가려지기도 한다. 짧은 이름 하나로 두 자리를 다 피한다.
+    **In this file `transpose` is a method rather than a module function.** And
+    `triangular_solve`'s third parameter is named `transpose`, so inside it the
+    name is shadowed by the parameter as well. One short name avoids both
+    places.
     """
     return _wrap(t).transpose(-2, -1)
 
 
 def _as_lower(factor, upper):
-    """인수를 **아래 삼각으로** 세운다. `A = L Lᵀ` 가 되도록.
+    """Stand the factor up **as a lower triangle**, so that `A = L Lᵀ`.
 
-    조립으로 둔다 — `tril`·`transpose` 를 지나면 **인수 쪽으로도 기울기가 흐른다.**
-    numpy 로 곧장 잘라 쓰면 값은 맞고 역방향이 `b` 로만 가는데, torch 는 인수로도
-    흘린다(실측). 그 갈림은 인수를 미분 대상으로 두지 않으면 안 보인다.
+    It is kept as an assembly — passing through `tril` and `transpose` flows
+    **gradient towards the factor as well.** Trimmed directly with numpy the
+    values are right and the backward reaches `b` alone, and torch flows into the
+    factor too (measured). That divergence is invisible unless the factor is made
+    a differentiation target.
     """
     return _mT(triu(factor)) if upper else tril(factor)
 
 
 def cholesky_solve(b, factor, upper=False):
-    """`A x = b` 를 **촐레스키 인수로** 푼다. `A = L Lᵀ` (또는 `Uᵀ U`).
+    """Solve `A x = b` **through a Cholesky factor.** `A = L Lᵀ` (or `Uᵀ U`).
 
-    `A` 를 다시 세워 `solve` 로 보낸다. 삼각 대입 두 번이 더 싸지만, 그 길로 적으면
-    역방향을 손으로 써야 하고 **인수 쪽 기울기가 조용히 빠진다** — 이 크기에서 아끼는
-    것보다 그 위험이 크다.
+    `A` is rebuilt and handed to `solve`. Two triangular substitutions would be
+    cheaper, and written that way the backward has to be written by hand and **the
+    gradient towards the factor quietly goes missing** — a bigger risk than what
+    the saving is worth at this size.
     """
     low = _as_lower(_wrap(factor), upper)
     return solve(matmul(low, _mT(low)), _wrap(b))
 
 
 def cholesky_inverse(factor, upper=False):
-    """촐레스키 인수에서 **원래 행렬의 역행렬**을 낸다. 인수의 역이 아니다."""
+    """From a Cholesky factor, produce **the original matrix's inverse.** Not the
+    factor's inverse."""
     low = _as_lower(_wrap(factor), upper)
     return inverse(matmul(low, _mT(low)))
 
 
 def triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
-    """**둘을 준다** — 해와, 넘긴 계수 행렬의 **사본**(실측).
+    """**It gives two things** — the solution and **a copy** of the coefficient
+    matrix handed in (measured).
 
-    `linalg.solve_triangular` 와 같은 계산인데 인자 순서가 뒤집혀 있고 **기본
-    `upper` 가 참이다.** 그 둘을 놓치면 다른 삼각을 풀고도 값이 그럴듯하게 나온다.
+    The same computation as `linalg.solve_triangular` with the argument order
+    reversed and **`upper` defaulting to true.** Missing those two, it solves the
+    other triangle and the value still comes out plausible.
 
-    셋째 인자 이름이 `transpose` 라 이 함수 안에서는 모듈의 `transpose` 가 가려진다.
-    `_mT` 별칭이 그 자리를 메운다.
+    The third parameter is named `transpose`, so inside this function the module's
+    `transpose` is shadowed. The `_mT` alias fills that place.
     """
     b, a = _wrap(b), _wrap(a)
     tri = triu(a) if upper else tril(a)
     if unitriangular:
-        # **대각을 안 보고 1 로 친다.** 대각을 그대로 두면 조용히 다른 답이 나온다.
+        # **The diagonal is ignored and treated as 1.** Left as it is, a quietly
+        # different answer comes out.
         n = tri.data.shape[-1]
         off = triu(tri, 1) if upper else tril(tri, -1)
         tri = off + Tensor(_np.eye(n, dtype=tri.data.dtype))
@@ -7435,16 +7747,19 @@ def triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
 
 
 def lu_solve_top(b, lu_data, pivots):
-    """**`linalg.lu_solve` 와 인자 순서가 뒤집혀 있다** — 이쪽은 `b` 가 먼저다."""
+    """**The argument order is reversed from `linalg.lu_solve`** — `b` comes
+    first here."""
     return lu_solve(lu_data, pivots, b)
 
 
 def lu_top(a, pivot=True, get_infos=False):
-    """`(LU, pivots)`. **`linalg.lu` 와 다른 것을 낸다** — 그쪽은 `P·L·U` 셋으로
-    펴 주고 이쪽은 **겹쳐 담은 한 판과 교환 목록**이다(실측).
+    """`(LU, pivots)`. **A different thing from `linalg.lu`** — that one spreads
+    it into `P`, `L` and `U` and this gives **one packed matrix plus the swap
+    list** (measured).
 
-    `get_infos=True` 면 셋째로 정보 코드가 붙는다. 우리는 늘 0 이다 — 특이 행렬을
-    만나면 그 자리에서 던지지 조용히 코드로 알리지 않는다.
+    With `get_infos=True` an info code is attached as a third field. It is always
+    0 here — meeting a singular matrix it throws at that point rather than
+    reporting quietly through a code.
     """
     if not pivot:
         _unsupported("lu(pivot=False)")
@@ -7455,10 +7770,11 @@ def lu_top(a, pivot=True, get_infos=False):
 
 
 def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True):
-    """겹쳐 담은 한 판을 `P·L·U` 로 편다.
+    """Spread one packed matrix into `P`, `L` and `U`.
 
-    **끄면 `None` 이 아니라 빈 텐서가 온다**(실측: 모양이 `(0,)` 이다). `None` 으로
-    두면 받는 쪽이 `if p is None` 으로 갈라 쓰게 되고, 그것은 torch 코드가 아니다.
+    **Turned off it gives an empty tensor rather than `None`** (measured: the shape
+    is `(0,)`). Left as `None` the receiving side branches on `if p is None`, and
+    that is not torch code.
     """
     lu_data, lu_pivots = _wrap(lu_data), _wrap(lu_pivots)
     empty = Tensor(_np.zeros(0, dtype=lu_data.data.dtype))
@@ -7486,21 +7802,23 @@ def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True):
 
 
 def orgqr(a, tau):
-    """`geqrf` 가 담아 둔 반사자들을 곱해 **Q 를 세운다.**
-    `linalg.householder_product` 와 같은 것이고 torch 가 이름을 둘 준다."""
+    """Multiply the reflectors `geqrf` packed away and **build Q.** The same as
+    `linalg.householder_product`; torch gives it two names."""
     return householder_product(a, tau)
 
 
 def ormqr(a, tau, other, left=True, transpose=False):
-    """**Q 를 안 세우고** `C` 에 곱한다. 큰 행렬에서 그것이 요점인데, 여기서는 세워서
-    곱한다 — 값이 같고, 이 크기에서 아끼는 것이 없다.
+    """Multiply into `C` **without building Q.** That is the point on a large
+    matrix, and here it is built and multiplied — the value is the same and there
+    is nothing to save at this size.
 
-    **`orgqr` 과 다른 Q 다.** 그쪽은 `m×k` 로 **자른** Q 를 주는데(`linalg.qr` 의 Q
-    와 같다), 이쪽은 자르지 않은 `m×m` 을 쓴다 — 반사자들은 `Rᵐ` 위의 사상이고,
-    자르면 그 사상의 일부만 곱하게 된다. 실측으로 걸렸다: 세로로 긴 행렬에서 답이
-    통째로 달랐다. 정사각으로만 재면 둘이 같아서 안 보인다.
+    **A different Q from `orgqr`'s.** That one gives the **trimmed** `m×k` Q (the
+    same Q as `linalg.qr`'s) and this uses the untrimmed `m×m` — the reflectors are
+    a map on `Rᵐ`, and trimming multiplies by only part of that map. Caught by
+    measurement: on a tall matrix the answer was entirely different. Measured on
+    squares alone the two coincide and it is invisible.
 
-    `left` 는 어느 쪽에서 곱하는가이고 `transpose` 는 `Qᵀ` 를 쓰는가다.
+    `left` says which side to multiply from and `transpose` whether to use `Qᵀ`.
     """
     q = _full_q(a, tau)
     if transpose:
@@ -7511,10 +7829,10 @@ def ormqr(a, tau, other, left=True, transpose=False):
 
 
 def _full_q(a, tau):
-    """반사자들을 곱해 **자르지 않은 `m×m`** Q 를 세운다.
+    """Multiply the reflectors together and build the **untrimmed `m×m`** Q.
 
-    `householder_product` 와 같은 고리인데 마지막에 열을 안 자른다. 그 한 줄이
-    `orgqr` 과 `ormqr` 의 차이 전부다.
+    The same loop as `householder_product` without the final column trim. That one
+    line is the whole difference between `orgqr` and `ormqr`.
     """
     mat = _np.asarray(_wrap(a).data, dtype=_np.float64)
     taus = _np.asarray(_wrap(tau).data, dtype=_np.float64).reshape(-1)
@@ -7531,14 +7849,17 @@ def _full_q(a, tau):
 def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
            largest=True, method=None, tracker=None, ortho_iparams=None,
            ortho_fparams=None, ortho_bparams=None):
-    """대칭 행렬의 **끝쪽 고유쌍 `k` 개.**
+    """The `k` **extreme eigenpairs** of a symmetric matrix.
 
-    **torch 는 반복법이고 우리는 정확해다.** 그쪽은 큰 희소 행렬에서 몇 개만 싸게
-    얻으려고 반복하는데, 우리에게는 희소가 없고 크기도 작다. 재보니 torch 의 답이
-    정확해로 **7e-6 안까지** 수렴하고 씨앗에도 그만큼만 흔들린다(실측) — 이 저장소의
-    허용 오차 한참 아래다. 그래서 값은 같고 비용만 다르다.
+    **torch is iterative and this is exact.** That side iterates so that a few can
+    be obtained cheaply from a large sparse matrix, and here there is no sparse
+    layout and the sizes are small. Measured, torch's answer converges to within
+    **7e-6** of the exact one and shakes by no more than that with the seed
+    (measured) — far below this repository's tolerance. So the values match and
+    only the cost differs.
 
-    **`largest` 가 순서까지 정한다** — 참이면 큰 것부터, 거짓이면 작은 것부터다(실측).
+    **`largest` sets the order too** — true gives largest first and false smallest
+    first (measured).
     """
     if B is not None or X is not None:
         _unsupported("lobpcg(B= or X=) — the generalised eigenvalue problem")
@@ -7550,14 +7871,17 @@ def lobpcg(a, k=1, B=None, X=None, n=None, iK=None, niter=None, tol=None,
 
 
 def svd_lowrank(a, q=6, niter=2, M=None):
-    """무작위 사영으로 얻는 **저계수 SVD.** `(U, S, V)` 이고 **V 는 전치가 아니다.**
+    """A **low-rank SVD** obtained by random projection. `(U, S, V)`, and **V is
+    not transposed.**
 
-    **정확히 저계수인 입력에서만 답이 안 흔들린다.** torch 는 무작위 행렬로 사영하는데,
-    계수가 `q` 를 넘으면 씨앗에 따라 특이값이 0.5 씩 움직인다(실측). 계수가 `q` 이하면
-    씨앗을 바꿔도 7e-7 안이다 — 골든이 물을 수 있는 자리는 그쪽뿐이다.
+    **The answer stops shaking only on exactly low-rank input.** torch projects
+    with a random matrix, and once the rank exceeds `q` the singular values move
+    by around 0.5 with the seed (measured). At rank `q` or below, changing the seed
+    stays within 7e-7 — that is the only place the golden can ask about.
 
-    우리는 사영을 안 한다. 전체 SVD 를 구해 앞의 `q` 개를 자른다 — 정확히 저계수인
-    자리에서는 같은 답이고, 넘치는 자리에서는 **torch 보다 정확한** 답이다.
+    This does not project. The full SVD is computed and the first `q` taken — the
+    same answer where the input is exactly low rank, and **a more accurate answer
+    than torch's** where it is not.
     """
     a = _wrap(a)
     data = _np.asarray(a.data, dtype=_np.float64)
@@ -7570,9 +7894,11 @@ def svd_lowrank(a, q=6, niter=2, M=None):
 
 
 def pca_lowrank(a, q=None, center=True, niter=2):
-    """저계수 PCA. **`center=False` 면 `svd_lowrank` 와 같은 것이다**(실측).
+    """A low-rank PCA. **With `center=False` it is the same as `svd_lowrank`**
+    (measured).
 
-    가운데 맞추기가 이 함수와 저쪽의 차이 전부다. 참으로만 재면 그 갈래가 안 보인다.
+    The centring is the whole difference between this function and that one.
+    Measured with true alone that branch is invisible.
     """
     a = _wrap(a)
     data = _np.asarray(a.data, dtype=_np.float64)
@@ -7583,19 +7909,22 @@ def pca_lowrank(a, q=None, center=True, niter=2):
     return svd_lowrank(Tensor(data.astype(a.data.dtype)), q, niter)
 
 
-# ── 통계 ────────────────────────────────────────────────────────────────────
+# ── statistics ──────────────────────────────────────────────────────────────
 #
-# **난수 넷에는 굳힐 수 있는 구석이 있다.**
+# **The four random ones have a corner that can be pinned.**
 #
-# `normal`·`bernoulli`·`poisson`·`binomial` 의 값은 골든이 못 굳힌다 — torch 의 난수
-# 줄기와 우리 것이 다르고, 같게 만들 방법도 없다. 그런데 **끝값은 결정적이다**:
-# `std=0` 이면 평균 그대로, `p=0` 이면 전부 0, `p=1` 이면 전부 1, `poisson(0)` 은 0 이다
-# (실측). 골든은 그 자리를 묻고, 나머지는 모양과 형만 본다.
+# The golden cannot pin the values of `normal`, `bernoulli`, `poisson` and
+# `binomial` — torch's random stream and ours differ, and there is no way to make
+# them agree. And **the extremes are deterministic**: `std=0` gives the mean
+# itself, `p=0` gives all zeros, `p=1` gives all ones, and `poisson(0)` gives 0
+# (measured). The golden asks about those places and looks at the shape and the
+# dtype for the rest.
 #
-# 그것이 "난수라 못 묻는다" 와 "안 묻는다" 의 차이다.
+# That is the difference between "random, so it cannot be asked" and "it is not
+# asked".
 
 def _edges(data, bins, low, high):
-    """경계를 세운다. **마지막 칸은 오른쪽이 닫혀 있다**(실측)."""
+    """Build the edges. **The last bin is closed on the right** (measured)."""
     if low == high:
         low, high = float(_np.min(data)), float(_np.max(data))
         if low == high:
@@ -7604,7 +7933,8 @@ def _edges(data, bins, low, high):
 
 
 def _count_into(data, edges, weights=None):
-    """`edges` 가 나눈 칸에 센다. **범위 밖은 버린다** — torch 가 그렇다(실측)."""
+    """Count into the bins `edges` divides. **What falls outside is discarded** —
+    torch does that (measured)."""
     flat = _np.asarray(data, dtype=_np.float64).reshape(-1)
     w = (_np.ones_like(flat) if weights is None
          else _np.asarray(weights, dtype=_np.float64).reshape(-1))
@@ -7612,17 +7942,19 @@ def _count_into(data, edges, weights=None):
     for value, weight in zip(flat, w):
         if value < edges[0] or value > edges[-1]:
             continue
-        # 오른쪽 끝은 마지막 칸에 넣는다.
+        # The right edge goes into the last bin.
         slot = int(_np.searchsorted(edges, value, side="right")) - 1
         out[min(max(slot, 0), len(out) - 1)] += weight
     return out
 
 
 def histc(t, bins=100, min=0, max=0):
-    """칸마다 몇 개인가. **`min == max` 면 자료의 범위를 쓴다**(실측).
+    """How many fall in each bin. **With `min == max` the data's own range is
+    used** (measured).
 
-    범위를 주면 **밖은 버린다** — 양끝 칸으로 몰아넣지 않는다. 전부 범위 안인 자료로
-    재면 그 규칙이 안 드러난다.
+    Given a range, **what falls outside is discarded** — it is not piled into the
+    end bins. Measured on data that is entirely inside the range that rule never
+    surfaces.
     """
     t = _wrap(t)
     edges = _edges(t.data, bins, float(min), float(max))
@@ -7630,10 +7962,10 @@ def histc(t, bins=100, min=0, max=0):
 
 
 def histogram(t, bins=100, range=None, weight=None, density=False):
-    """`histc` 와 같은 셈에 **경계까지 준다.**
+    """`histc`'s arithmetic **with the edges given as well.**
 
-    `bins` 에 텐서를 주면 그것이 곧 경계다 — 칸 너비가 다를 수 있고, 그러면
-    `density` 가 칸마다 다른 값으로 나눈다.
+    A tensor for `bins` is the edges themselves — the bin widths may differ, and
+    then `density` divides by a different value per bin.
     """
     t = _wrap(t)
     if isinstance(bins, (Tensor, list, tuple, _np.ndarray)):
@@ -7653,7 +7985,7 @@ def histogram(t, bins=100, range=None, weight=None, density=False):
 
 
 def histogramdd(t, bins=10, range=None, weight=None, density=False):
-    """축이 여럿인 히스토그램. `t` 는 `(표본 수, 차원)` 이다."""
+    """A histogram over several axes. `t` is `(sample count, dimensions)`."""
     t = _wrap(t)
     data = _np.asarray(t.data, dtype=_np.float64)
     dims = data.shape[-1]
@@ -7673,10 +8005,11 @@ def histogramdd(t, bins=10, range=None, weight=None, density=False):
 
 
 def mode(t, dim=-1, keepdim=False):
-    """가장 자주 나온 값. **같은 횟수면 작은 값이 이기고, 자리는 그 값의 마지막이다**
-    (실측: `[4,4,5,5]` 가 값 4 · 자리 1 을 준다).
+    """The most frequent value. **On an equal count the smaller value wins, and
+    the index is that value's last occurrence** (measured: `[4,4,5,5]` gives value
+    4 and index 1).
 
-    비긴 자리가 없는 자료로 재면 그 규칙이 안 드러난다.
+    Measured on data with no ties that rule never surfaces.
     """
     t = _wrap(t)
     data = _np.asarray(t.data)
@@ -7694,10 +8027,11 @@ def mode(t, dim=-1, keepdim=False):
                 best, best_count = value, count
         vals[row] = best
         idx[row] = int(_np.flatnonzero(line == best)[-1])
-    # 기울기는 **밝힌 그 자리 하나로** 간다. 가장 자주 나온 값이라 같은 값이 여럿
-    # 있지만, `mode` 는 그중 마지막을 번호로 건네므로 그 자리가 답을 대표한다
-    # (실측: [1,1,2,2,2] 의 기울기가 마지막 2 에만 간다). 여기에도 `Tensor(...)` 만
-    # 있어서 그래프가 끊겨 있었다.
+    # The gradient goes **to the one position named.** Being the most frequent
+    # value there are several cells holding it, and `mode` hands back the last of
+    # them as the index, so that position represents the answer (measured: the
+    # gradient of [1,1,2,2,2] goes to the last 2 alone). Here too there was only a
+    # bare `Tensor(...)` and the graph was cut.
     weight = _np.zeros(flat.shape, dtype=_np.float64)
     weight[_np.arange(flat.shape[0]), idx] = 1.0
     weight = _np.moveaxis(weight.reshape(moved.shape), -1, axis)
@@ -7718,9 +8052,10 @@ def mode(t, dim=-1, keepdim=False):
 
 
 def nanmedian(t, dim=None, keepdim=False):
-    """NaN 을 **빼고** 센 중앙값. `median` 은 NaN 이 하나만 있어도 NaN 을 낸다(실측).
+    """The median computed **excluding** NaN. `median` gives NaN when even one is
+    present (measured).
 
-    짝수 개면 **아래를 고른다** — 평균을 내지 않는다.
+    With an even count it **takes the lower one** — it does not average.
     """
     t = _wrap(t)
     _refuses_bool(t.data, "nanmedian does not take booleans.",
@@ -7731,8 +8066,9 @@ def nanmedian(t, dim=None, keepdim=False):
         flat = data.reshape(-1)
         clean = flat[~_np.isnan(flat)]
         pick = _np.sort(clean)[(clean.shape[0] - 1) // 2]
-        # **값이 같은 칸 전부에 고르게 나눈다** — `median()` 과 같은 규칙이다.
-        # 여기에는 `Tensor(...)` 만 있어서 그래프가 조용히 끊겨 있었다.
+        # **Split evenly across every cell holding the same value** —
+        # `median()`'s rule. Here there was only a bare `Tensor(...)` and the
+        # graph was quietly cut.
         share = (flat == pick).astype(_np.float64)
         share = (share / share.sum()).reshape(t.data.shape)
         return t._make(_np.asarray(pick, dtype=t.data.dtype), (t,),
@@ -7749,9 +8085,11 @@ def nanmedian(t, dim=None, keepdim=False):
         at = order[(order.shape[0] - 1) // 2]
         vals[row] = line[at]
         idx[row] = int(at)
-    # **축을 주면 번호가 나오고, 번호가 나오면 기울기는 그 자리 하나로 간다.**
-    # 축이 없을 때 고르게 나누는 것과 반대인데, 갈림은 같다 — 번호를 건네는 연산은
-    # 고른 자리를 밝히고, 안 건네는 연산은 값이 같은 칸을 구별하지 않는다.
+    # **Given an axis, indices come out, and once indices come out the gradient
+    # goes to that one position.** The opposite of splitting evenly with no axis,
+    # and the split is the same one — an operation that hands back indices names
+    # the position it chose, and one that does not draws no distinction between
+    # cells holding the same value.
     weight = _np.zeros(flat.shape, dtype=_np.float64)
     weight[_np.arange(flat.shape[0]), idx] = 1.0
     weight = _np.moveaxis(weight.reshape(moved.shape), -1, axis)
@@ -7772,10 +8110,12 @@ def nanmedian(t, dim=None, keepdim=False):
 
 
 def gradient(t, spacing=1, dim=None, edge_order=1):
-    """중심 차분. **축마다 하나씩, 묶음으로 낸다** — 축을 안 주면 전부다.
+    """Central differences. **One per axis, returned as a tuple** — with no axis
+    given, all of them.
 
-    `edge_order` 가 1 이면 양끝을 한쪽 차분으로, 2 면 이차식으로 맞춘다(실측:
-    `x²` 에서 2 면 정확한 도함수가 나오고 1 이면 양끝이 어긋난다).
+    An `edge_order` of 1 fits the ends with a one-sided difference and 2 with a
+    quadratic (measured: on `x²`, 2 gives the exact derivative and 1 is off at
+    both ends).
     """
     t = _wrap(t)
     data = _np.asarray(t.data, dtype=_np.float64)
@@ -7793,15 +8133,17 @@ def gradient(t, spacing=1, dim=None, edge_order=1):
 
 
 def trapz(y, x=None, dx=1.0, dim=-1):
-    """`trapezoid` 의 옛 이름. 같은 것이다(실측)."""
+    """The old name for `trapezoid`. The same thing (measured)."""
     return trapezoid(y, x, dx, dim)
 
 
 def nonzero_static(t, size, fill_value=-1):
-    """0 이 아닌 자리를 **정해진 개수만큼** 낸다. 모자라면 채우고 넘치면 자른다.
+    """Give **a fixed number of** non-zero positions. Short, it pads; over, it
+    trims.
 
-    `nonzero` 는 결과 크기가 값에 달려 GPU 에서 한 번 읽어야 하는데, 이쪽은 크기를
-    미리 주므로 그 왕복이 없다 — 그 자리를 위해 있는 이름이다.
+    `nonzero`'s result size depends on the values and needs one read back from the
+    GPU, and this is given the size in advance so there is no such round trip —
+    the name exists for that place.
     """
     t = _wrap(t)
     found = _np.argwhere(_np.asarray(t.data) != 0)
@@ -7813,14 +8155,18 @@ def nonzero_static(t, size, fill_value=-1):
 
 
 def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
-    """정규분포 표본. **`std` 가 0 이면 평균 그대로다** — 골든이 그 자리를 묻는다.
+    """A normal sample. **With `std` at 0 it is the mean itself** — the golden asks
+    about that place.
 
-    `mean`·`std` 를 텐서로 주면 자리마다 다른 분포다. 그때는 `size` 를 안 받는다.
+    Given `mean` and `std` as tensors it is a different distribution per position.
+    In that case it does not take `size`.
 
-    `dtype=`·`requires_grad=` 는 `**kw` 가 **삼키고 있었다.** 공장 열넷을 `_made` 로
-    모을 때도, 그 밖의 아홉을 모을 때도 목록에 없었다 — `**kw` 를 들고 있는 함수를
-    훑어 후보를 넷 뽑았는데 torch 서명을 보니 진짜는 이것과 `frombuffer` 둘이었다
-    (`bernoulli` 는 torch 자신이 그 인자를 안 받고, `empty_strided` 는 이미 거절한다).
+    `dtype=` and `requires_grad=` were **being swallowed** by `**kw`. It was
+    outside the list both when fourteen factories were gathered under `_made` and
+    when the other nine were — walking the functions carrying `**kw` produced four
+    candidates, and against torch's signatures the real ones were this and
+    `frombuffer` (torch itself does not take the argument on `bernoulli`, and
+    `empty_strided` already refuses).
     """
     _no_out(kw)
     if isinstance(mean, Tensor) or isinstance(std, Tensor):
@@ -7834,100 +8180,113 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
 
 
 def bernoulli(t, **kw):
-    """자리마다 그 확률로 1. **0 이면 전부 0, 1 이면 전부 1** — 그 두 끝이 결정적이다."""
+    """A 1 at each position with that probability. **0 gives all zeros and 1 all
+    ones** — those two extremes are deterministic."""
     t = _wrap(t)
     p = _np.asarray(t.data, dtype=_np.float64)
     return Tensor((_rng.random(p.shape) < p).astype(t.data.dtype))
 
 
 def poisson(t, **kw):
-    """자리마다 그 세기의 포아송 표본. **0 이면 전부 0 이다**(실측)."""
+    """A Poisson sample at that rate per position. **0 gives all zeros**
+    (measured)."""
     t = _wrap(t)
     lam = _np.asarray(t.data, dtype=_np.float64)
     return Tensor(_rng.poisson(lam).astype(t.data.dtype))
 
 
 def binomial(count, prob, **kw):
-    """`count` 번 중 성공 횟수. **`p=0` 이면 0, `p=1` 이면 `count` 다.**"""
+    """The number of successes in `count` trials. **`p=0` gives 0 and `p=1` gives
+    `count`.**"""
     n = _np.asarray(_wrap(count).data, dtype=_np.float64)
     p = _np.asarray(_wrap(prob).data, dtype=_np.float64)
     n, p = _np.broadcast_arrays(n, p)
     return Tensor(_rng.binomial(n.astype(_np.int64), p).astype(_DEFAULT_DTYPE))
 
 
-# **오래 거절이었다.** 거절문에는 "복소수 규약을 안 정했다" 고 적혀 있었고, 그
-# 이유가 맞았다 — 저장이 모자란 것이 아니라 **Wirtinger 규약을 안 재본 것**이었다.
-# 재서 못 박고 나니(`z.grad = ∂L/∂re + i·∂L/∂im`) 이 두 이름이 조립으로 나왔다.
+# **A refusal for a long time.** The refusal said "the complex convention has not
+# been settled", and the reason was right — what was missing was not storage but
+# **the Wirtinger convention never having been measured.** Measured and pinned
+# (`z.grad = ∂L/∂re + i·∂L/∂im`), these two names came out as assemblies.
 #
-# 못 하는 이유를 **정확히** 적어 둔 값어치가 여기서 나왔다. "저장이 없다" 로 적어
-# 두었으면 저장이 생긴 날에도 아무도 다시 안 물었을 것이다.
+# Writing down **precisely** why something could not be done paid off here.
+# Written as "there is no storage", nobody would have asked again on the day the
+# storage arrived.
 stft = _fft_stft
 istft = _fft_istft
 
 
 def hash_tensor(*args, **kw):
-    """**uint64 도 없고 규격도 없다.**
+    """**No uint64 and no specification.**
 
-    torch 가 내는 것은 `uint64` 이고(실측), 어떤 해시인지는 문서에도 없다. 값을
-    맞출 수 없는 것을 이름만 놓으면 그 값을 믿고 쓰는 코드가 생긴다.
+    What torch produces is `uint64` (measured), and which hash it is is not in the
+    documentation either. Putting down a name for something whose values cannot be
+    matched creates code that trusts those values.
     """
     _unsupported("torch.hash_tensor — there is no uint64 and no settled hash spec")
 
 
-# ── 복소수의 이웃, 그리고 생성 몇 ──────────────────────────────────────────
+# ── the neighbourhood of complex numbers, and a few factories ───────────────
 #
-# **복소수가 없어도 답이 있는 이름들이다.**
+# **The names that have an answer even without complex numbers.**
 #
-# `real`·`conj`·`resolve_conj` 는 실수 텐서에서 **항등**이고(실측: 버퍼까지 공유한다),
-# `is_complex`·`is_conj`·`is_neg` 는 전부 거짓이며, `angle` 은 음수에서 π 다. 복소수
-# 규약을 안 정했다고 이 이름들까지 없으면, 그것을 분기에 쓰는 교재 코드가 `AttributeError`
-# 로 멈춘다 — 답할 수 있는 것과 없는 것은 다르다.
+# `real`, `conj` and `resolve_conj` are **the identity** on a real tensor
+# (measured: they share the buffer too), `is_complex`, `is_conj` and `is_neg` are
+# all false, and `angle` is π for negatives. Leaving these names out as well
+# because the complex convention was unsettled makes textbook code that branches on
+# them stop with an `AttributeError` — what can be answered and what cannot are
+# different things.
 #
-# `imag` 만 다르다. **torch 자신이 실수에서 거절한다**(실측) — 그래서 여기서 거절하는
-# 것은 우리 한계가 아니라 **torch 를 그대로 옮긴 것**이다.
+# `imag` alone differs. **torch itself refuses on the reals** (measured) — so
+# refusing here is **torch carried over exactly** rather than a limit of ours.
 
 def _is_complex(t):
     return _np.asarray(t.data).dtype.kind == "c"
 
 
 def _alias(t, name):
-    """같은 값을 그대로 내는 항등. **형과 그래프를 지킨다.**
+    """The identity, giving the same value back. **It keeps the dtype and the
+    graph.**
 
-    `positive` 의 단항 커널로 보내면 안 된다 — 그쪽은 형이 float32 로 떨어져서
-    `bool` 을 넣으면 `bool` 이 안 나온다(실측: torch 는 `bool` 을 그대로 준다).
+    It must not be sent to `positive`'s unary kernel — that side falls to float32,
+    so a `bool` going in does not come out `bool` (measured: torch gives `bool`
+    back unchanged).
     """
     t = _wrap(t)
     return t._make(t.data, (t,), lambda g: (g,), name)
 
 
-# ── 복소수의 기울기 규약 ────────────────────────────────────────────────────
+# ── the complex gradient convention ─────────────────────────────────────────
 #
-# **손실이 늘 실수라서 Wirtinger 가 무너진다.** torch 는 복소 손실에 `backward()` 를
-# 거절한다(실측: "grad can be implicitly created only for real scalar outputs").
-# 그러면 규약이 이것으로 정리된다 —
+# **Wirtinger collapses because the loss is always real.** torch refuses
+# `backward()` on a complex loss (measured: "grad can be implicitly created only
+# for real scalar outputs"). That settles the convention as this —
 #
-#   z.grad = ∂L/∂re + i·∂L/∂im        (실수 둘로 따로 미분해서 묶는다)
+#   z.grad = ∂L/∂re + i·∂L/∂im        (differentiated as two reals and bundled)
 #
-# 실측이 그것을 못 박는다(z = 1+2j):
+# Measurement pins it (z = 1+2j):
 #
-#   L = z.real  → 1+0j        L = z.imag  → **0+1j** (−1j 가 아니다)
+#   L = z.real  → 1+0j        L = z.imag  → **0+1j** (not −1j)
 #   L = |z|²    → 2+4j        L = (z·z̄).real → 2+4j
 #
-# 이 규약에서 **정칙 함수 f 의 역방향은 `conj(f'(z))·g` 다** — 실수 쪽 코드가 쓰는
-# `f'(x)·g` 와 **켤레 하나**가 다르다. 그 하나를 빼먹으면 부호만 뒤집힌 기울기가
-# 나오고, 값이 그럴듯해서 실수 입력으로는 절대 안 보인다.
+# Under this convention **a holomorphic f's backward is `conj(f'(z))·g`** — one
+# conjugate away from the `f'(x)·g` the real-valued code uses. Leaving that one
+# out produces a gradient with the sign flipped, and the values are plausible
+# enough that real input never shows it.
 
 def _cgrad(local, g):
-    """정칙 함수의 역방향 한 항. **켤레가 붙는 자리**다."""
+    """One term of a holomorphic function's backward. **Where the conjugate
+    attaches.**"""
     return _np.conj(local) * g
 
 
 def real(t):
-    """실수부.
+    """The real part.
 
-    실수 텐서에서는 **자기 자신**이고 형도 그대로다(`bool` 도 `bool`). 복소수에서는
-    실수부를 꺼내고, **기울기는 실수 자리로만 흐른다** — `z.real` 의 기울기가
-    `1+0j` 인 것이 그 뜻이다(실측).
+    On a real tensor it is **the tensor itself**, dtype included (`bool` stays
+    `bool`). On a complex one it takes the real part, and **the gradient flows to
+    the real slot alone** — which is what the gradient of `z.real` being `1+0j`
+    means (measured).
     """
     t = _wrap(t)
     if not _is_complex(t):
@@ -7938,11 +8297,12 @@ def real(t):
 
 
 def imag(t):
-    """허수부.
+    """The imaginary part.
 
-    **실수 텐서에서는 torch 도 거절한다**(실측) — 우리 한계가 아니다. 복소수에서는
-    허수부를 꺼내고, **기울기가 `i` 를 달고 돌아간다** — `z.imag` 의 기울기가
-    `0+1j` 다(실측). `−1j` 로 적으면 부호가 뒤집힌 채 그럴듯하게 돈다.
+    **torch refuses on a real tensor too** (measured) — not a limit of ours. On a
+    complex one it takes the imaginary part, and **the gradient goes back carrying
+    an `i`** — the gradient of `z.imag` is `0+1j` (measured). Written as `−1j` it
+    runs plausibly with the sign flipped.
     """
     t = _wrap(t)
     if not _is_complex(t):
@@ -7955,10 +8315,11 @@ def imag(t):
 
 
 def conj(t):
-    """켤레. 실수에서는 항등이고 **뷰다** — torch 도 버퍼를 공유한다(실측).
+    """The conjugate. Over the reals it is the identity and **a view** — torch
+    shares the buffer too (measured).
 
-    **정칙이 아니다.** 그래서 역방향이 `conj(f')·g` 꼴이 아니라 **`conj(g)`** 다 —
-    켤레의 켤레라서 그렇다.
+    **It is not holomorphic.** So its backward is **`conj(g)`** rather than the
+    `conj(f')·g` form — being the conjugate of a conjugate.
     """
     t = _wrap(t)
     if not _is_complex(t):
@@ -7968,11 +8329,13 @@ def conj(t):
 
 
 def conj_physical(t):
-    """`conj` 와 같은 값. torch 는 이쪽이 **실제로 복사하는 판**이라고 이름을 나눈다.
+    """The same value as `conj`. torch splits the names to say this is **the
+    version that actually copies.**
 
-    **복소수가 들어오기 전에는 이 함수가 항등이었다** — 실수만 있던 시절에는 그것이
-    맞는 값이었고, 골든도 통과했다. 복소수를 붙이는 순간 같은 코드가 틀린 답이 됐다.
-    "지금 통과하는 항등" 은 범위가 넓어질 때 제일 먼저 무너지는 자리다.
+    **Before complex numbers arrived this function was the identity** — while
+    everything was real that was the right value and the golden passed. The moment
+    complex was attached the same code became a wrong answer. "An identity that
+    passes today" is the first thing to break when the domain widens.
     """
     t = _wrap(t)
     if not _is_complex(t):
@@ -7987,38 +8350,43 @@ def conj_physical_(t):
 
 
 def resolve_conj(t):
-    """켤레 표시를 실제 값으로 굳힌다. 실수에는 그 표시가 없어 항등이다."""
+    """Materialise the conjugate flag into actual values. The reals carry no such
+    flag, so it is the identity."""
     return _alias(t, "ResolveConjBackward0")
 
 
 def resolve_neg(t):
-    """부호 표시를 굳힌다. `resolve_conj` 와 같은 자리다."""
+    """Materialise the negation flag. `resolve_conj`'s place."""
     return _alias(t, "ResolveNegBackward0")
 
 
 def angle(t):
-    """편각. 실수에서는 **음수가 π, 나머지가 0** 이다 — 복소수의 특수한 경우다.
+    """The angle. Over the reals it is **π for negatives and 0 for the rest** — the
+    complex case specialised.
 
-    **형이 언제나 float32 다** — 정수를 넣어도 정수가 안 나온다(실측). 각도는 정수 칸에
-    안 들어가므로 그것이 맞고, 실수만 넣어 보면 그 규칙이 안 드러난다.
+    **The dtype is always float32** — an integer going in does not come out an
+    integer (measured). An angle does not fit in an integer cell, so that is right,
+    and feeding it floats alone never surfaces the rule.
     """
     t = _wrap(t)
     data = _np.asarray(t.data)
     if data.dtype.kind == "c":
         return Tensor(_np.angle(data).astype(_DEFAULT_DTYPE))
     out = _np.where(data < 0, _math.pi, 0.0).astype(_DEFAULT_DTYPE)
-    # **0 을 흘린다 — "없다" 가 아니라 맞는 답이다.** 실수의 편각은 계단이라 어디서든
-    # 도함수가 0 이고, torch 도 0 을 채운다(실측). 그래프를 안 이으면 `backward()` 가
-    # 멈추는데, 그때 나오는 말은 사용자를 가리키지 이 연산을 가리키지 않는다.
+    # **It flows a 0 — the right answer rather than "absent".** The angle of a
+    # real is a step and its derivative is 0 everywhere, and torch fills 0 too
+    # (measured). Without carrying the graph through, `backward()` stops, and what
+    # comes out then points at the user rather than at this operation.
     return t._make(out, (t,), lambda g: (_np.zeros_like(data, dtype=_np.float64),),
                    "AngleBackward0")
 
 
 def _complex_abs(t):
-    """복소수의 크기. **역방향에 켤레가 안 붙는다** — 실수를 내는 함수라 정칙이 아니다.
+    """The magnitude of a complex number. **No conjugate attaches to the
+    backward** — it produces a real, so it is not holomorphic.
 
-    `∂|z|/∂re = re/|z|`, `∂|z|/∂im = im/|z|` 를 묶으면 `z/|z|` 다. 실측이 그것을
-    받친다: `L = |z|²` 에서 기울기가 `2z` 다(z=1+2j 에서 2+4j).
+    Bundling `∂|z|/∂re = re/|z|` and `∂|z|/∂im = im/|z|` gives `z/|z|`. Measurement
+    backs it: on `L = |z|²` the gradient is `2z` (2+4j at z=1+2j).
     """
     data = _np.asarray(t.data)
     mag = _np.abs(data)
@@ -8032,13 +8400,15 @@ def _complex_abs(t):
 
 
 def complex(re, im):
-    """실수부와 허수부를 묶는다. **이 이름이 파이썬 내장을 가린다** — 이 파일 안에서
-    복소수 판정에 `_is_complex` 를 쓰는 이유가 그것이다."""
+    """Bundle a real part and an imaginary part. **This name shadows the Python
+    builtin** — which is why `_is_complex` is used for the complex test inside this
+    file."""
     re, im = _wrap(re), _wrap(im)
     out = (_np.asarray(re.data, dtype=_np.float32)
            + 1j * _np.asarray(im.data, dtype=_np.float32)).astype(_np.complex64)
-    # **실수 잎으로 기울기가 흐른다.** 실수부는 실수 몫을, 허수부는 허수 몫을 받는다 —
-    # 그것이 `∂L/∂re + i·∂L/∂im` 규약의 반대 방향이다.
+    # **The gradient flows into the real leaves.** The real part takes the real
+    # share and the imaginary part the imaginary one — the reverse direction of the
+    # `∂L/∂re + i·∂L/∂im` convention.
     return re._make(out, (re, im),
                     lambda g: (_np.real(_np.asarray(g)).astype(_np.float32),
                                _np.imag(_np.asarray(g)).astype(_np.float32)),
@@ -8046,7 +8416,7 @@ def complex(re, im):
 
 
 def polar(abs_, angle_):
-    """크기와 편각으로 만든다. `abs·(cos θ + i sin θ)`."""
+    """Build from a magnitude and an angle. `abs·(cos θ + i sin θ)`."""
     abs_, angle_ = _wrap(abs_), _wrap(angle_)
     mag = _np.asarray(abs_.data, dtype=_np.float64)
     ang = _np.asarray(angle_.data, dtype=_np.float64)
@@ -8054,9 +8424,10 @@ def polar(abs_, angle_):
 
 
 def view_as_real(t):
-    """복소수를 `(…, 2)` 실수로 본다. 마지막 축이 `(re, im)` 이다(실측).
+    """View a complex tensor as `(…, 2)` reals. The last axis is `(re, im)`
+    (measured).
 
-    **실수 텐서에는 안 된다** — torch 도 거절한다.
+    **It does not work on a real tensor** — torch refuses too.
     """
     t = _wrap(t)
     if not _is_complex(t):
@@ -8071,7 +8442,7 @@ def view_as_real(t):
 
 
 def view_as_complex(t):
-    """`(…, 2)` 실수를 복소수로 본다. `view_as_real` 의 반대다."""
+    """View `(…, 2)` reals as complex. The inverse of `view_as_real`."""
     t = _wrap(t)
     data = _np.asarray(t.data)
     if data.shape[-1] != 2:
@@ -8087,25 +8458,28 @@ def view_as_complex(t):
 
 
 def is_complex(t):
-    """복소수인가. **복소수를 넣기 전에는 늘 거짓이었다** — 이제 진짜로 본다."""
+    """Is it complex. **Before complex numbers went in it was always false** — it
+    now actually looks."""
     return _is_complex(_wrap(t))
 
 
 def is_conj(t):
-    """켤레 표시가 붙어 있는가. 그 표시를 만들 길이 없으니 늘 거짓이다."""
+    """Does it carry a conjugate flag. There is no way to create that flag, so it
+    is always false."""
     return False
 
 
 def is_neg(t):
-    """부호 표시가 붙어 있는가. `is_conj` 와 같은 자리다."""
+    """Does it carry a negation flag. `is_conj`'s place."""
     return False
 
 
 def asarray(obj, dtype=None, copy=None, **kw):
-    """**텐서를 주면 사본이 아니다**(실측). `copy=True` 여야 사본이다.
+    """**Given a tensor it is not a copy** (measured). `copy=True` makes it one.
 
-    `as_tensor` 와 거의 같은데 `copy` 를 명시로 받는 자리가 다르다 — 그 인자가
-    없으면 "안 베끼는 것이 기본" 이라는 규칙을 부르는 쪽이 못 고른다.
+    Almost the same as `as_tensor`, differing in taking `copy` explicitly — without
+    that argument the caller cannot override the rule that not copying is the
+    default.
     """
     if isinstance(obj, Tensor) and dtype is None and not copy:
         return obj
@@ -8118,13 +8492,15 @@ def asarray(obj, dtype=None, copy=None, **kw):
 
 def frombuffer(buffer, dtype=_float32, count=-1, offset=0,
                requires_grad=False, **kw):
-    """바이트를 그대로 읽는다. **`offset` 은 바이트 수다** — 원소 수가 아니다(실측).
+    """Read the bytes as they are. **`offset` is a byte count** — not an element
+    count (measured).
 
-    **`dtype=` 은 여기서 뜻이 다르다.** 다른 공장에서는 만든 뒤 형을 바꾸는 것인데
-    여기서는 **바이트를 무엇으로 읽을지**를 정한다 — 나중에 바꾸면 이미 다르게 읽은
-    뒤다. 그래서 `_made` 에 형을 안 맡기고 여기서 읽고, 기울기만 맡긴다.
+    **`dtype=` means something different here.** In the other factories it converts
+    after building, and here it decides **what the bytes are read as** — converting
+    afterwards is after they have already been read as something else. So the dtype
+    is not left to `_made` and is read here, with only the gradient left to it.
 
-    `requires_grad=` 는 `**kw` 가 삼키고 있었다.
+    `requires_grad=` was being swallowed by `**kw`.
     """
     kind = dtype.np if hasattr(dtype, "np") else _np.dtype(dtype)
     return _made(_np.frombuffer(buffer, dtype=kind, count=count,
@@ -8132,15 +8508,18 @@ def frombuffer(buffer, dtype=_float32, count=-1, offset=0,
 
 
 def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
-    """**끝을 포함한다** — `arange` 는 뺀다(실측: `range(0, 4)` 가 다섯 개다).
+    """**The end is included** — `arange` excludes it (measured: `range(0, 4)`
+    gives five elements).
 
-    torch 가 폐기 예정으로 두었지만 옛 교재에 남아 있고, `arange` 와 한 칸 다른 것이
-    바로 그 폐기 사유다. 조용히 `arange` 로 넘기면 원소가 하나 모자란다.
+    torch has it marked for removal and it survives in older textbooks, and being
+    one element apart from `arange` is precisely the reason for the removal.
+    Forwarded quietly to `arange`, one element goes missing.
 
-    **이름이 `range` 가 아닌 이유**: 이 파일이 파이썬 내장 `range` 를 91 곳에서 쓴다.
-    모듈에 그 이름을 두면 전부가 이 함수를 부르게 된다 — `lu`·`lu_solve` 와 같은
-    수법으로 여기서는 `range_top` 이고 `borch/__init__.py` 가 `range` 로 내보낸다.
-    이 파일에서 아홉 번째 겪는 "모듈 이름이 내장을 가린다" 다.
+    **Why the name is not `range`**: this file uses the Python builtin `range` in
+    91 places. Putting that name on the module would send all of them to this
+    function — the same trick as `lu` and `lu_solve`, so here it is `range_top` and
+    `borch/__init__.py` exports it as `range`. The ninth "a module name shadows a
+    builtin" in this file.
     """
     _no_out(kw)
     _needs_step(step, "range")
@@ -8151,26 +8530,29 @@ def range_top(start, end=None, step=1, dtype=None, requires_grad=False, **kw):
 
 
 def empty_strided(size, stride, **kw):
-    """**걸음을 표현할 수 없어서 없다.**
+    """**Absent because strides cannot be expressed.**
 
-    `as_strided` 와 다른 자리다. 그쪽은 **값**이 답이라 사본으로도 같은 답을 내는데,
-    이쪽은 값이 쓰레기이고 **걸음 자체가 유일한 답**이다. 우리 텐서에는 걸음이라는
-    것이 없으므로 모양만 맞춘 것을 주면 "걸음이 그렇다" 고 믿는 코드가 생긴다.
+    A different place from `as_strided`. There **the values** are the answer, so a
+    copy gives the same answer; here the values are garbage and **the strides
+    themselves are the only answer.** Our tensors have no such thing as strides, so
+    handing back something whose shape merely matches creates code that believes
+    the strides are what it asked for.
     """
     _no_out(kw)
     _unsupported("torch.empty_strided — there is no such thing as a stride here")
 
 
 def empty_permuted(size, physical_layout, **kw):
-    """`empty_strided` 와 같은 이유로 없다."""
+    """Absent for `empty_strided`'s reason."""
     _no_out(kw)
     _unsupported("torch.empty_permuted — there is no such thing as a stride here")
 
 
-# ================================================================ 이름 잇기
+# ============================================================ wiring the names
 #
-# **파일 끝이어야 한다.** 아래 두 고리가 이 파일의 함수들을 이름으로 찾으므로, 위에서
-# 돌면 아직 정의 안 된 것을 못 본다 — `add` 하나에서 `KeyError` 로 멈췄다.
+# **This has to be the end of the file.** The two loops below look this file's
+# functions up by name, so run higher up they cannot see what is not defined yet —
+# `add` alone stopped with a `KeyError`.
 
 for _nm in _INPLACE_UNARY + _INPLACE_MORE:
     setattr(Tensor, _nm + "_", _make_inplace(_nm))
@@ -8178,16 +8560,18 @@ for _nm in _INPLACE_BINARY + _INPLACE_ARGS:
     setattr(Tensor, _nm + "_", _make_inplace(_nm, "args"))
 
 
-# ---- 모듈 함수를 **메서드로도** 낸다
+# ---- module functions exposed **as methods too**
 #
-# torch 는 같은 것을 둘 다 준다 — `torch.add(x, y)` 와 `x.add(y)`. `borch/__init__.py`
-# 에 그 반대 방향 고리가 있는데(메서드 → 모듈 함수), **이쪽 방향이 없었다.** 그래서
-# 계산은 다 해 놓고 이름이 한쪽에서만 닿았다 — `borch.matrix_exp(x)` 는 되고
-# `x.matrix_exp()` 는 안 됐다. `x.add(y)` 는 torch 코드에서 아주 흔한 꼴이다.
+# torch gives both — `torch.add(x, y)` and `x.add(y)`. `borch/__init__.py` has the
+# loop going the other way (method → module function), and **this direction was
+# missing.** So the computation was all there and the name reached from one side
+# alone — `borch.matrix_exp(x)` worked and `x.matrix_exp()` did not. `x.add(y)` is
+# a very common shape in torch code.
 #
-# **아무 이름이나 걸면 안 된다.** 모듈에 있는 것을 전부 메서드로 만들면 torch 에 없는
-# 메서드가 생기고, 그러면 우리에게서만 도는 코드를 쓰게 된다. 그래서 목록을 적고,
-# 그 목록이 진짜 torch 의 메서드인지는 `tests/test_tensor_api.py` 가 확인한다.
+# **Not every name may be attached.** Making a method out of everything on the
+# module creates methods torch does not have, and then people write code that runs
+# only against us. So a list is written, and whether that list really consists of
+# torch methods is confirmed by `tests/test_tensor_api.py`.
 _AS_METHOD = (
     "add", "sub", "mul", "div", "subtract", "multiply", "divide", "true_divide",
     "floor_divide", "remainder", "fmod", "float_power", "lerp",
@@ -8202,31 +8586,36 @@ _AS_METHOD = (
     "bitwise_and", "bitwise_or", "bitwise_xor", "bitwise_not",
     "bitwise_left_shift", "bitwise_right_shift", "gcd", "lcm",
     "nextafter", "frexp", "logcumsumexp", "mvlgamma", "i0",
-    # `fill` 은 여기 없다 — torch 는 최상위에만 두고 메서드로는 `fill_` 만 준다.
+    # `fill` is not here — torch keeps it at the top level alone and offers only
+    # `fill_` as a method.
     "clamp_max", "clamp_min", "detach_",
-    # 모양·색인. `unravel_index`·`cartesian_prod`·`combinations`·`tril_indices`
-    # ·`triu_indices`·`vander`·`chain_matmul` 은 여기 없다 — torch 가 그것들은
-    # 최상위에만 두기 때문이다.
+    # Shape and indexing. `unravel_index`, `cartesian_prod`, `combinations`,
+    # `tril_indices`, `triu_indices`, `vander` and `chain_matmul` are not here —
+    # torch keeps those at the top level alone.
     "as_strided", "as_strided_", "as_strided_scatter", "diag_embed",
     "diagonal_scatter", "select_scatter", "slice_scatter", "split_with_sizes",
     "tensor_split", "unique_consecutive",
     "index_put", "index_put_", "index_reduce", "masked_scatter",
     "masked_scatter_", "put", "renorm", "scatter_reduce", "ger", "mv",
-    # addmm 계열. **제자리 판은 torch 에서 메서드로만 있다** — `torch.addmm_` 이라는
-    # 최상위 이름은 없다(실측). 그래서 여기에는 있고 `borch/__init__.py` 에는 없다.
-    # 예외가 `addmv_` 하나인데 그것만 torch 가 최상위에도 둔다.
+    # The addmm family. **The in-place versions exist as methods only in torch** —
+    # there is no top-level name `torch.addmm_` (measured). So they are here and
+    # not in `borch/__init__.py`. The one exception is `addmv_`, which torch alone
+    # also keeps at the top level.
     "addmm", "addmm_", "addbmm", "addbmm_", "baddbmm", "baddbmm_",
     "addmv", "addmv_", "addr", "addr_", "addcmul", "addcmul_",
     "addcdiv", "addcdiv_", "sspaddmm",
-    # 최상위 선형대수. `lu_unpack`·`lobpcg`·`pca_lowrank`·`svd_lowrank` 는 여기
-    # 없다 — torch 가 그 넷은 최상위에만 둔다(실측).
+    # Top-level linear algebra. `lu_unpack`, `lobpcg`, `pca_lowrank` and
+    # `svd_lowrank` are not here — torch keeps those four at the top level alone
+    # (measured).
     "cholesky_solve", "cholesky_inverse", "triangular_solve", "orgqr", "ormqr",
-    # 통계. `histogramdd`·`gradient`·`trapz`·`normal`·`poisson`·`binomial` 은
-    # 여기 없다 — torch 가 그것들을 최상위에만 둔다(실측).
+    # Statistics. `histogramdd`, `gradient`, `trapz`, `normal`, `poisson` and
+    # `binomial` are not here — torch keeps those at the top level alone
+    # (measured).
     "histc", "histogram", "mode", "nanmedian", "bernoulli", "nonzero_static",
     "stft", "istft", "hash_tensor",
-    # 복소수의 이웃. `asarray`·`frombuffer`·`range`·`empty_strided` 는 여기 없다 —
-    # torch 가 그것들을 최상위에만 둔다(실측).
+    # The neighbourhood of complex numbers. `asarray`, `frombuffer`, `range` and
+    # `empty_strided` are not here — torch keeps those at the top level alone
+    # (measured).
     "angle", "conj", "conj_physical", "conj_physical_", "imag", "is_complex",
     "is_conj", "is_neg", "resolve_conj", "resolve_neg",
 )
@@ -8239,7 +8628,7 @@ def _as_method(name):
         return fn(self, *args, **kw)
 
     method.__name__ = name
-    method.__doc__ = f"`torch.{name}(x, ...)` 과 같다. torch 는 둘 다 준다."
+    method.__doc__ = f"The same as `torch.{name}(x, ...)`. torch offers both."
     return method
 
 
@@ -8247,35 +8636,41 @@ for _nm in _AS_METHOD:
     if not hasattr(Tensor, _nm):
         setattr(Tensor, _nm, _as_method(_nm))
 
-# **`lu`·`lu_solve` 는 이름이 둘씩이다.** 이 파일의 그 이름들은 `linalg` 쪽 것이고
-# (`lu` 는 `P·L·U` 셋을 펴 주고, `lu_solve` 는 인수를 먼저 받는다), 메서드는
-# **최상위 쪽**이어야 한다. `_AS_METHOD` 는 이름이 하나일 때만 쓸 수 있으므로
-# 이 둘만 손으로 건다 — 그냥 목록에 넣으면 메서드가 다른 함수를 부른다.
+# **`lu` and `lu_solve` each have two names.** The ones in this file are
+# `linalg`'s (`lu` spreads `P`, `L` and `U`, and `lu_solve` takes the factor
+# first), and the methods have to be **the top-level ones.** `_AS_METHOD` works
+# only where there is one name, so these two are attached by hand — put into the
+# list they would give methods that call the wrong function.
 Tensor.lu = _as_method("lu_top")
 Tensor.lu.__name__ = "lu"
 Tensor.lu_solve = _as_method("lu_solve_top")
 Tensor.lu_solve.__name__ = "lu_solve"
 
 
-# ── 분포에서 뽑아 제자리에 채우는 일곱 ────────────────────────────────────────
+# ── the seven that draw from a distribution and fill in place ───────────────
 #
-# **`_ops.py` 에 둔다 — `_rng` 가 여기 산다.** 처음에 `_tensor.py` 에 두고 부를 때마다
-# `from ._ops import _rng` 로 집었는데, `sys.modules` 에서 `borch.*` 를 지우는 검사
-# (`test_alias`)가 먼저 돌면 **다른 `_ops` 의 생성기**를 집는다. 그러면 씨앗을 심어도
-# 안 먹고, 그 증상은 "혼자 돌리면 되는데 다 같이 돌리면 안 된다" 라 원인에서 멀다.
+# **They live in `_ops.py` — `_rng` lives here.** They were first put in
+# `_tensor.py` and grabbed `from ._ops import _rng` on every call, and when the
+# check that clears `borch.*` out of `sys.modules` (`test_alias`) runs first they
+# grab **a different `_ops`'s generator.** Then planting a seed has no effect, and
+# the symptom is "it works alone and not when everything runs together", which is
+# a long way from the cause.
 #
-# `bernoulli_` 처럼 끝값이 확정인 자리가 없어서 **값은 못 굳힌다.** 그래서 표에
-# 물을 것은 값이 아니라 셋이다 — 모양·형이 안 바뀌는가, 못 쓰는 형을 거절하는가,
-# 인자의 정의역을 지키는가. 뒤의 둘이 특히 갈리기 쉽다: **torch 의 규칙이 분포마다
-# 다르고 예외 종류까지 다르다**(실측).
+# There is no place with a deterministic extreme as `bernoulli_` has, so **the
+# values cannot be pinned.** What the table asks about is three things rather than
+# the values — whether the shape and dtype stay put, whether an unusable dtype is
+# refused, and whether the arguments' domain is honoured. The last two drift
+# especially easily: **torch's rule differs per distribution, down to the exception
+# type** (measured).
 #
-#   연속 분포는 정수·참거짓을 **거절**한다 — `normal_`·`uniform_`·`log_normal_` 은
-#   `NotImplementedError`, `exponential_`·`cauchy_` 는 이유를 적은 `RuntimeError` 다.
-#   `geometric_` 은 **이산이라 정수에서 돈다.** 이름만 보고 "난수는 실수만" 으로
-#   묶으면 그 하나에서 틀린다.
+#   The continuous distributions **refuse** integers and booleans — `normal_`,
+#   `uniform_` and `log_normal_` with a `NotImplementedError`, and `exponential_`
+#   and `cauchy_` with a `RuntimeError` stating the reason. `geometric_` is
+#   **discrete and runs on integers.** Grouped by name as "random means floats
+#   only", that one comes out wrong.
 #
-#   `random_` 은 어느 형에서든 돌고 **범위가 형에 달렸다** — int64 는 그 형의
-#   최대까지, bool 은 {0,1} 이다.
+#   `random_` runs on any dtype and **its range depends on the dtype** — int64
+#   goes to that dtype's maximum and bool is {0,1}.
 _CONTINUOUS_REFUSAL = {
     "normal_": ("NotImplementedError", '"normal_kernel_cpu" not implemented for'),
     "uniform_": ("NotImplementedError", '"check_uniform_bounds" not implemented for'),
@@ -8299,14 +8694,16 @@ def _refuse_leaf(self, name):
 
 
 def _needs_continuous(self, name):
-    """연속 분포는 실수 칸에만 채운다 — **예외 종류가 분포마다 다르다.**"""
+    """A continuous distribution fills floating point cells only — **the
+    exception type differs per distribution.**"""
     if self.data.dtype.kind == "f":
         return
     kind, phrase = _CONTINUOUS_REFUSAL[name]
     shown = _TYPE_NAMES.get(self.data.dtype.kind, "Long")
     error = NotImplementedError if kind == "NotImplementedError" else RuntimeError
     raise error(_like_torch(
-        f"`{name}` 은 실수 텐서에만 채웁니다 ({self.dtype} 을 받았습니다).",
+        f"`{name}` fills a floating point tensor only (it received "
+        f"{self.dtype}).",
         f"{phrase} '{shown}'"))
 
 
@@ -8359,7 +8756,8 @@ def _log_normal_(self, mean=1.0, std=2.0, generator=None):
 
 
 def _geometric_(self, p, generator=None):
-    """**이산이라 정수 텐서에서도 돈다.** 연속 다섯과 갈리는 하나다."""
+    """**Discrete, so it runs on an integer tensor too.** The one that parts from
+    the five continuous ones."""
     del generator
     if not 0 < p < 1:
         raise RuntimeError(_like_torch(
@@ -8369,12 +8767,14 @@ def _geometric_(self, p, generator=None):
 
 
 def _random_(self, from_=0, to=None, generator=None):
-    """**범위가 형에 달렸다** — 안 주면 그 형이 담을 수 있는 데까지다."""
+    """**The range depends on the dtype** — given nothing it reaches as far as
+    that dtype can hold."""
     del generator
-    # **상한이 그 형이 정확히 셀 수 있는 데까지다.** float32 는 2^24 를 넘으면
-    # 이웃한 정수를 구별 못 하므로 그 위를 뽑으면 값이 뭉친다 — torch 도 거기서
-    # 끊는다(실측: 최댓값이 1.677e7). 처음에 2^53 으로 뒀는데 그것은 float64 의
-    # 자리이고, 우리 저장은 float32 다.
+    # **The upper bound is as far as that dtype counts exactly.** Past 2^24
+    # float32 cannot tell neighbouring integers apart, so drawing above that
+    # clumps the values — torch cuts it there too (measured: the maximum is
+    # 1.677e7). It was first set at 2^53, and that is float64's place while our
+    # storage is float32.
     kind, bits = self.data.dtype.kind, self.data.dtype.itemsize * 8
     if to is None:
         to = {"b": 2, "f": 1 << 24, "i": 1 << (bits - 1), "u": 1 << bits}[kind]
@@ -8395,12 +8795,14 @@ del _rname, _rfn
 
 
 def _bernoulli_(self, p=0.5, generator=None):
-    """**`p` 로 채운다 — 자기 값을 확률로 읽지 않는다.** `bernoulli()` 와 다르다.
+    """**It fills from `p` — it does not read its own values as probabilities.**
+    Different from `bernoulli()`.
 
-    **`_ops` 에 둔다 — `_rng` 가 여기 산다.** 처음에 `_tensor.py` 에 두면서 그 파일에
-    없는 `_rng` 대신 `_np.random` 을 썼는데, 그것은 numpy 의 **전역** 난수기라
-    `manual_seed` 가 안 닿는다. 같은 씨앗으로 두 번 뽑으면 다른 값이 나왔고, 아무도
-    안 물었다 — 씨앗 검사가 나중에 넣은 일곱만 돌고 이 하나를 안 세었기 때문이다.
+    **It lives in `_ops` — `_rng` lives here.** Put in `_tensor.py` at first, it
+    used `_np.random` in place of the `_rng` that file does not have, and that is
+    numpy's **global** generator, which `manual_seed` does not reach. Drawing twice
+    from the same seed gave different values and nobody asked — the seed check ran
+    over the seven added later and did not count this one.
     """
     del generator
     _refuse_leaf(self, "bernoulli_")
@@ -8410,18 +8812,23 @@ def _bernoulli_(self, p=0.5, generator=None):
 Tensor.bernoulli_ = _bernoulli_
 
 
-# ── torch 가 **속성**으로 주는 셋 ────────────────────────────────────────────
+# ── the three torch offers as **properties** ────────────────────────────────
 #
-# `x.device`·`x.real`·`x.imag` 는 torch 에서 괄호가 없다. 우리는 셋 다 함수로만
-# 있었고, 그중 둘은 `_as_method` 가 **메서드로** 붙여 놓았다 — 그러면 `x.real` 이
-# 텐서가 아니라 **묶인 메서드 객체**를 돌려준다. 예외도 안 나고, `if x.imag:` 같은
-# 줄이 참으로 지나간다. torch 는 실수 텐서의 `imag` 에서 멈춘다.
+# `x.device`, `x.real` and `x.imag` take no parentheses in torch. All three
+# existed here as functions alone, and `_as_method` had attached two of them **as
+# methods** — and then `x.real` hands back **a bound method object** rather than a
+# tensor. No exception either, and a line like `if x.imag:` passes as true. torch
+# stops on `imag` for a real tensor.
 #
-# `x.device` 는 아예 없었다. `torch.device(...)` 라는 이름은 있는데 텐서 쪽 속성이
-# 없어서, **`print(x.device)` 나 `if x.device.type == "cuda"` 가 거기서 멈춘다** —
-# 교재가 장치를 확인할 때 치는 줄이다.
+# `x.device` was absent entirely. The name `torch.device(...)` existed and the
+# tensor-side property did not, so **`print(x.device)` and
+# `if x.device.type == "cuda"` stop there** — the line a textbook types when
+# checking the device.
 Tensor.device = property(
     lambda self: _device("cpu"),
-    doc="언제나 `cpu` 다 — numpy 위에 있고 다른 장치가 없다.")
-Tensor.real = property(real, doc="실수부. 실수 텐서에서는 자기 자신이다.")
-Tensor.imag = property(imag, doc="허수부. **실수 텐서에서는 멈춘다** — torch 가 그렇다.")
+    doc="Always `cpu` — it sits on numpy and there is no other device.")
+Tensor.real = property(
+    real, doc="The real part. On a real tensor it is the tensor itself.")
+Tensor.imag = property(
+    imag,
+    doc="The imaginary part. **It stops on a real tensor** — torch does that.")

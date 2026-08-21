@@ -675,7 +675,10 @@ class StepLR(_Scheduler):
     `base * gamma ** (last_epoch // step_size)`.
 
     Run alone from the start the two produce **the same sequence.** Which is why
-    `StepLR/자취` was green for a long time. They diverge when a fresh scheduler
+    `sched::StepLR`, which walks the whole trajectory, was green for a long time.
+    (That is the case to name: StepLR is not in the `_SCHEDULERS` trace list, so
+    the `opt::` trace family has no entry for it and `sched::` is where its
+    trajectory is asked.) They diverge when a fresh scheduler
     is built on an optimiser whose lr has already moved — that is, **when
     resuming.** At that moment the closed form puts the learning rate back to its
     first value (0.05 to 0.2). Half-cooled training goes hot again, with no
