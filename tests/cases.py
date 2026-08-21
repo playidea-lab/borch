@@ -7823,9 +7823,16 @@ def vision_cases(inp=None):
         # The three non-constant modes. They are numpy's own, so what is being asked is
         # whether **torchvision means the same thing by the same word** — `reflect` and
         # `symmetric` differ only in whether the edge value repeats.
-        (VISION_PREFIX + "Pad(edge)", on_float(lambda T: T.Pad(1, padding_mode="edge"))),
-        (VISION_PREFIX + "Pad(reflect)", on_float(lambda T: T.Pad(1, padding_mode="reflect"))),
-        (VISION_PREFIX + "Pad(symmetric)", on_float(lambda T: T.Pad(1, padding_mode="symmetric"))),
+        #
+        # **They pad by two, and one is the reason.** At a padding of one, `edge` and
+        # `symmetric` are the same picture — symmetric mirrors the edge value, which is
+        # the edge value — so the two entries held identical numbers and the pair could
+        # not tell the modes apart. Another session swapped the two in their port and
+        # all sixteen value cases still passed. Two is the smallest padding where the
+        # words diverge.
+        (VISION_PREFIX + "Pad(edge)", on_float(lambda T: T.Pad(2, padding_mode="edge"))),
+        (VISION_PREFIX + "Pad(reflect)", on_float(lambda T: T.Pad(2, padding_mode="reflect"))),
+        (VISION_PREFIX + "Pad(symmetric)", on_float(lambda T: T.Pad(2, padding_mode="symmetric"))),
         # A colour per channel, through PIL. numpy's `constant_values` reads per **axis**,
         # so a three-colour fill handed straight to it paints the channel axis instead of
         # the colours — right shape, wrong picture, nothing raised.

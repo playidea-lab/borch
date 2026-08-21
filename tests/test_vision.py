@@ -583,3 +583,24 @@ def test_every_random_pixel_wrapper_actually_draws():
         assert len(seen) == 2, (
             f"{transform} gave {len(seen)} distinct results over sixty draws — one "
             "means the draw is dead, and these six share one implementation")
+
+
+def test_edge_and_symmetric_are_not_the_same_padding():
+    """**At a padding of one they are the same picture**, and the golden held them as
+    two entries with identical numbers for it.
+
+    `symmetric` mirrors the border row, and the mirror of a single row is that row —
+    which is what `edge` repeats. So the pair proved nothing, and another session
+    swapped the two modes in their port with all sixteen value cases still green. Two
+    is the smallest padding where the words diverge, and this asks it of the library
+    directly so the distinction does not depend on which padding a case happened to
+    pick.
+    """
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    assert np.array_equal(V.Pad(1, padding_mode="edge")(img),
+                          V.Pad(1, padding_mode="symmetric")(img)), (
+        "at one they agree — if that changed, this test is measuring something else now")
+    assert not np.array_equal(V.Pad(2, padding_mode="edge")(img),
+                              V.Pad(2, padding_mode="symmetric")(img)), (
+        "edge and symmetric give the same answer at a padding of two, so nothing here "
+        "can tell them apart")
