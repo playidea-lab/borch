@@ -269,3 +269,58 @@ def test_resize_takes_the_enum_and_the_string_alike():
     a = V.Resize((4, 3), interpolation="bilinear")(img)
     b = V.Resize((4, 3), interpolation=V.InterpolationMode.BILINEAR)(img)
     assert np.array_equal(a, b)
+
+
+# --- arguments the cases above pass over ------------------------------------
+#
+# Prompted by a measurement from another session: on the borch.ts side `MaxPool2d` was
+# present taking `(kernel)` alone against the core's `return_indices`, `InstanceNorm` took
+# `(eps?)` against five, and `Adam` was missing `weight_decay` — three names present and
+# narrower than they look, none of them visible to a count of names. **What finds that is a
+# case whose arguments exercise the parameter**, so these are the arguments the golden cases
+# do not reach.
+
+
+def test_erasing_takes_a_value_for_each_channel():
+    """A sequence fills channel by channel. Handed straight through it would broadcast into
+    one number for all three, which on a normalised image is **a colour rather than the
+    channel means** — and no shape says so."""
+    V.manual_seed(0)
+    out = V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0),
+                          value=[0.1, 0.2, 0.3])(np.ones((3, 8, 8), dtype=np.float32))
+    for channel, want in enumerate((0.1, 0.2, 0.3)):
+        blanked = out[channel][out[channel] != 1.0]
+        assert blanked.size and np.allclose(blanked, want), (
+            f"channel {channel} was filled with {set(blanked.tolist()) or 'nothing'}, not {want}")
+
+
+def test_erasing_with_random_fills_the_rectangle_with_noise():
+    """`value="random"` is a different branch, not a different number — one draw per pixel."""
+    V.manual_seed(0)
+    out = V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0),
+                          value="random")(np.ones((3, 8, 8), dtype=np.float32))
+    blanked = out[out != 1.0]
+    assert blanked.size > 1 and len(set(blanked.tolist())) > 1, (
+        "the rectangle came out one repeated value — that is a constant, not noise")
+
+
+def test_erasing_refuses_a_value_that_is_not_one_per_channel():
+    with pytest.raises(ValueError, match="channels"):
+        V.RandomErasing(p=1.0, scale=(0.2, 0.2), ratio=(1.0, 1.0),
+                        value=[0.1, 0.2])(np.ones((3, 8, 8), dtype=np.float32))
+
+
+def test_a_size_of_one_number_or_a_one_element_list_means_both_sides():
+    """torchvision spreads `[3]` over both sides, and a copied line uses that form. Read as
+    a pair it would be a size of one dimension and stop somewhere else entirely."""
+    img = np.zeros((5, 4, 3), dtype=np.float32)
+    assert V.FiveCrop(2)(img)[0].shape == V.FiveCrop([2])(img)[0].shape == (2, 2, 3)
+    assert V.Pad([1])(img).shape == (7, 6, 3)
+
+
+def test_grayscale_of_a_single_channel_image_passes_it_through():
+    """A one-channel picture is already grey. The luma sum reaches for three channels, so
+    without the branch this is an `IndexError` on the very input that needs no work."""
+    img = np.full((5, 4, 1), 0.25, dtype=np.float32)
+    out = V.Grayscale()(img)
+    assert out.shape == (5, 4, 1) and np.allclose(out, 0.25)

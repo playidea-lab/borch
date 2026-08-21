@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3031 golden cases pass**, and that is a surface check rather than a
+> is that **3032 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -584,8 +584,8 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **all 3031 golden cases** — nothing in the table is skipped on this side
-alone. The core covers 2978 cases, and the remaining 53 are ones the core refuses
+It passes **all 3032 golden cases** — nothing in the table is skipped on this side
+alone. The core covers 2979 cases, and the remaining 53 are ones the core refuses
 on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of it.
 
 > That number said 2930 until this translation. The phrasing around it was
@@ -1035,8 +1035,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3031 golden cases** compare all three implementations against **the same
-expected values.** The core covers 2978 cases, leaving out the 53 that are
+And **3032 golden cases** compare all three implementations against **the same
+expected values.** The core covers 2979 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are

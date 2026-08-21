@@ -7755,6 +7755,21 @@ def vision_cases(inp=None):
         return T.LinearTransformation(L.tensor(m), L.tensor(v))(
             _as_tensor(L, T.ToTensor()(img_f)))
 
+    def resized_crop_nearest(L):
+        # **torchvision takes the enum here and not the string.** `RandomResizedCrop` is
+        # stricter than the tutorials read — `interpolation="nearest"` stops it with "should
+        # be a InterpolationMode". Ours takes either, so this is the one place the case has
+        # to spell the same filter in two spellings.
+        T = _vision(L)
+        if _is_real_torch(L):
+            from torchvision.transforms import InterpolationMode
+            crop = T.RandomResizedCrop((3, 2), scale=(1.0, 1.0), ratio=(0.8, 0.8),
+                                       interpolation=InterpolationMode.NEAREST)
+            return crop(_as_tensor(L, T.ToTensor()(img_f)))
+        crop = T.RandomResizedCrop((3, 2), scale=(1.0, 1.0), ratio=(0.8, 0.8),
+                                   interpolation="nearest")
+        return T.ToTensor()(crop(img_f))
+
     def erasing(L, **kw):
         T = _vision(L)
         return T.RandomErasing(**kw)(_as_tensor(L, T.ToTensor()(img_f)))
@@ -7799,6 +7814,10 @@ def vision_cases(inp=None):
         # resize that follows and the rounding that chooses the crop.
         (VISION_PREFIX + "RandomResizedCrop(pinned to the whole image)",
          on_float(lambda T: T.RandomResizedCrop((3, 2), scale=(1.0, 1.0), ratio=(0.8, 0.8)))),
+        # **The same crop with the other filter**, because an `interpolation` accepted and
+        # then dropped on the way to the resize passes the case above exactly. The two
+        # differ by 0.5006 here (measured), so a dropped argument cannot hide.
+        (VISION_PREFIX + "RandomResizedCrop(nearest)", resized_crop_nearest),
         (VISION_PREFIX + "LinearTransformation", linear),
         (VISION_PREFIX + "RandomErasing(p=0)", lambda L: erasing(L, p=0.0)),
         # **The fallback, and it is the branch that gets written wrong.** When ten draws all
