@@ -1,65 +1,75 @@
 # borch
 
-**브라우저에서 도는 PyTorch.** numpy 위에 얹은 얇은 층이고, 설치 없이 PyTorch 문법을 연습한다.
+**PyTorch that runs in a browser.** A thin layer over numpy, for practising
+PyTorch syntax with nothing installed.
 
-> ## 먼저, 이것이 **아닌** 것
+> ## First, what this is **not**
 >
-> PyTorch 가 아니다. 표면의 **11%**, 코드로는 **0.1%** 다.
-> `CUDA` · 분산 · 혼합정밀도 · `torch.compile` · 사전학습 가중치는 **영원히 없다** —
-> 브라우저에 존재할 수 없거나, 그것을 배우려면 브라우저를 벗어나야 하는 것들이다.
+> It is not PyTorch. **11%** of the surface, and **0.1%** by code.
+> `CUDA`, distributed training, mixed precision, `torch.compile` and pre-trained
+> weights are **never coming** — they either cannot exist in a browser, or
+> learning them means leaving the browser.
 >
-> 할 수 있는 말은 하나다. **입문 튜토리얼 코드가 임포트만 바꿔 같은 값을 낸다.**
-> 그건 실측했다(아래 적합성).
+> There is one claim to make. **Introductory tutorial code produces the same
+> values with one import changed.** That was measured (see conformance, below).
 >
-> 이름이 비슷한 다른 프로젝트들과 무관하다 —
+> Unrelated to the other projects with similar names —
 > [minitorch](https://minitorch.github.io) · [nanotorch](https://pypi.org/project/nanotorch/) ·
 > [edutorch](https://pypi.org/project/edutorch/).
 
-## 세 가지가 이 이름을 쓴다
+## Three things carry this name
 
-같은 골든(진짜 PyTorch 로 굳힌 기대값)을 셋이 함께 본다. **표가 하나여야 갈리는
-것이 보인다** — 서로를 대조해서 잡은 결함이 이 저장소 이력의 큰 몫이다.
+All three look at the same golden — the expected values pinned with real PyTorch.
+**One table is what makes a divergence visible** — defects caught by comparing the
+three against each other are a large share of this repository's history.
 
-| | 무엇 위에 | 어디서 | 천장 |
+| | built on | where it runs | ceiling |
 |---|---|---|---|
-| **`borch`** (PyPI) | numpy | 어디서나 · Pyodide | MNIST 급 |
-| **`borch`** (npm) — borch.ts | **WGSL 직접, 의존성 0** | 브라우저 안에서만 | CIFAR ResNet-18 **에폭 1.5분** |
-| **`borch-webgpu`** (파이썬) | 위의 borch.ts | 브라우저 안에서만 | 같은 것이 **에폭 1.6분** |
+| **`borch`** (PyPI) | numpy | anywhere, and Pyodide | MNIST scale |
+| **`borch`** (npm) — borch.ts | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
+| **`borch-webgpu`** (Python) | the borch.ts above | in a browser only | the same thing at **1.6 min/epoch** |
 
-아래 둘은 **같은 커널 위에 있다.** `borch-webgpu` 는 borch.ts 를 파이썬에서 부르는
-7,863 줄짜리 결속이고, 그 차이(1.5분 대 1.6분)가 Pyodide 를 한 번 지나는 값이다.
+The lower two **stand on the same kernels.** `borch-webgpu` is a 7,863 line
+binding calling borch.ts from Python, and the difference (1.5 against 1.6 minutes)
+is the cost of one trip through Pyodide.
 
-> 그 자리에 한동안 **TF.js 판**이 있었다. 같은 이름, 다른 밑바닥, **5,307 줄**. 직접 쓴
-> WGSL 이 같은 벤치에서 20% 빨랐고(배치 64 에서 154.7ms → 123.4ms) 랭크 한계도
-> 없어서 걷어냈다. 그 결정과 실측은 [BORCH-TS.md](BORCH-TS.md) 에 있다.
+> **A TF.js version stood there for a while.** The same name, a different
+> foundation, **5,307 lines.** Hand-written WGSL was 20% faster on the same
+> benchmark (154.7ms → 123.4ms at batch 64) and carried no rank limit, so it was
+> removed. That decision and its measurements are in
+> [BORCH-TS.md](BORCH-TS.md).
 
-아래는 파이썬 쪽 이야기다. TypeScript 쪽은 [borch.ts](#borchts--typescript-와-wgsl) 절에 있다.
+What follows is the Python side. The TypeScript side is in the
+[borch.ts](#borchts--typescript-and-wgsl) section.
 
-## 눈으로 먼저 — 설명 페이지와 플레이그라운드
+## See it first — the explanatory pages and the playground
 
-`site/` 에 정적 페이지 둘이 있다. 히어로의 코드가 그 자리에서 돌고, 플레이그라운드는
-**자바스크립트와 파이썬 둘 다** 받는다 — 같은 WGSL 커널 위에서 손실 값이 자릿수까지 같다.
+There are two static pages under `site/`. The hero's code runs where it stands,
+and the playground takes **both JavaScript and Python** — on the same WGSL
+kernels, the loss values agree to the last digit.
 
 ```bash
 npm run build:ts && npm run site      # http://127.0.0.1:8123/site/
 ```
 
-밖으로 나가는 요청이 없다. Pyodide 와 numpy 까지 저장소 안(`vendor/`)에서 온다.
-기본은 영어이고 한국어는 `/site/ko/` 에 있다. 자세한 것은 [site/README.md](site/README.md).
+No request leaves the machine. Pyodide and numpy come out of the repository
+itself (`vendor/`). English is the default and Korean is under `/site/ko/`. The
+details are in [site/README.md](site/README.md).
 
-## 설치
+## Installing
 
-순수 파이썬 휠 하나다. 의존성은 numpy 뿐이고, Pyodide 에는 numpy 가 이미 있다.
-`borch` 패키지와 `borchvision` 모듈이 들어 있다.
+One pure-Python wheel. numpy is the only dependency, and Pyodide already has
+numpy. It contains the `borch` package and the `borchvision` module.
 
 ```bash
-uv add ./pyborch-1.4.0-py3-none-any.whl        # 릴리스에서 받은 파일
+uv add ./pyborch-1.4.0-py3-none-any.whl        # the file from a release
 ```
 
-브라우저(Pyodide)에서는 휠 바이트를 가상 파일시스템에 써넣고 `micropip` 으로 건다.
+In a browser (Pyodide), the wheel's bytes are written into the virtual filesystem
+and installed with `micropip`.
 
 ```js
-// 파일 이름을 그대로 써야 한다 — micropip 이 이름에서 패키지명과 버전을 읽는다.
+// The filename has to be kept — micropip reads the package name and version from it.
 py.FS.writeFile("/pyborch-1.4.0-py3-none-any.whl", new Uint8Array(wheelBytes));
 await py.runPythonAsync(`
 import micropip
@@ -67,8 +77,9 @@ await micropip.install("emfs:/pyborch-1.4.0-py3-none-any.whl")
 `);
 ```
 
-> **저장소가 private 이라 릴리스 URL 을 그대로 `micropip.install()` 에 넣을 수 없다.**
-> 익명 요청은 404 를 받는다(실제로 그렇게 해보고 알았다). 공개로 돌리면 URL 한 줄로 끝난다.
+> **The repository is private, so a release URL cannot go straight into
+> `micropip.install()`.** An anonymous request gets a 404 — found out by trying it.
+> Once it is public, one URL is the whole of it.
 
 ```python
 import borch as torch
@@ -79,121 +90,143 @@ loss.backward()
 print(w.grad.item())               # -4.0
 ```
 
-### 이름을 어떻게 붙일 것인가 — 셋이고, 경계는 재봤다
+### How to name it — three ways, and the boundary was measured
 
-`import borch as torch` 는 **그 파일 안의 이름** 하나를 만든다. `from X.Y import Z` 는
-`sys.modules` 에 등록된 **경로**를 보므로 별칭이 안 닿는다. 그 차이가 어디서 갈리는지를
-`tests/test_alias.py` 가 못 박는다.
+`import borch as torch` creates **one name inside that file.**
+`from X.Y import Z` looks at a **path** registered in `sys.modules`, which an
+alias does not reach. Where exactly that difference bites is pinned by
+`tests/test_alias.py`.
 
-| | `torch.nn.Linear` | `from borch.nn import Linear` | `from torch.… import` | 남의 `import torch` |
+| | `torch.nn.Linear` | `from borch.nn import Linear` | `from torch.… import` | somebody else's `import torch` |
 |---|---|---|---|---|
-| `import borch as torch` | ✅ | ❌ | ❌ | 안 건드림 |
-| `borch.install("borch")` | ✅ | ✅ | ❌ | 안 건드림 |
-| `sys.modules["torch"] = borch` | ✅ | ✅ | ✅ | **가로챔** |
+| `import borch as torch` | ✅ | ❌ | ❌ | untouched |
+| `borch.install("borch")` | ✅ | ✅ | ❌ | untouched |
+| `sys.modules["torch"] = borch` | ✅ | ✅ | ✅ | **intercepted** |
 
-**기본은 첫 줄이다.** 대부분의 교재 코드가 `torch.nn.Linear` 처럼 속성으로 닿고, 그건
-별칭만으로 된다.
+**The first line is the default.** Most textbook code reaches things as attributes,
+as in `torch.nn.Linear`, and an alias alone covers that.
 
-`from … import` 가 필요하면 **자기 이름으로 심는다** — `borch.install("borch")`. 하위
-경로가 열리면서 남의 코드는 안 건드린다.
+If `from … import` is needed, **plant it under its own name** —
+`borch.install("borch")`. The submodule paths open and nobody else's code is
+touched.
 
-`torch` 로 심는 것은 마지막이다. 그 뒤로는 **남의 라이브러리가 하는 `import torch` 도**
-축소판을 받는다. 학습자 한 명의 연습 환경에서는 편의지만, 다른 코드가 섞인 곳에서는
-원인을 못 찾는 오류가 된다.
+Planting it as `torch` is the last resort. After that, **`import torch` inside
+somebody else's library** gets the subset too. In one learner's practice
+environment that is a convenience; where other code is mixed in it becomes an
+error whose cause cannot be found.
 
 ```python
 import sys, borch
-sys.modules["torch"] = borch          # 정말 필요할 때만
+sys.modules["torch"] = borch          # only when it is really needed
 ```
 
 ---
 
-## 왜 만들었나
+## Why this exists
 
-PyTorch 는 WebAssembly 로 포팅되지 않는다. 수백 MB의 네이티브 코드에, 손튜닝된 AVX·NEON
-커널은 wasm SIMD 로 옮겨지지 않고, OpenMP 스레드는 Pyodide 가 싣지 않는 헤더를 요구한다.
+PyTorch is not ported to WebAssembly. Hundreds of MB of native code, hand-tuned
+AVX and NEON kernels that do not carry over to wasm SIMD, and OpenMP threads that
+want headers Pyodide does not ship.
 
-**그런데 문법을 익히는 데는 그중 아무것도 필요하지 않다.** numpy 는 Pyodide 안에 이미 있다.
+**And none of that is needed to learn the syntax.** numpy is already inside
+Pyodide.
 
-비행 시뮬레이터에 가깝다 — **조종간은 진짜 조종간이고, 밑의 물리가 흉내다.**
-학습자가 타이핑하는 코드는 진짜 PyTorch 코드이고, 자기 컴퓨터에서 그대로 돈다.
+It is closer to a flight simulator — **the controls are real controls and the
+physics underneath is the imitation.** The code a learner types is real PyTorch
+code, and it runs unchanged on their own machine.
 
-## 설계 원칙 — 틀린 답보다 없는 기능이 낫다
+## The design principle — an absent feature beats a wrong answer
 
-흉내가 진짜와 *거의* 같으면 그것을 배우는 사람은 거짓을 배운다.
-그래서 **범위 밖은 근사하지 않고 예외를 던진다.**
+An imitation that is *almost* the same as the real thing teaches whoever learns
+from it something false. So **anything outside the range throws rather than
+approximating.**
 
 ```python
 >>> torch.tensor([-1.5, 2.0, -0.25])
-tensor([-1.5000,  2.0000, -0.2500])          # 진짜와 같은 자리·같은 정렬
+tensor([-1.5000,  2.0000, -0.2500])          # the real thing's places and alignment
 
 >>> torch.tensor([1.0], requires_grad=True) * 2
 tensor([2.], grad_fn=<MulBackward0>)
 
 >>> torch.randn(3, 4) @ torch.randn(3, 2)
-RuntimeError: 행렬곱의 모양이 안 맞습니다 (3x4 @ 3x2) — 앞의 열(4)과 뒤의 행(3)이 같아야 합니다.
+RuntimeError: The matmul shapes do not line up (3x4 @ 3x2) — the columns on the left (4) must match the rows on the right (3).
 (torch: mat1 and mat2 shapes cannot be multiplied (3x4 and 3x2))
 
->>> torch.nn.LSTM(2, 2)
-BorchError: nn.LSTM 은(는) 브라우저 축소판에 없습니다.
-자기 컴퓨터에서 `uv add torch` 로 진짜 PyTorch 를 쓰세요 — 축소판은 문법 연습용이고,
-없는 것을 흉내 내면 틀린 것을 배우게 됩니다.
+>>> torch.tensor([1.0]).half()
+BorchError: `.half()`(float16) is not in the browser subset.
+Use real PyTorch on your own machine (`uv add torch`) — this subset is for practising the syntax, and imitating what is missing teaches the wrong thing.
 ```
 
-조용히 다른 값을 내느니 시끄럽게 멈춘다.
+It stops loudly rather than quietly producing a different value.
 
-**한 자리만 예외다.** `svd_lowrank`·`pca_lowrank` 의 `niter` 는 받되 안 쓴다. torch 는
-무작위 부분공간을 `niter` 번 다듬는데, 그 반복이 있는 이유는 사영이 근사이기
-때문이다. 우리는 전체 SVD 를 구해 앞을 자르므로 다듬을 것이 없다 — 그래서 **작은
-`niter` 에서 torch 와 값이 갈린다.** 우리 쪽이 torch 의 `niter` 를 크게 키운 극한에
-있는, 더 정확한 갈림이다. 멈추지 않는 이유는 여기서 멈추면 정확한 답을 거절하게
-되기 때문이고, 적어 두는 이유는 **갈림은 더 정확해도 갈림**이기 때문이다.
+> The refusal above used to be `nn.LSTM`, and **that stopped being true** —
+> `LSTM`, `GRU` and the transformer encoder went in under roadmap item 6, so the
+> example was demonstrating a refusal that no longer happens. Replaced with one
+> measured just now. This block shows what you get today, unlike the record in
+> `ROADMAP.md`, which shows what you got then and is left alone for that reason.
 
-## 파일 구조 — 한 파일이 아니다
+**There is exactly one exception.** `svd_lowrank` and `pca_lowrank` accept
+`niter` and do not use it. torch refines a random subspace `niter` times, and that
+loop exists because the projection is an approximation. This computes the full SVD
+and trims the front, so there is nothing to refine — which means **the values part
+from torch's at small `niter`.** The divergence is towards the more accurate side:
+ours sits at the limit torch reaches by raising `niter`. It does not stop, because
+stopping here would mean refusing an exact answer; it is written down, because **a
+divergence is a divergence even when it is more accurate.**
 
-`borch` 는 **패키지다**. 처음에는 파일 하나였고 그것이 "얹으면 끝"이라는 배포
-이야기의 일부였는데, 3,300 줄이 되면서 그 명분이 먼저 사라졌다.
+## The file layout — it is not one file
 
-| | 줄 | 무엇 |
+`borch` is **a package.** It began as one file, and that was part of a
+distribution story about dropping it in and being done; at 3,300 lines that
+justification went first.
+
+| | lines | what |
 |---|---|---|
-| `_base.py` | 323 | dtype · 오류 규격 · `repr` |
-| `_tensor.py` | 1,711 | `Tensor` 와 autograd |
-| `_ops.py` | 7948 | 수학 · 모양 · `nn.functional` |
-| `_nn.py` | 2,881 | 층 · 순환 · 트랜스포머 |
-| `_optim.py` | 1,000 | 옵티마이저 · 스케줄러 |
-| `_fft.py` | 364 | `torch.fft` · `stft`/`istft` |
-| `_data.py` | 355 | `Dataset` · `DataLoader` |
+| `_base.py` | 323 | dtypes, the error specification, `repr` |
+| `_tensor.py` | 1,711 | `Tensor` and autograd |
+| `_ops.py` | 7948 | maths, shapes, `nn.functional` |
+| `_nn.py` | 2,881 | layers, recurrence, transformers |
+| `_optim.py` | 1,000 | optimisers and schedulers |
+| `_fft.py` | 364 | `torch.fft`, `stft`/`istft` |
+| `_data.py` | 355 | `Dataset` and `DataLoader` |
 | `_rnn.py` | 65 | `nn.utils.rnn` |
-| `__init__.py` | 340 | 전부 모으고 `torch` 로 심는 자리 |
+| `__init__.py` | 340 | where everything is gathered and planted as `torch` |
 
-**공개 이름은 안 바뀌었다** — 쪼개기 전후로 197개 그대로다. `import borch` 는
-같은 것을 준다. `borch_webgpu` 도 같은 모양이고 7,863 줄에 일곱 파일이다.
+**The public names did not change** — 197 of them, the same before and after the
+split. `import borch` gives the same thing. `borch_webgpu` has the same shape:
+7,863 lines across seven files.
 
-손으로 옮기지 않았다. 자르는 자리만 정하고 나머지는 스크립트가 했다 — 3천 줄을 사람이
-오려 붙이면 조용히 한 줄이 사라지고, 그건 골든이 잡기 전까지 아무도 모른다.
+It was not moved by hand. Only the cut points were chosen and a script did the
+rest — a person cutting and pasting a file that size quietly loses a line, and
+nobody knows until the golden catches it.
 
-## 어떻게 보증하는가
+## How it is guaranteed
 
-`tests/test_diff.py` 가 **같은 연산을 진짜 torch 와 borch 양쪽에 넣고 숫자를 비교한다.**
-pytest 180개, **코드 커버리지 93%**.
+`tests/test_diff.py` **puts the same operation into real torch and into borch and
+compares the numbers.** 180 pytest cases, **93% code coverage.**
 
 ```bash
 uv run --with pytest --with numpy --with torch pytest tests/
 ```
 
-> **GPU 쪽은 코드 커버리지를 못 잰다.** 브라우저 안에서만 돌아서 `pytest --cov` 가
-> 닿지 않는다. 그쪽에 대해 말할 수 있는 것은 **골든 2991건이 지난다**는 것뿐이고,
-> 그것은 표면 검사이지 줄 검사가 아니다. 두 수를 같은 것처럼 적지 않는다.
+> **Code coverage cannot be measured on the GPU side.** It runs in a browser
+> alone, so `pytest --cov` does not reach it. All that can be said about that side
+> is that **2991 golden cases pass**, and that is a surface check rather than a
+> line check. The two numbers are not written down as though they were the same
+> thing.
 
-이 검사가 첫 실행에서 잡은 것: PyTorch 의 `BatchNorm2d` 는 **같은 forward 안에서 분산을
-두 가지로 쓴다** — 정규화는 편향(ddof=0), `running_var` 갱신은 비편향(ddof=1).
-둘 다 편향으로 두면 출력이 2.6% 어긋난다. 코드를 읽어서는 나오지 않는 종류다.
+What this check caught on its first run: PyTorch's `BatchNorm2d` **uses two
+different variances inside one forward pass** — the biased one (ddof=0) for the
+normalisation and the unbiased one (ddof=1) for updating `running_var`. Biased in
+both places, the output is off by 2.6%. Not the kind of thing that comes out of
+reading the code.
 
-### 초록색이 거짓일 수 있는 일곱 자리
+### Seven places where green can be a lie
 
-표가 커질수록 "몇 건이 지난다" 는 말의 값어치가 떨어진다. **묻지 않은 것은 안 맞는다**
-가 이 저장소에서 반복된 유일한 규칙이고, 아래는 각각 **실제로 물린** 자리다. 새 케이스를
-쓰거나 결함을 쫓을 때 먼저 의심할 곳이다.
+The larger the table grows, the less "N cases pass" is worth. **What is not asked
+is not right** is the one rule this repository has repeated, and each of the
+places below **actually bit.** They are where to look first when writing a new
+case or chasing a defect.
 
 **목록에 들어오려면 틀렸던 케이스를 이름으로 댈 수 있어야 한다.** 지금 일곱이 다
 그렇다 — `norm(p)`·`nn.Softmax()`·`edge::grad::max(동점)` 처럼. 이름을 못 대는 항목은
