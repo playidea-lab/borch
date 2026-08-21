@@ -1,4 +1,4 @@
-"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""A piece of borch, split out. __init__ gathers the public names."""
 
 import collections as _collections
 import math as _math
@@ -24,18 +24,20 @@ from ._ops import (
     nll_loss, no_grad, norm, normalize, pad, prelu, relu, relu6, rms_norm, selu,
     sigmoid, silu, smooth_l1_loss, softmax, softmin, softplus, softshrink, softsign,
     cat, stack, tanh, tanhshrink, zeros,
-    # 손실과 거리.
+    # Losses and distances.
     cosine_embedding_loss, gaussian_nll_loss, hinge_embedding_loss, huber_loss,
     kl_div, margin_ranking_loss, multi_margin_loss, multilabel_margin_loss,
     multilabel_soft_margin_loss, pairwise_distance, pdist, poisson_nll_loss,
     soft_margin_loss, triplet_margin_loss, triplet_margin_with_distance_loss,
-    # 자리 옮기기와 채널째 dropout.
+    # Rearrangement and channel-wise dropout.
     alpha_dropout, channel_shuffle, dropout1d, dropout2d, dropout3d,
     feature_alpha_dropout, pixel_shuffle, pixel_unshuffle,
-    # 창 펴기와 나머지. **`unfold_im2col` 은 이름이 갈려 있다** — `Tensor.unfold` 와
-    # 하는 일이 달라서 모듈 자리를 나눠 쓸 수가 없다(그쪽 주석 참고).
+    # Unfolding windows and the rest. **`unfold_im2col` carries a split name** —
+    # it does a different job from `Tensor.unfold`, so they cannot share the
+    # module slot (see the comment over there).
     amax, bilinear, fold, local_response_norm, rrelu, unfold_im2col,
-    # 이긴 자리를 함께 내는 풀링과, 그 자리로 되돌리는 짝.
+    # The poolings that also give the winning positions, and the partner that
+    # puts values back at them.
     adaptive_max_pool1d_with_indices, adaptive_max_pool2d_with_indices,
     adaptive_max_pool3d_with_indices, max_pool1d_with_indices,
     max_pool2d_with_indices, max_pool3d_with_indices,
@@ -43,23 +45,25 @@ from ._ops import (
     fractional_max_pool2d, fractional_max_pool2d_with_indices,
     fractional_max_pool3d, fractional_max_pool3d_with_indices,
     ctc_loss,
-    # 제자리 활성과 `interpolate` 의 옛 이름들.
+    # In-place activations and `interpolate`'s old names.
     celu_, elu_, hardtanh_, leaky_relu_, relu_, rrelu_, selu_, threshold_,
     upsample, upsample_bilinear, upsample_nearest,
-    # 층이 얹혀 있는 함수들. 식을 한 벌만 둔다.
+    # The functions layers sit on top of. One copy of each formula.
     batch_norm, embedding_bag, gumbel_softmax,
-    # 공간 변환기의 짝.
+    # The spatial transformer's pair.
     affine_grid, grid_sample,
 )
-# **`_wrap` 을 함수 안에서 들여오면 안 된다.** 한 번 그렇게 두었더니
-# `tests/test_alias.py` 가 `sys.modules` 에서 `borch.*` 를 지운 뒤 그 임포트가 다시
-# 돌면서 `_ops` 의 **두 번째 사본**을 만들었고, `Tensor` 클래스가 둘이 되어
-# `isinstance` 가 어긋났다. 값이 object 배열로 나왔는데 그 케이스만 따로 돌리면
-# 통과해서 원인이 한참 멀어 보였다 — 늦은 임포트는 이 저장소에서 그 값을 한다.
+# **`_wrap` must not be imported inside a function.** Left that way once,
+# `tests/test_alias.py` cleared `borch.*` out of `sys.modules` and that import ran
+# again, building **a second copy** of `_ops`; there were then two `Tensor`
+# classes and `isinstance` went wrong. The values came out as an object array and
+# running that case on its own passed, so the cause looked a long way off — a
+# late import costs that much in this repository.
 #
-# **`threshold` 만 이름을 바꿔 들여온다.** `Threshold` 층이 `self.threshold` 라는
-# 속성을 갖는데(torch 가 그 이름을 쓴다), 그러면 `forward` 안에서 같은 이름이 함수와
-# 속성 둘을 가리키게 된다. 이름을 갈라 두면 그 자리가 아예 안 생긴다.
+# **`threshold` alone is imported under a different name.** The `Threshold` layer
+# has an attribute called `self.threshold` (torch uses that name), and then the
+# same name inside `forward` points at both the function and the attribute.
+# Splitting the names means that place never arises.
 from ._ops import threshold as threshold_fn
 
 # ================================================================ nn
@@ -72,11 +76,12 @@ nn = _NN()
 
 
 class Parameter(Tensor):
-    """학습 대상. `nn.Linear` 가 만드는 가중치는 처음부터 requires_grad 다.
+    """What training targets. The weights `nn.Linear` makes carry requires_grad
+    from the start.
 
-    **`requires_grad` 를 받는다.** torch 에 있는 인자인데 여기 없어서
-    `nn.Parameter(t, requires_grad=False)` 가 `TypeError` 로 멈췄다 — 얼려 두는
-    가중치를 만들 때 교재가 쓰는 꼴이다.
+    **It takes `requires_grad`.** The argument exists in torch and was missing
+    here, so `nn.Parameter(t, requires_grad=False)` stopped with a `TypeError` —
+    the form textbooks use when making a frozen weight.
     """
 
     def __init__(self, data, requires_grad=True):
@@ -89,18 +94,21 @@ class Module:
     def __init__(self):
         self._modules = {}
         self._params = {}
-        self._buffers = {}          # 학습은 안 하지만 저장·복원되는 값 (running_mean 등)
+        self._buffers = {}          # values that are not trained and are saved and restored (running_mean and the like)
         self.training = True
 
     def register_buffer(self, name, value, persistent=True):
-        """torch 의 `register_buffer`. `state_dict` 에 들어가고 학습 대상은 아니다.
+        """torch's `register_buffer`. It goes into `state_dict` and is not
+        trained.
 
-        BatchNorm 의 running_mean 이 여기 들어간다 — 빠뜨리면 저장했다 불러왔을 때
-        **평가 모드가 초기값으로 돌아가고**, 학습은 멀쩡해 보이는데 추론만 틀린다.
+        BatchNorm's running_mean goes in here — left out, saving and loading
+        sends **evaluation mode back to the initial values**, and training looks
+        fine while inference alone is wrong.
 
-        `persistent=False` 면 `state_dict` 에서 빠진다. 캐시처럼 다시 만들 수 있는
-        값을 체크포인트에 안 싣는 자리이고, **이 인자를 무시하면 남의 체크포인트와
-        열쇠가 어긋난다** — 받는 쪽이 strict 로 읽으면 그대로 거절이다.
+        With `persistent=False` it stays out of `state_dict`. This is where a
+        value that can be rebuilt, like a cache, is kept out of the checkpoint,
+        and **ignoring the argument makes the keys disagree with somebody else's
+        checkpoint** — read strictly on the receiving side, that is a refusal.
         """
         self.__dict__.setdefault("_buffers", {})[name] = value
         if not persistent:
@@ -119,11 +127,13 @@ class Module:
         object.__setattr__(self, name, value)
 
     def named_buffers(self, prefix="", persistent_only=False):
-        """버퍼를 이름과 함께. **`persistent_only` 는 저장 쪽에서만 켠다.**
+        """The buffers with their names. **`persistent_only` is turned on by the
+        saving side alone.**
 
-        torch 의 `named_buffers()` 는 `persistent=False` 인 것도 낸다 — 그것은 "저장"
-        목록이 아니라 "버퍼" 목록이다. 저장에서 빼는 것은 `state_dict` 의 일이라
-        여기서 기본으로 걸러 버리면 두 목록이 하나로 뭉개진다.
+        torch's `named_buffers()` produces the `persistent=False` ones too — it is
+        a list of buffers rather than a list of what gets saved. Keeping them out
+        of the save is `state_dict`'s job, and filtering here by default mashes
+        the two lists into one.
         """
         skip = self.__dict__.get("_nonpersistent", set()) if persistent_only else ()
         for n, b in self.__dict__.get("_buffers", {}).items():
@@ -174,17 +184,20 @@ class Module:
 
     def state_dict(self):
         out = {name: Tensor(p.data.copy()) for name, p in self.named_parameters()}
-        # **저장에서는 `persistent=False` 를 뺀다.** 그것이 그 인자의 뜻이다.
+        # **The save leaves out `persistent=False`.** That is what the argument
+        # means.
         for name, buf in self.named_buffers(persistent_only=True):
-            # 버퍼는 두 모양으로 들어온다 — 층이 등록한 numpy 값과 **사용자가
-            # `register_buffer` 로 넣은 텐서**. 저장 형식은 텐서 하나다.
+            # A buffer arrives in two shapes — the numpy value a layer
+            # registered and **a tensor the user put in through
+            # `register_buffer`.** The save format is a tensor throughout.
             out[name] = Tensor(buf.data.copy() if isinstance(buf, Tensor)
                                else _np.array(buf, copy=True))
         return out
 
     def load_state_dict(self, state, strict=True):
         own = dict(self.named_parameters())
-        # 받을 수 있는 것은 버퍼 전부지만, **없다고 나무랄 것은 저장되는 것뿐**이다.
+        # Every buffer can be received, and **only the saved ones may be
+        # complained about as missing.**
         buffers = dict(self.named_buffers())
         saved = dict(self.named_buffers(persistent_only=True))
         missing = [k for k in list(own) + list(saved) if k not in state]
@@ -200,9 +213,10 @@ class Module:
                 *path, leaf = name.split(".")
                 for part in path:
                     holder = holder._modules[part]
-                # **들어 있던 것과 같은 모양으로 되돌린다.** 텐서로 등록한 버퍼를
-                # numpy 로 바꿔치기하면 `self.mask.unsqueeze(0)` 같은 줄이 불러온
-                # 뒤에만 터진다 — 저장 전에는 되던 코드가 저장 후에 안 된다.
+                # **Restored in the shape it went in as.** Swapping a buffer
+                # registered as a tensor for numpy makes a line like
+                # `self.mask.unsqueeze(0)` blow up only after loading — code that
+                # ran before the save stops running after it.
                 keep = isinstance(buffers[name], Tensor)
                 holder.register_buffer(
                     leaf,
@@ -227,9 +241,11 @@ class Module:
         return self.forward(*a, **k)
 
     def __repr__(self):
-        # **자식이 여러 줄이면 그 줄들도 들여쓴다.** 한 줄만 들여썼더니 컨테이너가
-        # 컨테이너를 담을 때(`ModuleList` 안의 `Sequential`) 안쪽이 왼쪽 끝에 붙어
-        # torch 와 글자가 갈렸다 — 값은 멀쩡하고 그림만 틀리는 종류다.
+        # **A child spanning several lines has all of them indented.** Indenting
+        # the first line only put the inner one hard against the left margin when
+        # a container held a container (a `Sequential` inside a `ModuleList`) and
+        # the characters diverged from torch — the kind where the values are fine
+        # and the picture is wrong.
         parts = []
         for name, mod in self._modules.items():
             head, *rest = repr(mod).splitlines()
@@ -244,10 +260,12 @@ class Linear(Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        # 진짜 torch 와 같은 초기화 (Kaiming uniform 계열): U(-1/√fan_in, 1/√fan_in)
-        # **입력이 0 일 수 있다.** `AdaptiveLogSoftmaxWithLoss` 의 꼬리 차원이
-        # `in_features // div_value**(i+1)` 이라 0 으로 떨어진다 — torch 는 빈 텐서를
-        # 만들고 "초기화할 것이 없다" 며 넘어간다. 여기서는 √0 으로 나눠 멈췄다.
+        # Real torch's initialisation (the Kaiming uniform family):
+        # U(-1/√fan_in, 1/√fan_in)
+        # **The input can be 0.** `AdaptiveLogSoftmaxWithLoss`'s tail dimension is
+        # `in_features // div_value**(i+1)`, which falls to 0 — torch builds an
+        # empty tensor and moves on with nothing to initialise. This divided by
+        # √0 and stopped.
         bound = 1.0 / _math.sqrt(in_features) if in_features else 0.0
         self.weight = Parameter(_rng.uniform(-bound, bound, (out_features, in_features)).astype(_DEFAULT_DTYPE))
         self.bias = Parameter(_rng.uniform(-bound, bound, (out_features,)).astype(_DEFAULT_DTYPE)) if bias else None
@@ -257,8 +275,10 @@ class Linear(Module):
         return out + self.bias if self.bias is not None else out
 
     def __repr__(self):
-        # `bias=` 까지 찍는다 — torch 가 그렇고, 게으른 층이 굳은 뒤의 글자를 골든이
-        # 묻기 시작하면서 드러났다. 편향이 있는지는 `state_dict` 열쇠를 바꾸는 정보다.
+        # `bias=` is printed too — torch does that, and it surfaced once the
+        # golden began asking about the characters of a lazy layer after it
+        # materialises. Whether there is a bias is information that changes the
+        # `state_dict` keys.
         return (f"Linear(in_features={self.in_features}, "
                 f"out_features={self.out_features}, "
                 f"bias={getattr(self, 'bias', None) is not None})")
@@ -289,10 +309,12 @@ class Flatten(Module):
 
 
 class Identity(Module):
-    """**아무 인자나 받는다.** torch 가 그렇다(실측) — `Identity(64, unused=True)`.
+    """**It takes any arguments.** torch does that (measured) —
+    `Identity(64, unused=True)`.
 
-    자리 채우개로 쓰는 층이라, 쓰는 쪽은 갈아 끼운 층의 인자를 그대로 둔 채 이름만
-    바꾼다. 인자를 거절하면 그 줄에서 멈춘다.
+    It is a layer used as a placeholder, so people swap the name and leave the
+    replaced layer's arguments where they are. Refusing the arguments stops at
+    that line.
     """
 
     def __init__(self, *args, **kw):
@@ -334,10 +356,10 @@ class Sequential(Module):
 
 
 class ModuleList(Module):
-    """층 목록. **번호가 곧 이름이다** — `layers.0.weight` 처럼.
+    """A list of layers. **The index is the name** — as in `layers.0.weight`.
 
-    `append` 가 없으면 층 수가 정해지지 않은 모델을 쓸 방법이 없다. torch 코드에서
-    가장 흔한 모양이 그것이다:
+    Without `append` there is no way to write a model whose layer count is not
+    fixed. That is the commonest shape in torch code:
 
         self.layers = nn.ModuleList()
         for _ in range(depth):
@@ -351,10 +373,11 @@ class ModuleList(Module):
             self._modules[str(i)] = m
 
     def _renumber(self):
-        """`_modules` 를 목록 순서대로 다시 매긴다.
+        """Renumber `_modules` in list order.
 
-        `insert` 가 있으면 번호가 밀리므로 통째로 다시 쓴다. 밀린 자리만 고치면
-        중간에 옛 이름이 남고, 그것은 `state_dict` 열쇠로 새어 나온다.
+        With `insert` the indices shift, so they are rewritten wholesale. Fixing
+        only the shifted positions leaves an old name in the middle, and that
+        leaks out as a `state_dict` key.
         """
         self._modules.clear()
         for i, m in enumerate(self._layers):
@@ -393,15 +416,17 @@ class ModuleList(Module):
 
 
 def _ordered(mapping):
-    """torch 의 순서 규칙. **평범한 dict 는 열쇠를 정렬해서 넣는다.**
+    """torch's ordering rule. **A plain dict has its keys sorted on the way in.**
 
-    `OrderedDict` 나 같은 종류의 컨테이너로 주면 넣은 순서를 지키고, 그냥 `dict`
-    로 주면 정렬한다. torch 가 그렇게 하는데(옛 파이썬의 dict 가 순서를 안 지켰다),
-    안 맞추면 `named_parameters` 의 순서가 갈리고 그것이 곧 `state_dict` 의 순서다.
+    Given an `OrderedDict` or a container of that kind it keeps the insertion
+    order, and given a plain `dict` it sorts. torch does that (dicts in old
+    Python did not keep their order),
+    Unmatched, `named_parameters`'s order diverges, and that order is
+    `state_dict`'s.
 
-    골든이 이 자리를 잡았다 — `{"w": …, "b": …}` 를 넣었더니 torch 는 `ws.b ws.w`
-    를 내고 우리는 `ws.w ws.b` 를 냈다. 두 열쇠를 알파벳 순으로 골랐으면 우연히
-    통과했을 자리다.
+    The golden caught this place — given `{"w": …, "b": …}`, torch produced
+    `ws.b ws.w` and this produced `ws.w ws.b`. Had the two keys been chosen in
+    alphabetical order it would have passed by accident.
     """
     items = dict(mapping or {})
     if isinstance(mapping, (ModuleDict, ParameterDict, _collections.OrderedDict)):
@@ -410,9 +435,10 @@ def _ordered(mapping):
 
 
 class ModuleDict(Module):
-    """이름 붙은 층 묶음. 갈래를 이름으로 고르는 모델이 쓴다.
+    """A named group of layers. Used by models that select a branch by name.
 
-    번호 대신 준 이름이 그대로 `state_dict` 열쇠가 된다 — `blocks.down.weight`.
+    The name given instead of an index becomes the `state_dict` key —
+    `blocks.down.weight`.
     """
 
     def __init__(self, mods=None):
@@ -451,14 +477,16 @@ class ModuleDict(Module):
 
 
 class ParameterList(Module):
-    """`Parameter` 목록. **이것이 없으면 대신할 방법이 없다.**
+    """A list of `Parameter`s. **Without it there is no way around.**
 
-    맨 리스트에 `Parameter` 를 담아 속성으로 붙이면 `Module.__setattr__` 이 그것을
-    `Parameter` 로도 `Module` 로도 못 알아본다. 어느 목록에도 안 들어가고,
-    `parameters()` 가 안 내놓고, 옵티마이저가 못 본다 — 그런데 **손실은 내려간다.**
-    남은 파라미터가 대신 맞추기 때문이다. 예외도 경고도 없다.
+    Putting `Parameter`s in a bare list and attaching it as an attribute leaves
+    `Module.__setattr__` unable to recognise it as either a `Parameter` or a
+    `Module`. It enters no list, `parameters()` does not produce it and the
+    optimiser cannot see it — and **the loss goes down anyway**, because the
+    remaining parameters compensate. No exception and no warning.
 
-    torch 도 똑같이 못 알아보고, 그래서 torch 에 이 클래스가 있다.
+    torch fails to recognise it in exactly the same way, which is why torch has
+    this class.
     """
 
     def __init__(self, params=()):
@@ -493,7 +521,7 @@ class ParameterList(Module):
 
 
 class ParameterDict(Module):
-    """이름 붙은 `Parameter` 묶음. `ParameterList` 와 같은 이유로 있다."""
+    """A named group of `Parameter`s. It exists for `ParameterList`'s reason."""
 
     def __init__(self, params=None):
         super().__init__()
@@ -530,24 +558,28 @@ class ParameterDict(Module):
         return self
 
 
-# **접는 방식은 손실의 일부다.** `_ops._reduce` 가 그 규칙을 한 자리에 두고 열셋이
-# 그것을 쓰는데, **제일 흔한 다섯이 안 쓰고 있었다** — 여기 넷과 `NLLLoss` 다.
-# `.mean()` 이 박혀 있어서 `reduction=` 을 주면 `TypeError` 로 멈췄다.
+# **How it folds is part of the loss.** `_ops._reduce` keeps that rule in one
+# place and thirteen use it, and **the five commonest were not** — the four here
+# and `NLLLoss`. A `.mean()` was baked in, so passing `reduction=` stopped with a
+# `TypeError`.
 #
-# 뒤집혀 있다는 것이 실마리였다. `cosine_embedding`·`multi_margin`·`triplet` 처럼
-# **드문 손실은 전부** `reduction` 을 받는데 `MSELoss`·`CrossEntropyLoss` 가 안 받았다.
-# 나중에 쓴 것이 torch 서명을 따랐고 처음 쓴 것이 안 고쳐진 것이다. 골든이 못 본
-# 이유는 튜토리얼이 기본값 `mean` 만 쓰기 때문이다.
+# Being upside down was the clue. **Every rare loss** — `cosine_embedding`,
+# `multi_margin`, `triplet` — took `reduction`, and `MSELoss` and
+# `CrossEntropyLoss` did not. What was written later followed torch's signature
+# and what was written first went unfixed. The golden did not see it because
+# tutorials use the default `mean` only.
 class _Loss(Module):
-    """`reduction` 을 한 번만 받아 둔다. 손실마다 적으면 자리마다 어긋난다.
+    """`reduction` is accepted in one place. Written per loss, the places
+    diverge.
 
-    **`weight`·`pos_weight` 는 여기서 거절한다.** torch 는 그 둘을 버퍼로 등록하고
-    `state_dict` 에 실어 보내는데(손실도 체크포인트를 갖는다), 무엇보다 `mean` 의
-    나눗셈이 달라진다 — 표본 수가 아니라 **가중치의 합**으로 나눈다. 받아만 두고
-    안 쓰면 손실 값이 조용히 달라지고, 그것은 학습률을 잘못 고르게 만든다.
+    **`weight` and `pos_weight` are refused here.** torch registers the two as
+    buffers and ships them in `state_dict` (a loss has a checkpoint too), and
+    above all the division in `mean` changes — it divides by **the sum of the
+    weights** rather than by the sample count. Accepted and unused, the loss
+    value quietly changes, and that leads to choosing the wrong learning rate.
 
-    거절 문구를 쓰는 이유는 `TypeError` 가 "이 라이브러리에 없다" 를 안 말해 주기
-    때문이다 — 오타를 냈을 때와 같은 화면이다.
+    A refusal message is used because a `TypeError` does not say "absent from
+    this library" — it is the same screen as a typo.
     """
 
     def __init__(self, reduction="mean", *, weight=None, pos_weight=None):
@@ -566,7 +598,7 @@ class MSELoss(_Loss):
 
 class BCEWithLogitsLoss(_Loss):
     def forward(self, logits, target):
-        # log(1+e^-|x|) + max(x,0) - x*t  — 큰 값에서도 안전한 형태
+        # log(1+e^-|x|) + max(x,0) - x*t  — the form that stays safe at large values
         x, t = logits, target
         return _reduce(relu(x) - x * t + (1 + (-(x.abs())).exp()).log(),
                        self.reduction)
@@ -613,10 +645,12 @@ class Conv2d(Module):
 
 
 class MaxPool2d(Module):
-    """**`return_indices` 를 켜면 답이 둘이 된다** — 값과 이긴 자리.
+    """**With `return_indices` on there are two answers** — the values and the
+    winning positions.
 
-    `MaxUnpool2d` 에 그 자리표를 넘겨 되돌린다. 자동 부호기(autoencoder)에서 흔한
-    짝이고, 자리표 없이는 되돌릴 수가 없다 — 어느 칸이 이겼는지가 값 안에 없다.
+    Those positions are handed to `MaxUnpool2d` to undo it. A common pair in an
+    autoencoder, and without the positions it cannot be undone — which cell won
+    is not in the values.
     """
 
     def __init__(self, kernel_size, stride=None, return_indices=False):
@@ -630,7 +664,8 @@ class MaxPool2d(Module):
 
 
 class Embedding(Module):
-    """번호를 벡터로 바꾸는 학습 가능한 표. 8장에서 '번호를 매기면 안 된다'고 한 그 대안."""
+    """A trainable table turning an index into a vector. The alternative chapter
+    8 offers to "do not just number them"."""
 
     def __init__(self, num_embeddings, embedding_dim):
         super().__init__()
@@ -655,14 +690,17 @@ class Embedding(Module):
 
 
 class LayerNorm(Module):
-    """**`normalized_shape` 는 접는 축의 개수를 정한다** — 마지막 축 하나가 아니다.
+    """**`normalized_shape` decides how many axes are folded** — not the last
+    axis alone.
 
-    `LayerNorm(4)` 로만 재면 이 갈림이 안 보인다. 축이 하나일 때는 "마지막 축을
-    접는다" 와 같은 답이기 때문이고, 실제로 그렇게 적혀 있었다. `LayerNorm((3, 4))`
-    는 뒤 두 축을 **한 덩어리로** 접는다 — 평균과 분산이 12 칸에서 나온다.
+    Measured with `LayerNorm(4)` only, this divergence is invisible. With one
+    axis it gives the same answer as "fold the last axis", and that is what was
+    written. `LayerNorm((3, 4))` folds the last two axes **as one block** — the
+    mean and the variance come from 12 cells.
 
-    `elementwise_affine` 도 받는다. 끄면 파라미터가 없어지고, 그러면 `state_dict`
-    열쇠가 통째로 사라진다 — 그것은 값이 아니라 배선의 이야기다.
+    `elementwise_affine` is taken too. Turned off the parameters disappear, and
+    then the `state_dict` keys vanish wholesale — a story about the wiring rather
+    than about a value.
     """
 
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
@@ -680,10 +718,12 @@ class LayerNorm(Module):
 
     def forward(self, x):
         dims = len(self.normalized_shape)
-        # 뒤 `dims` 개 축을 하나로 접어 평균·분산을 한 번에 낸다. 축마다 따로 접으면
-        # 같은 수가 안 나온다 — 평균의 평균은 평균이 아니다.
+        # The last `dims` axes are folded into one and the mean and variance
+        # come out together. Folded axis by axis the numbers differ — the mean of
+        # means is not the mean.
         shape = tuple(int(n) for n in x.shape)
-        # **모양이 안 맞으면 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
+        # **A mismatched shape stops.** Being lenient quietly folds the wrong
+        # axis.
         if shape[len(shape) - dims:] != self.normalized_shape:
             raise RuntimeError(_like_torch(
                 f"normalized_shape={list(self.normalized_shape)} but the input is "
@@ -706,7 +746,8 @@ class LayerNorm(Module):
 
 
 class BatchNorm2d(Module):
-    """학습 중에는 이번 배치로, 평가 때는 모아둔 값으로 — 6장에서 eval() 이 바꾸는 그 층."""
+    """This batch during training and the accumulated values during evaluation —
+    the layer eval() changes in chapter 6."""
 
     def __init__(self, num_features, eps=1e-5, momentum=0.1):
         super().__init__()
@@ -718,11 +759,14 @@ class BatchNorm2d(Module):
         self.register_buffer("num_batches_tracked", 0)
 
     def forward(self, x):
-        # **계산은 `F.batch_norm` 이 한다.** 층과 함수가 각자 적으면 언젠가 갈리고,
-        # 갈리는 자리가 running 통계라 학습은 멀쩡하고 평가만 틀린다.
+        # **`F.batch_norm` does the computation.** With the layer and the
+        # function each writing their own they eventually diverge, and the place
+        # they diverge is the running statistics, so training is fine and
+        # evaluation alone is wrong.
         #
-        # 랭크를 안 따진다 — 채널 축만 남기고 나머지를 전부 줄이므로 (N,C,H,W) 도
-        # (N,C,D,H,W) 도 같은 코드로 돈다. `BatchNorm3d` 가 그대로 물려받는다.
+        # The rank is not examined — everything but the channel axis is reduced,
+        # so (N,C,H,W) and (N,C,D,H,W) run through the same code. `BatchNorm3d`
+        # inherits it unchanged.
         out = batch_norm(x, self.running_mean, self.running_var,
                          self.weight, self.bias, self.training,
                          self.momentum, self.eps)
@@ -734,14 +778,18 @@ class BatchNorm2d(Module):
 
 
 class _RNNBase(Module):
-    """RNN·LSTM·GRU 의 공통 부분 — 파라미터 만들기와 층·시간 루프.
+    """What RNN, LSTM and GRU share — building the parameters and the layer and
+    time loops.
 
-    파라미터 이름을 torch 와 같게 둔다(`weight_ih_l0` …). 이름이 맞아야 `state_dict` 키가
-    맞고, 체크포인트가 양쪽을 오간다.
+    The parameter names match torch's (`weight_ih_l0` and the rest). Matching
+    names make the `state_dict` keys match, and a checkpoint crosses between the
+    two.
 
-    시간 방향은 파이썬 반복문이다. 순환은 앞을 끝내야 뒤를 볼 수 있어서(30장) 병렬화가 안 되고,
-    그 느림이 곧 트랜스포머가 나온 이유다. 다만 **입력 쪽 곱은 h 에 안 걸리므로**
-    시간 전체를 한 번에 계산해 둔다 — 반복문 안에는 은닉 쪽 곱만 남는다.
+    Time is a Python loop. Recurrence cannot be parallelised because the earlier
+    step has to finish before the later one is visible (chapter 30), and that
+    slowness is why the transformer exists. Since **the input-side multiplication
+    does not involve h**, though, the whole of time is computed at once — only
+    the hidden-side multiplication is left inside the loop.
     """
 
     gates = 1
@@ -773,7 +821,8 @@ class _RNNBase(Module):
                 getattr(self, f"bias_ih_l{layer}", None), getattr(self, f"bias_hh_l{layer}", None))
 
     def _run(self, x, init):
-        """(출력, 층별 마지막 상태 목록). init 은 층별 초기 상태를 주는 함수."""
+        """(output, a list of per-layer final states). init is the function
+        supplying the per-layer initial state."""
         if self.batch_first:
             x = x.transpose(0, 1)                       # (N,T,I) → (T,N,I)
         T, N = x.data.shape[0], x.data.shape[1]
@@ -782,7 +831,7 @@ class _RNNBase(Module):
         finals = []
         for layer in range(self.num_layers):
             w_ih, w_hh, b_ih, b_hh = self._weights(layer)
-            pre = layer_input @ w_ih.transpose(0, 1)     # (T, N, gates*H) — h 와 무관
+            pre = layer_input @ w_ih.transpose(0, 1)     # (T, N, gates*H) — independent of h
             if self.has_bias:
                 pre = pre + b_ih
             state = init(layer, N)
@@ -808,7 +857,8 @@ class _RNNBase(Module):
 
 
 class RNN(_RNNBase):
-    """h_t = tanh(W_ih·x_t + b_ih + W_hh·h_{t-1} + b_hh) — 29장이 가르치는 그것."""
+    """h_t = tanh(W_ih·x_t + b_ih + W_hh·h_{t-1} + b_hh) — what chapter 29
+    teaches."""
 
     def __init__(self, *a, nonlinearity="tanh", **k):
         if nonlinearity not in ("tanh", "relu"):
@@ -833,14 +883,15 @@ class RNN(_RNNBase):
 
 
 class LSTM(_RNNBase):
-    """게이트 넷으로 **무엇을 잊고 무엇을 남길지** 배운다.
+    """Four gates learn **what to forget and what to keep.**
 
-        i = σ(...)  잊지 말고 넣을 것      f = σ(...)  버릴 것
-        g = tanh(...) 넣을 값             o = σ(...)  내보낼 것
+        i = σ(...)  what to take in       f = σ(...)  what to drop
+        g = tanh(...) the value to take in  o = σ(...)  what to send out
         c' = f·c + i·g                   h' = o·tanh(c')
 
-    `weight_ih_l0` 는 (4H, I) 이고 행 순서가 **i, f, g, o** 다. torch 와 같게 둬야
-    체크포인트가 오간다 — 순서를 바꾸면 값은 그럴듯한데 학습이 안 된다.
+    `weight_ih_l0` is (4H, I) and the row order is **i, f, g, o.** It has to
+    match torch for a checkpoint to cross — reordered, the values are plausible
+    and training does not happen.
     """
 
     gates = 4
@@ -870,14 +921,14 @@ class LSTM(_RNNBase):
 
 
 class GRU(_RNNBase):
-    """게이트 셋. LSTM 보다 단순하고 대개 비슷하게 동작한다.
+    """Three gates. Simpler than LSTM and usually behaves much the same.
 
-        r = σ(...)  과거를 얼마나 볼까      z = σ(...)  얼마나 갈아탈까
+        r = σ(...)  how much of the past to look at   z = σ(...)  how much to switch over
         n = tanh(W_in·x + b_in + r·(W_hn·h + b_hn))
         h' = (1-z)·n + z·h
 
-    n 게이트에서 **r 이 편향까지 포함한 은닉 항에 곱해진다** — 편향을 밖에 두면
-    값이 미세하게 어긋나고, 그건 눈에 안 띈다.
+    In the n gate **r multiplies the hidden term including its bias** — keeping
+    the bias outside makes the values slightly off, and that goes unnoticed.
     """
 
     gates = 3
@@ -904,14 +955,18 @@ class GRU(_RNNBase):
 
 
 class RNNCellBase(Module):
-    """되풀이의 **한 걸음.** 시간 루프를 손으로 적고 싶은 코드가 이것을 부른다.
+    """**One step** of the recurrence. Code that wants to write the time loop by
+    hand calls this.
 
-    **이름이 층 쪽과 다르다.** 층은 `weight_ih_l0` 처럼 층 번호를 붙이고 셀은
-    `weight_ih` 다 — 셀에는 층이 없기 때문이다. `state_dict` 열쇠가 그 이름이므로
-    틀리면 체크포인트가 안 맞는다.
+    **The names differ from the layer's.** A layer attaches a layer index, as in
+    `weight_ih_l0`, and a cell is `weight_ih` — because a cell has no layers. The
+    `state_dict` keys are those names, so getting them wrong means a checkpoint
+    does not match.
 
-    게이트 수만 다르고 나머지는 같다. 한 걸음 식은 `_RNNBase` 쪽 것을 그대로 쓴다 —
-    두 벌로 적으면 게이트 순서가 갈리는 날이 오고, 그때 모양은 같고 값만 틀린다.
+    Only the gate count differs and the rest is the same. The one-step formula is
+    `_RNNBase`'s, used as it is — written as two copies, the day comes when the
+    gate order diverges, and then the shapes match and only the values are
+    wrong.
     """
 
     gates = 1
@@ -970,7 +1025,8 @@ class RNNCell(RNNCellBase):
 
 
 class GRUCell(RNNCellBase):
-    """게이트 셋. **`weight_ih` 안의 순서가 `r, z, n` 이다** — 바꾸면 값만 갈린다."""
+    """Three gates. **The order inside `weight_ih` is `r, z, n`** — reordered,
+    only the values diverge."""
 
     gates = 3
 
@@ -988,10 +1044,11 @@ class GRUCell(RNNCellBase):
 
 
 class LSTMCell(RNNCellBase):
-    """게이트 넷. **혼자 둘을 돌려준다** — `(h, c)` 다.
+    """Four gates. **The only one that returns two things** — `(h, c)`.
 
-    셋을 한 모양으로 두면 기억 칸이 사라지고, 그러면 값은 나오는데 학습이 안 된다.
-    `weight_ih` 안의 순서는 `i, f, g, o` 다.
+    Forcing the three into one shape loses the memory cell, and then values come
+    out and training does not happen. The order inside `weight_ih` is
+    `i, f, g, o`.
     """
 
     gates = 4
@@ -1014,25 +1071,29 @@ nn.RNNCellBase = RNNCellBase
 nn.RNNCell = RNNCell
 nn.GRUCell = GRUCell
 nn.LSTMCell = LSTMCell
-# `RNNBase` 는 `RNN`·`LSTM`·`GRU` 의 부모다. torch 에서도 직접 못 만든다(ValueError).
+# `RNNBase` is the parent of `RNN`, `LSTM` and `GRU`. It cannot be constructed
+# directly in torch either (ValueError).
 nn.RNNBase = _RNNBase
 
 
-# ---------------------------------------------------------------- 최상위 순환
+# ------------------------------------------------------- top-level recurrence
 #
-# **층과 같은 계산인데 가중치를 목록으로 받는다.** `torch.lstm(x, (h,c), params, …)`
-# 이 그 꼴이고, 층이 안에서 부르는 것이 이것이다.
+# **The layer's computation, taking the weights as a list.**
+# `torch.lstm(x, (h,c), params, …)` is the form, and this is what the layer calls
+# inside.
 #
-# **층을 지어 가중치를 갈아 끼운다.** 되풀이 식을 여기서 다시 적으면 게이트 순서가
-# 갈리는 날이 오고, 그때 모양은 같고 값만 틀린다 — 셀 쪽 docstring 이 이미 같은
-# 이유로 층의 식을 빌려 쓴다. 지어 두면 파라미터가 한 벌 낭비되지만, 그것은 값이
-# 아니라 시간이다.
+# **A layer is built and its weights swapped out.** Writing the recurrence
+# formula again here means the day comes when the gate order diverges, and then
+# the shapes match and only the values are wrong — the cell's docstring already
+# borrows the layer's formula for the same reason. Building it wastes one set of
+# parameters, and that is time rather than a value.
 
 def _install_weights(mod, params, num_layers, has_biases):
-    """평평한 가중치 목록을 층의 이름표 자리에 꽂는다.
+    """Plug a flat list of weights into the layer's named slots.
 
-    차례는 **층마다 `[w_ih, w_hh, b_ih, b_hh]`** 다(실측). 편향이 없으면 둘씩이다.
-    `Parameter` 로 감싸지 않는다 — 부르는 쪽이 준 텐서로 기울기가 그대로 가야 한다.
+    The order is **`[w_ih, w_hh, b_ih, b_hh]` per layer** (measured). With no bias
+    it is two per layer. They are not wrapped in `Parameter` — the gradient has
+    to reach the tensors the caller handed over, unchanged.
     """
     per = 4 if has_biases else 2
     want = per * num_layers
@@ -1052,11 +1113,12 @@ def _install_weights(mod, params, num_layers, has_biases):
 
 def _rnn_top(cls, x, hx, params, has_biases, num_layers, dropout, train,
              bidirectional, batch_first, **kw):
-    """최상위 순환 넷의 공통 몸통.
+    """The body the four top-level recurrent ones share.
 
-    **양방향과 층간 드롭아웃은 거절한다.** 우리 층에 그 둘이 없어서다 — 여기서
-    한 방향만 돌려주면 모양이 절반이라 시끄럽게 걸리겠지만, 드롭아웃 쪽은 값이
-    그럴듯한 채로 갈린다(정칙화가 안 걸린 학습). 둘 다 여기서 멈춘다.
+    **Bidirectionality and inter-layer dropout are refused.** Our layers have
+    neither — handing back one direction here would be caught loudly because the
+    shape is half, and the dropout side would diverge with plausible values
+    (training with no regularisation applied). Both stop here.
     """
     if bidirectional:
         _unsupported("bidirectional recurrence (bidirectional=True)")
@@ -1072,8 +1134,9 @@ def _rnn_top(cls, x, hx, params, has_biases, num_layers, dropout, train,
 
 def lstm(input, hx, params, has_biases, num_layers, dropout, train,      # noqa: A002
          bidirectional, batch_first=False):
-    """`(출력, h_n, c_n)` — **셋을 편다.** 층 쪽은 `(출력, (h, c))` 로 묶는데
-    최상위는 안 묶는다(실측). 묶은 채로 주면 받는 쪽의 풀기가 한 칸 어긋난다."""
+    """`(output, h_n, c_n)` — **all three spread.** The layer groups them as
+    `(output, (h, c))` and the top level does not (measured). Handed over
+    grouped, the caller's unpacking is off by one."""
     out, (h, c) = _rnn_top(LSTM, input, hx, params, has_biases, num_layers,
                            dropout, train, bidirectional, batch_first)
     return out, h, c
@@ -1098,7 +1161,8 @@ def rnn_relu(input, hx, params, has_biases, num_layers, dropout, train,  # noqa:
 
 
 def _cell_top(cls, x, hx, w_ih, w_hh, b_ih, b_hh, **kw):
-    """칸 넷의 공통 몸통. 층 쪽과 달리 이름에 층 번호가 없다."""
+    """The body the four cells share. Unlike the layers, the names carry no
+    layer index."""
     hidden = w_ih.data.shape[0] // cls.gates
     cell = cls(w_ih.data.shape[1], hidden, bias=b_ih is not None, **kw)
     cell.weight_ih, cell.weight_hh = w_ih, w_hh
@@ -1108,7 +1172,7 @@ def _cell_top(cls, x, hx, w_ih, w_hh, b_ih, b_hh, **kw):
 
 
 def lstm_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):              # noqa: A002
-    """한 걸음. `nn.LSTMCell` 과 **같은 값**이다(실측)."""
+    """One step. **The same value** as `nn.LSTMCell` (measured)."""
     return _cell_top(LSTMCell, input, tuple(hx), w_ih, w_hh, b_ih, b_hh)
 
 
@@ -1127,11 +1191,12 @@ def rnn_relu_cell(input, hx, w_ih, w_hh, b_ih=None, b_hh=None):         # noqa: 
 
 
 class MultiheadAttention(Module):
-    """45일차에 짠 어텐션을 여러 관점으로 나눈 것.
+    """The attention written on day 45, split across several perspectives.
 
-    torch 는 Q·K·V 의 가중치를 **하나로 묶어** `in_proj_weight` (3E, E) 에 담는다 —
-    행렬곱을 세 번이 아니라 한 번 하려는 것이고, 그래서 체크포인트도 그 모양이다.
-    나눠 들면 값은 같아도 `state_dict` 가 안 맞는다.
+    torch keeps the Q, K and V weights **bundled into one**, in
+    `in_proj_weight` (3E, E) — so that the matmul happens once rather than three
+    times, and so a checkpoint takes that shape too. Carried separately the
+    values match and the `state_dict` does not.
     """
 
     def __init__(self, embed_dim, num_heads, bias=True, batch_first=False):
@@ -1153,8 +1218,9 @@ class MultiheadAttention(Module):
                 key_padding_mask=None, average_attn_weights=True):
         key = query if key is None else key
         value = query if value is None else value
-        # **함수 꼴은 길이가 앞이다.** `batch_first` 면 여기서 뒤집어 넘긴다 —
-        # 계산은 `multi_head_attention_forward` 한 벌만 둔다.
+        # **The function form puts the length first.** With `batch_first` it is
+        # flipped here before being handed over — the computation is kept as one
+        # copy in `multi_head_attention_forward`.
         if self.batch_first:
             query, key, value = (t.transpose(0, 1) for t in (query, key, value))
         out, weights = multi_head_attention_forward(
@@ -1173,21 +1239,23 @@ class MultiheadAttention(Module):
 
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                                  is_causal=False, scale=None):
-    """어텐션의 알맹이. **`MultiheadAttention` 이 안에서 하던 계산을 이름으로 낸다.**
+    """The core of attention. **The computation `MultiheadAttention` was doing
+    inside, exposed under a name.**
 
-    층은 있는데 이 함수가 없었다. 층을 안 쓰고 어텐션을 손으로 짜는 코드가 이 이름을
-    부르고, 요즘 트랜스포머 코드의 기본형이 그것이다.
+    The layer existed and this function did not. Code that writes attention by
+    hand without the layer calls this name, and that is the default shape of
+    modern transformer code.
 
-    **가림막은 곱하는 것이 아니라 더하는 것이다.** `-inf` 를 더해 softmax 가 0 을
-    내게 하는 것이지 0 을 곱하는 것이 아니다 — 곱하면 softmax 가 이미 정규화한 뒤라
-    남은 자리가 1 로 안 돌아간다.
+    **A mask is added, not multiplied.** `-inf` is added so that softmax produces
+    0; a 0 is not multiplied in — multiplying comes after softmax has already
+    normalised, so the remaining positions do not sum back to 1.
     """
     query, key, value = _wrap(query), _wrap(key), _wrap(value)
     dim = query.data.shape[-1]
     factor = (1.0 / _math.sqrt(dim)) if scale is None else scale
     scores = (query @ key.transpose(-2, -1)) * factor
     if is_causal:
-        # 위 삼각을 막는다. 가림막을 같이 주면 torch 는 둘 다 적용한다.
+        # Block the upper triangle. Given a mask as well, torch applies both.
         length = query.data.shape[-2]
         upper = _np.triu(_np.ones((length, key.data.shape[-2]), dtype=bool), k=1)
         scores = scores.masked_fill(Tensor(upper), float("-inf"))
@@ -1207,16 +1275,20 @@ def multi_head_attention_forward(
         use_separate_proj_weight=False, q_proj_weight=None, k_proj_weight=None,
         v_proj_weight=None, static_k=None, static_v=None,
         average_attn_weights=True, is_causal=False):
-    """`MultiheadAttention` 이 안에서 하는 계산을 이름으로 낸다. **층이 이것을 부른다.**
+    """The computation `MultiheadAttention` does inside, exposed under a name.
+    **The layer calls this.**
 
-    **입력이 `(L, N, E)` 다** — 길이가 앞이다. 층은 `batch_first` 를 받지만 이 함수는
-    torch 에서도 늘 길이가 앞이라, 배치를 앞에 두고 부르면 조용히 다른 축을 섞는다.
+    **The input is `(L, N, E)`** — length first. The layer takes `batch_first`
+    and this function is always length-first in torch too, so calling it with the
+    batch first quietly mixes the wrong axis.
 
-    가중치를 밖에서 받으므로 층을 안 쓰고 어텐션을 손으로 조립하는 코드가 이 이름을
-    부른다 — torch 의 `MultiheadAttention` 자신도 이것을 부른다.
+    It takes the weights from outside, so code assembling attention by hand
+    without the layer calls this name — torch's own `MultiheadAttention` calls it
+    as well.
 
-    **안 하는 것은 시끄럽게 거절한다.** `bias_k`·`add_zero_attn`·`static_k` 처럼
-    드물게 쓰는 갈래를 조용히 무시하면 값이 그럴듯하게 다르다.
+    **What it does not do is refused loudly.** Quietly ignoring a rarely used
+    branch such as `bias_k`, `add_zero_attn` or `static_k` makes the values
+    plausibly different.
     """
     for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
                         ("static_k", static_k), ("static_v", static_v)):
@@ -1228,7 +1300,8 @@ def multi_head_attention_forward(
         _unsupported("multi_head_attention_forward(use_separate_proj_weight=True)")
 
     query, key, value = _wrap(query), _wrap(key), _wrap(value)
-    # 안에서는 배치를 앞에 두고 센다. 들어올 때와 나갈 때만 뒤집는다.
+    # Inside, everything is computed batch-first. It is flipped only on the way
+    # in and on the way out.
     query, key, value = (t.transpose(0, 1) for t in (query, key, value))
     B, T, E = query.data.shape
     S = key.data.shape[1]
@@ -1254,7 +1327,8 @@ def multi_head_attention_forward(
     if attn_mask is not None:
         scores = _apply_mask(scores, attn_mask)
     if key_padding_mask is not None:
-        # `(N, S)` 를 `(N, 1, 1, S)` 로 펴 머리마다 같은 자리를 가린다.
+        # `(N, S)` is spread to `(N, 1, 1, S)` so every head masks the same
+        # positions.
         pad = _wrap(key_padding_mask)
         scores = _apply_mask(scores, pad.reshape(B, 1, 1, S))
     weights = softmax(scores, dim=-1)
@@ -1265,7 +1339,7 @@ def multi_head_attention_forward(
     out = merged @ _wrap(out_proj_weight).transpose(0, 1)
     if out_proj_bias is not None:
         out = out + _wrap(out_proj_bias)
-    out = out.transpose(0, 1)                       # 다시 길이가 앞으로
+    out = out.transpose(0, 1)                       # back to length-first
     if not need_weights:
         return out, None
     return out, (weights.mean(dim=1) if average_attn_weights else weights)
@@ -1276,13 +1350,13 @@ def _split_heads(t, B, T, heads, head_dim):
 
 
 def _apply_mask(scores, mask):
-    """torch 는 마스크를 두 가지로 받는다.
+    """torch takes a mask in two forms.
 
-      불리언 — True 인 자리를 가린다(-inf 로 채운다)
-      실수   — 점수에 **더한다.** `generate_square_subsequent_mask` 가 주는 0/-inf 가 그것이다
+      boolean — the True positions are masked (filled with -inf)
+      float   — **added** to the scores. The 0/-inf `generate_square_subsequent_mask` gives is this
 
-    실수 마스크를 "0 이 아니면 가림"으로 뭉뚱그리면 인과 마스크는 우연히 맞지만
-    가중치를 조절하는 마스크에서 어긋난다.
+    Lumping a float mask in as "mask where it is not 0" happens to get the causal
+    mask right and goes wrong on a mask that adjusts the weights.
     """
     m = mask if isinstance(mask, Tensor) else Tensor(_np.asarray(mask))
     if m.data.dtype.kind == "b":
@@ -1291,7 +1365,8 @@ def _apply_mask(scores, mask):
 
 
 class TransformerEncoderLayer(Module):
-    """어텐션 + 피드포워드, 각각에 잔차와 정규화. 10장의 Block 그대로다."""
+    """Attention plus feed-forward, each with a residual and a normalisation.
+    Chapter 10's Block exactly."""
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", batch_first=False, norm_first=False, layer_norm_eps=1e-5):
@@ -1324,7 +1399,7 @@ class TransformerEncoderLayer(Module):
 
 
 class TransformerEncoder(Module):
-    """같은 층을 여러 겹. torch 와 같이 `layers.N.…` 로 이름이 붙는다."""
+    """The same layer stacked. Named `layers.N.…` as in torch."""
 
     def __init__(self, encoder_layer, num_layers, norm=None):
         super().__init__()
@@ -1343,10 +1418,12 @@ class TransformerEncoder(Module):
 
 
 class TransformerDecoderLayer(Module):
-    """자기 어텐션 → **인코더를 보는 어텐션** → 피드포워드.
+    """Self-attention → **attention over the encoder** → feed-forward.
 
-    인코더 층과 다른 점은 가운데 하나다 — `multihead_attn` 이 자기 자신이 아니라
-    인코더의 출력(memory)을 본다. 번역에서 "지금까지 쓴 문장"과 "원문"을 함께 보는 자리다.
+    The one difference from the encoder layer is in the middle —
+    `multihead_attn` looks at the encoder's output (the memory) rather than at
+    itself. In translation this is where "the sentence written so far" and "the
+    source" are looked at together.
     """
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
@@ -1404,7 +1481,8 @@ class TransformerDecoder(Module):
 
 
 class Transformer(Module):
-    """인코더와 디코더를 묶은 것. 「Attention Is All You Need」의 그림 전체다."""
+    """The encoder and the decoder together. The whole diagram from "Attention
+    Is All You Need"."""
 
     def __init__(self, d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
                  dim_feedforward=2048, dropout=0.1, activation="relu",
@@ -1428,9 +1506,10 @@ class Transformer(Module):
 
     @staticmethod
     def generate_square_subsequent_mask(sz):
-        """윗삼각을 -inf 로 채운 **실수** 마스크. 더해서 쓴다.
+        """A **float** mask with the upper triangle filled with -inf. It is
+        added.
 
-        32장의 "미래를 보지 못하게" 가 이 한 줄이다.
+        Chapter 32's "do not let it see the future" is this one line.
         """
         m = _np.zeros((sz, sz), dtype=_DEFAULT_DTYPE)
         m[_np.triu_indices(sz, 1)] = -_np.inf
@@ -1451,7 +1530,7 @@ nn.Embedding = Embedding
 nn.LayerNorm = LayerNorm
 nn.BatchNorm2d = BatchNorm2d
 class _Activation(Module):
-    """활성함수 층 — 상태가 없으니 함수 하나를 감싼다."""
+    """An activation layer — it has no state, so it wraps one function."""
 
     fn = staticmethod(relu)
 
@@ -1460,11 +1539,13 @@ class _Activation(Module):
 
 
 class GELU(Module):
-    """**인자를 받는다** — `approximate='tanh'` 는 다른 식이고 값이 다르다.
+    """**It takes an argument** — `approximate='tanh'` is a different formula
+    and a different value.
 
-    `_Activation` 껍데기로 두면 `nn.GELU('tanh')` 가 `Module.__init__() takes 1
-    positional argument` 로 멈춘다. 없는 인자를 조용히 버리는 것보다는 낫지만,
-    torch 에 있는 것을 없다고 하는 것은 그대로 갈림이다.
+    Left as an `_Activation` shell, `nn.GELU('tanh')` stops with
+    `Module.__init__() takes 1 positional argument`. Better than quietly
+    discarding an argument that does not exist, and saying something torch has is
+    absent is still a divergence.
     """
 
     def __init__(self, approximate="none"):
@@ -1497,10 +1578,11 @@ class ELU(Module):
         return elu(x, self.alpha)
 
 
-# ── 상태 없는 활성함수 층. 전부 함수 하나를 감싼다. ─────────────────────────
+# ── the stateless activation layers. Each wraps one function. ───────────────
 #
-# 감싸개가 **다른 함수를 부르는** 실수가 이 부류의 유일한 실패 방식이고, 그것은
-# 눈으로 안 보이고 값으로만 갈린다 — 그래서 골든이 함수 꼴과 층 꼴을 따로 묻는다.
+# A wrapper **calling the wrong function** is this family's only failure mode,
+# and it is invisible to the eye and diverges only in the values — which is why
+# the golden asks about the function form and the layer form separately.
 
 class Hardsigmoid(_Activation):
     fn = staticmethod(hardsigmoid)
@@ -1607,10 +1689,11 @@ class GLU(Module):
 
 
 class PReLU(Module):
-    """음수 쪽 기울기를 **학습한다.** 이 부류에서 유일하게 파라미터가 있다.
+    """It **learns** the slope on the negative side. The only one in this family
+    with a parameter.
 
-    `weight` 라는 이름이 `state_dict` 열쇠가 되므로 torch 와 같아야 한다 — 이름이
-    갈리면 남의 체크포인트를 못 읽는다.
+    The name `weight` becomes the `state_dict` key, so it has to match torch — a
+    diverging name means somebody else's checkpoint is unreadable.
     """
 
     def __init__(self, num_parameters=1, init=0.25):
@@ -1623,10 +1706,12 @@ class PReLU(Module):
 
 
 class GroupNorm(Module):
-    """채널을 그룹으로 묶어 정규화. **배치가 작을 때 BatchNorm 대신 쓴다.**
+    """Normalise with the channels bundled into groups. **Used instead of
+    BatchNorm when the batch is small.**
 
-    BatchNorm 은 배치 통계를 쓰므로 배치가 1~2 면 통계가 못 미덥다. 이쪽은 표본
-    하나 안에서 묶으므로 배치 크기와 무관하다.
+    BatchNorm uses batch statistics, so at a batch of 1 or 2 those statistics are
+    not trustworthy. This one bundles within a single sample, so it is
+    independent of the batch size.
     """
 
     def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
@@ -1643,10 +1728,12 @@ class GroupNorm(Module):
 
 
 class _InstanceNorm(Module):
-    """표본마다·채널마다 따로. **기본이 `affine=False` 다** — torch 가 그렇다.
+    """Per sample and per channel. **The default is `affine=False`** — that is
+    what torch does.
 
-    `BatchNorm` 과 반대라 헷갈리는 자리이고, 기본값을 뒤집으면 파라미터가 있는 층과
-    없는 층이 바뀌어서 `state_dict` 열쇠가 통째로 갈린다.
+    The opposite of `BatchNorm`, which makes it a confusing place, and flipping
+    the default swaps which layers have parameters and which do not, so the
+    `state_dict` keys diverge wholesale.
     """
 
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=False,
@@ -1658,13 +1745,15 @@ class _InstanceNorm(Module):
             self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
         else:
             self.weight = self.bias = None
-        # **인자를 받아 놓고 안 쓰면 거짓말이 된다.**
+        # **An argument accepted and unused becomes a lie.**
         #
-        # `track_running_stats=True` 를 주면 torch 는 이동 통계 셋을 등록하고,
-        # 그것을 평가 모드에서 **실제로 쓴다**. 여기서는 조용히 무시하고 있었다 —
-        # `state_dict` 열쇠 셋이 통째로 없어지고, 학습은 멀쩡한데 평가만 다른 값을
-        # 낸다. 버퍼만 등록하고 순방향이 안 쓰면 열쇠만 맞고 값이 틀리는, 더 늦게
-        # 발견되는 자리로 옮겨 갈 뿐이다. 그래서 **안 되는 것은 안 된다고 한다.**
+        # Given `track_running_stats=True`, torch registers three running
+        # statistics and **actually uses them** in evaluation mode. This was
+        # quietly ignoring it — three `state_dict` keys vanish wholesale, and
+        # training is fine while evaluation alone produces different values.
+        # Registering the buffers without the forward pass using them only moves
+        # it to a later-discovered place where the keys match and the values are
+        # wrong. So **what does not work is said not to work.**
         if track_running_stats:
             _unsupported("InstanceNorm with track_running_stats=True")
 
@@ -1685,7 +1774,8 @@ class InstanceNorm3d(_InstanceNorm):
 
 
 class RMSNorm(Module):
-    """**평균을 안 뺀다.** 그것이 `LayerNorm` 과의 유일한 차이다."""
+    """**It does not subtract the mean.** That is the only difference from
+    `LayerNorm`."""
 
     def __init__(self, normalized_shape, eps=None, elementwise_affine=True):
         super().__init__()
@@ -1701,10 +1791,12 @@ class RMSNorm(Module):
 
 
 class _ConvTransposeND(Module):
-    """전치 합성곱. **가중치가 `(입력, 출력, …)` 이다** — `Conv2d` 와 뒤집혀 있다.
+    """A transposed convolution. **The weights are `(in, out, …)`** — reversed
+    from `Conv2d`.
 
-    정사각 커널이면 뒤집어 놓아도 모양이 맞아서 값으로만 갈린다. `state_dict` 열쇠는
-    `weight`·`bias` 로 `Conv2d` 와 같으므로, 모양만 보고 넣으면 조용히 틀린다.
+    With a square kernel the shape fits even reversed, so it diverges only in the
+    values. The `state_dict` keys are `weight` and `bias`, the same as `Conv2d`'s,
+    so loading by shape alone is quietly wrong.
     """
 
     nd = 2
@@ -1738,15 +1830,15 @@ class ConvTranspose3d(_ConvTransposeND):
 
 
 def _default_softmax_dim(ndim):
-    """`dim` 을 안 주었을 때 torch 가 고르는 축.
+    """The axis torch chooses when `dim` is not given.
 
-    **`-1` 이 아니다.** 랭크에 따라 0 이나 1 이고, torch 는 그 자리에서 경고까지
-    낸다("Implicit dimension choice for softmax has been deprecated"). 규칙은
-    실측했다 — 랭크 1 → 0, 2 → 1, 3 → **0**, 4 → 1.
+    **It is not `-1`.** It is 0 or 1 depending on the rank, and torch even warns
+    at that point ("Implicit dimension choice for softmax has been deprecated").
+    The rule was measured — rank 1 → 0, 2 → 1, 3 → **0**, 4 → 1.
 
-    **랭크 2 로만 물으면 이 결함이 안 보인다.** 거기서는 `dim=1` 과 `dim=-1` 이
-    같은 축이라 `-1` 을 기본값으로 두어도 답이 같다. 실제로 그렇게 두고 있었고,
-    랭크 3 에서 조용히 다른 축을 접고 있었다.
+    **Asked at rank 2 only, this defect is invisible.** There `dim=1` and
+    `dim=-1` are the same axis, so a default of `-1` gives the same answer. It
+    really was left that way, quietly folding the wrong axis at rank 3.
     """
     return 0 if ndim in (0, 1, 3) else 1
 
@@ -1781,10 +1873,13 @@ class AvgPool2d(Module):
 
 
 class _PoolND(Module):
-    """창을 정해 접는 층들의 몸통. **어느 함수를 부르느냐만 다르다.**
+    """The body of the layers that fold over a fixed window. **Only which
+    function they call differs.**
 
-    층마다 `forward` 를 따로 적으면 그중 하나가 다른 함수를 부르는 날이 오고, 그것은
-    값으로만 갈린다 — 활성함수 쪽에서 같은 이유로 함수 꼴과 층 꼴을 따로 물었다.
+    Writing a `forward` per layer means the day comes when one of them calls a
+    different function, and that diverges only in the values — the activations
+    had the function form and the layer form asked separately for the same
+    reason.
     """
 
     fn = staticmethod(avg_pool2d)
@@ -1818,7 +1913,8 @@ class AdaptiveAvgPool3d(_PoolND):
 
 
 class _AdaptiveMaxPoolND(_PoolND):
-    """적응형 최대 풀링. **`return_indices` 를 받는다** — 평균 쪽에는 없는 인자다."""
+    """Adaptive max pooling. **It takes `return_indices`** — an argument the
+    average side does not have."""
 
     adaptive = True
 
@@ -1865,21 +1961,26 @@ ASMoutput = _collections.namedtuple("ASMoutput", ["output", "loss"])
 
 
 class AdaptiveLogSoftmaxWithLoss(Module):
-    """글자가 아주 많을 때의 softmax. **자주 나오는 것을 싸게 낸다.**
+    """A softmax for when there are very many tokens. **It makes the frequent
+    ones cheap.**
 
-    어휘가 수십만이면 마지막 선형층 하나가 모델보다 크다. 여기서는 글자를 빈도순으로
-    묶어 두고, 앞쪽 뭉치(`shortlist`)는 머리에서 바로 내고 뒤쪽 뭉치들은 **머리에서
-    그 뭉치를 고른 확률 × 뭉치 안의 확률**로 낸다. 뒤쪽일수록 중간 차원을 `div_value`
-    로 나눠 좁힌다 — 드물게 나오는 글자에 자리를 덜 쓴다.
+    With a vocabulary of hundreds of thousands, the final linear layer alone is
+    larger than the model. Here the tokens are bundled by frequency; the leading
+    bundle (the `shortlist`) comes straight out of the head, and the later
+    bundles come out as **the probability the head assigned to that bundle × the
+    probability within the bundle.** The further back the bundle, the narrower
+    its intermediate dimension, divided down by `div_value` — less room spent on
+    rare tokens.
 
-    ## 재보고 적은 것들
+    ## What was measured and written down
 
-    - **기본값이 `div_value=4.0`·`head_bias=False`** 다. 2.0 으로 알고 물으면 꼬리
-      층의 모양이 통째로 달라진다(`tests/probe_asm.py`).
-    - 중간 차원은 `in_features // div_value**(i+1)` 이고 **0 이 될 수 있다.**
-      torch 도 그 자리에서 빈 층을 만든다 — 막지 않는다.
-    - `forward` 는 이름 붙은 튜플 `(output, loss)` 를 낸다. `output` 은 정답 자리의
-      로그확률이고 `loss` 는 그것의 평균에 음수를 붙인 것이다.
+    - **The defaults are `div_value=4.0` and `head_bias=False`.** Asked assuming
+      2.0, the tail layers come out a wholly different shape
+      (`tests/probe_asm.py`).
+    - The intermediate dimension is `in_features // div_value**(i+1)` and **can
+      reach 0.** torch builds an empty layer there too — it is not blocked.
+    - `forward` produces a named tuple `(output, loss)`. `output` is the log
+      probability at the target position and `loss` is its mean negated.
     """
 
     def __init__(self, in_features, n_classes, cutoffs, div_value=4.0,
@@ -1905,10 +2006,11 @@ class AdaptiveLogSoftmaxWithLoss(Module):
         self.tail = ModuleList(tail)
 
     def log_prob(self, x):
-        """모든 글자의 로그확률 `(N, n_classes)`.
+        """The log probability of every token, `(N, n_classes)`.
 
-        뒤쪽 뭉치의 확률에 **머리가 그 뭉치를 고른 로그확률을 더한다** — 곱셈이
-        로그에서 덧셈이고, 그래서 행 전체의 합이 1 로 남는다.
+        The probability of a later bundle **has the head's log probability for
+        that bundle added to it** — a multiplication is an addition in the log
+        domain, which is what keeps each row summing to 1.
         """
         head = log_softmax(self.head(x), dim=1)
         parts = [head[:, :self.shortlist_size]]
@@ -1930,12 +2032,13 @@ class AdaptiveLogSoftmaxWithLoss(Module):
 
 
 class CTCLoss(Module):
-    """소리와 글자를 **자리를 맞추지 않고** 잇는 손실.
+    """A loss that connects audio to characters **without aligning them.**
 
-    `forward` 가 인자를 넷 받는다 — 로그확률, 표적, 입력 길이, 표적 길이. 길이가
-    표본마다 다르고 그것이 이 손실의 요점이라, 다른 손실처럼 둘로는 못 받는다.
+    `forward` takes four arguments — the log probabilities, the target, the input
+    lengths and the target lengths. The lengths differ per sample and that is the
+    point of this loss, so it cannot take two like the others.
 
-    **`repr` 이 비어 있다.** torch 의 `extra_repr` 가 아무것도 안 낸다(재봤다).
+    **The `repr` is empty.** torch's `extra_repr` produces nothing (measured).
     """
 
     def __init__(self, blank=0, reduction="mean", zero_infinity=False):
@@ -1952,14 +2055,15 @@ class CTCLoss(Module):
 
 
 class _FractionalMaxPoolND(Module):
-    """창 자리를 무작위로 흔드는 최대 풀링.
+    """Max pooling that jitters the window positions at random.
 
-    고정 창은 격자가 늘 같은 자리에 놓여서 그 격자에 맞는 무늬만 잘 본다. 여기서는
-    창 시작이 표본에 따라 흔들려서, 같은 층을 여러 번 지나면 다른 격자를 본다 —
-    학습에서 규제로 쓰인다.
+    A fixed window puts the grid in the same place every time, so it sees only
+    the patterns that fit that grid. Here the window start jitters per sample, so
+    passing the same layer several times sees different grids — used as
+    regularisation during training.
 
-    **`repr` 이 비어 있다.** torch 의 `extra_repr` 가 아무것도 안 내서 `()` 로만
-    찍힌다(재봤다). 흉내가 아니라 그쪽이 그렇다.
+    **The `repr` is empty.** torch's `extra_repr` produces nothing, so it prints
+    as `()` alone (measured). Not an imitation — that side is like that.
     """
 
     fn = None
@@ -1968,9 +2072,10 @@ class _FractionalMaxPoolND(Module):
     def __init__(self, kernel_size, output_size=None, output_ratio=None,
                  return_indices=False, _random_samples=None):
         super().__init__()
-        # **둘 중 하나만 받는다** — torch 는 생성자에서 멈춘다. 관대하면 둘 다
-        # 주었을 때 어느 쪽이 이겼는지가 값으로만 드러나고, 하나도 안 주었을 때는
-        # 크기가 어디서 왔는지 아무도 못 읽는다.
+        # **Exactly one of the two is accepted** — torch stops in the
+        # constructor. Being lenient means that when both are given, which one
+        # won shows only in the values, and when neither is given nobody can read
+        # where the size came from.
         if (output_size is None) == (output_ratio is None):
             raise ValueError(
                 "FractionalMaxPool takes either output_size or output_ratio, not both."
@@ -2002,11 +2107,12 @@ class FractionalMaxPool3d(_FractionalMaxPoolND):
 
 
 class AdaptiveAvgPool2d(_PoolND):
-    """**출력 크기가 1 이 아니어도 된다.**
+    """**The output size does not have to be 1.**
 
-    예전에는 1 만 받고 나머지를 거절했다. 그때는 `_pool_all` 로 전부 평균 내는 것이
-    전부여서 그랬는데, 이제 창을 자리마다 달리 잡는 기계가 생겼으므로 거절할 이유가
-    없다 — 거절은 흉내의 한 방식이 아니라 다른 규칙이었다.
+    It used to take 1 and refuse everything else. That was because averaging the
+    whole thing through `_pool_all` was all there was, and now that there is
+    machinery for windows placed differently per position there is no reason to
+    refuse — the refusal was a different rule rather than a form of imitation.
     """
 
     fn = staticmethod(adaptive_avg_pool2d)
@@ -2014,11 +2120,13 @@ class AdaptiveAvgPool2d(_PoolND):
 
 
 class Unflatten(Module):
-    """축 하나를 여러 축으로 편다. **뒤에 오는 축은 그대로 남는다.**
+    """Spread one axis into several. **The axes after it stay where they are.**
 
-    `shape[:dim] + sizes` 로만 적혀 있었다 — 펴는 축이 마지막일 때는 맞는 답이라
-    오래 안 보였고, 가운데 축을 펴면 뒤쪽이 통째로 사라진다. 원소 수가 안 맞아
-    `reshape` 이 멈추므로 조용히 틀리지는 않지만, 멈추는 자리가 원인에서 멀다.
+    It was written as `shape[:dim] + sizes` alone — the right answer when the
+    axis being spread is the last one, so it went unseen for a long time, and
+    spreading a middle axis loses everything behind it wholesale. The element
+    count does not match so `reshape` stops, which means it is not quietly wrong,
+    and the place it stops is far from the cause.
     """
 
     def __init__(self, dim, unflattened_size):
@@ -2078,13 +2186,15 @@ class BatchNorm1d(Module):
         return normed * self.weight + self.bias
 
 
-# ---- 1차원·3차원 계열
+# ---- the 1-D and 3-D families
 #
-# **거절 stub 이었다.** 자매(webgpu)에는 실물이 있는데 코어에는 없어서, `import` 하나
-# 바꾸면 코드가 깨지는 방향이 열려 있었다 — 이 프로젝트의 약속이 정확히 그 반대다.
+# **They were refusing stubs.** The sister library (webgpu) had the real thing
+# and the core did not, which left open a direction where changing one `import`
+# breaks the code — this project's promise is exactly the opposite.
 #
-# 산수는 `conv2d`·`max_pool2d` 가 한다. 새 im2col 을 쓰지 않는다: 같은 계산을 두 벌로
-# 두면 한쪽만 고쳐진 채로 갈리는 날이 온다.
+# `conv2d` and `max_pool2d` do the arithmetic. No new im2col is written: two
+# copies of the same computation means the day comes when one of them is fixed
+# and they diverge.
 
 class Conv1d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
@@ -2157,11 +2267,13 @@ class MaxPool3d(Module):
 
 
 class _MaxUnpoolND(Module):
-    """`MaxPool` 이 고른 자리로 값을 되돌린다. 차원마다 함수만 다르다.
+    """Put values back at the positions `MaxPool` chose. Only the function
+    differs per dimensionality.
 
-    **`forward` 가 인자를 둘 받는다.** 다른 층과 다른 모양이라 `Sequential` 에 그냥
-    못 넣는데, torch 도 같다 — 자리표는 값과 함께 흘러야 하고 그것을 층 안에 숨기면
-    같은 층을 두 번 쓸 때 남의 자리표를 쓰게 된다.
+    **`forward` takes two arguments.** A different shape from the other layers,
+    so it cannot simply go into a `Sequential`, and torch is the same — the
+    positions have to flow alongside the values, and hiding them inside the layer
+    means using somebody else's positions when the same layer is used twice.
     """
 
     fn = None
@@ -2169,8 +2281,9 @@ class _MaxUnpoolND(Module):
 
     def __init__(self, kernel_size, stride=None, padding=0):
         super().__init__()
-        # **축마다 펴서 든다.** torch 가 그렇게 들고, `repr` 에 그 튜플이 그대로
-        # 나온다 — 수 하나로 들고 있으면 `kernel_size=2` 로 찍혀 갈린다.
+        # **Carried spread out per axis.** torch carries it that way and the
+        # tuple appears in the `repr` as-is — carried as a single number it
+        # prints as `kernel_size=2` and diverges.
         n = type(self).dim
         self.kernel_size = tuple(_spread(kernel_size, n))
         self.stride = tuple(_spread(kernel_size if stride is None else stride, n))
@@ -2201,11 +2314,12 @@ class MaxUnpool3d(_MaxUnpoolND):
 
 
 class BatchNorm3d(BatchNorm2d):
-    """`BatchNorm2d` 와 **같은 코드다** — 위에서 랭크를 안 따지게 고쳤으므로
-    (N,C,D,H,W) 도 그대로 통한다. 자매도 같은 구조다."""
+    """**The same code** as `BatchNorm2d` — it was fixed above to stop examining
+    the rank, so (N,C,D,H,W) passes through unchanged. The sister library has the
+    same structure."""
 
 
-# ---------------------------------------------------------------- 나머지 층
+# --------------------------------------------------------- the rest of the layers
 
 class Unfold(Module):
     def __init__(self, kernel_size, dilation=1, padding=0, stride=1):
@@ -2240,7 +2354,8 @@ class Fold(Module):
 
 
 class Bilinear(Module):
-    """두 입력을 **한꺼번에** 섞는다. 가중치가 세 축이라 `(out, in1, in2)` 다."""
+    """Mixes two inputs **at once.** The weights have three axes, so
+    `(out, in1, in2)`."""
 
     def __init__(self, in1_features, in2_features, out_features, bias=True):
         super().__init__()
@@ -2278,7 +2393,8 @@ class LocalResponseNorm(Module):
 
 
 class Softmax2d(Module):
-    """`(N, C, H, W)` 의 **채널 방향** softmax. `softmax(dim=1)` 과 같다."""
+    """A softmax **along the channels** of `(N, C, H, W)`. The same as
+    `softmax(dim=1)`."""
 
     def forward(self, x):
         return softmax(x, dim=1)
@@ -2300,8 +2416,8 @@ class RReLU(Module):
 
 
 class _Upsampling(Module):
-    """옛 이름 둘. **`UpsamplingBilinear2d` 는 `align_corners=True` 다** —
-    `Upsample(mode='bilinear')` 의 기본값과 다르다."""
+    """Two old names. **`UpsamplingBilinear2d` is `align_corners=True`** —
+    different from `Upsample(mode='bilinear')`'s default."""
 
     _mode = "nearest"
     _corners = None
@@ -2329,10 +2445,11 @@ class UpsamplingBilinear2d(_Upsampling):
 
 
 class EmbeddingBag(Module):
-    """가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 층이다.
+    """One row per bag. Selecting from the table and **combining** is all one
+    layer.
 
-    `offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인
-    자리가 그 모양이다.
+    Given `offsets`, a 1-D row of indices is cut into bags — the shape for when
+    the bags have differing lengths.
     """
 
     def __init__(self, num_embeddings, embedding_dim, mode="mean"):
@@ -2343,7 +2460,8 @@ class EmbeddingBag(Module):
             _rng.standard_normal((num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE))
 
     def forward(self, idx, offsets=None, per_sample_weights=None):
-        # 계산은 `F.embedding_bag` 이 한다 — 층과 함수를 두 벌로 두지 않는다.
+        # `F.embedding_bag` does the computation — the layer and the function
+        # are not kept as two copies.
         return embedding_bag(idx, self.weight, offsets, self.mode,
                              per_sample_weights)
 
@@ -2357,9 +2475,10 @@ for _cls in (Unfold, Fold, Bilinear, LocalResponseNorm, Softmax2d, RReLU,
     setattr(nn, _cls.__name__, _cls)
 
 
-# ------------------------------------------------- 자리 옮기기·채널째 dropout
+# ------------------------ rearrangement and channel-wise dropout
 #
-# 여덟 층이 전부 함수 하나를 부른다. 갈리는 것은 넘길 인자와 찍는 글자뿐이다.
+# All eight layers call one function. Only the arguments passed and the
+# characters printed differ.
 
 class _Rearrange(Module):
     _fn = None
@@ -2392,7 +2511,8 @@ class ChannelShuffle(_Rearrange):
 
 
 class _FeatureDropout(Module):
-    """채널째 떨구는 것들. **`inplace` 까지 찍는다** — torch 가 그렇다."""
+    """The ones that drop whole channels. **`inplace` is printed too** — torch
+    does that."""
 
     _fn = None
 
@@ -2423,23 +2543,27 @@ for _name, _cls in {"PixelShuffle": PixelShuffle,
     setattr(nn, _name, _cls)
 
 
-# ---------------------------------------------------------------- 게으른 층
+# ------------------------------------------------------------- the lazy layers
 #
-# **모양을 첫 forward 에서 알아낸다.** `nn.LazyLinear(3)` 은 `in_features` 를 안 받고
-# 처음 지나가는 값을 보고 정한다 — 합성곱 뒤에 몇 채널이 나오는지를 손으로 세는 일이
-# 사라지므로 실제 코드가 자주 쓴다.
+# **The shape is worked out at the first forward.** `nn.LazyLinear(3)` does not
+# take `in_features` and decides from the first value that passes through — it
+# removes counting by hand how many channels come out after a convolution, which
+# is why real code uses it often.
 #
-# **굳으면 클래스가 바뀐다.** 이것이 규약의 핵심이고 짐작으로는 안 나온다. 첫 forward
-# 뒤에 그 물건은 더 이상 `LazyLinear` 가 아니라 `Linear` 다 — 이름도 `isinstance` 도
-# 바뀌고 `has_uninitialized_params` 라는 메서드 자체가 사라진다(진짜 torch 에 물어
-# 확인했다). 깃발 하나로 처리하면 이름이 안 바뀌고, 그러면 `repr` 이 갈린다.
+# **Materialising changes the class.** That is the heart of the contract and it
+# does not come out of guessing. After the first forward the object is no longer
+# a `LazyLinear` but a `Linear` — the name and `isinstance` both change and the
+# method `has_uninitialized_params` disappears entirely (confirmed by asking real
+# torch). Handled with a flag the name does not change, and then the `repr`
+# diverges.
 
 class UninitializedParameter(Parameter):
-    """아직 모양을 모르는 파라미터.
+    """A parameter whose shape is not known yet.
 
-    **있기는 있다.** `parameters()` 가 내놓고 `state_dict` 에 열쇠가 있다 — 그래서
-    굳기 전에 옵티마이저에 넣는 것이 된다(torch 가 허용하고 그 순서로 짜는 코드가
-    있다). 다만 모양을 묻거나 셈을 하면 던진다.
+    **It does exist.** `parameters()` produces it and it has a `state_dict` key —
+    so it can go into an optimiser before materialising (torch allows that and
+    there is code written in that order). Asking for its shape or computing with
+    it throws, though.
     """
 
     def __init__(self):
@@ -2470,19 +2594,22 @@ class UninitializedBuffer(UninitializedParameter):
 
 
 def Buffer(data):
-    """`nn.Buffer(t)` — 학습 안 하지만 저장되는 값이라는 표시.
+    """`nn.Buffer(t)` — a mark saying this value is not trained and is saved.
 
-    torch 에서 이것은 텐서 자신이다(`isinstance(nn.Buffer(t), Tensor)` 가 참).
-    표시를 실제로 읽는 것은 `register_buffer` 쪽이라, 여기서는 그대로 돌려준다.
+    In torch this is the tensor itself (`isinstance(nn.Buffer(t), Tensor)` is
+    true). What actually reads the mark is `register_buffer`, so it is handed
+    back unchanged here.
     """
     return data
 
 
 class _Lazy(Module):
-    """게으른 층의 뿌리. `_becomes` 가 굳은 뒤 될 클래스이고 `_infer` 가 모양을 읽는다.
+    """The root of the lazy layers. `_becomes` is the class it turns into and
+    `_infer` reads the shape.
 
-    굳는 자리를 `forward` 에 둔다 — 그래야 `Sequential` 안에서든 손으로 부르든 같은
-    자리를 지난다. 굳은 뒤에는 **자기 자신을 진짜 층으로 바꿔치고** 다시 부른다.
+    Materialising happens in `forward` — so that it passes the same place whether
+    it is inside a `Sequential` or called by hand. Once materialised it **swaps
+    itself for the real layer** and calls again.
     """
 
     _becomes = None
@@ -2499,14 +2626,16 @@ class _Lazy(Module):
         return True
 
     def _infer(self, x):
-        """모양에서 읽어낸 첫 인자. 층마다 다르므로 여기서 갈린다."""
+        """The first argument read off the shape. It differs per layer, so this
+        is where they split."""
         raise NotImplementedError
 
     def forward(self, x):
         cls = type(self)._becomes
         real = cls(*self._infer(x), *self._lazy_args, **self._lazy_kw)
-        # 속을 통째로 갈아 끼운다. 새 물건을 돌려주면 이미 옵티마이저에 들어간
-        # 파라미터와 딴 것이 되어, 학습이 도는데 가중치가 안 움직인다.
+        # The insides are swapped out wholesale. Handing back a new object makes
+        # it a different thing from the parameters already in the optimiser, and
+        # then training runs and the weights do not move.
         self.__dict__.clear()
         self.__dict__.update(real.__dict__)
         self.__class__ = cls
@@ -2528,12 +2657,14 @@ class LazyLinear(_Lazy):
 
 
 def _lazy_channels(x):
-    """(N, C, …) 에서 채널 수. 합성곱과 정규화가 같이 쓴다."""
+    """The channel count from (N, C, …). Shared by the convolutions and the
+    normalisations."""
     return (x.shape[1],)
 
 
 def _make_lazies():
-    """열두 개를 여기서 찍는다. 무엇이 될지와 무엇을 읽을지만 다르다."""
+    """Twelve are stamped out here. Only what they become and what they read
+    differ."""
     table = (
         ("LazyConv1d", Conv1d, ("in_channels", "out_channels")),
         ("LazyConv2d", Conv2d, ("in_channels", "out_channels")),
@@ -2563,14 +2694,17 @@ nn.UninitializedBuffer = UninitializedBuffer
 nn.Buffer = Buffer
 
 
-# ---------------------------------------------------------------- 손실 층
+# --------------------------------------------------------------- the loss layers
 #
-# **전부 같은 모양이다** — 만들 때 인자를 받아 두고 부를 때 함수로 넘긴다. torch 의
-# 손실 층이 하는 일이 그것뿐이라, 층마다 `forward` 를 적으면 같은 두 줄을 열세 번
-# 적는 것이 된다. 인자 이름만 표로 두고 나머지는 여기서 찍는다.
+# **They all have the same shape** — take the arguments at construction and hand
+# them to the function at the call. That is all a torch loss layer does, so
+# writing a `forward` per layer amounts to writing the same two lines thirteen
+# times. Only the argument names are kept in a table and the rest is stamped out
+# here.
 
 class _Loss(Module):
-    """손실 층의 뿌리. `_fn` 이 함수를, `_keys` 가 넘길 인자 이름을 정한다."""
+    """The root of the loss layers. `_fn` names the function and `_keys` names
+    the arguments to pass."""
 
     _fn = None
     _keys = ()
@@ -2586,8 +2720,9 @@ class _Loss(Module):
         return type(self)._fn(*inputs, reduction=self.reduction, **self._opts)
 
     def __repr__(self):
-        # torch 는 손실 층을 **인자 없이** 찍는다 — `HuberLoss(delta=0.5)` 도
-        # `HuberLoss()` 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
+        # torch prints a loss layer **with no arguments** — even
+        # `HuberLoss(delta=0.5)` comes out as `HuberLoss()` (measured). The
+        # characters are part of the answer, so it is followed exactly.
         return f"{type(self).__name__}()"
 
 
@@ -2618,7 +2753,8 @@ for _name, _loss_cls in _make_losses().items():
 
 
 class PairwiseDistance(Module):
-    """짝지어진 두 줄 사이의 거리. **`eps` 는 차에 더한다** — 함수 쪽에 적었다."""
+    """The distance between two paired rows. **`eps` is added to the
+    difference** — written down on the function side."""
 
     def __init__(self, p=2.0, eps=1e-6, keepdim=False):
         super().__init__()
@@ -2648,15 +2784,17 @@ nn.PairwiseDistance = PairwiseDistance
 nn.CosineSimilarity = CosineSimilarity
 
 
-# ---------------------------------------------------------------- 패딩 층
+# ------------------------------------------------------------ the padding layers
 #
-# **열다섯 개가 한 기계에서 나온다.** 셋(1·2·3 차원) × 다섯(reflect·replicate·zero·
-# constant·circular)이고, 갈리는 것은 모드 이름과 짝의 개수뿐이다. 손으로 열다섯 벌을
-# 적으면 열다섯 자리가 어긋날 수 있는데, 실제로 갈리는 것은 두 가지뿐이다.
+# **Fifteen come out of one machine.** Three (1-D, 2-D, 3-D) × five (reflect,
+# replicate, zero, constant, circular), and only the mode name and the number of
+# pairs differ. Written out fifteen times by hand there are fifteen places that
+# can drift, and only two things actually differ.
 #
-# **`ConstantPad` 만 다르게 찍는다** — 나머지는 짝만 찍고 그쪽은 이름을 붙인다
-# (`ConstantPad1d(padding=(2, 2), value=7.0)`). 진짜 torch 가 그렇고, 골든이 글자를
-# 굳혔으므로 그 차이가 답의 일부다.
+# **`ConstantPad` alone prints differently** — the rest print the pairs and that
+# one attaches names (`ConstantPad1d(padding=(2, 2), value=7.0)`). Real torch does
+# that, and the golden pinned the characters, so the difference is part of the
+# answer.
 
 class _PadNd(Module):
     _mode = "constant"
@@ -2683,7 +2821,8 @@ class _ConstantPadNd(_PadNd):
 
 
 def _make_pads():
-    """열다섯 개를 여기서 찍는다. 이름과 모드와 차수만 다르다."""
+    """Fifteen are stamped out here. Only the name, the mode and the
+    dimensionality differ."""
     made = {}
     for kind, mode, base in (("Reflection", "reflect", _PadNd),
                              ("Replication", "replicate", _PadNd),
@@ -2702,15 +2841,18 @@ for _name, _pad_cls in _make_pads().items():
 
 
 class Upsample(Module):
-    """확대. 한 칸이 s×s 로 복제되므로 **역방향은 그 블록을 합하는 것**이다.
+    """Enlargement. One cell is replicated into s×s, so **the backward is
+    summing that block.**
 
-    **첫 자리는 `size` 다.** torch 가 그렇다 — `Upsample(2)` 는 배율 2 가 아니라
-    "출력을 2×2 로" 다. 배율을 첫 자리에 두고 있었고, 그러면 `Upsample(2)` 가 같은
-    코드에서 늘리는 것과 줄이는 것으로 갈린다. 모양이 그럴듯해서 값으로만 걸린다.
+    **The first position is `size`.** That is what torch does — `Upsample(2)` is
+    not a factor of 2 but "make the output 2×2". The factor was in the first
+    position, and then `Upsample(2)` splits into enlarging and shrinking within
+    the same code. The shape is plausible, so only the values catch it.
 
-    **`mode='bilinear'` 를 거절하고 있었다.** 계산은 `interpolate` 에 이미 있었고
-    `F.upsample_bilinear` 로는 돌았다 — 같은 계산에 이름이 둘인데 한쪽만 되던
-    자리다. 교재가 쓰는 꼴은 층 쪽이다.
+    **`mode='bilinear'` was being refused.** The computation already existed in
+    `interpolate` and ran through `F.upsample_bilinear` — one computation under
+    two names with only one of them working. The form textbooks use is the
+    layer.
     """
 
     def __init__(self, size=None, scale_factor=None, mode="nearest",
@@ -2775,7 +2917,8 @@ def one_hot(t, num_classes=-1):
 
 
 class _Functional(_Namespace):
-    # 손실과 거리. **층과 같은 함수를 가리킨다** — 두 벌이면 어긋난다.
+    # Losses and distances. **They point at the same functions the layers do** —
+    # two copies would drift.
     huber_loss = staticmethod(huber_loss)
     kl_div = staticmethod(kl_div)
     poisson_nll_loss = staticmethod(poisson_nll_loss)
@@ -2792,19 +2935,21 @@ class _Functional(_Namespace):
     multilabel_margin_loss = staticmethod(multilabel_margin_loss)
     pairwise_distance = staticmethod(pairwise_distance)
     pdist = staticmethod(pdist)
-    # 자리 옮기기와 채널째 dropout.
+    # Rearrangement and channel-wise dropout.
     pixel_shuffle = staticmethod(pixel_shuffle)
     pixel_unshuffle = staticmethod(pixel_unshuffle)
     channel_shuffle = staticmethod(channel_shuffle)
-    # `native_channel_shuffle` 은 안 낸다. ATen 의 밑단 진입점이고 위에 부르는 이름이
-    # 따로 있다 — 빈자리 표에 그렇게 적어 두고 여기서 만들면 표가 거짓말을 한다.
-    # 실제로 한 번 만들었다가 `test_gap.py` 가 그 모순을 잡았다.
+    # `native_channel_shuffle` is not exposed. It is ATen's low-level entry
+    # point and there is a separate name above that calls it — writing that down
+    # in the gap table and then building it here makes the table lie. It really
+    # was built once and `test_gap.py` caught the contradiction.
     dropout1d = staticmethod(dropout1d)
     dropout2d = staticmethod(dropout2d)
     dropout3d = staticmethod(dropout3d)
     alpha_dropout = staticmethod(alpha_dropout)
     feature_alpha_dropout = staticmethod(feature_alpha_dropout)
-    # 창 펴기와 나머지. **`F.unfold` 는 im2col 이다** — `Tensor.unfold` 와 다르다.
+    # Unfolding windows and the rest. **`F.unfold` is im2col** — different from
+    # `Tensor.unfold`.
     unfold = staticmethod(unfold_im2col)
     fold = staticmethod(fold)
     bilinear = staticmethod(bilinear)
@@ -2850,7 +2995,8 @@ class _Functional(_Namespace):
     lp_pool1d = staticmethod(lp_pool1d)
     lp_pool2d = staticmethod(lp_pool2d)
     lp_pool3d = staticmethod(lp_pool3d)
-    # 이긴 자리를 함께 내는 판과, 그 자리로 되돌리는 짝.
+    # The versions that also give the winning positions, and the partner that
+    # puts values back at them.
     adaptive_max_pool1d_with_indices = staticmethod(adaptive_max_pool1d_with_indices)
     adaptive_max_pool2d_with_indices = staticmethod(adaptive_max_pool2d_with_indices)
     adaptive_max_pool3d_with_indices = staticmethod(adaptive_max_pool3d_with_indices)
@@ -2861,7 +3007,8 @@ class _Functional(_Namespace):
     max_unpool2d = staticmethod(max_unpool2d)
     max_unpool3d = staticmethod(max_unpool3d)
     ctc_loss = staticmethod(ctc_loss)
-    # 제자리 활성. 계산은 밑줄 없는 쪽이 하고 여기서는 제 버퍼에 되쓴다.
+    # In-place activations. The version without the underscore does the
+    # computation and this writes back into its own buffer.
     celu_ = staticmethod(celu_)
     elu_ = staticmethod(elu_)
     hardtanh_ = staticmethod(hardtanh_)
@@ -2897,7 +3044,8 @@ class _Functional(_Namespace):
     pad = staticmethod(pad)
     normalize = staticmethod(normalize)
     cosine_similarity = staticmethod(cosine_similarity)
-    # 1차원·3차원 계열. **자매에는 있고 여기에는 없던 것들이다.**
+    # The 1-D and 3-D families. **The ones the sister library had and this did
+    # not.**
     conv1d = staticmethod(conv1d)
     conv2d = staticmethod(conv2d)
     conv3d = staticmethod(conv3d)

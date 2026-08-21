@@ -1,4 +1,4 @@
-"""borch 를 쪼갠 조각. 공개 이름은 __init__ 이 모은다."""
+"""A piece of borch, split out. __init__ gathers the public names."""
 
 import math as _math
 
@@ -13,22 +13,25 @@ from ._base import (
 # ---------------------------------------------------------------- Tensor
 
 def _conj(x):
-    """**정칙 함수의 역방향에 붙는 켤레.**
+    """**The conjugate that attaches to a holomorphic function's backward.**
 
-    복소수 기울기 규약이 `z.grad = ∂L/∂re + i·∂L/∂im` 이라(실측), 정칙 함수 `f` 의
-    역방향이 `conj(f'(z))·g` 다. 실수에서는 켤레가 항등이라 **실수만 넣어 보면 이
-    자리가 있는지 없는지 알 수 없다** — 그래서 실수 코드에 그냥 넣어 두어도 안전하고,
-    빼먹으면 복소수에서만 부호가 뒤집힌다.
+    The complex gradient convention is `z.grad = ∂L/∂re + i·∂L/∂im` (measured),
+    so a holomorphic `f`'s backward is `conj(f'(z))·g`. Over the reals the
+    conjugate is the identity, so **feeding it reals alone cannot tell whether
+    this place is there** — which makes it safe to leave in real code, and
+    leaving it out flips the sign for complex numbers only.
     """
     return _np.conj(x) if _np.asarray(x).dtype.kind == "c" else x
 
 
 def _keep(out, source, dim, keepdim):
-    """접힌 축을 크기 1 로 되살린다. `numpy` 의 `keepdims` 가 없는 함수들이 쓴다.
+    """Revive a folded axis at size 1. Used by the functions numpy has no
+    `keepdims` for.
 
-    **`argmax`·`argmin` 이 그런 자리다** — numpy 가 그 인자를 안 받아서, 축을 되살릴
-    곳이 여기밖에 없다. 안 되살리면 축 하나가 사라진 채로 브로드캐스팅이 **맞아
-    버리고**, 값만 틀린 채 끝까지 간다.
+    **`argmax` and `argmin` are such places** — numpy does not take the argument,
+    so here is the only place to revive the axis. Without it an axis is gone and
+    the broadcasting **happens to fit**, and it runs all the way through with
+    only the values wrong.
     """
     if not keepdim or dim is None:
         return out
@@ -38,7 +41,8 @@ def _keep(out, source, dim, keepdim):
 
 
 def _unbroadcast(grad, shape):
-    """브로드캐스팅으로 늘어난 축을 되돌린다. 역전파의 필수 단계다."""
+    """Undo the axes broadcasting stretched. A required step of
+    backpropagation."""
     while grad.ndim > len(shape):
         grad = grad.sum(axis=0)
     for i, n in enumerate(shape):
@@ -47,18 +51,20 @@ def _unbroadcast(grad, shape):
     return grad.reshape(shape)
 
 
-# torch 의 dtype 승격은 numpy 와 다르다 — **범주**로 먼저 가르고, 그 범주 안에서만 올린다.
+# torch's dtype promotion differs from numpy's — it splits by **category** first
+# and promotes only within that category.
 #
-#   범주:  bool(0) < 정수(1) < 실수(2) < 복소수(3)
-#   규칙:  참여한 것 중 가장 높은 범주를 고르고, 그 범주에 속한 것들 중 큰 것을 쓴다.
-#          낮은 범주는 높은 범주를 **끌어올리지 않는다.**
+#   categories:  bool(0) < integer(1) < float(2) < complex(3)
+#   the rule:    take the highest category present, and within it the largest.
+#                A lower category **does not pull a higher one up.**
 #
-# 그래서 float32 + int64 가 torch 에서는 float32 다 (numpy 는 float64 로 올린다).
-# 여기를 numpy 에 맡기면 학습자는 틀린 규칙을 배운다.
+# So float32 + int64 is float32 in torch (numpy promotes it to float64). Left to
+# numpy here, the learner learns the wrong rule.
 #
-# **복소수는 한 칸 더 위다**(실측: `complex64 + int64` 가 complex64). 그런데 실수 쪽
-# 정밀도가 복소수 쪽으로 **건너온다** — `complex64 + float64` 가 **complex128** 이다
-# (실측). 범주 규칙만으로는 그 자리가 안 나오므로 따로 적는다.
+# **Complex sits one step higher** (measured: `complex64 + int64` is complex64).
+# And the precision on the real side **carries across** to the complex one —
+# `complex64 + float64` is **complex128** (measured). The category rule alone does
+# not produce that, so it is written separately.
 
 _CATEGORY = {"b": 0, "i": 1, "u": 1, "f": 2, "c": 3}
 _RANK = {_np.dtype("bool"): 0, _np.dtype("int64"): 10,
@@ -66,7 +72,8 @@ _RANK = {_np.dtype("bool"): 0, _np.dtype("int64"): 10,
          _np.dtype("complex64"): 30, _np.dtype("complex128"): 31}
 _DEFAULT_BY_CATEGORY = {0: _np.dtype("bool"), 1: _np.dtype("int64"),
                         2: _np.dtype("float32"), 3: _np.dtype("complex64")}
-# 실수의 정밀도가 복소수로 건너오는 표. 배정도 실수 하나가 배정도 복소수를 만든다.
+# The table for a real's precision carrying into complex. One double-precision
+# real makes a double-precision complex.
 _WIDENS_COMPLEX = {_np.dtype("float64"): _np.dtype("complex128")}
 
 
@@ -75,13 +82,14 @@ def _category(dt):
 
 
 def result_type(a, b):
-    """두 텐서 dtype 의 결과 타입. torch.result_type 과 같은 규칙."""
+    """The result type of two tensor dtypes. torch.result_type's rule."""
     da, db = _np.dtype(a), _np.dtype(b)
     cat = max(_category(da), _category(db))
     same = [d for d in (da, db) if _category(d) == cat]
     out = max(same, key=lambda d: _RANK.get(d, 0))
     if cat == 3:
-        # **실수 쪽 정밀도가 건너온다.** `complex64 + float64` 가 complex128 이다.
+        # **The real side's precision carries across.** `complex64 + float64` is
+        # complex128.
         for d in (da, db):
             wide = _WIDENS_COMPLEX.get(d)
             if wide is not None and _RANK[wide] > _RANK[out]:
@@ -100,7 +108,7 @@ def _scalar_category(value):
 
 
 def _no_bool_subtract(dtype, other):
-    """torch 는 불리언에 `-` 를 허용하지 않는다. `^` 나 `~` 를 쓰라고 안내한다."""
+    """torch does not allow `-` on booleans. It points at `^` or `~`."""
     other_dtype = other.data.dtype if isinstance(other, Tensor) else _np.asarray(other).dtype
     if _np.dtype(dtype).kind == "b" or other_dtype.kind == "b":
         raise RuntimeError(_like_torch(
@@ -111,11 +119,12 @@ def _no_bool_subtract(dtype, other):
 
 
 def _promote(data, scalar):
-    """파이썬 스칼라와 섞을 때의 dtype.
+    """The dtype when mixing with a Python scalar.
 
-    스칼라는 텐서보다 약하다 — 범주가 텐서보다 낮거나 같으면 텐서의 dtype 을 따르고,
-    높을 때만 그 범주의 기본형으로 올라간다. int 텐서 + 파이썬 float 가
-    float64 가 아니라 **float32** 인 이유다.
+    A scalar is weaker than a tensor — at or below the tensor's category it takes
+    the tensor's dtype, and only above it does it rise to that category's default
+    type. Which is why an int tensor plus a Python float is **float32** rather
+    than float64.
     """
     tcat = _category(data.dtype)
     scat = _scalar_category(scalar)
@@ -123,14 +132,16 @@ def _promote(data, scalar):
 
 
 class _GradMode:
-    """`no_grad` 의 스위치를 **객체 하나에 담는다.** 그냥 모듈 전역으로 두면 안 된다.
+    """`no_grad`'s switch **held in one object.** It must not simply be a module
+    global.
 
-    파일을 쪼개면 `no_grad` 와 `_make` 가 다른 모듈에 놓이는데, 전역 이름은 모듈마다
-    따로 생긴다. `no_grad` 가 자기 모듈의 이름만 False 로 바꾸고 `_make` 는 옛 값을
-    계속 읽는다 — **예외도 경고도 없이 `no_grad` 가 안 먹는다.** 쪼개다 실제로 걸렸고,
-    골든이 아니라 `test_diff` 가 잡았다.
+    Splitting the file puts `no_grad` and `_make` in different modules, and a
+    global name is created separately per module. `no_grad` sets its own module's
+    name to False and `_make` goes on reading the old value — **`no_grad` stops
+    working, with no exception and no warning.** It actually happened while
+    splitting, and `test_diff` caught it rather than the golden.
 
-    객체 하나를 들여오면 어느 모듈에서 보든 같은 것을 본다.
+    Importing one object means every module sees the same thing.
     """
 
     enabled = True
@@ -140,10 +151,11 @@ _grad_mode = _GradMode()
 
 
 class _DataDescriptor:
-    """`t.data` 는 읽을 때 numpy 를, 쓸 때는 **텐서만** 받는다.
+    """`t.data` reads as numpy and accepts **tensors only** on write.
 
-    torch 가 `p.data = ndarray` 를 거부하기 때문이다. 여기서 받아주면 브라우저에서 돌던
-    코드가 자기 컴퓨터에서 깨진다 — 관대한 것도 갈리는 것이다.
+    Because torch refuses `p.data = ndarray`. Accepting it here means code that
+    ran in the browser breaks on the user's own machine — being more permissive
+    is still diverging.
     """
 
     def __get__(self, obj, owner=None):
@@ -167,22 +179,25 @@ class Tensor:
 
     def __init__(self, data, requires_grad=False, _parents=(), _backward=None):
         self._array = data if isinstance(data, _np.ndarray) else _np.asarray(data)
-        # **배정도가 여기서 막힌다.** `float64` 가 없으니 `complex128` 도 없다.
+        # **Double precision is blocked here.** No `float64` means no
+        # `complex128` either.
         #
-        # 이 한 줄이 목문이다 — 승격이 그것을 만드는 유일한 길이 `complex64 + float64`
-        # 이고, 그 결과도 여기를 지나 텐서가 된다. 자리마다 막으면 새 연산이 생길
-        # 때마다 빠뜨린다.
+        # This one line is the throat — the only path by which promotion produces
+        # it is `complex64 + float64`, and that result passes through here to
+        # become a tensor. Blocked place by place, every new operation forgets
+        # one.
         if self._array.dtype == _np.complex128:
             _no_complex128("This tensor's dtype")
-        # no_grad 는 **연산의 결과**가 그래프를 안 갖게 할 뿐, 직접 만든 잎의 requires_grad 를
-        # 끄지는 않는다. torch 도 그렇다 — 여기서 끄면 no_grad 블록 안에서 만든 파라미터가
-        # 학습 대상에서 조용히 빠진다.
+        # no_grad only stops **the result of an operation** from carrying a
+        # graph; it does not turn off requires_grad on a leaf made directly.
+        # torch is the same — turning it off here would quietly drop a parameter
+        # made inside a no_grad block from training.
         self.requires_grad = bool(requires_grad)
         self.grad = None
         self._parents = _parents
         self._backward = _backward
-        self._freed = False        # backward 한 번이면 그래프를 놓는다 (torch 와 같다)
-        self._op = None            # grad_fn 표시용 — 어느 연산에서 나왔는가
+        self._freed = False        # one backward releases the graph (as torch does)
+        self._op = None            # for showing grad_fn — which operation produced it
 
         if self.requires_grad and self.data.dtype.kind not in "fc":
             raise RuntimeError(
@@ -190,7 +205,7 @@ class Tensor:
                 "on floating point only — convert with `.float()`."
             )
 
-    # ---- 기본 정보
+    # ---- the basics
 
     @property
     def shape(self):
@@ -245,7 +260,7 @@ class Tensor:
     def __hash__(self):
         return id(self)
 
-    # ---- 그래프
+    # ---- the graph
 
     def _make(self, data, parents, backward, op=None):
         needs = _grad_mode.enabled and any(p.requires_grad for p in parents)
@@ -271,11 +286,12 @@ class Tensor:
                     "A tensor with more than one value needs a gradient. "
                     "Usually the loss is reduced to a scalar first.",
                     "grad can be implicitly created only for scalar outputs"))
-            # **손실은 실수여야 한다.** torch 가 그 자리에서 멈춘다(실측).
+            # **A loss has to be real.** torch stops right there (measured).
             #
-            # 그리고 이 한 줄이 복소수 기울기 규약 전체를 떠받친다 — 손실이 늘 실수라야
-            # `z.grad = ∂L/∂re + i·∂L/∂im` 이 잘 정의된다. 복소 손실을 받아 주면
-            # Wirtinger 의 나머지 절반을 정해야 하고, 그것은 안 정한 자리다.
+            # And this one line holds up the whole complex gradient convention —
+            # `z.grad = ∂L/∂re + i·∂L/∂im` is well defined only because the loss
+            # is always real. Accepting a complex loss would mean settling the
+            # other half of Wirtinger, and that is a place left unsettled.
             if self.data.dtype.kind == "c":
                 raise RuntimeError(_like_torch(
                     "backward() cannot be called on a complex loss — make it real with "
@@ -286,9 +302,10 @@ class Tensor:
 
         seed = _np.asarray(gradient, dtype=self.data.dtype)
         if seed.shape != self.data.shape:
-            # **모양을 여기서 본다.** 안 보면 numpy 가 나중에 브로드캐스팅을 시도하고,
-            # 맞으면 조용히 틀린 기울기가 나오고 안 맞으면 `ValueError` 가 원인에서
-            # 먼 자리에서 뜬다. torch 는 여기서 `RuntimeError` 로 멈춘다 — 실측했다.
+            # **The shape is checked here.** Unchecked, numpy attempts to
+            # broadcast later, and if it fits a quietly wrong gradient comes out
+            # and if it does not a `ValueError` appears a long way from the
+            # cause. torch stops here with a `RuntimeError` — measured.
             raise RuntimeError(_like_torch(
                 f"The gradient shape {tuple(seed.shape)} differs from the value shape "
                 f"{tuple(self.data.shape)}.",
@@ -296,7 +313,7 @@ class Tensor:
                 f"torch.Size({list(seed.shape)}) and output[0] has a shape of "
                 f"torch.Size({list(self.data.shape)})."))
 
-        # 위상 정렬 — 뒤에서 앞으로 한 번씩만 지나간다
+        # A topological sort — back to front, each node once
         order, seen = [], set()
 
         def visit(t):
@@ -314,19 +331,21 @@ class Tensor:
             g = grads.get(id(t))
             if g is None:
                 continue
-            if t._backward is None:                 # 잎 — 여기에 쌓는다
+            if t._backward is None:                 # a leaf — accumulate here
                 if t.requires_grad:
                     t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
                 continue
-            # **`retain_grad()` 를 부른 파생 텐서에도 쌓는다.** 안 그러면 그 이름이
-            # 거절만 흉내 내고 하는 일이 없다 — 잎에서 멈추는 것까지만 맞고 정작
-            # 하려던 일을 안 한다.
+            # **Accumulate on a derived tensor that called `retain_grad()`
+            # too.** Otherwise that name only imitates the refusal and does
+            # nothing — it gets as far as stopping at a leaf and never does the
+            # thing it was for.
             if getattr(t, "_retain", False):
                 t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
             for parent, pg in zip(t._parents, t._backward(g)):
                 if pg is None:
                     continue
-                # 잎의 .grad 는 위의 분기에서만 채운다. 여기서도 채우면 두 번 쌓인다.
+                # A leaf's .grad is filled by the branch above only. Filling it
+                # here as well accumulates twice.
                 pg = _unbroadcast(_np.asarray(pg), parent.data.shape)
                 grads[id(parent)] = pg if id(parent) not in grads else grads[id(parent)] + pg
 
@@ -344,17 +363,21 @@ class Tensor:
     def numpy(self):
         return self.data
 
-    # ---- 형 변환
+    # ---- dtype conversion
 
     def _cast(self, target):
-        """실수끼리의 형 변환은 **그래프를 잇는다.** torch 가 그렇다.
+        """A conversion between floating point dtypes **carries the graph
+        through.** That is what torch does.
 
-        전에는 `Tensor(..., self.requires_grad)` 였는데, 그러면 결과가 `requires_grad=True`
-        라고 말하면서 부모가 없다. `backward()` 는 예외 없이 잘 돌고 원래 텐서의 `.grad`
-        만 `None` 으로 남는다 — **예외도 경고도 없다.** 이 저장소가 가장 싫어하는 모양이고,
-        `x.float()` 는 튜토리얼 코드에 흔해서 조용히 학습이 안 되는 자리가 된다.
+        It used to be `Tensor(..., self.requires_grad)`, and then the result says
+        `requires_grad=True` while having no parents. `backward()` runs without
+        an exception and only the original tensor's `.grad` stays `None` — **no
+        exception and no warning.** The shape this repository dislikes most, and
+        `x.float()` is common in tutorial code, so it becomes a place where
+        training quietly does not happen.
 
-        정수·불리언으로 가는 변환은 여기 안 온다. 거기서는 torch 도 기울기를 끊는다.
+        A conversion to an integer or boolean dtype does not come here. torch
+        cuts the gradient there too.
         """
         out = self.data.astype(target)
         return self._make(out, (self,), lambda g: (g.astype(self.data.dtype),), "ToCopyBackward0")
@@ -366,12 +389,13 @@ class Tensor:
         return Tensor(self.data.astype(_np.int64))
 
     def int(self):
-        """**int32 가 없다 — 그래서 거절한다.**
+        """**There is no int32 — so it refuses.**
 
-        오래 int64 를 내주고 있었다. 값은 그럴듯한데 `x.int().dtype == torch.int32`
-        를 보는 코드가 자기 컴퓨터에서 갈리고, 그때 원인은 이 줄이 아니라 훨씬
-        뒤에서 드러난다. torch 의 `.int()` 는 int32 다(실측) — 우리에게 그 칸이
-        없으면 다른 칸을 대신 주는 것이 아니라 멈추는 편이 낫다.
+        It handed back int64 for a long time. The values are plausible and code
+        looking at `x.int().dtype == torch.int32` diverges on the user's own
+        machine, and the cause surfaces far past this line rather than at it.
+        torch's `.int()` is int32 (measured) — with no such storage here,
+        stopping beats handing over a different cell instead.
         """
         _unsupported("`.int()`(int32)")
 
@@ -382,13 +406,14 @@ class Tensor:
         return self._cast(_np.float64)
 
     def type_as(self, other):
-        """`other` 의 형으로 맞춘다. **없는 기능이 아니라 안 적힌 기능이었다** —
-        `type()` 은 있는데 이쪽이 없어서 `AttributeError` 로 멈췄다."""
+        """Match `other`'s dtype. **Not an absent feature but an unwritten one** —
+        `type()` existed and this did not, so it stopped with an
+        `AttributeError`."""
         return self.type(other.dtype if isinstance(other, Tensor)
                          else _np.asarray(other).dtype)
 
     def cfloat(self):
-        """complex64. 이 칸은 있다 — `cdouble`·`chalf` 와 달리."""
+        """complex64. This storage exists — unlike `cdouble` and `chalf`."""
         return Tensor(self.data.astype(_np.complex64))
 
 
@@ -399,21 +424,25 @@ class Tensor:
         return self._cast(target)
 
     def to(self, *args, **kwargs):
-        """장치와 **형** 둘 다 받는다. torch 의 `to` 가 그 둘을 한 이름에 담는다.
+        """Takes both a device and **a dtype.** torch's `to` holds the two under
+        one name.
 
-        **오래 형을 조용히 버리고 있었다.** 장치 문자열만 보고 나머지는 무시한 채
-        `self` 를 돌려줬으므로 `x.to(torch.float32)` 가 아무 일도 안 했다 — 예외도
-        경고도 없이 원래 형 그대로다. 그 꼴이 교재 코드에 흔하고(`x.to(device)` 와
-        나란히 쓰인다), 정수 텐서에서는 그 뒤 나눗셈이 **정수 나눗셈으로 조용히**
-        갈린다. 축약에 `dtype=` 를 붙이다가 드러났다 — 그쪽이 이 함수를 부르는데
-        형이 안 바뀌어서.
+        **It quietly discarded the dtype for a long time.** It looked only at the
+        device string, ignored the rest and handed back `self`, so
+        `x.to(torch.float32)` did nothing — the original dtype, with no exception
+        and no warning. That form is common in textbook code (it sits next to
+        `x.to(device)`), and on an integer tensor the division that follows
+        **quietly becomes integer division.** It surfaced while attaching
+        `dtype=` to the reductions — that side calls this function and the dtype
+        did not change.
         """
         target = None
         for a in list(args) + list(kwargs.values()):
-            # **`device` 물건도 받는다.** `x.to(device)` 가 튜토리얼의 꼴이고,
-            # 그 `device` 는 문자열이 아니라 `torch.device(...)` 다. 문자열만 보면
-            # 그 줄이 조용히 아무것도 안 한다 — 형 인자로 읽혀 `target` 이 되면
-            # 오히려 `numpy` 가 "형이 아니다" 로 멈춘다.
+            # **A `device` object is accepted too.** `x.to(device)` is the
+            # tutorial's form, and that `device` is a `torch.device(...)` rather
+            # than a string. Looking at strings alone, that line quietly does
+            # nothing — and read as a dtype argument into `target` it makes
+            # `numpy` stop with "not a dtype" instead.
             if isinstance(a, _device):
                 if a.type != "cpu":
                     _unsupported(f"device '{a}'")
@@ -431,7 +460,7 @@ class Tensor:
     def cpu(self):
         return self
 
-    # ---- 산술
+    # ---- arithmetic
 
     def _binary(self, other, forward, back_self, back_other, op=None):
         if isinstance(other, Tensor):
@@ -439,8 +468,9 @@ class Tensor:
             o = other if other.data.dtype == target else Tensor(other.data.astype(target))
             mine = self.data if self.data.dtype == target else self.data.astype(target)
         else:
-            # 파이썬 스칼라를 텐서 dtype 으로 끌어온 뒤 계산한다. numpy 에 맡기면
-            # int64 + float32 가 float64 로 올라가는데 torch 는 float32 를 준다.
+            # The Python scalar is pulled to the tensor's dtype before
+            # computing. Left to numpy, int64 + float32 rises to float64, and
+            # torch gives float32.
             target = _promote(self.data, other)
             o = Tensor(_np.asarray(other, dtype=target))
             mine = self.data.astype(target) if self.data.dtype != target else self.data
@@ -472,12 +502,14 @@ class Tensor:
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__sub__(self)
 
     def __mul__(self, o):
-        """곱셈. **복소수에서는 국소 도함수에 켤레가 붙는다.**
+        """Multiplication. **On complex numbers the local derivative takes a
+        conjugate.**
 
-        규약이 `z.grad = ∂L/∂re + i·∂L/∂im` 이라, 정칙 함수 `f` 의 역방향은
-        `conj(f'(z))·g` 다. `d(ab)/da = b` 이므로 `conj(b)·g` — 실수에서는 켤레가
-        항등이라 같은 식이 되고, **복소수에서만 갈린다.** 실수 입력으로는 이 자리가
-        절대 안 보인다.
+        The convention is `z.grad = ∂L/∂re + i·∂L/∂im`, so a holomorphic `f`'s
+        backward is `conj(f'(z))·g`. `d(ab)/da = b`, hence `conj(b)·g` — over the
+        reals the conjugate is the identity and the formula is the same, and
+        **they diverge on complex numbers only.** Real input never shows this
+        place.
         """
         return self._binary(o, _np.multiply,
                             lambda g, a, b: g * _conj(b),
@@ -486,12 +518,14 @@ class Tensor:
     __rmul__ = __mul__
 
     def __truediv__(self, o):
-        # torch 의 나눗셈은 정수·불리언끼리여도 기본 실수형(float32)을 낸다.
-        # numpy 에 맡기면 int64/int64 가 float64 가 된다.
+        # torch's division gives the default floating point dtype (float32) even
+        # between integers or booleans. Left to numpy, int64/int64 becomes
+        # float64.
         def div(a, b):
             out = _np.divide(a, b)
             return out.astype(_DEFAULT_DTYPE) if a.dtype.kind not in "fc" else out
-        # 곱셈과 같은 자리 — `d(a/b)/da = 1/b`, `d(a/b)/db = −a/b²` 에 켤레가 붙는다.
+        # The same place as multiplication — the conjugate attaches to
+        # `d(a/b)/da = 1/b` and `d(a/b)/db = −a/b²`.
         return self._binary(o, div, lambda g, a, b: g / _conj(b),
                             lambda g, a, b: -g * _conj(a) / _conj(b * b),
                             "DivBackward0")
@@ -509,8 +543,9 @@ class Tensor:
         return self._make(-self.data, (self,), lambda g: (-g,), "NegBackward0")
 
     def __mod__(self, o):
-        """나머지. **기울기는 나누어지는 쪽으로 그대로 흐른다** — `a % b` 는 `a` 에 대해
-        기울기 1 이다(계단이 뛰는 자리를 빼면). 나누는 쪽으로는 `-floor(a/b)` 다."""
+        """The remainder. **The gradient flows straight through to the
+        dividend** — `a % b` has gradient 1 with respect to `a` (except where the
+        step jumps). Towards the divisor it is `-floor(a/b)`."""
         od = o.data if isinstance(o, Tensor) else o
         parents = (self, o) if isinstance(o, Tensor) else (self,)
 
@@ -536,13 +571,14 @@ class Tensor:
                 f"({o.data.shape[-2]}).",
                 f"mat1 and mat2 shapes cannot be multiplied ({a} and {b})"))
         def back(g):
-            """**1차원은 자리를 하나 빌려 쓴다.**
+            """**1-D borrows an axis.**
 
-            numpy 는 앞이 1차원이면 `(1, n)` 으로, 뒤가 1차원이면 `(n, 1)` 로 늘려
-            곱하고 **그 빌린 축을 결과에서 지운다.** 역방향에서는 그 축을 도로 끼워야
-            전치가 성립한다 — 안 끼우면 `swapaxes(v, -1, -2)` 가 1차원에서 그대로
-            멈춘다(`axis -2 is out of bounds`). 2차원끼리로만 재면 안 드러나는 자리라
-            `mv` 를 넣으면서 처음 밟았다.
+            numpy stretches a leading 1-D to `(1, n)` and a trailing 1-D to
+            `(n, 1)`, multiplies, and **removes the borrowed axis from the
+            result.** The backward has to put that axis back for the transpose to
+            hold — without it `swapaxes(v, -1, -2)` stops outright on 1-D
+            (`axis -2 is out of bounds`). Measured between 2-D operands alone the
+            place never shows, and adding `mv` stepped on it first.
             """
             g = _np.asarray(g)
             a, b = self.data, o.data
@@ -552,7 +588,8 @@ class Tensor:
             gg = g.reshape(lead + (aa.shape[-2], bb.shape[-1]))
             da = gg @ _np.swapaxes(bb, -1, -2)
             db = _np.swapaxes(aa, -1, -2) @ gg
-            # 배치가 한쪽으로만 퍼진 자리는 크기가 안 맞는다 — 그때는 그대로 둔다.
+            # Where the batch was broadcast on one side only the sizes do not
+            # match — there it is left alone.
             return (da.reshape(a.shape) if da.size == a.size else da,
                     db.reshape(b.shape) if db.size == b.size else db)
 
@@ -564,7 +601,7 @@ class Tensor:
     def matmul(self, o):
         return self.__matmul__(o)
 
-    # 제자리 갱신 — no_grad 안에서만 허용한다 (진짜 torch 도 같은 규칙)
+    # In-place updates — allowed inside no_grad only (real torch's rule too)
     def _inplace(self, fn, other):
         if self.requires_grad and _grad_mode.enabled:
             raise RuntimeError(
@@ -584,7 +621,7 @@ class Tensor:
     def __imul__(self, o):
         return self._inplace(_np.multiply, o)
 
-    # ---- 비교 (기울기 없음)
+    # ---- comparison (no gradient)
 
     def _cmp(self, o, fn):
         return Tensor(fn(self.data, o.data if isinstance(o, Tensor) else o))
@@ -600,23 +637,27 @@ class Tensor:
     def __or__(self, o): return self._cmp(o, _np.logical_or)
 
     def all(self, dim=None, keepdim=False):
-        """전부 참인가. **축과 `keepdim` 을 받는다** — 안 받으면 조용히 틀린다.
+        """Are they all true. **It takes an axis and `keepdim`** — without them
+        it is quietly wrong.
 
-        축을 안 받으면 `x.all(dim=1)` 이 전체 축약으로 떨어져 스칼라가 나오는데,
-        그 뒤 브로드캐스팅이 **맞아 버려서** 값만 틀린 채 끝까지 간다. `keepdim` 도
-        같은 갈래다 — 축 하나가 사라진 모양이 우연히 브로드캐스팅으로 들어맞는다.
+        With no axis, `x.all(dim=1)` falls through to a whole-tensor reduction
+        and gives a scalar, and the broadcasting afterwards **happens to fit**,
+        so it runs all the way through with only the values wrong. `keepdim` is
+        the same branch — a shape missing one axis fits the broadcasting by
+        accident.
         """
         return Tensor(_np.all(self.data, axis=dim, keepdims=bool(keepdim)))
 
     def any(self, dim=None, keepdim=False):
         return Tensor(_np.any(self.data, axis=dim, keepdims=bool(keepdim)))
 
-    # ---- 모양
+    # ---- shape
 
     def reshape(self, *shape):
-        # numpy 의 reshape 는 가능하면 뷰를 준다 — 그대로 들고 있으면 저장소가 공유되고,
-        # 그것이 torch 의 동작이다. `b = a.view(2,2); b[0,0]=9` 가 a 를 바꾼다.
-        # 복사해 두면 편하지만, 실무에서 사고가 나는 바로 그 지점을 안 가르치게 된다.
+        # numpy's reshape gives a view where it can — held as-is the storage is
+        # shared, and that is torch's behaviour. `b = a.view(2,2); b[0,0]=9`
+        # changes a. Copying would be convenient and would stop teaching the
+        # exact point where accidents happen in practice.
         shape = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
         old = self.data.shape
         try:
@@ -629,10 +670,12 @@ class Tensor:
         return self._make(out, (self,), lambda g: (g.reshape(old),), "ViewBackward0")
 
     def view(self, *shape):
-        """`reshape` 과 달리 **저장소를 그대로 쓸 수 있을 때만** 된다.
+        """Unlike `reshape`, this works **only when the storage can be used as
+        it is.**
 
-        transpose 한 텐서처럼 메모리 순서가 어긋난 것에는 torch 가 거부하고
-        `reshape` 을 쓰라고 안내한다. 둘의 차이를 여기서 배우는 게 맞다.
+        On something whose memory order is off, such as a transposed tensor,
+        torch refuses and points at `reshape`. Learning the difference between
+        the two here is right.
         """
         if not self.data.flags["C_CONTIGUOUS"]:
             raise RuntimeError(_like_torch(
@@ -668,70 +711,82 @@ class Tensor:
                           lambda g: (_np.transpose(g, inv),))
 
     def contiguous(self):
-        """**`self` 를 그냥 돌려주고 있었다.** 이미 연속이면 그것이 맞지만 아니면
-        틀리다 — 전치한 뒤 불러도 여전히 비연속이었고, 그래서 `is_contiguous()` 가
-        torch 와 반대 답을 낸다. 기울기는 항등이다.
+        """**It simply handed back `self`.** Right when it is already contiguous
+        and wrong otherwise — called after a transpose it stayed non-contiguous,
+        so `is_contiguous()` gave the opposite answer from torch. The gradient is
+        the identity.
         """
         if self.data.flags["C_CONTIGUOUS"]:
             return self
         return self._make(_np.ascontiguousarray(self.data), (self,),
                           lambda g: (_np.asarray(g),), "CloneBackward0")
 
-    # ── 묻는 것 넷 ────────────────────────────────────────────────────────
+    # ── the four that ask ─────────────────────────────────────────────────
     #
-    # 넷 다 **torch 에서 실제로 거짓이 나온다** — 그것을 먼저 재고 넣었다. 늘 참인
-    # 술어는 우리 구현을 굳히는 것뿐이라 케이스로 물어도 묻는 게 아니다.
+    # All four **actually come back false in torch** — that was measured before
+    # they went in. A predicate that is always true only pins our own
+    # implementation, so asking it as a case is not asking anything.
     #
-    # `is_contiguous` 는 우리에게도 뜻이 있다. numpy 가 전치·permute·성긴 슬라이스를
-    # **뷰**로 주므로 그 자리에서 거짓이 되고, torch 와 같은 답이다. 브라우저 쪽은
-    # 뷰를 안 만들어서 늘 참인데, 그것은 이 술어의 이야기가 아니라 **뷰의 이야기**다.
+    # `is_contiguous` means something here too. numpy gives a transpose, a
+    # permute and a strided slice as **views**, so it becomes false there, and
+    # that is torch's answer. The browser side makes no views and is always true,
+    # and that is a story about **views** rather than about this predicate.
 
     def is_floating_point(self):
         return bool(self.data.dtype.kind == "f")
 
-    # ── 조밀 텐서에도 답이 있는 여섯 ──────────────────────────────────────
+    # ── the six that have an answer on a dense tensor too ─────────────────
     #
-    # 이름만 보면 **희소·장치·양자화라 없는 게 맞다**고 세게 된다. 실제로 재보니
-    # torch 가 조밀 텐서에서 여섯을 그냥 해낸다 — 희소·양자화 기계가 필요한 것이
-    # 아니라 "이 텐서는 조밀하다"·"CPU 다" 라는 답이 있는 것이다. 이름으로 세면
-    # 없는 결함을 굳히게 되고, 나중에 누가 구현하면 **초록이던 케이스가 빨개진다.**
+    # Going by the names they get counted as **rightly absent, being sparse,
+    # device or quantisation names.** Measured, torch simply does all six on a
+    # dense tensor — what is needed is not sparse or quantisation machinery but
+    # the answers "this tensor is dense" and "it is on the CPU". Counted by name,
+    # a defect that does not exist gets pinned, and when somebody implements it
+    # later **a case that was green turns red.**
     #
-    # `to_dense`·`dequantize` 는 **기울기를 나른다**(실측) — 항등이라 그대로 지난다.
+    # `to_dense` and `dequantize` **carry the gradient** (measured) — being the
+    # identity, it passes straight through.
 
     def dense_dim(self):
-        """조밀 텐서는 축이 전부 조밀하다."""
+        """On a dense tensor every axis is dense."""
         return self.data.ndim
 
     def sparse_dim(self):
-        """조밀 텐서에 희소 축은 없다."""
+        """A dense tensor has no sparse axes."""
         return 0
 
     def to_dense(self):
-        """이미 조밀하다 — torch 도 같은 객체를 돌려준다(실측)."""
+        """It is already dense — torch hands back the same object too
+        (measured)."""
         return self
 
     def dequantize(self):
-        """실수에서는 항등이다. 양자화 dtype 이 필요한 자리가 아니다."""
+        """The identity over the reals. Not a place that needs a quantised
+        dtype."""
         return self
 
     def storage_offset(self):
-        """우리 배열은 언제나 자기 버퍼의 처음부터다 — 저장을 나눠 갖지 않는다."""
+        """Our arrays always start at the beginning of their own buffer — the
+        storage is not shared."""
         return 0
 
     def get_device(self):
-        """CPU 텐서는 -1 이다(실측). 장치 번호가 없다는 뜻이지 오류가 아니다."""
+        """A CPU tensor gives -1 (measured). It means there is no device index,
+        not that something went wrong."""
         return -1
 
     def is_signed(self):
-        """참거짓과 부호 없는 정수만 거짓이다 — 실수·정수·복소수는 참."""
+        """False for booleans and unsigned integers only — floats, signed
+        integers and complex are true."""
         return bool(self.data.dtype.kind in "fci")
 
     def is_contiguous(self):
         return bool(self.data.flags["C_CONTIGUOUS"])
 
     def is_nonzero(self):
-        """**원소가 하나여야 한다.** 여럿이면 torch 가 "모호하다" 로 멈춘다 —
-        `if tensor:` 가 조용히 첫 원소를 보는 일을 막는 자리다."""
+        """**There has to be exactly one element.** With more, torch stops with
+        "ambiguous" — the place that stops `if tensor:` from quietly looking at
+        the first element."""
         if self.data.size != 1:
             raise RuntimeError(_like_torch(
                 f"The truth value of a tensor with {self.data.size} values is ambiguous.",
@@ -763,14 +818,17 @@ class Tensor:
             if isinstance(idx, tuple) else (idx.data if isinstance(idx, Tensor) else idx)
         self.data[key] = value.data if isinstance(value, Tensor) else value
 
-    # ---- 제자리 연산
+    # ---- in-place operations
     #
-    # **버퍼를 진짜로 고친다.** 코어의 뷰는 numpy 배열을 공유하므로(실측:
-    # `np.shares_memory(a.data, a.view(2,2).data)` 가 참) 뷰를 고치면 원본도 바뀐다 —
-    # torch 와 같다. 자매는 TF.js 텐서가 불변이라 그 전파를 못 하고, 거기서 둘이 갈린다.
+    # **The buffer really is changed.** The core's views share the numpy array
+    # (measured: `np.shares_memory(a.data, a.view(2,2).data)` is true), so
+    # changing a view changes the original — as in torch. The sister library
+    # cannot propagate that because a TF.js tensor is immutable, and that is where
+    # the two part.
     #
-    # torch 가 거절하는 자리도 따라 거절한다. 잎에 기울기가 켜져 있으면 못 고치고,
-    # 역전파에 필요한 값을 덮는 것도 못 한다 — 후자는 우리가 안 잡지만, 잎 쪽은 잡는다.
+    # The places torch refuses are refused here too. A leaf with gradients on
+    # cannot be changed, and neither can a value the backward pass needs — the
+    # latter goes uncaught here, and the leaf case is caught.
 
     def _inplace(self, fn, what):
         if self.requires_grad and _grad_mode.enabled:
@@ -780,13 +838,15 @@ class Tensor:
                 "a leaf Variable that requires grad is being used in an in-place operation"))
         out = fn()
         got = out.data if isinstance(out, Tensor) else _np.asarray(out)
-        # **모양이 바뀌는 제자리 연산이 있다.** `transpose_`·`squeeze_`·`unsqueeze_` 는
-        # 값이 아니라 보는 틀을 고친다. 값만 되쓰면 3×2 를 2×3 자리에 넣으라는 말이
-        # 되어 터지고, 정사각으로만 물으면 **모양이 안 바뀐 채 통과한다** — 실제로
-        # 2×2 케이스가 이것을 못 봤다. 그 자리에서는 배열을 갈아 끼운다. numpy 의
-        # 전치·차원 넣기는 뷰라서 버퍼는 그대로 공유하고 틀만 바뀐다.
+        # **Some in-place operations change the shape.** `transpose_`,
+        # `squeeze_` and `unsqueeze_` change the frame rather than the values.
+        # Writing back the values alone amounts to putting a 3×2 into a 2×3 slot
+        # and blows up, and asked with squares only it **passes with the shape
+        # unchanged** — a 2×2 case really did fail to see this. There the array
+        # is swapped out instead. numpy's transpose and axis insertion are views,
+        # so the buffer stays shared and only the frame changes.
         if got.shape != self.data.shape:
-            self._array = got                  # `.data` 는 일부러 ndarray 를 거절한다
+            self._array = got                  # `.data` refuses an ndarray on purpose
             return self
         self.data[...] = got
         return self
@@ -825,20 +885,23 @@ class Tensor:
 
     clip_ = clamp_
 
-    # ---- 축약
+    # ---- reductions
 
     def _cast_first(self, dtype):
-        """`dtype=` 를 받은 축약이 맨 앞에서 부른다. 안 주면 자기 자신이다.
+        """A reduction that received `dtype=` calls this first. Given nothing it
+        is the identity.
 
-        **규칙 한 줄이다: 넣기 전에 바꾼다.** 접고 나서 바꾸는 것이 아니다 —
-        실측이 그것을 못 박는다:
+        **One line of rule: convert before going in.** Not convert after folding —
+        measurement pins that:
 
             torch.tensor([1.7, -2.3, 0.9]).sum(dtype=torch.int64)  →  -1
 
-        먼저 접으면 `0.3` 이고 그것을 정수로 깎아도 `0` 이다. 먼저 깎으면
-        `[1, -2, 0]` 이라 합이 `-1` 이다. 답이 갈리는 자리이고, 그래서 이 한 줄이
-        `dtype=` 의 정의다. 정수 입력에 `mean(dtype=float32)` 이 도는 것도 같은
-        이유다 — 거절하던 것은 **결과 형을 못 정해서**였고, 그것을 받았으니 돈다.
+        Folded first it is `0.3`, and truncated to an integer that is `0`.
+        Truncated first it is `[1, -2, 0]`, so the sum is `-1`. This is where the
+        answers part, which makes this one line the definition of `dtype=`.
+        `mean(dtype=float32)` running on integer input is the same reason — what
+        was refused was **not being able to decide the output dtype**, and once
+        that is given it runs.
         """
         return self if dtype is None else self.to(dtype)
 
@@ -849,8 +912,9 @@ class Tensor:
 
     def sum(self, dim=None, keepdim=False, dtype=None):
         if dtype is not None:
-            # **결과 형도 못 박는다.** 캐스팅만 하면 누적 규칙이 다시 올린다 —
-            # `sum(dtype=bool)` 이 int64 로 나온다(torch 는 `True` 다, 실측).
+            # **The output dtype is pinned as well.** With the cast alone the
+            # accumulation rule promotes it again — `sum(dtype=bool)` comes out
+            # int64 (torch gives `True`, measured).
             return self._cast_first(dtype).sum(dim, keepdim).to(dtype)
         shape = self.data.shape
 
@@ -865,9 +929,11 @@ class Tensor:
 
     def mean(self, dim=None, keepdim=False, dtype=None):
         if dtype is not None:
-            # **정수로 내리라는 것은 거절한다**(실측). `dtype=` 이 입력 쪽 거절은
-            # 풀어 주지만(정수 입력 + `dtype=float32` 는 돈다) 결과가 정수인 평균은
-            # 여전히 답이 없다 — 푸는 것은 **결과 형을 못 정하던 것**뿐이다.
+            # **Asking it down to an integer is refused** (measured). `dtype=`
+            # lifts the refusal on the input side (integer input plus
+            # `dtype=float32` runs), and a mean whose result is an integer still
+            # has no answer — what is lifted is **only** the inability to decide
+            # the output dtype.
             _needs_float(
                 _np.empty(0, dtype=_np.dtype(getattr(dtype, "np", dtype))),
                 "The output dtype of a mean has to be a floating point one.",
@@ -894,15 +960,17 @@ class Tensor:
 
     def _argreduce(self, np_fn, np_arg, dim, keepdim):
         if dim is None:
-            # **축이 없으면 번호도 없고, 그래서 규칙이 반대가 된다.** 번호를 주는
-            # `max(dim=0)` 은 고른 한 자리에 기울기를 전부 주지만, 번호가 없는
-            # `max()` 는 동점에 **고르게 나눈다** — `amax()` 와 같은 규칙이다
-            # (실측: [3,5,5,1,5] → [0, ⅓, ⅓, 0, ⅓]).
+            # **With no axis there are no indices, and so the rule reverses.**
+            # `max(dim=0)`, which gives indices, hands the whole gradient to the
+            # one chosen position, and `max()`, which gives none, **splits it
+            # evenly across a tie** — `amax()`'s rule (measured:
+            # [3,5,5,1,5] → [0, ⅓, ⅓, 0, ⅓]).
             #
-            # 예전에는 여기서 `Tensor(...)` 를 맨손으로 만들어 **그래프가 조용히
-            # 끊겼다.** 값 검사는 전부 통과했다 — 값은 맞았기 때문이다. 드러난 것은
-            # `backward()` 를 불렀을 때이고, 그때 나오는 말은 "requires_grad 가 아닌
-            # 텐서" 라 사용자를 가리킨다. 연산이 없다고는 아무도 안 말해 준다.
+            # This used to build a bare `Tensor(...)` here and **the graph was
+            # quietly cut.** Every value check passed — because the values were
+            # right. It surfaced on calling `backward()`, and what comes out
+            # there says "a tensor that does not require grad", which points at
+            # the user. Nobody says the operation is missing.
             value = _np.asarray(np_fn(self.data))
             hit = (self.data == value).astype(self.data.dtype)
             share = hit / hit.sum()
@@ -923,15 +991,15 @@ class Tensor:
             return (z,)
 
         out = self._make(values, (self,), back)
-        # **번호도 축을 지켜야 한다.** 값만 살리면 `x.gather(1, m.indices)` 가 랭크
-        # 어긋남으로 멈추거나 — 더 나쁘게 — 브로드캐스팅으로 통과한다. torch 는 둘
-        # 다 `(2, 1)` 을 준다(실측).
+        # **The indices have to keep the axis too.** Keeping it on the values
+        # alone makes `x.gather(1, m.indices)` stop on a rank mismatch or — worse
+        # — pass by broadcasting. torch gives `(2, 1)` for both (measured).
         return _MinMax(out, Tensor(_np.expand_dims(idx, d) if keepdim else idx))
 
     def _elementwise_extreme(self, other, pick, name):
-        """**동점이면 반씩 나눈다.** torch 가 그렇다 — `maximum(2, 2)` 의 기울기는
-        양쪽 다 0.5 다. `_ops.maximum` 과 같은 규칙이고, 여기서 다시 적는 이유는
-        `_tensor.py` 가 `_ops` 를 못 들여오기 때문이다(순환)."""
+        """**A tie splits in half.** That is what torch does — the gradient of
+        `maximum(2, 2)` is 0.5 on both sides. `_ops.maximum`'s rule, written again
+        here because `_tensor.py` cannot import `_ops` (a cycle)."""
         other = other if isinstance(other, Tensor) else Tensor(_np.asarray(other))
         tie = self.data == other.data
         left = _np.where(tie, 0.5, (self.data > other.data).astype(self.data.dtype))
@@ -940,10 +1008,11 @@ class Tensor:
         return self._make(pick(self.data, other.data), (self, other),
                           lambda g: (g * left, g * (1.0 - left)), name)
 
-    # **한 이름에 셋이 들어 있다.** torch 의 `max` 는 인자에 따라 다른 것을 낸다:
-    # 인자가 없으면 전부의 최댓값 하나, 축이면 `(값, 번호)` 쌍, **텐서면 칸마다의
-    # 최댓값**이다. 마지막 갈래가 없어서 `torch.max(a, b)` 가 축인 줄 알고
-    # `'Tensor' object cannot be interpreted as an integer` 로 멈췄다.
+    # **Three things under one name.** torch's `max` produces different things
+    # depending on the arguments: with none, one overall maximum; with an axis, a
+    # `(values, indices)` pair; **with a tensor, the elementwise maximum.** The
+    # last branch was missing, so `torch.max(a, b)` took it for an axis and
+    # stopped with `'Tensor' object cannot be interpreted as an integer`.
 
     def max(self, dim=None, keepdim=False):
         if isinstance(dim, Tensor):
@@ -966,11 +1035,12 @@ class Tensor:
         return Tensor(_keep(_np.argmin(self.data, axis=dim), self, dim, keepdim))
 
     def var(self, dim=None, unbiased=True, keepdim=False):
-        """**그래프 안에서** 계산한다.
+        """Computed **inside the graph.**
 
-        전에는 `np.var` 로 값만 떼어 돌려줬다. 값은 맞지만 기울기가 안 흐른다 —
-        분산을 손실에 끼우면 학습이 조용히 멈춘다. ROADMAP 11번이 topk·sort 에서
-        잡은 것과 같은 종류인데, 여기는 검사가 없어서 남아 있었다.
+        It used to take the value out through `np.var` and hand it back. The
+        value is right and no gradient flows — put a variance into the loss and
+        training quietly stops. The same kind of thing ROADMAP item 11 caught in
+        topk and sort, and it survived here because there was no check.
         """
         _needs_float(
             self.data,
@@ -987,11 +1057,13 @@ class Tensor:
         return self.var(dim=dim, unbiased=unbiased, keepdim=keepdim) ** 0.5
 
     def abs(self):
-        """크기. **복소수에서는 결과가 실수이고 기울기가 `z/|z|` 다.**
+        """The magnitude. **On complex numbers the result is real and the
+        gradient is `z/|z|`.**
 
-        `sign` 을 그대로 쓰면 안 된다 — numpy 의 복소 `sign` 은 torch 의 것과 다르고,
-        애초에 torch 는 복소수에 `sign` 을 거절한다(실측). 여기서 필요한 것은
-        `∂|z|/∂re = re/|z|`, `∂|z|/∂im = im/|z|` 를 묶은 `z/|z|` 다.
+        `sign` must not be used as-is — numpy's complex `sign` differs from
+        torch's, and torch refuses `sign` on complex numbers in the first place
+        (measured). What is needed here is `z/|z|`, which bundles
+        `∂|z|/∂re = re/|z|` and `∂|z|/∂im = im/|z|`.
         """
         if self.data.dtype.kind == "c":
             mag = _np.abs(self.data)
@@ -1018,10 +1090,11 @@ class Tensor:
         return self._make(out, (self,), lambda g: (_np.where(m, 0, g),))
 
     def bincount(self):
-        # `intp` 다 — wasm32 에서 int64 를 주면 거절한다. `_ops.repeat_interleave` 참고.
-        # **참·거짓은 거절한다** — torch 가 `"bincount_cpu" not implemented for
-        # 'Bool'` 로 멈춘다(실측). `_ops.bincount` 에도 같은 가드가 있는데 메서드가
-        # 그 문을 안 지나고 numpy 를 직접 부르고 있었다 — 두 벌은 이렇게 갈린다.
+        # `intp` — on wasm32, handing it int64 is refused. See
+        # `_ops.repeat_interleave`. **Booleans are refused** — torch stops with
+        # `"bincount_cpu" not implemented for 'Bool'` (measured). `_ops.bincount`
+        # has the same guard and the method was calling numpy directly without
+        # passing that gate — this is how two copies diverge.
         _refuses_bool(self.data, "bincount does not take booleans.",
                       '"bincount_cpu" not implemented for \'Bool\'',
                       kind=NotImplementedError)
@@ -1029,7 +1102,7 @@ class Tensor:
 
 
 class _MinMax:
-    """`x.max(dim=0)` 이 돌려주는 (values, indices). 진짜 torch 와 같은 모양."""
+    """The (values, indices) `x.max(dim=0)` hands back. Real torch's shape."""
 
     def __init__(self, values, indices):
         self.values = values
@@ -1045,39 +1118,46 @@ class _MinMax:
 
 
 
-# ── 제자리 판을 짝에서 만든다 ────────────────────────────────────────────────
+# ── the in-place versions built from their partners ─────────────────────────
 #
-# torch 의 제자리 연산은 `x.add_(1)` 처럼 이름 끝에 밑줄이 붙고, **학습 루프에서
-# 관용구다** — `p.data.add_(-lr * g)` 를 안 쓰는 교재가 드물다. 그런데 마흔한 개가
-# 빠져 있었다. 짝(`x.add`)은 전부 있고 `_inplace` 관용구도 있었으니, 없던 것은
-# **잇는 줄** 하나씩이었다.
+# torch's in-place operations carry a trailing underscore, as in `x.add_(1)`,
+# and **they are the idiom in a training loop** — a textbook that does not write
+# `p.data.add_(-lr * g)` is rare. And forty-one of them were missing. The
+# partners (`x.add`) all existed and so did the `_inplace` idiom, so what was
+# missing was **one connecting line** each.
 #
-# 손으로 마흔한 벌을 적지 않는다. 서로 다른 것이 이름뿐이면 그 마흔한 벌은 언젠가
-# 한 자리만 다르게 고쳐지고, 그 한 자리는 아무도 안 본다. 표를 두고 붙인다.
+# Forty-one copies are not written by hand. When the only difference is the
+# name, one of those forty-one eventually gets fixed differently from the rest,
+# and nobody looks at that one. A table is kept and they are attached from it.
 #
-# **`i0_`·`clamp_min_`·`clamp_max_` 는 셋 다 `_ops` 에 이미 있었다** — 모듈 함수로만
-# 있고 메서드로는 없었던 것이다. `borch.i0_(x)` 는 되고 `x.i0_()` 는 안 됐는데,
-# 교재가 쓰는 쪽은 뒤쪽이다.
+# **`i0_`, `clamp_min_` and `clamp_max_` all three already existed in `_ops`** —
+# as module functions only and not as methods. `borch.i0_(x)` worked and
+# `x.i0_()` did not, and the side textbooks use is the latter.
 #
-# **둘은 이 표에 못 넣는다.** 이름 끝에 밑줄이 붙었다고 짝과 같은 연산이 아니다 —
-# 마흔한 개를 전부 torch 와 대조해서 확인했고 거기서 갈렸다.
+# **Two cannot go in this table.** A trailing underscore does not make it the
+# same operation as its partner — all forty-one were checked against torch, and
+# that is where these two parted.
 #
-#   `bernoulli_` 는 **짝과 다른 연산이다.** `x.bernoulli()` 는 `x` 를 확률로 읽는데
-#   `x.bernoulli_(p=0.5)` 는 `x` 를 무시하고 `p` 로 채운다(실측: `[0,1,0,1]` 을 넣어도
-#   결과가 매번 다르다). 짝에서 만들었으면 확률이 0·1 인 자리는 확정이라 값이 맞고,
-#   **가운데 확률에서만 조용히 틀렸을** 것이다.
+#   `bernoulli_` is **a different operation from its partner.** `x.bernoulli()`
+#   reads `x` as probabilities, and `x.bernoulli_(p=0.5)` ignores `x` and fills
+#   from `p` (measured: `[0,1,0,1]` going in still comes out different every
+#   time). Built from the partner, the positions at probability 0 or 1 are
+#   certain and their values match, and it would be **quietly wrong only at the
+#   probabilities in between.**
 #
-#   `float_power_` 는 **torch 가 거절한다.** `float_power` 의 결과가 언제나 float64 라
-#   float32 자리에 되쓸 수 없어서다. 우리에게는 float64 가 아예 없으므로 이 연산은
-#   제자리로는 영영 안 된다.
+#   `float_power_` is **refused by torch.** `float_power`'s result is always
+#   float64 and cannot be written back into a float32 destination. There is no
+#   float64 here at all, so this operation will never work in place.
 _INPLACE_FROM_PAIR = (
     "bitwise_and_", "bitwise_left_shift_", "bitwise_not_",
     "bitwise_or_", "bitwise_right_shift_", "bitwise_xor_", "clamp_max_",
     "clamp_min_", "digamma_", "divide_", "erfinv_",
     "floor_divide_", "fmod_", "gcd_", "greater_", "greater_equal_", "i0_",
-    # **셋이 빠져 있었다.** 마흔한 개를 재놓고 목록을 손으로 옮겨 적으면서
-    # `index_reduce_`·`scatter_reduce_` 를 흘렸고, `resize_as_` 는 모듈에만 있던
-    # 이름을 정리하다 같이 빠졌다 — **잰 것과 적은 것이 갈리는** 자리다.
+    # **Three were missing.** Forty-one were measured and then the list was
+    # copied out by hand, dropping `index_reduce_` and `scatter_reduce_`, and
+    # `resize_as_` fell out alongside while tidying the names that existed on the
+    # module only — a place where **what was measured and what was written
+    # diverge.**
     "index_reduce_", "scatter_reduce_",
     "lcm_", "lerp_", "less_", "less_equal_", "lgamma_", "logical_and_",
     "logical_not_", "logical_or_", "logical_xor_", "multiply_", "mvlgamma_",
@@ -1094,7 +1174,8 @@ def _bind_inplace(name):
 
     method.__name__ = name
     method.__qualname__ = f"Tensor.{name}"
-    method.__doc__ = f"`{pair}` 를 제자리에서. 값을 되쓰고 자기를 돌려준다."
+    method.__doc__ = (f"`{pair}` in place. It writes the values back and hands "
+                      "back itself.")
     return method
 
 
@@ -1104,9 +1185,10 @@ del _name
 
 
 def _float_power_(self, exponent):
-    """**언제나 거절한다.** torch 도 float32 자리에서는 거절한다 — `float_power` 의
-    결과가 float64 이고 그것을 float32 에 되쓸 수 없어서다. 우리에게는 float64 가
-    없으므로 어떤 dtype 에서도 안 된다. 값을 내주면 그 코드가 진짜 torch 에서 깨진다."""
+    """**Always refuses.** torch refuses on a float32 destination too —
+    `float_power`'s result is float64 and cannot be written back into float32.
+    There is no float64 here, so it works at no dtype at all. Handing back a
+    value means that code breaks against real torch."""
     del exponent
     raise RuntimeError(_like_torch(
         f"`float_power_` cannot be used on a {self.dtype} slot — the result is double "
@@ -1119,15 +1201,17 @@ def _float_power_(self, exponent):
 Tensor.float_power_ = _float_power_
 
 
-# ── 없는 형은 이름째 거절한다 ────────────────────────────────────────────────
+# ── an absent dtype is refused by name ──────────────────────────────────────
 #
-# 예전에는 `AttributeError: 'Tensor' object has no attribute 'half'` 가 났다.
-# **그 문구는 오타와 구별이 안 된다** — 배우는 사람은 자기가 이름을 잘못 쳤다고
-# 읽지, 그 형이 여기 없다고는 안 읽는다.
+# This used to raise `AttributeError: 'Tensor' object has no attribute 'half'`.
+# **That wording is indistinguishable from a typo** — a learner reads it as
+# having mistyped the name rather than as that dtype being absent here.
 #
-# `half`·`bfloat16` 은 튜토리얼의 혼합정밀도 절에서 **실제로 치는 줄**이라, 그
-# 자리에서 나는 말이 셋 다 같아야 한다. 값이 아니라 **거절 문구**를 맞추는 자리이고,
-# 그런 자리는 서로 대조해도 안 걸린다 — `i0` 이 물렸던 갈래와 같다.
+# `half` and `bfloat16` are **lines actually typed** in a tutorial's
+# mixed-precision section, so what comes out there has to be the same across all
+# three. This is a place where **the refusal wording** is matched rather than a
+# value, and such places are not caught by comparing the three — the same branch
+# `i0` was bitten by.
 _ABSENT_DTYPES = {
     "half": "float16", "bfloat16": "bfloat16", "chalf": "complex32",
     "cdouble": "complex128", "byte": "uint8", "char": "int8", "short": "int16",
@@ -1141,7 +1225,8 @@ def _bind_absent_dtype(name, shown):
 
     method.__name__ = name
     method.__qualname__ = f"Tensor.{name}"
-    method.__doc__ = f"{shown} 은 이 축소판에 없다 — 다른 칸을 대신 주지 않는다."
+    method.__doc__ = (f"{shown} does not exist in this subset — it does not "
+                      "hand over a different storage instead.")
     return method
 
 
@@ -1150,24 +1235,29 @@ for _dname, _shown in _ABSENT_DTYPES.items():
 del _dname, _shown
 
 
-# ── 모듈에만 있던 이름을 메서드로도 낸다 ──────────────────────────────────────
+# ── names that existed on the module only, exposed as methods too ───────────
 #
-# torch 는 거의 모든 연산을 **둘 다** 준다 — `torch.igamma(x, y)` 와 `x.igamma(y)`.
-# 우리는 모듈 쪽만 있고 메서드가 없는 자리가 열셋이었다. `borch.arctan2(x, y)` 는
-# 되고 `x.arctan2(y)` 는 `AttributeError` 였는데, **교재가 쓰는 쪽은 메서드다.**
+# torch offers nearly every operation **both ways** — `torch.igamma(x, y)` and
+# `x.igamma(y)`. Thirteen places here had the module side and no method.
+# `borch.arctan2(x, y)` worked and `x.arctan2(y)` was an `AttributeError`, and
+# **the side textbooks use is the method.**
 #
-# 결속의 `_base.py` 에 같은 이야기가 이미 적혀 있었다("`borch.t(x)` 는 되고
-# `x.t()` 는 안 되는 한쪽 고리만 남았다") — 그쪽은 그때 메꿨고 코어는 안 메꿨다.
+# The binding's `_base.py` already wrote the same story down ("only the one-way
+# loop was left, where `borch.t(x)` works and `x.t()` does not") — that side
+# filled it in at the time and the core did not.
 #
-# **`lstsq`·`solve` 는 여기 없다.** torch 가 1.9 에서 폐기하고 **지금은 거절한다** —
-# 이름은 남아 있는데 부르면 멈춘다. 처음에 "torch 에 있는 이름" 으로 세어 붙였다가,
-# 인자 차례를 재보려다 torch 쪽이 거절하는 것을 봤다. 우리가 답을 내주면 그 코드가
-# 진짜 torch 에서 깨진다 — **관대한 것도 갈리는 것이다.**
+# **`lstsq` and `solve` are not here.** torch deprecated them in 1.9 and **now
+# refuses them** — the names survive and calling one stops. They were counted in
+# at first as "names that exist in torch", and measuring the argument order
+# showed that side refusing. Handing back an answer means that code breaks
+# against real torch — **being more permissive is still diverging.**
 _METHOD_FROM_MODULE = (
     "arctan2", "igamma", "igammac", "geqrf",
-    # **짝이 없는 밑줄 이름.** `resize_as_` 는 모듈에만 있고 `resize_as` 라는 짝이
-    # 아예 없어서, 파생표에 넣으면 없는 이름을 찾다가 `AttributeError` 로 멈춘다 —
-    # 표에 이름을 적는 것과 그 표가 그 이름을 만들 수 있는 것은 다른 일이다.
+    # **An underscore name with no partner.** `resize_as_` exists on the module
+    # only and there is no `resize_as` partner at all, so put into the derived
+    # table it looks for a name that is not there and stops with an
+    # `AttributeError` — writing a name into a table and the table being able to
+    # build that name are different things.
     "resize_as_",
 )
 
@@ -1185,11 +1275,12 @@ def _deprecated_by_torch(name, instead):
 
 
 def _polygamma(self, n):
-    """**인자가 뒤집혀 있다.** 모듈은 `polygamma(n, x)` 이고 메서드는
-    `x.polygamma(n)` 이다 — torch 가 그렇게 둔다(실측).
+    """**The arguments are reversed.** The module is `polygamma(n, x)` and the
+    method is `x.polygamma(n)` — that is how torch keeps them (measured).
 
-    표로 그냥 붙였다가 `TypeError` 로 걸렸다. 안 걸렸으면 차수와 입력이 뒤바뀐 채
-    값이 나왔을 자리다 — `lu_solve` 가 같은 모양이었다.
+    Attached blindly from the table it was caught by a `TypeError`. Uncaught, a
+    value would have come out with the order and the input swapped — `lu_solve`
+    had the same shape.
     """
     from . import _ops
     return _ops.polygamma(n, self)
@@ -1202,7 +1293,7 @@ def _bind_from_module(name):
 
     method.__name__ = name
     method.__qualname__ = f"Tensor.{name}"
-    method.__doc__ = f"`borch.{name}` 을 메서드로. torch 는 둘 다 준다."
+    method.__doc__ = f"`borch.{name}` as a method. torch offers both."
     return method
 
 
@@ -1212,12 +1303,13 @@ del _mname
 
 
 def _is_same_size(self, other):
-    """모양이 같은가. **값이 아니라 모양만** 본다."""
+    """Do the shapes match. **The shape only, not the values.**"""
     return tuple(self.data.shape) == tuple(_np.asarray(other.data).shape)
 
 
 def _fill_diagonal_(self, value, wrap=False):
-    """대각을 채운다. `wrap` 은 세로로 긴 행렬에서 대각을 **감아 이어 간다**."""
+    """Fill the diagonal. `wrap` **wraps the diagonal around** on a tall
+    matrix."""
     if self.requires_grad and _grad_mode.enabled:
         raise RuntimeError(_like_torch(
             "`fill_diagonal_` cannot be used on a leaf tensor that requires grad.",
@@ -1227,7 +1319,8 @@ def _fill_diagonal_(self, value, wrap=False):
 
 
 def _requires_grad_(self, requires_grad=True):
-    """**교재의 관용구다** — `x.requires_grad_()` 로 잎을 켠다. 자기를 돌려준다."""
+    """**A textbook idiom** — `x.requires_grad_()` turns a leaf on. It hands
+    back itself."""
     if requires_grad and self.data.dtype.kind not in "fc":
         raise RuntimeError(
             "Gradients do not flow through integer tensors. Differentiation is defined "
@@ -1237,7 +1330,8 @@ def _requires_grad_(self, requires_grad=True):
 
 
 def _share_memory_(self):
-    """프로세스 사이 공유는 여기 없다. torch 도 CPU 에서는 자기를 돌려준다."""
+    """There is no sharing between processes here. torch hands back itself on
+    the CPU too."""
     return self
 
 
@@ -1251,20 +1345,21 @@ Tensor.fill_diagonal_ = _fill_diagonal_
 Tensor.requires_grad_ = _requires_grad_
 Tensor.share_memory_ = _share_memory_
 
-# 짝이 생겼으니 밑줄 판도 같은 표에서 나온다.
+# With the partners in place, the underscore versions come from the same table.
 for _iname in ("arctan2_", "igamma_", "igammac_", "polygamma_"):
     setattr(Tensor, _iname, _bind_inplace(_iname))
 del _iname
 
 
-# ── torch 가 **속성**으로 주는 술어들 ────────────────────────────────────────
+# ── the predicates torch offers as **properties** ───────────────────────────
 #
-# 대부분 "이 텐서가 어디 있는가·어떤 저장인가" 를 묻고 우리 답은 하나로 정해져
-# 있다. **그래도 이름이 있어야 한다** — 없으면 `if x.is_cuda:` 가 `AttributeError`
-# 로 멈추는데, torch 에서는 그냥 거짓으로 지나가는 줄이다.
+# Most of them ask where this tensor lives or what storage it uses, and our
+# answer is fixed. **The name still has to exist** — without it `if x.is_cuda:`
+# stops with an `AttributeError`, and in torch that line simply passes as false.
 #
-# **`is_leaf` 만 진짜 계산이다.** 잎은 연산에서 나오지 않은 텐서이고, 그것이
-# 거짓이면 `.grad` 가 안 쌓인다 — 값이 하나로 정해진 나머지와 성격이 다르다.
+# **`is_leaf` alone is a real computation.** A leaf is a tensor that did not come
+# out of an operation, and when it is false `.grad` does not accumulate — a
+# different nature from the rest, whose values are fixed.
 _ALWAYS_FALSE = (
     "is_cuda", "is_ipu", "is_maia", "is_meta", "is_mkldnn", "is_mps", "is_mtia",
     "is_nested", "is_quantized", "is_sparse", "is_sparse_csr", "is_vulkan",
@@ -1272,49 +1367,57 @@ _ALWAYS_FALSE = (
 )
 
 for _pname in _ALWAYS_FALSE:
-    setattr(Tensor, _pname, property(lambda self: False, doc="이 축소판에는 없다."))
+    setattr(Tensor, _pname,
+            property(lambda self: False, doc="Absent from this subset."))
 del _pname
 
-# CPU 에 산다. **결속은 여기서 갈린다** — 값이 GPU 버퍼에 있으므로 거짓이다.
+# It lives on the CPU. **The binding parts here** — its values are in a GPU
+# buffer, so it is false there.
 Tensor.is_cpu = property(lambda self: True)
 Tensor.is_leaf = property(
     lambda self: not self._parents,
-    doc="연산에서 안 나온 텐서. **거짓이면 `.grad` 가 안 쌓인다.**")
+    doc="A tensor that did not come out of an operation. **False means `.grad` "
+        "does not accumulate.**")
 Tensor.retains_grad = property(
     lambda self: bool(getattr(self, "_retain", False)),
-    doc="`retain_grad()` 를 부른 파생 텐서만 참이다 — 잎은 torch 도 거짓이다.")
+    doc="True only on a derived tensor that called `retain_grad()` — on a leaf "
+        "torch gives false too.")
 
 
 def _is_pinned(self):
-    """**메서드다** — 위의 것들과 달리 괄호가 있다(실측). 고정 메모리는 없다."""
+    """**A method** — unlike the ones above it takes parentheses (measured).
+    There is no pinned memory."""
     del self
     return False
 
 
 def _is_coalesced(self):
-    """희소 전용이라 **조밀 텐서에서는 멈춘다** — torch 도 그렇다(실측)."""
+    """Sparse-only, so **it stops on a dense tensor** — torch is the same
+    (measured)."""
     raise RuntimeError(_like_torch(
         "A dense tensor has no coalesce state.",
         "is_coalesced expected sparse coordinate tensor layout but got Strided"))
 
 
-# **`is_neg`·`is_pinned` 만 메서드다** — 괄호가 있다(실측). 속성으로 두면
-# `x.is_neg` 가 참거짓이 아니라 묶인 메서드를 돌려주는데, torch 쪽은
-# 묶인 메서드다 — 이번엔 **우리가 속성으로 만든 것이 갈림**이었다.
+# **`is_neg` and `is_pinned` alone are methods** — they take parentheses
+# (measured). Kept as properties, `x.is_neg` hands back a boolean rather than a
+# bound method, while torch's is a bound method — this time **making it a
+# property was the divergence.**
 Tensor.is_neg = lambda self: False
 Tensor.is_pinned = _is_pinned
 Tensor.is_coalesced = _is_coalesced
 
 
-# ── 짝이 없는 제자리 판 여덟 ────────────────────────────────────────────────
+# ── the eight in-place versions with no partner ─────────────────────────────
 #
-# 파생표로는 못 만든다 — 짝이 아예 없다. 다섯은 torch 가 해내고 셋은 희소 전용이라
-# **torch 도 조밀 텐서에서 멈춘다.** 이름만 보고 "제자리니까 다 만든다" 로 묶으면
-# 뒤의 셋에서 우리가 더 관대해진다.
+# The derived table cannot build them — there is no partner at all. torch does
+# five of them and three are sparse-only, so **torch stops on a dense tensor
+# too.** Grouped by name as "in-place, so build them all", we become more
+# permissive on the last three.
 
 def _apply_(self, fn):
-    """칸마다 파이썬 함수를 건다. **torch 도 CPU 에서만 된다** — 느린 길이고,
-    그래서 값이 아니라 편의를 주는 이름이다."""
+    """Apply a Python function per element. **torch does this on the CPU only** —
+    a slow path, so the name gives convenience rather than a value."""
     _refuse_leaf_inplace(self, "apply_")
     flat = self.data.reshape(-1)
     self.data[...] = _np.array([fn(v.item()) for v in flat],
@@ -1342,9 +1445,10 @@ def _map2_(self, other, third, fn):
 
 
 def _resize_(self, *sizes):
-    """**키우면 새 칸의 값이 정해지지 않는다** — torch 는 쓰레기값을 준다(실측:
-    우연히 0 이 나오기도 한다). 우리는 0 으로 채운다. 값을 굳힐 수 없는 자리라
-    골든은 **줄이는 쪽과 모양만** 묻는다."""
+    """**Growing leaves the new cells undefined** — torch gives garbage
+    (measured: sometimes it happens to be zero). This fills with zeros. The
+    values cannot be pinned, so the golden asks about **shrinking and the shape
+    only.**"""
     _refuse_leaf_inplace(self, "resize_")
     shape = tuple(sizes[0]) if len(sizes) == 1 and isinstance(sizes[0], (tuple, list)) \
         else tuple(int(s) for s in sizes)
@@ -1360,7 +1464,8 @@ def _resize_(self, *sizes):
 
 
 def _set_(self, source=None):
-    """**저장을 통째로 갈아 끼운다.** 인자가 없으면 빈 텐서가 된다."""
+    """**Swaps the storage wholesale.** With no arguments it becomes an empty
+    tensor."""
     _refuse_leaf_inplace(self, "set_")
     self._array = (_np.empty(0, dtype=self.data.dtype) if source is None
                    else _np.asarray(source.data))
@@ -1395,20 +1500,22 @@ for _sname in ("resize_as_sparse_", "sparse_resize_", "sparse_resize_and_clear_"
 del _sname
 
 
-# ── 저장을 들여다보는 것들 ───────────────────────────────────────────────────
+# ── the ones that look into the storage ─────────────────────────────────────
 #
-# 값이 아니라 **어떻게 놓여 있는가**를 묻는다. numpy 가 그대로 답해 주므로 우리도
-# 진짜 수를 낼 수 있다 — `stride()` 는 전치하면 `(3,1)` 에서 `(1,3)` 이 되고, 그것이
-# 뷰라는 사실 자체다.
+# They ask **how it is laid out** rather than what the values are. numpy answers
+# directly, so real numbers can come out here — `stride()` goes from `(3,1)` to
+# `(1,3)` on a transpose, and that is the fact of it being a view.
 
 def _stride(self, dim=None):
-    """칸 단위 걸음. **바이트가 아니다** — numpy 의 `strides` 를 원소 크기로 나눈다."""
+    """Strides in elements. **Not bytes** — numpy's `strides` divided by the
+    element size."""
     got = tuple(s // self.data.itemsize for s in self.data.strides)
     return got if dim is None else got[dim]
 
 
 def _dim_order(self):
-    """메모리에서 빠른 축부터의 차례. 연속이면 `(0, 1, …)` 이고 전치하면 뒤집힌다."""
+    """The axes ordered from the fastest in memory. Contiguous it is
+    `(0, 1, …)`, and a transpose reverses it."""
     return tuple(int(i) for i in _np.argsort([-s for s in self.data.strides]))
 
 
@@ -1429,7 +1536,8 @@ Tensor.grad_dtype = property(lambda self: self.dtype)
 
 
 class _Layout:
-    """`torch.strided`. 우리에게 다른 배치는 없다 — 희소도 mkldnn 도 없다."""
+    """`torch.strided`. There is no other layout here — no sparse and no
+    mkldnn."""
 
     __slots__ = ()
 
@@ -1445,11 +1553,12 @@ class _Layout:
         return hash("torch.strided")
 
 
-# ── 전치의 세 이름 ──────────────────────────────────────────────────────────
+# ── the three names for transposition ───────────────────────────────────────
 #
-# `H` 는 **2차원 전용**이고(torch 가 거기서 멈춘다), `mT`·`mH` 는 **마지막 두 축만**
-# 바꿔서 묶음에도 쓴다. 셋 다 켤레 여부가 갈린다 — `mT` 만 켤레를 안 취한다.
-# 실수에서는 셋이 같은 답이라, **복소수로 물어야** 그 차이가 드러난다.
+# `H` is **2-D only** (torch stops there), and `mT` and `mH` swap **the last two
+# axes only**, so they work on batches. The three part on whether they conjugate —
+# `mT` alone does not. Over the reals all three give the same answer, so **asking
+# with complex numbers** is what shows the difference.
 
 def _hermitian(self):
     if self.data.ndim != 2:
@@ -1474,10 +1583,10 @@ Tensor.mT = property(_matrix_transpose)
 Tensor.mH = property(lambda self: _matrix_transpose(self).conj())
 
 
-# ── `new_*` — **형을 물려받아** 새 텐서를 만든다 ─────────────────────────────
+# ── `new_*` — build a new tensor **inheriting the dtype** ───────────────────
 #
-# `torch.zeros(...)` 와 다른 점이 그것뿐이다. 교재가 쓰는 이유도 그것이고 —
-# 형을 손으로 적으면 원본이 바뀔 때 같이 안 바뀐다.
+# That is the only difference from `torch.zeros(...)`. It is also why textbooks
+# use it — a dtype written by hand does not change when the original does.
 
 def _new_like(name, fill):
     def method(self, *size, dtype=None, requires_grad=False):
@@ -1488,14 +1597,15 @@ def _new_like(name, fill):
         return Tensor(fill(shape, want), requires_grad)
 
     method.__name__ = name
-    method.__doc__ = f"`{name}` — 이 텐서의 형을 물려받는다."
+    method.__doc__ = f"`{name}` — inherits this tensor's dtype."
     return method
 
 
 Tensor.new_zeros = _new_like("new_zeros", lambda s, d: _np.zeros(s, dtype=d))
 Tensor.new_ones = _new_like("new_ones", lambda s, d: _np.ones(s, dtype=d))
-# **`new_empty` 는 값이 정해지지 않는다.** torch 도 쓰레기값을 준다 — 우리는 0 으로
-# 채우되 골든은 **모양과 형만** 묻는다. 값을 굳히면 그것이 명세가 되어 버린다.
+# **`new_empty` leaves the values undefined.** torch gives garbage too — this
+# fills with zeros and the golden asks about **the shape and the dtype only.**
+# Pinning the values would turn them into the specification.
 Tensor.new_empty = _new_like("new_empty", lambda s, d: _np.zeros(s, dtype=d))
 
 
@@ -1516,19 +1626,21 @@ Tensor.new_tensor = _new_tensor
 Tensor.new = lambda self, *size: (self.new_empty(*size) if size
                                   else Tensor(_np.empty(0, dtype=self.data.dtype)))
 
-# ── 모양을 **남에게서 받아 오는** 이름들 ─────────────────────────────────────
+# ── the names that **take their shape from somebody else** ──────────────────
 Tensor.reshape_as = lambda self, other: self.reshape(*other.shape)
 Tensor.view_as = lambda self, other: self.view(*other.shape)
 Tensor.resize_as = lambda self, other: self.reshape(*other.shape)
-# **`narrow_copy`·`unsafe_*`·`slice_inverse` 는 안 만든다.** 넣었다가
-# `tests/test_gap.py` 가 잡았다 — `NOT_API` 가 그것들을 **함수화 패스용 내부 변종**
-# 이라고 이미 적어 두고 있었고, 진짜 이름은 `narrow`·`chunk`·`split` 이다.
-# torch 에 이름이 있다고 다 공개 API 인 것은 아니고, 그 판단이 이미 있었다.
+# **`narrow_copy`, `unsafe_*` and `slice_inverse` are not built.** They went in
+# and `tests/test_gap.py` caught them — `NOT_API` already wrote them down as
+# **internal variants for the functionalisation pass**, and the real names are
+# `narrow`, `chunk` and `split`. A name existing in torch does not make it public
+# API, and that judgement had already been made.
 
 
 def _sum_to_size(self, *size):
-    """**브로드캐스팅을 되돌린다.** 늘어난 축을 도로 합쳐 그 모양으로 만든다 —
-    역전파가 안에서 하는 일과 같고, torch 는 그것을 이름으로도 준다."""
+    """**Undoes broadcasting.** The stretched axes are folded back into that
+    shape — the same thing backpropagation does internally, and torch offers it
+    under a name as well."""
     shape = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list)) \
         else tuple(int(s) for s in size)
     return Tensor(_unbroadcast(self.data, shape))
@@ -1538,15 +1650,16 @@ Tensor.sum_to_size = _sum_to_size
 
 
 def _retain_grad(self):
-    """**가르는 것은 잎인가가 아니라 `requires_grad` 다**(실측).
+    """**What decides is `requires_grad`, not whether it is a leaf** (measured).
 
-    처음에 "잎이면 멈춘다" 로 썼는데 torch 는 `requires_grad=True` 인 잎에서 **그냥
-    지나간다** — 잎은 이미 `.grad` 가 쌓이므로 청할 것이 없어서다. 멈추는 것은
-    기울기를 아예 안 받는 텐서뿐이다. 앞의 측정이 `requires_grad=False` 인 텐서
-    하나였고, 그 하나로 규칙을 정했다.
+    It was first written as "stop on a leaf", and torch **simply passes** on a
+    leaf with `requires_grad=True` — a leaf already accumulates `.grad`, so there
+    is nothing to ask for. What stops is only a tensor that receives no gradient
+    at all. The earlier measurement was one tensor with `requires_grad=False`, and
+    the rule was set from that one.
 
-    잎에 부르면 `retains_grad` 는 **거짓으로 남는다** — 남기고 있는 것이 아니라
-    원래 쌓이는 것이라서다.
+    Called on a leaf, `retains_grad` **stays false** — it is not retaining
+    anything; it accumulates by nature.
     """
     if not self.requires_grad:
         raise RuntimeError(_like_torch(
@@ -1560,28 +1673,29 @@ def _retain_grad(self):
 Tensor.retain_grad = _retain_grad
 
 
-# ── torch 가 **스스로 거절하는** 것들 ────────────────────────────────────────
+# ── the ones **torch refuses itself** ───────────────────────────────────────
 #
-# 이름은 남아 있는데 부르면 멈춘다. 우리가 답을 내주면 그 코드가 진짜 torch 에서
-# 깨진다 — `lstsq`·`solve` 에서 이미 한 번 밟은 자리다.
+# The names survive and calling one stops. Handing back an answer means that
+# code breaks against real torch — a place already stepped on with `lstsq` and
+# `solve`.
 _GONE = {
     "eig": "linalg.eig", "symeig": "linalg.eigh",
 }
-# 우리에게 그 기계가 없는 것들. **없다고 말하는 것이 답이다.**
+# The ones whose machinery does not exist here. **Saying so is the answer.**
 _NO_MACHINERY = {
     "to_mkldnn": "MKL-DNN",
-    "q_per_channel_axis": "채널별 양자화",
-    "q_per_channel_scales": "채널별 양자화",
-    "q_per_channel_zero_points": "채널별 양자화",
-    "smm": "희소 행렬곱",
-    "to_padded_tensor": "중첩 텐서",
-    "as_subclass": "텐서 하위 클래스",
-    "module_load": "`load_state_dict` 의 내부 훅",
-    "reinforce": "옛 확률적 그래프",
-    "new_empty_strided": "걸음을 손으로 주는 저장",
-    "register_hook": "역전파 훅",
-    "register_post_accumulate_grad_hook": "역전파 훅",
-    "index": "고급 색인의 내부 진입점 — `x[...]` 를 쓰세요",
+    "q_per_channel_axis": "per-channel quantisation",
+    "q_per_channel_scales": "per-channel quantisation",
+    "q_per_channel_zero_points": "per-channel quantisation",
+    "smm": "sparse matrix multiplication",
+    "to_padded_tensor": "nested tensors",
+    "as_subclass": "Tensor subclasses",
+    "module_load": "`load_state_dict`'s internal hook",
+    "reinforce": "the old stochastic graph",
+    "new_empty_strided": "storage with hand-given strides",
+    "register_hook": "backward hooks",
+    "register_post_accumulate_grad_hook": "backward hooks",
+    "index": "advanced indexing's internal entry point — use `x[...]`",
 }
 
 
@@ -1612,17 +1726,18 @@ for _aname, _what in _NO_MACHINERY.items():
     setattr(Tensor, _aname, _bind_absent(_aname, _what))
 del _gname, _instead, _aname, _what
 
-# `resize` 는 밑줄 없는 옛 이름이고 torch 도 조건이 맞아야 돈다. 우리는 제자리 판을
-# 부르는 얇은 껍데기로 둔다 — 사본을 주는 것이 아니라는 점이 torch 와 같다.
+# `resize` is the old name without the underscore, and torch runs it only when
+# the conditions fit. It is kept as a thin shell calling the in-place version —
+# matching torch in not handing back a copy.
 Tensor.resize = lambda self, *size: self.resize_(*size)
 
 
 class _GradFn:
-    """`grad_fn` 자리. **주소는 못 맞추지만 이름은 맞출 수 있다.**
+    """The `grad_fn` slot. **The address cannot be matched and the name can.**
 
-    torch 는 `<MulBackward0 object at 0x…>` 를 찍는다. 주소가 들어가므로 글자를
-    굳힐 수는 없고, **형 이름**(`MulBackward0`)은 굳힐 수 있다 — 어느 연산에서
-    나왔는가가 그 이름에 들어 있다.
+    torch prints `<MulBackward0 object at 0x…>`. The address is in there, so the
+    characters cannot be pinned, and **the type name** (`MulBackward0`) can —
+    which operation it came out of is in that name.
     """
 
     __slots__ = ("_name",)
@@ -1645,18 +1760,22 @@ def _grad_fn(self):
 Tensor.grad_fn = property(_grad_fn)
 
 
-# ── 희소·저장소·양자화 — **이름은 있고 조밀 텐서에는 안 맞는다** ─────────────
+# ── sparse, storage and quantisation — **the names exist and do not fit a
+# dense tensor** ────────────────────────────────────────────────────────────
 #
-# 이 셋을 "없는 게 맞다" 로 묶어 두고 이름조차 안 만들었는데, 두 가지가 틀렸다.
+# These three were grouped as "rightly absent" and had no names built at all, and
+# two things about that were wrong.
 #
-# **첫째, torch 는 열둘에 답한다.** `to_sparse()` 는 조밀 텐서를 받아 희소를 만들고
-# `storage()` 도 답이 있다. 그것들은 "없는 게 맞다" 가 아니라 **없는 기능**이다 —
-# 희소 텐서라는 물건 자체가 여기 없다.
+# **First, torch answers twelve of them.** `to_sparse()` takes a dense tensor and
+# makes a sparse one, and `storage()` has an answer too. Those are **absent
+# features** rather than "rightly absent" — the thing called a sparse tensor does
+# not exist here.
 #
-# **둘째, 나머지 스물둘도 문구가 갈렸다.** 우리는 `'Tensor' object has no attribute
-# 'coalesce'` 를 냈는데 그것은 **오타와 구별이 안 된다.** torch 는 `coalesce expected
-# sparse coordinate tensor layout but got Strided` 라고 — 이름은 있고 이 텐서에
-# 안 맞는다고 말한다. 형 변환 아홉에서 고친 것과 같은 갈래를 여기서 또 만났다.
+# **Second, the wording diverged on the other twenty-two.** This gave
+# `'Tensor' object has no attribute 'coalesce'`, which is **indistinguishable
+# from a typo.** torch says `coalesce expected sparse coordinate tensor layout
+# but got Strided` — the name exists and does not fit this tensor. The same
+# branch fixed across the nine dtype conversions, met again here.
 
 def _needs_sparse(name, layout):
     def method(self, *args, **kw):
@@ -1680,27 +1799,30 @@ for _n, _layout in (
     setattr(Tensor, _n, _needs_sparse(_n, _layout))
 del _n, _layout
 
-# 희소를 **만드는** 쪽. torch 는 해내지만 우리에게는 희소 텐서라는 물건이 없다.
-# "이 텐서에 안 맞는다" 가 아니라 **"그 기능이 없다"** 이므로 문구를 가른다.
+# The side that **makes** a sparse tensor. torch does it and the thing called a
+# sparse tensor does not exist here. This is **"that feature is absent"** rather
+# than "it does not fit this tensor", so the wording is split.
 for _n in ("to_sparse", "to_sparse_coo", "to_sparse_csr", "to_sparse_csc",
            "to_sparse_bsr", "to_sparse_bsc", "sparse_mask"):
-    setattr(Tensor, _n, _bind_absent(_n, "희소 텐서"))
+    setattr(Tensor, _n, _bind_absent(_n, "sparse tensors"))
 for _n in ("storage", "storage_type", "untyped_storage"):
-    setattr(Tensor, _n, _bind_absent(_n, "저장소 객체 — `.numpy()` 를 쓰세요"))
+    setattr(Tensor, _n, _bind_absent(_n, "Storage objects — use `.numpy()`"))
 for _n in ("int_repr", "q_scale", "q_zero_point", "qscheme"):
-    setattr(Tensor, _n, _bind_absent(_n, "양자화"))
+    setattr(Tensor, _n, _bind_absent(_n, "quantisation"))
 for _n in ("cuda", "ipu", "mtia", "xpu"):
-    setattr(Tensor, _n, _bind_absent(_n, "그 장치"))
+    setattr(Tensor, _n, _bind_absent(_n, "that device"))
 for _n in ("pin_memory", "record_stream"):
-    setattr(Tensor, _n, _bind_absent(_n, "고정 메모리·스트림"))
+    setattr(Tensor, _n, _bind_absent(_n, "pinned memory and streams"))
 del _n
 
 
 def _is_set_to(self, other):
-    """**두 텐서가 같은 저장을 가리키는가.** 모양·걸음·시작 자리까지 같아야 한다.
+    """**Do two tensors point at the same storage.** The shape, the strides and
+    the starting offset all have to match.
 
-    늘 거짓이 아니다 — 뷰는 참이고 사본은 거짓이다. 그래서 이 술어는 `tensor()` 가
-    사본을 뜨는지 `from_numpy` 가 공유하는지를 **묻는 이름**이기도 하다.
+    It is not always false — a view is true and a copy is false. So this
+    predicate is also **the name that asks** whether `tensor()` takes a copy and
+    whether `from_numpy` shares.
     """
     if not isinstance(other, Tensor):
         return False
