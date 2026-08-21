@@ -7922,6 +7922,84 @@ def vision_cases(inp=None):
                    f"{_vision(L).functional.get_image_num_channels(_size_input(L))}"),
     ]
 
+    # --- the photometric five, and the jitter that draws them ------------------
+    #
+    # **These go through the tensor path on both sides, uint8 included**, and that is
+    # the one place this table does not hand torchvision a PIL image. torchvision has
+    # two implementations of every one of them — `ImageEnhance` for PIL and this
+    # arithmetic for tensors — and they do not agree. Ours copies the second, so
+    # comparing against the first would be asking a question we have already answered
+    # "no" to on purpose (`Grayscale` parts from PIL by one, measured).
+
+    def photo(call, on_bytes=False):
+        def run(L):
+            T = _vision(L)
+            F = T.functional
+            src = img_u8 if on_bytes else img_f
+            if _is_real_torch(L):
+                x = L.tensor(np.ascontiguousarray(src.transpose(2, 0, 1)))
+                out = call(F, x)
+                return L.tensor(np.ascontiguousarray(
+                    np.asarray(out.detach().numpy(), dtype=np.float32)))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(call(F, src), dtype=np.float32).transpose(2, 0, 1)))
+        return run
+
+    cases += [
+        (VISION_PREFIX + "F.adjust_brightness(dark)",
+         photo(lambda F, x: F.adjust_brightness(x, 0.5))),
+        # **Above 1 it clamps**, and the clamp is the half of this that a factor below
+        # one never reaches.
+        (VISION_PREFIX + "F.adjust_brightness(bright)",
+         photo(lambda F, x: F.adjust_brightness(x, 1.7))),
+        (VISION_PREFIX + "F.adjust_contrast", photo(lambda F, x: F.adjust_contrast(x, 0.5))),
+        (VISION_PREFIX + "F.adjust_saturation",
+         photo(lambda F, x: F.adjust_saturation(x, 1.7))),
+        # Hue is the only one that leaves RGB. A quarter turn and a small negative one,
+        # because the wrap at 0 and the wrap at 1 are different lines of arithmetic.
+        (VISION_PREFIX + "F.adjust_hue(quarter turn)",
+         photo(lambda F, x: F.adjust_hue(x, 0.25))),
+        (VISION_PREFIX + "F.adjust_hue(backwards)",
+         photo(lambda F, x: F.adjust_hue(x, -0.1))),
+        (VISION_PREFIX + "F.adjust_gamma", photo(lambda F, x: F.adjust_gamma(x, 2.2))),
+        (VISION_PREFIX + "F.adjust_gamma(with gain)",
+         photo(lambda F, x: F.adjust_gamma(x, 0.5, 0.5))),
+        # **The uint8 branch, where the truncation lives.** Every blend ends in a cast
+        # back, and doing the arithmetic one precision wider moves a value across that
+        # boundary — measured: float64 instead of float32 puts one pixel of this exact
+        # case one step out.
+        (VISION_PREFIX + "F.adjust_saturation(uint8)",
+         photo(lambda F, x: F.adjust_saturation(x, 1.7), on_bytes=True)),
+        (VISION_PREFIX + "F.adjust_hue(uint8)",
+         photo(lambda F, x: F.adjust_hue(x, 0.25), on_bytes=True)),
+    ]
+
+    def jitter(brightness, hue):
+        """`ColorJitter` with **one factor pinned to a single value.** The draw then
+        has one answer, and the order it also draws does not matter because there is
+        only one thing to order — so the case asks whether the jitter reaches the
+        right function, which is all a frozen value can ask of a random transform."""
+        def run(L):
+            T = _vision(L)
+            # **The unused factor is left out rather than passed as `None`.**
+            # torchvision reads `None` as "not a number and not a pair" and stops —
+            # `None` is what it *stores* for a factor nobody asked for, not what it
+            # takes.
+            kw = {"brightness": brightness} if brightness else {"hue": hue}
+            build = T.ColorJitter(**kw)
+            if _is_real_torch(L):
+                x = L.tensor(np.ascontiguousarray(img_f.transpose(2, 0, 1)))
+                return L.tensor(np.ascontiguousarray(
+                    np.asarray(build(x).detach().numpy(), dtype=np.float32)))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(build(img_f), dtype=np.float32).transpose(2, 0, 1)))
+        return run
+
+    cases += [
+        (VISION_PREFIX + "ColorJitter(brightness pinned)", jitter((0.6, 0.6), None)),
+        (VISION_PREFIX + "ColorJitter(hue pinned)", jitter(None, (0.2, 0.2))),
+    ]
+
     # Representation (T3). This project treats `repr` as specification too — the tutorials do
     # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
@@ -7955,6 +8033,10 @@ def vision_cases(inp=None):
         ("TenCrop", lambda T: T.TenCrop((3, 2), vertical_flip=True)),
         ("RandomResizedCrop", lambda T: T.RandomResizedCrop(4)),
         ("RandomErasing", lambda T: T.RandomErasing()),
+        ("ColorJitter", lambda T: T.ColorJitter(0.5, 0.3, 0.2, 0.1)),
+        # The bare one, because **a jitter left at its defaults stores `None`** rather
+        # than a range that does nothing, and only the default form prints that.
+        ("ColorJitter(the default)", lambda T: T.ColorJitter()),
     )
     for name, build in reprs:
         cases.append((VISION_PREFIX + f"repr::{name}",

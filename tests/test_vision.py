@@ -429,3 +429,80 @@ def test_functional_and_the_class_are_one_implementation():
     assert np.array_equal(F.center_crop(img, [3, 2]), V.CenterCrop((3, 2))(img))
     assert np.array_equal(F.pad(img, 1, 0.5), V.Pad(1, 0.5)(img))
     assert np.array_equal(F.rgb_to_grayscale(img, 3), V.Grayscale(3)(img))
+
+
+# --- the photometric five ---------------------------------------------------
+
+
+def test_colour_jitter_draws_the_order_as_well_as_the_factors():
+    """**The order is part of the draw**, and it has to be, because these do not
+    commute: `adjust_contrast` measures the picture's mean grey, and a brightness
+    applied first has already moved it.
+
+    Two factors pinned to single values leave the factors deterministic and the order
+    not — so two distinct results over many calls is the order varying, and one is a
+    fixed order wearing a draw's name.
+    """
+    V.manual_seed(0)
+    jitter = V.ColorJitter(brightness=(0.6, 0.6), contrast=(1.8, 1.8))
+    img = np.linspace(0, 1, 60, dtype=np.float32).reshape(5, 4, 3)
+    seen = {jitter(img).tobytes() for _ in range(60)}
+    assert len(seen) == 2, (
+        f"sixty draws gave {len(seen)} distinct results — with both factors pinned "
+        "there are exactly two orders that differ, so one means the order is fixed.")
+
+
+def test_a_factor_left_alone_is_stored_as_nothing_rather_than_as_the_identity():
+    """`ColorJitter()` keeps `None`, not `(1, 1)`. It is the difference between not
+    blending and blending by a ratio that happens to cancel — the second still costs
+    a cast, and on a uint8 picture a cast is a rounding."""
+    assert V.ColorJitter().brightness is None
+    assert V.ColorJitter(0.5).contrast is None
+    assert V.ColorJitter(brightness=(1.0, 1.0)).brightness is None
+    assert V.ColorJitter(brightness=(0.5, 1.5)).brightness == (0.5, 1.5)
+
+
+def test_hue_and_saturation_leave_a_one_channel_picture_alone():
+    """torchvision returns it untouched to match PIL, and it is **a branch rather
+    than arithmetic that happens to cancel** — without it, `_rgb2hsv` reads three
+    channels off a picture that has one."""
+    grey = np.linspace(0, 1, 20, dtype=np.float32).reshape(5, 4, 1)
+    assert np.array_equal(V.transforms.functional.adjust_hue(grey, 0.3), grey)
+    assert np.array_equal(V.transforms.functional.adjust_saturation(grey, 0.3), grey)
+
+
+def test_the_photometric_five_refuse_what_torch_refuses():
+    F = V.transforms.functional
+    img = np.zeros((4, 4, 3), dtype=np.float32)
+    for call, match in ((lambda: F.adjust_brightness(img, -1), "non-negative"),
+                        (lambda: F.adjust_contrast(img, -1), "non-negative"),
+                        (lambda: F.adjust_saturation(img, -1), "non-negative"),
+                        (lambda: F.adjust_gamma(img, -1), "non-negative"),
+                        (lambda: F.adjust_hue(img, 0.7), r"\[-0.5, 0.5\]")):
+        with pytest.raises(ValueError, match=match):
+            call()
+
+
+def test_the_blend_is_done_in_the_precision_torch_promotes_to():
+    """**One pixel decides this, and here it is.**
+
+    A uint8 blend ends in a truncating cast. torch promotes `uint8 * float` to
+    float32; doing the same arithmetic in float64 moves values across that boundary,
+    and `adjust_saturation(1.7)` on the golden's byte picture was one step out until
+    the working precision matched. `(102, 168, 82)` is a pixel where the two
+    precisions genuinely disagree — float64 gives 188 in the green channel and
+    float32 gives 189 — so this fails rather than passing by luck if the precision
+    widens again.
+    """
+    px = np.array([[[102, 168, 82]]], dtype=np.uint8)
+    grey = np.asarray(V.transforms.functional.rgb_to_grayscale(px), dtype=np.float64)
+    in_float64 = np.clip(1.7 * px.astype(np.float64) + (1 - 1.7) * grey,
+                         0, 255).astype(np.uint8)
+    ours = V.transforms.functional.adjust_saturation(px, 1.7)
+    assert ours.dtype == np.uint8
+    assert list(in_float64.ravel()) == [76, 188, 42], (
+        "the float64 answer moved — this test pins a disagreement between two "
+        "precisions, so it is worth nothing if one of them changed")
+    assert list(ours.ravel()) == [76, 189, 42], (
+        f"ours gave {list(ours.ravel())}; torch promotes to float32 and answers "
+        "[76, 189, 42]. Widening the working precision is the change that breaks this.")

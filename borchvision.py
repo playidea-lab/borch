@@ -1070,6 +1070,236 @@ class RandomErasing:
                 f"ratio={self.ratio}, value={self.value}, inplace={self.inplace})")
 
 
+# --- photometric: the arithmetic torchvision does in float ------------------
+#
+# **These are the tensor path's numbers, not PIL's.** torchvision has two
+# implementations of every one of them — `ImageEnhance` for a PIL image, and this
+# arithmetic for a tensor — and they do not agree to the last bit. `Grayscale`
+# already parts from PIL by one for the same reason (measured), and the golden
+# compares against the tensor path because that is the one with a formula to copy.
+
+
+def _bound(dtype):
+    """The top of the range. **255 for uint8 and 1 for a float image** — every
+    blend clamps to it, and using 1 on a uint8 picture blanks it to black."""
+    return 255.0 if dtype == _np.uint8 else 1.0
+
+
+def _working_dtype(dtype):
+    """**float32 for an integer picture, and the picture's own float otherwise.**
+
+    torch promotes `uint8 * python float` to float32, and the blend below then
+    truncates back to uint8. Doing the arithmetic in float64 instead moves a value
+    across the truncation boundary — measured, one pixel of one case at
+    `adjust_saturation(1.7)`, which is the whole difference and enough to fail.
+    """
+    return _np.float32 if _np.dtype(dtype).kind != "f" else dtype
+
+
+def _blend(a, b, ratio):
+    work = _working_dtype(a.dtype)
+    out = _np.clip(ratio * a.astype(work) + (1.0 - ratio) * _np.asarray(b, dtype=work),
+                   0.0, _bound(a.dtype))
+    return out.astype(a.dtype)
+
+
+def _to_float01(img):
+    """uint8 to float in [0,1], **torch's conversion and not a division of choice.**"""
+    return img.astype(_np.float32) / 255.0 if img.dtype == _np.uint8 else img
+
+
+def _from_float01(arr, dtype):
+    """Back again. torch multiplies by `256 - 1e-3` and truncates rather than
+    rounding — copied because the two differ on about half the values."""
+    if dtype != _np.uint8:
+        return arr.astype(dtype)
+    return (arr * (255.0 + 1.0 - 1e-3)).astype(_np.uint8)
+
+
+def _rgb2hsv(arr):
+    """Pillow's algorithm, which is the one torchvision copied. The equal-channel
+    case is **kept out of the division rather than fixed afterwards** — a grey pixel
+    has `maxc == minc`, and dividing by the difference would make a NaN that then
+    has to be found again."""
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    maxc, minc = arr.max(axis=-1), arr.min(axis=-1)
+    eqc = maxc == minc
+    cr = maxc - minc
+    ones = _np.ones_like(maxc)
+    s = cr / _np.where(eqc, ones, maxc)
+    divisor = _np.where(eqc, ones, cr)
+    rc, gc, bc = (maxc - r) / divisor, (maxc - g) / divisor, (maxc - b) / divisor
+    h = ((maxc == r) * (bc - gc)
+         + ((maxc == g) & (maxc != r)) * (2.0 + rc - bc)
+         + ((maxc != g) & (maxc != r)) * (4.0 + gc - rc))
+    return _np.stack((_np.fmod(h / 6.0 + 1.0, 1.0), s, maxc), axis=-1)
+
+
+def _hsv2rgb(hsv):
+    """The way back. torch selects the sextant with a one-hot mask and an einsum;
+    the same choice is a `take_along_axis` here, and the numbers are identical —
+    the einsum is how you write a gather when it also has to differentiate."""
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    sextant = _np.floor(h * 6.0)
+    f = h * 6.0 - sextant
+    idx = (sextant.astype(_np.int32) % 6)[..., None]
+    p = _np.clip(v * (1.0 - s), 0.0, 1.0)
+    q = _np.clip(v * (1.0 - s * f), 0.0, 1.0)
+    t = _np.clip(v * (1.0 - s * (1.0 - f)), 0.0, 1.0)
+    pick = lambda six: _np.take_along_axis(_np.stack(six, axis=-1), idx, axis=-1)[..., 0]
+    return _np.stack((pick((v, q, p, p, t, v)),
+                      pick((t, v, v, q, p, p)),
+                      pick((p, p, t, v, v, q))), axis=-1)
+
+
+def adjust_brightness(img, brightness_factor):
+    """Toward black at 0, unchanged at 1, brighter above."""
+    if brightness_factor < 0:
+        raise ValueError(
+            f"brightness_factor is not non-negative — got {brightness_factor}.\n"
+            f"(torch: brightness_factor ({brightness_factor}) is not non-negative.)")
+    img = _require_hwc(img, "adjust_brightness")
+    return _blend(img, _np.zeros_like(img), brightness_factor)
+
+
+def adjust_contrast(img, contrast_factor):
+    """Toward **the picture's own mean grey**, which is one number for the whole
+    image rather than one per channel or per pixel."""
+    if contrast_factor < 0:
+        raise ValueError(
+            f"contrast_factor is not non-negative — got {contrast_factor}.\n"
+            f"(torch: contrast_factor ({contrast_factor}) is not non-negative.)")
+    img = _require_hwc(img, "adjust_contrast")
+    work = _working_dtype(img.dtype)
+    grey = _to_gray(img, 1, "adjust_contrast")
+    return _blend(img, _np.full(img.shape, grey.astype(work).mean(), dtype=work),
+                  contrast_factor)
+
+
+def adjust_saturation(img, saturation_factor):
+    """Toward grey, per pixel. **A one-channel picture comes back untouched** —
+    torchvision does that to match PIL, and it is a branch rather than an
+    accident."""
+    if saturation_factor < 0:
+        raise ValueError(
+            f"saturation_factor is not non-negative — got {saturation_factor}.\n"
+            f"(torch: saturation_factor ({saturation_factor}) is not non-negative.)")
+    img = _require_hwc(img, "adjust_saturation")
+    if (img.shape[2] if img.ndim == 3 else 1) == 1:
+        return img
+    return _blend(img, _to_gray(img, 1, "adjust_saturation"), saturation_factor)
+
+
+def adjust_hue(img, hue_factor):
+    """Rotate the hue. **The only one that leaves RGB** — through HSV, add to the
+    angle, and back.
+
+    `hue_factor` is a turn rather than degrees: 0.5 is half the wheel. A
+    one-channel picture comes back untouched, matching PIL.
+    """
+    if not -0.5 <= hue_factor <= 0.5:
+        raise ValueError(
+            f"hue_factor is not in [-0.5, 0.5] — got {hue_factor}.\n"
+            f"(torch: hue_factor ({hue_factor}) is not in [-0.5, 0.5].)")
+    img = _require_hwc(img, "adjust_hue")
+    if (img.shape[2] if img.ndim == 3 else 1) == 1:
+        return img
+    dtype = img.dtype
+    hsv = _rgb2hsv(_to_float01(img).astype(_np.float32))
+    hsv[..., 0] = _np.fmod(hsv[..., 0] + hue_factor + 1.0, 1.0)
+    return _from_float01(_hsv2rgb(hsv), dtype)
+
+
+def adjust_gamma(img, gamma, gain=1):
+    """`gain * x ** gamma`, clamped. Below 1 it lifts the shadows and above 1 it
+    deepens them — **the correction a display does**, which is why it is the one
+    here whose name is not a direction."""
+    if gamma < 0:
+        raise ValueError(
+            f"gamma is not non-negative — got {gamma}.\n"
+            "(torch: Gamma should be a non-negative real number)")
+    img = _require_hwc(img, "adjust_gamma")
+    dtype = img.dtype
+    out = _np.clip(gain * _np.power(_to_float01(img).astype(_np.float32), gamma), 0.0, 1.0)
+    return _from_float01(out, dtype)
+
+
+class ColorJitter:
+    """Brightness, contrast, saturation and hue, each drawn from a range — **and
+    the four applied in a drawn order.**
+
+    The order is part of the draw and not a detail: brightness then contrast is not
+    contrast then brightness, because contrast measures the picture's mean and
+    brightness has already moved it.
+
+    A single number `b` means the range `[1-b, 1+b]` (hue is centred on 0 instead).
+    A range that comes out as exactly the identity is **turned off rather than
+    applied** — torchvision stores `None` there, and that is why the repr shows
+    `None` for anything left at its default.
+    """
+
+    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
+        self.brightness = self._check_input(brightness, "brightness")
+        self.contrast = self._check_input(contrast, "contrast")
+        self.saturation = self._check_input(saturation, "saturation")
+        self.hue = self._check_input(hue, "hue", center=0, bound=(-0.5, 0.5),
+                                     clip_first_on_zero=False)
+
+    def _check_input(self, value, name, center=1, bound=(0, float("inf")),
+                     clip_first_on_zero=True):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if value < 0:
+                raise ValueError(
+                    f"{name} as a single number must be non-negative — got {value}.\n"
+                    f"(torch: If {name} is a single number, it must be non negative.)")
+            value = [center - float(value), center + float(value)]
+            if clip_first_on_zero:
+                value[0] = max(value[0], 0.0)
+        elif isinstance(value, (tuple, list)) and len(value) == 2:
+            value = [float(value[0]), float(value[1])]
+        else:
+            raise TypeError(
+                f"{name} is a single number or a pair — got {value!r}.\n"
+                f"(torch: {name} should be a single number or a list/tuple with "
+                "length 2.)")
+        if not bound[0] <= value[0] <= value[1] <= bound[1]:
+            raise ValueError(
+                f"{name} values should be between {bound}, but got {value}.\n"
+                f"(torch: {name} values should be between {bound}, but got {value}.)")
+        # **The identity is stored as `None`, not as a range that does nothing.**
+        # Applied anyway it would still cost a blend and, on a uint8 picture, a
+        # rounding — so "no jitter" and "a jitter of exactly 1" are different.
+        return None if value[0] == value[1] == center else tuple(value)
+
+    def get_params(self):
+        """The four factors and **the order to apply them in.** Kept as a method of
+        its own because it is the only part that draws."""
+        draw = lambda span: None if span is None else float(
+            _rng.uniform(span[0], span[1]))
+        return (_rng.permutation(4), draw(self.brightness), draw(self.contrast),
+                draw(self.saturation), draw(self.hue))
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        order, brightness, contrast, saturation, hue = self.get_params()
+        for which in order:
+            if which == 0 and brightness is not None:
+                img = adjust_brightness(img, brightness)
+            elif which == 1 and contrast is not None:
+                img = adjust_contrast(img, contrast)
+            elif which == 2 and saturation is not None:
+                img = adjust_saturation(img, saturation)
+            elif which == 3 and hue is not None:
+                img = adjust_hue(img, hue)
+        return img
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(brightness={self.brightness}"
+                f", contrast={self.contrast}"
+                f", saturation={self.saturation}"
+                f", hue={self.hue})")
+
+
 # --- transforms.functional -------------------------------------------------
 #
 # **The same arithmetic, called without building an object.** Every function here
@@ -1217,14 +1447,16 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
               "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
               "RandomGrayscale", "RandomHorizontalFlip", "RandomOrder",
-              "RandomResizedCrop", "RandomVerticalFlip", "Resize", "TenCrop",
-              "ToTensor"):
+              "ColorJitter", "RandomResizedCrop", "RandomVerticalFlip", "Resize",
+              "TenCrop", "ToTensor"):
     setattr(transforms, _name, globals()[_name])
 
 # `InterpolationMode` is in both, because torchvision has it in both — it is defined
 # in `functional` and re-exported by `transforms`, and a name counted in one namespace
 # and missing from the other is a gap that is not one.
-for _name in ("InterpolationMode", "center_crop", "crop", "erase", "five_crop",
+for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
+              "adjust_gamma", "adjust_hue", "adjust_saturation",
+              "center_crop", "crop", "erase", "five_crop",
               "get_dimensions", "get_image_num_channels", "get_image_size", "hflip",
               "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",
               "ten_crop", "to_grayscale", "to_tensor", "vflip"):
