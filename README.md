@@ -530,8 +530,8 @@ random, so it cannot be measured".
 ## borch.ts — TypeScript and WGSL
 
 It does not go through Python. **It does not go through TF.js either** — the
-kernels are written directly in WGSL. **Zero** runtime dependencies, and an ES
-module a browser simply reads (242KB gzipped, 834KB before compression).
+kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
+an ES module a browser simply reads (242KB gzipped, 834KB before compression).
 
 ```bash
 npm install borch

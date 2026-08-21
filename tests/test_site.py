@@ -156,7 +156,7 @@ def test_site_examples_name_only_real_modules():
 # All three here are **measurable**. A number that cannot be measured is not on this list.
 SIZE_CLAIMS = (
     # (document, the marker that line must carry, the name of what measures the truth)
-    ("README.md", "ES 모듈", "bundle"),
+    ("README.md", "ES module", "bundle"),
     ("site/index.html", "ES module", "bundle"),
     ("site/ko/index.html", "ES 모듈", "bundle"),
 )
@@ -206,6 +206,61 @@ def test_docs_do_not_name_a_stale_bundle_size():
     assert not stale, (
         "the bundle sizes the documentation claims are stale:\n  " + "\n  ".join(stale) +
         "\n\nmeasure and fix: cat borch-ts/dist/src/*.js | wc -c")
+
+
+# ── where a page quotes another document's heading ────────────────────
+#
+# A lesson page pointing the reader at a section of the README writes that section's
+# title in quotation marks. That is a **wording contract between two files**, and the
+# usual way it breaks is the usual way: the heading is rewritten, the quote is not, and
+# the reader is sent looking for a section that no longer exists under that name.
+#
+# It broke exactly that way here — both pages quoted `초록색이 거짓일 수 있는 일곱 자리`
+# while the README's heading became `Seven places where green can be a lie`, and nothing
+# said so. The Korean page quotes the English heading on purpose: it is a **name of a
+# place in another document**, not prose to be read, so translating it would break the
+# very link the sentence exists to make.
+HEADING_QUOTES = (
+    ("site/learn/08-debugging.html", "README.md", "Seven places where green can be a lie"),
+    ("site/ko/learn/08-debugging.html", "README.md", "Seven places where green can be a lie"),
+)
+
+
+def test_a_page_quoting_a_heading_quotes_one_that_exists():
+    """Both ends of the quote, so neither side can move alone."""
+    broken = []
+    for rel, target, heading in HEADING_QUOTES:
+        page, doc = ROOT / rel, ROOT / target
+        if heading not in page.read_text(encoding="utf-8"):
+            broken.append(f"{rel} no longer quotes {heading!r} — the page moved")
+        elif f"# {heading}" not in doc.read_text(encoding="utf-8"):
+            broken.append(f"{target} has no heading {heading!r} — {rel} points at nothing")
+    assert not broken, (
+        "a page quotes a heading that is not there:\n  " + "\n  ".join(broken) +
+        "\n\nfix both ends together, or drop the row if the sentence went away.")
+
+
+def test_the_documents_still_carry_the_markers_this_file_looks_for():
+    """A marker that matches nothing checks nothing, **and says nothing while doing it.**
+
+    The loop above walks the lines of each document looking for its marker. A document
+    that no longer contains its marker contributes no lines, `stale` stays empty and the
+    test is green — the same green as a document whose numbers are right.
+
+    This is not hypothetical here. README.md's marker was `ES 모듈`, and translating the
+    README to English left it matching nothing. The size claim went unchecked in the one
+    document `test_docs.py` calls the source the site copies from, and the suite stayed
+    green through the commit that did it. Rewrapping a paragraph is enough to do it
+    again, which is why the marker is asserted rather than trusted.
+    """
+    missing = [f"{rel}: {marker!r}" for rel, marker, _ in SIZE_CLAIMS
+               if (ROOT / rel).exists()
+               and marker not in (ROOT / rel).read_text(encoding="utf-8")]
+    assert not missing, (
+        "SIZE_CLAIMS names markers these documents no longer carry:\n  " +
+        "\n  ".join(missing) +
+        "\n\nthe claim moved or was rewritten — point the marker at it again, or drop "
+        "the row if the document stopped claiming a size.")
 
 # ── whether the pages agree with each other ───────────────────────────
 #
