@@ -282,6 +282,16 @@ def test_the_readme_counts_the_typescript_bodies_correctly():
     node = shutil.which("node")
     if node is None:
         pytest.skip("no node")
+    # **The measurement is a build artefact, so a stale build accuses the document.**
+    # This happened on this test's first day: a merge added cases, `dist` was three
+    # commits old, and it reported the README as claiming 2635 against a measured 2629 —
+    # naming the one file that was right. The rule is `test_api_reference_is_not_stale`'s,
+    # for the reason its docstring gives about two people losing a day each.
+    stale = _stale_dist()
+    if stale:
+        pytest.fail(
+            "the bundle is older than the source, so the count below would be measured\n"
+            "against a case table that no longer exists:\n\n  " + stale.replace("\n", "\n  "))
 
     out = subprocess.run([node, "--input-type=module", "-e", COUNT_CASES],
                          capture_output=True, text=True, cwd=ROOT,
