@@ -1300,6 +1300,224 @@ class ColorJitter:
                 f", hue={self.hue})")
 
 
+# --- the six that rewrite pixels, and the six that draw them ----------------
+#
+# **This is AutoAugment's op set**, which is why the six arrive together. A sweep
+# that lands five and leaves one makes the sixth read as declined rather than
+# missed — the shape this repository has now found in a gap-table row, a README
+# sentence and a ledger row on the same day.
+#
+# Two of them are **uint8 only**, and that is torchvision's rule rather than a
+# shortcut here: `posterize` throws bits away by masking them, and `equalize`
+# counts a 256-bin histogram. Neither means anything on a float image, and
+# torchvision raises rather than inventing a meaning.
+
+
+def invert(img):
+    """`bound - x`. White for black, and the bound is 255 or 1 depending on the
+    dtype — which is the whole of it, and the whole of what goes wrong."""
+    img = _require_hwc(img, "invert")
+    return (_bound(img.dtype) - img.astype(_working_dtype(img.dtype))).astype(img.dtype)
+
+
+def posterize(img, bits):
+    """Keep the top `bits` of each byte and zero the rest — **fewer colours, by
+    masking rather than by rounding.**"""
+    img = _require_hwc(img, "posterize")
+    if img.dtype != _np.uint8:
+        raise TypeError(
+            f"posterize takes a uint8 image — it received {img.dtype}.\n"
+            "  It throws away the low bits of a byte, and a float image has no bits\n"
+            "  to throw away.\n"
+            f"(torch: Only torch.uint8 image tensors are supported, but found {img.dtype})")
+    return img & _np.uint8(-int(2 ** (8 - bits)) & 0xFF)
+
+
+def solarize(img, threshold):
+    """Invert **only the pixels at or above** the threshold. Below it, nothing
+    happens — so the picture comes back part positive and part negative."""
+    img = _require_hwc(img, "solarize")
+    if threshold > _bound(img.dtype):
+        raise TypeError(
+            f"threshold {threshold} is above this image's bound "
+            f"{_bound(img.dtype)}.\n"
+            "(torch: Threshold should be less than bound of img.)")
+    return _np.where(img >= threshold, invert(img), img)
+
+
+def autocontrast(img):
+    """Stretch each channel to fill the range. **Per channel and not per picture** —
+    a channel that is already flat is left alone rather than divided by zero."""
+    img = _require_hwc(img, "autocontrast")
+    work = _working_dtype(img.dtype)
+    bound = _bound(img.dtype)
+    lo = img.min(axis=(0, 1), keepdims=True).astype(work)
+    hi = img.max(axis=(0, 1), keepdims=True).astype(work)
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        scale = bound / (hi - lo)
+    flat = ~_np.isfinite(scale)
+    lo = _np.where(flat, 0, lo)
+    scale = _np.where(flat, 1, scale)
+    return _np.clip((img.astype(work) - lo) * scale, 0, bound).astype(img.dtype)
+
+
+def _equalize_channel(plane):
+    """One channel's histogram equalisation, **in torch's integer arithmetic.**
+
+    Every division here floors, and the shifted lookup table (`[0] + lut[:-1]`) is
+    what makes the darkest value map to 0 rather than to the first step. Written
+    with floating point it is off by one over most of the range.
+    """
+    hist = _np.bincount(plane.reshape(-1), minlength=256)
+    nonzero = hist[hist != 0]
+    step = int(nonzero[:-1].sum()) // 255
+    if step == 0:
+        return plane
+    lut = (_np.cumsum(hist) + step // 2) // step
+    lut = _np.clip(_np.concatenate(([0], lut[:-1])), 0, 255).astype(_np.uint8)
+    return lut[plane]
+
+
+def equalize(img):
+    """Flatten the histogram, per channel. **uint8 only**, for torchvision's
+    reason: it counts 256 bins."""
+    img = _require_hwc(img, "equalize")
+    if img.dtype != _np.uint8:
+        raise TypeError(
+            f"equalize takes a uint8 image — it received {img.dtype}.\n"
+            "  It counts a 256-bin histogram, and a float image has no bins.\n"
+            f"(torch: Only torch.uint8 image tensors are supported, but found {img.dtype})")
+    arr = img if img.ndim == 3 else img[:, :, None]
+    return _np.stack([_equalize_channel(arr[:, :, c]) for c in range(arr.shape[2])],
+                     axis=-1)
+
+
+def _blurred(img):
+    """The 3x3 smoothing `adjust_sharpness` blends toward — **ones with a 5 in the
+    middle, over 13.**
+
+    The border is left as it was. torchvision convolves without padding and writes
+    the result back into the middle, so the outermost ring of pixels is the
+    original — copied rather than tidied, because a padded convolution gives
+    different numbers there and the difference is invisible in the middle.
+    """
+    work = _working_dtype(img.dtype)
+    kernel = _np.ones((3, 3), dtype=work)
+    kernel[1, 1] = 5.0
+    kernel /= kernel.sum()
+    src = img.astype(work)
+    h, w = img.shape[0], img.shape[1]
+    middle = _np.zeros((h - 2, w - 2) + img.shape[2:], dtype=work)
+    for di in range(3):
+        for dj in range(3):
+            middle += kernel[di, dj] * src[di:di + h - 2, dj:dj + w - 2]
+    out = src.copy()
+    out[1:-1, 1:-1] = middle
+    if _np.dtype(img.dtype).kind != "f":
+        # **Rounded, not truncated.** torch casts the convolution back to an integer
+        # dtype through `round`, and truncating instead is one step low on about half
+        # the pixels — measured against `adjust_sharpness` on the byte picture.
+        out = _np.clip(_np.round(out), 0, _bound(img.dtype))
+    return out.astype(img.dtype)
+
+
+def adjust_sharpness(img, sharpness_factor):
+    """Blur at 0, unchanged at 1, sharper above — the blend that `ImageEnhance`
+    calls sharpness. **A picture two pixels wide or shorter comes back untouched**,
+    because there is no middle to convolve."""
+    if sharpness_factor < 0:
+        raise ValueError(
+            f"sharpness_factor is not non-negative — got {sharpness_factor}.\n"
+            f"(torch: sharpness_factor ({sharpness_factor}) is not non-negative.)")
+    img = _require_hwc(img, "adjust_sharpness")
+    if img.shape[0] <= 2 or img.shape[1] <= 2:
+        return img
+    return _blend(img, _blurred(img), sharpness_factor)
+
+
+class _RandomPixelOp:
+    """What the six `Random…` wrappers share: a probability, and one call."""
+
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        if _rng.random() >= self.p:
+            return img
+        return self._apply(img)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(p={self.p})"
+
+
+class RandomInvert(_RandomPixelOp):
+    """`invert` with probability `p`."""
+
+    def _apply(self, img):
+        return invert(img)
+
+
+class RandomAutocontrast(_RandomPixelOp):
+    """`autocontrast` with probability `p`."""
+
+    def _apply(self, img):
+        return autocontrast(img)
+
+
+class RandomEqualize(_RandomPixelOp):
+    """`equalize` with probability `p`. uint8 only, as the function is."""
+
+    def _apply(self, img):
+        return equalize(img)
+
+
+class RandomPosterize(_RandomPixelOp):
+    """`posterize` with probability `p`."""
+
+    def __init__(self, bits, p=0.5):
+        super().__init__(p)
+        self.bits = bits
+
+    def _apply(self, img):
+        return posterize(img, self.bits)
+
+    def __repr__(self):
+        # **No space after the comma**, which is torchvision's own spelling here and
+        # not a slip in the copy — three of these six print that way and the other
+        # three have one field.
+        return f"{type(self).__name__}(bits={self.bits},p={self.p})"
+
+
+class RandomSolarize(_RandomPixelOp):
+    """`solarize` with probability `p`."""
+
+    def __init__(self, threshold, p=0.5):
+        super().__init__(p)
+        self.threshold = threshold
+
+    def _apply(self, img):
+        return solarize(img, self.threshold)
+
+    def __repr__(self):
+        return f"{type(self).__name__}(threshold={self.threshold},p={self.p})"
+
+
+class RandomAdjustSharpness(_RandomPixelOp):
+    """`adjust_sharpness` with probability `p`."""
+
+    def __init__(self, sharpness_factor, p=0.5):
+        super().__init__(p)
+        self.sharpness_factor = sharpness_factor
+
+    def _apply(self, img):
+        return adjust_sharpness(img, self.sharpness_factor)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(sharpness_factor={self.sharpness_factor}"
+                f",p={self.p})")
+
+
 # --- transforms.functional -------------------------------------------------
 #
 # **The same arithmetic, called without building an object.** Every function here
@@ -1447,7 +1665,9 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
               "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
               "RandomGrayscale", "RandomHorizontalFlip", "RandomOrder",
-              "ColorJitter", "RandomResizedCrop", "RandomVerticalFlip", "Resize",
+              "ColorJitter", "RandomAdjustSharpness", "RandomAutocontrast",
+              "RandomEqualize", "RandomInvert", "RandomPosterize",
+              "RandomResizedCrop", "RandomSolarize", "RandomVerticalFlip", "Resize",
               "TenCrop", "ToTensor"):
     setattr(transforms, _name, globals()[_name])
 
@@ -1456,6 +1676,8 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
 # and missing from the other is a gap that is not one.
 for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
               "adjust_gamma", "adjust_hue", "adjust_saturation",
+              "adjust_sharpness", "autocontrast", "equalize", "invert",
+              "posterize", "solarize",
               "center_crop", "crop", "erase", "five_crop",
               "get_dimensions", "get_image_num_channels", "get_image_size", "hflip",
               "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",
