@@ -1,12 +1,14 @@
 /**
- * 플레이그라운드 화면.
+ * The playground screen.
  *
- * 코드를 치고, 브라우저의 GPU 에서 돌리고, 나온 것을 본다. 서버로 아무것도 안
- * 보낸다 — 보낼 곳이 없다. 이 페이지는 정적 파일이고 계산은 전부 이 탭 안에서 난다.
+ * Type code, run it on the browser's GPU, look at what comes out. Nothing is sent to a
+ * server — there is nowhere to send it. This page is a static file and every
+ * computation happens inside this tab.
  *
- * 언어가 둘이다. **밑바닥은 하나다** — 자바스크립트는 borch.ts 를 직접 부르고,
- * 파이썬은 Pyodide 위의 `borch_webgpu` 가 같은 커널을 부른다. 그 차이(파이썬을 한 번
- * 지나는 값)가 얼마인지는 저장소의 벤치가 재놓았다: 배치 64 에서 118.5ms 대 123.4ms.
+ * There are two languages. **There is one floor beneath them** — JavaScript calls
+ * borch.ts directly, and Python calls the same kernels through `borch_webgpu` on
+ * Pyodide. What that difference costs (the value passing through Python once) has been
+ * measured by the repository's benchmark: 118.5ms against 123.4ms at batch 64.
  */
 
 import { EXAMPLES } from "./examples.js";
@@ -34,7 +36,7 @@ const filename = $("#filename");
 const STORE_KEY = "borch.playground.code";
 let lang = "js";
 
-/* ── 예시 목록 ──────────────────────────────────────────────────────── */
+/* ── the example list ───────────────────────────────────────────────── */
 
 function fillPicker() {
   picker.textContent = "";
@@ -58,15 +60,15 @@ function langOf(id) {
   return EXAMPLES.py.some((e) => e.id === id) ? "py" : "js";
 }
 
-/** 편집기의 언어를 바꾼다. 저장된 코드도 언어별로 따로 둔다. */
+/** Switches the editor's language, keeping the saved code apart per language. */
 function setLang(next, { keepCode = false } = {}) {
   lang = next;
   langPicker.value = next;
   fillPicker();
   surface.textContent = t(next === "js" ? "editor.surfaceJs" : "editor.surfacePy");
   filename.textContent = t(next === "js" ? "editor.fileJs" : "editor.filePy");
-  // **여기 한국어가 박혀 있었다.** 영문 페이지의 편집기가 화면 낭독기에게 자기를
-  // 한국어로 소개하고 있었다 — 눈으로는 안 보이는 자리라 아무도 못 봤다.
+  // **Korean was hardcoded here.** The English page's editor introduced itself to a
+  // screen reader in Korean — a place the eye never reaches, so nobody saw it.
   const name = t(next === "js" ? "editor.nameJs" : "editor.namePy");
   editor.setAttribute("aria-label", `${name}. ${t("editor.hint")}`);
   editor.setAttribute("title", t("editor.hint"));
@@ -94,16 +96,17 @@ function saveCode() {
   localStorage.setItem(`${STORE_KEY}.${lang}`, editor.value);
 }
 
-/* ── 강조 층 ────────────────────────────────────────────────────────
+/* ── the painted layer ──────────────────────────────────────────────
  *
- * 뒤에 색을 칠한 층을 깔고 위의 textarea 는 글자를 투명하게 둔다. 입력·선택·
- * 되돌리기·한글 조합은 전부 브라우저의 것이라 우리가 흉내 낼 것이 없다 —
- * 직접 그리는 편집기가 그 자리에서 커서를 잃는다.
+ * A coloured layer sits behind and the textarea on top keeps its text transparent.
+ * Typing, selection, undo and IME composition all stay the browser's, so there is
+ * nothing for us to imitate — an editor that draws its own text is exactly where the
+ * caret gets lost.
  */
 
 function repaint() {
-  // **끝의 줄바꿈 하나가 안 그려진다.** 마지막 줄이 비어 있으면 아래 층의 높이가
-  // 한 줄 모자라고, 그러면 그 줄에서 스크롤이 어긋난다. 공백 하나를 붙여 막는다.
+  // **A trailing newline does not get drawn.** With an empty last line the layer below
+  // is one line short and the scroll goes out of step there. One space prevents it.
   painted.innerHTML = highlight(`${editor.value}\n `, lang);
   syncScroll();
 }
@@ -116,7 +119,7 @@ function syncScroll() {
 
 editor.addEventListener("scroll", syncScroll);
 
-/* ── 처음에 무엇을 열 것인가 ────────────────────────────────────────── */
+/* ── what to open with ──────────────────────────────────────────────── */
 
 function boot() {
   const hash = new URLSearchParams(location.hash.slice(1));
@@ -130,7 +133,7 @@ function boot() {
       saveCode();
       say(t("editor.opened", t("editor.fromLink")), "note");
       return;
-    } catch { /* 망가진 링크는 없는 셈 친다 */ }
+    } catch { /* a broken link counts as no link */ }
   }
 
   const want = hash.get("example");
@@ -165,8 +168,8 @@ picker.addEventListener("change", () => {
 
 editor.addEventListener("input", () => { repaint(); saveCode(); });
 
-// 같은 문서 안에서 주소만 바뀌는 경우에도 예시가 바뀌어야 한다 — 해시만 바뀌면
-// 브라우저는 페이지를 다시 안 읽는다.
+// The example has to change even when only the address moves within the same document —
+// on a hash-only change the browser does not reload the page.
 window.addEventListener("hashchange", () => {
   const want = new URLSearchParams(location.hash.slice(1)).get("example");
   const ex = want ? findExample(want) : null;
@@ -176,11 +179,11 @@ window.addEventListener("hashchange", () => {
   load(ex);
 });
 
-// 탭이 초점을 옮기면 코드 편집기가 아니다. **그런데 나갈 문은 있어야 한다.**
+// If Tab moves focus it is not a code editor. **But there has to be a way out.**
 //
-// 없으면 키보드로 들어온 사람이 못 나간다 — Tab 이 공백만 늘린다. Escape 로 한 번
-// 무장하고 다음 Tab 이 나간다. 강의 블록(`runnable.js`)과 같은 문이라 두 편집기의
-// 손짓이 같다.
+// Without one, someone who arrives by keyboard cannot leave — Tab only grows the
+// spaces. Escape arms it once and the next Tab leaves. The same door as the lesson
+// blocks (`runnable.js`), so both editors take the same gesture.
 let leaving = false;
 editor.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { leaving = true; return; }
@@ -200,7 +203,7 @@ editor.addEventListener("keydown", (e) => {
   }
 });
 
-/* ── 출력 ───────────────────────────────────────────────────────────── */
+/* ── output ─────────────────────────────────────────────────────────── */
 
 function say(text, kind = "") {
   const line = document.createElement("div");
@@ -212,7 +215,7 @@ function say(text, kind = "") {
 
 function clearConsole() { consoleOut.textContent = ""; }
 
-/* ── 손실 그래프 ────────────────────────────────────────────────────── */
+/* ── the loss plot ──────────────────────────────────────────────────── */
 
 let series = [];
 let seriesName = "";
@@ -286,7 +289,7 @@ function drawChart() {
 
 window.addEventListener("resize", scheduleDraw);
 
-/* ── 장치 ───────────────────────────────────────────────────────────── */
+/* ── the device ─────────────────────────────────────────────────────── */
 
 (async function showDevice() {
   try {
@@ -307,7 +310,7 @@ window.addEventListener("resize", scheduleDraw);
   }
 })();
 
-/* ── 실행 ───────────────────────────────────────────────────────────── */
+/* ── running ────────────────────────────────────────────────────────── */
 
 let running = false;
 
@@ -353,7 +356,7 @@ stopBtn.addEventListener("click", () => {
   say(t("run.stopping"), "note");
 });
 
-/* ── 공유 ───────────────────────────────────────────────────────────── */
+/* ── sharing ────────────────────────────────────────────────────────── */
 
 $("#share").addEventListener("click", async () => {
   const frag = `#lang=${lang}&code=${encodeCode(editor.value)}`;
@@ -367,8 +370,9 @@ $("#share").addEventListener("click", async () => {
   history.replaceState(null, "", frag);
 });
 
-// **맨 끝에서 연다.** 위쪽의 그래프 상태(`series`)보다 먼저 부르면 그 자리에서
-// 초기화 전 접근으로 터지고, 화면은 그냥 빈 채로 남는다 — 실제로 두 번 겪었다.
-// (두 번째는 파일 끝을 잘라내면서 이 한 줄을 같이 지웠을 때다. 증상은 같았다:
-//  예외도 없이 편집기가 비어 있고 공유 링크에 코드가 안 실린다.)
+// **Opened at the very end.** Called before the plot state above it (`series`), it
+// blows up there on access-before-initialisation and the screen simply stays blank —
+// which happened twice. (The second time was deleting this one line while truncating
+// the end of the file. The symptom was the same: no exception, an empty editor, and no
+// code in the share link.)
 boot();

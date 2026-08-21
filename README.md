@@ -450,7 +450,7 @@ torch 의 난수기를 쓸 수 없어서다. 그래서 골든은 확률을 0·1 
 ## borch.ts — TypeScript 와 WGSL
 
 파이썬을 안 거친다. **TF.js 도 안 거친다** — 커널을 WGSL 로 직접 썼다.
-런타임 의존성이 **0개**이고, 브라우저가 그냥 읽는 ES 모듈이다(gzip 230KB, 압축 전 818KB).
+런타임 의존성이 **0개**이고, 브라우저가 그냥 읽는 ES 모듈이다(gzip 242KB, 압축 전 834KB).
 
 ```bash
 npm install borch
@@ -511,7 +511,7 @@ borch.ts 자신은 2352 건에 TS 본문을 써 두었다. 나머지 608 건은 
 그중 상당수는 파이썬 이름 별칭을 묻는 것이라 옮기면 같은 질문이 두 번이 된다.
 줄지 않는 그 수를 러너가 계속 찍는다 — 은근히 사라지는 것보다 낫다.
 
-### torch 와 갈리는 다섯 자리
+### torch 와 갈리는 여섯 자리
 
 첫 열 줄에서 전부 만나므로 미리 적는다.
 
@@ -522,6 +522,27 @@ borch.ts 자신은 2352 건에 TS 본문을 써 두었다. 나머지 608 건은 
 | `using s = scope()` 로 감싼다 | JS 의 쓰레기 수집이 GPU 메모리를 제때 안 놓는다. 한 스텝이 중간 버퍼를 수천 개 만든다 |
 | `model.call(x)` | JS 는 객체를 그냥 못 부른다 |
 | `'cpu'` 로는 연산이 안 된다 | 값을 내려두는 자리이지 커널이 있는 장치가 아니다 (아래 절) |
+| `await opt.step(closure)` | **`LBFGS` 만** 그렇다. 한 걸음 안에서 스칼라를 읽어 분기한다 (바로 아래) |
+
+**`LBFGS` 는 느리고, 그것은 알고리즘의 성질이다.** 다른 옵티마이저는 기울기 한 벌로
+한 걸음을 가지만 이쪽은 안에서 `maxIter` 번 돌면서 매번 손실과 기울기를 다시 묻고,
+되돌이마다 **스칼라를 읽어 분기한다** — 기울기 문턱, 곡률 `y·s`, 방향 미분, 손실 변화.
+전부 `if` 와 `break` 의 조건이라 GPU 위에 둘 수 없고, 값을 읽는 것은 여기서 비동기다.
+한 번의 `step()` 이 스텝당 백 번 안팎의 GPU→호스트 왕복을 낸다.
+
+조기 종료를 버리고 고정 횟수로 돌면 동기로 만들 수 있지만, 그렇게 만든 것은 동기
+LBFGS 가 아니라 **다른 알고리즘**이다. 큰 모델에는 `Adam` 을 쓰고, 이 이름은 **작은
+문제를 정확히** 풀 때 쓴다. 직선 탐색(`lineSearchFn`)은 없고, 주면 시끄럽게 멈춘다.
+
+```ts
+const opt = new optim.LBFGS([p], 0.1);
+await opt.step(() => {                  // 닫힘이 손실을 다시 재고 기울기를 채운다
+  p.grad = null;
+  const loss = crit.call(model.call(x), y);
+  loss.backward();
+  return loss;
+});
+```
 
 `scope()` 는 torch 에 없다 — TF.js 의 `tidy` 와 같은 자리이고 이유도 같다. 파라미터처럼
 살아남아야 하는 것은 `keepAlive` 로 표시한다 — **안 감싸면 몇 스텝 만에 장치가 찬다.**
@@ -756,26 +777,40 @@ loader.length;    // 표본 수가 아니라 **배치 수**. torch 와 같다
 옮겨서도 안 된다. 대신 이쪽을 들면 **파이썬 `borch`·numpy·HF 도구가 같은 파일을
 읽는다** — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 그것으로 열린다.
 
-```ts
-import { save, load, prefixed, unprefixed, numbersToMeta, metaToNumbers } from "borch";
+**중첩을 그대로 담는다** — 교재의 관용구가 그것이고, torch·파이썬 `borch` 와 같은
+모양이다. 텐서가 아닌 것(숫자·글자·참거짓·`null`·배열)도 같이 간다.
 
-const state = opt.stateDict();
-const bytes = await save(
-  { ...prefixed("model", model.stateDict()), ...prefixed("opt", state.tensors) },
-  { ...numbersToMeta("opt", state.numbers),
-    ...numbersToMeta("sched", sched.stateDict()) },
-);
+```ts
+import { save, load } from "borch";
+
+const bytes = await save({
+  model: model.stateDict(),
+  opt: opt.stateDict(),
+  sched: sched.stateDict(),
+  epoch: 5,
+});
 // bytes 는 Uint8Array — IndexedDB 에 넣든 파일로 내리든 쓰는 쪽 몫이다
 ```
 
 되돌릴 때는 **모델·옵티마이저·스케줄러를 같은 인자로 다시 세운 뒤** 얹는다.
 
 ```ts
-const read = load(bytes);
-model.loadStateDict(unprefixed("model", read.tensors));
-opt.loadStateDict({ tensors: unprefixed("opt", read.tensors),
-                    numbers: metaToNumbers("opt", read.metadata) });
-sched.loadStateDict(metaToNumbers("sched", read.metadata));
+const ck = load(bytes);
+model.loadStateDict(ck.model);
+opt.loadStateDict(ck.opt);
+sched.loadStateDict(ck.sched);
+```
+
+구조는 머리의 `borch.tree` 에 JSON 으로 적히고 텐서는 지금까지처럼 평평하게 눕는다 —
+**파이썬 쪽과 같은 스킴이라 서로의 체크포인트를 읽는다.** 나무가 없는 파일(남이 만든
+safetensors)을 주면 평평한 텐서 표로 온다.
+
+밑의 코덱이 필요하면 `encode`/`decode` 가 그 자리다. 평평한 `Record<string, Tensor>`
+와 문자열 메타데이터만 다루고, 이름을 겹치지 않게 눕히는 `prefixed`·`unprefixed` 와
+숫자를 메타데이터로 옮기는 `numbersToMeta`·`metaToNumbers` 가 같이 있다.
+
+```ts
+const { tensors, metadata } = decode(bytes);
 ```
 
 **가중치만 되돌리면 안 된다.** 모멘텀·스텝 계수기·스케줄러의 에폭이 같이 가야 재개한

@@ -187,7 +187,7 @@
 
         const model = new nn.Sequential(
           new nn.Flatten(), new nn.Linear(64, 32), new nn.ReLU(), new nn.Linear(32, 2));
-        model.loadStateDict(load(new Uint8Array(window.__quickstart)).tensors);
+        model.loadStateDict(load(new Uint8Array(window.__quickstart)));
 
         const test = window.makeBatch(400);
         const x = Tensor.from(test.pixels, [400, 1, 8, 8]);

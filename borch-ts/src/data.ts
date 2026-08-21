@@ -1,25 +1,30 @@
 /**
- * 데이터셋과 적재기 — `torch.utils.data` 자리.
+ * Datasets and loaders — where `torch.utils.data` goes.
  *
- * ## 없으면 이야기가 반쯤 거짓이 된다
+ * ## Without this, the story is half untrue
  *
- * 이 저장소는 "브라우저에서 학습한다" 고 말하는데, 여기가 비어 있으면 그 학습이
- * **배치를 손으로 자르는 것**으로 끝난다. 실제로 저장소 안의 정확도 러너가 뽑기·섞기를
- * 직접 짜고 있었다 — 쓰는 사람은 누구나 같은 것을 다시 짜게 된다.
+ * This repository says "train in the browser", and with this empty that
+ * training ends at **slicing batches by hand.** The accuracy runner inside
+ * the repository was in fact writing its own sampling and shuffling — and
+ * every user would end up writing the same thing again.
  *
- * ## 무엇을 안 만들었나
+ * ## What was not built
  *
- * **`sampler` 옵션이 없다.** torch 에 있는 이름이지만 지금 받쳐 줄 것이 없다. 이름만
- * 놓으면 `paramGroups` 가 그랬던 꼴이 된다 — 모양은 torch 인데 속이 비어서, 쓰는
- * 사람이 넣은 것이 조용히 무시되는 자리. 없는 것은 없다고 둔다.
+ * **There is no `sampler` option.** The name exists in torch, but there is
+ * nothing behind it here yet. Putting the name down alone repeats what
+ * happened with `paramGroups` — torch's shape with nothing inside, a place
+ * where what the user passes is quietly ignored. What is not there is left
+ * absent.
  *
- * `num_workers` 도 없다. 워커를 띄우면 GPU 손잡이가 그쪽으로 안 건너간다.
+ * There is no `num_workers` either. Spawning a worker does not carry the
+ * GPU handle across to it.
  *
- * ## torch 와 갈리는 두 자리
+ * ## Two places it parts from torch
  *
- * **배치는 GPU 텐서라 `scope()` 안에서 받아야 한다.** 적재기가 대신 감쌀 수가 없다 —
- * 텐서가 구역 밖으로 나가는 것이 목적이기 때문이다. 안 감싸면 한 에폭이 만드는 배치가
- * 전부 남는다.
+ * **Batches are GPU tensors, so they have to be received inside
+ * `scope()`.** The loader cannot wrap them for you — the whole point is
+ * that the tensor leaves the scope. Leave it unwrapped and every batch an
+ * epoch makes stays alive.
  *
  * ```ts
  * for (const [x, y] of loader) {
@@ -32,12 +37,13 @@
  * }
  * ```
  *
- * `x` 와 `y` 는 구역 **밖에서** 만들어졌으므로 살려 둘 것으로 표시할 필요가 없다.
- * 구역이 놓는 것은 그 안에서 만든 중간 버퍼다.
+ * `x` and `y` were made **outside** the scope, so they need no keep-alive
+ * mark. What the scope releases are the intermediates made inside it.
  *
- * **섞기가 `manualSeed` 를 따른다.** torch 는 DataLoader 에 별도 generator 를 두는데
- * 여기서는 호스트 줄기 하나를 쓴다(`random.ts`) — 씨앗 하나가 층 초기화·dropout·
- * 텐서 팩토리에 이어 배치 순서까지 되돌린다. 문을 늘리지 않는 쪽을 골랐다.
+ * **Shuffling follows `manualSeed`.** torch gives the DataLoader its own
+ * generator; here one host stream is used (`random.ts`) — one seed rewinds
+ * layer initialisation, dropout, the tensor factories and now batch order
+ * too. The choice was to not add another door.
  */
 
 import { RuntimeError } from "./errors.js";
@@ -45,11 +51,13 @@ import { uniform } from "./random.js";
 import { Tensor } from "./tensor.js";
 
 /**
- * 번호로 꺼낼 수 있는 것. `torch.utils.data.Dataset` 자리다.
+ * Something that can be fetched by index. Where `torch.utils.data.Dataset`
+ * goes.
  *
- * `gather` 는 **있어도 되고 없어도 된다.** 있으면 적재기가 배치를 한 번에 뽑고,
- * 없으면 하나씩 꺼내 쌓는다. 텐서를 들고 있는 데이터셋에서 이 차이가 크다 — 배치
- * 32 에 텐서 둘이면 GPU 연산이 66 번에서 2 번으로 준다.
+ * `gather` **is optional.** With it, the loader pulls a batch in one go;
+ * without it, it fetches one at a time and stacks. The difference is large
+ * for a dataset holding tensors — at batch 32 with two tensors, GPU
+ * operations drop from 66 to 2.
  */
 export interface Dataset {
   readonly length: number;
@@ -57,7 +65,10 @@ export interface Dataset {
   gather?(indices: readonly number[]): readonly Tensor[];
 }
 
-/** 첫 축이 표본 축인 텐서 몇 개. `torch.utils.data.TensorDataset` 자리다. */
+/**
+ * A few tensors whose first axis is the sample axis. Where
+ * `torch.utils.data.TensorDataset` goes.
+ */
 export class TensorDataset implements Dataset {
   readonly tensors: readonly Tensor[];
 
@@ -100,7 +111,9 @@ export class TensorDataset implements Dataset {
   }
 }
 
-/** 원본의 일부만 본다. `randomSplit` 이 이것을 낸다. */
+/**
+ * Sees only part of the original. `randomSplit` produces one.
+ */
 export class Subset implements Dataset {
   constructor(
     readonly dataset: Dataset,
@@ -116,8 +129,10 @@ export class Subset implements Dataset {
   }
 
   /**
-   * **번호를 옮겨 원본에 넘긴다.** 이것이 없으면 `randomSplit` 을 지난 데이터셋이
-   * 전부 느린 길로 떨어진다 — 학습·검증을 나누는 것이 예사로운 일인데.
+   * **Translates the indices and passes them to the original.** Without
+   * this, every dataset that has been through `randomSplit` falls onto the
+   * slow path — and splitting train from validation is an ordinary thing to
+   * do.
    */
   gather(indices: readonly number[]): readonly Tensor[] {
     const mapped = indices.map((i) => this.at(i));
@@ -135,7 +150,10 @@ export class Subset implements Dataset {
   }
 }
 
-/** 여러 데이터셋을 이어 하나로. `torch.utils.data.ConcatDataset` 자리다. */
+/**
+ * Several datasets joined into one. Where `torch.utils.data.ConcatDataset`
+ * goes.
+ */
 export class ConcatDataset implements Dataset {
   private readonly ends: number[] = [];
 
@@ -163,12 +181,13 @@ export class ConcatDataset implements Dataset {
 }
 
 /**
- * 겹치지 않게 나눈다. `torch.utils.data.random_split` 자리다.
+ * Splits without overlap. Where `torch.utils.data.random_split` goes.
  *
- * **합이 전체와 같아야 한다.** torch 도 거기서 멈춘다 — 남는 표본이 조용히 버려지면
- * 학습·검증 비율이 적어 놓은 것과 달라지고 아무도 못 본다.
+ * **The parts must sum to the whole.** torch stops there too — a leftover
+ * sample quietly discarded makes the train/validation ratio differ from the
+ * one written down, and nobody sees it.
  *
- * 섞기는 `manualSeed` 를 따른다. 같은 씨앗이면 같은 나눔이다.
+ * Shuffling follows `manualSeed`. The same seed gives the same split.
  */
 export function randomSplit(
   dataset: Dataset, lengths: readonly number[],
@@ -191,28 +210,36 @@ export function randomSplit(
 
 export interface LoaderOptions {
   batchSize?: number;
-  /** 에폭마다 다시 섞는다 — torch 와 같다. */
+  /**
+   * Reshuffles every epoch, as in torch.
+   */
   shuffle?: boolean;
-  /** 마지막 배치가 모자라면 버린다. 배치 크기가 고정이어야 하는 층이 쓴다. */
+  /**
+   * Drops the last batch if it is short. Layers that need a fixed batch
+   * size use it.
+   */
   dropLast?: boolean;
 }
 
 /**
- * 배치를 내놓는다. `torch.utils.data.DataLoader` 자리다.
+ * Hands out batches. Where `torch.utils.data.DataLoader` goes.
  *
- * **동기 반복자다.** 배치를 만드는 것은 GPU 연산이고 borch 의 순방향은 동기이므로
- * `for (const [x, y] of loader)` 가 그대로 돈다 — 값을 읽을 때만 비동기다.
+ * **It is a synchronous iterator.** Making a batch is a GPU operation and
+ * borch's forward is synchronous, so `for (const [x, y] of loader)` works
+ * as written — only reading values is asynchronous.
  *
- * `length` 는 표본 수가 아니라 **배치 수**다. torch 와 같다.
+ * `length` is the number of **batches**, not samples, as in torch.
  *
- * ## 배치는 `scope()` 안에서 받아야 한다
+ * ## Batches have to be received inside `scope()`
  *
- * 파일 머리에도 적었지만 여기 다시 적는다 — **로더를 쓰는 사람이 첫 루프에서 바로
- * 부딪히는 자리**이고, 문서 한 곳만 보고 코드를 쓰는 것이 보통이다.
+ * It is written at the head of the file too, and it is written again here —
+ * this is **the place a loader's user hits on their first loop**, and
+ * reading one spot of the documentation before writing code is the normal
+ * case.
  *
  * ```ts
  * for (const [x, y] of loader) {
- *   await scope(async () => {          // 이 안에서 만든 중간 버퍼가 나갈 때 놓인다
+ *   await scope(async () => {          // intermediates made in here are released on the way out
  *     opt.zeroGrad();
  *     const loss = crit.call(model.call(x), y);
  *     loss.backward();
@@ -221,9 +248,10 @@ export interface LoaderOptions {
  * }
  * ```
  *
- * 로더가 대신 감쌀 수는 없다. 배치가 구역 밖으로 나가는 것이 목적이기 때문이다 —
- * 감싸면 `x` 와 `y` 가 쓰이기도 전에 놓인다. 안 감싸면 한 에폭이 만드는 중간 버퍼가
- * 전부 남고, 몇 에폭 만에 장치가 찬다.
+ * The loader cannot wrap it for you. The point is that the batch leaves the
+ * scope — wrap it and `x` and `y` are released before they are ever used.
+ * Leave it unwrapped and every intermediate an epoch makes stays, and the
+ * device fills within a few epochs.
  */
 export class DataLoader implements Iterable<readonly Tensor[]> {
   readonly batchSize: number;

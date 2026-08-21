@@ -1,8 +1,8 @@
 /**
- * 랜딩 페이지의 살아 있는 자리 — 히어로의 데모와 장치 배지.
+ * The living parts of the landing page — the hero demo and the device badge.
  *
- * 설명 페이지가 "브라우저에서 돈다" 고 적어 놓고 그것을 안 보여주면 그 문장은
- * 광고다. 그래서 첫 화면에서 바로 한 번 돌려 볼 수 있게 둔다.
+ * An explainer that writes "it runs in the browser" and then does not show it has
+ * written an advertisement. So the first screen offers one run, right there.
  */
 
 import { HERO_CODE } from "./examples.js";

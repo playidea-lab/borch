@@ -10,43 +10,59 @@
  * 그래서 테이프만 따로 시험할 수 있다.
  */
 
-/** 그래프의 마디. 텐서가 이것을 구현한다. */
+/**
+ * A node in the graph. Tensor implements it.
+ */
 export interface Node<T> {
-  /** 이 값을 만든 입력들. 잎이면 비어 있다. */
+  /**
+   * The inputs this value was made from. Empty at a leaf.
+   */
   readonly parents: readonly Node<T>[];
-  /** 기울기를 받을 것인가. */
+  /**
+   * Whether it receives gradient.
+   */
   requiresGrad: boolean;
-  /** 잎에만 쌓인다. torch 와 같다. */
+  /**
+   * Accumulates on leaves only, as in torch.
+   */
   grad: T | null;
   /**
-   * 출력 기울기 하나를 받아 **부모 수만큼** 돌려준다.
+   * Takes one output gradient and returns **as many as there are parents.**
    *
-   * 흘리지 않는 부모 자리는 `null` 이다. `null` 과 "0 으로 채운 것" 은 다르다 —
-   * 계단 함수(`sign`·`floor`)는 **0 을 흘린다**. 자매에서 이것을 한 번 거절로
-   * 잘못 적었고, 계단을 낀 손실이 torch 에서는 도는데 우리에게서만 멈췄다.
+   * A parent that gets nothing is `null`. `null` and "filled with zeros"
+   * are different — step functions (`sign`, `floor`) **do pass zero
+   * through.** The sister project wrote this once as a refusal, and a loss
+   * with a step in it ran under torch while stopping only for us.
    */
   readonly backwardFn: ((grad: T) => readonly (T | null)[]) | null;
-  /** torch 의 `grad_fn` 이름. 오류 메시지와 골든의 `repr::` 케이스가 쓴다. */
+  /**
+   * torch's `grad_fn` name. Error messages and the golden `repr::` cases
+   * use it.
+   */
   readonly gradName: string;
   /**
-   * 역전파가 이미 지나간 마디인가.
+   * Whether backward has already passed through this node.
    *
-   * torch 는 한 번 흘리고 나면 그래프를 놓아준다 — 중간 값들이 메모리를 붙들고
-   * 있기 때문이다. 두 번째 호출은 거절이지 다시 계산이 아니다.
+   * torch releases the graph once gradient has flowed, because the
+   * intermediate values are holding memory. A second call is a refusal, not
+   * a recomputation.
    */
   freed: boolean;
 }
 
 /**
- * 기울기를 켜고 끄는 스위치를 **객체 안에** 둔다.
+ * Keeps the switch that turns gradient on and off **inside an object.**
  *
- * 모듈 수준 변수로 두면 안 된다. 파이썬 쪽에서 단일 파일을 8개로 쪼갤 때 정확히
- * 이것 때문에 `no_grad` 가 조용히 안 먹었다 — 모듈마다 자기 사본이 생겼고, 골든
- * 374건이 전부 통과하는 채로 지나갔다. 값을 한 군데 두면 그 일이 안 생긴다.
+ * It must not be a module-level variable. On the Python side, splitting a
+ * single file into eight broke `no_grad` quietly for exactly this reason —
+ * each module got its own copy, and all 374 golden cases passed straight
+ * through it. Keeping the value in one place stops that from happening.
  */
 export const gradMode = { enabled: true };
 
-/** `torch.no_grad()`. 예외가 나도 되돌린다. */
+/**
+ * `torch.no_grad()`. Restores even if an exception is thrown.
+ */
 export function noGrad<R>(body: () => R): R {
   const before = gradMode.enabled;
   gradMode.enabled = false;
@@ -83,9 +99,10 @@ function topoOrder<T>(root: Node<T>): Node<T>[] {
 }
 
 /**
- * 역전파. `root` 에서 씨앗을 흘려 잎의 `grad` 에 쌓는다.
+ * Backpropagation. Seeds at `root` and accumulates into the leaves' `grad`.
  *
- * @param add 기울기 둘을 더하는 법. 한 값이 여러 곳에 쓰였으면 그만큼 더해진다.
+ * @param add how two gradients are added. A value used in several places is
+ *   added that many times.
  */
 export function backward<T>(
   root: Node<T>,

@@ -17,7 +17,9 @@
  * 조건수가 나쁜 행렬에서 눈에 보인다 — 코어가 `erf` 에서 같은 이유로 float64 를 쓴다.
  */
 
-/** 행 우선으로 늘어놓은 정사각 행렬. */
+/**
+ * A square matrix laid out row-major.
+ */
 export type Mat = Float64Array;
 
 export function fromF32(a: Float32Array): Mat {
@@ -53,17 +55,21 @@ export function transpose(a: Mat, n: number, m: number): Mat {
 export interface LU {
   readonly lu: Mat;
   readonly piv: Int32Array;
-  /** 행을 맞바꾼 횟수의 부호. 행렬식의 부호가 여기서 나온다. */
+  /**
+   * The sign of the number of row swaps. The determinant's sign comes from
+   * here.
+   */
   readonly sign: number;
   readonly n: number;
   readonly singular: boolean;
 }
 
 /**
- * 부분 피벗을 쓰는 LU 분해.
+ * LU factorisation with partial pivoting.
  *
- * **피벗은 선택이 아니다.** 안 하면 첫 원소가 0 이거나 아주 작은 행렬에서 나눗셈이
- * 터지거나 자릿수가 통째로 날아간다.
+ * **Pivoting is not optional.** Without it, a matrix whose first element is
+ * zero or very small either blows up the division or loses the digits
+ * entirely.
  */
 export function lu(a: Mat, n: number): LU {
   const m = Float64Array.from(a);
@@ -109,7 +115,10 @@ export function det(f: LU): number {
   return d;
 }
 
-/** 부호와 로그 절댓값을 따로. 행렬식이 아주 작을 때 `log(det)` 보다 안전하다. */
+/**
+ * The sign and the log absolute value, separately. Safer than `log(det)`
+ * when the determinant is very small.
+ */
 export function slogdet(f: LU): { sign: number; logabs: number } {
   if (f.singular) return { sign: 0, logabs: -Infinity };
   let sign = f.sign;
@@ -122,7 +131,9 @@ export function slogdet(f: LU): { sign: number; logabs: number } {
   return { sign, logabs };
 }
 
-/** `A X = B` 를 푼다. `B` 는 열이 `m` 개다. */
+/**
+ * Solves `A X = B`. `B` has `m` columns.
+ */
 export function solve(f: LU, b: Mat, m: number): Mat {
   const n = f.n;
   const x = new Float64Array(n * m);
@@ -161,7 +172,10 @@ export function inverse(a: Mat, n: number): Mat {
   return solve(lu(a, n), eye, n);
 }
 
-/** 아래 삼각 콜레스키. 대칭 양정부호가 아니면 던진다 — 조용히 NaN 을 내지 않는다. */
+/**
+ * The lower-triangular Cholesky. Throws if the matrix is not symmetric
+ * positive definite — it does not quietly return NaN.
+ */
 export function cholesky(a: Mat, n: number): Mat {
   const l = new Float64Array(n * n);
   for (let i = 0; i < n; i++) {
@@ -184,11 +198,13 @@ export function cholesky(a: Mat, n: number): Mat {
 }
 
 /**
- * 하우스홀더 QR.
+ * Householder QR.
  *
- * **그람-슈미트가 아니라 하우스홀더다.** 둘은 같은 분해를 다른 부호로 낸다. LAPACK 이
- * 하우스홀더를 쓰고 torch 가 LAPACK 을 쓰므로, 골든의 `R` 과 부호까지 맞추려면
- * 같은 방식이어야 한다 — `Q` 는 골든이 절댓값으로 묻지만 `R` 은 그대로 묻는다.
+ * **Householder, not Gram–Schmidt.** The two give the same factorisation
+ * with different signs. LAPACK uses Householder and torch uses LAPACK, so
+ * matching the golden `R` down to its signs requires the same method — the
+ * golden cases ask about `Q` in absolute value, but they ask about `R` as
+ * it is.
  */
 export function qr(a: Mat, n: number, m: number): { q: Mat; r: Mat } {
   const r = Float64Array.from(a);
@@ -230,12 +246,14 @@ export function qr(a: Mat, n: number, m: number): { q: Mat; r: Mat } {
 }
 
 /**
- * 한쪽 삼각만 남기고 나머지를 거울로 채운다.
+ * Keeps one triangle and mirrors it into the other.
  *
- * **`eigh` 는 대칭이 아닌 것도 받는다.** torch 는 기본으로 아래 삼각만 읽고 위쪽은
- * 무시한다 — `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의 답이 같다(진짜 torch 에 물었다).
- * 야코비는 행렬 전체를 보므로, 여기서 먼저 거울을 만들어 주지 않으면 대칭이 아닌
- * 입력에서 조용히 갈린다. **대칭을 주는 한 안 드러나는 차이다.**
+ * **`eigh` accepts matrices that are not symmetric.** By default torch
+ * reads only the lower triangle and ignores the upper — `[[4,99],[1,3]]`
+ * and `[[4,1],[1,3]]` give the same answer (asked of real torch). Jacobi
+ * looks at the whole matrix, so without mirroring first, a non-symmetric
+ * input diverges quietly here. **It is a difference that never shows as
+ * long as you pass something symmetric.**
  */
 export function mirror(a: Mat, n: number, upper: boolean): Mat {
   const out = Float64Array.from(a);
@@ -250,9 +268,10 @@ export function mirror(a: Mat, n: number, upper: boolean): Mat {
 }
 
 /**
- * 대칭 행렬의 고윳값·고유벡터 — 야코비 회전.
+ * Eigenvalues and eigenvectors of a symmetric matrix — Jacobi rotations.
  *
- * 고윳값을 **오름차순**으로 준다. torch 의 `linalg.eigh` 가 그렇다.
+ * Eigenvalues come back in **ascending** order, as torch's `linalg.eigh`
+ * gives them.
  */
 export function eigh(a: Mat, n: number): { values: Float64Array; vectors: Mat } {
   const m = Float64Array.from(a);
@@ -313,16 +332,18 @@ const JACOBI_SWEEPS = 60;
 const JACOBI_TOL = 1e-30;
 
 /**
- * 특이값 분해. **직사각도 받는다.**
+ * Singular value decomposition. **Rectangular input is accepted.**
  *
- * `AᵀA` 의 고유분해에서 얻는다 — 작은 행렬에서 통하는 가장 짧은 길이다. 특이값을
- * **내림차순**으로 준다(torch 와 같다). 큰 행렬이나 조건수가 나쁜 행렬에서는
- * 이 방법이 자릿수를 잃는데, 여기서 미는 크기가 아니다.
+ * It is obtained from the eigendecomposition of `AᵀA` — the shortest route
+ * that holds for small matrices. Singular values come back in
+ * **descending** order (as in torch). On large or ill-conditioned matrices
+ * this method loses digits, but that is not the size being pushed here.
  *
- * `u` 는 **축소본**이다 — `rows × k` (`k = min(rows, cols)`). torch 의 기본값인
- * `full_matrices=True` 는 `rows × rows` 를 요구하므로 남는 열을 `completeBasis` 가
- * 채운다. 그 둘을 나눠 둔 이유는 축소본이 늘 유일하고, 채운 쪽은 남는 차원이
- * 둘 이상이면 **유일하지 않기** 때문이다.
+ * `u` is **reduced** — `rows × k` (`k = min(rows, cols)`). torch's default,
+ * `full_matrices=True`, wants `rows × rows`, so `completeBasis` fills the
+ * remaining columns. The two are kept apart because the reduced form is
+ * always unique while the filled one is **not** once more than one
+ * dimension is left over.
  */
 export function svd(
   a: Mat, rows: number, cols = rows,
@@ -353,11 +374,13 @@ export function svd(
 const SVD_ZERO = 1e-12;
 
 /**
- * `rows × k` 인 정규직교 열들을 `rows × rows` 로 채운다.
+ * Fills `rows × k` orthonormal columns out to `rows × rows`.
  *
- * 이미 있는 열에 직교하는 방향을 그람-슈미트로 찾는다. **남는 차원이 둘 이상이면
- * 답이 유일하지 않다** — 그 부분공간 안에서 어떻게 돌려도 같은 분해다. 골든이
- * 절댓값으로 묻고 남는 차원이 하나인 자리만 재는 이유가 그것이다.
+ * It finds directions orthogonal to the existing columns by Gram–Schmidt.
+ * **With more than one dimension left over the answer is not unique** — any
+ * rotation inside that subspace is the same factorisation. That is why the
+ * golden cases ask in absolute value, and only measure where exactly one
+ * dimension is left.
  */
 export function completeBasis(u: Mat, rows: number, k: number): Mat {
   const out = new Float64Array(rows * rows);
@@ -385,7 +408,10 @@ export function completeBasis(u: Mat, rows: number, k: number): Mat {
   return out;
 }
 
-/** 무어-펜로즈 유사역행렬. 특이값이 0 에 가까운 방향은 버린다. */
+/**
+ * The Moore–Penrose pseudoinverse. Directions whose singular value is near
+ * zero are dropped.
+ */
 export function pinverse(a: Mat, rows: number, cols = rows): Mat {
   const k = Math.min(rows, cols);
   const { u, s, vt } = svd(a, rows, cols);
@@ -399,7 +425,10 @@ export function pinverse(a: Mat, rows: number, cols = rows): Mat {
   return matmul(matmul(v, inv, cols, k, k), transpose(u, rows, k), cols, k, rows);
 }
 
-/** 0 이 아닌 특이값의 개수. 무엇을 0 으로 볼지는 가장 큰 특이값에 맞춘다. */
+/**
+ * The count of non-zero singular values. What counts as zero is scaled to
+ * the largest singular value.
+ */
 export function matrixRank(a: Mat, rows: number, cols = rows): number {
   const k = Math.min(rows, cols);
   const { s } = svd(a, rows, cols);
@@ -410,11 +439,13 @@ export function matrixRank(a: Mat, rows: number, cols = rows): number {
 }
 
 /**
- * `lu_factor` 가 내는 것 — 한 장에 겹쳐 담은 `L`·`U` 와 교환표.
+ * What `lu_factor` produces — `L` and `U` packed into one plate, plus the
+ * pivot table.
  *
- * **교환표는 1 부터 센다.** LAPACK 규약이고 torch 가 그대로 물려받았다. 교환이
- * 없는 2×2 에서 `[1, 2]` 이지 `[0, 1]` 이 아니다 — 0 부터 세면 `luSolveFactored`
- * 가 아무 소리 없이 다른 답을 낸다. 진짜 torch 에 물어서 맞췄다.
+ * **The pivot table counts from 1.** That is the LAPACK convention and
+ * torch inherited it as-is. A 2×2 with no swap gives `[1, 2]`, not `[0, 1]`
+ * — count from zero and `luSolveFactored` gives a different answer without
+ * a sound. Matched by asking real torch.
  */
 export interface LuPacked {
   readonly lu: Mat;
@@ -455,7 +486,9 @@ export function luFactor(a: Mat, rows: number, cols: number): LuPacked {
   return { lu: m, piv, rows, cols };
 }
 
-/** 겹쳐 담은 것을 `P`·`L`·`U` 셋으로 편다. */
+/**
+ * Unpacks the packed plate into `P`, `L` and `U`.
+ */
 export function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat } {
   const { rows, cols, lu: packed, piv } = f;
   const k = Math.min(rows, cols);
@@ -485,7 +518,10 @@ export function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat } {
   return { p, l, u };
 }
 
-/** 삼각행렬이라는 것을 **알고** 푼다. 앞으로나 뒤로 한 번이면 끝난다. */
+/**
+ * Solves **knowing** the matrix is triangular. One pass, forward or
+ * backward, and it is done.
+ */
 export function solveTriangular(
   a: Mat, b: Mat, n: number, m: number,
   upper: boolean, unit: boolean,
@@ -517,11 +553,12 @@ const EXP_SMALL = 0.5;
 const EXP_TERMS = 18;
 
 /**
- * 행렬 지수 `e^A` — **스케일링과 제곱.**
+ * The matrix exponential `e^A` — **scaling and squaring.**
  *
- * 테일러만으로는 큰 행렬에서 안 모인다. `A*5` 의 답이 4.8e+10 인데 그 자리에서는
- * 항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤
- * `s` 번 제곱하면 같은 답이 안전하게 나온다 — `e^A = (e^{A/2^s})^{2^s}` 다.
+ * Taylor alone does not converge on large matrices. The answer for `A*5` is
+ * 4.8e+10, and at that point the growing terms overflow first. Bringing the
+ * 1-norm of `A/2^s` below 0.5, running the series, and then squaring `s`
+ * times gives the same answer safely — `e^A = (e^{A/2^s})^{2^s}`.
  */
 export function matrixExp(a: Mat, n: number): Mat {
   let norm = 0;
@@ -554,18 +591,21 @@ export function matrixExp(a: Mat, n: number): Mat {
 }
 
 /**
- * `e^A` 의 역방향을 **행렬 하나로 굳힌다.**
+ * Freezes the backward of `e^A` **into a single matrix.**
  *
- * 프레셰 도함수에는 이런 항등식이 있다 — `expm([[Aᵀ, E],[0, Aᵀ]])` 의 오른쪽 위
- * 블록이 `E` 방향의 도함수다. 근사가 아니라 항등식이다.
+ * The Fréchet derivative has this identity — the upper-right block of
+ * `expm([[Aᵀ, E],[0, Aᵀ]])` is the derivative in the direction `E`. It is
+ * an identity, not an approximation.
  *
- * **그런데 여기서는 그 길로 못 간다.** 역방향에 들어오는 `Ḡ` 는 GPU 에 있고, 이
- * 파일은 CPU 다 — 역방향 안에서는 GPU 를 기다릴 수가 없다. 그래서 순방향에서
- * `Ḡ` 가 **선형으로** 들어간다는 사실을 쓴다: 자리 하나만 1 인 행렬 `E_k` 마다 한 번씩
- * 구해서 `n²×n²` 짜리 표를 만들어 두면, 역방향은 행렬곱 한 번으로 끝난다.
+ * **That route is not available here, though.** The `Ḡ` arriving in the
+ * backward is on the GPU and this file is CPU — you cannot wait on the GPU
+ * from inside a backward. So it uses the fact that `Ḡ` enters **linearly**:
+ * solve once for each `E_k` with a single one in one slot, build an `n²×n²`
+ * table, and the backward is one matrix multiply.
  *
- * 값은 정확하다(각 열이 진짜 도함수다 — 차분이 아니다). 대가는 순방향에서 `2n×2n`
- * 짜리 `expm` 을 `n²` 번 부르는 것인데, 여기서 미는 크기에서는 그게 싸다.
+ * The values are exact (each column is a real derivative, not a finite
+ * difference). The price is `n²` calls to a `2n×2n` `expm` in the forward,
+ * which is cheap at the sizes being pushed here.
  */
 export function matrixExpAdjointMap(a: Mat, n: number): Mat {
   const at = transpose(a, n, n);
@@ -595,10 +635,11 @@ export function matrixExpAdjointMap(a: Mat, n: number): Mat {
 }
 
 /**
- * `eigh` 의 고유벡터 역방향에 들어가는 `F_ij = 1/(λⱼ − λᵢ)`.
+ * `F_ij = 1/(λⱼ − λᵢ)`, which enters `eigh`'s eigenvector backward.
  *
- * **고윳값이 겹치면 터진다.** torch 도 같이 터지므로 흉내가 아니라 같은 한계다.
- * 대각은 자기 자신과의 차라 나눗셈이 아니라 정의상 0 이다.
+ * **Repeated eigenvalues blow it up.** torch blows up with it, so this is
+ * the same limit rather than an imitation. The diagonal is a difference
+ * with itself, so it is zero by definition rather than a division.
  */
 export function eighGap(values: Float64Array, n: number): Mat {
   const f = new Float64Array(n * n);
@@ -612,7 +653,9 @@ export function eighGap(values: Float64Array, n: number): Mat {
   return f;
 }
 
-/** `lu_factor` 가 낸 것으로 `A x = b` 를 푼다. */
+/**
+ * Solves `A x = b` using what `lu_factor` produced.
+ */
 export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
   const n = f.rows;
   const x = new Float64Array(n * m);
@@ -651,12 +694,13 @@ export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
 }
 
 /**
- * 콜레스키의 역방향.
+ * Cholesky's backward.
  *
- * `L = chol(A)` 일 때 `A` 로 가는 기울기다. 유도가 짧지 않아서 식을 그대로 적는다 —
- * `P = Φ(Lᵀ·L̄)` 에서 `Φ` 는 아래 삼각을 취하되 대각을 반으로 줄이는 것이고,
- * `Ā = L⁻ᵀ·P·L⁻¹` 을 대칭화한다. 대칭화가 필요한 이유는 `A` 가 대칭이라 위·아래
- * 삼각이 같은 자유도를 공유하기 때문이다.
+ * The gradient towards `A` when `L = chol(A)`. The derivation is not short,
+ * so the formula is written out — with `P = Φ(Lᵀ·L̄)`, where `Φ` takes the
+ * lower triangle and halves the diagonal, symmetrise `Ā = L⁻ᵀ·P·L⁻¹`. The
+ * symmetrisation is needed because `A` is symmetric, so its upper and lower
+ * triangles share the same degrees of freedom.
  */
 export function choleskyBackward(l: Mat, lbar: Mat, n: number): Mat {
   const lt = transpose(l, n, n);

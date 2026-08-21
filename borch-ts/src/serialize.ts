@@ -1,33 +1,37 @@
 /**
- * 체크포인트를 바이트로, 바이트를 체크포인트로 — **safetensors** 형식.
+ * Checkpoint to bytes, bytes to checkpoint — the **safetensors** format.
  *
- * ## 왜 이것이 필요한가
+ * ## Why this is needed
  *
- * `stateDict()` 는 있었는데 **저장할 방법이 없었다.** 탭을 새로고침하면 학습 결과가
- * 사라진다. 브라우저는 프로세스가 데스크톱보다 훨씬 자주 죽는 자리라 torch 보다
- * 오히려 더 아쉬운 구멍이었다.
+ * `stateDict()` existed, but **there was no way to save it.** Refreshing
+ * the tab lost the training. A browser is a place where the process dies
+ * far more often than on a desktop, so this gap was felt more sharply here
+ * than it is in torch.
  *
- * ## 왜 우리 형식을 안 만들었나
+ * ## Why no format of our own
  *
- * torch 의 `save`/`load` 는 pickle 이다. 파이썬 객체를 실행하며 푸는 형식이라
- * 브라우저로 옮길 수도 없고 옮겨서도 안 된다.
+ * torch's `save`/`load` is pickle. It is a format that unpacks by executing
+ * Python objects, which cannot be carried into a browser and should not be.
  *
- * safetensors 는 머리가 JSON 이고 몸이 연속된 바이트다. **코덱이 이 파일 하나이고,
- * 그 값으로 파이썬 `borch`·numpy·HF 도구가 같은 파일을 읽는다.** 자체 형식을 만들면
- * 그것이 안 된다 — 브라우저에서 학습해 자기 컴퓨터로 가져가는 길이 이 프로젝트의
- * 이야기 절반이므로, 읽는 쪽이 우리뿐인 형식은 절반을 버리는 것이다.
+ * safetensors is a JSON header and a body of contiguous bytes. **The codec
+ * is this one file, and for that price Python `borch`, numpy and the HF
+ * tools read the same file.** A private format loses that — training in the
+ * browser and taking the result back to your own machine is half of this
+ * project's story, and a format only we can read throws that half away.
  *
  * ```
- * [8바이트 LE u64: 머리 길이 N][N바이트 JSON 머리][몸: 텐서 바이트가 이어 붙는다]
+ * [8 bytes LE u64: header length N][N bytes of JSON header][body: tensor bytes, concatenated]
  * ```
  *
- * ## dtype 을 정직하게 적는 법
+ * ## Writing the dtype honestly
  *
- * borch 의 `int64`·`bool` 은 **이름표일 뿐 값은 float32 버퍼에 있다**(`dtype.ts`).
- * 머리에 `I64` 라고 적으면 4 바이트짜리 몸과 어긋나서 **남의 리더가 깨진다.**
+ * borch's `int64` and `bool` are **labels; the values live in a float32
+ * buffer** (`dtype.ts`). Writing `I64` in the header contradicts a
+ * four-byte body and **breaks other people's readers.**
  *
- * 그래서 `dtype` 은 언제나 `F32` 로 적고, borch 의 이름표는 `__metadata__` 에 따로
- * 싣는다. 남이 읽으면 float32 배열이 나오고(맞다), 우리가 읽으면 이름표까지 돌아온다.
+ * So `dtype` is always written as `F32`, and borch's label rides separately
+ * in `__metadata__`. Someone else reads a float32 array (which is true); we
+ * read it and the label comes back too.
  */
 
 import { RuntimeError } from "./errors.js";
@@ -62,12 +66,13 @@ interface Entry {
 }
 
 /**
- * 체크포인트를 바이트로.
+ * A checkpoint, as bytes.
  *
- * **비동기다** — 값이 GPU 에 있으므로 되가져오는 왕복이 든다. 호스트에 내려둔
- * 텐서(`await t.cpu()`)를 주면 그 왕복이 없다.
+ * **It is async** — the values are on the GPU, so there is a round trip to
+ * fetch them back. Hand it tensors already brought down to the host (`await
+ * t.cpu()`) and that round trip is gone.
  */
-export async function save(
+export async function encode(
   tensors: Record<string, Tensor>,
   metadata: Record<string, string> = {},
 ): Promise<Uint8Array> {
@@ -125,12 +130,14 @@ export async function save(
 }
 
 /**
- * 바이트를 체크포인트로. **동기다** — 올리는 것은 큐에 쓰기 하나다.
+ * Bytes, as a checkpoint. **Synchronous** — uploading is one queued write.
  *
- * 깨진 파일에서 조용히 이상한 텐서를 만들지 않는다. 길이·자리·형을 다 확인하고
- * 안 맞으면 던진다 — 체크포인트가 조용히 틀리면 그 뒤 학습 전체가 뜻을 잃는다.
+ * It will not quietly manufacture odd tensors out of a damaged file.
+ * Lengths, offsets and types are all checked, and it throws when they do
+ * not agree — a checkpoint that is quietly wrong robs every training run
+ * after it of meaning.
  */
-export function load(bytes: Uint8Array): Bundle {
+export function decode(bytes: Uint8Array): Bundle {
   if (bytes.byteLength < LENGTH_FIELD) {
     throw new RuntimeError(`checkpoint is too short: ${bytes.byteLength} bytes`);
   }
@@ -187,6 +194,129 @@ export function load(bytes: Uint8Array): Bundle {
   return { tensors, metadata };
 }
 
+// ── 중첩 ────────────────────────────────────────────────────────────────────
+//
+// **교재의 관용구는 중첩이다** — `{model: …, opt: …, epoch: 3}` 를 통째로 저장한다.
+// 평평한 텐서 표만 되면 그 코드가 안 돈다.
+//
+// 파일 형식은 그대로다. 구조를 나무로 적어 `borch.tree` 라는 메타데이터 열쇠에 싣고,
+// 텐서는 지금까지처럼 평평하게 눕힌다. **파이썬 `_serialize.py` 와 같은 스킴이고,
+// 그것이 요점이다** — 두 벌로 두면 한쪽만 고쳐지고 그때 한쪽이 쓴 파일을 다른 쪽이
+// 못 읽는다. 나무가 없는 파일(남이 만든 safetensors)은 평평한 표로 준다.
+
+/** `borch.tree` — 구조를 적는 자리. 파이썬 쪽과 **같은 글자여야 한다.** */
+const TREE_KEY = "borch.tree";
+
+/** What this format can hold. It is not pickle, so not any object at all. */
+export type Savable =
+  | Tensor | null | boolean | number | string | Savable[] | { [key: string]: Savable };
+
+/** 나무의 마디. `T`=텐서 · `d`=사전 · `l`=배열 · `j`=그냥 값. */
+type Node =
+  | { t: "T"; v: string }
+  | { t: "d"; v: Record<string, Node> }
+  | { t: "l"; v: Node[] }
+  | { t: "j"; v: null | boolean | number | string };
+
+// 파이썬 쪽에는 `u`(튜플)도 있다. **JS 에는 그 자리가 없다** — 배열 하나뿐이라
+// 쓸 일이 없고, 읽을 때는 받아서 배열로 준다(아래). 안 그러면 파이썬이 쓴 파일에서
+// 튜플이 든 것만 조용히 못 읽힌다.
+
+function flatten(
+  obj: Savable, path: string[], tensors: Record<string, Tensor>, seen: Set<string>,
+): Node {
+  if (obj instanceof Tensor) {
+    const name = path.join(".") || "tensor";
+    if (seen.has(name)) {
+      // 서로 다른 자리가 같은 이름으로 펴졌다. 하나가 다른 하나를 덮으면 되돌릴 때
+      // 두 자리가 같은 값을 갖는데, 그것은 예외보다 나쁘다.
+      throw new RuntimeError(
+        `'${name}' appears twice — the flattened names collide and cannot be stored.`);
+    }
+    seen.add(name);
+    tensors[name] = obj;
+    return { t: "T", v: name };
+  }
+  if (Array.isArray(obj)) {
+    return { t: "l", v: obj.map((v, i) => flatten(v, [...path, String(i)], tensors, seen)) };
+  }
+  if (obj === null || typeof obj === "boolean" || typeof obj === "number"
+      || typeof obj === "string") {
+    return { t: "j", v: obj };
+  }
+  if (typeof obj === "object") {
+    const v: Record<string, Node> = {};
+    for (const [k, child] of Object.entries(obj)) {
+      v[k] = flatten(child, [...path, k], tensors, seen);
+    }
+    return { t: "d", v };
+  }
+  throw new RuntimeError(
+    `${typeof obj} cannot be stored — only tensors, objects, arrays, numbers and strings.\n` +
+    "This format is not pickle, so it cannot hold arbitrary objects.");
+}
+
+function unflatten(node: Node, tensors: Record<string, Tensor>): Savable {
+  if (node.t === "T") {
+    const t = tensors[node.v];
+    if (!t) throw new RuntimeError(`the tree names '${node.v}', which the file does not hold`);
+    return t;
+  }
+  if (node.t === "d") {
+    const out: Record<string, Savable> = {};
+    for (const [k, child] of Object.entries(node.v)) out[k] = unflatten(child, tensors);
+    return out;
+  }
+  // 파이썬이 쓴 튜플(`u`)도 여기로 온다 — JS 에는 그 자리가 없어 배열로 준다.
+  if (node.t === "l" || (node as { t: string }).t === "u") {
+    return (node.v as Node[]).map((child) => unflatten(child, tensors));
+  }
+  return node.v;
+}
+
+/**
+ * A checkpoint, as bytes — **it takes nesting as it is.** This is where
+ * `torch.save` sits.
+ *
+ * ```ts
+ * const bytes = await save({ model: m.stateDict(), opt: o.stateDict(), epoch: 3 });
+ * ```
+ *
+ * **It is async** — the values are on the GPU, so there is a round trip to fetch
+ * them back.
+ *
+ * Hand it a flat table of tensors and it behaves as it did before — that is one
+ * case of nesting too. One tree rides along in the file, though, so **the bytes
+ * differ from before.** Older files still read.
+ */
+export async function save(
+  obj: Savable, metadata: Record<string, string> = {},
+): Promise<Uint8Array> {
+  const tensors: Record<string, Tensor> = {};
+  const tree = flatten(obj, [], tensors, new Set());
+  return encode(tensors, { ...metadata, [TREE_KEY]: JSON.stringify(tree) });
+}
+
+/**
+ * Bytes, as a checkpoint — with the structure it was saved under. This is where
+ * `torch.load` sits.
+ *
+ * **A file with no tree comes back as a flat table.** Someone else's safetensors is
+ * like that, and so is a file borch.ts wrote before it had this layer.
+ */
+export function load(bytes: Uint8Array): Savable {
+  const { tensors, metadata } = decode(bytes);
+  const tree = metadata[TREE_KEY];
+  if (tree === undefined) return tensors;
+  let node: Node;
+  try {
+    node = JSON.parse(tree) as Node;
+  } catch {
+    throw new RuntimeError(`checkpoint has a '${TREE_KEY}' that is not JSON`);
+  }
+  return unflatten(node, tensors);
+}
+
 /** 머리에 든 것이 우리가 아는 모양인가. 아니면 그 이름을 대고 던진다. */
 function asEntry(name: string, value: unknown): Entry {
   const e = value as Partial<Entry> | null;
@@ -221,14 +351,19 @@ function isStringMap(v: unknown): v is Record<string, string> {
 }
 
 /**
- * 이름 앞에 꼬리표를 붙인다. 모델과 옵티마이저를 **한 파일에** 담을 때 쓴다.
+ * Puts a tag in front of each name. Used to hold a model and an optimizer
+ * **in one file.**
  *
  * ```ts
- * const bytes = await save({
+ * const bytes = await encode({
  *   ...prefixed("model", model.stateDict()),
  *   ...prefixed("opt", opt.stateDict().tensors),
  * }, { ...numbersToMeta("opt", opt.stateDict().numbers) });
  * ```
+ *
+ * **This is a tool for using the flat codec directly.** `save` takes nesting as it
+ * is, so no tag is needed — write `save({ model: …, opt: … })` and names cannot
+ * collide.
  */
 export function prefixed<T>(
   prefix: string, entries: Record<string, T>,
@@ -238,7 +373,9 @@ export function prefixed<T>(
   return out;
 }
 
-/** 꼬리표를 뗀다. 앞머리가 다른 것은 안 준다. */
+/**
+ * Takes the tag off. Anything with a different prefix is not returned.
+ */
 export function unprefixed<T>(
   prefix: string, entries: Record<string, T>,
 ): Record<string, T> {
@@ -251,11 +388,13 @@ export function unprefixed<T>(
 }
 
 /**
- * 수를 머리에 실을 수 있게 문자열로. safetensors 의 `__metadata__` 는 문자열만 받는다.
+ * Numbers as strings, so they can ride in the header. safetensors'
+ * `__metadata__` takes strings only.
  *
- * **`JSON.stringify` 로 적는다.** `String(0.1)` 은 `"0.1"` 이고 그것을 다시 읽으면
- * 같은 배정도 수가 나오지만, `Infinity` 는 `"Infinity"` 가 되어 `JSON.parse` 가
- * 거절한다 — `ReduceLROnPlateau` 의 `best` 가 정확히 무한대에서 시작한다.
+ * **It writes with `JSON.stringify`.** `String(0.1)` is `"0.1"` and reading
+ * that back gives the same double, but `Infinity` becomes `"Infinity"`,
+ * which `JSON.parse` refuses — and `ReduceLROnPlateau`'s `best` starts at
+ * exactly infinity.
  */
 export function numbersToMeta(
   prefix: string, numbers: Record<string, number>,
@@ -268,7 +407,9 @@ export function numbersToMeta(
   return out;
 }
 
-/** 위의 되돌림. 앞머리가 맞는 것만 준다. */
+/**
+ * The undo of the above. Only entries whose prefix matches are returned.
+ */
 export function metaToNumbers(
   prefix: string, metadata: Record<string, string>,
 ): Record<string, number> {

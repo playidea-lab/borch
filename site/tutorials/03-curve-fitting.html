@@ -171,7 +171,7 @@
           new nn.Linear(1, 64), new nn.Tanh(),
           new nn.Linear(64, 64), new nn.Tanh(),
           new nn.Linear(64, 1));
-        model.loadStateDict(load(new Uint8Array(window.__curveModel)).tensors);
+        model.loadStateDict(load(new Uint8Array(window.__curveModel)));
 
         const x = Tensor.from(xs, [N, 1]);
         const fit = Array.from(await model.call(x).toArray());
@@ -208,7 +208,7 @@
           new nn.Linear(1, 64), new nn.Tanh(),
           new nn.Linear(64, 64), new nn.Tanh(),
           new nn.Linear(64, 1));
-        model.loadStateDict(load(new Uint8Array(window.__curveModel)).tensors);
+        model.loadStateDict(load(new Uint8Array(window.__curveModel)));
 
         // `probe` is a name borch injects, so this one is called asked.
         const asked = [-3, -2.5, -2, 0, 2, 2.5, 3, 4];

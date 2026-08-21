@@ -1,30 +1,36 @@
 /**
- * `torchvision.transforms` 모양의 변환.
+ * Transforms shaped like `torchvision.transforms`.
  *
- * ## 왜 텐서 라이브러리 안에 있나
+ * ## Why this is inside a tensor library
  *
- * 학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히
- * 틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판
- * (`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가
- * 라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.
+ * Running training requires a place where images become tensors, and there
+ * are things that go quietly wrong at that place — the comment on
+ * `ToTensor` below is one of them. It uses **the same rules** as the
+ * repository's Python side (`borchvision.py`). If the rules diverge, the
+ * same data becomes different values per library, and that is caught only
+ * by comparing values.
  *
- * ## 이미지는 배열이지 텐서가 아니다
+ * ## An image is an array, not a tensor
  *
- * `RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서
- * 이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.
- * 장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가
- * 메모리로 무너진다.
+ * `RandomHorizontalFlip` and `RandomCrop` take an `(H, W, C)` array. What
+ * arrives here in torchvision is a PIL image, and having no PIL, an array
+ * stands in its place. Making a tensor per image makes one GPU buffer per
+ * image, which looks like it works right up until it collapses on memory.
  */
 
 import { Tensor } from "./tensor.js";
 
-/** `(H, W, C)` 로 늘어놓은 이미지. 값은 uint8 이거나 실수다. */
+/**
+ * An image laid out as `(H, W, C)`. The values are uint8 or float.
+ */
 export interface Image {
   readonly data: Float64Array;
   readonly height: number;
   readonly width: number;
   readonly channels: number;
-  /** uint8 이면 `ToTensor` 가 255 로 나눈다. */
+  /**
+   * If uint8, `ToTensor` divides by 255.
+   */
   readonly isByte: boolean;
 }
 
@@ -43,7 +49,10 @@ export interface Transform {
   describe(): string;
 }
 
-/** 변환을 줄줄이. `repr` 이 안쪽을 들여쓴 여러 줄이라 그 모양까지 맞춘다. */
+/**
+ * Transforms in sequence. `repr` is several lines with the inside indented,
+ * so that shape is matched too.
+ */
 export class Compose implements Transform {
   constructor(private readonly transforms: readonly Transform[]) {}
 
@@ -60,11 +69,13 @@ export class Compose implements Transform {
 }
 
 /**
- * `(H,W,C)` 또는 `(H,W)` → `(C,H,W)` 텐서.
+ * `(H,W,C)` or `(H,W)` → a `(C,H,W)` tensor.
  *
- * **uint8 일 때만 255 로 나눈다** — torchvision 의 규칙이 그렇다. 실수 배열을 넣으면
- * 나누지 않고 그대로 옮긴다. 이 구분을 놓치면 이미 [0,1] 인 데이터가 한 번 더 나뉘어
- * 255 배 어두워지는데, **예외는 안 나고 학습만 안 된다.**
+ * **It divides by 255 only when the input is uint8** — that is
+ * torchvision's rule. Pass a float array and it is carried over undivided.
+ * Miss this distinction and data that is already in [0,1] gets divided once
+ * more and comes out 255× darker, with **no exception raised and only the
+ * training failing.**
  */
 export class ToTensor implements Transform {
   apply(x: Image | Tensor): Tensor {
@@ -88,7 +99,9 @@ export class ToTensor implements Transform {
   }
 }
 
-/** 채널마다 `(x - mean) / std`. */
+/**
+ * `(x - mean) / std`, per channel.
+ */
 export class Normalize implements Transform {
   constructor(
     private readonly mean: readonly number[],
@@ -143,7 +156,9 @@ function nextInt(bound: number): number {
   return bound <= 1 ? 0 : Math.floor(nextFloat() * bound);
 }
 
-/** 좌우로 뒤집는다. `(H, W, C)` 배열을 받는다. */
+/**
+ * Flips left to right. Takes an `(H, W, C)` array.
+ */
 export class RandomHorizontalFlip implements Transform {
   constructor(private readonly p = 0.5) {}
 
@@ -166,7 +181,9 @@ export class RandomHorizontalFlip implements Transform {
   }
 }
 
-/** 가장자리를 채운 뒤 무작위로 잘라낸다. */
+/**
+ * Pads the edges, then crops at random.
+ */
 export class RandomCrop implements Transform {
   private readonly size: [number, number];
 
@@ -304,10 +321,12 @@ function resizeCols(
 }
 
 /**
- * 크기를 바꾼다. **배열을 받아 배열을 낸다** — 텐서가 아니다. 장당 텐서를 만들면
- * GPU 버퍼가 장당 하나씩 생긴다(`RandomCrop` 과 같은 이유).
+ * Changes the size. **It takes an array and returns an array** — not a
+ * tensor. Making a tensor per image makes one GPU buffer per image (the
+ * same reason as `RandomCrop`).
  *
- * `size` 가 수 하나면 **짧은 변**을 그 값으로 맞추고 비율을 지킨다.
+ * Given a single number for `size`, it fits **the short side** to that
+ * value and keeps the ratio.
  */
 export class Resize implements Transform {
   constructor(
@@ -358,8 +377,9 @@ function roundHalfToEven(x: number): number {
 }
 
 /**
- * 가운데를 잘라낸다. **자를 크기가 원본보다 크면 0 으로 채운 뒤 자른다** —
- * torchvision 이 그렇게 하고, 거절하면 같은 코드가 두 라이브러리에서 갈린다.
+ * Crops out the middle. **A crop larger than the original is padded with
+ * zeros and then cropped** — torchvision does that, and refusing would make
+ * the same code diverge between two libraries.
  */
 export class CenterCrop implements Transform {
   private readonly th: number;
@@ -404,14 +424,16 @@ export class CenterCrop implements Transform {
 }
 
 /**
- * `(N,C,H,W)` 배치를 한 번에 늘린다. **torchvision 에 없는 우리 것이다.**
+ * Augments an `(N,C,H,W)` batch in one pass. **Ours, not torchvision's.**
  *
- * 장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생긴다 — 한 에폭이 만 장이면 만 개다.
- * 배치를 CPU 에서 다 늘린 뒤 텐서를 **하나** 만드는 것이 감당되는 유일한 순서라,
- * 그 순서를 이름 붙여 내놓는다.
+ * Making a tensor per image makes one GPU buffer per image — ten thousand
+ * of them for a ten-thousand-image epoch. Augmenting the whole batch on the
+ * CPU and then making **one** tensor is the only order that holds, so that
+ * order is given a name and exported.
  *
- * **뽑기는 장마다 따로 한다.** 배치 전체에 같은 자르기·뒤집기를 쓰면 배치 안에서
- * 늘어난 것이 없어 augmentation 의 효과가 사라진다.
+ * **The random draws are per image.** Using one crop and one flip across
+ * the whole batch means nothing inside the batch was augmented relative to
+ * anything else, and the point of augmentation is gone.
  */
 export function augmentBatch(
   x: Float32Array,
@@ -451,7 +473,10 @@ export function augmentBatch(
   return out;
 }
 
-/** 채널마다 `(x - mean) / std`. CPU 에서 배치째 — 텐서를 만들기 전에 끝낸다. */
+/**
+ * `(x - mean) / std` per channel, batch-wide on the CPU — finished before
+ * any tensor is made.
+ */
 export function normalizeBatch(
   x: Float32Array,
   n: number, c: number, hw: number,

@@ -1,13 +1,15 @@
 /**
- * API 레퍼런스 화면.
+ * The API reference screen.
  *
- * 목록의 원본은 `site/assets/api.json` 이고 그것은 `site/build_api.py` 가
- * `borch-ts/dist/src/*.d.ts` 에서 뽑는다. **여기서는 아무것도 안 적는다** — 손으로
- * 적은 목록은 첫 주에만 맞고, 이 저장소는 낡은 수를 이미 네 번 잡았다.
+ * The index comes from `site/assets/api.json`, which `site/build_api.py` pulls out of
+ * `borch-ts/dist/src/*.d.ts`. **Nothing is written here** — a hand-written index is
+ * right for the first week only, and this repository has already caught four stale
+ * numbers.
  *
- * 설명문은 소스의 TSDoc 그대로라 **한국어다.** 시그니처·분류·torch 이름 대응은
- * 언어 중립이라 양쪽 페이지에서 같다. 영어 페이지는 그 사정을 화면에 적는다 —
- * 번역본을 지어내면 소스와 갈리기 시작하고, 갈린 뒤에는 어느 쪽이 사실인지 모른다.
+ * The descriptions are the source's TSDoc, which is English. The Korean beside them
+ * lives in `site/api_ko.json`, each entry stamped with a fingerprint of the English it
+ * was made from, so the generator names the ones whose source has moved. Signatures,
+ * kinds and the torch name mapping are language-neutral and identical on both pages.
  */
 
 import { pick } from "./i18n.js";
@@ -24,18 +26,21 @@ const S = {
   hits: { en: "{0} matches", ko: "{0}개 걸림" },
   modules: { en: "Modules", ko: "모듈" },
   inThis: { en: "In this module", ko: "이 모듈 안" },
-  koNote: {
-    // 오래 "번역하지 않는다 — 번역은 쓰인 날부터 소스와 어긋난다" 고 적혀 있던 자리다.
-    // 그 걱정이 맞아서, 번역마다 그때 본 원문의 해시를 같이 적는다. 원문이 바뀌면
-    // 생성기가 이름을 대며 낡았다고 말한다 — 어긋남을 막지는 못해도 조용히 두지는 않는다.
-    en: "Descriptions come from the source's own comments, which are written in "
-      + "Korean. The English here is a translation held beside them, each one stamped "
-      + "with the source it was made from, so the generator says which ones have gone "
-      + "stale instead of letting them drift quietly.",
-    ko: "설명문은 소스의 주석을 그대로 옮긴 것이다. 고칠 곳은 이 페이지가 아니라 소스다." },
+  indexGone: {
+    en: "Could not read the API index — run <code>python3 site/build_api.py</code> first.",
+    ko: "API 목록을 못 읽었다 — <code>python3 site/build_api.py</code> 를 먼저 돌린다." },
+  sourceNote: {
+    // This place read "not translated here — a translation starts drifting from the
+    // source the day it is written" for a long time. The worry was right, so every
+    // translation carries a hash of the source it was made from, and the generator names
+    // the stale ones. Drift is not prevented; it is prevented from being quiet.
+    en: "Descriptions are the source's own comments. Fix one in the source, not on this "
+      + "page.",
+    ko: "설명문은 소스의 주석에서 나온다. 소스가 영어라 여기 한국어는 그 옆에 둔 번역이고, "
+      + "번역마다 그때 본 원문이 함께 적혀 있어 낡으면 생성기가 이름을 댄다." },
   notYet: {
-    en: "Not translated yet — shown in the source's Korean.",
-    ko: "" },
+    en: "",
+    ko: "아직 안 옮겼다 — 소스의 영어를 그대로 보여준다." },
   generated: {
     en: "Generated from borch-ts/dist/src/*.d.ts by site/build_api.py — {0} entries.",
     ko: "site/build_api.py 가 borch-ts/dist/src/*.d.ts 에서 뽑았다 — 항목 {0}개." },
@@ -43,20 +48,20 @@ const S = {
 const say = (key, ...args) => (S[key][LANG] ?? S[key].en)
   .replace(/\{(\d+)\}/g, (m, i) => String(args[Number(i)] ?? m));
 
-/** 이 화면의 언어로 된 설명. **없으면 감추지 않고 한국어를 낸다.**
+/** The description in this screen's language. **Missing, it shows the source rather than hiding it.**
  *
- *  빈 자리를 남기면 그 이름은 설명이 없는 것처럼 읽힌다 — 있는데 아직 안 옮긴 것과
- *  애초에 없는 것은 다르고, 읽는 사람에게 그 둘은 전혀 다른 정보다. 그래서 원문을
- *  내고 옆에 표를 단다. */
+ *  A blank leaves the name reading as though it has no description — and "written but
+ *  not yet carried across" and "never written" are entirely different facts for a
+ *  reader. So the source text appears with a mark beside it. */
 const prose = (node) => {
-  const ko = node.doc ?? "";
-  if (LANG !== "en" || !ko) return { text: ko, untranslated: false };
-  return node.doc_en
-    ? { text: node.doc_en, untranslated: false }
-    : { text: ko, untranslated: true };
+  const src = node.doc ?? "";
+  if (LANG !== "ko" || !src) return { text: src, untranslated: false };
+  return node.doc_ko
+    ? { text: node.doc_ko, untranslated: false }
+    : { text: src, untranslated: true };
 };
 
-/** 설명 한 덩이를 그린다. 안 옮긴 것은 그렇다고 적는다. */
+/** Draws one description, saying so when it has not been carried across. */
 const proseHtml = (node, style = "") => {
   const { text, untranslated } = prose(node);
   if (!text) return "";
@@ -69,7 +74,7 @@ const sidebar = document.getElementById("sidebar");
 const main = document.getElementById("doc-main");
 
 let api = null;
-let index = [];      // 검색용 납작한 목록
+let index = [];      // a flat list for searching
 
 boot();
 
@@ -79,8 +84,11 @@ async function boot() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     api = await res.json();
   } catch (err) {
-    main.innerHTML = `<div class="note-box">API 목록을 못 읽었다 — <code>python3 site/build_api.py</code>
-      를 먼저 돌린다.<br><span class="small muted">${esc(String(err))}</span></div>`;
+    // This wording was hardcoded in Korean. A missing index is the normal state right
+    // after a clone, so the person opening the English page for the first time meets
+    // exactly this line.
+    main.innerHTML = `<div class="note-box">${say("indexGone")}`
+      + `<br><span class="small muted">${esc(String(err))}</span></div>`;
     return;
   }
 
@@ -100,7 +108,7 @@ async function boot() {
   route();
 }
 
-/* ── 사이드바 ───────────────────────────────────────────────────────── */
+/* ── the sidebar ────────────────────────────────────────────────────── */
 
 function drawSidebar() {
   const box = document.createElement("div");
@@ -126,7 +134,7 @@ function drawSidebar() {
   });
 }
 
-/* ── 길찾기 ─────────────────────────────────────────────────────────── */
+/* ── routing ────────────────────────────────────────────────────────── */
 
 function route() {
   const raw = decodeURIComponent(location.hash.slice(1));
@@ -151,12 +159,13 @@ function drawModule(mod) {
     <p class="eyebrow">API</p>
     <h1>${esc(mod.title)}</h1>
     ${mod.doc
-        // 소스가 자기 설명을 갖고 있으면 그쪽이 원본이다. 우리 한 줄은 그것이
-        // 없을 때만 쓴다 — 둘 다 보이면 같은 말을 두 번 하는 화면이 된다.
+        // Where the source has its own description, that one is the original. Our own
+        // line is used only in its absence — both visible is a screen saying the same
+        // thing twice.
         ? proseHtml(mod)
         : `<p class="lead">${inline(esc(pick(mod.blurb)))}</p>`}
     <p class="small muted" style="margin-top:1rem">${say("generated", api.total)}
-      ${LANG === "en" ? `<br>${esc(say("koNote"))}` : ""}</p>`;
+      <br>${esc(say("sourceNote"))}</p>`;
   main.append(head);
 
   for (const sym of mod.symbols) main.append(card(sym));
@@ -196,9 +205,10 @@ function card(sym) {
     det.className = "members";
     det.open = sym.members.length <= 12;
     det.innerHTML = `<summary>${say("members", sym.members.length)}</summary>`;
-    // **소스가 나눠 둔 순서와 묶음을 그대로 지킨다.** 428 개가 한 줄로 늘어서면
-    // 목록이 아니라 벽이다. 다시 나누지는 않는다 — 그건 저자의 분류를 우리 짐작으로
-    // 덮는 것이고, 소스가 바뀌면 조용히 어긋난다.
+    // **The order and grouping the source set are kept as they are.** Four hundred and
+    // twenty-eight names in one run is a wall, not a list. They are not regrouped —
+    // that would cover the author's classification with our guess, and it would drift
+    // quietly the moment the source changed.
     let lastSection = null;
     for (const mem of sym.members) {
       const section = mem.section ? pick(mem.section) : null;
@@ -236,25 +246,26 @@ function tags(item) {
   return `<table class="tags">${rows}</table>`;
 }
 
-/* ── 검색 ───────────────────────────────────────────────────────────── */
+/* ── search ─────────────────────────────────────────────────────────── */
 
 function showHits(q) {
   const needle = q.toLowerCase();
-  // **이름에 걸린 것이 먼저다.** 처음에는 걸린 자리(indexOf)로만 줄을 세웠는데,
-  // 이름에 없고 **주인 이름**에만 걸린 것이 −1 을 받아 맨 앞에 섰다 — `conv` 를
-  // 찾으면 `Conv2d` 보다 `bias — nn.ConvND` 가 먼저 나왔다.
+  // **A hit in the name comes first.** Ranking was once by match position (indexOf)
+  // alone, and something matching only its **owner's** name scored −1 and went to the
+  // front — searching `conv` put `bias — nn.ConvND` above `Conv2d`.
   const rank = (e) => {
     const name = e.name.toLowerCase();
     const at = name.indexOf(needle);
-    if (at === 0) return [0, name.length];                  // 이름이 그것으로 시작
-    if (at > 0) return [1, at];                             // 이름 안 어딘가
+    if (at === 0) return [0, name.length];                  // the name starts with it
+    if (at > 0) return [1, at];                             // somewhere inside the name
     const owner = (e.of ?? "").toLowerCase().indexOf(needle);
-    if (owner >= 0) return [2, owner];                      // 주인 이름에만
-    return [3, 0];                                          // 설명문에만
+    if (owner >= 0) return [2, owner];                      // only in the owner's name
+    return [3, 0];                                          // only in the description
   };
-  // **설명문도 찾는다.** 이름을 모르는 채로 오는 것이 흔한 경우다 — "누수"·"전치"·
-  // "in place" 로 찾는 사람에게 이름만 보는 검색은 아무것도 못 준다. 설명이 한국어라
-  // 한국어 검색이 실제로 듣는다.
+  // **The descriptions are searched too.** Arriving without knowing the name is the
+  // common case — for someone searching "leak", "transpose" or "in place", a search
+  // that only reads names gives nothing back. Each page searches its own language,
+  // since `prose()` above hands over whichever text that page shows.
   const hits = index
     .filter((e) => e.name.toLowerCase().includes(needle)
                 || (e.of ?? "").toLowerCase().includes(needle)
@@ -282,7 +293,7 @@ function showHits(q) {
   main.append(ul);
 }
 
-/** 걸린 낱말 둘레만 잘라 보여 준다. */
+/** Shows only the slice around the matched word. */
 function snippet(text, needle) {
   const flat = text.replace(/\s+/g, " ");
   const at = flat.toLowerCase().indexOf(needle);
@@ -292,7 +303,7 @@ function snippet(text, needle) {
   return (from ? "… " : "") + esc(cut) + " …";
 }
 
-/* ── 아주 얇은 마크다운 ─────────────────────────────────────────────── */
+/* ── a very thin markdown ───────────────────────────────────────────── */
 
 function md(text) {
   const blocks = esc(text).split(/\n{2,}/);

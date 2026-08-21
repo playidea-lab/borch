@@ -1,35 +1,46 @@
 /**
- * `torch.fft` — 이산 푸리에 변환, 그리고 그 위의 `stft`/`istft`.
+ * `torch.fft` — the discrete Fourier transform, and `stft`/`istft` on top
+ * of it.
  *
- * **커널이 하나다.** 정변환·역변환·반쪽 변환·그 셋의 역방향이 전부 같은 셰이더를
- * 부호와 배율만 바꿔 부른다. 나눠 쓰면 여섯 벌이 되고, 그중 하나가 다르게 고쳐지는
- * 날이 온다 — 이 저장소가 반복해서 진 자리가 그 종류다.
+ * **There is one kernel.** Forward, inverse, half transforms and the
+ * inverses of those three all call the same shader with a different sign
+ * and scale. Split apart they become six copies, and the day comes when one
+ * of them is fixed differently — that is the kind of ground this repository
+ * has repeatedly lost.
  *
- * ## O(n²) 다 — 이름은 `fft` 인데
+ * ## It is O(n²), for all that it is called `fft`
  *
- * 직접 DFT 를 돈다. 쿨리-튜키를 쓰면 2 의 거듭제곱에서만 빠르고, 아닌 길이는
- * 블루스타인이 따로 필요하다. **값은 어느 쪽이든 같고**, 이 프로젝트의 천장(교재
- * 크기의 신호)에서는 차이가 안 보인다. 빨라야 하는 날이 오면 그때 바꾸되,
- * **지금 없는 속도를 있는 것처럼 적지 않는다.**
+ * It runs the DFT directly. Cooley–Tukey is only fast at powers of two, and
+ * other lengths need Bluestein on the side. **The values are the same
+ * either way**, and at this project's ceiling — textbook-sized signals —
+ * the difference does not show. If a day comes when it has to be fast,
+ * change it then, but **do not write down speed that is not there today.**
  *
- * ## 축을 안 옮긴다
+ * ## Axes are not moved
  *
- * `dim` 이 어디든 자료를 옮기지 않는다. `(바깥, 축, 안쪽)` 세 수로 자리를 계산해
- * 셰이더가 바로 집는다 — 옮기고 되돌리면 버퍼 두 벌이 더 들고, 복소수 옮기기는
- * 아직 없는 연산이라 그 자리를 만들어야 했을 것이다.
+ * Wherever `dim` points, no data is moved. Three numbers — `(outer, axis,
+ * inner)` — locate the element and the shader reads it directly. Moving and
+ * moving back costs two more buffers, and moving complex data is an
+ * operation that does not exist yet, so it would have had to be built for
+ * this.
  *
- * ## 기울기
+ * ## Gradients
  *
- * 변환은 **선형**이라 역방향이 규약에서 바로 나온다. 정칙 함수의 역방향이
- * `conj(f')·g` 이므로 `grad_x[j] = Σ_k e^{+2πijk/n}·g[k]` — **정규화 없는 역변환**이다.
- * 어려운 자리는 값이 아니라 **어느 쪽 반쪽을 세는가** 다:
+ * The transform is **linear**, so the backward falls straight out of the
+ * convention. The backward of a holomorphic function is `conj(f')·g`, which
+ * gives `grad_x[j] = Σ_k e^{+2πijk/n}·g[k]` — **an unnormalised inverse
+ * transform.** The hard part is not the value but **which half gets
+ * counted**:
  *
- * * `rfft` 의 역방향은 저장된 반쪽에만 기울기가 온다 — 켤레 짝을 더하면 두 배가 된다.
- * * `irfft` 의 역방향은 **가장자리만 한 번, 가운데는 두 번** 센다 — 되살린 켤레 짝이
- *   같은 저장 칸에서 왔기 때문이다.
+ * * `rfft`'s backward receives gradient only on the stored half — adding
+ *   the conjugate pair doubles it.
+ * * `irfft`'s backward counts **the edges once and the middle twice**,
+ *   because the conjugate pair it restored came out of the same stored
+ *   slot.
  *
- * 둘 다 **순방향 값은 멀쩡한 채로** 틀릴 수 있다. 코어(numpy)가 먼저 같은 유도를
- * 지났고 골든이 둘을 따로 묻는다.
+ * Either can be wrong **while the forward values stay perfectly fine**. The
+ * core (numpy) went through the same derivation first, and the golden cases
+ * ask about the two separately.
  */
 
 import { RuntimeError } from "./errors.js";
@@ -382,13 +393,19 @@ function rollBy(input: Tensor, dim: number | readonly number[] | null | undefine
   });
 }
 
-/** 0 주파수를 가운데로. **`n//2` 만큼 민다**(실측 — 홀수에서도 그렇다). */
+/**
+ * Zero frequency to the middle. **It shifts by `n//2`** (measured —
+ * including at odd lengths).
+ */
 export function fftshift(input: Tensor,
                          dim?: number | readonly number[] | null): Tensor {
   return rollBy(input, dim, (n) => Math.floor(n / 2));
 }
 
-/** 되돌리기. **홀수에서 `n//2` 로 되돌리면 안 맞는다** — 반대 방향으로 같은 만큼. */
+/**
+ * The undo. **Shifting back by `n//2` does not land at odd lengths** — the
+ * same amount, the other way.
+ */
 export function ifftshift(input: Tensor,
                           dim?: number | readonly number[] | null): Tensor {
   return rollBy(input, dim, (n) => -Math.floor(n / 2));
@@ -594,7 +611,10 @@ export function ifft2(input: Tensor, s?: (number | null)[] | null,
   return ifftn(input, s, dim, norm);
 }
 
-/** 실수 입력. **마지막 축만 `rfft` 이고 나머지는 `fft`** 다 — 차례가 답을 정한다. */
+/**
+ * Real input. **Only the last axis is `rfft`; the rest are `fft`** — the
+ * order decides the answer.
+ */
 export function rfftn(input: Tensor, s?: (number | null)[] | null,
                       dim?: number[] | number | null, norm?: string | null): Tensor {
   const [axes, sizes] = axesAndSizes(input, s, dim);
@@ -604,7 +624,9 @@ export function rfftn(input: Tensor, s?: (number | null)[] | null,
   return out;
 }
 
-/** `rfftn` 의 역. **`ifft` 를 먼저 돌고 마지막에 `irfft`** 다. */
+/**
+ * The inverse of `rfftn`. **`ifft` first, `irfft` last.**
+ */
 export function irfftn(input: Tensor, s?: (number | null)[] | null,
                        dim?: number[] | number | null, norm?: string | null): Tensor {
   const [axes, sizes] = axesAndSizes(input, s, dim);
@@ -627,7 +649,10 @@ export function irfft2(input: Tensor, s?: (number | null)[] | null,
   return irfftn(input, s, dim, norm);
 }
 
-/** 에르미트 대칭인 복소수 → **실수.** `irfft` 의 켤레 관계다(실측). */
+/**
+ * Hermitian-symmetric complex → **real.** The conjugate relation of `irfft`
+ * (measured).
+ */
 export function hfft(input: Tensor, n?: number | null, dim = -1,
                      norm?: string | null): Tensor {
   const axis = axisOf(dim, input.shape.length);
@@ -636,7 +661,9 @@ export function hfft(input: Tensor, n?: number | null, dim = -1,
   return irfft(input.conj(), len, axis, flipNorm(norm));
 }
 
-/** 실수 → **에르미트 대칭인 복소수.** `rfft` 의 켤레다. */
+/**
+ * Real → **Hermitian-symmetric complex.** The conjugate of `rfft`.
+ */
 export function ihfft(input: Tensor, n?: number | null, dim = -1,
                       norm?: string | null): Tensor {
   const axis = axisOf(dim, input.shape.length);
@@ -644,10 +671,12 @@ export function ihfft(input: Tensor, n?: number | null, dim = -1,
 }
 
 /**
- * 마지막 축이 `hfft` 이고 **앞 축은 `fft`** 다.
+ * The last axis is `hfft` and **the axes before it are `fft`.**
  *
- * `rfftn` 의 거울이니 `ifft` 일 것 같은데 torch 는 `fft` 다(실측 — 후보를 둘 다
- * 만들어 대 봤다). **모양은 양쪽 다 맞아서** 값을 안 재면 안 드러난다.
+ * Being the mirror of `rfftn` it looks like it should be `ifft`, but torch
+ * uses `fft` (measured — both candidates were built and compared). **The
+ * shape is right either way**, so it does not surface unless the values are
+ * measured.
  */
 export function hfftn(input: Tensor, s?: (number | null)[] | null,
                       dim?: number[] | number | null, norm?: string | null): Tensor {

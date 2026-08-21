@@ -1,30 +1,32 @@
 /**
- * 문서 안에서 그 자리에 도는 코드 블록.
+ * Code blocks that run where they sit, inside the prose.
  *
- * **설명 옆의 코드가 안 돌면 그건 그림이다.** 이 저장소는 문서의 코드가 썩는 것을
- * 두 번 잡았고, 사이트에서 그 자리를 막는 방법은 하나뿐이다 — 읽는 사람이 누르면
- * 진짜로 도는 것. 그래서 Learn 의 모든 예제는 **고칠 수 있고 돌릴 수 있다.**
+ * **Code beside an explanation that does not run is a picture.** This repository has
+ * twice caught documentation code going stale, and on a site there is only one way to
+ * close that gap — the reader presses it and it really runs. So every example under
+ * Learn **can be edited and can be run.**
  *
- * 쓰는 쪽은 이렇게 적는다:
+ * It is written like this:
  *
  *     <div class="runnable" data-lang="js">
  *       <script type="text/plain">await init(); …</script>
  *     </div>
  *
- * 한 블록이 **두 언어**를 담을 수 있다. 같은 일을 두 표면으로 적어 두면 읽는
- * 사람이 눌러서 수를 맞춰 볼 수 있다 — "자릿수까지 같다" 는 말보다 그게 낫다:
+ * One block can hold **two languages**. Writing the same work on both surfaces lets a
+ * reader press and compare the numbers — better than the sentence "they agree to the
+ * last digit":
  *
  *     <div class="runnable" data-lang="js">
  *       <script type="text/plain" data-lang="js">await init(); …</script>
  *       <script type="text/plain" data-lang="py">import borch_webgpu as torch …</script>
  *     </div>
  *
- * `data-lang` 이 없는 원본은 바깥 `div` 의 언어로 친다. 바깥 `div` 의 언어가
- * 처음 보이는 쪽이다.
+ * A source without `data-lang` counts as the outer `div`'s language, and the outer
+ * `div`'s language is the one shown first.
  *
- * `<script type="text/plain">` 에 담는 이유는 브라우저가 그 안을 **건드리지 않기**
- * 때문이다. `<pre>` 에 넣으면 `<`·`&` 를 일일이 escape 해야 하고, 한 번 빠뜨리면
- * 코드가 조용히 달라진다.
+ * It sits in `<script type="text/plain">` because the browser **leaves the inside
+ * alone**. Put it in a `<pre>` and every `<` and `&` has to be escaped by hand, and one
+ * missed escape changes the code quietly.
  */
 
 import { drawSeries, drawTensor } from "./render.js";
@@ -40,21 +42,23 @@ const LABEL = {
   editorHint: {
     en: "Code editor. Tab indents; press Escape then Tab to leave.",
     ko: "코드 편집기. Tab 은 들여쓰기이고, 나가려면 Escape 를 누른 뒤 Tab 을 누른다." },
-  // 강의 블록은 자기가 무엇인지 말할 이름이 따로 없어 위 문장이 이름을 겸한다.
-  // 플레이그라운드는 "자바스크립트 코드" 같은 이름이 이미 있어 지시만 붙인다.
+  // A lesson block has no separate name for what it is, so the sentence above serves as
+  // the name too. The playground already has one ("JavaScript code"), so it appends only
+  // the instruction.
 };
 
 const NAME = { js: "javascript", py: "python" };
 
-/** 큰 편집기의 자리. **페이지가 몇 겹 아래인지로 풀면 안 된다** — `../playground.html`
- *  은 `learn/` 에서만 맞고 최상위 페이지에서는 사이트 밖을 가리킨다. 이 파일은 언제나
- *  `site/assets/` 에 있으므로 여기서 재면 어느 페이지에서 불러도 같은 곳이 나온다. */
+/** Where the big editor lives. **It must not be resolved from how deep the page is** —
+ *  `../playground.html` is right only from `learn/` and points outside the site from a
+ *  top-level page. This file is always in `site/assets/`, so measuring from here gives
+ *  the same place whichever page loaded it. */
 const PLAYGROUND = new URL("../playground.html", import.meta.url).href;
 
 const LANG = document.documentElement.lang === "ko" ? "ko" : "en";
 const say = (key) => LABEL[key][LANG];
 
-/** 한 번에 하나만 돈다 — 두 블록이 같은 장치를 동시에 밟으면 수가 섞인다. */
+/** One at a time — two blocks stepping on the same device at once mix the numbers. */
 let busy = false;
 
 export function mountRunnables(root = document) {
@@ -66,15 +70,16 @@ function mount(box) {
   if (!sources.length) return;
   const first = box.dataset.lang === "py" ? "py" : "js";
 
-  // 언어 → 처음 적힌 코드. 두 번째 원본에 `data-lang` 이 없으면 첫 번째와 같은
-  // 칸에 덮어써서 한 벌이 조용히 사라진다 — `test_site.py` 가 그 꼴을 막는다.
+  // language → the code as first written. A second source without `data-lang` overwrites
+  // the first one's slot and a copy disappears quietly — `test_site.py` blocks that.
   const original = new Map();
   for (const el of sources) {
     original.set(el.dataset.lang === "py" ? "py" : el.dataset.lang === "js" ? "js" : first,
       dedent(el.textContent));
     el.remove();
   }
-  // 지금 편집기에 있는 글. 언어를 오갈 때 고친 것이 남아 있어야 비교가 된다.
+  // What is in the editor right now. Edits have to survive switching languages, or there
+  // is nothing to compare.
   const draft = new Map(original);
   let lang = original.has(first) ? first : [...original.keys()][0];
 
@@ -105,15 +110,16 @@ function mount(box) {
 
   const paint = () => {
     painted.innerHTML = highlight(`${editor.value}\n `, lang);
-    // 글 높이에 맞춘다 — 블록마다 스크롤 막대가 생기면 읽는 흐름이 끊긴다.
+    // Sized to the text — a scrollbar on every block breaks the flow of reading.
     const rows = editor.value.split("\n").length;
     box.querySelector(".edit").style.height = `${rows * 1.6 * 12.5 + 28}px`;
   };
   const setCode = (text) => {
     editor.value = text;
     paint();
-    // **지금 화면에 있는 코드**를 넘긴다. 고친 것을 그대로 큰 편집기로 들고 갈 수
-    // 있어야 의미가 있다 — 원본을 넘기면 방금 한 일이 사라진다.
+    // It hands over **the code currently on screen**. Carrying your edit into the big
+    // editor as it stands is the point — handing over the original loses what you just
+    // did.
     openLink.href = `${PLAYGROUND}#lang=${lang}&code=${encodeCode(editor.value)}`;
   };
 
@@ -126,18 +132,20 @@ function mount(box) {
     layer.scrollTop = editor.scrollTop;
     layer.scrollLeft = editor.scrollLeft;
   });
-  // **Tab 은 여기서 들여쓰기라, 나갈 문을 따로 내야 한다.**
+  // **Tab indents here, so there has to be a separate way out.**
   //
-  // 안 내면 키보드로 편집기에 들어온 사람이 못 나간다 — Tab 을 아무리 눌러도 공백만
-  // 늘어난다(실측: 두 번 눌러 822→826 자, 초점 그대로). 마우스 없이는 탭을 닫는
-  // 것 말고 방법이 없고, 이것은 접근성에서 이름이 붙은 실패다(WCAG 2.1.2 키보드 덫).
+  // Without one, someone who arrives by keyboard cannot leave — however many times Tab
+  // is pressed, only the spaces grow (measured: two presses took 822 characters to 826
+  // with focus unmoved). Without a mouse there is nothing to do but close the tab, and
+  // this failure has a name — WCAG 2.1.2, keyboard trap.
   //
-  // Escape 로 한 번 무장하고 다음 Tab 이 나간다 — CodeMirror·Monaco 가 쓰는 문이라
-  // 코드 편집기를 만져 본 사람에게는 이미 아는 손짓이다. 다른 키를 치면 도로 잠긴다.
+  // Escape arms it once and the next Tab leaves — the door CodeMirror and Monaco use,
+  // so it is already a known gesture to anyone who has touched a code editor. Any other
+  // key locks it again.
   let leaving = false;
   editor.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { leaving = true; return; }
-    if (e.key === "Tab" && leaving) { leaving = false; return; }   // 기본 동작 = 초점 이동
+    if (e.key === "Tab" && leaving) { leaving = false; return; }   // default action = move focus
     if (e.key !== "Tab") leaving = false;
     if (e.key === "Tab") {
       e.preventDefault();
@@ -152,8 +160,8 @@ function mount(box) {
 
   resetBtn.addEventListener("click", () => { setCode(original.get(lang)); out.textContent = ""; });
 
-  // 언어 탭. 고친 글은 언어별로 남기고, **출력은 지운다** — 자바스크립트가 찍은
-  // 수 위에 python 이라고 적힌 머리띠가 걸리면 그건 틀린 이름표다.
+  // The language tabs. Edits are kept per language and **the output is cleared** — a
+  // header reading python above numbers JavaScript printed is a wrong label.
   for (const tab of box.querySelectorAll("button.tab")) {
     tab.addEventListener("click", () => {
       if (tab.dataset.lang === lang) return;
@@ -169,9 +177,9 @@ function mount(box) {
   }
 
   const write = (text, kind = "") => {
-    // **읽던 자리를 뺏지 않는다.** 무조건 맨 아래로 끌면, 위를 보려고 올린 사람이
-    // 다음 줄이 찍히는 순간 도로 내려간다 — 학습 루프처럼 계속 찍는 코드에서는
-    // 올라가는 것이 아예 불가능해진다.
+    // **It does not take the reader's place away.** Always dragging to the bottom sends
+    // someone who scrolled up back down the instant the next line prints — and with code
+    // that keeps printing, such as a training loop, scrolling up becomes impossible.
     const following = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
     const line = document.createElement("div");
     if (kind) line.className = kind;
@@ -180,8 +188,8 @@ function mount(box) {
     if (following) out.scrollTop = out.scrollHeight;
   };
 
-  // 한 실행이 찍은 수. `plot()` 이 쌓고, 끝나면 한 번 그린다 — 스텝마다 다시
-  // 그리면 학습보다 그리는 데 시간이 더 든다.
+  // The numbers one run printed. `plot()` accumulates and it is drawn once at the end —
+  // redrawing per step costs more time than the training does.
   let series = [];
   let seriesName = "";
 
@@ -204,14 +212,14 @@ function mount(box) {
           series.push(value);
         },
         onShow: async (tensor, options) => {
-          // 파이썬에서 오면 옵션이 평범한 객체가 아닐 수 있다. 값만 꺼낸다.
+          // Arriving from Python, the options may not be a plain object. Take the values only.
           const opts = options ? JSON.parse(JSON.stringify(options)) : {};
-          // 몇 장을 한 줄에 놓을지는 **이 칸의 실제 너비**가 정한다. 720 을 박아
-          // 두었더니 좁은 화면에서 오른쪽이 잘렸다.
+          // How many fit per row is decided by **this box's real width**. Pinned at 720,
+          // the right edge was cut off on a narrow screen.
           //
-          // **비어 있는 칸의 너비를 재면 안 된다** — `.canvas-out:empty` 는
-          // `display: none` 이라 0 을 준다. 첫 장을 그리기 전이 언제나 그 상태라
-          // 한 줄에 한 장씩 나왔다. 블록 전체의 너비를 재면 그 함정이 없다.
+          // **The empty box's width must not be measured** — `.canvas-out:empty` is
+          // `display: none` and gives 0. Before the first image that is always the state,
+          // so everything came out one per row. Measuring the whole block avoids it.
           if (!opts.width) opts.width = box.clientWidth - 32;
           stage.append(await drawTensor(tensor, opts));
         },
@@ -235,7 +243,7 @@ function mount(box) {
   setCode(draft.get(lang));
 }
 
-/** `<script>` 안의 들여쓰기를 걷어낸다. HTML 들여쓰기가 코드에 섞이면 파이썬이 죽는다. */
+/** Strips the indentation inside `<script>`. HTML indentation mixed into the code kills Python. */
 function dedent(text) {
   const lines = text.replace(/^\n/, "").replace(/\s+$/, "").split("\n");
   const pad = Math.min(...lines.filter((l) => l.trim())
@@ -243,8 +251,8 @@ function dedent(text) {
   return lines.map((l) => l.slice(pad)).join("\n");
 }
 
-// 중지 버튼은 아직 안 단다 — 강의의 예제는 전부 몇백 밀리초 안에 끝난다.
-// 오래 도는 것을 넣게 되면 그때 여기에 붙인다. 지금 달면 안 쓰이는 손잡이가 된다.
+// No stop button yet — every lesson example finishes within a few hundred milliseconds.
+// It goes here the day something long-running arrives; added now it is a handle nobody uses.
 void requestStop;
 
 mountRunnables();

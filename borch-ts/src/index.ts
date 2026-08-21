@@ -1,10 +1,10 @@
 /**
- * borch — 브라우저에서 WebGPU 위에 도는 PyTorch 모양의 텐서 라이브러리.
+ * borch — a PyTorch-shaped tensor library running on WebGPU in the browser.
  *
  * ```ts
  * import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
  *
- * await init();                                  // WebGPU 어댑터를 잡는다
+ * await init();                                  // acquire the WebGPU adapter
  *
  * const model = new nn.Sequential(
  *   new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));
@@ -15,7 +15,7 @@
  * const y = keepAlive(Tensor.from(labels, [32], { dtype: "int64" }));
  *
  * for (let i = 0; i < steps; i++) {
- *   await scope(async () => {                    // 한 스텝의 중간 버퍼를 놓는다
+ *   await scope(async () => {                    // release one step's intermediates
  *     opt.zeroGrad();
  *     const loss = crit.call(model.call(x), y);
  *     loss.backward();
@@ -25,39 +25,47 @@
  * }
  * ```
  *
- * ## 이 파일이 하는 일
+ * ## What this file does
  *
- * 공개 표면을 **한 자리에 모은다.** 이것이 없으면 쓰는 사람이 `dist/src/tensor.js`
- * 같은 안쪽 경로를 직접 짚어야 하고, 그러면 우리가 파일을 옮기는 순간 남의 코드가
- * 깨진다. 여기 적힌 것만 약속이고 나머지는 안쪽 사정이다.
+ * It gathers the public surface **into one place.** Without it, users have
+ * to point at inner paths like `dist/src/tensor.js`, and then the moment we
+ * move a file their code breaks. What is written here is the promise; the
+ * rest is internal business.
  *
- * ## torch 와 갈리는 자리 — 미리 적는다
+ * ## Where it parts from torch — written down in advance
  *
- * **`await init()` 을 먼저 불러야 한다.** WebGPU 어댑터를 잡는 것이 비동기라 피할
- * 길이 없다. 안 부르고 텐서를 만들면 그 자리에서 문구와 함께 멈춘다. `torch.cuda.
- * is_available()` 자리는 `await isAvailable()` 이고, 왜 안 되는지까지 알아야 하면
- * `await probe()` 가 `'no-api'`(브라우저가 낡음)와 `'no-adapter'`(드라이버 차단·
- * 헤드리스)를 갈라 준다.
+ * **`await init()` has to be called first.** Acquiring the WebGPU adapter
+ * is asynchronous and there is no way around it. Make a tensor without
+ * calling it and it stops there with a message. Where
+ * `torch.cuda.is_available()` goes, use `await isAvailable()`, and if you
+ * need to know *why* it is unavailable, `await probe()` separates
+ * `'no-api'` (the browser is too old) from `'no-adapter'` (driver blocked,
+ * headless).
  *
- * **`'cpu'` 는 값이 담긴 그릇이지 연산되는 장치가 아니다.** `await t.cpu()` 로 값을
- * 호스트로 내리고 `t.webgpu()` 로 올린다. 내려온 텐서는 읽을 수는 있어도(`toArray`·
- * `item`·`repr`) 연산에는 못 쓴다 — borch 에 CPU 커널이 없다. 넣으면 torch 와 같은
- * 문구("Expected all tensors to be on the same device")로 멈춘다. `t.device` 가
- * 지금 어디인지 답한다.
+ * **`'cpu'` is a place values are held, not a device that computes.** Bring
+ * values down to the host with `await t.cpu()` and back up with
+ * `t.webgpu()`. A tensor that has come down can be read (`toArray`, `item`,
+ * `repr`) but cannot be computed with — borch has no CPU kernels. Feed one
+ * in and it stops with torch's own wording ("Expected all tensors to be on
+ * the same device"). `t.device` answers where it is.
  *
- * **값을 읽는 것이 비동기다.** `await t.item()`, `await t.toArray()`. GPU 메모리를
- * 다시 가져오는 일이라 그렇다. 순방향·역방향은 동기다.
+ * **Reading values is asynchronous.** `await t.item()`, `await
+ * t.toArray()`. It is a trip back for GPU memory. Forward and backward are
+ * synchronous.
  *
- * **구역을 열어야 학습이 돈다.** `scope()` 안에서 만든 중간 버퍼는 나갈 때 놓는다.
- * 자바스크립트의 쓰레기 수집은 GPU 메모리를 제때 안 놓아주므로, 한 스텝이 만드는
- * 수천 개를 그냥 두면 몇 스텝 만에 장치가 찬다. torch 에 없는 개념이고 TF.js 의
- * `tidy` 와 같은 자리다. 파라미터처럼 살아남아야 하는 것은 `keepAlive` 로 표시한다.
+ * **Training needs a scope open.** Intermediate buffers made inside
+ * `scope()` are released on the way out. JavaScript's garbage collector
+ * does not return GPU memory in time, so leaving the thousands one step
+ * makes fills the device within a few steps. It is a concept torch does not
+ * have, and it sits where TF.js's `tidy` sits. Anything that has to
+ * survive, such as parameters, is marked with `keepAlive`.
  *
- * **꼴이 둘이다 — 파이썬의 `with` 에 가까운 쪽을 권한다.**
+ * **There are two spellings — the one closer to Python's `with` is
+ * recommended.**
  *
  * ```ts
  * for (let i = 0; i < steps; i++) {
- *   using s = scope();                 // 블록 끝에서 닫힌다
+ *   using s = scope();                 // closes at the end of the block
  *   opt.zeroGrad();
  *   const loss = crit.call(model.call(x), y);
  *   loss.backward();
@@ -66,17 +74,21 @@
  * }
  * ```
  *
- * 놓는 일이 동기라 `await using` 이 아니라 `using` 이다. 블록을 벗어나는 시점은
- * 안의 `await` 이 전부 끝난 뒤이므로 위의 `await loss.item()` 은 안전하다(실측).
- * 콜백 꼴도 그대로 남는다 — 값을 그대로 돌려받는 자리는 그쪽이 짧다.
+ * Releasing is synchronous, so it is `using` and not `await using`. The
+ * block is left only after every `await` inside it has finished, which
+ * makes the `await loss.item()` above safe (measured). The callback
+ * spelling stays as well — it is shorter where you want the value handed
+ * straight back.
  *
- * **까먹으면 시끄럽게 멈춘다.** 표시 없이 구역 밖으로 들고 나간 텐서를 쓰면 그
- * 자리에서 예외가 난다. 한동안 안 그랬고, 그때는 **다음 할당이 덮어쓴 남의 값**이
- * 조용히 읽혔다(실측: `[1,2,3,4]` → `9,9,9,9`).
+ * **Forgetting stops loudly.** Using a tensor carried out of a scope
+ * without being marked raises at that point. For a while it did not, and
+ * back then **whatever the next allocation had written over it** was read
+ * quietly (measured: `[1,2,3,4]` came back as `9,9,9,9`).
  *
- * **모델을 부르는 것은 `model.call(x)` 다.** 자바스크립트는 객체를 그냥 부를 수
- * 없어서 torch 의 `model(x)` 를 그대로 옮길 수 없다. `forward` 를 직접 불러도 같은
- * 값이 나오지만 `call` 쪽을 권한다 — 나중에 훅이 붙는다면 그 자리다.
+ * **A model is called as `model.call(x)`.** JavaScript cannot simply call
+ * an object, so torch's `model(x)` cannot be carried over as written.
+ * Calling `forward` directly gives the same value, but `call` is the
+ * recommended one — it is where hooks would attach if they ever do.
  */
 
 export {
@@ -104,40 +116,48 @@ export { slice } from "./indexing.js";
 export type { Slice } from "./indexing.js";
 // 체크포인트. **형식은 safetensors 다** — 파이썬 `borch`·numpy·HF 도구가 같은 파일을
 // 읽는다. torch 의 `save`/`load` 는 pickle 이라 옮길 수도 옮겨서도 안 된다.
+// `save`/`load` 는 **중첩을 그대로** 오간다 — torch·파이썬 `borch` 와 같은 자리다.
+// `encode`/`decode` 는 그 밑의 코덱이고, 평평한 텐서 표와 바이트만 다룬다.
 export {
-  load, metaToNumbers, numbersToMeta, prefixed, save, unprefixed,
+  decode, encode, load, metaToNumbers, numbersToMeta, prefixed, save, unprefixed,
 } from "./serialize.js";
-export type { Bundle } from "./serialize.js";
+export type { Bundle, Savable } from "./serialize.js";
 // **밖에서 여닫을 수 있어야 한다.** `noGrad(fn)` 은 함수를 받는 모양이라 파이썬의
 // `with` 로 옮길 수가 없다 — 결속이 스위치를 직접 쥔다.
 export { gradMode } from "./autograd.js";
 
 /**
- * 이것이 텐서인가.
+ * Whether this is a tensor.
  *
- * 밖에서 이 라이브러리를 감싸는 쪽이 필요로 한다 — 메서드가 텐서를 주는지 수를
- * 주는지 모양을 주는지에 따라 다르게 다뤄야 하는데, `instanceof` 를 쓰려면 클래스를
- * 들여와야 하고 다른 언어에서는 그것이 안 된다. Pyodide 의 파이썬 결속이 첫 사용자다.
+ * Code wrapping this library from outside needs it — it has to treat a
+ * method's result differently depending on whether it returns a tensor, a
+ * number or a shape, and using `instanceof` means importing the class,
+ * which other languages cannot do. Pyodide's Python binding is the first
+ * user.
  */
 export function isTensor(x: unknown): boolean {
   return x instanceof TensorClass;
 }
 
 /**
- * 자리 하나를 **`null` 로** 비운다.
+ * Empties one slot **to `null`.**
  *
- * ## 왜 이것이 밖에 있는가
+ * ## Why this is exposed
  *
- * 파이썬에서는 JS 의 `null` 을 만들 수 없다. Pyodide 는 `null` 을 파이썬 `None` 으로
- * 주고, 반대로 `None` 을 보내면 **`undefined`** 가 된다 — JS 에서 그 둘은 다른 값이다.
+ * Python cannot make JavaScript's `null`. Pyodide hands `null` to Python as
+ * `None`, and sending `None` back the other way produces **`undefined`** —
+ * which in JavaScript is a different value.
  *
- * 그래서 `p.grad = None` 이 저쪽 자리를 `undefined` 로 만들었고, `autograd.ts` 는
- * 비었는지를 `node.grad === null` 로 묻는다. 비교가 거짓이 되어 없는 것에 기울기를
- * 쌓으려 들었고, 터진 자리는 `Cannot read properties of undefined (reading 'add')`
- * 였다 — 파이썬 줄에서 한참 떨어진 곳이다.
+ * So `p.grad = None` left the slot on the other side as `undefined`, and
+ * `autograd.ts` asks whether it is empty with `node.grad === null`. The
+ * comparison came out false, it tried to accumulate gradient into something
+ * that was not there, and what blew up was `Cannot read properties of
+ * undefined (reading 'add')` — a long way from the Python line.
  *
- * **저쪽의 엄격한 비교를 느슨하게 바꾸지 않는다.** 그러면 TS 쪽 불변식이 약해지고
- * 진짜 원인인 변환은 그대로 남는다. null 이 있는 쪽에 만드는 자리를 낸다.
+ * **Loosening the strict comparison over there is not the fix.** That
+ * weakens the TS invariant and leaves the real cause, the conversion,
+ * exactly where it was. Put the way to make a null on the side that has
+ * nulls.
  */
 export function setNull(target: Record<string, unknown>, key: string): void {
   target[key] = null;

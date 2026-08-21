@@ -81,7 +81,8 @@ function widest(values: readonly number[], format: (v: number) => string): numbe
 /**
  * 한 줄에 늘어놓되 80 자를 넘으면 자른다.
  *
- * @param depth 여는 대괄호가 몇 개나 앞에 있는가 — 들여쓰기가 그만큼 더 들어간다.
+ * @param depth how many opening brackets stand in front — the indentation
+ *   grows by that much.
  */
 function wrapRow(cells: readonly string[], depth: number): string {
   const pad = INDENT + " ".repeat(depth);
@@ -149,7 +150,9 @@ export function formatTensor(info: ReprInfo): string {
   return `tensor(${parts.join(", ")})`;
 }
 
-/** `torch.Size([2, 2])`. 모양도 찍히는 것이라 명세다. */
+/**
+ * `torch.Size([2, 2])`. The shape is printed too, so it is a specification.
+ */
 export function formatSize(shape: readonly number[]): string {
   return `torch.Size([${shape.join(", ")}])`;
 }

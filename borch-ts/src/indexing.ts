@@ -37,7 +37,9 @@
 
 import { RuntimeError } from "./errors.js";
 
-/** `x[start:end:step]`. 직접 만들지 말고 `slice()` 를 쓴다. */
+/**
+ * `x[start:end:step]`. Do not build one directly — use `slice()`.
+ */
 export interface Slice {
   readonly kind: "slice";
   readonly start: number | null;
@@ -46,11 +48,12 @@ export interface Slice {
 }
 
 /**
- * 자를 구간. 비운 자리는 파이썬처럼 끝까지다.
+ * The span to cut. An empty position runs to the end, as in Python.
  *
- * **걸음이 음수면 거절한다.** 파이썬의 `x[::-1]` 은 뒤집기인데, 여기에는 그 일을
- * 하는 `flip` 이 따로 있다. 두 문으로 같은 일을 하게 두면 어느 쪽이 정본인지가
- * 흐려지고, 그것은 이 저장소가 반복해서 피해 온 자리다.
+ * **A negative step is refused.** Python's `x[::-1]` reverses, but there is
+ * a `flip` here that already does that job. Letting two spellings do one
+ * thing blurs which is canonical, and that is a place this repository has
+ * repeatedly stayed away from.
  */
 export function slice(
   start: number | null = null,
@@ -72,10 +75,11 @@ export function isSlice(v: unknown): v is Slice {
 }
 
 /**
- * 한 축을 어떻게 볼 것인가 — **값이 아니라 계획이다.**
+ * How one axis is to be read — **a plan, not a value.**
  *
- * 파싱을 실행에서 떼어 두면 이 파일이 `Tensor` 를 안 부른다(순환이 없다). 그리고
- * 범위·차례를 여기서 다 따지므로, 실행하는 쪽은 이미 맞는 수만 받는다.
+ * Keeping parsing apart from execution means this file never calls `Tensor`
+ * (no cycle). Ranges and ordering are all settled here, so the side that
+ * executes only ever receives numbers that already hold.
  */
 export type AxisPlan =
   | { kind: "int"; at: number }
@@ -102,10 +106,11 @@ function resolveSlice(s: Slice, size: number): AxisPlan {
 }
 
 /**
- * 축 하나짜리 인덱스를 계획으로.
+ * A single-axis index, turned into a plan.
  *
- * @param axis 몇 번째 축인지. 오류 문구에만 쓴다 — 어느 자리가 틀렸는지 안 적으면
- *   랭크가 넷쯤 될 때 사람이 세어 봐야 한다.
+ * @param axis which axis it is. Used only in the error message — without
+ *   saying which position is wrong, someone has to count them by hand at
+ *   around rank four.
  */
 export function planAxis(
   index: number | null | Slice | readonly number[],

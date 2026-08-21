@@ -1,13 +1,15 @@
 /**
- * 플레이그라운드의 예시들.
+ * The playground's examples.
  *
- * **여기 있는 코드는 전부 실제로 돈다.** 안 돌리는 예시는 썩고, 그것은 첫 사용자가
- * 정확히 밟는 자리다 — 이 저장소는 문서의 설치 안내가 실은 안 듣던 것을 두 번 잡았다.
- * 순서는 PRD 의 학습 경로(Tensor → Autograd → 회귀 → MLP → CNN)를 따른다.
+ * **Every piece of code here actually runs.** An example that is never run rots, and
+ * that is precisely where a first user steps — this repository has twice caught
+ * installation instructions in its own documentation that did not work. The order
+ * follows the PRD's learning path (Tensor → Autograd → regression → MLP → CNN).
  *
- * 제목·설명·주석은 `{en, ko}` 로 둘 다 적는다. **코드 자체는 같아야 한다** —
- * 두 언어가 다른 코드를 돌리면 "값이 같다" 는 이 페이지의 주장이 거짓이 된다.
- * 갈리는 것은 주석과 찍는 문구뿐이다.
+ * Titles, descriptions and comments are written in both, as `{en, ko}`. **The code
+ * itself has to be identical** — two languages running different code would make this
+ * page's claim that the values agree a false one. Only the comments and the printed
+ * wording differ.
  */
 
 import { pick } from "./i18n.js";
@@ -372,11 +374,11 @@ log("그것은 이 라이브러리의 수가 아니라 그 래스터라이저의
 ];
 
 /**
- * 파이썬 쪽 — 같은 커널 위에서 `borch_webgpu` 로 부른다.
+ * The Python side — the same kernels, called through `borch_webgpu`.
  *
- * **`await` 이 안 나온다.** Pyodide 의 `run_sync`(JSPI)가 그 자리를 메우고, 결속이
- * 나머지를 감춘다. 그래서 여기 있는 코드는 임포트 한 줄과 `scope()` 한 줄만 빼면
- * 교재의 PyTorch 코드와 같은 모양이다 — 그것이 이 결속의 유일한 주장이다.
+ * **No `await` appears.** Pyodide's `run_sync` (on JSPI) fills that place and the
+ * binding hides the rest. So the code here, but for one import line and one `scope()`
+ * line, has the shape of the textbook's PyTorch — which is this binding's only claim.
  */
 const PY_EXAMPLES = [
   {
@@ -649,7 +651,7 @@ for i in range(30):
   },
 ];
 
-/** `{en, ko}` 를 지금 언어 하나로 접는다. 나머지 코드는 언어를 몰라도 된다. */
+/** Folds `{en, ko}` down to the current language, so the rest of the code need not know about languages. */
 function localize(list) {
   return list.map((ex) => ({
     id: ex.id,
@@ -659,10 +661,10 @@ function localize(list) {
   }));
 }
 
-/** 언어별 예시. 플레이그라운드의 고르는 상자가 이것을 읽는다. */
+/** The examples per language. The playground's picker reads this. */
 export const EXAMPLES = { js: localize(JS_EXAMPLES), py: localize(PY_EXAMPLES) };
 
-/** 히어로에 박아 두는 것 — 짧고, 실패할 자리가 적어야 한다. */
+/** What is pinned in the hero — short, with few places to fail. */
 export const HERO_CODE = pick({
   en: `await init();                       // acquire the WebGPU adapter
 

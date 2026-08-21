@@ -1,12 +1,13 @@
 /**
- * 화면에 나가는 문구. **기본은 영어이고 한국어가 `/ko/` 에 있다.**
+ * The wording that reaches the screen. **English is the default and Korean lives under `/ko/`.**
  *
- * 페이지의 본문은 각 HTML 안에 그대로 적혀 있다 — 자바스크립트가 꺼져도 읽히고,
- * 링크를 걸었을 때 미리보기에도 뜬다. 여기 있는 것은 **코드가 만드는 문구**뿐이다:
- * 장치 상태, 실행 결과, 오류, 예시의 제목.
+ * A page's prose is written out inside its own HTML — it reads with JavaScript off and
+ * it appears in a link preview. What lives here is only **the wording code produces**:
+ * device state, run results, errors, the examples' titles.
  *
- * 어느 쪽인지는 `<html lang>` 이 정한다. 경로(`/ko/`)와 같이 가지만 경로를 읽지
- * 않는다 — 그러면 파일을 옮기는 순간 문구가 조용히 영어로 돌아간다.
+ * Which one is in force is decided by `<html lang>`. It travels with the path (`/ko/`)
+ * but does not read the path — do that and moving a file quietly drops the wording back
+ * to English.
  */
 
 export const LANG = document.documentElement.lang === "ko" ? "ko" : "en";
@@ -39,6 +40,14 @@ const STRINGS = {
     en: "stop requested — the loop halts where it checks stopped().",
     ko: "중지를 걸었다 — 루프가 stopped() 를 보는 자리에서 멈춘다." },
 
+  "run.unknownError": { en: "unknown error", ko: "알 수 없는 오류" },
+  "draw.rank": {
+    en: "show() draws [H,W], [C,H,W] or [N,C,H,W] — this was [{0}].",
+    ko: "show() 는 [H,W]·[C,H,W]·[N,C,H,W] 를 그린다 — 받은 것은 [{0}] 다." },
+  "draw.channels": {
+    en: "drawing needs 1 or 3 channels — this had {0}.",
+    ko: "채널이 1 이나 3 이어야 그린다 — 받은 것은 {0} 다." },
+  "draw.empty": { en: "nothing to plot yet", ko: "아직 그릴 것이 없다" },
   "editor.nameJs": { en: "JavaScript code", ko: "자바스크립트 코드" },
   "editor.namePy": { en: "Python code", ko: "파이썬 코드" },
   "editor.hint": {
@@ -80,8 +89,8 @@ const STRINGS = {
       + "  From the repository root: npm run build:ts\n"
       + "  Looked for: {0}\n  (original error: {1})",
     ko: "borch.ts 방출물을 못 읽었다 — 브라우저는 TypeScript 를 그대로 못 읽는다.\n"
-      + "  저장소 루트에서: npm run build:ts\n"
-      + "  찾던 자리: {0}\n  (원래 오류: {1})" },
+      + "  from the repository root: npm run build:ts\n"
+      + "  looked in: {0}\n  (original error: {1})" },
   "load.borchTs": {
     en: "loading borch.ts and acquiring the adapter…",
     ko: "borch.ts 를 올리고 어댑터를 잡는 중…" },
@@ -99,21 +108,21 @@ const STRINGS = {
       + "  From the repository root: python3 site/fetch_data.py\n"
       + "  (add --download if you do not have the CIFAR binaries)",
     ko: "튜토리얼 데이터가 없다 ({0}).\n"
-      + "  저장소 루트에서: python3 site/fetch_data.py\n"
-      + "  (CIFAR 바이너리가 없으면 --download 를 붙인다)" },
+      + "  from the repository root: python3 site/fetch_data.py\n"
+      + "  (add --download if the CIFAR binaries are not there)" },
   "load.scriptFailed": {
     en: "could not load {0}", ko: "못 올렸다: {0}" },
 };
 
-/** `t("run.done", 12)` — 자리표시자는 `{0}`, `{1}` 이다. */
+/** `t("run.done", 12)` — the placeholders are `{0}`, `{1}`. */
 export function t(key, ...args) {
   const entry = STRINGS[key];
-  if (!entry) return key;                    // 없는 열쇠는 열쇠 그대로 — 조용히 비지 않는다
+  if (!entry) return key;                    // an unknown key comes back as itself — it does not go quietly blank
   const text = entry[LANG] ?? entry.en;
   return text.replace(/\{(\d+)\}/g, (m, i) => String(args[Number(i)] ?? m));
 }
 
-/** `{en, ko}` 로 적힌 것에서 지금 언어를 고른다. 예시의 제목·본문이 그 꼴이다. */
+/** Picks the current language out of something written as `{en, ko}` — the examples' titles and prose are that shape. */
 export function pick(pair) {
   if (pair === null || typeof pair !== "object") return pair;
   return pair[LANG] ?? pair.en;
