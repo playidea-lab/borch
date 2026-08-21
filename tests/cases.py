@@ -7701,6 +7701,121 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "CenterCrop(원본보다 큼)", lambda L: center_crop(L, (13, 11))),
     ]
 
+    # --- the fourteen that arrived after the first seven ----------------------
+    #
+    # **Each side is given the picture in its own format**, which is the rule the cases
+    # above already follow: real torchvision gets a tensor (or a PIL image where the
+    # picture is uint8), and ours gets the (H,W,C) array that stands in for PIL. Handing
+    # both the same object would compare a coincidence.
+
+    def on_float(build):
+        """A transform that takes a picture, compared on the float image.
+
+        The orders differ and have to. torchvision's transform wants a tensor, so
+        `ToTensor` comes **first** there; ours wants the array, so `ToTensor` comes
+        **last**. Both end at (C,H,W), which is the only place they can be compared.
+        """
+        def run(L):
+            T = _vision(L)
+            t = build(T)
+            if _is_real_torch(L):
+                return t(_as_tensor(L, T.ToTensor()(img_f)))
+            return T.ToTensor()(t(img_f))
+        return run
+
+    def on_uint8(build):
+        """The same, on the uint8 image — where torchvision's side is **a real PIL
+        image.** The two paths inside torchvision are not the same code, and a transform
+        that agrees with the tensor path can still part from the PIL one."""
+        def run(L):
+            T = _vision(L)
+            out = build(T)(_pil_position(L, img_u8))
+            return _as_tensor(L, out)
+        return run
+
+    def crops(build):
+        """`FiveCrop` and `TenCrop` hand back **a tuple**, and the harness compares
+        arrays. Stacked, a crop landing in the wrong slot is caught by value; compared one
+        by one it would not be."""
+        def run(L):
+            T = _vision(L)
+            t = build(T)
+            if _is_real_torch(L):
+                return L.stack(t(_as_tensor(L, T.ToTensor()(img_f))))
+            return L.stack([T.ToTensor()(p) for p in t(img_f)])
+        return run
+
+    def linear(L):
+        # A reversing matrix rather than the identity — the identity passes whatever the
+        # multiplication does, including doing nothing at all.
+        n = int(np.prod(img_f.shape))
+        m = np.eye(n, dtype=np.float32)[::-1].copy()
+        v = np.full(n, 0.5, dtype=np.float32)
+        T = _vision(L)
+        return T.LinearTransformation(L.tensor(m), L.tensor(v))(
+            _as_tensor(L, T.ToTensor()(img_f)))
+
+    def erasing(L, **kw):
+        T = _vision(L)
+        return T.RandomErasing(**kw)(_as_tensor(L, T.ToTensor()(img_f)))
+
+    cases += [
+        # **Padding's two-element form is the one that misreads** — it is (left/right,
+        # top/bottom), not (left, top). Given a square pad both readings agree, so the
+        # four-sided case is the one that decides it.
+        (VISION_PREFIX + "Pad(all sides)", on_float(lambda T: T.Pad(2))),
+        (VISION_PREFIX + "Pad(four sides)", on_float(lambda T: T.Pad((1, 2, 3, 4)))),
+        # The three non-constant modes. They are numpy's own, so what is being asked is
+        # whether **torchvision means the same thing by the same word** — `reflect` and
+        # `symmetric` differ only in whether the edge value repeats.
+        (VISION_PREFIX + "Pad(edge)", on_float(lambda T: T.Pad(1, padding_mode="edge"))),
+        (VISION_PREFIX + "Pad(reflect)", on_float(lambda T: T.Pad(1, padding_mode="reflect"))),
+        (VISION_PREFIX + "Pad(symmetric)", on_float(lambda T: T.Pad(1, padding_mode="symmetric"))),
+        # A colour per channel, through PIL. numpy's `constant_values` reads per **axis**,
+        # so a three-colour fill handed straight to it paints the channel axis instead of
+        # the colours — right shape, wrong picture, nothing raised.
+        (VISION_PREFIX + "Pad(a colour per channel)", on_uint8(lambda T: T.Pad(1, fill=(1, 2, 3)))),
+        # Grayscale. **The three-channel form is the one models need**, and it is where a
+        # broadcast can quietly give three different channels.
+        (VISION_PREFIX + "Grayscale(one channel)", on_float(lambda T: T.Grayscale())),
+        (VISION_PREFIX + "Grayscale(three channels)", on_float(lambda T: T.Grayscale(3))),
+        (VISION_PREFIX + "RandomGrayscale(p=1)", on_float(lambda T: T.RandomGrayscale(p=1.0))),
+        # The vertical flip, both ways round. p=0 is not a formality: a flip written on the
+        # wrong axis still passes p=1 on a square picture, and this one is 5x4.
+        (VISION_PREFIX + "VerticalFlip(p=1)", on_float(lambda T: T.RandomVerticalFlip(1.0))),
+        (VISION_PREFIX + "VerticalFlip(p=0)", on_float(lambda T: T.RandomVerticalFlip(0.0))),
+        # Five and ten crops. The corners are easy to write and easy to swap; stacking is
+        # what makes a swap show.
+        (VISION_PREFIX + "FiveCrop", crops(lambda T: T.FiveCrop((3, 2)))),
+        (VISION_PREFIX + "TenCrop", crops(lambda T: T.TenCrop((3, 2)))),
+        (VISION_PREFIX + "TenCrop(vertical)", crops(lambda T: T.TenCrop((3, 2), vertical_flip=True))),
+        # **The cap has to actually bite.** On this 5x4 picture most `max_size` values never
+        # reach it — the long side barely grows — and the case then compares an ordinary
+        # resize while reading as though it compared the cap. 8 with a cap of 9 is where it
+        # triggers (measured: 10 becomes 9, and the short side follows to 7).
+        (VISION_PREFIX + "Resize(long side capped)", on_float(lambda T: T.Resize(8, max_size=9))),
+        # `RandomResizedCrop` pinned so that the draw has one answer: the whole area, at the
+        # picture's own ratio. That leaves one place to crop, so what is compared is the
+        # resize that follows and the rounding that chooses the crop.
+        (VISION_PREFIX + "RandomResizedCrop(pinned to the whole image)",
+         on_float(lambda T: T.RandomResizedCrop((3, 2), scale=(1.0, 1.0), ratio=(0.8, 0.8)))),
+        (VISION_PREFIX + "LinearTransformation", linear),
+        (VISION_PREFIX + "RandomErasing(p=0)", lambda L: erasing(L, p=0.0)),
+        # **The fallback, and it is the branch that gets written wrong.** When ten draws all
+        # miss, torchvision hands the picture back untouched — an implementation that
+        # erases "whatever it last computed" instead passes every other case.
+        (VISION_PREFIX + "RandomErasing(ten draws all miss)",
+         lambda L: erasing(L, p=1.0, scale=(0.99, 1.0), ratio=(1.0, 1.0))),
+        # The composition three. Pinned at 0 and 1 they say whether **all or none** is
+        # applied, which is what separates `RandomApply` from a `p` on each transform.
+        (VISION_PREFIX + "RandomApply(p=1)", on_float(lambda T: T.RandomApply([T.Pad(1)], p=1.0))),
+        (VISION_PREFIX + "RandomApply(p=0)", on_float(lambda T: T.RandomApply([T.Pad(1)], p=0.0))),
+        (VISION_PREFIX + "RandomChoice(one to choose from)",
+         on_float(lambda T: T.RandomChoice([T.Pad(1)]))),
+        (VISION_PREFIX + "RandomOrder(one to order)", on_float(lambda T: T.RandomOrder([T.Pad(1)]))),
+        (VISION_PREFIX + "Lambda", on_float(lambda T: T.Lambda(lambda x: x * 2))),
+    ]
+
     # Representation (T3). This project treats `repr` as specification too — the tutorials do
     # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
@@ -7710,10 +7825,38 @@ def vision_cases(inp=None):
         ("RandomCrop", lambda T: T.RandomCrop(32, padding=4)),
         ("CenterCrop", lambda T: T.CenterCrop(24)),
         ("Compose", lambda T: T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])),
+        # **`Resize` was missing from this list, and not by oversight.** Its repr printed
+        # two fields where torchvision prints four, so it could not be added — and the
+        # table stayed green while the one transform whose repr differed was the one not
+        # in it. `max_size` and `antialias` are printed now, so it can be asked.
+        ("Resize", lambda T: T.Resize(4)),
+        ("Resize(a pair)", lambda T: T.Resize((4, 3))),
+        ("Lambda", lambda T: T.Lambda(lambda x: x)),
+        ("RandomApply", lambda T: T.RandomApply([T.ToTensor()], p=0.3)),
+        ("RandomChoice", lambda T: T.RandomChoice([T.ToTensor(), T.CenterCrop(2)])),
+        ("RandomOrder", lambda T: T.RandomOrder([T.ToTensor(), T.CenterCrop(2)])),
+        ("RandomVerticalFlip", lambda T: T.RandomVerticalFlip(p=0.5)),
+        ("Pad", lambda T: T.Pad(2)),
+        ("Pad(four sides)", lambda T: T.Pad((1, 2, 3, 4), fill=1, padding_mode="reflect")),
+        ("Grayscale", lambda T: T.Grayscale(3)),
+        ("RandomGrayscale", lambda T: T.RandomGrayscale(p=0.1)),
+        ("FiveCrop", lambda T: T.FiveCrop(3)),
+        ("TenCrop", lambda T: T.TenCrop((3, 2), vertical_flip=True)),
+        ("RandomResizedCrop", lambda T: T.RandomResizedCrop(4)),
+        ("RandomErasing", lambda T: T.RandomErasing()),
     )
     for name, build in reprs:
         cases.append((VISION_PREFIX + f"repr::{name}",
                       lambda L, b=build: repr(b(_vision(L)))))
+
+    # **This one needs the library as well as its transforms** — torchvision's constructor
+    # takes tensors, so the matrix has to be built in whichever library is being asked.
+    def linear_repr(L):
+        T = _vision(L)
+        return repr(T.LinearTransformation(L.tensor(np.eye(3, dtype=np.float32)),
+                                           L.tensor(np.zeros(3, dtype=np.float32))))
+
+    cases.append((VISION_PREFIX + "repr::LinearTransformation", linear_repr))
     return cases
 
 
