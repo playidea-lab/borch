@@ -350,6 +350,21 @@ class ToTensor:
     """
 
     def __call__(self, pic):
+        # **A tuple is what `FiveCrop` and `TenCrop` hand back**, and it survives
+        # `asarray` as a stacked 4-D array — so without this the refusal below reads
+        # `it received (5, 2, 2, 3)` and leaves the caller to work out that the five is
+        # five pictures. torchvision's own documentation answers it with `Lambda`.
+        #
+        # Prompted by the sister library, where the same composition type-checked and
+        # died inside `ToTensor` instead: a shared interface widened to admit several
+        # pictures authorises them everywhere it is accepted.
+        if isinstance(pic, (tuple, list)):
+            raise TypeError(
+                f"ToTensor takes one picture — {len(pic)} arrived together.\n"
+                "  `FiveCrop` and `TenCrop` hand back several. Put a `Lambda` after\n"
+                "  them to turn the group into one tensor:\n"
+                "  Compose([FiveCrop(size), Lambda(lambda crops: "
+                "stack([ToTensor()(c) for c in crops]))])")
         arr = _np.asarray(pic)
         if arr.ndim == 2:
             arr = arr[:, :, None]
@@ -1092,6 +1107,15 @@ def _working_dtype(dtype):
     truncates back to uint8. Doing the arithmetic in float64 instead moves a value
     across the truncation boundary — measured, one pixel of one case at
     `adjust_saturation(1.7)`, which is the whole difference and enough to fail.
+
+    **The deciding question is whether a narrowing cast comes after the arithmetic.**
+    If it does, the working dtype chooses the output and no tolerance covers picking
+    wrong — this function is that decision, which is why it is a function rather than
+    an expression. If it does not, matching numpy's promotion is free and should be
+    done anyway, so that nobody later "simplifies" it: the sister library measured
+    that same weighted sum and found 0 of 20 pixels exact in float64 against 20 of 20
+    with every product and partial sum narrowed, while both passed the tolerance the
+    whole time.
     """
     return _np.float32 if _np.dtype(dtype).kind != "f" else dtype
 

@@ -440,7 +440,7 @@ NOT_PORTED = {
     # 앞의 넷은 클래스 하나를 쓰면 닫히고, 뒤의 열다섯은 `vision.ts` 에 새 모듈이
     # 생겨야 한다. 한 수로 적으면 "열아홉 남았다" 로 읽히고 그 둘이 같은 크기의
     # 일처럼 보인다.
-    "vision::": (19, "아직 — `ColorJitter` 넷 · `transforms.functional` 열다섯 (값 17 · repr 2)"),
+    "vision::": (45, "아직 — `ColorJitter` 넷 · 픽셀 여섯과 그 래퍼 · `transforms.functional` (값 37 · repr 8)"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

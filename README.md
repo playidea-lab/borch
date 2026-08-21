@@ -593,17 +593,17 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2693 cases. The remaining 379 are **two different
+borch.ts itself has written TS bodies for 2693 cases. The remaining 405 are **two different
 things, and counting them as one hides the second**. 360 are **deliberately not
 carried across** — the binding (`borch-webgpu`) already goes through borch.ts's kernels on
 those cases, so **the values are verified**, and what a TS body would add is not a
 value but this side's surface: names and argument order. A good many of them ask
 about a Python name alias, so carrying them across would ask the same question
-twice. The other 19 are **owed**: the `borchvision` work that arrived after
+twice. The other 45 are **owed**: the `borchvision` work that arrived after
 borch.ts's `vision.ts` was written. `vision.ts` now carries twenty of the
 twenty-one transforms; what is left is `ColorJitter` and the
 `transforms.functional` namespace, which does not exist on the TS side at all.
-Those are a backlog rather than a decision, and calling all 379 deliberate would
+Those are a backlog rather than a decision, and calling all 405 deliberate would
 make the backlog invisible by counting it as a choice. The runner keeps printing
 the total rather than letting it shrink quietly.
 

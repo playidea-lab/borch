@@ -604,3 +604,24 @@ def test_edge_and_symmetric_are_not_the_same_padding():
                               V.Pad(2, padding_mode="symmetric")(img)), (
         "edge and symmetric give the same answer at a padding of two, so nothing here "
         "can tell them apart")
+
+
+def test_totensor_says_what_to_do_when_a_group_of_crops_arrives():
+    """`Compose([FiveCrop(3), ToTensor()])` is a natural thing to write and a wrong
+    one, and **the refusal has to say which part is wrong.**
+
+    Without the guard the tuple survives `asarray` as a stacked 4-D array and the
+    message reads `it received (5, 2, 2, 3)` — true, and it leaves the reader to work
+    out that the five is five pictures. This project's standard for an error is that it
+    says what to do, and the answer is torchvision's own: a `Lambda`.
+
+    Found from the sister library, where the same composition type-checked and died
+    inside `ToTensor` with a shape complaint instead.
+    """
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    with pytest.raises(TypeError, match="Lambda"):
+        V.Compose([V.FiveCrop(2), V.ToTensor()])(img)
+    # And the way through still works, so the message is advice rather than a wall.
+    out = V.Compose([V.FiveCrop(2),
+                     V.Lambda(lambda crops: [V.ToTensor()(c) for c in crops])])(img)
+    assert len(out) == 5 and out[0].shape == (3, 2, 2)
