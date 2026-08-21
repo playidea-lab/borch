@@ -397,122 +397,141 @@ asynchrony.
 
 The design and the measurements are in [WEBGPU-DESIGN.md](WEBGPU-DESIGN.md).
 
-## 지원 범위
+## The supported range
 
 | | |
 |---|---|
-| **텐서** | 모양·브로드캐스팅·dtype 승격 · 인덱싱 · reshape/view/permute/squeeze · split·chunk·flip·roll·gather·narrow·index_select·masked_select |
-| **autograd** | `requires_grad` · `backward()` · `.grad` · `no_grad()` · `detach()` · 누적 |
-| **축약** | `sum`·`mean`·`max`·`min`·`prod`·`median`·`norm`·`cumsum`·`topk`·`sort`·`unique`·`std` — 역전파 포함 |
-| **nn** | `Module` · `Linear` · `Conv1d/2d/3d` · `MaxPool1d/2d/3d` · `Upsample` · `Embedding` · `LayerNorm` · `BatchNorm1d/2d/3d` · `Dropout` · `Sequential` · `ModuleList` |
-| **순환** | `RNN` · `LSTM` · `GRU` — 다층 · `batch_first` · 초기 상태. **최상위 함수 꼴도** (`torch.lstm`·`lstm_cell` 등 여덟) — 가중치를 목록으로 받는다. 양방향과 층간 드롭아웃은 거절한다 |
-| **트랜스포머** | `MultiheadAttention` · 인코더·디코더 층 · `nn.Transformer` — 불리언·실수 마스크 · `norm_first` · gelu |
-| **손실** | `MSELoss`·`L1Loss`·`SmoothL1Loss`·`BCELoss`·`BCEWithLogitsLoss`·`CrossEntropyLoss`·`NLLLoss` |
-| **optim** | `SGD`(momentum·weight_decay) · `Adam` · `AdamW` · `RMSprop` — `param_groups` · `state_dict` |
-| **스케줄러** | `StepLR` · `MultiStepLR` · `ExponentialLR` · `CosineAnnealingLR` · `LambdaLR` · `ReduceLROnPlateau` |
-| **데이터** | `Dataset` · `TensorDataset` · `Subset` · `ConcatDataset` · `DataLoader` · `WeightedRandomSampler` · `random_split(generator=)` · `collate_fn` |
-| **저장** | `state_dict` · `load_state_dict` · `save`/`load` · 버퍼(`running_mean` 등) 포함 |
-| **nn.functional** | 25종 — 활성·손실·`pad`·`normalize`·`cosine_similarity`·`one_hot`·`layer_norm`·`embedding` |
-| **복소수** | `complex64` 만 — `complex`·`polar`·`view_as_real`/`view_as_complex`·`real`/`imag`/`conj`/`angle`/`abs` · 산술 · autograd. **셋 다에 있다** (아래) |
-| **푸리에** | `fft.fft`/`ifft`/`rfft`/`irfft` · `fftfreq`/`rfftfreq`/`fftshift`/`ifftshift` · `stft`/`istft` — `n`·`dim`·`norm` 과 역전파. **셋 다에 있다** |
+| **tensors** | shapes, broadcasting, dtype promotion, indexing, reshape/view/permute/squeeze, split, chunk, flip, roll, gather, narrow, index_select, masked_select |
+| **autograd** | `requires_grad`, `backward()`, `.grad`, `no_grad()`, `detach()`, accumulation |
+| **reductions** | `sum`, `mean`, `max`, `min`, `prod`, `median`, `norm`, `cumsum`, `topk`, `sort`, `unique`, `std` — backward included |
+| **nn** | `Module`, `Linear`, `Conv1d/2d/3d`, `MaxPool1d/2d/3d`, `Upsample`, `Embedding`, `LayerNorm`, `BatchNorm1d/2d/3d`, `Dropout`, `Sequential`, `ModuleList` |
+| **recurrence** | `RNN`, `LSTM`, `GRU` — multi-layer, `batch_first`, an initial state. **The top-level function forms too** (`torch.lstm`, `lstm_cell` and six others) — they take the weights as a list. Bidirectionality and inter-layer dropout are refused |
+| **transformers** | `MultiheadAttention`, encoder and decoder layers, `nn.Transformer` — boolean and float masks, `norm_first`, gelu |
+| **losses** | `MSELoss`, `L1Loss`, `SmoothL1Loss`, `BCELoss`, `BCEWithLogitsLoss`, `CrossEntropyLoss`, `NLLLoss` |
+| **optim** | `SGD` (momentum, weight_decay), `Adam`, `AdamW`, `RMSprop` — `param_groups`, `state_dict` |
+| **schedulers** | `StepLR`, `MultiStepLR`, `ExponentialLR`, `CosineAnnealingLR`, `LambdaLR`, `ReduceLROnPlateau` |
+| **data** | `Dataset`, `TensorDataset`, `Subset`, `ConcatDataset`, `DataLoader`, `WeightedRandomSampler`, `random_split(generator=)`, `collate_fn` |
+| **saving** | `state_dict`, `load_state_dict`, `save`/`load`, buffers (`running_mean` and the like) included |
+| **nn.functional** | 25 of them — activations, losses, `pad`, `normalize`, `cosine_similarity`, `one_hot`, `layer_norm`, `embedding` |
+| **complex** | `complex64` only — `complex`, `polar`, `view_as_real`/`view_as_complex`, `real`/`imag`/`conj`/`angle`/`abs`, arithmetic, autograd. **In all three** (below) |
+| **Fourier** | `fft.fft`/`ifft`/`rfft`/`irfft`, `fftfreq`/`rfftfreq`/`fftshift`/`ifftshift`, `stft`/`istft` — `n`, `dim`, `norm` and the backward. **In all three** |
 
-### 복소수 — `complex64` 만
+### Complex numbers — `complex64` only
 
-`complex128` 은 **영원히 없다.** WGSL 에 `f64` 가 없어서 브라우저에서 도는 절반이
-그것을 못 든다. 그래서 이름은 두되, `complex64 + float64` 처럼 승격이 그것을 만들려는
-자리에서 **조용히 내려앉지 않고 멈춘다** — torch 는 여기서 `complex128` 을 준다.
-값이 반쯤 맞는 것보다 여기서 서는 편이 낫다는 이 저장소의 같은 선택이다.
+There will **never** be a `complex128`. WGSL has no `f64`, so the half that runs in
+a browser cannot carry it. The name is kept, and where promotion tries to produce
+it — `complex64 + float64` — it **stops rather than quietly settling for less.**
+torch gives `complex128` there. It is this repository's usual choice: standing
+still here beats a value that is half right.
 
-기울기 규약은 재서 못 박았다: **torch 는 복소 손실에 `backward()` 를 거절한다.**
-손실이 늘 실수라면 규약은 하나로 정해진다 —
+The gradient convention was pinned by measurement: **torch refuses `backward()` on
+a complex loss.** If the loss is always real, the convention is settled —
 
     z.grad = ∂L/∂re + i·∂L/∂im
 
-그 위에서 **정칙 함수의 역방향에는 켤레가 붙고**(곱셈·나눗셈: `conj(f'(z))·g`),
-실수를 내는 `abs` 에는 안 붙는다(`z/|z|`). 실수 입력만으로는 이 차이가 안 보인다 —
-켤레가 실수에서 항등이라서다. 그래서 골든이 셋을 한 표에서 묻는다.
+On top of that, **a holomorphic function's backward takes a conjugate**
+(multiplication and division: `conj(f'(z))·g`), and `abs`, which produces a real,
+does not (`z/|z|`). Real input alone never shows the difference — the conjugate is
+the identity over the reals. So the golden asks about all three in one table.
 
-**`conj` 가 torch 와 갈린다.** torch 의 `conj` 는 **게으르다** — 켤레 비트만 세우고
-값을 안 뒤집는다. 그래서 `torch.is_conj(torch.conj(z))` 가 `True` 이고,
-`view_as_real` 은 "풀지 않은 켤레" 라며 거절한다. 우리 것은 즉시 뒤집으므로
-그 상태가 아예 없고, **`is_conj` 는 언제나 `False`** 다. 값은 같다 —
-`conj_physical` 로 물으면 양쪽이 같은 답을 낸다.
+**`conj` diverges from torch's.** torch's `conj` is **lazy** — it raises the
+conjugate bit and does not flip the values. So `torch.is_conj(torch.conj(z))` is
+`True`, and `view_as_real` refuses, calling it an unresolved conjugate. This one
+flips immediately, so that state does not exist at all and **`is_conj` is always
+`False`.** The values agree — asked through `conj_physical`, both sides give the
+same answer.
 
-**borch.ts 의 저장은 인터리브다** — `[re, im, re, im, …]` 한 버퍼. 그래서
-`view_as_real`·`view_as_complex` 가 **진짜 뷰**이고(torch 도 그렇다), 대신 오래된
-불변식 `size = 버퍼 길이` 가 `버퍼 길이 = size × 2` 로 갈린다. 그것을 모르는 커널이
-복소수 버퍼를 읽으면 앞쪽 절반만 실수로 보고 **예외 없이** 틀린 답을 내므로,
-**기본값이 거절**이다 — 복소수를 아는 연산만 따로 문을 지난다. `Tensor.from` 으로
-형만 `complex64` 라고 붙이는 것, 이름표 갈이(`to`), 체크포인트 저장도 같은 이유로
-막혀 있다.
+**borch.ts stores them interleaved** — one buffer of `[re, im, re, im, …]`. That
+makes `view_as_real` and `view_as_complex` **real views** (as they are in torch),
+and in exchange the old invariant `size = buffer length` becomes
+`buffer length = size × 2`. A kernel that does not know this reads a complex
+buffer, sees the first half as reals, and produces a wrong answer **with no
+exception** — so **the default is refusal**, and only the operations that know
+about complex numbers pass through their own gate. Attaching the `complex64` label
+alone through `Tensor.from`, relabelling through `to`, and saving a checkpoint are
+blocked for the same reason.
 
-### 푸리에 — `torch.fft` 와 `stft`
+### Fourier — `torch.fft` and `stft`
 
-**복소수 위에 선다.** `stft` 는 오래 거절이었고 거절문에 "복소수 규약을 안 정했다"
-고 적혀 있었다. 그 이유가 **정확했기 때문에** 규약이 정해진 날 문이 열렸다 — "저장이
-없다" 로 적어 두었으면 저장이 생긴 뒤에도 아무도 다시 안 물었을 것이다.
+**It stands on complex numbers.** `stft` was a refusal for a long time and the
+refusal said "the complex convention has not been settled". **Because that reason
+was precise**, the door opened on the day the convention was settled — written as
+"there is no storage", nobody would have asked again after the storage arrived.
 
-`stft` 는 새 커널이 아니라 **조립이다** — 자르고 · 창을 곱하고 · `rfft`. 셋 다 이미
-미분되는 이름이라 **기울기가 저절로 맞는다.** 손으로 커널을 쓰면 순방향은 금방 맞고
-역방향이 창과 겹침을 다 지나야 해서, 틀리면 값은 그럴듯하고 학습만 안 된다.
+`stft` is **an assembly** rather than a new kernel — slice, multiply by the window,
+`rfft`. All three are already differentiable names, so **the gradient comes out
+right on its own.** Writing the kernel by hand, the forward comes out right
+quickly and the backward has to travel through the window and the overlap; getting
+it wrong leaves plausible values and training that does not train.
 
-브라우저 쪽은 **DFT 를 그대로 돈다 — O(n²) 다.** 쿨리-튜키는 2 의 거듭제곱에서만
-빠르고 아닌 길이는 블루스타인이 따로 필요한데, **값은 어느 쪽이든 같고** 이 프로젝트의
-천장에서는 차이가 안 보인다. 빨라야 하는 날이 오면 그때 바꾸되, 지금 없는 속도를
-있는 것처럼 적지 않는다. 회전인자는 **호스트에서 배정도로 만들어 올린다** —
-셰이더의 `cos`/`sin` 은 정확도가 구현에 맡겨져 있고, 실제로 사각창 `stft` 한 자리가
-상대오차 2.7e-4 로 골든을 벗어났다(f32 반올림으로는 설명이 안 되는 크기다).
+The browser side **runs the DFT directly — O(n²).** Cooley-Tukey is fast at
+powers of two alone and other lengths need Bluestein separately, and **the values
+are the same either way**; at this project's ceiling the difference is invisible.
+The day speed is needed it can change, and until then speed that does not exist is
+not written down as though it did. The twiddle factors are **built on the host in
+double precision and uploaded** — a shader's `cos` and `sin` have
+implementation-defined accuracy, and one rectangular-window `stft` really did fall
+outside the golden at a relative error of 2.7e-4 (a size f32 rounding does not
+explain).
 
-기울기에서 어려운 자리는 값이 아니라 **어느 쪽 반쪽을 세는가** 다. `rfft` 의 역방향은
-저장된 반쪽에만 기울기가 오므로 켤레 짝을 **안** 더하고(더하면 두 배), `irfft` 는
-되살린 켤레 짝이 같은 칸에서 왔으므로 **가장자리만 한 번, 가운데는 두 번** 센다.
-둘 다 순방향 값은 멀쩡한 채로 틀릴 수 있는 자리다.
+The hard part of the gradient is not a value but **which half gets counted.**
+`rfft`'s backward receives gradient on the stored half alone, so it does **not**
+add the conjugate partner (adding it doubles); and `irfft`'s revived conjugate
+partners came from the same cells, so it counts **the edges once and the middle
+twice.** Both are places that can be wrong while the forward values stay sound.
 
-> **`abs` 의 칼날.** 골든의 `stft` 기울기 케이스가 고르지 않은 수를 쓰는 데는 이유가
-> 있다. 경사 신호는 나이퀴스트 칸이 **정확히 0** 이 되는데 거기서 `abs` 는 미분
-> 불가능하고 부호가 반올림에 달린다 — 우리는 float64 로 누산해 +1 을, torch 는
-> float32 FFT 라 0 을 골랐다. 규칙이 갈린 것이 아니라 **케이스가 칼날 위에 선 것**
-> 이고, 그런 것을 굳히면 골든이 부동소수 우연을 명세로 박제한다.
+> **`abs`'s knife edge.** There is a reason the golden's `stft` gradient case uses
+> uneven numbers. A ramp signal makes the Nyquist bin **exactly 0**, and there
+> `abs` is not differentiable and the sign depends on rounding — accumulating in
+> float64 chose +1 and torch's float32 FFT chose 0. The rules did not diverge;
+> **the case was standing on the knife edge**, and pinning one of those mounts a
+> floating-point accident as the specification.
 
-**`print` 도 명세다.** torch 는 복소수를 찍을 때 **실수부와 허수부를 따로 잰다** —
-`[1+2j, -0.5-1j]` 에서 실수부는 소수 네 자리를 요구하고 허수부는 정수라
-`1.0000+2.j` 가 된다. 한 형식으로 재면 `1.0000+2.0000j` 가 나오는데, 값이 전부
-맞는 채로 글자만 갈린다. 자리맞춤도 실수부에만 걸려서 `1.-0.j` 처럼 **음의 0** 이
-산다 — 그 부호 하나가 이 결속의 읽기 경로에서 `-0.0` 을 잃고 있던 것을 잡았다.
-`-0.0 == 0.0` 이라 값 대조로는 영영 안 걸렸을 자리다.
+**`print` is part of the specification too.** Printing a complex number, torch
+**measures the real and imaginary parts separately** — in `[1+2j, -0.5-1j]` the
+real part demands four decimal places and the imaginary part is integral, giving
+`1.0000+2.j`. Measured under one format it comes out `1.0000+2.0000j`, with every
+value right and the characters diverged. The padding applies to the real part
+alone, so a **negative zero** survives, as in `1.-0.j` — and that one sign caught
+this binding losing `-0.0` on its read path. `-0.0 == 0.0`, so a value comparison
+would never have caught it.
 
-## torchvision — `transforms` 만 (`borchvision`)
+## torchvision — `transforms` only (`borchvision`)
 
-파이토치 입문 튜토리얼의 **첫 열 줄이 torchvision** 이다.
+**The first ten lines of an introductory PyTorch tutorial are torchvision.**
 
 ```python
 datasets.MNIST(root, transform=transforms.ToTensor())
 ```
 
-"임포트만 바꿔 같은 값을 낸다"는 약속이 여기서 먼저 걸리므로, `transforms` 는 있다.
-별도 파일인 이유는 `torchvision.transforms` 이지 `torch.transforms` 가 아니어서다 —
-코어 안에 넣으면 진짜 torch 에 **없는 자리**를 만들게 된다.
+The promise of "the same values with one import changed" catches here first, so
+`transforms` exists. It is a separate file because it is
+`torchvision.transforms` rather than `torch.transforms` — put inside the core it
+would create **a place real torch does not have.**
 
 ```python
 import borchvision as torchvision
 from borchvision import transforms
 ```
 
-| 있는 것 | `Compose` · `ToTensor` · `Normalize` · `RandomHorizontalFlip` · `RandomCrop` |
+| what is here | `Compose`, `ToTensor`, `Normalize`, `RandomHorizontalFlip`, `RandomCrop` |
 |---|---|
-| **`datasets`** | 없다. 받아오는 쪽이 막혀 있다 — `cs.toronto.edu` 가 CORS 헤더를 안 준다(실측). 게다가 torch 의 `download=True` 는 받아두고 재사용하는데 Pyodide 파일시스템은 새로고침에 날아간다. **바이트를 손에 넣은 뒤는 이미 된다** (`fetch_cached`·`cache_put`·`TensorDataset`) |
-| **`ops`** | 없다. `nms` 는 numpy 로 짧아서 "크다"는 이유는 거짓이고, 진짜 이유는 아무도 그 앞에 안 선다는 것이다 — 검출은 사전학습 백본과 COCO 급 데이터가 있어야 끝까지 간다 |
-| **사전학습 가중치** | 없다. `.pth` 는 pickle 이라 torch 내부 클래스를 흉내 내야 읽히고, 미묘하게 틀리면 모양 맞는 가중치에 틀린 수가 들어온다. ResNet-18 만 45MB 이며, 무엇보다 `pretrained=True` 가 돌면 사람들은 발표된 top-1 과 비교한다 — 비트 동등은 명시적 비목표라 지킬 수 없는 약속이다 |
+| **`datasets`** | absent. The fetching side is blocked — `cs.toronto.edu` sends no CORS header (measured). And torch's `download=True` keeps the download and reuses it, while Pyodide's filesystem is gone on a refresh. **Once the bytes are in hand it already works** (`fetch_cached`, `cache_put`, `TensorDataset`) |
+| **`ops`** | absent. `nms` is short in numpy, so "it is large" would be a false reason; the real one is that nobody stands in front of it — detection needs a pre-trained backbone and COCO-scale data to reach the end |
+| **pre-trained weights** | absent. A `.pth` is a pickle, so reading it means imitating torch's internal classes, and getting that subtly wrong brings wrong numbers in correctly shaped weights. ResNet-18 alone is 45MB, and above all, once `pretrained=True` runs people compare against the published top-1 — bit equivalence is an explicit non-goal, so that is a promise it cannot keep |
 
-**난수는 torch 와 다르다.** 같은 씨앗을 줘도 torchvision 과 같은 장면이 나오지 않는다 —
-torch 의 난수기를 쓸 수 없어서다. 그래서 골든은 확률을 0·1 로 못 박은 자리만 대조하고,
-뽑기가 실제로 도는지는 `tests/test_vision.py` 가 분포로 본다. 둘 중 하나만 하면
-"무작위니까 못 잰다"로 안 잰 것을 잰 것처럼 적게 된다.
+**The random numbers differ from torch's.** The same seed does not produce
+torchvision's picture — torch's generator cannot be used. So the golden compares
+only where the probability is pinned at 0 or 1, and whether the draws actually
+happen is checked by distribution in `tests/test_vision.py`. Doing one of the two
+alone means writing down something unmeasured as measured, under cover of "it is
+random, so it cannot be measured".
 
-## borch.ts — TypeScript 와 WGSL
+## borch.ts — TypeScript and WGSL
 
-파이썬을 안 거친다. **TF.js 도 안 거친다** — 커널을 WGSL 로 직접 썼다.
-런타임 의존성이 **0개**이고, 브라우저가 그냥 읽는 ES 모듈이다(gzip 242KB, 압축 전 834KB).
+It does not go through Python. **It does not go through TF.js either** — the
+kernels are written directly in WGSL. **Zero** runtime dependencies, and an ES
+module a browser simply reads (242KB gzipped, 834KB before compression).
 
 ```bash
 npm install borch
@@ -521,7 +540,7 @@ npm install borch
 ```ts
 import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
 
-await init();                                   // WebGPU 어댑터를 잡는다
+await init();                                   // acquire a WebGPU adapter
 
 const model = new nn.Sequential(
   new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));
@@ -532,7 +551,7 @@ const x = keepAlive(Tensor.from(pixels, [32, 784]));
 const y = keepAlive(Tensor.from(labels, [32], { dtype: "int64" }));
 
 for (let i = 0; i < steps; i++) {
-  await scope(async () => {                     // 한 스텝의 중간 버퍼를 놓는다
+  await scope(async () => {                     // release one step's intermediate buffers
     opt.zeroGrad();
     const loss = crit.call(model.call(x), y);
     loss.backward();
@@ -542,36 +561,52 @@ for (let i = 0; i < steps; i++) {
 }
 ```
 
-**이 예시는 실제로 돈다** — `npm run example:ts` 가 그대로 실행하고 손실이 내려가는
-것까지 본다. 문서의 코드는 안 돌리면 썩고, 이 저장소는 설치 안내가 실제로는 안 듣던
-것을 이미 두 번 잡았다.
+**This example really runs** — `npm run example:ts` executes it as written and
+watches the loss go down. Code in documentation rots unless it is run, and this
+repository has twice caught installation instructions that did not actually
+work.
 
-### Pyodide 에서 파이썬으로 — `borch_webgpu`
+### From Pyodide, in Python — `borch_webgpu`
 
-파이썬 코드를 **borch.ts 위에서** 돌린다. 결속이 하는 일은 위의 네 가지
-차이(`await init()`·`await item()`·`scope()`·`.call()`)를 감추는 것이다.
+It runs Python code **on top of borch.ts.** What the binding does is hide the four
+differences above (`await init()`, `await item()`, `scope()`, `.call()`).
 
 ```python
-import borch_webgpu as torch          # 별칭이면 대부분 된다
+import borch_webgpu as torch          # an alias covers most of it
 ```
 
-WebGPU 에 동기 읽기가 없는데도 **`await` 이 안 나온다.** Pyodide 의 `run_sync`(JSPI)가
-그 자리를 메운다 — 재봤고(`tests/browser/sync_probe.py`), 조건이 하나 있다: 페이지가
-비동기로 파이썬에 들어와야 한다. 러너는 이미 그렇게 들어간다.
+WebGPU has no synchronous read and **no `await` appears anyway.** Pyodide's
+`run_sync` (JSPI) fills that place — measured (`tests/browser/sync_probe.py`), with
+one condition: the page has to enter Python asynchronously. The runner already
+does.
 
-`from borch_webgpu.nn import Linear` 처럼 하위 경로가 필요하면 `borch_webgpu.install()` 을
-부른다. 기본값이 자기 이름이라 남의 `import torch` 는 안 건드린다 — 위의 표와 같은
-선택이다.
+If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
+`borch_webgpu.install()`. It defaults to its own name, so somebody else's
+`import torch` is untouched — the same choice as the table above.
 
-**골든 2991 건 전부**를 지난다 — 표에서 이쪽만 건너뛰는 것이 하나도 없다. 코어는
-그중 2930 건을 보는데, 나머지 53 건은 코어가 일부러 거절하는 것들(1·3 차원 합성곱,
-랭크 7·8)이라 안 묻는다.
+It passes **all 2991 golden cases** — nothing in the table is skipped on this side
+alone. The core covers 2938 cases, and the remaining 53 are ones the core refuses
+on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of it.
 
-borch.ts 자신은 2352 건에 TS 본문을 써 두었다. 나머지 608 건은 **일부러 안 옮겼다** —
-결속(`borch-webgpu`)이 이미 그 케이스들에서 borch.ts 커널을 지나므로 **값은 검증되고
-있고**, TS 본문이 추가로 증명하는 것은 값이 아니라 이쪽 표면(이름과 인자 순서)이다.
-그중 상당수는 파이썬 이름 별칭을 묻는 것이라 옮기면 같은 질문이 두 번이 된다.
-줄지 않는 그 수를 러너가 계속 찍는다 — 은근히 사라지는 것보다 낫다.
+> That number said 2930 until this translation. The phrasing around it was
+> `보는데` rather than `본다`, so `test_docs.py`'s pattern never matched it and the
+> figure went stale unwatched while the two beside it stayed current. It is 2938,
+> measured. The English wording now matches the pattern, so it is watched.
+
+borch.ts itself has written TS bodies for 2352 cases. The remaining 608 are
+**deliberately not carried across** — the binding (`borch-webgpu`) already goes
+through borch.ts's kernels on those cases, so **the values are verified**, and what
+a TS body would add is not a value but this side's surface: names and argument
+order. A good many of them ask about a Python name alias, so carrying them across
+would ask the same question twice. The runner keeps printing that number rather
+than letting it shrink quietly.
+
+> **Those last two figures are not verified from here.** The count comes from the
+> browser runner, so confirming it needs `borch-ts/test/missing.py` under
+> playwright. They are carried across as written rather than re-derived, because a
+> grep over `cases.ts` gives 401 — `cases.ts` builds names programmatically and a
+> text search cannot see them, which is the same reason `test_docs.py` parses
+> rather than greps.
 
 ### torch 와 갈리는 여섯 자리
 

@@ -134,7 +134,12 @@ LINE_DOCS = ("README.md", "borch_webgpu/__init__.py", "borch/__init__.py")
 # `test_the_documents_still_make_the_claims_this_file_checks` for why a count
 # rather than a presence check.
 CLAIMS = {
-    ("README.md", "golden"): 4,
+    # Five since the "The core covers 2938 cases" sentence became visible.
+    # It read `보는데` rather than `본다` in Korean, so the pattern never
+    # matched it and the figure sat stale at 2930 while the two beside it
+    # stayed current. Translating it into a phrasing the pattern catches is
+    # what put it under watch.
+    ("README.md", "golden"): 5,
     ("site/index.html", "golden"): 1,
     ("site/ko/index.html", "golden"): 1,
     ("README.md", "lines"): 4,
