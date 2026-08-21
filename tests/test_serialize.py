@@ -1,16 +1,17 @@
-"""`save`/`load` 의 **골든이 안 묻는 자리**.
+"""**Where the golden cases do not ask** about `save`/`load`.
 
-골든은 값을 묻는다 — 쓴 것을 되읽으면 같은가. 그것은 세 구현에서 다 돌고 실제로
-돈다. 여기서 묻는 것은 그 바깥이다.
+The golden cases ask about values — read back what was written, is it the same. That runs in
+all three implementations and really does run. What is asked here is outside that.
 
-- **거절.** 이 형식이 못 담는 것을 조용히 담지 않는가. 거절 코드는 짜기는 쉬운데
-  한 번도 안 돌려보면 문구만 있고 동작이 없는 채로 남는다.
-- **바이트 동등.** 같은 것을 두 번 저장하면 같은 파일인가. 이름 순서를 고정한
-  이유가 그것이고, 안 물으면 사전 순서가 바뀌는 날 조용히 깨진다.
-- **남의 파일.** `borch.tree` 가 없는 safetensors 를 평평한 사전으로 읽는가.
-  브라우저가 쓴 파일이 그 모양이라 이 갈래가 실제 경로다.
-- **결속의 갈래.** 코덱은 하나지만 텐서를 꺼내고 되돌리는 두 함수는 다르다.
-  브라우저 없이 그 자리에 numpy 를 끼워 같은 바이트가 나오는지 본다.
+- **Refusal.** Does it quietly store what this format cannot hold? Refusal code is easy to
+  write and, never once exercised, stays as wording with no behaviour behind it.
+- **Byte equality.** Saving the same thing twice, is it the same file? That is why the name
+  order is fixed, and unasked it breaks quietly the day dictionary order changes.
+- **Somebody else's file.** Does a safetensors file with no `borch.tree` read as a flat dict?
+  What the browser writes has that shape, so this branch is a real path.
+- **The binding's branch.** The codec is one, but the two functions that take a tensor apart
+  and put it back are different. numpy is fitted into that place, without a browser, to see
+  whether the same bytes come out.
 """
 
 import pathlib
@@ -32,8 +33,8 @@ def _tmp(name):
 
 
 def test_save_refuses_integers_float32_cannot_hold_exactly():
-    # 2^24 를 넘는 정수는 f32 에서 이웃한 값과 구별되지 않는다. 몸이 f32 인 것은
-    # borch.ts 가 읽을 수 있게 하려는 선택이므로, 그 대가를 조용히 치르면 안 된다.
+    # An integer past 2^24 is indistinguishable from its neighbour in f32. The body being f32
+    # is a choice made so borch.ts can read it, so that price must not be paid quietly.
     big = borch.tensor(np.array([2 ** 24 + 1], dtype=np.int64))
     with pytest.raises(BorchError, match="integer too large"):
         borch.save({"labels": big}, _tmp("big.bin"))
@@ -47,7 +48,7 @@ def test_save_accepts_integers_at_the_exact_boundary():
 
 
 def test_save_refuses_an_object_the_format_cannot_hold():
-    # pickle 은 아무거나 담았다. 이 형식은 못 담고, 못 담는 것은 말해야 한다.
+    # pickle held anything. This format cannot, and what it cannot hold it has to say.
     with pytest.raises(BorchError, match="cannot be stored"):
         borch.save({"fn": len}, _tmp("obj.bin"))
 
@@ -59,8 +60,8 @@ def test_save_refuses_complex():
 
 
 def test_save_refuses_two_paths_that_flatten_to_one_name():
-    # `{"a": {"b": t}}` 와 `{"a.b": t}` 는 같은 이름으로 펴진다. 하나가 다른 하나를
-    # 덮으면 되돌릴 때 두 자리가 같은 값을 갖는데, 그것은 예외보다 나쁘다.
+    # `{"a": {"b": t}}` and `{"a.b": t}` flatten to the same name. If one overwrites the other,
+    # both places hold the same value on the way back, which is worse than an exception.
     t = borch.tensor(np.zeros(2, dtype=np.float32))
     with pytest.raises(BorchError, match="appears twice"):
         borch.save({"a": {"b": t}, "a.b": t}, _tmp("dup.bin"))
@@ -87,8 +88,8 @@ def test_load_reads_a_file_object_and_save_writes_one():
 
 
 def test_load_ignores_weights_only_and_map_location():
-    # torch 코드가 이 둘을 붙여 부른다. 이 형식은 코드를 안 실행하므로 언제나
-    # `weights_only` 쪽이고, 받아만 두는 것이 임포트만 바꾸는 길을 지킨다.
+    # torch code passes these two along. This format executes no code, so it is always on the
+    # `weights_only` side, and merely accepting them keeps the import-only-change path open.
     path = _tmp("kw.bin")
     borch.save({"w": borch.tensor(np.ones(2, dtype=np.float32))}, path)
     got = borch.load(path, weights_only=True, map_location="cpu")
@@ -103,8 +104,8 @@ def test_load_refuses_an_argument_it_does_not_know():
 
 
 def test_a_foreign_safetensors_reads_as_a_flat_dict():
-    # `borch.tree` 가 없는 파일이다 — borch.ts 가 쓴 것이 이 모양이고, 남의 도구가
-    # 쓴 것도 그렇다. 나무가 없으면 중첩을 지어내지 말고 평평하게 준다.
+    # A file with no `borch.tree` — what borch.ts writes has this shape, and so does what
+    # somebody else's tool writes. With no tree, do not invent nesting; hand it back flat.
     blob = encode({"fc.weight": np.array([[1.0, 2.0]], dtype=np.float32)})
     path = _tmp("foreign.bin")
     path.write_bytes(blob)
@@ -128,15 +129,17 @@ def test_a_header_longer_than_the_file_is_refused():
 
 
 def test_the_binding_shaped_hooks_write_the_same_bytes_as_the_core():
-    """**결속이 쓴 파일을 코어가 읽는가** — 브라우저 없이 그 자리를 재는 법.
+    """**Does the core read a file the binding wrote** — how to measure that place with no browser.
 
-    결속은 코덱을 그대로 쓰고 두 갈래만 바꾼다(텐서를 알아보는 잣대, 값을 꺼내고
-    되돌리는 길). 그 두 갈래를 numpy 로 흉내 내면 저쪽이 쓸 바이트가 나온다.
+    The binding uses the codec as it is and changes two branches only (the test for recognising
+    a tensor, and the path for taking a value out and putting it back). Imitating those two
+    branches with numpy produces the bytes the other side would write.
 
-    이것이 없으면 "코덱이 하나니까 같다" 는 주장이지 측정이 아니다. 실제로 이
-    프로젝트는 그 주장 하나를 믿고 파이썬 쪽이 pickle 을 쓰는 것을 오래 못 봤다.
+    Without this, "the codec is one, so they are the same" is a claim and not a measurement.
+    This project believed that one claim and went a long time without seeing that the Python
+    side was using pickle.
     """
-    class Fake:                       # 결속의 `Tensor` 자리
+    class Fake:                       # standing in for the binding's `Tensor`
         def __init__(self, array):
             self.array = array
 
@@ -148,14 +151,14 @@ def test_the_binding_shaped_hooks_write_the_same_bytes_as_the_core():
     theirs = _tmp("binding.bin")
     dump(payload, theirs, array_of)
 
-    # 코어가 그 파일을 연다 — 구조와 값이 그대로여야 한다.
+    # The core opens that file — structure and values have to come through unchanged.
     got = borch.load(theirs)
     assert sorted(got) == ["epoch", "model"]
     assert got["epoch"] == 3
     assert np.array_equal(got["model"]["fc.weight"].data,
                           np.array([[1.5, -2.25]], dtype=np.float32))
 
-    # 그리고 코어가 같은 것을 쓰면 **같은 바이트**여야 한다.
+    # And when the core writes the same thing, it has to be **the same bytes.**
     mine = _tmp("core.bin")
     borch.save({"model": {"fc.weight": borch.tensor(
         np.array([[1.5, -2.25]], dtype=np.float32))}, "epoch": 3}, mine)
@@ -163,7 +166,7 @@ def test_the_binding_shaped_hooks_write_the_same_bytes_as_the_core():
 
 
 def test_parse_gives_back_what_dump_took_for_lists_and_tuples():
-    # 목록과 튜플이 섞인 것도 모양을 지켜야 한다 — 옵티마이저 상태가 그 모양이다.
+    # A mix of lists and tuples has to keep its shape too — optimizer state has that shape.
     payload = {"xs": [borch.tensor(np.ones(2, dtype=np.float32)), 1, "two"],
                "pair": (3, 4.5)}
     path = _tmp("mixed.bin")
@@ -186,8 +189,8 @@ def test_dtype_labels_survive_the_round_trip():
 
 
 def test_parse_is_the_same_function_the_binding_calls():
-    # `parse` 를 직접 불러 본다 — 결속이 부르는 것이 이것이고, 여기서 안 물으면
-    # 그 경로는 브라우저에서만 돌아 실패가 늦게 보인다.
+    # `parse` is called directly — this is what the binding calls, and unasked here that path
+    # runs only in the browser, where a failure shows up late.
     blob = encode({"w": np.array([2.0], dtype=np.float32)})
     path = _tmp("parse.bin")
     path.write_bytes(blob)

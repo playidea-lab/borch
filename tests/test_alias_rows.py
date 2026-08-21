@@ -1,29 +1,38 @@
-"""**"별칭" 이라고 적힌 줄이 정말 별칭인가.**
+"""**Is a row that says "별칭" really an alias?**
 
-`borch-ts/test/run.py` 의 갭 표는 안 옮긴 케이스를 접두어별로 묶고 까닭을 한 줄씩
-적는다. 그중 `별칭` 은 *"옮기면 같은 질문을 두 번 한다"* 는 뜻이고, 그 말이 성립하려면
-**그 이름이 borch.ts 에 다른 철자로 있어야 한다.** 없으면 두 번이 아니라 영이다.
+The gap table in `borch-ts/test/run.py` groups the cases that were not ported by prefix and
+writes one line of reason for each. Among them `별칭` (alias) means *"porting it would ask
+the same question twice"*, and for that to hold **the name has to exist on the borch.ts side
+under a different spelling.** Absent, it is not twice but zero.
 
-이 검사가 있는 까닭: 그 주장이 **세 줄 연속으로 틀렸다.**
+Why this check exists: that claim was **wrong three rows running.**
 
-- `bit::` 24 — "비트 연산의 메서드 이름". 그 메서드 이름들이 저쪽에 없었다.
-- `method2::` 60 — "`multiply`=`mul` 처럼 둘째 이름". 아홉은 이름이 아예 없었다.
-- `top::` 50 — "최상위 제자리 함수". 떨구기 넷이 없어서 못 옮기던 것이었다.
+- `bit::` 24 — "the method names of the bit operations". Those method names were not over there.
+- `method2::` 60 — "a second name, as `multiply`=`mul`". Nine had no name at all.
+- `top::` 50 — "top-level in-place functions". Four droppers were missing, which is why they could not be ported.
 
-셋 다 사람이 한 줄씩 까 보다가 나왔고, 세 번 연속이면 그것은 우연이 아니라 구조다.
-까닭은 **주장**이고, 검사되지 않는 주장은 시간이 지나면 그냥 글자가 된다.
+All three came out of a person opening the rows one by one, and three in a row is not
+coincidence but structure. A reason is **a claim**, and an unchecked claim becomes mere
+lettering with time.
 
-## 무엇을 재는가
+## What it measures
 
-케이스 이름에서 부르는 torch 이름을 뽑아, 선언된 borch.ts 표면과 대조한다. 철자는
-`test_binding_fills_in.py` 와 같은 규칙으로 맞춘다 — **끝 밑줄은 남긴다**(제자리 판과
-아닌 것은 다른 연산이다).
+It pulls the torch name being called out of the case name and compares it against the
+declared borch.ts surface. Spelling is normalised by the same rule as
+`test_binding_fills_in.py` — **the trailing underscore is kept** (the in-place edition and
+the other one are different operations).
 
-## 무엇을 안 재는가
+## What it does not measure
 
-`파이썬`·`없음`·`아직` 줄은 안 본다. 그 셋은 "저쪽에 있다" 고 주장하지 않는다.
-그리고 이름을 못 뽑는 케이스(설명이 이름이 아닌 것들)는 **센 것에서 빼고 그 수를
-말한다** — 조용히 넘기면 이 검사도 남의 주장을 검사 안 한 게 된다.
+The `파이썬`/`없음`/`아직` rows are not looked at. Those three do not claim "it exists over
+there". And cases whose name cannot be pulled out (ones whose title is a description rather
+than a name) are **left out of the count and their number is stated** — passed over quietly,
+this check would itself be a check that does not check somebody's claim.
+
+## Why the Korean words stay
+
+`별칭`, and the prefixes, are **keys into `run.py`'s table**, not prose. They change when
+that file's wording changes, and not before.
 """
 
 import json
@@ -35,26 +44,27 @@ RUNNER = ROOT / "borch-ts" / "test" / "run.py"
 INDEX = ROOT / "site" / "assets" / "api-index.json"
 GOLDEN = ROOT / "tests" / "golden.json"
 
-# 이름을 못 뽑는 자리. **까닭과 함께 적는다** — 비면 이 검사가 조용해진다.
+# Places where the name cannot be pulled out. **Written down with the reason** — left empty, this check goes quiet.
 NOT_A_NAME = {
-    "cache::": "전역 상수가 더럽혀졌는지를 묻는다 — 이름이 아니라 상태다",
-    "grad::": "`vjp` 는 `backward(씨앗)` 이라 케이스 이름이 연산 이름이 아니다",
+    "cache::": "asks whether a global constant got dirtied — that is state, not a name",
+    "grad::": "`vjp` is `backward(seed)`, so the case name is not an operation name",
 }
 
 
 def _flat(name):
-    """`test_binding_fills_in._flat` 과 같은 규칙. 끝 밑줄만 남긴다."""
+    """The same rule as `test_binding_fills_in._flat`. Only the trailing underscore is kept."""
     tail = "_" if name.endswith("_") else ""
     return name.replace("_", "").lower() + tail
 
 
 def _alias_rows():
-    """갭 표에서 `별칭` 이라 적힌 접두어들."""
+    """The prefixes marked `별칭` in the gap table."""
     text = RUNNER.read_text(encoding="utf-8")
     rows = re.findall(r'^\s*"([a-z0-9]+::)":\s*\((\d+),\s*"([^"]*)"\)', text, re.M)
-    # **머리글자로 본다.** 처음엔 `"별칭" in why` 였는데, `dtype::` 의 까닭에 든
-    # "형 별칭" 이라는 다른 뜻의 낱말이 걸렸다 — 표시는 줄 맨 앞의 한 낱말이고
-    # 본문에 같은 글자가 나오는 것과는 다르다.
+    # **Read as a leading word.** It was `"별칭" in why` at first, and that caught
+    # `dtype::`'s reason, where "형 별칭" (type alias) is the same word meaning something else
+    # — the marker is one word at the head of the row, which is not the same as the letters
+    # appearing anywhere in the body.
     return {head for head, _, why in rows if why.startswith("별칭")}
 
 
@@ -63,11 +73,13 @@ def _declared():
             for n in json.loads(INDEX.read_text(encoding="utf-8"))}
 
 
-# 케이스 제목에 **인자 이름**이 앞에 오는 자리들. 연산 이름이 아니므로 안 센다.
+# Places where an **argument name** comes first in the case title. Not an operation name, so
+# not counted.
 #
-# 이 목록이 필요한 이유: 제목은 사람이 읽으라고 쓴 글이지 문법이 아니다. 뽑기가
-# 완벽할 수 없고, **못 뽑는 것을 조용히 넘기면 이 검사도 남의 주장을 검사 안 한
-# 게 된다** — 그래서 세지 않는 것은 여기 이름으로 적고 건너뛴 수를 화면에 낸다.
+# Why this list is needed: a title is writing meant to be read by a person, not a grammar.
+# Extraction cannot be perfect, and **passing over what cannot be pulled out quietly would
+# make this check one that does not check somebody's claim** — so what is not counted is
+# named here and the skipped number is put on screen.
 ARGUMENT_NAMES = {
     "bias_k", "is_causal", "key_padding_mask", "need_weights", "offsets",
     "per_sample_weights", "hard",
@@ -75,9 +87,9 @@ ARGUMENT_NAMES = {
 
 
 def _called_name(case):
-    """케이스 이름에서 부르는 torch 이름. 못 뽑으면 `None`."""
+    """The torch name being called, from the case name. `None` if it cannot be pulled out."""
     rest = case.split("::", 1)[1]
-    # `제자리::foo_` 처럼 한 칸 더 들어간 자리는 마지막 칸이 이름이다.
+    # Where there is one more segment, as in `제자리::foo_`, the last segment is the name.
     leaf = rest.split("::")[-1]
     hit = re.match(r"([A-Za-z_][A-Za-z_0-9]*)", leaf)
     if hit is None or hit.group(1) in ARGUMENT_NAMES:
@@ -86,9 +98,9 @@ def _called_name(case):
 
 
 def test_rows_calling_themselves_aliases_really_are():
-    """`별칭` 줄의 이름은 **저쪽에 있어야 한다.** 없으면 별칭이 아니라 결손이다."""
+    """A `별칭` row's name **has to exist over there.** Absent, it is not an alias but a gap."""
     heads = _alias_rows()
-    assert heads, "갭 표에서 `별칭` 줄을 하나도 못 찾았다 — 이 검사가 헛돌고 있다."
+    assert heads, "not one `별칭` row was found in the gap table — this check is spinning."
 
     declared = _declared()
     cases = json.loads(GOLDEN.read_text(encoding="utf-8"))["cases"]
@@ -107,7 +119,9 @@ def test_rows_calling_themselves_aliases_really_are():
     report = "\n".join(
         f"  {head} — {' '.join(sorted(names))}" for head, names in sorted(missing.items()))
     assert not missing, (
-        "`별칭` 이라 적힌 줄인데 borch.ts 에 그 이름이 없다:\n" + report +
-        "\n\n별칭은 *옮기면 같은 질문을 두 번 한다* 는 뜻이고, 이름이 없으면 두 번이\n"
-        "아니라 영이다. borch.ts 에 넣고 케이스를 옮기거나, 까닭을 사실로 고쳐라.\n"
-        f"(이름을 못 뽑아 건너뛴 케이스 {unnamed}건 — 그건 이 검사의 사각지대다.)")
+        "rows marked `별칭` whose name is not in borch.ts:\n" + report +
+        "\n\nAlias means *porting it would ask the same question twice*, and with no name it\n"
+        "is not twice but zero. Put it into borch.ts and port the cases, or correct the\n"
+        "reason to something true.\n"
+        f"({unnamed} cases skipped because the name could not be pulled out — that is this "
+        "check's blind spot.)")

@@ -1,11 +1,17 @@
-"""골든 하네스 자체가 제 일을 하는지 본다.
+"""Looks at whether the golden harness itself does its job.
 
-GPU 백엔드는 아직 없다. 그래서 borch 를 **제3의 라이브러리인 척** 골든에
-대조시킨다 — 하네스가 도는지는 그것으로 드러나고, 백엔드가 생기면 같은 자리에 넣는다.
+There is no GPU backend yet. So borch is compared against the golden answers **as though it
+were a third library** — that reveals whether the harness runs, and when a backend arrives it
+goes into the same place.
 
-그런데 "도는가"만 물으면 안 된다. 골든 하네스가 조용히 망가지는 방식은 두 가지다 —
-표가 바뀐 뒤 낡은 골든과 비교하거나, 입력이 갈린 채로 비교하는 것. 둘 다 **통과가
-나오는데 아무것도 대조하지 않은** 상태다. 그래서 그 둘을 일부러 만들어 걸리는지 본다.
+But "does it run" is not the only question. A golden harness breaks quietly in two ways: by
+comparing against stale golden answers after the table changed, or by comparing while the
+inputs have diverged. Both are states where **a pass comes out and nothing was compared.** So
+those two are built on purpose to see whether they are caught.
+
+Korean literals below (`낡았다`, `입력이 골든과 다르다`, `GPU 검증 오류`, and the `흐름`
+words) are **the wording `golden.py` and `cases.py` print.** They are keys, not prose, and
+they move when those files do.
 """
 
 import importlib.util
@@ -20,58 +26,60 @@ _spec.loader.exec_module(golden)
 
 
 def test_golden_dump_then_check_matches_borch(tmp_path):
-    """코어는 **자기 범위만** 대조한다.
+    """The core compares **only its own scope.**
 
-    골든은 진짜 torch 로 굳히므로 자매 라이브러리에만 있는 것까지 담는다. 코어는 그것들을
-    일부러 거절하므로 건너뛴다 — 두 라이브러리의 범위가 갈리기 시작했고, 건너뛴 수가
-    정확히 자매 전용 케이스 수와 같아야 그 갈림이 의도한 대로라는 뜻이다.
+    The golden answers are frozen with real torch, so they hold things that exist in the sister
+    library alone. The core refuses those on purpose, so they are skipped — the two libraries'
+    scopes have begun to diverge, and the divergence is as intended only if the skipped count
+    equals the sister-only case count exactly.
     """
     path = tmp_path / "golden.npz"
     count, _ = golden.dump(path)
-    assert count > 0, "골든이 비었다 — 케이스 표가 안 실렸다"
+    assert count > 0, "the golden answers are empty — the case table did not load"
 
     bad, total = golden.check(golden.load_borch(), path)
     assert total == count - len(golden.cases_mod.webgpu_cases())
-    assert not bad, "골든과 갈렸다:\n  " + "\n  ".join(bad)
+    assert not bad, "diverged from the golden answers:\n  " + "\n  ".join(bad)
 
 
 def test_check_rejects_stale_golden(tmp_path, monkeypatch):
-    """표가 바뀐 뒤 낡은 골든으로 **통과가 나오면 안 된다.**"""
+    """After the table changes, stale golden answers **must not produce a pass.**"""
     path = tmp_path / "golden.npz"
     golden.dump(path)
-    monkeypatch.setattr(golden.cases_mod, "manifest_hash", lambda cases: "표가바뀐뒤의해시")
+    monkeypatch.setattr(golden.cases_mod, "manifest_hash", lambda cases: "the-hash-after-the-table-changed")
     with pytest.raises(SystemExit, match="낡았다"):
         golden.check(golden.load_borch(), path)
 
 
 def test_check_rejects_mismatched_inputs(tmp_path, monkeypatch):
-    """입력이 갈리면 멈춰야 한다.
+    """Diverged inputs have to stop it.
 
-    numpy 의 `default_rng` 는 버전이 달라도 같은 수를 주기로 되어 있지만, 그 약속에
-    검사를 안 걸면 어긋났을 때 **다른 입력끼리 비교하고 통과 도장을 찍는다.**
+    numpy's `default_rng` promises the same numbers across versions, but with no check on that
+    promise, the day it breaks **different inputs get compared and stamped as passing.**
     """
     path = tmp_path / "golden.npz"
     golden.dump(path)
-    monkeypatch.setattr(golden.cases_mod, "input_fingerprint", lambda inp: "다른입력의지문")
+    monkeypatch.setattr(golden.cases_mod, "input_fingerprint", lambda inp: "a-different-input-fingerprint")
     with pytest.raises(SystemExit, match="입력이 골든과 다르다"):
         golden.check(golden.load_borch(), path)
 
 
 def test_check_names_the_case_that_raised_a_gpu_fault(tmp_path):
-    """**GPU 검증 오류를 낸 케이스를 이름으로 짚는다.**
+    """**Names the case that raised a GPU validation error.**
 
-    WebGPU 는 그것을 예외로 안 던진다. 무효한 명령 버퍼는 조용히 아무것도 안 하므로
-    **범인은 통과하고 뒤에 줄 선 케이스가 대신 빨개진다** — 세 번 겪었다(`as_strided_`
-    의 초과 복사, 옵티마이저 상태의 버퍼 공유, 아무것도 안 고르는 `index_select`).
+    WebGPU does not throw one as an exception. An invalid command buffer quietly does nothing,
+    so **the culprit passes and a case queued behind it turns red instead** — this happened
+    three times (`as_strided_`'s over-copy, a shared buffer in optimizer state, and an
+    `index_select` selecting nothing).
 
-    브라우저 없이 그 배선만 확인한다. 여기서 세는 사람이 가짜 계수기를 들고 있어도
-    **어느 케이스에서 늘었는지**를 답에 적어야 한다 — 안 적으면 러너에 수 하나가
-    더 찍힐 뿐이고, 그것으로는 여전히 원인에서 한 칸 떨어진 자리를 보게 된다.
+    Only the wiring is checked, with no browser. Even with a fake counter doing the counting
+    here, the answer has to say **which case the count went up on** — without that, one more
+    number is printed in the runner and you are still looking one slot away from the cause.
     """
     path = tmp_path / "golden.npz"
     golden.dump(path)
 
-    # 세 번째 케이스에서 딱 한 번 오류가 난 척한다.
+    # Pretends an error happened exactly once, on the third case.
     state = {"n": 0, "seen": 0}
 
     def counter():
@@ -82,23 +90,23 @@ def test_check_names_the_case_that_raised_a_gpu_fault(tmp_path):
 
     bad, _ = golden.check(golden.load_borch(), path, faults=counter)
     hits = [line for line in bad if "GPU 검증 오류" in line]
-    assert len(hits) == 1, f"한 건이어야 하는데 {len(hits)} 건이다:\n  " + "\n  ".join(bad)
+    assert len(hits) == 1, f"there should be one and there are {len(hits)}:\n  " + "\n  ".join(bad)
 
-    # **어느 케이스인지가 요점이다.** 첫 호출은 루프 밖(기준선)이므로, 세 번째 호출은
-    # 케이스 표의 두 번째 케이스가 끝난 자리다.
+    # **Which case it is, is the point.** The first call is outside the loop (the baseline), so
+    # the third call lands where the table's second case finished.
     names = [n for n, _ in golden.cases_mod.golden_cases()]
     assert hits[0].startswith(names[1] + ":"), (
-        f"{names[1]} 을 짚어야 하는데: {hits[0]}")
+        f"it should point at {names[1]}: {hits[0]}")
 
 
-# ---- 기울기 흐름 표가 제 일을 하는지
+# ---- whether the gradient-flow table does its job
 #
-# 이 표는 값이 아니라 "기울기가 흐르는가"를 묻는다. 그런데 그것을 **묻기만 하고 못
-# 잡으면** 아무것도 안 하면서 초록을 하나 더 만드는 것이다. 그래서 조용히 끊기는 두
-# 모양을 일부러 만들어 걸리는지 본다 — 실제로 자매에서 둘 다 나왔던 모양이다.
+# This table asks not about values but "does a gradient flow". If it **asks and cannot catch**,
+# it does nothing while adding one more green. So the two shapes of a quiet break are built on
+# purpose to see whether they are caught — both really did occur in the sister library.
 
 class _Shim:
-    """라이브러리 하나를 흉내 내되 이름 하나만 바꿔치기한다."""
+    """Imitates one library with exactly one name swapped out."""
 
     def __init__(self, lib, **swapped):
         self._lib, self._swapped = lib, swapped
@@ -112,7 +120,7 @@ def _flow_case(name):
 
 
 def test_flow_table_catches_a_severed_graph():
-    """맨 텐서를 돌려주는 연산 — `roll` 과 `masked_select` 가 실제로 그랬다."""
+    """An operation returning a bare tensor — `roll` and `masked_select` really did this."""
     core = golden.load_borch()
     assert _flow_case("roll")(core).startswith("흐름")
 
@@ -122,15 +130,15 @@ def test_flow_table_catches_a_severed_graph():
 
 
 def test_flow_table_catches_requires_grad_without_a_gradient():
-    """**더 나쁜 쪽.** `requires_grad` 는 True 인데 되짚으면 `.grad` 가 `None` 이다.
+    """**The worse of the two.** `requires_grad` is True and going backwards leaves `.grad` `None`.
 
-    `.float()` 이 정확히 이랬고, `requires_grad` 만 묻는 검사는 이것을 통과시킨다.
+    `.float()` was exactly this, and a check that asks about `requires_grad` alone lets it pass.
     """
     core = golden.load_borch()
     assert _flow_case("sqrt")(core) == "흐름/기울기있음"
 
     def lying_sqrt(t):
-        # 부모를 안 달고 requires_grad 만 켠다 — 옛 `.float()` 과 같은 모양이다.
+        # Attaches no parents and turns `requires_grad` on — the shape the old `.float()` had.
         return core.Tensor(core.sqrt(t).numpy(), requires_grad=True)
 
     assert _flow_case("sqrt")(_Shim(core, sqrt=lying_sqrt)) == "흐름/조용히None"
