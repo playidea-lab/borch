@@ -1,51 +1,52 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
-<title>borch — 골든 대조</title>
-<!-- 빈 favicon. 없으면 매 실행마다 404 가 콘솔에 찍혀 진짜 오류를 덮는다. -->
+<title>borch — golden comparison</title>
+<!-- An empty favicon. Without it a 404 is printed to the console every run and buries real errors. -->
 <link rel="icon" href="data:,">
 
 <!--
-  골든 2단계. 브라우저 안에서 라이브러리를 골든과 대조한다.
+  Golden stage two. Compares a library against the golden answers inside a browser.
 
-  저장소 **루트를 서빙한 채** 로 열어야 한다(`/tests/browser/runner.html`).
-  아래 경로들이 거기에 맞춰져 있고, 가상 파일시스템에도 같은 모양으로 얹는다 —
-  그래야 golden.py 의 `__file__` 기준 경로 계산을 안 고쳐도 된다.
+  It has to be opened **with the repository root served** (`/tests/browser/runner.html`).
+  The paths below are set to that, and the virtual filesystem gets the same shape — so
+  golden.py's `__file__`-relative path arithmetic needs no editing.
 
-  대조할 라이브러리는 `?lib=` 로 고른다. 기본은 borch 이고,
-  GPU 백엔드가 생기면 `?lib=borch_webgpu` 로 바꾼다 — 이 파일은 안 고친다.
+  The library to compare is picked with `?lib=`. The default is borch, and with a GPU
+  backend it becomes `?lib=borch_webgpu` — this file is not edited.
 -->
 
-<pre id="out">시작하는 중…</pre>
+<pre id="out">starting…</pre>
 
-<!-- 이 페이지는 Pyodide 를 서빙한다 = 실행 형태로 배포한다. MPL-2.0 §3.2 가 소스를
-     구할 길을 알리라고 하므로, 문서에만 적어두지 않고 페이지에 둔다. -->
+<!-- This page serves Pyodide = distributes it in executable form. MPL-2.0 §3.2 asks that the
+     way to obtain the source be given, so it goes on the page rather than in a document only. -->
 <footer style="margin-top:2rem;font:12px/1.6 system-ui;color:#666">
-  이 페이지는 <a href="https://github.com/pyodide/pyodide">Pyodide</a>(MPL-2.0)와
-  <a href="https://github.com/tensorflow/tfjs">TensorFlow.js</a>(Apache-2.0)를 포함합니다.
-  각 소스는 링크된 저장소에서 받을 수 있습니다.
-  numpy(BSD-3-Clause)와 CPython 표준 라이브러리(PSF)도 함께 실립니다 —
+  This page includes <a href="https://github.com/pyodide/pyodide">Pyodide</a> (MPL-2.0) and
+  <a href="https://github.com/tensorflow/tfjs">TensorFlow.js</a> (Apache-2.0).
+  The source of each can be obtained from the linked repository.
+  numpy (BSD-3-Clause) and the CPython standard library (PSF) load alongside them —
   <a href="/THIRD-PARTY.md">THIRD-PARTY.md</a>.
 </footer>
 
-<!-- 전부 로컬에서 온다. CDN 은 테스트 시점에 살아 있어야 하는 의존이었고 실제로
-     한 번 끊겼다 — `tests/browser/vendor.py` 가 받아 두고 해시로 잠근다. -->
+<!-- All of it comes from local files. A CDN was a dependency that had to be alive at test time
+     and it really did go down once — `tests/browser/vendor.py` fetches it and locks it by hash. -->
 <script src="/vendor/pyodide/pyodide.js"></script>
 <script>
 const OUT = document.getElementById("out");
 const say = (line) => { OUT.textContent += "\n" + line; };
 
-// 드라이버(run.py)가 읽는 자리. 끝나기 전에는 null 이다.
+// What the driver (run.py) reads. It is null until this finishes.
 window.GOLDEN_RESULT = null;
 
-// 저장소 안의 경로 → Pyodide 가상 파일시스템의 경로.
-// 오른쪽 모양을 왼쪽과 같게 두는 것이 요점이다.
+// A path in the repository → a path in Pyodide's virtual filesystem.
+// Keeping the right-hand shape the same as the left-hand one is the point.
 //
-// 두 라이브러리는 **패키지다**(예전에는 파일 하나였다). 모듈을 여기 적어야 한다 —
-// 빠뜨리면 `ImportError` 로 시끄럽게 터진다. 조용히 반쪽만 실리는 것보다 낫다.
+// Both libraries are **packages** (they used to be one file each). The modules have to be
+// listed here — a missing one blows up loudly as an `ImportError`, which beats half of it
+// loading quietly.
 const PACKAGES = {
   borch: ["__init__", "_base", "_tensor", "_ops", "_fft", "_nn", "_optim",
           "_data", "_rnn", "_serialize"],
-  // borch.ts 위에 얹은 얇은 결속. 예전에는 이 이름이 TF.js 판이었다.
+  // The thin binding over borch.ts. This name used to be the TF.js edition.
   borch_webgpu: ["__init__", "_base", "_ops", "_nn", "_optim", "_data",
                  "_serialize"],
 };
@@ -54,41 +55,41 @@ const FILES = [
   ["/tests/cases.py", "/work/tests/cases.py"],
   ["/tests/golden.py", "/work/tests/golden.py"],
   ["/tests/browser/bench.py", "/work/bench.py"],
-  // 벤치와 짝이다 — 저쪽은 시간, 이쪽은 세는 것. `--cost` 가 부른다.
+  // The benchmark's pair — that one times, this one counts. Called by `--cost`.
   ["/tests/browser/cost.py", "/work/cost.py"],
 ];
 for (const [pkg, mods] of Object.entries(PACKAGES)) {
   for (const m of mods) FILES.push([`/${pkg}/${m}.py`, `/work/${pkg}/${m}.py`]);
 }
 const BINARY = [["/tests/golden.npz", "/work/tests/golden.npz"]];
-// 뽑아둔 JSON 도 같이 싣는다 — 브라우저에서 그것만으로 대조가 되는지 확인할 수
-// 있어야 "다른 언어도 쓸 수 있다"가 주장이 아니라 실측이 된다.
+// The exported JSON loads too — being able to confirm in a browser that it alone suffices for
+// a comparison is what turns "another language could use this" from a claim into a measurement.
 FILES.push(["/tests/golden.json", "/work/tests/golden.json"]);
 FILES.push(["/tests/export_json.py", "/work/tests/export_json.py"]);
 
-// **TF.js 를 싣던 자리가 여기였다.** `vendor/tf.min.js` 를 스크립트 태그로 올리고
-// `tf.setBackend("webgpu")` 가 실제로 붙었는지 확인하는 코드가 스무 줄쯤 있었다.
-// 그 구현을 지웠으므로 벤더 파일도 이 러너도 그것을 안 부른다 — 이 페이지가 밖에서
-// 받아 오는 것은 이제 Pyodide 뿐이다.
+// **This is where TF.js used to load.** There were some twenty lines putting
+// `vendor/tf.min.js` in a script tag and confirming `tf.setBackend("webgpu")` really attached.
+// That implementation is gone, so neither the vendor files nor this runner call it — the only
+// thing this page fetches from outside now is Pyodide.
 
 async function main() {
   const lib = new URLSearchParams(location.search).get("lib") || "borch";
-  OUT.textContent = "Pyodide 를 올리는 중…";
+  OUT.textContent = "loading Pyodide…";
   const py = await loadPyodide({ indexURL: "/vendor/pyodide/" });
-  // 대조가 끝난 뒤 드라이버가 임의의 파이썬을 물어볼 수 있게 남겨둔다.
-  // 브라우저 안에서만 재현되는 것을 눈으로 보려면 이 통로가 있어야 한다.
+  // Left here so the driver can ask arbitrary Python after the comparison finishes.
+  // Seeing what only reproduces inside the browser needs this channel.
   window.PY = py;
-  say("numpy 를 올리는 중…");
+  say("loading numpy…");
   await py.loadPackage("numpy");
 
   py.FS.mkdirTree("/work/tests");
   for (const pkg of Object.keys(PACKAGES)) py.FS.mkdirTree(`/work/${pkg}`);
-  // `fetch` 는 404 에 예외를 안 던진다. 확인 안 하면 **오류 페이지의 HTML 이 그대로
-  // 파이썬 파일로 써진다** — 실제로 그렇게 해서 `<!DOCTYPE HTML>` 에서 SyntaxError 가
-  // 났다. 없는 파일은 없다고 말해야 한다.
+  // `fetch` throws nothing on a 404. Unchecked, **the error page's HTML gets written out as a
+  // Python file** — that really happened and gave a SyntaxError on `<!DOCTYPE HTML>`. A file
+  // that is not there has to say so.
   const grab = async (url) => {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`파일을 못 받았다: ${url} (HTTP ${res.status})`);
+    if (!res.ok) throw new Error(`could not fetch: ${url} (HTTP ${res.status})`);
     return res;
   };
   for (const [url, dst] of FILES) {
@@ -97,12 +98,12 @@ async function main() {
   for (const [url, dst] of BINARY) {
     py.FS.writeFile(dst, new Uint8Array(await (await grab(url)).arrayBuffer()));
   }
-  say(`대조 대상: ${lib}`);
-  let backend = "numpy (브라우저 GPU 안 씀)";
+  say(`comparing: ${lib}`);
+  let backend = "numpy (no browser GPU)";
   if (lib !== "borch") {
-    // ES 모듈을 올리고 어댑터를 잡은 뒤 전역에 둔다 — 파이썬 결속이 `js.borch` 로
-    // 그것을 잡는다. **TF.js 를 싣던 갈래는 없어졌다** — 그쪽 구현을 지웠다.
-    say("borch.ts 를 올리는 중…");
+    // Loads the ES module, gets the adapter and puts it in the global — the Python binding
+    // reaches it as `js.borch`. **The TF.js branch is gone** — that implementation was deleted.
+    say("loading borch.ts…");
     const borch = await import("/borch-ts/dist/src/index.js");
     await borch.init();
     globalThis.borch = borch;
@@ -123,19 +124,20 @@ _spec.loader.exec_module(g)
 LIB = ${JSON.stringify(lib)}
 lib = g.load_borch() if LIB == "borch" else importlib.import_module(LIB)
 
-# **케이스마다 GPU 검증 오류 수를 잰다.** WebGPU 는 그것을 예외로 안 던지고 명령
-# 버퍼를 조용히 버리므로, 안 재면 **범인은 통과하고 뒤에 줄 선 케이스가 대신
-# 빨개진다.** 세 번 그렇게 겪었다. 코어(numpy)에는 잴 것이 없다.
+# **The GPU validation error count is read per case.** WebGPU does not throw one as an
+# exception and quietly discards the command buffer, so unmeasured **the culprit passes and a
+# case queued behind it turns red instead.** That happened three times. The core (numpy) has
+# nothing to measure.
 faults = None
 if LIB != "borch":
     import js
-    # **Device.faults 는 인스턴스 것이다** — adapterInfo 와 달리 static 이 아니라서
-    # 지금 붙은 장치를 device() 로 잡아야 한다.
+    # **Device.faults belongs to the instance** — unlike adapterInfo it is not static, so the
+    # currently attached device has to be reached through device().
     #
-    # **이 안에는 백틱을 쓰지 마라.** 이 파이썬은 JS 템플릿 문자열 안에 있어서
-    # 백틱 하나가 문자열을 닫고, 그러면 스크립트가 통째로 파싱에서 죽는다 —
-    # 증상은 콘솔 오류가 아니라 GOLDEN_RESULT 가 undefined 인 것이고, 드라이버는
-    # 그것을 "결과가 없다" 로 본다. 원인에서 아주 먼 자리다.
+    # **Do not use a backtick in here.** This Python sits inside a JS template string, so one
+    # backtick closes the string and the whole script dies in parsing — the symptom is not a
+    # console error but GOLDEN_RESULT being undefined, which the driver reads as "no result".
+    # That is a very long way from the cause.
     faults = lambda: int(js.borch.device().faults.count)         # noqa: E731
 
 bad, total = g.check(lib, "/work/tests/golden.npz", faults=faults)
@@ -144,19 +146,19 @@ json.dumps({"lib": LIB, "total": total, "bad": bad,
 `;
   const result = JSON.parse(await py.runPythonAsync(code));
   const ok = result.bad.length === 0;
-  say(`\n골든 대조 — 케이스 ${result.total}개`);
-  say(`  일치 ${result.total - result.bad.length}/${result.total}`);
-  if (result.faults) say(`  GPU 검증 오류 ${result.faults}건 — 위의 초록은 그만큼 못 믿는다`);
+  say(`\ngolden comparison — ${result.total} cases`);
+  say(`  agreeing ${result.total - result.bad.length}/${result.total}`);
+  if (result.faults) say(`  ${result.faults} GPU validation errors — the green above is that much less trustworthy`);
   for (const why of result.bad) say(`  ✗ ${why}`);
   window.GOLDEN_RESULT = { ...result, ok, backend };
 }
 
 main().catch((e) => {
-  // 파이썬 쪽 예외는 메시지 안에 역추적이 통째로 들어 있다. 자르면 원인이 사라진다.
+  // A Python exception carries the whole traceback inside its message. Trimming loses the cause.
   const detail = (e && e.message ? e.message : String(e));
-  say("\n실패:\n" + detail);
+  say("\nfailed:\n" + detail);
   console.error("[runner] " + detail);
-  // 실패도 결과다. 드라이버가 영원히 기다리지 않게 남긴다.
-  window.GOLDEN_RESULT = { ok: false, total: 0, bad: ["러너가 터졌다"], error: detail };
+  // A failure is a result too. Left here so the driver does not wait forever.
+  window.GOLDEN_RESULT = { ok: false, total: 0, bad: ["the runner blew up"], error: detail };
 });
 </script>

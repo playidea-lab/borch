@@ -1,27 +1,29 @@
-"""바깥에서 받아오는 것을 한 번만 받아 두고, 바이트가 그대로인지 확인한다.
+"""Fetches what comes from outside once and checks the bytes have not moved.
 
-CDN 은 **테스트 시점에 살아 있어야 하는 의존**이다. 실제로 한 번 끊겨서 검증이 멈췄다
-(`ERR_QUIC_PROTOCOL_ERROR`). 그리고 `@4.22.0` 이 언제까지 같은 바이트를 준다는 것은
-정책이지 계약이 아니다 — 그 버전이 사라지거나 바뀌면 오늘의 골든을 재현할 수 없다.
+A CDN is **a dependency that has to be alive at test time.** It really did go down once and
+stopped the verification (`ERR_QUIC_PROTOCOL_ERROR`). And that `@4.22.0` will keep giving the
+same bytes is a policy, not a contract — if that version disappears or changes, today's
+golden answers cannot be reproduced.
 
-**받은 것은 이제 저장소에 있다**(`vendor/pyodide/`). 오래 "해시만 둔다" 였고 근거는
-크기였는데, 재 보니 여섯 파일이 팩에서 8.4MB 다 — 이 저장소는 `tests/golden.json`
-하나에 이력 23.9MB 를 쓰고 있다. 그 옆에서 한 번 넣고 안 바뀌는 8.4MB 는 큰 값이
-아니었다. 판올림마다 같은 만큼 영구히 붙는 것이 이 결정이 치르는 값이고, 0.27.2 에서
-올릴 계획이 없어서 치르기로 했다.
+**What was fetched now lives in the repository** (`vendor/pyodide/`). For a long time it was
+"keep the hashes only", on the grounds of size, and measuring showed six files at 8.4MB
+packed — this repository spends 23.9MB of history on `tests/golden.json` alone. Next to that,
+8.4MB put in once and never changed was not a large number. What this decision costs is the
+same amount attached permanently at every version bump, and it was worth paying because there
+is no plan to move off 0.27.2.
 
-바뀐 것은 **어디에 두는가**뿐이고 잠금 파일은 그대로 쓴다. 오히려 이제야 제 일을 한다 —
-파일과 잠금이 **둘 다 커밋돼 있으므로** 대조가 네트워크 없이 CI 에서 돈다. 예전에는
-신선한 러너에 파일이 없어서 `fetch` 가 받아 온 것으로 잠금을 새로 썼고, 그 뒤 대조는
-자기 자신과 비교하는 것이었다.
+What changed is **where they are kept** only; the lock file is used as before. If anything it
+does its job only now — with the files and the lock **both committed**, the comparison runs in
+CI with no network. Before, a fresh runner had no files, so `fetch` wrote a new lock from what
+it downloaded, and the comparison after that compared with itself.
 
-    uv run python tests/browser/vendor.py check   # 있는 것과 잠금을 대조한다
-    uv run python tests/browser/vendor.py fetch   # 판올림할 때만. 잠금이 다르면 멈춘다
-    uv run python tests/browser/vendor.py fetch --bump   # 잠금을 새로 쓴다
+    uv run python tests/browser/vendor.py check   # compares what is here against the lock
+    uv run python tests/browser/vendor.py fetch   # only when bumping. Stops if the lock differs
+    uv run python tests/browser/vendor.py fetch --bump   # writes a new lock
 
-여기서 받는 것들의 라이선스는 [THIRD-PARTY.md](../../THIRD-PARTY.md) 에 있다.
-**Pyodide 는 MPL-2.0 이다** — 우리 코드로 번지지는 않지만, 커밋한 이상 **이 저장소도
-재배포자다.** 그래서 THIRD-PARTY.md 에 소스를 구할 길을 적어 둔다.
+The licences of what is fetched here are in [THIRD-PARTY.md](../../THIRD-PARTY.md).
+**Pyodide is MPL-2.0** — it does not spread to our code, but having committed it **this
+repository is a redistributor too.** So THIRD-PARTY.md records where to get the source.
 """
 
 import hashlib
@@ -36,17 +38,17 @@ LOCK = pathlib.Path(__file__).resolve().parent / "assets.lock"
 
 PYODIDE_VERSION = "0.27.2"
 PYODIDE_BASE = f"https://cdn.jsdelivr.net/pyodide/v{PYODIDE_VERSION}/full/"
-# Pyodide 가 뜨면서 실제로 부르는 것들. 빠지면 브라우저 콘솔에 404 로 드러난다.
+# What Pyodide actually requests as it comes up. A missing one shows as a 404 in the console.
 PYODIDE_FILES = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm",
                  "python_stdlib.zip", "pyodide-lock.json"]
-PYODIDE_PACKAGES = ["numpy"]          # 파일 이름은 lock 에서 찾는다
+PYODIDE_PACKAGES = ["numpy"]          # the file name is looked up in the lock
 
-# **TF.js 를 받던 자리다.** `@tensorflow/tfjs@4.22.0` 두 파일을 CDN 에서 받아
-# `vendor/` 에 두었다. 그 위에 서던 구현을 손으로 쓴 WGSL 로 갈아치우면서 필요가
-# 없어졌다 — 이제 밖에서 받아 오는 것은 Pyodide 하나뿐이다.
+# **This is where TF.js used to be fetched.** Two `@tensorflow/tfjs@4.22.0` files came from
+# the CDN into `vendor/`. Replacing the implementation that stood on it with hand-written WGSL
+# made them unnecessary — the only thing fetched from outside now is Pyodide.
 #
-# 남은 벤더가 하나여도 이 파일은 남긴다. CDN 은 테스트 시점에 살아 있어야 하는
-# 의존이고 실제로 한 번 끊겼다.
+# This file stays even with one vendor left. A CDN is a dependency that has to be alive at test
+# time, and it really did go down once.
 
 
 def _sha(data):
@@ -59,7 +61,7 @@ def _get(url):
 
 
 def _targets():
-    """(저장 경로, 주소) 목록. numpy 는 lock 을 읽어야 이름을 알 수 있다."""
+    """A list of (path, URL). numpy's name can only be known by reading the lock."""
     return [(pathlib.Path("pyodide") / name, PYODIDE_BASE + name)
             for name in PYODIDE_FILES]
 
@@ -70,22 +72,22 @@ def _package_targets(lock_bytes):
     for want in PYODIDE_PACKAGES:
         entry = packages.get(want)
         if entry is None:
-            raise SystemExit(f"pyodide-lock.json 에 {want} 가 없습니다")
+            raise SystemExit(f"{want} is not in pyodide-lock.json")
         name = entry["file_name"]
         found.append((pathlib.Path("pyodide") / name, PYODIDE_BASE + name))
     return found
 
 
 def fetch(bump=False):
-    """받아서 `vendor/` 에 둔다. **잠금이 이미 있으면 대조하고, 다르면 멈춘다.**
+    """Fetches into `vendor/`. **With a lock already present it compares, and stops if they differ.**
 
-    오래 여기서 잠금을 **덮어썼다.** 그러면 받아 온 것이 곧 정답이 되어, 잠금이 지키는
-    것은 "이미 파일을 가진 기계" 뿐이고 하나도 없는 기계에서는 아무것도 안 지켰다.
-    신선한 CI 러너가 정확히 후자라, 커밋된 해시 여섯 개가 거기서는 조용히 새 잠금이
-    됐다 — 검사가 자기 입력을 자기가 정하는 그 모양이다.
+    For a long time this **overwrote** the lock. That makes whatever was downloaded the right
+    answer, so the lock guarded "a machine that already has the files" and guarded nothing at
+    all on a machine that has none. A fresh CI runner is exactly the latter, so six committed
+    hashes quietly became a new lock there — the shape where a check chooses its own input.
 
-    판올림은 `--bump` 로 명시한다. 잠금이 바뀌는 것이 커밋에 남아야 하는 일이라,
-    받는 김에 슬쩍 바뀌면 안 된다.
+    A bump is stated with `--bump`. A change to the lock is a thing that has to be visible in a
+    commit, so it must not slip in on the back of a fetch.
     """
     VENDOR.mkdir(exist_ok=True)
     lock, total = {}, 0
@@ -116,13 +118,13 @@ def fetch(bump=False):
         gone = sorted(p for p in old if p not in lock)
         if moved or gone:
             raise SystemExit(
-                "받아온 것이 잠금과 다릅니다 — 덮어쓰지 않았습니다.\n  "
-                + "\n  ".join([f"{p}: 바이트가 다르다" for p in moved]
-                               + [f"{p}: 이제 안 받는다" for p in gone])
-                + "\n\n판올림이라면 `fetch --bump` 로 잠금을 새로 쓰십시오.")
+                "what was fetched differs from the lock — nothing was overwritten.\n  "
+                + "\n  ".join([f"{p}: the bytes differ" for p in moved]
+                               + [f"{p}: no longer fetched" for p in gone])
+                + "\n\nIf this is a bump, write a new lock with `fetch --bump`.")
     LOCK.write_text(text, encoding="utf-8")
-    print(f"\n받았다 — {len(lock)}개 · {total / 1e6:.1f} MB → {VENDOR}")
-    print(f"잠금 파일: {LOCK}" + (" (새로 씀)" if bump or old is None else " (그대로)"))
+    print(f"\nfetched — {len(lock)} files · {total / 1e6:.1f} MB → {VENDOR}")
+    print(f"lock file: {LOCK}" + (" (rewritten)" if bump or old is None else " (unchanged)"))
     return 0
 
 
@@ -138,31 +140,32 @@ def _read_lock():
 
 
 def check(quiet=False):
-    """잠금과 대조한다. (문제 목록)"""
+    """Compares against the lock. (a list of problems)"""
     entries = _read_lock()
     if entries is None:
-        return ["잠금 파일이 없다 — 먼저 `vendor.py fetch` 를 돌려라"]
+        return ["there is no lock file — run `vendor.py fetch` first"]
     bad = []
     for path, digest in entries.items():
         f = VENDOR / path
         if not f.exists():
-            bad.append(f"{path}: 없다")
+            bad.append(f"{path}: missing")
         elif _sha(f.read_bytes()) != digest:
-            bad.append(f"{path}: **바이트가 다르다** — 받아온 것이 잠금과 어긋난다")
+            bad.append(f"{path}: **the bytes differ** — what is here is out of step with the lock")
     if not bad and not quiet:
-        print(f"벤더 대조 — {len(entries)}개 전부 일치")
+        print(f"vendor comparison — all {len(entries)} agree")
     return bad
 
 
 def ensure():
-    """없으면 받고, 있으면 대조한다. 러너가 시작할 때 부른다."""
+    """Fetches if absent, compares if present. Called as a runner starts."""
     if _read_lock() is None or check(quiet=True):
         missing = check(quiet=True)
         if missing and _read_lock() is not None:
-            drifted = [m for m in missing if "다르다" in m]
+            # The word is the marker `check` writes above — the two move together.
+            drifted = [m for m in missing if "the bytes differ" in m]
             if drifted:
-                raise SystemExit("벤더 파일이 잠금과 다릅니다:\n  " + "\n  ".join(drifted))
-        print("벤더 파일을 받는다(처음 한 번)…")
+                raise SystemExit("vendor files differ from the lock:\n  " + "\n  ".join(drifted))
+        print("fetching the vendor files (once)…")
         fetch()
 
 
@@ -175,7 +178,7 @@ def main(argv):
         for why in bad:
             print(f"  ✗ {why}")
         return 1 if bad else 0
-    print("쓰는 법: vendor.py [check | fetch [--bump]]")
+    print("usage: vendor.py [check | fetch [--bump]]")
     return 2
 
 

@@ -1,64 +1,65 @@
-"""브라우저를 띄우는 자리 하나.
+"""One place that opens a browser.
 
-다섯 개의 러너가 각자 `p.chromium.launch(...)` 를 부르고 있었고 인자가 갈려 있었다 —
-`tests/browser/run.py` 에는 플래그가 아예 없었다. macOS 에서는 그래도 WebGPU 가 나와서
-안 보였는데, 갈린 조건으로 잰 두 수를 나란히 놓고 "같은 잣대" 라고 부르는 순간
-그것은 거짓이 된다. 그래서 여기 모은다.
+Five runners were each calling `p.chromium.launch(...)` with diverging arguments —
+`tests/browser/run.py` had no flags at all. On macOS WebGPU came out anyway so it went
+unseen, but the moment two numbers measured under diverged conditions are put side by side
+and called "the same yardstick", that is a lie. So they are gathered here.
 
-**`BORCH_CHROME_CHANNEL` 을 주면 시스템 브라우저를 쓴다.** Playwright 는 자기가 받은
-Chromium 을 쓰는 것이 기본인데, GPU 서버에는 그것이 없고 배포판 Chrome 이 깔려 있는
-경우가 있다. 브라우저를 하나 더 받게 하는 것보다 있는 것을 쓰는 편이 낫고, 무엇보다
-**사용자가 실제로 쓰는 브라우저**가 그쪽이다.
+**Give `BORCH_CHROME_CHANNEL` to use the system browser.** Playwright uses the Chromium it
+downloaded itself by default, and a GPU server may not have that while having a distribution
+Chrome installed. Using what is there beats downloading one more browser, and above all
+**the browser the user actually uses** is that one.
 
     BORCH_CHROME_CHANNEL=chrome DISPLAY=:1 uv run ... --headed
 
-`DISPLAY` 는 여기서 안 다룬다 — Playwright 가 프로세스 환경을 그대로 물려주므로 명령
-앞에 붙이면 그만이다. 헤드리스로는 안 된다는 것이 이 저장소의 반복된 교훈이고
-(소프트웨어 래스터라이저가 예외 없이 조용히 나온다), 러너들이 어댑터를 먼저 찍는
-이유가 그것이다.
+`DISPLAY` is not handled here — Playwright passes the process environment through, so putting
+it in front of the command is enough. That headless does not work is this repository's
+repeated lesson (a software rasteriser comes out quietly, without exception), and it is why
+the runners print the adapter first.
 """
 
 import os
 import re
 import sys
 
-# WebGPU 를 켜고 리눅스에서 Vulkan 을 쓰게 한다. macOS 는 Metal 이라 뒤엣것이 무시된다.
+# Turns WebGPU on and makes Linux use Vulkan. macOS is on Metal, so the second is ignored.
 FLAGS = ["--enable-unsafe-webgpu", "--enable-features=Vulkan"]
 
-# CPU 로 도는 구현들. Chrome 은 SwiftShader, 리눅스 Mesa 는 lavapipe(llvmpipe)다.
+# Implementations that run on the CPU. Chrome has SwiftShader; Linux Mesa has lavapipe (llvmpipe).
 _SOFTWARE = re.compile(r"swiftshader|llvmpipe|lavapipe|software", re.I)
 
 
 def is_software(adapter):
-    """이 어댑터가 CPU 인가. 이름으로 가른다 — WebGPU 는 그것을 안 알려준다."""
+    """Is this adapter a CPU? Told apart by name — WebGPU does not report it."""
     return bool(adapter and _SOFTWARE.search(str(adapter)))
 
 
 def refuse_if_software(adapter, what):
-    """**시간과 자원을 재는 것은 CPU 에서 무효다.** 무효면 True 를 준다.
+    """**Measuring time and resources is void on a CPU.** Returns True when void.
 
-    값은 장치가 안 바꾸므로 골든은 소프트웨어 어댑터에서도 유효한 증거다 — 로직이
-    맞다는 증거이지 GPU 경로가 돈다는 증거가 아닐 뿐이다. 그래서 골든은 안 막고
-    벤치·정확도만 막는다.
+    A device does not change values, so the golden answers are valid evidence on a software
+    adapter too — evidence that the logic is right, just not that the GPU path runs. So the
+    golden run is not blocked and only the benchmarks and accuracy are.
 
-    이 구분이 이 함수가 있는 이유다. 리눅스 GPU 서버에서 헤드리스로 골든을 돌렸더니
-    845/845 가 나왔는데 어댑터는 `google / swiftshader` 였다 — 통과는 진짜였지만
-    "다른 벤더에서 확인했다"는 주장은 거짓이었다. 사람이 로그 첫 줄을 안 읽으면
-    그대로 지나간다.
+    That distinction is why this function exists. Running the golden cases headless on a Linux
+    GPU server gave 845/845 while the adapter was `google / swiftshader` — the pass was real
+    and the claim "confirmed on another vendor" was false. Unless a person reads the first line
+    of the log, it goes straight through.
     """
     if not is_software(adapter):
         return False
-    print(f"**소프트웨어 어댑터다({adapter}) — 이 장치에서 {what} 은 무효다.**\n"
-          "  CPU 로 돈 것이라 이 수는 GPU 의 수가 아니다. `--headed` 로,\n"
-          "  진짜 GPU 가 붙은 화면에서 다시 재라.", file=sys.stderr)
+    print(f"**Software adapter ({adapter}) — {what} is void on this device.**\n"
+          "  It ran on the CPU, so this number is not a GPU's number. Measure again with\n"
+          "  `--headed`, on a screen with a real GPU attached.", file=sys.stderr)
     return True
 
 
 def warn_if_software(adapter, what):
-    """골든처럼 **값만 묻는** 것에 쓴다. 막지 않고, 무엇을 증명했는지만 좁혀 적는다."""
+    """For things that **ask about values only**, as the golden run does. Does not block; only
+    narrows what was proved."""
     if is_software(adapter):
-        print(f"  (소프트웨어 어댑터다 — {what} 이 맞다는 것은 증명되지만,\n"
-              "   GPU 경로가 도는지는 이 실행이 증명하지 않는다.)")
+        print(f"  (Software adapter — that {what} is right is proved, but this run does not\n"
+              "   prove that the GPU path runs.)")
 
 
 import contextlib
@@ -66,23 +67,24 @@ import contextlib
 
 @contextlib.contextmanager
 def browser(playwright, headed=False, flags=FLAGS):
-    """**브라우저를 여는 유일한 문.** 닫는 것까지 여기서 한다.
+    """**The only door that opens a browser.** Closing happens here too.
 
-    열두 러너가 전부 `browser.close()` 를 `with` 의 마지막 줄에 두고 있었고, 그 앞에서
-    예외가 나면 **브라우저가 안 닫힌다.**
+    All twelve runners had `browser.close()` as the last line of their `with`, and an exception
+    before it means **the browser does not close.**
 
-    조용히 새는 것이 아니다 — 남은 크로미엄이 CPU 를 계속 쓴다. 실제로 러너 하나가
-    2 분 42 초째 살아 있었고, 그 사이 다른 세션이 벤치를 재고 있었다. 그쪽 수가
-    문서의 16 배로 나왔고, 원인을 찾는 데 **양쪽이 각자 시간을 썼다**(끝내 보니 그
-    16 배는 다른 원인이었지만, 그것을 가려내느라 또 시간이 들었다).
+    It does not leak quietly — the leftover Chromium keeps using CPU. One runner really was
+    still alive at two minutes forty-two, and in that time another session was measuring
+    benchmarks. Their number came out at sixteen times the documented one, and **both sides
+    spent time** chasing the cause (it turned out that sixteen times had a different cause, but
+    ruling this one out cost time again).
 
-    값 검사로는 절대 안 보인다. 검사 장치가 자기 뒷정리를 안 해서 **다른 측정을
-    망가뜨리는** 종류다.
+    A value check will never see it. This is the kind where a test apparatus does not clean up
+    after itself and **damages another measurement.**
 
-    **그래서 안 닫는 판은 밖에 없다.** 처음 고칠 때 여섯만 옮기고 `launch` 를 공개로
-    남겼는데, 나머지 여섯이 그대로 그것을 쓰고 있었다 — 그중 셋이 하필
-    `bench`·`cost`·`accuracy`, 누수가 제일 해로운 자리였다. 목록이 두 벌이면 갈리고,
-    문이 둘이면 하나만 고쳐진다.
+    **So there is no non-closing edition outside.** The first fix moved only six and left
+    `launch` public, and the other six went on using it — three of them being `bench`, `cost`
+    and `accuracy`, exactly where a leak does the most harm. Two lists diverge, and with two
+    doors only one gets fixed.
     """
     got = _open(playwright, headed=headed, flags=flags)
     try:
@@ -92,7 +94,7 @@ def browser(playwright, headed=False, flags=FLAGS):
 
 
 def _open(playwright, headed=False, flags=FLAGS):
-    """`headed` 가 아니면 소프트웨어 어댑터가 나온다 — 부르는 쪽이 어댑터를 찍어야 한다."""
+    """Without `headed` a software adapter comes out — the caller has to print the adapter."""
     channel = os.environ.get("BORCH_CHROME_CHANNEL") or None
     return playwright.chromium.launch(
         headless=not headed,
