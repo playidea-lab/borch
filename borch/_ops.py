@@ -3029,7 +3029,7 @@ def median(t, dim=None, keepdim=False):
     # **참·거짓은 거절한다.** torch 가 `"median_cpu" not implemented for 'Bool'` 로
     # 멈춘다(실측). 규칙이 아니라 torch 의 구멍이지만, 여기서 값을 내주면 그 코드가
     # 진짜 torch 에서 깨진다 — 관대한 것도 갈리는 것이다.
-    _refuses_bool(t.data, "median 은 참거짓을 받지 않습니다.",
+    _refuses_bool(t.data, "median does not take booleans.",
                   '"median_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
     if dim is None:
@@ -3087,8 +3087,8 @@ def norm(t, p=2, dim=None, dtype=None):
         t = _wrap(t.data.astype(_np_of(dtype)))
     _needs_float(
         t.data,
-        "노름은 실수에만 있습니다 — 제곱근이 정수 칸에 안 들어갑니다. "
-        "`.float()` 을 먼저 부르세요.",
+        "A norm exists over the reals only — a square root does not fit in an "
+        "integer cell. Call `.float()` first.",
         "linalg.vector_norm: Expected a floating point or complex tensor as input")
     if p == 1:
         return t.abs().sum(dim=dim)
@@ -3179,7 +3179,7 @@ def nanmean(t, dim=None, keepdim=False, dtype=None):
     t = _wrap(t)
     _needs_float(
         t.data,
-        "nanmean 은 실수에만 있습니다. `.float()` 을 먼저 부르세요.",
+        "nanmean exists over the reals only. Call `.float()` first.",
         "nanmean(): expected input to have floating point or complex dtype")
     clean, bad = _nan_mask(t)
     count = (~bad).sum(axis=dim, keepdims=keepdim)
@@ -3342,7 +3342,8 @@ def quantile(t, q, dim=None, keepdim=False):
     t = _wrap(t)
     _needs_float(
         t.data,
-        "분위수는 실수에만 있습니다 — 보간이 정수 칸에 안 들어갑니다.",
+        "Quantiles exist over the reals only — the interpolation does not fit "
+        "in an integer cell.",
         "quantile() input tensor must be either float or double dtype")
     qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
     out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim)
@@ -4610,7 +4611,7 @@ def bincount(t, weights=None, minlength=0):
     개수를 세는 것과 값을 더하는 것이 다른 일이기 때문이다.
     """
     t = _wrap(t)
-    _refuses_bool(t.data, "bincount 는 참거짓을 받지 않습니다.",
+    _refuses_bool(t.data, "bincount does not take booleans.",
                   '"bincount_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
     # `intp` 다 — wasm32 에서 int64 를 주면 거절한다. 위 `repeat_interleave` 참고.
@@ -7489,7 +7490,7 @@ def nanmedian(t, dim=None, keepdim=False):
     짝수 개면 **아래를 고른다** — 평균을 내지 않는다.
     """
     t = _wrap(t)
-    _refuses_bool(t.data, "nanmedian 은 참거짓을 받지 않습니다.",
+    _refuses_bool(t.data, "nanmedian does not take booleans.",
                   '"median_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
     data = _np.asarray(t.data, dtype=_np.float64)

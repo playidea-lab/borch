@@ -42,7 +42,7 @@ _TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float",
                "c": "ComplexFloat"}
 
 
-def _needs_float(data, korean: str, torch_phrase: str):
+def _needs_float(data, said: str, torch_phrase: str):
     """**We stop where torch stops.**
 
     Mean, variance and norm are division and square roots, so the answer does not
@@ -55,14 +55,14 @@ def _needs_float(data, korean: str, torch_phrase: str):
     here, which functions live under this rule reads as a list.
     """
     if data.dtype.kind not in "fc":
-        raise RuntimeError(_like_torch(korean, torch_phrase))
+        raise RuntimeError(_like_torch(said, torch_phrase))
 
 
-def _refuses_bool(data, korean: str, torch_phrase: str, kind=RuntimeError):
+def _refuses_bool(data, said: str, torch_phrase: str, kind=RuntimeError):
     """The places that refuse booleans only. `argmax` and `median` are like that
     (measured)."""
     if data.dtype.kind == "b":
-        raise kind(_like_torch(korean, torch_phrase))
+        raise kind(_like_torch(said, torch_phrase))
 
 
 def _refuses_nonfloat_kernel(data, name: str, kernel: str):

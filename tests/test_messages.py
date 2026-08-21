@@ -36,7 +36,12 @@ HANGUL = re.compile(r"[가-힣]")
 # with no argument produced a half-Korean message. The call sites were English
 # and the check read call sites, so it saw nothing. The names live in one list
 # now and both patterns are built from it — adding a helper covers both.
-HELPERS = ("_unsupported", "_absent_here", "_absent_dtype", "_no_complex128")
+# `_needs_float` and `_refuses_bool` took a parameter literally named `korean`,
+# and twelve call sites passed Korean sentences into an otherwise English
+# `BorchError`. They were outside this list, so nothing asked. A helper that
+# carries wording belongs here — the list is the rule.
+HELPERS = ("_unsupported", "_absent_here", "_absent_dtype", "_no_complex128",
+           "_needs_float", "_refuses_bool", "_refuses_nonfloat_kernel")
 _NAMES = "|".join(HELPERS)
 _PY_RAISE = rf"(?:raise \w*(?:Error|Exception)|{_NAMES})\("
 _PY_HELPER_DEF = rf"def (?:{_NAMES})\("

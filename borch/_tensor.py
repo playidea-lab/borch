@@ -870,14 +870,14 @@ class Tensor:
             # 여전히 답이 없다 — 푸는 것은 **결과 형을 못 정하던 것**뿐이다.
             _needs_float(
                 _np.empty(0, dtype=_np.dtype(getattr(dtype, "np", dtype))),
-                "평균의 결과 형은 실수여야 합니다.",
+                "The output dtype of a mean has to be a floating point one.",
                 "mean(): could not infer output dtype. Input dtype must be either "
                 "a floating point or complex dtype")
             return self._cast_first(dtype).mean(dim, keepdim).to(dtype)
         _needs_float(
             self.data,
-            "평균은 실수에만 있습니다 — 정수·참거짓 칸에는 나눗셈의 답이 안 들어갑니다. "
-            "`.float()` 을 먼저 부르세요.",
+            "A mean exists over the reals only — the answer to a division does "
+            "not fit in an integer or boolean cell. Call `.float()` first.",
             "mean(): could not infer output dtype. Input dtype must be either "
             "a floating point or complex dtype")
         shape = self.data.shape
@@ -956,12 +956,12 @@ class Tensor:
         return self._argreduce(_np.min, _np.argmin, dim, keepdim)
 
     def argmax(self, dim=None, keepdim=False):
-        _refuses_bool(self.data, "argmax 는 참거짓을 받지 않습니다.",
+        _refuses_bool(self.data, "argmax does not take booleans.",
                       "argmax(): does not support bool input")
         return Tensor(_keep(_np.argmax(self.data, axis=dim), self, dim, keepdim))
 
     def argmin(self, dim=None, keepdim=False):
-        _refuses_bool(self.data, "argmin 은 참거짓을 받지 않습니다.",
+        _refuses_bool(self.data, "argmin does not take booleans.",
                       "argmin(): does not support bool input")
         return Tensor(_keep(_np.argmin(self.data, axis=dim), self, dim, keepdim))
 
@@ -974,7 +974,8 @@ class Tensor:
         """
         _needs_float(
             self.data,
-            "분산·표준편차는 실수에만 있습니다. `.float()` 을 먼저 부르세요.",
+            "Variance and standard deviation exist over the reals only. Call "
+            "`.float()` first.",
             "std and var only support floating point and complex dtypes")
         n = self.data.size if dim is None else self.data.shape[dim]
         mean = self.mean(dim=dim, keepdim=True) if dim is not None else self.mean()
@@ -1021,7 +1022,7 @@ class Tensor:
         # **참·거짓은 거절한다** — torch 가 `"bincount_cpu" not implemented for
         # 'Bool'` 로 멈춘다(실측). `_ops.bincount` 에도 같은 가드가 있는데 메서드가
         # 그 문을 안 지나고 numpy 를 직접 부르고 있었다 — 두 벌은 이렇게 갈린다.
-        _refuses_bool(self.data, "bincount 는 참거짓을 받지 않습니다.",
+        _refuses_bool(self.data, "bincount does not take booleans.",
                       '"bincount_cpu" not implemented for \'Bool\'',
                       kind=NotImplementedError)
         return Tensor(_np.bincount(self.data.astype(_np.intp)))

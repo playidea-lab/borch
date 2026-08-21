@@ -1,30 +1,37 @@
-"""borch — numpy 위에 얹은 PyTorch 모양의 얇은 층.
+"""borch — a thin PyTorch-shaped layer over numpy.
 
-설치 없이 브라우저(Pyodide)에서 PyTorch **문법**을 연습하기 위한 것이다.
-torch 는 wasm 으로 포팅되지 않는다 — 수백 MB의 네이티브 코드에, 손튜닝된 AVX·NEON
-커널은 wasm SIMD 로 옮겨지지 않고, OpenMP 스레드는 Pyodide 가 싣지 않는 헤더를 요구한다.
-그런데 **문법을 익히는 데는 그중 아무것도 필요하지 않다.** numpy 면 된다.
+For practising PyTorch **syntax** in a browser (Pyodide) with nothing installed.
+torch is not ported to wasm — hundreds of MB of native code, hand-tuned AVX and
+NEON kernels that do not carry over to wasm SIMD, and OpenMP threads that want
+headers Pyodide does not ship. And **none of that is needed to learn the
+syntax.** numpy is enough.
 
-## 설계 원칙 — 틀린 답보다 없는 기능이 낫다
+## The design principle — an absent feature beats a wrong answer
 
-축소판이 진짜와 조금이라도 다르게 동작하면 학생은 거짓을 배운다. 그래서
-**없는 것은 근사하지 않고 예외를 던진다.** 조용히 다른 값을 내느니 시끄럽게 멈춘다.
+A subset that behaves even slightly differently from the real thing teaches the
+student something false. So **what is absent throws rather than approximating.**
+It stops loudly rather than quietly producing a different value.
 
-지원 범위 밖을 만나면 `BorchError` 가 나고, 메시지가 "자기 컴퓨터에서 하라"고 말한다.
+Outside the supported range a `BorchError` is raised, and the message says to do
+it on your own machine.
 
-## 어떻게 보장하는가
+## How that is guaranteed
 
-두 겹이다.
+Two layers.
 
-1. `borch-check` — 같은 **랩 테스트**를 진짜 torch 와 축소판 양쪽에서 돌린다.
-2. `borch-diff` — 랩과 무관하게 **같은 연산의 숫자를 직접 비교**한다
-   (`tests/test_borch_diff.py`). 1번만으로는 랩이 지나가는 길만 봐서
-   축소판의 73% 였고, 그 사각지대에 역전파가 들어 있었다.
+1. `borch-check` — runs the same **lab tests** against real torch and against the
+   subset.
+2. `borch-diff` — compares **the numbers of the same operation directly**,
+   independently of the labs (`tests/test_borch_diff.py`). The first alone sees
+   only the paths the labs walk, which was 73% of the subset, and backpropagation
+   sat in that blind spot.
 
-지금은 두 검사가 86% 를 덮는다. 남은 곳은 `__repr__` 처럼 값이 걸리지 않는 자리다.
+The two checks now cover 86%. What is left is places where no value is at stake,
+such as `__repr__`.
 
-`borch-diff` 가 실제로 잡은 것: BatchNorm 은 정규화에 편향 분산을,
-running_var 갱신에는 비편향 분산을 쓴다. 둘 다 편향으로 두면 2.6% 어긋난다.
+Something `borch-diff` actually caught: BatchNorm uses the biased variance for
+the normalisation and the unbiased one for updating running_var. Biased in both
+places is off by 2.6%.
 """
 
 
@@ -38,10 +45,11 @@ from ._base import (
     _tensor_str, _unsupported, bool_, device, dtype, float32, float64, int64,
     bfloat16, chalf, complex32, float16, half, int16, int32, long,
     set_printoptions, short,
-    # 복소수의 형 이름. `complex128`·`cdouble` 은 **이름만** 있다 — 만들려 하면
-    # `Tensor.__init__` 의 목문이 멈춘다.
+    # The complex dtype names. `complex128` and `cdouble` exist **as names
+    # only** — trying to make one stops at the gate in `Tensor.__init__`.
     cdouble, cfloat, complex128, complex64,
-    # 최상위 수 상수. **`callable` 만 세는 커버리지 표가 못 보던 다섯이다.**
+    # The top-level numeric constants. **The five a coverage table counting only
+    # `callable` could not see.**
     e, inf, nan, newaxis, pi,
 )
 from ._tensor import (
@@ -82,52 +90,59 @@ from ._ops import (
     split, sqrt, square, stack, svd, swapaxes, swapdims, tan, tanh, tensor, tile, topk,
     trace, tril, triu, trunc, unbind, unflatten, unfold, unique, unsqueeze, vsplit,
     where, xlogy, zeros, zeros_like,
-    # torch 가 두 번째 이름으로 주는 것들 — 연산자가 하는 일에 이름만 붙인다.
+    # The ones torch offers under a second name — a name attached to what an
+    # operator already does.
     add, adjoint, block_diag, broadcast_shapes, broadcast_tensors, broadcast_to,
     column_stack, concat, concatenate, div, divide, dstack, floor_divide, fmod,
     greater, greater_equal, hstack, less, less_equal, moveaxis, mul, multiply,
     not_equal, remainder, row_stack, rsub, sub, subtract, t, true_divide, vstack,
-    # 계산 자체가 없던 것들.
+    # The ones with no computation of their own.
     cross, empty_like, float_power, fmax, fmin, inner, isclose, isin, isneginf,
     isposinf, isreal, kron, lerp, logical_xor, logspace, meshgrid, nan_to_num,
     rand_like, randint_like, randn_like, scalar_tensor, std_mean, var_mean, vdot,
-    # 색인으로 쓰는 쪽.
+    # The writing side of indexing.
     bucketize, index_add, index_copy, index_fill, scatter, scatter_add,
     searchsorted, take, take_along_dim,
-    # 수치 계열. 뒤의 셋은 급수로 센다.
+    # The numeric family. The last three are computed as series.
     cdist, corrcoef, cov, cumulative_trapezoid, digamma, erfinv, lgamma,
     tensordot, trapezoid,
-    # 반사자 꼴 QR. `linalg.householder_product` 의 짝이라 최상위에도 있다.
+    # QR in reflector form. The partner to `linalg.householder_product`, so it
+    # exists at top level too.
     geqrf,
-    # **최상위에만 있는 이름들.** `F` 쪽과 서명이 다른 것도 있어서 자리를 옮겨 준다.
+    # **The names that exist only at top level.** Some have a different
+    # signature from `F`'s, so the positions are moved.
     alpha_dropout_, dropout_, feature_alpha_dropout_, feature_dropout,
     feature_dropout_, grid_sampler, nan_to_num_,
-    # `F` 와 **같은 계산**인 최상위 이름들 (실측해서 확인했다).
+    # The top-level names that are **the same computation** as `F`'s (confirmed
+    # by measurement).
     alpha_dropout, bilinear, celu_, channel_shuffle, embedding_bag,
     feature_alpha_dropout, max_pool1d_with_indices, pixel_shuffle,
     pixel_unshuffle, rrelu, rrelu_, selu_, threshold_,
-    # **서명이 다른 둘.** 최상위는 날 ATen 이라 인자 순서와 열거형이 다르다 —
-    # `_aten` 판이 그 자리를 맡고, `F` 쪽은 이름 그대로 남는다.
+    # **The two with a different signature.** The top level is raw ATen, so the
+    # argument order and the enums differ — the `_aten` versions take that place
+    # and `F`'s keep their own names.
     batch_norm_aten as batch_norm, ctc_loss_aten as ctc_loss,
-    # 기울기 모드.
+    # Gradient modes.
     enable_grad, inference_mode, is_grad_enabled, is_inference,
     is_inference_mode_enabled, set_grad_enabled,
-    # 난수 상태.
+    # Random state.
     get_rng_state, initial_seed, seed, set_rng_state,
-    # 살펴보기.
+    # Introspection.
     can_cast, finfo, get_default_dtype, iinfo, is_distributed, is_floating_point,
     is_nonzero, is_same_size, is_signed, is_storage, is_tensor, promote_types,
     set_default_dtype, typename,
-    # 비트 연산과 정수 수학. `bool` 에서는 논리 연산이 된다 — torch 가 dtype 을 본다.
+    # Bitwise operations and integer maths. On `bool` they become logical
+    # operations — torch looks at the dtype.
     bitwise_and, bitwise_left_shift, bitwise_not, bitwise_or,
     bitwise_right_shift, bitwise_xor, gcd, gcd_, lcm, lcm_,
     arctan2, clamp_max, clamp_max_, clamp_min, clamp_min_, detach_, fill,
     frexp, i0, i0_, logcumsumexp, mvlgamma, nextafter,
-    # 창 함수. `periodic` 이 기본이고 그것이 길이를 하나 늘린다.
+    # Window functions. `periodic` is the default and it adds one to the
+    # length.
     bartlett_window, blackman_window, hamming_window, hann_window,
     kaiser_window,
-    # 모양·색인. **`as_strided` 는 torch 에서 뷰지만 우리는 사본이다** — 자세한
-    # 사정은 `_ops.py` 의 그 자리에 적었다.
+    # Shape and indexing. **`as_strided` is a view in torch and a copy here** —
+    # the details are written at that place in `_ops.py`.
     as_strided, as_strided_, as_strided_scatter, diag_embed, diagonal_scatter,
     select_scatter, slice_scatter, split_with_sizes, tensor_split,
     unique_consecutive, unravel_index,
@@ -135,37 +150,46 @@ from ._ops import (
     put, renorm, scatter_reduce,
     cartesian_prod, chain_matmul, combinations, ger, mv, tril_indices,
     triu_indices, vander,
-    # addmm 계열. **제자리 판은 안 낸다** — torch 가 그것들을 메서드로만 두기
-    # 때문이다. `addmv_` 하나만 예외라 그것만 있다(실측).
+    # The addmm family. **The in-place versions are not exposed** — torch keeps
+    # those as methods only. `addmv_` is the single exception and it alone is
+    # here (measured).
     addbmm, addcdiv, addcmul, addmm, addmv, addmv_, addr, baddbmm, sspaddmm,
-    # 최상위 선형대수. **`linalg` 쪽과 이름이 겹치는 둘은 자리를 옮겨 준다** —
-    # `lu` 는 그쪽이 `P·L·U` 셋을 펴 주고 이쪽은 겹쳐 담은 한 판을 주며,
-    # `lu_solve` 는 이쪽이 오른쪽 변을 먼저 받는다.
+    # Top-level linear algebra. **The two whose names collide with `linalg`'s
+    # have their positions moved** — that side's `lu` spreads `P`, `L` and `U`
+    # while this one gives a single packed matrix, and this `lu_solve` takes the
+    # right-hand side first.
     cholesky_inverse, cholesky_solve, lobpcg, lu_top as lu,
     lu_solve_top as lu_solve, lu_unpack, orgqr, ormqr, pca_lowrank,
     svd_lowrank, triangular_solve,
-    # 통계. **난수 넷의 값은 못 굳히지만 끝값은 결정적이다** — 그 자리를 골든이 묻는다.
-    # `stft`·`istft`·`hash_tensor` 는 이름만 두고 거절한다(복소수·uint64 가 없다).
+    # Statistics. **The four random ones cannot have their values pinned and
+    # their extremes are deterministic** — that is what the golden asks about.
+    # `stft`, `istft` and `hash_tensor` are names that refuse (no complex, no
+    # uint64).
     bernoulli, binomial, gradient, hash_tensor, histc, histogram, histogramdd,
     istft, mode, nanmedian, nonzero_static, normal, poisson, stft, trapz,
-    # **복소수가 없어도 답이 있는 이름들.** 실수에서 `conj` 계열은 항등이고
-    # `is_complex` 는 거짓이다. `imag` 만 거절인데 **torch 자신이 그렇게 한다**(실측).
+    # **The names that have an answer even without complex numbers.** Over the
+    # reals the `conj` family is the identity and `is_complex` is false. `imag`
+    # alone refuses, and **torch itself does that** (measured).
     angle, asarray, conj, conj_physical, conj_physical_, empty_permuted,
     empty_strided, frombuffer, imag, is_complex, is_conj, is_neg, real,
     resolve_conj, resolve_neg,
-    # **복소수.** `complex128` 은 이름만 있고 만들려 하면 멈춘다 — `float64` 가
-    # 없어서다. 기울기 규약은 `∂L/∂re + i·∂L/∂im` 이고 실측으로 못 박았다.
+    # **Complex numbers.** `complex128` is a name and trying to make one stops —
+    # because there is no `float64`. The gradient convention is
+    # `∂L/∂re + i·∂L/∂im`, pinned by measurement.
     complex, polar, view_as_complex, view_as_real,
-    # **이 파일이 내장 `range` 를 91 곳에서 쓴다** — `_ops` 안에서는 다른 이름이고
-    # 밖으로만 `range` 로 낸다. `lu`·`lu_solve` 와 같은 자리다.
+    # **This file uses the builtin `range` in 91 places** — inside `_ops` it has
+    # a different name and it is exposed as `range` only on the way out. The same
+    # place as `lu` and `lu_solve`.
     range_top as range,
-    # **최상위에도 있는 거리 둘.** torch 에서 이 둘은 `F` 의 것과 **글자 그대로 같은
-    # 함수**다(`torch.pdist is F.pdist` 가 참이다).
+    # **The two distances that exist at top level as well.** In torch these two
+    # are **literally the same function** as `F`'s (`torch.pdist is F.pdist` is
+    # true).
     #
-    # 같이 드러난 손실 일곱(`kl_div`·`poisson_nll_loss` …)은 안 낸다 — 최상위 쪽이
-    # 날 ATen 연산이라 **기본 reduction 이 `none` 이고 `reduction` 이 정수다.**
-    # `torch.kl_div(a, b)` 는 `[2,2]` 를 내고 `F.kl_div(a, b)` 는 스칼라를 낸다.
-    # 친절한 별명으로 두면 모양부터 갈린다.
+    # The seven losses that surfaced alongside (`kl_div`, `poisson_nll_loss`, …)
+    # are not exposed — the top-level ones are raw ATen operations, so **the
+    # default reduction is `none` and `reduction` is an integer.**
+    # `torch.kl_div(a, b)` gives `[2,2]` and `F.kl_div(a, b)` gives a scalar.
+    # Put down as a friendly alias, they diverge starting at the shape.
     pairwise_distance, pdist,
 )
 from ._nn import (
@@ -179,8 +203,10 @@ from ._nn import (
     TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer, Unflatten,
     Upsample, _Activation, _Functional, _NN, _RNNBase, _apply_mask, _cls,
     _nn_unsupported, _split_heads, nn, one_hot,
-    # **최상위 순환 여덟.** torch 는 층(`nn.LSTM`)과 함수(`torch.lstm`)를 둘 다 주고,
-    # 층이 안에서 부르는 것이 함수 쪽이다. 가중치를 목록으로 받는 것이 차이다.
+    # **The eight top-level recurrent ones.** torch offers both the layer
+    # (`nn.LSTM`) and the function (`torch.lstm`), and what the layer calls
+    # inside is the function. The difference is that they take the weights as a
+    # list.
     gru, gru_cell, lstm, lstm_cell, rnn_relu, rnn_relu_cell, rnn_tanh,
     rnn_tanh_cell,
 )
@@ -205,15 +231,16 @@ from ._serialize import (
     load, save,
 )
 
-# ================================================================ 메서드 노출
+# ==================================================== exposing them as methods
 #
-# torch 코드는 `torch.sin(x)` 와 `x.sin()` 을 섞어 쓴다. 우리는 모듈 함수만 갖고 있어서
-# 점 표기를 쓴 튜토리얼이 `AttributeError` 로 멈췄다 — **있는 기능인데 부르는 법이 하나
-# 모자란** 자리였다.
+# torch code mixes `torch.sin(x)` and `x.sin()`. Having module functions only,
+# a tutorial using dot notation stopped with an `AttributeError` — **a feature
+# that exists and is one calling convention short.**
 #
-# 이 목록은 손으로 고르지 않았다. torch 에게 `x.f(...)` 와 `torch.f(x, ...)` 가 같은
-# 값을 내는지 물어보고, 같다고 답한 것만 담았다. 62개가 같다고 나왔고 하나가 달랐다 —
-# `where` 다(아래 참고). 그런 것을 그냥 붙이면 조용히 틀린 답이 나온다.
+# This list was not chosen by hand. torch was asked whether `x.f(...)` and
+# `torch.f(x, ...)` give the same value, and only the ones it said yes to are
+# here. 62 came back equal and one differed — `where` (see below). Attaching one
+# of those blindly gives a quietly wrong answer.
 
 _AS_METHOD = (
     "allclose", "argsort", "bmm", "ceil", "chunk", "clamp", "cos", "cosh", "cumprod",
@@ -223,24 +250,28 @@ _AS_METHOD = (
     "norm", "outer", "pow", "prod", "reciprocal", "relu", "roll", "round", "rsqrt",
     "sigmoid", "sign", "sin", "sinh", "softmax", "sort", "split", "square", "tan",
     "tanh", "tile", "topk", "trace", "tril", "triu", "unbind", "unique",
-    # 수학 함수 묶음. 같은 방법으로 확인했다 — torch 에게 물어보고 같다고 한 것만.
+    # The maths group. Confirmed the same way — asked of torch, and only what
+    # it said was equal.
     "acos", "acosh", "arccos", "arccosh", "arcsin", "arcsinh", "arctan", "arctanh",
     "asin", "asinh", "atan", "atan2", "atanh", "absolute", "clip", "copysign",
     "deg2rad", "erfc", "exp2", "expm1", "fix", "frac", "heaviside", "hypot", "ldexp",
     "log1p", "logaddexp", "logaddexp2", "logit", "negative", "positive", "rad2deg",
     "sgn", "signbit", "sinc", "trunc", "xlogy",
-    # 축약 묶음. torch 도 이 열여섯을 메서드로 노출한다.
+    # The reduction group. torch exposes these sixteen as methods too.
     "amax", "amin", "aminmax", "argwhere", "cummax", "cummin", "diff", "dist",
     "kthvalue", "logsumexp", "msort", "nanmean", "nanquantile", "nansum", "nonzero",
     "quantile",
-    # 모양 묶음. 이 중 `expand`·`repeat`·`ravel`·`select`·`unfold`·`expand_as` 는
-    # **torch 에 모듈 함수가 없고 메서드로만 있다** — 부르는 법이 하나뿐인 자리다.
+    # The shape group. Of these, `expand`, `repeat`, `ravel`, `select`, `unfold`
+    # and `expand_as` **have no module function in torch and exist as methods
+    # only** — places with a single calling convention.
     "diagflat", "diagonal", "dsplit", "expand", "expand_as", "fliplr", "flipud",
     "hsplit", "ravel", "repeat", "rot90", "select", "swapaxes", "swapdims",
     "unflatten", "unfold", "vsplit",
-    # 자매에는 메서드로 있고 여기에는 함수로만 있던 셋. torch 도 메서드로 준다.
+    # The three the sister library had as methods and this had as functions
+    # only. torch offers them as methods too.
     "index_select", "masked_select", "repeat_interleave", "masked_fill",
-    # 색인으로 쓰는 쪽. torch 는 전부 메서드로도 준다 — `x.scatter_(…)` 가 그 꼴이다.
+    # The writing side of indexing. torch offers all of them as methods as
+    # well — `x.scatter_(…)` is the form.
     "scatter", "scatter_add", "index_add", "index_copy", "index_fill", "take",
     "take_along_dim",
 )
@@ -251,10 +282,12 @@ for _method in _AS_METHOD:
 
 
 def _where_method(self, condition, other):
-    """**인자 순서가 함수와 다르다.** `x.where(조건, y)` 는 `torch.where(조건, x, y)` 다.
+    """**The argument order differs from the function's.**
+    `x.where(condition, y)` is `torch.where(condition, x, y)`.
 
-    이것만 그냥 붙이면 `x` 가 조건 자리로 들어가 조용히 틀린 답이 나온다.
-    torch 에 물어봐서 알았지, 목록을 눈으로 훑어서는 안 나왔을 자리다.
+    Attached blindly like the rest, `x` lands in the condition slot and the
+    answer is quietly wrong. It was found by asking torch; reading down the list
+    by eye would not have found it.
     """
     return where(condition, self, other)
 
@@ -262,13 +295,14 @@ def _where_method(self, condition, other):
 Tensor.where = _where_method
 
 
-# ── `nn.functional` 에 있는 것 중 **torch 가 최상위에도 두는 것들.** ──────────
+# ── the ones in `nn.functional` that **torch also keeps at top level** ──────
 #
-# torch 는 층 관련 함수를 대개 `F.` 아래에만 두는데, 일부는 `torch.` 에도 둔다.
-# 어느 쪽인지는 규칙이 아니라 그쪽의 이력이라 **물어봐서 알아야 한다** —
-# `tests/torch_gap.py` 가 그 목록을 낸다.
+# torch mostly keeps the layer functions under `F.` alone, and puts some of them
+# on `torch.` as well. Which is which is that side's history rather than a rule,
+# so **it has to be asked** — `tests/torch_gap.py` produces the list.
 #
-# 물건은 이미 다 있고 이름만 없었다. 이름이 없으면 그 코드는 안 돈다.
+# The things all existed already and only the names were missing. Without the
+# name that code does not run.
 for _name in ("conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
               "group_norm", "instance_norm", "rms_norm",
               "celu", "selu", "prelu", "hardshrink", "threshold",
@@ -276,32 +310,39 @@ for _name in ("conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
     globals()[_name] = getattr(nn.functional, _name)
 
 
-# ── 메서드를 **모듈 함수로도** 낸다. `_AS_METHOD` 의 정확히 반대 방향이다. ──────
+# ── methods exposed **as module functions too.** Exactly the opposite
+# direction from `_AS_METHOD`. ──────────────────────────────────────────────
 #
-# torch 는 거의 모든 것을 두 이름으로 준다 — `x.sum()` 과 `torch.sum(x)`. 여기는 한쪽만
-# 있었고, 그래서 `torch.sum(x, dim=1)` 이 `AttributeError` 로 멈췄다. 골든이 그것을
-# 잡은 것도 아니다 — 케이스를 쓰다가 걸렸고, 표에 그 꼴이 하나도 없었기 때문이다.
+# torch offers nearly everything under two names — `x.sum()` and `torch.sum(x)`.
+# Only one side existed here, so `torch.sum(x, dim=1)` stopped with an
+# `AttributeError`. The golden did not catch it either — it turned up while
+# writing cases, because the table held no case of that form at all.
 #
-# 목록을 손으로 안 적는다. **torch 가 모듈 함수로도 주는 것**과 우리가 메서드로 가진
-# 것의 교집합이 곧 답이고, 그것을 기계가 낸다. 손으로 적으면 다음에 메서드를 하나
-# 늘릴 때 이쪽을 빼먹는다.
-# ── torch 의 **형 별칭**을 먼저 놓는다. 아래 고리보다 위여야 한다. ──────────────
+# The list is not written by hand. The intersection of **what torch also offers
+# as a module function** and what we have as a method is the answer, and the
+# machine produces it. Written by hand, the next method added forgets this
+# side.
+# ── torch's **dtype aliases** go down first. They have to sit above the loop
+# below. ────────────────────────────────────────────────────────────────────
 #
-# `torch.float`·`torch.double`·`torch.int`·`torch.bool` 은 dtype 이지 함수가 아니다.
-# 그런데 `float`·`double`·`int`·`bool` 은 Tensor 의 메서드이기도 해서, 아래 고리가
-# 이 이름들을 **메서드에서 만든 함수**로 채우고 있었다. 그래서 교재에 흔한
-# `zeros(2, dtype=torch.float)` 이 `'function' object has no attribute 'np'` 로
-# 멈췄다 — 가리키는 형은 멀쩡히 있는데 이름만 가려져 있었다.
+# `torch.float`, `torch.double`, `torch.int` and `torch.bool` are dtypes rather
+# than functions. And `float`, `double`, `int` and `bool` are also Tensor
+# methods, so the loop below was filling these names with **functions built from
+# the methods.** That made the textbook-common `zeros(2, dtype=torch.float)` stop
+# with `'function' object has no attribute 'np'` — the dtype it points at was
+# perfectly present and only the name was covered over.
 #
-# 고리는 `_name in globals()` 를 보고 건너뛰므로, **여기 먼저 놓는 것이 곧 고침**이다.
-# 메서드 쪽(`x.float()`)은 그대로다 — 이 이름들은 모듈 자리에만 놓인다.
+# The loop skips on `_name in globals()`, so **putting them down here is the
+# fix.** The method side (`x.float()`) is untouched — these names go into the
+# module slot only.
 #
-# `int` 만 별칭이 아니다. **`torch.int` 는 int32 이고 우리에게 그 칸이 없다** —
-# 이름은 두되 쓰려 하면 멈춘다(`int32` 는 `_AbsentDtype` 이다).
+# `int` alone is not an alias. **`torch.int` is int32 and there is no such
+# storage here** — the name is kept and using it stops (`int32` is an
+# `_AbsentDtype`).
 float = float32
 double = float64
 bool = bool_
-# 아래 넷은 가리키는 형 자체가 없다 — 이름만 두고 쓰려 하면 멈춘다.
+# The four below have no dtype to point at — names only, and using one stops.
 int = int32
 half = float16
 short = int16
@@ -309,11 +350,11 @@ chalf = complex32
 
 
 def _as_function(name):
-    """메서드를 첫 인자로 받는 함수로 감싼다."""
+    """Wrap a method as a function taking it as the first argument."""
     def call(t, *args, **kwargs):
         return getattr(_wrap_tensor(t), name)(*args, **kwargs)
     call.__name__ = name
-    call.__doc__ = f"`x.{name}(...)` 과 같다. torch 는 둘 다 준다."
+    call.__doc__ = f"The same as `x.{name}(...)`. torch offers both."
     return call
 
 
@@ -321,24 +362,27 @@ def _wrap_tensor(t):
     return t if isinstance(t, Tensor) else tensor(t)
 
 
-# **torch 가 다른 종류로 내주는 이름은 가져가지 않는다.**
+# **A name torch exposes as a different kind of thing is not taken.**
 #
-# 이 고리는 메서드 이름을 그대로 모듈 자리에 놓는데, torch 에서 그 이름이 함수가
-# 아닌 자리가 있다. 그러면 우리 쪽에는 **함수가 앉고**, 쓰는 사람은 그 이름을 원래
-# 용도로 쓰다가 한 칸 밀린 오류를 본다 — `dtype=torch.float` 이
-# `'function' object has no attribute 'np'` 로 멈춘 것이 그 꼴이었다.
+# This loop puts method names straight into the module slot, and there are
+# places where that name is not a function in torch. Then **a function sits**
+# on our side, and somebody using the name for its real purpose sees an error one
+# step displaced — `dtype=torch.float` stopping with
+# `'function' object has no attribute 'np'` was that shape.
 #
-# 형 여덟(`float`·`bool`·`half` …)은 **위에서 먼저 놓아** 막았고, 남은 것이 아래
-# 다섯이다. 손으로 세 번 뺐으니 이번에는 규칙으로 적는다.
+# The eight dtypes (`float`, `bool`, `half`, …) are blocked **by being put down
+# above**, and the five below are what is left. Removed by hand three times, so
+# this time it is written as a rule.
 #
-# **이 표는 torch 를 안 보고 적는다** — 코어는 torch 에 기대지 않는다. 대신
-# `tests/test_module_names.py` 가 torch 를 들고 이 표가 낡지도 짧지도 않은지 본다.
+# **This table is written without looking at torch** — the core does not lean on
+# torch. Instead `tests/test_module_names.py` holds torch and checks that this
+# table is neither stale nor short.
 _NOT_OURS = {
-    "cpu": "torch 에서는 이름 공간이다 — 고를 장치가 하나뿐이라 우리에게는 없다",
-    "storage": "torch 에서는 이름 공간이다 — 저장 계층을 들여다보는 자리가 없다",
-    "mtia": "torch 에서는 이름 공간이다 — 다른 가속기다",
-    "xpu": "torch 에서는 이름 공간이다 — 다른 가속기다",
-    "qscheme": "torch 에서는 클래스다 — 양자화 방식이고 그 형이 없다",
+    "cpu": "a namespace in torch — there is one device to choose, so we have none",
+    "storage": "a namespace in torch — there is nowhere here to look into a storage layer",
+    "mtia": "a namespace in torch — a different accelerator",
+    "xpu": "a namespace in torch — a different accelerator",
+    "qscheme": "a class in torch — a quantisation scheme, and that dtype is absent",
 }
 
 for _name in dir(Tensor):
@@ -347,22 +391,26 @@ for _name in dir(Tensor):
     if callable(getattr(Tensor, _name, None)):
         globals()[_name] = _as_function(_name)
 
-# **여기가 파일의 끝 가까이여야 한다.** 위 고리가 `sum`·`min`·`max`·`all`·`any` 를
-# 모듈 전역에 놓는데, 그 이름들은 파이썬 내장이기도 하다. 이 아래에서 내장으로
-# 부르는 코드가 있으면 조용히 다른 것이 불린다 — 결속에서 `bool` 로 한 번 겪었다.
+# **This has to be near the end of the file.** The loop above puts `sum`, `min`,
+# `max`, `all` and `any` into module scope, and those are Python builtins too.
+# Code below this calling the builtins quietly calls something else — the binding
+# went through this once with `bool`.
 
 
-# ── `out=` — 미리 만든 텐서에 써 넣기 ────────────────────────────────────────
+# ── `out=` — writing into a tensor made in advance ──────────────────────────
 #
-# torch 는 이 이름들에서 결과를 새로 만들지 않고 건네받은 텐서에 써 넣는다.
-# **절약은 우리에게 안 일어난다** — 계산한 뒤 옮기므로 할당은 그대로 생긴다. 그래도
-# 관측되는 것 둘은 진짜다: 목적지가 바뀌고, 돌아오는 것이 **같은 객체**다. 그 둘에
-# 기대는 코드가 있으므로 흉내가 아니라 사실을 지키는 쪽이다.
+# For these names torch writes into the tensor it was handed rather than making
+# a new result. **The saving does not happen here** — it computes and then moves,
+# so the allocation occurs anyway. The two observable things are real, though:
+# the destination changes, and what comes back is **the same object.** Code leans
+# on those two, so this keeps a fact rather than an imitation.
 #
-# **목록은 재서 만들었다.** docstring 의 `out=None` 만 보면 넓다 —
-# `rand_like`·`zeros_like`·`median`·`where` 는 거기 적혀 있는데 실제 오버로드는 안
-# 받는다. 그래서 torch 를 **실제로 불러 보고** 갈랐고, `tests/test_out_names.py` 가
-# 그 갈림을 다시 잰다. 코어는 torch 에 기대지 않으므로 표는 여기 적고 대조는 저기서.
+# **The list was built by measuring.** Going by the `out=None` in the docstrings
+# it is wider — `rand_like`, `zeros_like`, `median` and `where` are written there
+# and the actual overload does not accept it. So the split came from **actually
+# calling torch**, and `tests/test_out_names.py` measures that split again. The
+# core does not lean on torch, so the table lives here and the comparison lives
+# there.
 _TAKES_OUT = frozenset("""
     add addbmm addcdiv addcmul addmm addmv addr all amax amin any arange
     baddbmm bitwise_and bitwise_left_shift bitwise_not bitwise_right_shift
@@ -385,7 +433,8 @@ _TAKES_OUT = frozenset("""
     zeros
 """.split())
 
-# `out=(값, 번호)` 처럼 **여럿**을 받는 것들. 규칙은 같고 자리가 여럿일 뿐이다.
+# The ones taking **several**, as in `out=(values, indices)`. The same rule with
+# more than one slot.
 _TAKES_OUT_TUPLE = frozenset("""
     aminmax cummax cummin frexp geqrf histogram kthvalue mode sort svd topk
     triangular_solve
@@ -393,8 +442,9 @@ _TAKES_OUT_TUPLE = frozenset("""
 
 
 def _accepts_out(fn, name):
-    """`out=` 을 받아 `_out` 에 넘긴다. **함수마다 손으로 안 적는다** — 백일흔둘을
-    손으로 고치면 그중 하나가 빠지고, 빠진 자리는 조용히 삼킨다."""
+    """Take `out=` and hand it to `_out`. **Not written per function** — fixing
+    a hundred and seventy-two by hand leaves one of them out, and the one left
+    out swallows quietly."""
     def call(*args, **kwargs):
         out = kwargs.pop("out", None)
         return _out(fn(*args, **kwargs), out, name)
@@ -413,14 +463,16 @@ del _name
 # ================================================================ install
 
 def install(name="torch", modules=None):
-    """`import torch` 가 이 축소판을 집도록 하위 모듈 경로를 심는다.
+    """Plant the submodule paths so that `import torch` picks up this subset.
 
-    경로를 손으로 적으면 어긋난다 — 실제로 어긋났다. 러너·검사기·테스트가 각자
-    목록을 들고 있었고 셋 다 `torch.optim.lr_scheduler` 를 빠뜨려서, 물건은 있는데
-    `from torch.optim.lr_scheduler import StepLR` 이 교재 본문에서 멈췄다.
-    그래서 목록을 두지 않고 `_Namespace` 를 훑어 만든다.
+    Writing the paths by hand drifts — and it did. The runner, the checker and
+    the tests each held their own list and all three left out
+    `torch.optim.lr_scheduler`, so the thing existed and
+    `from torch.optim.lr_scheduler import StepLR` stopped in the body of a
+    textbook. So there is no list; it is built by walking `_Namespace`.
 
-    뿌리(`sys.modules["torch"]`)는 부르는 쪽이 심는다 — 모듈 객체를 쥔 것은 그쪽이다.
+    The root (`sys.modules["torch"]`) is planted by the caller — that side is
+    what holds the module object.
     """
     import sys
 
