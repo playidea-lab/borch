@@ -1,17 +1,19 @@
-"""메서드 이름을 **진짜 torch 에 물어 확인한다.**
+"""Confirms the method names **by asking real torch.**
 
-`borch/_ops.py` 에 표 셋이 있다 — 모듈 함수를 메서드로도 낼 이름(`_AS_METHOD`), 그리고
-제자리 연산으로 낼 이름들(`_INPLACE_*`). 표는 손으로 적은 것이라 틀릴 수 있고, 틀리는
-방향이 둘 다 나쁘다.
+`borch/_ops.py` holds three tables — names to put out as methods as well as module functions
+(`_AS_METHOD`), and names to put out as in-place operations (`_INPLACE_*`). The tables are
+written by hand and can be wrong, and both directions of wrong are bad.
 
-- **torch 에 없는 이름을 만들면** 우리에게서만 도는 코드를 쓰게 된다. 그 코드를 진짜
-  torch 로 옮기는 날 `AttributeError` 가 나는데, 그때는 이미 그 이름에 기대어 짜 놓은
-  뒤다. 이 저장소의 유일한 주장이 "임포트만 바꿔 돌린다" 이므로 이것은 그 주장을 깬다.
-- **표에 적고 안 만들면** 조용히 아무 일도 안 일어난다. 빈자리 수만 안 줄고 아무도
-  모른다.
+- **Inventing a name torch does not have** means writing code that runs only here. The day
+  that code moves to real torch it raises `AttributeError`, and by then it has already been
+  written leaning on that name. This repository's only claim is "run it with the import
+  changed", and this breaks that claim.
+- **Writing it into the table and not building it** does nothing at all, quietly. The gap
+  count simply does not fall and nobody knows.
 
-골든이 이것을 못 잡는다. 골든은 우리가 **물어본** 이름만 보고, 표에 적었는데 안 물은
-이름은 그 표 밖이다. 그래서 표 자체를 여기서 본다.
+The golden cases cannot catch this. They see only the names we **asked about**, and a name
+written into a table and never asked about is outside them. So the tables themselves are
+looked at here.
 """
 
 import pytest
@@ -38,34 +40,37 @@ TABLES = [
 
 
 def test_every_name_we_add_is_a_real_torch_method():
-    """**torch 에 없는 메서드를 만들면 안 된다.**
+    """**A method torch does not have must not be built.**
 
-    없는 이름을 만들면 그것에 기대어 짠 코드가 진짜 torch 에서 안 돈다 — 흉내가
-    아니라 **다른 라이브러리**를 만드는 것이다.
+    Inventing a name means code leaning on it does not run under real torch — that is not
+    imitating but building **a different library.**
     """
     invented = [f"{label}: {name}" for label, name in _named(TABLES)
                 if not hasattr(torch.Tensor, name)]
     assert not invented, (
-        "torch.Tensor 에 없는 이름을 만들고 있다:\n  " + "\n  ".join(invented) +
-        "\n\n표에서 빼라 — 없는 이름은 임포트만 바꿔서는 안 도는 코드를 만든다.")
+        "names being built that torch.Tensor does not have:\n  " + "\n  ".join(invented) +
+        "\n\nTake them out — a name that does not exist makes code that does not run with the "
+        "import changed.")
 
 
 def test_every_name_we_promised_is_actually_there():
-    """**표에 적고 안 만든 것이 없어야 한다.**
+    """**Nothing written into a table may go unbuilt.**
 
-    이쪽이 틀리면 조용하다. 예외도 안 나고 빈자리 수만 안 줄어든다.
+    Wrong in this direction it is quiet. No exception is raised and the gap count simply does
+    not fall.
     """
     missing = [f"{label}: {name}" for label, name in _named(TABLES)
                if not hasattr(borch.Tensor, name)]
     assert not missing, (
-        "표에 적었는데 안 만들어진 이름이 있다:\n  " + "\n  ".join(missing))
+        "names written into a table and never built:\n  " + "\n  ".join(missing))
 
 
 def test_the_method_and_the_function_are_the_same_calculation():
-    """`x.add(y)` 와 `borch.add(x, y)` 가 같은 답이어야 한다.
+    """`x.add(y)` and `borch.add(x, y)` have to give the same answer.
 
-    두 벌로 적으면 언젠가 갈리고, 그때 값이 그럴듯해서 안 보인다. 여기서는 같은
-    함수를 가리키는지가 아니라 **같은 답을 내는지**를 본다.
+    Written as two copies they diverge eventually, and the values are plausible enough then
+    that nothing shows. What is looked at here is not whether they point at the same function
+    but **whether they give the same answer.**
     """
     x = borch.tensor([[1.0, 2.0], [3.0, 4.0]])
     y = borch.tensor([[0.5, 1.5], [2.5, 3.5]])
@@ -77,19 +82,19 @@ def test_the_method_and_the_function_are_the_same_calculation():
             continue
         method = getattr(x, name)(*extra)
         plain = getattr(borch, name)(x, *extra)
-        assert borch.allclose(method, plain), f"{name}: 메서드와 함수가 갈린다"
+        assert borch.allclose(method, plain), f"{name}: the method and the function diverge"
 
 
 def test_in_place_writes_into_the_same_tensor():
-    """제자리 연산은 **같은 텐서를 고쳐야** 한다 — 새것을 돌려주면 뜻이 없다."""
+    """An in-place operation has to **modify the same tensor** — returning a new one means nothing."""
     for name in ("absolute_", "sinc_", "sgn_"):
         x = borch.tensor([-1.0, 2.0, -3.0])
         got = getattr(x, name)()
-        assert got is x, f"{name}: 제자리가 아니라 새것을 냈다"
+        assert got is x, f"{name}: it returned a new tensor rather than acting in place"
 
 
 def test_in_place_refuses_a_leaf_that_needs_grad():
-    """torch 가 거절하는 자리를 따라 거절한다."""
+    """It refuses where torch refuses."""
     for lib in (borch, torch):
         x = lib.tensor([1.0, 2.0], requires_grad=True)
         with pytest.raises(RuntimeError):
