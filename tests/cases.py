@@ -7823,9 +7823,16 @@ def vision_cases(inp=None):
         # The three non-constant modes. They are numpy's own, so what is being asked is
         # whether **torchvision means the same thing by the same word** — `reflect` and
         # `symmetric` differ only in whether the edge value repeats.
-        (VISION_PREFIX + "Pad(edge)", on_float(lambda T: T.Pad(1, padding_mode="edge"))),
-        (VISION_PREFIX + "Pad(reflect)", on_float(lambda T: T.Pad(1, padding_mode="reflect"))),
-        (VISION_PREFIX + "Pad(symmetric)", on_float(lambda T: T.Pad(1, padding_mode="symmetric"))),
+        #
+        # **They pad by two, and one is the reason.** At a padding of one, `edge` and
+        # `symmetric` are the same picture — symmetric mirrors the edge value, which is
+        # the edge value — so the two entries held identical numbers and the pair could
+        # not tell the modes apart. Another session swapped the two in their port and
+        # all sixteen value cases still passed. Two is the smallest padding where the
+        # words diverge.
+        (VISION_PREFIX + "Pad(edge)", on_float(lambda T: T.Pad(2, padding_mode="edge"))),
+        (VISION_PREFIX + "Pad(reflect)", on_float(lambda T: T.Pad(2, padding_mode="reflect"))),
+        (VISION_PREFIX + "Pad(symmetric)", on_float(lambda T: T.Pad(2, padding_mode="symmetric"))),
         # A colour per channel, through PIL. numpy's `constant_values` reads per **axis**,
         # so a three-colour fill handed straight to it paints the channel axis instead of
         # the colours — right shape, wrong picture, nothing raised.
@@ -8000,6 +8007,75 @@ def vision_cases(inp=None):
         (VISION_PREFIX + "ColorJitter(hue pinned)", jitter(None, (0.2, 0.2))),
     ]
 
+    # --- the six that rewrite pixels ------------------------------------------
+    #
+    # Same rule as the photometric five: **the tensor implementation on both sides**,
+    # uint8 included. `posterize` and `equalize` are uint8 only over there, so their
+    # cases have no float half to ask about.
+
+    cases += [
+        (VISION_PREFIX + "F.invert", photo(lambda F, x: F.invert(x))),
+        (VISION_PREFIX + "F.invert(uint8)", photo(lambda F, x: F.invert(x), on_bytes=True)),
+        # **The masking, at three widths.** One bit is the extreme, four is the usual,
+        # and eight has to be the identity — a mask computed as `2 ** (8 - bits)` gets
+        # that last one wrong in the obvious way.
+        (VISION_PREFIX + "F.posterize(one bit)",
+         photo(lambda F, x: F.posterize(x, 1), on_bytes=True)),
+        (VISION_PREFIX + "F.posterize(four bits)",
+         photo(lambda F, x: F.posterize(x, 4), on_bytes=True)),
+        (VISION_PREFIX + "F.posterize(all eight)",
+         photo(lambda F, x: F.posterize(x, 8), on_bytes=True)),
+        (VISION_PREFIX + "F.solarize", photo(lambda F, x: F.solarize(x, 0.5))),
+        (VISION_PREFIX + "F.solarize(uint8)",
+         photo(lambda F, x: F.solarize(x, 128), on_bytes=True)),
+        (VISION_PREFIX + "F.autocontrast", photo(lambda F, x: F.autocontrast(x))),
+        (VISION_PREFIX + "F.autocontrast(uint8)",
+         photo(lambda F, x: F.autocontrast(x), on_bytes=True)),
+        (VISION_PREFIX + "F.equalize", photo(lambda F, x: F.equalize(x), on_bytes=True)),
+        # Sharpness at 0 is the blur itself and at 2 is the sharpening — **and the
+        # border is the original in both**, because the convolution has no padding and
+        # the result is written back into the middle.
+        (VISION_PREFIX + "F.adjust_sharpness(blurred)",
+         photo(lambda F, x: F.adjust_sharpness(x, 0.0))),
+        (VISION_PREFIX + "F.adjust_sharpness(sharpened)",
+         photo(lambda F, x: F.adjust_sharpness(x, 2.0))),
+        # **The uint8 one is where the rounding lives.** torch casts the convolution
+        # back through `round`; truncating instead is one step low on about half the
+        # pixels, and every other sharpness case passes with it wrong.
+        (VISION_PREFIX + "F.adjust_sharpness(uint8)",
+         photo(lambda F, x: F.adjust_sharpness(x, 2.0), on_bytes=True)),
+    ]
+
+    def wrapper(build, on_bytes=False):
+        """A `Random…` wrapper with its probability pinned. p=0 is not a formality
+        here: five of the six share one implementation, and a wrapper that applied its
+        op whatever the draw said passes every p=1 case there is."""
+        def run(L):
+            T = _vision(L)
+            src = img_u8 if on_bytes else img_f
+            if _is_real_torch(L):
+                x = L.tensor(np.ascontiguousarray(src.transpose(2, 0, 1)))
+                return L.tensor(np.ascontiguousarray(
+                    np.asarray(build(T)(x).detach().numpy(), dtype=np.float32)))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(build(T)(src), dtype=np.float32).transpose(2, 0, 1)))
+        return run
+
+    cases += [
+        (VISION_PREFIX + "RandomInvert(p=1)", wrapper(lambda T: T.RandomInvert(p=1.0))),
+        (VISION_PREFIX + "RandomInvert(p=0)", wrapper(lambda T: T.RandomInvert(p=0.0))),
+        (VISION_PREFIX + "RandomEqualize(p=1)",
+         wrapper(lambda T: T.RandomEqualize(p=1.0), on_bytes=True)),
+        (VISION_PREFIX + "RandomPosterize(p=1)",
+         wrapper(lambda T: T.RandomPosterize(3, p=1.0), on_bytes=True)),
+        (VISION_PREFIX + "RandomSolarize(p=1)",
+         wrapper(lambda T: T.RandomSolarize(0.4, p=1.0))),
+        (VISION_PREFIX + "RandomAutocontrast(p=1)",
+         wrapper(lambda T: T.RandomAutocontrast(p=1.0))),
+        (VISION_PREFIX + "RandomAdjustSharpness(p=1)",
+         wrapper(lambda T: T.RandomAdjustSharpness(2.0, p=1.0))),
+    ]
+
     # Representation (T3). This project treats `repr` as specification too — the tutorials do
     # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
@@ -8037,6 +8113,14 @@ def vision_cases(inp=None):
         # The bare one, because **a jitter left at its defaults stores `None`** rather
         # than a range that does nothing, and only the default form prints that.
         ("ColorJitter(the default)", lambda T: T.ColorJitter()),
+        # **Three of these print without a space after the comma** — torchvision's own
+        # spelling, and the kind of thing only a frozen string notices.
+        ("RandomInvert", lambda T: T.RandomInvert()),
+        ("RandomPosterize", lambda T: T.RandomPosterize(4)),
+        ("RandomSolarize", lambda T: T.RandomSolarize(0.5)),
+        ("RandomAdjustSharpness", lambda T: T.RandomAdjustSharpness(2)),
+        ("RandomAutocontrast", lambda T: T.RandomAutocontrast()),
+        ("RandomEqualize", lambda T: T.RandomEqualize()),
     )
     for name, build in reprs:
         cases.append((VISION_PREFIX + f"repr::{name}",

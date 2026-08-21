@@ -506,3 +506,122 @@ def test_the_blend_is_done_in_the_precision_torch_promotes_to():
     assert list(ours.ravel()) == [76, 189, 42], (
         f"ours gave {list(ours.ravel())}; torch promotes to float32 and answers "
         "[76, 189, 42]. Widening the working precision is the change that breaks this.")
+
+
+# --- the six that rewrite pixels --------------------------------------------
+
+
+def test_the_two_that_need_bytes_say_so_rather_than_inventing_a_meaning():
+    """`posterize` throws away the low bits of a byte and `equalize` counts 256 bins.
+    Neither means anything on a float image, and torchvision raises — so a float
+    picture has to stop here too, or the same line gives a number over there and an
+    answer here."""
+    f = np.zeros((4, 4, 3), dtype=np.float32)
+    with pytest.raises(TypeError, match="uint8"):
+        V.transforms.functional.posterize(f, 4)
+    with pytest.raises(TypeError, match="uint8"):
+        V.transforms.functional.equalize(f)
+
+
+def test_posterize_at_eight_bits_changes_nothing():
+    """The mask is `-(2 ** (8 - bits))`, so eight bits is `-1` and keeps everything.
+    Written as `2 ** (8 - bits)` — the obvious spelling — eight bits masks with 1 and
+    the picture becomes its own low bit."""
+    img = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
+    assert np.array_equal(V.transforms.functional.posterize(img, 8), img)
+    assert not np.array_equal(V.transforms.functional.posterize(img, 4), img)
+
+
+def test_autocontrast_leaves_a_flat_channel_alone():
+    """A channel with one value has `max == min`, and the scale is `bound / 0`.
+    torchvision replaces the non-finite scale with 1 and the minimum with 0 rather
+    than clamping afterwards — a picture that is all one colour comes back unchanged
+    instead of all black or all NaN."""
+    flat = np.full((4, 4, 3), 7, dtype=np.uint8)
+    assert np.array_equal(V.transforms.functional.autocontrast(flat), flat)
+
+
+def test_sharpness_leaves_the_border_as_it_found_it():
+    """The 3×3 blur is convolved **without padding** and written back into the middle,
+    so the outermost ring is the original. A padded convolution gives different
+    numbers exactly there, and the middle — which is what anyone looks at — agrees
+    either way."""
+    img = (np.arange(75, dtype=np.float32).reshape(5, 5, 3) / 75).astype(np.float32)
+    out = V.transforms.functional.adjust_sharpness(img, 0.0)
+    assert np.array_equal(out[0], img[0]) and np.array_equal(out[-1], img[-1])
+    assert np.array_equal(out[:, 0], img[:, 0]) and np.array_equal(out[:, -1], img[:, -1])
+    assert not np.array_equal(out[1:-1, 1:-1], img[1:-1, 1:-1])
+
+
+def test_a_picture_too_small_to_blur_comes_back_untouched():
+    """Two pixels wide has no middle to convolve. torchvision returns the input, and
+    the alternative is an empty result written into an empty slice — which raises
+    nothing and returns the right shape."""
+    tiny = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    assert np.array_equal(V.transforms.functional.adjust_sharpness(tiny, 2.0), tiny)
+
+
+def test_every_random_pixel_wrapper_actually_draws():
+    """Six wrappers share one implementation, so **one broken draw is six**. Each is
+    asked at p=0.5 for both outcomes — the golden pins p=0 and p=1, and neither can
+    see a draw that never happens."""
+    V.manual_seed(0)
+    # **Big enough, and varied enough, that every one of the six actually changes it.**
+    # A 4x4 ramp was the first choice and `equalize` returned it untouched — its
+    # `step` floors to zero below 255 pixels a channel, so the two outcomes were the
+    # same picture and the test read that as a dead draw. The picture has to be able
+    # to show the difference before absence of difference means anything.
+    img = (np.arange(1200) ** 2 % 256).astype(np.uint8).reshape(20, 20, 3)
+    for build in (lambda: V.RandomInvert(p=0.5),
+                  lambda: V.RandomAutocontrast(p=0.5),
+                  lambda: V.RandomEqualize(p=0.5),
+                  lambda: V.RandomPosterize(3, p=0.5),
+                  lambda: V.RandomSolarize(100, p=0.5),
+                  lambda: V.RandomAdjustSharpness(2.0, p=0.5)):
+        transform = build()
+        seen = {transform(img).tobytes() for _ in range(60)}
+        assert len(seen) == 2, (
+            f"{transform} gave {len(seen)} distinct results over sixty draws — one "
+            "means the draw is dead, and these six share one implementation")
+
+
+def test_edge_and_symmetric_are_not_the_same_padding():
+    """**At a padding of one they are the same picture**, and the golden held them as
+    two entries with identical numbers for it.
+
+    `symmetric` mirrors the border row, and the mirror of a single row is that row —
+    which is what `edge` repeats. So the pair proved nothing, and another session
+    swapped the two modes in their port with all sixteen value cases still green. Two
+    is the smallest padding where the words diverge, and this asks it of the library
+    directly so the distinction does not depend on which padding a case happened to
+    pick.
+    """
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    assert np.array_equal(V.Pad(1, padding_mode="edge")(img),
+                          V.Pad(1, padding_mode="symmetric")(img)), (
+        "at one they agree — if that changed, this test is measuring something else now")
+    assert not np.array_equal(V.Pad(2, padding_mode="edge")(img),
+                              V.Pad(2, padding_mode="symmetric")(img)), (
+        "edge and symmetric give the same answer at a padding of two, so nothing here "
+        "can tell them apart")
+
+
+def test_totensor_says_what_to_do_when_a_group_of_crops_arrives():
+    """`Compose([FiveCrop(3), ToTensor()])` is a natural thing to write and a wrong
+    one, and **the refusal has to say which part is wrong.**
+
+    Without the guard the tuple survives `asarray` as a stacked 4-D array and the
+    message reads `it received (5, 2, 2, 3)` — true, and it leaves the reader to work
+    out that the five is five pictures. This project's standard for an error is that it
+    says what to do, and the answer is torchvision's own: a `Lambda`.
+
+    Found from the sister library, where the same composition type-checked and died
+    inside `ToTensor` with a shape complaint instead.
+    """
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    with pytest.raises(TypeError, match="Lambda"):
+        V.Compose([V.FiveCrop(2), V.ToTensor()])(img)
+    # And the way through still works, so the message is advice rather than a wall.
+    out = V.Compose([V.FiveCrop(2),
+                     V.Lambda(lambda crops: [V.ToTensor()(c) for c in crops])])(img)
+    assert len(out) == 5 and out[0].shape == (3, 2, 2)
