@@ -44,9 +44,37 @@ export async function report(): Promise<string> {
   // 후자다 — 세 스텝이 전부 같은 수를 내면 그 예시는 거짓말이다.
   const [first, last] = [seen[0] ?? NaN, seen[seen.length - 1] ?? NaN];
   const ok = Number.isFinite(first) && Number.isFinite(last) && last < first;
+
+  // ── README 의 `LBFGS` 예시 ────────────────────────────────────────────
+  //
+  // **이 파일의 첫 문단이 정한 규칙을 내가 어겼다.** "문서를 고치면 이 파일도 같이
+  // 고친다" 라고 적혀 있는데, LBFGS 예시를 README 에 넣으면서 여기는 안 건드렸다.
+  // 그래서 그 예시는 한 번도 안 돌아 본 채로 문서에 올라가 있었고, **실제로 틀려
+  // 있었다** — `new LBFGS([p], …)` 로 파라미터 하나를 최적화하면서 손실은 `model`
+  // 로 계산했다. `p` 가 그 모델의 것이 아니면 스텝이 아무것도 안 움직인다.
+  //
+  // 예외가 안 나는 종류라 읽어서는 안 보인다. 돌려야 보인다.
+  const lb = new nn.Sequential(
+    new nn.Linear(784, 128), new nn.ReLU(), new nn.Linear(128, 10));
+  const lbOpt = new optim.LBFGS(lb.parameters(), 0.1);
+  const before = await scope(async () => await crit.call(lb.call(x), y).item());
+  await scope(async () => {
+    await lbOpt.step(() => {
+      lbOpt.zeroGrad();
+      const loss = crit.call(lb.call(x), y);
+      loss.backward();
+      return loss;
+    });
+  });
+  const after = await scope(async () => await crit.call(lb.call(x), y).item());
+  const lbOk = Number.isFinite(before) && Number.isFinite(after) && after < before;
+
   return [
     `README 예시 — 손실 ${seen.map((v) => v.toFixed(4)).join(" → ")}`,
     ok ? "예시가 적힌 그대로 돌고, 손실이 내려간다"
        : "**예시가 돌기는 하는데 손실이 안 내려간다** — 보여줄 것이 못 된다",
+    `README LBFGS 예시 — 손실 ${before.toFixed(4)} → ${after.toFixed(4)}`,
+    lbOk ? "LBFGS 예시도 적힌 그대로 돌고, 한 스텝에 손실이 내려간다"
+         : "**LBFGS 예시가 파라미터를 안 움직인다** — 최적화하는 것과 손실이 보는 것이 다르다",
   ].join("\n");
 }

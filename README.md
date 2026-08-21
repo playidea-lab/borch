@@ -636,9 +636,9 @@ problem exactly.** There is no line search (`lineSearchFn`), and passing one sto
 loudly.
 
 ```ts
-const opt = new optim.LBFGS([p], 0.1);
-await opt.step(() => {                  // the closure re-measures the loss and fills the gradients
-  p.grad = null;
+const opt = new optim.LBFGS(model.parameters(), 0.1);
+await opt.step(() => {          // the closure re-measures the loss and fills the gradients
+  opt.zeroGrad();
   const loss = crit.call(model.call(x), y);
   loss.backward();
   return loss;
