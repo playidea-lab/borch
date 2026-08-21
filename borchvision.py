@@ -51,6 +51,7 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
 import enum as _enum
+import warnings as _warnings
 
 import numpy as _np
 
@@ -164,6 +165,18 @@ def _to_numpy(x):
         return x
     take = getattr(x, "numpy", None)
     return take() if callable(take) else _np.asarray(x)
+
+
+def _warn_min_max(scale, ratio):
+    """torchvision **warns** when a range arrives the wrong way round and goes on.
+
+    Both `RandomResizedCrop` and `RandomErasing` do it, and both keep running. The
+    line between warning and refusing is theirs to draw, not ours — a refusal here
+    stops code that runs over there, and this file's whole claim is that the same
+    code does the same thing.
+    """
+    if scale[0] > scale[1] or ratio[0] > ratio[1]:
+        _warnings.warn("Scale and ratio should be of kind (min, max)")
 
 
 def _antialias(value):
@@ -771,8 +784,8 @@ class Resize:
             raise ValueError(
                 "max_size means something only when the size is the short side "
                 "(a single number).\n"
-                "(torch: max_size should only be passed if size is int or sequence "
-                "of length 1)")
+                "(torch: max_size should only be passed if size specifies the length "
+                "of the smaller edge)")
         self.max_size = max_size
         self.antialias = _antialias(antialias)
 
@@ -889,11 +902,10 @@ class RandomResizedCrop:
     def __init__(self, size, scale=(0.08, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0),
                  interpolation="bilinear", antialias=True):
         self.size = _pair(size, "RandomResizedCrop")
-        if scale[0] > scale[1] or ratio[0] > ratio[1]:
-            raise ValueError(
-                f"scale and ratio read as (min, max) — got {tuple(scale)} and "
-                f"{tuple(ratio)}.\n"
-                "(torch: Scale and ratio should be of kind (min, max))")
+        # **A warning and not a refusal**, because torchvision warns here and carries
+        # on. Refusing stops a line that runs over there, and "imitate the structure"
+        # includes imitating where it lets you through.
+        _warn_min_max(scale, ratio)
         self.scale = scale
         self.ratio = ratio
         self.interpolation = _interpolation(interpolation)
@@ -956,6 +968,7 @@ class RandomErasing:
             raise ValueError(
                 f"value as a string is only 'random' — got {value!r}.\n"
                 "(torch: If value is str, it should be 'random')")
+        _warn_min_max(scale, ratio)
         if scale[0] < 0 or scale[1] > 1:
             raise ValueError(
                 f"scale is a fraction of the area, between 0 and 1 — got {tuple(scale)}.\n"
@@ -1013,7 +1026,7 @@ class RandomErasing:
                     f"value has {len(self.value)} numbers and the image has "
                     f"{channels} channels.\n"
                     "(torch: If value is a sequence, it should have either a single "
-                    "value or the number of input channels)")
+                    "value or (number of input channels))")
             fill = _np.asarray(self.value, dtype=_np.float32).reshape(-1, 1, 1)
         else:
             fill = float(self.value)
