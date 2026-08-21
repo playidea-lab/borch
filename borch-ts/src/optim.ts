@@ -458,14 +458,20 @@ export class RMSprop extends Optimizer {
     lr: number,
     private readonly alpha = 0.99,
     private readonly eps = 1e-8,
+    private readonly weightDecay = 0,
   ) {
     super(params, lr);
     this.squares = this.state(this.params);
   }
 
-  protected override update(index: number, param: Tensor, grad: Tensor): void {
+  protected override update(index: number, param: Tensor, g: Tensor): void {
     const sq = this.squares[index];
     if (!sq) throw new Error(`RMSprop: no state for parameter ${index}`);
+    // **커널은 안 건드린다.** 붙은 감쇠는 기울기에 더하는 것이므로 커널에 들어가기
+    // 전에 텐서 연산으로 끝난다 — 값을 셰이더에 구우면 `weightDecay` 마다 파이프
+    // 라인이 하나씩 늘고, 그 수는 굽는 이름에 들어간다(`Adam` 과 같은 판단).
+    const decay = this.grouped(this.weightDecay);
+    const grad = decay === 0 ? g : g.add(param.mul(Tensor.full([], decay)));
     const n = param.size;
     const d = device();
     d.run1d(
@@ -492,6 +498,26 @@ abstract class Composed extends Optimizer {
   // `state()` 는 밑동으로 올라갔다 — `SGD`·`Adam`·`RMSprop` 도 은행을 등록해야
   // `addParamGroup` 이 그것들을 같이 늘린다.
 
+  /**
+   * **감쇠를 여기서 든다.** 다섯이 전부 같은 붙은 꼴(`g + λ·p`)을 쓰므로, 저마다
+   * 필드와 두 줄을 갖게 하면 다섯 벌이 되고 그중 하나만 고쳐지는 날이 온다.
+   *
+   * 떨어진 꼴은 `AdamW` 하나뿐이고 그쪽은 전용 커널 위에 있어서 여기 안 온다.
+   */
+  constructor(params: ParamsArg, lr: number,
+              protected readonly weightDecay = 0) {
+    super(params, lr);
+  }
+
+  /**
+   * 감쇠를 먹인 기울기. **0 이면 원본을 그대로 준다** — 0 을 곱해 더하는 연산이
+   * 스텝마다 파라미터마다 두 개씩 늘고, 그것은 안 하는 것과 값이 같다.
+   */
+  protected decayed(param: Tensor, grad: Tensor): Tensor {
+    const wd = this.grouped(this.weightDecay);
+    return wd === 0 ? grad : grad.add(param.mul(this.k(wd)));
+  }
+
   protected at(bank: Tensor[], index: number, what: string): Tensor {
     const got = bank[index];
     if (!got) throw new Error(`${what}: no state for parameter ${index}`);
@@ -511,9 +537,16 @@ export class Adagrad extends Composed {
   private readonly sums: Tensor[];
   private stepCount = 0;
 
+  /**
+   * **`weightDecay` sits fourth, before `eps`** — that is torch's order, and the
+   * binding calls this positionally, so the position is the contract. It is one
+   * of the two here inserted into the middle rather than appended; every call in
+   * this repository stops at `lr`, so nothing moved under them, and that was
+   * checked rather than assumed.
+   */
   constructor(params: ParamsArg, lr = 0.01, private readonly lrDecay = 0,
-              private readonly eps = 1e-10) {
-    super(params, lr);
+              weightDecay = 0, private readonly eps = 1e-10) {
+    super(params, lr, weightDecay);
     this.sums = this.state(this.params);
   }
 
@@ -530,7 +563,8 @@ export class Adagrad extends Composed {
     if (v.stepCount !== undefined) this.stepCount = v.stepCount;
   }
 
-  protected override update(index: number, param: Tensor, grad: Tensor): void {
+  protected override update(index: number, param: Tensor, g: Tensor): void {
+    const grad = this.decayed(param, g);
     const sum = this.at(this.sums, index, "Adagrad");
     sum.copyFrom(sum.add(grad.square()));
     const lr = this.lr / (1 + (this.stepCount - 1) * this.lrDecay);
@@ -547,13 +581,14 @@ export class Adadelta extends Composed {
   private readonly deltas: Tensor[];
 
   constructor(params: ParamsArg, lr = 1.0, private readonly rho = 0.9,
-              private readonly eps = 1e-6) {
-    super(params, lr);
+              private readonly eps = 1e-6, weightDecay = 0) {
+    super(params, lr, weightDecay);
     this.squares = this.state(this.params);
     this.deltas = this.state(this.params);
   }
 
-  protected override update(index: number, param: Tensor, grad: Tensor): void {
+  protected override update(index: number, param: Tensor, g: Tensor): void {
+    const grad = this.decayed(param, g);
     const sq = this.at(this.squares, index, "Adadelta");
     const acc = this.at(this.deltas, index, "Adadelta");
     const rho = this.k(this.rho);
@@ -576,8 +611,9 @@ export class Adamax extends Composed {
   private stepCount = 0;
 
   constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
-              private readonly beta2 = 0.999, private readonly eps = 1e-8) {
-    super(params, lr);
+              private readonly beta2 = 0.999, private readonly eps = 1e-8,
+              weightDecay = 0) {
+    super(params, lr, weightDecay);
     this.first = this.state(this.params);
     this.inf = this.state(this.params);
   }
@@ -595,7 +631,8 @@ export class Adamax extends Composed {
     if (v.stepCount !== undefined) this.stepCount = v.stepCount;
   }
 
-  protected override update(index: number, param: Tensor, grad: Tensor): void {
+  protected override update(index: number, param: Tensor, g: Tensor): void {
+    const grad = this.decayed(param, g);
     const m = this.at(this.first, index, "Adamax");
     const u = this.at(this.inf, index, "Adamax");
     m.copyFrom(m.mul(this.k(this.beta1)).add(grad.mul(this.k(1 - this.beta1))));
@@ -618,10 +655,20 @@ export class NAdam extends Composed {
   private muProduct = 1;
   private stepCount = 0;
 
+  /**
+   * **`weightDecay` goes before `momentumDecay`, not after** — torch's order,
+   * and the binding calls positionally.
+   *
+   * This one is why an arity check cannot find a dropped argument. Before this,
+   * the binding passed six and this took six, so the counts agreed perfectly
+   * while the sixth was `momentumDecay` at both ends and `weight_decay` reached
+   * nothing. It was the last of seven to be found, and the only one an
+   * argument-count comparison could never have shown.
+   */
   constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8,
-              private readonly momentumDecay = 4e-3) {
-    super(params, lr);
+              weightDecay = 0, private readonly momentumDecay = 4e-3) {
+    super(params, lr, weightDecay);
     this.first = this.state(this.params);
     this.second = this.state(this.params);
   }
@@ -650,7 +697,8 @@ export class NAdam extends Composed {
     if (v.muNext !== undefined) this.muNext = v.muNext;
   }
 
-  protected override update(index: number, param: Tensor, grad: Tensor): void {
+  protected override update(index: number, param: Tensor, g: Tensor): void {
+    const grad = this.decayed(param, g);
     const m = this.at(this.first, index, "NAdam");
     const v = this.at(this.second, index, "NAdam");
     m.copyFrom(m.mul(this.k(this.beta1)).add(grad.mul(this.k(1 - this.beta1))));
@@ -677,8 +725,9 @@ export class RAdam extends Composed {
   private stepCount = 0;
 
   constructor(params: ParamsArg, lr = 1e-3, private readonly beta1 = 0.9,
-              private readonly beta2 = 0.999, private readonly eps = 1e-8) {
-    super(params, lr);
+              private readonly beta2 = 0.999, private readonly eps = 1e-8,
+              weightDecay = 0) {
+    super(params, lr, weightDecay);
     this.first = this.state(this.params);
     this.second = this.state(this.params);
   }
@@ -696,7 +745,8 @@ export class RAdam extends Composed {
     if (v.stepCount !== undefined) this.stepCount = v.stepCount;
   }
 
-  protected override update(index: number, param: Tensor, grad: Tensor): void {
+  protected override update(index: number, param: Tensor, g: Tensor): void {
+    const grad = this.decayed(param, g);
     const m = this.at(this.first, index, "RAdam");
     const v = this.at(this.second, index, "RAdam");
     const t = this.stepCount;
@@ -736,8 +786,8 @@ export class ASGD extends Composed {
 
   constructor(params: ParamsArg, lr = 1e-2, private readonly lambd = 1e-4,
               private readonly alpha = 0.75, private readonly t0 = 1e6,
-              private readonly weightDecay = 0) {
-    super(params, lr);
+              weightDecay = 0) {
+    super(params, lr, weightDecay);
     this.ax = this.state(this.params);
     this.eta = lr;
   }
@@ -763,8 +813,9 @@ export class ASGD extends Composed {
     const ax = this.at(this.ax, index, "ASGD");
     const eta = this.eta;
     const mu = this.mu;
-    const g = this.weightDecay
-      ? grad.add(param.mul(this.k(this.weightDecay))) : grad;
+    // **밑동의 것을 쓴다.** 여기 손으로 적혀 있었는데, 그러면 그룹별 감쇠
+    // (`grouped`)를 안 보므로 층별로 다르게 준 값이 이 옵티마이저에서만 무시된다.
+    const g = this.decayed(param, grad);
     param.copyFrom(param.mul(this.k(1 - this.lambd * eta)).sub(g.mul(this.k(eta))));
     // `mu` 가 1 이면 평균이 아니라 **사본**이다 — 더하면 두 배가 된다.
     ax.copyFrom(mu === 1 ? param : ax.add(param.sub(ax).mul(this.k(mu))));
@@ -1015,8 +1066,8 @@ export class Adafactor extends Composed {
   constructor(params: ParamsArg, lr = 1e-2, private readonly beta2Decay = -0.8,
               private readonly eps1: number | null = null,
               private readonly eps2 = 1e-3, private readonly d = 1.0,
-              private readonly weightDecay = 0) {
-    super(params, lr);
+              weightDecay = 0) {
+    super(params, lr, weightDecay);
     this.extendState(this.params);
   }
 
@@ -1072,9 +1123,11 @@ export class Adafactor extends Composed {
     const norm = param.square().sum().sqrt();
     const alpha = norm.div(this.k(Math.sqrt(param.size)))
       .binary("maximum", this.k(this.eps2)).mul(this.k(rho));
-    if (this.weightDecay) {
-      param.copyFrom(param.mul(this.k(1 - this.lr * this.weightDecay)));
-    }
+    // **여기는 떨어진 꼴이다** — `decayed()` 의 붙은 꼴이 아니다. torch 의
+    // `Adafactor` 가 가중치에 직접 걸고, `AdamW` 와 같은 자리다. 밑동의 헬퍼로
+    // 바꾸면 조용히 다른 옵티마이저가 된다.
+    const wd = this.grouped(this.weightDecay);
+    if (wd) param.copyFrom(param.mul(this.k(1 - this.lr * wd)));
     const rank = grad.shape.length;
     let variance: Tensor;
     if (rank > 1) {

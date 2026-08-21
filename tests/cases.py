@@ -3491,6 +3491,24 @@ _OPTIMIZERS = [
     # It is large here for the same reason the others take five steps: to be visible.
     ("Adam(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
     ("AdamW", {"lr": 0.05, "weight_decay": 0.1}),
+    # **Every optimizer that takes `weight_decay` is asked with a non-zero one.**
+    #
+    # There was no such case anywhere until today, and the absence hid seven defects: the
+    # browser binding accepted the argument and dropped it in seven places — in one of them
+    # (`NAdam`) while passing the right *number* of arguments, so even an arity check saw
+    # nothing. An argument nothing exercises is an argument nothing holds.
+    #
+    # The value is 0.1 rather than torch's default, for the same reason the pair above uses
+    # it: the branch disappears at zero, and a case built on the default passes against an
+    # implementation that ignores the argument entirely.
+    ("Adagrad(weight_decay)", {"lr": 0.1, "weight_decay": 0.1}),
+    ("Adadelta(weight_decay)", {"lr": 0.5, "weight_decay": 0.1}),
+    ("Adamax(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
+    ("NAdam(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
+    ("RAdam(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
+    ("RMSprop(weight_decay)", {"lr": 0.01, "weight_decay": 0.1}),
+    ("ASGD(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
+    ("SGD(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.

@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 4
+  "missing": 6
  },
  "modules": [
   {
@@ -10696,12 +10696,12 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, alpha?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr: number, alpha?: number, eps?: number, weightDecay?: number)",
        "doc": ""
       },
       {
        "name": "update",
-       "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
+       "signature": "protected update(index: number, param: Tensor, g: Tensor): void",
        "doc": "",
        "protected": true
       }
@@ -10715,8 +10715,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, eps?: number)",
-       "doc": ""
+       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, eps?: number)",
+       "doc": "**`weightDecay` sits fourth, before `eps`** — that is torch's order, and the\nbinding calls this positionally, so the position is the contract. It is one\nof the two here inserted into the middle rather than appended; every call in\nthis repository stops at `lr`, so nothing moved under them, and that was\nchecked rather than assumed."
       },
       {
        "name": "step",
@@ -10738,7 +10738,7 @@
       },
       {
        "name": "update",
-       "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
+       "signature": "protected update(index: number, param: Tensor, g: Tensor): void",
        "doc": "",
        "protected": true
       }
@@ -10753,12 +10753,12 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, rho?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, rho?: number, eps?: number, weightDecay?: number)",
        "doc": ""
       },
       {
        "name": "update",
-       "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
+       "signature": "protected update(index: number, param: Tensor, g: Tensor): void",
        "doc": "",
        "protected": true
       }
@@ -10773,7 +10773,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
        "doc": ""
       },
       {
@@ -10796,7 +10796,7 @@
       },
       {
        "name": "update",
-       "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
+       "signature": "protected update(index: number, param: Tensor, g: Tensor): void",
        "doc": "",
        "protected": true
       }
@@ -10811,8 +10811,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, momentumDecay?: number)",
-       "doc": ""
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, momentumDecay?: number)",
+       "doc": "**`weightDecay` goes before `momentumDecay`, not after** — torch's order,\nand the binding calls positionally.\n\nThis one is why an arity check cannot find a dropped argument. Before this,\nthe binding passed six and this took six, so the counts agreed perfectly\nwhile the sixth was `momentumDecay` at both ends and `weight_decay` reached\nnothing. It was the last of seven to be found, and the only one an\nargument-count comparison could never have shown."
       },
       {
        "name": "step",
@@ -10834,7 +10834,7 @@
       },
       {
        "name": "update",
-       "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
+       "signature": "protected update(index: number, param: Tensor, g: Tensor): void",
        "doc": "",
        "protected": true
       }
@@ -10849,7 +10849,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
        "doc": ""
       },
       {
@@ -10872,7 +10872,7 @@
       },
       {
        "name": "update",
-       "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
+       "signature": "protected update(index: number, param: Tensor, g: Tensor): void",
        "doc": "",
        "protected": true
       }

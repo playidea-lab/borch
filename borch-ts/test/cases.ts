@@ -3103,6 +3103,29 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
     ["Adam(weight_decay)",
       (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
     ["AdamW", (ps) => new optim.AdamW(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+    // **`weightDecay` 를 받는 옵티마이저 전부를 0 이 아닌 값으로 묻는다.**
+    //
+    // 오늘까지 그런 케이스가 하나도 없었고, 그 부재가 결손 일곱을 숨겼다 — 결속이
+    // 이 인자를 받아서 일곱 자리에서 버리고 있었고, 그중 `NAdam` 은 **인자 수까지
+    // 맞아서** arity 검사로도 안 보였다.
+    //
+    // 자리에 주의: `Adagrad` 는 `eps` **앞**, `NAdam` 은 `momentumDecay` **앞**이다.
+    // 끝에 붙이면 조용히 다른 인자가 된다.
+    ["Adagrad(weight_decay)",
+      (ps) => new optim.Adagrad(ps, 0.1, 0, 0.1)],
+    ["Adadelta(weight_decay)",
+      (ps) => new optim.Adadelta(ps, 0.5, 0.9, 1e-6, 0.1)],
+    ["Adamax(weight_decay)",
+      (ps) => new optim.Adamax(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+    ["NAdam(weight_decay)",
+      (ps) => new optim.NAdam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+    ["RAdam(weight_decay)",
+      (ps) => new optim.RAdam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1)],
+    ["RMSprop(weight_decay)",
+      (ps) => new optim.RMSprop(ps, 0.01, 0.99, 1e-8, 0.1)],
+    ["ASGD(weight_decay)",
+      (ps) => new optim.ASGD(ps, 0.05, 1e-4, 0.75, 1e6, 0.1)],
+    ["SGD(weight_decay)", (ps) => new optim.SGD(ps, 0.05, 0, 0.1)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {

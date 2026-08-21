@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3037 golden cases pass**, and that is a surface check rather than a
+> is that **3053 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -584,8 +584,8 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **all 3037 golden cases** — nothing in the table is skipped on this side
-alone. The core covers 2984 cases, and the remaining 53 are ones the core refuses
+It passes **all 3053 golden cases** — nothing in the table is skipped on this side
+alone. The core covers 3000 cases, and the remaining 53 are ones the core refuses
 on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of it.
 
 > That number said 2930 until this translation. The phrasing around it was
@@ -593,7 +593,7 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2635 cases. The remaining 402 are **two different
+borch.ts itself has written TS bodies for 2651 cases. The remaining 402 are **two different
 things, and counting them as one hides the second**. 360 are **deliberately not
 carried across** — the binding (`borch-webgpu`) already goes through borch.ts's kernels on
 those cases, so **the values are verified**, and what a TS body would add is not a
@@ -610,7 +610,7 @@ rather than letting it shrink quietly.
 > so loading `borch-ts/dist/test/cases.js` in node and counting the map is enough,
 > and `tests/test_site.py` now does exactly that whenever `dist` exists. A text
 > search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 784
-> against the real 2635, because the names are built programmatically.
+> against the real 2651, because the names are built programmatically.
 
 ### Six places where it diverges from torch
 
@@ -1039,8 +1039,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3037 golden cases** compare all three implementations against **the same
-expected values.** The core covers 2984 cases, leaving out the 53 that are
+And **3053 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3000 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are
