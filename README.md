@@ -531,7 +531,7 @@ random, so it cannot be measured".
 
 It does not go through Python. **It does not go through TF.js either** — the
 kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
-an ES module a browser simply reads (242KB gzipped, 834KB before compression).
+an ES module a browser simply reads (255KB gzipped, 877KB before compression).
 
 ```bash
 npm install borch
@@ -593,7 +593,7 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2629 cases. The remaining 362 are
+borch.ts itself has written TS bodies for 2635 cases. The remaining 360 are
 **deliberately not carried across** — the binding (`borch-webgpu`) already goes
 through borch.ts's kernels on those cases, so **the values are verified**, and what
 a TS body would add is not a value but this side's surface: names and argument
@@ -606,7 +606,7 @@ than letting it shrink quietly.
 > so loading `borch-ts/dist/test/cases.js` in node and counting the map is enough,
 > and `tests/test_site.py` now does exactly that whenever `dist` exists. A text
 > search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 784
-> against the real 2629, because the names are built programmatically.
+> against the real 2635, because the names are built programmatically.
 
 ### Six places where it diverges from torch
 
