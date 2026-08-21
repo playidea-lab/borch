@@ -1,636 +1,766 @@
-# borch.ts — 설계
+# borch.ts — the design
 
-> 브라우저에서 **학습되는** TypeScript 텐서 라이브러리. WGSL 커널을 직접 쓴다.
+> A TypeScript tensor library that **trains** in a browser. The WGSL kernels are
+> written directly.
 >
-> 이 문서는 착수 전에 확정할 것을 확정하고, **확정할 수 없는 것을 확정할 수 없다고
-> 적어두기 위한** 것이다. 앞의 두 라이브러리를 세울 때 같은 방식이 통했다.
+> This document settles what can be settled before starting, and exists **to
+> write down what cannot be settled as unsettled.** The same approach worked when
+> standing up the two libraries before it.
 
 ---
 
-## 왜 만드는가 — 잰 것만 적는다
+## Why build it — only what was measured
 
-세 가지를 확인하고 시작한다. 넷째는 확인 못 했고, 그것도 적는다.
+Three things were confirmed before starting. The fourth could not be, and that is
+written down too.
 
-### 1. 자리가 비어 있다
+### 1. The spot is empty
 
-브라우저에서 torch 모양 API 로 **실제 학습되는** TS 라이브러리를 못 찾았다.
+No TS library was found that **actually trains** in a browser through a
+torch-shaped API.
 
-| | 별 | 마지막 푸시 | 학습 | 막힌 곳 |
+| | stars | last push | trains | where it stops |
 |---|---|---|---|---|
-| [webgpu-torch](https://github.com/praeclarum/webgpu-torch) | 646 | 2024-07 | **안 됨** | `conv2d`·`mm` 역방향이 "not implemented" |
-| [js-pytorch](https://github.com/eduardoleao052/js-pytorch) | 1,222 | 2024-11 | 됨 | GPU.js, 연산 16개·층 11개 |
-| TyTorch | — | 2025-10 | 됨 | **브라우저에서 안 돎** (libtorch 네이티브) |
+| [webgpu-torch](https://github.com/praeclarum/webgpu-torch) | 646 | 2024-07 | **no** | `conv2d` and `mm` backward are "not implemented" |
+| [js-pytorch](https://github.com/eduardoleao052/js-pytorch) | 1,222 | 2024-11 | yes | GPU.js, 16 operations and 11 layers |
+| TyTorch | — | 2025-10 | yes | **does not run in a browser** (native libtorch) |
 
-`webgpu-torch` 가 제일 가까웠고 **정확히 conv 역방향에서 멈췄다.** 우리는 그것을
-자매 라이브러리에서 이미 풀었다 — 역방향을 순방향 conv 로 다시 쓰는 유도다.
+`webgpu-torch` came closest and **stopped at exactly the conv backward.** That was
+already solved in the sister library — the derivation that rewrites the backward
+as a forward conv.
 
-### 2. 우리 WGSL 이 TF.js 만큼 나온다
+### 2. Our WGSL keeps up with TF.js
 
-`tests/browser/wgsl_bench.js` · `wgsl_conv.js` 로 잰 것이다. 값은 전부 TF.js 와 대조했다.
+Measured with `tests/browser/wgsl_bench.js` and `wgsl_conv.js`. Every value was
+compared against TF.js.
 
-| | TF.js 대비 |
+| | against TF.js |
 |---|---|
-| 행렬곱 (1024³ · 2048³ · 16384×576×64) | **115 ~ 217%** |
-| conv (ResNet-18 이 쓰는 다섯 모양) | **72 ~ 284%** — 다섯 중 셋이 100% 이상 |
+| matrix multiplication (1024³, 2048³, 16384×576×64) | **115–217%** |
+| conv (the five shapes ResNet-18 uses) | **72–284%** — three of the five above 100% |
 
-하루 만에 쓴 커널이고 TF.js 는 수년 튜닝된 것이다. 남은 72~83% 두 자리는 아직 안
-해본 것들(`vec4` 로드, 커널 루프 전개, 모양별 타일 크기)이 남아 있다.
+These kernels were written in a day and TF.js has been tuned for years. The two
+places sitting at 72–83% still have things untried on them (`vec4` loads, unrolling
+the kernel loop, per-shape tile sizes).
 
-### 3. 골든이 언어를 건넌다
+### 3. The golden crosses languages
 
-`tests/golden.json` — 진짜 torch 로 굳힌 기대값 798건. **JSON 만으로** 코어 746건,
-자매 799건이 대조되는 것을 재봤다. 첫날부터 이것을 쓴다.
+`tests/golden.json` — 798 expected values pinned with real torch. Measured that
+**the JSON alone** compares 746 cases on the core and 799 on the sister library.
+This is used from day one.
 
-### 4. 수요는 확인 못 했다
+### 4. Demand could not be confirmed
 
-`webgpu-torch` 가 646별을 받고 2년 멈춘 것을 "수요 없음"으로도, "저자가 다른 데로
-갔음"으로도 읽을 수 있다. **우리는 어느 쪽인지 모른다.** 이것은 이 프로젝트가 서 있는
-가정 중 유일하게 안 재본 것이고, 틀리면 나머지가 다 맞아도 아무도 안 쓴다.
+`webgpu-torch` collecting 646 stars and then stopping for two years can be read as
+"no demand" and equally as "the author moved on". **We do not know which.** It is
+the one assumption this project stands on that has not been measured, and if it is
+wrong then everything else being right does not matter — nobody uses it.
 
 ---
 
-## 무엇이 다른가 — 자매와의 비교
+## What is different — compared against the sister library
 
-자매(`borch_webgpu`)는 TF.js 위에 있고, **73군데가 TF.js 우회 장치**다.
-그 대부분이 여기서 사라진다.
+The sister library (`borch_webgpu`) sits on TF.js, and **73 places are TF.js
+workarounds.** Most of them disappear here.
 
-| | 자매 (TF.js) | borch.ts (WGSL) |
+| | the sister (TF.js) | borch.ts (WGSL) |
 |---|---|---|
-| 레이아웃 | NHWC 강제 — `_relayout`·`_nhwc` 를 들고 다님 | **우리가 정한다** |
-| CPU 왕복 | 17군데 (`einsum`·`quantile`·`linalg`·`cummax` 번호…) | 커널을 쓰면 된다 |
-| `pad` | 랭크 5+ 에서 **조용히 값이 깨짐** | 남의 버그가 아니다 |
-| `cast` | int32→float32 가 **비트를 안 바꿈** | 없음 |
-| 랭크 | 7 부터 일부만 | 우리가 정한다 |
-| 의존 | TF.js + Pyodide (~10MB) | 없음 |
+| layout | NHWC forced — carrying `_relayout` and `_nhwc` around | **we decide it** |
+| CPU round trips | 17 places (`einsum`, `quantile`, `linalg`, `cummax` indices, …) | write a kernel |
+| `pad` | **quietly wrong values** at rank 5 and above | not somebody else's bug |
+| `cast` | int32→float32 **does not change the bits** | absent |
+| rank | partial from 7 upwards | we decide it |
+| dependencies | TF.js + Pyodide (~10MB) | none |
 
-### 대신 떠안는 것
+### What is taken on instead
 
-- **모양별 셰이더 특수화가 필수다.** 나눗셈 제수를 유니폼으로 두면 강도 축소가 안 되고,
-  그것만으로 conv 가 43% → 284% 로 갈렸다(실측). 즉 **모양 서명 → 파이프라인 캐시**가
-  라이브러리 구조에 들어간다. 최적화가 아니라 구조다.
-- **WebGPU 는 한계를 넘으면 던지지 않고 조용히 안 한다.** 이 벤치를 쓰면서 두 번 밟았다 —
-  버퍼 128MB 초과에서 24만 GFLOPS, 워크그룹 65,535 초과에서 "TF.js 대비 144%".
-  둘 다 값을 같이 안 봤으면 그대로 믿었을 수치다. **모든 커널에 값 대조를 붙인다.**
-- 커널 엔지니어링 자체. 이 벤치에서 세 번 다 플랫폼이 아니라 내 커널이 문제였다:
-  누산기가 레지스터에서 떨어짐, dispatch 한계 초과, 런타임 나눗셈.
+- **Per-shape shader specialisation is mandatory.** A division's divisor kept in a
+  uniform blocks strength reduction, and that alone moved conv from 43% to 284%
+  (measured). Which means **a shape signature to a pipeline cache** goes into the
+  library's structure. Structure rather than optimisation.
+- **WebGPU does not throw past a limit; it quietly does nothing.** This benchmark
+  stepped on it twice — 240,000 GFLOPS past the 128MB buffer limit, and "144% of
+  TF.js" past the 65,535 workgroup limit. Both are numbers that would have been
+  believed without checking the values alongside. **Every kernel gets a value
+  comparison attached.**
+- The kernel engineering itself. All three times on this benchmark the problem was
+  my kernel rather than the platform: an accumulator falling out of registers, a
+  dispatch limit exceeded, a division at runtime.
 
 ---
 
-## 확정한 것
+## What is settled
 
-### 저장소
+### The repository
 
-**이 저장소 안에서 시작한다** (`borch-ts/`). 골든·CI·비교 대상이 여기 있다.
-독립이 필요해지면 그때 뗀다 — 먼저 떼면 골든부터 복사해야 하고, 그 순간 갈린다.
+**It starts inside this repository** (`borch-ts/`). The golden, the CI and what it
+is compared against are here. It gets split out when independence is needed —
+split first and the golden has to be copied, and the two diverge from that moment.
 
-### 장치
+### Devices
 
-**열거하지 않는다. 인덱스도 없다.** WebGPU 는 어댑터를 세는 방법을 안 준다 —
-`navigator.gpu.requestAdapter()` 가 하나를 주고 끝이고, 고를 수 있는 것은
-`powerPreference` 힌트뿐이다. 그래서 `'webgpu:1'` 은 가리킬 대상이 없고 `device`
-객체를 만들 이유도 없다. 문자열 둘(`'webgpu'`·`'cpu'`)로 끝난다.
+**They are not enumerated, and there is no index.** WebGPU gives no way to count
+adapters — `navigator.gpu.requestAdapter()` gives one and that is that, and the
+only choice is the `powerPreference` hint. So `'webgpu:1'` has nothing to point at
+and there is no reason to build a `device` object. Two strings (`'webgpu'` and
+`'cpu'`) are the whole of it.
 
-**VRAM 은 못 묻는다.** 총량도 여유도 표준에 없다. 대신 `maxBufferSize` ·
-`maxStorageBufferBindingSize` 를 어댑터 최대치로 올려 받고 그것을 넘으면 던진다
-(`device.ts`) — WebGPU 는 한계를 넘으면 조용히 안 하기 때문이다.
+**VRAM cannot be asked about.** Neither the total nor the free amount is in the
+standard. Instead `maxBufferSize` and `maxStorageBufferBindingSize` are requested
+at the adapter's maximum and exceeding them throws (`device.ts`) — because past a
+limit WebGPU quietly does nothing.
 
-**`'cpu'` 는 저장 위치이지 연산 장치가 아니다.** 값이 `Float32Array` 로 호스트에
-있다는 뜻이고, 그 위에 커널은 없다. 연산에 넣으면 `Tensor.buffer` 게터가 torch 와
-같은 문구로 멈춘다 — 연산 진입점 176 곳이 전부 그 게터를 지나므로 가드가 한 자리에
-있다. CPU 커널을 만들지 않은 것은 그것이 사는 자리가 없어서다: WebGPU 가 없는
-브라우저에서 4,700 줄어치 연산을 JS 로 다시 쓰면 "조용히 느려지느니 안 도는 편이
-낫다" 는 이 저장소의 판단과 정면으로 어긋난다.
+**`'cpu'` is a storage location rather than a compute device.** It means the
+values are on the host as a `Float32Array`, and there are no kernels over that.
+Putting one into an operation makes the `Tensor.buffer` getter stop with torch's
+wording — all 176 operation entry points pass through that getter, so the guard
+sits in one place. No CPU kernels were built because there is nowhere for them to
+live: rewriting 4,700 lines of operations in JS for a browser without WebGPU runs
+head-on into this repository's judgement that not running beats quietly getting
+slower.
 
-**폴백하지 않는다. 대신 왜 안 되는지를 값으로 준다.** `probe()` 가 `'no-api'` 와
-`'no-adapter'` 를 가른다 — 앞은 브라우저·문맥 문제이고 뒤는 드라이버 차단 목록·
-가상 머신·헤드리스다. 쓰는 사람이 할 수 있는 일이 서로 달라서 예외 하나로 뭉치면
-안 된다.
+**It does not fall back; it hands back the reason as a value.** `probe()` splits
+`'no-api'` from `'no-adapter'` — the first is a browser or context problem and the
+second is a driver blocklist, a virtual machine, or headless. What the user can do
+about them differs, so one exception must not cover both.
 
-### 체크포인트 형식은 safetensors — 읽는 쪽이 우리뿐이면 절반을 버린다
+### The checkpoint format is safetensors — a format only we read throws half of it away
 
-torch 의 `save`/`load` 는 pickle 이다. 파이썬 객체를 실행하며 푸는 형식이라 브라우저로
-옮길 수도 없고 옮겨서도 안 된다. 그래서 형식을 골라야 했고, 후보는 셋이었다.
+torch's `save`/`load` is pickle. It unpacks Python objects by executing them, so it
+cannot be carried into a browser and should not be. A format had to be chosen, and
+there were three candidates.
 
 | | |
 |---|---|
-| JSON 배열 | 간단하지만 실수 하나에 일곱 바이트가 든다. 파라미터 백만 개면 7MB 가 글자다 |
-| 자체 이진 | 촘촘하고 정확하다. **읽는 쪽이 우리뿐이다** |
-| **safetensors** | 8 바이트 머리 길이 + JSON 머리 + 연속된 몸. 코덱이 한 파일 |
+| a JSON array | simple, and a single float costs seven bytes. A million parameters is 7MB of text |
+| our own binary | dense and exact. **We are the only readers** |
+| **safetensors** | 8 bytes of header length, a JSON header, a contiguous body. The codec is one file |
 
-셋째를 골랐다. 코덱이 `serialize.ts` 하나이고, 그 값으로 파이썬 `borch`·numpy·HF
-도구가 같은 파일을 읽는다. **브라우저에서 학습해 자기 컴퓨터로 가져가는 것이 이
-프로젝트가 하는 이야기의 절반**인데, 읽는 쪽이 우리뿐인 형식은 그 절반을 버린다.
+The third was chosen. The codec is `serialize.ts` alone, and what that buys is
+Python `borch`, numpy and the HF tools reading the same file. **Training in a
+browser and carrying the result to your own machine is half of what this project
+is about**, and a format only we read throws that half away.
 
-**dtype 은 언제나 `F32` 로 적는다.** borch 의 `int64`·`bool` 은 이름표일 뿐 값은
-float32 버퍼에 있다. 머리에 `I64` 라고 쓰면 4 바이트짜리 몸과 어긋나서 남의 리더가
-깨진다 — 이름표는 `__metadata__` 에 따로 싣는다. 남이 읽으면 float32 배열이 나오고
-그것이 맞는 답이며, 우리가 읽으면 이름표까지 돌아온다.
+**The dtype is always written as `F32`.** borch's `int64` and `bool` are labels
+alone and the values live in a float32 buffer. Writing `I64` into the header
+disagrees with a four-byte body and breaks somebody else's reader — the labels ride
+separately in `__metadata__`. Somebody else reading gets a float32 array and that
+is the right answer; reading it here brings the labels back too.
 
-**러너가 그 주장을 실제로 잰다.** 우리 코덱이 우리 코덱과 왕복하는 것은 자체 형식으로도
-되므로 증명이 아니다. `serialize.py` 는 브라우저가 쓴 바이트를 받아 **numpy 로만**
-뜯는다 — borch 코드를 한 줄도 안 쓰고 값과 이름표를 확인한다.
+**The runner actually measures that claim.** Our codec round-tripping with our
+codec would work for our own format too, so it proves nothing. `serialize.py`
+takes the bytes the browser wrote and opens them **with numpy alone** — it confirms
+the values and the labels without a line of borch code.
 
-### 재개는 왕복이 아니다
+### Resuming is not a round trip
 
-저장했다 읽어서 값이 같은지는 **코덱만** 묻는 것이다. 진짜 물음은 *끊었다 이은 학습이
-안 끊고 돌린 학습과 같은가* 이고, 모멘텀 하나·스텝 계수기 하나·스케줄러의 에폭 하나만
-빠져도 왕복은 초록인 채로 재개만 갈린다. 전부 결정론적이므로 **비트 단위로 같아야
-한다** — 허용 오차를 두면 빠뜨린 상태를 오차로 읽는다.
+Saving, reading back and getting the same values asks about **the codec** and
+nothing else. The real question is *whether training interrupted and resumed
+matches training that ran straight through*, and one momentum, one step counter or
+one scheduler epoch
+going missing leaves the round trip green and the resume alone diverged. All of it
+is deterministic, so **it has to be equal bit for bit** — a tolerance reads missing
+state as error.
 
-같은 러너가 **가중치만 되돌린 경로**도 돌린다. 그쪽이 갈려야 위의 동등성 검사가
-무언가를 재고 있다는 뜻이다. 안 갈리면 그 검사는 아무것도 안 묻고 있는 것이다.
+The same runner also walks **the path that restores the weights alone.** That one
+has to diverge for the equivalence check above to be measuring anything. If it does
+not, that check is asking nothing.
 
-### 축약의 dtype — 규칙이 넷이다 (**재놓았고, borch.ts 는 아직 구현 안 됨**)
+### The dtype of a reduction — there are four rules (**measured; borch.ts implements part of it**)
 
-`bool.sum()` 이 `int64` 라는 것 하나가 알려져 있었고, 그래서 모양·색인 연산에 쓴
-"보존" 도 값 연산에 쓴 "승격" 도 아닌 셋째 규칙이 있다는 것까지만 확인됐다.
-torch 에게 30 자리를 물어 표를 뽑았다.
+One thing was known — that `bool.sum()` is `int64` — and from it, only that there
+is a third rule which is neither the "preserve" used by the shape and indexing
+operations nor the "promote" used by the value operations. torch was asked about 30
+places and the table came out.
 
-| 규칙 | 연산 | int64 | bool |
+| rule | operations | int64 | bool |
 |---|---|---|---|
-| **누적 — bool 을 올린다** | `sum`·`prod`·`cumsum`·`cumprod` | int64 | **int64** |
-| **고르기 — 형을 지킨다** | `amax`·`amin`·`max`·`min` | int64 | **bool** |
-| 형이 고정 | `any`·`all` | bool | bool |
-| 형이 고정 | `argmax`·`argmin`·`nonzero`·`count_nonzero` | int64 | int64 |
-| 형이 고정 | `logsumexp` | float32 | float32 |
-| 거절 | `mean`·`var`·`std`·`norm` | ✗ | ✗ |
-| 거절 (bool 만) | `median`·`argmax`·`argmin` | 됨 | ✗ |
+| **accumulating — it promotes bool** | `sum`, `prod`, `cumsum`, `cumprod` | int64 | **int64** |
+| **selecting — it keeps the dtype** | `amax`, `amin`, `max`, `min` | int64 | **bool** |
+| fixed dtype | `any`, `all` | bool | bool |
+| fixed dtype | `argmax`, `argmin`, `nonzero`, `count_nonzero` | int64 | int64 |
+| fixed dtype | `logsumexp` | float32 | float32 |
+| refused | `mean`, `var`, `std`, `norm` | ✗ | ✗ |
+| refused (bool only) | `median`, `argmax`, `argmin` | works | ✗ |
 
-`dtype=` 인자를 주면 그것이 전부를 이긴다.
+A `dtype=` argument beats all of it.
 
-**가르는 선이 낯익다.** 누적은 값을 **만들고**(참·거짓 칸에 3 이 안 들어간다), 고르기는
-있던 값을 **건넨다**. dtype 이름표를 고칠 때 그은 선과 같은 선이다 — 축약도 그 규칙
-아래에 있었고, "축약은 예외" 가 아니라 **누적과 고르기가 서로 다른 것**이었다.
+**The dividing line is a familiar one.** Accumulating **makes** a value (a 3 does
+not fit in a boolean cell) and selecting **hands over** a value that was already
+there. It is the same line drawn when the dtype labels were fixed — the reductions
+were under that rule all along, and rather than "reductions are an exception",
+**accumulating and selecting are two different things.**
 
-`mean` 이 거절이라는 것도 같은 자리에서 나온다. 평균은 나눗셈이라 정수 칸에 답이
-안 들어가고, torch 는 근사하지 않고 멈춘다.
+`mean` being a refusal comes from the same place. A mean is a division, so the
+answer does not fit in an integer cell, and torch stops rather than
+approximating.
 
-코어(numpy)는 위 30 자리 중 **24 를 이미 맞게** 한다. 갈리는 여섯은 dtype 규칙이
-아니라 **거절 여부**다 — `mean`·`median(bool)`·`argmax(bool)` 에서 torch 가 멈추는데
-코어는 값을 내고, `logsumexp` 는 float64 를 낸다(numpy 기본값이 새는 자리).
+The core (numpy) already gets **24 of those 30 places** right. The six that
+diverge are not about the dtype rule but about **whether it refuses** —
+`mean`, `median(bool)` and `argmax(bool)` stop in torch and produce a value in the
+core, and `logsumexp` gives float64 (a place where numpy's default leaks through).
 
-borch.ts 는 축약이 전부 `Tensor.make` 를 dtype 없이 부르므로 지금 **전부 float32** 다.
-표를 골든으로 옮기는 것과 구현은 한 판에 같이 간다 — 케이스만 먼저 넣으면 빨간 채로
-남고, 구현만 먼저 하면 그 규칙이 어디에도 안 적힌다.
+> **This paragraph said borch.ts's reductions all call `Tensor.make` without a
+> dtype and are all float32, and half of that has expired.** Measured in
+> `borch-ts/src/tensor.ts` rather than recalled: `Tensor.sum` now reads
+> `sum(dtype?: DType)` and its first line is
+> `if (dtype !== undefined) return this.castFirst(dtype).sum().to(dtype)`, with the
+> same shape on `nansum` and `cumsum`. So `dtype=` **is** accepted and honoured, and
+> it converts before accumulating — which is the order that decides the value, since
+> folding `[1.7, −2.3, 0.9]` to int64 gives −1 converting first and 0 converting
+> last, and torch does the former.
+>
+> What has not changed is the default path: with no `dtype` it still goes through
+> `Tensor.make` unlabelled and comes out float32. So the accurate statement is
+> **borch.ts's reductions default to float32, and `dtype=` is honoured on `sum`,
+> `nansum` and `cumsum`.**
+>
+> Marked rather than rewritten, because whether that is now enough to move the
+> table into the golden depends on the binding, and nobody has measured that half.
+> Translating an expired claim would leave it looking newer and no truer.
 
-### 상수 캐시는 읽기 전용이다 — 잰 것이 아니라 잡힌 것
+Moving the table into the golden and implementing it go in one commit — cases
+alone leave it red, and the implementation alone leaves the rule written down
+nowhere.
 
-원소 하나짜리 텐서는 값으로 캐시된다(`tensor.ts` 의 `scalarCache`). 학습 루프가 같은
-상수를 매 스텝 다시 만들기 때문이고, 그 자체는 맞다 — **상수는 읽기만 하니까.**
+### The constant cache is read-only — caught rather than measured
 
-문제는 상수가 아닌 것이 그 문을 지날 때다. 파라미터 그룹 러너를 붙이자마자
-`Adam` 에서 WebGPU 검증 오류가 났다:
+A one-element tensor is cached by value (`scalarCache` in `tensor.ts`). A training
+loop rebuilds the same constants every step, and that much is right — **a constant
+is only read.**
+
+The trouble is when something that is not a constant passes through that gate.
+Attaching the parameter-group runner immediately produced a WebGPU validation error
+in `Adam`:
 
 ```
 Writable storage buffer binding aliasing found between binding index 2 and 3
 ```
 
-크기 1 파라미터의 `m` 과 `v` 가 **같은 버퍼**였다. 둘 다 `Tensor.zeros([1])` 로
-만들었고 그것은 전역 0 상수다. 같은 갈래를 훑으니 셋이 더 나왔다:
+A size-1 parameter's `m` and `v` were **the same buffer.** Both were built with
+`Tensor.zeros([1])`, and that is the global zero constant. Walking the same branch
+turned up three more:
 
-| 자리 | 무엇이 되는가 |
+| place | what it becomes |
 |---|---|
-| `Adam` 의 m·v (크기 1) | 명령 버퍼째 무효 — **예외로 보인다** |
-| `SGD` 의 모멘텀 버퍼 (크기 1) | 프로그램 전체가 쓰는 0 상수를 덮어쓴다 |
-| `nn.PReLU()` — **기본이 파라미터 하나다** | 가중치가 곧 전역 0.25 상수이고 옵티마이저가 학습 중에 그것을 고친다 |
-| `BatchNorm(1)` 의 이동 통계 | 전역 0·1 상수를 덮어쓴다 |
+| `Adam`'s m and v (size 1) | the whole command buffer invalid — **it looks like an exception** |
+| `SGD`'s momentum buffer (size 1) | overwrites the zero constant the whole program uses |
+| `nn.PReLU()` — **its default is one parameter** | the weight *is* the global 0.25 constant, and the optimiser edits it during training |
+| `BatchNorm(1)`'s running statistics | overwrites the global 0 and 1 constants |
 
-**첫 줄만 터지고 나머지 셋은 조용히 틀린다.** 골든이 못 잡은 이유는 분명하다 —
-케이스마다 가중치를 밖에서 넣어 주므로 옵티마이저 상태도 이동 통계도 안 지난다.
+**Only the first row blows up; the other three are quietly wrong.** Why the golden
+missed them is plain — every case supplies its weights from outside, so neither
+optimiser state nor running statistics ever pass through.
 
-고친 방식은 문을 하나 더 내는 것이다: `Tensor.owned(shape, value)` 는 캐시를 안 타고
-자기 버퍼를 준다. **제자리로 고쳐질 것은 값이 무엇이든 이쪽으로 온다** — 파라미터,
-옵티마이저 상태, 이동 통계. 규칙을 크기로 두면(1 일 때만 조심) 언젠가 잊는다.
+The fix was to open one more door: `Tensor.owned(shape, value)` skips the cache and
+gives its own buffer. **Anything that will be edited in place comes through this
+one whatever its value** — parameters, optimiser state, running statistics. Make
+the rule about size (be careful when it is 1) and it gets forgotten eventually.
 
-### dtype
+### dtypes
 
-**float32 하나로 시작한다.** 자매는 float32·int64·bool 셋인데, int64 를 float32 에
-담는 것은 TF.js 의 `cast` 가 깨져서 고른 우회였다. 우리 커널에서는 그 강제가 없으므로
-필요해질 때 제대로 넣는다 — 지금 흉내 내면 자매의 우회를 이유 없이 물려받는다.
+**It starts with float32 alone.** The sister library has three — float32, int64 and
+bool — and carrying int64 in a float32 buffer was a workaround chosen because
+TF.js's `cast` is broken. Our kernels are under no such compulsion, so it goes in
+properly when it is needed — imitating it now inherits the sister's workaround for
+no reason.
 
-### 레이아웃
+### Layout
 
-**NCHW.** torch 와 같다. 자매가 NHWC 를 든 것은 TF.js 의 conv 가 그것만 빨라서였고,
-우리 커널은 우리가 쓴다.
+**NCHW.** As in torch. The sister carries NHWC because TF.js's conv is fast only
+that way, and our kernels are ours to write.
 
 ### autograd
 
-자매·코어와 **같은 테이프 구조**를 쓴다. 셋이 같은 모양이면 한 곳에서 고친 것을
-다른 곳으로 옮기기 쉽고, 이번 세션에 그 값어치를 여러 번 봤다.
+**The same tape structure** as the sister and the core. Three things of one shape
+make a fix in one easy to carry to the others, and that has paid off several times
+this session.
 
-### 커널 생성
+### Kernel generation
 
-**연산 표에서 WGSL 을 생성한다.** 이름·순방향식·역방향식을 한 줄로 적으면 커널이 나온다.
-`webgpu-torch` 에서 가져온 유일한 아이디어이고, 좋은 아이디어다 — 이번 세션에 새
-미분식을 손으로 여러 번 썼고 그때마다 틀릴 자리를 하나씩 만들었다.
+**The WGSL is generated from an operation table.** Writing the name, the forward
+expression and the backward expression on one line produces the kernel. It is the
+one idea taken from `webgpu-torch`, and it is a good one — several new derivatives
+were written by hand this session and each one created a place to be wrong.
 
-### 검증
+### Verification
 
-**첫 커밋부터 골든에 붙인다.** 케이스 본문은 여기 없으므로 같은 이름의 케이스를
-TS 로 쓰고 `golden.json` 의 답에 맞춘다. 연산을 하나 넣을 때 케이스도 같이 넣는다 —
-이 저장소가 표면을 늘리면서 지킨 유일한 조건이다.
+**It is attached to the golden from the first commit.** The case bodies are not
+here, so a case of the same name is written in TS and matched against
+`golden.json`'s answer. A case goes in with each operation — the one condition this
+repository has held to while growing its surface.
 
 ---
 
-## 안 정한 것
+## What is not settled
 
-- **패키지 이름과 배포.** `borch` 는 private 저장소라 아직 PyPI 에 없고,
-  npm 도 같은 판단이 필요하다. 사람이 정할 일이다.
-- **API 를 어디까지 torch 로 둘 것인가.** `x.add_(1)` 은 TS 에서 어색하고,
-  `x.add(1)` 이 자연스럽다. torch 코드를 옮겨 오는 사람과 TS 를 쓰는 사람 중
-  누구를 먼저 볼지가 안 정해졌다.
-- **자매를 언젠가 접을 것인가.** 지금은 접지 않는다 — 파이썬 사용자의 GPU 경로다.
-- **복소수 — 정했다. 넣는다.** 아래에 따로 적는다.
+- **The package name and how it is published.** `borch` is in a private repository
+  and is not on PyPI yet, and npm needs the same judgement. That is a person's
+  decision.
+- **How far the API stays torch's.** `x.add_(1)` is awkward in TS and `x.add(1)` is
+  natural. Whether the person porting torch code or the person writing TS comes
+  first is undecided.
+- **Whether the sister library is eventually retired.** Not for now — it is the
+  Python user's GPU path.
+- **Complex numbers — decided. They go in.** Written out below.
 
-### 복소수 — 넣는다. 막고 있던 것이 둘 다 무너졌다
+### Complex numbers — they go in. Both things blocking it collapsed
 
-**한동안 두 가지가 이유로 적혀 있었고 둘 다 틀렸다.**
+**Two reasons stood written down for a while and both were wrong.**
 
-첫째는 "저장이 float32 하나라서" 였다. 어떤 GPU 에도 복소수 타입은 없다 — CUDA 의
-`cuComplex` 도 float 둘짜리 구조체이고 **torch 의 `complex64` 도 float32 둘**이다
-(실측: 원소당 8 바이트, `view_as_real` 이 `(…, 2)` **뷰**를 준다). 우리 `int64`·`bool`
-이 float32 버퍼 위의 이름표인 것과 같은 기계이고, 그 기계는 이미 있다.
+The first was "the storage is float32 and nothing else". No GPU has a complex type
+— CUDA's `cuComplex` is a struct of two floats and **torch's `complex64` is two
+float32s too** (measured: 8 bytes per element, and `view_as_real` gives a `(…, 2)`
+**view**). It is the same machinery as our `int64` and `bool` being labels over a
+float32 buffer, and that machinery already exists.
 
-둘째는 "autograd 규약(Wirtinger)을 재기 전엔 못 건드린다" 였다. 이쪽은 진짜 걱정이었는데
-**재보니 Wirtinger 기계가 필요 없었다.** torch 가 복소 손실을 아예 거절하기 때문이다:
+The second was "it cannot be touched before the autograd convention (Wirtinger) is
+measured". That one was a real worry, and **measuring showed no Wirtinger machinery
+was needed** — because torch refuses a complex loss outright:
 
 ```
 (z*z).sum().backward()
   → RuntimeError: grad can be implicitly created only for real scalar outputs
 ```
 
-손실이 늘 실수라면 규약이 하나로 정리된다 — **`(re, im)` 을 독립인 두 실수로 보고
-보통의 실수 autograd 를 돌린 뒤 묶는다.** z = 1+2j 에서 잰 값들:
+If the loss is always real, the convention settles into one — **treat `(re, im)`
+as two independent reals, run ordinary real autograd, and bundle them.** Measured
+at z = 1+2j:
 
-| 손실 | `z.grad` | `(∂L/∂re, ∂L/∂im)` |
+| loss | `z.grad` | `(∂L/∂re, ∂L/∂im)` |
 |---|---|---|
 | `(z·z̄).real` | `2+4j` | (2, 4) |
 | `abs(z)²` | `2+4j` | (2, 4) |
 | `z.real` | `1+0j` | (1, 0) |
-| `z.imag` | **`+1j`** | (0, 1) — 켤레 규약이면 `-1j` 였다 |
+| `z.imag` | **`+1j`** | (0, 1) — a conjugate convention would give `-1j` |
 | **`(z*z).real`** | **`2-4j`** | (2, −4) |
 
-**마지막 줄이 못을 박는다.** 위의 넷은 "두 실수" 와 양립하지만 **보통의 복소 미분과
-구분이 안 된다** — 같은 답을 내거나 정의가 애매한 자리들이다. `(z*z).real` 은
-`a²-b²` 라 두 규약이 갈리고(`2-4j` 대 `2+4j`), 잰 값이 앞쪽이다.
+**The last row is what pins it.** The four above it are compatible with "two
+reals" and **cannot be told apart from ordinary complex differentiation** — they
+give the same answer or the definition is ambiguous. `(z*z).real` is `a²-b²`, where
+the two conventions part (`2-4j` against `2+4j`), and what was measured is the
+former.
 
-**남은 한계는 하나다.** WGSL 에 `f64` 가 없으므로 `complex128` 은 영원히 없다.
-`complex64 + float64` 가 그 조합을 만드는 유일한 길이므로 거기서 시끄럽게 거절한다 —
-`.double()` 과 **같은 자리, 같은 모양**이라 새 종류의 함정은 아니다.
+**One limit remains.** WGSL has no `f64`, so there will never be a `complex128`.
+`complex64 + float64` is the only route that produces that combination, so it is
+refused loudly there — **the same place and the same shape** as `.double()`, so it
+is not a new kind of trap.
 
-#### 그 밖에 잰 것
+#### What else was measured
 
 | | |
 |---|---|
-| 승격 | 복소수가 최상위 범주. `complex64 + float64 → complex128` 만 거절 |
-| 거절 | torch 자신이 막는 것들 — `sign`·`relu`·`max`·`sort`·`floor`·순서 비교. `eq` 는 된다(순서가 없지 상등은 있다) |
-| repr | `tensor([ 1.0000+2.j, -0.5000-1.j])` — 다시 굳혀야 한다 |
-| 골든 | numpy 가 `complex64` 를 `.npz` 에 그대로 담는다. **하네스는 안 고쳐도 된다** |
-| fft | `rfft(8)` → `(5,)` complex64 · `stft(n_fft=4)` → `(3, 9)` |
+| promotion | complex is the top category. Only `complex64 + float64 → complex128` is refused |
+| refusals | the ones torch itself blocks — `sign`, `relu`, `max`, `sort`, `floor`, ordered comparisons. `eq` works (there is no order, and there is equality) |
+| repr | `tensor([ 1.0000+2.j, -0.5000-1.j])` — it has to be pinned again |
+| golden | numpy stores `complex64` in an `.npz` as it is. **The harness needs no change** |
+| fft | `rfft(8)` → `(5,)` complex64; `stft(n_fft=4)` → `(3, 9)` |
 
-#### 단계
+#### The stages
 
-1. **코어(numpy)만** — dtype·생성·`view_as_real/complex`·산술·`real/imag/conj`·autograd.
-   numpy 가 `complex64` 를 이미 다루므로 **규약 검증이 목적**이다. `tensor.ts` 를 안 건드린다
-2. **borch.ts 저장(인터리브) + 커널** — 여기가 제일 침습적이다. **`size` 와 버퍼 길이가
-   1:1 이라는 전제**가 코드 전반에 깔려 있고 그것을 걷어내는 일이다
-3. 결속 + repr + 골든 케이스
-4. 그 위에 `fft` / `stft`
+1. **The core (numpy) alone** — dtypes, construction, `view_as_real/complex`,
+   arithmetic, `real/imag/conj`, autograd. numpy already handles `complex64`, so
+   **the purpose is verifying the convention.** `tensor.ts` is untouched
+2. **borch.ts storage (interleaved) plus kernels** — the most invasive part. **The
+   assumption that `size` and the buffer length are 1:1** runs through the code and
+   this is the work of pulling it out
+3. The binding, the repr, and the golden cases
+4. `fft` and `stft` on top of that
 
-`stft` 는 그동안 **이름만 두고 거절**한다. 실수 `(…, 2)` 경로는 폐기 예정이라
-(실측 — `UserWarning: ... will raise an error`) 곧 없어질 모양을 가르치게 된다.
-4 단계에서 복소수로 제대로 낸다.
+Until then `stft` is **a name that refuses.** The real `(…, 2)` path is slated for
+removal (measured — `UserWarning: ... will raise an error`), so it would teach a
+shape that is about to disappear. Stage 4 produces it properly, in complex.
 
 
-## 단계
+## The stages
 
-| | 내용 | 나가는 것 | |
+| | contents | what ships | |
 |---|---|---|---|
-| **T0** | 장치·버퍼·파이프라인 캐시, `Tensor`, 원소별 연산 표, 행렬곱 | 골든의 원소별 케이스가 지난다 | ✅ |
-| **T1** | autograd 테이프, 축약, 역방향 | `grad::` 케이스가 지난다 | ✅ |
-| **T2** | conv·풀링·`nn.Module`·옵티마이저 | MLP 학습이 돈다 | ✅ MLP·CNN 둘 다 |
-| **T3** | ResNet-18 | 에폭 시간과 정확도를 잰다 — 자매와 같은 잣대로 | ✅ 둘 다 이겼다 |
+| **T0** | device, buffers, the pipeline cache, `Tensor`, the elementwise operation table, matmul | the golden's elementwise cases pass | ✅ |
+| **T1** | the autograd tape, reductions, backward | the `grad::` cases pass | ✅ |
+| **T2** | conv, pooling, `nn.Module`, optimisers | MLP training runs | ✅ MLP and CNN both |
+| **T3** | ResNet-18 | measure epoch time and accuracy — by the sister's own measure | ✅ ahead on both |
 
-네 단계가 다 섰다. 골든 **845/845 — 미작성 0건**, 자매보다 **30% 빠르고**(에폭 2.02분 → 1.55분)
-**시험 정확도 65.5% 대 60.4%** 다. 전부 같은 기계의 진짜 GPU(`apple / metal-3`)에서
-잰 것이고, 그 조건이 결과에 같이 적힌다.
+All four stages stand. Golden **845/845 with 0 unwritten**, **30% faster** than the
+sister (2.02 → 1.55 minutes per epoch), and **test accuracy 65.5% against 60.4%.**
+All measured on a real GPU on the same machine (`apple / metal-3`), and that
+condition is recorded with the result.
 
-> 나중에 다시 재니 속도는 그대로였고(에폭 1.55분) **정확도는 늘리기를 켠 쪽만
-> 자매를 넘는다**(64.6% 대 60.4%). 끈 쪽은 59.3% 로 밑이다 — 그때는 지름길 층
-> 여섯이 학습되지 않은 상태였고 그것이 규제처럼 굴고 있었다. 아래 T3 정확도 절에
-> 두 수와 까닭이 있다. 벤치의 ResNet-18 자체도 진짜 torch 와
-순방향·손실·역방향이 맞는 것을 확인했다.
+> Measured again later, the speed held (1.55 minutes per epoch) and **only the
+> augmented side beats the sister on accuracy** (64.6% against 60.4%). With
+> augmentation off it is 59.3%, below. At the time six of the shortcut layers were
+> not being trained and that was acting as regularisation. Both figures and the
+> reason are in the T3 accuracy section below. The benchmark's ResNet-18 itself was
+> also confirmed to match real torch on the forward pass, the loss and the backward
+> pass.
 
-T2 까지 왔다. 골든 845건 전부와, 그 위에 `nn.Module`·`Sequential`·`Linear`·`ConvND`·
-`BatchNormND`·`Recurrent`(RNN·LSTM·GRU)·`MultiheadAttention`, 옵티마이저 넷(SGD·모멘텀·
-Adam·RMSprop), 스케줄 여섯, 선형대수, `transforms` 가 있다.
+It has reached T2. All 845 golden cases, and on top of them `nn.Module`,
+`Sequential`, `Linear`, `ConvND`, `BatchNormND`, `Recurrent` (RNN, LSTM, GRU) and
+`MultiheadAttention`, four optimisers (SGD, momentum, Adam, RMSprop), six
+schedulers, linear algebra, and `transforms`.
 
-### 골든이 798 에서 845 가 된 이유 — 난수는 특별한 값을 안 준다
+### Why the golden went from 798 to 845 — random numbers do not produce the special values
 
-`relu` 가 골든 798 건을 그대로 통과했다. 입력이 **정확히 0** 일 때 torch 는 기울기를
-0 으로 주는데(`x > 0` 이지 `x >= 0` 이 아니다) 이쪽은 1 을 흘렸고, ResNet 을 진짜
-torch 와 맞춰보다 드러났다(입력 기울기 최대차 1.5e-2).
+`relu` passed 798 golden cases unchanged. At an input of **exactly 0** torch gives
+a gradient of 0 (`x > 0`, not `x >= 0`) and this flowed 1, and it surfaced while
+matching ResNet against real torch (input gradient max diff 1.5e-2).
 
-원인은 relu 케이스가 모자라서가 아니라 **입력이 전부 정규분포 난수**여서다. 좋은
-기본값인데 한 가지를 못 한다 — 정확히 0, 정확히 같은 두 수, 정확히 경계, 정확히 .5 가
-한 번도 안 나온다. 함수가 꺾이는 자리가 거기 다 있다.
+The cause was not too few relu cases but that **every input was a normal random
+number.** A good default that cannot do one thing — exactly 0, two exactly equal
+numbers, exactly a boundary, exactly .5 never come up once. Every place a function
+kinks is in there.
 
-`edge::` 표가 그 입력을 모아 둔다. 접을 때 **자리마다 다른 가중치**를 곱하는 것이
-조건이다 — 균일하게 접으면 꺾인 한 자리의 차이가 합계에 묻힌다. 세 라이브러리에서
-다섯 가지가 걸렸고, 전부 순방향이 정확히 같아서 값 대조로는 볼 수 없는 것들이다.
+The `edge::` table collects those inputs. The condition is multiplying **a
+different weight per position** when folding — folded uniformly, the difference at
+one kinked position is buried in the sum. Five things were caught across the three
+libraries, and every one of them has an exactly matching forward pass, so a value
+comparison cannot see them.
 
-| 무엇 | 어디 |
+| what | where |
 |---|---|
-| `maximum`/`minimum` 동점에 기울기를 안 나눈다 (torch 는 반씩) | 셋 다 |
-| 그 위에 얹힌 `leakyRelu`(0 에서 `(1+s)/2`)·`clamp`(경계에서 절반) | borch.ts |
-| 최댓값 풀링 동점 — torch 는 먼저 나온 자리 하나 | 코어·자매 |
-| `maxPoolWithArgmax` 번호가 배치를 빼고 세어 **전 배치가 첫 장으로** | 자매 |
-| `topk`/`sort` 동점 순서 (오름차순 뒤집기가 동점까지 뒤집는다) | 코어·자매 |
-| 1차원 `max`/`min`/`argmax` 가 스칼라 대신 `(1,)` | 자매 |
+| `maximum`/`minimum` not splitting the gradient on a tie (torch splits in half) | all three |
+| `leakyRelu` (`(1+s)/2` at 0) and `clamp` (half at the boundary), which sit on top of it | borch.ts |
+| max pooling ties — torch takes the one position that comes first | core and sister |
+| `maxPoolWithArgmax` indices counted without the batch, so **the whole batch lands on the first plane** | sister |
+| `topk`/`sort` tie order (reversing an ascending sort reverses the ties too) | core and sister |
+| 1-D `max`/`min`/`argmax` giving `(1,)` instead of a scalar | sister |
 
-풀링 동점은 드문 자리가 아니다. **ReLU 뒤에는 정확히 0 이 널려 있어서** 창이 통째로
-0 이면 매번 동점이다.
+Pooling ties are not a rare place. **Exactly-zero is everywhere after a ReLU**, so
+a window that is entirely zero is a tie every time.
 
-각 케이스가 실제로 무는지는 고친 것을 되돌려서 확인했다 — 그 케이스들만 실패하고
-나머지는 그대로다. 넣어놓고 안 무는 케이스는 통과 개수만 늘린다.
+Whether each case actually bites was confirmed by reverting the fix — those cases
+alone fail and the rest hold. A case that goes in and bites nothing only raises the
+passing count.
 
-### T3 — 자매 기준선 (이 기계, 같은 날)
+### T3 — the sister's baseline (this machine, the same day)
 
     uv run --with playwright python tests/browser/run.py --lib borch_webgpu --headed --bench
 
-| 배치 | ms/step | 에폭 | GPU |
+| batch | ms/step | epoch | GPU |
 |---|---|---|---|
-| 16 | 48.7 | 2.54분 | 136MB |
-| 32 | 86.0 | 2.24분 | 181MB |
-| 64 | 154.9 | **2.02분** | 226MB |
+| 16 | 48.7 | 2.54 min | 136MB |
+| 32 | 86.0 | 2.24 min | 181MB |
+| 64 | 154.9 | **2.02 min** | 226MB |
 
-**헤드리스로 재면 안 된다.** 그러면 TF.js 가 WebGPU 를 못 잡고 WebGL 로 조용히
-떨어진다(실측 — 러너가 경고를 찍는다). 그 수는 WebGPU 의 수가 아니다.
+**It must not be measured headless.** TF.js then fails to get WebGPU and drops
+quietly to WebGL (measured — the runner prints a warning). Those numbers are not
+WebGPU's.
 
-### T3 — borch.ts, 같은 벤치
+### T3 — borch.ts, the same benchmark
 
     npm run build:ts
     uv run --with playwright python borch-ts/test/bench.py --headed
 
-    어댑터: apple / metal-3
+    adapter: apple / metal-3
 
-| 배치 | 자매 (TF.js) | borch.ts | | 에폭 |
+| batch | sister (TF.js) | borch.ts | | epoch |
 |---|---|---|---|---|
-| 16 | 48.7 ms | **38.4 / 40.5 ms** | 27% 빠름 | 2.00분 |
-| 32 | 86.0 ms | **62.5 / 63.2 ms** | 38% 빠름 | 1.63분 |
-| 64 | 154.9 ms | **118.9 / 119.7 ms** | 30% 빠름 | **1.55분** |
+| 16 | 48.7 ms | **38.4 / 40.5 ms** | 27% faster | 2.00 min |
+| 32 | 86.0 ms | **62.5 / 63.2 ms** | 38% faster | 1.63 min |
+| 64 | 154.9 ms | **118.9 / 119.7 ms** | 30% faster | **1.55 min** |
 
-두 번 재서 재현됐다. dispatch 415 개, 제출 1 개, 누수 0. 손실은 0.0032 / 0.0083 /
-0.0100 으로 자매(0.0037 / 0.0059 / 0.0093)와 같은 수준이다 — 같은 배치를 일곱 번 보면
-외우는 것이 맞고, 그 칸이 학습 경로가 실제로 도는지의 판정이다.
+Measured twice and reproduced. 415 dispatches, 1 submission, 0 leaked. The losses
+are 0.0032 / 0.0083 / 0.0100, the same level as the sister's (0.0037 / 0.0059 /
+0.0093) — memorising the same batch after seven passes is the correct behaviour,
+and that column is what decides whether the training path actually runs.
 
-**자매의 에폭 2.02 분이 1.55 분이 됐다.**
+**The sister's 2.02 minutes per epoch became 1.55.**
 
-### 그 수가 한동안 재현이 안 됐다 — 커널 하나가 16 배 느렸다
+### Those numbers stopped reproducing for a while — one kernel was 16× slower
 
-나중에 같은 기계·같은 명령으로 다시 재니 **38.1 이 154.6, 118.9 가 1,921.3** 이
-나왔다. 손실은 그대로였으니 계산은 맞고 속도만 간 것이었다.
+Measuring again later on the same machine with the same command gave **154.6 where
+38.1 had been, and 1,921.3 where 118.9 had been.** The losses were unchanged, so the
+arithmetic was right and only the speed had gone.
 
-기계 탓이 아니라는 것은 **증가율의 모양**이 말해 줬다. 배치가 두 배일 때 문서의 수는
-1.6~1.9 배로 느는데 그때는 3.5 배였다 — 느린 기계였다면 세 수가 같은 비율로 커진다.
+**The shape of the growth** said it was not the machine. Doubling the batch grows
+the documented numbers by 1.6–1.9×, and it was growing by 3.5× — a slow machine
+would grow all three by the same ratio.
 
-그런데 개별 연산을 재면 전부 선형이었고(합성곱 순·역, BatchNorm 역, relu, add),
-같은 일감을 배치만 나눠 봐도 큰 쪽이 오히려 빨랐다(16×4 = 7.5ms 대 64×1 = 6.2ms).
-메모리도 선형이었다. **부분은 전부 멀쩡한데 합이 6.5 배였다.**
+And measuring the individual operations, every one was linear (conv forward and
+backward, BatchNorm backward, relu, add), and splitting the same total work by
+batch had the larger one come out faster (16×4 = 7.5ms against 64×1 = 6.2ms).
+Memory was linear too. **Every part was sound and the sum was 6.5×.**
 
-거기서 막혔다. 커널 종류별 **횟수**는 있는데 **시간**이 없었고, 횟수는 배치가 커져도
-429 로 그대로라 아무것도 안 가리켰다. 그래서 `timestamp-query` 를 붙였다
-(`Device.startProfile()` — 켜면 dispatch 마다 패스를 열고 GPU 시간을 잰다).
+That is where it stopped. There were **counts** per kernel kind and no **times**,
+and the counts stayed at 429 as the batch grew, so they pointed at nothing. So
+`timestamp-query` went in (`Device.startProfile()` — turned on, it opens a pass per
+dispatch and measures GPU time).
 
-한 번 재니 바로 나왔다: **`gb` 하나가 94%**, 배치가 두 배일 때 네 배.
-서명까지 보니 `SliceBackward0` 이고, `adaptiveAvgPool(1)` 이 4×4 를 통째로 자르면서
-**입력과 출력이 같은 크기인 자르기**를 만들고 있었다.
+One measurement and it was there: **one `gb` at 94%**, four times larger at twice
+the batch. Reading its signature, it was `SliceBackward0`, and
+`adaptiveAvgPool(1)` slicing a whole 4×4 was producing **a slice whose input and
+output are the same size.**
 
-원인은 `gatherBackward` 가 `O(입력 × 출력)` 이었던 것이다 — 입력 원소마다 출력
-전체를 훑어 자기를 가리키는 것을 찾는다. 양쪽이 배치에 비례하므로 제곱이 된다.
+The cause was `gatherBackward` being `O(input × output)` — for each input element
+it walks the whole output looking for the ones that point at it. Both sides are
+proportional to the batch, so it squares.
 
-고침은 **되짚기**다. 규칙이 전부 `lin` 이고 걸음이 0 이 아니며 블록이 안 겹치면
-(자르기·전치·`select`·`permute` 가 그렇다) 입력 자리에서 출력 자리를 닫힌 꼴로
-셀 수 있다 — `O(입력)`. `expand`·`repeat`·`flip`·`roll` 은 조건에 안 맞으므로
-훑는 길이 그대로 남는다.
+The fix is **tracing back.** When every rule is `lin`, no stride is 0 and the
+blocks do not overlap (which is the case for a slice, a transpose, `select` and
+`permute`), the output position can be computed from the input position in closed
+form — `O(input)`. `expand`, `repeat`, `flip` and `roll` do not meet the condition,
+so the walking path stays for them.
 
-고친 뒤 **38.1 / 62.9 / 119.1 ms** — 위 표에 다시 내려앉았다. 그 수치는 정직했고,
-못 재현한 쪽이 회귀였다.
+After the fix: **38.1 / 62.9 / 119.1 ms** — back down onto the table above. Those
+figures were honest, and the run that failed to reproduce them was the
+regression.
 
-> 이 사냥이 남긴 것 하나: **벽시계만으로는 여기까지 못 온다.** "429 개 중 어느
-> 것" 을 물을 수 없어서 부분을 하나씩 재는 데 시간을 다 썼고, 그 방법으로는
-> "부분은 멀쩡한데 합이 안 맞는다" 에서 멈춘다. 재는 장치가 없으면 원인이 아니라
-> 정황만 쌓인다.
+> One thing this hunt left behind: **wall-clock time alone does not get here.**
+> "Which of the 429" was not a question that could be asked, so all the time went
+> into measuring the parts one at a time, and that route stops at "every part is
+> sound and the sum does not add up". Without an instrument, what accumulates is
+> circumstance rather than a cause.
 
-### 그 전에 정정할 것 — 이 문서의 수치가 한동안 틀렸다
+### A correction before that — this document's figures were wrong for a while
 
-    어댑터: google / swiftshader     ← 헤드리스
-    어댑터: apple / metal-3          ← --headed
+    adapter: google / swiftshader     ← headless
+    adapter: apple / metal-3          ← --headed
 
-**SwiftShader 는 CPU 소프트웨어 래스터라이저다.** 자매 벤치는 `--headed` 로 돌려야
-한다고 그 파일에 적혀 있는데, borch.ts 벤치는 헤드리스로 돌고 있었다. 어댑터를 못
-얻으면 던지게 해 두었지만 **소프트웨어 어댑터는 얻어진다** — 예외도 안 나고 벽시계는
-돌고 수가 나온다.
+**SwiftShader is a CPU software rasteriser.** The sister's benchmark file says it
+has to be run with `--headed`, and the borch.ts benchmark was running headless.
+Failing to get an adapter was set up to throw, and **a software adapter is
+obtained** — no exception, the wall clock runs, and numbers come out.
 
-그래서 한동안 "자매 대비 272 배 느림" 이라고 적혀 있었다. 그것은 라이브러리 비교가
-아니라 **CPU 대 GPU 비교**였다. 이 저장소가 반복해서 잡아온 결함의 모양 그대로이고,
-이번에는 그 함정에 잡는 쪽이 들어가 있었다.
+So "272× slower than the sister" stood written for a while. That was not a
+comparison of libraries but **a comparison of CPU against GPU.** It is the exact
+shape of the defect this repository has caught over and over, and this time the one
+doing the catching was inside the trap.
 
-이제 벤치와 골든 러너가 **어댑터를 먼저 찍는다.** 값은 장치가 안 바꾸므로 골든의
-통과 여부에는 상관없지만, 안 적어두면 성능을 재는 다음 사람이 같은 자리에 빠진다.
+Now the benchmark and the golden runner **print the adapter first.** The device
+does not change the values, so it makes no difference to whether the golden passes;
+left unwritten, the next person measuring performance falls into the same place.
 
-### 무엇을 했는가
+### What was done
 
-시작할 때 라이브러리에 든 conv 는 **출력 하나에 스레드 하나, 공유 메모리 없는 단순
-루프**였다. `tests/browser/wgsl_conv.js` 가 TF.js 의 72~284% 로 잰 것은 **타일링 +
-공유 메모리 + 4×4 레지스터 블로킹** 커널이고, 그것은 옮긴 적이 없었다.
+The conv the library started with was **one thread per output, a plain loop, no
+shared memory.** What `tests/browser/wgsl_conv.js` measured at 72–284% of TF.js was
+a **tiled, shared-memory, 4×4 register-blocked** kernel, and that had never been
+carried across.
 
-그러므로 이 문서 앞의 "우리 WGSL 이 TF.js 만큼 나온다" 는 **틀린 말이 아니라 다른
-물건에 대한 말**이었다. 그 구분을 안 적었던 것이 이 문서의 잘못이다.
+So "our WGSL keeps up with TF.js" earlier in this document was **not a false
+statement but a statement about a different thing.** Failing to record that
+distinction is this document's fault.
 
-옮긴 것과 함께 한 것:
+What was carried across, and what went with it:
 
-- **타일링 GEMM 뼈대 하나**에서 순방향·입력기울기·가중치기울기가 나온다. 셋이 같은
-  구조에 색인만 다르다 — 세 벌로 베끼면 그중 하나만 고치는 날이 오고, 그 하나는
-  값 검사가 못 보는 기울기 쪽일 것이다.
-- **제출을 묶는다.** 연산마다 명령 인코더를 새로 만들어 보내던 것을 하나에 쌓아
-  값을 읽을 때 한 번 보낸다. 스텝당 제출이 1 개다.
-- **`BatchNorm` 융합** — 층마다 스무 개 넘던 연산이 커널 넷이다. 가중치·치우침의
-  기울기는 역방향이 이미 센 두 합이라 공짜다.
-- **옵티마이저 융합** — 파라미터당 dispatch 넷이 하나가 됐다.
-- **스칼라는 커널을 안 부른다.** `x * 0.5` 가 전부 `fill` 커널로 가고 있었다.
-- **버퍼를 크기별로 되쓴다.** 스텝마다 같은 모양이 되풀이되므로 만드는 일이 한 번이다.
-- **`gradWeight` 는 축약을 쪼갠다.** 출력이 작고 축약이 큰 GEMM 이라 층에 따라
-  워크그룹이 한 개까지 떨어진다.
+- **One tiled GEMM skeleton** produces the forward, the input gradient and the
+  weight gradient. All three are the same structure with different indexing —
+  copied out three times, the day comes when one of them is fixed, and that one
+  will be on the gradient side where the value checks cannot see it.
+- **Submissions are batched.** A fresh command encoder built and sent per operation
+  became one that stacks and sends once, when a value is read. One submission per
+  step.
+- **`BatchNorm` fusion** — over twenty operations per layer became four kernels.
+  The weight and bias gradients are two sums the backward already computes, so they
+  are free.
+- **Optimiser fusion** — four dispatches per parameter became one.
+- **A scalar does not call a kernel.** `x * 0.5` was going through the `fill`
+  kernel every time.
+- **Buffers are reused by size.** The same shapes repeat every step, so building
+  them happens once.
+- **`gradWeight` splits its reduction.** It is a GEMM with a small output and a
+  large reduction, so depending on the layer it falls to a single workgroup.
 
-**중간 단계의 귀속은 못 믿는다.** "제출 묶기가 56% 줄였다" 같은 수는 전부 SwiftShader
-에서 잰 것이라 GPU 에서 같은 비율일 이유가 없다. 최종 성적만 진짜 어댑터에서 잰
-것이고, 무엇이 얼마나 기여했는지는 다시 재야 안다.
+**The attributions for the intermediate steps cannot be trusted.** Numbers like
+"batching submissions cut 56%" were all measured on SwiftShader, and there is no
+reason for the same ratio to hold on a GPU. Only the final figures were measured on
+a real adapter, and what contributed how much has to be measured again to be
+known.
 
-### 벤치가 잡은 것 — 속도보다 이쪽이 크다
+### What the benchmark caught — this matters more than the speed
 
-숫자보다 먼저 나온 것이 둘이고, 둘 다 **골든 798건이 못 잡은 것**이다.
+Two things came out ahead of the numbers, and both are things **798 golden cases
+could not catch.**
 
-1. **평균 풀링의 역방향이 통째로 안 돌았다.** `layout: "auto"` 가 셰이더에서 안 읽는
-   바인딩을 빼는데 `avg` 갈래는 입력을 안 본다. 남는 버퍼 하나 때문에 WebGPU 가
-   명령 버퍼를 무효로 만들고 — 예외는 안 던진다 — 기울기가 그냥 안 생겼다.
-   골든은 `adaptive_avg_pool2d` 를 **값으로만** 굳혀서 이것을 안 묻는다.
+1. **Average pooling's backward did not run at all.** `layout: "auto"` drops a
+   binding the shader does not read, and the `avg` branch does not look at its
+   input. That one surplus buffer made WebGPU invalidate the command buffer — it
+   throws no exception — and the gradient simply never appeared. The golden pins
+   `adaptive_avg_pool2d` **by value alone**, so it does not ask about this.
 
-2. **가중치 초기화가 아예 없었다.** 전부 0 이었다. 0 으로 시작한 망은 대칭이라
-   같은 층의 뉴런이 같은 기울기를 받고 영원히 같이 움직인다. 골든의 모든 케이스가
-   가중치를 밖에서 넣어 주므로 초기값을 아무도 안 본다.
+2. **There was no weight initialisation at all.** Everything was zero. A network
+   starting from zero is symmetric, so the neurons in a layer receive the same
+   gradient and move together forever. Every golden case supplies its weights from
+   outside, so nobody looks at the initial values.
 
-둘 다 "손실이 2.2685 에서 안 움직인다"는 한 칸으로 드러났다. 벽시계는 그동안 멀쩡히
-수를 내고 있었다 — **측정처럼 보이는 것이 나오고 있었다.** 그래서 벤치는 이제 검증
-오류가 하나라도 나면 수를 안 낸다.
+Both surfaced through one column — "the loss does not move from 2.2685". The wall
+clock had been producing perfectly good numbers throughout — **something that
+looked like a measurement was coming out.** So the benchmark now produces no
+numbers at all if even one validation error occurs.
 
-고친 뒤 손실이 **0.0032 / 0.0082 / 0.0098** 로 내려간다. 자매가 같은 벤치에서 내는
-0.0037 / 0.0059 / 0.0093 과 같은 수준이다 — 같은 배치를 일곱 번 보면 외우는 것이
-맞고, 그것이 학습 경로가 실제로 도는지의 판정이다. **속도는 그대로였다**(13,042ms).
-값은 시간에 영향을 안 준다는 뜻이고, 그래서 앞의 속도 수치도 그대로 유효하다.
+After the fix the loss falls to **0.0032 / 0.0082 / 0.0098.** That is the same
+level as the 0.0037 / 0.0059 / 0.0093 the sister gives on the same benchmark —
+memorising the same batch after seven passes is the correct behaviour, and that is
+what decides whether the training path actually runs. **The speed was unchanged**
+(13,042ms). Which is to say the values do not affect the timing, so the speed
+figures above remain valid.
 
-### 고친 것과 그때마다 잰 것
+### What was fixed, and what was measured each time
 
-**추측으로 고치지 않았다.** 매번 재고, 잰 것이 다음에 무엇을 고칠지 정했다.
+**Nothing was fixed by guessing.** Each step was measured, and what was measured
+decided what to fix next.
 
-| 한 것 | ms/step (배치 16) | dispatch |
+| what was done | ms/step (batch 16) | dispatches |
 |---|---|---|
-| 처음 | 13,279 | 1,636 |
-| 타일링 conv **순방향** 이식 | 11,000 (−16%) | 1,636 |
-| `fill` 없애기 + `BatchNorm` 융합 | 8,570 (−22%) | **710** |
+| at the start | 13,279 | 1,636 |
+| porting the tiled conv **forward** | 11,000 (−16%) | 1,636 |
+| removing `fill` plus `BatchNorm` fusion | 8,570 (−22%) | **710** |
 
-첫 이식이 16% 밖에 못 준 이유가 내역에 있었다 — **conv 는 1,636 개 중 예순 개뿐**
-(3.7%)이고 나머지가 원소별·축약 배관이었다. 커널 벤치가 conv 를 재고 있었으니 conv 를
-고치는 것이 자연스러워 보였는데, 실제 스텝에서는 거기가 아니었다.
+Why the first port bought only 16% was in the breakdown — **conv was sixty of the
+1,636** (3.7%) and the rest was elementwise and reduction plumbing. The kernel
+benchmark had been measuring conv, so fixing conv looked like the natural move, and
+in an actual step that was not where the time was.
 
-`fill` 286 개는 **스칼라 하나를 쓰겠다고 커널을 부르는 것**이었다. `x * 0.5` 가 전부
-그리로 왔다. dispatch 없이 올리고 값으로 캐시한다.
+The 286 `fill` dispatches were **calling a kernel to write one scalar.** Every
+`x * 0.5` arrived there. It is uploaded without a dispatch and cached by value.
 
-### 어디에 시간이 있는지도 재서 갈랐다
+### Where the time was, split by measuring too
 
-    batch 16   8,613.9 ms/step  (순방향 1,414.1)
+    batch 16   8,613.9 ms/step  (forward 1,414.1)
 
-**역방향과 옵티마이저가 84%다.** 그래서 그 다음이 정해졌다 — conv 의 역방향 둘이
-아직 단순 커널이었고(가중치 원소마다 배치·출력 자리를 훑는다: 512 채널 층에서 6 억 번),
-옵티마이저가 파라미터당 dispatch 넷이었다(파라미터 텐서 예순둘 → 이백사십 번).
+**The backward and the optimiser are 84%.** Which decided what came next — conv's
+two backward passes were still plain kernels (walking the batch and the output
+positions per weight element: 600 million times in a 512-channel layer), and the
+optimiser was four dispatches per parameter (sixty-two parameter tensors → two
+hundred and forty).
 
-셋 다 타일링 GEMM **한 뼈대**에서 나오게 했다. 순방향·역방향 둘이 같은 구조에 색인만
-다르다 — 세 벌로 베끼면 그중 하나만 고치는 날이 오고, 그 하나는 값 검사가 못 보는
-기울기 쪽일 것이다.
+All three were made to come out of **one** tiled GEMM skeleton. The forward and the
+two backwards are the same structure with different indexing — copied out three
+times, the day comes when one of them is fixed, and that one will be on the
+gradient side where the value checks cannot see it.
 
-### 잰 것
+### What was measured
 
     npm run build:ts
     npm run golden:ts
 
-    골든 798건 중 798건을 TS 로 썼다 — 0건은 아직 안 물었다.
-    통과 798 / 실패 0
+    798 of 798 golden cases written in TS — 0 not yet asked.
+    passed 798 / failed 0
 
-진짜 torch 로 굳힌 답 전부를 브라우저의 WGSL 이 직접 맞은 것이다. 그때는 코어(746)와
-자매(799)가 보는 것보다 넓었다 — 셋 중 유일하게 표 전체를 지났다.
+Every answer pinned with real torch, matched directly by WGSL in a browser. At the
+time that was wider than what the core (746) and the sister (799) saw — the only
+one of the three to pass the whole table.
 
-> **이 문단은 그때의 기록이다.** 표가 798 에서 2,953 으로 자라는 동안 borch.ts 는
-> 2,343 을 쓰고 610 을 안 물었으므로, 지금은 **자매가 표 전체를 지나고 borch.ts 가
-> 제일 좁다.** 수가 낡은 것이 아니라 그 수로 쓴 **문장이 뒤집혔다** — 이 파일은
-> 그때를 적는 자리라 수는 그대로 두고, 현재형으로 쓴 결론만 과거형으로 옮긴다.
-> 낡은 수보다 **낡은 결론**이 나쁘다: 수는 다시 재면 드러나는데 결론은 읽는 사람이
-> 지금 사실로 가져간다.
+> **This paragraph is a record of the time.** While the table grew from 798 to
+> 2,953, borch.ts wrote 2,343 and left 610 unasked, so today **the sister passes
+> the whole table and borch.ts is the narrowest of the three.** It is not the number
+> that went stale but **the sentence written from it** that reversed — this file
+> records a time, so the numbers stay and only the conclusion moves from the
+> present tense into the past. **A stale conclusion is worse than a stale number**:
+> a number surfaces when it is measured again, and a conclusion is carried away by
+> the reader as a present fact.
 
-**0 실패는 그 자체로는 못 믿을 수치라 반대로도 확인했다.** 넷을 일부러 깨뜨려 봤고
-넷 다 정확히 그 케이스만 잡혔다.
+**Zero failures is not a figure to be trusted on its own, so it was confirmed from
+the other direction too.** Four things were broken on purpose and each caught
+exactly its own cases.
 
-| 깨뜨린 것 | 잡힌 곳 |
+| what was broken | what caught it |
 |---|---|
-| `deg2rad` 에 0.001 | `math::deg2rad` 하나 |
-| 흩뿌리기에서 누적 제거 | `grad::expand`·`repeat`·`unfold(겹침)` 셋 — 출력 둘이 같은 입력을 읽는 자리만 |
-| conv 의 걸음 나눗셈 판정 제거 | `grad::conv2d(스트라이드2)/x` 하나 — 걸음 1 은 늘 나눠떨어져 안 걸린다 |
-| `roll` 을 그래프에서 뗌 | `flow::roll` 하나. **`method::roll` 은 그대로 통과했다** — 값은 맞고 그래프만 끊긴, 자매가 겪은 그 모양이다 |
+| 0.001 added to `deg2rad` | `math::deg2rad`, one case |
+| the accumulation removed from the scatter | `grad::expand`, `repeat` and `unfold(겹침)` — three, and only where two outputs read the same input |
+| conv's stride-divisibility test removed | `grad::conv2d(스트라이드2)/x`, one case — stride 1 always divides evenly and never catches it |
+| `roll` detached from the graph | `flow::roll`, one case. **`method::roll` passed unchanged** — right values with the graph cut, the shape the sister went through |
 
-### 러너가 통과 수보다 먼저 찍는 것
+### What the runner prints before the passing count
 
-**안 물은 수**다. 이름을 하나 잘못 적으면 그 케이스는 조용히 안 돌고 남은 것만
-통과하는데, 그때 화면이 초록이면 그게 제일 나쁜 결과다. 등록했는데 골든에 없는
-이름도 실패로 센다.
+**The number not asked.** One name written wrongly and that case quietly does not
+run while the rest pass, and a green screen at that moment is the worst possible
+outcome. A name registered and absent from the golden counts as a failure too.
 
-`borch-ts/test/missing.py` 가 안 물은 것을 이름으로 뽑는다 — 개수는 헤아릴 수 있어도
-헤쳐 나갈 수는 없다.
+`borch-ts/test/missing.py` produces the unasked ones by name — a count can be
+counted and cannot be navigated.
 
-### 가는 길에 고친 것
+### Fixed along the way
 
-87건이 한동안 막혀 있었는데 원인이 구현이 아니라 **내보내기**였다. 케이스 함수가
-자기 입력을 `np.random.default_rng` 로 그 자리에서 만들어서 `golden.json` 에 안 실렸고,
-그러면 파이썬이 아닌 구현은 기대값은 있는데 입력이 없는 상태가 된다. 입력을
-`golden_inputs()` 로 옮겼다 — 값이 안 바뀌게 옮겼고, 하네스가 그것을 확인해 줬다
-(`golden.py check` 가 갈린 입력으로 새로 추가한 키만 짚었다).
+87 cases were blocked for a while and the cause was **the export** rather than the
+implementation. The case functions built their own inputs on the spot with
+`np.random.default_rng`, so those inputs never went into `golden.json`, and then an
+implementation that is not Python has the expected values and not the inputs. The
+inputs moved into `golden_inputs()` — moved without changing a value, and the
+harness confirmed that (`golden.py check` named only the newly added keys as
+diverged inputs).
 
-이건 borch.ts 만의 문제가 아니었다. 골든을 언어 중립으로 만든 이유가 "다음 구현이
-검증 없이 자라지 않게" 하는 것인데, 그 상태로는 다음 구현도 같은 87건에서 막혔다.
+This was not borch.ts's problem alone. The golden was made language-neutral so that
+"the next implementation does not grow without verification", and in that state the
+next implementation would have been blocked at the same 87.
 
-### T3 — 정확도
+### T3 — accuracy
 
     uv run --with playwright python borch-ts/test/accuracy.py --epochs 10 --headed
 
-    어댑터: apple / metal-3
-    학습 10000장 / 시험 10000장, 배치 128, 10 에폭
+    adapter: apple / metal-3
+    10000 training images / 10000 test images, batch 128, 10 epochs
 
-| | 자매 | borch.ts (그때) | borch.ts (지금) |
+| | sister | borch.ts (then) | borch.ts (now) |
 |---|---|---|---|
-| 늘리기 끔 | | 62.4% (에폭 8) | 59.3% (에폭 8) |
-| 늘리기 켬 | | **65.5%** (에폭 10) | **64.6%** (에폭 10) |
-| 보고된 값 | 60.4% | | |
+| augmentation off | | 62.4% (epoch 8) | 59.3% (epoch 8) |
+| augmentation on | | **65.5%** (epoch 10) | **64.6%** (epoch 10) |
+| as reported | 60.4% | | |
 
-에폭이 18.5~19.6 초다(1 만 장). 5 만 장으로 환산하면 1.57 분으로, 스텝 벤치가 낸
-1.55 분과 맞는다 — 두 측정이 서로를 확인한다. 이 수는 나중에 다시 재도 같았다
-(18.4~19.7 초).
+An epoch is 18.5–19.6 seconds (on 10,000 images). Scaled to 50,000 that is 1.57
+minutes, which agrees with the 1.55 the step benchmark gave — the two measurements
+confirm each other. The figure held when measured again later (18.4–19.7
+seconds).
 
-**늘리기의 효과가 수로 보인다.** 끄면 학습 정확도가 81.5% 까지 가는데 시험은 59.3%
-에서 꺾인다 — 22 포인트 차이는 외운 것이다. 켜면 차이가 4 포인트로 줄고
-(68.7% / 64.6%) 에폭 10 에서도 **아직 오르는 중**이다. 학습 정확도를 늘리지 않은
-이미지로 재기 때문에 그 값이 낮게 나오는 것도 예상대로다.
+**Augmentation's effect shows up as numbers.** With it off, the training accuracy
+reaches 81.5% while the test accuracy turns over at 59.3% — a 22-point gap is
+memorisation. With it on, the gap falls to 4 points (68.7% / 64.6%) and at epoch 10
+it is **still climbing.** Not raising the training accuracy is what augmentation
+is for, and measuring on 10,000 images rather than 50,000 keeping the figures low
+is expected too.
 
-#### 지금 수가 그때보다 낮은 것 — 잡음이 아니다
+#### The numbers being lower now than then — this is not noise
 
-**같은 조건을 두 번 돌리면 열 에폭이 소수점까지 같다**(실측). `random.ts` 의 줄기가
-고정 자리에서 시작하므로 페이지를 새로 열 때마다 같은 초기 가중치·같은 늘리기 뽑기가
-나온다. 그러니 3.1 포인트와 0.9 포인트는 **코드가 바뀐 결과**다.
+**Running the same condition twice gives ten epochs identical to the decimal
+place** (measured). `random.ts`'s stream starts from a fixed place, so a freshly
+opened page gives the same initial weights and the same augmentation draws. So the
+3.1 points and the 0.9 points are **the result of code changing.**
 
-바뀐 것 중 이 표에 닿는 것은 하나가 크다 — **그때는 지름길 층 여섯이 학습되지
-않았다.** 벤치의 `Block` 이 지름길을 평범한 객체에 담아 `parameters()` 가 못 봤고,
-그래서 그 표는 "여섯 층이 얼어붙은 ResNet-18" 의 정확도였다. 지금은 전부 배운다.
+One change reaches this table and it is a large one — **six shortcut layers were
+not being trained at the time.** The benchmark's `Block` held its shortcut in a
+plain object where `parameters()` could not see it, so that table was the accuracy
+of "a ResNet-18 with six layers frozen". They all learn now.
 
-**더 배우는데 수가 낮아진 것이 이상해 보이지만 그렇지 않다.** 얼어붙은 층은
-규제처럼 굴었고, 1 만 장에 10 에폭이면 이 모델은 외우는 쪽이 이긴다(학습 81.5% 대
-시험 59.3%). 파라미터를 늘리면 외우기가 빨라지고 시험 정확도는 그만큼 안 따라온다 —
-늘리기를 켠 쪽에서 차이가 0.9 포인트로 줄어드는 것이 그 설명과 맞는다.
+**More learning producing lower numbers looks strange and is not.** The frozen
+layers acted as regularisation, and at 10 epochs over 10,000 images this model wins
+by memorising (81.5% training against 59.3% test). More parameters memorise faster
+and the test accuracy does not follow by as much — the gap narrowing to 0.9 points
+on the augmented side agrees with that explanation.
 
-**결론이 하나 바뀐다.** 전에는 "두 조건 다 자매의 60.4% 를 넘는다" 였는데, 지금은
-**늘리기를 켠 쪽만 넘는다**(64.6% 대 60.4%). 끈 쪽은 59.3% 로 밑이다. 그러니
-"이겼다" 는 말에는 이제 조건이 붙는다.
+**One conclusion changes.** It used to read "both conditions beat the sister's
+60.4%", and now **only the augmented one does** (64.6% against 60.4%). With
+augmentation off it is 59.3%, below. So "ahead" now carries a condition.
 
-### 이 표의 모델이 파이썬 쪽과 같은 것인지도 재야 했다
+### Whether this table's model is the same one as the Python side's also had to be measured
 
     uv run --with playwright --with numpy --with torch python borch-ts/test/samemodel.py --headed
 
-**벤치의 ResNet-18 은 골든 밖이다.** `tests/browser/bench.py` 를 눈으로 읽어 옮긴
-것이라, 블록 구성이나 BN 자리가 미묘하게 달라도 값 대조가 없었다. 다르면 속도도
-정확도도 **다른 모델끼리 비교한 것**이 된다.
+**The benchmark's ResNet-18 is outside the golden.** It was transcribed by eye
+from `tests/browser/bench.py`, so a subtly different block arrangement or BN
+placement had no value comparison against it. Different, and both the speed and the
+accuracy become **a comparison between two different models.**
 
-그래서 파라미터·입력·출력·손실·입력기울기를 뽑아 진짜 torch 로 맞춰본다. 이름 짓는
-규칙이 두 언어에서 다르므로 **자리로 맞춘다** — 구조가 같으면 모양 목록이 순서까지
-같고, 다르면 거기서 먼저 갈린다.
+So the parameters, the input, the output, the loss and the input gradient are
+extracted and matched against real torch. The naming rules differ between the two
+languages, so **they are matched by position** — the same structure gives the same
+list of shapes in the same order, and a difference parts there first.
 
-처음 돌렸을 때 **구조와 순방향은 맞고 입력 기울기가 갈렸다**(최대차 1.5e-2). 조각을
-하나씩 떼어 좁히니 `relu` 였다 — `step(0.0, x)` 는 `x >= 0` 이라 입력이 정확히 0 인
-자리에서 1 을 흘리는데 torch 는 0 을 준다.
+The first run had **the structure and the forward pass matching and the input
+gradient diverged** (max diff 1.5e-2). Taking pieces off one at a time narrowed it
+to `relu` — `step(0.0, x)` is `x >= 0`, so it flows 1 where the input is exactly 0
+and torch gives 0.
 
-**골든 798 건이 이것을 못 잡았다.** relu 케이스의 입력에 0 이 없었기 때문이다. 그리고
-`grad::BatchNorm2d/x` 는 `sum()` 으로 접는데, 그러면 상류 기울기가 전부 1 이라
-**BatchNorm 역방향의 보정항 둘이 정확히 상쇄된다** — 기대값이 4.7e-10 인 이유가
-그것이고, 그 케이스는 보정항을 아예 안 물어본다. 그래서 조각 대조는 **자리마다 다른
-가중치**로 접는다.
+**798 golden cases did not catch this**, because no relu case had a 0 in its
+input. And `grad::BatchNorm2d/x` folds with `sum()`, which makes every upstream
+gradient 1, and then **BatchNorm's two backward correction terms cancel exactly** —
+that is why its expected value is 4.7e-10, and that case does not ask about the
+correction terms at all. So the piecewise comparison folds with **a different
+weight per position.**
 
-### 이 문서가 스스로에게 건 규칙
+### The rule this document set for itself
 
-"같은 벤치로 재고, 진 것은 졌다고 적는다" 고 여기 적어두었는데, 그 규칙이 이번에
-두 번 걸렸다 — 한 번은 정말 지고 있을 때, 한 번은 **잘못된 장치에서 재고 있을 때**다.
-둘째가 더 위험했다. 지고 있는 것은 수를 보면 알지만, 잘못 재는 것은 수가 멀쩡해 보인다.
+"Measure on the same benchmark, and write down a loss as a loss" is written here,
+and that rule caught this document twice — once when it really was behind, and once
+when it was **measuring on the wrong device.** The second was the more dangerous.
+Being behind is visible in the numbers; measuring wrongly produces numbers that
+look perfectly fine.
