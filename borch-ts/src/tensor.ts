@@ -6997,6 +6997,27 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * The larger of the two, position by position.
+   *
+   * **Not `max`.** `max` reduces along an axis and this compares two tensors,
+   * which is torch's split and not one invented here. `fmax` below is a third
+   * thing again — it skips NaN where this carries it out.
+   *
+   * **A tie splits the gradient in half**, 0.5 to each side rather than 1 to
+   * both. The kernel has done that since it was written and `edge::grad::` asks
+   * about it; the forward is equally right either way, so a value comparison
+   * cannot see which was meant.
+   */
+  maximum(other: Tensor | number): Tensor {
+    return this.binary("maximum", Tensor.asTensor(other));
+  }
+
+  /** The smaller of the two, position by position. `maximum`'s twin. */
+  minimum(other: Tensor | number): Tensor {
+    return this.binary("minimum", Tensor.asTensor(other));
+  }
+
+  /**
    * **It skips NaN** — `maximum` carries NaN out with it. That divergence
    * is the whole of the name.
    *

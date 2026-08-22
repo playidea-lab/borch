@@ -39,7 +39,11 @@ DECL = ROOT / "borch-ts" / "dist" / "src"
 # Core-only names per namespace, measured. **Each row is a to-do list, not a budget.**
 # Lower it by carrying the name across; raising one needs a reason in this commit.
 FROZEN = {
-    "Tensor": 107,
+    # 107 until `maximum` and `minimum` were exposed. The kernels were already
+    # there — `binary("maximum", …)` is used a dozen times inside `tensor.ts` — so
+    # what was missing was the public method, which is the kind of gap a name count
+    # finds and a value comparison never can.
+    "Tensor": 105,
     "nn": 14,
     "nn.functional": 30,
     "optim": 0,
