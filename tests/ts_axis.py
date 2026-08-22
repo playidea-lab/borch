@@ -67,21 +67,119 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 INDEX = ROOT / "site" / "assets" / "api-index.json"
 
-# Which Python namespaces have a borch.ts side at all. `transforms` and
-# `transforms.functional` are `borchvision`'s and their TypeScript side is `vision.ts`,
-# which the golden's `vision::` cases hold name by name — measuring them here as well
-# would ask the same question twice.
+# Which Python namespaces have a borch.ts side to compare against.
+#
+# **`torch` — the top level — is not on this list, and that is a finding rather than
+# an omission.** The first version measured it and reported 202 core-only names.
+# Reading them showed the question does not have an answer: `borch/__init__.py`
+# mirrors *every* `Tensor` method into module scope (`for _name in dir(Tensor)`), the
+# way real torch offers `torch.numel(x)` beside `x.numel()`. borch.ts does not — its
+# methods live on the class and its `index` module carries two names. So comparing the
+# two top levels counts every method a second time and answers a question about
+# module structure while looking like one about features.
+#
+# The methods themselves are still compared: they are the `Tensor` row.
+#
+# `transforms` and `transforms.functional` are `borchvision`'s. Their TypeScript side
+# is `vision.ts` and the golden's `vision::` cases hold it name by name, so measuring
+# it here would ask the same question twice.
 SPACES = frozenset({
-    "torch", "Tensor", "nn", "nn.functional",
+    "Tensor", "nn", "nn.functional",
     "optim", "optim.lr_scheduler", "linalg", "utils.data",
 })
+
+
+def refused():
+    """Names the core carries **only in order to refuse them.**
+
+    `borch/_tensor.py` binds a stub for each: `to_mkldnn` raises "MKL-DNN is not in
+    the browser subset", `symeig` says torch removed it and points at `linalg.eigh`.
+    They are the design principle working — *an absent feature beats a wrong answer* —
+    and they are not features.
+
+    borch.ts not carrying the stub is therefore **not a missing feature**. It is a
+    worse error message: `x.to_mkldnn()` says "not a function" there and says what is
+    wrong and why here. Worth fixing one day, and not the same list as `maximum`.
+
+    **Asked of the bound method, not of a table.** The first version imported
+    `_GONE`, `_NO_MACHINERY` and `_ABSENT_DTYPES` and found fourteen. Reading the
+    source showed why that was too few: as many again are bound by **inline loops**
+    with no table to import — sparse, quantisation, storage, the four accelerators.
+    A list of table names would have gone on missing those and the miss would have
+    been silent, because a refusal counted as a gap looks exactly like a gap.
+
+    So the marker is where the function came from. Every stub is built by one of a
+    few factories and keeps that factory in its `__qualname__`; nothing else in the
+    core does. If that ever stops being true this raises rather than quietly
+    reporting zero — a rule that misses in our favour is worse than no rule, which is
+    `torch_gap.py`'s sentence and the reason this one is written to fail closed.
+    """
+    from borch import _tensor
+
+    factories = ("_bind_gone", "_bind_absent", "_needs_sparse", "_bind_absent_dtype")
+    out = {name for name in dir(_tensor.Tensor)
+           if not name.startswith("_")
+           and getattr(getattr(_tensor.Tensor, name, None), "__qualname__", "")
+           .startswith(factories)}
+    # `_bind_absent_dtype` rewrites its own `__qualname__`, so its names are read
+    # from the one table that does exist. Both paths are kept because either alone
+    # was measured to be short.
+    out |= set(_tensor._ABSENT_DTYPES)
+    if len(out) < 20:
+        raise SystemExit(
+            f"only {len(out)} refusal stubs found in borch/_tensor.py — the factory "
+            "names above have probably changed. Fix them rather than letting "
+            "refusals be counted as gaps.")
+    return out
 
 # **Names the core has and borch.ts is not going to.** Each row is a judgement and
 # carries its reason; a name absent from both this table and borch.ts is the to-do
 # list. Keyed by `space::name` so that a reason about one name cannot excuse a whole
 # namespace — the shape `test_binding_arguments.py` found by keying its own table the
 # wrong way first.
-DELIBERATE: dict[str, str] = {}
+#
+# **Every row here raises the agreement figure**, so the work slides towards writing
+# rows. The rule is `torch_gap.py`'s: a reason has to be checkable, and one that
+# cannot be written is a gap. Each row below cites where its reason is already
+# established in this repository rather than asserting it fresh.
+
+_ALIAS = "torch's own alias for {}; borch.ts carries the one name"
+_DEVICE = ("one device in a browser — borch/__init__.py's `_NOT_OURS` says the same "
+           "for `cpu`: there is one device to choose, so we have none")
+_STORAGE = ("no storage layer to look into — borch/__init__.py's `_NOT_OURS`, and "
+            "the core answers `.storage()` with 'use `.numpy()`'")
+_NUMPY = "the numpy bridge; borch.ts has no numpy on the other side of it"
+
+DELIBERATE: dict[str, str] = {
+    # torch keeps both spellings of six arcs and four arithmetic names. The core
+    # mirrors torch, borch.ts carries the primary — a learner who types the alias
+    # gets an error rather than a different answer, which is this project's rule.
+    **{f"Tensor::{n}": _ALIAS.format(p)
+       for n, p in (("arccos", "acos"), ("arccos_", "acos_"),
+                    ("arccosh", "acosh"), ("arccosh_", "acosh_"),
+                    ("arcsin", "asin"), ("arcsin_", "asin_"),
+                    ("arcsinh", "asinh"), ("arcsinh_", "asinh_"),
+                    ("clip", "clamp"), ("divide", "div"), ("subtract", "sub"),
+                    ("ndimension", "dim"), ("nelement", "numel"),
+                    ("swapdims", "transpose"), ("swapdims_", "transpose_"))},
+    # There is one device and no storage objects. Both reasons are the core's own,
+    # written into `_NOT_OURS` when the same question was asked of torch.
+    **{f"Tensor::{n}": _DEVICE
+       for n in ("get_device", "is_pinned", "pin_memory", "share_memory_",
+                 "is_shared", "record_stream", "is_distributed")},
+    **{f"Tensor::{n}": _STORAGE
+       for n in ("data_ptr", "const_data_ptr", "storage_offset", "element_size",
+                 "is_set_to", "dim_order", "untyped_storage")},
+    # The numpy bridge, which has nothing on the far side in TypeScript.
+    **{f"Tensor::{n}": _NUMPY for n in ("numpy", "tolist", "new_tensor")},
+    # Worker processes do not exist in a browser, which is `run.py`'s stated reason
+    # for the two `dataconv::` cases it leaves unported.
+    "utils.data::get_worker_info":
+        "no worker processes in a browser — borch-ts/test/run.py says the same",
+    "utils.data::default_convert":
+        "converts numpy and Python containers into tensors; neither is on the "
+        "TypeScript side of the bridge",
+}
 
 # **Names borch.ts has and the core does not.** The reverse direction is not
 # symmetric: borch.ts is a browser library and carries things a numpy core has no
@@ -128,18 +226,24 @@ def _camel(name):
 
 
 def compare():
-    """`{space: core-only names}`, with the two spellings reconciled."""
+    """`{space: (gaps, refusals)}`, with the two spellings reconciled.
+
+    Both are core-only. They are returned apart because they are different work: a
+    gap wants the feature written, a refusal wants the message carried across.
+    """
     import torch_gap
 
     theirs = ts_names()
     lowered = {n.lower() for n in theirs}
+    stubs = refused()
     out = {}
     for space, _real, ours in torch_gap._spaces():
         if space not in SPACES:                  # borchvision's spaces are held elsewhere
             continue
-        out[space] = sorted(
-            n for n in torch_gap._public(ours)
-            if _camel(n) not in theirs and n.lower() not in lowered)
+        missing = [n for n in torch_gap._public(ours)
+                   if _camel(n) not in theirs and n.lower() not in lowered]
+        out[space] = (sorted(n for n in missing if n not in stubs),
+                      sorted(n for n in missing if n in stubs))
     return out
 
 
@@ -147,17 +251,22 @@ def main(argv):
     show = argv[argv.index("--show") + 1] if "--show" in argv else None
     rows = compare()
     unexplained = 0
-    for space, missing in rows.items():
-        loose = [n for n in missing if f"{space}::{n}" not in DELIBERATE]
+    stubs = 0
+    for space, (gaps, refusals) in rows.items():
+        loose = [n for n in gaps if f"{space}::{n}" not in DELIBERATE]
         unexplained += len(loose)
+        stubs += len(refusals)
         mark = " " if not loose else "✘"
-        print(f"  {mark} {space:22s} core-only {len(missing):>4}  "
-              f"without a reason {len(loose):>4}")
+        print(f"  {mark} {space:22s} gap {len(gaps):>4}  "
+              f"without a reason {len(loose):>4}   refusal stub {len(refusals):>4}")
         if show is not None and space.startswith(show):
-            for name in missing:
+            for name in gaps:
                 why = DELIBERATE.get(f"{space}::{name}", "**no reason**")
                 print(f"      · {name}  {why}")
-    print(f"\n이름만 센다 — 서명도 값도 안 본다. 까닭 없는 것 {unexplained}건.")
+            for name in refusals:
+                print(f"      · {name}  (the core only refuses it too)")
+    print(f"\n이름만 센다 — 서명도 값도 안 본다.")
+    print(f"까닭 없는 결손 {unexplained}건 · 거절 스텁 {stubs}건.")
     return 0
 
 

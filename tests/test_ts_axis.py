@@ -39,14 +39,27 @@ DECL = ROOT / "borch-ts" / "dist" / "src"
 # Core-only names per namespace, measured. **Each row is a to-do list, not a budget.**
 # Lower it by carrying the name across; raising one needs a reason in this commit.
 FROZEN = {
-    "torch": 202,
-    "Tensor": 147,
+    "Tensor": 107,
     "nn": 14,
     "nn.functional": 30,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 3,
     "utils.data": 12,
+}
+
+# The core carries these only in order to refuse them, so borch.ts not carrying the
+# stub is a worse error message rather than a missing feature. Held apart from the
+# gaps and pinned separately: a refusal turning into a gap, or a gap being quietly
+# reclassified as a refusal, are both movements worth seeing.
+REFUSALS = {
+    "Tensor": 40,
+    "nn": 0,
+    "nn.functional": 0,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 0,
 }
 
 
@@ -89,17 +102,24 @@ def test_the_core_to_borch_ts_axis_has_not_widened():
         f"the namespaces measured changed: {sorted(set(rows) ^ set(FROZEN))}\n"
         "  Add or remove the row in FROZEN in the same commit as the change.")
 
-    moved = {space: (len(names), FROZEN[space])
-             for space, names in rows.items() if len(names) != FROZEN[space]}
+    moved = []
+    for space, (gaps, refusals) in sorted(rows.items()):
+        if len(gaps) != FROZEN[space]:
+            moved.append(f"{space} gaps: {len(gaps)} now, {FROZEN[space]} written down")
+        if len(refusals) != REFUSALS[space]:
+            moved.append(f"{space} refusals: {len(refusals)} now, "
+                         f"{REFUSALS[space]} written down")
     assert not moved, (
-        "the core-only name counts moved:\n  "
-        + "\n  ".join(f"{space}: {now} now, {was} written down"
-                      for space, (now, was) in sorted(moved.items()))
-        + "\n\n  Lower means a name was carried across — edit FROZEN down.\n"
+        "the core-only name counts moved:\n  " + "\n  ".join(moved)
+        + "\n\n  A gap count lower means a name was carried across — edit FROZEN down.\n"
           "  Higher means the core gained a name borch.ts does not have, or a\n"
           "  borch.ts name was removed. Either wants saying out loud.\n"
+          "  A refusal count moving means the core changed what it refuses, or the\n"
+          "  factory names ts_axis.refused() looks for have drifted. The second is\n"
+          "  the dangerous one: it reclassifies refusals as gaps, and it happened\n"
+          "  once already — reading tables alone found 14 of the 40.\n"
           "  See it: uv run --with numpy --with torch --with torchvision \\\n"
-          "            python tests/ts_axis.py --show nn")
+          "            python tests/ts_axis.py --show Tensor")
 
 
 def test_the_measurement_still_runs_as_a_script():
