@@ -258,3 +258,52 @@ def test_the_failure_message_can_say_where_the_number_came_from():
         "is keyed on the line that starts with the folder name, so it breaks when the "
         "table is reformatted.")
     assert "last written in" in said, said
+
+
+# Measured floors, well under today's counts. They exist to catch a sweep that stopped
+# finding files, not to track the directory's size.
+FLOORS = {"borch-ts/src": 15, "borch-ts/test": 20}
+
+
+def test_the_sweep_still_finds_files_to_count():
+    """**A ceiling over an empty sweep is green forever, and reads as a clean directory.**
+
+    `_count` walks `rglob("*")` and filters on suffix and on path parts. Narrow that
+    filter by accident — a suffix dropped, a `dist` guard that starts matching real
+    paths, a directory renamed — and it counts nothing. Nothing is under every ceiling,
+    so the ratchet passes, the tightening test skips on `if total`, and both report
+    exactly what they report when a translation pass has finished.
+
+    There is no residue to find afterwards. A file that is never visited cannot be
+    counted as unvisited, and the summary is small and healthy-looking either way.
+
+    So the floor is asserted separately, on the **file count** rather than the character
+    count, because the character count is supposed to fall to zero and the file count is
+    not. Another session hit this exact shape today: a filter keyed on a field that does
+    not exist reported `agree 0 / differ 0 / unreadable 0` for a namespace of 144 layers,
+    and it was found by the row being too clean rather than by anything failing.
+    """
+    thin = {}
+    for folder, floor in FLOORS.items():
+        found = len(_countable(folder))
+        if found < floor:
+            thin[folder] = (found, floor)
+    assert not thin, (
+        "the sweep found fewer files than it should — it is measuring less than it "
+        "claims:\n  "
+        + "\n  ".join(f"{f}: {n} files against a floor of {fl}" for f, (n, fl) in thin.items())
+        + "\n\n  A ceiling over a sweep that found nothing passes forever. Check SUFFIXES, "
+          "the\n  `dist`/`node_modules` guards, and whether the directory moved.")
+
+
+def test_every_ceiling_has_a_floor():
+    """A ceiling added without a floor is the case above, waiting.
+
+    The floor is cheap and its absence is invisible, which is the combination that means
+    it will be forgotten unless something asks.
+    """
+    missing = [folder for folder in CEILINGS if folder not in FLOORS]
+    assert not missing, (
+        f"these ceilings have no floor beneath them: {missing}. Measure the file count "
+        "and\n  write it into FLOORS well under what is there — it catches a sweep that "
+        "stops\n  finding files, which no ceiling can.")
