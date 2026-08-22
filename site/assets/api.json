@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 683,
-  "stale": 1,
-  "missing": 71
+  "done": 684,
+  "stale": 0,
+  "missing": 72
  },
  "modules": [
   {
@@ -8556,9 +8556,44 @@
        "doc": ""
       },
       {
+       "name": "maxNorm",
+       "signature": "readonly maxNorm: number | null",
+       "doc": "",
+       "torch": "max_norm"
+      },
+      {
+       "name": "normType",
+       "signature": "readonly normType: number",
+       "doc": "",
+       "torch": "norm_type"
+      },
+      {
+       "name": "scaleGradByFreq",
+       "signature": "readonly scaleGradByFreq: boolean",
+       "doc": "",
+       "torch": "scale_grad_by_freq"
+      },
+      {
        "name": "mode",
        "signature": "readonly mode: \"sum\" | \"mean\" | \"max\"",
        "doc": ""
+      },
+      {
+       "name": "sparse",
+       "signature": "readonly sparse: boolean",
+       "doc": ""
+      },
+      {
+       "name": "includeLastOffset",
+       "signature": "readonly includeLastOffset: boolean",
+       "doc": "",
+       "torch": "include_last_offset"
+      },
+      {
+       "name": "paddingIdx",
+       "signature": "readonly paddingIdx: number | null",
+       "doc": "",
+       "torch": "padding_idx"
       },
       {
        "name": "weight",
@@ -8567,8 +8602,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(num: number, dim: number, mode?: \"sum\" | \"mean\" | \"max\")",
-       "doc": ""
+       "signature": "constructor(num: number, dim: number, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, weightIn?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null)",
+       "doc": "**`mode` sits sixth, where torch has it.**\n\nIt used to be third, so `new EmbeddingBag(10, 3, \"sum\")` set `maxNorm` in\ntorch and the mode here. Both readings then build a layer and return bags of\nthe right shape, and only the numbers differ."
       },
       {
        "name": "ownParameters",
@@ -10193,10 +10228,11 @@
     {
      "kind": "function",
      "name": "embeddingBag",
-     "signature": "export declare function embeddingBag(idx: Tensor, weight: Tensor, offsets?: readonly number[] | null, mode?: \"sum\" | \"mean\" | \"max\", perSampleWeights?: Tensor | null): Tensor",
-     "doc": "One row per bag. Selecting from the table **and combining** is one\nfunction.\n\nGiven `offsets` it cuts a one-dimensional index run into bags — the place\nwhere bag lengths differ. `perSampleWeights` is used by torch only when\n`mode='sum'`.",
+     "signature": "export declare function embeddingBag(idx: Tensor, weight: Tensor, offsets?: readonly number[] | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, perSampleWeights?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null): Tensor",
+     "doc": "One row per bag. Selecting from the table and **combining** is all one function.\n\nGiven `offsets`, a one-dimensional index run is cut into bags — the shape for\nwhen the bags have differing lengths. `perSampleWeights` is used in torch under\n`mode='sum'` alone.\n\n**`mode` sits sixth, where torch has it.** It used to be fourth, so\n`embeddingBag(idx, w, offsets, \"sum\")` handed a mode string to `maxNorm` — and\n`maxNorm` rewrites the table, so the layer would have been rescaling its own\nembeddings on every forward pass.",
      "members": [],
-     "torch": "embedding_bag"
+     "torch": "embedding_bag",
+     "doc_ko": "가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.\n\n`offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.\n`perSampleWeights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.\n\n**`mode` 는 여섯째 자리다. torch 가 거기 두기 때문이다.** 전에는 넷째였고, 그래서\n`embeddingBag(idx, w, offsets, \"sum\")` 이 mode 문자열을 `maxNorm` 에 넘겼다 — 그리고\n`maxNorm` 은 표를 다시 쓴다. 층이 매 순방향마다 자기 임베딩을 다시 조정할 뻔했다."
     },
     {
      "kind": "function",
@@ -10536,7 +10572,7 @@
      "members": []
     }
    ],
-   "count": 663,
+   "count": 669,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -14546,5 +14582,5 @@
    "count": 9
   }
  ],
- "total": 1896
+ "total": 1902
 }
