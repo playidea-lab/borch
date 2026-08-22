@@ -3535,12 +3535,66 @@
        }
       },
       {
+       "name": "eq",
+       "signature": "eq(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
+       }
+      },
+      {
+       "name": "ne",
+       "signature": "ne(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
+       }
+      },
+      {
+       "name": "lt",
+       "signature": "lt(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
+       }
+      },
+      {
+       "name": "le",
+       "signature": "le(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
+       }
+      },
+      {
+       "name": "gt",
+       "signature": "gt(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
+       }
+      },
+      {
+       "name": "ge",
+       "signature": "ge(other: Tensor | number): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
+       }
+      },
+      {
        "name": "maximum",
        "signature": "maximum(other: Tensor | number): Tensor",
        "doc": "The larger of the two, position by position.\n\n**Not `max`.** `max` reduces along an axis and this compares two tensors,\nwhich is torch's split and not one invented here. `fmax` below is a third\nthing again — it skips NaN where this carries it out.\n\n**A tie splits the gradient in half**, 0.5 to each side rather than 1 to\nboth. The kernel has done that since it was written and `edge::grad::` asks\nabout it; the forward is equally right either way, so a value comparison\ncannot see which was meant.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3548,8 +3602,8 @@
        "signature": "minimum(other: Tensor | number): Tensor",
        "doc": "The smaller of the two, position by position. `maximum`'s twin.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3557,8 +3611,8 @@
        "signature": "fmax(other: Tensor): Tensor",
        "doc": "**It skips NaN** — `maximum` carries NaN out with it. That divergence\nis the whole of the name.\n\nThere is no separate kernel. If one side is NaN the definition is to\ntake the other, and `where` writes that down directly — **written as a\nmultiplication, `0 × NaN = NaN` contaminates the very slots that were\nfiltered out.** The assembly lived only in the binding for a long time.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "**NaN 을 건너뛴다** — `maximum` 은 NaN 을 물고 나온다. 그 갈림이 이름의 전부다.\n\n커널이 따로 없다. 한쪽이 NaN 이면 다른 쪽을 고르는 것이 정의이고, `where` 가\n그것을 그대로 적는다 — **곱하기로 짜면 `0 × NaN = NaN` 이라 걸러 낸 자리가\n오염된다.** 조립이 오래 결속에만 있었다."
       },
@@ -3567,8 +3621,8 @@
        "signature": "fmin(other: Tensor): Tensor",
        "doc": "",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3576,8 +3630,8 @@
        "signature": "moveaxis(src: number, dst: number): Tensor",
        "doc": "Moves an axis. The same as `movedim`, and torch offers both.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "축을 옮긴다. `movedim` 과 같은 것이고 torch 가 둘 다 준다."
       },
@@ -3586,8 +3640,8 @@
        "signature": "t(): Tensor",
        "doc": "Two-dimensional transpose. **One dimension or fewer is left alone** —\nas in torch.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "2 차원 전치. **1 차원 이하는 그대로 둔다** — torch 가 그렇다."
       },
@@ -3596,8 +3650,8 @@
        "signature": "vdot(other: Tensor): Tensor",
        "doc": "The vector inner product. **For complex it conjugates the left side** —\non reals it is `dot`.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "벡터 내적. **복소수면 왼쪽을 켤레로 본다** — 실수에서는 `dot` 과 같다."
       },
@@ -3607,8 +3661,8 @@
        "doc": "Stretches to that shape. The same as `expand`, taking the shape **as a\nlist.**",
        "torch": "broadcast_to",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "늘려서 그 모양으로. `expand` 와 같은 것이고 모양을 **목록으로** 받는다."
       },
@@ -3617,8 +3671,8 @@
        "signature": "gcd(other: Tensor | number): Tensor",
        "doc": "The greatest common divisor. **It discards signs** — torch's answer is\nalways non-negative.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "최대공약수. **부호를 버린다** — torch 의 답은 늘 0 이상이다."
       },
@@ -3627,8 +3681,8 @@
        "signature": "lcm(other: Tensor | number): Tensor",
        "doc": "The least common multiple. **Zero when `gcd` is zero** (measured: the\nlcm of 0 and 7 is 0).",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "최소공배수. **`gcd` 가 0 이면 0 이다**(실측: 0 과 7 의 lcm 은 0)."
       },
@@ -3637,8 +3691,8 @@
        "signature": "nextafter(other: Tensor | number): Tensor",
        "doc": "The next representable float towards `other`. The point is that the\nspacing differs with the value.",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "`other` 쪽으로 한 칸 옆의 부동소수. 간격이 값에 따라 다른 것이 요점이다."
       },
@@ -3648,8 +3702,8 @@
        "doc": "",
        "torch": "bitwise_and",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3658,8 +3712,8 @@
        "doc": "",
        "torch": "bitwise_or",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3668,8 +3722,8 @@
        "doc": "",
        "torch": "bitwise_xor",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3678,8 +3732,8 @@
        "doc": "",
        "torch": "bitwise_left_shift",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3688,8 +3742,8 @@
        "doc": "",
        "torch": "bitwise_right_shift",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3698,8 +3752,8 @@
        "doc": "Logical and, **reading anything non-zero as true.** That is where it\nparts from the bitwise operation.",
        "torch": "logical_and",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        },
        "doc_ko": "*0 이 아니면 참으로 보고** 논리곱. 비트 연산과 갈리는 자리가 그것이다."
       },
@@ -3709,8 +3763,8 @@
        "doc": "",
        "torch": "logical_or",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -3719,8 +3773,8 @@
        "doc": "",
        "torch": "logical_not",
        "section": {
-        "ko": "torch's second spellings",
-        "en": "torch's second spellings"
+        "ko": "The same six under torch's short names",
+        "en": "The same six under torch's short names"
        }
       },
       {
@@ -6466,7 +6520,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 663,
+   "count": 669,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -14462,5 +14516,5 @@
    "count": 9
   }
  ],
- "total": 1888
+ "total": 1894
 }

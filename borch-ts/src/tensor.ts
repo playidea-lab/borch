@@ -6996,6 +6996,44 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.binary("ne", Tensor.asTensor(other));
   }
 
+  // ── The same six under torch's short names ──────────────────────────────
+  //
+  // torch carries both spellings — `gt` beside `greater`, `le` beside
+  // `less_equal` — and the five above were the long half only. The short half is
+  // what tutorial code is written in, so `x.gt(0)` raised while `x.greater(0)`
+  // worked, and the kernels were the same kernels either way.
+  //
+  // **`eq` is the one that is not a rename.** torch's long form for `ne` is
+  // `not_equal` and for `lt` is `less`, but `eq`'s neighbour `equal` is a
+  // different function — it reduces two tensors to one boolean, where `eq`
+  // compares position by position. Giving `eq` the elementwise body and leaving
+  // `equal` alone is the whole of the care needed here; folding them together
+  // would return a scalar where torch returns a mask.
+
+  eq(other: Tensor | number): Tensor {
+    return this.binary("eq", Tensor.asTensor(other));
+  }
+
+  ne(other: Tensor | number): Tensor {
+    return this.notEqual(other);
+  }
+
+  lt(other: Tensor | number): Tensor {
+    return this.less(other);
+  }
+
+  le(other: Tensor | number): Tensor {
+    return this.lessEqual(other);
+  }
+
+  gt(other: Tensor | number): Tensor {
+    return this.greater(other);
+  }
+
+  ge(other: Tensor | number): Tensor {
+    return this.greaterEqual(other);
+  }
+
   /**
    * The larger of the two, position by position.
    *

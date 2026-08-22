@@ -220,9 +220,21 @@ def _camel(name):
     every multi-word name as missing on both sides at once. That is not a gap; it is
     two spellings of one name. A name with no underscore passes through unchanged,
     which is most class names.
+
+    **A trailing underscore is kept, and the first version dropped it.** torch marks
+    in-place with it — `eq_` writes into the receiver where `eq` returns a new
+    tensor, and they are two functions rather than two spellings. Splitting on `_`
+    naively gives `eq_` an empty last part, so it camelled to `eq` and matched the
+    out-of-place method.
+
+    That was caught by the number improving too much: adding six comparison methods
+    dropped the count by twelve. `torch_gap.py` says a rule that misses in our favour
+    is worse than no rule, and this one missed in our favour by exactly the six
+    in-place forms nobody had written.
     """
-    head, *rest = name.split("_")
-    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+    trailing = "_" if name.endswith("_") else ""
+    head, *rest = name.rstrip("_").split("_")
+    return head + "".join(p[:1].upper() + p[1:] for p in rest) + trailing
 
 
 def compare():
