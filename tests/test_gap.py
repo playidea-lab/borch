@@ -124,6 +124,29 @@ def test_the_readme_functional_count_is_the_measured_one():
         f"{len(theirs & ours)} of {len(theirs)}.")
 
 
+def test_the_v2_namespace_is_counted_and_its_overlap_is_not_hidden():
+    """**v2 reads 0 of 72 and that is true about the namespace, not about the library.**
+
+    `borchvision.transforms.v2` does not exist, so every one of v2's names is absent
+    from it. But 38 of those names are transforms this library already has one
+    namespace over, and v2's versions give the same values on a plain image — so a
+    reader taking "0 of 72" as "none of v2's transforms work here" would be wrong.
+
+    This pins the two numbers together so the second cannot quietly stop being true:
+    if the overlap changes, or if v2 stops being a superset of v1, this fails and the
+    docstring that explains the zero has to be rewritten with it.
+    """
+    v2 = _api(torchvision.transforms.v2, "transforms.v2")
+    v1 = _api(torchvision.transforms, "transforms")
+    ours = _public(borchvision.transforms)
+    assert not (v1 - v2), (
+        f"v1 has names v2 does not: {sorted(v1 - v2)}\n"
+        "  The docstring says v2 is a superset. If that stopped being true, the "
+        "explanation of the zero is wrong too.")
+    assert len(v2 & ours) >= 38, (
+        f"only {len(v2 & ours)} of v2's names exist here; the docstring says 38")
+
+
 def test_no_table_entry_matches_nothing():
     """**There must be no dead rows.**
 

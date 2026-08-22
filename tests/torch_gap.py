@@ -45,6 +45,31 @@ the move that hid it: absent from the list reads as zero to review, and absent f
 while present in the list reads as thirty-six to review. The second was the true sentence,
 and it is what put the namespace on the to-do list it has now come off.
 
+## `transforms.v2` is on the list and `transforms.v2.functional` is not
+
+v2 is torchvision's current recommended API and it was **invisible to this measure
+until now** — not declined, not counted, just never asked about, because
+`dir(torchvision.transforms)` does not carry `v2` until something imports it. That is
+the same shape as `transforms` itself being off the list this morning, one level up.
+
+It is counted against an absent namespace, so it reads 0 of 72. **That is the true
+sentence about the namespace**, and it is not the true sentence about the library:
+38 of those 72 names exist here under `transforms`, and measured, v2's transforms give
+**the same values as v1's on a plain image** (`Resize` v1 against v2: max difference
+0.0). What is missing is the namespace and the tv_tensors dispatch, not the arithmetic.
+
+`transforms.v2.functional` is **deliberately not on the list**, which needs saying
+because a namespace off the list is normally the defect this file exists to catch.
+Measured: it has 165 public callables, and 128 of them are `<operation>_<type>`
+dispatch kernels — `affine_image`, `affine_mask`, `affine_bounding_boxes`,
+`affine_keypoints`, `affine_video` are one operation counted five times. Counting them
+raw gives a denominator that is false in the direction this file warns about twice
+already, and the tables cannot explain them either: the wildcard rows deliberately do
+not match namespaced keys, so `"*_image"` would also swallow `to_pil_image` in v1 and
+attach a reason about dispatch to a name that has nothing to do with it. Putting it on
+the list needs namespaced suffix rows, which the matcher does not support today. So it
+is absent **with this paragraph** rather than absent silently.
+
 **And the number counts names, not signatures.** `Grayscale` present with the wrong luma
 weights counts the same as `Grayscale`; so does `Pad` present without `padding_mode`. This
 is not hypothetical — measured on the borch.ts side, `MaxPool2d` was present taking
@@ -76,6 +101,12 @@ import torch
 
 try:                                            # the vision half needs one more package
     import torchvision
+    # **`v2` has to be imported by name.** It is not an attribute of
+    # `torchvision.transforms` until something imports it, which is precisely why this
+    # measure could not see it: `dir()` on the parent does not list it, so no sweep
+    # that walks attributes reaches it. A namespace can be invisible to a measure
+    # without being hidden.
+    import torchvision.transforms.v2                              # noqa: F401
 except ImportError:                             # pragma: no cover - measured by test_gap
     torchvision = None
 
@@ -500,9 +531,49 @@ SKIPPED = {
                                            "one — as `PILToTensor`",
     "transforms.functional.convert_image_dtype": "uint8 has no storage in this subset — "
                                                  "as `ConvertImageDtype`",
+
+    # `transforms.v2`. **Only what is declined for the same reason `ops` is** — v2's
+    # whole addition over v1 is that a transform carries boxes, masks, keypoints and
+    # video alongside the image, and that pays off with a detector. There is no
+    # detector in the catalogue, so the type system that exists to keep boxes in step
+    # with the picture has nothing to keep in step.
+    #
+    # Everything else absent from v2 is the to-do list and reads as one: 38 of its 72
+    # names are the transforms this library already has, one namespace over.
+    "transforms.v2.ClampBoundingBoxes": "boxes travelling with the picture — the point "
+                                        "of v2's type system, and it pays off with a "
+                                        "detector, which the catalogue has none of",
+    "transforms.v2.ClampKeyPoints": "as above, for keypoints",
+    "transforms.v2.SanitizeBoundingBoxes": "as above",
+    "transforms.v2.SanitizeKeyPoints": "as above",
+    "transforms.v2.ConvertBoundingBoxFormat": "as above",
+    "transforms.v2.SetClampingMode": "as above",
+    "transforms.v2.RandomIoUCrop": "a detection augmentation — it crops by how much of "
+                                   "a box survives, so it is boxes or it is nothing",
+    "transforms.v2.get_bounding_boxes": "reads the boxes out of a v2 sample — as above",
+    "transforms.v2.get_keypoints": "as above",
+    "transforms.v2.UniformTemporalSubsample": "video. There is no video anywhere in "
+                                              "this project and a tutorial's first ten "
+                                              "lines do not open one",
+    "transforms.v2.JPEG": "it encodes and decodes JPEG. numpy has no codec, and adding "
+                          "one is the dependency this library does without — the same "
+                          "answer PIL gets",
 }
 
 # The namespaces looked at. (display name, torch's side, ours)
+class _Absent:
+    """**A namespace we do not have, standing where it would be.**
+
+    `_spaces()` drops a `None`, so declaring an absent namespace that way counts it as
+    nothing to review — which is exactly the move that hid `transforms` this morning.
+    An empty object counts it as everything to review, and that is the honest number.
+
+    This class was here once for `transforms.functional`, was deleted when that
+    namespace was built, and came back for `transforms.v2`. Worth noting rather than
+    tidying: the thing it represents recurs, so the class is not scaffolding.
+    """
+
+
 def _spaces():
     got = [("torch", torch, borch),
            ("Tensor", torch.Tensor, borch.Tensor),
@@ -515,7 +586,8 @@ def _spaces():
     if torchvision is not None:
         got += [("transforms", torchvision.transforms, borchvision.transforms),
                 ("transforms.functional", torchvision.transforms.functional,
-                 borchvision.transforms.functional)]
+                 borchvision.transforms.functional),
+                ("transforms.v2", torchvision.transforms.v2, _Absent())]
     return [(name, a, b) for name, a, b in got if b is not None]
 
 
