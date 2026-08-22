@@ -1962,8 +1962,9 @@ ${flatId(inN)}
 }`;
 }
 
-export function convOut(size: number, pad: number, kernel: number, stride: number): number {
-  return Math.floor((size + 2 * pad - kernel) / stride) + 1;
+export function convOut(size: number, pad: number, kernel: number, stride: number,
+                        dilation = 1): number {
+  return Math.floor((size + 2 * pad - ((kernel - 1) * dilation + 1)) / stride) + 1;
 }
 
 /**
@@ -1983,11 +1984,23 @@ export interface ConvNDShape {
   readonly kernel: readonly number[];
   readonly stride: readonly number[];
   readonly pad: readonly number[];
+  /** How far apart the filter's cells sit. One is the ordinary convolution. */
+  readonly dilation?: readonly number[];
   readonly outDims: readonly number[];
 }
 
+/** The filter's spacing per axis, defaulting to one. */
+function convDil(s: ConvNDShape, d: number): number {
+  return s.dilation?.[d] ?? 1;
+}
+
 export function convNDKey(s: ConvNDShape): string {
-  return [s.N, s.C, s.O, s.inDims, s.kernel, s.stride, s.pad].join("|");
+  // **`dilation` belongs in the key.** The shader bakes the spacing in, so two calls
+  // that differ only in dilation are two shaders — left out of the key the first one
+  // is cached and the second silently reuses it, which is a wrong answer with no
+  // exception anywhere near it.
+  return [s.N, s.C, s.O, s.inDims, s.kernel, s.stride, s.pad,
+    s.dilation ?? s.kernel.map(() => 1)].join("|");
 }
 
 /** The product accumulated from the back — how many elements one step along an axis
@@ -2048,7 +2061,8 @@ ${s.kernel.map((size, d) =>
 ${s.outDims.map((size, d) =>
       `          let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`).join("\n")}
 ${s.outDims.map((_, d) =>
-      `          let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d}) - ${s.pad[d] ?? 0};`)
+      `          let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d} * `
+      + `${convDil(s, d)}u) - ${s.pad[d] ?? 0};`)
       .join("\n")}
           if (${s.inDims.map((size, d) => `i${d} >= 0 && i${d} < ${size}`).join(" && ")}) {
             v = X[(bn * ${s.C}u + ch) * ${inSpace}u
@@ -2195,7 +2209,8 @@ function patchCoords(s: ConvNDShape, indent: string): {
       ...s.outDims.map((size, d) =>
         `${indent}let o${d} = (col / ${outStride[d] ?? 1}u) % ${size}u;`)].join("\n"),
     coords: s.outDims.map((_, d) =>
-      `${indent}let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d}) - ${s.pad[d] ?? 0};`)
+      `${indent}let i${d} = i32(o${d} * ${s.stride[d] ?? 1}u + kk${d} * `
+      + `${convDil(s, d)}u) - ${s.pad[d] ?? 0};`)
       .join("\n"),
     guard: s.inDims.map((size, d) => `i${d} >= 0 && i${d} < ${size}`).join(" && "),
     offset: s.inDims.map((_, d) => `u32(i${d}) * ${inStride[d] ?? 1}u`).join(" + "),
@@ -2286,7 +2301,7 @@ ${s.inDims.map((size, d) =>
 ${s.inDims.map((_, d) => {
       const st = s.stride[d] ?? 1;
       return `          {
-            let t${d} = i${d} + ${s.pad[d] ?? 0} - i32(kk${d});
+            let t${d} = i${d} + ${s.pad[d] ?? 0} - i32(kk${d} * ${convDil(s, d)}u);
             if (t${d} < 0 || t${d} % ${st} != 0) { ok = false; }
             else {
               let o${d} = t${d} / ${st};

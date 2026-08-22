@@ -74,7 +74,7 @@ export interface Report { text: string; checks: Check[] }
  * model's kinds.
  */
 class Small extends nn.Module {
-  private readonly conv = new nn.Conv2d(1, 4, 3, 1, 1, false);
+  private readonly conv = new nn.Conv2d(1, 4, 3, 1, 1, 1, 1, false);
   private readonly bn = new nn.BatchNormND(4);
   private readonly fc = new nn.Linear(4 * 8 * 8, 3);
 

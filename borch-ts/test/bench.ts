@@ -39,12 +39,17 @@ export class Block extends nn.Module {
 
   constructor(cin: number, cout: number, stride: number) {
     super();
-    this.conv1 = new nn.Conv2d(cin, cout, 3, stride, 1, false);
+    // **`bias` is eighth now**, where torch has it — `dilation` and `groups` took
+    // the two seats in front of it. `tsc` named every one of these six call sites
+    // the moment the constructor moved, which Python had nothing to do.
+    this.conv1 = new nn.Conv2d(cin, cout, 3, stride, 1, 1, 1, false);
     this.bn1 = new nn.BatchNormND(cout);
-    this.conv2 = new nn.Conv2d(cout, cout, 3, 1, 1, false);
+    this.conv2 = new nn.Conv2d(cout, cout, 3, 1, 1, 1, 1, false);
     this.bn2 = new nn.BatchNormND(cout);
     const shrinks = stride !== 1 || cin !== cout;
-    this.downConv = shrinks ? new nn.Conv2d(cin, cout, 1, stride, 0, false) : null;
+    this.downConv = shrinks
+      ? new nn.Conv2d(cin, cout, 1, stride, 0, 1, 1, false)
+      : null;
     this.downBn = shrinks ? new nn.BatchNormND(cout) : null;
   }
 
@@ -70,7 +75,7 @@ export class ResNet18 extends nn.Module {
 
   constructor(classes = 10) {
     super();
-    this.stem = new nn.Conv2d(3, 64, 3, 1, 1, false);
+    this.stem = new nn.Conv2d(3, 64, 3, 1, 1, 1, 1, false);
     this.bn = new nn.BatchNormND(64);
     this.body = new nn.Sequential([
       new Block(64, 64, 1), new Block(64, 64, 1),
@@ -407,7 +412,9 @@ export async function dumpPieces(): Promise<Record<string, {
     bn: () => ({ mod: new nn.BatchNormND(3), shape: [2, 3, 4, 4] }),
     avgpool: () => ({ mod: new AvgPoolTo1(), shape: [2, 3, 4, 4] }),
     relu: () => ({ mod: new nn.ReLU(), shape: [2, 3, 4, 4] }),
-    conv: () => ({ mod: new nn.Conv2d(3, 4, 3, 1, 1, false), shape: [2, 3, 4, 4] }),
+    conv: () => ({
+      mod: new nn.Conv2d(3, 4, 3, 1, 1, 1, 1, false), shape: [2, 3, 4, 4],
+    }),
     block: () => ({ mod: new Block(3, 3, 1), shape: [2, 3, 4, 4] }),
     blockDown: () => ({ mod: new Block(3, 6, 2), shape: [2, 3, 8, 8] }),
   };

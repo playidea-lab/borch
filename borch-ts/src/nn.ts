@@ -683,11 +683,22 @@ export class ConvND extends Module {
     private readonly stride = 1,
     private readonly padding = 0,
     useBias = true,
+    private readonly dilation = 1,
+    private readonly groups = 1,
+    private readonly paddingMode: PadMode | "zeros" = "zeros",
   ) {
     super();
+    if (inChannels % groups !== 0 || outChannels % groups !== 0) {
+      throw new RuntimeError(
+        `groups=${groups} divides neither the input channels (${inChannels}) nor `
+        + `the filters (${outChannels})`);
+    }
     const shape = [
-      outChannels, inChannels, ...new Array<number>(spatial).fill(kernel),
+      outChannels, inChannels / groups, ...new Array<number>(spatial).fill(kernel),
     ];
+    // **The fan-in is divided by `groups`.** Each filter sees only
+    // `inChannels / groups` channels, and initialised as though it saw all of them
+    // a grouped convolution starts too small — torch divides here too.
     const bound = 1 / Math.sqrt(Math.max(1, fanIn(shape)));
     this.weight = uniform(shape, bound);
     this.bias = useBias ? uniform([outChannels], bound) : null;
@@ -702,28 +713,50 @@ export class ConvND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    return x.convND(this.weight, this.bias, this.stride, this.padding);
+    // **A non-zero padding mode is padded here and the convolution called with 0**,
+    // which is what torch's layer does and why `F.conv2d` has no such argument.
+    // Putting it in both would be a second place for one decision.
+    if (this.paddingMode !== "zeros" && this.padding !== 0) {
+      const spatial = x.shape.length - 2;
+      const widths: number[] = [];
+      for (let d = 0; d < spatial; d++) widths.push(this.padding, this.padding);
+      return x.padND(widths, this.paddingMode).convND(
+        this.weight, this.bias, this.stride, 0, this.dilation, this.groups);
+    }
+    return x.convND(this.weight, this.bias, this.stride, this.padding,
+                    this.dilation, this.groups);
   }
 }
 
+/**
+ * **`bias` sits eighth, where torch has it**, and `dilation` sixth.
+ *
+ * `new Conv2d(3, 16, 3, 1, 1, false)` used to turn the bias off and now sets
+ * `dilation`. The core moved first and this followed — while the two were apart,
+ * the same line meant different things on the two sides, and both returned a
+ * feature map of the right shape.
+ */
 export class Conv1d extends ConvND {
   constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
-              bias = true) {
-    super(inC, outC, kernel, 1, stride, padding, bias);
+              dilation = 1, groups = 1, bias = true,
+              paddingMode: PadMode | "zeros" = "zeros") {
+    super(inC, outC, kernel, 1, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
 
 export class Conv2d extends ConvND {
   constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
-              bias = true) {
-    super(inC, outC, kernel, 2, stride, padding, bias);
+              dilation = 1, groups = 1, bias = true,
+              paddingMode: PadMode | "zeros" = "zeros") {
+    super(inC, outC, kernel, 2, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
 
 export class Conv3d extends ConvND {
   constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
-              bias = true) {
-    super(inC, outC, kernel, 3, stride, padding, bias);
+              dilation = 1, groups = 1, bias = true,
+              paddingMode: PadMode | "zeros" = "zeros") {
+    super(inC, outC, kernel, 3, stride, padding, bias, dilation, groups, paddingMode);
   }
 }
 

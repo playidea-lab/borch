@@ -9047,8 +9047,34 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     bias: Tensor | null = null,
     stride: number | readonly number[] = 1,
     padding: number | readonly number[] = 0,
+    dilation: number | readonly number[] = 1,
+    groups = 1,
   ): Tensor {
     const spatial = this.shape.length - 2;
+    if (groups !== 1) {
+      // **Groups by slicing and joining, not inside the kernel.** The gradient
+      // then follows from the pieces — `narrow` and `cat` carry theirs — where a
+      // grouped path through the shader would be a second index arithmetic that
+      // has to agree with the first, and the three conv shaders each carry one
+      // already.
+      const inCh = this.shape[1] ?? 1;
+      const outCh = weight.shape[0] ?? 1;
+      if (inCh % groups !== 0 || outCh % groups !== 0) {
+        throw new RuntimeError(
+          `groups=${groups} divides neither the input channels (${inCh}) nor the `
+          + `filters (${outCh})`);
+      }
+      const cin = inCh / groups;
+      const cout = outCh / groups;
+      const parts: Tensor[] = [];
+      for (let g = 0; g < groups; g++) {
+        parts.push(this.narrow(1, g * cin, cin).convND(
+          weight.narrow(0, g * cout, cout),
+          bias === null ? null : bias.narrow(0, g * cout, cout),
+          stride, padding, dilation));
+      }
+      return Tensor.cat(parts, 1);
+    }
     if (spatial < 1 || weight.shape.length !== this.shape.length) {
       throw new Error(`conv: shapes do not match: [${this.shape}] x [${weight.shape}]`);
     }
@@ -9058,6 +9084,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const kernel = weight.shape.slice(2);
     const st = spread(stride);
     const pd = spread(padding);
+    const dl = spread(dilation);
     const C = this.shape[1] ?? 1;
     const WC = weight.shape[1] ?? 1;
     if (C !== WC) {
@@ -9068,9 +9095,9 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     }
     const s: ConvNDShape = {
       N: this.shape[0] ?? 1, C, O: weight.shape[0] ?? 1,
-      inDims, kernel, stride: st, pad: pd,
+      inDims, kernel, stride: st, pad: pd, dilation: dl,
       outDims: inDims.map((d, i) =>
-        convOut(d, pd[i] ?? 0, kernel[i] ?? 1, st[i] ?? 1)),
+        convOut(d, pd[i] ?? 0, kernel[i] ?? 1, st[i] ?? 1, dl[i] ?? 1)),
     };
     const key = convNDKey(s);
     const outShape = [s.N, s.O, ...s.outDims];

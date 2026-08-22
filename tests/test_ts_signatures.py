@@ -102,7 +102,18 @@ SHIFTED = {
     # against torch, which is what a repository with three implementations and one
     # outside authority does -- the core cannot move toward torch except by moving
     # away from borch.ts until borch.ts follows.
-    "nn": 7,
+    # 7 -> 4. The three Conv layers followed the core: torch's order, with `bias`
+    # eighth and `dilation` sixth. `dilation` is implemented in the shader (one
+    # token in three index expressions, plus the spacing in the cache key, without
+    # which two calls differing only in dilation would silently share a shader),
+    # `groups` by slicing and joining so the gradient follows from the pieces, and
+    # `padding_mode` by padding in the layer as torch's layer does.
+    #
+    # **`tsc` named all six positional call sites the moment the constructor moved**
+    # -- `new Conv2d(cin, cout, 3, stride, 1, false)` with a boolean where a number
+    # now goes. The same move in Python was silent, and another session had six
+    # tests break on it this morning.
+    "nn": 4,
     # 1 -> 2. `F.embedding_bag` moved `mode` from third to sixth, where torch
     # has it, and borch.ts still takes it third. Same pair as the layer above,
     # one level down.
@@ -186,7 +197,9 @@ RENAMED = {
 # turning it into a truncation without anyone noticing.
 SHORTER = {
     "Tensor": 16,
-    "nn": 18,   # +3, the same twelve becoming visible
+    "nn": 21,   # +3: the Conv layers now carry arguments borch.ts still lacks
+                #     nowhere else -- they left `shifted` for `shorter`, which is
+                #     the safe bucket: a prefix, refusing what it does not reach.
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 12,

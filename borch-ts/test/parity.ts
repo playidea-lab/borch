@@ -883,6 +883,66 @@ export async function report(): Promise<Report> {
     `std [${pair.std.shape}] · mean [${pair.mean.shape}]`);
   await nearAll("stdMean's mean is the mean over that axis", pair.mean, [2.5, 4, 5.5]);
 
+  // ── conv: the arguments that arrived after the core moved ────────────
+  //
+  // **The golden cannot ask these.** Its cases go through the binding, which calls
+  // `convND` with the four arguments it always had; `dilation` and `groups` are
+  // reachable only from TypeScript until the binding grows them. And no value is
+  // written down here — each check is an **equivalence**, so what is asked is that
+  // the new argument means what it says rather than that some array is right.
+  const cx = keepAlive(Tensor.from(
+    Array.from({ length: 2 * 4 * 6 * 6 }, (_, i) => ((i * 7) % 13) / 13 - 0.5),
+    [2, 4, 6, 6]));
+
+  // `groups=2` is two convolutions on the channel halves, joined. Written out by
+  // hand here, so the check knows nothing about how the argument is implemented.
+  const gw = keepAlive(Tensor.from(
+    Array.from({ length: 6 * 2 * 3 * 3 }, (_, i) => ((i * 5) % 11) / 11 - 0.5),
+    [6, 2, 3, 3]));
+  const grouped = cx.convND(gw, null, 1, 0, 1, 2);
+  const byHand = Tensor.cat([
+    cx.narrow(1, 0, 2).convND(gw.narrow(0, 0, 3), null, 1, 0),
+    cx.narrow(1, 2, 2).convND(gw.narrow(0, 3, 3), null, 1, 0),
+  ], 1);
+  await agrees("groups=2 is two convolutions on the halves", grouped, byHand);
+
+  // `dilation=2` is the same convolution with the filter's cells spread out. A
+  // 3×3 dilated by 2 covers 5×5 with zeros between, so the equivalence is against
+  // a kernel written that way — which asks the shader's index arithmetic and
+  // nothing else.
+  const dw = keepAlive(Tensor.from(
+    Array.from({ length: 2 * 4 * 3 * 3 }, (_, i) => ((i * 3) % 7) / 7 - 0.5),
+    [2, 4, 3, 3]));
+  const spread = new Float32Array(2 * 4 * 5 * 5);
+  const flat = await dw.toArray();
+  for (let o = 0; o < 2; o++) {
+    for (let c = 0; c < 4; c++) {
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          spread[((o * 4 + c) * 5 + i * 2) * 5 + j * 2] =
+            flat[((o * 4 + c) * 3 + i) * 3 + j] ?? 0;
+        }
+      }
+    }
+  }
+  await agrees("dilation=2 is the filter with its cells spread apart",
+    cx.convND(dw, null, 1, 0, 2), cx.convND(keepAlive(Tensor.from(spread, [2, 4, 5, 5]))));
+
+  // The layer's non-zero padding mode pads and then convolves with padding 0 —
+  // the same split torch's layer makes, and the reason `F.conv2d` has no such
+  // argument.
+  {
+    const layer = new nn.Conv2d(4, 2, 3, 1, 1, 1, 1, false, "reflect");
+    const plain = cx.padND([1, 1, 1, 1], "reflect")
+      .convND(layer.weight, null, 1, 0);
+    await agrees("padding_mode pads first and convolves with 0",
+      layer.call(cx), plain);
+  }
+
+  want("Conv2d takes bias eighth, as torch does",
+    new nn.Conv2d(4, 2, 3, 1, 0, 1, 1, false).bias === null,
+    "a positional `false` in the sixth seat would be a dilation now");
+
   // ── vision: the place a widened type opened ──────────────────────────
   //
   // **The golden cannot ask this.** `Transform` widened to take an array as well, for

@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 68
+  "missing": 69
  },
  "modules": [
   {
@@ -5083,7 +5083,7 @@
       },
       {
        "name": "convND",
-       "signature": "convND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[]): Tensor",
+       "signature": "convND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], dilation?: number | readonly number[], groups?: number): Tensor",
        "doc": "Convolution independent of dimensionality. `conv1d`, `conv2d` and\n`conv3d` all come here.\n\nOne spatial axis is 1-D and two is 2-D — a separate function per\ndimensionality makes three copies, and a day comes when only one of\nthem is fixed. The sister project was in exactly that state.",
        "torch": "conv_n_d",
        "section": {
@@ -6933,7 +6933,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inChannels: number, outChannels: number, kernel: number, spatial: number, stride?: number, padding?: number, useBias?: boolean)",
+       "signature": "constructor(inChannels: number, outChannels: number, kernel: number, spatial: number, stride?: number, padding?: number, useBias?: boolean, dilation?: number, groups?: number, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       },
       {
@@ -6954,11 +6954,11 @@
      "kind": "class",
      "name": "Conv1d",
      "signature": "export declare class Conv1d extends ConvND",
-     "doc": "",
+     "doc": "**`bias` sits eighth, where torch has it**, and `dilation` sixth.\n\n`new Conv2d(3, 16, 3, 1, 1, false)` used to turn the bias off and now sets\n`dilation`. The core moved first and this followed — while the two were apart,\nthe same line meant different things on the two sides, and both returned a\nfeature map of the right shape.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -6971,7 +6971,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
@@ -6984,7 +6984,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, dilation?: number, groups?: number, bias?: boolean, paddingMode?: PadMode | \"zeros\")",
        "doc": ""
       }
      ]
