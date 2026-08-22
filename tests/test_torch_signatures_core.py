@@ -95,6 +95,26 @@ SHORTER = {
 # unreadable rows into comparisons nobody checked.
 UNREADABLE_IN_TORCH = 571
 
+# **How many rows each namespace actually gets judged on, out of how many are filed.**
+# The measurement's docstring prints this table as prose, and prose goes stale in
+# silence; this is the claim, checkable.
+#
+# It is also the concrete form of what a floor cannot do. A floor asks whether fewer
+# things were compared. The fault this axis shipped with compared the same number and
+# **classified all of them into a bucket meaning not-our-problem** — an absorbing
+# state, where a row is still counted and no longer judged. Pinning the ratio per
+# namespace is what makes that say something: `Tensor` going from 9-of-512 to
+# 0-of-512 moves a number here and moves nothing in any total.
+JUDGED = {
+    "Tensor": (9, 512),
+    "nn": (119, 161),
+    "nn.functional": (75, 126),
+    "optim": (14, 14),
+    "optim.lr_scheduler": (16, 16),
+    "linalg": (0, 42),
+    "utils.data": (13, 18),
+}
+
 
 def _rows():
     import torch_signatures_core
@@ -135,6 +155,37 @@ def test_the_core_to_torch_argument_axis_has_not_widened():
         "  overrides are abbreviated (measured: Tensor.std loses correction and\n"
         "  keepdim), so a source that looks better can be worse.\n"
         "  Higher usually means a torch upgrade moved something into C.")
+
+
+def test_each_namespace_is_judged_on_as_much_as_it_was():
+    """The judged-to-filed ratio per namespace, exactly.
+
+    **`linalg` is 0 of 42 and `Tensor` is 9 of 512.** The tensor surface is the
+    largest body of API in the project and it has no outside authority on arguments
+    at all — what holds it is the core and borch.ts agreeing with each other, plus
+    the golden, which compares values and only for cases somebody wrote.
+
+    Written down because a coverage figure taken over the judged rows alone would
+    read as 94%, and because knowing where a finding *could* have come from is worth
+    more than that figure. `std` was caught on the axis that cannot say which side is
+    wrong; had both libraries taken the correction first, nothing would have noticed.
+    """
+    rows = _rows()
+    moved = []
+    for space, found in sorted(rows.items()):
+        judged = sum(1 for r in found
+                     if r[3] not in ("torch is C", "variadic", "no signature"))
+        want_judged, want_filed = JUDGED[space]
+        if (judged, len(found)) != (want_judged, want_filed):
+            moved.append(f"{space}: {judged} of {len(found)} now, "
+                         f"{want_judged} of {want_filed} written")
+    assert not moved, (
+        "the judged-to-filed ratios moved:\n  " + "\n  ".join(moved)
+        + "\n\n  Judged going **down** while the total holds is the dangerous one:\n"
+          "  it means rows moved into a bucket that means 'cannot judge', which is\n"
+          "  an absorbing state and invisible to any count of the total. That is the\n"
+          "  fault this axis shipped with — every C method silently classified as\n"
+          "  absent, and Tensor reading as three agreements and finished.")
 
 
 def test_the_measurement_still_compares_something():

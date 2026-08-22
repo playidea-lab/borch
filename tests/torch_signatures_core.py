@@ -66,6 +66,30 @@ tensor surface. Two other sources were measured and **neither is used**:
 Neither door is shut. Both want a decision about where the authority comes from, and
 that is not a decision to take inside a measurement.
 
+## Which findings this repository is entitled to expect, measured
+
+How many argument lists actually get judged against torch, per namespace:
+
+    optim.lr_scheduler      16 of  16
+    optim                   14 of  14
+    utils.data              13 of  18
+    nn                     119 of 161
+    nn.functional           75 of 126
+    Tensor                   9 of 512
+    linalg                   0 of  42
+
+**The tensor surface is the largest body of API in the project and almost none of it
+is checked against torch by argument.** `linalg` is none of it. What holds those is
+the core and borch.ts agreeing with each other, plus the golden — which compares
+values, and only for cases somebody wrote.
+
+That is not an argument for building the parser. It is the map of where a finding
+like `std` could have come from: `std` was caught on `ts_signatures.py`'s axis, and
+that axis cannot say which side is wrong. Had both libraries taken the correction
+first, nothing here would have noticed. **Knowing which findings we are entitled to
+expect is worth more than a coverage figure**, and a coverage figure computed over
+the judged rows alone would have read as 94%.
+
 ## What it cannot see
 
 Types, defaults, keyword-only-ness, and whether the values agree. The third of those
