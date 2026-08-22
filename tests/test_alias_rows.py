@@ -60,7 +60,15 @@ def _flat(name):
 def _alias_rows():
     """The prefixes marked `별칭` in the gap table."""
     text = RUNNER.read_text(encoding="utf-8")
-    rows = re.findall(r'^\s*"([a-z0-9]+::)":\s*\((\d+),\s*"([^"]*)"\)', text, re.M)
+    # **The reason may run to a second line.** Python joins adjacent string literals, and
+    # one row in the table is written that way; an expression ending at the first closing
+    # quote skipped it entirely — silently, because a row it cannot see contributes
+    # nothing rather than raising. It was `unpool::`, and it is marked `아직` rather than
+    # `별칭`, so nothing this check decides changed. That is the reason to fix it now:
+    # the next two-line row is one nobody will think to look for.
+    rows = [(head, n, "".join(re.findall(r'"([^"]*)"', body)))
+            for head, n, body in re.findall(
+                r'^\s*"([a-z0-9]+::)":\s*\((\d+),\s*((?:"[^"]*"\s*)+)\)', text, re.M)]
     # **Read as a leading word.** It was `"별칭" in why` at first, and that caught
     # `dtype::`'s reason, where "형 별칭" (type alias) is the same word meaning something else
     # — the marker is one word at the head of the row, which is not the same as the letters

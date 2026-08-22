@@ -45,17 +45,17 @@ def _load_module(name, path):
     return mod
 
 
-def _stale_dist():
-    """The reason `dist` is out of date, or `None`.
-
-    **The rule is not restated here.** `borch-ts/test/run.py` already decides what "stale"
-    means for the golden runner, and a second copy of a freshness rule is a rule that
-    diverges — the day the two disagree, one runner stops and the other does not, and the
-    difference reads as a defect in whatever was being changed.
+def _runner():
+    """`borch-ts/test/run.py`, loaded as a module.
 
     It is loaded under its own name, and its directory goes on `sys.path` only for the
     load. Left there, `run`, `bench`, `cost` and `serialize` would all resolve to that tree
     for the rest of the session, and `tests/browser` has files of every one of those names.
+
+    **Two things in this file need it** — the freshness rule and the gap-table ledger —
+    and both want the module rather than its text. Matching the text is what
+    `test_alias_rows.py` does, and its expression cannot see a row whose reason runs to a
+    second line.
     """
     import importlib.util                                            # noqa: PLC0415
 
@@ -69,8 +69,19 @@ def _stale_dist():
     finally:
         if here in sys.path:
             sys.path.remove(here)
+    return mod
+
+
+def _stale_dist():
+    """The reason `dist` is out of date, or `None`.
+
+    **The rule is not restated here.** `borch-ts/test/run.py` already decides what "stale"
+    means for the golden runner, and a second copy of a freshness rule is a rule that
+    diverges — the day the two disagree, one runner stops and the other does not, and the
+    difference reads as a defect in whatever was being changed.
+    """
     try:
-        mod.require_fresh_dist(ROOT)
+        _runner().require_fresh_dist(ROOT)
     except SystemExit as exc:
         return str(exc)
     return None
@@ -806,3 +817,91 @@ def test_the_english_reference_carries_no_korean():
     assert not seen, ("Korean reaches the English API reference:\n  "
                       + "\n  ".join(seen[:15])
                       + (f"\n  … and {len(seen) - 15} more" if len(seen) > 15 else ""))
+
+
+DECLINED = re.compile(r"(\d[\d,]*) deliberately not carried across")
+OWED = re.compile(r"and (\d[\d,]*) owed")
+# The marker that separates the two. It sits at the head of every reason string in
+# `borch-ts/test/run.py`'s ledger, and `test_alias_rows.py` reads the same position for
+# `별칭` — the markers are keys into that table, not prose, which is what makes them
+# readable from here. `아직` is the one that means the work is owed rather than declined.
+OWED_MARKER = "아직"
+
+
+def _ledger_split():
+    """(declined, owed) as **the ledger itself has them.**
+
+    Read by importing the runner rather than by matching its text. `test_alias_rows.py`
+    does match text, with `\\((\\d+),\\s*"([^"]*)"\\)`, and that expression **cannot see a
+    row whose reason is split across two lines** — `unpool::` is one, 20 cases, and it
+    has been invisible to that reader the whole time it has existed. Importing has no
+    such blind spot and costs one module load this file already pays for.
+
+    The marker is read as **a leading word**, for the reason written beside the same read
+    in `test_alias_rows.py`: `dtype::`'s reason contains "형 별칭", where the same word
+    means something else, and matching anywhere in the body caught it.
+    """
+    rows = _runner().NOT_PORTED.values()
+    owed = sum(n for n, why in rows if why.lstrip("*").startswith(OWED_MARKER))
+    return sum(n for n, _ in rows) - owed, owed
+
+
+def test_the_readme_splits_the_remainder_the_way_the_ledger_does():
+    """**340 declined and 107 owed are not typed into the README — they are read.**
+
+    The two mean opposite things. Declined is a decision that has been made: porting
+    those would ask a question borch.ts has no place to be asked. Owed is work that has
+    not happened. A single remainder cannot show a debt being paid and taken on at the
+    same time, and the runner's ledger learned that years' worth of prefixes ago, which
+    is why every row there carries the marker this reads.
+
+    **The check exists because writing the split by hand went wrong twice in one day.**
+    The first sentence said the remainder was "all one thing now" and a new block was
+    frozen an hour later. The replacement said 376 and 71 and was wrong when it was
+    written — `ops::` and `unpool::` are marked owed too and only `v2::` was counted.
+    Both times the **total** was right, and the total was all that was checked, so both
+    readings were green. This is the same shape as `test_docs.py`'s own lesson that a
+    check on a number does not read the sentence beside it; the answer here is not a
+    better sentence but not retyping a number the ledger already holds.
+    """
+    declined, owed = _ledger_split()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    said_declined, said_owed = DECLINED.search(readme), OWED.search(readme)
+    assert said_declined and said_owed, (
+        "the README stopped stating the split in the shape this reads — fix the "
+        "patterns above, or drop this test if the claim went away.")
+    got = (int(said_declined.group(1).replace(",", "")),
+           int(said_owed.group(1).replace(",", "")))
+    assert got == (declined, owed), (
+        f"the README splits the remainder {got[0]} declined / {got[1]} owed; the "
+        f"ledger has {declined} / {owed}.\n"
+        f"  owed is every row in borch-ts/test/run.py whose reason starts `{OWED_MARKER}`.")
+
+
+def test_the_ledger_and_the_measured_remainder_are_the_same_number():
+    """The two halves have to add back up to what `dist` measures.
+
+    They come from opposite directions — one is `golden − written`, counted by loading
+    the compiled case table, and the other is the sum of rows somebody wrote by hand.
+    **Nothing has been comparing them.** A prefix could be double-counted in the ledger,
+    or a row's frozen number could drift, and the per-prefix check in `run.py` would
+    still pass every row it looks at while the total said something else.
+    """
+    stale = _stale_dist()
+    if stale:
+        pytest.skip("the bundle is stale; the measured half cannot be trusted")
+    node = shutil.which("node")
+    if node is None or not TS_CASES.exists():
+        pytest.skip("no node, or the bundle has not been built")
+    out = subprocess.run([node, "--input-type=module", "-e", COUNT_CASES],
+                         capture_output=True, text=True, cwd=ROOT,
+                         env={**os.environ, "GOLDEN": str(GOLDEN_JSON),
+                              "CASES": TS_CASES.as_uri()})
+    assert out.returncode == 0, f"could not load the case table:\n{out.stderr[-2000:]}"
+    got = json.loads(out.stdout)
+    measured = got["golden"] - got["written"]
+    declined, owed = _ledger_split()
+    assert declined + owed == measured, (
+        f"the ledger's rows add to {declined + owed} and the case tables leave "
+        f"{measured} unasked ({got['golden']} golden − {got['written']} written).\n"
+        "  a prefix is counted twice, missing, or carrying a stale frozen number.")
