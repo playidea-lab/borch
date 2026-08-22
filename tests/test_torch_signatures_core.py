@@ -137,7 +137,16 @@ SHIFTED = {
     # we have nothing to put there — it changes no value, so it is absent rather than
     # refused, and the row is honest about the position being unmatched.
     "optim": 1,
-    "optim.lr_scheduler": 2,
+    # 2 → 1. `ReduceLROnPlateau` took torch's `threshold_mode`, `cooldown`
+    # and `eps` — three arguments missing from the middle, so a call written
+    # from torch's documentation put the cooldown where `threshold_mode` goes
+    # and the minimum rate where `cooldown` does. All three implemented and
+    # checked against real torch over seven configurations, twelve steps each.
+    #
+    # `OneCycleLR` stays: `epochs` and `steps_per_epoch` are an alternative
+    # spelling of `total_steps` and the momentum cycle is a feature, not a
+    # rename. It is work rather than a shift, and it is not done.
+    "optim.lr_scheduler": 1,
     "linalg": 0,
     "utils.data": 0,
 }

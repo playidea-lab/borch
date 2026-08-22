@@ -1055,19 +1055,42 @@ class ReduceLROnPlateau:
     shrinking the step instead of stopping."""
 
     def __init__(self, optimizer, mode="min", factor=0.1, patience=10,
-                 threshold=1e-4, min_lr=0.0):
+                 threshold=1e-4, threshold_mode="rel", cooldown=0, min_lr=0.0,
+                 eps=1e-8):
+        """torch's order. **`threshold_mode`, `cooldown` and `eps` were missing from
+        the middle**, so `ReduceLROnPlateau(opt, "min", 0.5, 5, 1e-3, 0, 1e-4)` — a
+        call written from torch's documentation — put the cooldown where
+        `threshold_mode` goes and the minimum rate where `cooldown` does.
+        """
+        if mode not in ("min", "max"):
+            raise ValueError(f"mode {mode} is unknown!")
+        if threshold_mode not in ("rel", "abs"):
+            raise ValueError(f"threshold mode {threshold_mode} is unknown!")
         self.optimizer = optimizer
         self.mode, self.factor, self.patience = mode, factor, patience
-        self.threshold, self.min_lr = threshold, min_lr
+        self.threshold, self.threshold_mode = threshold, threshold_mode
+        self.cooldown, self.min_lr, self.eps = cooldown, min_lr, eps
         self.best = None
         self.num_bad_epochs = 0
+        self.cooldown_counter = 0
 
     def _better(self, value):
+        """torch's four comparisons — two directions crossed with two thresholds.
+
+        **`rel` scales the threshold by the best value and `abs` subtracts it.** At a
+        loss near 1 the two are almost the same number, which is why a case built on
+        the default cannot tell them apart, and at a loss near 100 they are not close
+        at all.
+        """
         if self.best is None:
             return True
         if self.mode == "min":
-            return value < self.best * (1 - self.threshold)
-        return value > self.best * (1 + self.threshold)
+            if self.threshold_mode == "rel":
+                return value < self.best * (1 - self.threshold)
+            return value < self.best - self.threshold
+        if self.threshold_mode == "rel":
+            return value > self.best * (1 + self.threshold)
+        return value > self.best + self.threshold
 
     def step(self, metric):
         metric = float(metric.item() if isinstance(metric, Tensor) else metric)
@@ -1075,10 +1098,23 @@ class ReduceLROnPlateau:
             self.best, self.num_bad_epochs = metric, 0
         else:
             self.num_bad_epochs += 1
-            if self.num_bad_epochs > self.patience:
-                for group in self.optimizer.param_groups:
-                    group["lr"] = max(group["lr"] * self.factor, self.min_lr)
-                self.num_bad_epochs = 0
+        # **The cooldown counter runs down before the patience is looked at, and the
+        # bad epochs are cleared while it does.** torch ignores the epochs inside a
+        # cooldown entirely rather than counting them towards the next cut, so a
+        # counter that merely blocked the cut would fire the moment it expired.
+        if self.cooldown_counter > 0:
+            self.cooldown_counter -= 1
+            self.num_bad_epochs = 0
+        elif self.num_bad_epochs > self.patience:
+            for group in self.optimizer.param_groups:
+                new = max(group["lr"] * self.factor, self.min_lr)
+                # **A cut smaller than `eps` is not made at all.** Without it the
+                # rate keeps shrinking by amounts that do not change the training
+                # and do change the number a checkpoint carries.
+                if group["lr"] - new > self.eps:
+                    group["lr"] = new
+            self.cooldown_counter = self.cooldown
+            self.num_bad_epochs = 0
 
     def get_last_lr(self):
         return [g["lr"] for g in self.optimizer.param_groups]

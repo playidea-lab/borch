@@ -33,6 +33,34 @@ arguments into a constructor taking six — **the arity agrees perfectly** and t
 is `momentumDecay`, while `weight_decay` appears nowhere in the call. Anything counting
 arguments reads that as correct. Anything comparing sets reads it as correct too. Only
 walking the parameters by position, name by name, reaches it.
+
+## What this check is for, stated after a day of moving argument orders
+
+**A positional call is a silent bet that the callee's parameter order never moves.**
+Two sessions moved a dozen of them in one afternoon — losses, convolutions, pooling,
+optimizers, all onto torch's own lists — and the bet came due four times. What caught
+each one divides cleanly, and not by how bad the defect was:
+
+    boolean into a number slot      `new Conv2d(cin, cout, 3, s, 1, false)`
+                                    tsc named all six call sites, free
+    number into a number slot       `new SGD(p, lr, 0.9, 5e-4)`
+                                    tsc silent — both are `number`. A grep found it.
+    Python, no compiler at all      `F.cross_entropy` → `CrossEntropyLoss(reduction)`
+                                    six tests red, with a class-weight refusal none
+                                    of them was asking for
+    across the language boundary    the binding building borch.ts's optimizers
+                                    **this file, and nothing else in three languages**
+
+The gradient runs from *caught free* to *caught by one purpose-built check*, and the
+deciding factor is **whether the two types happen to differ** — which is not a
+property of the defect. `Tensor.sum(dtype)` was safe by accident because `DType` is a
+string union; `Tensor.std(correction)` was not, because a correction and an axis are
+both numbers, and the two signatures are the same shape side by side.
+
+So the coverage this repository appears to have on this class is mostly luck about
+type widths. The one place it is not luck is the check written for the question, and
+that is the argument for treating this file as the model rather than the exception:
+**it would have caught its defect whatever the types happened to be.**
 """
 
 import pathlib

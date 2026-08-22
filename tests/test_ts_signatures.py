@@ -233,7 +233,13 @@ SHORTER = {
     # the core can only move toward the outside authority by moving away from
     # borch.ts until borch.ts follows. The pair of axes disagreeing for a while is
     # the mechanism working; a number held still while the two part is not.
-    "nn": 24,
+    #
+    # 24 → 19 on the merge: five loss constructors that had been truncations here
+    # became agreements once both sides carried torch's lists. **The two halves of
+    # the split moved this number in opposite directions in the same window**, and it
+    # is written with both reasons because a running total makes one of them
+    # invisible.
+    "nn": 19,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
@@ -241,7 +247,12 @@ SHORTER = {
     # landing on the wrong parameter. `SGD` did get `maximize` on both sides in the
     # same edit and is not here.
     "optim": 1,
-    "optim.lr_scheduler": 12,
+    # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
+    # list in the same edit, so the row stopped being a truncation. The
+    # cooldown counter joined `stateDict` with it — left out, a resume inside
+    # a cooldown starts counting patience again at once, which is a cut up to
+    # `cooldown` steps early: small, plausible, invisible against a curve.
+    "optim.lr_scheduler": 11,
     "linalg": 2,
     "utils.data": 1,
 }

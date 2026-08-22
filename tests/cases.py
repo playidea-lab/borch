@@ -7341,6 +7341,34 @@ def train_cases(inp=None):
 
     cases.append(("sched::ReduceLROnPlateau", plateau))
 
+    # **`threshold_mode`, `cooldown` and `eps` were not parameters at all** until the
+    # core took torch's argument list, so a call written from torch's documentation —
+    # `ReduceLROnPlateau(opt, "min", 0.5, 5, 1e-3, 0, 1e-4)` — put the cooldown where
+    # `threshold_mode` goes and the minimum rate where `cooldown` does.
+    #
+    # The metrics fall and then stall, so a cut happens twice and a cooldown has
+    # something to suppress. Each row is given a value that changes the answer:
+    # `abs` and `rel` are nearly the same number at a loss near 1 and are told apart
+    # at `threshold=0.1`, and `eps=0.4` is larger than the first cut so no cut is made.
+    def plateau_arg(L, **kw):
+        p = L.tensor([1.0], requires_grad=True)
+        opt = L.optim.SGD([p], lr=1.0)
+        sch = L.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=1, **kw)
+        seen = []
+        for metric in [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5]:
+            sch.step(metric)
+            seen.append(opt.param_groups[0]["lr"])
+        return L.tensor(seen)
+
+    for label, kw in (
+        ("threshold_mode=abs", {"threshold_mode": "abs", "threshold": 0.1}),
+        ("cooldown", {"cooldown": 2}),
+        ("eps", {"eps": 0.4}),
+        ("min_lr", {"min_lr": 0.3}),
+    ):
+        cases.append((f"sched::ReduceLROnPlateau({label})",
+                      lambda L, k=kw: plateau_arg(L, **k)))
+
     def plateau_max(L):
         """The `max` direction — for a metric where **bigger is better**, an accuracy.
 

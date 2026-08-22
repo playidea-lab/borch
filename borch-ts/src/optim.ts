@@ -1655,6 +1655,7 @@ export class LambdaLR extends LRScheduler {
 export class ReduceLROnPlateau {
   private best: number;
   private bad = 0;
+  private cooling = 0;
 
   /**
    * `mode` decides which direction counts as improvement — `'min'` for a loss,
@@ -1673,9 +1674,17 @@ export class ReduceLROnPlateau {
     private readonly factor = 0.1,
     private readonly patience = 10,
     private readonly threshold = 1e-4,
+    private readonly thresholdMode: "rel" | "abs" = "rel",
+    private readonly cooldown = 0,
+    private readonly minLr = 0,
+    private readonly eps = 1e-8,
   ) {
     if (mode !== "min" && mode !== "max") {
       throw new Error(`mode must be 'min' or 'max', got ${JSON.stringify(mode)}`);
+    }
+    if (thresholdMode !== "rel" && thresholdMode !== "abs") {
+      throw new Error(
+        `thresholdMode must be 'rel' or 'abs', got ${JSON.stringify(thresholdMode)}`);
     }
     this.best = mode === "min" ? Infinity : -Infinity;
   }
@@ -1689,9 +1698,17 @@ export class ReduceLROnPlateau {
    * None`; this way there is one comparison rather than two.
    */
   private better(metric: number): boolean {
-    return this.mode === "min"
-      ? metric < this.best * (1 - this.threshold)
-      : metric > this.best * (1 + this.threshold);
+    // **`rel` scales the threshold by the best value and `abs` subtracts it.** Near a
+    // loss of 1 the two are almost the same number, which is why a case built on the
+    // default cannot tell them apart; near 100 they are not close at all.
+    if (this.mode === "min") {
+      return this.thresholdMode === "rel"
+        ? metric < this.best * (1 - this.threshold)
+        : metric < this.best - this.threshold;
+    }
+    return this.thresholdMode === "rel"
+      ? metric > this.best * (1 + this.threshold)
+      : metric > this.best + this.threshold;
   }
 
   /**
@@ -1705,29 +1722,48 @@ export class ReduceLROnPlateau {
    * resets.
    */
   stateDict(): Record<string, number> {
-    return { best: this.best, bad: this.bad };
+    // `cooling` joined the moment `cooldown` did. Left out, a resume in the middle of
+    // a cooldown starts counting patience again immediately, which is a cut one to
+    // `cooldown` steps earlier than the run would have made — small, plausible, and
+    // invisible against a curve.
+    return { best: this.best, bad: this.bad, cooling: this.cooling };
   }
 
   loadStateDict(values: Record<string, number>): void {
     if (values.best !== undefined) this.best = values.best;
     if (values.bad !== undefined) this.bad = values.bad;
+    if (values.cooling !== undefined) this.cooling = values.cooling;
   }
 
   step(metric: number): void {
-    // torch defaults to `rel` mode — it counts as an improvement only when it improves
-    // relatively by at least this much.
     if (this.better(metric)) {
       this.best = metric;
       this.bad = 0;
+    } else {
+      this.bad += 1;
+    }
+    // **The cooldown runs down before the patience is looked at, and it clears the
+    // bad epochs while it does.** torch ignores the epochs inside a cooldown rather
+    // than counting them towards the next cut, so a counter that merely blocked the
+    // cut would fire the moment it expired.
+    if (this.cooling > 0) {
+      this.cooling -= 1;
+      this.bad = 0;
       return;
     }
-    this.bad += 1;
     if (this.bad > this.patience) {
       // **Every group is cut.** This one does not inherit `LRScheduler` (it multiplies
       // the current value rather than the base), so it cannot use `apply` above. Cutting
       // one group leaves the rest as they were, and the per-layer learning rates drift
       // apart as the schedule goes on.
-      for (const group of this.opt.paramGroups) group.lr *= this.factor;
+      for (const group of this.opt.paramGroups) {
+        const next = Math.max(group.lr * this.factor, this.minLr);
+        // A cut smaller than `eps` is not made at all — otherwise the rate keeps
+        // shrinking by amounts that change no training and do change the number a
+        // checkpoint carries.
+        if (group.lr - next > this.eps) group.lr = next;
+      }
+      this.cooling = this.cooldown;
       this.bad = 0;
     }
   }

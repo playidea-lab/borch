@@ -5729,6 +5729,33 @@ function addTrain(out: Map<string, Case>, inp: Inputs): void {
     }
     return Tensor.from(seen, [seen.length]);
   });
+
+  // `thresholdMode`, `cooldown` and `eps` — not parameters at all until both sides
+  // took torch's argument list. The metrics fall then stall, so a cut happens twice
+  // and a cooldown has something to suppress.
+  const plateauArgs: [string, (o: optim.SGD) => optim.ReduceLROnPlateau][] = [
+    ["threshold_mode=abs", (o) => new optim.ReduceLROnPlateau(
+      o, "min", 0.5, 1, 0.1, "abs")],
+    ["cooldown", (o) => new optim.ReduceLROnPlateau(
+      o, "min", 0.5, 1, 1e-4, "rel", 2)],
+    ["eps", (o) => new optim.ReduceLROnPlateau(
+      o, "min", 0.5, 1, 1e-4, "rel", 0, 0, 0.4)],
+    ["min_lr", (o) => new optim.ReduceLROnPlateau(
+      o, "min", 0.5, 1, 1e-4, "rel", 0, 0.3)],
+  ];
+  for (const [label, make] of plateauArgs) {
+    out.set(`sched::ReduceLROnPlateau(${label})`, () => {
+      const p = Tensor.from([1.0], [1], { requiresGrad: true });
+      const opt = new optim.SGD([p], 1.0);
+      const sch = make(opt);
+      const seen: number[] = [];
+      for (const metric of [1, 1, 0.5, 0.5, 0.5, 0.5, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5]) {
+        sch.step(metric);
+        seen.push(opt.paramGroups[0]?.lr ?? 0);
+      }
+      return Tensor.from(seen, [seen.length]);
+    });
+  }
 }
 
 /**
