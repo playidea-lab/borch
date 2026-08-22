@@ -83,17 +83,17 @@ export abstract class Optimizer {
    */
   protected readonly params: Tensor[] = [];
 
-  /** 파라미터 자리 → 그룹 번호. */
+  /** Parameter position → group number. */
   private readonly groupOf: number[] = [];
 
-  /** `step` 이 도는 동안 지금 밟고 있는 그룹. `lr` 이 이것을 본다. */
+  /** The group currently being walked while `step` runs. `lr` reads it. */
   private currentGroup = 0;
 
   /**
-   * `state()` 가 만든 은행들. 그룹이 늘면 여기 전부에 자리를 더한다.
+   * The banks `state()` created. Adding a group adds a slot to every one of them.
    *
-   * 채운 값을 같이 든다 — `Rprop` 의 걸음 크기는 0 이 아니라 `lr` 에서 시작하고,
-   * 나중에 더한 파라미터도 같은 자리에서 출발해야 한다.
+   * The fill value is held with them — `Rprop`'s step size starts at `lr` rather than 0,
+   * and a parameter added later has to start from the same place.
    */
   private readonly banks: { slots: Tensor[]; value: number }[] = [];
 
@@ -104,7 +104,7 @@ export abstract class Optimizer {
     for (const g of groups) this.attach(g);
   }
 
-  /** 그룹 하나를 붙이고 평평한 목록에 이어 붙인다. */
+  /** Attaches one group and appends it to the flat list. */
   private attach(init: ParamGroupInit): ParamGroup {
     const index = this.paramGroups.length;
     const group: ParamGroup = {
@@ -147,16 +147,17 @@ export abstract class Optimizer {
    *   non-zero.
    */
   protected state(shapes: readonly Tensor[], value = 0): Tensor[] {
-    // **`Tensor.zeros`·`Tensor.full` 을 쓰면 안 된다.** 원소 하나짜리는 값으로
-    // 캐시되어 있어 같은 버퍼가 오고, 옵티마이저는 상태에 **쓴다** — `Adam` 의 m·v 가
-    // 겹쳐 명령 버퍼가 통째로 무효가 되고, `SGD` 의 모멘텀과 `Rprop` 의 걸음 크기는
-    // 프로그램 전체가 쓰는 상수를 덮어쓴다. `owned` 는 자기 버퍼를 준다(`tensor.ts`).
+    // **`Tensor.zeros` and `Tensor.full` must not be used.** A single-element tensor is
+    // cached by value so the same buffer comes back, and an optimiser **writes** to its
+    // state — `Adam`'s m and v collide and invalidate the whole command buffer, while
+    // `SGD`'s momentum and `Rprop`'s step size overwrite a constant the entire program
+    // uses. `owned` gives a buffer of its own (`tensor.ts`).
     //
-    // **만드는 자리를 하나로 모으는 것이 요점이다.** 이 결함을 처음 고칠 때 한쪽은
-    // `Composed.state()` 만 고쳤는데 `SGD`·`Adam`·`RMSprop` 은 전용 커널을 써서 그
-    // 밑동 밖이라 안 닿았고, 고쳤다고 적힌 채로 셋이 남아 있었다. "크기가 1 일 때만
-    // 조심" 같은 규칙으로 두면 다음 옵티마이저에서 또 잊는다 — 실제로 `Rprop` 이
-    // 그렇게 들어왔다.
+    // **Gathering the place they are made into one is the point.** The first fix for this
+    // defect changed `Composed.state()` alone, and `SGD`, `Adam` and `RMSprop` use their
+    // own kernels and sit outside that base, so it never reached them — three were left
+    // while the record said it was fixed. Kept as a rule like "be careful when the size
+    // is 1", the next optimiser forgets again — and `Rprop` really did arrive that way.
     const slots = shapes.map((p) => keepAlive(Tensor.owned(p.shape, value)));
     this.banks.push({ slots, value });
     return slots;
@@ -203,7 +204,8 @@ export abstract class Optimizer {
       for (const [i, p] of this.params.entries()) {
         const g = p.grad;
         if (!g) continue;
-        // 어느 그룹의 파라미터인지 먼저 정해야 `this.lr` 이 맞는 값을 준다.
+        // Which group a parameter belongs to has to be settled first for `this.lr` to
+        // give the right value.
         this.currentGroup = this.groupOf[i] ?? 0;
         this.update(i, p, g);
       }
@@ -228,7 +230,7 @@ export abstract class Optimizer {
    * The undo of the above. Whoever overrode it takes their own back out.
    */
   protected loadCounters(_values: Record<string, number>): void {
-    /* 스칼라가 없는 옵티마이저는 할 일이 없다 */
+    /* an optimiser with no scalars has nothing to do */
   }
 
   /**
@@ -309,11 +311,12 @@ export class SGD extends Optimizer {
     private readonly weightDecay = 0,
   ) {
     super(params, lr);
-    // **상태를 미리 잡는다.** 스텝마다 새 텐서를 만들면 구역이 닫힐 때 그것이 놓이고,
-    // 다음 스텝의 버퍼가 사라진 자리를 가리킨다. torch 도 상태를 붙박이로 든다.
+    // **The state is allocated up front.** Building a new tensor every step has it
+    // released when the scope closes, and the next step's buffer points at a place that
+    // is gone. torch holds its state as a fixture too.
     //
-    // 0 에서 시작해도 torch 와 값이 같다: 첫 스텝의 `0·momentum + grad` 가 torch 의
-    // `buf = grad.clone()` 과 같은 수다.
+    // Starting from 0 still matches torch's values: the first step's
+    // `0·momentum + grad` is the same number as torch's `buf = grad.clone()`.
     this.buffers = momentum === 0 ? []
       : this.state(this.params);
   }
@@ -327,8 +330,8 @@ export class SGD extends Optimizer {
       if (!buf) throw new Error(`SGD: no buffer for parameter ${index}`);
       buffers.push(buf.buffer);
     }
-    // **그룹이 따로 정했으면 그것을 쓴다.** bias·norm 을 weight decay 에서 빼는 것이
-    // 이 자리의 대표 용도다 — 그것 하나 때문에 그룹이 필요하다.
+    // **A group's own value wins where it set one.** Excluding bias and norm from weight
+    // decay is this slot's representative use — that one thing is why groups exist.
     const decay = this.grouped(this.weightDecay);
     d.run1d(
       d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}:${decay}`,
@@ -365,7 +368,8 @@ export class Adam extends Optimizer {
   }
 
   override step(): void {
-    // 편향 보정이 스텝 수에 걸리므로 파라미터마다가 아니라 한 번만 센다.
+    // The bias correction depends on the step count, so it is computed once rather than
+    // per parameter.
     this.stepCount += 1;
     super.step();
   }
@@ -382,23 +386,25 @@ export class Adam extends Optimizer {
     const m = this.first[index];
     const v = this.second[index];
     if (!m || !v) throw new Error(`Adam: no state for parameter ${index}`);
-    // 편향 보정은 스텝마다 달라지므로 셰이더에 굽지 않고 작은 버퍼로 넘긴다.
+    // The bias correction differs every step, so it is handed across in a small buffer
+    // rather than baked into the shader.
     const corr = Tensor.from([
       1 - this.beta1 ** this.stepCount,
       1 - this.beta2 ** this.stepCount,
     ], [2]);
 
-    // **커널은 안 건드린다.** 두 감쇠가 다 텐서 연산으로 적히기 때문이다.
+    // **The kernel is not touched.** Both decays can be written as tensor operations.
     //
-    // 붙은 쪽은 모멘트가 보기 전의 기울기에 더한다 — `g + λ·p`.
+    // The coupled one adds into the gradient before the moments see it — `g + λ·p`.
     //
-    // 떨어진 쪽은 갱신 **뒤에** 원래 가중치에 걸린다: `p − lr·m̂/(√v̂+ε) − lr·λ·p`.
-    // 그것은 `p·(1 − lr·λ) − lr·m̂/(√v̂+ε)` 와 같은 수이므로, **먼저 줄여 놓고**
-    // 여느 때처럼 한 걸음 가면 된다. 모멘트는 기울기에서 나오므로 미리 줄인 것이
-    // 그쪽을 흔들지 않는다.
+    // The decoupled one applies to the original weight **after** the update:
+    // `p − lr·m̂/(√v̂+ε) − lr·λ·p`. That is the same number as
+    // `p·(1 − lr·λ) − lr·m̂/(√v̂+ε)`, so **shrink first** and then take an ordinary step.
+    // The moments come from the gradient, so shrinking in advance does not disturb them.
     //
-    // 커널에 인자를 하나 더 굽는 쪽도 됐지만, 그러면 `weightDecay` 값마다 파이프라인이
-    // 하나씩 는다 — 굽는 이름에 그 수가 들어가기 때문이다.
+    // Baking one more argument into the kernel would also have worked, and then there is
+    // one pipeline per `weightDecay` value — because that number goes into the baked
+    // name.
     const decay = this.grouped(this.weightDecay);
     let g = grad;
     if (decay !== 0) {
@@ -467,9 +473,10 @@ export class RMSprop extends Optimizer {
   protected override update(index: number, param: Tensor, g: Tensor): void {
     const sq = this.squares[index];
     if (!sq) throw new Error(`RMSprop: no state for parameter ${index}`);
-    // **커널은 안 건드린다.** 붙은 감쇠는 기울기에 더하는 것이므로 커널에 들어가기
-    // 전에 텐서 연산으로 끝난다 — 값을 셰이더에 구우면 `weightDecay` 마다 파이프
-    // 라인이 하나씩 늘고, 그 수는 굽는 이름에 들어간다(`Adam` 과 같은 판단).
+    // **The kernel is not touched.** Coupled decay adds into the gradient, so it is
+    // finished as a tensor operation before the kernel — baking the value into the shader
+    // gives one pipeline per `weightDecay`, since that number goes into the baked name
+    // (the same judgement as `Adam`).
     const decay = this.grouped(this.weightDecay);
     const grad = decay === 0 ? g : g.add(param.mul(Tensor.full([], decay)));
     const n = param.size;
@@ -484,25 +491,30 @@ export class RMSprop extends Optimizer {
 }
 
 /**
- * 상태를 텐서로 들고 **텐서 연산으로** 갱신하는 옵티마이저의 밑동.
+ * The base for optimisers that hold their state as tensors and update it **with tensor
+ * operations.**
  *
- * `SGD`·`Adam`·`RMSprop` 은 전용 WGSL 커널을 쓴다 — 세 개가 학습 루프의 거의 전부라
- * 융합할 값어치가 있었다. 나머지는 그렇지 않으므로 있는 연산으로 조립한다. 맞는
- * 것이 먼저이고, 커널로 굽는 것은 **재보고** 필요할 때 할 일이다.
+ * `SGD`, `Adam` and `RMSprop` use their own WGSL kernels — those three are nearly the
+ * whole of a training loop, so fusing them was worth it. The rest are not, so they are
+ * assembled from operations that exist. Correct comes first, and baking a kernel is a job
+ * for **after measuring** that it is needed.
  *
- * 갱신한 값은 `copyFrom` 으로 **제자리에 되쓴다.** 새 텐서로 갈아끼우면 모델이 든
- * 손잡이와 옵티마이저가 든 손잡이가 갈려서 학습은 도는데 파라미터가 안 움직인다.
+ * The updated value is written back **in place** with `copyFrom`. Swapping in a new tensor
+ * separates the handle the model holds from the one the optimiser holds, and then training
+ * runs while the parameters do not move.
  */
 
 abstract class Composed extends Optimizer {
-  // `state()` 는 밑동으로 올라갔다 — `SGD`·`Adam`·`RMSprop` 도 은행을 등록해야
-  // `addParamGroup` 이 그것들을 같이 늘린다.
+  // `state()` moved up to the base — `SGD`, `Adam` and `RMSprop` have to register their
+  // banks too for `addParamGroup` to grow them along with the rest.
 
   /**
-   * **감쇠를 여기서 든다.** 다섯이 전부 같은 붙은 꼴(`g + λ·p`)을 쓰므로, 저마다
-   * 필드와 두 줄을 갖게 하면 다섯 벌이 되고 그중 하나만 고쳐지는 날이 온다.
+   * **The decay is held here.** All five use the same coupled form (`g + λ·p`), so giving
+   * each its own field and two lines makes five copies, and a day comes when one of them
+   * is fixed.
    *
-   * 떨어진 꼴은 `AdamW` 하나뿐이고 그쪽은 전용 커널 위에 있어서 여기 안 온다.
+   * The decoupled form is `AdamW` alone, and that one sits on its own kernel and never
+   * comes here.
    */
   constructor(params: ParamsArg, lr: number,
               protected readonly weightDecay = 0) {
@@ -510,8 +522,9 @@ abstract class Composed extends Optimizer {
   }
 
   /**
-   * 감쇠를 먹인 기울기. **0 이면 원본을 그대로 준다** — 0 을 곱해 더하는 연산이
-   * 스텝마다 파라미터마다 두 개씩 늘고, 그것은 안 하는 것과 값이 같다.
+   * The gradient with decay applied. **At 0 it hands back the original** — multiplying by
+   * 0 and adding costs two more operations per parameter per step, and gives the same
+   * value as not doing it.
    */
   protected decayed(param: Tensor, grad: Tensor): Tensor {
     const wd = this.grouped(this.weightDecay);
@@ -524,7 +537,7 @@ abstract class Composed extends Optimizer {
     return got;
   }
 
-  /** 상수 하나를 텐서로. 스칼라와의 연산은 브로드캐스팅으로 붙는다. */
+  /** One constant as a tensor. Arithmetic against a scalar attaches by broadcasting. */
   protected k(v: number): Tensor {
     return Tensor.full([], v);
   }
@@ -678,7 +691,7 @@ export class NAdam extends Composed {
     const t = this.stepCount;
     this.mu = this.beta1 * (1 - 0.5 * 0.96 ** (t * this.momentumDecay));
     this.muNext = this.beta1 * (1 - 0.5 * 0.96 ** ((t + 1) * this.momentumDecay));
-    // 누적곱은 파라미터마다가 아니라 스텝마다 한 번 는다.
+    // The running product grows once per step rather than once per parameter.
     this.muProduct *= this.mu;
     super.step();
   }
@@ -813,11 +826,12 @@ export class ASGD extends Composed {
     const ax = this.at(this.ax, index, "ASGD");
     const eta = this.eta;
     const mu = this.mu;
-    // **밑동의 것을 쓴다.** 여기 손으로 적혀 있었는데, 그러면 그룹별 감쇠
-    // (`grouped`)를 안 보므로 층별로 다르게 준 값이 이 옵티마이저에서만 무시된다.
+    // **It uses the base's.** This was written out by hand here, and then it does not
+    // see the per-group decay (`grouped`), so a value set differently per layer is ignored
+    // in this optimiser alone.
     const g = this.decayed(param, grad);
     param.copyFrom(param.mul(this.k(1 - this.lambd * eta)).sub(g.mul(this.k(eta))));
-    // `mu` 가 1 이면 평균이 아니라 **사본**이다 — 더하면 두 배가 된다.
+    // With `mu` at 1 it is **a copy** rather than an average — adding gives twice.
     ax.copyFrom(mu === 1 ? param : ax.add(param.sub(ax).mul(this.k(mu))));
   }
 }
@@ -841,9 +855,10 @@ export class Rprop extends Composed {
               private readonly sizeMax = 50) {
     super(params, lr);
     this.prev = this.state(this.params);
-    // **`Tensor.full` 로 만들면 안 된다.** 크기 1 파라미터에서 그것은 값으로 캐시된
-    // 전역 `lr` 상수를 돌려주는데, 아래 `update` 가 `size.copyFrom(...)` 으로 거기에
-    // 쓴다 — 프로그램 전체의 그 상수가 학습 중에 바뀐다. 예외는 안 난다.
+    // **It must not be built with `Tensor.full`.** On a size-1 parameter that hands back
+    // the value-cached global `lr` constant, and `update` below writes into it with
+    // `size.copyFrom(...)` — that constant, for the whole program, changes during
+    // training. Nothing is raised.
     this.stepSize = this.state(this.params, lr);
   }
 
@@ -851,11 +866,13 @@ export class Rprop extends Composed {
     const prev = this.at(this.prev, index, "Rprop");
     const size = this.at(this.stepSize, index, "Rprop");
     const sign = grad.mul(prev).sign();
-    // **참·거짓 표를 실수로 되돌린다.** 비교는 bool 을 내고 borch.ts 는 bool 로 셈하는
-    // 것을 거절한다 — 값이 0/1 이라 그냥 될 것 같지만 그 거절이 맞다.
+    // **The true/false table is turned back into floats.** A comparison gives bool and
+    // borch.ts refuses arithmetic on bool — the values are 0/1 so it looks like it would
+    // simply work, and the refusal is right.
     const rising = sign.binary("gt", this.k(0)).to("float32");
     const falling = sign.binary("lt", this.k(0)).to("float32");
-    // 부호가 0 이면 1 을 곱한다 — 첫 걸음과, 앞서 뒤집혀 0 으로 만든 칸이 그렇다.
+    // A sign of 0 multiplies by 1 — that covers the first step and any cell zeroed by an
+    // earlier reversal.
     const factor = this.k(1)
       .add(rising.mul(this.k(this.etaPlus - 1)))
       .add(falling.mul(this.k(this.etaMinus - 1)));
@@ -944,13 +961,13 @@ export class LBFGS extends Optimizer {
       "from the concatenated gradient. Reaching here means step() was not overridden.");
   }
 
-  /** 파라미터의 기울기를 **한 줄로 이어** 본다. 없는 자리는 0 이다. */
+  /** Sees the parameters' gradients **joined into one row.** A missing one is 0. */
   private flatGrad(): Tensor {
     return Tensor.cat(
       this.params.map((p) => (p.grad ?? Tensor.zeros(p.shape)).reshape([p.size])), 0);
   }
 
-  /** 한 줄짜리 방향을 파라미터 모양으로 잘라 더한다. */
+  /** Cuts a one-row direction into the parameters' shapes and adds. */
   private addStep(size: number, direction: Tensor): void {
     let at = 0;
     noGrad(() => {
@@ -1005,7 +1022,8 @@ export class LBFGS extends Optimizer {
           this.history.ro.push(1 / ys);
           this.hDiag = ys / await y.mul(y).sum().item();
         }
-        // 두 겹 되돌이 — 헤세 역행렬을 안 만들고 방향만 낸다.
+        // The two-loop recursion — it produces the direction without building the
+        // inverse Hessian.
         const n = this.history.dirs.length;
         const al = new Array<number>(n).fill(0);
         let q = flat.neg();
@@ -1031,7 +1049,7 @@ export class LBFGS extends Optimizer {
 
       this.addStep(this.t, this.d ?? flat);
       if (iter !== this.maxIter) {
-        // 마지막 되돌이에서는 다시 안 잰다 — torch 도 그렇다.
+        // Nothing is measured again on the last iteration — as in torch.
         loss = await closure().item();
         flat = this.flatGrad();
         evals += 1;
@@ -1086,7 +1104,7 @@ export class Adafactor extends Composed {
       if (rank > 1) {
         const rows = [...p.shape.slice(0, -1), 1];
         const cols = [...p.shape.slice(0, -2), 1, p.shape[rank - 1] ?? 1];
-        // 제자리로 갱신되므로 캐시를 안 타는 `owned` 여야 한다.
+        // It is updated in place, so it has to be `owned` and outside the cache.
         this.rowVar.push(keepAlive(Tensor.owned(rows)));
         this.colVar.push(keepAlive(Tensor.owned(cols)));
         this.variance.push(null);
@@ -1112,20 +1130,22 @@ export class Adafactor extends Composed {
   }
 
   protected override update(index: number, param: Tensor, grad: Tensor): void {
-    // f32 의 기계 입실론. torch 는 dtype 에서 가져오고 여기는 float32 하나뿐이다.
+    // f32's machine epsilon. torch takes it from the dtype and here there is only
+    // float32.
     const one = this.eps1 ?? 1.1920928955078125e-7;
     const step = this.stepCount;
     const blend = this.k(step ** this.beta2Decay);
     const rho = Math.min(this.lr, 1 / Math.sqrt(step));
-    // **`alpha` 와 `denom` 을 수로 못 뺀다** — WebGPU 에 동기 읽기가 없어서 GPU 위의
-    // 값을 여기서 읽으면 기다려야 한다. 스칼라 **텐서**로 남겨 곱한다. 코어는 numpy 라
-    // 수로 계산하지만 식은 같다.
+    // **`alpha` and `denom` cannot be taken out as numbers** — WebGPU has no synchronous
+    // read, so reading a value on the GPU here means waiting. They stay scalar **tensors**
+    // and are multiplied. The core is numpy and computes them as numbers, and the
+    // expression is the same.
     const norm = param.square().sum().sqrt();
     const alpha = norm.div(this.k(Math.sqrt(param.size)))
       .binary("maximum", this.k(this.eps2)).mul(this.k(rho));
-    // **여기는 떨어진 꼴이다** — `decayed()` 의 붙은 꼴이 아니다. torch 의
-    // `Adafactor` 가 가중치에 직접 걸고, `AdamW` 와 같은 자리다. 밑동의 헬퍼로
-    // 바꾸면 조용히 다른 옵티마이저가 된다.
+    // **This one is the decoupled form** rather than `decayed()`'s coupled one. torch's
+    // `Adafactor` applies it to the weight directly, the same place as `AdamW`. Swapping
+    // in the base's helper quietly makes it a different optimiser.
     const wd = this.grouped(this.weightDecay);
     if (wd) param.copyFrom(param.mul(this.k(1 - this.lr * wd)));
     const rank = grad.shape.length;
@@ -1137,7 +1157,8 @@ export class Adafactor extends Composed {
       const sq = grad.square();
       row.copyFrom(row.add(sq.mean(rank - 1, true).sub(row).mul(blend)));
       col.copyFrom(col.add(sq.mean(rank - 2, true).sub(col).mul(blend)));
-      // `(…, R, 1) × (…, 1, C)` 는 바깥곱이다 — 브로드캐스팅이 그대로 해 준다.
+      // `(…, R, 1) × (…, 1, C)` is the outer product — broadcasting does it as it
+      // stands.
       const outer = row.mul(col);
       variance = outer.div(row.mean(rank - 2, true).binary("maximum", this.k(one)));
     } else {
@@ -1169,7 +1190,8 @@ export class Adafactor extends Composed {
  */
 export abstract class LRScheduler {
   protected epoch = 0;
-  /** 그룹마다의 기준값. 하위 클래스가 세는 `base` 는 첫 그룹의 것이다. */
+  /** The base value per group. The `base` a subclass computes from is the first
+   *  group's. */
   private readonly bases: number[];
   readonly base: number;
 
@@ -1182,14 +1204,14 @@ export abstract class LRScheduler {
   }
 
   /**
-   * 계산한 값을 **모든 그룹에** 적용한다.
+   * Applies the computed value **to every group.**
    *
-   * 그룹마다 기준이 다르면 그 비율을 지킨다 — torch 가 `base_lrs` 를 그룹마다 들고
-   * 각자에게서 다시 계산하는 것과 같은 결과다. `compute` 는 첫 그룹의 기준으로 한
-   * 값만 내므로 여기서 비율을 곱한다.
+   * Where the groups have different bases it keeps their ratio — the same result as
+   * torch holding `base_lrs` per group and recomputing from each. `compute` produces one
+   * value from the first group's base, so the ratio is multiplied in here.
    *
-   * **그룹이 하나면 비율이 1 이라 옛 동작과 한 비트도 안 다르다.** 궤적을 통째로
-   * 굳혀 둔 골든이 그것을 본다.
+   * **With one group the ratio is 1 and it does not differ from the old behaviour by a
+   * bit.** The golden, which freezes whole trajectories, watches that.
    */
   private apply(value: number): void {
     const first = this.bases[0] ?? 0;
@@ -1449,8 +1471,8 @@ export class OneCycleLR extends LRScheduler {
     super(opt);
     this.initial = maxLr / divFactor;
     this.minLr = this.initial / finalDivFactor;
-    // torch 의 셈 그대로 — `pctStart × totalSteps − 1` 이지
-    // `pctStart × (totalSteps − 1)` 이 아니다.
+    // torch's arithmetic verbatim — `pctStart × totalSteps − 1`, not
+    // `pctStart × (totalSteps − 1)`.
     this.up = pctStart * totalSteps - 1;
     this.down = totalSteps - this.up - 1;
   }
@@ -1468,12 +1490,15 @@ export class OneCycleLR extends LRScheduler {
 }
 
 /**
- * 학습률을 **오르내리게** 한다. 안장점을 빠져나오라고 일부러 흔드는 방식이다.
+ * Makes the learning rate **rise and fall.** It shakes it on purpose, to leave saddle
+ * points.
  *
- * `stepSizeUp` 만큼 올라갔다가 `stepSizeDown` 만큼 내려온다. 안 주면 올라간 만큼
- * 내려온다 — **오르내림이 같으면 그 인자가 있는지도 안 보인다.**
+ * It climbs for `stepSizeUp` and descends for `stepSizeDown`. Left unset, it descends by
+ * as much as it climbed — **with the rise and the fall equal, there is no seeing whether
+ * that argument exists at all.**
  *
- * `mode` 셋 중 `expRange` 만 기준이 **주기가 아니라 걸음**이다. 거기가 갈리는 자리다.
+ * Of the three `mode`s, `expRange` alone measures against **the step rather than the
+ * cycle.** That is where they diverge.
  */
 /**
  * **With more than one group, the bounds become relative.** torch takes
@@ -1505,7 +1530,7 @@ export class CyclicLR extends LRScheduler {
     const ratio = this.up / total;
     const cycle = Math.floor(1 + epoch / total);
     const x = 1 + epoch / total - cycle;
-    // 올라가는 구간과 내려오는 구간의 기울기가 다르다.
+    // The climbing stretch and the descending stretch have different slopes.
     const rise = x <= ratio ? x / ratio : (x - 1) / (ratio - 1);
     const scale = this.mode === "triangular2"
       ? 1 / 2 ** (cycle - 1)
@@ -1618,7 +1643,8 @@ export class ReduceLROnPlateau {
   }
 
   step(metric: number): void {
-    // torch 의 기본은 `rel` 모드다 — 상대적으로 이만큼은 좋아져야 나아진 것으로 센다.
+    // torch defaults to `rel` mode — it counts as an improvement only when it improves
+    // relatively by at least this much.
     if (metric < this.best * (1 - this.threshold)) {
       this.best = metric;
       this.bad = 0;
@@ -1627,9 +1653,10 @@ export class ReduceLROnPlateau {
     if (this.best === Infinity) this.best = metric;
     this.bad += 1;
     if (this.bad > this.patience) {
-      // **그룹 전부를 깎는다.** 이쪽은 `LRScheduler` 를 안 물려받아서(기준값이 아니라
-      // 지금 값에 곱한다) 위의 `apply` 를 못 쓴다. 한 그룹만 깎으면 나머지가 그대로
-      // 남아 층별 학습률이 스케줄을 지날수록 어긋난다.
+      // **Every group is cut.** This one does not inherit `LRScheduler` (it multiplies
+      // the current value rather than the base), so it cannot use `apply` above. Cutting
+      // one group leaves the rest as they were, and the per-layer learning rates drift
+      // apart as the schedule goes on.
       for (const group of this.opt.paramGroups) group.lr *= this.factor;
       this.bad = 0;
     }
