@@ -26,6 +26,7 @@ The licences of what is fetched here are in [THIRD-PARTY.md](../../THIRD-PARTY.m
 repository is a redistributor too.** So THIRD-PARTY.md records where to get the source.
 """
 
+import collections
 import hashlib
 import json
 import pathlib
@@ -139,18 +140,28 @@ def _read_lock():
     return entries
 
 
+# **What kind of problem it is, said as a field rather than in the sentence.**
+# `ensure()` treats drift and absence completely differently — one stops, the other
+# fetches — and it used to tell them apart by searching this text for "the bytes differ".
+# A reworded sentence would have turned drift into a silent re-fetch, which overwrites
+# exactly the files whose difference should have stopped everything.
+Problem = collections.namedtuple("Problem", "kind path text")
+
+
 def check(quiet=False):
-    """Compares against the lock. (a list of problems)"""
+    """Compares against the lock. (a list of `Problem`)"""
     entries = _read_lock()
     if entries is None:
-        return ["there is no lock file — run `vendor.py fetch` first"]
+        return [Problem("no-lock", "",
+                        "there is no lock file — run `vendor.py fetch` first")]
     bad = []
     for path, digest in entries.items():
         f = VENDOR / path
         if not f.exists():
-            bad.append(f"{path}: missing")
+            bad.append(Problem("missing", path, f"{path}: missing"))
         elif _sha(f.read_bytes()) != digest:
-            bad.append(f"{path}: **the bytes differ** — what is here is out of step with the lock")
+            bad.append(Problem("drift", path, f"{path}: **the bytes differ** — what is "
+                                              "here is out of step with the lock"))
     if not bad and not quiet:
         print(f"vendor comparison — all {len(entries)} agree")
     return bad
@@ -159,12 +170,12 @@ def check(quiet=False):
 def ensure():
     """Fetches if absent, compares if present. Called as a runner starts."""
     if _read_lock() is None or check(quiet=True):
-        missing = check(quiet=True)
-        if missing and _read_lock() is not None:
-            # The word is the marker `check` writes above — the two move together.
-            drifted = [m for m in missing if "the bytes differ" in m]
+        problems = check(quiet=True)
+        if problems and _read_lock() is not None:
+            drifted = [p for p in problems if p.kind == "drift"]
             if drifted:
-                raise SystemExit("vendor files differ from the lock:\n  " + "\n  ".join(drifted))
+                raise SystemExit("vendor files differ from the lock:\n  "
+                                 + "\n  ".join(p.text for p in drifted))
         print("fetching the vendor files (once)…")
         fetch()
 
@@ -176,7 +187,7 @@ def main(argv):
     if what == "check":
         bad = check()
         for why in bad:
-            print(f"  ✗ {why}")
+            print(f"  ✗ {why.text}")
         return 1 if bad else 0
     print("usage: vendor.py [check | fetch [--bump]]")
     return 2

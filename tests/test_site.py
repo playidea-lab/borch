@@ -30,6 +30,21 @@ INDEX = ROOT / "site" / "assets" / "api-index.json"
 DECL = ROOT / "borch-ts" / "dist" / "src"
 
 
+def _load_module(name, path):
+    """Loads a file as a module under a name of our choosing, touching no import path.
+
+    `tests/browser` holds files called `run`, `bench`, `cost` and `serialize`, and so does
+    `borch-ts/test`. Putting either directory on `sys.path` decides for the rest of the
+    session which one those names mean.
+    """
+    import importlib.util                                            # noqa: PLC0415
+
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _stale_dist():
     """The reason `dist` is out of date, or `None`.
 
@@ -628,20 +643,17 @@ def test_vendored_pyodide_matches_its_lock():
     lock = ROOT / "tests" / "browser" / "assets.lock"
     assert lock.exists(), "tests/browser/assets.lock is missing"
 
-    want = {}
-    for line in lock.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            digest, path = line.split("  ", 1)
-            want[path] = digest
+    # **The comparison is borrowed, not rewritten.** `tests/browser/vendor.py` already
+    # decides what "agrees with the lock" means, and the runners stop on its answer. A
+    # second copy here was the same rule written twice: the day they disagree, the suite
+    # and the runners say different things about the same six files, and the difference
+    # reads as a defect in whatever was being changed. Same reason `_stale_dist` loads
+    # `run.py` rather than restating freshness.
+    checker = _load_module("bt_vendor", ROOT / "tests" / "browser" / "vendor.py")
+    want = checker._read_lock()
     assert want, "the lock file is empty"
 
-    wrong = []
-    for path, digest in sorted(want.items()):
-        f = ROOT / "vendor" / path
-        if not f.exists():
-            wrong.append(f"{path}: missing")
-        elif hashlib.sha256(f.read_bytes()).hexdigest() != digest:
-            wrong.append(f"{path}: the bytes differ from the lock")
+    wrong = [p.text for p in checker.check(quiet=True)]
     assert not wrong, ("the repository's Pyodide differs from the lock:\n  " + "\n  ".join(wrong))
 
     # Something not in the lock slipping in ships in the deploy as bytes nobody measured.
