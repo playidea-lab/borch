@@ -78,7 +78,15 @@ SHIFTED = {
     # which is what showed the nine `inserted` rows this table briefly carried were
     # an artefact of dropping the core's `*args` rather than a fault in borch.ts.
     "Tensor": 1,
-    "nn": 0,
+    # 0 -> 1. **This row is a real gap that opened today rather than one that was
+    # found.** The core's MaxPool1d/2d/3d grew torch's padding, dilation and
+    # ceil_mode; borch.ts still takes `(kernel, stride, returnIndices)`, so
+    # `new nn.MaxPool2d(2, 2, 1)` sets returnIndices where torch and the core set
+    # padding. Raised by the session that moved the core, recorded rather than
+    # tidied away -- `nn.ts` belongs to another session and is blocked on its own
+    # decision, and a number quietly held at 0 while the two sides part is the thing
+    # this table exists to prevent.
+    "nn": 1,
     "nn.functional": 1,
     "optim": 0,
     "optim.lr_scheduler": 0,

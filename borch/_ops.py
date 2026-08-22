@@ -744,9 +744,93 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
     return out
 
 
-def max_pool1d(x, kernel_size, stride=None, return_indices=False):
+def _pool_geometry(shape, spatial, kernel_size, stride, padding, dilation, ceil_mode):
+    """The per-axis window lists, and the pad widths that go with them.
+
+    **torch refuses padding larger than half the window** and so does this — with
+    a wider pad a window can be entirely padding, and its maximum would be the
+    `-inf` the padding is made of. A silent `-inf` in a feature map is the kind of
+    thing that surfaces an hour later as a NaN loss.
+    """
+    ks = _spread(kernel_size, spatial)
+    st = _spread(stride if stride is not None else kernel_size, spatial)
+    pd = _spread(padding, spatial)
+    dl = _spread(dilation, spatial)
+    for k in range(spatial):
+        if pd[k] * 2 > ks[k]:
+            raise RuntimeError(
+                "pad should be at most half of effective kernel size, but got "
+                f"padding={pd[k]} and kernel_size={ks[k]}")
+    axes = [_pool_windows(shape[2 + k], ks[k], st[k], pd[k], dl[k], ceil_mode)
+            for k in range(spatial)]
+    return axes, pd
+
+
+def _padded_for_max(x, pads):
+    """Pad the spatial axes with `-inf`, so a padded cell never wins a window."""
+    if not any(pads):
+        return x
+    widths = []
+    for width in reversed(pads):
+        widths += [width, width]
+    return pad(x, widths, value=float("-inf"))
+
+
+def _unpadded_positions(shape, pads):
+    """The flat index **within the unpadded plane**, laid out on the padded one.
+
+    The padded cells hold whatever falls there; they carry `-inf` as a value and
+    so never win, and `_pool_geometry` refuses the padding width that would let a
+    window be all padding.
+    """
+    spatial = shape[2:]
+    plane = int(_np.prod(spatial)) if spatial else 1
+    base = _np.arange(plane).reshape(spatial)
+    for axis, width in enumerate(pads):
+        if width:
+            base = _np.pad(base, [(width, width) if a == axis else (0, 0)
+                                  for a in range(len(spatial))])
+    padded = shape[:2] + base.shape
+    return _np.broadcast_to(base, padded)
+
+
+def _max_pool_nd(x, spatial, kernel_size, stride, padding, dilation, ceil_mode,
+                 return_indices):
+    """The general pool. **One window list feeds both the value and the index.**
+
+    The fast paths below keep the default case quick; everything the new
+    arguments touch comes through here, so `padding`, `dilation` and `ceil_mode`
+    are decided once. Splitting them would put the same arithmetic in two places,
+    which is the rule `_fixed_windows` is already written under — and a value and
+    an index looking at different windows agree on the value.
+    """
+    x = _wrap(x)
+    axes, pads = _pool_geometry(x.data.shape, spatial, kernel_size, stride,
+                                padding, dilation, ceil_mode)
+    padded = _padded_for_max(x, pads)
+    if return_indices:
+        positions = _unpadded_positions(x.data.shape, pads)
+        out, pos = _max_with_index(padded, axes, positions)
+        return out, Tensor(pos)
+    out = padded
+    for k in range(spatial):
+        out = _fold_axis(out, 2 + k, axes[k], "max")
+    return out
+
+
+def _pool_is_plain(padding, dilation, ceil_mode):
+    """Whether the fast path answers this call."""
+    return not any(_spread(padding, 3)) and all(
+        d == 1 for d in _spread(dilation, 3)) and not ceil_mode
+
+
+def max_pool1d(x, kernel_size, stride=None, padding=0, dilation=1,
+               return_indices=False, ceil_mode=False):
     """Insert a height of 1 into `max_pool2d`. The height and its window are
     both 1, so that axis does not move."""
+    if not _pool_is_plain(padding, dilation, ceil_mode):
+        return _max_pool_nd(x, 1, kernel_size, stride, padding, dilation,
+                            ceil_mode, return_indices)
     if return_indices:
         return max_pool1d_with_indices(x, kernel_size, stride)
     x = _wrap(x)
@@ -772,9 +856,13 @@ def _pool_1d_over_last(x, kernel_size, stride):
     return cat(parts, 3)
 
 
-def max_pool3d(x, kernel_size, stride=None, return_indices=False):
+def max_pool3d(x, kernel_size, stride=None, padding=0, dilation=1,
+               return_indices=False, ceil_mode=False):
     """The depth direction is sliced and the maxima taken across the slices, and
     `max_pool2d` does the rest."""
+    if not _pool_is_plain(padding, dilation, ceil_mode):
+        return _max_pool_nd(x, 3, kernel_size, stride, padding, dilation,
+                            ceil_mode, return_indices)
     if return_indices:
         return max_pool3d_with_indices(x, kernel_size, stride)
     x = _wrap(x)
@@ -801,25 +889,34 @@ def max_pool3d(x, kernel_size, stride=None, return_indices=False):
 
 def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
                             ceil_mode=False, **_):
-    """**This name exists at torch's top level too.** That side takes everything
-    positionally, so the other three slots are left open and anything but the
-    default is refused loudly."""
-    if padding or dilation != 1 or ceil_mode:
-        _unsupported("max_pool1d_with_indices(padding·dilation·ceil_mode)")
+    """**This name exists at torch's top level too**, and takes everything
+    positionally. The three slots that used to be refused are implemented now and
+    go through `_max_pool_nd`, which is where the window arithmetic lives."""
+    if not _pool_is_plain(padding, dilation, ceil_mode):
+        return _max_pool_nd(x, 1, kernel_size, stride, padding, dilation,
+                            ceil_mode, True)
     x = _wrap(x)
     windows = _fixed_windows(x.data.shape[2], kernel_size, stride or kernel_size)
     out, pos = _max_with_index(x, [windows])
     return out, Tensor(pos)
 
 
-def max_pool2d_with_indices(x, kernel_size, stride=None, **_):
+def max_pool2d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+                            ceil_mode=False, **_):
+    if not _pool_is_plain(padding, dilation, ceil_mode):
+        return _max_pool_nd(x, 2, kernel_size, stride, padding, dilation,
+                            ceil_mode, True)
     x = _wrap(x)
     out, pos = _max_with_index(
         x, _fixed_window_axes(x.data.shape, kernel_size, stride))
     return out, Tensor(pos)
 
 
-def max_pool3d_with_indices(x, kernel_size, stride=None, **_):
+def max_pool3d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+                            ceil_mode=False, **_):
+    if not _pool_is_plain(padding, dilation, ceil_mode):
+        return _max_pool_nd(x, 3, kernel_size, stride, padding, dilation,
+                            ceil_mode, True)
     x = _wrap(x)
     out, pos = _max_with_index(
         x, _fixed_window_axes(x.data.shape, kernel_size, stride))
@@ -1242,6 +1339,18 @@ def _spread(v, n):
     return [v] * n if isinstance(v, int) else list(v)
 
 
+def _window_range(window):
+    """The positions one window covers. **A third element is the dilation step.**
+
+    A window used to be `(start, end)` and dilation makes it not contiguous:
+    `MaxPool2d(2, dilation=2)` looks at columns 0 and 2, not 0 and 1. Written as a
+    step on the window rather than as a separate argument, every consumer keeps
+    reading one list and there is no second place for the two to disagree — which
+    is the rule `_fixed_windows` already states for itself.
+    """
+    return range(window[0], window[1], window[2] if len(window) > 2 else 1)
+
+
 def _fold_axis(x, axis, windows, kind):
     """Fold one axis according to a list of windows. **The windows may have
     differing lengths.**
@@ -1257,8 +1366,8 @@ def _fold_axis(x, axis, windows, kind):
     torch's rule.
     """
     parts = []
-    for start, end in windows:
-        pieces = [x[_slice_at(axis, j, j + 1)] for j in range(start, end)]
+    for window in windows:
+        pieces = [x[_slice_at(axis, j, j + 1)] for j in _window_range(window)]
         acc = pieces[0]
         for piece in pieces[1:]:
             acc = acc + piece if kind == "avg" else _maximum_first(acc, piece)
@@ -1296,7 +1405,44 @@ def _adaptive(x, output_size, kind):
 def _fixed_windows(n_in, size, step):
     """The list of fixed windows. **Written in one place only** — values and
     positions looking at different windows would diverge."""
-    return [(s, s + size) for s in range(0, n_in - size + 1, step)]
+    return [(s, s + size, 1) for s in range(0, n_in - size + 1, step)]
+
+
+def _pool_windows(n_in, size, stride, padding, dilation, ceil_mode):
+    """Pooling windows over the **padded** axis, in torch's arithmetic.
+
+    `n_in` is the unpadded length; the windows are positions in the padded one,
+    because padding is done by padding and the window list is what carries every
+    other difference.
+
+    **`ceil_mode` is not simply a ceiling.** Rounding up can put the last window
+    entirely inside the right padding, and torch drops that one — the
+    documentation says a window is allowed off the end only if it *starts* within
+    the input or the left padding. Take the ceiling and stop there and a 5-long
+    axis with kernel 2, stride 3 and padding 1 gives one window too many, all of
+    it padding, whose maximum is `-inf`.
+
+    Measured against real torch rather than read off the formula, which is how
+    the `ceil_mode` row in `tests/torch_signatures_core.py` was closed.
+    """
+    span = (size - 1) * dilation + 1
+    total = n_in + 2 * padding
+    if ceil_mode:
+        count = -(-(total - span) // stride) + 1
+        while count > 1 and (count - 1) * stride >= n_in + padding:
+            count -= 1
+    else:
+        count = (total - span) // stride + 1
+    if count < 1:
+        raise RuntimeError(
+            f"pool: the window ({span}) does not fit the padded input ({total})")
+    # **The last window is clipped to the padded extent.** Under `ceil_mode` the
+    # ceiling lets a window run off the end, and torch simply ignores the cells
+    # that are not there — for a maximum that is the same as clipping, because
+    # what is not there is the `-inf` the padding is made of. Left unclipped the
+    # slice runs past the axis and the fold builds an empty piece.
+    return [(s * stride, min(s * stride + span, total), dilation)
+            for s in range(count)]
 
 
 def _fixed_window_axes(shape, kernel_size, stride):
@@ -1324,7 +1470,7 @@ def _fixed(x, kernel_size, stride, kind):
     return out
 
 
-def _max_with_index(x, window_axes):
+def _max_with_index(x, window_axes, positions=None):
     """Produce the maximum together with **the winning position.**
 
     The position follows torch's convention as **a flat index within the plane** —
@@ -1351,12 +1497,18 @@ def _max_with_index(x, window_axes):
     plane = int(_np.prod(spatial)) if spatial else 1
 
     val = data
-    pos = _np.broadcast_to(_np.arange(plane).reshape(spatial), shape)
+    # **`positions` is given when the input was padded.** torch's indices are into
+    # the *unpadded* plane (measured), so counting them off the padded one would be
+    # right in shape and wrong in value — and `MaxUnpool` would then put every
+    # value back in the wrong cell, quietly, since the values themselves match.
+    pos = (positions if positions is not None
+           else _np.broadcast_to(_np.arange(plane).reshape(spatial), shape))
     for k in reversed(range(len(window_axes))):
         axis = 2 + k
         vparts, pparts = [], []
-        for start, end in window_axes[k]:
-            cut = (slice(None),) * axis + (slice(start, end),)
+        for window in window_axes[k]:
+            span = _window_range(window)
+            cut = (slice(None),) * axis + (slice(span.start, span.stop, span.step),)
             vs, ps = val[cut], pos[cut]
             j = vs.argmax(axis=axis)[(slice(None),) * axis + (None,)]
             vparts.append(_np.take_along_axis(vs, j, axis))
@@ -1452,7 +1604,11 @@ def lp_pool3d(x, norm_type, kernel_size, stride=None):
     return ((out.sign() * relu(out.abs())) * (kd * kh * kw)) ** (1.0 / norm_type)
 
 
-def max_pool2d(x, kernel_size, stride=None, return_indices=False):
+def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=1,
+               return_indices=False, ceil_mode=False):
+    if not _pool_is_plain(padding, dilation, ceil_mode):
+        return _max_pool_nd(x, 2, kernel_size, stride, padding, dilation,
+                            ceil_mode, return_indices)
     if return_indices:
         return max_pool2d_with_indices(x, kernel_size, stride)
     stride = stride or kernel_size

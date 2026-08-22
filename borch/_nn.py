@@ -653,14 +653,19 @@ class MaxPool2d(Module):
     is not in the values.
     """
 
-    def __init__(self, kernel_size, stride=None, return_indices=False):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
+                 return_indices=False, ceil_mode=False):
         super().__init__()
         self.kernel_size, self.stride = kernel_size, stride
-        self.return_indices = return_indices
+        self.padding, self.dilation = padding, dilation
+        self.return_indices, self.ceil_mode = return_indices, ceil_mode
 
     def forward(self, x):
-        return max_pool2d(x, self.kernel_size, self.stride,
-                          return_indices=self.return_indices)
+        return max_pool2d(x, self.kernel_size, self.stride, self.padding,
+                          self.dilation, self.return_indices, self.ceil_mode)
+
+    def __repr__(self):
+        return _pool_repr("MaxPool2d", self)
 
 
 class Embedding(Module):
@@ -2322,32 +2327,52 @@ class Conv3d(Module):
                 f"kernel_size={self.kernel_size}, stride={self.stride})")
 
 
+def _pool_repr(name, layer):
+    """torch's own repr, with the three new settings shown only when they are set.
+
+    Printing them always would be torch's exact wording and would also change the
+    output of every existing default construction — nothing in the golden holds a
+    `MaxPool` repr today, and adding an argument is a poor moment to move a string
+    that nothing is watching.
+    """
+    parts = [f"kernel_size={layer.kernel_size}", f"stride={layer.stride}"]
+    for field, default in (("padding", 0), ("dilation", 1), ("ceil_mode", False)):
+        value = getattr(layer, field)
+        if value != default:
+            parts.append(f"{field}={value}")
+    return f"{name}({', '.join(parts)})"
+
+
 class MaxPool1d(Module):
-    def __init__(self, kernel_size, stride=None, return_indices=False):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
+                 return_indices=False, ceil_mode=False):
         super().__init__()
         self.kernel_size, self.stride = kernel_size, stride
-        self.return_indices = return_indices
+        self.padding, self.dilation = padding, dilation
+        self.return_indices, self.ceil_mode = return_indices, ceil_mode
 
     def forward(self, x):
-        return max_pool1d(x, self.kernel_size, self.stride,
-                          return_indices=self.return_indices)
+        return max_pool1d(x, self.kernel_size, self.stride, self.padding,
+                          self.dilation, self.return_indices, self.ceil_mode)
 
     def __repr__(self):
-        return f"MaxPool1d(kernel_size={self.kernel_size}, stride={self.stride})"
+        return _pool_repr("MaxPool1d", self)
 
 
 class MaxPool3d(Module):
-    def __init__(self, kernel_size, stride=None, return_indices=False):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
+                 return_indices=False, ceil_mode=False):
         super().__init__()
         self.kernel_size, self.stride = kernel_size, stride
-        self.return_indices = return_indices
+        self.padding, self.dilation = padding, dilation
+        self.return_indices, self.ceil_mode = return_indices, ceil_mode
 
     def forward(self, x):
-        return max_pool3d(x, self.kernel_size, self.stride,
-                          return_indices=self.return_indices)
+        return max_pool3d(x, self.kernel_size, self.stride, self.padding,
+                          self.dilation, self.return_indices, self.ceil_mode)
 
     def __repr__(self):
-        return f"MaxPool3d(kernel_size={self.kernel_size}, stride={self.stride})"
+        return _pool_repr("MaxPool3d", self)
 
 
 class _MaxUnpoolND(Module):

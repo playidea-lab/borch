@@ -64,7 +64,16 @@ SHIFTED = {
     # RNNBase took mode first, as torch does, and RNN/LSTM/GRU pass their own. The
     # string is not decoration: it is what tells the base which recurrence to build.
     "Tensor": 2,
-    "nn": 11,
+    # 11 → 8. MaxPool1d/2d/3d grew torch's padding, dilation and ceil_mode in
+    # torch's positions, implemented rather than refused: padding pads with -inf so
+    # a padded cell never wins, the indices stay flat indices into the *unpadded*
+    # plane, and ceil_mode drops the window that would start inside the right
+    # padding. Checked against real torch over 80 configurations across 1d, 2d and
+    # 3d -- values, shapes, indices and gradients.
+    #
+    # `MaxPool2d(2, 2, 1)` used to set return_indices=1. It sets padding=1 now, as
+    # torch reads it.
+    "nn": 8,
     "nn.functional": 0,
     "optim": 2,
     "optim.lr_scheduler": 2,
