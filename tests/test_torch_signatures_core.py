@@ -126,7 +126,17 @@ SHIFTED = {
     # seat. That is the dangerous one and it is empty. The rest is work, not risk.
     "nn": 0,
     "nn.functional": 0,
-    "optim": 2,
+    # 2 → 1. `SGD` took torch's `dampening`, `nesterov` and `maximize`, and `Adagrad`
+    # its `initial_accumulator_value` — implemented, and checked against real torch
+    # over six configurations. `SGD(p, 0.1, 0.9, 1e-4)`, the line a torch tutorial
+    # writes, used to set the **dampening** to the weight decay and leave the decay
+    # at zero: two different things, both plausible small numbers, and the run trains
+    # and trains slightly wrong.
+    #
+    # `Adagrad` stays because `foreach` sits before torch's keyword-only boundary and
+    # we have nothing to put there — it changes no value, so it is absent rather than
+    # refused, and the row is honest about the position being unmatched.
+    "optim": 1,
     "optim.lr_scheduler": 2,
     "linalg": 0,
     "utils.data": 0,
@@ -161,7 +171,12 @@ SHORTER = {
     # stopped being short when they took torch's argument lists.
     "nn": 58,
     "nn.functional": 0,
-    "optim": 10,
+    # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
+    # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are
+    # torch's execution switches and change no value. **A row moving from `shifted`
+    # to `shorter` is the fix**, not a wash — one meant an argument in the wrong
+    # seat, this one means a feature torch has and we do not.
+    "optim": 11,
     "optim.lr_scheduler": 1,
     "linalg": 0,
     "utils.data": 1,

@@ -86,23 +86,46 @@ class Optimizer:
 
 
 class SGD(Optimizer):
-    def __init__(self, params, lr=0.01, momentum=0.0, weight_decay=0.0):
-        super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay))
+    def __init__(self, params, lr=0.01, momentum=0.0, dampening=0.0,
+                 weight_decay=0.0, nesterov=False, *, maximize=False):
+        """torch's order, with `dampening` third and `nesterov` sixth.
+
+        **This read `(params, lr, momentum, weight_decay)`**, so `SGD(p, 0.1, 0.9,
+        1e-4)` — a line anybody transcribes out of a torch tutorial — set the
+        dampening to the weight decay and left the decay at zero. The two do
+        different things and both are plausible small numbers, so the run trains and
+        trains slightly wrong.
+
+        `foreach`, `differentiable` and `fused` are torch's own execution switches
+        and change no value; they are absent here rather than refused, which is the
+        one case where absence is right — there is nothing they could mean.
+        """
+        if nesterov and (momentum <= 0 or dampening != 0):
+            raise ValueError("Nesterov momentum requires a momentum and zero dampening")
+        super().__init__(params, dict(lr=lr, momentum=momentum, dampening=dampening,
+                                      weight_decay=weight_decay, nesterov=nesterov,
+                                      maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 if group["momentum"]:
                     st = self._state(p)
                     buf = st.get("momentum_buffer")
-                    buf = g if buf is None else group["momentum"] * buf + g
+                    # **The first step is the raw gradient, undamped.** torch seeds the
+                    # buffer with `g` and only then starts damping, so a dampening of
+                    # 0.9 does not shrink the very first move.
+                    buf = g if buf is None else (group["momentum"] * buf
+                                                 + (1 - group["dampening"]) * g)
                     st["momentum_buffer"] = buf
-                    g = buf
+                    # Nesterov looks ahead: the step is the gradient plus the
+                    # momentum, not the momentum alone.
+                    g = g + group["momentum"] * buf if group["nesterov"] else buf
                 p._array = p.data - group["lr"] * g
 
 
@@ -175,9 +198,18 @@ class Adagrad(Optimizer):
     converges to zero — that is this optimiser's nature and not a defect.
     """
 
-    def __init__(self, params, lr=0.01, lr_decay=0.0, weight_decay=0.0, eps=1e-10):
-        super().__init__(params, dict(lr=lr, lr_decay=lr_decay,
-                                      weight_decay=weight_decay, eps=eps))
+    def __init__(self, params, lr=0.01, lr_decay=0.0, weight_decay=0.0,
+                 initial_accumulator_value=0.0, eps=1e-10, *, maximize=False):
+        """torch's order — `initial_accumulator_value` sits **before** `eps`.
+
+        Without it `Adagrad(p, 0.01, 0, 0, 1e-8)` set the accumulator's start where
+        the caller meant the epsilon, and an accumulator seeded at 1e-8 rather than 0
+        is a different first step from the one they asked for.
+        """
+        super().__init__(params, dict(
+            lr=lr, lr_decay=lr_decay, weight_decay=weight_decay,
+            initial_accumulator_value=initial_accumulator_value, eps=eps,
+            maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -186,9 +218,10 @@ class Adagrad(Optimizer):
                     continue
                 st = self._state(p)
                 st.setdefault("step", 0)
-                st.setdefault("sum", _np.zeros_like(p.data))
+                st.setdefault("sum", _np.full_like(
+                    p.data, group["initial_accumulator_value"]))
                 st["step"] += 1
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 st["sum"] = st["sum"] + g * g

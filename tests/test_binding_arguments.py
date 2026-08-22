@@ -52,7 +52,15 @@ BINDING = ROOT / "borch_webgpu" / "_optim.py"
 # one-prose-reason problem this repository keeps finding, and it very nearly went in
 # here: the first version of this table was keyed by name and hid exactly that.
 OWED = {
-    # **Empty, and it was six.** Every row came out with the fix that made it false:
+    # borch.ts's `Adagrad` has no `maximize`. The binding accepts the argument so that
+    # it holds torch's position — `Adagrad(p, 0.1, 0, 0, 0.5)` has to reach
+    # `initial_accumulator_value` and not something else — and **raises when it is
+    # actually asked for**, which is the one shape this check cannot see: it reads the
+    # call site, and a refusal happens before the call.
+    ("Adagrad", "maximize"):
+        "accepted to hold torch's position, and refused rather than dropped — the "
+        "binding raises NotImplementedError before reaching borch.ts",
+    # **It was six before that.** Every row came out with the fix that made it false:
     # borch.ts gained `weightDecay` on eight optimizers (`414af4d`) and the five call
     # sites here now pass it. The table stays because the next dropped argument needs
     # somewhere to be written down, and an empty one says "nothing is owed" where a
@@ -119,8 +127,14 @@ def _call_sites():
     """`(python name, ts name, python parameters, arguments passed)` per optimizer."""
     src = BINDING.read_text()
     for m in re.finditer(r"^def (\w+)\(", src, re.M):
+        # **The bare `*` is a marker, not a parameter.** It arrived the day the
+        # optimizers took torch's argument lists, where `maximize` is keyword-only,
+        # and this read it as an argument named `*` that the call never passes —
+        # a finding manufactured by the instrument, which is the shape this file
+        # exists to catch one level down.
         params = [a.split(":")[0].split("=")[0].strip()
                   for a in _split(_balanced(src, m.end() - 1)[1:-1])]
+        params = [p for p in params if p and p != "*"]
         end = src.find("\ndef ", m.end())
         body = src[m.end(): end if end > 0 else len(src)]
         call = re.search(r"_ts\.optim\.(\w+)\.new\(", body)

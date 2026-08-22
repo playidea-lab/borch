@@ -236,8 +236,9 @@ export async function report(): Promise<Report> {
   const viaGroup = mk();
   viaCtor.grad = Tensor.from([1], [1]);
   viaGroup.grad = Tensor.from([1], [1]);
-  new optim.SGD([viaCtor], 0.1, 0, 0.5).step();
-  new optim.SGD([{ params: [viaGroup], weightDecay: 0.5 }], 0.1, 0, 0).step();
+  // `weightDecay` is the fifth argument now, behind torch's `dampening`.
+  new optim.SGD([viaCtor], 0.1, 0, 0, 0.5).step();
+  new optim.SGD([{ params: [viaGroup], weightDecay: 0.5 }], 0.1, 0, 0, 0).step();
   want("per-group weightDecay bites the same as the constructor's",
     near(await viaCtor.item(), await viaGroup.item(), 1e-6),
     `${(await viaCtor.item()).toFixed(6)} / ${(await viaGroup.item()).toFixed(6)}`);

@@ -304,13 +304,34 @@ export abstract class Optimizer {
 export class SGD extends Optimizer {
   private readonly buffers: Tensor[];
 
+  private stepCount = 0;
+  private readonly maximize: boolean;
+
+  /**
+   * torch's order — `dampening` third and `nesterov` sixth, with `maximize`
+   * keyword-only behind them as torch has it.
+   *
+   * **This read `(params, lr, momentum, weightDecay)`**, so `new SGD(p, 0.1, 0.9,
+   * 1e-4)` — the line a torch tutorial writes — set the dampening to the weight
+   * decay and left the decay at zero. Two different things, both plausible small
+   * numbers, and the run trains and trains slightly wrong.
+   */
   constructor(
     params: ParamsArg,
     lr: number,
     private readonly momentum = 0,
+    private readonly dampening = 0,
     private readonly weightDecay = 0,
+    private readonly nesterov = false,
+    { maximize = false }: { maximize?: boolean } = {},
   ) {
     super(params, lr);
+    this.maximize = maximize;
+    if (nesterov && (momentum <= 0 || dampening !== 0)) {
+      throw new Error(
+        "Nesterov momentum requires a momentum and zero dampening — torch " +
+        "refuses the same combination.");
+    }
     // **The state is allocated up front.** Building a new tensor every step has it
     // released when the scope closes, and the next step's buffer points at a place that
     // is gone. torch holds its state as a fixture too.
@@ -333,12 +354,25 @@ export class SGD extends Optimizer {
     // **A group's own value wins where it set one.** Excluding bias and norm from weight
     // decay is this slot's representative use — that one thing is why groups exist.
     const decay = this.grouped(this.weightDecay);
+    // **`first` is part of the key.** The first step is undamped — torch seeds the
+    // buffer with the gradient itself — so the two variants have to be two
+    // pipelines. Left out of the key, the cache would hand step two the shader
+    // compiled for step one and the dampening would never apply.
+    const first = this.stepCount === 0;
     d.run1d(
-      d.pipeline(`sgd:${n}:${this.lr}:${this.momentum}:${decay}`,
-        () => sgdStep(n, this.lr, this.momentum, decay)),
+      d.pipeline(
+        `sgd:${n}:${this.lr}:${this.momentum}:${decay}:${this.dampening}:` +
+        `${this.nesterov}:${this.maximize}:${first}`,
+        () => sgdStep(n, this.lr, this.momentum, decay, this.dampening,
+                      this.nesterov, this.maximize, first)),
       buffers,
       n,
     );
+  }
+
+  override step(): void {
+    super.step();
+    this.stepCount += 1;
   }
 }
 
@@ -558,9 +592,15 @@ export class Adagrad extends Composed {
    * checked rather than assumed.
    */
   constructor(params: ParamsArg, lr = 0.01, private readonly lrDecay = 0,
-              weightDecay = 0, private readonly eps = 1e-10) {
+              weightDecay = 0, initialAccumulatorValue = 0,
+              private readonly eps = 1e-10) {
     super(params, lr, weightDecay);
-    this.sums = this.state(this.params);
+    // **`initialAccumulatorValue` sits fifth, before `eps`** — torch's order, and
+    // this is the second argument inserted into this constructor's middle rather
+    // than appended. Without it `new Adagrad(p, 0.01, 0, 0, 1e-8)` seeded the
+    // accumulator where the caller meant the epsilon, and an accumulator starting at
+    // 1e-8 rather than 0 is a different first step from the one they asked for.
+    this.sums = this.state(this.params, initialAccumulatorValue);
   }
 
   override step(): void {

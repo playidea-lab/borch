@@ -3709,7 +3709,14 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       (ps) => new optim.RMSprop(ps, 0.01, 0.99, 1e-8, 0.1)],
     ["ASGD(weight_decay)",
       (ps) => new optim.ASGD(ps, 0.05, 1e-4, 0.75, 1e6, 0.1)],
-    ["SGD(weight_decay)", (ps) => new optim.SGD(ps, 0.05, 0, 0.1)],
+    ["SGD(weight_decay)", (ps) => new optim.SGD(ps, 0.05, 0, 0, 0.1)],
+    // The three that were not parameters until the core took torch's order.
+    ["SGD(dampening)", (ps) => new optim.SGD(ps, 0.1, 0.9, 0.5)],
+    ["SGD(nesterov)", (ps) => new optim.SGD(ps, 0.1, 0.9, 0, 0, true)],
+    ["SGD(maximize)", (ps) => new optim.SGD(ps, 0.01, 0, 0, 0, false,
+      { maximize: true })],
+    ["Adagrad(initial_accumulator_value)",
+      (ps) => new optim.Adagrad(ps, 0.1, 0, 0, 0.5)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {

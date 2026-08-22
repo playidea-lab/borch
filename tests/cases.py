@@ -3509,6 +3509,21 @@ _OPTIMIZERS = [
     ("RMSprop(weight_decay)", {"lr": 0.01, "weight_decay": 0.1}),
     ("ASGD(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
     ("SGD(weight_decay)", {"lr": 0.05, "weight_decay": 0.1}),
+    # **The arguments that were not parameters until the core took torch's order.**
+    # `SGD` read `(params, lr, momentum, weight_decay)`, so the tutorial line
+    # `SGD(p, 0.1, 0.9, 1e-4)` set the *dampening* to the weight decay and left the
+    # decay at zero — two different things, both plausible small numbers, and the run
+    # trains and trains slightly wrong.
+    #
+    # Each is asked with a value that changes the answer. `dampening` is meaningless
+    # without momentum, `nesterov` needs momentum and refuses dampening (torch
+    # refuses the same combination), and `initial_accumulator_value` only shows in
+    # the first steps, which is why five are taken.
+    ("SGD(dampening)", {"lr": 0.1, "momentum": 0.9, "dampening": 0.5}),
+    ("SGD(nesterov)", {"lr": 0.1, "momentum": 0.9, "nesterov": True}),
+    ("SGD(maximize)", {"lr": 0.01, "maximize": True}),
+    ("Adagrad(initial_accumulator_value)",
+     {"lr": 0.1, "initial_accumulator_value": 0.5}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.

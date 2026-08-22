@@ -235,7 +235,12 @@ SHORTER = {
     # the mechanism working; a number held still while the two part is not.
     "nn": 24,
     "nn.functional": 0,
-    "optim": 0,
+    # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
+    # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
+    # many raises there, where the same gap in `shifted` would have meant a value
+    # landing on the wrong parameter. `SGD` did get `maximize` on both sides in the
+    # same edit and is not here.
+    "optim": 1,
     "optim.lr_scheduler": 12,
     "linalg": 2,
     "utils.data": 1,

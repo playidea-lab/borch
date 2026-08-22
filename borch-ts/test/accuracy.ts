@@ -148,7 +148,10 @@ export async function trainEval(
   const augment = opts.augment ?? false;
 
   const model = new ResNet18();
-  const opt = new SGD(model.parameters(), lr, 0.9, 5e-4);
+  // `weightDecay` is fifth now, behind torch's `dampening`. Left as the fourth this
+  // would have damped the momentum by 5e-4 and decayed nothing — two plausible small
+  // numbers, and **`tsc` cannot tell them apart** because both are `number`.
+  const opt = new SGD(model.parameters(), lr, 0.9, 0, 5e-4);
   const crit = new nn.CrossEntropyLoss();
   const usable = train.n - (train.n % batch);
   const rows: EpochRow[] = [];

@@ -109,8 +109,14 @@ def _params(ps):
     return _js.Array.new(*[handle(p) for p in ps])
 
 
-def SGD(params, lr=0.01, momentum=0.0, weight_decay=0.0):
-    return _Opt(_ts.optim.SGD.new(_params(params), lr, momentum, weight_decay))
+def SGD(params, lr=0.01, momentum=0.0, dampening=0.0, weight_decay=0.0,
+        nesterov=False, *, maximize=False):
+    """torch's order. **`weight_decay` moved from fourth to fifth** and this call
+    moved with it — a positional bridge is a bet that the far side's parameter order
+    never changes, and `test_binding_arguments.py` is what collects on it."""
+    return _Opt(_ts.optim.SGD.new(_params(params), lr, momentum, dampening,
+                                  weight_decay, nesterov,
+                                  _js.JSON.parse(f'{{"maximize":{str(bool(maximize)).lower()}}}')))
 
 
 def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
@@ -123,8 +129,17 @@ def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
                                       weight_decay))
 
 
-def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0, eps=1e-10):
-    return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, weight_decay, eps))
+def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0,
+            initial_accumulator_value=0.0, eps=1e-10, *, maximize=False):
+    """`initial_accumulator_value` sits fifth, before `eps` — torch's order, and
+    borch.ts moved with the core. `maximize` is not carried across yet; it is
+    accepted so the position is held and refused so it cannot be believed."""
+    if maximize:
+        raise NotImplementedError(
+            "Adagrad(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
+    return _Opt(_ts.optim.Adagrad.new(_params(params), lr, lr_decay, weight_decay,
+                                      initial_accumulator_value, eps))
 
 
 def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):

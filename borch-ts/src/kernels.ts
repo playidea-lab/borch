@@ -3043,14 +3043,22 @@ ${flatId(n)}
  */
 export function sgdStep(
   n: number, lr: number, momentum: number, weightDecay = 0,
+  dampening = 0, nesterov = false, maximize = false, first = false,
 ): string {
   const hasMomentum = momentum !== 0;
   // **Weight decay is added into the gradient.** That is a different number from
   // shrinking the parameter separately — what differs is whether the momentum buffer
   // carries the decay along. torch's SGD is this side.
+  const base = maximize ? "-G[gid]" : "G[gid]";
   const grad = weightDecay !== 0
-    ? `G[gid] + P[gid] * ${weightDecay}`
-    : "G[gid]";
+    ? `${base} + P[gid] * ${weightDecay}`
+    : base;
+  // **The first step is the raw gradient, undamped.** torch seeds the buffer with
+  // the gradient itself and only damps from the second step on, so a dampening of
+  // 0.9 does not shrink the very first move. Baking `first` into the shader keeps
+  // the branch out of the inner loop and out of the pipeline key's way — the key
+  // carries it, so the two variants are two pipelines rather than one wrong one.
+  const damped = first || dampening === 0 ? "gv" : `gv * ${1 - dampening}`;
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
@@ -3060,9 +3068,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let gv = ${grad};
 ${hasMomentum
-    ? `  let b = Buf[gid] * ${momentum} + gv;
+    ? `  let b = Buf[gid] * ${momentum} + ${damped};
   Buf[gid] = b;
-  P[gid] = P[gid] - b * ${lr};`
+  P[gid] = P[gid] - (${nesterov ? `gv + b * ${momentum}` : "b"}) * ${lr};`
     : `  P[gid] = P[gid] - gv * ${lr};`}
 }`;
 }
