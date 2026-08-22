@@ -349,3 +349,51 @@ def test_the_kernel_rows_cover_every_kernel_and_nothing_else():
         "number.")
     unexplained = [n for n in kernels if not _why("transforms.v2.functional", n)]
     assert not unexplained, f"kernels with no reason: {unexplained[:8]}"
+
+
+def test_the_not_api_bin_has_not_grown():
+    """**The one bin that comes out of the denominator, and the one nothing watched.**
+
+    Every other absence stays in: what was declined is a choice we made, so we carry
+    the cost of it in the percentage. `NOT_API` is subtracted before the fraction is
+    taken, which is right when the call is right — and it means a wrong call there is a
+    wrong call **that also makes the number look better.** The comment beside the
+    denominator has always said this about `SKIPPED`, and then granted `NOT_API` the
+    exemption without anything watching it.
+
+    So the bin has a written size. Growing it is an edit to that number, which makes it
+    a decision somebody made rather than one that drifted. The contents were read once,
+    on the day this went in: of 203 names four carried an `Example::` in torch's own
+    docstring, three of those were fairly called internals, and the fourth —
+    `narrow_copy` — moved to `SKIPPED`, where it costs a percentage point rather than
+    being free.
+    """
+    from torch_gap import NOT_API_SIZE, _why                     # noqa: PLC0415
+
+    measured, wrong = {}, []
+    for space, theirs, ours in _spaces():
+        have = _public(ours)
+        found = sum(1 for name in _public(theirs)
+                    if name not in have
+                    and (_why(space, name) or ("",))[0] == "not API")
+        if found:
+            measured[space] = found
+    for space, found in sorted(measured.items()):
+        allowed = NOT_API_SIZE.get(space)
+        if allowed is None:
+            wrong.append(f"{space}: {found} not-API names and no size written down")
+        elif found > allowed:
+            wrong.append(f"{space}: {found} not-API names, {allowed} written down")
+    # Shrinking is not a failure — but a size that is now too big describes a bin that
+    # no longer exists, and the next person reads it as room.
+    for space, allowed in sorted(NOT_API_SIZE.items()):
+        found = measured.get(space, 0)
+        if found < allowed:
+            wrong.append(f"{space}: {found} not-API names, {allowed} written down — "
+                         "lower it")
+    assert not wrong, (
+        "the not-API bin no longer matches what is written down:\n  "
+        + "\n  ".join(wrong)
+        + "\n\nThis bin is subtracted from the denominator. A name put here rather than "
+          "in SKIPPED raises the percentage, so growing it is a decision, not a tidy-up "
+          "— move the number deliberately, with the reason in the commit message.")
