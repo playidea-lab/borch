@@ -2464,7 +2464,9 @@ function addUnpool(out: Map<string, Case>): void {
   // twice takes somebody else's positions. torch has the same shape, which is why this is
   // `place(x, indices)` rather than `forward`.
   out.set("unpool::층::MaxPool2d → MaxUnpool2d", () => {
-    const pool = new nn.MaxPool2d(2, undefined, true);
+    // `returnIndices` sits fifth now, behind torch's `padding` and `dilation`.
+    // Written positionally as the third it would have set a padding of `true`.
+    const pool = new nn.MaxPool2d(2, undefined, 0, 1, true);
     const got = pool.pick(plane());
     return new nn.MaxUnpool2d(2).place(got.values, got.indices);
   });

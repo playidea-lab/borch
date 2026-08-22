@@ -78,58 +78,67 @@ SHIFTED = {
     # which is what showed the nine `inserted` rows this table briefly carried were
     # an artefact of dropping the core's `*args` rather than a fault in borch.ts.
     "Tensor": 1,
-    # 0 -> 1. **This row is a real gap that opened today rather than one that was
-    # found.** The core's MaxPool1d/2d/3d grew torch's padding, dilation and
-    # ceil_mode; borch.ts still takes `(kernel, stride, returnIndices)`, so
-    # `new nn.MaxPool2d(2, 2, 1)` sets returnIndices where torch and the core set
-    # padding. Raised by the session that moved the core, recorded rather than
-    # tidied away -- `nn.ts` belongs to another session and is blocked on its own
-    # decision, and a number quietly held at 0 while the two sides part is the thing
-    # this table exists to prevent.
-    # 1 -> 4. Three more opened the same way the MaxPool row did: the core's Conv1d,
-    # Conv2d and Conv3d took torch's dilation, groups and padding_mode, and borch.ts
-    # still takes `(in, out, kernel, stride, padding, bias)`. `new nn.Conv2d(3, 16,
-    # 3, 1, 1, false)` turns the bias off over there and sets dilation here.
+# **0 → 1 → 0 → 3 in one afternoon, and the shape of that trace is the finding.**
+    #
+    # `MaxPool1d/2d/3d`: the core took torch's `padding`, `dilation` and `ceil_mode`,
+    # which opened the row — borch.ts still had `(kernel, stride, returnIndices)`, so
+    # `new nn.MaxPool2d(2, 2, 1)` set `returnIndices` where torch and the core set
+    # `padding`. The session that moved the core **raised this number with the reason
+    # attached rather than holding it**, which is the only thing that made the gap a
+    # row instead of a silence. borch.ts then took all six positions; `padding`,
+    # `dilation` and `ceilMode` **refuse**, because the WGSL pooling kernel does not
+    # do them yet and an argument that raises with its own name beats one that
+    # quietly takes another's seat.
+    #
+    # `Conv1d/2d/3d`: opened the same way and still open. The core grew `dilation`,
+    # `groups` and `padding_mode`, and moved `bias` from sixth to eighth where torch
+    # has it; borch.ts still takes `(in, out, kernel, stride, padding, bias)`, so
+    # `new nn.Conv2d(3, 16, 3, 1, 1, false)` turns the bias off there and sets a
+    # dilation here.
     #
     # **Closing a gap against an outside authority opens one between two of our own
-    # libraries**, and it is not a side effect: with three implementations and one
-    # outside authority, the core can only move toward torch by moving away from
+    # libraries first**, and it is not a side effect. With three implementations and
+    # one outside authority, the core can only move toward torch by moving away from
     # borch.ts until borch.ts follows. The pair of axes disagreeing is the mechanism
     # working. The danger is only ever a number held still while the sides part.
-    # 4 -> 7. Three more, the same way: the core's ConvTranspose1d/2d/3d took
-    # torch's output_padding, groups and dilation, and borch.ts has not followed
-    # yet. This is the fourth family in a row to open a row here while closing one
-    # against torch, which is what a repository with three implementations and one
-    # outside authority does -- the core cannot move toward torch except by moving
-    # away from borch.ts until borch.ts follows.
-    # 7 -> 4. The three Conv layers followed the core: torch's order, with `bias`
-    # eighth and `dilation` sixth. `dilation` is implemented in the shader (one
-    # token in three index expressions, plus the spacing in the cache key, without
-    # which two calls differing only in dilation would silently share a shader),
-    # `groups` by slicing and joining so the gradient follows from the pieces, and
-    # `padding_mode` by padding in the layer as torch's layer does.
     #
-    # **`tsc` named all six positional call sites the moment the constructor moved**
-    # -- `new Conv2d(cin, cout, 3, stride, 1, false)` with a boolean where a number
-    # now goes. The same move in Python was silent, and another session had six
-    # tests break on it this morning.
-    # 4 -> 1. The three ConvTranspose layers followed the core: torch's order,
-    # `bias` eighth and `dilation` **ninth**, which is not the convolution's order
-    # and is torch's. outputPadding, groups and dilation implemented.
+    # 4 → 7. Three more the same way: the core's ConvTranspose1d/2d/3d took torch's
+    # output_padding, groups and dilation, and borch.ts had not followed. That was
+    # the fourth family in a row to open a row here while closing one against torch.
     #
-    # `outputPadding` is expressed as a longer output and nothing else: the shader
+    # 7 → 4. The three Conv layers followed the core: torch's order, with `bias`
+    # eighth and `dilation` sixth. `dilation` is implemented in the shader (one token
+    # in three index expressions, plus the spacing in the cache key, without which two
+    # calls differing only in dilation would silently share a shader), `groups` by
+    # slicing and joining so the gradient follows from the pieces, and `padding_mode`
+    # by padding in the layer as torch's layer does.
+    #
+    # **`tsc` named all six positional call sites the moment the constructor moved** —
+    # `new Conv2d(cin, cout, 3, stride, 1, false)`, with a boolean where a number now
+    # goes. The same move in Python was silent, and six tests broke on it instead.
+    #
+    # 4 → 1. The three ConvTranspose layers followed: torch's order, `bias` eighth
+    # and `dilation` **ninth**, which is not the convolution's order and is torch's.
+    # `outputPadding` is expressed as a longer output and nothing else — the shader
     # finds, for each output cell, the input cells that reach it, and asked for more
-    # cells it answers by the same rule -- which is what torch's extra rows are.
-    # They are **not zeros**, and a version that wrote zeros would agree on every
-    # shape and part on the values.
-    "nn": 1,
-    # 1 -> 2. `F.embedding_bag` moved `mode` from third to sixth, where torch
-    # has it, and borch.ts still takes it third. Same pair as the layer above,
-    # one level down.
-    # 2 -> 1. `F.embeddingBag` followed the core: `mode` sixth, where torch has it.
-    # `tsc` named all eight call sites the instant it moved -- five golden cases and
-    # the layer's own two -- because a mode string does not fit `number | null`. The
-    # identical move on the Python side was silent.
+    # cells it answers by the same rule, which is what torch's extra rows are. They
+    # are **not zeros**, and a version that wrote zeros would agree on every shape and
+    # part on the values.
+    #
+    # 1 → 0. `MaxPool2d` closed from the other half of the split: borch.ts took all
+    # six of torch's positions, with `padding`, `dilation` and `ceilMode` **refusing**
+    # rather than working, because the WGSL pooling kernel does not do them yet. An
+    # argument that raises with its own name beats one that quietly takes another's
+    # seat — the same trade the core made for `add_bias_kv`.
+    #
+    # **Zero here does not mean borch.ts matches the core.** Nineteen rows are
+    # `shorter` and nineteen `unaligned`. What is empty is the bucket where an
+    # argument sits in another's seat, and that was the dangerous one.
+    "nn": 0,
+    # 1 → 2 → 1. `F.embedding_bag` moved `mode` from third to sixth on the core side,
+    # and `F.embeddingBag` followed. **`tsc` named all eight call sites the instant it
+    # moved** — five golden cases and the layer's own two — because a mode string does
+    # not fit `number | null`. The identical move on the Python side was silent.
     "nn.functional": 1,
     "optim": 0,
     "optim.lr_scheduler": 0,

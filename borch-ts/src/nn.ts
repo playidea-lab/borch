@@ -1290,8 +1290,28 @@ export class MaxPool2d extends Module {
    */
   constructor(private readonly kernel = 2,
               private readonly stride?: number,
-              readonly returnIndices = false) {
+              readonly padding = 0,
+              readonly dilation = 1,
+              readonly returnIndices = false,
+              readonly ceilMode = false) {
     super();
+    // **`padding`, `dilation` and `ceilMode` hold torch's positions and refuse.**
+    // The core grew all three as working arguments in the same afternoon; until the
+    // WGSL pooling kernel does too, the choice here is between an argument that is
+    // absent and one that is in the wrong seat — and the wrong seat is what makes
+    // `new MaxPool2d(2, 2, 1)` set `returnIndices` where torch and the core set
+    // `padding`. A refusal that names the argument is the smaller wrong, and it is
+    // the same trade the core made for `add_bias_kv` an hour earlier.
+    for (const [name, asked] of [["padding", padding !== 0],
+                                 ["dilation", dilation !== 1],
+                                 ["ceilMode", ceilMode]] as const) {
+      if (asked) {
+        throw new Error(
+          `MaxPool2d(${name}=…) is not carried across yet — the core implements it ` +
+          "and this side does not. The argument is here so that it cannot take " +
+          "another one's place.");
+      }
+    }
   }
 
   override forward(x: Tensor): Tensor {
