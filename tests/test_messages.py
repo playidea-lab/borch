@@ -393,8 +393,24 @@ def test_every_console_prefix_is_printed_on_one_side_and_read_on_the_other():
           "green. It shows on the day something hangs.")
 
 
-# The size of each allowance, pinned. Raising one is allowed and takes a commit.
-ALLOWANCE_SIZES = {"QUOTED_CASE_NAMES": 2, "TS_QUOTED": 5}
+# Each allowance, pinned by **entries and by characters exempted.** Raising either is
+# allowed and takes a commit.
+#
+# The character count is the number the list otherwise does not have. A coverage
+# percentage moves when a bucket grows, and somebody may see it; subtracting text from a
+# rule produces no number at all, so the rule covering less of the file has nothing to
+# notice it by. Two names and seventeen characters say different things — a single long
+# quoted name costs one entry and a great deal of coverage.
+ALLOWANCE_SIZES = {
+    "QUOTED_CASE_NAMES": (2, 17),
+    "TS_QUOTED": (5, 18),
+}
+
+
+def _exempted(files, strip):
+    """How many Korean characters the allowance removes before the rule looks."""
+    text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+    return len(HANGUL.findall(text)) - len(HANGUL.findall(strip(text)))
 
 
 def test_the_allowances_do_not_grow_unremarked():
@@ -416,17 +432,31 @@ def test_the_allowances_do_not_grow_unremarked():
     when nobody wants to write a reason, and no check looked at its size.** Three
     properties meeting at one place: tempting, flattering, unwatched.
 
-    This list has the first and the third. It did not have the second only because
-    subtracting text does not produce a percentage — and a rule quietly covering less of a
-    directory is the same loss without a number attached to notice it by.
+    This list has the first and the third, and lacked the second only because subtracting
+    text produces no percentage. **That is worse rather than better** — their reading, and
+    it is right: a bucket that moves a number at least offers a chance somebody sees it
+    move, while a rule covering less of a file offers nothing at all. So the pin carries
+    the **characters exempted** as well as the entries, which is the number this list did
+    not otherwise have. Two names and seventeen characters say different things: one long
+    quoted name costs a single entry and a great deal of coverage.
+
+    The probe that argued for the pin: pick a real Korean golden key, write a comment in
+    `borch-ts/src` citing it, add it to the list. Every existing guard passes, correctly —
+    **each entry is defensible and the set is erosion.** No per-entry check can see that.
     """
-    actual = {"QUOTED_CASE_NAMES": len(QUOTED_CASE_NAMES), "TS_QUOTED": len(TS_QUOTED)}
+    actual = {
+        "QUOTED_CASE_NAMES": (len(QUOTED_CASE_NAMES),
+                              _exempted(_files(), _without_quoted_names)),
+        "TS_QUOTED": (len(TS_QUOTED), _exempted(_ts_files(), _without_ts_quotes)),
+    }
     grown = {k: (v, ALLOWANCE_SIZES[k]) for k, v in actual.items()
              if v != ALLOWANCE_SIZES.get(k)}
     assert not grown, (
-        "an allowance changed size:\n  "
-        + "\n  ".join(f"{k}: {now} entries against {was} written" for k, (now, was)
-                      in sorted(grown.items()))
+        "an allowance changed:\n  "
+        + "\n  ".join(
+            f"{k}: {now[0]} entries / {now[1]} characters exempted, "
+            f"against {was[0]} / {was[1]} written"
+            for k, (now, was) in sorted(grown.items()))
         + "\n\n  Growing one is allowed — a genuinely new Korean golden name may have to "
           "be quoted.\n  Raise the number here in the same commit and say which name and "
           "why, so that\n  the rule covering less is something somebody chose.\n"
