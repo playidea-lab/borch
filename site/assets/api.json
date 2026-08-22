@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 65
+  "missing": 66
  },
  "modules": [
   {
@@ -11466,8 +11466,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, factor?: number, patience?: number, threshold?: number)",
-       "doc": ""
+       "signature": "constructor(opt: Optimizer, mode?: \"min\" | \"max\", factor?: number, patience?: number, threshold?: number)",
+       "doc": "`mode` decides which direction counts as improvement — `'min'` for a loss,\n`'max'` for an accuracy.\n\n**It stands second because torch puts it second, and for a while it was not\nhere at all.** Without it `new ReduceLROnPlateau(opt, 'min', 0.1)` — the way\ntorch's own documentation writes the call — put the string into `factor` and\n`0.1` into `patience`, and nothing raised: the schedule simply cut the learning\nrate by `NaN` at the wrong time. An argument missing from the middle of a list\ndoes not fail, it answers."
       },
       {
        "name": "stateDict",

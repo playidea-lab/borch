@@ -45,6 +45,19 @@ this repository that looks at an answer rather than a shape.
 Any normaliser is a claim about which differences do not matter, and it usually gets
 written where nobody states the claim. So each is stated here:
 
+## One bucket carried a claim it could not support
+
+`renamed` — same arity, different names — was labelled harmless on the ground that
+TypeScript has no keyword arguments. Reading the rows afterwards found
+`F.gumbel_softmax(logits, tau, hard, eps, dim)` against `(logits, tau, hard, dim,
+noise)`, where position three is a tolerance in one library and an axis in the other.
+The label was a claim about a whole bucket drawn from the rows that happened to be
+read first, which is the same error as deciding a fold before counting. It now says
+what it can support: **the names cannot tell whether these are the same arguments.**
+
+Only `shorter` is safe, and for a reason that does not depend on reading: passing an
+argument borch.ts does not take raises.
+
 - **camelCase folding** — claims `return_indices` and `returnIndices` are one name.
   Established on the name axis; the trailing underscore is kept there and there is
   nothing to keep here, since no borch.ts parameter is an in-place marker.
@@ -186,9 +199,18 @@ def core_params(fn, receiver=False):
     called, so position is the thing that is actually true. A `staticmethod` has
     none, which is why the caller decides rather than this function guessing.
 
-    `*args` and `**kwargs` are dropped, and that is a **loss stated rather than
-    hidden**: a core function taking `*args` is comparable to nothing here, and
-    counting it as either agreement or disagreement would be an invention.
+    **A signature with `*args` or `**kwargs` returns `None`**, the same as one that
+    cannot be read at all. The first version dropped them and compared what was left,
+    which sounds like the stated loss above and is not: nine loss constructors in the
+    core are written `(*args, reduction='mean', **kw)`, so what was left was
+    `[reduction]` and every one of them read as borch.ts having *inserted* arguments
+    in front. borch.ts had them because torch has them; the core is the side that
+    takes anything and ignores it.
+
+    Nine rows in the dangerous bucket, pointing at the wrong library, from dropping a
+    parameter and then treating the remainder as the whole list. Which is this file's
+    own recurring mistake for the fifth time — **the drop was documented and the
+    consequence of the drop was not.**
     """
     import inspect
 
@@ -199,7 +221,7 @@ def core_params(fn, receiver=False):
     out = []
     for name, p in sig.parameters.items():
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
-            continue
+            return None
         out.append(name)
     if out and (receiver or out[0] in ("self", "cls")):
         out = out[1:]
@@ -325,6 +347,14 @@ def _theirs(by_module, space, camel):
 # same-position pairs (`--renames`) rather than from whichever rows were read first,
 # and only where the two names cannot mean anything but the same thing.
 #
+# **A row must also not be the only place a gap is recorded, and that rule cost this
+# table its most obvious entry.** `t → a` is true — the core calls its matrix `t` and
+# borch.ts calls it `a`, one file and one author, attested. Folding it moves six
+# `linalg` rows out of `unaligned` and into `shorter`, which reads as *safe*; and
+# those six rows are the only visible record that `linalg.norm` takes no `p`, `pinv`
+# no `rcond`, `matrix_rank` no `tol`. A slightly wrong label on a countable row beats
+# a correct label on a row nobody can find, so the entry is left out on purpose.
+#
 # Deliberately **not** folded, though both stand high in that tally: `padding → p`
 # (torch's `p` is a norm's order in some of those rows and a padding width in
 # others), and `betas → beta1` (borch.ts splits torch's pair into two scalars, so
@@ -382,12 +412,64 @@ def _verdict(wanted, yours):
         return "shorter"
     if len(yours) > len(wanted) and yours[:len(wanted)] == wanted:
         return "longer"
+    # **An argument gone from the middle, or one put in front of the list.** Both
+    # shift every argument after them by a place, and neither raises: the call still
+    # has an acceptable number of arguments and each lands on the wrong parameter.
+    # `ReduceLROnPlateau` is the first and `CosineEmbeddingLoss` the second.
+    #
+    # Told apart from a short tail **by alignment rather than by length**, which is
+    # the correction a peer's reading forced. `shorter` was tested as an exact
+    # prefix, so a list that was both renamed and short — `linalg.norm(t, p, dim,
+    # dtype)` against `(a)` — matched neither `shorter` nor `renamed` and fell into
+    # `differ`, where it read as six dangerous rows that were nothing of the kind.
+    if _subsequence(yours, wanted):
+        return "dropped"
+    if _subsequence(wanted, yours):
+        return "inserted"
     if len(yours) == len(wanted):
-        # Same arity, different names. **TypeScript has no keyword arguments**, so a
-        # positional caller is unaffected and this cannot silently mean something
-        # else — unless the same concepts were reordered, which the names do catch.
+        # Same arity, different names.
+        #
+        # **This bucket was called harmless and that was wrong.** The reasoning was
+        # that TypeScript has no keyword arguments, so a positional caller cannot be
+        # hurt by a spelling. But a position that holds a *different argument* has
+        # the same shape as a position that holds the same one under another name,
+        # and the names cannot separate them:
+        #
+        #   F.gumbel_softmax(logits, tau, hard, eps, dim)
+        #   borch.ts        (logits, tau, hard, dim, noise)
+        #
+        # Position three is torch's `eps` and borch.ts's `dim`. `gumbelSoftmax(x, 1,
+        # false, -1)` sets a tolerance in one library and an axis in the other, and
+        # nothing raises. Found by reading the rows after the bucket had already been
+        # labelled safe — the label was a claim about the whole bucket made from the
+        # rows that happened to be read first.
+        #
+        # So `renamed` means *the same number of arguments and no way to tell from
+        # the names whether they are the same arguments.* It is `unaligned`'s
+        # equal-length sibling, not a clean bill. A name difference that IS just a
+        # spelling belongs in `RENAMES`, attested by a person, where it becomes
+        # `agree` — that is the only route out of here.
         return "reordered" if sorted(yours) == sorted(wanted) else "renamed"
-    return "differ"
+    # Renamed **and** a different length: the names give nothing to align on, so this
+    # says so instead of guessing. `unaligned` is a request to read the row, not a
+    # verdict — calling it `differ` claimed a shift nobody had shown.
+    return "unaligned"
+
+
+def _subsequence(small, big):
+    """Whether `small` appears inside `big` in order, with at least one gap.
+
+    An exact prefix is excluded: that is `shorter`, and it is the safe case. What is
+    left is a name removed from somewhere other than the end, which moves everything
+    behind it.
+    """
+    if len(small) >= len(big) or not small:
+        return False
+    at = 0
+    for name in big:
+        if at < len(small) and small[at] == name:
+            at += 1
+    return at == len(small) and small != big[:len(small)]
 
 
 def compare():
@@ -458,6 +540,15 @@ def renames(rows):
     `opt` in every scheduler), and a pair standing once beside a length change is
     where to look. Deciding the folds first and counting afterwards would have folded
     whatever the first few rows happened to show.
+
+    **The tally may propose an entry for `RENAMES`. It must never install one.** A
+    peer tried the automatic version — anything standing three times becomes a
+    convention — and it moved two real defects out of danger: `reduction → margin`
+    stands in four loss constructors and `betas → beta1` in four optimizers, and both
+    are arguments genuinely added or split rather than renamed. **A defect that
+    repeats is indistinguishable from a convention by frequency alone**, and the more
+    instances there are the more certainly it disappears. That is why `_verdict`
+    classifies by alignment instead, and why every row of `RENAMES` is hand-written.
     """
     tally = {}
     for found in rows.values():
@@ -479,10 +570,17 @@ def main(argv):
             print(f"  {n:>4}  {a}  →  {b}")
         return 0
     differ = bagged = unreadable = ambiguous = agreed = shorter = renamed = 0
+    unaligned = 0
     for space, found in rows.items():
-        d = [r for r in found if r[3] in ("differ", "reordered")]
+        d = [r for r in found if r[3] in ("dropped", "inserted", "reordered")]
         s = [r for r in found if r[3] in ("shorter", "longer")]
         n = [r for r in found if r[3] == "renamed"]
+        # **Its own column, not folded in with the renames.** `unaligned` means the
+        # names give nothing to align on — `Adam(params, lr, betas, eps, weightDecay)`
+        # against `(params, lr, beta1, beta2, eps, weightDecay)`, where borch.ts
+        # splits torch's pair into two positions. That is a real arity change, and
+        # counting it beside the harmless spelling differences would bury it.
+        x = [r for r in found if r[3] == "unaligned"]
         b = [r for r in found if r[3].startswith("agree to the bag")]
         a = [r for r in found if r[3].startswith("ambiguous")]
         u = [r for r in found if r[3].startswith("no ")]
@@ -492,11 +590,14 @@ def main(argv):
         ambiguous += len(a)
         unreadable += len(u)
         renamed += len(n)
-        agreed += len(found) - len(d) - len(s) - len(n) - len(b) - len(a) - len(u)
-        mark = " " if not d else "✘"
-        print(f"  {mark} {space:22s} agree {len(found) - len(d) - len(s) - len(n):>4}   "
-              f"differ {len(d):>4}   shorter {len(s):>4}   renamed {len(n):>4}   "
-              f"bag {len(b):>3}   ambiguous {len(a):>3}   unreadable {len(u):>3}")
+        unaligned += len(x)
+        agreed += len(found) - len(d) - len(s) - len(n) - len(x) - len(b) - len(a) - len(u)
+        mark = " " if not (d or x or n) else "✘"
+        print(f"  {mark} {space:22s} "
+              f"agree {len(found) - len(d) - len(s) - len(n) - len(x) - len(b) - len(a) - len(u):>4}   "
+              f"shifted {len(d):>3}   unaligned {len(x):>3}   shorter {len(s):>4}   "
+              f"renamed {len(n):>4}   bag {len(b):>3}   two {len(a):>3}   "
+              f"unread {len(u):>3}")
         if show is not None and space.startswith(show):
             # **The agreeing pairs print too.** A namespace reporting nothing wrong is
             # the one to distrust — `nn`'s 144 constructors went from unmeasurable to
@@ -506,10 +607,13 @@ def main(argv):
                 print(f"      · {name}({', '.join(mine or [])})")
                 print(f"          borch.ts: ({', '.join(yours or [])})  — {note}")
     print("\n이름이 양쪽에 있는데 인자가 다른 자리를 센다 — 형도 기본값도 값도 안 본다.")
-    print(f"맞음 {agreed}건 · **어긋남 {differ}건** · 꼬리가 짧다 {shorter}건 · "
-          f"이름만 다르다 {renamed}건 · 보따리에서 멈춘 것 {bagged}건 · "
-          f"두 선언 {ambiguous}건 · 못 읽음 {unreadable}건.")
-    print("어긋남만이 값이 조용히 달라지는 자리다. 짧은 것은 안 옮긴 기능이다.")
+    print(f"맞음 {agreed}건 · **밀림 {differ}건** · **못 맞춤 {unaligned}건** · "
+          f"꼬리가 짧다 {shorter}건 · 이름만 다르다 {renamed}건 · "
+          f"보따리에서 멈춘 것 {bagged}건 · 두 선언 {ambiguous}건 · 못 읽음 {unreadable}건.")
+    print("밀림은 이름으로 밀린 것이 보이는 자리다. 못 맞춤과 이름만 다름은 "
+          "이름으로 가를 수 없어 사람이 읽어야 하는 자리다 —")
+    print("  `gumbel_softmax` 는 길이가 같은데 셋째 자리가 한쪽은 eps 이고 한쪽은 dim 이었다.")
+    print("짧은 것 하나만이 안전하다: 인자를 더 넘기면 raise 한다.")
     return 0
 
 

@@ -7291,6 +7291,33 @@ def train_cases(inp=None):
 
     cases.append(("sched::ReduceLROnPlateau", plateau))
 
+    def plateau_max(L):
+        """The `max` direction — for a metric where **bigger is better**, an accuracy.
+
+        Added because borch.ts had no `mode` at all: the min direction was written
+        into the comparison, and torch's own way of spelling the call,
+        `ReduceLROnPlateau(opt, 'min', 0.1)`, put a string where the factor goes.
+        A signature check found it; this is the case that holds the behaviour, since
+        a signature check cannot say the two directions compute the same thing.
+
+        **The metrics are not the mirror image of `plateau`'s.** They were at first,
+        and `test_case_names.py` refused them: an exact mirror produces the exact
+        same trajectory, so the case would have read as green whether `max` worked or
+        was quietly still `min`. A case named after an argument has to be one the
+        argument changes.
+        """
+        p = L.tensor([1.0], requires_grad=True)
+        opt = L.optim.SGD([p], lr=1.0)
+        sch = L.optim.lr_scheduler.ReduceLROnPlateau(
+            opt, mode="max", patience=1, factor=0.5)
+        seen = []
+        for metric in [0.1, 0.2, 0.2, 0.2, 0.2, 0.9, 0.2, 0.2]:
+            sch.step(metric)
+            seen.append(opt.param_groups[0]["lr"])
+        return L.tensor(seen)
+
+    cases.append(("sched::ReduceLROnPlateau(max)", plateau_max))
+
     # Recurrence and transformers — the weights have to be planted for the three libraries to
     # start from the same place. That the parameter **names** must match torch's for a state_dict
     # to load is caught here too.

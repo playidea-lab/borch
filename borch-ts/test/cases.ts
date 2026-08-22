@@ -5665,9 +5665,24 @@ function addTrain(out: Map<string, Case>, inp: Inputs): void {
   out.set("sched::ReduceLROnPlateau", () => {
     const p = Tensor.from([1.0], [1], { requiresGrad: true });
     const opt = new optim.SGD([p], 1.0);
-    const sch = new optim.ReduceLROnPlateau(opt, 0.5, 1);
+    // `mode` was not a parameter when this case was written, so `0.5` and `1` stood
+    // one place to the left. The Python side has always passed them by keyword, which
+    // is why the two sides agreed on a value while disagreeing about the call.
+    const sch = new optim.ReduceLROnPlateau(opt, "min", 0.5, 1);
     const seen: number[] = [];
     for (const metric of [1.0, 1.0, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0]) {
+      sch.step(metric);
+      seen.push(opt.paramGroups[0]?.lr ?? 0);
+    }
+    return Tensor.from(seen, [seen.length]);
+  });
+
+  out.set("sched::ReduceLROnPlateau(max)", () => {
+    const p = Tensor.from([1.0], [1], { requiresGrad: true });
+    const opt = new optim.SGD([p], 1.0);
+    const sch = new optim.ReduceLROnPlateau(opt, "max", 0.5, 1);
+    const seen: number[] = [];
+    for (const metric of [0.1, 0.2, 0.2, 0.2, 0.2, 0.9, 0.2, 0.2]) {
       sch.step(metric);
       seen.push(opt.paramGroups[0]?.lr ?? 0);
     }

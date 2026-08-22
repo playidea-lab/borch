@@ -1613,15 +1613,46 @@ export class LambdaLR extends LRScheduler {
  * `step(metric)`.
  */
 export class ReduceLROnPlateau {
-  private best = Infinity;
+  private best: number;
   private bad = 0;
 
+  /**
+   * `mode` decides which direction counts as improvement — `'min'` for a loss,
+   * `'max'` for an accuracy.
+   *
+   * **It stands second because torch puts it second, and for a while it was not
+   * here at all.** Without it `new ReduceLROnPlateau(opt, 'min', 0.1)` — the way
+   * torch's own documentation writes the call — put the string into `factor` and
+   * `0.1` into `patience`, and nothing raised: the schedule simply cut the learning
+   * rate by `NaN` at the wrong time. An argument missing from the middle of a list
+   * does not fail, it answers.
+   */
   constructor(
     private readonly opt: Optimizer,
+    private readonly mode: "min" | "max" = "min",
     private readonly factor = 0.1,
     private readonly patience = 10,
     private readonly threshold = 1e-4,
-  ) {}
+  ) {
+    if (mode !== "min" && mode !== "max") {
+      throw new Error(`mode must be 'min' or 'max', got ${JSON.stringify(mode)}`);
+    }
+    this.best = mode === "min" ? Infinity : -Infinity;
+  }
+
+  /**
+   * Whether this value is an improvement, by torch's relative rule.
+   *
+   * The starting value carries the first call: `Infinity * (1 - threshold)` is
+   * `Infinity` and `-Infinity * (1 + threshold)` is `-Infinity`, so whatever
+   * arrives first is better than it. The core writes the same idea as `best is
+   * None`; this way there is one comparison rather than two.
+   */
+  private better(metric: number): boolean {
+    return this.mode === "min"
+      ? metric < this.best * (1 - this.threshold)
+      : metric > this.best * (1 + this.threshold);
+  }
 
   /**
    * The two things a resume needs. **`best` starts at infinity** — which is
@@ -1645,12 +1676,11 @@ export class ReduceLROnPlateau {
   step(metric: number): void {
     // torch defaults to `rel` mode — it counts as an improvement only when it improves
     // relatively by at least this much.
-    if (metric < this.best * (1 - this.threshold)) {
+    if (this.better(metric)) {
       this.best = metric;
       this.bad = 0;
       return;
     }
-    if (this.best === Infinity) this.best = metric;
     this.bad += 1;
     if (this.bad > this.patience) {
       // **Every group is cut.** This one does not inherit `LRScheduler` (it multiplies

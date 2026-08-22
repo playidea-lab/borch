@@ -48,7 +48,7 @@ pytest.importorskip("numpy")
 # tutorial line returns a number instead of raising. Each is work; lower it by fixing
 # borch.ts or by folding a convention into `ts_signatures.RENAMES` **with its reason**.
 #
-# **`linalg` was 14 differ against a namespace nobody could call**, and it is 6 now.
+# **`linalg` was 14 differ against a namespace nobody could call**, and it is 0 now.
 # The first run of this axis paired `torch.linalg.det(t)` against `det(f)` and
 # `matmul(a, b)` against `matmul(a, b, n, k, m)` — flat, `Mat`-based CPU internals
 # that `site/build_api.py` was publishing as though they were the torch namespace,
@@ -56,35 +56,92 @@ pytest.importorskip("numpy")
 # already open, and this axis is where it turned from an argument into a number.
 #
 # A peer session split the file (`_linalg.ts` for the numerics, `linalg.ts` for the
-# namespace) and the row became readable in the same edit: 7 agree, 17 renamed, 2
-# shorter, 6 differ. The 17 are one convention — the core calls its matrix `t` and
-# borch.ts calls it `a` — and they sit in the harmless bucket rather than being
-# folded, because `t` is too short a name to fold everywhere on the strength of one
-# namespace.
-DIFFER = {
-    # 4 → 3. `std(dim, unbiased, keepdim)` against `std(correction)`: this pair took the
+# namespace) and the row became readable in the same edit. The last six left it when
+# `_verdict` learned to tell a shift from a rename that is also short — see below.
+SHIFTED = {
+    # `Tensor` was 4 here and one of them was the worst row the axis has produced:
+    # `std(dim, unbiased, keepdim)` against `std(correction)`. This pair took the
     # correction first, alone among the reductions, so `x.std(0)` — the line anybody
-    # transcribing torch writes — compiled, ran and returned a scalar at correction 0
-    # where torch returns one value per column. `dim` comes first now, as it already did
-    # in `mean`, `sumDim` and `amax`. Nothing else in the repository was watching that
-    # place: the golden asks `std()` three times and never with an argument.
-    "Tensor": 3,
-    # 30 → 29. `SmoothL1Loss`: the core took `(beta, reduction)` and borch.ts
-    # `(reduction, beta)`. **borch.ts was right** — torch's live arguments are
-    # `(reduction, beta)`, with the deprecated `size_average` and `reduce` in front of
-    # them. So `SmoothL1Loss("sum")` set `beta="sum"` in Python and `reduction="sum"`
-    # in TypeScript, and nothing raised at construction either way.
+    # transcribing torch writes — compiled, ran, and returned a scalar at correction 0
+    # where torch returns one value per column. A wrong **rank**, which flows
+    # downstream and breaks somewhere unrelated. A peer fixed it (`dim` first, as in
+    # `mean`, `sumDim` and `amax`) and found the same defect's second half while
+    # there: `stdMean` took its mean over everything regardless of the axis.
     #
-    # This axis could not say which side was wrong. Its two sides are the core and
-    # borch.ts and **neither of them is torch**, so a row here means they disagree and
-    # never which one to move. Asking real torch is what settled it, and there is no
-    # check in this repository that does that for `borch.nn` — `test_torch_signatures.py`
-    # covers borchvision against torchvision and stops there.
-    "nn": 29,
-    "nn.functional": 2,
+    # Nothing else was watching that place — the golden asks `std()` three times and
+    # never with an argument. Worth noting beside `ReduceLROnPlateau`: `tsc` caught
+    # the scheduler's call site the moment `mode` was added, because the type was a
+    # string union, and could not catch this one because `number` is not narrow.
+    "Tensor": 1,
+    "nn": 1,
+    "nn.functional": 1,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 0,
+}
+
+# **238 pairs cannot be compared at all, and that is the largest number here.**
+# The core writes 238 of its callables as `(*args, reduction='mean', **kw)` or the
+# like — it takes whatever is passed and ignores what it does not know. There is no
+# argument list to compare, so this axis is blind to a third of the surface, and it
+# is blind in the direction that matters: `borch.nn.HuberLoss(delta=0.5)` is accepted
+# and does nothing.
+#
+# Not pinned as a table, because it is not this axis's finding to hold — it is the
+# core's own signature surface, and the check that ought to catch it is a core ↔ real
+# torch signature axis, which does not exist. `torch_gap.py` measures those two by
+# name only. Written here so the number is not mistaken for a measurement problem.
+UNREADABLE_TOTAL = 238
+
+# **Neither list can be aligned against the other by name.** Not shown to be a shift
+# and not shown to be safe — a row to read, held apart so it is neither claimed as a
+# defect nor tidied in with the spelling differences.
+#
+# `optim`'s 7 are one shape worth naming: torch's `Adam(params, lr, betas, eps,
+# weight_decay)` against borch.ts's `(params, lr, beta1, beta2, eps, weightDecay)`.
+# The pair became two positions, which is a real arity change and not a rename.
+UNALIGNED = {
+    "Tensor": 3,
+    # `SmoothL1Loss` left this table when a peer fixed it: the core took
+    # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
+    # torch's live arguments are `(reduction, beta)`, with the deprecated
+    # `size_average` and `reduce` in front of them. So `SmoothL1Loss("sum")` set
+    # `beta="sum"` in Python and `reduction="sum"` in TypeScript, and nothing raised
+    # at construction either way.
+    #
+    # **This axis could not say which side was wrong**, and that is the sentence to
+    # carry out of it. Its two sides are the core and borch.ts, and neither of them
+    # is torch, so a row here means they disagree and never which one to move.
+    # `parity.ts` has the same blind spot in the same words — *the sisters have
+    # parted*. Two instruments, one blind spot, because they share a pair of sides.
+    # Asking real torch settled it, and no check in this repository does that for
+    # `borch.nn`: `test_torch_signatures.py` covers borchvision against torchvision
+    # and stops there.
+    "nn": 19,
+    "nn.functional": 1,
     "optim": 7,
-    "optim.lr_scheduler": 4,
+    "optim.lr_scheduler": 3,
     "linalg": 6,
+    "utils.data": 0,
+}
+
+# Same arity, names differ. **Pinned, because this bucket was called harmless and
+# is not.** The reasoning was that TypeScript has no keyword arguments; then
+# `F.gumbel_softmax(logits, tau, hard, eps, dim)` turned up against `(logits, tau,
+# hard, dim, noise)`, where position three is a tolerance in torch and an axis in
+# borch.ts. A name difference and a different argument look identical from here.
+#
+# A difference that really is only spelling belongs in `ts_signatures.RENAMES`, where
+# a person attests it and the row becomes `agree`. That is the only way out of this
+# table, and it is deliberately a way that requires someone to write a sentence.
+RENAMED = {
+    "Tensor": 29,
+    "nn": 16,
+    "nn.functional": 1,
+    "optim": 1,
+    "optim.lr_scheduler": 0,
+    "linalg": 17,
     "utils.data": 0,
 }
 
@@ -92,13 +149,13 @@ DIFFER = {
 # too many raises. Held separately so that fixing a shift cannot be paid for by
 # turning it into a truncation without anyone noticing.
 SHORTER = {
-    "Tensor": 162,
-    "nn": 32,
+    "Tensor": 16,
+    "nn": 17,
     "nn.functional": 0,
     "optim": 0,
-    "optim.lr_scheduler": 11,
+    "optim.lr_scheduler": 12,
     "linalg": 2,
-    "utils.data": 2,
+    "utils.data": 1,
 }
 
 
@@ -126,21 +183,25 @@ def _rows():
 def test_the_signature_axis_has_not_widened():
     """Every namespace's shifted and truncated counts, exactly."""
     rows = _rows()
-    assert set(rows) == set(DIFFER) == set(SHORTER), (
-        f"the namespaces measured changed: {sorted(set(rows) ^ set(DIFFER))}")
+    assert set(rows) == set(SHIFTED) == set(SHORTER) == set(UNALIGNED), (
+        f"the namespaces measured changed: {sorted(set(rows) ^ set(SHIFTED))}")
 
     moved = []
     for space, found in sorted(rows.items()):
-        got = {"differ": 0, "shorter": 0}
+        got = {"shifted": 0, "shorter": 0, "unaligned": 0, "renamed": 0}
         for _n, _m, _y, note in found:
-            if note in ("differ", "reordered"):
-                got["differ"] += 1
+            if note in ("dropped", "inserted", "reordered"):
+                got["shifted"] += 1
             elif note in ("shorter", "longer"):
                 got["shorter"] += 1
-        if got["differ"] != DIFFER[space]:
-            moved.append(f"{space} differ: {got['differ']} now, {DIFFER[space]} written")
-        if got["shorter"] != SHORTER[space]:
-            moved.append(f"{space} shorter: {got['shorter']} now, {SHORTER[space]} written")
+            elif note == "unaligned":
+                got["unaligned"] += 1
+            elif note == "renamed":
+                got["renamed"] += 1
+        for key, table in (("shifted", SHIFTED), ("shorter", SHORTER),
+                           ("unaligned", UNALIGNED), ("renamed", RENAMED)):
+            if got[key] != table[space]:
+                moved.append(f"{space} {key}: {got[key]} now, {table[space]} written")
     assert not moved, (
         "the signature counts moved:\n  " + "\n  ".join(moved)
         + "\n\n  Lower means a signature was carried across — edit the table down.\n"
@@ -158,14 +219,14 @@ def test_the_measurement_still_reads_methods():
     out — while the printed summary went on looking like a measurement of the whole
     surface. Nothing was red. `nn` said agree 0 / differ 0 / unreadable 0.
 
-    The floor is set well under what stands today (570 pairs) so ordinary work does
+    The floor is set well under what stands today (614 pairs) so ordinary work does
     not trip it, and well over what top-level functions alone give (30), which is the
     number the broken version produced.
     """
     rows = _rows()
     pairs = sum(len(found) for found in rows.values())
     assert pairs > 300, (
-        f"only {pairs} signature pairs were compared, and there were 570.\n"
+        f"only {pairs} signature pairs were filed, and there were 614.\n"
         "  The likely cause is the member walk in ts_signatures.ts_signatures():\n"
         "  members carry no `kind`, so a filter written on `kind` files none of them\n"
         "  and every method vanishes from the measurement without leaving a row.")
@@ -187,10 +248,16 @@ def test_a_dropped_middle_argument_is_not_read_as_a_short_tail():
     import ts_signatures
 
     assert ts_signatures._verdict(["a", "b", "c"], ["a", "b"]) == "shorter"
-    assert ts_signatures._verdict(["a", "b", "c"], ["a", "c"]) == "differ"
+    assert ts_signatures._verdict(["a", "b", "c"], ["a", "c"]) == "dropped"
+    assert ts_signatures._verdict(["a", "b"], ["z", "a", "b"]) == "inserted"
     assert ts_signatures._verdict(["a", "b"], ["a", "b"]) == "agree"
     assert ts_signatures._verdict(["a", "b"], ["b", "a"]) == "reordered"
     assert ts_signatures._verdict(["a", "b"], ["a", "z"]) == "renamed"
+    # **Renamed and short at once.** The first version tested `shorter` as an exact
+    # prefix, so this matched neither and landed among the shifts — six `linalg` rows
+    # read as dangerous when the names simply give nothing to align on. A peer
+    # reading the rows found it; no count could have.
+    assert ts_signatures._verdict(["t", "p", "dim"], ["a"]) == "unaligned"
     # torch's `T_max` against borch.ts's `tMax` — the initial capital carries nothing
     # on a parameter, which is the reverse of the rule the *name* axis applies.
     assert ts_signatures._verdict(["TMax"], ["tMax"]) == "agree"
