@@ -211,17 +211,27 @@ def test_the_flattening_does_not_merge_two_names_into_one():
         pytest.skip("no generated index — run npm run build:ts && npm run docs:api")
     names = [str(path).split(".")[-1]
              for path in json.loads(index.read_text(encoding="utf-8"))]
-    # **Not yet judged**, and each is borch.ts declaring one idea under two spellings
-    # rather than a fault in `_flat`. Found by this check on its first run:
+    # **Three collide, and reading them showed all three are correct.** The first
+    # guess when this check went red was "borch.ts declares one idea under two
+    # spellings"; opening each one said otherwise, which is the reason a collision
+    # is reported rather than auto-resolved.
     #
-    #   RNNKind / RnnKind          two type names for one thing
-    #   bitwiseNot_ / bitwise_not_ camelCase and snake_case side by side, in a
-    #   logicalNot_ / logical_not_ library whose whole surface is camelCase
+    #   RNNKind / RnnKind
+    #       Two different types. `nn.ts` has the layer kind ("RNN" | "LSTM" | "GRU")
+    #       and `rnn.ts` the kernel kind ("lstm" | "gru" | "rnn_tanh" | "rnn_relu").
+    #       Confusingly close, and not duplicates.
     #
-    # They stay listed **by name** rather than as a count, so a fourth blows up at
-    # once while these three show the list is not a number left half-done. Deciding
-    # which spelling survives is borch.ts's call and not this check's — what this
-    # check owes is that they stopped being invisible.
+    #   bitwiseNot_ / bitwise_not_
+    #   logicalNot_ / logical_not_
+    #       Both real and both wanted. The camelCase ones are written by hand; the
+    #       snake_case ones are generated from the WGSL table, whose keys are
+    #       **torch's own names** — `logical_and`, `bitwise_xor`,
+    #       `bitwise_left_shift`, nine of them. So the snake_case is not a
+    #       convention leaking out of the kernels; it is torch's spelling, and a
+    #       learner typing `x.bitwise_not_()` is typing the name torch gave them.
+    #
+    # Listed **by name** rather than as a count, so a fourth blows up at once and
+    # these three show the list is not a number left half-done.
     KNOWN = {"Rnnkind", "bitwisenot_", "logicalnot_"}
     clash = {k: v for k, v in _collisions(names).items() if k not in KNOWN}
     assert not clash, (
