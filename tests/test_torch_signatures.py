@@ -57,17 +57,41 @@ V.use(BT)
 # name -> why ours takes different arguments. Nothing here yet; see the docstring.
 DELIBERATE: dict[str, str] = {}
 
-# `*args`/`**kwargs` are what `object.__init__` shows for a class that defines none —
-# an Enum, for instance. They are not arguments anybody passes.
-_NOT_ARGUMENTS = ("self", "args", "kwargs")
+# The pairs this check **cannot** compare, because one side or the other is variadic.
+# Both are Enums, which define no `__init__`, so `object.__init__`'s `(*args, **kwargs)`
+# is what shows — there is nothing to compare and nothing wrong. Listed by name rather
+# than counted so that a third one fails here instead of joining them in silence.
+UNCOMPARABLE = ("AutoAugmentPolicy", "InterpolationMode", "ToTensor")
+
+_NOT_ARGUMENTS = ("self",)
 
 
 def _arguments(cls):
+    """The parameter names in order, or `None` when the signature cannot be compared.
+
+    **A variadic signature is not a short signature.** `*args`/`**kwargs` are what
+    `object.__init__` shows for a class that defines none — an Enum, for instance — and
+    they are also what a wrapper writes when it accepts everything and passes it on.
+    Those two look identical here and mean opposite things.
+
+    This used to strip them by name and compare the remainder as though it were the whole
+    list. That is a filter removing part of a record and letting what is left stand in for
+    it, and it does not go quiet: for the two Enums it compared `[] == []` and **passed
+    while measuring nothing.** Another session hit the same shape an hour ago in
+    `ts_signatures.py`, where dropping `*args` from nine core loss constructors left
+    `[reduction]` and reported all nine as defects in the other library.
+
+    So it returns `None`, the same as an unreadable signature, and the count of pairs that
+    could not be compared is asserted below rather than left implicit.
+    """
     try:
         sig = inspect.signature(cls.__init__)
     except (TypeError, ValueError):                             # pragma: no cover
         return None
-    return [name for name in sig.parameters if name not in _NOT_ARGUMENTS]
+    parameters = list(sig.parameters.values())
+    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in parameters):
+        return None
+    return [p.name for p in parameters if p.name not in _NOT_ARGUMENTS]
 
 
 def _shared():
@@ -101,11 +125,14 @@ def test_every_transform_takes_torchs_arguments_in_torchs_order():
     loudly; an argument missing from the middle makes a positional call succeed and
     mean something else, which is the shape that reached production here.
     """
-    wrong = []
+    wrong, uncomparable = [], []
     for name, ours, theirs in _shared():
         if name in DELIBERATE:
             continue
         mine, torchs = _arguments(ours), _arguments(theirs)
+        if mine is None or torchs is None:
+            uncomparable.append(name)
+            continue
         if mine != torchs:
             missing = [a for a in torchs if a not in mine]
             extra = [a for a in mine if a not in torchs]
@@ -113,6 +140,14 @@ def test_every_transform_takes_torchs_arguments_in_torchs_order():
                 f"{name}\n      ours  : {', '.join(mine)}\n"
                 f"      torch : {', '.join(torchs)}\n"
                 f"      missing={missing or 'none'} extra={extra or 'none'}")
+    # **What could not be compared is said out loud.** Silence here is the same silence
+    # as a pass, and these are the rows where the check knows least.
+    assert len(uncomparable) <= len(UNCOMPARABLE), (
+        "more transforms than expected have a variadic signature on one side, so they "
+        "are not being compared at all:\n    " + ", ".join(sorted(uncomparable))
+        + f"\n\n  Expected at most {len(UNCOMPARABLE)}: {', '.join(UNCOMPARABLE)}.\n"
+          "  A wrapper that accepts everything reads exactly like a class that takes "
+          "nothing.")
     assert not wrong, (
         "transforms whose argument list is not torchvision's:\n    "
         + "\n    ".join(wrong) +
@@ -135,6 +170,8 @@ def test_every_function_takes_torchs_arguments_in_torchs_order():
         if name in DELIBERATE:
             continue
         mine, torchs = _arguments(ours), _arguments(theirs)
+        if mine is None or torchs is None:
+            continue
         if mine != torchs:
             wrong.append(f"{name}\n      ours  : {', '.join(mine)}\n"
                          f"      torch : {', '.join(torchs)}")
@@ -149,7 +186,8 @@ def test_no_deliberate_row_explains_a_transform_that_matches():
     contradiction `test_gap.py` catches in the other table, and the same way a stale
     reason outlives the thing it described."""
     stale = [name for name, ours, theirs in _shared()
-             if name in DELIBERATE and _arguments(ours) == _arguments(theirs)]
+             if name in DELIBERATE and _arguments(ours) is not None
+             and _arguments(ours) == _arguments(theirs)]
     assert not stale, (
         f"`DELIBERATE` explains transforms that already match torchvision: {stale}\n"
         "  Take the row out — it reads as a difference to the next person.")
