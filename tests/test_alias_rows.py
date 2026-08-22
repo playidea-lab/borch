@@ -57,18 +57,44 @@ def _flat(name):
     return name.replace("_", "").lower() + tail
 
 
+# Two patterns of different strictness over the same table. `HEADS` only has to find
+# where a row **starts**; `ROW` has to take it apart. Comparing their counts is what makes
+# an extractor that has gone blind say so — see `_rows`.
+HEADS = re.compile(r'^\s*"[a-z0-9]+::"\s*:', re.M)
+ROW = re.compile(r'^\s*"([a-z0-9]+::)":\s*\((\d+),\s*((?:"[^"]*"\s*)+)\)', re.M)
+
+
+def _rows():
+    """Every row of the gap table, taken apart. **And it says how many it read.**
+
+    The reason may run to a second line — Python joins adjacent string literals, and one
+    row is written that way. An expression ending at the first closing quote skipped it
+    entirely, and skipped it **in silence**: a row it cannot see contributes nothing
+    rather than raising, so this stayed green while reading one row fewer than exists.
+    It was `unpool::`, twenty cases, invisible for as long as this reader has existed.
+
+    Widening the expression fixes that row. It does not fix the shape, which is that
+    **the absence of state is not the absence of failure** — a reader that finds nothing
+    at all passes just as quietly. So the count is checked against a second, much weaker
+    pattern that only has to find where a row begins. The two disagreeing means the
+    taking-apart lost something, and that is now a failure rather than a smaller table.
+    """
+    text = RUNNER.read_text(encoding="utf-8")
+    rows = [(head, n, "".join(re.findall(r'"([^"]*)"', body)))
+            for head, n, body in ROW.findall(text)]
+    started = len(HEADS.findall(text))
+    assert len(rows) == started, (
+        f"the gap table has {started} rows and this took apart {len(rows)}. What it lost "
+        "is invisible to every check reading this table — a row it cannot see contributes "
+        "nothing rather than raising.\n"
+        f"  read: {sorted(head for head, _, _ in rows)}")
+    assert rows, f"not one row was read out of {RUNNER.name} — this reader is spinning."
+    return rows
+
+
 def _alias_rows():
     """The prefixes marked `별칭` in the gap table."""
-    text = RUNNER.read_text(encoding="utf-8")
-    # **The reason may run to a second line.** Python joins adjacent string literals, and
-    # one row in the table is written that way; an expression ending at the first closing
-    # quote skipped it entirely — silently, because a row it cannot see contributes
-    # nothing rather than raising. It was `unpool::`, and it is marked `아직` rather than
-    # `별칭`, so nothing this check decides changed. That is the reason to fix it now:
-    # the next two-line row is one nobody will think to look for.
-    rows = [(head, n, "".join(re.findall(r'"([^"]*)"', body)))
-            for head, n, body in re.findall(
-                r'^\s*"([a-z0-9]+::)":\s*\((\d+),\s*((?:"[^"]*"\s*)+)\)', text, re.M)]
+    rows = _rows()
     # **Read as a leading word.** It was `"별칭" in why` at first, and that caught
     # `dtype::`'s reason, where "형 별칭" (type alias) is the same word meaning something else
     # — the marker is one word at the head of the row, which is not the same as the letters
