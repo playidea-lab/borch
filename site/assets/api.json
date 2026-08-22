@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 683,
+  "done": 684,
   "stale": 0,
   "missing": 65
  },
@@ -926,22 +926,23 @@
       },
       {
        "name": "variance",
-       "signature": "variance(correction?: number): Tensor",
-       "doc": "Variance. **torch's default is the unbiased estimate (dividing by\nn-1)** — left at `correction=0` the value comes out subtly smaller, and\nthat becomes the place it diverges quietly inside a normalisation\nlayer.",
+       "signature": "variance(dim?: number, correction?: number, keepdim?: boolean): Tensor",
+       "doc": "Variance over `dim`, or over the whole tensor when `dim` is left out.\n\n**torch's default is the unbiased estimate (dividing by n-1)** — left at\n`correction=0` the value comes out subtly smaller, and that becomes the\nplace it diverges quietly inside a normalisation layer.\n\n**`dim` is the first argument because torch puts it there**, and because\nevery neighbouring reduction here already does — `mean(dim, keepdim,\ndtype)`, `sumDim`, `amax`. This pair took `correction` first, alone among\nthem, and `x.std(0)` is a line anybody transcribing torch writes: it\ncompiled, it ran, and it returned a scalar at correction 0 where torch\nreturns one value per column. Not a crash, an answer — and a different\nrank, so it broke somewhere else entirely.\n\nThe signature axis (`tests/ts_signatures.py`) is what found it. The\nneighbour `sum(dim, keepdim, dtype)` has the same shape and is safe by\naccident: its first argument is a `DType`, so `x.sum(0)` will not\ncompile. `number` is not narrow enough to catch anything.",
        "section": {
         "ko": "Reductions",
         "en": "Reductions"
        },
-       "doc_ko": "분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면\n값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다."
+       "doc_ko": "`dim` 축의 분산. `dim` 을 안 주면 텐서 전체.\n\n**torch 의 기본은 불편추정(n-1 로 나눈다)** — `correction=0` 으로 두면 값이 미묘하게\n작아지고, 그 자리가 정규화 층 안에서 조용히 갈리는 자리가 된다.\n\n**`dim` 이 첫 인자인 것은 torch 가 거기 두기 때문**이고, 이웃한 축약들이 이미 전부\n그렇게 하기 때문이다 — `mean(dim, keepdim, dtype)`·`sumDim`·`amax`. 이 짝만 홀로\n`correction` 을 먼저 받고 있었는데, `x.std(0)` 은 torch 를 옮겨 적는 사람이 그냥\n치는 줄이다. 그것이 컴파일되고, 돌고, torch 가 열마다 하나씩 돌려주는 자리에서\n**correction 0 의 스칼라**를 돌려줬다. 터진 것이 아니라 답이 나온 것이고, 게다가\n계수가 달라서 엉뚱한 자리에서 깨졌다.\n\n서명 축(`tests/ts_signatures.py`)이 찾았다. 값 검사는 하나도 못 봤다. 이웃인\n`sum(dim, keepdim, dtype)` 은 같은 모양인데 우연히 안전하다 — 첫 인자가 `DType` 이라\n`x.sum(0)` 이 아예 컴파일이 안 된다. `number` 는 무엇을 잡기에 충분히 좁지 않다."
       },
       {
        "name": "std",
-       "signature": "std(correction?: number): Tensor",
-       "doc": "",
+       "signature": "std(dim?: number, correction?: number, keepdim?: boolean): Tensor",
+       "doc": "The standard deviation. See `variance` for why `dim` comes first.",
        "section": {
         "ko": "Reductions",
         "en": "Reductions"
-       }
+       },
+       "doc_ko": "표준편차. `dim` 이 먼저 오는 이유는 `variance` 를 보라."
       },
       {
        "name": "squeeze",
@@ -4608,7 +4609,7 @@
       },
       {
        "name": "stdMean",
-       "signature": "stdMean(correction?: number): { std: Tensor; mean: Tensor; }",
+       "signature": "stdMean(dim?: number, correction?: number, keepdim?: boolean): { std: Tensor; mean: Tensor; }",
        "doc": "The standard deviation and mean together. One name for the same reason\nas `aminmax`.",
        "torch": "std_mean",
        "section": {
@@ -4619,7 +4620,7 @@
       },
       {
        "name": "varMean",
-       "signature": "varMean(correction?: number): { variance: Tensor; mean: Tensor; }",
+       "signature": "varMean(dim?: number, correction?: number, keepdim?: boolean): { variance: Tensor; mean: Tensor; }",
        "doc": "",
        "torch": "var_mean",
        "section": {

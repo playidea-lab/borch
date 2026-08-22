@@ -2480,8 +2480,8 @@
     "src": "fb9526ed3bd8"
   },
   "tensor/Tensor.variance": {
-    "ko": "분산. **torch 의 기본은 불편추정(n-1 로 나눔)이다** — `correction=0` 으로 두면\n값이 미묘하게 작아지고, 그것이 정규화 층에서 조용히 갈리는 자리가 된다.",
-    "src": "e32d655cc2a1"
+    "ko": "`dim` 축의 분산. `dim` 을 안 주면 텐서 전체.\n\n**torch 의 기본은 불편추정(n-1 로 나눈다)** — `correction=0` 으로 두면 값이 미묘하게\n작아지고, 그 자리가 정규화 층 안에서 조용히 갈리는 자리가 된다.\n\n**`dim` 이 첫 인자인 것은 torch 가 거기 두기 때문**이고, 이웃한 축약들이 이미 전부\n그렇게 하기 때문이다 — `mean(dim, keepdim, dtype)`·`sumDim`·`amax`. 이 짝만 홀로\n`correction` 을 먼저 받고 있었는데, `x.std(0)` 은 torch 를 옮겨 적는 사람이 그냥\n치는 줄이다. 그것이 컴파일되고, 돌고, torch 가 열마다 하나씩 돌려주는 자리에서\n**correction 0 의 스칼라**를 돌려줬다. 터진 것이 아니라 답이 나온 것이고, 게다가\n계수가 달라서 엉뚱한 자리에서 깨졌다.\n\n서명 축(`tests/ts_signatures.py`)이 찾았다. 값 검사는 하나도 못 봤다. 이웃인\n`sum(dim, keepdim, dtype)` 은 같은 모양인데 우연히 안전하다 — 첫 인자가 `DType` 이라\n`x.sum(0)` 이 아예 컴파일이 안 된다. `number` 는 무엇을 잡기에 충분히 좁지 않다.",
+    "src": "0994a8805ae1"
   },
   "tensor/Tensor.vdot": {
     "ko": "벡터 내적. **복소수면 왼쪽을 켤레로 본다** — 실수에서는 `dot` 과 같다.",
@@ -2730,5 +2730,9 @@
   "linalg/tensorinv": {
     "ko": "`tensorinv(A, ind=2)` — `A` 를 축 `ind` 에서 행렬로 접은 것의 역.\n\n메서드 이름은 `tensorInv` 이고, 이것도 이미 있었다. 위의 `tensorsolve` 를 보라.",
     "src": "bd5e1d9375f9"
+  },
+  "tensor/Tensor.std": {
+    "ko": "표준편차. `dim` 이 먼저 오는 이유는 `variance` 를 보라.",
+    "src": "a46b80a60076"
   }
 }

@@ -62,7 +62,13 @@ pytest.importorskip("numpy")
 # folded, because `t` is too short a name to fold everywhere on the strength of one
 # namespace.
 DIFFER = {
-    "Tensor": 4,
+    # 4 → 3. `std(dim, unbiased, keepdim)` against `std(correction)`: this pair took the
+    # correction first, alone among the reductions, so `x.std(0)` — the line anybody
+    # transcribing torch writes — compiled, ran and returned a scalar at correction 0
+    # where torch returns one value per column. `dim` comes first now, as it already did
+    # in `mean`, `sumDim` and `amax`. Nothing else in the repository was watching that
+    # place: the golden asks `std()` three times and never with an argument.
+    "Tensor": 3,
     "nn": 30,
     "nn.functional": 2,
     "optim": 7,

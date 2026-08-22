@@ -2204,31 +2204,55 @@ export class Tensor implements Node<Tensor> {
   }
 
   /**
-   * Variance. **torch's default is the unbiased estimate (dividing by
-   * n-1)** — left at `correction=0` the value comes out subtly smaller, and
-   * that becomes the place it diverges quietly inside a normalisation
-   * layer.
+   * Variance over `dim`, or over the whole tensor when `dim` is left out.
+   *
+   * **torch's default is the unbiased estimate (dividing by n-1)** — left at
+   * `correction=0` the value comes out subtly smaller, and that becomes the
+   * place it diverges quietly inside a normalisation layer.
+   *
+   * **`dim` is the first argument because torch puts it there**, and because
+   * every neighbouring reduction here already does — `mean(dim, keepdim,
+   * dtype)`, `sumDim`, `amax`. This pair took `correction` first, alone among
+   * them, and `x.std(0)` is a line anybody transcribing torch writes: it
+   * compiled, it ran, and it returned a scalar at correction 0 where torch
+   * returns one value per column. Not a crash, an answer — and a different
+   * rank, so it broke somewhere else entirely.
+   *
+   * The signature axis (`tests/ts_signatures.py`) is what found it. The
+   * neighbour `sum(dim, keepdim, dtype)` has the same shape and is safe by
+   * accident: its first argument is a `DType`, so `x.sum(0)` will not
+   * compile. `number` is not narrow enough to catch anything.
    */
-  variance(correction = 1): Tensor {
+  variance(dim?: number, correction = 1, keepdim = false): Tensor {
     // **It stops where torch stops** (measured). A division or a square root has no
     // answer that fits an integer cell — promoted quietly to float the way numpy does,
     // that code then breaks on real torch.
     this.needsFloat("variance is for floating point only", "std and var only support floating point and complex dtypes");
-    const n = this.size;
     // **Detaching the mean leaves the gradient unchanged.** The share that passes
     // through the mean is proportional to Σ(x−m), and that sum is 0 by definition, so it
     // vanishes entirely. Left attached it becomes a computation where two large terms
     // cancel, so detaching is also the more accurate value.
-    const centered = this.sub(this.mean().detach());
-    return centered.square().sum().div(Tensor.full([], n - correction));
+    if (dim === undefined) {
+      const n = this.size;
+      const centered = this.sub(this.mean().detach());
+      return centered.square().sum().div(Tensor.full([], n - correction));
+    }
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    const n = this.shape[axis] ?? 1;
+    // The mean keeps the axis so it broadcasts back over the centred values; the fold
+    // that follows is the one that answers to `keepdim`.
+    const centered = this.sub(this.mean(axis, true).detach());
+    return centered.square().sumDim(axis, keepdim).div(Tensor.full([], n - correction));
   }
 
-  std(correction = 1): Tensor {
+  /** The standard deviation. See `variance` for why `dim` comes first. */
+  std(dim?: number, correction = 1, keepdim = false): Tensor {
     // **It stops where torch stops** (measured). A division or a square root has no
     // answer that fits an integer cell — promoted quietly to float the way numpy does,
     // that code then breaks on real torch.
     this.needsFloat("std is for floating point only", "std and var only support floating point and complex dtypes");
-    return this.variance(correction).sqrt();
+    return this.variance(dim, correction, keepdim).sqrt();
   }
 
   /**
@@ -8238,12 +8262,26 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The standard deviation and mean together. One name for the same reason
    * as `aminmax`.
    */
-  stdMean(correction = 1): { std: Tensor; mean: Tensor } {
-    return { std: this.std(correction), mean: this.mean() };
+  stdMean(
+    dim?: number, correction = 1, keepdim = false,
+  ): { std: Tensor; mean: Tensor } {
+    return {
+      std: this.std(dim, correction, keepdim),
+      // **The mean has to fold the same axis.** It used to be `this.mean()`
+      // regardless, so asking for a per-column standard deviation would have
+      // returned it beside the mean of everything — two answers of different
+      // rank in one object, and only one of them about the axis asked for.
+      mean: this.mean(dim, keepdim),
+    };
   }
 
-  varMean(correction = 1): { variance: Tensor; mean: Tensor } {
-    return { variance: this.variance(correction), mean: this.mean() };
+  varMean(
+    dim?: number, correction = 1, keepdim = false,
+  ): { variance: Tensor; mean: Tensor } {
+    return {
+      variance: this.variance(dim, correction, keepdim),
+      mean: this.mean(dim, keepdim),
+    };
   }
 
   /**

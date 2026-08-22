@@ -842,6 +842,47 @@ export async function report(): Promise<Report> {
       (linalg as unknown as Record<string, unknown>)[missing] === undefined);
   }
 
+  // ── std and variance: the axis argument that was not there ──────────
+  //
+  // **The golden asks `std()` three times and never with an argument**, so it could not
+  // see this. `std(correction = 1)` took the correction first, alone among the reductions
+  // — `mean`, `sumDim`, `amax` all take `dim` — and `x.std(0)`, which is what anybody
+  // transcribing torch writes, compiled, ran, and returned a **scalar at correction 0**
+  // where torch returns one value per column. Not a crash: an answer, of a different
+  // rank, breaking somewhere else entirely.
+  //
+  // Found by the signature axis (`tests/ts_signatures.py`), not by any value check. The
+  // values below are real torch's, taken on the same input.
+  const grid = keepAlive(Tensor.from([1, 2, 3, 4, 6, 8], [2, 3]));
+
+  const nearAll = async (
+    name: string, got: Tensor, expected: number[],
+  ): Promise<void> => {
+    const seen = Array.from(await got.toArray());
+    want(name, seen.length === expected.length
+      && seen.every((v, i) => near(v, expected[i] ?? NaN, 1e-5)),
+      `${seen.map((v) => v.toFixed(4)).join(", ")}`);
+  };
+
+  await nearAll("std(0) folds axis 0 — torch's answer",
+    grid.std(0), [2.1213202, 2.8284271, 3.5355339]);
+  await nearAll("std(1) folds axis 1", grid.std(1), [1, 2]);
+  await nearAll("variance(0, 0) takes the correction second",
+    grid.variance(0, 0), [2.25, 4, 6.25]);
+  want("std() with no axis is still the whole tensor",
+    near(await grid.std().item(), 2.6076810, 1e-5), `${await grid.std().item()}`);
+  want("keepdim keeps the folded axis",
+    grid.std(1, 1, true).shape.join(",") === "2,1", grid.std(1, 1, true).shape.join(","));
+
+  // **`stdMean` has to fold the same axis in both halves.** It returned `this.mean()`
+  // regardless of the axis, so asking for a per-column standard deviation gave it beside
+  // the mean of everything — two answers of different rank in one object.
+  const pair = grid.stdMean(0);
+  want("stdMean folds the same axis in both halves",
+    pair.std.shape.join(",") === "3" && pair.mean.shape.join(",") === "3",
+    `std [${pair.std.shape}] · mean [${pair.mean.shape}]`);
+  await nearAll("stdMean's mean is the mean over that axis", pair.mean, [2.5, 4, 5.5]);
+
   // ── vision: the place a widened type opened ──────────────────────────
   //
   // **The golden cannot ask this.** `Transform` widened to take an array as well, for
