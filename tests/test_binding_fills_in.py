@@ -176,6 +176,63 @@ def _ts_surface():
     return {_flat(str(name).split(".")[-1]) for name in declared}
 
 
+def _collisions(names):
+    """Distinct names that `_flat` maps onto one key. **Empty is the requirement.**
+
+    A normaliser used to *compare* two names announces its mistakes: the wrong answer
+    comes back as a mismatch somebody reads. A normaliser used to build a **lookup
+    key** does not. Two names colliding merge into one entry, the set comes back one
+    row short, and a lookup of either succeeds — no mismatch, no report, and a count
+    that still looks plausible.
+
+    Both users of `_flat` build a set this way, so this is the shape that has to be
+    asserted rather than hoped for. It is the same defect that hid `tensor` behind
+    the class `Tensor` and `flatten` behind the layer `nn.Flatten` — those were found
+    by keeping the initial capital, and this makes the next one loud instead.
+    """
+    seen, clash = {}, {}
+    for name in names:
+        key = _flat(name)
+        if key in seen and seen[key] != name:
+            clash.setdefault(key, {seen[key]}).add(name)
+        seen.setdefault(key, name)
+    return clash
+
+
+def test_the_flattening_does_not_merge_two_names_into_one():
+    """`_flat` has to be injective **over the names it is actually given.**
+
+    Not injective in general — `a_b` and `ab` collide by construction and always
+    will. What matters is whether anything in borch.ts's declared surface or torch's
+    collides today, because that is what the two sets are built from.
+    """
+    index = ROOT / "site" / "assets" / "api-index.json"
+    if not index.exists():
+        pytest.skip("no generated index — run npm run build:ts && npm run docs:api")
+    names = [str(path).split(".")[-1]
+             for path in json.loads(index.read_text(encoding="utf-8"))]
+    # **Not yet judged**, and each is borch.ts declaring one idea under two spellings
+    # rather than a fault in `_flat`. Found by this check on its first run:
+    #
+    #   RNNKind / RnnKind          two type names for one thing
+    #   bitwiseNot_ / bitwise_not_ camelCase and snake_case side by side, in a
+    #   logicalNot_ / logical_not_ library whose whole surface is camelCase
+    #
+    # They stay listed **by name** rather than as a count, so a fourth blows up at
+    # once while these three show the list is not a number left half-done. Deciding
+    # which spelling survives is borch.ts's call and not this check's — what this
+    # check owes is that they stopped being invisible.
+    KNOWN = {"Rnnkind", "bitwisenot_", "logicalnot_"}
+    clash = {k: v for k, v in _collisions(names).items() if k not in KNOWN}
+    assert not clash, (
+        "two declared names flatten onto one key, so the set is short and a lookup of\n"
+        "either succeeds:\n  "
+        + "\n  ".join(f"{key} ← {' '.join(sorted(group))}"
+                      for key, group in sorted(clash.items()))
+        + "\n\n  A normaliser building a lookup key cannot report its own mistakes —\n"
+          "  a collision merges two entries and nothing anywhere mismatches.")
+
+
 def _touches_the_ts_side(node):
     """Whether this function calls a borch.ts handle **even once.**
 
