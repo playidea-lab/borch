@@ -19,27 +19,50 @@ that does not exist breaks that point first.
 
 ## What is absent, and why
 
-- **`datasets`** — the fetching side is blocked. Measured: `cs.toronto.edu` does
-  not send `Access-Control-Allow-Origin`, so a browser cannot fetch the CIFAR
-  originals. Not the kind of thing diligence fixes. And torch's `download=True`
-  keeps it under `root` and reuses it on the next run, while Pyodide's filesystem
-  is gone on a refresh — a place where the same code behaves differently with no
-  exception, which must not be imitated. **Once the bytes are in hand it already
-  works**
-  (`fetch_cached`·`cache_put`·`TensorDataset`)
-- **`ops`** — `nms` is short in numpy, so "it is large" would be a false reason.
-  The real reason is that nobody stands in front of it. Detection needs a
-  pre-trained backbone and COCO-scale data to reach the end, and until then `nms`
-  stays a correct function with nowhere to go. A surface with no users grows no
-  cases, and **surfaces with no cases were every place this repository was quietly
-  wrong**
-- **pre-trained weights** — a `.pth` is a pickle inside a zip and `torch.load`
-  revives the classes through their module paths. Reading it means imitating
-  torch's internal structure, and getting it subtly wrong brings in **the wrong
-  numbers in correctly shaped weights.** ResNet-18 alone is 45MB on top of that,
-  and above all, once `pretrained=True` runs people compare against the published
-  top-1 — bit equivalence is this project's explicit non-goal, so that is a promise
-  it cannot keep
+- **`datasets`** — **torchvision's own addresses are unreachable from a browser**,
+  which is narrower than "the fetching side is blocked" and is what the measurement
+  actually says. Re-measured: `cs.toronto.edu` redirects to `cave.cs.toronto.edu`
+  and neither sends `Access-Control-Allow-Origin`, and neither does
+  `ossci-datasets.s3.amazonaws.com`, which is torchvision's **first** MNIST mirror.
+  Hosts that do send it exist — `raw.githubusercontent.com` and `huggingface.co`
+  both answer with the header — and torchvision itself keeps a `mirrors` list for
+  exactly this kind of reason.
+
+  The second half of the old reason was **stale rather than narrow**. It said
+  Pyodide's filesystem is gone on a refresh, so caching could not work; but
+  `borch_webgpu.fetch_cached` puts the bytes in **OPFS**, which survives one. The
+  machinery this paragraph said was missing was built next door and this file did
+  not hear about it — two files in one repository, each right on its own, with
+  nothing comparing them.
+
+  So what is left is a decision rather than an impossibility: a `datasets.CIFAR10`
+  whose `download=True` reaches a mirror is the same code doing the same thing from
+  a different address, and a `download=True` that raises is a trap. **Once the bytes
+  are in hand it already works** — `TensorDataset` is in `borch`, and `fetch_cached`
+  and `cache_put` are in `borch_webgpu` rather than here, which the old wording did
+  not say and a reader following it would not find
+- **`ops`** — `nms` is short in numpy, so "it is large" would be a false reason. The
+  real one was "nobody stands in front of it", and counting the namespace shows that
+  reason is **wider than what it justifies**. Of the 39 public callables, 16 are
+  `nn.Module` layers and 12 more need a model's feature maps or predictions; those 28
+  do need a detector, and there is no detector in the catalogue. The remaining **11
+  are box geometry with no weights anywhere in them** — `nms`, `batched_nms`,
+  `box_iou`, `box_area`, `box_convert`, `clip_boxes_to_image`, `masks_to_boxes`,
+  `remove_small_boxes` and the three generalised IoUs. They are deterministic, so
+  they would have golden cases from the first day, and the person in front of them is
+  not somebody running a detector but somebody learning what IoU and NMS compute —
+  which is who this project is for. **A surface with no users grows no cases**, and
+  that is still true of the 28
+- **`models` and `pretrained=True`** — this used to read "pre-trained weights", and
+  that is no longer what is refused. **Weights load in this project**: `bimm` holds
+  the architecture catalogue and `borch-hub` fetches a manifest, checks its hash and
+  builds the model. What is refused is narrower and still stands. A `.pth` is a
+  pickle inside a zip and `torch.load` revives the classes through their module
+  paths; reading it means imitating torch's internal structure, and getting it subtly
+  wrong brings **the wrong numbers in correctly shaped weights** — which is why the
+  hub carries its own manifest and hash instead. And once `pretrained=True` runs,
+  people compare against the published top-1, which bit equivalence being an explicit
+  non-goal makes a promise this cannot keep
 
 ## The random numbers differ from torch's — written down because they cannot be
 imitated
