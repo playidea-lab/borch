@@ -391,3 +391,43 @@ def test_every_console_prefix_is_printed_on_one_side_and_read_on_the_other():
         + "\n  ".join(f"{k} in {', '.join(v)}" for k, v in sorted(unprinted.items()))
         + "\n\n  The filter matches nothing, so the trace is empty and every run stays "
           "green. It shows on the day something hangs.")
+
+
+# The size of each allowance, pinned. Raising one is allowed and takes a commit.
+ALLOWANCE_SIZES = {"QUOTED_CASE_NAMES": 2, "TS_QUOTED": 5}
+
+
+def test_the_allowances_do_not_grow_unremarked():
+    """**An exemption list is a bucket that makes the number better.**
+
+    Both lists are subtracted from the text *before* the no-Korean rule looks at it. Two
+    checks guard each entry — it has to be a real key in `tests/golden.json`, and it has
+    to be cited somewhere — and **nothing watches how many entries there are.**
+
+    Every guard still passes as the list grows. Each new entry is a genuine golden name
+    genuinely quoted; the rule simply covers less of the file each time. Legitimate growth
+    and erosion are indistinguishable from inside, which is exactly why the size has to be
+    a decision somebody records rather than a number that drifts.
+
+    Another session found the same shape in the gap table today, in its sharpest form: a
+    bucket named `not API, uncounted` that removes a name from the *denominator*, beside
+    one named `declined` that keeps it. Putting a name in the first raises the coverage
+    percentage and putting it in the second does not, **the first is the more tempting one
+    when nobody wants to write a reason, and no check looked at its size.** Three
+    properties meeting at one place: tempting, flattering, unwatched.
+
+    This list has the first and the third. It did not have the second only because
+    subtracting text does not produce a percentage — and a rule quietly covering less of a
+    directory is the same loss without a number attached to notice it by.
+    """
+    actual = {"QUOTED_CASE_NAMES": len(QUOTED_CASE_NAMES), "TS_QUOTED": len(TS_QUOTED)}
+    grown = {k: (v, ALLOWANCE_SIZES[k]) for k, v in actual.items()
+             if v != ALLOWANCE_SIZES.get(k)}
+    assert not grown, (
+        "an allowance changed size:\n  "
+        + "\n  ".join(f"{k}: {now} entries against {was} written" for k, (now, was)
+                      in sorted(grown.items()))
+        + "\n\n  Growing one is allowed — a genuinely new Korean golden name may have to "
+          "be quoted.\n  Raise the number here in the same commit and say which name and "
+          "why, so that\n  the rule covering less is something somebody chose.\n"
+          "  Shrinking one is good news and wants the same line changed.")
