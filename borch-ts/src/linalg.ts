@@ -1,20 +1,22 @@
 /**
- * 작은 행렬의 선형대수 — **CPU 에서 돈다.**
+ * Linear algebra on small matrices — **it runs on the CPU.**
  *
- * ## 왜 CPU 인가
+ * ## Why the CPU
  *
- * LU·QR·야코비 회전은 전부 **순차적**이다. 앞 단계의 결과가 다음 단계의 입력이라
- * 병렬로 펼 자리가 거의 없고, 2×2 나 3×3 에서는 커널을 띄우고 결과를 읽어 오는
- * 왕복이 계산보다 비싸다. 자매도 같은 결론으로 numpy 를 쓴다.
+ * LU, QR and Jacobi rotations are all **sequential.** Each step's result is the next
+ * step's input, so there is almost nothing to spread in parallel, and at 2×2 or 3×3 the
+ * round trip of launching a kernel and reading the result back costs more than the
+ * computation. The sister library reaches the same conclusion and uses numpy.
  *
- * 대가는 이 연산들이 **비동기**가 된다는 것이다. GPU 에서 값을 읽어 와야 하니까.
- * 역방향에 필요한 것(역행렬, 행렬식 같은)은 순방향에서 미리 구해 붙잡아 두므로,
- * `backward()` 자체는 그대로 동기다.
+ * The price is that these operations become **asynchronous**, since a value has to be read
+ * back from the GPU. What the backward needs (the inverse, the determinant and so on) is
+ * computed in the forward and captured, so `backward()` itself stays synchronous.
  *
- * ## 배정도로 센다
+ * ## It computes in double precision
  *
- * 입력도 출력도 float32 지만 계산은 float64 다. 소거법은 자릿수를 잘 잃고, 그 손실이
- * 조건수가 나쁜 행렬에서 눈에 보인다 — 코어가 `erf` 에서 같은 이유로 float64 를 쓴다.
+ * The input and the output are float32 and the arithmetic is float64. Elimination loses
+ * digits easily, and that loss is visible on an ill-conditioned matrix — the core uses
+ * float64 in `erf` for the same reason.
  */
 
 /**
@@ -141,7 +143,7 @@ export function solve(f: LU, b: Mat, m: number): Mat {
     const src = f.piv[i] ?? i;
     for (let j = 0; j < m; j++) x[i * m + j] = b[src * m + j] ?? 0;
   }
-  // 아래 삼각 — 대각이 1 이라 나눗셈이 없다.
+  // The lower triangle — the diagonal is 1, so there is no division.
   for (let i = 1; i < n; i++) {
     for (let k = 0; k < i; k++) {
       const f2 = f.lu[i * n + k] ?? 0;
@@ -151,7 +153,7 @@ export function solve(f: LU, b: Mat, m: number): Mat {
       }
     }
   }
-  // 위 삼각.
+  // The upper triangle.
   for (let i = n - 1; i >= 0; i--) {
     for (let k = i + 1; k < n; k++) {
       const f2 = f.lu[i * n + k] ?? 0;
@@ -217,7 +219,8 @@ export function qr(a: Mat, n: number, m: number): { q: Mat; r: Mat } {
     norm = Math.sqrt(norm);
     if (norm === 0) continue;
     const head = r[k * m + k] ?? 0;
-    // 부호를 머리와 같게 잡아야 뺄셈에서 자릿수를 안 잃는다. LAPACK 도 그렇게 한다.
+    // Taking the sign to match the head is what keeps the subtraction from losing
+    // digits. LAPACK does the same.
     const alpha = head >= 0 ? -norm : norm;
     const v = new Float64Array(n);
     v[k] = head - alpha;
@@ -331,30 +334,36 @@ export function eigh(a: Mat, n: number): { values: Float64Array; vectors: Mat } 
 const JACOBI_SWEEPS = 60;
 const JACOBI_TOL = 1e-30;
 
-/* ── 비대칭 고유분해 ────────────────────────────────────────────────────
+/* ── The non-symmetric eigendecomposition ──────────────────────────────
  *
- * `eigh` 는 대칭만 받고 답이 실수다. 일반 행렬은 **답이 늘 복소수**다 — 회전 행렬은
- * 실수 고윳값이 아예 없다(±i). 그래서 다른 함수이고 다른 길이다.
+ * `eigh` takes symmetric matrices only and its answers are real. For a general matrix
+ * **the answer is always complex** — a rotation matrix has no real eigenvalue at all
+ * (±i). So it is a different function and a different route.
  *
- * 길은 셋으로 나뉜다.
+ * The route has three parts.
  *
- * 1. **헤센베르크 축약** — 하우스홀더 반사로 첫 아랫대각 아래를 0 으로 만든다.
- *    직교 변환이라 고윳값이 안 변하고, 다음 단계의 한 번 값을 `O(n³)` 에서
- *    `O(n²)` 으로 내린다.
- * 2. **이동 QR 반복** — 프랜시스 이중이동으로 실수 슈어 형태까지 민다. 결과는
- *    준삼각이다: 대각에 1×1(실수 고윳값)과 2×2(켤레 복소수 짝) 블록이 섞인다.
- * 3. **고유벡터** — 고윳값마다 `(A − λI)v = 0` 의 영공간을 복소수 소거법으로 푼다.
+ * 1. **Hessenberg reduction** — Householder reflections zero everything below the first
+ *    subdiagonal. It is an orthogonal transformation, so the eigenvalues do not change,
+ *    and it takes the next stage's per-iteration cost from `O(n³)` to `O(n²)`.
+ * 2. **Shifted QR iteration** — a Francis double shift pushes it to the real Schur form.
+ *    The result is quasi-triangular: the diagonal mixes 1×1 blocks (real eigenvalues) and
+ *    2×2 blocks (conjugate complex pairs).
+ * 3. **Eigenvectors** — per eigenvalue, the null space of `(A − λI)v = 0` is solved by
+ *    complex elimination.
  *
- * **왜 실수 산술로 슈어까지 가는가.** 복소수 QR 로 바로 갈 수도 있는데, 실수 입력의
- * 복소수 고윳값은 반드시 켤레 짝으로 오므로 실수 형태가 그 짝을 **정확히** 지킨다.
- * 복소수 경로로 가면 짝이 마지막 자릿수에서 갈라져 `합 = 대각합` 같은 항등식이
- * 반올림만큼 어긋난다 — 골든이 정확히 그것을 묻는다.
+ * **Why go to Schur in real arithmetic.** A complex QR could go there directly, and a
+ * real input's complex eigenvalues always come in conjugate pairs, so the real form keeps
+ * that pairing **exactly.** Through the complex route the pair separates in the last
+ * digits and an identity such as `sum = trace` is off by that rounding — which is exactly
+ * what the golden asks about.
  */
 
-/** 이 반복이 안 끝나면 그것은 수렴이 아니라 결함이다. LAPACK 도 상한을 둔다. */
+/** An iteration that does not finish is a defect rather than convergence. LAPACK caps it
+ *  too. */
 const QR_ITERATIONS = 100;
 
-/** 아랫대각을 0 으로 볼 문턱. 이웃 대각 성분의 크기에 견준 상대값이다. */
+/** The threshold below which a subdiagonal counts as 0. Relative to the size of the
+ *  neighbouring diagonal entries. */
 const DEFLATE_EPS = 1e-14;
 
 /**
@@ -383,8 +392,9 @@ export function hessenberg(a: Mat, n: number): { h: Mat; q: Mat } {
     for (let i = k + 1; i < n; i++) vv += (v[i] ?? 0) ** 2;
     if (vv === 0) continue;
 
-    // `H ← (I − 2vvᵀ/vᵀv)·H·(I − 2vvᵀ/vᵀv)`. 양쪽에서 반사해야 닮음변환이다 —
-    // 한쪽만 하면 모양은 헤센베르크가 되는데 고윳값이 달라진다.
+    // `H ← (I − 2vvᵀ/vᵀv)·H·(I − 2vvᵀ/vᵀv)`. Reflecting from both sides is what makes
+    // it a similarity transformation — one side alone gives the Hessenberg shape with
+    // different eigenvalues.
     for (let j = 0; j < n; j++) {
       let dot = 0;
       for (let i = k + 1; i < n; i++) dot += (v[i] ?? 0) * (h[i * n + j] ?? 0);
@@ -433,7 +443,8 @@ export function eigvals(a: Mat, n: number): { re: Float64Array; im: Float64Array
       re[0] = h[0] ?? 0;
       break;
     }
-    // 아랫대각이 이웃 대각들에 견줘 무시할 만하면 거기서 잘린다.
+    // Where the subdiagonal is negligible against its neighbouring diagonals, it splits
+    // there.
     let low = high;
     while (low > 0) {
       const sub = Math.abs(h[low * n + (low - 1)] ?? 0);
@@ -473,7 +484,8 @@ export function eigvals(a: Mat, n: number): { re: Float64Array; im: Float64Array
   return { re, im };
 }
 
-/** 2×2 블록의 고윳값 — 이차식의 두 근. 판별식이 음수면 켤레 짝이다. */
+/** A 2×2 block's eigenvalues — the two roots of the quadratic. A negative discriminant
+ *  means a conjugate pair. */
 function quadratic(a: number, b: number, c: number, d: number): [
   { re: number; im: number }, { re: number; im: number },
 ] {
@@ -489,11 +501,13 @@ function quadratic(a: number, b: number, c: number, d: number): [
 }
 
 /**
- * 한 번의 이동 QR 쓸기. **윌킨슨 이동**을 쓰되 복소수면 실수부만 쓴다.
+ * One shifted QR sweep. It uses the **Wilkinson shift**, taking the real part alone when
+ * the shift is complex.
  *
- * 여기 실수 산술만 있으므로 켤레 짝을 향해 수렴할 때는 이동이 실수부에서 멈춘다.
- * 그때 2×2 블록이 남고 위의 `quadratic` 이 그 짝을 정확히 낸다 — **짝을 반복으로
- * 좁히지 않는 것이 요점이다.** 좁히면 두 근이 마지막 자릿수에서 갈라진다.
+ * There is only real arithmetic here, so while converging towards a conjugate pair the
+ * shift stops at the real part. A 2×2 block is left, and `quadratic` above produces that
+ * pair exactly — **not narrowing the pair by iteration is the point.** Narrowing separates
+ * the two roots in the last digits.
  */
 function qrSweep(h: Mat, n: number, low: number, high: number): void {
   const a = h[(high - 1) * n + (high - 1)] ?? 0;
@@ -501,7 +515,8 @@ function qrSweep(h: Mat, n: number, low: number, high: number): void {
   const c = h[high * n + (high - 1)] ?? 0;
   const d = h[high * n + high] ?? 0;
   const [p, q] = quadratic(a, b, c, d);
-  // 두 근 중 `d` 에 가까운 쪽. 복소수면 실수부가 둘 다 같으므로 어느 쪽이든 같다.
+  // Whichever of the two roots is closer to `d`. When they are complex both share a real
+  // part, so either gives the same.
   const shift = Math.abs(p.re - d) <= Math.abs(q.re - d) ? p.re : q.re;
 
   const size = high - low + 1;
@@ -511,7 +526,8 @@ function qrSweep(h: Mat, n: number, low: number, high: number): void {
     sub[i * size + i] = (sub[i * size + i] ?? 0) - shift;
   }
   const { q: qq, r } = qr(sub, size, size);
-  // `RQ + σI` — 이것이 닮음변환이다. `Q` 는 직교이므로 `RQ = Qᵀ(A−σI)Q`.
+  // `RQ + σI` — this is the similarity transformation. `Q` is orthogonal, so
+  // `RQ = Qᵀ(A−σI)Q`.
   const next = matmul(r, qq, size, size, size);
   for (let i = 0; i < size; i++) {
     for (let j = 0; j < size; j++) {
@@ -521,19 +537,21 @@ function qrSweep(h: Mat, n: number, low: number, high: number): void {
 }
 
 /**
- * 고윳값 하나에 딸린 고유벡터 — `(A − λI)v = 0` 의 영공간.
+ * The eigenvector belonging to one eigenvalue — the null space of `(A − λI)v = 0`.
  *
- * `λ` 는 반올림 안에서만 고윳값이므로 `A − λI` 는 **거의** 특이하다. 부분 피벗
- * 소거를 끝까지 밀고, 피벗이 사실상 0 인 자리를 자유변수로 잡아 1 을 준다. 그것이
- * 영공간 방향이고, 고전적인 처방이다.
+ * `λ` is an eigenvalue only within rounding, so `A − λI` is **nearly** singular. Partial
+ * pivoting elimination is pushed to the end and a position whose pivot is effectively 0 is
+ * taken as a free variable and given 1. That is the null space direction, and it is the
+ * classical prescription.
  *
- * **크기는 1 로 맞추되 부호는 안 정한다.** torch 자신이 float32 와 float64 에서
- * 반대 부호를 낸다(실측). 골든도 부호에 안 기대고 정의(`A·V = V·diag(λ)`)를 묻는다.
+ * **The magnitude is normalised to 1 and the sign is not fixed.** torch itself gives
+ * opposite signs at float32 and float64 (measured). The golden does not lean on the sign
+ * either; it asks about the definition (`A·V = V·diag(λ)`).
  */
 function nullVector(
   a: Mat, n: number, lRe: number, lIm: number,
 ): { re: Float64Array; im: Float64Array } {
-  // `A − λI` 를 복소수로 편다. 실수부와 허수부를 나란히 든다.
+  // `A − λI` laid out as complex. The real and imaginary parts are held side by side.
   const mr = new Float64Array(n * n);
   const mi = new Float64Array(n * n);
   for (let i = 0; i < n; i++) {
@@ -551,7 +569,7 @@ function nullVector(
       const m = Math.hypot(mr[i * n + col] ?? 0, mi[i * n + col] ?? 0);
       if (m > mag) { mag = m; best = i; }
     }
-    if (mag < 1e-12) continue;          // 이 열은 자유변수다
+    if (mag < 1e-12) continue;          // this column is a free variable
     if (best !== row) {
       for (let j = 0; j < n; j++) {
         let t = mr[row * n + j] ?? 0;
@@ -568,7 +586,7 @@ function nullVector(
     for (let i = row + 1; i < n; i++) {
       const ar = mr[i * n + col] ?? 0;
       const ai = mi[i * n + col] ?? 0;
-      // `f = (a/p)` 를 복소수로.
+      // `f = (a/p)`, in complex.
       const fr = (ar * pr + ai * pi) / den;
       const fi = (ai * pr - ar * pi) / den;
       if (fr === 0 && fi === 0) continue;
@@ -585,9 +603,10 @@ function nullVector(
 
   const vr = new Float64Array(n);
   const vi = new Float64Array(n);
-  // **자유변수를 하나 잡아 1 을 준다.** 없으면(수치적으로 정칙으로 보이면) 마지막
-  // 열을 자유로 친다 — `λ` 가 고윳값인 이상 영공간은 반드시 있고, 못 찾았다는 것은
-  // 문턱이 짰다는 뜻이지 없다는 뜻이 아니다.
+  // **One free variable is taken and given 1.** With none (when it looks numerically
+  // non-singular) the last column is treated as free — as long as `λ` is an eigenvalue the
+  // null space is certainly there, and not finding one means the threshold was tight
+  // rather than that it does not exist.
   let free = n - 1;
   for (let col = n - 1; col >= 0; col--) {
     if (where[col] === -1) { free = col; break; }
@@ -665,7 +684,7 @@ export function svd(
   const at = transpose(a, rows, cols);
   const ata = matmul(at, a, cols, rows, cols);
   const { values, vectors } = eigh(ata, cols);
-  // eigh 는 오름차순이라 뒤집는다.
+  // eigh is ascending, so it is reversed.
   const s = new Float64Array(k);
   const v = new Float64Array(cols * k);
   for (let j = 0; j < k; j++) {
@@ -815,7 +834,8 @@ export function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat } {
   for (let i = 0; i < k; i++) {
     for (let j = 0; j < cols; j++) u[i * cols + j] = i <= j ? (packed[i * cols + j] ?? 0) : 0;
   }
-  // 교환을 되짚어 순열 행렬을 세운다. `A = P L U` 이므로 `P` 는 교환의 **역**이다.
+  // The swaps are retraced to stand up the permutation matrix. `A = P L U`, so `P` is
+  // **the inverse** of the swaps.
   const order = new Int32Array(rows);
   for (let i = 0; i < rows; i++) order[i] = i;
   for (let col = 0; col < k; col++) {
@@ -853,16 +873,19 @@ export function solveTriangular(
         x[i * m + j] = (x[i * m + j] ?? 0) - c * (x[k * m + j] ?? 0);
       }
     }
-    // **`unit` 이면 대각을 안 본다** — 1 로 친다. 안 지키면 값이 조용히 달라진다.
+    // **With `unit` the diagonal is not read** — it is taken as 1. Not honouring that
+    // changes the values quietly.
     const d = unit ? 1 : (a[i * n + i] ?? 1);
     for (let j = 0; j < m; j++) x[i * m + j] = (x[i * m + j] ?? 0) / d;
   }
   return x;
 }
 
-/** 스케일링·제곱에서 무엇을 "작다" 로 볼지. 1-노름이 이 아래면 테일러가 빨리 모인다. */
+/** What counts as "small" for scaling and squaring. Below this 1-norm the Taylor series
+ *  converges quickly. */
 const EXP_SMALL = 0.5;
-/** 그 조건에서 필요한 항의 개수. `0.5^18/18!` 은 배정도의 바닥보다 한참 아래다. */
+/** How many terms that condition needs. `0.5^18/18!` is far below double precision's
+ *  floor. */
 const EXP_TERMS = 18;
 
 /**
@@ -973,7 +996,8 @@ export function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat {
   const n = f.rows;
   const x = new Float64Array(n * m);
   for (let i = 0; i < n * m; i++) x[i] = b[i] ?? 0;
-  // 순방향에서 한 교환을 오른쪽에도 같은 순서로 적용한다.
+  // The swaps made in the forward are applied to the right-hand side in the same
+  // order.
   for (let col = 0; col < f.piv.length; col++) {
     const src = (f.piv[col] ?? col + 1) - 1;
     if (src === col) continue;

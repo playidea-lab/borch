@@ -46,21 +46,22 @@
 import { RuntimeError } from "./errors.js";
 import { device, makeNode, Tensor } from "./tensor.js";
 
-/** `n` 은 변환 길이, `nIn`·`nOut` 은 실제로 든 칸과 낼 칸. */
+/** `n` is the transform length; `nIn` and `nOut` are the cells actually held and
+ *  produced. */
 interface DftPlan {
   readonly n: number;
   readonly nIn: number;
   readonly nOut: number;
-  /** −1 이면 정변환, +1 이면 역변환. */
+  /** −1 is the forward transform and +1 the inverse. */
   readonly sign: number;
   readonly scale: number;
-  /** 입력이 인터리브 복소수인가. */
+  /** Whether the input is interleaved complex. */
   readonly inComplex: boolean;
-  /** 저장된 반쪽을 켤레로 되살릴 것인가(`irfft`). */
+  /** Whether to restore the stored half by conjugation (`irfft`). */
   readonly hermitian: boolean;
-  /** 결과의 실수부만 쓸 것인가(`irfft`). */
+  /** Whether to keep only the result's real part (`irfft`). */
   readonly realOut: boolean;
-  /** 축 앞쪽 칸 수와 뒤쪽 칸 수. 축을 안 옮기려고 든다. */
+  /** The cell counts before and after the axis. Held so the axis need not be moved. */
   readonly outer: number;
   readonly inner: number;
 }
@@ -69,15 +70,18 @@ function shader(p: DftPlan): string {
   const threads = p.outer * p.nOut * p.inner;
   const stride = Math.min(Math.max(1, Math.ceil(threads / 64)), 65535) * 64;
   const step = p.inComplex ? 2 : 1;
-  // **입력 한 칸 집기.** 없는 칸은 0 이고(길이를 늘려 물은 자리), 허미시안이면
-  // 반대쪽 짝을 켤레로 되살린다.
-  // **허수부는 실수부 바로 옆이다.** 복소수 저장은 칸마다 `(re, im)` 을 끼워
-  // 넣는다 — 쓰는 쪽이 `Out[o*2]`·`Out[o*2+1]` 로 그렇게 적고 있다.
+  // **Picking one input cell.** A cell that is not there is 0 (where the length was
+  // extended in the request), and in the Hermitian case the opposite partner is restored
+  // by conjugation.
+  // **The imaginary part sits immediately beside the real one.** Complex storage
+  // interleaves `(re, im)` per cell — the writing side says so with `Out[o*2]` and
+  // `Out[o*2+1]`.
   //
-  // 여기 오래 `A[at + inner]` 라고 적혀 있었다. **마지막 축에서는 `inner` 가 1 이라
-  // 우연히 같다.** 그래서 1 차원 케이스는 전부 통과했고, 복소수를 **마지막이 아닌
-  // 축**으로 변환하는 순간 허수부를 엉뚱한 칸에서 읽었다. 실수 입력은 이 줄을
-  // 아예 안 지나므로 두 축 다 맞았다 — 세 조건이 겹쳐야 드러나는 자리였다.
+  // This said `A[at + inner]` for a long time. **On the last axis `inner` is 1, so it
+  // happens to be the same.** Every 1-D case passed, and transforming a complex input
+  // along **any axis but the last** read the imaginary part from the wrong cell. A real
+  // input never passes this line at all, so both axes were right for it — it took three
+  // conditions together to show.
   const fetch = p.hermitian
     ? `
     var xr = 0.0;
@@ -114,20 +118,24 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let rest = gid % ${p.nOut * p.inner}u;
   let k = rest / ${p.inner}u;
   let innerIdx = rest % ${p.inner}u;
-  // 입력에서 이 줄이 시작하는 자리. 복소수면 칸당 둘이라 안쪽 걸음이 두 배다.
-  // (셰이더 글은 템플릿 문자열 안에 있다 — 여기 역따옴표를 쓰면 문자열이 닫힌다.)
+  // Where this row starts in the input. Complex holds two per cell, so the inner stride
+  // doubles.
+  // (The shader text lives inside a template literal — a backtick here closes the
+  //  string.)
   let base = outerIdx * ${p.nIn * p.inner * step}u + innerIdx * ${step}u;
   var re = 0.0;
   var im = 0.0;
   for (var j = 0u; j < ${p.n}u; j = j + 1u) {
 ${fetch}
-    // **회전인자는 표에서 읽는다 — 셰이더에서 cos/sin 을 안 부른다.**
+    // **The twiddle factors are read from a table — no cos/sin is called in the
+    // shader.**
     //
-    // 각을 계산해 부르는 판이 먼저 있었는데, 사각창 stft 한 자리가 상대오차
-    // 2.7e-4 로 골든을 벗어났다. f32 반올림으로는 설명이 안 되는 크기이고,
-    // WGSL 의 삼각함수는 정확도가 구현에 맡겨져 있다(소프트웨어 어댑터에서 특히).
-    // 표를 호스트에서 **배정도로** 만들어 올리면 그 자리가 아예 없어지고, 안쪽
-    // 고리에서 초월함수도 사라진다.
+    // A version computing the angle and calling them came first, and one rectangular-window
+    // stft left the golden at a relative error of 2.7e-4. That is too large to explain by
+    // f32 rounding, and WGSL leaves its trigonometric accuracy to the implementation
+    // (particularly on a software adapter). Building the table **in double precision** on
+    // the host and uploading it removes that place entirely, and the transcendentals leave
+    // the inner loop with it.
     let m = (j * k) % ${p.n}u;
     let c = Tw[m * 2u];
     let s = ${p.sign > 0 ? "" : "-"}Tw[m * 2u + 1u];
@@ -140,11 +148,12 @@ ${write}
 }
 
 /**
- * 회전인자 표. `m = 0…n−1` 에 대한 `cos(2πm/n)`·`sin(2πm/n)` 을 번갈아 담는다.
+ * The twiddle table. It holds `cos(2πm/n)` and `sin(2πm/n)` alternately for
+ * `m = 0…n−1`.
  *
- * **호스트에서 배정도로 만든다.** 부호는 셰이더가 붙이므로 표는 한 벌이면 되고,
- * 같은 `n` 이면 같은 버퍼를 다시 쓴다 — 학습 고리에서 매 스텝 새로 올리면 그것이
- * 곧 누수처럼 보인다.
+ * **Built in double precision on the host.** The shader attaches the sign, so one table
+ * suffices, and the same `n` reuses the same buffer — uploading a new one every step in a
+ * training loop looks exactly like a leak.
  */
 const twiddles = new Map<number, GPUBuffer>();
 
@@ -163,7 +172,7 @@ function twiddleOf(n: number): GPUBuffer {
   return buf;
 }
 
-/** 커널 한 번. 모양은 부르는 쪽이 안다. */
+/** One kernel call. The caller knows the shape. */
 function run(input: Tensor, p: DftPlan): Tensor {
   const count = p.outer * p.nOut * p.inner;
   const dev = device();
@@ -200,7 +209,8 @@ function replaced(shape: readonly number[], axis: number, size: number): number[
 }
 
 /**
- * 정규화 이름 → 곱할 값. **틀린 이름은 멈춘다** — 조용히 1 을 쓰면 값이 갈린다.
+ * Normalisation name → the factor. **An unknown name stops** — quietly using 1 diverges
+ * in the values.
  */
 function normScale(norm: string | null | undefined, n: number,
                    inverse: boolean): number {
@@ -212,7 +222,7 @@ function normScale(norm: string | null | undefined, n: number,
   throw new RuntimeError(`Invalid normalization mode: "${norm}"`);
 }
 
-/** 한 판을 돌리고 모양을 되붙인다. 네 이름이 전부 이 자리를 지난다. */
+/** Runs one plate and reattaches the shape. All four names pass through here. */
 function transform(
   input: Tensor, plan: Omit<DftPlan, "outer" | "inner">, axis: number,
   gradName: string, back: (g: Tensor) => Tensor,
@@ -235,7 +245,7 @@ export function fft(input: Tensor, n?: number | null, dim = -1,
     n: len, nIn: Math.min(have, len), nOut: len, sign: -1, scale,
     inComplex: wasComplex, hermitian: false, realOut: false,
   }, axis, "FftC2CBackward0", (g) => {
-    // **정규화 없는 역변환**에 순방향의 배율이 그대로 곱해진다 — 선형이라.
+    // **An unnormalised inverse** takes the forward's factor as it is — it is linear.
     const [outer, inner] = split(g.shape, axis);
     const wide = run(g, {
       n: len, nIn: len, nOut: len, sign: +1, scale,
@@ -283,7 +293,7 @@ export function rfft(input: Tensor, n?: number | null, dim = -1,
     n: len, nIn: Math.min(have, len), nOut: bins, sign: -1, scale,
     inComplex: false, hermitian: false, realOut: false,
   }, axis, "FftR2CBackward0", (g) => {
-    // **켤레 짝을 안 더한다.** 저장 안 된 반쪽은 애초에 손실에 안 들어갔다.
+    // **The conjugate partner is not added.** The unstored half never entered the loss.
     const [outer, inner] = split(g.shape, axis);
     const wide = run(g, {
       n: len, nIn: bins, nOut: len, sign: +1, scale,
@@ -299,15 +309,17 @@ export function irfft(input: Tensor, n?: number | null, dim = -1,
   const have = input.shape[axis] ?? 0;
   const len = n === undefined || n === null ? 2 * (have - 1) : n;
   const scale = normScale(norm, len, true);
-  // **`n` 을 주면 앞쪽 `n//2+1` 칸만 쓴다**(실측). 든 칸을 다 쓰면 n 이 작을 때
-  // 없는 주파수까지 되살려서, 모양은 맞고 값만 틀린다.
+  // **Given `n`, only the first `n//2+1` cells are used** (measured). Using every cell
+  // held restores frequencies that are not there when n is small — the shape is right and
+  // only the values are wrong.
   const used = Math.min(have, Math.floor(len / 2) + 1);
   return transform(input, {
     n: len, nIn: used, nOut: len, sign: +1, scale,
     inComplex: true, hermitian: true, realOut: true,
   }, axis, "FftC2RBackward0", (g) => {
-    // **쓴 칸만큼만 낸다.** `nOut = used` 라, 안 쓴 칸에는 기울기가 애초에 안 생긴다 —
-    // 그 자리를 나중에 0 으로 지우는 대신 만들지 않는 편이 짧고 틀릴 자리가 없다.
+    // **It produces only as many cells as were used.** With `nOut = used`, no gradient
+    // ever arises at an unused cell — not making it beats zeroing it afterwards, and there
+    // is nowhere to be wrong.
     const [outer, inner] = split(g.shape, axis);
     const wide = run(g, {
       n: len, nIn: len, nOut: used, sign: -1, scale,
@@ -315,8 +327,9 @@ export function irfft(input: Tensor, n?: number | null, dim = -1,
     });
     let full = new Tensor(wide.raw, replaced(g.shape, axis, used),
                           { dtype: "complex64" });
-    // **가장자리는 한 번, 가운데는 두 번.** 되살린 짝이 같은 칸에서 왔으므로 그
-    // 칸에 기울기가 두 번 도착한다. `k=0` 과 짝수 n 의 `k=n/2` 만 자기 켤레다.
+    // **The edges once and the middle twice.** The restored partner came from the same
+    // cell, so the gradient arrives at that cell twice. Only `k=0`, and `k=n/2` at even n,
+    // are their own conjugates.
     const weight = new Float32Array(used).fill(2);
     weight[0] = 1;
     if (len % 2 === 0 && used > len / 2) weight[len / 2] = 1;
@@ -324,24 +337,27 @@ export function irfft(input: Tensor, n?: number | null, dim = -1,
     line[axis] = used;
     full = full.mul(Tensor.from(weight, line));
     if (used === have) return full;
-    // 안 쓴 칸은 0 이다. 모양은 입력과 같아야 하므로 뒤에 채운다.
+    // Unused cells are 0. The shape has to match the input, so they are filled at the
+    // end.
     return overReal(full, (r) => padAxis(r, axis, have - used));
   });
 }
 
 /**
- * 축 하나를 앞에서부터 `keep` 칸으로 자른다. 이미 같으면 그대로.
+ * Cuts one axis to `keep` cells from the front. Already equal, it passes through.
  *
- * **복소수도 지나야 한다** — 역방향이 길이를 늘려 물은 자리를 도로 줄일 때 여기를
- * 쓰는데, 그때 손에 든 것이 복소수 기울기다. `narrow` 를 그냥 부르면 복소수 문에서
- * 멈추고, 그 문구는 "이 연산은 아직" 이라 원인이 fft 안쪽을 안 가리킨다.
+ * **Complex has to pass here too** — the backward uses it to shrink a request that
+ * extended the length, and what it holds then is a complex gradient. Calling `narrow`
+ * directly stops at the complex door, and that message says "this operation does not yet",
+ * which does not point the cause anywhere inside fft.
  */
 function trim(t: Tensor, axis: number, keep: number): Tensor {
   if ((t.shape[axis] ?? 0) === keep) return t;
   return overReal(t, (r) => r.narrow(axis, 0, keep));
 }
 
-/** 축 하나의 뒤에 0 을 `count` 칸 붙인다. `padND` 는 마지막 축부터 세므로 짝을 채운다. */
+/** Appends `count` zeros to one axis. `padND` counts from the last axis, so the pairs
+ *  are filled accordingly. */
 function padAxis(t: Tensor, axis: number, count: number): Tensor {
   const pairs: number[] = [];
   for (let i = t.shape.length - 1; i > axis; i--) pairs.push(0, 0);
@@ -365,14 +381,16 @@ export function rfftfreq(n: number, d = 1.0): Tensor {
 }
 
 /**
- * 복소수 텐서에 **칸을 옮기는 연산**을 걸어 준다.
+ * Applies **an operation that moves cells** to a complex tensor.
  *
- * `viewAsReal` 이 마지막에 크기 2 축을 붙이고 그것이 늘 안쪽에 남으므로, 실수
- * 텐서로 보고 축 번호만 한 칸 밀어 두면 그대로 통한다. 옮기고 나서 `viewAsComplex`
- * 로 되돌린다 — **둘 다 뷰라 버퍼 사본이 안 는다.**
+ * `viewAsReal` appends an axis of size 2 at the end and it always stays innermost, so
+ * seeing it as a real tensor and shifting the axis numbers by one works as it is. After
+ * the move, `viewAsComplex` turns it back — **both are views, so no buffer copy is
+ * added.**
  *
- * 인터리브 저장을 아는 자리이므로 여기 둔다. 복소수를 아는 옮기기 커널을 따로
- * 쓰는 대신, 이미 있는 실수 커널을 빌린다.
+ * It lives here because this is the place that knows the interleaved storage. Rather than
+ * a moving kernel that understands complex, it borrows the real kernel that already
+ * exists.
  */
 function overReal(z: Tensor, fn: (t: Tensor, shift: number) => Tensor): Tensor {
   if (!z.isComplex()) return fn(z, 0);
@@ -411,17 +429,19 @@ export function ifftshift(input: Tensor,
   return rollBy(input, dim, (n) => -Math.floor(n / 2));
 }
 
-// ── 짧은 시간 변환 ────────────────────────────────────────────────────────
+// ── The short-time transform ──────────────────────────────────────────────
 //
-// **새 커널이 아니라 조립이다.** 자르고 · 창을 곱하고 · `rfft`. 셋 다 이미
-// 미분되는 이름이라 **기울기가 저절로 맞는다.**
+// **An assembly rather than a new kernel.** Slice, multiply by the window, `rfft`. All
+// three are already differentiable names, so **the gradient comes out right by itself.**
 
 /**
- * 창을 **`nFft` 길이로** 맞춘다. `winLength` 는 받기만 하고 맞추는 길이는 `nFft` 다.
+ * Fits the window **to `nFft`.** `winLength` is only received; the length fitted to is
+ * `nFft`.
  *
- * 한동안 `winLength` 로 맞추고 있었다 — `win_length=6, n_fft=8` 에서 창이 6 칸으로
- * 남아 곱셈이 모양에서 멈췄다. **시끄럽게 멈춰서 다행인 자리**다. 두 수가 우연히
- * 같은 케이스만 있었으면 조용히 지나갔다.
+ * It fitted to `winLength` for a while — at `win_length=6, n_fft=8` the window stayed 6
+ * cells and the multiplication stopped on the shape. **A place it is fortunate to stop
+ * loudly.** With only cases where the two numbers happen to be equal, it would have gone
+ * by in silence.
  */
 function windowOf(window: Tensor | null | undefined, nFft: number,
                   winLength?: number | null): Tensor {
@@ -436,7 +456,7 @@ function windowOf(window: Tensor | null | undefined, nFft: number,
     throw new RuntimeError(
       "window length should be less than or equal to n_fft");
   }
-  // **가운데에 놓는다**(실측). 왼쪽 정렬이면 값이 갈린다.
+  // **It is centred** (measured). Left-aligned diverges in the values.
   const left = Math.floor((nFft - have) / 2);
   return window.padND([left, nFft - have - left]);
 }
@@ -459,8 +479,9 @@ export function stft(input: Tensor, nFft: number, options: StftOptions = {}): Te
     padMode = "reflect", normalized = false, onesided = null,
     returnComplex = null,
   } = options;
-  // **`returnComplex` 를 안 주면 거절한다**(실측). 실수 `(…, 2)` 로 내는 옛 길은
-  // torch 에서 폐기 예정이라, 기본값을 정해 주면 곧 사라질 모양을 가르치게 된다.
+  // **Without `returnComplex` it refuses** (measured). The old route producing a real
+  // `(…, 2)` is deprecated in torch, so choosing a default would teach a shape that is
+  // about to disappear.
   if (returnComplex === null && !input.isComplex()) {
     throw new RuntimeError(
       "stft requires the return_complex parameter be given for real inputs");
@@ -490,11 +511,12 @@ export function stft(input: Tensor, nFft: number, options: StftOptions = {}): Te
     .mul(windowOf(window, nFft, winLength));
   let spec = half ? rfft(frames, null, -1) : fft(frames, null, -1);
   if (normalized) spec = spec.mul(Tensor.full([], 1 / Math.sqrt(nFft)));
-  // `(…, 틀, 칸)` → `(…, 칸, 틀)`. torch 가 칸을 앞에 둔다.
+  // `(…, frame, bin)` → `(…, bin, frame)`. torch puts the bins first.
   return swapLastTwo(spec);
 }
 
-/** 마지막 두 축을 바꾼다. 복소수면 실수 짝으로 보고 축을 한 칸 밀어서. */
+/** Swaps the last two axes. For complex, seen as its real pair with the axes shifted by
+ *  one. */
 function swapLastTwo(t: Tensor): Tensor {
   return overReal(t, (r, shift) => {
     const rank = r.shape.length;
@@ -512,15 +534,15 @@ export function istft(input: Tensor, nFft: number,
   const bins = input.shape[input.shape.length - 2] ?? 0;
   const half = onesided ?? (bins === Math.floor(nFft / 2) + 1);
   const count = input.shape[input.shape.length - 1] ?? 0;
-  const spec = swapLastTwo(input);                       // (…, 틀, 칸)
+  const spec = swapLastTwo(input);                       // (…, frame, bin)
   let frames = half ? irfft(spec, nFft, -1) : fft(spec, null, -1);
   if (normalized) frames = frames.mul(Tensor.full([], Math.sqrt(nFft)));
   const win = windowOf(window, nFft, winLength);
   frames = frames.mul(win);
 
   const total = nFft + hop * (count - 1);
-  // **겹쳐 더하기.** 틀마다 자리를 맞춰 0 으로 두르고 전부 더한다 — 흩뿌리는
-  // 커널 없이 되고, 역방향이 그대로 따라온다.
+  // **Overlap-add.** Each frame is placed by padding with zeros and they are all summed
+  // — it works without a scattering kernel and the backward follows as it is.
   let out: Tensor | null = null;
   for (let k = 0; k < count; k++) {
     const piece = frames.select(-2, k)
@@ -528,8 +550,9 @@ export function istft(input: Tensor, nFft: number,
     out = out === null ? piece : out.add(piece);
   }
   if (out === null) throw new RuntimeError("istft: the input has no frames");
-  // **창의 제곱 겹침으로 나눈다.** 그 나눗셈이 없으면 겹친 자리가 창 무게만큼
-  // 부풀어 오른다. 0 에 가까운 자리는 1 로 두어 나눗셈을 피한다.
+  // **Divided by the overlapped window squared.** Without that division the overlapping
+  // positions swell by the window's weight. Positions near 0 are set to 1 to avoid the
+  // division.
   const envelope = win.mul(win);
   let cover: Tensor | null = null;
   for (let k = 0; k < count; k++) {
@@ -548,14 +571,16 @@ export function istft(input: Tensor, nFft: number,
   return out;
 }
 
-// ── 여러 축 · 에르미트 — **전부 위 넷의 조립이다** ───────────────────────────
+// ── Several axes and the Hermitian forms — **all assemblies of the four above** ──
 //
-// 새 커널이 없다. `fft2` 는 축을 하나씩 도는 것이고(실측: torch 의 `fft2` 와 정확히
-// 같다) 에르미트 갈래는 켤레와 배율로 풀린다. 그래서 기울기도 따로 안 쓴다 — 테이프가
-// 그대로 이어진다. 여기 역방향을 손으로 적으면 위 넷과 두 벌이 되고, 두 벌은 갈린다.
+// No new kernel. `fft2` walks the axes one at a time (measured: exactly torch's `fft2`),
+// and the Hermitian branch resolves into conjugates and factors. So no gradient is written
+// either — the tape carries straight through. Writing a backward by hand here would make
+// two copies of the four above, and two copies diverge.
 //
-// **파이썬이 대신 채우지 않게 여기 둔다.** 결속이 조립하면 골든은 초록이 되는데
-// borch.ts 를 쓰는 쪽에는 그 이름이 여전히 없다 — 이 저장소가 일곱 번 겪은 자리다.
+// **They live here so that Python does not fill them in instead.** With the binding
+// assembling them the golden goes green while the name is still absent for anybody using
+// borch.ts — a place this repository has met seven times.
 
 function axesAndSizes(
   t: Tensor, s: readonly (number | null)[] | null | undefined,
@@ -578,7 +603,8 @@ function axesAndSizes(
   return [axes, sizes];
 }
 
-/** 에르미트 갈래는 정·역이 뒤바뀐다 — 정규화 이름도 같이 뒤집는다. */
+/** The Hermitian branch swaps forward and inverse — the normalisation name flips with
+ *  them. */
 function flipNorm(norm?: string | null): string | null | undefined {
   if (norm === "forward") return "backward";
   if (norm === "backward" || norm === null || norm === undefined) return "forward";
