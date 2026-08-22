@@ -435,12 +435,18 @@ NOT_PORTED = {
     # **줄이 안 줄어든 것처럼 보이는 것은 그래서다** — 19 를 갚는 동안 26 이 붙었다.
     # 갚은 것과 새로 진 것을 한 수로 적으면 아무 일도 없었던 것처럼 읽힌다.
     #
-    #   갚음  19 + 26  (`ColorJitter`·`functional` 열넷 · 픽셀 여섯과 감싸개 여섯)
-    #   남음  40  (격자 재표본 — 값 32 · repr 8)
+    #   paid   19 + 26 + 40  (ColorJitter and functional, the six pixel ops with
+    #                         their wrappers, the five that resample on a grid)
+    #   left   9             (the policy layer — 값 4 · repr 5)
     #
-    # **남은 마흔은 성격이 하나다**: rotate·affine·perspective·elastic·gaussian_blur,
-    # 전부 화소 사이를 읽는 것들이다. 그 앞의 것들은 화소를 옮기거나 값만 바꿨다.
-    "vision::": (49, "아직 — 격자 재표본과 정책 넷이 `vision.ts` 에 없다 (값 36 · repr 13)"),
+    # **The nine that are left are narrow on the Python side too.** AutoAugment,
+    # RandAugment, TrivialAugmentWide and AugMix all draw on every call, so what can
+    # be frozen is the three learned tables **as text** plus RandAugment(num_ops=0),
+    # the one configuration of any of them that does not draw. Everything else about
+    # them is distribution and pytest looks at it there. That boundary was stated
+    # rather than discovered — without it, an hour goes into hunting for an AugMix
+    # value case that does not exist and concluding something was missed.
+    "vision::": (9, "아직 — 정책 넷이 `vision.ts` 에 없다 (값 4 · repr 5)"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

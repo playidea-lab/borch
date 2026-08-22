@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 43
+  "missing": 56
  },
  "modules": [
   {
@@ -12594,9 +12594,191 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "function",
+     "name": "rotate",
+     "signature": "export declare function rotate(img: Image, angle: number, interpolation?: \"bilinear\" | \"nearest\", expand?: boolean, center?: readonly [number, number] | null, fill?: number | readonly number[] | null): Image",
+     "doc": "Turn the picture about its centre. **Counter-clockwise for a positive angle**,\nwhich is PIL's direction and the opposite of what a screen's y-axis suggests.\n\n`expand` grows the output to hold the whole rotated picture; without it the\ncorners go outside and are lost.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "affine",
+     "signature": "export declare function affine(img: Image, angle: number, translate: readonly [number, number], scale: number, shear: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null, center?: readonly [number, number] | null): Image",
+     "doc": "Rotate, shear, scale and shift in one resampling. **One pass and not four** —\nfour would interpolate four times and blur what a single grid keeps sharp.",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "RandomRotation",
+     "signature": "export declare class RandomRotation implements Transform",
+     "doc": "A turn drawn from `degrees`.\n\n**The fill is spelled per channel before the call**, because torchvision does\nthat in its `forward` and not in `rotate` — a single number there becomes one\nper channel, and passing it through undone gives a different picture on a\nthree-channel image.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(degrees: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", expand?: boolean, center?: readonly [number, number] | null, fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(): number",
+       "doc": "",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAffine",
+     "signature": "export declare class RandomAffine implements Transform",
+     "doc": "A rotation, a shift, a scaling and a shear, each drawn from its own range and\n**applied in one resampling.**\n\n`translate` is a *fraction* of the picture's width and height rather than a\nnumber of pixels, so the same transform means the same thing on any size.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(degrees: number | readonly number[], translate?: readonly [number, number] | null, scale?: readonly [number, number] | null, shear?: number | readonly number[] | null, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[], center?: readonly [number, number] | null)",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(w: number, h: number): [number, [number, number], number, [number, number]]",
+       "doc": "`[angle, [tx, ty], scale, [shearX, shearY]]`. **The shift is drawn in pixels\nand rounded**, so a fraction working out to less than half a pixel draws zero\nrather than a fraction of one.",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "gaussianBlur",
+     "signature": "export declare function gaussianBlur(img: Image, kernelSize: number | readonly number[], sigma?: number | readonly number[] | null): Image",
+     "doc": "Blur with a Gaussian. **The border is reflected**, not zeroed — a zero border\ndarkens the edge of every blurred picture, which looks like a vignette.\n\n`kernelSize` is one number or two, and both have to be **odd**: an even kernel\nhas no centre pixel to sit on, so the picture would shift by half a pixel.",
+     "members": [],
+     "torch": "gaussian_blur"
+    },
+    {
+     "kind": "function",
+     "name": "perspective",
+     "signature": "export declare function perspective(img: Image, startpoints: readonly (readonly [number, number])[], endpoints: readonly (readonly [number, number])[], interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null): Image",
+     "doc": "Move the four corners somewhere else — **a photograph of a photograph held at\nan angle.** Unlike `affine`, straight lines stay straight but parallel ones\nstop being parallel.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "elasticTransform",
+     "signature": "export declare function elasticTransform(img: Image, displacement: ArrayLike<number>, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null): Image",
+     "doc": "Push every pixel a little way, smoothly. **The displacement is given rather\nthan drawn** — `ElasticTransform` draws it and this applies it, so a whole\nbatch can share one warp.",
+     "members": [],
+     "torch": "elastic_transform"
+    },
+    {
+     "kind": "class",
+     "name": "GaussianBlur",
+     "signature": "export declare class GaussianBlur implements Transform",
+     "doc": "Blur by a Gaussian whose width is **drawn from a range each call.**\n\nThe kernel size is fixed and the sigma is the draw, which is the opposite way\nround from most of these — a bigger kernel costs time, so torchvision fixes\nthe cost and varies the effect inside it.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(kernelSize: number | readonly number[], sigma?: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(): number",
+       "doc": "",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPerspective",
+     "signature": "export declare class RandomPerspective implements Transform",
+     "doc": "Tilt the picture, with probability `p`. `distortionScale` is how far the\ncorners may move, as a fraction of half the picture.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(distortionScale?: number, p?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(width: number, height: number): [ readonly [number, number][], readonly [number, number][] ]",
+       "doc": "The four corners before and after. **Drawn in whole pixels** — torchvision\nuses integer draws here, so a small picture has a small number of distinct\ndistortions rather than a continuum.",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "ElasticTransform",
+     "signature": "export declare class ElasticTransform implements Transform",
+     "doc": "Push every pixel a little way along a **smooth random field** — the warp that\nmakes handwriting look handwritten differently.\n\n`alpha` is how far pixels move and `sigma` how smoothly: a small sigma with a\nlarge alpha is noise rather than a warp, which is why both go through the same\nblur.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(alpha?: number | readonly number[], sigma?: number | readonly number[], interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[])",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(height: number, width: number): Float64Array",
+       "doc": "A displacement field: noise, blurred, scaled by `alpha` — and **divided by\nthe picture's size**, because the grid is in [-1,1] and not in pixels.",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 146,
+   "count": 176,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -14144,5 +14326,5 @@
    "count": 9
   }
  ],
- "total": 1836
+ "total": 1866
 }

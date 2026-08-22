@@ -2092,3 +2092,820 @@ export class RandomAdjustSharpness extends RandomPixelOp {
     return `RandomAdjustSharpness(sharpness_factor=${this.sharpnessFactor},p=${this.p})`;
   }
 }
+
+
+// ── Resampling on a grid: the ones that read BETWEEN pixels ──────────
+//
+// Everything above moves pixels (crop, flip, pad) or rewrites their values
+// (photometric, pixel ops). Everything below reads the input between them.
+// Three conventions decide every value, and **each one is invisible when it is
+// wrong** — the picture comes out looking slightly soft rather than looking
+// broken, so none of them announces itself.
+
+/**
+ * torch's `grid_sample` with `align_corners=false` and zero padding, on `(H,W,C)`.
+ *
+ * **`align_corners=false` is the whole of the coordinate convention** and not a
+ * detail: it puts -1 and 1 at the *outer edges* of the border pixels rather than
+ * at their centres, so the un-normalising is `((g + 1) * size - 1) / 2`. With the
+ * other convention every resampled pixel is half a pixel out, which looks like a
+ * slightly soft image rather than like a bug.
+ */
+function gridSample(img: Image, grid: Float64Array, oh: number, ow: number,
+                    mode: "bilinear" | "nearest"): Float64Array {
+  const { height: h, width: w, channels: c } = img;
+  const out = new Float64Array(oh * ow * c);
+  // The input at integer positions, **zero outside** — torch's `padding_mode`.
+  const read = (yy: number, xx: number, k: number): number =>
+    (xx >= 0 && xx < w && yy >= 0 && yy < h) ? (img.data[(yy * w + xx) * c + k] ?? 0) : 0;
+
+  for (let i = 0; i < oh * ow; i++) {
+    const gx = grid[i * 2] ?? 0;
+    const gy = grid[i * 2 + 1] ?? 0;
+    const x = f32(f32(f32(f32(gx + 1) * w) - 1) / 2);
+    const y = f32(f32(f32(f32(gy + 1) * h) - 1) / 2);
+    if (mode === "nearest") {
+      // **Half goes to even** — numpy's `rint`, torch's `nearbyint`. `floor(x+0.5)`
+      // disagrees, and the disagreement shows only at positions landing exactly
+      // halfway, which a 90-degree rotation produces on every pixel. Measured: it
+      // is the ONLY one of the three nearest-mode cases that can see this.
+      const yy = roundHalfToEven(y), xx = roundHalfToEven(x);
+      for (let k = 0; k < c; k++) out[i * c + k] = read(yy, xx, k);
+      continue;
+    }
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = f32(x - x0), fy = f32(y - y0);
+    const wts: [number, number, number][] = [
+      [y0, x0, f32(f32(1 - fy) * f32(1 - fx))],
+      [y0, x0 + 1, f32(f32(1 - fy) * fx)],
+      [y0 + 1, x0, f32(fy * f32(1 - fx))],
+      [y0 + 1, x0 + 1, f32(fy * fx)],
+    ];
+    for (let k = 0; k < c; k++) {
+      let acc = 0;
+      for (const [yy, xx, weight] of wts) acc = f32(acc + f32(read(yy, xx, k) * weight));
+      out[i * c + k] = acc;
+    }
+  }
+  return out;
+}
+
+/**
+ * Sample, and paint the outside with `fill`.
+ *
+ * **The mask is sampled alongside the picture** rather than the outside being
+ * computed. torchvision appends a channel of ones, resamples it with everything
+ * else, and reads the result as "how much of this pixel came from inside" — so a
+ * bilinear edge pixel is a blend of picture and fill in the same proportion the
+ * interpolation used. Deciding inside-ness from the coordinates instead gives a
+ * hard edge that is wrong by up to one whole pixel: measured at 18 pixels of
+ * `rotate(filled)`, up to 0.305 out.
+ */
+function gridTransform(img: Image, grid: Float64Array, oh: number, ow: number,
+                       mode: "bilinear" | "nearest",
+                       fill: readonly number[] | null): Image {
+  const c = img.channels;
+  const sampled = gridSample(img, grid, oh, ow, mode);
+  let painted = sampled;
+  if (fill !== null) {
+    const ones: Image = {
+      data: new Float64Array(img.height * img.width).fill(1),
+      height: img.height, width: img.width, channels: 1, isByte: img.isByte,
+    };
+    const mask = gridSample(ones, grid, oh, ow, mode);
+    const values = fill.length === 1
+      ? new Array<number>(c).fill(f32(fill[0] ?? 0))
+      : fill.map((v) => f32(v));
+    painted = new Float64Array(sampled.length);
+    for (let i = 0; i < oh * ow; i++) {
+      const m = mask[i] ?? 0;
+      for (let k = 0; k < c; k++) {
+        const v = values[k] ?? 0;
+        painted[i * c + k] = mode === "nearest"
+          ? (m < 0.5 ? v : (sampled[i * c + k] ?? 0))
+          : f32(f32((sampled[i * c + k] ?? 0) * m) + f32(f32(1 - m) * v));
+      }
+    }
+  }
+  const out = new Float64Array(painted.length);
+  const hi = bound(img.isByte);
+  for (let i = 0; i < out.length; i++) {
+    const v = painted[i] ?? 0;
+    out[i] = img.isByte ? Math.min(Math.max(Math.round(v), 0), hi) : v;
+  }
+  return { data: out, height: oh, width: ow, channels: c, isByte: img.isByte };
+}
+
+/**
+ * The output's pixel centres, mapped back through `matrix`, in [-1,1].
+ *
+ * The half-pixel offset (`0.5`) is torch's, and it is what makes the grid line
+ * up with pixel centres rather than corners. Removing it moves every one of the
+ * sixteen rotate/affine cases (measured).
+ */
+function affineGrid(matrix: readonly number[], w: number, h: number,
+                    ow: number, oh: number): Float64Array {
+  const t = matrix.map((v) => f32(v));
+  const sx = f32(0.5 * w), sy = f32(0.5 * h);
+  const grid = new Float64Array(oh * ow * 2);
+  for (let j = 0; j < oh; j++) {
+    // `linspace(-oh/2 + 0.5, oh/2 + 0.5 - 1, oh)` steps by exactly 1, so it is
+    // the start plus `j`.
+    const y = f32(f32(-oh * 0.5 + 0.5) + j);
+    for (let i = 0; i < ow; i++) {
+      const x = f32(f32(-ow * 0.5 + 0.5) + i);
+      const gx = f32(f32(f32(x * (t[0] ?? 0)) + f32(y * (t[1] ?? 0))) + (t[2] ?? 0));
+      const gy = f32(f32(f32(x * (t[3] ?? 0)) + f32(y * (t[4] ?? 0))) + (t[5] ?? 0));
+      grid[(j * ow + i) * 2] = f32(gx / sx);
+      grid[(j * ow + i) * 2 + 1] = f32(gy / sy);
+    }
+  }
+  return grid;
+}
+
+/**
+ * The six numbers, **inverted** — the grid maps output positions back to input
+ * ones, so what goes in is the inverse of the transform being described.
+ */
+function inverseAffineMatrix(center: readonly [number, number], angle: number,
+                             translate: readonly [number, number], scale: number,
+                             shear: readonly [number, number]): number[] {
+  const rad = (d: number): number => (d * Math.PI) / 180;
+  const rot = rad(angle), sx = rad(shear[0]), sy = rad(shear[1]);
+  const [cx, cy] = center;
+  const [tx, ty] = translate;
+  const a = Math.cos(rot - sy) / Math.cos(sy);
+  const b = -Math.cos(rot - sy) * Math.tan(sx) / Math.cos(sy) - Math.sin(rot);
+  const cc = Math.sin(rot - sy) / Math.cos(sy);
+  const d = -Math.sin(rot - sy) * Math.tan(sx) / Math.cos(sy) + Math.cos(rot);
+  const m = [d, -b, 0, -cc, a, 0].map((v) => v / scale);
+  m[2] = (m[2] ?? 0) + (m[0] ?? 0) * (-cx - tx) + (m[1] ?? 0) * (-cy - ty) + cx;
+  m[5] = (m[5] ?? 0) + (m[3] ?? 0) * (-cx - tx) + (m[4] ?? 0) * (-cy - ty) + cy;
+  return m;
+}
+
+/**
+ * How big the picture has to be to hold the whole rotated one — `expand=true`.
+ *
+ * **The truncation to 1e-4 is carried rather than justified.** torchvision's
+ * comment says it avoids ceiling a corner at 1e-15 up to a whole pixel, and the
+ * Python side could not reproduce that: sweeping 36 picture sizes by 360 whole
+ * degrees, the answer is the same with the truncation and without it, every
+ * time. It is here because removing it would be a change to a ported formula on
+ * the strength of one sweep, not because a case was found.
+ *
+ * What the sizes are is measured, and it is not the obvious thing: a quarter
+ * turn of a 5x4 picture comes out **5 tall by 6 wide**, not 4x5. Deriving it
+ * from the geometry gives the wrong answer.
+ */
+function affineOutputSize(matrix: readonly number[], w: number, h: number): [number, number] {
+  const t = matrix.map((v) => f32(v));
+  const pts: [number, number][] = [
+    [f32(-0.5 * w), f32(-0.5 * h)], [f32(-0.5 * w), f32(0.5 * h)],
+    [f32(0.5 * w), f32(0.5 * h)], [f32(0.5 * w), f32(-0.5 * h)],
+  ];
+  let loX = Infinity, loY = Infinity, hiX = -Infinity, hiY = -Infinity;
+  for (const [px, py] of pts) {
+    const mx = f32(f32(f32(px * (t[0] ?? 0)) + f32(py * (t[1] ?? 0))) + (t[2] ?? 0));
+    const my = f32(f32(f32(px * (t[3] ?? 0)) + f32(py * (t[4] ?? 0))) + (t[5] ?? 0));
+    loX = Math.min(loX, mx); hiX = Math.max(hiX, mx);
+    loY = Math.min(loY, my); hiY = Math.max(hiY, my);
+  }
+  const TOL = 1e-4;
+  const span = (lo: number, hi: number, size: number): number => {
+    const l = f32(lo + f32(size * 0.5)), r = f32(hi + f32(size * 0.5));
+    return Math.ceil(Math.trunc(r / TOL) * TOL) - Math.floor(Math.trunc(l / TOL) * TOL);
+  };
+  return [span(loX, hiX, w), span(loY, hiY, h)];
+}
+
+/**
+ * torch's centre convention: **(0, 0) is the middle of the picture**, so an
+ * explicit centre arrives as an offset from it rather than as a pixel position. The default is `[0, 0]` and
+ * not `[w/2, h/2]` — the grid is already centred, and passing the middle as a
+ * centre shifts the picture by half its own size.
+ */
+function centerOffset(center: readonly [number, number] | null,
+                      w: number, h: number): [number, number] {
+  if (center === null) return [0, 0];
+  return [center[0] - w * 0.5, center[1] - h * 0.5];
+}
+
+function shearPair(shear: number | readonly number[]): [number, number] {
+  if (typeof shear === "number") return [shear, 0];
+  if (shear.length === 1) return [shear[0] ?? 0, shear[0] ?? 0];
+  if (shear.length !== 2) {
+    throw new RuntimeError(
+      `shear is one or two numbers — it received ${shear.length}.\n` +
+      "(torch: Shear should be a sequence containing two values.)");
+  }
+  return [shear[0] ?? 0, shear[1] ?? 0];
+}
+
+/**
+ * Turn the picture about its centre. **Counter-clockwise for a positive angle**,
+ * which is PIL's direction and the opposite of what a screen's y-axis suggests.
+ *
+ * `expand` grows the output to hold the whole rotated picture; without it the
+ * corners go outside and are lost.
+ */
+export function rotate(
+  img: Image,
+  angle: number,
+  interpolation: "bilinear" | "nearest" = "nearest",
+  expand = false,
+  center: readonly [number, number] | null = null,
+  fill: number | readonly number[] | null = null,
+): Image {
+  const src = asImage(img, "rotate");
+  const { height: h, width: w } = src;
+  // **The angle is negated on the way in**, and torchvision's own comment says
+  // why: `rotate` and `affine` disagree about which way is positive, and the
+  // negation here is what makes them agree from outside.
+  const matrix = inverseAffineMatrix(centerOffset(center, w, h), -angle, [0, 0], 1, [0, 0]);
+  const [ow, oh] = expand ? affineOutputSize(matrix, w, h) : [w, h];
+  const grid = affineGrid(matrix, w, h, ow, oh);
+  return gridTransform(src, grid, oh, ow, interpolation, fillList(fill));
+}
+
+/**
+ * Rotate, shear, scale and shift in one resampling. **One pass and not four** —
+ * four would interpolate four times and blur what a single grid keeps sharp.
+ */
+export function affine(
+  img: Image,
+  angle: number,
+  translate: readonly [number, number],
+  scale: number,
+  shear: number | readonly number[],
+  interpolation: "bilinear" | "nearest" = "nearest",
+  fill: number | readonly number[] | null = null,
+  center: readonly [number, number] | null = null,
+): Image {
+  const src = asImage(img, "affine");
+  if (scale <= 0) {
+    throw new RuntimeError(
+      `scale is a positive number — got ${scale}.\n` +
+      "(torch: Argument scale should be positive)");
+  }
+  const { height: h, width: w } = src;
+  const matrix = inverseAffineMatrix(centerOffset(center, w, h), angle,
+    [translate[0], translate[1]], scale, shearPair(shear));
+  const grid = affineGrid(matrix, w, h, w, h);
+  return gridTransform(src, grid, h, w, interpolation, fillList(fill));
+}
+
+function fillList(fill: number | readonly number[] | null): readonly number[] | null {
+  if (fill === null) return null;
+  return typeof fill === "number" ? [fill] : fill;
+}
+
+
+/** A number `d` means `[-d, d]`; a pair is taken as it is. */
+function setupAngle(x: number | readonly number[], name: string): [number, number] {
+  if (typeof x === "number") {
+    if (x < 0) {
+      throw new RuntimeError(
+        `${name} as a single number must be positive — got ${x}.\n` +
+        `(torch: If ${name} is a single number, it must be positive.)`);
+    }
+    return [-x, x];
+  }
+  if (x.length !== 2) {
+    throw new RuntimeError(
+      `${name} is a single number or a pair — got ${x.length} numbers.\n` +
+      `(torch: ${name} should be a sequence of length 2.)`);
+  }
+  return [x[0] ?? 0, x[1] ?? 0];
+}
+
+/** Python's list spelling — `[-30.0, 30.0]`, which is how `repr` prints these. */
+function floatList(v: readonly number[]): string {
+  return `[${v.map(pyFloat).join(", ")}]`;
+}
+
+/**
+ * A turn drawn from `degrees`.
+ *
+ * **The fill is spelled per channel before the call**, because torchvision does
+ * that in its `forward` and not in `rotate` — a single number there becomes one
+ * per channel, and passing it through undone gives a different picture on a
+ * three-channel image.
+ */
+export class RandomRotation implements Transform {
+  private readonly degrees: [number, number];
+
+  constructor(
+    degrees: number | readonly number[],
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly expand = false,
+    private readonly center: readonly [number, number] | null = null,
+    private readonly fill: number | readonly number[] | null = 0,
+  ) {
+    this.degrees = setupAngle(degrees, "degrees");
+  }
+
+  getParams(): number {
+    return uniform(this.degrees[0], this.degrees[1]);
+  }
+
+  apply(x: Subject): Image {
+    const img = asImage(x, "RandomRotation");
+    const fill = this.fill === null ? null
+      : typeof this.fill === "number"
+        ? new Array<number>(img.channels).fill(this.fill)
+        : [...this.fill];
+    return rotate(img, this.getParams(), this.interpolation, this.expand,
+      this.center, fill);
+  }
+
+  describe(): string {
+    // **`center` and `fill` are printed only when they are set**, which is
+    // torchvision's own shape here and not the same rule as `RandomAffine`'s two
+    // classes down — that one drops a field when it equals its default, and this
+    // one drops it when it is null.
+    let out = `RandomRotation(degrees=${floatList(this.degrees)}` +
+      `, interpolation=${this.interpolation}, expand=${this.expand ? "True" : "False"}`;
+    if (this.center !== null) out += `, center=(${this.center.join(", ")})`;
+    if (this.fill !== null) {
+      out += `, fill=${typeof this.fill === "number" ? this.fill : tuple(this.fill)}`;
+    }
+    return out + ")";
+  }
+}
+
+/**
+ * A rotation, a shift, a scaling and a shear, each drawn from its own range and
+ * **applied in one resampling.**
+ *
+ * `translate` is a *fraction* of the picture's width and height rather than a
+ * number of pixels, so the same transform means the same thing on any size.
+ */
+export class RandomAffine implements Transform {
+  private readonly degrees: [number, number];
+  private readonly shearRange: [number, number] | null;
+
+  constructor(
+    degrees: number | readonly number[],
+    private readonly translate: readonly [number, number] | null = null,
+    private readonly scale: readonly [number, number] | null = null,
+    shear: number | readonly number[] | null = null,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly fill: number | readonly number[] = 0,
+    private readonly center: readonly [number, number] | null = null,
+  ) {
+    this.degrees = setupAngle(degrees, "degrees");
+    if (translate !== null) {
+      for (const t of translate) {
+        if (!(t >= 0 && t <= 1)) {
+          throw new RuntimeError(
+            `translate is a fraction of the picture, between 0 and 1 — ` +
+            `got (${translate.join(", ")}).\n` +
+            "(torch: translation values should be between 0 and 1)");
+        }
+      }
+    }
+    if (scale !== null) {
+      for (const s of scale) {
+        if (s < 0) {
+          throw new RuntimeError(
+            `scale values should be positive — got (${scale.join(", ")}).\n` +
+            "(torch: scale values should be positive)");
+        }
+      }
+    }
+    this.shearRange = shear === null ? null : setupAngle(shear, "shear");
+  }
+
+  /**
+   * `[angle, [tx, ty], scale, [shearX, shearY]]`. **The shift is drawn in pixels
+   * and rounded**, so a fraction working out to less than half a pixel draws zero
+   * rather than a fraction of one.
+   */
+  getParams(w: number, h: number): [number, [number, number], number, [number, number]] {
+    const angle = uniform(this.degrees[0], this.degrees[1]);
+    let shift: [number, number] = [0, 0];
+    if (this.translate !== null) {
+      const maxDx = this.translate[0] * w;
+      const maxDy = this.translate[1] * h;
+      shift = [roundHalfToEven(uniform(-maxDx, maxDx)),
+        roundHalfToEven(uniform(-maxDy, maxDy))];
+    }
+    const scale = this.scale === null ? 1 : uniform(this.scale[0], this.scale[1]);
+    const shear: [number, number] = this.shearRange === null
+      ? [0, 0] : [uniform(this.shearRange[0], this.shearRange[1]), 0];
+    return [angle, shift, scale, shear];
+  }
+
+  apply(x: Subject): Image {
+    const img = asImage(x, "RandomAffine");
+    const fill = typeof this.fill === "number"
+      ? new Array<number>(img.channels).fill(this.fill) : [...this.fill];
+    const [angle, shift, scale, shear] = this.getParams(img.width, img.height);
+    return affine(img, angle, shift, scale, shear, this.interpolation, fill, this.center);
+  }
+
+  describe(): string {
+    let out = `RandomAffine(degrees=${floatList(this.degrees)}`;
+    if (this.translate !== null) out += `, translate=(${this.translate.join(", ")})`;
+    if (this.scale !== null) out += `, scale=(${this.scale.join(", ")})`;
+    if (this.shearRange !== null) out += `, shear=${floatList(this.shearRange)}`;
+    if (this.interpolation !== "nearest") out += `, interpolation=${this.interpolation}`;
+    if (this.fill !== 0) {
+      out += `, fill=${typeof this.fill === "number" ? this.fill : tuple(this.fill)}`;
+    }
+    if (this.center !== null) out += `, center=(${this.center.join(", ")})`;
+    return out + ")";
+  }
+}
+
+
+function gaussianKernel1d(size: number, sigma: number): number[] {
+  const half = f32((size - 1) * 0.5);
+  const out: number[] = [];
+  let total = 0;
+  for (let i = 0; i < size; i++) {
+    const x = f32(-half + i);
+    const v = f32(Math.exp(f32(-0.5 * f32(Math.pow(f32(x / sigma), 2)))));
+    out.push(v);
+    total = f32(total + v);
+  }
+  return out.map((v) => f32(v / total));
+}
+
+/** numpy's `reflect` — mirrors without repeating the edge. `sourceIndex`'s rule. */
+function reflectAt(i: number, n: number): number {
+  return sourceIndex(i, n, "reflect");
+}
+
+/**
+ * Blur with a Gaussian. **The border is reflected**, not zeroed — a zero border
+ * darkens the edge of every blurred picture, which looks like a vignette.
+ *
+ * `kernelSize` is one number or two, and both have to be **odd**: an even kernel
+ * has no centre pixel to sit on, so the picture would shift by half a pixel.
+ */
+export function gaussianBlur(
+  img: Image,
+  kernelSize: number | readonly number[],
+  sigma: number | readonly number[] | null = null,
+): Image {
+  const src = asImage(img, "gaussian_blur");
+  const sizes = typeof kernelSize === "number"
+    ? [kernelSize, kernelSize] : [kernelSize[0] ?? 0, kernelSize[1] ?? kernelSize[0] ?? 0];
+  for (const s of sizes) {
+    if (s <= 0 || s % 2 === 0) {
+      throw new RuntimeError(
+        `kernel_size is odd and positive — got (${sizes.join(", ")}).\n` +
+        "(torch: Kernel size value should be an odd and positive number.)");
+    }
+  }
+  let sigmas: number[];
+  if (sigma === null) sigmas = sizes.map((s) => 0.3 * ((s - 1) * 0.5 - 1) + 0.8);
+  else if (typeof sigma === "number") sigmas = [sigma, sigma];
+  else sigmas = sigma.length === 1 ? [sigma[0] ?? 0, sigma[0] ?? 0] : [sigma[0] ?? 0, sigma[1] ?? 0];
+  for (const s of sigmas) {
+    if (s <= 0) {
+      throw new RuntimeError(
+        `sigma is a positive number — got (${sigmas.join(", ")}).\n` +
+        "(torch: sigma should have positive values.)");
+    }
+  }
+  // **`kernelSize` and `sigma` are (x, y)** — width first, like `getImageSize`
+  // and unlike everything shaped. torchvision builds the 2-D kernel as an outer
+  // product of the y kernel with the x one, and **a transpose is invisible while
+  // both sizes match** — only the oblong case can see it (measured).
+  const kx = gaussianKernel1d(sizes[0] ?? 1, sigmas[0] ?? 1);
+  const ky = gaussianKernel1d(sizes[1] ?? 1, sigmas[1] ?? 1);
+  const pw = Math.floor((sizes[0] ?? 1) / 2), ph = Math.floor((sizes[1] ?? 1) / 2);
+  const { height: h, width: w, channels: c } = src;
+  const out = new Float64Array(src.data.length);
+  const hi = bound(src.isByte);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (let k = 0; k < c; k++) {
+        let acc = 0;
+        for (let di = 0; di < ky.length; di++) {
+          const sy = reflectAt(y + di - ph, h);
+          for (let dj = 0; dj < kx.length; dj++) {
+            const sx = reflectAt(x + dj - pw, w);
+            const weight = f32((ky[di] ?? 0) * (kx[dj] ?? 0));
+            acc = f32(acc + f32(weight * f32(src.data[(sy * w + sx) * c + k] ?? 0)));
+          }
+        }
+        out[(y * w + x) * c + k] = src.isByte
+          ? Math.min(Math.max(Math.round(acc), 0), hi) : acc;
+      }
+    }
+  }
+  return { ...src, data: out };
+}
+
+/**
+ * The eight numbers, solved by least squares. **In float64 and returned as
+ * float32**, which is torchvision's own precision split.
+ *
+ * **The reason usually given for that split did not reproduce here.** The claim
+ * is that the solve is ill-conditioned enough that float32 moves the corners
+ * visibly. Measured three ways and it does not:
+ *
+ *   golden's own corners   float32 and float64 solves agree to the bit
+ *                          (condition number 2318)
+ *   500 random corner sets zero difference in the coefficients
+ *   this whole solve in    all 32 grid cases still pass, 4.77e-7 worst,
+ *   float32                three orders inside the 1e-4 tolerance
+ *
+ * float64 stays because upstream does it and a ported formula is not changed on
+ * the strength of one sweep. What is not carried is the justification — the
+ * effect it describes is not present in anything this side can measure.
+ */
+function perspectiveCoefficients(
+  startpoints: readonly (readonly [number, number])[],
+  endpoints: readonly (readonly [number, number])[],
+): number[] {
+  if (startpoints.length !== 4 || endpoints.length !== 4) {
+    throw new RuntimeError(
+      `Please provide exactly four corners, got ${startpoints.length} startpoints ` +
+      `and ${endpoints.length} endpoints.\n(torch: Please provide exactly four corners)`);
+  }
+  const a: number[][] = [];
+  const b: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const p1 = endpoints[i] ?? [0, 0];
+    const p2 = startpoints[i] ?? [0, 0];
+    a.push([p1[0], p1[1], 1, 0, 0, 0, -p2[0] * p1[0], -p2[0] * p1[1]]);
+    a.push([0, 0, 0, p1[0], p1[1], 1, -p2[1] * p1[0], -p2[1] * p1[1]]);
+    b.push(p2[0], p2[1]);
+  }
+  // The system is square and full rank, so least squares is simply the solve.
+  // Gaussian elimination with partial pivoting, in float64 — which matches
+  // numpy's `lstsq` to the bit after the float32 cast on every case here.
+  for (let col = 0; col < 8; col++) {
+    let best = col;
+    for (let r = col + 1; r < 8; r++) {
+      if (Math.abs(a[r]?.[col] ?? 0) > Math.abs(a[best]?.[col] ?? 0)) best = r;
+    }
+    if (best !== col) {
+      const t = a[col]!; a[col] = a[best]!; a[best] = t;
+      const tb = b[col]!; b[col] = b[best]!; b[best] = tb;
+    }
+    const pivot = a[col]?.[col] ?? 0;
+    for (let r = col + 1; r < 8; r++) {
+      const factor = (a[r]?.[col] ?? 0) / pivot;
+      if (factor === 0) continue;
+      for (let k = col; k < 8; k++) a[r]![k] = (a[r]?.[k] ?? 0) - factor * (a[col]?.[k] ?? 0);
+      b[r] = (b[r] ?? 0) - factor * (b[col] ?? 0);
+    }
+  }
+  const x = new Array<number>(8).fill(0);
+  for (let r = 7; r >= 0; r--) {
+    let acc = b[r] ?? 0;
+    for (let k = r + 1; k < 8; k++) acc -= (a[r]?.[k] ?? 0) * (x[k] ?? 0);
+    x[r] = acc / (a[r]?.[r] ?? 1);
+  }
+  return x.map((v) => f32(v));
+}
+
+/**
+ * The projective map, **with the division that makes it projective.** An affine
+ * grid is this one with the last two coefficients zero.
+ */
+function perspectiveGrid(coeffs: readonly number[], ow: number, oh: number): Float64Array {
+  const c = coeffs.map((v) => f32(v));
+  const sx = f32(0.5 * ow), sy = f32(0.5 * oh);
+  const grid = new Float64Array(oh * ow * 2);
+  for (let j = 0; j < oh; j++) {
+    const y = f32(0.5 + j);
+    for (let i = 0; i < ow; i++) {
+      const x = f32(0.5 + i);
+      const t0 = f32(f32(f32(x * (c[0] ?? 0)) + f32(y * (c[1] ?? 0))) + (c[2] ?? 0));
+      const t1 = f32(f32(f32(x * (c[3] ?? 0)) + f32(y * (c[4] ?? 0))) + (c[5] ?? 0));
+      const den = f32(f32(f32(x * (c[6] ?? 0)) + f32(y * (c[7] ?? 0))) + 1);
+      grid[(j * ow + i) * 2] = f32(f32(f32(t0 / sx) / den) - 1);
+      grid[(j * ow + i) * 2 + 1] = f32(f32(f32(t1 / sy) / den) - 1);
+    }
+  }
+  return grid;
+}
+
+/**
+ * Move the four corners somewhere else — **a photograph of a photograph held at
+ * an angle.** Unlike `affine`, straight lines stay straight but parallel ones
+ * stop being parallel.
+ */
+export function perspective(
+  img: Image,
+  startpoints: readonly (readonly [number, number])[],
+  endpoints: readonly (readonly [number, number])[],
+  interpolation: "bilinear" | "nearest" = "bilinear",
+  fill: number | readonly number[] | null = null,
+): Image {
+  const src = asImage(img, "perspective");
+  const coeffs = perspectiveCoefficients(startpoints, endpoints);
+  const grid = perspectiveGrid(coeffs, src.width, src.height);
+  return gridTransform(src, grid, src.height, src.width, interpolation, fillList(fill));
+}
+
+/**
+ * Push every pixel a little way, smoothly. **The displacement is given rather
+ * than drawn** — `ElasticTransform` draws it and this applies it, so a whole
+ * batch can share one warp.
+ */
+export function elasticTransform(
+  img: Image,
+  displacement: ArrayLike<number>,
+  interpolation: "bilinear" | "nearest" = "bilinear",
+  fill: number | readonly number[] | null = null,
+): Image {
+  const src = asImage(img, "elastic_transform");
+  const { height: h, width: w } = src;
+  const grid = new Float64Array(h * w * 2);
+  for (let j = 0; j < h; j++) {
+    // The identity grid reads each output pixel from its own position; the
+    // displacement is what gets added to it.
+    const gy = f32(f32(-h + 1) / h + f32(j * f32(2 / h)));
+    for (let i = 0; i < w; i++) {
+      const gx = f32(f32(-w + 1) / w + f32(i * f32(2 / w)));
+      grid[(j * w + i) * 2] = f32(gx + f32(displacement[(j * w + i) * 2] ?? 0));
+      grid[(j * w + i) * 2 + 1] = f32(gy + f32(displacement[(j * w + i) * 2 + 1] ?? 0));
+    }
+  }
+  return gridTransform(src, grid, h, w, interpolation, fillList(fill));
+}
+
+
+/**
+ * Blur by a Gaussian whose width is **drawn from a range each call.**
+ *
+ * The kernel size is fixed and the sigma is the draw, which is the opposite way
+ * round from most of these — a bigger kernel costs time, so torchvision fixes
+ * the cost and varies the effect inside it.
+ */
+export class GaussianBlur implements Transform {
+  private readonly kernelSize: [number, number];
+  private readonly sigma: [number, number];
+
+  constructor(kernelSize: number | readonly number[],
+              sigma: number | readonly [number, number] = [0.1, 2.0]) {
+    this.kernelSize = typeof kernelSize === "number"
+      ? [kernelSize, kernelSize]
+      : [kernelSize[0] ?? 0, kernelSize[1] ?? kernelSize[0] ?? 0];
+    for (const s of this.kernelSize) {
+      if (s <= 0 || s % 2 === 0) {
+        throw new RuntimeError(
+          `kernel_size is odd and positive — got (${this.kernelSize.join(", ")}).\n` +
+          "(torch: Kernel size value should be an odd and positive number.)");
+      }
+    }
+    if (typeof sigma === "number") {
+      if (sigma <= 0) {
+        throw new RuntimeError(
+          `sigma is a positive number — got ${sigma}.\n` +
+          "(torch: If sigma is a single number, it must be positive.)");
+      }
+      this.sigma = [sigma, sigma];
+    } else {
+      if (!(sigma[0] > 0 && sigma[0] <= sigma[1])) {
+        throw new RuntimeError(
+          `sigma is (min, max) with min above zero — got (${sigma.join(", ")}).\n` +
+          "(torch: sigma values should be positive and of the form (min, max).)");
+      }
+      this.sigma = [sigma[0], sigma[1]];
+    }
+  }
+
+  getParams(): number {
+    return uniform(this.sigma[0], this.sigma[1]);
+  }
+
+  apply(x: Subject): Image {
+    const img = asImage(x, "GaussianBlur");
+    const drawn = this.getParams();
+    return gaussianBlur(img, this.kernelSize, [drawn, drawn]);
+  }
+
+  describe(): string {
+    // `sigma` is a pair of Python floats, so it prints `2.0` rather than `2`.
+    // `kernel_size` is integers and prints as it is — two spellings on one line,
+    // which is torchvision's shape rather than an inconsistency to tidy.
+    return `GaussianBlur(kernel_size=(${this.kernelSize.join(", ")}), ` +
+      `sigma=${floatTuple(this.sigma)})`;
+  }
+}
+
+/**
+ * Tilt the picture, with probability `p`. `distortionScale` is how far the
+ * corners may move, as a fraction of half the picture.
+ */
+export class RandomPerspective implements Transform {
+  constructor(
+    private readonly distortionScale = 0.5,
+    private readonly p = 0.5,
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    private readonly fill: number | readonly number[] = 0,
+  ) {}
+
+  /**
+   * The four corners before and after. **Drawn in whole pixels** — torchvision
+   * uses integer draws here, so a small picture has a small number of distinct
+   * distortions rather than a continuum.
+   */
+  getParams(width: number, height: number):
+    [readonly [number, number][], readonly [number, number][]] {
+    const halfH = Math.floor(height / 2), halfW = Math.floor(width / 2);
+    const dx = Math.trunc(this.distortionScale * halfW);
+    const dy = Math.trunc(this.distortionScale * halfH);
+    const between = (lo: number, hi: number): number => lo + nextInt(hi - lo);
+    const topleft: [number, number] = [between(0, dx + 1), between(0, dy + 1)];
+    const topright: [number, number] = [between(width - dx - 1, width), between(0, dy + 1)];
+    const botright: [number, number] = [between(width - dx - 1, width),
+      between(height - dy - 1, height)];
+    const botleft: [number, number] = [between(0, dx + 1), between(height - dy - 1, height)];
+    const start: [number, number][] = [[0, 0], [width - 1, 0],
+      [width - 1, height - 1], [0, height - 1]];
+    return [start, [topleft, topright, botright, botleft]];
+  }
+
+  apply(x: Subject): Image {
+    const img = asImage(x, "RandomPerspective");
+    if (nextFloat() >= this.p) return img;
+    const fill = typeof this.fill === "number"
+      ? new Array<number>(img.channels).fill(this.fill) : [...this.fill];
+    const [start, end] = this.getParams(img.width, img.height);
+    return perspective(img, start, end, this.interpolation, fill);
+  }
+
+  describe(): string {
+    // **Only `p`.** torchvision prints nothing else here — not the distortion,
+    // not the fill — and that is its spelling rather than an oversight to
+    // improve on.
+    return `RandomPerspective(p=${this.p})`;
+  }
+}
+
+/**
+ * Push every pixel a little way along a **smooth random field** — the warp that
+ * makes handwriting look handwritten differently.
+ *
+ * `alpha` is how far pixels move and `sigma` how smoothly: a small sigma with a
+ * large alpha is noise rather than a warp, which is why both go through the same
+ * blur.
+ */
+export class ElasticTransform implements Transform {
+  private readonly alpha: [number, number];
+  private readonly sigma: [number, number];
+  private readonly fill: number[];
+
+  constructor(
+    alpha: number | readonly number[] = 50,
+    sigma: number | readonly number[] = 5,
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    fill: number | readonly number[] = 0,
+  ) {
+    this.alpha = typeof alpha === "number" ? [alpha, alpha] : [alpha[0] ?? 0, alpha[1] ?? 0];
+    this.sigma = typeof sigma === "number" ? [sigma, sigma] : [sigma[0] ?? 0, sigma[1] ?? 0];
+    this.fill = typeof fill === "number" ? [fill] : [...fill];
+  }
+
+  /**
+   * A displacement field: noise, blurred, scaled by `alpha` — and **divided by
+   * the picture's size**, because the grid is in [-1,1] and not in pixels.
+   */
+  getParams(height: number, width: number): Float64Array {
+    const out = new Float64Array(height * width * 2);
+    for (let axis = 0; axis < 2; axis++) {
+      const sigma = this.sigma[axis] ?? 0;
+      const alpha = this.alpha[axis] ?? 0;
+      const extent = axis === 0 ? width : height;
+      const noise: Image = {
+        data: new Float64Array(height * width), height, width, channels: 1, isByte: false,
+      };
+      for (let i = 0; i < noise.data.length; i++) noise.data[i] = f32(nextFloat() * 2 - 1);
+      let field = noise;
+      if (sigma > 0) {
+        let size = Math.trunc(8 * sigma + 1);
+        if (size % 2 === 0) size += 1;
+        field = gaussianBlur(noise, [size, size], this.sigma);
+      }
+      for (let i = 0; i < height * width; i++) {
+        out[i * 2 + axis] = f32(f32((field.data[i] ?? 0) * alpha) / extent);
+      }
+    }
+    return out;
+  }
+
+  apply(x: Subject): Image {
+    const img = asImage(x, "ElasticTransform");
+    return elasticTransform(img, this.getParams(img.height, img.width),
+      this.interpolation, this.fill);
+  }
+
+  describe(): string {
+    // **The enum's name, not its value** — this is the one class that prints
+    // `InterpolationMode.BILINEAR` where every other one prints `bilinear`.
+    const mode = `InterpolationMode.${this.interpolation.toUpperCase()}`;
+    return `ElasticTransform(alpha=${floatList(this.alpha)}, ` +
+      `sigma=${floatList(this.sigma)}, interpolation=${mode}, ` +
+      `fill=${floatList(this.fill)})`;
+  }
+}

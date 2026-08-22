@@ -1583,6 +1583,104 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::RandomAdjustSharpness(p=1)", () =>
     photo(new vision.RandomAdjustSharpness(2.0, 1.0).apply(f()) as vision.Image));
 
+  // ── Resampling on a grid ─────────────────────────────────────────
+  //
+  // **The first place in this table that reads the input BETWEEN its pixels.**
+  // Everything above moves pixels (crop, flip, pad) or rewrites their values
+  // (photometric, pixel ops). Three conventions decide every value here and each
+  // one is invisible when wrong — the picture just looks slightly soft. Each was
+  // broken deliberately to see what caught it; `vision.ts` records which does.
+  out.set("vision::F.rotate(bilinear)", () => photo(vision.rotate(f(), 30, "bilinear")));
+  // **Only 90 degrees holds half-to-even.** It is the one angle that puts every
+  // pixel exactly halfway, so the other two nearest-mode cases are blind to that
+  // convention (measured).
+  out.set("vision::F.rotate(nearest)", () => photo(vision.rotate(f(), 90, "nearest")));
+  out.set("vision::F.rotate(a straight angle)", () =>
+    photo(vision.rotate(f(), 180, "bilinear")));
+  // `expand` is the size where **a quarter turn of 5x4 comes out 5x6**. Deriving
+  // it from the geometry gives 4x5, which is wrong.
+  out.set("vision::F.rotate(expand)", () => photo(vision.rotate(f(), 30, "bilinear", true)));
+  out.set("vision::F.rotate(expand, quarter turn)", () =>
+    photo(vision.rotate(f(), 90, "bilinear", true)));
+  // The fill is painted through **a mask sampled alongside the picture**. Deciding
+  // inside-ness from the coordinates gives a hard edge wrong by up to a whole
+  // pixel; this case catches that at 18 pixels (measured).
+  out.set("vision::F.rotate(filled)", () =>
+    photo(vision.rotate(f(), 30, "bilinear", false, null, [0.5, 0.25, 0.75])));
+  out.set("vision::F.rotate(filled, nearest)", () =>
+    photo(vision.rotate(f(), 30, "nearest", false, null, [0.5, 0.25, 0.75])));
+  out.set("vision::F.rotate(off centre)", () =>
+    photo(vision.rotate(f(), 30, "bilinear", false, [1, 2])));
+  out.set("vision::F.rotate(uint8)", () => photo(vision.rotate(u8(), 30, "bilinear")));
+
+  out.set("vision::F.affine(turned)", () =>
+    photo(vision.affine(f(), 30, [0, 0], 1.0, [0, 0], "bilinear")));
+  out.set("vision::F.affine(shifted)", () =>
+    photo(vision.affine(f(), 0, [1, 2], 1.0, [0, 0], "bilinear")));
+  out.set("vision::F.affine(scaled)", () =>
+    photo(vision.affine(f(), 0, [0, 0], 1.5, [0, 0], "bilinear")));
+  out.set("vision::F.affine(sheared)", () =>
+    photo(vision.affine(f(), 0, [0, 0], 1.0, [10, 20], "bilinear")));
+  out.set("vision::F.affine(all four)", () =>
+    photo(vision.affine(f(), 15, [1, -1], 0.8, [5, -5], "bilinear")));
+  out.set("vision::F.affine(all four, nearest)", () =>
+    photo(vision.affine(f(), 15, [1, -1], 0.8, [5, -5], "nearest")));
+  out.set("vision::F.affine(uint8)", () =>
+    photo(vision.affine(u8(), 15, [1, -1], 0.8, [5, -5], "bilinear")));
+
+  // The draw is pinned to one value, so the frozen picture asks about the
+  // resampling rather than about the dice.
+  out.set("vision::RandomRotation(pinned)", () =>
+    photo(new vision.RandomRotation([30, 30], "bilinear").apply(f()) as vision.Image));
+  out.set("vision::RandomRotation(pinned, expand)", () =>
+    photo(new vision.RandomRotation([30, 30], "bilinear", true).apply(f()) as vision.Image));
+  out.set("vision::RandomAffine(pinned)", () =>
+    photo(new vision.RandomAffine([20, 20], null, null, null, "bilinear")
+      .apply(f()) as vision.Image));
+  // **The fill is spelled per channel before the call** — the class does that,
+  // not `affine`, so a single number handed through undone gives a different
+  // picture on a three-channel image.
+  out.set("vision::RandomAffine(pinned, filled)", () =>
+    photo(new vision.RandomAffine([20, 20], null, null, null, "bilinear", 0.5)
+      .apply(f()) as vision.Image));
+
+  out.set("vision::F.gaussian_blur(odd square)", () =>
+    photo(vision.gaussianBlur(f(), [3, 3], [1.0, 1.0])));
+  // **A kernel that is not square, with different sigmas.** The 2-D kernel is an
+  // outer product of the y kernel with the x one, and a transpose there is
+  // invisible while both are the same size — this is the only case that sees it.
+  out.set("vision::F.gaussian_blur(oblong)", () =>
+    photo(vision.gaussianBlur(f(), [3, 5], [0.5, 2.0])));
+  out.set("vision::F.gaussian_blur(default sigma)", () =>
+    photo(vision.gaussianBlur(f(), [5, 5], null)));
+  out.set("vision::F.gaussian_blur(uint8)", () =>
+    photo(vision.gaussianBlur(u8(), [3, 3], [1.0, 1.0])));
+
+  const corners: readonly [number, number][] = [[0, 0], [3, 0], [3, 4], [0, 4]];
+  const tilted: readonly [number, number][] = [[1, 1], [3, 0], [2, 4], [0, 3]];
+  out.set("vision::F.perspective(tilted)", () =>
+    photo(vision.perspective(f(), corners, tilted, "bilinear")));
+  out.set("vision::F.perspective(tilted, nearest)", () =>
+    photo(vision.perspective(f(), corners, tilted, "nearest")));
+  out.set("vision::F.perspective(unmoved)", () =>
+    photo(vision.perspective(f(), corners, corners, "bilinear")));
+  out.set("vision::F.perspective(filled)", () =>
+    photo(vision.perspective(f(), corners, tilted, "bilinear", [0.5, 0.2, 0.1])));
+  out.set("vision::F.perspective(uint8)", () =>
+    photo(vision.perspective(u8(), corners, tilted, "bilinear")));
+
+  // The displacement is **given rather than drawn** — the golden cannot compare a
+  // draw, and `elasticTransform` takes the field as an argument exactly so that
+  // it can be given.
+  const shift = Float64Array.from({ length: 5 * 4 * 2 },
+    (_, i) => Math.fround(((i % 7) - 3) * 0.02));
+  out.set("vision::F.elastic_transform", () =>
+    photo(vision.elasticTransform(f(), shift, "bilinear")));
+  out.set("vision::F.elastic_transform(nearest)", () =>
+    photo(vision.elasticTransform(f(), shift, "nearest")));
+  out.set("vision::F.elastic_transform(uint8)", () =>
+    photo(vision.elasticTransform(u8(), shift, "bilinear")));
+
   // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
   const reprs: [string, () => vision.Transform][] = [
     ["ToTensor", () => new vision.ToTensor()],
@@ -1598,6 +1696,25 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     // repr 이 다른 그 변환이 골든에 케이스가 없던 유일한 변환이었다.
     ["Resize", () => new vision.Resize(4)],
     ["Resize(a pair)", () => new vision.Resize([4, 3])],
+    // **`center` and `fill` print only when set**, while `RandomAffine` just
+    // below drops a field when it equals its default — two rules that look the
+    // same and are not.
+    ["RandomRotation", () => new vision.RandomRotation([-30, 30])],
+    ["RandomRotation(expanded, off centre)",
+      () => new vision.RandomRotation([-10, 10], "nearest", true, [1, 2], 5)],
+    ["RandomAffine", () => new vision.RandomAffine([-30, 30])],
+    ["RandomAffine(everything)",
+      () => new vision.RandomAffine([0, 0], [0.1, 0.2], [0.8, 1.2], [5, 10])],
+    // `kernel_size` is an integer pair and `sigma` a float pair — two spellings
+    // on one line.
+    ["GaussianBlur", () => new vision.GaussianBlur(3)],
+    ["GaussianBlur(oblong)", () => new vision.GaussianBlur([3, 5], [0.2, 3.0])],
+    // **Only `p`.** Printing neither the distortion nor the fill is torchvision's
+    // own spelling.
+    ["RandomPerspective", () => new vision.RandomPerspective()],
+    // **This one alone prints `InterpolationMode.BILINEAR`.** Every other class
+    // prints `bilinear`.
+    ["ElasticTransform", () => new vision.ElasticTransform()],
     ["RandomInvert", () => new vision.RandomInvert()],
     ["RandomAutocontrast", () => new vision.RandomAutocontrast()],
     ["RandomEqualize", () => new vision.RandomEqualize()],
