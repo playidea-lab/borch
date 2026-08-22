@@ -626,18 +626,81 @@ def _nn_unsupported(name):
     return factory
 
 
+def _no_device_dtype(name, device, dtype):
+    """torch's `device=` and `dtype=` occupy the last two positions of nearly every
+    layer. **They are carried and refused rather than left out**: left out, a
+    positional call that reaches them lands on nothing and the two signatures part
+    at every layer that has them; carried, the position is torch's and the refusal
+    says which name it was."""
+    if device is not None:
+        _unsupported(f"nn.{name}(device=…)")
+    if dtype is not None:
+        _unsupported(f"nn.{name}(dtype=…)")
+
+
+def _conv_bound(in_channels, groups, kernel_numel):
+    """torch's initialisation bound. **The fan-in is divided by `groups`** —
+    each filter sees only `in_channels // groups` channels, so a grouped
+    convolution initialised as if it saw all of them starts too small."""
+    return 1.0 / _math.sqrt(in_channels // groups * kernel_numel)
+
+
+_PADDING_MODES = ("zeros", "reflect", "replicate", "circular")
+
+
+def _conv_pad(x, padding, mode, spatial):
+    """The non-zero padding modes, applied before the convolution.
+
+    torch's layer does the same: anything but `zeros` is padded here and the
+    convolution is then called with padding 0. Keeping it in the layer rather
+    than in `conv2d` is why `F.conv2d` has no `padding_mode` — the functional
+    takes an already-padded input, and putting the mode there too would be a
+    second place for the same decision.
+    """
+    if mode == "zeros":
+        return x, padding
+    if mode not in _PADDING_MODES:
+        raise ValueError(f"padding_mode has to be one of {_PADDING_MODES}, got {mode!r}")
+    widths = _spread(padding, spatial)
+    if not any(widths):
+        return x, 0
+    pairs = []
+    for width in reversed(widths):
+        pairs += [width, width]
+    return pad(_wrap(x), pairs, mode=mode), 0
+
+
 class Conv2d(Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True):
+    """**`bias` moved from the sixth position to the eighth**, where torch has it.
+
+    `Conv2d(3, 16, 3, 1, 1, False)` used to turn the bias off and now sets
+    `dilation=False`. Every call site in this repository already passed `bias` by
+    keyword, which is the only reason the move was quiet — a positional call is a
+    silent bet that the callee's parameter order never moves.
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 dilation=1, groups=1, bias=True, padding_mode="zeros",
+                 device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("Conv2d", device, dtype)
+        if padding_mode not in _PADDING_MODES:
+            raise ValueError(
+                f"padding_mode has to be one of {_PADDING_MODES}, got {padding_mode!r}")
         self.in_channels, self.out_channels = in_channels, out_channels
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
-        bound = 1.0 / _math.sqrt(in_channels * kernel_size * kernel_size)
+        self.dilation, self.groups, self.padding_mode = dilation, groups, padding_mode
+        ks = _spread(kernel_size, 2)
+        bound = _conv_bound(in_channels, groups, ks[0] * ks[1])
         self.weight = Parameter(_rng.uniform(
-            -bound, bound, (out_channels, in_channels, kernel_size, kernel_size)).astype(_DEFAULT_DTYPE))
+            -bound, bound,
+            (out_channels, in_channels // groups, ks[0], ks[1])).astype(_DEFAULT_DTYPE))
         self.bias = Parameter(_rng.uniform(-bound, bound, (out_channels,)).astype(_DEFAULT_DTYPE)) if bias else None
 
     def forward(self, x):
-        return conv2d(x, self.weight, self.bias, self.stride, self.padding)
+        x, padding = _conv_pad(x, self.padding, self.padding_mode, 2)
+        return conv2d(x, self.weight, self.bias, self.stride, padding,
+                      self.dilation, self.groups)
 
     def __repr__(self):
         return (f"Conv2d({self.in_channels}, {self.out_channels}, "
@@ -2287,18 +2350,28 @@ class BatchNorm1d(Module):
 
 class Conv1d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
-                 bias=True):
+                 dilation=1, groups=1, bias=True, padding_mode="zeros",
+                 device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("Conv1d", device, dtype)
+        if padding_mode not in _PADDING_MODES:
+            raise ValueError(
+                f"padding_mode has to be one of {_PADDING_MODES}, got {padding_mode!r}")
         self.in_channels, self.out_channels = in_channels, out_channels
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
-        bound = 1.0 / _math.sqrt(in_channels * kernel_size)
+        self.dilation, self.groups, self.padding_mode = dilation, groups, padding_mode
+        k = _spread(kernel_size, 1)[0]
+        bound = _conv_bound(in_channels, groups, k)
         self.weight = Parameter(_rng.uniform(
-            -bound, bound, (out_channels, in_channels, kernel_size)).astype(_DEFAULT_DTYPE))
+            -bound, bound,
+            (out_channels, in_channels // groups, k)).astype(_DEFAULT_DTYPE))
         self.bias = Parameter(
             _rng.uniform(-bound, bound, (out_channels,)).astype(_DEFAULT_DTYPE)) if bias else None
 
     def forward(self, x):
-        return conv1d(x, self.weight, self.bias, self.stride, self.padding)
+        x, padding = _conv_pad(x, self.padding, self.padding_mode, 1)
+        return conv1d(x, self.weight, self.bias, self.stride, padding,
+                      self.dilation, self.groups)
 
     def __repr__(self):
         return (f"Conv1d({self.in_channels}, {self.out_channels}, "
@@ -2307,20 +2380,27 @@ class Conv1d(Module):
 
 class Conv3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
-                 bias=True):
+                 dilation=1, groups=1, bias=True, padding_mode="zeros",
+                 device=None, dtype=None):
         super().__init__()
+        _no_device_dtype("Conv3d", device, dtype)
+        if padding_mode not in _PADDING_MODES:
+            raise ValueError(
+                f"padding_mode has to be one of {_PADDING_MODES}, got {padding_mode!r}")
         self.in_channels, self.out_channels = in_channels, out_channels
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
-        k = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
-        bound = 1.0 / _math.sqrt(in_channels * k * k * k)
-        shape = (out_channels, in_channels) + ((k, k, k) if isinstance(kernel_size, int)
-                                               else tuple(kernel_size))
+        self.dilation, self.groups, self.padding_mode = dilation, groups, padding_mode
+        ks = _spread(kernel_size, 3)
+        bound = _conv_bound(in_channels, groups, ks[0] * ks[1] * ks[2])
+        shape = (out_channels, in_channels // groups) + tuple(ks)
         self.weight = Parameter(_rng.uniform(-bound, bound, shape).astype(_DEFAULT_DTYPE))
         self.bias = Parameter(
             _rng.uniform(-bound, bound, (out_channels,)).astype(_DEFAULT_DTYPE)) if bias else None
 
     def forward(self, x):
-        return conv3d(x, self.weight, self.bias, self.stride, self.padding)
+        x, padding = _conv_pad(x, self.padding, self.padding_mode, 3)
+        return conv3d(x, self.weight, self.bias, self.stride, padding,
+                      self.dilation, self.groups)
 
     def __repr__(self):
         return (f"Conv3d({self.in_channels}, {self.out_channels}, "

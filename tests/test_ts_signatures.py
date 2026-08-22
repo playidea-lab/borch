@@ -86,7 +86,17 @@ SHIFTED = {
     # tidied away -- `nn.ts` belongs to another session and is blocked on its own
     # decision, and a number quietly held at 0 while the two sides part is the thing
     # this table exists to prevent.
-    "nn": 1,
+    # 1 -> 4. Three more opened the same way the MaxPool row did: the core's Conv1d,
+    # Conv2d and Conv3d took torch's dilation, groups and padding_mode, and borch.ts
+    # still takes `(in, out, kernel, stride, padding, bias)`. `new nn.Conv2d(3, 16,
+    # 3, 1, 1, false)` turns the bias off over there and sets dilation here.
+    #
+    # **Closing a gap against an outside authority opens one between two of our own
+    # libraries**, and it is not a side effect: with three implementations and one
+    # outside authority, the core can only move toward torch by moving away from
+    # borch.ts until borch.ts follows. The pair of axes disagreeing is the mechanism
+    # working. The danger is only ever a number held still while the sides part.
+    "nn": 4,
     "nn.functional": 1,
     "optim": 0,
     "optim.lr_scheduler": 0,

@@ -438,34 +438,74 @@ def _pad2d(x, padding):
     return _np.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
 
 
-def _im2col(xd, KH, KW, stride):
+def _im2col(xd, KH, KW, stride, dilation=1):
     """Spread (N,C,H,W) into (N*OH*OW, C*KH*KW). So that one GEMM finishes the
-    convolution."""
+    convolution.
+
+    **Dilation widens the window and then thins it.** A dilated filter covers
+    `(K-1)·d + 1` cells and uses every `d`-th one, so the sliding view is taken at
+    the covered size and sliced with a step — which keeps the column layout
+    identical, and `_col2im` only has to know where each filter position landed.
+    """
     sh, sw = _pair(stride)
+    dh, dw = _pair(dilation)
     N, C, H, W = xd.shape
-    OH = (H - KH) // sh + 1
-    OW = (W - KW) // sw + 1
-    win = _np.lib.stride_tricks.sliding_window_view(xd, (KH, KW), axis=(2, 3))
-    win = win[:, :, ::sh, ::sw, :, :]                  # (N, C, OH, OW, KH, KW)
+    span_h, span_w = (KH - 1) * dh + 1, (KW - 1) * dw + 1
+    OH = (H - span_h) // sh + 1
+    OW = (W - span_w) // sw + 1
+    win = _np.lib.stride_tricks.sliding_window_view(xd, (span_h, span_w), axis=(2, 3))
+    win = win[:, :, ::sh, ::sw, ::dh, ::dw]            # (N, C, OH, OW, KH, KW)
     cols = win.transpose(0, 2, 3, 1, 4, 5)             # (N, OH, OW, C, KH, KW)
     return _np.ascontiguousarray(cols).reshape(N * OH * OW, C * KH * KW), OH, OW
 
 
-def _col2im(gcols, shape, KH, KW, stride, OH, OW):
+def _col2im(gcols, shape, KH, KW, stride, OH, OW, dilation=1):
     """The inverse of im2col. It loops over **the filter positions (KH×KW)**
     rather than the output positions (OH×OW) — on a 28×28 image that is 9 rounds
-    instead of 784."""
+    instead of 784.
+
+    Filter position `(i, j)` lands at `i·dh` under dilation, which is the only
+    thing dilation changes here.
+    """
     sh, sw = _pair(stride)
+    dh, dw = _pair(dilation)
     N, C, H, W = shape
     gx = _np.zeros(shape, dtype=gcols.dtype)
     g = gcols.reshape(N, OH, OW, C, KH, KW).transpose(0, 3, 4, 5, 1, 2)   # (N,C,KH,KW,OH,OW)
     for i in range(KH):
         for j in range(KW):
-            gx[:, :, i:i + OH * sh:sh, j:j + OW * sw:sw] += g[:, :, i, j]
+            top, left = i * dh, j * dw
+            gx[:, :, top:top + OH * sh:sh, left:left + OW * sw:sw] += g[:, :, i, j]
     return gx
 
 
-def conv2d(x, weight, bias=None, stride=1, padding=0):
+def _grouped(call, x, weight, bias, groups, channel_axis=1):
+    """`groups` by composition: slice the channels, convolve each group, join.
+
+    **Written as slicing and joining rather than inside the GEMM** because the
+    gradient then follows from the pieces — `cat` and the slice already carry
+    theirs, and a hand-written backward for the grouped case would be a second
+    formula that has to agree with the first. The convolutions in this file each
+    carry one such formula already; two per operation is where they part.
+    """
+    x, weight = _wrap(x), _wrap(weight)
+    in_ch = x.data.shape[channel_axis]
+    out_ch = weight.data.shape[0]
+    if in_ch % groups or out_ch % groups:
+        raise RuntimeError(
+            f"groups={groups} divides neither the input channels ({in_ch}) nor "
+            f"the filters ({out_ch})")
+    cin, cout = in_ch // groups, out_ch // groups
+    parts = []
+    for g in range(groups):
+        xs = x[_slice_at(channel_axis, g * cin, (g + 1) * cin)]
+        ws = weight[_slice_at(0, g * cout, (g + 1) * cout)]
+        bs = None if bias is None else _wrap(bias)[_slice_at(0, g * cout, (g + 1) * cout)]
+        parts.append(call(xs, ws, bs))
+    return cat(parts, channel_axis)
+
+
+def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     """A convolution for small inputs. The same computation as the double loop
     written by hand in chapter 26.
 
@@ -478,17 +518,22 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
     so the padding on the height axis has to be 0. The sister library already
     takes them per axis, so this matches it.
     """
+    if groups != 1:
+        return _grouped(
+            lambda xs, ws, bs: conv2d(xs, ws, bs, stride, padding, dilation),
+            x, weight, bias, groups)
     xd = _pad2d(x.data, padding)
     wd = weight.data
     ph, pw = _pair(padding)
+    dh, dw = _pair(dilation)
     N, C, H, W = xd.shape
     F, C2, KH, KW = wd.shape
     if C != C2:
         raise RuntimeError(f"channels do not match: input {C}, filter {C2}")
-    if H < KH or W < KW:
+    if H < (KH - 1) * dh + 1 or W < (KW - 1) * dw + 1:
         raise RuntimeError("the filter is larger than the input.")
 
-    cols, OH, OW = _im2col(xd, KH, KW, stride)
+    cols, OH, OW = _im2col(xd, KH, KW, stride, dilation)
     w2 = wd.reshape(F, -1)
     out = (cols @ w2.T).reshape(N, OH, OW, F).transpose(0, 3, 1, 2)
 
@@ -496,7 +541,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0):
         g = _np.asarray(g)
         g2 = g.transpose(0, 2, 3, 1).reshape(-1, F)
         gw = (g2.T @ cols).reshape(wd.shape)
-        gx = _col2im(g2 @ w2, xd.shape, KH, KW, stride, OH, OW)
+        gx = _col2im(g2 @ w2, xd.shape, KH, KW, stride, OH, OW, dilation)
         if ph:
             gx = gx[:, :, ph:-ph, :]
         if pw:
@@ -687,7 +732,7 @@ def rms_norm(x, normalized_shape, weight=None, eps=None):
     return out if weight is None else out * _wrap(weight)
 
 
-def conv1d(x, weight, bias=None, stride=1, padding=0):
+def conv1d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     """A 1-D convolution. **Built by inserting a height of 1 into `conv2d`.**
 
     The sister library (webgpu) already works this way. A new im2col would make
@@ -699,19 +744,24 @@ def conv1d(x, weight, bias=None, stride=1, padding=0):
     f, c2, k = weight.data.shape
     lifted = x.reshape(n, c, 1, length)
     kernel = weight.reshape(f, c2, 1, k)
-    # The height axis is left alone — stride 1, padding 0.
-    out = conv2d(lifted, kernel, bias, (1, stride), (0, padding))
+    # The height axis is left alone — stride 1, padding 0, dilation 1.
+    out = conv2d(lifted, kernel, bias, (1, stride), (0, padding), (1, dilation),
+                 groups)
     shape = out.data.shape
     return out.reshape(shape[0], shape[1], shape[3])
 
 
-def conv3d(x, weight, bias=None, stride=1, padding=0):
+def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     """A 3-D convolution. **A 2-D convolution per depth, summed.**
 
     im2col is not rewritten in 3-D — built from multiplications and additions the
     backward follows on its own, and there is no new derivative to write. Slow
     and not wrong.
     """
+    if groups != 1:
+        return _grouped(
+            lambda xs, ws, bs: conv3d(xs, ws, bs, stride, padding, dilation),
+            x, weight, bias, groups)
     x, weight = _wrap(x), _wrap(weight)
     n, c, d, h, w = x.data.shape
     f, c2, kd, kh, kw = weight.data.shape
@@ -719,6 +769,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
         raise RuntimeError(f"channels do not match: input {c}, filter {c2}")
     sd, sh, sw = (stride, stride, stride) if isinstance(stride, int) else tuple(stride)
     pd, ph, pw = (padding, padding, padding) if isinstance(padding, int) else tuple(padding)
+    dd, dh, dw = (dilation,) * 3 if isinstance(dilation, int) else tuple(dilation)
     if pd:
         pads = [(0, 0)] * 5
         pads[2] = (pd, pd)
@@ -726,14 +777,15 @@ def conv3d(x, weight, bias=None, stride=1, padding=0):
                     lambda g: (_np.asarray(g)[:, :, pd:-pd],), "Pad3dBackward0")
         d = x.data.shape[2]
 
-    out_d = (d - kd) // sd + 1
+    out_d = (d - ((kd - 1) * dd + 1)) // sd + 1
     slabs = []
     for od in range(out_d):
         acc = None
         for i in range(kd):
-            plane = x[_slice_at(2, od * sd + i, od * sd + i + 1)].reshape(n, c, h, w)
+            depth = od * sd + i * dd
+            plane = x[_slice_at(2, depth, depth + 1)].reshape(n, c, h, w)
             slab = weight[_slice_at(2, i, i + 1)].reshape(f, c2, kh, kw)
-            part = conv2d(plane, slab, None, (sh, sw), (ph, pw))
+            part = conv2d(plane, slab, None, (sh, sw), (ph, pw), (dh, dw))
             acc = part if acc is None else acc + part
         shape = acc.data.shape
         slabs.append(acc.reshape(shape[0], shape[1], 1, shape[2], shape[3]))

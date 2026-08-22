@@ -73,7 +73,18 @@ SHIFTED = {
     #
     # `MaxPool2d(2, 2, 1)` used to set return_indices=1. It sets padding=1 now, as
     # torch reads it.
-    "nn": 8,
+    # 8 -> 5. Conv1d/2d/3d grew torch's dilation, groups and padding_mode, all
+    # implemented: dilation widens the im2col window and thins it, groups is done by
+    # slicing the channels and joining the pieces so the gradient follows from
+    # `cat` rather than from a second hand-written formula, and the non-zero padding
+    # modes pad in the layer exactly as torch's layer does. Checked against real
+    # torch over 144 functional configurations and 352 through the layers.
+    #
+    # **`bias` moved from the sixth position to the eighth**, where torch has it, so
+    # `Conv2d(3, 16, 3, 1, 1, False)` sets dilation now. Every call site in this
+    # repository already passed it by keyword, which is the only reason the move was
+    # quiet -- a positional call is a silent bet that the callee's order never moves.
+    "nn": 5,
     "nn.functional": 0,
     "optim": 2,
     "optim.lr_scheduler": 2,
