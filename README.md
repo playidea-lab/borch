@@ -602,19 +602,22 @@ The core covers 3181 cases, and the 53 *it* does not see are this side's alone
 > measured. The English wording now matches the pattern, so it is watched.
 
 borch.ts itself has written TS bodies for 2787 cases. **The remaining 447 are two
-things**: 376 deliberately not carried across, and **71 owed** — the `v2::` block,
-frozen here after that count was last written. The binding (`borch-webgpu`) already
-goes through borch.ts's kernels on all of them, so **the values are verified**, and
-what a TS body would add is not a value but this side's surface: names and argument
-order. A good many of the 376 ask about a Python name alias, so carrying those
-across would ask the same question twice; the 71 are not that, which is why they
-are counted apart.
+things**: 340 deliberately not carried across, and 107 owed. The binding
+(`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
+values are verified**, and what a TS body would add is not a value but this side's
+surface: names and argument order. A good many of the 340 ask about a Python name
+alias, so carrying those across would ask the same question twice; the 107 are not
+that, which is why they are counted apart.
 
-> The sentence above said the remainder was "all one thing now" and it stopped
-> being true the moment a new block was frozen. Two numbers that move for
-> different reasons had been added into one, and a single figure cannot show a
-> debt being paid and taken on at once — the same thing the runner's ledger
-> learned one paragraph down, arrived at again from the other end.
+> **Neither number is written by hand.** Both are read out of the runner's ledger,
+> where every row already carries the marker that says which kind it is — and they
+> are read because writing them by hand went wrong twice in one day. First the
+> sentence said the remainder was "all one thing now", which stopped being true the
+> moment a new block was frozen. Then the split that replaced it said 376 and 71,
+> and **it was wrong on arrival**: two other prefixes were marked owed and only the
+> newest one got counted. The total was right both times, and the total is what was
+> being checked, so both readings were green. The ledger knew the answer in both
+> cases; a person was retyping it in between.
 
 > **The owed half is zero, and the number it fell from never fell in a straight
 > line: 57 → 19 → 50 → 40 → 9 → 3 → 0.** Ninety-four cases were carried across
