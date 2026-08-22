@@ -1507,3 +1507,90 @@ def test_DatasetFolder_refuses_both_ways_of_saying_which_files(tmp_path):
         DS.DatasetFolder(tmp_path, load, extensions=(".png",))
     picked = DS.DatasetFolder(tmp_path, load, is_valid_file=lambda p: p.endswith(".txt"))
     assert len(picked) == 1
+
+
+def _plant_emnist(root, split, train, pixels, labels):
+    raw = pathlib.Path(root) / "EMNIST" / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    prefix = f"emnist-{split}-{'train' if train else 'test'}"
+    (raw / f"{prefix}-images-idx3-ubyte").write_bytes(pixels)
+    (raw / f"{prefix}-labels-idx1-ubyte").write_bytes(labels)
+
+
+def test_EMNIST_split_picks_the_files_and_the_class_list(tmp_path):
+    """One archive holds six datasets and `split` chooses among them **twice** — which
+    pair of files is opened, and which class list the labels index into. A version that
+    got one right and the other wrong would load real pictures and name them wrongly,
+    which is the kind of wrong that shows up as a confusing confusion matrix.
+    """
+    pixels, labels = _tiny(3)
+    for split in ("balanced", "letters", "digits"):
+        _plant_emnist(tmp_path, split, True, pixels, labels)
+    for split, count in (("balanced", 47), ("letters", 27), ("digits", 10)):
+        loaded = DS.EMNIST(tmp_path, split=split)
+        assert len(loaded.classes) == count
+        assert loaded.class_to_idx[loaded.classes[2]] == 2
+        assert len(loaded) == 3
+    with pytest.raises(ValueError, match="Unknown value"):
+        DS.EMNIST(tmp_path, split="uppercase")
+
+
+def test_EMNIST_letters_keeps_a_placeholder_at_index_zero(tmp_path):
+    """Its labels run **1 to 26**, so index 0 holds no letter. Dropping the placeholder
+    shifts every class by one, and `a` becomes `b` in every report the model produces
+    while the accuracy stays exactly the same."""
+    classes = DS.EMNIST.classes_split_dict["letters"]
+    assert classes[0] == "N/A" and classes[1] == "a" and classes[26] == "z"
+    assert len(classes) == 27
+    # `digits` and `mnist` are the same ten and start at zero — the contrast is the point.
+    assert DS.EMNIST.classes_split_dict["digits"][0] == "0"
+
+
+def test_EMNIST_merges_the_fifteen_letters_whose_cases_look_alike(tmp_path):
+    """`byclass` is 62 characters as written; `bymerge` and `balanced` fold the fifteen
+    whose upper and lower cases cannot be told apart by hand. **There is no rule that
+    produces that set** — it is a judgement NIST made, so it is written out, and this
+    checks the arithmetic of applying it rather than the judgement itself.
+    """
+    by_class = set(DS.EMNIST.classes_split_dict["byclass"])
+    merged = set(DS.EMNIST.classes_split_dict["bymerge"])
+    assert len(by_class) == 62 and len(merged) == 47
+    assert by_class - merged == DS.EMNIST._merged_classes
+    assert all(letter.islower() for letter in by_class - merged)
+    # The uppercase twins survive; it is the lowercase spelling that goes.
+    assert "C" in merged and "c" not in merged
+    assert DS.EMNIST.classes_split_dict["balanced"] == DS.EMNIST.classes_split_dict["bymerge"]
+
+
+def test_EMNIST_unpacks_only_the_members_it_means_to(tmp_path, monkeypatch):
+    """`zipfile.extractall` follows a member's own path and a member's path can climb
+    out of where it is being unpacked. Nothing in NIST's archive does; **the guard does
+    not depend on that staying true**, and the case is written because an archive is
+    the one input here that arrives from a third party and names its own files.
+    """
+    import io
+    import zipfile
+    made = io.BytesIO()
+    pixels, labels = _tiny(2)
+    with zipfile.ZipFile(made, "w") as writing:
+        writing.writestr("gzip/emnist-digits-train-images-idx3-ubyte.gz",
+                         __import__("gzip").compress(pixels))
+        writing.writestr("gzip/emnist-digits-train-labels-idx1-ubyte.gz",
+                         __import__("gzip").compress(labels))
+        writing.writestr("gzip/../../escaped.gz", __import__("gzip").compress(b"no"))
+        writing.writestr("gzip/readme.txt", b"not a member we want")
+    body = made.getvalue()
+
+    import hashlib
+    monkeypatch.setattr(DS.EMNIST, "md5", hashlib.md5(body).hexdigest())
+    monkeypatch.setattr(V, "_fetch_to",
+                        lambda url, path, digest, **kw: (pathlib.Path(path)
+                                                         .write_bytes(body), path)[1])
+    loaded = DS.EMNIST(tmp_path, split="digits", download=True)
+    assert len(loaded) == 2
+    raw = tmp_path / "EMNIST" / "raw"
+    written = sorted(p.name for p in raw.iterdir())
+    assert "escaped" in written, (
+        "the climbing member should land flattened inside raw/, not above it")
+    assert not (tmp_path.parent / "escaped").exists()
+    assert "readme.txt" not in written and "readme" not in written

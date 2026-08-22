@@ -81,9 +81,11 @@ import io as _io
 import math as _math
 import os as _os
 import pickle as _pickle
+import string as _string
 import sys as _sys
 import tarfile as _tarfile
 import types as _types
+import zipfile as _zipfile
 import urllib.request as _urlreq
 import warnings as _warnings
 
@@ -4561,6 +4563,100 @@ class DatasetFolder(VisionDataset):
         return sample, target
 
 
+class EMNIST(MNIST):
+    """The whole NIST Special Database 19 in MNIST's format — **letters as well as
+    digits, and six ways of carving it up.**
+
+    `split` is required and picks both the pictures and the class list. `byclass` is
+    all 62 characters as written; `bymerge` and `balanced` fold the fifteen letters
+    whose upper and lower cases are indistinguishable by hand — `c`, `i`, `j`, `k`,
+    `l`, `m`, `o`, `p`, `s`, `u`, `v`, `w`, `x`, `y`, `z` — into 47; `letters` is the
+    26 lowercase with **a placeholder at index 0**, because its labels are 1-based on
+    disk and nothing sits at zero; `digits` and `mnist` are the ten digits at different
+    sizes.
+
+    **The pictures arrive transposed** and torchvision leaves them that way, so this
+    does too. A picture that reads as a mirrored, rotated character is not a bug here
+    and not one there; it is what the files contain, and `transforms` has `hflip` and
+    `rotate` for anyone who wants them upright. Correcting it silently would make this
+    library and torchvision disagree on every EMNIST pixel.
+
+    One archive holds all six splits — 536MB of zip containing gzipped IDX — so the
+    first `download=True` fetches everything regardless of which split was asked for,
+    and the ones after that fetch nothing.
+    """
+
+    url = "https://biometrics.nist.gov/cs_links/EMNIST/gzip.zip"
+    md5 = "58c8d27c78d21e728a6bc7b3cc06412e"
+    splits = ("byclass", "bymerge", "balanced", "letters", "digits", "mnist")
+    # The fifteen whose cases are not told apart by hand. Written out rather than
+    # derived: there is no rule that produces this set, it is a judgement NIST made.
+    _merged_classes = {"c", "i", "j", "k", "l", "m", "o", "p", "s", "u", "v", "w",
+                       "x", "y", "z"}
+    _all_classes = set(_string.digits + _string.ascii_letters)
+    classes_split_dict = {
+        "byclass": sorted(_all_classes),
+        "bymerge": sorted(_all_classes - _merged_classes),
+        "balanced": sorted(_all_classes - _merged_classes),
+        # **Index 0 is a placeholder and not a class.** The labels run 1..26, so a
+        # reader that drops this entry has every letter off by one and a confusion
+        # matrix that looks like a systematically confused model.
+        "letters": ["N/A"] + list(_string.ascii_lowercase),
+        "digits": list(_string.digits),
+        "mnist": list(_string.digits),
+    }
+
+    def __init__(self, root, split, **kwargs):
+        if split not in self.splits:
+            raise ValueError(f"Unknown value '{split}' for argument split. "
+                             f"Valid values are {{{', '.join(self.splits)}}}.")
+        self.split = split
+        super().__init__(root, **kwargs)
+        self.classes = self.classes_split_dict[split]
+
+    def _files(self):
+        prefix = f"emnist-{self.split}-{'train' if self.train else 'test'}"
+        return [f"{prefix}-images-idx3-ubyte", f"{prefix}-labels-idx1-ubyte"]
+
+    def _load_data(self):
+        images, labels = self._files()
+        with open(_os.path.join(self.raw_folder, images), "rb") as handle:
+            data = _read_idx_images(handle.read())
+        with open(_os.path.join(self.raw_folder, labels), "rb") as handle:
+            targets = _read_idx_labels(handle.read())
+        return data, targets
+
+    def download(self):
+        """**The zip is unpacked one member at a time and only where it belongs.**
+
+        `zipfile.extractall` follows a member's own path, and a member's path can climb
+        out of the directory it is unpacked into. Nothing in this archive does; the
+        guard costs three lines and does not depend on that staying true.
+        """
+        if self._check_exists():
+            return
+        _os.makedirs(self.raw_folder, exist_ok=True)
+        archive = _os.path.join(self.raw_folder, "gzip.zip")
+        if _os.path.isfile(archive) and _md5_of_file(archive) != self.md5:
+            _os.unlink(archive)
+        if not _os.path.isfile(archive):
+            _fetch_to(self.url, archive, self.md5)
+        with _zipfile.ZipFile(archive) as zipped:
+            for member in zipped.namelist():
+                base = _os.path.basename(member)
+                if not base.endswith(".gz"):
+                    continue
+                out = _os.path.join(self.raw_folder, base[:-len(".gz")])
+                if _os.path.isfile(out):
+                    continue
+                with zipped.open(member) as source:
+                    with open(out, "wb") as handle:
+                        handle.write(_gzip.decompress(source.read()))
+
+    def extra_repr(self):
+        return f"Split: {self.split}"
+
+
 transforms = _types.ModuleType("borchvision.transforms")
 functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
@@ -4572,7 +4668,7 @@ _sys.modules["borchvision.transforms.functional"] = functional
 # `import borchvision.ops` work and `import torchvision.ops` mean something else.
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
-for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST",
+for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
               "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder"):
     setattr(datasets, _name, globals()[_name])
 
