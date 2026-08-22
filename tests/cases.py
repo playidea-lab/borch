@@ -10636,7 +10636,7 @@ def golden_cases(inp=None):
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + method_cases(inp) + math_cases(inp)
+            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + dataset_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
@@ -11703,3 +11703,178 @@ def _v2_from_picture(L, picture, build):
     m = _vision_v2(L)
     out = _as_numpy(build(m, L)(picture))
     return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+
+
+DATASET_PREFIX = "dataset::"
+
+
+def _vision_datasets(L):
+    """`borchvision.datasets` for us, `torchvision.datasets` for real torch."""
+    if _is_real_torch(L):
+        import torchvision.datasets as real
+        return real
+    _vision(L)
+    import sys as _sys
+    return _sys.modules["borchvision"].datasets
+
+
+def _idx_bytes(kind, shape, payload):
+    """An IDX file, built here. **The header is the case.**
+
+    Two zero bytes, then the type code, then the number of axes; then one big-endian
+    length per axis. Writing it out rather than downloading one is what lets the
+    decoder be compared at all: torchvision's reader takes a path, so the bytes have to
+    exist as a file on both sides, and eleven megabytes of MNIST cannot go in a golden
+    dump for a header that is sixteen bytes long.
+    """
+    head = bytes([0, 0, kind, len(shape)])
+    for length in shape:
+        head += int(length).to_bytes(4, "big")
+    return head + payload
+
+
+def dataset_cases(inp=None):
+    """`borchvision.datasets` — **the decoders, asked without a network.**
+
+    A dataset is two things: an address and a format. The address half cannot be a
+    golden case, because a case that downloads is a case that fails on a train, and
+    because freezing MNIST's answer means shipping MNIST. The format half is the part
+    that can be got wrong quietly, and it is all here.
+
+    The bytes are **built in this file** and handed to both sides. torchvision's
+    readers take a path rather than bytes, so each case writes a temporary file — that
+    is the only reason the plumbing below exists, and it is worth the plumbing: the
+    alternative is comparing our decoder against our own expectations, which proves
+    that the test was written after the code.
+
+    **The real data was compared once, outside this table.** MNIST, FashionMNIST and
+    KMNIST, both splits, against real torchvision: `data`, `targets`, `classes`,
+    `class_to_idx`, `len` and `__getitem__` all equal, and our download produced files
+    byte-identical to torchvision's. That is written in the README rather than frozen
+    here, because a check that needs 250MB and a working network is not a check that
+    runs.
+    """
+    del inp
+
+    def on_idx(build, read):
+        """The same bytes to both sides — through a file, because that is what
+        torchvision's reader takes."""
+        def run(L):
+            import os
+            import tempfile
+            data = build()
+            handle, path = tempfile.mkstemp(suffix="-idx")
+            try:
+                with os.fdopen(handle, "wb") as out:
+                    out.write(data)
+                if _is_real_torch(L):
+                    from torchvision.datasets import mnist as real
+                    got = getattr(real, read)(path)
+                else:
+                    mod = _vision_datasets(L)
+                    import sys as _sys
+                    lib = _sys.modules["borchvision"]
+                    got = (lib._read_idx_images if read == "read_image_file"
+                           else lib._read_idx_labels)(data)
+                    del mod
+            finally:
+                os.unlink(path)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(got), dtype=np.float32)))
+        return run
+
+    # Pictures: two 3x4 frames of bytes, counting up so that a transposed or
+    # mis-strided read lands somewhere visibly different.
+    _pixels = np.arange(24, dtype=np.uint8).tobytes()
+    # Labels: ten of them, including 0 and 255 — the ends are where a signed read shows.
+    _labels = bytes([0, 1, 2, 9, 200, 255, 3, 4, 5, 6])
+
+    cases = [
+        (DATASET_PREFIX + "IDX images",
+         on_idx(lambda: _idx_bytes(8, (2, 3, 4), _pixels), "read_image_file")),
+        (DATASET_PREFIX + "IDX labels",
+         on_idx(lambda: _idx_bytes(8, (10,), _labels), "read_label_file")),
+        (DATASET_PREFIX + "IDX images(one frame)",
+         on_idx(lambda: _idx_bytes(8, (1, 4, 6), _pixels), "read_image_file")),
+    ]
+
+    def refuses(build, read, phrase):
+        """**A header that promises more than the file carries.** `strict=False` in
+        torchvision relaxes an assert and not the reshape underneath it, so both sides
+        still refuse — and what is frozen is that they refuse the same way. Measured,
+        torch's words are `shape '[12]' is invalid for input of size 10`; ours are the
+        same sentence, which is what makes the phrase searchable across the two.
+        """
+        def run(L):
+            import os
+            import tempfile
+            data = build()
+            handle, path = tempfile.mkstemp(suffix="-idx")
+            try:
+                with os.fdopen(handle, "wb") as out:
+                    out.write(data)
+                try:
+                    if _is_real_torch(L):
+                        from torchvision.datasets import mnist as real
+                        getattr(real, read)(path)
+                    else:
+                        import sys as _sys
+                        lib = _sys.modules["borchvision"]
+                        (lib._read_idx_images if read == "read_image_file"
+                         else lib._read_idx_labels)(data)
+                except Exception as exc:                            # noqa: BLE001
+                    return f"거절|문구={phrase in str(exc)}"
+            finally:
+                os.unlink(path)
+            return "예외가 안 났다"
+        return run
+
+    cases.append((DATASET_PREFIX + "IDX labels(short by two)=거절",
+                  refuses(lambda: _idx_bytes(8, (12,), _labels), "read_label_file",
+                          "invalid for input of size 10")))
+
+    def cifar(build, want):
+        """A CIFAR batch, pickled here and read by both sides.
+
+        torchvision has no public reader for one — it opens the file inside
+        `CIFAR10.__init__`, which needs a whole directory of batches with the right
+        checksums. So **the comparison is against `pickle` plus the reshape written
+        out**, which is what torchvision's few lines do, and the case is worth having
+        for the reshape: a batch is planar, 1024 red then 1024 green then 1024 blue,
+        and a channel-swapped CIFAR trains to a plausible number.
+        """
+        def run(L):
+            import pickle
+            raw = pickle.dumps(build())
+            if _is_real_torch(L):
+                entry = pickle.loads(raw, encoding="latin1")
+                labels = entry.get("labels", entry.get("fine_labels"))
+                out = (np.asarray(entry["data"]).reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+                       if want == "data" else np.asarray(labels))
+            else:
+                import sys as _sys
+                lib = _sys.modules["borchvision"]
+                images, labels = lib._read_cifar_batch(raw)
+                out = images if want == "data" else np.asarray(labels)
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    # Two pictures, and **each channel a constant** so that a channel swap is a
+    # different number rather than a different arrangement of the same numbers.
+    _batch = np.zeros((2, 3072), dtype=np.uint8)
+    _batch[0, 0:1024], _batch[0, 1024:2048], _batch[0, 2048:] = 10, 20, 30
+    _batch[1, 0:1024], _batch[1, 1024:2048], _batch[1, 2048:] = 40, 50, 60
+    # One pixel off the constant, so that the reshape's own order is asked too.
+    _batch[0, 5], _batch[0, 1024 + 7] = 200, 201
+    _entry = {"data": _batch, "labels": [3, 7]}
+
+    cases += [
+        (DATASET_PREFIX + "CIFAR batch(pictures)", cifar(lambda: dict(_entry), "data")),
+        (DATASET_PREFIX + "CIFAR batch(labels)", cifar(lambda: dict(_entry), "labels")),
+        # **CIFAR-100 spells the same field `fine_labels`**, and the file does not say
+        # which of the two it is. A reader that only knows one key reads the other
+        # dataset as having no labels at all, which is a dataset that trains.
+        (DATASET_PREFIX + "CIFAR batch(fine_labels)",
+         cifar(lambda: {"data": _batch, "fine_labels": [11, 62]}, "labels")),
+    ]
+    return cases

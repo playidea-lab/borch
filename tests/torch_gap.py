@@ -45,6 +45,26 @@ the move that hid it: absent from the list reads as zero to review, and absent f
 while present in the list reads as thirty-six to review. The second was the true sentence,
 and it is what put the namespace on the to-do list it has now come off.
 
+## `datasets` reads 7 of 72, and **eight of the gaps are left without a reason**
+
+Every other absence in this file carries one. These eight do not, and that is the
+entry rather than an oversight: `EMNIST`, `QMNIST`, `MovingMNIST`, `USPS`, `SEMEION`,
+`STL10`, `FER2013`, `DatasetFolder`.
+
+The reason the rest are declined is a codec. Most of torchvision's datasets are
+folders of JPEG or PNG, numpy decodes neither, and adding a decoder is the dependency
+this library does without — the same answer PIL gets in `transforms`, arriving from
+the other side. That reason is true of fifty-seven names and **false of these eight**.
+`QMNIST` and `EMNIST` are MNIST's own IDX format, one of them zipped. `MovingMNIST` is
+a `.npy`. `USPS` is bzipped text, `SEMEION` is text, `FER2013` is a CSV, `STL10` is
+raw bytes, and `DatasetFolder` walks directories and calls a loader you pass it.
+
+Writing "a codec" beside those would be **exactly the failure this file exists to
+catch**, and it has been caught here twice already — once when `datasets` was refused
+for a network reason that turned out to be about two servers' CORS headers, and once
+when the browser half of the same sentence was stale. So the count now says eight
+rather than nothing, and eight is a to-do list.
+
 ## `transforms.v2` is on the list and `transforms.v2.functional` is not
 
 v2 is torchvision's current recommended API and it was **invisible to this measure**
@@ -121,6 +141,7 @@ try:                                            # the vision half needs one more
     # without being hidden.
     import torchvision.transforms.v2                              # noqa: F401
     import torchvision.ops                                        # noqa: F401
+    import torchvision.datasets                                   # noqa: F401
 except ImportError:                             # pragma: no cover - measured by test_gap
     torchvision = None
 
@@ -592,6 +613,80 @@ SKIPPED = {
                           "one is the dependency this library does without — the same "
                           "answer PIL gets",
 
+
+    # `datasets`. **The line is a codec, not a network.** Seven of these are built
+    # here; of the rest, most read JPEG or PNG, and numpy has no decoder for either.
+    # Adding one is the dependency this library does without — the same answer PIL
+    # gets in `transforms`, arriving from the other side.
+    #
+    # Eight names are **absent with no reason on purpose**; see this file's docstring.
+
+    "datasets.CLEVRClassification": "its pictures are JPEG or PNG and numpy decodes neither. "
+                            "Adding a codec is the dependency this library does "
+                            "without — the same answer PIL gets",
+    "datasets.Caltech101": "as above — a codec",
+    "datasets.Caltech256": "as above — a codec",
+    "datasets.CelebA": "as above — a codec",
+    "datasets.Cityscapes": "as above — a codec",
+    "datasets.CocoCaptions": "as above — a codec",
+    "datasets.CocoDetection": "as above — a codec",
+    "datasets.Country211": "as above — a codec",
+    "datasets.DTD": "as above — a codec",
+    "datasets.EuroSAT": "as above — a codec",
+    "datasets.FGVCAircraft": "as above — a codec",
+    "datasets.Flickr30k": "as above — a codec",
+    "datasets.Flickr8k": "as above — a codec",
+    "datasets.Flowers102": "as `SVHN` for the labels, and its pictures are JPEG on top of that",
+    "datasets.Food101": "as above — a codec",
+    "datasets.GTSRB": "as above — a codec",
+    "datasets.HMDB51": "video. There is no video anywhere in this project and a tutorial's first ten lines do not open one",
+    "datasets.INaturalist": "as above — a codec",
+    "datasets.ImageFolder": "a folder of pictures, and opening one needs a codec. `DatasetFolder` is the half that works without: it walks the folders and calls a `loader` you pass, and that one is absent here for a different reason — nobody has written it",
+    "datasets.ImageNet": "as above — a codec",
+    "datasets.Imagenette": "as above — a codec",
+    "datasets.Kinetics": "as above",
+    "datasets.Kitti": "as above — a codec",
+    "datasets.LFWPairs": "as above — a codec",
+    "datasets.LFWPeople": "as above — a codec",
+    "datasets.LSUN": "the pictures live in an LMDB database. That is a second dependency before the codec is even reached",
+    "datasets.LSUNClass": "as above",
+    "datasets.Omniglot": "as above — a codec",
+    "datasets.OxfordIIITPet": "as above — a codec",
+    "datasets.PCAM": "the whole set is one HDF5 file, so it is `h5py` rather than a codec. Same answer: the dependency",
+    "datasets.PhotoTour": "as above — a codec",
+    "datasets.Places365": "as above — a codec",
+    "datasets.RenderedSST2": "as above — a codec",
+    "datasets.SBDataset": "as above — `.mat` annotations and JPEG pictures",
+    "datasets.SBU": "as above — a codec",
+    "datasets.SUN397": "as above — a codec",
+    "datasets.SVHN": "it is a MATLAB v7 file, and reading one is `scipy.io.loadmat`. No image codec is involved — the refusal is the dependency, and it is the same answer PIL and a JPEG decoder get",
+    "datasets.StanfordCars": "as above — a codec",
+    "datasets.UCF101": "as above",
+    "datasets.VOCDetection": "as above — a codec",
+    "datasets.VOCSegmentation": "as above — a codec",
+    "datasets.WIDERFace": "as above — a codec",
+
+    # The stereo and optical-flow sets are one kind and are declined as one. Each is a
+    # **pair** of pictures plus a disparity or flow field in `.pfm` or `.flo`, so they
+    # need the codec and then a second format on top of it, and what they exist to
+    # train has no model here either.
+    "datasets.CREStereo": "stereo or optical flow — paired pictures plus a "
+                            "disparity field, so a codec and then another format",
+    "datasets.CarlaStereo": "as above",
+    "datasets.ETH3DStereo": "as above",
+    "datasets.FallingThingsStereo": "as above",
+    "datasets.FlyingChairs": "as above",
+    "datasets.FlyingThings3D": "as above",
+    "datasets.HD1K": "as above",
+    "datasets.InStereo2k": "as above",
+    "datasets.Kitti2012Stereo": "as above",
+    "datasets.Kitti2015Stereo": "as above",
+    "datasets.KittiFlow": "as above",
+    "datasets.Middlebury2014Stereo": "as above",
+    "datasets.SceneFlowStereo": "as above",
+    "datasets.Sintel": "as above",
+    "datasets.SintelStereo": "as above",
+
     # `ops`. **The eleven that are here are box geometry and the twenty-eight that are
     # not need a model.** The old one-line reason covered all thirty-nine and
     # justified twenty-eight of them, which is why it is written out by kind now.
@@ -666,7 +761,8 @@ def _spaces():
                 ("transforms.functional", torchvision.transforms.functional,
                  borchvision.transforms.functional),
                 ("transforms.v2", torchvision.transforms.v2, borchvision.transforms.v2),
-                ("ops", torchvision.ops, borchvision.ops)]
+                ("ops", torchvision.ops, borchvision.ops),
+                ("datasets", torchvision.datasets, borchvision.datasets)]
     return [(name, a, b) for name, a, b in got if b is not None]
 
 

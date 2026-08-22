@@ -518,6 +518,12 @@ NOT_PORTED = {
     # re-export — so the strings are frozen as strings. The other 19 are values at the
     # settings where the draw has nothing to draw. Portable, both halves: the arithmetic
     # is v1's, already here, and a repr is a string comparison on either side.
+    # Six, and all six are **decoders on bytes built in the case table** — an IDX
+    # header and a CIFAR batch, written out rather than downloaded. Nothing here
+    # touches a network, so they port like any other value case; what does not port
+    # is the rest of `datasets`, which on that side is a `fetch` and an OPFS cache
+    # and has no case in this table at all.
+    "dataset::": (7, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),

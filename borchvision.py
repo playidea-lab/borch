@@ -74,9 +74,16 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
 import enum as _enum
+import gzip as _gzip
+import hashlib as _hashlib
+import io as _io
 import math as _math
+import os as _os
+import pickle as _pickle
 import sys as _sys
+import tarfile as _tarfile
 import types as _types
+import urllib.request as _urlreq
 import warnings as _warnings
 
 import numpy as _np
@@ -3625,6 +3632,595 @@ class _V2CutMix(_V2MixBase):
 # namespace path, and the alternative — telling people to spell the import
 # differently here — is the kind of difference that makes the imitation worthless.
 
+# --------------------------------------------------------------------------- datasets
+#
+# **The refusal that used to stand here was about addresses, not about datasets.**
+# What a browser cannot reach is torchvision's own hosts — `cs.toronto.edu` and
+# `ossci-datasets.s3.amazonaws.com` send no CORS header, measured — and that is a fact
+# about two servers. Reading the bytes once they are in hand needs no network at all,
+# and this is that half: the decoders, and a download that works where a socket does.
+#
+# The formats are the whole content. MNIST's is IDX, four files of it; CIFAR's is a
+# Python pickle inside a tar. Both are read here **from bytes**, so the same code
+# serves a file on disk, a response body, and a golden case built in memory.
+
+_IDX_DTYPES = {8: "u1", 9: "i1", 11: ">i2", 12: ">i4", 13: ">f4", 14: ">f8"}
+
+
+def _read_idx(data):
+    """IDX ("Pascal Vincent") bytes to an array. **Big endian, always.**
+
+    The header is four bytes: two zero, then the type, then the number of axes; then
+    one big-endian 32-bit length per axis. torchvision reads the same header by hand
+    and then flips the bytes afterwards when the machine is little-endian — numpy does
+    that in the dtype string, which is why `>i2` appears above and no flip appears
+    below. The result is the same array; only who does the swapping differs.
+
+    The lengths are **not** trusted to match the payload. torchvision passes
+    `strict=False` from both its readers, so a file whose header promises more than it
+    carries is reshaped and raises there rather than here; a file that carries more is
+    truncated. Both are kept, because a divergence in what an malformed file does is
+    the kind that only shows up on the day one arrives.
+    """
+    kind, axes = data[2], data[3]
+    if kind not in _IDX_DTYPES:
+        raise ValueError(f"unknown IDX type code {kind} — expected one of "
+                         f"{sorted(_IDX_DTYPES)}")
+    if not 1 <= axes <= 3:
+        raise ValueError(f"IDX header says {axes} axes; 1 to 3 is the format")
+    shape = [int.from_bytes(data[4 * (i + 1):4 * (i + 2)], "big") for i in range(axes)]
+    flat = _np.frombuffer(data, dtype=_np.dtype(_IDX_DTYPES[kind]),
+                          offset=4 * (axes + 1))
+    want = int(_np.prod(shape))
+    if flat.size < want:
+        # **torch's sentence, because that is the one people search for.** Its own
+        # readers pass `strict=False`, which relaxes an assert and not the reshape
+        # underneath it, so a short file refuses there too — with these words. numpy's
+        # own message names the same two numbers the other way round, and a phrase that
+        # differs between the two implementations is a phrase nobody can grep for.
+        raise ValueError(
+            f"shape '{list(shape)}' is invalid for input of size {flat.size}\n"
+            f"  the IDX header promises {want} values and the file carries "
+            f"{flat.size} — it is truncated.")
+    return flat[:want].reshape(shape)
+
+
+def _read_idx_images(data):
+    """The three-axis half, checked. The message is torchvision's."""
+    out = _read_idx(data)
+    if out.dtype != _np.uint8:
+        raise TypeError(f"x should be of dtype uint8 instead of {out.dtype}")
+    if out.ndim != 3:
+        raise ValueError(f"x should have 3 dimensions instead of {out.ndim}")
+    return out
+
+
+def _read_idx_labels(data):
+    """The one-axis half. **Widened to int64**, as torchvision's `.long()` does — the
+    labels are bytes on disk and an index everywhere else."""
+    out = _read_idx(data)
+    if out.dtype != _np.uint8:
+        raise TypeError(f"x should be of dtype uint8 instead of {out.dtype}")
+    if out.ndim != 1:
+        raise ValueError(f"x should have 1 dimension instead of {out.ndim}")
+    return out.astype(_np.int64)
+
+
+class _CifarUnpickler(_pickle.Unpickler):
+    """A CIFAR batch is **a Python pickle that was downloaded**, and a pickle names the
+    classes it will build before it builds them.
+
+    torchvision calls `pickle.load` on it. That is safe as long as the file is the one
+    the checksum names, and it is arbitrary code execution the moment it is not — a
+    proxy, a mirror, a cache, a redirect. The checksum is verified here too and this
+    is not a claim that it fails; it is that **a second lock costs ten lines** and the
+    failure it prevents is the worst one in this file.
+
+    So the classes are named instead of trusted. What a CIFAR batch legitimately needs
+    is numpy's array reconstruction and its scalar type objects, nothing else.
+    """
+
+    _ALLOWED = {
+        ("numpy", "dtype"), ("numpy", "ndarray"), ("numpy", "uint8"),
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy._core.multiarray", "_reconstruct"),
+    }
+
+    def find_class(self, module, name):
+        if (module, name) not in self._ALLOWED:
+            raise _pickle.UnpicklingError(
+                f"a CIFAR batch asked for `{module}.{name}`, which is not one of the "
+                "names this format needs.\n"
+                "  A batch file is a pickle, so a name it asks for is code that will "
+                "run. This refuses rather than runs it.")
+        return super().find_class(module, name)
+
+
+def _read_cifar_batch(data):
+    """One CIFAR batch's `(images, labels)`, images as **(N,H,W,C) uint8**.
+
+    On disk a batch is `(N, 3072)`, one row a picture, and the row is planar: 1024 red,
+    then 1024 green, then 1024 blue. So it reshapes to `(N,3,32,32)` and then moves the
+    channel last — torchvision does exactly this, and the transpose is the part that is
+    silently survivable if it is got wrong, since a channel-swapped CIFAR still trains.
+
+    The label key is `labels` in CIFAR-10 and `fine_labels` in CIFAR-100. Both are
+    looked for, because the file does not say which of the two it is.
+    """
+    entry = _CifarUnpickler(_io.BytesIO(data), encoding="latin1").load()
+    labels = entry.get("labels", entry.get("fine_labels"))
+    if labels is None:
+        raise ValueError("a CIFAR batch with neither `labels` nor `fine_labels` — "
+                         f"it carries {sorted(entry)}")
+    images = _np.asarray(entry["data"]).reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+    return _np.ascontiguousarray(images), [int(v) for v in labels]
+
+
+def _md5(data):
+    return _hashlib.md5(data).hexdigest()
+
+
+def _md5_of_file(path, chunk=1 << 20):
+    """The same digest **without holding the file**. The archives this checks are
+    measured in hundreds of megabytes, and the point of streaming them in was not to
+    read them whole a moment later."""
+    running = _hashlib.md5()
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(chunk)
+            if not block:
+                break
+            running.update(block)
+    return running.hexdigest()
+
+
+def _fetch(url, digest, timeout=60.0):
+    """One file's bytes, **checked against the digest before they are returned.**
+
+    Handing back unverified bytes and checking later is the version that goes wrong:
+    the caller has already written them somewhere by then, and the next run finds a
+    file of the right name holding the wrong thing. It is one function so that there
+    is one place where bytes become trusted.
+
+    For the small files only — every MNIST piece is under ten megabytes. `_fetch_to`
+    is the one to reach for when the file is not.
+    """
+    with _urlreq.urlopen(url, timeout=timeout) as response:      # noqa: S310
+        data = response.read()
+    if digest is not None and _md5(data) != digest:
+        raise RuntimeError(
+            f"{url} came back with md5 {_md5(data)}, expected {digest}.\n"
+            "  A mirror, a proxy or a captive portal serving something else is the "
+            "usual cause; the file is not written.")
+    return data
+
+
+def _fetch_to(url, path, digest, timeout=60.0, chunk=1 << 20):
+    """The same, **streamed to a file** and hashed as it goes.
+
+    CIFAR-10 is 170MB. Read into memory it is 170MB of memory, and this is a library
+    that also runs where that is most of what there is — so the bytes go past a
+    megabyte at a time and only the digest is carried.
+
+    The invariant from `_fetch` is kept by writing to `path + ".part"` and renaming
+    **after** the digest agrees. Nothing sits at the real path unverified, which is
+    what makes a failed download safe to simply run again: there is no half file to
+    recognise, because a half file has the wrong name.
+    """
+    partial = path + ".part"
+    running = _hashlib.md5()
+    with _urlreq.urlopen(url, timeout=timeout) as response:      # noqa: S310
+        with open(partial, "wb") as out:
+            while True:
+                block = response.read(chunk)
+                if not block:
+                    break
+                running.update(block)
+                out.write(block)
+    if digest is not None and running.hexdigest() != digest:
+        _os.unlink(partial)
+        raise RuntimeError(
+            f"{url} came back with md5 {running.hexdigest()}, expected {digest}.\n"
+            "  A mirror, a proxy or a captive portal serving something else is the "
+            "usual cause; the partial file is removed.")
+    _os.replace(partial, path)
+    return path
+
+
+class VisionDataset:
+    """The base every dataset here subclasses. **It holds the two transform slots.**
+
+    `transform` acts on the picture and `target_transform` on the label; `transforms`
+    takes both together, for the datasets where they cannot be decided apart — a crop
+    that moves the boxes with it. Giving `transforms` alongside either of the others is
+    an error rather than a precedence rule, which is torchvision's choice and worth
+    keeping: a silent precedence is how you find out months later which one lost.
+    """
+
+    def __init__(self, root=None, transforms=None, transform=None,
+                 target_transform=None):
+        if transforms is not None and (transform is not None
+                                       or target_transform is not None):
+            raise ValueError("Only transforms or transform/target_transform can be "
+                             "passed as argument")
+        self.root = root
+        self.transform, self.target_transform = transform, target_transform
+        if transforms is None and (transform is not None
+                                   or target_transform is not None):
+            transforms = _StandardTransform(transform, target_transform)
+        self.transforms = transforms
+
+    def __len__(self):
+        raise NotImplementedError
+
+    def __getitem__(self, index):
+        raise NotImplementedError
+
+    def extra_repr(self):
+        return ""
+
+    def __repr__(self):
+        """torchvision's, **including the part that looks like a mistake.**
+
+        The transforms' repr is added to the body as a single element and the indent is
+        applied per element, so only its first line is indented and `Transform:` comes
+        out at column zero under an indented `StandardTransform`. It reads as ragged and
+        it is what torchvision prints; matching it is the point, since what a reader
+        compares against is the output in front of them, not the tidier one.
+        """
+        body = [f"Number of datapoints: {len(self)}"]
+        if self.root is not None:
+            body.append(f"Root location: {self.root}")
+        body += self.extra_repr().splitlines()
+        if self.transforms is not None:
+            body.append(repr(self.transforms))
+        return "\n".join([f"Dataset {type(self).__name__}"]
+                          + [" " * 4 + line for line in body])
+
+
+class _StandardTransform:
+    """The pair, applied. torchvision names this `StandardTransform` and does not
+    export it; it is here because the repr above prints it and a reader who sees the
+    name should be able to find what makes it."""
+
+    def __init__(self, transform=None, target_transform=None):
+        self.transform, self.target_transform = transform, target_transform
+
+    def __call__(self, picture, target):
+        if self.transform is not None:
+            picture = self.transform(picture)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return picture, target
+
+    def _lines(self, head, held):
+        """**The continuation lines are padded to the length of the label**, so a
+        `Compose` printed after `Transform: ` lines up under its own opening bracket
+        rather than under the label."""
+        body = repr(held).splitlines()
+        return [f"{head}{body[0]}"] + [" " * len(head) + line for line in body[1:]]
+
+    def __repr__(self):
+        lines = ["StandardTransform"]
+        if self.transform is not None:
+            lines += self._lines("Transform: ", self.transform)
+        if self.target_transform is not None:
+            lines += self._lines("Target transform: ", self.target_transform)
+        return "\n".join(lines)
+
+
+class MNIST(VisionDataset):
+    """Handwritten digits. **`__getitem__` gives an `(H,W)` array, not a PIL image.**
+
+    That is the one place this diverges, and it is the same divergence `ToTensor` has
+    everywhere else in this file: torchvision hands the transform a PIL image because
+    every one of its transforms accepts one, and there is no PIL here. A recipe reads
+    the same either way — `transform=Compose([ToTensor(), Normalize(...)])` — because
+    `ToTensor` is where the two conventions meet.
+
+    `.data` is `(N,28,28)` uint8 and `.targets` is `(N,)` int64, both arrays. In
+    torchvision they are tensors of the same shape and dtype; arrays are what the rest
+    of this file speaks, and `borch.tensor(ds.data)` is the bridge.
+    """
+
+    mirrors = ["https://ossci-datasets.s3.amazonaws.com/mnist/",
+               "http://yann.lecun.com/exdb/mnist/"]
+    resources = [("train-images-idx3-ubyte.gz", "f68b3c2dcbeaaa9fbdd348bbdeb94873"),
+                 ("train-labels-idx1-ubyte.gz", "d53e105ee54ea40749a09fcbcd1e9432"),
+                 ("t10k-images-idx3-ubyte.gz", "9fb629c4189551a2d022fa330f9573f3"),
+                 ("t10k-labels-idx1-ubyte.gz", "ec29112dd5afa0611ce80d1b7f02629c")]
+    classes = ["0 - zero", "1 - one", "2 - two", "3 - three", "4 - four",
+               "5 - five", "6 - six", "7 - seven", "8 - eight", "9 - nine"]
+
+    def __init__(self, root, train=True, transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.train = train
+        if download:
+            self.download()
+        if not self._check_exists():
+            raise RuntimeError("Dataset not found. You can use download=True to "
+                               "download it")
+        self.data, self.targets = self._load_data()
+
+    @property
+    def raw_folder(self):
+        return _os.path.join(self.root, type(self).__name__, "raw")
+
+    @property
+    def class_to_idx(self):
+        return {name: i for i, name in enumerate(self.classes)}
+
+    def _files(self):
+        return [_os.path.splitext(name)[0] for name, _ in self.resources]
+
+    def _check_exists(self):
+        return all(_os.path.isfile(_os.path.join(self.raw_folder, name))
+                   for name in self._files())
+
+    def download(self):
+        """**Every mirror is tried before the file is given up on**, and the digest
+        decides, not the response code. A mirror that answers 200 with an error page
+        is the case that a status check passes and a checksum does not."""
+        if self._check_exists():
+            return
+        _os.makedirs(self.raw_folder, exist_ok=True)
+        for name, digest in self.resources:
+            out = _os.path.join(self.raw_folder, _os.path.splitext(name)[0])
+            if _os.path.isfile(out):
+                continue
+            errors = []
+            for mirror in self.mirrors:
+                try:
+                    # **The digest names the compressed file**, so it is checked
+                    # against what came off the wire and not against the gzip of
+                    # what was decompressed — gzip is not reproducible, the header
+                    # carries a timestamp, and recompressing gives another digest.
+                    raw = _gzip.decompress(_fetch(mirror + name, digest))
+                except Exception as exc:                          # noqa: BLE001
+                    errors.append(f"{mirror}{name}: {type(exc).__name__}: {exc}")
+                    continue
+                with open(out, "wb") as handle:
+                    handle.write(raw)
+                break
+            else:
+                raise RuntimeError(
+                    f"could not fetch {name} from any mirror:\n  "
+                    + "\n  ".join(errors))
+
+    def _load_data(self):
+        which = "train" if self.train else "t10k"
+        folder = self.raw_folder
+        with open(_os.path.join(folder, f"{which}-images-idx3-ubyte"), "rb") as handle:
+            data = _read_idx_images(handle.read())
+        with open(_os.path.join(folder, f"{which}-labels-idx1-ubyte"), "rb") as handle:
+            targets = _read_idx_labels(handle.read())
+        return data, targets
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        picture, target = self.data[index], int(self.targets[index])
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {'Train' if self.train else 'Test'}"
+
+
+class FashionMNIST(MNIST):
+    """Clothes, in MNIST's shape and MNIST's format. **Only the addresses and the
+    class names differ**, which is why it is four lines and not another decoder."""
+
+    mirrors = ["http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/"]
+    resources = [("train-images-idx3-ubyte.gz", "8d4fb7e6c68d591d4c3dfef9ec88bf0d"),
+                 ("train-labels-idx1-ubyte.gz", "25c81989df183df01b3e8a0aad5dffbe"),
+                 ("t10k-images-idx3-ubyte.gz", "bef4ecab320f06d8554ea6380940ec79"),
+                 ("t10k-labels-idx1-ubyte.gz", "bb300cfdad3c16e7a12a480ee83cd310")]
+    classes = ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+               "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"]
+
+
+class KMNIST(MNIST):
+    """Kuzushiji — ten classical Japanese characters, again in MNIST's format."""
+
+    mirrors = ["http://codh.rois.ac.jp/kmnist/dataset/kmnist/"]
+    resources = [("train-images-idx3-ubyte.gz", "bdb82020997e1d708af4cf47b453dcf7"),
+                 ("train-labels-idx1-ubyte.gz", "e144d726b3acfaa3e44228e80efcd344"),
+                 ("t10k-images-idx3-ubyte.gz", "5c965bf0a639b31b8f53240b1b52f4d7"),
+                 ("t10k-labels-idx1-ubyte.gz", "7320c461ea6c1c855c0b718fb2a4b134")]
+    classes = ["o", "ki", "su", "tsu", "na", "ha", "ma", "ya", "re", "wo"]
+
+
+class CIFAR10(VisionDataset):
+    """Sixty thousand 32×32 colour pictures in ten classes.
+
+    Two things differ from MNIST beyond the format. The whole set arrives as **one
+    tar**, so a partial download is all-or-nothing rather than four files deep; and
+    `.targets` is a plain Python list rather than an array, which is torchvision's
+    choice and is kept — `ds.targets[i]` is an `int` on both sides, and code that
+    indexes it with an array is code that would have broken there too.
+    """
+
+    url = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+    filename = "cifar-10-python.tar.gz"
+    tgz_md5 = "c58f30108f718f92721af3b95e74349a"
+    base_folder = "cifar-10-batches-py"
+    train_list = [["data_batch_1", "c99cafc152244af753f735de768cd75f"],
+                  ["data_batch_2", "d4bba439e000b95fd0a9bffe97cbabec"],
+                  ["data_batch_3", "54ebc095f3ab1f0389bbae665268c751"],
+                  ["data_batch_4", "634d18415352ddfa80567beed471001a"],
+                  ["data_batch_5", "482c414d41f54cd18b22e5b47cb7c3cb"]]
+    test_list = [["test_batch", "40351d587109b95175f43aff81a1287e"]]
+    meta = {"filename": "batches.meta", "key": "label_names",
+            "md5": "5ff9c542aee3614f3951f8cda6e48888"}
+
+    def __init__(self, root, train=True, transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.train = train
+        if download:
+            self.download()
+        if not self._check_integrity():
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        pieces = self.train_list if train else self.test_list
+        blocks, targets = [], []
+        for name, _digest in pieces:
+            images, labels = _read_cifar_batch(self._read(name))
+            blocks.append(images)
+            targets += labels
+        self.data = _np.concatenate(blocks) if len(blocks) > 1 else blocks[0]
+        self.targets = targets
+        self._load_meta()
+
+    def _folder(self):
+        return _os.path.join(self.root, self.base_folder)
+
+    def _read(self, name):
+        with open(_os.path.join(self._folder(), name), "rb") as handle:
+            return handle.read()
+
+    def _load_meta(self):
+        """The class names live in their own pickle beside the batches. **A dataset
+        whose labels are integers with no names is one where a confusion matrix cannot
+        be read**, so this is loaded rather than hard-coded here."""
+        entry = _CifarUnpickler(_io.BytesIO(self._read(self.meta["filename"])),
+                                encoding="latin1").load()
+        self.classes = [name.decode() if isinstance(name, bytes) else name
+                        for name in entry[self.meta["key"]]]
+
+    @property
+    def class_to_idx(self):
+        return {name: i for i, name in enumerate(self.classes)}
+
+    def _pieces(self):
+        return list(self.train_list) + list(self.test_list) + [
+            [self.meta["filename"], self.meta["md5"]]]
+
+    def _check_integrity(self):
+        """**Existence is not integrity, and the difference decides whether a bad
+        batch can be healed.**
+
+        Checking only that the files are there was the first version, with the md5
+        done later at read time. Every corrupt batch was still caught — but caught in
+        the wrong place: `download=True` saw files, skipped the download, and the read
+        raised. The one thing that fixes a truncated batch could not fix it, and the
+        message asked the reader to delete files by hand.
+
+        So the digests are checked here, which is torchvision's arrangement. It costs
+        one pass over 180MB when the dataset is opened; the alternative costs somebody
+        an afternoon once.
+        """
+        for name, digest in self._pieces():
+            path = _os.path.join(self._folder(), name)
+            if not _os.path.isfile(path):
+                return False
+            if _md5_of_file(path) != digest:
+                return False
+        return True
+
+    def download(self):
+        """Fetch the tar and unpack it. **Only the members this dataset names are
+        written** — a tar can carry a path that climbs out of the directory it is
+        unpacked into, and `extractall` follows it."""
+        if self._check_integrity():
+            return
+        wanted = {name for name, _ in self._pieces()}
+        _os.makedirs(self._folder(), exist_ok=True)
+        archive = _os.path.join(self.root, self.filename)
+        # **The kept archive is verified, not trusted by name.** Measured, not
+        # imagined: a download of this file was interrupted, the truncated tar stayed
+        # at the right name, and the next run trusted it because it existed. What came
+        # out was `EOFError: Compressed file ended before the end-of-stream marker`
+        # from inside gzip — a sentence about a stream, naming no file, offering no
+        # move. Hashing 170MB costs a fraction of a second and the alternative costs
+        # somebody the afternoon of working out which file to delete.
+        if _os.path.isfile(archive) and _md5_of_file(archive) != self.tgz_md5:
+            _os.unlink(archive)
+        if not _os.path.isfile(archive):
+            _fetch_to(self.url, archive, self.tgz_md5)
+        with _tarfile.open(archive, mode="r:gz") as tar:
+            for member in tar:
+                base = _os.path.basename(member.name)
+                if not member.isfile() or base not in wanted:
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                with open(_os.path.join(self._folder(), base), "wb") as handle:
+                    while True:
+                        block = extracted.read(1 << 20)
+                        if not block:
+                            break
+                        handle.write(block)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        picture, target = self.data[index], self.targets[index]
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {'Train' if self.train else 'Test'}"
+
+
+class CIFAR100(CIFAR10):
+    """A hundred classes over the same pictures, in the same format. The batches are
+    two rather than six and the label key is `fine_labels` — the coarse twenty are in
+    the same file under another key, and torchvision does not read them either."""
+
+    url = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
+    filename = "cifar-100-python.tar.gz"
+    tgz_md5 = "eb9058c3a382ffc7106e4002c42a8d85"
+    base_folder = "cifar-100-python"
+    train_list = [["train", "16019d7e3df5f24257cddd939b257f8d"]]
+    test_list = [["test", "f0ef6b0ae62326f3e7ffdfab6717acfc"]]
+    meta = {"filename": "meta", "key": "fine_label_names",
+            "md5": "7973b15100ade9c7d40fb424638fde48"}
+
+
+class FakeData(VisionDataset):
+    """Random pictures with random labels. **No download and no format** — it exists
+    so that a pipeline can be run before the data arrives, which is the one moment
+    when a dataset that needs nothing is worth more than a real one.
+
+    Same `image_size` convention as torchvision: `(C,H,W)`. What comes out is `(H,W,C)`
+    like every other picture here, so a `(3,32,32)` request gives a `(32,32,3)` array —
+    the argument names the picture torchvision would build and the result is in this
+    file's layout.
+    """
+
+    def __init__(self, size=1000, image_size=(3, 224, 224), num_classes=10,
+                 transform=None, target_transform=None, random_offset=0):
+        super().__init__(None, transform=transform, target_transform=target_transform)
+        self.size, self.num_classes = size, num_classes
+        self.image_size = tuple(image_size)
+        self.random_offset = random_offset
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, index):
+        """**Seeded per index**, so the same index gives the same picture within a run
+        and across runs. torchvision does this too, and it is what makes a fake dataset
+        usable for a reproducibility check rather than only for a smoke test."""
+        if index >= len(self):
+            raise IndexError(f"{index} is out of range for {len(self)} items")
+        rng = _np.random.default_rng(index + self.random_offset)
+        channels, height, width = self.image_size
+        picture = rng.random((height, width, channels), dtype=_np.float32)
+        target = int(rng.integers(self.num_classes))
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+
 transforms = _types.ModuleType("borchvision.transforms")
 functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
@@ -3634,6 +4230,12 @@ _sys.modules["borchvision.transforms.functional"] = functional
 # `ops` is torchvision's **top-level** namespace, not one under `transforms` — so it is
 # registered beside it rather than inside it. Getting that wrong would make
 # `import borchvision.ops` work and `import torchvision.ops` mean something else.
+datasets = _types.ModuleType("borchvision.datasets")
+_sys.modules["borchvision.datasets"] = datasets
+for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST",
+              "CIFAR10", "CIFAR100", "FakeData"):
+    setattr(datasets, _name, globals()[_name])
+
 ops = _types.ModuleType("borchvision.ops")
 _sys.modules["borchvision.ops"] = ops
 
