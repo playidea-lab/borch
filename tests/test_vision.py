@@ -828,3 +828,171 @@ def test_randaugment_with_no_operations_is_the_identity():
     """The only configuration of any of the four that does not draw."""
     img = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
     assert np.array_equal(V.RandAugment(num_ops=0)(img), img)
+
+
+# ----------------------------------------------------------------- transforms.v2
+#
+# The golden cases carry the v2 reprs and the deterministic values. What is left here is
+# the same thing this file is for everywhere else — that the draws draw — plus one
+# difference from torchvision that a value comparison cannot see, because the golden
+# check compares numbers and not the type they are stored in.
+
+V2 = V.transforms.v2
+
+
+def test_ToImage_gives_a_wider_integer_than_torchvision_does():
+    """**int64 where torchvision gives uint8**, and the numbers the same.
+
+    The core has no uint8 storage, so this is not a choice this file made and not one
+    it can undo. It is asserted rather than left to be noticed because the golden check
+    compares values with `allclose`, which is blind to the dtype — the one place this
+    difference lives is the one place the comparison cannot look.
+    """
+    picture = np.arange(24, dtype=np.uint8).reshape(4, 3, 2)
+    out = V2.ToImage()(picture)
+    assert str(out.dtype).endswith("int64")
+    assert out.shape == (2, 4, 3)
+    assert np.array_equal(np.asarray(out.numpy()), picture.transpose(2, 0, 1))
+    # And the pair v2 tells you to write instead of `ToTensor` lands where v1 lands.
+    scaled = V2.Compose([V2.ToImage(), V2.ToDtype(BT.float32, scale=True)])(picture)
+    assert np.allclose(np.asarray(scaled.numpy()),
+                       picture.transpose(2, 0, 1) / 255.0, atol=1e-6)
+
+
+def test_GaussianNoise_draws_a_value_per_pixel_not_one_per_picture():
+    """A single draw broadcast over the picture is the plausible wrong version: it
+    passes a mean test, passes a standard-deviation test on a batch, and adds no noise
+    at all in the sense anyone wants."""
+    flat = np.full((16, 16, 3), 0.5, dtype=np.float32)
+    out = np.asarray(V2.GaussianNoise(0.0, 0.05, clip=False)(flat))
+    assert out.std() > 0.02
+    assert len(np.unique(out.round(6))) > 100
+
+
+def test_RandomChannelPermutation_reaches_every_ordering():
+    """Three channels have six orderings, and a shuffle that draws an index rather than
+    a permutation reaches only three of them."""
+    picture = np.zeros((2, 2, 3), dtype=np.float32)
+    picture[:, :, 0], picture[:, :, 1], picture[:, :, 2] = 1.0, 2.0, 3.0
+    seen = {tuple(np.asarray(V2.RandomChannelPermutation()(picture))[0, 0].tolist())
+            for _ in range(300)}
+    assert len(seen) == 6
+
+
+def test_RandomZoomOut_puts_the_picture_somewhere_other_than_the_corner():
+    """The offsets are two draws, and a version that pads evenly — or that uses one
+    draw for both axes — leaves the golden case at `p=0` green."""
+    picture = np.ones((4, 4, 3), dtype=np.float32)
+    corners = set()
+    for _ in range(200):
+        out = np.asarray(V2.RandomZoomOut(fill=0, side_range=(2.0, 2.0), p=1.0)(picture))
+        assert out.shape == (8, 8, 3)
+        rows, cols = np.nonzero(out[:, :, 0])
+        corners.add((int(rows.min()), int(cols.min())))
+    assert len({r for r, _ in corners}) > 2 and len({c for _, c in corners}) > 2
+    assert any(r != c for r, c in corners)              # not one draw used twice
+
+
+def test_RandomResize_covers_the_range_and_stops_before_the_top():
+    """`[min_size, max_size)` — the top is excluded, which is the off-by-one this
+    transform exists to get wrong."""
+    picture = np.ones((10, 10, 3), dtype=np.float32)
+    sizes = {np.asarray(V2.RandomResize(4, 7)(picture)).shape[0] for _ in range(400)}
+    assert sizes == {4, 5, 6}
+
+
+def test_ScaleJitter_moves_both_axes_by_the_same_factor():
+    """It is one factor applied to the target, not a factor per axis — a per-axis draw
+    would change the aspect ratio, which is the thing scale jitter must not do.
+
+    Asserted in **pixels rather than as a ratio**: the factor can take the 10×20 target
+    down to 2×5, where whole-pixel rounding alone moves the ratio from 2.0 to 2.5. A
+    ratio tolerance loose enough for that case is loose enough to miss a real per-axis
+    draw at the large end; one pixel is the true bound at both ends.
+    """
+    picture = np.ones((10, 20, 3), dtype=np.float32)
+    for _ in range(200):
+        h, w = np.asarray(V2.ScaleJitter((10, 20), (0.5, 2.0))(picture)).shape[:2]
+        assert abs(w - 2 * h) <= 1
+
+
+def test_RandomPhotometricDistort_applies_each_adjustment_sometimes():
+    """`p` is per adjustment, not one coin for all four. With one coin the picture is
+    either untouched or fully distorted and never partly, which shows up as far fewer
+    distinct outcomes than four independent coins give."""
+    picture = np.linspace(0.1, 0.9, 4 * 4 * 3, dtype=np.float32).reshape(4, 4, 3)
+    outcomes = {np.asarray(V2.RandomPhotometricDistort(p=0.5)(picture)).round(4).tobytes()
+                for _ in range(200)}
+    assert len(outcomes) > 32
+
+
+def test_MixUp_pairs_each_row_with_the_one_before_it():
+    """The pairing is a roll by one and **not** a random partner — torchvision says so
+    outright, and a recipe that shuffles its batch for that reason is relying on it."""
+    batch = np.zeros((3, 2, 2, 1), dtype=np.float32)
+    batch[0], batch[1], batch[2] = 0.0, 1.0, 2.0
+    labels = np.array([0, 1, 2])
+    mixed, _ = V2.MixUp(num_classes=3)(batch, labels)
+    mixed = np.asarray(mixed)
+    # row 0 lies between row 0 and row 2 (its partner), never near row 1.
+    assert mixed[0, 0, 0, 0] <= 2.0 and mixed[1, 0, 0, 0] <= 1.0
+    lam = mixed[1, 0, 0, 0]                             # row 1 = 1*lam + 0*(1-lam)
+    assert abs(mixed[2, 0, 0, 0] - (2.0 * lam + 1.0 * (1 - lam))) < 1e-5
+
+
+def test_MixUp_labels_stay_a_distribution():
+    """Two classes' worth of weight summing to one is the only property a loss
+    downstream depends on, and a swapped `lam`/`1-lam` keeps the sum while inverting
+    the picture — so the row's own class getting the larger share is asserted too."""
+    batch = np.zeros((4, 2, 2, 1), dtype=np.float32)
+    labels = np.array([0, 1, 2, 3])
+    for _ in range(50):
+        _, out = V2.MixUp(alpha=5.0, num_classes=4)(batch, labels)
+        out = np.asarray(out)
+        assert np.allclose(out.sum(axis=1), 1.0, atol=1e-5)
+        assert (out >= 0).all()
+        # alpha=5 puts lam near 0.5 but the row's own class is index i, its partner i-1.
+        assert out[2, 2] > 0.1 and out[2, 1] > 0.1
+
+
+def test_CutMix_mixes_the_label_by_the_area_it_actually_pasted():
+    """The box is clipped at the picture's edge, so the drawn weight and the pasted
+    area come apart — and the label has to follow **the area**. Measured directly:
+    count the pixels that changed and compare with the weight the label was given."""
+    batch = np.zeros((2, 8, 8, 1), dtype=np.float32)
+    batch[1] = 1.0
+    labels = np.array([0, 1])
+    for _ in range(100):
+        out, mixed = V2.CutMix(num_classes=2)(batch, labels)
+        out, mixed = np.asarray(out), np.asarray(mixed)
+        pasted = float((out[0, :, :, 0] == 1.0).sum()) / 64.0
+        # row 0's own class keeps `lam`, its partner takes what was pasted.
+        assert abs(mixed[0, 1] - pasted) < 1e-5
+        assert abs(mixed[0, 0] - (1.0 - pasted)) < 1e-5
+
+
+def test_CutMix_and_MixUp_refuse_a_batch_that_does_not_match_its_labels():
+    """Every shape involved here is plausible, so a mismatch is a silent mis-train
+    rather than a crash — which is why the checks are worth having at all."""
+    batch = np.zeros((4, 2, 2, 1), dtype=np.float32)
+    with pytest.raises(ValueError, match="num_classes must be passed"):
+        V2.MixUp()(batch, np.array([0, 1, 2, 3]))
+    with pytest.raises(ValueError, match="does not match the batch size"):
+        V2.CutMix(num_classes=2)(batch, np.array([0, 1]))
+    with pytest.raises(ValueError, match="4 dims"):
+        V2.MixUp(num_classes=2)(np.zeros((2, 2, 1), dtype=np.float32), np.array([0, 1]))
+    with pytest.raises(ValueError, match="index based"):
+        V2.CutMix(num_classes=2)(batch, np.zeros((4, 2, 2)))
+
+
+def test_v2_names_are_not_a_second_copy_of_the_arithmetic():
+    """The v2 twins subclass v1's transforms; only the repr is theirs. If one ever
+    grows a body the two spellings drift apart silently, and every value case in the
+    golden file goes on passing because it asks one spelling or the other."""
+    picture = np.random.default_rng(3).random((6, 5, 3)).astype(np.float32)
+    for build in (lambda m: m.Resize((3, 4)), lambda m: m.CenterCrop(3),
+                  lambda m: m.Pad(2, padding_mode="reflect"),
+                  lambda m: m.Grayscale(3), lambda m: m.Normalize([0.4], [0.2]),
+                  lambda m: m.GaussianBlur(3, (1.0, 1.0))):
+        assert np.allclose(np.asarray(build(V2)(picture)),
+                           np.asarray(build(V.transforms)(picture)), atol=1e-6)

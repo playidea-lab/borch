@@ -7665,6 +7665,15 @@ def _vision_ops(L):
     return _sys.modules["borchvision"].ops
 
 
+def _vision_v2(L):
+    """`transforms.v2` for each side. Fetched through `_vision` so that the module is
+    loaded and bound once, rather than a second copy living beside the first."""
+    if _is_real_torch(L):
+        from torchvision.transforms import v2 as real
+        return real
+    return _vision(L).v2
+
+
 def _as_numpy(x):
     """Out of whichever library's tensor, into numpy — the ops return the kind they
     were given and these cases hand them numpy, so this is mostly for torch's side."""
@@ -10600,7 +10609,7 @@ def golden_cases(inp=None):
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + ops_cases(inp) + method_cases(inp) + math_cases(inp)
+            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
@@ -11482,3 +11491,188 @@ def ops_cases(inp=None):
         (OPS_PREFIX + "masks_to_boxes", op(lambda O, to: O.masks_to_boxes(to(_masks)))),
     ]
     return cases
+
+
+V2_PREFIX = "v2::"
+
+
+def _v2_named(x):
+    """`Lambda`'s repr prints the function's name, so it has to have one. A lambda
+    would print `<lambda>` on both sides and prove nothing about the name being read."""
+    return x
+
+
+def v2_cases(inp=None):
+    """`transforms.v2` — **fifty-two reprs and the arithmetic underneath them.**
+
+    v2's transforms take the same arguments and compute the same numbers as v1's; what
+    differs is what they print. That is not a cosmetic difference here, because a
+    tutorial's `print(transform)` is how a reader checks that the thing they built is
+    the thing they meant. So the repr is the larger half of this block: fifty-two of
+    them, one per name, and they are frozen as strings against real torchvision's.
+
+    The reprs are worth freezing precisely because they came out **wrong four times**
+    before they came out right — `Resize(5)` stores `[5]` and not `5`, `RandomErasing`
+    turns its `value` into a list, `RandomChoice` fills in uniform probabilities that
+    were never passed, and `ElasticTransform`'s printed fill cannot be read back off
+    the finished object. Every one of those was found by comparing, not by reading.
+
+    The value half is smaller and asks two things. That the v2 names inherit the v1
+    arithmetic rather than a copy of it — three transforms are run through the v2
+    spelling and have to land on the v1 answer — and that the twelve v2 adds compute
+    what torchvision computes. Of those twelve, six draw and so are pinned to the
+    settings where they do not: `p=0`, or `sigma=0`, or an argument that leaves the
+    picture alone. Whether the drawing itself is right is pytest's question.
+
+    `MixUp` and `CutMix` are here as reprs only. Their weight is drawn from a Beta
+    distribution and there is no argument that pins it — an `alpha` large enough to
+    concentrate it still does not fix it — so their values are pytest's, where the
+    properties that matter (the pairing is a roll by one, the label follows the area
+    actually pasted) can be asked without a shared generator.
+    """
+    inp = golden_inputs() if inp is None else inp
+
+    def v2_repr(build):
+        """Both sides get their own `v2` module and their own dtypes; what is compared
+        is the string that comes back."""
+        return lambda L: repr(build(_vision_v2(L), L))
+
+    # Fifty recipes. The arguments are chosen to make the repr **say something** —
+    # a default-everything constructor prints the same text no matter what the
+    # constructor did with what it was given.
+    _reprs = (
+        ("Resize", lambda m, L: m.Resize((4, 3))),
+        ("Resize(one number)", lambda m, L: m.Resize(5)),
+        ("CenterCrop", lambda m, L: m.CenterCrop(4)),
+        ("RandomCrop", lambda m, L: m.RandomCrop(4)),
+        ("RandomResizedCrop", lambda m, L: m.RandomResizedCrop(4)),
+        ("FiveCrop", lambda m, L: m.FiveCrop(3)),
+        ("TenCrop", lambda m, L: m.TenCrop(3)),
+        ("Pad", lambda m, L: m.Pad(2)),
+        ("RandomHorizontalFlip", lambda m, L: m.RandomHorizontalFlip()),
+        ("RandomVerticalFlip", lambda m, L: m.RandomVerticalFlip()),
+        ("Grayscale", lambda m, L: m.Grayscale(3)),
+        ("RandomGrayscale", lambda m, L: m.RandomGrayscale()),
+        ("Normalize", lambda m, L: m.Normalize([0.5], [0.5])),
+        ("RandomErasing", lambda m, L: m.RandomErasing()),
+        ("ColorJitter", lambda m, L: m.ColorJitter(0.5)),
+        ("ColorJitter(all four)", lambda m, L: m.ColorJitter(0.5, 0.3, 0.2, 0.1)),
+        ("RandomInvert", lambda m, L: m.RandomInvert()),
+        ("RandomPosterize", lambda m, L: m.RandomPosterize(4)),
+        ("RandomSolarize", lambda m, L: m.RandomSolarize(0.5)),
+        ("RandomAutocontrast", lambda m, L: m.RandomAutocontrast()),
+        ("RandomEqualize", lambda m, L: m.RandomEqualize()),
+        ("RandomAdjustSharpness", lambda m, L: m.RandomAdjustSharpness(2)),
+        ("RandomRotation", lambda m, L: m.RandomRotation(30)),
+        ("RandomAffine", lambda m, L: m.RandomAffine(30)),
+        ("RandomPerspective", lambda m, L: m.RandomPerspective()),
+        ("ElasticTransform", lambda m, L: m.ElasticTransform()),
+        ("GaussianBlur", lambda m, L: m.GaussianBlur(3)),
+        ("AutoAugment", lambda m, L: m.AutoAugment()),
+        ("RandAugment", lambda m, L: m.RandAugment()),
+        ("TrivialAugmentWide", lambda m, L: m.TrivialAugmentWide()),
+        ("AugMix", lambda m, L: m.AugMix()),
+        ("RandomOrder", lambda m, L: m.RandomOrder([m.Identity(), m.RGB()])),
+        ("RandomChoice", lambda m, L: m.RandomChoice([m.Identity(), m.RGB()])),
+        # One child and two children print differently — torch's `nn.Module` puts one
+        # on the same line and breaks two across lines. Both spellings are asked.
+        ("Compose(one)", lambda m, L: m.Compose([m.Identity()])),
+        ("Compose(two)", lambda m, L: m.Compose([m.Identity(), m.RGB()])),
+        ("RandomApply", lambda m, L: m.RandomApply([m.Identity()], p=0.3)),
+        ("Lambda", lambda m, L: m.Lambda(_v2_named, int, float)),
+        ("Identity", lambda m, L: m.Identity()),
+        ("RGB", lambda m, L: m.RGB()),
+        ("ToImage", lambda m, L: m.ToImage()),
+        ("ToPureTensor", lambda m, L: m.ToPureTensor()),
+        ("ToDtype", lambda m, L: m.ToDtype(L.float32, scale=True)),
+        ("GaussianNoise", lambda m, L: m.GaussianNoise()),
+        ("GaussianNoise(three arguments)", lambda m, L: m.GaussianNoise(0.1, 0.5, False)),
+        ("RandomChannelPermutation", lambda m, L: m.RandomChannelPermutation()),
+        ("RandomPhotometricDistort", lambda m, L: m.RandomPhotometricDistort()),
+        ("RandomResize", lambda m, L: m.RandomResize(8, 16)),
+        ("RandomShortestSize", lambda m, L: m.RandomShortestSize(8, 20)),
+        ("RandomZoomOut", lambda m, L: m.RandomZoomOut()),
+        ("ScaleJitter", lambda m, L: m.ScaleJitter((8, 8))),
+        ("MixUp", lambda m, L: m.MixUp(num_classes=4)),
+        ("CutMix", lambda m, L: m.CutMix(alpha=0.5, num_classes=3)),
+    )
+
+    cases = [(V2_PREFIX + "repr " + name, v2_repr(build)) for name, build in _reprs]
+
+    img_f = inp["vis_f"]
+    gray = np.ascontiguousarray(img_f[:, :, :1])
+    img_u8 = inp["vis_u8"]
+
+    def on(picture, build):
+        """The same picture in each side's own format, out as a float tensor.
+
+        Ours takes `(H,W,C)` arrays and torchvision's v2 takes `(C,H,W)` tensors —
+        handing both the same object would ask two different questions.
+        """
+        def run(L):
+            m = _vision_v2(L)
+            if _is_real_torch(L):
+                given = L.tensor(np.ascontiguousarray(picture.transpose(2, 0, 1)))
+                out = _as_numpy(build(m, L)(given).detach())
+                # `len(out.shape)` and not `out.ndim`: `test_binding_fills_in` parses
+                # this file for attribute references and cannot tell a numpy array's
+                # `.ndim` from a tensor's, so writing it here reports a name the
+                # golden cases ask about when no case asks about it.
+                out = out.transpose(1, 2, 0) if len(out.shape) == 3 else out
+            else:
+                out = _as_numpy(build(m, L)(picture))
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    cases += [
+        # The three that are v1's arithmetic reached through a v2 name. If the twin
+        # subclass ever grows a body of its own these stop matching v1's own cases.
+        (V2_PREFIX + "Resize(inherited)", on(img_f, lambda m, L: m.Resize((4, 3)))),
+        (V2_PREFIX + "CenterCrop(inherited)", on(img_f, lambda m, L: m.CenterCrop(4))),
+        (V2_PREFIX + "Pad(inherited)", on(img_f, lambda m, L: m.Pad(2))),
+
+        (V2_PREFIX + "Identity", on(img_f, lambda m, L: m.Identity())),
+        (V2_PREFIX + "ToPureTensor", on(img_f, lambda m, L: m.ToPureTensor())),
+        # `RGB` on a colour picture is the identity; on a grey one it is the case.
+        (V2_PREFIX + "RGB(three channels)", on(img_f, lambda m, L: m.RGB())),
+        (V2_PREFIX + "RGB(one channel)", on(gray, lambda m, L: m.RGB())),
+
+        # `ToImage` moves the axes and **does not scale**; `ToDtype(scale=True)` is the
+        # other half. The pair is what v2 tells you to write instead of `ToTensor`, so
+        # the pair is asked as well as each part.
+        (V2_PREFIX + "ToImage", lambda L: _v2_from_picture(L, img_u8,
+                                                           lambda m, L2: m.ToImage())),
+        (V2_PREFIX + "ToDtype(scaling)", on(img_u8, lambda m, L: m.ToDtype(L.float32, scale=True))),
+        (V2_PREFIX + "ToDtype(not scaling)", on(img_u8, lambda m, L: m.ToDtype(L.float32))),
+        (V2_PREFIX + "ToImage then ToDtype", lambda L: _v2_from_picture(
+            L, img_u8, lambda m, L2: m.Compose([m.ToImage(),
+                                                m.ToDtype(L2.float32, scale=True)]))),
+
+        # Six that draw, pinned where they do not draw. `sigma=0` leaves the mean,
+        # which is what makes the clip case a clip case rather than a noise case.
+        (V2_PREFIX + "GaussianNoise(sigma=0)",
+         on(img_f, lambda m, L: m.GaussianNoise(0.0, 0.0))),
+        (V2_PREFIX + "GaussianNoise(clipping)",
+         on(img_f, lambda m, L: m.GaussianNoise(5.0, 0.0, True))),
+        (V2_PREFIX + "GaussianNoise(not clipping)",
+         on(img_f, lambda m, L: m.GaussianNoise(5.0, 0.0, False))),
+        (V2_PREFIX + "RandomZoomOut(p=0)", on(img_f, lambda m, L: m.RandomZoomOut(p=0.0))),
+        (V2_PREFIX + "RandomPhotometricDistort(p=0)",
+         on(img_f, lambda m, L: m.RandomPhotometricDistort(p=0.0))),
+        # A one-wide range has one answer, so the draw is a draw with nothing to draw.
+        (V2_PREFIX + "RandomResize(one size)", on(img_f, lambda m, L: m.RandomResize(4, 5))),
+        (V2_PREFIX + "RandomShortestSize(one size)",
+         on(img_f, lambda m, L: m.RandomShortestSize(4, 40))),
+        (V2_PREFIX + "ScaleJitter(one factor)",
+         on(img_f, lambda m, L: m.ScaleJitter((8, 8), (1.0, 1.0)))),
+    ]
+    return cases
+
+
+def _v2_from_picture(L, picture, build):
+    """`ToImage` is asked of **an (H,W,C) byte picture on both sides** — it is the
+    transform whose whole job is moving those axes, so handing torchvision a picture
+    already moved would ask it to do nothing and call that agreement."""
+    m = _vision_v2(L)
+    out = _as_numpy(build(m, L)(picture))
+    return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
