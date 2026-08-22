@@ -211,21 +211,19 @@ def core_params(fn, receiver=False):
     parameter and then treating the remainder as the whole list. Which is this file's
     own recurring mistake for the fifth time — **the drop was documented and the
     consequence of the drop was not.**
-    """
-    import inspect
 
-    try:
-        sig = inspect.signature(fn)
-    except (ValueError, TypeError):
-        return None
-    out = []
-    for name, p in sig.parameters.items():
-        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
-            return None
-        out.append(name)
-    if out and (receiver or out[0] in ("self", "cls")):
-        out = out[1:]
-    return out
+    **The reading itself lives in `signature_read.py` now.** The same defect turned
+    out to be in `test_torch_signatures.py` at the same hour, where it did not make
+    loud wrong rows but a **pass**: two Enums compared as `['kwds'] == ['kwds']`,
+    because the exclusion list said `kwargs` and Python's Enum writes `kwds`. The
+    filter's own incompleteness became the thing the two sides agreed on. Two files,
+    one bug, neither author reading the other's — which is the argument for one
+    reader rather than a shared rule about how to write three.
+    """
+    from signature_read import VARIADIC, parameters
+
+    got = parameters(fn, receiver=receiver)
+    return None if got is VARIADIC else got
 
 
 # Which emitted modules a Python namespace may be paired against. **Written down

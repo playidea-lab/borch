@@ -1,0 +1,219 @@
+"""Counts where the **core** takes different arguments from **real torch**.
+
+    uv run --with numpy --with torch --with torchvision python tests/torch_signatures_core.py
+    uv run --with numpy --with torch --with torchvision python tests/torch_signatures_core.py --show nn
+
+## Every other comparison in this repository is between two of our own libraries
+
+    tests/torch_gap.py             core        ↔ real torch          names only
+    tests/test_torch_signatures.py borchvision ↔ real torchvision    arguments
+    tests/ts_signatures.py         core        ↔ borch.ts            arguments
+    tests/test_binding_arguments   binding     ↔ borch.ts            arguments
+    borch-ts/test/parity.ts        core        ↔ borch.ts            behaviour
+
+Only the second asks an outside authority, and it asks it about borchvision. So for
+`borch` itself **nothing compares an argument list against torch**, and the checks
+that do compare arguments have both feet inside the project.
+
+That is not a missing axis so much as a shared blind spot. When the core and borch.ts
+disagree, a row says *they disagree* and never *which one to move* — and when they
+agree, the whole apparatus can be converged on one error and report agreement. Both
+happened this week:
+
+- `SmoothL1Loss` — the core took `(beta, reduction)` and borch.ts `(reduction, beta)`.
+  Two instruments reported the split (`ts_signatures.py` as a row, `parity.ts` in the
+  words *the sisters have parted*) and **neither could say who was wrong.** torch
+  settled it: borch.ts was right.
+- The nine loss constructors that `ts_signatures.py` briefly reported as borch.ts
+  inserting arguments. borch.ts had them because torch has them.
+
+## What it compares, and what it deliberately folds
+
+Constructor arguments for `nn`, and function arguments for the rest, by name and in
+order, through `signature_read.parameters` — the one reader all three of these files
+share, after the same defect was found sitting in two of them at once.
+
+**torch's `size_average` and `reduce` are dropped, and that is a claim.** torch
+documents both as deprecated, keeps them in every loss signature for compatibility,
+and ignores them whenever `reduction` is passed. Keeping them makes every loss
+mismatch at position 0 for a reason nobody acts on; dropping them lets the real
+orderings show. The fold is written into `DEPRECATED` below rather than into the
+comparison, because a true fold still has to be attested somewhere a reader can find
+it — which is the lesson `_camel` taught by folding `eq_` onto `eq` and reporting a
+name present that was not.
+
+## The limit that matters: 571 rows where torch is C
+
+`inspect` cannot read a C implementation, and `torch.Tensor` is almost entirely C —
+496 of its methods, plus 41 in `linalg` and 34 in `nn.functional`. They are **counted
+as `torch is C` rather than skipped**, because the first version returned the same
+value for "torch does not have it" and "torch has it and I cannot read it", and
+`Tensor` came back with three agreements and looked finished.
+
+So this axis sees `nn`, `optim` and the schedulers well, and sees very little of the
+tensor surface. Two other sources were measured and **neither is used**:
+
+- `torch.overrides.get_testing_overrides()` gives readable Python stubs for 1,426
+  entries — and they are abbreviated. `Tensor.std` comes back as `(input, dim=None)`
+  where the real signature carries `correction` and `keepdim` as well. Comparing
+  against it would report the core as having *extra* arguments it correctly has.
+  A lower-fidelity source that looks like a higher-fidelity one is worse than none.
+- The docstring's first line is the real thing — `add(other, *, alpha=1) -> Tensor`
+  — and reading it means a **third argument parser**. Two of the three that existed
+  this week had the same defect in them, which is the reason `signature_read.py`
+  exists; adding a fourth reader to close this gap would be undoing that.
+
+Neither door is shut. Both want a decision about where the authority comes from, and
+that is not a decision to take inside a measurement.
+
+## What it cannot see
+
+Types, defaults, keyword-only-ness, and whether the values agree. The third of those
+matters more here than on the other axes: the core writes `(reduction='mean', *,
+weight=None)`, and reading that as `[reduction, weight]` loses the fact that `weight`
+**cannot be passed positionally at all**. A row can therefore look like an ordering
+difference when the argument is not reachable by position on one side. Said here
+because the four losses below are exactly that shape.
+"""
+
+import sys
+import pathlib
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
+
+# torch keeps these in every loss signature and ignores them when `reduction` is
+# given. **A fold, and therefore a claim** — see the module docstring.
+DEPRECATED = frozenset({"size_average", "reduce"})
+
+
+def _spaces():
+    """The namespaces with a real torch counterpart, as `(name, ours, theirs)`."""
+    import torch
+    import borch
+
+    return [
+        ("Tensor", borch.Tensor, torch.Tensor),
+        ("nn", borch.nn, torch.nn),
+        ("nn.functional", borch.nn.functional, torch.nn.functional),
+        ("optim", borch.optim, torch.optim),
+        ("optim.lr_scheduler", borch.optim.lr_scheduler, torch.optim.lr_scheduler),
+        ("linalg", borch.linalg, torch.linalg),
+        ("utils.data", borch.utils.data, torch.utils.data),
+    ]
+
+
+ABSENT = object()       # the name is not in that namespace at all
+
+
+def _read(space, holder, name):
+    """`[names]` · `VARIADIC` · `ABSENT` · `None` (present but unreadable).
+
+    **`ABSENT` and `None` are held apart on purpose.** The first version returned
+    `None` for both and the caller skipped it as "not in torch", which quietly
+    dropped every method torch implements in C — `inspect` cannot read those, and
+    `torch.Tensor` is almost all of them. `Tensor` came back with three agreements
+    and looked finished.
+
+    That is this week's recurring shape once more: a name that produces no row of any
+    kind cannot be counted as uncounted. Here it costs a whole namespace.
+    """
+    import inspect
+    from signature_read import VARIADIC, parameters, of_class
+
+    thing = getattr(holder, name, None)
+    if thing is None:
+        return ABSENT
+    if inspect.isclass(thing):
+        return of_class(thing)
+    if space == "Tensor":
+        # Reached through the class, so the first parameter is the receiver — except
+        # a `staticmethod`, which has none. Asked of the raw attribute so a
+        # descriptor answers as itself.
+        held = inspect.getattr_static(holder, name, None)
+        return parameters(thing, receiver=not isinstance(held, staticmethod))
+    return parameters(thing)
+
+
+def compare():
+    """`{space: [(name, ours, theirs, verdict), ...]}` over names present in both.
+
+    A name missing on one side is `torch_gap.py`'s count and is not asked again here.
+    Refusal stubs are dropped: the core carries them **in order to refuse**, so their
+    argument list is a message rather than a feature.
+    """
+    import torch_gap
+    import ts_axis
+    import ts_signatures
+    from signature_read import VARIADIC
+
+    stubs = ts_axis.refused()
+    out = {}
+    for space, ours, theirs in _spaces():
+        rows = []
+        for name in sorted(torch_gap._public(ours)):
+            if space == "Tensor" and name in stubs:
+                continue
+            mine = _read(space, ours, name)
+            yours = _read(space, theirs, name)
+            if yours is ABSENT:
+                continue                             # not in torch — the name axis's row
+            if yours is None:
+                # **torch has it and `inspect` cannot read it** — a C implementation.
+                # Counted, not skipped: it is most of `torch.Tensor`, and a namespace
+                # that quietly loses its whole content reads as a namespace that agrees.
+                rows.append((name, mine if isinstance(mine, list) else None, None,
+                             "torch is C"))
+                continue
+            if mine is VARIADIC or yours is VARIADIC:
+                rows.append((name, None, None, "variadic"))
+                continue
+            if mine is None:
+                rows.append((name, None, None, "no signature"))
+                continue
+            kept = [p for p in yours if p not in DEPRECATED]
+            rows.append((name, mine, kept, ts_signatures._verdict(mine, kept)))
+        out[space] = rows
+    return out
+
+
+def main(argv):
+    show = argv[argv.index("--show") + 1] if "--show" in argv else None
+    rows = compare()
+    tally = {}
+    for space, found in sorted(rows.items()):
+        counts = {}
+        for _n, _m, _y, note in found:
+            counts[note] = counts.get(note, 0) + 1
+            tally[note] = tally.get(note, 0) + 1
+        shifted = counts.get("dropped", 0) + counts.get("inserted", 0) \
+            + counts.get("reordered", 0)
+        mark = " " if not shifted else "✘"
+        print(f"  {mark} {space:22s} agree {counts.get('agree', 0):>4}   "
+              f"shifted {shifted:>3}   unaligned {counts.get('unaligned', 0):>3}   "
+              f"shorter {counts.get('shorter', 0) + counts.get('longer', 0):>4}   "
+              f"renamed {counts.get('renamed', 0):>4}   "
+              f"variadic {counts.get('variadic', 0):>4}   "
+              f"torch is C {counts.get('torch is C', 0):>4}")
+        if show is not None and space.startswith(show):
+            for name, mine, yours, note in found:
+                if note == "agree":
+                    continue
+                print(f"      · {name}")
+                print(f"          torch ({', '.join(yours or [])})")
+                print(f"          core  ({', '.join(mine or [])})  — {note}")
+    print("\n코어를 **진짜 torch** 와 인자로 대조한다 — 이 저장소에서 바깥 권위를 묻는 "
+          "둘째 검사다.")
+    print(f"  맞음 {tally.get('agree', 0)} · 밀림 "
+          f"{tally.get('dropped', 0) + tally.get('inserted', 0) + tally.get('reordered', 0)}"
+          f" · 못 맞춤 {tally.get('unaligned', 0)} · 꼬리가 짧다 "
+          f"{tally.get('shorter', 0) + tally.get('longer', 0)} · 이름만 다르다 "
+          f"{tally.get('renamed', 0)} · 못 잼 {tally.get('variadic', 0)}"
+          f" · torch 가 C {tally.get('torch is C', 0)}")
+    print("  `size_average` 와 `reduce` 는 접었다 — torch 가 폐기했다고 적어둔 둘이다.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

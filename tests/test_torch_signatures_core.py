@@ -1,0 +1,173 @@
+"""Pins the core ↔ **real torch** argument axis.
+
+`tests/torch_signatures_core.py` is the measurement and its docstring says what it
+compares and what it cannot see. This file holds the numbers, the way
+`test_ts_signatures.py` and `test_ts_axis.py` hold theirs.
+
+## Why this axis had to exist separately from the other two
+
+Every other argument check in this repository has both feet inside the project. When
+the core and borch.ts disagree, a row says *they disagree* and never *which one to
+move* — and when they agree, the whole apparatus can be converged on one error and
+report agreement. `SmoothL1Loss` was the first: two instruments reported the split
+and neither could say who was wrong. torch settled it, and borch.ts was right.
+
+## What a green run does not say
+
+- **Not that most of the surface was compared.** 571 rows are `torch is C`, which
+  `inspect` cannot read — 496 of them in `Tensor`. This axis sees `nn`, `optim` and
+  the schedulers well and sees very little else. The measurement's docstring records
+  the two other sources that were tried and why neither is used.
+- **Not that a `shorter` row is harmless here.** On the core↔borch.ts axis a prefix
+  is safe because passing one argument too many raises. Against torch it means a
+  *feature* torch has and the core does not, which is `torch_gap.py`'s business.
+- **Not that the values agree.** The golden holds that, and only for the cases
+  somebody wrote.
+"""
+
+import pathlib
+import subprocess
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tests"))
+
+pytest.importorskip("torch")
+pytest.importorskip("numpy")
+
+# **An argument at a different position from torch's.** The bucket where a line
+# transcribed out of torch's documentation compiles, runs, and means something else.
+#
+# All thirteen `nn` rows are one shape: the core keeps the arguments it implements,
+# in torch's relative order, and drops the ones it does not from the middle. So
+#
+#     MaxPool2d(2, 2, 1)              torch padding=1        core return_indices=1
+#     Conv2d(3, 16, 3, 1, 1, False)   torch dilation=False   core bias=False
+#     MultiheadAttention(64, 8, 0.1)  torch dropout=0.1      core bias=0.1
+#     EmbeddingBag(10, 3, "sum")      torch max_norm="sum"   core mode="sum"
+#
+# Consistent with itself, and each one silently different from torch. **Not fixed
+# here**: closing them means either implementing the missing arguments or standing
+# refusal stubs in their places, and which of those is right is a decision about what
+# the browser subset promises rather than a patch. Recorded so the decision is
+# findable — that is this table's job.
+SHIFTED = {
+    "Tensor": 2,
+    "nn": 13,
+    "nn.functional": 0,
+    "optim": 2,
+    "optim.lr_scheduler": 2,
+    "linalg": 0,
+    "utils.data": 0,
+}
+
+# The names cannot be aligned against each other, so the row says so rather than
+# guessing. `nn.functional`'s 30 are mostly the core naming its first argument `x`
+# where torch says `input`.
+UNALIGNED = {
+    "Tensor": 0,
+    "nn": 10,
+    "nn.functional": 30,
+    "optim": 0,
+    "optim.lr_scheduler": 0,
+    "linalg": 0,
+    "utils.data": 1,
+}
+
+# The core takes a prefix of torch's arguments — a **feature torch has and we do
+# not**, which is `torch_gap.py`'s kind of finding rather than a silent shift.
+SHORTER = {
+    "Tensor": 2,
+    "nn": 52,
+    "nn.functional": 0,
+    "optim": 10,
+    "optim.lr_scheduler": 1,
+    "linalg": 0,
+    "utils.data": 1,
+}
+
+# **torch is implemented in C here and `inspect` cannot read it.** Pinned as a total
+# rather than per namespace, because the number is a property of torch's build and
+# not of our work: it moves when torch moves. It is pinned at all so that a change in
+# how the measurement reads signatures — a fourth parser, say — cannot quietly turn
+# unreadable rows into comparisons nobody checked.
+UNREADABLE_IN_TORCH = 571
+
+
+def _rows():
+    import torch_signatures_core
+    return torch_signatures_core.compare()
+
+
+def test_the_core_to_torch_argument_axis_has_not_widened():
+    rows = _rows()
+    assert set(rows) == set(SHIFTED), (
+        f"the namespaces measured changed: {sorted(set(rows) ^ set(SHIFTED))}")
+
+    moved, unreadable = [], 0
+    for space, found in sorted(rows.items()):
+        got = {}
+        for _n, _m, _y, note in found:
+            got[note] = got.get(note, 0) + 1
+        unreadable += got.get("torch is C", 0)
+        pairs = (
+            ("shifted", SHIFTED,
+             got.get("dropped", 0) + got.get("inserted", 0) + got.get("reordered", 0)),
+            ("unaligned", UNALIGNED, got.get("unaligned", 0)),
+            ("shorter", SHORTER, got.get("shorter", 0) + got.get("longer", 0)),
+        )
+        for label, table, count in pairs:
+            if count != table[space]:
+                moved.append(f"{space} {label}: {count} now, {table[space]} written")
+    assert not moved, (
+        "the core-against-torch counts moved:\n  " + "\n  ".join(moved)
+        + "\n\n  Lower means an argument list was brought into line — edit the table.\n"
+          "  Higher wants saying out loud. Read the rows first:\n"
+          "    uv run --with numpy --with torch --with torchvision \\\n"
+          "      python tests/torch_signatures_core.py --show nn")
+    assert unreadable == UNREADABLE_IN_TORCH, (
+        f"{unreadable} rows are unreadable in torch, and {UNREADABLE_IN_TORCH} were "
+        "written down.\n"
+        "  Lower means something started reading C signatures — check what authority\n"
+        "  it is using before believing the rows it produced. torch's testing\n"
+        "  overrides are abbreviated (measured: Tensor.std loses correction and\n"
+        "  keepdim), so a source that looks better can be worse.\n"
+        "  Higher usually means a torch upgrade moved something into C.")
+
+
+def test_the_measurement_still_compares_something():
+    """A floor, for the reason `test_ts_signatures.py` has one.
+
+    This axis lost a whole namespace on its first run: `_read` returned the same
+    value for "torch does not have this name" and "torch has it and `inspect` cannot
+    read it", so every C-implemented method was skipped as absent. `Tensor` came back
+    with three agreements and read as finished.
+
+    **A row that is never produced cannot be counted as missing**, so the defence has
+    to be a floor beside the counts rather than a smaller number inside them.
+
+    **And this floor does not catch that particular regression** — put the fault back
+    and it stays green, because the rows that vanish were never in the compared count
+    to begin with. `UNREADABLE_IN_TORCH` is what goes red (0 against 571). Worth
+    saying out loud: a floor guards against *comparing fewer things*, and this fault
+    was *classifying fewer things*. Two different silences, and the same test does not
+    cover both. Verified by breaking it in each direction.
+    """
+    rows = _rows()
+    compared = sum(1 for found in rows.values() for r in found
+                   if r[3] not in ("torch is C", "variadic", "no signature"))
+    assert compared > 150, (
+        f"only {compared} argument lists were compared, and there were 246.\n"
+        "  Check `_read` first: returning one value for absent and for unreadable\n"
+        "  drops every C-implemented method without leaving a row behind.")
+
+
+def test_the_measurement_still_runs_as_a_script():
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "tests" / "torch_signatures_core.py"),
+         "--show", "utils"],
+        capture_output=True, text=True, cwd=ROOT)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "utils.data" in out.stdout

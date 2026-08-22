@@ -63,35 +63,23 @@ DELIBERATE: dict[str, str] = {}
 # than counted so that a third one fails here instead of joining them in silence.
 UNCOMPARABLE = ("AutoAugmentPolicy", "InterpolationMode", "ToTensor")
 
-_NOT_ARGUMENTS = ("self",)
-
-
 def _arguments(cls):
-    """The parameter names in order, or `None` when the signature cannot be compared.
+    """The constructor's parameter names in order, or `None` when it cannot be compared.
 
-    **A variadic signature is not a short signature.** `*args`/`**kwargs` are what
-    `object.__init__` shows for a class that defines none — an Enum, for instance — and
-    they are also what a wrapper writes when it accepts everything and passes it on.
-    Those two look identical here and mean opposite things.
+    **The body of this moved to `signature_read.py`.** The rule it carries — that a
+    variadic signature is not a short signature — was arrived at independently in two
+    files on the same afternoon, after failing differently in each: here it compared
+    `['kwds'] == ['kwds']` for two Enums and **passed while measuring nothing**, and
+    in `ts_signatures.py` it reported nine core loss constructors as defects in the
+    other library. One reader now, so a third copy cannot make it a third time.
 
-    This used to strip them by name and compare the remainder as though it were the whole
-    list. That is a filter removing part of a record and letting what is left stand in for
-    it, and it does not go quiet: for the two Enums it compared `[] == []` and **passed
-    while measuring nothing.** Another session hit the same shape an hour ago in
-    `ts_signatures.py`, where dropping `*args` from nine core loss constructors left
-    `[reduction]` and reported all nine as defects in the other library.
-
-    So it returns `None`, the same as an unreadable signature, and the count of pairs that
-    could not be compared is asserted below rather than left implicit.
+    `None` is returned for both "no signature" and "cannot be compared", because the
+    callers below already treat them alike and count the result.
     """
-    try:
-        sig = inspect.signature(cls.__init__)
-    except (TypeError, ValueError):                             # pragma: no cover
-        return None
-    parameters = list(sig.parameters.values())
-    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in parameters):
-        return None
-    return [p.name for p in parameters if p.name not in _NOT_ARGUMENTS]
+    from signature_read import VARIADIC, of_class
+
+    got = of_class(cls)
+    return None if got is VARIADIC else got
 
 
 def _shared():
