@@ -69,7 +69,18 @@ DIFFER = {
     # in `mean`, `sumDim` and `amax`. Nothing else in the repository was watching that
     # place: the golden asks `std()` three times and never with an argument.
     "Tensor": 3,
-    "nn": 30,
+    # 30 → 29. `SmoothL1Loss`: the core took `(beta, reduction)` and borch.ts
+    # `(reduction, beta)`. **borch.ts was right** — torch's live arguments are
+    # `(reduction, beta)`, with the deprecated `size_average` and `reduce` in front of
+    # them. So `SmoothL1Loss("sum")` set `beta="sum"` in Python and `reduction="sum"`
+    # in TypeScript, and nothing raised at construction either way.
+    #
+    # This axis could not say which side was wrong. Its two sides are the core and
+    # borch.ts and **neither of them is torch**, so a row here means they disagree and
+    # never which one to move. Asking real torch is what settled it, and there is no
+    # check in this repository that does that for `borch.nn` — `test_torch_signatures.py`
+    # covers borchvision against torchvision and stops there.
+    "nn": 29,
     "nn.functional": 2,
     "optim": 7,
     "optim.lr_scheduler": 4,

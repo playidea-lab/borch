@@ -2025,7 +2025,8 @@ def MSELoss(reduction="mean"):
     return _Wrap(lambda a, b: wrap(handle(a).mseLoss(handle(b), reduction)))
 
 
-def SmoothL1Loss(beta=1.0, reduction="mean"):
+def SmoothL1Loss(reduction="mean", beta=1.0):
+    # `reduction` first, as in torch and in borch.ts. See `borch/_nn.py`.
     return _Wrap(lambda a, b: wrap(
         handle(a).smoothL1Loss(handle(b), beta, reduction)))
 

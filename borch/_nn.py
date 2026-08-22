@@ -2145,7 +2145,20 @@ class L1Loss(_Loss):
 
 
 class SmoothL1Loss(_Loss):
-    def __init__(self, beta=1.0, reduction="mean"):
+    """**`reduction` comes first, as in torch.**
+
+    torch's live arguments are `(reduction, beta)` — the deprecated `size_average`
+    and `reduce` sit in front of them and nobody passes those. This class took
+    `(beta, reduction)`, so `SmoothL1Loss("sum")` set `beta="sum"` here and
+    `reduction="sum"` there. Nothing raised at construction; the failure arrived
+    later, wherever `beta` was used as a number.
+
+    borch.ts had it right, and the divergence read as the two sisters disagreeing
+    rather than as one of them being wrong — which is what a comparison between two
+    of our own libraries can never tell apart. It took asking real torch.
+    """
+
+    def __init__(self, reduction="mean", beta=1.0):
         super().__init__(reduction)
         self.beta = beta
 
