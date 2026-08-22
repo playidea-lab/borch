@@ -67,6 +67,12 @@ DELIBERATE = {
         "a sort's gradient is all ones regardless of order. A value case asks about the order.",
     "norm::grad::F.conv_transpose2d(편향)":
         "the gradient towards the input is independent of the bias. A value case asks about the bias.",
+    "ops::box_area(cxcywh)":
+        "**equality is what this case is for.** A box's area does not depend on how the box is "
+        "spelled, so the same boxes written as centre-and-size have to give the areas they gave "
+        "as two corners. It still separates an implementation that ignores `fmt` — read as "
+        "`xyxy`, a `cxcywh` box gives `(w - cx) * (h - cy)`, which is a different number — so "
+        "the case discriminates while its answer matches.",
 }
 
 

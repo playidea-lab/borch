@@ -2768,6 +2768,845 @@ def get_image_num_channels(img):
     return get_dimensions(img)[0]
 
 
+# --- ops: the box geometry, and only that -----------------------------------
+#
+# **Eleven of torchvision's thirty-nine.** The other twenty-eight are `nn.Module`
+# layers and the functions that need a model's feature maps, and those need a
+# detector nobody here has. These eleven need nothing but four numbers a box: they
+# are deterministic, they compare against real torchvision exactly, and the person in
+# front of them is somebody working out what IoU and NMS actually compute rather than
+# somebody running a detector.
+#
+# **Boxes are `(N, 4)` and the format is a named argument, not a guess.** `xyxy` is
+# two corners, `xywh` is a corner and a size, `cxcywh` is a centre and a size. The
+# three are indistinguishable by inspection — four numbers either way — so a wrong
+# `fmt` is a wrong answer that raises nothing.
+
+
+_BOX_FORMATS = ("xyxy", "xywh", "cxcywh")
+
+
+def _boxes_in(boxes):
+    """Numpy, and **remember whether a tensor came in.** These take and return the
+    kind they were given, as `Normalize` does — a caller who has tensors should not
+    have to unwrap them to ask a question about geometry."""
+    if isinstance(boxes, _np.ndarray):
+        return boxes.astype(_np.float64), False
+    return _to_numpy(boxes).astype(_np.float64), True
+
+
+def _boxes_out(values, was_tensor, dtype=None):
+    out = values.astype(dtype) if dtype is not None else values
+    return _backend().tensor(out) if was_tensor else out
+
+
+def _to_xyxy(boxes, fmt):
+    if fmt not in _BOX_FORMATS:
+        raise ValueError(
+            f"Unsupported Bounding Box format {fmt} — it is one of "
+            f"{', '.join(_BOX_FORMATS)}.\n"
+            f"(torch: Unsupported Bounding Box area for given format {fmt})")
+    if fmt == "xyxy":
+        return boxes
+    if fmt == "xywh":
+        x, y, w, h = boxes[..., 0], boxes[..., 1], boxes[..., 2], boxes[..., 3]
+        return _np.stack((x, y, x + w, y + h), axis=-1)
+    cx, cy, w, h = boxes[..., 0], boxes[..., 1], boxes[..., 2], boxes[..., 3]
+    return _np.stack((cx - 0.5 * w, cy - 0.5 * h, cx + 0.5 * w, cy + 0.5 * h), axis=-1)
+
+
+def box_convert(boxes, in_fmt, out_fmt):
+    """Between the three spellings of a box. **The identity is a copy and not the
+    same array** — torchvision returns a new tensor even when the formats match, and
+    a caller who mutates the result should not reach the caller's boxes."""
+    for name, fmt in (("in_fmt", in_fmt), ("out_fmt", out_fmt)):
+        if fmt not in _BOX_FORMATS:
+            raise ValueError(
+                f"Unsupported Bounding Box Conversions for given {name} {fmt}.\n"
+                "(torch: Unsupported Bounding Box Conversions for given in_fmt and "
+                "out_fmt)")
+    arr, was_tensor = _boxes_in(boxes)
+    xyxy = _to_xyxy(arr, in_fmt)
+    if out_fmt == "xyxy":
+        out = xyxy.copy()
+    else:
+        x1, y1, x2, y2 = xyxy[..., 0], xyxy[..., 1], xyxy[..., 2], xyxy[..., 3]
+        w, h = x2 - x1, y2 - y1
+        out = (_np.stack((x1, y1, w, h), axis=-1) if out_fmt == "xywh"
+               else _np.stack((x1 + 0.5 * w, y1 + 0.5 * h, w, h), axis=-1))
+    return _boxes_out(out, was_tensor, _np.float32)
+
+
+def box_area(boxes, fmt="xyxy"):
+    """Width times height. **A box with `x2 < x1` gets a negative area** rather than
+    zero — torchvision does not clamp here, and clamping would hide a box built the
+    wrong way round."""
+    arr, was_tensor = _boxes_in(boxes)
+    xyxy = _to_xyxy(arr, fmt)
+    return _boxes_out((xyxy[..., 2] - xyxy[..., 0]) * (xyxy[..., 3] - xyxy[..., 1]),
+                      was_tensor, _np.float32)
+
+
+def _inter_union(a, b):
+    """Intersection and union of every box in `a` against every box in `b`."""
+    lt = _np.maximum(a[..., None, :2], b[..., None, :, :2])
+    rb = _np.minimum(a[..., None, 2:], b[..., None, :, 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    inter = wh[..., 0] * wh[..., 1]
+    area_a = (a[..., 2] - a[..., 0]) * (a[..., 3] - a[..., 1])
+    area_b = (b[..., 2] - b[..., 0]) * (b[..., 3] - b[..., 1])
+    return inter, area_a[..., None] + area_b[..., None, :] - inter
+
+
+def box_iou(boxes1, boxes2, fmt="xyxy"):
+    """**An `N x M` matrix, not a paired list.** Every box against every box, which is
+    what a detector needs and what surprises everyone the first time."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(_to_xyxy(a, fmt), _to_xyxy(b, fmt))
+    return _boxes_out(inter / union, was_tensor, _np.float32)
+
+
+def generalized_box_iou(boxes1, boxes2):
+    """IoU, **minus what the smallest enclosing box wastes.** Two boxes that do not
+    touch have an IoU of 0 whatever the distance between them; this one keeps falling
+    to -1, which is why a loss can be built on it and not on IoU."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(a, b)
+    iou = inter / union
+    lt = _np.minimum(a[..., None, :2], b[..., None, :, :2])
+    rb = _np.maximum(a[..., None, 2:], b[..., None, :, 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    area = wh[..., 0] * wh[..., 1]
+    return _boxes_out(iou - (area - union) / area, was_tensor, _np.float32)
+
+
+def _centre_distance(a, b):
+    """Squared distance between centres, and the squared diagonal of the enclosing
+    box — the two halves both distance-based IoUs need."""
+    lt = _np.minimum(a[..., None, :2], b[..., None, :, :2])
+    rb = _np.maximum(a[..., None, 2:], b[..., None, :, 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    diagonal = wh[..., 0] ** 2 + wh[..., 1] ** 2
+    cx_a = (a[..., 0] + a[..., 2]) / 2
+    cy_a = (a[..., 1] + a[..., 3]) / 2
+    cx_b = (b[..., 0] + b[..., 2]) / 2
+    cy_b = (b[..., 1] + b[..., 3]) / 2
+    centres = ((cx_a[..., None] - cx_b[..., None, :]) ** 2
+               + (cy_a[..., None] - cy_b[..., None, :]) ** 2)
+    return centres, diagonal
+
+
+def distance_box_iou(boxes1, boxes2, eps=1e-7):
+    """IoU penalised by **how far apart the centres are**, as a fraction of the
+    enclosing box's diagonal."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(a, b)
+    centres, diagonal = _centre_distance(a, b)
+    return _boxes_out(inter / union - centres / (diagonal + eps), was_tensor,
+                      _np.float32)
+
+
+def complete_box_iou(boxes1, boxes2, eps=1e-7):
+    """`distance_box_iou` and **one more term for the aspect ratio** — two boxes with
+    the same centre and area but different shapes score lower here and identically
+    under the distance one."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(a, b)
+    iou = inter / union
+    centres, diagonal = _centre_distance(a, b)
+    diou = iou - centres / (diagonal + eps)
+    w_a, h_a = a[..., 2] - a[..., 0], a[..., 3] - a[..., 1]
+    w_b, h_b = b[..., 2] - b[..., 0], b[..., 3] - b[..., 1]
+    v = (4 / (_np.pi ** 2)) * (_np.arctan(w_b / h_b)[..., None, :]
+                               - _np.arctan(w_a / h_a)[..., None]) ** 2
+    with _np.errstate(invalid="ignore"):
+        alpha = v / (1 - iou + v + eps)
+    return _boxes_out(diou - alpha * v, was_tensor, _np.float32)
+
+
+def clip_boxes_to_image(boxes, size):
+    """Push every corner back inside a picture of `size`, which is **(height, width)**
+    — the opposite order to a box's own `(x, y)`, and torchvision's own convention."""
+    arr, was_tensor = _boxes_in(boxes)
+    height, width = size
+    out = arr.copy()
+    out[..., 0::2] = _np.clip(out[..., 0::2], 0, width)
+    out[..., 1::2] = _np.clip(out[..., 1::2], 0, height)
+    return _boxes_out(out, was_tensor, _np.float32)
+
+
+def remove_small_boxes(boxes, min_size):
+    """**Indices, not boxes.** Every one of these that filters returns the positions
+    rather than the survivors, because the caller almost always has scores and labels
+    to filter by the same positions."""
+    arr, was_tensor = _boxes_in(boxes)
+    keep = ((arr[..., 2] - arr[..., 0]) >= min_size) & \
+           ((arr[..., 3] - arr[..., 1]) >= min_size)
+    return _boxes_out(_np.nonzero(keep)[0], was_tensor, _np.int64)
+
+
+def masks_to_boxes(masks):
+    """The tightest box around each mask. **An empty mask gives all zeros** rather
+    than an error — torchvision's behaviour, and the one that lets a batch with a
+    blank mask in it still stack."""
+    arr = masks if isinstance(masks, _np.ndarray) else _to_numpy(masks)
+    was_tensor = not isinstance(masks, _np.ndarray)
+    out = _np.zeros((arr.shape[0], 4), dtype=_np.float64)
+    for i in range(arr.shape[0]):
+        ys, xs = _np.nonzero(arr[i])
+        if xs.size:
+            out[i] = (xs.min(), ys.min(), xs.max(), ys.max())
+    return _boxes_out(out, was_tensor, _np.int64 if arr.dtype != _np.float32 else _np.float32)
+
+
+def nms(boxes, scores, iou_threshold):
+    """Non-maximum suppression: keep the best-scoring box, throw away everything that
+    overlaps it too much, repeat.
+
+    **`> iou_threshold` and not `>=`.** At a threshold of 0 two boxes that merely
+    touch — zero overlap — both survive, and that is the boundary anybody testing this
+    reaches for first.
+
+    Ties in the score are **not decided here and torchvision does not decide them
+    either**; its own documentation says the choice is not guaranteed to match between
+    CPU and GPU. So a case built on tied scores is a case with no answer.
+    """
+    arr, was_tensor = _boxes_in(boxes)
+    values = _to_numpy(scores) if not isinstance(scores, _np.ndarray) else scores
+    order = _np.argsort(-_np.asarray(values, dtype=_np.float64), kind="stable")
+    kept = []
+    while order.size:
+        best = order[0]
+        kept.append(best)
+        if order.size == 1:
+            break
+        rest = order[1:]
+        inter, union = _inter_union(arr[best][None, :], arr[rest])
+        overlap = (inter / union)[0]
+        order = rest[overlap <= iou_threshold]
+    return _boxes_out(_np.asarray(kept, dtype=_np.int64), was_tensor, _np.int64)
+
+
+def batched_nms(boxes, scores, idxs, iou_threshold):
+    """NMS **per class**, done by moving each class's boxes somewhere the others
+    cannot reach.
+
+    The offset trick is torchvision's and it is worth reading twice: every box is
+    shifted by its class index times more than the largest coordinate, so boxes of
+    different classes can no longer overlap and a single pass of `nms` does the lot.
+    """
+    arr, was_tensor = _boxes_in(boxes)
+    if arr.size == 0:
+        return _boxes_out(_np.zeros((0,), dtype=_np.int64), was_tensor, _np.int64)
+    labels = _np.asarray(_to_numpy(idxs) if not isinstance(idxs, _np.ndarray) else idxs,
+                         dtype=_np.float64)
+    offsets = labels * (arr.max() + 1)
+    return nms(arr + offsets[:, None], scores, iou_threshold)
+
+
+# --- transforms.v2 ----------------------------------------------------------
+#
+# **torchvision's current recommended API, and it is v1 with a different surface.**
+# Measured before any of this was written: on a plain image v2's transforms give the
+# same values as v1's (`Resize` v1 against v2, max difference 0.0). So the arithmetic
+# is not written twice — every class here inherits its behaviour from the one above.
+#
+# **What is written twice is the `repr`, because that genuinely differs.** Measured:
+# of the 33 transforms comparable in both, **21 print differently**.
+#
+#     v1: Resize(size=(4, 3), interpolation=bilinear, max_size=None, antialias=True)
+#     v2: Resize(size=[4, 3], interpolation=bilinear, antialias=True)
+#
+#     v1: ColorJitter(brightness=(0.5, 1.5), contrast=None, saturation=None, hue=None)
+#     v2: ColorJitter(brightness=(0.5, 1.5))
+#
+# The plan for this namespace was "re-export the 38, the values are the same" — and
+# that was a decision made from a measurement of **values** which a measurement of the
+# **surface** then refuted. This project treats `repr` as specification, because
+# tutorials print transforms and a learner reads what is printed. Twenty-one wrong
+# ones is not a rounding.
+#
+# ## The rule is one rule, and torchvision's own
+#
+# v2 does not hand-write those reprs. `Transform.extra_repr` walks the instance's
+# attributes, skips the private ones, keeps only what is a bool, number, string,
+# tuple, list or enum, and joins them. **That is why `ColorJitter` drops three
+# fields** — they are `None`, and `None` is not in the list. So the difference between
+# the two namespaces is not the printing but **what each class stores, under what name
+# and in what order**, and that is what the table below records.
+#
+# Every one of the 38 declares its printed fields, including the twelve that happen to
+# agree with v1 today. Leaving those to inherit would make this file depend on a
+# coincidence, and a coincidence is what stops holding without telling anyone.
+
+
+class _V2Repr:
+    """v2's printing rule, once.
+
+    The fields are declared rather than read off `__dict__` because the behaviour
+    comes from the v1 class above, whose attributes are its own — same values, other
+    names, other order. Declaring keeps one implementation of the arithmetic and one
+    statement of the surface, which is the whole shape of this namespace.
+    """
+
+    _shown: dict = {}
+
+    def _v2(self, **fields):
+        self.__dict__["_shown"] = fields
+
+    def __repr__(self):
+        # **The type filter is torchvision's and it is load-bearing**: `None` is not
+        # among the kinds it keeps, so a field left unset disappears from the line
+        # rather than printing as `None`. That single rule is most of the difference
+        # between the two namespaces.
+        parts = [f"{name}={value}" for name, value in self._shown.items()
+                 if isinstance(value, (bool, int, float, str, tuple, list, _enum.Enum))]
+        return f"{type(self).__name__}({', '.join(parts)})"
+
+
+def _v2_twin(base, fields):
+    """A v2 class: the v1 one's behaviour, the v2 one's printed surface.
+
+    **Built from a table rather than written out thirty-eight times.** The repository
+    prefers three similar lines to an early abstraction, and thirty-eight is not
+    three — every one of these would be the same four lines with two names changed,
+    and the thing that actually differs between them is the field list, which is what
+    the table holds.
+
+    The name is set on the class because `repr` reads `type(self).__name__`, and a
+    twin called `_V2Resize` would print itself under a name torchvision does not have.
+    """
+    class Twin(_V2Repr, base):
+        def __init__(self, *args, **kwargs):
+            base.__init__(self, *args, **kwargs)
+            self._v2(**{name: read(self) for name, read in fields})
+
+    Twin.__name__ = base.__name__
+    Twin.__qualname__ = base.__name__
+    Twin.__doc__ = (f"`transforms.v2.{base.__name__}` — {base.__name__}'s behaviour "
+                    "with v2's printed surface.")
+    return Twin
+
+
+def _listed(value):
+    """v2 stores several sizes as **lists** where v1 keeps tuples, and the repr shows
+    the difference. One number stays one number."""
+    return value if isinstance(value, (int, float)) else list(value)
+
+# The table. Each row is `(class, ((printed name, how to read it), ...))` in **v2's
+# order**, which is the order its constructor assigns and therefore the order its repr
+# prints. Read out of real torchvision rather than inferred — the same discipline the
+# policy tables got, and for the same reason: every plausible ordering is plausible.
+_V2_TABLE = (
+    # **One number is a list too** — v2 prints `Resize(5)` as `size=[5]`. `_listed`
+    # leaves a number a number, so the size is read differently here and only here.
+    (Resize, (("size", lambda s: [s.size] if isinstance(s.size, int) else list(s.size)),
+              ("interpolation", lambda s: s.interpolation),
+              ("antialias", lambda s: s.antialias))),
+    (CenterCrop, (("size", lambda s: s.size),)),
+    (RandomCrop, (("size", lambda s: s.size),
+                  ("pad_if_needed", lambda s: s.pad_if_needed),
+                  ("fill", lambda s: s.fill),
+                  ("padding_mode", lambda s: s.padding_mode))),
+    (RandomResizedCrop, (("size", lambda s: s.size), ("scale", lambda s: tuple(s.scale)),
+                         ("ratio", lambda s: tuple(s.ratio)),
+                         ("interpolation", lambda s: s.interpolation),
+                         ("antialias", lambda s: s.antialias))),
+    (FiveCrop, (("size", lambda s: s.size),)),
+    (TenCrop, (("size", lambda s: s.size), ("vertical_flip", lambda s: s.vertical_flip))),
+    (Pad, (("padding", lambda s: s.padding), ("fill", lambda s: s.fill),
+           ("padding_mode", lambda s: s.padding_mode))),
+    (RandomHorizontalFlip, (("p", lambda s: s.p),)),
+    (RandomVerticalFlip, (("p", lambda s: s.p),)),
+    (Grayscale, (("num_output_channels", lambda s: s.num_output_channels),)),
+    (RandomGrayscale, (("p", lambda s: s.p),)),
+    (Normalize, (("mean", lambda s: _listed(s.mean)), ("std", lambda s: _listed(s.std)),
+                 ("inplace", lambda s: s.inplace))),
+    (RandomErasing, (("p", lambda s: s.p), ("scale", lambda s: tuple(s.scale)),
+                     ("ratio", lambda s: tuple(s.ratio)),
+                     ("value", lambda s: (s.value if isinstance(s.value, str)
+                                          else [float(v) for v in _np.atleast_1d(s.value)])),
+                     ("inplace", lambda s: s.inplace))),
+    # **`ColorJitter` is the clearest case of the type filter doing the work.** It
+    # stores `None` for a factor nobody asked for, and `None` is not a kind v2 prints,
+    # so the default one prints its own name and nothing else.
+    (ColorJitter, (("brightness", lambda s: s.brightness),
+                   ("contrast", lambda s: s.contrast),
+                   ("saturation", lambda s: s.saturation),
+                   ("hue", lambda s: s.hue))),
+    (RandomInvert, (("p", lambda s: s.p),)),
+    (RandomPosterize, (("p", lambda s: s.p), ("bits", lambda s: s.bits))),
+    (RandomSolarize, (("p", lambda s: s.p), ("threshold", lambda s: s.threshold))),
+    (RandomAutocontrast, (("p", lambda s: s.p),)),
+    (RandomEqualize, (("p", lambda s: s.p),)),
+    (RandomAdjustSharpness, (("p", lambda s: s.p),
+                             ("sharpness_factor", lambda s: s.sharpness_factor))),
+    (RandomRotation, (("degrees", lambda s: _listed(s.degrees)),
+                      ("interpolation", lambda s: s.interpolation),
+                      ("expand", lambda s: s.expand), ("fill", lambda s: s.fill))),
+    (RandomAffine, (("degrees", lambda s: _listed(s.degrees)),
+                    ("interpolation", lambda s: s.interpolation),
+                    ("fill", lambda s: s.fill))),
+    (RandomPerspective, (("p", lambda s: s.p),
+                         ("distortion_scale", lambda s: s.distortion_scale),
+                         ("interpolation", lambda s: s.interpolation),
+                         ("fill", lambda s: s.fill))),
+    (GaussianBlur, (("kernel_size", lambda s: tuple(s.kernel_size)),
+                    ("sigma", lambda s: _listed(s.sigma)))),
+    # **The policies put `interpolation` first**, where every other class here has it
+    # after the arguments that decide the picture. That is v2's assignment order and
+    # not a tidier one.
+    (AutoAugment, (("interpolation", lambda s: s.interpolation),
+                   ("policy", lambda s: s.policy))),
+    (RandAugment, (("interpolation", lambda s: s.interpolation),
+                   ("num_ops", lambda s: s.num_ops),
+                   ("magnitude", lambda s: s.magnitude),
+                   ("num_magnitude_bins", lambda s: s.num_magnitude_bins))),
+    (TrivialAugmentWide, (("interpolation", lambda s: s.interpolation),
+                          ("num_magnitude_bins", lambda s: s.num_magnitude_bins))),
+    (AugMix, (("interpolation", lambda s: s.interpolation),
+              ("severity", lambda s: s.severity),
+              ("mixture_width", lambda s: s.mixture_width),
+              ("chain_depth", lambda s: s.chain_depth),
+              ("alpha", lambda s: s.alpha), ("all_ops", lambda s: s.all_ops))),
+    # **These two print nothing at all.** Their state is arrays and functions, and
+    # neither is a kind v2's rule keeps — so the name and empty brackets is the whole
+    # of it, which is easy to mistake for an unfinished repr.
+    (LinearTransformation, ()),
+    (ToTensor, ()),
+    (RandomOrder, (("transforms", lambda s: list(s.transforms)),)),
+    # **v2 fills `p` in.** v1 leaves it `None`; v2 builds the uniform distribution and
+    # stores it, so two transforms given no probabilities print `p=[0.5, 0.5]`.
+    (RandomChoice, (("transforms", lambda s: list(s.transforms)),
+                    ("p", lambda s: (list(s.p) if s.p is not None
+                                     else [1 / len(s.transforms)] * len(s.transforms))))),
+)
+
+def _module_repr(name, lines):
+    """torch's `nn.Module` printing, which is what v2's containers inherit.
+
+    **One transform prints inline and two print over several lines**, and the indent
+    is not the same in the two cases — four spaces inline, six once it breaks, because
+    torch indents each line of `extra_repr` by two more when it wraps. Measured rather
+    than derived; it is the kind of thing nobody would guess and everybody would get
+    almost right.
+    """
+    body = "\n".join(f"    {line}" for line in lines)
+    if "\n" not in body:
+        return f"{name}({body})"
+    inner = "\n".join(f"  {line}" for line in body.split("\n"))
+    return f"{name}(\n{inner}\n)"
+
+
+class _V2ElasticTransform(_V2Repr, ElasticTransform):
+    """**The one whose printed `fill` cannot be read back off the object.** v1
+    normalises it to a list in the constructor and v2 prints the number as it was
+    given, so the twin keeps the argument rather than recovering it — recovering it
+    would turn `0` into `0.0`, and the two print differently."""
+
+    def __init__(self, alpha=50.0, sigma=5.0, interpolation="bilinear", fill=0):
+        ElasticTransform.__init__(self, alpha, sigma, interpolation, fill)
+        self._v2(alpha=_listed(self.alpha), sigma=_listed(self.sigma),
+                 interpolation=self.interpolation, fill=fill)
+
+
+class _V2Compose(Compose):
+    """v2's `Compose`. Same behaviour, torch's module printing."""
+
+    def __repr__(self):
+        return _module_repr(type(self).__name__, [str(t) for t in self.transforms])
+
+
+class _V2RandomApply(RandomApply):
+    """v2's `RandomApply`. **`p` is not printed**, unlike v1's — it is stored and left
+    out, which is torch's module repr showing only what `extra_repr` returns."""
+
+    def __repr__(self):
+        return _module_repr(type(self).__name__, [str(t) for t in self.transforms])
+
+
+class _V2Lambda(_V2Repr, Lambda):
+    """v2's `Lambda` takes **the types it applies to** as well as the function — the
+    one place in this namespace where the constructor differs, not just the printing.
+    Given tv_tensors it would run only on the kinds named; here there is one kind, so
+    the argument is kept and recorded rather than acted on."""
+
+    def __init__(self, lambd, *types):
+        Lambda.__init__(self, lambd)
+        self.types = types or (object,)
+        self._v2()
+
+    def __repr__(self):
+        names = [t.__name__ for t in self.types]
+        return f"{type(self).__name__}({self.lambd.__name__}, types={names})"
+
+
+class _V2Identity(_V2Repr):
+    """Does nothing, and **that is a transform** — it is what a policy draws when it
+    draws no operation, and what a `Compose` holds when a branch is switched off."""
+
+    def __init__(self):
+        self._v2()
+
+    def __call__(self, x):
+        return x
+
+
+class _V2ToPureTensor(_V2Repr):
+    """Strips the tv_tensor wrappers off a sample. **Here there are none**, so it is
+    the identity — kept because a pipeline copied from torchvision ends with it and
+    should not stop, and named rather than aliased to `Identity` because the two mean
+    different things the day tv_tensors arrive."""
+
+    def __init__(self):
+        self._v2()
+
+    def __call__(self, x):
+        return x
+
+
+class _V2RGB(_V2Repr):
+    """One channel to three. A three-channel picture passes through, which is what
+    makes it safe to put in front of a model that needs three."""
+
+    def __init__(self):
+        self._v2()
+
+    def __call__(self, img):
+        img = _require_hwc(img, "RGB")
+        arr = img if img.ndim == 3 else img[:, :, None]
+        if arr.shape[2] == 3:
+            return arr
+        if arr.shape[2] != 1:
+            raise ValueError(
+                f"RGB takes a 1- or 3-channel picture — it received {arr.shape[2]}.")
+        return _np.ascontiguousarray(_np.repeat(arr, 3, axis=2))
+
+
+class _V2ToImage(_V2Repr):
+    """`(H,W,C)` to a `(C,H,W)` tensor — **and it does not divide by 255.**
+
+    That is the whole reason v2 split `ToTensor` in two. `ToTensor` both moved the
+    axes and scaled, so a float image was scaled a second time by anyone who did not
+    know; here the moving is one transform and the scaling is `ToDtype(scale=True)`,
+    and each says which it does.
+
+    One difference from torchvision, and it is the core's, not this file's: given a
+    `uint8` picture torchvision hands back a `uint8` tensor and this hands back an
+    `int64` one, because the core has no `uint8` storage to hand back. The numbers are
+    the same 0..255; only the box they sit in is wider. It shows in memory and in
+    `.dtype`, and it stops mattering the moment `ToDtype(float32, scale=True)` runs —
+    that pair, which is what v2 tells you to write instead of `ToTensor`, agrees with
+    torchvision to 6e-08 and with v1 `ToTensor` exactly.
+    """
+
+    def __init__(self):
+        self._v2()
+
+    def __call__(self, pic):
+        arr = _np.asarray(pic)
+        if arr.ndim == 2:
+            arr = arr[:, :, None]
+        return _backend().tensor(_np.ascontiguousarray(arr.transpose(2, 0, 1)))
+
+
+class _V2ToDtype(_V2Repr):
+    """Cast, and **optionally scale on the way.** `scale=True` is the half of the old
+    `ToTensor` that divided; without it this only changes the dtype, which is why the
+    flag is not a default."""
+
+    def __init__(self, dtype, scale=False):
+        self.dtype = dtype
+        self.scale = scale
+        self._v2(scale=scale)
+
+    def __call__(self, x):
+        arr = x if isinstance(x, _np.ndarray) else _to_numpy(x)
+        target = _np.dtype(self.dtype.np if hasattr(self.dtype, "np") else self.dtype)
+        if self.scale and _np.dtype(arr.dtype).kind != "f" and target.kind == "f":
+            out = arr.astype(target) / 255.0
+        elif self.scale and _np.dtype(arr.dtype).kind == "f" and target.kind != "f":
+            out = (arr * 255.0).astype(target)
+        else:
+            out = arr.astype(target)
+        return out if isinstance(x, _np.ndarray) else _backend().tensor(out)
+
+
+class _V2GaussianNoise(_V2Repr):
+    """Add normal noise. **Float pictures only** — torchvision has an integer path
+    that works in int16 and clamps, and a uint8 picture with sigma in units of [0,1]
+    is a different question, so it is refused here rather than answered differently."""
+
+    def __init__(self, mean=0.0, sigma=0.1, clip=True):
+        if sigma < 0:
+            raise ValueError(
+                f"sigma shouldn't be negative. Got {sigma}\n"
+                "(torch: sigma shouldn't be negative)")
+        self.mean, self.sigma, self.clip = mean, sigma, clip
+        self._v2(mean=mean, sigma=sigma, clip=clip)
+
+    def __call__(self, img):
+        img = _require_hwc(img, "GaussianNoise")
+        if _np.dtype(img.dtype).kind != "f":
+            raise TypeError(
+                f"GaussianNoise takes a float picture — it received {img.dtype}.\n"
+                "  Its sigma is in the units of a normalised image; on bytes the same "
+                "number means something else.")
+        out = img + (self.mean + _rng.standard_normal(img.shape).astype(img.dtype)
+                     * self.sigma)
+        return _np.clip(out, 0.0, 1.0) if self.clip else out
+
+
+class _V2RandomChannelPermutation(_V2Repr):
+    """Shuffle the channels. **Every ordering including the original** — it is a draw
+    over permutations, not a guarantee of change."""
+
+    def __init__(self):
+        self._v2()
+
+    def __call__(self, img):
+        img = _require_hwc(img, "RandomChannelPermutation")
+        arr = img if img.ndim == 3 else img[:, :, None]
+        order = _rng.permutation(arr.shape[2])
+        return _np.ascontiguousarray(arr[:, :, order])
+
+
+class _V2RandomPhotometricDistort(_V2Repr):
+    """The SSD recipe: each of four adjustments applied with probability `p`, **the
+    contrast either before or after the other two**, and then maybe a channel shuffle.
+
+    The contrast's position is itself a coin flip, which is the part that reads as a
+    detail and is not: contrast measures the picture's mean, so doing it first and
+    doing it last are different pictures.
+    """
+
+    def __init__(self, brightness=(0.875, 1.125), contrast=(0.5, 1.5),
+                 saturation=(0.5, 1.5), hue=(-0.05, 0.05), p=0.5):
+        self.brightness, self.contrast = brightness, contrast
+        self.saturation, self.hue, self.p = saturation, hue, p
+        self._v2(brightness=brightness, contrast=contrast, hue=hue,
+                 saturation=saturation, p=p)
+
+    def __call__(self, img):
+        img = _require_hwc(img, "RandomPhotometricDistort")
+        draw = lambda span: (float(_rng.uniform(span[0], span[1]))
+                             if _rng.random() < self.p else None)
+        brightness, contrast = draw(self.brightness), draw(self.contrast)
+        saturation, hue = draw(self.saturation), draw(self.hue)
+        contrast_first = bool(_rng.random() < 0.5)
+        shuffle = _rng.random() < self.p
+        if brightness is not None:
+            img = adjust_brightness(img, brightness)
+        if contrast is not None and contrast_first:
+            img = adjust_contrast(img, contrast)
+        if saturation is not None:
+            img = adjust_saturation(img, saturation)
+        if hue is not None:
+            img = adjust_hue(img, hue)
+        if contrast is not None and not contrast_first:
+            img = adjust_contrast(img, contrast)
+        if shuffle:
+            arr = img if img.ndim == 3 else img[:, :, None]
+            img = _np.ascontiguousarray(arr[:, :, _rng.permutation(arr.shape[2])])
+        return img
+
+
+class _V2RandomResize(_V2Repr):
+    """Resize the short side to a number drawn from `[min_size, max_size)`. **A range
+    of sizes rather than one**, which is what multi-scale training wants."""
+
+    def __init__(self, min_size, max_size, interpolation="bilinear", antialias=True):
+        self.min_size, self.max_size = min_size, max_size
+        self.interpolation = _interpolation(interpolation)
+        self.antialias = _antialias(antialias)
+        self._v2(min_size=min_size, max_size=max_size,
+                 interpolation=self.interpolation, antialias=self.antialias)
+
+    def __call__(self, img):
+        img = _require_hwc(img, "RandomResize")
+        size = int(_rng.integers(self.min_size, self.max_size))
+        return Resize(size, self.interpolation)(img)
+
+
+class _V2RandomShortestSize(_V2Repr):
+    """The short side to one of `min_size`, **with the long side capped** by
+    `max_size` — so a very wide picture is scaled by whichever of the two constraints
+    binds first, rather than by the short side alone."""
+
+    def __init__(self, min_size, max_size=None, interpolation="bilinear",
+                 antialias=True):
+        self.min_size = ([int(min_size)] if isinstance(min_size, int)
+                         else [int(s) for s in min_size])
+        self.max_size = max_size
+        self.interpolation = _interpolation(interpolation)
+        self.antialias = _antialias(antialias)
+        self._v2(min_size=self.min_size, max_size=max_size,
+                 interpolation=self.interpolation, antialias=self.antialias)
+
+    def __call__(self, img):
+        img = _require_hwc(img, "RandomShortestSize")
+        h, w = img.shape[0], img.shape[1]
+        drawn = self.min_size[int(_rng.integers(0, len(self.min_size)))]
+        ratio = drawn / min(h, w)
+        if self.max_size is not None:
+            ratio = min(ratio, self.max_size / max(h, w))
+        return Resize((int(h * ratio), int(w * ratio)), self.interpolation)(img)
+
+
+class _V2RandomZoomOut(_V2Repr):
+    """Put the picture on a **larger canvas**, somewhere random on it, with the rest
+    filled. The picture shrinks relative to the frame without being resampled — which
+    is why detection recipes reach for it rather than for a scale-down."""
+
+    def __init__(self, fill=0, side_range=(1.0, 4.0), p=0.5):
+        if side_range[0] < 1.0 or side_range[0] > side_range[1]:
+            raise ValueError(
+                f"Invalid side range provided {tuple(side_range)}.\n"
+                "(torch: Invalid canvas side range provided)")
+        self.fill, self.side_range, self.p = fill, side_range, p
+        self._v2(p=p, fill=fill, side_range=tuple(float(s) for s in side_range))
+
+    def __call__(self, img):
+        img = _require_hwc(img, "RandomZoomOut")
+        if _rng.random() >= self.p:
+            return img
+        h, w = img.shape[0], img.shape[1]
+        ratio = self.side_range[0] + _rng.random() * (self.side_range[1]
+                                                      - self.side_range[0])
+        canvas_w, canvas_h = int(w * ratio), int(h * ratio)
+        draw = _rng.random(2)
+        left = int((canvas_w - w) * draw[0])
+        top = int((canvas_h - h) * draw[1])
+        return Pad([left, top, canvas_w - (left + w), canvas_h - (top + h)],
+                   self.fill)(img)
+
+
+class _V2ScaleJitter(_V2Repr):
+    """Resize toward `target_size` by a **drawn factor** — the large-scale jitter of
+    the detection recipes, where the same picture is seen at a tenth and at twice its
+    size across an epoch."""
+
+    def __init__(self, target_size, scale_range=(0.1, 2.0), interpolation="bilinear",
+                 antialias=True):
+        self.target_size, self.scale_range = tuple(target_size), tuple(scale_range)
+        self.interpolation = _interpolation(interpolation)
+        self.antialias = _antialias(antialias)
+        self._v2(target_size=self.target_size, scale_range=self.scale_range,
+                 interpolation=self.interpolation, antialias=self.antialias)
+
+    def __call__(self, img):
+        img = _require_hwc(img, "ScaleJitter")
+        h, w = img.shape[0], img.shape[1]
+        scale = self.scale_range[0] + _rng.random() * (self.scale_range[1]
+                                                       - self.scale_range[0])
+        ratio = min(self.target_size[1] / h, self.target_size[0] / w) * scale
+        return Resize((int(h * ratio), int(w * ratio)), self.interpolation)(img)
+
+
+class _V2MixBase(_V2Repr):
+    """What `MixUp` and `CutMix` share — **a batch, and labels that move with it.**
+
+    These two are the only transforms in v2 whose input is a training pair rather
+    than a picture. Everything else here takes `(H,W,C)` and gives `(H,W,C)` back;
+    these take `(N,H,W,C)` with a label per row and give both back changed, because
+    mixing two pictures without mixing their labels teaches the wrong thing.
+
+    The pairing is **row `i` with row `i-1`** — a roll by one, not a random partner.
+    torchvision says outright that this is an implementation detail and that the
+    batch is expected to be shuffled already; kept the same here, because a recipe
+    that shuffles for torchvision's sake would otherwise be silently unnecessary.
+
+    `labels_getter` is **not taken.** In torchvision it exists to find the labels
+    inside a nested sample — a dict, a tuple of tv_tensors — and there are no
+    tv_tensors here, so the labels arrive as the second argument and nothing has to
+    go looking. Taking the argument and ignoring it would read as support.
+    """
+
+    def __init__(self, *, alpha=1.0, num_classes=None):
+        self.alpha = float(alpha)
+        self.num_classes = num_classes
+        self._v2(alpha=self.alpha, num_classes=num_classes)
+
+    def _read(self, images, labels):
+        """The two checks torchvision makes, in its words — a wrong batch here is a
+        silent mis-train otherwise, since every shape involved is plausible."""
+        images = _np.asarray(images)
+        labels = _np.asarray(labels)
+        if labels.ndim not in (1, 2):
+            raise ValueError(
+                f"labels should be index based with shape (batch_size,) "
+                f"or probability based with shape (batch_size, num_classes), "
+                f"but got a tensor of shape {labels.shape} instead.")
+        if labels.ndim == 1 and self.num_classes is None:
+            raise ValueError(
+                "num_classes must be passed if the labels are index-based (1D)")
+        if images.ndim != 4:
+            raise ValueError(
+                f"Expected a batched input with 4 dims, but got {images.ndim} "
+                "dimensions instead.")
+        if images.shape[0] != labels.shape[0]:
+            raise ValueError(
+                "The batch size of the image or video does not match the batch size "
+                f"of the labels: {images.shape[0]} != {labels.shape[0]}.")
+        return images, labels
+
+    def _mix_label(self, labels, lam):
+        """One-hot first if they came in as indices, then the same blend the pictures
+        get. **`lam` weights the row itself and `1-lam` its partner** — the way round
+        that matters, and the way round torchvision has it."""
+        if labels.ndim == 1:
+            hot = _np.zeros((labels.shape[0], self.num_classes), dtype=_np.float32)
+            hot[_np.arange(labels.shape[0]), labels.astype(int)] = 1.0
+            labels = hot
+        labels = labels.astype(_np.float32, copy=False)
+        return _np.roll(labels, 1, axis=0) * (1.0 - lam) + labels * lam
+
+
+class _V2MixUp(_V2MixBase):
+    """Blend each picture with the one before it, and their labels by the same weight.
+
+    <https://arxiv.org/abs/1710.09412>. The whole transform is one weighted average,
+    which is what makes it worth having: no crop, no resample, nothing to get subtly
+    wrong, and it still moves a classifier's calibration.
+    """
+
+    def __call__(self, images, labels):
+        images, labels = self._read(images, labels)
+        lam = float(_rng.beta(self.alpha, self.alpha))
+        mixed = (_np.roll(images, 1, axis=0) * (1.0 - lam)
+                 + images * lam).astype(images.dtype, copy=False)
+        return mixed, self._mix_label(labels, lam)
+
+
+class _V2CutMix(_V2MixBase):
+    """Paste a rectangle of the previous picture into this one, and mix the labels by
+    **the area actually pasted** rather than by the weight that was drawn.
+
+    <https://arxiv.org/abs/1905.04899>. That adjustment is the part worth pointing at:
+    the box is centred on a random point and clipped at the edges, so a box near a
+    corner loses half its area, and a label mixed by the drawn weight would then
+    claim more of the other class than the picture contains.
+    """
+
+    def __call__(self, images, labels):
+        images, labels = self._read(images, labels)
+        lam = float(_rng.beta(self.alpha, self.alpha))
+        h, w = images.shape[1], images.shape[2]
+        centre_x, centre_y = int(_rng.integers(w)), int(_rng.integers(h))
+        half = 0.5 * _math.sqrt(1.0 - lam)
+        half_w, half_h = int(half * w), int(half * h)
+        x1, y1 = max(centre_x - half_w, 0), max(centre_y - half_h, 0)
+        x2, y2 = min(centre_x + half_w, w), min(centre_y + half_h, h)
+        out = images.copy()
+        out[:, y1:y2, x1:x2] = _np.roll(images, 1, axis=0)[:, y1:y2, x1:x2]
+        by_area = float(1.0 - (x2 - x1) * (y2 - y1) / (w * h))
+        return out, self._mix_label(labels, by_area)
+
+
 # --- the namespaces, and why they are modules ------------------------------
 #
 # `transforms` used to be an instance of a class with the name borrowed. That was
@@ -2791,6 +3630,20 @@ functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
 _sys.modules["borchvision.transforms"] = transforms
 _sys.modules["borchvision.transforms.functional"] = functional
+
+# `ops` is torchvision's **top-level** namespace, not one under `transforms` — so it is
+# registered beside it rather than inside it. Getting that wrong would make
+# `import borchvision.ops` work and `import torchvision.ops` mean something else.
+ops = _types.ModuleType("borchvision.ops")
+_sys.modules["borchvision.ops"] = ops
+
+# `transforms.v2` is a namespace inside `transforms`, and registered the same way the
+# other two are. **The classes in it are not the classes in `transforms`** — they are
+# twins that inherit the behaviour and print v2's surface, which is the whole of what
+# separates the two namespaces on a plain image.
+v2 = _types.ModuleType("borchvision.transforms.v2")
+transforms.v2 = v2
+_sys.modules["borchvision.transforms.v2"] = v2
 
 for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
@@ -2820,3 +3673,38 @@ for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
               "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",
               "ten_crop", "to_grayscale", "to_tensor", "vflip"):
     setattr(functional, _name, globals()[_name])
+
+for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
+              "clip_boxes_to_image", "complete_box_iou", "distance_box_iou",
+              "generalized_box_iou", "masks_to_boxes", "nms", "remove_small_boxes"):
+    setattr(ops, _name, globals()[_name])
+
+for _base, _fields in _V2_TABLE:
+    setattr(v2, _base.__name__, _v2_twin(_base, _fields))
+
+# The three whose printing is torch's module repr rather than v2's field rule, and the
+# fourteen v2 adds. Assigned under the names torchvision gives them — the leading `_V2`
+# on the class is so that the name in this module still means the v1 one.
+for _name, _cls in (("Compose", _V2Compose), ("RandomApply", _V2RandomApply),
+                    ("Lambda", _V2Lambda), ("Identity", _V2Identity),
+                    ("ElasticTransform", _V2ElasticTransform),
+                    ("RGB", _V2RGB), ("ToImage", _V2ToImage), ("ToDtype", _V2ToDtype),
+                    ("ToPureTensor", _V2ToPureTensor),
+                    ("GaussianNoise", _V2GaussianNoise),
+                    ("RandomChannelPermutation", _V2RandomChannelPermutation),
+                    ("RandomPhotometricDistort", _V2RandomPhotometricDistort),
+                    ("RandomResize", _V2RandomResize),
+                    ("RandomShortestSize", _V2RandomShortestSize),
+                    ("RandomZoomOut", _V2RandomZoomOut),
+                    ("ScaleJitter", _V2ScaleJitter),
+                    ("MixUp", _V2MixUp), ("CutMix", _V2CutMix)):
+    _cls.__name__ = _name
+    _cls.__qualname__ = _name
+    setattr(v2, _name, _cls)
+
+# **The enum is shared rather than twinned.** torchvision's v2 re-exports the same
+# `InterpolationMode`, and a second one would make `v2.InterpolationMode.BILINEAR` a
+# different object from `transforms.InterpolationMode.BILINEAR` — equal by value and
+# not by identity, which is the kind of difference that bites once and takes an hour.
+v2.InterpolationMode = InterpolationMode
+v2.AutoAugmentPolicy = AutoAugmentPolicy

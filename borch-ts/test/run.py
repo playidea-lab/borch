@@ -442,6 +442,21 @@ NOT_PORTED = {
     # as text plus RandAugment(num_ops=0), the one configuration of any of them that
     # does not draw. Without being told that boundary, an hour goes into hunting for
     # an AugMix value case that does not exist and concluding something was missed.
+    # `ops::` 는 새 접두어다. `borchvision.ops` 의 상자 기하 열하나가 파이썬 쪽에
+    # 들어왔고 `borch-ts` 에는 그 이름공간이 아직 없다.
+    #
+    # **`아직` 이지 `없음` 이 아니다.** 저쪽에 `nms` 가 없다는 것은 사실이지만, 이
+    # 열하나는 가중치도 특징 맵도 안 쓰는 **순수 산술**이라 옮기는 데 모델이 필요
+    # 없다 — 옮길 값이 있고 아직 안 옮긴 것이다. 반대로 torchvision `ops` 의 나머지
+    # 스물여덟(RoI·FPN·검출 손실)은 검출기가 있어야 하고, 그쪽은 파이썬에도 없으므로
+    # 이 행이 지는 빚에 안 들어간다.
+    "ops::": (16, "아직 — 상자 기하 열하나. 순수 산술이라 옮기는 데 모델이 필요 없다"),
+    # 52 of the 71 are **repr strings**. v2 computes what v1 computes and differs only
+    # in what it prints, and that difference is the whole reason these names are not a
+    # re-export — so the strings are frozen as strings. The other 19 are values at the
+    # settings where the draw has nothing to draw. Portable, both halves: the arithmetic
+    # is v1's, already here, and a repr is a string comparison on either side.
+    "v2::": (71, "아직 — v2 이름 쉰둘의 repr, 그리고 뽑기를 멈춘 자리의 값 열아홉"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

@@ -47,16 +47,29 @@ and it is what put the namespace on the to-do list it has now come off.
 
 ## `transforms.v2` is on the list and `transforms.v2.functional` is not
 
-v2 is torchvision's current recommended API and it was **invisible to this measure
-until now** — not declined, not counted, just never asked about, because
-`dir(torchvision.transforms)` does not carry `v2` until something imports it. That is
-the same shape as `transforms` itself being off the list this morning, one level up.
+v2 is torchvision's current recommended API and it was **invisible to this measure**
+until it was put on the list — not declined, not counted, just never asked about,
+because `dir(torchvision.transforms)` does not carry `v2` until something imports it.
+That is the same shape as `transforms` itself being off the list, one level up.
 
-It is counted against an absent namespace, so it reads 0 of 72. **That is the true
-sentence about the namespace**, and it is not the true sentence about the library:
-38 of those 72 names exist here under `transforms`, and measured, v2's transforms give
-**the same values as v1's on a plain image** (`Resize` v1 against v2: max difference
-0.0). What is missing is the namespace and the tv_tensors dispatch, not the arithmetic.
+Counted against an absent namespace it read 0 of 72, which was the true sentence about
+the namespace and a false one about the library: 38 of those names already existed
+here under `transforms`, computing the same values. It now reads 52 of 72, and the
+gap between those two numbers is the whole reason a namespace is put on the list
+before it is built rather than after.
+
+**What v2 changes over v1 is what it prints, not what it computes.** Measured across
+the comparable names: values agreed everywhere, and 21 of 33 reprs differed —
+`Resize(5)` keeps its size as `[5]`, `ColorJitter` drops the arguments left at `None`
+instead of printing them. So the transforms here subclass v1's and override only the
+repr, and the golden file freezes 52 of those strings against real torchvision's. Four
+were wrong before they were right, every one found by comparing.
+
+The 20 still declined are the tv_tensor half — boxes, masks, keypoints and video
+travelling alongside the picture — plus the base class whose body *is* that dispatch.
+`MixUp` and `CutMix` were in that group and are not: they need a batch and a label,
+which is unlike everything else here, but they need nothing this library lacks, and
+"it is unlike the others" is not a reason.
 
 `transforms.v2.functional` is **deliberately not on the list**, which needs saying
 because a namespace off the list is normally the defect this file exists to catch.
@@ -107,6 +120,7 @@ try:                                            # the vision half needs one more
     # that walks attributes reaches it. A namespace can be invisible to a measure
     # without being hidden.
     import torchvision.transforms.v2                              # noqa: F401
+    import torchvision.ops                                        # noqa: F401
 except ImportError:                             # pragma: no cover - measured by test_gap
     torchvision = None
 
@@ -555,9 +569,71 @@ SKIPPED = {
     "transforms.v2.UniformTemporalSubsample": "video. There is no video anywhere in "
                                               "this project and a tutorial's first ten "
                                               "lines do not open one",
+    "transforms.v2.ToPILImage": "there is no PIL here — as in v1",
+    "transforms.v2.PILToTensor": "it takes a PIL image and nothing here makes one — "
+                                 "as in v1",
+    "transforms.v2.ConvertImageDtype": "uint8 has no storage in this subset — as in v1",
+    "transforms.v2.Transform": "**the base class every v2 transform inherits**, and its "
+                               "body is the tv_tensor dispatch: flatten the sample, "
+                               "decide per leaf whether this leaf gets transformed, "
+                               "reassemble. Here the transforms inherit v1's classes "
+                               "instead and take a picture, so there is no sample to "
+                               "walk. Present as a name it would be an empty class that "
+                               "subclassing gets nothing from",
+    "transforms.v2.query_size": "reads `(H, W)` out of **a sample** — a dict or tuple "
+                                "of tv_tensors where the picture has to be found first. "
+                                "On a bare array that is `.shape`, so what the function "
+                                "is for is the part that is missing",
+    "transforms.v2.query_chw": "as above, for `(C, H, W)`",
+    "transforms.v2.has_any": "asks which tv_tensor types are in a sample — as above",
+    "transforms.v2.has_all": "as above",
+    "transforms.v2.check_type": "as above",
     "transforms.v2.JPEG": "it encodes and decodes JPEG. numpy has no codec, and adding "
                           "one is the dependency this library does without — the same "
                           "answer PIL gets",
+
+    # `ops`. **The eleven that are here are box geometry and the twenty-eight that are
+    # not need a model.** The old one-line reason covered all thirty-nine and
+    # justified twenty-eight of them, which is why it is written out by kind now.
+    #
+    # The layers first — every one of these is a piece of a detector or a backbone,
+    # and the catalogue (`bimm`) has one classifier in it.
+    "ops.Conv2dNormActivation": "a backbone's building block — it needs a model to be "
+                                "a block of",
+    "ops.Conv3dNormActivation": "as above, and 3-D convolution is declined in the core",
+    "ops.DeformConv2d": "deformable convolution — a detector's, and there is no "
+                        "detector in the catalogue",
+    "ops.deform_conv2d": "as above",
+    "ops.FeaturePyramidNetwork": "the detector's neck. Nothing feeds it here",
+    "ops.MultiScaleRoIAlign": "as above",
+    "ops.RoIAlign": "it crops from a feature map. A feature map comes from a model",
+    "ops.RoIPool": "as above",
+    "ops.PSRoIAlign": "as above",
+    "ops.PSRoIPool": "as above",
+    "ops.roi_align": "as above",
+    "ops.roi_pool": "as above",
+    "ops.ps_roi_align": "as above",
+    "ops.ps_roi_pool": "as above",
+    "ops.FrozenBatchNorm2d": "batch norm with the statistics frozen — it exists for "
+                             "fine-tuning a pre-trained detector",
+    "ops.DropBlock2d": "structured dropout for convolutional backbones",
+    "ops.DropBlock3d": "as above",
+    "ops.drop_block2d": "as above",
+    "ops.drop_block3d": "as above",
+    "ops.StochasticDepth": "it drops whole residual blocks — it needs blocks",
+    "ops.stochastic_depth": "as above",
+    "ops.SqueezeExcitation": "a backbone's attention block — as above",
+    "ops.MLP": "a stack of linear layers with dropout. `nn.Sequential` is that, and "
+               "torchvision's version exists to be a piece of its own models",
+    "ops.Permute": "an `nn.Module` wrapper around `permute`, so that it can sit in a "
+                   "`Sequential`. The core has the function",
+    # The losses need predictions, which need a model.
+    "ops.sigmoid_focal_loss": "a detection loss — it takes a model's predictions",
+    "ops.complete_box_iou_loss": "as above",
+    "ops.distance_box_iou_loss": "as above",
+    "ops.generalized_box_iou_loss": "as above. **The IoU itself is here** — what is "
+                                    "absent is the loss around it, which is where the "
+                                    "predictions come in",
 }
 
 # The namespaces looked at. (display name, torch's side, ours)
@@ -569,8 +645,10 @@ class _Absent:
     An empty object counts it as everything to review, and that is the honest number.
 
     This class was here once for `transforms.functional`, was deleted when that
-    namespace was built, and came back for `transforms.v2`. Worth noting rather than
-    tidying: the thing it represents recurs, so the class is not scaffolding.
+    namespace was built, came back for `transforms.v2`, and now stands empty again.
+    Worth keeping rather than tidying: it has been needed twice and deleted twice, so
+    what it represents recurs. Deleting it costs nothing to write back and costs the
+    next person the reasoning above, which is the part that was expensive.
     """
 
 
@@ -587,7 +665,8 @@ def _spaces():
         got += [("transforms", torchvision.transforms, borchvision.transforms),
                 ("transforms.functional", torchvision.transforms.functional,
                  borchvision.transforms.functional),
-                ("transforms.v2", torchvision.transforms.v2, _Absent())]
+                ("transforms.v2", torchvision.transforms.v2, borchvision.transforms.v2),
+                ("ops", torchvision.ops, borchvision.ops)]
     return [(name, a, b) for name, a, b in got if b is not None]
 
 
