@@ -73,6 +73,7 @@ that diverges rather than the values. The places where the probability is pinned
 at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
+import bz2 as _bz2
 import enum as _enum
 import gzip as _gzip
 import hashlib as _hashlib
@@ -4312,6 +4313,254 @@ def gaussian_noise(img, mean=0.0, sigma=0.1, clip=True):
     return v2.GaussianNoise(mean, sigma, clip)(img)
 
 
+class QMNIST(MNIST):
+    """MNIST's pictures **with the rest of what NIST recorded about them.**
+
+    Four things differ from `MNIST` and only one is the format. The labels are
+    `idx2-int` rather than `idx1-ubyte` — a table of **eight int32 columns per
+    picture**, of which the first is the digit and the others are who wrote it, which
+    NIST partition it came from, and where in that partition. `compat=True`, the
+    default, hands back the digit alone so that a recipe written for MNIST runs
+    unchanged; `compat=False` hands back the row.
+
+    `what` picks the subset rather than `train` doing it. **The test set is 60,000
+    pictures**, not 10,000: MNIST's familiar test set is the first 10,000 of it, which
+    is what `test10k` means, and `test50k` is the remainder — 50,000 pictures that were
+    never in MNIST at all and are measurably harder. A count of 60,000 where 10,000 was
+    expected is the first sign somebody has swapped one for the other.
+    """
+
+    subsets = {"train": "train", "test": "test", "test10k": "test",
+               "test50k": "test", "nist": "nist"}
+    resources = {
+        "train": [
+            ("https://raw.githubusercontent.com/facebookresearch/qmnist/master/"
+             "qmnist-train-images-idx3-ubyte.gz", "ed72d4157d28c017586c42bc6afe6370"),
+            ("https://raw.githubusercontent.com/facebookresearch/qmnist/master/"
+             "qmnist-train-labels-idx2-int.gz", "0058f8dd561b90ffdd0f734c6a30e5e4")],
+        "test": [
+            ("https://raw.githubusercontent.com/facebookresearch/qmnist/master/"
+             "qmnist-test-images-idx3-ubyte.gz", "1394631089c404de565df7b7aeaf9412"),
+            ("https://raw.githubusercontent.com/facebookresearch/qmnist/master/"
+             "qmnist-test-labels-idx2-int.gz", "5b5b05890a5e13444e108efe57b788aa")],
+        "nist": [
+            ("https://raw.githubusercontent.com/facebookresearch/qmnist/master/"
+             "xnist-images-idx3-ubyte.xz", "7f124b3b8ab81486c9d8c2749c17f834"),
+            ("https://raw.githubusercontent.com/facebookresearch/qmnist/master/"
+             "xnist-labels-idx2-int.xz", "5ed0e788978e45d4a8bd4b7caec3d79d")],
+    }
+
+    def __init__(self, root, what=None, compat=True, train=True, **kwargs):
+        if what is None:
+            what = "train" if train else "test"
+        if what not in self.subsets:
+            raise ValueError(f"what should be one of {sorted(self.subsets)}, got {what}")
+        self.what, self.compat = what, compat
+        super().__init__(root, train=(what == "train"), **kwargs)
+
+    def _files(self):
+        return [_os.path.splitext(name.rsplit("/", 1)[-1])[0]
+                for name, _ in self.resources[self.subsets[self.what]]]
+
+    def download(self):
+        """**The `.xz` one is declined rather than half-supported.** `nist` is the raw
+        402,953-picture partition and it ships LZMA-compressed; nothing else here needs
+        that decompressor and a dataset that downloads but cannot be opened is worse
+        than one that says so."""
+        if self._check_exists():
+            return
+        if self.subsets[self.what] == "nist":
+            raise RuntimeError(
+                "QMNIST's `nist` subset ships as .xz and is not read here.\n"
+                "  `train`, `test`, `test10k` and `test50k` are gzip and do work.")
+        _os.makedirs(self.raw_folder, exist_ok=True)
+        for url, digest in self.resources[self.subsets[self.what]]:
+            name = _os.path.splitext(url.rsplit("/", 1)[-1])[0]
+            out = _os.path.join(self.raw_folder, name)
+            if _os.path.isfile(out):
+                continue
+            with open(out, "wb") as handle:
+                handle.write(_gzip.decompress(_fetch(url, digest)))
+
+    def _load_data(self):
+        images, labels = self._files()
+        with open(_os.path.join(self.raw_folder, images), "rb") as handle:
+            data = _read_idx_images(handle.read())
+        with open(_os.path.join(self.raw_folder, labels), "rb") as handle:
+            # **Not `_read_idx_labels`** — that one insists on one byte and one axis,
+            # and this is a two-axis table of int32. The reader underneath takes both.
+            targets = _read_idx(handle.read()).astype(_np.int64)
+        if self.what == "test10k":
+            data, targets = data[:10000], targets[:10000]
+        elif self.what == "test50k":
+            data, targets = data[10000:], targets[10000:]
+        return data, targets
+
+    def __getitem__(self, index):
+        picture, target = self.data[index], self.targets[index]
+        if self.compat:
+            target = int(target[0])
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {self.what}"
+
+
+class SEMEION(VisionDataset):
+    """1,593 handwritten digits at 16×16, **as a text file of ones and zeros.**
+
+    No compression, no container, one line a picture: 256 pixel values then ten
+    one-hot columns. The pixels are already 0 or 1, so the only conversion is a scale
+    to 0..255 — which is why this dataset is here at all while forty others are not.
+
+    `.labels` rather than `.targets`, which is torchvision's name for it and is worth
+    keeping even though it is the odd one out. A recipe that reads `.targets` should
+    fail loudly here rather than find an attribute that happens to exist.
+    """
+
+    url = "http://archive.ics.uci.edu/ml/machine-learning-databases/semeion/semeion.data"
+    filename = "semeion.data"
+    md5_checksum = "cb545d371d2ce14ec121470795a77432"
+
+    def __init__(self, root, transform=None, target_transform=None, download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        path = _os.path.join(self.root, self.filename)
+        if download and not _os.path.isfile(path):
+            _os.makedirs(self.root, exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(_fetch(self.url, self.md5_checksum))
+        if not self._check_integrity():
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        rows = _np.loadtxt(path)
+        self.data = (rows[:, :256] * 255).astype(_np.uint8).reshape(-1, 16, 16)
+        # **The label is which one-hot column is set**, not the value in it. Reading
+        # the value gives 1.0 for every picture and a dataset of a single class.
+        self.labels = _np.nonzero(rows[:, 256:])[1]
+
+    def _check_integrity(self):
+        path = _os.path.join(self.root, self.filename)
+        return _os.path.isfile(path) and _md5_of_file(path) == self.md5_checksum
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        picture, target = self.data[index], int(self.labels[index])
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+
+class USPS(VisionDataset):
+    """7,291 training and 2,007 test digits at 16×16, **in LIBSVM text inside bzip2.**
+
+    Two conversions, and both are the kind that pass unnoticed when reversed. The
+    pixel values run −1 to 1 and become bytes as `(v + 1) / 2 * 255`, so a version
+    that forgot the shift gives a picture that is still a picture. And **the labels on
+    disk are 1 to 10**, so every one has 1 subtracted; forgotten, the tenth class
+    becomes an index nothing has a name for and the zeros disappear.
+    """
+
+    split_list = {
+        "train": ("https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/multiclass/"
+                  "usps.bz2", "usps.bz2", "ec16c51db3855ca6c91edd34d0e9b197"),
+        "test": ("https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/multiclass/"
+                 "usps.t.bz2", "usps.t.bz2", "8ea070ee2aca1ac39742fdd1ef5ed118"),
+    }
+
+    def __init__(self, root, train=True, transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.train = train
+        url, filename, digest = self.split_list["train" if train else "test"]
+        path = _os.path.join(self.root, filename)
+        if download and not _os.path.isfile(path):
+            _os.makedirs(self.root, exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(_fetch(url, digest))
+        if not _os.path.isfile(path):
+            raise RuntimeError("Dataset not found. You can use download=True to "
+                               "download it")
+        with _bz2.open(path) as handle:
+            rows = [line.decode().split() for line in handle.readlines()]
+        pixels = [[cell.split(":")[-1] for cell in row[1:]] for row in rows]
+        picture = _np.asarray(pixels, dtype=_np.float32).reshape(-1, 16, 16)
+        self.data = ((picture + 1) / 2 * 255).astype(_np.uint8)
+        self.targets = [int(row[0]) - 1 for row in rows]
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        picture, target = self.data[index], self.targets[index]
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {'Train' if self.train else 'Test'}"
+
+
+class DatasetFolder(VisionDataset):
+    """A folder per class, and **a `loader` you hand it.**
+
+    This is the one dataset here that reads no format at all: it walks directories,
+    sorts what it finds, and calls your function on each path. `ImageFolder` is this
+    with the loader defaulted to PIL, which is why that one is absent and this one is
+    not — the codec was never in this class, only in that default.
+
+    The classes are **the sorted names of the subdirectories**, and the sort is the
+    part worth stating: the index a class gets depends on its name and on nothing
+    else, so renaming a folder renumbers the labels of a trained model.
+    """
+
+    def __init__(self, root, loader, extensions=None, transform=None,
+                 target_transform=None, is_valid_file=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if (extensions is None) == (is_valid_file is None):
+            raise ValueError("Both extensions and is_valid_file cannot be None or "
+                             "not None at the same time")
+        self.loader = loader
+        self.extensions = extensions
+        keep = (is_valid_file if is_valid_file is not None
+                else (lambda path: path.lower().endswith(tuple(extensions))))
+        self.classes, self.class_to_idx = self.find_classes(root)
+        self.samples = []
+        for name in self.classes:
+            folder = _os.path.join(root, name)
+            for base, _dirs, files in sorted(_os.walk(folder, followlinks=True)):
+                for leaf in sorted(files):
+                    path = _os.path.join(base, leaf)
+                    if keep(path):
+                        self.samples.append((path, self.class_to_idx[name]))
+        if not self.samples:
+            raise FileNotFoundError(
+                f"Found no valid file for the classes {', '.join(self.classes)}. "
+                f"Supported extensions are: "
+                f"{','.join(extensions) if extensions else 'the given is_valid_file'}")
+        self.targets = [index for _path, index in self.samples]
+
+    def find_classes(self, directory):
+        classes = sorted(entry.name for entry in _os.scandir(directory)
+                         if entry.is_dir())
+        if not classes:
+            raise FileNotFoundError(f"Couldn't find any class folder in {directory}.")
+        return classes, {name: i for i, name in enumerate(classes)}
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        sample = self.loader(path)
+        if self.transforms is not None:
+            sample, target = self.transforms(sample, target)
+        return sample, target
+
+
 transforms = _types.ModuleType("borchvision.transforms")
 functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
@@ -4323,8 +4572,8 @@ _sys.modules["borchvision.transforms.functional"] = functional
 # `import borchvision.ops` work and `import torchvision.ops` mean something else.
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
-for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST",
-              "CIFAR10", "CIFAR100", "FakeData"):
+for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST",
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

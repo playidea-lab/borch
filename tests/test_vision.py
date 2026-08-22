@@ -1365,3 +1365,145 @@ def test_to_dtype_without_scale_is_the_trap_it_looks_like():
     bytes_in = np.array([[[0, 128, 255]]], dtype=np.uint8)
     assert float(np.asarray(V2F.to_dtype(bytes_in, BT.float32)).max()) == 255.0
     assert float(np.asarray(V2F.to_dtype(bytes_in, BT.float32, scale=True)).max()) == 1.0
+
+
+def test_QMNIST_hands_back_the_digit_by_default_and_the_row_when_asked(tmp_path):
+    """`compat=True` gives `int(target[0])` so a recipe written for MNIST runs
+    unchanged; `compat=False` gives all eight columns. **`.targets` is the table in
+    both cases** — the flag changes what `__getitem__` hands over and not what the
+    dataset holds, which is the part that reads as a contradiction until it is said.
+    """
+    raw = tmp_path / "QMNIST" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "qmnist-test-images-idx3-ubyte").write_bytes(
+        _idx(8, (2, 2, 3), bytes(range(12))))
+    head = bytes([0, 0, 12, 2]) + (2).to_bytes(4, "big") + (8).to_bytes(4, "big")
+    values = [7, 4, 2578, 69, 37, 279260, 0, 0, 3, 1, 5, 6, 7, 8, 0, 0]
+    (raw / "qmnist-test-labels-idx2-int").write_bytes(
+        head + b"".join(int(v).to_bytes(4, "big", signed=True) for v in values))
+
+    loaded = DS.QMNIST(tmp_path, what="test")
+    assert loaded.targets.shape == (2, 8) and loaded.targets.dtype == np.int64
+    assert loaded[0][1] == 7 and loaded[1][1] == 3
+    assert int(loaded.targets[0][5]) == 279260, "the int32 columns were read as bytes"
+    wide = DS.QMNIST(tmp_path, what="test", compat=False)
+    assert list(wide[0][1]) == values[:8]
+    assert wide.targets.shape == loaded.targets.shape
+
+
+def test_QMNIST_test_is_sixty_thousand_and_test10k_is_the_familiar_ten(tmp_path):
+    """**The count is the thing that catches a swap.** QMNIST's test set is 60,000;
+    MNIST's familiar 10,000 is its first slice. Somebody reaching for `what="test"`
+    expecting MNIST's test set gets six times the data and a number that looks like a
+    bug in the model.
+    """
+    raw = tmp_path / "QMNIST" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "qmnist-test-images-idx3-ubyte").write_bytes(
+        _idx(8, (12, 1, 1), bytes(range(12))))
+    head = bytes([0, 0, 12, 2]) + (12).to_bytes(4, "big") + (1).to_bytes(4, "big")
+    (raw / "qmnist-test-labels-idx2-int").write_bytes(
+        head + b"".join(int(v).to_bytes(4, "big") for v in range(12)))
+
+    whole = DS.QMNIST(tmp_path, what="test")
+    assert len(whole) == 12
+    # The slice boundary is 10,000 in the real file; with twelve rows it cannot be
+    # exercised, so what is asked is that the two halves partition the whole.
+    first = DS.QMNIST(tmp_path, what="test10k")
+    rest = DS.QMNIST(tmp_path, what="test50k")
+    assert len(first) + len(rest) == len(whole)
+    assert np.array_equal(np.concatenate([first.data, rest.data]), whole.data)
+    with pytest.raises(ValueError, match="what should be one of"):
+        DS.QMNIST(tmp_path, what="validation")
+
+
+def test_QMNIST_says_so_rather_than_half_supporting_the_xz_subset(tmp_path):
+    """`nist` ships LZMA-compressed and nothing else here needs that decompressor.
+    **A dataset that downloads and cannot be opened is worse than one that says so.**"""
+    with pytest.raises(RuntimeError, match=r"\.xz"):
+        DS.QMNIST(tmp_path, what="nist", download=True)
+
+
+def test_SEMEION_reads_the_label_as_which_column_is_set(tmp_path, monkeypatch):
+    """The last ten columns are one-hot. Reading the **value** gives 1.0 for every
+    picture and a dataset with a single class — which trains, and scores exactly what
+    a single-class dataset scores, and looks like the model failing."""
+    path = tmp_path / "semeion.data"
+    rows = []
+    for label in (3, 0, 9):
+        pixels = ["1.0000" if i % 3 == 0 else "0.0000" for i in range(256)]
+        hot = ["1.0000" if i == label else "0.0000" for i in range(10)]
+        rows.append(" ".join(pixels + hot))
+    path.write_text("\n".join(rows) + "\n")
+    # **The digest is checked on every open**, not only after a download — torchvision
+    # does the same — so a planted file has to be given its own. Patching it here is
+    # the alternative to shipping 200KB of real dataset to ask about a one-hot column.
+    import hashlib
+    monkeypatch.setattr(DS.SEMEION, "md5_checksum",
+                        hashlib.md5(path.read_bytes()).hexdigest())
+
+    loaded = DS.SEMEION(tmp_path)
+    assert list(loaded.labels) == [3, 0, 9]
+    assert loaded.data.shape == (3, 16, 16) and loaded.data.dtype == np.uint8
+    # 0/1 on disk, 0/255 in the dataset — the only conversion there is.
+    assert set(np.unique(loaded.data)) == {0, 255}
+    assert loaded[1][1] == 0
+    assert not hasattr(loaded, "targets"), (
+        "torchvision calls this one `labels`, and a recipe reading `.targets` should "
+        "fail here rather than find an attribute that happens to exist")
+
+
+def test_USPS_shifts_the_pixels_and_moves_the_labels_down_one(tmp_path):
+    """Two conversions, both invisible when reversed. Pixels run −1 to 1 and become
+    `(v + 1) / 2 * 255`; **labels on disk run 1 to 10** and have one subtracted, so a
+    version that forgets gives a tenth class nothing has a name for and no zeros.
+    """
+    import bz2
+    lines = []
+    for label, value in ((1, -1.0), (10, 1.0), (5, 0.0)):
+        cells = " ".join(f"{i + 1}:{value}" for i in range(256))
+        lines.append(f"{label} {cells}")
+    (tmp_path / "usps.bz2").write_bytes(bz2.compress(("\n".join(lines) + "\n").encode()))
+
+    loaded = DS.USPS(tmp_path, train=True)
+    assert loaded.targets == [0, 9, 4], "the labels were not moved down one"
+    assert loaded.data.shape == (3, 16, 16) and loaded.data.dtype == np.uint8
+    assert loaded.data[0].max() == 0 and loaded.data[1].min() == 255
+    assert 127 <= int(loaded.data[2][0][0]) <= 128       # 0.0 lands mid-range
+
+
+def test_DatasetFolder_numbers_the_classes_by_sorted_name(tmp_path):
+    """The index a class gets depends on its folder's name and on nothing else, so
+    **renaming a folder renumbers a trained model's labels.** Uppercase sorts first,
+    which is where it bites: `Bee` before `ant`.
+    """
+    for name, files in (("zebra", ["b.txt", "a.txt"]), ("ant", ["x.txt"]),
+                        ("Bee", ["q.txt"])):
+        (tmp_path / name).mkdir()
+        for leaf in files:
+            (tmp_path / name / leaf).write_text(leaf)
+    seen = DS.DatasetFolder(tmp_path, lambda p: pathlib.Path(p).read_text(),
+                            extensions=(".txt",))
+    assert seen.classes == ["Bee", "ant", "zebra"]
+    assert seen.class_to_idx == {"Bee": 0, "ant": 1, "zebra": 2}
+    assert seen.targets == [0, 1, 2, 2]
+    assert [pathlib.Path(p).name for p, _ in seen.samples] == ["q.txt", "x.txt",
+                                                               "a.txt", "b.txt"]
+    assert seen[0] == ("q.txt", 0)
+
+
+def test_DatasetFolder_refuses_both_ways_of_saying_which_files(tmp_path):
+    """`extensions` and `is_valid_file` are two spellings of one decision, and passing
+    both is a question about which wins. torchvision refuses; so does this."""
+    (tmp_path / "one").mkdir()
+    (tmp_path / "one" / "a.txt").write_text("a")
+    load = lambda path: pathlib.Path(path).read_text()                   # noqa: E731
+    with pytest.raises(ValueError, match="cannot be None or not None"):
+        DS.DatasetFolder(tmp_path, load)
+    with pytest.raises(ValueError, match="cannot be None or not None"):
+        DS.DatasetFolder(tmp_path, load, extensions=(".txt",),
+                         is_valid_file=lambda p: True)
+    with pytest.raises(FileNotFoundError, match="Found no valid file"):
+        DS.DatasetFolder(tmp_path, load, extensions=(".png",))
+    picked = DS.DatasetFolder(tmp_path, load, is_valid_file=lambda p: p.endswith(".txt"))
+    assert len(picked) == 1

@@ -528,7 +528,7 @@ NOT_PORTED = {
     # catch a re-export quietly becoming a second implementation, which is a thing that
     # can happen on either side.
     "v2f::": (17, "아직 — v2.functional: the nine v2 adds, and eight of v1's re-exports"),
-    "dataset::": (7, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
+    "dataset::": (9, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),

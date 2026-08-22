@@ -10648,7 +10648,7 @@ def golden_cases(inp=None):
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + v2_functional_cases(inp) + dataset_cases(inp) + method_cases(inp) + math_cases(inp)
+            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + v2_functional_cases(inp) + dataset_cases(inp) + dataset_text_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
@@ -11990,4 +11990,74 @@ def v2_functional_cases(inp=None):
         (V2F_PREFIX + "rotate(inherited)", on(img_f, lambda F, x, L: F.rotate(x, 30.0))),
         (V2F_PREFIX + "adjust_hue(inherited)",
          on(img_f, lambda F, x, L: F.adjust_hue(x, 0.2))),
+    ]
+
+
+def dataset_text_cases(inp=None):
+    """The three text-and-table formats, **read from bytes built here.**
+
+    `dataset_cases` above froze the two binary decoders. These three are the ones the
+    eight-name to-do list gave up, and the reason they could be given up is the reason
+    they can be frozen: SEMEION is a text file, USPS is text inside bzip2, and QMNIST's
+    labels are the same IDX reader with a wider type and a second axis. No codec, no
+    network, and the conversions are all arithmetic somebody can get backwards.
+
+    **Only QMNIST's is here**, and the reason is what a comparison is for. torchvision
+    reads SEMEION with `np.loadtxt` and two lines of arithmetic, and USPS with `bz2`
+    and three; it exposes no function for either, so a case would have to compare our
+    arithmetic against the same arithmetic typed a second time in this file. That is a
+    test of the typing. Those two were compared against the real library on the real
+    files instead — once, recorded in the README.
+
+    QMNIST's labels can be compared, because the reader for them is torchvision's own
+    `read_sn3_pascalvincent_tensor` and it takes a path. What it is asked is the shape
+    MNIST's labels never have: **int32, big-endian, two axes.** Read as bytes, or read
+    the other way round, a field like 279260 becomes something else entirely — and a
+    label table that is wrong in its later columns still trains, because the digit is
+    column zero.
+    """
+    del inp
+
+    def on_idx(build):
+        """The IDX reader, on a **two-axis int32** table — the shape QMNIST's labels
+        have and MNIST's never do."""
+        def run(L):
+            import os
+            import tempfile
+            data = build()
+            handle, path = tempfile.mkstemp(suffix="-idx2")
+            try:
+                with os.fdopen(handle, "wb") as out:
+                    out.write(data)
+                if _is_real_torch(L):
+                    from torchvision.datasets import mnist as real
+                    got = real.read_sn3_pascalvincent_tensor(path, strict=False)
+                else:
+                    import sys as _sys
+                    _vision(L)
+                    got = _sys.modules["borchvision"]._read_idx(data)
+            finally:
+                os.unlink(path)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(got), dtype=np.float32)))
+        return run
+
+    def idx2(rows, columns, values):
+        head = bytes([0, 0, 12, 2])                 # type 12 is int32, two axes
+        head += int(rows).to_bytes(4, "big") + int(columns).to_bytes(4, "big")
+        return head + b"".join(int(v).to_bytes(4, "big", signed=True) for v in values)
+
+    # Eight columns, three rows, and **values past what a byte holds** — 279260 is a
+    # real QMNIST field. Read as bytes it becomes something else entirely, and read
+    # little-endian it becomes something else again.
+    _rows = [7, 4, 2578, 69, 37, 279260, 0, 0,
+             2, 4, 2359, 55, 32, 253328, 0, 0,
+             1, 4, 2530, 80, 31, 273542, 0, 0]
+
+    return [
+        (DATASET_PREFIX + "IDX int32 table(QMNIST labels)",
+         on_idx(lambda: idx2(3, 8, _rows))),
+        # A negative, because int32 is signed and the reader must not widen it wrong.
+        (DATASET_PREFIX + "IDX int32 table(negative)",
+         on_idx(lambda: idx2(2, 2, [-1, 2147483647, -2147483648, 0]))),
     ]
