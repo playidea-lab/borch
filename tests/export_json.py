@@ -23,6 +23,27 @@ That division is this file's point. The expensive half (numbers obtained by runn
 torch) crosses over; the cheap half (one line of call) can be rewritten. Writing it the other
 way round would be wrong — the moment it says "the golden answers were ported whole", the next
 person believes cases were written that were not.
+
+## Hand-writing the other side is what makes porting find things
+
+The cheap half looks like the half worth automating, and it is not. Because the two sides are
+written independently against a third thing, **porting between them is a comparator**, and it
+runs in both directions. Measured, in one day:
+
+- Porting found a `repr` case whose two entries held identical numbers (`Pad(edge)` and
+  `Pad(symmetric)` agree at a padding of one, so the pair could tell the modes apart in name
+  only), and a docstring claiming a measurement the case it named did not contain.
+- Editing the inputs on this side conferred a check on the other: a saturation factor moved
+  from 1.7 to 0.1 and a float32 chain in borch.ts went from unmeasured to load-bearing without
+  a line of it changing. Same again for the two padding modes at 2.
+
+Neither side could have produced any of those alone. The measurement has to be manufactured
+here — real torch is here — and the thing being measured lives there.
+
+**So generating `borch-ts/test/cases.ts` from `tests/cases.py` would end all of it, and
+nothing would announce that.** Both sides would still be green, the counts would still agree,
+and the second implementation would have stopped being a second opinion. If that automation is
+ever proposed as a labour saving, this paragraph is the cost.
 """
 
 import hashlib
