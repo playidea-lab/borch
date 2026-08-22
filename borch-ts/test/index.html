@@ -1,16 +1,16 @@
 <!doctype html>
 <!--
-  borch.ts 골든 러너.
+  The borch.ts golden runner.
 
-  저장소 루트에서 정적 서버를 띄우고 /borch-ts/test/ 를 연다. 예:
+  Serve the repository root statically and open /borch-ts/test/. For example:
       python3 -m http.server 8000
-  실행 결과는 화면과 콘솔 양쪽으로 나가고, `window.__borchReport` 에도 남는다 —
-  Playwright 같은 자동 러너가 그것을 읽으면 된다.
+  The result goes to the screen and to the console, and stays in `window.__borchReport`
+  as well — an automated runner such as Playwright reads it there.
 -->
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>borch.ts — 골든 대조</title>
+  <title>borch.ts — against the golden</title>
   <style>
     body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
            margin: 2rem; max-width: 60rem; }
@@ -20,16 +20,17 @@
   </style>
 </head>
 <body>
-  <h1>borch.ts — 골든 대조</h1>
-  <pre id="out">돌리는 중…</pre>
+  <h1>borch.ts — against the golden</h1>
+  <pre id="out">running…</pre>
   <script type="module">
-    // dist 는 `npm run build:ts` 가 만든다. 소스가 아니라 방출물을 부른다 —
-    // 브라우저는 TypeScript 를 그대로 못 읽는다.
+    // `npm run build:ts` makes dist. The emit is loaded rather than the source — a
+    // browser cannot read TypeScript as it is.
     import { run, format } from "../dist/test/golden.js";
     import { why } from "./why.js";
 
     const out = document.getElementById("out");
-    // 경로만 상대로 준다. 호스트를 박으면 어디서 서빙하든 한 군데만 맞는다.
+    // Only a relative path. Nail in a host and it is right in one place alone, wherever
+    // it is served from.
     const GOLDEN = "../../tests/golden.json";
 
     try {
@@ -39,9 +40,10 @@
       out.className = report.failed.length === 0 && report.unknown.length === 0
         ? "ok" : "fail";
     } catch (err) {
-      // 실패를 조용히 넘기지 않는다 — 안 돈 것과 통과한 것은 다르다.
+      // A failure is not passed over quietly — what did not run and what passed are
+      // different things.
       window.__borchReport = { error: why(err) };
-      out.textContent = `돌지 못했다: ${why(err)}`;
+      out.textContent = `it could not run: ${why(err)}`;
       out.className = "fail";
     }
   </script>

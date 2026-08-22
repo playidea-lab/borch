@@ -1,8 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>torch 배선</title>
+<title>torch wiring</title>
 <body>
-  <pre id="out">도는 중…</pre>
+  <pre id="out">running…</pre>
   <script type="module">
     import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/parity.js";
@@ -14,9 +14,9 @@
       window.__borchParity = { text, checks, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
-      // 터지는 것도 결과다 — 조용히 넘기면 러너가 영원히 기다린다.
+      // Blowing up is a result too — pass it over quietly and the runner waits forever.
       window.__borchParity = { error: String(why(err)) };
-      out.textContent = `배선 점검이 터졌다: ${why(err)}`;
+      out.textContent = `the wiring check blew up: ${why(err)}`;
     }
   </script>
 </body>

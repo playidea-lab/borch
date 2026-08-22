@@ -1,8 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>장치 관리</title>
+<title>device handling</title>
 <body>
-  <pre id="out">도는 중…</pre>
+  <pre id="out">running…</pre>
   <script type="module">
     import { Device } from "../dist/src/device.js";
     import { report } from "../dist/test/device.js";
@@ -16,9 +16,9 @@
       };
       out.textContent = text;
     } catch (err) {
-      // 터지는 것도 결과다 — 조용히 넘기면 러너가 영원히 기다린다.
+      // Blowing up is a result too — pass it over quietly and the runner waits forever.
       window.__borchDevice = { error: String(why(err)) };
-      out.textContent = `장치 점검이 터졌다: ${why(err)}`;
+      out.textContent = `the device check blew up: ${why(err)}`;
     }
   </script>
 </body>

@@ -1,16 +1,16 @@
 <!doctype html>
 <!--
-  borch.ts 학습 스텝 벤치. `tests/browser/bench.py` 와 같은 잣대다.
+  The borch.ts training-step bench. The same yardstick as `tests/browser/bench.py`.
 
       npm run build:ts
       uv run --with playwright python borch-ts/test/bench.py
 
-  결과는 화면과 `window.__borchBench` 양쪽에 남는다.
+  The result stays on the screen and in `window.__borchBench`.
 -->
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>borch.ts — 학습 스텝 벤치</title>
+  <title>borch.ts — training-step bench</title>
   <style>
     body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
            margin: 2rem; max-width: 60rem; }
@@ -18,8 +18,8 @@
   </style>
 </head>
 <body>
-  <h1>borch.ts — ResNet-18(CIFAR) 학습 스텝</h1>
-  <pre id="out">재는 중… (한참 걸린다)</pre>
+  <h1>borch.ts — a ResNet-18 (CIFAR) training step</h1>
+  <pre id="out">measuring… (this takes a while)</pre>
   <script type="module">
     import { init } from "../dist/src/tensor.js";
     import { Device } from "../dist/src/device.js";
@@ -30,14 +30,16 @@
     try {
       await init();
       const text = await report();
-      // **어댑터를 본문에만 두면 안 된다.** 러너가 그것을 보고 CPU 에서 잰 수를
-      // 거부해야 하는데, 사람이 읽는 글에서 파내는 것은 붙였다 떨어지는 연결이다.
+      // **The adapter must not be left in the body alone.** The runner has to see it
+      // to refuse a figure measured on a CPU, and digging it out of prose a person
+      // reads is a join that comes apart.
       window.__borchBench = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
-      // 실패를 조용히 넘기지 않는다 — 안 돈 것과 느린 것은 다르다.
+      // A failure is not passed over quietly — what did not run and what is slow are
+      // different things.
       window.__borchBench = { error: String(why(err)) };
-      out.textContent = `재지 못했다: ${why(err)}`;
+      out.textContent = `it could not be measured: ${why(err)}`;
     }
   </script>
 </body>

@@ -1,8 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>체크포인트</title>
+<title>checkpoints</title>
 <body>
-  <pre id="out">도는 중…</pre>
+  <pre id="out">running…</pre>
   <script type="module">
     import { Device } from "../dist/src/device.js";
     import { report, sample, sampleNested } from "../dist/test/serialize.js";
@@ -11,16 +11,17 @@
     const out = document.getElementById("out");
     try {
       const { text, checks } = await report();
-      // 러너가 numpy 로 직접 뜯어 본다 — 남이 읽는가가 이 형식을 고른 이유다.
+      // The runner takes it apart with numpy directly — whether somebody else can read
+      // it is why this format was chosen.
       window.__borchSerialize = {
         text, checks, adapter: Device.adapterInfo,
         sample: await sample(), nested: await sampleNested(),
       };
       out.textContent = text;
     } catch (err) {
-      // 터지는 것도 결과다 — 조용히 넘기면 러너가 영원히 기다린다.
+      // Blowing up is a result too — pass it over quietly and the runner waits forever.
       window.__borchSerialize = { error: String(why(err)) };
-      out.textContent = `체크포인트 점검이 터졌다: ${why(err)}`;
+      out.textContent = `the checkpoint check blew up: ${why(err)}`;
     }
   </script>
 </body>

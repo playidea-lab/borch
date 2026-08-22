@@ -1,20 +1,23 @@
-"""borch.ts 의 ResNet-18 이 **파이썬 쪽과 같은 모델인지** 진짜 torch 로 맞춰본다.
+"""Whether borch.ts's ResNet-18 is **the same model as the Python side's**, put to real
+torch.
 
     npm run build:ts
     uv run --with playwright --with numpy --with torch python borch-ts/test/samemodel.py --headed
 
-## 왜 필요한가
+## Why it is needed
 
-벤치와 정확도에 쓴 ResNet-18 은 `tests/browser/bench.py` 를 **눈으로 읽어** TypeScript
-로 옮긴 것이라 골든 밖에 있다. 블록 구성이나 BN 자리가 미묘하게 다르면 속도도
-정확도도 **다른 모델끼리 비교한 것**이 되는데, 그 갈림은 값으로만 보인다.
+The ResNet-18 used by the bench and by the accuracy runner was carried into TypeScript by
+**reading `tests/browser/bench.py` by eye**, so it sits outside the golden. Let the block
+arrangement or a BN's position differ subtly and both the speed and the accuracy become
+**a comparison of two different models** — and that parting is visible only in the values.
 
-## 어떻게 맞추는가
+## How they are lined up
 
-이름 짓는 규칙이 두 언어에서 다르므로 **자리로 맞춘다.** 파라미터를 순서대로 놓고
-모양 목록을 먼저 견준다 — 구조가 같으면 정확히 같고, 다르면 거기서 먼저 갈린다.
-모양이 맞으면 그 값을 torch 모델에 그대로 넣고 같은 입력으로 순방향·역방향을 돌려
-출력·손실·입력기울기를 견준다.
+The naming rules differ between the two languages, so they are lined up **by position.**
+The parameters are laid out in order and the list of shapes is weighed first — with the
+same structure it is exactly equal, and with a different one it parts there first. Where
+the shapes agree, those values go into the torch model as they are and the same input runs
+forward and backward, and the output, the loss and the input gradient are weighed.
 """
 
 import pathlib
@@ -25,13 +28,14 @@ import numpy as np
 import run as runner
 from launch import browser as browser_of, refuse_if_software
 
-# 골든과 같은 허용 오차. 비트 동등은 이 프로젝트의 명시적 비목표다.
+# The golden's tolerance. Bit equality is this project's explicit non-goal.
 ATOL = 1e-4
 RTOL = 1e-4
 
 
 def _torch_model():
-    """파이썬 쪽 ResNet-18 을 진짜 torch 로 세운다 — 벤치가 쓰는 바로 그 함수다."""
+    """Stand the Python side's ResNet-18 up in real torch — the very function the bench
+    uses."""
     import importlib.util
 
     import torch
@@ -39,8 +43,9 @@ def _torch_model():
     path = pathlib.Path(runner.ROOT) / "tests" / "browser" / "bench.py"
     spec = importlib.util.spec_from_file_location("bt_bench_src", path)
     src = spec.loader.get_source("bt_bench_src")
-    # `bench.py` 는 Pyodide 안에서 도는 파일이라 `js` 를 들여온다. 여기서는 모델을
-    # 만드는 부분만 필요하므로 그 줄만 뺀다 — 모델 코드는 한 글자도 안 바꾼다.
+    # `bench.py` runs inside Pyodide, so it imports `js`. Only the part that builds the
+    # model is needed here, so that one line is taken out — the model code is not changed
+    # by a character.
     src = src.replace("import js\n", "").replace(
         "import borchvision as vision\n", "")
     module = importlib.util.module_from_spec(spec)
@@ -49,11 +54,12 @@ def _torch_model():
 
 
 def _close(name, got, want, bad):
-    """허용 오차 안인가. 갈리면 어느 자리에서 얼마나 갈렸는지 적는다."""
+    """Is it inside the tolerance. Where it parts, say at which position and by how
+    much."""
     got = np.asarray(got, dtype=np.float64).ravel()
     want = np.asarray(want, dtype=np.float64).ravel()
     if got.shape != want.shape:
-        bad.append(f"{name}: 원소 수 {got.size} 대 {want.size}")
+        bad.append(f"{name}: {got.size} elements against {want.size}")
         return
     gap = np.abs(got - want)
     tol = ATOL + RTOL * np.abs(want)
@@ -64,7 +70,8 @@ def _close(name, got, want, bad):
 
 
 def _piece_module(torch, name, shapes):
-    """조각 하나를 진짜 torch 로 세운다. TypeScript 쪽 `dumpPieces` 와 짝이다."""
+    """Stand one piece up in real torch. The partner of `dumpPieces` on the TypeScript
+    side."""
     import torch.nn as tnn
 
     if name == "bn":
@@ -97,23 +104,24 @@ def _piece_module(torch, name, shapes):
                 return torch.relu(out + side)
 
         return Block()
-    raise ValueError(f"모르는 조각: {name} (모양 {shapes})")
+    raise ValueError(f"unknown piece: {name} (shapes {shapes})")
 
 
 def _check_pieces(pieces):
-    """조각을 하나씩 견준다. **자리마다 다른 가중치로** 접었으므로 보정항이 안 상쇄된다."""
+    """Weigh the pieces one at a time. Folded **with a different weight per position**, so
+    the correction terms do not cancel."""
     import torch
 
     if not pieces:
         return False
-    print("\n조각별 대조 (자리마다 다른 가중치로 역전파)")
+    print("\npiece by piece (backpropagated with a different weight per position)")
     failed = False
     for name, d in pieces.items():
         mod = _piece_module(torch, name, d["shapes"])
         mine = [tuple(s) for s in d["shapes"]]
         theirs = [tuple(p.shape) for p in mod.parameters()]
         if mine != theirs:
-            print(f"  ✗ {name}: 파라미터 모양이 다르다 — {mine} 대 {theirs}")
+            print(f"  ✗ {name}: the parameter shapes differ — {mine} against {theirs}")
             failed = True
             continue
         with torch.no_grad():
@@ -128,11 +136,11 @@ def _check_pieces(pieces):
         (y * w).sum().backward()
 
         bad = []
-        _close("출력", d["output"], y.detach().numpy(), bad)
-        _close("입력기울기", d["inputGrad"], x.grad.numpy(), bad)
+        _close("output", d["output"], y.detach().numpy(), bad)
+        _close("input gradient", d["inputGrad"], x.grad.numpy(), bad)
         for i, (p, g) in enumerate(zip(mod.parameters(), d["paramGrads"])):
             if g is not None and p.grad is not None:
-                _close(f"파라미터{i}기울기", g, p.grad.numpy(), bad)
+                _close(f"gradient of parameter {i}", g, p.grad.numpy(), bad)
         if bad:
             failed = True
             print(f"  ✗ {name}")
@@ -166,19 +174,20 @@ def main(argv):
         stop()
 
     if "error" in dump:
-        print(f"뽑지 못했다: {dump['error']}", file=sys.stderr)
+        print(f"nothing could be dumped: {dump['error']}", file=sys.stderr)
         return 1
 
     import torch
 
-    print(f"어댑터: {dump['adapter']}")
-    # **소프트웨어 래스터라이저에서는 판정하지 않는다.**
+    print(f"adapter: {dump['adapter']}")
+    # **It does not judge on a software rasteriser.**
     #
-    # 헤드리스 브라우저는 SwiftShader 를 준다. 조각 대조는 거기서도 통과하는데 전체
-    # 모델은 최대차 3.9e-03 이 나온다 — 스무 층을 지나며 쌓인 부동소수점 차이지 결함이
-    # 아니다(같은 코드가 Metal 에서는 4.6e-06 이다). 그것을 갈림으로 읽으면 없는 버그를
-    # 쫓게 되고, 반대로 허용 오차를 그만큼 늘리면 진짜 갈림을 놓친다.
-    if refuse_if_software(dump["adapter"], "torch 와의 최대차"):
+    # A headless browser hands over SwiftShader. The piece-by-piece comparison passes
+    # there too, and the whole model comes out at a largest difference of 3.9e-03 — which
+    # is floating point accumulated across twenty layers rather than a defect (the same
+    # code gives 4.6e-06 on Metal). Read that as a parting and a bug that does not exist
+    # gets chased; widen the tolerance to cover it and a real parting is missed.
+    if refuse_if_software(dump["adapter"], "the largest difference from torch"):
         return 1
     if _check_pieces(dump.get("pieces", {})):
         return 1
@@ -187,15 +196,16 @@ def main(argv):
     theirs = [tuple(p.shape) for p in model.parameters()]
 
     if mine != theirs:
-        print(f"**구조가 다르다** — 파라미터 {len(mine)}개 대 {len(theirs)}개")
+        print(f"**the structures differ** — {len(mine)} parameters against {len(theirs)}")
         for i, (a, b) in enumerate(zip(mine, theirs)):
             if a != b:
-                print(f"  자리 {i}: borch.ts {a} · torch {b}")
+                print(f"  position {i}: borch.ts {a} · torch {b}")
                 break
         if len(mine) != len(theirs):
-            print(f"  개수부터 다르다: {len(mine)} 대 {len(theirs)}")
+            print(f"  the counts differ to begin with: {len(mine)} against {len(theirs)}")
         return 1
-    print(f"구조 일치 — 파라미터 {len(mine)}개, 모양이 순서까지 같다")
+    print(f"the structures match — {len(mine)} parameters, the shapes equal down to their "
+          "order")
 
     with torch.no_grad():
         for p, v in zip(model.parameters(), dump["params"]):
@@ -215,7 +225,7 @@ def main(argv):
         got = np.asarray(got, dtype=np.float64).ravel()
         want = np.asarray(want, dtype=np.float64).ravel()
         if got.shape != want.shape:
-            bad.append(f"{name}: 원소 수 {got.size} 대 {want.size}")
+            bad.append(f"{name}: {got.size} elements against {want.size}")
             return
         gap = np.abs(got - want)
         tol = ATOL + RTOL * np.abs(want)
@@ -224,18 +234,18 @@ def main(argv):
             bad.append(f"{name}: [{worst}] {got[worst]} ≠ {want[worst]} "
                        f"(max diff {gap.max():.3e})")
         else:
-            print(f"  {name} 일치 (최대차 {gap.max():.3e})")
+            print(f"  {name} matches (largest difference {gap.max():.3e})")
 
-    compare("출력", dump["output"], out.detach().numpy())
-    compare("손실", [dump["loss"]], [loss.item()])
-    compare("입력 기울기", dump["inputGrad"], x.grad.numpy())
+    compare("the output", dump["output"], out.detach().numpy())
+    compare("the loss", [dump["loss"]], [loss.item()])
+    compare("the input gradient", dump["inputGrad"], x.grad.numpy())
 
     if bad:
-        print("\n갈린 곳:")
+        print("\nwhere it parted:")
         for line in bad:
             print(f"  ✗ {line}")
         return 1
-    print("\n같은 모델이다 — 순방향·손실·역방향이 진짜 torch 와 맞는다")
+    print("\nit is the same model — forward, loss and backward agree with real torch")
     return 0
 
 

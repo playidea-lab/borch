@@ -1,24 +1,25 @@
 <!doctype html>
 <!--
-  borch.ts 의 ResNet-18 이 파이썬 쪽 것과 **같은 모델인지** 확인할 재료를 뽑는다.
+  Dumps the material for asking whether borch.ts's ResNet-18 is **the same model** as
+  the Python side's.
 
       npm run build:ts
       uv run --with playwright --with numpy --with torch python borch-ts/test/samemodel.py --headed
 
-  파라미터·입력·출력·손실·입력기울기를 내보내면, 파이썬 쪽이 진짜 torch 로 같은 것을
-  계산해 맞춰본다.
+  It hands out the parameters, the input, the output, the loss and the input gradient,
+  and the Python side computes the same things in real torch and lines them up.
 -->
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>borch.ts — 같은 모델인가</title>
+  <title>borch.ts — is it the same model</title>
   <style>
     body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; }
   </style>
 </head>
 <body>
-  <h1>borch.ts — ResNet-18 재료 뽑기</h1>
-  <pre id="out">뽑는 중…</pre>
+  <h1>borch.ts — dumping the ResNet-18 material</h1>
+  <pre id="out">dumping…</pre>
   <script type="module">
     import { init } from "../dist/src/tensor.js";
     import { dumpForComparison, dumpPieces } from "../dist/test/bench.js";
@@ -28,14 +29,14 @@
     const out = document.getElementById("out");
     try {
       await init();
-      // 조각을 먼저 뽑는다 — 전체가 갈렸을 때 어디인지를 이것이 짚는다.
+      // The pieces are dumped first — they point at where, when the whole parts.
       const pieces = await dumpPieces();
       const dump = await dumpForComparison(2);
       window.__borchModel = { adapter: Device.adapterInfo, pieces, ...dump };
-      out.textContent = `파라미터 ${dump.shapes.length}개, 손실 ${dump.loss}`;
+      out.textContent = `${dump.shapes.length} parameters, loss ${dump.loss}`;
     } catch (err) {
       window.__borchModel = { error: String(why(err)) };
-      out.textContent = `뽑지 못했다: ${why(err)}`;
+      out.textContent = `nothing could be dumped: ${why(err)}`;
     }
   </script>
 </body>

@@ -99,7 +99,7 @@ CEILINGS = {
     # into the table and not words in a sentence. They move when those checks move and
     # not before — which is why translating that file took the reasons and left these,
     # and why every row added after it costs two characters here.
-    "borch-ts/test": 5736,
+    "borch-ts/test": 0,
 }
 
 

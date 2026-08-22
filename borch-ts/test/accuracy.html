@@ -1,17 +1,19 @@
 <!doctype html>
 <!--
-  borch.ts CIFAR-10 정확도. `tests/browser/bench.py` 의 `report_accuracy` 와 같은 잣대다.
+  borch.ts's CIFAR-10 accuracy. The same yardstick as `report_accuracy` in
+  `tests/browser/bench.py`.
 
       npm run build:ts
       uv run --with playwright python borch-ts/test/accuracy.py --headed
 
-  **창을 띄워야 한다.** 헤드리스 크로미움은 소프트웨어 어댑터를 주고, 그러면 이 측정이
-  몇 시간이 된다 — 페이지가 어댑터 이름을 먼저 찍으므로 그것을 보고 판단하라.
+  **It has to be run with a window.** Headless Chromium hands over a software adapter,
+  and then this measurement takes hours — the page prints the adapter's name first, so
+  judge by that.
 -->
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>borch.ts — CIFAR-10 정확도</title>
+  <title>borch.ts — CIFAR-10 accuracy</title>
   <style>
     body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
            margin: 2rem; max-width: 60rem; }
@@ -19,8 +21,8 @@
   </style>
 </head>
 <body>
-  <h1>borch.ts — CIFAR-10 정확도</h1>
-  <pre id="out">데이터를 받는 중…</pre>
+  <h1>borch.ts — CIFAR-10 accuracy</h1>
+  <pre id="out">downloading the data…</pre>
   <script type="module">
     import { init } from "../dist/src/tensor.js";
     import { Device } from "../dist/src/device.js";
@@ -33,35 +35,36 @@
     const cap = Number(params.get("images") ?? 0);
     const only = params.get("augment");
 
-    /** 404 에 안 던지는 fetch 를 그대로 쓰면 HTML 을 데이터로 읽는다. */
+    /** Use fetch as it is, throwing nothing on a 404, and HTML gets read as data. */
     const grab = async (url) => {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`받지 못했다: ${res.status} ${url}`);
+      if (!res.ok) throw new Error(`could not fetch: ${res.status} ${url}`);
       return new Uint8Array(await res.arrayBuffer());
     };
 
     try {
       await init();
-      out.textContent = "데이터를 푸는 중…";
-      // 시험 데이터는 **학습에 안 쓴 것**이어야 한다. 원본 아카이브의 test_batch 를
-      // 따로 쓴다 — 같은 덩이를 나눠 쓰면 재는 것이 정확도가 아니다.
+      out.textContent = "unpacking the data…";
+      // The test data has to be **what the training never saw.** The original
+      // archive's test_batch is used separately — split one blob and what is measured
+      // is not the accuracy.
       const train = decodeCifar(await grab("/cifar-batch1.bin"));
       const test = decodeCifar(await grab("/cifar-batch-test.bin"));
       const cut = (s) => cap
         ? { x: s.x.subarray(0, cap * 3 * 32 * 32), y: s.y.subarray(0, cap), n: cap }
         : s;
-      out.textContent = "학습 중… (에폭마다 줄이 늘어난다)";
+      out.textContent = "training… (a line appears per epoch)";
       const text = await report(
         cut(train), cut(test), epochs,
         only === null ? undefined : only === "on",
       );
-      // 어댑터를 본문에만 두면 러너가 못 본다 — 사람이 읽는 글에서 파내는 것은
-      // 붙였다 떨어지는 연결이다.
+      // Left in the body alone, the runner cannot see the adapter — digging it out of
+      // prose a person reads is a join that comes apart.
       window.__borchAccuracy = { text, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
       window.__borchAccuracy = { error: String(why(err)) };
-      out.textContent = `재지 못했다: ${why(err)}`;
+      out.textContent = `it could not be measured: ${why(err)}`;
     }
   </script>
 </body>

@@ -1,27 +1,29 @@
-"""배움터와 길잡이의 **실행 가능한 블록이 실제로 도는가.**
+"""Whether the **runnable blocks** in the lessons and the tutorials actually run.
 
     npm run build:ts
     uv run --with playwright python borch-ts/test/lessons.py
 
-## 왜 있는가
+## Why it exists
 
-이 저장소는 사이트 페이지의 JS 를 한 번도 안 돌려 봤다. `test_site.py` 는 글자와
-링크와 스프라이트를 보고, 골든 러너는 `borch-ts/test/` 안의 제 페이지만 본다.
-그 사이에 **사용자가 실제로 누르는 코드**가 있고 아무도 안 봤다.
+This repository had never once run the JS on its own site pages. `test_site.py` looks at
+the words, the links and the sprites, and the golden runner looks only at its own pages
+inside `borch-ts/test/`. Between the two sits **the code a user actually presses**, and
+nobody was looking at it.
 
-그 자리가 값을 물은 것은 `save`/`load` 를 중첩 쌍으로 바꿀 때다. 열 곳이 `load(x)
-.tensors` 로 쓰고 있었고 새 `load` 는 표를 바로 준다 — 고치는 것은 한 줄씩이었지만,
-**고쳤는지 아는 방법이 사람의 눈뿐이었다.** 다음에 공개 이름이 바뀌면 같은 자리가
-같은 방식으로 조용히 깨진다.
+That place asked its price when `save`/`load` became a nested pair. Ten of them were
+written `load(x).tensors` and the new `load` hands the table over directly — mending it was
+a line each, but **the only way to know whether it had been mended was a person's eyes.**
+The next time a public name moves, the same places break the same silent way.
 
-## 무엇을 재는가
+## What it measures
 
-각 페이지의 `data-lang="js"` 블록을 **누른다.** 그리고 출력이 나왔는지, 그 안에
-예외 문구가 없는지를 본다. 값이 맞는지는 안 본다 — 그것은 골든의 일이다. 여기가
-잡는 것은 **터지는가**이고, 이름이 바뀌면 터지는 것이 정확히 그 방식이다.
+It **presses** every `data-lang="js"` block on each page, then looks at whether output
+appeared and whether an exception's wording is in it. It does not look at whether the
+values are right — that is the golden's job. What is caught here is **whether it blows
+up**, and blowing up is exactly what a renamed name does.
 
-파이썬 블록(`data-lang="py"`)은 안 누른다. Pyodide 를 받아야 하고 그것은 이 검사가
-재려는 것과 다른 종류의 느림이다.
+Python blocks (`data-lang="py"`) are not pressed. They want Pyodide downloaded, which is a
+different kind of slow from the one this check is measuring.
 """
 
 import pathlib
@@ -32,7 +34,7 @@ from launch import browser as browser_of
 
 ROOT = runner.ROOT
 
-# **누를 페이지.** 실행 가능한 JS 블록이 있고 borch.ts 를 쓰는 것들이다.
+# **The pages to press.** The ones with runnable JS blocks that use borch.ts.
 PAGES = [
     "/site/learn/06-save-load.html",
     "/site/ko/learn/06-save-load.html",
@@ -44,22 +46,25 @@ PAGES = [
     "/site/ko/tutorials/05-adversarial.html",
 ]
 
-# **`04-image-classifier` 는 뺐다.** CIFAR 를 받아 conv 를 여러 에폭 돌리는 페이지라
-# 소프트웨어 어댑터에서 몇 분이 든다 — 이 검사가 재려는 것(이름이 바뀌어 터지는가)에
-# 비해 값이 안 맞는다. 그 페이지의 `load` 자리는 같은 한 줄이고 위 넷이 그것을 본다.
+# **`04-image-classifier` is left out.** It downloads CIFAR and runs convolutions for
+# several epochs, which takes minutes on a software adapter — out of proportion to what
+# this check measures (does a renamed name blow up). That page's `load` is the same single
+# line, and the four above watch it.
 
-# **먼저 구조로 본다.** 페이지가 예외를 잡아 화면에 적으므로(`runnable.js` 의
-# `write(describeError(err), "err")`) 던진 줄은 `class="err"` 를 달고 온다. 글자가
-# 아니라 그 표시를 세면 문구가 바뀌어도, 페이지 언어가 달라도 안 죽는다.
+# **Structure first.** The page catches an exception and writes it to the screen
+# (`runnable.js`'s `write(describeError(err), "err")`), so a line that threw arrives
+# carrying `class="err"`. Counting that mark rather than the words survives a change of
+# wording, and survives the page being in another language.
 #
-# 처음에는 글자로만 봤고 목록에 `"실패"` 가 들어 있었다. **그 패턴은 죽어 있었다** —
-# `describeError` 가 내는 것은 `err.name: err.message` 이고 거기 그 낱말이 올 자리가
-# 없다. 죽은 패턴은 화면에서 드문 패턴과 구별이 안 된다.
+# At first this looked at the words alone, and the list contained `"실패"` ("failed").
+# **That pattern was dead** — what `describeError` produces is `err.name: err.message`, and
+# there is nowhere in that for the word to appear. A dead pattern cannot be told from a
+# rare one by looking at the screen.
 ERROR_CLASS = "div.err"
 
-# 글자 쪽은 **그물이지 문이 아니다.** 안 던지고 잘못 도는 자리를 잡으려는 것이고,
-# 여기 없는 문구가 나온다고 통과가 되는 것은 아니다 — 그 문은 위의 `div.err` 가
-# 지킨다.
+# The word side is **a net, not a gate.** It is there to catch a place that runs wrongly
+# without throwing, and wording that is not in this list does not make a pass — that gate
+# is held by the `div.err` above.
 BAD = ("is not a function", "undefined is not", "Cannot read", "TypeError",
        "ReferenceError", "Error:", "throw")
 
@@ -67,7 +72,7 @@ TIMEOUT_MS = 300_000
 
 
 def run_page(page, path):
-    """한 페이지의 JS 블록을 전부 누르고 (통과, 적을 말) 을 돌려준다."""
+    """Press every JS block on one page; return (passed, what to say)."""
     page.goto(path)
     page.wait_for_selector("div.runnable button.go", timeout=TIMEOUT_MS)
 
@@ -75,39 +80,43 @@ def run_page(page, path):
     blocks = page.query_selector_all("div.runnable")
     pressed = 0
     for i, block in enumerate(blocks):
-        # 파이썬 블록은 건너뛴다 — Pyodide 를 받는 일이라 여기서 잴 것이 아니다.
+        # Python blocks are skipped — they download Pyodide, which is not what this
+        # measures.
         if (block.get_attribute("data-lang") or "js") != "js":
             continue
         go = block.query_selector("button.go")
         if go is None:
-            said.append(f"블록 {i} 에 실행 단추가 없다")
+            said.append(f"block {i} has no run button")
             continue
         go.click()
         pressed += 1
-        # **단추가 다시 눌리게 되면 끝난 것이다**(`runnable.js` 의 `runBtn.disabled`).
+        # **It is finished when the button becomes pressable again**
+        # (`runnable.js`'s `runBtn.disabled`).
         #
-        # 처음에는 단추 **글자**가 "도는 중" 에서 돌아오는 것을 봤다. 그 낱말은 저쪽
-        # 파일의 것이고 이 파일이 그 철자를 알고 있어야 하는데, **아무도 그 둘을 붙잡고
-        # 있지 않다.** 저쪽이 문구를 고치면 여기는 틀렸다고 말하지 못하고 **영원히
-        # 기다린다** — 값이 틀리는 것보다 나쁘다, 무엇을 기다리는지가 화면에 안 나오니까.
-        # `disabled` 는 같은 사실을 문구 없이 말한다.
+        # At first this watched the button's **text** come back from "running". That word
+        # belongs to the other file and this file would have to know its spelling —
+        # **and nothing holds the two together.** Change the wording over there and this
+        # cannot say it is wrong; it **waits forever** — worse than a wrong value, because
+        # nothing on screen says what is being waited for. `disabled` says the same fact
+        # without any wording at all.
         page.wait_for_function("el => !el.disabled", arg=go, timeout=TIMEOUT_MS)
         out = block.query_selector("pre.out, .out")
         text = (out.inner_text() if out else "").strip()
         if not text:
-            said.append(f"블록 {i} 가 아무것도 안 냈다")
+            said.append(f"block {i} produced nothing")
             continue
-        # **표시가 먼저다.** 페이지가 예외를 잡아 적은 줄이 여기 걸린다.
+        # **The mark comes first.** A line the page wrote after catching an exception
+        # catches here.
         for line in (out.query_selector_all(ERROR_CLASS) if out else []):
-            said.append(f"블록 {i} — {line.inner_text().strip().splitlines()[0][:120]}")
+            said.append(f"block {i} — {line.inner_text().strip().splitlines()[0][:120]}")
         for bad in BAD:
             if bad in text:
-                said.append(f"블록 {i} — {text.splitlines()[0][:120]}")
+                said.append(f"block {i} — {text.splitlines()[0][:120]}")
                 break
 
     if pressed == 0:
-        # **0 건을 돌리고 초록을 보는 것이 제일 나쁜 결과다.**
-        said.append("누를 JS 블록이 하나도 없었다 — 선택자가 낡았을 수 있다")
+        # **Running 0 of them and seeing green is the worst outcome available.**
+        said.append("there was not one JS block to press — the selector may be stale")
     return not said, pressed, said
 
 
@@ -122,7 +131,8 @@ def main(argv):
                 browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
-            page.on("pageerror", lambda e: rows.append((False, 0, [f"페이지 예외: {e}"])))
+            page.on("pageerror",
+                    lambda e: rows.append((False, 0, [f"page exception: {e}"])))
             for rel in PAGES:
                 ok, pressed, said = run_page(page, f"http://127.0.0.1:{port}{rel}")
                 rows.append((rel, ok, pressed, said))
@@ -132,12 +142,12 @@ def main(argv):
     bad = 0
     for rel, ok, pressed, said in rows:
         mark = "✓" if ok else "✗"
-        print(f"  {mark} {rel} — JS 블록 {pressed}개")
+        print(f"  {mark} {rel} — {pressed} JS blocks")
         for line in said:
             print(f"      {line}", file=sys.stderr)
         if not ok:
             bad += 1
-    print(f"페이지 {len(rows)}개 중 {len(rows) - bad}개 통과")
+    print(f"{len(rows) - bad} of {len(rows)} pages passed")
     return 0 if bad == 0 else 1
 
 
