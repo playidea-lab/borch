@@ -1941,19 +1941,41 @@ class _ConvTransposeND(Module):
     nd = 2
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
-                 bias=True):
+                 output_padding=0, groups=1, bias=True, dilation=1,
+                 padding_mode="zeros", device=None, dtype=None):
+        """**torch puts `dilation` after `bias` here and before it in `Conv2d`.**
+
+        The two are not the same list in a different spelling; the eighth position
+        is `bias` in one and `dilation` in the other. Following torch means
+        following that too — a tidier order of our own would read as agreement and
+        land a positional call somewhere else.
+        """
         super().__init__()
+        _no_device_dtype(type(self).__name__, device, dtype)
+        if padding_mode != "zeros":
+            # torch refuses this itself: only `zeros` is implemented for a
+            # transposed convolution, on either side.
+            raise ValueError(
+                "Only `zeros` padding mode is supported for ConvTranspose"
+                f"{type(self).nd}d")
         self.in_channels, self.out_channels = in_channels, out_channels
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
-        shape = (in_channels, out_channels) + (kernel_size,) * type(self).nd
-        bound = 1.0 / _math.sqrt(out_channels * kernel_size ** type(self).nd)
+        self.output_padding, self.groups = output_padding, groups
+        self.dilation, self.padding_mode = dilation, padding_mode
+        ks = _spread(kernel_size, type(self).nd)
+        shape = (in_channels, out_channels // groups) + tuple(ks)
+        numel = 1
+        for size in ks:
+            numel *= size
+        bound = _conv_bound(out_channels, groups, numel)
         self.weight = Parameter(_rng.uniform(-bound, bound, shape).astype(_DEFAULT_DTYPE))
         self.bias = (Parameter(_rng.uniform(-bound, bound, out_channels)
                                .astype(_DEFAULT_DTYPE)) if bias else None)
 
     def forward(self, x):
         fn = {1: conv_transpose1d, 2: conv_transpose2d, 3: conv_transpose3d}[type(self).nd]
-        return fn(x, self.weight, self.bias, self.stride, self.padding)
+        return fn(x, self.weight, self.bias, self.stride, self.padding,
+                  self.output_padding, self.groups, self.dilation)
 
 
 class ConvTranspose1d(_ConvTransposeND):

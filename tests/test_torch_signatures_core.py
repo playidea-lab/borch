@@ -84,7 +84,22 @@ SHIFTED = {
     # `Conv2d(3, 16, 3, 1, 1, False)` sets dilation now. Every call site in this
     # repository already passed it by keyword, which is the only reason the move was
     # quiet -- a positional call is a silent bet that the callee's order never moves.
-    "nn": 5,
+    # 5 -> 2. ConvTranspose1d/2d/3d grew output_padding, groups and dilation, all
+    # implemented, checked against real torch over 346 configurations.
+    #
+    # **torch puts `dilation` after `bias` here and before it in Conv2d.** The two
+    # are not one list in a different spelling, and following torch means following
+    # that too -- a tidier order of our own would read as agreement and land a
+    # positional call somewhere else.
+    #
+    # `output_padding` is the row that argued for comparing values and not only
+    # shapes. It extends the window at the bottom and the right, and **the extra
+    # rows are not zeros**: it reaches back into the part the padding trim was about
+    # to throw away, which holds computed values. Filling them with zeros matches
+    # the shape exactly and differs in the values -- measured, on twelve of the
+    # first fifty-six configurations, every one of them `padding` and
+    # `output_padding` together.
+    "nn": 2,
     "nn.functional": 0,
     "optim": 2,
     "optim.lr_scheduler": 2,

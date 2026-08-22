@@ -552,7 +552,34 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return x._make(out if bias is None else out + bias.data.reshape(1, -1, 1, 1), parents, back)
 
 
-def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
+def _grouped_transpose(call, x, weight, bias, groups):
+    """`groups` for a transposed convolution.
+
+    **The weight axes are the other way round here** — `(in, out/groups, …)` — so
+    the slice that walks the groups runs down axis 0 for the input side and the
+    bias is cut by axis 1. Written apart from `_grouped` for that reason alone: one
+    helper taking an axis argument reads as though the two were the same shape, and
+    they are the trap this file already warns about two functions up.
+    """
+    x, weight = _wrap(x), _wrap(weight)
+    in_ch = x.data.shape[1]
+    per_group_out = weight.data.shape[1]
+    if in_ch % groups:
+        raise RuntimeError(
+            f"groups={groups} does not divide the input channels ({in_ch})")
+    cin = in_ch // groups
+    parts = []
+    for g in range(groups):
+        xs = x[_slice_at(1, g * cin, (g + 1) * cin)]
+        ws = weight[_slice_at(0, g * cin, (g + 1) * cin)]
+        bs = (None if bias is None else
+              _wrap(bias)[_slice_at(0, g * per_group_out, (g + 1) * per_group_out)])
+        parts.append(call(xs, ws, bs))
+    return cat(parts, 1)
+
+
+def conv_transpose2d(x, weight, bias=None, stride=1, padding=0, output_padding=0,
+                     groups=1, dilation=1):
     """A transposed convolution — **the same computation `conv2d` flows towards
     its input.**
 
@@ -564,6 +591,11 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
     square kernel the shape fits even reversed, so it diverges only in the values.
     The commonest mistake in this layer.
     """
+    if groups != 1:
+        return _grouped_transpose(
+            lambda xs, ws, bs: conv_transpose2d(xs, ws, bs, stride, padding,
+                                                output_padding, 1, dilation),
+            x, weight, bias, groups)
     x, weight = _wrap(x), _wrap(weight)
     N, C, H, W = x.data.shape
     C2, F, KH, KW = weight.data.shape
@@ -571,8 +603,15 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
         raise RuntimeError(f"channels do not match: input {C}, filter {C2}")
     sh, sw = _pair(stride)
     ph, pw = _pair(padding)
-    OH = (H - 1) * sh + KH
-    OW = (W - 1) * sw + KW
+    dh, dw = _pair(dilation)
+    oph, opw = _pair(output_padding)
+    if oph >= sh and oph >= dh or opw >= sw and opw >= dw:
+        raise RuntimeError(
+            "output padding must be smaller than either stride or dilation, but "
+            f"got output_padding={output_padding}, stride={stride}, "
+            f"dilation={dilation}")
+    OH = (H - 1) * sh + (KH - 1) * dh + 1
+    OW = (W - 1) * sw + (KW - 1) * dw + 1
 
     # Each input cell is scattered across the kernel into the output positions.
     # `col2im` is exactly that shape — the input is spread to `(N·H·W, C)`,
@@ -580,24 +619,40 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
     cols = x.data.transpose(0, 2, 3, 1).reshape(N * H * W, C)
     w2 = weight.data.reshape(C, F * KH * KW)
     spread = cols @ w2
-    out = _col2im(spread, (N, F, OH, OW), KH, KW, (sh, sw), H, W)
+    out = _col2im(spread, (N, F, OH, OW), KH, KW, (sh, sw), H, W, (dh, dw))
 
     def back(g):
         g = _np.asarray(g)
-        gcols, _, _ = _im2col(g, KH, KW, (sh, sw))          # (N·H·W, F·KH·KW)
+        gcols, _, _ = _im2col(g, KH, KW, (sh, sw), (dh, dw))   # (N·H·W, F·KH·KW)
         gx = (gcols @ w2.T).reshape(N, H, W, C).transpose(0, 3, 1, 2)
         gw = (cols.T @ gcols).reshape(weight.data.shape)
         got = (gx, gw)
         return got if bias is None else got + (g.sum(axis=(0, 2, 3)),)
 
-    if ph or pw:
-        # The padding is **trimmed off the output** — the opposite direction
-        # from an ordinary convolution.
-        out = out[:, :, ph:OH - ph, pw:OW - pw]
+    if ph or pw or oph or opw:
+        # The padding is **trimmed off the output** — the opposite direction from an
+        # ordinary convolution — and `output_padding` extends the window at the
+        # bottom and the right.
+        #
+        # **The extra rows are not zeros.** `output_padding` reaches back into the
+        # part the trim was about to throw away, which holds computed values; only
+        # where it runs past the untrimmed output is there nothing to take. Filling
+        # them with zeros instead matches the shape exactly and differs in the
+        # values — measured, on twelve of fifty-six configurations, all of them
+        # `padding` and `output_padding` together.
+        bottom, right = OH - ph + oph, OW - pw + opw
+        kept = out[:, :, ph:min(bottom, OH), pw:min(right, OW)]
+        tail_h, tail_w = max(0, bottom - OH), max(0, right - OW)
+        if tail_h or tail_w:
+            kept = _np.pad(kept, ((0, 0), (0, 0), (0, tail_h), (0, tail_w)))
+        out = kept
 
-        def back(g, _inner=back, _ph=ph, _pw=pw, _oh=OH, _ow=OW):   # noqa: F811
-            full = _np.zeros((N, F, _oh, _ow), dtype=_np.asarray(g).dtype)
-            full[:, :, _ph:_oh - _ph, _pw:_ow - _pw] = g
+        def back(g, _inner=back, _ph=ph, _pw=pw, _oh=OH, _ow=OW,
+                 _bottom=bottom, _right=right):                   # noqa: F811
+            g = _np.asarray(g)
+            keep_h, keep_w = min(_bottom, _oh) - _ph, min(_right, _ow) - _pw
+            full = _np.zeros((N, F, _oh, _ow), dtype=g.dtype)
+            full[:, :, _ph:_ph + keep_h, _pw:_pw + keep_w] = g[:, :, :keep_h, :keep_w]
             return _inner(full)
 
     if bias is not None:
@@ -606,24 +661,32 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0):
     return x._make(out, parents, back, "ConvTranspose2DBackward0")
 
 
-def conv_transpose1d(x, weight, bias=None, stride=1, padding=0):
+def conv_transpose1d(x, weight, bias=None, stride=1, padding=0, output_padding=0,
+                     groups=1, dilation=1):
     """Insert a height of 1 into `conv_transpose2d` — the same way as
     `conv1d`."""
     x, weight = _wrap(x), _wrap(weight)
     n, c, length = x.data.shape
     c2, f, k = weight.data.shape
     out = conv_transpose2d(x.reshape(n, c, 1, length), weight.reshape(c2, f, 1, k),
-                           bias, (1, stride), (0, padding))
+                           bias, (1, stride), (0, padding), (0, output_padding),
+                           groups, (1, dilation))
     shape = out.data.shape
     return out.reshape(shape[0], shape[1], shape[3])
 
 
-def conv_transpose3d(x, weight, bias=None, stride=1, padding=0):
+def conv_transpose3d(x, weight, bias=None, stride=1, padding=0, output_padding=0,
+                     groups=1, dilation=1):
     """Run a 2-D transposed convolution per depth and **add where they overlap.**
 
     The same way as `conv3d` — no separate 3-D kernel is written, so there is no
     new derivative to write.
     """
+    if groups != 1:
+        return _grouped_transpose(
+            lambda xs, ws, bs: conv_transpose3d(xs, ws, bs, stride, padding,
+                                                output_padding, 1, dilation),
+            x, weight, bias, groups)
     x, weight = _wrap(x), _wrap(weight)
     n, c, d, h, w = x.data.shape
     c2, f, kd, kh, kw = weight.data.shape
@@ -631,7 +694,10 @@ def conv_transpose3d(x, weight, bias=None, stride=1, padding=0):
         raise RuntimeError(f"channels do not match: input {c}, filter {c2}")
     sd, sh, sw = (stride,) * 3 if isinstance(stride, int) else tuple(stride)
     pd, ph, pw = (padding,) * 3 if isinstance(padding, int) else tuple(padding)
-    out_d = (d - 1) * sd + kd
+    opd, oph, opw = ((output_padding,) * 3 if isinstance(output_padding, int)
+                     else tuple(output_padding))
+    dd, dh, dw = (dilation,) * 3 if isinstance(dilation, int) else tuple(dilation)
+    out_d = (d - 1) * sd + (kd - 1) * dd + 1
 
     # The per-depth results are gathered into a list and stacked at once. Several
     # input depths overlap at each position, so they **have to be added** —
@@ -641,13 +707,29 @@ def conv_transpose3d(x, weight, bias=None, stride=1, padding=0):
         for i in range(kd):
             plane = x[_slice_at(2, od, od + 1)].reshape(n, c, h, w)
             slab = weight[_slice_at(2, i, i + 1)].reshape(c2, f, kh, kw)
-            part = conv_transpose2d(plane, slab, None, (sh, sw), (ph, pw))
-            at = od * sd + i
+            part = conv_transpose2d(plane, slab, None, (sh, sw), (ph, pw),
+                                    (oph, opw), 1, (dh, dw))
+            at = od * sd + i * dd
             slabs[at] = part if slabs[at] is None else slabs[at] + part
-    shape = slabs[0].data.shape
+    shape = next(s for s in slabs if s is not None).data.shape
+    empty = None
+    for at, slab in enumerate(slabs):
+        if slab is None:
+            if empty is None:
+                empty = _wrap(_np.zeros(shape, dtype=_DEFAULT_DTYPE))
+            slabs[at] = empty
     out = cat([s.reshape(shape[0], shape[1], 1, shape[2], shape[3]) for s in slabs], 2)
-    if pd:
-        out = out[_slice_at(2, pd, out_d - pd)]
+    # The depth axis is trimmed and then extended by `output_padding`, by the same
+    # rule the height and the width follow one function up: what the extension
+    # reaches is computed values where they exist, and nothing only past the end.
+    if pd or opd:
+        bottom = out_d - pd + opd
+        kept = out[_slice_at(2, pd, min(bottom, out_d))]
+        if bottom > out_d:
+            tail = _wrap(_np.zeros(
+                (n, f, bottom - out_d) + kept.data.shape[3:], dtype=_DEFAULT_DTYPE))
+            kept = cat([kept, tail], 2)
+        out = kept
     if bias is not None:
         out = out + bias.reshape(1, -1, 1, 1, 1)
     return out

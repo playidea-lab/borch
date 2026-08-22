@@ -96,7 +96,13 @@ SHIFTED = {
     # outside authority, the core can only move toward torch by moving away from
     # borch.ts until borch.ts follows. The pair of axes disagreeing is the mechanism
     # working. The danger is only ever a number held still while the sides part.
-    "nn": 4,
+    # 4 -> 7. Three more, the same way: the core's ConvTranspose1d/2d/3d took
+    # torch's output_padding, groups and dilation, and borch.ts has not followed
+    # yet. This is the fourth family in a row to open a row here while closing one
+    # against torch, which is what a repository with three implementations and one
+    # outside authority does -- the core cannot move toward torch except by moving
+    # away from borch.ts until borch.ts follows.
+    "nn": 7,
     "nn.functional": 1,
     "optim": 0,
     "optim.lr_scheduler": 0,
