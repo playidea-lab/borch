@@ -308,6 +308,83 @@ because torch does take a copy and did not leak, sixteen places were wrong **in
 the core alone.** Run one at a time they all passed, so the cause was not at its
 own address. The remedy differs too — not more cases but **isolation.**
 
+### Six places where a green *check* can be a lie
+
+The seven above are places where a case passes and the library is wrong. These are
+one level up: places where **the check passes and the checking is wrong.** They came
+out of a single day of building `borchvision` out to torchvision's surface, so the
+count beside each is small and honest rather than accumulated.
+
+The same rule applies for getting on this list: **name the instance.** All six can.
+
+**A check that has never said how many rows it read cannot tell being right from
+reading nothing** (twice). `test_alias_rows` takes the gap ledger apart with a regular
+expression, and that expression could not see a row whose reason runs to a second
+source line. `unpool::` — twenty cases — was invisible to it for as long as it had
+existed, silently, because a row it cannot see contributes nothing rather than
+raising. Widening the expression fixed **that row and not the shape**: zero rows
+examined is zero failures, which is the same green. It now checks its own count
+against a second, deliberately weaker pattern that only has to find where a row
+begins. Hours later a translation pass dropped a row's count entirely, and the same
+check named it.
+
+**A reason written in prose is the most comfortable place for a namespace to
+disappear** (once, and the worst of the six). `transforms.v2.functional` sat off the
+gap table with a paragraph explaining why: 114 of its 165 names are `<operation>_<type>`
+dispatch kernels, one reason covers all of them, and the matcher's wildcards could not
+carry a namespace — `"*_image"` written flat would also swallow v1's `to_pil_image`.
+Every sentence of that was true. The paragraph also said **128 kernels where there are
+114**, inside the file whose whole job is checking numbers, and nothing was watching
+it. That is what makes this shape worse than a wrong reason: **a wrong reason is
+visible on reading and a correct one is not**, and what the paragraph does is stop the
+next person asking why the namespace is missing. Absent from the list, wearing an
+explanation.
+
+**The bin that is exempt from judgement is the bin that improves the number** (once).
+Two bins hold what is absent. What was declined stays in the denominator — we chose
+it, so we carry it — and what is called "not API" is subtracted before the percentage
+is taken. So the most tempting place to put a name you do not want to explain is also
+the only place where doing so **raises the score**, and nothing read that bin's size.
+Measured, the contents were sound: of 203 names, four carry an `Example::` in torch's
+own docstring and three of those are fairly called internals. The fourth was
+`narrow_copy`, filed as a functionalisation-pass variant of `narrow` when it is a
+documented function that **copies where `narrow` gives a view.** It moved to the
+declined bin, and `Tensor` reads 99% instead of 100%.
+
+**A guessed family looks more regular than the real one** (twice). AugMix's policy
+table was parameterised as `_space(kind)` beside the other three, and was wrong in
+four ways at once — the translate denominator, the posterize top, a missing `Identity`
+and the photometric four in the wrong place. Later, six suffixes looked like the
+natural set for v2's dispatch kernels and `*_batch` matched nothing. Both times the
+guess was the tidier artifact, and tidiness is not evidence: it is **the absence of a
+surface to put a question on.** A list with exceptions in it invites "why is this one
+different"; a parameterised rule invites nothing. Missing it twice is structurally
+predictable rather than careless.
+
+**A check's answer can be thrown away by the shape of the command around it** (twice,
+once on each side of this repository). `pytest … | grep … | head` reports the
+pipeline's last exit code, so `set -e` never fires on a failing suite; and read as
+text, **an empty grep is indistinguishable from a run that died before printing a
+summary.** Both happened on the same day, and one of them surfaced only because
+somebody reported the other. The remedy is `> file; echo $?` and reading the code. A
+check that was right and went unread is a check that did not run.
+
+**Two branches each correct about their own tree, and the merge correct about
+neither** (five times in one day). Every shared counter did it: the ceiling on Korean
+characters left in a directory being translated, the golden case count, the number of
+TypeScript bodies written. Each branch measured its own tree and wrote down the right
+number; **neither could measure the sum**, and the merge is where the two arrive. The
+ceiling's failure message now says which commit last wrote the number and how many
+merges have landed since — a line that turns an hour of reading diffs into a fact.
+The counts derived from the ledger fixed themselves, which is the point of deriving
+them.
+
+> **What the six have in common is not carelessness.** Each is a place where the
+> absence of a signal reads exactly like the signal being fine — no rows read, no
+> number to go stale, no size to watch, no question to ask, no output to see, no tree
+> that holds both branches. The remedy is the same shape every time and it is never
+> "look harder": make the absence produce a number, and then watch the number.
+
 ---
 
 ## How fast it is
