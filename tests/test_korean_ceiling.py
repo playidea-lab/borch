@@ -63,7 +63,7 @@ SUFFIXES = (".ts", ".py", ".html")
 # before raising one.
 CEILINGS = {
     "borch-ts/src": 18,          # the rest of src; what is left is quoted golden names
-    "borch-ts/test": 43078,
+    "borch-ts/test": 27201,
 }
 
 
