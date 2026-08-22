@@ -327,3 +327,44 @@ def test_the_three_sides_look_for_one_sentence():
     assert found["tests/cases.py"] in said, (
         f"the fragment the cases look for is {found['tests/cases.py']!r} and borch says "
         f"{said!r}")
+
+
+# The prefix `golden.ts` prints in front of each case name, and the prefix `run.py` strips
+# to recover it. Two files, two languages, one string.
+TRACE_SITES = (
+    ("borch-ts/test/golden.ts", re.compile(r'console\.debug\(`(\[[^\]`]*\] )\$\{name\}`\)')),
+    ("borch-ts/test/run.py", re.compile(r'^_STARTED = "([^"]*)"', re.M)),
+)
+
+
+def test_the_two_sides_of_the_hang_trace_spell_it_the_same():
+    """**A wording contract whose failure is silence, not a mismatch.**
+
+    `golden.ts` prints `[golden] <name>` as it starts each case and `run.py` keeps the
+    lines beginning with that prefix, so that when the wait times out it can name the case
+    that never finished. Nothing else uses those lines.
+
+    So a prefix changed on one side alone does not fail: the filter matches nothing, the
+    trace is empty, and every green run stays green. It only shows on the day something
+    hangs — and what shows then is `(not one of them started)`, which reads as the runner
+    never having started rather than as a broken filter. The line it replaces is the one
+    that keeps a hang from being searched for through 1,199 lines of scrollback.
+
+    This is exactly the seam translation walks into: the prefix was `[골든] `, it is
+    `[golden] ` now, and the two halves live in different files and different languages.
+    """
+    found = {}
+    for rel, pattern in TRACE_SITES:
+        hits = pattern.findall((ROOT / rel).read_text(encoding="utf-8"))
+        assert hits, (
+            f"{rel} no longer states the trace prefix this reads. It is one half of a "
+            "wording contract; matching nothing here would pass in silence, which is the "
+            "failure mode this test exists for.")
+        assert len(set(hits)) == 1, f"{rel} states {sorted(set(hits))}"
+        found[rel] = hits[0]
+
+    printed = found["borch-ts/test/golden.ts"]
+    watched = found["borch-ts/test/run.py"]
+    assert printed == watched, (
+        f"golden.ts prints {printed!r} and run.py watches for {watched!r} — the hang trace "
+        "collects nothing, and a timeout will say no case ever started.")

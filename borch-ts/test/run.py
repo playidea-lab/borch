@@ -1,16 +1,17 @@
-"""borch.ts 골든 러너를 브라우저에서 돌린다.
+"""Run the borch.ts golden runner in a browser.
 
     npm run build:ts
     uv run --with playwright python borch-ts/test/run.py
 
-`tests/browser/run.py` 와 같은 방식이다 — 저장소 루트를 임시 포트에 얹고 Playwright
-로 페이지를 열어 결과를 읽는다. 따로 쓴 이유는 그쪽이 `runner.html?lib=` 로 파이썬
-라이브러리를 Pyodide 에 태우는 전용 러너이고, 이쪽은 Pyodide 가 필요 없기 때문이다.
-borch.ts 는 브라우저가 그냥 읽는 JS 다.
+The same shape as `tests/browser/run.py` — put the repository root on a temporary port,
+open the page with Playwright, read the result off it. It is written separately because
+that one is a dedicated runner that loads the Python library into Pyodide through
+`runner.html?lib=`, and this one needs no Pyodide at all. borch.ts is JS the browser
+simply reads.
 
-**돌지 않은 것과 통과한 것을 안 섞는다.** 페이지가 던지면 종료 코드가 0 이 아니고,
-"등록했는데 골든에 없는 이름"이 하나라도 있으면 그것도 실패다 — 오타로 0 건을
-돌리고 초록색을 보는 것이 이 프로젝트에서 제일 나쁜 결과다.
+**What did not run is not mixed in with what passed.** If the page throws, the exit code
+is not 0, and a single "registered but not in the golden" name is a failure too — running
+0 cases through a typo and seeing green is the worst outcome available in this project.
 """
 
 import functools
@@ -24,31 +25,35 @@ from launch import browser as browser_of, warn_if_software
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PAGE = "/borch-ts/test/index.html"
-# **넉넉히 준다.** 전에는 120 초였는데, 표가 커지고 헤드리스가 소프트웨어 어댑터로
-# 내려가면 그 안에 못 끝난다. 그때 나오는 화면은 "멈췄다" 와 구별이 안 돼서 실제로
-# 한 번 없는 결함을 쫓았다 — 마지막 케이스 이름까지 찍어 놓고도 그랬다.
-# 시간이 모자란 것과 안 끝나는 것은 다른 일이므로, 예산은 의심의 여지가 없게 둔다.
+# **Give it room.** This was 120 seconds, and with the table grown and headless dropping
+# to a software adapter it cannot finish inside that. The screen it produces then cannot be
+# told apart from "it hung", and a defect that did not exist really was chased once — even
+# with the last case name printed. Running out of time and never finishing are different
+# events, so the budget is set past any doubt.
 TIMEOUT_MS = 600_000
 
 
 def require_fresh_dist(root=ROOT):
-    """**소스가 `dist` 보다 새것이면 여기서 멈춘다.**
+    """**Stop here when the source is newer than `dist`.**
 
-    러너가 싣는 것은 `borch-ts/dist` 이고 그것은 `.gitignore` 라 어느 커밋에도 없다.
-    그래서 리베이스하거나 브랜치를 옮기면 소스만 바뀌고 방출물은 옛것으로 남는다.
+    What the runner loads is `borch-ts/dist`, and that is in `.gitignore`, so it is in no
+    commit. Rebase or move between branches and the source changes while the emit stays
+    old.
 
-    **그 상태를 러너가 못 알린다.** 낡은 `dist` 와 진짜 결손이 `borch.ts 에 X 가 없다`
-    라는 **같은 문구**로 나오기 때문이다. 실제로 두 사람이 각각 밟았다 — 한쪽은 새
-    케이스 119 건을 넣고 러너 수가 한 건도 안 움직여 이름 오타를 찾았고, 다른 쪽은
-    결속에서 31 건이 빨개진 것을 회귀로 보고했다. 그 31 건은 `tensor.ts` 에 **있는**
-    이름들이었고, 소스를 읽으면서 러너는 `dist` 를 읽고 있었다.
+    **The runner cannot report that state.** A stale `dist` and a genuine hole come out
+    with **the same wording**: `borch.ts does not have X`. Two people walked into it
+    separately — one added 119 new cases, saw the runner's count not move by a single
+    case, and went looking for a typo in a name; the other reported 31 red cases in the
+    binding as a regression. Those 31 names were **there** in `tensor.ts`. They were
+    reading the source while the runner read `dist`.
 
-    `check:ts` 는 `--noEmit` 이라 이 자리를 안 고친다. 빌드를 잊는 것이 자연스러운
-    구조이므로, 잊었을 때 **다른 것을 의심하기 전에** 멈추는 편이 낫다.
+    `check:ts` is `--noEmit`, so it does not mend this place. Forgetting the build is what
+    the structure invites, so it is better to stop when it is forgotten — **before
+    anything else is suspected.**
     """
     dist = root / "borch-ts" / "dist"
     if not dist.exists():
-        raise SystemExit(f"방출물이 없다: {dist}\n  먼저: npm run build:ts")
+        raise SystemExit(f"no emit: {dist}\n  first: npm run build:ts")
     newest_src = max(
         (p.stat().st_mtime for p in (root / "borch-ts").rglob("*.ts")
          if "dist" not in p.parts and "node_modules" not in p.parts),
@@ -56,62 +61,69 @@ def require_fresh_dist(root=ROOT):
     oldest_out = min((p.stat().st_mtime for p in dist.rglob("*.js")), default=0)
     if newest_src > oldest_out:
         raise SystemExit(
-            "방출물이 소스보다 낡았다 — 러너는 `borch-ts/dist` 를 싣는다.\n"
-            "  먼저: npm run build:ts\n"
-            "  (이대로 돌리면 새 이름이 `borch.ts 에 없다` 로 나오는데, 그것은\n"
-            "   진짜 결손일 때와 **같은 문구**라 원인이 안 보인다.)")
+            "the emit is older than the source — the runner loads `borch-ts/dist`.\n"
+            "  first: npm run build:ts\n"
+            "  (run it as it is and a new name comes out as `not in borch.ts`, which is\n"
+            "   **the same wording** as a genuine hole, so the cause is invisible.)")
 
 
 def require_fresh_golden(root=ROOT):
-    """**`cases.py` 가 `golden.json` 보다 새것이면 여기서 멈춘다.**
+    """**Stop here when `cases.py` is newer than `golden.json`.**
 
-    `dist` 와 같은 함정이 골든에도 있다. 러너가 읽는 것은 `tests/golden.json` 이고,
-    그것은 `tests/cases.py` → `golden.npz` → `golden.json` 의 두 단계를 거쳐 나온다.
-    가운데 `npz` 는 `.gitignore` 라 어느 커밋에도 없다.
+    The golden has the same trap as `dist`. What the runner reads is `tests/golden.json`,
+    and that comes out of `tests/cases.py` → `golden.npz` → `golden.json`, two steps, and
+    the `npz` in the middle is in `.gitignore` and so in no commit.
 
-    그래서 케이스를 새로 쓰고 뽑기를 잊으면 **그 케이스가 "이름이 골든에 없다" 로
-    나온다** — 이름을 오타 낸 것과 **같은 문구**다. 실제로 아홉 건을 넣고 그 화면을
-    받아, 없는 오타를 먼저 찾았다.
+    So write a new case, forget to dump, and **that case comes out as "the name is not in
+    the golden"** — **the same wording** as a typo in the name. Nine cases really were
+    added, that screen came back, and a typo that did not exist was searched for first.
 
-    두 단계라 잊기 쉽고, 첫 단계는 진짜 torch 를 요구해서 아무 데서나 못 돈다.
-    잊었을 때 **다른 것을 의심하기 전에** 멈추는 편이 낫다.
+    Two steps are easy to forget, and the first of them wants real torch, so it does not
+    run everywhere. Better to stop when it is forgotten, **before anything else is
+    suspected.**
 
-    ## mtime 은 사실이 아니라 대리물이다
+    ## mtime is a proxy, not the fact
 
-    처음에는 시각만 봤다. 그런데 `cases.py` 의 **주석만** 고쳐도 시각은 움직인다 —
-    다른 세션이 그 파일을 영어로 옮기자 러너가 멈췄고, 골든은 멀쩡했다. 케이스 이름도
-    값도 그대로였는데 시각 하나 때문에 "다시 뽑아라" 가 나온 것이다.
+    At first only the time was looked at. But changing **a comment alone** in `cases.py`
+    moves the time — another session translated that file into English and the runner
+    stopped, with the golden perfectly fine. The case names and the values were untouched
+    and one timestamp produced "dump it again".
 
-    거짓 경보를 그냥 두면 사람이 그 경고를 지나치는 법을 배우고, 그러면 **진짜일 때도
-    지나친다.** 그래서 시각이 어긋나면 거기서 멈추지 않고 **이름 표를 실제로 대조한다**
-    (`manifest`). 같으면 시각만 움직인 것이므로 지나간다.
+    Leave a false alarm standing and people learn to walk past that warning, and then they
+    **walk past the real one too.** So when the times disagree it does not stop there: it
+    **compares the name table itself** (`manifest`). Equal means only the time moved, and
+    it goes through.
 
-    **값까지는 안 본다.** 그것은 `tests/test_committed_golden.py` 의 일이고 진짜 torch
-    없이도 도는데, 여기서 두 벌로 두면 언젠가 갈린다.
+    **It does not go as far as the values.** That is `tests/test_committed_golden.py`'s
+    job, which runs without real torch, and a second copy of it here would part from the
+    first eventually.
     """
     cases = root / "tests" / "cases.py"
     exported = root / "tests" / "golden.json"
     if not exported.exists():
-        raise SystemExit(f"골든이 없다: {exported}")
+        raise SystemExit(f"no golden: {exported}")
     if cases.stat().st_mtime <= exported.stat().st_mtime:
         return
     if _names_still_match(root, exported):
         return
     raise SystemExit(
-        "골든이 케이스 표보다 낡았다 — 러너는 `tests/golden.json` 을 읽는다.\n"
-        "  먼저: uv run --with numpy --with torch --with torchvision "
+        "the golden is older than the case table — the runner reads "
+        "`tests/golden.json`.\n"
+        "  first: uv run --with numpy --with torch --with torchvision "
         "python tests/golden.py dump\n"
-        "  그다음: uv run --with numpy python tests/export_json.py\n"
-        "  (이대로 돌리면 새 케이스가 `이름이 골든에 없다` 로 나오는데, 그것은\n"
-        "   이름을 틀렸을 때와 **같은 문구**라 원인이 안 보인다.)")
+        "  then: uv run --with numpy python tests/export_json.py\n"
+        "  (run it as it is and a new case comes out as `the name is not in the\n"
+        "   golden`, which is **the same wording** as getting the name wrong, so the\n"
+        "   cause is invisible.)")
 
 
 def _names_still_match(root, exported):
-    """굳혀 둔 이름 표가 지금 `cases.py` 가 내는 것과 같은가.
+    """Is the frozen name table the one `cases.py` produces today?
 
-    **못 재면 못 잰다고 답한다.** `cases.py` 를 들여오려면 numpy 가 있어야 하고 이
-    러너는 그것 없이도 도는 자리가 있다. 그때 "같다" 로 답하면 이 갈래가 검사를 끄는
-    스위치가 된다 — 없는 확신을 만드는 쪽보다 시끄러운 쪽이 낫다.
+    **Where it cannot measure, it answers that it cannot.** Importing `cases.py` wants
+    numpy, and there are places this runner runs without it. Answering "equal" there would
+    turn this branch into a switch that turns the check off — better noisy than
+    manufacturing a confidence nobody has.
     """
     import json
     import sys
@@ -137,7 +149,7 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 def serve(root):
-    """저장소 루트를 임시 포트에 얹고 (포트, 종료함수) 를 돌려준다."""
+    """Put the repository root on a temporary port; return (port, shutdown)."""
     handler = functools.partial(_ReportMissing, directory=str(root))
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -145,9 +157,10 @@ def serve(root):
 
 
 class _ReportMissing(_Quiet):
-    """**못 찾은 것을 찍는다.** 설명 안 된 404 를 덮어두면 안 된다 — 이 저장소의
-    러너가 한 번 404 HTML 을 파이썬 파일로 받아 엉뚱한 자리에서 터진 적이 있다.
-    브라우저가 알아서 찾는 것(favicon)도 여기 걸리므로 정체가 드러난다."""
+    """**Print what was not found.** An unexplained 404 must not be papered over — a
+    runner in this repository once took 404 HTML as a Python file and blew up somewhere
+    else entirely. What the browser fetches on its own (favicon) lands here too, so it
+    shows itself for what it is."""
 
     def send_error(self, code, message=None, explain=None):
         if code == 404:
@@ -155,19 +168,23 @@ class _ReportMissing(_Quiet):
         super().send_error(code, message, explain)
 
 
-_STARTED = "[골든] "
+_STARTED = "[golden] "
 
 
 def run(headed=False, verbose=False):
-    """`verbose` 면 콘솔을 전부 찍는다.
+    """With `verbose`, print the console in full.
 
-    **조용한 멈춤을 붙잡는다.** 러너가 케이스마다 try/catch 를 하므로 예외는 보고서에
-    실려 나온다. 안 실리는 것은 **영영 안 끝나는** 케이스이고, 그때는 보고서 자체가
-    안 만들어져 화면에 아무것도 안 남은 채 시간만 간다.
+    **It catches a silent hang.** The runner try/catches every case, so an exception rides
+    out in the report. What does not ride out is a case that **never finishes**, and then
+    no report is built at all and the time simply passes with nothing on screen.
 
-    그래서 러너가 케이스를 시작할 때마다 찍는 줄을 여기서 붙잡아 두었다가, 시간이
-    다 되면 **마지막으로 시작한 이름**을 말한다 — 그게 범인이다. 터미널 스크롤백에
-    기대면 1,199 줄에 묻히고, 실제로 한 번 묻혔다.
+    So the line the runner prints as it starts each case is caught here, and when the time
+    runs out it says **the last name started** — that is the culprit. Leaning on terminal
+    scrollback buries it under 1,199 lines, and it really was buried once.
+
+    The prefix it watches for is written on the other side, in `golden.ts`. Translate one
+    of the two alone and this quietly catches nothing: the trace goes empty, the timeout
+    screen loses its only useful line, and nothing fails.
     """
     from playwright.sync_api import sync_playwright
 
@@ -181,23 +198,25 @@ def run(headed=False, verbose=False):
         if m.text.startswith(_STARTED):
             last.append(m.text[len(_STARTED):])
         if verbose or m.type == "error":
-            print(f"  [브라우저] {m.text}")
+            print(f"  [browser] {m.text}")
 
     try:
-        # **브라우저를 닫는 것도 `with` 가 한다** — 마지막 줄에 두면 그 앞에서
-        # 예외가 날 때 안 닫히고, 남은 크로미엄이 다른 측정을 망가뜨린다.
+        # **`with` closes the browser too** — put on the last line instead, an exception
+        # before it leaves it open, and the leftover Chromium ruins another measurement.
         with sync_playwright() as p, browser_of(p, headed=headed) as browser:
-            # 헤드리스 Chromium 은 기본으로 WebGPU 어댑터를 안 준다 — 요청하면
-            # 예외가 아니라 null 이 온다. 예전 TF.js 판에서는 이 문제가 안 보였다.
-            # 못 얻으면 WebGL 로 조용히 내려갔기 때문이다 — 안 보이는 것이 나은
-            # 것이 아니라, 그때 잰 수가 GPU 의 것이 아니었다.
+            # Headless Chromium gives no WebGPU adapter by default — ask and null comes
+            # back rather than an exception. The old TF.js build never showed this
+            # problem, because failing to get one it dropped quietly to WebGL — which is
+            # not better for being invisible: the numbers measured then were not the
+            # GPU's.
             page = browser.new_page()
             page.set_default_timeout(0)
-            # 셰이더 컴파일 오류는 콘솔로만 나온다. 삼키면 원인을 못 찾는다.
+            # Shader compile errors come out on the console alone. Swallow them and the
+            # cause cannot be found.
             page.on("console", on_console)
             page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
-            # 설명 안 된 404 는 덮어두면 안 된다 — 이 저장소의 러너가 한 번
-            # 404 HTML 을 파이썬 파일로 받아 엉뚱한 자리에서 터진 적이 있다.
+            # An unexplained 404 must not be papered over — a runner in this repository
+            # once took 404 HTML as a Python file and blew up somewhere else entirely.
             page.on("response", lambda r: print(f"  [404] {r.url}")
                     if r.status == 404 else None)
             page.goto(url)
@@ -205,10 +224,10 @@ def run(headed=False, verbose=False):
                 page.wait_for_function("window.__borchReport !== undefined",
                                        timeout=TIMEOUT_MS)
             except Exception:
-                where = last[-1] if last else "(한 건도 시작 못 했다)"
-                print(f"보고서가 안 나왔다. 마지막으로 시작한 케이스: {where}\n"
-                      f"  {len(last)}건을 시작했다 — 그 케이스가 안 끝난 것이다.",
-                      file=sys.stderr)
+                where = last[-1] if last else "(not one of them started)"
+                print(f"no report came out. last case started: {where}\n"
+                      f"  {len(last)} started — that case is the one that never "
+                      "finished.", file=sys.stderr)
                 raise
             report = page.evaluate("window.__borchReport")
     finally:
@@ -216,216 +235,257 @@ def run(headed=False, verbose=False):
     return report
 
 
-# 안 옮긴 까닭. **접두어마다 이유와 개수가 있어야 한다.**
+# Why they were not ported. **Every prefix owes a reason and a count.**
 #
-# 오래 "N 건은 일부러 안 옮겼다" 한 줄이었다. 그 문장 안에 세 가지가 섞여 있었다 —
-# 정말 옮길 값이 없는 것, 아직 안 옮긴 것, 그리고 **borch.ts 에 아예 없는 것.**
-# 개수만 찍으니 셋이 화면에서 똑같이 보였고, 실제로 `rnntop::` 35 건이 빠뜨린
-# 것인 채로 그 안에 있었다. 여기 적고 나서야 `opt::LBFGS` 와 `index::searchsorted`
-# 가 **없는 이름**이라는 것이 드러났다.
+# For a long time this was one line: "N cases were deliberately not ported". Three
+# different things were mixed inside that sentence — what has no value to port, what has
+# not been ported yet, and **what is not in borch.ts at all.** Printing the count alone
+# made the three look identical on screen, and `rnntop::`, 35 cases, really was sitting
+# in there as something forgotten. Only once they were written out here did it come out
+# that `opt::LBFGS` and `index::searchsorted` were **absent names**.
 #
-# 개수는 **정확히 맞아야 한다.** 여유를 두면 새로 안 옮긴 케이스가 그 틈에 숨는다 —
-# 바로 그것이 이 검사가 막으려는 일이다. 케이스를 늘렸으면 옮기거나, 못 옮길
-# 까닭과 함께 수를 올려라.
+# The counts have to be **exact**. Leave slack and a newly unported case hides in the gap
+# — which is the very thing this check exists to stop. Grow the cases and either port
+# them or raise the number with the reason it cannot be ported.
 #
-# 표시:  별칭 = 옮기면 같은 질문을 두 번 한다
-#        파이썬 = 파이썬 표면의 것이라 TS 에 대응물이 없다
-#        아직 = 옮길 값이 있는데 안 옮겼다 (**밀린 일이다**)
-#        없음 = borch.ts 에 그 이름이 없다 (**결손이다**)
+# Markers:  별칭   = porting it asks the same question twice (alias)
+#           파이썬 = it belongs to the Python surface, with no TS counterpart (python)
+#           아직   = there is value in porting it and it has not been done (**a backlog**)
+#           없음   = the name is not in borch.ts (**a hole**)
+#
+# The four markers are keys rather than prose: `test_alias_rows.py` reads `별칭` off the
+# head of a reason string and `test_site.py` reads `아직` to split the remainder into
+# backlog and never. They move when those checks move, and not before.
 NOT_PORTED = {
-    # 104 → 103. `dtype::없는이름::` 이 물던 이름을 `narrow_copy`·`unsafe_chunk` 로
-    # 옮겼다 — 앞의 것은 torch 가 실제로 답해서 "없는 이름" 이 아니었다.
-    # 103 → 111 → 147 → 156 → 157. 형 별칭과 공장들이 `dtype=`·`requires_grad=` 를 실제로
-    # 듣는지 묻는 것들. **파이썬 쪽 이야기다** — borch.ts 는 형을 문자열로 받으므로
-    # `torch.float` 이라는 이름 자체가 없고, 공장도 `Tensor.zeros(shape)` 라 형을
-    # 인자로 안 받는다. 기울기도 저쪽은 `requiresGrad()` 를 따로 부른다.
+    # 104 → 103. What `dtype::없는이름::` was asking about moved to `narrow_copy` and
+    # `unsafe_chunk` — torch actually answers the earlier one, so it was no absent name.
+    # 103 → 111 → 147 → 156 → 157. Whether the dtype aliases and the factories really
+    # listen to `dtype=` and `requires_grad=`. **A Python-side matter** — borch.ts takes a
+    # dtype as a string, so the name `torch.float` does not exist at all, and its factories
+    # are `Tensor.zeros(shape)` and take no dtype argument. Gradients too: over there
+    # `requiresGrad()` is called separately.
     #
-    # 147 → 156 은 **열넷 밖에 남아 있던 아홉**이다. 창 함수 다섯이 `requires_grad=`
-    # 를 삼키고 있었고(조용히 기울기 없는 잎을 준다), 번호 만드는 넷이 `dtype=` 을
-    # 아예 안 받았다. 앞의 묶음이 목록으로 고쳐졌기에 그 목록 밖은 그대로였다.
-    # 156 → 157 은 `norm(dtype=)` — 축약 중 그것만 안 듣고 있었다.
-    # 157 → 160 은 `normal`·`frombuffer` 의 마지막 둘, 그리고 `frombuffer` 가 없는
-    # 형을 **조용히 float32 로 떨어뜨리던** 자리다. 후보를 `**kw` grep 으로 넷 뽑았는데
-    # torch 서명을 하나씩 보니 진짜는 둘이었다 — 목록을 기계로 만들면 아닌 것이 섞인다.
-    # 160 → 164 는 `out=` 을 삼키지 않고 멈추는지 묻는 넷이다. borch.ts 에는
-    # 그 인자가 아예 없다.
-    # 164 → 172. `out=` 을 **실제로 구현**했다(전에는 거절이 답이었다). 미리 만든
-    # 텐서에 쓰고 같은 객체를 돌려주는 것·모양이 다르면 다시 잡는 것·형과 기울기
-    # 거절. **파이썬 쪽 이야기다** — borch.ts 에는 `out=` 이라는 인자가 없다.
-    # 172 → 158. **이름 있는 형 바꾸기 열넷을 옮겼다.** 그중 여덟은 거절이 답이고,
-    # 그 자리에서 맞추는 것은 값이 아니라 **문구**다 — 이름이 없으면
-    # `'half' 이 없다` 가 나오는데 오타와 구별이 안 된다. 남은 158 은 옮길 수
-    # 없다: `자리만::`·`공장::`·`별칭::`·`out::` 은 전부 파이썬 서명 이야기이고
-    # borch.ts 는 형을 문자열로 받아 `torch.float` 이라는 이름 자체가 없다.
-    # 기울기 넷만 남았다. **파이썬 쪽 헬퍼가 잎을 만든다** — `_grad_of` 가 잎에
-    # 기울기가 도착했는지 확인하고 꺼내는 자리라 그 꼴을 TS 로 옮기면 두 벌이 된다.
-    # 값 열일곱은 옮겼고, 커널의 결함을 잡은 것도 그쪽이다.
-    "fft::": (4, "파이썬 — 기울기 헬퍼가 잎을 만드는 꼴"),
-    # 158 → 86. **까닭 하나가 여덟 묶음을 덮고 있었다.** "아직" 은 밀린 일이라는
-    # 뜻인데, 실제로 밀려 있던 것은 `자리만::` 63 과 `묻는것::` 9 뿐이었다 — 그 둘은
-    # `t.dtype` 하나만 묻는 순수한 저쪽 성질이라 진작 물었어야 했다. 옮겼다.
+    # 147 → 156 is **the nine that were left outside the fourteen**. Five window functions
+    # were swallowing `requires_grad=` (quietly handing back a leaf with no gradient) and
+    # four of the numbering factories did not take `dtype=` at all. The earlier batch had
+    # been mended as a list, so what lay outside that list stayed as it was.
+    # 156 → 157 is `norm(dtype=)` — alone among the reductions in not listening.
+    # 157 → 160 is the last two of `normal` and `frombuffer`, and the place `frombuffer`
+    # was **quietly dropping an unknown dtype to float32**. Four candidates came out of a
+    # `**kw` grep and reading torch's signatures one by one left two — build the list
+    # mechanically and things that do not belong come with it.
+    # 160 → 164 is the four asking whether `out=` is refused rather than swallowed.
+    # borch.ts has no such argument at all.
+    # 164 → 172. `out=` was **actually implemented** (refusal used to be the answer):
+    # writing into a tensor made in advance and returning that same object, re-taking it
+    # when the shape differs, refusing on dtype and on gradient. **A Python-side matter** —
+    # there is no `out=` argument in borch.ts.
+    # 172 → 158. **Fourteen named dtype conversions were ported.** Refusal is the answer
+    # for eight of them, and what is pinned there is not a value but the **wording** — a
+    # missing name produces `'half' is not there`, which cannot be told from a typo. The
+    # remaining 158 cannot be ported: `자리만::`, `공장::`, `별칭::` and `out::` are all
+    # about Python signatures, and borch.ts takes a dtype as a string, so the name
+    # `torch.float` does not exist.
+    # Four gradient cases are left. **A Python-side helper is what makes the leaf** —
+    # `_grad_of` is where a leaf is checked for an arrived gradient and it is taken out, so
+    # carrying that shape into TS would make a second copy of it. The seventeen value cases
+    # were ported, and it was those that caught a defect in the kernel.
+    "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
+    # 158 → 86. **One reason was covering eight groups.** `아직` means a backlog, and
+    # what was actually backed up was `자리만::` 63 and `묻는것::` 9 alone — both pure
+    # properties of the other side, asking `t.dtype` and nothing else, and both should have
+    # been asked long before. Ported.
     #
-    # 나머지는 밀린 것이 아니라 **물을 자리가 없는 것**이다:
+    # The rest is not backlog but **nowhere to ask it**:
     #
-    #   `공장::` 40  — 저쪽 공장이 `dtype=`·`requires_grad=` 를 안 받는다. torch 는
-    #                  `zeros(3, dtype=int64)` 인데 이쪽은 만들고 나서 바꾸는 두
-    #                  단계다. 표 어디에도 안 적혀 있던 API 차이이고, 여기가 그 기록이다.
-    #   `별칭::` 16  — `torch.float` 이라는 이름 자체가 없다(형이 문자열이다).
-    #   `out::`  12  — `out=` 인자가 없다. 흉내 내면 절약이 안 일어난다.
-    #   `없는이름::` 11 · `조밀에도답::` 6 · `없는형::` 1 — 파이썬 표면.
-    "dtype::": (86, "파이썬·설계 — 공장의 `dtype=`, 형 별칭, `out=`"),
-    # 이 수가 82 에서 88 로 뛰는 것을 이 검사가 **붙인 날 잡았다** —
-    # `x.real`·`x.device` 를 속성으로 바꾼 묶음이 케이스를 여섯 늘렸다.
-    # 88 → 116. 술어 스무 개와 짝 없는 제자리 판 여덟을 넣었다. 둘 다 **파이썬
-    # 표면의 이야기**다 — `is_cuda` 는 borch.ts 에 물을 자리가 없고, `apply_`·`map_`
-    # 는 칸마다 파이썬 함수를 거는 것이라 GPU 로는 못 한다.
-    # 116 → 144. 저장을 들여다보는 것(`stride`·`nbytes`)·전치의 세 이름·`new_*`·
-    # `retain_grad` 를 넣었다. **여기 있는 이유가 갈래마다 다르다** — `stride` 는
-    # 저쪽이 뷰를 안 만들어 답이 갈리고(그 갈림 자체를 케이스로 뒀다), `new_*` 는
-    # 파이썬의 형 물려받기이고, `H`·`mT` 는 저쪽에 이름이 없다.
-    # 144 → 158. 희소 접근자 일곱(`values`·`indices`·`crow_indices` …)과 저장·양자화
-    # 쪽 없는 기능들, 그리고 `is_set_to`. **전부 거절이 답인 자리**다 — borch.ts 는
-    # 조밀 텐서만 다루므로 저쪽에 물을 자리 자체가 없다.
-    # 158 → 137. **한 까닭이 열넷을 덮고 있었다.** "별칭·파이썬" 은 큰 묶음
-    # (`술어::` 23 은 `is_cuda`·`is_mps` 류, `저장::` 10 은 `stride`·`layout`,
-    # 묶음 없는 47 은 사본 의미론)에 대해서는 맞았는데, 그 아래에 `분포::` 22 가
-    # 숨어 있었다 — 그리고 그중 **열다섯은 이쪽 코드가 안 하던 것**이었다.
+    #   `공장::` 40   — the factories over there take no `dtype=` or `requires_grad=`.
+    #                   torch writes `zeros(3, dtype=int64)`; here it is two steps, make it
+    #                   and then convert. An API difference written down in no table, and
+    #                   this is the record of it.
+    #   `별칭::` 16   — the name `torch.float` does not exist (a dtype is a string).
+    #   `out::` 12    — there is no `out=` argument. Imitated, it saves nothing.
+    #   `없는이름::` 11 · `조밀에도답::` 6 · `없는형::` 1 — the Python surface.
+    "dtype::": (86, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
+    # This number jumping from 82 to 88 was caught **the day the check went in** — the
+    # batch that turned `x.real` and `x.device` into properties grew the cases by six.
+    # 88 → 116. Twenty predicates and eight unpaired in-place variants went in. Both are
+    # **matters of the Python surface** — `is_cuda` has nowhere to be asked in borch.ts,
+    # and `apply_` and `map_` hang a Python function on every slot, which a GPU cannot do.
+    # 116 → 144. Looking into the storage (`stride`, `nbytes`), the three names for
+    # transpose, `new_*` and `retain_grad` went in. **They are here for different reasons
+    # by group** — `stride` parts because the other side makes no views (that parting is
+    # itself a case), `new_*` is Python's dtype inheritance, and `H` and `mT` are names
+    # that do not exist over there.
+    # 144 → 158. Seven sparse accessors (`values`, `indices`, `crow_indices` …), the
+    # missing storage and quantisation features, and `is_set_to`. **Refusal is the answer
+    # in every one** — borch.ts handles dense tensors only, so there is nowhere over there
+    # to ask it.
+    # 158 → 137. **One reason was covering fourteen.** "alias or python" was true of the
+    # big groups (`술어::` 23 is the `is_cuda`/`is_mps` kind, `저장::` 10 is `stride` and
+    # `layout`, and the ungrouped 47 is copy semantics), but `분포::` 22 was hidden
+    # underneath it — and **fifteen of those were things this code was not doing.**
     #
-    # 다섯 분포를 넣으면서 거절을 안 넣었다. 정수 칸에서 멈추지 않았고(연속 다섯은
-    # 멈춰야 한다), 인자 정의역을 안 봤다(`p` 는 열린 구간, `lambda` 는 양수). 스물하나를
-    # 옮기면서 그 셋을 채웠다. 남은 하나(`random_(int64) 의 상한`)는 **못 한다** —
-    # torch 는 2⁶² 인데 이쪽 int64 는 f32 칸에 담겨 2²⁴ 위를 못 센다.
+    # Five distributions went in without their refusals. They did not stop on an integer
+    # slot (the five continuous ones have to), and the argument domains were not looked at
+    # (`p` is an open interval, `lambda` is positive). Porting twenty-one filled those
+    # three in. The one left (`random_(int64)`'s upper bound) **cannot be done** — torch's
+    # is 2⁶², and int64 here sits in an f32 slot and cannot count above 2²⁴.
     #
-    # 나머지 116 은 정말 별칭·파이썬이다. `짝에서::` 40 중 저쪽에 이름이 있는 것은
-    # `i0_` 하나뿐인데, 그것들은 대개 torch 의 **둘째 철자**(`divide_`=`div_`)이거나
-    # 비트·논리 제자리 판이라 옮기면 같은 질문이 두 번이 된다.
-    # 137 → 97. `짝에서::` 40 을 옮겼다. 그 마흔이 "별칭" 으로 적혀 있었는데
-    # **별칭인 것은 열뿐이었다**(`divide_`=`div_` 같은 둘째 철자). 열일곱은 계산이
-    # 있는데 밑줄 이름만 없었고, 열하나는 커널 표에만 있어서 `binary("gcd", …)` 로만
-    # 닿았다 — torch 에서 옮겨 온 코드가 치는 줄은 `x.gcd(y)` 다.
+    # The other 116 really are alias or python. Of the 40 in `짝에서::` only `i0_` has a
+    # name over there, and they are mostly torch's **second spelling** (`divide_` = `div_`)
+    # or the in-place bitwise and logical variants, so porting them asks the same question
+    # twice.
+    # 137 → 97. The 40 in `짝에서::` were ported. They were written down as "alias", and
+    # **only ten of them were aliases** (second spellings like `divide_` = `div_`).
+    # Seventeen had the arithmetic and lacked only the underscore name, and eleven were in
+    # the kernel table alone, reachable only as `binary("gcd", …)` — while the line code
+    # transcribed from torch types is `x.gcd(y)`.
     #
-    # 남은 97 은 정말 파이썬이다: `술어::` 23(`is_cuda`·`is_mps`), `저장::` 10
-    # (`stride`·`layout`), 묶음 없는 47(사본 의미론·`from_numpy`), `희소::` 5.
-    "inplace::": (97, "파이썬 — 뷰·공유·속성·술어·저장 들여다보기"),
-    # `method2::` 이 여기 있었다 — 60 건, "별칭 — `multiply`=`mul` 처럼 파이썬의
-    # 둘째 이름". 별칭인 것은 그중 일부였고, **아홉은 저쪽에 이름이 아예 없었다**
-    # (`fmax`·`vdot`·`moveaxis`·`t`·`broadcast_to`·비교 넷). 넣고 전부 옮겼다.
+    # The remaining 97 really are python: `술어::` 23 (`is_cuda`, `is_mps`), `저장::` 10
+    # (`stride`, `layout`), the ungrouped 47 (copy semantics, `from_numpy`), `희소::` 5.
+    "inplace::": (97, "파이썬 — views, sharing, properties, predicates, storage"),
+    # `method2::` used to be here — 60 cases, "alias — Python's second name, as
+    # `multiply` = `mul`". Some of them were aliases, and **nine had no name over there at
+    # all** (`fmax`, `vdot`, `moveaxis`, `t`, `broadcast_to`, four comparisons). They went
+    # in and all of them were ported.
     #
-    # 옮기다가 둘이 더 나왔다. `fmax`·`fmin` 은 결속에만 있던 조립이었고,
-    # `remainder` 는 수만 받아서 `x.remainder(y)` 가 안 돌았다 — **있는데 좁은
-    # 이름**은 없는 이름보다 찾기 어렵다.
-    # 48 → 9. 복소수의 이웃 서른아홉을 옮겼다 — `real`·`conj`·`conjPhysical`·
-    # `resolveConj`·`resolveNeg`·`angle` 을 세 형에 값과 형으로 물었고, 판정 셋도.
-    # 없던 넷(`resolveConj`·`resolveNeg`·`isConj`·`isNeg`)은 만들었다. **게으른
-    # 켤레 비트가 없다는 것은 구현의 사정이지 그 물음이 뜻을 잃는 이유가 아니다.**
+    # Porting turned up two more. `fmax` and `fmin` were assemblies that lived only in the
+    # binding, and `remainder` took a number alone, so `x.remainder(y)` did not run — **a
+    # name that is there but narrow** is harder to find than one that is absent.
+    # 48 → 9. Thirty-nine neighbours of the complex numbers were ported — `real`, `conj`,
+    # `conjPhysical`, `resolveConj`, `resolveNeg` and `angle`, asked by value and by dtype
+    # across three dtypes, and three judgements besides. The four that did not exist
+    # (`resolveConj`, `resolveNeg`, `isConj`, `isNeg`) were built. **Having no lazy
+    # conjugate bit is a circumstance of the implementation, not a reason for the question
+    # to lose its meaning.**
     #
-    # 남은 아홉은 **저쪽에 그 공장이 없다** — `range`(끝을 포함한다)·`frombuffer`·
-    # `asarray`. 앞의 둘은 이름 자체가 없고, `asarray` 는 TS 에서 `Tensor.from` 이
-    # 그 자리다. 그리고 `arange` 는 인자를 **하나만** 받는다(torch 는 셋).
-    # 9 → 2. `range`·`frombuffer` 를 저쪽에 넣었고 `arange` 도 인자 셋을 받는다.
-    # 남은 둘은 `asarray` 로, numpy 배열과 파이썬 목록을 받는 자리라 TS 에 없다.
-    "make::": (2, "파이썬 — `asarray` 는 ndarray·목록을 받는다. 저쪽엔 그 둘이 없다"),
-    # 47 → 50. `finfo`·`iinfo` 의 **종류**와 인자 없는 기본형. 파이썬 쪽
-    # 이야기다 — borch.ts 에는 그 두 이름이 없다.
-    # 50 → 39. **까닭이 열하나만 설명하고 있었다.** "최상위 제자리 함수" 는
-    # `제자리::` 열(떨구기 넷과 `nan_to_num_`)의 이야기였고, 그 넷은 저쪽에 이름이
-    # 없어서 못 옮기던 것이었다 — 넣고 옮겼다.
+    # The nine left are **factories that do not exist over there** — `range` (it includes
+    # the end), `frombuffer` and `asarray`. The first two have no name at all, and
+    # `Tensor.from` is what stands where `asarray` does in TS. And `arange` took **one**
+    # argument (torch takes three).
+    # 9 → 2. `range` and `frombuffer` went in over there and `arange` takes three arguments
+    # now. The two left are `asarray`, which takes a numpy array or a Python list, and TS
+    # has neither.
+    "make::": (2, "파이썬 — `asarray` takes an ndarray or a list; TS has neither"),
+    # 47 → 50. The **kinds** of `finfo` and `iinfo`, and the no-argument default dtype. A
+    # Python-side matter — neither name is in borch.ts.
+    # 50 → 39. **The reason was explaining only eleven of them.** "top-level in-place
+    # functions" was about the ten in `제자리::` (the four dropouts and `nan_to_num_`), and
+    # those four could not be ported because they had no name over there — they went in and
+    # were ported.
     #
-    # 남은 39 는 **파이썬 표면**이고 성격이 셋으로 갈린다:
+    # The 39 left are **the Python surface**, and they part into three kinds:
     #
-    #   `살펴보기::` 16 — `finfo`·`iinfo`·`can_cast`·`promote_types`·`typename`.
-    #                     형을 값으로 들여다보는 일이라 형이 문자열인 저쪽에 자리가 없다.
-    #   `device::`   9  — `torch.device` 는 `.type`·`.index` 를 가진 **객체**다.
-    #                     저쪽 `t.device` 는 문자열이고, 어댑터를 내는 `device()` 는
-    #                     아예 다른 함수다.
-    #   나머지 14   — `resize_as_`(손잡이를 갈아 끼운다) · `inference_mode`(with 문) ·
-    #                 난수 상태 왕복 · 정수 열거형을 받는 최상위 서명들.
-    "top::": (39, "파이썬 — 형 들여다보기, `device` 객체, with 문, 정수 열거형 서명"),
-    # `spot::` 이 여기 있었다 — 47 건, "아직". 전부 옮겼으므로 줄을 지운다.
-    "toplin::": (42, "별칭 — `lu`=`linalg.lu_factor` 처럼 최상위의 둘째 이름"),
-    # `stat::` 이 여기 있었다 — 42 건. 31 건은 그냥 안 물어본 것이었고, 나머지 11 은
-    # **이름이 저쪽에 없어서** 못 옮기던 것이라 그 다섯을 borch.ts 에 넣었다.
-    # `keep::` 이 여기 있었다 — 35 건, "아직". 전부 옮겼으므로 줄을 지운다.
+    #   `살펴보기::` 16 — `finfo`, `iinfo`, `can_cast`, `promote_types`, `typename`.
+    #                     Looking into a dtype as a value, which has nowhere to sit over
+    #                     there, where a dtype is a string.
+    #   `device::` 9    — `torch.device` is an **object** with `.type` and `.index`.
+    #                     `t.device` over there is a string, and `device()`, which hands
+    #                     back the adapter, is an entirely different function.
+    #   the other 14    — `resize_as_` (it swaps the handle out) · `inference_mode` (a with
+    #                     statement) · round-tripping the random state · top-level
+    #                     signatures taking an integer enum.
+    "top::": (39, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
+    # `spot::` used to be here — 47 cases, `아직`. All ported, so the row is gone.
+    "toplin::": (42, "별칭 — a top-level second name, as `lu` = `linalg.lu_factor`"),
+    # `stat::` used to be here — 42 cases. 31 of them had simply never been asked, and the
+    # other 11 could not be ported because **the name was not over there**, so those five
+    # went into borch.ts.
+    # `keep::` used to be here — 35 cases, `아직`. All ported, so the row is gone.
     #
-    # 옮겨 보니 **값은 서른네 건이 첫 시도에 맞았다.** 축약의 `dtype=` 은 "넣기 전에
-    # 바꾼다" 는 규칙도, `sum(→bool)` 은 되고 `cumsum(→bool)` 은 안 된다는 갈림도
-    # 이미 지켜지고 있었다. 안 지켜진 것은 하나 — **`sum` 만 `dtype=` 을 받을 자리가
-    # 없었다.** 이웃(`mean`·`prod`·`nansum`·`cumsum`·`sumDim`)이 전부 받는데
-    # 축약에서 제일 많이 불리는 이름 하나가 빠져 있었다.
-    # `blend::` 가 여기 있었다 — 34 건. 전부 옮겼으므로 줄을 지운다.
+    # Porting them showed **thirty-four values right on the first try.** The reductions'
+    # `dtype=` rule (convert before accumulating) was already held, and so was the parting
+    # where `sum(→bool)` is allowed and `cumsum(→bool)` is not. One thing was not held —
+    # **`sum` alone had nowhere to take `dtype=`.** Its neighbours (`mean`, `prod`,
+    # `nansum`, `cumsum`, `sumDim`) all took it, and the one name called most often of all
+    # the reductions was missing it.
+    # `blend::` used to be here — 34 cases. All ported, so the row is gone.
     #
-    # **서른넷이 첫 시도에 맞았다.** `beta=0` 이 값에서는 빠지고 그래프에는 남는
-    # 자리도, `input` 이 `(4,)` 나 스칼라로 퍼지는 자리도, 제자리 판이 자기를
-    # 돌려주는 자리도 이미 옳았다. 여기서는 결손이 안 나왔다 — **묻지 않았을 뿐인
-    # 곳과 틀린 곳은 다르고, 그 둘은 물어봐야 갈린다.**
-    "fname::": (28, "별칭 — `F` 의 제자리 판. 메서드 쪽에서 이미 묻는다"),
-    # `bit::` 이 여기 있었다 — 24 건, "별칭 — 비트 연산의 메서드 이름". 그 이름들이
-    # **저쪽에 없었다는 것이 요점이었는데** 까닭이 그것을 별칭이라 불렀다. 넣고 전부
-    # 옮겼으므로 줄을 지운다.
+    # **Thirty-four right on the first try.** Where `beta=0` drops out of the value and
+    # stays in the graph, where `input` broadcasts as `(4,)` or as a scalar, where an
+    # in-place variant returns itself — all already correct. No hole came out here — **a
+    # place that was merely never asked is not the same as a place that is wrong, and
+    # asking is what separates the two.**
+    "fname::": (28, "별칭 — `F`'s in-place variants. The method side asks them already"),
+    # `bit::` used to be here — 24 cases, "alias — the method names of the bit
+    # operations". **The point was that those names were not over there**, and the reason
+    # called them aliases. They went in and all were ported, so the row is gone.
     #
-    # 옮기다가 `bitwise_not(참거짓)` 이 갈렸다: 커널 주석이 "참거짓이면 논리 부정이고
-    # 그 갈림은 결속이 한다" 고 적어 두었는데, 그러면 TypeScript 쪽은 `-2` 를 받는다 —
-    # **없는 답이 아니라 틀린 답**이다. 갈림을 저쪽으로 옮겼다.
-    # **"대부분 `repr`" 이 아니었다.** `--show unpool` 로 펴 보니 스물둘 중 `repr` 은
-    # 여섯뿐이고, 나머지 열넷은 값·기울기·모양을 묻는다. 그리고 그 이름들이
-    # borch.ts 에 **이미 있다** — `CTCLoss`·`FractionalMaxPool`·
-    # `AdaptiveLogSoftmaxWithLoss` 셋 다 클래스가 서 있고 케이스만 안 왔다.
+    # Porting them parted `bitwise_not(bool)`: a kernel comment had written down that "on
+    # bool this is logical negation and the binding does the parting" — which leaves the
+    # TypeScript side receiving `-2`. **Not a missing answer but a wrong one.** The parting
+    # moved over there.
+    # **It was not "mostly `repr`".** Laid out with `--show unpool`, six of the twenty-two
+    # are `repr` and the other fourteen ask values, gradients and shapes. And those names
+    # are **already in** borch.ts — `CTCLoss`, `FractionalMaxPool` and
+    # `AdaptiveLogSoftmaxWithLoss` all stand as classes and only the cases never came.
     #
-    # 한 줄로 굳은 까닭은 그 안에서 성격이 갈려도 안 보인다. 이 줄이 그것을 여섯 번째로
-    # 보여줬고, 그래서 수를 성격별로 적는다.
-    "unpool::": (20, "**아직**(값 14 — CTCLoss·FractionalMaxPool·적응형softmax 는 "
-                     "이름이 서 있고 케이스만 안 왔다) · repr 6 은 파이썬 쪽 글자다"),
-    # `linalg::` 이 여기 있었다 — 17 건. 열여섯은 그냥 안 물어본 것이었고, 하나
-    # (`ldl_factor_ex`)는 결속이 자리 셋을 손으로 세우고 있어서 못 물던 것이다.
-    "grad::": (12, "별칭 — vjp 는 `backward(seed)` 이고 parity 가 이미 묻는다"),
-    "cplx::": (10, "파이썬 — 복소수 `repr` 은 파이썬 formatter 의 것이다"),
-    # 버퍼 케이스 열 중 다섯은 옮겼고(등록·저장 제외·목록·값 왕복), 다섯이 남았다.
-    # **남은 것의 까닭이 둘로 갈린다.** `InstanceNorm` 셋은 borch.ts 에 그 **층**이
-    # 없어서다 — 텐서 메서드 `instanceNorm` 은 있고 층은 파이썬 쪽에서 세운다.
-    # 손실 둘은 거절을 묻는 케이스인데, TypeScript 에서는 없는 인자를 주는 것이
-    # 실행 중 거절이 아니라 **컴파일 오류**라 물을 자리가 없다.
-    "container::": (5, "파이썬 — InstanceNorm 층은 결속이 세우고, 거절은 파이썬 인자다"),
-    # `torch.pi`·`inf`·`nan`·`newaxis` 는 **파이썬 최상위의 값**이다. borch.ts 는
-    # 모듈이 아니라 클래스 묶음이고, JS 에는 `Math.PI`·`Infinity`·`null` 이 이미
-    # 있어서 같은 이름을 다시 낼 자리가 없다 — `x[:, None]` 도 저쪽에서는
-    # `unsqueeze(1)` 이라 색인 문법 자체가 파이썬 쪽 이야기다.
-    "const::": (6, "파이썬 — 최상위 값과 색인 문법. JS 에는 그 자리가 없다"),
-    # 5 → 2. `searchSorted`·`bucketize` 가 생겼다(이진 탐색 커널 하나). 남은 둘은
-    # **거절**이고 파이썬 쪽 이야기다 — torch 가 같은 것을 `right`(참거짓)와
-    # `side`(글자) 두 이름으로 받고, 그 둘이 어긋나면 멈춘다. borch.ts 는 `right`
-    # 하나만 알므로 어긋날 짝이 없다.
-    "index::": (2, "파이썬 — `side` 와 `right` 를 맞춰 보는 일. TS 는 하나만 안다"),
-    # 4 → 10. "이어서 학습하기" 여섯이 늘었다. **저것들은 borch.ts 를 이미 밟는다** —
-    # 결속의 옵티마이저·스케줄러가 저쪽 것을 그대로 부르므로 `--lib borch_webgpu`
-    # 로 도는 그 여섯이 곧 borch.ts 의 `StepLR`·은행 왕복을 재는 것이고, TS 쪽
-    # `serialize` 가 같은 것을 바이트로 한 번 더 붙잡는다. 넷은 여전히 `LBFGS` 다.
-    # 10 → 14. `save`/`load` 왕복 넷이 늘었다. **TS 쪽은 `serialize` 가 이미
-    # 바이트로 묻는다** — 같은 코덱을 왕복시키고, 남이(numpy·파이썬 `borch`) 읽는지
-    # 까지 확인한다. 골든으로 한 번 더 묻는 것은 파이썬의 `torch.save(경로)` 표면
-    # 이고 borch.ts 는 바이트만 다루므로(파일은 페이지의 일이다) 물을 자리가 없다.
-    # 14 → 17. LBFGS 케이스 셋이 늘었다 — 기존 셋이 **준뉴턴 부분을 한 번도 안
-    # 밟고 있었다.** 닫힘이 기울기를 상수로 넣어 주어서 `y = 0`, `ys = 0` 이고
-    # 이력에 아무것도 안 쌓였다. 이름은 LBFGS 인데 재는 것은 첫 반복의 경사하강뿐.
+    # A reason frozen into one line hides the kinds parting inside it. This row showed that
+    # for the sixth time, which is why the counts are written out by kind.
+    "unpool::": (20, "**아직**(14 values — CTCLoss, FractionalMaxPool and the adaptive "
+                 "softmax stand as names and only the cases never came) · the 6 repr "
+                 "cases are Python's own lettering"),
+    # `linalg::` used to be here — 17 cases. Sixteen had simply never been asked, and one
+    # (`ldl_factor_ex`) could not be asked because the binding was standing three of its
+    # slots up by hand.
+    "grad::": (12, "별칭 — a vjp is `backward(seed)`, and parity asks it already"),
+    "cplx::": (10, "파이썬 — a complex `repr` belongs to Python's formatter"),
+    # Five of the ten buffer cases were ported (registration, keeping one out of the
+    # state, listing, a value round trip) and five are left. **The reason parts in two for
+    # what remains.** The three `InstanceNorm` cases are here because borch.ts has no such
+    # **layer** — the tensor method `instanceNorm` is there and the layer is stood up on
+    # the Python side. The two loss cases ask about a refusal, and in TypeScript passing an
+    # argument that does not exist is a **compile error** rather than a refusal at run
+    # time, so there is nowhere to ask it.
+    "container::": (5, "파이썬 — the binding stands the InstanceNorm layer up, and the "
+                       "refusal is a Python argument"),
+    # `torch.pi`, `inf`, `nan` and `newaxis` are **values at Python's top level**. borch.ts
+    # is a bundle of classes rather than a module, and JS already has `Math.PI`, `Infinity`
+    # and `null`, so there is nowhere to offer the same names again — `x[:, None]` is
+    # `unsqueeze(1)` over there too, so the indexing syntax itself is a Python matter.
+    "const::": (6, "파이썬 — top-level values and indexing syntax. JS has no seat for it"),
+    # 5 → 2. `searchSorted` and `bucketize` arrived (one binary-search kernel). The two
+    # left are **refusals** and a Python matter — torch takes the same thing under two
+    # names, `right` (a boolean) and `side` (a word), and stops when the two disagree.
+    # borch.ts knows `right` alone, so there is no partner to disagree with.
+    "index::": (2, "파이썬 — reconciling `side` with `right`. TS knows only one"),
+    # 4 → 10. Six "resume training" cases arrived. **Those already tread on borch.ts** —
+    # the binding's optimizers and schedulers call the ones over there as they are, so
+    # those six running under `--lib borch_webgpu` are measuring borch.ts's `StepLR` and
+    # its state-bank round trip, and `serialize` on the TS side pins the same thing again
+    # in bytes. Four were still `LBFGS`.
+    # 10 → 14. Four `save`/`load` round trips arrived. **On the TS side `serialize`
+    # already asks it in bytes** — it round-trips the same codec and goes as far as
+    # checking whether others (numpy, Python `borch`) can read it. Asking it once more
+    # through the golden is Python's `torch.save(path)` surface, and borch.ts handles bytes
+    # alone (files are the page's business), so there is nowhere to ask it.
+    # 14 → 17. Three LBFGS cases arrived — the existing three **never trod on the
+    # quasi-Newton part at all.** The closure fed the gradient in as a constant, so `y = 0`
+    # and `ys = 0` and nothing accumulated in the history. The name was LBFGS and what was
+    # measured was the first iteration's gradient descent, and nothing else.
     #
-    # **borch.ts 에 없는 이유가 "안 만들었다" 가 아니다.** 이 알고리즘은 제어 흐름이
-    # 값에 달렸는데(`ys > 1e-10`, 수렴 판정) 저쪽 읽기는 전부 비동기다 — 동기
-    # `step()` 안에서 GPU 위의 수를 볼 수가 없다. 결속은 `run_sync` 가 있어서 된다.
-    # 넣으려면 `async step(closure)` 가 되어야 하고, 그러면 저쪽에서 **혼자만
-    # 비동기인 옵티마이저**가 된다.
-    # `opt::` 는 **한 줄도 안 남았다.** 적혀 있던 까닭 셋이 차례로 틀렸다 —
-    # "LBFGS 는 동기 step 으로는 못 쓴다"(사실이지만 결론이 틀렸다: `step` 을
-    # 비동기로 두면 된다), "이어서 학습은 결속이 밟는다"(아예 사실이 아니었다),
-    # "save/load 는 평평한 텐서 표만 받는다"(그때는 사실이었고, 이제 나무를 든다).
-    # `vision::` 이 목록에 없어서 케이스들이 **까닭 없이** 남아 러너가 거절했다
-    # (`fda5540` 이후). 한 줄로 "아직" 이라고만 적으면 그 안에서 성격이 갈리는 것이
-    # 안 보이므로 나눠 적는다 — 이 파일이 접두어별로 나눠 적는 것과 같은 이유가
-    # 한 칸 더 안쪽에 있다.
+    # **The reason it is not in borch.ts is not "nobody built it".** This algorithm's
+    # control flow depends on values (`ys > 1e-10`, the convergence test) and every read
+    # over there is asynchronous — a number on the GPU cannot be looked at from inside a
+    # synchronous `step()`. The binding manages because it has `run_sync`. Putting it in
+    # would mean `async step(closure)`, and then it would be **the one asynchronous
+    # optimizer** over there.
+    # `opt::` has **no line left at all.** The three reasons written down were each wrong
+    # in turn — "LBFGS cannot be used from a synchronous step" (true, and the conclusion
+    # was wrong: make `step` asynchronous), "resuming training treads on the binding"
+    # (simply untrue), "save/load takes a flat tensor table only" (true then; it carries a
+    # tree now).
+    # `vision::` was not in the list, so its cases were left **with no reason** and the
+    # runner refused them (after `fda5540`). Written as one line saying `아직`, the kinds
+    # parting inside it are invisible, so the counts are written out — the same reason this
+    # file splits by prefix, one level further in.
     #
-    # **42 → 38 이 그 나눔이 한 일이다.** 나눠 적었을 때 42 는 "밀린 일 38 + 결손 4"
-    # 였다. 결손 넷은 저쪽이 **이미 가진** 변환의 인자가 좁아서 못 맞추던 것이고
-    # (`Resize` 의 `max_size`, `describe()` 의 네 자리 중 둘, `RandomCrop` 의
-    # `padding` 기본값), `ae60832` 에서 고쳐져 넷 다 답을 냈다. 한 수로 적었다면
-    # 그 넷은 백로그로 계산돼 아무도 손대지 않았을 것이다.
+    # **42 → 38 is what that split did.** Written out, the 42 was "38 backlog + 4 holes".
+    # The four holes were conversions the other side **already had**, with arguments too
+    # narrow to match (`Resize`'s `max_size`, two of `describe()`'s four slots,
+    # `RandomCrop`'s `padding` default), and `ae60832` mended them so all four answered.
+    # Written as a single number, those four would have counted as backlog and nobody would
+    # have touched them.
     #
     # **The `vision::` row is gone: it reached 0 and this table's own rule is that a
     # row with nothing left must be deleted.**
@@ -451,29 +511,33 @@ NOT_PORTED = {
     # been carried. The other twenty-eight of torchvision's `ops` (RoI, FPN, detection
     # losses) do need a detector, and they are absent from the Python side too, so they
     # are not part of the debt this row records.
-    "ops::": (16, "아직 — 상자 기하 열하나. 순수 산술이라 옮기는 데 모델이 필요 없다"),
+    "ops::": (16, "아직 — the eleven box-geometry functions. Pure arithmetic, so "
+                  "carrying them across needs no model"),
     # 52 of the 71 are **repr strings**. v2 computes what v1 computes and differs only
     # in what it prints, and that difference is the whole reason these names are not a
     # re-export — so the strings are frozen as strings. The other 19 are values at the
     # settings where the draw has nothing to draw. Portable, both halves: the arithmetic
     # is v1's, already here, and a repr is a string comparison on either side.
-    "v2::": (71, "아직 — v2 이름 쉰둘의 repr, 그리고 뽑기를 멈춘 자리의 값 열아홉"),
-    "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
-    "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
+    "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
+                 "settings where the draw stops"),
+    "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
+    "dataconv::": (3, "파이썬 — `default_convert` and `get_worker_info` are Python's"),
 }
 
 
 def unasked_report(report, show=None):
-    """안 물어본 것을 **접두어로 묶어** 보여주고, 까닭 없는 것을 가려낸다.
+    """Show what was never asked **grouped by prefix**, and sift out what has no reason.
 
-    개수만 찍으면 그 수가 무엇으로 이루어졌는지 아무도 모른다. `679 건` 안에
-    "일부러 안 옮긴 것" 과 "빠뜨린 것" 이 섞여 있어도 화면은 똑같다.
+    Print the count alone and nobody knows what the number is made of. `679 cases` looks
+    exactly the same whether or not "deliberately not ported" and "forgotten" are mixed
+    inside it.
 
-    `show` 에 접두어를 주면 **그 자리의 이름을 전부 편다.** 개수와 한 줄짜리 까닭만
-    보고는 "무엇이 빠졌는지" 를 물을 수가 없었다 — 한 묶음을 옮기려면 먼저 그 목록을
-    봐야 하는데, 그 목록을 내주는 자리가 없어서 케이스 표를 손으로 뒤져야 했다.
-    까닭이 한 줄로 굳으면 그 안에서 성격이 갈려도 안 보인다는 것이 이 저장소가
-    접두어별로 나눠 적기 시작한 이유이고, 같은 이유가 한 칸 더 안쪽에도 있었다.
+    Give `show` a prefix and it **lays out every name in that seat.** From a count and a
+    one-line reason there was no way to ask "what is missing" — porting a group means
+    seeing its list first, and with nowhere handing that list over the case table had to be
+    searched by hand. That a reason frozen into one line hides the kinds parting inside it
+    is why this repository started writing the reasons out per prefix, and the same reason
+    was waiting one level further in.
     """
     import json
 
@@ -482,13 +546,13 @@ def unasked_report(report, show=None):
     rest = [n for n in doc["cases"] if n not in asked]
     groups = {}
     for name in rest:
-        head = name.split("::", 1)[0] + "::" if "::" in name else "(접두어 없음)"
+        head = name.split("::", 1)[0] + "::" if "::" in name else "(no prefix)"
         groups.setdefault(head, []).append(name)
 
     if show is not None:
         want = show if show.endswith("::") else show + "::"
         names = groups.get(want, [])
-        out = [f"  {want} 에서 안 물어본 것 {len(names)}건:"]
+        out = [f"  never asked in {want} — {len(names)}:"]
         out.extend(f"    · {n}" for n in sorted(names))
         return out
 
@@ -497,66 +561,69 @@ def unasked_report(report, show=None):
     for head, names in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         entry = NOT_PORTED.get(head)
         if entry is None:
-            lines.append(f"    ✘ {head:18s} {len(names):>4}건  "
-                         f"**까닭이 안 적혀 있다**  [{names[0]}]")
-            surprise.append(f"{head} ({len(names)}건, 까닭 없음)")
+            lines.append(f"    ✘ {head:18s} {len(names):>4}  "
+                         f"**no reason is written down**  [{names[0]}]")
+            surprise.append(f"{head} ({len(names)}, no reason)")
             continue
         frozen, why = entry
         mark = " " if len(names) == frozen else "✘"
-        lines.append(f"    {mark} {head:18s} {len(names):>4}건  {why}")
+        lines.append(f"    {mark} {head:18s} {len(names):>4}  {why}")
         if len(names) != frozen:
-            surprise.append(f"{head} (적힌 것 {frozen}, 실제 {len(names)})")
+            surprise.append(f"{head} (written {frozen}, actual {len(names)})")
     if lines:
-        lines.insert(0, "  안 물어본 것 — 접두어별:")
-    # 목록에 있는데 하나도 안 남은 것은 **다 옮긴 것**이다. 그 줄은 지워야 한다 —
-    # 안 지우면 다음 사람이 아직 안 옮긴 줄로 읽는다.
+        lines.insert(0, "  never asked — by prefix:")
+    # A row in the list with nothing left under it is **fully ported**. That row has to be
+    # deleted — left standing, the next person reads it as work not yet done.
     for head, (frozen, _) in NOT_PORTED.items():
         if head not in groups:
-            surprise.append(f"{head} (전부 옮겼다 — 목록에서 지워라)")
+            surprise.append(f"{head} (all ported — delete the row)")
     if surprise:
-        lines.append("  ✘ 맞춰지지 않는 자리: " + " · ".join(surprise))
-        lines.append("     옮겼으면 수를 내리고, 못 옮겼으면 까닭과 함께 올려라.")
+        lines.append("  ✘ places that do not reconcile: " + " · ".join(surprise))
+        lines.append("     Ported, lower the number; not ported, raise it with the "
+                     "reason.")
     return lines
 
 
 def main(argv):
     dist = ROOT / "borch-ts" / "dist" / "test" / "golden.js"
     if not dist.exists():
-        # 낡은 dist 로 도는 것보다 안 도는 편이 낫다.
+        # Better not to run at all than to run on a stale dist.
         print(f"no emit: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
     report = run(headed="--headed" in argv, verbose="--verbose" in argv)
     if "error" in report:
-        print(f"돌지 못했다: {report['error']}", file=sys.stderr)
+        print(f"it could not run: {report['error']}", file=sys.stderr)
         return 1
 
-    # **어느 장치에서 돌았는지 먼저 적는다.** 값은 장치가 안 바꾸지만, 안 적어두면
-    # 성능을 재는 쪽이 헤드리스의 소프트웨어 어댑터를 진짜 GPU 로 착각한다 —
-    # 이 저장소에서 실제로 그렇게 됐다.
-    adapter = report.get("adapter", "(모름)")
-    print(f"어댑터: {adapter}")
-    # **여기서는 막지 않는다.** 골든은 값을 묻고 값은 장치가 안 바꾸므로, CPU 에서
-    # 통과해도 그것은 진짜 통과다. 다만 그 통과가 증명하는 범위가 좁아지므로 적는다 —
-    # 실제로 리눅스 GPU 서버에서 845/845 를 받고 "다른 벤더에서 확인했다"고 읽을
-    # 뻔했는데 어댑터가 `google / swiftshader` 였다.
-    warn_if_software(adapter, "값")
+    # **Say which device it ran on, first.** The device does not change the values, but
+    # left unsaid, whoever measures performance mistakes a headless software adapter for a
+    # real GPU — which is what happened in this repository.
+    adapter = report.get("adapter", "(unknown)")
+    print(f"adapter: {adapter}")
+    # **It does not block here.** The golden asks about values and the device does not
+    # change them, so passing on a CPU is a real pass. It is written down because what that
+    # pass proves is narrower — 845/845 really did come back from a Linux GPU server and
+    # was nearly read as "confirmed on another vendor" when the adapter was
+    # `google / swiftshader`.
+    warn_if_software(adapter, "the values")
     gap = report["total"] - report["registered"]
-    print(f"골든 {report['total']}건 중 {report['registered']}건을 TS 로 썼다 "
-          f"— {gap}건은 아직 안 물었다.")
+    print(f"{report['registered']} of the golden's {report['total']} are written in TS "
+          f"— {gap} have not been asked yet.")
     show = argv[argv.index("--show") + 1] if "--show" in argv else None
     gap_lines = unasked_report(report, show)
     for line in gap_lines:
         print(line)
     gap_ok = not any("✘" in line for line in gap_lines)
     for name in report["unknown"]:
-        print(f"  ? 이름이 골든에 없다: {name}")
+        print(f"  ? the name is not in the golden: {name}")
     for f in report["failed"]:
         print(f"  ✘ {f['name']} — {f['why']}")
-    print(f"통과 {report['passed']} / 실패 {len(report['failed'])}")
+    print(f"passed {report['passed']} / failed {len(report['failed'])}")
 
-    # **안 물어본 것도 실패다** — 까닭이 안 적혀 있거나 수가 안 맞으면.
-    # 골든이 자라는데 TS 쪽이 안 따라가는 것을 개수 한 줄로는 못 본다.
+    # **What was never asked is a failure too** — where no reason is written down or the
+    # numbers do not reconcile. One line of count cannot show the golden growing while the
+    # TS side fails to follow.
     ok = not report["failed"] and not report["unknown"] and gap_ok
     return 0 if ok else 1
 
