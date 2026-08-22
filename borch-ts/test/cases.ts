@@ -1,22 +1,25 @@
 /**
- * 골든 케이스의 **TypeScript 쪽 본문**.
+ * The golden cases' **bodies, on the TypeScript side.**
  *
- * `tests/golden.json` 은 답만 준다. 케이스 본문(`lambda L: L.acos(L.tensor(unit))`)은
- * 파이썬 코드이고 기계적으로 TS 가 되지 않으므로, 여기서 **같은 이름으로 다시 쓴다.**
- * 그 나눔이 골든을 언어 중립으로 만든 방식이다 — 비싼 절반(진짜 torch 를 돌려 얻은
- * 숫자)은 옮겨지고, 싼 절반(호출 한 줄)은 다시 쓴다.
+ * `tests/golden.json` carries the answers alone. A case body
+ * (`lambda L: L.acos(L.tensor(unit))`) is Python and does not mechanically become TS, so
+ * it is **rewritten here under the same name.** That division is what makes the golden
+ * language-neutral — the expensive half (numbers obtained by running real torch) is
+ * carried across and the cheap half (one line of calls) is rewritten.
  *
- * ## 이름이 맞아야 한다
+ * ## The names have to match
  *
- * 여기 적은 이름이 `golden.json` 의 키와 한 글자라도 다르면 그 케이스는 **조용히
- * 안 돌아간다.** 러너가 "등록됐는데 골든에 없는 이름"을 따로 세서 알리는 이유다 —
- * 오타로 0건을 돌리고 "전부 통과"라고 말하는 것이 이 프로젝트에서 제일 나쁜 결과다.
+ * A name written here that differs from `golden.json`'s key by one character makes that
+ * case **quietly not run.** It is why the runner separately counts and reports "registered
+ * and absent from the golden" — running 0 cases through a typo and saying "all passed" is
+ * the worst outcome in this project.
  *
- * ## 입력이 여기 있는 이유
+ * ## Why the inputs are here
  *
- * `math::` 계열이 쓰는 배열은 `golden_inputs()` 에 없고 `tests/cases.py` 안에 직접
- * 적혀 있다. 그래서 JSON 의 `inputs` 로 안 넘어온다 — 여기서 같은 값을 다시 적는다.
- * 값이 갈리면 대조가 대조가 아니게 되므로, 옮길 때 그대로 옮겼다.
+ * The arrays the `math::` family uses are not in `golden_inputs()`; they are written
+ * directly inside `tests/cases.py`. So they do not arrive through the JSON's `inputs` —
+ * the same values are written again here. Divergent values stop the comparison from being
+ * a comparison, so they were carried across verbatim.
  */
 
 import { type DType, dtypeName } from "../src/dtype.js";
@@ -33,31 +36,33 @@ import { LinAlgError } from "../src/errors.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
 /**
- * 케이스 하나.
+ * One case.
  *
- * 보통은 결과 텐서를 낸다. **문자열을 내는 것도 있다** — `equal` 이 참인가, 어떤
- * 예외가 나는가처럼 값이 아니라 판정을 굳힌 케이스다. 그런 것은 근사가 아니라
- * 정확히 같아야 한다.
+ * Usually it produces the resulting tensor. **Some produce a string** — cases that froze a
+ * verdict rather than a value, such as whether `equal` is true or which exception is
+ * raised. Those have to be exactly equal rather than approximately.
  */
 export type Case = () => Tensor | string | Promise<Tensor | string>;
 
-/** 골든이 실어 보낸 입력 하나. 값은 평평하고 모양이 따로 온다. */
+/** One input the golden carried across. The values are flat and the shape arrives
+ *  separately. */
 export interface RawInput {
   readonly shape?: number[];
   readonly values?: (number | boolean | null)[];
 }
 
 /**
- * 케이스가 함께 쓰는 입력.
+ * The inputs the cases share.
  *
- * **골든이 들고 온 것을 그대로 쓴다.** 여기서 배열을 다시 적으면 그 자리가 틀릴
- * 자리가 되고, 틀려도 화면에는 "우리 값이 다르다" 로만 뜬다. 굳힐 때 쓴 바로 그
- * 숫자를 쓰는 것이 대조를 대조로 만든다.
+ * **What the golden brought is used as it is.** Writing the arrays out again here makes
+ * that a place to be wrong, and being wrong shows on screen only as "our values differ".
+ * Using the very numbers the answers were frozen with is what makes the comparison a
+ * comparison.
  */
 export class Inputs {
   constructor(private readonly raw_: Readonly<Record<string, RawInput>>) {}
 
-  /** 매번 새 텐서를 만든다 — 케이스끼리 텐서를 나눠 쓰면 기울기가 쌓인다. */
+  /** A new tensor every time — cases sharing a tensor accumulate gradients. */
   get(name: string, requiresGrad = false): Tensor {
     const entry = this.raw_[name];
     if (!entry?.values) throw new Error(`골든에 입력 '${name}' 이 없다`);
@@ -66,7 +71,8 @@ export class Inputs {
     return Tensor.from(flat, entry.shape ?? [flat.length], { requiresGrad });
   }
 
-  /** 텐서로 안 만들고 값만. 이미지처럼 GPU 에 안 올리는 것이 쓴다. */
+  /** The values without making a tensor. Used by things that do not go to the GPU, such
+   *  as images. */
   raw(name: string): number[] {
     const entry = this.raw_[name];
     if (!entry?.values) throw new Error(`골든에 입력 '${name}' 이 없다`);
@@ -81,7 +87,7 @@ export class Inputs {
   }
 }
 
-// ── tests/cases.py 의 math_cases 가 쓰는 입력. 그대로 옮긴 것이다. ──────────
+// ── The inputs `math_cases` uses in tests/cases.py. Carried across verbatim. ──
 const plain = [0.5, 2.0, -1.5, 3.0];
 const unit = [0.2, 0.6, -0.9, 0.45]; // (-1, 1) 안
 const big = [1.5, 2.5, 3.0, 1.2]; // > 1
@@ -90,7 +96,8 @@ const other = [1.0, 2.0, -3.0, 0.5];
 const logitIn = [0.2, 0.6, 0.35, 0.45]; // (0, 1) 안
 const weights = [1.0, 2.0, 3.0, 4.0]; // 자리마다 다른 가중치
 
-/** 함수마다 정의역이 다르다. 밖에서 부르면 NaN 이고, NaN 은 대조가 안 된다. */
+/** Each function has its own domain. Called outside it the answer is NaN, and NaN cannot
+ *  be compared. */
 const DOMAIN: Readonly<Record<string, readonly number[]>> = {
   acos: unit, asin: unit, atanh: unit,
   arccos: unit, arcsin: unit, arctanh: unit,
@@ -104,10 +111,11 @@ function pick(name: string): readonly number[] {
 }
 
 /**
- * `math::` 가 쓰는 단항. **왼쪽이 골든의 이름, 오른쪽이 우리 표의 연산이다.**
+ * The unaries `math::` uses. **The left is the golden's name and the right is the
+ * operation in our table.**
  *
- * torch 의 별칭(`arccos` = `acos`)은 여기서 같은 커널로 간다. 별칭마다 커널을
- * 따로 두면 하나만 고치는 날이 온다.
+ * torch's aliases (`arccos` = `acos`) go to the same kernel here. A kernel per alias means
+ * a day when only one of them is fixed.
  */
 const MATH_UNARY: Readonly<Record<string, string>> = {
   acos: "acos", acosh: "acosh", asin: "asin", asinh: "asinh",
@@ -122,18 +130,18 @@ const MATH_BINARY: readonly string[] = [
   "atan2", "hypot", "copysign", "logaddexp", "logaddexp2",
 ];
 
-/** 계단 함수. **0 을 흘린다** — 없는 것과 0 인 것은 다르다. */
+/** A step function. **It flows 0** — absent and zero are different. */
 const STEPS: readonly string[] = ["sign", "floor", "ceil", "round", "trunc", "fix"];
 
 /**
- * 접두사 없는 표 — 교재 범위 밖이지만 흔한 것들.
+ * The table with no prefix — outside the textbook's range and common all the same.
  *
- * 입력을 `Inputs` 에서 받는다. 여기 적힌 숫자가 하나도 없다는 것이 요점이다.
+ * The inputs come from `Inputs`. That not one number is written here is the point.
  *
- * **안 넣은 것들**: 정렬이 필요한 `median`·`topk`·`sort`·`unique`·`argsort`,
- * 결과 크기가 값에 달린 `masked_select`·`bincount`, 정수 dtype 이 필요한
- * `F.one_hot`·`F.nll_loss`, 그리고 합성곱·풀링·`BatchNorm2d`·`bmm`·`einsum`·
- * `pad_sequence` 는 T2 다.
+ * **What is left out**: the ones needing a sort (`median`, `topk`, `sort`, `unique`,
+ * `argsort`), the ones whose output size depends on the values (`masked_select`,
+ * `bincount`), the ones needing an integer dtype (`F.one_hot`, `F.nll_loss`), and
+ * convolution, pooling, `BatchNorm2d`, `bmm`, `einsum` and `pad_sequence`, which are T2.
  */
 function addWide(out: Map<string, Case>, inp: Inputs): void {
   const xp = () => inp.get("xp");
@@ -141,7 +149,8 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
   const x2 = () => inp.get("x2");
   const tail = () => inp.get("tail");
 
-  // xp 는 양수만 — log2·rsqrt 가 음수에서 NaN 이고, NaN 은 자기 자신과도 다르다.
+  // xp is positives only — log2 and rsqrt are NaN on a negative, and NaN differs even
+  // from itself.
   for (const name of ["log2", "log10", "rsqrt", "square", "reciprocal", "tan",
     "sinh", "cosh", "erf", "sign", "floor", "ceil", "round", "sqrt", "exp",
     "abs", "sin", "cos"]) {
@@ -204,8 +213,8 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["tile", () => x1().tile(2)],
     ["movedim", () => x2().movedim(0, 1)],
     ["as_tensor", () => x1()],
-    // 합성곱·풀링. **걸음 2 를 따로 묻는 것은 의도다** — 역방향에서 기울기 사이에
-    // 0 을 끼우는 경로가 거기서만 돈다.
+    // Convolution and pooling. **Asking about stride 2 separately is deliberate** — the
+    // backward path that inserts zeros between the gradients runs only there.
     ["F.conv2d", () => inp.get("img").conv2d(inp.get("cw"), inp.get("cb"), 1, 1)],
     ["F.conv2d(패딩0)", () => inp.get("img").conv2d(inp.get("cw"), null, 1, 0)],
     ["F.conv2d(스트라이드2)",
@@ -213,8 +222,9 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["F.max_pool2d", () => inp.get("img").maxPool2d(2)],
     ["F.avg_pool2d", () => inp.get("img").avgPool2d(2)],
     ["BatchNorm2d(학습)", () => new nn.BatchNorm2d(3).call(inp.get("img"))],
-    // **저장·복원 뒤의 평가 모드.** 이동 통계가 state_dict 에서 빠지면 여기서만
-    // 갈린다 — 학습은 멀쩡해 보이고 추론만 틀리는, 코어가 겪은 그 결함이다.
+    // **Evaluation mode after a save and a restore.** With the running statistics left
+    // out of state_dict it diverges here and nowhere else — training looks fine and
+    // inference alone is wrong, the defect the core lived through.
     ["BatchNorm2d(저장→복원→eval)", () => {
       const trained = new nn.BatchNorm2d(3);
       trained.call(inp.get("img")); // 이동 통계가 갱신된다
@@ -234,7 +244,8 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
     ["F.one_hot", () => Tensor.from([0, 2], [2], { dtype: "int64" }).oneHot(3)],
     ["F.nll_loss",
       () => x2().logSoftmax(-1).nllLoss(Tensor.from([0, 1, 2], [3], { dtype: "int64" }))],
-    // 길이가 다른 것을 한 배치에 담는 자리. 교재 ch05 가 이 경로를 그대로 쓴다.
+    // Where different lengths go into one batch. The textbook's ch05 uses this path as
+    // it is.
     ["pad_sequence", () => Tensor.padSequence(ragged())],
     ["pad_sequence(batch_first)", () => Tensor.padSequence(ragged(), true)],
     ["pad_sequence(채움값)", () => Tensor.padSequence(ragged(), true, -1.0)],
@@ -243,41 +254,45 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
   ];
   for (const [name, fn] of table) out.set(name, fn);
 
-  // 결과 크기가 값에 달린 것들 — CPU 를 한 번 왕복하므로 비동기다.
+  // The ones whose output size depends on the values — they go to the CPU and back once,
+  // so they are asynchronous.
   out.set("unique", async () => Tensor.from([1, 1, 2, 3], [4]).unique());
   out.set("masked_select",
     async () => x1().maskedSelect(x1().binary("gt", Tensor.full([], 0))));
   out.set("bincount",
     async () => Tensor.from([0, 1, 1, 3], [4], { dtype: "int64" }).bincount());
 
-  /** `x2[:3, :3]` — 골든이 그 자리만 쓰는 케이스들이 있다. */
+  /** `x2[:3, :3]` — some golden cases use that corner alone. */
   function square3(): Tensor {
     return x2().narrow(0, 0, 3).narrow(1, 0, 3);
   }
 }
 
 /**
- * 계산해서 얻은 텐서를 **잎으로** 세운다.
+ * Stands a computed tensor up **as a leaf.**
  *
- * 골든 쪽은 `L.tensor(x2.T.copy(), requires_grad=True)` 처럼 값을 미리 만들어 잎으로
- * 넣는다. 이쪽에서 `x2().transpose()` 를 그대로 쓰면 그것은 파생 텐서라 기울기가
- * 안 쌓이고, 케이스가 "기울기가 안 왔다" 로 죽는다 — 구현이 멀쩡한데도.
+ * The golden side builds the value in advance and puts it in as a leaf, as in
+ * `L.tensor(x2.T.copy(), requires_grad=True)`. Using `x2().transpose()` directly here
+ * makes it a derived tensor, no gradient accumulates, and the case dies as "no gradient
+ * arrived" — with the implementation perfectly fine.
  *
- * 버퍼는 같이 쓴다. 값을 다시 계산할 이유가 없다.
+ * The buffer is shared. There is no reason to recompute the value.
  */
 function asLeaf(t: Tensor): Tensor {
   return new Tensor(t.buffer, t.shape, { requiresGrad: true });
 }
 
 /**
- * 랭크가 올라갈 때 **어디서 무너지는지** 본다.
+ * **Where it breaks** as the rank rises.
  *
- * 자매에게는 이것이 한계를 재는 표였다 — TF.js 가 랭크 7 부터 일부 연산을 거절해서
- * `=거절` 이 붙은 케이스들은 "거절하는 것이 정답" 이었다. borch.ts 에는 그 한계가
- * 없으므로 **torch 와 같이 성공이 정답**이고, 답도 torch 의 것을 그대로 쓴다.
+ * For the sister library this was a table measuring a limit — TF.js refuses some
+ * operations from rank 7, so cases marked `=거절` had "refusing is the right answer".
+ * borch.ts has no such limit, so **succeeding, as torch does, is the right answer**, and
+ * the answers are torch's verbatim.
  *
- * 값을 통째로 묻는다 — 스칼라로 줄이면 자리가 뒤바뀌어도 합이 같아 통과한다.
- * 기울기도 자리마다 다른 가중치를 곱해 받는다.
+ * The whole value is asked about — reduced to a scalar, swapped positions still sum the
+ * same and it passes. The gradients are received multiplied by a different weight per
+ * position too.
  */
 function addHighRank(out: Map<string, Case>, inp: Inputs): void {
   for (const r of [6, 7, 8]) {
@@ -301,10 +316,10 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     ];
     for (const [name, fn] of table) out.set(`webgpu::${name}`, fn);
 
-    // **셋 다 값으로 묻는다 — 랭크 6 이든 8 이든.** 예전에는 7·8 만 "거절하는 것이
-    // 정답" 으로 굳혀 두었는데, 그것은 TF.js 의 천장이지 이 구현의 것이 아니었다.
-    // 그쪽이 사라지면서 물어볼 수 있는 것이 "안 던졌는가" 에서 "맞는 값인가" 로
-    // 올라갔다. 뒤가 훨씬 센 질문이다.
+    // **All three are asked by value — at rank 6 as at rank 8.** 7 and 8 used to be
+    // frozen with "refusing is the right answer", and that was TF.js's ceiling rather than
+    // this implementation's. With that side gone, the question that can be asked rose from
+    // "did it avoid throwing" to "is the value right". The second is far stronger.
     out.set(`webgpu::${tag} 합(축)`, () => v().sumDim(axis));
     out.set(`webgpu::F.pad(${tag}, 값)`,
       () => v().pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
@@ -328,9 +343,11 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     }
   }
 
-  // 넷을 따로 두는 이유는 이력이다. 자매에서 랭크 7 은 순방향도 기울기도 됐고 랭크 8 은
-  // 값만 나오고 기울기가 없었다 — 경계가 연산 이름에도 입력 랭크에도 안 걸린다는 증거였다.
-  // 지금은 넷 다 값을 내지만, 짐작으로 경계를 적으면 그 짐작이 문서가 된다는 자리로 남긴다.
+  // The four are kept apart for historical reasons. In the sister library rank 7 had both
+  // the forward and the gradient while rank 8 produced a value with no gradient — evidence
+  // that the boundary hung on neither the operation's name nor the input's rank. All four
+  // produce values now, and they stay as the place recording that a boundary written from
+  // a guess becomes documentation of that guess.
   for (const r of [7, 8]) {
     const key = `rank${r}_unbind`;
     out.set(`webgpu::랭크${r} unbind(순방향)`,
@@ -347,7 +364,8 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     return gradOf(x, "랭크8 unbind");
   });
 
-  // 랭크 5 는 자매가 `tf.pad` 로 조용히 값을 깨뜨리던 자리다. 우리 것도 물어둔다.
+  // Rank 5 is where the sister library quietly broke values through `tf.pad`. Ours is
+  // asked about too.
   for (const kind of ["narrow", "unbind", "split"] as const) {
     out.set(`webgpu::grad::랭크5 ${kind}`, () => {
       const x = inp.get("vol5", true);
@@ -363,12 +381,13 @@ function addHighRank(out: Map<string, Case>, inp: Inputs): void {
     () => inp.get("vol5").pad(-1, 2, 1, -1.5).pad(-2, 1, 0, -1.5));
 }
 
-/** 길이 3·1·2 짜리 셋. 채운 자리가 어디인지 눈으로 보이는 최소 크기다. */
+/** Three of lengths 3, 1 and 2. The smallest size at which the padded positions are
+ *  visible by eye. */
 function ragged(grad = false): Tensor[] {
   return [[1, 2, 3], [4], [5, 6]].map((v) => Tensor.from(v, [v.length], { requiresGrad: grad }));
 }
 
-/** `x > 0` 을 0/1 로. `logical_*` 케이스가 그 형태를 쓴다. */
+/** `x > 0` as 0/1. The `logical_*` cases use that form. */
 function positive(t: Tensor): Tensor {
   return t.binary("gt", Tensor.full([], 0));
 }
@@ -380,17 +399,18 @@ function piece(parts: Tensor[], k: number): Tensor {
 }
 
 /**
- * 참·거짓을 **골든이 굳힌 철자로** 적는다.
+ * Writes true and false **in the spelling the golden froze.**
  *
- * 굳힐 때 파이썬의 `str(bool(...))` 을 썼으므로 `True`/`False` 다. JS 의 `String(true)`
- * 는 `true` 라 그대로 두면 안 맞는다. 이것은 판정이 다른 것이 아니라 적는 법이
- * 다른 것이고, 골든이 답을 들고 있는 쪽이니 이쪽이 맞춘다.
+ * The freezing used Python's `str(bool(...))`, so it is `True`/`False`. JS's
+ * `String(true)` is `true` and left alone it does not match. This is a difference in how
+ * it is written rather than in the verdict, and the golden is the side holding the
+ * answers, so this side matches it.
  */
 function verdict(value: boolean): string {
   return value ? "True" : "False";
 }
 
-/** `x.grad` 를 낸다. 안 도착했으면 조용히 넘기지 않고 던진다. */
+/** Produces `x.grad`. If none arrived it throws rather than passing quietly. */
 function gradOf(leaf: Tensor, name: string): Tensor {
   const g = leaf.grad;
   if (!g) {
@@ -438,10 +458,12 @@ export function cases(inputs: Inputs): Map<string, Case> {
     });
   }
 
-  // 값만 묻는 나머지. 참·거짓이거나 계단이라 기울기 케이스가 없다.
+  // The rest, asked by value alone. They are booleans or steps, so they have no gradient
+  // case.
   out.set("math::sgn", () => Tensor.from(plain).unary("sgn"));
   out.set("math::signbit", () => Tensor.from(plain).unary("signbit"));
-  // **x 에 0 이 있어야 이 함수를 시험하는 것이다.** 없으면 `x * log(y)` 와 구별이 안 된다.
+  // **A 0 in x is what makes this a test of this function.** Without one it is
+  // indistinguishable from `x * log(y)`.
   out.set("math::xlogy(x에 0 포함)", () =>
     Tensor.from([0.0, 2.0, 0.0, 3.0])
       .binary("xlogy", Tensor.from([1.0, 2.0, 0.5, 4.0])));
@@ -495,12 +517,13 @@ export function cases(inputs: Inputs): Map<string, Case> {
 }
 
 /**
- * 최상위에 남아 있던 이름들 — `top::`.
+ * The names left at the top level — `top::`.
  *
- * **골든의 `top::` 가운데 여기서 안 묻는 것이 둘 있다.** `device::` 는 borch.ts 에
- * 같은 것이 없고(우리 쪽 `device()` 는 어댑터를 내는 다른 함수다), `resize_as_` 는
- * 파이썬 결속이 손잡이를 갈아 끼워 해내는 것이라 TS 표면에 없다. 이름을 안 맞춰
- * 두면 러너가 "골든에 없는 이름"으로 세어 주므로, 안 쓰는 쪽을 고른 것이다.
+ * **Two of the golden's `top::` are not asked here.** `device::` has no counterpart in
+ * borch.ts (our `device()` is a different function returning the adapter), and
+ * `resize_as_` is something the Python binding achieves by swapping handles, so it has no
+ * TS surface. Leaving the names unmatched has the runner count them as "absent from the
+ * golden", so not using them was the choice made.
  */
 function addTopRest(out: Map<string, Case>): void {
   const P = "top::";
@@ -511,10 +534,11 @@ function addTopRest(out: Map<string, Case>): void {
   const x = (grad = false): Tensor => Tensor.from(GRID, undefined, { requiresGrad: grad });
   const a = (): Tensor => Tensor.from(SHAPES);
 
-  // ── 최상위 전용 제자리들 ────────────────────────────────────────────
+  // ── The in-place forms that exist only at the top level ──────────────
   //
-  // 난수는 못 굳히지만 **`p=0` 이면 항등이라** 값이 결정적이다. 그리고 `is` 를 따로
-  // 묻는다 — 같은 텐서를 안 돌려주면 이어 부르는 코드가 원본을 못 고친다.
+  // Draws cannot be frozen, and **at `p=0` it is the identity**, so the values are
+  // deterministic. And `is` is asked separately — without the same tensor coming back,
+  // code that chains on cannot edit the original.
   const holes23 = (): Tensor => Tensor.from(
     [-1.0, 0.5, Number.NaN, 0.25, Infinity, 1.0], [2, 3]);
   const img1234 = (): Tensor => Tensor.from(
@@ -537,11 +561,12 @@ function addTopRest(out: Map<string, Case>): void {
       return verdict(run(v) === v);
     });
   }
-  // `feature_dropout` 은 **채널째** 떨군다 — `dropout2d` 와 같은 계산이다.
+  // `feature_dropout` drops **by channel** — the same computation as `dropout2d`.
   out.set(`${P}feature_dropout(p=0)`, () => img1234().featureDropout(0.0, true));
 
   out.set(`${P}igamma`, () => igamma(a(), Tensor.from(SPOTS)));
-  // **한 식으로 못 덮는다** — `x < a+1` 은 급수, 그 밖은 연분수다.
+  // **One expression cannot cover it** — `x < a+1` is the series and the rest is the
+  // continued fraction.
   out.set(`${P}igamma(큰 x)`, () =>
     igamma(a(), Tensor.from(SHAPES.map((v) => v * 8))));
   out.set(`${P}igammac`, () => igammac(a(), Tensor.from(SPOTS)));
@@ -553,7 +578,7 @@ function addTopRest(out: Map<string, Case>): void {
   out.set(`${P}constant_pad_nd`, () => x().constantPadNd([1, 2], 9.0));
   out.set(`${P}fake_quantize(per_tensor)`, () =>
     x().fakeQuantizePerTensorAffine(0.5, 0, 0, 7));
-  // 영점을 옮기면 자르는 자리가 바뀐다.
+  // Moving the zero point moves where it truncates.
   out.set(`${P}fake_quantize(zp=2)`, () =>
     x().fakeQuantizePerTensorAffine(0.5, 2, 0, 7));
   out.set(`${P}fake_quantize(per_channel)`, () =>
@@ -573,10 +598,12 @@ function addTopRest(out: Map<string, Case>): void {
   grad("igammac / x", SPOTS, (t) => igammac(a(), t));
   grad("polygamma(1)", STEPS, (t) => polygamma(1, t));
   grad("constant_pad_nd", GRID, (t) => t.constantPadNd([1, 2], 9.0));
-  // **범위 밖은 0 이다** — 반올림이 계단인데 범위 안은 곧바로 통과시킨다.
+  // **Outside the range it is 0** — rounding is a step, and inside the range it passes
+  // straight through.
   grad("fake_quantize", GRID, (t) => t.fakeQuantizePerTensorAffine(0.5, 0, 0, 7));
 
-  // 첫 인자로는 안 미분한다 — torch 자신이 거절한다(닫힌 꼴이 없다).
+  // It does not differentiate with respect to the first argument — torch itself refuses
+  // (there is no closed form).
   out.set(`${P}igamma 는 a 로 안 미분한다`, () => {
     try {
       const leaf = Tensor.from(SHAPES, undefined, { requiresGrad: true });
@@ -591,11 +618,12 @@ function addTopRest(out: Map<string, Case>): void {
 /**
  * `keepdim` — `keep::`.
  *
- * **축이 조용히 사라지는 자리다.** 모양이 안 맞으면 시끄럽게 멈추는데, 축 하나가
- * 빠진 모양은 브로드캐스팅에 **자주 들어맞는다** — 그러면 값만 틀린 채 끝까지 간다.
+ * **This is where an axis quietly disappears.** A shape that does not match stops loudly,
+ * and a shape with one axis missing **often still fits** broadcasting — and then it runs
+ * all the way through with only the values wrong.
  *
- * `all`·`any`·`countNonzero` 는 축 자체가 없었다. 인자를 주면 조용히 버려지고
- * 전체 축약이 나왔다.
+ * `all`, `any` and `countNonzero` had no axis at all. An argument passed to them was
+ * quietly discarded and a full reduction came out.
  */
 function addKeepdim(out: Map<string, Case>): void {
   const P = "keep::";
@@ -606,7 +634,8 @@ function addKeepdim(out: Map<string, Case>): void {
   const b = (): Tensor => Tensor.from(FLAGS, [2, 3], { dtype: "bool" });
   const shapeOf = (fn: () => Tensor): Case => () => `(${fn().shape.join(", ")})`;
 
-  // 축을 접는 것들. 골든의 이름이 파이썬 쪽 철자라 그대로 쓴다.
+  // The ones that fold an axis. The golden's names are the Python spellings, so they are
+  // used as they are.
   const folds: [string, (keep: boolean) => Tensor][] = [
     ["sum", (k) => g().sumDim(1, k)],
     ["mean", (k) => g().mean(1, k)],
@@ -622,7 +651,7 @@ function addKeepdim(out: Map<string, Case>): void {
     out.set(`${P}${name}(dim=1) 값`, () => fn(true));
   }
 
-  // 쌍을 내는 것들 — **둘 다 축이 살아야 한다.**
+  // The ones producing a pair — **the axis has to survive in both.**
   const pairs: [string, (keep: boolean) => { values: Tensor; indices: Tensor }][] = [
     ["max", (k) => g().max(1, k)],
     ["min", (k) => g().min(1, k)],
@@ -647,8 +676,8 @@ function addKeepdim(out: Map<string, Case>): void {
   out.set(`${P}count_nonzero(dim=1)`, () => g().countNonzero(1));
   out.set(`${P}count_nonzero() 전체`, () => g().countNonzero());
 
-  // 기울기도 축을 살린 채 와야 한다. 어긋나면 잎에서 터지거나 — 더 나쁘게 —
-  // 브로드캐스팅으로 **번져서** 값이 커진다.
+  // The gradient has to arrive with the axis alive too. Mismatched, it blows up at the
+  // leaf — or worse, **spreads** by broadcasting and the values grow.
   const grad = (name: string, body: (t: Tensor) => Tensor): void => {
     out.set(`${P}grad::${name}`, () => {
       const leaf = g(true);
@@ -668,30 +697,33 @@ function addKeepdim(out: Map<string, Case>): void {
 }
 
 /**
- * 축약의 `dtype=` — `keep::dtype::`.
+ * A reduction's `dtype=` — `keep::dtype::`.
  *
- * **규칙 한 줄이다: 넣기 전에 바꾼다.** 접고 나서가 아니다. 형만 물으면 두 순서가
- * 구별이 안 되므로 값도 묻는다 — `[1.7, −2.3, 0.9]` 의 합이 먼저 깎으면 −1,
- * 나중에 깎으면 0 이다.
+ * **The rule is one line: cast before folding.** Not after. Asking about the dtype alone
+ * cannot separate the two orders, so the value is asked about too — the sum of
+ * `[1.7, −2.3, 0.9]` is −1 casting first and 0 casting after.
  *
- * **이 갈래가 조용히 틀리는 자리라는 것은 이미 실측됐다.** 축약 중 `norm` 하나만
- * `dtype=` 을 안 듣고 있었고, `sum`·`mean`·`prod` 는 들었다 — 넷 중 하나만 안 듣는
- * 것이 하나도 안 듣는 것보다 나쁘다. 파이썬 쪽에서 그것을 잡았고, 여기 서른다섯은
- * **같은 물음을 borch.ts 에 처음 하는 것**이다.
+ * **That this branch is a place to be quietly wrong is already measured.** Among the
+ * reductions only `norm` was not listening to `dtype=` while `sum`, `mean` and `prod`
+ * were — one of four not listening is worse than none of them listening. The Python side
+ * caught that, and the thirty-five here are **the first time the same question is asked of
+ * borch.ts.**
  */
 /**
- * 이름 있는 형 바꾸기 — `dtype::형바꾸기::`.
+ * The named casts — `dtype::형바꾸기::`.
  *
- * **`to(형)` 이 있는데 왜 이름이 또 필요한가.** torch 가 둘 다 주기 때문이고, 교재가
- * `x.float()` 을 쓰기 때문이다. 이 이름들이 borch.ts 에 없어서 파이썬 두 판만 답하고
- * 있었고, 골든의 그 열넷은 "파이썬 쪽 이야기" 로 안 옮겨져 있었다. **실제로는
- * 아무도 안 물어본 이름이었다** — `spot::` 마흔일곱이 같은 꼴이었다.
+ * **Why another name when `to(dtype)` exists.** Because torch gives both, and because the
+ * textbook writes `x.float()`. These names were absent from borch.ts, so only the two
+ * Python versions answered, and those fourteen golden cases had gone uncarried as "a
+ * Python-side matter". **In fact they were names nobody had ever asked about** — the
+ * forty-seven `spot::` were the same shape.
  *
- * 여덟은 **거절이 답**이다. 그 자리에서 무엇이 중요한지가 값이 아니라 **문구**라는
- * 것이 이 묶음의 요점이다. 이름이 아예 없으면 `'half' 이 없다` 가 나오는데 그것은
- * 오타와 구별이 안 되고, 파이썬 두 판은 `.half()`(float16) 은(는) 브라우저 축소판에
- * 없습니다 로 멈춘다. 셋이 다른 문장을 말하면 배우는 사람은 **구현마다 다른 것**으로
- * 읽는다. 값 대조로는 절대 안 걸리는 갈래다.
+ * For eight of them **the refusal is the answer.** That what matters there is the
+ * **wording** rather than the value is this group's point. With the name simply absent the
+ * message is `'half' is not defined`, which is indistinguishable from a typo, while the
+ * two Python versions stop with `.half()`(float16) is not in the browser subset. Three
+ * implementations saying three sentences read to a learner as **three different things.**
+ * It is a branch a value comparison can never catch.
  */
 function addNamedCasts(out: Map<string, Case>): void {
   const P = "dtype::형바꾸기::";
@@ -701,15 +733,17 @@ function addNamedCasts(out: Map<string, Case>): void {
   out.set(`${P}long`, () => dtypeName(src().long().dtype));
   out.set(`${P}bool`, () => dtypeName(src().bool().dtype));
   out.set(`${P}cfloat`, () => dtypeName(src().cfloat().dtype));
-  // **`type_as` 는 상대의 형을 따른다** — 상대가 정수면 정수다.
+  // **`type_as` follows the other's dtype** — an integer partner gives an integer.
   out.set(`${P}type_as`, () => dtypeName(
     src().typeAs(Tensor.from([1, 2, 3], [3], { dtype: "int64" })).dtype));
 
-  // 파이썬 쪽 판정이 문구의 **조각**을 본다. 여기서도 같은 조각을 확인하고 같은
-  // 낱말을 돌려준다 — 문장 전체를 굳히면 한 글자만 바뀌어도 갈린다.
-  // **파이썬 쪽 `tests/cases.py` 와 같은 조각이어야 한다.** 여기가 갈리면 양쪽이 각자
-  // 자기 문장만 확인하고, 스물한 건이 전부 초록인 채로 서로 다른 말을 하게 된다 —
-  // 실제로 그랬다. 굳혀진 답이 `기대대로` 라는 판정 낱말이라 문장이 벌어져도 안 움직인다.
+  // The Python side's verdict looks at **a fragment** of the message. The same fragment
+  // is checked here and the same word returned — freezing the whole sentence diverges on a
+  // single character.
+  // **It has to be the same fragment as the Python side's `tests/cases.py`.** Diverge here
+  // and each side checks only its own sentence, and twenty-one cases stay green while
+  // saying different things — which is what happened. The frozen answer is the verdict word
+  // `기대대로`, so it does not move however far the sentences drift.
   const MARK = "is not in the browser subset";
   const weRefuse = (name: string, body: () => unknown): void => {
     out.set(`${P}${name}=우리는거절`, () => {
@@ -732,8 +766,9 @@ function addNamedCasts(out: Map<string, Case>): void {
   weRefuse("short", () => src().short());
   weRefuse("int", () => src().int());
 
-  // **`double` 은 갈래가 다르다** — 코어에는 float64 가 있고 브라우저 쪽에만 없다.
-  // 파이썬 쪽은 `_as_expected` 로 접었고 답이 같은 낱말이다.
+  // **`double` branches differently** — the core has float64 and only the browser side
+  // does not. The Python side folded it through `_as_expected` and the answer is the same
+  // word.
   out.set(`${P}double=브라우저는거절`, () => {
     try {
       src().double();
@@ -747,7 +782,8 @@ function addNamedCasts(out: Map<string, Case>): void {
 
 function addReduceDtype(out: Map<string, Case>): void {
   const P = "keep::dtype::";
-  // 실수를 정수로 접는 자리가 순서를 가른다. 정수·참거짓은 올림 쪽을 본다.
+  // Folding a float into an integer is what separates the orders. Integers and booleans
+  // look at the promoting side.
   const SLANT = [1.7, -2.3, 0.9];
   const COUNTS = [3, 1, 4];
   const MARKS = [1, 0, 1];
@@ -760,15 +796,15 @@ function addReduceDtype(out: Map<string, Case>): void {
   for (const kind of ["실수", "정수", "참거짓"]) {
     for (const want of ["float32", "int64"] as const) {
       out.set(`${P}sum(${kind}→${want})`, () => src(kind).sum(want));
-      // **형 이름은 `dtypeName` 을 지난다.** 골든은 파이썬의 `str(dtype)` 인
-      // `torch.float32` 를 굳혔고 borch.ts 의 `.dtype` 은 `float32` 다 — 그대로
-      // 내면 여덟 건이 이름 표기 하나로 빨개진다.
+      // **The dtype name goes through `dtypeName`.** The golden froze Python's
+      // `str(dtype)`, which is `torch.float32`, and borch.ts's `.dtype` is `float32` —
+      // handed over unchanged, eight cases go red on one spelling.
       out.set(`${P}sum(${kind}→${want}) 의 형`,
         () => dtypeName(src(kind).sum(want).dtype));
       out.set(`${P}cumsum(${kind}→${want})`, () => src(kind).cumsum(0, want));
     }
-    // **`sum(dtype=bool)` 은 되는데 `cumsum(dtype=bool)` 은 안 된다** — 규칙이
-    // 아니라 torch 가 그 커널을 안 만든 것이라, 따로 묻지 않으면 안 보인다.
+    // **`sum(dtype=bool)` works and `cumsum(dtype=bool)` does not** — not a rule but a
+    // kernel torch never built, so it is invisible unless asked about separately.
     out.set(`${P}sum(${kind}→참거짓)`, () => src(kind).sum("bool"));
     out.set(`${P}prod(${kind}→float32)`, () => src(kind).prod(undefined, false, "float32"));
   }
@@ -781,14 +817,14 @@ function addReduceDtype(out: Map<string, Case>): void {
       .sumDim(1, false, "float32"));
   out.set(`${P}nansum(실수→int64)`, () => src("실수").nansum(undefined, false, "int64"));
 
-  // `dtype=` 이 **모든** 거절을 풀지는 않는다. 셋은 그대로다(실측).
+  // `dtype=` does not release **every** refusal. Three stand (measured).
   const refuses = (name: string, body: () => unknown): void => {
     out.set(`${P}${name}`, () => {
       try {
         body();
       } catch (err) {
-        // 파이썬 쪽은 예외의 **종류 이름**을 굳혔다. 저쪽 `RuntimeError` 가
-        // 여기서도 같은 이름이라 그대로 맞는다.
+        // The Python side froze the exception's **kind name.** Their `RuntimeError` is
+        // the same name here, so it matches as it stands.
         return (err as Error).constructor.name;
       }
       return "예외가 안 났다";
@@ -798,13 +834,15 @@ function addReduceDtype(out: Map<string, Case>): void {
   refuses("cumsum(→참거짓)은 거절", () => src("정수").cumsum(0, "bool"));
   refuses("cumprod(→참거짓)은 거절", () => src("정수").cumprod(0, "bool"));
 
-  // **`to` 가 형을 진짜 바꾼다.** 오래 장치 문자열만 보고 형을 조용히 버렸다.
+  // **`to` really changes the dtype.** For a long time it read the device string alone
+  // and quietly discarded the dtype.
   out.set(`${P}to(float32) 의 형`, () => dtypeName(src("정수").to("float32").dtype));
   out.set(`${P}to(int64) 의 형`, () => dtypeName(src("실수").to("int64").dtype));
   out.set(`${P}to(int64) 의 값`, () => src("실수").to("int64"));
 
-  // **이름은 `keep::grad::` 다** — 파이썬 쪽에서 `grad()` 헬퍼가 붙이는 접두어가
-  // `dtype::` 이 아니다. 여기서 한 칸 더 넣었더니 "골든에 없는 이름" 으로 나왔다.
+  // **The name is `keep::grad::`** — the prefix the `grad()` helper attaches on the
+  // Python side is not `dtype::`. Adding one more segment here produced "a name absent
+  // from the golden".
   out.set("keep::grad::sum(dtype=float32)", () => {
     const leaf = Tensor.from([1.0, 4.0, 2.0, 3.0, 0.5, 5.0], [2, 3],
       { requiresGrad: true });
@@ -814,11 +852,12 @@ function addReduceDtype(out: Map<string, Case>): void {
 }
 
 /**
- * 나머지 선택 인자 — `keep::arg::`.
+ * The remaining optional arguments — `keep::arg::`.
  *
- * **둘은 받는 척하고 버리던 자리였다.** `dist(p)` 가 `p` 를 무시하고 늘 L2 를 냈고
- * (값이 그럴듯한 크기라 안 보였다), `div(roundingMode)` 는 값만 맞추고 형을 실수로
- * 뒀다. 나머지는 인자 자체가 없어 시끄럽게 멈추던 것들이다.
+ * **Two of them were accepting and discarding.** `dist(p)` ignored `p` and always produced
+ * L2 (invisible, because the value was of a plausible size), and `div(roundingMode)`
+ * matched the value while leaving the dtype a float. The rest had no such argument at all
+ * and stopped loudly.
  */
 function addArgs(out: Map<string, Case>): void {
   const P = "keep::arg::";
@@ -861,23 +900,26 @@ function addArgs(out: Map<string, Case>): void {
 }
 
 /**
- * 푸리에 — `fft::`.
+ * Fourier — `fft::`.
  *
- * **커널이 하나다.** 정변환·역변환·반쪽 변환과 그 셋의 역방향이 전부 같은 셰이더를
- * 부호와 배율만 바꿔 부른다. 그래서 이 표가 실제로 묻는 것은 **그 인자 조합**이다.
+ * **There is one kernel.** The forward, the inverse, the half transform and all three
+ * backwards call the same shader with only the sign and the factor changed. So what this
+ * table really asks about is **that combination of arguments.**
  *
- * 값보다 기울기가 요점이다. 변환은 선형이라 순방향은 맞히기 쉽고, 어려운 자리는
- * **어느 쪽 반쪽을 세는가** 다 — `rfft` 는 켤레 짝을 안 더하고(더하면 두 배),
- * `irfft` 는 가장자리만 한 번 가운데는 두 번 센다. 둘 다 **순방향 값은 멀쩡한 채로**
- * 틀릴 수 있어서, 값 케이스만 있으면 초록인 채로 지나간다.
+ * The gradients matter more than the values. The transform is linear so the forward is
+ * easy to get right, and the hard part is **which half is counted** — `rfft` does not add
+ * the conjugate partner (adding it doubles), and `irfft` counts the edges once and the
+ * middle twice. Both can be wrong **with the forward values perfectly fine**, so with only
+ * value cases they pass green.
  */
 function addFft(out: Map<string, Case>): void {
   const P = "fft::";
   const XS = [1.0, -2.0, 0.5, 3.0, -1.0, 0.25];
   const YS = [0.5, 1.0, -1.5, 0.25, 2.0, -0.5];
-  // **칼날을 피한 신호다.** 경사 신호(`arange/8 − 1`)는 나이퀴스트 칸이 정확히 0 이
-  // 되는데 거기서 `abs` 가 미분 불가능하고 부호가 반올림에 달린다 — 값이 아니라
-  // 케이스가 문제인 자리라, 0 인 칸이 없는 수로 바꿔 두었다.
+  // **A signal that avoids the blade.** A ramp (`arange/8 − 1`) makes the Nyquist bin
+  // exactly 0, and there `abs` is not differentiable and the sign hangs on rounding — a
+  // place where the case rather than the value is the problem, so it was replaced with
+  // numbers that have no zero bin.
   const SIG = [0.3, -1.2, 0.7, 2.1, -0.4, 1.5, -2.3, 0.9,
                1.1, -0.6, 0.25, -1.7, 2.4, 0.05, -0.8, 1.35];
   const MAT = Array.from({ length: 12 }, (_, i) => i);
@@ -890,13 +932,13 @@ function addFft(out: Map<string, Case>): void {
   const hann = (n = 8): Tensor => Tensor.hannWindow(n);
   const pair = (fn: () => Tensor): Case => () => fn().viewAsReal();
 
-  // ── 여러 축 · 에르미트 ─────────────────────────────────────────────────
+  // ── Several axes and the Hermitian forms ───────────────────────────────
   //
-  // **이 묶음이 커널의 결함 하나를 잡았다.** 복소수를 마지막이 아닌 축으로 변환할 때
-  // 허수부를 엉뚱한 칸에서 읽고 있었다 — 셰이더가 쓸 때는 `(re, im)` 을 끼워 넣고
-  // 읽을 때는 안쪽 크기만큼 떨어져 있다고 봤는데, **마지막 축에서는 그 둘이 우연히
-  // 같다.** 위의 1 차원 케이스가 전부 통과한 이유이고, 여기 2 차원이 없었으면
-  // 지금도 초록이었을 자리다.
+  // **This group caught a defect in the kernel.** Transforming a complex input along any
+  // axis but the last read the imaginary part from the wrong cell — the shader interleaves
+  // `(re, im)` when writing and assumed they were an inner-size apart when reading, and
+  // **on the last axis those two are accidentally the same.** That is why every 1-D case
+  // above passed, and without the 2-D cases here it would still be green.
   const grid2 = [0.31, -1.2, 0.75, 2.1, -0.4, 1.55, -2.3, 0.9,
                  1.1, -0.62, 0.25, -1.7];
   const rgrid = (): Tensor => Tensor.from(grid2, [3, 4]);
@@ -975,9 +1017,10 @@ function addFft(out: Map<string, Case>): void {
 
   for (const center of [true, false]) {
     for (const hop of [2, 4]) {
-      // **이름은 파이썬 쪽 글자다.** JS 의 `true` 를 그대로 끼우면 `center=true` 가
-      // 되어 골든의 `center=True` 와 안 맞고, 그 케이스는 **조용히 안 돌아간다** —
-      // 러너가 "이름이 골든에 없다" 로 따로 세는 이유가 이것이다.
+      // **The name is the Python spelling.** Interpolating JS's `true` gives
+      // `center=true`, which does not match the golden's `center=True`, and that case
+      // **quietly does not run** — which is why the runner separately counts "the name is
+      // absent from the golden".
       const tag = center ? "True" : "False";
       out.set(`${P}stft center=${tag} hop=${hop}`, pair(() => stft(sig(), 8, {
         hopLength: hop, window: hann(), center, returnComplex: true,
@@ -1049,25 +1092,27 @@ function addFft(out: Map<string, Case>): void {
 }
 
 /**
- * 복소수 — `cplx::`.
+ * Complex — `cplx::`.
  *
- * **파이썬 코어(numpy)가 먼저 갔고 여기가 뒤따른다.** 그동안 이 케이스들은 `golden.py`
- * 의 `CORE_ONLY_PREFIXES` 에 걸려 브라우저 쪽이 통째로 건너뛰었다. 여기 본문이 생기는
- * 순간 그 건너뜀이 끝나는 것이 아니라, **결속(`borch_webgpu`)은 아직 건너뛴다** —
- * 파이썬 결속에 복소수 이름이 아직 없기 때문이다. 셋의 범위가 한 줄로 안 움직인다.
+ * **The Python core (numpy) went first and this follows.** Until now these cases were
+ * caught by `golden.py`'s `CORE_ONLY_PREFIXES` and the browser side skipped them entirely.
+ * Bodies existing here does not end that skipping outright — **the binding
+ * (`borch_webgpu`) still skips**, because the Python binding has no complex names yet. The
+ * three implementations' coverage does not move in one line.
  *
- * ## 무엇을 묻는가
+ * ## What it asks
  *
- * 값보다 **기울기 쪽이 이 표의 요점**이다. 규약이
+ * **The gradients are this table's point** rather than the values. The convention is
  *
  *     z.grad = ∂L/∂re + i·∂L/∂im
  *
- * 이라 정칙 함수(`mul`·`div`)의 역방향에는 켤레가 붙고, 실수를 내는 `abs` 에는 안
- * 붙는다. **실수 입력으로는 그 차이가 안 보인다** — 켤레가 실수에서 항등이라서다.
- * 그래서 셋을 한 표에서 묻는다.
+ * so a conjugate appears in the backward of a holomorphic function (`mul`, `div`) and does
+ * not for `abs`, which produces a real. **With real inputs that difference is invisible**,
+ * because conjugation is the identity on reals. So all three are asked in one table.
  *
- * `(z*z).real` 은 그중에서도 **규약 자체를 가른다**: 이 규약이면 `2−4j`, 보통의 복소
- * 미분이면 `2+4j` 다. 값만 맞히는 구현은 여기서 갈린다.
+ * `(z*z).real` **separates the conventions themselves**: under this one it is `2−4j`, and
+ * under ordinary complex differentiation `2+4j`. An implementation that only matches
+ * values diverges here.
  */
 function addComplex(out: Map<string, Case>): void {
   const re = [1.0, -3.0];
@@ -1094,15 +1139,17 @@ function addComplex(out: Map<string, Case>): void {
   out.set(`${P}z + z`, () => z().add(z()).viewAsReal());
   out.set(`${P}z / z`, () => z().div(z()).viewAsReal());
   out.set(`${P}z * 실수`, () => z().mul(Tensor.from(re)).viewAsReal());
-  // 승격은 **형 이름**을 묻는다. 실수가 끼어도 복소수로 남아야 한다.
+  // Promotion asks about the **dtype name.** A real among them still has to come out
+  // complex.
   out.set(`${P}complex64 + float32 의 형`, () =>
     dtypeName(z().add(Tensor.from([1.0])).dtype));
   out.set(`${P}complex64 + int64 의 형`, () =>
     dtypeName(z().add(Tensor.from([1]).to("int64")).dtype));
 
   /**
-   * 기울기를 **실수 잎 둘**에서 받는다. 복소수 잎을 직접 만들지 않는 것이 요점이다 —
-   * 값이 `(∂L/∂re, ∂L/∂im)` 로 갈려 나와서 어느 쪽이 틀렸는지가 보인다.
+   * Receives the gradient at **two real leaves.** Not building a complex leaf directly is
+   * the point — the value comes apart as `(∂L/∂re, ∂L/∂im)` and which side is wrong is
+   * visible.
    */
   const grad = (name: string, body: (w: Tensor) => Tensor): void => {
     out.set(`${P}grad::${name}`, () => {
@@ -1128,22 +1175,24 @@ function addComplex(out: Map<string, Case>): void {
       Tensor.complex(r, i).mul(Tensor.complex(r, i)).sum().backward();
       return "예외가 안 났다";
     } catch {
-      // 골든은 **예외의 종류 이름**을 굳혔다. 코어(numpy)가 `RuntimeError` 를 내고
-      // 여기도 같은 이름이라야 옮겨 적은 코드가 같은 것을 잡는다.
+      // The golden froze the **exception's kind name.** The core (numpy) raises
+      // `RuntimeError`, and only the same name here lets ported code catch the same
+      // thing.
       return "RuntimeError";
     }
   });
 }
 
 /**
- * 꺾이는 자리.
+ * The kinks.
  *
- * 다른 표의 입력은 거의 다 정규분포 난수다. 좋은 기본값이지만 **특별한 값이 한 번도
- * 안 나온다** — 정확히 0, 정확히 같은 두 수, 정확히 경계값, 정확히 .5. 함수가 꺾이는
- * 자리가 전부 거기에 있고, `relu` 가 그래서 골든 798 건을 뚫고 나갔다.
+ * Almost every other table's input is a normal draw. That is a good default and **a
+ * special value never appears** — exactly 0, exactly two equal numbers, exactly the
+ * boundary, exactly .5. Every place a function kinks is there, and that is how `relu` got
+ * through 798 golden cases.
  *
- * 접을 때 자리마다 다른 가중치를 곱하는 것이 조건이다. 균일하게 접으면 꺾인 한 자리의
- * 차이가 합계에 묻힌다.
+ * Folding with a different weight per position is the condition. Folded uniformly, the
+ * difference at one kinked position is buried in the sum.
  */
 function addEdge(out: Map<string, Case>): void {
   const z = [-2, -1, 0, 1, 2, 0];              // 정확히 0 을 품는다
@@ -1152,9 +1201,10 @@ function addEdge(out: Map<string, Case>): void {
   const dup = [1, 3, 2, 3];
 
   const set = (name: string, fn: Case): void => { out.set(`edge::${name}`, fn); };
-  // **가중치가 1 부터다.** 0 부터면 첫 자리의 몫이 0 이고, 출력이 한 칸인 케이스는
-  // 그 하나가 전부라 **기울기가 통째로 0** 이 된다 — 균일 접기를 피하려는 장치가
-  // 그 케이스를 아무것도 안 묻는 상태로 만든다.
+  // **The weights start at 1.** Starting at 0 makes the first position's share 0, and a
+  // case whose output is a single cell has that one as its entirety, so **the gradient is
+  // 0 outright** — the device meant to avoid uniform folding leaves that case asking
+  // nothing.
   const seed = (t: Tensor): Tensor =>
     t.mul(Tensor.from([...Array(t.size).keys()].map((i) => i + 1), t.shape));
 
@@ -1167,7 +1217,7 @@ function addEdge(out: Map<string, Case>): void {
     });
   };
 
-  // ── 0 에서 꺾이는 것들 ──
+  // ── The ones that kink at 0 ──
   const kinks: ReadonlyArray<readonly [string, (x: Tensor) => Tensor]> = [
     ["abs", (x) => x.abs()],
     ["sign", (x) => x.sign()],
@@ -1182,15 +1232,16 @@ function addEdge(out: Map<string, Case>): void {
     grad(`${name}(0포함)`, z, fn);
   }
 
-  // ── 경계에 정확히 닿는 clamp ──
+  // ── clamp landing exactly on the boundary ──
   set("clamp(경계에서)", () => Tensor.from([...z]).clamp(-1, 1));
   grad("clamp(경계에서)", z, (x) => x.clamp(-1, 1));
   grad("clamp(위만)", z, (x) => x.clampMax(1));
   grad("clamp(아래만)", z, (x) => x.clampMin(-1));
 
-  // ── 동점 ──
-  // **torch 는 동점에서 기울기를 나눠 준다** — 두 입력이 같으면 각각 절반씩이다.
-  // 한쪽에 몰아주거나 양쪽에 1 씩 주는 구현은 순방향이 완벽히 같아서 값으로는 안 잡힌다.
+  // ── Ties ──
+  // **torch divides the gradient on a tie** — two equal inputs get half each. An
+  // implementation sending it all to one side, or 1 to both, has a perfectly identical
+  // forward and is not caught by values.
   set("maximum(동점)", () =>
     Tensor.from([...ta]).binary("maximum", Tensor.from([...tb])));
   set("minimum(동점)", () =>
@@ -1222,9 +1273,10 @@ function addEdge(out: Map<string, Case>): void {
   set("sort(동점).indices", () => Tensor.from([...dup]).sort(0).indices);
   set("topk(동점).indices", () => Tensor.from([...dup]).topk(3, 0).indices);
 
-  // 창 안에 같은 값이 둘 있는 풀링. **`maximum` 과 답이 다르다** — torch 의 풀링은
-  // 이긴 자리 하나를 골라 거기로만 흘리고 나누지 않는다. 이 라이브러리의 커널은
-  // "동점이면 먼저 나온 자리" 라고 적혀 있는데 그것을 확인한 적이 없었다.
+  // Pooling with two equal values inside the window. **The answer differs from
+  // `maximum`'s** — torch's pooling picks one winning position and flows only there rather
+  // than dividing. This library's kernel says "the earlier position on a tie", and that
+  // had never been confirmed.
   const tied = [1, 1, 2, 0, 1, 0, 2, 2, 3, 3, 0, 1, 0, 3, 1, 1];
   set("max_pool2d(동점)", () => Tensor.from([...tied], [1, 1, 4, 4]).maxPool2d(2));
   set("grad::max_pool2d(동점)", () => {
@@ -1233,31 +1285,35 @@ function addEdge(out: Map<string, Case>): void {
     return gradOf(x, "max_pool2d(동점)");
   });
 
-  // ── 반올림 규칙 ──
-  // **torch 는 .5 를 짝수로 붙인다.** `floor(x + 0.5)` 로 쓰면 전부 위로 올라가 갈린다.
+  // ── Rounding rules ──
+  // **torch sends .5 to the even side.** Written as `floor(x + 0.5)` everything rounds up
+  // and diverges.
   set("round(.5에서)", () => Tensor.from([...half]).round());
   set("floor(정수에서)", () => Tensor.from([...z]).floor());
   set("ceil(정수에서)", () => Tensor.from([...z]).ceil());
   set("trunc(음수)", () => Tensor.from([...half]).trunc());
   set("frac(음수)", () => Tensor.from([...half]).frac());
 
-  // **`%` 는 제수의 부호를 따른다** — `-7 % 3` 이 2 이지 -1 이 아니다. JS 의 `%` 는
-  // 반대이므로 그것을 그대로 쓰면 음수 입력에서만 갈린다. 양수로는 절대 안 드러난다.
+  // **`%` follows the divisor's sign** — `-7 % 3` is 2 rather than -1. JS's `%` is the
+  // opposite, so using it directly diverges on negative inputs alone. It never shows with
+  // positives.
   const neg = [-7, -3, 3, 7];
   set("%(음수)", () => Tensor.from([...neg]).remainder(3));
   set("%(음수로 나누기)", () => Tensor.from([...neg]).remainder(-3));
 }
 
 /**
- * 순환망과 어텐션.
+ * Recurrent networks and attention.
  *
- * 가중치를 밖에서 넣어 **셋이 같은 자리에서 출발**하게 한다 — 각자 초기화하면
- * 무엇이 갈렸는지가 아니라 초기화가 갈렸는지를 보게 된다. 파라미터 **이름**이
- * torch 와 같아야 `state_dict` 로 넣을 수 있다는 것도 여기서 걸린다.
+ * The weights are planted from outside so that **all three start from the same place** —
+ * initialising separately shows whether the initialisation diverged rather than what
+ * diverged. That the parameter **names** have to match torch's for `state_dict` to plant
+ * them is caught here too.
  */
 function addSeq(out: Map<string, Case>, inp: Inputs): void {
-  // **torch 의 이름을 지나간다.** 밑동은 `Recurrent(in, hidden, kind)` 하나인데,
-  // 그것만 부르면 `nn.LSTM` 이라는 이름을 아무도 안 재게 된다 — 교재의 첫 줄이 그것이다.
+  // **It goes through torch's names.** The base is the single
+  // `Recurrent(in, hidden, kind)`, and calling that alone leaves nobody measuring the name
+  // `nn.LSTM` — which is a textbook's first line.
   const KINDS = { RNN: nn.RNN, LSTM: nn.LSTM, GRU: nn.GRU } as const;
   const build = (kind: nn.RNNKind): nn.Recurrent => {
     const m = new KINDS[kind](3, 4);
@@ -1270,7 +1326,7 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
   };
   for (const kind of ["RNN", "LSTM", "GRU"] as const) {
     out.set(`seq::${kind}/출력`, () => build(kind).run(inp.get("seq_x")).output);
-    // LSTM 만 상태가 둘이라 골든이 은닉만 꺼낸다.
+    // LSTM alone has two states, so the golden takes the hidden one.
     out.set(`seq::${kind}/마지막상태`,
       () => build(kind).run(inp.get("seq_x")).hidden);
   }
@@ -1284,24 +1340,25 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
     return m.attend(inp.get("attn_x"), mask);
   };
   out.set("seq::MultiheadAttention", () => attention(null));
-  // 인과 마스크는 **실수**다(0/-inf). "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
+  // A causal mask is a **float** (0/-inf). Lumping it into "non-zero means masked"
+  // diverges here.
   out.set("seq::MultiheadAttention(인과 마스크)",
     () => attention(nn.MultiheadAttention.causalMask(5)));
 }
 
 /**
- * `torchvision.transforms` 모양의 변환.
+ * Transforms shaped like `torchvision.transforms`.
  *
- * **무작위 변환은 뽑기를 대조할 수 없다** — torch 의 난수기를 우리가 못 쓰기 때문이다.
- * 그래서 골든이 확률을 0 이나 1 로 못 박거나 자를 자리가 하나뿐이게 만들어 결정적인
- * 자리만 묻는다. 여기서 "무작위니까 대조 못 한다"고 넘기면 그게 안 본 것을 봤다고
- * 적는 짓이다.
+ * **A random transform's draws cannot be compared** — because torch's generator is not
+ * available to us. So the golden pins the probability at 0 or 1, or leaves only one place
+ * to crop, and asks about the deterministic part alone. Waving it away here as "random, so
+ * it cannot be compared" would be recording something unlooked-at as looked-at.
  */
 function addVision(out: Map<string, Case>, inp: Inputs): void {
   const mean = [0.5, 0.4, 0.3];
   const std = [0.2, 0.3, 0.4];
 
-  /** 골든의 (H,W,C) 입력을 그대로 이미지로 본다. */
+  /** Sees the golden's (H,W,C) input as an image, unchanged. */
   const pic = (name: string, isByte: boolean): vision.Image => {
     const shape = inp.shapeOf(name);
     const [h = 1, w = 1, c = 1] = shape;
@@ -1322,28 +1379,30 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     new vision.Compose([new vision.ToTensor(), new vision.Normalize(mean, std)])
       .apply(u8()) as Tensor);
 
-  // 확률을 못 박아 뽑기와 무관하게 만든다.
+  // The probability is pinned so the draw does not matter.
   for (const p of [1.0, 0.0]) {
     out.set(`vision::Flip(p=${p === 1 ? 1 : 0})`, () =>
       asTensor(new vision.RandomHorizontalFlip(p).apply(u8()) as vision.Image));
   }
-  // 자를 자리가 **하나뿐**이 되게 크기를 맞춘다. 그래야 뽑기와 무관하게 결정적이다.
+  // The size is chosen so there is **only one** place to crop. That is what makes it
+  // deterministic regardless of the draw.
   out.set("vision::Crop(패딩없음)",
     () => asTensor(new vision.RandomCrop([5, 4], 0).apply(u8()) as vision.Image));
   out.set("vision::Crop(패딩1)",
     () => asTensor(new vision.RandomCrop([7, 6], 1).apply(u8()) as vision.Image));
 
-  // 크기 바꾸기. **실수 이미지로 한다** — uint8 로 하면 `ToTensor` 가 255 로 나누는
-  // 자리가 파이썬 판과 순서 때문에 갈린다(저쪽은 텐서를 받아 먼저 나뉜다).
+  // Resizing. **Done on a float image** — with uint8, where `ToTensor` divides by 255
+  // diverges from the Python version by ordering (that side takes a tensor and divides
+  // first).
   const f = () => pic("vis_f", false);
-  // **`ToTensor` 를 거친다** — 파이썬 쪽 케이스가 `ToTensor(Resize(...))` 이고,
-  // 그것이 (H,W,C) 를 (C,H,W) 로 돌린다. 옆의 `asTensor` 는 전치를 안 하는
-  // 다른 헬퍼다(그 케이스들은 파이썬 쪽도 전치를 안 한다).
+  // **It goes through `ToTensor`** — the Python case is `ToTensor(Resize(...))`, and that
+  // turns (H,W,C) into (C,H,W). The `asTensor` beside it is a different helper that does
+  // not transpose (and those cases do not transpose on the Python side either).
   const toTensor = (img: vision.Image): Tensor =>
     new vision.ToTensor().apply(img) as Tensor;
 
-  // **광도계 케이스는 `ToTensor` 를 안 쓴다.** 저쪽 `photo()` 가 전치만 하고 255 로
-  // 나누지 않으므로, 바이트 답이 바이트 값 그대로 얼어 있다.
+  // **The photometric cases do not use `ToTensor`.** Their `photo()` transposes without
+  // dividing by 255, so the byte answers are frozen as byte values.
   const photo = (img: vision.Image): Tensor => {
     const { data, height: h, width: w, channels: c } = img;
     const out = new Float32Array(c * h * w);
@@ -1364,13 +1423,14 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     toTensor(new vision.Resize(4).apply(f()) as vision.Image));
   out.set("vision::Resize(최근접)", () =>
     toTensor(new vision.Resize([4, 3], "nearest").apply(f()) as vision.Image));
-  // **상한이 실제로 문다.** 5×4 를 짧은 변 8 로 늘리면 긴 변이 10 인데 9 로 잘리고
-  // 짧은 변이 7 로 따라 준다 — 두 나눗셈이 다 버림이라야 (9, 7) 이다.
+  // **The cap actually bites.** Growing a 5×4 to a short side of 8 gives a long side of
+  // 10, which is clipped to 9, and the short side follows down to 7 — only with both
+  // divisions truncating is it (9, 7).
   out.set("vision::Resize(long side capped)", () =>
     toTensor(new vision.Resize(8, "bilinear", 9).apply(f()) as vision.Image));
-  // **자를 자리가 홀수인 것을 넣는다.** 파이썬의 round 는 절반을 짝수로 보내고
-  // `Math.round` 는 위로 올린다 — 그 차이로 여기가 한 칸 어긋나 최대 0.837 이
-  // 갈렸다(실측). 짝수만 시험하면 그 자리가 통째로 안 걸린다.
+  // **An odd crop offset goes in.** Python's round sends a half to the even side and
+  // `Math.round` rounds up — that difference puts this one cell out and diverged by up to
+  // 0.837 (measured). Testing even offsets alone misses the place entirely.
   out.set("vision::CenterCrop(짝수)", () =>
     toTensor(new vision.CenterCrop([4, 4]).apply(f()) as vision.Image));
   out.set("vision::CenterCrop(홀수)", () =>
@@ -1378,20 +1438,22 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::CenterCrop(원본보다 큼)", () =>
     toTensor(new vision.CenterCrop([13, 11]).apply(f()) as vision.Image));
 
-  // ImageNet 조리법. **뽑기가 한 답만 갖도록 못 박는다** — 넓이는 전체, 비율은
-  // 그림 자신의 것. 그러면 자를 자리가 하나뿐이라 비교되는 것은 뒤따르는 크기
-  // 바꾸기와 자를 곳을 고르는 반올림이다.
+  // The ImageNet recipe. **The draw is pinned to a single answer** — the area is the
+  // whole picture and the ratio is the picture's own. Then there is one place to crop, and
+  // what is being compared is the resize that follows and the rounding that picks the
+  // crop.
   const pinned = (filter: "bilinear" | "nearest") =>
     new vision.RandomResizedCrop([3, 2], [1.0, 1.0], [0.8, 0.8], filter);
   out.set("vision::RandomResizedCrop(pinned to the whole image)", () =>
     toTensor(pinned("bilinear").apply(f()) as vision.Image));
-  // **같은 자르기를 다른 거르개로.** `interpolation` 을 받아 놓고 크기 바꾸기로
-  // 넘기지 않으면 위 케이스는 그대로 통과한다. 여기서 둘이 0.5006 갈린다(실측).
+  // **The same crop through a different filter.** Accepting `interpolation` and not
+  // passing it to the resize leaves the case above passing unchanged. Here the two diverge
+  // by 0.5006 (measured).
   out.set("vision::RandomResizedCrop(nearest)", () =>
     toTensor(pinned("nearest").apply(f()) as vision.Image));
 
-  // 백색화. **뒤집는 행렬을 쓴다** — 단위행렬은 곱셈이 무엇을 하든, 아무것도
-  // 안 해도 통과시킨다.
+  // Whitening. **It uses a reversing matrix** — an identity passes whatever the
+  // multiplication does, including doing nothing.
   out.set("vision::LinearTransformation", () => {
     const n = inp.shapeOf("vis_f").reduce((a, b) => a * b, 1);
     const rows = Array.from({ length: n }, (_, i) =>
@@ -1400,16 +1462,18 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
       .apply(toTensor(f()));
   });
 
-  // 지우기 둘. **둘 다 그림을 그대로 돌려준다** — 확률 0 과, 열 번이 다 빗나가는
-  // 자리다. 뒤쪽이 정작 틀리게 써지는 가지다: 열 번이 다 빗나갔을 때 "마지막으로
-  // 계산한 것"을 지우는 구현은 다른 케이스를 전부 통과한다.
+  // Two erasings. **Both return the picture unchanged** — one at probability 0 and one
+  // where all ten attempts miss. The second is the branch that actually gets written
+  // wrongly: an implementation that erases "the last thing it computed" when all ten miss
+  // passes every other case.
   out.set("vision::RandomErasing(p=0)", () =>
     new vision.RandomErasing(0.0).apply(toTensor(f())) as Tensor);
   out.set("vision::RandomErasing(ten draws all miss)", () =>
     new vision.RandomErasing(1.0, [0.99, 1.0], [1.0, 1.0]).apply(toTensor(f())) as Tensor);
 
-  // 여러 장이 나오는 둘. **쌓아서 비교한다** — 하나씩 대면 잘라낸 조각이 엉뚱한
-  // 칸에 들어가도 안 걸린다. 파이썬 쪽 `crops` 도 같은 이유로 쌓는다.
+  // The two that produce several pictures. **They are stacked before comparing** —
+  // compared one at a time, a crop landing in the wrong slot is not caught. The Python
+  // side's `crops` stacks for the same reason.
   const stacked = (parts: readonly vision.Image[]): Tensor =>
     Tensor.stack(parts.map(toTensor));
   out.set("vision::FiveCrop", () =>
@@ -1419,54 +1483,56 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::TenCrop(vertical)", () =>
     stacked(new vision.TenCrop([3, 2], true).apply(f()) as readonly vision.Image[]));
 
-  // 세로 뒤집기. 확률을 못 박아 뽑기와 무관하게 만든다.
+  // The vertical flip. The probability is pinned so the draw does not matter.
   out.set("vision::VerticalFlip(p=1)", () =>
     toTensor(new vision.RandomVerticalFlip(1.0).apply(f()) as vision.Image));
   out.set("vision::VerticalFlip(p=0)", () =>
     toTensor(new vision.RandomVerticalFlip(0.0).apply(f()) as vision.Image));
 
-  // 덧대기. **네 모드를 다 묻는다** — `reflect` 와 `symmetric` 은 가장자리를 한 번
-  // 더 쓰느냐로만 갈리고, 그 한 칸이 두 이름의 차이 전부다. 한쪽만 시험하면
-  // 둘을 맞바꿔 놔도 통과한다.
+  // Padding. **All four modes are asked about** — `reflect` and `symmetric` differ only
+  // in whether the edge is used once more, and that one cell is the whole difference
+  // between the two names. Testing one alone passes even with the two swapped.
   out.set("vision::Pad(all sides)", () =>
     toTensor(new vision.Pad(2).apply(f()) as vision.Image));
   out.set("vision::Pad(four sides)", () =>
     toTensor(new vision.Pad([1, 2, 3, 4]).apply(f()) as vision.Image));
-  // **리베이스한 뒤에는 골든을 다시 돌린다 — 이식한 케이스가 그대로라고 가정하지
-  // 않는다.** 이 세 줄이 바로 그것으로 빨개졌다: 저쪽이 덧댐을 1 에서 2 로 바꿨고,
-  // 이름은 그대로였고, 아무것도 이 파일이 같이 움직여야 한다고 말해 주지 않았다.
+  // **Rerun the golden after a rebase — do not assume a ported case is unchanged.**
+  // These three lines went red for exactly that: the other side changed the padding from 1
+  // to 2, the name stayed the same, and nothing said this file had to move with it.
   //
-  // 저쪽에 규칙이 하나 적혀 있다 — 입력을 바꾸면 `cases.ts` 에서 그 이름을 grep 하라.
-  // 맞는 규칙이지만 **그 절반만으로는 안 된다**: 편집하는 사람은 main 밖에 못 본다.
-  // 이식이 브랜치 위에 있는 동안은 grep 에 안 걸리고, 이식하는 사람은 늘 브랜치 위에
-  // 있다. 그래서 나머지 절반이 여기 있다.
+  // A rule is written over there — after changing an input, grep `cases.ts` for the name.
+  // It is the right rule and **that half alone is not enough**: whoever is editing cannot
+  // see outside main. While a port sits on a branch it does not appear in that grep, and
+  // whoever is porting is always on a branch. So the other half lives here.
   //
-  // **덧댐이 2 다. 1 이면 안 된다.** 1 칸에서는 `symmetric` 이 가장자리를 한 번
-  // 비추는데 그게 곧 가장자리 값이라, 두 모드가 수학적으로 같은 답을 낸다 — 세 케이스가
-  // 다 1 이던 동안 구현에서 두 이름을 맞바꿔도 전부 통과했다(실측). 2 가 두 낱말이
-  // 갈리는 가장 작은 덧댐이다.
+  // **The padding is 2. It must not be 1.** At one cell `symmetric` mirrors the edge once
+  // and that is the edge value itself, so the two modes give mathematically identical
+  // answers — while all three cases were at 1, swapping the two names in the implementation
+  // still passed everything (measured). 2 is the smallest padding at which the two words
+  // separate.
   out.set("vision::Pad(edge)", () =>
     toTensor(new vision.Pad(2, 0, "edge").apply(f()) as vision.Image));
   out.set("vision::Pad(reflect)", () =>
     toTensor(new vision.Pad(2, 0, "reflect").apply(f()) as vision.Image));
   out.set("vision::Pad(symmetric)", () =>
     toTensor(new vision.Pad(2, 0, "symmetric").apply(f()) as vision.Image));
-  // **채널별 색으로 덧댄다.** 파이썬 쪽은 이것을 numpy 의 `constant_values` 로 못
-  // 넘긴다 — 그 인자는 축마다 읽히므로 세 색이 채널 축을 칠한다. uint8 케이스라
-  // 저쪽은 진짜 PIL 이미지를 받고, 여기는 전치 없이 (H,W,C) 로 나온다.
+  // **Padded with a per-channel colour.** The Python side cannot pass this through
+  // numpy's `constant_values` — that argument reads per axis, so three colours paint the
+  // channel axis. It is a uint8 case, so that side receives a real PIL image and this one
+  // comes out as (H,W,C) with no transpose.
   out.set("vision::Pad(a colour per channel)", () =>
     asTensor(new vision.Pad(1, [1, 2, 3]).apply(u8()) as vision.Image));
 
-  // 학습자의 함수가 파이프라인에 들어가는 유일한 자리.
+  // The one place a learner's own function enters the pipeline.
   out.set("vision::Lambda", () =>
     toTensor(new vision.Lambda((x) => {
       const img = x as vision.Image;
       return { ...img, data: img.data.map((v) => v * 2) };
     }).apply(f()) as vision.Image));
 
-  // 감싸개 셋. **하나짜리 목록으로 묻는다** — 뽑기를 비교할 수 없으므로 뽑을
-  // 것이 하나뿐이거나 확률이 0/1 인 자리만 결정적이다. 뽑기 자체가 제대로 도는지는
-  // pytest 가 분포로 본다.
+  // The three wrappers. **They are asked with a one-item list** — draws cannot be
+  // compared, so only a single thing to draw, or a probability of 0/1, is deterministic.
+  // Whether the drawing itself works is looked at by pytest, distributionally.
   out.set("vision::RandomApply(p=1)", () =>
     toTensor(new vision.RandomApply([new vision.Pad(1)], 1.0).apply(f()) as vision.Image));
   out.set("vision::RandomApply(p=0)", () =>
@@ -1476,11 +1542,12 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::RandomOrder(one to order)", () =>
     toTensor(new vision.RandomOrder([new vision.Pad(1)]).apply(f()) as vision.Image));
 
-  // 흑백. **세 채널 형태가 모델이 원하는 것**이고, 채널 수가 안 바뀌는 것이 요점이다.
+  // Greyscale. **The three-channel form is what a model wants**, and the channel count
+  // not changing is the point.
   //
-  // 그리고 이 파일에서 **실수 화소로 산술을 하는 첫 변환**이다. 나머지는 화소를
-  // 옮기기만 해서 float64 로 계산해도 값이 안 갈렸다. 여기는 갈린다 — `vision.ts`
-  // 의 `toGray` 주석에 numpy 의 승격 규칙과 함께 적어 뒀다.
+  // It is also **the first transform in this file that does arithmetic on float pixels.**
+  // The rest only move pixels, so computing in float64 did not change their values. Here
+  // it does — written up with numpy's promotion rules in `vision.ts`'s `toGray` comment.
   out.set("vision::Grayscale(one channel)", () =>
     toTensor(new vision.Grayscale().apply(f()) as vision.Image));
   out.set("vision::Grayscale(three channels)", () =>
@@ -1488,32 +1555,36 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::RandomGrayscale(p=1)", () =>
     toTensor(new vision.RandomGrayscale(1.0).apply(f()) as vision.Image));
 
-  // 색 지터. **한 인자만 한 값에 못 박는다** — 그러면 뽑기의 답이 하나고, 같이
-  // 뽑는 순서도 세울 것이 하나뿐이라 상관없어진다. 얼어붙은 값이 무작위 변환에게
-  // 물을 수 있는 것은 "지터가 옳은 함수에 닿는가" 까지다.
+  // Colour jitter. **One argument is pinned to one value** — then the draw has one
+  // answer, and the order the draws are made in has one thing to order, so it stops
+  // mattering. What a frozen value can ask of a random transform reaches as far as "does
+  // the jitter arrive at the right function".
   out.set("vision::ColorJitter(brightness pinned)", () =>
     photo(new vision.ColorJitter([0.6, 0.6]).apply(f()) as vision.Image));
   out.set("vision::ColorJitter(hue pinned)", () =>
     photo(new vision.ColorJitter(undefined, undefined, undefined, [0.2, 0.2])
       .apply(f()) as vision.Image));
 
-  // `transforms.functional`. **자리를 뽑지 않고 준다** — 위의 자르기는 전부 답이
-  // 하나가 되게 못 박은 뽑기를 지나지만, 이 넷은 네 수 자체가 케이스다.
+  // `transforms.functional`. **The position is given rather than drawn** — the crops
+  // above all pass through a draw pinned to one answer, while for these four the four
+  // numbers themselves are the case.
   out.set("vision::F.crop", () =>
     toTensor(vision.crop(f(), 1, 1, 3, 2)));
   out.set("vision::F.resized_crop", () =>
     toTensor(vision.resizedCrop(f(), 1, 0, 3, 4, [2, 2])));
-  // `Pad` 의 두 값 형태 — (좌우, 상하) 인데 (좌, 상) 으로 읽힌다. 클래스 케이스는
-  // 네 수를 주므로 두 읽기가 같은 답을 낸다.
+  // `Pad`'s two-value form — (left/right, top/bottom), which reads as (left, top). The
+  // class case passes four numbers, so both readings give the same answer.
   out.set("vision::F.pad(two numbers)", () =>
     toTensor(vision.pad(f(), [1, 2], 0.5)));
-  // **이 표에서 무언가가 실제로 지워지는 첫 케이스다.** `RandomErasing` 의 둘은
-  // p=0 과 열 번이 다 빗나가는 가지라, 엉뚱한 사각형을 지우거나 엉뚱한 수로
-  // 채우는 구현도 둘 다 통과한다.
+  // **The first case in this table where something is actually erased.** The two
+  // `RandomErasing` cases are the p=0 branch and the all-ten-miss branch, so an
+  // implementation erasing the wrong rectangle or filling with the wrong number passes both
+  // of them.
   out.set("vision::F.erase", () =>
     vision.erase(toTensor(f()), 1, 1, 2, 2, Tensor.full([3, 2, 2], 0.25)));
-  // **`get_image_size` 는 너비가 먼저**이고 나머지는 전부 높이가 먼저다. 글자로
-  // 얼려 두면 뒤바뀐 것이 그럴듯한 짝이 아니라 다른 문자열이 된다.
+  // **`get_image_size` puts the width first** and everything else puts the height first.
+  // Frozen as characters, a swap becomes a different string rather than a plausible
+  // pair.
   out.set("vision::F.sizes", () => {
     const img = f();
     return `[${vision.getDimensions(img).join(", ")}] ` +
@@ -1521,29 +1592,31 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
       `${vision.getImageNumChannels(img)}`;
   });
 
-  // 광도계 다섯. **양쪽 다 텐서 경로로 간다, uint8 까지** — 이 표에서 저쪽에
-  // PIL 이미지를 안 건네는 유일한 자리다. torchvision 은 이 다섯을 두 번 구현해
-  // 뒀고 둘은 일치하지 않는다. 우리 것은 두 번째를 옮겼다.
+  // The photometric five. **Both sides take the tensor path, uint8 included** — the one
+  // place in this table that does not hand the other side a PIL image. torchvision
+  // implements these five twice and the two do not agree. Ours ported the second.
   out.set("vision::F.adjust_brightness(dark)", () => photo(vision.adjustBrightness(f(), 0.5)));
-  // **1 위에서는 잘린다**, 그리고 그 자름은 1 아래 배율이 한 번도 안 닿는 절반이다.
+  // **Above 1 it clips**, and that clipping is the half a factor below 1 never
+  // reaches.
   out.set("vision::F.adjust_brightness(bright)", () => photo(vision.adjustBrightness(f(), 1.7)));
   out.set("vision::F.adjust_contrast", () => photo(vision.adjustContrast(f(), 0.5)));
   out.set("vision::F.adjust_saturation", () => photo(vision.adjustSaturation(f(), 1.7)));
-  // 색상은 RGB 를 떠나는 유일한 것이다. 4분의 1 바퀴와 작은 음수 — 0 에서 감기는
-  // 것과 1 에서 감기는 것이 서로 다른 줄의 산술이다.
+  // Hue is the only one that leaves RGB. A quarter turn and a small negative — wrapping
+  // at 0 and wrapping at 1 are arithmetic on different lines.
   out.set("vision::F.adjust_hue(quarter turn)", () => photo(vision.adjustHue(f(), 0.25)));
   out.set("vision::F.adjust_hue(backwards)", () => photo(vision.adjustHue(f(), -0.1)));
   out.set("vision::F.adjust_gamma", () => photo(vision.adjustGamma(f(), 2.2)));
   out.set("vision::F.adjust_gamma(with gain)", () => photo(vision.adjustGamma(f(), 0.5, 0.5)));
-  // **바이트 가지.** 모든 블렌드가 캐스트로 끝나므로 작업 정밀도가 답을 고를 수 있는
-  // 자리다 — 다만 이 두 건이 그것을 재지는 못한다. `vision.ts` 의 광도계 주석에
-  // 무엇을 쟀고 무엇이 안 걸리는지 적어 뒀다.
-  // **배율 0.1 이 그 자리를 무는 배율이다.** 1.7 에서는 이 그림에서 float64 와
-  // float32 가 한 화소도 안 갈린다 — 같은 그림도 배율에 따라 갈리고 안 갈린다.
-  // 그리고 이 줄은 파이썬 쪽 케이스의 배율과 **손으로 맞춰져 있다**: 이름이 같으므로
-  // 저쪽이 배율을 바꾸면 여기도 같은 커밋에서 바뀌어야 하고, 아무것도 그걸 말해 주지
-  // 않는다. 케이스를 더하거나 지우는 것은 안전하고, **이미 이식된 케이스의 입력을
-  // 바꾸는 것**만 두 파일이 같이 움직여야 한다.
+  // **The byte branch.** Every blend ends in a cast, so this is a place where the working
+  // precision can pick the answer — and these two cases do not measure it. `vision.ts`'s
+  // photometric comment records what was measured and what goes uncaught.
+  // **A factor of 0.1 is the factor that bites there.** At 1.7, float64 and float32 do not
+  // differ on a single pixel of this picture — the same picture diverges or does not
+  // depending on the factor.
+  // And this line is **matched by hand to the Python case's factor**: the names are the
+  // same, so a factor changed over there has to change here in the same commit, and nothing
+  // says so. Adding or removing a case is safe; only **changing the input of a case that
+  // has already been ported** requires both files to move together.
   out.set("vision::F.adjust_saturation(uint8)", () => photo(vision.adjustSaturation(u8(), 0.1)));
   out.set("vision::F.adjust_hue(uint8)", () => photo(vision.adjustHue(u8(), 0.25)));
 
