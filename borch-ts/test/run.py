@@ -195,7 +195,7 @@ def run(headed=False, verbose=False):
             page.set_default_timeout(0)
             # 셰이더 컴파일 오류는 콘솔로만 나온다. 삼키면 원인을 못 찾는다.
             page.on("console", on_console)
-            page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
+            page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
             # 설명 안 된 404 는 덮어두면 안 된다 — 이 저장소의 러너가 한 번
             # 404 HTML 을 파이썬 파일로 받아 엉뚱한 자리에서 터진 적이 있다.
             page.on("response", lambda r: print(f"  [404] {r.url}")
@@ -507,7 +507,7 @@ def main(argv):
     dist = ROOT / "borch-ts" / "dist" / "test" / "golden.js"
     if not dist.exists():
         # 낡은 dist 로 도는 것보다 안 도는 편이 낫다.
-        print(f"방출물이 없다: {dist}\n  먼저: npm run build:ts", file=sys.stderr)
+        print(f"no emit: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
     report = run(headed="--headed" in argv, verbose="--verbose" in argv)

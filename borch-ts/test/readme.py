@@ -1,15 +1,15 @@
-"""문서에 적힌 예시가 실제로 도는지 본다.
+"""Whether the examples written in the documentation actually run.
 
     npm run build:ts
     uv run --with playwright python borch-ts/test/readme.py [--headed]
 
-**문서의 코드는 안 돌리면 썩는다.** 이름이 바뀌어도, 인자 순서가 바뀌어도, `await` 가
-하나 빠져도 아무도 안 알려주고 첫 사용자가 거기서 막힌다. 이 저장소는 README 의 설치
-안내가 실제로 안 듣던 것을 이미 두 번 잡았다.
+**Code in a document rots unless it is run.** A renamed name, a reordered argument, one
+missing `await` — nobody says a word and the first user stops there. This repository has
+already caught README install instructions that did not work, twice.
 
-값은 안 묻는다 — 골든이 그 일을 한다. 여기서 묻는 것은 하나다: **적어 놓은 그대로
-쳤을 때 도는가.** 그래서 소프트웨어 어댑터에서도 막지 않는다. 예시가 도는지는
-장치와 무관하다.
+It does not ask about values — the golden does that. What is asked here is one thing:
+**does it run when typed exactly as written.** So it does not refuse on a software adapter
+either. Whether an example runs has nothing to do with the device.
 """
 
 import sys
@@ -25,7 +25,7 @@ TIMEOUT_MS = 300_000
 def main(argv):
     dist = runner.ROOT / "borch-ts" / "dist" / "test" / "readme.js"
     if not dist.exists():
-        print(f"방출물이 없다: {dist}\n  먼저: npm run build:ts", file=sys.stderr)
+        print(f"no emit: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
     port, stop = runner.serve(runner.ROOT)
@@ -36,9 +36,9 @@ def main(argv):
                 browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
-            page.on("console", lambda m: print(f"  [브라우저] {m.text}")
+            page.on("console", lambda m: print(f"  [browser] {m.text}")
                     if m.type == "error" else None)
-            page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
+            page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
             page.goto(f"http://127.0.0.1:{port}{PAGE}")
             page.wait_for_function("window.__borchReadme !== undefined",
                                    timeout=TIMEOUT_MS)
@@ -47,15 +47,16 @@ def main(argv):
         stop()
 
     if "error" in result:
-        print(f"**예시가 터졌다** — 문서를 그대로 친 사람이 여기서 막힌다.\n"
+        print(f"**an example blew up** — somebody typing the document verbatim stops "
+              f"here.\n"
               f"{result['error']}", file=sys.stderr)
         return 1
-    print(f"어댑터: {result.get('adapter', '(모름)')}")
+    print(f"adapter: {result.get('adapter', '(unknown)')}")
     print(result["text"])
-    # **이 줄이 `"그대로 돌고" in text` 였다.** 그 낱말은 두 예시의 성공 문장 양쪽에
-    # 들어 있어서, 첫 예시가 실패하고 LBFGS 만 통과해도 0 이 나갔다 — 손실이 안
-    # 내려가는 예시를 문서에 그대로 둔 채로.
-    return verdict(result, "README 예시")
+    # **This line was `"그대로 돌고" in text`.** That phrase sits in the success sentence
+    # of both examples, so with the first failing and only LBFGS passing it exited 0 —
+    # leaving an example whose loss does not go down in the document.
+    return verdict(result, "the README examples")
 
 
 if __name__ == "__main__":

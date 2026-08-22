@@ -146,7 +146,7 @@ def _check_pieces(pieces):
 def main(argv):
     dist = runner.ROOT / "borch-ts" / "dist" / "test" / "bench.js"
     if not dist.exists():
-        print(f"방출물이 없다: {dist}\n  먼저: npm run build:ts", file=sys.stderr)
+        print(f"no emit: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
     port, stop = runner.serve(runner.ROOT)
@@ -157,7 +157,7 @@ def main(argv):
                 browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
-            page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
+            page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
             page.goto(f"http://127.0.0.1:{port}/borch-ts/test/samemodel.html")
             page.wait_for_function("window.__borchModel !== undefined",
                                    timeout=600_000)

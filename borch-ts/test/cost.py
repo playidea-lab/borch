@@ -1,22 +1,23 @@
-"""한 스텝이 무엇을 얼마나 쓰는가 — **시간이 아니라 세는 것**으로.
+"""What one step uses and how much of it — **by counting rather than by timing.**
 
     npm run build:ts
     uv run --with playwright python borch-ts/test/cost.py [--headed]
 
-## 벤치와 무엇이 다른가
+## How it differs from the bench
 
-`bench.py` 는 벽시계를 재고, 그래서 소프트웨어 어댑터에서 **답을 거부한다** —
-CPU 래스터라이저에서 잰 ms 는 이 라이브러리의 수가 아니다. 그 판단이 맞다.
+`bench.py` measures a wall clock and therefore **refuses to answer on a software
+adapter** — ms measured on a CPU rasteriser is not this library's number. That judgement
+is right.
 
-여기서 세는 것(dispatch 수·제출 수·잡고 있는 버퍼)은 **코드 경로가 정하는 수라
-장치가 안 바꾼다.** 그래서 막지 않는다 — **벤치가 못 도는 자리에서 도는 것**이
-이 검사의 존재 이유다.
+What is counted here (dispatches, submissions, buffers held) is **a number the code path
+decides and the device does not change.** So it does not refuse — **running where the
+bench cannot** is this check's reason to exist.
 
-## 골든이 못 보는 것
+## What the golden cannot see
 
-골든은 값만 본다. 스텝마다 버퍼를 하나씩 흘려도, 커널을 두 배로 걸어도 값은
-똑같이 맞으므로 표는 전부 초록이다. `scope()` 가 있는 이유가 그 자리이고,
-지금까지 그것을 지키는 검사가 없었다.
+The golden looks only at values. Leak one buffer per step, or issue twice the kernels, and
+the values are equally right, so the whole table is green. That is the place `scope()`
+exists for, and until now nothing guarded it.
 """
 
 import sys
@@ -30,11 +31,11 @@ TIMEOUT_MS = 600_000
 
 
 def main(argv):
-    # 낡은 방출물로 초록을 보는 것이 안 도는 것보다 나쁘다.
+    # Seeing green from a stale emit is worse than not running at all.
     runner.require_fresh_dist()
     dist = runner.ROOT / "borch-ts" / "dist" / "test" / "cost.js"
     if not dist.exists():
-        print(f"방출물이 없다: {dist}\n  먼저: npm run build:ts", file=sys.stderr)
+        print(f"no emit: {dist}\n  first: npm run build:ts", file=sys.stderr)
         return 2
 
     port, stop = runner.serve(runner.ROOT)
@@ -45,9 +46,9 @@ def main(argv):
                 browser_of(p, headed="--headed" in argv) as browser:
             page = browser.new_page()
             page.set_default_timeout(0)
-            page.on("console", lambda m: print(f"  [브라우저] {m.text}")
+            page.on("console", lambda m: print(f"  [browser] {m.text}")
                     if m.type == "error" else None)
-            page.on("pageerror", lambda e: print(f"  [브라우저 예외] {e}"))
+            page.on("pageerror", lambda e: print(f"  [browser exception] {e}"))
             page.goto(f"http://127.0.0.1:{port}{PAGE}")
             page.wait_for_function("window.__borchCost !== undefined",
                                    timeout=TIMEOUT_MS)
@@ -56,12 +57,12 @@ def main(argv):
         stop()
 
     if "error" in result:
-        print(f"**비용 점검이 터졌다**\n{result['error']}", file=sys.stderr)
+        print(f"**the cost check blew up**\n{result['error']}", file=sys.stderr)
         return 1
     print(result["text"])
-    # 판정은 검사들의 상태에서 나온다. 여기와 페이지가 같은 글을 서로 다른 낱말로
-    # 훑고 있었다 — `verdict.py` 가 그 셋을 적어 두었다.
-    return verdict(result, "비용 검사")
+    # The verdict comes from the checks' state. Here and the page were scanning one
+    # document for different words — `verdict.py` records all three ways that goes wrong.
+    return verdict(result, "the cost checks")
 
 
 if __name__ == "__main__":
