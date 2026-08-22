@@ -7375,9 +7375,22 @@ function addMethod(out: Map<string, Case>): void {
   }
 
   // 짝이 필요한 것. 비교는 0/1 을 내고 골든의 bool 과 그대로 맞는다.
-  for (const name of ["eq", "ne", "lt", "le", "gt", "ge", "maximum", "minimum"]) {
+  for (const name of ["eq", "ne", "lt", "le", "gt", "ge"]) {
     out.set(`method::${name}`, () => vec().binary(name, other()));
   }
+  // **These two go through the public method, and the rest above do not.**
+  // `binary("maximum", …)` is the internal helper, and calling it here left
+  // `Tensor.maximum` — the name a user types — measured by nothing: the kernel was
+  // right, the golden was green, and the method did not exist at all until now.
+  // The core-to-borch.ts name axis is what found that; a value comparison cannot,
+  // because both sides of it were the helper.
+  //
+  // The six above still take the helper because `eq`, `ne`, `lt`, `le`, `gt` and
+  // `ge` have no public method of those names here — they are `equal`, `notEqual`,
+  // `lessThan` and so on, and the axis counts all six as gaps. Changing these lines
+  // is what closing those gaps would look like.
+  out.set("method::maximum", () => vec().maximum(other()));
+  out.set("method::minimum", () => vec().minimum(other()));
   out.set("method::dot", () => vec().dot(other()));
   out.set("method::outer", () => vec().outer(other()));
 
