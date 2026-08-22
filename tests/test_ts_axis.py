@@ -53,7 +53,10 @@ FROZEN = {
     # A rule that misses in our favour is worse than no rule — the number improving
     # is what made this one findable.
     "Tensor": 112,
-    "nn": 14,
+    # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
+    # is a layer and `embedding` is a function; folding both reported the layer as
+    # present because the function was. torch's initial capital IS that boundary.
+    "nn": 16,
     "nn.functional": 30,
     "optim": 0,
     "optim.lr_scheduler": 0,

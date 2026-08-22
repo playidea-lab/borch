@@ -91,6 +91,16 @@ ALIASED = {
     # while carrying across the sixty `method2::` cases. "It is an alias" and "the name is
     # not there" can both be true at once.
     "trapz": "trapezoid",
+    # **These two arrived when `_flat` stopped folding the first letter**, and they had
+    # been hidden by exactly the fault that rule was tightened against: `tensor`
+    # matched the class `Tensor` and `flatten` matched the layer `nn.Flatten`. A
+    # factory function is not its class and a layer is not a method, so both were
+    # reported present because a differently-cased neighbour existed.
+    #
+    # Verified against the index rather than assumed: it carries `Tensor`, `Flatten`,
+    # `ravel`, `reshape` and `from` — and neither `tensor` nor `flatten`.
+    "tensor": "Tensor.from",
+    "flatten": "ravel (or reshape([-1]))",
 }
 # `is_tensor` had one line here. The declaration index was not sweeping `index.ts`, so
 # `isTensor` went uncaught despite being a public name — not a missing name but **a blind
@@ -125,9 +135,20 @@ def _flat(name):
     having appeared, and before that `bernoulli_` folded onto `bernoulli` and produced a
     phantom "nineteen present". The same normalisation erased meaning three times in this
     session — erasing and matching are different jobs.
+
+    **And the first letter stays too**, for the same reason one level up. In torch an
+    initial capital is the class/function boundary: `nn.Embedding` is a layer and
+    `nn.functional.embedding` is a function. Folding both reports the layer as present
+    because the function is — measured on the core-to-borch.ts axis, where exactly that
+    hid `Embedding` and one other.
+
+    This check passes with the fold and without it, so nothing here exercises the
+    difference today. That is the reason to keep the stricter rule rather than the
+    reason to skip it: passing both ways means the check cannot tell them apart.
     """
     tail = "_" if name.endswith("_") else ""
-    return name.replace("_", "").lower() + tail
+    body = name.replace("_", "")
+    return (body[:1] + body[1:].lower()) + tail
 
 
 def _ts_surface():

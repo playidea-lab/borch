@@ -54,7 +54,8 @@ NOT_A_NAME = {
 def _flat(name):
     """The same rule as `test_binding_fills_in._flat`. Only the trailing underscore is kept."""
     tail = "_" if name.endswith("_") else ""
-    return name.replace("_", "").lower() + tail
+    body = name.replace("_", "")
+    return (body[:1] + body[1:].lower()) + tail
 
 
 def _alias_rows():

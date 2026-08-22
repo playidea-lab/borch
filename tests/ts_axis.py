@@ -237,6 +237,33 @@ def _camel(name):
     return head + "".join(p[:1].upper() + p[1:] for p in rest) + trailing
 
 
+def _folds_onto(name, lowered):
+    """Whether `name` matches something in borch.ts once case is set aside.
+
+    **Needed, because `_camel` cannot bridge every spelling.** The core writes
+    `tensorinv` and `tensorsolve` with no underscore at all, and borch.ts writes
+    `tensorInv` and `tensorSolve`; there is nothing for a split-on-underscore rule
+    to work with. Twelve names sit in that shape and dropping the fold invents
+    twelve gaps that are not there — measured.
+
+    **But the first letter is kept, and that is the whole care in this function.**
+    In torch, an initial capital is the class/function boundary: `nn.Embedding` is
+    a layer and `nn.functional.embedding` is a function, and they are not each
+    other. Folding both would report the layer as present because the function is,
+    which is a normaliser erasing a distinction the domain makes — the same fault
+    as `_camel` stripping the in-place underscore, one line down and pointing the
+    other way.
+
+    So: any normaliser is a claim about which differences do not matter. This one
+    claims that internal capitalisation does not and that the first letter does.
+    """
+    if not name:
+        return False
+    if name[0].isupper():                        # a class; the capital is the name
+        return False
+    return name.lower() in lowered
+
+
 def compare():
     """`{space: (gaps, refusals)}`, with the two spellings reconciled.
 
@@ -253,7 +280,7 @@ def compare():
         if space not in SPACES:                  # borchvision's spaces are held elsewhere
             continue
         missing = [n for n in torch_gap._public(ours)
-                   if _camel(n) not in theirs and n.lower() not in lowered]
+                   if _camel(n) not in theirs and not _folds_onto(n, lowered)]
         out[space] = (sorted(n for n in missing if n not in stubs),
                       sorted(n for n in missing if n in stubs))
     return out

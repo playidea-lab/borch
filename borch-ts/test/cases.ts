@@ -7585,22 +7585,26 @@ function addMethod(out: Map<string, Case>): void {
 
   // The ones needing a partner. A comparison gives 0/1 and matches the golden's bool as it
   // stands.
-  for (const name of ["eq", "ne", "lt", "le", "gt", "ge"]) {
-    out.set(`method::${name}`, () => vec().binary(name, other()));
-  }
-  // **These two go through the public method, and the rest above do not.**
-  // `binary("maximum", …)` is the internal helper, and calling it here left
-  // `Tensor.maximum` — the name a user types — measured by nothing: the kernel was
-  // right, the golden was green, and the method did not exist at all until now.
-  // The core-to-borch.ts name axis is what found that; a value comparison cannot,
-  // because both sides of it were the helper.
   //
-  // The six above still take the helper because `eq`, `ne`, `lt`, `le`, `gt` and
-  // `ge` have no public method of those names here — they are `equal`, `notEqual`,
-  // `lessThan` and so on, and the axis counts all six as gaps. Changing these lines
-  // is what closing those gaps would look like.
-  out.set("method::maximum", () => vec().maximum(other()));
-  out.set("method::minimum", () => vec().minimum(other()));
+  // **All eight go through the public method, and until today none of them did.**
+  // They called `vec().binary("gt", other())` — the internal helper — so the kernel
+  // was measured, the gradient a tie splits was measured, and the eight names a user
+  // types were measured by nothing. Two of them (`maximum`, `minimum`) did not exist
+  // at all while their cases were green, and the other six existed only under
+  // torch's long spellings: `greater` was here and `gt` was not.
+  //
+  // A case that calls the internal helper is green about the internal helper. The
+  // core-to-borch.ts name axis is what found it; no value comparison can, because
+  // both sides of the comparison were the same helper.
+  const paired: [string, (a: Tensor, b: Tensor) => Tensor][] = [
+    ["eq", (a, b) => a.eq(b)], ["ne", (a, b) => a.ne(b)],
+    ["lt", (a, b) => a.lt(b)], ["le", (a, b) => a.le(b)],
+    ["gt", (a, b) => a.gt(b)], ["ge", (a, b) => a.ge(b)],
+    ["maximum", (a, b) => a.maximum(b)], ["minimum", (a, b) => a.minimum(b)],
+  ];
+  for (const [name, call] of paired) {
+    out.set(`method::${name}`, () => call(vec(), other()));
+  }
   out.set("method::dot", () => vec().dot(other()));
   out.set("method::outer", () => vec().outer(other()));
 
