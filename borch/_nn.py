@@ -793,9 +793,39 @@ class _RNNBase(Module):
     """
 
     gates = 1
+    mode = None
 
-    def __init__(self, input_size, hidden_size, num_layers=1, bias=True, batch_first=False):
+    # torch's own set. `RNN_TANH` and `RNN_RELU` are one class with two activations,
+    # which is why `RNN` takes `nonlinearity` and the mode carries it here.
+    MODES = ("RNN_TANH", "RNN_RELU", "LSTM", "GRU")
+
+    def __init__(self, mode, input_size, hidden_size, num_layers=1, bias=True,
+                 batch_first=False, dropout=0.0, bidirectional=False, proj_size=0):
+        """torch's parameter list, `mode` first.
+
+        **This began at `input_size`**, so `RNNBase` disagreed with torch by one
+        place at every position and the four arguments after `batch_first` were not
+        there at all. `RNN`, `LSTM` and `GRU` pass their own mode now, which is what
+        torch does too — the string is not decoration, it is what tells the base
+        class which recurrence it is building.
+
+        `dropout`, `bidirectional` and `proj_size` are **refused when asked for**
+        rather than accepted and ignored. A bidirectional layer that silently runs
+        one direction returns a plausible number of the wrong shape's meaning.
+        """
         super().__init__()
+        if mode not in self.MODES:
+            raise ValueError(f"Unrecognized RNN mode: {mode}")
+        self.mode = mode
+        if dropout:
+            _unsupported(f"{type(self).__name__}(dropout={dropout})")
+        if bidirectional:
+            _unsupported(f"{type(self).__name__}(bidirectional=True)")
+        if proj_size:
+            _unsupported(f"{type(self).__name__}(proj_size={proj_size})")
+        self.dropout = dropout
+        self.bidirectional = bidirectional
+        self.proj_size = proj_size
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -864,7 +894,9 @@ class RNN(_RNNBase):
         if nonlinearity not in ("tanh", "relu"):
             raise ValueError("nonlinearity must be 'tanh' or 'relu'.")
         self.nonlinearity = nonlinearity
-        super().__init__(*a, **k)
+        # The mode carries the activation, which is why `RNN_TANH` and `RNN_RELU`
+        # are two of torch's four modes and one class here.
+        super().__init__(f"RNN_{nonlinearity.upper()}", *a, **k)
 
     def _step(self, pre_t, h, w_hh, b_hh):
         act = tanh if self.nonlinearity == "tanh" else relu
@@ -895,6 +927,9 @@ class LSTM(_RNNBase):
     """
 
     gates = 4
+
+    def __init__(self, *a, **k):
+        super().__init__("LSTM", *a, **k)
 
     def _step(self, pre_t, state, w_hh, b_hh):
         h, c = state
@@ -932,6 +967,9 @@ class GRU(_RNNBase):
     """
 
     gates = 3
+
+    def __init__(self, *a, **k):
+        super().__init__("GRU", *a, **k)
 
     def _step(self, pre_t, h, w_hh, b_hh):
         H = self.hidden_size
@@ -1199,13 +1237,46 @@ class MultiheadAttention(Module):
     values match and the `state_dict` does not.
     """
 
-    def __init__(self, embed_dim, num_heads, bias=True, batch_first=False):
+    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True,
+                 add_bias_kv=False, add_zero_attn=False, kdim=None, vdim=None,
+                 batch_first=False):
+        """torch's parameter list, in torch's order.
+
+        **This took `(embed_dim, num_heads, bias, batch_first)`**, so
+        `MultiheadAttention(64, 8, 0.1)` — torch's own way of writing a dropout of
+        0.1 — set `bias=0.1` here and nothing raised. Five arguments were missing
+        from the middle and every one of them shifted what followed.
+
+        Four of the five are **refused rather than implemented**, and the refusal
+        already existed one layer down: `multi_head_attention_forward` names
+        `bias_k`, `add_zero_attn` and `use_separate_proj_weight` and stops. Carrying
+        the argument here means the refusal arrives with the right name attached
+        instead of the value landing on a different parameter — *an absent feature
+        beats a wrong answer* is this library's rule, and a wrong **position** is a
+        wrong answer wearing the shape of a feature.
+
+        `dropout` is the one that works: the function applies it while training.
+        """
         super().__init__()
         if embed_dim % num_heads:
             raise ValueError(f"embed_dim({embed_dim}) is not divisible by num_heads({num_heads}).")
+        if add_bias_kv:
+            _unsupported("MultiheadAttention(add_bias_kv=True)")
+        if add_zero_attn:
+            _unsupported("MultiheadAttention(add_zero_attn=True)")
+        for name, given in (("kdim", kdim), ("vdim", vdim)):
+            # torch only takes the separate-projection path when these differ from
+            # `embed_dim`; passing the same number is the ordinary layer and is not
+            # a request for anything this cannot do.
+            if given is not None and given != embed_dim:
+                _unsupported(f"MultiheadAttention({name}={given}) — a key or value "
+                             "width unlike the embedding's")
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
+        self.dropout = dropout
+        self.kdim = embed_dim if kdim is None else kdim
+        self.vdim = embed_dim if vdim is None else vdim
         self.batch_first = batch_first
 
         bound = _math.sqrt(1.0 / embed_dim)
@@ -1225,7 +1296,7 @@ class MultiheadAttention(Module):
             query, key, value = (t.transpose(0, 1) for t in (query, key, value))
         out, weights = multi_head_attention_forward(
             query, key, value, self.embed_dim, self.num_heads,
-            self.in_proj_weight, self.in_proj_bias, None, None, False, 0.0,
+            self.in_proj_weight, self.in_proj_bias, None, None, False, self.dropout,
             self.out_proj.weight, self.out_proj.bias, self.training,
             key_padding_mask=key_padding_mask, need_weights=need_weights,
             attn_mask=attn_mask, average_attn_weights=average_attn_weights)

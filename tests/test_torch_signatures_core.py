@@ -54,8 +54,17 @@ pytest.importorskip("numpy")
 # the browser subset promises rather than a patch. Recorded so the decision is
 # findable — that is this table's job.
 SHIFTED = {
+    # 13 → 11. MultiheadAttention grew torch's five middle arguments -- dropout,
+    # add_bias_kv, add_zero_attn, kdim, vdim -- so MultiheadAttention(64, 8, 0.1),
+    # torch's own way of writing a dropout, no longer sets bias=0.1. Four of the five
+    # are refused rather than implemented, and the refusal already existed one layer
+    # down in multi_head_attention_forward; carrying the argument means the refusal
+    # arrives with the right name instead of the value landing elsewhere.
+    #
+    # RNNBase took mode first, as torch does, and RNN/LSTM/GRU pass their own. The
+    # string is not decoration: it is what tells the base which recurrence to build.
     "Tensor": 2,
-    "nn": 13,
+    "nn": 11,
     "nn.functional": 0,
     "optim": 2,
     "optim.lr_scheduler": 2,
@@ -80,7 +89,7 @@ UNALIGNED = {
 # not**, which is `torch_gap.py`'s kind of finding rather than a silent shift.
 SHORTER = {
     "Tensor": 2,
-    "nn": 52,
+    "nn": 54,
     "nn.functional": 0,
     "optim": 10,
     "optim.lr_scheduler": 1,

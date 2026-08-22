@@ -155,7 +155,7 @@ RENAMED = {
 # turning it into a truncation without anyone noticing.
 SHORTER = {
     "Tensor": 16,
-    "nn": 17,
+    "nn": 15,
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 12,
