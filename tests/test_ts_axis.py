@@ -60,7 +60,10 @@ FROZEN = {
     "nn.functional": 30,
     "optim": 0,
     "optim.lr_scheduler": 0,
-    "linalg": 3,
+    # 3 → 0. The three were `inv`, `pinv` and `matmul` — torch's spellings of
+    # `inverse`, `pinverse` and `mm`, which had no name anywhere in borch.ts. The
+    # `linalg` namespace carries them now.
+    "linalg": 0,
     "utils.data": 12,
 }
 

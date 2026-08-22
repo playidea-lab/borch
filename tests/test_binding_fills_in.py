@@ -230,9 +230,24 @@ def test_the_flattening_does_not_merge_two_names_into_one():
     #       convention leaking out of the kernels; it is torch's spelling, and a
     #       learner typing `x.bitwise_not_()` is typing the name torch gave them.
     #
-    # Listed **by name** rather than as a count, so a fourth blows up at once and
-    # these three show the list is not a number left half-done.
-    KNOWN = {"Rnnkind", "bitwisenot_", "logicalnot_"}
+    #   tensorInv / tensorinv
+    #   tensorSolve / tensorsolve
+    #       The `linalg` namespace, arriving after the three above. torch has these
+    #       as `linalg` free functions and as no method at all, while the binding
+    #       reaches borch.ts by calling a method on a tensor handle
+    #       (`handle(a).tensorSolve`). So the camelCase one is what the binding and
+    #       the golden call and the lowercase one is what somebody transcribing
+    #       torch writes — the same relation `inv`/`inverse` and `matmul`/`mm` have,
+    #       which simply do not collide because their letters differ.
+    #
+    #       This check earned its keep on the day: the namespace nearly arrived
+    #       carrying a **second implementation** of both, because the search that
+    #       reported them missing asked torch's spelling against camelCase method
+    #       names and matched nothing.
+    #
+    # Listed **by name** rather than as a count, so a sixth blows up at once and
+    # these five show the list is not a number left half-done.
+    KNOWN = {"Rnnkind", "bitwisenot_", "logicalnot_", "tensorinv", "tensorsolve"}
     clash = {k: v for k, v in _collisions(names).items() if k not in KNOWN}
     assert not clash, (
         "two declared names flatten onto one key, so the set is short and a lookup of\n"

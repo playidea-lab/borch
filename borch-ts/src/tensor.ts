@@ -134,7 +134,7 @@ function padIndex(
   }
   return idx;
 }
-import * as LA from "./linalg.js";
+import * as LA from "./_linalg.js";
 // **This is a circular import** — `special.ts` uses `Tensor`. It is used inside method
 // bodies, so it is called after the modules have finished loading, and it works. It must
 // not be used at the top level.

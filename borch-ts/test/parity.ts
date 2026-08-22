@@ -10,7 +10,7 @@
  */
 
 import {
-  device, type DType, init, keepAlive, manualSeed, nn, noGrad, optim, scope,
+  device, type DType, init, keepAlive, linalg, manualSeed, nn, noGrad, optim, scope,
   slice, Tensor, vision,
 } from "../src/index.js";
 
@@ -751,6 +751,96 @@ export async function report(): Promise<Report> {
   // Written here so it is not forgotten the next time this is tidied.
   want("SmoothL1Loss takes reduction first",
     new nn.SmoothL1Loss("none").call(lx(), ly()).size > 1);
+
+  // ── linalg: a namespace over methods that already carry the arithmetic ──
+  //
+  // **The golden cannot ask this either.** Every value here belongs to a `Tensor` method
+  // the golden already holds against real torch, so asking the values again would freeze a
+  // second copy of the same answers. What is unasked anywhere else is **the shape of the
+  // call** — which argument receives, and what the defaults are — and that is what a
+  // namespace is.
+  //
+  // The three below are the reason it is written by hand rather than generated. A loop
+  // over the method names produces all three defects, and none of them raises.
+  const sq = keepAlive(Tensor.from([4, 3, 6, 3], [2, 2]));
+  const rhs2 = keepAlive(Tensor.from([1, 2], [2, 1]));
+
+  const agreesWith = async (
+    name: string, got: Promise<Tensor> | Tensor, expected: Promise<Tensor> | Tensor,
+  ): Promise<void> => {
+    const [a, b] = [await got, await expected];
+    const shapeOk = a.shape.join(",") === b.shape.join(",");
+    want(name, shapeOk && same(await a.toArray(), await b.toArray()),
+      shapeOk ? "" : `shape [${a.shape}] vs [${b.shape}]`);
+  };
+
+  await agreesWith("linalg.det is the method", linalg.det(sq), sq.det());
+  await agreesWith("linalg.inv is `inverse`", linalg.inv(sq), sq.inverse());
+  await agreesWith("linalg.pinv is `pinverse`", linalg.pinv(sq), sq.pinverse());
+  await agreesWith("linalg.matmul is `mm`", linalg.matmul(sq, sq), sq.mm(sq));
+  await agreesWith("linalg.solve is the method", linalg.solve(sq, rhs2), sq.solve(rhs2));
+
+  // **`lu_solve` is received by the right-hand side.** torch orders it (LU, pivots, B) and
+  // the method is `B.luSolve(LU, pivots)`. Forwarded positionally the first argument would
+  // be `B`, and with a square matrix the name, the argument count and the shapes all still
+  // agree — only the value is wrong.
+  const fac = await sq.luFactor();
+  await agreesWith("linalg.luSolve takes the factors first",
+    linalg.luSolve(fac.LU, fac.pivots, rhs2), rhs2.luSolve(fac.LU, fac.pivots));
+  //
+  // Asked with a **square** right-hand side on purpose. With `[2,1]` the swap is refused
+  // on shape and the check would be measuring the shape rule instead — the danger is the
+  // case where nothing objects, so that is the case asked.
+  const rhsSq = keepAlive(Tensor.from([1, 0, 0, 1], [2, 2]));
+  const straight = Array.from(
+    await (await linalg.luSolve(fac.LU, fac.pivots, rhsSq)).toArray()).join(",");
+  const swapped = await linalg.luSolve(rhsSq, fac.pivots, fac.LU).then(
+    async (t) => Array.from(await t.toArray()).join(","), () => "(it refused)");
+  want("swapping lu_solve's arguments answers, and answers differently",
+    swapped !== straight && swapped !== "(it refused)",
+    `${straight}  vs  ${swapped}`);
+
+  // **`diagonal` reads different axes under the two names.** `torch.diagonal` takes the
+  // first two and `torch.linalg.diagonal` the last two, so on rank 3 even the shape
+  // differs — `(2,3,4)` gives `(2,3)` here and `(4,2)` through the method's defaults.
+  want("linalg.diagonal reads the last two axes",
+    linalg.diagonal(cube).shape.join(",") === "2,3",
+    linalg.diagonal(cube).shape.join(","));
+  want("the method's defaults still read the first two",
+    cube.diagonal().shape.join(",") === "4,2", cube.diagonal().shape.join(","));
+
+  // `multiDot` chooses the cheapest parenthesisation, and every order gives the same
+  // matrix, so it is asked against the plain chain.
+  const thin = keepAlive(Tensor.from([1, 2, 3, 4, 5, 6], [3, 2]));
+  const wide = keepAlive(Tensor.from([1, 0, 2, 0, 1, 3], [2, 3]));
+  await agreesWith("multiDot is the chain",
+    linalg.multiDot([thin, wide, thin]), thin.mm(wide).mm(thin));
+
+  const folded = keepAlive(Tensor.from([4, 3, 6, 3], [2, 1, 2]));
+  const back = await linalg.tensorinv(folded, 2);
+  want("tensorinv folds, inverts and unfolds",
+    back.shape.join(",") === "2,2,1", back.shape.join(","));
+
+  // **The internal kernel must not be reachable from the namespace.** `_linalg.ts` takes
+  // flat `Float64Array`s and dimension counts — `matmul(a, b, n, k, m)` — and forty of
+  // those names were being swept into the published reference as though they were the API.
+  // Re-export it and the reference fills with signatures nobody can call; that is what
+  // this row is here to catch.
+  const kernelOnly = [
+    "fromF32", "toF32", "mirror", "completeBasis", "eighGap", "hessenberg",
+    "luExpand", "luSolveFactored", "choleskyBackward", "matrixExpAdjointMap",
+  ];
+  const leaked = kernelOnly.filter(
+    (n) => (linalg as unknown as Record<string, unknown>)[n] !== undefined);
+  want("the internal kernel is not re-exported", leaked.length === 0,
+    leaked.length ? `leaked: ${leaked.join(", ")}` : `${kernelOnly.length} checked`);
+
+  // `cholesky_ex` and `inv_ex` return a status instead of raising. Nothing here produces
+  // that status, and a wrapper always reporting success would be a check that cannot fail.
+  for (const missing of ["choleskyEx", "invEx"]) {
+    want(`linalg.${missing} is not offered — the refusal is the answer`,
+      (linalg as unknown as Record<string, unknown>)[missing] === undefined);
+  }
 
   // ── vision: the place a widened type opened ──────────────────────────
   //

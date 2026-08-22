@@ -2,7 +2,7 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 673,
+  "done": 683,
   "stale": 0,
   "missing": 65
  },
@@ -13232,310 +13232,285 @@
     "ko": "선형대수 — 분해·풀이·노름.",
     "en": "Linear algebra — decompositions, solves, norms."
    },
-   "doc": "",
+   "doc": "`torch.linalg` — the namespace, over the methods that already carry the arithmetic.\n\nEvery name here forwards to a `Tensor` method. The values are the methods' values, and\nthe golden already holds those against real torch, so **nothing here is a second\nimplementation.** What this file decides is the *shape of the call*: which argument is\nthe receiver, and what the defaults are.\n\n## Why it is written out by hand rather than generated\n\nA loop over the method names would be shorter and wrong in three places, and wrong in\nthe way that does not raise:\n\n- **`lu_solve` is received by the factors.** torch is `linalg.lu_solve(LU, pivots, B)`\n  and the method here is `B.luSolve(LU, pivots)` — the receiver is the right-hand side.\n  Forward mechanically and `linalg.luSolve(B, LU, pivots)` still has the right name and\n  the right number of arguments, so nothing catches it and only the value is wrong. With\n  square matrices even the shape agrees.\n- **`diagonal` reads different axes.** `torch.diagonal` takes the first two (`0, 1`) and\n  `torch.linalg.diagonal` the last two (`-2, -1`). Given `(2,3,4)` that is `(4,2)` against\n  `(2,3)` — the same name, and even the shape differs.\n- **Five names are spelled differently.** torch's `linalg.inv`, `linalg.pinv` and\n  `linalg.matmul` are `inverse`, `pinverse` and `mm` as methods, and `tensorsolve` and\n  `tensorinv` are `tensorSolve` and `tensorInv`.\n\nThe last two nearly went in here as fresh implementations, because the search that found\nthem missing used torch's spelling against camelCase method names. What caught it was\n`test_binding_fills_in.py` noticing the two declarations landing on one lookup key —\n**a normaliser is a claim about which differences do not matter**, and case was carrying\nthe whole difference between a name that exists and a name that does not.\n\n`parity.ts` writes the general form of this down: *who the receiver is belongs to the\nname too.* It is the reason `Tensor.lu_solve` is checked there by value against the\nother spelling rather than by its signature.\n\n## What is not here\n\n`cholesky_ex` and `inv_ex` return a status code instead of raising. Nothing here\nproduces that status, and a wrapper that always reports success would be a check that\ncannot fail — the refusal these methods raise is the answer, so the `_ex` pair stays\nabsent rather than becoming a lie with a torch-shaped name.",
    "symbols": [
-    {
-     "kind": "type",
-     "name": "Mat",
-     "signature": "export type Mat = Float64Array",
-     "doc": "A square matrix laid out row-major.",
-     "members": [],
-     "doc_ko": "행 우선으로 늘어놓은 정사각 행렬."
-    },
-    {
-     "kind": "function",
-     "name": "fromF32",
-     "signature": "export declare function fromF32(a: Float32Array): Mat",
-     "doc": "",
-     "members": [],
-     "torch": "from_f32"
-    },
-    {
-     "kind": "function",
-     "name": "toF32",
-     "signature": "export declare function toF32(a: Mat): Float32Array",
-     "doc": "",
-     "members": [],
-     "torch": "to_f32"
-    },
-    {
-     "kind": "function",
-     "name": "matmul",
-     "signature": "export declare function matmul(a: Mat, b: Mat, n: number, k: number, m: number): Mat",
-     "doc": "",
-     "members": []
-    },
-    {
-     "kind": "function",
-     "name": "transpose",
-     "signature": "export declare function transpose(a: Mat, n: number, m: number): Mat",
-     "doc": "",
-     "members": []
-    },
-    {
-     "kind": "interface",
-     "name": "LU",
-     "signature": "export interface LU",
-     "doc": "",
-     "members": [
-      {
-       "name": "lu",
-       "signature": "readonly lu: Mat",
-       "doc": ""
-      },
-      {
-       "name": "piv",
-       "signature": "readonly piv: Int32Array",
-       "doc": ""
-      },
-      {
-       "name": "sign",
-       "signature": "readonly sign: number",
-       "doc": "The sign of the number of row swaps. The determinant's sign comes from\nhere.",
-       "doc_ko": "행을 맞바꾼 횟수의 부호. 행렬식의 부호가 여기서 나온다."
-      },
-      {
-       "name": "n",
-       "signature": "readonly n: number",
-       "doc": ""
-      },
-      {
-       "name": "singular",
-       "signature": "readonly singular: boolean",
-       "doc": ""
-      }
-     ]
-    },
-    {
-     "kind": "function",
-     "name": "lu",
-     "signature": "export declare function lu(a: Mat, n: number): LU",
-     "doc": "LU factorisation with partial pivoting.\n\n**Pivoting is not optional.** Without it, a matrix whose first element is\nzero or very small either blows up the division or loses the digits\nentirely.",
-     "members": [],
-     "doc_ko": "부분 피벗을 쓰는 LU 분해.\n\n**피벗은 선택이 아니다.** 안 하면 첫 원소가 0 이거나 아주 작은 행렬에서 나눗셈이\n터지거나 자릿수가 통째로 날아간다."
-    },
     {
      "kind": "function",
      "name": "det",
-     "signature": "export declare function det(f: LU): number",
-     "doc": "",
-     "members": []
+     "signature": "export declare function det(a: Tensor): Promise<Tensor>",
+     "doc": "`det(A)` — the determinant.",
+     "members": [],
+     "doc_ko": "`det(A)` — 행렬식."
     },
     {
      "kind": "function",
      "name": "slogdet",
-     "signature": "export declare function slogdet(f: LU): { sign: number; logabs: number; }",
-     "doc": "The sign and the log absolute value, separately. Safer than `log(det)`\nwhen the determinant is very small.",
+     "signature": "export declare function slogdet(a: Tensor): Promise<{ sign: Tensor; logabs: Tensor; }>",
+     "doc": "`slogdet(A)` — the sign and the log of the absolute determinant.",
      "members": [],
-     "doc_ko": "부호와 로그 절댓값을 따로. 행렬식이 아주 작을 때 `log(det)` 보다 안전하다."
+     "doc_ko": "`slogdet(A)` — 행렬식의 부호와 절댓값의 로그."
     },
     {
      "kind": "function",
-     "name": "solve",
-     "signature": "export declare function solve(f: LU, b: Mat, m: number): Mat",
-     "doc": "Solves `A X = B`. `B` has `m` columns.",
+     "name": "matrixPower",
+     "signature": "export declare function matrixPower(a: Tensor, n: number): Tensor",
+     "doc": "`matrix_power(A, n)` — `A` multiplied by itself `n` times.",
      "members": [],
-     "doc_ko": "`A X = B` 를 푼다. `B` 는 열이 `m` 개다."
-    },
-    {
-     "kind": "function",
-     "name": "inverse",
-     "signature": "export declare function inverse(a: Mat, n: number): Mat",
-     "doc": "",
-     "members": []
-    },
-    {
-     "kind": "function",
-     "name": "cholesky",
-     "signature": "export declare function cholesky(a: Mat, n: number): Mat",
-     "doc": "The lower-triangular Cholesky. Throws if the matrix is not symmetric\npositive definite — it does not quietly return NaN.",
-     "members": [],
-     "doc_ko": "아래 삼각 콜레스키. 대칭 양정부호가 아니면 던진다 — 조용히 NaN 을 내지 않는다."
-    },
-    {
-     "kind": "function",
-     "name": "qr",
-     "signature": "export declare function qr(a: Mat, n: number, m: number): { q: Mat; r: Mat; }",
-     "doc": "Householder QR.\n\n**Householder, not Gram–Schmidt.** The two give the same factorisation\nwith different signs. LAPACK uses Householder and torch uses LAPACK, so\nmatching the golden `R` down to its signs requires the same method — the\ngolden cases ask about `Q` in absolute value, but they ask about `R` as\nit is.",
-     "members": [],
-     "doc_ko": "하우스홀더 QR.\n\n**그람-슈미트가 아니라 하우스홀더다.** 둘은 같은 분해를 다른 부호로 낸다. LAPACK 이\n하우스홀더를 쓰고 torch 가 LAPACK 을 쓰므로, 골든의 `R` 과 부호까지 맞추려면\n같은 방식이어야 한다 — `Q` 는 골든이 절댓값으로 묻지만 `R` 은 그대로 묻는다."
-    },
-    {
-     "kind": "function",
-     "name": "mirror",
-     "signature": "export declare function mirror(a: Mat, n: number, upper: boolean): Mat",
-     "doc": "Keeps one triangle and mirrors it into the other.\n\n**`eigh` accepts matrices that are not symmetric.** By default torch\nreads only the lower triangle and ignores the upper — `[[4,99],[1,3]]`\nand `[[4,1],[1,3]]` give the same answer (asked of real torch). Jacobi\nlooks at the whole matrix, so without mirroring first, a non-symmetric\ninput diverges quietly here. **It is a difference that never shows as\nlong as you pass something symmetric.**",
-     "members": [],
-     "doc_ko": "한쪽 삼각만 남기고 나머지를 거울로 채운다.\n\n**`eigh` 는 대칭이 아닌 것도 받는다.** torch 는 기본으로 아래 삼각만 읽고 위쪽은\n무시한다 — `[[4,99],[1,3]]` 과 `[[4,1],[1,3]]` 의 답이 같다(진짜 torch 에 물었다).\n야코비는 행렬 전체를 보므로, 여기서 먼저 거울을 만들어 주지 않으면 대칭이 아닌\n입력에서 조용히 갈린다. **대칭을 주는 한 안 드러나는 차이다.**"
-    },
-    {
-     "kind": "function",
-     "name": "eigh",
-     "signature": "export declare function eigh(a: Mat, n: number): { values: Float64Array; vectors: Mat; }",
-     "doc": "Eigenvalues and eigenvectors of a symmetric matrix — Jacobi rotations.\n\nEigenvalues come back in **ascending** order, as torch's `linalg.eigh`\ngives them.",
-     "members": [],
-     "doc_ko": "대칭 행렬의 고윳값·고유벡터 — 야코비 회전.\n\n고윳값을 **오름차순**으로 준다. torch 의 `linalg.eigh` 가 그렇다."
-    },
-    {
-     "kind": "function",
-     "name": "hessenberg",
-     "signature": "export declare function hessenberg(a: Mat, n: number): { h: Mat; q: Mat; }",
-     "doc": "Householder reflections push it to **upper Hessenberg.** `A = Q·H·Qᵀ`.\n\nThe transform is orthogonal, so the eigenvalues do not change — that is the\nproperty which makes this step free.",
-     "members": [],
-     "doc_ko": "하우스홀더 반사로 **상부 헤센베르크**로 민다. `A = Q·H·Qᵀ`.\n\n직교 변환이므로 고윳값이 안 변한다 — 그것이 이 단계를 공짜로 만드는 성질이다."
-    },
-    {
-     "kind": "function",
-     "name": "eigvals",
-     "signature": "export declare function eigvals(a: Mat, n: number): { re: Float64Array; im: Float64Array; }",
-     "doc": "The eigenvalues — **a conjugate pair comes out of one 2×2 block together.**\n\nShifted QR pushes it to quasi-triangular, then the diagonal blocks are read.\nA 1×1 block is one real eigenvalue; a 2×2 block gives one pair from its\nquadratic. A non-negative discriminant means two reals — a matrix can be\nasymmetric and still have only real eigenvalues, and that branch runs here.",
-     "members": [],
-     "doc_ko": "고윳값 — **켤레 짝은 하나의 2×2 블록에서 함께 나온다.**\n\n이동 QR 로 준삼각까지 민 다음 대각 블록을 읽는다. 1×1 이면 실수 고윳값 하나,\n2×2 면 그 블록의 이차식에서 짝 하나. 판별식이 0 이상이면 실수 둘이다 — 대칭이\n아니어도 실수 고윳값만 가지는 행렬이 있고 그 갈래를 여기서 지난다."
-    },
-    {
-     "kind": "function",
-     "name": "eig",
-     "signature": "export declare function eig(a: Mat, n: number): { re: Float64Array; im: Float64Array; vecRe: Mat; vecIm: Mat; }",
-     "doc": "Eigenvalues and eigenvectors. Where `torch.linalg.eig` sits.\n\nThe vectors stand in **columns** — `V[:, k]` belongs to `values[k]`, which is\nwhat makes `A·V = V·diag(λ)` hold.",
-     "members": [],
-     "doc_ko": "고윳값과 고유벡터. `torch.linalg.eig` 자리다.\n\n벡터는 **열**로 선다 — `V[:, k]` 가 `values[k]` 의 것이고, 그래야\n`A·V = V·diag(λ)` 가 성립한다."
-    },
-    {
-     "kind": "function",
-     "name": "svd",
-     "signature": "export declare function svd(a: Mat, rows: number, cols?: number): { u: Mat; s: Float64Array; vt: Mat; }",
-     "doc": "Singular value decomposition. **Rectangular input is accepted.**\n\nIt is obtained from the eigendecomposition of `AᵀA` — the shortest route\nthat holds for small matrices. Singular values come back in\n**descending** order (as in torch). On large or ill-conditioned matrices\nthis method loses digits, but that is not the size being pushed here.\n\n`u` is **reduced** — `rows × k` (`k = min(rows, cols)`). torch's default,\n`full_matrices=True`, wants `rows × rows`, so `completeBasis` fills the\nremaining columns. The two are kept apart because the reduced form is\nalways unique while the filled one is **not** once more than one\ndimension is left over.",
-     "members": [],
-     "doc_ko": "특이값 분해. **직사각도 받는다.**\n\n`AᵀA` 의 고유분해에서 얻는다 — 작은 행렬에서 통하는 가장 짧은 길이다. 특이값을\n**내림차순**으로 준다(torch 와 같다). 큰 행렬이나 조건수가 나쁜 행렬에서는\n이 방법이 자릿수를 잃는데, 여기서 미는 크기가 아니다.\n\n`u` 는 **축소본**이다 — `rows × k` (`k = min(rows, cols)`). torch 의 기본값인\n`full_matrices=True` 는 `rows × rows` 를 요구하므로 남는 열을 `completeBasis` 가\n채운다. 그 둘을 나눠 둔 이유는 축소본이 늘 유일하고, 채운 쪽은 남는 차원이\n둘 이상이면 **유일하지 않기** 때문이다."
-    },
-    {
-     "kind": "function",
-     "name": "completeBasis",
-     "signature": "export declare function completeBasis(u: Mat, rows: number, k: number): Mat",
-     "doc": "Fills `rows × k` orthonormal columns out to `rows × rows`.\n\nIt finds directions orthogonal to the existing columns by Gram–Schmidt.\n**With more than one dimension left over the answer is not unique** — any\nrotation inside that subspace is the same factorisation. That is why the\ngolden cases ask in absolute value, and only measure where exactly one\ndimension is left.",
-     "members": [],
-     "torch": "complete_basis",
-     "doc_ko": "`rows × k` 인 정규직교 열들을 `rows × rows` 로 채운다.\n\n이미 있는 열에 직교하는 방향을 그람-슈미트로 찾는다. **남는 차원이 둘 이상이면\n답이 유일하지 않다** — 그 부분공간 안에서 어떻게 돌려도 같은 분해다. 골든이\n절댓값으로 묻고 남는 차원이 하나인 자리만 재는 이유가 그것이다."
-    },
-    {
-     "kind": "function",
-     "name": "pinverse",
-     "signature": "export declare function pinverse(a: Mat, rows: number, cols?: number): Mat",
-     "doc": "The Moore–Penrose pseudoinverse. Directions whose singular value is near\nzero are dropped.",
-     "members": [],
-     "doc_ko": "무어-펜로즈 유사역행렬. 특이값이 0 에 가까운 방향은 버린다."
+     "torch": "matrix_power",
+     "doc_ko": "`matrix_power(A, n)` — `A` 를 자기 자신과 `n` 번 곱한 것."
     },
     {
      "kind": "function",
      "name": "matrixRank",
-     "signature": "export declare function matrixRank(a: Mat, rows: number, cols?: number): number",
-     "doc": "The count of non-zero singular values. What counts as zero is scaled to\nthe largest singular value.",
+     "signature": "export declare function matrixRank(a: Tensor): Promise<Tensor>",
+     "doc": "`matrix_rank(A)` — how many singular values are above the tolerance.",
      "members": [],
      "torch": "matrix_rank",
-     "doc_ko": "0 이 아닌 특이값의 개수. 무엇을 0 으로 볼지는 가장 큰 특이값에 맞춘다."
-    },
-    {
-     "kind": "interface",
-     "name": "LuPacked",
-     "signature": "export interface LuPacked",
-     "doc": "What `lu_factor` produces — `L` and `U` packed into one plate, plus the\npivot table.\n\n**The pivot table counts from 1.** That is the LAPACK convention and\ntorch inherited it as-is. A 2×2 with no swap gives `[1, 2]`, not `[0, 1]`\n— count from zero and `luSolveFactored` gives a different answer without\na sound. Matched by asking real torch.",
-     "members": [
-      {
-       "name": "lu",
-       "signature": "readonly lu: Mat",
-       "doc": ""
-      },
-      {
-       "name": "piv",
-       "signature": "readonly piv: Int32Array",
-       "doc": ""
-      },
-      {
-       "name": "rows",
-       "signature": "readonly rows: number",
-       "doc": ""
-      },
-      {
-       "name": "cols",
-       "signature": "readonly cols: number",
-       "doc": ""
-      }
-     ],
-     "doc_ko": "`lu_factor` 가 내는 것 — 한 장에 겹쳐 담은 `L`·`U` 와 교환표.\n\n**교환표는 1 부터 센다.** LAPACK 규약이고 torch 가 그대로 물려받았다. 교환이\n없는 2×2 에서 `[1, 2]` 이지 `[0, 1]` 이 아니다 — 0 부터 세면 `luSolveFactored`\n가 아무 소리 없이 다른 답을 낸다. 진짜 torch 에 물어서 맞췄다."
-    },
-    {
-     "kind": "function",
-     "name": "luFactor",
-     "signature": "export declare function luFactor(a: Mat, rows: number, cols: number): LuPacked",
-     "doc": "",
-     "members": [],
-     "torch": "lu_factor"
-    },
-    {
-     "kind": "function",
-     "name": "luExpand",
-     "signature": "export declare function luExpand(f: LuPacked): { p: Mat; l: Mat; u: Mat; }",
-     "doc": "Unpacks the packed plate into `P`, `L` and `U`.",
-     "members": [],
-     "torch": "lu_expand",
-     "doc_ko": "겹쳐 담은 것을 `P`·`L`·`U` 셋으로 편다."
-    },
-    {
-     "kind": "function",
-     "name": "solveTriangular",
-     "signature": "export declare function solveTriangular(a: Mat, b: Mat, n: number, m: number, upper: boolean, unit: boolean): Mat",
-     "doc": "Solves **knowing** the matrix is triangular. One pass, forward or\nbackward, and it is done.",
-     "members": [],
-     "torch": "solve_triangular",
-     "doc_ko": "삼각행렬이라는 것을 **알고** 푼다. 앞으로나 뒤로 한 번이면 끝난다."
+     "doc_ko": "`matrix_rank(A)` — 허용 오차를 넘는 특잇값의 개수."
     },
     {
      "kind": "function",
      "name": "matrixExp",
-     "signature": "export declare function matrixExp(a: Mat, n: number): Mat",
-     "doc": "The matrix exponential `e^A` — **scaling and squaring.**\n\nTaylor alone does not converge on large matrices. The answer for `A*5` is\n4.8e+10, and at that point the growing terms overflow first. Bringing the\n1-norm of `A/2^s` below 0.5, running the series, and then squaring `s`\ntimes gives the same answer safely — `e^A = (e^{A/2^s})^{2^s}`.",
+     "signature": "export declare function matrixExp(a: Tensor): Promise<Tensor>",
+     "doc": "`matrix_exp(A)` — the matrix exponential.",
      "members": [],
      "torch": "matrix_exp",
-     "doc_ko": "행렬 지수 `e^A` — **스케일링과 제곱.**\n\n테일러만으로는 큰 행렬에서 안 모인다. `A*5` 의 답이 4.8e+10 인데 그 자리에서는\n항이 커지는 쪽이 먼저 넘친다. `A/2^s` 의 1-노름을 0.5 아래로 낮춰 급수를 태운 뒤\n`s` 번 제곱하면 같은 답이 안전하게 나온다 — `e^A = (e^{A/2^s})^{2^s}` 다."
+     "doc_ko": "`matrix_exp(A)` — 행렬 지수."
     },
     {
      "kind": "function",
-     "name": "matrixExpAdjointMap",
-     "signature": "export declare function matrixExpAdjointMap(a: Mat, n: number): Mat",
-     "doc": "Freezes the backward of `e^A` **into a single matrix.**\n\nThe Fréchet derivative has this identity — the upper-right block of\n`expm([[Aᵀ, E],[0, Aᵀ]])` is the derivative in the direction `E`. It is\nan identity, not an approximation.\n\n**That route is not available here, though.** The `Ḡ` arriving in the\nbackward is on the GPU and this file is CPU — you cannot wait on the GPU\nfrom inside a backward. So it uses the fact that `Ḡ` enters **linearly**:\nsolve once for each `E_k` with a single one in one slot, build an `n²×n²`\ntable, and the backward is one matrix multiply.\n\nThe values are exact (each column is a real derivative, not a finite\ndifference). The price is `n²` calls to a `2n×2n` `expm` in the forward,\nwhich is cheap at the sizes being pushed here.",
+     "name": "cholesky",
+     "signature": "export declare function cholesky(a: Tensor, upper?: boolean): Promise<Tensor>",
+     "doc": "`cholesky(A, upper=False)` — the Cholesky factor.",
      "members": [],
-     "torch": "matrix_exp_adjoint_map",
-     "doc_ko": "`e^A` 의 역방향을 **행렬 하나로 굳힌다.**\n\n프레셰 도함수에는 이런 항등식이 있다 — `expm([[Aᵀ, E],[0, Aᵀ]])` 의 오른쪽 위\n블록이 `E` 방향의 도함수다. 근사가 아니라 항등식이다.\n\n**그런데 여기서는 그 길로 못 간다.** 역방향에 들어오는 `Ḡ` 는 GPU 에 있고, 이\n파일은 CPU 다 — 역방향 안에서는 GPU 를 기다릴 수가 없다. 그래서 순방향에서\n`Ḡ` 가 **선형으로** 들어간다는 사실을 쓴다: 자리 하나만 1 인 행렬 `E_k` 마다 한 번씩\n구해서 `n²×n²` 짜리 표를 만들어 두면, 역방향은 행렬곱 한 번으로 끝난다.\n\n값은 정확하다(각 열이 진짜 도함수다 — 차분이 아니다). 대가는 순방향에서 `2n×2n`\n짜리 `expm` 을 `n²` 번 부르는 것인데, 여기서 미는 크기에서는 그게 싸다."
+     "doc_ko": "`cholesky(A, upper=False)` — 콜레스키 인수."
     },
     {
      "kind": "function",
-     "name": "eighGap",
-     "signature": "export declare function eighGap(values: Float64Array, n: number): Mat",
-     "doc": "`F_ij = 1/(λⱼ − λᵢ)`, which enters `eigh`'s eigenvector backward.\n\n**Repeated eigenvalues blow it up.** torch blows up with it, so this is\nthe same limit rather than an imitation. The diagonal is a difference\nwith itself, so it is zero by definition rather than a division.",
+     "name": "qr",
+     "signature": "export declare function qr(a: Tensor, mode?: \"reduced\" | \"complete\"): Promise<{ q: Tensor; r: Tensor; }>",
+     "doc": "`qr(A, mode=\"reduced\")` — the QR decomposition.",
      "members": [],
-     "torch": "eigh_gap",
-     "doc_ko": "`eigh` 의 고유벡터 역방향에 들어가는 `F_ij = 1/(λⱼ − λᵢ)`.\n\n**고윳값이 겹치면 터진다.** torch 도 같이 터지므로 흉내가 아니라 같은 한계다.\n대각은 자기 자신과의 차라 나눗셈이 아니라 정의상 0 이다."
+     "doc_ko": "`qr(A, mode=\"reduced\")` — QR 분해."
     },
     {
      "kind": "function",
-     "name": "luSolveFactored",
-     "signature": "export declare function luSolveFactored(f: LuPacked, b: Mat, m: number): Mat",
-     "doc": "Solves `A x = b` using what `lu_factor` produced.",
+     "name": "svd",
+     "signature": "export declare function svd(a: Tensor, fullMatrices?: boolean): Promise<{ u: Tensor; s: Tensor; vt: Tensor; }>",
+     "doc": "`svd(A, full_matrices=True)` — the singular value decomposition.",
      "members": [],
-     "torch": "lu_solve_factored",
-     "doc_ko": "`lu_factor` 가 낸 것으로 `A x = b` 를 푼다."
+     "doc_ko": "`svd(A, full_matrices=True)` — 특잇값 분해."
     },
     {
      "kind": "function",
-     "name": "choleskyBackward",
-     "signature": "export declare function choleskyBackward(l: Mat, lbar: Mat, n: number): Mat",
-     "doc": "Cholesky's backward.\n\nThe gradient towards `A` when `L = chol(A)`. The derivation is not short,\nso the formula is written out — with `P = Φ(Lᵀ·L̄)`, where `Φ` takes the\nlower triangle and halves the diagonal, symmetrise `Ā = L⁻ᵀ·P·L⁻¹`. The\nsymmetrisation is needed because `A` is symmetric, so its upper and lower\ntriangles share the same degrees of freedom.",
+     "name": "svdvals",
+     "signature": "export declare function svdvals(a: Tensor): Promise<Tensor>",
+     "doc": "`svdvals(A)` — the singular values alone.",
      "members": [],
-     "torch": "cholesky_backward",
-     "doc_ko": "콜레스키의 역방향.\n\n`L = chol(A)` 일 때 `A` 로 가는 기울기다. 유도가 짧지 않아서 식을 그대로 적는다 —\n`P = Φ(Lᵀ·L̄)` 에서 `Φ` 는 아래 삼각을 취하되 대각을 반으로 줄이는 것이고,\n`Ā = L⁻ᵀ·P·L⁻¹` 을 대칭화한다. 대칭화가 필요한 이유는 `A` 가 대칭이라 위·아래\n삼각이 같은 자유도를 공유하기 때문이다."
+     "doc_ko": "`svdvals(A)` — 특잇값만."
+    },
+    {
+     "kind": "function",
+     "name": "eig",
+     "signature": "export declare function eig(a: Tensor): Promise<{ values: Tensor; vectors: Tensor; }>",
+     "doc": "`eig(A)` — eigenvalues and eigenvectors of a general square matrix.",
+     "members": [],
+     "doc_ko": "`eig(A)` — 일반 정사각 행렬의 고윳값과 고유벡터."
+    },
+    {
+     "kind": "function",
+     "name": "eigvals",
+     "signature": "export declare function eigvals(a: Tensor): Promise<Tensor>",
+     "doc": "`eigvals(A)` — the eigenvalues alone.",
+     "members": [],
+     "doc_ko": "`eigvals(A)` — 고윳값만."
+    },
+    {
+     "kind": "function",
+     "name": "eigh",
+     "signature": "export declare function eigh(a: Tensor, uplo?: \"L\" | \"U\"): Promise<{ values: Tensor; vectors: Tensor; }>",
+     "doc": "`eigh(A, UPLO=\"L\")` — the symmetric (Hermitian) eigendecomposition.",
+     "members": [],
+     "doc_ko": "`eigh(A, UPLO=\"L\")` — 대칭(에르미트) 고유분해."
+    },
+    {
+     "kind": "function",
+     "name": "eigvalsh",
+     "signature": "export declare function eigvalsh(a: Tensor, uplo?: \"L\" | \"U\"): Promise<Tensor>",
+     "doc": "`eigvalsh(A, UPLO=\"L\")` — the symmetric eigenvalues alone.",
+     "members": [],
+     "doc_ko": "`eigvalsh(A, UPLO=\"L\")` — 대칭 고윳값만."
+    },
+    {
+     "kind": "function",
+     "name": "solve",
+     "signature": "export declare function solve(a: Tensor, b: Tensor): Promise<Tensor>",
+     "doc": "`solve(A, B)` — solve `A x = B`.",
+     "members": [],
+     "doc_ko": "`solve(A, B)` — `A x = B` 를 푼다."
+    },
+    {
+     "kind": "function",
+     "name": "solveTriangular",
+     "signature": "export declare function solveTriangular(a: Tensor, b: Tensor, upper: boolean, left?: boolean, unitriangular?: boolean): Promise<Tensor>",
+     "doc": "`solve_triangular(A, B, upper, left=True, unitriangular=False)`.",
+     "members": [],
+     "torch": "solve_triangular",
+     "doc_ko": "`solve_triangular(A, B, upper, left=True, unitriangular=False)`."
+    },
+    {
+     "kind": "function",
+     "name": "lstsq",
+     "signature": "export declare function lstsq(a: Tensor, b: Tensor): Promise<Tensor>",
+     "doc": "`lstsq(A, B)` — the least-squares solution.",
+     "members": [],
+     "doc_ko": "`lstsq(A, B)` — 최소제곱 해."
+    },
+    {
+     "kind": "function",
+     "name": "matrixNorm",
+     "signature": "export declare function matrixNorm(a: Tensor, ord?: number | string): Promise<Tensor>",
+     "doc": "`matrix_norm(A, ord=\"fro\")`.",
+     "members": [],
+     "torch": "matrix_norm",
+     "doc_ko": "`matrix_norm(A, ord=\"fro\")`."
+    },
+    {
+     "kind": "function",
+     "name": "vectorNorm",
+     "signature": "export declare function vectorNorm(x: Tensor, ord?: number, dim?: number): Tensor",
+     "doc": "`vector_norm(x, ord=2, dim=None)`.",
+     "members": [],
+     "torch": "vector_norm",
+     "doc_ko": "`vector_norm(x, ord=2, dim=None)`."
+    },
+    {
+     "kind": "function",
+     "name": "norm",
+     "signature": "export declare function norm(a: Tensor): Tensor",
+     "doc": "`norm(A)` — the Frobenius norm of the whole tensor.",
+     "members": [],
+     "doc_ko": "`norm(A)` — 텐서 전체의 프로베니우스 노름."
+    },
+    {
+     "kind": "function",
+     "name": "cond",
+     "signature": "export declare function cond(a: Tensor, p?: number | string | null): Promise<Tensor>",
+     "doc": "`cond(A, p=None)` — the condition number.",
+     "members": [],
+     "doc_ko": "`cond(A, p=None)` — 조건수."
+    },
+    {
+     "kind": "function",
+     "name": "cross",
+     "signature": "export declare function cross(a: Tensor, b: Tensor, dim?: number): Tensor",
+     "doc": "`cross(a, b, dim=-1)` — the cross product.",
+     "members": [],
+     "doc_ko": "`cross(a, b, dim=-1)` — 외적."
+    },
+    {
+     "kind": "function",
+     "name": "householderProduct",
+     "signature": "export declare function householderProduct(a: Tensor, tau: Tensor): Promise<Tensor>",
+     "doc": "`householder_product(A, tau)` — the product of the Householder reflectors.",
+     "members": [],
+     "torch": "householder_product",
+     "doc_ko": "`householder_product(A, tau)` — 하우스홀더 반사의 곱."
+    },
+    {
+     "kind": "function",
+     "name": "luFactor",
+     "signature": "export declare function luFactor(a: Tensor): Promise<{ LU: Tensor; pivots: Tensor; }>",
+     "doc": "`lu_factor(A)` — the packed LU factors and the pivots.",
+     "members": [],
+     "torch": "lu_factor",
+     "doc_ko": "`lu_factor(A)` — 겹쳐 담은 LU 인수와 교환표."
+    },
+    {
+     "kind": "function",
+     "name": "lu",
+     "signature": "export declare function lu(a: Tensor): Promise<{ P: Tensor; L: Tensor; U: Tensor; }>",
+     "doc": "`lu(A)` — the LU decomposition, expanded into `P`, `L` and `U`.",
+     "members": [],
+     "doc_ko": "`lu(A)` — LU 분해를 `P`·`L`·`U` 로 펴서."
+    },
+    {
+     "kind": "function",
+     "name": "vander",
+     "signature": "export declare function vander(x: Tensor, n?: number): Tensor",
+     "doc": "`vander(x, N=None)` — the Vandermonde matrix.",
+     "members": [],
+     "doc_ko": "`vander(x, N=None)` — 반데르몽드 행렬."
+    },
+    {
+     "kind": "function",
+     "name": "inv",
+     "signature": "export declare function inv(a: Tensor): Promise<Tensor>",
+     "doc": "`inv(A)` — the inverse. The method is `inverse`.",
+     "members": [],
+     "doc_ko": "`inv(A)` — 역행렬. 메서드 이름은 `inverse` 다."
+    },
+    {
+     "kind": "function",
+     "name": "pinv",
+     "signature": "export declare function pinv(a: Tensor): Promise<Tensor>",
+     "doc": "`pinv(A)` — the Moore-Penrose pseudo-inverse. The method is `pinverse`.",
+     "members": [],
+     "doc_ko": "`pinv(A)` — 무어-펜로즈 유사역행렬. 메서드 이름은 `pinverse` 다."
+    },
+    {
+     "kind": "function",
+     "name": "matmul",
+     "signature": "export declare function matmul(a: Tensor, b: Tensor): Tensor",
+     "doc": "`matmul(A, B)` — matrix multiplication. The method is `mm`.",
+     "members": [],
+     "doc_ko": "`matmul(A, B)` — 행렬 곱. 메서드 이름은 `mm` 이다."
+    },
+    {
+     "kind": "function",
+     "name": "luSolve",
+     "signature": "export declare function luSolve(luData: Tensor, pivots: Tensor, b: Tensor): Promise<Tensor>",
+     "doc": "`lu_solve(LU, pivots, B)` — solve using factors from `lu_factor`.\n\n**The factors come first here and the method is received by `B`.** Forwarding this one\npositionally would swap `LU` and `B`, and with square matrices nothing about the call\nwould look wrong.",
+     "members": [],
+     "torch": "lu_solve",
+     "doc_ko": "`lu_solve(LU, pivots, B)` — `lu_factor` 가 낸 인수로 푼다.\n\n**여기서는 인수가 먼저 오고 메서드는 `B` 가 받는다.** 이것만 자리대로 넘기면 `LU` 와\n`B` 가 뒤바뀌는데, 정사각 행렬이면 부름의 어디를 봐도 이상해 보이지 않는다."
+    },
+    {
+     "kind": "function",
+     "name": "diagonal",
+     "signature": "export declare function diagonal(a: Tensor, offset?: number, dim1?: number, dim2?: number): Tensor",
+     "doc": "`diagonal(A, offset=0, dim1=-2, dim2=-1)`.\n\n**The defaults are not the method's.** `torch.diagonal` reads axes `0, 1` and\n`torch.linalg.diagonal` reads `-2, -1`; given `(2,3,4)` that is `(4,2)` against `(2,3)`.\nThe method takes the axes as arguments precisely so both spellings can be right.",
+     "members": [],
+     "doc_ko": "`diagonal(A, offset=0, dim1=-2, dim2=-1)`.\n\n**기본값이 메서드의 것과 다르다.** `torch.diagonal` 은 축 `0, 1` 을 읽고\n`torch.linalg.diagonal` 은 `-2, -1` 을 읽는다 — `(2,3,4)` 를 주면 `(4,2)` 와 `(2,3)`\n이다. 메서드가 축을 인자로 받는 것은 두 철자가 모두 옳을 수 있게 하기 위해서다."
+    },
+    {
+     "kind": "function",
+     "name": "multiDot",
+     "signature": "export declare function multiDot(chain: readonly Tensor[]): Tensor",
+     "doc": "`multi_dot([A, B, C, …])` — a chain of matrix products.\n\nMatrix multiplication is associative, so **every order gives the same matrix**; what\ndiffers is the work. `(A·B)·C` and `A·(B·C)` cost `n·m·p + n·p·q` and `m·p·q + n·m·q`,\nwhich for a thin middle factor differ by orders of magnitude. So the cheapest\nparenthesisation is found first, by the usual dynamic program, which is the whole reason\ntorch offers this name at all.\n\n**The values are not bit-identical across orders.** Floating-point addition does not\nassociate, so the chosen order is part of the answer to a last-digit comparison.",
+     "members": [],
+     "torch": "multi_dot",
+     "doc_ko": "`multi_dot([A, B, C, …])` — 행렬 곱의 사슬.\n\n행렬 곱은 결합법칙을 따르므로 **어떤 순서로 묶어도 같은 행렬**이 나온다. 갈리는 것은\n일의 양이다. `(A·B)·C` 와 `A·(B·C)` 는 `n·m·p + n·p·q` 와 `m·p·q + n·m·q` 만큼 드는데,\n가운데 인수가 얇으면 자릿수가 달라진다. 그래서 가장 싼 묶음을 먼저 찾는다 — 흔한 동적\n계획법이고, torch 가 이 이름을 두는 이유 전체가 그것이다.\n\n**순서가 다르면 값이 비트까지 같지는 않다.** 부동소수점 덧셈은 결합법칙을 안 따르므로,\n고른 순서는 마지막 자리를 견주는 물음에 대해서는 답의 일부다."
+    },
+    {
+     "kind": "function",
+     "name": "tensorsolve",
+     "signature": "export declare function tensorsolve(a: Tensor, b: Tensor): Promise<Tensor>",
+     "doc": "`tensorsolve(A, B)` — solve `A x = B` where `A` and `B` carry more than two axes.\n\nThe method is `tensorSolve`. **It was already there and this file nearly reimplemented\nit**, because the search for it used torch's spelling (`tensorsolve`) against the\ncamelCase method names and matched nothing. `test_binding_fills_in.py` caught the two\ndeclarations colliding on one lookup key — the collision check another session added\nthis morning, after a normaliser folded `eq_` onto `eq`.",
+     "members": [],
+     "doc_ko": "`tensorsolve(A, B)` — 축이 둘보다 많은 `A`·`B` 에 대해 `A x = B` 를 푼다.\n\n메서드 이름은 `tensorSolve` 다. **이미 있었는데 이 파일이 하마터면 다시 구현할\n뻔했다.** 없다고 판정한 검색이 torch 의 철자(`tensorsolve`)를 camelCase 메서드 이름에\n대고 물어서 아무것도 안 맞았기 때문이다. 붙잡은 것은 `test_binding_fills_in.py` 가 두\n선언이 한 열쇠로 접히는 것을 본 것이고, 그 검사는 다른 세션이 오늘 아침 정규화기가\n`eq_` 를 `eq` 로 접는 것을 보고 붙인 것이다."
+    },
+    {
+     "kind": "function",
+     "name": "tensorinv",
+     "signature": "export declare function tensorinv(a: Tensor, ind?: number): Promise<Tensor>",
+     "doc": "`tensorinv(A, ind=2)` — the inverse of `A` folded into a matrix at axis `ind`.\n\nThe method is `tensorInv`, and it was already there too. See `tensorsolve` above.",
+     "members": [],
+     "doc_ko": "`tensorinv(A, ind=2)` — `A` 를 축 `ind` 에서 행렬로 접은 것의 역.\n\n메서드 이름은 `tensorInv` 이고, 이것도 이미 있었다. 위의 `tensorsolve` 를 보라."
     }
    ],
-   "count": 40
+   "count": 33,
+   "doc_ko": "`torch.linalg` — 산술을 이미 들고 있는 메서드들 위의 이름 공간.\n\n여기 있는 모든 이름은 `Tensor` 메서드로 넘긴다. 값은 그 메서드의 값이고 골든이 이미\n진짜 torch 와 대조하고 있으므로 **여기에 둘째 구현은 없다.** 이 파일이 정하는 것은\n*부름의 모양*이다 — 어느 인자가 수신자인가, 기본값은 무엇인가.\n\n## 왜 생성하지 않고 손으로 적는가\n\n메서드 이름을 훑는 고리가 더 짧고, 세 자리에서 틀린다. 그리고 **안 던지는 쪽으로**\n틀린다:\n\n- **`lu_solve` 는 인수가 아니라 오른쪽 변이 받는다.** torch 는\n  `linalg.lu_solve(LU, pivots, B)` 이고 여기 메서드는 `B.luSolve(LU, pivots)` 다.\n  기계적으로 넘기면 `linalg.luSolve(B, LU, pivots)` 가 되는데 이름도 인자 개수도\n  맞아서 아무것도 안 걸리고 값만 틀린다. 정사각 행렬이면 모양까지 맞는다.\n- **`diagonal` 은 읽는 축이 다르다.** `torch.diagonal` 은 앞의 둘(`0, 1`)을,\n  `torch.linalg.diagonal` 은 뒤의 둘(`-2, -1`)을 읽는다. `(2,3,4)` 를 주면 각각\n  `(2,3)` 과 `(4,2)` 다 — 같은 이름인데 모양까지 갈린다.\n- **철자가 다른 이름이 다섯 있다.** torch 의 `linalg.inv`·`linalg.pinv`·`linalg.matmul`\n  은 메서드로는 `inverse`·`pinverse`·`mm` 이고, `tensorsolve`·`tensorinv` 는\n  `tensorSolve`·`tensorInv` 다.\n\n뒤의 둘은 하마터면 여기서 새로 구현될 뻔했다. 없다고 판정한 검색이 torch 의 철자를\ncamelCase 메서드 이름에 대고 물었기 때문이다. 붙잡은 것은 `test_binding_fills_in.py`\n가 두 선언이 한 열쇠로 접히는 것을 본 것이었다 — **정규화기는 어떤 차이가 중요하지\n않은지에 대한 주장**이고, 여기서는 대소문자가 있는 이름과 없는 이름의 차이를 통째로\n지고 있었다.\n\n`parity.ts` 가 이것의 일반형을 적어 두었다: *수신자가 누구인가도 이름의 일부다.*\n`Tensor.lu_solve` 를 서명이 아니라 다른 철자와 값으로 대조하는 이유가 그것이다.\n\n## 여기 없는 것\n\n`cholesky_ex` 와 `inv_ex` 는 던지는 대신 상태 코드를 돌려준다. 여기서 그 상태를\n만들어 내는 것이 없고, 늘 성공을 보고하는 껍데기는 **실패할 수 없는 검사**다 — 이\n메서드들이 던지는 거절이 답이므로, `_ex` 짝은 torch 모양의 이름을 단 거짓이 되느니\n없는 채로 둔다."
   },
   {
    "name": "serialize",
@@ -14516,5 +14491,5 @@
    "count": 9
   }
  ],
- "total": 1894
+ "total": 1887
 }

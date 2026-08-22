@@ -177,6 +177,10 @@ export * as data from "./data.js";
 // The place `torch.fft` occupies. Its body carries its own kernel (the DFT shader), so it
 // stands apart.
 export * as fft from "./fft.js";
+// The place `torch.linalg` occupies. The names forward to `Tensor` methods; what the
+// namespace decides is the shape of the call. The numerics live in `_linalg.ts`, which is
+// internal and takes flat `Float64Array`s rather than tensors.
+export * as linalg from "./linalg.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
