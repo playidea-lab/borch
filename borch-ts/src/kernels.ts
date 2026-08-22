@@ -1,32 +1,39 @@
 /**
- * WGSL 커널을 **연산 표에서 생성한다.**
+ * WGSL kernels are **generated from a table of operations.**
  *
- * ## 왜 표에서 생성하는가
+ * ## Why generate from a table
  *
- * 자매 라이브러리를 만들면서 새 미분식을 손으로 여러 번 썼고, 그때마다 틀릴 자리를
- * 하나씩 만들었다. 콜레스키 역방향은 쓰기 전에 torch 와 대조해서 살았고,
- * `roll`·`masked_select` 는 값만 맞고 그래프가 끊긴 채로 골든 746건을 통과했다.
- * 이름·순방향식·역방향식을 **한 줄로 적고 커널이 나오게** 하면 그 자리가 줄어든다.
+ * Building the sister library meant writing new derivative expressions by hand several
+ * times, and each one created a place to be wrong. The Cholesky backward survived
+ * because it was compared against torch before being written; `roll` and
+ * `masked_select` passed 746 golden cases with the right values and a severed graph.
+ * Writing **a name, a forward expression and a backward expression on one line and
+ * letting the kernel come out** reduces that surface.
  *
- * ## 모양을 상수로 굽는다
+ * ## The shape is baked in as a constant
  *
- * 나눗셈 제수를 유니폼으로 두면 컴파일러가 강도 축소를 못 하고, GPU 에는 정수 나눗셈
- * 하드웨어가 없다. 그것만으로 conv 가 TF.js 대비 43% → 284% 로 갈렸다
- * (실측, `tests/browser/wgsl_conv.js`). 그래서 모양이 셰이더 문자열에 들어가고,
- * **모양 서명 → 파이프라인 캐시**가 라이브러리 구조가 된다. 최적화가 아니다.
+ * With the divisor in a uniform, the compiler cannot do strength reduction, and a GPU
+ * has no integer division hardware. That alone moved conv from 43% to 284% of TF.js
+ * (measured, `tests/browser/wgsl_conv.js`). So the shape goes into the shader string,
+ * and **shape signature → pipeline cache** becomes the library's structure. It is not an
+ * optimisation.
  */
 
-/** 원소별 단항 — `fwd` 는 `x` 로 쓰고, `bwd` 는 **기울기에 곱할 것**이다. */
+/** An elementwise unary — `fwd` is written in terms of `x`, and `bwd` is **what the
+ *  gradient is multiplied by.** */
 export interface UnarySpec {
-  /** 순방향 WGSL 식. 입력은 `x`. */
+  /** The forward WGSL expression. The input is `x`. */
   readonly fwd: string;
-  /** 도함수 WGSL 식. `x` 는 입력, `o` 는 순방향 결과다 — 다시 안 센다. */
+  /** The derivative's WGSL expression. `x` is the input and `o` is the forward result
+   *  — it is not recomputed. */
   readonly bwd: string;
-  /** 식이 부르는 보조 함수의 WGSL 정의. 한 줄로 안 되는 것만 여기 온다. */
+  /** WGSL definitions for the helpers an expression calls. Only what does not fit on
+   *  one line comes here. */
   readonly prelude?: string;
 }
 
-/** 원소별 이항 — `da`·`db` 는 각 입력으로 가는 기울기에 곱할 것이다. */
+/** An elementwise binary — `da` and `db` are what the gradient to each input is
+ *  multiplied by. */
 export interface BinarySpec {
   readonly fwd: string;
   readonly da: string;
@@ -35,26 +42,31 @@ export interface BinarySpec {
 }
 
 /**
- * erf 계열의 보조 함수.
+ * The helper behind the erf family.
  *
- * Abramowitz & Stegun 7.1.26 이고 코어(`borch/_ops.py`)와 **같은 계수**다.
- * 셋이 다른 근사를 쓰면 값이 갈릴 때 구현이 갈린 것인지 근사가 갈린 것인지 못 가른다.
+ * Abramowitz & Stegun 7.1.26, with **the same coefficients** as the core
+ * (`borch/_ops.py`). Three implementations using three approximations means that when
+ * the values diverge, there is no telling whether the implementations diverged or the
+ * approximations did.
  *
- * 원형은 `erfc_pos` 다 — 다항식 × exp(-y²) 라 뺄셈이 없어서 꼬리에서 자릿수가 안 난다.
+ * The primitive is `erfc_pos` — a polynomial × exp(-y²), with no subtraction, so no
+ * digits are lost in the tail.
  *
- * **원점 근처는 코어와 다르게 간다.** 코어는 `1 - erfc_pos(|x|)` 를 float64 로 계산해
- * 상쇄를 피하는데, WGSL 에는 f64 가 없다. 그래서 |x| < 0.5 는 급수로 답한다 —
- * 그 구간에서 다음 항이 4e-7 이라 이 프로젝트의 허용 오차(1e-4) 한참 아래다.
- * f32 로 그냥 빼면 코어가 실측으로 확인한 그 자리(4.6만 점 중 5,124 점)가 되살아난다.
+ * **Near the origin it parts from the core.** The core computes `1 - erfc_pos(|x|)` in
+ * float64 to avoid the cancellation, and WGSL has no f64. So |x| < 0.5 is answered by a
+ * series — the next term there is 4e-7, far below this project's tolerance (1e-4).
+ * Subtracting in f32 instead brings back exactly the place the core confirmed by
+ * measurement (5,124 points out of 46,000).
  */
 /**
- * NaN 판정.
+ * The NaN test.
  *
- * **`x != x` 는 여기서 안 통했다.** WGSL 에 `isNan` 내장이 없어 그것을 썼는데,
- * `nansum` 이 NaN 을 그대로 더하고 `nanmean` 의 개수가 3 대신 4 로 나왔다 —
- * 셰이더 컴파일러가 부동소수 비교를 NaN 없는 것으로 접었다는 뜻이다.
+ * **`x != x` did not work here.** WGSL has no `isNan` builtin, so that was used, and
+ * `nansum` went on adding NaNs while `nanmean`'s count came out 4 instead of 3 — which
+ * means the shader compiler folded the float comparison as though NaN did not exist.
  *
- * 지수부가 전부 1 이고 가수부가 0 이 아니면 NaN 이다. 비트로 보면 접힐 여지가 없다.
+ * An exponent of all ones with a non-zero mantissa is NaN. Seen as bits, there is
+ * nothing to fold.
  */
 const NAN_PRELUDE = `
 fn is_nan(x: f32) -> bool {
@@ -79,17 +91,17 @@ fn erf_(x: f32) -> f32 {
   return sign(x) * (1.0 - erfc_pos(a));
 }
 fn erfc_(x: f32) -> f32 {
-  // x >= 0 은 원형을 그대로 쓴다 — 뺄셈이 아예 없다.
+  // x >= 0 uses the primitive as it is — there is no subtraction at all.
   return select(2.0 - erfc_pos(abs(x)), erfc_pos(x), x >= 0.0);
 }`;
 
 /**
- * 감마 계열. **코어(numpy)와 같은 식을 적는다** — 두 벌을 다르게 적으면 어느 쪽이
- * 맞는지를 골든이 못 가른다.
+ * The gamma family. **The same expressions as the core (numpy)** — written differently
+ * in the two places, the golden cannot say which is right.
  *
- * `lgamma` 는 란초시(g=7, n=9), `digamma`·`trigamma` 는 되풀이 식으로 6 이상까지
- * 밀고 스털링 점근 전개를 쓴다. 작은 x 에서 점근식이 안 맞기 때문이고, 미는 자리를
- * 빼먹으면 0 근처에서만 조용히 틀린다.
+ * `lgamma` is Lanczos (g=7, n=9); `digamma` and `trigamma` push up past 6 with the
+ * recurrence and then use Stirling's asymptotic expansion. The asymptotic form does not
+ * hold at small x, and leaving out the pushing goes quietly wrong near 0 alone.
  */
 const GAMMA_PRELUDE = `
 const LANCZOS = array<f32, 9>(
@@ -97,7 +109,7 @@ const LANCZOS = array<f32, 9>(
   771.3234287776531, -176.6150291621406, 12.507343278686905,
   -0.13857109526572012, 9.984369578019572e-6, 1.5056327351493116e-7);
 fn lgamma_(x: f32) -> f32 {
-  // 반사 공식으로 음수 쪽을 접는다: Γ(x)Γ(1−x) = π/sin(πx).
+  // The reflection formula folds the negative side: Γ(x)Γ(1−x) = π/sin(πx).
   let neg = x < 0.5;
   let z = select(x, 1.0 - x, neg) - 1.0;
   var acc = LANCZOS[0];
@@ -110,7 +122,7 @@ fn lgamma_(x: f32) -> f32 {
 fn digamma_(x0: f32) -> f32 {
   var x = x0;
   var out = 0.0;
-  // 6 이상으로 민다 — 점근식이 그 아래에서 안 맞는다.
+  // Pushed above 6 — the asymptotic form does not hold below it.
   for (var i = 0; i < 8; i = i + 1) {
     if (x >= 6.0) { break; }
     out = out - 1.0 / x;
@@ -136,8 +148,9 @@ fn trigamma_(x0: f32) -> f32 {
 }`;
 
 /**
- * `erf` 의 역함수. 구간을 둘로 가른다 — 가운데와 꼬리는 수렴이 달라서 한 식으로
- * 못 덮고, 덮으려 들면 한쪽이 허용 오차를 넘는다. 마지막에 뉴턴 한 번으로 조인다.
+ * The inverse of `erf`. It splits the range in two — the middle and the tail converge
+ * differently, so one expression cannot cover both, and forcing it puts one side over
+ * the tolerance. A single Newton step tightens it at the end.
  */
 const ERFINV_PRELUDE = `
 fn erfinv_(x: f32) -> f32 {
@@ -149,18 +162,21 @@ fn erfinv_(x: f32) -> f32 {
   let tail = sign(x) * (((1.641345311 * w + 3.429567803) * w - 1.624906493) * w - 1.970840454)
     / ((1.6370678 * w + 3.5438892) * w + 1.0);
   var out = select(tail, mid, abs(x) <= 0.7);
-  // 근사식만으로는 허용 오차 언저리다. 뉴턴 한 번이 그것을 넘긴다.
+  // The approximation alone sits at the edge of the tolerance. One Newton step clears
+  // it.
   let err = erf_(out) - x;
   out = out - err / (1.1283791670955126 * exp(-out * out));
   return out;
 }`;
 
 /**
- * 0 차 변형 베셀 함수 `I₀`. Abramowitz & Stegun 9.8.1·9.8.2 의 표를 그대로 쓴다.
+ * The zeroth-order modified Bessel function `I₀`. It uses the tables of Abramowitz &
+ * Stegun 9.8.1 and 9.8.2 verbatim.
  *
- * **|x| 를 3.75 에서 가른다** — 작은 쪽은 `t = x/3.75` 의 짝수 급수, 큰 쪽은
- * `exp(|x|)/√|x|` 를 앞에 두고 `3.75/|x|` 의 급수를 곱한다. 한쪽 식만 적으면 다른
- * 구간에서 통째로 어긋나는데, 작은 값으로만 물으면 그것이 안 보인다.
+ * **|x| splits at 3.75** — below it, an even series in `t = x/3.75`; above it,
+ * `exp(|x|)/√|x|` in front multiplied by a series in `3.75/|x|`. Writing one of the two
+ * alone is wholly wrong in the other range, and asking only with small values hides
+ * that.
  */
 const I0_PRELUDE = `
 fn i0_(x: f32) -> f32 {
@@ -178,20 +194,22 @@ fn i0_(x: f32) -> f32 {
   return exp(a) / sqrt(a) * poly;
 }
 
-// **i0 의 도함수 — i1.** 급수로 짠다:
+// **i0's derivative — i1.** Written as a series:
 //
 //     i1(x) = Σ (x/2)^(2k+1) / (k! (k+1)!)
 //
-// 항을 앞 항에 곱해 이어 가면 계승이 넘치지 않는다. **항이 전부 양수라 서로 안
-// 지우므로** 자릿수를 잃는 자리가 없다 — 근사가 아니라 수렴이다. 부호는 홀함수라
-// 마지막에 붙인다. 코어(numpy)가 같은 급수를 쓰고, 그쪽이 torch 와 상대오차
-// 1.6e-15 로 맞는 것을 확인했다.
+// Carrying each term forward by multiplying the previous one keeps the factorials from
+// overflowing. **Every term is positive so none cancel**, and no digits are lost — this
+// is convergence rather than approximation. The function is odd, so the sign is attached
+// at the end. The core (numpy) uses the same series, and it was confirmed to agree with
+// torch to a relative error of 1.6e-15.
 //
-// 고리 수가 상수인 것은 WGSL 이 조건 탈출을 싫어해서가 아니라 **f32 에서 60 항이면
-// |x| ≤ 30 을 이미 다 덮기** 때문이다. 그 밖은 i0 자체가 f32 를 넘긴다.
+// The loop count is a constant not because WGSL dislikes a conditional break but because
+// **at f32, sixty terms already cover |x| ≤ 30.** Beyond that, i0 itself overruns f32.
 //
-// (셰이더 글은 템플릿 문자열 안이다 — 여기 역따옴표를 쓰면 문자열이 닫힌다.
-//  이 저장소에서 세 번째로 밟은 자리다: runner.html · fft.ts · 여기.)
+// (The shader text lives inside a template literal — a backtick here closes the string.
+//  This is the third time this repository has stepped on that: runner.html, fft.ts, and
+//  here.)
 fn i1_(x: f32) -> f32 {
   let half = abs(x) * 0.5;
   var term = half;
@@ -204,10 +222,11 @@ fn i1_(x: f32) -> f32 {
 }`;
 
 /**
- * 도함수가 없는 것(`sign`·`floor` 같은 계단)은 `bwd: "0.0"` 이다.
+ * Anything with no derivative (a step, such as `sign` or `floor`) is `bwd: "0.0"`.
  *
- * **그래프를 끊지 않는다.** torch 는 0 을 흘리고, 거절과 0 은 다르다 — 자매에서
- * 이것을 한 번 틀렸고, 계단을 낀 손실이 torch 에서는 도는데 우리에게서는 멈췄다.
+ * **The graph is not severed.** torch flows a 0, and a refusal is not a 0 — the sister
+ * library got this wrong once, and a loss with a step in it ran on torch and stopped on
+ * ours.
  */
 export const UNARY: Readonly<Record<string, UnarySpec>> = {
   neg: { fwd: "-x", bwd: "-1.0" },
@@ -235,12 +254,12 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
   log10: { fwd: "log(x) * 0.4342944819032518", bwd: "0.4342944819032518 / x" },
   expm1: { fwd: "exp(x) - 1.0", bwd: "o + 1.0" },
   log1p: { fwd: "log(1.0 + x)", bwd: "1.0 / (1.0 + x)" },
-  // **0 에서 안 흘린다.** `step(0.0, x)` 는 `x >= 0` 이라 정확히 0 인 자리에서 1 을
-  // 주는데 torch 는 0 을 준다. 골든의 relu 케이스는 입력에 0 이 없어 이것을 못 봤고,
-  // ResNet 을 진짜 torch 와 맞춰보다 드러났다.
+  // **Nothing flows at 0.** `step(0.0, x)` is `x >= 0`, so it gives 1 at exactly 0
+  // where torch gives 0. The golden's relu case had no 0 in its input and could not see
+  // this; it surfaced while matching ResNet against real torch.
   relu: { fwd: "max(x, 0.0)", bwd: "select(0.0, 1.0, x > 0.0)" },
   sigmoid: { fwd: "1.0 / (1.0 + exp(-x))", bwd: "o * (1.0 - o)" },
-  // 계단 — 0 을 흘린다. torch 가 그렇다.
+  // A step — it flows 0. torch does the same.
   sign: { fwd: "sign(x)", bwd: "0.0" },
   floor: { fwd: "floor(x)", bwd: "0.0" },
   ceil: { fwd: "ceil(x)", bwd: "0.0" },
@@ -251,8 +270,9 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
   rad2deg: { fwd: "x * 57.29577951308232", bwd: "57.29577951308232" },
   positive: { fwd: "x", bwd: "1.0" },
   logit: { fwd: "log(x / (1.0 - x))", bwd: "1.0 / (x * (1.0 - x))" },
-  // sinc(0) 은 1 이고 그 자리의 도함수는 0 이다. 0 으로 나누는 자리라 갈라 쓴다 —
-  // WGSL 은 0/0 에서 NaN 을 내고, NaN 은 자기 자신과도 달라 대조가 통과할 수 없다.
+  // sinc(0) is 1 and the derivative there is 0. It is a division by zero, so it is
+  // split out — WGSL gives NaN for 0/0, and NaN differs even from itself, so no
+  // comparison can pass.
   sinc: {
     fwd: "select(sin(3.141592653589793 * x) / (3.141592653589793 * x), 1.0, x == 0.0)",
     bwd:
@@ -260,22 +280,25 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
   },
   erf: { fwd: "erf_(x)", bwd: "1.1283791670955126 * exp(-x * x)", prelude: ERF_PRELUDE },
   erfc: { fwd: "erfc_(x)", bwd: "-1.1283791670955126 * exp(-x * x)", prelude: ERF_PRELUDE },
-  // sgn 은 실수에서 sign 과 같다. 별칭이지만 torch 가 둘 다 가지므로 이름을 남긴다.
+  // On reals sgn is the same as sign. It is an alias, and torch has both, so the name
+  // stays.
   sgn: { fwd: "sign(x)", bwd: "0.0" },
-  // 참·거짓을 0/1 로 낸다. dtype 이 float32 하나뿐이라 bool 을 따로 안 든다.
-  // **-0.0 은 여기서 거짓이다** — torch 는 참으로 본다. 지금 케이스에 -0.0 이 없어
-  // 안 갈리지만, 갈리는 날이 오면 이 줄이 원인이다.
+  // True and false come out as 0/1. The dtype is float32 alone, so no separate bool is
+  // held.
+  // **-0.0 is false here** — torch reads it as true. No current case contains -0.0 so
+  // nothing diverges, and on the day something does, this line is the cause.
   signbit: { fwd: "select(0.0, 1.0, x < 0.0)", bwd: "0.0" },
-  // 둘 다 torch 의 공개 이름이 아니라 `nansum`·`nanmean` 을 조립하는 조각이다.
+  // Neither is a public torch name; they are the pieces `nansum` and `nanmean` are
+  // assembled from.
   nanToZero: {
     fwd: "select(x, 0.0, is_nan(x))",
-    // NaN 자리로는 안 흘린다. 그 자리는 합에 안 들어갔으므로 0 이 맞다.
+    // Nothing flows to a NaN position. It never entered the sum, so 0 is right.
     bwd: "select(1.0, 0.0, is_nan(x))",
     prelude: NAN_PRELUDE,
   },
   notNan: { fwd: "select(1.0, 0.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
   isnan: { fwd: "select(0.0, 1.0, is_nan(x))", bwd: "0.0", prelude: NAN_PRELUDE },
-  // 무한대 판정도 비트로 본다 — 지수부가 전부 1 이고 가수부가 0 이다.
+  // The infinity test is bitwise too — an exponent of all ones with a zero mantissa.
   isinf: {
     fwd: "select(0.0, 1.0, (bitcast<u32>(x) & 0x7fffffffu) == 0x7f800000u)",
     bwd: "0.0",
@@ -285,37 +308,45 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
     bwd: "0.0",
   },
   logical_not: { fwd: "select(0.0, 1.0, x == 0.0)", bwd: "0.0" },
-  // 값은 정수다. 이항 비트 연산과 같은 자리 — `f32` 로 담고 `i32` 로 센다.
-  // **참거짓이면 논리 부정이다**(`~true` 는 `-2` 가 아니라 `false`). 그 갈림은 dtype 을
-  // 아는 파이썬 결속이 하고, 여기는 정수만 본다.
+  // The values are integers. The same arrangement as the binary bitwise operations —
+  // stored as `f32` and computed as `i32`.
+  // **On a boolean it is logical negation** (`~true` is `false`, not `-2`). That branch
+  // is taken by the Python binding, which knows the dtype; this only looks at
+  // integers.
   bitwise_not: { fwd: "f32(~i32(x))", bwd: "0.0" },
   /**
-   * 0 차 변형 베셀 함수. `kaiser_window` 가 이것 위에 선다. 도함수는 `i1` 이다.
+   * The zeroth-order modified Bessel function. `kaiser_window` stands on it. Its
+   * derivative is `i1`.
    *
-   * **오래 `bwd: "0.0"` 이었고, 그 근거가 "코어도 그래프를 끊고 있어서" 였다.**
-   * 코어가 고쳐지면서 그 전제가 사라졌는데, 애초에 근거가 잘못이었다 —
-   * 한쪽 구멍을 다른 쪽이 베끼고 그것을 이유로 적으면 **골든이 그 물음을 영영 안
-   * 한다.** 셋이 서로를 대조하는 구조의 고유한 위험이고, 실제로 초록이었다.
+   * **It was `bwd: "0.0"` for a long time, and the justification was "the core severs
+   * the graph too."** That premise disappeared when the core was fixed, and the
+   * justification was wrong from the start — one side copying the other's hole and
+   * writing that down as the reason means **the golden never asks that question again.**
+   * It is the risk inherent in three implementations comparing against each other, and
+   * it really was green.
    *
-   * 그리고 이 자리는 코어보다 나빴다. **끊긴 그래프는 소리를 낸다**(`backward` 가
-   * "requires_grad 가 아니다" 로 멈춘다). `0.0` 은 안 낸다 — 값이 0 인 기울기와
-   * "여기 기울기가 없다" 는 다른 말인데, 후자를 전자로 적으면 학습이 조용히 안 된다.
+   * And this place was worse than the core's. **A severed graph makes a noise**
+   * (`backward` stops with "does not require grad"). `0.0` makes none — a gradient whose
+   * value is 0 and "there is no gradient here" say different things, and writing the
+   * second as the first makes training quietly not happen.
    */
   i0: { fwd: "i0_(x)", bwd: "i1_(x)", prelude: I0_PRELUDE },
   /**
-   * `frexp` 의 두 얼굴. WGSL 내장이 구조체를 내므로 자리별로 한 번씩 굽는다.
+   * `frexp`'s two faces. The WGSL builtin returns a struct, so it is baked once per
+   * slot.
    *
-   * torch 는 지수를 int32 로 내는데 여기 저장은 f32 하나뿐이라 값으로만 맞춘다.
+   * torch returns the exponent as int32 while the storage here is f32 alone, so only the
+   * value is matched.
    */
   frexpMantissa: { fwd: "frexp(x).fract", bwd: "0.0" },
   frexpExponent: { fwd: "f32(frexp(x).exp)", bwd: "0.0" },
   /**
-   * torch 의 기본 `gelu` — 근사형이 아니라 **정확형**이다.
+   * torch's default `gelu` — the **exact** form rather than the approximation.
    *
-   * `0.5·x·(1 + erf(x/√2))`. 왼쪽 꼬리에서 `1` 과 `erf` 가 상쇄되는데, f32 에서
-   * `erf(-8)` 은 정확히 `-1` 이라 결과가 0 이 된다. torch 는 -4.9e-15 를 주므로
-   * 차이가 5e-15 이고, 이 프로젝트의 허용 오차(1e-4) 한참 아래다. 더 정확히 하려면
-   * 코어처럼 erfc 로 유도해야 하는데 지금 그럴 이유가 없다.
+   * `0.5·x·(1 + erf(x/√2))`. In the left tail `1` and `erf` cancel, and in f32
+   * `erf(-8)` is exactly `-1`, so the result is 0. torch gives -4.9e-15, a difference of
+   * 5e-15, far below this project's tolerance (1e-4). Doing better would mean deriving
+   * through erfc as the core does, and there is no reason to right now.
    */
   gelu: {
     fwd: "0.5 * x * (1.0 + erf_(x * 0.7071067811865476))",
@@ -326,7 +357,8 @@ export const UNARY: Readonly<Record<string, UnarySpec>> = {
   },
   silu: {
     fwd: "x / (1.0 + exp(-x))",
-    // s 를 두 번 쓰므로 보조 함수로 뺀다 — 식 안에 두면 exp 를 네 번 부른다.
+    // s is used twice, so it is pulled into a helper — inline it calls exp four
+    // times.
     bwd: "silu_grad(x)",
     prelude: `
 fn silu_grad(x: f32) -> f32 {
@@ -338,11 +370,13 @@ fn silu_grad(x: f32) -> f32 {
     fwd: "select(exp(x) - 1.0, x, x > 0.0)",
     bwd: "select(o + 1.0, 1.0, x > 0.0)",
   },
-  // ── 인자 없는 활성함수. 인자를 받는 것들은 `tensor.ts` 가 상수를 구워 만든다. ──
+  // ── Activations with no arguments. The ones taking arguments are baked as
+  //    constants by `tensor.ts`. ─────────────────────────────────────────────
   //
-  // **꺾이는 점에서 어느 쪽인지가 전부다.** 식은 문서에 있지만 `x == ±3`·`x == 6`
-  // 같은 정확한 경계에서 torch 가 무엇을 주는지는 재봐야 알고, 난수 입력은 그 점을
-  // 절대 안 준다. 골든이 그 점들을 손으로 들고 있다.
+  // **Which side of the kink you are on is the whole thing.** The expressions are in the
+  // documentation, and what torch gives at exact boundaries like `x == ±3` or `x == 6`
+  // has to be measured, and a random input never lands on those points. The golden holds
+  // them by hand.
   hardsigmoid: {
     fwd: "clamp(x / 6.0 + 0.5, 0.0, 1.0)",
     bwd: "select(0.0, 0.16666666666666666, x > -3.0 && x < 3.0)",
@@ -351,7 +385,8 @@ fn silu_grad(x: f32) -> f32 {
     fwd: "select(select(x * (x + 3.0) / 6.0, x, x >= 3.0), 0.0, x <= -3.0)",
     bwd: "select(select((2.0 * x + 3.0) / 6.0, 1.0, x >= 3.0), 0.0, x <= -3.0)",
   },
-  // log σ(x). **곧장 계산하면 큰 음수에서 log(0) 이 된다** — 안정형으로 쓴다.
+  // log σ(x). **Computed directly it becomes log(0) at large negatives** — written in
+  // the stable form.
   logsigmoid: {
     fwd: "-log(1.0 + exp(-abs(x))) + min(x, 0.0)",
     bwd: "1.0 / (1.0 + exp(x))",
@@ -367,7 +402,8 @@ fn mish_grad(x: f32) -> f32 {
   return th + x * (1.0 - th * th) * s;
 }`,
   },
-  // **양쪽 경계에서 기울기가 0 이다.** `clamp` 를 그냥 미분하면 그 자리를 놓친다.
+  // **The gradient is 0 at both boundaries.** Differentiating `clamp` naively misses
+  // those points.
   relu6: {
     fwd: "clamp(x, 0.0, 6.0)",
     bwd: "select(0.0, 1.0, x > 0.0 && x < 6.0)",
@@ -390,11 +426,11 @@ fn softsign_grad(x: f32) -> f32 {
     fwd: "x - tanh(x)",
     bwd: "tanh(x) * tanh(x)",
   },
-  // ── 급수로 세는 것들. **닫힌 식이 없다.** ────────────────────────────────
+  // ── The ones computed by series. **There is no closed form.** ──────────────
   //
-  // 계수는 잘 알려진 표를 그대로 쓴다 — 자릿수를 줄이면 그만큼 답이 틀린다.
-  // 코어(numpy)와 **같은 식**을 적는다. 두 벌을 다르게 적으면 어느 쪽이 맞는지를
-  // 골든이 못 가른다.
+  // The coefficients come from well-known tables verbatim — trimming digits makes the
+  // answer wrong by that much. **The same expressions** as the core (numpy). Written
+  // differently in the two places, the golden cannot say which is right.
   lgamma: {
     fwd: "lgamma_(x)",
     bwd: "digamma_(x)",
@@ -418,18 +454,20 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
   sub: { fwd: "x - y", da: "1.0", db: "-1.0" },
   mul: { fwd: "x * y", da: "y", db: "x" },
   div: { fwd: "x / y", da: "1.0 / y", db: "-x / (y * y)" },
-  // **밑이 음수면 답이 없다.** WGSL 의 pow 는 `exp2(y·log2(x))` 이고 log2 가 음수에서
-  // 정의되지 않는다 — 실제로는 `|x|` 를 쓴 것 같은 값이 나와서, 짝수 지수의 순방향은
-  // 우연히 맞고 역방향의 부호만 뒤집힌다. 정수 지수는 `Tensor.powScalar` 가 곱셈으로
-  // 돌아가므로 이 자리를 안 지난다.
+  // **A negative base has no answer.** WGSL's pow is `exp2(y·log2(x))` and log2 is
+  // undefined for negatives — in practice a value comes out as though `|x|` had been
+  // used, so an even exponent's forward is accidentally right and only the backward's
+  // sign is flipped. Integer exponents go through `Tensor.powScalar` as multiplications
+  // and never pass here.
   pow: { fwd: "pow(x, y)", da: "y * pow(x, y - 1.0)", db: "o * log(x)" },
-  // **동점이면 반씩 나눈다.** torch 가 그렇다 — `maximum(2, 2)` 의 기울기는 양쪽 다
-  // 0.5 이지 1 이 아니다. `step(y, x)` 는 `x >= y` 라 동점에서 양쪽에 1 을 줬고,
-  // 그러면 합이 torch 의 두 배가 된다. 순방향은 어느 쪽이든 똑같이 맞으므로 값 대조로는
-  // 안 잡히고, `edge::grad::maximum(동점)` 이 이것을 묻는다.
+  // **A tie splits in half.** torch does the same — `maximum(2, 2)`'s gradient is 0.5
+  // on each side, not 1. `step(y, x)` is `x >= y`, so it gave 1 to both sides on a tie,
+  // and then the sum is twice torch's. The forward is equally right either way so a
+  // value comparison does not catch it, and `edge::grad::maximum(동점)` asks about it.
   //
-  // `clamp` 와 `leakyRelu` 는 여기 얹혀 있었는데 **torch 에서 그 둘은 나누지 않는다** —
-  // 경계에서 기울기를 온전히 흘린다. 그래서 각자 커널을 갖게 했다(`clampScalar`·`leakyRelu`).
+  // `clamp` and `leakyRelu` used to sit on this, and **torch does not split those two**
+  // — they flow the whole gradient at the boundary. So they were given their own kernels
+  // (`clampScalar` and `leakyRelu`).
   maximum: {
     fwd: "max(x, y)",
     da: "select(select(0.0, 1.0, x > y), 0.5, x == y)",
@@ -446,16 +484,17 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
     db: "-x / (x * x + y * y)",
   },
   hypot: { fwd: "sqrt(x * x + y * y)", da: "x / o", db: "y / o" },
-  // 부호만 옮긴다. y 로는 안 흐른다 — 부호는 계단이다.
+  // It carries the sign across. Nothing flows to y — a sign is a step.
   copysign: {
     fwd: "select(-abs(x), abs(x), y >= 0.0)",
     da: "select(-sign(x), sign(x), y >= 0.0)",
     db: "0.0",
   },
-  // **안정형으로 쓴다.** log(exp x + exp y) 를 그대로 쓰면 x 가 89 를 넘는 순간
-  // float32 의 exp 가 inf 가 되고, 그 뒤 결과가 전부 inf 다. 큰 쪽을 빼내면 안 넘친다.
+  // **Written in the stable form.** Taking log(exp x + exp y) literally makes
+  // float32's exp overflow to inf the moment x passes 89, and every result after that is
+  // inf. Pulling the larger one out keeps it from overflowing.
   logaddexp: {
-    // WGSL 에 log1p 내장이 없다 — log(1+t) 로 적는다.
+    // WGSL has no log1p builtin — written as log(1+t).
     fwd: "max(x, y) + log(1.0 + exp(-abs(x - y)))",
     da: "1.0 / (1.0 + exp(y - x))",
     db: "1.0 / (1.0 + exp(x - y))",
@@ -465,22 +504,22 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
     da: "1.0 / (1.0 + exp2(y - x))",
     db: "1.0 / (1.0 + exp2(x - y))",
   },
-  // **x 가 0 이면 y 와 무관하게 0 이다.** y 가 0 이어도 그렇다 — 그러라고 있는 함수이고,
-  // 그 자리를 안 보면 `x * log(y)` 와 구별이 안 된다.
+  // **x at 0 gives 0 whatever y is.** Even when y is 0 — that is what the function is
+  // for, and without looking at that point it is indistinguishable from `x * log(y)`.
   xlogy: {
     fwd: "select(x * log(y), 0.0, x == 0.0)",
     da: "log(y)",
     db: "x / y",
   },
-  // x<0 이면 0, x>0 이면 1, x==0 이면 y 를 그대로. 계단이라 x 로는 안 흐른다.
+  // 0 for x<0, 1 for x>0, and y itself at x==0. It is a step, so nothing flows to x.
   heaviside: {
     fwd: "select(select(0.0, 1.0, x > 0.0), y, x == 0.0)",
     da: "0.0",
     db: "select(0.0, 1.0, x == 0.0)",
   },
   ldexp: { fwd: "x * exp2(y)", da: "exp2(y)", db: "o * 0.6931471805599453" },
-  // 비교는 0/1 을 낸다. dtype 이 float32 하나뿐이라 bool 을 따로 안 든다 —
-  // 골든의 bool 케이스와는 0/1 로 맞는다. **기울기는 양쪽 다 0 이다.**
+  // A comparison gives 0/1. The dtype is float32 alone, so no separate bool is held —
+  // it matches the golden's bool cases as 0/1. **The gradient is 0 on both sides.**
   eq: { fwd: "select(0.0, 1.0, x == y)", da: "0.0", db: "0.0" },
   ne: { fwd: "select(0.0, 1.0, x != y)", da: "0.0", db: "0.0" },
   lt: { fwd: "select(0.0, 1.0, x < y)", da: "0.0", db: "0.0" },
@@ -493,23 +532,25 @@ export const BINARY: Readonly<Record<string, BinarySpec>> = {
   logical_or: {
     fwd: "select(0.0, 1.0, x != 0.0 || y != 0.0)", da: "0.0", db: "0.0",
   },
-  // ── 비트 ────────────────────────────────────────────────────────────────
+  // ── Bitwise ─────────────────────────────────────────────────────────────
   //
-  // 저장은 f32 하나지만 값은 정수다. `i32` 로 바꿔 셈하고 되돌린다 — f32 는 2^24
-  // 까지 정수를 정확히 담으므로 그 범위에서 답이 맞다.
+  // The storage is a single f32 and the values are integers. They are converted to `i32`
+  // for the arithmetic and back — f32 holds every integer exactly up to 2^24, so the
+  // answers are right in that range.
   //
-  // **오른쪽 시프트는 산술이다.** WGSL 의 `i32 >>` 가 부호를 늘리므로 `-3 >> 5` 가
-  // `-1` 이 된다 — torch 도 그렇다(실측). `u32` 로 바꿔 논리 시프트를 하면 음수에서
-  // 통째로 다른 답이 나오는데, 양수로만 물으면 그 차이가 안 보인다.
+  // **The right shift is arithmetic.** WGSL's `i32 >>` extends the sign, so `-3 >> 5` is
+  // `-1` — as in torch (measured). Converting to `u32` for a logical shift gives a
+  // wholly different answer on negatives, and asking only with positives hides that.
   //
-  // 참거짓에서 torch 는 논리 연산으로 가른다. 그 갈림은 dtype 을 아는 쪽(파이썬
-  // 결속)이 하고, 여기서는 정수 셈만 한다.
+  // On booleans torch branches to the logical operation. That branch is taken by the
+  // side that knows the dtype (the Python binding); here it is integer arithmetic
+  // only.
   bitwise_and: { fwd: "f32(i32(x) & i32(y))", da: "0.0", db: "0.0" },
   bitwise_or: { fwd: "f32(i32(x) | i32(y))", da: "0.0", db: "0.0" },
   bitwise_xor: { fwd: "f32(i32(x) ^ i32(y))", da: "0.0", db: "0.0" },
   bitwise_left_shift: { fwd: "f32(i32(x) << u32(i32(y)))", da: "0.0", db: "0.0" },
   bitwise_right_shift: { fwd: "f32(i32(x) >> u32(i32(y)))", da: "0.0", db: "0.0" },
-  // 유클리드 호제법. 부호는 버린다 — torch 의 gcd 는 늘 0 이상이다.
+  // Euclid's algorithm. The sign is discarded — torch's gcd is always non-negative.
   gcd: {
     fwd: "gcd_(x, y)", da: "0.0", db: "0.0",
     prelude: `
@@ -520,7 +561,7 @@ fn gcd_(xa: f32, yb: f32) -> f32 {
   return f32(a);
 }`,
   },
-  // `|a·b| / gcd`. **gcd 가 0 이면 0 이다** — torch 도 그렇다(0 과 7 의 lcm 이 0).
+  // `|a·b| / gcd`. **A gcd of 0 gives 0** — as in torch (the lcm of 0 and 7 is 0).
   lcm: {
     fwd: "lcm_(x, y)", da: "0.0", db: "0.0",
     prelude: `
@@ -534,14 +575,15 @@ fn lcm_(xa: f32, yb: f32) -> f32 {
 }`,
   },
   /**
-   * `a` 에서 `b` 쪽으로 **표현 가능한 다음 수.** 한 ulp 만 움직인다.
+   * **The next representable number** from `a` towards `b`. It moves by one ulp.
    *
-   * 부호가 있는 정수로 읽으면 f32 는 크기 순으로 늘어선다 — 양수는 비트가 커질수록
-   * 크고, 음수는 비트가 커질수록 **0 에서 멀다**. 그래서 방향 판정이 `b > a` 만으로는
-   * 안 되고 `a` 의 부호와 맞물린다. 양수로만 물으면 그 얽힘이 안 보인다.
+   * Read as signed integers, f32 lays out in order of magnitude — a larger bit pattern
+   * is a larger positive, and for negatives a larger bit pattern is **further from 0.**
+   * So deciding the direction cannot be `b > a` alone; it is entangled with `a`'s sign.
+   * Asked only with positives, that entanglement is invisible.
    *
-   * `a == 0` 은 따로 둔다 — 0 의 비트에 1 을 더하면 부호가 아니라 크기가 붙으므로
-   * 음의 방향을 놓친다.
+   * `a == 0` is kept apart — adding 1 to the bits of 0 attaches magnitude rather than
+   * sign, which misses the negative direction.
    */
   nextafter: {
     fwd: "nextafter_(x, y)", da: "1.0", db: "0.0",
@@ -558,24 +600,27 @@ fn nextafter_(a: f32, b: f32) -> f32 {
   },
 };
 
-/** 워크그룹 크기. 원소별과 축약은 1차원이다. */
+/** The workgroup size. Elementwise and reductions are 1-D. */
 export const WORKGROUP = 64;
 
 /**
- * `dispatchWorkgroups` 축당 한계. **넘으면 던지지 않고 조용히 안 한다.**
+ * The per-axis limit on `dispatchWorkgroups`. **Exceed it and it does not throw; it
+ * quietly does not run.**
  *
- * conv 벤치에서 589,824 개를 요청했고 WebGPU 는 아무 말 없이 일부만 돌렸다.
- * "TF.js 대비 144%" 로 보였고 값 6개 중 5개가 틀렸다 — 값을 같이 안 봤으면
- * 그대로 믿었을 수치다. 그래서 격자 계산이 커널 생성기 안에 있다.
+ * The conv bench asked for 589,824 and WebGPU silently ran only some of them. It looked
+ * like "144% of TF.js" and five of six values were wrong — a number that would have been
+ * believed if the values had not been looked at alongside. Which is why the grid
+ * arithmetic lives inside the kernel generator.
  */
 export const MAX_DISPATCH = 65535;
 
-/** 1차원 작업을 한계 안의 2차원 격자로 편다. */
+/** Spreads 1-D work into a 2-D grid inside the limit. */
 export interface Grid {
-  /** `dispatchWorkgroups` 에 넣을 것. */
+  /** What goes into `dispatchWorkgroups`. */
   readonly x: number;
   readonly y: number;
-  /** 한 줄에 놓인 **스레드** 수 — 셰이더가 `g.y * GX + g.x` 로 쓴다. */
+  /** The number of **threads** laid along one row — the shader writes
+   *  `g.y * GX + g.x`. */
   readonly threadsX: number;
 }
 
@@ -586,7 +631,8 @@ export function grid1d(n: number, workgroup: number = WORKGROUP): Grid {
   return { x, y, threadsX: x * workgroup };
 }
 
-/** 2차원 격자에서 평평한 번호를 낸다. 한계를 안 넘어도 같은 식을 쓴다 — 경로가 하나여야 한다. */
+/** Produces the flat index from the 2-D grid. The same expression is used even below
+ *  the limit — there has to be one path. */
 function flatId(n: number): string {
   const { threadsX } = grid1d(n);
   return `  let gid = g.y * ${threadsX}u + g.x;\n  if (gid >= ${n}u) { return; }`;
@@ -596,26 +642,30 @@ export type UnaryName = keyof typeof UNARY & string;
 export type BinaryName = keyof typeof BINARY & string;
 
 /**
- * 상수를 품은 단항 연산.
+ * A unary operation carrying a constant.
  *
- * `clamp(-1, 1)` 이나 `leakyRelu(0.1)` 처럼 인자가 식에 섞이는 것들이다. 인자를
- * 유니폼으로 넣으면 셰이더가 하나로 끝나지만 이 파일이 그 반대를 고르는 이유가 여기도
- * 그대로 적용된다 — 상수로 구우면 접힌다. 이름에 그 상수가 들어가므로 파이프라인
- * 캐시가 알아서 갈라지고, 같은 인자로 두 번 부르면 같은 셰이더를 쓴다.
+ * Things like `clamp(-1, 1)` or `leakyRelu(0.1)`, where the argument is mixed into the
+ * expression. Putting the argument in a uniform would mean one shader, and the reason
+ * this file chooses the opposite applies here too — baked as a constant, it folds. The
+ * constant goes into the name, so the pipeline cache splits by itself and two calls with
+ * the same argument use the same shader.
  */
 const DERIVED: Record<string, UnarySpec> = {};
 
 /**
- * WGSL 의 f32 리터럴. 정수처럼 보이는 값도 소수점을 달아야 형이 안 갈린다.
+ * WGSL's f32 literal. A value that looks like an integer still needs a decimal point or
+ * the type diverges.
  *
- * **무한대와 NaN 은 셰이더에 구울 수가 없다.** WGSL 은 컴파일 시점에 계산되는 값이
- * inf 나 NaN 이 되는 것을 금지한다 — 리터럴도, `bitcast<f32>(0x7f800000u)` 로 에둘러도
- * 똑같이 거절당한다(둘 다 실측). 그전에는 `String(Infinity)` 가 `Infinity` 라는
- * **글자**를 셰이더에 심어서 `unresolved value 'Infinity'` 로 멈췄다 — 값 하나
- * 채우려다 파이프라인 전체가 죽었고, 그 자리가 `Tensor.full(shape, Infinity)` 였다.
+ * **Infinity and NaN cannot be baked into a shader.** WGSL forbids a
+ * compile-time-evaluated value from becoming inf or NaN — a literal and the detour
+ * through `bitcast<f32>(0x7f800000u)` are refused identically (both measured). Before
+ * that, `String(Infinity)` planted the **characters** `Infinity` into the shader and it
+ * stopped with `unresolved value 'Infinity'` — filling one value killed the whole
+ * pipeline, and the place was `Tensor.full(shape, Infinity)`.
  *
- * 그쪽은 CPU 에서 채워 올리는 길로 갔다. 여기서는 **시끄럽게 거절한다** — 못 굽는
- * 것을 조용히 근사하면 셰이더는 도는데 답이 다른 상태가 된다.
+ * That side went the route of filling on the CPU and uploading. Here it **refuses
+ * loudly** — quietly approximating what cannot be baked leaves the shader running with a
+ * different answer.
  */
 export function f32lit(v: number): string {
   if (!Number.isFinite(v)) {
@@ -624,22 +674,24 @@ export function f32lit(v: number): string {
       "compile time.\n  Fill it on the CPU and upload it (Tensor.full takes that path).",
     );
   }
-  // **지수 표기에는 소수점을 안 붙인다.** `String(-1e30)` 은 `-1e+30` 인데
-  // `Number.isInteger` 가 참이라 `.0` 을 덧댔고, `-1e+30.0` 은 WGSL 이 파싱에서
-  // 거절한다 — 값 하나 채우려다 파이프라인이 통째로 죽었다. 지수 표기는 그 자체로
-  // 이미 부동소수 리터럴이다.
+  // **No decimal point is attached to exponent notation.** `String(-1e30)` is
+  // `-1e+30`, `Number.isInteger` is true for it, so `.0` was appended — and WGSL refuses
+  // `-1e+30.0` at parse time. Filling one value killed the whole pipeline. Exponent
+  // notation is already a floating point literal by itself.
   const text = String(v);
   if (text.includes("e") || text.includes("E") || text.includes(".")) return text;
   return `${text}.0`;
 }
 
-/** 상수를 구운 단항 연산을 등록하고 그 이름을 준다. 이미 있으면 다시 안 만든다. */
+/** Registers a unary with its constant baked in and hands back the name. Already
+ *  present, it is not built again. */
 export function unaryWith(key: string, make: () => UnarySpec): string {
   DERIVED[key] ??= make();
   return key;
 }
 
-/** 이 이름으로 단항 커널을 만들 수 있는가. 표에 있는 것과 구운 것을 함께 본다. */
+/** Whether a unary kernel can be built for this name. It looks at the table's and the
+ *  baked ones together. */
 export function hasUnary(name: string): boolean {
   return Boolean(UNARY[name] ?? DERIVED[name]);
 }
@@ -650,7 +702,8 @@ function unarySpec(name: string): UnarySpec {
   return op;
 }
 
-/** 원소별 단항 순방향. 원소 수를 상수로 굽는다 — 경계 검사가 접힌다. */
+/** An elementwise unary forward. The element count is baked in as a constant — the
+ *  bounds check folds away. */
 export function unaryForward(name: string, n: number): string {
   const op = unarySpec(name);
   return `${op.prelude ?? ""}
@@ -664,7 +717,8 @@ ${flatId(n)}
 }`;
 }
 
-/** 원소별 단항 역방향. 순방향 결과를 받아 다시 안 센다. */
+/** An elementwise unary backward. It takes the forward result rather than recomputing
+ *  it. */
 export function unaryBackward(name: string, n: number): string {
   const op = unarySpec(name);
   return `${op.prelude ?? ""}
@@ -682,14 +736,15 @@ ${flatId(n)}
 }
 
 /**
- * 평평한 출력 번호에서 두 입력의 번호를 낸다.
+ * From a flat output index, produces both inputs' indices.
  *
- * **나눗셈이 하나도 안 남는다** — 축을 뒤에서부터 훑으며 나머지를 빼 나가고, 제수가
- * 전부 리터럴이라 컴파일러가 곱셈·시프트로 접는다. 유니폼으로 두면 이것이 안 접히고,
- * 그 차이가 conv 에서 4배였다.
+ * **Not one division survives** — the axes are walked from the back subtracting
+ * remainders, and every divisor is a literal, so the compiler folds them into
+ * multiplications and shifts. In a uniform they do not fold, and that difference was 4×
+ * on conv.
  *
- * 크기 1 인 축은 스트라이드가 0 이라 같은 값을 계속 읽는다 — **늘려서 복제하지
- * 않는다.** 복제하는 판은 메모리를 쓰고, conv 에서 im2col 이 진 이유가 그것이다.
+ * An axis of size 1 has stride 0 and keeps reading the same value — **it is not expanded
+ * and copied.** The copying version costs memory, and that is why im2col lost at conv.
  */
 function indexPair(
   shape: readonly number[],
@@ -706,7 +761,7 @@ function indexPair(
   return lines.join("\n");
 }
 
-/** 원소별 이항 순방향. 브로드캐스팅을 스트라이드로 처리한다. */
+/** An elementwise binary forward. Broadcasting is handled through the strides. */
 export function binaryForward(
   name: string,
   shape: readonly number[],
@@ -731,14 +786,17 @@ ${indexPair(shape, strideA, strideB)}
 }
 
 /**
- * 원소별 이항 역방향, 한쪽 몫. **출력 모양으로 낸다.**
+ * One side's share of an elementwise binary backward. **It comes out in the output's
+ * shape.**
  *
- * 브로드캐스팅이 있으면 여기서는 늘어난 채로 기여를 내고, 접는 일은
- * `reduceBroadcast` 가 따로 한다. 두 단계로 나눈 이유는 **원자 덧셈을 피하려는
- * 것**이다 — 여기서 입력 자리로 바로 더하면 순서가 매번 달라지고, 부동소수는
- * 순서가 바뀌면 값이 바뀌어 같은 씨앗의 학습이 두 번 다르게 간다.
+ * Where there is broadcasting, the contribution is produced expanded here and the
+ * folding is done separately by `reduceBroadcast`. The reason for two stages is **to
+ * avoid atomic addition** — adding straight into the input positions here would make the
+ * order differ every time, and floating point changes value with order, so the same seed
+ * would train two different ways.
  *
- * 순방향과 **같은 인덱싱 식**을 쓴다. 경로가 둘이면 한쪽만 고치게 된다.
+ * It uses **the same indexing expression** as the forward. Two paths means fixing only
+ * one of them.
  */
 export function binaryBackward(
   name: string,
@@ -768,14 +826,15 @@ ${indexPair(shape, strideA, strideB)}
 }
 
 /**
- * 브로드캐스팅으로 늘어난 축을 도로 접는다.
+ * Folds a broadcast axis back down.
  *
- * `a(3,1) + b(3,4)` 에서 `a` 로 가는 기울기는 (3,4) 짜리를 축 1 로 합친 (3,1) 이다.
- * 이것을 안 하면 모양이 안 맞고, 모양만 맞추고 합을 빠뜨리면 **값이 그럴듯하게
- * 틀린다** — 골든을 통과하고 학습만 안 되는 종류다.
+ * For `a(3,1) + b(3,4)`, the gradient to `a` is the (3,4) summed along axis 1 into
+ * (3,1). Without it the shape does not match, and matching the shape while omitting the
+ * sum makes **the values plausibly wrong** — the kind that passes the golden and only
+ * fails to train.
  *
- * 스레드 하나가 결과 한 칸을 맡아 자기 몫을 **정해진 순서로** 훑는다. 원자 덧셈을
- * 안 쓰므로 두 번 돌리면 같은 값이 나온다.
+ * One thread takes one output cell and walks its share **in a fixed order.** No atomic
+ * addition, so running it twice gives the same value.
  *
  * @param full the gradient's shape
  * @param small the shape to fold down to. Same rank, and each axis is
@@ -807,7 +866,7 @@ export function reduceBroadcast(
     const fd = full[d] ?? 1;
     if (sd === fd && fd !== 1) baseTerms.push(`i${d} * ${fullStride[d]}u`);
     else if (fd !== 1) broadcastAxes.push(d);
-    // sd === fd === 1 이면 기여가 없다 — 항을 안 만든다.
+    // With sd === fd === 1 there is no contribution — no term is emitted.
   }
 
   const open: string[] = [];
@@ -837,11 +896,12 @@ ${close.join("\n")}
 }
 
 /**
- * 행렬곱. **누산기 16개를 이름 붙인 스칼라로 펼친다.**
+ * The matrix product. **The sixteen accumulators are spread into named scalars.**
  *
- * `array<f32,16>` 에 담고 `acc[i*4+j]` 로 변수 인덱싱하면 WGSL 이 레지스터에 못 두고
- * 메모리로 떨어뜨린다. 같은 알고리즘·같은 타일 크기로 **182 vs 4,474 GFLOPS** 였다
- * (실측). 읽기는 나쁘지만 24배이고, 이 커널은 TF.js 의 115~217% 다.
+ * Held in an `array<f32,16>` and indexed by a variable as `acc[i*4+j]`, WGSL cannot keep
+ * them in registers and spills to memory. Same algorithm, same tile size:
+ * **182 vs 4,474 GFLOPS** (measured). It reads badly and it is 24×, and this kernel runs
+ * at 115–217% of TF.js.
  */
 export function matmul(M: number, K: number, N: number): string {
   const decl: string[] = [];
@@ -904,11 +964,12 @@ ${store.join("\n")}
 }
 
 /**
- * 전체 합. 워크그룹 안에서 트리로 접고 워크그룹당 부분합 하나를 낸다.
+ * The full sum. It folds as a tree inside a workgroup and produces one partial sum per
+ * workgroup.
  *
- * **원자 연산을 안 쓴다.** 부동소수 덧셈은 순서가 바뀌면 값이 달라지고, 그러면 같은
- * 씨앗으로 두 번 돌린 학습이 갈린다. 부분합이 하나가 될 때까지 다시 부르는 쪽이
- * 느리지만 **결정적**이고, 이 프로젝트는 재현되는 쪽을 고른다.
+ * **No atomics.** Floating point addition changes value with order, and then two runs
+ * from the same seed train differently. Calling again until one partial sum is left is
+ * slower and **deterministic**, and this project takes the reproducible side.
  */
 export function reduceSum(n: number): string {
   const g = grid1d(n);
@@ -921,8 +982,9 @@ var<workgroup> part: array<f32, ${WORKGROUP}>;
 fn main(@builtin(global_invocation_id) g: vec3<u32>,
         @builtin(local_invocation_id) l: vec3<u32>,
         @builtin(workgroup_id) w: vec3<u32>) {
-  // **여기서는 일찍 안 나간다.** 아래 배리어를 워크그룹 전원이 같이 만나야 하고,
-  // 범위 밖 스레드가 return 하면 제어 흐름이 균일하지 않아 결과가 정의되지 않는다.
+  // **Nothing returns early here.** The whole workgroup has to meet the barrier below
+  // together, and a thread outside the range returning makes the control flow non-uniform
+  // and the result undefined.
   let gid = g.y * ${g.threadsX}u + g.x;
   part[l.x] = select(0.0, A[gid], gid < N);
   workgroupBarrier();
@@ -937,33 +999,36 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>,
 }`;
 }
 
-/** `reduceSum` 한 번이 내는 부분합 개수. 하나가 될 때까지 다시 부른다. */
+/** How many partial sums one `reduceSum` produces. It is called again until one is
+ *  left. */
 export function reduceParts(n: number): number {
   return Math.max(1, Math.ceil(n / WORKGROUP));
 }
 
 /**
- * 축 하나를 접는다. 축약 축을 가운데 두고 `(바깥, 축약, 안쪽)` 으로 본다.
+ * Folds one axis. The reduced axis sits in the middle, seen as `(outer, reduced,
+ * inner)`.
  *
- * 스레드 하나가 결과 한 칸을 맡아 축약 축을 **정해진 순서로** 훑는다. 원자 연산도
- * 트리도 없다 — 같은 입력이면 같은 값이 나온다.
+ * One thread takes one output cell and walks the reduced axis **in a fixed order.** No
+ * atomics and no tree — the same input gives the same value.
  *
- * **전체 축약에는 이걸 쓰지 않는다.** `outer = inner = 1` 이면 스레드 하나가 n 번
- * 도는 꼴이라, 큰 텐서에서는 `Device.sumAll` 의 트리가 맞다. 여기 쓰는 것은 축이
- * 실제로 있을 때다.
+ * **This is not used for a full reduction.** With `outer = inner = 1` it is one thread
+ * going round n times, so on a large tensor `Device.sumAll`'s tree is the right one. This
+ * is for when there really is an axis.
  */
 export type ReduceKind = "sum" | "max" | "min" | "prod";
 
 /**
- * 축약의 시작값과 한 걸음.
+ * A reduction's starting value and one step.
  *
- * **최대·최소는 파수꾼 값을 안 쓴다.** 처음에 `-3.4028235e38` 을 넣었더니 WGSL 이
- * "f32 로 표현할 수 없다" 며 거부했고(JS 가 찍은 십진수가 f32 최대값보다 위로
- * 반올림된다), 비트캐스트로 -inf 를 만들었더니 그것도 거부했다 — WGSL 은 상수식에
- * 무한대를 못 담는다. 둘 다 예외가 아니라 결과 0 으로만 보였다.
+ * **Max and min use no sentinel.** Putting in `-3.4028235e38` first, WGSL refused it as
+ * "cannot be represented as f32" (the decimal JS prints rounds above f32's maximum), and
+ * building -inf by bitcast was refused too — WGSL cannot hold an infinity in a constant
+ * expression. Neither appeared as an exception; both appeared as a result of 0.
  *
- * 첫 원소에서 시작해 나머지를 훑는 쪽이 그 문제가 아예 없고, 답도 더 정확하다.
- * 축약 길이는 항상 1 이상이라 첫 원소는 늘 있다.
+ * Starting from the first element and walking the rest has none of that problem, and the
+ * answer is more accurate. A reduction's length is always at least 1, so the first
+ * element is always there.
  */
 const REDUCE_INIT: Readonly<Record<ReduceKind, string>> = {
   sum: "0.0",
@@ -972,7 +1037,8 @@ const REDUCE_INIT: Readonly<Record<ReduceKind, string>> = {
   min: "A[base]",
 };
 
-/** 시작값이 첫 원소면 그 자리를 두 번 세지 않는다. */
+/** When the starting value is the first element, that position is not counted
+ *  twice. */
 const REDUCE_FROM: Readonly<Record<ReduceKind, number>> = {
   sum: 0, prod: 0, max: 1, min: 1,
 };
@@ -1010,10 +1076,10 @@ ${flatId(n)}
 }
 
 /**
- * 축약하되 **값이 아니라 자리**를 낸다.
+ * Reduces, and produces **the position rather than the value.**
  *
- * 동점이면 **먼저 나온 자리**를 준다 — 뒤엣것으로 밀리지 않게 부등호를 엄격하게 쓴다.
- * torch 도 그렇게 답한다.
+ * A tie gives **the earlier position** — the comparison is strict so it does not slide
+ * to the later one. torch answers the same way.
  */
 export function argReduce(
   kind: "max" | "min",
@@ -1043,10 +1109,11 @@ ${flatId(n)}
 }
 
 /**
- * 축 하나의 앞뒤에 상수를 덧댄다.
+ * Pads one axis with a constant at each end.
  *
- * 덧댄 자리는 입력의 **어느 자리도 안 보므로** gather 로 안 된다. 여러 축을 채우려면
- * 이 커널을 축마다 부른다 — 한 번에 하는 커널을 따로 두면 두 벌을 고쳐야 한다.
+ * A padded position **looks at no input position**, so a gather cannot do it. Filling
+ * several axes calls this kernel once per axis — a separate kernel doing them at once
+ * would be two copies to fix.
  */
 export function padAxis(
   outer: number,
@@ -1077,7 +1144,7 @@ ${flatId(n)}
 }`;
 }
 
-/** `sum(dim)` 의 역방향 — 접힌 축으로 도로 편다. */
+/** `sum(dim)`'s backward — expands back along the folded axis. */
 export function expandDim(outer: number, red: number, inner: number): string {
   const n = outer * red * inner;
   return `
@@ -1093,14 +1160,15 @@ ${flatId(n)}
 }
 
 /**
- * `amax`/`amin` 의 역방향. **동점이면 고르게 나눈다.**
+ * `amax`/`amin`'s backward. **A tie divides evenly.**
  *
- * torch 의 실측이 그렇다 — `[1,3,3,2]` 의 `amax` 기울기는 `[0,.5,.5,0]` 이다.
- * 하나만 골라 주면 값 검사는 통과하고 학습만 미묘하게 갈린다. 그래서 골든의 입력에
- * 동점이 일부러 들어 있고, 여기서 그 규칙을 지킨다.
+ * That is what torch measures as — `[1,3,3,2]`'s `amax` gradient is `[0,.5,.5,0]`.
+ * Choosing one of them passes the value check and leaves training subtly different. So
+ * the golden's inputs contain ties on purpose, and this holds the rule.
  *
- * 자기 축을 한 번 더 훑어 동점 수를 센다. 축약 길이만큼의 추가 비용이고, 그 값을
- * 순방향에서 들고 오면 버퍼가 하나 더 필요하다 — 지금 크기에서는 다시 세는 쪽이 싸다.
+ * It walks its axis once more to count the ties. That costs the reduction's length again,
+ * and carrying the count from the forward would need another buffer — at these sizes,
+ * counting again is cheaper.
  */
 export function extremeBackward(
   outer: number,
@@ -1129,25 +1197,26 @@ ${flatId(n)}
 }
 
 /**
- * 출력 축 하나가 입력의 어디를 보는가.
+ * Where one output axis looks in the input.
  *
- * `expand`·`repeat`·`swapaxes`·`select`·`diagonal`·`rot90`·`unfold`·`flip`·`split` 이
- * 전부 이 세 규칙의 조합이다. 연산마다 커널을 쓰면 열 몇 개가 되고, 그중 하나만
- * 고치는 날이 온다.
+ * `expand`, `repeat`, `swapaxes`, `select`, `diagonal`, `rot90`, `unfold`, `flip` and
+ * `split` are all combinations of these three rules. A kernel per operation would be a
+ * dozen of them, and a day comes when only one of them is fixed.
  */
 export interface AxisRule {
-  /** 출력 축의 크기. */
+  /** The output axis's size. */
   readonly size: number;
-  /** 입력에서의 걸음. **0 이면 늘린 축이다** — 복제하지 않고 같은 값을 다시 읽는다. */
+  /** The stride in the input. **0 means an expanded axis** — the same value is read
+   *  again rather than copied. */
   readonly stride: number;
   /**
-   * `lin` 은 그대로, `mod` 는 되돌아가고(repeat), `rev` 는 거꾸로(flip),
-   * `div` 는 같은 자리에 머무른다(repeat_interleave).
+   * `lin` goes straight on, `mod` wraps back (repeat), `rev` runs backwards (flip), and
+   * `div` stays in place (repeat_interleave).
    */
   readonly kind: "lin" | "mod" | "rev" | "div";
-  /** `mod`·`rev` 의 주기. 보통 입력 축의 크기다. */
+  /** The period for `mod` and `rev`. Usually the input axis's size. */
   readonly wrap: number;
-  /** `mod` 에 더해지는 자리이동. `roll` 이 쓴다 — `repeat` 은 0 이다. */
+  /** The shift added to `mod`. `roll` uses it — for `repeat` it is 0. */
   readonly bias?: number;
 }
 
@@ -1157,12 +1226,13 @@ function ruleCoord(r: AxisRule, c: string): string {
     return bias === 0 ? `(${c} % ${r.wrap}u)` : `((${c} + ${bias}u) % ${r.wrap}u)`;
   }
   if (r.kind === "rev") return `(${r.wrap - 1}u - ${c})`;
-  // `wrap` 이 되풀이 횟수다. `[a,b]` 를 2 번씩이면 `[a,a,b,b]` 가 된다.
+  // `wrap` is the repeat count. `[a,b]` twice each gives `[a,a,b,b]`.
   if (r.kind === "div") return `(${c} / ${r.wrap}u)`;
   return c;
 }
 
-/** 출력 번호에서 입력 번호를 내는 WGSL. 제수가 전부 리터럴이라 나눗셈이 안 남는다. */
+/** The WGSL producing the input index from the output index. Every divisor is a
+ *  literal, so no division survives. */
 function sourceIndex(
   rules: readonly AxisRule[],
   offset: number,
@@ -1187,10 +1257,11 @@ function ruleCount(rules: readonly AxisRule[]): number {
 }
 
 /**
- * 규칙 묶음의 서명. **파이프라인 캐시의 열쇠다.**
+ * The signature of a rule set. **It is the pipeline cache's key.**
  *
- * 규칙의 어느 한 자리라도 빠뜨리면 다른 연산이 같은 셰이더를 물려받는다 — 모양을
- * 굽는 설계라 그것은 조용히 틀린 답이 된다. 그래서 이 함수가 규칙 옆에 있다.
+ * Leaving out any one part of a rule lets a different operation inherit the same shader —
+ * and with shapes baked in, that is a quietly wrong answer. Which is why this function
+ * lives next to the rules.
  */
 export function ruleKey(rules: readonly AxisRule[], offset: number): string {
   const parts = rules.map(
@@ -1213,29 +1284,34 @@ ${sourceIndex(rules, offset, "gid", "src")}
 }
 
 /**
- * gather 의 역방향 — 흩어진 것을 도로 모은다.
+ * The gather's backward — it collects the scattered pieces back.
  *
- * **입력 자리마다 출력 전체를 훑는다.** 원자 덧셈으로 흩뿌리면 순서가 매번 달라지고,
- * 부동소수는 순서가 바뀌면 값이 바뀌어 같은 씨앗의 학습이 두 번 다르게 간다.
- * 여기서는 출력 번호를 오름차순으로 도니 몇 번을 돌려도 같은 값이다.
+ * **For each input position it walks the whole output.** Scattering with atomic addition
+ * makes the order differ every time, and floating point changes value with order, so the
+ * same seed would train two different ways. Here the output indices are walked in
+ * ascending order, so any number of runs gives the same value.
  *
- * 대신 비용이 **입력 크기 × 출력 크기**다. 지금 쓰는 자리(모양 연산의 역방향, 원소
- * 수십 개)에서는 문제가 없지만, 학습 루프 안쪽에 이 커널이 들어가면 안 된다.
- * 그때는 연산별로 접는 법이 따로 있다(`expand` 는 축약, `flip` 은 다시 뒤집기).
+ * The cost instead is **input size × output size.** At the places it is used today (the
+ * backward of a shape operation, tens of elements) that is fine, and this kernel must not
+ * end up inside a training loop. For that there are per-operation ways to fold (`expand`
+ * is a reduction, `flip` is another flip).
  *
- * 겹치는 자리를 제대로 더하는 것이 요점이다 — 길이 5 를 `unfold(3, 1)` 로 펴면
- * 기울기가 `[1,2,3,2,1]` 이 된다. 겹친 만큼 쌓이는 것이고, 안 더하면 전부 1 이 된다.
+ * Adding the overlapping positions properly is the point — unfolding a length of 5 with
+ * `unfold(3, 1)` gives the gradient `[1,2,3,2,1]`. It piles up by the overlap, and
+ * without the addition it would be all ones.
  */
 /**
- * 규칙이 **되짚을 수 있는가** — 입력 자리에서 출력 자리를 바로 셀 수 있는가.
+ * Whether a rule set **can be inverted** — whether the output position can be computed
+ * directly from the input position.
  *
- * 조건 둘이다. 모든 축이 `lin`(그대로 나아감)이고 걸음이 0 이 아닐 것 —
- * `expand` 는 걸음이 0 이라 여러 출력이 한 입력을 보므로 되짚기가 하나로 안 나온다.
- * 그리고 걸음을 큰 것부터 놓았을 때 **블록이 안 겹칠 것**: 큰 걸음 하나가 그 아래
- * 축들이 덮는 범위보다 넓어야 나눗셈으로 좌표가 갈린다.
+ * Two conditions. Every axis is `lin` (running straight on) with a non-zero stride —
+ * `expand` has stride 0, so several outputs look at one input and the inverse is not
+ * unique. And with the strides laid out largest first, **the blocks must not overlap**: a
+ * large stride has to exceed the range the axes below it cover, or the division cannot
+ * separate the coordinates.
  *
- * 자르기·전치·`select`·`permute` 가 전부 이 조건을 만족한다. `repeat`·`expand`·
- * `flip`·`roll` 은 아니고, 그쪽은 훑는 길로 간다.
+ * Slicing, transposing, `select` and `permute` all satisfy this. `repeat`, `expand`,
+ * `flip` and `roll` do not, and those take the walking path.
  *
  * @returns the axes sorted by descending stride, or `null` where the
  *   conditions do not hold.
@@ -1244,7 +1320,8 @@ function invertibleAxes(
   rules: readonly AxisRule[],
 ): { size: number; stride: number; outStride: number }[] | null {
   if (rules.length === 0) return null;
-  // 출력에서의 걸음(행 우선). 되짚은 좌표를 출력 번호로 되돌릴 때 쓴다.
+  // The strides in the output (row-major). Used to turn the recovered coordinates back
+  // into an output index.
   const outStrides: number[] = new Array(rules.length).fill(1);
   for (let d = rules.length - 2; d >= 0; d--) {
     outStrides[d] = (outStrides[d + 1] ?? 1) * (rules[d + 1]?.size ?? 1);
@@ -1252,13 +1329,15 @@ function invertibleAxes(
   const axes: { size: number; stride: number; outStride: number }[] = [];
   for (const [d, r] of rules.entries()) {
     if (r.kind !== "lin" || r.stride === 0) return null;
-    // 크기 1 인 축은 좌표가 늘 0 이라 되짚기에 아무 몫이 없다.
+    // An axis of size 1 has coordinate 0 always, so it contributes nothing to the
+    // inversion.
     if (r.size === 1) continue;
     axes.push({ size: r.size, stride: r.stride, outStride: outStrides[d] ?? 1 });
   }
   if (axes.length === 0) return [];
   axes.sort((a, b) => b.stride - a.stride);
-  // 아래 축들이 덮는 폭보다 위 축의 걸음이 넓어야 나눗셈이 좌표를 가른다.
+  // The upper axis's stride has to exceed the width the axes below cover, or the
+  // division cannot separate the coordinates.
   let span = 1;
   for (let i = axes.length - 1; i >= 0; i--) {
     const a = axes[i];
@@ -1277,11 +1356,13 @@ export function gatherBackward(
   const outN = ruleCount(rules);
   const axes = invertibleAxes(rules);
   if (axes) {
-    // **되짚는 길.** 입력 자리마다 출력 자리를 한 번에 셈한다 — `O(입력)`.
+    // **The inverting path.** It computes the output position for each input position
+    // in one go — `O(input)`.
     //
-    // 훑는 길은 `O(입력 × 출력)` 이라 배치가 두 배면 **네 배**가 된다. 실측:
-    // ResNet-18 한 스텝의 94% 가 이 커널 하나였고, `adaptiveAvgPool(1)` 이 4×4 를
-    // 통째로 자르면서 **입력과 출력이 같은 크기인 자르기**를 만들고 있었다.
+    // The walking path is `O(input × output)`, so twice the batch is **four times** the
+    // work. Measured: 94% of a single ResNet-18 step was this one kernel, where
+    // `adaptiveAvgPool(1)` was slicing the whole 4×4 and so producing **a slice whose
+    // input and output are the same size.**
     const steps = axes.map((a) => `
     { let c = rest / ${a.stride}u;
       if (c >= ${a.size}u) { ok = false; } else {
@@ -1300,7 +1381,8 @@ ${flatId(inSize)}
     var t = 0u;
     var ok = true;
 ${steps}
-    // 남은 것이 0 이어야 이 입력이 정확히 그 출력 자리다. 아니면 안 뽑힌 칸이다.
+    // Only a remainder of 0 makes this input exactly that output position. Otherwise it
+    // is a cell that was not selected.
     if (ok && rest == 0u && t < ${outN}u) { acc = G[t]; }
   }
   Out[gid] = acc;
@@ -1322,9 +1404,10 @@ ${sourceIndex(rules, offset, "t", "src")}
 }
 
 /**
- * `diagflat` — 벡터를 대각선에 놓고 나머지는 0.
+ * `diagflat` — puts a vector on the diagonal and 0 everywhere else.
  *
- * 이것만 gather 로 안 된다. 출력의 대부분이 입력의 **어느 자리도 안 보기** 때문이다.
+ * This one alone cannot be a gather, because most of the output **looks at no input
+ * position.**
  */
 export function diagflat(n: number): string {
   const total = n * n;
@@ -1340,7 +1423,7 @@ ${flatId(total)}
 }`;
 }
 
-/** `diagflat` 의 역방향 — 대각선만 거둔다. */
+/** `diagflat`'s backward — it collects the diagonal alone. */
 export function diagflatBackward(n: number): string {
   return `
 @group(0) @binding(0) var<storage, read> G: array<f32>;
@@ -1353,10 +1436,11 @@ ${flatId(n)}
 }
 
 /**
- * `where(조건, x, y)` — 조건 자리마다 둘 중 하나.
+ * `where(condition, x, y)` — one of the two at each position.
  *
- * 기울기는 **고른 쪽으로만** 간다. 안 고른 쪽으로 0 을 보내는 것과 같은 값이지만,
- * 안 고른 쪽이 NaN 이면 다르다 — `0 * NaN` 은 NaN 이다. 그래서 곱하지 않고 고른다.
+ * The gradient goes **to the chosen side only.** That is the same value as sending 0 to
+ * the unchosen side, and it differs when the unchosen side is NaN — `0 * NaN` is NaN. So
+ * it selects rather than multiplies.
  */
 export function whereKernel(n: number): string {
   return `
@@ -1371,7 +1455,8 @@ ${flatId(n)}
 }`;
 }
 
-/** `where` 의 역방향, 한쪽 몫. 고른 자리에만 기울기를 놓는다. */
+/** One side's share of `where`'s backward. It places the gradient only where that side
+ *  was chosen. */
 export function whereBackward(n: number, take: "a" | "b"): string {
   const test = take === "a" ? "C[gid] != 0.0" : "C[gid] == 0.0";
   return `
@@ -1385,11 +1470,13 @@ ${flatId(n)}
 }`;
 }
 
-/** 아래·위 삼각만 남기고 0. `diagonal` 이 아니라 **면**을 남긴다. */
+/** Keeps the lower or upper triangle and zeroes the rest. It keeps **an area**, not a
+ *  `diagonal`. */
 export function triangle(rows: number, cols: number, lower: boolean, diagonal: number): string {
   const n = rows * cols;
-  // tril 은 j - i <= diagonal, triu 는 j - i >= diagonal 을 남긴다. 정수 뺄셈이
-  // 음수가 될 수 있어 i32 로 본다 — u32 로 두면 아래쪽 절반이 거대한 수가 된다.
+  // tril keeps j - i <= diagonal and triu keeps j - i >= diagonal. The integer
+  // subtraction can go negative, so it is read as i32 — as u32 the lower half becomes an
+  // enormous number.
   const test = lower
     ? `(i32(j) - i32(i)) <= ${diagonal}`
     : `(i32(j) - i32(i)) >= ${diagonal}`;
@@ -1406,10 +1493,11 @@ ${flatId(n)}
 }
 
 /**
- * 누적 합·곱. 스레드 하나가 자기 앞자리를 전부 훑는다.
+ * The cumulative sum and product. One thread walks everything before its own position.
  *
- * 병렬 스캔(Hillis-Steele 등)이 있지만 안 쓴다. 여기 필요한 길이가 짧고, 병렬 스캔은
- * **더하는 순서가 바뀌어** 같은 입력에서 다른 값이 나올 수 있다. 재현이 먼저다.
+ * A parallel scan (Hillis-Steele and the rest) exists and is not used. The lengths needed
+ * here are short, and a parallel scan **changes the order of the additions**, so the same
+ * input can give a different value. Reproducibility comes first.
  */
 export function cumulative(
   kind: "sum" | "prod",
@@ -1440,7 +1528,8 @@ ${flatId(n)}
 }`;
 }
 
-/** `cumsum` 의 역방향 — 뒤에서부터 누적한다. 앞자리는 뒤 전부에 기여했다. */
+/** `cumsum`'s backward — it accumulates from the back. An earlier position contributed
+ *  to everything after it. */
 export function cumsumBackward(outer: number, len: number, inner: number): string {
   const n = outer * len * inner;
   return `
@@ -1463,18 +1552,20 @@ ${flatId(n)}
 }
 
 /**
- * ── 평평한 번호표로 읽고 쓰기 ──────────────────────────────────────────────
+ * ── Reading and writing through a flat index table ─────────────────────────
  *
- * `as_strided`·`select_scatter`·`slice_scatter`·`diagonal_scatter`·`put`·
- * `index_put` 이 전부 **한 가지 일**이다 — 저장소의 어느 칸들을 볼 것인가만 다르다.
- * 그 "어느 칸"을 번호표 하나로 뽑아 두면 커널은 셋이면 된다.
+ * `as_strided`, `select_scatter`, `slice_scatter`, `diagonal_scatter`, `put` and
+ * `index_put` are all **one job** — they differ only in which cells of the storage they
+ * look at. Extract that "which cells" into a single index table and three kernels
+ * suffice.
  *
- * 번호표는 두 곳에서 온다. 모양만으로 정해지는 것(걸음·조각·대각선)은 CPU 가 만들어
- * 올리고, 값에 달린 것(`index_put` 의 색인 텐서)은 GPU 에서 셈해서 온다. **커널은
- * 그 둘을 구별하지 않는다** — 어느 쪽이든 버퍼에 담긴 번호일 뿐이다.
+ * The table comes from two places. What follows from the shape alone (strides, slices,
+ * diagonals) is built on the CPU and uploaded; what depends on values (`index_put`'s
+ * index tensor) is computed on the GPU. **The kernels do not distinguish them** — either
+ * way they are indices in a buffer.
  */
 
-/** 번호표가 가리키는 칸을 읽는다. */
+/** Reads the cells the index table points at. */
 export function flatGather(n: number): string {
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -1488,10 +1579,11 @@ ${flatId(n)}
 }
 
 /**
- * 그 역방향. **겹치는 자리로는 쌓인다** — 한 칸을 두 번 읽었으면 기울기도 두 번 온다.
+ * Its backward. **Overlapping positions accumulate** — a cell read twice receives the
+ * gradient twice.
  *
- * 원자 덧셈 대신 **읽는 쪽에서 센다**. 이 파일의 `gatherIndexBackward` 와 같은 수법이고,
- * 겹치는 번호에서 경쟁이 아예 안 생긴다.
+ * Rather than atomic addition, **the reading side counts.** The same technique as this
+ * file's `gatherIndexBackward`, and no contention arises on overlapping indices at all.
  */
 export function flatGatherBackward(n: number, count: number): string {
   return `
@@ -1510,10 +1602,11 @@ ${flatId(n)}
 }
 
 /**
- * 사본의 번호표 자리에 써 넣는다.
+ * Writes into the indexed positions of a copy.
  *
- * **겹치는 번호에서 갈린다** — 쌓으면 더하고, 아니면 **뒤에 쓴 것이 남는다**. 두
- * 갈래를 안 겹치는 번호로만 재면 같은 함수처럼 보인다.
+ * **They diverge on repeated indices** — accumulating adds, and otherwise **the last
+ * write wins.** Measured only with non-overlapping indices, the two branches look like
+ * one function.
  */
 export function flatScatterInto(
   n: number,
@@ -1537,26 +1630,30 @@ ${flatId(n)}
 }`;
 }
 
-/** 합치는 규칙 다섯. `mean` 만 개수를 따로 세므로 여기서 갈라 둔다. */
+/** The five combining rules. `mean` alone counts separately, so it is split out
+ *  here. */
 export const REDUCE_START: Readonly<Record<string, string>> = {
   sum: "0.0",
   prod: "1.0",
-  // **f32 의 최대값을 그대로 적으면 WGSL 이 거절한다.** `3.4028235e38` 은 십진으로
-  // 반올림된 값이라 진짜 최대(3.40282347e38)보다 크고, 파서가 "f32 로 표현할 수
-  // 없다" 며 셰이더를 통째로 버린다. 한 자리 아래로 적는다.
+  // **Writing f32's maximum literally makes WGSL refuse it.** `3.4028235e38` is the
+  // decimal rounding and sits above the true maximum (3.40282347e38), so the parser
+  // discards the whole shader as "cannot be represented as f32". It is written one digit
+  // lower.
   amax: "-3.4028234e38",
   amin: "3.4028234e38",
   mean: "0.0",
 };
 
 /**
- * 번호표 자리에 **합치며** 써 넣는다. `scatter_reduce`·`index_reduce` 의 밑동이다.
+ * Writes into the indexed positions **while combining.** The base of `scatter_reduce` and
+ * `index_reduce`.
  *
- * **`includeSelf` 는 원래 값을 첫 항으로 넣는가**다. 항등원으로 채운 판에 곱하기를
- * 하면 켜나 끄나 같은 답이라(실측), 그 자리로만 재면 이 깃발이 안 보인다.
+ * **`includeSelf` is whether the original value enters as the first term.** Multiplying
+ * into a plate filled with the identity gives the same answer either way (measured), so
+ * measured only there this flag is invisible.
  *
- * 안 닿은 칸은 **그대로 둔다** — 시작값(`prod` 의 1, `amax` 의 -inf)을 흘리면 조용히
- * 다른 판이 된다.
+ * Cells nothing reached are **left as they are** — leaking the starting value (1 for
+ * `prod`, -inf for `amax`) quietly makes it a different plate.
  */
 export function flatReduceInto(
   n: number,
@@ -1599,11 +1696,12 @@ ${flatId(n)}
 }
 
 /**
- * 가면이 참인 자리에 원천을 **평평한 차례대로** 채운다.
+ * Fills the positions where the mask is true from the source **in flat order.**
  *
- * 자리마다 원천의 몇 번째가 오는지는 **그 앞에 참이 몇 개 있었는가**로 정해진다.
- * 그 개수를 자리마다 세므로 값 읽기가 필요 없다 — 읽었으면 이 연산이 비동기가 되고,
- * 그러면 부르는 쪽 코드가 전부 `await` 를 달아야 한다.
+ * Which element of the source lands at a position is decided by **how many trues came
+ * before it.** That count is computed per position, so no value has to be read back — a
+ * read would make this operation asynchronous, and then every caller would have to attach
+ * an `await`.
  */
 export function maskedScatterKernel(n: number): string {
   return `
@@ -1623,7 +1721,7 @@ ${flatId(n)}
 }`;
 }
 
-/** `masked_scatter` 의 원천 쪽 역방향. 안 쓰인 칸으로는 0 이 간다. */
+/** `masked_scatter`'s backward on the source side. Unused cells receive 0. */
 export function maskedScatterSourceBackward(n: number, count: number): string {
   return `
 @group(0) @binding(0) var<storage, read> M: array<f32>;
@@ -1643,11 +1741,11 @@ ${flatId(n)}
 }
 
 /**
- * `gather(dim, index)` — 축 하나를 색인 텐서가 가리키는 대로 고른다.
+ * `gather(dim, index)` — selects along one axis as the index tensor points.
  *
- * 색인이 float32 에 담겨 온다. dtype 이 하나뿐이라 그런데, 정수 값이 float32 에
- * 정확히 담기는 범위(2²⁴)를 넘으면 조용히 틀린 자리를 읽는다 — 지금 쓰는 크기에서는
- * 한참 아래다.
+ * The indices arrive in float32, because there is one dtype. Past the range where an
+ * integer sits exactly in float32 (2²⁴) it quietly reads the wrong position — far above
+ * the sizes in use.
  */
 export function gatherIndex(
   outer: number,
@@ -1672,14 +1770,14 @@ ${flatId(n)}
 }
 
 /**
- * `prod` 의 역방향.
+ * `prod`'s backward.
  *
- * **`out / x` 로 안 쓴다.** 그 식은 x 에 0 이 하나만 있어도 무너진다 — 0 인 자리에서
- * 0/0 이 되고, 나머지 자리에서는 out 이 0 이라 전부 0 이 된다. torch 는 그 축의
- * 다른 값들의 곱을 준다.
+ * **It is not written as `out / x`.** That expression collapses the moment x contains a
+ * single 0 — at the zero it becomes 0/0, and everywhere else out is 0 so everything comes
+ * out 0. torch gives the product of the axis's other values.
  *
- * 자기를 뺀 나머지를 그때그때 곱한다. 축 길이만큼 도는 값이고, 나눗셈이 없으니
- * 0 이 섞여도 맞는다.
+ * It multiplies the others as it goes. The cost is the axis's length, and with no
+ * division it is right even with a 0 among them.
  */
 export function prodBackward(outer: number, red: number, inner: number): string {
   const n = outer * red * inner;
@@ -1704,13 +1802,15 @@ ${flatId(n)}
 }
 
 /**
- * `cumprod` 의 역방향.
+ * `cumprod`'s backward.
  *
- * `out[j]` 는 `A[0..j]` 의 곱이므로, `A[k]` 는 `j >= k` 인 모든 출력에 기여한다.
- * 그 기여가 **자기를 뺀 나머지의 곱**이라 여기도 나눗셈이 없다 — 0 이 섞여도 맞는다.
+ * `out[j]` is the product of `A[0..j]`, so `A[k]` contributes to every output with
+ * `j >= k`. That contribution is **the product of the others**, so there is no division
+ * here either — it is right even with a 0 among them.
  *
- * 비용이 축 길이의 세제곱이다. 짧은 축에서만 쓸 것이고, 길어지면 접두·접미 곱을
- * 미리 들어야 한다. 지금 그것을 요구하는 자리가 없어서 안 한다.
+ * The cost is the cube of the axis's length. It is for short axes, and a longer one would
+ * need prefix and suffix products held in advance. Nothing demands that today, so it is
+ * not done.
  */
 export function cumprodBackward(outer: number, len: number, inner: number): string {
   const n = outer * len * inner;
@@ -1739,10 +1839,11 @@ ${flatId(n)}
 }
 
 /**
- * `gather(dim, index)` 의 역방향 — 읽어간 자리로 도로 모은다.
+ * `gather(dim, index)`'s backward — collects back to the positions that were read.
  *
- * 같은 자리를 여러 번 읽었으면 그만큼 쌓인다. 입력 자리마다 출력을 오름차순으로
- * 훑으므로 원자 연산이 없고, 두 번 돌리면 같은 값이다. 비용은 입력 × 출력이다.
+ * A position read several times accumulates that many times. Each input position walks
+ * the output in ascending order, so there are no atomics and two runs give the same
+ * value. The cost is input × output.
  */
 export function gatherIndexBackward(
   outer: number,
@@ -1771,7 +1872,8 @@ ${flatId(inN)}
 }`;
 }
 
-/** `index_select` — 축 하나를 색인 **벡터**가 고른다. 색인이 자리마다 다르지 않다. */
+/** `index_select` — one axis is chosen by an index **vector.** The index does not vary
+ *  per position. */
 export function indexSelect(
   outer: number,
   axis: number,
@@ -1795,21 +1897,25 @@ ${flatId(n)}
 }
 
 /**
- * 정렬된 경계 안에서 각 값이 들어갈 자리. `searchsorted`·`bucketize` 가 같이 쓴다.
+ * Where each value lands among sorted boundaries. `searchsorted` and `bucketize` share
+ * it.
  *
- * **비교해서 세는 것으로도 답은 나온다.** 골든의 TS 판이 오래 그렇게 적혀 있었다 —
- * `seq < want` 를 퍼뜨려 더하면 정확히 이 수다. 값은 맞지만 그 길은 `n·m` 짜리 중간
- * 텐서를 만든다. 경계 1,000 개에 값 100 만 개면 4GB 이고, 그러면 이 이름이
- * **버퍼 한계에서 멈춘다** — 사용자가 `bucketize` 를 고르는 이유가 바로 그 크기에서
- * 싸게 하려는 것인데 거기서 못 쓰게 된다.
+ * **Counting by comparison also produces the answer.** The golden's TS version was
+ * written that way for a long time — broadcasting `seq < want` and summing is exactly
+ * this number. The values are right and that route builds an `n·m` intermediate tensor.
+ * A thousand boundaries against a million values is 4GB, and then this name **stops at
+ * the buffer limit** — precisely at the size somebody chooses `bucketize` to be cheap
+ * at, it becomes unusable.
  *
- * 그래서 이진 탐색이다. 스레드는 값마다 하나, 고리는 `log2(n)` 번, 중간 텐서는 없다.
+ * So it is a binary search. One thread per value, `log2(n)` iterations, no intermediate
+ * tensor.
  *
- * `right` 가 동점의 어느 쪽인지를 정한다 — 거짓이면 **나보다 작은 것의 수**(같은 값
- * 앞에 선다), 참이면 **나보다 작거나 같은 것의 수**(같은 값 뒤에 선다).
+ * `right` decides which side of a tie — false gives **how many are smaller than me**
+ * (standing before equals), true gives **how many are smaller than or equal to me**
+ * (standing after them).
  */
 export function searchSorted(nSeq: number, nVal: number, right: boolean): string {
-  // 동점을 왼쪽으로 보낼지 오른쪽으로 보낼지가 이 비교 하나에 걸려 있다.
+  // Whether a tie goes left or right hangs on this one comparison.
   const goRight = right ? "A[mid] <= v" : "A[mid] < v";
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -1829,7 +1935,7 @@ ${flatId(nVal)}
 }`;
 }
 
-/** `index_select` 의 역방향. 같은 자리를 여러 번 골랐으면 쌓인다. */
+/** `index_select`'s backward. A position chosen several times accumulates. */
 export function indexSelectBackward(
   outer: number,
   axis: number,
@@ -1861,17 +1967,18 @@ export function convOut(size: number, pad: number, kernel: number, stride: numbe
 }
 
 /**
- * 차원 수에 상관없는 합성곱의 모양.
+ * The shape of a convolution with no regard for the number of dimensions.
  *
- * 1·2·3 차원을 **한 커널 생성기로** 덮는다. 공간 축을 배열로 들면 conv1d 는 축이
- * 하나, conv3d 는 셋일 뿐이고 나머지 구조가 같다 — 차원마다 커널을 따로 쓰면
- * 세 벌이 되고, 그중 하나만 고치는 날이 온다. 실제로 자매가 그 상태였다.
+ * One kernel generator covers 1, 2 and 3 dimensions. With the spatial axes held as an
+ * array, conv1d simply has one axis and conv3d has three, and the rest of the structure
+ * is the same — a kernel per dimension is three copies, and a day comes when only one of
+ * them is fixed. The sister library really was in that state.
  */
 export interface ConvNDShape {
   readonly N: number;
   readonly C: number;
   readonly O: number;
-  /** 입력의 공간 축들. */
+  /** The input's spatial axes. */
   readonly inDims: readonly number[];
   readonly kernel: readonly number[];
   readonly stride: readonly number[];
@@ -1883,7 +1990,8 @@ export function convNDKey(s: ConvNDShape): string {
   return [s.N, s.C, s.O, s.inDims, s.kernel, s.stride, s.pad].join("|");
 }
 
-/** 뒤에서부터 누적한 곱 — 축 하나를 한 칸 옮길 때 건너뛰는 원소 수다. */
+/** The product accumulated from the back — how many elements one step along an axis
+ *  skips. */
 function suffixStrides(dims: readonly number[]): number[] {
   const out: number[] = new Array<number>(dims.length).fill(1);
   for (let d = dims.length - 2; d >= 0; d--) {
@@ -1894,24 +2002,26 @@ function suffixStrides(dims: readonly number[]): number[] {
 
 
 /**
- * 타일링 합성곱 — **암묵적 GEMM**.
+ * The tiled convolution — **an implicit GEMM.**
  *
- * `tests/browser/wgsl_conv.js` 가 TF.js 의 72~284% 로 잰 커널을 옮긴 것이다. 옮기기
- * 전에는 아래의 단순 커널이 들어 있었고, ResNet 한 스텝이 자매의 272 배였다.
+ * A port of the kernel `tests/browser/wgsl_conv.js` measured at 72–284% of TF.js. Before
+ * the port, the simple kernel below was in place and one ResNet step was 272× the sister
+ * library's.
  *
- * ## 축을 뒤집었다
+ * ## The axes are flipped
  *
- * 벤치 판은 결과를 `(N·OH·OW, O)` 로 쓴다. 우리는 NCHW 라 그대로 두면 전치가 한 번
- * 더 필요하다. 대신 GEMM 을 `(O, N·OH·OW)` 로 뒤집으면
+ * The bench version writes its result as `(N·OH·OW, O)`. We are NCHW, so left that way it
+ * needs one more transpose. Flipping the GEMM to `(O, N·OH·OW)` instead means
  *
- * - 가중치 타일이 `W[f·K + k]` 로 이어진 자리를 읽고,
- * - 결과 타일의 이웃 스레드가 이웃 `ow` 를 써서 NCHW 로 바로 합쳐진다.
+ * - the weight tile reads contiguous positions as `W[f·K + k]`, and
+ * - neighbouring threads in the result tile write neighbouring `ow`, landing directly in
+ *   NCHW.
  *
- * ## 모양을 굽는 이유가 여기서 제일 크다
+ * ## This is where baking the shape pays most
  *
- * 타일을 실을 때마다 원소당 나눗셈을 예닐곱 번 다시 한다. 제수가 유니폼이면 컴파일러가
- * 그것을 곱셈·시프트로 못 바꾸고 GPU 에는 정수 나눗셈 하드웨어가 없다 — 벤치에서 그
- * 하나가 43% 와 284% 를 갈랐다.
+ * Every tile load redoes six or seven divisions per element. With the divisor in a
+ * uniform the compiler cannot turn those into multiplications and shifts, and a GPU has
+ * no integer division hardware — in the bench that one thing separated 43% from 284%.
  */
 export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
   const inStride = suffixStrides(s.inDims);
@@ -1928,9 +2038,9 @@ export function convNDForwardTiled(s: ConvNDShape, hasBias: boolean): string {
 @group(0) @binding(1) var<storage, read> Wt: array<f32>;
 ${hasBias ? "@group(0) @binding(2) var<storage, read> B: array<f32>;" : ""}
 @group(0) @binding(${hasBias ? 3 : 2}) var<storage, read_write> Out: array<f32>;`,
-    // 가중치가 (O, K) 로 이어져 있어 행 하나가 통째로 붙어 있다.
+    // The weights run as (O, K), so one row is contiguous in its entirety.
     loadA: `          v = Wt[arow * ${K}u + kk];`,
-    // im2col 을 **메모리에 안 펴고** 여기서 만든다.
+    // im2col is built here **without being laid out in memory.**
     loadB: `          let ch = kk / ${kSpace}u;
 ${s.kernel.map((size, d) =>
       `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
@@ -1953,17 +2063,19 @@ ${s.outDims.map((size, d) =>
   });
 }
 
-/** 타일링 conv 가 쓸 dispatch 격자. 행이 출력 채널, 열이 배치·출력 자리다. */
+/** The dispatch grid for the tiled conv. Rows are output channels; columns are batch
+ *  and output position. */
 export function convTiledGrid(s: ConvNDShape): [number, number, number] {
   const P = s.N * s.outDims.reduce((a, b) => a * b, 1);
   return [Math.ceil(P / 64), Math.ceil(s.O / 64), 1];
 }
 
 /**
- * 타일링 GEMM 의 뼈대.
+ * The skeleton of the tiled GEMM.
  *
- * 순방향·역방향 셋이 **같은 구조에 색인만 다르다.** 뼈대를 세 번 베껴 적으면 그중
- * 하나만 고치는 날이 오고, 그 하나는 기울기 쪽일 것이다 — 값 검사가 못 보는 쪽.
+ * The forward and the two backwards are **one structure with different indexing.**
+ * Copying the skeleton three times means a day comes when only one of them is fixed, and
+ * that one will be on the gradient side — the side a value check cannot see.
  *
  * @param loadA WGSL (a single expression) giving the left tile's element at
  *   row `arow`, inner `kk`.
@@ -1980,10 +2092,10 @@ function tiledGemm(opts: {
   readonly loadB: string;
   readonly emit: string;
   /**
-   * 축약을 몇 조각으로 나눌 것인가. 1 이면 안 나눈다.
+   * How many pieces to split the reduction into. 1 means no split.
    *
-   * 나누면 `emit` 이 받는 것이 부분합이고, 어느 조각인지는 `part` 로 온다 —
-   * 부르는 쪽이 그것을 어디에 쌓을지 정한다.
+   * Split, what `emit` receives is a partial sum and which piece it is arrives as `part`
+   * — the caller decides where to accumulate it.
    */
   readonly splits?: number;
 }): string {
@@ -2000,7 +2112,8 @@ function tiledGemm(opts: {
     }
   }
   const splits = opts.splits ?? 1;
-  // 조각마다 맡는 타일 수. 마지막 조각이 조금 덜 맡을 수 있으므로 경계를 넘지 않게 센다.
+  // How many tiles each piece takes. The last piece may take slightly fewer, so the
+  // count is kept inside the boundary.
   const allTiles = Math.ceil(opts.K / 16);
   const perSplit = Math.ceil(allTiles / splits);
   return `
@@ -2064,7 +2177,8 @@ ${store.join("\n")}
 }`;
 }
 
-/** 입력 자리(`col`)와 커널 자리(`kk`)를 좌표로 푸는 WGSL. */
+/** The WGSL resolving an input position (`col`) and a kernel position (`kk`) into
+ *  coordinates. */
 function patchCoords(s: ConvNDShape, indent: string): {
   kParts: string; pParts: string; coords: string; guard: string; offset: string;
 } {
@@ -2089,11 +2203,12 @@ function patchCoords(s: ConvNDShape, indent: string): {
 }
 
 /**
- * 가중치로 가는 기울기 — 타일링 판.
+ * The gradient to the weights — the tiled version.
  *
- * `dW[o, (c,k)] = Σ_p G[p, o] · X_col[p, (c,k)]` 인 GEMM 이다. 행이 출력 채널,
- * 열이 `(입력 채널, 커널 자리)`, 안쪽이 배치·출력 자리다. 결과가 `(O, K)` 로
- * 이어져 나오므로 가중치 모양 그대로다.
+ * A GEMM of `dW[o, (c,k)] = Σ_p G[p, o] · X_col[p, (c,k)]`. Rows are output channels,
+ * columns are `(input channel, kernel position)`, and the inner axis is batch and output
+ * position. The result comes out contiguous as `(O, K)`, which is the weights' shape as
+ * it is.
  */
 export function convNDGradWeightTiled(s: ConvNDShape): string {
   const outSpace = s.outDims.reduce((a, b) => a * b, 1);
@@ -2108,12 +2223,13 @@ export function convNDGradWeightTiled(s: ConvNDShape): string {
     bindings: `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Out: array<f32>;`,
-    // 왼쪽: G 를 (출력채널 × 배치·출력자리) 로 본다.
+    // Left: G seen as (output channel × batch and output position).
     loadA: `          let gn = kk / ${outSpace}u;
           let gp = kk % ${outSpace}u;
           v = G[(gn * ${s.O}u + arow) * ${outSpace}u + gp];`,
-    // 오른쪽: im2col 을 **메모리에 안 펴고** 여기서 만든다. 열이 (채널, 커널 자리),
-    // 안쪽이 (배치, 출력 자리)다 — 순방향과 축만 바뀐 같은 계산이다.
+    // Right: im2col is built here **without being laid out in memory.** Columns are
+    // (channel, kernel position) and the inner axis is (batch, output position) — the
+    // same computation as the forward with the axes swapped.
     loadB: `          let ch = col / ${kSpace}u;
 ${s.kernel.map((size, d) =>
       `          let kk${d} = (col / ${suffixStrides(s.kernel)[d] ?? 1}u) % ${size}u;`).join("\n")}
@@ -2124,18 +2240,20 @@ ${c.coords}
           if (${c.guard}) {
             v = X[(bn * ${s.C}u + ch) * ${inSpace}u + ${c.offset}];
           }`,
-    // 조각을 나눴으면 부분합을 조각별 칸에 쓴다. 안 나눴으면 그 칸이 하나뿐이라
-    // 그대로 결과다 — 부르는 쪽이 더하는 단계를 붙일지 말지 정한다.
+    // Split, the partial sums are written into a cell per piece. Unsplit there is only
+    // one such cell, so it is the result as it stands — the caller decides whether to
+    // attach a summing stage.
     emit: `  Out[part * ${s.O * cols}u + f * ${cols}u + col] = v;`,
   });
 }
 
 /**
- * 입력으로 가는 기울기 — 타일링 판.
+ * The gradient to the input — the tiled version.
  *
- * `dX[(n,i), c] = Σ_{o,k} G[(n,o자리), o] · W[o, c, k]` 이고, 합의 짝 `(o, k)` 가
- * 안쪽 축이다. **걸음이 1 보다 크면 나눗셈이 안 떨어지는 자리가 있고 거기로는
- * 아무것도 안 온다** — 그 판정이 오른쪽 타일 안에 있다.
+ * `dX[(n,i), c] = Σ_{o,k} G[(n, output position), o] · W[o, c, k]`, with the summed pair
+ * `(o, k)` as the inner axis. **With a stride above 1 there are positions where the
+ * division does not come out even, and nothing arrives at those** — that test lives
+ * inside the right-hand tile.
  */
 export function convNDGradInputTiled(s: ConvNDShape): string {
   const outSpace = s.outDims.reduce((a, b) => a * b, 1);
@@ -2151,11 +2269,12 @@ export function convNDGradInputTiled(s: ConvNDShape): string {
     bindings: `@group(0) @binding(0) var<storage, read> G: array<f32>;
 @group(0) @binding(1) var<storage, read> Wt: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Out: array<f32>;`,
-    // 왼쪽: 가중치를 (입력채널 × (출력채널, 커널자리)) 로 본다.
+    // Left: the weights seen as (input channel × (output channel, kernel position)).
     loadA: `          let oc = kk / ${kSpace}u;
           let kp = kk % ${kSpace}u;
           v = Wt[(oc * ${s.C}u + arow) * ${kSpace}u + kp];`,
-    // 오른쪽: 이 입력 자리에 **닿는** 출력 자리를 찾는다. 안 닿으면 0 이다.
+    // Right: it finds the output positions that **reach** this input position. Nothing
+    // reaching means 0.
     loadB: `          let oc = kk / ${kSpace}u;
 ${s.kernel.map((size, d) =>
       `          let kk${d} = (kk / ${kStride[d] ?? 1}u) % ${size}u;`).join("\n")}
@@ -2184,34 +2303,36 @@ ${s.inDims.map((_, d) => {
 }
 
 /**
- * 가중치 기울기의 축약 축을 몇 조각으로 쪼갤 것인가.
+ * How many pieces to split the weight gradient's reduced axis into.
  *
- * **이 GEMM 은 출력이 작고 축약이 크다.** 층 하나에서 출력이 `(64, 27)` 인데 축약이
- * `배치 × 32 × 32 = 16,384` 인 식이라, 타일 격자가 워크그룹 **한 개**까지 떨어진다 —
- * GPU 하나에 일감 하나다. 축약을 쪼개 여러 워크그룹에 나눠 주고 마지막에 더한다.
+ * **This GEMM has a small output and a large reduction.** In one layer the output is
+ * `(64, 27)` while the reduction is `batch × 32 × 32 = 16,384`, so the tile grid falls to
+ * **a single workgroup** — one piece of work for the whole GPU. The reduction is split
+ * across several workgroups and summed at the end.
  *
- * 조각 수는 격자가 너무 작을 때만 늘린다. 쪼개면 부분합 버퍼와 더하는 단계가 붙으므로
- * 이미 격자가 넉넉한 층에서는 손해다.
+ * The piece count only rises when the grid is too small. Splitting attaches a partial-sum
+ * buffer and a summing stage, so on a layer whose grid is already ample it is a loss.
  */
 export function convGradWeightSplit(s: ConvNDShape): number {
   const cols = s.C * s.kernel.reduce((a, b) => a * b, 1);
   const tiles = Math.ceil(cols / 64) * Math.ceil(s.O / 64);
   const K = s.N * s.outDims.reduce((a, b) => a * b, 1);
-  // 워크그룹이 이만큼은 돼야 GPU 가 논다는 소리를 안 듣는다. 넘으면 안 쪼갠다.
+  // Below this many workgroups the GPU is said to be idle. Above it, no split.
   const WANT = 64;
   if (tiles >= WANT) return 1;
-  // 조각 하나가 최소 이만큼의 축약은 맡아야 나누는 값이 남는다.
+  // A piece has to take at least this much reduction for the split to be worth it.
   const MIN_PER_SPLIT = 256;
   return Math.max(1, Math.min(Math.ceil(WANT / tiles), Math.floor(K / MIN_PER_SPLIT)));
 }
 
-/** 가중치 기울기의 격자 — 행이 출력 채널, 열이 (입력 채널, 커널 자리), 깊이가 조각. */
+/** The weight gradient's grid — rows are output channels, columns are (input channel,
+ *  kernel position), and depth is the piece. */
 export function convGradWeightGrid(s: ConvNDShape): [number, number, number] {
   const cols = s.C * s.kernel.reduce((a, b) => a * b, 1);
   return [Math.ceil(cols / 64), Math.ceil(s.O / 64), convGradWeightSplit(s)];
 }
 
-/** 쪼갠 부분합을 더한다. 순서가 정해져 있어 두 번 돌려도 같은 값이다. */
+/** Sums the split partials. The order is fixed, so two runs give the same value. */
 export function sumSplits(n: number, splits: number): string {
   return `
 @group(0) @binding(0) var<storage, read> Parts: array<f32>;
@@ -2227,7 +2348,8 @@ ${flatId(n)}
 }`;
 }
 
-/** 입력 기울기의 격자 — 행이 입력 채널, 열이 배치·입력 자리. */
+/** The input gradient's grid — rows are input channels, columns are batch and input
+ *  position. */
 export function convGradInputGrid(s: ConvNDShape): [number, number, number] {
   const cols = s.N * s.inDims.reduce((a, b) => a * b, 1);
   return [Math.ceil(cols / 64), Math.ceil(s.C / 64), 1];
@@ -2235,10 +2357,10 @@ export function convGradInputGrid(s: ConvNDShape): [number, number, number] {
 
 
 /**
- * 차원 수에 상관없는 풀링. 채널을 배치에 접어 넣는다.
+ * Pooling with no regard for the number of dimensions. The channels fold into the batch.
  *
- * `max` 는 이긴 자리 **하나**로만 보낸다 — 동점이면 먼저 나온 자리다. `amax` 가
- * 고르게 나누는 것과 다르고, torch 의 풀링이 그렇다.
+ * `max` sends to **one** winning position — the earlier one on a tie. That differs from
+ * `amax` dividing evenly, and it is what torch's pooling does.
  */
 export interface PoolNDShape {
   readonly NC: number;
@@ -2333,7 +2455,7 @@ ${kOpen.join("\n")}
           let v = X[wbase + ${kTerms.join(" + ")}];
           if (v > best) { best = v; }
 ${kClose.join("\n")}
-        // 동점이면 **먼저 나온 자리**가 이긴다. 앞자리에 같은 값이 있으면 진다.
+        // On a tie **the earlier position** wins. An equal value earlier beats it.
         var earlier = false;
 ${kOpen.join("\n")}
           let idx = ${kTerms.join(" + ")};
@@ -2343,10 +2465,11 @@ ${kClose.join("\n")}
         win = (X[wbase + ${wTerms.map((_, d) => `u32(d${d}) * ${inStride[d] ?? 1}u`).join(" + ")}] == best) && !earlier;
         if (win) { acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}]; }
       }`;
-  // **평균은 입력을 안 본다.** 그런데 `X` 를 선언만 해두면 `layout: "auto"` 가 안 쓰는
-  // 바인딩을 빼버리고, 부르는 쪽이 버퍼 셋을 넘기면 "binding index 0 not present" 로
-  // 거절한다. 그 거절은 예외가 아니라 **무효한 명령 버퍼**여서, 역방향이 통째로 안
-  // 돌면서 학습만 조용히 멈춘다. 실제로 ResNet 벤치가 그 상태로 수를 냈다.
+  // **The average does not look at the input.** And merely declaring `X` makes
+  // `layout: "auto"` drop the unused binding, so a caller passing three buffers is
+  // refused with "binding index 0 not present". That refusal is not an exception but
+  // **an invalid command buffer**, so the whole backward does not run and training alone
+  // quietly stops. The ResNet bench really did produce numbers in that state.
   const decl = kind === "max"
     ? `@group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
@@ -2369,22 +2492,24 @@ ${close.join("\n")}
 }`;
 }
 
-/** 풀링 역방향이 받는 버퍼 수. 종류마다 다르므로 부르는 쪽이 여기서 받아 간다. */
+/** How many buffers a pooling backward takes. It differs per kind, so the caller reads
+ *  it from here. */
 export function poolNDBackwardNeedsInput(kind: "max" | "avg"): boolean {
   return kind === "max";
 }
 
 /**
- * 창 목록 — 축마다 각 출력 칸이 덮는 구간.
+ * The window list — per axis, the interval each output cell covers.
  *
- * 고정 창과 적응형을 **같은 모양으로** 넘기려고 만든 자리다. 고정은 `start = o·stride`
- * 에 길이가 일정하고, 적응형은 `floor(o·n/want)` 부터 `ceil((o+1)·n/want)` 까지라
- * 길이가 자리마다 다르다. 규칙을 셰이더 안에 둘로 적으면 한쪽만 고치는 날이 온다.
+ * It exists to hand the fixed and the adaptive forms across **in one shape.** The fixed
+ * one is `start = o·stride` at a constant length; the adaptive one runs from
+ * `floor(o·n/want)` to `ceil((o+1)·n/want)`, so the length differs per position. Writing
+ * the two rules inside the shader means a day comes when only one is fixed.
  */
 export interface PoolWindows {
   readonly NC: number;
   readonly inDims: readonly number[];
-  /** 축마다 `[시작, 끝)` 의 목록. 길이가 그 축의 출력 크기다. */
+  /** Per axis, the list of `[start, end)`. Its length is that axis's output size. */
   readonly axes: readonly (readonly (readonly [number, number])[])[];
 }
 
@@ -2394,16 +2519,16 @@ export function poolWindowsKey(p: PoolWindows): string {
 }
 
 /**
- * 최댓값과 **이긴 자리**를 한 번에 낸다.
+ * Produces the maximum and **the winning position** together.
  *
- * 자리는 torch 의 규약대로 **평면 안의 평평한 번호**다 — 배치·채널마다 0 부터 다시
- * 센다. `maxUnpool` 이 이 번호를 그대로 되돌린다.
+ * The position follows torch's convention: **a flat index within the plane** — counted
+ * from 0 again per batch and channel. `maxUnpool` sends that index straight back.
  *
- * **값을 여기서 같이 낸다.** 값을 다른 커널에서 구하면 "자리는 A 인데 값은 B" 인
- * 상태가 만들어질 수 있고, 둘 다 그럴듯해서 아무 눈에도 안 띈다.
+ * **The value comes out here with it.** Computing the value in another kernel allows a
+ * state of "position A but value B", and both are plausible, so no eye catches it.
  *
- * 동점이면 **먼저 나온 자리**가 이긴다 — torch 가 그렇다. 창을 도는 순서가 평평한
- * 번호가 커지는 순서이고 비교가 `>` 라서, 첫 최댓값이 그대로 남는다.
+ * On a tie **the earlier position** wins — as in torch. The window is walked in order of
+ * increasing flat index and the comparison is `>`, so the first maximum stays.
  */
 export function poolMaxWithIndex(p: PoolWindows): string {
   const inSpace = p.inDims.reduce((a, b) => a * b, 1);
@@ -2413,8 +2538,9 @@ export function poolMaxWithIndex(p: PoolWindows): string {
   const outStride = suffixStrides(outDims);
   const n = p.NC * outSpace;
 
-  // 창 표를 셰이더에 상수로 굽는다. 출력 칸 수가 작아서 값이 싸고, 자리마다 길이가
-  // 다른 적응형도 같은 모양으로 실린다.
+  // The window table is baked into the shader as constants. The output cell count is
+  // small so it is cheap, and the adaptive form with its varying lengths rides in the
+  // same shape.
   const tables = p.axes.map((axis, d) => {
     const starts = axis.map((w) => `${w[0]}u`).join(", ");
     const ends = axis.map((w) => `${w[1]}u`).join(", ");
@@ -2460,13 +2586,16 @@ ${close.join("\n")}
 }
 
 /**
- * 자리표를 따라 기울기를 되돌린다. 이긴 자리로만 간다.
+ * Sends the gradient back along the position table. It goes to the winning positions
+ * only.
  *
- * 순방향이 이미 자리를 정해 두었으므로 여기서 다시 고르지 않는다 — 다시 고르면 그
- * 고르기가 순방향과 갈릴 수 있고, 동점이 있을 때 정확히 그렇게 된다.
+ * The forward already fixed the positions, so nothing is chosen again here — choosing
+ * again could diverge from the forward's choice, and with a tie present that is exactly
+ * what happens.
  *
- * 입력 자리마다 **자기를 가리키는 출력 칸을 찾아 더한다.** 흩뿌리기가 아니라 모으기라
- * 스레드끼리 같은 칸에 안 쓴다 — 창이 겹치면 한 입력이 여러 출력에게 이길 수 있다.
+ * Each input position **finds the output cells pointing at it and adds.** It is a gather
+ * rather than a scatter, so no two threads write the same cell — with overlapping windows
+ * one input can win for several outputs.
  */
 export function poolMaxIndexBackward(p: PoolWindows): string {
   const inSpace = p.inDims.reduce((a, b) => a * b, 1);
@@ -2491,12 +2620,13 @@ ${flatId(n)}
 }
 
 /**
- * 자리표가 가리키는 칸에 값을 놓는다. 나머지는 0 — `MaxUnpool` 이다.
+ * Places values at the cells the position table points at, 0 elsewhere — this is
+ * `MaxUnpool`.
  *
- * **모으기로 쓴다.** 흩뿌리면 겹치는 자리에서 스레드 순서가 답을 정하는데, 그것은
- * 실행마다 달라질 수 있는 답이라 대조가 안 된다. 출력 칸마다 자기를 가리키는 입력을
- * 찾아 오면 순서가 정해진다 — 여럿이면 **마지막 것**이 남고, torch 의 흩뿌리기와
- * 같은 답이다.
+ * **Written as a gather.** Scattering lets thread order decide the answer at overlapping
+ * positions, and that answer can differ from run to run, which cannot be compared. Having
+ * each output cell find the inputs pointing at it fixes the order — with several, **the
+ * last** survives, which is the same answer as torch's scatter.
  */
 export function unpoolFromIndex(
   NC: number, inSpace: number, outSpace: number,
@@ -2520,7 +2650,8 @@ ${flatId(n)}
 }`;
 }
 
-/** `MaxUnpool` 의 역방향 — 값이 간 자리에서 그대로 받아 온다. 채우기의 반대다. */
+/** `MaxUnpool`'s backward — it takes back from wherever the value went. The reverse of
+ *  the filling. */
 export function unpoolFromIndexBackward(
   NC: number, inSpace: number, outSpace: number,
 ): string {
@@ -2539,9 +2670,11 @@ ${flatId(n)}
 }
 
 /**
- * 최근접 이웃 확대. 각 출력 자리가 자기를 낳은 입력 자리를 그대로 읽는다.
+ * Nearest-neighbour upsampling. Each output position reads the input position that bore
+ * it.
  *
- * 역방향은 자기를 읽어 간 출력들을 모으는 것이고, 배율이 정수라 그 개수가 일정하다.
+ * The backward gathers the outputs that read it, and with an integer scale that count is
+ * constant.
  */
 export function upsampleNearest(
   NC: number,
@@ -2568,7 +2701,7 @@ ${flatId(n)}
 }`;
 }
 
-/** 확대의 역방향 — 자기를 읽어 간 자리를 모은다. */
+/** Upsampling's backward — it gathers the positions that read it. */
 export function upsampleNearestBackward(
   NC: number,
   inDims: readonly number[],
@@ -2608,12 +2741,13 @@ ${close.join("\n")}
 }
 
 /**
- * 축 하나를 정렬한다. **자리도 같이 옮긴다** — 값만 옮기면 `argsort` 를 못 만들고,
- * 기울기를 원래 자리로 되돌릴 수도 없다.
+ * Sorts one axis. **The positions move with the values** — moving values alone cannot
+ * build `argsort`, nor send the gradient back to where it came from.
  *
- * 삽입 정렬이다. 축이 길어지면 나쁘지만, 여기서 미는 값이 축 길이 열 몇이고
- * **안정 정렬**이라 동점의 순서가 torch 와 같다 — 비토닉 정렬은 그 순서를 안 지킨다.
- * 스레드 하나가 축 하나를 통째로 맡으므로 원자 연산도 없다.
+ * It is an insertion sort. That is bad for a long axis, and what is pushed through here
+ * is an axis length in the tens, and it is a **stable sort**, so ties keep torch's order —
+ * a bitonic sort does not preserve that. One thread takes a whole axis, so there are no
+ * atomics either.
  */
 export function sortAxis(
   outer: number,
@@ -2622,7 +2756,7 @@ export function sortAxis(
   descending: boolean,
 ): string {
   const n = outer * inner;
-  // 안정성을 지키려면 **같은 값에서 멈춰야** 한다. 엄격 부등호를 쓰는 이유다.
+  // Stability requires **stopping at an equal value.** Hence the strict comparison.
   const test = descending ? "cur > prev" : "cur < prev";
   return `
 @group(0) @binding(0) var<storage, read> A: array<f32>;
@@ -2657,10 +2791,11 @@ ${flatId(n)}
 }
 
 /**
- * 자리 표를 따라 기울기를 원래 자리로 되돌린다.
+ * Sends the gradient back to its original position along the position table.
  *
- * `sort`·`topk`·`median` 의 역방향이 전부 이것이다 — 뽑아 온 자리로만 흘리고
- * 나머지는 0. 값만 떼어 돌려주면 그 자리로 기울기가 안 가고 학습이 조용히 멈춘다.
+ * The backward of `sort`, `topk` and `median` is all this — it flows to the gathered
+ * positions and 0 elsewhere. Returning the values detached sends no gradient there, and
+ * training quietly stops.
  */
 export function scatterByIndex(
   outer: number,
@@ -2690,14 +2825,16 @@ ${flatId(n)}
 }
 
 /**
- * `scatterByIndex` 의 **덮어쓰는** 판. 겹치는 번호에서 마지막에 쓴 것이 남는다.
+ * The **overwriting** version of `scatterByIndex`. On repeated indices the last write
+ * survives.
  *
- * 쌓는 것과 덮는 것의 차이가 `scatter_add` 와 `scatter` 의 차이 전부다 — 번호가
- * 안 겹치면 두 함수가 같은 답을 내므로, 겹치는 번호로 재야만 갈린다.
+ * The difference between accumulating and overwriting is the whole difference between
+ * `scatter_add` and `scatter` — with non-repeating indices the two give the same answer,
+ * so only repeated indices separate them.
  *
- * **출력 쪽에서 읽는다.** 입력 쪽에서 쓰면 같은 칸에 여러 스레드가 달려들어
- * 누가 마지막인지가 정해지지 않는다 — 여기서는 각 출력 칸이 자기에게 오는 것을
- * 훑으므로 순서가 정해진다.
+ * **It reads from the output side.** Writing from the input side has several threads
+ * arriving at one cell with no fixed notion of which is last — here each output cell
+ * walks what comes to it, which fixes the order.
  */
 export function scatterOverwrite(
   outer: number,
@@ -2728,10 +2865,10 @@ ${flatId(n)}
 }
 
 /**
- * 누적 최대·최소. 값과 자리를 같이 낸다.
+ * The cumulative maximum and minimum. It produces the value and the position together.
  *
- * **동점이면 나중 자리를 준다** — torch 의 `cummax` 가 그렇다(`argmax` 가 먼저
- * 자리를 주는 것과 반대다). 등호를 포함하는 부등호 하나가 그 차이다.
+ * **A tie gives the later position** — as torch's `cummax` does (the opposite of `argmax`
+ * giving the earlier one). One comparison including equality is the whole difference.
  */
 export function cumExtreme(
   kind: "max" | "min",
@@ -2765,14 +2902,14 @@ ${flatId(n)}
 }
 
 /**
- * 배치 정규화의 채널 통계 — 합과 제곱합을 **한 번에** 낸다.
+ * BatchNorm's per-channel statistics — the sum and the sum of squares **in one pass.**
  *
- * 조립으로 두면 `sumDim` 셋 + `sub` + `square` + `sumDim` 셋 + 나눗셈 몇으로 열 몇
- * dispatch 가 되고, 그것이 층마다 스무 번이다. 실측에서 ResNet 한 스텝의 dispatch
- * 1,636 개 중 태반이 여기서 나왔다.
+ * Assembled, it is three `sumDim` plus `sub` plus `square` plus three `sumDim` plus a few
+ * divisions, a dozen or so dispatches, twenty times over per layer. Measured, most of the
+ * 1,636 dispatches in one ResNet step came from here.
  *
- * 스레드 하나가 채널 하나를 맡아 배치·공간을 전부 훑는다. 순서가 정해져 있으므로
- * 원자 연산이 없고 두 번 돌리면 같은 값이다.
+ * One thread takes one channel and walks the whole batch and space. The order is fixed,
+ * so there are no atomics and two runs give the same value.
  */
 export function batchNormStats(N: number, C: number, S: number): string {
   return `
@@ -2794,13 +2931,14 @@ ${flatId(C)}
   }
   let m = total / ${(N * S).toFixed(1)};
   Mean[gid] = m;
-  // **편향추정이다**(n 으로 나눈다) — torch 의 BatchNorm 이 정규화에 쓰는 것이 이것이고,
-  // 이동 통계에 넣는 불편추정과는 다른 수다. 하나로 합치면 평가 모드에서만 갈린다.
+  // **This is the biased estimate** (divided by n) — what torch's BatchNorm uses for
+  // the normalisation, and a different number from the unbiased one that goes into the
+  // running statistics. Merged into one, they diverge in evaluation mode alone.
   Var[gid] = sq / ${(N * S).toFixed(1)} - m * m;
 }`;
 }
 
-/** 통계를 받아 정규화하고 크기·치우침까지 한 번에 먹인다. */
+/** Takes the statistics, normalises, and applies the scale and shift in one pass. */
 export function batchNormApply(N: number, C: number, S: number, eps: number): string {
   const n = N * C * S;
   return `
@@ -2819,14 +2957,15 @@ ${flatId(n)}
 }
 
 /**
- * 배치 정규화의 역방향.
+ * BatchNorm's backward.
  *
- * **평균과 분산이 그래프 안에 있다.** 밖으로 빼면 입력 기울기가 어긋나고 `weight`
- * 에는 아예 안 온다 — 코어가 오래 겪은 자리다. 식은
+ * **The mean and the variance are inside the graph.** Taken outside it, the input
+ * gradient comes out wrong and nothing reaches `weight` at all — a place the core lived
+ * with for a long time. The expression is
  *
  *     dx = γ·σ⁻¹·(dy − mean(dy) − x̂·mean(dy·x̂))
  *
- * 이고, 여기 필요한 두 평균을 채널마다 한 번 세고 그 뒤에 원소별로 먹인다.
+ * and the two means it needs are counted once per channel, then applied elementwise.
  */
 export function batchNormStatsBackward(N: number, C: number, S: number): string {
   return `
@@ -2876,21 +3015,24 @@ ${flatId(n)}
 }
 
 /**
- * 옵티마이저 한 걸음 — **파라미터와 상태를 제자리에서 고친다.**
+ * One optimiser step — **it edits the parameters and the state in place.**
  *
- * 조립판은 파라미터 하나에 dispatch 넷이 들었다(모멘텀 곱, 기울기 더하기, 학습률 곱,
- * 빼기). ResNet-18 은 파라미터 텐서가 예순둘이라 그것만 이백사십 번이고, 실측에서
- * 원소별 dispatch 사백칠십 개의 절반을 넘었다.
+ * The assembled version cost four dispatches per parameter (multiply the momentum, add
+ * the gradient, multiply the learning rate, subtract). ResNet-18 has sixty-two parameter
+ * tensors, so that alone is two hundred and forty, and measured it was over half of the
+ * four hundred and seventy elementwise dispatches.
  *
- * **읽으면서 같은 자리에 쓴다.** 스레드 하나가 자기 원소만 보므로 순서가 섞일 자리가
- * 없다 — 브로드캐스팅도 축약도 없는 원소별 갱신이라 가능한 일이다.
+ * **It reads and writes the same position.** One thread sees only its own element, so
+ * there is nowhere for the order to mix — possible because this is an elementwise update
+ * with no broadcasting and no reduction.
  */
 export function sgdStep(
   n: number, lr: number, momentum: number, weightDecay = 0,
 ): string {
   const hasMomentum = momentum !== 0;
-  // **가중치 감쇠는 기울기에 더한다.** 파라미터를 따로 줄이는 것과 다른 수다 —
-  // 모멘텀 버퍼가 감쇠를 함께 들고 가느냐가 갈린다. torch 의 SGD 가 이쪽이다.
+  // **Weight decay is added into the gradient.** That is a different number from
+  // shrinking the parameter separately — what differs is whether the momentum buffer
+  // carries the decay along. torch's SGD is this side.
   const grad = weightDecay !== 0
     ? `G[gid] + P[gid] * ${weightDecay}`
     : "G[gid]";
@@ -2910,7 +3052,8 @@ ${hasMomentum
 }`;
 }
 
-/** Adam 한 걸음. 편향 보정을 스텝 수로 받아 굽지 않는다 — 매 스텝 달라진다. */
+/** One Adam step. The bias correction arrives by step count rather than being baked —
+ *  it differs every step. */
 export function adamStep(
   n: number, lr: number, beta1: number, beta2: number, eps: number,
 ): string {
@@ -2928,7 +3071,8 @@ ${flatId(n)}
   let v = V[gid] * ${beta2} + gv * gv * ${1 - beta2};
   M[gid] = m;
   V[gid] = v;
-  // Corr[0] = 1-β₁ᵗ, Corr[1] = 1-β₂ᵗ. 스텝마다 달라지므로 굽지 않고 받는다.
+  // Corr[0] = 1-β₁ᵗ, Corr[1] = 1-β₂ᵗ. They differ every step, so they arrive rather
+  // than being baked.
   P[gid] = P[gid] - ${lr} * (m / Corr[0]) / (sqrt(v / Corr[1]) + ${eps});
 }`;
 }
@@ -2949,10 +3093,10 @@ ${flatId(n)}
 }
 
 /**
- * 이동 통계 갱신 — `running ← (1−t)·running + t·new`, 두 개를 한 번에.
+ * The running-statistics update — `running ← (1−t)·running + t·new`, both at once.
  *
- * 조립판은 BatchNorm 하나에 여덟 dispatch 였고 층이 스무 개다. 채널 수만큼만 도는
- * 작은 일이라 커널 하나로 충분하다.
+ * The assembled version was eight dispatches per BatchNorm across twenty layers. It is a
+ * small job running over the channel count alone, so one kernel is enough.
  */
 export function runningStats(C: number, momentum: number, unbias: number): string {
   return `
@@ -2964,12 +3108,13 @@ export function runningStats(C: number, momentum: number, unbias: number): strin
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(C)}
   RunMean[gid] = RunMean[gid] * ${1 - momentum} + Mean[gid] * ${momentum};
-  // **이동 통계에는 불편추정이 들어간다** — 정규화에 쓰는 편향추정과 다른 수다.
+  // **The running statistics take the unbiased estimate** — a different number from the
+  // biased one used for the normalisation.
   RunVar[gid] = RunVar[gid] * ${1 - momentum} + Var[gid] * ${unbias * momentum};
 }`;
 }
 
-/** 값 하나로 채운다. 기울기 씨앗(`backward()` 의 1.0)과 `zeros` 가 쓴다. */
+/** Fills with one value. The gradient seed (`backward()`'s 1.0) and `zeros` use it. */
 export function fill(n: number, value: number): string {
   return `
 @group(0) @binding(0) var<storage, read_write> Out: array<f32>;
@@ -2981,16 +3126,18 @@ ${flatId(n)}
 }
 
 /**
- * 자리마다 난수를 만드는 해시. **상태를 안 들고 자리와 씨앗만으로 뽑는다.**
+ * The hash that makes a random number per position. **It holds no state and draws from
+ * the position and the seed alone.**
  *
- * GPU 에는 순서라는 것이 없다. 스레드가 어떤 차례로 도는지 정해져 있지 않으므로
- * "다음 난수" 를 물려주는 방식은 여기서 뜻이 없고, 같은 입력에 같은 답이 나오지도
- * 않는다. 그래서 `해시(자리, 씨앗)` 로 뽑는다 — 자리마다 독립이고, 같은 씨앗이면
- * 같은 답이 나오고, 스레드 사이에 주고받을 것이 없다.
+ * A GPU has no such thing as order. The sequence threads run in is not fixed, so handing
+ * on "the next random number" means nothing here, and the same input would not give the
+ * same answer. So it draws as `hash(position, seed)` — independent per position, the same
+ * answer for the same seed, and nothing to pass between threads.
  *
- * 쓰는 것은 잘 알려진 정수 뒤섞기(Wang/Jenkins 계열)다. 암호용이 아니고 통계용도
- * 아니다 — dropout 이 자리를 고르는 데 쓰는 만큼이면 된다. 통계적 성질이 걸린 일이
- * 생기면 그때는 이것을 쓰면 안 되고, 그 사실을 여기 적어 둔다.
+ * What it uses is a well-known integer mix (the Wang/Jenkins family). It is not for
+ * cryptography and it is not for statistics either — it is as much as dropout needs to
+ * pick positions. If something arrives whose statistical properties matter, this must not
+ * be used for it, and that fact is written down here.
  */
 const RANDOM_PRELUDE = `
 fn hash_u32(v: u32) -> u32 {
@@ -3003,23 +3150,27 @@ fn hash_u32(v: u32) -> u32 {
   return x;
 }
 fn rand01(gid: u32, seed: u32) -> f32 {
-  // 24 비트만 쓴다 — f32 의 가수부가 그만큼이라 그 위는 어차피 안 실린다.
+  // Only 24 bits are used — that is f32's mantissa, and anything above it does not ride
+  // along anyway.
   let h = hash_u32(gid * 0x9e3779b9u + hash_u32(seed));
   return f32(h >> 8u) * (1.0 / 16777216.0);
 }`;
 
 /**
- * Dropout 의 가림막. **살아남은 자리에 `1/(1-p)` 를 적는다** — 0 아니면 그 값이다.
+ * Dropout's mask. **It writes `1/(1-p)` at the surviving positions** — either 0 or that
+ * value.
  *
- * 가림막을 따로 내놓는 이유는 역방향 때문이다. 순방향에서 뽑은 것과 **같은** 가림막을
- * 역방향이 봐야 하는데, 다시 뽑으면 씨앗이 같아도 그것을 보장하려고 씨앗을 들고
- * 다녀야 한다. 만들어 두고 곱하는 편이 짧고, 곱셈의 미분은 이미 있다.
+ * The mask is produced separately because of the backward. The backward has to see **the
+ * same** mask the forward drew, and drawing again would mean carrying the seed around to
+ * guarantee it even with the seed unchanged. Building it once and multiplying is shorter,
+ * and multiplication's derivative already exists.
  */
 /**
- * `[lo, hi)` 균등난수.
+ * A uniform draw over `[lo, hi)`.
  *
- * dropout 이 쓰던 해시를 그대로 쓴다 — 자리와 씨앗만으로 뽑으므로 GPU 에 순서가
- * 없어도 같은 답이 나온다. `rrelu` 가 학습 모드에서 기울기를 여기서 뽑는다.
+ * It uses the hash dropout already uses — drawing from the position and the seed alone,
+ * so the same answer comes out even though the GPU has no order. `rrelu` draws its slope
+ * here in training mode.
  */
 export function uniformFill(n: number, lo: number, hi: number,
                             seed: number): string {
