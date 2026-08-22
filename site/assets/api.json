@@ -12288,8 +12288,8 @@
        "signature": "constructor(brightness?: number | readonly [number, number], contrast?: number | readonly [number, number], saturation?: number | readonly [number, number], hue?: number | readonly [number, number])",
        "doc": "",
        "section": {
-        "ko": "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯",
-        "en": "Six pixel operations, and the six that apply them with a probability"
+        "ko": "Six pixel operations, and the six that wrap them in a probability",
+        "en": "Six pixel operations, and the six that wrap them in a probability"
        }
       },
       {
@@ -12303,8 +12303,8 @@
        "signature": "apply(x: Subject): Image",
        "doc": "",
        "section": {
-        "ko": "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯",
-        "en": "Six pixel operations, and the six that apply them with a probability"
+        "ko": "Six pixel operations, and the six that wrap them in a probability",
+        "en": "Six pixel operations, and the six that wrap them in a probability"
        }
       },
       {
@@ -12312,8 +12312,8 @@
        "signature": "describe(): string",
        "doc": "",
        "section": {
-        "ko": "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯",
-        "en": "Six pixel operations, and the six that apply them with a probability"
+        "ko": "Six pixel operations, and the six that wrap them in a probability",
+        "en": "Six pixel operations, and the six that wrap them in a probability"
        }
       }
      ]

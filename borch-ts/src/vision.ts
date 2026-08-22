@@ -108,9 +108,10 @@ export class Lambda implements Transform {
 
 /** What the three below share — the list, and how the list prints. */
 abstract class RandomTransforms implements Transform {
-  // **이름을 넘겨받는다.** `this.constructor.name` 이나 `new.target.name` 으로 쓰면
-  // 번들러가 클래스 이름을 줄이는 날 `repr` 이 조용히 바뀐다 — 이 프로젝트는 `repr`
-  // 을 명세로 보므로 그것은 사양이 소리 없이 바뀌는 것이다.
+  // **The name is handed in.** Written as `this.constructor.name` or
+  // `new.target.name`, `repr` changes quietly the day a bundler shortens the class name —
+  // and this project treats `repr` as a specification, so that is the specification
+  // changing without a sound.
   constructor(
     private readonly who: string,
     protected readonly transforms: readonly Transform[],
@@ -229,11 +230,12 @@ export class RandomOrder extends RandomTransforms {
 export class ToTensor implements Transform {
   apply(x: Subject): Tensor {
     if (x instanceof Tensor) return x;
-    // **여러 장이 온 것을 여기서 잡는다.** `Transform` 이 배열까지 받도록 넓어진 뒤로
-    // `Compose([new FiveCrop(3), new ToTensor()])` 가 타입 검사를 통과한다. 막지
-    // 않으면 배열을 구조분해해 `data`·`height` 가 전부 `undefined` 가 되고, 터지긴
-    // 하는데 `shape [,,] does not match 0 elements` 라고 터진다 — 무엇을 잘못했는지
-    // 안 적힌 사고다(실측). torchvision 도 같은 자리에서 `Lambda` 를 쓰라고 말한다.
+    // **Several pictures arriving is caught here.** Since `Transform` widened to accept
+    // an array, `Compose([new FiveCrop(3), new ToTensor()])` passes the type check.
+    // Unblocked, it destructures the array, `data` and `height` all come out `undefined`,
+    // and it does blow up — as `shape [,,] does not match 0 elements`, an accident with
+    // no record of what was done wrong (measured). torchvision says to use a `Lambda` at
+    // the same place.
     const { data, height, width, channels, isByte } = asImage(x, "ToTensor");
     const out = new Float32Array(channels * height * width);
     const scale = isByte ? 1 / 255 : 1;
@@ -271,24 +273,24 @@ export class Normalize implements Transform {
   }
 
   describe(): string {
-    // 파이썬이 튜플을 `(0.5, 0.4, 0.3)` 로 찍는다. 받은 그대로를 찍는 것이 규칙이고,
-    // 골든이 그 글자를 굳혔다.
+    // Python prints a tuple as `(0.5, 0.4, 0.3)`. Printing what arrived, unchanged, is
+    // the rule, and the golden has frozen those characters.
     return `Normalize(mean=${tuple(this.mean)}, std=${tuple(this.std)})`;
   }
 }
 
-/** 파이썬의 튜플 표기. 원소가 하나면 뒤에 쉼표가 붙는다. */
+/** Python's tuple notation. One element carries a trailing comma. */
 function tuple(values: readonly number[]): string {
   const parts = values.map((v) => String(v));
   return parts.length === 1 ? `(${parts[0]},)` : `(${parts.join(", ")})`;
 }
 
 /**
- * 뽑기를 쓰는 변환의 난수기.
+ * The generator for transforms that draw.
  *
- * **골든은 뽑기를 대조하지 않는다** — 확률을 0 이나 1 로 못 박거나 자를 자리가
- * 하나뿐이게 만들어 결정적인 자리만 묻는다. 그래서 여기 난수기는 torch 와 같을
- * 필요가 없고, 같은 척해서도 안 된다.
+ * **The golden does not compare draws** — it pins the probability at 0 or 1, or leaves
+ * only one place to crop, and asks about the deterministic part alone. So the generator
+ * here does not have to match torch's, and must not pretend to.
  */
 const rng = { state: 12345 };
 
@@ -297,7 +299,7 @@ export function manualSeed(seed: number): void {
 }
 
 function nextFloat(): number {
-  // xorshift32. 분포를 재는 자리가 아니라 뽑기가 도는지만 보는 자리다.
+  // xorshift32. Not a place that measures a distribution — only that drawing runs.
   let x = rng.state || 1;
   x ^= x << 13; x >>>= 0;
   x ^= x >> 17;
@@ -434,7 +436,7 @@ export class Pad implements Transform {
         `${JSON.stringify(paddingMode)}.\n` +
         "(torch: Padding mode should be either constant, edge, reflect or symmetric)");
     }
-    padSides(padding);          // 첫 호출이 아니라 여기서 멈춘다
+    padSides(padding);          // it stops here rather than at the first call
   }
 
   apply(x: Image | Tensor): Image {
@@ -484,7 +486,8 @@ export class Pad implements Transform {
 /** The luma weights. torchvision's, verbatim — a rounded set moves whole pixels. */
 const LUMA = [0.2989, 0.587, 0.114] as const;
 
-// 같은 세 수를 float32 로 좁힌 것. **왜 둘 다 필요한지가 요점이다** — 아래 참조.
+// The same three numbers narrowed to float32. **Why both are needed is the point** —
+// see below.
 const LUMA32 = [Math.fround(0.2989), Math.fround(0.587), Math.fround(0.114)] as const;
 
 /**
@@ -512,25 +515,29 @@ function toGray(img: Image, outChannels: number, who: string): Image {
       const r = img.data[i * 3] ?? 0;
       const g = img.data[i * 3 + 1] ?? 0;
       const b = img.data[i * 3 + 2] ?? 0;
-      // **두 갈래가 있고, 둘 다 numpy 를 그대로 따라간 것이다.** 재서 알아낸 자리라
-      // 적어 둔다 — 어느 쪽 소스를 읽어도 안 보이고, 두 쪽을 맞대야만 나온다.
+      // **There are two branches and both follow numpy exactly.** It is written down
+      // because it was found by measurement — it is invisible in either source and only
+      // appears when the two are laid side by side.
       //
-      // 파이썬은 `arr[:,:,0]*_LUMA[0] + ...` 한 줄이고, 그 한 줄의 산술이 배열의
-      // dtype 에 따라 갈린다 (NEP 50 의 약한 승격):
+      // Python is the one line `arr[:,:,0]*_LUMA[0] + ...`, and that line's arithmetic
+      // branches on the array's dtype (NEP 50's weak promotion):
       //
-      //   uint8  × 파이썬 실수 → float64.  전부 float64 로 계산하고 끝에서 잘린다.
-      //   float32 × 파이썬 실수 → float32.  **스칼라가 먼저 float32 로 좁혀지고**,
-      //                                     그 뒤 곱과 부분합이 전부 float32 다.
+      //   uint8   × Python float → float64.  Everything computes in float64 and
+      //                                      truncates at the end.
+      //   float32 × Python float → float32.  **The scalar narrows to float32 first**,
+      //                                      and every product and partial sum after it
+      //                                      is float32.
       //
-      // 실수 쪽을 float64 로 계산하면 골든과 최대 6.5e-8 갈린다. 허용오차 안이라
-      // **검사는 통과한다** — 20 개 화소 중 0 개가 정확히 맞는데도. 스칼라만 좁히면
-      // 16/20, 곱마다 좁히면 16/20, 위대로 하면 20/20 에 오차 0 이다.
+      // Computing the float branch in float64 diverges from the golden by up to 6.5e-8.
+      // That is inside the tolerance, so **the check passes** — with 0 of 20 pixels
+      // exactly right. Narrowing the scalar alone gives 16/20, narrowing each product
+      // gives 16/20, and doing it as above gives 20/20 at zero error.
       const lum = img.isByte
         ? r * LUMA[0] + g * LUMA[1] + b * LUMA[2]
         : Math.fround(Math.fround(Math.fround(r * LUMA32[0])
             + Math.fround(g * LUMA32[1])) + Math.fround(b * LUMA32[2]));
-      // `lum.astype(arr.dtype)` — 바이트 쪽만 여기서 좁힌다. 실수 쪽은 위에서
-      // 이미 float32 이므로 이 캐스트가 값을 안 바꾼다.
+      // `lum.astype(arr.dtype)` — only the byte branch narrows here. The float branch is
+      // already float32 above, so this cast changes no value.
       one[i] = img.isByte ? Math.trunc(lum) : lum;
     }
   } else {
@@ -630,24 +637,25 @@ export class RandomCrop implements Transform {
   }
 
   describe(): string {
-    // 파이썬 쪽이 `size` 를 튜플로 정규화해서 들고 있으므로 그 모양으로 찍는다.
+    // The Python side holds `size` normalised as a tuple, so it prints in that shape.
     return `RandomCrop(size=(${this.size[0]}, ${this.size[1]}), `
       + `padding=${this.padding === null ? "None" : this.padding})`;
   }
 }
 
 /**
- * 출력 자리마다 (읽기 시작점, 가중치). 축 하나에 대한 것이다 — 이 필터는 분리
- * 가능하므로 가로 한 번, 세로 한 번 지나면 된다.
+ * Per output position, a (read start, weights) pair. It covers one axis — the filter is
+ * separable, so one horizontal pass and one vertical pass suffice.
  *
- * **안티에일리어싱을 한다.** torchvision 의 `Resize` 는 기본이 `antialias=true`
- * 이고 끈 것과의 차이가 8×8→4×4 에서 최대 0.0301 이다(실측). 0 이 아니므로
- * "bilinear" 라고만 적으면 어느 쪽인지 안 정해진 것이고, 켠 것으로 학습한 모델에
- * 끈 것을 넣으면 입력이 다르다.
+ * **It antialiases.** torchvision's `Resize` defaults to `antialias=true`, and the
+ * difference from having it off is up to 0.0301 at 8×8→4×4 (measured). It is not zero, so
+ * writing only "bilinear" leaves which one undecided, and feeding a model trained with it
+ * on an input produced with it off is a different input.
  *
- * 확대일 때는 `support` 가 1 이라 보통의 겹선형과 같아진다 — 갈래가 하나로 족한
- * 이유다. 경계 규칙을 두 가지로 재봤는데 **모든 케이스에서 답이 같았다**(넓힌
- * 자리에서 삼각 필터가 0 이다). torch 의 C 구현과 같은 쪽을 쓴다.
+ * When enlarging, `support` is 1 and it becomes ordinary bilinear — which is why one
+ * branch suffices. Two boundary rules were measured and **every case gave the same
+ * answer** (the triangular filter is 0 in the widened region). It uses the same side as
+ * torch's C implementation.
  */
 function aaWeights(src: number, dst: number): { at: number; w: Float64Array }[] {
   const scale = src / dst;
@@ -671,12 +679,13 @@ function aaWeights(src: number, dst: number): { at: number; w: Float64Array }[] 
 }
 
 /**
- * 짧은 변을 `size` 로. 긴 변은 비율을 지킨다 — torchvision 의 `Resize(int)` 다.
+ * The short side to `size`. The long side keeps the ratio — torchvision's `Resize(int)`.
  *
- * **`maxSize` 는 비율 대신이 아니라 비율 뒤에 온다.** 먼저 짧은 변을 `size` 로 맞춰
- * 긴 변을 구하고, 그것이 상한을 넘을 때만 긴 변을 상한으로 자른 뒤 짧은 변이 따라
- * 줄어든다. 두 번의 나눗셈이 **둘 다 버림**이다 — 반올림하면 5×4 를
- * `Resize(8, maxSize=9)` 로 줄일 때 (9, 7) 이 아니라 (9, 8) 이 나온다.
+ * **`maxSize` comes after the ratio rather than instead of it.** The short side is set to
+ * `size` first and the long side follows; only when that exceeds the cap is the long side
+ * clipped to the cap and the short side shrunk to follow. Both divisions **truncate** —
+ * rounding gives (9, 8) rather than (9, 7) when reducing a 5×4 with
+ * `Resize(8, maxSize=9)`.
  */
 function shortSide(
   h: number, w: number, size: number, maxSize: number | null,
@@ -686,9 +695,10 @@ function shortSide(
   let newShort = size;
   let newLong = short === size ? long : Math.trunc((size * long) / short);
   if (maxSize !== null && newLong > maxSize) {
-    // **여기서 던진다, 만들 때가 아니라.** torchvision 도 크기를 셈하는 안쪽에서
-    // 멈추므로 `Resize(4, max_size=4)` 는 세워지고 그림을 받을 때 선다. repr 케이스는
-    // 변환을 세우기만 하고 안 부르므로, 앞당겨 던지면 어느 쪽이 갈렸는지가 바뀐다.
+    // **It throws here rather than at construction.** torchvision also stops inside the
+    // size arithmetic, so `Resize(4, max_size=4)` stands up and stops when it receives a
+    // picture. The repr cases only build the transform without calling it, so throwing
+    // earlier would change which side diverged.
     if (maxSize <= size) {
       throw new RuntimeError(
         `max_size = ${maxSize} must be strictly greater than size = ${size} — ` +
@@ -700,7 +710,7 @@ function shortSide(
   return h < w ? [newShort, newLong] : [newLong, newShort];
 }
 
-/** `(H, W, C)` 로 늘어놓은 것의 한 축만 바꾼다. */
+/** Changes one axis of something laid out as `(H, W, C)`. */
 function resizeRows(
   src: Float64Array, h: number, w: number, c: number, dst: number, nearest: boolean,
 ): Float64Array {
@@ -726,7 +736,7 @@ function resizeRows(
   return out;
 }
 
-/** 세로를 바꾸는 것과 같은 일을 가로에. 축만 다르다. */
+/** The same job as the vertical one, on the horizontal. Only the axis differs. */
 function resizeCols(
   src: Float64Array, h: number, w: number, c: number, dst: number, nearest: boolean,
 ): Float64Array {
@@ -825,13 +835,13 @@ export class Resize implements Transform {
 }
 
 /**
- * **파이썬의 `round` 는 절반을 짝수로 보낸다.** `Math.round` 는 위로 올린다 —
- * `round(0.5)` 가 파이썬에서 0, JS 에서 1 이다.
+ * **Python's `round` sends a half to the even side.** `Math.round` rounds up —
+ * `round(0.5)` is 0 in Python and 1 in JS.
  *
- * torchvision 의 `CenterCrop` 이 `int(round(...))` 로 시작점을 잡으므로, 그것을
- * 그대로 흉내 내지 않으면 **자르는 자리가 한 칸 어긋난다.** 값이 조금 다른 것이
- * 아니라 다른 화소가 나오고, 실측으로 최대 0.837 갈렸다 — 파이썬 판과 TypeScript
- * 판을 나란히 대보기 전에는 안 보였다.
+ * torchvision's `CenterCrop` takes its start with `int(round(...))`, so without imitating
+ * that exactly **the crop lands one cell out.** It is not a slightly different value but
+ * different pixels, and it measured as a divergence of up to 0.837 — invisible until the
+ * Python and TypeScript versions were laid side by side.
  */
 function roundHalfToEven(x: number): number {
   const down = Math.floor(x);
@@ -923,7 +933,7 @@ export function augmentBatch(
       const src = (i * c + ch) * h * w;
       const dst = (i * c + ch) * th * tw;
       for (let y = 0; y < th; y++) {
-        // 채운 자리는 원본 밖이다 — 거기서는 `fill` 을 쓴다.
+        // A padded position is outside the original — `fill` is used there.
         const sy = top + y - pad;
         for (let t = 0; t < tw; t++) {
           const sx0 = left + t - pad;
@@ -990,9 +1000,10 @@ function floatTuple(values: readonly number[]): string {
  */
 export class LinearTransformation implements Transform {
   private readonly side: number;
-  // **늦게 만든다.** 생성자에서 텐서를 만들면 `describe()` 가 장치를 요구하게 되고,
-  // 파이썬 쪽은 GPU 없이 찍힌다. `repr` 을 명세로 보는 이상 그것을 보려고 장치를
-  // 띄워야 하는 것은 뒤집힌 것이다 — 실제로 검사가 여기서 걸렸다.
+  // **Built late.** Building the tensor in the constructor makes `describe()` demand a
+  // device, and the Python side prints without a GPU. As long as `repr` is treated as a
+  // specification, having to bring up a device to see one is backwards — and a check
+  // really did catch this.
   private matrix: Tensor | null = null;
   private meanVector: Tensor | null = null;
 
@@ -1379,47 +1390,52 @@ function padded(img: Image, pad: number, fill: number): Image {
 }
 
 
-// ── 광도계: torchvision 이 **텐서 경로에서** 하는 산술 ──────────────────
+// ── Photometric: the arithmetic torchvision does **on the tensor path** ────
 //
-// **PIL 의 수가 아니다.** torchvision 은 이 다섯을 두 번 구현해 뒀다 — PIL 이미지용
-// `ImageEnhance` 와 텐서용 산술 — 그리고 둘은 마지막 비트까지 일치하지 않는다.
-// 파이썬 쪽이 두 번째를 옮겼고 골든이 그것과 대조하므로 여기도 두 번째다.
+// **These are not PIL's numbers.** torchvision implements these five twice — the
+// `ImageEnhance` path for PIL images and the arithmetic for tensors — and the two do not
+// agree to the last bit. The Python side ported the second, and the golden compares
+// against that, so this is the second too.
 //
-// **정밀도에 대해 실제로 잰 것.** 여기 `f32` 가 잔뜩 붙은 이유를 적어 두는데,
-// 처음 적으려던 이유는 재 보니 틀렸다.
+// **What was actually measured about precision.** The reason for all the `f32` here is
+// written down, and the reason first written was wrong when measured.
 //
-// 산 이야기: 바이트 그림에서 모든 블렌드가 **좁히는 캐스트로 끝나므로**, 작업
-// 정밀도가 답을 고른다. 무작위 5x4 바이트 그림 300 장 x 배율 4 개로 재니
-// float64 로 계산한 것과 float32 로 계산한 것이 **72000 화소 중 910 개(1.3%)**
-// 에서 갈렸다. 1 만큼 갈리므로 1e-4 허용오차 **밖**이다. 그러니 장식이 아니다.
+// The live account: in a byte picture every blend **ends in a narrowing cast**, so the
+// working precision picks the answer. Measured over 300 random 5×4 byte pictures × 4
+// factors, computing in float64 and computing in float32 diverged at **910 of 72,000
+// pixels (1.3%)**. They diverge by 1, which is **outside** the 1e-4 tolerance. So it is
+// not decoration.
 //
-// 그리고 **검사가 그것을 본다** — 지금은. 이 문단은 하루 사이에 두 번 뒤집혔고,
-// 뒤집힌 자국을 남겨 두는 편이 결론만 적는 것보다 쓸모 있다:
+// And **a check sees it** — now. This paragraph turned over twice in one day, and leaving
+// the marks of the turns is more useful than writing only the conclusion:
 //
-//   처음  파이썬 쪽 주석이 "실측, `adjust_saturation(1.7)` 의 한 화소" 라고 했고
-//         나는 그걸 근거로 이 경로를 float32 로 썼다.
-//   재보니 그 케이스에서 갈리는 화소가 **0 개**였다. `f32` 를 전부 항등으로 바꿔도
-//         열 건이 다 통과했다 — 걸리지 않은 것은 그림이 아니라 배율이었다.
-//   지금  저쪽이 케이스를 배율 0.1 로 옮겼다. `f32` 를 항등으로 바꾸면 **4 화소가
-//         정확히 1.0 씩** 어긋나 허용오차 밖으로 나간다.
+//   first     the Python side's comment said "measured, one pixel of
+//             `adjust_saturation(1.7)`", and on that basis I wrote this path in float32.
+//   measured  that case diverged at **0 pixels.** Replacing every `f32` with the identity
+//             still passed all ten cases — what had not been caught was the factor, not
+//             the picture.
+//   now       that side moved the case to a factor of 0.1. With `f32` replaced by the
+//             identity, **4 pixels are off by exactly 1.0** and it leaves the tolerance.
 //
-// 그래서 판별 질문은 이것이다: **산술 뒤에 좁히는 캐스트가 오는가.** 오면 작업
-// 정밀도가 답을 고르므로 어떤 허용오차도 안 덮어 준다. 그 사실과, 검사가 그것을
-// 보는가는 여전히 **별개**다 — 하루 동안은 사실만 있고 검사가 없었다.
+// So the deciding question is this: **does a narrowing cast follow the arithmetic.** If it
+// does, the working precision picks the answer and no tolerance covers it. That fact and
+// whether a check sees it are still **separate** — for a day there was the fact and no
+// check.
 
 const f32 = Math.fround;
 
-/** 범위의 위끝. **바이트는 255, 실수 그림은 1** — 블렌드가 여기로 잘린다. */
+/** The top of the range. **255 for bytes and 1 for a float picture** — a blend clips to
+ *  it. */
 function bound(isByte: boolean): number {
   return isByte ? 255 : 1;
 }
 
 /**
- * `ratio*a + (1-ratio)*b`, 잘라서 원래 형으로.
+ * `ratio*a + (1-ratio)*b`, clipped back to the original dtype.
  *
- * `1 - ratio` 는 **float64 로 먼저** 계산된다 (파이썬에서 둘 다 파이썬 실수다).
- * 좁아지는 것은 float32 배열에 곱해지는 순간이다 — 그 차례가 `toGray` 에서 20 화소
- * 중 0 개와 20 개를 갈랐다.
+ * `1 - ratio` is computed **in float64 first** (both are Python floats over there). The
+ * narrowing happens the moment it multiplies a float32 array — and that ordering
+ * separated 0 of 20 pixels from 20 of 20 in `toGray`.
  */
 function blend(a: Image, b: ArrayLike<number>, ratio: number): Image {
   const hi = bound(a.isByte);
@@ -1434,7 +1450,7 @@ function blend(a: Image, b: ArrayLike<number>, ratio: number): Image {
   return { ...a, data: out };
 }
 
-/** 바이트를 [0,1] 실수로. **torch 의 변환이지 임의의 나눗셈이 아니다.** */
+/** A byte into a [0,1] float. **It is torch's conversion, not an arbitrary division.** */
 function toFloat01(img: Image): Float64Array {
   if (!img.isByte) return img.data;
   const out = new Float64Array(img.data.length);
@@ -1442,8 +1458,8 @@ function toFloat01(img: Image): Float64Array {
   return out;
 }
 
-// torch 는 반올림이 아니라 `256 - 1e-3` 을 곱하고 자른다 — 값의 절반쯤에서 두 방식이
-// 갈리므로 그대로 옮긴다.
+// torch multiplies by `256 - 1e-3` and truncates rather than rounding — the two methods
+// diverge on about half the values, so it is copied exactly.
 const BYTE_SCALE = f32(255 + 1 - 1e-3);
 
 function fromFloat01(arr: Float64Array, img: Image): Image {
@@ -1456,9 +1472,9 @@ function fromFloat01(arr: Float64Array, img: Image): Image {
 }
 
 /**
- * Pillow 의 알고리즘 — torchvision 이 옮긴 그것이다. **채널이 같은 화소는 나눗셈
- * 바깥에서 처리한다**: 회색 화소는 `maxc == minc` 라 차로 나누면 NaN 이 생기고,
- * 그러면 그것을 다시 찾아야 한다.
+ * Pillow's algorithm — the one torchvision ported. **A pixel whose channels are equal is
+ * handled outside the division**: a grey pixel has `maxc == minc`, so dividing by the
+ * difference produces a NaN, and then it has to be found again.
  */
 function rgb2hsv(src: Float64Array, n: number): Float64Array {
   const out = new Float64Array(n * 3);
@@ -1475,8 +1491,8 @@ function rgb2hsv(src: Float64Array, n: number): Float64Array {
     const rc = f32(f32(maxc - r) / div);
     const gc = f32(f32(maxc - g) / div);
     const bc = f32(f32(maxc - b) / div);
-    // 파이썬 쪽은 세 마스크를 곱해 더한다. 정확히 하나만 1 이고 나머지 항은 0 이라
-    // 덧셈이 정확하므로 분기로 써도 같은 수가 나온다.
+    // The Python side multiplies three masks and adds. Exactly one is 1 and the other
+    // terms are 0, so the addition is exact and a branch gives the same number.
     let h: number;
     if (maxc === r) h = f32(bc - gc);
     else if (maxc === g) h = f32(f32(2 + rc) - bc);
@@ -1489,8 +1505,9 @@ function rgb2hsv(src: Float64Array, n: number): Float64Array {
 }
 
 /**
- * 되돌아오는 길. torch 는 원핫 마스크와 einsum 으로 육분면을 고른다 — 여기서는
- * 색인으로 고르고 수는 같다. einsum 은 미분도 해야 하는 gather 를 쓰는 방식이다.
+ * The way back. torch picks the sextant with a one-hot mask and an einsum — here it is
+ * picked by index and the numbers are the same. The einsum route is how you do it when
+ * the gather also has to be differentiable.
  */
 function hsv2rgb(hsv: Float64Array, n: number): Float64Array {
   const clip01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -1599,7 +1616,7 @@ export function adjustGamma(img: Image, gamma: number, gain = 1): Image {
   return fromFloat01(out, img);
 }
 
-/** `null` 이면 안 쓴다는 뜻이고, 그것이 `None` 으로 찍힌다. */
+/** `null` means it is not used, and that prints as `None`. */
 type Span = readonly [number, number] | null;
 
 function checkSpan(
@@ -1633,9 +1650,9 @@ function checkSpan(
       `${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].\n` +
       `(torch: ${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].)`);
   }
-  // **항등은 "아무것도 안 하는 범위" 가 아니라 `None` 으로 저장된다.** 그냥 적용하면
-  // 블렌드 한 번과, 바이트 그림에서는 반올림 한 번이 든다 — "지터 없음" 과 "정확히
-  // 1 인 지터" 는 다른 것이다.
+  // **The identity is stored as `None` rather than as a range that does nothing.**
+  // Applied anyway it costs one blend, and on a byte picture one rounding — "no jitter"
+  // and "a jitter of exactly 1" are different things.
   return pair[0] === pair[1] && pair[0] === center ? null : [pair[0], pair[1]];
 }
 
@@ -1712,16 +1729,18 @@ export class ColorJitter implements Transform {
 
 // ── transforms.functional ──────────────────────────────────────────────
 //
-// **같은 산술을 객체를 세우지 않고 부르는 것.** 여기 있는 것은 전부 위 클래스나 그
-// 클래스가 쓰는 도우미에게 일을 넘긴다 — 아무것도 다시 구현하지 않는다. 그게 요점이다:
-// `Resize` 의 거르개가 두 벌 있으면 쓴 날에는 맞고 나중 어느 날에는 안 맞는다.
+// **The same arithmetic called without standing an object up.** Everything here hands the
+// work to a class above or to a helper that class uses — nothing is reimplemented. That
+// is the point: two copies of `Resize`'s filter agree on the day they are written and
+// disagree on some later one.
 //
-// torchvision 은 반대로 나눠 뒀다 — 클래스가 함수를 부른다. 여기가 반대인 것은
-// 클래스가 먼저 있었기 때문이고, 호출 그래프의 모양을 맞추자고 도는 코드를 뒤집는 것은
-// 밖에서 아무도 못 보는 것을 위해 고치는 일이다. (파이썬 쪽도 같은 이유로 같은 방향이다.)
+// torchvision divides it the other way — the class calls the function. It is reversed here
+// because the classes came first, and turning running code inside out to match the shape
+// of a call graph is fixing something nobody outside can see. (The Python side is the same
+// direction for the same reason.)
 //
-// **무엇에 쓰나**: 튜토리얼은 `RandomHorizontalFlip()` 만큼 자주 `F.hflip(x)` 라고
-// 쓰고, 지금까지 그 줄은 없는 네임스페이스에 대한 오류로 멈췄다.
+// **What it is for**: a tutorial writes `F.hflip(x)` as often as `RandomHorizontalFlip()`,
+// and until now that line stopped with an error about a namespace that did not exist.
 
 /** Left to right, with no draw in it. */
 export function hflip(img: Image): Image {
@@ -1807,10 +1826,11 @@ export function erase(x: Tensor, top: number, left: number,
     const row = Math.floor(i / w) % h;
     if (row >= top && row < top + height && col >= left && col < left + width) mask[i] = 1;
   }
-  // **`v` 를 제자리로 덧대서 올린다.** 자리마다 다른 값이 올 수 있으므로 상수 하나로
-  // 줄이면 안 된다 — 골든의 케이스가 마침 상수라 그렇게 써도 통과하지만, 그것은
-  // 케이스가 그 구분을 못 하는 것이지 맞는 것이 아니다. `where` 는 브로드캐스트를
-  // 안 하므로 모양이 정확히 같아야 한다.
+  // **`v` is lifted into place at full size.** A different value can arrive per
+  // position, so it must not be reduced to a single constant — the golden's case happens
+  // to be a constant so writing it that way passes, and that is the case being unable to
+  // tell the difference rather than the code being right. `where` does not broadcast, so
+  // the shapes have to match exactly.
   const rank = v.shape.length;
   const placed = v.pad(rank - 2, top, h - top - height)
     .pad(rank - 1, left, w - left - width);
@@ -1839,10 +1859,10 @@ export function getImageNumChannels(img: Image): number {
 }
 
 
-// ── 픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯 ──────────────────
+// ── Six pixel operations, and the six that wrap them in a probability ──
 //
-// 기하가 없다 — 화소가 자리를 안 옮기고 값만 바뀐다. 그래서 격자 재표본이 필요한
-// 것들과 따로 두고, 검사도 따로 선다.
+// There is no geometry — no pixel moves and only the values change. So they are kept apart
+// from the ones needing a grid resample, and their checks stand apart too.
 
 /**
  * `bound - x`. White for black — and the bound is 255 or 1 depending on the
@@ -1917,8 +1937,9 @@ export function autocontrast(img: Image): Image {
       if (v < lo) lo = v;
       if (v > hi) hi = v;
     }
-    // 평평한 채널은 `bound / 0` 이 되고, 파이썬 쪽은 그것을 **나눈 뒤에** 유한하지
-    // 않은 자리로 골라낸다. 여기서는 나누기 전에 갈라 같은 답을 낸다.
+    // A flat channel gives `bound / 0`, and the Python side picks those out **after
+    // dividing**, as the non-finite positions. Here it branches before dividing and gives
+    // the same answer.
     const flat = hi === lo;
     const shift = flat ? 0 : f32(lo);
     const scale = flat ? 1 : f32(hiBound / f32(hi - lo));
@@ -1932,10 +1953,11 @@ export function autocontrast(img: Image): Image {
 }
 
 /**
- * 한 채널의 히스토그램 평활화, **torch 의 정수 산술 그대로.**
+ * Histogram equalisation of one channel, **in torch's integer arithmetic verbatim.**
  *
- * 여기 나눗셈은 전부 버림이고, 한 칸 밀린 표(`[0, ...lut[:-1]]`)가 가장 어두운 값을
- * 첫 계단이 아니라 0 으로 보낸다. 부동소수로 쓰면 범위 대부분에서 1 씩 어긋난다.
+ * Every division here truncates, and the table shifted by one (`[0, ...lut[:-1]]`) sends
+ * the darkest value to 0 rather than to the first step. Written in floating point it is
+ * off by 1 across most of the range.
  */
 function equalizeChannel(plane: Float64Array): Float64Array {
   const hist = new Int32Array(256);
@@ -1988,11 +2010,13 @@ export function equalize(img: Image): Image {
 }
 
 /**
- * `adjustSharpness` 가 섞어 가는 3x3 평활 — **1 여덟 개와 가운데 5, 13 으로 나눈 것.**
+ * The 3×3 smoothing `adjustSharpness` blends towards — **eight 1s with a 5 in the middle,
+ * divided by 13.**
  *
- * 테두리는 그대로 둔다. torchvision 은 덧대지 않고 합성곱한 뒤 가운데에 되써넣으므로,
- * 바깥 한 겹은 원본이다 — 정돈한 것이 아니라 복사한 것이고, 덧댄 합성곱은 거기서
- * 다른 수를 내는데 그 차이가 가운데에서는 안 보인다.
+ * The border is left alone. torchvision convolves without padding and writes the result
+ * back into the middle, so the outer ring is the original — copied rather than tidied, and
+ * a padded convolution gives a different number there while the difference is invisible in
+ * the middle.
  */
 function blurred(img: Image): Image {
   const k = [1, 1, 1, 1, 5, 1, 1, 1, 1].map((v) => f32(v / 13));
@@ -2008,8 +2032,9 @@ function blurred(img: Image): Image {
               * f32(img.data[((y - 1 + dy) * w + (x - 1 + dx)) * c + ch] ?? 0)));
           }
         }
-        // **버림이 아니라 반올림.** torch 는 합성곱을 정수 dtype 으로 되돌릴 때
-        // `round` 를 지나고, 버리면 화소 절반쯤에서 한 계단 낮다(파이썬 쪽 실측).
+        // **Rounding rather than truncating.** torch passes through `round` when
+        // returning a convolution to an integer dtype, and truncating is one step low on
+        // about half the pixels (measured on the Python side).
         out[(y * w + x) * c + ch] = img.isByte
           ? Math.min(Math.max(Math.round(acc), 0), bound(true))
           : acc;
@@ -2035,7 +2060,7 @@ export function adjustSharpness(img: Image, sharpnessFactor: number): Image {
   return blend(src, blurred(src).data, sharpnessFactor);
 }
 
-/** 여섯 감싸개가 나눠 갖는 것: 확률 하나와 호출 하나. */
+/** What the six wrappers share: one probability and one call. */
 abstract class RandomPixelOp implements Transform {
   constructor(private readonly who: string, protected readonly p = 0.5) {}
 
@@ -2070,8 +2095,9 @@ export class RandomEqualize extends RandomPixelOp {
 export class RandomPosterize extends RandomPixelOp {
   constructor(private readonly bits: number, p = 0.5) { super("RandomPosterize", p); }
   protected run(img: Image): Image { return posterize(img, this.bits); }
-  // **쉼표 뒤에 공백이 없다.** torchvision 자신의 표기이고 옮겨 적다 흘린 것이
-  // 아니다 — 이 여섯 중 셋이 그렇게 찍고 나머지 셋은 칸이 하나뿐이다.
+  // **There is no space after the comma.** That is torchvision's own notation rather
+  // than something dropped in transcription — three of these six print that way and the
+  // other three have only one field.
   override describe(): string { return `RandomPosterize(bits=${this.bits},p=${this.p})`; }
 }
 
