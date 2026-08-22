@@ -4221,6 +4221,97 @@ class FakeData(VisionDataset):
         return picture, target
 
 
+# --------------------------------------------------- transforms.v2.functional
+#
+# **165 public names, and 114 of them are one operation counted five times.**
+# `affine_image`, `affine_mask`, `affine_bounding_boxes`, `affine_keypoints` and
+# `affine_video` are v2's dispatch kernels: the type decides which runs, and the
+# type system that decides is the half of v2 declined here. What is left is 51
+# names, 34 of which v1 already has under `transforms.functional`.
+#
+# So most of this file is a re-export, and the nine below are what v2 adds that can
+# be built without tv_tensors. They are thin on purpose — a second body for `hflip`
+# under the name `horizontal_flip` is two implementations of one thing, and the one
+# that is not being looked at is the one that drifts.
+
+
+def horizontal_flip(img):
+    """v2's spelling of `hflip`. **The same function, not a copy of it.**"""
+    return hflip(img)
+
+
+def vertical_flip(img):
+    """v2's spelling of `vflip`."""
+    return vflip(img)
+
+
+def elastic(img, displacement, interpolation="bilinear", fill=None):
+    """v2's spelling of `elastic_transform`. **Measured, the two agree exactly** — max
+    difference 0.0 on a random picture — so this forwards rather than repeating it.
+
+    `fill=None` and not `0`. Writing the zero looked harmless and is not: `None` leaves
+    the outside of the warp untouched and `0` paints it black, and on a picture whose
+    edges barely move the difference is a thin dark rim that reads as the warp working.
+    Caught by comparing, which is the only way that one gets caught.
+    """
+    return elastic_transform(img, displacement, interpolation, fill)
+
+
+def get_size(img):
+    """`[height, width]` — **a list, and in that order.**
+
+    `get_image_size` in v1 answers `[width, height]`. Reversing the pair was one of
+    v2's deliberate corrections, and the two names sit one namespace apart giving
+    opposite answers, so this is the place to say which is which rather than the place
+    to be brief.
+    """
+    height, width = get_dimensions(img)[1:]
+    return [height, width]
+
+
+def get_num_channels(img):
+    """v2's spelling of `get_image_num_channels`."""
+    return get_image_num_channels(img)
+
+
+def grayscale_to_rgb(img):
+    """One channel to three. **Three channels pass through untouched** — measured
+    against torchvision, which returns the input rather than raising, so a pipeline
+    can carry mixed pictures without a branch."""
+    arr = _np.asarray(img)
+    if arr.ndim == 2:
+        arr = arr[:, :, None]
+    if arr.shape[2] == 1:
+        return _np.ascontiguousarray(_np.repeat(arr, 3, axis=2))
+    return arr
+
+
+def permute_channels(img, permutation):
+    """Reorder the channels. The list is **positions to take from**, so `[2, 0, 1]`
+    puts the old third channel first — the same direction as indexing, and the
+    opposite of "where each channel goes"."""
+    arr = _np.asarray(img)
+    arr = arr if arr.ndim == 3 else arr[:, :, None]
+    if sorted(permutation) != list(range(arr.shape[2])):
+        raise ValueError(
+            f"Invalid permutation {list(permutation)} for {arr.shape[2]} channels\n"
+            "  (torch: Invalid permutation)")
+    return _np.ascontiguousarray(arr[:, :, list(permutation)])
+
+
+def to_dtype(img, dtype=None, scale=False):
+    """Cast, and **optionally scale on the way** — the half of `ToTensor` that v2
+    split out, as a function. `scale=False` is the default here as it is there, which
+    is the trap: `to_dtype(bytes, float32)` gives 0..255 floats and looks like it
+    worked."""
+    return v2.ToDtype(dtype, scale)(img)
+
+
+def gaussian_noise(img, mean=0.0, sigma=0.1, clip=True):
+    """Add normal noise. Float pictures only, for the reason `GaussianNoise` gives."""
+    return v2.GaussianNoise(mean, sigma, clip)(img)
+
+
 transforms = _types.ModuleType("borchvision.transforms")
 functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
@@ -4310,3 +4401,23 @@ for _name, _cls in (("Compose", _V2Compose), ("RandomApply", _V2RandomApply),
 # not by identity, which is the kind of difference that bites once and takes an hour.
 v2.InterpolationMode = InterpolationMode
 v2.AutoAugmentPolicy = AutoAugmentPolicy
+
+# `transforms.v2.functional`. **34 names are v1's, re-exported rather than rewritten**
+# — v2 changed what its transforms print, not what its functions compute, and a second
+# body under a second name is the one that drifts because nobody is looking at it.
+v2_functional = _types.ModuleType("borchvision.transforms.v2.functional")
+v2.functional = v2_functional
+_sys.modules["borchvision.transforms.v2.functional"] = v2_functional
+for _name in ("adjust_brightness", "adjust_contrast", "adjust_gamma", "adjust_hue",
+              "adjust_saturation", "adjust_sharpness", "affine", "autocontrast",
+              "center_crop", "crop", "elastic_transform", "equalize", "erase",
+              "five_crop", "gaussian_blur", "get_dimensions", "get_image_num_channels",
+              "get_image_size", "hflip", "invert", "normalize", "pad", "perspective",
+              "posterize", "resize", "resized_crop", "rgb_to_grayscale", "rotate",
+              "solarize", "ten_crop", "to_grayscale", "to_tensor", "vflip",
+              # And the nine v2 adds that need no tv_tensors.
+              "horizontal_flip", "vertical_flip", "elastic", "get_size",
+              "get_num_channels", "grayscale_to_rgb", "permute_channels", "to_dtype",
+              "gaussian_noise"):
+    setattr(v2_functional, _name, globals()[_name])
+v2_functional.InterpolationMode = InterpolationMode

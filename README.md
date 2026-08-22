@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3237 golden cases pass**, and that is a surface check rather than a
+> is that **3254 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -516,6 +516,7 @@ from borchvision import transforms
 
 | what is here | **38 of the 41 names `torchvision.transforms` carries — everything except the three that carry a reason.** Composition — `Compose`, `Lambda`, `RandomApply`, `RandomChoice`, `RandomOrder`. Tensors — `ToTensor`, `Normalize`, `LinearTransformation`. Geometry — `Resize`, `CenterCrop`, `RandomCrop`, `RandomResizedCrop`, `FiveCrop`, `TenCrop`, `Pad`, `InterpolationMode`, `RandomRotation`, `RandomAffine`, `RandomPerspective`, `ElasticTransform`, `GaussianBlur`. Policies — `AutoAugment`, `AutoAugmentPolicy`, `RandAugment`, `TrivialAugmentWide`, `AugMix`. Augmentation — `RandomHorizontalFlip`, `RandomVerticalFlip`, `Grayscale`, `RandomGrayscale`, `RandomErasing`, `ColorJitter`, `RandomInvert`, `RandomPosterize`, `RandomSolarize`, `RandomAutocontrast`, `RandomEqualize`, `RandomAdjustSharpness`. Plus `augment_batch`, which torchvision does not have. **`transforms.functional` holds 34 of the 37 names `torchvision.transforms.functional` carries** — `crop`, `center_crop`, `resized_crop`, `five_crop`, `ten_crop`, `pad`, `resize`, `hflip`, `vflip`, `rgb_to_grayscale`, `to_grayscale`, `normalize`, `to_tensor`, `erase`, `get_dimensions`, `get_image_size`, `get_image_num_channels`, `InterpolationMode`, and the photometric `adjust_brightness`, `adjust_contrast`, `adjust_saturation`, `adjust_hue`, `adjust_gamma`, and the pixel rewrites `invert`, `posterize`, `solarize`, `autocontrast`, `equalize`, `adjust_sharpness`, and the grid resampling `rotate`, `affine`, `perspective`, `elastic_transform`, `gaussian_blur` — so `import borchvision.transforms.functional as F` is a line that runs. **What is absent carries a reason** in `tests/torch_gap.py`, and what carries none is the to-do list |
 | **`transforms.v2`** | **52 of 72 present** — torchvision's current recommended API, and `import borchvision.transforms.v2 as T` is a line that runs. **What v2 changes over v1 is what it prints, not what it computes**: measured across the comparable names, values agreed everywhere and 21 of 33 reprs differed — `Resize(5)` keeps its size as `[5]`, `ColorJitter` drops the arguments left at `None` rather than printing them. So these subclass v1's transforms and override the repr alone, and the golden file freezes **52 repr strings** against real torchvision's, because `print(transform)` is how a tutorial's reader checks that what they built is what they meant. Four of those strings were wrong before they were right, every one found by comparing. On top of v1 it adds `Identity`, `RGB`, `ToImage`, `ToDtype`, `ToPureTensor`, `GaussianNoise`, `RandomChannelPermutation`, `RandomPhotometricDistort`, `RandomResize`, `RandomShortestSize`, `RandomZoomOut`, `ScaleJitter`, `MixUp` and `CutMix`. The 20 absent are the tv_tensor half — boxes, masks, keypoints and video travelling alongside the picture, which pays off with a detector and there is none in the catalogue — plus the base class whose body *is* that dispatch. `MixUp` and `CutMix` were in that group and are not: they take a batch and a label, unlike everything else here, but they need nothing this library lacks, and "it is unlike the others" is not a reason. The namespace was invisible to the gap measure until it was named, because it is not an attribute of `torchvision.transforms` until something imports it — it read 0 of 72 while 38 of those names already existed one namespace over |
+| **`transforms.v2.functional`** | **43 of 165 present** — and the two numbers need each other. **114 of those 165 names are one operation counted five times**: `affine_image`, `affine_mask`, `affine_bounding_boxes`, `affine_keypoints` and `affine_video` are v2's dispatch kernels, routed by the type of what arrives, and that type system is the half of v2 declined one namespace up. Of the 51 real names, 34 are v1's and are **re-exported rather than rewritten** — a second body under a second name is the one that drifts, because nobody is looking at it. Nine more are what v2 adds that need no tv_tensors: `horizontal_flip`, `vertical_flip`, `elastic`, `get_size`, `get_num_channels`, `grayscale_to_rgb`, `permute_channels`, `to_dtype`, `gaussian_noise`. Watch `get_size`: it answers `[height, width]` where v1's `get_image_size` answers `[width, height]` — v2 reversed the pair on purpose, the two names sit one namespace apart, and taking the wrong one gives a transposed picture that is still plausible, so both are frozen side by side. **This namespace was off the gap table until now**, described in a paragraph instead, because the matcher's wildcards could not carry a namespace and `"*_image"` written flat would have swallowed v1's `to_pil_image`. The matcher takes namespaced wildcards now; the paragraph became five rows and a number — and the paragraph had said 128 kernels where there are 114, which nothing was checking |
 |---|---|
 | **`datasets`** | **7 of 72 present** — `MNIST`, `FashionMNIST`, `KMNIST`, `CIFAR10`, `CIFAR100`, `FakeData` and the `VisionDataset` they subclass, each with `download=True` that works. The refusal that used to stand here was **about addresses, not about datasets**: what a browser cannot reach is torchvision's own hosts (`cs.toronto.edu` and `ossci-datasets.s3.amazonaws.com` send no CORS header, measured), and that is a fact about two servers rather than about reading bytes. **Compared against real torchvision on the real data** — MNIST, FashionMNIST, KMNIST and CIFAR-10, both splits of each: `data`, `targets`, `classes`, `class_to_idx`, `len`, `__getitem__` and the repr all equal, on all 60,000 pictures rather than a sample. Our `download()` wrote files byte-identical to torchvision's. The one divergence is the one `ToTensor` has everywhere else: `__getitem__` gives an `(H,W)` or `(H,W,C)` array where torchvision gives a PIL image, so a recipe reads the same because `ToTensor` is where the two conventions meet. A CIFAR batch is a **pickle that was downloaded**, and torchvision calls `pickle.load` on it; here the classes it may build are named, because the checksum is the only thing between a mirror and code that runs. The tar is streamed and hashed a megabyte at a time rather than held whole, lands at `.part` until the digest agrees, and **a kept archive is re-hashed rather than trusted by name** — that last one is measured: an interrupted download left a truncated tar at the right name, and what came out of the next run was `EOFError: Compressed file ended before the end-of-stream marker` from inside gzip, a sentence about a stream that names no file and offers no move. The golden cases freeze the decoders on bytes built in the case table — a case that downloads is a case that fails on a train, and freezing MNIST's answer means shipping MNIST |
 | **the eight gaps with no reason** | Every other absence in this project carries a reason. `EMNIST`, `QMNIST`, `MovingMNIST`, `USPS`, `SEMEION`, `STL10`, `FER2013` and `DatasetFolder` do not, **on purpose.** What declines the other 57 datasets is a codec: most are folders of JPEG or PNG, numpy decodes neither, and adding a decoder is the dependency this library does without — the same answer PIL gets in `transforms`, arriving from the other side. That reason is **false of these eight**. `QMNIST` and `EMNIST` are MNIST's own IDX, one of them zipped; `MovingMNIST` is a `.npy`; `USPS` is bzipped text, `SEMEION` is text, `FER2013` is a CSV, `STL10` is raw bytes, and `DatasetFolder` walks directories and calls a loader you hand it. Writing "a codec" beside those would be the over-wide refusal this project has already caught twice — including once on this very row. So the count says eight, and eight is a to-do list |
@@ -586,9 +587,9 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **3237 golden cases** — every one in the table but five. Those five are
+It passes **3254 golden cases** — every one in the table but five. Those five are
 the core's alone: complex eigenvalues, and there is no complex dtype on this side.
-The core covers 3189 cases, and the 53 *it* does not see are this side's alone
+The core covers 3206 cases, and the 53 *it* does not see are this side's alone
 (1-D and 3-D convolutions, ranks 7 and 8), which it refuses on purpose.
 
 > That sentence read "nothing in the table is skipped on this side alone" until
@@ -602,12 +603,12 @@ The core covers 3189 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2788 cases. **The remaining 454 are two
-things**: 340 deliberately not carried across, and 114 owed. The binding
+borch.ts itself has written TS bodies for 2788 cases. **The remaining 471 are two
+things**: 340 deliberately not carried across, and 131 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
 surface: names and argument order. A good many of the 340 ask about a Python name
-alias, so carrying those across would ask the same question twice; the 114 are not
+alias, so carrying those across would ask the same question twice; the 131 are not
 that, which is why they are counted apart.
 
 > **Neither number is written by hand.** Both are read out of the runner's ledger,
@@ -1062,8 +1063,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3242 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3189 cases, leaving out the 53 that are
+And **3259 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3206 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are
