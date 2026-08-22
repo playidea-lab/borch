@@ -99,7 +99,17 @@ SHIFTED = {
     # the shape exactly and differs in the values -- measured, on twelve of the
     # first fifty-six configurations, every one of them `padding` and
     # `output_padding` together.
-    "nn": 2,
+    # 2 -> 1. EmbeddingBag took torch's whole list: `mode` sits sixth, where torch
+    # has it, so `EmbeddingBag(10, 3, "sum")` set `max_norm="sum"` in torch and the
+    # mode here -- both sides then build a layer and return bags of the right shape,
+    # and only the numbers differ. max_norm, norm_type, _weight, include_last_offset
+    # and padding_idx implemented; scale_grad_by_freq and sparse refused in their own
+    # positions. Checked against real torch over 28 configurations.
+    #
+    # `padding_idx` is the one that needed measuring rather than reading: the padded
+    # entry **leaves the bag** rather than contributing zero to it, which is the same
+    # thing under `sum` and not under `mean`, where it has to leave the denominator.
+    "nn": 1,
     "nn.functional": 0,
     "optim": 2,
     "optim.lr_scheduler": 2,
@@ -165,7 +175,7 @@ JUDGED = {
     # fix looks like here** — the total did not change, and no other number in this
     # file would have recorded that anything happened.
     "nn": (144, 161),
-    "nn.functional": (75, 126),
+    "nn.functional": (76, 126),   # +1: embedding_bag became readable
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
     "linalg": (0, 42),

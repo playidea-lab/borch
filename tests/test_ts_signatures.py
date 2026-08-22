@@ -103,7 +103,10 @@ SHIFTED = {
     # outside authority does -- the core cannot move toward torch except by moving
     # away from borch.ts until borch.ts follows.
     "nn": 7,
-    "nn.functional": 1,
+    # 1 -> 2. `F.embedding_bag` moved `mode` from third to sixth, where torch
+    # has it, and borch.ts still takes it third. Same pair as the layer above,
+    # one level down.
+    "nn.functional": 2,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
@@ -151,7 +154,7 @@ UNALIGNED = {
     # and can be judged now -- six of the six that moved here are the norms,
     # whose eager forms borch.ts spells differently. The count rose because the
     # measurement reaches further, not because anything parted.
-    "nn": 25,
+    "nn": 26,   # +1, EmbeddingBag: the core took torch's list, borch.ts has not
     "nn.functional": 1,
     "optim": 7,
     "optim.lr_scheduler": 3,
@@ -170,7 +173,7 @@ UNALIGNED = {
 # table, and it is deliberately a way that requires someone to write a sentence.
 RENAMED = {
     "Tensor": 30,
-    "nn": 19,   # +3, the same twelve becoming visible
+    "nn": 18,   # -1, EmbeddingBag left `renamed` for `unaligned`
     "nn.functional": 1,
     "optim": 1,
     "optim.lr_scheduler": 0,

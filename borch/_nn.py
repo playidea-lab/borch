@@ -2664,18 +2664,46 @@ class EmbeddingBag(Module):
     the bags have differing lengths.
     """
 
-    def __init__(self, num_embeddings, embedding_dim, mode="mean"):
+    def __init__(self, num_embeddings, embedding_dim, max_norm=None, norm_type=2.0,
+                 scale_grad_by_freq=False, mode="mean", sparse=False, _weight=None,
+                 include_last_offset=False, padding_idx=None, device=None,
+                 dtype=None):
+        """**`mode` sits sixth, where torch has it.**
+
+        It used to be third, so `EmbeddingBag(10, 3, "sum")` set `max_norm="sum"`
+        in torch and the mode here. Both sides then build a layer and return bags
+        of the right shape, and only the numbers differ.
+        """
         super().__init__()
+        _no_device_dtype("EmbeddingBag", device, dtype)
         self.num_embeddings, self.embedding_dim = num_embeddings, embedding_dim
+        self.max_norm, self.norm_type = max_norm, norm_type
+        self.scale_grad_by_freq, self.sparse = scale_grad_by_freq, sparse
         self.mode = mode
-        self.weight = Parameter(
-            _rng.standard_normal((num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE))
+        self.include_last_offset, self.padding_idx = include_last_offset, padding_idx
+        if _weight is None:
+            table = _rng.standard_normal(
+                (num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE)
+        else:
+            table = _np.asarray(_weight.data if hasattr(_weight, "data") else _weight,
+                                dtype=_DEFAULT_DTYPE)
+            if table.shape != (num_embeddings, embedding_dim):
+                raise ValueError(
+                    "Shape of weight does not match num_embeddings and embedding_dim")
+        self.weight = Parameter(table)
 
     def forward(self, idx, offsets=None, per_sample_weights=None):
         # `F.embedding_bag` does the computation — the layer and the function
-        # are not kept as two copies.
-        return embedding_bag(idx, self.weight, offsets, self.mode,
-                             per_sample_weights)
+        # are not kept as two copies. **By keyword**: this call passed `mode`
+        # fourth, and the day the function took torch's order it would have been
+        # handing it to `max_norm`.
+        return embedding_bag(
+            idx, self.weight, offsets, max_norm=self.max_norm,
+            norm_type=self.norm_type, scale_grad_by_freq=self.scale_grad_by_freq,
+            mode=self.mode, sparse=self.sparse,
+            per_sample_weights=per_sample_weights,
+            include_last_offset=self.include_last_offset,
+            padding_idx=self.padding_idx)
 
     def __repr__(self):
         return (f"EmbeddingBag({self.num_embeddings}, {self.embedding_dim}, "

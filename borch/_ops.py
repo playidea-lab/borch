@@ -6956,32 +6956,90 @@ def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
     return normed
 
 
-def embedding_bag(idx, weight, offsets=None, mode="mean", per_sample_weights=None,
-                  **_):
+def _renorm_rows(weight, ids, max_norm, norm_type):
+    """torch's `max_norm`: the rows that were looked up and are too long are
+    shortened, **in the table itself.**
+
+    It is a side effect on a parameter, which is unusual enough to be worth
+    saying: `embedding_bag(idx, w, max_norm=1.0)` leaves `w` changed. torch does
+    exactly this (measured), and a version that renormalised a copy would agree on
+    the output of the first call and part on the second.
+    """
+    rows = _np.unique(_np.asarray(ids).astype(int).reshape(-1))
+    data = weight.data
+    lengths = _np.linalg.norm(data[rows], ord=norm_type, axis=1)
+    over = rows[lengths > max_norm]
+    if over.size:
+        scale = max_norm / (lengths[lengths > max_norm] + 1e-7)
+        data[over] = data[over] * scale.reshape(-1, 1)
+
+
+def embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
+                  scale_grad_by_freq=False, mode="mean", sparse=False,
+                  per_sample_weights=None, include_last_offset=False,
+                  padding_idx=None):
     """One row per bag. Selecting from the table and **combining** is all one
     function.
 
     Given `offsets`, a 1-D row of indices is cut into bags — the case where the
     bags have differing lengths. `per_sample_weights` is used in torch under
     `mode='sum'` alone.
+
+    **`mode` sits sixth, where torch has it.** It used to be third, so
+    `embedding_bag(idx, w, offsets, "sum")` set `max_norm="sum"` in torch and the
+    mode here — the same call, two meanings, and both sides return a bag of the
+    right shape.
     """
+    idx, weight = _wrap(idx), _wrap(weight)
+    if scale_grad_by_freq:
+        _unsupported("embedding_bag(scale_grad_by_freq=True)")
+    if sparse:
+        _unsupported("embedding_bag(sparse=True) — there is no sparse gradient here")
+    if max_norm is not None:
+        _renorm_rows(weight, idx.data, max_norm, norm_type)
     picked = embedding(idx, weight)
     if per_sample_weights is not None:
         picked = picked * _wrap(per_sample_weights).reshape(
             *_wrap(per_sample_weights).data.shape, 1)
 
-    def squash(part, dim):
+    # **`padding_idx` leaves the bag rather than contributing zero to it.** Under
+    # `sum` those are the same thing; under `mean` they are not, because the
+    # padded entry has to leave the denominator too (measured against torch).
+    keep = None
+    if padding_idx is not None:
+        keep = (_np.asarray(idx.data).astype(int) != padding_idx).astype(_DEFAULT_DTYPE)
+        picked = picked * _wrap(keep).reshape(*keep.shape, 1)
+
+    def squash(part, dim, mask=None):
         if mode == "sum":
             return part.sum(dim=dim)
         if mode == "max":
             return amax(part, dim=dim)
-        return part.mean(dim=dim)
+        if mask is None:
+            return part.mean(dim=dim)
+        counted = _np.maximum(mask.sum(axis=dim, keepdims=True), 1.0)
+        return part.sum(dim=dim) / _wrap(counted.reshape(-1, 1) if dim == 1
+                                         else counted.reshape(1, -1)[0])
 
     if offsets is None:
-        return squash(picked, dim=1)
-    bounds = [int(v) for v in _wrap(offsets).data] + [int(_wrap(idx).data.size)]
-    return stack([squash(picked[bounds[i]:bounds[i + 1]], dim=0)
-                  for i in range(len(bounds) - 1)], dim=0)
+        return squash(picked, dim=1, mask=keep)
+    bounds = [int(v) for v in _np.asarray(_wrap(offsets).data).reshape(-1)]
+    # **`include_last_offset` means the last entry closes the final bag** rather
+    # than opening a new one — so the count of bags is one fewer than the offsets,
+    # not one more than the gaps between them.
+    if not include_last_offset:
+        bounds = bounds + [int(idx.data.size)]
+    parts = []
+    for i in range(len(bounds) - 1):
+        lo, hi = bounds[i], bounds[i + 1]
+        piece = picked[lo:hi]
+        piece_mask = None if keep is None else keep[lo:hi].reshape(-1, 1)
+        if mode == "mean" and piece_mask is not None:
+            total = max(float(piece_mask.sum()), 1.0)
+            parts.append(piece.sum(dim=0) / _wrap(_np.array(total, dtype=_DEFAULT_DTYPE)))
+        else:
+            parts.append(squash(piece, dim=0))
+    return stack(parts, dim=0)
 
 
 def gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
