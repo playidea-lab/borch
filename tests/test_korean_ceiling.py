@@ -45,7 +45,7 @@ SUFFIXES = (".ts", ".py", ".html")
 # Measured 2026-08-22. Lower these after a translation pass; see the module docstring
 # before raising one.
 CEILINGS = {
-    "borch-ts/src": 45480,
+    "borch-ts/src": 41245,      # nn.ts: 4,244 → 9 (two golden case names cited)
     "borch-ts/test": 52721,
 }
 

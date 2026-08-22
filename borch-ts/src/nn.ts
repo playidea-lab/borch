@@ -25,43 +25,48 @@ import {
 } from "./tensor.js";
 
 /**
- * 가중치 초기화.
+ * Weight initialisation.
  *
- * **없으면 학습이 안 된다.** 0 으로 시작하면 같은 층의 뉴런들이 같은 기울기를 받아
- * 영원히 같은 값으로 움직인다 — ResNet 을 그렇게 돌리면 손실이 ln(10)=2.303 에
- * 붙은 채로 스텝만 지나간다. 실제로 그 상태로 벤치를 냈고, 골든 798건은 그것을
- * 못 잡았다: 케이스마다 가중치를 밖에서 넣어 주기 때문에 초기값을 아무도 안 본다.
+ * **Without it nothing learns.** Starting at 0, the neurons of one layer receive the
+ * same gradient and move to the same value forever — run ResNet that way and the loss
+ * sits at ln(10)=2.303 while the steps go by. A bench was actually published in that
+ * state, and 798 golden cases did not catch it: every case plants the weights from
+ * outside, so nobody looks at the initial values.
  *
- * torch 의 기본과 같은 식이다 — `kaiming_uniform_(a=√5)` 는 경계가 `1/√fan_in` 으로
- * 접히고, 편향도 같은 경계의 균등분포다.
+ * The formula is torch's default — `kaiming_uniform_(a=√5)` folds the bound down to
+ * `1/√fan_in`, and the bias is uniform over the same bound.
  *
- * **난수기는 torch 와 다르다.** 같을 수가 없고, 같은 척해서도 안 된다. 골든은 초기값을
- * 안 묻고 가중치를 늘 밖에서 넣으므로 여기서 갈릴 것이 없다.
+ * **The generator is not torch's.** It cannot be, and it must not pretend to be. The
+ * golden does not ask about initial values and always plants the weights, so there is
+ * nothing here to diverge.
  */
-// **난수기는 `random.ts` 로 옮겼다.** 층 초기화와 `Tensor.randn` 이 같은 줄기를
-// 써야 씨앗 하나가 전부를 되돌린다. 여기 갇혀 있으면 `tensor.ts` 가 못 부른다 —
-// 부르면 순환이다.
+// **The generator moved to `random.ts`.** Layer initialisation and `Tensor.randn`
+// have to draw from one stream for a single seed to reset everything. Kept in here,
+// `tensor.ts` cannot call it — calling would be a cycle.
 //
-// **dropout 도 같이 되돌린다.** 그쪽은 부를 때마다 오르는 계수기를 따로 들고 있어서,
-// 안 건드리면 씨앗을 심어도 마스크가 매번 달라진다 — "같은 씨앗에 같은 결과" 를
-// 기대하는 사람이 가장 먼저 확인하는 자리가 층 초기화와 dropout 이다. 코어도 같은
-// 갈래의 결함을 갖고 있었고 같은 케이스가 둘 다 잡았다.
+// **Dropout is reset with it.** That side holds its own counter that rises on every
+// call, so left alone, planting a seed still gives a different mask each time — layer
+// initialisation and dropout are the first two places somebody expecting "same seed,
+// same result" looks. The core carried a defect of the same family, and one case
+// caught both.
 //
-// **씨앗 값을 실어야 한다.** 여기서 늘 1 로 되돌렸었는데, 그러면 씨앗을 바꿔도
-// 마스크가 안 바뀐다 — 씨앗 다섯 개로 분산을 재는 사람이 가중치 초기화만 흔들린 수를
-// 실험 분산으로 읽는다. 황금비 상수로 한 번 섞는 것은 두 줄기(호스트 xorshift 와 GPU
-// 해시)가 같은 수에서 출발해 우연히 붙어 움직이지 않게 하려는 것이다.
+// **The seed value has to be carried in.** This used to reset to 1 every time, and
+// then changing the seed does not change the mask — somebody measuring variance over
+// five seeds reads a number that only the weight initialisation moved as experimental
+// variance. Mixing once with the golden-ratio constant keeps the two streams (the host
+// xorshift and the GPU hash) from starting at the same number and moving together by
+// coincidence.
 onSeed((seed) => { Tensor.dropoutSeed = ((seed ^ 0x9e3779b9) >>> 0) || 1; });
 
 export { manualSeed } from "./random.js";
 
-/** `[-bound, bound]` 균등분포로 채운 텐서. */
+/** A tensor filled uniformly over `[-bound, bound]`. */
 function uniform(shape: readonly number[], bound: number): Tensor {
   const n = shape.reduce((a, b) => a * b, 1);
   return Tensor.from(uniformArray(n, bound), shape);
 }
 
-/** 들어오는 갈래 수. 가중치의 첫 축을 뺀 나머지의 곱이다. */
+/** How many paths arrive. The product of the weight's axes after the first. */
 function fanIn(shape: readonly number[]): number {
   return shape.slice(1).reduce((a, b) => a * b, 1);
 }
@@ -180,17 +185,19 @@ export abstract class Module {
    * Labels with the position name prefixed, as in `0.weight`.
    */
   namedParameters(prefix = ""): Record<string, Tensor> {
-    // **`children()` 만 덮어쓰면 그 자식은 안 배운다.**
+    // **Overriding `children()` alone leaves that child unlearned.**
     //
-    // 파라미터를 모으는 것은 `namedChildren()` 뿐이다. 둘이 어긋나면 층은 눈에
-    // 보이는데 파라미터가 안 잡히고, **예외도 경고도 없이 학습만** 그 자리에서
-    // 멈춘다 — 손실은 내려간다. 나머지가 대신 맞추기 때문이다.
+    // Only `namedChildren()` collects parameters. When the two disagree the layer is
+    // visible while its parameters are not picked up, and **with no exception and no
+    // warning, learning alone** stops at that place — the loss still goes down,
+    // because the rest compensates.
     //
-    // 벤치의 ResNet-18 이 그 상태였다. 지름길을 평범한 객체(`{conv, bn}`)에 담고
-    // `children()` 에만 적어 두어서, 지름길 층 여섯이 한 번도 안 배운 채로 에폭
-    // 시간을 재고 있었다. 그것을 붙잡은 것은 값 검사가 아니라 **죽은 텐서 가드**다 —
-    // 옵티마이저가 못 보는 잎은 `zeroGrad()` 도 못 받아 지난 스텝의 기울기가 남고,
-    // 그 버퍼는 이미 통에 돌아간 것이었다.
+    // The bench's ResNet-18 was in that state. The shortcut was held in a plain object
+    // (`{conv, bn}`) and written into `children()` only, so six shortcut layers were
+    // never learning while the epoch time was being measured. What caught it was not a
+    // value check but **the dead-tensor guard** — a leaf the optimiser cannot see never
+    // receives `zeroGrad()`, so the previous step's gradient stays, and that buffer had
+    // already gone back to the pool.
     const kids = this.namedChildren();
     const listed = this.children().length;
     if (listed !== Object.keys(kids).length) {
@@ -241,10 +248,10 @@ export abstract class Module {
    * training runs while the parameters do not move.
    */
   loadStateDict(values: Readonly<Record<string, Tensor>>, strict = true): void {
-    // **버퍼도 받는다.** 내보내는 것과 받는 것이 다르면 자기가 저장한 파일을
-    // 자기가 못 읽는다 — `stateDict()` 는 버퍼를 실어 보내는데 여기는
-    // `namedParameters()` 만 보고 있어서 strict 로는 "모르는 이름" 이 났다.
-    // 저장과 복원은 **같은 목록**을 봐야 한다.
+    // **Buffers are accepted too.** When what goes out differs from what comes in, a
+    // file cannot be read back by the thing that wrote it — `stateDict()` sends the
+    // buffers out while this looked at `namedParameters()` alone, so strict mode raised
+    // "unknown name". Saving and restoring have to look at **the same list**.
     const own = { ...this.namedParameters(), ...this.namedBuffers() };
     for (const [name, src] of Object.entries(values)) {
       const dst = own[name];
@@ -275,12 +282,12 @@ export abstract class Module {
    */
   registerBuffer(name: string, value: Tensor, persistent = true): void {
     this.bufferNames.set(name, persistent);
-    // 구역이 닫혀도 살아야 한다 — 파라미터가 아니라 아무도 안 잡아 준다.
+    // It has to survive the scope closing — it is not a parameter, so nobody holds it.
     keepAlive(value);
     (this as unknown as Record<string, Tensor>)[name] = value;
   }
 
-  /** 이름 → 저장되는가. 필드 자체는 층에 그대로 붙어 있고 여기는 표식만 든다. */
+  /** Name → is it saved. The field itself stays on the layer; this holds only the mark. */
   private readonly bufferNames = new Map<string, boolean>();
 
   /**
@@ -311,8 +318,9 @@ export abstract class Module {
 
   train(mode = true): this {
     this.training = mode;
-    // **`namedChildren` 으로 돈다.** 이름을 붙인 층이 `children` 을 안 덮어써도
-    // 모드가 내려가야 한다 — 안 그러면 학습은 멀쩡하고 추론만 틀린다.
+    // **It walks `namedChildren`.** The mode has to reach a named layer even when it
+    // does not override `children` — otherwise training is fine and inference alone is
+    // wrong.
     for (const c of Object.values(this.namedChildren())) c.train(mode);
     return this;
   }
@@ -362,8 +370,8 @@ export class Sequential extends Module {
 
   override forward(x: Tensor): Tensor {
     let cur = x;
-    // 안에서도 `call` 로 지난다 — 권하는 길을 라이브러리 자신이 안 가면 그 권함은
-    // 남이 볼 예시에서 지워진다.
+    // It goes through `call` internally too — a recommended path the library itself
+    // does not take is a recommendation erased from the example everybody reads.
     for (const layer of this.layers) cur = layer.call(cur);
     return cur;
   }
@@ -437,10 +445,10 @@ export class ModuleList extends Module {
 }
 
 /**
- * torch 의 순서 규칙. **평범한 객체는 열쇠를 정렬해서 넣는다.**
+ * torch's ordering rule. **A plain object goes in with its keys sorted.**
  *
- * 안 맞추면 `namedParameters` 의 순서가 갈리고 그것이 곧 `stateDict` 의 순서다 —
- * 골든이 실제로 이 자리를 잡았다(`{w, b}` 에 torch 는 `ws.b ws.w` 를 냈다).
+ * Unmatched, `namedParameters` diverges in order and that is exactly `stateDict`'s
+ * order — the golden caught this very place (for `{w, b}`, torch gave `ws.b ws.w`).
  */
 function sortedEntries<T>(obj: Readonly<Record<string, T>>): [string, T][] {
   return Object.entries(obj).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -617,8 +625,8 @@ export class Linear extends Module {
 
   constructor(inFeatures: number, outFeatures: number, bias = true) {
     super();
-    // 골든은 가중치를 밖에서 넣는다. 여기 초기값이 무엇이든 덮어쓰이지만,
-    // 안 넣고 쓰는 경우를 위해 0 이 아닌 값을 둔다.
+    // The golden plants the weights from outside, so whatever is here is overwritten
+    // — a non-zero value is left for the case where nobody plants anything.
     const bound = 1 / Math.sqrt(Math.max(1, inFeatures));
     this.weight = uniform([outFeatures, inFeatures], bound);
     this.bias = bias ? uniform([outFeatures], bound) : null;
@@ -627,7 +635,7 @@ export class Linear extends Module {
   }
 
   override ownParameters(): Record<string, Tensor> {
-    // **치우침이 없으면 열쇠도 없다.** 있는 척하면 `state_dict` 가 남의 것과 안 맞는다.
+    // **No bias, no key.** Pretending otherwise makes `state_dict` disagree with theirs.
     return this.bias
       ? { weight: this.weight, bias: this.bias }
       : { weight: this.weight };
@@ -725,10 +733,11 @@ export class ReLU extends Module {
   }
 }
 
-// ── 활성함수 층. 전부 텐서 메서드 하나를 감싼다. ────────────────────────────
+// ── Activation layers. Each wraps exactly one tensor method. ────────────────
 //
-// 감싸개가 **다른 함수를 부르는** 것이 이 부류의 유일한 실패 방식이고, 그것은 눈으로
-// 안 보이고 값으로만 갈린다 — 그래서 골든이 함수 꼴과 층 꼴을 따로 묻는다.
+// The one way this family fails is a wrapper **calling a different function**, and
+// that is invisible to the eye and diverges only in the values — which is why the
+// golden asks about the functional form and the layer form separately.
 
 export class Hardsigmoid extends Module {
   override forward(x: Tensor): Tensor {
@@ -858,15 +867,17 @@ export class GLU extends Module {
   }
 }
 
-// ── 결속이 손으로 메꾸고 있던 여덟. **이름은 껍데기인데 인자는 진짜다.** ─────
+// ── The eight the binding was filling in by hand. **The name is a shell and the
+//    arguments are real.** ────────────────────────────────────────────────────
 //
-// 파이썬 결속(`borch_webgpu/_nn.py`)이 텐서 메서드 위에 factory 로 만들어 두어서
-// 골든은 이 여덟이 없는 것을 **구조적으로 못 봤다** — 케이스가 전부 결속을 지나기
-// 때문이다. TypeScript 로 `new nn.GELU()` 를 쓰는 사람에게만 없는 이름이었다.
+// The Python binding (`borch_webgpu/_nn.py`) built these as factories over the tensor
+// methods, so the golden was **structurally unable to see** that these eight were
+// missing — every case goes through the binding. They were absent only for somebody
+// writing `new nn.GELU()` in TypeScript.
 //
-// 옮기면서 셋이 인자를 갖고 있는 것이 드러났다(실측): `GELU(approximate)` 는 식이
-// 통째로 다르고, `ELU(alpha)` 는 음수 쪽 크기를 정하고, `Softmax()` 의 기본 축은
-// **`-1` 이 아니다.**
+// Porting them showed that three carry arguments (measured): `GELU(approximate)` is a
+// wholly different formula, `ELU(alpha)` sets the size of the negative side, and
+// `Softmax()`'s default axis is **not `-1`.**
 
 export class SiLU extends Module {
   override forward(x: Tensor): Tensor {
@@ -938,13 +949,13 @@ export class GELU extends Module {
 }
 
 /**
- * `dim` 을 안 주었을 때 torch 가 고르는 축. **`-1` 이 아니다.**
+ * The axis torch picks when `dim` is not given. **It is not `-1`.**
  *
- * 랭크 1 → 0, 2 → 1, 3 → **0**, 4 → 1 (실측). torch 는 그 자리에서 경고까지 낸다.
+ * Rank 1 → 0, 2 → 1, 3 → **0**, 4 → 1 (measured). torch even warns at that point.
  *
- * **랭크 2 로만 물으면 이 규칙이 안 보인다** — 거기서는 `dim=1` 과 `dim=-1` 이 같은
- * 축이라 `-1` 을 기본값으로 두어도 답이 같다. 코어가 실제로 그렇게 두고 있었고,
- * 랭크 3 에서 조용히 다른 축을 접고 있었다.
+ * **Asking only at rank 2 hides this rule** — there `dim=1` and `dim=-1` are the same
+ * axis, so a default of `-1` gives the same answer. The core actually had it that way,
+ * and was quietly folding a different axis at rank 3.
  */
 function defaultSoftmaxDim(ndim: number): number {
   return ndim === 0 || ndim === 1 || ndim === 3 ? 0 : 1;
@@ -1110,13 +1121,14 @@ export class ConvTransposeND extends Module {
   }
 }
 
-/* ── 차원을 고정한 이름들 ───────────────────────────────────────────────
+/* ── The names with the dimension fixed ─────────────────────────────────
  *
- * `ConvTransposeND` 는 `spatial` 을 **인자로** 받는다. torch 는 그 수를 이름에 넣으
- * 므로, 여기서는 그 자리 하나를 고정하는 것이 곧 torch 의 이름이다.
+ * `ConvTransposeND` takes `spatial` **as an argument**. torch puts that number in the
+ * name, so fixing that one slot here *is* torch's name.
  *
- * 값은 이미 증명돼 있다 — 골든 `norm::nn.ConvTranspose{1,2,3}d` 세 건이 `ND` 판으로
- * 돌고 있었다. 없던 것은 계산이 아니라 이름이다.
+ * The values are already proven — the three golden cases
+ * `norm::nn.ConvTranspose{1,2,3}d` were running on the `ND` form. What was missing was
+ * the name, not the computation.
  */
 
 /** `torch.nn.ConvTranspose1d`. */
@@ -1190,7 +1202,8 @@ export function scaledDotProductAttention(
   const keyLen = key.shape[key.shape.length - 2] ?? 1;
   const scale = Tensor.full([], 1 / Math.sqrt(dim));
 
-  // 위 삼각을 막는 가림막. 0 과 큰 음수로 만들어 **더한다.**
+  // The mask that blocks the upper triangle. Built from 0 and a large negative, and
+  // **added.**
   let causal: Tensor | null = null;
   if (isCausal) {
     const rows: number[] = [];
@@ -1238,14 +1251,16 @@ export class MaxPool2d extends Module {
   }
 }
 
-/* ── 차원이 다른 짝들 ────────────────────────────────────────────────────
+/* ── The pairs that differ only in dimension ────────────────────────────
  *
- * **계산은 이미 있었고 층 이름만 없었다.** `x.maxPool1d(2)` 는 되는데
- * `new nn.MaxPool1d(2)` 는 안 되는 상태였다 — 교재를 그대로 따라 치면 거기서 멈춘다.
+ * **The computation was already there and only the layer name was missing.**
+ * `x.maxPool1d(2)` worked while `new nn.MaxPool1d(2)` did not — follow a textbook
+ * literally and you stop right there.
  *
- * 골든이 `ndim::nn.MaxPool1d` 로 값을 이미 붙잡고 있는데, borch.ts 쪽 케이스가 층이
- * 아니라 **텐서 메서드로** 답하고 있었다. 그래서 값은 증명돼 있고 이름은 없었다.
- * 케이스도 층을 지나가게 같이 고친다 — 안 그러면 이 이름들을 아무도 안 재게 된다.
+ * The golden was already holding the values as `ndim::nn.MaxPool1d`, but the borch.ts
+ * case was answering **through the tensor method** rather than the layer. So the values
+ * were proven and the name was absent. The cases are fixed to go through the layer as
+ * well — otherwise nobody ever measures these names.
  */
 
 /** `torch.nn.MaxPool1d`. */
@@ -1395,9 +1410,10 @@ export class FractionalMaxPoolND extends Module {
       throw new ValueError(
         "FractionalMaxPool takes either outputSize or outputRatio, not both.");
     }
-    // **받아만 놓고 버리지 않는다.** torch 는 이 깃발이 참이면 `forward` 가 쌍을
-    // 내는데, 여기 `forward` 는 텐서를 내기로 되어 있다(`Module` 의 약속). 조용히
-    // 값만 주는 대신 멈추고 `pool()` 로 보낸다.
+    // **Accepted and not discarded.** With this flag true torch's `forward` returns a
+    // pair, and `forward` here is committed to returning a tensor (`Module`'s promise).
+    // Rather than quietly handing back the value alone, it stops and sends you to
+    // `pool()`.
     if (returnIndices) {
       throw new RuntimeError(
         "returnIndices comes back from pool(x) — forward returns a single tensor.");
@@ -1579,7 +1595,8 @@ export class LayerNorm extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    // **모양이 안 맞으면 멈춘다.** 관대하면 잘못된 축을 조용히 접는다.
+    // **A shape that does not match stops.** Being lenient folds the wrong axis in
+    // silence.
     const tail = x.shape.slice(x.shape.length - this.dims);
     if (tail.length !== this.shape.length
       || tail.some((d, i) => d !== this.shape[i])) {
@@ -1618,14 +1635,15 @@ export class Upsample extends Module {
   }
 }
 
-// ── 되풀이의 한 걸음 ────────────────────────────────────────────────────
+// ── One step of the recurrence ─────────────────────────────────────────
 //
-// **이름이 층 쪽과 다르다.** 층은 `weight_ih_l0` 처럼 층 번호를 붙이고 셀은
-// `weight_ih` 다 — 셀에는 층이 없다. `stateDict` 열쇠가 그 이름이므로 틀리면
-// 체크포인트가 안 맞는다.
+// **The names differ from the layer's.** A layer attaches the layer number, as in
+// `weight_ih_l0`, and a cell is `weight_ih` — a cell has no layers. Those names are the
+// `stateDict` keys, so getting them wrong makes checkpoints disagree.
 //
-// 게이트 순서는 `Recurrent` 와 같은 것을 쓴다 — GRU 는 `r, z, n`, LSTM 은
-// `i, f, g, o` 다. 두 벌로 적으면 갈리는 날이 오고 그때 값만 조용히 틀린다.
+// The gate order is the one `Recurrent` uses — `r, z, n` for GRU, `i, f, g, o` for
+// LSTM. Written twice, a day comes when they diverge, and on that day only the values
+// are quietly wrong.
 
 export class RNNCellBase extends Module {
   readonly weightIh: Tensor;
@@ -1749,7 +1767,7 @@ export class LSTMCell extends RNNCellBase {
   }
 }
 
-// ── 나머지 층 ───────────────────────────────────────────────────────────
+// ── The remaining layers ───────────────────────────────────────────────
 
 export class Unfold extends Module {
   constructor(readonly kernel: number, readonly dilation = 1,
@@ -1823,8 +1841,8 @@ export class LocalResponseNorm extends Module {
   }
 
   override describe(): string {
-    // **파이썬 꼴로 찍는다.** `k=1` 이 아니라 `k=1.0` 이다 — JS 는 정수처럼 보이는
-    // 실수에서 소수점을 지우고, 골든은 글자를 굳혔다.
+    // **Printed the way Python prints it.** `k=1.0`, not `k=1` — JS drops the decimal
+    // point on a float that looks like an integer, and the golden froze the characters.
     const py = (v: number) => (Number.isInteger(v) ? `${v}.0` : String(v));
     return `LocalResponseNorm(${this.size}, alpha=${this.alpha}, ` +
       `beta=${py(this.beta)}, k=${py(this.k)})`;
@@ -1853,10 +1871,11 @@ export class RReLU extends Module {
 }
 
 /**
- * 옛 이름 둘.
+ * The two old names.
  *
- * **`UpsamplingBilinear2d` 는 `alignCorners=true` 다** — `Upsample(bilinear)` 의
- * 기본값과 다르다. 이름만 보고 별명으로 두면 가장자리가 어긋난다.
+ * **`UpsamplingBilinear2d` is `alignCorners=true`** — different from
+ * `Upsample(bilinear)`'s default. Treated as an alias on the strength of the name
+ * alone, the edges come out misaligned.
  */
 class UpsamplingBase extends Module {
   constructor(readonly label: string, readonly scale: number,
@@ -1900,7 +1919,8 @@ export class EmbeddingBag extends Module {
   }
 
   override forward(idx: Tensor): Tensor {
-    // 계산은 `embeddingBag` 이 한다 — 층과 함수를 두 벌로 두지 않는다.
+    // `embeddingBag` does the computation — the layer and the function are not two
+    // copies of it.
     return embeddingBag(idx, this.weight, null, this.mode);
   }
 
@@ -1920,9 +1940,10 @@ export class EmbeddingBag extends Module {
   }
 }
 
-// ── 자리 옮기기·채널째 dropout ──────────────────────────────────────────
+// ── Moving elements, and dropout by channel ────────────────────────────
 //
-// 여덟 층이 전부 텐서 메서드 하나를 부른다. 갈리는 것은 넘길 인자와 찍는 글자뿐이다.
+// All eight layers call exactly one tensor method. What differs is the arguments passed
+// and the characters printed.
 
 export class PixelShuffle extends Module {
   constructor(readonly factor: number) { super(); }
@@ -1942,7 +1963,7 @@ export class ChannelShuffle extends Module {
   override describe(): string { return `ChannelShuffle(groups=${this.groups})`; }
 }
 
-/** 채널째 떨구는 것들의 뿌리. **`inplace` 까지 찍는다** — torch 가 그렇다. */
+/** The root of the drop-by-channel family. **It prints `inplace` too** — torch does. */
 class FeatureDropoutBase extends Module {
   constructor(
     readonly label: string,
@@ -1978,15 +1999,16 @@ export class FeatureAlphaDropout extends FeatureDropoutBase {
   constructor(p?: number) { super("FeatureAlphaDropout", p, true, true); }
 }
 
-// ── 게으른 층 ───────────────────────────────────────────────────────────
+// ── Lazy layers ────────────────────────────────────────────────────────
 //
-// **모양을 첫 forward 에서 알아낸다.** `new nn.LazyLinear(3)` 은 들어오는 크기를 안
-// 받고 처음 지나가는 값을 보고 정한다 — 합성곱 뒤에 몇 채널이 나오는지를 손으로 세는
-// 일이 사라진다.
+// **The shape is learned at the first forward.** `new nn.LazyLinear(3)` takes no input
+// size and decides from the first value that passes through — which removes the job of
+// counting by hand how many channels come out of a convolution.
 //
-// **굳으면 딴 것이 된다.** torch 는 첫 forward 뒤에 그 물건의 클래스를 바꿔 버린다.
-// 여기서는 프로토타입을 갈아 끼우고 속을 옮겨 같은 자리를 짚는다 — 새 물건을
-// 돌려주면 이미 붙잡아 둔 쪽이 옛것을 계속 들고 있게 된다.
+// **Once it sets, it becomes something else.** After the first forward torch changes
+// the object's class outright. Here the prototype is swapped and the innards moved, so
+// the same object is still the one you hold — handing back a new object would leave
+// whoever already captured it holding the old one.
 
 export class LazyModule extends Module {
   private built: Module | null = null;
@@ -1996,7 +2018,7 @@ export class LazyModule extends Module {
      * The text to print before it solidifies. `describe()` uses it.
      */
     readonly label: string,
-    /** 알아낸 크기로 진짜 층을 만든다. */
+    /** Builds the real layer from the size that was learned. */
     private readonly build: (inferred: number) => Module,
     /**
      * What to read off the input. Linear reads the last axis; the rest read
@@ -2014,7 +2036,8 @@ export class LazyModule extends Module {
   override forward(x: Tensor): Tensor {
     if (!this.built) {
       const real = this.build(this.read(x));
-      // 속을 옮기고 프로토타입을 갈아 끼운다 — 이 뒤로 이 물건은 진짜 층이다.
+      // Move the innards and swap the prototype — after this the object is the real
+      // layer.
       Object.assign(this, real);
       Object.setPrototypeOf(this, Object.getPrototypeOf(real));
       return (this as unknown as Module).forward(x);
@@ -2027,7 +2050,7 @@ export class LazyModule extends Module {
   }
 }
 
-/** 입력에서 무엇을 읽을지. */
+/** What to read out of the input. */
 const lastAxis = (x: Tensor) => x.shape[x.shape.length - 1] ?? 0;
 const channels = (x: Tensor) => x.shape[1] ?? 0;
 
@@ -2038,9 +2061,10 @@ export class LazyLinear extends LazyModule {
   }
 }
 
-// 이름을 붙여 열둘. **찍어내는 함수로 두지 않는다** — 익명 클래스를 내보내면
-// TypeScript 가 `Module` 의 비공개 자리를 이유로 거절한다. 패딩 층에서 같은 벽을
-// 만났고, 상속을 무너뜨리는 것보다 세 줄씩 적는 편이 싸다.
+// Twelve, each with a name. **Not written as a factory** — exporting an anonymous
+// class makes TypeScript refuse on the grounds of `Module`'s private members. The
+// padding layers met the same wall, and three lines each is cheaper than breaking the
+// inheritance to get around it.
 class LazyConvBase extends LazyModule {
   constructor(spatial: number, transpose: boolean, outC: number, kernel: number,
               stride = 1, padding = 0, bias = true) {
@@ -2103,14 +2127,15 @@ export class LazyInstanceNorm3d extends LazyNormBase {
   constructor(eps?: number) { super("instance", 3, eps); }
 }
 
-// ── 손실 층 ─────────────────────────────────────────────────────────────
+// ── Loss layers ────────────────────────────────────────────────────────
 //
-// **전부 같은 모양이다** — 만들 때 인자를 받아 두고 부를 때 텐서 메서드로 넘긴다.
-// torch 의 손실 층이 하는 일이 그것뿐이라, 층마다 `forward` 를 적으면 같은 두 줄을
-// 열세 번 적는 것이 된다.
+// **They all have one shape** — hold the arguments at construction, hand them to a
+// tensor method at the call. That is all torch's loss layers do, so writing a `forward`
+// per layer would be writing the same two lines thirteen times.
 //
-// **torch 는 손실 층을 인자 없이 찍는다** — `HuberLoss(delta=0.5)` 도 `HuberLoss()`
-// 로 나온다(실측). 글자가 답의 일부라 그대로 따른다.
+// **torch prints a loss layer with no arguments** — even `HuberLoss(delta=0.5)` comes
+// out as `HuberLoss()` (measured). The characters are part of the answer, so this
+// follows.
 
 /**
  * Softmax for a very large vocabulary. **It makes frequent tokens cheap.**
@@ -2246,8 +2271,9 @@ export function ctcLoss(
   for (let i = 0; i < targets.length; i++) {
     const labels = (targets[i] ?? []).slice(0, targetLengths[i] ?? 0);
     const nTime = inputLengths[i] ?? 0;
-    // 붙어 있는 같은 글자마다 공백 한 칸이 더 든다. 그보다 짧으면 정렬이 하나도
-    // 없어서 확률이 0 이고 손실이 무한이다 — 문턱값이 아니라 실제 조건이다.
+    // Each repeated character that touches its neighbour costs one more blank. Shorter
+    // than that and there is no alignment at all, so the probability is 0 and the loss
+    // is infinite — an actual condition, not a threshold.
     let needs = labels.length;
     for (let k = 1; k < labels.length; k++) if (labels[k] === labels[k - 1]) needs++;
     divisors.push(Math.max(labels.length, 1));
@@ -2299,13 +2325,15 @@ export class CTCLoss {
   describe(): string { return "CTCLoss()"; }
 }
 
-// **흔한 손실 층 넷이 없었다.** `HuberLoss`·`KLDivLoss`·`TripletMarginLoss` 같은
-// 드문 것은 있는데 `MSELoss`·`L1Loss`·`SmoothL1Loss`·`BCEWithLogitsLoss` 가 없었다 —
-// `reduction` 때와 **같은 방향의 뒤집힘**이 층 이름에서 한 번 더 나온 자리다.
-// 나중에 쓴 것이 torch 를 따랐고 처음 자리가 안 채워졌다.
+// **Four common loss layers were missing.** The rare ones — `HuberLoss`, `KLDivLoss`,
+// `TripletMarginLoss` — were present while `MSELoss`, `L1Loss`, `SmoothL1Loss` and
+// `BCEWithLogitsLoss` were not: **the same inversion as `reduction`**, appearing once
+// more in the layer names. What was written later followed torch, and the first places
+// were never filled in.
 //
-// 파이썬 결속은 텐서 메서드 위에 스스로 만들어 두어 멀쩡했다. 그래서 **TypeScript
-// 로 직접 쓰는 사람에게만** 없었고, 골든도 결속을 지나므로 안 물었다.
+// The Python binding built them over the tensor methods itself and was fine. So they
+// were missing **only for somebody writing TypeScript directly**, and the golden goes
+// through the binding, so it never asked.
 
 export class MSELoss {
   constructor(readonly reduction: Reduction = "mean") {}
@@ -2678,9 +2706,9 @@ export class PadNd extends Module {
   }
 }
 
-// 이름을 붙여 열다섯. **찍어내는 함수로 두지 않는다** — 익명 클래스를 내보내면
-// TypeScript 가 `Module` 의 비공개 자리를 이유로 거절하고, 그 자리를 열려고 상속을
-// 무너뜨리는 것보다 세 줄씩 적는 편이 싸다.
+// Fifteen, each with a name. **Not written as a factory** — exporting an anonymous
+// class makes TypeScript refuse on the grounds of `Module`'s private members, and three
+// lines each is cheaper than breaking the inheritance to open that up.
 export class ReflectionPad1d extends PadNd {
   constructor(p: number | readonly number[]) { super("ReflectionPad1d", p, "reflect", 1); }
 }
@@ -2740,30 +2768,36 @@ export class ConstantPad3d extends PadNd {
 }
 
 /**
- * 채널마다 정규화. **학습 모드와 평가 모드가 다르다.**
+ * Normalises per channel. **Training mode and evaluation mode differ.**
  *
- * 학습 때는 이 배치의 통계로 정규화하면서 이동 통계를 갱신하고, 평가 때는 이동
- * 통계를 쓴다. 저장하고 복원한 뒤 평가 모드로 넘어가는 경로에서만 그 차이가
- * 드러나는데, 코어가 겪은 결함이 정확히 거기였다 — 이동 통계가 `state_dict` 에서
- * 빠져서 학습은 멀쩡하고 추론만 틀렸다.
+ * In training it normalises with this batch's statistics while updating the running
+ * ones; in evaluation it uses the running statistics. The difference shows only on the
+ * path that saves, restores and then switches to evaluation, and that is exactly where
+ * the core's defect sat — the running statistics were left out of `state_dict`, so
+ * training was fine and inference alone was wrong.
  */
 /**
- * 차원 수에 상관없는 배치 정규화. `BatchNorm1d`·`2d`·`3d` 가 전부 이것이다.
+ * Batch normalisation with no regard for the number of dimensions. `BatchNorm1d`, `2d`
+ * and `3d` are all this.
  *
- * 접는 축이 배치와 공간 전부이고 채널만 남는다 — 공간 축이 몇 개든 규칙이 같아서
- * 차원마다 클래스를 세울 이유가 없다.
+ * The axes folded are the batch and all the spatial ones, leaving the channel — the
+ * rule is the same however many spatial axes there are, so there is no reason to stand
+ * up a class per dimension.
  */
-// ── 공간 변환기 ──────────────────────────────────────────────────────────
+// ── The spatial transformer ────────────────────────────────────────────
 //
-// `affineGrid` 가 "출력의 이 칸은 입력의 어디를 보는가" 를 적은 격자를 만들고,
-// `gridSample` 이 그 자리에서 값을 떠 온다. 사이의 `theta` 가 학습된다.
+// `affineGrid` builds a grid saying "this cell of the output looks at where in the
+// input", and `gridSample` lifts the value from that place. The `theta` between them is
+// what learns.
 //
-// **새 커널을 안 쓴다.** 자리 번호도 텐서로 둘 수 있어서(`floor` 한 값을
-// `indexSelect` 의 번호로 넘긴다) 있는 연산만으로 짜인다. 작은 커널이 여럿 도는
-// 대신 입력과 격자 양쪽 기울기가 저절로 따라온다 — 흩뿌리는 역방향을 손으로 적으면
-// 스레드끼리 같은 칸에 쓰게 되고, 그 답은 실행마다 달라질 수 있다.
+// **No new kernel.** The positions can be tensors too (a `floor`ed value is handed to
+// `indexSelect` as its index), so it is built from operations that already exist. In
+// exchange for several small kernels running, the gradients for both the input and the
+// grid follow by themselves — writing the scattering backward by hand has threads
+// writing to the same cell, and that answer can differ from run to run.
 
-/** `[-1, 1]` 위의 표본 자리. `alignCorners` 가 끝을 못 박느냐 칸 가운데를 잡느냐를 가른다. */
+/** Sample positions over `[-1, 1]`. `alignCorners` decides between pinning the ends
+ *  and taking cell centres. */
 function gridBase(n: number, alignCorners: boolean): number[] {
   if (alignCorners) {
     if (n <= 1) return [0];
@@ -2789,12 +2823,13 @@ export function affineGrid(
   const w = size[3] ?? 1;
   const xs = gridBase(w, alignCorners);
   const ys = gridBase(h, alignCorners);
-  // 균질좌표 `(x, y, 1)` — 이동까지 한 번의 곱으로 끝낸다.
+  // Homogeneous coordinates `(x, y, 1)` — the translation lands in the same product.
   const flat: number[] = [];
   for (let i = 0; i < h; i++) {
     for (let j = 0; j < w; j++) flat.push(xs[j] ?? 0, ys[i] ?? 0, 1);
   }
-  // 배치마다 같은 격자에 제 `theta` 를 곱한다. `bmm` 이 3 차원끼리라 배치를 맞춰 편다.
+  // Each batch multiplies the same grid by its own `theta`. `bmm` works on 3-D pairs,
+  // so the batch is expanded to match.
   const base = Tensor.from(flat, [h * w, 3]);
   const parts: Tensor[] = [];
   for (let b = 0; b < n; b++) {
@@ -2803,7 +2838,7 @@ export function affineGrid(
   return Tensor.stack(parts, 0).reshape([n, h, w, 2]);
 }
 
-/** `[-1, 1]` 을 입력의 칸 번호로. `gridBase` 의 반대다. */
+/** `[-1, 1]` into the input's cell index. The reverse of `gridBase`. */
 function gridDenorm(g: Tensor, n: number, alignCorners: boolean): Tensor {
   if (alignCorners) return g.add(Tensor.full([], 1)).mul(Tensor.full([], (n - 1) / 2));
   return g.add(Tensor.full([], 1)).mul(Tensor.full([], n)).sub(Tensor.full([], 1))
@@ -2811,8 +2846,9 @@ function gridDenorm(g: Tensor, n: number, alignCorners: boolean): Tensor {
 }
 
 /**
- * 범위 밖을 **되접는다.** 되접는 구간이 `alignCorners` 로 갈린다 —
- * 참이면 `[0, n−1]`, 거짓이면 `[−0.5, n−0.5]` 다(실측). 되접은 뒤 한 번 더 자른다.
+ * **Reflects** what falls outside. The interval reflected in depends on
+ * `alignCorners` — `[0, n−1]` when true and `[−0.5, n−0.5]` when false (measured).
+ * After reflecting it clamps once more.
  */
 function gridReflect(v: Tensor, n: number, alignCorners: boolean): Tensor {
   const lo = alignCorners ? 0 : -0.5;
@@ -2858,7 +2894,8 @@ export function gridSample(
     sy = gridReflect(sy, H, alignCorners);
   }
 
-  // 평면마다의 시작 번호. `(N, C)` 를 미리 펴 두면 모서리마다 더하기만 하면 된다.
+  // The starting index per plane. With `(N, C)` flattened in advance, each corner is
+  // just an addition.
   const planeStart: number[] = [];
   for (let n = 0; n < N; n++) {
     for (let c = 0; c < C; c++) planeStart.push((n * C + c) * H * W);
@@ -2866,7 +2903,8 @@ export function gridSample(
   const starts = Tensor.from(planeStart, [N, C, 1]);
   const source = x.reshape([x.size]);
 
-  /** 모서리 하나를 떠 온다. **범위 밖은 0 이되 번호는 잘라서 넘긴다.** */
+  /** Lifts one corner. **Outside the range gives 0, and the index is clamped before
+   *  it is passed.** */
   const pick = (iy: Tensor, ix: Tensor): Tensor => {
     const inside = iy.binary("ge", Tensor.full([], 0))
       .mul(iy.binary("lt", Tensor.full([], H)))
@@ -2882,7 +2920,7 @@ export function gridSample(
 
   const shaped = (t: Tensor) => t.reshape([N, C, OH, OW]);
   if (mode === "nearest") {
-    // torch 는 반올림한다. 무게가 없으므로 격자로는 기울기가 안 간다.
+    // torch rounds. There are no weights, so no gradient reaches the grid.
     return shaped(pick(sy.round(), sx.round()));
   }
   const x0 = sx.floor();
@@ -2936,11 +2974,13 @@ export function batchNorm(
       runningVar.reshape(shape).binary("add", Tensor.full([], eps)).sqrt());
     return scaled.mul(w.reshape(shape)).add(b.reshape(shape));
   }
-  // **융합 커널로 간다.** 조립판은 층 하나에 dispatch 스무 개가 넘었고, ResNet 한
-  // 스텝의 1,636 개 중 태반이 거기서 나왔다(실측).
+  // **This goes through a fused kernel.** The assembled form cost more than twenty
+  // dispatches for one layer, and most of the 1,636 in a single ResNet step came from
+  // there (measured).
   const { out, mean, variance } = x.batchNormFused(w, b, eps);
   if (runningMean && runningVar) {
-    // 둘을 커널 하나로 갱신한다. 조립판은 층마다 여덟 dispatch 였고 층이 스무 개다.
+    // Both are updated by one kernel. The assembled form was eight dispatches per
+    // layer, across twenty layers.
     const count = x.size / channels;
     const unbias = count / (count - 1);
     const d = device();
@@ -3049,7 +3089,7 @@ export function gumbelSoftmax(
   noise: Tensor | null = null,
 ): Tensor {
   const axis = dim < 0 ? dim + logits.shape.length : dim;
-  // Gumbel 잡음 — `-log(-log(u))`. 균등난수 하나에서 만든다.
+  // Gumbel noise — `-log(-log(u))`. Built from a single uniform draw.
   const eps = 1e-10;
   const g = noise ?? Tensor.uniform(logits.shape)
     .binary("add", Tensor.full([], eps)).log().neg()
@@ -3067,26 +3107,30 @@ export class BatchNormND extends Module {
   readonly runningMean: Tensor;
   readonly runningVar: Tensor;
   /**
-   * 학습 모드로 지나간 횟수. **GPU 에 안 둔다 — 그냥 수다.**
+   * How many times it has passed through in training mode. **Not on the GPU — it is
+   * just a number.**
    *
-   * torch 는 이것을 0 차원 텐서 버퍼로 갖고 `state_dict` 에 넣는다. 우리는 이 값을
-   * 계산에 안 쓰므로(`momentum` 이 늘 수다) 텐서로 둘 이유가 없고, 텐서로 두면
-   * **BN 층마다 스텝당 dispatch 가 하나씩 는다** — ResNet-18 이면 스무 개다. 쓰지도
-   * 않는 값에 그 값을 낼 수 없다.
+   * torch keeps this as a 0-dimensional tensor buffer and puts it in `state_dict`. We
+   * never use the value in a computation (`momentum` is always a number), so there is
+   * no reason for it to be a tensor, and as a tensor it **adds one dispatch per step
+   * per BN layer** — twenty of them in ResNet-18. A value nobody uses cannot be worth
+   * that.
    *
-   * 그런데도 세는 이유는 `state_dict` 다. 이 열쇠가 없으면 torch·`borch` 가 낸
-   * 체크포인트를 **기본(strict)으로 못 읽는다.** 실제로 그랬다 — 골든이
-   * `container::BatchNorm/state_dict 열쇠` 로 그것을 잡았고, 그 전까지 열쇠를 묻는
-   * 케이스가 `Linear` 뿐이라 버퍼 갈래를 한 번도 안 물었다.
+   * It is counted anyway because of `state_dict`. Without this key a checkpoint written
+   * by torch or by `borch` **cannot be read in the default (strict) mode.** That
+   * actually happened — the golden caught it as
+   * `container::BatchNorm/state_dict 열쇠`, and until then the only case asking about
+   * keys was `Linear`, so the buffer branch had never been asked about.
    */
   private numBatchesTracked = 0;
   /**
-   * 불러온 체크포인트가 갖고 있던 횟수. **텐서로 들고 있는다.**
+   * The count the loaded checkpoint carried. **Held as a tensor.**
    *
-   * `item()` 이 비동기라 동기인 `loadStateDict` 안에서 수로 못 읽는다. 그렇다고
-   * 버리면 불러온 것을 **다시 저장할 때 0 이 나온다** — 아무도 안 읽는 값이 조용히
-   * 틀리는 것이라 제일 늦게 발견된다. 그래서 텐서인 채로 두고, 그 뒤로 지나간
-   * 횟수만 수로 세어 내보낼 때 한 번 더한다.
+   * `item()` is asynchronous, so it cannot be read as a number inside the synchronous
+   * `loadStateDict`. Discarding it instead makes **saving what was loaded write 0** —
+   * a value nobody reads going quietly wrong, which is the last kind to be found. So it
+   * stays a tensor, and only the passes since then are counted as a number and added
+   * once on the way out.
    */
   private trackedBase: Tensor | null = null;
 
@@ -3101,7 +3145,8 @@ export class BatchNormND extends Module {
     this.claim(this.weight, this.bias);
     this.runningMean = Tensor.owned([channels], 0);
     this.runningVar = Tensor.owned([channels], 1);
-    // 이동 통계는 기울기를 안 받지만 **구역이 닫혀도 살아야 한다.**
+    // The running statistics take no gradient, and **still have to survive the scope
+    // closing.**
     keepAlive(this.runningMean);
     keepAlive(this.runningVar);
   }
@@ -3121,12 +3166,13 @@ export class BatchNormND extends Module {
    * happened twice in this layer.
    */
   override namedBuffers(persistentOnly = false): Record<string, Tensor> {
-    void persistentOnly;                      // 이 층에는 안 싣는 버퍼가 없다
+    void persistentOnly;                      // no non-persistent buffer on this layer
     return {
       running_mean: this.runningMean,
       running_var: this.runningVar,
-      // 셀 때는 수였지만 내보낼 때는 텐서여야 한다 — 저장 형식이 텐서 사전이다.
-      // 부를 때마다 새로 만든다. `stateDict` 는 드물게 도는 길이라 값이 안 든다.
+      // A number while counting and a tensor on the way out — the saved format is a
+      // dictionary of tensors. Built fresh per call; `stateDict` is a rarely travelled
+      // path, so it costs nothing.
       num_batches_tracked: this.trackedBase === null
         ? Tensor.owned([], this.numBatchesTracked)
         : this.trackedBase.add(Tensor.owned([], this.numBatchesTracked)),
@@ -3142,7 +3188,8 @@ export class BatchNormND extends Module {
       if (name === "running_mean") noGrad(() => this.runningMean.copyFrom(src));
       else if (name === "running_var") noGrad(() => this.runningVar.copyFrom(src));
       else if (name === "num_batches_tracked") {
-        // 준 텐서를 그대로 붙잡지 않는다 — 구역이 닫히면 그 버퍼는 재활용된다.
+        // The given tensor is not captured as it is — when the scope closes that
+        // buffer is recycled.
         const base = Tensor.owned([], 0);
         noGrad(() => base.copyFrom(src));
         keepAlive(base);
@@ -3156,8 +3203,9 @@ export class BatchNormND extends Module {
 
   override forward(x: Tensor): Tensor {
     if (this.training) this.numBatchesTracked += 1;
-    // **계산은 `batchNorm` 이 한다.** 층과 함수가 각자 적으면 언젠가 갈리고,
-    // 갈리는 자리가 이동 통계라 학습은 멀쩡하고 평가만 틀린다.
+    // **`batchNorm` does the computation.** With the layer and the function each
+    // written out, a day comes when they diverge, and the place they diverge is the
+    // running statistics — so training is fine and evaluation alone is wrong.
     return batchNorm(x, this.runningMean, this.runningVar, this.weight,
       this.bias, this.training, this.momentum, this.eps);
   }
@@ -3210,7 +3258,8 @@ export class Recurrent extends Module {
     super();
     const gates = kind === "LSTM" ? 4 : kind === "GRU" ? 3 : 1;
     const rows = hidden * gates;
-    // torch 의 순환망은 은닉 크기로 경계를 잡는다 — 네 가중치가 같은 경계를 쓴다.
+    // torch's recurrent nets take the bound from the hidden size — all four weights
+    // use the same bound.
     const bound = 1 / Math.sqrt(Math.max(1, hidden));
     this.weightIh = uniform([rows, inputSize], bound);
     this.weightHh = uniform([rows, hidden], bound);
@@ -3246,7 +3295,7 @@ export class Recurrent extends Module {
       if (this.kind === "RNN") {
         h = gi.add(gh).unary("tanh");
       } else if (this.kind === "LSTM") {
-        // torch 의 게이트 순서는 i, f, g, o 다. 순서가 틀리면 값이 그럴듯하게 틀린다.
+        // torch's gate order is i, f, g, o. Wrong order makes the values plausibly wrong.
         const g = gi.add(gh);
         const i = slice(g, 0, H).unary("sigmoid");
         const f = slice(g, 1, H).unary("sigmoid");
@@ -3255,8 +3304,9 @@ export class Recurrent extends Module {
         c = f.mul(c).add(i.mul(gg));
         h = o.mul(c.unary("tanh"));
       } else {
-        // GRU 는 r, z 까지만 더하고 **n 게이트에서 갈린다** — 은닉 쪽 몫에 r 을 곱한 뒤
-        // 더한다. 다 더하고 나서 곱하면 값이 조용히 달라진다.
+        // GRU adds only through r and z and **parts ways at the n gate** — the hidden
+        // side's share is multiplied by r and then added. Adding first and multiplying
+        // afterwards changes the value silently.
         const r = slice(gi, 0, H).add(slice(gh, 0, H)).unary("sigmoid");
         const z = slice(gi, 1, H).add(slice(gh, 1, H)).unary("sigmoid");
         const n = slice(gi, 2, H).add(r.mul(slice(gh, 2, H))).unary("tanh");
@@ -3273,19 +3323,21 @@ export class Recurrent extends Module {
   }
 }
 
-/* ── 종류를 고정한 이름들 ───────────────────────────────────────────────
+/* ── The names with the kind fixed ──────────────────────────────────────
  *
- * `Recurrent` 는 종류를 **인자로** 받고 torch 는 그것을 이름으로 가른다. 그래서 이
- * 셋은 인자 하나를 고정한 것이고, 그것이 곧 torch 가 쓰는 이름이다.
+ * `Recurrent` takes the kind **as an argument** and torch splits it out into the name.
+ * So these three fix one argument, and that is exactly the name torch uses.
  *
- * 값은 이미 증명돼 있다 — 골든 `seq::{RNN,LSTM,GRU}/{출력,마지막상태}` 여섯 건이
- * `Recurrent` 로 돌고 있었다. 없던 것은 계산이 아니라 이름이고, **순환망 교재는
- * `nn.LSTM(...)` 으로 시작하므로** 그 첫 줄에서 멈추고 있었다.
+ * The values are already proven — the six golden cases
+ * `seq::{RNN,LSTM,GRU}/{출력,마지막상태}` were running on `Recurrent`. What was missing
+ * was the name rather than the computation, and **a recurrent-network textbook opens
+ * with `nn.LSTM(...)`**, so it stopped people on the first line.
  *
- * **torch 의 인자 전부를 받지는 않는다.** 저쪽은 `numLayers`·`batchFirst`·양방향·
- * 층간 드롭아웃도 받는데 여기 밑동은 한 층·시간 우선뿐이다. 받아 놓고 안 쓰면
- * 거짓말이 되므로 **아예 안 받는다** — 코어가 `InstanceNorm` 의
- * `track_running_stats` 에서 같은 자리를 같은 방법으로 지킨다.
+ * **It does not take all of torch's arguments.** That side also takes `numLayers`,
+ * `batchFirst`, bidirectional and inter-layer dropout, while the base here is one layer,
+ * time-first. Accepting an argument and not using it is a lie, so **it is not accepted
+ * at all** — the core holds the same line the same way at `InstanceNorm`'s
+ * `track_running_stats`.
  */
 
 /** `torch.nn.RNN` — one layer, time-first. */
@@ -3312,16 +3364,16 @@ export class GRU extends Recurrent {
   }
 }
 
-/** 게이트가 세로로 이어 붙어 있다 — `k` 번째 `H` 줄. */
+/** The gates are stacked vertically — the `k`th run of `H` rows. */
 function slice(g: Tensor, k: number, H: number): Tensor {
   return g.narrow(1, k * H, H);
 }
 
 /**
- * 여러 머리로 나눠 보는 어텐션.
+ * Attention split across several heads.
  *
- * 입력은 `(배치, 길이, 특징)` 이다(`batch_first=True`). 마스크는 **실수**다 —
- * 0 과 -inf 이고, "0 이 아니면 가림" 으로 뭉뚱그리면 여기서 갈린다.
+ * The input is `(batch, length, features)` (`batch_first=True`). The mask is a
+ * **float** — 0 and -inf — and lumping it into "non-zero means masked" diverges here.
  */
 /**
  * The function form of attention. Weights come from outside.
@@ -3358,7 +3410,7 @@ export function multiHeadAttentionForward(
   const head = E / numHeads;
   const scale = Tensor.full([], 1 / Math.sqrt(head));
 
-  /** 길이를 앞에 둔 것을 배치 앞으로 돌리고 투영한다. */
+  /** Turns length-first into batch-first and projects. */
   const project = (t: Tensor, len: number, slot: number): Tensor => {
     const flat = t.permute([1, 0, 2]).reshape([N * len, E]);
     const w = inWeight.narrow(0, slot * E, E);
@@ -3410,7 +3462,8 @@ export class MultiheadAttention extends Module {
     super();
     const bound = 1 / Math.sqrt(Math.max(1, embed));
     this.inWeight = uniform([3 * embed, embed], bound);
-    // torch 의 어텐션은 편향을 0 에서 시작한다 — 여기는 대칭이 안 깨질 자리가 아니다.
+    // torch's attention starts the bias at 0 — this is not a place where symmetry
+    // needs breaking.
     this.inBias = Tensor.owned([3 * embed], 0);
     this.outWeight = uniform([embed, embed], bound);
     this.outBias = Tensor.owned([embed], 0);
@@ -3493,17 +3546,17 @@ export class CrossEntropyLoss {
   describe(): string { return "CrossEntropyLoss()"; }
 }
 
-// ── torch.nn.functional 자리 ────────────────────────────────────────────
+// ── The place torch.nn.functional occupies ─────────────────────────────
 //
-// **`nn.functional` 로 낸다** — torch 의 경로가 `torch.nn.functional` 이므로
-// `const F = nn.functional` 한 줄이면 `F.conv2d(x, w, b)` 가 그대로 돈다.
+// **It is exported as `nn.functional`** — torch's path is `torch.nn.functional`, so one
+// line of `const F = nn.functional` makes `F.conv2d(x, w, b)` work unchanged.
 //
-// 이 파일이 이미 갖고 있던 자유 함수 여덟도 같이 모은다. 지금은 `nn.batchNorm` 과
-// `nn.Linear` 가 한 이름 공간에 섞여 있는데, torch 에서 앞은 `F.` 이고 뒤는 `nn.` 이다.
-// **옛 이름은 그대로 둔다** — 옮기는 것이 목적이지 깨는 것이 아니다.
+// The eight free functions this file already had are gathered in too. As it stands
+// `nn.batchNorm` and `nn.Linear` share one namespace, while in torch the first is `F.`
+// and the second is `nn.`. **The old names stay** — the point is to move, not to break.
 //
-// 방향이 하나다: `nn` → `functional` → `tensor`. `functional` 이 이 파일을 도로
-// 부르면 순환이 되므로, 여기 있는 여덟은 옮기지 않고 **여기서 묶기만** 한다.
+// There is one direction: `nn` → `functional` → `tensor`. `functional` calling back
+// into this file would be a cycle, so the eight here are **only gathered**, not moved.
 import * as delegated from "./functional.js";
 
 export const functional = {
