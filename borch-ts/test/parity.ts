@@ -1,10 +1,12 @@
 /**
- * torch 를 옮겨 적었을 때 도는가 — 파라미터 등록·파라미터 그룹·난수 팩토리.
+ * Does torch, transcribed, run — parameter registration, parameter groups, random
+ * factories.
  *
- * **골든이 이 셋을 못 잡는다.** 골든은 케이스마다 가중치를 밖에서 넣어 주므로
- * 파라미터가 어떻게 모이는지를 안 묻고, 초기값도 안 본다. 여기서 잡으려는 것은
- * 값이 아니라 **배선**이다 — 특히 첫 번째는 틀려도 예외가 안 나고 학습만 조용히
- * 안 되는 종류라 러너가 없으면 영영 안 보인다.
+ * **The golden cannot catch these three.** It plants the weights from outside for every
+ * case, so it never asks how parameters are gathered and never looks at an initial value.
+ * What is caught here is not a value but the **wiring** — and the first of the three
+ * raises nothing when it is wrong, it only stops the learning, quietly, so without a
+ * runner it is never seen at all.
  */
 
 import {
@@ -15,12 +17,13 @@ import {
 interface Check { name: string; ok: boolean; note: string }
 
 /**
- * 이 보고의 정본은 `checks` 다. `text` 는 사람이 읽는 그림자다.
+ * `checks` is the authority in this report. `text` is the shadow a person reads.
  *
- * **러너가 문장을 훑어 통과를 판정하고 있었다.** 그 방식은 문구가 바뀌면 조용히
- * 답을 바꾸고, `readme.py` 에서는 실제로 그랬다 — 두 예시 중 하나만 통과해도
- * 찾던 낱말이 다른 줄에 남아 있어 0 을 냈다. 상태를 그대로 넘기면 러너가 셀 수
- * 있고, 무엇이 실패했는지도 제 입으로 말한다.
+ * **The runner used to judge by scanning a sentence.** That way of judging changes its
+ * answer quietly when the wording changes, and in `readme.py` it did — with one of the two
+ * examples failing, the word it looked for was still sitting on another line, so it
+ * returned 0. Hand the state over as it is and the runner can count, and can say for
+ * itself which thing failed.
  */
 export interface Report { text: string; checks: Check[] }
 const checks: Check[] = [];
@@ -33,15 +36,16 @@ function near(a: number, b: number, tol: number): boolean {
   return Math.abs(a - b) <= tol;
 }
 
-/** 던져야 하는 자리. **안 던지는 것이 실패다** — 조용히 지나가면 값이 틀린다. */
+/** Where it has to throw. **Not throwing is the failure** — pass quietly and the value
+ * is wrong. */
 function wantThrow(name: string, fragment: string, body: () => unknown): void {
   try {
     body();
-    want(name, false, "안 던졌다");
+    want(name, false, "it did not throw");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     want(name, message.includes(fragment),
-      message.includes(fragment) ? "" : `문구가 다르다: ${message}`);
+      message.includes(fragment) ? "" : `different wording: ${message}`);
   }
 }
 
@@ -49,7 +53,8 @@ function same(a: Float32Array, b: Float32Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-/** 밖에서 층을 만드는 사람이 쓸 법한 모양. 등록을 손으로 안 적는다. */
+/** The shape somebody building a layer from outside would write. Registration is never
+ * spelled out by hand. */
 class Net extends nn.Module {
   fc1 = new nn.Linear(4, 8);
   fc2 = new nn.Linear(8, 2);
@@ -60,21 +65,22 @@ class Net extends nn.Module {
 }
 
 /**
- * **자식을 평범한 객체에 담으면 등록이 안 된다.** torch 도 그렇고(그래서
- * `nn.ModuleDict` 가 있다), 그 자체는 옳다. 잡아야 하는 것은 그 다음이다 —
- * `children()` 만 덮어써서 **둘이 어긋나는 것.**
+ * **A child put in a plain object is not registered.** torch is the same (which is why
+ * `nn.ModuleDict` exists) and by itself that is right. What has to be caught is what comes
+ * next — overriding `children()` alone, so that **the two disagree.**
  *
- * 파라미터를 모으는 것은 `namedChildren()` 이므로, `children()` 에만 적어 두면
- * 그 자식은 **예외 없이 학습만 안 된다.** 실제로 벤치의 ResNet-18 이 그 상태였고
- * 지름길 층 여섯이 한 번도 안 배웠다 — 손실은 내려갔다. 나머지가 대신 맞춘다.
+ * Parameters are gathered by `namedChildren()`, so a child written into `children()` only
+ * **stops learning, with no exception at all.** The bench's ResNet-18 was in exactly that
+ * state and six shortcut layers never learned once — and the loss went down. The rest
+ * compensate.
  */
 class SplitBrain extends nn.Module {
   readonly a = new nn.Linear(2, 2);
-  // 평범한 객체 — `namedChildren()` 의 `instanceof Module` 에 안 걸린다.
+  // A plain object — it does not catch on `namedChildren()`'s `instanceof Module`.
   readonly side = { fc: new nn.Linear(2, 2) };
 
   override children(): nn.Module[] {
-    return [this.a, this.side.fc];      // ← 여기에만 적혀 있다
+    return [this.a, this.side.fc];      // ← written here and nowhere else
   }
 
   override forward(x: Tensor): Tensor {
@@ -82,10 +88,10 @@ class SplitBrain extends nn.Module {
   }
 }
 
-/** 텐서 필드가 전부 파라미터인 것은 아니다. */
+/** Not every tensor field is a parameter. */
 class WithConstant extends nn.Module {
   weight = Tensor.from([2, 3], [2], { requiresGrad: true });
-  mask = Tensor.from([1, 0], [2]);          // 상수 — 옵티마이저가 밟으면 안 된다
+  mask = Tensor.from([1, 0], [2]);          // constant — no optimizer may step on it
 
   override forward(x: Tensor): Tensor {
     return x.mul(this.weight).mul(this.mask);
@@ -95,32 +101,34 @@ class WithConstant extends nn.Module {
 export async function report(): Promise<Report> {
   await init();
 
-  // ── 1. 파라미터 자동 등록 ─────────────────────────────────────────────
+  // ── 1. Parameters registering themselves ─────────────────────────────
   const net = new Net();
-  want("자식 층이 필드에서 잡힌다", net.children().length === 2);
-  want("파라미터가 전부 모인다", net.parameters().length === 4,
-    `${net.parameters().length} 개`);
+  want("child layers are picked up from the fields", net.children().length === 2);
+  want("every parameter is gathered", net.parameters().length === 4,
+    `${net.parameters().length} of them`);
 
   const names = Object.keys(net.namedParameters()).sort();
-  want("이름이 필드 이름을 쓴다",
+  want("the names are the field names",
     names.join(",") === "fc1.bias,fc1.weight,fc2.bias,fc2.weight", names.join(","));
 
   const wc = new WithConstant();
-  want("requiresGrad 가 파라미터의 표식이다",
+  want("requiresGrad is what marks a parameter",
     Object.keys(wc.ownParameters()).join(",") === "weight",
     Object.keys(wc.ownParameters()).join(","));
 
-  // **`children()` 과 `namedChildren()` 이 어긋나면 그 자식은 안 배운다.**
+  // **When `children()` and `namedChildren()` disagree, that child does not learn.**
   //
-  // 파라미터를 모으는 것은 `namedChildren()` 뿐이다. `children()` 만 덮어쓰면
-  // 층은 눈에 보이는데 파라미터는 안 잡히고, **예외도 경고도 없이 학습만** 그
-  // 자리에서 멈춘다. 손실은 내려간다 — 나머지가 대신 맞추기 때문이다.
+  // Only `namedChildren()` gathers parameters. Override `children()` alone and the layer
+  // is visible while its parameters are not picked up — **the learning, and nothing else,
+  // stops right there, with no exception and no warning.** The loss goes down, because the
+  // rest compensate.
   //
-  // 벤치의 ResNet-18 이 정확히 그 상태였다(지름길 층 여섯). 붙잡은 것은 값 검사가
-  // 아니라 **죽은 텐서 가드**였다: 옵티마이저가 못 보는 잎은 `zeroGrad()` 도 못
-  // 받으므로 지난 스텝의 기울기가 남고, 그것이 이미 통에 돌아간 버퍼였다.
+  // The bench's ResNet-18 was in exactly that state (six shortcut layers). What caught it
+  // was not a value check but the **dead-tensor guard**: a leaf the optimizer cannot see
+  // does not get `zeroGrad()` either, so last step's gradient stays, and that was a buffer
+  // already handed back to the pool.
   const split = new SplitBrain();
-  let splitNote = "안 멈췄다";
+  let splitNote = "it did not stop";
   let splitStopped = false;
   try {
     split.parameters();
@@ -128,32 +136,34 @@ export async function report(): Promise<Report> {
     splitStopped = true;
     splitNote = (err as Error).message.split("\n")[0] ?? "";
   }
-  want("children() 과 namedChildren() 이 어긋나면 멈춘다", splitStopped, splitNote);
+  want("children() and namedChildren() disagreeing stops it", splitStopped, splitNote);
 
-  // ── `nn.Parameter` — **torch 와 갈리는 자리 둘을 값으로 붙잡는다** ────────
+  // ── `nn.Parameter` — **the two places we part from torch, pinned by value** ──
   //
-  // 갈림을 주석에만 적으면 다음 사람이 그 주석을 안 읽고 고친다. 여기 있으면
-  // 고치는 순간 빨개지고, 그때 갈림이 **의도였는지**를 다시 정하게 된다.
+  // Write a divergence in a comment only and the next person changes it without reading
+  // the comment. Written here, changing it goes red on the spot, and that is the moment
+  // somebody decides again whether the divergence was **meant.**
   const src = Tensor.from([1, 2, 3], [3]);
   const par = new nn.Parameter(src);
-  want("Parameter 가 학습 대상 표식을 세운다", par.requiresGrad);
-  // torch 는 원본을 안 건드린다 — 우리도 그렇다.
-  want("Parameter 가 원본의 깃발을 안 건드린다", !src.requiresGrad);
-  // **저장은 안 나눠 갖는다.** torch 는 나눠 갖지만 우리에게는 뷰가 없다.
-  // 파이썬 결속도 같은 선택이라, 두 GPU 구현끼리는 안 갈린다.
-  // 둘째 인자로 깃발을 끈다 — 안 끄면 잎에 제자리 쓰기를 못 해서 이 물음 자체가
-  // 안 선다. 덤으로 그 인자가 닿는지도 여기서 물어진다.
+  want("Parameter raises the learn-me flag", par.requiresGrad);
+  // torch leaves the original alone — so do we.
+  want("Parameter leaves the original's flag alone", !src.requiresGrad);
+  // **The storage is not shared.** torch shares it; we have no views.
+  // The Python binding made the same choice, so the two GPU implementations do not part.
+  // The second argument turns the flag off — without that, a leaf cannot be written in
+  // place and the question itself will not stand. It asks, as a bonus, whether that
+  // argument arrives at all.
   await (async () => {
     const p2 = new nn.Parameter(src, false);
-    want("Parameter(t, false) 는 깃발을 안 세운다", !p2.requiresGrad);
+    want("Parameter(t, false) raises no flag", !p2.requiresGrad);
     p2.copyFrom(Tensor.from([9, 9, 9], [3]));
     const after = await src.toArray();
-    want("Parameter 는 저장을 안 나눠 갖는다 — torch 와 갈린다",
-      after[0] === 1, `원본 첫 칸 ${after[0]}`);
+    want("Parameter does not share storage — here we part from torch",
+      after[0] === 1, `first slot of the original ${after[0]}`);
   })();
-  // **평범한 `requiresGrad` 텐서도 파라미터로 센다.** torch 는 `Parameter` 로 감싼
-  // 것만 세고 이것은 안 센다(실측) — 규칙을 그쪽으로 바꾸면 `claim()` 으로 세워 둔
-  // 지금 코드가 조용히 파라미터를 잃는다.
+  // **A plain `requiresGrad` tensor counts as a parameter too.** torch counts only what
+  // is wrapped in `Parameter` and does not count this (measured) — move the rule that way
+  // and today's code, which raises the flag with `claim()`, quietly loses parameters.
   class Bare extends nn.Module {
     marked = new nn.Parameter(Tensor.from([1, 1], [2]));
     flagged = Tensor.from([1, 1], [2], { requiresGrad: true });
@@ -162,28 +172,29 @@ export async function report(): Promise<Report> {
       return x;
     }
   }
-  want("깃발만 세운 텐서도 파라미터로 센다 — torch 와 갈린다",
+  want("a tensor with only the flag counts too — here we part from torch",
     Object.keys(new Bare().ownParameters()).sort().join(",") === "flagged,marked",
     Object.keys(new Bare().ownParameters()).sort().join(","));
 
-  // 컨테이너는 자리 번호를 지켜야 한다 — 골든이 그 이름으로 가중치를 넣는다.
+  // A container has to keep its slot numbers — the golden plants weights by those names.
   const seq = new nn.Sequential(new nn.Linear(2, 2), new nn.ReLU());
-  want("Sequential 은 자리 번호를 지킨다",
+  want("Sequential keeps its slot numbers",
     Object.keys(seq.namedParameters()).sort().join(",") === "0.bias,0.weight",
     Object.keys(seq.namedParameters()).join(","));
   const list = new nn.ModuleList([new nn.Linear(2, 2)]);
-  want("ModuleList 도 자리 번호를 지킨다",
+  want("ModuleList keeps them too",
     Object.keys(list.namedParameters()).sort().join(",") === "0.bias,0.weight",
     Object.keys(list.namedParameters()).join(","));
 
-  // state_dict 왕복. 이름이 갈리면 여기서 걸린다.
+  // state_dict round trip. A name that parts is caught here.
   const target = new Net();
   target.loadStateDict(net.stateDict());
   const a0 = await net.parameters()[0]!.toArray();
   const b0 = await target.parameters()[0]!.toArray();
-  want("state_dict 왕복이 값을 옮긴다", same(a0, b0));
+  want("a state_dict round trip carries the values", same(a0, b0));
 
-  // **이것이 진짜 물음이다.** 등록이 새면 손실이 안 내려간다 — 예외는 안 난다.
+  // **This is the real question.** Where registration leaks the loss does not go down —
+  // and nothing is raised.
   const trained = new Net();
   for (const p of trained.parameters()) keepAlive(p);
   const opt = new optim.SGD(trained.parameters(), 0.1);
@@ -201,11 +212,11 @@ export async function report(): Promise<Report> {
       seen.push(await loss.item());
     });
   }
-  want("등록만으로 학습이 돈다",
+  want("registration alone makes it learn",
     (seen[4] ?? NaN) < (seen[0] ?? NaN),
     seen.map((v) => v.toFixed(4)).join(" → "));
 
-  // ── 2. 파라미터 그룹 ──────────────────────────────────────────────────
+  // ── 2. Parameter groups ──────────────────────────────────────────────
   const mk = () => keepAlive(Tensor.from([1], [1], { requiresGrad: true }));
   const slow = mk();
   const fast = mk();
@@ -213,24 +224,26 @@ export async function report(): Promise<Report> {
   fast.grad = Tensor.from([1], [1]);
   const two = new optim.SGD(
     [{ params: [slow], lr: 0.1 }, { params: [fast], lr: 0.5 }], 0.01);
-  want("그룹이 둘로 잡힌다", two.paramGroups.length === 2);
+  want("the groups come out as two", two.paramGroups.length === 2);
   two.step();
-  want("그룹마다 다른 학습률로 움직인다",
+  want("each group moves at its own learning rate",
     near(await slow.item(), 0.9, 1e-6) && near(await fast.item(), 0.5, 1e-6),
     `${(await slow.item()).toFixed(4)} / ${(await fast.item()).toFixed(4)}`);
 
-  // 그룹에 준 값과 생성자에 준 값이 같은 결과여야 한다. 식은 안 묻고 배선만 묻는다.
+  // A value given to the group and the same value given to the constructor have to come
+  // out the same. The formula is not asked here; only the wiring is.
   const viaCtor = mk();
   const viaGroup = mk();
   viaCtor.grad = Tensor.from([1], [1]);
   viaGroup.grad = Tensor.from([1], [1]);
   new optim.SGD([viaCtor], 0.1, 0, 0.5).step();
   new optim.SGD([{ params: [viaGroup], weightDecay: 0.5 }], 0.1, 0, 0).step();
-  want("그룹별 weightDecay 가 생성자 값과 같게 먹는다",
+  want("per-group weightDecay bites the same as the constructor's",
     near(await viaCtor.item(), await viaGroup.item(), 1e-6),
     `${(await viaCtor.item()).toFixed(6)} / ${(await viaGroup.item()).toFixed(6)}`);
 
-  // 나중에 더한 그룹은 상태 은행까지 늘어야 한다 — 안 늘면 다음 스텝에서 터진다.
+  // A group added later has to grow the state bank with it — otherwise the next step
+  // blows up.
   const first = mk();
   const later = mk();
   const adam = new optim.Adam([first], 0.1);
@@ -242,32 +255,32 @@ export async function report(): Promise<Report> {
     adam.step();
   } catch (err) {
     added = false;
-    want("addParamGroup 뒤 step", false, String(err));
+    want("step after addParamGroup", false, String(err));
   }
   if (added) {
-    want("addParamGroup 이 상태 은행까지 늘린다",
+    want("addParamGroup grows the state bank too",
       (await later.item()) !== 1 && (await first.item()) !== 1,
       `${(await first.item()).toFixed(4)} / ${(await later.item()).toFixed(4)}`);
   }
 
-  // 스케줄러는 그룹 전부를 몰아야 하고, 그룹 사이 비율을 지켜야 한다.
+  // A scheduler has to drive every group, and to keep the ratio between them.
   const s1 = mk();
   const s2 = mk();
   const sched = new optim.SGD(
     [{ params: [s1], lr: 0.1 }, { params: [s2], lr: 1.0 }], 0.1);
   const step = new optim.StepLR(sched, 1, 0.1).start();
   step.step();
-  want("스케줄러가 모든 그룹을 몰고 비율을 지킨다",
+  want("the scheduler drives every group and keeps the ratio",
     near(sched.paramGroups[0]!.lr, 0.01, 1e-9)
       && near(sched.paramGroups[1]!.lr, 0.1, 1e-9),
     `${sched.paramGroups[0]!.lr} / ${sched.paramGroups[1]!.lr}`);
 
-  // ── 제자리로 고쳐지는 것은 자기 버퍼를 가져야 한다 ────────────────────
-  // 위의 `addParamGroup` 검사가 이것을 잡았다. `Tensor.zeros([1])` 은 값으로 캐시된
-  // **전역 상수**를 돌려주는데, 옵티마이저와 이동 통계는 거기에 쓴다.
-  // **옵티마이저 전부를 건다.** 이 결함은 한 클래스의 실수가 아니라 `Tensor.zeros`·
-  // `Tensor.full` 로 상태를 만드는 습관 전체에 걸린 것이라, 새 옵티마이저가 붙을
-  // 때마다 다시 들어온다 — 실제로 `Rprop` 이 그렇게 들어왔다.
+  // ── What is mended in place has to own its buffer ─────────────────────
+  // The `addParamGroup` check above caught this. `Tensor.zeros([1])` returns a **global
+  // constant** cached by value, and optimizers and running statistics write into it.
+  // **Every optimizer is put on the hook.** The defect is not one class's slip but the
+  // whole habit of making state with `Tensor.zeros` and `Tensor.full`, so it walks back in
+  // with each new optimizer — `Rprop` arrived that way.
   const makers: [string, (p: Tensor) => optim.Optimizer][] = [
     ["SGD(momentum)", (p) => new optim.SGD([p], 0.1, 0.9)],
     ["Adam", (p) => new optim.Adam([p], 0.1)],
@@ -287,34 +300,36 @@ export async function report(): Promise<Report> {
   for (const [label, make] of makers) {
     const p = mk();
     const o = make(p);
-    // **두 번 밟는다.** 상태가 살아 있어야 하고, 첫 스텝이 상태를 망가뜨리면 둘째에서
-    // 드러난다.
+    // **Step twice.** The state has to survive, and a first step that ruins it shows up
+    // on the second.
     for (let i = 0; i < 2; i++) {
       p.grad = Tensor.from([1], [1]);
       o.step();
     }
     ((await p.item()) !== 1 ? moved : stuck).push(label);
   }
-  want("옵티마이저 전부가 원소 하나짜리 파라미터에서 돈다",
-    stuck.length === 0, stuck.length ? `안 움직인 것: ${stuck.join(", ")}` : `${moved.length} 개`);
-  want("그 사이 검증 오류가 안 났다", device().faults.count === before,
+  want("every optimizer runs on a one-element parameter",
+    stuck.length === 0,
+    stuck.length ? `did not move: ${stuck.join(", ")}` : `${moved.length} of them`);
+  want("no validation fault along the way", device().faults.count === before,
     device().faults.first);
 
-  // 상태가 캐시를 탔으면 여기가 바뀐다. `0.1` 은 위에서 학습률로 쓴 값이다.
+  // Where state rode the cache, this changes. `0.1` is the learning rate used above.
   //
-  // **허용 오차가 필요하다.** 0.1 은 float32 로 정확히 안 떨어져서 읽어 오면
-  // 0.10000000149… 다. 처음에 1e-9 로 물었다가 그 반올림에 걸렸다 — 오염이 아니라
-  // 표현의 문제였고, 검사가 스스로 거짓 경보를 낸 자리다.
+  // **A tolerance is needed here.** 0.1 does not land exactly in float32, so reading it
+  // back gives 0.10000000149… Asked at 1e-9 at first, this caught on that rounding — not
+  // contamination but representation, and a place where a check raised a false alarm
+  // against itself.
   const canary = [
     await Tensor.full([1], 0).item(),
     await Tensor.full([1], 1).item(),
     await Tensor.full([1], 0.1).item(),
   ];
-  want("전역 0·1·0.1 상수가 안 더럽혀졌다",
+  want("the global 0, 1 and 0.1 constants are unsoiled",
     canary[0] === 0 && canary[1] === 1 && near(canary[2] ?? NaN, 0.1, 1e-6),
     canary.join(" / "));
 
-  // 파라미터 모양이 아닌 상태를 드는 옵티마이저도 그룹이 늘어야 한다.
+  // An optimizer carrying state that is not parameter-shaped has to grow its groups too.
   const af1 = mk();
   const af2 = Tensor.from([1, 2, 3, 4], [2, 2], { requiresGrad: true });
   keepAlive(af2);
@@ -323,55 +338,58 @@ export async function report(): Promise<Report> {
   af1.grad = Tensor.from([1], [1]);
   af2.grad = Tensor.from([1, 1, 1, 1], [2, 2]);
   af.step();
-  want("Adafactor 가 addParamGroup 뒤에도 돈다",
+  want("Adafactor still runs after addParamGroup",
     (await af1.item()) !== 1 && (await af2.toArray())[0] !== 1);
 
   const p1 = new nn.PReLU();
   const p2 = new nn.PReLU();
   noGrad(() => { p1.weight.fill_(9); });
-  want("PReLU 기본 가중치가 서로 독립이다",
+  want("two PReLU default weights are independent of each other",
     (await p2.weight.item()) === 0.25, `${await p2.weight.item()}`);
-  want("전역 0.25 상수가 안 더럽혀진다",
+  want("the global 0.25 constant is not soiled",
     (await Tensor.full([1], 0.25).item()) === 0.25);
 
   const bn = new nn.BatchNormND(1);
   noGrad(() => { bn.runningVar.fill_(5); });
-  want("BatchNorm(1) 의 이동 통계가 전역 1 상수와 안 겹친다",
+  want("BatchNorm(1)'s running statistics do not overlap the global 1",
     (await Tensor.ones([1]).item()) === 1, `${await Tensor.ones([1]).item()}`);
 
-  // ── 씨앗을 직접 주는 역방향 ───────────────────────────────────────────
-  // 값이 맞는지는 골든이 진짜 torch 와 대조한다(`grad::vjp::*`, 결속 러너가 borch.ts 를
-  // 지난다). 여기서 묻는 것은 **TS 표면**이다 — 인자 차례와 거절 문구.
+  // ── Backward given its seed by hand ──────────────────────────────────
+  // Whether the values are right is the golden's business, against real torch
+  // (`grad::vjp::*`, where the binding's runner goes through borch.ts). What is asked here
+  // is the **TS surface** — argument order and refusal wording.
   const leaf = keepAlive(Tensor.from([1, 2, 3], [3], { requiresGrad: true }));
   const out = leaf.mul(leaf);
   out.backward(Tensor.from([1, 10, 100], [3]));
   // d(x²)/dx · v = 2x·v = [2, 40, 600]
-  want("씨앗을 준 역방향이 야코비안-벡터 곱을 낸다",
+  want("backward with a seed gives the Jacobian-vector product",
     same(await leaf.grad!.toArray(), Float32Array.from([2, 40, 600])),
     `${Array.from(await leaf.grad!.toArray()).join(",")}`);
 
-  wantThrow("씨앗 없이 비스칼라는 거절한다",
+  wantThrow("a non-scalar with no seed is refused",
     "grad can be implicitly created only for scalar outputs",
     () => Tensor.from([1, 2], [2], { requiresGrad: true }).backward());
-  wantThrow("모양이 어긋난 씨앗을 거절한다", "Mismatch in shape",
+  wantThrow("a seed of the wrong shape is refused", "Mismatch in shape",
     () => Tensor.from([1, 2], [2], { requiresGrad: true })
       .backward(Tensor.from([1, 2, 3], [3])));
 
-  // 둘째 자리가 `retainGraph` 다 — torch 의 인자 차례와 같다.
+  // The second slot is `retainGraph` — torch's argument order.
   const twice = keepAlive(Tensor.from([2], [1], { requiresGrad: true }));
   const held = twice.mul(twice);
   held.backward(Tensor.from([1], [1]), true);
   held.backward(Tensor.from([1], [1]), true);
-  want("둘째 자리가 retainGraph 다 — 두 번 흘리면 두 배",
+  want("the second slot is retainGraph — flow twice and it doubles",
     (await twice.grad!.item()) === 8, `${await twice.grad!.item()}`);
 
-  // ── 대괄호 자리 ───────────────────────────────────────────────────────
+  // ── The square-bracket seat ──────────────────────────────────────────
   //
-  // **`at()` 은 값을 안 만든다.** 전부 `select`·`narrow`·`indexSelect` 로 넘기고,
-  // 그 셋은 골든이 이미 진짜 torch 와 대조하고 있다. 그러니 여기서 물을 것은
-  // **`at()` 이 위임한 것과 같은 답을 내는가** 하나다 — 그러면 값은 골든에 얹힌다.
+  // **`at()` makes no values.** It passes everything to `select`, `narrow` and
+  // `indexSelect`, and the golden already holds those three against real torch. So there
+  // is one thing to ask here — **does `at()` answer the same as what it delegated to** —
+  // and then the values ride on the golden.
   //
-  // 값을 손으로 적어 두고 비교하면 그 손이 틀렸을 때 검사가 같이 틀린다.
+  // Write the values out by hand and compare, and when that hand is wrong the check is
+  // wrong with it.
   const cube = keepAlive(Tensor.from(
     Array.from({ length: 24 }, (_, i) => i), [2, 3, 4]));
 
@@ -380,66 +398,68 @@ export async function report(): Promise<Report> {
   ): Promise<void> => {
     const shapeOk = got.shape.join(",") === expected.shape.join(",");
     want(name, shapeOk && same(await got.toArray(), await expected.toArray()),
-      shapeOk ? "" : `모양 [${got.shape}] vs [${expected.shape}]`);
+      shapeOk ? "" : `shape [${got.shape}] vs [${expected.shape}]`);
   };
 
-  await agrees("at(0) 은 select 다", cube.at(0), cube.select(0, 0));
-  await agrees("at(-1) 은 뒤에서 센다", cube.at(-1), cube.select(0, 1));
-  await agrees("at([null, 1]) 은 둘째 축의 select 다",
+  await agrees("at(0) is select", cube.at(0), cube.select(0, 0));
+  await agrees("at(-1) counts from the back", cube.at(-1), cube.select(0, 1));
+  await agrees("at([null, 1]) is a select on the second axis",
     cube.at([null, 1]), cube.select(1, 1));
-  await agrees("at(slice(1, 3)) 은 narrow 다",
+  await agrees("at(slice(1, 3)) is narrow",
     cube.at(slice(1, 3)), cube.narrow(0, 1, 1));
-  await agrees("열린 슬라이스가 끝까지 간다",
+  await agrees("an open slice runs to the end",
     cube.at([null, slice(1)]), cube.narrow(1, 1, 2));
-  await agrees("걸음 있는 슬라이스는 indexSelect 로 간다",
+  await agrees("a slice with a stride goes through indexSelect",
     cube.at([null, null, slice(null, null, 2)]),
     cube.indexSelect(2, Tensor.from([0, 2], [2], { dtype: "int64" })));
-  await agrees("번호표는 대괄호 둘이다",
+  await agrees("a list of indices takes two brackets",
     cube.at([[1, 0]]),
     cube.indexSelect(0, Tensor.from([1, 0], [2], { dtype: "int64" })));
-  await agrees("텐서 번호표도 받는다",
+  await agrees("a tensor of indices is taken too",
     cube.at(Tensor.from([1], [1], { dtype: "int64" })),
     cube.indexSelect(0, Tensor.from([1], [1], { dtype: "int64" })));
 
-  // **축 번호가 밀린다.** 정수는 축을 없애므로 둘째 인덱스는 원래 축 1 을 가리키는데,
-  // 그때 남은 텐서에서는 그것이 축 0 이다. 이 자리를 안 세면 조용히 다른 축을 자른다.
-  await agrees("정수 뒤의 인덱스가 원래 축을 가리킨다",
+  // **The axis numbers shift.** An integer removes an axis, so the second index names
+  // the original axis 1 — which, in what is left, is axis 0. Miss this place and it
+  // quietly cuts a different axis.
+  await agrees("an index after an integer names the original axis",
     cube.at([0, slice(1, 3)]), cube.select(0, 0).narrow(0, 1, 2));
-  await agrees("정수 둘이 이어져도 밀림이 맞다",
+  await agrees("two integers in a row shift correctly too",
     cube.at([1, 2]), cube.select(0, 1).select(0, 2));
-  want("적게 주면 남은 축은 통째로",
+  want("give fewer and the remaining axes come whole",
     cube.at(0).shape.join(",") === "3,4", cube.at(0).shape.join(","));
 
-  // 빈 것도 답이다 — 파이썬이 `x[5:99]` 를 빈 것으로 준다.
-  want("범위를 넘는 슬라이스는 빈 것이 된다",
+  // Empty is an answer too — Python gives `x[5:99]` as empty.
+  want("a slice past the end becomes empty",
     cube.at(slice(5, 99)).shape.join(",") === "0,3,4",
     cube.at(slice(5, 99)).shape.join(","));
 
-  wantThrow("범위를 넘는 정수는 거절한다", "out of bounds", () => cube.at(9));
-  wantThrow("축보다 많은 인덱스를 거절한다", "too many indices",
+  wantThrow("an integer past the end is refused", "out of bounds", () => cube.at(9));
+  wantThrow("more indices than axes is refused", "too many indices",
     () => cube.at([0, 0, 0, 0]));
-  wantThrow("음수 걸음은 flip 을 가리킨다", "flip()",
+  wantThrow("a negative stride points at flip", "flip()",
     () => slice(0, 3, -1));
 
-  // ── 축약의 형 ─────────────────────────────────────────────────────────
+  // ── The dtype a reduction returns ────────────────────────────────────
   //
-  // 표는 torch 에게 물어 굳혔고 코어 쪽은 `tests/test_reduce_dtype.py` 가 쥔다.
-  // 여기는 **borch.ts 쪽 같은 표**다 — 셋이 같은 답을 내야 한다.
+  // The table was frozen by asking torch, and `tests/test_reduce_dtype.py` holds the core
+  // side. This is **the same table on the borch.ts side** — the three have to answer alike.
   //
-  // **int64 와 bool 을 둘 다 묻는다.** int64 만 물으면 "형을 지킨다" 와 "bool 을
-  // 올린다" 가 같아 보이고, 절반만 맞는 구현이 통과한다.
+  // **Both int64 and bool are asked.** Ask int64 alone and "it keeps the dtype" and "it
+  // promotes bool" look the same, and an implementation that is half right passes.
   const ints = Tensor.from([3, 1, 4], [3], { dtype: "int64" });
   const flags = Tensor.from([1, 0, 1], [3], { dtype: "bool" });
   const table: [string, DType, DType][] = [
-    // 누적 — 값을 만든다. 참·거짓 칸에 3 이 안 들어가므로 bool 이 올라간다.
+    // Accumulating — it makes values. 3 does not fit in a true/false slot, so bool is
+    // promoted.
     ["sum", ints.sum().dtype, flags.sum().dtype],
     ["prod", ints.prod().dtype, flags.prod().dtype],
     ["cumsum", ints.cumsum(0).dtype, flags.cumsum(0).dtype],
     ["cumprod", ints.cumprod(0).dtype, flags.cumprod(0).dtype],
-    // 고르기 — 있던 값을 건넨다. 형이 그대로 간다.
+    // Choosing — it hands over a value that was already there. The dtype goes through.
     ["amax", ints.amax().dtype, flags.amax().dtype],
     ["amin", ints.amin().dtype, flags.amin().dtype],
-    // 고정
+    // Fixed
     ["any", ints.any().dtype, flags.any().dtype],
     ["all", ints.all().dtype, flags.all().dtype],
     ["countNonzero", ints.countNonzero().dtype, flags.countNonzero().dtype],
@@ -458,204 +478,215 @@ export async function report(): Promise<Report> {
     const [wi, wb] = expected[name] as [DType, DType];
     return i !== wi || b !== wb;
   });
-  want("축약의 형이 torch 표와 같다", wrong.length === 0,
-    wrong.map(([n, i, b]) => `${n}: ${i}/${b}`).join(", ") || "11 개");
+  want("reduction dtypes match torch's table", wrong.length === 0,
+    wrong.map(([n, i, b]) => `${n}: ${i}/${b}`).join(", ") || "11 of them");
 
-  // 누적과 고르기가 **갈리는지**를 따로 묻는다. 위의 표가 통째로 한 방향으로 틀려도
-  // 이 줄은 살아남아 "둘이 서로 다른 것" 이라는 규칙을 지킨다.
-  want("bool 에서 누적과 고르기가 갈린다",
+  // Whether accumulating and choosing **part** is asked separately. Should the table
+  // above be wrong as a whole in one direction, this line survives it and keeps the rule
+  // that the two are different things.
+  want("on bool, accumulating and choosing part",
     flags.sum().dtype === "int64" && flags.amax().dtype === "bool",
     `${flags.sum().dtype} / ${flags.amax().dtype}`);
 
-  // 실수만 받는 넷. torch 가 멈추는 자리에서 멈춰야 한다.
+  // The four that take floats only. They have to stop where torch stops.
   for (const [name, call] of [
     ["mean", () => ints.mean()], ["variance", () => ints.variance()],
     ["std", () => ints.std()], ["norm", () => ints.norm()],
   ] as [string, () => Tensor][]) {
-    wantThrow(`${name} 은 정수를 거절한다`, "torch:", call);
+    wantThrow(`${name} refuses an integer`, "torch:", call);
   }
 
   // ── nn.functional ─────────────────────────────────────────────────────
   //
-  // **값은 안 만든다.** 전부 `Tensor` 메서드로 넘기므로 골든이 이미 그 값들을 지킨다.
-  // 여기서 묻는 것은 **위임한 것과 같은 답을 내는가**, 그리고 **이름으로 이어서는 안
-  // 되는 자리가 안 이어졌는가** 둘이다.
+  // **It makes no values.** Everything is passed to a `Tensor` method, so the golden
+  // already holds those values. Two things are asked here — **does it answer the same as
+  // what it delegated to**, and **have the places that must not be joined by name been
+  // left unjoined.**
   const F = nn.functional;
   const fx = keepAlive(Tensor.from([1, -2, 3, -4], [2, 2]));
 
-  want("nn.functional 이 열린다", typeof F === "object" && F !== null);
+  want("nn.functional opens", typeof F === "object" && F !== null);
   same(await F.relu(fx).toArray(), await fx.relu().toArray())
-    ? want("F.relu 가 메서드와 같다", true)
-    : want("F.relu 가 메서드와 같다", false);
-  want("F.leakyRelu 가 메서드와 같다",
+    ? want("F.relu is the method", true)
+    : want("F.relu is the method", false);
+  want("F.leakyRelu is the method",
     same(await F.leakyRelu(fx, 0.2).toArray(), await fx.leakyRelu(0.2).toArray()));
-  want("F.softmax 가 메서드와 같다",
+  want("F.softmax is the method",
     same(await F.softmax(fx, 1).toArray(), await fx.softmax(1).toArray()));
 
-  // **이름이 같은데 연산이 다른 자리.** 자동으로 이었으면 조용히 다른 것이 걸린다.
-  want("F.batchNorm 은 층의 자유 함수다 — Tensor.batchNorm 이 아니다",
-    F.batchNorm.length >= 5, `인자 ${F.batchNorm.length} 개`);
-  want("F.unfold 는 im2col 이다 — Tensor.unfold 가 아니다",
+  // **Where the name is the same and the operation is not.** Joined automatically, a
+  // different thing is picked up, quietly.
+  want("F.batchNorm is the layer's free function — not Tensor.batchNorm",
+    F.batchNorm.length >= 5, `${F.batchNorm.length} arguments`);
+  want("F.unfold is im2col — not Tensor.unfold",
     same(await F.unfold(fx.reshape([1, 1, 2, 2]), 2).toArray(),
       await fx.reshape([1, 1, 2, 2]).unfoldIm2col(2).toArray()));
-  // huberLoss 는 torch 가 (reduction, delta) 차례라 위치 인자가 뒤바뀐다.
-  want("F.huberLoss 가 torch 의 인자 차례를 쓴다",
+  // torch orders huberLoss (reduction, delta), so the positional arguments swap.
+  want("F.huberLoss uses torch's argument order",
     same(await F.huberLoss(fx, fx.zerosLike(), "mean", 2).toArray(),
       await fx.huberLoss(fx.zerosLike(), 2, "mean").toArray()));
 
-  // **수신자가 누구인가도 이름의 일부다.** `Tensor.lu_solve` 는 torch 에서 오른쪽
-  // 변이 받는다 — 인수가 받도록 두면 이름도 인자 개수도 맞아서 그 자리에서는 안
-  // 걸리고 값만 틀린다. 인수가 받는 쪽은 `luSolveFactored` 로 따로 있다.
+  // **Who the receiver is belongs to the name too.** In torch it is the right-hand side
+  // that receives `Tensor.lu_solve` — let the factors receive it instead and the name and
+  // the argument count both still fit, so nothing catches there and only the value is
+  // wrong. The one the factors receive is separate, as `luSolveFactored`.
   const lu = await Tensor.from([4, 3, 6, 3], [2, 2]).luFactor();
   const rhs = Tensor.from([1, 2], [2, 1]);
   const viaMethod = await rhs.luSolve(lu.LU, lu.pivots);
   const viaFactored = await lu.LU.luSolveFactored(lu.pivots, rhs);
-  want("lu_solve 의 수신자가 b 다",
+  want("lu_solve is received by b",
     same(await viaMethod.toArray(), await viaFactored.toArray()),
     `${Array.from(await viaMethod.toArray()).join(",")}`);
 
-  // 이어서는 안 되는 것들은 **없어야** 한다. 있으면 조용히 다른 연산이다.
+  // The ones that must not be joined have to be **absent**. Present, they are quietly a
+  // different operation.
   for (const missing of ["layerNorm", "rmsNorm", "pad", "upsample"]) {
-    want(`F.${missing} 은 안 낸다 — 연산이 다르다`,
+    want(`F.${missing} is not offered — it is a different operation`,
       (F as Record<string, unknown>)[missing] === undefined);
   }
 
-  // ── 3. 난수 팩토리 ────────────────────────────────────────────────────
+  // ── 3. Random factories ──────────────────────────────────────────────
   const N = 4096;
   const g = await Tensor.randn([N]).toArray();
   const mean = g.reduce((a, b) => a + b, 0) / N;
   const sd = Math.sqrt(g.reduce((a, b) => a + (b - mean) ** 2, 0) / N);
-  want("randn 이 표준정규에 가깝다", near(mean, 0, 0.08) && near(sd, 1, 0.08),
-    `평균 ${mean.toFixed(4)}, 표준편차 ${sd.toFixed(4)}`);
+  want("randn is close to the standard normal", near(mean, 0, 0.08) && near(sd, 1, 0.08),
+    `mean ${mean.toFixed(4)}, sd ${sd.toFixed(4)}`);
 
   const u = await Tensor.rand([N]).toArray();
-  want("rand 가 [0, 1) 안에 든다", u.every((v) => v >= 0 && v < 1));
+  want("rand lands inside [0, 1)", u.every((v) => v >= 0 && v < 1));
 
   const ri = Tensor.randint(3, 7, [N]);
   const riv = await ri.toArray();
-  want("randint 가 [low, high) 안의 정수다",
+  want("randint is an integer inside [low, high)",
     ri.dtype === "int64"
       && riv.every((v) => Number.isInteger(v) && v >= 3 && v < 7)
       && riv.some((v) => v === 6) && !riv.some((v) => v === 7));
 
   const perm = Array.from(await Tensor.randperm(64).toArray()).sort((a, b) => a - b);
-  want("randperm 이 순열이다", perm.every((v, i) => v === i));
+  want("randperm is a permutation", perm.every((v, i) => v === i));
 
-  // **골든은 이 넷의 끝값만 묻는다.** `p=0`·`p=1`·`std=0`·`λ=0` 은 결정적이라 굳힐
-  // 수 있지만 가운데는 아니고, 그래서 골든만 보면 `normal` 이 `std` 를 곱하지 않고
-  // 평균만 돌려줘도 초록이다 — `std=0` 에서 답이 같기 때문이다. 씨앗 케이스가 위에서
-  // 배운 것과 같은 자리다: **끝값만 지키면 절반이다.**
+  // **The golden asks these four at their endpoints only.** `p=0`, `p=1`, `std=0` and
+  // `λ=0` are deterministic and can be frozen; the middle cannot, so on the golden alone a
+  // `normal` that never multiplies by `std` and returns the mean is green — at `std=0` the
+  // answers agree. It is the place the seed cases taught above: **holding the endpoints is
+  // holding half.**
   const bern = await Tensor.zeros([N]).add(Tensor.full([], 0.25)).bernoulli()
     .toArray();
   const hits = bern.reduce((a, b) => a + b, 0) / N;
-  want("bernoulli 가 확률을 실제로 본다",
+  want("bernoulli actually looks at the probability",
     bern.every((v) => v === 0 || v === 1) && near(hits, 0.25, 0.03),
-    `1 이 나온 비율 ${hits.toFixed(4)}`);
+    `share that came out 1: ${hits.toFixed(4)}`);
 
   const nm = await Tensor.normal(
     Tensor.zeros([N]).add(Tensor.full([], 5)), 2).toArray();
   const nmMean = nm.reduce((a, b) => a + b, 0) / N;
   const nmSd = Math.sqrt(nm.reduce((a, b) => a + (b - nmMean) ** 2, 0) / N);
-  want("normal 이 평균과 표준편차를 둘 다 쓴다",
+  want("normal uses both the mean and the standard deviation",
     near(nmMean, 5, 0.15) && near(nmSd, 2, 0.15),
-    `평균 ${nmMean.toFixed(4)}, 표준편차 ${nmSd.toFixed(4)}`);
+    `mean ${nmMean.toFixed(4)}, sd ${nmSd.toFixed(4)}`);
 
-  // 푸아송은 **평균과 분산이 같다** — 하나만 맞으면 다른 분포다.
+  // Poisson has **the same mean and variance** — get only one of them right and it is a
+  // different distribution.
   const po = await Tensor.zeros([N]).add(Tensor.full([], 4)).poisson()
     .then((t) => t.toArray());
   const poMean = po.reduce((a, b) => a + b, 0) / N;
   const poVar = po.reduce((a, b) => a + (b - poMean) ** 2, 0) / N;
-  want("poisson 이 평균 λ·분산 λ 를 낸다",
+  want("poisson gives mean λ and variance λ",
     po.every((v) => Number.isInteger(v) && v >= 0)
       && near(poMean, 4, 0.25) && near(poVar, 4, 0.5),
-    `평균 ${poMean.toFixed(3)}, 분산 ${poVar.toFixed(3)}`);
+    `mean ${poMean.toFixed(3)}, variance ${poVar.toFixed(3)}`);
 
   const bi = await Tensor.zeros([N]).add(Tensor.full([], 10))
     .binomial(Tensor.zeros([N]).add(Tensor.full([], 0.5)))
     .then((t) => t.toArray());
   const biMean = bi.reduce((a, b) => a + b, 0) / N;
-  want("binomial 이 n·p 를 낸다",
+  want("binomial gives n·p",
     bi.every((v) => Number.isInteger(v) && v >= 0 && v <= 10)
       && near(biMean, 5, 0.2),
-    `평균 ${biMean.toFixed(3)}`);
+    `mean ${biMean.toFixed(3)}`);
 
-  // **제자리 다섯은 골든이 못 본다.** 값이 난수라 굳힐 수가 없고, 결속은 이 이름들을
-  // 자기 numpy 줄기로 만들어서 케이스가 borch.ts 쪽에 닿지도 않는다. 분포의 자리표
-  // 하나씩을 여기서 재는 것이 이 다섯에 대해 할 수 있는 전부다.
+  // **The golden cannot see these five in-place fills.** The values are random and cannot
+  // be frozen, and the binding makes these names on its own numpy stem, so the cases never
+  // even reach the borch.ts side. Measuring one landmark of each distribution here is all
+  // that can be done for the five.
   const drawn = async (fill: (t: Tensor) => Tensor): Promise<Float32Array> =>
     fill(Tensor.zeros([N])).toArray();
   const avg = (v: Float32Array): number => v.reduce((a, b) => a + b, 0) / N;
 
   const ex = await drawn((t) => t.exponential_(2));
-  want("exponential_ 의 평균이 1/lambd 다",
+  want("exponential_ has mean 1/lambd",
     ex.every((v) => v >= 0) && near(avg(ex), 0.5, 0.03),
-    `평균 ${avg(ex).toFixed(4)}`);
+    `mean ${avg(ex).toFixed(4)}`);
 
-  // 코시는 **평균이 없다** — 표본평균으로 재면 실행마다 튄다. 중앙값으로 잰다.
+  // Cauchy **has no mean** — measured by the sample mean it jumps from run to run. It is
+  // measured by the median.
   const ca = Array.from(await drawn((t) => t.cauchy_(3, 1))).sort((a, b) => a - b);
   const mid = ca[N >> 1] ?? 0;
-  want("cauchy_ 의 중앙값이 median 이다", near(mid, 3, 0.1),
-    `중앙값 ${mid.toFixed(4)}`);
+  want("cauchy_'s middle value is the median", near(mid, 3, 0.1),
+    `median ${mid.toFixed(4)}`);
 
-  // 로그정규는 **로그를 취해야** 정규가 된다 — 그것이 이 이름의 정의다.
+  // A log-normal is normal **once the log is taken** — that is what the name defines.
   const ln = await drawn((t) => t.logNormal_(0, 1));
   const logged = Array.from(ln).map((v) => Math.log(v));
   const lnMean = logged.reduce((a, b) => a + b, 0) / N;
-  want("log_normal_ 은 로그를 취하면 정규다",
+  want("log_normal_ is normal once the log is taken",
     ln.every((v) => v > 0) && near(lnMean, 0, 0.05),
-    `로그의 평균 ${lnMean.toFixed(4)}`);
+    `mean of the log ${lnMean.toFixed(4)}`);
 
   const ge = await drawn((t) => t.geometric_(0.25));
-  want("geometric_ 의 평균이 1/p 다",
+  want("geometric_ has mean 1/p",
     ge.every((v) => Number.isInteger(v) && v >= 1) && near(avg(ge), 4, 0.25),
-    `평균 ${avg(ge).toFixed(3)}`);
+    `mean ${avg(ge).toFixed(3)}`);
 
   const ra = await drawn((t) => t.random_(5, 9));
-  want("random_ 이 [from, to) 의 정수다",
+  want("random_ is an integer in [from, to)",
     ra.every((v) => Number.isInteger(v) && v >= 5 && v < 9)
       && new Set(ra).size === 4);
 
-  want("randnLike 가 모양을 빌린다",
+  want("randnLike borrows the shape",
     Tensor.zeros([2, 3]).randnLike().shape.join(",") === "2,3");
 
-  // 씨앗 하나가 텐서와 층을 같이 되돌려야 한다.
+  // One seed has to reset the tensors and the layers together.
   manualSeed(7);
   const r1 = await Tensor.randn([8]).toArray();
   manualSeed(7);
   const r2 = await Tensor.randn([8]).toArray();
-  want("같은 씨앗이면 randn 이 같다", same(r1, r2));
+  want("the same seed gives the same randn", same(r1, r2));
 
   manualSeed(11);
   const w1 = await new nn.Linear(3, 2).parameters()[0]!.toArray();
   manualSeed(11);
   const w2 = await new nn.Linear(3, 2).parameters()[0]!.toArray();
-  want("같은 씨앗이면 층 초기화도 같다", same(w1, w2));
+  want("the same seed initialises a layer the same", same(w1, w2));
 
-  // xorshift 는 상태가 0 이면 영원히 0 을 낸다. 씨앗 0 이 난수를 죽이면 안 된다.
+  // xorshift with a zero state gives zero forever. Seed 0 must not kill the randomness.
   manualSeed(0);
   const z = await Tensor.rand([4]).toArray();
-  want("manualSeed(0) 이 난수를 죽이지 않는다", new Set(z).size > 1);
+  want("manualSeed(0) does not kill the randomness", new Set(z).size > 1);
 
-  // **다른 씨앗은 다른 결과를 내야 한다.** 같은 씨앗에 같은 결과만 지키면 절반이다 —
-  // dropout 계수기를 늘 1 로 되돌리던 동안 씨앗을 다섯 개 돌려도 마스크는 다섯 번 다
-  // 같았고, 그러면 실험 분산이 가중치 초기화 하나에서만 나온다.
+  // **Different seeds have to give different results.** Holding only "same seed, same
+  // result" is holding half — while the dropout counter was being reset to 1 every time,
+  // five seeds gave the same mask five times over, and then the variance of an experiment
+  // comes from the weight initialisation alone.
   const gpuDraw = async (seed: number): Promise<Float32Array> => {
     manualSeed(seed);
-    return Tensor.uniform([16]).toArray();      // GPU 줄기 — dropout 계수기를 쓴다
+    return Tensor.uniform([16]).toArray();      // GPU stem — it uses the dropout counter
   };
-  want("다른 씨앗이면 GPU 줄기도 달라진다",
+  want("different seeds move the GPU stem too",
     !same(await gpuDraw(1), await gpuDraw(2)));
-  want("같은 씨앗이면 GPU 줄기가 같다",
+  want("the same seed gives the same GPU stem",
     same(await gpuDraw(7), await gpuDraw(7)));
 
-  // ── 결속이 메꿔 주던 이름들 ─────────────────────────────────────────────
+  // ── The names the binding had been filling in ────────────────────────
   //
-  // **골든은 이 여섯을 구조적으로 못 본다.** 케이스가 전부 `borch_webgpu` 를
-  // 지나는데, 그쪽이 텐서 메서드 위에 층을 **스스로 만들어** 놓아서 borch.ts 에
-  // 클래스가 없어도 파이썬 쪽은 멀쩡했다. TypeScript 로 `new nn.MSELoss()` 를 쓰는
-  // 사람에게만 없는 이름이었다.
+  // **The golden cannot see these six, structurally.** Every case goes through
+  // `borch_webgpu`, and that side **builds the layers itself** on top of the tensor
+  // methods, so the Python side was fine with no class in borch.ts at all. The name was
+  // missing only for somebody writing `new nn.MSELoss()` in TypeScript.
   //
-  // 여기서 묻는 것은 값이 아니라 **이름이 있는가와 인자가 닿는가**다.
+  // What is asked here is not a value but **whether the name is there and whether the
+  // argument arrives.**
   const lx = () => Tensor.from([0.5, -1, 2, 1.5], [2, 2]);
   const ly = () => Tensor.from([1, 0, -1, 0.5], [2, 2]);
   const label = () => Tensor.from([1, 0], [2], { dtype: "int64" as DType });
@@ -670,25 +701,28 @@ export async function report(): Promise<Report> {
     ["CrossEntropyLoss", (r) => new nn.CrossEntropyLoss(r).call(lx(), label())],
   ];
   for (const [name, call] of lossLayers) {
-    // `none` 은 접기 전이라 원소가 여럿이고 `sum` 은 스칼라다. **둘의 모양이 달라야**
-    // 인자가 실제로 닿은 것이다 — 값을 안 봐도 이것만으로 갈린다.
-    want(`nn.${name} 이 있고 reduction 이 닿는다`,
+    // `none` is before the fold, so it has many elements, and `sum` is a scalar. **The
+    // two shapes differing** is what says the argument actually arrived — that alone
+    // separates them, without looking at a value.
+    want(`nn.${name} is there and reduction arrives`,
       call("none").size > 1 && call("sum").size === 1,
       `none=${call("none").size} sum=${call("sum").size}`);
   }
 
-  // **결속이 메꾸고 있는 층 이름 열일곱.** 위의 여섯과 같은 갈래인데 아직 안 고쳤다 —
-  // 여기서는 **묻기만 한다.** 고치는 것은 `nn.ts` 이고, 묻는 줄을 먼저 붙여 두면
-  // 그 사이에 하나가 조용히 생기거나 사라져도 잡힌다.
+  // **The forty-seven layer factories the binding writes by hand** — the ones torch has.
   //
-  // 결속(`borch_webgpu/_nn.py`)이 텐서 메서드 위에 factory 로 만들어 두어서 파이썬
-  // 쪽은 멀쩡하다. 골든 케이스는 전부 결속을 지나므로 **이 열일곱은 표가 구조적으로
-  // 못 본다** — TypeScript 로 `new nn.GELU()` 를 쓰는 사람에게만 없는 이름이다.
-  // **빨간 채로 두지 않는다.** 열일곱이 지금 없는 것은 아는 사실이고, 러너가 늘
-  // 빨가면 다음 사람이 러너를 안 읽는다. 그래서 묻는 것은 "다 있는가" 가 아니라
-  // **"아는 것 말고 새로 없어진 것이 있는가"** 다. 하나가 채워지면 아래 목록에서
-  // 지우면 되고, 안 지워도 초록이 유지된다 — 늘어나는 쪽만 빨개진다.
-  // 결속(`borch_webgpu/_nn.py`)이 손으로 쓴 층 factory 마흔일곱 — torch 에 있는 것만.
+  // The binding (`borch_webgpu/_nn.py`) builds them as factories on top of the tensor
+  // methods, so the Python side is fine. Every golden case goes through the binding, so
+  // **the table cannot see these, structurally** — a name is missing only for somebody
+  // writing `new nn.GELU()` in TypeScript.
+  //
+  // **It is not left red.** A runner that is always red is a runner the next person stops
+  // reading, so what is asked is not "are they all there" but **"is anything newly gone,
+  // beyond what we know about"**. Fill one in and it comes off the list below; leave it on
+  // and the run stays green — only the growing side goes red.
+  //
+  // Filtering the list and then comparing the result back against the same list is always
+  // green and asks nothing (it was written that way first, then fixed).
   const FILLED_IN = [
     "AdaptiveLogSoftmaxWithLoss", "AvgPool2d", "BCEWithLogitsLoss", "Bilinear",
     "CELU", "CTCLoss", "Conv1d", "Conv2d", "Conv3d", "CrossEntropyLoss", "ELU",
@@ -700,53 +734,54 @@ export async function report(): Promise<Report> {
     "Softmax", "Softmin", "Softplus", "Softshrink", "Tanh", "Threshold",
     "Unflatten", "Upsample",
   ];
-  // **지금 없는 것.** 채워지면 여기서 지운다 — 안 지워도 초록이고, **늘어나는 쪽만**
-  // 빨개진다. 목록에서 걸러 낸 것을 다시 목록과 대조하면 늘 초록이라 아무것도 안
-  // 묻는다(처음에 그렇게 썼다가 고쳤다).
-  // **열일곱 전부 채웠다.** 목록이 비어도 검사는 뜻이 있다 — 하나가 사라지면
-  // `새로 없어진 것` 으로 빨개진다.
+  // **What is missing right now. All seventeen have been filled in.** An empty list still
+  // means something: let one disappear and it goes red as `newly gone`.
   const KNOWN_ABSENT = new Set<string>();
   const bag = nn as unknown as Record<string, unknown>;
   const absent = FILLED_IN.filter((n) => !(n in bag));
   const surprise = absent.filter((n) => !KNOWN_ABSENT.has(n));
-  want("결속이 메꾸는 층 이름에 새 구멍이 없다", surprise.length === 0,
-    `아는 것 ${absent.length}/${KNOWN_ABSENT.size}` +
-    (surprise.length ? ` · **새로 없어진 것**: ${surprise.join(", ")}` : ""));
+  want("no new hole among the layer names the binding fills in", surprise.length === 0,
+    `known ${absent.length}/${KNOWN_ABSENT.size}` +
+    (surprise.length ? ` · **newly gone**: ${surprise.join(", ")}` : ""));
 
-  // **`SmoothL1Loss` 의 첫 인자가 코어와 다르다.** 코어는 `(beta, reduction)` 이고
-  // 여기는 `(reduction, beta)` 다. torch 자신은 둘 다 이름으로만 받는 자리라
-  // "torch 와 갈렸다" 고는 못 하지만, **자매끼리 갈린 것**은 맞다 — 같은 코드를
-  // 옮겨 적는 사람이 첫 인자에서 걸린다. 여기 적어 두어 다음에 정리할 때 안 잊는다.
-  want("SmoothL1Loss 의 첫 인자는 reduction 이다",
+  // **`SmoothL1Loss`'s first argument differs from the core's.** The core is
+  // `(beta, reduction)` and this is `(reduction, beta)`. torch itself takes both by
+  // keyword only, so this cannot be called parting from torch — but **the sisters have
+  // parted**, and somebody transcribing the same code catches on the first argument.
+  // Written here so it is not forgotten the next time this is tidied.
+  want("SmoothL1Loss takes reduction first",
     new nn.SmoothL1Loss("none").call(lx(), ly()).size > 1);
 
-  // ── vision: 타입이 넓어져 생긴 자리 ──────────────────────────────────
+  // ── vision: the place a widened type opened ──────────────────────────
   //
-  // **골든이 이것을 못 묻는다.** `Transform` 이 `FiveCrop`·`TenCrop` 때문에 배열도
-  // 받도록 넓어졌고, 그러자 `Compose([new FiveCrop(3), new ToTensor()])` 가 타입
-  // 검사를 통과한다. 파이썬 쪽에는 대응물이 없어 — 저쪽 `ToTensor` 는 numpy 배열을
-  // 받고 튜플은 다른 식으로 죽는다 — 골든에 물어볼 케이스 자체가 없다.
+  // **The golden cannot ask this.** `Transform` widened to take an array as well, for
+  // `FiveCrop` and `TenCrop`, and with that `Compose([new FiveCrop(3), new ToTensor()])`
+  // passes the type check. There is no counterpart on the Python side — its `ToTensor`
+  // takes a numpy array and a tuple dies there some other way — so there is no case to put
+  // to the golden at all.
   //
-  // 막기 전에는 `shape [,,] does not match 0 elements` 로 터졌다(실측). 터지긴
-  // 하니 "거절한다" 는 맞지만 무엇을 잘못했는지는 안 적힌 사고였다. 여기가
-  // **TS 표면**을 묻는 자리라서 여기 둔다.
+  // Before it was stopped, this blew up as `shape [,,] does not match 0 elements`
+  // (measured). It does blow up, so "it refuses" was true, but nothing in the accident
+  // said what had been done wrong. This is where the **TS surface** is asked, so it goes
+  // here.
   const pic = vision.image(new Float64Array(12), 2, 2, 3, false);
-  wantThrow("ToTensor 는 여러 장을 거절한다", "it received 5 of them",
+  wantThrow("ToTensor refuses several pictures", "it received 5 of them",
     () => new vision.ToTensor().apply(new vision.FiveCrop([1, 1]).apply(pic)));
-  wantThrow("Compose 안에서도 같은 자리에서 멈춘다", "Lambda",
+  wantThrow("inside Compose it stops in the same place", "Lambda",
     () => new vision.Compose([new vision.FiveCrop([1, 1]), new vision.ToTensor()])
       .apply(pic));
 
-  // **검증 오류가 하나라도 났으면 위의 초록은 못 믿는다.** WebGPU 는 무효한 명령
-  // 버퍼를 조용히 버리므로, 값이 안 바뀐 것을 "통과" 로 읽는 검사가 생길 수 있다.
-  want("WebGPU 검증 오류가 없다", device().faults.count === 0,
+  // **One validation fault and the green above cannot be believed.** WebGPU drops an
+  // invalid command buffer quietly, so a check can come to read an unchanged value as a
+  // pass.
+  want("no WebGPU validation fault", device().faults.count === 0,
     device().faults.first);
 
   const failed = checks.filter((c) => !c.ok);
   const lines = checks.map((c) =>
     `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);
   lines.push(failed.length === 0
-    ? `torch 배선 ${checks.length}건 전부 통과`
-    : `**${failed.length}건 실패** / ${checks.length}건`);
+    ? `all ${checks.length} torch wiring checks passed`
+    : `**${failed.length} failed** / ${checks.length}`);
   return { text: lines.join("\n"), checks };
 }

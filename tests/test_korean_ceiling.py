@@ -71,7 +71,7 @@ CEILINGS = {
     # the report: when `run.py` is translated they go with it and this comes back down.
     # The markers in front of them (`아직`, `별칭`, `파이썬`, `없음`) are keys that
     # `test_alias_rows.py` matches on and move only if that test moves too.
-    "borch-ts/test": 27253,
+    "borch-ts/test": 23049,
 }
 
 
