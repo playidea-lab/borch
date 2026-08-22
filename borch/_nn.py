@@ -2717,16 +2717,33 @@ nn.Buffer = Buffer
 
 class _Loss(Module):
     """The root of the loss layers. `_fn` names the function and `_keys` names
-    the arguments to pass."""
+    the arguments to pass.
+
+    **The constructor is generated per subclass with torch's own parameter list**,
+    rather than shared as `(*args, reduction="mean", **kw)`. That shared version
+    paired positionals with `zip(self._keys, args)`, and `zip` stops at the shorter
+    side — so everything past the last key **went nowhere and raised nothing**:
+
+        HuberLoss(0.5, "sum")        → 0.25, computed with reduction="mean"
+        HuberLoss(0.5, "sum", 99)    → accepted, three positionals against one key
+        SoftMarginLoss(0.5)          → accepted, `_keys` is empty
+
+    torch answers the first of those with `ValueError: 0.5 is not a valid value for
+    reduction`. Ours returned a number, and the wrong one — a loss reduced by the
+    mean when the caller asked for the sum. **A silently discarded argument is worse
+    than a refused one**, which is this library's own rule pointing at itself.
+
+    The generated signature also puts `reduction` where torch puts it, which is not
+    always first: `HuberLoss(reduction, delta)` but `MarginRankingLoss(margin,
+    reduction)`. Getting that from a table means the order is written down once.
+    """
 
     _fn = None
     _keys = ()
 
-    def __init__(self, *args, reduction="mean", **kw):
+    def __init__(self, **kw):
         super().__init__()
-        self.reduction = reduction
-        for key, value in zip(self._keys, args):
-            kw.setdefault(key, value)
+        self.reduction = kw.pop("reduction", "mean")
         self._opts = kw
 
     def forward(self, *inputs):
@@ -2739,25 +2756,70 @@ class _Loss(Module):
         return f"{type(self).__name__}()"
 
 
+# Each row is **torch's own parameter list, in torch's order**, with the deprecated
+# `size_average` and `reduce` left out — torch documents both as dead and ignores them
+# whenever `reduction` is given, and keeping them would put two arguments nobody
+# passes in front of the ones everybody does.
+#
+# `"*"` marks the point after which torch takes keyword arguments only, and two of
+# these have one at the very front: `GaussianNLLLoss` and
+# `TripletMarginWithDistanceLoss` refuse positional arguments entirely in torch.
+# Following that is the difference between a subset you can practise on and one that
+# teaches a call real torch will reject.
+_LOSSES = (
+    ("HuberLoss", "huber_loss", ("reduction='mean'", "delta=1.0")),
+    ("KLDivLoss", "kl_div", ("reduction='mean'", "log_target=False")),
+    ("PoissonNLLLoss", "poisson_nll_loss",
+     ("log_input=True", "full=False", "eps=1e-8", "reduction='mean'")),
+    ("GaussianNLLLoss", "gaussian_nll_loss",
+     ("*", "full=False", "eps=1e-6", "reduction='mean'")),
+    ("MarginRankingLoss", "margin_ranking_loss", ("margin=0.0", "reduction='mean'")),
+    ("CosineEmbeddingLoss", "cosine_embedding_loss",
+     ("margin=0.0", "reduction='mean'")),
+    ("HingeEmbeddingLoss", "hinge_embedding_loss", ("margin=1.0", "reduction='mean'")),
+    ("SoftMarginLoss", "soft_margin_loss", ("reduction='mean'",)),
+    ("TripletMarginLoss", "triplet_margin_loss",
+     ("margin=1.0", "p=2.0", "eps=1e-6", "swap=False", "reduction='mean'")),
+    ("TripletMarginWithDistanceLoss", "triplet_margin_with_distance_loss",
+     ("*", "distance_function=None", "margin=1.0", "swap=False", "reduction='mean'")),
+    ("MultiLabelSoftMarginLoss", "multilabel_soft_margin_loss",
+     ("weight=None", "reduction='mean'")),
+    ("MultiMarginLoss", "multi_margin_loss",
+     ("p=1", "margin=1.0", "weight=None", "reduction='mean'")),
+    ("MultiLabelMarginLoss", "multilabel_margin_loss", ("reduction='mean'",)),
+)
+
+
+def _loss_init(params):
+    """A real `__init__` with `params` as its signature, built by `exec`.
+
+    **Generated rather than hand-written, and generated rather than shared.** Thirteen
+    hand-written constructors is the same two lines thirteen times, which is what the
+    shared `*args` version was avoiding and it was right to. What it got wrong was
+    reaching for `*args`: a signature that accepts everything cannot refuse anything,
+    and `zip` then dropped whatever it had no key for.
+
+    `exec` is what gives a **real** signature — one `inspect` reads, one that puts
+    `reduction` where torch puts it, and one that raises `TypeError` on an argument
+    too many instead of swallowing it. A generated function has that; a wrapper
+    carrying `functools.wraps` or a hand-set `__signature__` only looks like it does,
+    and this file has been bitten twice this week by things that only looked right.
+    """
+    names = [p.split("=")[0] for p in params if p != "*"]
+    src = (f"def __init__(self, {', '.join(params)}):\n"
+           f"    _Loss.__init__(self, "
+           + ", ".join(f"{n}={n}" for n in names) + ")\n")
+    scope = {"_Loss": _Loss}
+    exec(src, scope)                                     # noqa: S102 — see docstring
+    return scope["__init__"]
+
+
 def _make_losses():
-    table = (
-        ("HuberLoss", huber_loss, ("delta",)),
-        ("KLDivLoss", kl_div, ("log_target",)),
-        ("PoissonNLLLoss", poisson_nll_loss, ("log_input", "full", "eps")),
-        ("GaussianNLLLoss", gaussian_nll_loss, ("full", "eps")),
-        ("MarginRankingLoss", margin_ranking_loss, ("margin",)),
-        ("CosineEmbeddingLoss", cosine_embedding_loss, ("margin",)),
-        ("HingeEmbeddingLoss", hinge_embedding_loss, ("margin",)),
-        ("SoftMarginLoss", soft_margin_loss, ()),
-        ("TripletMarginLoss", triplet_margin_loss, ("margin", "p", "eps", "swap")),
-        ("TripletMarginWithDistanceLoss", triplet_margin_with_distance_loss,
-         ("distance_function", "margin", "swap")),
-        ("MultiLabelSoftMarginLoss", multilabel_soft_margin_loss, ("weight",)),
-        ("MultiMarginLoss", multi_margin_loss, ("p", "margin", "weight")),
-        ("MultiLabelMarginLoss", multilabel_margin_loss, ()),
-    )
-    return {name: type(name, (_Loss,), {"_fn": staticmethod(fn), "_keys": keys})
-            for name, fn, keys in table}
+    return {name: type(name, (_Loss,), {
+        "_fn": staticmethod(globals()[fn]),
+        "_keys": tuple(p.split("=")[0] for p in params if p != "*"),
+        "__init__": _loss_init(params),
+    }) for name, fn, params in _LOSSES}
 
 
 for _name, _loss_cls in _make_losses().items():

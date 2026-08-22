@@ -2589,10 +2589,19 @@ export class TripletMarginWithDistanceLoss {
 }
 
 export class MultiLabelSoftMarginLoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  /**
+   * **`weight` first, because that is torch's order.** This took `reduction`
+   * alone until the core grew a real signature, and then the two axes disagreed:
+   * `new MultiLabelSoftMarginLoss('sum')` set the reduction here and the class
+   * weights in torch, and neither side raised.
+   */
+  constructor(
+    readonly weight?: Tensor,
+    readonly reduction: Reduction = "mean",
+  ) {}
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.multilabelSoftMarginLoss(target, this.reduction);
+    return x.multilabelSoftMarginLoss(target, this.weight, this.reduction);
   }
 
   call(x: Tensor, target: Tensor): Tensor {

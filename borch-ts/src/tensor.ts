@@ -4587,10 +4587,14 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * class set.**
    */
   multilabelSoftMarginLoss(
-    target: Tensor, reduction: Reduction = "mean",
+    target: Tensor, weight?: Tensor, reduction: Reduction = "mean",
   ): Tensor {
-    const each = target.mul(this.logsigmoid())
+    // `weight` rescales each class before the mean, which is where torch applies
+    // it. Multiplying before or after the negation gives the same number; the
+    // order here follows the core so the two read alike side by side.
+    let each = target.mul(this.logsigmoid())
       .add(Tensor.full([], 1).sub(target).mul(this.neg().logsigmoid()));
+    if (weight !== undefined) each = each.mul(weight);
     const dim = this.shape.length - 1;
     return each.neg().mean(dim).reduceAs(reduction);
   }

@@ -3335,6 +3335,9 @@ function addLoss(out: Map<string, Case>): void {
       () => new nn.TripletMarginWithDistanceLoss().call(anc(), pos(), neg())],
     ["MultiLabelSoftMarginLoss", () => new nn.MultiLabelSoftMarginLoss()
       .call(Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]))],
+    ["MultiLabelSoftMarginLoss(weight)",
+      () => new nn.MultiLabelSoftMarginLoss(Tensor.from([0.5, 2, 1.5], [3]))
+        .call(Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]))],
     ["MultiMarginLoss", () => new nn.MultiMarginLoss().call(mm(), mmt())],
     ["MultiLabelMarginLoss", () => new nn.MultiLabelMarginLoss()
       .call(Tensor.from([0.1, 0.2, 0.4, 0.8], [1, 4]),

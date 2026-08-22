@@ -6421,6 +6421,18 @@ def loss_cases(inp=None):
         ("MultiLabelSoftMarginLoss", lambda L: L.nn.MultiLabelSoftMarginLoss()(
             L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
             L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)))),
+        # **The weighted form, added when borch.ts grew a `weight` it did not have.**
+        # torch puts `weight` first and borch.ts took `reduction` there, so
+        # `MultiLabelSoftMarginLoss('sum')` set the class weights in one library and
+        # the reduction in the other, and neither raised. The weights are unequal so
+        # the answer differs from the unweighted case above — a case whose argument
+        # does not change its answer proves nothing, which `test_case_names.py`
+        # refuses and which caught the `max` scheduler case earlier today.
+        ("MultiLabelSoftMarginLoss(weight)",
+         lambda L: L.nn.MultiLabelSoftMarginLoss(
+             L.tensor(np.array([0.5, 2.0, 1.5], dtype=np.float32)))(
+                 L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
+                 L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)))),
         ("MultiMarginLoss", lambda L: L.nn.MultiMarginLoss()(
             L.tensor(_LOSS_MM), L.tensor(np.array([2, 0], dtype=np.int64)))),
         ("MultiLabelMarginLoss", lambda L: L.nn.MultiLabelMarginLoss()(

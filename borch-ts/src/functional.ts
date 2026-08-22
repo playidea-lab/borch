@@ -161,8 +161,13 @@ export function multilabelMarginLoss(input: Tensor, target: Tensor, reduction: R
   return input.multilabelMarginLoss(target, reduction);
 }
 
-export function multilabelSoftMarginLoss(input: Tensor, target: Tensor, reduction: Reduction = "mean"): Tensor {
-  return input.multilabelSoftMarginLoss(target, reduction);
+// `weight` sits between `target` and `reduction`, which is where torch's
+// `F.multilabel_soft_margin_loss(input, target, weight, size_average, reduce,
+// reduction)` puts it.
+export function multilabelSoftMarginLoss(
+  input: Tensor, target: Tensor, weight?: Tensor, reduction: Reduction = "mean",
+): Tensor {
+  return input.multilabelSoftMarginLoss(target, weight, reduction);
 }
 
 export function nllLoss(input: Tensor, target: Tensor): Tensor {

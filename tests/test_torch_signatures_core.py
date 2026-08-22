@@ -107,7 +107,12 @@ UNREADABLE_IN_TORCH = 571
 # 0-of-512 moves a number here and moves nothing in any total.
 JUDGED = {
     "Tensor": (9, 512),
-    "nn": (119, 161),
+    # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
+    # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
+    # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
+    # fix looks like here** — the total did not change, and no other number in this
+    # file would have recorded that anything happened.
+    "nn": (132, 161),
     "nn.functional": (75, 126),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
