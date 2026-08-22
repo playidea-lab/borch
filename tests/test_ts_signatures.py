@@ -210,9 +210,21 @@ RENAMED = {
 # turning it into a truncation without anyone noticing.
 SHORTER = {
     "Tensor": 16,
-    "nn": 24,   # +6: the Conv and ConvTranspose layers left `shifted` for
-                #     `shorter`, which is the safe bucket -- a prefix, refusing what
-                #     it does not reach. Six dangerous rows became six harmless ones.
+    # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
+    # order, so five truncations became agreements; the twelve lazy layers stopped
+    # being uncomparable and three landed here; then borch.ts's Conv and
+    # ConvTranspose layers took torch's lists and six rows left `shifted` for this
+    # bucket.
+    #
+    # **Six dangerous rows became six harmless ones**, which is what following torch
+    # looks like when the far side cannot do everything torch does: a prefix refuses
+    # what it does not reach, and one argument too many raises.
+    #
+    # **Closing a gap against torch opens one between our own two libraries first** —
+    # the core can only move toward the outside authority by moving away from
+    # borch.ts until borch.ts follows. The pair of axes disagreeing for a while is
+    # the mechanism working; a number held still while the two part is not.
+    "nn": 24,
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 12,

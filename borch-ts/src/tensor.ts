@@ -4883,20 +4883,59 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Return the value detached and no gradient reaches the extracted slot,
    * making the whole classification loss non-differentiable.
    */
-  nllLoss(target: Tensor, reduction: Reduction = "mean"): Tensor {
+  nllLoss(
+    target: Tensor, ignoreIndex = -100, reduction: Reduction = "mean",
+  ): Tensor {
     // **The per-sample values are made before folding.** Averaging as soon as they are
     // drawn leaves nowhere to build `reduction: "none"` — per-sample values cannot be
     // recovered from a scalar.
-    const each = this.gather(1, target.reshape([target.size, 1]))
-      .reshape([target.size]).neg();
-    return each.reduceAs(reduction);
+    //
+    // `ignoreIndex` is not an index, so the gather has to see a real one: the
+    // ignored rows are gathered from row 0 and then zeroed, and their value never
+    // reaches the answer. Same ordering the core needs, for the same reason.
+    const keep = target.ne(Tensor.full([], ignoreIndex));
+    const safe = target.mul(keep);
+    const each = this.gather(1, safe.reshape([target.size, 1]))
+      .reshape([target.size]).neg().mul(keep.reshape([target.size]));
+    return each.reduceIgnoring(keep, reduction);
   }
 
   /**
    * Straight from logits. `log_softmax` and `nll_loss` joined.
    */
-  crossEntropy(target: Tensor, reduction: Reduction = "mean"): Tensor {
-    return this.logSoftmax(-1).nllLoss(target, reduction);
+  crossEntropy(
+    target: Tensor, ignoreIndex = -100, reduction: Reduction = "mean",
+    labelSmoothing = 0.0,
+  ): Tensor {
+    const logp = this.logSoftmax(-1);
+    if (!labelSmoothing) return logp.nllLoss(target, ignoreIndex, reduction);
+    // torch spreads ε over every class: the target term keeps 1-ε and the rest
+    // share ε/C, which is the mean of every class's log-probability.
+    const keep = target.ne(Tensor.full([], ignoreIndex));
+    const safe = target.mul(keep);
+    const picked = logp.gather(1, safe.reshape([target.size, 1]))
+      .reshape([target.size]).neg();
+    const spread = logp.neg().mean(logp.shape.length - 1);
+    const each = picked.mul(Tensor.full([], 1 - labelSmoothing))
+      .add(spread.mul(Tensor.full([], labelSmoothing)))
+      .mul(keep.reshape([target.size]));
+    return each.reduceIgnoring(keep, reduction);
+  }
+
+  /**
+   * Fold, with the ignored rows already zeroed and `keep` marking which stayed.
+   *
+   * **The three reductions treat a skipped row differently and two of the three are
+   * easy to get right by accident.** `sum` is unaffected either way. `mean` has to
+   * divide by the rows that remain, not by all of them — averaging with the zeros in
+   * gives a number too small by exactly that ratio and nothing about it looks wrong.
+   * `none` **keeps them as zeros**, because the shape is part of that answer.
+   */
+  reduceIgnoring(keep: Tensor, reduction: Reduction): Tensor {
+    if (reduction === "none") return this;
+    const total = this.sum();
+    if (reduction === "sum") return total;
+    return total.div(keep.reshape([keep.size]).sum());
   }
 
   // ── Where the output size depends on the values ───────────────────────

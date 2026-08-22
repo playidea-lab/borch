@@ -569,6 +569,34 @@ class ParameterDict(Module):
 # `CrossEntropyLoss` did not. What was written later followed torch's signature
 # and what was written first went unfixed. The golden did not see it because
 # tutorials use the default `mean` only.
+def _reduce_ignoring(each, idx, ignore_index, reduction):
+    """Fold `each`, leaving out the rows whose target is `ignore_index`.
+
+    **torch treats the three reductions differently and the difference is easy to
+    get wrong in both directions:**
+
+    - `mean` drops them from the **denominator** as well as the sum. A batch with
+      half its targets ignored divides by the half that remain; zeroing the terms
+      and averaging as usual gives a number too small by exactly that ratio, and
+      nothing about it looks wrong.
+    - `sum` is the same either way.
+    - `none` **keeps them, as zeros.** The shape is part of the answer here, so
+      dropping the rows returns a shorter vector — measured against torch, which
+      returns `[0.357, 0.0, 0.511]` where dropping gives `[0.357, 0.511]`.
+
+    The first version dropped for all three and was right about `mean` and `sum`.
+    A case at `none` is what showed it, which is why the case exists.
+    """
+    if ignore_index is None or not (idx == ignore_index).any():
+        return _reduce(each, reduction)
+    mask = _wrap((idx != ignore_index).astype(each.data.dtype))
+    zeroed = each * mask
+    if reduction == "none":
+        return zeroed
+    total = zeroed.sum()
+    return total if reduction == "sum" else total / int((idx != ignore_index).sum())
+
+
 class _Loss(Module):
     """`reduction` is accepted in one place. Written per loss, the places
     diverge.
@@ -583,21 +611,48 @@ class _Loss(Module):
     this library" — it is the same screen as a typo.
     """
 
-    def __init__(self, reduction="mean", *, weight=None, pos_weight=None):
+    def __init__(self, reduction="mean", *, weight=None, pos_weight=None,
+                 ignore_index=-100, label_smoothing=0.0):
+        """**One signature for six losses is what torch does not do**, and the
+        subclasses below override this with torch's own list each.
+
+        It stays as the shared body: whatever the order the arguments arrive in,
+        they end up here, and the refusals are written once.
+
+        `weight` and `pos_weight` are refused rather than dropped — see above — but
+        they now arrive **at the position torch puts them**, which is first for
+        every loss that has one. `CrossEntropyLoss(class_weights)` used to put the
+        tensor into `reduction` and fail later with a numpy message about comparing
+        a float32 array to a string; it says what is actually wrong now.
+        """
         super().__init__()
         if weight is not None:
             _unsupported(f"{type(self).__name__}(weight=…) — class weights")
         if pos_weight is not None:
             _unsupported(f"{type(self).__name__}(pos_weight=…)")
         self.reduction = reduction
+        self.ignore_index = ignore_index
+        self.label_smoothing = label_smoothing
 
 
 class MSELoss(_Loss):
+    def __init__(self, reduction="mean"):
+        """**torch's `MSELoss` has no `weight` at all**, and this offered one —
+        keyword-only, and refused when given, but offered. An argument that only
+        exists to say no is a wrong entry in the reference and in every editor's
+        completion list, and this axis found it looking the other way for once."""
+        super().__init__(reduction)
+
     def forward(self, pred, target):
         return _reduce((pred - target) ** 2, self.reduction)
 
 
 class BCEWithLogitsLoss(_Loss):
+    def __init__(self, weight=None, reduction="mean", pos_weight=None):
+        """torch's order — and `pos_weight` is **last**, after `reduction`, which is
+        the only loss that puts it there."""
+        super().__init__(reduction, weight=weight, pos_weight=pos_weight)
+
     def forward(self, logits, target):
         # log(1+e^-|x|) + max(x,0) - x*t  — the form that stays safe at large values
         x, t = logits, target
@@ -606,6 +661,11 @@ class BCEWithLogitsLoss(_Loss):
 
 
 class BCELoss(_Loss):
+    def __init__(self, weight=None, reduction="mean"):
+        """torch's order. **No `pos_weight`** — that belongs to the logits form
+        alone, and offering it here would be an argument torch does not have."""
+        super().__init__(reduction, weight=weight)
+
     def forward(self, p, t):
         eps = 1e-12
         return _reduce(-(t * (p + eps).log() + (1 - t) * (1 - p + eps).log()),
@@ -613,12 +673,35 @@ class BCELoss(_Loss):
 
 
 class CrossEntropyLoss(_Loss):
+    def __init__(self, weight=None, ignore_index=-100, reduction="mean",
+                 label_smoothing=0.0):
+        """torch's order: `weight` first, `reduction` **third.**
+
+        This was `(reduction, *, weight, pos_weight)`, so the two arguments people
+        actually pass to this constructor — class weights, and an index to skip —
+        were either unreachable by position or landed on `reduction`.
+        """
+        super().__init__(reduction, weight=weight, ignore_index=ignore_index,
+                         label_smoothing=label_smoothing)
+
     def forward(self, logits, target):
         n = logits.data.shape[0]
         sm = softmax(logits, dim=-1)
         idx = target.data.astype(int)
-        picked = sm[_np.arange(n), idx]
-        return _reduce(-(picked + 1e-12).log(), self.reduction)
+        # **The ignored rows are gathered before they are dropped**, so their index
+        # has to be a real one first — torch's own sentinel is -100 and picking with
+        # it raises. Row 0 is a placeholder whose value never reaches the answer.
+        safe = _np.where(idx == self.ignore_index, 0, idx)
+        picked = sm[_np.arange(n), safe]
+        each = -(picked + 1e-12).log()
+        if self.label_smoothing:
+            # torch spreads ε over every class: the target term keeps 1-ε and the
+            # rest share ε/C, which is the mean of every class's log-probability.
+            e = self.label_smoothing
+            classes = logits.data.shape[-1]
+            each = each * (1 - e) + (-(sm + 1e-12).log()).mean(dim=-1) * e
+            del classes
+        return _reduce_ignoring(each, idx, self.ignore_index, self.reduction)
 
 
 def _nn_unsupported(name):
@@ -2302,6 +2385,10 @@ class Unflatten(Module):
 
 
 class L1Loss(_Loss):
+    def __init__(self, reduction="mean"):
+        """No `weight` in torch either — the same correction as `MSELoss`."""
+        super().__init__(reduction)
+
     def forward(self, pred, target):
         return l1_loss(pred, target, self.reduction)
 
@@ -2329,8 +2416,18 @@ class SmoothL1Loss(_Loss):
 
 
 class NLLLoss(_Loss):
+    def __init__(self, weight=None, ignore_index=-100, reduction="mean"):
+        """torch's order — `weight`, then `ignore_index`, then `reduction`."""
+        super().__init__(reduction, weight=weight, ignore_index=ignore_index)
+
     def forward(self, log_probs, target):
-        return nll_loss(log_probs, target, reduction=self.reduction)
+        idx = target.data.astype(int)
+        # The gather happens inside `nll_loss`, so the sentinel has to be replaced
+        # before it gets there — the same ordering `CrossEntropyLoss` needs, and for
+        # the same reason: -100 is not an index.
+        safe = _np.where(idx == self.ignore_index, 0, idx)
+        each = nll_loss(log_probs, _wrap(safe), reduction="none")
+        return _reduce_ignoring(each, idx, self.ignore_index, self.reduction)
 
 
 class BatchNorm1d(Module):
@@ -3407,17 +3504,25 @@ class _Functional(_Namespace):
     adaptive_avg_pool2d = staticmethod(adaptive_avg_pool2d)
     interpolate = staticmethod(interpolate)
 
+    # **Every one of these passes by keyword now.** They read `MSELoss(reduction)`
+    # and the like, and the day the constructors took torch's order that put a
+    # string where `weight` goes — six tests went red at once and the message was
+    # the class-weight refusal, which is not what any of them were doing. A
+    # positional call is a silent bet that the callee's parameter order never moves,
+    # and this file has just moved six of them.
     @staticmethod
     def mse_loss(pred, target, reduction="mean"):
-        return MSELoss(reduction)(pred, target)
+        return MSELoss(reduction=reduction)(pred, target)
 
     @staticmethod
-    def binary_cross_entropy_with_logits(logits, target, reduction="mean"):
-        return BCEWithLogitsLoss(reduction)(logits, target)
+    def binary_cross_entropy_with_logits(logits, target, weight=None,
+                                         reduction="mean", pos_weight=None):
+        return BCEWithLogitsLoss(weight=weight, reduction=reduction,
+                                 pos_weight=pos_weight)(logits, target)
 
     @staticmethod
-    def binary_cross_entropy(p, target, reduction="mean"):
-        return BCELoss(reduction)(p, target)
+    def binary_cross_entropy(p, target, weight=None, reduction="mean"):
+        return BCELoss(weight=weight, reduction=reduction)(p, target)
 
     @staticmethod
     def linear(x, weight, bias=None):
@@ -3428,8 +3533,20 @@ class _Functional(_Namespace):
     max_pool2d = staticmethod(max_pool2d)
 
     @staticmethod
-    def cross_entropy(logits, target, reduction="mean"):
-        return CrossEntropyLoss(reduction)(logits, target)
+    def cross_entropy(logits, target, weight=None, ignore_index=-100,
+                      reduction="mean", label_smoothing=0.0):
+        """torch's argument list for the function form as well.
+
+        **This read `CrossEntropyLoss(reduction)` — positionally.** The day the
+        constructor took torch's order, `weight` moved into first place and that
+        call started handing it a string; the refusal fired and six tests went red
+        at once. Written with the keyword it would have survived the change, which
+        is the argument for keywords at every internal call site: a positional call
+        is a silent bet that the callee's order never moves.
+        """
+        return CrossEntropyLoss(weight=weight, ignore_index=ignore_index,
+                                reduction=reduction,
+                                label_smoothing=label_smoothing)(logits, target)
 
 
 nn.functional = _Functional()

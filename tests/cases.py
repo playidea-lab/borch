@@ -6421,6 +6421,29 @@ def loss_cases(inp=None):
         ("MultiLabelSoftMarginLoss", lambda L: L.nn.MultiLabelSoftMarginLoss()(
             L.tensor(np.array([[0.5, -1.0, 2.0]], dtype=np.float32)),
             L.tensor(np.array([[1.0, 0.0, 1.0]], dtype=np.float32)))),
+        # **`ignore_index`, across all three reductions.** It was not a parameter at
+        # all until the core took torch's argument list, and the three folds treat a
+        # skipped row differently: `mean` drops it from the denominator, `sum` is
+        # unaffected, and `none` **keeps it as a zero** so the shape survives. The
+        # first implementation dropped it everywhere and was right about two of the
+        # three — `none` came back one element short, which only a case at `none`
+        # could show.
+        *[(f"CrossEntropyLoss(ignore_index, {red})",
+           lambda L, r=red: L.nn.CrossEntropyLoss(ignore_index=-100, reduction=r)(
+               L.tensor(np.array([[2., 1., .1], [.5, 2.5, .3], [1., .2, 3.]],
+                                 dtype=np.float32)),
+               L.tensor(np.array([0, -100, 2], dtype=np.int64))))
+          for red in ("mean", "sum", "none")],
+        ("CrossEntropyLoss(label_smoothing)",
+         lambda L: L.nn.CrossEntropyLoss(label_smoothing=0.1)(
+             L.tensor(np.array([[2., 1., .1], [.5, 2.5, .3], [1., .2, 3.]],
+                               dtype=np.float32)),
+             L.tensor(np.array([0, 1, 2], dtype=np.int64)))),
+        ("NLLLoss(ignore_index)",
+         lambda L: L.nn.NLLLoss(ignore_index=-100)(
+             L.tensor(np.log(np.array([[.7, .2, .1], [.1, .8, .1], [.2, .2, .6]],
+                                      dtype=np.float32))),
+             L.tensor(np.array([0, -100, 2], dtype=np.int64)))),
         # **The weighted form, added when borch.ts grew a `weight` it did not have.**
         # torch puts `weight` first and borch.ts took `reduction` there, so
         # `MultiLabelSoftMarginLoss('sum')` set the class weights in one library and

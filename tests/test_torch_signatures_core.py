@@ -63,6 +63,10 @@ SHIFTED = {
     #
     # RNNBase took mode first, as torch does, and RNN/LSTM/GRU pass their own. The
     # string is not decoration: it is what tells the base which recurrence to build.
+    # 11 → 10. The four weight-first losses took torch's lists, which moved
+    # `BCEWithLogitsLoss` out of this bucket. Two rows also left `unaligned` (10 → 8)
+    # and `nn.functional` lost three (30 → 27): **one edit, seen from three
+    # buckets**, which is what a real fix looks like against an outside authority.
     "Tensor": 2,
     # 11 → 8. MaxPool1d/2d/3d grew torch's padding, dilation and ceil_mode in
     # torch's positions, implemented rather than refused: padding pads with -inf so
@@ -73,43 +77,54 @@ SHIFTED = {
     #
     # `MaxPool2d(2, 2, 1)` used to set return_indices=1. It sets padding=1 now, as
     # torch reads it.
-    # 8 -> 5. Conv1d/2d/3d grew torch's dilation, groups and padding_mode, all
+    #
+    # 8 → 5. Conv1d/2d/3d grew torch's dilation, groups and padding_mode, all
     # implemented: dilation widens the im2col window and thins it, groups is done by
-    # slicing the channels and joining the pieces so the gradient follows from
-    # `cat` rather than from a second hand-written formula, and the non-zero padding
-    # modes pad in the layer exactly as torch's layer does. Checked against real
-    # torch over 144 functional configurations and 352 through the layers.
+    # slicing the channels and joining the pieces so the gradient follows from `cat`
+    # rather than from a second hand-written formula, and the non-zero padding modes
+    # pad in the layer exactly as torch's layer does. Checked against real torch over
+    # 144 functional configurations and 352 through the layers.
     #
     # **`bias` moved from the sixth position to the eighth**, where torch has it, so
     # `Conv2d(3, 16, 3, 1, 1, False)` sets dilation now. Every call site in this
     # repository already passed it by keyword, which is the only reason the move was
-    # quiet -- a positional call is a silent bet that the callee's order never moves.
-    # 5 -> 2. ConvTranspose1d/2d/3d grew output_padding, groups and dilation, all
+    # quiet — a positional call is a silent bet that the callee's order never moves.
+    #
+    # 5 → 2. ConvTranspose1d/2d/3d grew output_padding, groups and dilation, all
     # implemented, checked against real torch over 346 configurations.
     #
-    # **torch puts `dilation` after `bias` here and before it in Conv2d.** The two
-    # are not one list in a different spelling, and following torch means following
-    # that too -- a tidier order of our own would read as agreement and land a
-    # positional call somewhere else.
+    # **torch puts `dilation` after `bias` here and before it in Conv2d.** The two are
+    # not one list in a different spelling, and following torch means following that
+    # too — a tidier order of our own would read as agreement and land a positional
+    # call somewhere else.
     #
     # `output_padding` is the row that argued for comparing values and not only
-    # shapes. It extends the window at the bottom and the right, and **the extra
-    # rows are not zeros**: it reaches back into the part the padding trim was about
-    # to throw away, which holds computed values. Filling them with zeros matches
-    # the shape exactly and differs in the values -- measured, on twelve of the
-    # first fifty-six configurations, every one of them `padding` and
-    # `output_padding` together.
-    # 2 -> 1. EmbeddingBag took torch's whole list: `mode` sits sixth, where torch
-    # has it, so `EmbeddingBag(10, 3, "sum")` set `max_norm="sum"` in torch and the
-    # mode here -- both sides then build a layer and return bags of the right shape,
-    # and only the numbers differ. max_norm, norm_type, _weight, include_last_offset
-    # and padding_idx implemented; scale_grad_by_freq and sparse refused in their own
-    # positions. Checked against real torch over 28 configurations.
+    # shapes. It extends the window at the bottom and the right, and **the extra rows
+    # are not zeros**: it reaches back into the part the padding trim was about to
+    # throw away, which holds computed values. Measured on twelve of the first
+    # fifty-six configurations, every one of them `padding` and `output_padding`
+    # together.
     #
-    # `padding_idx` is the one that needed measuring rather than reading: the padded
-    # entry **leaves the bag** rather than contributing zero to it, which is the same
-    # thing under `sum` and not under `mean`, where it has to leave the denominator.
-    "nn": 1,
+    # 2 → 1. EmbeddingBag took torch's whole list: `mode` sits sixth, so
+    # `EmbeddingBag(10, 3, "sum")` set `max_norm="sum"` in torch and the mode here —
+    # both sides then build a layer and return bags of the right shape, and only the
+    # numbers differ. `padding_idx` needed measuring rather than reading: the padded
+    # entry **leaves the bag** rather than contributing zero, which is the same thing
+    # under `sum` and not under `mean`, where it has to leave the denominator.
+    #
+    # 1 → 0, from the other half of the split in the same window: the four
+    # weight-first losses took torch's lists and `BCEWithLogitsLoss` left this bucket.
+    #
+    # **Two sessions lowering one number is why it is written with every reason
+    # rather than a running total.** This line has conflicted on rebase five times;
+    # each time the resolution kept both stories, because a single figure with one
+    # story attached makes the other invisible, and the thing a reader will want a
+    # year from now is which change moved it.
+    #
+    # **Zero here does not mean `nn` agrees with torch.** 52 rows are `shorter` and 8
+    # `unaligned`; what is gone is the bucket where an argument sits in another's
+    # seat. That is the dangerous one and it is empty. The rest is work, not risk.
+    "nn": 0,
     "nn.functional": 0,
     "optim": 2,
     "optim.lr_scheduler": 2,
@@ -122,8 +137,8 @@ SHIFTED = {
 # where torch says `input`.
 UNALIGNED = {
     "Tensor": 0,
-    "nn": 10,
-    "nn.functional": 30,
+    "nn": 8,
+    "nn.functional": 27,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
@@ -134,15 +149,17 @@ UNALIGNED = {
 # not**, which is `torch_gap.py`'s kind of finding rather than a silent shift.
 SHORTER = {
     "Tensor": 2,
-    # 54 -> 60 and the judged share 132 -> 144 of 161. **Nothing got worse: twelve
-    # rows became visible.** The twelve lazy layers declared `(*args, **kwargs)` and
-    # sat in the uncomparable bucket while every other layer was measured; they
-    # declare their target's signature minus what they infer now, which is torch's
-    # own rule for them, so the axis can judge them. Six land on `agree` -- the
-    # convolutions, whose eager forms match torch -- and six on `shorter`, because
-    # their targets are short of torch and a lazy layer is exactly as complete as
-    # what it becomes.
-    "nn": 60,
+    # 54 → 60 and the judged share 132 → 144 of 161. **Nothing got worse: twelve rows
+    # became visible.** The twelve lazy layers declared `(*args, **kwargs)` and sat in
+    # the uncomparable bucket while every other layer was measured; they declare their
+    # target's signature minus what they infer now, which is torch's own rule for
+    # them, so the axis can judge them. Six land on `agree` — the convolutions, whose
+    # eager forms match torch — and six on `shorter`, because their targets are short
+    # of torch and a lazy layer is exactly as complete as what it becomes.
+    #
+    # 60 → 58 from the other half of the split: two of the weight-first losses
+    # stopped being short when they took torch's argument lists.
+    "nn": 58,
     "nn.functional": 0,
     "optim": 10,
     "optim.lr_scheduler": 1,

@@ -3341,6 +3341,25 @@ function addLoss(out: Map<string, Case>): void {
     ["MultiLabelSoftMarginLoss(weight)",
       () => new nn.MultiLabelSoftMarginLoss(Tensor.from([0.5, 2, 1.5], [3]))
         .call(Tensor.from([0.5, -1, 2], [1, 3]), Tensor.from([1, 0, 1], [1, 3]))],
+    // `ignoreIndex` across all three folds. The three treat a skipped row
+    // differently — `mean` drops it from the denominator, `sum` is unaffected,
+    // `none` keeps it as a zero so the shape survives — and only the `none` case
+    // can show the third, which is how the core's first version was caught coming
+    // back one element short.
+    ...(["mean", "sum", "none"] as const).map((r) =>
+      [`CrossEntropyLoss(ignore_index, ${r})`,
+        () => new nn.CrossEntropyLoss(undefined, -100, r).call(
+          Tensor.from([2, 1, 0.1, 0.5, 2.5, 0.3, 1, 0.2, 3], [3, 3]),
+          Tensor.from([0, -100, 2], [3], { dtype: "int64" }))] as
+        [string, () => Tensor]),
+    ["CrossEntropyLoss(label_smoothing)",
+      () => new nn.CrossEntropyLoss(undefined, -100, "mean", 0.1).call(
+        Tensor.from([2, 1, 0.1, 0.5, 2.5, 0.3, 1, 0.2, 3], [3, 3]),
+        Tensor.from([0, 1, 2], [3], { dtype: "int64" }))],
+    ["NLLLoss(ignore_index)",
+      () => new nn.NLLLoss(undefined, -100).call(
+        Tensor.from([0.7, 0.2, 0.1, 0.1, 0.8, 0.1, 0.2, 0.2, 0.6], [3, 3]).log(),
+        Tensor.from([0, -100, 2], [3], { dtype: "int64" }))],
     ["MultiMarginLoss", () => new nn.MultiMarginLoss().call(mm(), mmt())],
     ["MultiLabelMarginLoss", () => new nn.MultiLabelMarginLoss()
       .call(Tensor.from([0.1, 0.2, 0.4, 0.8], [1, 4]),
@@ -3372,9 +3391,12 @@ function addLoss(out: Map<string, Case>): void {
       // The two classification losses. `nllLoss` **averaged as soon as it gathered**, so
       // there was nowhere to build `none` — per-sample values cannot be recovered from a
       // scalar.
+      // `ignoreIndex` sits between the target and the reduction now, as it does in
+      // torch and in the core. Passing the reduction positionally used to work and
+      // would now set an index, which is why `tsc` names every one of these.
       [`cross_entropy(${reduction})`,
-        () => ceX().crossEntropy(ceT(), reduction)],
-      [`nll_loss(${reduction})`, () => ceLogp().nllLoss(ceT(), reduction)],
+        () => ceX().crossEntropy(ceT(), -100, reduction)],
+      [`nll_loss(${reduction})`, () => ceLogp().nllLoss(ceT(), -100, reduction)],
       // Six layers were **missing** for a while too. borch.ts's `nn` had the rare ones
       // such as `HuberLoss` and was missing the common ones, and **the binding was filling
       // in by building layers over the tensor methods itself**, so the golden saw none of
@@ -3387,9 +3409,10 @@ function addLoss(out: Map<string, Case>): void {
       [`nn.SmoothL1Loss(${reduction})`,
         () => new nn.SmoothL1Loss(reduction, 1.0).call(x(), y())],
       [`nn.CrossEntropyLoss(${reduction})`,
-        () => new nn.CrossEntropyLoss(reduction).call(ceX(), ceT())],
+        () => new nn.CrossEntropyLoss(undefined, -100, reduction)
+          .call(ceX(), ceT())],
       [`nn.NLLLoss(${reduction})`,
-        () => new nn.NLLLoss(reduction).call(ceLogp(), ceT())],
+        () => new nn.NLLLoss(undefined, -100, reduction).call(ceLogp(), ceT())],
     ];
     for (const [name, fn] of fns) out.set(`loss::reduction::${name}`, fn);
   }

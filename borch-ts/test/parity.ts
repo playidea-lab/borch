@@ -694,11 +694,15 @@ export async function report(): Promise<Report> {
     ["MSELoss", (r) => new nn.MSELoss(r).call(lx(), ly())],
     ["L1Loss", (r) => new nn.L1Loss(r).call(lx(), ly())],
     ["SmoothL1Loss", (r) => new nn.SmoothL1Loss(r).call(lx(), ly())],
-    ["BCEWithLogitsLoss", (r) => new nn.BCEWithLogitsLoss(r).call(
+    // These three take torch's argument list now — `weight` first, and for the two
+    // that have it `ignoreIndex` before the reduction. Written positionally they
+    // would set a class weight to `"sum"`, which is why `tsc` names each one.
+    ["BCEWithLogitsLoss", (r) => new nn.BCEWithLogitsLoss(undefined, r).call(
       lx(), Tensor.from([1, 0, 1, 0], [2, 2]))],
-    ["NLLLoss", (r) => new nn.NLLLoss(r).call(
+    ["NLLLoss", (r) => new nn.NLLLoss(undefined, -100, r).call(
       Tensor.from([-1.6, -0.7, -0.5, -1.2], [2, 2]), label())],
-    ["CrossEntropyLoss", (r) => new nn.CrossEntropyLoss(r).call(lx(), label())],
+    ["CrossEntropyLoss",
+      (r) => new nn.CrossEntropyLoss(undefined, -100, r).call(lx(), label())],
   ];
   for (const [name, call] of lossLayers) {
     // `none` is before the fold, so it has many elements, and `sum` is a scalar. **The

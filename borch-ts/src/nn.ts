@@ -2448,8 +2448,33 @@ export class SmoothL1Loss {
   describe(): string { return "SmoothL1Loss()"; }
 }
 
+/**
+ * Class weights are **refused rather than absent**, at the position torch puts them.
+ *
+ * The core refuses them for a reason worth repeating here: torch's `mean` divides by
+ * the **sum of the weights** rather than by the sample count, so a `weight` accepted
+ * and ignored changes the loss value quietly and leads to choosing the wrong learning
+ * rate. What it must not do is take the seat of something else —
+ * `new CrossEntropyLoss(classWeights)` set the *reduction* to a tensor until the core
+ * grew torch's order and the two sides came apart.
+ */
+function refuseWeight(layer: string, what: string, weight: unknown): void {
+  if (weight !== undefined && weight !== null) {
+    throw new Error(
+      `${layer}(${what}=…) is not in the browser subset. Use real PyTorch on your ` +
+      "own machine; imitating what is missing teaches the wrong thing.");
+  }
+}
+
 export class BCEWithLogitsLoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  constructor(
+    weight?: Tensor,
+    readonly reduction: Reduction = "mean",
+    posWeight?: Tensor,
+  ) {
+    refuseWeight("BCEWithLogitsLoss", "weight", weight);
+    refuseWeight("BCEWithLogitsLoss", "posWeight", posWeight);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
     return x.bceWithLogits(target, this.reduction);
@@ -2463,10 +2488,16 @@ export class BCEWithLogitsLoss {
 }
 
 export class NLLLoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  constructor(
+    weight: Tensor | undefined = undefined,
+    readonly ignoreIndex = -100,
+    readonly reduction: Reduction = "mean",
+  ) {
+    refuseWeight("NLLLoss", "weight", weight);
+  }
 
   forward(x: Tensor, target: Tensor): Tensor {
-    return x.nllLoss(target, this.reduction);
+    return x.nllLoss(target, this.ignoreIndex, this.reduction);
   }
 
   call(x: Tensor, target: Tensor): Tensor {
@@ -3704,10 +3735,18 @@ export class MultiheadAttention extends Module {
  * touched side.
  */
 export class CrossEntropyLoss {
-  constructor(readonly reduction: Reduction = "mean") {}
+  constructor(
+    weight: Tensor | undefined = undefined,
+    readonly ignoreIndex = -100,
+    readonly reduction: Reduction = "mean",
+    readonly labelSmoothing = 0.0,
+  ) {
+    refuseWeight("CrossEntropyLoss", "weight", weight);
+  }
 
   forward(logits: Tensor, target: Tensor): Tensor {
-    return logits.crossEntropy(target, this.reduction);
+    return logits.crossEntropy(target, this.ignoreIndex, this.reduction,
+                               this.labelSmoothing);
   }
 
   call(logits: Tensor, target: Tensor): Tensor {

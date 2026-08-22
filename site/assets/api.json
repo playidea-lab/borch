@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 684,
-  "stale": 0,
-  "missing": 70
+  "done": 683,
+  "stale": 1,
+  "missing": 71
  },
  "modules": [
   {
@@ -2409,7 +2409,7 @@
       },
       {
        "name": "nllLoss",
-       "signature": "nllLoss(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "nllLoss(target: Tensor, ignoreIndex?: number, reduction?: Reduction): Tensor",
        "doc": "The negative log-likelihood. `this` must already have been through\n`log_softmax`.\n\n**The graph breaks easily where the target position is extracted.**\nReturn the value detached and no gradient reaches the extracted slot,\nmaking the whole classification loss non-differentiable.",
        "torch": "nll_loss",
        "section": {
@@ -2420,7 +2420,7 @@
       },
       {
        "name": "crossEntropy",
-       "signature": "crossEntropy(target: Tensor, reduction?: Reduction): Tensor",
+       "signature": "crossEntropy(target: Tensor, ignoreIndex?: number, reduction?: Reduction, labelSmoothing?: number): Tensor",
        "doc": "Straight from logits. `log_softmax` and `nll_loss` joined.",
        "torch": "cross_entropy",
        "section": {
@@ -2428,6 +2428,16 @@
         "en": "The addmm family"
        },
        "doc_ko": "로짓에서 바로. `log_softmax` 와 `nll_loss` 를 붙인 것이다."
+      },
+      {
+       "name": "reduceIgnoring",
+       "signature": "reduceIgnoring(keep: Tensor, reduction: Reduction): Tensor",
+       "doc": "Fold, with the ignored rows already zeroed and `keep` marking which stayed.\n\n**The three reductions treat a skipped row differently and two of the three are\neasy to get right by accident.** `sum` is unaffected either way. `mean` has to\ndivide by the rows that remain, not by all of them — averaging with the zeros in\ngives a number too small by exactly that ratio and nothing about it looks wrong.\n`none` **keeps them as zeros**, because the shape is part of that answer.",
+       "torch": "reduce_ignoring",
+       "section": {
+        "ko": "The addmm family",
+        "en": "The addmm family"
+       }
       },
       {
        "name": "maskedSelect",
@@ -6521,7 +6531,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 669,
+   "count": 670,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -7621,14 +7631,30 @@
      "doc": "",
      "members": [
       {
+       "name": "padding",
+       "signature": "readonly padding: number",
+       "doc": ""
+      },
+      {
+       "name": "dilation",
+       "signature": "readonly dilation: number",
+       "doc": ""
+      },
+      {
        "name": "returnIndices",
        "signature": "readonly returnIndices: boolean",
        "doc": "",
        "torch": "return_indices"
       },
       {
+       "name": "ceilMode",
+       "signature": "readonly ceilMode: boolean",
+       "doc": "",
+       "torch": "ceil_mode"
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(kernel?: number, stride?: number | undefined, returnIndices?: boolean)",
+       "signature": "constructor(kernel?: number, stride?: number | undefined, padding?: number, dilation?: number, returnIndices?: boolean, ceilMode?: boolean)",
        "doc": "**`returnIndices` was missing until the layer that consumes them arrived.**\nThe name was here, the argument was not, and that is invisible from a name\ncount — `MaxUnpool` is what makes the positions worth asking for.",
        "doc_ko": "**그것을 받아먹는 층이 생길 때까지 `returnIndices` 가 없었다.** 이름은 여기\n있었고 인자가 없었으며, 그것은 이름을 세는 것으로는 안 보인다 — 자리를 물어볼\n값어치를 만드는 것이 `MaxUnpool` 이다."
       },
@@ -8530,44 +8556,9 @@
        "doc": ""
       },
       {
-       "name": "maxNorm",
-       "signature": "readonly maxNorm: number | null",
-       "doc": "",
-       "torch": "max_norm"
-      },
-      {
-       "name": "normType",
-       "signature": "readonly normType: number",
-       "doc": "",
-       "torch": "norm_type"
-      },
-      {
-       "name": "scaleGradByFreq",
-       "signature": "readonly scaleGradByFreq: boolean",
-       "doc": "",
-       "torch": "scale_grad_by_freq"
-      },
-      {
        "name": "mode",
        "signature": "readonly mode: \"sum\" | \"mean\" | \"max\"",
        "doc": ""
-      },
-      {
-       "name": "sparse",
-       "signature": "readonly sparse: boolean",
-       "doc": ""
-      },
-      {
-       "name": "includeLastOffset",
-       "signature": "readonly includeLastOffset: boolean",
-       "doc": "",
-       "torch": "include_last_offset"
-      },
-      {
-       "name": "paddingIdx",
-       "signature": "readonly paddingIdx: number | null",
-       "doc": "",
-       "torch": "padding_idx"
       },
       {
        "name": "weight",
@@ -8576,8 +8567,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(num: number, dim: number, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, weightIn?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null)",
-       "doc": "**`mode` sits sixth, where torch has it.**\n\nIt used to be third, so `new EmbeddingBag(10, 3, \"sum\")` set `maxNorm` in\ntorch and the mode here. Both readings then build a layer and return bags of\nthe right shape, and only the numbers differ."
+       "signature": "constructor(num: number, dim: number, mode?: \"sum\" | \"mean\" | \"max\")",
+       "doc": ""
       },
       {
        "name": "ownParameters",
@@ -9242,7 +9233,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(weight?: Tensor, reduction?: Reduction, posWeight?: Tensor)",
        "doc": ""
       },
       {
@@ -9269,13 +9260,19 @@
      "doc": "",
      "members": [
       {
+       "name": "ignoreIndex",
+       "signature": "readonly ignoreIndex: number",
+       "doc": "",
+       "torch": "ignore_index"
+      },
+      {
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
        "doc": ""
       },
       {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(weight?: Tensor | undefined, ignoreIndex?: number, reduction?: Reduction)",
        "doc": ""
       },
       {
@@ -10196,11 +10193,10 @@
     {
      "kind": "function",
      "name": "embeddingBag",
-     "signature": "export declare function embeddingBag(idx: Tensor, weight: Tensor, offsets?: readonly number[] | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, perSampleWeights?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null): Tensor",
-     "doc": "One row per bag. Selecting from the table and **combining** is all one function.\n\nGiven `offsets`, a one-dimensional index run is cut into bags — the shape for\nwhen the bags have differing lengths. `perSampleWeights` is used in torch under\n`mode='sum'` alone.\n\n**`mode` sits sixth, where torch has it.** It used to be fourth, so\n`embeddingBag(idx, w, offsets, \"sum\")` handed a mode string to `maxNorm` — and\n`maxNorm` rewrites the table, so the layer would have been rescaling its own\nembeddings on every forward pass.",
+     "signature": "export declare function embeddingBag(idx: Tensor, weight: Tensor, offsets?: readonly number[] | null, mode?: \"sum\" | \"mean\" | \"max\", perSampleWeights?: Tensor | null): Tensor",
+     "doc": "One row per bag. Selecting from the table **and combining** is one\nfunction.\n\nGiven `offsets` it cuts a one-dimensional index run into bags — the place\nwhere bag lengths differ. `perSampleWeights` is used by torch only when\n`mode='sum'`.",
      "members": [],
-     "torch": "embedding_bag",
-     "doc_ko": "가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.\n\n`offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.\n`perSampleWeights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.\n\n**`mode` 는 여섯째 자리다. torch 가 거기 두기 때문이다.** 전에는 넷째였고, 그래서\n`embeddingBag(idx, w, offsets, \"sum\")` 이 mode 문자열을 `maxNorm` 에 넘겼다 — 그리고\n`maxNorm` 은 표를 다시 쓴다. 층이 매 순방향마다 자기 임베딩을 다시 조정할 뻔했다."
+     "torch": "embedding_bag"
     },
     {
      "kind": "function",
@@ -10493,13 +10489,25 @@
      "doc": "Straight from logits and target indices. `log_softmax` and `nll_loss`\njoined.\n\n**There was no `reduction`** — the layer side had the same hole.\nTextbooks use layers more than functions, so this is the more frequently\ntouched side.",
      "members": [
       {
+       "name": "ignoreIndex",
+       "signature": "readonly ignoreIndex: number",
+       "doc": "",
+       "torch": "ignore_index"
+      },
+      {
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
        "doc": ""
       },
       {
+       "name": "labelSmoothing",
+       "signature": "readonly labelSmoothing: number",
+       "doc": "",
+       "torch": "label_smoothing"
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(reduction?: Reduction)",
+       "signature": "constructor(weight?: Tensor | undefined, ignoreIndex?: number, reduction?: Reduction, labelSmoothing?: number)",
        "doc": ""
       },
       {
@@ -10735,14 +10743,19 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, momentum?: number, weightDecay?: number)",
-       "doc": ""
+       "signature": "constructor(params: ParamsArg, lr: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, { maximize }?: { maximize?: boolean; })",
+       "doc": "torch's order — `dampening` third and `nesterov` sixth, with `maximize`\nkeyword-only behind them as torch has it.\n\n**This read `(params, lr, momentum, weightDecay)`**, so `new SGD(p, 0.1, 0.9,\n1e-4)` — the line a torch tutorial writes — set the dampening to the weight\ndecay and left the decay at zero. Two different things, both plausible small\nnumbers, and the run trains and trains slightly wrong."
       },
       {
        "name": "update",
        "signature": "protected update(index: number, param: Tensor, grad: Tensor): void",
        "doc": "",
        "protected": true
+      },
+      {
+       "name": "step",
+       "signature": "step(): void",
+       "doc": ""
       }
      ]
     },
@@ -10829,7 +10842,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, initialAccumulatorValue?: number, eps?: number)",
        "doc": "**`weightDecay` sits fourth, before `eps`** — that is torch's order, and the\nbinding calls this positionally, so the position is the contract. It is one\nof the two here inserted into the middle rather than appended; every call in\nthis repository stops at `lr`, so nothing moved under them, and that was\nchecked rather than assumed."
       },
       {
@@ -11507,7 +11520,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, mode?: \"min\" | \"max\", factor?: number, patience?: number, threshold?: number)",
+       "signature": "constructor(opt: Optimizer, mode?: \"min\" | \"max\", factor?: number, patience?: number, threshold?: number, thresholdMode?: \"rel\" | \"abs\", cooldown?: number, minLr?: number, eps?: number)",
        "doc": "`mode` decides which direction counts as improvement — `'min'` for a loss,\n`'max'` for an accuracy.\n\n**It stands second because torch puts it second, and for a while it was not\nhere at all.** Without it `new ReduceLROnPlateau(opt, 'min', 0.1)` — the way\ntorch's own documentation writes the call — put the string into `factor` and\n`0.1` into `patience`, and nothing raised: the schedule simply cut the learning\nrate by `NaN` at the wrong time. An argument missing from the middle of a list\ndoes not fail, it answers."
       },
       {
@@ -11532,7 +11545,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 150,
+   "count": 151,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -14533,5 +14546,5 @@
    "count": 9
   }
  ],
- "total": 1894
+ "total": 1896
 }
