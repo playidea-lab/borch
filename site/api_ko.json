@@ -420,16 +420,16 @@
     "src": "35444e3f6259"
   },
   "nn/ConvTranspose1d": {
-    "ko": "`torch.nn.ConvTranspose1d`.",
-    "src": "37dffc30885a"
+    "ko": "`torch.nn.ConvTranspose1d`.\n\n**torch 는 여기서 `dilation` 을 `bias` 뒤에 두고 `Conv1d` 에서는 앞에 둔다.** 두\n목록은 철자만 다른 같은 것이 아니다 — 여덟째 자리가 하나는 `bias` 이고 하나는\n`dilation` 이다. torch 를 따른다는 것은 그것까지 따른다는 뜻이다. 우리 나름의 더\n깔끔한 순서는 일치처럼 읽히면서 위치 인자를 다른 데로 떨어뜨린다.",
+    "src": "bd29ed51454e"
   },
   "nn/ConvTranspose2d": {
-    "ko": "`torch.nn.ConvTranspose2d`.",
-    "src": "f55574d2468b"
+    "ko": "`torch.nn.ConvTranspose2d`. 인자 차례는 `ConvTranspose1d` 를 보라.",
+    "src": "caf74a12383e"
   },
   "nn/ConvTranspose3d": {
-    "ko": "`torch.nn.ConvTranspose3d`.",
-    "src": "3711c2869c8d"
+    "ko": "`torch.nn.ConvTranspose3d`. 인자 차례는 `ConvTranspose1d` 를 보라.",
+    "src": "38e5a65a92c8"
   },
   "nn/Dropout": {
     "ko": "학습 때만 자리를 떨군다. **평가 모드에서는 항등이다.**\n\n`training` 은 `Module` 이 들고 있고 `eval()` 이 컨테이너를 뚫고 내려가 끈다 —\n그 전파가 끊기면 학습은 멀쩡하고 추론만 틀린다.",

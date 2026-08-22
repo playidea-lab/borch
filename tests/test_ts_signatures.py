@@ -113,7 +113,16 @@ SHIFTED = {
     # -- `new Conv2d(cin, cout, 3, stride, 1, false)` with a boolean where a number
     # now goes. The same move in Python was silent, and another session had six
     # tests break on it this morning.
-    "nn": 4,
+    # 4 -> 1. The three ConvTranspose layers followed the core: torch's order,
+    # `bias` eighth and `dilation` **ninth**, which is not the convolution's order
+    # and is torch's. outputPadding, groups and dilation implemented.
+    #
+    # `outputPadding` is expressed as a longer output and nothing else: the shader
+    # finds, for each output cell, the input cells that reach it, and asked for more
+    # cells it answers by the same rule -- which is what torch's extra rows are.
+    # They are **not zeros**, and a version that wrote zeros would agree on every
+    # shape and part on the values.
+    "nn": 1,
     # 1 -> 2. `F.embedding_bag` moved `mode` from third to sixth, where torch
     # has it, and borch.ts still takes it third. Same pair as the layer above,
     # one level down.
@@ -197,9 +206,9 @@ RENAMED = {
 # turning it into a truncation without anyone noticing.
 SHORTER = {
     "Tensor": 16,
-    "nn": 21,   # +3: the Conv layers now carry arguments borch.ts still lacks
-                #     nowhere else -- they left `shifted` for `shorter`, which is
-                #     the safe bucket: a prefix, refusing what it does not reach.
+    "nn": 24,   # +6: the Conv and ConvTranspose layers left `shifted` for
+                #     `shorter`, which is the safe bucket -- a prefix, refusing what
+                #     it does not reach. Six dangerous rows became six harmless ones.
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 12,

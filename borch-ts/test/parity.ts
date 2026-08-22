@@ -943,6 +943,58 @@ export async function report(): Promise<Report> {
     new nn.Conv2d(4, 2, 3, 1, 0, 1, 1, false).bias === null,
     "a positional `false` in the sixth seat would be a dilation now");
 
+  // ── convTranspose: the three that followed the core ──────────────────
+  //
+  // Equivalences again, so nothing here writes a value down.
+  const tx = keepAlive(Tensor.from(
+    Array.from({ length: 2 * 4 * 5 * 5 }, (_, i) => ((i * 11) % 17) / 17 - 0.5),
+    [2, 4, 5, 5]));
+  const tw = keepAlive(Tensor.from(
+    Array.from({ length: 4 * 3 * 3 * 3 }, (_, i) => ((i * 5) % 13) / 13 - 0.5),
+    [4, 3, 3, 3]));
+
+  await agrees("transpose groups=2 is two transposes on the halves",
+    tx.convTransposeND(tw, null, 1, 0, 0, 2),
+    Tensor.cat([
+      tx.narrow(1, 0, 2).convTransposeND(tw.narrow(0, 0, 2), null, 1, 0),
+      tx.narrow(1, 2, 2).convTransposeND(tw.narrow(0, 2, 2), null, 1, 0),
+    ], 1));
+
+  // **`outputPadding` reaches back into what the padding trim threw away.** With
+  // padding 1 and outputPadding 1 the answer has to be the untrimmed transpose cut
+  // at `[p, len - p + op)` — real values, not zeros. Writing zeros there agrees on
+  // the shape and differs in the values, which is how the core found it.
+  {
+    const full = tx.convTransposeND(tw, null, 2, 0);
+    const len = full.shape[2] ?? 0;
+    await agrees("outputPadding takes computed values, not zeros",
+      tx.convTransposeND(tw, null, 2, 1, 1),
+      full.narrow(2, 1, len - 1).narrow(3, 1, len - 1));
+  }
+
+  // `dilation=2` against the same filter spread apart, as for the convolution.
+  {
+    const spread = new Float32Array(4 * 3 * 5 * 5);
+    const flat = await tw.toArray();
+    for (let i = 0; i < 4; i++) {
+      for (let o = 0; o < 3; o++) {
+        for (let a = 0; a < 3; a++) {
+          for (let b = 0; b < 3; b++) {
+            spread[((i * 3 + o) * 5 + a * 2) * 5 + b * 2] =
+              flat[((i * 3 + o) * 3 + a) * 3 + b] ?? 0;
+          }
+        }
+      }
+    }
+    await agrees("transpose dilation=2 is the filter spread apart",
+      tx.convTransposeND(tw, null, 1, 0, 0, 1, 2),
+      tx.convTransposeND(keepAlive(Tensor.from(spread, [4, 3, 5, 5]))));
+  }
+
+  want("ConvTranspose2d takes bias eighth and dilation ninth",
+    new nn.ConvTranspose2d(4, 2, 3, 1, 0, 0, 1, false).bias === null,
+    "torch orders this one differently from Conv2d, and so does this");
+
   // ── vision: the place a widened type opened ──────────────────────────
   //
   // **The golden cannot ask this.** `Transform` widened to take an array as well, for

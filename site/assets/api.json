@@ -5094,7 +5094,7 @@
       },
       {
        "name": "convTransposeND",
-       "signature": "convTransposeND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[]): Tensor",
+       "signature": "convTransposeND(weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor",
        "doc": "Transposed convolution independent of dimensionality.\n\n**There is no new kernel.** A transposed convolution's forward is the\nsame computation as an ordinary convolution's flow towards its input,\nso `convNDGradInputTiled` is used as-is. The backward flips likewise —\nthe input-side gradient is an ordinary convolution's forward, and the\nweight side is the same kernel with two arguments exchanged. The same\ncomputation in two copies means a day when one of them is fixed.\n\n**The weight axes are flipped relative to `convND`** — `(in, out, …)`.\nWith a square kernel the shape still matches when flipped, so only the\nvalues diverge.",
        "torch": "conv_transpose_n_d",
        "section": {
@@ -7527,7 +7527,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, spatial: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, spatial: number, stride?: number, padding?: number, bias?: boolean, outputPadding?: number, groups?: number, dilation?: number)",
        "doc": ""
       },
       {
@@ -7548,43 +7548,43 @@
      "kind": "class",
      "name": "ConvTranspose1d",
      "signature": "export declare class ConvTranspose1d extends ConvTransposeND",
-     "doc": "`torch.nn.ConvTranspose1d`.",
+     "doc": "`torch.nn.ConvTranspose1d`.\n\n**torch puts `dilation` after `bias` here and before it in `Conv1d`.** The two\nare not one list in a different spelling: the eighth position is `bias` in one\nand `dilation` in the other. Following torch means following that too — a tidier\norder of our own would read as agreement and land a positional call elsewhere.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.ConvTranspose1d`."
+     "doc_ko": "`torch.nn.ConvTranspose1d`.\n\n**torch 는 여기서 `dilation` 을 `bias` 뒤에 두고 `Conv1d` 에서는 앞에 둔다.** 두\n목록은 철자만 다른 같은 것이 아니다 — 여덟째 자리가 하나는 `bias` 이고 하나는\n`dilation` 이다. torch 를 따른다는 것은 그것까지 따른다는 뜻이다. 우리 나름의 더\n깔끔한 순서는 일치처럼 읽히면서 위치 인자를 다른 데로 떨어뜨린다."
     },
     {
      "kind": "class",
      "name": "ConvTranspose2d",
      "signature": "export declare class ConvTranspose2d extends ConvTransposeND",
-     "doc": "`torch.nn.ConvTranspose2d`.",
+     "doc": "`torch.nn.ConvTranspose2d`. See `ConvTranspose1d` on the argument order.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.ConvTranspose2d`."
+     "doc_ko": "`torch.nn.ConvTranspose2d`. 인자 차례는 `ConvTranspose1d` 를 보라."
     },
     {
      "kind": "class",
      "name": "ConvTranspose3d",
      "signature": "export declare class ConvTranspose3d extends ConvTransposeND",
-     "doc": "`torch.nn.ConvTranspose3d`.",
+     "doc": "`torch.nn.ConvTranspose3d`. See `ConvTranspose1d` on the argument order.",
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, bias?: boolean)",
+       "signature": "constructor(inC: number, outC: number, kernel: number, stride?: number, padding?: number, outputPadding?: number, groups?: number, bias?: boolean, dilation?: number)",
        "doc": ""
       }
      ],
-     "doc_ko": "`torch.nn.ConvTranspose3d`."
+     "doc_ko": "`torch.nn.ConvTranspose3d`. 인자 차례는 `ConvTranspose1d` 를 보라."
     },
     {
      "kind": "class",

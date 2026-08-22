@@ -1135,10 +1135,19 @@ export class ConvTransposeND extends Module {
     private readonly stride = 1,
     private readonly padding = 0,
     bias = true,
+    private readonly outputPadding = 0,
+    private readonly groups = 1,
+    private readonly dilation = 1,
   ) {
     super();
-    const bound = 1 / Math.sqrt(Math.max(1, outC * kernel ** spatial));
-    this.weight = uniform([inC, outC, ...new Array<number>(spatial).fill(kernel)], bound);
+    if (inC % groups !== 0 || outC % groups !== 0) {
+      throw new RuntimeError(
+        `groups=${groups} divides neither the input channels (${inC}) nor the `
+        + `filters (${outC})`);
+    }
+    const bound = 1 / Math.sqrt(Math.max(1, (outC / groups) * kernel ** spatial));
+    this.weight = uniform(
+      [inC, outC / groups, ...new Array<number>(spatial).fill(kernel)], bound);
     this.bias = bias ? uniform([outC], bound) : null;
     this.claim(...(this.bias ? [this.weight, this.bias] : [this.weight]));
   }
@@ -1150,7 +1159,8 @@ export class ConvTransposeND extends Module {
   }
 
   override forward(x: Tensor): Tensor {
-    return x.convTransposeND(this.weight, this.bias, this.stride, this.padding);
+    return x.convTransposeND(this.weight, this.bias, this.stride, this.padding,
+                             this.outputPadding, this.groups, this.dilation);
   }
 }
 
@@ -1164,27 +1174,37 @@ export class ConvTransposeND extends Module {
  * the name, not the computation.
  */
 
-/** `torch.nn.ConvTranspose1d`. */
+/**
+ * `torch.nn.ConvTranspose1d`.
+ *
+ * **torch puts `dilation` after `bias` here and before it in `Conv1d`.** The two
+ * are not one list in a different spelling: the eighth position is `bias` in one
+ * and `dilation` in the other. Following torch means following that too — a tidier
+ * order of our own would read as agreement and land a positional call elsewhere.
+ */
 export class ConvTranspose1d extends ConvTransposeND {
-  constructor(inC: number, outC: number, kernel: number,
-              stride = 1, padding = 0, bias = true) {
-    super(inC, outC, kernel, 1, stride, padding, bias);
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+              outputPadding = 0, groups = 1, bias = true, dilation = 1) {
+    super(inC, outC, kernel, 1, stride, padding, bias, outputPadding, groups,
+          dilation);
   }
 }
 
-/** `torch.nn.ConvTranspose2d`. */
+/** `torch.nn.ConvTranspose2d`. See `ConvTranspose1d` on the argument order. */
 export class ConvTranspose2d extends ConvTransposeND {
-  constructor(inC: number, outC: number, kernel: number,
-              stride = 1, padding = 0, bias = true) {
-    super(inC, outC, kernel, 2, stride, padding, bias);
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+              outputPadding = 0, groups = 1, bias = true, dilation = 1) {
+    super(inC, outC, kernel, 2, stride, padding, bias, outputPadding, groups,
+          dilation);
   }
 }
 
-/** `torch.nn.ConvTranspose3d`. */
+/** `torch.nn.ConvTranspose3d`. See `ConvTranspose1d` on the argument order. */
 export class ConvTranspose3d extends ConvTransposeND {
-  constructor(inC: number, outC: number, kernel: number,
-              stride = 1, padding = 0, bias = true) {
-    super(inC, outC, kernel, 3, stride, padding, bias);
+  constructor(inC: number, outC: number, kernel: number, stride = 1, padding = 0,
+              outputPadding = 0, groups = 1, bias = true, dilation = 1) {
+    super(inC, outC, kernel, 3, stride, padding, bias, outputPadding, groups,
+          dilation);
   }
 }
 

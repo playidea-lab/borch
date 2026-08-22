@@ -9183,8 +9183,33 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     bias: Tensor | null = null,
     stride: number | readonly number[] = 1,
     padding: number | readonly number[] = 0,
+    outputPadding: number | readonly number[] = 0,
+    groups = 1,
+    dilation: number | readonly number[] = 1,
   ): Tensor {
     const spatial = this.shape.length - 2;
+    if (groups !== 1) {
+      // **The weight axes are the other way round here** — `(in, out/groups, …)` —
+      // so the slice that walks the groups runs down axis 0 for the input side and
+      // the bias is cut by axis 1. Written apart from the convolution's for that
+      // reason: with a square kernel the reversed weight fits, and it diverges only
+      // in the values.
+      const inCh = this.shape[1] ?? 1;
+      const perGroupOut = weight.shape[1] ?? 1;
+      if (inCh % groups !== 0) {
+        throw new RuntimeError(
+          `groups=${groups} does not divide the input channels (${inCh})`);
+      }
+      const cin = inCh / groups;
+      const parts: Tensor[] = [];
+      for (let g = 0; g < groups; g++) {
+        parts.push(this.narrow(1, g * cin, cin).convTransposeND(
+          weight.narrow(0, g * cin, cin),
+          bias === null ? null : bias.narrow(0, g * perGroupOut, perGroupOut),
+          stride, padding, outputPadding, 1, dilation));
+      }
+      return Tensor.cat(parts, 1);
+    }
     if (spatial < 1 || weight.shape.length !== this.shape.length) {
       throw new Error(
         `convTranspose: shapes do not match: [${this.shape}] x [${weight.shape}]`);
@@ -9193,6 +9218,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       typeof v === "number" ? new Array<number>(spatial).fill(v) : [...v];
     const st = spread(stride);
     const pd = spread(padding);
+    const op = spread(outputPadding);
+    const dl = spread(dilation);
     const Cin = this.shape[1] ?? 1;
     const Cout = weight.shape[1] ?? 1;
     if ((weight.shape[0] ?? 1) !== Cin) {
@@ -9205,11 +9232,21 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     const ourDims = this.shape.slice(2);
     // Seen through an ordinary convolution's eyes: our input is its **output** and our
     // output is its input. So O and C go into swapped slots.
+    // **`outputPadding` is expressed as a longer output and nothing else.** The
+    // shader finds, for each output cell, the input cells that reach it; ask it for
+    // more cells and it answers by the same rule — which is what torch's extra rows
+    // are. They are **not zeros**: they reach back into the part the padding trim
+    // was about to throw away, and only past the untrimmed end is there nothing to
+    // find, where the shader's guard already gives 0. Writing zeros instead matches
+    // the shape exactly and differs in the values (measured on the core side, on
+    // twelve of fifty-six configurations, every one of them padding and
+    // outputPadding together).
     const outDims = ourDims.map((d, i) =>
-      (d - 1) * (st[i] ?? 1) + (kernel[i] ?? 1) - 2 * (pd[i] ?? 0));
+      (d - 1) * (st[i] ?? 1) + ((kernel[i] ?? 1) - 1) * (dl[i] ?? 1) + 1
+      - 2 * (pd[i] ?? 0) + (op[i] ?? 0));
     const s: ConvNDShape = {
       N: this.shape[0] ?? 1, C: Cout, O: Cin,
-      inDims: outDims, kernel, stride: st, pad: pd, outDims: ourDims,
+      inDims: outDims, kernel, stride: st, pad: pd, dilation: dl, outDims: ourDims,
     };
     const key = convNDKey(s);
     const outShape = [s.N, Cout, ...outDims];
