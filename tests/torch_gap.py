@@ -45,19 +45,20 @@ the move that hid it: absent from the list reads as zero to review, and absent f
 while present in the list reads as thirty-six to review. The second was the true sentence,
 and it is what put the namespace on the to-do list it has now come off.
 
-## `datasets` reads 11 of 72, and **four of the gaps are left without a reason**
+## `datasets` reads 12 of 72, and **three of the gaps are left without a reason**
 
-It was eight, and four of them have since been built — which is what the list was for.
-The four left are `EMNIST`, `MovingMNIST`, `STL10` and `FER2013`.
+It was eight, and five of them have since been built — which is what the list was for.
+The three left are `MovingMNIST`, `STL10` and `FER2013`.
 
 The reason the rest are declined is a codec. Most of torchvision's datasets are
 folders of JPEG or PNG, numpy decodes neither, and adding a decoder is the dependency
 this library does without — the same answer PIL gets in `transforms`, arriving from
-the other side. That reason is true of fifty-seven names and **false of these four**,
-and their real reasons are not even the same as each other. `EMNIST` is MNIST's own
-IDX inside a 562MB zip; `MovingMNIST` is an 819MB `.npy`; `STL10` is 2.6GB of raw
-bytes. Measured at this network's speed those are 64 minutes, 93 minutes and five
-hours — a cost, and not an impossibility, which is a different sentence.
+the other side. That reason is true of fifty-seven names and **false of these three**,
+and their real reasons are not even the same as each other. `MovingMNIST` is an 819MB
+`.npy`; `STL10` is 2.6GB of raw bytes. Measured at this network's speed those are 93
+minutes and five hours — a cost, and not an impossibility, which is a different
+sentence. `EMNIST` was on this list yesterday with the same kind of reason, 562MB of
+it, and the way it came off was somebody waiting for the download.
 
 **`FER2013` is the one that cannot be closed honestly.** torchvision has no `download`
 for it; it expects a manual Kaggle fetch. So there is no way to compare against real
