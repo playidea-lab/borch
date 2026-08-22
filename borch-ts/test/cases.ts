@@ -2716,18 +2716,21 @@ function addUnpool(out: Map<string, Case>): void {
   const ebIdx = () => Tensor.from([0, 2, 1, 4], [2, 2], { dtype: "int64" });
   for (const mode of ["mean", "sum", "max"] as const) {
     out.set(`fname::embedding_bag::${mode}`,
-      () => nn.embeddingBag(ebIdx(), ebTable(), null, mode));
+      // **`mode` is sixth now**, where torch has it. Passed fourth it would be
+      // `maxNorm`, and `maxNorm` rewrites the table.
+      () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, false, mode));
   }
   out.set("fname::embedding_bag::offsets",
     () => nn.embeddingBag(
-      Tensor.from([0, 2, 1, 4, 3], [5], { dtype: "int64" }), ebTable(), [0, 2], "sum"));
+      Tensor.from([0, 2, 1, 4, 3], [5], { dtype: "int64" }), ebTable(), [0, 2],
+      null, 2, false, "sum"));
   out.set("fname::embedding_bag::per_sample_weights",
-    () => nn.embeddingBag(ebIdx(), ebTable(), null, "sum",
+    () => nn.embeddingBag(ebIdx(), ebTable(), null, null, 2, false, "sum", false,
       Tensor.from([1, 2, 0.5, 0.5], [2, 2])));
   out.set("fname::embedding_bag::grad", () => {
     const table = ebTable();
     table.requiresGrad = true;
-    nn.embeddingBag(ebIdx(), table, null, "sum").sum().backward();
+    nn.embeddingBag(ebIdx(), table, null, null, 2, false, "sum").sum().backward();
     return gradOf(table, "embeddingBag");
   });
 
@@ -2949,14 +2952,14 @@ function addMisc(out: Map<string, Case>): void {
   const bags = () => Tensor.from([0, 1, 2, 3], [2, 2]);
   for (const mode of ["sum", "mean", "max"] as const) {
     out.set(`misc::층::EmbeddingBag(${mode})`, () => {
-      const layer = new nn.EmbeddingBag(5, 3, mode);
+      const layer = new nn.EmbeddingBag(5, 3, null, 2, false, mode);
       layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
       return layer.call(bags());
     });
   }
 
   out.set("misc::층::EmbeddingBag(offsets)", () => {
-    const layer = new nn.EmbeddingBag(5, 3, "sum");
+    const layer = new nn.EmbeddingBag(5, 3, null, 2, false, "sum");
     layer.loadStateDict({ weight: Tensor.from(table, [5, 3]) });
     return layer.callOffsets(Tensor.from([0, 1, 2, 3], [4]), [0, 2]);
   });

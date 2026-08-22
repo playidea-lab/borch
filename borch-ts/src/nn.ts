@@ -17,7 +17,7 @@
  * divergent values.
  */
 
-import { RuntimeError, ValueError } from "./errors.js";
+import { NotImplementedError, RuntimeError, ValueError } from "./errors.js";
 import { runningStats } from "./kernels.js";
 import { onSeed, uniform as uniform01, uniformArray } from "./random.js";
 import {
@@ -1960,10 +1960,24 @@ export class UpsamplingBilinear2d extends UpsamplingBase {
 export class EmbeddingBag extends Module {
   readonly weight: Tensor;
 
+  /**
+   * **`mode` sits sixth, where torch has it.**
+   *
+   * It used to be third, so `new EmbeddingBag(10, 3, "sum")` set `maxNorm` in
+   * torch and the mode here. Both readings then build a layer and return bags of
+   * the right shape, and only the numbers differ.
+   */
   constructor(readonly num: number, readonly dim: number,
-              readonly mode: "sum" | "mean" | "max" = "mean") {
+              readonly maxNorm: number | null = null,
+              readonly normType = 2,
+              readonly scaleGradByFreq = false,
+              readonly mode: "sum" | "mean" | "max" = "mean",
+              readonly sparse = false,
+              weightIn: Tensor | null = null,
+              readonly includeLastOffset = false,
+              readonly paddingIdx: number | null = null) {
     super();
-    this.weight = uniform([num, dim], 1);
+    this.weight = weightIn ?? uniform([num, dim], 1);
     this.claim(this.weight);
   }
 
@@ -1974,7 +1988,9 @@ export class EmbeddingBag extends Module {
   override forward(idx: Tensor): Tensor {
     // `embeddingBag` does the computation — the layer and the function are not two
     // copies of it.
-    return embeddingBag(idx, this.weight, null, this.mode);
+    return embeddingBag(idx, this.weight, null, this.maxNorm, this.normType,
+                        this.scaleGradByFreq, this.mode, this.sparse, null,
+                        this.includeLastOffset, this.paddingIdx);
   }
 
   /**
@@ -1985,7 +2001,9 @@ export class EmbeddingBag extends Module {
    * uses (shopping carts, sentences) have differing lengths.
    */
   callOffsets(idx: Tensor, offsets: readonly number[]): Tensor {
-    return embeddingBag(idx, this.weight, offsets, this.mode);
+    return embeddingBag(idx, this.weight, offsets, this.maxNorm, this.normType,
+                        this.scaleGradByFreq, this.mode, this.sparse, null,
+                        this.includeLastOffset, this.paddingIdx);
   }
 
   override describe(): string {
@@ -3100,18 +3118,86 @@ export function embedding(idx: Tensor, weight: Tensor): Tensor {
  * where bag lengths differ. `perSampleWeights` is used by torch only when
  * `mode='sum'`.
  */
+/**
+ * torch's `max_norm`: the rows that were looked up and are too long are shortened,
+ * **in the table itself.**
+ *
+ * A side effect on a parameter, which is unusual enough to say out loud:
+ * `embeddingBag(idx, w, null, 1.0)` leaves `w` changed, permanently. torch does
+ * exactly this — and a version that renormalised a copy **agrees on the first call
+ * and parts on the second**, which is a difference no instrument in this repository
+ * can see: the golden runs a case once, the axes read a signature, parity checks a
+ * value. Once is not a sample.
+ *
+ * Only the rows `idx` names are touched. A whole-table renormalisation is the
+ * obvious shortcut and it is wrong — a row nobody looked up stays long in torch.
+ */
+function renormRows(weight: Tensor, idx: Tensor, maxNorm: number,
+                    normType: number): void {
+  const rows = weight.shape[0] ?? 1;
+  const flat = idx.reshape([idx.size]);
+  const seen = Tensor.zeros([rows])
+    .indexAdd(0, flat, Tensor.ones([flat.size]))
+    .reshape([rows, 1]);
+  const lengths = weight.abs().powScalar(normType).sumDim(1, true)
+    .powScalar(1 / normType);
+  // `min(1, maxNorm / length)` where the row was looked up, and 1 everywhere else.
+  const wanted = lengths.reciprocal().mul(Tensor.full([], maxNorm)).minimum(1);
+  const scale = wanted.mul(seen.gt(0).to("float32"))
+    .add(seen.eq(0).to("float32"));
+  weight.copyFrom(weight.mul(scale));
+}
+
+/**
+ * One row per bag. Selecting from the table and **combining** is all one function.
+ *
+ * Given `offsets`, a one-dimensional index run is cut into bags — the shape for
+ * when the bags have differing lengths. `perSampleWeights` is used in torch under
+ * `mode='sum'` alone.
+ *
+ * **`mode` sits sixth, where torch has it.** It used to be fourth, so
+ * `embeddingBag(idx, w, offsets, "sum")` handed a mode string to `maxNorm` — and
+ * `maxNorm` rewrites the table, so the layer would have been rescaling its own
+ * embeddings on every forward pass.
+ */
 export function embeddingBag(
   idx: Tensor,
   weight: Tensor,
   offsets: readonly number[] | null = null,
+  maxNorm: number | null = null,
+  normType = 2,
+  scaleGradByFreq = false,
   mode: "sum" | "mean" | "max" = "mean",
+  sparse = false,
   perSampleWeights: Tensor | null = null,
+  includeLastOffset = false,
+  paddingIdx: number | null = null,
 ): Tensor {
+  // **`mode` sits sixth, where torch has it.** It used to be fourth, so
+  // `embeddingBag(idx, w, offsets, "sum")` handed a mode string to `maxNorm` — and
+  // `maxNorm` rewrites the table, so the layer would have been rescaling its own
+  // embeddings on every forward pass. The layer's call moved with it.
+  if (scaleGradByFreq) {
+    throw new NotImplementedError("embeddingBag(scaleGradByFreq) is not carried across");
+  }
+  if (sparse) {
+    throw new NotImplementedError(
+      "embeddingBag(sparse) is not carried across — there is no sparse gradient here");
+  }
+  if (maxNorm !== null) renormRows(weight, idx, maxNorm, normType);
   const dim = weight.shape[1] ?? 1;
-  const squash = (picked: Tensor, d: number) => {
+  // **`paddingIdx` leaves the bag rather than contributing zero to it.** Under `sum`
+  // those are the same thing; under `mean` they are not, because the padded entry
+  // has to leave the denominator too.
+  const kept = paddingIdx === null
+    ? null
+    : idx.ne(Tensor.full([], paddingIdx)).to("float32");
+  const squash = (picked: Tensor, d: number, mask: Tensor | null) => {
     if (mode === "sum") return picked.sumDim(d, false);
     if (mode === "max") return picked.amax(d, false);
-    return picked.mean(d, false);
+    if (mask === null) return picked.mean(d, false);
+    return picked.sumDim(d, false)
+      .div(mask.sumDim(d, false).maximum(1).reshape([...picked.shape.slice(0, d), 1]));
   };
   if (offsets === null) {
     const bags = idx.shape[0] ?? 1;
@@ -3121,9 +3207,13 @@ export function embeddingBag(
     if (perSampleWeights) {
       picked = picked.mul(perSampleWeights.reshape([bags, each, 1]));
     }
-    return squash(picked, 1);
+    if (kept) picked = picked.mul(kept.reshape([bags, each, 1]));
+    return squash(picked, 1, kept);
   }
-  const bounds = [...offsets, idx.size];
+  // **`includeLastOffset` means the last entry closes the final bag** rather than
+  // opening a new one, so the bag count is one fewer than the offsets rather than
+  // one more than the gaps between them.
+  const bounds = includeLastOffset ? [...offsets] : [...offsets, idx.size];
   const parts: Tensor[] = [];
   for (let b = 0; b + 1 < bounds.length; b++) {
     const from = bounds[b] ?? 0;
@@ -3132,7 +3222,16 @@ export function embeddingBag(
     if (perSampleWeights) {
       picked = picked.mul(perSampleWeights.narrow(0, from, len).reshape([len, 1]));
     }
-    parts.push(squash(picked, 0));
+    let slice: Tensor | null = null;
+    if (kept) {
+      slice = kept.narrow(0, from, len);
+      picked = picked.mul(slice.reshape([len, 1]));
+    }
+    if (mode === "mean" && slice) {
+      parts.push(picked.sumDim(0, false).div(slice.sumDim(0, false).maximum(1)));
+    } else {
+      parts.push(squash(picked, 0, null));
+    }
   }
   return Tensor.stack(parts, 0);
 }

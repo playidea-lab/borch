@@ -995,6 +995,77 @@ export async function report(): Promise<Report> {
     new nn.ConvTranspose2d(4, 2, 3, 1, 0, 0, 1, false).bias === null,
     "torch orders this one differently from Conv2d, and so does this");
 
+  // ── EmbeddingBag: the arguments, and the one that only shows twice ───
+  //
+  // `mode` moved from third to sixth. `tsc` named all eight call sites the moment
+  // it did — five golden cases and the layer's own two — because a mode string
+  // does not fit a `number | null`. The same move on the Python side was silent.
+  const ebW = () => keepAlive(Tensor.from(
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], [5, 3]));
+  const ebI = keepAlive(Tensor.from([0, 1, 2, 3], [2, 2], { dtype: "int64" }));
+
+  // **`paddingIdx` leaves the bag rather than contributing zero to it.** Under
+  // `sum` those are the same thing and under `mean` they are not, so the check is
+  // at `mean`, as an equivalence: bag 0 is rows 0 and 1 with row 1 padded, so it
+  // has to be **row 0 itself** — not their sum halved.
+  //
+  // Written by hand first, and the hand was wrong: the expected array had bag 1 as
+  // row 3 rather than the mean of rows 2 and 3, so the check failed against a
+  // correct implementation. `parity.ts` says two hundred lines up that writing
+  // values out by hand makes the check wrong wherever the hand is, and it was
+  // right within the hour.
+  {
+    const padded = nn.embeddingBag(
+      ebI, ebW(), null, null, 2, false, "mean", false, null, false, 1);
+    await agrees("paddingIdx at mean gives the unpadded row itself",
+      padded.narrow(0, 0, 1), ebW().narrow(0, 0, 1));
+    // And it is not the zero-contributing reading, which would halve it.
+    const zeroed = ebW().narrow(0, 0, 1).mul(Tensor.full([], 0.5));
+    const seen = Array.from(await padded.narrow(0, 0, 1).toArray());
+    const halved = Array.from(await zeroed.toArray());
+    want("paddingIdx is not the same as contributing zero",
+      seen.some((v, i) => Math.abs(v - (halved[i] ?? 0)) > 1e-6),
+      `${seen.join(",")} against ${halved.join(",")}`);
+  }
+
+  // `includeLastOffset` means the last entry closes the final bag rather than
+  // opening a new one, so the same bags come out of one more offset.
+  const flatIdx = keepAlive(Tensor.from([0, 1, 2, 3], [4], { dtype: "int64" }));
+  await agrees("includeLastOffset closes the last bag",
+    nn.embeddingBag(flatIdx, ebW(), [0, 2, 4], null, 2, false, "sum", false, null, true),
+    nn.embeddingBag(flatIdx, ebW(), [0, 2], null, 2, false, "sum"));
+
+  // **`maxNorm` rewrites the table, and that is the whole point of asking twice.**
+  //
+  // A version that renormalised a copy would agree with this on the first call and
+  // part on the second — a difference no other instrument here can see, because the
+  // golden runs a case once, the axes read a signature, and every check above looks
+  // at one call. Once is not a sample.
+  {
+    const table = ebW();
+    const before = Array.from(await table.toArray());
+    nn.embeddingBag(ebI, table, null, 1.0, 2, false, "sum");
+    const after = Array.from(await table.toArray());
+    want("maxNorm shortens the rows in the table itself",
+      after.some((v, i) => v !== before[i]),
+      "a copy would leave the parameter untouched and agree on the output");
+
+    // The rows `idx` never named keep their length. A whole-table renormalisation
+    // is the obvious shortcut and torch does not do it.
+    want("maxNorm leaves the rows nobody looked up",
+      after[12] === before[12] && after[13] === before[13],
+      `row 4: ${after.slice(12).join(",")}`);
+
+    // Renormalised once, a row is exactly at the limit, so asking again changes
+    // nothing. A copy-based version passes this one too — it is the pair that
+    // separates them.
+    nn.embeddingBag(ebI, table, null, 1.0, 2, false, "sum");
+    const twice = Array.from(await table.toArray());
+    want("maxNorm a second time is a no-op",
+      twice.every((v, i) => Math.abs(v - (after[i] ?? 0)) < 1e-6),
+      `${twice.slice(0, 3).map((v) => v.toFixed(4)).join(",")}`);
+  }
+
   // ── vision: the place a widened type opened ──────────────────────────
   //
   // **The golden cannot ask this.** `Transform` widened to take an array as well, for

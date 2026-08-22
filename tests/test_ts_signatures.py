@@ -126,7 +126,11 @@ SHIFTED = {
     # 1 -> 2. `F.embedding_bag` moved `mode` from third to sixth, where torch
     # has it, and borch.ts still takes it third. Same pair as the layer above,
     # one level down.
-    "nn.functional": 2,
+    # 2 -> 1. `F.embeddingBag` followed the core: `mode` sixth, where torch has it.
+    # `tsc` named all eight call sites the instant it moved -- five golden cases and
+    # the layer's own two -- because a mode string does not fit `number | null`. The
+    # identical move on the Python side was silent.
+    "nn.functional": 1,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,

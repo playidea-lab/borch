@@ -444,7 +444,7 @@
     "src": "dbbbef2556df"
   },
   "nn/EmbeddingBag": {
-    "ko": "가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 층이다.",
+    "ko": "가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 층이다.\n\n**`mode` 는 여섯째 자리다. torch 가 거기 두기 때문이다.** 전에는 셋째였고, 그래서\n`new EmbeddingBag(10, 3, \"sum\")` 이 torch 에서는 `maxNorm` 을 세우고 여기서는 mode 를\n세웠다. 두 해석 모두 층을 만들고 올바른 모양의 가방을 돌려주며, 숫자만 다르다.",
     "src": "541724830ec6"
   },
   "nn/EmbeddingBag.callOffsets": {
@@ -704,8 +704,8 @@
     "src": "51932366836e"
   },
   "nn/embeddingBag": {
-    "ko": "가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.\n\n`offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.\n`perSampleWeights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.",
-    "src": "e7b52769a5c0"
+    "ko": "가방마다 한 줄. 표에서 골라 **합치는 것**까지가 한 함수다.\n\n`offsets` 를 주면 1 차원 번호 줄을 가방으로 자른다 — 가방 길이가 제각각인 자리다.\n`perSampleWeights` 는 torch 에서 `mode='sum'` 일 때만 쓴다.\n\n**`mode` 는 여섯째 자리다. torch 가 거기 두기 때문이다.** 전에는 넷째였고, 그래서\n`embeddingBag(idx, w, offsets, \"sum\")` 이 mode 문자열을 `maxNorm` 에 넘겼다 — 그리고\n`maxNorm` 은 표를 다시 쓴다. 층이 매 순방향마다 자기 임베딩을 다시 조정할 뻔했다.",
+    "src": "2cbf9d55f0d7"
   },
   "nn/gridSample": {
     "ko": "격자가 가리키는 자리에서 값을 떠 온다. `affineGrid` 의 짝이다.\n\n**자리 번호는 상수, 무게는 텐서다.** 내림한 정수는 미분이 없고 그 나머지가 무게가\n되므로, 무게만 그래프에 두면 입력과 격자 양쪽으로 기울기가 흐른다.",
