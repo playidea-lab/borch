@@ -147,7 +147,11 @@ UNALIGNED = {
     # Asking real torch settled it, and no check in this repository does that for
     # `borch.nn`: `test_torch_signatures.py` covers borchvision against torchvision
     # and stops there.
-    "nn": 19,
+    # 19 -> 25. The twelve lazy layers stopped declaring `(*args, **kwargs)`
+    # and can be judged now -- six of the six that moved here are the norms,
+    # whose eager forms borch.ts spells differently. The count rose because the
+    # measurement reaches further, not because anything parted.
+    "nn": 25,
     "nn.functional": 1,
     "optim": 7,
     "optim.lr_scheduler": 3,
@@ -166,7 +170,7 @@ UNALIGNED = {
 # table, and it is deliberately a way that requires someone to write a sentence.
 RENAMED = {
     "Tensor": 30,
-    "nn": 16,
+    "nn": 19,   # +3, the same twelve becoming visible
     "nn.functional": 1,
     "optim": 1,
     "optim.lr_scheduler": 0,
@@ -179,7 +183,7 @@ RENAMED = {
 # turning it into a truncation without anyone noticing.
 SHORTER = {
     "Tensor": 16,
-    "nn": 15,
+    "nn": 18,   # +3, the same twelve becoming visible
     "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 12,

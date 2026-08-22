@@ -124,7 +124,15 @@ UNALIGNED = {
 # not**, which is `torch_gap.py`'s kind of finding rather than a silent shift.
 SHORTER = {
     "Tensor": 2,
-    "nn": 54,
+    # 54 -> 60 and the judged share 132 -> 144 of 161. **Nothing got worse: twelve
+    # rows became visible.** The twelve lazy layers declared `(*args, **kwargs)` and
+    # sat in the uncomparable bucket while every other layer was measured; they
+    # declare their target's signature minus what they infer now, which is torch's
+    # own rule for them, so the axis can judge them. Six land on `agree` -- the
+    # convolutions, whose eager forms match torch -- and six on `shorter`, because
+    # their targets are short of torch and a lazy layer is exactly as complete as
+    # what it becomes.
+    "nn": 60,
     "nn.functional": 0,
     "optim": 10,
     "optim.lr_scheduler": 1,
@@ -156,7 +164,7 @@ JUDGED = {
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
     # fix looks like here** — the total did not change, and no other number in this
     # file would have recorded that anything happened.
-    "nn": (132, 161),
+    "nn": (144, 161),
     "nn.functional": (75, 126),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),

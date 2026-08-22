@@ -1,6 +1,7 @@
 """A piece of borch, split out. __init__ gathers the public names."""
 
 import collections as _collections
+import inspect as _inspect
 import math as _math
 
 import numpy as _np
@@ -2828,10 +2829,28 @@ class _Lazy(Module):
 
     def __init__(self, *args, **kw):
         super().__init__()
+        bound = type(self)._bind(*args, **kw)
         self._lazy_args, self._lazy_kw = list(args), dict(kw)
         self.weight = UninitializedParameter()
-        if kw.get("bias", True):
+        # **`bias` can arrive positionally.** This read `kw.get("bias", True)`, so
+        # `LazyConv2d(4, 3, 1, 0, 1, 1, False)` — every argument in torch's order,
+        # the bias turned off — built an uninitialized bias anyway and then threw it
+        # away at materialisation. Nothing failed; the layer simply carried a
+        # parameter for one forward pass. Binding against the real signature is what
+        # makes the question answerable at all.
+        if bound.arguments.get("bias", True):
             self.bias = UninitializedParameter()
+
+    @classmethod
+    def _bind(cls, *args, **kw):
+        """Check the call against the signature this class actually declares.
+
+        A lazy layer forwards everything to the class it becomes, so a wrong name
+        used to travel all the way there and be refused in its name instead of this
+        one. Bound here, the refusal says `LazyConv2d`.
+        """
+        signature = _inspect.signature(cls.__init__)
+        return signature.bind(None, *args, **kw)
 
     def has_uninitialized_params(self):
         return True
@@ -2873,27 +2892,59 @@ def _lazy_channels(x):
     return (x.shape[1],)
 
 
+def _lazy_declaration(becomes, infers):
+    """The `__init__` a lazy layer declares: **its target's, minus what it infers.**
+
+    torch's rule exactly — `LazyConv2d` is `Conv2d` without `in_channels`,
+    `LazyLinear` is `Linear` without `in_features`, and so on for all twelve.
+    Checked against real torch rather than assumed.
+
+    **Derived and not written down.** A hand-copied list here would be one more
+    fact that is correct on the day it is pasted: every argument the six
+    convolutions gained today would have had to be typed a second time, and the
+    day one is missed the lazy layer takes torch's arguments in the wrong seats
+    while the eager one takes them in the right ones. Nothing would compare the
+    two — a variadic signature cannot be judged, which is why these twelve sat in
+    the axis's uncomparable bucket while every other layer was measured.
+    """
+    parameters = list(_inspect.signature(becomes.__init__).parameters.values())
+    kept = parameters[1 + infers:]
+    declared = _inspect.Signature(
+        [_inspect.Parameter("self", _inspect.Parameter.POSITIONAL_OR_KEYWORD)] + kept)
+    names = tuple(p.name for p in parameters[1:])
+
+    def __init__(self, *args, **kw):
+        _Lazy.__init__(self, *args, **kw)
+
+    __init__.__signature__ = declared
+    return __init__, names
+
+
 def _make_lazies():
     """Twelve are stamped out here. Only what they become and what they read
     differ."""
     table = (
-        ("LazyConv1d", Conv1d, ("in_channels", "out_channels")),
-        ("LazyConv2d", Conv2d, ("in_channels", "out_channels")),
-        ("LazyConv3d", Conv3d, ("in_channels", "out_channels")),
-        ("LazyConvTranspose1d", ConvTranspose1d, ("in_channels", "out_channels")),
-        ("LazyConvTranspose2d", ConvTranspose2d, ("in_channels", "out_channels")),
-        ("LazyConvTranspose3d", ConvTranspose3d, ("in_channels", "out_channels")),
-        ("LazyBatchNorm1d", BatchNorm1d, ("num_features",)),
-        ("LazyBatchNorm2d", BatchNorm2d, ("num_features",)),
-        ("LazyBatchNorm3d", BatchNorm3d, ("num_features",)),
-        ("LazyInstanceNorm1d", InstanceNorm1d, ("num_features",)),
-        ("LazyInstanceNorm2d", InstanceNorm2d, ("num_features",)),
-        ("LazyInstanceNorm3d", InstanceNorm3d, ("num_features",)),
+        ("LazyConv1d", Conv1d),
+        ("LazyConv2d", Conv2d),
+        ("LazyConv3d", Conv3d),
+        ("LazyConvTranspose1d", ConvTranspose1d),
+        ("LazyConvTranspose2d", ConvTranspose2d),
+        ("LazyConvTranspose3d", ConvTranspose3d),
+        ("LazyBatchNorm1d", BatchNorm1d),
+        ("LazyBatchNorm2d", BatchNorm2d),
+        ("LazyBatchNorm3d", BatchNorm3d),
+        ("LazyInstanceNorm1d", InstanceNorm1d),
+        ("LazyInstanceNorm2d", InstanceNorm2d),
+        ("LazyInstanceNorm3d", InstanceNorm3d),
     )
-    return {name: type(name, (_Lazy,), {
-        "_becomes": becomes, "_names": names,
-        "_infer": staticmethod(_lazy_channels),
-    }) for name, becomes, names in table}
+    made = {}
+    for name, becomes in table:
+        init, names = _lazy_declaration(becomes, 1)
+        made[name] = type(name, (_Lazy,), {
+            "_becomes": becomes, "_names": names, "__init__": init,
+            "_infer": staticmethod(_lazy_channels),
+        })
+    return made
 
 
 for _name, _lazy_cls in {"LazyLinear": LazyLinear, **_make_lazies()}.items():
