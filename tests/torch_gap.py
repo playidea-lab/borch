@@ -335,7 +335,6 @@ NOT_API = {
     "detach_copy": "a functionalisation-pass variant — the real name is `detach`",
     "diagonal_copy": "a functionalisation-pass variant — the real name is `diagonal`",
     "expand_copy": "a functionalisation-pass variant — the real name is `expand`",
-    "narrow_copy": "a functionalisation-pass variant — the real name is `narrow`",
     "permute_copy": "a functionalisation-pass variant — the real name is `permute`",
     "select_copy": "a functionalisation-pass variant — the real name is `select`",
     "slice_copy": "a functionalisation-pass variant — the real name is slicing",
@@ -568,6 +567,19 @@ SKIPPED = {
     # rather than wildcarded**: `*_pil_image` would also catch a name torchvision has not
     # invented yet, and a row matching something nobody has read is how a reason ends up
     # attached to the wrong thing.
+    # **Moved out of `NOT_API` after being read.** It was called a
+    # functionalisation-pass variant of `narrow`, and it is not one: torch documents
+    # it, with an example, and it does something `narrow` does not — it copies where
+    # `narrow` gives a view. It exists because sparse tensors have no view-narrow, and
+    # sparse is declined in the core, which is a reason and a different one.
+    #
+    # The move matters beyond this name. `NOT_API` comes out of the denominator and
+    # `SKIPPED` does not, so a wrong reason there is a wrong reason **that also
+    # improves the number** — which is why that bin is now frozen by size below.
+    "narrow_copy": "`narrow` and then a copy. torch has it because sparse tensors have "
+                   "no view-narrow, and sparse is declined in the core, so what is "
+                   "left is `narrow(...).clone()`",
+
     "transforms.functional.to_pil_image": "there is no PIL here — as `ToPILImage`",
     "transforms.functional.pil_to_tensor": "it takes a PIL image and nothing here makes "
                                            "one — as `PILToTensor`",
@@ -782,6 +794,33 @@ SKIPPED = {
     "ops.generalized_box_iou_loss": "as above. **The IoU itself is here** — what is "
                                     "absent is the loss around it, which is where the "
                                     "predictions come in",
+}
+
+# **How big the `NOT_API` bin is allowed to be, per namespace.**
+#
+# Every other absence stays in the denominator. This one does not — a name called "not
+# API" is subtracted before the percentage is taken, which is right when the call is
+# right and is **the one place in this file where a wrong call makes the number look
+# better.** The comment beside the denominator already says this about `SKIPPED` and
+# then grants `NOT_API` the exemption; nothing was watching the exemption.
+#
+# So the bin has a size and the size is written down. Growing it is an edit here, which
+# makes it a decision somebody made rather than a number that drifted — the same
+# arrangement `tests/test_korean_ceiling.py` uses, and for the same reason.
+#
+# Measured 2026-08-22. The contents were read at the same time: of 203 names, four carry
+# an `Example::` in torch's own docstring, and three of those four are fairly called
+# internals (deprecated, an optimizer tool, a runtime one). The fourth was `narrow_copy`
+# and it has been moved to `SKIPPED`.
+NOT_API_SIZE = {
+    "torch": 180,
+    "Tensor": 4,
+    "nn": 1,
+    "nn.functional": 10,
+    "optim": 1,
+    "optim.lr_scheduler": 2,
+    "utils.data": 2,
+    "transforms.functional": 1,
 }
 
 # The namespaces looked at. (display name, torch's side, ours)
@@ -1043,6 +1082,12 @@ def main(argv):
         total_missing += len(unexplained)
         print(f"\n{space} — {covered} of {len(api)} API names present "
               f"({covered * 100 // max(1, len(api))}%)")
+        # **The same fraction with the exempt bin put back.** One number cannot show
+        # both what was judged and what was excused from being judged, and the gap
+        # between the two is exactly what calling something "not API" buys.
+        if not_api:
+            print(f"  {covered} of {len(a)} counting the not-API bin "
+                  f"({covered * 100 // max(1, len(a))}%)")
         parts = [f"not API, uncounted {len(not_api)}"]
         if by_space:
             parts.append(f"namespace declined {len(by_space)}")
