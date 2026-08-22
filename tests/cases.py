@@ -7607,6 +7607,15 @@ def _rank_ceiling_cases(ranks, inp):
 # grep `borch-ts/test/cases.ts` for that case's name.** If it is there, the two move
 # together.
 #
+# **And that grep is not sufficient, which is the half worth knowing.** It reads main,
+# and a port in flight is invisible from there — the porter is always in flight. It
+# happened within the hour of this paragraph being written: the `Pad(edge)` cases went
+# from padding 1 to padding 2 after a grep of main came back clean, and three ported
+# cases went red on the other side because that port had not landed yet. The editor
+# cannot see the branch. **The other half of this rule lives on the porting side** —
+# re-run the golden after rebasing rather than assuming ported cases still hold — and
+# neither half covers the gap alone.
+#
 # Written after `F.adjust_saturation(uint8)` moved from 1.7 to 0.1 — and the sequel is
 # the reason it is worth a paragraph. That one number was what made the other side's
 # float32 chain measurable: the same mutation that left ten of their cases green the
