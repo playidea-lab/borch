@@ -1547,6 +1547,42 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::F.adjust_saturation(uint8)", () => photo(vision.adjustSaturation(u8(), 0.1)));
   out.set("vision::F.adjust_hue(uint8)", () => photo(vision.adjustHue(u8(), 0.25)));
 
+  // 픽셀 연산 여섯. 화소가 자리를 안 옮기고 값만 바뀐다.
+  out.set("vision::F.invert", () => photo(vision.invert(f())));
+  out.set("vision::F.invert(uint8)", () => photo(vision.invert(u8())));
+  // `posterize` 와 `equalize` 는 **바이트 전용**이다 — 하나는 버릴 비트가 필요하고
+  // 하나는 셀 칸이 필요하다. 여덟 비트짜리는 아무것도 안 버리는 가장자리다.
+  out.set("vision::F.posterize(one bit)", () => photo(vision.posterize(u8(), 1)));
+  out.set("vision::F.posterize(four bits)", () => photo(vision.posterize(u8(), 4)));
+  out.set("vision::F.posterize(all eight)", () => photo(vision.posterize(u8(), 8)));
+  out.set("vision::F.solarize", () => photo(vision.solarize(f(), 0.5)));
+  out.set("vision::F.solarize(uint8)", () => photo(vision.solarize(u8(), 128)));
+  out.set("vision::F.autocontrast", () => photo(vision.autocontrast(f())));
+  out.set("vision::F.autocontrast(uint8)", () => photo(vision.autocontrast(u8())));
+  out.set("vision::F.equalize", () => photo(vision.equalize(u8())));
+  // 0 에서 흐리고 2 에서 또렷하다. **양쪽을 다 묻는다** — 흐리는 쪽만 시험하면
+  // 블렌드의 1 위쪽 절반이 한 번도 안 걸린다.
+  out.set("vision::F.adjust_sharpness(blurred)", () => photo(vision.adjustSharpness(f(), 0.0)));
+  out.set("vision::F.adjust_sharpness(sharpened)", () => photo(vision.adjustSharpness(f(), 2.0)));
+  out.set("vision::F.adjust_sharpness(uint8)", () => photo(vision.adjustSharpness(u8(), 2.0)));
+
+  // 감싸개 여섯. **p=0 이 형식이 아니다** — 여섯 중 다섯이 한 구현을 나눠 쓰므로,
+  // 뽑기 결과와 무관하게 연산을 적용하는 감싸개는 p=1 케이스를 전부 통과한다.
+  out.set("vision::RandomInvert(p=1)", () =>
+    photo(new vision.RandomInvert(1.0).apply(f()) as vision.Image));
+  out.set("vision::RandomInvert(p=0)", () =>
+    photo(new vision.RandomInvert(0.0).apply(f()) as vision.Image));
+  out.set("vision::RandomEqualize(p=1)", () =>
+    photo(new vision.RandomEqualize(1.0).apply(u8()) as vision.Image));
+  out.set("vision::RandomPosterize(p=1)", () =>
+    photo(new vision.RandomPosterize(3, 1.0).apply(u8()) as vision.Image));
+  out.set("vision::RandomSolarize(p=1)", () =>
+    photo(new vision.RandomSolarize(0.4, 1.0).apply(f()) as vision.Image));
+  out.set("vision::RandomAutocontrast(p=1)", () =>
+    photo(new vision.RandomAutocontrast(1.0).apply(f()) as vision.Image));
+  out.set("vision::RandomAdjustSharpness(p=1)", () =>
+    photo(new vision.RandomAdjustSharpness(2.0, 1.0).apply(f()) as vision.Image));
+
   // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
   const reprs: [string, () => vision.Transform][] = [
     ["ToTensor", () => new vision.ToTensor()],
@@ -1562,6 +1598,13 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     // repr 이 다른 그 변환이 골든에 케이스가 없던 유일한 변환이었다.
     ["Resize", () => new vision.Resize(4)],
     ["Resize(a pair)", () => new vision.Resize([4, 3])],
+    ["RandomInvert", () => new vision.RandomInvert()],
+    ["RandomAutocontrast", () => new vision.RandomAutocontrast()],
+    ["RandomEqualize", () => new vision.RandomEqualize()],
+    // **셋은 쉼표 뒤에 공백이 없다.** torchvision 자신의 표기다.
+    ["RandomPosterize", () => new vision.RandomPosterize(4)],
+    ["RandomSolarize", () => new vision.RandomSolarize(0.5)],
+    ["RandomAdjustSharpness", () => new vision.RandomAdjustSharpness(2)],
     ["ColorJitter", () => new vision.ColorJitter(0.5, 0.3, 0.2, 0.1)],
     // 맨몸의 것도 묻는다 — **기본값에 둔 지터는 `None` 을 저장**하지, 아무것도
     // 안 하는 범위를 저장하지 않는다. 그 구분은 기본 형태만 찍어 본다.

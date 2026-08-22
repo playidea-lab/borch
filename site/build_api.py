@@ -112,6 +112,8 @@ MODULES = [
 # translation are carried across** — otherwise the source's own name is shown. Inventing
 # one here is where drift from the source begins.
 SECTION_EN = {
+    "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯":
+        "Six pixel operations, and the six that apply them with a probability",
     "만들기": "Creating", "원소별": "Elementwise", "행렬곱": "Matrix products",
     "축약": "Reductions", "모양": "Shape", "창 펴기": "Windows",
     "나머지 층이 쓰는 것들": "Used by the layers", "자리 옮기기": "Moving elements",

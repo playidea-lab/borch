@@ -1837,3 +1837,258 @@ export function getImageSize(img: Image): [number, number] {
 export function getImageNumChannels(img: Image): number {
   return asImage(img, "get_image_num_channels").channels;
 }
+
+
+// ── 픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯 ──────────────────
+//
+// 기하가 없다 — 화소가 자리를 안 옮기고 값만 바뀐다. 그래서 격자 재표본이 필요한
+// 것들과 따로 두고, 검사도 따로 선다.
+
+/**
+ * `bound - x`. White for black — and the bound is 255 or 1 depending on the
+ * dtype, which is the whole of it and the whole of what goes wrong.
+ */
+export function invert(img: Image): Image {
+  const src = asImage(img, "invert");
+  const hi = bound(src.isByte);
+  const out = new Float64Array(src.data.length);
+  for (let i = 0; i < out.length; i++) {
+    const v = f32(hi - f32(src.data[i] ?? 0));
+    out[i] = src.isByte ? Math.trunc(v) : v;
+  }
+  return { ...src, data: out };
+}
+
+/**
+ * Keep the top `bits` of each byte and zero the rest — **fewer colours, by
+ * masking rather than by rounding.** uint8 only: a float image has no bits to
+ * throw away.
+ */
+export function posterize(img: Image, bits: number): Image {
+  const src = asImage(img, "posterize");
+  if (!src.isByte) {
+    throw new RuntimeError(
+      "posterize takes a uint8 image — it received a float one.\n" +
+      "  It throws away the low bits of a byte, and a float image has no bits\n" +
+      "  to throw away.\n" +
+      "(torch: Only torch.uint8 image tensors are supported)");
+  }
+  const mask = (-(2 ** (8 - bits))) & 0xff;
+  const out = new Float64Array(src.data.length);
+  for (let i = 0; i < out.length; i++) out[i] = (src.data[i] ?? 0) & mask;
+  return { ...src, data: out };
+}
+
+/**
+ * Invert **only the pixels at or above** the threshold. Below it nothing
+ * happens, so the picture comes back part positive and part negative.
+ */
+export function solarize(img: Image, threshold: number): Image {
+  const src = asImage(img, "solarize");
+  const hi = bound(src.isByte);
+  if (threshold > hi) {
+    throw new RuntimeError(
+      `threshold ${threshold} is above this image's bound ${hi}.\n` +
+      "(torch: Threshold should be less than bound of img.)");
+  }
+  const flipped2 = invert(src);
+  const out = new Float64Array(src.data.length);
+  for (let i = 0; i < out.length; i++) {
+    const v = src.data[i] ?? 0;
+    out[i] = v >= threshold ? (flipped2.data[i] ?? 0) : v;
+  }
+  return { ...src, data: out };
+}
+
+/**
+ * Stretch each channel to fill the range. **Per channel and not per picture** —
+ * a channel that is already flat is left alone rather than divided by zero.
+ */
+export function autocontrast(img: Image): Image {
+  const src = asImage(img, "autocontrast");
+  const hiBound = bound(src.isByte);
+  const c = src.channels;
+  const n = src.data.length;
+  const out = new Float64Array(n);
+  for (let k = 0; k < c; k++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = k; i < n; i += c) {
+      const v = src.data[i] ?? 0;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    // 평평한 채널은 `bound / 0` 이 되고, 파이썬 쪽은 그것을 **나눈 뒤에** 유한하지
+    // 않은 자리로 골라낸다. 여기서는 나누기 전에 갈라 같은 답을 낸다.
+    const flat = hi === lo;
+    const shift = flat ? 0 : f32(lo);
+    const scale = flat ? 1 : f32(hiBound / f32(hi - lo));
+    for (let i = k; i < n; i += c) {
+      let v = f32(f32(f32(src.data[i] ?? 0) - shift) * scale);
+      v = v < 0 ? 0 : v > hiBound ? hiBound : v;
+      out[i] = src.isByte ? Math.trunc(v) : v;
+    }
+  }
+  return { ...src, data: out };
+}
+
+/**
+ * 한 채널의 히스토그램 평활화, **torch 의 정수 산술 그대로.**
+ *
+ * 여기 나눗셈은 전부 버림이고, 한 칸 밀린 표(`[0, ...lut[:-1]]`)가 가장 어두운 값을
+ * 첫 계단이 아니라 0 으로 보낸다. 부동소수로 쓰면 범위 대부분에서 1 씩 어긋난다.
+ */
+function equalizeChannel(plane: Float64Array): Float64Array {
+  const hist = new Int32Array(256);
+  for (let i = 0; i < plane.length; i++) hist[plane[i] ?? 0]! += 1;
+  const nonzero: number[] = [];
+  for (let v = 0; v < 256; v++) if (hist[v] !== 0) nonzero.push(hist[v] ?? 0);
+  let tail = 0;
+  for (let i = 0; i < nonzero.length - 1; i++) tail += nonzero[i] ?? 0;
+  const step = Math.floor(tail / 255);
+  if (step === 0) return plane;
+  const lut = new Int32Array(256);
+  let running = 0;
+  const half = Math.floor(step / 2);
+  const cum = new Int32Array(256);
+  for (let v = 0; v < 256; v++) {
+    running += hist[v] ?? 0;
+    cum[v] = Math.floor((running + half) / step);
+  }
+  for (let v = 1; v < 256; v++) {
+    const t = cum[v - 1] ?? 0;
+    lut[v] = t < 0 ? 0 : t > 255 ? 255 : t;
+  }
+  const out = new Float64Array(plane.length);
+  for (let i = 0; i < out.length; i++) out[i] = lut[plane[i] ?? 0] ?? 0;
+  return out;
+}
+
+/**
+ * Flatten the histogram, per channel. **uint8 only**, for torchvision's reason:
+ * it counts 256 bins.
+ */
+export function equalize(img: Image): Image {
+  const src = asImage(img, "equalize");
+  if (!src.isByte) {
+    throw new RuntimeError(
+      "equalize takes a uint8 image — it received a float one.\n" +
+      "  It counts a 256-bin histogram, and a float image has no bins.\n" +
+      "(torch: Only torch.uint8 image tensors are supported)");
+  }
+  const c = src.channels;
+  const n = src.data.length;
+  const out = new Float64Array(n);
+  for (let k = 0; k < c; k++) {
+    const plane = new Float64Array(n / c);
+    for (let i = k, j = 0; i < n; i += c, j++) plane[j] = src.data[i] ?? 0;
+    const done = equalizeChannel(plane);
+    for (let i = k, j = 0; i < n; i += c, j++) out[i] = done[j] ?? 0;
+  }
+  return { ...src, data: out };
+}
+
+/**
+ * `adjustSharpness` 가 섞어 가는 3x3 평활 — **1 여덟 개와 가운데 5, 13 으로 나눈 것.**
+ *
+ * 테두리는 그대로 둔다. torchvision 은 덧대지 않고 합성곱한 뒤 가운데에 되써넣으므로,
+ * 바깥 한 겹은 원본이다 — 정돈한 것이 아니라 복사한 것이고, 덧댄 합성곱은 거기서
+ * 다른 수를 내는데 그 차이가 가운데에서는 안 보인다.
+ */
+function blurred(img: Image): Image {
+  const k = [1, 1, 1, 1, 5, 1, 1, 1, 1].map((v) => f32(v / 13));
+  const { height: h, width: w, channels: c } = img;
+  const out = Float64Array.from(img.data);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      for (let ch = 0; ch < c; ch++) {
+        let acc = 0;
+        for (let dy = 0; dy < 3; dy++) {
+          for (let dx = 0; dx < 3; dx++) {
+            acc = f32(acc + f32((k[dy * 3 + dx] ?? 0)
+              * f32(img.data[((y - 1 + dy) * w + (x - 1 + dx)) * c + ch] ?? 0)));
+          }
+        }
+        // **버림이 아니라 반올림.** torch 는 합성곱을 정수 dtype 으로 되돌릴 때
+        // `round` 를 지나고, 버리면 화소 절반쯤에서 한 계단 낮다(파이썬 쪽 실측).
+        out[(y * w + x) * c + ch] = img.isByte
+          ? Math.min(Math.max(Math.round(acc), 0), bound(true))
+          : acc;
+      }
+    }
+  }
+  return { ...img, data: out };
+}
+
+/**
+ * Blur at 0, unchanged at 1, sharper above — the blend `ImageEnhance` calls
+ * sharpness. **A picture two pixels wide or shorter comes back untouched**,
+ * because there is no middle to convolve.
+ */
+export function adjustSharpness(img: Image, sharpnessFactor: number): Image {
+  if (sharpnessFactor < 0) {
+    throw new RuntimeError(
+      `sharpness_factor is not non-negative — got ${sharpnessFactor}.\n` +
+      `(torch: sharpness_factor (${sharpnessFactor}) is not non-negative.)`);
+  }
+  const src = asImage(img, "adjust_sharpness");
+  if (src.height <= 2 || src.width <= 2) return src;
+  return blend(src, blurred(src).data, sharpnessFactor);
+}
+
+/** 여섯 감싸개가 나눠 갖는 것: 확률 하나와 호출 하나. */
+abstract class RandomPixelOp implements Transform {
+  constructor(private readonly who: string, protected readonly p = 0.5) {}
+
+  protected abstract run(img: Image): Image;
+
+  apply(x: Subject): Image {
+    const img = asImage(x, this.who);
+    if (nextFloat() >= this.p) return img;
+    return this.run(img);
+  }
+
+  describe(): string {
+    return `${this.who}(p=${this.p})`;
+  }
+}
+
+export class RandomInvert extends RandomPixelOp {
+  constructor(p = 0.5) { super("RandomInvert", p); }
+  protected run(img: Image): Image { return invert(img); }
+}
+
+export class RandomAutocontrast extends RandomPixelOp {
+  constructor(p = 0.5) { super("RandomAutocontrast", p); }
+  protected run(img: Image): Image { return autocontrast(img); }
+}
+
+export class RandomEqualize extends RandomPixelOp {
+  constructor(p = 0.5) { super("RandomEqualize", p); }
+  protected run(img: Image): Image { return equalize(img); }
+}
+
+export class RandomPosterize extends RandomPixelOp {
+  constructor(private readonly bits: number, p = 0.5) { super("RandomPosterize", p); }
+  protected run(img: Image): Image { return posterize(img, this.bits); }
+  // **쉼표 뒤에 공백이 없다.** torchvision 자신의 표기이고 옮겨 적다 흘린 것이
+  // 아니다 — 이 여섯 중 셋이 그렇게 찍고 나머지 셋은 칸이 하나뿐이다.
+  override describe(): string { return `RandomPosterize(bits=${this.bits},p=${this.p})`; }
+}
+
+export class RandomSolarize extends RandomPixelOp {
+  constructor(private readonly threshold: number, p = 0.5) { super("RandomSolarize", p); }
+  protected run(img: Image): Image { return solarize(img, this.threshold); }
+  override describe(): string {
+    return `RandomSolarize(threshold=${this.threshold},p=${this.p})`;
+  }
+}
+
+export class RandomAdjustSharpness extends RandomPixelOp {
+  constructor(private readonly sharpnessFactor: number, p = 0.5) {
+    super("RandomAdjustSharpness", p);
+  }
+  protected run(img: Image): Image { return adjustSharpness(img, this.sharpnessFactor); }
+  override describe(): string {
+    return `RandomAdjustSharpness(sharpness_factor=${this.sharpnessFactor},p=${this.p})`;
+  }
+}

@@ -593,34 +593,35 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2712 cases. The remaining 426 are **two different
+borch.ts itself has written TS bodies for 2738 cases. The remaining 400 are **two different
 things, and counting them as one hides the second**. 360 are **deliberately not
 carried across** — the binding (`borch-webgpu`) already goes through borch.ts's kernels on
 those cases, so **the values are verified**, and what a TS body would add is not a
 value but this side's surface: names and argument order. A good many of them ask
 about a Python name alias, so carrying them across would ask the same question
-twice. The other 66 are **owed**: the `borchvision` work that arrived after
-borch.ts's `vision.ts` was written. `vision.ts` carries all twenty-one of the
-transforms it was measured against, `ColorJitter` included, and a
-`transforms.functional` namespace that did not exist on this side at all. What is
-left is everything frozen since: the six pixel rewrites with their wrappers and
-the two that resample on a grid. Those are a backlog rather than a decision, and
-calling all 426 deliberate would make the backlog invisible by counting it as a
-choice. The runner keeps printing the total rather than letting it shrink quietly.
+twice. The other 40 are **owed**: the `borchvision` work that arrived after
+borch.ts's `vision.ts` was written. `vision.ts` carries the transforms, the
+`transforms.functional` namespace that did not exist on this side at all, and the
+six pixel rewrites with their six wrappers. What is left has one shape — the
+transforms that **read the input between its pixels**: `rotate`, `affine`,
+`perspective`, `elastic_transform`, `gaussian_blur` and the classes over them.
+Those are a backlog rather than a decision, and calling all 400 deliberate would
+make the backlog invisible by counting it as a choice. The runner keeps printing
+the total rather than letting it shrink quietly.
 
-> **The owed figure has gone 57 → 19 → 50 rather than down, and that is the
-> figure working.** Nineteen were carried across while the other session froze
-> more; one number cannot show a debt being paid and taken on at the same time,
-> so the runner's row carries both. A count that only falls looks like progress
-> stalling whenever someone else is building, and a count that only reports a
-> total hides that anyone paid.
+> **The owed figure has gone 57 → 19 → 50 → 40 rather than down, and that is the
+> figure working.** Forty-five have been carried across while the other session
+> froze more; one number cannot show a debt being paid and taken on at the same
+> time, so the runner's row carries both. A count that only falls looks like
+> progress stalling whenever someone else is building, and a count that only
+> reports a total hides that anyone paid.
 
 > Those two figures said 2352 and 608 until they were measured. **Confirming them
 > does not need a browser** — the case table registers names without running them,
 > so loading `borch-ts/dist/test/cases.js` in node and counting the map is enough,
 > and `tests/test_site.py` now does exactly that whenever `dist` exists. A text
-> search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 828
-> against the real 2712, because the names are built programmatically.
+> search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 848
+> against the real 2738, because the names are built programmatically.
 
 ### Six places where it diverges from torch
 

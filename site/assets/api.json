@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 37
+  "missing": 43
  },
  "modules": [
   {
@@ -12286,7 +12286,11 @@
       {
        "name": "constructor",
        "signature": "constructor(brightness?: number | readonly [number, number], contrast?: number | readonly [number, number], saturation?: number | readonly [number, number], hue?: number | readonly [number, number])",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯",
+        "en": "Six pixel operations, and the six that apply them with a probability"
+       }
       },
       {
        "name": "getParams",
@@ -12297,12 +12301,20 @@
       {
        "name": "apply",
        "signature": "apply(x: Subject): Image",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯",
+        "en": "Six pixel operations, and the six that apply them with a probability"
+       }
       },
       {
        "name": "describe",
        "signature": "describe(): string",
-       "doc": ""
+       "doc": "",
+       "section": {
+        "ko": "픽셀 연산 여섯, 그리고 그것을 확률로 감싸는 여섯",
+        "en": "Six pixel operations, and the six that apply them with a probability"
+       }
       }
      ]
     },
@@ -12410,9 +12422,181 @@
      "doc": "",
      "members": [],
      "torch": "get_image_num_channels"
+    },
+    {
+     "kind": "function",
+     "name": "invert",
+     "signature": "export declare function invert(img: Image): Image",
+     "doc": "`bound - x`. White for black — and the bound is 255 or 1 depending on the\ndtype, which is the whole of it and the whole of what goes wrong.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "posterize",
+     "signature": "export declare function posterize(img: Image, bits: number): Image",
+     "doc": "Keep the top `bits` of each byte and zero the rest — **fewer colours, by\nmasking rather than by rounding.** uint8 only: a float image has no bits to\nthrow away.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "solarize",
+     "signature": "export declare function solarize(img: Image, threshold: number): Image",
+     "doc": "Invert **only the pixels at or above** the threshold. Below it nothing\nhappens, so the picture comes back part positive and part negative.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "autocontrast",
+     "signature": "export declare function autocontrast(img: Image): Image",
+     "doc": "Stretch each channel to fill the range. **Per channel and not per picture** —\na channel that is already flat is left alone rather than divided by zero.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "equalize",
+     "signature": "export declare function equalize(img: Image): Image",
+     "doc": "Flatten the histogram, per channel. **uint8 only**, for torchvision's reason:\nit counts 256 bins.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "adjustSharpness",
+     "signature": "export declare function adjustSharpness(img: Image, sharpnessFactor: number): Image",
+     "doc": "Blur at 0, unchanged at 1, sharper above — the blend `ImageEnhance` calls\nsharpness. **A picture two pixels wide or shorter comes back untouched**,\nbecause there is no middle to convolve.",
+     "members": [],
+     "torch": "adjust_sharpness"
+    },
+    {
+     "kind": "class",
+     "name": "RandomInvert",
+     "signature": "export declare class RandomInvert extends RandomPixelOp",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "protected run(img: Image): Image",
+       "doc": "",
+       "protected": true
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAutocontrast",
+     "signature": "export declare class RandomAutocontrast extends RandomPixelOp",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "protected run(img: Image): Image",
+       "doc": "",
+       "protected": true
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomEqualize",
+     "signature": "export declare class RandomEqualize extends RandomPixelOp",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "protected run(img: Image): Image",
+       "doc": "",
+       "protected": true
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomPosterize",
+     "signature": "export declare class RandomPosterize extends RandomPixelOp",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(bits: number, p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "protected run(img: Image): Image",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomSolarize",
+     "signature": "export declare class RandomSolarize extends RandomPixelOp",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(threshold: number, p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "protected run(img: Image): Image",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandomAdjustSharpness",
+     "signature": "export declare class RandomAdjustSharpness extends RandomPixelOp",
+     "doc": "",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(sharpnessFactor: number, p?: number)",
+       "doc": ""
+      },
+      {
+       "name": "run",
+       "signature": "protected run(img: Image): Image",
+       "doc": "",
+       "protected": true
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 119,
+   "count": 146,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -13960,5 +14144,5 @@
    "count": 9
   }
  ],
- "total": 1809
+ "total": 1836
 }
