@@ -1341,6 +1341,21 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   // 다른 헬퍼다(그 케이스들은 파이썬 쪽도 전치를 안 한다).
   const toTensor = (img: vision.Image): Tensor =>
     new vision.ToTensor().apply(img) as Tensor;
+
+  // **광도계 케이스는 `ToTensor` 를 안 쓴다.** 저쪽 `photo()` 가 전치만 하고 255 로
+  // 나누지 않으므로, 바이트 답이 바이트 값 그대로 얼어 있다.
+  const photo = (img: vision.Image): Tensor => {
+    const { data, height: h, width: w, channels: c } = img;
+    const out = new Float32Array(c * h * w);
+    for (let k = 0; k < c; k++) {
+      for (let i = 0; i < h; i++) {
+        for (let j = 0; j < w; j++) {
+          out[(k * h + i) * w + j] = data[(i * w + j) * c + k] ?? 0;
+        }
+      }
+    }
+    return Tensor.from(out, [c, h, w]);
+  };
   out.set("vision::Resize(줄임·겹선형)", () =>
     toTensor(new vision.Resize([4, 3]).apply(f()) as vision.Image));
   out.set("vision::Resize(늘림·겹선형)", () =>
@@ -1417,12 +1432,25 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     toTensor(new vision.Pad(2).apply(f()) as vision.Image));
   out.set("vision::Pad(four sides)", () =>
     toTensor(new vision.Pad([1, 2, 3, 4]).apply(f()) as vision.Image));
+  // **리베이스한 뒤에는 골든을 다시 돌린다 — 이식한 케이스가 그대로라고 가정하지
+  // 않는다.** 이 세 줄이 바로 그것으로 빨개졌다: 저쪽이 덧댐을 1 에서 2 로 바꿨고,
+  // 이름은 그대로였고, 아무것도 이 파일이 같이 움직여야 한다고 말해 주지 않았다.
+  //
+  // 저쪽에 규칙이 하나 적혀 있다 — 입력을 바꾸면 `cases.ts` 에서 그 이름을 grep 하라.
+  // 맞는 규칙이지만 **그 절반만으로는 안 된다**: 편집하는 사람은 main 밖에 못 본다.
+  // 이식이 브랜치 위에 있는 동안은 grep 에 안 걸리고, 이식하는 사람은 늘 브랜치 위에
+  // 있다. 그래서 나머지 절반이 여기 있다.
+  //
+  // **덧댐이 2 다. 1 이면 안 된다.** 1 칸에서는 `symmetric` 이 가장자리를 한 번
+  // 비추는데 그게 곧 가장자리 값이라, 두 모드가 수학적으로 같은 답을 낸다 — 세 케이스가
+  // 다 1 이던 동안 구현에서 두 이름을 맞바꿔도 전부 통과했다(실측). 2 가 두 낱말이
+  // 갈리는 가장 작은 덧댐이다.
   out.set("vision::Pad(edge)", () =>
-    toTensor(new vision.Pad(1, 0, "edge").apply(f()) as vision.Image));
+    toTensor(new vision.Pad(2, 0, "edge").apply(f()) as vision.Image));
   out.set("vision::Pad(reflect)", () =>
-    toTensor(new vision.Pad(1, 0, "reflect").apply(f()) as vision.Image));
+    toTensor(new vision.Pad(2, 0, "reflect").apply(f()) as vision.Image));
   out.set("vision::Pad(symmetric)", () =>
-    toTensor(new vision.Pad(1, 0, "symmetric").apply(f()) as vision.Image));
+    toTensor(new vision.Pad(2, 0, "symmetric").apply(f()) as vision.Image));
   // **채널별 색으로 덧댄다.** 파이썬 쪽은 이것을 numpy 의 `constant_values` 로 못
   // 넘긴다 — 그 인자는 축마다 읽히므로 세 색이 채널 축을 칠한다. uint8 케이스라
   // 저쪽은 진짜 PIL 이미지를 받고, 여기는 전치 없이 (H,W,C) 로 나온다.
@@ -1460,6 +1488,65 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::RandomGrayscale(p=1)", () =>
     toTensor(new vision.RandomGrayscale(1.0).apply(f()) as vision.Image));
 
+  // 색 지터. **한 인자만 한 값에 못 박는다** — 그러면 뽑기의 답이 하나고, 같이
+  // 뽑는 순서도 세울 것이 하나뿐이라 상관없어진다. 얼어붙은 값이 무작위 변환에게
+  // 물을 수 있는 것은 "지터가 옳은 함수에 닿는가" 까지다.
+  out.set("vision::ColorJitter(brightness pinned)", () =>
+    photo(new vision.ColorJitter([0.6, 0.6]).apply(f()) as vision.Image));
+  out.set("vision::ColorJitter(hue pinned)", () =>
+    photo(new vision.ColorJitter(undefined, undefined, undefined, [0.2, 0.2])
+      .apply(f()) as vision.Image));
+
+  // `transforms.functional`. **자리를 뽑지 않고 준다** — 위의 자르기는 전부 답이
+  // 하나가 되게 못 박은 뽑기를 지나지만, 이 넷은 네 수 자체가 케이스다.
+  out.set("vision::F.crop", () =>
+    toTensor(vision.crop(f(), 1, 1, 3, 2)));
+  out.set("vision::F.resized_crop", () =>
+    toTensor(vision.resizedCrop(f(), 1, 0, 3, 4, [2, 2])));
+  // `Pad` 의 두 값 형태 — (좌우, 상하) 인데 (좌, 상) 으로 읽힌다. 클래스 케이스는
+  // 네 수를 주므로 두 읽기가 같은 답을 낸다.
+  out.set("vision::F.pad(two numbers)", () =>
+    toTensor(vision.pad(f(), [1, 2], 0.5)));
+  // **이 표에서 무언가가 실제로 지워지는 첫 케이스다.** `RandomErasing` 의 둘은
+  // p=0 과 열 번이 다 빗나가는 가지라, 엉뚱한 사각형을 지우거나 엉뚱한 수로
+  // 채우는 구현도 둘 다 통과한다.
+  out.set("vision::F.erase", () =>
+    vision.erase(toTensor(f()), 1, 1, 2, 2, Tensor.full([3, 2, 2], 0.25)));
+  // **`get_image_size` 는 너비가 먼저**이고 나머지는 전부 높이가 먼저다. 글자로
+  // 얼려 두면 뒤바뀐 것이 그럴듯한 짝이 아니라 다른 문자열이 된다.
+  out.set("vision::F.sizes", () => {
+    const img = f();
+    return `[${vision.getDimensions(img).join(", ")}] ` +
+      `[${vision.getImageSize(img).join(", ")}] ` +
+      `${vision.getImageNumChannels(img)}`;
+  });
+
+  // 광도계 다섯. **양쪽 다 텐서 경로로 간다, uint8 까지** — 이 표에서 저쪽에
+  // PIL 이미지를 안 건네는 유일한 자리다. torchvision 은 이 다섯을 두 번 구현해
+  // 뒀고 둘은 일치하지 않는다. 우리 것은 두 번째를 옮겼다.
+  out.set("vision::F.adjust_brightness(dark)", () => photo(vision.adjustBrightness(f(), 0.5)));
+  // **1 위에서는 잘린다**, 그리고 그 자름은 1 아래 배율이 한 번도 안 닿는 절반이다.
+  out.set("vision::F.adjust_brightness(bright)", () => photo(vision.adjustBrightness(f(), 1.7)));
+  out.set("vision::F.adjust_contrast", () => photo(vision.adjustContrast(f(), 0.5)));
+  out.set("vision::F.adjust_saturation", () => photo(vision.adjustSaturation(f(), 1.7)));
+  // 색상은 RGB 를 떠나는 유일한 것이다. 4분의 1 바퀴와 작은 음수 — 0 에서 감기는
+  // 것과 1 에서 감기는 것이 서로 다른 줄의 산술이다.
+  out.set("vision::F.adjust_hue(quarter turn)", () => photo(vision.adjustHue(f(), 0.25)));
+  out.set("vision::F.adjust_hue(backwards)", () => photo(vision.adjustHue(f(), -0.1)));
+  out.set("vision::F.adjust_gamma", () => photo(vision.adjustGamma(f(), 2.2)));
+  out.set("vision::F.adjust_gamma(with gain)", () => photo(vision.adjustGamma(f(), 0.5, 0.5)));
+  // **바이트 가지.** 모든 블렌드가 캐스트로 끝나므로 작업 정밀도가 답을 고를 수 있는
+  // 자리다 — 다만 이 두 건이 그것을 재지는 못한다. `vision.ts` 의 광도계 주석에
+  // 무엇을 쟀고 무엇이 안 걸리는지 적어 뒀다.
+  // **배율 0.1 이 그 자리를 무는 배율이다.** 1.7 에서는 이 그림에서 float64 와
+  // float32 가 한 화소도 안 갈린다 — 같은 그림도 배율에 따라 갈리고 안 갈린다.
+  // 그리고 이 줄은 파이썬 쪽 케이스의 배율과 **손으로 맞춰져 있다**: 이름이 같으므로
+  // 저쪽이 배율을 바꾸면 여기도 같은 커밋에서 바뀌어야 하고, 아무것도 그걸 말해 주지
+  // 않는다. 케이스를 더하거나 지우는 것은 안전하고, **이미 이식된 케이스의 입력을
+  // 바꾸는 것**만 두 파일이 같이 움직여야 한다.
+  out.set("vision::F.adjust_saturation(uint8)", () => photo(vision.adjustSaturation(u8(), 0.1)));
+  out.set("vision::F.adjust_hue(uint8)", () => photo(vision.adjustHue(u8(), 0.25)));
+
   // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
   const reprs: [string, () => vision.Transform][] = [
     ["ToTensor", () => new vision.ToTensor()],
@@ -1475,6 +1562,10 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     // repr 이 다른 그 변환이 골든에 케이스가 없던 유일한 변환이었다.
     ["Resize", () => new vision.Resize(4)],
     ["Resize(a pair)", () => new vision.Resize([4, 3])],
+    ["ColorJitter", () => new vision.ColorJitter(0.5, 0.3, 0.2, 0.1)],
+    // 맨몸의 것도 묻는다 — **기본값에 둔 지터는 `None` 을 저장**하지, 아무것도
+    // 안 하는 범위를 저장하지 않는다. 그 구분은 기본 형태만 찍어 본다.
+    ["ColorJitter(the default)", () => new vision.ColorJitter()],
     ["RandomResizedCrop", () => new vision.RandomResizedCrop(4)],
     ["RandomErasing", () => new vision.RandomErasing()],
     ["LinearTransformation", () => new vision.LinearTransformation(

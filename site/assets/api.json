@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 23
+  "missing": 37
  },
  "modules": [
   {
@@ -12236,9 +12236,183 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "function",
+     "name": "adjustBrightness",
+     "signature": "export declare function adjustBrightness(img: Image, brightnessFactor: number): Image",
+     "doc": "Toward black at 0, unchanged at 1, brighter above.",
+     "members": [],
+     "torch": "adjust_brightness"
+    },
+    {
+     "kind": "function",
+     "name": "adjustContrast",
+     "signature": "export declare function adjustContrast(img: Image, contrastFactor: number): Image",
+     "doc": "Toward **the picture's own mean grey**, which is one number for the whole\nimage rather than one per channel or per pixel.",
+     "members": [],
+     "torch": "adjust_contrast"
+    },
+    {
+     "kind": "function",
+     "name": "adjustSaturation",
+     "signature": "export declare function adjustSaturation(img: Image, saturationFactor: number): Image",
+     "doc": "Toward grey, per pixel. **A one-channel picture comes back untouched** —\ntorchvision does that to match PIL, and it is a branch rather than an accident.",
+     "members": [],
+     "torch": "adjust_saturation"
+    },
+    {
+     "kind": "function",
+     "name": "adjustHue",
+     "signature": "export declare function adjustHue(img: Image, hueFactor: number): Image",
+     "doc": "Rotate the hue. **The only one that leaves RGB** — through HSV, add to the\nangle, and back.\n\n`hueFactor` is a turn rather than degrees: 0.5 is half the wheel. A\none-channel picture comes back untouched, matching PIL.",
+     "members": [],
+     "torch": "adjust_hue"
+    },
+    {
+     "kind": "function",
+     "name": "adjustGamma",
+     "signature": "export declare function adjustGamma(img: Image, gamma: number, gain?: number): Image",
+     "doc": "`gain * x ** gamma`, clamped. Below 1 it lifts the shadows and above 1 it\ndeepens them — **the correction a display does**, which is why it is the one\nhere whose name is not a direction.",
+     "members": [],
+     "torch": "adjust_gamma"
+    },
+    {
+     "kind": "class",
+     "name": "ColorJitter",
+     "signature": "export declare class ColorJitter implements Transform",
+     "doc": "Brightness, contrast, saturation and hue, each drawn from a range — **and the\nfour applied in a drawn order.**\n\nThe order is part of the draw and not a detail: brightness then contrast is\nnot contrast then brightness, because contrast measures the picture's mean and\nbrightness has already moved it.\n\nA single number `b` means the range `[1-b, 1+b]` (hue is centred on 0\ninstead). A range that comes out as exactly the identity is **turned off\nrather than applied** — torchvision stores nothing there, which is why the\nrepr shows `None` for anything left at its default.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(brightness?: number | readonly [number, number], contrast?: number | readonly [number, number], saturation?: number | readonly [number, number], hue?: number | readonly [number, number])",
+       "doc": ""
+      },
+      {
+       "name": "getParams",
+       "signature": "getParams(): [number[], number | null, number | null, number | null, number | null]",
+       "doc": "The four factors and **the order to apply them in.** Kept separate because\nit is the only part that draws.",
+       "torch": "get_params"
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "function",
+     "name": "hflip",
+     "signature": "export declare function hflip(img: Image): Image",
+     "doc": "Left to right, with no draw in it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "vflip",
+     "signature": "export declare function vflip(img: Image): Image",
+     "doc": "Top to bottom, with no draw in it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "crop",
+     "signature": "export declare function crop(img: Image, top: number, left: number, height: number, width: number): Image",
+     "doc": "**Not `RandomCrop` without the draw** — the position is given, and it may\nhang off the edge, which is torchvision's behaviour rather than an oversight.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "centerCrop",
+     "signature": "export declare function centerCrop(img: Image, size: number | readonly [number, number]): Image",
+     "doc": "",
+     "members": [],
+     "torch": "center_crop"
+    },
+    {
+     "kind": "function",
+     "name": "resize",
+     "signature": "export declare function resize(img: Image, size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", maxSize?: number | null, antialias?: boolean): Image",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "resizedCrop",
+     "signature": "export declare function resizedCrop(img: Image, top: number, left: number, height: number, width: number, size: number | readonly [number, number], interpolation?: \"bilinear\" | \"nearest\", antialias?: boolean): Image",
+     "doc": "Crop, then resize what was cropped. `RandomResizedCrop` without the draw.",
+     "members": [],
+     "torch": "resized_crop"
+    },
+    {
+     "kind": "function",
+     "name": "pad",
+     "signature": "export declare function pad(img: Image, padding: number | readonly number[], fill?: number | readonly number[], paddingMode?: PaddingMode): Image",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "rgbToGrayscale",
+     "signature": "export declare function rgbToGrayscale(img: Image, numOutputChannels?: number): Image",
+     "doc": "",
+     "members": [],
+     "torch": "rgb_to_grayscale"
+    },
+    {
+     "kind": "function",
+     "name": "toTensor",
+     "signature": "export declare function toTensor(img: Image): Tensor",
+     "doc": "",
+     "members": [],
+     "torch": "to_tensor"
+    },
+    {
+     "kind": "function",
+     "name": "normalize",
+     "signature": "export declare function normalize(x: Tensor, mean: readonly number[], std: readonly number[]): Tensor",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "erase",
+     "signature": "export declare function erase(x: Tensor, top: number, left: number, height: number, width: number, v: Tensor): Tensor",
+     "doc": "Blank out a rectangle of a `(...,C,H,W)` tensor. **The position is given**,\nwhere `RandomErasing` draws it.",
+     "members": []
+    },
+    {
+     "kind": "function",
+     "name": "getDimensions",
+     "signature": "export declare function getDimensions(img: Image): [number, number, number]",
+     "doc": "`[C, H, W]` — **height before width**, unlike `getImageSize` just below.",
+     "members": [],
+     "torch": "get_dimensions"
+    },
+    {
+     "kind": "function",
+     "name": "getImageSize",
+     "signature": "export declare function getImageSize(img: Image): [number, number]",
+     "doc": "`[W, H]` — **width first.** torchvision's order, and the odd one out here.",
+     "members": [],
+     "torch": "get_image_size"
+    },
+    {
+     "kind": "function",
+     "name": "getImageNumChannels",
+     "signature": "export declare function getImageNumChannels(img: Image): number",
+     "doc": "",
+     "members": [],
+     "torch": "get_image_num_channels"
     }
    ],
-   "count": 95,
+   "count": 119,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -13786,5 +13960,5 @@
    "count": 9
   }
  ],
- "total": 1785
+ "total": 1809
 }

@@ -1377,3 +1377,463 @@ function padded(img: Image, pad: number, fill: number): Image {
   }
   return { ...img, data: out, height, width };
 }
+
+
+// ── 광도계: torchvision 이 **텐서 경로에서** 하는 산술 ──────────────────
+//
+// **PIL 의 수가 아니다.** torchvision 은 이 다섯을 두 번 구현해 뒀다 — PIL 이미지용
+// `ImageEnhance` 와 텐서용 산술 — 그리고 둘은 마지막 비트까지 일치하지 않는다.
+// 파이썬 쪽이 두 번째를 옮겼고 골든이 그것과 대조하므로 여기도 두 번째다.
+//
+// **정밀도에 대해 실제로 잰 것.** 여기 `f32` 가 잔뜩 붙은 이유를 적어 두는데,
+// 처음 적으려던 이유는 재 보니 틀렸다.
+//
+// 산 이야기: 바이트 그림에서 모든 블렌드가 **좁히는 캐스트로 끝나므로**, 작업
+// 정밀도가 답을 고른다. 무작위 5x4 바이트 그림 300 장 x 배율 4 개로 재니
+// float64 로 계산한 것과 float32 로 계산한 것이 **72000 화소 중 910 개(1.3%)**
+// 에서 갈렸다. 1 만큼 갈리므로 1e-4 허용오차 **밖**이다. 그러니 장식이 아니다.
+//
+// 그리고 **검사가 그것을 본다** — 지금은. 이 문단은 하루 사이에 두 번 뒤집혔고,
+// 뒤집힌 자국을 남겨 두는 편이 결론만 적는 것보다 쓸모 있다:
+//
+//   처음  파이썬 쪽 주석이 "실측, `adjust_saturation(1.7)` 의 한 화소" 라고 했고
+//         나는 그걸 근거로 이 경로를 float32 로 썼다.
+//   재보니 그 케이스에서 갈리는 화소가 **0 개**였다. `f32` 를 전부 항등으로 바꿔도
+//         열 건이 다 통과했다 — 걸리지 않은 것은 그림이 아니라 배율이었다.
+//   지금  저쪽이 케이스를 배율 0.1 로 옮겼다. `f32` 를 항등으로 바꾸면 **4 화소가
+//         정확히 1.0 씩** 어긋나 허용오차 밖으로 나간다.
+//
+// 그래서 판별 질문은 이것이다: **산술 뒤에 좁히는 캐스트가 오는가.** 오면 작업
+// 정밀도가 답을 고르므로 어떤 허용오차도 안 덮어 준다. 그 사실과, 검사가 그것을
+// 보는가는 여전히 **별개**다 — 하루 동안은 사실만 있고 검사가 없었다.
+
+const f32 = Math.fround;
+
+/** 범위의 위끝. **바이트는 255, 실수 그림은 1** — 블렌드가 여기로 잘린다. */
+function bound(isByte: boolean): number {
+  return isByte ? 255 : 1;
+}
+
+/**
+ * `ratio*a + (1-ratio)*b`, 잘라서 원래 형으로.
+ *
+ * `1 - ratio` 는 **float64 로 먼저** 계산된다 (파이썬에서 둘 다 파이썬 실수다).
+ * 좁아지는 것은 float32 배열에 곱해지는 순간이다 — 그 차례가 `toGray` 에서 20 화소
+ * 중 0 개와 20 개를 갈랐다.
+ */
+function blend(a: Image, b: ArrayLike<number>, ratio: number): Image {
+  const hi = bound(a.isByte);
+  const r = f32(ratio);
+  const q = f32(1 - ratio);
+  const out = new Float64Array(a.data.length);
+  for (let i = 0; i < out.length; i++) {
+    const v = f32(f32(r * f32(a.data[i] ?? 0)) + f32(q * f32(b[i] ?? 0)));
+    const c = v < 0 ? 0 : v > hi ? hi : v;
+    out[i] = a.isByte ? Math.trunc(c) : c;
+  }
+  return { ...a, data: out };
+}
+
+/** 바이트를 [0,1] 실수로. **torch 의 변환이지 임의의 나눗셈이 아니다.** */
+function toFloat01(img: Image): Float64Array {
+  if (!img.isByte) return img.data;
+  const out = new Float64Array(img.data.length);
+  for (let i = 0; i < out.length; i++) out[i] = f32(f32(img.data[i] ?? 0) / 255);
+  return out;
+}
+
+// torch 는 반올림이 아니라 `256 - 1e-3` 을 곱하고 자른다 — 값의 절반쯤에서 두 방식이
+// 갈리므로 그대로 옮긴다.
+const BYTE_SCALE = f32(255 + 1 - 1e-3);
+
+function fromFloat01(arr: Float64Array, img: Image): Image {
+  const out = new Float64Array(arr.length);
+  for (let i = 0; i < out.length; i++) {
+    const v = f32(arr[i] ?? 0);
+    out[i] = img.isByte ? Math.trunc(f32(v * BYTE_SCALE)) : v;
+  }
+  return { ...img, data: out };
+}
+
+/**
+ * Pillow 의 알고리즘 — torchvision 이 옮긴 그것이다. **채널이 같은 화소는 나눗셈
+ * 바깥에서 처리한다**: 회색 화소는 `maxc == minc` 라 차로 나누면 NaN 이 생기고,
+ * 그러면 그것을 다시 찾아야 한다.
+ */
+function rgb2hsv(src: Float64Array, n: number): Float64Array {
+  const out = new Float64Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const r = f32(src[i * 3] ?? 0);
+    const g = f32(src[i * 3 + 1] ?? 0);
+    const b = f32(src[i * 3 + 2] ?? 0);
+    const maxc = Math.max(r, g, b);
+    const minc = Math.min(r, g, b);
+    const eqc = maxc === minc;
+    const cr = f32(maxc - minc);
+    const s = f32(cr / (eqc ? 1 : maxc));
+    const div = eqc ? 1 : cr;
+    const rc = f32(f32(maxc - r) / div);
+    const gc = f32(f32(maxc - g) / div);
+    const bc = f32(f32(maxc - b) / div);
+    // 파이썬 쪽은 세 마스크를 곱해 더한다. 정확히 하나만 1 이고 나머지 항은 0 이라
+    // 덧셈이 정확하므로 분기로 써도 같은 수가 나온다.
+    let h: number;
+    if (maxc === r) h = f32(bc - gc);
+    else if (maxc === g) h = f32(f32(2 + rc) - bc);
+    else h = f32(f32(4 + gc) - rc);
+    out[i * 3] = f32(f32(f32(h / 6) + 1) % 1);
+    out[i * 3 + 1] = s;
+    out[i * 3 + 2] = maxc;
+  }
+  return out;
+}
+
+/**
+ * 되돌아오는 길. torch 는 원핫 마스크와 einsum 으로 육분면을 고른다 — 여기서는
+ * 색인으로 고르고 수는 같다. einsum 은 미분도 해야 하는 gather 를 쓰는 방식이다.
+ */
+function hsv2rgb(hsv: Float64Array, n: number): Float64Array {
+  const clip01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+  const out = new Float64Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const h = hsv[i * 3] ?? 0;
+    const s = hsv[i * 3 + 1] ?? 0;
+    const v = hsv[i * 3 + 2] ?? 0;
+    const six = f32(h * 6);
+    const sextant = Math.floor(six);
+    const f = f32(six - sextant);
+    const idx = (((sextant | 0) % 6) + 6) % 6;
+    const pp = clip01(f32(v * f32(1 - s)));
+    const qq = clip01(f32(v * f32(1 - f32(s * f))));
+    const tt = clip01(f32(v * f32(1 - f32(s * f32(1 - f)))));
+    const R = [v, qq, pp, pp, tt, v];
+    const G = [tt, v, v, qq, pp, pp];
+    const B = [pp, pp, tt, v, v, qq];
+    out[i * 3] = R[idx] ?? 0;
+    out[i * 3 + 1] = G[idx] ?? 0;
+    out[i * 3 + 2] = B[idx] ?? 0;
+  }
+  return out;
+}
+
+/** Toward black at 0, unchanged at 1, brighter above. */
+export function adjustBrightness(img: Image, brightnessFactor: number): Image {
+  if (brightnessFactor < 0) {
+    throw new RuntimeError(
+      `brightness_factor is not non-negative — got ${brightnessFactor}.\n` +
+      `(torch: brightness_factor (${brightnessFactor}) is not non-negative.)`);
+  }
+  return blend(img, new Float64Array(img.data.length), brightnessFactor);
+}
+
+/**
+ * Toward **the picture's own mean grey**, which is one number for the whole
+ * image rather than one per channel or per pixel.
+ */
+export function adjustContrast(img: Image, contrastFactor: number): Image {
+  if (contrastFactor < 0) {
+    throw new RuntimeError(
+      `contrast_factor is not non-negative — got ${contrastFactor}.\n` +
+      `(torch: contrast_factor (${contrastFactor}) is not non-negative.)`);
+  }
+  const grey = toGray(img, 1, "adjust_contrast").data;
+  let sum = 0;
+  for (let i = 0; i < grey.length; i++) sum = f32(sum + f32(grey[i] ?? 0));
+  const flat = new Float64Array(img.data.length).fill(f32(sum / grey.length));
+  return blend(img, flat, contrastFactor);
+}
+
+/**
+ * Toward grey, per pixel. **A one-channel picture comes back untouched** —
+ * torchvision does that to match PIL, and it is a branch rather than an accident.
+ */
+export function adjustSaturation(img: Image, saturationFactor: number): Image {
+  if (saturationFactor < 0) {
+    throw new RuntimeError(
+      `saturation_factor is not non-negative — got ${saturationFactor}.\n` +
+      `(torch: saturation_factor (${saturationFactor}) is not non-negative.)`);
+  }
+  if (img.channels !== 3) return img;
+  return blend(img, toGray(img, 3, "adjust_saturation").data, saturationFactor);
+}
+
+/**
+ * Rotate the hue. **The only one that leaves RGB** — through HSV, add to the
+ * angle, and back.
+ *
+ * `hueFactor` is a turn rather than degrees: 0.5 is half the wheel. A
+ * one-channel picture comes back untouched, matching PIL.
+ */
+export function adjustHue(img: Image, hueFactor: number): Image {
+  if (!(hueFactor >= -0.5 && hueFactor <= 0.5)) {
+    throw new RuntimeError(
+      `hue_factor is not in [-0.5, 0.5] — got ${hueFactor}.\n` +
+      `(torch: hue_factor (${hueFactor}) is not in [-0.5, 0.5].)`);
+  }
+  if (img.channels !== 3) return img;
+  const n = img.height * img.width;
+  const hsv = rgb2hsv(toFloat01(img), n);
+  for (let i = 0; i < n; i++) {
+    hsv[i * 3] = f32(f32(f32((hsv[i * 3] ?? 0) + hueFactor) + 1) % 1);
+  }
+  return fromFloat01(hsv2rgb(hsv, n), img);
+}
+
+/**
+ * `gain * x ** gamma`, clamped. Below 1 it lifts the shadows and above 1 it
+ * deepens them — **the correction a display does**, which is why it is the one
+ * here whose name is not a direction.
+ */
+export function adjustGamma(img: Image, gamma: number, gain = 1): Image {
+  if (gamma < 0) {
+    throw new RuntimeError(
+      `gamma is not non-negative — got ${gamma}.\n` +
+      "(torch: Gamma should be a non-negative real number)");
+  }
+  const src = toFloat01(img);
+  const out = new Float64Array(src.length);
+  for (let i = 0; i < out.length; i++) {
+    const v = f32(gain * f32(Math.pow(f32(src[i] ?? 0), gamma)));
+    out[i] = v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+  return fromFloat01(out, img);
+}
+
+/** `null` 이면 안 쓴다는 뜻이고, 그것이 `None` 으로 찍힌다. */
+type Span = readonly [number, number] | null;
+
+function checkSpan(
+  value: number | readonly [number, number] | undefined,
+  name: string,
+  center: number,
+  lo: number,
+  hi: number,
+  clipFirstOnZero: boolean,
+): Span {
+  let pair: [number, number];
+  if (value === undefined) {
+    pair = [center, center];
+  } else if (typeof value === "number") {
+    if (value < 0) {
+      throw new RuntimeError(
+        `${name} as a single number must be non-negative — got ${value}.\n` +
+        `(torch: If ${name} is a single number, it must be non negative.)`);
+    }
+    pair = [center - value, center + value];
+    if (clipFirstOnZero) pair[0] = Math.max(pair[0], 0);
+  } else if (Array.isArray(value) && value.length === 2) {
+    pair = [Number(value[0]), Number(value[1])];
+  } else {
+    throw new RuntimeError(
+      `${name} is a single number or a pair — got ${JSON.stringify(value)}.\n` +
+      `(torch: ${name} should be a single number or a list/tuple with length 2.)`);
+  }
+  if (!(lo <= pair[0] && pair[0] <= pair[1] && pair[1] <= hi)) {
+    throw new RuntimeError(
+      `${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].\n` +
+      `(torch: ${name} values should be between (${lo}, ${hi}), but got [${pair[0]}, ${pair[1]}].)`);
+  }
+  // **항등은 "아무것도 안 하는 범위" 가 아니라 `None` 으로 저장된다.** 그냥 적용하면
+  // 블렌드 한 번과, 바이트 그림에서는 반올림 한 번이 든다 — "지터 없음" 과 "정확히
+  // 1 인 지터" 는 다른 것이다.
+  return pair[0] === pair[1] && pair[0] === center ? null : [pair[0], pair[1]];
+}
+
+function spanText(s: Span): string {
+  return s === null ? "None" : `(${s[0]}, ${s[1]})`;
+}
+
+/**
+ * Brightness, contrast, saturation and hue, each drawn from a range — **and the
+ * four applied in a drawn order.**
+ *
+ * The order is part of the draw and not a detail: brightness then contrast is
+ * not contrast then brightness, because contrast measures the picture's mean and
+ * brightness has already moved it.
+ *
+ * A single number `b` means the range `[1-b, 1+b]` (hue is centred on 0
+ * instead). A range that comes out as exactly the identity is **turned off
+ * rather than applied** — torchvision stores nothing there, which is why the
+ * repr shows `None` for anything left at its default.
+ */
+export class ColorJitter implements Transform {
+  private readonly brightness: Span;
+  private readonly contrast: Span;
+  private readonly saturation: Span;
+  private readonly hue: Span;
+
+  constructor(
+    brightness?: number | readonly [number, number],
+    contrast?: number | readonly [number, number],
+    saturation?: number | readonly [number, number],
+    hue?: number | readonly [number, number],
+  ) {
+    this.brightness = checkSpan(brightness, "brightness", 1, 0, Infinity, true);
+    this.contrast = checkSpan(contrast, "contrast", 1, 0, Infinity, true);
+    this.saturation = checkSpan(saturation, "saturation", 1, 0, Infinity, true);
+    this.hue = checkSpan(hue, "hue", 0, -0.5, 0.5, false);
+  }
+
+  /**
+   * The four factors and **the order to apply them in.** Kept separate because
+   * it is the only part that draws.
+   */
+  getParams(): [number[], number | null, number | null, number | null, number | null] {
+    const order = [0, 1, 2, 3];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = nextInt(i + 1);
+      const a = order[i] ?? 0, b = order[j] ?? 0;
+      order[i] = b; order[j] = a;
+    }
+    const draw = (s: Span): number | null => (s === null ? null : uniform(s[0], s[1]));
+    return [order, draw(this.brightness), draw(this.contrast),
+      draw(this.saturation), draw(this.hue)];
+  }
+
+  apply(x: Subject): Image {
+    let img = asImage(x, "ColorJitter");
+    const [order, brightness, contrast, saturation, hue] = this.getParams();
+    for (const which of order) {
+      if (which === 0 && brightness !== null) img = adjustBrightness(img, brightness);
+      else if (which === 1 && contrast !== null) img = adjustContrast(img, contrast);
+      else if (which === 2 && saturation !== null) img = adjustSaturation(img, saturation);
+      else if (which === 3 && hue !== null) img = adjustHue(img, hue);
+    }
+    return img;
+  }
+
+  describe(): string {
+    return `ColorJitter(brightness=${spanText(this.brightness)}` +
+      `, contrast=${spanText(this.contrast)}` +
+      `, saturation=${spanText(this.saturation)}` +
+      `, hue=${spanText(this.hue)})`;
+  }
+}
+
+// ── transforms.functional ──────────────────────────────────────────────
+//
+// **같은 산술을 객체를 세우지 않고 부르는 것.** 여기 있는 것은 전부 위 클래스나 그
+// 클래스가 쓰는 도우미에게 일을 넘긴다 — 아무것도 다시 구현하지 않는다. 그게 요점이다:
+// `Resize` 의 거르개가 두 벌 있으면 쓴 날에는 맞고 나중 어느 날에는 안 맞는다.
+//
+// torchvision 은 반대로 나눠 뒀다 — 클래스가 함수를 부른다. 여기가 반대인 것은
+// 클래스가 먼저 있었기 때문이고, 호출 그래프의 모양을 맞추자고 도는 코드를 뒤집는 것은
+// 밖에서 아무도 못 보는 것을 위해 고치는 일이다. (파이썬 쪽도 같은 이유로 같은 방향이다.)
+//
+// **무엇에 쓰나**: 튜토리얼은 `RandomHorizontalFlip()` 만큼 자주 `F.hflip(x)` 라고
+// 쓰고, 지금까지 그 줄은 없는 네임스페이스에 대한 오류로 멈췄다.
+
+/** Left to right, with no draw in it. */
+export function hflip(img: Image): Image {
+  return flipped(asImage(img, "hflip"), false);
+}
+
+/** Top to bottom, with no draw in it. */
+export function vflip(img: Image): Image {
+  return flipped(asImage(img, "vflip"), true);
+}
+
+/**
+ * **Not `RandomCrop` without the draw** — the position is given, and it may
+ * hang off the edge, which is torchvision's behaviour rather than an oversight.
+ */
+export function crop(img: Image, top: number, left: number,
+                     height: number, width: number): Image {
+  return cropAt(asImage(img, "crop"), top, left, height, width);
+}
+
+export function centerCrop(img: Image, size: number | readonly [number, number]): Image {
+  return new CenterCrop(size).apply(img);
+}
+
+export function resize(
+  img: Image,
+  size: number | readonly [number, number],
+  interpolation: "bilinear" | "nearest" = "bilinear",
+  maxSize: number | null = null,
+  antialias = true,
+): Image {
+  return new Resize(size, interpolation, maxSize, antialias).apply(img);
+}
+
+/** Crop, then resize what was cropped. `RandomResizedCrop` without the draw. */
+export function resizedCrop(
+  img: Image, top: number, left: number, height: number, width: number,
+  size: number | readonly [number, number],
+  interpolation: "bilinear" | "nearest" = "bilinear",
+  antialias = true,
+): Image {
+  return resize(crop(img, top, left, height, width), size, interpolation, null, antialias);
+}
+
+export function pad(
+  img: Image,
+  padding: number | readonly number[],
+  fill: number | readonly number[] = 0,
+  paddingMode: PaddingMode = "constant",
+): Image {
+  return new Pad(padding, fill, paddingMode).apply(img);
+}
+
+export function rgbToGrayscale(img: Image, numOutputChannels = 1): Image {
+  return toGray(asImage(img, "rgb_to_grayscale"), numOutputChannels, "rgb_to_grayscale");
+}
+
+export function toTensor(img: Image): Tensor {
+  return new ToTensor().apply(img);
+}
+
+export function normalize(x: Tensor, mean: readonly number[], std: readonly number[]): Tensor {
+  return new Normalize(mean, std).apply(x);
+}
+
+/**
+ * Blank out a rectangle of a `(...,C,H,W)` tensor. **The position is given**,
+ * where `RandomErasing` draws it.
+ */
+export function erase(x: Tensor, top: number, left: number,
+                      height: number, width: number, v: Tensor): Tensor {
+  const shape = x.shape;
+  if (shape.length < 3) {
+    throw new RuntimeError(
+      `erase takes (...,C,H,W) — it received (${shape.join(", ")}).`);
+  }
+  const h = shape[shape.length - 2] ?? 1;
+  const w = shape[shape.length - 1] ?? 1;
+  const n = x.size;
+  const mask = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const col = i % w;
+    const row = Math.floor(i / w) % h;
+    if (row >= top && row < top + height && col >= left && col < left + width) mask[i] = 1;
+  }
+  // **`v` 를 제자리로 덧대서 올린다.** 자리마다 다른 값이 올 수 있으므로 상수 하나로
+  // 줄이면 안 된다 — 골든의 케이스가 마침 상수라 그렇게 써도 통과하지만, 그것은
+  // 케이스가 그 구분을 못 하는 것이지 맞는 것이 아니다. `where` 는 브로드캐스트를
+  // 안 하므로 모양이 정확히 같아야 한다.
+  const rank = v.shape.length;
+  const placed = v.pad(rank - 2, top, h - top - height)
+    .pad(rank - 1, left, w - left - width);
+  if (placed.size !== n) {
+    throw new RuntimeError(
+      `erase: v padded to (${placed.shape.join(", ")}) does not match the image ` +
+      `(${shape.join(", ")}).`);
+  }
+  return placed.reshape(shape).where(Tensor.from(mask, shape), x);
+}
+
+/** `[C, H, W]` — **height before width**, unlike `getImageSize` just below. */
+export function getDimensions(img: Image): [number, number, number] {
+  const i = asImage(img, "get_dimensions");
+  return [i.channels, i.height, i.width];
+}
+
+/** `[W, H]` — **width first.** torchvision's order, and the odd one out here. */
+export function getImageSize(img: Image): [number, number] {
+  const i = asImage(img, "get_image_size");
+  return [i.width, i.height];
+}
+
+export function getImageNumChannels(img: Image): number {
+  return asImage(img, "get_image_num_channels").channels;
+}
