@@ -17,6 +17,23 @@ commits of which one was a translation. Nothing was going wrong — features wer
 and each arrived with Korean comments, because that is what the surrounding file looks
 like. Waiting was not holding position; it was losing ground at about 11% a day.
 
+## What a green run here does **not** mean
+
+It does not mean a directory is English. It does not mean a file is. **The ceiling is a
+derivative** — it answers "did this grow" and is silent about every absolute fact, and a
+green run is compatible with 40,000 Korean characters sitting exactly where they were.
+
+This is written down because it already misled somebody. A session translated the
+characters its own commit had added, ran this, saw green, and reported "vision.ts is
+translated" — the check answered *did this grow* and the sentence claimed *is this
+English*. The file still held 2,883 Korean characters, and the report was believed
+downstream until somebody grepped.
+
+Having a green test in front of you is what makes it easy to stop looking. To claim a
+file is English, count it:
+
+    grep -c "[가-힣]" path/to/file
+
 ## What it costs
 
 Nothing to read and nothing to run. It asks only that **new comments in these directories
@@ -45,7 +62,7 @@ SUFFIXES = (".ts", ".py", ".html")
 # Measured 2026-08-22. Lower these after a translation pass; see the module docstring
 # before raising one.
 CEILINGS = {
-    "borch-ts/src": 16291,      # kernels.ts: 10,840 → 2 (one golden case name cited)
+    "borch-ts/src": 12562,      # device.ts: 3,729 → 0
     "borch-ts/test": 52721,
 }
 

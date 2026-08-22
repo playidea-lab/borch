@@ -1,25 +1,28 @@
 /**
- * WebGPU 장치·버퍼·파이프라인 캐시.
+ * The WebGPU device, its buffers and the pipeline cache.
  *
- * ## 파이프라인 캐시가 왜 여기 있나
+ * ## Why the pipeline cache lives here
  *
- * 모양을 셰이더에 굽는 것이 이 라이브러리의 전제다(`kernels.ts` 참고). 그러면 같은
- * 연산도 모양이 다르면 다른 셰이더이고, 층을 한 번 지나갈 때마다 컴파일하면 커널이
- * 빠른 것이 의미가 없다. 그래서 **모양 서명 → 파이프라인** 이 자료구조로 들어간다.
- * 최적화가 아니라 굽기로 얻은 속도를 지키는 값이다.
+ * Baking the shape into the shader is this library's premise (see `kernels.ts`). That
+ * makes one operation several shaders as the shapes differ, and compiling on every pass
+ * through a layer makes a fast kernel meaningless. So **shape signature → pipeline**
+ * enters as a data structure. It is not an optimisation but the price of keeping the
+ * speed the baking bought.
  *
- * ## 한계는 조용히 온다
+ * ## The limits arrive quietly
  *
- * WebGPU 는 버퍼 크기나 dispatch 한계를 넘으면 **던지지 않고 안 한다.** 벤치에서
- * 두 번 밟았다 — 128MB 초과에서 24만 GFLOPS, dispatch 65,535 초과에서 "144%".
- * 둘 다 값을 안 봤으면 믿었을 수치라, 여기서는 한계를 **미리 재고 넘으면 던진다.**
+ * Past a buffer size or a dispatch limit, WebGPU **does not throw; it does not do it.**
+ * The bench stepped on this twice — 240,000 GFLOPS above 128MB, and "144%" above 65,535
+ * dispatches. Both are numbers that would have been believed if the values had not been
+ * looked at, so here the limits are **measured in advance and exceeding one throws.**
  */
 
 import { grid1d, reduceParts, reduceSum, WORKGROUP } from "./kernels.js";
 
 const BYTES_PER_F32 = 4;
 
-/** 검증 오류를 몇 건까지 찍을 것인가. 첫 건이 원인이고 나머지는 그 여파다. */
+/** How many validation errors to print. The first is the cause and the rest are its
+ *  wake. */
 const MAX_REPORTED_ERRORS = 3;
 
 /**
@@ -62,29 +65,31 @@ export type Availability =
   | { ok: true; adapter: string }
   | { ok: false; why: "no-api" | "no-adapter"; message: string };
 
-// **버전을 대는 것만으로는 부족하다.** Safari 18.6 에서 이 문구를 받은 사람이
-// 있었는데, 그는 이미 18+ 였고 localhost 였고 secure context 였다 — 문구가 시키는
-// 것을 전부 한 상태에서 같은 문구를 받았다. 그러면 브라우저 버전을 확인하러 갔다가
-// 아니라는 것만 알고 돌아오고, **다음에 무엇을 할지는 여전히 모른다.**
+// **Naming the version is not enough.** Somebody received this message on Safari 18.6,
+// already on 18+, on localhost, in a secure context — they had done everything the
+// message tells you to do and got the same message. Then they go and check the browser
+// version, learn only that it is not that, and come back **still not knowing what to do
+// next.**
 //
-// 그 사파리에서 실제로 남은 원인은 기능 플래그가 꺼져 있는 것이었다. 안내문은 대개
-// 맞는 말을 하다가 이렇게 **한 사람에게만 틀린 말**이 되는데, 그 한 사람이 바로 이
-// 문구를 읽는 사람이다. 그래서 켜는 자리를 직접 적는다.
+// On that Safari the remaining cause was the feature flag being off. Guidance is usually
+// saying something true and then becomes **wrong for exactly one person**, and that one
+// person is the one reading it. So the place to switch it on is written out.
 const NO_API =
-  "WebGPU 가 없다. Chrome/Edge 113+ 또는 Safari 18+ 가 필요하다. " +
-  "**버전이 맞는데도 이 문구가 보이면 꺼져 있는 것이다** — Safari 는 " +
-  "설정 → 고급 → 기능 플래그 → WebGPU, 리눅스 Chrome 은 " +
-  "chrome://flags 의 Unsafe WebGPU. https 또는 localhost 여야 한다.";
+  "There is no WebGPU. Chrome/Edge 113+ or Safari 18+ is required. " +
+  "**Seeing this on a version that matches means it is switched off** — on Safari, " +
+  "Settings → Advanced → Feature Flags → WebGPU; on Linux Chrome, " +
+  "Unsafe WebGPU in chrome://flags. It has to be https or localhost.";
 
 const NO_ADAPTER =
-  "WebGPU 어댑터를 못 얻었다 — 드라이버 차단 목록, 가상 머신, 또는 GPU 가 없는 " +
-  "헤드리스 환경일 수 있다.";
+  "No WebGPU adapter could be obtained — a driver blocklist, a virtual machine, or a " +
+  "headless environment with no GPU.";
 
-/** 어느 어댑터인지 한 줄로. 빈 칸은 뺀다 — 브라우저가 대부분을 가린다. */
+/** Which adapter, on one line. Empty fields are dropped — the browser hides most of
+ *  them. */
 function describe(adapter: GPUAdapter): string {
   const info: Partial<GPUAdapterInfo> = adapter.info ?? {};
   return [info.vendor, info.architecture, info.device, info.description]
-    .filter(Boolean).join(" / ") || "(알 수 없음)";
+    .filter(Boolean).join(" / ") || "(unknown)";
 }
 
 function askAdapter(options: InitOptions): Promise<GPUAdapter | null> {
@@ -123,7 +128,7 @@ export async function isAvailable(options: InitOptions = {}): Promise<boolean> {
   return (await probe(options)).ok;
 }
 
-/** 오류 메시지가 가리키는 줄을 찾을 수 있게 셰이더에 번호를 붙인다. */
+/** Numbers the shader's lines so the line an error names can be found. */
 function numbered(code: string): string {
   return code
     .split("\n")
@@ -134,22 +139,23 @@ function numbered(code: string): string {
 export class Device {
   private readonly device: GPUDevice;
   private readonly limits: GPUSupportedLimits;
-  /** 모양까지 포함한 서명 → 파이프라인. */
+  /** Signature including the shape → pipeline. */
   private readonly pipelines = new Map<string, GPUComputePipeline>();
   /**
-   * 파이프라인 → 바인드 그룹 배치.
+   * Pipeline → bind group layout.
    *
-   * `getBindGroupLayout` 은 부를 때마다 **새 객체를 만든다** — 사양이 캐시를 약속하지
-   * 않는다. dispatch 마다 부르면 그만큼 만들고 버리는 것이고, 스텝당 칠백 번이다.
+   * `getBindGroupLayout` **makes a new object on every call** — the specification
+   * promises no cache. Called per dispatch, that is one made and thrown away each time,
+   * seven hundred times a step.
    */
   private readonly layouts = new WeakMap<GPUComputePipeline, GPUBindGroupLayout>();
   /**
-   * 읽어올 때 쓰는 staging 버퍼의 **놀고 있는 것들**. 크기별로 여러 개다.
+   * The **idle ones** among the staging buffers used for reading back. Several per size.
    *
-   * 처음에는 크기마다 하나만 두고 돌려썼는데, 읽기 둘이 겹치면 같은 버퍼를 두 번
-   * 매핑하게 되어 "Buffer already has an outstanding map pending" 으로 터졌다.
-   * `equal` 이 두 텐서를 `Promise.all` 로 읽자마자 나왔다 — 겹쳐 읽는 것은 흔한 일이라
-   * 하나로는 안 된다.
+   * At first there was one per size, reused, and two overlapping reads mapped the same
+   * buffer twice and blew up with "Buffer already has an outstanding map pending". It
+   * appeared the moment `equal` read two tensors through `Promise.all` — overlapping
+   * reads are ordinary, so one is not enough.
    */
   private readonly stagingFree = new Map<number, GPUBuffer[]>();
 
@@ -162,36 +168,44 @@ export class Device {
     if (!("gpu" in navigator)) throw new Error(NO_API);
     const adapter = await askAdapter(options);
     if (!adapter) throw new Error(NO_ADAPTER);
-    // **어느 장치인지 알아야 잰 수가 뜻을 갖는다.** 헤드리스 브라우저는 진짜 GPU 대신
-    // 소프트웨어 어댑터를 주는 일이 있고, 그것도 어댑터라 예외가 안 난다 — 그러면
-    // 벽시계는 멀쩡히 돌고 "느리다" 는 결론만 남는다. 재는 쪽이 이것을 봐야 한다.
+    // **A measured number means something only once you know which device it came
+    // from.** A headless browser sometimes hands back a software adapter instead of a
+    // real GPU, and that is an adapter too, so nothing is raised — then the wall clock
+    // runs perfectly well and all that is left is the conclusion "it is slow". Whoever
+    // is measuring has to see this.
     Device.adapterInfo = describe(adapter);
     Device.adapterFeatures = [...adapter.features].sort().join(" ");
-    // 기본 한계를 그대로 쓰지 않고 어댑터가 주는 최대치를 요청한다. 기본
-    // maxStorageBufferBindingSize 는 128MB 이고, 그 위에서 조용히 틀린 답이 나온다.
+    // Rather than taking the default limits, it requests the maximum the adapter
+    // offers. The default maxStorageBufferBindingSize is 128MB, and above it a quietly
+    // wrong answer comes out.
     const want: Record<string, number> = {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,
       maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
     };
-    // **`timestamp-query` 는 있으면 받아 둔다.** 요청해 두어도 안 켜면 비용이 없고,
-    // 나중에 켜려면 장치를 다시 만들어야 한다 — 재는 사람이 그 시점에 그것을 알 수
-    // 없다. 없는 어댑터에서 요청하면 `requestDevice` 가 거절하므로 있을 때만 넣는다.
+    // **`timestamp-query` is taken when it is there.** Requested and unused it costs
+    // nothing, and switching it on later means building the device again — which whoever
+    // is measuring cannot know at that moment. Requesting it on an adapter without it
+    // makes `requestDevice` refuse, so it goes in only when present.
     const canTime = adapter.features.has("timestamp-query");
     const device = await adapter.requestDevice({
       requiredLimits: want,
       requiredFeatures: canTime ? ["timestamp-query"] : [],
     });
-    // 검증 오류도 예외로 안 온다. 붙잡지 않으면 잘못 만든 파이프라인이 조용히
-    // 아무것도 안 하고, 그 결과를 우리는 "값이 틀렸다" 로만 보게 된다.
+    // Validation errors do not arrive as exceptions either. Uncaught, a badly built
+    // pipeline quietly does nothing, and we see that result only as "the values are
+    // wrong".
     //
-    // 처음 것들만 낸다 — 셰이더 하나가 깨지면 그 뒤 dispatch 마다 같은 오류가 다시
-    // 나서 진짜 원인(첫 줄)이 스크롤 밖으로 밀린다. 실측으로 그렇게 됐다.
-    // **줄이는 것이지 삼키는 것이 아니다.** 몇 건을 접었는지는 마지막에 적는다.
+    // Only the first few are emitted — one broken shader raises the same error again on
+    // every dispatch after it, pushing the real cause (the first line) off the top of the
+    // scroll. That happened, measured. **This trims rather than swallows.** How many were
+    // folded away is written at the end.
     //
-    // **세어서 밖으로 내보낸다.** 찍기만 하면 재는 쪽이 그것을 못 본다 — ResNet 벤치가
-    // 무효한 명령 버퍼를 안고도 ms/step 을 냈고, 그 수는 측정이 아니라 학습이 안 되는
-    // 상태의 벽시계였다. 재는 쪽이 이 수를 보고 결과를 거절할 수 있어야 한다.
+    // **They are counted and exposed.** Printed alone, whoever is measuring does not see
+    // them — the ResNet bench produced a ms/step while holding an invalid command buffer,
+    // and that number was not a measurement but the wall clock of a state where nothing
+    // was learning. Whoever measures has to be able to see this count and refuse the
+    // result.
     const made = new Device(device);
     const seen = made.faults;
     device.addEventListener("uncapturederror", (event) => {
@@ -199,24 +213,25 @@ export class Device {
       const err = (event as GPUUncapturedErrorEvent).error;
       if (seen.first === "") seen.first = err.message;
       if (seen.count <= MAX_REPORTED_ERRORS) {
-        console.error(`[borch.ts] WebGPU 검증 오류 ${seen.count}: ${err.message}`);
+        console.error(`[borch.ts] WebGPU validation error ${seen.count}: ${err.message}`);
       } else if (seen.count === MAX_REPORTED_ERRORS + 1) {
         console.error(
-          `[borch.ts] 검증 오류가 ${MAX_REPORTED_ERRORS} 건을 넘었다 — ` +
-            "이후는 안 찍는다. 원인은 위의 첫 건이다.",
+          `[borch.ts] more than ${MAX_REPORTED_ERRORS} validation errors — ` +
+            "no more will be printed. The cause is the first one above.",
         );
       }
     });
     device.lost
       .then((info) => {
-        // **찍기만 하면 안 된다.** 장치를 잃으면 그 뒤의 모든 텐서와 모든 수가 뜻을
-        // 잃는데, 로그는 재는 쪽이 읽지 않는다 — `faults` 를 밖으로 내보낸 것과 같은
-        // 이유로 이것도 물어볼 수 있는 상태여야 한다. 그래야 벤치가 결과를 거절한다.
+        // **Printing is not enough.** Losing the device empties every tensor and every
+        // number after it of meaning, and whoever is measuring does not read the log —
+        // for the same reason `faults` is exposed, this has to be a state that can be
+        // asked about. That is what lets a bench refuse its result.
         made.lost = { reason: String(info.reason), message: info.message };
-        console.error(`[borch.ts] WebGPU 장치를 잃었다: ${info.reason} — ${info.message}`);
+        console.error(`[borch.ts] the WebGPU device was lost: ${info.reason} — ${info.message}`);
       })
       .catch(() => {
-        /* lost 는 거절되지 않지만, 거절되더라도 여기서 더 할 일이 없다 */
+        /* lost is not rejected, and even if it were there is nothing more to do here */
       });
     return made;
   }
@@ -268,21 +283,24 @@ export class Device {
    */
   readonly byKind = new Map<string, number>();
 
-  /** 지금 어느 커널을 부르는지. `pipeline` 이 서명의 앞머리를 여기 남긴다. */
+  /** Which kernel is being called right now. `pipeline` leaves the head of the
+   *  signature here. */
   private current = "?";
-  /** 지금 굽는 파이프라인의 **서명 전체**. 프로파일이 이것으로 쌓는다. */
+  /** The **whole signature** of the pipeline being baked. The profiler accumulates by
+   *  it. */
   private currentSig = "?";
 
   /**
-   * 아직 안 보낸 명령들.
+   * The commands not yet submitted.
    *
-   * **연산마다 제출하면 안 된다.** 처음에는 dispatch 마다 명령 인코더를 새로 만들어
-   * 제출했는데, 배치를 4 배로 늘렸을 때 시간이 2.1 배밖에 안 늘었다 — 직선으로 맞추면
-   * 배치와 무관한 고정비가 스텝당 5.2 초, dispatch 당 7.4ms 였다. 제출 하나에 그런
-   * 값이 들 리 없으니 그것이 곧 제출 횟수의 값이었다.
+   * **Submitting per operation is wrong.** At first a command encoder was built and
+   * submitted per dispatch, and multiplying the batch by 4 raised the time by only 2.1× —
+   * fitted to a line, the fixed cost independent of the batch was 5.2 seconds per step
+   * and 7.4ms per dispatch. One submission cannot cost that, so that *was* the cost of
+   * the number of submissions.
    *
-   * 이제 한 인코더에 쌓아 두고 **읽을 때** 한 번 보낸다. WebGPU 는 한 패스 안의
-   * dispatch 사이에 장벽을 알아서 넣으므로 순서는 그대로 지켜진다.
+   * Now they accumulate in one encoder and go out once **when something is read.** WebGPU
+   * inserts the barriers between dispatches within a pass itself, so the order is kept.
    */
   private encoder: GPUCommandEncoder | null = null;
   private pass: GPUComputePassEncoder | null = null;
@@ -303,12 +321,13 @@ export class Device {
    * diagnostics are pulled out deliberately.
    */
   pipeline(signature: string, source: () => string): GPUComputePipeline {
-    // 서명의 첫 토막이 커널 종류다(`cnt:...`, `u:relu:...`). 모양까지 세면 종류가
-    // 수백 개가 되어 어디가 무거운지가 안 보인다.
+    // The first segment of the signature is the kernel kind (`cnt:...`, `u:relu:...`).
+    // Counting the shape too gives hundreds of kinds and hides where the weight is.
     this.current = signature.split(":")[0] ?? "?";
-    // **프로파일 중에는 서명 전체를 쓴다.** 종류만으로는 "gb 가 94%" 까지밖에 못 가고,
-    // 그 다음 물음(어느 규칙·어느 모양인가)에서 막힌다 — 실제로 거기서 막혔다.
-    // 켰을 때만 쌓이므로 평소에는 값이 없다.
+    // **While profiling it uses the whole signature.** The kind alone reaches "gb is
+    // 94%" and stops at the next question (which rule, which shape) — which is where it
+    // actually stopped. It accumulates only while switched on, so it costs nothing
+    // otherwise.
     this.currentSig = signature;
     const hit = this.pipelines.get(signature);
     if (hit) return hit;
@@ -318,7 +337,7 @@ export class Device {
       for (const m of info.messages) {
         if (m.type !== "error" && m.type !== "warning") continue;
         console.error(
-          `[borch.ts] ${signature} 셰이더 ${m.type} ${m.lineNum}:${m.linePos} — ` +
+          `[borch.ts] ${signature} shader ${m.type} ${m.lineNum}:${m.linePos} — ` +
             `${m.message}\n${numbered(code)}`,
         );
       }
@@ -339,43 +358,49 @@ export class Device {
   }
 
   /**
-   * 지금 열려 있는 구역들. `alloc` 이 만든 것을 여기 적어 두고 구역이 닫힐 때 놓는다.
+   * The scopes currently open. What `alloc` builds is written here and released when the
+   * scope closes.
    *
-   * **없으면 학습이 안 돈다.** ResNet 한 스텝이 중간 버퍼를 수천 개 만드는데, GPU
-   * 버퍼는 자바스크립트의 쓰레기 수집이 제때 안 놓아준다 — 손잡이가 사라져도 메모리가
-   * 남는다. 자매도 같은 이유로 `scope()` 를 든다.
+   * **Without it nothing trains.** One ResNet step builds thousands of intermediate
+   * buffers, and JavaScript's garbage collector does not release a GPU buffer in time —
+   * the handle disappears and the memory stays. The sister library holds a `scope()` for
+   * the same reason.
    */
   private readonly scopes: Set<GPUBuffer>[] = [];
-  /** 구역이 닫혀도 살아남는 것 — 파라미터와 옵티마이저 상태다. */
+  /** What survives a scope closing — the parameters and the optimiser state. */
   private readonly kept = new WeakSet<GPUBuffer>();
   /**
-   * 놓인 버퍼를 크기별로 되쓴다.
+   * Reuses released buffers by size.
    *
-   * `createBuffer` 는 드라이버를 거쳐 GPU 메모리를 잡는 일이고, 학습 한 스텝이 그것을
-   * 수백 번 한다. 그런데 **스텝마다 같은 크기가 되풀이된다** — 모양이 매번 같기
-   * 때문이다. 파괴하고 다시 만드는 대신 돌려쓰면 그 일이 한 번으로 준다.
+   * `createBuffer` goes through the driver to claim GPU memory, and one training step
+   * does it hundreds of times. And **the same sizes repeat every step**, because the
+   * shapes are the same every time. Reusing rather than destroying and rebuilding reduces
+   * that to once.
    */
   private readonly spare = new Map<number, GPUBuffer[]>();
-  /** 버퍼가 실제로 몇 바이트인지. 반납할 때 어느 통에 넣을지가 여기서 나온다. */
+  /** How many bytes a buffer actually is. Which pool it returns to comes from here. */
   private readonly sizes = new WeakMap<GPUBuffer, number>();
 
   /**
-   * 버퍼가 **몇 번째 삶인가.** 통에 돌아갈 때마다 하나씩 오른다.
+   * **Which life a buffer is on.** It rises by one every time the buffer returns to the
+   * pool.
    *
-   * ## 왜 필요한가 — 실측
+   * ## Why it is needed — measured
    *
-   * 구역이 닫힐 때 버퍼는 파괴되지 않고 통에 돌아간다(그게 통이 있는 이유다).
-   * 그런데 그 버퍼를 가리키던 텐서가 구역 밖으로 샜으면, 그 텐서는 여전히 같은
-   * `GPUBuffer` 를 들고 있고 **다음 할당이 그것을 꺼내 덮어쓴다.**
+   * When a scope closes a buffer is not destroyed but returned to the pool (that is what
+   * the pool is for). And if a tensor pointing at that buffer leaked out of the scope,
+   * that tensor still holds the same `GPUBuffer`, and **the next allocation takes it out
+   * and overwrites it.**
    *
-   * 재봤다. `[1,2,3,4]` 를 담은 텐서를 구역 밖으로 흘리고 같은 크기를 네 번 더
-   * 잡은 뒤 읽으니 **`9,9,9,9`** 가 나왔다 — 남의 값이, 예외 없이.
-   * 이 저장소의 첫 문장이 "조용히 다른 값을 내느니 시끄럽게 멈춘다" 인데 그 반대가
-   * 핵심 학습 루프에서 일어나고 있었다.
+   * It was measured. Leak a tensor holding `[1,2,3,4]` out of a scope, take four more
+   * allocations of the same size, read it back, and out comes **`9,9,9,9`** — somebody
+   * else's values, with no exception. This repository's opening sentence is that it stops
+   * loudly rather than quietly producing a different value, and the opposite was
+   * happening in the core training loop.
    *
-   * 텐서는 태어날 때 이 수를 적어 두고, 값에 닿을 때 견준다. 어긋나면 그 텐서는
-   * **이미 죽은 것**이고 거기서 멈춘다. 골든은 이것을 못 본다 — 케이스마다 페이지가
-   * 깨끗해서 통이 휘저어질 일이 없다.
+   * A tensor records this number when it is born and compares on reaching its value. A
+   * mismatch means that tensor is **already dead** and it stops there. The golden cannot
+   * see this — each case has a clean page, so the pool is never stirred.
    */
   private readonly ages = new WeakMap<GPUBuffer, number>();
 
@@ -388,11 +413,12 @@ export class Device {
   }
 
   /**
-   * 삶을 하나 올린다 — **이 순간 그 버퍼를 가리키던 텐서는 전부 죽는다.**
+   * Raises the life by one — **every tensor pointing at that buffer dies at this moment.**
    *
-   * 통에 실제로 다시 꺼내 쓸 때가 아니라 **돌려놓을 때** 올린다. 꺼낼 때 올리면
-   * "아직 아무도 안 가져갔으니 읽히긴 한다" 는 구간이 생기고, 그 구간에서만
-   * 통과하는 코드가 나온다 — 재현이 할당 순서에 달린 결함이 그렇게 만들어진다.
+   * It rises **on return to the pool** rather than when the buffer is actually taken out
+   * again. Raising it on the way out creates a window where "nobody has taken it yet, so
+   * it still reads", and code appears that passes only inside that window — which is how
+   * a defect whose reproduction depends on allocation order gets made.
    */
   private retire(buffer: GPUBuffer): void {
     this.ages.set(buffer, this.age(buffer) + 1);
@@ -424,14 +450,15 @@ export class Device {
         survived += 1;
         continue;
       }
-      // **여기서 죽는다.** 이 버퍼를 들고 밖으로 샌 텐서가 있으면 이제부터 그
-      // 텐서는 쓰면 멈춘다 — 안 그러면 다음 할당이 덮어쓴 값을 조용히 읽는다.
+      // **They die here.** If a tensor holding this buffer leaked out, using it stops
+      // from now on — otherwise it quietly reads what the next allocation overwrote.
       this.retire(buf);
-      // 파괴하지 않고 통에 돌려놓는다. 다음 스텝이 같은 크기를 다시 부른다.
+      // Returned to the pool rather than destroyed. The next step asks for the same
+      // size again.
       const size = this.sizes.get(buf);
       if (size === undefined) {
-        // 여기 오는 것은 `alloc` 이 안 만든 버퍼다. 아직 안 보낸 명령이 이것을
-        // 가리킬 수 있으므로 보내고 나서 놓는다.
+        // What arrives here is a buffer `alloc` did not build. Unsubmitted commands may
+        // point at it, so it is released after they go out.
         this.flush();
         buf.destroy();
       } else {
@@ -444,9 +471,9 @@ export class Device {
       }
       freed += 1;
     }
-    // **마지막 셈을 남긴다.** 이 값이 필요해서 `scope()` 를 못 쓰고 `beginScope`/
-    // `endScope` 를 직접 부르던 자리가 있었다 — 벤치가 누수를 재느라 그랬다.
-    // 권하는 길을 쓰면 못 보는 것이 있으면 그 권함은 안 지켜진다.
+    // **The last count is kept.** There was a place calling `beginScope`/`endScope`
+    // directly rather than `scope()` because it needed this value — the bench, measuring
+    // leaks. A recommended path that hides something is a recommendation nobody keeps.
     this.lastScope = { freed, survived };
     return this.lastScope;
   }
@@ -521,16 +548,18 @@ export class Device {
       for (const buf of pool) buf.destroy();
     }
     this.spare.clear();
-    // 만든 것에서 뺀다 — 안 빼면 `memory` 가 죽은 버퍼를 계속 센다.
+    // Subtracted from what was built — otherwise `memory` goes on counting dead
+    // buffers.
     this.made -= freed.count;
     this.madeBytes -= freed.bytes;
     return freed;
   }
 
-  // `sizes` 는 WeakMap 이라 셀 수 없다 — 셀 수 있게 두면 버퍼가 안 죽는다.
-  // 그래서 만들 때 센다. **빼는 자리는 없다** — `alloc` 이 만든 버퍼는 파괴하지
-  // 않고 통에 돌려놓기 때문이다(`endScope`). 파괴하는 두 자리(`alloc` 밖에서 온
-  // 버퍼, 읽기용 staging)는 애초에 여기 안 세어졌다.
+  // `sizes` is a WeakMap and cannot be counted — making it countable would keep the
+  // buffers alive. So it counts at build time. **There is nowhere to subtract**, because
+  // a buffer `alloc` built returns to the pool rather than being destroyed (`endScope`).
+  // The two places that do destroy (a buffer from outside `alloc`, and a read staging
+  // buffer) were never counted here in the first place.
   private made = 0;
   private madeBytes = 0;
 
@@ -562,7 +591,8 @@ export class Device {
     const bytes = count * BYTES_PER_F32;
     const max = this.limits.maxStorageBufferBindingSize;
     if (bytes > max) {
-      // 넘긴 채로 돌리면 WebGPU 는 조용히 일부만 쓴다. 여기서 멈추는 편이 낫다.
+      // Run past the limit, WebGPU quietly writes only some of it. Stopping here is
+      // better.
       throw new Error(
         `buffer exceeds the limit: ${(bytes / 1048576).toFixed(1)}MB > ` +
           `${(max / 1048576).toFixed(0)}MB (maxStorageBufferBindingSize)`,
@@ -655,21 +685,23 @@ export class Device {
         [src, dst],
         size,
       );
-      // **여기서 놓으면 안 된다.** 명령을 쌓아 두었다가 나중에 보내므로, 방금 건
-      // dispatch 가 아직 이 버퍼를 읽을 참이다. 구역이 닫힐 때 통으로 돌아간다.
+      // **It must not be released here.** The commands accumulate and go out later, so
+      // the dispatch just issued is still about to read this buffer. It returns to the
+      // pool when the scope closes.
       owned = dst;
       src = dst;
       count = parts;
     }
     if (owned) return owned;
-    // 원소가 하나면 접을 것이 없다. 입력을 그대로 돌려주면 호출자가 남의 버퍼를
-    // 파괴하게 되므로 복사해서 준다.
+    // With one element there is nothing to fold. Handing the input straight back would
+    // have the caller destroy somebody else's buffer, so a copy is given.
     //
-    // **쌓아 둔 줄에 얹어야 한다.** 여기서 인코더를 따로 만들어 바로 제출했더니, 아직
-    // 안 보낸 명령이 만들 값을 **먼저** 복사해서 0 이 나왔다 — 뒤늦게 그 값이 계산돼도
-    // 복사본은 이미 떠난 뒤다. 예외도 NaN 도 아니고 **그냥 0** 이라, `x.mean()` 의
-    // `x` 가 원소 하나일 때 손실이 조용히 0 이 되는 자리였다. 원소가 하나인 텐서를
-    // 접는 일이 드물어서 골든 1,399 건이 초록인 채로 지나갔다.
+    // **It has to ride the accumulated queue.** Building a separate encoder here and
+    // submitting immediately copied the value the unsubmitted commands were going to make
+    // **before** they made it, and 0 came out — the value is computed later and the copy
+    // has already left. Not an exception and not a NaN but **simply 0**, which is where
+    // the loss quietly became 0 when `x.mean()`'s `x` held one element. Folding a
+    // one-element tensor is rare, so 1,399 golden cases went by green.
     const copy = this.alloc(1);
     this.copyInto(copy, input, 1);
     return copy;
@@ -684,29 +716,31 @@ export class Device {
    */
   copyInto(dst: GPUBuffer, src: GPUBuffer, count: number): void {
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
-    // 복사는 계산 패스 안에 못 들어간다. 패스를 닫고 같은 인코더에 얹으면 순서는
-    // 그대로이고 제출은 여전히 한 번이다.
+    // A copy cannot go inside a compute pass. Closing the pass and riding the same
+    // encoder keeps the order and still submits once.
     this.openEncoder().copyBufferToBuffer(src, 0, dst, 0, bytes);
   }
 
   /**
-   * 커널마다 GPU 시간을 잰다. **기본은 꺼져 있다.**
+   * Measures GPU time per kernel. **Off by default.**
    *
-   * ## 왜 있는가
+   * ## Why it exists
    *
-   * 벽시계로는 스텝 전체밖에 못 잰다. 429 개 dispatch 중 어느 것이 비싼지 물으려
-   * 했더니 물을 방법이 없었다 — 종류별 **횟수**는 있는데 종류별 **시간**이 없었고,
-   * 횟수는 배치가 커져도 그대로라 아무것도 안 가리켰다.
+   * A wall clock can only measure a whole step. Asking which of 429 dispatches was
+   * expensive turned out to have no way to be asked — there were **counts** per kind and
+   * no **time** per kind, and the counts stay the same as the batch grows, so they
+   * pointed at nothing.
    *
-   * ## 켜면 무엇이 달라지는가
+   * ## What changes when it is on
    *
-   * 평소에는 모든 dispatch 가 계산 패스 **하나**를 함께 쓴다(제출도 스텝당 한 번).
-   * 타임스탬프는 패스 단위라, 그 상태로는 패스 전체의 시작·끝밖에 못 찍는다.
-   * 그래서 켜면 **dispatch 마다 패스를 연다.**
+   * Normally every dispatch shares **one** compute pass (and one submission per step).
+   * Timestamps are per pass, so in that state only the whole pass's start and end can be
+   * stamped. So switching it on **opens a pass per dispatch.**
    *
-   * **그러면 절대값은 평소보다 커진다.** 패스를 여는 값이 붙기 때문이다. 여기서
-   * 얻으려는 것은 절대 시간이 아니라 **어느 커널이 몫이 큰가** 이고, 그 비율은
-   * 남는다. 절대값을 재려면 끄고 벤치를 쓴다.
+   * **The absolute numbers then come out larger than usual**, because opening a pass
+   * costs. What is wanted here is not absolute time but **which kernel holds the largest
+   * share**, and that ratio survives. For absolute numbers, switch it off and use the
+   * bench.
    */
   private profiling = false;
   /**
@@ -726,7 +760,8 @@ export class Device {
    * repository has been counting.
    */
   profileDropped = 0;
-  /** 질의 집합의 크기. 한 제출에 이보다 많이 재면 나머지는 안 잰다. */
+  /** The query set's size. More than this in one submission and the rest go
+   *  unmeasured. */
   private static readonly MAX_QUERIES = 4096;
 
   /**
@@ -755,13 +790,14 @@ export class Device {
     }
   }
 
-  /** 계산 패스를 연다. 평소에는 하나를 함께 쓰고, 프로파일 중에는 하나씩 연다. */
+  /** Opens a compute pass. Normally one is shared; while profiling one is opened per
+   *  dispatch. */
   private openPass(): GPUComputePassEncoder {
     if (!this.profiling) {
       if (!this.pass) this.pass = this.openEncoder().beginComputePass();
       return this.pass;
     }
-    // 프로파일 중 — 앞 패스를 닫고 타임스탬프를 낀 새 패스를 연다.
+    // While profiling — close the previous pass and open a new one with timestamps.
     if (this.pass) {
       this.pass.end();
       this.pass = null;
@@ -771,8 +807,9 @@ export class Device {
       type: "timestamp", count: Device.MAX_QUERIES,
     });
     if (this.queryUsed + 2 > Device.MAX_QUERIES) {
-      // 자리가 없으면 그냥 평소처럼 연다 — **안 잰 것을 0 으로 세면 안 된다.**
-      // 세어는 둔다. 안 세면 잘린 표가 온전한 표와 똑같이 생긴다.
+      // With no room it simply opens as usual — **what was not measured must not be
+      // counted as 0.** It is counted, though: uncounted, a truncated table looks exactly
+      // like a complete one.
       this.profileDropped += 1;
       this.pass = encoder.beginComputePass();
       return this.pass;
@@ -791,10 +828,12 @@ export class Device {
   }
 
   /**
-   * 찍어 둔 타임스탬프를 읽어 종류별로 더한다. **제출 뒤에 불러야 한다.**
+   * Reads the stamped timestamps and sums them per kind. **It has to be called after
+   * submission.**
    *
-   * 해석 버퍼와 읽기 버퍼를 그때그때 만들고 버린다 — 프로파일은 드물게 도는 길이라
-   * 통을 쓸 값어치가 없고, 통을 쓰면 재는 장치가 재는 대상을 건드린다.
+   * The resolve buffer and the read buffer are built and thrown away as needed — the
+   * profile is a rarely travelled path, so a pool is not worth it, and a pool would have
+   * the measuring apparatus touch what it measures.
    */
   private async collectProfile(): Promise<void> {
     if (!this.querySet || this.queryUsed === 0) return;
@@ -828,7 +867,8 @@ export class Device {
     }
   }
 
-  /** 인코더를 연다. 계산 패스가 열려 있으면 닫는다 — 복사가 그 밖에 있어야 한다. */
+  /** Opens the encoder. An open compute pass is closed — a copy has to be outside
+   *  it. */
   private openEncoder(): GPUCommandEncoder {
     if (this.pass) {
       this.pass.end();
@@ -873,15 +913,17 @@ export class Device {
   }
 
   async read(buffer: GPUBuffer, count: number): Promise<Float32Array> {
-    // **장치를 잃었으면 여기서 멈춘다.**
+    // **A lost device stops here.**
     //
-    // 잃은 장치에 건 명령은 예외를 안 던지고 그냥 안 돈다(WebGPU 사양이 그렇다).
-    // 그래서 학습 루프는 계속 돌고, 손실은 안 움직이고, `ms/step` 은 멀쩡히 나온다 —
-    // 검증 오류가 났을 때와 **똑같은 화면**이고, 그 자리는 이미 `faults` 로 막아
-    // 두었다. 같은 이유가 여기도 그대로인데 이쪽만 비어 있었다.
+    // Commands issued to a lost device throw nothing and simply do not run (the WebGPU
+    // specification says so). So the training loop keeps going, the loss does not move,
+    // and `ms/step` comes out perfectly well — **the same screen** as a validation error,
+    // and that place was already blocked with `faults`. The same reasoning applied here
+    // and only this side was empty.
     //
-    // 값이 나가는 자리에 둔다. dispatch 마다 보면 429 번 보게 되고, 무엇보다
-    // **사람이 믿는 수가 되는 순간**이 여기다.
+    // It sits where a value goes out. Checked per dispatch it would be checked 429 times,
+    // and more to the point, **this is the moment a number becomes one a person
+    // believes.**
     if (this.lost) {
       throw new Error(
         `the WebGPU device was lost (${this.lost.reason}) — nothing after this means ` +
@@ -889,8 +931,8 @@ export class Device {
           "  Reload the page to get a device again.",
       );
     }
-    // 빈 텐서를 읽으면 빈 것이 나와야 한다. 버퍼는 최소 한 칸을 잡으므로, 그것을
-    // 그대로 읽으면 있지도 않은 원소 하나가 딸려 나온다.
+    // Reading an empty tensor has to give something empty. A buffer claims at least one
+    // cell, and reading that as it is brings along an element that does not exist.
     if (count === 0) return new Float32Array(0);
     const bytes = Math.max(count * BYTES_PER_F32, BYTES_PER_F32);
     let free = this.stagingFree.get(bytes);
@@ -903,15 +945,16 @@ export class Device {
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     try {
-      // 쌓아 둔 명령까지 한 인코더에 얹고 **여기서 한 번** 보낸다.
+      // The accumulated commands ride the same encoder and go out **once, here.**
       this.openEncoder().copyBufferToBuffer(buffer, 0, stage, 0, bytes);
       this.flush();
       await stage.mapAsync(GPUMapMode.READ);
-      // 매핑된 메모리는 unmap 하면 사라진다. 반드시 복사해서 내보낸다.
+      // Mapped memory disappears on unmap. It is always copied before going out.
       const out = new Float32Array(stage.getMappedRange().slice(0));
       stage.unmap();
-      // **성공했을 때만 돌려놓는다.** 실패한 버퍼는 매핑 상태를 모르고, 그것을
-      // 풀에 넣으면 다음 사람이 깨진 상태를 물려받아 원인이 한 단계 멀어진다.
+      // **Only a success returns it.** A failed buffer's mapping state is unknown, and
+      // putting it in the pool hands the broken state to the next caller, moving the
+      // cause one step further away.
       free.push(stage);
       return out;
     } catch (err) {
@@ -920,14 +963,14 @@ export class Device {
     }
   }
 
-  /** 워크그룹 크기. 커널과 장치가 같은 값을 봐야 한다. */
+  /** The workgroup size. The kernels and the device have to see the same value. */
   static readonly workgroup = WORKGROUP;
 
   /**
    * Which adapter it attached to. A value anyone measuring performance must
    * record alongside.
    */
-  static adapterInfo = "(아직 안 붙음)";
+  static adapterInfo = "(not attached yet)";
 
   /**
    * Optional features the adapter offers. **`timestamp-query` has to be
