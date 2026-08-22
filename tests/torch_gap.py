@@ -45,25 +45,32 @@ the move that hid it: absent from the list reads as zero to review, and absent f
 while present in the list reads as thirty-six to review. The second was the true sentence,
 and it is what put the namespace on the to-do list it has now come off.
 
-## `datasets` reads 7 of 72, and **eight of the gaps are left without a reason**
+## `datasets` reads 11 of 72, and **four of the gaps are left without a reason**
 
-Every other absence in this file carries one. These eight do not, and that is the
-entry rather than an oversight: `EMNIST`, `QMNIST`, `MovingMNIST`, `USPS`, `SEMEION`,
-`STL10`, `FER2013`, `DatasetFolder`.
+It was eight, and four of them have since been built — which is what the list was for.
+The four left are `EMNIST`, `MovingMNIST`, `STL10` and `FER2013`.
 
 The reason the rest are declined is a codec. Most of torchvision's datasets are
 folders of JPEG or PNG, numpy decodes neither, and adding a decoder is the dependency
 this library does without — the same answer PIL gets in `transforms`, arriving from
-the other side. That reason is true of fifty-seven names and **false of these eight**.
-`QMNIST` and `EMNIST` are MNIST's own IDX format, one of them zipped. `MovingMNIST` is
-a `.npy`. `USPS` is bzipped text, `SEMEION` is text, `FER2013` is a CSV, `STL10` is
-raw bytes, and `DatasetFolder` walks directories and calls a loader you pass it.
+the other side. That reason is true of fifty-seven names and **false of these four**,
+and their real reasons are not even the same as each other. `EMNIST` is MNIST's own
+IDX inside a 562MB zip; `MovingMNIST` is an 819MB `.npy`; `STL10` is 2.6GB of raw
+bytes. Measured at this network's speed those are 64 minutes, 93 minutes and five
+hours — a cost, and not an impossibility, which is a different sentence.
 
-Writing "a codec" beside those would be **exactly the failure this file exists to
-catch**, and it has been caught here twice already — once when `datasets` was refused
-for a network reason that turned out to be about two servers' CORS headers, and once
-when the browser half of the same sentence was stale. So the count now says eight
-rather than nothing, and eight is a to-do list.
+**`FER2013` is the one that cannot be closed honestly.** torchvision has no `download`
+for it; it expects a manual Kaggle fetch. So there is no way to compare against real
+torchvision from here, and any implementation would be checked against nothing but its
+own expectations. That is worth saying out loud because it means **this list cannot
+reach zero by working harder** — one of the four is blocked on something that is not
+effort.
+
+Writing "a codec" beside any of them would be **exactly the failure this file exists
+to catch**, and it has been caught here twice already — once when `datasets` was
+refused for a network reason that turned out to be about two servers' CORS headers,
+and once when the browser half of the same sentence was stale. So the count says four,
+and four is a to-do list.
 
 ## `transforms.v2` is on the list and `transforms.v2.functional` is not
 
