@@ -531,7 +531,7 @@ random, so it cannot be measured".
 
 It does not go through Python. **It does not go through TF.js either** — the
 kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
-an ES module a browser simply reads (271KB gzipped, 931KB before compression).
+an ES module a browser simply reads (283KB gzipped, 985KB before compression).
 
 ```bash
 npm install borch
@@ -593,35 +593,27 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2778 cases. The remaining 369 are **two different
-things, and counting them as one hides the second**. 360 are **deliberately not
-carried across** — the binding (`borch-webgpu`) already goes through borch.ts's kernels on
-those cases, so **the values are verified**, and what a TS body would add is not a
-value but this side's surface: names and argument order. A good many of them ask
-about a Python name alias, so carrying them across would ask the same question
-twice. The other 9 are **owed**: the `borchvision` work that arrived after
-borch.ts's `vision.ts` was written. `vision.ts` carries the transforms, the
-`transforms.functional` namespace that did not exist on this side at all, the six
-pixel rewrites with their wrappers, and the five that resample on a grid. What is
-left is the policy layer — `AutoAugment`, `RandAugment`, `TrivialAugmentWide`,
-`AugMix` — where only four cases are comparable at all, because all four draw on
-every call. Those are a backlog rather than a decision, and calling all 369
-deliberate would make the backlog invisible by counting it as a choice. The runner
-keeps printing the total rather than letting it shrink quietly.
+borch.ts itself has written TS bodies for 2787 cases. **The remaining 360 are all
+one thing now: deliberately not carried across.** The binding (`borch-webgpu`)
+already goes through borch.ts's kernels on those cases, so **the values are
+verified**, and what a TS body would add is not a value but this side's surface:
+names and argument order. A good many of them ask about a Python name alias, so
+carrying them across would ask the same question twice.
 
-> **The owed figure has gone 57 → 19 → 50 → 40 → 9 rather than straight down, and
-> that is the figure working.** Cases were carried across while the other session
-> froze more; one number cannot show a debt being paid and taken on at the same
-> time, so the runner's row carries both. A count that only falls looks like
-> progress stalling whenever someone else is building, and a count that only
-> reports a total hides that anyone paid.
+> **The owed half is zero, and the number it fell from never fell in a straight
+> line: 57 → 19 → 50 → 40 → 9 → 3 → 0.** Ninety-four cases were carried across
+> while the Python side kept freezing more, and one figure cannot show a debt
+> being paid and taken on at the same time — so while it existed, the runner's row
+> carried both. A count that only falls looks like progress stalling whenever
+> somebody else is building, and a count that only reports a total hides that
+> anyone paid.
 
 > Those two figures said 2352 and 608 until they were measured. **Confirming them
 > does not need a browser** — the case table registers names without running them,
 > so loading `borch-ts/dist/test/cases.js` in node and counting the map is enough,
 > and `tests/test_site.py` now does exactly that whenever `dist` exists. A text
-> search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 880
-> against the real 2778, because the names are built programmatically.
+> search still cannot do it: `grep -c 'out\.set('` over `cases.ts` gives 882
+> against the real 2787, because the names are built programmatically.
 
 ### Six places where it diverges from torch
 

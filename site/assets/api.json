@@ -4,7 +4,7 @@
  "korean": {
   "done": 673,
   "stale": 0,
-  "missing": 56
+  "missing": 63
  },
  "modules": [
   {
@@ -12776,9 +12776,127 @@
        "doc": ""
       }
      ]
+    },
+    {
+     "kind": "const",
+     "name": "AutoAugmentPolicy",
+     "signature": "export declare const AutoAugmentPolicy: { readonly IMAGENET: \"imagenet\"; readonly CIFAR10: \"cifar10\"; readonly SVHN: \"svhn\"; }",
+     "doc": "Which learned table `AutoAugment` uses. The three are the datasets the search\nwas run on, and they are **not interchangeable** — the SVHN policy inverts and\nshears hard because house numbers survive it, and a photograph does not.",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "AutoAugmentPolicyName",
+     "signature": "export type AutoAugmentPolicyName = (typeof AutoAugmentPolicy)[keyof typeof AutoAugmentPolicy]",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "type",
+     "name": "PolicyStep",
+     "signature": "export type PolicyStep = readonly [string, number, number | null]",
+     "doc": "One half of a policy pair: the operation, its probability, its strength bin.",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "AutoAugment",
+     "signature": "export declare class AutoAugment implements Transform",
+     "doc": "The **learned** one: twenty-five pairs of operations found by a search, each\nwith its own probability and strength, one pair drawn per call.\n\nNothing about the table is derivable — it is the output of the search, which is\nwhy it is written out rather than computed, and why the three datasets are\nthree tables.",
+     "members": [
+      {
+       "name": "policies",
+       "signature": "readonly policies: readonly (readonly [PolicyStep, PolicyStep])[]",
+       "doc": "The learned table for this policy. **A list**, as torchvision hands back."
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(policy?: AutoAugmentPolicyName, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(_x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "RandAugment",
+     "signature": "export declare class RandAugment implements Transform",
+     "doc": "The **uniform** one: `numOps` operations drawn evenly, all at the same fixed\nstrength.\n\nIts point is that the search was unnecessary — one strength dial and a count do\nas well as the learned table, which is why `magnitude` is a number you tune\nrather than a distribution.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numOps?: number, magnitude?: number, numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TrivialAugmentWide",
+     "signature": "export declare class TrivialAugmentWide implements Transform",
+     "doc": "The one with **no dials at all**: one operation, drawn evenly, at a strength\nalso drawn evenly from a wide ladder.\n\nThat is the paper's claim — tuning the strength was never worth it — so there\nis no magnitude argument to pass. The ladder is much wider than\n`RandAugment`'s to make up for drawing it.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(numMagnitudeBins?: number, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(_x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "AugMix",
+     "signature": "export declare class AugMix implements Transform",
+     "doc": "The **blended** one: several independent chains of operations, mixed back into\nthe original by weights drawn from a Dirichlet.\n\nThat is what makes it different in kind from the other three — they replace the\npicture and this one **averages several versions of it with the original**, so\nthe result stays close to the input however hard the chains hit.",
+     "members": [
+      {
+       "name": "constructor",
+       "signature": "constructor(severity?: number, mixtureWidth?: number, chainDepth?: number, alpha?: number, allOps?: boolean, interpolation?: \"bilinear\" | \"nearest\", fill?: number | readonly number[] | null)",
+       "doc": ""
+      },
+      {
+       "name": "apply",
+       "signature": "apply(_x: Subject): Image",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
     }
    ],
-   "count": 176,
+   "count": 196,
    "doc_ko": "`torchvision.transforms` 모양의 변환.\n\n## 왜 텐서 라이브러리 안에 있나\n\n학습을 돌리려면 이미지를 텐서로 바꾸는 자리가 반드시 있고, 그 자리에서 조용히\n틀리는 것들이 있다 — 아래 `ToTensor` 의 주석이 그 중 하나다. 저장소의 파이썬 판\n(`borchvision.py`)과 **같은 규칙**을 쓴다. 규칙이 갈리면 같은 데이터가\n라이브러리마다 다른 값이 되고, 그것은 값 대조로만 잡힌다.\n\n## 이미지는 배열이지 텐서가 아니다\n\n`RandomHorizontalFlip`·`RandomCrop` 은 `(H, W, C)` 배열을 받는다. torchvision 에서\n이 자리에 오는 것이 PIL 이미지이고 우리에게 PIL 이 없어서 배열이 그 자리를 대신한다.\n장당 텐서를 만들면 GPU 버퍼가 장당 하나씩 생기는데, 그건 되는 것처럼 보이다가\n메모리로 무너진다."
   },
   {
@@ -14326,5 +14444,5 @@
    "count": 9
   }
  ],
- "total": 1866
+ "total": 1886
 }

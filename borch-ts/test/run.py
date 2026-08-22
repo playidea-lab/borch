@@ -427,26 +427,21 @@ NOT_PORTED = {
     # `padding` 기본값), `ae60832` 에서 고쳐져 넷 다 답을 냈다. 한 수로 적었다면
     # 그 넷은 백로그로 계산돼 아무도 손대지 않았을 것이다.
     #
-    # **57 → 26.** 두 번에 걸쳐 열아홉을 옮겼다: 변환 열셋, 그 다음 `ColorJitter`
-    # 와 `transforms.functional` 열넷. `vision.ts` 가 파이썬 쪽 스물하나를 다 들고
-    # `functional` 네임스페이스도 선다.
+    # **The `vision::` row is gone: it reached 0 and this table's own rule is that a
+    # row with nothing left must be deleted.**
     #
-    # 그 사이 저쪽이 스물여섯을 새로 얼렸다 (PR #6 의 픽셀 여섯과 그 래퍼 여섯).
-    # **줄이 안 줄어든 것처럼 보이는 것은 그래서다** — 19 를 갚는 동안 26 이 붙었다.
-    # 갚은 것과 새로 진 것을 한 수로 적으면 아무 일도 없었던 것처럼 읽힌다.
+    # It went 57 → 19 → 50 → 40 → 9 → 3 → 0, which is not a number failing to fall.
+    # 94 cases were carried across while the Python side kept freezing more, and one
+    # figure cannot show a debt being paid and taken on at the same time — so while
+    # the row existed it carried both. That is the same reason this table splits by
+    # prefix at all, one level further in.
     #
-    #   paid   19 + 26 + 40  (ColorJitter and functional, the six pixel ops with
-    #                         their wrappers, the five that resample on a grid)
-    #   left   9             (the policy layer — 값 4 · repr 5)
-    #
-    # **The nine that are left are narrow on the Python side too.** AutoAugment,
-    # RandAugment, TrivialAugmentWide and AugMix all draw on every call, so what can
-    # be frozen is the three learned tables **as text** plus RandAugment(num_ops=0),
-    # the one configuration of any of them that does not draw. Everything else about
-    # them is distribution and pytest looks at it there. That boundary was stated
-    # rather than discovered — without it, an hour goes into hunting for an AugMix
-    # value case that does not exist and concluding something was missed.
-    "vision::": (9, "아직 — 정책 넷이 `vision.ts` 에 없다 (값 4 · repr 5)"),
+    # **The policy layer was narrow on the Python side too**, and that was said
+    # rather than discovered. AutoAugment, RandAugment, TrivialAugmentWide and AugMix
+    # all draw on every call, so what could be frozen was the three learned tables
+    # as text plus RandAugment(num_ops=0), the one configuration of any of them that
+    # does not draw. Without being told that boundary, an hour goes into hunting for
+    # an AugMix value case that does not exist and concluding something was missed.
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

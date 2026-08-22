@@ -1681,6 +1681,36 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
   out.set("vision::F.elastic_transform(uint8)", () =>
     photo(vision.elasticTransform(u8(), shift, "bilinear")));
 
+  // **Zero operations has to be the identity**, and it is the only configuration
+  // of any of the four policies that does not draw. A `numOps` read as a count of
+  // something else would show here and nowhere else.
+  out.set("vision::RandAugment(no operations)", () =>
+    photo(new vision.RandAugment(0).apply(u8()) as vision.Image));
+
+  // `AutoAugment`'s learned table, **as text.** Twenty-five pairs of (operation,
+  // probability, strength) per dataset, found by a search and derivable from
+  // nothing — the kind of data that is transcribed wrong silently and stays wrong,
+  // because every entry is plausible. Comparing it as a string is the only way to
+  // ask about data that has no arithmetic to check it against.
+  //
+  // **Python's `str()` does the formatting, not the library.** The Python case is
+  // `str(AutoAugment(policy).policies)`, so what is being compared is a language
+  // feature applied to a public attribute; spelling it here rather than in
+  // `vision.ts` keeps `policies` holding data rather than holding a string. The
+  // brackets are part of it — a list prints `[...]` and a tuple `(...)`, and the
+  // golden caught that difference on its first run.
+  const pyPolicy = (v: number | null): string => (v === null ? "None" : `${v}`);
+  const pyStep = (s: readonly [string, number, number | null]): string =>
+    `('${s[0]}', ${Number.isInteger(s[1]) ? `${s[1]}.0` : s[1]}, ${pyPolicy(s[2])})`;
+  const pyTable = (t: readonly (readonly [
+    readonly [string, number, number | null],
+    readonly [string, number, number | null],
+  ])[]): string => `[${t.map((p) => `(${pyStep(p[0])}, ${pyStep(p[1])})`).join(", ")}]`;
+  for (const policy of ["imagenet", "cifar10", "svhn"] as const) {
+    out.set(`vision::AutoAugment(the ${policy} table)`, () =>
+      pyTable(new vision.AutoAugment(policy).policies));
+  }
+
   // 이 프로젝트는 `repr` 도 명세로 본다 — 튜토리얼이 `print(transform)` 을 한다.
   const reprs: [string, () => vision.Transform][] = [
     ["ToTensor", () => new vision.ToTensor()],
@@ -1715,6 +1745,15 @@ function addVision(out: Map<string, Case>, inp: Inputs): void {
     // **This one alone prints `InterpolationMode.BILINEAR`.** Every other class
     // prints `bilinear`.
     ["ElasticTransform", () => new vision.ElasticTransform()],
+    // The four policies. `AutoAugment` prints its enum where the other three print
+    // `InterpolationMode`, and `AugMix` prints seven fields — all four spellings
+    // are torchvision's and none is derivable from the others.
+    ["AutoAugment", () => new vision.AutoAugment()],
+    ["AutoAugment(svhn, filled)",
+      () => new vision.AutoAugment(vision.AutoAugmentPolicy.SVHN, "nearest", 3)],
+    ["RandAugment", () => new vision.RandAugment()],
+    ["TrivialAugmentWide", () => new vision.TrivialAugmentWide()],
+    ["AugMix", () => new vision.AugMix()],
     ["RandomInvert", () => new vision.RandomInvert()],
     ["RandomAutocontrast", () => new vision.RandomAutocontrast()],
     ["RandomEqualize", () => new vision.RandomEqualize()],

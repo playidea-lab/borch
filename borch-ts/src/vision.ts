@@ -2909,3 +2909,288 @@ export class ElasticTransform implements Transform {
       `fill=${floatList(this.fill)})`;
   }
 }
+
+// ── The policy layer ──────────────────────────────────────────────────
+//
+// **Almost nothing here can be frozen, and that is the honest shape of it.** All
+// four draw on every call — which operation, how hard, which sign, and for two of
+// them how many — so a frozen picture would be a frozen dice roll. What can be
+// frozen is the part that is not drawn: the learned table itself, and the one
+// configuration that applies nothing.
+//
+// The operations these pick from are cased individually above. That is where this
+// layer's values are actually held.
+
+/**
+ * Which learned table `AutoAugment` uses. The three are the datasets the search
+ * was run on, and they are **not interchangeable** — the SVHN policy inverts and
+ * shears hard because house numbers survive it, and a photograph does not.
+ */
+export const AutoAugmentPolicy = {
+  IMAGENET: "imagenet",
+  CIFAR10: "cifar10",
+  SVHN: "svhn",
+} as const;
+
+export type AutoAugmentPolicyName =
+  (typeof AutoAugmentPolicy)[keyof typeof AutoAugmentPolicy];
+
+/** `AutoAugmentPolicy.IMAGENET`, which is how Python prints an enum member. */
+function policyName(v: AutoAugmentPolicyName): string {
+  const key = Object.keys(AutoAugmentPolicy).find(
+    (k) => AutoAugmentPolicy[k as keyof typeof AutoAugmentPolicy] === v);
+  return `AutoAugmentPolicy.${key ?? v}`;
+}
+
+/** `InterpolationMode.NEAREST` — three of the four print the enum, not the value. */
+function modeName(v: "bilinear" | "nearest"): string {
+  return `InterpolationMode.${v.toUpperCase()}`;
+}
+
+/** `None` for null, otherwise the number as Python spells it. */
+function orNone(v: number | readonly number[] | null): string {
+  if (v === null) return "None";
+  return typeof v === "number" ? `${v}` : tuple(v);
+}
+
+/** One half of a policy pair: the operation, its probability, its strength bin. */
+export type PolicyStep = readonly [string, number, number | null];
+
+/**
+ * **Lists, not tuples**, because `AutoAugment(...).policies` is a public attribute
+ * and torchvision hands back a list. The golden caught the difference on its first
+ * run: identical data, different brackets. What holds a value is part of the
+ * surface.
+ *
+ * Nothing here is derivable — it is the output of the search that produced
+ * AutoAugment, which is why it is written out rather than computed, and why the
+ * three datasets are three tables. Every entry is plausible, so a transcription
+ * error stays; the golden comparing these as text is the only check there can be.
+ */
+const POLICIES: Record<string, readonly (readonly [PolicyStep, PolicyStep])[]> = {
+  imagenet: [
+    [["Posterize", 0.4, 8], ["Rotate", 0.6, 9]],
+    [["Solarize", 0.6, 5], ["AutoContrast", 0.6, null]],
+    [["Equalize", 0.8, null], ["Equalize", 0.6, null]],
+    [["Posterize", 0.6, 7], ["Posterize", 0.6, 6]],
+    [["Equalize", 0.4, null], ["Solarize", 0.2, 4]],
+    [["Equalize", 0.4, null], ["Rotate", 0.8, 8]],
+    [["Solarize", 0.6, 3], ["Equalize", 0.6, null]],
+    [["Posterize", 0.8, 5], ["Equalize", 1.0, null]],
+    [["Rotate", 0.2, 3], ["Solarize", 0.6, 8]],
+    [["Equalize", 0.6, null], ["Posterize", 0.4, 6]],
+    [["Rotate", 0.8, 8], ["Color", 0.4, 0]],
+    [["Rotate", 0.4, 9], ["Equalize", 0.6, null]],
+    [["Equalize", 0.0, null], ["Equalize", 0.8, null]],
+    [["Invert", 0.6, null], ["Equalize", 1.0, null]],
+    [["Color", 0.6, 4], ["Contrast", 1.0, 8]],
+    [["Rotate", 0.8, 8], ["Color", 1.0, 2]],
+    [["Color", 0.8, 8], ["Solarize", 0.8, 7]],
+    [["Sharpness", 0.4, 7], ["Invert", 0.6, null]],
+    [["ShearX", 0.6, 5], ["Equalize", 1.0, null]],
+    [["Color", 0.4, 0], ["Equalize", 0.6, null]],
+    [["Equalize", 0.4, null], ["Solarize", 0.2, 4]],
+    [["Solarize", 0.6, 5], ["AutoContrast", 0.6, null]],
+    [["Invert", 0.6, null], ["Equalize", 1.0, null]],
+    [["Color", 0.6, 4], ["Contrast", 1.0, 8]],
+    [["Equalize", 0.8, null], ["Equalize", 0.6, null]],
+  ],
+  cifar10: [
+    [["Invert", 0.1, null], ["Contrast", 0.2, 6]],
+    [["Rotate", 0.7, 2], ["TranslateX", 0.3, 9]],
+    [["Sharpness", 0.8, 1], ["Sharpness", 0.9, 3]],
+    [["ShearY", 0.5, 8], ["TranslateY", 0.7, 9]],
+    [["AutoContrast", 0.5, null], ["Equalize", 0.9, null]],
+    [["ShearY", 0.2, 7], ["Posterize", 0.3, 7]],
+    [["Color", 0.4, 3], ["Brightness", 0.6, 7]],
+    [["Sharpness", 0.3, 9], ["Brightness", 0.7, 9]],
+    [["Equalize", 0.6, null], ["Equalize", 0.5, null]],
+    [["Contrast", 0.6, 7], ["Sharpness", 0.6, 5]],
+    [["Color", 0.7, 7], ["TranslateX", 0.5, 8]],
+    [["Equalize", 0.3, null], ["AutoContrast", 0.4, null]],
+    [["TranslateY", 0.4, 3], ["Sharpness", 0.2, 6]],
+    [["Brightness", 0.9, 6], ["Color", 0.2, 8]],
+    [["Solarize", 0.5, 2], ["Invert", 0.0, null]],
+    [["Equalize", 0.2, null], ["AutoContrast", 0.6, null]],
+    [["Equalize", 0.2, null], ["Equalize", 0.6, null]],
+    [["Color", 0.9, 9], ["Equalize", 0.6, null]],
+    [["AutoContrast", 0.8, null], ["Solarize", 0.2, 8]],
+    [["Brightness", 0.1, 3], ["Color", 0.7, 0]],
+    [["Solarize", 0.4, 5], ["AutoContrast", 0.9, null]],
+    [["TranslateY", 0.9, 9], ["TranslateY", 0.7, 9]],
+    [["AutoContrast", 0.9, null], ["Solarize", 0.8, 3]],
+    [["Equalize", 0.8, null], ["Invert", 0.1, null]],
+    [["TranslateY", 0.7, 9], ["AutoContrast", 0.9, null]],
+  ],
+  svhn: [
+    [["ShearX", 0.9, 4], ["Invert", 0.2, null]],
+    [["ShearY", 0.9, 8], ["Invert", 0.7, null]],
+    [["Equalize", 0.6, null], ["Solarize", 0.6, 6]],
+    [["Invert", 0.9, null], ["Equalize", 0.6, null]],
+    [["Equalize", 0.6, null], ["Rotate", 0.9, 3]],
+    [["ShearX", 0.9, 4], ["AutoContrast", 0.8, null]],
+    [["ShearY", 0.9, 8], ["Invert", 0.4, null]],
+    [["ShearY", 0.9, 5], ["Solarize", 0.2, 6]],
+    [["Invert", 0.9, null], ["AutoContrast", 0.8, null]],
+    [["Equalize", 0.6, null], ["Rotate", 0.9, 3]],
+    [["ShearX", 0.9, 4], ["Solarize", 0.3, 3]],
+    [["ShearY", 0.8, 8], ["Invert", 0.7, null]],
+    [["Equalize", 0.9, null], ["TranslateY", 0.6, 6]],
+    [["Invert", 0.9, null], ["Equalize", 0.6, null]],
+    [["Contrast", 0.3, 3], ["Rotate", 0.8, 4]],
+    [["Invert", 0.8, null], ["TranslateY", 0.0, 2]],
+    [["ShearY", 0.7, 6], ["Solarize", 0.4, 8]],
+    [["Invert", 0.6, null], ["Rotate", 0.8, 4]],
+    [["ShearY", 0.3, 7], ["TranslateX", 0.9, 3]],
+    [["ShearX", 0.1, 6], ["Invert", 0.6, null]],
+    [["Solarize", 0.7, 2], ["TranslateY", 0.6, 7]],
+    [["ShearY", 0.8, 4], ["Invert", 0.8, null]],
+    [["ShearX", 0.7, 9], ["TranslateY", 0.8, 3]],
+    [["ShearY", 0.8, 5], ["AutoContrast", 0.7, null]],
+    [["ShearX", 0.7, 2], ["Invert", 0.1, null]],
+  ],
+};
+
+/**
+ * The **learned** one: twenty-five pairs of operations found by a search, each
+ * with its own probability and strength, one pair drawn per call.
+ *
+ * Nothing about the table is derivable — it is the output of the search, which is
+ * why it is written out rather than computed, and why the three datasets are
+ * three tables.
+ */
+export class AutoAugment implements Transform {
+  /** The learned table for this policy. **A list**, as torchvision hands back. */
+  readonly policies: readonly (readonly [PolicyStep, PolicyStep])[];
+
+  constructor(
+    private readonly policy: AutoAugmentPolicyName = AutoAugmentPolicy.IMAGENET,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly fill: number | readonly number[] | null = null,
+  ) {
+    const table = POLICIES[policy];
+    if (table === undefined) {
+      throw new RuntimeError(
+        `${JSON.stringify(policy)} is not an AutoAugmentPolicy — ` +
+        `it is one of ${Object.values(AutoAugmentPolicy).join(", ")}.`);
+    }
+    this.policies = table;
+  }
+
+  apply(_x: Subject): Image {
+    throw new RuntimeError(
+      "AutoAugment does not run here yet — the fifteen operations it draws from " +
+      "are present, but the magnitude space that turns a strength index into a " +
+      "number is not.\n" +
+      `  It holds policy=${this.policy} and interpolation=${this.interpolation}; ` +
+      "`describe()` works, applying does not.");
+  }
+
+  describe(): string {
+    return `AutoAugment(policy=${policyName(this.policy)}, fill=${orNone(this.fill)})`;
+  }
+}
+
+/**
+ * The **uniform** one: `numOps` operations drawn evenly, all at the same fixed
+ * strength.
+ *
+ * Its point is that the search was unnecessary — one strength dial and a count do
+ * as well as the learned table, which is why `magnitude` is a number you tune
+ * rather than a distribution.
+ */
+export class RandAugment implements Transform {
+  constructor(
+    private readonly numOps = 2,
+    private readonly magnitude = 9,
+    private readonly numMagnitudeBins = 31,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly fill: number | readonly number[] | null = null,
+  ) {}
+
+  apply(x: Subject): Image {
+    const img = asImage(x, "RandAugment");
+    // **Zero operations has to be the identity**, and it is the only configuration
+    // of any of the four that does not draw. A `numOps` read as a count of
+    // something else would show here and nowhere else.
+    if (this.numOps === 0) return img;
+    throw new RuntimeError(
+      "RandAugment does not run here yet — only `numOps = 0`, which applies " +
+      "nothing, is implemented.\n" +
+      "  The magnitude space that turns a strength index into a number is absent.");
+  }
+
+  describe(): string {
+    return `RandAugment(num_ops=${this.numOps}, magnitude=${this.magnitude}` +
+      `, num_magnitude_bins=${this.numMagnitudeBins}` +
+      `, interpolation=${modeName(this.interpolation)}, fill=${orNone(this.fill)})`;
+  }
+}
+
+/**
+ * The one with **no dials at all**: one operation, drawn evenly, at a strength
+ * also drawn evenly from a wide ladder.
+ *
+ * That is the paper's claim — tuning the strength was never worth it — so there
+ * is no magnitude argument to pass. The ladder is much wider than
+ * `RandAugment`'s to make up for drawing it.
+ */
+export class TrivialAugmentWide implements Transform {
+  constructor(
+    private readonly numMagnitudeBins = 31,
+    private readonly interpolation: "bilinear" | "nearest" = "nearest",
+    private readonly fill: number | readonly number[] | null = null,
+  ) {}
+
+  apply(_x: Subject): Image {
+    throw new RuntimeError(
+      "TrivialAugmentWide does not run here yet — its magnitude ladder is absent.");
+  }
+
+  describe(): string {
+    return `TrivialAugmentWide(num_magnitude_bins=${this.numMagnitudeBins}` +
+      `, interpolation=${modeName(this.interpolation)}, fill=${orNone(this.fill)})`;
+  }
+}
+
+/**
+ * The **blended** one: several independent chains of operations, mixed back into
+ * the original by weights drawn from a Dirichlet.
+ *
+ * That is what makes it different in kind from the other three — they replace the
+ * picture and this one **averages several versions of it with the original**, so
+ * the result stays close to the input however hard the chains hit.
+ */
+export class AugMix implements Transform {
+  private static readonly PARAMETER_MAX = 10;
+
+  constructor(
+    private readonly severity = 3,
+    private readonly mixtureWidth = 3,
+    private readonly chainDepth = -1,
+    private readonly alpha = 1.0,
+    private readonly allOps = true,
+    private readonly interpolation: "bilinear" | "nearest" = "bilinear",
+    private readonly fill: number | readonly number[] | null = null,
+  ) {
+    if (!(severity >= 1 && severity <= AugMix.PARAMETER_MAX)) {
+      throw new RuntimeError(
+        `The severity must be between [1, ${AugMix.PARAMETER_MAX}]. ` +
+        `Got ${severity} instead.\n` +
+        `(torch: The severity must be between [1, ${AugMix.PARAMETER_MAX}].)`);
+    }
+  }
+
+  apply(_x: Subject): Image {
+    throw new RuntimeError(
+      "AugMix does not run here yet — its magnitude space is absent, and it is " +
+      "the one of the four whose space differs from the others in four places.");
+  }
+
+  describe(): string {
+    return `AugMix(severity=${this.severity}, mixture_width=${this.mixtureWidth}` +
+      `, chain_depth=${this.chainDepth}, alpha=${pyFloat(this.alpha)}` +
+      `, all_ops=${this.allOps ? "True" : "False"}` +
+      `, interpolation=${modeName(this.interpolation)}, fill=${orNone(this.fill)})`;
+  }
+}
