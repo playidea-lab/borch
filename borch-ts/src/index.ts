@@ -100,30 +100,34 @@ export {
   scope,
   Tensor,
 } from "./tensor.js";
-// `using s = scope()` 를 쓰는 쪽이 손잡이의 형을 적을 수 있어야 한다.
+// Somebody writing `using s = scope()` has to be able to name the handle's type.
 export type { Scope } from "./tensor.js";
 
 import { Tensor as TensorClass } from "./tensor.js";
 
 export { Device, isAvailable, probe } from "./device.js";
 export type { Availability, DeviceKind, InitOptions } from "./device.js";
-// `torch.manual_seed` 자리 — 층 초기화·dropout·`Tensor.randn` 이 한 씨앗에 걸린다.
-// `nn.manualSeed` 로도 같은 것이 나온다(옛 이름을 안 깬다).
+// The place `torch.manual_seed` occupies — layer initialisation, dropout and
+// `Tensor.randn` all hang on one seed. `nn.manualSeed` gives the same thing (the old name
+// is not broken).
 export { manualSeed } from "./random.js";
 export { einsum } from "./einsum.js";
-// 대괄호 자리. `x[1:3]` 은 파이썬에서도 `x[slice(1, 3)]` 으로 풀리므로 같은 이름이다.
+// The place brackets occupy. `x[1:3]` resolves to `x[slice(1, 3)]` in Python too, so it
+// is the same name.
 export { slice } from "./indexing.js";
 export type { Slice } from "./indexing.js";
-// 체크포인트. **형식은 safetensors 다** — 파이썬 `borch`·numpy·HF 도구가 같은 파일을
-// 읽는다. torch 의 `save`/`load` 는 pickle 이라 옮길 수도 옮겨서도 안 된다.
-// `save`/`load` 는 **중첩을 그대로** 오간다 — torch·파이썬 `borch` 와 같은 자리다.
-// `encode`/`decode` 는 그 밑의 코덱이고, 평평한 텐서 표와 바이트만 다룬다.
+// Checkpoints. **The format is safetensors** — Python `borch`, numpy and the HF tools
+// read the same file. torch's `save`/`load` is pickle, which cannot and should not be
+// ported.
+// `save`/`load` carry **the nesting as it is** — the same place as torch and Python
+// `borch`. `encode`/`decode` are the codec beneath them and deal only in a flat tensor
+// table and bytes.
 export {
   decode, encode, load, metaToNumbers, numbersToMeta, prefixed, save, unprefixed,
 } from "./serialize.js";
 export type { Bundle, Savable } from "./serialize.js";
-// **밖에서 여닫을 수 있어야 한다.** `noGrad(fn)` 은 함수를 받는 모양이라 파이썬의
-// `with` 로 옮길 수가 없다 — 결속이 스위치를 직접 쥔다.
+// **It has to be openable from outside.** `noGrad(fn)` takes a function, so it cannot be
+// ported to Python's `with` — the binding holds the switch directly.
 export { gradMode } from "./autograd.js";
 
 /**
@@ -165,27 +169,32 @@ export function setNull(target: Record<string, unknown>, key: string): void {
 export { IndexError, RuntimeError } from "./errors.js";
 export type { DType } from "./dtype.js";
 
-// 이름 공간을 나눠 둔다 — `nn` 과 `vision` 둘 다 `manualSeed` 를 갖고 있고,
-// torch 도 `torch.nn` · `torch.optim` 으로 갈라 부른다.
-// `torch.utils.data` 자리. 이름 공간을 나눠 두는 것은 `nn`·`optim` 과 같은 이유다.
+// The namespaces are kept apart — both `nn` and `vision` have a `manualSeed`, and torch
+// separates them as `torch.nn` and `torch.optim` too.
+// The place `torch.utils.data` occupies. The namespace is kept apart for the same reason
+// as `nn` and `optim`.
 export * as data from "./data.js";
-// `torch.fft` 자리. 몸통이 자기 커널(DFT 셰이더)을 갖고 있어 따로 선다.
+// The place `torch.fft` occupies. Its body carries its own kernel (the DFT shader), so it
+// stands apart.
 export * as fft from "./fft.js";
 export * as nn from "./nn.js";
 export * as optim from "./optim.js";
 export * as vision from "./vision.js";
 
-// **`stft`·`istft` 는 최상위다** — torch 가 `torch.stft` 로 둔다. `fft` 이름 공간
-// 안에도 같은 함수가 보이지만, 교재 코드가 쓰는 꼴은 최상위 쪽이다.
+// **`stft` and `istft` are top level** — torch puts them at `torch.stft`. The same
+// functions are visible inside the `fft` namespace as well, and the form textbook code
+// uses is the top-level one.
 export { istft, stft } from "./fft.js";
 export type { StftOptions } from "./fft.js";
 
-// **최상위 순환 여덟.** torch 는 층(`nn.LSTM`)과 함수(`torch.lstm`)를 둘 다 주고,
-// 층이 안에서 부르는 것이 함수 쪽이다 — 가중치를 목록으로 받는 것이 차이다.
+// **The eight top-level recurrent names.** torch gives both the layer (`nn.LSTM`) and the
+// function (`torch.lstm`), and what the layer calls internally is the function — the
+// difference is that it takes the weights as a list.
 export {
   gru, gruCell, lstm, lstmCell, rnnRelu, rnnReluCell, rnnTanh, rnnTanhCell,
 } from "./rnn.js";
 export type { RnnOptions } from "./rnn.js";
 
-// 특수 함수. `n` 이 셰이더 상수라 단항 표에 안 들어가서 따로 선다.
+// The special functions. `n` is a shader constant, so they do not fit the unary table and
+// stand apart.
 export { igamma, igammac, polygamma } from "./special.js";

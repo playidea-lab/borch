@@ -1,25 +1,27 @@
 /**
- * `torch.nn.functional` 자리 — **`F.conv2d(x, w, b)` 를 옮겨 적을 수 있게 한다.**
+ * The place `torch.nn.functional` occupies — **so that `F.conv2d(x, w, b)` can be copied
+ * across.**
  *
- * torch 는 같은 연산을 두 이름으로 갖는다. `x.relu()` 도 되고 `F.relu(x)` 도 되며,
- * 교재 코드는 층을 쓸 때는 앞쪽을 쓰고 손실·합성곱을 직접 부를 때는 뒤쪽을 쓴다.
- * borch 에는 앞쪽만 있어서 `F.` 로 적힌 줄을 통째로 다시 써야 했다.
+ * torch gives the same operation two names. `x.relu()` works and so does `F.relu(x)`, and
+ * textbook code uses the first for layers and the second when calling losses and
+ * convolutions directly. borch had the first alone, so any line written with `F.` had to
+ * be rewritten entirely.
  *
- * ## 여기 있는 것은 위임뿐이다
+ * ## What is here is delegation and nothing else
  *
- * 값은 전부 `Tensor` 의 메서드가 낸다. **골든이 이미 그 값들을 지키고 있으므로**
- * 이 파일이 지는 책임은 이름과 인자 차례 하나다 — 새 커널도, 새 미분식도 없다.
- * `at()` 이 대괄호에 해준 것과 같은 자리다.
+ * Every value comes from a `Tensor` method. **The golden already holds those values**, so
+ * this file's responsibility is one name and one argument order — no new kernel and no new
+ * derivative. The same place `at()` occupies for brackets.
  *
- * ## 메서드를 안 없앤다
+ * ## The methods are not removed
  *
- * torch 가 둘 다 갖고 있으므로 우리도 둘 다 갖는다. 옮기는 것이 목적이지 깨는 것이
- * 아니고, `x.relu()` 로 적힌 코드가 이 변경으로 멈출 이유가 없다.
+ * torch has both, so we have both. The point is to port rather than to break, and code
+ * written as `x.relu()` has no reason to stop because of this change.
  *
- * **`Tensor` 가 작아지지는 않는다.** 메서드 401 개 중 여기로 이름이 나는 것은
- * 예순쯤이고 나머지는 torch 도 메서드로 두는 것들이다. 이 파일은 god object 를
- * 푸는 것이 아니라 **없던 문을 내는 것**이다 — 그 둘을 섞어 말하면 결과가 기대에
- * 못 미친다.
+ * **`Tensor` does not get smaller.** Of its 401 methods, about sixty get a name here and
+ * the rest are ones torch keeps as methods too. This file is not untangling a god object;
+ * it is **opening a door that was not there** — saying the two together sets an
+ * expectation the result does not meet.
  */
 
 import { type Reduction, Tensor } from "./tensor.js";
@@ -240,11 +242,12 @@ export function tripletMarginLoss(input: Tensor, positive: Tensor, negative: Ten
 
 
 /**
- * `F.unfold` — im2col 이다. **`Tensor.unfold` 와 다른 연산이다.**
+ * `F.unfold` — im2col. **A different operation from `Tensor.unfold`.**
  *
- * torch 에서 `x.unfold(dim, size, step)` 은 축 하나에 창을 미는 것이고
- * `F.unfold(x, kernel)` 은 합성곱용으로 펴는 것이다. 이름이 같아서 자동으로 이으면
- * **다른 연산이 조용히 걸린다** — 실제로 처음 생성했을 때 그렇게 걸렸다.
+ * In torch, `x.unfold(dim, size, step)` slides a window along one axis while
+ * `F.unfold(x, kernel)` lays it out for a convolution. The names match, so wiring it up
+ * automatically **quietly attaches the wrong operation** — which is what happened when
+ * this was first generated.
  */
 export function unfold(
   input: Tensor, kernelSize: number | [number, number], dilation = 1,
@@ -254,9 +257,9 @@ export function unfold(
 }
 
 /**
- * `F.huber_loss` — **인자 차례가 다르다.** torch 는 `(input, target, reduction,
- * delta)` 이고 우리 메서드는 `(target, delta, reduction)` 이다. 자동 위임이면 위치
- * 인자를 쓴 코드가 델타와 축약을 바꿔 넣는다.
+ * `F.huber_loss` — **the argument order differs.** torch is `(input, target, reduction,
+ * delta)` and our method is `(target, delta, reduction)`. Delegated automatically, code
+ * using positional arguments swaps delta and reduction.
  */
 export function huberLoss(
   input: Tensor, target: Tensor, reduction: Reduction = "mean", delta = 1.0,
@@ -264,32 +267,35 @@ export function huberLoss(
   return input.huberLoss(target, delta, reduction);
 }
 
-// ── 여기 없는 것 — **이름이 같은데 연산이 다르다** ──────────────────────
+// ── What is not here — **the name matches and the operation does not** ────
 //
-// 이름으로 이으면 다섯이 조용히 다른 것에 걸린다. 그래서 안 낸다. 없는 것은
-// 없다고 두는 편이, 이름은 torch 인데 속이 다른 것보다 낫다.
+// Wired up by name, five of them quietly attach to something else. So they are not
+// exported. Leaving something absent is better than a torch name with different insides.
 //
-//   F.batch_norm      `Tensor.batchNorm(dim, eps)` 은 축만 바꾼 `layerNorm` 이다.
-//                     진짜는 `nn.functional.batchNorm` 으로 나간다(`nn.ts` 의 자유 함수)
-//   F.layer_norm      torch 는 `normalized_shape` 를, 우리는 접을 축 하나를 받는다
-//   F.rms_norm        같은 이유
-//   F.pad             torch 는 축 전부의 덧댐을 목록으로, 우리는 축 하나씩
-//   F.upsample        torch 에서도 폐기 예정이다 — `interpolate` 쪽이 정본이고
-//                     우리 것은 배율 하나만 받는다
+//   F.batch_norm      `Tensor.batchNorm(dim, eps)` is `layerNorm` with the axis changed.
+//                     The real one goes out as `nn.functional.batchNorm` (a free function
+//                     in `nn.ts`)
+//   F.layer_norm      torch takes `normalized_shape`; we take one axis to fold
+//   F.rms_norm        the same reason
+//   F.pad             torch takes every axis's padding as a list; we take one axis at a time
+//   F.upsample        deprecated in torch too — `interpolate` is the authoritative one,
+//                     and ours takes a single scale
 //
-// **이 목록은 자동으로 안 는다.** 새 메서드를 여기 이을 때는 torch 의 시그니처와
-// 인자 이름·차례를 맞춰 봐야 한다 — 처음 생성했을 때 열여덟이 어긋났고 그중
-// 일곱이 진짜 다른 연산이었다. `F.unfold` 는 `Tensor.unfold` 가 아니라 im2col 이고,
-// `F.huber_loss` 는 델타와 축약의 자리가 우리와 뒤바뀌어 있다.
+// **This list does not grow by itself.** Wiring a new method here means checking it
+// against torch's signature, argument names and order — eighteen were off when this was
+// first generated and seven of those were genuinely different operations. `F.unfold` is
+// im2col rather than `Tensor.unfold`, and `F.huber_loss` has delta and reduction in
+// swapped positions.
 
-// ── 표에서 생성되는 단항들 ──────────────────────────────────────────────
+// ── The unaries generated from the table ──────────────────────────────────
 //
-// `relu`·`sigmoid` 같은 것은 `tensor.ts` 가 `UNARY` 표를 돌며 프로토타입에 단다.
-// **선언만 있고 본문이 없어서** 시그니처를 훑는 방식으로는 안 잡힌다 — 처음 생성했을
-// 때 `F.relu` 가 통째로 빠진 채로 지나갈 뻔했고, parity 러너가 그것을 잡았다.
+// Things like `relu` and `sigmoid` are attached to the prototype by `tensor.ts` walking
+// the `UNARY` table. **They have a declaration and no body**, so a signature sweep does
+// not catch them — when this was first generated `F.relu` nearly went missing entirely,
+// and the parity runner caught it.
 //
-// 여기 있는 열하나가 torch 의 `F.` 에도 있는 것들이다. 나머지 서른여덟(`exp`·`log`
-// 따위)은 torch 도 `F.` 에 안 두므로 안 낸다.
+// The eleven here are the ones torch also has under `F.`. The other thirty-eight (`exp`,
+// `log` and so on) are not under torch's `F.` either, so they are not exported.
 export function relu(input: Tensor): Tensor { return input.relu(); }
 export function relu6(input: Tensor): Tensor { return input.relu6(); }
 export function sigmoid(input: Tensor): Tensor { return input.sigmoid(); }

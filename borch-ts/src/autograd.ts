@@ -1,13 +1,14 @@
 /**
- * 자동 미분 테이프.
+ * The automatic differentiation tape.
  *
- * 코어(`borch`)·자매(`borch_webgpu`)와 **같은 모양**이다. 셋이 같으면
- * 한 곳에서 고친 것을 다른 곳으로 옮기기 쉽고, 이번 프로젝트에서 그 값어치를
- * 여러 번 봤다 — 자매의 `roll`·`masked_select` 가 값만 맞고 그래프가 끊긴 것을
- * 코어의 같은 자리를 보고 찾았다.
+ * **The same shape** as the core (`borch`) and the sister library (`borch_webgpu`). With
+ * all three alike, a fix made in one place moves easily to the others, and this project
+ * has seen that pay off several times — the sister library's `roll` and `masked_select`
+ * having right values and a severed graph was found by looking at the same place in the
+ * core.
  *
- * 그래프 자료구조는 텐서를 모른다. `T` 로 두었기에 `tensor.ts` 를 import 하지 않고,
- * 그래서 테이프만 따로 시험할 수 있다.
+ * The graph data structure does not know about tensors. Left as `T`, it imports no
+ * `tensor.ts`, and so the tape can be tested on its own.
  */
 
 /**
@@ -73,12 +74,12 @@ export function noGrad<R>(body: () => R): R {
   }
 }
 
-/** 위상 정렬. 부모가 항상 자식보다 뒤에 오도록 늘어놓는다. */
+/** A topological sort. It lays them out so a parent always comes after its child. */
 function topoOrder<T>(root: Node<T>): Node<T>[] {
   const order: Node<T>[] = [];
   const seen = new Set<Node<T>>();
-  // 재귀로 쓰면 깊은 그래프(ResNet-18 은 마디 수백 개)에서 스택이 넘는다.
-  // 두 상태를 쓰는 명시적 스택이라 깊이에 안 걸린다.
+  // Written recursively, a deep graph (ResNet-18 has hundreds of nodes) overflows the
+  // stack. This is an explicit stack with two states, so depth does not bind.
   const stack: { node: Node<T>; expanded: boolean }[] = [{ node: root, expanded: false }];
   while (stack.length > 0) {
     const frame = stack.pop();
@@ -122,7 +123,7 @@ export function backward<T>(
     const g = grads.get(node);
     if (g === undefined) continue;
     if (!node.backwardFn || node.parents.length === 0) {
-      // 잎이다. torch 와 같이 여기에만 쌓는다.
+      // A leaf. As in torch, it accumulates here alone.
       node.grad = node.grad === null ? g : add(node.grad, g);
       continue;
     }
@@ -130,8 +131,8 @@ export function backward<T>(
     if (!options.retainGraph) node.freed = true;
     const parts = node.backwardFn(g);
     if (parts.length !== node.parents.length) {
-      // 조용히 틀리는 대신 멈춘다. 부모 하나를 빠뜨린 미분식은 값이 그럴듯해서
-      // 골든을 통과하고, 학습이 안 되는 것으로만 드러난다.
+      // It stops rather than being quietly wrong. A derivative that omits one parent has
+      // plausible values, passes the golden, and shows up only as a failure to train.
       throw new Error(
         `${node.gradName}: backward returned ${parts.length} gradients, but the node ` +
           `has ${node.parents.length} parents.`,

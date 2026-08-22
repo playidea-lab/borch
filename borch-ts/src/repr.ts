@@ -1,35 +1,39 @@
 /**
- * `print(t)` 가 진짜 torch 와 같게 찍히도록.
+ * So that `print(t)` prints exactly as real torch does.
  *
- * ## 왜 글자를 명세로 두는가
+ * ## Why the characters are treated as a specification
  *
- * 배우는 사람이 가장 많이 하는 일이 `print(tensor)` 다. 다르게 찍히면 교재의 예시와
- * 화면이 안 맞고, 그때마다 "내가 뭘 잘못했나" 를 의심하게 된다. 값이 맞아도 그렇다.
+ * What somebody learning does most is `print(tensor)`. Printed differently, the screen
+ * does not match the textbook's example, and every time that happens they suspect
+ * themselves. That holds even when the values are right.
  *
- * ## torch 의 규칙 — 재서 옮긴 것이다
+ * ## torch's rules — measured and ported
  *
- * - 실수인데 값이 전부 정수면 `1.` 로 찍는다. 아니면 소수 넷째 자리까지.
- * - 가장 큰 값과 가장 작은 값의 비가 크거나 값이 아주 크면 지수형으로 바꾼다.
- * - 자리를 오른쪽 맞춤으로 채운다 — 음수가 섞이면 양수 앞에 빈칸이 하나 생긴다.
- * - 한 줄이 80 자를 넘으면 자르고 여덟 칸 들여쓴다(`tensor([` 의 길이다).
- * - 3차원부터는 덩어리 사이에 빈 줄이 하나 들어간다.
+ * - A float whose values are all integral prints as `1.`; otherwise to four decimals.
+ * - A large ratio between the largest and smallest value, or very large values, switches
+ *   to exponent form.
+ * - Fields are right-aligned — with negatives among them, a positive gains a leading
+ *   blank.
+ * - A line over 80 characters wraps and indents by eight (the length of `tensor([`).
+ * - From three dimensions on, a blank line separates the chunks.
  */
 
 import type { DType } from "./dtype.js";
 
-/** 한 줄의 최대 길이. `tensor([` 를 포함해서 센다. */
+/** A line's maximum length. `tensor([` counts towards it. */
 const LINE_WIDTH = 80;
-const INDENT = "        "; // "tensor([" 와 같은 길이
+const INDENT = "        "; // the same length as "tensor(["
 
-/** 지수형으로 넘어가는 문턱. 큰 값과 작은 값의 비가 이보다 크면 바꾼다. */
+/** The threshold for switching to exponent form — a larger ratio between the largest and
+ *  smallest value than this. */
 const SCI_RATIO = 1000;
 const SCI_LARGE = 1e8;
 const DECIMALS = 4;
 
 interface Style {
-  /** 원소 하나를 글자로. */
+  /** One element as characters. */
   readonly format: (v: number) => string;
-  /** 오른쪽 맞춤에 쓸 너비. */
+  /** The width used for right alignment. */
   readonly width: number;
 }
 
@@ -46,7 +50,7 @@ function styleFor(values: readonly number[], dtype: DType): Style {
   const magnitudes = finite.map(Math.abs).filter((v) => v !== 0);
   const hi = magnitudes.length > 0 ? Math.max(...magnitudes) : 0;
   const lo = magnitudes.length > 0 ? Math.min(...magnitudes) : 0;
-  // 값이 전부 정수면 torch 는 소수점만 찍고 끝낸다 — `1.` 이지 `1.0000` 이 아니다.
+  // With all values integral torch prints the point and stops — `1.`, not `1.0000`.
   const allIntegral = finite.every((v) => Number.isInteger(v));
   const scientific = hi >= SCI_LARGE || (lo > 0 && hi / lo > SCI_RATIO);
   let format: (v: number) => string;
@@ -65,7 +69,7 @@ function special(v: number): string {
   return v > 0 ? "inf" : "-inf";
 }
 
-/** `1.0000e+06` — 지수는 최소 두 자리다. torch 가 그렇게 찍는다. */
+/** `1.0000e+06` — the exponent is at least two digits. That is how torch prints it. */
 function exponential(v: number): string {
   if (!Number.isFinite(v)) return special(v);
   const raw = v.toExponential(DECIMALS);
@@ -79,7 +83,7 @@ function widest(values: readonly number[], format: (v: number) => string): numbe
 }
 
 /**
- * 한 줄에 늘어놓되 80 자를 넘으면 자른다.
+ * Lays out on one line, wrapping past 80 characters.
  *
  * @param depth how many opening brackets stand in front — the indentation
  *   grows by that much.
@@ -102,7 +106,8 @@ function wrapRow(cells: readonly string[], depth: number): string {
   return lines.join(`,\n${pad}`);
 }
 
-/** 중첩된 대괄호를 만든다. 3차원부터는 덩어리 사이에 빈 줄이 하나 들어간다. */
+/** Builds the nested brackets. From three dimensions on, a blank line separates the
+ *  chunks. */
 function block(
   values: readonly number[],
   shape: readonly number[],
@@ -121,10 +126,11 @@ function block(
   for (let i = 0; i < outer; i++) {
     parts.push(block(values.slice(i * stride, (i + 1) * stride), inner, style, depth + 1));
   }
-  // 랭크가 3 이상이면 덩어리 사이가 한 줄 더 벌어진다.
+  // At rank 3 and above the chunks are separated by one more line.
   const gap = shape.length >= 3 ? "\n\n" : "\n";
-  // 대괄호가 하나 더 있는 만큼만 더 들여쓴다. 여기에 빈칸을 하나 더 붙이면 한 칸씩
-  // 밀리는데, 눈으로는 잘 안 보이고 글자 대조에서만 걸린다.
+  // The indent grows by exactly the one extra bracket. One more blank here shifts
+  // everything by a column — hard to see by eye and caught only by a character
+  // comparison.
   const pad = INDENT + " ".repeat(depth);
   return `[${parts.join(`,${gap}${pad}`)}]`;
 }
@@ -133,9 +139,9 @@ export interface ReprInfo {
   readonly values: readonly number[];
   readonly shape: readonly number[];
   readonly dtype: DType;
-  /** 잎이면서 기울기를 받는가. */
+  /** Whether it is a leaf that requires a gradient. */
   readonly requiresGrad: boolean;
-  /** 잎이 아니면 `grad_fn` 이름. */
+  /** The `grad_fn` name when it is not a leaf. */
   readonly gradName: string;
 }
 

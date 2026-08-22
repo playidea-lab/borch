@@ -1,38 +1,38 @@
 /**
- * 대괄호 자리 — `x[...]` 를 옮겨 적는 문법.
+ * The place brackets occupy — the syntax for copying `x[...]` across.
  *
- * ## 왜 필요한가
+ * ## Why it is needed
  *
- * torch 코드에서 대괄호는 어디에나 나오는데 **자바스크립트는 `[]` 를 오버로드할 수
- * 없다.** 그래서 여기서는 줄마다 다른 메서드가 된다 — `select`·`narrow`·
- * `indexSelect`·`gather`·`maskedSelect`… 열다섯 개다. 값은 전부 맞지만, 옮겨 적는
- * 사람이 **줄마다 "이건 어느 메서드지" 를 골라야 한다.** `x[1:3]` 이 `narrow` 인지
- * `select` 인지, 인자가 `(dim, start, length)` 인지 `(dim, start, end)` 인지.
+ * Brackets appear everywhere in torch code and **JavaScript cannot overload `[]`.** So
+ * here each line becomes a different method — `select`, `narrow`, `indexSelect`, `gather`,
+ * `maskedSelect`… fifteen of them. Every value is right, and whoever is copying **has to
+ * choose "which method is this" line by line.** Whether `x[1:3]` is `narrow` or `select`,
+ * and whether the arguments are `(dim, start, length)` or `(dim, start, end)`.
  *
- * `at()` 은 그 열다섯 갈래를 문 하나로 좁힌다. 없애는 것이 아니라 **문을 하나 더
- * 내는 것**이고, 기존 메서드는 그대로 있다.
+ * `at()` narrows those fifteen branches into one door. It removes nothing — it **opens one
+ * more door**, and the existing methods stay.
  *
- * ## 슬라이스가 왜 함수인가
+ * ## Why a slice is a function
  *
- * `x.at([1, 3])` 이 "축 0 은 1, 축 1 은 3" 인지 "1:3 을 자른다" 인지 **배열만으로는
- * 구분이 안 된다.** 파이썬은 문법이 갈라 주지만(`x[1, 3]` 대 `x[1:3]`) 여기서는
- * 둘 다 배열이다.
+ * Whether `x.at([1, 3])` means "axis 0 at 1, axis 1 at 3" or "slice 1:3" **cannot be told
+ * from an array alone.** Python's syntax separates them (`x[1, 3]` against `x[1:3]`) and
+ * here both are arrays.
  *
- * 그래서 슬라이스를 이름 있는 것으로 만든다. 파이썬의 `x[1:3]` 도 실은
- * `x[slice(1, 3)]` 로 풀리므로 **같은 이름을 쓴다** — 새로 배울 것이 아니라 원래
- * 그 자리에 있던 이름이다.
+ * So the slice becomes a named thing. Python's `x[1:3]` also resolves to
+ * `x[slice(1, 3)]`, so **it uses the same name** — not something new to learn but the name
+ * that was there all along.
  *
  * ```ts
  * x.at(0)                     // x[0]
- * x.at([null, 1])             // x[:, 1]        null 이 파이썬의 `:` 다
+ * x.at([null, 1])             // x[:, 1]        null is Python's `:`
  * x.at(slice(1, 3))           // x[1:3]
  * x.at([0, slice(1, 3)])      // x[0, 1:3]
  * x.at(slice(null, null, 2))  // x[::2]
- * x.at([[0, 2]])              // x[[0, 2]]      대괄호 둘 — numpy 와 같은 모양이다
+ * x.at([[0, 2]])              // x[[0, 2]]      two brackets — the same shape as numpy
  * ```
  *
- * **맨 바깥 배열은 언제나 축 목록이다.** 번호표로 고르려면 한 겹 더 싼다 —
- * numpy 의 `x[0, 1]` 과 `x[[0, 1]]` 이 갈리는 자리와 같은 모양이다.
+ * **The outermost array is always the list of axes.** Selecting by an index list wraps one
+ * layer more — the same shape as the place numpy's `x[0, 1]` and `x[[0, 1]]` diverge.
  */
 
 import { RuntimeError } from "./errors.js";
@@ -88,10 +88,10 @@ export type AxisPlan =
   | { kind: "whole" };
 
 /**
- * 파이썬의 슬라이스 셈. 음수는 뒤에서 세고, 넘치면 잘라 맞춘다.
+ * Python's slice arithmetic. A negative counts from the back and an overrun is clamped.
  *
- * **여기서 던지지 않는다** — 파이썬도 `x[5:99]` 를 빈 것으로 준다. 범위를 넘긴 것이
- * 오류인 곳은 정수 인덱스 쪽이고 그것은 따로 본다.
+ * **It does not throw here** — Python gives `x[5:99]` as empty too. Where an overrun is an
+ * error is the integer-index side, and that is looked at separately.
  */
 function resolveSlice(s: Slice, size: number): AxisPlan {
   const clamp = (v: number): number => Math.min(Math.max(v, 0), size);

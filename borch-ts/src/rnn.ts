@@ -30,13 +30,13 @@ function gatesOf(kind: RnnKind): number {
   return kind === "lstm" ? 4 : kind === "gru" ? 3 : 1;
 }
 
-/** `x·Wᵀ (+ b)`. 편향이 없으면 안 더한다. */
+/** `x·Wᵀ (+ b)`. With no bias, nothing is added. */
 function affine(x: Tensor, w: Tensor, b: Tensor | null): Tensor {
   const out = x.linear(w);
   return b === null ? out : out.add(b);
 }
 
-/** 게이트 하나를 잘라 온다. `(배치, 게이트·H)` 에서 `k` 번째 토막이다. */
+/** Slices out one gate. The `k`th segment of `(batch, gates·H)`. */
 function gate(z: Tensor, k: number, H: number): Tensor {
   return z.narrow(1, k * H, H);
 }
@@ -60,8 +60,8 @@ export function rnnStep(
     return [next, next];
   }
   if (kind === "gru") {
-    // **`n` 게이트만 `r` 을 은닉 쪽에 곱한다.** 입력 쪽에는 안 곱한다 — 그 자리를
-    // 바꾸면 값이 그럴듯하게 틀린다.
+    // **Only the `n` gate multiplies the hidden side by `r`.** The input side is not
+    // multiplied — swapping those makes the values plausibly wrong.
     const r = gate(gi, 0, H).add(gate(gh, 0, H)).unary("sigmoid");
     const z = gate(gi, 1, H).add(gate(gh, 1, H)).unary("sigmoid");
     const n = gate(gi, 2, H).add(r.mul(gate(gh, 2, H))).unary("tanh");
@@ -78,7 +78,8 @@ export function rnnStep(
   return [o.mul(nextC.unary("tanh")), nextC];
 }
 
-/** 평평한 가중치 목록을 층별 넷으로 쪼갠다. 차례는 `[w_ih, w_hh, b_ih, b_hh]` 다. */
+/** Splits the flat weight list into four per layer. The order is
+ *  `[w_ih, w_hh, b_ih, b_hh]`. */
 function layerWeights(params: readonly Tensor[], layers: number, hasBiases: boolean):
   [Tensor, Tensor, Tensor | null, Tensor | null][] {
   const per = hasBiases ? 4 : 2;

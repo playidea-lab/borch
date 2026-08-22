@@ -26,7 +26,7 @@ import { RuntimeError } from "./errors.js";
 
 export type DType = "float32" | "int64" | "bool" | "complex64";
 
-/** 낮을수록 아래. 승격은 높은 쪽으로만 간다. */
+/** Lower is further down. Promotion only ever goes upward. */
 const RANK: Readonly<Record<DType, number>> = {
   bool: 0, int64: 1, float32: 2, complex64: 3,
 };
@@ -121,11 +121,11 @@ export function rankOf(d: DType): number {
 }
 
 /**
- * 뺄셈에 bool 이 낀 경우.
+ * A subtraction with a bool in it.
  *
- * torch 가 내는 문구를 그대로 담는다 — 막힌 사람이 검색할 것이 그 문구다.
- * **`RuntimeError` 를 그대로 쓴다**: 골든이 예외의 종류 이름을 굳혔고, 여기서 전용
- * 클래스를 세우면 그 이름이 갈린다.
+ * It carries torch's text verbatim — that text is what somebody stuck will search for.
+ * **It uses `RuntimeError` as it is**: the golden froze the exception's kind name, and
+ * standing up a dedicated class here would diverge from it.
  */
 function BoolSubtraction(): RuntimeError {
   return new RuntimeError(

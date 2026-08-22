@@ -78,8 +78,9 @@ export class TensorDataset implements Dataset {
     }
     const rows = tensors[0]?.shape[0] ?? 0;
     for (const [i, t] of tensors.entries()) {
-      // **여기서 안 막으면 배치가 조용히 어긋난다.** 표본 수가 다른 두 텐서를 묶으면
-      // 짧은 쪽이 범위를 넘고, 그것은 학습이 도는 채로 라벨만 밀리는 자리다.
+      // **Unblocked here, the batches quietly go out of step.** Bundling two tensors
+      // with different sample counts overruns the shorter one, and that is a place where
+      // training runs while the labels alone are shifted.
       if (t.shape[0] !== rows) {
         throw new RuntimeError(
           `TensorDataset tensors disagree on sample count: index ${i} has ${t.shape[0]}, ` +
@@ -99,8 +100,8 @@ export class TensorDataset implements Dataset {
   }
 
   gather(indices: readonly number[]): readonly Tensor[] {
-    // **이어진 자리는 번호표를 안 만든다.** 안 섞은 적재기가 그 경우이고, 그때
-    // `narrow` 는 색인 텐서를 올리는 일 없이 잘라 준다.
+    // **A contiguous run builds no index table.** An unshuffled loader is that case, and
+    // there `narrow` slices without uploading an index tensor.
     const first = indices[0] ?? 0;
     const contiguous = indices.every((v, i) => v === first + i);
     if (contiguous) {
@@ -275,8 +276,8 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
   }
 
   [Symbol.iterator](): Iterator<readonly Tensor[]> {
-    // **에폭마다 새로 섞는다.** 순서를 생성자에서 한 번만 정하면 두 번째 에폭이
-    // 첫 번째와 같은 차례로 돌고, 섞는 이유가 사라진다.
+    // **Reshuffled every epoch.** Deciding the order once in the constructor makes the
+    // second epoch run in the first's order, and the reason for shuffling disappears.
     const order = this.shuffle
       ? shuffled(this.dataset.length)
       : Array.from({ length: this.dataset.length }, (_, i) => i);
@@ -299,9 +300,9 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
 }
 
 /**
- * 표본 여럿을 배치 하나로. `default_collate` 자리다.
+ * Several samples into one batch. The place `default_collate` occupies.
  *
- * 자리마다 따로 쌓는다 — `[[x₀, y₀], [x₁, y₁]]` 이 `[X, Y]` 가 된다.
+ * It stacks per position — `[[x₀, y₀], [x₁, y₁]]` becomes `[X, Y]`.
  */
 function stackItems(items: readonly (readonly Tensor[])[]): readonly Tensor[] {
   const first = items[0];
@@ -318,7 +319,7 @@ function stackItems(items: readonly (readonly Tensor[])[]): readonly Tensor[] {
     Tensor.stack(items.map((item) => item[slot] as Tensor), 0));
 }
 
-/** `0..n-1` 을 섞은 번호. Fisher–Yates, 호스트 줄기(`manualSeed` 를 따른다). */
+/** `0..n-1` shuffled. Fisher–Yates, on the host stream (it follows `manualSeed`). */
 function shuffled(n: number): number[] {
   const order = Array.from({ length: n }, (_, i) => i);
   for (let i = n - 1; i > 0; i--) {

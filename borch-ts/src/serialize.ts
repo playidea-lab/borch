@@ -40,18 +40,20 @@ import { Tensor } from "./tensor.js";
 
 const BYTES_PER_F32 = 4;
 
-/** 머리 길이를 적는 자리. safetensors 가 정한 크기다. */
+/** Where the header length is written. The size safetensors fixed. */
 const LENGTH_FIELD = 8;
 
 /**
- * 머리를 이 배수로 맞춰 몸이 8 바이트에서 시작하게 한다.
+ * Pads the header to this multiple so the body starts on 8 bytes.
  *
- * 사양이 요구하지는 않지만 참조 구현이 공백으로 채워 맞춘다. 어긋나면 numpy 쪽에서
- * 몸을 그대로 매핑하지 못하고 복사가 한 번 더 든다.
+ * The specification does not require it and the reference implementation pads with spaces
+ * to match. Misaligned, the numpy side cannot map the body directly and it costs another
+ * copy.
  */
 const ALIGN = 8;
 
-/** borch 이름표를 싣는 열쇠의 앞머리. float32 인 것은 안 적는다 — 기본값이다. */
+/** The prefix of the key carrying borch's labels. float32 is not written — it is the
+ *  default. */
 const DTYPE_KEY = "borch.dtype:";
 
 export interface Bundle {
@@ -77,8 +79,8 @@ export async function encode(
   metadata: Record<string, string> = {},
 ): Promise<Uint8Array> {
   const names = Object.keys(tensors);
-  // **이름 순서를 고정한다.** 객체의 열쇠 순서는 만든 차례를 따르므로, 같은 모델을
-  // 두 번 저장하면 같은 바이트가 나와야 한다는 약속이 그것 하나에 걸린다.
+  // **The name order is fixed.** An object's key order follows creation order, so the
+  // promise that saving one model twice gives the same bytes hangs on that alone.
   names.sort();
 
   const header: Record<string, Entry | Record<string, string>> = {};
@@ -88,9 +90,10 @@ export async function encode(
 
   for (const name of names) {
     const t = tensors[name] as Tensor;
-    // **복소수는 아직 이 파일 형식에 안 들어간다.** 저장이 칸당 f32 두 개라
-    // `shape` 와 몸 길이가 어긋나고, 그 상태는 저장은 되는데 **읽을 때** 터진다 —
-    // 체크포인트가 몇 시간 뒤에 못 읽히는 것이 제일 나쁜 실패다.
+    // **Complex does not go into this file format yet.** The storage is two f32 per
+    // cell, so `shape` and the body length disagree, and in that state it saves and blows
+    // up **on reading** — a checkpoint that cannot be read hours later is the worst
+    // failure there is.
     if (t.dtype === "complex64") {
       throw new RuntimeError(
         `'${name}' is complex64 — saving that is not supported yet. ` +
@@ -118,7 +121,7 @@ export async function encode(
   const out = new Uint8Array(LENGTH_FIELD + headerLength + offset);
   new DataView(out.buffer).setBigUint64(0, BigInt(headerLength), true);
   out.set(json, LENGTH_FIELD);
-  // 남는 자리는 공백이다 — JSON 파서가 뒤에 붙은 공백을 그냥 지난다.
+  // The remainder is spaces — a JSON parser walks past trailing whitespace.
   out.fill(0x20, LENGTH_FIELD + json.length, LENGTH_FIELD + headerLength);
 
   let at = LENGTH_FIELD + headerLength;
@@ -180,9 +183,9 @@ export function decode(bytes: Uint8Array): Bundle {
         `'${name}' has shape [${entry.shape}], which does not match ${count} elements`,
       );
     }
-    // **사본을 뜬다.** 원본 바이트 배열이 8 바이트 정렬이 아닐 수 있고, 그때
-    // `new Float32Array(buffer, offset)` 은 그냥 던진다. 여기서 한 번 복사하면
-    // 정렬 걱정이 사라지고, 어차피 GPU 로 올리며 또 복사한다.
+    // **A copy is taken.** The original byte array may not be 8-byte aligned, and then
+    // `new Float32Array(buffer, offset)` simply throws. One copy here removes the
+    // alignment worry, and it copies again on the way to the GPU regardless.
     const values = new Float32Array(
       bytes.slice(bodyAt + begin, bodyAt + end).buffer,
     );
@@ -194,33 +197,36 @@ export function decode(bytes: Uint8Array): Bundle {
   return { tensors, metadata };
 }
 
-// ── 중첩 ────────────────────────────────────────────────────────────────────
+// ── Nesting ────────────────────────────────────────────────────────────────
 //
-// **교재의 관용구는 중첩이다** — `{model: …, opt: …, epoch: 3}` 를 통째로 저장한다.
-// 평평한 텐서 표만 되면 그 코드가 안 돈다.
+// **The textbook idiom is nested** — `{model: …, opt: …, epoch: 3}` saved whole. With a
+// flat tensor table alone, that code does not run.
 //
-// 파일 형식은 그대로다. 구조를 나무로 적어 `borch.tree` 라는 메타데이터 열쇠에 싣고,
-// 텐서는 지금까지처럼 평평하게 눕힌다. **파이썬 `_serialize.py` 와 같은 스킴이고,
-// 그것이 요점이다** — 두 벌로 두면 한쪽만 고쳐지고 그때 한쪽이 쓴 파일을 다른 쪽이
-// 못 읽는다. 나무가 없는 파일(남이 만든 safetensors)은 평평한 표로 준다.
+// The file format is unchanged. The structure is written as a tree and carried in a
+// metadata key called `borch.tree`, and the tensors are laid out flat as before. **It is
+// the same scheme as Python's `_serialize.py`, and that is the point** — two copies means
+// one gets fixed and then a file one side wrote cannot be read by the other. A file with
+// no tree (somebody else's safetensors) comes back as a flat table.
 
-/** `borch.tree` — 구조를 적는 자리. 파이썬 쪽과 **같은 글자여야 한다.** */
+/** `borch.tree` — where the structure is written. It has to be **the same characters**
+ *  as the Python side's. */
 const TREE_KEY = "borch.tree";
 
 /** What this format can hold. It is not pickle, so not any object at all. */
 export type Savable =
   | Tensor | null | boolean | number | string | Savable[] | { [key: string]: Savable };
 
-/** 나무의 마디. `T`=텐서 · `d`=사전 · `l`=배열 · `j`=그냥 값. */
+/** A node of the tree. `T`=tensor, `d`=dict, `l`=list, `j`=a plain value. */
 type Node =
   | { t: "T"; v: string }
   | { t: "d"; v: Record<string, Node> }
   | { t: "l"; v: Node[] }
   | { t: "j"; v: null | boolean | number | string };
 
-// 파이썬 쪽에는 `u`(튜플)도 있다. **JS 에는 그 자리가 없다** — 배열 하나뿐이라
-// 쓸 일이 없고, 읽을 때는 받아서 배열로 준다(아래). 안 그러면 파이썬이 쓴 파일에서
-// 튜플이 든 것만 조용히 못 읽힌다.
+// The Python side also has `u` (tuple). **JS has no such slot** — there is only the
+// array, so nothing writes one, and on reading it is accepted and handed back as an array
+// (below). Otherwise a file written by Python fails, quietly and only where it contains a
+// tuple.
 
 function flatten(
   obj: Savable, path: string[], tensors: Record<string, Tensor>, seen: Set<string>,
@@ -228,8 +234,8 @@ function flatten(
   if (obj instanceof Tensor) {
     const name = path.join(".") || "tensor";
     if (seen.has(name)) {
-      // 서로 다른 자리가 같은 이름으로 펴졌다. 하나가 다른 하나를 덮으면 되돌릴 때
-      // 두 자리가 같은 값을 갖는데, 그것은 예외보다 나쁘다.
+      // Two different places flattened to the same name. One overwriting the other gives
+      // both places the same value on restore, and that is worse than an exception.
       throw new RuntimeError(
         `'${name}' appears twice — the flattened names collide and cannot be stored.`);
     }
@@ -267,7 +273,8 @@ function unflatten(node: Node, tensors: Record<string, Tensor>): Savable {
     for (const [k, child] of Object.entries(node.v)) out[k] = unflatten(child, tensors);
     return out;
   }
-  // 파이썬이 쓴 튜플(`u`)도 여기로 온다 — JS 에는 그 자리가 없어 배열로 준다.
+  // A tuple written by Python (`u`) arrives here too — JS has no such slot, so it comes
+  // back as an array.
   if (node.t === "l" || (node as { t: string }).t === "u") {
     return (node.v as Node[]).map((child) => unflatten(child, tensors));
   }
@@ -317,7 +324,7 @@ export function load(bytes: Uint8Array): Savable {
   return unflatten(node, tensors);
 }
 
-/** 머리에 든 것이 우리가 아는 모양인가. 아니면 그 이름을 대고 던진다. */
+/** Whether what the header holds is a shape we know. Otherwise it throws, naming it. */
 function asEntry(name: string, value: unknown): Entry {
   const e = value as Partial<Entry> | null;
   if (
@@ -329,8 +336,8 @@ function asEntry(name: string, value: unknown): Entry {
     throw new RuntimeError(`'${name}' has a malformed header entry`);
   }
   if (e.dtype !== "F32") {
-    // **근사하지 않는다.** 남이 만든 F16·I64 파일을 float32 로 읽어 주면 값은
-    // 나오는데 그 값이 무엇인지는 아무도 모른다.
+    // **It does not approximate.** Reading somebody else's F16 or I64 file as float32
+    // produces values, and nobody knows what those values are.
     throw new RuntimeError(
       `'${name}' has dtype ${String(e.dtype)} — borch only reads F32`,
     );

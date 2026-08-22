@@ -44,7 +44,8 @@ function parse(spec: string, operands: number): Plan {
     }
   }
   if (rhs !== undefined) return { inputs, output: rhs.trim() };
-  // 출력을 안 적으면 **한 번만 나온 첨자를 알파벳 순으로** 남긴다. numpy 와 같은 규칙이다.
+  // With no output written, it keeps **the subscripts appearing once, in alphabetical
+  // order.** The same rule as numpy.
   const seen = new Map<string, number>();
   for (const term of inputs) {
     for (const ch of term) seen.set(ch, (seen.get(ch) ?? 0) + 1);
@@ -53,13 +54,13 @@ function parse(spec: string, operands: number): Plan {
   return { inputs, output: once.sort().join("") };
 }
 
-/** 한 항을 목표 첨자 순서로 돌리고, 남는 축은 접는다. */
+/** Rotates one term into the target subscript order and folds the axes left over. */
 function alignOne(t: Tensor, term: string, output: string): Tensor {
   const keep = [...term].filter((c) => output.includes(c));
   const drop = [...term].filter((c) => !output.includes(c));
   let cur = t;
   let letters = term;
-  // 뒤에서부터 접어야 앞쪽 축 번호가 안 밀린다.
+  // Folding from the back is what keeps the earlier axis numbers from shifting.
   for (const ch of [...drop].reverse()) {
     const at = letters.indexOf(ch);
     cur = cur.sumDim(at, false);
@@ -86,8 +87,8 @@ export function einsum(spec: string, ...operands: Tensor[]): Tensor {
   const [ta = "", tb = ""] = plan.inputs;
   const out = plan.output;
 
-  // 첨자를 셋으로 가른다: 양쪽에 있고 출력에도 있는 것(배치), 양쪽에 있고 출력에
-  // 없는 것(줄일 것), 한쪽에만 있는 것(남길 것).
+  // The subscripts split three ways: in both and in the output (batch), in both and not
+  // in the output (to be contracted), and in one side only (to be kept).
   const batch = [...ta].filter((c) => tb.includes(c) && out.includes(c));
   const shrink = [...ta].filter((c) => tb.includes(c) && !out.includes(c));
   const keepA = [...ta].filter((c) => !tb.includes(c) && out.includes(c));
@@ -118,7 +119,7 @@ function dimOf(t: Tensor, term: string, letter: string): number {
   return t.shape[term.indexOf(letter)] ?? 1;
 }
 
-/** 축을 목표 순서로 돌린다. */
+/** Rotates the axes into the target order. */
 function reorder(t: Tensor, term: string, want: readonly string[]): Tensor {
   const order = want.map((c) => term.indexOf(c));
   return order.length > 1 ? t.permute(order) : t;

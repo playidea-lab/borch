@@ -39,15 +39,21 @@ the committed `tests/golden.json`, so a docstring that cites one
 Those names stay Korean by decision — the reasoning is at the top of `tests/cases.py` — so
 this allowance is permanent, and the two checks below keep it small and honest.
 
-## What this file does **not** cover
+## `borch-ts/src` is covered the same way now
 
-`borch-ts/src` is checked by construct, not by directory: `throw new …Error(`. That is the
-shape of rule this file exists to warn against, and it is knowingly weak — sixteen Korean
-strings reach a user through a named constant, a `console.error`, a `||` fallback label
-and a table of wording, and not one of them is a throw site. It stays narrow because that
-source is mid-translation under another hand; it becomes a whole-directory rule in the
-same commit that finishes the pass, not before, since a check that is red on arrival gets
-skipped rather than obeyed.
+It used to be checked by construct rather than by directory — `throw new …Error(` — which
+is the shape of rule this file exists to warn against. It was knowingly weak: sixteen
+Korean strings reached a user through a named constant, a `console.error`, a `||` fallback
+label and a table of wording, and not one of them was a throw site. Twelve of the sixteen
+were in `device.ts` alone.
+
+It stayed narrow while that source was mid-translation, because **a check that is red on
+arrival gets skipped rather than obeyed.** The pass has landed, so the rule widens to the
+whole directory in the same commit — which is the shape that held on the Python side after
+an enumerated list lost five times.
+
+The allowance is the same one and for the same reason: a golden case name or a frozen
+golden value quoted from a comment is an identifier, not prose.
 """
 
 import json
@@ -77,7 +83,19 @@ QUOTED_CASE_NAMES = (
 # **A throw site is not only a `raise`.** Some places hand the wording to a helper that
 # throws inside it. Kept for the TypeScript side, where the whole-directory rule cannot
 # land yet.
-TS_THROW = re.compile(r"throw new \w*Error\(")
+# Golden case names and frozen golden values quoted from comments in `borch-ts/src`.
+# Each is checked against `tests/golden.json` below — as an exact key, a prefix of keys, or
+# a frozen string value. A brace expansion (`{RNN,LSTM,GRU}`) is expanded first, because it
+# is a notation for several names rather than a name.
+TS_QUOTED = (
+    "기대대로",
+    "inplace::짝에서::",
+    "edge::grad::maximum(동점)",
+    "container::BatchNorm/state_dict 열쇠",
+    "seq::{RNN,LSTM,GRU}/{출력,마지막상태}",
+)
+
+BRACES = re.compile(r"\{([^{}]*)\}")
 
 
 def _without_quoted_names(text):
@@ -166,25 +184,83 @@ def test_the_allowance_is_used():
         "nothing uses is a hole waiting for something else.")
 
 
-def test_the_typescript_throw_sites_are_english():
-    """The narrow half, over `borch-ts/src`, kept until the whole-directory rule can land.
+def _ts_files():
+    return sorted((ROOT / "borch-ts" / "src").rglob("*.ts"))
+
+
+def _without_ts_quotes(text):
+    for name in TS_QUOTED:
+        text = text.replace(name, "")
+    return text
+
+
+def test_the_typescript_source_carries_no_korean():
+    """Every line of `borch-ts/src`, not the lines a construct thought were interesting.
 
     An error message is what an English reader meets **the first time anything breaks**.
     Even after the documentation and the site were entirely English, 81% of the messages
     were Korean — the largest Korean surface left, at 303 throw sites across the three
-    libraries.
+    libraries. The sixteen this directory still had at the end reached a user through five
+    constructs and no throw site, which is why the rule is the directory rather than the
+    construct.
     """
     bad = []
-    for path in sorted((ROOT / "borch-ts" / "src").glob("*.ts")):
-        for line, site in _sites(path.read_text(), TS_THROW):
-            if HANGUL.search(site):
-                first = HANGUL.search(site)
-                snippet = site[max(0, first.start() - 30):first.start() + 40]
-                bad.append(f"{path.relative_to(ROOT)}:{line}  …{snippet.strip()}…")
+    for path in _ts_files():
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if HANGUL.search(_without_ts_quotes(line)):
+                bad.append(f"{path.relative_to(ROOT)}:{number}  {line.strip()[:90]}")
     assert not bad, (
-        f"{len(bad)} thrown messages are Korean. They are the surface a user meets first "
-        "and have to be English.\n  " + "\n  ".join(bad[:40])
+        f"{len(bad)} lines in borch-ts/src carry Korean. It is English throughout — "
+        "messages, comments and docstrings alike.\n  " + "\n  ".join(bad[:40])
         + (f"\n  … and {len(bad) - 40} more" if len(bad) > 40 else ""))
+
+
+def _expand_braces(name):
+    """`a{x,y}b` into `axb` and `ayb`. Several groups expand together."""
+    out = [name]
+    while any(BRACES.search(n) for n in out):
+        grown = []
+        for n in out:
+            m = BRACES.search(n)
+            if m is None:
+                grown.append(n)
+                continue
+            grown += [n[:m.start()] + part + n[m.end():] for part in m.group(1).split(",")]
+        out = grown
+    return out
+
+
+def test_the_quoted_typescript_names_exist():
+    """An allowance that names something absent stops being an allowance.
+
+    A quoted name counts as present when it is a key, the start of one, the end of one, or
+    a frozen string value — comments cite case families by prefix, and one of them cites
+    the verdict word the golden froze rather than a case at all.
+    """
+    doc = json.loads((ROOT / "tests" / "golden.json").read_text())["cases"]
+    values = {v.get("value") for v in doc.values()
+              if isinstance(v, dict) and v.get("kind") == "string"}
+    missing = []
+    for quoted in TS_QUOTED:
+        for name in _expand_braces(quoted):
+            if name in values:
+                continue
+            if any(k == name or k.startswith(name) or k.endswith(name) for k in doc):
+                continue
+            missing.append(name)
+    assert not missing, (
+        "these are listed as quoted golden names and are neither keys nor frozen values in "
+        f"tests/golden.json: {missing}. Either the case was renamed — in which case fix the "
+        "comment citing it — or the allowance is stale.")
+
+
+def test_the_typescript_allowance_is_used():
+    """Every entry earns its place, or it is dead permission."""
+    text = "\n".join(p.read_text() for p in _ts_files())
+    unused = [name for name in TS_QUOTED if name not in text]
+    assert not unused, (
+        f"listed as allowed and cited nowhere in borch-ts/src: {unused}. Remove them — an "
+        "allowance nothing uses is a hole waiting for something else.")
 
 
 # ── the one sentence three implementations have to share ──────────────

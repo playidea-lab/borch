@@ -16,12 +16,12 @@ import { NotImplementedError, RuntimeError } from "./errors.js";
 import { device, makeNode, Tensor } from "./tensor.js";
 
 /**
- * `lgamma` — 두 특수 함수가 공통으로 쓴다. 램초스 근사다.
+ * `lgamma` — shared by two special functions. The Lanczos approximation.
  *
- * **반사식을 재귀로 쓰면 안 된다.** WGSL 은 함수의 재귀를 금지하고, 셰이더를 굽는
- * 자리에서 `cyclic dependency found` 로 멈춘다 — 값이 틀린 것이 아니라 커널이
- * 아예 안 만들어진다. 그래서 근사 몸통(`lgammaCore_`)과 반사(`lgamma_`)를
- * 두 함수로 갈랐다.
+ * **The reflection formula must not be written recursively.** WGSL forbids function
+ * recursion and stops while baking the shader with `cyclic dependency found` — not a wrong
+ * value but no kernel at all. So the approximation body (`lgammaCore_`) and the reflection
+ * (`lgamma_`) are two functions.
  */
 const LGAMMA = `
 fn lgammaCore_(x: f32) -> f32 {
@@ -39,14 +39,16 @@ fn lgammaCore_(x: f32) -> f32 {
 }
 fn lgamma_(x: f32) -> f32 {
   if (x < 0.5) {
-    // 반사식. 작은 쪽은 근사가 안 맞아서 큰 쪽으로 옮겨 센다.
+    // The reflection formula. The approximation does not hold on the small side, so it
+    // is moved to the large side and computed there.
     return log(3.14159265358979 / abs(sin(3.14159265358979 * x))) - lgammaCore_(1.0 - x);
   }
   return lgammaCore_(x);
 }`;
 
 /**
- * 되풀이 + 점근으로 `ψ^(n)`. `n` 이 상수라 계승을 호스트에서 미리 접어 넣는다.
+ * `ψ^(n)` by recurrence plus asymptotics. `n` is a constant, so the factorials are folded
+ * in on the host in advance.
  *
  *     ψ^(n)(x) = ψ^(n)(x+1) + (−1)^(n+1) n! / x^(n+1)
  *     ψ^(n)(x) ≈ (−1)^(n+1) [ (n−1)!/xⁿ + n!/(2x^(n+1)) + Σ B_2k … ]
@@ -74,7 +76,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   if (gid >= ${count}u) { return; }
   var y = A[gid];
   var acc = 0.0;
-  // **큰 쪽으로 민다.** 점근식은 작은 x 에서 안 맞는다.
+  // **Pushed to the large side.** The asymptotic form does not hold at small x.
   for (var i = 0u; i < 64u; i = i + 1u) {
     if (y >= 20.0) { break; }
     acc = acc + ${sign}.0 * ${fact(n).toExponential(12)} / pow(y, ${n + 1}.0);
@@ -88,10 +90,10 @@ ${tail}
 }
 
 /**
- * 정규화된 하부 불완전 감마 `P(a, x)`.
+ * The regularised lower incomplete gamma `P(a, x)`.
  *
- * **한 식으로 못 덮는다** — `x < a+1` 은 급수, 그 밖은 연분수다. 반대로 쓰면 항이
- * 서로 지워 자릿수를 잃는다.
+ * **One expression cannot cover it** — `x < a+1` is the series and the rest is the
+ * continued fraction. The other way round, the terms cancel and digits are lost.
  */
 function igammaSource(count: number): string {
   const stride = Math.min(Math.max(1, Math.ceil(count / 64)), 65535) * 64;
@@ -121,7 +123,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     Out[gid] = total * head;
     return;
   }
-  // 연분수 — 상부 Q 를 구하고 1 에서 뺀다.
+  // The continued fraction — it computes the upper Q and subtracts from 1.
   let tiny = 1e-30;
   var b = x + 1.0 - a;
   var c = 1.0 / tiny;
@@ -143,7 +145,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 }`;
 }
 
-/** `dP/dx = x^(a−1)·e^(−x) / Γ(a)`. 기울기가 이쪽에만 있다. */
+/** `dP/dx = x^(a−1)·e^(−x) / Γ(a)`. The gradient exists on this side only. */
 function igammaSlopeSource(count: number): string {
   const stride = Math.min(Math.max(1, Math.ceil(count / 64)), 65535) * 64;
   return `
@@ -178,9 +180,10 @@ export function igamma(a: Tensor, x: Tensor): Tensor {
   dev.run1d(dev.pipeline(`igamma:${n}`, () => igammaSource(n)),
             [a.buffer, x.buffer, out], n);
   return makeNode(out, x.shape, [a, x], (g) => {
-    // **첫 인자로는 안 미분한다** — torch 도 닫힌 꼴이 없어 거절한다(실측).
-    // 종류는 `NotImplementedError` 다. torch 가 그 종류로 내고, "아직 없다" 와
-    // "부른 쪽이 틀렸다" 는 잡는 코드가 다르다.
+    // **It does not differentiate with respect to the first argument** — torch has no
+    // closed form for it either and refuses (measured). The kind is `NotImplementedError`.
+    // torch raises that kind, and "it does not exist yet" and "the caller was wrong" are
+    // caught by different code.
     if (a.requiresGrad) {
       throw new NotImplementedError(
         "the derivative for 'igamma: input' is not implemented.");
@@ -204,7 +207,7 @@ export function polygamma(n: number, x: Tensor): Tensor {
   if (k < 0) {
     throw new RuntimeError("polygamma(n, x) does not support negative n.");
   }
-  // `n = 0` 은 이미 단항 표에 있다 — 같은 식을 두 벌로 두지 않는다.
+  // `n = 0` is already in the unary table — the same expression is not kept twice.
   if (k === 0) return x.digamma();
   const dev = device();
   const count = x.size;
@@ -212,7 +215,8 @@ export function polygamma(n: number, x: Tensor): Tensor {
   dev.run1d(dev.pipeline(`polygamma:${k}:${count}`,
                          () => polygammaSource(k, count)),
             [x.buffer, out], count);
-  // 미분은 다음 차수다(실측: `polygamma(1)` 의 기울기가 `polygamma(2)`).
+  // The derivative is the next order (measured: `polygamma(1)`'s gradient is
+  // `polygamma(2)`).
   return makeNode(out, x.shape, [x],
                   (g) => [g.mul(polygamma(k + 1, x).detach())],
                   "PolygammaBackward0");
