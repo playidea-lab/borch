@@ -329,42 +329,65 @@ def test_the_three_sides_look_for_one_sentence():
         f"{said!r}")
 
 
-# The prefix `golden.ts` prints in front of each case name, and the prefix `run.py` strips
-# to recover it. Two files, two languages, one string.
-TRACE_SITES = (
-    ("borch-ts/test/golden.ts", re.compile(r'console\.debug\(`(\[[^\]`]*\] )\$\{name\}`\)')),
-    ("borch-ts/test/run.py", re.compile(r'^_STARTED = "([^"]*)"', re.M)),
-)
+# A console prefix a browser page prints and a runner keeps its lines by. Discovered
+# rather than listed: a third pair should be held the moment it is written, not when
+# somebody remembers to add it here.
+TS_EMITS = re.compile(r"console\.\w+\(\s*`(\[[^\]`]+\])")
+PY_WATCHES = re.compile(r'startswith\(\s*"(\[[^\]"]+\])|^\s*_\w+\s*=\s*"(\[[^\]"]+\])',
+                        re.M)
+BROWSER_TEST = ROOT / "borch-ts" / "test"
 
 
-def test_the_two_sides_of_the_hang_trace_spell_it_the_same():
+def _prefix_sites():
+    """`(emitted, watched)`, each `{prefix: [files]}`."""
+    emitted, watched = {}, {}
+    for path in sorted(BROWSER_TEST.glob("*.ts")):
+        for found in TS_EMITS.finditer(path.read_text(encoding="utf-8")):
+            emitted.setdefault(found.group(1), []).append(path.name)
+    for path in sorted(BROWSER_TEST.glob("*.py")):
+        for found in PY_WATCHES.finditer(path.read_text(encoding="utf-8")):
+            watched.setdefault(found.group(1) or found.group(2), []).append(path.name)
+    return emitted, watched
+
+
+def test_every_console_prefix_is_printed_on_one_side_and_read_on_the_other():
     """**A wording contract whose failure is silence, not a mismatch.**
 
-    `golden.ts` prints `[golden] <name>` as it starts each case and `run.py` keeps the
-    lines beginning with that prefix, so that when the wait times out it can name the case
-    that never finished. Nothing else uses those lines.
+    Two of these exist. `golden.ts` prints `[golden] <name>` as it starts each case and
+    `run.py` keeps the lines beginning with that prefix, so that a timeout can name the
+    case that never finished. `accuracy.ts` prints `[accuracy] epoch …` and `accuracy.py`
+    keeps those, so that a run measured over hours leaves something behind when it dies
+    partway. Nothing else uses either set of lines.
 
     So a prefix changed on one side alone does not fail: the filter matches nothing, the
-    trace is empty, and every green run stays green. It only shows on the day something
-    hangs — and what shows then is `(not one of them started)`, which reads as the runner
-    never having started rather than as a broken filter. The line it replaces is the one
-    that keeps a hang from being searched for through 1,199 lines of scrollback.
+    trace is empty, and every green run stays green. It shows only on the day something
+    hangs or dies — and what shows then is `(not one of them started)` or an empty
+    progress log, which reads as the runner never having started rather than as a broken
+    filter.
 
-    This is exactly the seam translation walks into: the prefix was `[골든] `, it is
-    `[golden] ` now, and the two halves live in different files and different languages.
+    This is exactly the seam translation walks into: `[골든] ` became `[golden] ` and
+    `[accuracy] 에폭 ` became `[accuracy] epoch `, in different files, in different
+    languages, on different days.
+
+    **The pairs are discovered rather than listed.** A hard-coded table would hold the two
+    that exist and say nothing about a third — and the whole failure mode here is a
+    contract nobody wrote down.
     """
-    found = {}
-    for rel, pattern in TRACE_SITES:
-        hits = pattern.findall((ROOT / rel).read_text(encoding="utf-8"))
-        assert hits, (
-            f"{rel} no longer states the trace prefix this reads. It is one half of a "
-            "wording contract; matching nothing here would pass in silence, which is the "
-            "failure mode this test exists for.")
-        assert len(set(hits)) == 1, f"{rel} states {sorted(set(hits))}"
-        found[rel] = hits[0]
+    emitted, watched = _prefix_sites()
+    assert emitted, (
+        "no console prefix was found in borch-ts/test/*.ts — the pattern stopped matching, "
+        "and a check that finds no pairs holds no contracts while passing.")
 
-    printed = found["borch-ts/test/golden.ts"]
-    watched = found["borch-ts/test/run.py"]
-    assert printed == watched, (
-        f"golden.ts prints {printed!r} and run.py watches for {watched!r} — the hang trace "
-        "collects nothing, and a timeout will say no case ever started.")
+    unread = {k: v for k, v in emitted.items() if k not in watched}
+    assert not unread, (
+        "a page prints these prefixes and no runner keeps their lines:\n  "
+        + "\n  ".join(f"{k} from {', '.join(v)}" for k, v in sorted(unread.items()))
+        + "\n\n  Either the runner's spelling moved, or the lines are being printed for "
+          "nobody.")
+
+    unprinted = {k: v for k, v in watched.items() if k not in emitted}
+    assert not unprinted, (
+        "these runners keep lines by a prefix no page prints:\n  "
+        + "\n  ".join(f"{k} in {', '.join(v)}" for k, v in sorted(unprinted.items()))
+        + "\n\n  The filter matches nothing, so the trace is empty and every run stays "
+          "green. It shows on the day something hangs.")

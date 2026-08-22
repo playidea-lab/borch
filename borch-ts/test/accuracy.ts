@@ -1,15 +1,16 @@
 /**
- * CIFAR-10 으로 **진짜 정확도**를 잰다.
+ * **Real accuracy**, measured on CIFAR-10.
  *
- * `tests/browser/bench.py` 의 `train_eval` 과 **같은 잣대**다 — 같은 모델, 같은
- * 옵티마이저(SGD lr 0.05, 모멘텀 0.9, 가중치 감쇠 5e-4), 같은 배치(128), 같은
- * 정규화, 같은 늘리기(자르기 32·채움 4·좌우뒤집기 0.5).
+ * **The same yardstick** as `train_eval` in `tests/browser/bench.py` — same model, same
+ * optimizer (SGD lr 0.05, momentum 0.9, weight decay 5e-4), same batch (128), same
+ * normalisation, same augmentation (crop 32 with padding 4, horizontal flip 0.5).
  *
- * ## 학습 정확도와 시험 정확도를 **둘 다** 잰다
+ * ## Both the training accuracy **and** the test accuracy
  *
- * 학습 정확도만 보면 늘 오르므로 잘 되는 것처럼 보인다. 둘의 **차이**가 과적합이고,
- * 늘리기가 줄이라고 있는 것이 그 차이다. 시험 정확도만 봐도 안 된다 — 안 오를 때
- * 아직 덜 배운 것인지 이미 외운 것인지가 안 갈린다.
+ * The training accuracy always rises, so on its own it looks like things are going well.
+ * The **gap** between the two is the overfitting, and that gap is what augmentation is
+ * there to close. The test accuracy alone will not do either — when it stops rising, that
+ * alone cannot separate not having learned enough from having memorised.
  */
 
 import { Device } from "../src/device.js";
@@ -19,10 +20,12 @@ import { device, keepAlive, noGrad, Tensor } from "../src/tensor.js";
 import { augmentBatch, normalizeBatch } from "../src/vision.js";
 import { ResNet18 } from "./bench.js";
 
-/** CIFAR-10 의 통상값. 정규화를 빼면 첫 에폭이 눈에 띄게 느리게 붙는다. */
+/** CIFAR-10's usual figures. Without the normalisation the first epoch settles
+ * noticeably more slowly. */
 const CIFAR_MEAN = [0.4914, 0.4822, 0.4465];
 const CIFAR_STD = [0.2470, 0.2435, 0.2616];
-/** 한 장이 3073 바이트 — 라벨 1 에 R·G·B 가 1024 씩. 그 순서가 곧 (3,32,32) 다. */
+/** One picture is 3073 bytes — 1 label and 1024 each of R, G and B. That order is
+ * exactly (3,32,32). */
 const RECORD = 3073;
 const SIDE = 32;
 const PIXELS = SIDE * SIDE;
@@ -33,11 +36,11 @@ export interface Split {
   readonly n: number;
 }
 
-/** 바이너리 한 덩이를 `(x, y)` 로 푼다. 값은 [0,1] 로 나눠 둔다. */
+/** Unpack one binary blob into `(x, y)`. The values are divided into [0,1]. */
 export function decodeCifar(raw: Uint8Array): Split {
   if (raw.length % RECORD !== 0) {
     throw new Error(
-      `CIFAR-10 바이너리가 아니다 — ${raw.length} 바이트는 ${RECORD} 의 배수가 아니다`,
+      `not a CIFAR-10 binary — ${raw.length} bytes is not a multiple of ${RECORD}`,
     );
   }
   const n = raw.length / RECORD;
@@ -53,8 +56,9 @@ export function decodeCifar(raw: Uint8Array): Split {
   return { x, y, n };
 }
 
-/** 고른 장들을 모아 모델에 넣을 모양으로. 늘리기는 **정규화보다 먼저** 한다 —
- * 가장자리를 0 으로 채운 뒤 정규화해야 그 0 이 다른 화소와 같은 자로 재진다. */
+/** Gather the chosen pictures into the shape the model takes. Augmentation comes
+ * **before** normalisation — pad the border with zeros first and those zeros are then
+ * measured by the same ruler as every other pixel. */
 function prepare(
   split: Split, picks: Int32Array | number[], augment: boolean,
 ): Float32Array {
@@ -73,10 +77,12 @@ function prepare(
 }
 
 /**
- * 맞힌 비율. **학습에 안 쓴 데이터로** 재는 것이 이 함수의 전부다.
+ * The share that was right. Measuring it **on data the training never saw** is the whole
+ * of this function.
  *
- * 평가 모드로 두는 것이 조건이다 — BatchNorm 이 학습 통계를 쓰면 배치 구성에 따라
- * 값이 흔들려서, 재는 것이 정확도가 아니라 배치 운이 된다.
+ * Being in evaluation mode is the condition — with BatchNorm using the training
+ * statistics, the figure moves with how the batch happens to be made up, and what is
+ * measured is the luck of the batch rather than the accuracy.
  */
 async function accuracy(
   model: nn.Module, split: Split, batch = 250,
@@ -109,7 +115,7 @@ async function accuracy(
   return right / split.n;
 }
 
-/** 섞기. 씨앗을 박아 두 조건이 같은 차례를 보게 한다. */
+/** The shuffle. The seed is pinned so both conditions see the same order. */
 function shuffled(n: number, seed: number): Int32Array {
   const order = new Int32Array(n);
   for (let i = 0; i < n; i++) order[i] = i;
@@ -178,11 +184,16 @@ export async function trainEval(
       loss: Math.round(last * 10000) / 10000,
       seconds: Math.round(seconds * 10) / 10,
     });
-    // 긴 측정은 도중에 죽으면 반환값이 통째로 사라진다. 흘려보낸 것만 남는다.
-    console.log(`[accuracy] 에폭 ${e + 1}/${epochs} 늘리기=${augment} `
-      + `학습 ${(rows[rows.length - 1]?.train ?? 0).toFixed(3)} `
-      + `시험 ${(rows[rows.length - 1]?.test ?? 0).toFixed(3)} `
-      + `${seconds.toFixed(1)}초`);
+    // A long measurement that dies partway loses its return value entirely. What was let
+    // out along the way is what remains.
+    //
+    // **The `[accuracy]` prefix is a contract with `accuracy.py`**, which keeps the console
+    // lines that begin with it. Change one side alone and the progress goes quietly
+    // missing; `test_messages.py` holds the two spellings together.
+    console.log(`[accuracy] epoch ${e + 1}/${epochs} augment=${augment} `
+      + `train ${(rows[rows.length - 1]?.train ?? 0).toFixed(3)} `
+      + `test ${(rows[rows.length - 1]?.test ?? 0).toFixed(3)} `
+      + `${seconds.toFixed(1)}s`);
   }
   return rows;
 }
@@ -192,23 +203,25 @@ export async function report(
 ): Promise<string> {
   const conditions = only === undefined ? [false, true] : [only];
   const lines: string[] = [
-    `어댑터: ${Device.adapterInfo}`,
-    `ResNet-18(CIFAR) · 정확도`,
-    `학습 ${train.n}장 / 시험 ${test.n}장, 배치 128, ${epochs} 에폭`,
+    `adapter: ${Device.adapterInfo}`,
+    `ResNet-18 (CIFAR) · accuracy`,
+    `${train.n} training pictures / ${test.n} test, batch 128, ${epochs} epochs`,
   ];
   for (const augment of conditions) {
     const rows = await trainEval(train, test, { epochs, augment });
-    lines.push(`\n늘리기 ${augment ? "켬" : "끔"}`);
+    lines.push(`\naugmentation ${augment ? "on" : "off"}`);
     for (const r of rows) {
-      lines.push(`  에폭 ${String(r.epoch).padStart(2)}  `
-        + `학습 ${r.train.toFixed(3)}  시험 ${r.test.toFixed(3)}  `
-        + `손실 ${r.loss.toFixed(4)}  ${r.seconds.toFixed(1)}초`);
+      lines.push(`  epoch ${String(r.epoch).padStart(2)}  `
+        + `train ${r.train.toFixed(3)}  test ${r.test.toFixed(3)}  `
+        + `loss ${r.loss.toFixed(4)}  ${r.seconds.toFixed(1)}s`);
     }
     const best = rows.reduce((a, b) => (b.test > a.test ? b : a), rows[0]!);
-    lines.push(`  가장 좋은 시험 정확도 ${(best.test * 100).toFixed(1)}% (에폭 ${best.epoch})`);
+    lines.push(
+      `  best test accuracy ${(best.test * 100).toFixed(1)}% (epoch ${best.epoch})`);
   }
   return lines.join("\n");
 }
 
-/** 파라미터를 구역 밖에서 살려 두는 통로 — 러너가 모델을 밖에서 세운다. */
+/** The way to keep parameters alive outside a scope — the runner stands the model up
+ * from outside. */
 export { keepAlive };
