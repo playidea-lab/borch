@@ -16,6 +16,7 @@ import sys
 
 import run as runner
 from launch import browser as browser_of
+from verdict import verdict
 
 PAGE = "/borch-ts/test/readme.html"
 TIMEOUT_MS = 300_000
@@ -51,7 +52,10 @@ def main(argv):
         return 1
     print(f"어댑터: {result.get('adapter', '(모름)')}")
     print(result["text"])
-    return 0 if "그대로 돌고" in result["text"] else 1
+    # **이 줄이 `"그대로 돌고" in text` 였다.** 그 낱말은 두 예시의 성공 문장 양쪽에
+    # 들어 있어서, 첫 예시가 실패하고 LBFGS 만 통과해도 0 이 나갔다 — 손실이 안
+    # 내려가는 예시를 문서에 그대로 둔 채로.
+    return verdict(result, "README 예시")
 
 
 if __name__ == "__main__":

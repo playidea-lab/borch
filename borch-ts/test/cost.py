@@ -23,6 +23,7 @@ import sys
 
 import run as runner
 from launch import browser as browser_of
+from verdict import verdict
 
 PAGE = "/borch-ts/test/cost.html"
 TIMEOUT_MS = 600_000
@@ -58,8 +59,9 @@ def main(argv):
         print(f"**비용 점검이 터졌다**\n{result['error']}", file=sys.stderr)
         return 1
     print(result["text"])
-    # 세는 것은 페이지 쪽 한 군데다 — 두 곳에서 세면 갈릴 때 어느 쪽이 맞는지 모른다.
-    return 0 if "전부 통과" in result["text"] else 1
+    # 판정은 검사들의 상태에서 나온다. 여기와 페이지가 같은 글을 서로 다른 낱말로
+    # 훑고 있었다 — `verdict.py` 가 그 셋을 적어 두었다.
+    return verdict(result, "비용 검사")
 
 
 if __name__ == "__main__":

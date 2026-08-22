@@ -10,8 +10,8 @@
 
     const out = document.getElementById("out");
     try {
-      const text = await report();
-      window.__borchReadme = { text, adapter: Device.adapterInfo };
+      const { text, checks } = await report();
+      window.__borchReadme = { text, checks, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
       // **예시가 터지는 것이 이 페이지가 잡으려는 것이다.** 조용히 넘기면 의미가 없다.

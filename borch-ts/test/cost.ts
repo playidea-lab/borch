@@ -52,6 +52,15 @@ interface Check {
   readonly ok: boolean;
   readonly note: string;
 }
+/**
+ * 이 보고의 정본은 `checks` 다. `text` 는 사람이 읽는 그림자다.
+ *
+ * **러너가 문장을 훑어 통과를 판정하고 있었다.** 그 방식은 문구가 바뀌면 조용히
+ * 답을 바꾸고, `readme.py` 에서는 실제로 그랬다 — 두 예시 중 하나만 통과해도
+ * 찾던 낱말이 다른 줄에 남아 있어 0 을 냈다. 상태를 그대로 넘기면 러너가 셀 수
+ * 있고, 무엇이 실패했는지도 제 입으로 말한다.
+ */
+export interface Report { text: string; checks: Check[] }
 
 /**
  * 재는 데 쓰는 모델. **작아야 한다** — 소프트웨어 어댑터에서도 도는 것이 이 검사의
@@ -82,7 +91,7 @@ const EXPECT = {
   submits: 1,
 };
 
-export async function report(): Promise<string> {
+export async function report(): Promise<Report> {
   const checks: Check[] = [];
   const want = (name: string, ok: boolean, note = ""): void => {
     checks.push({ name, ok, note });
@@ -284,5 +293,5 @@ export async function report(): Promise<string> {
   lines.push(bad.length
     ? `**${bad.length}건이 갈렸다.**`
     : `비용 검사 ${checks.length}건 전부 통과`);
-  return lines.join("\n");
+  return { text: lines.join("\n"), checks };
 }

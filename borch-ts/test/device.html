@@ -10,9 +10,9 @@
 
     const out = document.getElementById("out");
     try {
-      const text = await report();
+      const { text, checks } = await report();
       window.__borchDevice = {
-        text, adapter: Device.adapterInfo, features: Device.adapterFeatures,
+        text, checks, adapter: Device.adapterInfo, features: Device.adapterFeatures,
       };
       out.textContent = text;
     } catch (err) {

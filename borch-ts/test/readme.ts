@@ -12,7 +12,19 @@
 
 import { init, keepAlive, nn, optim, scope, Tensor } from "../src/index.js";
 
-export async function report(): Promise<string> {
+interface Check { name: string; ok: boolean; note: string }
+
+/**
+ * 이 보고의 정본은 `checks` 다. `text` 는 사람이 읽는 그림자다.
+ *
+ * **이 파일이 그 차이를 가장 비싸게 보여준 자리다.** `readme.py` 는 통과를
+ * `"그대로 돌고" in text` 로 판정했는데, 그 낱말은 두 예시의 성공 문장 **양쪽**에
+ * 들어 있다. 그래서 첫 예시가 실패하고 LBFGS 만 통과해도 낱말은 남아 있었고,
+ * 러너는 0 을 냈다 — 손실이 안 내려가는 예시를 문서에 그대로 둔 채로.
+ */
+export interface Report { text: string; checks: Check[] }
+
+export async function report(): Promise<Report> {
   await init();
 
   const model = new nn.Sequential(
@@ -69,12 +81,23 @@ export async function report(): Promise<string> {
   const after = await scope(async () => await crit.call(lb.call(x), y).item());
   const lbOk = Number.isFinite(before) && Number.isFinite(after) && after < before;
 
-  return [
-    `README 예시 — 손실 ${seen.map((v) => v.toFixed(4)).join(" → ")}`,
-    ok ? "예시가 적힌 그대로 돌고, 손실이 내려간다"
-       : "**예시가 돌기는 하는데 손실이 안 내려간다** — 보여줄 것이 못 된다",
-    `README LBFGS 예시 — 손실 ${before.toFixed(4)} → ${after.toFixed(4)}`,
-    lbOk ? "LBFGS 예시도 적힌 그대로 돌고, 한 스텝에 손실이 내려간다"
-         : "**LBFGS 예시가 파라미터를 안 움직인다** — 최적화하는 것과 손실이 보는 것이 다르다",
-  ].join("\n");
+  const checks: Check[] = [
+    {
+      name: "README 예시가 적힌 그대로 돌고, 손실이 내려간다",
+      ok,
+      note: `손실 ${seen.map((v) => v.toFixed(4)).join(" → ")}`,
+    },
+    {
+      name: "README LBFGS 예시가 한 스텝에 손실을 내린다",
+      ok: lbOk,
+      note: `손실 ${before.toFixed(4)} → ${after.toFixed(4)}`,
+    },
+  ];
+  const lines = checks.map((c) =>
+    `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);
+  const failed = checks.filter((c) => !c.ok);
+  lines.push(failed.length === 0
+    ? `README 예시 ${checks.length}건 전부 통과`
+    : `**${failed.length}건 실패** / ${checks.length}건`);
+  return { text: lines.join("\n"), checks };
 }

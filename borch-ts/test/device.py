@@ -17,6 +17,7 @@ import sys
 
 import run as runner
 from launch import browser as browser_of
+from verdict import verdict
 
 PAGE = "/borch-ts/test/device.html"
 TIMEOUT_MS = 300_000
@@ -61,7 +62,7 @@ def main(argv):
     print(result["text"])
     # 실패 건수를 세는 것은 페이지 쪽이다. 여기서는 그 판정을 그대로 받는다 —
     # 두 곳에서 세면 두 셈이 갈릴 때 어느 쪽이 맞는지 알 방법이 없다.
-    return 0 if "전부 통과" in result["text"] else 1
+    return verdict(result, "장치 관리")
 
 
 if __name__ == "__main__":

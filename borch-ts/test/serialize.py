@@ -17,6 +17,7 @@ import sys
 
 import run as runner
 from launch import browser as browser_of
+from verdict import verdict
 
 PAGE = "/borch-ts/test/serialize.html"
 TIMEOUT_MS = 300_000
@@ -56,8 +57,7 @@ def main(argv):
         return 1
     print(f"어댑터: {result.get('adapter', '(모름)')}")
     print(result["text"])
-    ok = "전부 통과" in result["text"]
-    if not (ok and cross_language(result.get("sample"))):
+    if verdict(result, "체크포인트") or not cross_language(result.get("sample")):
         return 1
     return 0 if cross_tree(result.get("nested")) else 1
 

@@ -27,6 +27,16 @@ interface Check {
   note: string;
 }
 
+/**
+ * 이 보고의 정본은 `checks` 다. `text` 는 사람이 읽는 그림자다.
+ *
+ * **러너가 문장을 훑어 통과를 판정하고 있었다.** 그 방식은 문구가 바뀌면 조용히
+ * 답을 바꾸고, `readme.py` 에서는 실제로 그랬다 — 두 예시 중 하나만 통과해도
+ * 찾던 낱말이 다른 줄에 남아 있어 0 을 냈다. 상태를 그대로 넘기면 러너가 셀 수
+ * 있고, 무엇이 실패했는지도 제 입으로 말한다.
+ */
+export interface Report { text: string; checks: Check[] }
+
 const checks: Check[] = [];
 
 function want(name: string, ok: boolean, note = ""): void {
@@ -49,7 +59,7 @@ function same(a: Float32Array, b: Float32Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-export async function report(): Promise<string> {
+export async function report(): Promise<Report> {
   // ── 붙기 전 ────────────────────────────────────────────────────────────
   // **순서가 중요하다.** `init()` 뒤에 물으면 안 붙은 상태를 영영 못 본다.
   want("init 전 currentDevice() 는 null", currentDevice() === null);
@@ -146,5 +156,5 @@ export async function report(): Promise<string> {
       ? `장치 관리 ${checks.length}건 전부 통과`
       : `**${failed.length}건 실패** / ${checks.length}건`,
   );
-  return lines.join("\n");
+  return { text: lines.join("\n"), checks };
 }

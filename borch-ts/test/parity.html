@@ -10,8 +10,8 @@
 
     const out = document.getElementById("out");
     try {
-      const text = await report();
-      window.__borchParity = { text, adapter: Device.adapterInfo };
+      const { text, checks } = await report();
+      window.__borchParity = { text, checks, adapter: Device.adapterInfo };
       out.textContent = text;
     } catch (err) {
       // 터지는 것도 결과다 — 조용히 넘기면 러너가 영원히 기다린다.
