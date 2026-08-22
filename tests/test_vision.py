@@ -693,3 +693,71 @@ def test_affine_refuses_a_scale_that_is_not_positive():
     with pytest.raises(ValueError, match="positive"):
         V.transforms.functional.affine(np.zeros((4, 4, 3), dtype=np.float32),
                                        0, [0, 0], 0.0, [0, 0])
+
+
+# --- the other three that resample ------------------------------------------
+
+
+def test_gaussian_blur_reflects_the_border_rather_than_zeroing_it():
+    """A zero border darkens the edge of every blurred picture, which reads as a
+    vignette rather than as a mistake. Reflected, a picture of one constant value comes
+    back **exactly that value everywhere** — which is the cheapest thing that can tell
+    the two apart."""
+    flat = np.full((7, 7, 3), 0.6, dtype=np.float32)
+    out = V.transforms.functional.gaussian_blur(flat, [3, 3], [1.0, 1.0])
+    assert np.allclose(out, 0.6), "the border is darker than the middle"
+
+
+def test_gaussian_blur_refuses_an_even_kernel():
+    """An even kernel has no centre pixel to sit on, so the picture would move by half
+    a pixel — a blur that also shifts."""
+    img = np.zeros((5, 5, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="odd"):
+        V.transforms.functional.gaussian_blur(img, [2, 3])
+    with pytest.raises(ValueError, match="positive"):
+        V.transforms.functional.gaussian_blur(img, [3, 3], [0.0, 1.0])
+
+
+def test_gaussian_blur_takes_its_sizes_width_first():
+    """`kernel_size` and `sigma` are **(x, y)**, like `get_image_size` and unlike every
+    shape in this file. A picture blurred hard across and barely down has to come out
+    smeared horizontally, and swapping the pair is invisible on a square kernel."""
+    img = np.zeros((9, 9, 1), dtype=np.float32)
+    img[4, 4] = 1.0
+    out = V.transforms.functional.gaussian_blur(img, [9, 9], [3.0, 0.3])
+    across = out[4, :, 0].std()
+    down = out[:, 4, 0].std()
+    assert across < down, (
+        "a large sigma_x should spread the point sideways, flattening the row — "
+        f"row spread {across:.4f}, column spread {down:.4f}")
+
+
+def test_perspective_with_the_corners_unmoved_changes_nothing_much():
+    """**The identity is the case that catches a sign or a transpose.** A projective
+    map wrong in either still looks like a plausible tilt when the corners have moved,
+    and only stops looking plausible when they have not."""
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    corners = [[0, 0], [3, 0], [3, 4], [0, 4]]
+    out = V.transforms.functional.perspective(img, corners, corners, "bilinear")
+    assert np.allclose(out, img, atol=1e-4)
+
+
+def test_elastic_transform_is_given_its_field_rather_than_drawing_one():
+    """`ElasticTransform` draws the displacement and `elastic_transform` applies it, so
+    a batch can share one warp — and, here, so the golden can compare a warp at all."""
+    img = np.arange(60, dtype=np.float32).reshape(5, 4, 3)
+    nothing = np.zeros((5, 4, 2), dtype=np.float32)
+    assert np.allclose(V.transforms.functional.elastic_transform(img, nothing), img,
+                       atol=1e-4)
+
+
+def test_the_three_drawn_wrappers_draw():
+    """`GaussianBlur` draws its sigma, `RandomPerspective` its corners, and
+    `ElasticTransform` a whole field. **Nothing in the golden can see any of the
+    three** — the frozen cases give the field, the corners and the sigma."""
+    V.manual_seed(0)
+    img = (np.arange(1200) ** 2 % 256).astype(np.float32).reshape(20, 20, 3) / 255
+    for transform in (V.GaussianBlur(3), V.RandomPerspective(p=1.0),
+                      V.ElasticTransform(alpha=20.0)):
+        seen = {transform(img).tobytes() for _ in range(30)}
+        assert len(seen) > 1, f"{transform} gave one result over thirty draws"

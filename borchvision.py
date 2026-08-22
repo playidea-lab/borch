@@ -1892,6 +1892,270 @@ class RandomAffine:
         return out + ")"
 
 
+# --- the other three that resample -----------------------------------------
+#
+# `perspective` and `elastic_transform` are the same sampler as `rotate` with a
+# different grid; `gaussian_blur` is not a resampling at all but arrives with them
+# because `ElasticTransform` is built out of it.
+
+
+def _gaussian_kernel1d(size, sigma, work):
+    half = (size - 1) * 0.5
+    x = _np.linspace(-half, half, size, dtype=work)
+    pdf = _np.exp(-0.5 * (x / sigma) ** 2)
+    return pdf / pdf.sum()
+
+
+def gaussian_blur(img, kernel_size, sigma=None):
+    """Blur with a Gaussian. **The border is reflected**, not zeroed — a zero border
+    darkens the edge of every blurred picture, which looks like a vignette.
+
+    `kernel_size` is one number or two, and both have to be **odd**: an even kernel
+    has no centre pixel to sit on, so the picture would shift by half a pixel.
+    """
+    img = _require_hwc(img, "gaussian_blur")
+    sizes = _pair(kernel_size, "gaussian_blur")
+    for s in sizes:
+        if s <= 0 or s % 2 == 0:
+            raise ValueError(
+                f"kernel_size is odd and positive — got {sizes}.\n"
+                f"(torch: Kernel size value should be an odd and positive number.)")
+    if sigma is None:
+        sigmas = [0.3 * ((s - 1) * 0.5 - 1) + 0.8 for s in sizes]
+    elif isinstance(sigma, (int, float)):
+        sigmas = [float(sigma), float(sigma)]
+    else:
+        sigmas = [float(s) for s in sigma]
+        if len(sigmas) == 1:
+            sigmas = [sigmas[0], sigmas[0]]
+    for s in sigmas:
+        if s <= 0:
+            raise ValueError(
+                f"sigma is a positive number — got {sigmas}.\n"
+                "(torch: sigma should have positive values.)")
+
+    work = _working_dtype(img.dtype)
+    # **`kernel_size` and `sigma` are (x, y)** — width first, like `get_image_size` and
+    # unlike everything shaped. torchvision builds the 2-D kernel as an outer product
+    # of the y kernel with the x one, and swapping them is invisible on a square kernel.
+    kx = _gaussian_kernel1d(sizes[0], sigmas[0], work)
+    ky = _gaussian_kernel1d(sizes[1], sigmas[1], work)
+    kernel = _np.outer(ky, kx)
+    ph, pw = sizes[1] // 2, sizes[0] // 2
+    padded = _np.pad(img.astype(work), [(ph, ph), (pw, pw)] + [(0, 0)] * (img.ndim - 2),
+                     mode="reflect")
+    h, w = img.shape[0], img.shape[1]
+    out = _np.zeros(img.shape, dtype=work)
+    for di in range(kernel.shape[0]):
+        for dj in range(kernel.shape[1]):
+            out += kernel[di, dj] * padded[di:di + h, dj:dj + w]
+    if _np.dtype(img.dtype).kind != "f":
+        out = _np.clip(_np.round(out), 0, _bound(img.dtype))
+    return out.astype(img.dtype)
+
+
+def _perspective_coefficients(startpoints, endpoints):
+    """The eight numbers, solved by least squares. **In float64 and returned as
+    float32**, which is torchvision's own precision split — the solve is
+    ill-conditioned enough that doing it in float32 moves the corners visibly."""
+    if len(startpoints) != 4 or len(endpoints) != 4:
+        raise ValueError(
+            f"Please provide exactly four corners, got {len(startpoints)} startpoints "
+            f"and {len(endpoints)} endpoints.\n"
+            "(torch: Please provide exactly four corners)")
+    a = _np.zeros((8, 8), dtype=_np.float64)
+    for i, (p1, p2) in enumerate(zip(endpoints, startpoints)):
+        a[2 * i] = [p1[0], p1[1], 1, 0, 0, 0, -p2[0] * p1[0], -p2[0] * p1[1]]
+        a[2 * i + 1] = [0, 0, 0, p1[0], p1[1], 1, -p2[1] * p1[0], -p2[1] * p1[1]]
+    b = _np.asarray(startpoints, dtype=_np.float64).reshape(8)
+    solved = _np.linalg.lstsq(a, b, rcond=None)[0]
+    return [float(v) for v in solved.astype(_np.float32)]
+
+
+def _perspective_grid(coeffs, ow, oh, work):
+    """The projective map, **with the division that makes it projective.** An affine
+    grid is this one with the last two coefficients zero."""
+    xs = _np.linspace(0.5, ow + 0.5 - 1.0, ow, dtype=work)
+    ys = _np.linspace(0.5, oh + 0.5 - 1.0, oh, dtype=work)
+    base = _np.empty((oh, ow, 3), dtype=work)
+    base[..., 0] = xs[None, :]
+    base[..., 1] = ys[:, None]
+    base[..., 2] = 1.0
+    theta1 = _np.asarray([coeffs[0:3], coeffs[3:6]], dtype=work)
+    theta2 = _np.asarray([[coeffs[6], coeffs[7], 1.0]] * 2, dtype=work)
+    flat = base.reshape(-1, 3)
+    top = flat @ (theta1.T / _np.asarray([0.5 * ow, 0.5 * oh], dtype=work))
+    bottom = flat @ theta2.T
+    return (top / bottom - 1.0).reshape(oh, ow, 2)
+
+
+def perspective(img, startpoints, endpoints, interpolation="bilinear", fill=None):
+    """Move the four corners somewhere else — **a photograph of a photograph held at
+    an angle.** Unlike `affine`, straight lines stay straight but parallel ones stop
+    being parallel."""
+    img = _require_hwc(img, "perspective")
+    mode = _interpolation(interpolation)
+    coeffs = _perspective_coefficients(startpoints, endpoints)
+    grid = _perspective_grid(coeffs, img.shape[1], img.shape[0],
+                             _working_dtype(img.dtype))
+    return _grid_transform(img, grid, mode, fill)
+
+
+def _identity_grid(h, w, work):
+    """The grid that reads each output pixel from its own position — what a
+    displacement is added to."""
+    ys = _np.linspace((-h + 1) / h, (h - 1) / h, h, dtype=work)
+    xs = _np.linspace((-w + 1) / w, (w - 1) / w, w, dtype=work)
+    grid = _np.empty((h, w, 2), dtype=work)
+    grid[..., 0] = xs[None, :]
+    grid[..., 1] = ys[:, None]
+    return grid
+
+
+def elastic_transform(img, displacement, interpolation="bilinear", fill=None):
+    """Push every pixel a little way, smoothly. **The displacement is given rather
+    than drawn** — `ElasticTransform` draws it and this applies it, so a whole batch
+    can share one warp."""
+    img = _require_hwc(img, "elastic_transform")
+    mode = _interpolation(interpolation)
+    work = _working_dtype(img.dtype)
+    shift = _np.asarray(displacement, dtype=work).reshape(img.shape[0], img.shape[1], 2)
+    grid = _identity_grid(img.shape[0], img.shape[1], work) + shift
+    return _grid_transform(img, grid, mode, fill)
+
+
+class GaussianBlur:
+    """Blur by a Gaussian whose width is **drawn from a range each call.**
+
+    The kernel size is fixed and the sigma is the draw, which is the opposite way
+    round from most of these — a bigger kernel costs time, so torchvision fixes the
+    cost and varies the effect inside it.
+    """
+
+    def __init__(self, kernel_size, sigma=(0.1, 2.0)):
+        self.kernel_size = _pair(kernel_size, "GaussianBlur")
+        for s in self.kernel_size:
+            if s <= 0 or s % 2 == 0:
+                raise ValueError(
+                    f"kernel_size is odd and positive — got {self.kernel_size}.\n"
+                    "(torch: Kernel size value should be an odd and positive number.)")
+        if isinstance(sigma, (int, float)):
+            if sigma <= 0:
+                raise ValueError(
+                    f"sigma is a positive number — got {sigma}.\n"
+                    "(torch: If sigma is a single number, it must be positive.)")
+            sigma = (float(sigma), float(sigma))
+        else:
+            if not 0.0 < sigma[0] <= sigma[1]:
+                raise ValueError(
+                    f"sigma is (min, max) with min above zero — got {tuple(sigma)}.\n"
+                    "(torch: sigma values should be positive and of the form "
+                    "(min, max).)")
+            sigma = (float(sigma[0]), float(sigma[1]))
+        self.sigma = sigma
+
+    def get_params(self):
+        return float(_rng.uniform(self.sigma[0], self.sigma[1]))
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        drawn = self.get_params()
+        return gaussian_blur(img, self.kernel_size, [drawn, drawn])
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(kernel_size={tuple(self.kernel_size)}, "
+                f"sigma={self.sigma})")
+
+
+class RandomPerspective:
+    """Tilt the picture, with probability `p`. `distortion_scale` is how far the
+    corners may move, as a fraction of half the picture."""
+
+    def __init__(self, distortion_scale=0.5, p=0.5, interpolation="bilinear", fill=0):
+        self.distortion_scale = distortion_scale
+        self.p = p
+        self.interpolation = _interpolation(interpolation)
+        self.fill = fill
+
+    def get_params(self, width, height):
+        """The four corners before and after. **Drawn in whole pixels** — torchvision
+        uses integer draws here, so a small picture has a small number of distinct
+        distortions rather than a continuum."""
+        half_h, half_w = height // 2, width // 2
+        dx, dy = int(self.distortion_scale * half_w), int(self.distortion_scale * half_h)
+        topleft = [int(_rng.integers(0, dx + 1)), int(_rng.integers(0, dy + 1))]
+        topright = [int(_rng.integers(width - dx - 1, width)),
+                    int(_rng.integers(0, dy + 1))]
+        botright = [int(_rng.integers(width - dx - 1, width)),
+                    int(_rng.integers(height - dy - 1, height))]
+        botleft = [int(_rng.integers(0, dx + 1)),
+                   int(_rng.integers(height - dy - 1, height))]
+        start = [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]]
+        return start, [topleft, topright, botright, botleft]
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        if _rng.random() >= self.p:
+            return img
+        channels = img.shape[2] if img.ndim == 3 else 1
+        fill = ([float(self.fill)] * channels if isinstance(self.fill, (int, float))
+                else [float(f) for f in self.fill])
+        start, end = self.get_params(img.shape[1], img.shape[0])
+        return perspective(img, start, end, self.interpolation, fill)
+
+    def __repr__(self):
+        # **Only `p`.** torchvision prints nothing else here — not the distortion, not
+        # the fill — and that is its spelling rather than an oversight to improve on.
+        return f"{type(self).__name__}(p={self.p})"
+
+
+class ElasticTransform:
+    """Push every pixel a little way along a **smooth random field** — the warp that
+    makes handwriting look handwritten differently.
+
+    `alpha` is how far pixels move and `sigma` how smoothly: a small sigma with a
+    large alpha is noise rather than a warp, which is why both are drawn from the same
+    blur.
+    """
+
+    def __init__(self, alpha=50.0, sigma=5.0, interpolation="bilinear", fill=0):
+        self.alpha = ([float(alpha)] * 2 if isinstance(alpha, (int, float))
+                      else [float(a) for a in alpha])
+        self.sigma = ([float(sigma)] * 2 if isinstance(sigma, (int, float))
+                      else [float(s) for s in sigma])
+        self.interpolation = _interpolation(interpolation)
+        self.fill = ([float(fill)] if isinstance(fill, (int, float))
+                     else [float(f) for f in fill])
+
+    def get_params(self, height, width):
+        """A displacement field: noise, blurred, scaled by `alpha` — and **divided by
+        the picture's size**, because the grid is in [-1,1] and not in pixels."""
+        def one(sigma, alpha, extent):
+            noise = (_rng.random((height, width, 1)).astype(_np.float32) * 2 - 1)
+            if sigma > 0.0:
+                size = int(8 * sigma + 1)
+                if size % 2 == 0:
+                    size += 1
+                noise = gaussian_blur(noise, [size, size], self.sigma)
+            return noise * alpha / extent
+        return _np.concatenate([one(self.sigma[0], self.alpha[0], width),
+                                one(self.sigma[1], self.alpha[1], height)], axis=2)
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        displacement = self.get_params(img.shape[0], img.shape[1])
+        return elastic_transform(img, displacement, self.interpolation, self.fill)
+
+    def __repr__(self):
+        # **The enum's name, not its value** — this is the one class that prints
+        # `InterpolationMode.BILINEAR` where every other prints `bilinear`. Rendered
+        # through our own enum so it is our name rather than a string spelled to look
+        # like one.
+        return (f"{type(self).__name__}(alpha={self.alpha}, sigma={self.sigma}, "
+                f"interpolation={InterpolationMode(self.interpolation)}, "
+                f"fill={self.fill})")
+
+
 # --- transforms.functional -------------------------------------------------
 #
 # **The same arithmetic, called without building an object.** Every function here
@@ -2039,10 +2303,12 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
               "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
               "RandomGrayscale", "RandomHorizontalFlip", "RandomOrder",
-              "ColorJitter", "RandomAdjustSharpness", "RandomAffine",
+              "ColorJitter", "ElasticTransform", "GaussianBlur",
+              "RandomAdjustSharpness", "RandomAffine",
               "RandomAutocontrast",
               "RandomEqualize", "RandomInvert", "RandomPosterize",
-              "RandomResizedCrop", "RandomRotation", "RandomSolarize",
+              "RandomPerspective", "RandomResizedCrop", "RandomRotation",
+              "RandomSolarize",
               "RandomVerticalFlip", "Resize",
               "TenCrop", "ToTensor"):
     setattr(transforms, _name, globals()[_name])
@@ -2053,7 +2319,8 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
 for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
               "adjust_gamma", "adjust_hue", "adjust_saturation",
               "adjust_sharpness", "autocontrast", "equalize", "invert",
-              "affine", "posterize", "rotate", "solarize",
+              "affine", "elastic_transform", "gaussian_blur", "perspective",
+              "posterize", "rotate", "solarize",
               "center_crop", "crop", "erase", "five_crop",
               "get_dimensions", "get_image_num_channels", "get_image_size", "hflip",
               "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",

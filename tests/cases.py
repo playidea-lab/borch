@@ -7589,6 +7589,30 @@ def _rank_ceiling_cases(ranks, inp):
     return cases
 
 
+# **Changing a frozen case's inputs is a two-file change, and the case name does not
+# say so.**
+#
+# Adding a case is safe — the TS side owes one more and the ledger row counts it.
+# Removing one is safe — the row goes down. Changing the *inputs* of a case that is
+# already ported is the only edit where two files have to move together while neither
+# mentions the other: `borch-ts/test/cases.ts` writes the same arguments out
+# independently, so the name stays identical and the values stop agreeing.
+#
+# It is caught, and caught **loudly** — the browser runner reports a value mismatch on
+# a named case. It is caught one merge too late, on main, by whoever pushes next, and
+# they read a value mismatch on a case they did not touch and start looking at the
+# implementation.
+#
+# So the rule is not another check. **Before committing a change to a case's inputs,
+# grep `borch-ts/test/cases.ts` for that case's name.** If it is there, the two move
+# together.
+#
+# Written after `F.adjust_saturation(uint8)` moved from 1.7 to 0.1 — and the sequel is
+# the reason it is worth a paragraph. That one number was what made the other side's
+# float32 chain measurable: the same mutation that left ten of their cases green the
+# day before now moves four pixels by a whole step. **A check can be conferred on one
+# library by an input written in another**, which is also why quietly changing one is
+# not a local edit.
 VISION_PREFIX = "vision::"
 _BT_VISION = None
 
@@ -8187,6 +8211,84 @@ def vision_cases(inp=None):
          turned(lambda T, m: T.RandomAffine((20, 20), interpolation=m, fill=0.5))),
     ]
 
+    # --- the other three that resample ----------------------------------------
+    #
+    # `perspective` and `elastic_transform` are the grid sampler again with a different
+    # grid; `gaussian_blur` is not a resampling and is here because `ElasticTransform`
+    # is built out of it.
+
+    def warp(call, on_bytes=False):
+        """**`L` builds the displacement, not `torch`.** This file does not import
+        torch — its first line says so, because golden stage two runs in a browser
+        where there is none — and `elastic_transform` is the first case here that needs
+        a tensor as an *argument* rather than as the picture. `L.tensor` is the way to
+        ask for one without naming the library."""
+        def run(L):
+            T = _vision(L)
+            F = T.functional
+            src = img_u8 if on_bytes else img_f
+            if _is_real_torch(L):
+                from torchvision.transforms import InterpolationMode
+                x = L.tensor(np.ascontiguousarray(src.transpose(2, 0, 1)))
+                out = call(F, x, {"nearest": InterpolationMode.NEAREST,
+                                  "bilinear": InterpolationMode.BILINEAR}, L)
+                return L.tensor(np.ascontiguousarray(
+                    np.asarray(out.detach().numpy(), dtype=np.float32)))
+            out = call(F, src, {"nearest": "nearest", "bilinear": "bilinear"}, None)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(out, dtype=np.float32).transpose(2, 0, 1)))
+        return run
+
+    # Four corners moved, and a set that moves none — **the identity is the case that
+    # catches a sign or a transpose**, since a projective map that is wrong in either
+    # still looks like a plausible tilt on a distorted one.
+    _corners = [[0, 0], [3, 0], [3, 4], [0, 4]]
+    _tilted = [[1, 1], [3, 0], [2, 4], [0, 3]]
+    # A displacement small enough to stay inside, so the case is about the warp rather
+    # than about the fill. It is spelled out rather than drawn: **the golden cannot
+    # compare a draw**, and `elastic_transform` takes the field as an argument exactly
+    # so that it can be given.
+    _shift = (np.arange(5 * 4 * 2, dtype=np.float32).reshape(5, 4, 2) % 7 - 3) * 0.02
+
+    cases += [
+        (VISION_PREFIX + "F.gaussian_blur(odd square)",
+         warp(lambda F, x, M, t: F.gaussian_blur(x, [3, 3], [1.0, 1.0]))),
+        # **A kernel that is not square, with different sigmas.** The 2-D kernel is an
+        # outer product of the y kernel with the x one, and a transpose there is
+        # invisible while both are the same size.
+        (VISION_PREFIX + "F.gaussian_blur(oblong)",
+         warp(lambda F, x, M, t: F.gaussian_blur(x, [3, 5], [0.5, 2.0]))),
+        (VISION_PREFIX + "F.gaussian_blur(default sigma)",
+         warp(lambda F, x, M, t: F.gaussian_blur(x, [5, 5], None))),
+        (VISION_PREFIX + "F.gaussian_blur(uint8)",
+         warp(lambda F, x, M, t: F.gaussian_blur(x, [3, 3], [1.0, 1.0]), on_bytes=True)),
+        (VISION_PREFIX + "F.perspective(tilted)",
+         warp(lambda F, x, M, t: F.perspective(x, _corners, _tilted, M["bilinear"]))),
+        (VISION_PREFIX + "F.perspective(tilted, nearest)",
+         warp(lambda F, x, M, t: F.perspective(x, _corners, _tilted, M["nearest"]))),
+        (VISION_PREFIX + "F.perspective(unmoved)",
+         warp(lambda F, x, M, t: F.perspective(x, _corners, _corners, M["bilinear"]))),
+        (VISION_PREFIX + "F.perspective(filled)",
+         warp(lambda F, x, M, t: F.perspective(x, _corners, _tilted, M["bilinear"],
+                                               fill=[0.5, 0.2, 0.1]))),
+        (VISION_PREFIX + "F.perspective(uint8)",
+         warp(lambda F, x, M, t: F.perspective(x, _corners, _tilted, M["bilinear"]),
+              on_bytes=True)),
+        # The displacement arrives shaped `1 x H x W x 2` for torch and `H x W x 2`
+        # here — the same numbers in each side's own convention, which is the rule the
+        # whole vision block follows.
+        (VISION_PREFIX + "F.elastic_transform",
+         warp(lambda F, x, M, t: F.elastic_transform(
+             x, t.tensor(np.ascontiguousarray(_shift[None])) if t else _shift, M["bilinear"]))),
+        (VISION_PREFIX + "F.elastic_transform(nearest)",
+         warp(lambda F, x, M, t: F.elastic_transform(
+             x, t.tensor(np.ascontiguousarray(_shift[None])) if t else _shift, M["nearest"]))),
+        (VISION_PREFIX + "F.elastic_transform(uint8)",
+         warp(lambda F, x, M, t: F.elastic_transform(
+             x, t.tensor(np.ascontiguousarray(_shift[None])) if t else _shift, M["bilinear"]),
+             on_bytes=True)),
+    ]
+
     # Representation (T3). This project treats `repr` as specification too — the tutorials do
     # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
@@ -8239,6 +8341,12 @@ def vision_cases(inp=None):
         ("RandomRotation(expanded, off centre)",
          lambda T: T.RandomRotation((-10, 10), expand=True, center=(1, 2), fill=5)),
         ("RandomAffine", lambda T: T.RandomAffine(30)),
+        ("GaussianBlur", lambda T: T.GaussianBlur(3)),
+        ("GaussianBlur(oblong)", lambda T: T.GaussianBlur((3, 5), (0.2, 3.0))),
+        ("RandomPerspective", lambda T: T.RandomPerspective()),
+        # **The one class that prints the enum's name where every other prints its
+        # value** — `interpolation=InterpolationMode.BILINEAR` rather than `bilinear`.
+        ("ElasticTransform", lambda T: T.ElasticTransform()),
         ("RandomAffine(everything)",
          lambda T: T.RandomAffine(0, translate=(0.1, 0.2), scale=(0.8, 1.2),
                                   shear=(5, 10))),
