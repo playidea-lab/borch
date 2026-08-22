@@ -1,71 +1,77 @@
 /**
- * 한 스텝이 **무엇을 얼마나 쓰는가** — 시간이 아니라 **세는 것**으로.
+ * **What one step spends, and how much of it** — counted rather than timed.
  *
  *     npm run build:ts
  *     npm run cost:ts
  *
- * ## 왜 시간이 아닌가
+ * ## Why not time
  *
- * 벤치(`bench.ts`)는 벽시계를 재고, 그래서 **소프트웨어 어댑터에서는 답을 거부한다** —
- * CPU 래스터라이저에서 잰 ms 는 이 라이브러리의 수가 아니라 그 래스터라이저의 수다.
- * 그 판단이 맞고, 그래서 벤치는 GPU 가 있는 기계에서만 뜻이 있다.
+ * The bench (`bench.ts`) measures the wall clock, and so **refuses to answer on a software
+ * adapter** — milliseconds off a CPU rasteriser are that rasteriser's number and not this
+ * library's. That judgement is right, and it leaves the bench meaningful only on a machine
+ * with a GPU.
  *
- * **여기서 세는 것들은 어댑터와 무관하다.** dispatch 를 몇 번 걸었는가, 구역이 몇
- * 개를 놓았는가, 버퍼를 몇 개 잡고 있는가 — 전부 코드 경로가 정하는 수이고 장치가
- * 바꾸지 않는다. 그래서 **벤치가 못 도는 자리에서 이것은 돈다.** CI 와 이 저장소의
- * 기본 실행 환경이 그 자리다.
+ * **What is counted here does not depend on the adapter.** How many dispatches were made,
+ * how many buffers a scope let go, how many are held — every one of them is decided by the
+ * code path and not changed by the device. So **this runs where the bench cannot.** CI,
+ * and this repository's default environment, are exactly there.
  *
- * ## 무엇을 잡는가
+ * ## What it catches
  *
- * 골든은 **값만** 본다. 스텝마다 버퍼를 하나씩 흘리는 구현도, 커널을 두 배로 거는
- * 구현도 값은 똑같이 맞으므로 표는 전부 초록이다. 실제로 이 저장소가 그것을
- * 겪었고(`scope()` 가 있는 이유가 그것이다), 지금까지 그 자리를 지키는 검사가
- * 하나도 없었다 — `device.ts` 의 주석이 **"`survived` 가 0 이 아니면 학습 루프에서
- * 그것이 누수다"** 라고 적어 두었는데 그 수를 묻는 곳이 벤치뿐이었고, 벤치는
- * 사람이 손으로 돌리는 것이다.
+ * The golden looks at **values alone.** An implementation leaking one buffer per step and
+ * an implementation dispatching twice as many kernels both give the same values, so the
+ * table is green either way. This repository lived through that (it is why `scope()`
+ * exists) and until now not one check stood in that place — `device.ts`'s comment had
+ * written down that **"a `survived` that is not 0 is a leak in the training loop"**, and
+ * the only thing asking for that number was the bench, which a person runs by hand.
  *
- * ## 굳힌 수를 고쳐야 할 때
+ * ## When a frozen number has to change
  *
- * `EXPECT` 는 **재서 넣은 수다**(추정이 아니다). 늘었다면 셋 중 하나다 —
- * 커널을 더 걸게 만들었거나, 묶던 것을 안 묶거나, 누수가 생겼다. 줄었다면 좋은
- * 일이고 그때도 여기를 고쳐야 한다. **고칠 때 왜 바뀌었는지 함께 적는다** — 수만
- * 갈아 끼우면 다음 사람은 그 수가 무엇을 뜻하는지 모른 채 또 갈아 끼운다.
+ * `EXPECT` holds **measurements, not estimates.** If one grew it is one of three things —
+ * more kernels are being dispatched, something that used to be batched is not, or there is
+ * a leak. If one shrank that is good news, and it still has to be changed here. **Write
+ * down why it moved along with the new number** — swap the figure alone and the next
+ * person swaps it again without knowing what it meant.
  *
- * ## 무는지 확인했다
+ * ## It was probed
  *
- * 학습 루프 안에 `keepAlive(loss.mul(loss))` 한 줄을 넣어 스텝마다 버퍼 하나를
- * 흘려 봤다. **세 검사가 각각 다른 각도에서 걸렸다** — dispatch 가 53→54,
- * `survived` 가 0→1, 잡은 버퍼가 26→36. 셋이 같은 것을 세고 있었다면 하나만
- * 빨개졌을 것이므로, 이 겹침은 낭비가 아니라 서로 다른 방식의 새는 자리를 덮는다.
+ * One line, `keepAlive(loss.mul(loss))`, was put inside the training loop to leak one
+ * buffer per step. **Three checks caught it, each from a different angle** — dispatches
+ * 53 → 54, `survived` 0 → 1, buffers held 26 → 36. Had the three been counting the same
+ * thing only one would have gone red, so the overlap is not waste: it covers three
+ * different ways of leaking.
  *
- * 반대로 **겹치기만 하던 검사도 하나 있었고 그래서 지웠다** — 아래 "통이 도는가"
- * 자리에 이유가 있다. 같은 검사를 결속 쪽으로 옮겨 보고서야 알았다.
+ * **One check was overlap and nothing else, and it was deleted** — the reason is at "does
+ * the pool cycle" below. That only became visible after the same check was carried over to
+ * the binding side.
  */
 
 import * as nn from "../src/nn.js";
 import { SGD } from "../src/optim.js";
 import { device, keepAlive, scope, Tensor } from "../src/tensor.js";
 
-/** 검사 하나. 통과 여부와 **실제로 본 수**를 같이 남긴다. */
+/** One check. It keeps whether it passed and **the number actually seen.** */
 interface Check {
   readonly name: string;
   readonly ok: boolean;
   readonly note: string;
 }
 /**
- * 이 보고의 정본은 `checks` 다. `text` 는 사람이 읽는 그림자다.
+ * `checks` is the authority in this report. `text` is the shadow a person reads.
  *
- * **러너가 문장을 훑어 통과를 판정하고 있었다.** 그 방식은 문구가 바뀌면 조용히
- * 답을 바꾸고, `readme.py` 에서는 실제로 그랬다 — 두 예시 중 하나만 통과해도
- * 찾던 낱말이 다른 줄에 남아 있어 0 을 냈다. 상태를 그대로 넘기면 러너가 셀 수
- * 있고, 무엇이 실패했는지도 제 입으로 말한다.
+ * **The runner used to judge by scanning a sentence.** That way of judging changes its
+ * answer quietly when the wording changes, and in `readme.py` it did — with one of the two
+ * examples failing, the word it looked for was still sitting on another line, so it
+ * returned 0. Hand the state over as it is and the runner can count, and can say for
+ * itself which thing failed.
  */
 export interface Report { text: string; checks: Check[] }
 
 /**
- * 재는 데 쓰는 모델. **작아야 한다** — 소프트웨어 어댑터에서도 도는 것이 이 검사의
- * 존재 이유다. 그래도 합성곱·정규화·선형·손실을 한 번씩 지나므로, 스텝 하나가
- * 건드리는 자리의 종류는 큰 모델과 같다.
+ * The model this measures with. **It has to be small** — running on a software adapter is
+ * the reason this check exists. It still passes through a convolution, a normalisation, a
+ * linear layer and a loss once each, so the *kinds* of place one step touches are a large
+ * model's kinds.
  */
 class Small extends nn.Module {
   private readonly conv = new nn.Conv2d(1, 4, 3, 1, 1, false);
@@ -79,15 +85,16 @@ class Small extends nn.Module {
 }
 
 /**
- * 스텝 하나가 거는 dispatch 수와 제출 수. **재서 넣은 값이다.**
+ * How many dispatches and how many submits one step makes. **Measured, not estimated.**
  *
- * 위의 `Small` 에 배치 4 로 잰 것이고, 모델이나 커널이 바뀌면 같이 바뀐다.
+ * Taken on `Small` above at batch 4; it moves when the model or the kernels move.
  */
 const EXPECT = {
   dispatches: 53,
-  // **스텝 하나에 제출이 한 번이다.** 명령을 쌓아 두었다가 손실을 읽을 때 한 번에
-  // 보내기 때문이고, 이 수가 오르면 중간에 GPU 를 기다리는 자리가 생겼다는 뜻이다 —
-  // 값은 그대로인 채 스텝이 느려지는 종류라 골든이 절대 못 본다.
+  // **One step is one submit.** The commands pile up and go in a single send when the
+  // loss is read, so this number rising means a place appeared that waits on the GPU
+  // mid-step — the kind that leaves the values alone and makes the step slower, which the
+  // golden can never see.
   submits: 1,
 };
 
@@ -104,29 +111,32 @@ export async function report(): Promise<Report> {
   const labels = new Float32Array(batch);
   for (let i = 0; i < batch; i++) labels[i] = i % 3;
 
-  // 입력과 파라미터는 **구역 밖**이다. 안에서 만들면 첫 스텝 끝에 놓인다.
+  // The input and the parameters are **outside the scope.** Made inside, they would be
+  // let go at the end of the first step.
   const x = keepAlive(Tensor.from(pixels, [batch, 1, 8, 8]));
   const y = keepAlive(Tensor.from(labels, [batch], { dtype: "int64" }));
   const model = new Small();
   const opt = new SGD(model.parameters(), 0.05, 0.9);
   const crit = new nn.CrossEntropyLoss();
 
-  /** **쓰는 사람이 칠 그대로.** 저수준 구역을 부르면 `scope()` 를 재는 게 아니다. */
+  /** **Exactly what a user would type.** Call the low-level scope and it is no longer
+   * `scope()` that is being measured. */
   const step = async (): Promise<number> => scope(async () => {
     opt.zeroGrad();
     const loss = crit.call(model.call(x), y);
     loss.backward();
     opt.step();
-    return await loss.item();      // 구역 안에서 읽어야 그 버퍼가 있다
+    return await loss.item();      // read inside the scope, while that buffer exists
   });
 
-  // 워밍업. 첫 스텝은 셰이더를 굽고 통이 비어 있어서 뒤와 수가 다르다.
+  // Warm-up. The first step bakes shaders and starts with an empty pool, so its numbers
+  // are not the ones that follow.
   for (let i = 0; i < 3; i++) await step();
 
-  // ── 1. 스텝당 dispatch 수가 **스텝마다 같은가** ────────────────────────
+  // ── 1. Is the dispatch count **the same every step** ─────────────────
   //
-  // 늘어난다면 스텝이 스텝을 보고 있다는 뜻이다 — 그래프가 안 끊기거나, 캐시가
-  // 열쇠를 잘못 잡아 셰이더를 다시 굽거나.
+  // Growing means a step is looking at a step — the graph is not being cut, or the cache
+  // took the wrong key and is baking a shader again.
   const perStep: number[] = [];
   const perSubmit: number[] = [];
   for (let i = 0; i < 5; i++) {
@@ -137,73 +147,80 @@ export async function report(): Promise<Report> {
     perSubmit.push(dev.submits - s0);
   }
   const first = perStep[0] ?? 0;
-  want("스텝마다 dispatch 수가 같다", perStep.every((n) => n === first),
+  want("the dispatch count is the same every step", perStep.every((n) => n === first),
     perStep.join(" "));
   const firstSubmit = perSubmit[0] ?? 0;
-  want("스텝마다 제출 수가 같다", perSubmit.every((n) => n === firstSubmit),
+  want("the submit count is the same every step",
+    perSubmit.every((n) => n === firstSubmit),
     perSubmit.join(" "));
 
-  // ── 2. 굳힌 수와 같은가 ───────────────────────────────────────────────
+  // ── 2. Is it the frozen number ───────────────────────────────────────
   if (EXPECT.dispatches > 0) {
-    want("스텝당 dispatch 가 굳힌 수와 같다", first === EXPECT.dispatches,
-      `${first} (굳힌 것 ${EXPECT.dispatches})`);
-    want("스텝당 제출이 굳힌 수와 같다", firstSubmit === EXPECT.submits,
-      `${firstSubmit} (굳힌 것 ${EXPECT.submits})`);
+    want("dispatches per step match the frozen number", first === EXPECT.dispatches,
+      `${first} (frozen ${EXPECT.dispatches})`);
+    want("submits per step match the frozen number", firstSubmit === EXPECT.submits,
+      `${firstSubmit} (frozen ${EXPECT.submits})`);
   } else {
-    // 굳힌 수를 지우고 돌리면 여기로 온다 — 새로 재는 자리다.
-    want("스텝당 dispatch 를 아직 안 굳혔다", false,
-      `재보니 dispatch ${first} · 제출 ${firstSubmit} — EXPECT 에 적어라`);
+    // Clear the frozen numbers and run, and it arrives here — the place to take a fresh
+    // measurement.
+    want("dispatches per step have not been frozen yet", false,
+      `measured: dispatches ${first} · submits ${firstSubmit} — write them into EXPECT`);
   }
 
-  // ── 3. 구역이 아무것도 안 남기는가 ────────────────────────────────────
+  // ── 3. Does the scope leave nothing behind ──────────────────────────
   //
-  // **이것이 누수의 정의다.** `device.ts` 가 그렇게 적어 두었고, 스텝마다 하나씩
-  // 남으면 긴 학습에서 장치가 찬다 — 값은 끝까지 맞은 채로.
+  // **This is the definition of a leak.** `device.ts` wrote it down that way, and one
+  // survivor per step fills the device over a long training run — with the values right
+  // the whole way.
   await step();
-  want("구역이 버퍼를 안 남긴다", dev.lastScope.survived === 0,
-    `살아남은 것 ${dev.lastScope.survived} · 놓은 것 ${dev.lastScope.freed}`);
-  want("구역이 다 닫혔다", dev.scopeDepth === 0, `깊이 ${dev.scopeDepth}`);
+  want("the scope leaves no buffer behind", dev.lastScope.survived === 0,
+    `survived ${dev.lastScope.survived} · freed ${dev.lastScope.freed}`);
+  want("every scope was closed", dev.scopeDepth === 0, `depth ${dev.scopeDepth}`);
 
-  // ── 4. 잡고 있는 버퍼가 스텝 수와 함께 안 자라는가 ────────────────────
+  // ── 4. Do the buffers held grow with the step count ─────────────────
   //
-  // 위의 `survived` 는 **한 구역**만 본다. 구역 밖에서 새는 것(예: 전역 캐시가
-  // 스텝마다 항목을 늘리는 것)은 그 수에 안 잡히므로 따로 본다.
+  // The `survived` above looks at **one scope.** A leak outside a scope — a global cache
+  // gaining an entry per step, say — does not show in that number, so it is asked apart.
   const early = dev.memory;
   const earlyPool = dev.pooled;
   for (let i = 0; i < 10; i++) await step();
   const late = dev.memory;
-  want("스텝을 열 번 더 돌려도 잡은 버퍼가 안 는다",
+  want("ten more steps do not add to the buffers held",
     late.tensors <= early.tensors,
-    `${early.tensors} → ${late.tensors} 개 · ` +
+    `${early.tensors} → ${late.tensors} · ` +
     `${(early.bytes / 1024).toFixed(0)}KB → ${(late.bytes / 1024).toFixed(0)}KB`);
-  // **통도 같이 봐야 한다.** 위의 수는 통에 든 것을 빼므로, 스텝마다 버퍼가 통으로
-  // 흘러들면 저 줄은 초록인 채로 발자국만 자란다. 같은 모양을 되풀이하는 동안
-  // 통은 작업 집합에서 멈춰야 한다 — 안 멈추면 그것은 정책이 아니라 결함이다.
+  // **The pool has to be watched with it.** The number above subtracts what is in the
+  // pool, so if buffers drain into the pool once a step, that line stays green while the
+  // footprint grows. Repeating one shape, the pool has to settle at the working set — and
+  // not settling is a defect rather than a policy.
   const latePool = dev.pooled;
-  want("스텝을 되풀이해도 통이 안 자란다", latePool.count <= earlyPool.count,
-    `${earlyPool.count} → ${latePool.count} 개 · ` +
+  want("repeating steps does not grow the pool", latePool.count <= earlyPool.count,
+    `${earlyPool.count} → ${latePool.count} · ` +
     `${(earlyPool.bytes / 1024).toFixed(0)}KB → ${(latePool.bytes / 1024).toFixed(0)}KB`);
 
-  // ── 통이 도는가는 **따로 안 묻는다** ──────────────────────────────────
+  // ── Whether the pool cycles is **not asked separately** ─────────────
   //
-  // 처음에는 "잡은 버퍼 수가 스텝당 dispatch 수보다 적은가" 를 물었다. 매번 새로
-  // 만들고 매번 놓는 구현도 `survived` 는 0 이니 그것만으로는 부족하다는 생각이었다.
+  // At first this asked "are the buffers held fewer than the dispatches per step". The
+  // thought was that an implementation making a fresh buffer every time and letting it go
+  // every time also has `survived` 0, so that number alone is not enough.
   //
-  // **결속 쪽에 같은 검사를 옮기고서 그것이 아무것도 새로 안 묻는다는 것을 알았다.**
-  // 저쪽은 골든이 먼저 돈 페이지라 시작부터 4 만 개를 잡고 있어서, 절대값 비교가
-  // 하네스의 잔여물을 학습 루프의 몫으로 읽었다. 고치려고 뜯어보니 `memory.tensors`
-  // 는 `made - spare` 이고 **통에 안 돌려놓는 구현은 `spare` 가 0 이라 이 수가 그냥
-  // 자란다** — 바로 위의 검사가 이미 그것을 잡는다. 두 검사가 다른 것을 세는 줄
-  // 알았는데 같은 것을 세고 있었다.
+  // **Carrying the same check over to the binding side is what showed it asks nothing
+  // new.** Over there the golden has run on the page first, so it starts holding forty
+  // thousand, and the absolute comparison read the harness's leftovers as the training
+  // loop's. Opening it up to mend it: `memory.tensors` is `made - spare`, and **an
+  // implementation that does not return to the pool has `spare` 0, so that number simply
+  // grows** — which the check just above already catches. Two checks thought to count
+  // different things were counting one.
   //
-  // 다른 자리에서 돌려 보지 않았으면 그 겹침을 몰랐을 것이다. 검사 하나를 지우는
-  // 것이 이 실행의 결과다.
+  // Without running it somewhere else the overlap would not have been visible. Deleting a
+  // check is what that run produced.
 
-  // ── 구역 밖으로 샌 텐서는 **시끄럽게 멈춘다** ─────────────────────────
+  // ── A tensor that escaped its scope **stops, loudly** ───────────────
   //
-  // 전에는 조용히 남의 값이 나왔다(실측: `[1,2,3,4]` 가 `9,9,9,9` 로 읽혔다).
-  // 버퍼가 파괴되지 않고 통에 돌아가서 다음 할당이 덮어쓰기 때문이고, WebGPU 는
-  // 그것을 안 막아 준다 — 유효한 버퍼를 유효하게 읽는 것이니까.
+  // It used to hand back somebody else's values quietly (measured: `[1,2,3,4]` read back
+  // as `9,9,9,9`). The buffer is not destroyed but returned to the pool, and the next
+  // allocation writes over it; WebGPU does not stop that, because it is a valid read of a
+  // valid buffer.
   {
     let escaped: Tensor | null = null;
     await scope(async () => {
@@ -214,19 +231,20 @@ export async function report(): Promise<Report> {
     let stopped = false;
     try {
       const got = await (escaped as unknown as Tensor).toArray();
-      note = `조용히 읽혔다: ${Array.from(got).join(",")}`;
+      note = `it read quietly: ${Array.from(got).join(",")}`;
     } catch (err) {
       stopped = true;
       note = (err as Error).message.split("\n")[0] ?? "";
     }
-    want("샌 텐서를 쓰면 멈춘다", stopped, note);
+    want("using an escaped tensor stops", stopped, note);
   }
 
-  // ── 블록 꼴(`using`)이 콜백 꼴과 같은 일을 하는가 ─────────────────────
+  // ── Does the block form (`using`) do what the callback form does ────
   //
-  // 두 꼴이 같은 `beginScope`/`endScope` 위에 서지만, **그것을 말로만 두면 갈린다.**
-  // 여기서 묻는 것은 세 가지다 — 블록을 벗어날 때 닫히는가, 그 시점이 안의 `await`
-  // **뒤**인가, 그리고 `keep()` 한 것이 살아남는가.
+  // Both forms stand on the same `beginScope`/`endScope`, but **left as a statement that
+  // holds only in prose, the two part.** Three things are asked here — does it close on
+  // leaving the block, is that moment **after** the `await` inside, and does what `keep()`
+  // held survive.
   {
     const before = dev.scopeDepth;
     let inside = -1;
@@ -236,54 +254,60 @@ export async function report(): Promise<Report> {
       using s = scope();
       inside = dev.scopeDepth;
       survived = s.keep(Tensor.from([5, 6], [2]).mul(Tensor.full([], 1)));
-      // **`await` 이 블록 안에 있다.** 놓는 일이 이 기다림보다 먼저 일어나면
-      // 여기서 죽은 텐서를 읽게 된다 — 그것이 `using` 으로 되는지의 핵심이다.
+      // **The `await` is inside the block.** If the letting-go happened before this
+      // wait, a dead tensor would be read here — which is the crux of whether `using`
+      // works at all.
       awaited = (await survived.toArray())[0] ?? -1;
     }
-    want("using 이 블록 안에서 구역을 연다", inside === before + 1,
-      `깊이 ${before} → ${inside}`);
-    want("using 이 블록 끝에서 닫는다", dev.scopeDepth === before,
-      `깊이 ${dev.scopeDepth}`);
-    want("블록 안의 await 이 닫히기 전에 끝난다", awaited === 5, `${awaited}`);
-    // 살린 것은 바깥 구역으로 넘어갔으므로 블록 뒤에도 읽힌다. 안 넘겼으면 위에서
-    // 만든 죽은 텐서 가드가 여기서 멈춘다 — 그래서 이 줄이 `keep()` 을 묻는다.
+    want("using opens the scope inside the block", inside === before + 1,
+      `depth ${before} → ${inside}`);
+    want("using closes it at the end of the block", dev.scopeDepth === before,
+      `depth ${dev.scopeDepth}`);
+    want("the await inside the block finishes before it closes", awaited === 5,
+      `${awaited}`);
+    // What was kept passed to the outer scope, so it still reads after the block. Had it
+    // not, the dead-tensor guard made above would stop here — which is what makes this
+    // line an question about `keep()`.
     const after = await survived.toArray();
-    want("keep() 한 것이 블록 뒤에도 산다", after[1] === 6,
+    want("what keep() held is alive after the block", after[1] === 6,
       Array.from(after).join(","));
   }
 
-  // ── 통은 스스로 안 줄어든다 ───────────────────────────────────────────────
+  // ── The pool does not shrink on its own ─────────────────────────────
   //
-  // 스텝이 같은 모양을 되풀이하면 통이 값을 한다 — 위의 "잡은 버퍼가 안 는다" 가
-  // 그것을 잰다. **모양이 바뀌면 이야기가 다르다.** 크기별로 나뉜 통이라 배치 16 의
-  // 버퍼는 배치 32 에 못 쓰이고 그대로 남는데, `memory` 는 통에 든 것을 일부러
-  // 빼므로 그 수에는 안 나타난다. 벤치가 한 판에서 세 배치를 돌므로 실제 경로다.
+  // While the steps repeat one shape the pool earns its keep — "the buffers held do not
+  // grow" above measures that. **A changing shape is another story.** The pool is split by
+  // size, so a batch-16 buffer cannot serve batch 32 and simply stays, and `memory`
+  // deliberately subtracts what is in the pool, so it does not appear in that number. The
+  // bench runs three batch sizes in one sitting, so this is a real path.
   {
     const before = dev.pooled;
     for (const n of [1000, 2000, 3000]) {
       dev.beginScope();
-      // 모양마다 다른 크기 — 통이 크기별로 갈린다.
+      // A different size per shape — the pool parts by size.
       Tensor.owned([n], 1).mul(Tensor.owned([n], 2));
       dev.endScope([]);
     }
     const grown = dev.pooled;
-    want("모양이 바뀌면 통이 자란다", grown.count > before.count,
-      `${before.count} → ${grown.count} 개 · ${Math.round(grown.bytes / 1024)}KB`);
-    // **`memory` 는 그것을 안 센다.** 두 수가 다른 것을 묻는다는 것을 여기서 못 박는다 —
-    // 하나로 합치면 누수 검사와 발자국 검사 중 하나가 거짓이 된다.
-    want("memory 는 통에 든 것을 안 센다", dev.memory.bytes < grown.bytes + dev.memory.bytes,
-      `잡은 것 ${Math.round(dev.memory.bytes / 1024)}KB · ` +
-      `통 ${Math.round(grown.bytes / 1024)}KB`);
+    want("a changing shape grows the pool", grown.count > before.count,
+      `${before.count} → ${grown.count} · ${Math.round(grown.bytes / 1024)}KB`);
+    // **`memory` does not count that.** Pinned here, that the two numbers ask different
+    // questions — fold them into one and either the leak check or the footprint check
+    // becomes a lie.
+    want("memory does not count what is in the pool",
+      dev.memory.bytes < grown.bytes + dev.memory.bytes,
+      `held ${Math.round(dev.memory.bytes / 1024)}KB · ` +
+      `pool ${Math.round(grown.bytes / 1024)}KB`);
     const freed = dev.emptyCache();
-    want("emptyCache 가 통을 비운다",
+    want("emptyCache empties the pool",
       freed.count === grown.count && dev.pooled.count === 0,
-      `${freed.count} 개 · ${Math.round(freed.bytes / 1024)}KB 돌려줬다`);
-    // 비운 뒤에도 계속 돌아야 한다 — 통을 비우는 것이 장치를 망가뜨리면 안 된다.
+      `${freed.count} · ${Math.round(freed.bytes / 1024)}KB handed back`);
+    // It has to keep running afterwards — emptying the pool must not break the device.
     dev.beginScope();
     const still = Tensor.owned([4], 3).add(Tensor.owned([4], 4));
     const value = (await still.toArray())[0] ?? -1;
     dev.endScope([]);
-    want("통을 비운 뒤에도 계산이 돈다", value === 7, `${value}`);
+    want("arithmetic runs after the pool is emptied", value === 7, `${value}`);
   }
 
   const bad = checks.filter((c) => !c.ok);
@@ -291,7 +315,7 @@ export async function report(): Promise<Report> {
     `  ${c.ok ? "✓" : "✗"} ${c.name}${c.note ? ` — ${c.note}` : ""}`);
   lines.push("");
   lines.push(bad.length
-    ? `**${bad.length}건이 갈렸다.**`
-    : `비용 검사 ${checks.length}건 전부 통과`);
+    ? `**${bad.length} parted.**`
+    : `all ${checks.length} cost checks passed`);
   return { text: lines.join("\n"), checks };
 }

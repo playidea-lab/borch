@@ -1,11 +1,13 @@
 /**
- * ResNet-18(CIFAR 판)로 **진짜 학습 스텝**을 잰다.
+ * A **real training step**, measured on ResNet-18 (the CIFAR build).
  *
- * `tests/browser/bench.py` 와 **같은 잣대**다 — 같은 모델, 같은 옵티마이저, 같은
- * 배치, 같은 계산식. 잣대가 다르면 비교가 아니라 두 개의 다른 수다.
+ * **The same yardstick** as `tests/browser/bench.py` — same model, same optimizer, same
+ * batch sizes, same arithmetic. A different yardstick makes two different numbers rather
+ * than a comparison.
  *
- * 층 하나로 잰 값은 BN·ReLU·잔차 덧셈처럼 대역폭에 묶인 연산을 안 센다. "에폭 몇 분"
- * 은 그것들까지 포함한 실제 스텝에서만 나온다 — FLOPs 로 나눈 추정이 아니라.
+ * A figure taken from one layer does not count the bandwidth-bound operations — BN, ReLU,
+ * the residual add. "Minutes per epoch" comes out of a real step that includes them, and
+ * not out of an estimate divided from FLOPs.
  */
 
 import * as nn from "../src/nn.js";
@@ -13,23 +15,24 @@ import { SGD } from "../src/optim.js";
 import { Device } from "../src/device.js";
 import { device, keepAlive, noGrad, scope, Tensor } from "../src/tensor.js";
 
-/** 에폭 시간을 내는 데 쓰는 장수. 파이썬 벤치와 같은 수여야 비교가 된다. */
+/** How many images the epoch time is figured from. It has to be the Python bench's
+ * number for the two to compare. */
 const CIFAR_TRAIN_IMAGES = 50000;
 
-/** ResNet 의 기본 블록. 지름길이 모양을 바꿔야 할 때만 1×1 을 둔다. */
+/** ResNet's basic block. The 1×1 is there only when the shortcut has to change shape. */
 export class Block extends nn.Module {
   private readonly conv1: nn.Conv2d;
   private readonly bn1: nn.BatchNormND;
   private readonly conv2: nn.Conv2d;
   private readonly bn2: nn.BatchNormND;
   /**
-   * **필드로 꺼내 둔다.** 전에는 `{ conv, bn }` 이라는 평범한 객체였고
-   * `children()` 에만 적혀 있었다 — `namedChildren()` 은 `instanceof Module` 인
-   * 필드만 훑으므로 그 둘을 못 봤고, **지름길 층 여섯이 한 번도 안 배웠다.**
-   * 손실은 내려갔다. 나머지가 대신 맞추기 때문이다.
+   * **Pulled out into fields.** These used to be a plain `{ conv, bn }` object written
+   * into `children()` alone — and `namedChildren()` sweeps only fields that are
+   * `instanceof Module`, so it never saw the two, and **six shortcut layers never learned
+   * once.** The loss went down, because the rest compensate.
    *
-   * torch 도 파이썬 dict 에 담은 층을 등록 안 한다(그래서 `nn.ModuleDict` 가
-   * 있다). 라이브러리가 옳았고 이 파일이 틀렸다.
+   * torch does not register a layer put in a Python dict either (which is why
+   * `nn.ModuleDict` exists). The library was right and this file was wrong.
    */
   private readonly downConv: nn.Conv2d | null;
   private readonly downBn: nn.BatchNormND | null;
@@ -56,7 +59,8 @@ export class Block extends nn.Module {
 }
 
 /**
- * CIFAR 판 — 3×3 스템에 맥스풀이 없다. 32×32 를 7×7 스템으로 받으면 너무 줄어든다.
+ * The CIFAR build — a 3×3 stem and no max pool. Take 32×32 through a 7×7 stem and too
+ * little is left.
  */
 export class ResNet18 extends nn.Module {
   private readonly stem: nn.Conv2d;
@@ -77,9 +81,9 @@ export class ResNet18 extends nn.Module {
     this.fc = new nn.Linear(512, classes);
   }
 
-  // `children()` 을 안 덮어쓴다 — 넷 다 필드라 기본 훑기가 찾는다. 덮어쓰면
-  // `namedChildren()` 과 어긋날 자리가 생기고, 그 어긋남이 바로 위 `Block` 을
-  // 여섯 층 동안 안 배우게 만든 것이다.
+  // `children()` is not overridden — all four are fields, so the default sweep finds
+  // them. Overriding it opens a place to disagree with `namedChildren()`, and that
+  // disagreement is what kept `Block` above from learning for six layers.
 
   override forward(x: Tensor): Tensor {
     let h = this.bn.forward(this.stem.forward(x)).unary("relu");
@@ -93,55 +97,65 @@ export interface StepResult {
   params: number;
   msPerStep: number;
   epochMin: number;
-  /** 스텝당 안 놓인 버퍼 수. 0 이 아니면 새는 것이다. */
+  /** Buffers per step that were not let go. Anything but 0 is a leak. */
   leakPerStep: number;
-  /** 스텝당 dispatch 수. 느린 것이 커널인지 부르는 횟수인지 가른다. */
+  /** Dispatches per step. It separates a slow kernel from too many calls. */
   dispatches: number;
-  /** dispatch 하나당 벽시계. 커널 시간이 아니라 **부르는 값**의 상한이다. */
+  /** Wall clock per dispatch. Not kernel time — an upper bound on **what a call
+   * costs.** */
   usPerDispatch: number;
-  /** 커널 종류별 dispatch 수, 많은 것부터. 다음에 무엇을 고칠지가 여기서 나온다. */
+  /** Dispatches by kind of kernel, most first. What to mend next comes out of here. */
   kinds: [string, number][];
-  /** 커널 종류별 **GPU 시간**(ms), 큰 것부터. 횟수와 다른 순서가 나오는 것이 요점이다. */
+  /** **GPU time** (ms) by kind of kernel, largest first. The point is that the order
+   * differs from the count's. */
   hot: [string, number][];
-  /** 프로파일 중에 잰 총합(ms). 패스를 하나씩 여느라 평소보다 크다. */
+  /** The total measured while profiling (ms). Larger than usual, because a pass is
+   * opened per dispatch. */
   profiledMs: number;
-  /** 질의 자리가 모자라 **못 잰** dispatch 수. 0 이 아니면 위 표는 스텝의 일부다. */
+  /** Dispatches **not measured**, for want of a query slot. Anything but 0 and the
+   * table above is part of a step rather than all of it. */
   profileDropped: number;
   /**
-   * 통에서 다음 스텝을 기다리는 버퍼(MB). **`gpuMb` 는 이것을 안 센다.**
+   * Buffers waiting in the pool for the next step (MB). **`gpuMb` does not count this.**
    *
-   * 저쪽은 "새는가", 이쪽은 "쥐고 있는가" 다. 한 판에서 배치를 바꿔 가며 재므로
-   * 앞 배치의 버퍼가 여기 쌓인다 — 그것을 안 적으면 발자국이 작아 보인다.
+   * That one asks "is it leaking" and this one "is it being held". The batch size changes
+   * within one sitting, so the previous batch's buffers pile up here — leave it unsaid and
+   * the footprint looks smaller than it is.
    */
   pooledMb: number;
-  /** 스텝당 실제 제출 수. dispatch 수와 갈리는 만큼이 묶인 것이다. */
+  /** Actual submits per step. How far it parts from the dispatch count is how much was
+   * batched. */
   submits: number;
   /**
-   * 스텝이 끝난 뒤 잡고 있는 GPU 메모리(MB).
+   * GPU memory held after the step (MB).
    *
-   * **파이썬 벤치는 이것을 재는데 이쪽은 안 쟀다.** 같은 잣대라고 부르면서 한쪽만
-   * 보는 칸이 있으면 그 칸에서 갈린 것은 비교에 안 나온다.
+   * **The Python bench measures this and this side did not.** Call it the same yardstick
+   * while a column is read on one side only, and whatever parts in that column does not
+   * appear in the comparison.
    */
   gpuMb: number;
-  /** 순방향만 돌렸을 때의 벽시계. 나머지가 역방향과 옵티마이저의 몫이다. */
+  /** Wall clock with the forward alone. The rest is backward and optimizer. */
   msForward: number;
-  /** 가중치 기울기를 끈 스텝. 전체에서 빼면 `gradWeight` 의 몫이다. */
+  /** A step with the weight gradient off. Subtract from the whole and what is left is
+   * `gradWeight`'s share. */
   msNoWeightGrad: number;
-  /** 그때의 dispatch 수. 안 줄었으면 **깃발이 안 먹은 것**이다. */
+  /** The dispatch count then. If it did not fall, **the flag did not bite.** */
   noWeightDispatches: number;
   loss: number;
 }
 
 /**
- * 한 스텝의 벽시계 시간.
+ * The wall clock of one step.
  *
- * **워밍업 뒤에 기준선을 잡는다.** 안 그러면 첫 스텝의 셰이더 컴파일이 측정 창에
- * 들어와 스텝당 비용으로 둔갑한다 — 모양마다 셰이더를 굽는 설계라 그 값이 크다.
+ * **The baseline is taken after the warm-up.** Otherwise the first step's shader
+ * compilation falls inside the measuring window and passes itself off as per-step cost —
+ * and a design that bakes a shader per shape makes that a large figure.
  */
 export async function runStep(
   batch = 32, steps = 5, warmup = 2,
 ): Promise<StepResult> {
-  // 입력은 **구역 밖**에서 만든다. 안에서 만들면 첫 스텝이 끝날 때 놓인다.
+  // The input is made **outside the scope.** Made inside, it is let go at the end of the
+  // first step.
   const rng = { s: 12345 };
   const next = (): number => {
     let x = rng.s; x ^= x << 13; x >>>= 0; x ^= x >> 17; x ^= x << 5; x >>>= 0;
@@ -161,15 +175,16 @@ export async function runStep(
   const opt = new SGD(params, 0.05, 0.9);
   const crit = new nn.CrossEntropyLoss();
 
-  // **쓰는 사람이 칠 그대로 친다.** 벤치는 남이 보는 유일한 학습 루프이므로, 여기가
-  // 저수준 `beginScope`/`endScope` 를 부르면 `scope()` 를 권한 것이 무의미해진다.
-  // 누수는 `device().lastScope` 로 본다 — 그것 때문에 저수준으로 내려가던 자리였다.
+  // **Typed exactly as a user would type it.** The bench is the only training loop
+  // outsiders read, so calling the low-level `beginScope`/`endScope` here would make
+  // recommending `scope()` meaningless. The leak is read from `device().lastScope` — which
+  // is what used to make this place reach for the low-level pair.
   const one = async (): Promise<number> => scope(async () => {
     opt.zeroGrad();
     const out = crit.call(model.call(x), y);
     out.backward();
     opt.step();
-    // **구역 안에서 읽어야 한다** — 나가면 그 버퍼가 없다.
+    // **It has to be read inside the scope** — outside it, that buffer is gone.
     return await out.item();
   });
 
@@ -184,7 +199,7 @@ export async function runStep(
   const perStep = (performance.now() - t0) / steps;
   const perStepDispatches = (device().dispatches - d0) / steps;
   const perStepSubmits = (device().submits - s0) / steps;
-  // 종류별로 갈라 둔다 — 총수만으로는 다음에 무엇을 고칠지 안 나온다.
+  // Split by kind — a total alone does not say what to mend next.
   const kinds: [string, number][] = [];
   for (const [kind, n] of device().byKind) {
     const grew = (n - (k0.get(kind) ?? 0)) / steps;
@@ -192,28 +207,31 @@ export async function runStep(
   }
   kinds.sort((a, b) => b[1] - a[1]);
 
-  // 누수는 **구역이 안 놓고 내보낸 버퍼 수**다.
+  // A leak is **the number of buffers a scope let out without letting go.**
   //
-  // 처음에는 열린 구역의 깊이를 뺐는데, 그건 구역 밖에서 늘 0 이라 언제나 0 을 낸다 —
-  // 이름은 누수인데 재는 것이 아무것도 없는 계측이다. 파이썬 벤치가 같은 함정을
-  // 적어두었고("이름이 말하는 것과 다른 수를 내는 계측은 진짜 누수를 만났을 때도
-  // 못 믿는다") 나는 그것을 읽고도 같은 것을 만들었다.
+  // At first this subtracted the depth of the open scopes, which outside a scope is always
+  // 0, so it always gave 0 — an instrument named for a leak and measuring nothing. The
+  // Python bench had written the same trap down ("an instrument that reports a number
+  // other than what its name says cannot be believed when it does meet a real leak") and I
+  // read that and built the same thing anyway.
   await one();
   const leak = device().lastScope.survived;
 
   /**
-   * 순방향만.
+   * The forward alone.
    *
-   * **역방향의 몫을 추측하지 않으려고 잰다.** 전체에서 이것을 빼면 남는 것이
-   * 역방향과 옵티마이저이고, 그 둘 중 어느 쪽을 먼저 고칠지가 거기서 정해진다.
-   * 손실을 읽는 것까지 같이 해야 GPU 를 기다리는 지점이 같다.
+   * **Measured so that the backward's share is not guessed at.** Subtract this from the
+   * whole and what is left is the backward and the optimizer, and which of those two to
+   * mend first is decided there. Reading the loss has to happen here too, so that the
+   * place where it waits on the GPU is the same.
    */
   const forwardOnly = async (): Promise<void> => {
     const d = device();
     d.beginScope();
     try {
-      // `noGrad` 는 **동기** 본문을 받는다 — 비동기를 넣으면 기울기 스위치가 읽기보다
-      // 먼저 되돌아간다. 그래프 세우기만 감싸고 읽기는 밖에서 기다린다.
+      // `noGrad` takes a **synchronous** body — pass an asynchronous one and the
+      // gradient switch flips back before the read. It wraps the graph building alone,
+      // and the read is awaited outside it.
       const out = noGrad(() => crit.forward(model.forward(x), y));
       await out.item();
     } finally {
@@ -226,11 +244,13 @@ export async function runStep(
   const perForward = (performance.now() - f0) / steps;
 
   /**
-   * 가중치 기울기를 끄고 한 스텝.
+   * One step with the weight gradient off.
    *
-   * **어느 커널이 무거운지를 추측 대신 뺄셈으로 낸다.** `gradWeight` 는 출력이 작고
-   * 축약이 큰 GEMM 이라 층에 따라 워크그룹이 한 개까지 떨어진다 — 그것이 실제로
-   * 비싼지는 켜고 끈 차이로만 알 수 있다. 학습은 이 동안 틀리지만 재는 것은 시간이다.
+   * **Which kernel is heavy comes out of a subtraction rather than a guess.**
+   * `gradWeight` is a GEMM with a small output and a large reduction, so depending on the
+   * layer it falls to a single workgroup — and whether that is actually expensive is
+   * knowable only from the difference between on and off. The learning is wrong while this
+   * runs, and what is being measured is time.
    */
   const convWeights = params.filter((p) => p.shape.length >= 3);
   for (const p of convWeights) p.requiresGrad = false;
@@ -239,17 +259,18 @@ export async function runStep(
   const wd0 = device().dispatches;
   for (let i = 0; i < steps; i++) await one();
   const perNoWeightGrad = (performance.now() - w0) / steps;
-  // **깃발이 진짜로 일을 줄이는가.** 시간만 보면 "gradWeight 가 싸다" 와 "깃발이
-  // 안 먹는다" 가 같은 화면이다. dispatch 수가 안 줄면 뒤쪽이다.
+  // **Does the flag really take work away.** By time alone, "gradWeight is cheap" and
+  // "the flag does not bite" are the same screen. If the dispatch count did not fall it is
+  // the second.
   const noWeightDispatches = (device().dispatches - wd0) / steps;
   for (const p of convWeights) p.requiresGrad = true;
 
   /**
-   * 커널 종류별 GPU 시간. **횟수만으로는 어디가 비싼지 안 나온다** — 횟수는 배치가
-   * 커져도 그대로인데 시간은 배치마다 다르게 늘어난다.
+   * GPU time by kind of kernel. **A count alone does not say where the cost is** — the
+   * count stays put as the batch grows while the time grows differently per kind.
    *
-   * 재는 동안은 dispatch 마다 패스를 열므로 **합이 위의 ms/step 보다 크다.** 여기서
-   * 볼 것은 절대값이 아니라 몫이다.
+   * A pass is opened per dispatch while measuring, so **the total is larger than the
+   * ms/step above.** What to read here is the share, not the absolute figure.
    */
   await device().profile(() => one());
   const hot: [string, number][] = [];
@@ -258,26 +279,29 @@ export async function runStep(
   const profiledMs = hot.reduce((a, [, ms]) => a + ms, 0);
   const profileDropped = device().profileDropped;
 
-  // **검증 오류가 하나라도 났으면 수를 안 낸다.**
+  // **One validation fault and no number is given.**
   //
-  // 무효한 명령 버퍼는 예외를 안 던지고 그냥 아무것도 안 한다. 그 상태에서도
-  // 벽시계는 돌아서 ms/step 이 나오는데, 그건 측정이 아니라 학습이 안 되는 상태의
-  // 벽시계다. 실제로 그렇게 됐다 — 평균 풀링의 역방향이 통째로 무효였고 손실이
-  // 2.27 에서 안 움직이는 채로 "13070 ms/step" 이 나왔다.
+  // An invalid command buffer throws nothing and simply does nothing. The wall clock runs
+  // in that state too and produces an ms/step, which is not a measurement but the wall
+  // clock of a state in which no learning happens. It happened — average pooling's backward
+  // was invalid in its entirety, and "13070 ms/step" came out while the loss sat at
+  // 2.27.
   const faults = device().faults;
   if (faults.count > 0) {
     throw new Error(
-      `WebGPU 검증 오류 ${faults.count}건이 났다 — 이 수는 측정이 아니다.\n` +
-        `첫 건: ${faults.first}`,
+      `${faults.count} WebGPU validation fault(s) — this is not a measurement.\n` +
+        `first: ${faults.first}`,
     );
   }
-  // **장치를 잃은 것도 같은 이유로 막는다.** 잃은 장치는 명령을 조용히 안 돌리므로
-  // 화면이 위와 똑같다 — 손실이 안 움직이고 벽시계만 돈다. 위를 막아 두고 이쪽을
-  // 안 막으면 같은 거짓 수치가 다른 문으로 들어온다.
+  // **A lost device is stopped for the same reason.** A lost device silently declines to
+  // run the commands, so the screen is the one above — the loss does not move and only the
+  // wall clock does. Stop the first and leave this open, and the same false figure comes in
+  // through another door.
   const lost = device().lost;
   if (lost) {
     throw new Error(
-      `WebGPU 장치를 잃었다(${lost.reason}) — 이 수는 측정이 아니다.\n${lost.message}`,
+      `the WebGPU device was lost (${lost.reason}) — this is not a measurement.\n`
+        + lost.message,
     );
   }
 
@@ -304,7 +328,7 @@ export async function runStep(
   };
 }
 
-/** 파이썬 벤치와 같은 배치들을 같은 차례로. */
+/** The Python bench's batch sizes, in its order. */
 export async function report(batches: readonly number[] = [16, 32, 64]): Promise<string> {
   const lines: string[] = [];
   for (const b of batches) {
@@ -313,57 +337,62 @@ export async function report(batches: readonly number[] = [16, 32, 64]): Promise
       lines.push(
         `batch ${String(r.batch).padStart(3)}  ` +
         `${r.msPerStep.toFixed(1).padStart(8)} ms/step  ` +
-        `(순방향 ${r.msForward.toFixed(1).padStart(7)} · dW뺀것 ` +
+        `(forward ${r.msForward.toFixed(1).padStart(7)} · no dW ` +
         `${r.msNoWeightGrad.toFixed(1).padStart(7)}/${r.noWeightDispatches}d)  ` +
-        `에폭 ${r.epochMin.toFixed(2).padStart(6)}분  ` +
+        `epoch ${r.epochMin.toFixed(2).padStart(6)} min  ` +
         `dispatch ${String(r.dispatches).padStart(5)}  ` +
-        `제출 ${String(r.submits).padStart(3)}  ` +
+        `submits ${String(r.submits).padStart(3)}  ` +
         `${String(r.usPerDispatch).padStart(5)}µs/dispatch  ` +
-        `누수 ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
-        `${r.gpuMb.toFixed(1).padStart(6)}MB(+통 ${r.pooledMb.toFixed(1)})  ` +
-        `손실 ${r.loss.toFixed(4)}`,
+        `leak ${r.leakPerStep.toFixed(1).padStart(5)}  ` +
+        `${r.gpuMb.toFixed(1).padStart(6)}MB(+pool ${r.pooledMb.toFixed(1)})  ` +
+        `loss ${r.loss.toFixed(4)}`,
       );
-      // **시간 내역은 배치마다 찍는다.** 횟수는 배치가 커져도 그대로지만 시간은
-      // 안 그렇다 — 초선형인 커널이 있으면 여기서만 보인다.
+      // **The time breakdown is printed per batch.** The counts stay put as the batch
+      // grows and the times do not — a superlinear kernel is visible only here.
       const hot = r.hot.slice(0, 8)
         .map(([kind, ms]) => `${kind} ${ms.toFixed(1)}`).join(" · ");
-      // 잘렸으면 **합 옆에 붙여서** 적는다. 각주로 미루면 표만 읽고 지나간다.
+      // If it was cut short, say so **beside the total.** Put in a footnote it is read
+      // past, with only the table taken in.
       const cut = r.profileDropped > 0
-        ? `, ${r.profileDropped}개는 자리가 없어 못 쟀다 — 아래는 일부다`
+        ? `, ${r.profileDropped} had no query slot and went unmeasured — this is part of it`
         : "";
-      lines.push(`         GPU 시간(ms, 합 ${r.profiledMs}${cut}): ${hot}`);
-      // 종류별 횟수는 배치마다 같으므로 한 번만 찍는다.
+      lines.push(`         GPU time (ms, total ${r.profiledMs}${cut}): ${hot}`);
+      // The counts by kind are the same for every batch, so they are printed once.
       if (b === batches[0]) {
         const top = r.kinds.slice(0, 8)
           .map(([kind, n]) => `${kind} ${n}`).join(" · ");
-        lines.push(`         dispatch 내역: ${top}`);
+        lines.push(`         dispatch breakdown: ${top}`);
       }
     } catch (err) {
-      lines.push(`batch ${String(b).padStart(3)}  실패: ` +
+      lines.push(`batch ${String(b).padStart(3)}  failed: ` +
         `${err instanceof Error ? `${err.constructor.name}: ${err.message.slice(0, 120)}` : String(err)}`);
-      // **어디서 났는지가 무엇이 났는지만큼 중요하다.** 문구만 남기면 같은 문구를
-      // 내는 자리가 여럿일 때 어느 쪽인지 못 가른다.
+      // **Where it happened matters as much as what happened.** Keep the wording alone
+      // and, where several places produce the same wording, they cannot be told apart.
       if (err instanceof Error && err.stack) {
         lines.push(`         ${err.stack.split("\n").slice(3, 11).join("\n         ")}`);
       }
     }
   }
-  // **어느 장치에서 잰 것인지가 수보다 먼저 온다.** 헤드리스 브라우저가 소프트웨어
-  // 어댑터를 주면 예외 없이 느린 수가 나오고, 그것은 라이브러리의 성적이 아니다.
-  return `ResNet-18(CIFAR) · 배치별 실제 학습 스텝\n어댑터: ${Device.adapterInfo}\n`
+  // **Which device it was measured on comes before the numbers.** Where a headless
+  // browser hands over a software adapter, slow figures come out with no exception raised,
+  // and they are not the library's result.
+  return `ResNet-18 (CIFAR) · a real training step, per batch\n`
+    + `adapter: ${Device.adapterInfo}\n`
     + lines.join("\n");
 }
 
-/** 구역을 밖에서도 쓸 수 있게 — 러너가 전체를 한 겹 더 감싼다. */
+/** So the scope can be used from outside — the runner wraps the whole in one more. */
 export { scope };
 
 /**
- * 조각을 하나씩 떼어 **자리마다 다른 가중치로** 역전파해 본다.
+ * Take the pieces off one at a time and backpropagate **with a different weight per
+ * position.**
  *
- * 전체 모델만 견주면 갈렸을 때 어디인지 모른다. 그리고 그냥 `sum()` 으로 접으면
- * 상류 기울기가 전부 1 이라 **BatchNorm 역방향의 보정항 둘이 정확히 상쇄된다** —
- * 골든의 `grad::BatchNorm2d/x` 가 기대값 4.7e-10 인 이유가 그것이고, 그래서 그
- * 케이스는 보정항을 하나도 안 물어본다.
+ * Weigh the whole model alone and, when it parts, there is no telling where. And folding
+ * with a plain `sum()` makes every upstream gradient 1, at which point **BatchNorm's two
+ * backward correction terms cancel exactly** — that is why the golden's
+ * `grad::BatchNorm2d/x` expects 4.7e-10, and why that case asks nothing at all about the
+ * correction terms.
  */
 export async function dumpPieces(): Promise<Record<string, {
   params: number[][];
@@ -393,12 +422,13 @@ export async function dumpPieces(): Promise<Record<string, {
     for (let i = 0; i < n; i++) data[i] = Math.sin(i * 0.31) * 0.7;
     const x = keepAlive(Tensor.from(data, shape, { requiresGrad: true }));
     const y = mod.forward(x);
-    // **자리마다 다른 가중치.** 전부 1 이면 보정항이 상쇄되어 아무것도 안 묻는다.
+    // **A different weight per position.** All ones and the correction terms cancel,
+    // and nothing is asked.
     const w = new Float32Array(y.size);
     for (let i = 0; i < w.length; i++) w[i] = ((i % 7) + 1) * 0.3;
     y.mul(Tensor.from(w, y.shape)).sum().backward();
     const grad = x.grad;
-    if (!grad) throw new Error(`${name}: 입력 기울기가 안 왔다`);
+    if (!grad) throw new Error(`${name}: no gradient arrived at the input`);
     const params = mod.parameters();
     out[name] = {
       params: await Promise.all(params.map(async (p) => [...await p.toArray()])),
@@ -414,7 +444,8 @@ export async function dumpPieces(): Promise<Record<string, {
   return out;
 }
 
-/** 비교용 껍데기 — 파이썬 쪽 `AdaptiveAvgPool2d(1)` 과 짝이다. */
+/** A shell for the comparison — the partner of `AdaptiveAvgPool2d(1)` on the Python
+ * side. */
 class AvgPoolTo1 extends nn.Module {
   override forward(x: Tensor): Tensor {
     return x.adaptiveAvgPool(1);
@@ -422,14 +453,17 @@ class AvgPoolTo1 extends nn.Module {
 }
 
 /**
- * 이 ResNet-18 이 **파이썬 쪽 것과 같은 모델인지** 확인할 재료를 낸다.
+ * The material for asking whether this ResNet-18 is **the same model as the Python
+ * side's.**
  *
- * 벤치의 모델은 `tests/browser/bench.py` 를 눈으로 읽어 옮긴 것이라 골든 밖에 있다.
- * 블록 구성이나 BN 자리가 미묘하게 다르면 속도도 정확도도 **다른 모델끼리 비교한
- * 것**이 되는데, 그 갈림은 값으로만 보인다.
+ * The bench's model was carried across by reading `tests/browser/bench.py` by eye, so it
+ * sits outside the golden. Let the block arrangement or a BN's position differ subtly and
+ * both the speed and the accuracy become **a comparison of two different models** — and
+ * that parting is visible only in the values.
  *
- * 파라미터를 **순서대로** 내보낸다. 구조가 같으면 모양 목록이 정확히 같고, 다르면
- * 거기서 먼저 갈린다 — 이름 짓는 규칙이 두 언어에서 다르므로 자리로 맞춘다.
+ * The parameters go out **in order.** With the same structure the list of shapes is
+ * exactly equal, and with a different one it parts there first — the naming rules differ
+ * between the two languages, so they are lined up by position.
  */
 export async function dumpForComparison(batch = 2): Promise<{
   shapes: number[][];
@@ -441,7 +475,8 @@ export async function dumpForComparison(batch = 2): Promise<{
 }> {
   const model = new ResNet18();
   const params = model.parameters();
-  // 입력도 라벨도 못 박는다 — 두 쪽이 같은 수를 봐야 비교다.
+  // The input and the labels are both pinned — a comparison wants both sides looking at
+  // the same numbers.
   const pixels = new Float32Array(batch * 3 * 32 * 32);
   for (let i = 0; i < pixels.length; i++) {
     pixels[i] = Math.sin(i * 0.017) * 0.5;
@@ -456,7 +491,7 @@ export async function dumpForComparison(batch = 2): Promise<{
   loss.backward();
 
   const grad = x.grad;
-  if (!grad) throw new Error("입력 기울기가 안 왔다 — 그래프가 끊겼다");
+  if (!grad) throw new Error("no gradient arrived at the input — the graph was cut");
   return {
     shapes: params.map((p) => [...p.shape]),
     params: await Promise.all(params.map(async (p) => [...await p.toArray()])),
