@@ -440,7 +440,7 @@ NOT_PORTED = {
     #
     # **남은 마흔은 성격이 하나다**: rotate·affine·perspective·elastic·gaussian_blur,
     # 전부 화소 사이를 읽는 것들이다. 그 앞의 것들은 화소를 옮기거나 값만 바꿨다.
-    "vision::": (40, "아직 — 격자 재표본이 `vision.ts` 에 없다 (값 32 · repr 8)"),
+    "vision::": (49, "아직 — 격자 재표본과 정책 넷이 `vision.ts` 에 없다 (값 36 · repr 13)"),
     "cache::": (4, "별칭 — 전역 상수 오염은 parity 가 같은 것을 묻는다"),
     "dataconv::": (3, "파이썬 — `default_convert`·`get_worker_info` 는 파이썬 쪽이다"),
 }

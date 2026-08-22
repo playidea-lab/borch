@@ -8298,6 +8298,43 @@ def vision_cases(inp=None):
              on_bytes=True)),
     ]
 
+    # --- the policies ---------------------------------------------------------
+    #
+    # **Almost nothing here can be frozen, and that is the honest shape of it.** All
+    # four draw on every call — which operation, how hard, which sign, and for two of
+    # them how many — so a frozen picture would be a frozen dice roll. What *can* be
+    # frozen is the part that is not drawn: the learned table itself, and the one
+    # configuration that applies nothing.
+    #
+    # The operations these pick from are all cased above, individually. That is where
+    # this layer's values are actually held.
+
+    def policy_table(name):
+        """`AutoAugment`'s learned table, **as text.**
+
+        It is twenty-five pairs of (operation, probability, strength) per dataset,
+        found by a search and derivable from nothing — the kind of data that is
+        transcribed wrong silently and stays wrong, because every entry is plausible.
+        Comparing it as a string is the only way to ask about data that has no
+        arithmetic to check it against.
+        """
+        def run(L):
+            T = _vision(L)
+            policy = T.AutoAugmentPolicy(name)
+            return str(T.AutoAugment(policy).policies)
+        return run
+
+    for _policy in ("imagenet", "cifar10", "svhn"):
+        cases.append((VISION_PREFIX + f"AutoAugment(the {_policy} table)",
+                      policy_table(_policy)))
+
+    cases.append((
+        # **Zero operations has to be the identity**, and it is the only configuration
+        # of any of the four that does not draw. A `num_ops` read as a count of
+        # something else would show here and nowhere else.
+        VISION_PREFIX + "RandAugment(no operations)",
+        wrapper(lambda T: T.RandAugment(num_ops=0), on_bytes=True)))
+
     # Representation (T3). This project treats `repr` as specification too — the tutorials do
     # `print(transform)`, and if it differs there the learner learns something else.
     reprs = (
@@ -8356,6 +8393,15 @@ def vision_cases(inp=None):
         # **The one class that prints the enum's name where every other prints its
         # value** — `interpolation=InterpolationMode.BILINEAR` rather than `bilinear`.
         ("ElasticTransform", lambda T: T.ElasticTransform()),
+        # The four policies. `AutoAugment` prints its enum where the other three print
+        # `InterpolationMode`, and `AugMix` prints seven fields — all four spellings
+        # are torchvision's and none is derivable from the others.
+        ("AutoAugment", lambda T: T.AutoAugment()),
+        ("AutoAugment(svhn, filled)",
+         lambda T: T.AutoAugment(T.AutoAugmentPolicy("svhn"), fill=3)),
+        ("RandAugment", lambda T: T.RandAugment()),
+        ("TrivialAugmentWide", lambda T: T.TrivialAugmentWide()),
+        ("AugMix", lambda T: T.AugMix()),
         ("RandomAffine(everything)",
          lambda T: T.RandomAffine(0, translate=(0.1, 0.2), scale=(0.8, 1.2),
                                   shear=(5, 10))),

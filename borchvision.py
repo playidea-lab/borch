@@ -2156,6 +2156,476 @@ class ElasticTransform:
                 f"fill={self.fill})")
 
 
+# --- the policies -----------------------------------------------------------
+#
+# **Nothing new is computed here.** Every one of these four picks from the operations
+# above and applies them; the work was the operations, and this is the layer that
+# finally uses all of them at once. `_apply_op` below is the whole vocabulary, and
+# every name in it resolves to something in this file.
+#
+# They differ only in **what decides the choice**: a learned table (`AutoAugment`), a
+# uniform draw with a fixed strength (`RandAugment`), a uniform draw with a drawn
+# strength (`TrivialAugmentWide`), or several chains blended together (`AugMix`).
+#
+# **They want a uint8 picture.** `posterize` masks bits and `equalize` counts a
+# histogram, so a float image raises the moment either is drawn — which is
+# torchvision's behaviour too, and it surfaces at a random moment rather than on the
+# first call. Written down here because "sometimes it works" is the worst way to meet
+# it.
+
+
+def _apply_op(img, op_name, magnitude, interpolation, fill):
+    """One named operation at one strength. **The names are the policies' vocabulary**
+    and they are not our function names — `Color` is saturation, `Identity` does
+    nothing, and the shears take a tangent."""
+    if op_name == "ShearX":
+        # **The magnitude is a slope and `affine` takes an angle**, which is why the
+        # arctangent is here. The original AutoAugment passed the slope straight into a
+        # matrix; torchvision's `affine` takes degrees, so the two agree only through
+        # this conversion — dropping it is a shear that is wrong by more the larger it
+        # gets, and right at zero.
+        return affine(img, 0.0, [0, 0], 1.0,
+                      [_math.degrees(_math.atan(magnitude)), 0.0],
+                      interpolation=interpolation, fill=fill, center=[0, 0])
+    if op_name == "ShearY":
+        return affine(img, 0.0, [0, 0], 1.0,
+                      [0.0, _math.degrees(_math.atan(magnitude))],
+                      interpolation=interpolation, fill=fill, center=[0, 0])
+    if op_name == "TranslateX":
+        return affine(img, 0.0, [int(magnitude), 0], 1.0, [0.0, 0.0],
+                      interpolation=interpolation, fill=fill)
+    if op_name == "TranslateY":
+        return affine(img, 0.0, [0, int(magnitude)], 1.0, [0.0, 0.0],
+                      interpolation=interpolation, fill=fill)
+    if op_name == "Rotate":
+        return rotate(img, magnitude, interpolation=interpolation, fill=fill)
+    if op_name == "Brightness":
+        return adjust_brightness(img, 1.0 + magnitude)
+    if op_name == "Color":
+        return adjust_saturation(img, 1.0 + magnitude)
+    if op_name == "Contrast":
+        return adjust_contrast(img, 1.0 + magnitude)
+    if op_name == "Sharpness":
+        return adjust_sharpness(img, 1.0 + magnitude)
+    if op_name == "Posterize":
+        return posterize(img, int(magnitude))
+    if op_name == "Solarize":
+        return solarize(img, magnitude)
+    if op_name == "AutoContrast":
+        return autocontrast(img)
+    if op_name == "Equalize":
+        return equalize(img)
+    if op_name == "Invert":
+        return invert(img)
+    if op_name == "Identity":
+        return img
+    raise ValueError(
+        f"The provided operator {op_name} is not recognized.\n"
+        "(torch: The provided operator is not recognized.)")
+
+
+class AutoAugmentPolicy(_enum.Enum):
+    """Which learned table `AutoAugment` uses. The three are the datasets the search
+    was run on, and they are **not interchangeable** — the SVHN policy inverts and
+    shears hard because house numbers survive it, and a photograph does not."""
+
+    IMAGENET = "imagenet"
+    CIFAR10 = "cifar10"
+    SVHN = "svhn"
+
+
+def _linspace_bins(lo, hi, num_bins):
+    return _np.linspace(lo, hi, num_bins, dtype=_np.float64)
+
+
+def _posterize_bins(top, num_bins, divisor):
+    """`top - round(arange / ((num_bins - 1) / divisor))`, in **integers**. A float
+    magnitude here would be truncated by `posterize`'s `int()` rather than rounded, and
+    the two disagree on half the bins.
+
+    `top` is 8 everywhere except `AugMix`, where it is 4 — the same formula counting
+    down from half as high, which is a stronger posterize at every bin.
+    """
+    steps = _np.arange(num_bins) / ((num_bins - 1) / divisor)
+    return (top - _np.rint(steps)).astype(_np.int64)
+
+
+# **Four tables and not one parameterised one.** They look like variations — shear,
+# translate, rotate, the photometric four, posterize, solarize — and they are not: the
+# ranges differ, `AugMix` translates by a third of the picture where the others use
+# 150/331 of it, its posterize counts down from 4 rather than 8, `AutoAugment` alone
+# has `Invert`, and three of the four put `Identity` first while one has none.
+#
+# The first draft of this file was one table with a `kind` flag, written from the two
+# I had read. It was wrong about `AugMix` in four places at once. **A shape that looks
+# like a family is not evidence that it is one**, and each of these is checkable
+# against its source only while it is written out.
+#
+# The order matters as much as the numbers: the operation is chosen by drawing an
+# index into the dictionary, so moving a name changes which strength every later draw
+# lands on.
+
+
+def _space_auto(num_bins, size):
+    """`AutoAugment` — the only one with `Invert`, and the only one without
+    `Identity`."""
+    return {
+        "ShearX": (_linspace_bins(0.0, 0.3, num_bins), True),
+        "ShearY": (_linspace_bins(0.0, 0.3, num_bins), True),
+        "TranslateX": (_linspace_bins(0.0, 150.0 / 331.0 * size[1], num_bins), True),
+        "TranslateY": (_linspace_bins(0.0, 150.0 / 331.0 * size[0], num_bins), True),
+        "Rotate": (_linspace_bins(0.0, 30.0, num_bins), True),
+        "Brightness": (_linspace_bins(0.0, 0.9, num_bins), True),
+        "Color": (_linspace_bins(0.0, 0.9, num_bins), True),
+        "Contrast": (_linspace_bins(0.0, 0.9, num_bins), True),
+        "Sharpness": (_linspace_bins(0.0, 0.9, num_bins), True),
+        "Posterize": (_posterize_bins(8, num_bins, 4), False),
+        "Solarize": (_linspace_bins(255.0, 0.0, num_bins), False),
+        "AutoContrast": (None, False),
+        "Equalize": (None, False),
+        "Invert": (None, False),
+    }
+
+
+def _space_rand(num_bins, size):
+    """`RandAugment` — `AutoAugment`'s ranges with `Identity` in front and `Invert`
+    gone."""
+    space = {"Identity": (None, False)}
+    space.update(_space_auto(num_bins, size))
+    del space["Invert"]
+    return space
+
+
+def _space_trivial(num_bins):
+    """`TrivialAugmentWide` — **much wider, and it does not know the picture's size.**
+    Its translate is a flat 32 pixels rather than a fraction, which is the paper's
+    point: one strength ladder, no tuning."""
+    return {
+        "Identity": (None, False),
+        "ShearX": (_linspace_bins(0.0, 0.99, num_bins), True),
+        "ShearY": (_linspace_bins(0.0, 0.99, num_bins), True),
+        "TranslateX": (_linspace_bins(0.0, 32.0, num_bins), True),
+        "TranslateY": (_linspace_bins(0.0, 32.0, num_bins), True),
+        "Rotate": (_linspace_bins(0.0, 135.0, num_bins), True),
+        "Brightness": (_linspace_bins(0.0, 0.99, num_bins), True),
+        "Color": (_linspace_bins(0.0, 0.99, num_bins), True),
+        "Contrast": (_linspace_bins(0.0, 0.99, num_bins), True),
+        "Sharpness": (_linspace_bins(0.0, 0.99, num_bins), True),
+        "Posterize": (_posterize_bins(8, num_bins, 6), False),
+        "Solarize": (_linspace_bins(255.0, 0.0, num_bins), False),
+        "AutoContrast": (None, False),
+        "Equalize": (None, False),
+    }
+
+
+def _space_augmix(num_bins, size, all_ops):
+    """`AugMix` — **a third of the picture, and posterize counting down from four.**
+    The photometric four are absent unless asked for, and they arrive at the *end*,
+    which changes what every index above them draws."""
+    space = {
+        "ShearX": (_linspace_bins(0.0, 0.3, num_bins), True),
+        "ShearY": (_linspace_bins(0.0, 0.3, num_bins), True),
+        "TranslateX": (_linspace_bins(0.0, size[1] / 3.0, num_bins), True),
+        "TranslateY": (_linspace_bins(0.0, size[0] / 3.0, num_bins), True),
+        "Rotate": (_linspace_bins(0.0, 30.0, num_bins), True),
+        "Posterize": (_posterize_bins(4, num_bins, 4), False),
+        "Solarize": (_linspace_bins(255.0, 0.0, num_bins), False),
+        "AutoContrast": (None, False),
+        "Equalize": (None, False),
+    }
+    if all_ops:
+        space.update({
+            "Brightness": (_linspace_bins(0.0, 0.9, num_bins), True),
+            "Color": (_linspace_bins(0.0, 0.9, num_bins), True),
+            "Contrast": (_linspace_bins(0.0, 0.9, num_bins), True),
+            "Sharpness": (_linspace_bins(0.0, 0.9, num_bins), True),
+        })
+    return space
+
+
+def _fill_per_channel(fill, img):
+    if fill is None:
+        return None
+    channels = img.shape[2] if img.ndim == 3 else 1
+    if isinstance(fill, (int, float)):
+        return [float(fill)] * channels
+    return [float(f) for f in fill]
+
+
+# **Lists, not tuples**, because `AutoAugment(...).policies` is a public attribute and
+# torchvision hands back a list. The golden caught the difference on the first run:
+# identical data, different brackets. What holds a value is part of the surface.
+_POLICIES = {
+    "imagenet": [
+        (("Posterize", 0.4, 8), ("Rotate", 0.6, 9)),
+        (("Solarize", 0.6, 5), ("AutoContrast", 0.6, None)),
+        (("Equalize", 0.8, None), ("Equalize", 0.6, None)),
+        (("Posterize", 0.6, 7), ("Posterize", 0.6, 6)),
+        (("Equalize", 0.4, None), ("Solarize", 0.2, 4)),
+        (("Equalize", 0.4, None), ("Rotate", 0.8, 8)),
+        (("Solarize", 0.6, 3), ("Equalize", 0.6, None)),
+        (("Posterize", 0.8, 5), ("Equalize", 1.0, None)),
+        (("Rotate", 0.2, 3), ("Solarize", 0.6, 8)),
+        (("Equalize", 0.6, None), ("Posterize", 0.4, 6)),
+        (("Rotate", 0.8, 8), ("Color", 0.4, 0)),
+        (("Rotate", 0.4, 9), ("Equalize", 0.6, None)),
+        (("Equalize", 0.0, None), ("Equalize", 0.8, None)),
+        (("Invert", 0.6, None), ("Equalize", 1.0, None)),
+        (("Color", 0.6, 4), ("Contrast", 1.0, 8)),
+        (("Rotate", 0.8, 8), ("Color", 1.0, 2)),
+        (("Color", 0.8, 8), ("Solarize", 0.8, 7)),
+        (("Sharpness", 0.4, 7), ("Invert", 0.6, None)),
+        (("ShearX", 0.6, 5), ("Equalize", 1.0, None)),
+        (("Color", 0.4, 0), ("Equalize", 0.6, None)),
+        (("Equalize", 0.4, None), ("Solarize", 0.2, 4)),
+        (("Solarize", 0.6, 5), ("AutoContrast", 0.6, None)),
+        (("Invert", 0.6, None), ("Equalize", 1.0, None)),
+        (("Color", 0.6, 4), ("Contrast", 1.0, 8)),
+        (("Equalize", 0.8, None), ("Equalize", 0.6, None)),
+    ],
+    "cifar10": [
+        (("Invert", 0.1, None), ("Contrast", 0.2, 6)),
+        (("Rotate", 0.7, 2), ("TranslateX", 0.3, 9)),
+        (("Sharpness", 0.8, 1), ("Sharpness", 0.9, 3)),
+        (("ShearY", 0.5, 8), ("TranslateY", 0.7, 9)),
+        (("AutoContrast", 0.5, None), ("Equalize", 0.9, None)),
+        (("ShearY", 0.2, 7), ("Posterize", 0.3, 7)),
+        (("Color", 0.4, 3), ("Brightness", 0.6, 7)),
+        (("Sharpness", 0.3, 9), ("Brightness", 0.7, 9)),
+        (("Equalize", 0.6, None), ("Equalize", 0.5, None)),
+        (("Contrast", 0.6, 7), ("Sharpness", 0.6, 5)),
+        (("Color", 0.7, 7), ("TranslateX", 0.5, 8)),
+        (("Equalize", 0.3, None), ("AutoContrast", 0.4, None)),
+        (("TranslateY", 0.4, 3), ("Sharpness", 0.2, 6)),
+        (("Brightness", 0.9, 6), ("Color", 0.2, 8)),
+        (("Solarize", 0.5, 2), ("Invert", 0.0, None)),
+        (("Equalize", 0.2, None), ("AutoContrast", 0.6, None)),
+        (("Equalize", 0.2, None), ("Equalize", 0.6, None)),
+        (("Color", 0.9, 9), ("Equalize", 0.6, None)),
+        (("AutoContrast", 0.8, None), ("Solarize", 0.2, 8)),
+        (("Brightness", 0.1, 3), ("Color", 0.7, 0)),
+        (("Solarize", 0.4, 5), ("AutoContrast", 0.9, None)),
+        (("TranslateY", 0.9, 9), ("TranslateY", 0.7, 9)),
+        (("AutoContrast", 0.9, None), ("Solarize", 0.8, 3)),
+        (("Equalize", 0.8, None), ("Invert", 0.1, None)),
+        (("TranslateY", 0.7, 9), ("AutoContrast", 0.9, None)),
+    ],
+    "svhn": [
+        (("ShearX", 0.9, 4), ("Invert", 0.2, None)),
+        (("ShearY", 0.9, 8), ("Invert", 0.7, None)),
+        (("Equalize", 0.6, None), ("Solarize", 0.6, 6)),
+        (("Invert", 0.9, None), ("Equalize", 0.6, None)),
+        (("Equalize", 0.6, None), ("Rotate", 0.9, 3)),
+        (("ShearX", 0.9, 4), ("AutoContrast", 0.8, None)),
+        (("ShearY", 0.9, 8), ("Invert", 0.4, None)),
+        (("ShearY", 0.9, 5), ("Solarize", 0.2, 6)),
+        (("Invert", 0.9, None), ("AutoContrast", 0.8, None)),
+        (("Equalize", 0.6, None), ("Rotate", 0.9, 3)),
+        (("ShearX", 0.9, 4), ("Solarize", 0.3, 3)),
+        (("ShearY", 0.8, 8), ("Invert", 0.7, None)),
+        (("Equalize", 0.9, None), ("TranslateY", 0.6, 6)),
+        (("Invert", 0.9, None), ("Equalize", 0.6, None)),
+        (("Contrast", 0.3, 3), ("Rotate", 0.8, 4)),
+        (("Invert", 0.8, None), ("TranslateY", 0.0, 2)),
+        (("ShearY", 0.7, 6), ("Solarize", 0.4, 8)),
+        (("Invert", 0.6, None), ("Rotate", 0.8, 4)),
+        (("ShearY", 0.3, 7), ("TranslateX", 0.9, 3)),
+        (("ShearX", 0.1, 6), ("Invert", 0.6, None)),
+        (("Solarize", 0.7, 2), ("TranslateY", 0.6, 7)),
+        (("ShearY", 0.8, 4), ("Invert", 0.8, None)),
+        (("ShearX", 0.7, 9), ("TranslateY", 0.8, 3)),
+        (("ShearY", 0.8, 5), ("AutoContrast", 0.7, None)),
+        (("ShearX", 0.7, 2), ("Invert", 0.1, None)),
+    ],
+}
+
+
+class AutoAugment:
+    """The **learned** one: twenty-five pairs of operations found by a search, each
+    with its own probability and strength, one pair drawn per call.
+
+    Nothing about the table is derivable — it is the output of the search, which is why
+    it is written out rather than computed, and why the three datasets are three
+    tables.
+    """
+
+    def __init__(self, policy=AutoAugmentPolicy.IMAGENET, interpolation="nearest",
+                 fill=None):
+        self.policy = policy if isinstance(policy, AutoAugmentPolicy) else \
+            AutoAugmentPolicy(policy)
+        self.interpolation = _interpolation(interpolation)
+        self.fill = fill
+        self.policies = _POLICIES[self.policy.value]
+
+    def get_params(self, transform_num):
+        """Which pair, and **two probabilities and two signs** — drawn before anything
+        is applied, because both halves of a pair are decided at once."""
+        return (int(_rng.integers(0, transform_num)), _rng.random(2),
+                _rng.integers(0, 2, 2))
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        fill = _fill_per_channel(self.fill, img)
+        which, probs, signs = self.get_params(len(self.policies))
+        space = _space_auto(10, (img.shape[0], img.shape[1]))
+        for i, (op_name, p, magnitude_id) in enumerate(self.policies[which]):
+            if probs[i] <= p:
+                magnitudes, signed = space[op_name]
+                magnitude = (float(magnitudes[magnitude_id])
+                             if magnitude_id is not None else 0.0)
+                if signed and signs[i] == 0:
+                    magnitude *= -1.0
+                img = _apply_op(img, op_name, magnitude, self.interpolation, fill)
+        return img
+
+    def __repr__(self):
+        return f"{type(self).__name__}(policy={self.policy}, fill={self.fill})"
+
+
+class RandAugment:
+    """The **uniform** one: `num_ops` operations drawn evenly, all at the same fixed
+    strength.
+
+    Its point is that the search was unnecessary — one strength dial and a count do as
+    well as the learned table, which is why `magnitude` is a number you tune rather
+    than a distribution.
+    """
+
+    def __init__(self, num_ops=2, magnitude=9, num_magnitude_bins=31,
+                 interpolation="nearest", fill=None):
+        self.num_ops = num_ops
+        self.magnitude = magnitude
+        self.num_magnitude_bins = num_magnitude_bins
+        self.interpolation = _interpolation(interpolation)
+        self.fill = fill
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        fill = _fill_per_channel(self.fill, img)
+        space = _space_rand(self.num_magnitude_bins, (img.shape[0], img.shape[1]))
+        names = list(space)
+        for _ in range(self.num_ops):
+            op_name = names[int(_rng.integers(0, len(names)))]
+            magnitudes, signed = space[op_name]
+            magnitude = 0.0 if magnitudes is None else float(magnitudes[self.magnitude])
+            if signed and _rng.integers(0, 2):
+                magnitude *= -1.0
+            img = _apply_op(img, op_name, magnitude, self.interpolation, fill)
+        return img
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(num_ops={self.num_ops}"
+                f", magnitude={self.magnitude}"
+                f", num_magnitude_bins={self.num_magnitude_bins}"
+                f", interpolation={InterpolationMode(self.interpolation)}"
+                f", fill={self.fill})")
+
+
+class TrivialAugmentWide:
+    """The one with **no dials at all**: one operation, drawn evenly, at a strength
+    also drawn evenly from a wide ladder.
+
+    That is the paper's claim — tuning the strength was never worth it — so there is no
+    magnitude argument to pass. The ladder is much wider than `RandAugment`'s to make
+    up for drawing it.
+    """
+
+    def __init__(self, num_magnitude_bins=31, interpolation="nearest", fill=None):
+        self.num_magnitude_bins = num_magnitude_bins
+        self.interpolation = _interpolation(interpolation)
+        self.fill = fill
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        fill = _fill_per_channel(self.fill, img)
+        space = _space_trivial(self.num_magnitude_bins)
+        names = list(space)
+        op_name = names[int(_rng.integers(0, len(names)))]
+        magnitudes, signed = space[op_name]
+        magnitude = (0.0 if magnitudes is None
+                     else float(magnitudes[int(_rng.integers(0, len(magnitudes)))]))
+        if signed and _rng.integers(0, 2):
+            magnitude *= -1.0
+        return _apply_op(img, op_name, magnitude, self.interpolation, fill)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}("
+                f"num_magnitude_bins={self.num_magnitude_bins}"
+                f", interpolation={InterpolationMode(self.interpolation)}"
+                f", fill={self.fill})")
+
+
+class AugMix:
+    """The **blended** one: several independent chains of operations, mixed back into
+    the original by weights drawn from a Dirichlet.
+
+    That is what makes it different in kind from the other three — they replace the
+    picture and this one **averages several versions of it with the original**, so the
+    result stays close to the input however hard the chains hit.
+    """
+
+    _PARAMETER_MAX = 10
+
+    def __init__(self, severity=3, mixture_width=3, chain_depth=-1, alpha=1.0,
+                 all_ops=True, interpolation="bilinear", fill=None):
+        if not 1 <= severity <= self._PARAMETER_MAX:
+            raise ValueError(
+                f"The severity must be between [1, {self._PARAMETER_MAX}]. "
+                f"Got {severity} instead.\n"
+                f"(torch: The severity must be between [1, {self._PARAMETER_MAX}].)")
+        self.severity = severity
+        self.mixture_width = mixture_width
+        self.chain_depth = chain_depth
+        self.alpha = alpha
+        self.all_ops = all_ops
+        self.interpolation = _interpolation(interpolation)
+        self.fill = fill
+
+    def _dirichlet(self, params):
+        return _rng.dirichlet(params)
+
+    def __call__(self, img):
+        img = _require_hwc(img, type(self).__name__)
+        fill = _fill_per_channel(self.fill, img)
+        space = _space_augmix(self._PARAMETER_MAX, (img.shape[0], img.shape[1]),
+                              self.all_ops)
+        names = list(space)
+        work = _working_dtype(img.dtype)
+
+        # **Two Dirichlet draws and not one.** The first splits the picture from the
+        # chains; the second splits the chains among themselves. Drawing one over
+        # `mixture_width + 1` would look equivalent and give a different distribution.
+        m = self._dirichlet([self.alpha, self.alpha])
+        weights = self._dirichlet([self.alpha] * self.mixture_width) * m[1]
+
+        mixed = img.astype(work) * m[0]
+        for i in range(self.mixture_width):
+            chain = img
+            depth = (self.chain_depth if self.chain_depth > 0
+                     else int(_rng.integers(1, 4)))
+            for _ in range(depth):
+                op_name = names[int(_rng.integers(0, len(names)))]
+                magnitudes, signed = space[op_name]
+                magnitude = (0.0 if magnitudes is None else
+                             float(magnitudes[int(_rng.integers(0, self.severity))]))
+                if signed and _rng.integers(0, 2):
+                    magnitude *= -1.0
+                chain = _apply_op(chain, op_name, magnitude, self.interpolation, fill)
+            mixed = mixed + weights[i] * chain.astype(work)
+        # **Truncated, not rounded**, because torch casts with `.to(dtype)` here where
+        # the convolutions round. Two casts, two rules, one file.
+        return mixed.astype(img.dtype)
+
+    def __repr__(self):
+        return (f"{type(self).__name__}(severity={self.severity}"
+                f", mixture_width={self.mixture_width}"
+                f", chain_depth={self.chain_depth}"
+                f", alpha={self.alpha}"
+                f", all_ops={self.all_ops}"
+                f", interpolation={InterpolationMode(self.interpolation)}"
+                f", fill={self.fill})")
+
+
 # --- transforms.functional -------------------------------------------------
 #
 # **The same arithmetic, called without building an object.** Every function here
@@ -2303,12 +2773,13 @@ for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
               "Pad", "RandomApply", "RandomChoice", "RandomCrop", "RandomErasing",
               "RandomGrayscale", "RandomHorizontalFlip", "RandomOrder",
-              "ColorJitter", "ElasticTransform", "GaussianBlur",
+              "AugMix", "AutoAugment", "AutoAugmentPolicy", "ColorJitter",
+              "ElasticTransform", "GaussianBlur", "RandAugment",
               "RandomAdjustSharpness", "RandomAffine",
               "RandomAutocontrast",
               "RandomEqualize", "RandomInvert", "RandomPosterize",
               "RandomPerspective", "RandomResizedCrop", "RandomRotation",
-              "RandomSolarize",
+              "RandomSolarize", "TrivialAugmentWide",
               "RandomVerticalFlip", "Resize",
               "TenCrop", "ToTensor"):
     setattr(transforms, _name, globals()[_name])

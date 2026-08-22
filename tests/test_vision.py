@@ -761,3 +761,70 @@ def test_the_three_drawn_wrappers_draw():
                       V.ElasticTransform(alpha=20.0)):
         seen = {transform(img).tobytes() for _ in range(30)}
         assert len(seen) > 1, f"{transform} gave one result over thirty draws"
+
+
+# --- the policies -----------------------------------------------------------
+
+
+def test_every_policy_transform_draws():
+    """All four draw on every call, which is why **the golden holds almost nothing
+    about them** — a frozen picture would be a frozen dice roll. This is the check that
+    the dice are thrown at all."""
+    V.manual_seed(0)
+    img = (np.arange(1200) ** 2 % 256).astype(np.uint8).reshape(20, 20, 3)
+    for transform in (V.AutoAugment(), V.RandAugment(), V.TrivialAugmentWide(),
+                      V.AugMix()):
+        seen = {transform(img).tobytes() for _ in range(30)}
+        assert len(seen) > 1, f"{transform} gave one result over thirty draws"
+
+
+def test_the_operation_names_are_the_vocabulary_and_all_of_them_resolve():
+    """**Every name a policy can draw has to exist**, and the failure is that it does
+    not until the draw happens to land there — a rare op with a typo'd name is a crash
+    on an unlucky epoch rather than on the first call."""
+    img = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
+    every = set()
+    for space in (V._space_auto(10, (4, 4)), V._space_rand(31, (4, 4)),
+                  V._space_trivial(31), V._space_augmix(10, (4, 4), True)):
+        every |= set(space)
+    for name in sorted(every):
+        V._apply_op(img, name, 1.0, "nearest", [0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="not recognized"):
+        V._apply_op(img, "Twirl", 1.0, "nearest", None)
+
+
+def test_augmix_keeps_the_original_in_the_mixture():
+    """**This is the one that is different in kind.** The other three replace the
+    picture; `AugMix` averages several augmented versions back into the original, so
+    the result stays near the input however hard the chains hit. With `alpha` small the
+    original's weight is large, and the output has to be closer to it than a single
+    chain would be."""
+    V.manual_seed(0)
+    img = (np.arange(1200) ** 2 % 256).astype(np.uint8).reshape(20, 20, 3)
+    far = np.mean([np.abs(V.TrivialAugmentWide()(img).astype(float) - img).mean()
+                   for _ in range(20)])
+    near = np.mean([np.abs(V.AugMix(alpha=0.05)(img).astype(float) - img).mean()
+                    for _ in range(20)])
+    assert near < far, (
+        f"AugMix moved the picture {near:.1f} on average and a single chain {far:.1f} "
+        "— the mixture is not keeping the original")
+
+
+def test_the_policies_are_a_list_because_torchvision_hands_back_one():
+    """`policies` is a public attribute. **What holds a value is part of the surface**,
+    and the golden caught this on its first run: identical data, different brackets."""
+    assert isinstance(V.AutoAugment().policies, list)
+    assert len(V.AutoAugment().policies) == 25
+
+
+def test_augmix_refuses_a_severity_outside_its_range():
+    with pytest.raises(ValueError, match="severity"):
+        V.AugMix(severity=0)
+    with pytest.raises(ValueError, match="severity"):
+        V.AugMix(severity=11)
+
+
+def test_randaugment_with_no_operations_is_the_identity():
+    """The only configuration of any of the four that does not draw."""
+    img = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
+    assert np.array_equal(V.RandAugment(num_ops=0)(img), img)
