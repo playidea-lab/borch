@@ -107,6 +107,7 @@ try:                                            # the vision half needs one more
     # that walks attributes reaches it. A namespace can be invisible to a measure
     # without being hidden.
     import torchvision.transforms.v2                              # noqa: F401
+    import torchvision.ops                                        # noqa: F401
 except ImportError:                             # pragma: no cover - measured by test_gap
     torchvision = None
 
@@ -558,6 +559,49 @@ SKIPPED = {
     "transforms.v2.JPEG": "it encodes and decodes JPEG. numpy has no codec, and adding "
                           "one is the dependency this library does without — the same "
                           "answer PIL gets",
+
+    # `ops`. **The eleven that are here are box geometry and the twenty-eight that are
+    # not need a model.** The old one-line reason covered all thirty-nine and
+    # justified twenty-eight of them, which is why it is written out by kind now.
+    #
+    # The layers first — every one of these is a piece of a detector or a backbone,
+    # and the catalogue (`bimm`) has one classifier in it.
+    "ops.Conv2dNormActivation": "a backbone's building block — it needs a model to be "
+                                "a block of",
+    "ops.Conv3dNormActivation": "as above, and 3-D convolution is declined in the core",
+    "ops.DeformConv2d": "deformable convolution — a detector's, and there is no "
+                        "detector in the catalogue",
+    "ops.deform_conv2d": "as above",
+    "ops.FeaturePyramidNetwork": "the detector's neck. Nothing feeds it here",
+    "ops.MultiScaleRoIAlign": "as above",
+    "ops.RoIAlign": "it crops from a feature map. A feature map comes from a model",
+    "ops.RoIPool": "as above",
+    "ops.PSRoIAlign": "as above",
+    "ops.PSRoIPool": "as above",
+    "ops.roi_align": "as above",
+    "ops.roi_pool": "as above",
+    "ops.ps_roi_align": "as above",
+    "ops.ps_roi_pool": "as above",
+    "ops.FrozenBatchNorm2d": "batch norm with the statistics frozen — it exists for "
+                             "fine-tuning a pre-trained detector",
+    "ops.DropBlock2d": "structured dropout for convolutional backbones",
+    "ops.DropBlock3d": "as above",
+    "ops.drop_block2d": "as above",
+    "ops.drop_block3d": "as above",
+    "ops.StochasticDepth": "it drops whole residual blocks — it needs blocks",
+    "ops.stochastic_depth": "as above",
+    "ops.SqueezeExcitation": "a backbone's attention block — as above",
+    "ops.MLP": "a stack of linear layers with dropout. `nn.Sequential` is that, and "
+               "torchvision's version exists to be a piece of its own models",
+    "ops.Permute": "an `nn.Module` wrapper around `permute`, so that it can sit in a "
+                   "`Sequential`. The core has the function",
+    # The losses need predictions, which need a model.
+    "ops.sigmoid_focal_loss": "a detection loss — it takes a model's predictions",
+    "ops.complete_box_iou_loss": "as above",
+    "ops.distance_box_iou_loss": "as above",
+    "ops.generalized_box_iou_loss": "as above. **The IoU itself is here** — what is "
+                                    "absent is the loss around it, which is where the "
+                                    "predictions come in",
 }
 
 # The namespaces looked at. (display name, torch's side, ours)
@@ -587,7 +631,8 @@ def _spaces():
         got += [("transforms", torchvision.transforms, borchvision.transforms),
                 ("transforms.functional", torchvision.transforms.functional,
                  borchvision.transforms.functional),
-                ("transforms.v2", torchvision.transforms.v2, _Absent())]
+                ("transforms.v2", torchvision.transforms.v2, _Absent()),
+                ("ops", torchvision.ops, borchvision.ops)]
     return [(name, a, b) for name, a, b in got if b is not None]
 
 

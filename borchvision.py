@@ -2768,6 +2768,246 @@ def get_image_num_channels(img):
     return get_dimensions(img)[0]
 
 
+# --- ops: the box geometry, and only that -----------------------------------
+#
+# **Eleven of torchvision's thirty-nine.** The other twenty-eight are `nn.Module`
+# layers and the functions that need a model's feature maps, and those need a
+# detector nobody here has. These eleven need nothing but four numbers a box: they
+# are deterministic, they compare against real torchvision exactly, and the person in
+# front of them is somebody working out what IoU and NMS actually compute rather than
+# somebody running a detector.
+#
+# **Boxes are `(N, 4)` and the format is a named argument, not a guess.** `xyxy` is
+# two corners, `xywh` is a corner and a size, `cxcywh` is a centre and a size. The
+# three are indistinguishable by inspection — four numbers either way — so a wrong
+# `fmt` is a wrong answer that raises nothing.
+
+
+_BOX_FORMATS = ("xyxy", "xywh", "cxcywh")
+
+
+def _boxes_in(boxes):
+    """Numpy, and **remember whether a tensor came in.** These take and return the
+    kind they were given, as `Normalize` does — a caller who has tensors should not
+    have to unwrap them to ask a question about geometry."""
+    if isinstance(boxes, _np.ndarray):
+        return boxes.astype(_np.float64), False
+    return _to_numpy(boxes).astype(_np.float64), True
+
+
+def _boxes_out(values, was_tensor, dtype=None):
+    out = values.astype(dtype) if dtype is not None else values
+    return _backend().tensor(out) if was_tensor else out
+
+
+def _to_xyxy(boxes, fmt):
+    if fmt not in _BOX_FORMATS:
+        raise ValueError(
+            f"Unsupported Bounding Box format {fmt} — it is one of "
+            f"{', '.join(_BOX_FORMATS)}.\n"
+            f"(torch: Unsupported Bounding Box area for given format {fmt})")
+    if fmt == "xyxy":
+        return boxes
+    if fmt == "xywh":
+        x, y, w, h = boxes[..., 0], boxes[..., 1], boxes[..., 2], boxes[..., 3]
+        return _np.stack((x, y, x + w, y + h), axis=-1)
+    cx, cy, w, h = boxes[..., 0], boxes[..., 1], boxes[..., 2], boxes[..., 3]
+    return _np.stack((cx - 0.5 * w, cy - 0.5 * h, cx + 0.5 * w, cy + 0.5 * h), axis=-1)
+
+
+def box_convert(boxes, in_fmt, out_fmt):
+    """Between the three spellings of a box. **The identity is a copy and not the
+    same array** — torchvision returns a new tensor even when the formats match, and
+    a caller who mutates the result should not reach the caller's boxes."""
+    for name, fmt in (("in_fmt", in_fmt), ("out_fmt", out_fmt)):
+        if fmt not in _BOX_FORMATS:
+            raise ValueError(
+                f"Unsupported Bounding Box Conversions for given {name} {fmt}.\n"
+                "(torch: Unsupported Bounding Box Conversions for given in_fmt and "
+                "out_fmt)")
+    arr, was_tensor = _boxes_in(boxes)
+    xyxy = _to_xyxy(arr, in_fmt)
+    if out_fmt == "xyxy":
+        out = xyxy.copy()
+    else:
+        x1, y1, x2, y2 = xyxy[..., 0], xyxy[..., 1], xyxy[..., 2], xyxy[..., 3]
+        w, h = x2 - x1, y2 - y1
+        out = (_np.stack((x1, y1, w, h), axis=-1) if out_fmt == "xywh"
+               else _np.stack((x1 + 0.5 * w, y1 + 0.5 * h, w, h), axis=-1))
+    return _boxes_out(out, was_tensor, _np.float32)
+
+
+def box_area(boxes, fmt="xyxy"):
+    """Width times height. **A box with `x2 < x1` gets a negative area** rather than
+    zero — torchvision does not clamp here, and clamping would hide a box built the
+    wrong way round."""
+    arr, was_tensor = _boxes_in(boxes)
+    xyxy = _to_xyxy(arr, fmt)
+    return _boxes_out((xyxy[..., 2] - xyxy[..., 0]) * (xyxy[..., 3] - xyxy[..., 1]),
+                      was_tensor, _np.float32)
+
+
+def _inter_union(a, b):
+    """Intersection and union of every box in `a` against every box in `b`."""
+    lt = _np.maximum(a[..., None, :2], b[..., None, :, :2])
+    rb = _np.minimum(a[..., None, 2:], b[..., None, :, 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    inter = wh[..., 0] * wh[..., 1]
+    area_a = (a[..., 2] - a[..., 0]) * (a[..., 3] - a[..., 1])
+    area_b = (b[..., 2] - b[..., 0]) * (b[..., 3] - b[..., 1])
+    return inter, area_a[..., None] + area_b[..., None, :] - inter
+
+
+def box_iou(boxes1, boxes2, fmt="xyxy"):
+    """**An `N x M` matrix, not a paired list.** Every box against every box, which is
+    what a detector needs and what surprises everyone the first time."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(_to_xyxy(a, fmt), _to_xyxy(b, fmt))
+    return _boxes_out(inter / union, was_tensor, _np.float32)
+
+
+def generalized_box_iou(boxes1, boxes2):
+    """IoU, **minus what the smallest enclosing box wastes.** Two boxes that do not
+    touch have an IoU of 0 whatever the distance between them; this one keeps falling
+    to -1, which is why a loss can be built on it and not on IoU."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(a, b)
+    iou = inter / union
+    lt = _np.minimum(a[..., None, :2], b[..., None, :, :2])
+    rb = _np.maximum(a[..., None, 2:], b[..., None, :, 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    area = wh[..., 0] * wh[..., 1]
+    return _boxes_out(iou - (area - union) / area, was_tensor, _np.float32)
+
+
+def _centre_distance(a, b):
+    """Squared distance between centres, and the squared diagonal of the enclosing
+    box — the two halves both distance-based IoUs need."""
+    lt = _np.minimum(a[..., None, :2], b[..., None, :, :2])
+    rb = _np.maximum(a[..., None, 2:], b[..., None, :, 2:])
+    wh = _np.clip(rb - lt, 0.0, None)
+    diagonal = wh[..., 0] ** 2 + wh[..., 1] ** 2
+    cx_a = (a[..., 0] + a[..., 2]) / 2
+    cy_a = (a[..., 1] + a[..., 3]) / 2
+    cx_b = (b[..., 0] + b[..., 2]) / 2
+    cy_b = (b[..., 1] + b[..., 3]) / 2
+    centres = ((cx_a[..., None] - cx_b[..., None, :]) ** 2
+               + (cy_a[..., None] - cy_b[..., None, :]) ** 2)
+    return centres, diagonal
+
+
+def distance_box_iou(boxes1, boxes2, eps=1e-7):
+    """IoU penalised by **how far apart the centres are**, as a fraction of the
+    enclosing box's diagonal."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(a, b)
+    centres, diagonal = _centre_distance(a, b)
+    return _boxes_out(inter / union - centres / (diagonal + eps), was_tensor,
+                      _np.float32)
+
+
+def complete_box_iou(boxes1, boxes2, eps=1e-7):
+    """`distance_box_iou` and **one more term for the aspect ratio** — two boxes with
+    the same centre and area but different shapes score lower here and identically
+    under the distance one."""
+    a, was_tensor = _boxes_in(boxes1)
+    b, _ = _boxes_in(boxes2)
+    inter, union = _inter_union(a, b)
+    iou = inter / union
+    centres, diagonal = _centre_distance(a, b)
+    diou = iou - centres / (diagonal + eps)
+    w_a, h_a = a[..., 2] - a[..., 0], a[..., 3] - a[..., 1]
+    w_b, h_b = b[..., 2] - b[..., 0], b[..., 3] - b[..., 1]
+    v = (4 / (_np.pi ** 2)) * (_np.arctan(w_b / h_b)[..., None, :]
+                               - _np.arctan(w_a / h_a)[..., None]) ** 2
+    with _np.errstate(invalid="ignore"):
+        alpha = v / (1 - iou + v + eps)
+    return _boxes_out(diou - alpha * v, was_tensor, _np.float32)
+
+
+def clip_boxes_to_image(boxes, size):
+    """Push every corner back inside a picture of `size`, which is **(height, width)**
+    — the opposite order to a box's own `(x, y)`, and torchvision's own convention."""
+    arr, was_tensor = _boxes_in(boxes)
+    height, width = size
+    out = arr.copy()
+    out[..., 0::2] = _np.clip(out[..., 0::2], 0, width)
+    out[..., 1::2] = _np.clip(out[..., 1::2], 0, height)
+    return _boxes_out(out, was_tensor, _np.float32)
+
+
+def remove_small_boxes(boxes, min_size):
+    """**Indices, not boxes.** Every one of these that filters returns the positions
+    rather than the survivors, because the caller almost always has scores and labels
+    to filter by the same positions."""
+    arr, was_tensor = _boxes_in(boxes)
+    keep = ((arr[..., 2] - arr[..., 0]) >= min_size) & \
+           ((arr[..., 3] - arr[..., 1]) >= min_size)
+    return _boxes_out(_np.nonzero(keep)[0], was_tensor, _np.int64)
+
+
+def masks_to_boxes(masks):
+    """The tightest box around each mask. **An empty mask gives all zeros** rather
+    than an error — torchvision's behaviour, and the one that lets a batch with a
+    blank mask in it still stack."""
+    arr = masks if isinstance(masks, _np.ndarray) else _to_numpy(masks)
+    was_tensor = not isinstance(masks, _np.ndarray)
+    out = _np.zeros((arr.shape[0], 4), dtype=_np.float64)
+    for i in range(arr.shape[0]):
+        ys, xs = _np.nonzero(arr[i])
+        if xs.size:
+            out[i] = (xs.min(), ys.min(), xs.max(), ys.max())
+    return _boxes_out(out, was_tensor, _np.int64 if arr.dtype != _np.float32 else _np.float32)
+
+
+def nms(boxes, scores, iou_threshold):
+    """Non-maximum suppression: keep the best-scoring box, throw away everything that
+    overlaps it too much, repeat.
+
+    **`> iou_threshold` and not `>=`.** At a threshold of 0 two boxes that merely
+    touch — zero overlap — both survive, and that is the boundary anybody testing this
+    reaches for first.
+
+    Ties in the score are **not decided here and torchvision does not decide them
+    either**; its own documentation says the choice is not guaranteed to match between
+    CPU and GPU. So a case built on tied scores is a case with no answer.
+    """
+    arr, was_tensor = _boxes_in(boxes)
+    values = _to_numpy(scores) if not isinstance(scores, _np.ndarray) else scores
+    order = _np.argsort(-_np.asarray(values, dtype=_np.float64), kind="stable")
+    kept = []
+    while order.size:
+        best = order[0]
+        kept.append(best)
+        if order.size == 1:
+            break
+        rest = order[1:]
+        inter, union = _inter_union(arr[best][None, :], arr[rest])
+        overlap = (inter / union)[0]
+        order = rest[overlap <= iou_threshold]
+    return _boxes_out(_np.asarray(kept, dtype=_np.int64), was_tensor, _np.int64)
+
+
+def batched_nms(boxes, scores, idxs, iou_threshold):
+    """NMS **per class**, done by moving each class's boxes somewhere the others
+    cannot reach.
+
+    The offset trick is torchvision's and it is worth reading twice: every box is
+    shifted by its class index times more than the largest coordinate, so boxes of
+    different classes can no longer overlap and a single pass of `nms` does the lot.
+    """
+    arr, was_tensor = _boxes_in(boxes)
+    if arr.size == 0:
+        return _boxes_out(_np.zeros((0,), dtype=_np.int64), was_tensor, _np.int64)
+    labels = _np.asarray(_to_numpy(idxs) if not isinstance(idxs, _np.ndarray) else idxs,
+                         dtype=_np.float64)
+    offsets = labels * (arr.max() + 1)
+    return nms(arr + offsets[:, None], scores, iou_threshold)
+
+
 # --- the namespaces, and why they are modules ------------------------------
 #
 # `transforms` used to be an instance of a class with the name borrowed. That was
@@ -2791,6 +3031,12 @@ functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
 _sys.modules["borchvision.transforms"] = transforms
 _sys.modules["borchvision.transforms.functional"] = functional
+
+# `ops` is torchvision's **top-level** namespace, not one under `transforms` — so it is
+# registered beside it rather than inside it. Getting that wrong would make
+# `import borchvision.ops` work and `import torchvision.ops` mean something else.
+ops = _types.ModuleType("borchvision.ops")
+_sys.modules["borchvision.ops"] = ops
 
 for _name in ("CenterCrop", "Compose", "FiveCrop", "Grayscale",
               "InterpolationMode", "Lambda", "LinearTransformation", "Normalize",
@@ -2820,3 +3066,8 @@ for _name in ("InterpolationMode", "adjust_brightness", "adjust_contrast",
               "normalize", "pad", "resize", "resized_crop", "rgb_to_grayscale",
               "ten_crop", "to_grayscale", "to_tensor", "vflip"):
     setattr(functional, _name, globals()[_name])
+
+for _name in ("batched_nms", "box_area", "box_convert", "box_iou",
+              "clip_boxes_to_image", "complete_box_iou", "distance_box_iou",
+              "generalized_box_iou", "masks_to_boxes", "nms", "remove_small_boxes"):
+    setattr(ops, _name, globals()[_name])

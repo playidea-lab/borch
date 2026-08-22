@@ -7655,6 +7655,23 @@ def _vision(L):
     return _BT_VISION.transforms
 
 
+def _vision_ops(L):
+    """`borchvision.ops` for us, `torchvision.ops` for real torch."""
+    if _is_real_torch(L):
+        import torchvision.ops as real
+        return real
+    _vision(L)                                  # loads the module and binds the library
+    import sys as _sys
+    return _sys.modules["borchvision"].ops
+
+
+def _as_numpy(x):
+    """Out of whichever library's tensor, into numpy — the ops return the kind they
+    were given and these cases hand them numpy, so this is mostly for torch's side."""
+    take = getattr(x, "numpy", None)
+    return take() if callable(take) else np.asarray(x)
+
+
 def _size_input(L):
     """The picture the size questions are asked of, in each side's own format.
 
@@ -10583,7 +10600,7 @@ def golden_cases(inp=None):
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + method_cases(inp) + math_cases(inp)
+            + vision_cases(inp) + ops_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
@@ -11370,3 +11387,98 @@ def input_fingerprint(inp):
         h.update(key.encode("utf-8"))
         h.update(digest.encode("utf-8"))
     return h.hexdigest()
+
+
+OPS_PREFIX = "ops::"
+
+
+def ops_cases(inp=None):
+    """`borchvision.ops` — **box geometry, and only that.**
+
+    Eleven of torchvision's thirty-nine; the other twenty-eight need a model's feature
+    maps or predictions and there is no detector in the catalogue. These eleven need
+    nothing but four numbers a box, so unlike most of the vision block **every one of
+    them is deterministic** and the whole namespace can be frozen. That is unusual
+    enough here to be worth saying: there is no distribution half to this one.
+
+    The boxes are written out rather than drawn. Overlaps have to be **arranged** —
+    random boxes in a large enough field mostly miss each other, and an IoU table of
+    zeros passes against an implementation that computes the wrong thing.
+    """
+    del inp
+
+    # Three that overlap in different amounts, one far away, and **a duplicate** —
+    # the duplicate is what makes `nms` at a low threshold have something to do.
+    _boxes = np.array([[0.0, 0.0, 10.0, 10.0],
+                       [1.0, 1.0, 11.0, 11.0],
+                       [5.0, 5.0, 15.0, 15.0],
+                       [30.0, 30.0, 40.0, 40.0],
+                       [0.0, 0.0, 10.0, 10.0]], dtype=np.float32)
+    _others = np.array([[2.0, 2.0, 8.0, 8.0],
+                        [12.0, 0.0, 22.0, 10.0],
+                        [30.0, 31.0, 41.0, 39.0]], dtype=np.float32)
+    _scores = np.array([0.9, 0.75, 0.6, 0.95, 0.5], dtype=np.float32)
+    _labels = np.array([0, 0, 1, 1, 0], dtype=np.int64)
+    # A mask with one blank plane — **the blank is the case**: torchvision answers
+    # zeros rather than raising, and that is what lets a batch with one still stack.
+    _masks = np.zeros((3, 6, 8), dtype=np.uint8)
+    _masks[0, 1:4, 2:6] = 1
+    _masks[1, 0:2, 0:1] = 1
+
+    def op(call):
+        """**Each side gets the boxes in its own kind.** torchvision's `batched_nms`
+        and `masks_to_boxes` call `.numel()` on what they are given, so they need real
+        tensors; ours take either. `to` is what makes the same case body ask both."""
+        def run(L):
+            O = _vision_ops(L)
+            to = ((lambda a: L.tensor(np.ascontiguousarray(a))) if _is_real_torch(L)
+                  else (lambda a: a))
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(call(O, to)), dtype=np.float32)))
+        return run
+
+    cases = [
+        (OPS_PREFIX + "box_area", op(lambda O, to: O.box_area(to(_boxes)))),
+        # The same boxes read three ways. **`fmt` is a claim about four numbers that
+        # look identical either way**, so a wrong one is a wrong answer with nothing
+        # raised — and the round trip is what pins the pair of conversions together.
+        (OPS_PREFIX + "box_convert(xyxy to xywh)",
+         op(lambda O, to: O.box_convert(to(_boxes), "xyxy", "xywh"))),
+        (OPS_PREFIX + "box_convert(xyxy to cxcywh)",
+         op(lambda O, to: O.box_convert(to(_boxes), "xyxy", "cxcywh"))),
+        (OPS_PREFIX + "box_convert(cxcywh back to xyxy)",
+         op(lambda O, to: O.box_convert(O.box_convert(to(_boxes), "xyxy", "cxcywh"),
+                                    "cxcywh", "xyxy"))),
+        (OPS_PREFIX + "box_area(cxcywh)",
+         op(lambda O, to: O.box_area(O.box_convert(to(_boxes), "xyxy", "cxcywh"), "cxcywh"))),
+        # **N by M and not a paired list.** Five boxes against three gives fifteen
+        # numbers, and an implementation that pairs them off returns three.
+        (OPS_PREFIX + "box_iou", op(lambda O, to: O.box_iou(to(_boxes), to(_others)))),
+        # The three penalised IoUs. They agree with plain IoU wherever the boxes
+        # overlap and part where they do not, which is why `_others` has one box that
+        # misses everything.
+        (OPS_PREFIX + "generalized_box_iou",
+         op(lambda O, to: O.generalized_box_iou(to(_boxes), to(_others)))),
+        (OPS_PREFIX + "distance_box_iou",
+         op(lambda O, to: O.distance_box_iou(to(_boxes), to(_others)))),
+        (OPS_PREFIX + "complete_box_iou",
+         op(lambda O, to: O.complete_box_iou(to(_boxes), to(_others)))),
+        (OPS_PREFIX + "clip_boxes_to_image",
+         op(lambda O, to: O.clip_boxes_to_image(to(_boxes), (20, 25)))),
+        (OPS_PREFIX + "remove_small_boxes",
+         op(lambda O, to: O.remove_small_boxes(to(_boxes), 10.5))),
+        # **`> threshold` and not `>=`.** At zero, boxes that merely touch both
+        # survive; the duplicate does not. Both ends are asked.
+        (OPS_PREFIX + "nms(nothing may overlap)",
+         op(lambda O, to: O.nms(to(_boxes), to(_scores), 0.0))),
+        (OPS_PREFIX + "nms(half)", op(lambda O, to: O.nms(to(_boxes), to(_scores), 0.5))),
+        (OPS_PREFIX + "nms(everything survives)",
+         op(lambda O, to: O.nms(to(_boxes), to(_scores), 1.0))),
+        # Per class, by moving each class out of the others' reach. With the labels
+        # here the duplicate is in the same class as the box it duplicates, so the
+        # offset trick has something to prove.
+        (OPS_PREFIX + "batched_nms",
+         op(lambda O, to: O.batched_nms(to(_boxes), to(_scores), to(_labels), 0.5))),
+        (OPS_PREFIX + "masks_to_boxes", op(lambda O, to: O.masks_to_boxes(to(_masks)))),
+    ]
+    return cases

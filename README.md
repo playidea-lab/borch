@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3147 golden cases pass**, and that is a surface check rather than a
+> is that **3163 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -517,7 +517,7 @@ from borchvision import transforms
 | what is here | **38 of the 41 names `torchvision.transforms` carries — everything except the three that carry a reason.** Composition — `Compose`, `Lambda`, `RandomApply`, `RandomChoice`, `RandomOrder`. Tensors — `ToTensor`, `Normalize`, `LinearTransformation`. Geometry — `Resize`, `CenterCrop`, `RandomCrop`, `RandomResizedCrop`, `FiveCrop`, `TenCrop`, `Pad`, `InterpolationMode`, `RandomRotation`, `RandomAffine`, `RandomPerspective`, `ElasticTransform`, `GaussianBlur`. Policies — `AutoAugment`, `AutoAugmentPolicy`, `RandAugment`, `TrivialAugmentWide`, `AugMix`. Augmentation — `RandomHorizontalFlip`, `RandomVerticalFlip`, `Grayscale`, `RandomGrayscale`, `RandomErasing`, `ColorJitter`, `RandomInvert`, `RandomPosterize`, `RandomSolarize`, `RandomAutocontrast`, `RandomEqualize`, `RandomAdjustSharpness`. Plus `augment_batch`, which torchvision does not have. **`transforms.functional` holds 34 of the 37 names `torchvision.transforms.functional` carries** — `crop`, `center_crop`, `resized_crop`, `five_crop`, `ten_crop`, `pad`, `resize`, `hflip`, `vflip`, `rgb_to_grayscale`, `to_grayscale`, `normalize`, `to_tensor`, `erase`, `get_dimensions`, `get_image_size`, `get_image_num_channels`, `InterpolationMode`, and the photometric `adjust_brightness`, `adjust_contrast`, `adjust_saturation`, `adjust_hue`, `adjust_gamma`, and the pixel rewrites `invert`, `posterize`, `solarize`, `autocontrast`, `equalize`, `adjust_sharpness`, and the grid resampling `rotate`, `affine`, `perspective`, `elastic_transform`, `gaussian_blur` — so `import borchvision.transforms.functional as F` is a line that runs. **What is absent carries a reason** in `tests/torch_gap.py`, and what carries none is the to-do list. **`transforms.v2` — torchvision's current recommended API — reads 0 of 72 there**, which is true of the namespace and not of the library: 38 of those 72 are the transforms above, one namespace over, and v2's versions give the same values on a plain image (measured: `Resize` v1 against v2, max difference 0.0). It was invisible to the measure until it was named, because that namespace is not an attribute of `torchvision.transforms` until something imports it |
 |---|---|
 | **`datasets`** | absent, and **the reason is narrower than it used to read here.** What is unreachable from a browser is *torchvision's own addresses* — re-measured: `cs.toronto.edu` redirects to `cave.cs.toronto.edu` and neither sends a CORS header, and neither does `ossci-datasets.s3.amazonaws.com`, torchvision's first MNIST mirror. Hosts that do send one exist (`raw.githubusercontent.com`, `huggingface.co`), and torchvision itself keeps a `mirrors` list. The old second half was stale rather than narrow: it said Pyodide's filesystem is gone on a refresh, but `borch_webgpu.fetch_cached` uses **OPFS**, which is not. So this is a decision and not an impossibility. **Once the bytes are in hand it already works** — `TensorDataset` is in `borch`; `fetch_cached` and `cache_put` are in `borch_webgpu` |
-| **`ops`** | 28 of 39 absent, and **the old one-line reason covered more than it justified.** Counted: 16 are `nn.Module` layers and 12 more need a model's feature maps or predictions — those 28 need a detector and there is none in the catalogue. The other **11 are box geometry with no weights in them** (`nms`, `batched_nms`, `box_iou`, `box_area`, `box_convert`, `clip_boxes_to_image`, `masks_to_boxes`, `remove_small_boxes`, and three generalised IoUs); they are deterministic, would have golden cases on day one, and the person in front of them is somebody learning what IoU and NMS compute |
+| **`ops`** | **11 of 39 present** — `import borchvision.ops as ops` gives `nms`, `batched_nms`, `box_iou`, `box_area`, `box_convert`, `clip_boxes_to_image`, `masks_to_boxes`, `remove_small_boxes` and the generalised, distance and complete IoUs. They are box geometry with no weights anywhere in them, so unlike the rest of this library **every one is deterministic** and the golden holds all of them. The other 28 are absent with reasons: 16 are `nn.Module` layers and 12 need a model's feature maps or predictions, and there is no detector in the catalogue. The old one-line reason covered all 39 and justified 28 — the split is what let the 11 be built |
 | **`models` and `pretrained=True`** | absent — but **weights are not refused in this project.** [`bimm`](https://github.com/playidea-lab/bimm) holds the architecture catalogue and [`borch-hub`](https://github.com/playidea-lab/borch-hub) fetches a manifest, checks its hash and builds the model. What is refused is narrower: a `.pth` is a pickle, so reading one means imitating torch's internal classes and getting that subtly wrong brings wrong numbers in correctly shaped weights — which is why the hub carries its own manifest and hash instead. And once `pretrained=True` runs people compare against the published top-1, which bit equivalence being an explicit non-goal makes a promise it cannot keep |
 
 **The random numbers differ from torch's.** The same seed does not produce
@@ -584,8 +584,8 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **all 3147 golden cases** — nothing in the table is skipped on this side
-alone. The core covers 3094 cases, and the remaining 53 are ones the core refuses
+It passes **all 3163 golden cases** — nothing in the table is skipped on this side
+alone. The core covers 3110 cases, and the remaining 53 are ones the core refuses
 on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of it.
 
 > That number said 2930 until this translation. The phrasing around it was
@@ -593,7 +593,7 @@ on purpose (1-D and 3-D convolutions, ranks 7 and 8), so they are not asked of i
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2787 cases. **The remaining 360 are all
+borch.ts itself has written TS bodies for 2787 cases. **The remaining 376 are all
 one thing now: deliberately not carried across.** The binding (`borch-webgpu`)
 already goes through borch.ts's kernels on those cases, so **the values are
 verified**, and what a TS body would add is not a value but this side's surface:
@@ -1042,8 +1042,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3147 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3094 cases, leaving out the 53 that are
+And **3163 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3110 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are
