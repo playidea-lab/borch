@@ -442,14 +442,15 @@ NOT_PORTED = {
     # as text plus RandAugment(num_ops=0), the one configuration of any of them that
     # does not draw. Without being told that boundary, an hour goes into hunting for
     # an AugMix value case that does not exist and concluding something was missed.
-    # `ops::` 는 새 접두어다. `borchvision.ops` 의 상자 기하 열하나가 파이썬 쪽에
-    # 들어왔고 `borch-ts` 에는 그 이름공간이 아직 없다.
+    # `ops::` is a new prefix. The eleven box-geometry functions of `borchvision.ops`
+    # arrived on the Python side and borch.ts has no such namespace yet.
     #
-    # **`아직` 이지 `없음` 이 아니다.** 저쪽에 `nms` 가 없다는 것은 사실이지만, 이
-    # 열하나는 가중치도 특징 맵도 안 쓰는 **순수 산술**이라 옮기는 데 모델이 필요
-    # 없다 — 옮길 값이 있고 아직 안 옮긴 것이다. 반대로 torchvision `ops` 의 나머지
-    # 스물여덟(RoI·FPN·검출 손실)은 검출기가 있어야 하고, 그쪽은 파이썬에도 없으므로
-    # 이 행이 지는 빚에 안 들어간다.
+    # **The marker is `아직` and not `없음`.** That borch.ts has no `nms` is true, but
+    # these eleven touch no weights and no feature map — **pure arithmetic**, so
+    # carrying them across needs no model. There is a value to carry and it has not
+    # been carried. The other twenty-eight of torchvision's `ops` (RoI, FPN, detection
+    # losses) do need a detector, and they are absent from the Python side too, so they
+    # are not part of the debt this row records.
     "ops::": (16, "아직 — 상자 기하 열하나. 순수 산술이라 옮기는 데 모델이 필요 없다"),
     # 52 of the 71 are **repr strings**. v2 computes what v1 computes and differs only
     # in what it prints, and that difference is the whole reason these names are not a
