@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 66
+  "missing": 67
  },
  "modules": [
   {
@@ -9267,19 +9267,19 @@
      "doc": "",
      "members": [
       {
-       "name": "delta",
-       "signature": "readonly delta: number",
-       "doc": ""
-      },
-      {
        "name": "reduction",
        "signature": "readonly reduction: Reduction",
        "doc": ""
       },
       {
-       "name": "constructor",
-       "signature": "constructor(delta?: number, reduction?: Reduction)",
+       "name": "delta",
+       "signature": "readonly delta: number",
        "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(reduction?: Reduction, delta?: number)",
+       "doc": "**`reduction` first, because that is torch's order** — `HuberLoss(reduction,\ndelta)`, and it is the odd one out among the losses that take a margin-like\nnumber, which all put theirs first.\n\nThis took `(delta, reduction)` until a signature check found it. `new\nHuberLoss('sum')` set `delta` to a string, which is the same shape as\n`ReduceLROnPlateau` losing its `mode` and as `std` taking the correction before\nthe axis: a line transcribed from torch that compiles and answers."
       },
       {
        "name": "forward",

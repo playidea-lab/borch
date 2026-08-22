@@ -72,8 +72,13 @@ SHIFTED = {
     # never with an argument. Worth noting beside `ReduceLROnPlateau`: `tsc` caught
     # the scheduler's call site the moment `mode` was added, because the type was a
     # string union, and could not catch this one because `number` is not narrow.
+    # `nn` was 1 and is 0: `HuberLoss` took `(delta, reduction)` where torch takes
+    # `(reduction, delta)`, so `new HuberLoss('sum')` set the delta to a string. It is
+    # the odd one out — the nine other margin-taking losses all match torch exactly,
+    # which is what showed the nine `inserted` rows this table briefly carried were
+    # an artefact of dropping the core's `*args` rather than a fault in borch.ts.
     "Tensor": 1,
-    "nn": 1,
+    "nn": 0,
     "nn.functional": 1,
     "optim": 0,
     "optim.lr_scheduler": 0,
@@ -102,7 +107,7 @@ UNREADABLE_TOTAL = 238
 # weight_decay)` against borch.ts's `(params, lr, beta1, beta2, eps, weightDecay)`.
 # The pair became two positions, which is a real arity change and not a rename.
 UNALIGNED = {
-    "Tensor": 3,
+    "Tensor": 2,
     # `SmoothL1Loss` left this table when a peer fixed it: the core took
     # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
     # torch's live arguments are `(reduction, beta)`, with the deprecated
@@ -136,7 +141,7 @@ UNALIGNED = {
 # a person attests it and the row becomes `agree`. That is the only way out of this
 # table, and it is deliberately a way that requires someone to write a sentence.
 RENAMED = {
-    "Tensor": 29,
+    "Tensor": 30,
     "nn": 16,
     "nn.functional": 1,
     "optim": 1,

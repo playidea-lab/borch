@@ -2406,7 +2406,17 @@ export class NLLLoss {
 }
 
 export class HuberLoss {
-  constructor(readonly delta = 1.0, readonly reduction: Reduction = "mean") {
+  /**
+   * **`reduction` first, because that is torch's order** — `HuberLoss(reduction,
+   * delta)`, and it is the odd one out among the losses that take a margin-like
+   * number, which all put theirs first.
+   *
+   * This took `(delta, reduction)` until a signature check found it. `new
+   * HuberLoss('sum')` set `delta` to a string, which is the same shape as
+   * `ReduceLROnPlateau` losing its `mode` and as `std` taking the correction before
+   * the axis: a line transcribed from torch that compiles and answers.
+   */
+  constructor(readonly reduction: Reduction = "mean", readonly delta = 1.0) {
   }
 
   forward(x: Tensor, target: Tensor): Tensor {

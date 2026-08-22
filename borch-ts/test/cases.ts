@@ -3314,7 +3314,10 @@ function addLoss(out: Map<string, Case>): void {
   for (const [name, fn] of value) out.set(`loss::${name}`, fn);
 
   const layers: [string, () => Tensor][] = [
-    ["HuberLoss", () => new nn.HuberLoss(0.5).call(x(), y())],
+    // `delta` moved behind `reduction` to match torch. The Python case passes
+    // `delta=0.5` by keyword, so its value never moved and the golden is unchanged —
+    // which is exactly why nothing caught the order being wrong.
+    ["HuberLoss", () => new nn.HuberLoss("mean", 0.5).call(x(), y())],
     ["KLDivLoss", () => new nn.KLDivLoss("batchmean").call(logp(), tgtp())],
     ["PoissonNLLLoss", () => new nn.PoissonNLLLoss().call(positive(), counts())],
     ["GaussianNLLLoss",
