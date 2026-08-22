@@ -996,3 +996,302 @@ def test_v2_names_are_not_a_second_copy_of_the_arithmetic():
                   lambda m: m.GaussianBlur(3, (1.0, 1.0))):
         assert np.allclose(np.asarray(build(V2)(picture)),
                            np.asarray(build(V.transforms)(picture)), atol=1e-6)
+
+
+# ------------------------------------------------------------------- datasets
+#
+# The golden cases carry the decoders, compared against real torchvision on bytes built
+# in `tests/cases.py`. What is left here is everything the network touches — which is
+# checked **without** touching it, because a check that downloads is a check that fails
+# on a train — plus the two refusals and the one dataset that needs no bytes at all.
+
+DS = V.datasets
+
+
+def _idx(kind, shape, payload):
+    head = bytes([0, 0, kind, len(shape)])
+    for length in shape:
+        head += int(length).to_bytes(4, "big")
+    return head + payload
+
+
+def _plant(root, cls, train_pixels, train_labels, test_pixels, test_labels):
+    """Write an MNIST-shaped folder by hand. **This is what makes the download path
+    testable without a download** — `_check_exists` looks for files, so a folder that
+    already has them is the state `download=False` is supposed to accept."""
+    raw = pathlib.Path(root) / cls.__name__ / "raw"
+    raw.mkdir(parents=True)
+    (raw / "train-images-idx3-ubyte").write_bytes(train_pixels)
+    (raw / "train-labels-idx1-ubyte").write_bytes(train_labels)
+    (raw / "t10k-images-idx3-ubyte").write_bytes(test_pixels)
+    (raw / "t10k-labels-idx1-ubyte").write_bytes(test_labels)
+    return raw
+
+
+def _tiny(n, first_label=0):
+    pixels = _idx(8, (n, 2, 3), bytes(range(6 * n)))
+    labels = _idx(8, (n,), bytes((first_label + i) % 10 for i in range(n)))
+    return pixels, labels
+
+
+def test_MNIST_reads_the_split_it_was_asked_for(tmp_path):
+    """`train` picks which pair of files is opened, and **the two are not the same
+    length**, so a version that always reads one of them shows up as a count."""
+    _plant(tmp_path, DS.MNIST, *_tiny(4), *_tiny(2, first_label=5))
+    train, test = DS.MNIST(tmp_path, train=True), DS.MNIST(tmp_path, train=False)
+    assert (len(train), len(test)) == (4, 2)
+    assert train.data.shape == (4, 2, 3) and test.data.shape == (2, 2, 3)
+    assert train.targets.tolist() == [0, 1, 2, 3]
+    assert test.targets.tolist() == [5, 6]
+    assert train.data.dtype == np.uint8 and train.targets.dtype == np.int64
+
+
+def test_MNIST_without_download_refuses_rather_than_returning_nothing(tmp_path):
+    """An empty dataset is the failure that survives — it trains, it scores zero, and
+    the zero looks like the model's."""
+    with pytest.raises(RuntimeError, match="download=True"):
+        DS.MNIST(tmp_path, download=False)
+
+
+def test_the_MNIST_family_differs_only_in_addresses_and_names(tmp_path):
+    """FashionMNIST and KMNIST are MNIST's format under other URLs. **If one ever grew
+    a decoder of its own this would still pass on values**, so what is checked is that
+    they share the code: the same planted bytes read the same through all three."""
+    pixels, labels = _tiny(3)
+    seen = []
+    for cls in (DS.MNIST, DS.FashionMNIST, DS.KMNIST):
+        _plant(tmp_path / cls.__name__, cls, pixels, labels, pixels, labels)
+        loaded = cls(tmp_path / cls.__name__)
+        seen.append(loaded.data)
+        assert len(loaded.classes) == 10
+        assert loaded.class_to_idx[loaded.classes[3]] == 3
+    assert np.array_equal(seen[0], seen[1]) and np.array_equal(seen[1], seen[2])
+    # The three classes lists are **different**, which is the half that is theirs.
+    assert len({tuple(c.classes) for c in (DS.MNIST, DS.FashionMNIST, DS.KMNIST)}) == 3
+    assert len({tuple(c.mirrors) for c in (DS.MNIST, DS.FashionMNIST, DS.KMNIST)}) == 3
+
+
+def test_a_dataset_hands_each_transform_its_own_half(tmp_path):
+    """`transform` sees the picture and `target_transform` sees the label. Crossed, a
+    pipeline still runs — the label goes through `ToTensor` and comes back something —
+    so this asks that each one saw what it was given."""
+    _plant(tmp_path, DS.MNIST, *_tiny(2), *_tiny(2))
+    seen = {}
+
+    def watch_picture(picture):
+        seen["picture"] = np.asarray(picture).shape
+        return picture
+
+    def watch_label(label):
+        seen["label"] = label
+        return label + 100
+
+    loaded = DS.MNIST(tmp_path, transform=V.transforms.Lambda(watch_picture),
+                      target_transform=V.transforms.Lambda(watch_label))
+    picture, target = loaded[1]
+    assert seen["picture"] == (2, 3) and seen["label"] == 1
+    assert target == 101 and np.asarray(picture).shape == (2, 3)
+
+
+def test_transforms_and_transform_together_are_refused(tmp_path):
+    """torchvision's rule, kept. A silent precedence is how you find out months later
+    which of the two lost."""
+    _plant(tmp_path, DS.MNIST, *_tiny(1), *_tiny(1))
+    with pytest.raises(ValueError, match="Only transforms or"):
+        DS.VisionDataset(tmp_path, transforms=lambda a, b: (a, b),
+                         transform=lambda a: a)
+
+
+def test_a_truncated_IDX_file_refuses_in_torchs_words():
+    """The header promises more than the file carries. torchvision's `strict=False`
+    relaxes an assert and not the reshape beneath it, so both refuse — **and the
+    sentence is torch's**, because a phrase that differs between the two is a phrase
+    nobody can grep for."""
+    with pytest.raises(ValueError, match=r"invalid for input of size 6"):
+        V._read_idx_labels(_idx(8, (9,), bytes(range(6))))
+
+
+def test_a_CIFAR_batch_naming_an_unexpected_class_is_refused():
+    """A batch is a pickle, and a pickle names the classes it will build. torchvision
+    calls `pickle.load`; this names what a batch legitimately needs and refuses the
+    rest, because the checksum is the only thing standing between a mirror and code
+    that runs."""
+    import pickle
+
+    class Sneaky:
+        def __reduce__(self):
+            return (print, ("this ran",))
+
+    with pytest.raises(pickle.UnpicklingError, match="not one of the names"):
+        V._read_cifar_batch(pickle.dumps({"data": Sneaky(), "labels": [0]}))
+
+
+def test_a_CIFAR_batch_without_either_label_key_says_what_it_found():
+    with pytest.raises(ValueError, match="fine_labels"):
+        V._read_cifar_batch(__import__("pickle").dumps({"data": np.zeros((1, 3072),
+                                                                        np.uint8)}))
+
+
+def test_FakeData_gives_the_same_picture_for_the_same_index():
+    """Seeded per index rather than per dataset. **A fake dataset that changes between
+    two passes cannot be used to check reproducibility**, which is most of what one is
+    for once the pipeline runs at all."""
+    fake = DS.FakeData(size=5, image_size=(3, 8, 6), num_classes=4)
+    first, label = fake[2]
+    again, again_label = fake[2]
+    assert np.array_equal(np.asarray(first), np.asarray(again)) and label == again_label
+    assert np.asarray(first).shape == (8, 6, 3)          # (C,H,W) in, (H,W,C) out
+    assert not np.array_equal(np.asarray(first), np.asarray(fake[3][0]))
+    assert 0 <= label < 4 and len(fake) == 5
+    with pytest.raises(IndexError):
+        fake[5]
+
+
+def test_a_wrong_checksum_stops_the_bytes_before_they_are_written(monkeypatch):
+    """**The digest decides, not the response code.** A mirror answering 200 with an
+    error page is the case a status check passes and a checksum does not — and if the
+    bytes were written first, the next run finds a file of the right name holding the
+    wrong thing and never downloads again.
+    """
+    class Response:
+        def read(self):
+            return b"not the dataset"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(V._urlreq, "urlopen", lambda *a, **kw: Response())
+    with pytest.raises(RuntimeError, match="came back with md5"):
+        V._fetch("http://example.invalid/x", "0" * 32)
+    # And with no digest asked for, the same bytes come back — the check is the digest
+    # being given, not a second guess about what the bytes should be.
+    assert V._fetch("http://example.invalid/x", None) == b"not the dataset"
+
+
+def test_the_repr_is_torchvisions_including_the_ragged_indent(tmp_path):
+    """torchvision indents the body by four and adds the transforms' repr as **one
+    element**, so only its first line is indented and `Transform:` lands at column
+    zero. Measured against real torchvision on four datasets; frozen here because the
+    golden file cannot hold a repr that names a temporary directory.
+    """
+    _plant(tmp_path, DS.MNIST, *_tiny(2), *_tiny(2))
+    loaded = DS.MNIST(tmp_path, train=False, transform=V.transforms.Compose(
+        [V.transforms.ToTensor(), V.transforms.Normalize([0.1], [0.3])]))
+    # Asserted whole rather than line by line: the shape **is** the claim, and an
+    # index into it is a claim about one line that says nothing about the rest.
+    assert repr(loaded).replace(str(tmp_path), "<root>") == (
+        "Dataset MNIST\n"
+        "    Number of datapoints: 2\n"
+        "    Root location: <root>\n"
+        "    Split: Test\n"
+        "    StandardTransform\n"
+        "Transform: Compose(\n"
+        "               ToTensor()\n"
+        "               Normalize(mean=[0.1], std=[0.3])\n"
+        "           )")
+
+
+def test_a_streamed_download_leaves_nothing_at_the_real_path_when_it_fails(tmp_path,
+                                                                           monkeypatch):
+    """**A half file with the right name is worse than no file.** `_check_integrity`
+    decides by name, so a truncated `cifar-10-python.tar.gz` is a dataset that never
+    downloads again and never opens either — which is why the bytes land at `.part`
+    and are renamed only after the digest agrees.
+    """
+    class Response:
+        def __init__(self):
+            self.left = [b"half a ", b"dataset"]
+
+        def read(self, _size=None):
+            return self.left.pop(0) if self.left else b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(V._urlreq, "urlopen", lambda *a, **kw: Response())
+    target = str(tmp_path / "archive.tar.gz")
+    with pytest.raises(RuntimeError, match="partial file is removed"):
+        V._fetch_to("http://example.invalid/x", target, "0" * 32)
+    assert not pathlib.Path(target).exists()
+    assert list(tmp_path.iterdir()) == []            # and no `.part` left behind either
+
+    # The digest that does agree renames into place, and the chunks are joined in order.
+    import hashlib
+    right = hashlib.md5(b"half a dataset").hexdigest()
+    V._fetch_to("http://example.invalid/x", target, right)
+    assert pathlib.Path(target).read_bytes() == b"half a dataset"
+
+
+def test_a_streamed_download_hashes_what_it_wrote_rather_than_rereading_it(tmp_path,
+                                                                          monkeypatch):
+    """The digest is computed from the blocks going past, so a version that hashed the
+    file afterwards would agree with this one — **until the disk was full.** Asked
+    here as the property that matters instead: the whole body is hashed, not the first
+    block, which a `read()`-once implementation would quietly do.
+    """
+    blocks = [bytes([i]) * 1024 for i in range(4)]
+
+    class Response:
+        def __init__(self):
+            self.left = list(blocks)
+
+        def read(self, _size=None):
+            return self.left.pop(0) if self.left else b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    import hashlib
+    monkeypatch.setattr(V._urlreq, "urlopen", lambda *a, **kw: Response())
+    target = str(tmp_path / "many-blocks")
+    first_only = hashlib.md5(blocks[0]).hexdigest()
+    with pytest.raises(RuntimeError, match="came back with md5"):
+        V._fetch_to("http://example.invalid/x", target, first_only)
+    monkeypatch.setattr(V._urlreq, "urlopen", lambda *a, **kw: Response())
+    V._fetch_to("http://example.invalid/x", target,
+                hashlib.md5(b"".join(blocks)).hexdigest())
+    assert pathlib.Path(target).stat().st_size == 4096
+
+
+def test_a_kept_archive_is_verified_rather_than_trusted_by_name(tmp_path, monkeypatch):
+    """**Measured, not imagined.** A CIFAR download was interrupted; the truncated tar
+    kept the right name; the next run trusted it because it existed. What came out was
+    `EOFError: Compressed file ended before the end-of-stream marker` from inside gzip
+    — a sentence about a stream, naming no file and offering no move.
+
+    So a kept archive is hashed before it is opened, and a wrong one is removed and
+    fetched again rather than reported. Asked here as the behaviour that matters: the
+    bad bytes are gone and the good ones are in place, without anybody being told to
+    delete something.
+    """
+    import hashlib
+    root = tmp_path / "root"
+    (root / "cifar-10-batches-py").mkdir(parents=True)
+    truncated = root / "cifar-10-python.tar.gz"
+    truncated.write_bytes(b"the first megabyte and then the train left")
+
+    fetched = []
+
+    def instead(url, path, digest, **kw):
+        fetched.append(url)
+        pathlib.Path(path).write_bytes(b"the whole thing")
+        return path
+
+    monkeypatch.setattr(V, "_fetch_to", instead)
+    monkeypatch.setattr(V.datasets.CIFAR10, "tgz_md5",
+                        hashlib.md5(b"the whole thing").hexdigest())
+    # `download` stops at the tar here — opening it is `tarfile`'s job and this is
+    # about what reaches `tarfile`.
+    with pytest.raises(Exception):                    # noqa: B017, PT011
+        V.datasets.CIFAR10(root, download=True)
+    assert fetched, "the truncated archive was trusted and never re-downloaded"
+    assert truncated.read_bytes() == b"the whole thing"

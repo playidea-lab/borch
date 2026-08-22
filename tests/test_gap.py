@@ -77,7 +77,8 @@ def test_every_namespace_meant_to_be_counted_is_counted():
     """
     listed = {space for space, _theirs, _ours in _spaces()}
     want = {"torch", "Tensor", "nn", "nn.functional", "optim", "optim.lr_scheduler",
-            "linalg", "utils.data", "transforms", "transforms.functional"}
+            "linalg", "utils.data", "transforms", "transforms.functional",
+            "transforms.v2", "ops", "datasets"}
     assert want <= listed, (
         f"namespaces that should be counted are off the list: {sorted(want - listed)}\n"
         "  A namespace not in `_spaces()` is not counted and not asked for reasons. If one\n"
@@ -125,16 +126,17 @@ def test_the_readme_functional_count_is_the_measured_one():
 
 
 def test_the_v2_namespace_is_counted_and_its_overlap_is_not_hidden():
-    """**v2 reads 0 of 72 and that is true about the namespace, not about the library.**
+    """**v2 is a superset of v1, and the count has to keep saying so.**
 
-    `borchvision.transforms.v2` does not exist, so every one of v2's names is absent
-    from it. But 38 of those names are transforms this library already has one
-    namespace over, and v2's versions give the same values on a plain image — so a
-    reader taking "0 of 72" as "none of v2's transforms work here" would be wrong.
+    This was written when `borchvision.transforms.v2` did not exist and the table read
+    0 of 72 — a true sentence about the namespace and a false one about the library,
+    since 38 of those names were already here one namespace over. The namespace exists
+    now and reads 52 of 72, so the zero it explained is gone.
 
-    This pins the two numbers together so the second cannot quietly stop being true:
-    if the overlap changes, or if v2 stops being a superset of v1, this fails and the
-    docstring that explains the zero has to be rewritten with it.
+    What it measures did not change and is worth keeping: **torchvision's own v2 still
+    contains v1's names.** That containment is the reason the transforms here can
+    subclass their v1 versions and override the repr alone. If v2 ever stops being a
+    superset, that design stops being sound, and this is where it would show.
     """
     v2 = _api(torchvision.transforms.v2, "transforms.v2")
     v1 = _api(torchvision.transforms, "transforms")

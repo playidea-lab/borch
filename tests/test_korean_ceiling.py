@@ -91,15 +91,16 @@ SUFFIXES = (".ts", ".py", ".html")
 # before raising one.
 CEILINGS = {
     "borch-ts/src": 18,          # the rest of src; what is left is quoted golden names
-    # 27201 → 27253. Two gap-table **reason strings** went in with the `ops::` and
-    # `v2::` rows: `"아직 — 상자 기하 열하나…"` and `"아직 — v2 이름 쉰둘의 repr…"`.
-    # Those strings are **printed output**, not comments — the runner's report is
-    # Korean end to end today, and an English reason inside it would be the
-    # inconsistency this rule exists to prevent, pointing the other way. They follow
-    # the report: when `run.py` is translated they go with it and this comes back down.
-    # The markers in front of them (`아직`, `별칭`, `파이썬`, `없음`) are keys that
-    # `test_alias_rows.py` matches on and move only if that test moves too.
-    "borch-ts/test": 8737,
+    # 8737 → 8739. **Two characters, and they are a key rather than prose.** A
+    # `dataset::` row went into the gap ledger and its reason begins with the marker
+    # `아직`; the reason itself is English, as the rest of that table now is.
+    #
+    # The markers (`아직`, `별칭`, `파이썬`, `없음`) are what `test_alias_rows.py` and
+    # `test_site.py` match on to tell owed work from declined work, so they are keys
+    # into the table and not words in a sentence. They move when those checks move and
+    # not before — which is why translating that file took the reasons and left these,
+    # and why every row added after it costs two characters here.
+    "borch-ts/test": 8739,
 }
 
 
