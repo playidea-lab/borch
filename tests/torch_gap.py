@@ -91,17 +91,23 @@ travelling alongside the picture — plus the base class whose body *is* that di
 which is unlike everything else here, but they need nothing this library lacks, and
 "it is unlike the others" is not a reason.
 
-`transforms.v2.functional` is **deliberately not on the list**, which needs saying
-because a namespace off the list is normally the defect this file exists to catch.
-Measured: it has 165 public callables, and 128 of them are `<operation>_<type>`
-dispatch kernels — `affine_image`, `affine_mask`, `affine_bounding_boxes`,
-`affine_keypoints`, `affine_video` are one operation counted five times. Counting them
-raw gives a denominator that is false in the direction this file warns about twice
-already, and the tables cannot explain them either: the wildcard rows deliberately do
-not match namespaced keys, so `"*_image"` would also swallow `to_pil_image` in v1 and
-attach a reason about dispatch to a name that has nothing to do with it. Putting it on
-the list needs namespaced suffix rows, which the matcher does not support today. So it
-is absent **with this paragraph** rather than absent silently.
+`transforms.v2.functional` **is on the list now, and was not.** It reads 43 of 165.
+
+It was off with a paragraph rather than off silently, and the paragraph said what was
+blocking it: 114 of its 165 public names are `<operation>_<type>` dispatch kernels —
+`affine_image`, `affine_mask`, `affine_bounding_boxes`, `affine_keypoints` and
+`affine_video` are one operation counted five times — and one reason covers all of
+them, but the only wildcard this matcher understood was flat. `"*_image"` written flat
+also swallows `to_pil_image` in v1, attaching a sentence about v2's type dispatch to a
+name that has nothing to do with it.
+
+So the matcher takes namespaced wildcards now, and the paragraph became five rows and
+a number. That is the shape worth noticing: **a namespace stayed uncounted for as long
+as the tool could not express its reason**, which is the same failure as being off the
+list, wearing an explanation. A paragraph is not a number, and nothing was watching it.
+
+(The old paragraph said 128 kernels. Measured now: 114. Neither this file nor anything
+else was checking that figure, which is the point being made one line up.)
 
 **And the number counts names, not signatures.** `Grayscale` present with the wrong luma
 weights counts the same as `Grayscale`; so does `Pad` present without `padding_mode`. This
@@ -140,6 +146,7 @@ try:                                            # the vision half needs one more
     # that walks attributes reaches it. A namespace can be invisible to a measure
     # without being hidden.
     import torchvision.transforms.v2                              # noqa: F401
+    import torchvision.transforms.v2.functional                   # noqa: F401
     import torchvision.ops                                        # noqa: F401
     import torchvision.datasets                                   # noqa: F401
 except ImportError:                             # pragma: no cover - measured by test_gap
@@ -687,6 +694,52 @@ SKIPPED = {
     "datasets.Sintel": "as above",
     "datasets.SintelStereo": "as above",
 
+    # `transforms.v2.functional`. **114 of its 165 names are one operation counted
+    # five times**, and this is the row that says so — the first namespaced wildcard
+    # this table has been able to write. `affine_image`, `affine_mask`,
+    # `affine_bounding_boxes`, `affine_keypoints` and `affine_video` are v2's dispatch
+    # kernels: the type of what arrives decides which body runs, and that type system
+    # is the half of v2 declined one namespace up.
+    #
+    # Written flat as `"*_image"` these rows would also swallow v1's `to_pil_image`
+    # and attach a sentence about dispatch to a name that has nothing to do with it.
+    # That was the reason this namespace was **off the list entirely** — described in
+    # a paragraph rather than counted — and a namespace off the list is a namespace
+    # nobody counts, which is how `transforms` stayed invisible for the whole life of
+    # this library. The paragraph is gone; the number is here.
+    "transforms.v2.functional.*_image": "a dispatch kernel — v2 routes by the type of "
+                                        "what arrives, and the image body is the "
+                                        "public name one namespace over",
+    "transforms.v2.functional.*_video": "as above, and there is no video in this "
+                                        "project",
+    "transforms.v2.functional.*_mask": "as above, for segmentation masks — a tv_tensor "
+                                       "type, and the type system is declined in `v2`",
+    "transforms.v2.functional.*_bounding_boxes": "as above, for boxes",
+    "transforms.v2.functional.*_keypoints": "as above, for keypoints",
+
+    # The eight left over are not kernels and not v1's. Each carries its own reason.
+    "transforms.v2.functional.convert_bounding_box_format": "boxes travelling with the "
+                                                            "picture — as in `v2`",
+    "transforms.v2.functional.convert_image_dtype": "uint8 has no storage in this "
+                                                    "subset — as in v1",
+    "transforms.v2.functional.pil_to_tensor": "it takes a PIL image and nothing here "
+                                              "makes one — as in v1",
+    "transforms.v2.functional.jpeg": "it encodes and decodes JPEG. numpy has no codec",
+    "transforms.v2.functional.uniform_temporal_subsample": "video",
+    "transforms.v2.functional.get_num_frames": "video — it answers how many frames a "
+                                               "clip has, and nothing here is a clip",
+    "transforms.v2.functional.register_kernel": "**the dispatch registry itself.** It "
+                                                "attaches a body to a (functional, "
+                                                "tv_tensor type) pair, and there are "
+                                                "no tv_tensor types here to attach to",
+    "transforms.v2.functional.is_pure_tensor": "asks whether a tensor is a plain one "
+                                               "rather than a tv_tensor subclass. Here "
+                                               "every tensor is plain, so it could "
+                                               "only ever answer True — **a question "
+                                               "with one answer is not a question**, "
+                                               "and present it would read as support "
+                                               "for the type system it is testing for",
+
     # `ops`. **The eleven that are here are box geometry and the twenty-eight that are
     # not need a model.** The old one-line reason covered all thirty-nine and
     # justified twenty-eight of them, which is why it is written out by kind now.
@@ -761,6 +814,8 @@ def _spaces():
                 ("transforms.functional", torchvision.transforms.functional,
                  borchvision.transforms.functional),
                 ("transforms.v2", torchvision.transforms.v2, borchvision.transforms.v2),
+                ("transforms.v2.functional", torchvision.transforms.v2.functional,
+                 borchvision.transforms.v2.functional),
                 ("ops", torchvision.ops, borchvision.ops),
                 ("datasets", torchvision.datasets, borchvision.datasets)]
     return [(name, a, b) for name, a, b in got if b is not None]
@@ -853,12 +908,50 @@ def _look(table, name, full=None):
         return table[name]
     for key, reason in table.items():
         if "." in key:
+            # **A namespaced wildcard matches inside its namespace and nowhere else.**
+            # Dotted keys used to be skipped here entirely, and that is what kept
+            # `transforms.v2.functional` off the list: 114 of its 165 public names are
+            # `<operation>_<type>` dispatch kernels, one reason covers all of them, and
+            # the only way to write that reason was `"*_image"` — which is not
+            # namespaced, so it would have swallowed v1's `to_pil_image` too and
+            # attached a sentence about dispatch to a name that has nothing to do with
+            # it. A namespace off the list is a namespace nobody counts, and that is
+            # how `transforms` stayed invisible for the whole life of this library.
+            head, _, leaf = key.rpartition(".")
+            if "*" not in leaf or not full or not full.startswith(head + "."):
+                continue
+            # **Matched against the leaf of `full`, not against `name`.** The two are
+            # the same when `_why` calls this, and they are not when
+            # `test_no_table_entry_matches_nothing` does: that check hands the same
+            # namespaced string in both positions, deliberately, because it is asking
+            # whether a row matches anything at all. Reading `name` here made every one
+            # of these rows look dead — six reasons about nothing, and the check was
+            # right to say so about what it was actually being shown.
+            rest = full[len(head) + 1:]
+            if "." in rest:                     # a name further in, not this leaf
+                continue
+            if _leaf_match(leaf, rest):
+                return reason
             continue
         if key.endswith("*") and name.startswith(key[:-1]):
             return reason
         if key.startswith("*") and name.endswith(key[1:]):
             return reason
     return None
+
+
+def _leaf_match(pattern, name):
+    """`*` at one end only, as the flat wildcards have always been.
+
+    Deliberately not `fnmatch`: a pattern language nobody asked for is a pattern
+    language that will eventually match something nobody meant, and this table's whole
+    job is to not do that.
+    """
+    if pattern.endswith("*"):
+        return name.startswith(pattern[:-1])
+    if pattern.startswith("*"):
+        return name.endswith(pattern[1:])
+    return False
 
 
 def _why(space, name):

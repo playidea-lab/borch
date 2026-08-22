@@ -10636,7 +10636,7 @@ def golden_cases(inp=None):
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + dataset_cases(inp) + method_cases(inp) + math_cases(inp)
+            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + v2_functional_cases(inp) + dataset_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
@@ -11878,3 +11878,104 @@ def dataset_cases(inp=None):
          cifar(lambda: {"data": _batch, "fine_labels": [11, 62]}, "labels")),
     ]
     return cases
+
+
+V2F_PREFIX = "v2f::"
+
+
+def _vision_v2_functional(L):
+    """`transforms.v2.functional` for each side."""
+    if _is_real_torch(L):
+        from torchvision.transforms.v2 import functional as real
+        return real
+    return _vision_v2(L).functional
+
+
+def v2_functional_cases(inp=None):
+    """`transforms.v2.functional` — **the nine v2 adds, and that the rest is one body.**
+
+    34 of the 51 real names here are v1's, re-exported rather than rewritten, and a
+    re-export cannot be got wrong in a way a value case would see. What it *can* be got
+    wrong in is being a copy instead of a re-export, so four of v1's are asked through
+    the v2 spelling: if one ever grows a body of its own, these stop matching v1's own
+    frozen answers.
+
+    The nine adds are asked outright. Two of them are worth pointing at. `get_size`
+    answers `[height, width]` where v1's `get_image_size` answers `[width, height]` —
+    the two sit one namespace apart giving opposite answers, and both are frozen here
+    beside each other so that neither can drift into the other. And `elastic`'s `fill`
+    defaults to `None`; written as `0` it paints the outside of the warp black, which
+    on a picture whose edges barely move reads as the warp working. That one was
+    written as `0` first and caught by comparing.
+    """
+    inp = golden_inputs() if inp is None else inp
+    img_f = inp["vis_f"]
+    img_u8 = inp["vis_u8"]
+    grey = np.ascontiguousarray(img_f[:, :, :1])
+    # A displacement small enough that the picture stays recognisable and large enough
+    # that every pixel moves — a zero field would pass against a broken warp.
+    shift = (np.random.default_rng(7).random((1,) + img_f.shape[:2] + (2,))
+             .astype(np.float32) * 0.2 - 0.1)
+
+    def on(picture, call):
+        """The same picture in each side's own layout, out as a float tensor."""
+        def run(L):
+            F = _vision_v2_functional(L)
+            if _is_real_torch(L):
+                given = L.tensor(np.ascontiguousarray(picture.transpose(2, 0, 1)))
+                out = _as_numpy(call(F, given, L).detach())
+                out = out.transpose(1, 2, 0) if len(out.shape) == 3 else out
+            else:
+                out = _as_numpy(call(F, picture, L))
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    def answer(picture, call):
+        """For the ones that give a list or a number rather than a picture. Frozen as
+        **text**, because `[5, 4]` and `[4, 5]` compare equal to nothing else."""
+        def run(L):
+            F = _vision_v2_functional(L)
+            given = (L.tensor(np.ascontiguousarray(picture.transpose(2, 0, 1)))
+                     if _is_real_torch(L) else picture)
+            return str(call(F, given))
+        return run
+
+    return [
+        (V2F_PREFIX + "horizontal_flip", on(img_f, lambda F, x, L: F.horizontal_flip(x))),
+        (V2F_PREFIX + "vertical_flip", on(img_f, lambda F, x, L: F.vertical_flip(x))),
+        (V2F_PREFIX + "grayscale_to_rgb(one channel)",
+         on(grey, lambda F, x, L: F.grayscale_to_rgb(x))),
+        # Three channels **pass through** rather than raising, so a mixed pipeline needs
+        # no branch — and a version that stacked them again would give nine.
+        (V2F_PREFIX + "grayscale_to_rgb(three channels)",
+         on(img_f, lambda F, x, L: F.grayscale_to_rgb(x))),
+        (V2F_PREFIX + "permute_channels",
+         on(img_f, lambda F, x, L: F.permute_channels(x, [2, 0, 1]))),
+        (V2F_PREFIX + "to_dtype(scaling)",
+         on(img_u8, lambda F, x, L: F.to_dtype(x, L.float32, scale=True))),
+        (V2F_PREFIX + "to_dtype(not scaling)",
+         on(img_u8, lambda F, x, L: F.to_dtype(x, L.float32))),
+        (V2F_PREFIX + "gaussian_noise(sigma=0)",
+         on(img_f, lambda F, x, L: F.gaussian_noise(x, 0.0, 0.0))),
+        (V2F_PREFIX + "gaussian_noise(clipping)",
+         on(img_f, lambda F, x, L: F.gaussian_noise(x, 5.0, 0.0, True))),
+        (V2F_PREFIX + "elastic",
+         on(img_f, lambda F, x, L: F.elastic(x, L.tensor(np.ascontiguousarray(shift))))),
+
+        # **The two that answer a size, side by side.** v2 reversed the pair on purpose
+        # and the names are one namespace apart, so a reader who takes the wrong one
+        # gets a picture that is transposed and still plausible.
+        (V2F_PREFIX + "get_size(height first)", answer(img_f, lambda F, x: F.get_size(x))),
+        (V2F_PREFIX + "get_image_size(width first)",
+         answer(img_f, lambda F, x: F.get_image_size(x))),
+        (V2F_PREFIX + "get_num_channels", answer(img_f, lambda F, x: F.get_num_channels(x))),
+
+        # Four of v1's, reached through the v2 spelling. These are the ones that catch a
+        # re-export quietly becoming a second implementation.
+        (V2F_PREFIX + "resize(inherited)", on(img_f, lambda F, x, L: F.resize(x, [3, 2]))),
+        (V2F_PREFIX + "normalize(inherited)",
+         on(img_f, lambda F, x, L: F.normalize(x, [0.5], [0.25]))),
+        (V2F_PREFIX + "rotate(inherited)", on(img_f, lambda F, x, L: F.rotate(x, 30.0))),
+        (V2F_PREFIX + "adjust_hue(inherited)",
+         on(img_f, lambda F, x, L: F.adjust_hue(x, 0.2))),
+    ]

@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 import borchvision  # noqa: E402
 
 from torch_gap import (  # noqa: E402
-    DELIBERATE, NOT_API, SKIPPED, _look, _public, _spaces,
+    DELIBERATE, NOT_API, SKIPPED, _look, _public, _spaces, _why,
 )
 
 
@@ -286,3 +286,66 @@ def test_the_tool_still_runs():
     import torch_gap
 
     assert torch_gap.main([]) == 0
+
+
+def test_a_namespaced_wildcard_stays_inside_its_namespace():
+    """**The reason this table could not count `transforms.v2.functional` at all.**
+
+    114 of that namespace's 165 names are `<operation>_<type>` dispatch kernels and one
+    reason covers all of them, but the only wildcard this matcher understood was flat.
+    `"*_image"` written flat matches `to_pil_image` in v1 as well, and attaching a
+    sentence about v2's type dispatch to *that* name is the failure this whole file
+    exists to catch — a name not counted for a false reason, which nobody re-reads.
+
+    So the namespace is part of the key now, and this pins the containment. Flatten the
+    matcher again and `to_pil_image` starts answering with the dispatch sentence, which
+    is the shape that has to stay impossible.
+    """
+    kernel = _why("transforms.v2.functional", "affine_image")
+    assert kernel and "dispatch kernel" in kernel[1], (
+        "the namespaced wildcard stopped matching inside its own namespace")
+
+    for space, name in (("transforms.functional", "to_pil_image"),
+                        ("transforms", "ToPILImage")):
+        found = _why(space, name)
+        assert found and "dispatch" not in found[1], (
+            f"{space}.{name} is being explained by v2's dispatch reason. The wildcard "
+            "went flat, and a name explained by the wrong reason reads as explained.")
+
+
+def test_a_namespaced_wildcard_needs_the_whole_leaf():
+    """`*_image` is a suffix on the **leaf**, not on the full path, and not a substring.
+
+    Both directions are asked. A name that merely contains the word does not match, and
+    a name that ends with something longer does not either — either miss would let this
+    row claim names it was never written about, and the count would go on looking right.
+    """
+    for name in ("image", "my_image_thing", "affine_image_extra"):
+        assert _why("transforms.v2.functional", name) is None, (
+            f"{name} matched a kernel row it has nothing to do with")
+
+
+def test_the_kernel_rows_cover_every_kernel_and_nothing_else():
+    """**A count, because a wildcard cannot be read.**
+
+    Five rows stand for 114 names and no reader can check that by eye. Measured against
+    torchvision directly: every public name ending in one of the dispatch suffixes has
+    a reason, and the number of names those rows account for is the number that exists.
+    A sixth suffix appearing in a future torchvision shows up here as an uncovered name
+    rather than as a quietly smaller denominator.
+
+    There were six rows when this was written. `*_batch` was one of them and it matched
+    nothing — a reason about nothing, put there because six suffixes looked like a
+    natural set. `test_no_table_entry_matches_nothing` said so before this check ran,
+    which is the second time today that guessing at a family has cost more than
+    measuring it.
+    """
+    suffixes = ("_image", "_video", "_mask", "_bounding_boxes", "_keypoints")
+    names = _api(torchvision.transforms.v2.functional, "transforms.v2.functional")
+    kernels = [n for n in names if n.endswith(suffixes)]
+    assert len(kernels) == 114, (
+        f"torchvision now has {len(kernels)} dispatch kernels rather than 114 — the "
+        "rows below may no longer say what they say. Re-read them, then move the "
+        "number.")
+    unexplained = [n for n in kernels if not _why("transforms.v2.functional", n)]
+    assert not unexplained, f"kernels with no reason: {unexplained[:8]}"

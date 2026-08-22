@@ -1295,3 +1295,73 @@ def test_a_kept_archive_is_verified_rather_than_trusted_by_name(tmp_path, monkey
         V.datasets.CIFAR10(root, download=True)
     assert fetched, "the truncated archive was trusted and never re-downloaded"
     assert truncated.read_bytes() == b"the whole thing"
+
+
+# --------------------------------------------------- transforms.v2.functional
+
+V2F = V.transforms.v2.functional
+
+
+def test_the_v2_functional_names_are_v1s_functions_and_not_copies_of_them():
+    """34 of the 51 real names here are re-exports. **Asked by identity, not by
+    value** — a copy that computes the same thing today passes every value case and
+    drifts the first time one of the two is edited, and the one nobody is looking at
+    is the one that drifts.
+    """
+    import borchvision.transforms.functional as F1
+    shared = ["resize", "normalize", "rotate", "adjust_hue", "affine", "perspective",
+              "gaussian_blur", "erase", "pad", "crop", "center_crop", "hflip", "vflip"]
+    for name in shared:
+        assert getattr(V2F, name) is getattr(F1, name), (
+            f"v2.functional.{name} is a second object — the namespace has started "
+            "carrying its own bodies")
+    # The three renames are wrappers rather than aliases — v2 gave them new names and
+    # the new name has to reach the old body. Asked by value, since a wrapper is a
+    # different object by definition and identity would say nothing here.
+    picture = np.arange(12, dtype=np.float32).reshape(3, 4, 1)
+    assert np.array_equal(np.asarray(V2F.horizontal_flip(picture)),
+                          np.asarray(F1.hflip(picture)))
+    assert np.array_equal(np.asarray(V2F.vertical_flip(picture)),
+                          np.asarray(F1.vflip(picture)))
+
+
+def test_get_size_and_get_image_size_answer_in_opposite_orders():
+    """**v2 reversed the pair on purpose**, and both names are reachable from here.
+    A reader who takes the wrong one gets a transposed picture that is still plausible,
+    which is why the two are asserted against each other rather than separately.
+    """
+    picture = np.zeros((5, 4, 3), dtype=np.float32)
+    assert V2F.get_size(picture) == [5, 4]              # height, width
+    assert V2F.get_image_size(picture) == [4, 5]        # width, height
+    assert V2F.get_size(picture) == list(reversed(V2F.get_image_size(picture)))
+    assert V2F.get_num_channels(picture) == 3
+
+
+def test_permute_channels_refuses_a_permutation_that_is_not_one():
+    """A list that repeats or skips a channel is not a permutation, and taken as an
+    index it **silently duplicates one channel and drops another** — a picture that
+    still looks like a picture."""
+    picture = np.zeros((2, 2, 3), dtype=np.float32)
+    for wrong in ([0, 0, 1], [0, 1], [0, 1, 2, 0], [1, 2, 3]):
+        with pytest.raises(ValueError, match="Invalid permutation"):
+            V2F.permute_channels(picture, wrong)
+    assert np.asarray(V2F.permute_channels(picture, [2, 1, 0])).shape == (2, 2, 3)
+
+
+def test_grayscale_to_rgb_takes_a_two_dimensional_picture_too():
+    """A one-channel picture arrives either as `(H,W,1)` or as `(H,W)` depending on
+    what made it — `datasets.MNIST` gives the second. Both have to reach three
+    channels, or the pipeline that works on CIFAR breaks on MNIST."""
+    flat = np.arange(6, dtype=np.float32).reshape(2, 3)
+    out = np.asarray(V2F.grayscale_to_rgb(flat))
+    assert out.shape == (2, 3, 3)
+    assert np.array_equal(out[:, :, 0], out[:, :, 2]) and np.array_equal(out[:, :, 0], flat)
+
+
+def test_to_dtype_without_scale_is_the_trap_it_looks_like():
+    """`scale=False` is the default here as it is in torchvision, and
+    `to_dtype(bytes, float32)` gives 0..255 floats that look like they worked. Pinned
+    so that nobody makes it kind."""
+    bytes_in = np.array([[[0, 128, 255]]], dtype=np.uint8)
+    assert float(np.asarray(V2F.to_dtype(bytes_in, BT.float32)).max()) == 255.0
+    assert float(np.asarray(V2F.to_dtype(bytes_in, BT.float32, scale=True)).max()) == 1.0

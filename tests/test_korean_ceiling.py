@@ -90,17 +90,16 @@ SUFFIXES = (".ts", ".py", ".html")
 # Measured 2026-08-22. Lower these after a translation pass; see the module docstring
 # before raising one.
 CEILINGS = {
-    "borch-ts/src": 18,          # the rest of src; what is left is quoted golden names
-    # 8737 → 8739. **Two characters, and they are a key rather than prose.** A
-    # `dataset::` row went into the gap ledger and its reason begins with the marker
-    # `아직`; the reason itself is English, as the rest of that table now is.
+    "borch-ts/src": 18,          # 5734 → 5736. **Two characters, and they are a key rather than prose.** A `v2f::`
+    # row went into the gap ledger and its reason begins with the marker `아직`; the
+    # reason itself is English, as the rest of that table is.
     #
     # The markers (`아직`, `별칭`, `파이썬`, `없음`) are what `test_alias_rows.py` and
     # `test_site.py` match on to tell owed work from declined work, so they are keys
     # into the table and not words in a sentence. They move when those checks move and
     # not before — which is why translating that file took the reasons and left these,
     # and why every row added after it costs two characters here.
-    "borch-ts/test": 5734,
+    "borch-ts/test": 5736,
 }
 
 

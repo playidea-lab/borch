@@ -523,6 +523,11 @@ NOT_PORTED = {
     # touches a network, so they port like any other value case; what does not port
     # is the rest of `datasets`, which on that side is a `fetch` and an OPFS cache
     # and has no case in this table at all.
+    # Seventeen. Nine are the names v2 adds that need no tv_tensors, and the other
+    # eight ask v1's functions **through the v2 spelling** — those are the ones that
+    # catch a re-export quietly becoming a second implementation, which is a thing that
+    # can happen on either side.
+    "v2f::": (17, "아직 — v2.functional: the nine v2 adds, and eight of v1's re-exports"),
     "dataset::": (7, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),
