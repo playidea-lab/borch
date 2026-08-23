@@ -1,6 +1,7 @@
 """A piece of borch, split out. __init__ gathers the public names."""
 
 import builtins as _builtins
+import itertools as _itertools
 import math as _math
 
 import warnings as _warnings
@@ -1815,31 +1816,40 @@ def adaptive_max_pool3d(input, output_size, return_indices=False):
     return _adaptive(input, _spread(output_size, 3), "max")
 
 
-def avg_pool1d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
+def avg_pool1d(input, kernel_size, stride=None, padding=0, ceil_mode=False,   # noqa: A002
                count_include_pad=True):
-    """`padding` and `count_include_pad` are refused rather than approximated —
-    `avg_pool2d` next door has them and this shares none of its code."""
-    if padding or not count_include_pad:
-        _unsupported("avg_pool1d(padding=…) and count_include_pad=False")
-    return _fixed(input, _spread(kernel_size, 1), stride, "avg", ceil_mode)
+    """**`padding` and `count_include_pad` were refused here**, on the ground that
+    `avg_pool2d` next door has them and this *shares none of its code*. The ground
+    was exact, and it named its own remedy: the 2-D body was lifted into a
+    rank-agnostic `_avg_pool_nd` and all three ranks now call it, so the refusal has
+    nothing left to stand on.
+
+    torch gives 1-D no `divisor_override` — 2-D and 3-D have one and this does not.
+    Following the authority means following its inconsistencies; offering one here
+    would be an argument torch declines.
+    """
+    return _avg_pool_nd(input, 1, kernel_size, stride, padding, ceil_mode,
+                        count_include_pad, None, "AvgPool1DBackward0")
 
 
-def avg_pool3d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
+def avg_pool3d(input, kernel_size, stride=None, padding=0, ceil_mode=False,   # noqa: A002
                count_include_pad=True, divisor_override=None):
-    """See `avg_pool1d` on the refusals."""
-    if padding or not count_include_pad or divisor_override is not None:
-        _unsupported("avg_pool3d(padding=…), count_include_pad=False, "
-                     "divisor_override=…")
-    return _fixed(input, _spread(kernel_size, 3), stride, "avg", ceil_mode)
+    """See `avg_pool1d` on the refusals that used to be here."""
+    return _avg_pool_nd(input, 3, kernel_size, stride, padding, ceil_mode,
+                        count_include_pad, divisor_override, "AvgPool3DBackward0")
 
 
-def lp_pool2d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
+def lp_pool2d(input, norm_type, kernel_size, stride=None, ceil_mode=False):   # noqa: A002
     """The `p`-th root of the sum of `p`-th powers. At p=1 it is the sum, and at
     large p it approaches the maximum.
 
     **It follows torch's assembly exactly** — average pooling, multiplied back by
     the window size into a sum, then the root. The sign and the `relu` in the
     middle are that implementation's too.
+
+    `ceil_mode` therefore costs nothing beyond passing it on, and that is the whole
+    of what was missing: torch's is the fourth argument here and this stopped at
+    three, so `lp_pool2d(x, 2, 3, 2, True)` raised where torch rounded up.
     """
     input = _wrap(input)
     kh, kw = _pair(kernel_size)
@@ -1847,14 +1857,14 @@ def lp_pool2d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
     return ((out.sign() * relu(out.abs())) * (kh * kw)) ** (1.0 / norm_type)
 
 
-def lp_pool1d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
-    input = _wrap(input)
+def lp_pool1d(input, norm_type, kernel_size, stride=None, ceil_mode=False):  # noqa: A002
+    input = _wrap(input)                                                     # noqa: A001
     k = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
     out = avg_pool1d(input ** norm_type, k, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * k) ** (1.0 / norm_type)
 
 
-def lp_pool3d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
+def lp_pool3d(input, norm_type, kernel_size, stride=None, ceil_mode=False):  # noqa: A002
     """The same assembly as 1-D and 2-D. Only the window cell count becomes the
     product of three axes."""
     input = _wrap(input)
@@ -5353,54 +5363,64 @@ def _dropout_body(t, p=0.5, training=True):
     return t * Tensor(mask)
 
 
-def avg_pool2d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
-               count_include_pad=True, divisor_override=None):
-    """**It takes a different window per axis.** Because
-    `adaptive_avg_pool2d` has to be able to reduce the height and the width
-    differently — taking squares only leaves nothing to build it on.
+def _avg_pool_nd(input, spatial, kernel_size, stride, padding, ceil_mode,     # noqa: A002
+                 count_include_pad, divisor_override, name):
+    """Average pooling over `spatial` trailing axes, in torch's arithmetic.
 
-    **Four of torch's seven arguments were missing**, and the pair that decides the
-    *divisor* is the reason this is more than plumbing: an average over a padded
-    window can count the padding or not, and `count_include_pad=False` is what makes
-    an edge window an average of the values that are really there. torch's default is
-    `True`, so the padded edges are pulled toward zero — a choice, not an accident,
-    and one a caller has to be able to reverse.
+    **Written once for all three ranks.** It began as `avg_pool2d` alone, and
+    `avg_pool1d` and `avg_pool3d` were `_fixed(...)` calls that took a kernel and a
+    stride and nothing else — so `padding`, `ceil_mode`, `count_include_pad` and
+    `divisor_override` existed at rank 2 and not at ranks 1 and 3. Copying the body
+    twice would have made three places for the divisor rule to drift apart, and the
+    divisor rule is the whole difficulty here.
 
-    `divisor_override` replaces the count outright, which is how a fixed-scale
-    pooling layer is built.
+    The pair that decides the *divisor* is why this is more than plumbing: an average
+    over a padded window can count the padding or not, and `count_include_pad=False`
+    is what makes an edge window an average of the values that are really there.
+    torch's default is `True`, so the padded edges are pulled toward zero — a choice,
+    not an accident, and one a caller has to be able to reverse. `divisor_override`
+    replaces the count outright, which is how a fixed-scale pooling layer is built.
 
     The zeros are laid down explicitly rather than through `_pool_windows`, because
     with `count_include_pad=False` the divisor is **per window** — every edge window
     has a different count of real cells — and a shared helper that returns windows
     has nowhere to carry that.
     """
-    kh, kw = _pair(kernel_size)
-    sh, sw = _pair(stride if stride is not None else kernel_size)
-    ph, pw = _pair(padding)
-    xd = input.data
-    N, C, H, W = xd.shape
-    if ph or pw:
-        xd = _np.pad(xd, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
-    PH, PW = xd.shape[2], xd.shape[3]
+    x = _wrap(input)
+    ks = _spread(kernel_size, spatial)
+    st = _spread(stride if stride is not None else kernel_size, spatial)
+    pd = _spread(padding, spatial)
+    xd = x.data
+    real_len = xd.shape[2:]
+    if any(pd):
+        xd = _np.pad(xd, ((0, 0), (0, 0)) + tuple((p, p) for p in pd))
+    padded = list(xd.shape[2:])
+
     up = (lambda a, b: -(-a // b)) if ceil_mode else (lambda a, b: a // b)
-    OH = up(PH - kh, sh) + 1
-    OW = up(PW - kw, sw) + 1
-    # torch drops a ceil-mode window that begins inside the padding on the far side.
-    if ceil_mode:
-        while (OH - 1) * sh >= PH - ph:
-            OH -= 1
-        while (OW - 1) * sw >= PW - pw:
-            OW -= 1
-    need_h = (OH - 1) * sh + kh
-    need_w = (OW - 1) * sw + kw
-    if need_h > PH or need_w > PW:
-        xd = _np.pad(xd, ((0, 0), (0, 0), (0, max(0, need_h - PH)),
-                          (0, max(0, need_w - PW))))
-    win = _np.lib.stride_tricks.sliding_window_view(xd, (kh, kw), axis=(2, 3))
-    win = win[:, :, ::sh, ::sw, :, :][:, :, :OH, :OW]
-    totals = win.sum(axis=(4, 5))
+    outs = []
+    for k in range(spatial):
+        n = up(padded[k] - ks[k], st[k]) + 1
+        # torch drops a ceil-mode window that begins inside the padding on the far side.
+        if ceil_mode:
+            while n > 1 and (n - 1) * st[k] >= padded[k] - pd[k]:
+                n -= 1
+        outs.append(n)
+
+    # A ceil-mode window may run off the end; the cells that are not there are zeros
+    # and never counted (see the mask below), so the array is simply extended.
+    grow = [max(0, (outs[k] - 1) * st[k] + ks[k] - padded[k]) for k in range(spatial)]
+    if any(grow):
+        xd = _np.pad(xd, ((0, 0), (0, 0)) + tuple((0, g) for g in grow))
+
+    axes = tuple(range(2, 2 + spatial))
+    win = _np.lib.stride_tricks.sliding_window_view(xd, tuple(ks), axis=axes)
+    picker = (slice(None), slice(None)) + tuple(
+        slice(None, outs[k] * st[k], st[k]) for k in range(spatial))
+    win = win[picker]
+    totals = win.sum(axis=tuple(range(2 + spatial, 2 + 2 * spatial)))
+
     if divisor_override is not None:
-        counts = _np.full((OH, OW), float(divisor_override))
+        counts = _np.full(tuple(outs), float(divisor_override))
     else:
         # **One mask decides every divisor, and the two kinds of padding differ.**
         # Explicit `padding` counts or does not, by `count_include_pad`. The zeros a
@@ -5412,22 +5432,38 @@ def avg_pool2d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
         # Written as a mask rather than as two cases because the count is **per
         # window** once anything is clipped, and a formula has nowhere to put that.
         real = _np.zeros(xd.shape[2:], dtype=_np.float64)
-        real[ph:ph + H, pw:pw + W] = 1.0
+        real[tuple(slice(pd[k], pd[k] + real_len[k]) for k in range(spatial))] = 1.0
         if count_include_pad:
-            real[:PH, :PW] = 1.0
-        rw = _np.lib.stride_tricks.sliding_window_view(real, (kh, kw), axis=(0, 1))
-        counts = rw[::sh, ::sw][:OH, :OW].sum(axis=(2, 3))
+            real[tuple(slice(None, padded[k]) for k in range(spatial))] = 1.0
+        rw = _np.lib.stride_tricks.sliding_window_view(
+            real, tuple(ks), axis=tuple(range(spatial)))
+        rw = rw[tuple(slice(None, outs[k] * st[k], st[k]) for k in range(spatial))]
+        counts = rw.sum(axis=tuple(range(spatial, 2 * spatial)))
     out = totals / counts
 
     def back(g):
         g = _np.asarray(g) / counts
         gx = _np.zeros(xd.shape, dtype=xd.dtype)
-        for i in range(kh):
-            for j in range(kw):
-                gx[:, :, i:i + OH * sh:sh, j:j + OW * sw:sw] += g
-        return (gx[:, :, ph:ph + H, pw:pw + W],)
+        for offset in _itertools.product(*[range(ks[k]) for k in range(spatial)]):
+            where = (slice(None), slice(None)) + tuple(
+                slice(offset[k], offset[k] + outs[k] * st[k], st[k])
+                for k in range(spatial))
+            gx[where] += g
+        keep = (slice(None), slice(None)) + tuple(
+            slice(pd[k], pd[k] + real_len[k]) for k in range(spatial))
+        return (gx[keep],)
 
-    return input._make(out, (input,), back, "AvgPool2DBackward0")
+    return x._make(out, (x,), back, name)
+
+
+def avg_pool2d(input, kernel_size, stride=None, padding=0, ceil_mode=False,   # noqa: A002
+               count_include_pad=True, divisor_override=None):
+    """**It takes a different window per axis.** Because
+    `adaptive_avg_pool2d` has to be able to reduce the height and the width
+    differently — taking squares only leaves nothing to build it on.
+    """
+    return _avg_pool_nd(input, 2, kernel_size, stride, padding, ceil_mode,
+                        count_include_pad, divisor_override, "AvgPool2DBackward0")
 
 
 def _pool_all(x):

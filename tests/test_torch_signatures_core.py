@@ -281,7 +281,18 @@ UNALIGNED = {
     # matched to 1e-7 — so it was not the arithmetic, it was **my own call putting
     # `True` where torch keeps an epsilon**, which is exactly what the row warns
     # about and exactly what nobody had written a call to find out.
-    "nn": 5,
+    #
+    # **5 → 0, and the last five were the average-pooling family.** `AvgPool1d` and
+    # `AvgPool3d` read `(size, stride)` where torch reads `(kernel_size, stride,
+    # padding, ceil_mode, count_include_pad[, divisor_override])`, and the three
+    # `AdaptiveAvgPool`s read `(size, stride)` where torch reads `(output_size)` —
+    # **a `stride` torch does not have at all**, accepted here and doing nothing.
+    #
+    # One base class was serving both families, and the shape that fitted both was
+    # the intersection of the two, which is neither. Splitting it is what let the
+    # fixed poolers grow torch's four and the adaptive ones drop the argument that
+    # was never theirs.
+    "nn": 0,
     # **27 → 16.** Eleven of these were activations whose only difference from torch
     # was the missing `inplace` at the end — `relu(t)` against `relu(input, inplace)`
     # cannot align, so they sat here rather than in `shorter`. Giving them the
@@ -410,6 +421,18 @@ SHORTER = {
     # and the two lists part at every layer that has them.
     # 18 → 12. `Upsample`, the three LP pools, `TransformerEncoder` and
     # `RNNBase` all took what they were short of.
+    #
+    # **It did not move when `AvgPool1d` and `AvgPool3d` stopped refusing `padding`,
+    # `count_include_pad` and `divisor_override`**, and that is worth a line. Both
+    # already *declared* those names and raised inside; this bucket counts declared
+    # names, so a refusal and an implementation look identical to it. The two rows
+    # were `agree` before the change and `agree` after, while the behaviour went from
+    # "stops" to "matches torch over 156 configurations".
+    #
+    # An axis that cannot see the difference between declaring an argument and
+    # honouring it is not broken — it is measuring names, and it says so. It is the
+    # reason `test_inert_arguments.py` exists next to it, and the reason a green run
+    # here is not evidence that anything works.
     "nn": 12,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far

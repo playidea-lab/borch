@@ -2483,57 +2483,84 @@ class AvgPool2d(Module):
 
 
 class _PoolND(Module):
-    """The body of the layers that fold over a fixed window. **Only which
-    function they call differs.**
+    """The body of the layers that fold to a chosen **output size**. Only which
+    function they call differs.
 
     Writing a `forward` per layer means the day comes when one of them calls a
     different function, and that diverges only in the values — the activations
     had the function form and the layer form asked separately for the same
     reason.
+
+    **It used to carry `stride` as well, and torch's adaptive layers have none.**
+    One base served the fixed-window poolers and the adaptive ones together, so
+    `AdaptiveAvgPool2d(7, 2)` was accepted here and raised in torch, while the
+    fixed ones were short of `padding`, `ceil_mode` and the two divisor arguments
+    that torch does give them. A shared base is worth having when the two families
+    share a signature; these two never did, and the shape that fitted both was the
+    intersection of the two — which is neither.
+
+    The parameter is `output_size`, which is torch's name. It was `size`, and a
+    keyword call written from the documentation stopped on it.
     """
 
     fn = staticmethod(avg_pool2d)
-    adaptive = False
 
-    def __init__(self, size, stride=None):
+    def __init__(self, output_size):
         super().__init__()
-        self.size, self.stride = size, stride
+        self.output_size = output_size
 
     def forward(self, x):
-        fn = type(self).fn
-        return fn(x, self.size) if type(self).adaptive else fn(x, self.size, self.stride)
+        return type(self).fn(x, self.output_size)
 
 
-class AvgPool1d(_PoolND):
-    fn = staticmethod(avg_pool1d)
+class AvgPool1d(Module):
+    """torch gives 1-D no `divisor_override` — 2-D and 3-D have one. Matching an
+    authority means matching its inconsistencies."""
+
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True):
+        super().__init__()
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        self.ceil_mode, self.count_include_pad = ceil_mode, count_include_pad
+
+    def forward(self, x):
+        return avg_pool1d(x, self.kernel_size, self.stride, self.padding,
+                          self.ceil_mode, self.count_include_pad)
 
 
-class AvgPool3d(_PoolND):
-    fn = staticmethod(avg_pool3d)
+class AvgPool3d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True, divisor_override=None):
+        super().__init__()
+        self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
+        self.ceil_mode, self.count_include_pad = ceil_mode, count_include_pad
+        self.divisor_override = divisor_override
+
+    def forward(self, x):
+        return avg_pool3d(x, self.kernel_size, self.stride, self.padding,
+                          self.ceil_mode, self.count_include_pad,
+                          self.divisor_override)
 
 
 class AdaptiveAvgPool1d(_PoolND):
     fn = staticmethod(adaptive_avg_pool1d)
-    adaptive = True
 
 
 class AdaptiveAvgPool3d(_PoolND):
     fn = staticmethod(adaptive_avg_pool3d)
-    adaptive = True
 
 
 class _AdaptiveMaxPoolND(_PoolND):
     """Adaptive max pooling. **It takes `return_indices`** — an argument the
     average side does not have."""
 
-    adaptive = True
-
-    def __init__(self, size, return_indices=False):
-        super().__init__(size)
+    def __init__(self, output_size, return_indices=False):
+        super().__init__(output_size)
         self.return_indices = return_indices
 
     def forward(self, x):
-        return type(self).fn(x, self.size, return_indices=self.return_indices)
+        return type(self).fn(x, self.output_size,
+                             return_indices=self.return_indices)
 
 
 class AdaptiveMaxPool1d(_AdaptiveMaxPoolND):
@@ -2549,6 +2576,13 @@ class AdaptiveMaxPool3d(_AdaptiveMaxPoolND):
 
 
 class LPPool1d(Module):
+    """`ceil_mode` is torch's fourth argument and stopped here at three, so
+    `nn.LPPool2d(2, 3, 2, True)` raised. It costs nothing beyond passing it on —
+    these are average pooling scaled back into a sum — which is why it being absent
+    was an oversight rather than a decision."""
+
+    fn = staticmethod(lp_pool1d)
+
     def __init__(self, norm_type, kernel_size, stride=None, ceil_mode=False):
         """`ceil_mode` adds the trailing window that rounding up allows, **clipped
         to the input**: with no padding there is nothing to pad with, so torch folds
@@ -2559,20 +2593,20 @@ class LPPool1d(Module):
         self.ceil_mode = ceil_mode
 
     def forward(self, x):
-        return lp_pool1d(x, self.norm_type, self.kernel_size, self.stride,
-                         self.ceil_mode)
+        # **Which function is a class attribute, not a `forward` per subclass.**
+        # Three `forward`s differing only in the name they call is the shape that
+        # lets one of them drift to a different function, and that diverges only in
+        # the values — the same reason `_PoolND` exists next door.
+        return type(self).fn(x, self.norm_type, self.kernel_size, self.stride,
+                             self.ceil_mode)
 
 
 class LPPool2d(LPPool1d):
-    def forward(self, x):
-        return lp_pool2d(x, self.norm_type, self.kernel_size, self.stride,
-                         self.ceil_mode)
+    fn = staticmethod(lp_pool2d)
 
 
 class LPPool3d(LPPool1d):
-    def forward(self, x):
-        return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride,
-                         self.ceil_mode)
+    fn = staticmethod(lp_pool3d)
 
 
 ASMoutput = _collections.namedtuple("ASMoutput", ["output", "loss"])
@@ -2735,7 +2769,6 @@ class AdaptiveAvgPool2d(_PoolND):
     """
 
     fn = staticmethod(adaptive_avg_pool2d)
-    adaptive = True
 
 
 class Unflatten(Module):

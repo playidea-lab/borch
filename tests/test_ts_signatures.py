@@ -237,7 +237,12 @@ UNALIGNED = {
     #
     # The same thing the `torch is C` bucket did at scale, one row wide: a name
     # nobody could compare is not a name that agrees.
-    "nn": 37,
+    #
+    # 37 → 35. The three `AdaptiveAvgPool`s stopped taking a `stride` torch does not
+    # have, which made their lists a length borch.ts's could be compared against —
+    # **a row leaving `unaligned` because the core dropped an argument rather than
+    # gaining one**, which is the rarer direction and worth naming.
+    "nn": 35,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -437,7 +442,14 @@ SHORTER = {
     # (alongside other differences), and none of the 33 lacks *only* it. These
     # three are the first to be that clean, which is why the row is worth a
     # sentence rather than a nudge.
-    "nn": 33,
+    #
+    # 33 → 35. `AvgPool1d` and `AvgPool3d`. They already declared torch's arguments
+    # and refused them inside; what changed is that the refusals became real, and
+    # the two rows arrive here because the *adaptive* pools next door gave up a
+    # `stride` and stopped being uncomparable — the same edit moved two rows out of
+    # `unaligned` and two into this bucket, in opposite directions, and a running
+    # total would have shown neither.
+    "nn": 35,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
