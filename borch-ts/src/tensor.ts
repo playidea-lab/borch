@@ -5334,10 +5334,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   async unique(sorted?: boolean): Promise<Tensor>;
   async unique(
     sorted: boolean, returnInverse: boolean, returnCounts?: boolean,
+    dim?: number | null,
   ): Promise<Tensor[]>;
   async unique(
     sorted = true, returnInverse = false, returnCounts = false,
+    dim: number | null = null,
   ): Promise<Tensor | Tensor[]> {
+    if (dim !== null) {
+      return this.uniqueAlong(dim, returnInverse, returnCounts);
+    }
     // torch's order — `returnInverse` **second**. Two arguments were missing from
     // the middle here, so `x.unique(true, true)` asked for the inverse in torch and
     // for nothing at all over here.
@@ -5361,6 +5366,97 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     }
     if (returnCounts) {
       const counts = seen.map((v) => values.filter((w) => w === v).length);
+      out.push(Tensor.from(counts, [counts.length], { dtype: "int64" }));
+    }
+    return out.length === 1 ? (out[0] as Tensor) : out;
+  }
+
+  /**
+   * `unique(dim=…)` — **a different operation from the one beside it.**
+   *
+   * Without a dimension, `unique` folds *values*: a 3×2 of `[[1,2],[3,4],[1,2]]`
+   * has four distinct numbers and comes back as a flat `[1, 2, 3, 4]`. With
+   * `dim=0` it folds *whole slices*: two distinct rows, and the answer keeps its
+   * rank at 2×2. The inverse changes meaning with it — one entry per slice along
+   * `dim` rather than one per element.
+   *
+   * **This was written down as not carried across, and the reason outlived it.**
+   * The gap table said the two forms were different operations, which is true and
+   * was doing the work of an excuse: they are different operations and both are
+   * torch's. Two golden rows sat red under that sentence.
+   *
+   * Slices are ordered lexicographically, which is what numpy's `unique(axis=)`
+   * does and therefore what the core does. Equality is by value across the whole
+   * slice — two rows are one row only if every element matches.
+   */
+  private async uniqueAlong(
+    dim: number, returnInverse: boolean, returnCounts: boolean,
+  ): Promise<Tensor | Tensor[]> {
+    const rank = this.shape.length;
+    const axis = dim < 0 ? dim + rank : dim;
+    if (axis < 0 || axis >= rank) {
+      throw new IndexError(
+        `Dimension out of range (expected to be in range of [${-rank}, ${rank - 1}], but got ${dim})`,
+      );
+    }
+    const flat = Array.from(await this.toArray());
+    const along = this.shape[axis] ?? 0;
+    // How far apart two neighbouring positions along `axis` sit in the flat array.
+    // Everything below groups by `Math.floor(j / step) % along`, which is that
+    // position's coordinate on the axis — and **ascending `j` within a group is
+    // row-major order over the remaining axes**, so a slice needs no reshaping.
+    let step = 1;
+    for (let k = axis + 1; k < rank; k += 1) step *= this.shape[k] ?? 1;
+
+    const slices: number[][] = Array.from({ length: along }, () => []);
+    for (let j = 0; j < flat.length; j += 1) {
+      const at = Math.floor(j / step) % along;
+      (slices[at] as number[]).push(flat[j] as number);
+    }
+
+    const order = [...slices.keys()].sort((a, b) => {
+      const x = slices[a] as number[];
+      const y = slices[b] as number[];
+      for (let k = 0; k < x.length; k += 1) {
+        if (x[k] !== y[k]) return (x[k] as number) - (y[k] as number);
+      }
+      return 0;
+    });
+
+    const kept: number[][] = [];
+    const counts: number[] = [];
+    const inverse = new Array<number>(along).fill(0);
+    for (const at of order) {
+      const slice = slices[at] as number[];
+      const last = kept[kept.length - 1];
+      const same = last !== undefined && last.length === slice.length
+        && last.every((v, k) => v === slice[k]);
+      if (same) {
+        counts[counts.length - 1] = (counts[counts.length - 1] as number) + 1;
+      } else {
+        kept.push(slice);
+        counts.push(1);
+      }
+      inverse[at] = kept.length - 1;
+    }
+
+    const shape = [...this.shape];
+    shape[axis] = kept.length;
+    const values = new Array<number>(kept.length * (slices[0]?.length ?? 0));
+    const width = kept.length;
+    for (let j = 0; j < values.length; j += 1) {
+      const at = Math.floor(j / step) % width;
+      // The position inside the slice is the flat index with the axis removed, and
+      // it counts up in exactly the order the slice was gathered in.
+      const within = Math.floor(j / (step * width)) * step + (j % step);
+      values[j] = (kept[at] as number[])[within] as number;
+    }
+
+    const out: Tensor[] = [Tensor.from(values, shape, { dtype: this.dtype })];
+    if (returnInverse) {
+      out.push(Tensor.from(inverse, [along], { dtype: "int64" }));
+    }
+    if (returnCounts) {
       out.push(Tensor.from(counts, [counts.length], { dtype: "int64" }));
     }
     return out.length === 1 ? (out[0] as Tensor) : out;

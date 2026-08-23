@@ -2573,7 +2573,7 @@
        "signature": "unique(sorted?: boolean): Promise<Tensor>",
        "doc": "The distinct values, **ascending.** torch's default is to give them\nsorted.",
        "overloads": [
-        "unique(sorted: boolean, returnInverse: boolean, returnCounts?: boolean): Promise<Tensor[]>"
+        "unique(sorted: boolean, returnInverse: boolean, returnCounts?: boolean, dim?: number | null): Promise<Tensor[]>"
        ],
        "section": {
         "ko": "Where the output size depends on the values",

@@ -260,7 +260,7 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
   // `returnInverse` and `dim` were missing from the middle on both sides, so
   // `x.unique(true, true)` asked for the inverse in torch and for nothing here.
   // Asked by position rather than by keyword because that is the call the gap made
-  // wrong. `dim` is not carried across — a row in the gap table, not a silence.
+  // wrong.
   {
     const dups = (): Tensor =>
       Tensor.from([3, 1, 2, 1, 3, 3], [6], { dtype: "int64" });
@@ -268,6 +268,19 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
       async () => (await dups().unique(true, true))[1] as Tensor);
     out.set("spot::unique(inverse, counts)",
       async () => (await dups().unique(true, true, true))[2] as Tensor);
+    // **`dim` folds whole slices, which is a different operation from the two rows
+    // above**, and it was written down as not carried across for exactly that
+    // reason. Both are torch's, so the reason was true and was doing an excuse's
+    // work; these two rows sat red under it.
+    //
+    // The grid has a repeated row on purpose: without one, an implementation that
+    // returns every slice passes, and folding is the whole point.
+    const grid3 = (): Tensor =>
+      Tensor.from([1, 2, 3, 4, 1, 2], [3, 2], { dtype: "int64" });
+    out.set("spot::unique(dim=0)",
+      async () => (await grid3().unique(true, false, false, 0)) as unknown as Tensor);
+    out.set("spot::unique(dim=0, inverse)",
+      async () => (await grid3().unique(true, true, false, 0))[1] as Tensor);
     // `norm`'s `p`, `dim` and `keepdim` arrived in the same edit — this took no
     // arguments at all, so every `x.norm(2, 1)` was silently the norm of everything.
     const plane = (): Tensor =>
