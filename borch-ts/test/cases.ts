@@ -797,10 +797,12 @@ function addNamedCasts(out: Map<string, Case>): void {
   weRefuse("short", () => src().short());
   weRefuse("int", () => src().int());
 
-  // **`double` branches differently** — the core has float64 and only the browser side
-  // does not. The Python side folded it through `_as_expected` and the answer is the same
-  // word.
-  out.set(`${P}double=브라우저는거절`, () => {
+  // **`double` does not branch — all three refuse.** This comment said "the core has
+  // float64 and only the browser side does not", which was true until the core began
+  // narrowing double precision at construction and stopped being true without anything
+  // noticing: the case asked whether the call was turned away, and a silent downcast is
+  // not a refusal. The core refuses at `_cast` now, so the name says `우리는거절`.
+  out.set(`${P}double=우리는거절`, () => {
     try {
       src().double();
     } catch {
@@ -7206,10 +7208,10 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
   one("cross_entropy", x2,
     (x) => x.crossEntropy(Tensor.from([0, 1, 2], [3], { dtype: "int64" })));
 
-  // A place only the sister library refuses. We have no double precision and **changing
-  // the dtype itself works**, coming back as float32, so as in torch succeeding is the right
-  // answer.
-  out.set("grad::double()=브라우저는거절", () => {
+  // **Not a place only this side refuses, any more.** The core handed back float32 for
+  // the same call and now stops at the same gate, so all three agree and the expected
+  // word is the refusal one.
+  out.set("grad::double()=우리는거절", () => {
     try {
       const x = x1(true);
       x.to("float32").sum().backward();

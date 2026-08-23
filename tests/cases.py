@@ -421,16 +421,21 @@ def grad_cases(inp=None):
     # wrong.
     unary("float()", lambda L, x: x.float())
 
-    # `.double()` goes through the same `_cast`, so the arithmetic is already compared above.
-    # The question left here is **whether the browser side refuses it.** Having no double
-    # precision is a documented limit (it was for TF.js and it is for WGSL's f32), and this
-    # holds that limit to not widening quietly.
+    # `.double()` goes through the same `_cast`. The question used to be **whether the
+    # browser side refuses it** — the core was expected to succeed, and it did, by handing
+    # back `float32`. It refuses now, at `_cast`, so all three implementations agree and
+    # the case says "all of ours refuse" rather than "the two part".
+    #
+    # Having no double precision is a documented limit (it was for TF.js and it is for
+    # WGSL's f32). What was not documented is that the core has not had it either since
+    # `Tensor.__init__` began narrowing at construction, and this case could not tell,
+    # because a silent downcast is not a refusal.
     def double_grad(L):
         x = L.tensor(x1, requires_grad=True)
         x.double().sum().backward()
         return _grad_of(x, "double()")
 
-    cases.append(("grad::double()=브라우저는거절", _as_expected(double_grad)))
+    cases.append(("grad::double()=우리는거절", refusal_case(double_grad)))
 
     # Twelve places where torch flows a gradient and the core did not. In all of them the
     # result was `requires_grad=False` so `backward()` refused, which means **it was never
@@ -11352,10 +11357,23 @@ def dtype_cases(inp=None):
     cases.append((INPLACE_PREFIX + "술어::is_shared()",
                   lambda L: str(L.tensor(square2).is_shared())))
 
-    # `double` **parts deliberately** — the core has float64 and the browser side has no double
-    # precision in a WebGPU shader. A place where refusal is the answer, so `_as_expected` is used.
-    cases.append(("dtype::형바꾸기::double=브라우저는거절",
-                  _as_expected(lambda L: L.tensor(floats).double())))
+    # `double` **parts deliberately** — the browser side has no double precision in a WebGPU
+    # shader, so refusal is the answer there and `_as_expected` holds the place.
+    #
+    # **The sentence beside this used to say "the core has float64", and the core does not.**
+    # `Tensor.__init__` narrows `float64` to `float32` at construction, deliberately: its own
+    # comment calls having no such dtype "this library's first design decision". The claim was
+    # true once and stopped being true when that narrowing went in, and nothing said so —
+    # because `_as_expected` asks **"did it refuse?"** and not what came back. A silent
+    # downcast is not a refusal, so the case passed and read as "the core has float64".
+    we_refuse("double", lambda L: L.tensor(floats).double())
+
+    # **Two more spellings of the same request**, so that the gate is asked where it sits
+    # rather than only through `.double()`. All three arrive at `_cast`, and the reason it
+    # is one gate and not three is that three copies of a rule leave one behind — a thing
+    # this file has stepped on before.
+    we_refuse(".to(float64)", lambda L: L.tensor(floats).to(L.float64))
+    we_refuse(".type(float64)", lambda L: L.tensor(floats).type(L.float64))
 
     # ── a type **alias** is a type, not a function ──
     #
