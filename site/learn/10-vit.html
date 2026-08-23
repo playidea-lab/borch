@@ -132,7 +132,9 @@
 
         const fc = new nn.Linear(D, D * 2);
         try {
-          fc.call(seq);
+          // If this ever stops throwing, say so — silence would leave the note above
+          // claiming a refusal with nothing under it.
+          log("Linear on 3-D:", JSON.stringify(fc.call(seq).shape), "— it batches now");
         } catch (e) {
           log("Linear on 3-D:", e.message);
         }

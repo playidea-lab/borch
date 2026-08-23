@@ -129,7 +129,9 @@
 
         const fc = new nn.Linear(D, D * 2);
         try {
-          fc.call(seq);
+          // 언젠가 안 던지게 되면 그렇다고 말한다 — 조용하면 위 주석 상자가 거절을
+          // 주장하는데 그 밑에 아무 증거도 없게 된다.
+          log("3차원에 Linear:", JSON.stringify(fc.call(seq).shape), "— 이제 배치된다");
         } catch (e) {
           log("3차원에 Linear:", e.message);
         }
