@@ -3883,6 +3883,167 @@ def _mat_matrix(body):
     return name, flat.reshape(dims[::-1]).transpose().astype(_MAT_CLASS[cls])
 
 
+# ── pictures, for the formats that are not a codec ──────────────────────────
+#
+# **"A codec" was one sentence covering two costs**, the same way the `.mat` refusal
+# was. JPEG is a discrete cosine transform, Huffman tables, chroma subsampling and a
+# progressive mode: that is a codec and this library does not have one. PNG is
+# **`zlib` plus arithmetic** — walk the chunks, inflate one stream, undo a filter that
+# is chosen per row from five that each subtract a neighbour. PPM is a text header and
+# then the bytes.
+#
+# Measured before writing either: of the forty-five datasets declined for "a codec",
+# **two open PNG and no JPEG** and one opens PPM. So the sentence was carrying fifteen
+# rows that are genuinely blocked and three that were not, and nobody had asked which.
+
+def _png_read(data):
+    """One PNG as `uint8` — `(h, w)` for grey, `(h, w, 3)` or `(h, w, 4)` for colour.
+
+    Interlaced files are refused by name: Adam7 reorders the whole image into seven
+    passes, and a reader that ignored the flag would return a picture built from the
+    first pass alone — recognisable, wrong, and silent.
+    """
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("not a PNG — the eight-byte signature does not match")
+    at, idat, palette, alpha = 8, [], None, None
+    width = height = depth = colour = interlace = 0
+    while at + 8 <= len(data):
+        (size,) = _struct.unpack_from(">I", data, at)
+        kind = data[at + 4:at + 8]
+        body = data[at + 8:at + 8 + size]
+        at += 12 + size                          # 4 length, 4 type, body, 4 CRC
+        if kind == b"IHDR":
+            width, height, depth, colour, _, _, interlace = _struct.unpack(
+                ">IIBBBBB", body)
+        elif kind == b"PLTE":
+            palette = _np.frombuffer(body, dtype=_np.uint8).reshape(-1, 3)
+        elif kind == b"tRNS" and colour == 3:
+            alpha = _np.frombuffer(body, dtype=_np.uint8)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"IEND":
+            break
+    if interlace:
+        raise NotImplementedError(
+            "interlaced PNG (Adam7) is not read here — the rows arrive in seven "
+            "passes and reading only the first gives a recognisable picture of the "
+            "wrong thing")
+    if depth not in (1, 2, 4, 8, 16):
+        raise ValueError(f"PNG bit depth {depth} is not one this reads")
+
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colour]
+    raw = _zlib.decompress(b"".join(idat))
+    return _png_rows(raw, width, height, depth, channels, colour, palette, alpha)
+
+
+def _png_rows(raw, width, height, depth, channels, colour, palette, alpha):
+    """Undo the per-row filters and lay the samples out.
+
+    **Every filter refers to the row above**, so this cannot be vectorised over rows —
+    row `i` needs row `i-1` already reconstructed. It can be vectorised *within* a row
+    for three of the five; `Sub`, `Average` and `Paeth` refer to the pixel to the left
+    and are written as loops, which is what they are.
+    """
+    stride = (width * channels * depth + 7) // 8
+    out = _np.zeros((height, stride), dtype=_np.uint8)
+    step = max(1, channels * depth // 8)         # bytes between a sample and its left
+    prior = _np.zeros(stride, dtype=_np.uint8)
+    at = 0
+    for row in range(height):
+        kind = raw[at]
+        line = _np.frombuffer(raw, dtype=_np.uint8, count=stride, offset=at + 1).copy()
+        at += 1 + stride
+        if kind == 0:
+            pass
+        elif kind == 2:                          # Up — the whole row at once
+            line += prior
+        else:
+            for i in range(stride):
+                left = int(line[i - step]) if i >= step else 0
+                up = int(prior[i])
+                upleft = int(prior[i - step]) if i >= step else 0
+                if kind == 1:
+                    line[i] = (int(line[i]) + left) & 0xFF
+                elif kind == 3:
+                    line[i] = (int(line[i]) + (left + up) // 2) & 0xFF
+                elif kind == 4:
+                    # Paeth: whichever of the three neighbours the gradient is nearest.
+                    p = left + up - upleft
+                    pa, pb, pc = abs(p - left), abs(p - up), abs(p - upleft)
+                    near = left if (pa <= pb and pa <= pc) else (up if pb <= pc else upleft)
+                    line[i] = (int(line[i]) + near) & 0xFF
+                else:
+                    raise ValueError(f"PNG row filter {kind} is not one of the five")
+        out[row] = line
+        prior = line
+
+    if depth == 8:
+        samples = out.reshape(height, width, channels)
+    elif depth == 16:
+        pairs = out.reshape(height, -1, 2).astype(_np.uint16)
+        wide = (pairs[..., 0] << 8) | pairs[..., 1]
+        samples = (wide >> 8).astype(_np.uint8).reshape(height, width, channels)
+    else:
+        # **Sub-byte depths are packed high bit first**, and a row is padded to a whole
+        # byte. Omniglot's strokes are 1-bit, so this is the path its pictures take.
+        bits = _np.unpackbits(out, axis=1)
+        per = depth
+        grouped = bits[:, :width * channels * per].reshape(height, -1, per)
+        values = _np.zeros(grouped.shape[:2], dtype=_np.uint16)
+        for b in range(per):
+            values = (values << 1) | grouped[:, :, b]
+        # Scale so that the largest value the depth can hold becomes 255 — that is what
+        # a viewer shows and what PIL hands back.
+        scale = 255 // ((1 << per) - 1) if colour != 3 else 1
+        samples = (values * scale).astype(_np.uint8).reshape(height, width, channels)
+
+    if colour == 3:                              # palette: the sample is an index
+        if palette is None:
+            raise ValueError("a palette PNG with no PLTE chunk")
+        picture = palette[samples[:, :, 0]]
+        if alpha is not None:
+            wide = _np.full(samples.shape[:2], 255, dtype=_np.uint8)
+            wide[:] = alpha[_np.clip(samples[:, :, 0], 0, len(alpha) - 1)]
+            picture = _np.dstack([picture, wide])
+        return _np.ascontiguousarray(picture)
+    if channels == 1:
+        return _np.ascontiguousarray(samples[:, :, 0])
+    return _np.ascontiguousarray(samples)
+
+
+def _ppm_read(data):
+    """One binary PPM/PGM (`P5` or `P6`) as `uint8`.
+
+    **The cheapest format there is**: a magic number, three numbers, then the samples.
+    Comments run from `#` to the end of a line and may sit between any two fields,
+    which is the only part that is not a `split()`.
+    """
+    if data[:2] not in (b"P5", b"P6"):
+        raise ValueError("not a binary PGM or PPM — it does not begin `P5` or `P6`")
+    channels = 1 if data[:2] == b"P5" else 3
+    fields, at = [], 2
+    while len(fields) < 3:
+        while at < len(data) and data[at:at + 1].isspace():
+            at += 1
+        if data[at:at + 1] == b"#":
+            while at < len(data) and data[at] != 0x0A:
+                at += 1
+            continue
+        start = at
+        while at < len(data) and not data[at:at + 1].isspace():
+            at += 1
+        fields.append(int(data[start:at]))
+    width, height, largest = fields
+    at += 1                                      # exactly one whitespace byte follows
+    if largest > 255:
+        raise NotImplementedError(
+            "a 16-bit PPM is not read here — its samples are big-endian pairs")
+    got = _np.frombuffer(data, dtype=_np.uint8, count=width * height * channels,
+                         offset=at)
+    shape = (height, width) if channels == 1 else (height, width, channels)
+    return _np.ascontiguousarray(got.reshape(shape))
+
+
 def _md5(data):
     return _hashlib.md5(data).hexdigest()
 
@@ -4580,6 +4741,202 @@ class SEMEION(VisionDataset):
         return picture, target
 
 
+class Omniglot(VisionDataset):
+    """1,623 hand-drawn characters from 50 alphabets, 20 drawings each, **as PNG.**
+
+    **Declined for "a codec", and PNG is not the codec that word was standing for.**
+    JPEG is a discrete cosine transform with Huffman tables and a progressive mode.
+    PNG is `zlib` — which the standard library has — plus a chunk walk and a row
+    filter chosen from five that each subtract a neighbour. `_png_read` above is the
+    whole of it, and Omniglot's pictures take its narrowest path: 105×105, one
+    channel, **one bit deep.**
+
+    Two things a reader gets wrong quietly:
+
+    - **The classes are alphabet *and* character**, not alphabet. `Latin/character07`
+      is one class and `Latin/character08` another, so folding by alphabet gives 50
+      classes where torchvision gives 964, and every accuracy computed on it is a
+      different number for a different problem.
+    - **A stroke is 0 and the paper is 1** in the file, and PIL's `convert("L")`
+      leaves it that way. Inverting to make the ink bright is the natural thing and
+      makes every pixel disagree with torchvision.
+
+    `background=True` is the 964-class training half; `False` is the 659-class
+    evaluation half. torchvision's word, kept.
+    """
+
+    folder = "omniglot-py"
+    url_prefix = ("https://raw.githubusercontent.com/brendenlake/omniglot/"
+                  "master/python")
+    zips_md5 = {
+        "images_background": "68d2efa1b9178cc56df9314c21c6e718",
+        "images_evaluation": "6b91aef0f799c5bb55b94e3f2daec811",
+    }
+
+    def __init__(self, root, background=True, transform=None, target_transform=None,
+                 download=False, loader=None):
+        super().__init__(_os.path.join(root, self.folder), transform=transform,
+                         target_transform=target_transform)
+        self.background = background
+        self.loader = loader
+        name = self._target_folder()
+        folder = _os.path.join(self.root, name)
+        archive = _os.path.join(self.root, name + ".zip")
+        if download and not _os.path.isdir(folder):
+            _os.makedirs(self.root, exist_ok=True)
+            if not (_os.path.isfile(archive)
+                    and _md5_of_file(archive) == self.zips_md5[name]):
+                _fetch_to(f"{self.url_prefix}/{name}.zip", archive,
+                          self.zips_md5[name])
+            with _zipfile.ZipFile(archive) as zipped:
+                zipped.extractall(self.root)
+        if not _os.path.isdir(folder):
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        self.target_folder = folder
+        # **Not sorted, and that is deliberate.** torchvision's `list_dir` returns
+        # `os.listdir` unchanged, so the class index of a character is the position the
+        # filesystem happened to hand it back in. Sorting is the better rule — the same
+        # folder would then give the same labels everywhere — and it is a *different*
+        # rule: on a directory `os.listdir` returns unsorted, every label disagrees
+        # with torchvision's while both are internally consistent, and an accuracy
+        # compared against a published number is comparing two class orders.
+        #
+        # Measured on a fixture: sorted gave `Greek/character01` class 0 and
+        # torchvision gave it class 3. Nothing raises, both train, and the confusion
+        # matrices are permutations of each other.
+        #
+        # The same call this repository makes for EMNIST's transposed pictures:
+        # correcting silently is what makes two libraries disagree everywhere.
+        self._alphabets = [d for d in _os.listdir(folder)
+                           if _os.path.isdir(_os.path.join(folder, d))]
+        self._characters = [
+            _os.path.join(a, c) for a in self._alphabets
+            for c in _os.listdir(_os.path.join(folder, a))
+            if _os.path.isdir(_os.path.join(folder, a, c))]
+        self._character_images = [
+            [(f, idx) for f in _os.listdir(_os.path.join(folder, character))
+             if f.endswith(".png")]
+            for idx, character in enumerate(self._characters)]
+        self._flat_character_images = [
+            pair for images in self._character_images for pair in images]
+
+    def _target_folder(self):
+        return "images_background" if self.background else "images_evaluation"
+
+    def __len__(self):
+        return len(self._flat_character_images)
+
+    def __getitem__(self, index):
+        name, character_class = self._flat_character_images[index]
+        path = _os.path.join(self.target_folder,
+                             self._characters[character_class], name)
+        if self.loader is not None:
+            picture = self.loader(path)
+        else:
+            with open(path, "rb") as handle:
+                picture = _png_read(handle.read())
+        if self.transforms is not None:
+            picture, character_class = self.transforms(picture, character_class)
+        return picture, character_class
+
+
+class GTSRB(VisionDataset):
+    """German traffic signs — 43 classes, **as binary PPM.**
+
+    The cheapest picture format there is: a magic number, three numbers, then the
+    samples. It sat behind the same "a codec" sentence as the JPEG sets for as long as
+    nobody asked what the archive holds.
+
+    **The two splits are laid out differently and that is the whole of the work.**
+    Training is a folder per class and the class is the folder's name; test is one flat
+    folder with the answers in a semicolon-separated CSV, and its rows are not in the
+    order the files sort in. Reading the folder for the test split gives 12,630
+    pictures with the labels of whichever order the filesystem returned.
+    """
+
+    base = ("https://sid.erda.dk/public/archives/"
+            "daaeac0d7ce1152aea9b61d9f1e19370/")
+    resources = {
+        "train": ("GTSRB-Training_fixed.zip", "513f3c79a4c5141765e10e952eaa2478"),
+        "test": ("GTSRB_Final_Test_Images.zip", "c7e4e6327067d32654124b0fe9e82185"),
+        "test_gt": ("GTSRB_Final_Test_GT.zip", "fe31e9c9270bbcd7b84b7f21a9d9d9e5"),
+    }
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if split not in ("train", "test"):
+            raise ValueError(
+                f"Unknown value '{split}' for argument split. "
+                "Valid values are ('train', 'test').")
+        self.split = split
+        self._base_folder = _os.path.join(self.root, "gtsrb")
+        self._target_folder = _os.path.join(
+            self._base_folder, "GTSRB",
+            "Training" if split == "train" else _os.path.join("Final_Test", "Images"))
+        if download:
+            self.download()
+        if not _os.path.isdir(self._target_folder):
+            raise RuntimeError("Dataset not found. You can use download=True to "
+                               "download it")
+        if split == "train":
+            # **The label is the folder's position, not the number in its name.**
+            # torchvision walks the sorted folders and hands out 0, 1, 2 …, which is
+            # `DatasetFolder`'s rule everywhere. Reading `int("00007")` as 7 agrees on
+            # the real dataset — its forty-three folders are `00000` to `00042` with
+            # none missing, so position and name are the same number — and parts on
+            # any subset. Found on a fixture with two folders, `00000` and `00007`:
+            # ours said `[0, 0, 7, 7]` and torchvision `[0, 0, 1, 1]`.
+            #
+            # That is the shape where **a complete input cannot tell two rules apart**,
+            # and the fixture only caught it because the folders picked to be readable
+            # happened not to be contiguous.
+            folders = sorted(
+                d for d in _os.listdir(self._target_folder)
+                if _os.path.isdir(_os.path.join(self._target_folder, d)))
+            self._samples = []
+            for index, folder in enumerate(folders):
+                here = _os.path.join(self._target_folder, folder)
+                for name in sorted(_os.listdir(here)):
+                    if name.endswith(".ppm"):
+                        self._samples.append(
+                            (_os.path.join(here, name), index))
+        else:
+            answers = _os.path.join(self._base_folder, "GT-final_test.csv")
+            with open(answers, newline="") as handle:
+                self._samples = [
+                    (_os.path.join(self._target_folder, row["Filename"]),
+                     int(row["ClassId"]))
+                    for row in _csv.DictReader(handle, delimiter=";",
+                                               skipinitialspace=True)]
+
+    def download(self):
+        _os.makedirs(self._base_folder, exist_ok=True)
+        wanted = ["train"] if self.split == "train" else ["test", "test_gt"]
+        for key in wanted:
+            name, digest = self.resources[key]
+            archive = _os.path.join(self._base_folder, name)
+            if not (_os.path.isfile(archive) and _md5_of_file(archive) == digest):
+                _fetch_to(self.base + name, archive, digest)
+            with _zipfile.ZipFile(archive) as zipped:
+                zipped.extractall(self._base_folder)
+
+    def __len__(self):
+        return len(self._samples)
+
+    def __getitem__(self, index):
+        path, target = self._samples[index]
+        with open(path, "rb") as handle:
+            picture = _ppm_read(handle.read())
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {self.split}"
+
+
 class USPS(VisionDataset):
     """7,291 training and 2,007 test digits at 16×16, **in LIBSVM text inside bzip2.**
 
@@ -5168,7 +5525,7 @@ datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
               "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder",
-              "FER2013", "MovingMNIST", "STL10", "SVHN"):
+              "FER2013", "MovingMNIST", "STL10", "SVHN", "Omniglot", "GTSRB"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")
