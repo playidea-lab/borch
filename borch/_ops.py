@@ -2933,7 +2933,41 @@ def _lgamma_np(d):
            + _np.log(_np.abs(acc)))
     # Reflection: lgamma(x) = log(π/|sin(πx)|) − lgamma(1−x)
     flipped = _np.log(_np.pi / _np.abs(_np.sin(_np.pi * _np.where(neg, x, 0.5)))) - out
-    return _np.where(neg, flipped, out)
+    got = _np.where(neg, flipped, out)
+    # **The poles, which the reflection formula misses by a hair.** Γ has one at
+    # every non-positive integer, so `lgamma` is `inf` there — but `sin(π·−2)` in
+    # float64 is 2.4e-16 rather than 0, and `log(π/2.4e-16)` is 36.4. A finite
+    # number where torch says infinity, at three of the first four integers below
+    # zero, and plausible enough to pass through a loss unnoticed.
+    #
+    # Found by applying `lgamma_` twice: the first call sends 4.0 to 1.79 and −2.0
+    # to 36.4, and it is the second that puts a value where torch has already
+    # overflowed. **Nothing here calls anything twice.**
+    pole = (x <= 0) & (x == _np.floor(x))
+    return _np.where(_np.isnan(x), _np.nan,
+                     _np.where(pole | ~_np.isfinite(x), _np.inf, got))
+
+
+def _lifted(d, limit):
+    """`(x, running)` for the recurrences below — **with the values that never
+    terminate held out.**
+
+    All three polygamma functions lift `x` by adding one until it clears a limit.
+    `-inf + 1` is `-inf`, so `while any(x < limit)` **never ends** on a negative
+    infinity: the process stops answering, with no error and nothing on screen.
+
+    That is what it did. `x.digamma_()` twice was enough — the first call turns
+    -2.0 into an infinity and the second hangs on it. **Found by calling every
+    in-place operation twice**, which nothing in this repository did before: every
+    check makes a fresh tensor, calls once, and compares.
+
+    `nan` leaves on its own (`nan < limit` is false) and so does `+inf`. Only the
+    negative side loops, and only where a value reached it.
+    """
+    x = _np.asarray(d, dtype=_np.float64)
+    running = _np.isfinite(x)
+    # A placeholder above the limit for the rest, so the loop sees nothing to lift.
+    return _np.where(running, x, float(limit) + 1.0), running
 
 
 def _polygamma0(d):
@@ -2943,8 +2977,14 @@ def _polygamma0(d):
     The asymptotic expansion does not hold at small x, so `ψ(x) = ψ(x+1) − 1/x`
     lifts it to 6 and above before computing. One of the few places numpy does
     not have, so it is written by hand.
+
+    **The poles are torch's**, measured rather than derived: `ψ` has one at every
+    non-positive integer, and torch answers `nan` at the negative ones and `-inf`
+    at zero. The recurrence walks straight through them and reaches `-inf`
+    everywhere, which is right at 0 and wrong at −1, −2, …
     """
-    x = _np.asarray(d, dtype=_np.float64)
+    raw = _np.asarray(d, dtype=_np.float64)
+    x, running = _lifted(raw, 6)
     out = _np.zeros_like(x)
     while _np.any(x < 6):
         small = x < 6
@@ -2956,13 +2996,27 @@ def _polygamma0(d):
     # precision for x ≥ 6.
     series = (_np.log(x) - 0.5 * inv
               - inv2 * (1.0 / 12 - inv2 * (1.0 / 120 - inv2 / 252)))
-    return out + series
+    got = out + series
+    # The poles and the infinities, in torch's values. `-inf` is `nan` there and
+    # `+inf` is `inf`; a negative integer is `nan` and zero alone is `-inf`.
+    pole = running & (raw <= 0) & (raw == _np.floor(raw))
+    got = _np.where(running, got, _np.where(raw > 0, _np.inf, _np.nan))
+    return _np.where(pole, _np.where(raw == 0, -_np.inf, _np.nan), got)
 
 
 def _polygamma1(d):
     """`trigamma` — the derivative of `digamma`. Pushed and expanded the same
-    way."""
-    x = _np.asarray(d, dtype=_np.float64)
+    way, and **held out of the same non-terminating loop** — see `_lifted`.
+
+    torch answers `nan` at `-inf`, `0` at `+inf`, and `inf` at zero. At a negative
+    integer it gives a very large finite number (1.6e32 at −2) rather than an
+    infinity, which is its own float64 recurrence running into the reciprocal of
+    an epsilon rather than a value anybody derived. **Not reproduced**: matching it
+    would mean copying an artefact, and the recurrence here reaches `inf`, which is
+    the limit the function actually has. Written down rather than hidden.
+    """
+    raw = _np.asarray(d, dtype=_np.float64)
+    x, running = _lifted(raw, 6)
     out = _np.zeros_like(x)
     while _np.any(x < 6):
         small = x < 6
@@ -2970,8 +3024,10 @@ def _polygamma1(d):
         x = _np.where(small, x + 1.0, x)
     inv = 1.0 / x
     inv2 = inv * inv
-    return out + inv * (1.0 + 0.5 * inv
-                        + inv2 * (1.0 / 6 - inv2 * (1.0 / 30 - inv2 / 42)))
+    got = out + inv * (1.0 + 0.5 * inv
+                       + inv2 * (1.0 / 6 - inv2 * (1.0 / 30 - inv2 / 42)))
+    # Zero at `+inf` and no limit at `-inf` — torch's own answers for `n=1`.
+    return _np.where(running, got, _np.where(raw > 0, 0.0, _np.nan))
 
 
 def _polygamma_np(n, d):
@@ -2987,7 +3043,8 @@ def _polygamma_np(n, d):
     Recurrence: `ψ^(n)(x) = ψ^(n)(x+1) + (−1)^(n+1) n! / x^(n+1)`
     Asymptotic: `ψ^(n)(x) ≈ (−1)^(n+1) [ (n−1)!/xⁿ + n!/(2x^(n+1)) + Σ B_2k … ]`
     """
-    x = _np.asarray(d, dtype=_np.float64)
+    raw = _np.asarray(d, dtype=_np.float64)
+    x, running = _lifted(raw, 20)
     fact = float(_math.factorial(n))
     sign = 1.0 if (n + 1) % 2 == 0 else -1.0
     out = _np.zeros_like(x)
@@ -3002,7 +3059,19 @@ def _polygamma_np(n, d):
     for k, bern in enumerate((1 / 6, -1 / 30, 1 / 42, -1 / 30), start=1):
         series = series + (bern * _math.factorial(2 * k + n - 1)
                            / _math.factorial(2 * k) / x ** (2 * k + n))
-    return out + sign * series
+    got = out + sign * series
+    # **At the infinities this follows the function rather than torch, because
+    # torch does not follow itself.** Measured: at `+inf` torch gives `inf` for
+    # `n=0`, `0` for `n=1`, and `nan` for `n=2`; at `-inf` it gives `nan`, `nan`,
+    # and `-inf`. The first two are the limits — ψ grows without bound, every
+    # derivative of it decays to zero, and going the other way there is no limit at
+    # all because the poles never stop. The `n=2` pair is its own recurrence
+    # reaching a reciprocal, not a value anybody derived.
+    #
+    # So `n=2` differs from torch at exactly two inputs, and that is written here
+    # rather than matched: copying an artefact makes the next reader believe it.
+    away = _np.where(raw > 0, _np.inf if n == 0 else 0.0, _np.nan)
+    return _np.where(running, got, _np.where(_np.isnan(raw), _np.nan, away))
 
 
 def _igamma_np(a, x):
@@ -3087,7 +3156,20 @@ def _erfinv_np(d):
     # One Newton step. The approximation alone sits around float32's tolerance,
     # so it is tightened once more.
     err = _erf64(out) - x
-    return out - err / (2.0 / _math.sqrt(_math.pi) * _np.exp(-out * out))
+    out = out - err / (2.0 / _math.sqrt(_math.pi) * _np.exp(-out * out))
+    # **Outside [−1, 1] there is no answer, and this returned one.** `erf` maps the
+    # reals onto that interval, so its inverse is defined nowhere else; the `clip`
+    # above keeps the tail formula finite and it goes on producing numbers — 4.7e21
+    # at x = 1.5, where torch says `nan`.
+    #
+    # Nothing saw it because **no case applies `erfinv` twice**, and once is enough
+    # to leave the interval: `erfinv(0.5)` is 0.48 and stays inside, but
+    # `erfinv(1.5)` is where a second call lands. Every check here makes a fresh
+    # tensor and calls once.
+    return _np.where(
+        _np.abs(x) <= 1.0,
+        _np.where(_np.abs(x) == 1.0, _np.sign(x) * _np.inf, out),
+        _np.nan)
 
 
 def lgamma(t):

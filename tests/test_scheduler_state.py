@@ -88,15 +88,22 @@ CASES = {
         None),
 }
 
-# Schedulers that cannot survive a save. **Empty, and kept rather than deleted** — an
-# empty table says *nothing is owed* where a deleted one says nothing at all.
+# Schedulers that cannot survive a save. **Listed by name rather than counted**, so a
+# fourth fails here instead of quietly joining them, and each row carries what a resume
+# loses.
+#
+# **Empty, and kept rather than deleted.** An empty table says *nothing is owed*; a
+# deleted one says nothing at all, and the next scheduler without a save needs somewhere
+# to be written down.
 #
 # It held three for an hour: `ReduceLROnPlateau` with seven mutable attributes and
 # nowhere to put them, and `ChainedScheduler` and `SequentialLR` holding what they wrap
-# without its state. All three were mended in one change, by a base whose `state_dict`
-# takes everything but the optimizer and recurses into nested schedulers, so the chained
-# pair now carries dictionaries rather than the objects themselves and the whole thing
-# is JSON-serialisable.
+# without its state. All three were mended in one change, by a `_Saves` base whose
+# `state_dict` takes everything but the optimizer — which would make a cycle — and
+# recurses into nested schedulers, so the chained pair now carries dictionaries rather
+# than the objects themselves and the whole thing is JSON-serialisable. Two golden cases
+# hold `ReduceLROnPlateau`'s resume, and the second of the two exists because the first
+# passes even when loading does nothing.
 NO_STATE_DICT: dict[str, str] = {}
 
 
