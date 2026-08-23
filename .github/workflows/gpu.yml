@@ -62,6 +62,26 @@
 # to run, and slower means run less often — which is the road the miss above walked.
 # What a reader needs is not a longer command but the number, so that leaving one out
 # is a decision instead of an oversight.
+#
+# ## A number is from a tree, and the tree has to be named
+#
+# The first version of this note filled the `lessons:ts` row with a result somebody
+# else had measured — 12 of 12 pages — and called the row covered. **That run was on a
+# tree without the change it was supposed to clear.** It came from a branch that edits
+# no TypeScript, and what could break a lesson page is exactly TypeScript: `nn.ts` and
+# `tensor.ts` are where `Recurrent → RNNBase`, `viewAs → stridedView` and a rename of
+# 240 parameters live, and every lesson calls into both.
+#
+# So the row did not say "checked"; it said **"checked somewhere else"**, which is the
+# same sentence with the tree left out — and leaving the tree out is what made it read
+# as the first one. The peer who owned that number is the one who noticed, and re-ran
+# it merged: 12 of 12, 533s, values identical step for step across the 1320 lines.
+#
+# On **this** tree `lessons:ts` covers 8 pages (the other 4 are on that branch) and
+# passes 8/8 over 26 JS blocks. That is the number this file can stand behind.
+#
+# Cite a number from elsewhere by all means — name whose tree it is, or it silently
+# becomes a claim about this one.
 
 name: gpu
 
