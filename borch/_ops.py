@@ -2386,9 +2386,22 @@ def remainder(a, b):
 
 def fmod(a, b):
     """**The sign follows the dividend.** C's `fmod` rule, and the opposite of
-    `remainder`."""
-    a, b = _wrap(a), _wrap(b)
-    return a - (a / b).trunc() * b
+    `remainder`.
+
+    **Written as `a - trunc(a / b) * b` it was right in value and wrong in type.**
+    The division promotes, so two integer tensors came back `float32` where torch
+    answers `int64`, and a boolean dividend stopped outright — `bool / int` is
+    refused here, so the shape of the expression decided which inputs the function
+    accepted. numpy's `fmod` is the same rule with none of that attached.
+
+    The derivative is the one the expression implied: 1 for the dividend, and
+    `-trunc(a / b)` for the divisor.
+    """
+    a = _wrap(a)
+    return a._binary(b, _np.fmod,
+                     lambda g, x, y: g,
+                     lambda g, x, y: -g * _np.trunc(_np.divide(x, y)),
+                     "FmodBackward0")
 
 
 def rsub(a, b, alpha=1):
@@ -7478,7 +7491,11 @@ def upsample_bilinear(x, size=None, scale_factor=None):
 def _bitwise(name, op, bool_op=None):
     def call(a, b):
         a, b = _wrap(a), _wrap(b)
-        if a.data.dtype.kind == "b" and bool_op is not None:
+        # **Both have to be boolean, not just the first.** torch promotes to
+        # `int64` when either side is not, so `bitwise_and(bool, int64)` is `int64`
+        # there and came back `bool` here — the integer operand narrowed to a bit.
+        if (a.data.dtype.kind == "b" and b.data.dtype.kind == "b"
+                and bool_op is not None):
             return Tensor(bool_op(a.data, b.data))
         return Tensor(op(a.data.astype(_np.int64), b.data.astype(_np.int64)))
     call.__name__ = name

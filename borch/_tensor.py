@@ -189,6 +189,19 @@ class Tensor:
         # one.
         if self._array.dtype == _np.complex128:
             _no_complex128("This tensor's dtype")
+        # **And the paragraph above was only half true until now.** It said double
+        # precision is blocked here and the line below it blocked `complex128`
+        # alone, so `float64` — the thing "no `complex128` either" is a consequence
+        # of — walked straight through. `maximum`, `minimum`, `atan2`, `remainder`,
+        # `copysign` and `nextafter` all handed back `float64` tensors in a library
+        # whose first design decision is that there is no such dtype: numpy promotes
+        # `int64 + float32` to `float64`, and nothing narrowed it again.
+        #
+        # Found by comparing binary type promotion against torch across every pair
+        # of dtypes this library has. Thirteen rows, one line, and the comment that
+        # described the fix was already sitting above the place it belonged.
+        elif self._array.dtype == _np.float64:
+            self._array = self._array.astype(_DEFAULT_DTYPE)
         # no_grad only stops **the result of an operation** from carrying a
         # graph; it does not turn off requires_grad on a leaf made directly.
         # torch is the same — turning it off here would quietly drop a parameter

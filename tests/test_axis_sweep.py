@@ -37,6 +37,7 @@ own mistakes from findings.
 """
 
 import inspect
+import itertools
 
 import numpy as np
 import pytest
@@ -411,3 +412,117 @@ def test_the_sweep_leaves_the_library_as_it_found_it():
         f"  before {before}\n  after  {after}\n"
         "  Something reached by `dir(borch)` configures rather than computes — "
         "name it in CONFIGURES.")
+
+
+# ── the fourth axis: what dtype a binary operation answers in ────────────────
+#
+# torch has a promotion table and we have never compared against it. Twenty-four
+# binary functions, every pair of the three dtypes this library has.
+#
+# **The first run said 197 of 326 pairs differed and 165 of those were the probe.**
+# It swept `float64` and `int32` too, which this library does not have — WGSL has no
+# `f64`, and that is the repository's first design decision, so `borch.tensor` narrows
+# on the way in. The sweep was measuring the constructor. Restricted to the dtypes
+# that exist here, 28 differed and 8 of those are an attested refusal.
+#
+# That is the third form of the enumeration cost, after the probe's own call and the
+# probe moving global state: **a surface that is not the library's.** It reads as a
+# thorough finding — 197 rows — and the discriminator is not in the result.
+#
+# What it found, once the surface was right:
+#
+#   13  `float64` handed back by `maximum`, `minimum`, `atan2`, `remainder`,
+#       `copysign`, `nextafter`. numpy promotes `int64 + float32` to `float64` and
+#       nothing narrowed it, **in a library whose first decision is that the dtype
+#       does not exist.** The comment above `Tensor.__init__`'s dtype guard already
+#       said "double precision is blocked here" and the line under it blocked
+#       `complex128` alone.
+#    3  `fmod`, written as `a - trunc(a / b) * b`: right in value, and the division
+#       promoted, so two integers came back `float32` and a boolean dividend stopped
+#       outright. The shape of the expression was deciding which inputs it accepted.
+#    3  `bitwise_and`/`or`/`xor`, which took the boolean path when **the first**
+#       operand was boolean. torch promotes when either is not, so `bool & int64`
+#       narrowed an integer to a bit.
+BINARY_OPS = (
+    "add", "sub", "mul", "div", "true_divide", "floor_divide", "pow", "maximum",
+    "minimum", "atan2", "remainder", "fmod", "logaddexp", "hypot", "copysign",
+    "nextafter", "bitwise_and", "bitwise_or", "bitwise_xor", "logical_and",
+    "logical_or", "eq", "lt", "gt",
+)
+
+# **Pairs this library refuses on purpose.** `pow` with a tensor exponent is not in
+# the browser subset and says so; the row is here rather than absent so that the
+# refusal is a decision on the record instead of a gap in a sweep.
+REFUSED_PAIRS = {
+    ("pow", a, b): "a tensor exponent is not in the browser subset"
+    for a in ("bool", "int64", "float32") for b in ("bool", "int64", "float32")
+}
+
+# **Its own samples, all the same length.** Reusing `DTYPES` cost four of every nine
+# pairs and said nothing: its `int64` sample is three elements and its `bool` is two,
+# so `int64` against `bool` does not broadcast, torch raises, and the pair is skipped
+# as *torch refuses this* — indistinguishable from a pair torch really does refuse.
+# The count went from 216 possible to 98 compared and only the floor noticed.
+#
+# A fixture built for one question is not a fixture for another. The dtype axis asks
+# about one tensor, where length is free; this one asks about two, where it is not.
+BINARY_DTYPES = {
+    "bool": np.array([True, False]),
+    "int64": np.array([1, 2], dtype=np.int64),
+    "float32": np.array([1., 2.], dtype=np.float32),
+}
+
+LEAST_BINARY_PAIRS = 150
+
+
+def _binary_pairs():
+    """`[(op, left, right, torch's dtype, ours), ...]` over pairs torch accepts."""
+    import warnings
+
+    out = []
+    for op in BINARY_OPS:
+        theirs, mine = getattr(torch, op, None), getattr(borch, op, None)
+        if theirs is None or mine is None:
+            continue
+        for left, right in itertools.product(sorted(BINARY_DTYPES), repeat=2):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                try:
+                    t = theirs(torch.tensor(BINARY_DTYPES[left].copy()),
+                               torch.tensor(BINARY_DTYPES[right].copy()))
+                except Exception:                             # noqa: BLE001
+                    continue                                  # torch refuses; not ours to match
+                try:
+                    o = mine(borch.tensor(BINARY_DTYPES[left].copy()),
+                             borch.tensor(BINARY_DTYPES[right].copy()))
+                except Exception as e:                        # noqa: BLE001
+                    out.append((op, left, right, str(t.dtype),
+                                f"raised {type(e).__name__}"))
+                    continue
+            out.append((op, left, right, str(t.dtype), str(o.dtype)))
+    return out
+
+
+def test_a_binary_operation_answers_in_torch_dtype():
+    pairs = _binary_pairs()
+    assert len(pairs) >= LEAST_BINARY_PAIRS, (
+        f"only {len(pairs)} pairs were compared, {LEAST_BINARY_PAIRS} expected — "
+        "the enumeration stopped working. Every assertion below passes on nothing.")
+    wrong = [(op, a, b, x, y) for op, a, b, x, y in pairs
+             if x != y and (op, a, b) not in REFUSED_PAIRS]
+    assert not wrong, (
+        "these promote differently from torch:\n  "
+        + "\n  ".join(f"{op}({a}, {b}): torch {x}, ours {y}"
+                      for op, a, b, x, y in wrong[:12])
+        + "\n\n  `float64` in this list is not a mismatch but a leak — the dtype "
+          "does not exist here.")
+
+
+def test_no_refused_pair_has_started_working():
+    """A decided refusal that has become false has to leave the table, not sit."""
+    pairs = {(op, a, b): (x, y) for op, a, b, x, y in _binary_pairs()}
+    working = [k for k, (x, y) in pairs.items()
+               if k in REFUSED_PAIRS and not y.startswith("raised")]
+    assert not working, (
+        f"these are recorded as refused and now answer: {working}\n"
+        "  Take them out of REFUSED_PAIRS and let the dtype comparison judge them.")
