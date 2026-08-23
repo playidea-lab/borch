@@ -1,15 +1,30 @@
 # Publishes the explanation pages, the lessons, the API reference and the playground
 # to GitHub Pages.
 #
-# ## It does not run automatically — `workflow_dispatch` only
+# ## It runs on every push to `main`, and by hand
 #
-# **This repository is private, and going public is a decision a person makes.** On
-# push, the next commit *is* the publication. Same judgement as `gpu.yml` not attaching
-# a self-hosted runner — automation is not left to make a person's decision for them.
+# **It used to be `workflow_dispatch` only**, and the reason written here was that going
+# public is a decision a person makes, so on push the next commit *is* the publication.
+# That reason was right and it has been spent: the decision was made once, the site is
+# up, and from here a published site that lags `main` is a site describing a library
+# that has moved. The lesson pages assert what the runtime does; stale, they assert it
+# about a runtime nobody is running.
 #
-# When it is ready to go up, it is run by hand from Actions. Before that, Pages has to
-# be enabled in the repository settings (Settings → Pages → Source: GitHub Actions), and
-# Pages on a private repository requires a paid plan.
+# So the person's decision now is the merge, which is where it belongs.
+#
+# **No path filter.** The successful deployment took 35 seconds, and a filter is a
+# second list of what the site is made of — `borch/` and `borch_webgpu/` go up as well
+# as `site/`, and a filter that forgets one of them fails by not running, which looks
+# exactly like nothing having changed.
+#
+# ## What made the first two runs fail, since the error did not say
+#
+# Both ended at `actions/deploy-pages` with `HttpError: Not Found` and the advice
+# **"Ensure GitHub Pages has been enabled"**. It was enabled — the API answered with
+# `build_type: workflow` and the right URL the whole time. The cause was that **Pages on
+# a private repository needs a paid plan**; the deployment API answers 404 without one,
+# and the message names the wrong thing. Written down here because the next person to
+# meet that 404 will go and check the setting the message points at, and find it fine.
 #
 # ## Why it goes up in the repository's own shape
 #
@@ -19,9 +34,11 @@
 # the visitor to `/site/`. That leaves fewer places to fix than rewriting the paths for
 # deployment.
 
-name: deploy the site (by hand)
+name: deploy the site
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
