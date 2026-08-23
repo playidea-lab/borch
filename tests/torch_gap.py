@@ -45,33 +45,31 @@ the move that hid it: absent from the list reads as zero to review, and absent f
 while present in the list reads as thirty-six to review. The second was the true sentence,
 and it is what put the namespace on the to-do list it has now come off.
 
-## `datasets` reads 12 of 72, and **three of the gaps are left without a reason**
+## `datasets` reads 15 of 72, and **nothing in this file is absent without a reason**
 
-It was eight, and five of them have since been built — which is what the list was for.
-The three left are `MovingMNIST`, `STL10` and `FER2013`.
+The count of unexplained gaps was eight this morning. It is zero.
 
-The reason the rest are declined is a codec. Most of torchvision's datasets are
-folders of JPEG or PNG, numpy decodes neither, and adding a decoder is the dependency
-this library does without — the same answer PIL gets in `transforms`, arriving from
-the other side. That reason is true of fifty-seven names and **false of these three**,
-and their real reasons are not even the same as each other. `MovingMNIST` is an 819MB
-`.npy`; `STL10` is 2.6GB of raw bytes. Measured at this network's speed those are 93
-minutes and five hours — a cost, and not an impossibility, which is a different
-sentence. `EMNIST` was on this list yesterday with the same kind of reason, 562MB of
-it, and the way it came off was somebody waiting for the download.
+That number was never the goal — a zero bought by inventing reasons is worse than
+an eight — but the way it got there is worth the paragraph. Five were built because
+the list sat there being uncomfortable. Two more were downloads: `EMNIST` at 562MB
+and `STL10` at 2.6GB were declined with "a cost, not an impossibility", and the way
+they came off was somebody waiting.
 
-**`FER2013` is the one that cannot be closed honestly.** torchvision has no `download`
-for it; it expects a manual Kaggle fetch. So there is no way to compare against real
-torchvision from here, and any implementation would be checked against nothing but its
-own expectations. That is worth saying out loud because it means **this list cannot
-reach zero by working harder** — one of the four is blocked on something that is not
-effort.
+**The last one came off because the reason was wrong.** `FER2013` was written down
+as impossible to check: torchvision has no `download` for it, it wants a Kaggle
+account, so — the sentence went — there is nothing here to compare an implementation
+against. That is *cannot fetch the data* carried over into *cannot check the code*,
+and they are different claims. torchvision's reader takes a directory. A CSV written
+in the case table goes to both sides and the comparison is as real as every other one
+here. **It was the same over-wide refusal this row has now produced three times**,
+and each time the shape was identical: a true sentence about one thing, used as a
+reason about another.
 
-Writing "a codec" beside any of them would be **exactly the failure this file exists
-to catch**, and it has been caught here twice already — once when `datasets` was
-refused for a network reason that turned out to be about two servers' CORS headers,
-and once when the browser half of the same sentence was stale. So the count says four,
-and four is a to-do list.
+The 57 that stay declined are the codec: most of torchvision's datasets are folders
+of JPEG or PNG, numpy decodes neither, and adding a decoder is the dependency this
+library does without — the same answer PIL gets in `transforms`, arriving from the
+other side. That reason has been checked against every name it covers, which is what
+the three corrections were for.
 
 ## `transforms.v2` is on the list and `transforms.v2.functional` is not
 

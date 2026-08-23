@@ -74,6 +74,7 @@ at 0 or 1 are deterministic, so that is where the golden compares.
 """
 
 import bz2 as _bz2
+import csv as _csv
 import enum as _enum
 import gzip as _gzip
 import hashlib as _hashlib
@@ -4657,6 +4658,301 @@ class EMNIST(MNIST):
         return f"Split: {self.split}"
 
 
+class FER2013(VisionDataset):
+    """35,887 faces at 48×48, **as integers in a CSV cell.**
+
+    Each row's `pixels` column is 2,304 numbers separated by spaces. No codec, no
+    archive, no network — which is the whole reason this one is here while forty
+    others are not, and the reason it stayed off the list for a day longer than it
+    should have.
+
+    **torchvision cannot download it**, and that was written here as "there is
+    nothing to compare an implementation against". That was wrong, and wrong in a
+    way this project keeps catching: *cannot fetch the data* was carried over into
+    *cannot check the code*. torchvision's reader takes a directory. Point both at
+    the same file and the comparison is exactly as real as every other one here.
+
+    Two layouts, and `Usage` is what tells them apart. The Kaggle file — `fer2013.csv`
+    or `icml_face_data.csv` — holds every row with a `Usage` column saying which
+    split it belongs to; the per-split `train.csv` and `test.csv` do not, and
+    `test.csv` has **no `emotion` column at all**, so its labels are `None`.
+    """
+
+    _RESOURCES = {
+        "train": ("train.csv", "3f0dfb3d3fd99c811a1299cb947e3131"),
+        "test": ("test.csv", "b02c2298636a634e8c2faabbf3ea9a23"),
+        "fer": ("fer2013.csv", "f8428a1edbd21e88f42c73edd2a14f95"),
+        "icml": ("icml_face_data.csv", "b114b9e04e6949e5fe8b6a98b3892b1d"),
+    }
+    classes = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
+
+    def __init__(self, root, split="train", transform=None, target_transform=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. "
+                             "Valid values are {train, test}.")
+        self._split = split
+        folder = _os.path.join(self.root, "fer2013")
+        combined = next((key for key in ("fer", "icml")
+                         if _os.path.isfile(_os.path.join(folder,
+                                                          self._RESOURCES[key][0]))), None)
+        name, digest = self._RESOURCES[combined or split]
+        path = _os.path.join(folder, name)
+        if not (_os.path.isfile(path) and _md5_of_file(path) == digest):
+            raise RuntimeError(
+                f"{name} not found in {folder} or corrupted. You can download it from "
+                "https://www.kaggle.com/c/challenges-in-representation-learning-"
+                "facial-expression-recognition-challenge")
+        # **The ICML file's headers carry a leading space** and the others' do not.
+        # It is the kind of difference that a reader written against one file finds
+        # by raising `KeyError: 'pixels'` on the other, which reads as a corrupt file.
+        pixels_key = " pixels" if combined == "icml" else "pixels"
+        usage_key = " Usage" if combined == "icml" else "Usage"
+        keep = (("Training",) if split == "train"
+                else ("PublicTest", "PrivateTest"))
+        rows = []
+        with open(path, newline="") as handle:
+            for row in _csv.DictReader(handle):
+                if combined and row[usage_key] not in keep:
+                    continue
+                picture = _np.asarray([int(v) for v in row[pixels_key].split()],
+                                      dtype=_np.uint8).reshape(48, 48)
+                label = (int(row["emotion"])
+                         if combined or split == "train" else None)
+                rows.append((picture, label))
+        self._samples = rows
+
+    def __len__(self):
+        return len(self._samples)
+
+    def __getitem__(self, index):
+        picture, target = self._samples[index]
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"split={self._split}"
+
+
+class MovingMNIST(VisionDataset):
+    """Ten thousand clips of two digits drifting across a 64×64 frame.
+
+    **`__getitem__` gives one video and no label** — the only dataset here that
+    returns a bare array rather than a pair. It is a next-frame-prediction set: the
+    thing to predict is the clip's own later frames, so there is nothing else to
+    hand back.
+
+    `split` cuts **the frames, not the clips.** `split_ratio=10` means the first ten
+    frames of every clip are "train" and the last ten are "test", and both halves
+    still have ten thousand clips in them. Read as a clip split — which is what
+    every other dataset here means by `split` — a training run silently learns and
+    scores on the same ten thousand videos. `split=None`, the default, gives all
+    twenty frames.
+    """
+
+    _URL = ("https://www.cs.toronto.edu/~nitish/unsupervised_video/"
+            "mnist_test_seq.npy")
+
+    def __init__(self, root, split=None, split_ratio=10, download=False,
+                 transform=None):
+        super().__init__(root, transform=transform)
+        if split is not None and split not in ("train", "test"):
+            raise ValueError(f"Unknown value '{split}' for argument split. "
+                             "Valid values are {train, test}.")
+        if not isinstance(split_ratio, int):
+            raise TypeError("`split_ratio` should be an integer, but got "
+                            f"{type(split_ratio)}")
+        if not 1 <= split_ratio <= 19:
+            raise ValueError("`split_ratio` should be `1 <= split_ratio <= 19`, but "
+                             f"got {split_ratio} instead.")
+        self.split, self.split_ratio = split, split_ratio
+        self._folder = _os.path.join(self.root, type(self).__name__)
+        self._filename = self._URL.rsplit("/", 1)[-1]
+        path = _os.path.join(self._folder, self._filename)
+        if download and not _os.path.isfile(path):
+            _os.makedirs(self._folder, exist_ok=True)
+            _fetch_to(self._URL, path, None)
+        if not _os.path.isfile(path):
+            raise RuntimeError("Dataset not found. You can use download=True to "
+                               "download it.")
+        data = _np.load(path)                       # (frames, clips, 64, 64)
+        if split == "train":
+            data = data[:split_ratio]
+        elif split == "test":
+            data = data[split_ratio:]
+        # To (clips, frames, 1, 64, 64) — the channel axis is added rather than
+        # found, since the file is greyscale and says so by having no such axis.
+        self.data = _np.ascontiguousarray(data.transpose(1, 0, 2, 3)[:, :, None])
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        video = self.data[index]
+        if self.transform is not None:
+            video = self.transform(video)
+        return video
+
+
+class STL10(VisionDataset):
+    """96×96 colour, ten classes, and **a hundred thousand unlabelled pictures**
+    alongside the five thousand labelled ones — which is what the set is for.
+
+    Three things are worth stating because each is a place to be quietly wrong.
+
+    **The pictures are stored column-major.** The file reshapes to `(N,3,96,96)` and
+    then axes 2 and 3 are swapped. Skip the swap and every picture is transposed —
+    still a picture, still trains, and a model that learns transposed features scores
+    plausibly.
+
+    **The labels on disk are 1 to 10** and one is subtracted. Left alone, class 10
+    is an index the ten class names have no entry for.
+
+    **`unlabeled` carries `-1` rather than nothing.** A sentinel keeps the pair shape
+    that every other dataset here has, so the same loop reads both — and `-1` is
+    loud in a loss, where `0` would silently mean *aeroplane*.
+
+    `folds` picks one of ten predefined 1,000-picture subsets from
+    `fold_indices.txt`, for the low-data comparisons the set was published for.
+    """
+
+    base_folder = "stl10_binary"
+    url = "http://ai.stanford.edu/~acoates/stl10/stl10_binary.tar.gz"
+    filename = "stl10_binary.tar.gz"
+    tgz_md5 = "91f7769df0f17e558f3565bffb0c7dfb"
+    class_names_file = "class_names.txt"
+    folds_list_file = "fold_indices.txt"
+    train_list = [["train_X.bin", "918c2871b30a85fa023e0c44e0bee87f"],
+                  ["train_y.bin", "5a34089d4802c674881badbb80307741"],
+                  ["unlabeled_X.bin", "5242ba1fed5e4be9e1e742405eb56ca4"]]
+    test_list = [["test_X.bin", "7f263ba9f9e0b06b93213547f721ac82"],
+                 ["test_y.bin", "36f9794fa4beb8a2c72628de14fa638e"]]
+    splits = ("train", "train+unlabeled", "unlabeled", "test")
+
+    def __init__(self, root, split="train", folds=None, transform=None,
+                 target_transform=None, download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if split not in self.splits:
+            raise ValueError(f"Unknown value '{split}' for argument split. Valid "
+                             f"values are {{{', '.join(self.splits)}}}.")
+        self.split = split
+        self.folds = self._verify_folds(folds)
+        if download:
+            self.download()
+        elif not self._check_integrity():
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        if split == "train":
+            self.data, self.labels = self._load("train_X.bin", "train_y.bin")
+            self._take_fold(folds)
+        elif split == "train+unlabeled":
+            self.data, self.labels = self._load("train_X.bin", "train_y.bin")
+            self._take_fold(folds)
+            extra, _ = self._load("unlabeled_X.bin")
+            self.data = _np.concatenate((self.data, extra))
+            self.labels = _np.concatenate(
+                (self.labels, _np.asarray([-1] * extra.shape[0])))
+        elif split == "unlabeled":
+            self.data, _ = self._load("unlabeled_X.bin")
+            self.labels = _np.asarray([-1] * self.data.shape[0])
+        else:
+            self.data, self.labels = self._load("test_X.bin", "test_y.bin")
+        names = _os.path.join(self.root, self.base_folder, self.class_names_file)
+        if _os.path.isfile(names):
+            with open(names) as handle:
+                self.classes = handle.read().splitlines()
+
+    def _verify_folds(self, folds):
+        if folds is None or (isinstance(folds, int) and folds in range(10)):
+            return folds
+        if isinstance(folds, int):
+            raise ValueError("Value for argument folds should be in the range "
+                             f"[0, 10), but got {folds}.")
+        raise ValueError("Expected type None or int for argument folds, but got "
+                         f"type {type(folds)}.")
+
+    def _load(self, data_file, labels_file=None):
+        labels = None
+        if labels_file:
+            with open(_os.path.join(self.root, self.base_folder, labels_file),
+                      "rb") as handle:
+                labels = _np.frombuffer(handle.read(), dtype=_np.uint8) - 1
+        with open(_os.path.join(self.root, self.base_folder, data_file),
+                  "rb") as handle:
+            flat = _np.frombuffer(handle.read(), dtype=_np.uint8)
+        images = flat.reshape(-1, 3, 96, 96).transpose(0, 1, 3, 2)
+        return _np.ascontiguousarray(images), labels
+
+    def _take_fold(self, folds):
+        if folds is None:
+            return
+        with open(_os.path.join(self.root, self.base_folder,
+                                self.folds_list_file)) as handle:
+            picked = _np.asarray(handle.read().splitlines()[folds].split(),
+                                 dtype=_np.int64)
+        self.data = self.data[picked]
+        if self.labels is not None:
+            self.labels = self.labels[picked]
+
+    def _check_integrity(self):
+        for name, digest in self.train_list + self.test_list:
+            path = _os.path.join(self.root, self.base_folder, name)
+            if not _os.path.isfile(path) or _md5_of_file(path) != digest:
+                return False
+        return True
+
+    def download(self):
+        """As `CIFAR10.download`, and for the same reasons — streamed, hashed on the
+        way past, and **only the members this dataset names are written.**"""
+        if self._check_integrity():
+            return
+        folder = _os.path.join(self.root, self.base_folder)
+        _os.makedirs(folder, exist_ok=True)
+        wanted = {name for name, _ in self.train_list + self.test_list}
+        wanted |= {self.class_names_file, self.folds_list_file}
+        archive = _os.path.join(self.root, self.filename)
+        if _os.path.isfile(archive) and _md5_of_file(archive) != self.tgz_md5:
+            _os.unlink(archive)
+        if not _os.path.isfile(archive):
+            _fetch_to(self.url, archive, self.tgz_md5)
+        with _tarfile.open(archive, mode="r:gz") as tar:
+            for member in tar:
+                base = _os.path.basename(member.name)
+                if not member.isfile() or base not in wanted:
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                with open(_os.path.join(folder, base), "wb") as handle:
+                    while True:
+                        block = extracted.read(1 << 20)
+                        if not block:
+                            break
+                        handle.write(block)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        # **`.data` is `(N,C,H,W)` and what comes out here is `(H,W,C)`.** torchvision
+        # transposes at exactly this line too, with the comment "so that it is
+        # consistent with all other datasets" — its other datasets hold HWC and this
+        # one does not, so the attribute and the item disagree on purpose.
+        #
+        # Caught by comparing: `data`, `labels`, `len` and `classes` matched on all
+        # four splits while `__getitem__` did not, which is the shape that says the
+        # store is right and the door is wrong.
+        picture = _np.ascontiguousarray(self.data[index].transpose(1, 2, 0))
+        target = None if self.labels is None else int(self.labels[index])
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {self.split}"
+
+
 transforms = _types.ModuleType("borchvision.transforms")
 functional = _types.ModuleType("borchvision.transforms.functional")
 transforms.functional = functional
@@ -4669,7 +4965,8 @@ _sys.modules["borchvision.transforms.functional"] = functional
 datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
-              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder"):
+              "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder",
+              "FER2013", "MovingMNIST", "STL10"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")

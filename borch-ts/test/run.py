@@ -549,7 +549,7 @@ NOT_PORTED = {
     # them will want the state cases most, since a value case cannot see this at all.
     "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
                    "table after the call"),
-    "dataset::": (9, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
+    "dataset::": (19, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
