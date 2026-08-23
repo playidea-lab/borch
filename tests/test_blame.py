@@ -206,6 +206,54 @@ def test_it_says_nothing_when_the_failures_share_nothing(cases):
         + "\n  ".join(blame.report(THE_TWO, cases)))
 
 
+def test_building_the_case_list_moves_no_state_another_test_reads():
+    """**This file executes every section builder in `cases.py` to get its fixture.**
+
+    A sweep in a sister file reached `set_printoptions`, handed it a tensor, and left a
+    global precision behind; six tests in a different file then failed with
+    `Format specifier missing precision`, a message naming neither printing nor the
+    sweep. An instrument that changes what it measures is worse than one that measures
+    wrongly, because the damage lands somewhere it cannot be traced from.
+
+    Building a case list is not calling a case, so this should be safe — and *should be*
+    is what the check is for.
+
+    **The first version of this reseeded before taking the second reading**, which makes
+    an RNG shift impossible to observe: it reset the very thing it was watching. That is
+    the shape this repository has spent the day removing, arriving inside a check written
+    to prevent it.
+    """
+    import importlib.util                                        # noqa: PLC0415
+
+    import numpy as np                                           # noqa: PLC0415
+
+    import borch                                                 # noqa: PLC0415
+
+    def draw():
+        return tuple(np.asarray(borch.rand(3).data).round(9).tolist())
+
+    borch.manual_seed(0)
+    untouched = draw()
+    printing = dict(np.get_printoptions())
+
+    borch.manual_seed(0)
+    spec = importlib.util.spec_from_file_location("bt_cases", ROOT / "tests" / "cases.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.golden_cases(mod.golden_inputs())
+    after = draw()
+
+    assert after == untouched, (
+        "building the case list consumed random numbers.\n"
+        "  Every test that seeds and draws after this one gets a different stream, and\n"
+        "  the failure appears wherever that stream is read — not here.")
+    assert dict(np.get_printoptions()) == printing, (
+        "building the case list changed numpy's print options.\n"
+        "  Anything comparing a formatted number afterwards fails with a message about\n"
+        "  formatting.")
+    assert borch.is_grad_enabled(), "building the case list left autograd disabled"
+
+
 def test_a_case_is_not_grouped_by_the_data_it_closes_over(cases):
     """Inputs group as strongly as helpers and mean nothing.
 
