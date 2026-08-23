@@ -332,17 +332,19 @@ for step in range(201):
             <td>SGD, Adam, RMSprop and more, with LR schedulers</td></tr>
         <tr><td><strong>Playground</strong></td><td><span class="state now">here</span></td>
             <td>This site. Code, run, output, loss curve, GPU instrumentation</td></tr>
+        <tr><td><strong>Vision (<code>borchvision</code> · <code>borch.vision</code>)</strong></td><td><span class="state now">here</span></td>
+            <td>transforms, <code>v2</code>, functional, <code>ops</code> and 15 datasets — every value compared against real torchvision</td></tr>
         <tr><td><strong>Model I/O</strong></td><td><span class="state now">here</span></td>
             <td>safetensors — the Python borch, numpy and HF tools read the same file</td></tr>
-        <tr><td>Borch Models (@borch/models)</td><td><span class="state soon">planned</span></td>
-            <td>P1 in the PRD. Not here yet — and no pretrained weights either</td></tr>
+        <tr><td>Model catalogue (<code>bimm</code>)</td><td><span class="state soon">partial</span></td>
+            <td><code>createModel(library, name, args)</code> builds; not published to npm yet</td></tr>
         <tr><td>Learn (interactive tutorials)</td><td><span class="state soon">partial</span></td>
             <td>The eleven playground examples are the start of it</td></tr>
-        <tr><td>Hub (publish and share models)</td><td><span class="state soon">planned</span></td>
-            <td>P2 in the PRD. Sharing today is one URL carrying code</td></tr>
+        <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">partial</span></td>
+            <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. Not published to npm yet</td></tr>
         <tr><td>WASM fallback</td><td><span class="state soon">planned</span></td>
             <td>P2 in the PRD. Today, no WebGPU means it refuses</td></tr>
-        <tr><td>CUDA · distributed · mixed precision · torch.compile · pretrained weights</td>
+        <tr><td>CUDA · distributed · mixed precision · torch.compile</td>
             <td><span class="state never">never</span></td>
             <td>Things that cannot exist in a browser, or that you must leave the browser to learn</td></tr>
       </tbody>
