@@ -25,7 +25,7 @@ three against each other are a large share of this repository's history.
 
 | | built on | where it runs | ceiling |
 |---|---|---|---|
-| **`borch`** (PyPI) | numpy | anywhere, and Pyodide | MNIST scale |
+| **`pyborch`** — imported as `borch` | numpy | anywhere, and Pyodide | MNIST scale |
 | **`borch`** (npm) — borch.ts | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
 | **`borch-webgpu`** (Python) | the borch.ts above | in a browser only | the same thing at **1.6 min/epoch** |
 

@@ -401,12 +401,20 @@ for step in range(201):
     <table class="data">
       <thead><tr><th></th><th>무엇 위에</th><th>어디서</th><th>천장</th></tr></thead>
       <tbody>
-        <tr><td><strong>borch</strong> (PyPI)</td><td>numpy</td><td>어디서나 · Pyodide</td><td>MNIST 급</td></tr>
+        <tr><td><strong>pyborch</strong> — <code>import borch</code></td><td>numpy</td><td>어디서나 · Pyodide</td><td>MNIST 급</td></tr>
         <tr><td><strong>borch</strong> (npm) — borch.ts</td><td>WGSL 직접, 의존성 0</td><td>브라우저 안에서만</td><td>CIFAR ResNet-18 에폭 1.5분</td></tr>
         <tr><td><strong>borch-webgpu</strong> (파이썬)</td><td>위의 borch.ts</td><td>브라우저 안에서만</td><td>같은 것이 에폭 1.6분</td></tr>
       </tbody>
     </table>
     </div>
+
+    <p class="small" style="margin-top:1rem">
+      첫 행은 확인하기 전까지 <strong>borch</strong> (PyPI) 라고 적혀 있었다. 배포 이름은
+      <code>pyborch</code> 이고 <code>borch</code> 는 import 하는 이름이다. 그리고 PyPI 에
+      올라가 있지도 않다 — 거기 <code>borch</code> 는 남의 패키지(확률 프로그래밍
+      라이브러리)라서 <code>pip install borch</code> 는 모르는 사람의 코드를 받아 온다.
+      아래의 wheel 이 설치 방법이다.
+    </p>
 
     <div class="grid c2" style="margin-top:1.6rem">
       <div class="tile">
