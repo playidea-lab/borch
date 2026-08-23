@@ -44,7 +44,38 @@ PAGES = [
     "/site/ko/tutorials/03-curve-fitting.html",
     "/site/tutorials/05-adversarial.html",
     "/site/ko/tutorials/05-adversarial.html",
+    "/site/learn/09-resnet.html",
+    "/site/ko/learn/09-resnet.html",
+    "/site/learn/10-vit.html",
+    "/site/ko/learn/10-vit.html",
 ]
+
+# **This list is hand-kept and reads as coverage.** Thirty-two pages under `site` carry a
+# `data-lang="js"` block. These press twelve. The four lessons above were added only
+# because their author went looking for the harness after a sister session found it had
+# been running two of three implementations and calling it green.
+#
+# **A page absent from here is not reported as unwatched — it is not reported at all**,
+# which on screen is indistinguishable from a page that passed. Twenty pages (about
+# seventy-nine blocks) are in that state with no reason recorded: lessons 1–5, 7 and 8 in
+# both languages, tutorials 02 and 06, and `python.html`. Only `04-image-classifier` below
+# is left out on purpose.
+#
+# **The cost is why it is not simply derived from the directory.** Measured on a software
+# adapter: twelve pages take 544s, of which the two `10-vit` pages are 154s — a ViT page
+# is about two and a half times an ordinary one, because its last block trains. Pressing
+# all thirty-two would be several times this, and `gpu.yml` carries no `push` trigger for
+# it (a real adapter is needed), so **this check runs only when a person runs it.** Making
+# it slower is making it run less often, which is the same road that ended in two-of-three
+# above. The number is written here rather than left as a silent budget; whoever decides
+# should decide against it and not against a guess.
+
+# **`10-vit` prints a caught exception on purpose.** Its second block shows `nn.Linear`
+# refusing a 3-D input, so the message `mm is 2-D by 2-D: ...` is the **right** output
+# there. It survives `BAD` because none of those words are in it, and that is luck rather
+# than design — a message reworded to start `Error:` would fail a page that is working.
+# The `div.err` mark stays correct either way: the lesson catches, so the page never marks
+# the line as an error.
 
 # **`04-image-classifier` is left out.** It downloads CIFAR and runs convolutions for
 # several epochs, which takes minutes on a software adapter — out of proportion to what

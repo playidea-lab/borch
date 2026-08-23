@@ -443,6 +443,130 @@ def test_every_page_carries_the_same_global_nav():
     assert not problems, "\n".join(problems)
 
 
+SIDEBAR = re.compile(r'<aside class="sidebar">.*?<nav>(.*?)</nav>', re.S)
+NUMBERED = re.compile(r"^\d\d-")
+
+
+def test_a_section_sidebar_lists_every_page_of_its_section():
+    """A section's sidebar has to list **the pages that are actually there**.
+
+    The sidebar drifted the way an unchecked list drifts. `site/learn/06-save-load.html`
+    and its Korean twin listed six lessons while eight existed, so a reader who arrived at
+    lesson 6 was shown a course that ended there. **Nothing was broken**: every link on the
+    page worked, the page rendered, and the link checker above was satisfied, because a
+    link that is simply absent is not a broken link.
+
+    The first version of this check compared the sidebars **to each other** and complained
+    when one disagreed with the majority. That would have caught this bug, and it would
+    have been the wrong instrument: pages that all forget the same lesson agree perfectly,
+    and the majority is whichever mistake was copied more times. So it asks the directory
+    instead — the sidebar is a claim about which pages exist, and the pages exist on disk.
+
+    Order is compared too. The files are numbered, so the order they sort in is the order
+    a reader is meant to walk them.
+    """
+    problems = []
+    for folder in sorted({page.parent for page in _pages()}):
+        expected = sorted(f.name for f in folder.glob("*.html") if NUMBERED.match(f.name))
+        if not expected:
+            continue
+        for page in sorted(folder.glob("*.html")):
+            found = SIDEBAR.search(page.read_text(encoding="utf-8"))
+            if not found:
+                problems.append(f"{page.relative_to(ROOT)}: in a section but carries no sidebar")
+                continue
+            listed = [href for href in re.findall(r'<a href="([^"]+)"', found.group(1))
+                      if NUMBERED.match(href)]
+            if listed == expected:
+                continue
+            absent = [name for name in expected if name not in listed]
+            extra = [name for name in listed if name not in expected]
+            why = []
+            if absent:
+                why.append("never listed: " + ", ".join(absent))
+            if extra:
+                why.append("listed but not on disk: " + ", ".join(extra))
+            if not why:
+                why.append("listed out of order")
+            problems.append(f"{page.relative_to(ROOT)}: " + "; ".join(why))
+
+    assert not problems, ("a sidebar disagrees with the pages beside it:\n  "
+                          + "\n  ".join(problems))
+
+
+# ── where a page tells the reader a name is absent ─────────────────────
+#
+# A lesson that says "`AdaptiveAvgPool2d` is not here" is making a claim about **another
+# file's contents**, and the usual way such a claim breaks is that somebody closes the gap.
+# Then the page teaches a workaround for a problem that no longer exists, and the reader
+# who tries the real name finds it works — worse than a missing feature, because it teaches
+# distrust of the page.
+#
+# It has already broken once in the other direction, which is why the sentences below are
+# the ones they are. The first version of the lesson read the gap list by name and told
+# readers to use `AvgPool2d` with a fixed size. `AdaptiveAvgPool1d` and `AdaptiveAvgPool3d`
+# were there the whole time with **identical bodies**, both calling `adaptivePool`, which
+# ignores how many spatial axes it gets — the absent thing was a one-line alias. **A name
+# missing from a gap list does not tell you the capability is missing**, and the workaround
+# was worse than the real call: `AvgPool2d(8)` on a `[2, 16, 5, 7]` input returns
+# `[2, 16, 0, 0]` and raises nothing.
+#
+# Both ends are checked, the same way the heading quotes above are: the page must still
+# carry the sentence, and the name must still be absent. Neither side can move alone.
+
+# The third column is a **positive control**: a name that must be found. A negative
+# answer is only worth as much as the surface it was asked of, and that surface has a
+# known hole — `site/build_api.py`'s `MODULES` does not list `functional`, so a name
+# living only there is absent from the index and reads as absent from borch.ts. Without
+# a control, a namespace dropping out of the index would make every claim here *pass
+# harder*. The control is the sibling the lesson itself points at.
+
+ABSENCES_A_PAGE_TEACHES = (
+    ("site/learn/09-resnet.html",
+     "<code>AdaptiveAvgPool2d</code> is not here — but the pooling is.",
+     "AdaptiveAvgPool2d", "AdaptiveAvgPool1d"),
+    ("site/ko/learn/09-resnet.html",
+     "<code>AdaptiveAvgPool2d</code> 는 여기 없다 — 그런데 그 풀링은 있다.",
+     "AdaptiveAvgPool2d", "AdaptiveAvgPool1d"),
+)
+
+
+def test_a_page_teaching_around_a_missing_name_is_still_missing_it():
+    """The names lesson pages tell readers to work around have to still be gone.
+
+    `tests/ts_axis.py` reads the generated name index, so this asks it rather than keeping
+    a second list that would drift. At the time of writing, `nn`'s gap was being worked
+    down from fifteen and `AdaptiveAvgPool2d` was one of the names in it.
+
+    **That index is not the whole surface**, which the first version of this docstring
+    said it was. `site/build_api.py` does not sweep `functional`, so a name living only
+    there is missing from the index — and a check that reads "absent" off an incomplete
+    list cannot tell a real absence from an unswept one. Hence the control below: the
+    sibling that must be found makes the surface prove it can see this namespace before
+    its silence about a name is believed.
+    """
+    import ts_axis
+
+    surface = ts_axis.ts_names()
+    problems = []
+    for page_path, sentence, name, control in ABSENCES_A_PAGE_TEACHES:
+        if control not in surface:
+            problems.append(
+                f"{control} is not in the name index either, so the index cannot see "
+                f"this namespace and its silence about {name} means nothing")
+        page = ROOT / page_path
+        text = page.read_text(encoding="utf-8")
+        if sentence not in text:
+            problems.append(
+                f"{page_path} no longer says {sentence!r} — "
+                f"if the lesson was rewritten, this table is what tells you to update it")
+        if name in surface:
+            problems.append(
+                f"{name} is in borch.ts now, and {page_path} still teaches around it")
+
+    assert not problems, "\n  ".join([""] + problems)
+
+
 def test_site_links_to_this_repository():
     """The GitHub address the site points at has to be **this repository's**.
 

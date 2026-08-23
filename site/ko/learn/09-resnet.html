@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>9 · 잔차 신경망 — borch 배우기</title>
+<meta name="description" content="지름길 연결, BasicBlock, 그리고 그것이 실어 나르는 기울기를 직접 재기.">
+<link rel="alternate" hreflang="en" href="../../learn/09-resnet.html">
+<!-- 링크를 붙였을 때 뜨는 것. 그림은 `site/make_og.py` 가 만든다.
+     `%OG_BASE%` 은 배포 워크플로가 실제 주소로 바꿔 넣는다 — 소셜 크롤러는 상대
+     경로를 안 따라가고, 배포 주소를 여기 박으면 도메인이 바뀔 때 조용히 낡는다. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="borch">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="9 · 잔차 신경망 — borch 배우기">
+<meta property="og:description" content="지름길 연결, BasicBlock, 그리고 그것이 실어 나르는 기울기를 직접 재기.">
+<meta property="og:image" content="%OG_BASE%/site/assets/og.png">
+<meta property="og:url" content="%OG_BASE%/site/ko/learn/09-resnet.html">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../../assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='12' fill='%23ff7a3d'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><span class="dot"></span>borch</a>
+    <nav>
+      <a href="../learn/" class="on" aria-current="page">배우기</a>
+      <a href="../tutorials/">튜토리얼</a>
+      <a href="../api/">API</a>
+      <a href="../python.html">파이썬</a>
+      <a href="../playground.html">Playground</a>
+      <a href="https://github.com/playidea-lab/borch">GitHub</a>
+      <a href="../../learn/09-resnet.html" class="lang">English</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs">
+  <aside class="sidebar">
+    <h4>배우기</h4>
+    <nav>
+      <a href="./">길잡이</a>
+      <a href="01-tensors.html">1 · 텐서</a>
+      <a href="02-autograd.html">2 · Autograd</a>
+      <a href="03-modules.html">3 · 모듈</a>
+      <a href="04-training.html">4 · 학습</a>
+      <a href="05-cnn.html">5 · 합성곱</a>
+      <a href="06-save-load.html">6 · 저장과 파이썬</a>
+      <a href="07-data.html">7 · 데이터</a>
+      <a href="08-debugging.html">8 · 디버깅</a>
+      <a href="09-resnet.html" class="on">9 · 잔차</a>
+      <a href="10-vit.html">10 · 트랜스포머</a>
+    </nav>
+  </aside>
+
+  <main class="doc-main lesson">
+    <p class="eyebrow">배우기 · 9</p>
+    <h1>잔차 신경망</h1>
+    <p class="lead">
+      5번 레슨은 합성곱을 쌓았다. 충분히 쌓으면 학습이 멈춘다 — 모델이 작아서가 아니라
+      맨 앞 층까지 거의 아무것도 도달하지 못해서다. 잔차 신경망은 블록마다 한 줄,
+      <code>+ x</code> 를 더한다. 그 한 줄이 전부다. 여기서는 그것이 무엇을 실어 나르는지
+      직접 잴 수 있다.
+    </p>
+
+    <h2>블록</h2>
+    <p>
+      <em>BasicBlock</em> 은 합성곱 둘과 되돌아오는 길이다. 블록이 모양을 바꾸면 —
+      채널이 늘거나 stride 가 그림을 반으로 줄이면 — 되돌아오는 길이 입력 그 자체일 수
+      없으니 1&times;1 합성곱이 모양을 맞춰 준다. 모양이 그대로면 지름길에 층이 아예 없다.
+      텐서가 온 그대로 더해진다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        class BasicBlock extends nn.Module {
+          constructor(inC, outC, stride) {
+            super();
+            this.c1 = new nn.Conv2d(inC, outC, 3, stride, 1);
+            this.b1 = new nn.BatchNorm2d(outC);
+            this.c2 = new nn.Conv2d(outC, outC, 3, 1, 1);
+            this.b2 = new nn.BatchNorm2d(outC);
+            // 모양이 바뀔 때만 지름길에 층이 생긴다.
+            this.down = (stride !== 1 || inC !== outC)
+              ? new nn.Sequential(new nn.Conv2d(inC, outC, 1, stride, 0), new nn.BatchNorm2d(outC))
+              : null;
+          }
+          forward(x) {
+            const h = this.b2.call(this.c2.call(this.b1.call(this.c1.call(x)).relu()));
+            return h.add(this.down ? this.down.call(x) : x).relu();
+          }
+        }
+
+        const shrink = new BasicBlock(3, 8, 2);
+        const same = new BasicBlock(8, 8, 1);
+
+        const x = Tensor.randn([2, 3, 16, 16]);
+        log("줄이는 블록:", JSON.stringify(x.shape), "->", JSON.stringify(shrink.call(x).shape),
+            " 지름길 층:", shrink.down !== null);
+
+        const h = Tensor.randn([2, 8, 8, 8]);
+        log("그대로 블록:", JSON.stringify(h.shape), "->", JSON.stringify(same.call(h).shape),
+            " 지름길 층:", same.down !== null);
+      </script>
+    </div>
+
+    <h2>지름길이 실어 나르는 것</h2>
+    <p>
+      <code>+ x</code> 의 근거는 보통 재는 대신 그림으로 설명된다. 그럴 필요가 없다.
+      아래는 같은 합성곱 여덟 개를 두 번 쌓는다 — 한 번은 그냥, 한 번은 층마다 출력을
+      입력에 더해서 — 그리고 <em>맨 앞</em> 층의 가중치에 도달한 기울기를 양쪽에서 읽는다.
+    </p>
+    <p>
+      두 경우가 씨앗을 공유하므로 층은 똑같이 시작한다. 다른 것은 배선뿐이다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        async function firstLayerGradient(useSkip) {
+          manualSeed(1);                       // 두 경우가 같은 층으로 시작하도록.
+          const layers = [];
+          for (let i = 0; i < 8; i++) layers.push(new nn.Conv2d(4, 4, 3, 1, 1));
+          const input = Tensor.randn([1, 4, 8, 8]);
+
+          let squared = 0;
+          await scope(async () => {
+            let t = input;
+            for (const c of layers) t = useSkip ? c.call(t).relu().add(t) : c.call(t).relu();
+            t.sum().backward();
+            const g = layers[0].weight.grad;
+            squared = await g.mul(g).sum().item();
+          });
+          return Math.sqrt(squared);
+        }
+
+        const withSkip = await firstLayerGradient(true);
+        const plain = await firstLayerGradient(false);
+
+        log("여덟 층 깊이에서 첫 층에 도달한 기울기 크기");
+        log("  +x 있음 :", withSkip.toFixed(4));
+        log("  그냥    :", plain.toFixed(6));
+        log("  배수    :", (withSkip / plain).toFixed(0) + "배");
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong>이 배수는 상수가 아니다.</strong> 씨앗과 깊이와 활성화에 따라 달라지고, 이
+      페이지는 한 번 타이핑해 두고 방치한 숫자가 아니라 이번 실행이 낸 값을 찍는다.
+      씨앗이 바뀌어도 남는 것은 방향이다 — 그냥 쌓은 쪽은 작게 도착하고, 잔차 쪽은 그렇지 않다.
+    </div>
+
+    <h2>작은 ResNet 학습</h2>
+    <p>
+      줄기 하나, 블록 둘 — 하나는 모양을 지키고 하나는 반으로 줄인다 — 그다음 풀링과
+      평탄화와 선형 머리. 모든 ResNet 의 배치가 이것이고, 진짜 ResNet 은 구조가 아니라
+      가운데를 몇 번 반복하느냐로 달라진다.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+        manualSeed(0);
+
+        class BasicBlock extends nn.Module {
+          constructor(inC, outC, stride) {
+            super();
+            this.c1 = new nn.Conv2d(inC, outC, 3, stride, 1);
+            this.b1 = new nn.BatchNorm2d(outC);
+            this.c2 = new nn.Conv2d(outC, outC, 3, 1, 1);
+            this.b2 = new nn.BatchNorm2d(outC);
+            this.down = (stride !== 1 || inC !== outC)
+              ? new nn.Sequential(new nn.Conv2d(inC, outC, 1, stride, 0), new nn.BatchNorm2d(outC))
+              : null;
+          }
+          forward(x) {
+            const h = this.b2.call(this.c2.call(this.b1.call(this.c1.call(x)).relu()));
+            return h.add(this.down ? this.down.call(x) : x).relu();
+          }
+        }
+
+        // torchvision 이 AdaptiveAvgPool2d([1, 1]) 로 쓰는 그것.
+        class GlobalAvgPool extends nn.Module {
+          forward(x) { return x.adaptivePool("avg", [1, 1]); }
+        }
+
+        const net = new nn.Sequential(
+          new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
+          new BasicBlock(8, 8, 1),
+          new BasicBlock(8, 16, 2),
+          new GlobalAvgPool(), new nn.Flatten(), new nn.Linear(16, 3));
+
+        const B = 12;
+        const x = keepAlive(Tensor.randn([B, 1, 16, 16]));
+        const labels = new Float32Array(B);
+        for (let i = 0; i < B; i++) labels[i] = i % 3;
+        const y = keepAlive(Tensor.from(labels, [B], { dtype: "int64" }));
+
+        const opt = new optim.Adam(net.parameters(), 0.01);
+        const crit = new nn.CrossEntropyLoss();
+
+        log("파라미터:", net.parameters().length, "개");
+        for (let s = 0; s < 60; s++) {
+          await scope(async () => {
+            opt.zeroGrad();
+            const out = net.call(x);
+            if (s === 0) log("로짓:", JSON.stringify(out.shape));
+            const loss = crit.call(out, y);
+            loss.backward();
+            opt.step();
+            if (s % 20 === 0 || s === 59) log(`step ${String(s).padStart(2)}  loss ${(await loss.item()).toFixed(4)}`);
+          });
+        }
+      </script>
+    </div>
+
+    <div class="note-box">
+      <strong><code>AdaptiveAvgPool2d</code> 는 여기 없다 — 그런데 그 풀링은 있다.</strong>
+      torchvision 의 ResNet 은 그 이름으로 끝나므로 거기서 복사한 줄은 돌지 않는다. 없는
+      것은 이름뿐이다: <code>AdaptiveAvgPool1d</code> 와 <code>AdaptiveAvgPool3d</code> 가
+      둘 다 있고 <strong>본문이 완전히 같다</strong> — 둘 다
+      <code>adaptivePool("avg", 크기)</code> 를 부르고, 이 함수는 공간 축이 몇 개인지
+      신경 쓰지 않는다. 빠진 것은 한 줄짜리 별칭이지 기능이 아니다.<br><br>
+      이 레슨은 처음에 대신 <code>AvgPool2d</code> 에 특징 맵 크기를 주라고 했고, 이 부재를
+      실측 표가 세는 것 중 하나라고 했다. 둘 다 틀렸다. 그 표는 속도와 일치에 관한 것이라
+      해당 행이 없고, 부재를 들고 있는 것은 <code>tests/ts_axis.py</code> 다 — 거기서 이
+      이름은 <em>사유 없음</em> 아래에 있다. 그리고 고정 풀링은 같은 것이 아니다:
+      <code>[2, 16, 5, 7]</code> 입력에 <code>AvgPool2d(8)</code> 는 아무것도 안 던지고
+      <code>[2, 16, 0, 0]</code> 을 돌려주는데, adaptive 쪽은 시킨 대로
+      <code>[2, 16, 1, 1]</code> 을 준다. 결손 목록을 이름으로만 읽으면 그 이름이 제안하는
+      수리를 하게 되고, 그렇게 해서 레슨이 애초에 없지도 않았던 것의 우회법을 가르치게 된다.
+    </div>
+
+    <p>
+      완성된 <code>ResNet18Cifar</code> 가 모델 카탈로그에 있고, 위 블록과 똑같은
+      <code>Conv2d</code> 와 배치 정규화 층으로 만들어졌다 — 라이브러리가 따로 아는
+      특별한 것은 그 안에 없다. 위의 신경망은 <code>[4, 1, 23, 17]</code> 입력에도
+      <code>[4, 3]</code> 을 답한다. 그것이 adaptive 풀링이 사 주는 것이고, 고정 풀링이
+      못 하는 것이다.
+    </p>
+
+    <div class="pager">
+      <a href="08-debugging.html">← 8 · 디버깅</a>
+      <a href="10-vit.html" style="text-align:right">다음<b>10 · 트랜스포머</b></a>
+    </div>
+  </main>
+</div>
+<script type="module" src="../../assets/runnable.js"></script>
+<script type="module" src="../../assets/apilink.js"></script>
+</body>
+</html>
