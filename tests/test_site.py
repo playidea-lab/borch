@@ -444,46 +444,54 @@ def test_every_page_carries_the_same_global_nav():
 
 
 SIDEBAR = re.compile(r'<aside class="sidebar">.*?<nav>(.*?)</nav>', re.S)
+NUMBERED = re.compile(r"^\d\d-")
 
 
-def test_a_section_sidebar_lists_the_same_pages_on_every_page_of_it():
-    """Within one section the sidebar has to be **one and the same list**.
+def test_a_section_sidebar_lists_every_page_of_its_section():
+    """A section's sidebar has to list **the pages that are actually there**.
 
-    The global nav above is checked already; the sidebar was not, and it drifted the way
-    an unchecked list always drifts. `site/learn/06-save-load.html` and its Korean twin
-    listed six lessons while eight existed — a reader who arrived at lesson 6 was shown a
-    course that ended there. **Nothing was broken**: every link on the page worked, the
-    page rendered, and the link checker above was satisfied, because a link that is simply
-    absent is not a broken link.
+    The sidebar drifted the way an unchecked list drifts. `site/learn/06-save-load.html`
+    and its Korean twin listed six lessons while eight existed, so a reader who arrived at
+    lesson 6 was shown a course that ended there. **Nothing was broken**: every link on the
+    page worked, the page rendered, and the link checker above was satisfied, because a
+    link that is simply absent is not a broken link.
 
-    What makes it catchable is that the sidebar is a **claim about its siblings**, so the
-    siblings can be asked. Marking the current place is `class="on"`, exactly as in the
-    global nav, so it is stripped before the lists are compared.
+    The first version of this check compared the sidebars **to each other** and complained
+    when one disagreed with the majority. That would have caught this bug, and it would
+    have been the wrong instrument: pages that all forget the same lesson agree perfectly,
+    and the majority is whichever mistake was copied more times. So it asks the directory
+    instead — the sidebar is a claim about which pages exist, and the pages exist on disk.
+
+    Order is compared too. The files are numbered, so the order they sort in is the order
+    a reader is meant to walk them.
     """
-    sections = {}
     problems = []
-    for page in _pages():
-        found = SIDEBAR.search(page.read_text(encoding="utf-8"))
-        if not found:
+    for folder in sorted({page.parent for page in _pages()}):
+        expected = sorted(f.name for f in folder.glob("*.html") if NUMBERED.match(f.name))
+        if not expected:
             continue
-        block = re.sub(r' class="on"| aria-current="page"', "", found.group(1))
-        entries = tuple(re.findall(r'<a href="([^"]+)"[^>]*>([^<]*)</a>', block))
-        sections.setdefault(page.parent, {}).setdefault(entries, []).append(
-            page.relative_to(ROOT).as_posix())
+        for page in sorted(folder.glob("*.html")):
+            found = SIDEBAR.search(page.read_text(encoding="utf-8"))
+            if not found:
+                problems.append(f"{page.relative_to(ROOT)}: in a section but carries no sidebar")
+                continue
+            listed = [href for href in re.findall(r'<a href="([^"]+)"', found.group(1))
+                      if NUMBERED.match(href)]
+            if listed == expected:
+                continue
+            absent = [name for name in expected if name not in listed]
+            extra = [name for name in listed if name not in expected]
+            why = []
+            if absent:
+                why.append("never listed: " + ", ".join(absent))
+            if extra:
+                why.append("listed but not on disk: " + ", ".join(extra))
+            if not why:
+                why.append("listed out of order")
+            problems.append(f"{page.relative_to(ROOT)}: " + "; ".join(why))
 
-    for folder, found in sections.items():
-        if len(found) > 1:
-            biggest = max(found, key=lambda e: len(found[e]))
-            for entries, pages in found.items():
-                if entries == biggest:
-                    continue
-                missing = [href for href, _ in biggest if href not in dict(entries)]
-                problems.append(
-                    f"{folder.relative_to(ROOT)}: {', '.join(pages)} list "
-                    f"{len(entries)} entries where {len(biggest)} is usual"
-                    + (f" (absent: {', '.join(missing)})" if missing else ""))
-
-    assert not problems, "a section's sidebar disagrees with itself:\n  " + "\n  ".join(problems)
+    assert not problems, ("a sidebar disagrees with the pages beside it:\n  "
+                          + "\n  ".join(problems))
 
 
 def test_site_links_to_this_repository():

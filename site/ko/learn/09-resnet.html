@@ -218,8 +218,12 @@
     <div class="note-box">
       <strong><code>AdaptiveAvgPool2d</code> 는 여기 없다.</strong> torchvision 의 ResNet
       은 그것으로 끝나므로 거기서 복사한 줄은 돌지 않는다. 특징 맵 크기 — 위에서는 8 —
-      를 준 <code>AvgPool2d</code> 가 같은 일을 하고, 입력이 고정이면 그 크기를 안다.
-      이것은 <a href="../#measured">실측 표</a>가 덮지 않고 세는 부재 중 하나다.
+      를 준 <code>AvgPool2d</code> 가 같은 일을 하고, 입력이 고정이면 그 크기를 안다.<br><br>
+      이 문장은 처음에 그 부재를 실측 표가 세는 것 중 하나라고 했다. 아니다 — 그 표는
+      속도와 일치에 관한 것이고 여기에 해당하는 행이 없다. 이 부재를 실제로 들고 있는
+      것은 <code>tests/ts_axis.py</code> 다. TypeScript 표면을 numpy 코어와 대조해
+      이 이름을 <em>사유 없음</em> 아래에 올려 둔다. 세어지는 것과 설명되는 것은 다르고,
+      여기서는 앞의 것만 사실이었다.
     </div>
 
     <p>

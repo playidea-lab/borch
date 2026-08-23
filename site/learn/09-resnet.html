@@ -222,8 +222,13 @@
       <strong><code>AdaptiveAvgPool2d</code> is not here.</strong> torchvision's ResNet
       ends with it, so a line copied from there will not run; <code>AvgPool2d</code> with
       the feature-map size — 8 above — does the same thing when you know that size, which
-      on a fixed input you do. This is one of the absences the
-      <a href="../#measured">measured table</a> counts rather than papers over.
+      on a fixed input you do.<br><br>
+      This sentence first said the absence was one the measured table counts. It is not
+      — that table is about speed and agreement, and it has no row for this. What does
+      hold the absence is <code>tests/ts_axis.py</code>, which compares the TypeScript
+      surface against the numpy core and lists this name under <em>no reason</em>. Being
+      counted and being explained are different things, and only the first of them was
+      true here.
     </div>
 
     <p>
