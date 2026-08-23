@@ -6826,6 +6826,25 @@ def loss_cases(inp=None):
 
     cases.append((LOSS_PREFIX + "grad::triplet", triplet_grad))
 
+    def bce_grad(L):
+        """**BCE's gradient needed its own case because it has its own formula.**
+
+        torch does not differentiate through the −100 clamp; it floors the
+        denominator at 1e-12, so the gradient saturates at 1e12 where the value
+        saturates at 100. Differentiated through, `p = 1e-20` gives −1e20 — eight
+        orders past torch, and the first step takes the weight somewhere no finite
+        learning rate was meant to reach.
+
+        This case asks at comfortable probabilities, where the two formulas agree and
+        only an ordinary mistake would show. The saturating end is
+        `tests/test_arg_domain.py`'s.
+        """
+        q = L.tensor(_BCE_P, requires_grad=True)
+        F(L).binary_cross_entropy(q, L.tensor(_BCE_T)).backward()
+        return _grad_of(q, "bce")
+
+    cases.append((LOSS_PREFIX + "grad::bce", bce_grad))
+
     def cosine_grad(L):
         p = L.tensor(a, requires_grad=True)
         F(L).cosine_embedding_loss(p, L.tensor(b), L.tensor(sign)).backward()
@@ -6858,9 +6877,21 @@ def loss_cases(inp=None):
                 L.tensor(_CE_X), L.tensor(_CE_T), reduction=r)),
             ("nll_loss", lambda L, r: F(L).nll_loss(
                 L.tensor(_LOGP), L.tensor(_CE_T), reduction=r)),
-            # `binary_cross_entropy` is not here yet — borch.ts has `bceWithLogits` only and
-            # nothing that takes probabilities rather than logits. The core case stays in
-            # `tests/test_arg_domain.py`.
+            # **This note used to say `binary_cross_entropy` was not here yet** — that
+            # borch.ts had `bceWithLogits` alone and nothing taking probabilities. Both
+            # sides have it now, and the fixtures above (`_BCE_P`, `_BCE_T`) had been
+            # sitting here the whole time waiting for it.
+            #
+            # Worth asking at all three reductions because the core's forward was
+            # `-(p + 1e-12).log()`, which caps at 27.63 whatever `p` is — the same
+            # defect `CrossEntropyLoss` had, with the guard and the defect on one line.
+            # torch clamps the log's *output* at −100 instead. These fixtures are
+            # comfortable probabilities and would not have found it; the saturating
+            # ones are asked in `tests/test_arg_domain.py`.
+            ("binary_cross_entropy", lambda L, r: F(L).binary_cross_entropy(
+                L.tensor(_BCE_P), L.tensor(_BCE_T), reduction=r)),
+            ("nn.BCELoss", lambda L, r: L.nn.BCELoss(reduction=r)(
+                L.tensor(_BCE_P), L.tensor(_BCE_T))),
             ("nn.CrossEntropyLoss", lambda L, r: L.nn.CrossEntropyLoss(reduction=r)(
                 L.tensor(_CE_X), L.tensor(_CE_T))),
             ("nn.NLLLoss", lambda L, r: L.nn.NLLLoss(reduction=r)(

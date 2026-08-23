@@ -139,7 +139,7 @@ export class Subset implements Dataset {
     const mapped = indices.map((i) => this.at(i));
     return this.dataset.gather
       ? this.dataset.gather(mapped)
-      : stackItems(mapped.map((i) => this.dataset.get(i)));
+      : defaultCollate(mapped.map((i) => this.dataset.get(i)));
   }
 
   private at(index: number): number {
@@ -209,6 +209,231 @@ export function randomSplit(
   return out;
 }
 
+
+// ── Samplers ──────────────────────────────────────────────────────────────
+//
+// **These were absent, and the note at the top of this file was the reason.**
+// It said: putting a `sampler` option down with nothing behind it repeats what
+// happened with `paramGroups` — torch's shape, hollow inside, quietly ignoring
+// what the caller passes. That argument is right and it is an argument against a
+// *hollow* sampler, not against a sampler. So they are written rather than named.
+//
+// Nine names, and `tests/ts_axis.py` had all nine under `utils.data ✘ gap 12 ·
+// without a reason 10` the whole time.
+
+/**
+ * An order over a dataset's indices. Where `torch.utils.data.Sampler` goes.
+ *
+ * torch's is a class other samplers inherit; here it is an interface, because
+ * `for (const i of sampler)` is the only thing anything asks of one.
+ */
+export interface Sampler extends Iterable<number> {
+  readonly length: number;
+}
+
+/** `0, 1, 2, …` in order. `torch.utils.data.SequentialSampler`. */
+export class SequentialSampler implements Sampler {
+  constructor(private readonly dataSource: { readonly length: number }) {}
+
+  get length(): number {
+    return this.dataSource.length;
+  }
+
+  *[Symbol.iterator](): Iterator<number> {
+    for (let i = 0; i < this.dataSource.length; i++) yield i;
+  }
+}
+
+/**
+ * A shuffled order. `torch.utils.data.RandomSampler`.
+ *
+ * **With `replacement` it draws rather than permutes**, so an index can come up
+ * twice and another not at all — and only then does `numSamples` mean anything
+ * other than the dataset's length. torch refuses `numSamples` without
+ * `replacement` for exactly that reason, and so does this.
+ */
+export class RandomSampler implements Sampler {
+  constructor(
+    private readonly dataSource: { readonly length: number },
+    private readonly replacement = false,
+    private readonly numSamples: number | null = null,
+  ) {
+    if (numSamples !== null && !replacement) {
+      throw new RuntimeError(
+        "numSamples should not be specified when replacement is false");
+    }
+  }
+
+  get length(): number {
+    return this.numSamples ?? this.dataSource.length;
+  }
+
+  *[Symbol.iterator](): Iterator<number> {
+    const n = this.dataSource.length;
+    if (!this.replacement) {
+      yield* shuffled(n);
+      return;
+    }
+    for (let i = 0; i < this.length; i++) {
+      yield Math.floor(uniform() * n);
+    }
+  }
+}
+
+/** A shuffled order over the indices given. `torch.utils.data.SubsetRandomSampler`. */
+export class SubsetRandomSampler implements Sampler {
+  constructor(private readonly indices: readonly number[]) {}
+
+  get length(): number {
+    return this.indices.length;
+  }
+
+  *[Symbol.iterator](): Iterator<number> {
+    for (const at of shuffled(this.indices.length)) {
+      yield this.indices[at] as number;
+    }
+  }
+}
+
+/**
+ * Draws by weight. `torch.utils.data.WeightedRandomSampler` — the one that
+ * makes an unbalanced dataset trainable.
+ *
+ * **The weights need not sum to 1**; torch normalises them, and so does this.
+ * `replacement` defaults to **true** here, which is the opposite of
+ * `RandomSampler`'s default and is torch's doing.
+ */
+export class WeightedRandomSampler implements Sampler {
+  private readonly cumulative: number[];
+
+  constructor(
+    weights: readonly number[],
+    readonly numSamples: number,
+    replacement = true,
+  ) {
+    if (!replacement) {
+      // Drawing without replacement by weight needs the weights renormalised after
+      // every pick, and torch's own answer differs from the obvious one. Refused
+      // rather than approximated: a sampler that draws a *nearly* right distribution
+      // is the hardest kind of wrong to see, because the model still trains.
+      throw new RuntimeError(
+        "WeightedRandomSampler(replacement=false) is not here yet.");
+    }
+    let total = 0;
+    this.cumulative = weights.map((w) => (total += w));
+    if (total <= 0) {
+      throw new RuntimeError("weights must sum to a positive number");
+    }
+  }
+
+  get length(): number {
+    return this.numSamples;
+  }
+
+  *[Symbol.iterator](): Iterator<number> {
+    const total = this.cumulative[this.cumulative.length - 1] as number;
+    for (let i = 0; i < this.numSamples; i++) {
+      const hit = uniform() * total;
+      let lo = 0;
+      let hi = this.cumulative.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if ((this.cumulative[mid] as number) <= hit) lo = mid + 1;
+        else hi = mid;
+      }
+      yield lo;
+    }
+  }
+}
+
+/**
+ * Groups another sampler's indices into batches. `torch.utils.data.BatchSampler`.
+ *
+ * This is what a `batchSampler` option is *for*: the batches come from here, so
+ * `batchSize`, `shuffle` and `dropLast` are already decided and the loader must
+ * not decide them again. torch refuses all three alongside it, and so does the
+ * loader below.
+ */
+export class BatchSampler implements Iterable<readonly number[]> {
+  constructor(
+    private readonly sampler: Sampler,
+    private readonly batchSize: number,
+    private readonly dropLast = false,
+  ) {
+    if (batchSize < 1 || !Number.isInteger(batchSize)) {
+      throw new RuntimeError(`batchSize must be a positive integer: ${batchSize}`);
+    }
+  }
+
+  get length(): number {
+    return this.dropLast
+      ? Math.floor(this.sampler.length / this.batchSize)
+      : Math.ceil(this.sampler.length / this.batchSize);
+  }
+
+  *[Symbol.iterator](): Iterator<readonly number[]> {
+    let batch: number[] = [];
+    for (const i of this.sampler) {
+      batch.push(i);
+      if (batch.length === this.batchSize) {
+        yield batch;
+        batch = [];
+      }
+    }
+    if (batch.length && !this.dropLast) yield batch;
+  }
+}
+
+/**
+ * A dataset with no length and no index — you iterate it. Where
+ * `torch.utils.data.IterableDataset` goes.
+ *
+ * **It cannot be shuffled and it cannot be sampled**, because both need to know
+ * how many there are and where to reach. torch says the same by refusing
+ * `shuffle` on one, which `DataLoader` below does too.
+ */
+export interface IterableDataset extends Iterable<readonly Tensor[]> {
+  readonly iterable: true;
+}
+
+/** Several `IterableDataset`s end to end. `torch.utils.data.ChainDataset`. */
+export class ChainDataset implements IterableDataset {
+  readonly iterable = true as const;
+
+  constructor(private readonly datasets: readonly IterableDataset[]) {}
+
+  *[Symbol.iterator](): Iterator<readonly Tensor[]> {
+    for (const d of this.datasets) yield* d;
+  }
+}
+
+/**
+ * Several datasets side by side, one sample from each. `torch.utils.data.StackDataset`.
+ *
+ * **Not `ConcatDataset`, which is end to end.** This one is across: three datasets
+ * of 100 give 100 samples of three parts, where `ConcatDataset` gives 300 of one.
+ */
+export class StackDataset implements Dataset {
+  constructor(private readonly datasets: readonly Dataset[]) {
+    const first = datasets[0];
+    if (!first) throw new RuntimeError("StackDataset needs at least one dataset");
+    for (const d of datasets) {
+      if (d.length !== first.length) {
+        throw new RuntimeError(
+          `StackDataset needs equal lengths: ${d.length} and ${first.length}`);
+      }
+    }
+  }
+
+  get length(): number {
+    return this.datasets[0]?.length ?? 0;
+  }
+
+  get(index: number): readonly Tensor[] {
+    return this.datasets.flatMap((d) => d.get(index));
+  }
+}
+
 export interface LoaderOptions {
   batchSize?: number;
   /**
@@ -220,6 +445,19 @@ export interface LoaderOptions {
    * size use it.
    */
   dropLast?: boolean;
+  /**
+   * The order to visit the indices in. **Mutually exclusive with `shuffle`** —
+   * a sampler already decides the order, and taking both means one of them is
+   * quietly ignored. torch refuses the pair and so does this.
+   */
+  sampler?: Sampler;
+  /**
+   * Batches, already grouped. **Mutually exclusive with `batchSize`, `shuffle`,
+   * `sampler` and `dropLast`** — all four are decisions the batch sampler has
+   * already made, and accepting them here would let a caller set a `batchSize`
+   * that does nothing.
+   */
+  batchSampler?: Iterable<readonly number[]> & { readonly length: number };
 }
 
 /**
@@ -259,17 +497,37 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
   readonly shuffle: boolean;
   readonly dropLast: boolean;
 
+  readonly sampler: Sampler | null;
+  readonly batchSampler: (Iterable<readonly number[]> & { readonly length: number }) | null;
+
   constructor(readonly dataset: Dataset, options: LoaderOptions = {}) {
     this.batchSize = options.batchSize ?? 1;
     this.shuffle = options.shuffle ?? false;
     this.dropLast = options.dropLast ?? false;
+    this.sampler = options.sampler ?? null;
+    this.batchSampler = options.batchSampler ?? null;
     if (this.batchSize < 1 || !Number.isInteger(this.batchSize)) {
       throw new RuntimeError(`batchSize must be a positive integer: ${this.batchSize}`);
+    }
+    // **The refusals are the point of taking these at all.** A sampler beside a
+    // `shuffle`, or a batch sampler beside a `batchSize`, means one of the two is
+    // being ignored — and a loader that ignores an argument hands back batches that
+    // look right. torch stops at the same pairs.
+    if (this.sampler && options.shuffle !== undefined) {
+      throw new RuntimeError("sampler option is mutually exclusive with shuffle");
+    }
+    if (this.batchSampler
+        && (options.batchSize !== undefined || options.shuffle !== undefined
+            || options.sampler !== undefined || options.dropLast !== undefined)) {
+      throw new RuntimeError(
+        "batchSampler option is mutually exclusive with batchSize, shuffle, "
+          + "sampler, and dropLast");
     }
   }
 
   get length(): number {
-    const n = this.dataset.length;
+    if (this.batchSampler) return this.batchSampler.length;
+    const n = this.sampler ? this.sampler.length : this.dataset.length;
     return this.dropLast
       ? Math.floor(n / this.batchSize)
       : Math.ceil(n / this.batchSize);
@@ -278,21 +536,33 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
   [Symbol.iterator](): Iterator<readonly Tensor[]> {
     // **Reshuffled every epoch.** Deciding the order once in the constructor makes the
     // second epoch run in the first's order, and the reason for shuffling disappears.
-    const order = this.shuffle
-      ? shuffled(this.dataset.length)
-      : Array.from({ length: this.dataset.length }, (_, i) => i);
-    const batches = this.length;
+    // A batch sampler decides the grouping too, so the slicing below is skipped
+    // wholesale rather than fed a flattened order — its last batch may be short
+    // where the others are not, and re-slicing would silently regularise it.
+    const grouped: readonly (readonly number[])[] | null = this.batchSampler
+      ? [...this.batchSampler]
+      : null;
+    const order = grouped
+      ? []
+      : this.sampler
+        ? [...this.sampler]
+        : this.shuffle
+          ? shuffled(this.dataset.length)
+          : Array.from({ length: this.dataset.length }, (_, i) => i);
+    const batches = grouped ? grouped.length : this.length;
     let at = 0;
 
     return {
       next: (): IteratorResult<readonly Tensor[]> => {
         if (at >= batches) return { done: true, value: undefined };
         const from = at * this.batchSize;
-        const picks = order.slice(from, from + this.batchSize);
+        const picks = grouped
+          ? (grouped[at] as readonly number[])
+          : order.slice(from, from + this.batchSize);
         at += 1;
         const batch = this.dataset.gather
           ? this.dataset.gather(picks)
-          : stackItems(picks.map((i) => this.dataset.get(i)));
+          : defaultCollate(picks.map((i) => this.dataset.get(i)));
         return { done: false, value: batch };
       },
     };
@@ -300,15 +570,23 @@ export class DataLoader implements Iterable<readonly Tensor[]> {
 }
 
 /**
- * Several samples into one batch. The place `default_collate` occupies.
+ * Several samples into one batch. `torch.utils.data.default_collate`.
  *
  * It stacks per position — `[[x₀, y₀], [x₁, y₁]]` becomes `[X, Y]`.
+ *
+ * **It was called `stackItems` and its own comment said "the place
+ * `default_collate` occupies".** The function was here the whole time; only
+ * torch's name was missing, and the name axis counts names — so it read as an
+ * absent feature while the feature was three lines above the loader that used it.
+ * A comment naming what something *would* be called is not the name.
  */
-function stackItems(items: readonly (readonly Tensor[])[]): readonly Tensor[] {
-  const first = items[0];
+export function defaultCollate(
+  batch: readonly (readonly Tensor[])[],
+): readonly Tensor[] {
+  const first = batch[0];
   if (!first) throw new RuntimeError("cannot collate an empty batch");
   const width = first.length;
-  for (const item of items) {
+  for (const item of batch) {
     if (item.length !== width) {
       throw new RuntimeError(
         `samples disagree on tensor count: ${item.length} and ${width}`,
@@ -316,7 +594,7 @@ function stackItems(items: readonly (readonly Tensor[])[]): readonly Tensor[] {
     }
   }
   return Array.from({ length: width }, (_, slot) =>
-    Tensor.stack(items.map((item) => item[slot] as Tensor), 0));
+    Tensor.stack(batch.map((item) => item[slot] as Tensor), 0));
 }
 
 /** `0..n-1` shuffled. Fisher–Yates, on the host stream (it follows `manualSeed`). */

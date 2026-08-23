@@ -603,11 +603,29 @@ NOT_PORTED = {
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
-    # 3 → 7. Four `DataLoader` rows: `generator`, `batch_sampler`, and `drop_last`
-    # given by position. **borch.ts has no `DataLoader` at all** — over there a batch
-    # comes from `Dataset.batches()`, so there is nothing to give a generator to.
-    "dataconv::": (7, "파이썬 — `default_convert`, `get_worker_info` and the "
-                      "`DataLoader`'s arguments. borch.ts has no DataLoader"),
+    # 3 → 7 → 6. Four `DataLoader` rows went in with this reason:
+    #
+    #     **borch.ts has no `DataLoader` at all** — over there a batch comes from
+    #     `Dataset.batches()`, so there is nothing to give a generator to.
+    #
+    # **That sentence was false the day it was written.** `borch-ts/src/data.ts` has
+    # exported `class DataLoader` since 2026-08-17 and the reason above is dated
+    # 2026-08-23 — six days later, in bold, about a file that already had the class.
+    # Not a reason that went stale; one that was never true.
+    #
+    # The cost is not that the number was wrong — it was right, the four rows really
+    # could not be asked. The cost is that **a false reason points at the wrong
+    # repair.** "no DataLoader" says *build one*, and nobody was going to; the truth
+    # was "the DataLoader takes three options and torch's list is seventeen", which
+    # says *give the one you have a sampler*, and that took an afternoon.
+    #
+    # `batch_sampler` is asked now. What is left:
+    #   · two `generator` rows — one host stream, the decision at the top of data.ts
+    #   · `drop_last` given by **position** — borch.ts takes an options object, so
+    #     there is no ninth seat to put it in. That one is the language, not a gap.
+    "dataconv::": (6, "파이썬 — `default_convert`, `get_worker_info`, the two "
+                      "`generator` rows (one host stream), and `drop_last` given by "
+                      "position (borch.ts takes an options object)"),
 }
 
 

@@ -79,7 +79,12 @@ asarray resize_as_ storage_offset type values
 ALIASED = {
     "grid_sampler": "gridSample",
     "is_same_size": "comparing shape",
-    "max_pool1d_with_indices": "maxPoolWithIndices",
+    # `max_pool1d_with_indices` retired from here: borch.ts carries torch's own
+    # spelling now, in `functional.ts`, so it is no longer an alias but a name.
+    # **This row was right the whole time** — the computation was there under
+    # `maxPoolWithIndices`, and the axis that counts names could not say so. That is
+    # what this table is for, and it is also why the row could retire in an
+    # afternoon: it recorded where the work already was.
     "numel": "size",
     "scatter": "scatterSet",
     "swapdims": "swapaxes",

@@ -70,6 +70,20 @@ MODULES = [
     ("nn", "nn",
      {"ko": "층·손실·활성. `torch.nn` 자리.",
       "en": "Layers, losses, activations. Where `torch.nn` would be."}),
+    # **The same hole as `index` above, one module over.** `functional.ts` exists so
+    # that a line written `F.conv2d(x, w, b)` can be copied across, and it was in
+    # neither the reference nor the name index — so `tests/ts_axis.py` could not see
+    # a single name that lives only there. Eighteen `F.` names were added and the
+    # gap count moved by two: the two that also became `Tensor` methods.
+    #
+    # The note above this list describes that failure and names `isTensor` as the
+    # one it caught. **It was written, and the next module along was not checked
+    # against it** — a reason that is true, in place, about a case adjacent to the
+    # one in front of it.
+    ("functional", "functional",
+     {"ko": "`torch.nn.functional` 자리. 값은 전부 `Tensor` 메서드에서 온다 — 여기는 이름과 인자 순서뿐이다.",
+      "en": "Where `torch.nn.functional` would be. Every value comes from a `Tensor` "
+            "method; this module is one name and one argument order."}),
     ("optim", "optim",
      {"ko": "옵티마이저와 학습률 스케줄러. `torch.optim` 자리.",
       "en": "Optimizers and learning-rate schedulers. Where `torch.optim` would be."}),

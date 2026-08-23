@@ -2755,6 +2755,31 @@ function refuseWeight(layer: string, what: string, weight: unknown): void {
   }
 }
 
+/**
+ * `torch.nn.BCELoss` — over **probabilities**, where `BCEWithLogitsLoss` takes
+ * logits. It was absent while its logits form was here, so the name axis read the
+ * whole feature as missing.
+ *
+ * **No `posWeight`.** That argument belongs to the logits form alone, and offering
+ * it here would be an argument torch does not have — the core says the same at the
+ * same place.
+ */
+export class BCELoss {
+  constructor(weight?: Tensor, readonly reduction: Reduction = "mean") {
+    refuseWeight("BCELoss", "weight", weight);
+  }
+
+  forward(x: Tensor, target: Tensor): Tensor {
+    return x.bce(target, this.reduction);
+  }
+
+  call(x: Tensor, target: Tensor): Tensor {
+    return this.forward(x, target);
+  }
+
+  describe(): string { return "BCELoss()"; }
+}
+
 export class BCEWithLogitsLoss {
   constructor(
     weight?: Tensor,

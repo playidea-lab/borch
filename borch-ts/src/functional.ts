@@ -312,3 +312,172 @@ export function selu(input: Tensor): Tensor { return input.selu(); }
 export function softsign(input: Tensor): Tensor { return input.softsign(); }
 export function tanh(input: Tensor): Tensor { return input.tanh(); }
 export function tanhshrink(input: Tensor): Tensor { return input.tanhshrink(); }
+
+// ── The names torch keeps per rank, over kernels that were already here ────
+//
+// **Eighteen names, no new arithmetic.** `poolND`, `lpPool`, `maxUnpool`,
+// `convTransposeND`, `maxPoolWithIndices` and `fractionalMaxPool` were all doing this
+// work already, under generic ND names that borch.ts chose and torch does not have. So
+// the name axis counted eighteen absent *features* while every one of them was one
+// delegation away — the same shape as `BatchNorm1d` (absent while all six lazy variants
+// were present) and `default_collate` (present, under the name `stackItems`, with a
+// comment saying what it would be called).
+//
+// The rank is not consulted by the kernels, so it is checked here: torch refuses a 4-D
+// input to `conv_transpose1d`, and passing it through would answer a question torch
+// calls undefined — the quiet direction, and one the rank axis measures.
+
+function atRank(input: Tensor, want: number, who: string): Tensor {
+  if (input.shape.length !== want) {
+    throw new Error(`${who} expects a ${want}-D input, got [${input.shape}]`);
+  }
+  return input;
+}
+
+export function avgPool1d(input: Tensor, kernel = 2, stride?: number): Tensor {
+  return input.avgPool1d(kernel, stride);
+}
+
+export function avgPool3d(input: Tensor, kernel = 2, stride?: number): Tensor {
+  return input.avgPool3d(kernel, stride);
+}
+
+export function convTranspose1d(
+  input: Tensor, weight: Tensor, bias: Tensor | null = null,
+  stride: number | readonly number[] = 1, padding: number | readonly number[] = 0,
+  outputPadding: number | readonly number[] = 0, groups = 1,
+  dilation: number | readonly number[] = 1,
+): Tensor {
+  return atRank(input, 3, "conv_transpose1d")
+    .convTransposeND(weight, bias, stride, padding, outputPadding, groups, dilation);
+}
+
+export function convTranspose2d(
+  input: Tensor, weight: Tensor, bias: Tensor | null = null,
+  stride: number | readonly number[] = 1, padding: number | readonly number[] = 0,
+  outputPadding: number | readonly number[] = 0, groups = 1,
+  dilation: number | readonly number[] = 1,
+): Tensor {
+  return atRank(input, 4, "conv_transpose2d")
+    .convTransposeND(weight, bias, stride, padding, outputPadding, groups, dilation);
+}
+
+export function convTranspose3d(
+  input: Tensor, weight: Tensor, bias: Tensor | null = null,
+  stride: number | readonly number[] = 1, padding: number | readonly number[] = 0,
+  outputPadding: number | readonly number[] = 0, groups = 1,
+  dilation: number | readonly number[] = 1,
+): Tensor {
+  return atRank(input, 5, "conv_transpose3d")
+    .convTransposeND(weight, bias, stride, padding, outputPadding, groups, dilation);
+}
+
+export function lpPool1d(
+  input: Tensor, normType: number, kernel: number, stride?: number,
+): Tensor {
+  return atRank(input, 3, "lp_pool1d").lpPool(normType, kernel, stride);
+}
+
+export function lpPool2d(
+  input: Tensor, normType: number, kernel: number, stride?: number,
+): Tensor {
+  return atRank(input, 4, "lp_pool2d").lpPool(normType, kernel, stride);
+}
+
+export function lpPool3d(
+  input: Tensor, normType: number, kernel: number, stride?: number,
+): Tensor {
+  return atRank(input, 5, "lp_pool3d").lpPool(normType, kernel, stride);
+}
+
+export function maxPool1dWithIndices(
+  input: Tensor, kernel = 2, stride?: number,
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 3, "max_pool1d_with_indices").maxPoolWithIndices(kernel, stride);
+}
+
+export function maxPool2dWithIndices(
+  input: Tensor, kernel = 2, stride?: number,
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 4, "max_pool2d_with_indices").maxPoolWithIndices(kernel, stride);
+}
+
+export function maxPool3dWithIndices(
+  input: Tensor, kernel = 2, stride?: number,
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 5, "max_pool3d_with_indices").maxPoolWithIndices(kernel, stride);
+}
+
+export function maxUnpool1d(
+  input: Tensor, indices: Tensor, kernel: number, stride?: number, padding = 0,
+  outputSize?: readonly number[],
+): Tensor {
+  return atRank(input, 3, "max_unpool1d")
+    .maxUnpool(indices, kernel, stride, padding, outputSize);
+}
+
+export function maxUnpool2d(
+  input: Tensor, indices: Tensor, kernel: number, stride?: number, padding = 0,
+  outputSize?: readonly number[],
+): Tensor {
+  return atRank(input, 4, "max_unpool2d")
+    .maxUnpool(indices, kernel, stride, padding, outputSize);
+}
+
+export function maxUnpool3d(
+  input: Tensor, indices: Tensor, kernel: number, stride?: number, padding = 0,
+  outputSize?: readonly number[],
+): Tensor {
+  return atRank(input, 5, "max_unpool3d")
+    .maxUnpool(indices, kernel, stride, padding, outputSize);
+}
+
+export function fractionalMaxPool2d(
+  input: Tensor, kernel: number, outputSize: readonly number[],
+  randomSamples: readonly (readonly number[])[],
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 4, "fractional_max_pool2d")
+    .fractionalMaxPool(kernel, outputSize, randomSamples);
+}
+
+export function fractionalMaxPool2dWithIndices(
+  input: Tensor, kernel: number, outputSize: readonly number[],
+  randomSamples: readonly (readonly number[])[],
+): { values: Tensor; indices: Tensor } {
+  return fractionalMaxPool2d(input, kernel, outputSize, randomSamples);
+}
+
+export function fractionalMaxPool3d(
+  input: Tensor, kernel: number, outputSize: readonly number[],
+  randomSamples: readonly (readonly number[])[],
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 5, "fractional_max_pool3d")
+    .fractionalMaxPool(kernel, outputSize, randomSamples);
+}
+
+export function fractionalMaxPool3dWithIndices(
+  input: Tensor, kernel: number, outputSize: readonly number[],
+  randomSamples: readonly (readonly number[])[],
+): { values: Tensor; indices: Tensor } {
+  return fractionalMaxPool3d(input, kernel, outputSize, randomSamples);
+}
+
+/**
+ * `F.binary_cross_entropy_with_logits`. The method has been here as `bceWithLogits`
+ * — this is torch's name for it.
+ */
+export function binaryCrossEntropyWithLogits(
+  input: Tensor, target: Tensor, reduction: Reduction = "mean",
+): Tensor {
+  return input.bceWithLogits(target, reduction);
+}
+
+/**
+ * `F.binary_cross_entropy` — over probabilities. See `Tensor.bce` on why the
+ * clamp is on the log's output rather than an epsilon on the probability.
+ */
+export function binaryCrossEntropy(
+  input: Tensor, target: Tensor, reduction: Reduction = "mean",
+): Tensor {
+  return input.bce(target, reduction);
+}

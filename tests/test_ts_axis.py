@@ -83,15 +83,60 @@ FROZEN = {
     # three golden cases named `nn.InstanceNorm1d/2d/3d` while constructing
     # `InstanceNormND`. All six lazy variants existed, so `LazyInstanceNorm2d`
     # stood for the lazy form of a class nobody could import.
-    "nn": 11,
-    "nn.functional": 30,
+    # 11 → 10. `BCELoss`, whose logits form (`BCEWithLogitsLoss`) was already here —
+    # the same shape as `BatchNorm1d` above, and as `default_collate` below.
+    "nn": 10,
+    # **30 → 10, and eighteen of the twenty were one delegation each.**
+    #
+    # `poolND`, `lpPool`, `maxUnpool`, `convTransposeND`, `maxPoolWithIndices` and
+    # `fractionalMaxPool` were all doing the work already, under generic ND names
+    # borch.ts chose and torch does not have. So this counted eighteen absent
+    # *features* while every one was a wrapper away.
+    #
+    # **Adding them moved this number by two, and that was the real finding.**
+    # `functional.ts` was not in `site/build_api.py`'s `MODULES`, so the module that
+    # exists *so a line written `F.conv2d(x, w, b)` can be copied across* was in
+    # neither the API reference nor the name index — and this axis could not see a
+    # single name living only there. The two that did move were the two that also
+    # became `Tensor` methods.
+    #
+    # The comment at the top of that list describes exactly this failure, about
+    # `index.ts`, and names `isTensor` as the one it caught. **It was written, and
+    # the module next to it was never checked against it.** A reason that is true,
+    # in place, and about the case adjacent to the one in front of it.
+    #
+    # The ten left are the `adaptive_*` family and
+    # `triplet_margin_with_distance_loss`. The adaptive family is held deliberately:
+    # a peer's lesson page teaches a workaround for `AdaptiveAvgPool2d` being absent
+    # and pins the absence at both ends, so filling it silently would leave a page
+    # teaching a detour around a road that exists. It moves when that page does.
+    "nn.functional": 10,
     "optim": 0,
     "optim.lr_scheduler": 0,
     # 3 → 0. The three were `inv`, `pinv` and `matmul` — torch's spellings of
     # `inverse`, `pinverse` and `mm`, which had no name anywhere in borch.ts. The
     # `linalg` namespace carries them now.
     "linalg": 0,
-    "utils.data": 12,
+    # **12 → 2, and the two that remain have reasons.** The ten were the samplers
+    # and the two dataset shapes: `Sampler`, `SequentialSampler`, `RandomSampler`,
+    # `SubsetRandomSampler`, `WeightedRandomSampler`, `BatchSampler`,
+    # `IterableDataset`, `ChainDataset`, `StackDataset` — and `default_collate`.
+    #
+    # `data.ts`'s own header had argued against them, and the argument was good:
+    # *putting a `sampler` option down with nothing behind it repeats what happened
+    # with `paramGroups` — torch's shape, hollow inside, quietly ignoring what the
+    # caller passes.* That is an argument against a **hollow** sampler. They are
+    # written rather than named, and the loader's refusals (a `sampler` beside a
+    # `shuffle`, a `batchSampler` beside a `batchSize`) are the part that makes the
+    # option worth having: taking both means one is ignored, and a loader that
+    # ignores an argument still hands back batches that look right.
+    #
+    # **`default_collate` was already there under another name.** The function was
+    # `stackItems`, and its own comment read "the place `default_collate` occupies".
+    # This axis counts names, so the feature read as absent while sitting three
+    # lines above the loader that called it — a comment naming what something
+    # *would* be called is not the name.
+    "utils.data": 2,
 }
 
 # The core carries these only in order to refuse them, so borch.ts not carrying the

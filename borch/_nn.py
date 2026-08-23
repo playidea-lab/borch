@@ -709,8 +709,45 @@ class BCELoss(_WrittenLoss):
         super().__init__(reduction, weight=weight)
 
     def forward(self, p, t):
-        eps = 1e-12
-        return _reduce(-(t * (p + eps).log() + (1 - t) * (1 - p + eps).log()),
+        """**torch clamps the log, and this was adding an epsilon to the
+        probability.** They are not the same guard and the numbers say so.
+
+            p = 0,     target 1     ours 27.631   torch 100.0
+            p = 1e-20, target 1     ours 27.631   torch  46.052
+            p = 1e-8,  target 1     ours 18.42058 torch  18.42068
+
+        `-(p + 1e-12).log()` cannot exceed `-log(1e-12) = 27.63` whatever `p` is, so
+        every confident-and-wrong prediction reported the same loss as every other
+        one. torch's documented rule is that **the log's output** is clamped at
+        −100, which caps the loss at 100 and leaves 1e-20 telling the truth.
+
+        The epsilon is also wrong where nothing is clamped: at p = 1e-8 it moves the
+        answer in the fourth decimal, because it is added to a number smaller
+        than itself is large.
+
+        **This is `CrossEntropyLoss`'s defect a second time** — that one was
+        `-(picked + 1e-12).log()` and capped at 27.63 too. The guard and the defect
+        were the same line there as well. Two losses, one habit; the search that
+        found this one was for the habit rather than for the loss.
+        """
+        pd = _np.asarray(p.data, dtype=_DEFAULT_DTYPE)
+        td = _np.asarray(t.data, dtype=_DEFAULT_DTYPE)
+        with _np.errstate(divide="ignore"):
+            lo = _np.maximum(_np.log(pd), -100.0)
+            hi = _np.maximum(_np.log(1.0 - pd), -100.0)
+        out = -(td * lo + (1 - td) * hi)
+
+        def back(g):
+            # **torch floors the denominator at 1e-12 rather than differentiating
+            # through the clamp**, so the gradient saturates at 1e12 where the value
+            # saturates at 100. Differentiated through, `p = 1e-20` gives −1e20 —
+            # eight orders past torch, and the first optimiser step takes the weight
+            # somewhere no finite learning rate was meant to reach.
+            gg = _np.asarray(g, dtype=_DEFAULT_DTYPE)
+            denom = _np.maximum(pd * (1.0 - pd), 1e-12)
+            return (gg * (pd - td) / denom, gg * (hi - lo))
+
+        return _reduce(p._make(out, (p, t), back, "BinaryCrossEntropyBackward0"),
                        self.reduction)
 
 

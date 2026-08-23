@@ -405,7 +405,18 @@ SHORTER = {
     # 11 → 12. `ChainedScheduler` took torch's `optimizer` and borch.ts has not.
     "optim.lr_scheduler": 12,
     "linalg": 2,
-    "utils.data": 1,
+    # **1 → 4, and all four are the same `generator`.** `random_split` was the one;
+    # `RandomSampler`, `SubsetRandomSampler` and `WeightedRandomSampler` join it now
+    # that they exist at all.
+    #
+    # It is one decision, made once and written at the top of `borch-ts/src/data.ts`:
+    # torch gives a DataLoader its own generator, and borch.ts runs **one host
+    # stream**, so a single `manualSeed` rewinds layer initialisation, dropout, the
+    # tensor factories and batch order together. "The choice was to not add another
+    # door." Three more names inheriting a decision is not three more decisions —
+    # and the number is here rather than the reason so that the day the door opens,
+    # all four move at once and one of them not moving is visible.
+    "utils.data": 4,
 }
 
 

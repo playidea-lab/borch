@@ -32,6 +32,7 @@ import { igamma, igammac, polygamma } from "../src/special.js";
 import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
+import * as data from "../src/data.js";
 import { LinAlgError } from "../src/errors.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
@@ -3419,6 +3420,10 @@ function addLoss(out: Map<string, Case>): void {
 
   // ── How it folds is part of the loss ──────────────────────────────────
   const ceX = () => Tensor.from([0.5, -1, 2, 1.5, 0.25, -0.5], [2, 3]);
+  // Carried verbatim from `_BCE_P` / `_BCE_T` in `tests/cases.py`. Divergent values
+  // stop the comparison from being a comparison.
+  const bceP = () => Tensor.from([0.2, 0.7, 0.9, 0.4, 0.15, 0.6], [2, 3]);
+  const bceT = () => Tensor.from([0.0, 1.0, 1.0, 0.0, 0.0, 1.0], [2, 3]);
   const ceT = () => Tensor.from([2, 0], [2], { dtype: "int64" });
   const ceLogp = () => Tensor.from(
     [0.2, 0.5, 0.3, 0.6, 0.1, 0.3].map(Math.log), [2, 3]);
@@ -3445,6 +3450,17 @@ function addLoss(out: Map<string, Case>): void {
       [`cross_entropy(${reduction})`,
         () => ceX().crossEntropy(ceT(), -100, reduction)],
       [`nll_loss(${reduction})`, () => ceLogp().nllLoss(ceT(), -100, reduction)],
+      // **Binary cross-entropy over probabilities.** Its logits form has been asked
+      // for a long time and this one could not be, because borch.ts had no method
+      // taking probabilities. The core's forward was `-(p + 1e-12).log()`, which
+      // caps at 27.63 whatever `p` is — `CrossEntropyLoss`'s defect a second time,
+      // with the guard and the defect on the same line. torch clamps the log's
+      // *output* at −100. These are comfortable probabilities and would not find
+      // that; the saturating ones are asked on the Python side.
+      [`binary_cross_entropy(${reduction})`,
+        () => bceP().bce(bceT(), reduction)],
+      [`nn.BCELoss(${reduction})`,
+        () => new nn.BCELoss(undefined, reduction).call(bceP(), bceT())],
       // Six layers were **missing** for a while too. borch.ts's `nn` had the rare ones
       // such as `HuberLoss` and was missing the common ones, and **the binding was filling
       // in by building layers over the tensor methods itself**, so the golden saw none of
@@ -3497,6 +3513,16 @@ function addLoss(out: Map<string, Case>): void {
       return gradOf(p, name);
     });
   }
+  // BCE's gradient has its own formula in the core — torch floors the denominator at
+  // 1e-12 rather than differentiating through the −100 clamp. This asks at comfortable
+  // probabilities, where the two agree; the saturating end is asked in Python.
+  out.set("loss::grad::bce", () => {
+    const q = bceP();
+    q.requiresGrad = true;
+    q.bce(bceT()).backward();
+    return gradOf(q, "bce");
+  });
+
   out.set("loss::grad::triplet", () => {
     const p = anc(true);
     p.tripletMarginLoss(pos(), neg()).backward();
@@ -5174,6 +5200,31 @@ function addRecent(out: Map<string, Case>): void {
   out.set("stat::nonzero(as_tuple)/행",
     async () => (await sparse().nonzero(true))[0]!);
   out.set("stat::nonzero 표", async () => await sparse().nonzero());
+
+  // ── dataconv:: ──────────────────────────────────────────────────────────
+  //
+  // **This prefix was recorded as unaskable because "borch.ts has no DataLoader".**
+  // It has had one since 2026-08-17; the sentence was written on the 23rd. The row
+  // now says what is actually missing, and this case is the part that stopped being
+  // missing when the samplers were written.
+  //
+  // A batch sampler decides the grouping, so this asks the thing only it can answer:
+  // ten items, batches of four, `dropLast` — **two batches, and the last two items
+  // gone.** A loader that re-sliced a flattened order would give three.
+  out.set("dataconv::DataLoader(batch_sampler)", async () => {
+    const items = new data.TensorDataset(
+      Tensor.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [10]));
+    const loader = new data.DataLoader(items, {
+      batchSampler: new data.BatchSampler(new data.SequentialSampler(items), 4, true),
+    });
+    const seen: string[] = [];
+    for (const [batch] of loader) {
+      seen.push(Array.from(await (batch as Tensor).toArray())
+        .map((v) => String(Math.trunc(v))).join(","));
+    }
+    return seen.join(" | ");
+  });
+
 
   // **`wrap` means something only on a tall matrix.** While it was asked with squares
   // alone, this version invented a rule that does not exist (skipping a row on wrapping

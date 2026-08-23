@@ -4308,6 +4308,30 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * Binary cross-entropy over **probabilities**, not logits. `torch.nn.BCELoss`.
+   *
+   * **torch clamps the log at −100, and the obvious guard is a different one.**
+   * The core wrote `-(p + 1e-12).log()`, which cannot exceed 27.63 whatever `p`
+   * is — so every confident-and-wrong prediction reported the same loss as every
+   * other one, and at `p = 1e-8` the epsilon moved the answer in the fourth
+   * decimal. Clamping the log's *output* caps the loss at 100 and leaves 1e-20
+   * telling the truth (46.05).
+   *
+   * It is `CrossEntropyLoss`'s defect a second time. Both had the guard and the
+   * defect on the same line.
+   *
+   * Prefer `bceWithLogits` where you have logits: it is the numerically stable
+   * path and this one is reached only when the probabilities are what you hold.
+   */
+  bce(target: Tensor, reduction: Reduction = "mean"): Tensor {
+    const floor = Tensor.full([], -100);
+    const one = Tensor.full([], 1);
+    const lo = this.unary("log").binary("maximum", floor);
+    const hi = one.sub(this).unary("log").binary("maximum", floor);
+    return target.mul(lo).add(one.sub(target).mul(hi)).neg().reduceAs(reduction);
+  }
+
+  /**
    * Trailing axes to mean 0, variance 1. **The variance is the biased
    * estimate (divided by n)** — that is torch's `layer_norm`, and it
    * differs from `var()`'s default.
@@ -9027,6 +9051,20 @@ fn gelu_tanh_grad(x: f32) -> f32 {
 
   maxPool3d(kernel = 2, stride?: number): Tensor {
     return this.poolND("max", kernel, stride);
+  }
+
+  /**
+   * **`avgPool1d` and `avgPool3d` existed as a kernel and not as a name.**
+   * `poolND("avg", …)` was doing the work for `avgPool2d` and for the layers at every
+   * rank; only torch's two per-rank names were missing, exactly as `maxPool1d` and
+   * `maxPool3d` are the same call three lines up.
+   */
+  avgPool1d(kernel = 2, stride?: number): Tensor {
+    return this.poolND("avg", kernel, stride);
+  }
+
+  avgPool3d(kernel = 2, stride?: number): Tensor {
+    return this.poolND("avg", kernel, stride);
   }
 
   // ── Pooling that also returns the winning positions ───────────────────
