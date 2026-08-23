@@ -10016,6 +10016,22 @@ def inplace_cases(inp=None):
         ("renorm_", lambda L, x: x.renorm_(2, 0, 1.0), grid),
         ("subtract_", lambda L, x: x.subtract_(1), plain),
         ("true_divide_", lambda L, x: x.true_divide_(2), plain),
+        # **The twelve in-place binaries.** Every one is `mutate(binary(name, other))`
+        # over a kernel that was already here, so borch.ts builds them from a table —
+        # and a table is exactly what a case list cannot check, because the same
+        # table would generate the cases. Written out here, against torch's answers.
+        ("atan2_", lambda L, x, m="atan2_": getattr(x, m)(L.tensor(twos)), plain),
+        ("copysign_", lambda L, x, m="copysign_": getattr(x, m)(L.tensor(twos)), plain),
+        ("eq_", lambda L, x, m="eq_": getattr(x, m)(L.tensor(twos)), plain),
+        ("ge_", lambda L, x, m="ge_": getattr(x, m)(L.tensor(twos)), plain),
+        ("gt_", lambda L, x, m="gt_": getattr(x, m)(L.tensor(twos)), plain),
+        ("heaviside_", lambda L, x, m="heaviside_": getattr(x, m)(L.tensor(twos)), plain),
+        ("hypot_", lambda L, x, m="hypot_": getattr(x, m)(L.tensor(twos)), plain),
+        ("ldexp_", lambda L, x, m="ldexp_": getattr(x, m)(L.tensor(twos)), plain),
+        ("le_", lambda L, x, m="le_": getattr(x, m)(L.tensor(twos)), plain),
+        ("lt_", lambda L, x, m="lt_": getattr(x, m)(L.tensor(twos)), plain),
+        ("ne_", lambda L, x, m="ne_": getattr(x, m)(L.tensor(twos)), plain),
+        ("xlogy_", lambda L, x, m="xlogy_": getattr(x, m)(L.tensor(twos)), plain),
         # **In-place operations that change the shape.** Asked on a square only, they pass unchanged.
         ("t_", lambda L, x: x.t_(), grid),
     )

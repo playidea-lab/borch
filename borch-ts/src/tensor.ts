@@ -7147,6 +7147,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.unary(name));
   }
 
+  /**
+   * The table's **binary** operations, in place. Names like `hypot_` come here.
+   *
+   * It exists for the same reason `inplaceUnary` does: `mutate` is private, and the
+   * loop that attaches these lives outside the class. Reaching into the private
+   * from out there would have needed a cast, and a cast is how a class stops being
+   * able to say what it owns.
+   */
+  inplaceBinary(name: string, other: Tensor): Tensor {
+    return this.mutate(() => this.binary(name, other));
+  }
+
   // In-place operations that take arguments. They cannot run off a table, so they are
   // written one by one, and **the computation belongs to the underscore-less side** —
   // one expression in two copies diverges eventually, and the values are plausible
@@ -7547,6 +7559,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /** `sqrt(x² + y²)`. */
   hypot(other: Tensor): Tensor {
     return this.binary("hypot", other);
+  }
+
+  /** `x · 2^y`. `torch.Tensor.ldexp`. */
+  ldexp(other: Tensor): Tensor {
+    return this.binary("ldexp", other);
   }
 
   /** `log(exp(a) + exp(b))`, in the stable form — see the kernel. */
@@ -10999,6 +11016,35 @@ function noMemoryFormat(name: string, memoryFormat: string | null): void {
   }
 }
 
+/**
+ * **The in-place binaries, from a table.** `eq_`, `lt_`, `atan2_`, `hypot_` and
+ * eight more are each `mutate(() => this.binary(name, other))` and nothing else, so
+ * the comment beside the hand-written in-place methods — *they cannot run off a
+ * table, so they are written one by one* — is true of the ones taking an axis or an
+ * index and not of these. Twelve written out by hand is twelve places that can
+ * drift, which is the argument `_unary` makes on the Python side.
+ *
+ * The list is torch's: every name here has `name_` on `torch.Tensor` (measured).
+ * `logaddexp` and `logaddexp2` are **not** here — they have no in-place form in
+ * torch, and adding one would be a name this library has and torch does not.
+ */
+const INPLACE_BINARY = [
+  "atan2", "copysign", "eq", "ge", "gt", "heaviside", "hypot", "ldexp",
+  "le", "lt", "ne", "xlogy",
+] as const;
+
+for (const name of INPLACE_BINARY) {
+  Object.defineProperty(Tensor.prototype, `${name}_`, {
+    value: function (this: Tensor, other: Tensor): Tensor {
+      // **The computation belongs to the underscore-less side.** One expression in
+      // two copies diverges eventually, and the values stay plausible while it does.
+      return this.inplaceBinary(name, other);
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
 const INTERPOLATIONS = ["linear", "lower", "higher", "midpoint", "nearest"];
 
 /**
@@ -11189,6 +11235,18 @@ export interface Tensor {
   // (`nanToZero` and `notNan` stay undeclared on purpose — the kernel file says
   // neither is a public torch name; they are the pieces `nansum` is built from.
   // `logical_not` and `elu` have declared spellings of their own.)
+  ldexp_(other: Tensor): Tensor;
+  atan2_(other: Tensor): Tensor;
+  copysign_(other: Tensor): Tensor;
+  eq_(other: Tensor): Tensor;
+  ge_(other: Tensor): Tensor;
+  gt_(other: Tensor): Tensor;
+  heaviside_(other: Tensor): Tensor;
+  hypot_(other: Tensor): Tensor;
+  le_(other: Tensor): Tensor;
+  lt_(other: Tensor): Tensor;
+  ne_(other: Tensor): Tensor;
+  xlogy_(other: Tensor): Tensor;
   deg2rad(): Tensor;
   rad2deg(): Tensor;
   positive(): Tensor;

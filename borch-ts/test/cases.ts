@@ -5316,6 +5316,22 @@ function addRecent(out: Map<string, Case>): void {
     ["renorm_", ramp23, (x) => x.renorm_(2, 0, 1.0)],
     ["subtract_", plain4, (x) => x.subtract_(1)],
     ["true_divide_", plain4, (x) => x.trueDivide_(2)],
+    // **The twelve in-place binaries**, each `mutate(binary(name, other))` over a
+    // kernel that was already here. They are attached from a table in `tensor.ts`,
+    // and a table is what a case list cannot check — the same table would write the
+    // cases. So they are written out, here and in `tests/cases.py`.
+    ["atan2_", plain4, (x) => x.atan2_(twos4())],
+    ["copysign_", plain4, (x) => x.copysign_(twos4())],
+    ["eq_", plain4, (x) => x.eq_(twos4())],
+    ["ge_", plain4, (x) => x.ge_(twos4())],
+    ["gt_", plain4, (x) => x.gt_(twos4())],
+    ["heaviside_", plain4, (x) => x.heaviside_(twos4())],
+    ["hypot_", plain4, (x) => x.hypot_(twos4())],
+    ["ldexp_", plain4, (x) => x.ldexp_(twos4())],
+    ["le_", plain4, (x) => x.le_(twos4())],
+    ["lt_", plain4, (x) => x.lt_(twos4())],
+    ["ne_", plain4, (x) => x.ne_(twos4())],
+    ["xlogy_", plain4, (x) => x.xlogy_(twos4())],
     // **In-place operations that change the shape.** Asked with squares alone they pass
     // unchanged.
     ["t_", ramp23, (x) => x.t_()],

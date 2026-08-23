@@ -89,7 +89,20 @@ FROZEN = {
     # inside the class, a call into the strider with an argument it does not take.
     # It is `stridedView` now. A private helper should not squat on a name the
     # library it imitates has already spent.
-    "Tensor": 89,
+    # 89 → 76. The twelve in-place binaries (`atan2_`, `copysign_`, `eq_`, `ge_`,
+    # `gt_`, `heaviside_`, `hypot_`, `ldexp_`, `le_`, `lt_`, `ne_`, `xlogy_`) and
+    # `ldexp` itself. Every one is `mutate(binary(name, other))` over a kernel that
+    # was already there, so they come off a table.
+    #
+    # The comment beside the hand-written in-place methods says *they cannot run off
+    # a table, so they are written one by one.* That is true of the ones taking an
+    # axis or an index and **was being applied to a family where it is not** —
+    # twelve identical bodies is twelve places that can drift, which is the argument
+    # `_unary` makes on the Python side of the same repository.
+    #
+    # The golden cases are written out by hand on both sides rather than generated:
+    # a table cannot check a table, because the same list would produce both.
+    "Tensor": 76,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's
