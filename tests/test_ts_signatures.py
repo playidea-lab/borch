@@ -486,7 +486,20 @@ SHORTER = {
     # `stride` and stopped being uncomparable — the same edit moved two rows out of
     # `unaligned` and two into this bucket, in opposite directions, and a running
     # total would have shown neither.
-    "nn": 35,
+    #
+    # **35 → 32.** `AvgPool1d`, `AvgPool3d` and `LPPool1d` took the rest of torch's
+    # list, and taking it meant the WGSL kernel first: `PoolNDShape` had extents, a
+    # kernel and a stride and nowhere to put a padding, a `countIncludePad` or an
+    # overriding divisor, so there was nothing underneath for a constructor argument
+    # to be forwarded to. The average's divisor stopped being the kernel volume and
+    # became what the window actually covers, which is what all three of those
+    # arguments are asking about.
+    #
+    # **`AvgPool2d` is still here and that is deliberate.** It runs on a separate
+    # two-dimensional kernel rather than `poolND`, so the same six arguments are a
+    # second implementation and not a second constructor line. Left as it is until
+    # the two paths are one.
+    "nn": 32,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

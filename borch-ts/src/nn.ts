@@ -1680,25 +1680,39 @@ export class AvgPool2d extends Module {
  * axes, so it cannot use that path.
  */
 export class AvgPool1d extends Module {
+  /**
+   * **`AvgPool1d` has no `divisorOverride` and this is not an omission** — torch
+   * gives that argument to the 2-D and 3-D forms alone, so a seat here would be one
+   * this library invented.
+   */
   constructor(private readonly kernel: number,
-              private readonly stride?: number) {
+              private readonly stride?: number,
+              private readonly padding = 0,
+              private readonly ceilMode = false,
+              private readonly countIncludePad = true) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("avg", this.kernel, this.stride);
+    return x.poolND("avg", this.kernel, this.stride, this.padding, this.ceilMode,
+                    this.countIncludePad);
   }
 }
 
 /** `torch.nn.AvgPool3d`. */
 export class AvgPool3d extends Module {
   constructor(private readonly kernel: number,
-              private readonly stride?: number) {
+              private readonly stride?: number,
+              private readonly padding = 0,
+              private readonly ceilMode = false,
+              private readonly countIncludePad = true,
+              private readonly divisorOverride: number | null = null) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.poolND("avg", this.kernel, this.stride);
+    return x.poolND("avg", this.kernel, this.stride, this.padding, this.ceilMode,
+                    this.countIncludePad, this.divisorOverride);
   }
 }
 
@@ -1737,12 +1751,13 @@ export class AdaptiveAvgPool3d extends Module {
 export class LPPool1d extends Module {
   constructor(private readonly normType: number,
               private readonly kernel: number,
-              private readonly stride?: number) {
+              private readonly stride?: number,
+              private readonly ceilMode = false) {
     super();
   }
 
   override forward(x: Tensor): Tensor {
-    return x.lpPool(this.normType, this.kernel, this.stride);
+    return x.lpPool(this.normType, this.kernel, this.stride, this.ceilMode);
   }
 }
 

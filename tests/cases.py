@@ -3304,6 +3304,68 @@ def pool_cases(inp=None):
     add("F.lp_pool2d(p=1)", lambda L, x: L.nn.functional.lp_pool2d(x, 1, 2), img)
     cases.append((POOL_PREFIX + "nn.LPPool2d",
                   lambda L: L.nn.LPPool2d(2, 2)(L.tensor(img))))
+
+    # ── the pooling arguments that had a seat and no case. ──
+    #
+    # `AvgPool1d/3d` refused `padding`, `count_include_pad` and `divisor_override`
+    # from inside until they were implemented, and `LPPool` refused `ceil_mode`. A
+    # refusal and an implementation look identical to the name axis, which counts
+    # declared names — so the seats existing is not evidence that anything works,
+    # and until these lines there was nothing that asked.
+    #
+    # **Every one of the six changes the answer**, which is why they are worth
+    # freezing and how they were chosen. Four change the *shape* (padding and the
+    # three `ceil_mode`s), so a wrong one cannot hide behind a tolerance; the other
+    # two change the divisor, where a wrong one is a plausible number.
+    #
+    # `count_include_pad` needs a padding to have anything to include, and
+    # `divisor_override` needs overlapping windows for the difference to show,
+    # which is what the stride of 1 is doing.
+    #
+    # **The `AvgPool3d` ceiling case is a 3 and not a 2 because the volume is 4³.**
+    # Written as a 2 it divides evenly, `ceil_mode` changes nothing, and the case
+    # freezes an answer its neighbour already froze. It was written that way, and
+    # what caught it was not the run — the run was green — but the two guards that
+    # ask whether a case named after an argument answers differently from the case
+    # beside it. **The argument had been checked against a hand-made 3³ array
+    # rather than against the fixture the case runs on**, so the check answered a
+    # narrower question than its name: true of that array, false here.
+    cases.append((POOL_PREFIX + "nn.AvgPool1d(테두리 채움)",
+                  lambda L: L.nn.AvgPool1d(2, 2, 1)(L.tensor(seq))))
+    cases.append((POOL_PREFIX + "nn.AvgPool1d(가장자리 빼기)",
+                  lambda L: L.nn.AvgPool1d(2, 2, 1, False, False)(L.tensor(seq))))
+    cases.append((POOL_PREFIX + "nn.AvgPool3d(테두리 채움)",
+                  lambda L: L.nn.AvgPool3d(2, 2, 1)(L.tensor(vol))))
+    cases.append((POOL_PREFIX + "nn.AvgPool3d(나눗수 지정)",
+                  lambda L: L.nn.AvgPool3d(2, 1, 0, False, True, 4)(L.tensor(vol))))
+    cases.append((POOL_PREFIX + "nn.AvgPool3d(올림)",
+                  lambda L: L.nn.AvgPool3d(3, 3, 0, True)(L.tensor(vol))))
+    cases.append((POOL_PREFIX + "nn.LPPool1d(올림)",
+                  lambda L: L.nn.LPPool1d(2, 3, 3, True)(L.tensor(seq))))
+    cases.append((POOL_PREFIX + "nn.LPPool2d(올림)",
+                  lambda L: L.nn.LPPool2d(2, 3, 3, True)(L.tensor(img))))
+
+    # **The backward divides by the same three things and none of the seven above
+    # reaches it.** A cell in a short edge window was divided by fewer cells going
+    # forward, so it has to receive proportionally more coming back; written with the
+    # kernel volume everywhere, the forward is right and the gradient is quietly
+    # wrong at every edge — the shape is right, the total is not, and no forward
+    # comparison can see it. One case per divisor rule.
+    def pool_grad(L, make, arr):
+        x = L.tensor(arr, requires_grad=True)
+        out = make(L)(x)
+        (out * L.arange(out.numel()).reshape(out.shape).float()).sum().backward()
+        return _grad_of(x, "pool")
+
+    for name, make, arr in (
+        ("nn.AvgPool1d(테두리 채움)", lambda L: L.nn.AvgPool1d(2, 2, 1), seq),
+        ("nn.AvgPool1d(가장자리 빼기)", lambda L: L.nn.AvgPool1d(2, 2, 1, False, False), seq),
+        ("nn.AvgPool3d(나눗수 지정)",
+         lambda L: L.nn.AvgPool3d(2, 1, 0, False, True, 4), vol),
+        ("nn.AvgPool3d(올림)", lambda L: L.nn.AvgPool3d(3, 3, 0, True), vol),
+    ):
+        cases.append((POOL_PREFIX + f"grad::{name}",
+                      lambda L, m=make, a=arr: pool_grad(L, m, a)))
     return cases
 
 

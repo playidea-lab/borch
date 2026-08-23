@@ -1968,6 +1968,23 @@ export function convOut(size: number, pad: number, kernel: number, stride: numbe
 }
 
 /**
+ * Pooling's output extent, which is `convOut` **plus the ceiling rule.**
+ *
+ * `ceilMode` rounds up rather than down, and the rounding alone is not the rule: torch
+ * then drops the last window if it *starts* in the padding past the end. Without that
+ * second half, a ceiling can add a window made entirely of padded cells — an extra
+ * output column that torch does not produce, so the two answers part in shape rather
+ * than in value and every comparison after it is against the wrong extent.
+ */
+export function poolOut(size: number, pad: number, kernel: number, stride: number,
+                        ceilMode = false): number {
+  if (!ceilMode) return convOut(size, pad, kernel, stride);
+  let out = Math.ceil((size + 2 * pad - kernel) / stride) + 1;
+  if ((out - 1) * stride >= size + pad) out -= 1;
+  return out;
+}
+
+/**
  * The shape of a convolution with no regard for the number of dimensions.
  *
  * One kernel generator covers 1, 2 and 3 dimensions. With the spatial axes held as an
@@ -2383,16 +2400,32 @@ export interface PoolNDShape {
   readonly kernel: readonly number[];
   readonly stride: readonly number[];
   readonly outDims: readonly number[];
+  /** Per axis, and **only average pooling honours it** — the maximum's backward
+   *  reads the input at window positions and a padded window has none. */
+  readonly pad?: readonly number[];
+  /** `torch`'s `count_include_pad`. The divisor counts the padded cells too. */
+  readonly countIncludePad?: boolean;
+  /** `torch`'s `divisor_override`. A fixed divisor, ignoring both counts. */
+  readonly divisorOverride?: number | null;
 }
 
 export function poolNDKey(p: PoolNDShape): string {
-  return [p.NC, p.inDims, p.kernel, p.stride].join("|");
+  // **The divisor settings belong in the key.** They change the generated source, and
+  // a cache keyed without them hands back a pipeline compiled for the other divisor —
+  // which is not a crash but a wrong number, from the second call onward.
+  //
+  // **`outDims` was not in the key and had to be.** It is derived from the other four
+  // only while the rounding is fixed; `ceilMode` makes the same extents, kernel and
+  // stride give two different output sizes, and the key could not tell them apart.
+  // Nothing had gone wrong yet because nothing could ask for the ceiling — the field
+  // was safe to leave out for exactly as long as the argument was missing.
+  return [p.NC, p.inDims, p.kernel, p.stride, p.outDims,
+          p.pad ?? [], p.countIncludePad !== false, p.divisorOverride ?? "-"].join("|");
 }
 
 export function poolNDForward(p: PoolNDShape, kind: "max" | "avg"): string {
   const inSpace = p.inDims.reduce((a, b) => a * b, 1);
   const outSpace = p.outDims.reduce((a, b) => a * b, 1);
-  const kCount = p.kernel.reduce((a, b) => a * b, 1);
   const inStride = suffixStrides(p.inDims);
   const outStride = suffixStrides(p.outDims);
   const n = p.NC * outSpace;
@@ -2406,9 +2439,9 @@ export function poolNDForward(p: PoolNDShape, kind: "max" | "avg"): string {
     close.push("    }");
     terms.push(`(o${d} * ${p.stride[d] ?? 1}u + k${d}) * ${inStride[d] ?? 1}u`);
   }
-  const init = kind === "max" ? "X[base]" : "0.0";
-  const step = kind === "max" ? "acc = max(acc, v);" : "acc = acc + v;";
-  const done = kind === "max" ? "acc" : `acc / ${kCount.toFixed(1)}`;
+  if (kind === "avg") return avgNDForward(p);
+  const init = "X[base]";
+  const step = "acc = max(acc, v);";
   return `
 @group(0) @binding(0) var<storage, read> X: array<f32>;
 @group(0) @binding(1) var<storage, read_write> Out: array<f32>;
@@ -2424,32 +2457,119 @@ ${open.join("\n")}
       let v = X[plane * ${inSpace}u + ${terms.join(" + ")}];
       ${step}
 ${close.join("\n")}
-  Out[gid] = ${done};
+  Out[gid] = acc;
+}`;
+}
+
+/**
+ * Average pooling's own source, because **the divisor is not a constant.**
+ *
+ * The maximum takes every cell in the window and reduces them; the average takes
+ * every cell and then divides, and torch's divisor is three different things:
+ *
+ *   count_include_pad = true    the cells inside the *padded* extent
+ *   count_include_pad = false   the cells inside the *real* input
+ *   divisor_override = n        n, whatever the window covers
+ *
+ * The first two are not the kernel volume whenever a window hangs off an edge, which
+ * is what `padding` and `ceilMode` both arrange. Each axis contributes its own count
+ * and they multiply, so the whole thing is a handful of `min`/`max` per output cell
+ * rather than a second pass.
+ *
+ * **A window may reach past the padded extent and never past it on the left**: torch
+ * requires the last window to *start* inside, so the low end needs no clamp against
+ * the padded extent — only against the real input, which is what `count_include_pad`
+ * asks about.
+ */
+function avgNDForward(p: PoolNDShape): string {
+  const inSpace = p.inDims.reduce((a, b) => a * b, 1);
+  const outSpace = p.outDims.reduce((a, b) => a * b, 1);
+  const inStride = suffixStrides(p.inDims);
+  const outStride = suffixStrides(p.outDims);
+  const pad = p.pad ?? p.kernel.map(() => 0);
+  const n = p.NC * outSpace;
+  const decode = p.outDims.map((_, d) =>
+    `  let o${d} = i32((r / ${outStride[d] ?? 1}u) % ${p.outDims[d] ?? 1}u);`).join("\n");
+
+  const open: string[] = [];
+  const close: string[] = [];
+  const guards: string[] = [];
+  const terms: string[] = [];
+  const counts: string[] = [];
+  for (const [d, size] of p.kernel.entries()) {
+    const st = p.stride[d] ?? 1;
+    const pd = pad[d] ?? 0;
+    const dim = p.inDims[d] ?? 1;
+    open.push(`    for (var k${d} = 0; k${d} < ${size}; k${d} = k${d} + 1) {`);
+    close.push("    }");
+    // Padded coordinate minus the padding is the real one; outside is not read.
+    guards.push(`      let a${d} = o${d} * ${st} + k${d} - ${pd};`);
+    guards.push(`      if (a${d} < 0 || a${d} >= ${dim}) { continue; }`);
+    terms.push(`u32(a${d}) * ${inStride[d] ?? 1}u`);
+    const lo = `(o${d} * ${st})`;
+    counts.push(p.countIncludePad === false
+      ? `max(min(${lo} + ${size}, ${pd + dim}) - max(${lo}, ${pd}), 0)`
+      : `max(min(${lo} + ${size}, ${dim + 2 * pd}) - ${lo}, 0)`);
+  }
+  const divisor = p.divisorOverride != null
+    ? p.divisorOverride.toFixed(1)
+    : `f32(${counts.join(" * ")})`;
+  return `
+@group(0) @binding(0) var<storage, read> X: array<f32>;
+@group(0) @binding(1) var<storage, read_write> Out: array<f32>;
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+${flatId(n)}
+  let plane = gid / ${outSpace}u;
+  let r = gid % ${outSpace}u;
+${decode}
+  var acc = 0.0;
+${open.join("\n")}
+${guards.join("\n")}
+      acc = acc + X[plane * ${inSpace}u + ${terms.join(" + ")}];
+${close.join("\n")}
+  Out[gid] = acc / ${divisor};
 }`;
 }
 
 export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
   const inSpace = p.inDims.reduce((a, b) => a * b, 1);
   const outSpace = p.outDims.reduce((a, b) => a * b, 1);
-  const kCount = p.kernel.reduce((a, b) => a * b, 1);
   const inStride = suffixStrides(p.inDims);
   const outStride = suffixStrides(p.outDims);
   const n = p.NC * inSpace;
+  const pad = p.pad ?? p.kernel.map(() => 0);
   const decode = p.inDims.map((_, d) =>
-    `  let i${d} = i32((r / ${inStride[d] ?? 1}u) % ${p.inDims[d] ?? 1}u);`).join("\n");
+    `  let i${d} = i32((r / ${inStride[d] ?? 1}u) % ${p.inDims[d] ?? 1}u) + ${pad[d] ?? 0};`)
+    .join("\n");
   const open: string[] = [];
   const close: string[] = [];
   const oTerms: string[] = [];
   const wTerms: string[] = [];
+  const counts: string[] = [];
   for (const [d, size] of p.outDims.entries()) {
     const st = p.stride[d] ?? 1;
+    const pd = pad[d] ?? 0;
+    const dim = p.inDims[d] ?? 1;
+    const ks = p.kernel[d] ?? 1;
     open.push(`    for (var o${d} = 0; o${d} < ${size}; o${d} = o${d} + 1) {`);
     open.push(`      let d${d} = i${d} - o${d} * ${st};`);
-    open.push(`      if (d${d} < 0 || d${d} >= ${p.kernel[d] ?? 1}) { continue; }`);
+    open.push(`      if (d${d} < 0 || d${d} >= ${ks}) { continue; }`);
     close.push("    }");
     oTerms.push(`u32(o${d}) * ${outStride[d] ?? 1}u`);
     wTerms.push(`u32(o${d} * ${st}) * ${inStride[d] ?? 1}u`);
+    const lo = `(o${d} * ${st})`;
+    counts.push(p.countIncludePad === false
+      ? `max(min(${lo} + ${ks}, ${pd + dim}) - max(${lo}, ${pd}), 0)`
+      : `max(min(${lo} + ${ks}, ${dim + 2 * pd}) - ${lo}, 0)`);
   }
+  // **The same divisor as the forward, and it has to be recomputed here.** The
+  // gradient a cell receives from a window is the window's own `1/divisor`, so an
+  // edge window that divided by fewer cells hands back proportionally more. Dividing
+  // by the kernel volume everywhere is right only when nothing hangs off an edge.
+  const divisor = p.divisorOverride != null
+    ? p.divisorOverride.toFixed(1)
+    : `f32(${counts.join(" * ")})`;
   const kOpen: string[] = [];
   const kClose: string[] = [];
   const kTerms: string[] = [];
@@ -2461,7 +2581,7 @@ export function poolNDBackward(p: PoolNDShape, kind: "max" | "avg"): string {
     kMatch.push(`m${d} == u32(d${d})`);
   }
   const body = kind === "avg"
-    ? `      acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}] / ${kCount.toFixed(1)};`
+    ? `      acc = acc + G[plane * ${outSpace}u + ${oTerms.join(" + ")}] / ${divisor};`
     : `      {
         let wbase = plane * ${inSpace}u + ${wTerms.join(" + ")};
         var best = X[wbase];

@@ -1972,12 +1972,29 @@ AdaptiveAvgPool3d = _pool_layer("avg", True)
 AdaptiveMaxPool1d = _pool_layer("max", True)
 AdaptiveMaxPool2d = _pool_layer("max", True)
 AdaptiveMaxPool3d = _pool_layer("max", True)
-AvgPool1d = _pool_layer("avg", False)
-AvgPool3d = _pool_layer("avg", False)
+def AvgPool1d(kernel_size, stride=None, padding=0, ceil_mode=False,
+              count_include_pad=True):
+    """**It stands borch.ts's layer up rather than calling the functional path.**
+
+    It used to be `_pool_layer("avg", False)`, which reaches `avg_pool1d` and takes a
+    kernel and a stride and nothing else. The four arguments below live on the layer,
+    so the functional route could not carry them — and forwarding a padding into a
+    function with no seat for it drops it silently.
+
+    `divisor_override` is absent because torch gives it to the 2-D and 3-D forms only.
+    """
+    return _layer("AvgPool1d", kernel_size, stride, padding, ceil_mode,
+                  count_include_pad)
 
 
-def LPPool1d(norm_type, kernel_size, stride=None):
-    return _layer("LPPool1d", norm_type, kernel_size, stride)
+def AvgPool3d(kernel_size, stride=None, padding=0, ceil_mode=False,
+              count_include_pad=True, divisor_override=None):
+    return _layer("AvgPool3d", kernel_size, stride, padding, ceil_mode,
+                  count_include_pad, divisor_override)
+
+
+def LPPool1d(norm_type, kernel_size, stride=None, ceil_mode=False):
+    return _layer("LPPool1d", norm_type, kernel_size, stride, ceil_mode)
 
 
 LPPool2d = LPPool3d = LPPool1d

@@ -159,6 +159,7 @@ import {
   convNDKey,
   type ConvNDShape,
   convOut,
+  poolOut,
   convTiledGrid,
   cumExtreme,
   cumprodBackward,
@@ -9944,9 +9945,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * Pooling independent of dimensionality.
    */
-  poolND(kind: "max" | "avg", kernel: number, stride?: number): Tensor {
+  poolND(kind: "max" | "avg", kernel: number, stride?: number,
+         padding = 0, ceilMode = false, countIncludePad = true,
+         divisorOverride: number | null = null): Tensor {
     const spatial = this.shape.length - 2;
     if (spatial < 1) throw new Error(`pooling: the shape does not match: [${this.shape}]`);
+    // **The maximum refuses what only the average implements.** Its backward reads the
+    // input at each window position to find which cell won, and a padded position has
+    // no input to read — so the argument is not merely unwired, it has no meaning here
+    // yet. Refusing by name is the same trade `MaxPool2d` makes one file over.
+    if (kind === "max" && (padding !== 0 || ceilMode)) {
+      throw new Error(`maxPool: ${padding !== 0 ? "padding" : "ceilMode"} is not implemented`);
+    }
     const step = stride ?? kernel;
     const inDims = this.shape.slice(2);
     const p: PoolNDShape = {
@@ -9955,7 +9965,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       inDims,
       kernel: new Array<number>(spatial).fill(kernel),
       stride: new Array<number>(spatial).fill(step),
-      outDims: inDims.map((d) => convOut(d, 0, kernel, step)),
+      outDims: inDims.map((d) => poolOut(d, padding, kernel, step, ceilMode)),
+      pad: new Array<number>(spatial).fill(padding),
+      countIncludePad,
+      divisorOverride,
     };
     const key = poolNDKey(p);
     const outShape = [this.shape[0] ?? 1, this.shape[1] ?? 1, ...p.outDims];
@@ -10112,11 +10125,22 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * by the window size to get back to a sum, then the root. The sign
    * handling and the `relu` in the middle are that implementation's too.
    */
-  lpPool(normType: number, kernel: number, stride?: number): Tensor {
+  lpPool(normType: number, kernel: number, stride?: number, ceilMode = false): Tensor {
+    // **The mean times the kernel volume, which is not the sum at a short window —
+    // and torch is the one that wants it that way.** `lp_pool1d` is written as
+    // `avg_pool1d(x^p, …).mul(kernel_size)`, so under `ceilMode` the average divides
+    // an edge window by what it covered and the multiply puts back the whole volume.
+    // The difference is exactly the windows the ceiling adds.
+    //
+    // This was rewritten to divide by one and take the true sum, on the grounds that
+    // Lᵖ pooling is defined as a sum — true of the definition, not true of the
+    // function being matched, and the two only agree while every window is full. The
+    // two `LPPool` ceiling cases diverged and nothing else did. **Reading torch's own
+    // source is what settled it**, and it should have come before the edit.
     const spatial = this.shape.length - 2;
     const count = kernel ** spatial;
     const powered = this.powScalar(normType);
-    const out = powered.poolND("avg", kernel, stride ?? kernel);
+    const out = powered.poolND("avg", kernel, stride ?? kernel, 0, ceilMode);
     const signed = out.unary("sign").mul(out.abs().unary("relu"));
     return signed.mul(Tensor.full([], count)).powScalar(1 / normType);
   }

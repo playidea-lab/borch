@@ -4,7 +4,7 @@
  "korean": {
   "done": 685,
   "stale": 0,
-  "missing": 143
+  "missing": 144
  },
  "modules": [
   {
@@ -5523,7 +5523,7 @@
       },
       {
        "name": "poolND",
-       "signature": "poolND(kind: \"max\" | \"avg\", kernel: number, stride?: number): Tensor",
+       "signature": "poolND(kind: \"max\" | \"avg\", kernel: number, stride?: number, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null): Tensor",
        "doc": "Pooling independent of dimensionality.",
        "torch": "pool_n_d",
        "section": {
@@ -5576,7 +5576,7 @@
       },
       {
        "name": "lpPool",
-       "signature": "lpPool(normType: number, kernel: number, stride?: number): Tensor",
+       "signature": "lpPool(normType: number, kernel: number, stride?: number, ceilMode?: boolean): Tensor",
        "doc": "The `p`-th root of the sum of `p`-th powers.\n\n**It follows torch's assembly exactly** — average pooling, multiplied\nby the window size to get back to a sum, then the root. The sign\nhandling and the `relu` in the middle are that implementation's too.",
        "torch": "lp_pool",
        "section": {
@@ -8513,8 +8513,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, stride?: number | undefined)",
-       "doc": ""
+       "signature": "constructor(kernel: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean)",
+       "doc": "**`AvgPool1d` has no `divisorOverride` and this is not an omission** — torch\ngives that argument to the 2-D and 3-D forms alone, so a seat here would be one\nthis library invented."
       },
       {
        "name": "forward",
@@ -8532,7 +8532,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(kernel: number, stride?: number | undefined)",
+       "signature": "constructor(kernel: number, stride?: number | undefined, padding?: number, ceilMode?: boolean, countIncludePad?: boolean, divisorOverride?: number | null)",
        "doc": ""
       },
       {
@@ -8589,7 +8589,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(normType: number, kernel: number, stride?: number | undefined)",
+       "signature": "constructor(normType: number, kernel: number, stride?: number | undefined, ceilMode?: boolean)",
        "doc": ""
       },
       {
