@@ -1328,8 +1328,18 @@ class Tensor:
                       "argmin(): does not support bool input")
         return Tensor(_keep(_np.argmin(self.data, axis=dim), self, dim, keepdim))
 
-    def var(self, dim=None, unbiased=True, keepdim=False):
+    def var(self, dim=None, correction=1, keepdim=False, *, unbiased=None):
         """Computed **inside the graph.**
+
+        **The second seat is `correction`, which is torch's name and torch's
+        meaning.** It was `unbiased`, a boolean — and the two are not the same
+        argument: `correction` is *how many degrees of freedom to subtract*, so
+        `correction=0` is the population variance and `correction=2` has no boolean
+        spelling at all. torch takes the number, and it is the only way to reach the
+        rest of that family.
+
+        `unbiased` still works and is where torch keeps it — keyword-only, and it
+        wins when given, because that is what an older call meant.
 
         It used to take the value out through `np.var` and hand it back. The
         value is right and no gradient flows — put a variance into the loss and
@@ -1345,10 +1355,12 @@ class Tensor:
         mean = self.mean(dim=dim, keepdim=True) if dim is not None else self.mean()
         centered = self - mean
         total = (centered * centered).sum(dim=dim, keepdim=keepdim)
-        return total / float(n - 1 if unbiased else n)
+        take = (1 if unbiased else 0) if unbiased is not None else int(correction)
+        return total / float(n - take)
 
-    def std(self, dim=None, unbiased=True, keepdim=False):
-        return self.var(dim=dim, unbiased=unbiased, keepdim=keepdim) ** 0.5
+    def std(self, dim=None, correction=1, keepdim=False, *, unbiased=None):
+        return self.var(dim=dim, correction=correction, keepdim=keepdim,
+                        unbiased=unbiased) ** 0.5
 
     def abs(self):
         """The magnitude. **On complex numbers the result is real and the

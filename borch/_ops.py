@@ -2861,9 +2861,13 @@ def var_mean(t, dim=None, keepdim=False, **kw):
     uncaught.
 
     **Passed by keyword.** `var`'s positional order is
-    `(dim, unbiased, keepdim)`, so passed positionally `keepdim` lands in
-    `unbiased`'s slot — and then ddof goes from 1 to 0 and the value is off by a
-    factor of 12/11. It really was caught that way.
+    `(dim, correction, keepdim)`, so passed positionally `keepdim` lands in
+    `correction`'s slot — `True` becomes a correction of 1 and `False` a correction
+    of 0, and the value is off by a factor of 12/11. It really was caught that way.
+
+    (That middle seat was called `unbiased` when this was written and is torch's
+    `correction` now. The hazard is the same one and the sentence had to move with
+    the name, or it would describe a slot that is no longer there.)
     """
     _no_out(kw)
     t = _wrap(t)

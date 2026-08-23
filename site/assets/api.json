@@ -4,7 +4,7 @@
  "korean": {
   "done": 685,
   "stale": 0,
-  "missing": 119
+  "missing": 133
  },
  "modules": [
   {
@@ -936,7 +936,7 @@
       },
       {
        "name": "std",
-       "signature": "std(dim?: number, correction?: number, keepdim?: boolean): Tensor",
+       "signature": "std(dim?: number, correction?: number, keepdim?: boolean, unbiased?: boolean): Tensor",
        "doc": "The standard deviation. See `variance` for why `dim` comes first.",
        "section": {
         "ko": "Reductions",
@@ -3343,12 +3343,243 @@
        }
       },
       {
-       "name": "transpose_",
-       "signature": "transpose_(): Tensor",
+       "name": "conjPhysical_",
+       "signature": "conjPhysical_(): Tensor",
+       "doc": "",
+       "torch": "conj_physical_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "swapaxes_",
+       "signature": "swapaxes_(a: number, b: number): Tensor",
        "doc": "",
        "section": {
         "ko": "In-place operations",
         "en": "In-place operations"
+       }
+      },
+      {
+       "name": "maskedFill_",
+       "signature": "maskedFill_(mask: Tensor, value: number): Tensor",
+       "doc": "",
+       "torch": "masked_fill_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "indexAdd_",
+       "signature": "indexAdd_(dim: number, index: Tensor, source: Tensor, alpha?: number): Tensor",
+       "doc": "",
+       "torch": "index_add_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "indexCopy_",
+       "signature": "indexCopy_(dim: number, index: Tensor, source: Tensor): Tensor",
+       "doc": "",
+       "torch": "index_copy_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "indexFill_",
+       "signature": "indexFill_(dim: number, index: Tensor, value: number): Tensor",
+       "doc": "",
+       "torch": "index_fill_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "indexReduce_",
+       "signature": "indexReduce_(dim: number, index: Tensor, source: Tensor, reduce: string, includeSelf?: boolean): Tensor",
+       "doc": "",
+       "torch": "index_reduce_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "scatter",
+       "signature": "scatter(dim: number, index: Tensor, src: Tensor): Tensor",
+       "doc": "`torch.Tensor.scatter` — **overwrite at the indexed positions.** borch.ts calls\nit `scatterSet`, so torch's own name was absent while the operation was there.",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "scatter_",
+       "signature": "scatter_(dim: number, index: Tensor, src: Tensor): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "scatterAdd_",
+       "signature": "scatterAdd_(dim: number, index: Tensor, src: Tensor): Tensor",
+       "doc": "",
+       "torch": "scatter_add_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "scatterReduce_",
+       "signature": "scatterReduce_(dim: number, index: Tensor, src: Tensor, reduce: string, includeSelf?: boolean): Tensor",
+       "doc": "",
+       "torch": "scatter_reduce_",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "copy_",
+       "signature": "copy_(src: Tensor, nonBlocking?: boolean): Tensor",
+       "doc": "`torch.Tensor.copy_` — the values of `src`, written into this one. borch.ts\nspells it `copyFrom`, so torch's name was absent while the operation was here.",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "contiguous",
+       "signature": "contiguous(memoryFormat?: string | null): Tensor",
+       "doc": "`torch.Tensor.contiguous`. **Always this tensor**, and here that is right.\n\nThe core had to be fixed for handing back `self`: numpy holds genuinely\nnon-contiguous views, so after a transpose `is_contiguous()` gave the opposite\nanswer from torch. **This side has no such state** — `strides()` is computed\nfrom the shape every time, and every shape operation materialises through a\nplan rather than re-describing the same buffer.\n\nSo the same two lines are a defect there and the truth here, and the difference\nis a property of the storage rather than of the code. Written down because the\nnext person to read these will have read the core's comment first.",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "isContiguous",
+       "signature": "isContiguous(memoryFormat?: string | null): boolean",
+       "doc": "See `contiguous` — there is no non-contiguous tensor on this side.",
+       "torch": "is_contiguous",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "dsplit",
+       "signature": "dsplit(parts: number): Tensor[]",
+       "doc": "Split along **axis 2**. `torch.Tensor.dsplit`.",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "type",
+       "signature": "type(dtype?: DType, nonBlocking?: boolean): string | Tensor",
+       "doc": "`torch.Tensor.type`. **With no argument it names the type** — the first thing\nanybody writes to find out what they are holding — and with one it converts.",
+       "section": {
+        "ko": "In-place operations",
+        "en": "In-place operations"
+       }
+      },
+      {
+       "name": "newZeros",
+       "signature": "newZeros(shape: readonly number[]): Tensor",
+       "doc": "Zeros of `shape`, in **this** tensor's dtype. `torch.Tensor.new_zeros`.",
+       "torch": "new_zeros",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "newOnes",
+       "signature": "newOnes(shape: readonly number[]): Tensor",
+       "doc": "Ones of `shape`, in this tensor's dtype.",
+       "torch": "new_ones",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "newEmpty",
+       "signature": "newEmpty(shape: readonly number[]): Tensor",
+       "doc": "A tensor of `shape` in this dtype, **values undefined**. torch gives whatever\nthe allocation held; this gives zeros, and the golden asks about the shape and\nthe dtype only — pinning the values would make them the specification.",
+       "torch": "new_empty",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "newFull",
+       "signature": "newFull(shape: readonly number[], value: number, dtype?: DType | null, device?: string | null, requiresGrad?: boolean, layout?: string | null, pinMemory?: boolean): Tensor",
+       "doc": "`shape` filled with `value`, in this tensor's dtype.",
+       "torch": "new_full",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "isSameSize",
+       "signature": "isSameSize(other: Tensor): boolean",
+       "doc": "`torch.Tensor.is_same_size` — shapes equal, and nothing about the values.",
+       "torch": "is_same_size",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "take",
+       "signature": "take(index: Tensor): Tensor",
+       "doc": "The elements at flat positions, ignoring shape. `torch.Tensor.take`.\n\n**It is not `gather`.** `gather` walks one axis and keeps the others;\nthis reads the tensor as one long row and always gives back a 1-D answer.",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "takeAlongDim",
+       "signature": "takeAlongDim(indices: Tensor, dim?: number | null): Tensor",
+       "doc": "`torch.Tensor.take_along_dim` — `gather` along `dim`, and **`take` when `dim` is\nleft out**, which is torch's rule and the reason the two names are one function.",
+       "torch": "take_along_dim",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "var",
+       "signature": "var(dim?: number, correction?: number, keepdim?: boolean, unbiased?: boolean): Tensor",
+       "doc": "`torch.Tensor.var`. borch.ts spells the operation `variance`.",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
+       }
+      },
+      {
+       "name": "transpose_",
+       "signature": "transpose_(): Tensor",
+       "doc": "",
+       "section": {
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -3356,8 +3587,8 @@
        "signature": "squeeze_(dim: number): Tensor",
        "doc": "",
        "section": {
-        "ko": "In-place operations",
-        "en": "In-place operations"
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -3365,8 +3596,8 @@
        "signature": "unsqueeze_(dim: number): Tensor",
        "doc": "",
        "section": {
-        "ko": "In-place operations",
-        "en": "In-place operations"
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -3374,8 +3605,8 @@
        "signature": "tril_(diagonal?: number): Tensor",
        "doc": "",
        "section": {
-        "ko": "In-place operations",
-        "en": "In-place operations"
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -3383,8 +3614,8 @@
        "signature": "triu_(diagonal?: number): Tensor",
        "doc": "",
        "section": {
-        "ko": "In-place operations",
-        "en": "In-place operations"
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -3392,8 +3623,8 @@
        "signature": "cumsum_(dim?: number): Tensor",
        "doc": "",
        "section": {
-        "ko": "In-place operations",
-        "en": "In-place operations"
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -3401,8 +3632,8 @@
        "signature": "cumprod_(dim?: number): Tensor",
        "doc": "",
        "section": {
-        "ko": "In-place operations",
-        "en": "In-place operations"
+        "ko": "The `new_*` family, and four more built from what is here",
+        "en": "The `new_*` family, and four more built from what is here"
        }
       },
       {
@@ -6838,7 +7069,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 714,
+   "count": 738,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -15987,5 +16218,5 @@
    "count": 9
   }
  ],
- "total": 2101
+ "total": 2125
 }

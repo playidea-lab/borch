@@ -5284,6 +5284,10 @@ function addRecent(out: Map<string, Case>): void {
   const other4 = (): Tensor => Tensor.from([1, 1, 0, 0], [4], { dtype: "bool" });
   const plain4 = (): Tensor => Tensor.from([1, 4, 9, 2], [4]);
   const twos4 = (): Tensor => Tensor.from([2, 2, 2, 2], [4]);
+  // Carried verbatim from `at` / `feed` / `mask4` in `tests/cases.py`.
+  const at2 = (): Tensor => Tensor.from([0, 2], [2], { dtype: "int64" });
+  const feed2 = (): Tensor => Tensor.from([10, 20], [2]);
+  const mask4 = (): Tensor => Tensor.from([1, 0, 1, 0], [4], { dtype: "bool" });
   const pos4 = (): Tensor => Tensor.from([2, 3, 4, 5], [4]);
   const ramp23 = (): Tensor => Tensor.from([0, 1, 2, 3, 4, 5], [2, 3]);
   const pairs: [string, () => Tensor, (t: Tensor) => Tensor][] = [
@@ -5343,6 +5347,21 @@ function addRecent(out: Map<string, Case>): void {
     ["lt_", plain4, (x) => x.lt_(twos4())],
     ["ne_", plain4, (x) => x.ne_(twos4())],
     ["xlogy_", plain4, (x) => x.xlogy_(twos4())],
+    // **Ten in-place forms whose partner was already here.** Every one mutates, and
+    // none was held by a case — they went into `tensor.ts` and the only thing that
+    // would notice a wrong write is this table.
+    ["index_add_", plain4, (x) => x.indexAdd_(0, at2(), feed2())],
+    ["index_copy_", plain4, (x) => x.indexCopy_(0, at2(), feed2())],
+    ["index_fill_", plain4, (x) => x.indexFill_(0, at2(), 5.0)],
+    ["index_reduce_", plain4,
+      (x) => x.indexReduce_(0, at2(), feed2(), "amax")],
+    ["masked_fill_", plain4, (x) => x.maskedFill_(mask4(), 9.0)],
+    ["scatter_", plain4, (x) => x.scatter_(0, at2(), feed2())],
+    ["scatter_add_", plain4, (x) => x.scatterAdd_(0, at2(), feed2())],
+    ["scatter_reduce_", plain4,
+      (x) => x.scatterReduce_(0, at2(), feed2(), "sum")],
+    ["swapaxes_", ramp23, (x) => x.swapaxes_(0, 1)],
+    ["conj_physical_", plain4, (x) => x.conjPhysical_()],
     // **In-place operations that change the shape.** Asked with squares alone they pass
     // unchanged.
     ["t_", ramp23, (x) => x.t_()],

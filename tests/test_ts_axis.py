@@ -108,7 +108,32 @@ FROZEN = {
     # `to_dense`) took reasons rather than implementations: every one is a question
     # about a layout borch.ts does not have, and the three that answer do so only
     # because dense is the trivial case. Unexplained gaps 47 → 40.
-    "Tensor": 73,
+    # **73 → 49, and `Tensor` has no unexplained gap left.**
+    #
+    # Twenty-four carried across, and every single one already existed under another
+    # spelling or was one delegation from a method that did:
+    #
+    #   ten in-place forms   `conjPhysical_` `swapaxes_` `maskedFill_` `indexAdd_`
+    #                        `indexCopy_` `indexFill_` `indexReduce_` `scatter_`
+    #                        `scatterAdd_` `scatterReduce_` — each `mutate(partner)`,
+    #                        and written one by one because their argument lists
+    #                        differ, which is what that file's note is actually about
+    #   name only            `scatter` (`scatterSet`) · `var` (`variance`) ·
+    #                        `copy_` (`copyFrom`) · `take` · `takeAlongDim`
+    #   trivially true       `contiguous` · `isContiguous` — `strides()` is computed
+    #                        from the shape here, so unlike the core there is no
+    #                        non-contiguous state to be wrong about
+    #   built from parts     the five `new_*` · `isSameSize` · `dsplit` · `type`
+    #
+    # The rest took reasons rather than code, and the reasons are the point:
+    # `apply_`/`map_`/`map2_` need a per-element callback and reading the values back
+    # is asynchronous; the `resize_`/`set_` family re-aims storage a borch.ts tensor
+    # owns; `sspaddmm` and the sparse queries ask about a layout that does not exist.
+    #
+    # **Three are marked `owed` rather than refused** — `sum_to_size`,
+    # `multinomial`, `retain_grad`. That word is doing work: without it "no reason"
+    # means *nobody looked*, and these have been looked at and are ordinary work.
+    "Tensor": 49,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's

@@ -56,11 +56,20 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # names — none of them has a counterpart in TypeScript.
 PYTHON_SIDE = """
 as_tensor can_cast dense_dim from_numpy get_default_dtype get_device
-get_rng_state initial_seed is_contiguous is_distributed is_grad_enabled
+get_rng_state initial_seed is_distributed is_grad_enabled
 is_inference is_inference_mode_enabled is_storage numpy promote_types
 set_rng_state share_memory_ sparse_dim to_dense tolist typename
-asarray resize_as_ storage_offset type values
+asarray resize_as_ storage_offset values
 """.split()
+# `is_contiguous` and `type` were here as "Python type names" and "looking into
+# storage". **Neither was.** `is_contiguous` is a question about the layout and the
+# answer on this side is always true, because `strides()` is computed from the shape
+# and every shape operation materialises a new buffer — so it is a one-line method,
+# not a Python-only concept. `type()` names the dtype, which TypeScript has as much
+# of as Python does.
+#
+# Both went in as delegations. A list of "things that cannot cross" is a claim about
+# the other language, and two of these were claims about our own file layout.
 # `is_floating_point`, `is_signed` and `is_nonzero` were here. The first two were written
 # down as "dtype attributes" and the third as "the Python surface", and **all three are
 # torch's names and were absent over there.** It surfaced while carrying across the nine
@@ -78,7 +87,16 @@ asarray resize_as_ storage_offset type values
 # written beside it. Unwritten, the next person repeats the same check.
 ALIASED = {
     "grid_sampler": "gridSample",
-    "is_same_size": "comparing shape",
+    # **Six more retired in one pass**, and the pattern is now unmistakable:
+    # `is_same_size`, `scatter`, `take`, `take_along_dim`, `is_contiguous`, `type`.
+    # Every one recorded where the work already was — `scatterSet`, `indexSelect`
+    # after a flatten, `gather` — and every one closed with a delegation of one to
+    # three lines once a check finally said the *name* was missing rather than the
+    # feature.
+    #
+    # Eight rows have now left this table the same way. It is worth saying what that
+    # makes the table: **not a list of debts but a map of where things are**, and the
+    # debts were mostly spellings.
     # `max_pool1d_with_indices` retired from here: borch.ts carries torch's own
     # spelling now, in `functional.ts`, so it is no longer an alias but a name.
     # **This row was right the whole time** — the computation was there under
@@ -89,10 +107,7 @@ ALIASED = {
     # count was `size` all along and now it is also `numel`. **Two rows in this
     # table retired the same day**, both to one-line delegations, both because a
     # different check finally said the name was missing rather than the feature.
-    "scatter": "scatterSet",
     "swapdims": "swapaxes",
-    "take": "indexSelect (after flattening)",
-    "take_along_dim": "gather",
     # `broadcast_to`, `moveaxis`, `vdot` and `t` were here, written down as **not missing,
     # since they exist under a different spelling** — but if the spelling torch offers is
     # absent over there, code written with that name simply does not run. All four went in

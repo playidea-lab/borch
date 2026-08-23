@@ -9992,8 +9992,27 @@ def inplace_cases(inp=None):
     twos = np.array([2., 2., 2., 2.], dtype=np.float32)
     pos = np.array([2., 3., 4., 5.], dtype=np.float32)      # for the ones whose domain is positive
     grid = np.arange(6, dtype=np.float32).reshape(2, 3)
+    at = np.array([0, 2], dtype=np.int64)                   # positions, for the index family
+    feed = np.array([10., 20.], dtype=np.float32)
+    mask4 = np.array([True, False, True, False])
 
     derived = (
+        # **Ten in-place forms whose partner was already on both sides.** Every one
+        # mutates, and not one was held by a case — I added them to borch.ts and the
+        # only thing that would have noticed a wrong write is this table.
+        ("index_add_", lambda L, x: x.index_add_(0, L.tensor(at), L.tensor(feed)), plain),
+        ("index_copy_", lambda L, x: x.index_copy_(0, L.tensor(at), L.tensor(feed)), plain),
+        ("index_fill_", lambda L, x: x.index_fill_(0, L.tensor(at), 5.0), plain),
+        ("index_reduce_",
+         lambda L, x: x.index_reduce_(0, L.tensor(at), L.tensor(feed), "amax"), plain),
+        ("masked_fill_", lambda L, x: x.masked_fill_(L.tensor(mask4), 9.0), plain),
+        ("scatter_", lambda L, x: x.scatter_(0, L.tensor(at), L.tensor(feed)), plain),
+        ("scatter_add_",
+         lambda L, x: x.scatter_add_(0, L.tensor(at), L.tensor(feed)), plain),
+        ("scatter_reduce_",
+         lambda L, x: x.scatter_reduce_(0, L.tensor(at), L.tensor(feed), "sum"), plain),
+        ("swapaxes_", lambda L, x: x.swapaxes_(0, 1), grid),
+        ("conj_physical_", lambda L, x: x.conj_physical_(), plain),
         ("bitwise_and_", lambda L, x: x.bitwise_and_(3), ints),
         ("bitwise_or_", lambda L, x: x.bitwise_or_(3), ints),
         ("bitwise_xor_", lambda L, x: x.bitwise_xor_(3), ints),

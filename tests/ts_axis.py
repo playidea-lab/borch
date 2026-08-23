@@ -223,6 +223,60 @@ DELIBERATE: dict[str, str] = {
     **{f"Tensor::{n}": "a question about the sparse layout; borch.ts has one layout, "
                        "and the core only answers because dense is the trivial case"
        for n in ("dense_dim", "sparse_dim", "is_coalesced", "to_dense")},
+    "Tensor::sspaddmm": "sparse-by-sparse addmm; there is no sparse layout here",
+    # **Held absent on purpose, and checked in both directions.** A lesson page
+    # teaches a reader what to do without this class, and pins the absence at both
+    # ends — the sentence must stay and the name must not appear. Filling it would
+    # leave a page teaching a detour around a road that exists.
+    #
+    # The pooling itself is here (`adaptivePool`), and the nine `nn.functional`
+    # adaptive names are too — those are camelCase and `_folds_onto` refuses to fold
+    # a capitalised name, so the class stays a gap however many of them go in. That
+    # was measured against the index rather than assumed, including the positive
+    # control the page relies on (`AdaptiveAvgPool1d` must be *findable*).
+    #
+    # It moves when that page does, and not before.
+    "nn::AdaptiveAvgPool2d": "held — a lesson page teaches the way around this "
+                             "absence and pins it at both ends; the pooling itself "
+                             "is here as `adaptivePool`",
+    # **A per-element callback needs the values, and getting them is asynchronous.**
+    # torch's three run a Python function over every cell and are CPU-only for that
+    # reason. On this side the values live in a GPU buffer and `toArray()` returns a
+    # promise, so a *synchronous* `apply_` cannot exist — and an asynchronous one
+    # would be a different function wearing the name.
+    **{f"Tensor::{n}": "a per-element callback needs the values, and reading them "
+                       "back from the GPU is asynchronous — a synchronous apply_ "
+                       "cannot exist here"
+       for n in ("apply_", "map_", "map2_")},
+    # Storage surgery. borch.ts's tensor owns a GPU buffer of a fixed size and every
+    # shape operation materialises a new one through a plan; there is no second
+    # tensor pointing at the same storage for these to re-aim.
+    **{f"Tensor::{n}": "these re-aim or re-size the storage; a borch.ts tensor owns "
+                       "its buffer and shape operations materialise a new one"
+       for n in ("resize_", "resize_as", "resize_as_", "set_", "new")},
+    # `torch.inference_mode` is a second switch beside `no_grad`, and borch.ts has
+    # only the one. A tensor cannot be *in* a mode that does not exist.
+    "Tensor::is_inference": "there is no inference mode on this side, only no_grad",
+    # The core carries this to refuse it (no uint64, no settled hash spec) and the
+    # refusal is not built by a stub factory, so `refused()` cannot see it.
+    "Tensor::hash_tensor": "the core carries this only to refuse it — no uint64 and "
+                           "no settled hash spec — and the refusal is written by "
+                           "hand rather than by a stub factory",
+    # `igamma`/`igammac` are module functions in `special.ts`, which imports `Tensor`;
+    # a `Tensor.igamma` calling back into it would close the import cycle. The
+    # underscore forms need the plain ones to exist first, so both wait on that.
+    **{f"Tensor::{n}": "the partner lives in special.ts, which imports Tensor — a "
+                       "method calling back into it closes the import cycle"
+       for n in ("igamma_", "igammac_")},
+    # **Two that are owed rather than refused**, and saying so is the point of the
+    # row: `sum_to_size` folds broadcast axes back and `multinomial` draws by weight,
+    # and both are ordinary work nobody has done. They are here so that "no reason"
+    # means *nobody has looked*, and these have been looked at.
+    "Tensor::sum_to_size": "owed — folds broadcast axes back; ordinary work, not yet done",
+    "Tensor::multinomial": "owed — draws by weight; `WeightedRandomSampler` in data.ts "
+                           "does the same arithmetic and could be shared",
+    "Tensor::retain_grad": "owed — borch.ts keeps gradients on leaves only, and this "
+                           "asks for one on a non-leaf",
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

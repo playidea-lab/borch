@@ -2250,7 +2250,8 @@ export class Tensor implements Node<Tensor> {
   }
 
   /** The standard deviation. See `variance` for why `dim` comes first. */
-  std(dim?: number, correction = 1, keepdim = false): Tensor {
+  std(dim?: number, correction = 1, keepdim = false, unbiased?: boolean): Tensor {
+    if (unbiased !== undefined) return this.std(dim, unbiased ? 1 : 0, keepdim);
     // **It stops where torch stops** (measured). A division or a square root has no
     // answer that fits an integer cell — promoted quietly to float the way numpy does,
     // that code then breaks on real torch.
@@ -7187,6 +7188,200 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   // written one by one, and **the computation belongs to the underscore-less side** —
   // one expression in two copies diverges eventually, and the values are plausible
   // enough that it stays invisible.
+
+  // **Ten more, and these really are one by one.** The note above is right about
+  // *this* family: `indexReduce_` takes five arguments and `swapaxes_` takes two,
+  // so there is no shape for a table to hold. (The twelve elementwise binaries were
+  // the exception and come off one — `INPLACE_BINARY` below.)
+  //
+  // Every partner was already here. What was missing was the underscore, which is
+  // the sixth time in this session that a name read as absent while the work sat
+  // beside it.
+
+  conjPhysical_(): Tensor {
+    return this.mutate(() => this.conjPhysical());
+  }
+
+  swapaxes_(a: number, b: number): Tensor {
+    return this.mutate(() => this.swapaxes(a, b));
+  }
+
+  maskedFill_(mask: Tensor, value: number): Tensor {
+    return this.mutate(() => this.maskedFill(mask, value));
+  }
+
+  indexAdd_(dim: number, index: Tensor, source: Tensor, alpha = 1): Tensor {
+    return this.mutate(() => this.indexAdd(dim, index, source, alpha));
+  }
+
+  indexCopy_(dim: number, index: Tensor, source: Tensor): Tensor {
+    return this.mutate(() => this.indexCopy(dim, index, source));
+  }
+
+  indexFill_(dim: number, index: Tensor, value: number): Tensor {
+    return this.mutate(() => this.indexFill(dim, index, value));
+  }
+
+  indexReduce_(
+    dim: number, index: Tensor, source: Tensor, reduce: string,
+    includeSelf = true,
+  ): Tensor {
+    return this.mutate(() => this.indexReduce(dim, index, source, reduce, includeSelf));
+  }
+
+  /**
+   * `torch.Tensor.scatter` — **overwrite at the indexed positions.** borch.ts calls
+   * it `scatterSet`, so torch's own name was absent while the operation was there.
+   */
+  scatter(dim: number, index: Tensor, src: Tensor): Tensor {
+    return this.scatterSet(dim, index, src);
+  }
+
+  scatter_(dim: number, index: Tensor, src: Tensor): Tensor {
+    return this.mutate(() => this.scatterSet(dim, index, src));
+  }
+
+  scatterAdd_(dim: number, index: Tensor, src: Tensor): Tensor {
+    return this.mutate(() => this.scatterAdd(dim, index, src));
+  }
+
+  scatterReduce_(
+    dim: number, index: Tensor, src: Tensor, reduce: string, includeSelf = true,
+  ): Tensor {
+    return this.mutate(() => this.scatterReduce(dim, index, src, reduce, includeSelf));
+  }
+
+  /**
+   * `torch.Tensor.copy_` — the values of `src`, written into this one. borch.ts
+   * spells it `copyFrom`, so torch's name was absent while the operation was here.
+   */
+  copy_(src: Tensor, nonBlocking = false): Tensor {
+    // `nonBlocking` asks torch not to wait on an async device copy. Every write
+    // here has landed by the time this returns — carried because the seat is
+    // torch's, and a caller who passes it should not get a type error.
+    void nonBlocking;
+    return this.copyFrom(src);
+  }
+
+  /**
+   * `torch.Tensor.contiguous`. **Always this tensor**, and here that is right.
+   *
+   * The core had to be fixed for handing back `self`: numpy holds genuinely
+   * non-contiguous views, so after a transpose `is_contiguous()` gave the opposite
+   * answer from torch. **This side has no such state** — `strides()` is computed
+   * from the shape every time, and every shape operation materialises through a
+   * plan rather than re-describing the same buffer.
+   *
+   * So the same two lines are a defect there and the truth here, and the difference
+   * is a property of the storage rather than of the code. Written down because the
+   * next person to read these will have read the core's comment first.
+   */
+  contiguous(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("contiguous", memoryFormat);
+    return this;
+  }
+
+  /** See `contiguous` — there is no non-contiguous tensor on this side. */
+  isContiguous(memoryFormat: string | null = null): boolean {
+    noMemoryFormat("isContiguous", memoryFormat);
+    return true;
+  }
+
+  /** Split along **axis 2**. `torch.Tensor.dsplit`. */
+  dsplit(parts: number): Tensor[] {
+    return this.split(2, parts);
+  }
+
+  /**
+   * `torch.Tensor.type`. **With no argument it names the type** — the first thing
+   * anybody writes to find out what they are holding — and with one it converts.
+   */
+  type(dtype?: DType, nonBlocking = false): string | Tensor {
+    void nonBlocking;
+    if (dtype === undefined) {
+      const name = { float32: "Float", int64: "Long", bool: "Bool",
+                     complex64: "ComplexFloat" }[this.dtype as string] ?? "Float";
+      return `torch.${name}Tensor`;
+    }
+    return this.to(dtype);
+  }
+
+  // ── The `new_*` family, and four more built from what is here ─────────
+  //
+  // torch's `new_*` make a tensor **carrying this one's dtype**, which is the whole
+  // point of the name — `Tensor.zeros(shape)` cannot know it. The core's take
+  // `(*size, dtype, requires_grad)`; the shape is a list here because TypeScript has
+  // no `*args` that also takes a list.
+
+  /** Zeros of `shape`, in **this** tensor's dtype. `torch.Tensor.new_zeros`. */
+  newZeros(shape: readonly number[]): Tensor {
+    return Tensor.zeros([...shape]).to(this.dtype);
+  }
+
+  /** Ones of `shape`, in this tensor's dtype. */
+  newOnes(shape: readonly number[]): Tensor {
+    return Tensor.ones([...shape]).to(this.dtype);
+  }
+
+  /**
+   * A tensor of `shape` in this dtype, **values undefined**. torch gives whatever
+   * the allocation held; this gives zeros, and the golden asks about the shape and
+   * the dtype only — pinning the values would make them the specification.
+   */
+  newEmpty(shape: readonly number[]): Tensor {
+    return this.newZeros(shape);
+  }
+
+  /** `shape` filled with `value`, in this tensor's dtype. */
+  newFull(
+    shape: readonly number[], value: number, dtype: DType | null = null,
+    device: string | null = null, requiresGrad = false,
+    layout: string | null = null, pinMemory = false,
+  ): Tensor {
+    // torch's seven, in torch's order. The last four are **carried and refused**:
+    // left out, a positional call that reaches them lands on nothing, and the core
+    // refuses at the same seats for the same reason.
+    if (device !== null) throw new Error("newFull(device) is not here — there is one device.");
+    if (layout !== null) throw new Error("newFull(layout) is not here — there is one layout.");
+    if (pinMemory) throw new Error("newFull(pinMemory) is not here — there is no host pinning.");
+    const out = Tensor.full([...shape], value).broadcastTo([...shape])
+      .to(dtype ?? this.dtype);
+    out.requiresGrad = requiresGrad;
+    return out;
+  }
+
+  /** `torch.Tensor.is_same_size` — shapes equal, and nothing about the values. */
+  isSameSize(other: Tensor): boolean {
+    return this.shape.length === other.shape.length
+      && this.shape.every((n, i) => n === other.shape[i]);
+  }
+
+  /**
+   * The elements at flat positions, ignoring shape. `torch.Tensor.take`.
+   *
+   * **It is not `gather`.** `gather` walks one axis and keeps the others;
+   * this reads the tensor as one long row and always gives back a 1-D answer.
+   */
+  take(index: Tensor): Tensor {
+    return this.reshape([this.size]).indexSelect(0, index);
+  }
+
+  /**
+   * `torch.Tensor.take_along_dim` — `gather` along `dim`, and **`take` when `dim` is
+   * left out**, which is torch's rule and the reason the two names are one function.
+   */
+  takeAlongDim(indices: Tensor, dim: number | null = null): Tensor {
+    return dim === null ? this.take(indices) : this.gather(dim, indices);
+  }
+
+    /** `torch.Tensor.var`. borch.ts spells the operation `variance`. */
+  var(dim?: number, correction = 1, keepdim = false, unbiased?: boolean): Tensor {
+    // **`unbiased` is torch's older spelling and torch still takes it**, so refusing
+    // it would be a divergence rather than a tidy-up — even though its own docstring
+    // no longer documents it. Given, it wins: that is what an older call meant.
+    const take = unbiased === undefined ? correction : (unbiased ? 1 : 0);
+    return this.variance(dim, take, keepdim);
+  }
 
   transpose_(): Tensor {
     return this.mutate(() => this.transpose());
