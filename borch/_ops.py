@@ -2104,7 +2104,7 @@ def _slice_at(dim, start, end):
     return tuple(slice(None) for _ in range(dim)) + (slice(start, end),)
 
 
-def _pos_dim(t, dim):
+def _pos_dim(t, dim, extra=0):
     """A negative axis to a non-negative one.
 
     **`_slice_at` cannot take a negative.** `narrow(x, -1, …)` was **slicing axis
@@ -2112,8 +2112,24 @@ def _pos_dim(t, dim):
     went unseen for a long time. It first surfaced on a batched signal (1, 16)
     while assembling `stft` — the shape came out (0, 24) and `stack` stopped. It
     was luck that the shape collapsed loudly instead of the values being wrong.
+
+    **It did not check the range**, and every caller that reaches numpy inherited
+    numpy's `AxisError` — which subclasses `IndexError`, so those agree with torch by
+    luck. The callers that do their own slicing inherited **nothing**: `diff`,
+    `gradient` and `nanmedian` answered for `dim=7` on a two-dimensional tensor as
+    though the axis were the last one. Three plausible tensors, no error.
+
+    Found by sweeping torch's `dim` surface mechanically rather than by writing cases:
+    38 functions take a `dim`, and asking every one of them for an axis that does not
+    exist is a question no case list contained. The wording is torch's own.
     """
-    return dim + t.data.ndim if dim < 0 else dim
+    n = t.data.ndim
+    limit = n + extra
+    if not -limit <= dim < limit:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of "
+            f"[{-limit}, {limit - 1}], but got {dim})")
+    return dim + n if dim < 0 else dim
 
 
 def unbind(t, dim=0):
@@ -2787,6 +2803,10 @@ def flipud(t):
 
 def unflatten(t, dim, sizes):
     t = _wrap(t)
+    # Without this, an out-of-range `dim` slid past the end of the shape list and the
+    # refusal that followed was about the element count — a `RuntimeError` describing
+    # a shape nobody asked for, where torch names the axis.
+    _pos_dim(t, dim)
     shape = list(t.data.shape)
     shape[dim:dim + 1] = list(sizes)
     return t.reshape(*shape)
@@ -4059,6 +4079,11 @@ def diff(t, n=1, dim=-1, prepend=None, append=None):
     is not lost.
     """
     out = _wrap(t)
+    # **The axis is checked here rather than borrowed from a slice.** Slicing an
+    # axis that does not exist is not an error in Python — the answer came back as
+    # though `dim` were the last one, so `diff(x, dim=7)` on a 2-D tensor gave a
+    # plausible tensor and no complaint.
+    _pos_dim(out, dim)
     if prepend is not None or append is not None:
         parts = ([_wrap(prepend)] if prepend is not None else []) + [out] \
             + ([_wrap(append)] if append is not None else [])
@@ -8704,6 +8729,8 @@ def nanmedian(t, dim=None, keepdim=False):
                   '"median_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
     data = _np.asarray(t.data, dtype=_np.float64)
+    if dim is not None:
+        _pos_dim(t, dim)              # the sort below takes any axis without minding
     if dim is None:
         flat = data.reshape(-1)
         clean = flat[~_np.isnan(flat)]
@@ -8763,6 +8790,10 @@ def gradient(t, spacing=1, dim=None, edge_order=1):
     data = _np.asarray(t.data, dtype=_np.float64)
     axes = (tuple(_builtin_range(data.ndim)) if dim is None
             else (dim,) if isinstance(dim, int) else tuple(dim))
+    # `axis % data.ndim` below wraps rather than complains, so 7 became 1 on a 2-D
+    # tensor and the answer was the last axis's gradient under another name.
+    for axis in axes:
+        _pos_dim(t, axis)
     step = spacing if isinstance(spacing, (list, tuple)) else [spacing] * len(axes)
     outs = []
     for axis, gap in zip(axes, step):
