@@ -280,14 +280,28 @@ let pyodide = null;
 export async function loadPython(say = () => {}) {
   if (pyodide) return pyodide;
 
+  // **The GPU is required by `borch_webgpu` and not by Python mode**, and this gate
+  // used to be in front of both. Without WebGPU the whole thing stopped — including
+  // the core, which is numpy and has never touched a GPU.
+  //
+  // Measured before changing it: Pyodide, numpy and the core's ten modules, no
+  // adapter anywhere, `nn.Linear` trained 200 steps and the loss went 17.2945 →
+  // 0.000001 with the weight landing on 1.9992 against a true 2.0. Pyodide **is**
+  // wasm, so the fallback the site's table called "planned" was already loaded and
+  // held behind a check about a different thing.
+  //
+  // So the adapter is asked for and its absence is carried rather than thrown. What
+  // is lost is `borch_webgpu`; what remains is `import borch as torch`.
   const borch = await loadBorch();
   const probed = await borch.probe();
-  if (!probed.ok) throw new Error(probed.message);
+  const onGpu = probed.ok;
 
-  say(t("load.borchTs"));
-  await borch.init();
-  // The binding looks here. Without it, that side stops rather than quietly running on something else.
-  globalThis.borch = borch;
+  if (onGpu) {
+    say(t("load.borchTs"));
+    await borch.init();
+    // The binding looks here. Without it, that side stops rather than quietly running on something else.
+    globalThis.borch = borch;
+  }
 
   say(t("load.pyodide"));
   await loadScript(`${PYODIDE_DIR}pyodide.js`);
@@ -296,10 +310,16 @@ export async function loadPython(say = () => {}) {
   say(t("load.numpy"));
   await py.loadPackage("numpy");
 
-  say(t("load.binding"));
+  say(onGpu ? t("load.binding") : t("load.core"));
   const repo = new URL("../../", import.meta.url).href;
   const jobs = [];
-  for (const [pkg, modules] of Object.entries(PACKAGES)) {
+  // **Without an adapter the binding's modules are left off.** Written, they import
+  // fine and stop at the first call with a message about a device, which reads as a
+  // defect in whatever line the reader was running. Absent, `import borch_webgpu`
+  // says there is no such module, which is the true sentence.
+  const wanted = onGpu ? Object.entries(PACKAGES)
+                       : Object.entries(PACKAGES).filter(([pkg]) => pkg === "borch");
+  for (const [pkg, modules] of wanted) {
     py.FS.mkdirTree(`/work/${pkg}`);
     for (const name of modules) {
       jobs.push((async () => {

@@ -342,8 +342,8 @@ for step in range(201):
             <td>The eleven playground examples are the start of it</td></tr>
         <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">partial</span></td>
             <td>Manifest, hash check, environment report. Weights do load in a browser — measured, <code>access-control-allow-origin: *</code> on a 44.7MB safetensors. Not published to npm yet</td></tr>
-        <tr><td>WASM fallback</td><td><span class="state soon">planned</span></td>
-            <td>P2 in the PRD. Today, no WebGPU means it refuses</td></tr>
+        <tr><td>Without WebGPU — Python mode on wasm</td><td><span class="state now">here</span></td>
+            <td>Pyodide <strong>is</strong> wasm and the core is numpy, so <code>import borch as torch</code> trains with no adapter — measured in a browser with <code>navigator.gpu</code> removed: loss 17.2945 → 0.000001. What is missing then is <code>borch_webgpu</code>, and it says so by not being importable</td></tr>
         <tr><td>CUDA · distributed · mixed precision · torch.compile</td>
             <td><span class="state never">never</span></td>
             <td>Things that cannot exist in a browser, or that you must leave the browser to learn</td></tr>
