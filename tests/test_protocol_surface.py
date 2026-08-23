@@ -40,6 +40,21 @@ walk), empty (a length with nothing behind it), one element (scalar conversions 
 many (they must not), and **empty rows with a real second axis**, which is the shape
 that produced the original defect and which an earlier fix at a different shape did not
 reach.
+
+## What the pair count is, said exactly
+
+72 pairs is not 72 answers compared. Measured: **46 pairs where both sides produce a
+value, and 26 where both refuse** — the refusals agreeing about *whether*, not *what*.
+
+Both are real comparisons and the refusals are not filler: two of the defects this file
+found were exception *classes*, which live entirely in that half. But a reader given
+only the total would take it for 72 answers, and a sister file spent an afternoon on the
+version of that mistake where a fixture silently narrowed its question and left 98
+comparisons of a possible 216 with every count still looking plausible.
+
+`test_the_grid_keeps_asking_both_kinds_of_question` pins the split rather than the size.
+A change that turns answers into refusals leaves the total untouched, and the total is
+the only thing a floor can see.
 """
 
 import pathlib
@@ -144,6 +159,33 @@ def test_nothing_probed_is_also_written_down_as_unprobed():
                   if n.strip("_").replace("()", "") in
                   {p.strip("()").replace("np.", "") for p in PROBES})
     assert not both, f"listed as unprobed and also probed: {both}"
+
+
+def test_the_grid_keeps_asking_both_kinds_of_question():
+    """**Pins the split, not the size.**
+
+    A pair where both sides raise agrees about *whether* the call is allowed; a pair
+    where both answer agrees about *what*. Those are different questions and the total
+    cannot tell them apart — turn every answering pair into a refusing one and the count
+    of pairs is unchanged, while the file has stopped comparing values entirely.
+
+    Set as a floor on each half rather than an exact figure, because adding a shape
+    should be cheap. The numbers when written were 46 answering and 26 refusing.
+    """
+    answering = refusing = 0
+    for probe, shape in GRID:
+        fn, data = PROBES[probe], SHAPES[shape]
+        got = _ask(fn, borch.tensor(data.copy()))
+        if got.endswith("Error"):
+            refusing += 1
+        else:
+            answering += 1
+    assert answering >= 40, (
+        f"only {answering} pairs get a value out of the core, and there were 46.\n"
+        "  The grid can be the same size and have stopped comparing answers.")
+    assert refusing >= 20, (
+        f"only {refusing} pairs are refusals, and there were 26.\n"
+        "  Two of this file's findings were exception classes, which live only here.")
 
 
 @pytest.mark.parametrize("probe,shape", GRID, ids=lambda v: v)
