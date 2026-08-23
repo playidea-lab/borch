@@ -1500,32 +1500,111 @@ export class CosineAnnealingWarmRestarts extends LRScheduler {
  * used** — it is overwritten the moment this is built.
  */
 export class OneCycleLR extends LRScheduler {
-  private readonly initial: number;
-  private readonly minLr: number;
-  private readonly up: number;
-  private readonly down: number;
+  private readonly totalSteps: number;
+  private readonly anneal: "cos" | "linear";
+  /** `[endStep, from, to]` per phase — two normally, three under `threePhase`. */
+  private readonly phases: [number, number, number][];
 
-  constructor(opt: Optimizer, private readonly maxLr: number,
-              private readonly totalSteps: number, pctStart = 0.3,
-              divFactor = 25, finalDivFactor = 1e4) {
+  /**
+   * **torch's argument list, in torch's order.** It used to read
+   *
+   *     (opt, maxLr, totalSteps, pctStart, divFactor, finalDivFactor)
+   *
+   * which agrees with torch for three arguments and then parts for eleven
+   * consecutive positions. `new OneCycleLR(opt, 0.1, 200, 10, 100)` — a torch recipe's
+   * ten epochs of a hundred steps — set `pctStart` to 10 and `divFactor` to 100.
+   * `pctStart` is a fraction of the cycle, so given 10 the rate climbs for the whole
+   * run and never comes back down. Nothing throws, and the shape of that curve is the
+   * single thing this scheduler exists to control.
+   *
+   * `epochs`/`stepsPerEpoch` are torch's other way of saying `totalSteps`; one of the
+   * two has to be given.
+   */
+  constructor(opt: Optimizer, maxLr: number,
+              totalSteps: number | null = null,
+              epochs: number | null = null,
+              stepsPerEpoch: number | null = null,
+              pctStart = 0.3,
+              annealStrategy: "cos" | "linear" = "cos",
+              cycleMomentum = false,
+              baseMomentum = 0.85,
+              maxMomentum = 0.95,
+              divFactor = 25,
+              finalDivFactor = 1e4,
+              threePhase = false) {
     super(opt);
-    this.initial = maxLr / divFactor;
-    this.minLr = this.initial / finalDivFactor;
+    if (totalSteps === null) {
+      if (epochs === null || stepsPerEpoch === null) {
+        throw new Error(
+          "OneCycleLR needs totalSteps, or epochs and stepsPerEpoch.");
+      }
+      totalSteps = epochs * stepsPerEpoch;
+    } else if (epochs !== null || stepsPerEpoch !== null) {
+      // torch takes `totalSteps` and ignores the other two. This refuses, because the
+      // two answers can disagree and keeping one of them quietly is how the argument
+      // order above stayed unnoticed in the first place.
+      throw new Error(
+        "OneCycleLR: give totalSteps, or epochs and stepsPerEpoch — not both.");
+    }
+    if (cycleMomentum) {
+      // **The one part of torch's behaviour this side does not have, refused rather
+      // than ignored.** torch's default is `cycle_momentum=True`: momentum runs
+      // opposite to the rate, highest where the rate is lowest. The core (numpy) does
+      // it and agrees with torch to 1e-16 over 24 configurations.
+      //
+      // Here momentum is a private field on each optimizer — `SGD`'s
+      // `private readonly momentum`, `Adam`'s `betas` — and not something on the
+      // param group a scheduler can reach, and `SGD` decides at construction whether
+      // to allocate momentum buffers at all. Cycling it means moving momentum onto
+      // `ParamGroup` across every optimizer and making that allocation conditional on
+      // something that has not happened yet.
+      //
+      // So the default here is `false` where torch's is `true`. That is a real
+      // difference and it is refused loudly rather than left to be discovered from a
+      // training curve.
+      throw new Error(
+        `OneCycleLR(cycleMomentum) is not here yet — ${maxMomentum} down to ` +
+        `${baseMomentum} and back has nowhere to be written: momentum lives on the ` +
+        "optimizer rather than on the param group on this side. The numpy core does " +
+        "cycle it.");
+    }
+    if (annealStrategy !== "cos" && annealStrategy !== "linear") {
+      throw new Error(
+        `OneCycleLR: annealStrategy is 'cos' or 'linear', not ${annealStrategy}.`);
+    }
+    this.totalSteps = totalSteps;
+    this.anneal = annealStrategy;
+    const initial = maxLr / divFactor;
+    const minLr = initial / finalDivFactor;
     // torch's arithmetic verbatim — `pctStart × totalSteps − 1`, not
     // `pctStart × (totalSteps − 1)`.
-    this.up = pctStart * totalSteps - 1;
-    this.down = totalSteps - this.up - 1;
+    //
+    // The second boundary under `threePhase` is `2 × pctStart × totalSteps − 2`,
+    // which is `2 × rise` and not `2 × rise + 1`. Written the second way the middle
+    // phase runs one step long and everything after it slides — 7.4e-02 against
+    // torch, measured on the core, on a curve that still looked like a one-cycle
+    // curve.
+    const rise = pctStart * totalSteps - 1;
+    this.phases = threePhase
+      ? [[rise, initial, maxLr], [2 * rise, maxLr, initial],
+         [totalSteps - 1, initial, minLr]]
+      : [[rise, initial, maxLr], [totalSteps - 1, maxLr, minLr]];
   }
 
   protected override compute(epoch: number): number {
     const t = Math.min(epoch, this.totalSteps - 1);
-    const rising = t <= this.up;
-    const frac = rising
-      ? (this.up ? t / this.up : 1)
-      : (t - this.up) / Math.max(1e-12, this.down);
-    const lo = rising ? this.initial : this.maxLr;
-    const hi = rising ? this.maxLr : this.minLr;
-    return lo + (hi - lo) * (1 - Math.cos(Math.PI * frac)) / 2;
+    let start = 0;
+    for (const [i, [end, lo, hi]] of this.phases.entries()) {
+      if (t <= end || i === this.phases.length - 1) {
+        const span = end - start;
+        const frac = Math.min(1, Math.max(0, span > 0 ? (t - start) / span : 1));
+        return this.anneal === "linear"
+          ? lo + (hi - lo) * frac
+          : lo + (hi - lo) * (1 - Math.cos(Math.PI * frac)) / 2;
+      }
+      start = end;
+    }
+    throw new Error("unreachable — the last phase always answers");
   }
 }
 

@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 73
+  "missing": 74
  },
  "modules": [
   {
@@ -11426,8 +11426,8 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(opt: Optimizer, maxLr: number, totalSteps: number, pctStart?: number, divFactor?: number, finalDivFactor?: number)",
-       "doc": ""
+       "signature": "constructor(opt: Optimizer, maxLr: number, totalSteps?: number | null, epochs?: number | null, stepsPerEpoch?: number | null, pctStart?: number, annealStrategy?: \"cos\" | \"linear\", cycleMomentum?: boolean, baseMomentum?: number, maxMomentum?: number, divFactor?: number, finalDivFactor?: number, threePhase?: boolean)",
+       "doc": "**torch's argument list, in torch's order.** It used to read\n\n    (opt, maxLr, totalSteps, pctStart, divFactor, finalDivFactor)\n\nwhich agrees with torch for three arguments and then parts for eleven\nconsecutive positions. `new OneCycleLR(opt, 0.1, 200, 10, 100)` — a torch recipe's\nten epochs of a hundred steps — set `pctStart` to 10 and `divFactor` to 100.\n`pctStart` is a fraction of the cycle, so given 10 the rate climbs for the whole\nrun and never comes back down. Nothing throws, and the shape of that curve is the\nsingle thing this scheduler exists to control.\n\n`epochs`/`stepsPerEpoch` are torch's other way of saying `totalSteps`; one of the\ntwo has to be given."
       },
       {
        "name": "compute",

@@ -143,20 +143,51 @@ SHIFTED = {
     # at zero: two different things, both plausible small numbers, and the run trains
     # and trains slightly wrong.
     #
-    # `Adagrad` stays because `foreach` sits before torch's keyword-only boundary and
-    # we have nothing to put there — it changes no value, so it is absent rather than
-    # refused, and the row is honest about the position being unmatched.
-    "optim": 1,
+    # **1 → 0, and nothing about `Adagrad` changed.** The row said an argument sat in
+    # the wrong seat: the core's `maximize` where torch has `foreach`. Both libraries
+    # write it `*, maximize`, so no positional call can reach either one. The hazard
+    # could not be written down in Python.
+    #
+    # It was never a bad row in a working bucket. `shifted` claims *a positional call
+    # lands on the wrong parameter*, and the measurement was deciding that from names
+    # in order with no way to ask whether a positional call was possible — in every
+    # row, including all 109 it calls `agree`. `signature_read.positional()` exists
+    # now and `_reachable()` re-asks the same verdict on the reachable prefix.
+    #
+    # `Adagrad` moved to `shorter`, where it names `foreach`. That direction is the
+    # whole point: the tempting fix was to drop keyword-only parameters in
+    # `parameters()` itself, which retires two invented hazards and **hides 54 real
+    # absences** — thirteen `bias` flags on the normalisation layers, six on `Adam`.
+    # See `test_keyword_only_arguments_stay_visible`, which is the wall in front of
+    # that fix.
+    "optim": 0,
     # 2 → 1. `ReduceLROnPlateau` took torch's `threshold_mode`, `cooldown`
     # and `eps` — three arguments missing from the middle, so a call written
     # from torch's documentation put the cooldown where `threshold_mode` goes
     # and the minimum rate where `cooldown` does. All three implemented and
     # checked against real torch over seven configurations, twelve steps each.
     #
-    # `OneCycleLR` stays: `epochs` and `steps_per_epoch` are an alternative
-    # spelling of `total_steps` and the momentum cycle is a feature, not a
-    # rename. It is work rather than a shift, and it is not done.
-    "optim.lr_scheduler": 1,
+    # **1 → 0.** `OneCycleLR` was the row this comment said was "work rather than a
+    # shift, and it is not done". Both halves of that were true and it was still the
+    # most dangerous row on the axis: the two lists agree for three arguments and then
+    # part for **eleven consecutive positions**. `OneCycleLR(opt, 0.1, None, 10, 100)`
+    # — a torch recipe's ten epochs of a hundred steps — set `pct_start` to 10 and
+    # `div_factor` to 100. `pct_start` is a fraction of the cycle, so the rate climbs
+    # past the end of the run and never comes down, and nothing raises.
+    #
+    # Done rather than described: `epochs`/`steps_per_epoch`, `anneal_strategy`,
+    # `three_phase`, and the momentum cycle, which torch turns on by default and this
+    # simply did not have. Checked against real torch over 24 configurations of
+    # strategy × phases × momentum × `pct_start`, twenty steps each, learning rate and
+    # momentum both — worst difference 1.1e-16, and the `betas` path against `Adam`
+    # separately.
+    #
+    # Two arithmetic edges the first version got wrong and torch caught: the middle
+    # boundary under `three_phase` is `2 × pct_start × total_steps − 2`, and momentum
+    # in the third phase is **flat at `max_momentum`** rather than following the rate.
+    # The obvious rule — momentum runs opposite to the rate — gets both other phases
+    # exactly right, which is why it survived being written.
+    "optim.lr_scheduler": 0,
     "linalg": 0,
     "utils.data": 0,
 }
@@ -201,7 +232,14 @@ SHORTER = {
     # torch's execution switches and change no value. **A row moving from `shifted`
     # to `shorter` is the fix**, not a wash — one meant an argument in the wrong
     # seat, this one means a feature torch has and we do not.
-    "optim": 11,
+    #
+    # 11 → 12: `Adagrad` arrived the same way, except that nothing about `Adagrad` was
+    # fixed. The measurement stopped claiming a positional hazard that Python forbids,
+    # and what remains is the true difference — torch has a positional `foreach` after
+    # `eps` and the core stops there. Landing it here rather than in a bucket of its
+    # own is deliberate: this is the only bucket that names a missing argument, and a
+    # private one would have taken `foreach` out of the report to make it look tidier.
+    "optim": 12,
     "optim.lr_scheduler": 1,
     "linalg": 0,
     "utils.data": 1,
@@ -346,3 +384,112 @@ def test_the_measurement_still_runs_as_a_script():
         capture_output=True, text=True, cwd=ROOT)
     assert out.returncode == 0, out.stderr[-2000:]
     assert "utils.data" in out.stdout
+
+
+# **torch's keyword-only parameters that the core does not have.** Counted here so
+# that hiding them has a price.
+#
+# The fix that retired the `Adagrad` row could have been written two ways. The one
+# taken adds `signature_read.positional()` and uses it only to re-ask a shift verdict
+# on the reachable prefix. The one not taken drops keyword-only parameters inside
+# `parameters()`, which is three lines shorter, retires the same row, and makes every
+# number below vanish at once — 54 arguments torch has and we do not, gone from every
+# comparison in the repository, with no bucket going up to say so.
+#
+# It is the shape this repository keeps finding, in its most comfortable form: **the
+# cheaper fix and the silent one are the same edit.** A total would not have moved.
+# `SHORTER` would have gone *down*, which reads as progress. The only thing that
+# separates them is a number that exists solely to be lowered by work and raised by
+# nothing else.
+#
+# Thirteen of the 54 are one argument: `bias` on `BatchNorm{1,2,3}d`, `GroupNorm`,
+# `InstanceNorm{1,2,3}d` and the six Lazy variants — `BatchNorm1d(..., *, bias=True)`.
+# Six more are `Adam`'s. None of them is fixed by this commit; they are made
+# countable by it, which is the difference between an absence and a silence.
+KEYWORD_ONLY_ABSENCES = 54
+
+
+def _keyword_only_gaps():
+    """`[(space, name, [argument, ...]), ...]` — torch's keyword-only, ours absent.
+
+    **Reads `inspect` directly and not `signature_read.parameters`.** A check that
+    guards a reader against dropping something cannot ask that reader whether it
+    dropped it — the answer would come back clean by construction, and the count
+    would fall to zero for the one reason it must never fall to zero for.
+    """
+    import inspect
+
+    import torch_gap
+    import torch_signatures_core
+
+    def read(thing):
+        target = thing.__init__ if inspect.isclass(thing) else thing
+        try:
+            return inspect.signature(target).parameters
+        except (TypeError, ValueError):
+            return None
+
+    found = []
+    for space, ours, theirs in torch_signatures_core._spaces():
+        for name in sorted(torch_gap._public(ours)):
+            mine, yours = getattr(ours, name, None), getattr(theirs, name, None)
+            if mine is None or yours is None:
+                continue
+            theirs_p, mine_p = read(yours), read(mine)
+            if theirs_p is None or mine_p is None:
+                continue
+            missing = [p.name for p in theirs_p.values()
+                       if p.kind is p.KEYWORD_ONLY and p.name not in mine_p]
+            if missing:
+                found.append((space, name, missing))
+    return found
+
+
+def test_keyword_only_arguments_stay_visible():
+    """Reading a signature must not drop what cannot be passed by position.
+
+    This is the direction `_reachable()` must not over-correct in. It fails if
+    `parameters()` ever starts filtering by `kind` — every gap below would read as
+    zero, and no other check in this repository would notice.
+    """
+    gaps = _keyword_only_gaps()
+    total = sum(len(args) for _s, _n, args in gaps)
+    assert total == KEYWORD_ONLY_ABSENCES, (
+        f"{total} keyword-only arguments are torch's and not ours, "
+        f"{KEYWORD_ONLY_ABSENCES} written.\n"
+        "  Lower means some were implemented — edit the number down and say which.\n"
+        "  Zero means the reader started hiding them rather than the core gaining\n"
+        "  them; check `signature_read.parameters` before believing it.\n  "
+        + "\n  ".join(f"{s}.{n}: {', '.join(a)}" for s, n, a in gaps[:8]))
+
+    from signature_read import parameters
+    import torch
+    assert "maximize" in (parameters(torch.optim.Adagrad.__init__) or []), (
+        "`parameters()` has stopped reporting keyword-only arguments. That retires "
+        "the two rows `_reachable()` was written for and hides all "
+        f"{KEYWORD_ONLY_ABSENCES} absences above with them.")
+
+
+def test_a_forbidden_shift_is_not_reported_as_one():
+    """The `Adagrad` shape, asked directly rather than through the totals.
+
+    Built by hand so the check survives `Adagrad` being fixed: a pair whose names go
+    out of order only where neither side can be called positionally.
+    """
+    import ts_signatures
+    from signature_read import parameters, positional
+
+    def theirs(a, b, c=None, *, maximize=False, fused=None):
+        pass
+
+    def ours(a, b, *, maximize=False):
+        pass
+
+    assert ts_signatures._verdict(parameters(ours), parameters(theirs)) == "inserted", (
+        "the by-name reading of this pair is supposed to claim a shift — if it does "
+        "not, the example no longer demonstrates the thing it guards")
+    # `longer` rather than `shorter` because `_verdict(wanted, yours)` is asked with
+    # ours first: torch's list runs past the end of ours. Both land in the same bucket
+    # in the tables above, which is why the totals read as "shorter" either way.
+    assert ts_signatures._verdict(positional(ours), positional(theirs)) == "longer", (
+        "asked of the reachable prefix, the same pair is a short tail and nothing more")

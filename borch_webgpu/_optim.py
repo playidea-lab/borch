@@ -377,11 +377,30 @@ _SCHED_ARGS = {
     "PolynomialLR": ("total_iters", "power"),
     "MultiplicativeLR": ("lr_lambda",),
     "CosineAnnealingWarmRestarts": ("T_0", "T_mult", "eta_min"),
-    "OneCycleLR": ("max_lr", "total_steps", "pct_start", "div_factor",
-                   "final_div_factor"),
+    # **This table describes another module's parameter order**, which is the one kind
+    # of entry that stays plausible after it goes wrong — it is data, not a call, so
+    # nothing type-checks it and nothing raises. `OneCycleLR` grew from six names to
+    # thirteen when the core took torch's list; had this stayed at six, `div_factor`
+    # would have gone into `epochs`' seat and the schedule would have been wrong with
+    # no error anywhere.
+    "OneCycleLR": ("max_lr", "total_steps", "epochs", "steps_per_epoch", "pct_start",
+                   "anneal_strategy", "cycle_momentum", "base_momentum",
+                   "max_momentum", "div_factor", "final_div_factor", "three_phase"),
     "CyclicLR": ("base_lr", "max_lr", "step_size_up", "step_size_down", "mode",
                  "gamma"),
 }
+
+
+# A slot nobody filled, kept apart from a slot somebody filled with `None`. torch has
+# arguments whose default *is* `None` — `steps_per_epoch`, `step_size_down` — and the
+# two have to cross the boundary differently.
+_DEFAULT = object()
+
+
+def _undefined():
+    """JavaScript's `undefined`, which is what makes a TypeScript default apply."""
+    import js
+    return js.undefined
 
 
 def _sched(js_name):
@@ -391,10 +410,18 @@ def _sched(js_name):
         for i, key in enumerate(_SCHED_ARGS.get(js_name, ())):
             if key in kw:
                 while len(out) <= i:
-                    out.append(None)
+                    out.append(_DEFAULT)
                 out[i] = kw[key]
-        while out and out[-1] is None:
+        while out and out[-1] is _DEFAULT:
             out.pop()
+        # **A skipped middle slot has to reach JavaScript as `undefined`, not `null`.**
+        # A TypeScript default parameter applies for `undefined` and *not* for `null`,
+        # so `OneCycleLR(max_lr=…, total_steps=…, div_factor=10)` — which leaves seven
+        # slots unfilled between them — would hand `pctStart` a null, and every rate on
+        # the curve comes back `NaN`. With six names in the table above there was never
+        # a gap wide enough to notice; with thirteen there is.
+        out = [None if a is None else (_undefined() if a is _DEFAULT else a)
+               for a in out]
         # Python functions become proxies and are held — `LambdaLR` calls one later.
         keep = None
         ready = []

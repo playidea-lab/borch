@@ -169,7 +169,7 @@ def _spaces():
 ABSENT = object()       # the name is not in that namespace at all
 
 
-def _read(space, holder, name):
+def _read(space, holder, name, reach=False):
     """`[names]` · `VARIADIC` · `ABSENT` · `None` (present but unreadable).
 
     **`ABSENT` and `None` are held apart on purpose.** The first version returned
@@ -182,20 +182,65 @@ def _read(space, holder, name):
     kind cannot be counted as uncounted. Here it costs a whole namespace.
     """
     import inspect
-    from signature_read import VARIADIC, parameters, of_class
+    from signature_read import VARIADIC, parameters, positional, of_class
 
+    read = positional if reach else parameters
     thing = getattr(holder, name, None)
     if thing is None:
         return ABSENT
     if inspect.isclass(thing):
-        return of_class(thing)
+        return of_class(thing, reach=reach)
     if space == "Tensor":
         # Reached through the class, so the first parameter is the receiver — except
         # a `staticmethod`, which has none. Asked of the raw attribute so a
         # descriptor answers as itself.
         held = inspect.getattr_static(holder, name, None)
-        return parameters(thing, receiver=not isinstance(held, staticmethod))
-    return parameters(thing)
+        return read(thing, receiver=not isinstance(held, staticmethod))
+    return read(thing)
+
+
+# The verdicts that claim *a positional call lands on the wrong parameter*. They are
+# the only ones `_reachable` re-asks, because they are the only ones whose meaning
+# depends on a positional call being possible.
+SHIFTS = ("dropped", "inserted", "reordered")
+
+
+def _reachable(space, ours, theirs, name, note):
+    """`note`, unless nothing a caller can reach by position is out of place.
+
+    **A shift the language forbids is not a shift.** `optim.Adagrad` read as
+    `inserted` — the sharpest bucket here — because the core's `maximize` sits in
+    torch's `foreach` seat by name order. Both libraries write it `*, maximize`, so
+    no positional call can land on either. The row described a call nobody can write.
+
+    Asked by *re-running the same verdict on the positional prefixes*, rather than by
+    a rule about tails. A rule would have to guess what a shift confined to
+    keyword-only arguments means; re-asking makes the answer the same function of the
+    same evidence, one question narrower.
+
+    **The re-ask's answer is the row's answer** — it is not downgraded to a bucket of
+    its own, and it does not become `agree`. `Adagrad` comes back `shorter`, which is
+    true and useful: torch has a positional `foreach` after `eps` and the core stops
+    there. A private bucket would have been the tidier-looking choice and would have
+    taken `foreach` out of the only bucket that names missing arguments.
+
+    That is the failure this function has to avoid in its *other* direction, and it is
+    the larger of the two. Across these namespaces torch has **54 keyword-only
+    parameters the core does not have** — thirteen of them a `bias` flag on the
+    normalisation layers, six on `Adam` alone. Making keyword-only parameters
+    invisible to the comparison, rather than merely ineligible for `shifted`, would
+    retire two invented hazards and hide all 54 real absences. `parameters()` is
+    therefore left alone; only this re-ask uses `positional()`, and
+    `test_keyword_only_arguments_stay_visible` holds that line.
+    """
+    mine = _read(space, ours, name, reach=True)
+    yours = _read(space, theirs, name, reach=True)
+    if not isinstance(mine, list) or not isinstance(yours, list):
+        return note                                  # variadic or unreadable — unchanged
+    import ts_signatures
+    kept = [p for p in yours if p not in DEPRECATED]
+    narrower = ts_signatures._verdict(mine, kept)
+    return note if narrower in SHIFTS else narrower
 
 
 def compare():
@@ -235,7 +280,10 @@ def compare():
                 rows.append((name, None, None, "no signature"))
                 continue
             kept = [p for p in yours if p not in DEPRECATED]
-            rows.append((name, mine, kept, ts_signatures._verdict(mine, kept)))
+            note = ts_signatures._verdict(mine, kept)
+            if note in SHIFTS:
+                note = _reachable(space, ours, theirs, name, note)
+            rows.append((name, mine, kept, note))
         out[space] = rows
     return out
 

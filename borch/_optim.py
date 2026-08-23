@@ -899,30 +899,132 @@ class OneCycleLR(_Scheduler):
     goes entirely unused** — it is overwritten at construction.
     """
 
-    def __init__(self, optimizer, max_lr, total_steps, pct_start=0.3,
-                 div_factor=25.0, final_div_factor=1e4, last_epoch=-1):
+    def __init__(self, optimizer, max_lr, total_steps=None, epochs=None,
+                 steps_per_epoch=None, pct_start=0.3, anneal_strategy="cos",
+                 cycle_momentum=True, base_momentum=0.85, max_momentum=0.95,
+                 div_factor=25.0, final_div_factor=1e4, three_phase=False,
+                 last_epoch=-1):
+        """**torch's list, in torch's order.** It used to be
+
+            (optimizer, max_lr, total_steps, pct_start, div_factor,
+             final_div_factor, last_epoch)
+
+        which agrees with torch for three arguments and then parts for eleven
+        consecutive positions. `OneCycleLR(opt, 0.1, None, 10, 100)` — a line a torch
+        recipe writes to mean ten epochs of a hundred steps — set `pct_start` to 10
+        and `div_factor` to 100 here. `pct_start` is a fraction of the cycle; given
+        the value 10, the rising stretch runs ten times past the end, so the rate
+        climbs for the whole run and never comes down. Nothing raises, and the shape
+        of the curve is the one thing this scheduler exists to control.
+        """
+        if total_steps is None:
+            if epochs is None or steps_per_epoch is None:
+                raise ValueError(
+                    "OneCycleLR needs total_steps, or epochs and steps_per_epoch.")
+            total_steps = int(epochs) * int(steps_per_epoch)
+        elif epochs is not None or steps_per_epoch is not None:
+            # torch takes `total_steps` and ignores the other two here. Ours refuses,
+            # because the two answers can disagree and silently keeping one of them is
+            # how the argument order above went unnoticed in the first place.
+            raise ValueError(
+                "OneCycleLR: give total_steps, or epochs and steps_per_epoch — "
+                "not both.")
+        if anneal_strategy not in ("cos", "linear"):
+            raise ValueError(
+                f"OneCycleLR: anneal_strategy is 'cos' or 'linear', not {anneal_strategy!r}.")
         self.max_lr, self.total_steps, self.pct_start = max_lr, total_steps, pct_start
+        self.anneal_strategy = anneal_strategy
         self.initial_lr = max_lr / div_factor
         self.min_lr = self.initial_lr / final_div_factor
+        self.three_phase = bool(three_phase)
         # **torch's arithmetic, as written.** It is
         # `pct_start × total_steps − 1`, not `pct_start × (total_steps − 1)` —
         # written the latter way the peak shifted by about half a step and gave a
         # max diff of 7.6e-02.
-        self.up = float(pct_start * total_steps) - 1
-        self.down = total_steps - self.up - 1
+        #
+        # `_phases` is `[(end_step, from, to), ...]`. Two of them normally; three
+        # under `three_phase`, where torch climbs, comes back down to the *initial*
+        # rate over the same span, and only then anneals to the floor.
+        rise = float(pct_start * total_steps) - 1
+        if self.three_phase:
+            # The second boundary is `2 × pct_start × total_steps − 2`, which is
+            # `2 × rise` and not `2 × rise + 1`. Written the second way the middle
+            # phase runs one step long and every value after it slides: max diff
+            # 7.4e-02 against torch, measured, on a curve that still looked like a
+            # one-cycle curve.
+            self._phases = [
+                (rise, self.initial_lr, max_lr),
+                (2 * rise, max_lr, self.initial_lr),
+                (total_steps - 1, self.initial_lr, self.min_lr)]
+        else:
+            self._phases = [
+                (rise, self.initial_lr, max_lr),
+                (total_steps - 1, max_lr, self.min_lr)]
+
+        self.cycle_momentum = bool(cycle_momentum)
+        if self.cycle_momentum:
+            # torch refuses an optimiser with nowhere to put it rather than cycling
+            # nothing. `betas` is Adam's spelling and the first of the pair is the
+            # one that moves.
+            groups = optimizer.param_groups
+            self._momentum_key = next(
+                (k for k in ("momentum", "betas") if any(k in g for g in groups)), None)
+            if self._momentum_key is None:
+                raise ValueError(
+                    "OneCycleLR(cycle_momentum=True) needs an optimizer with "
+                    "momentum or betas; pass cycle_momentum=False.")
+            # **Momentum runs the other way from the rate.** High while the rate is
+            # low, lowest at the peak — that is the whole of the one-cycle idea and it
+            # was simply absent here, so `cycle_momentum` had nothing to be true about.
+            #
+            # Written out rather than derived from the rate's direction. The obvious
+            # rule — *rate rising means momentum falling* — gets the two-phase table
+            # exactly right and the third phase wrong: there the rate anneals from the
+            # initial value down to the floor while torch holds momentum **flat at
+            # `max_momentum`**. Deriving it gave a rising momentum instead, and it
+            # agreed with torch everywhere the rule was checked before that phase
+            # existed.
+            ends = [end for end, _lo, _hi in self._phases]
+            pairs = ([(max_momentum, base_momentum), (base_momentum, max_momentum),
+                      (max_momentum, max_momentum)] if self.three_phase else
+                     [(max_momentum, base_momentum), (base_momentum, max_momentum)])
+            self._momentum_phases = [(e, a, b) for e, (a, b) in zip(ends, pairs)]
         super().__init__(optimizer, last_epoch)
+
+    def _interpolate(self, t, phases):
+        """Where `t` falls in `phases`, and how far through that phase it is."""
+        start = 0.0
+        for end, lo, hi in phases:
+            if t <= end or (end, lo, hi) is phases[-1]:
+                span = end - start
+                frac = (t - start) / span if span > 0 else 1.0
+                return lo, hi, min(1.0, max(0.0, frac))
+            start = end
+        raise AssertionError("unreachable — the last phase always answers")
+
+    def _anneal(self, lo, hi, frac):
+        if self.anneal_strategy == "linear":
+            return lo + (hi - lo) * frac
+        # Cosine interpolation — the slope is zero at both ends.
+        return lo + (hi - lo) * (1 - _math.cos(_math.pi * frac)) / 2
 
     def get_lr(self):
         t = min(self.last_epoch, self.total_steps - 1)
-        if t <= self.up:
-            frac = t / self.up if self.up else 1.0
-            lo, hi = self.initial_lr, self.max_lr
-        else:
-            frac = (t - self.up) / max(1e-12, self.down)
-            lo, hi = self.max_lr, self.min_lr
-        # Cosine interpolation — the slope is zero at both ends.
-        scale = (1 - _math.cos(_math.pi * frac)) / 2
-        return [lo + (hi - lo) * scale for _ in self.base_lrs]
+        lo, hi, frac = self._interpolate(t, self._phases)
+        return [self._anneal(lo, hi, frac) for _ in self.base_lrs]
+
+    def step(self):
+        super().step()
+        if not self.cycle_momentum:
+            return
+        t = min(self.last_epoch, self.total_steps - 1)
+        lo, hi, frac = self._interpolate(t, self._momentum_phases)
+        value = self._anneal(lo, hi, frac)
+        for group in self.optimizer.param_groups:
+            if self._momentum_key == "betas":
+                group["betas"] = (value, group["betas"][1])
+            else:
+                group["momentum"] = value
 
 
 class CyclicLR(_Scheduler):

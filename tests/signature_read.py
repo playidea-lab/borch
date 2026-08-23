@@ -60,12 +60,9 @@ def parameters(fn, receiver=False):
     name pairs once came back led by `t → dim` twenty-eight times, which was not
     twenty-eight renamed parameters but twenty-eight lists off by one.
 
-    Keyword-only parameters are kept and are **not marked**, which is a limit worth
-    stating: `(reduction='mean', *, weight=None)` reads here as `[reduction, weight]`,
-    so a caller comparing it against torch's `(weight, ..., reduction)` sees an order
-    difference and cannot see that one side refuses to take `weight` positionally at
-    all. That distinction changes what a row means and no caller has needed it yet;
-    when one does, it belongs here rather than in that caller.
+    Keyword-only parameters are kept and are **not marked** in this list — see
+    `positional()` below, which is where the distinction lives now that a caller has
+    needed it.
     """
     try:
         sig = inspect.signature(fn)
@@ -80,12 +77,60 @@ def parameters(fn, receiver=False):
     return names
 
 
-def of_class(cls):
+def positional(fn, receiver=False):
+    """`parameters()` cut where the caller can no longer reach by position.
+
+    **A shift the language forbids is not a shift.** The three axes all have a
+    bucket for *an argument sits where the other side has a different one, so a
+    positional call lands on the wrong parameter* — and every one of them was
+    deciding it from names in order, with no way to ask whether a positional call
+    was possible at all.
+
+    `optim.Adagrad` is what that cost. torch writes it
+
+        (params, lr, lr_decay, weight_decay, initial_accumulator_value, eps,
+         foreach, *, maximize, differentiable, fused)
+
+    and the core stops after `eps` with its own `*, maximize`. As names in order,
+    the core's `maximize` sits in torch's `foreach` seat and the row read as an
+    inserted argument — the sharpest bucket there is. Neither `maximize` can be
+    passed positionally by anybody, in either library. The row described a call
+    that cannot be written.
+
+    It is wrong in the other direction too, and that half is worse: two lists that
+    disagree only past their positional prefixes are **safe**, and two that agree on
+    names while one takes fewer of them positionally are **not** — and a reader
+    without `kind` calls the first dangerous and the second identical. The bucket was
+    not making mistakes at its edges; it was answering a different question from the
+    one its name asks, everywhere, including in all 109 rows it calls `agree`.
+
+    Returns `VARIADIC` and `None` exactly as `parameters()` does, so a caller can use
+    the two together without a second set of cases.
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return None
+    got = list(sig.parameters.values())
+    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in got):
+        return VARIADIC
+    names = [p.name for p in got if p.kind is not p.KEYWORD_ONLY]
+    if names and (receiver or names[0] in _RECEIVER_NAMES):
+        names = names[1:]
+    return names
+
+
+def of_class(cls, reach=False):
     """The constructor's arguments — `cls.__init__` without its receiver.
+
+    `reach=True` asks `positional()` instead, giving the prefix a caller can reach
+    by position. Most of the classes on these axes are optimisers and schedulers,
+    where the keyword-only tail is exactly where torch puts the switches nobody
+    passes positionally.
 
     Asked of `__init__` rather than of the class, because a class with no `__init__`
     of its own inherits `object.__init__`, whose `(*args, **kwargs)` is exactly the
     variadic case above and must reach the caller as `VARIADIC` rather than as an
     empty list. `inspect.signature(cls)` hides that behind `()`.
     """
-    return parameters(cls.__init__)
+    return (positional if reach else parameters)(cls.__init__)
