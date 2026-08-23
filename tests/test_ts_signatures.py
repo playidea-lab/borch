@@ -187,9 +187,16 @@ UNALIGNED = {
     # and can be judged now -- six of the six that moved here are the norms,
     # whose eager forms borch.ts spells differently. The count rose because the
     # measurement reaches further, not because anything parted.
-    "nn": 25,   # -1, Bilinear: borch.ts gained a fourth parameter and the two lists
+    "nn": 26,   # -1, Bilinear: borch.ts gained a fourth parameter and the two lists
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
+                # +1, Embedding: a layer borch.ts did not have, so nothing could be
+                #     compared. It parts the same two ways `EmbeddingBag` next door
+                #     already does — `_weight`/`_freeze` against `weightIn`/`freeze`,
+                #     and no `device`/`dtype`, which borch.ts has nowhere.
+                #     **A count going up because a name became comparable is not the
+                #     same as two sides drifting**, and this bucket cannot tell them
+                #     apart on its own; that is what the comment is for.
     "nn.functional": 1,
     "optim": 7,
     "optim.lr_scheduler": 3,

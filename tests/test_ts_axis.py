@@ -54,9 +54,16 @@ FROZEN = {
     # is what made this one findable.
     "Tensor": 112,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
-    # is a layer and `embedding` is a function; folding both reported the layer as
-    # present because the function was. torch's initial capital IS that boundary.
-    "nn": 16,
+    # was a layer the core had and borch.ts did not, `embedding` a function both had;
+    # folding the two reported the layer as present because the function was. torch's
+    # initial capital IS that boundary, and keeping it took the count to 16.
+    #
+    # 16 → 15: `Embedding` is now on both sides, so it is no longer a core-only name.
+    # **The example above is kept even though the class it names is no longer a gap.**
+    # It is the reason the rule exists, not a list of what the rule currently finds —
+    # and a comment that describes today's data is a comment that goes stale the next
+    # time the data moves, which this file has been bitten by twice today.
+    "nn": 15,
     "nn.functional": 30,
     "optim": 0,
     "optim.lr_scheduler": 0,

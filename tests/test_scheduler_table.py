@@ -79,8 +79,18 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-TS = ROOT / "borch-ts" / "src" / "optim.ts"
-BINDING = ROOT / "borch_webgpu" / "_optim.py"
+
+# Every positional table in the binding, with the borch.ts file it is a copy of.
+# **There are two now and there will be more**, so the pairing is data rather than two
+# copies of the same test — `_MISC_ARGS` was added the day `_SCHED_ARGS` was compiled,
+# after a `repr` case at a non-default value showed that seven `nn` layers were
+# discarding every keyword argument they were given.
+TABLES = {
+    "_SCHED_ARGS": (ROOT / "borch_webgpu" / "_optim.py",
+                    ROOT / "borch-ts" / "src" / "optim.ts"),
+    "_MISC_ARGS": (ROOT / "borch_webgpu" / "_nn.py",
+                   ROOT / "borch-ts" / "src" / "nn.ts"),
+}
 
 # borch.ts's name → the binding's (torch's) name. **One line each, by hand.** A blanket
 # rule here would swallow a real reordering: `up` and `stepSizeUp` are the same
@@ -88,19 +98,25 @@ BINDING = ROOT / "borch_webgpu" / "_optim.py"
 RENAMED = {
     "up": "step_size_up",
     "fn": "lr_lambda",
+    "kernel": "kernel_size",
+    "outputSize": "output_size",
+    # borch.ts has one way of asking for a bigger picture and torch has two. `size=` is
+    # refused by name in the binding rather than folded here — see `_MISC_REFUSED`.
+    "scale": "scale_factor",
 }
 
 
-def _table():
-    """`_SCHED_ARGS`, read out of the binding rather than imported.
+def _table(name):
+    """One table, read out of the binding rather than imported.
 
     Importing `borch_webgpu` needs Pyodide. Reading the literal does not, and the
     literal is what a person edits.
     """
-    text = BINDING.read_text(encoding="utf-8")
-    block = re.search(r"_SCHED_ARGS = \{(.*?)\n\}", text, re.S)
+    binding, _ = TABLES[name]
+    text = binding.read_text(encoding="utf-8")
+    block = re.search(rf"{name} = \{{(.*?)\n\}}", text, re.S)
     assert block, (
-        "`_SCHED_ARGS` is no longer a dict literal in borch_webgpu/_optim.py.\n"
+        f"`{name}` is no longer a dict literal in {binding.name}.\n"
         "  This file reads it as text — if it moved or changed shape, fix the reader\n"
         "  rather than deleting the check: the table is the thing that goes wrong.")
     out = {}
@@ -110,8 +126,13 @@ def _table():
     return out
 
 
-def _constructor(src, cls):
-    """borch.ts's constructor parameter names for `cls`, in order, minus the optimizer.
+def _constructor(src, cls, drop_first):
+    """borch.ts's constructor parameter names for `cls`, in order.
+
+    `drop_first` is for the schedulers, whose first parameter is the optimizer and is
+    passed separately by the binding. **The `nn` layers have no such parameter**, and
+    dropping one there would shift every name by a seat and report a shift that is not
+    there — an instrument inventing the exact defect it looks for.
 
     Returns `None` when the class or its constructor cannot be found, which the caller
     turns into a failure. **Not a skip** — a parse that silently finds nothing would
@@ -122,9 +143,25 @@ def _constructor(src, cls):
         at = src.find(f"export class {cls}<")
     if at < 0:
         return None
+    # **Stop at the next class.** A class that declares no constructor of its own —
+    # `Softmax2d` is one — otherwise matched the *next* class's, and the parse came back
+    # with a plausible list of names belonging to something else. Found while pointing
+    # this parser at `nn.ts`, where classes without constructors are common; every
+    # scheduler happens to have one, so the bug was invisible in the file it was written
+    # for. A parser that reaches past its subject is worse than one that fails.
+    nxt = src.find("\nexport class ", at + 1)
+    end = len(src) if nxt < 0 else nxt
     ctor = src.find("constructor(", at)
-    if ctor < 0:
-        return None
+    if ctor < 0 or ctor > end:
+        # **The class is here and declares no constructor**, which means it takes
+        # nothing — `Softmax2d` is one. That is `[]`, not `None`: `None` is reserved
+        # for *the class was not found*, and returning it here would report a layer
+        # that exists as a layer that is gone.
+        #
+        # The same distinction as `ABSENT` on the core-to-torch axis, where one return
+        # value stood for both "torch does not have it" and "torch has it and I cannot
+        # read it", and `Tensor` came back with three agreements looking finished.
+        return []
     depth, i = 0, ctor + len("constructor")
     while i < len(src):
         if src[i] == "(":
@@ -157,8 +194,7 @@ def _constructor(src, cls):
         n = re.sub(r"^readonly\s+", "", n).strip()
         if n:
             out.append(re.split(r"[:=?]", n)[0].strip())
-    # The optimizer is first on both sides and is passed separately by the binding.
-    return out[1:] if out else []
+    return (out[1:] if out else []) if drop_first else out
 
 
 def _same(binding_name, ts_name):
@@ -170,56 +206,62 @@ def _same(binding_name, ts_name):
     return camel.lower() == ts_name.lower()
 
 
-TABLE = _table()
-SRC = TS.read_text(encoding="utf-8")
+READ = {name: _table(name) for name in TABLES}
+SOURCE = {name: ts.read_text(encoding="utf-8") for name, (_, ts) in TABLES.items()}
+# The schedulers pass the optimizer separately; the layers have no such parameter.
+DROP_FIRST = {"_SCHED_ARGS": True, "_MISC_ARGS": False}
+
+ROWS = [(name, cls) for name in TABLES for cls in sorted(READ[name])]
 
 
-def test_the_table_is_not_empty():
+def test_both_tables_were_actually_read():
     """The reader is a regex over a source file, so it can quietly find nothing.
 
     An empty table makes every test below vacuously true — the parametrised ones do
     not even appear. That reads as a clean run, which is the failure this file exists
     to catch, one level up in the file itself.
     """
-    assert len(TABLE) > 10, (
-        f"only {len(TABLE)} schedulers were read out of `_SCHED_ARGS`, and there "
-        f"were 13.\n  Check `_table()` before believing any result below.")
+    small = {name: len(rows) for name, rows in READ.items() if len(rows) < 5}
+    assert not small, (
+        f"a table came back with almost nothing in it: {small}\n"
+        "  There were 13 schedulers and 7 layers. Check `_table()` before believing\n"
+        "  any result below.")
 
 
-@pytest.mark.parametrize("cls", sorted(TABLE))
-def test_the_binding_sends_each_argument_to_the_seat_borch_ts_keeps_for_it(cls):
-    """**Every name in the table, against borch.ts's real constructor order.**
+@pytest.mark.parametrize("name,cls", ROWS, ids=lambda v: v if isinstance(v, str) else v)
+def test_the_binding_sends_each_argument_to_the_seat_borch_ts_keeps_for_it(name, cls):
+    """**Every name in every table, against borch.ts's real constructor order.**
 
     A row that parts here does not raise in production. It puts each value one seat
-    from where it belongs, and the schedule comes out wrong with nothing to read.
+    from where it belongs, and the answer comes out wrong with nothing to read.
     """
-    want = _constructor(SRC, cls)
+    src, ts = SOURCE[name], TABLES[name][1]
+    want = _constructor(src, cls, DROP_FIRST[name])
     assert want is not None, (
-        f"`{cls}` is in `_SCHED_ARGS` but no constructor for it was found in "
-        f"{TS.name}.\n  Either it was renamed on the borch.ts side — in which case the "
-        "binding is calling\n  something that no longer exists — or this file's parse "
-        "needs fixing. Not a skip:\n  a table describing a class that is gone is the "
-        "worst state of the two.")
+        f"`{cls}` is in `{name}` but no constructor for it was found in {ts.name}.\n"
+        "  Either it was renamed on the borch.ts side — in which case the binding is\n"
+        "  calling something that no longer exists — or this file's parse needs fixing.\n"
+        "  Not a skip: a table describing a class that is gone is the worse state.")
 
-    have = TABLE[cls]
+    have = READ[name][cls]
     off = [(i, have[i], want[i]) for i in range(min(len(have), len(want)))
            if not _same(have[i], want[i])]
     assert not off, (
-        f"`{cls}`: the binding's table does not match borch.ts's order.\n"
+        f"`{cls}` in `{name}`: the table does not match borch.ts's order.\n"
         + "".join(f"    slot {i}: the binding sends `{h}` into borch.ts's `{w}`\n"
                   for i, h, w in off)
         + "  Nothing raises for this. Each value lands one seat from where it belongs\n"
-          "  and the schedule is quietly wrong — unless the receiving constructor\n"
-          "  happens to validate its own argument, which is luck, not a check.")
+          "  and the answer is quietly wrong — unless the receiving constructor happens\n"
+          "  to validate its own argument, which is luck, not a check.")
 
     missing = want[len(have):]
     assert not missing, (
-        f"`{cls}`: borch.ts takes {len(want)} arguments and the table names "
+        f"`{cls}` in `{name}`: borch.ts takes {len(want)} arguments and the table names "
         f"{len(have)}.\n"
         f"    unreachable through the binding: {missing}\n"
         "  These do not fail — they are simply not passable. A caller setting one gets\n"
         "  silence and the default, which is the same shape as `cooldown` being\n"
-        "  unreachable for a day.")
+        "  unreachable for a day, and as seven `nn` layers discarding every keyword.")
 
 
 def test_every_renamed_row_still_names_something_real():
@@ -230,8 +272,9 @@ def test_every_renamed_row_still_names_something_real():
     fires.
     """
     everything = set()
-    for cls in TABLE:
-        everything.update(_constructor(SRC, cls) or [])
+    for name in TABLES:
+        for cls in READ[name]:
+            everything.update(_constructor(SOURCE[name], cls, DROP_FIRST[name]) or [])
     stale = sorted(n for n in RENAMED if n not in everything)
     assert not stale, (
         f"`RENAMED` folds borch.ts names that no longer appear in any constructor: "

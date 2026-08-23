@@ -2994,6 +2994,13 @@ function addMisc(out: Map<string, Case>): void {
     out.set(`misc::repr::${name}`,
       async () => (make() as unknown as { describe(): string }).describe());
   }
+
+  // **The row above builds it on the defaults, and the default `alpha` is 1e-4.**
+  // That prints the same in both languages, so it could never see that `describe`
+  // interpolated `alpha` without the decimal-point guard `beta` and `k` went through.
+  // At a whole number torch says `alpha=1.0` and this said `alpha=1`.
+  out.set("misc::repr::LocalResponseNorm(alpha=1.0)",
+    async () => new nn.LocalResponseNorm(2, 1.0, 2.0, 2.0).describe());
 }
 
 /**

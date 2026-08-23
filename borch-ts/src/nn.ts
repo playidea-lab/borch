@@ -25,6 +25,23 @@ import {
 } from "./tensor.js";
 
 /**
+ * A number printed the way Python prints a float — `2.0`, not `2`.
+ *
+ * **JavaScript drops the decimal point on a float that happens to be integral**, and
+ * `repr` cases freeze the characters, so `max_norm=2.0` came back as `max_norm=2` and a
+ * golden row failed on nothing but punctuation.
+ *
+ * The same three lines had already been written twice in this file — inside
+ * `LocalResponseNorm.describe` and inside the padding layers' — and a third copy was
+ * about to go into `Embedding`. **Two copies is a coincidence and three is a rule that
+ * belongs somewhere**, so both call sites now come here. Written once, the next
+ * `describe` that needs it can be found by looking rather than by remembering.
+ */
+function pyFloat(v: number): string {
+  return Number.isInteger(v) ? `${v}.0` : String(v);
+}
+
+/**
  * Weight initialisation.
  *
  * **Without it nothing learns.** Starting at 0, the neurons of one layer receive the
@@ -1924,11 +1941,17 @@ export class LocalResponseNorm extends Module {
   }
 
   override describe(): string {
-    // **Printed the way Python prints it.** `k=1.0`, not `k=1` — JS drops the decimal
-    // point on a float that looks like an integer, and the golden froze the characters.
-    const py = (v: number) => (Number.isInteger(v) ? `${v}.0` : String(v));
-    return `LocalResponseNorm(${this.size}, alpha=${this.alpha}, ` +
-      `beta=${py(this.beta)}, k=${py(this.k)})`;
+    // **`alpha` went unguarded for as long as the other two were guarded**, two lines
+    // below a comment explaining exactly why they needed it. It passed only because
+    // torch's default `alpha` is 1e-4, which is not integral and prints the same
+    // either way — so the one golden case that existed could never see it. At
+    // `alpha=1.0` torch says `alpha=1.0` and this said `alpha=1`.
+    //
+    // Knowing the rule and applying it to two of three arguments is not carelessness:
+    // `beta` and `k` were the ones being edited. It is a claim of completeness scoped
+    // to what the author had open, which is a shape this repository met twice today.
+    return `LocalResponseNorm(${this.size}, alpha=${pyFloat(this.alpha)}, ` +
+      `beta=${pyFloat(this.beta)}, k=${pyFloat(this.k)})`;
   }
 }
 
@@ -1982,6 +2005,116 @@ export class UpsamplingNearest2d extends UpsamplingBase {
 }
 export class UpsamplingBilinear2d extends UpsamplingBase {
   constructor(scale = 2) { super("UpsamplingBilinear2d", scale, "bilinear"); }
+}
+
+/**
+ * A trainable table turning an index into a vector.
+ *
+ * **This description belongs on the class, and putting a class here took someone
+ * else's.** The JSDoc above `EmbeddingBag` was "One row per bag…", and inserting a
+ * new class in front of it silently handed that sentence to this one — the emitted
+ * `.d.ts` attaches a comment to whatever declaration follows it, so the site would
+ * have described `Embedding` as a bag and `EmbeddingBag` as nothing at all. Nothing
+ * raises; `test_site.py` noticed that a Korean entry had lost its source.
+ */
+export class Embedding extends Module {
+  readonly weight: Tensor;
+  readonly paddingIdx: number | null;
+
+  /**
+   * torch's nine, of which two do real work here.
+   *
+   * **The comment on `embedding()` said this layer was absent from all three and
+   * that the golden did not ask for it.** That was true when it was written. The
+   * core then took torch's nine arguments, seven cases were added, and this side
+   * was not touched — so the binding answered `module 'borch_webgpu._nn' has no
+   * attribute 'Embedding'` seven times and the sentence explaining the absence was
+   * the reason nobody looked.
+   *
+   * Two arguments do real work and each has a case that fails without it:
+   *
+   * - **`maxNorm` shortens the rows that were looked up, in the table itself.** The
+   *   same side effect on a parameter that `embeddingBag` has, through the same
+   *   `renormRows`, not a second copy of the rule.
+   * - **`paddingIdx` stops that row learning.** The forward is untouched — torch
+   *   returns the padding row's values like any other — so an implementation that
+   *   masks the output instead passes every value case and fails only on the
+   *   gradient. Done here by splitting the table into a part the gradient flows
+   *   through and a detached part, which needs no new autograd machinery.
+   *
+   * And one line that is about **who supplied the weights** rather than about
+   * padding: a fresh table has its padding row zeroed and a given one does not.
+   * torch draws it in the same place, and both halves are asked because either
+   * alone reads as a rule about padding.
+   */
+  constructor(readonly num: number, readonly dim: number,
+              paddingIdx: number | null = null,
+              readonly maxNorm: number | null = null,
+              readonly normType = 2,
+              readonly scaleGradByFreq = false,
+              readonly sparse = false,
+              weightIn: Tensor | null = null,
+              freeze = false) {
+    super();
+    if (scaleGradByFreq) {
+      throw new NotImplementedError("Embedding(scaleGradByFreq) is not carried across");
+    }
+    if (sparse) {
+      throw new NotImplementedError(
+        "Embedding(sparse) is not carried across — there is no sparse gradient here");
+    }
+    if (paddingIdx !== null) {
+      if (paddingIdx >= num || paddingIdx < -num) {
+        throw new Error("padding_idx must be within num_embeddings");
+      }
+      if (paddingIdx < 0) paddingIdx = num + paddingIdx;
+    }
+    this.paddingIdx = paddingIdx;
+    if (weightIn !== null) {
+      this.weight = weightIn;
+    } else {
+      const fresh = Tensor.randn([num, dim]);
+      // Only a **fresh** table gets the padding row zeroed. A caller who handed
+      // weights in meant them.
+      this.weight = paddingIdx === null ? fresh : fresh.mul(this.rowMask(paddingIdx));
+    }
+    this.weight.requiresGrad = !freeze;
+    this.claim(this.weight);
+  }
+
+  /** `[num, 1]`, zero on `row` and one everywhere else. */
+  private rowMask(row: number): Tensor {
+    return Tensor.arange(0, this.num).ne(Tensor.full([], row))
+      .to("float32").reshape([this.num, 1]);
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    return { weight: this.weight };
+  }
+
+  override forward(idx: Tensor): Tensor {
+    if (this.maxNorm !== null) renormRows(this.weight, idx, this.maxNorm, this.normType);
+    // **The padding row keeps its values and loses its gradient.** `keep` carries the
+    // gradient, `drop` carries the same numbers with the path cut, and the sum is the
+    // table unchanged. Masking the output instead would pass every value case here
+    // and fail only `grad::Embedding(padding_idx)`.
+    let table = this.weight;
+    if (this.paddingIdx !== null) {
+      const keep = this.rowMask(this.paddingIdx);
+      table = table.mul(keep)
+        .add(table.detach().mul(Tensor.full([this.num, 1], 1).sub(keep)));
+    }
+    return embedding(idx, table);
+  }
+
+  override describe(): string {
+    const parts = [`${this.num}, ${this.dim}`];
+    if (this.paddingIdx !== null) parts.push(`padding_idx=${this.paddingIdx}`);
+    // **`max_norm` is a float and `padding_idx` is an index.** `2.0` and `1`, and the
+    // golden froze both spellings — this row failed on the punctuation alone.
+    if (this.maxNorm !== null) parts.push(`max_norm=${pyFloat(this.maxNorm)}`);
+    return `Embedding(${parts.join(", ")})`;
+  }
 }
 
 /**
@@ -2852,8 +2985,7 @@ export class PadNd extends Module {
   override describe(): string {
     const pairs = `(${this.padding.join(", ")})`;
     if (!this.label.startsWith("ConstantPad")) return `${this.label}(${pairs})`;
-    const v = Number.isInteger(this.value) ? `${this.value}.0` : String(this.value);
-    return `${this.label}(padding=${pairs}, value=${v})`;
+    return `${this.label}(padding=${pairs}, value=${pyFloat(this.value)})`;
   }
 }
 

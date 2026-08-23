@@ -124,6 +124,19 @@ def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
                                    eps, weight_decay))
 
 
+def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
+    """**`weight_decay` defaults to 0.01 here and to 0 in `Adam`**, which is torch's
+    split and most of the reason the two are separate names.
+
+    borch.ts has had this class all along; only this file had no line for it, so
+    `opt::AdamW` came back as `module 'borch_webgpu._optim' has no attribute 'AdamW'`.
+    **An absence says so.** The defect a few lines below was a table sending arguments
+    into the wrong seats, which said nothing at all for four of its eight.
+    """
+    return _Opt(_ts.optim.AdamW.new(_params(params), lr, betas[0], betas[1],
+                                    eps, weight_decay))
+
+
 def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
     return _Opt(_ts.optim.RMSprop.new(_params(params), lr, alpha, eps,
                                       weight_decay))

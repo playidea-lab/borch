@@ -1540,6 +1540,80 @@ def EmbeddingBag(num, dim, max_norm=None, norm_type=2.0, scale_grad_by_freq=Fals
         bool(include_last_offset), padding_idx))
 
 
+def Embedding(num, dim, padding_idx=None, max_norm=None, norm_type=2.0,
+              scale_grad_by_freq=False, sparse=False, _weight=None, _freeze=False,
+              **kw):
+    """torch's list, in torch's order, across a positional bridge.
+
+    **`padding_idx` is second and `max_norm` third**, which is the opposite of
+    `EmbeddingBag` next door — there `max_norm` is third and `padding_idx` is last.
+    Two neighbouring layers, two different orders, and torch is the reason for both.
+    Swapping them here would not raise: `padding_idx=1` reaching `maxNorm` renormalises
+    the whole table to length 1 on every forward pass, and the values would simply be
+    wrong.
+
+    Wired late. The comment on borch.ts's `embedding()` said no layer existed on any of
+    the three and that the golden did not ask — true when written, false once the core
+    took torch's nine, and the reason seven failing rows sat unexamined.
+    """
+    return Module(_ts.nn.Embedding.new(
+        num, dim, padding_idx, max_norm, float(norm_type),
+        bool(scale_grad_by_freq), bool(sparse),
+        handle(_weight) if _weight is not None else None, bool(_freeze)))
+
+
+def _undefined():
+    """JavaScript's `undefined`, which is what makes a TypeScript default apply.
+
+    **`null` does not.** A skipped middle slot handed across as `None` arrives as a
+    `null`, the default never fires, and the layer computes with it — `_optim.py` met
+    this at `OneCycleLR` and every rate on the curve came back `NaN`. The same hazard
+    reaches here the moment a table has a gap in it, which is the moment `_MISC_ARGS`
+    below created: `LocalResponseNorm(2, k=2.0)` leaves two slots unfilled.
+    """
+    import js
+    return js.undefined
+
+
+# borch.ts's constructor parameters, in borch.ts's order, under torch's spelling —
+# the same kind of table as `_SCHED_ARGS` in `_optim.py`, and it exists for the same
+# reason: the far side takes positions and torch code writes keywords.
+#
+# **Before this, `_misc_layer` forwarded `*args` and threw every keyword away except
+# `scale_factor`.** So `LocalResponseNorm(2, alpha=1.0, beta=2.0, k=2.0)` built the
+# layer on its defaults, and `Unfold(2, dilation=2)`, `Fold(4, 2, padding=1)` and
+# `RReLU(lower=0.2)` did the same. Nothing raised. The layer answered, with numbers
+# from a configuration nobody asked for.
+#
+# It was found by a `repr` case added at a **non-default** value to catch a missing
+# decimal point on the other side, and the first thing that case said was that the
+# arguments never arrived at all. A case whose default answer would be right cannot
+# tell those two apart, because it cannot tell either of them from working.
+#
+# `tests/test_scheduler_table.py` compiles this against `borch-ts/src/nn.ts`.
+_MISC_ARGS = {
+    "Unfold": ("kernel_size", "dilation", "padding", "stride"),
+    "Fold": ("output_size", "kernel_size", "dilation", "padding", "stride"),
+    "LocalResponseNorm": ("size", "alpha", "beta", "k"),
+    "Softmax2d": (),
+    "RReLU": ("lower", "upper"),
+    # **borch.ts takes `scale` and nothing else.** torch's `size=` is a different way
+    # of asking and that side has no seat for it, so it is refused by name below rather
+    # than dropped — an argument that raises with its own name beats one that silently
+    # takes the default.
+    "UpsamplingNearest2d": ("scale_factor",),
+    "UpsamplingBilinear2d": ("scale_factor",),
+}
+
+# Accepted by the core and with nowhere to go on the other side. Refused rather than
+# ignored, and listed rather than counted.
+_MISC_REFUSED = {
+    ("UpsamplingNearest2d", "size"): "borch.ts takes a scale factor, not a target size",
+    ("UpsamplingBilinear2d", "size"): "borch.ts takes a scale factor, not a target size",
+    ("RReLU", "inplace"): "there is no in-place activation on that side",
+}
+
+
 def _misc_layer(name):
     def make(*args, **kw):
         # **A Python tuple must not cross as-is.** Over there it becomes a
@@ -1548,16 +1622,26 @@ def _misc_layer(name):
         # `Fold((4,4), 2)` was that place.
         laid = [_js_list(list(a)) if isinstance(a, (list, tuple)) else a
                 for a in args]
-        if "scale_factor" in kw:
-            laid.append(kw["scale_factor"])
+        order = _MISC_ARGS.get(name, ())
+        for key, value in kw.items():
+            if (name, key) in _MISC_REFUSED:
+                raise NotImplementedError(
+                    f"{name}({key}=…) is not carried into the browser — "
+                    f"{_MISC_REFUSED[(name, key)]}.")
+            if key not in order:
+                raise TypeError(f"{name}() got an unexpected keyword argument {key!r}")
+            at = order.index(key)
+            while len(laid) <= at:
+                laid.append(_undefined())
+            laid[at] = (_js_list(list(value))
+                        if isinstance(value, (list, tuple)) else value)
         return _layer(name, *laid)
 
     make.__name__ = name
     return make
 
 
-for _misc in ("Unfold", "Fold", "LocalResponseNorm", "Softmax2d", "RReLU",
-              "UpsamplingNearest2d", "UpsamplingBilinear2d"):
+for _misc in _MISC_ARGS:
     globals()[_misc] = _misc_layer(_misc)
 
 

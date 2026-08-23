@@ -207,9 +207,36 @@ def _declarations(path):
     # a declaration the parser cannot find is a call site with no rule. They were the
     # only two, and the check that they are readable is the assertion below, not this
     # comment.
-    for m in re.finditer(r"export class (\w+)(?: extends \w+)? \{", src):
-        after = re.search(r"constructor\(", src[m.end():])
+    # **The search for `constructor(` has to stop at the next class.** Unbounded, a class
+    # that declares none picks up its *neighbour's* argument list and files it under its
+    # own name — a plausible list belonging to something else, which is the worst thing a
+    # parser can hand a check.
+    #
+    # Measured before fixing: **23 of `nn.ts`'s 152 classes** would borrow. `ReLU`,
+    # `Sigmoid`, `Tanh` and `Identity` take nothing and would have been filed with
+    # `CELU`'s and `LeakyReLU`'s arguments; `Softmax2d` with `RReLU`'s; `BatchNorm2d`
+    # with `Recurrent`'s. `optim.ts` has none, because every scheduler and optimiser
+    # declares a constructor — so the defect was invisible for as long as this file
+    # watched only that one, and arrived with `nn.ts`.
+    #
+    # Found by pointing a second parser (`test_scheduler_table.py`) at `nn.ts` and
+    # meeting the same bug there. Two parsers, one mistake, written months apart.
+    #
+    # **This check's result did not change**, which is worth saying plainly rather than
+    # claiming a fix that fixed nothing: the 23 are wired through the generic `_layer`
+    # factory, not as literal `X.new(...)` call sites, so nothing ever looked their
+    # declarations up. The bug was **latent, not absorbed** — one explicit wiring away
+    # from demanding that `ReLU()` pass `CELU`'s `alpha`, and the demand would have
+    # looked exactly like a real finding.
+    starts = [m for m in re.finditer(r"export class (\w+)(?: extends \w+)? \{", src)]
+    for i, m in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(src)
+        after = re.search(r"constructor\(", src[m.end():end])
         if not after:
+            # Declares no constructor, so it takes nothing. **`[]`, not skipped** — a
+            # skip leaves the call site with no rule, which reads the same as a class
+            # the parser could not find.
+            found[("class", m.group(1))] = []
             continue
         args = _split(_balanced(src, m.end() + after.end() - 1)[1:-1])
         found[("class", m.group(1))] = [

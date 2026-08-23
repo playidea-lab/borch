@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 74
+  "missing": 76
  },
  "modules": [
   {
@@ -8544,6 +8544,79 @@
     },
     {
      "kind": "class",
+     "name": "Embedding",
+     "signature": "export declare class Embedding extends Module",
+     "doc": "A trainable table turning an index into a vector.\n\n**This description belongs on the class, and putting a class here took someone\nelse's.** The JSDoc above `EmbeddingBag` was \"One row per bag…\", and inserting a\nnew class in front of it silently handed that sentence to this one — the emitted\n`.d.ts` attaches a comment to whatever declaration follows it, so the site would\nhave described `Embedding` as a bag and `EmbeddingBag` as nothing at all. Nothing\nraises; `test_site.py` noticed that a Korean entry had lost its source.",
+     "members": [
+      {
+       "name": "num",
+       "signature": "readonly num: number",
+       "doc": ""
+      },
+      {
+       "name": "dim",
+       "signature": "readonly dim: number",
+       "doc": ""
+      },
+      {
+       "name": "maxNorm",
+       "signature": "readonly maxNorm: number | null",
+       "doc": "",
+       "torch": "max_norm"
+      },
+      {
+       "name": "normType",
+       "signature": "readonly normType: number",
+       "doc": "",
+       "torch": "norm_type"
+      },
+      {
+       "name": "scaleGradByFreq",
+       "signature": "readonly scaleGradByFreq: boolean",
+       "doc": "",
+       "torch": "scale_grad_by_freq"
+      },
+      {
+       "name": "sparse",
+       "signature": "readonly sparse: boolean",
+       "doc": ""
+      },
+      {
+       "name": "weight",
+       "signature": "readonly weight: Tensor",
+       "doc": ""
+      },
+      {
+       "name": "paddingIdx",
+       "signature": "readonly paddingIdx: number | null",
+       "doc": "",
+       "torch": "padding_idx"
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(num: number, dim: number, paddingIdx?: number | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, sparse?: boolean, weightIn?: Tensor | null, freeze?: boolean)",
+       "doc": "torch's nine, of which two do real work here.\n\n**The comment on `embedding()` said this layer was absent from all three and\nthat the golden did not ask for it.** That was true when it was written. The\ncore then took torch's nine arguments, seven cases were added, and this side\nwas not touched — so the binding answered `module 'borch_webgpu._nn' has no\nattribute 'Embedding'` seven times and the sentence explaining the absence was\nthe reason nobody looked.\n\nTwo arguments do real work and each has a case that fails without it:\n\n- **`maxNorm` shortens the rows that were looked up, in the table itself.** The\n  same side effect on a parameter that `embeddingBag` has, through the same\n  `renormRows`, not a second copy of the rule.\n- **`paddingIdx` stops that row learning.** The forward is untouched — torch\n  returns the padding row's values like any other — so an implementation that\n  masks the output instead passes every value case and fails only on the\n  gradient. Done here by splitting the table into a part the gradient flows\n  through and a detached part, which needs no new autograd machinery.\n\nAnd one line that is about **who supplied the weights** rather than about\npadding: a fresh table has its padding row zeroed and a given one does not.\ntorch draws it in the same place, and both halves are asked because either\nalone reads as a rule about padding."
+      },
+      {
+       "name": "ownParameters",
+       "signature": "ownParameters(): Record<string, Tensor>",
+       "doc": "",
+       "torch": "own_parameters"
+      },
+      {
+       "name": "forward",
+       "signature": "forward(idx: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "describe",
+       "signature": "describe(): string",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
      "name": "EmbeddingBag",
      "signature": "export declare class EmbeddingBag extends Module",
      "doc": "One row per bag. Selecting from the table **and combining** is one layer.",
@@ -10575,7 +10648,7 @@
      "members": []
     }
    ],
-   "count": 669,
+   "count": 682,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -14585,5 +14658,5 @@
    "count": 9
   }
  ],
- "total": 1902
+ "total": 1915
 }

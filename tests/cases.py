@@ -5917,6 +5917,18 @@ def misc_cases(inp=None):
     add("층::LocalResponseNorm",
         lambda L: L.nn.LocalResponseNorm(2)(L.tensor(chans)))
     add("repr::LocalResponseNorm", lambda L: repr(L.nn.LocalResponseNorm(2)))
+    # **The default `alpha` is 1e-4 and prints the same in both languages**, so the row
+    # above could never see that borch.ts was interpolating `alpha` without the
+    # decimal-point guard its two neighbours went through. At a whole number torch says
+    # `alpha=1.0` and that side said `alpha=1`.
+    #
+    # A case for an argument has to be one whose default answer would be wrong — **and
+    # wrong by construction, not by arithmetic luck.** The row above is not testing
+    # `alpha` at all; it is testing that torch happened to pick a fractional default.
+    # Change that default upstream and a case nobody touched turns red, which is the
+    # tell that it was never asking the question its name claims.
+    add("repr::LocalResponseNorm(alpha=1.0)",
+        lambda L: repr(L.nn.LocalResponseNorm(2, alpha=1.0, beta=2.0, k=2.0)))
 
     # ── Softmax2d ───────────────────────────────────────────────────────
     add("층::Softmax2d", lambda L: L.nn.Softmax2d()(L.tensor(cube)))
@@ -7486,6 +7498,24 @@ def train_cases(inp=None):
 
     cases.append(("sched::ReduceLROnPlateau", plateau))
 
+    # **A case for an argument has to be one whose *default* answer would be wrong.**
+    #
+    # That rule was learned the expensive way, right here. These four rows ran against
+    # the binding for a day while `threshold_mode`, `cooldown`, `min_lr` and `eps` could
+    # not cross it at all — the table in `borch_webgpu/_optim.py` did not name them, so
+    # `_sched` dropped them and borch.ts used its defaults. **Every one of the four
+    # passed.** Not because the arguments worked, but because a run with the argument
+    # dropped is identical to a run that never asked for it.
+    #
+    # Eight other rows failed at the same moment, and only because a constructor happened
+    # to validate a string. So the score measured the half of the defect that had a type
+    # check in front of it and was blind to the half that did not.
+    #
+    # Which is why each row below is given a value that changes the answer: `abs` and
+    # `rel` are nearly the same number at a loss near 1 and are told apart at
+    # `threshold=0.1`, and `eps=0.4` is larger than the first cut so no cut is made. A
+    # row whose value the default would also produce is a row that cannot fail.
+    #
     # **`threshold_mode`, `cooldown` and `eps` were not parameters at all** until the
     # core took torch's argument list, so a call written from torch's documentation —
     # `ReduceLROnPlateau(opt, "min", 0.5, 5, 1e-3, 0, 1e-4)` — put the cooldown where
