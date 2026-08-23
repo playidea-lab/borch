@@ -338,7 +338,10 @@ SHORTER = {
     # thirteen out of `shorter` was not worth it, and nine for twenty-five is.
     # Written down because the two look like the same decision made twice, and
     # they are the same decision made on different numbers.
-    "nn": 28,
+    # 28 → 30. `Upsample` and the LP pools grew past borch.ts's lists when they took
+    # torch's last arguments. The safe end of the parting: one argument too many
+    # raises rather than landing somewhere.
+    "nn": 30,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
@@ -363,7 +366,8 @@ SHORTER = {
     # cooldown counter joined `stateDict` with it — left out, a resume inside
     # a cooldown starts counting patience again at once, which is a cut up to
     # `cooldown` steps early: small, plausible, invisible against a curve.
-    "optim.lr_scheduler": 11,
+    # 11 → 12. `ChainedScheduler` took torch's `optimizer` and borch.ts has not.
+    "optim.lr_scheduler": 12,
     "linalg": 2,
     "utils.data": 1,
 }

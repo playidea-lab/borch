@@ -1312,9 +1312,18 @@ class SequentialLR(_Saves):
 class ChainedScheduler(_Saves):
     """Applies several **at once.** Their factors multiply together."""
 
-    def __init__(self, schedulers):
+    def __init__(self, schedulers, optimizer=None):
+        """**`optimizer` sits second, where torch has it**, and is optional there
+        too: given nothing, torch takes the first scheduler's. Passing one that is
+        not theirs is refused rather than believed — `get_last_lr` reads the rates
+        off it, so a mismatched optimizer reports rates nobody set."""
         self.schedulers = list(schedulers)
-        self.optimizer = self.schedulers[0].optimizer
+        found = self.schedulers[0].optimizer
+        if optimizer is not None and optimizer is not found:
+            raise ValueError(
+                "ChainedScheduler: the optimizer given is not the one the schedulers "
+                "are stepping.")
+        self.optimizer = found
 
     def step(self):
         for sch in self.schedulers:

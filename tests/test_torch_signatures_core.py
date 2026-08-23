@@ -208,7 +208,11 @@ UNALIGNED = {
     # for a different reason: they **took `inplace` and discarded it**, so they
     # aligned with torch on paper while doing none of it. Alignment is a fact about
     # names and this file cannot see that — `test_inert_arguments.py` can.
-    "nn.functional": 14,
+    #
+    # 14 → 11. The three `lp_pool*` functions took `ceil_mode`. **Two sessions cut
+    # this row in the same window for unrelated reasons** and the rebase put both
+    # notes here; the number is measured after both, not either.
+    "nn.functional": 11,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
@@ -231,7 +235,9 @@ SHORTER = {
     # 1 → 2. `stft` and `backward` became comparable when the method binders started
     # setting `__wrapped__`; both are short tails against torch (`align_to_window`,
     # and `create_graph`/`inputs`).
-    "Tensor": 2,
+    # 2 → 0. `backward` took `create_graph` and `inputs`, `stft` took
+    # `align_to_window`. The `Tensor` half of this bucket is empty.
+    "Tensor": 0,
     # 54 → 60 and the judged share 132 → 144 of 161. **Nothing got worse: twelve rows
     # became visible.** The twelve lazy layers declared `(*args, **kwargs)` and sat in
     # the uncomparable bucket while every other layer was measured; they declare their
@@ -303,7 +309,9 @@ SHORTER = {
     # torch's, so a positional call that reaches it lands where torch lands, and the
     # refusal names which argument it was. Left out, the same call lands on nothing
     # and the two lists part at every layer that has them.
-    "nn": 18,
+    # 18 → 12. `Upsample`, the three LP pools, `TransformerEncoder` and
+    # `RNNBase` all took what they were short of.
+    "nn": 12,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
     # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are
@@ -326,7 +334,12 @@ SHORTER = {
     # torch's execution switches, accepted where they cannot change an answer and
     # refused where torch refuses them.
     "optim": 0,
-    "optim.lr_scheduler": 1,
+    # 1 → 0. `ChainedScheduler` took torch's `optimizer` — optional there too, and
+    # refused here when it is not the one the schedulers are stepping, since
+    # `get_last_lr` reads the rates off it.
+    #
+    # **This namespace and `optim` are both empty now.** Two of the seven.
+    "optim.lr_scheduler": 0,
     "linalg": 0,
     "utils.data": 0,
 }
@@ -700,7 +713,21 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # 36 → 9. Seventeen `device`/`dtype` pairs, `AvgPool2d`'s four and `Flatten`'s
 # `end_dim`. The nine left are named arguments this library does not have —
 # `create_graph`, `align_to_window`, `ceil_mode` on the LP pools, and the rest.
-TORCH_REACHES_FURTHER_BY_POSITION = 9
+# **9 → 0. There is no longer a call torch takes by position that this refuses.**
+#
+# The number started at 57 and came down in five steps, each a family rather than a
+# name: `maximize` on ten optimizers, `bias` and `affine` on thirteen normalisation
+# layers, `inplace` on thirteen activations, `device`/`dtype` on seventeen more, and
+# then nine singletons. **Every one of them was a line a torch recipe writes.**
+#
+# Zero here does not mean the two libraries agree. It means the narrower thing the
+# name says: **a positional call that works in torch does not stop here.** The
+# arguments can still be refused once they arrive — `device`, `create_graph`,
+# `capturable` all are — and `SHORTER` above still counts rows where torch declares
+# more names than the core does. What has gone is the failure that happens before any
+# of that: a `TypeError` about an argument count, from a line copied out of the
+# documentation.
+TORCH_REACHES_FURTHER_BY_POSITION = 0
 
 # **`agree` rows with the same problem: none.** Worth pinning precisely because it
 # is empty. `agree` means the two name lists match, and the worry — raised while

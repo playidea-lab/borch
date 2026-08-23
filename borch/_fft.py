@@ -455,14 +455,28 @@ def _window_of(window, n_fft, win_length, like):
 
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,     # noqa: A002
          center=True, pad_mode="reflect", normalized=False, onesided=None,
-         return_complex=None):
+         return_complex=None, align_to_window=None):
     """The short-time Fourier transform. The result is `(…, bins, frames)` —
     **frames last.**
+
+    **`align_to_window` is accepted, and torch's own refusal is the whole of what
+    it does here.** torch rejects it outright unless `center=False` — *"stft
+    align_to_window should only be set when center = false"* — and with
+    `center=False` it produced the identical answer at every setting tried, `True`
+    and `False` alike. So there is nothing to imitate: the observable behaviour is
+    the refusal, and that is mirrored exactly.
+    
+    Recorded rather than left out, because *the seat is torch's*. The alternative —
+    leaving the argument off — would put a positional call that reaches it on
+    nothing, which is the difference this whole axis exists to remove.
 
     **It refuses without `return_complex`.** torch does the same on real input
     (measured) — the old path producing a real `(…, 2)` is slated for removal, so
     choosing a default here would teach a shape that is about to disappear.
     """
+    if align_to_window is not None and center:
+        raise RuntimeError(
+            "stft align_to_window should only be set when center = false")
     from . import _ops
 
     t = _wrap(input)

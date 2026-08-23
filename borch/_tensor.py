@@ -373,7 +373,23 @@ class Tensor:
         out._op = op if needs else None
         return out
 
-    def backward(self, gradient=None, retain_graph=False):
+    def backward(self, gradient=None, retain_graph=False, create_graph=False,
+                 inputs=None):
+        """**`inputs` restricts which leaves accumulate.** torch walks the whole
+        graph and puts a gradient only on the tensors named, leaving every other
+        leaf's `.grad` untouched — the way a second loss is differentiated against
+        one branch without disturbing the rest. It was not an argument here, so
+        `loss.backward(inputs=[w])` stopped with a `TypeError` about a count.
+
+        **`create_graph` is refused.** It asks for the backward pass itself to be
+        recorded, so that the gradient can be differentiated again — the thing a
+        second-order method needs. Nothing here records it: the backward functions
+        are numpy closures, not graph nodes. Accepting the flag and walking the same
+        ungraphed pass would answer a first-order question to a caller who asked a
+        second-order one, and the answer would look right.
+        """
+        if create_graph:
+            _unsupported("backward(create_graph=True) — double backward")
         if not self.requires_grad:
             raise RuntimeError(_like_torch(
                 "backward() cannot be called on a tensor that does not require grad.",
@@ -416,6 +432,9 @@ class Tensor:
                 f"torch.Size({list(seed.shape)}) and output[0] has a shape of "
                 f"torch.Size({list(self.data.shape)})."))
 
+        wanted = None if inputs is None else {
+            id(t) for t in ([inputs] if isinstance(inputs, Tensor) else inputs)}
+
         # A topological sort — back to front, each node once
         order, seen = [], set()
 
@@ -435,7 +454,7 @@ class Tensor:
             if g is None:
                 continue
             if t._backward is None:                 # a leaf — accumulate here
-                if t.requires_grad:
+                if t.requires_grad and (wanted is None or id(t) in wanted):
                     t.grad = Tensor(g) if t.grad is None else Tensor(t.grad.data + g)
                 continue
             # **Accumulate on a derived tensor that called `retain_grad()`

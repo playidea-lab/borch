@@ -1416,7 +1416,15 @@ def max_unpool3d(x, indices, kernel_size, stride=None, padding=0, output_size=No
     return _unpool(x, indices, kernel_size, stride, padding, output_size, 3)
 
 
-def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None):
+def _out_size(in_size, scale_factor):
+    """torch's output length: **floor**, per axis, from a scale that may be a float."""
+    scales = (scale_factor if isinstance(scale_factor, (tuple, list))
+              else (scale_factor,) * len(in_size))
+    return tuple(int(_math.floor(n * float(sc))) for n, sc in zip(in_size, scales))
+
+
+def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None,
+                recompute_scale_factor=None):
     """Enlargement. Nearest and bilinear.
 
     **`align_corners` changes the values.** True pins both ends and divides
@@ -1428,30 +1436,61 @@ def interpolate(x, size=None, scale_factor=2, mode="nearest", align_corners=None
     """
     x = _wrap(x)
     if mode == "bilinear":
-        return _interpolate_bilinear(x, size, scale_factor, bool(align_corners))
+        return _interpolate_bilinear(x, size, scale_factor, bool(align_corners),
+                                     recompute_scale_factor)
     if mode != "nearest":
         _unsupported(f"interpolate(mode={mode!r}) — only nearest and bilinear are here")
-    if size is not None:
-        n, c, h, w = x.data.shape
-        oh, ow = _pair(size)
-        if oh % h or ow % w:
-            _unsupported("interpolate(size=) — upsampling by a non-integer factor")
-        scale_factor = (oh // h, ow // w)
-    sh, sw = _pair(scale_factor)
     xd = x.data
     n, c, h, w = xd.shape
-    out = _np.repeat(_np.repeat(xd, sh, axis=2), sw, axis=3)
+    if size is not None:
+        oh, ow = _pair(size)
+    else:
+        oh, ow = _out_size((h, w), scale_factor)
+    # **A source index per output cell, not a whole-number repeat.**
+    #
+    # This was `np.repeat` twice and it refused anything that was not an integer
+    # multiple — `interpolate(x, scale_factor=1.5)` stopped with `'float' object is
+    # not iterable`, from `_pair`, which names neither the scale nor the mode. torch
+    # takes any positive scale and takes `size=` that is not a multiple, and nearest
+    # neighbour has no difficulty with either: the source is `floor(i / scale)`.
+    #
+    # **`recompute_scale_factor` decides which scale that is.** True rebuilds it as
+    # `out / in` after the output size has been floored; False uses the number the
+    # caller gave. They differ exactly when the flooring loses something — `5 → 1.7`
+    # gives 8, and `8 / 5 = 1.6` is not `1.7`, so the two pick different source cells
+    # in the middle of the row.
+    #
+    # **`None` is torch's default and it behaves as `False`, not as `True`.** That is
+    # the opposite of what the name suggests — "recompute" reads like the thing a
+    # default would do — and it was written the other way here first. Measured: with
+    # `None`, torch agrees with `False` at every scale tried and with `True` at none
+    # of them.
+    use_given = recompute_scale_factor is not True and size is None
+    given = (scale_factor if isinstance(scale_factor, (tuple, list))
+             else (scale_factor, scale_factor))
+    sh = given[0] if use_given else (oh / h)
+    sw = given[1] if use_given else (ow / w)
+    rows = _np.minimum((_np.arange(oh) / sh).astype(int), h - 1)
+    cols = _np.minimum((_np.arange(ow) / sw).astype(int), w - 1)
+    out = xd[:, :, rows][:, :, :, cols]
 
     def back(g):
-        gg = _np.asarray(g).reshape(n, c, h, sh, w, sw)
-        return (gg.sum(axis=(3, 5)),)
+        g = _np.asarray(g)
+        gx = _np.zeros_like(xd)
+        _np.add.at(gx, (slice(None), slice(None), rows[:, None], cols[None, :]), g)
+        return (gx,)
 
     return x._make(out, (x,), back, "UpsampleBackward0")
 
 
-def _bilinear_axis(size_in, size_out, align_corners):
+def _bilinear_axis(size_in, size_out, align_corners, scale=None):
     """For each output position, **which two input positions and in what
-    proportion.**"""
+    proportion.**
+
+    `scale` is the one the caller asked for, used only where `align_corners` is
+    false and `recompute_scale_factor` is false — see `interpolate`. Left as `None`
+    the scale is `size_in / size_out`, which is what torch uses by default.
+    """
     if align_corners:
         # Both ends are pinned and the space between is divided evenly.
         src = (_np.arange(size_out, dtype=_np.float64)
@@ -1459,23 +1498,30 @@ def _bilinear_axis(size_in, size_out, align_corners):
     else:
         # Measured from the centre of each cell. Positions that fall outside are
         # clamped to the edge.
-        scale = size_in / size_out
-        src = (_np.arange(size_out, dtype=_np.float64) + 0.5) * scale - 0.5
+        step = (size_in / size_out) if scale is None else (1.0 / float(scale))
+        src = (_np.arange(size_out, dtype=_np.float64) + 0.5) * step - 0.5
         src = _np.clip(src, 0, None)
     lo = _np.floor(src).astype(_np.intp)
     hi = _np.minimum(lo + 1, size_in - 1)
     return lo, hi, (src - lo)
 
 
-def _interpolate_bilinear(x, size, scale_factor, align_corners):
+def _interpolate_bilinear(x, size, scale_factor, align_corners,
+                          recompute_scale_factor=None):
     n, c, h, w = x.data.shape
+    keep = None
     if size is not None:
         oh, ow = _pair(size)
     else:
-        sh, sw = _pair(scale_factor)
-        oh, ow = int(h * sh), int(w * sw)
-    y0, y1, wy = _bilinear_axis(h, oh, align_corners)
-    x0, x1, wx = _bilinear_axis(w, ow, align_corners)
+        oh, ow = _out_size((h, w), scale_factor)
+        if recompute_scale_factor is not True:
+            # **The caller's scale, not the one the output size implies**, and that
+            # is torch's default — `None` behaves as `False` here. They part once the
+            # floor has lost something: 5 at 1.7 gives 8, and 8 / 5 is 1.6.
+            keep = (scale_factor if isinstance(scale_factor, (tuple, list))
+                    else (scale_factor, scale_factor))
+    y0, y1, wy = _bilinear_axis(h, oh, align_corners, keep and keep[0])
+    x0, x1, wx = _bilinear_axis(w, ow, align_corners, keep and keep[1])
     wy = wy.astype(x.data.dtype)[:, None]
     wx = wx.astype(x.data.dtype)[None, :]
 
@@ -1569,10 +1615,21 @@ def _adaptive(x, output_size, kind):
     return out
 
 
-def _fixed_windows(n_in, size, step):
+def _fixed_windows(n_in, size, step, ceil_mode=False):
     """The list of fixed windows. **Written in one place only** — values and
-    positions looking at different windows would diverge."""
-    return [(s, s + size, 1) for s in range(0, n_in - size + 1, step)]
+    positions looking at different windows would diverge.
+
+    `ceil_mode` adds the trailing window that rounding up allows, **clipped to the
+    input** rather than padded: with no padding there is nothing to pad with, and
+    torch folds over the cells that are really there. It is dropped if it would
+    start past the end, which is the same rule `_pool_windows` states at length.
+    """
+    stops = list(range(0, n_in - size + 1, step))
+    if ceil_mode:
+        nxt = (stops[-1] + step) if stops else 0
+        if nxt < n_in and (not stops or stops[-1] + size < n_in):
+            stops.append(nxt)
+    return [(s, min(s + size, n_in), 1) for s in stops]
 
 
 def _pool_windows(n_in, size, stride, padding, dilation, ceil_mode):
@@ -1622,7 +1679,7 @@ def _fixed_window_axes(shape, kernel_size, stride):
             for k in range(spatial)]
 
 
-def _fixed(x, kernel_size, stride, kind):
+def _fixed(x, kernel_size, stride, kind, ceil_mode=False):
     """A fixed window. The same machine as the adaptive one with a different
     window list."""
     x = _wrap(x)
@@ -1632,7 +1689,8 @@ def _fixed(x, kernel_size, stride, kind):
     out = x
     for k in range(spatial):
         axis = 2 + k
-        windows = _fixed_windows(out.data.shape[axis], kernels[k], strides[k])
+        windows = _fixed_windows(out.data.shape[axis], kernels[k], strides[k],
+                                 ceil_mode)
         out = _fold_axis(out, axis, windows, kind)
     return out
 
@@ -1733,15 +1791,25 @@ def adaptive_max_pool3d(x, output_size, return_indices=False):
     return _adaptive(x, _spread(output_size, 3), "max")
 
 
-def avg_pool1d(x, kernel_size, stride=None):
-    return _fixed(x, _spread(kernel_size, 1), stride, "avg")
+def avg_pool1d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+               count_include_pad=True):
+    """`padding` and `count_include_pad` are refused rather than approximated —
+    `avg_pool2d` next door has them and this shares none of its code."""
+    if padding or not count_include_pad:
+        _unsupported("avg_pool1d(padding=…) and count_include_pad=False")
+    return _fixed(x, _spread(kernel_size, 1), stride, "avg", ceil_mode)
 
 
-def avg_pool3d(x, kernel_size, stride=None):
-    return _fixed(x, _spread(kernel_size, 3), stride, "avg")
+def avg_pool3d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+               count_include_pad=True, divisor_override=None):
+    """See `avg_pool1d` on the refusals."""
+    if padding or not count_include_pad or divisor_override is not None:
+        _unsupported("avg_pool3d(padding=…), count_include_pad=False, "
+                     "divisor_override=…")
+    return _fixed(x, _spread(kernel_size, 3), stride, "avg", ceil_mode)
 
 
-def lp_pool2d(x, norm_type, kernel_size, stride=None):
+def lp_pool2d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
     """The `p`-th root of the sum of `p`-th powers. At p=1 it is the sum, and at
     large p it approaches the maximum.
 
@@ -1751,23 +1819,23 @@ def lp_pool2d(x, norm_type, kernel_size, stride=None):
     """
     x = _wrap(x)
     kh, kw = _pair(kernel_size)
-    out = avg_pool2d(x ** norm_type, kernel_size, stride)
+    out = avg_pool2d(x ** norm_type, kernel_size, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * (kh * kw)) ** (1.0 / norm_type)
 
 
-def lp_pool1d(x, norm_type, kernel_size, stride=None):
+def lp_pool1d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
     x = _wrap(x)
     k = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
-    out = avg_pool1d(x ** norm_type, k, stride)
+    out = avg_pool1d(x ** norm_type, k, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * k) ** (1.0 / norm_type)
 
 
-def lp_pool3d(x, norm_type, kernel_size, stride=None):
+def lp_pool3d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
     """The same assembly as 1-D and 2-D. Only the window cell count becomes the
     product of three axes."""
     x = _wrap(x)
     kd, kh, kw = _spread(kernel_size, 3)
-    out = avg_pool3d(x ** norm_type, kernel_size, stride)
+    out = avg_pool3d(x ** norm_type, kernel_size, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * (kd * kh * kw)) ** (1.0 / norm_type)
 
 

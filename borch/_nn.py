@@ -1096,7 +1096,8 @@ class _RNNBase(Module):
     MODES = ("RNN_TANH", "RNN_RELU", "LSTM", "GRU")
 
     def __init__(self, mode, input_size, hidden_size, num_layers=1, bias=True,
-                 batch_first=False, dropout=0.0, bidirectional=False, proj_size=0):
+                 batch_first=False, dropout=0.0, bidirectional=False, proj_size=0,
+                 device=None, dtype=None):
         """torch's parameter list, `mode` first.
 
         **This began at `input_size`**, so `RNNBase` disagreed with torch by one
@@ -1110,6 +1111,7 @@ class _RNNBase(Module):
         one direction returns a plausible number of the wrong shape's meaning.
         """
         super().__init__()
+        _no_device_dtype(type(self).__name__, device, dtype)
         if mode not in self.MODES:
             raise ValueError(f"Unrecognized RNN mode: {mode}")
         self.mode = mode
@@ -1801,8 +1803,26 @@ class TransformerEncoderLayer(Module):
 class TransformerEncoder(Module):
     """The same layer stacked. Named `layers.N.…` as in torch."""
 
-    def __init__(self, encoder_layer, num_layers, norm=None):
+    def __init__(self, encoder_layer, num_layers, norm=None,
+                 enable_nested_tensor=True, mask_check=True):
+        """**Both of torch's last two are accepted and unused, and neither can
+        change an answer.**
+
+        `enable_nested_tensor` asks for the fast path that packs a padded batch into
+        a nested tensor — a representation, not a computation, and torch falls back
+        to the ordinary path whenever it cannot use it. There are no nested tensors
+        here, so this is that fallback permanently.
+
+        `mask_check` asks torch to *validate* the mask before using it. Ours
+        validates unconditionally: turning a check off to go faster is a trade there
+        is nothing to trade here.
+
+        Same standing as `foreach` on the optimizers — an argument that cannot change
+        the answer is not a capability being faked. The seats are torch's, so a
+        positional call reaching them lands where torch lands.
+        """
         super().__init__()
+        del enable_nested_tensor, mask_check
         import copy as _copy
         self.layers = ModuleList([_copy.deepcopy(encoder_layer) for _ in range(num_layers)])
         self._modules["layers"] = self.layers
@@ -2459,22 +2479,30 @@ class AdaptiveMaxPool3d(_AdaptiveMaxPoolND):
 
 
 class LPPool1d(Module):
-    def __init__(self, norm_type, kernel_size, stride=None):
+    def __init__(self, norm_type, kernel_size, stride=None, ceil_mode=False):
+        """`ceil_mode` adds the trailing window that rounding up allows, **clipped
+        to the input**: with no padding there is nothing to pad with, so torch folds
+        over the cells that are really there. It reached `avg_pool1d` and stopped
+        there, which is why all three of these were short by exactly one argument."""
         super().__init__()
         self.norm_type, self.kernel_size, self.stride = norm_type, kernel_size, stride
+        self.ceil_mode = ceil_mode
 
     def forward(self, x):
-        return lp_pool1d(x, self.norm_type, self.kernel_size, self.stride)
+        return lp_pool1d(x, self.norm_type, self.kernel_size, self.stride,
+                         self.ceil_mode)
 
 
 class LPPool2d(LPPool1d):
     def forward(self, x):
-        return lp_pool2d(x, self.norm_type, self.kernel_size, self.stride)
+        return lp_pool2d(x, self.norm_type, self.kernel_size, self.stride,
+                         self.ceil_mode)
 
 
 class LPPool3d(LPPool1d):
     def forward(self, x):
-        return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride)
+        return lp_pool3d(x, self.norm_type, self.kernel_size, self.stride,
+                         self.ceil_mode)
 
 
 ASMoutput = _collections.namedtuple("ASMoutput", ["output", "loss"])
@@ -3613,10 +3641,11 @@ class Upsample(Module):
     """
 
     def __init__(self, size=None, scale_factor=None, mode="nearest",
-                 align_corners=None):
+                 align_corners=None, recompute_scale_factor=None):
         super().__init__()
         self.size, self.scale_factor = size, scale_factor
         self.mode, self.align_corners = mode, align_corners
+        self.recompute_scale_factor = recompute_scale_factor
 
     def forward(self, x):
         if self.size is None and self.scale_factor is None:
@@ -3624,7 +3653,8 @@ class Upsample(Module):
                 "Give either size or scale_factor.",
                 "either size or scale_factor should be defined"))
         return interpolate(x, size=self.size, scale_factor=self.scale_factor,
-                           mode=self.mode, align_corners=self.align_corners)
+                           mode=self.mode, align_corners=self.align_corners,
+                           recompute_scale_factor=self.recompute_scale_factor)
 
     def __repr__(self):
         return f"Upsample(scale_factor={self.scale_factor}, mode={self.mode!r})"
