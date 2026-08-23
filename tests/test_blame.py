@@ -169,11 +169,43 @@ THE_TWO = [
 #
 # Named rather than filtered by a rule (a date, a prefix) so that the next addition
 # fails here and is looked at, instead of being absorbed by a pattern.
+#
+# **The cost of naming them is that this list needs adding to**, and it will fire on
+# any future `opt::` or `train::` case that trains — which has nothing to do with the
+# grouping and everything to do with the era. So `_era_gap` below turns that failure
+# from a puzzle into an instruction: it works out which cases are making the helper
+# stop being named and prints them ready to paste. A test that must be updated is
+# fine; a test that must be *understood again* every time is not.
 ADDED_AFTER = frozenset({
     "opt::Adam(maximize)/0.weight", "opt::Adam(maximize)/손실",
     "opt::RMSprop(maximize)/0.weight", "opt::RMSprop(maximize)/손실",
     "opt::SGD(the default rate)/0.weight", "opt::SGD(the default rate)/손실",
 })
+
+
+def _era_gap(cases, helper):
+    """The cases through `helper` that are **not** in the frozen failure list.
+
+    Those are exactly the rows that stop `blame.group` naming it, and exactly what
+    belongs in `ADDED_AFTER` if they were added after the 94 were measured. Returned
+    sorted so the failure message can be pasted straight in.
+
+    **Only the first assertion needs this.** Measured by emptying `ADDED_AFTER`: the
+    sibling test still passes, because `controls` asks for a helper with *no*
+    failures and a newly-added passing case cannot create one. So era drift shows up
+    at one end and not the other — which is worth knowing, since a reader who sees
+    one red test may reasonably conclude the other half is unaffected, and here that
+    happens to be true.
+    """
+    failed = set()
+    ordered = sorted((n for n, _ in cases), key=len, reverse=True)
+    for line in NINETY_FOUR:
+        for name in ordered:
+            if line == name or line.startswith(name + ":"):
+                failed.add(name)
+                break
+    return sorted(n for n, fn in cases
+                  if helper in blame._helpers(fn) and n not in failed)
 
 
 @pytest.fixture(scope="module")
@@ -201,7 +233,13 @@ def test_it_names_the_helper_every_failing_case_went_through(cases):
     named = {helper for helper, *_ in rows}
     assert "CrossEntropyLoss" in named, (
         f"the grouping did not name the loss every failing case trains through.\n"
-        f"  it named: {sorted(named) or '(nothing)'}")
+        f"  it named: {sorted(named) or '(nothing)'}\n\n"
+        "  These cases go through `CrossEntropyLoss` and are not in the frozen\n"
+        "  failure list, so the helper no longer fails whole:\n"
+        + "".join(f'        "{n}",\n' for n in _era_gap(cases, "CrossEntropyLoss"))
+        + "  If they were added after the 94 were measured, paste them into\n"
+          "  `ADDED_AFTER`. If one of them is old and newly passing, that is a\n"
+          "  different thing and worth reading before it is silenced.")
 
 
 def test_it_finds_the_sibling_that_passed(cases):
