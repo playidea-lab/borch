@@ -86,9 +86,21 @@ class Optimizer:
 
 
 class SGD(Optimizer):
-    def __init__(self, params, lr=0.01, momentum=0.0, dampening=0.0,
+    def __init__(self, params, lr=1e-3, momentum=0.0, dampening=0.0,
                  weight_decay=0.0, nesterov=False, *, maximize=False):
         """torch's order, with `dampening` third and `nesterov` sixth.
+
+        **The default learning rate was `0.01` and torch's is `1e-3`** — ten times
+        too large, on the one optimizer a tutorial is most likely to build without
+        arguments. `SGD(model.parameters())` trained, and trained ten times faster
+        than the same line does in torch, which does not fail: it converges to a
+        different place, or diverges on a problem torch handles.
+        
+        Nothing had noticed because every golden case names its own rate. A default
+        is the one value a case cannot check by using it — using it is what makes
+        the case agree with whatever the default happens to be. It surfaced from a
+        harness written for `maximize`, comparing the two libraries built with no
+        arguments at all.
 
         **This read `(params, lr, momentum, weight_decay)`**, so `SGD(p, 0.1, 0.9,
         1e-4)` — a line anybody transcribes out of a torch tutorial — set the
@@ -130,8 +142,9 @@ class SGD(Optimizer):
 
 
 class Adam(Optimizer):
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
-        super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay))
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+                 maximize=False):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, maximize=maximize))
 
     decoupled = False          # True for AdamW — the decay applies to the weights directly rather than to the gradient
 
@@ -146,7 +159,7 @@ class Adam(Optimizer):
                 st.setdefault("exp_avg", _np.zeros_like(p.data))
                 st.setdefault("exp_avg_sq", _np.zeros_like(p.data))
                 st["step"] += 1
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"] and not self.decoupled:
                     g = g + group["weight_decay"] * p.data
                 st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
@@ -165,13 +178,16 @@ class AdamW(Adam):
 
     decoupled = True
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
-        super().__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+                 weight_decay=0.01, *, maximize=False):
+        super().__init__(params, lr=lr, betas=betas, eps=eps,
+                         weight_decay=weight_decay, maximize=maximize)
 
 
 class RMSprop(Optimizer):
-    def __init__(self, params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
-        super().__init__(params, dict(lr=lr, alpha=alpha, eps=eps, weight_decay=weight_decay))
+    def __init__(self, params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0, *,
+                 maximize=False):
+        super().__init__(params, dict(lr=lr, alpha=alpha, eps=eps, weight_decay=weight_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -180,7 +196,7 @@ class RMSprop(Optimizer):
                     continue
                 st = self._state(p)
                 st.setdefault("square_avg", _np.zeros_like(p.data))
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 st["square_avg"] = (group["alpha"] * st["square_avg"]
@@ -237,9 +253,10 @@ class Adadelta(Optimizer):
     takes, it is wildly large.
     """
 
-    def __init__(self, params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):
+    def __init__(self, params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0, *,
+                 maximize=False):
         super().__init__(params, dict(lr=lr, rho=rho, eps=eps,
-                                      weight_decay=weight_decay))
+                                      weight_decay=weight_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -250,7 +267,7 @@ class Adadelta(Optimizer):
                 st = self._state(p)
                 st.setdefault("square_avg", _np.zeros_like(p.data))
                 st.setdefault("acc_delta", _np.zeros_like(p.data))
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 st["square_avg"] = rho * st["square_avg"] + (1 - rho) * g * g
@@ -264,9 +281,10 @@ class Adamax(Optimizer):
     """Adam's second moment kept as **a maximum rather than a mean of squares.**
     The infinity-norm version."""
 
-    def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+    def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+                 maximize=False):
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
-                                      weight_decay=weight_decay))
+                                      weight_decay=weight_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -279,7 +297,7 @@ class Adamax(Optimizer):
                 st.setdefault("exp_avg", _np.zeros_like(p.data))
                 st.setdefault("exp_inf", _np.zeros_like(p.data))
                 st["step"] += 1
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
@@ -299,10 +317,11 @@ class NAdam(Optimizer):
     """
 
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0.0, momentum_decay=4e-3):
+                 weight_decay=0.0, momentum_decay=4e-3, *,
+                 maximize=False):
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
                                       weight_decay=weight_decay,
-                                      momentum_decay=momentum_decay))
+                                      momentum_decay=momentum_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -318,7 +337,7 @@ class NAdam(Optimizer):
                 st.setdefault("exp_avg_sq", _np.zeros_like(p.data))
                 st["step"] += 1
                 t = st["step"]
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 mu = b1 * (1 - 0.5 * 0.96 ** (t * psi))
@@ -342,9 +361,10 @@ class RAdam(Optimizer):
     Adam's, so the golden walks five steps.
     """
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+                 maximize=False):
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
-                                      weight_decay=weight_decay))
+                                      weight_decay=weight_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -359,7 +379,7 @@ class RAdam(Optimizer):
                 st.setdefault("exp_avg_sq", _np.zeros_like(p.data))
                 st["step"] += 1
                 t = st["step"]
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 st["exp_avg"] = b1 * st["exp_avg"] + (1 - b1) * g
@@ -392,9 +412,10 @@ class ASGD(Optimizer):
     """
 
     def __init__(self, params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6,
-                 weight_decay=0.0):
+                 weight_decay=0.0, *,
+                 maximize=False):
         super().__init__(params, dict(lr=lr, lambd=lambd, alpha=alpha, t0=t0,
-                                      weight_decay=weight_decay))
+                                      weight_decay=weight_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -408,7 +429,7 @@ class ASGD(Optimizer):
                 st.setdefault("mu", 1.0)
                 st.setdefault("ax", _np.zeros_like(p.data))
                 st["step"] += 1
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 if group["weight_decay"]:
                     g = g + group["weight_decay"] * p.data
                 eta, mu = st["eta"], st["mu"]
@@ -433,8 +454,9 @@ class Rprop(Optimizer):
     different, and an input whose signs never flip never catches it.
     """
 
-    def __init__(self, params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50)):
-        super().__init__(params, dict(lr=lr, etas=etas, step_sizes=step_sizes))
+    def __init__(self, params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *,
+                 maximize=False):
+        super().__init__(params, dict(lr=lr, etas=etas, step_sizes=step_sizes, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -449,6 +471,8 @@ class Rprop(Optimizer):
                 st.setdefault("step_size", _np.full_like(p.data, group["lr"]))
                 st["step"] += 1
                 g = _np.array(p.grad.data, copy=True)
+                if group["maximize"]:
+                    g = -g
                 sign = _np.sign(g * st["prev"])
                 factor = _np.where(sign > 0, eta_plus,
                                    _np.where(sign < 0, eta_minus, 1.0))
@@ -473,9 +497,10 @@ class Adafactor(Optimizer):
     """
 
     def __init__(self, params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3),
-                 d=1.0, weight_decay=0.0):
+                 d=1.0, weight_decay=0.0, *,
+                 maximize=False):
         super().__init__(params, dict(lr=lr, beta2_decay=beta2_decay, eps=eps,
-                                      d=d, weight_decay=weight_decay))
+                                      d=d, weight_decay=weight_decay, maximize=maximize))
 
     def step(self):
         for group in self.param_groups:
@@ -484,7 +509,7 @@ class Adafactor(Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                g = p.grad.data
+                g = -p.grad.data if group["maximize"] else p.grad.data
                 one = eps1 if eps1 is not None else _np.finfo(p.data.dtype).eps
                 st = self._state(p)
                 st.setdefault("step", 0)

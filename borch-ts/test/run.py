@@ -291,6 +291,19 @@ NOT_PORTED = {
     # carrying that shape into TS would make a second copy of it. The seventeen value cases
     # were ported, and it was those that caught a defect in the kernel.
     "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
+    # **`opt::` has a row again, and its own comment above says the last three reasons
+    # written here were each wrong in turn.** So this one names exactly what cannot
+    # cross and nothing more.
+    #
+    # `maximize` went onto ten core optimizers and borch.ts has it on `SGD` alone —
+    # carrying it means a WGSL kernel per optimizer, which is work rather than a
+    # decision, hence `아직`. The third is `SGD(the default rate)`, which cannot exist
+    # over there at all: borch.ts's `SGD` requires `lr`, so there is no default to
+    # disagree about. That one is `없음` in a row of `아직`, and it is counted here
+    # rather than split into a row of its own because a one-case prefix would read as
+    # a category.
+    "opt::": (6, "아직 — `maximize` on Adam and RMSprop needs a kernel each; and "
+                 "borch.ts's SGD requires `lr`, so it has no default rate to ask about"),
     # 158 → 86. **One reason was covering eight groups.** `아직` means a backlog, and
     # what was actually backed up was `자리만::` 63 and `묻는것::` 9 alone — both pure
     # properties of the other side, asking `t.dtype` and nothing else, and both should have

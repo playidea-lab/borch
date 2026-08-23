@@ -109,7 +109,7 @@ def _params(ps):
     return _js.Array.new(*[handle(p) for p in ps])
 
 
-def SGD(params, lr=0.01, momentum=0.0, dampening=0.0, weight_decay=0.0,
+def SGD(params, lr=1e-3, momentum=0.0, dampening=0.0, weight_decay=0.0,
         nesterov=False, *, maximize=False):
     """torch's order. **`weight_decay` moved from fourth to fifth** and this call
     moved with it — a positional bridge is a bet that the far side's parameter order
@@ -119,12 +119,22 @@ def SGD(params, lr=0.01, momentum=0.0, dampening=0.0, weight_decay=0.0,
                                   _js.JSON.parse(f'{{"maximize":{str(bool(maximize)).lower()}}}')))
 
 
-def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+def Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+         maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "Adam(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.Adam.new(_params(params), lr, betas[0], betas[1],
                                    eps, weight_decay))
 
 
-def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
+def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01, *,
+          maximize=False):
     """**`weight_decay` defaults to 0.01 here and to 0 in `Adam`**, which is torch's
     split and most of the reason the two are separate names.
 
@@ -133,11 +143,28 @@ def AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
     **An absence says so.** The defect a few lines below was a table sending arguments
     into the wrong seats, which said nothing at all for four of its eight.
     """
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "AdamW(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.AdamW.new(_params(params), lr, betas[0], betas[1],
                                     eps, weight_decay))
 
 
-def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0):
+def RMSprop(params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay=0.0, *,
+            maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "RMSprop(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.RMSprop.new(_params(params), lr, alpha, eps,
                                       weight_decay))
 
@@ -155,38 +182,101 @@ def Adagrad(params, lr=0.01, lr_decay=0.0, weight_decay=0.0,
                                       initial_accumulator_value, eps))
 
 
-def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0):
+def Adadelta(params, lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.0, *,
+             maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "Adadelta(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.Adadelta.new(_params(params), lr, rho, eps, weight_decay))
 
 
-def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+def Adamax(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+           maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "Adamax(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.Adamax.new(_params(params), lr, betas[0], betas[1], eps,
                                      weight_decay))
 
 
 def NAdam(params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0,
-          momentum_decay=4e-3):
+          momentum_decay=4e-3, *,
+          maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "NAdam(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.NAdam.new(_params(params), lr, betas[0], betas[1], eps,
                                     weight_decay, momentum_decay))
 
 
-def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
+def RAdam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0, *,
+          maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "RAdam(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.RAdam.new(_params(params), lr, betas[0], betas[1], eps,
                                     weight_decay))
 
 
-def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0):
+def ASGD(params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0.0, *,
+         maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "ASGD(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.ASGD.new(_params(params), lr, lambd, alpha, t0,
                                    weight_decay))
 
 
-def Rprop(params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50)):
+def Rprop(params, lr=1e-2, etas=(0.5, 1.2), step_sizes=(1e-6, 50), *,
+          maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "Rprop(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.Rprop.new(_params(params), lr, etas[0], etas[1],
                                     step_sizes[0], step_sizes[1]))
 
 
 def Adafactor(params, lr=1e-2, beta2_decay=-0.8, eps=(None, 1e-3), d=1.0,
-              weight_decay=0.0):
+              weight_decay=0.0, *,
+              maximize=False):
+    # `maximize` is the core's now and is not carried across here yet. **Accepted so
+    # the position is held, refused so it cannot be believed** — the shape `Adagrad`
+    # above already uses. Dropping it instead would train in the wrong direction and
+    # say nothing.
+    if maximize:
+        raise NotImplementedError(
+            "Adafactor(maximize=True) is not carried into the browser yet — "
+            "the argument is here so it cannot take another's place.")
     return _Opt(_ts.optim.Adafactor.new(_params(params), lr, beta2_decay,
                                         eps[0], eps[1], d, weight_decay))
 

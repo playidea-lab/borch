@@ -249,7 +249,10 @@ SHORTER = {
     # `eps` and the core stops there. Landing it here rather than in a bucket of its
     # own is deliberate: this is the only bucket that names a missing argument, and a
     # private one would have taken `foreach` out of the report to make it look tidier.
-    "optim": 12,
+    # 12 → 10. Two optimizers left for `agree` when they took `maximize`: torch has
+    # it keyword-only, so their positional lists were already level and the name was
+    # the whole difference.
+    "optim": 10,
     "optim.lr_scheduler": 1,
     "linalg": 0,
     "utils.data": 1,
@@ -432,7 +435,18 @@ def test_the_measurement_still_runs_as_a_script():
 # `foreach`, `capturable`, `differentiable`, `fused` — which change no value and are
 # absences in name only. The ones that do change values are `maximize` on eight
 # optimizers and `Adam`'s `decoupled_weight_decay`, and those are work.
-KEYWORD_ONLY_ABSENCES = 41
+# 41 → 33. **`maximize` on ten optimizers**, which is the other half of what this
+# number was holding: it turns the gradient round, so it changes values, where
+# `foreach` and `fused` do not. Checked against real torch over twelve optimizers ×
+# two directions × five steps — worst difference 2.4e-07, and `maximize=True` moves
+# the answer on every one of the twelve, which is the half a value comparison alone
+# would not have asked.
+#
+# The 33 left are almost entirely torch's execution switches — `foreach`,
+# `capturable`, `differentiable`, `fused` — which change no value. `Adam`'s
+# `decoupled_weight_decay` and `dim_order`'s `ambiguity_check` are the two that are
+# still work.
+KEYWORD_ONLY_ABSENCES = 33
 
 
 def _keyword_only_gaps():

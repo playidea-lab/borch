@@ -3551,6 +3551,20 @@ _OPTIMIZERS = [
     ("SGD(maximize)", {"lr": 0.01, "maximize": True}),
     ("Adagrad(initial_accumulator_value)",
      {"lr": 0.1, "initial_accumulator_value": 0.5}),
+    # **`maximize` existed on two of the twelve and the table asked about one.** It
+    # turns the gradient round, so it changes every value, and ten optimizers were
+    # simply refusing the argument. Adam and RMSprop are asked here because they are
+    # the two a recipe reaches for; the other eight are checked against real torch in
+    # the same edit rather than frozen, since twelve more rows of the same shape
+    # would freeze one behaviour twelve times.
+    ("Adam(maximize)", {"lr": 0.05, "maximize": True}),
+    ("RMSprop(maximize)", {"lr": 0.05, "maximize": True}),
+    # **A default is the one value a case cannot check by using it.** `SGD`'s `lr`
+    # defaulted to 0.01 here and to 1e-3 in torch — ten times too large on the
+    # optimizer a tutorial is most likely to build with no arguments at all — and
+    # every case above names its own rate, so nothing had ever asked. This row omits
+    # it on purpose.
+    ("SGD(the default rate)", {}),
 ]
 
 # `(name, constructor arguments, how many steps)`. The learning rate's **trajectory** is asked.

@@ -198,7 +198,15 @@ UNALIGNED = {
                 #     same as two sides drifting**, and this bucket cannot tell them
                 #     apart on its own; that is what the comment is for.
     "nn.functional": 1,
-    "optim": 7,
+    # 7 → 1. **Six rows left the worst bucket, and not because borch.ts moved.**
+    # `maximize` went onto ten core optimizers; borch.ts already spells its own
+    # switches at the same positions, so the two lists became the same length and
+    # the difference became a spelling — `renamed` rather than `unaligned`.
+    #
+    # A row leaving `unaligned` is worth more than a row leaving `shorter`: this is
+    # the bucket that means *nobody can tell from the names whether these are the
+    # same arguments*, so it is the one that has to be read by a person.
+    "optim": 1,
     "optim.lr_scheduler": 3,
     "linalg": 6,
     "utils.data": 0,
@@ -222,7 +230,10 @@ RENAMED = {
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     "nn.functional": 1,
-    "optim": 1,
+    # 1 → 7, all six arriving from `unaligned` above. Same length, different
+    # spellings, which is a row somebody can still get wrong — `renamed` is not a
+    # clean bill, it is `unaligned`'s equal-length sibling.
+    "optim": 7,
     "optim.lr_scheduler": 0,
     "linalg": 17,
     "utils.data": 0,
@@ -268,7 +279,12 @@ SHORTER = {
     # many raises there, where the same gap in `shifted` would have meant a value
     # landing on the wrong parameter. `SGD` did get `maximize` on both sides in the
     # same edit and is not here.
-    "optim": 1,
+    #
+    # 1 → 4. Three optimizers now take one argument more than borch.ts does, because
+    # `maximize` landed on the core and the far side has it on `SGD` alone. A short
+    # tail is the safe end of that: one argument too many raises rather than landing
+    # somewhere.
+    "optim": 4,
     # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
     # list in the same edit, so the row stopped being a truncation. The
     # cooldown counter joined `stateDict` with it — left out, a resume inside

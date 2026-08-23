@@ -155,12 +155,40 @@ THE_TWO = [
 ]
 
 
+# **Cases added after the 94 were measured.** The failure list above is frozen and the
+# case table below is read live, so the grouping's rule — *every case through this
+# helper failed* — is asked with a denominator that keeps growing while its numerator
+# does not. Three `opt::` cases added later go through `trained` and therefore through
+# `CrossEntropyLoss`, and they did not fail because by then it was fixed: the helper
+# stopped being named and both assertions went red against a correct implementation.
+#
+# That is this file's own sentence one level over. It says **a sample of a failure list
+# is not a failure list**, and the reason given is that which rows are *absent* carries
+# the finding. The same is true of the case table, and only one of the two was pinned —
+# so the fixture stayed a snapshot at one end and a live reading at the other.
+#
+# Named rather than filtered by a rule (a date, a prefix) so that the next addition
+# fails here and is looked at, instead of being absorbed by a pattern.
+ADDED_AFTER = frozenset({
+    "opt::Adam(maximize)/0.weight", "opt::Adam(maximize)/손실",
+    "opt::RMSprop(maximize)/0.weight", "opt::RMSprop(maximize)/손실",
+    "opt::SGD(the default rate)/0.weight", "opt::SGD(the default rate)/손실",
+})
+
+
 @pytest.fixture(scope="module")
 def cases():
     spec = importlib.util.spec_from_file_location("bt_cases", ROOT / "tests" / "cases.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.golden_cases(mod.golden_inputs())
+    built = mod.golden_cases(mod.golden_inputs())
+    kept = {n: f for n, f in dict(built).items() if n not in ADDED_AFTER}
+    missing = ADDED_AFTER - set(dict(built))
+    assert not missing, (
+        f"ADDED_AFTER names cases that no longer exist: {sorted(missing)}\n"
+        "  A name here that matches nothing removes nothing, and this fixture would "
+        "go on looking correct.")
+    return list(kept.items())
 
 
 def test_it_names_the_helper_every_failing_case_went_through(cases):

@@ -107,7 +107,10 @@ CEILINGS = {
     # each) for the `affine=False` and `bias=False` variants of `GroupNorm` and
     # `BatchNorm2d`. Names, not prose: the Python and TypeScript tables have to agree
     # on the string or the row reconciles against nothing.
-    "borch-ts/test": 3126,
+    # 3126 → 3132. The `opt::` row returning to `run.py`'s ledger, whose reasons are
+    # written in Korean and whose marker words (`아직`, `없음`) are what `test_site.py`
+    # matches on to tell owed work from declined work. A marker is a key.
+    "borch-ts/test": 3132,
 }
 
 
