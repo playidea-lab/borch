@@ -82,9 +82,9 @@ def _category(dt):
     return _CATEGORY.get(_np.dtype(dt).kind, 2)
 
 
-def result_type(a, b):
+def result_type(tensor1, tensor2):
     """The result type of two tensor dtypes. torch.result_type's rule."""
-    da, db = _np.dtype(a), _np.dtype(b)
+    da, db = _np.dtype(tensor1), _np.dtype(tensor2)
     cat = max(_category(da), _category(db))
     same = [d for d in (da, db) if _category(d) == cat]
     out = max(same, key=lambda d: _RANK.get(d, 0))

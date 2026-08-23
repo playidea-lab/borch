@@ -3303,16 +3303,16 @@ function gridReflect(v: Tensor, n: number, alignCorners: boolean): Tensor {
  * input and the grid.
  */
 export function gridSample(
-  x: Tensor,
+  input: Tensor,
   grid: Tensor,
   mode: "bilinear" | "nearest" = "bilinear",
   paddingMode: "zeros" | "border" | "reflection" = "zeros",
   alignCorners = false,
 ): Tensor {
-  const N = x.shape[0] ?? 1;
-  const C = x.shape[1] ?? 1;
-  const H = x.shape[2] ?? 1;
-  const W = x.shape[3] ?? 1;
+  const N = input.shape[0] ?? 1;
+  const C = input.shape[1] ?? 1;
+  const H = input.shape[2] ?? 1;
+  const W = input.shape[3] ?? 1;
   const OH = grid.shape[1] ?? 1;
   const OW = grid.shape[2] ?? 1;
   const cells = OH * OW;
@@ -3335,7 +3335,7 @@ export function gridSample(
     for (let c = 0; c < C; c++) planeStart.push((n * C + c) * H * W);
   }
   const starts = Tensor.from(planeStart, [N, C, 1]);
-  const source = x.reshape([x.size]);
+  const source = input.reshape([input.size]);
 
   /** Lifts one corner. **Outside the range gives 0, and the index is clamped before
    *  it is passed.** */
@@ -3385,7 +3385,7 @@ export function gridSample(
  * diverges in eval mode only.
  */
 export function batchNorm(
-  x: Tensor,
+  input: Tensor,
   runningMean: Tensor | null,
   runningVar: Tensor | null,
   weight: Tensor | null,
@@ -3394,8 +3394,8 @@ export function batchNorm(
   momentum = 0.1,
   eps = 1e-5,
 ): Tensor {
-  const channels = x.shape[1] ?? 1;
-  const spatial = x.shape.length - 2;
+  const channels = input.shape[1] ?? 1;
+  const spatial = input.shape.length - 2;
   const shape = [1, channels, ...new Array<number>(spatial).fill(1)];
   const w = weight ?? Tensor.ones([channels]);
   const b = bias ?? Tensor.zeros([channels]);
@@ -3403,7 +3403,7 @@ export function batchNorm(
     if (!runningMean || !runningVar) {
       throw new Error("batchNorm: eval mode needs running statistics");
     }
-    const centered = x.sub(runningMean.reshape(shape));
+    const centered = input.sub(runningMean.reshape(shape));
     const scaled = centered.div(
       runningVar.reshape(shape).binary("add", Tensor.full([], eps)).sqrt());
     return scaled.mul(w.reshape(shape)).add(b.reshape(shape));
@@ -3411,11 +3411,11 @@ export function batchNorm(
   // **This goes through a fused kernel.** The assembled form cost more than twenty
   // dispatches for one layer, and most of the 1,636 in a single ResNet step came from
   // there (measured).
-  const { out, mean, variance } = x.batchNormFused(w, b, eps);
+  const { out, mean, variance } = input.batchNormFused(w, b, eps);
   if (runningMean && runningVar) {
     // Both are updated by one kernel. The assembled form was eight dispatches per
     // layer, across twenty layers.
-    const count = x.size / channels;
+    const count = input.size / channels;
     const unbias = count / (count - 1);
     const d = device();
     d.run1d(
@@ -3528,7 +3528,7 @@ function renormRows(weight: Tensor, idx: Tensor, maxNorm: number,
  * embeddings on every forward pass.
  */
 export function embeddingBag(
-  idx: Tensor,
+  input: Tensor,
   weight: Tensor,
   offsets: readonly number[] | null = null,
   maxNorm: number | null = null,
@@ -3551,14 +3551,14 @@ export function embeddingBag(
     throw new NotImplementedError(
       "embeddingBag(sparse) is not carried across — there is no sparse gradient here");
   }
-  if (maxNorm !== null) renormRows(weight, idx, maxNorm, normType);
+  if (maxNorm !== null) renormRows(weight, input, maxNorm, normType);
   const dim = weight.shape[1] ?? 1;
   // **`paddingIdx` leaves the bag rather than contributing zero to it.** Under `sum`
   // those are the same thing; under `mean` they are not, because the padded entry
   // has to leave the denominator too.
   const kept = paddingIdx === null
     ? null
-    : idx.ne(Tensor.full([], paddingIdx)).to("float32");
+    : input.ne(Tensor.full([], paddingIdx)).to("float32");
   const squash = (picked: Tensor, d: number, mask: Tensor | null) => {
     if (mode === "sum") return picked.sumDim(d, false);
     if (mode === "max") return picked.amax(d, false);
@@ -3567,9 +3567,9 @@ export function embeddingBag(
       .div(mask.sumDim(d, false).maximum(1).reshape([...picked.shape.slice(0, d), 1]));
   };
   if (offsets === null) {
-    const bags = idx.shape[0] ?? 1;
-    const each = idx.shape[1] ?? 1;
-    let picked = weight.indexSelect(0, idx.reshape([bags * each]))
+    const bags = input.shape[0] ?? 1;
+    const each = input.shape[1] ?? 1;
+    let picked = weight.indexSelect(0, input.reshape([bags * each]))
       .reshape([bags, each, dim]);
     if (perSampleWeights) {
       picked = picked.mul(perSampleWeights.reshape([bags, each, 1]));
@@ -3580,12 +3580,12 @@ export function embeddingBag(
   // **`includeLastOffset` means the last entry closes the final bag** rather than
   // opening a new one, so the bag count is one fewer than the offsets rather than
   // one more than the gaps between them.
-  const bounds = includeLastOffset ? [...offsets] : [...offsets, idx.size];
+  const bounds = includeLastOffset ? [...offsets] : [...offsets, input.size];
   const parts: Tensor[] = [];
   for (let b = 0; b + 1 < bounds.length; b++) {
     const from = bounds[b] ?? 0;
-    const len = (bounds[b + 1] ?? idx.size) - from;
-    let picked = weight.indexSelect(0, idx.narrow(0, from, len));
+    const len = (bounds[b + 1] ?? input.size) - from;
+    let picked = weight.indexSelect(0, input.narrow(0, from, len));
     if (perSampleWeights) {
       picked = picked.mul(perSampleWeights.narrow(0, from, len).reshape([len, 1]));
     }

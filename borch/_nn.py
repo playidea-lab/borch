@@ -3734,8 +3734,8 @@ nn.BCEWithLogitsLoss = BCEWithLogitsLoss
 nn.CrossEntropyLoss = CrossEntropyLoss
 
 
-def one_hot(t, num_classes=-1):
-    idx = t.data.astype(int)
+def one_hot(tensor, num_classes=-1):
+    idx = tensor.data.astype(int)
     n = int(idx.max()) + 1 if num_classes == -1 else num_classes
     return Tensor(_np.eye(n, dtype=_np.int64)[idx])
 
@@ -3900,8 +3900,8 @@ class _Functional(_Namespace):
         return BCELoss(weight=weight, reduction=reduction)(p, target)
 
     @staticmethod
-    def linear(x, weight, bias=None):
-        out = x @ weight.transpose(-2, -1)
+    def linear(input, weight, bias=None):
+        out = input @ weight.transpose(-2, -1)
         return out + bias if bias is not None else out
 
     conv2d = staticmethod(conv2d)

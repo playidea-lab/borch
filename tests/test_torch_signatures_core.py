@@ -276,7 +276,19 @@ UNALIGNED = {
     # 14 → 11. The three `lp_pool*` functions took `ceil_mode`. **Two sessions cut
     # this row in the same window for unrelated reasons** and the rebase put both
     # notes here; the number is measured after both, not either.
-    "nn.functional": 11,
+    # 11 → 10. `normalize`. It had been filed here because the core called its
+    # first parameter `x` and torch calls it `input` — the lists could not be
+    # aligned, so nothing else about them was reported. With the names matched they
+    # aligned, and **what was actually missing showed through underneath**: torch
+    # takes `out=` and this did not. **A row in the vaguest bucket can be hiding a
+    # specific one**, and clearing the vague reason is what lets the specific one be
+    # seen.
+    #
+    # It could not go through `_accepts_out`: that wrapper is driven by
+    # `_TAKES_OUT`, which lists names on `torch` itself, and `normalize` lives only
+    # under `torch.nn.functional` — adding it there asked `test_out_names.py` for
+    # `torch.normalize`, which does not exist. Written into the function instead.
+    "nn.functional": 10,
     "optim": 0,
     "optim.lr_scheduler": 0,
     # 0 → 4, from the same docstring reading as `Tensor` above. All four are

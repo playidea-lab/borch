@@ -427,32 +427,32 @@ def where(cond, a=_MISSING, b=_MISSING):
     return ta._make(out, (ta, tb), lambda g: (_np.where(c, g, 0), _np.where(c, 0, g)))
 
 
-def sigmoid(t):
-    out = 1.0 / (1.0 + _np.exp(-_np.clip(_float_in(t.data), -60, 60)))
-    return t._make(out, (t,), lambda g: (g * out * (1 - out),), "SigmoidBackward0")
+def sigmoid(input):
+    out = 1.0 / (1.0 + _np.exp(-_np.clip(_float_in(input.data), -60, 60)))
+    return input._make(out, (input,), lambda g: (g * out * (1 - out),), "SigmoidBackward0")
 
 
-def relu(t, inplace=False):
+def relu(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "relu",
-                        lambda: _relu_body(t))
+    return _inplace_arg(input, inplace, "relu",
+                        lambda: _relu_body(input))
 
 
 def _relu_body(t):
     return t._make(_np.maximum(t.data, 0), (t,), lambda g: (g * (t.data > 0),), "ReluBackward0")
 
 
-def tanh(t):
-    out = _np.tanh(_float_in(t.data))
-    return t._make(out, (t,), lambda g: (g * (1 - out * out),), "TanhBackward0")
+def tanh(input):
+    out = _np.tanh(_float_in(input.data))
+    return input._make(out, (input,), lambda g: (g * (1 - out * out),), "TanhBackward0")
 
 
-def exp(t): return t.exp()
-def log(t): return t.log()
-def sqrt(t): return t.sqrt()
-def abs(t): return t.abs()
+def exp(input): return input.exp()
+def log(input): return input.log()
+def sqrt(input): return input.sqrt()
+def abs(input): return input.abs()
 
 
 def softmax(t, dim=-1):
@@ -547,7 +547,7 @@ def _grouped(call, x, weight, bias, groups, channel_axis=1):
     return cat(parts, channel_axis)
 
 
-def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+def conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     """A convolution for small inputs. The same computation as the double loop
     written by hand in chapter 26.
 
@@ -563,8 +563,8 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if groups != 1:
         return _grouped(
             lambda xs, ws, bs: conv2d(xs, ws, bs, stride, padding, dilation),
-            x, weight, bias, groups)
-    xd = _pad2d(x.data, padding)
+            input, weight, bias, groups)
+    xd = _pad2d(input.data, padding)
     wd = weight.data
     ph, pw = _pair(padding)
     dh, dw = _pair(dilation)
@@ -590,8 +590,9 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
             gx = gx[:, :, :, pw:-pw]
         return (gx, gw) if bias is None else (gx, gw, g.sum(axis=(0, 2, 3)))
 
-    parents = (x, weight) if bias is None else (x, weight, bias)
-    return x._make(out if bias is None else out + bias.data.reshape(1, -1, 1, 1), parents, back)
+    parents = (input, weight) if bias is None else (input, weight, bias)
+    shifted = out if bias is None else out + bias.data.reshape(1, -1, 1, 1)
+    return input._make(shifted, parents, back)
 
 
 def _grouped_transpose(call, x, weight, bias, groups):
@@ -620,7 +621,7 @@ def _grouped_transpose(call, x, weight, bias, groups):
     return cat(parts, 1)
 
 
-def conv_transpose2d(x, weight, bias=None, stride=1, padding=0, output_padding=0,
+def conv_transpose2d(input, weight, bias=None, stride=1, padding=0, output_padding=0,
                      groups=1, dilation=1):
     """A transposed convolution — **the same computation `conv2d` flows towards
     its input.**
@@ -637,9 +638,9 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0, output_padding=0
         return _grouped_transpose(
             lambda xs, ws, bs: conv_transpose2d(xs, ws, bs, stride, padding,
                                                 output_padding, 1, dilation),
-            x, weight, bias, groups)
-    x, weight = _wrap(x), _wrap(weight)
-    N, C, H, W = x.data.shape
+            input, weight, bias, groups)
+    input, weight = _wrap(input), _wrap(weight)
+    N, C, H, W = input.data.shape
     C2, F, KH, KW = weight.data.shape
     if C != C2:
         raise RuntimeError(f"channels do not match: input {C}, filter {C2}")
@@ -658,7 +659,7 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0, output_padding=0
     # Each input cell is scattered across the kernel into the output positions.
     # `col2im` is exactly that shape — the input is spread to `(N·H·W, C)`,
     # multiplied by the weights into `(N·H·W, F·KH·KW)` and then folded.
-    cols = x.data.transpose(0, 2, 3, 1).reshape(N * H * W, C)
+    cols = input.data.transpose(0, 2, 3, 1).reshape(N * H * W, C)
     w2 = weight.data.reshape(C, F * KH * KW)
     spread = cols @ w2
     out = _col2im(spread, (N, F, OH, OW), KH, KW, (sh, sw), H, W, (dh, dw))
@@ -699,25 +700,25 @@ def conv_transpose2d(x, weight, bias=None, stride=1, padding=0, output_padding=0
 
     if bias is not None:
         out = out + bias.data.reshape(1, -1, 1, 1)
-    parents = (x, weight) if bias is None else (x, weight, bias)
-    return x._make(out, parents, back, "ConvTranspose2DBackward0")
+    parents = (input, weight) if bias is None else (input, weight, bias)
+    return input._make(out, parents, back, "ConvTranspose2DBackward0")
 
 
-def conv_transpose1d(x, weight, bias=None, stride=1, padding=0, output_padding=0,
+def conv_transpose1d(input, weight, bias=None, stride=1, padding=0, output_padding=0,
                      groups=1, dilation=1):
     """Insert a height of 1 into `conv_transpose2d` — the same way as
     `conv1d`."""
-    x, weight = _wrap(x), _wrap(weight)
-    n, c, length = x.data.shape
+    input, weight = _wrap(input), _wrap(weight)
+    n, c, length = input.data.shape
     c2, f, k = weight.data.shape
-    out = conv_transpose2d(x.reshape(n, c, 1, length), weight.reshape(c2, f, 1, k),
+    out = conv_transpose2d(input.reshape(n, c, 1, length), weight.reshape(c2, f, 1, k),
                            bias, (1, stride), (0, padding), (0, output_padding),
                            groups, (1, dilation))
     shape = out.data.shape
     return out.reshape(shape[0], shape[1], shape[3])
 
 
-def conv_transpose3d(x, weight, bias=None, stride=1, padding=0, output_padding=0,
+def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0,
                      groups=1, dilation=1):
     """Run a 2-D transposed convolution per depth and **add where they overlap.**
 
@@ -728,9 +729,9 @@ def conv_transpose3d(x, weight, bias=None, stride=1, padding=0, output_padding=0
         return _grouped_transpose(
             lambda xs, ws, bs: conv_transpose3d(xs, ws, bs, stride, padding,
                                                 output_padding, 1, dilation),
-            x, weight, bias, groups)
-    x, weight = _wrap(x), _wrap(weight)
-    n, c, d, h, w = x.data.shape
+            input, weight, bias, groups)
+    input, weight = _wrap(input), _wrap(weight)
+    n, c, d, h, w = input.data.shape
     c2, f, kd, kh, kw = weight.data.shape
     if c != c2:
         raise RuntimeError(f"channels do not match: input {c}, filter {c2}")
@@ -747,7 +748,7 @@ def conv_transpose3d(x, weight, bias=None, stride=1, padding=0, output_padding=0
     slabs = [None] * out_d
     for od in range(d):
         for i in range(kd):
-            plane = x[_slice_at(2, od, od + 1)].reshape(n, c, h, w)
+            plane = input[_slice_at(2, od, od + 1)].reshape(n, c, h, w)
             slab = weight[_slice_at(2, i, i + 1)].reshape(c2, f, kh, kw)
             part = conv_transpose2d(plane, slab, None, (sh, sw), (ph, pw),
                                     (oph, opw), 1, (dh, dw))
@@ -803,7 +804,7 @@ def _channel_shape(x, size):
     return tuple(shape)
 
 
-def group_norm(x, num_groups, weight=None, bias=None, eps=1e-5):
+def group_norm(input, num_groups, weight=None, bias=None, eps=1e-5):
     """Normalise with the channels bundled into groups. **The group count sets
     the boundaries.**
 
@@ -813,17 +814,17 @@ def group_norm(x, num_groups, weight=None, bias=None, eps=1e-5):
     of the three identical — which is why the golden asks about all three side by
     side.
     """
-    x = _wrap(x)
-    shape = x.data.shape
+    input = _wrap(input)
+    shape = input.data.shape
     n, c = shape[0], shape[1]
     if c % num_groups:
         raise RuntimeError(f"cannot split {c} channels into {num_groups} groups")
     inner = (c // num_groups) * int(_np.prod(shape[2:], dtype=int))
-    out = _norm_flat(x.reshape(n, num_groups, inner), num_groups, eps).reshape(*shape)
+    out = _norm_flat(input.reshape(n, num_groups, inner), num_groups, eps).reshape(*shape)
     if weight is not None:
-        out = out * _wrap(weight).reshape(*_channel_shape(x, c))
+        out = out * _wrap(weight).reshape(*_channel_shape(input, c))
     if bias is not None:
-        out = out + _wrap(bias).reshape(*_channel_shape(x, c))
+        out = out + _wrap(bias).reshape(*_channel_shape(input, c))
     return out
 
 
@@ -834,7 +835,7 @@ def instance_norm(x, weight=None, bias=None, eps=1e-5):
     return group_norm(x, x.data.shape[1], weight, bias, eps)
 
 
-def rms_norm(x, normalized_shape, weight=None, eps=None):
+def rms_norm(input, normalized_shape, weight=None, eps=None):
     """**It does not subtract the mean.** That is the only difference from
     `LayerNorm`.
 
@@ -845,28 +846,28 @@ def rms_norm(x, normalized_shape, weight=None, eps=None):
     max diff of 2.26e-02** — because it is amplified where the variance is
     small.
     """
-    x = _wrap(x)
+    input = _wrap(input)
     if eps is None:
         eps = float(_np.finfo(_np.float32).eps)
-    shape = x.data.shape
+    shape = input.data.shape
     k = len(normalized_shape) if isinstance(normalized_shape, (list, tuple)) else 1
     lead = int(_np.prod(shape[:len(shape) - k], dtype=int))
     inner = int(_np.prod(shape[len(shape) - k:], dtype=int))
-    out = _norm_flat(x.reshape(lead, inner), lead, eps, center=False).reshape(*shape)
+    out = _norm_flat(input.reshape(lead, inner), lead, eps, center=False).reshape(*shape)
     return out if weight is None else out * _wrap(weight)
 
 
-def conv1d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     """A 1-D convolution. **Built by inserting a height of 1 into `conv2d`.**
 
     The sister library (webgpu) already works this way. A new im2col would make
     two copies of the same computation, and then the day comes when one is fixed
     and they diverge.
     """
-    x, weight = _wrap(x), _wrap(weight)
-    n, c, length = x.data.shape
+    input, weight = _wrap(input), _wrap(weight)
+    n, c, length = input.data.shape
     f, c2, k = weight.data.shape
-    lifted = x.reshape(n, c, 1, length)
+    lifted = input.reshape(n, c, 1, length)
     kernel = weight.reshape(f, c2, 1, k)
     # The height axis is left alone — stride 1, padding 0, dilation 1.
     out = conv2d(lifted, kernel, bias, (1, stride), (0, padding), (1, dilation),
@@ -875,7 +876,7 @@ def conv1d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return out.reshape(shape[0], shape[1], shape[3])
 
 
-def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+def conv3d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     """A 3-D convolution. **A 2-D convolution per depth, summed.**
 
     im2col is not rewritten in 3-D — built from multiplications and additions the
@@ -885,9 +886,9 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if groups != 1:
         return _grouped(
             lambda xs, ws, bs: conv3d(xs, ws, bs, stride, padding, dilation),
-            x, weight, bias, groups)
-    x, weight = _wrap(x), _wrap(weight)
-    n, c, d, h, w = x.data.shape
+            input, weight, bias, groups)
+    input, weight = _wrap(input), _wrap(weight)
+    n, c, d, h, w = input.data.shape
     f, c2, kd, kh, kw = weight.data.shape
     if c != c2:
         raise RuntimeError(f"channels do not match: input {c}, filter {c2}")
@@ -897,9 +898,9 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if pd:
         pads = [(0, 0)] * 5
         pads[2] = (pd, pd)
-        x = x._make(_np.pad(x.data, pads), (x,),
+        input = input._make(_np.pad(input.data, pads), (input,),
                     lambda g: (_np.asarray(g)[:, :, pd:-pd],), "Pad3dBackward0")
-        d = x.data.shape[2]
+        d = input.data.shape[2]
 
     out_d = (d - ((kd - 1) * dd + 1)) // sd + 1
     slabs = []
@@ -907,7 +908,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         acc = None
         for i in range(kd):
             depth = od * sd + i * dd
-            plane = x[_slice_at(2, depth, depth + 1)].reshape(n, c, h, w)
+            plane = input[_slice_at(2, depth, depth + 1)].reshape(n, c, h, w)
             slab = weight[_slice_at(2, i, i + 1)].reshape(f, c2, kh, kw)
             part = conv2d(plane, slab, None, (sh, sw), (ph, pw), (dh, dw))
             acc = part if acc is None else acc + part
@@ -1075,52 +1076,52 @@ def max_pool3d(x, kernel_size, stride=None, padding=0, dilation=1,
 # set — the name has already decided. So it is accepted and unused, like `foreach` on
 # the optimizers, and **the difference between that and `**_` is that a reader can
 # see it.**
-def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+def max_pool1d_with_indices(input, kernel_size, stride=None, padding=0, dilation=1,
                             ceil_mode=False, return_indices=True):
     """**This name exists at torch's top level too**, and takes everything
     positionally. The three slots that used to be refused are implemented now and
     go through `_max_pool_nd`, which is where the window arithmetic lives."""
     if not _pool_is_plain(padding, dilation, ceil_mode):
-        return _max_pool_nd(x, 1, kernel_size, stride, padding, dilation,
+        return _max_pool_nd(input, 1, kernel_size, stride, padding, dilation,
                             ceil_mode, True)
-    x = _wrap(x)
-    windows = _fixed_windows(x.data.shape[2], kernel_size, stride or kernel_size)
-    out, pos = _max_with_index(x, [windows])
+    input = _wrap(input)
+    windows = _fixed_windows(input.data.shape[2], kernel_size, stride or kernel_size)
+    out, pos = _max_with_index(input, [windows])
     return out, Tensor(pos)
 
 
-def max_pool2d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+def max_pool2d_with_indices(input, kernel_size, stride=None, padding=0, dilation=1,
                             ceil_mode=False, return_indices=True):
     if not _pool_is_plain(padding, dilation, ceil_mode):
-        return _max_pool_nd(x, 2, kernel_size, stride, padding, dilation,
+        return _max_pool_nd(input, 2, kernel_size, stride, padding, dilation,
                             ceil_mode, True)
-    x = _wrap(x)
+    input = _wrap(input)
     out, pos = _max_with_index(
-        x, _fixed_window_axes(x.data.shape, kernel_size, stride))
+        input, _fixed_window_axes(input.data.shape, kernel_size, stride))
     return out, Tensor(pos)
 
 
-def max_pool3d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
+def max_pool3d_with_indices(input, kernel_size, stride=None, padding=0, dilation=1,
                             ceil_mode=False, return_indices=True):
     if not _pool_is_plain(padding, dilation, ceil_mode):
-        return _max_pool_nd(x, 3, kernel_size, stride, padding, dilation,
+        return _max_pool_nd(input, 3, kernel_size, stride, padding, dilation,
                             ceil_mode, True)
-    x = _wrap(x)
+    input = _wrap(input)
     out, pos = _max_with_index(
-        x, _fixed_window_axes(x.data.shape, kernel_size, stride))
+        input, _fixed_window_axes(input.data.shape, kernel_size, stride))
     return out, Tensor(pos)
 
 
-def adaptive_max_pool1d_with_indices(x, output_size, return_indices=True):
-    return _adaptive_with_indices(x, _spread(output_size, 1))
+def adaptive_max_pool1d_with_indices(input, output_size, return_indices=True):
+    return _adaptive_with_indices(input, _spread(output_size, 1))
 
 
-def adaptive_max_pool2d_with_indices(x, output_size, return_indices=True):
-    return _adaptive_with_indices(x, _pair(output_size))
+def adaptive_max_pool2d_with_indices(input, output_size, return_indices=True):
+    return _adaptive_with_indices(input, _pair(output_size))
 
 
-def adaptive_max_pool3d_with_indices(x, output_size, return_indices=True):
-    return _adaptive_with_indices(x, _spread(output_size, 3))
+def adaptive_max_pool3d_with_indices(input, output_size, return_indices=True):
+    return _adaptive_with_indices(input, _spread(output_size, 3))
 
 
 def _adaptive_with_indices(x, sizes):
@@ -1399,44 +1400,44 @@ def _fractional_pool(x, kernel_size, output_size, output_ratio, samples, spatial
     return out, Tensor(idx)
 
 
-def fractional_max_pool2d(x, kernel_size, output_size=None, output_ratio=None,
+def fractional_max_pool2d(input, kernel_size, output_size=None, output_ratio=None,
                           return_indices=False, _random_samples=None):
-    out, idx = _fractional_pool(x, kernel_size, output_size, output_ratio,
+    out, idx = _fractional_pool(input, kernel_size, output_size, output_ratio,
                                 _random_samples, 2)
     return (out, idx) if return_indices else out
 
 
-def fractional_max_pool3d(x, kernel_size, output_size=None, output_ratio=None,
+def fractional_max_pool3d(input, kernel_size, output_size=None, output_ratio=None,
                           return_indices=False, _random_samples=None):
-    out, idx = _fractional_pool(x, kernel_size, output_size, output_ratio,
+    out, idx = _fractional_pool(input, kernel_size, output_size, output_ratio,
                                 _random_samples, 3)
     return (out, idx) if return_indices else out
 
 
-def fractional_max_pool2d_with_indices(x, kernel_size, output_size=None,
+def fractional_max_pool2d_with_indices(input, kernel_size, output_size=None,
                                        output_ratio=None, return_indices=True,
                                        _random_samples=None):
-    return _fractional_pool(x, kernel_size, output_size, output_ratio,
+    return _fractional_pool(input, kernel_size, output_size, output_ratio,
                             _random_samples, 2)
 
 
-def fractional_max_pool3d_with_indices(x, kernel_size, output_size=None,
+def fractional_max_pool3d_with_indices(input, kernel_size, output_size=None,
                                        output_ratio=None, return_indices=True,
                                        _random_samples=None):
-    return _fractional_pool(x, kernel_size, output_size, output_ratio,
+    return _fractional_pool(input, kernel_size, output_size, output_ratio,
                             _random_samples, 3)
 
 
-def max_unpool1d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
-    return _unpool(x, indices, kernel_size, stride, padding, output_size, 1)
+def max_unpool1d(input, indices, kernel_size, stride=None, padding=0, output_size=None):
+    return _unpool(input, indices, kernel_size, stride, padding, output_size, 1)
 
 
-def max_unpool2d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
-    return _unpool(x, indices, kernel_size, stride, padding, output_size, 2)
+def max_unpool2d(input, indices, kernel_size, stride=None, padding=0, output_size=None):
+    return _unpool(input, indices, kernel_size, stride, padding, output_size, 2)
 
 
-def max_unpool3d(x, indices, kernel_size, stride=None, padding=0, output_size=None):
-    return _unpool(x, indices, kernel_size, stride, padding, output_size, 3)
+def max_unpool3d(input, indices, kernel_size, stride=None, padding=0, output_size=None):
+    return _unpool(input, indices, kernel_size, stride, padding, output_size, 3)
 
 
 def _out_size(in_size, scale_factor):
@@ -1778,61 +1779,61 @@ def _max_with_index(x, window_axes, positions=None):
     return x._make(val, (x,), back, "MaxPoolWithIndicesBackward0"), pos
 
 
-def adaptive_avg_pool2d(x, output_size):
+def adaptive_avg_pool2d(input, output_size):
     """Average pooling to a chosen output size.
 
     **It does not have to be a multiple.** It used to refuse, and torch handles it
     by taking a different window size per position — the refusal was a different
     rule rather than an imitation.
     """
-    return _adaptive(x, _pair(output_size), "avg")
+    return _adaptive(input, _pair(output_size), "avg")
 
 
-def adaptive_avg_pool1d(x, output_size):
-    return _adaptive(x, _spread(output_size, 1), "avg")
+def adaptive_avg_pool1d(input, output_size):
+    return _adaptive(input, _spread(output_size, 1), "avg")
 
 
-def adaptive_avg_pool3d(x, output_size):
-    return _adaptive(x, _spread(output_size, 3), "avg")
+def adaptive_avg_pool3d(input, output_size):
+    return _adaptive(input, _spread(output_size, 3), "avg")
 
 
-def adaptive_max_pool1d(x, output_size, return_indices=False):
+def adaptive_max_pool1d(input, output_size, return_indices=False):
     if return_indices:
-        return adaptive_max_pool1d_with_indices(x, output_size)
-    return _adaptive(x, _spread(output_size, 1), "max")
+        return adaptive_max_pool1d_with_indices(input, output_size)
+    return _adaptive(input, _spread(output_size, 1), "max")
 
 
-def adaptive_max_pool2d(x, output_size, return_indices=False):
+def adaptive_max_pool2d(input, output_size, return_indices=False):
     if return_indices:
-        return adaptive_max_pool2d_with_indices(x, output_size)
-    return _adaptive(x, _pair(output_size), "max")
+        return adaptive_max_pool2d_with_indices(input, output_size)
+    return _adaptive(input, _pair(output_size), "max")
 
 
-def adaptive_max_pool3d(x, output_size, return_indices=False):
+def adaptive_max_pool3d(input, output_size, return_indices=False):
     if return_indices:
-        return adaptive_max_pool3d_with_indices(x, output_size)
-    return _adaptive(x, _spread(output_size, 3), "max")
+        return adaptive_max_pool3d_with_indices(input, output_size)
+    return _adaptive(input, _spread(output_size, 3), "max")
 
 
-def avg_pool1d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+def avg_pool1d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
                count_include_pad=True):
     """`padding` and `count_include_pad` are refused rather than approximated —
     `avg_pool2d` next door has them and this shares none of its code."""
     if padding or not count_include_pad:
         _unsupported("avg_pool1d(padding=…) and count_include_pad=False")
-    return _fixed(x, _spread(kernel_size, 1), stride, "avg", ceil_mode)
+    return _fixed(input, _spread(kernel_size, 1), stride, "avg", ceil_mode)
 
 
-def avg_pool3d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+def avg_pool3d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
                count_include_pad=True, divisor_override=None):
     """See `avg_pool1d` on the refusals."""
     if padding or not count_include_pad or divisor_override is not None:
         _unsupported("avg_pool3d(padding=…), count_include_pad=False, "
                      "divisor_override=…")
-    return _fixed(x, _spread(kernel_size, 3), stride, "avg", ceil_mode)
+    return _fixed(input, _spread(kernel_size, 3), stride, "avg", ceil_mode)
 
 
-def lp_pool2d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
+def lp_pool2d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
     """The `p`-th root of the sum of `p`-th powers. At p=1 it is the sum, and at
     large p it approaches the maximum.
 
@@ -1840,25 +1841,25 @@ def lp_pool2d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
     the window size into a sum, then the root. The sign and the `relu` in the
     middle are that implementation's too.
     """
-    x = _wrap(x)
+    input = _wrap(input)
     kh, kw = _pair(kernel_size)
-    out = avg_pool2d(x ** norm_type, kernel_size, stride, ceil_mode=ceil_mode)
+    out = avg_pool2d(input ** norm_type, kernel_size, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * (kh * kw)) ** (1.0 / norm_type)
 
 
-def lp_pool1d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
-    x = _wrap(x)
+def lp_pool1d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
+    input = _wrap(input)
     k = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
-    out = avg_pool1d(x ** norm_type, k, stride, ceil_mode=ceil_mode)
+    out = avg_pool1d(input ** norm_type, k, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * k) ** (1.0 / norm_type)
 
 
-def lp_pool3d(x, norm_type, kernel_size, stride=None, ceil_mode=False):
+def lp_pool3d(input, norm_type, kernel_size, stride=None, ceil_mode=False):
     """The same assembly as 1-D and 2-D. Only the window cell count becomes the
     product of three axes."""
-    x = _wrap(x)
+    input = _wrap(input)
     kd, kh, kw = _spread(kernel_size, 3)
-    out = avg_pool3d(x ** norm_type, kernel_size, stride, ceil_mode=ceil_mode)
+    out = avg_pool3d(input ** norm_type, kernel_size, stride, ceil_mode=ceil_mode)
     return ((out.sign() * relu(out.abs())) * (kd * kh * kw)) ** (1.0 / norm_type)
 
 
@@ -1896,20 +1897,20 @@ def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=1,
     return x._make(out, (x,), back)
 
 
-def sin(t): return t._make(_np.sin(_float_in(t.data)), (t,),
-                           lambda g: (g * _np.cos(_float_in(t.data)),), "SinBackward0")
-def cos(t): return t._make(_np.cos(_float_in(t.data)), (t,),
-                           lambda g: (-g * _np.sin(_float_in(t.data)),), "CosBackward0")
+def sin(input): return input._make(_np.sin(_float_in(input.data)), (input,),
+                           lambda g: (g * _np.cos(_float_in(input.data)),), "SinBackward0")
+def cos(input): return input._make(_np.cos(_float_in(input.data)), (input,),
+                           lambda g: (-g * _np.sin(_float_in(input.data)),), "CosBackward0")
 
 
-def clamp(t, min=None, max=None):
-    out = _np.clip(t.data, min, max)
-    inside = _np.ones_like(t.data, dtype=bool)
+def clamp(input, min=None, max=None):
+    out = _np.clip(input.data, min, max)
+    inside = _np.ones_like(input.data, dtype=bool)
     if min is not None:
-        inside &= t.data >= min
+        inside &= input.data >= min
     if max is not None:
-        inside &= t.data <= max
-    return t._make(out, (t,), lambda g: (g * inside,), "ClampBackward0")
+        inside &= input.data <= max
+    return input._make(out, (input,), lambda g: (g * inside,), "ClampBackward0")
 
 
 
@@ -1972,15 +1973,19 @@ def _loose(args, kw, key):
 
 
 def _unary(name, forward, derivative=None, op=None):
-    def fn(t):
-        t = _wrap(t)
-        data = t.data
+    # **The parameter is torch's name, and it is one line for forty functions.**
+    # Every table unary is this closure, so `abs`, `sin`, `sqrt` and the rest all
+    # took `t` where torch takes `input` — one rename here reaches all of them.
+    def fn(input):
+        input = _wrap(input)
+        data = input.data
         if name in _PROMOTES_INTEGERS:
             data = _float_in(data)
         out = forward(data)
         if derivative is None:
             return Tensor(out)
-        return t._make(out, (t,), lambda g: (g * derivative(data, out),), op or f"{name}Backward0")
+        return input._make(out, (input,), lambda g: (g * derivative(data, out),),
+                           op or f"{name}Backward0")
     fn.__name__ = name
     return fn
 
@@ -2047,7 +2052,7 @@ ceil = _unary("Ceil", _np.ceil, _zero_grad)
 _round_unary = _unary("Round", lambda x: _np.round(x), _zero_grad)
 
 
-def round(t, decimals=0):
+def round(input, decimals=0):
     """**torch takes `decimals` and this did not**, so `round(x, 2)` was a
     `TypeError` where torch rounds to two places. The name is one of the most
     ordinary in the library and the argument is the reason anybody reaches for it.
@@ -2057,18 +2062,18 @@ def round(t, decimals=0):
     that, which is what numpy does internally.
     """
     if decimals:
-        t = _wrap(t)
-        _needs_float(t.data,
+        input = _wrap(input)
+        _needs_float(input.data,
                      "Rounding to a number of places has no meaning in an "
                      "integer cell.",
                      "round_cpu not implemented for integer decimals")
         scale = 10.0 ** int(decimals)
-        return _round_unary(t * scale) / scale
-    return _round_unary(t)
+        return _round_unary(input * scale) / scale
+    return _round_unary(input)
 
 
-def neg(t): return -_wrap(t)
-def pow(t, exponent): return _wrap(t) ** exponent
+def neg(input): return -_wrap(input)
+def pow(input, exponent): return _wrap(input) ** exponent
 
 
 # ---- the rest of the trigonometric, exponential and logarithmic ones
@@ -2114,7 +2119,7 @@ sinc = _unary("Sinc", _np.sinc,
               lambda x, o: _np.where(x == 0, 0.0,
                                      (_np.cos(_np.pi * _np.where(x == 0, 1.0, x)) - o)
                                      / _np.where(x == 0, 1.0, x)))
-def logit(t, eps=None):
+def logit(input, eps=None):
     """The inverse of the sigmoid. **`eps` clamps the input away from 0 and 1**,
     where the answer runs to infinity — torch takes it and this did not, so
     `x.logit(1e-6)`, the form used on probabilities that may be exactly 0, stopped
@@ -2122,12 +2127,12 @@ def logit(t, eps=None):
 
     Without `eps` the infinities are torch's answer too, so the default is unchanged.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     if eps is None:
-        return _logit_raw(t)
+        return _logit_raw(input)
     lo = float(eps)
-    return _logit_raw(_wrap(_np.clip(_np.asarray(t.data), lo, 1.0 - lo))
-                      if not isinstance(t, Tensor) else t.clamp(lo, 1.0 - lo))
+    return _logit_raw(_wrap(_np.clip(_np.asarray(input.data), lo, 1.0 - lo))
+                      if not isinstance(input, Tensor) else input.clamp(lo, 1.0 - lo))
 
 
 _logit_raw = _unary("Logit", lambda x: _np.log(x / (1 - x)),
@@ -2149,10 +2154,11 @@ def _binary_math(name, forward, d_a, d_b, op=None):
     The derivative takes `(x, y)` and hands back **what to multiply the gradient
     by.** The signature `_binary` passes is `(g, x, y)`, so it is wrapped here.
     """
-    def fn(a, b):
-        a = _wrap(a)
-        return a._binary(b, forward,
-                         lambda g, x, y: g * d_a(x, y),
+    # As `_unary` above: one rename for every table binary.
+    def fn(input, other):
+        input = _wrap(input)
+        return input._binary(other, forward,
+                             lambda g, x, y: g * d_a(x, y),
                          lambda g, x, y: g * d_b(x, y),
                          op or f"{name}Backward0")
     fn.__name__ = name
@@ -2178,39 +2184,39 @@ logaddexp2 = _binary_math("Logaddexp2", _np.logaddexp2,
                           lambda x, y: _np.exp2(y - _np.logaddexp2(x, y)))
 
 
-def xlogy(a, b):
+def xlogy(input, other):
     """`x · log(y)`, and **0 where x is 0** — `0 · log(0)` is not left as nan."""
-    a = _wrap(a)
+    input = _wrap(input)
     with _np.errstate(divide="ignore", invalid="ignore"):
-        return a._binary(
-            b,
+        return input._binary(
+            other,
             lambda x, y: _np.where(x == 0, 0.0, x * _np.log(y)),
             lambda g, x, y: g * _np.where(x == 0, 0.0, _np.log(y)),
             lambda g, x, y: g * _np.where(x == 0, 0.0, x / y),
             "XlogyBackward0")
 
 
-def signbit(t):
-    return Tensor(_np.signbit(_wrap(t).data))
+def signbit(input):
+    return Tensor(_np.signbit(_wrap(input).data))
 
 
-def heaviside(t, values):
-    t, v = _wrap(t), _wrap(values)
-    return Tensor(_np.heaviside(t.data, v.data))
+def heaviside(input, values):
+    input, v = _wrap(input), _wrap(values)
+    return Tensor(_np.heaviside(input.data, v.data))
 
 
-def ldexp(t, other):
-    t, o = _wrap(t), _wrap(other)
-    return t * Tensor(_np.exp2(o.data.astype(t.data.dtype)))
+def ldexp(input, other):
+    input, o = _wrap(input), _wrap(other)
+    return input * Tensor(_np.exp2(o.data.astype(input.data.dtype)))
 
 
 # ----------------------------------------------------------------- comparison
 
 def _compare(name, fn):
-    def cmp(a, b):
-        a = _wrap(a)
-        bd = b.data if isinstance(b, Tensor) else b
-        return Tensor(fn(a.data, bd))
+    def cmp(input, other):
+        input = _wrap(input)
+        rhs = other.data if isinstance(other, Tensor) else other
+        return Tensor(fn(input.data, rhs))
     cmp.__name__ = name
     return cmp
 
@@ -2227,7 +2233,7 @@ isnan = _unary("IsNan", _np.isnan)
 isinf = _unary("IsInf", _np.isinf)
 
 
-def logical_not(t): return Tensor(_np.logical_not(_wrap(t).data))
+def logical_not(input): return Tensor(_np.logical_not(_wrap(input).data))
 
 
 def _split_at_ties(a, b):
@@ -2258,17 +2264,17 @@ def _maximum_first(a, b):
                    lambda g: (g * pick, g * ~pick), "MaximumBackward0")
 
 
-def maximum(a, b):
-    a, b = _wrap(a), _wrap(b)
-    la, lb = _split_at_ties(a, b)
-    return a._make(_np.maximum(a.data, b.data), (a, b),
+def maximum(input, other):
+    input, other = _wrap(input), _wrap(other)
+    la, lb = _split_at_ties(input, other)
+    return input._make(_np.maximum(input.data, other.data), (input, other),
                    lambda g: (g * la, g * lb), "MaximumBackward0")
 
 
-def minimum(a, b):
-    a, b = _wrap(a), _wrap(b)
-    lb, la = _split_at_ties(a, b)
-    return a._make(_np.minimum(a.data, b.data), (a, b),
+def minimum(input, other):
+    input, other = _wrap(input), _wrap(other)
+    lb, la = _split_at_ties(input, other)
+    return input._make(_np.minimum(input.data, other.data), (input, other),
                    lambda g: (g * la, g * lb), "MinimumBackward0")
 
 
@@ -2296,14 +2302,14 @@ def split(t, size, dim=0):
     return tuple(t[_slice_at(dim, s, e)] for s, e in zip([0] + cuts, cuts + [n]))
 
 
-def chunk(t, chunks, dim=0):
-    t = _wrap(t)
+def chunk(input, chunks, dim=0):
+    input = _wrap(input)
     if chunks <= 0:
         raise RuntimeError(
             f"chunk expects `chunks` to be greater than 0, got: {chunks}")
-    n = t.data.shape[dim]
+    n = input.data.shape[dim]
     size = -(-n // chunks)
-    return split(t, size, dim)
+    return split(input, size, dim)
 
 
 def _slice_at(dim, start, end):
@@ -2341,13 +2347,14 @@ def _pos_dim(t, dim, extra=0):
     return dim + n if dim < 0 else dim
 
 
-def unbind(t, dim=0):
-    t = _wrap(t)
-    dim = _pos_dim(t, dim)
-    return tuple(t[_slice_at(dim, i, i + 1)].squeeze(dim) for i in range(t.data.shape[dim]))
+def unbind(input, dim=0):
+    input = _wrap(input)
+    dim = _pos_dim(input, dim)
+    return tuple(input[_slice_at(dim, i, i + 1)].squeeze(dim)
+                 for i in range(input.data.shape[dim]))
 
 
-def narrow(t, dim, start, length):
+def narrow(input, dim, start, length):
     """**A run that would leave the end refuses.** A Python slice does not — it
     stops at the end and hands back what it has — so `narrow(0, 1, 9)` on a length
     of three answered `[2., 3.]`, a plausible tensor of the wrong length, and
@@ -2358,14 +2365,14 @@ def narrow(t, dim, start, length):
     exception is what found a wrong answer — there was no golden case, because
     writing one needs somebody who already suspected.
     """
-    t = _wrap(t)
-    axis = _pos_dim(t, dim)
-    size = t.data.shape[axis]
+    input = _wrap(input)
+    axis = _pos_dim(input, dim)
+    size = input.data.shape[axis]
     start = start + size if start < 0 else start
     if length < 0 or start < 0 or start + length > size:
         raise RuntimeError(
             f"start ({start}) + length ({length}) exceeds dimension size ({size}).")
-    return t[_slice_at(axis, start, start + length)]
+    return input[_slice_at(axis, start, start + length)]
 
 
 def flip(t, *dims, **kw):
@@ -2376,9 +2383,9 @@ def flip(t, *dims, **kw):
                    lambda g: (_np.flip(_np.asarray(g), dims).copy(),), "FlipBackward0")
 
 
-def roll(t, shifts, dims=None):
-    t = _wrap(t)
-    return t._make(_np.roll(t.data, shifts, dims), (t,),
+def roll(input, shifts, dims=None):
+    input = _wrap(input)
+    return input._make(_np.roll(input.data, shifts, dims), (input,),
                    lambda g: (_np.roll(_np.asarray(g), _negate(shifts), dims),), "RollBackward0")
 
 
@@ -2517,21 +2524,21 @@ def expand_as(t, other):
 # `rounding_mode`, so they cannot simply be aliases and get one layer of
 # wrapping.
 
-def add(a, b, alpha=1):
+def add(input, other, alpha=1):
     """`a + alpha·b`. **The operator has no `alpha`** — so it is a function
     rather than an alias."""
-    return _wrap(a) + (b if alpha == 1 else _wrap(b) * alpha)
+    return _wrap(input) + (other if alpha == 1 else _wrap(other) * alpha)
 
 
-def sub(a, b, alpha=1):
-    return _wrap(a) - (b if alpha == 1 else _wrap(b) * alpha)
+def sub(input, other, alpha=1):
+    return _wrap(input) - (other if alpha == 1 else _wrap(other) * alpha)
 
 
-def mul(a, b):
-    return _wrap(a) * b
+def mul(input, other):
+    return _wrap(input) * other
 
 
-def div(a, b, rounding_mode=None):
+def div(input, other, rounding_mode=None):
     """`rounding_mode` has three settings — none gives true division, and
     `'floor'` and `'trunc'` go to the integer side.
 
@@ -2541,7 +2548,7 @@ def div(a, b, rounding_mode=None):
     the dtype a float diverges later, where indexing or `bincount` demands an
     integer — invisible to a value comparison.
     """
-    left, right = _wrap(a), _wrap(b)
+    left, right = _wrap(input), _wrap(other)
     out = left / right
     if rounding_mode is None:
         return out
@@ -2557,8 +2564,8 @@ def div(a, b, rounding_mode=None):
     return out if _np.dtype(kind).kind == "f" else out.type(kind)
 
 
-def floor_divide(a, b):
-    return div(a, b, rounding_mode="floor")
+def floor_divide(input, other):
+    return div(input, other, rounding_mode="floor")
 
 
 def remainder(a, b):
@@ -2566,7 +2573,7 @@ def remainder(a, b):
     return _wrap(a) % b
 
 
-def fmod(a, b):
+def fmod(input, other):
     """**The sign follows the dividend.** C's `fmod` rule, and the opposite of
     `remainder`.
 
@@ -2579,8 +2586,8 @@ def fmod(a, b):
     The derivative is the one the expression implied: 1 for the dividend, and
     `-trunc(a / b)` for the divisor.
     """
-    a = _wrap(a)
-    return a._binary(b, _np.fmod,
+    input = _wrap(input)
+    return input._binary(other, _np.fmod,
                      lambda g, x, y: g,
                      lambda g, x, y: -g * _np.trunc(_np.divide(x, y)),
                      "FmodBackward0")
@@ -2595,7 +2602,7 @@ divide = div
 subtract = sub
 
 
-def true_divide(a, b):
+def true_divide(dividend, divisor):
     """**It cannot be `div`, because it is the one that has no `rounding_mode`.**
 
     `divide` is an alias and takes the argument; torch refuses it here —
@@ -2607,7 +2614,7 @@ def true_divide(a, b):
     code written here ran and the same code against torch raised — the divergence
     surfacing at the port rather than at the call.
     """
-    return div(a, b)
+    return div(dividend, divisor)
 
 greater = gt
 greater_equal = ge
@@ -2616,26 +2623,27 @@ less_equal = le
 not_equal = ne
 
 
-def t(x):
+def t(input):
     """A 2-D transpose. **1-D and below are left alone** — torch does that."""
-    x = _wrap(x)
-    _rank(x.data, (0, 1, 2), "t() expects a tensor with <= 2 dimensions, but self is {n}D")
-    return x if len(x.data.shape) < 2 else x.transpose(0, 1)
+    input = _wrap(input)
+    _rank(input.data, (0, 1, 2),
+          "t() expects a tensor with <= 2 dimensions, but self is {n}D")
+    return input if len(input.data.shape) < 2 else input.transpose(0, 1)
 
 
-def adjoint(x):
+def adjoint(input):
     """Swap the last two axes. Everything is real, so the conjugate is the
     identity."""
-    x = _wrap(x)
-    if x.data.ndim == 0:
-        return x.reshape(())
-    return x.transpose(-2, -1)
+    input = _wrap(input)
+    if input.data.ndim == 0:
+        return input.reshape(())
+    return input.transpose(-2, -1)
 
 
-def moveaxis(t, source, destination):
+def moveaxis(input, source, destination):
     """The other name for `movedim`. **It cannot be an alias** — `movedim` is
     below this."""
-    return movedim(t, source, destination)
+    return movedim(input, source, destination)
 
 
 concat = cat
@@ -2779,37 +2787,37 @@ def lerp(start, end, weight):
     return start + (end - start) * weight
 
 
-def nan_to_num(t, nan=0.0, posinf=None, neginf=None):
+def nan_to_num(input, nan=0.0, posinf=None, neginf=None):
     """Turn NaN and infinities into finite numbers. **Given nothing, that
     dtype's extremes.**"""
-    t = _wrap(t)
-    d = t.data
+    input = _wrap(input)
+    d = input.data
     hi = _np.finfo(d.dtype).max if posinf is None else posinf
     lo = _np.finfo(d.dtype).min if neginf is None else neginf
     fixed = _np.nan_to_num(d, nan=nan, posinf=hi, neginf=lo)
     keep = _np.isfinite(d)
-    return t._make(fixed.astype(d.dtype), (t,), lambda g: (g * keep,),
+    return input._make(fixed.astype(d.dtype), (input,), lambda g: (g * keep,),
                    "NanToNumBackward0")
 
 
-def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
-    a, b = _wrap(a), _wrap(b)
-    return Tensor(_np.isclose(a.data, b.data, rtol=rtol, atol=atol,
+def isclose(input, other, rtol=1e-5, atol=1e-8, equal_nan=False):
+    input, other = _wrap(input), _wrap(other)
+    return Tensor(_np.isclose(input.data, other.data, rtol=rtol, atol=atol,
                               equal_nan=equal_nan))
 
 
-def isreal(t):
+def isreal(input):
     """Everything is real, so all of it is true. **A fact rather than a lie** —
     there is no complex here."""
-    return Tensor(_np.ones(_wrap(t).data.shape, dtype=bool))
+    return Tensor(_np.ones(_wrap(input).data.shape, dtype=bool))
 
 
-def isposinf(t):
-    return Tensor(_np.isposinf(_wrap(t).data))
+def isposinf(input):
+    return Tensor(_np.isposinf(_wrap(input).data))
 
 
-def isneginf(t):
-    return Tensor(_np.isneginf(_wrap(t).data))
+def isneginf(input):
+    return Tensor(_np.isneginf(_wrap(input).data))
 
 
 def isin(elements, test_elements, **kw):
@@ -2819,16 +2827,17 @@ def isin(elements, test_elements, **kw):
 def _nan_extreme(name, pick):
     """`fmax` and `fmin`. **They skip NaN** — `maximum` carries NaN out with
     it."""
-    def call(a, b):
-        a, b = _wrap(a), _wrap(b)
-        out = pick(a.data, b.data)
-        take_a = out == a.data
+    def call(input, other):
+        input, other = _wrap(input), _wrap(other)
+        out = pick(input.data, other.data)
+        take_first = out == input.data
 
         def back(g):
             g = _np.asarray(g)
-            return (g * take_a, g * ~take_a)
+            return (g * take_first, g * ~take_first)
 
-        return a._make(out, (a, b), back, f"{name.capitalize()}Backward0")
+        return input._make(out, (input, other), back,
+                           f"{name.capitalize()}Backward0")
     call.__name__ = name
     return call
 
@@ -2837,14 +2846,14 @@ fmax = _nan_extreme("fmax", _np.fmax)
 fmin = _nan_extreme("fmin", _np.fmin)
 
 
-def float_power(a, b):
+def float_power(input, exponent):
     """A floating-point exponent. torch computes in double precision and there
     is only float32 here."""
-    return _wrap(a) ** b
+    return _wrap(input) ** exponent
 
 
-def logical_xor(a, b):
-    return Tensor(_np.logical_xor(_wrap(a).data != 0, _wrap(b).data != 0))
+def logical_xor(input, other):
+    return Tensor(_np.logical_xor(_wrap(input).data != 0, _wrap(other).data != 0))
 
 
 def var_mean(t, dim=None, keepdim=False, **kw):
@@ -2867,41 +2876,42 @@ def std_mean(t, dim=None, keepdim=False, **kw):
     return (t.std(dim=dim, keepdim=keepdim), t.mean(dim=dim, keepdim=keepdim))
 
 
-def inner(a, b):
+def inner(input, other):
     """The inner product over the last axes. In 1-D it is the dot product."""
-    a, b = _wrap(a), _wrap(b)
-    return a @ b.transpose(-2, -1) if len(a.data.shape) > 1 else (a * b).sum()
+    input, other = _wrap(input), _wrap(other)
+    return (input @ other.transpose(-2, -1) if len(input.data.shape) > 1
+            else (input * other).sum())
 
 
-def vdot(a, b):
-    return (_wrap(a) * _wrap(b)).sum()
+def vdot(input, other):
+    return (_wrap(input) * _wrap(other)).sum()
 
 
-def kron(a, b):
+def kron(input, other):
     """The Kronecker product. One side is stretched, multiplied and folded back
     — no new kernel needed."""
-    a, b = _wrap(a), _wrap(b)
-    ash, bsh = a.data.shape, b.data.shape
+    input, other = _wrap(input), _wrap(other)
+    ash, bsh = input.data.shape, other.data.shape
     if len(ash) != 1 or len(bsh) != 1:
         _unsupported("kron (anything but 1-D)")
-    out = a.reshape(ash[0], 1) * b.reshape(1, bsh[0])
+    out = input.reshape(ash[0], 1) * other.reshape(1, bsh[0])
     return out.reshape(ash[0] * bsh[0])
 
 
-def cross(a, b, dim=-1):
+def cross(input, other, dim=-1):
     """The cross product. The axis has to have length 3."""
-    a, b = _wrap(a), _wrap(b)
-    rank = len(a.data.shape)
+    input, other = _wrap(input), _wrap(other)
+    rank = len(input.data.shape)
     axis = dim + rank if dim < 0 else dim
-    if a.data.shape[axis] != 3:
+    if input.data.shape[axis] != 3:
         raise RuntimeError(f"cross needs dimension {dim} to have length 3")
 
     def part(t, i):
         return narrow(t, axis, i, 1)
 
-    return cat([part(a, 1) * part(b, 2) - part(a, 2) * part(b, 1),
-                part(a, 2) * part(b, 0) - part(a, 0) * part(b, 2),
-                part(a, 0) * part(b, 1) - part(a, 1) * part(b, 0)], axis)
+    return cat([part(input, 1) * part(other, 2) - part(input, 2) * part(other, 1),
+                part(input, 2) * part(other, 0) - part(input, 0) * part(other, 2),
+                part(input, 0) * part(other, 1) - part(input, 1) * part(other, 0)], axis)
 
 
 def block_diag(*tensors):
@@ -2946,39 +2956,40 @@ def repeat(t, *reps):
     return tile(t, want)
 
 
-def ravel(t):
-    return _wrap(t).reshape(-1)
+def ravel(input):
+    return _wrap(input).reshape(-1)
 
 
-def swapaxes(t, a, b):
+def swapaxes(input, axis0, axis1):
     """Swap two axes. The same as `transpose`; torch keeps one more name
     following numpy."""
-    t = _wrap(t)
-    order = list(range(t.data.ndim))
-    order[a], order[b] = order[b % t.data.ndim], order[a % t.data.ndim]
-    return t.permute(*order)
+    input = _wrap(input)
+    order = list(range(input.data.ndim))
+    rank = input.data.ndim
+    order[axis0], order[axis1] = order[axis1 % rank], order[axis0 % rank]
+    return input.permute(*order)
 
 
 swapdims = swapaxes
 
 
-def select(t, dim, index):
+def select(input, dim, index):
     """Take one slice from an axis and **remove that axis.** Unlike a slice, the
     rank drops by one."""
-    t = _wrap(t)
-    axis = _pos_dim(t, dim)
-    size = t.data.shape[axis]
+    input = _wrap(input)
+    axis = _pos_dim(input, dim)
+    size = input.data.shape[axis]
     if not -size <= index < size:
         # torch says `IndexError` here and `RuntimeError` for `scatter`. numpy said
         # `ValueError` about a squeeze, which is a complaint about the *next* step.
         raise IndexError(
             f"select(): index {index} out of range for tensor of size "
-            f"{list(t.data.shape)} at dimension {axis}")
+            f"{list(input.data.shape)} at dimension {axis}")
     at = index + size if index < 0 else index
-    return t[_slice_at(axis, at, at + 1)].squeeze(dim)
+    return input[_slice_at(axis, at, at + 1)].squeeze(dim)
 
 
-def diagonal(t, offset=0, dim1=0, dim2=1):
+def diagonal(input, offset=0, dim1=0, dim2=1):
     """Take the diagonal. `offset` says how many cells up or down the diagonal
     sits.
 
@@ -2986,13 +2997,13 @@ def diagonal(t, offset=0, dim1=0, dim2=1):
     gives a read-only view, so rather than writing into it an empty array is
     built and filled.
     """
-    t = _wrap(t)
-    out = _np.diagonal(t.data, offset=offset, axis1=dim1, axis2=dim2)
+    input = _wrap(input)
+    out = _np.diagonal(input.data, offset=offset, axis1=dim1, axis2=dim2)
 
     def back(g):
         # numpy's `diagonal` is a **read-only view** and cannot be written into.
         # An empty array is built and the coordinates computed directly.
-        z = _np.zeros_like(t.data)
+        z = _np.zeros_like(input.data)
         n = out.shape[-1]
         rows = _np.arange(n) + max(0, -offset)
         cols = _np.arange(n) + max(0, offset)
@@ -3001,15 +3012,15 @@ def diagonal(t, offset=0, dim1=0, dim2=1):
         z[tuple(idx)] = _np.moveaxis(_np.asarray(g), -1, 0)
         return (z,)
 
-    return t._make(_np.ascontiguousarray(out), (t,), back, "DiagonalBackward0")
+    return input._make(_np.ascontiguousarray(out), (input,), back, "DiagonalBackward0")
 
 
-def diagflat(t, offset=0):
+def diagflat(input, offset=0):
     """Flatten and then build a diagonal matrix."""
-    t = _wrap(t)
-    flat = t.reshape(-1)
+    input = _wrap(input)
+    flat = input.reshape(-1)
     n = flat.data.shape[0] + _abs(offset)
-    out = _np.zeros((n, n), dtype=t.data.dtype)
+    out = _np.zeros((n, n), dtype=input.data.dtype)
     rows = _np.arange(flat.data.shape[0]) + max(0, -offset)
     cols = _np.arange(flat.data.shape[0]) + max(0, offset)
     out[rows, cols] = flat.data
@@ -3020,10 +3031,10 @@ def diagflat(t, offset=0):
     return flat._make(out, (flat,), back, "DiagflatBackward0")
 
 
-def rot90(t, k=1, dims=(0, 1)):
-    t = _wrap(t)
+def rot90(input, k=1, dims=(0, 1)):
+    input = _wrap(input)
     dims = tuple(dims)
-    return t._make(_np.ascontiguousarray(_np.rot90(t.data, k, dims)), (t,),
+    return input._make(_np.ascontiguousarray(_np.rot90(input.data, k, dims)), (input,),
                    lambda g: (_np.ascontiguousarray(_np.rot90(_np.asarray(g), -k, dims)),),
                    "Rot90Backward0")
 
@@ -3066,23 +3077,23 @@ def dsplit(t, parts):
     return chunk(_wrap(t), parts, dim=2)
 
 
-def fliplr(t):
-    return flip(_wrap(t), (1,))
+def fliplr(input):
+    return flip(_wrap(input), (1,))
 
 
-def flipud(t):
-    return flip(_wrap(t), (0,))
+def flipud(input):
+    return flip(_wrap(input), (0,))
 
 
-def unflatten(t, dim, sizes):
-    t = _wrap(t)
+def unflatten(input, dim, sizes):
+    input = _wrap(input)
     # Without this, an out-of-range `dim` slid past the end of the shape list and the
     # refusal that followed was about the element count — a `RuntimeError` describing
     # a shape nobody asked for, where torch names the axis.
-    _pos_dim(t, dim)
-    shape = list(t.data.shape)
+    _pos_dim(input, dim)
+    shape = list(input.data.shape)
     shape[dim:dim + 1] = list(sizes)
-    return t.reshape(*shape)
+    return input.reshape(*shape)
 
 
 def atleast_1d(t):
@@ -3104,10 +3115,10 @@ def _negate(shifts):
     return -shifts if isinstance(shifts, int) else tuple(-s for s in shifts)
 
 
-def index_select(t, dim, index):
-    t = _wrap(t)
+def index_select(input, dim, index):
+    input = _wrap(input)
     idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
-    return t[_index_at(dim, idx)]
+    return input[_index_at(dim, idx)]
 
 
 def _index_at(dim, idx):
@@ -3119,16 +3130,16 @@ def _index_at(dim, idx):
 # surfaced while comparing against the sister library, and it was a gap against
 # torch rather than only against the sister.
 
-def matmul(a, b):
-    return _wrap(a) @ _wrap(b)
+def matmul(input, other):
+    return _wrap(input) @ _wrap(other)
 
 
 def reshape(t, *shape):
     return _wrap(t).reshape(*shape)
 
 
-def unsqueeze(t, dim):
-    return _wrap(t).unsqueeze(dim)
+def unsqueeze(input, dim):
+    return _wrap(input).unsqueeze(dim)
 
 
 def masked_fill(t, mask, value):
@@ -3136,22 +3147,22 @@ def masked_fill(t, mask, value):
     return where(m, Tensor(_np.asarray(value, dtype=t.data.dtype)), t)
 
 
-def masked_select(t, mask):
-    t = _wrap(t)
+def masked_select(input, mask):
+    input = _wrap(input)
     m = mask.data.astype(bool) if isinstance(mask, Tensor) else _np.asarray(mask, dtype=bool)
     # A mask that does not broadcast came out as numpy's `IndexError` about a
     # boolean index. torch treats it as the shape mismatch it is.
-    if m.shape != t.data.shape:
+    if m.shape != input.data.shape:
         try:
-            _np.broadcast_shapes(m.shape, t.data.shape)
+            _np.broadcast_shapes(m.shape, input.data.shape)
         except ValueError:
             raise RuntimeError(
                 f"The size of tensor a {list(m.shape)} must match the size of "
-                f"tensor b {list(t.data.shape)}") from None
-    return t[m]
+                f"tensor b {list(input.data.shape)}") from None
+    return input[m]
 
 
-def gather(t, dim, index, sparse_grad=False):
+def gather(input, dim, index, sparse_grad=False):
     """Take the positions the index points at. Used in classification to pull
     out the probability of the correct class.
 
@@ -3160,20 +3171,20 @@ def gather(t, dim, index, sparse_grad=False):
     position lands on nothing."""
     if sparse_grad:
         _unsupported("gather(sparse_grad=True)")
-    t = _wrap(t)
+    input = _wrap(input)
     idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
     # numpy's own complaint is an `IndexError`; torch says `RuntimeError` here and
     # `IndexError` for `select` two files over. Matching torch means matching that.
-    _in_bounds(idx, t.data.shape[_pos_dim(t, dim)], dim)
-    out = _np.take_along_axis(t.data, idx, axis=dim)
-    shape = t.data.shape
+    _in_bounds(idx, input.data.shape[_pos_dim(input, dim)], dim)
+    out = _np.take_along_axis(input.data, idx, axis=dim)
+    shape = input.data.shape
 
     def back(g):
         z = _np.zeros(shape, dtype=_np.asarray(g).dtype)
         _np.put_along_axis(z, idx, _np.asarray(g), axis=dim)
         return (z,)
 
-    return t._make(out, (t,), back, "GatherBackward0")
+    return input._make(out, (input,), back, "GatherBackward0")
 
 
 # ── the numeric family ──────────────────────────────────────────────────────
@@ -3221,10 +3232,10 @@ def cov(t, correction=1, **kw):
     return (centered @ centered.transpose(0, 1)) * (1.0 / max(1, n - correction))
 
 
-def corrcoef(t):
+def corrcoef(input):
     """Covariance divided by the standard deviations. **The diagonal becomes 1** —
     that is the check."""
-    c = cov(t)
+    c = cov(input)
     if c.data.ndim == 0:
         # One variable correlates with itself perfectly, and torch says so with a
         # scalar 1. Dividing by its own deviation would be 0/0 at zero variance.
@@ -3598,32 +3609,32 @@ def _erfinv_np(d):
         _np.nan)
 
 
-def lgamma(t):
+def lgamma(input):
     """The log of the gamma function. **Its derivative is `digamma`**, so having
     one of the two is half of it."""
-    t = _wrap(t)
-    d = _float_in(t.data)
+    input = _wrap(input)
+    d = _float_in(input.data)
     out = _lgamma_np(d).astype(d.dtype)
-    return t._make(out, (t,), lambda g: (g * _polygamma0(d).astype(d.dtype),),
+    return input._make(out, (input,), lambda g: (g * _polygamma0(d).astype(d.dtype),),
                    "LgammaBackward0")
 
 
-def digamma(t):
+def digamma(input):
     """The logarithmic derivative of gamma. Its derivative is `trigamma`."""
-    t = _wrap(t)
-    d = _float_in(t.data)
+    input = _wrap(input)
+    d = _float_in(input.data)
     out = _polygamma0(d).astype(d.dtype)
-    return t._make(out, (t,), lambda g: (g * _polygamma1(d).astype(d.dtype),),
+    return input._make(out, (input,), lambda g: (g * _polygamma1(d).astype(d.dtype),),
                    "DigammaBackward0")
 
 
-def erfinv(t):
+def erfinv(input):
     """The inverse of `erf`. Its derivative is `√π/2 · exp(erfinv(x)²)`."""
-    t = _wrap(t)
-    d = _float_in(t.data)
+    input = _wrap(input)
+    d = _float_in(input.data)
     out = _erfinv_np(d)
     grad = (_math.sqrt(_math.pi) / 2.0) * _np.exp(out * out)
-    return t._make(out.astype(d.dtype), (t,),
+    return input._make(out.astype(d.dtype), (input,),
                    lambda g: (g * grad.astype(d.dtype),), "ErfinvBackward0")
 
 
@@ -3889,7 +3900,7 @@ def _in_bounds(idx, size, dim, kind=RuntimeError):
             f"with size {size}")
 
 
-def scatter(t, dim, index, src):
+def scatter(input, dim, index, src):
     """**Overwrites** at the positions the indices point at. On a collision the
     last write survives.
 
@@ -3897,12 +3908,12 @@ def scatter(t, dim, index, src):
     non-colliding indices the two functions look identical. So the golden asks
     with indices where 0 appears twice.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     idx = _as_index(index)
-    _in_bounds(idx, t.data.shape[dim], dim)
-    out = t.data.copy()
+    _in_bounds(idx, input.data.shape[dim], dim)
+    out = input.data.copy()
     scalar = not isinstance(src, Tensor)
-    values = (_np.full(idx.shape, src, dtype=t.data.dtype) if scalar
+    values = (_np.full(idx.shape, src, dtype=input.data.dtype) if scalar
               else _wrap(src).data)
     _np.put_along_axis(out, idx, values, axis=dim)
 
@@ -3910,22 +3921,22 @@ def scatter(t, dim, index, src):
         g = _np.asarray(g)
         # An overwritten position is cut off from the original — a 0 goes
         # there.
-        keep = _np.ones(t.data.shape, dtype=g.dtype)
+        keep = _np.ones(input.data.shape, dtype=g.dtype)
         _np.put_along_axis(keep, idx, 0.0, axis=dim)
         got = (g * keep,)
         return got if scalar else got + (_np.take_along_axis(g, idx, axis=dim),)
 
-    parents = (t,) if scalar else (t, _wrap(src))
-    return t._make(out, parents, back, "ScatterBackward0")
+    parents = (input,) if scalar else (input, _wrap(src))
+    return input._make(out, parents, back, "ScatterBackward0")
 
 
-def scatter_add(t, dim, index, src):
+def scatter_add(input, dim, index, src):
     """**Adds** at the positions the indices point at. Collisions accumulate —
     where it parts from `scatter`."""
-    t, src = _wrap(t), _wrap(src)
+    input, src = _wrap(input), _wrap(src)
     idx = _as_index(index)
-    _in_bounds(idx, t.data.shape[dim], dim)
-    out = t.data.copy()
+    _in_bounds(idx, input.data.shape[dim], dim)
+    out = input.data.copy()
     # `put_along_axis` overwrites and cannot be used. Accumulating colliding
     # indices properly needs `add.at` — that is the whole difference between this
     # function and `scatter`.
@@ -3938,41 +3949,41 @@ def scatter_add(t, dim, index, src):
         g = _np.asarray(g)
         return (g, _np.take_along_axis(g, idx, axis=dim))
 
-    return t._make(out, (t, src), back, "ScatterAddBackward0")
+    return input._make(out, (input, src), back, "ScatterAddBackward0")
 
 
-def index_add(t, dim, index, source, alpha=1):
+def index_add(input, dim, index, source, alpha=1):
     """Add to the **rows** the indices point at. Colliding indices
     accumulate."""
-    t, source = _wrap(t), _wrap(source)
+    input, source = _wrap(input), _wrap(source)
     idx = _as_index(index)
-    _in_bounds(idx, t.data.shape[dim], dim)
-    out = t.data.copy()
+    _in_bounds(idx, input.data.shape[dim], dim)
+    out = input.data.copy()
     _np.add.at(out, (slice(None),) * dim + (idx,), source.data * alpha)
 
     def back(g):
         g = _np.asarray(g)
         return (g, _np.take(g, idx, axis=dim) * alpha)
 
-    return t._make(out, (t, source), back, "IndexAddBackward0")
+    return input._make(out, (input, source), back, "IndexAddBackward0")
 
 
-def index_copy(t, dim, index, source):
+def index_copy(input, dim, index, source):
     """**Replace** the rows the indices point at. No gradient goes to those
     rows."""
-    t, source = _wrap(t), _wrap(source)
+    input, source = _wrap(input), _wrap(source)
     idx = _as_index(index)
-    out = t.data.copy()
+    out = input.data.copy()
     picker = (slice(None),) * dim + (idx,)
     out[picker] = source.data
 
     def back(g):
         g = _np.asarray(g)
-        keep = _np.ones(t.data.shape, dtype=g.dtype)
+        keep = _np.ones(input.data.shape, dtype=g.dtype)
         keep[picker] = 0.0
         return (g * keep, _np.take(g, idx, axis=dim))
 
-    return t._make(out, (t, source), back, "IndexCopyBackward0")
+    return input._make(out, (input, source), back, "IndexCopyBackward0")
 
 
 def index_fill(t, dim, index, value):
@@ -3992,25 +4003,25 @@ def index_fill(t, dim, index, value):
     return t._make(out, (t,), back, "IndexFillBackward0")
 
 
-def take(t, index):
+def take(input, index):
     """Takes from **the flattened tensor** — it has no notion of an axis."""
-    t = _wrap(t)
+    input = _wrap(input)
     idx = _as_index(index)
-    shape = t.data.shape
+    shape = input.data.shape
 
     def back(g):
         z = _np.zeros(int(_np.prod(shape)), dtype=_np.asarray(g).dtype)
         _np.add.at(z, idx.reshape(-1), _np.asarray(g).reshape(-1))
         return (z.reshape(shape),)
 
-    return t._make(_np.take(t.data, idx), (t,), back, "TakeBackward0")
+    return input._make(_np.take(input.data, idx), (input,), back, "TakeBackward0")
 
 
-def take_along_dim(t, indices, dim=None):
+def take_along_dim(input, indices, dim=None):
     """The same as `gather`. torch offers both names."""
     if dim is None:
-        return take(t, indices)
-    return gather(t, dim, indices)
+        return take(input, indices)
+    return gather(input, dim, indices)
 
 
 def searchsorted(sorted_sequence, values, side=None, right=False, **kw):
@@ -4054,16 +4065,16 @@ def bucketize(values, boundaries, right=False, **kw):
     return searchsorted(boundaries, values, right=right)
 
 
-def repeat_interleave(t, repeats, dim=None, *, output_size=None):
+def repeat_interleave(input, repeats, dim=None, *, output_size=None):
     """Stretch in place. The backward is **folding the stretched ones back per
     group.**
 
     `output_size` is torch telling the kernel the answer's length in advance so it
     need not read the repeats back off the GPU. It changes no value, and a wrong one
     is a caller error rather than a hint, so it is checked against what came out."""
-    t = _wrap(t)
-    out = _np.repeat(t.data, repeats, axis=dim)
-    length = t.data.size if dim is None else t.data.shape[dim]
+    input = _wrap(input)
+    out = _np.repeat(input.data, repeats, axis=dim)
+    length = input.data.size if dim is None else input.data.shape[dim]
     counts = (_np.full(length, repeats, dtype=_np.int64) if isinstance(repeats, int)
               else _np.asarray(repeats, dtype=_np.int64))
     # **Given as `intp`.** numpy's default integer is C's `long`, which is int64
@@ -4078,9 +4089,9 @@ def repeat_interleave(t, repeats, dim=None, *, output_size=None):
         gg = _np.asarray(g)
         if dim is None:
             gg = gg.reshape(-1)
-        return (_np.add.reduceat(gg, starts, axis=axis).reshape(t.data.shape),)
+        return (_np.add.reduceat(gg, starts, axis=axis).reshape(input.data.shape),)
 
-    return t._make(out, (t,), back, "RepeatInterleaveBackward0")
+    return input._make(out, (input,), back, "RepeatInterleaveBackward0")
 
 
 def tile(t, *reps, **kw):
@@ -4109,9 +4120,9 @@ def tile(t, *reps, **kw):
     return t._make(out, (t,), back, "TileBackward0")
 
 
-def movedim(t, source, destination):
-    t = _wrap(t)
-    return t._make(_np.moveaxis(t.data, source, destination), (t,),
+def movedim(input, source, destination):
+    input = _wrap(input)
+    return input._make(_np.moveaxis(input.data, source, destination), (input,),
                    lambda g: (_np.moveaxis(_np.asarray(g), destination, source),),
                    "MovedimBackward0")
 
@@ -4276,16 +4287,16 @@ def _spread_max(t, dim, keepdim, take, name):
     return t._make(final, (t,), back, name)
 
 
-def amax(t, dim=None, keepdim=False):
-    return _spread_max(t, dim, keepdim, _np.max, "AmaxBackward0")
+def amax(input, dim=None, keepdim=False):
+    return _spread_max(input, dim, keepdim, _np.max, "AmaxBackward0")
 
 
-def amin(t, dim=None, keepdim=False):
-    return _spread_max(t, dim, keepdim, _np.min, "AminBackward0")
+def amin(input, dim=None, keepdim=False):
+    return _spread_max(input, dim, keepdim, _np.min, "AminBackward0")
 
 
-def aminmax(t, dim=None, keepdim=False):
-    return _MinMax(amin(t, dim, keepdim), amax(t, dim, keepdim))
+def aminmax(input, dim=None, keepdim=False):
+    return _MinMax(amin(input, dim, keepdim), amax(input, dim, keepdim))
 
 
 def _nan_mask(t):
@@ -4312,7 +4323,7 @@ def nansum(t, dim=None, keepdim=False, dtype=None):
                    "NansumBackward0")
 
 
-def nanmean(t, dim=None, keepdim=False, dtype=None):
+def nanmean(input, dim=None, keepdim=False, dtype=None):
     """A mean taken **excluding** nan — the count excludes them too.
 
     **`dtype=` does not lift the integer refusal.** `mean` lifts it and this does
@@ -4320,12 +4331,12 @@ def nanmean(t, dim=None, keepdim=False, dtype=None):
     asymmetry in torch rather than a rule, and diverging towards the permissive
     side is still diverging, so it is followed.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     _needs_float(
-        t.data,
+        input.data,
         "nanmean exists over the reals only. Call `.float()` first.",
         "nanmean(): expected input to have floating point or complex dtype")
-    clean, bad = _nan_mask(t)
+    clean, bad = _nan_mask(input)
     count = (~bad).sum(axis=dim, keepdims=keepdim)
     total = clean.sum(axis=dim, keepdims=keepdim)
     # **numpy's promotion rule must not be left alone.** Dividing a float32 by an
@@ -4334,11 +4345,12 @@ def nanmean(t, dim=None, keepdim=False, dtype=None):
     out = total / count.astype(total.dtype)
 
     def back(g):
-        gg = _expand_reduced(g, t.data.shape, dim, keepdim)
-        n = _expand_reduced(count, t.data.shape, dim, keepdim) if dim is not None else count
+        gg = _expand_reduced(g, input.data.shape, dim, keepdim)
+        n = (_expand_reduced(count, input.data.shape, dim, keepdim)
+             if dim is not None else count)
         return (_np.where(bad, 0.0, gg / n),)
 
-    got = t._make(out, (t,), back, "NanmeanBackward0")
+    got = input._make(out, (input,), back, "NanmeanBackward0")
     return got if dtype is None else got.to(dtype)
 
 
@@ -4353,24 +4365,24 @@ def _expand_reduced(g, shape, dim, keepdim):
     return _np.broadcast_to(gg, shape)
 
 
-def logsumexp(t, dim=None, keepdim=False):
+def logsumexp(input, dim=None, keepdim=False):
     """`log(sum(exp(x)))` computed **without overflow** — the maximum is
     subtracted before summing."""
-    t = _wrap(t)
+    input = _wrap(input)
     # **It takes integers and booleans too and produces float32** (measured).
     # Left alone two places are wrong — numpy promotes integers to float64, and
     # booleans refuse `-` and stop at the subtraction below.
-    if t.data.dtype.kind not in "fc":
-        t = _wrap(t.data.astype(_DEFAULT_DTYPE))
-    big = _np.max(t.data, axis=dim, keepdims=True)
-    shifted = _np.exp(t.data - big)
+    if input.data.dtype.kind not in "fc":
+        input = _wrap(input.data.astype(_DEFAULT_DTYPE))
+    big = _np.max(input.data, axis=dim, keepdims=True)
+    shifted = _np.exp(input.data - big)
     total = shifted.sum(axis=dim, keepdims=True)
     out = _np.log(total) + big
     soft = shifted / total
     if not keepdim:
         out = out.reshape(()) if dim is None else _np.squeeze(out, axis=dim)
-    return t._make(out, (t,),
-                   lambda g: (_expand_reduced(g, t.data.shape, dim, keepdim) * soft,),
+    return input._make(out, (input,),
+                   lambda g: (_expand_reduced(g, input.data.shape, dim, keepdim) * soft,),
                    "LogsumexpBackward0")
 
 
@@ -4419,50 +4431,50 @@ def _running_idx(better):
     return make
 
 
-def cummax(t, dim):
-    return _cum_extreme(t, dim, _running_idx(lambda cur, best: cur >= best),
+def cummax(input, dim):
+    return _cum_extreme(input, dim, _running_idx(lambda cur, best: cur >= best),
                         "CummaxBackward0")
 
 
-def cummin(t, dim):
-    return _cum_extreme(t, dim, _running_idx(lambda cur, best: cur <= best),
+def cummin(input, dim):
+    return _cum_extreme(input, dim, _running_idx(lambda cur, best: cur <= best),
                         "CumminBackward0")
 
 
-def kthvalue(t, k, dim=-1, keepdim=False):
+def kthvalue(input, k, dim=-1, keepdim=False):
     """The **k-th smallest** value. torch counts from 1."""
-    t = _wrap(t)
-    size = t.data.shape[dim]
+    input = _wrap(input)
+    size = input.data.shape[dim]
     if not 1 <= k <= size:
         raise RuntimeError(
             f"kthvalue(): selected number k out of range for dimension {dim}")
-    order = _np.argsort(t.data, axis=dim, kind="stable")
+    order = _np.argsort(input.data, axis=dim, kind="stable")
     at = _np.take(order, k - 1, axis=dim)
     at_e = _np.expand_dims(at, dim)
-    out = _np.take_along_axis(t.data, at_e, axis=dim)
+    out = _np.take_along_axis(input.data, at_e, axis=dim)
     if not keepdim:
         out = _np.squeeze(out, axis=dim)
 
     def back(g):
-        z = _np.zeros_like(t.data)
+        z = _np.zeros_like(input.data)
         gg = _np.asarray(g)
         _np.put_along_axis(z, at_e, gg if keepdim else _np.expand_dims(gg, dim), axis=dim)
         return (z,)
 
-    return _MinMax(t._make(out, (t,), back, "KthvalueBackward0"),
+    return _MinMax(input._make(out, (input,), back, "KthvalueBackward0"),
                    Tensor(at.astype(_np.int64)))
 
 
-def msort(t):
+def msort(input):
     """Sort **along the first axis.** The same as the values side of
     `sort(dim=0)`."""
-    t = _wrap(t)
-    if t.data.ndim == 0:
-        return t.reshape(())
-    return sort(t, dim=0).values
+    input = _wrap(input)
+    if input.data.ndim == 0:
+        return input.reshape(())
+    return sort(input, dim=0).values
 
 
-def diff(t, n=1, dim=-1, prepend=None, append=None):
+def diff(input, n=1, dim=-1, prepend=None, append=None):
     """The difference between neighbours. `x[1:] - x[:-1]`, n times.
 
     **Built from slicing** — slicing already carries the graph, so there is no
@@ -4478,7 +4490,7 @@ def diff(t, n=1, dim=-1, prepend=None, append=None):
     result the same length as the input — used in time series so the first cell
     is not lost.
     """
-    out = _wrap(t)
+    out = _wrap(input)
     # **The axis is checked here rather than borrowed from a slice.** Slicing an
     # axis that does not exist is not an error in Python — the answer came back as
     # though `dim` were the last one, so `diff(x, dim=7)` on a 2-D tensor gave a
@@ -4501,9 +4513,9 @@ def diff(t, n=1, dim=-1, prepend=None, append=None):
     return out
 
 
-def dist(a, b, p=2):
+def dist(input, other, p=2):
     """The distance between two tensors — `norm(a - b, p)`."""
-    return norm(_wrap(a) - _wrap(b), p=p)
+    return norm(_wrap(input) - _wrap(other), p=p)
 
 
 _INTERPOLATIONS = ("linear", "lower", "higher", "midpoint", "nearest")
@@ -4520,18 +4532,18 @@ def _interpolation(how):
     return how
 
 
-def quantile(t, q, dim=None, keepdim=False, *, interpolation="linear"):
+def quantile(input, q, dim=None, keepdim=False, *, interpolation="linear"):
     """Quantiles. torch's default is **linear interpolation**, the same as
     numpy's — and the other four rules were not reachable at all until this
     argument existed."""
-    t = _wrap(t)
+    input = _wrap(input)
     _needs_float(
-        t.data,
+        input.data,
         "Quantiles exist over the reals only — the interpolation does not fit "
         "in an integer cell.",
         "quantile() input tensor must be either float or double dtype")
-    qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
-    out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim,
+    qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=input.data.dtype)
+    out = _np.quantile(input.data, qq, axis=dim, keepdims=keepdim,
                        method=_interpolation(interpolation))
 
     # **The gradient splits across the two positions used in the interpolation** —
@@ -4546,7 +4558,7 @@ def quantile(t, q, dim=None, keepdim=False, *, interpolation="linear"):
     #
     # Here too there was only a bare `Tensor(...)` and the graph was quietly
     # cut.
-    data = _np.asarray(t.data, dtype=_np.float64)
+    data = _np.asarray(input.data, dtype=_np.float64)
     lines = data.reshape(1, -1) if dim is None else \
         _np.moveaxis(data, dim, -1).reshape(-1, data.shape[dim])
     order = _np.argsort(lines, axis=-1, kind="stable")
@@ -4574,23 +4586,23 @@ def quantile(t, q, dim=None, keepdim=False, *, interpolation="linear"):
         parts = gg.reshape(qs.size, -1) if _np.ndim(qq) else gg.reshape(1, -1)
         total = (sheets * parts[:, :, None]).sum(axis=0)
         if dim is None:
-            return (total.reshape(t.data.shape),)
+            return (total.reshape(input.data.shape),)
         moved = data.shape[:dim] + data.shape[dim + 1:] + (n,)
         return (_np.moveaxis(total.reshape(moved), -1, dim),)
 
-    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,), back,
+    return input._make(_np.asarray(out, dtype=input.data.dtype), (input,), back,
                    "QuantileBackward0")
 
 
-def nanquantile(t, q, dim=None, keepdim=False, *, interpolation="linear"):
-    t = _wrap(t)
-    qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
-    out = _np.nanquantile(t.data, qq, axis=dim, keepdims=keepdim,
+def nanquantile(input, q, dim=None, keepdim=False, *, interpolation="linear"):
+    input = _wrap(input)
+    qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=input.data.dtype)
+    out = _np.nanquantile(input.data, qq, axis=dim, keepdims=keepdim,
                           method=_interpolation(interpolation))
-    return Tensor(_np.asarray(out, dtype=t.data.dtype))
+    return Tensor(_np.asarray(out, dtype=input.data.dtype))
 
 
-def nonzero(t, as_tuple=False):
+def nonzero(input, as_tuple=False):
     """The coordinates of the non-zero positions. **The shape depends on the
     values** — which is why there is no gradient.
 
@@ -4605,7 +4617,7 @@ def nonzero(t, as_tuple=False):
     0 keyword-only absences, and both were found by a probe built for a different
     question entirely.
     """
-    data = _wrap(t).data
+    data = _wrap(input).data
     if data.ndim == 0:
         # **torch answers the two forms with different ranks here.** The table
         # form gives (count, 0) — no columns, because there are no axes to name a
@@ -4622,8 +4634,8 @@ def nonzero(t, as_tuple=False):
     return Tensor(_np.stack(idx, axis=-1).astype(_np.int64))
 
 
-def argwhere(t):
-    return nonzero(t)
+def argwhere(input):
+    return nonzero(input)
 
 
 def _no_bool_accumulate(name, dt):
@@ -4642,21 +4654,21 @@ def _no_bool_accumulate(name, dt):
             f'"{name}_out_cpu" not implemented for \'Bool\''))
 
 
-def cumsum(t, dim, dtype=None):
-    t = _wrap(t)
+def cumsum(input, dim, dtype=None):
+    input = _wrap(input)
     if dtype is not None:
         # **Converted before going in.** Measured: the float `[1.7, −2.3, 0.9]`
         # with `dtype=int64` gives `[1, −1, −1]` — the running sum of the
         # truncated `[1, −2, 0]`. Truncated after folding it comes out
         # `[1, 0, 0]`.
         _no_bool_accumulate("cumsum", dtype)
-        return cumsum(t.to(dtype), dim).to(dtype)
-    return t._make(_np.cumsum(t.data, axis=dim), (t,),
+        return cumsum(input.to(dtype), dim).to(dtype)
+    return input._make(_np.cumsum(input.data, axis=dim), (input,),
                    lambda g: (_np.flip(_np.cumsum(_np.flip(_np.asarray(g), dim), axis=dim), dim),),
                    "CumsumBackward0")
 
 
-def cumprod(t, dim, dtype=None):
+def cumprod(input, dim, dtype=None):
     """A running product. Its backward is written **without division.**
 
     **Writing `dtype` in the body without declaring it as a parameter caused
@@ -4672,14 +4684,14 @@ def cumprod(t, dim, dtype=None):
     training path, and **the side that is right when a 0 is in the mix** is this
     repository's standard.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     if dtype is not None:
         _no_bool_accumulate("cumprod", dtype)
-        return cumprod(t.to(dtype), dim).to(dtype)
-    out = _np.cumprod(t.data, axis=dim)
+        return cumprod(input.to(dtype), dim).to(dtype)
+    out = _np.cumprod(input.data, axis=dim)
 
     def back(g):
-        x = _np.moveaxis(t.data, dim, 0)
+        x = _np.moveaxis(input.data, dim, 0)
         gg = _np.moveaxis(_np.asarray(g), dim, 0)
         grad = _np.zeros_like(x, dtype=_np.result_type(x.dtype, _np.float32))
         prefix = _np.ones_like(x[0])                 # x_0 … x_{k-1}
@@ -4693,7 +4705,7 @@ def cumprod(t, dim, dtype=None):
             prefix = prefix * x[k]
         return (_np.moveaxis(grad, 0, dim),)
 
-    return t._make(out, (t,), back, "CumprodBackward0")
+    return input._make(out, (input,), back, "CumprodBackward0")
 
 
 def count_nonzero(t, *dim, **kw):
@@ -4730,7 +4742,7 @@ def _order(data, dim, descending):
     return _np.argsort(-data if descending else data, axis=dim, kind="stable")
 
 
-def topk(t, k, dim=-1, largest=True, sorted=True):
+def topk(input, k, dim=-1, largest=True, sorted=True):
     """The top k as (values, indices). Chapter 32's top-k sampling is this.
 
     **`sorted` is torch's fifth seat and was missing**, so `topk(k, dim, largest,
@@ -4738,31 +4750,31 @@ def topk(t, k, dim=-1, largest=True, sorted=True):
     because the position is torch's; the values come back sorted either way, which
     torch allows — `sorted=False` promises nothing about the order, not a different
     order."""
-    t = _wrap(t)
-    if not 0 <= k <= t.data.shape[dim]:
+    input = _wrap(input)
+    if not 0 <= k <= input.data.shape[dim]:
         raise RuntimeError("selected index k out of range")
-    order = _order(t.data, dim, largest)
+    order = _order(input.data, dim, largest)
     idx = _np.take(order, _np.arange(k), axis=dim)
-    return _MinMax(_pick(t, idx, dim, "TopkBackward0"), Tensor(idx))
+    return _MinMax(_pick(input, idx, dim, "TopkBackward0"), Tensor(idx))
 
 
-def sort(t, dim=-1, descending=False, stable=False):
+def sort(input, dim=-1, descending=False, stable=False):
     """**`stable` is torch's fourth seat.** The sort underneath is numpy's
     `argsort`, which is stable by default, so equal values already keep their
     original order and the flag asks for what happens anyway — carried because the
     position is torch's and a positional call has to reach the same parameter."""
-    t = _wrap(t)
-    if t.data.ndim == 0:
-        return _at_rank_0(t, lambda x: sort(x, 0, descending, stable))
-    idx = _order(t.data, dim, descending)
-    return _MinMax(_pick(t, idx, dim, "SortBackward0"), Tensor(idx))
+    input = _wrap(input)
+    if input.data.ndim == 0:
+        return _at_rank_0(input, lambda x: sort(x, 0, descending, stable))
+    idx = _order(input.data, dim, descending)
+    return _MinMax(_pick(input, idx, dim, "SortBackward0"), Tensor(idx))
 
 
-def argsort(t, dim=-1, descending=False, stable=False):
-    return sort(t, dim, descending, stable).indices
+def argsort(input, dim=-1, descending=False, stable=False):
+    return sort(input, dim, descending, stable).indices
 
 
-def unique(t, sorted=True, return_inverse=False, return_counts=False, dim=None):
+def unique(input, sorted=True, return_inverse=False, return_counts=False, dim=None):
     """torch's order — `return_inverse` **second**, and `dim` last.
 
     **Two arguments were missing from the middle**, so `x.unique(True, True)` asked
@@ -4782,7 +4794,7 @@ def unique(t, sorted=True, return_inverse=False, return_counts=False, dim=None):
     `values[inverse]` rebuilds the input, and that holds only because the values are
     sorted. torch's inverse means the same thing.
     """
-    data = _wrap(t).data
+    data = _wrap(input).data
     if dim is None:
         values, inverse, counts = _np.unique(
             data, return_inverse=True, return_counts=True)
@@ -4804,16 +4816,16 @@ def unique(t, sorted=True, return_inverse=False, return_counts=False, dim=None):
 
 # -------------------------------------------------------------- linear algebra
 
-def mm(a, b): return _wrap(a) @ _wrap(b)
-def bmm(a, b): return _wrap(a) @ _wrap(b)
+def mm(input, mat2): return _wrap(input) @ _wrap(mat2)
+def bmm(input, mat2): return _wrap(input) @ _wrap(mat2)
 
 
-def dot(a, b): return (_wrap(a) * _wrap(b)).sum()
+def dot(input, tensor): return (_wrap(input) * _wrap(tensor)).sum()
 
 
-def outer(a, b):
-    a, b = _wrap(a), _wrap(b)
-    return a.reshape(-1, 1) @ b.reshape(1, -1)
+def outer(input, vec2):
+    input, vec2 = _wrap(input), _wrap(vec2)
+    return input.reshape(-1, 1) @ vec2.reshape(1, -1)
 
 
 def _diagonal_scatter(shape, g):
@@ -4825,7 +4837,7 @@ def _diagonal_scatter(shape, g):
     return z
 
 
-def diag(t, diagonal=0):
+def diag(input, diagonal=0):
     """1-D builds a diagonal matrix and 2-D takes the diagonal — opposite
     directions, so opposite backwards.
 
@@ -4833,29 +4845,29 @@ def diag(t, diagonal=0):
     Without it, `x.diag(1)` stops with a `TypeError` — the loud kind, so no value
     diverged.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     k = int(diagonal)
-    out = _np.diag(t.data, k)
-    if t.data.ndim == 1:
+    out = _np.diag(input.data, k)
+    if input.data.ndim == 1:
         def back(g):
             # Only that diagonal is taken back out of the matrix built.
             return (_np.diagonal(_np.asarray(g), k).copy(),)
     else:
         def back(g):
-            z = _np.zeros_like(t.data)
+            z = _np.zeros_like(input.data)
             _np.fill_diagonal(z[max(0, -k):, max(0, k):], 1.0)
-            spread = _np.zeros_like(t.data)
+            spread = _np.zeros_like(input.data)
             rows, cols = _np.nonzero(z)
             spread[rows, cols] = _np.asarray(g)
             return (spread,)
-    return t._make(out, (t,), back, "DiagBackward0")
+    return input._make(out, (input,), back, "DiagBackward0")
 
 
-def trace(t):
-    t = _wrap(t)
-    _rank(t.data, (2,), "trace: expected a matrix, but got tensor with dim {n}")
-    return t._make(_np.trace(t.data), (t,),
-                   lambda g: (_diagonal_scatter(t.data.shape, _np.asarray(g)),),
+def trace(input):
+    input = _wrap(input)
+    _rank(input.data, (2,), "trace: expected a matrix, but got tensor with dim {n}")
+    return input._make(_np.trace(input.data), (input,),
+                   lambda g: (_diagonal_scatter(input.data.shape, _np.asarray(g)),),
                    "TraceBackward0")
 
 
@@ -4913,12 +4925,12 @@ def empty(*shape, dtype=None, requires_grad=False, device=None):
 
 
 
-def leaky_relu(t, negative_slope=0.01, inplace=False):
+def leaky_relu(input, negative_slope=0.01, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "leaky_relu",
-                        lambda: _leaky_relu_body(t, negative_slope))
+    return _inplace_arg(input, inplace, "leaky_relu",
+                        lambda: _leaky_relu_body(input, negative_slope))
 
 
 def _leaky_relu_body(t, negative_slope=0.01):
@@ -4928,12 +4940,12 @@ def _leaky_relu_body(t, negative_slope=0.01):
                    lambda g: (g * _np.where(pick, 1.0, negative_slope),), "LeakyReluBackward0")
 
 
-def elu(t, alpha=1.0, inplace=False):
+def elu(input, alpha=1.0, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "elu",
-                        lambda: _elu_body(t, alpha))
+    return _inplace_arg(input, inplace, "elu",
+                        lambda: _elu_body(input, alpha))
 
 
 def _elu_body(t, alpha=1.0):
@@ -4944,12 +4956,12 @@ def _elu_body(t, alpha=1.0):
                    "EluBackward0")
 
 
-def silu(t, inplace=False):
+def silu(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "silu",
-                        lambda: _silu_body(t))
+    return _inplace_arg(input, inplace, "silu",
+                        lambda: _silu_body(input))
 
 
 def _silu_body(t):
@@ -5009,13 +5021,13 @@ def _gelu(t):
     return t._make(out, (t,), back, "GeluBackward0")
 
 
-def gelu(t, approximate="none"):
+def gelu(input, approximate="none"):
     if approximate == "tanh":
-        return _gelu_tanh(_wrap(t))
+        return _gelu_tanh(_wrap(input))
     if approximate != "none":
         raise ValueError(
             f"gelu(): approximate is 'none' or 'tanh' (got {approximate!r})")
-    return _gelu(_wrap(t))
+    return _gelu(_wrap(input))
 
 
 # ── the seventeen activations ───────────────────────────────────────────────
@@ -5036,12 +5048,12 @@ def _sigmoid_of(d):
     return 1.0 / (1.0 + _np.exp(-_np.clip(d, -60, 60)))
 
 
-def celu(t, alpha=1.0, inplace=False):
+def celu(input, alpha=1.0, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "celu",
-                        lambda: _celu_body(t, alpha))
+    return _inplace_arg(input, inplace, "celu",
+                        lambda: _celu_body(input, alpha))
 
 
 def _celu_body(t, alpha=1.0):
@@ -5059,21 +5071,21 @@ def _celu_body(t, alpha=1.0):
                    "CeluBackward0")
 
 
-def hardshrink(t, lambd=0.5):
+def hardshrink(input, lambd=0.5):
     """The value where |x| > λ and 0 otherwise. **On the boundary it is 0**
     (`>`, not `>=`)."""
-    t = _wrap(t)
-    keep = _np.abs(t.data) > lambd
-    return t._make(_np.where(keep, t.data, 0.0), (t,),
+    input = _wrap(input)
+    keep = _np.abs(input.data) > lambd
+    return input._make(_np.where(keep, input.data, 0.0), (input,),
                    lambda g: (g * keep,), "HardshrinkBackward0")
 
 
-def hardsigmoid(t, inplace=False):
+def hardsigmoid(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "hardsigmoid",
-                        lambda: _hardsigmoid_body(t))
+    return _inplace_arg(input, inplace, "hardsigmoid",
+                        lambda: _hardsigmoid_body(input))
 
 
 def _hardsigmoid_body(t):
@@ -5086,12 +5098,12 @@ def _hardsigmoid_body(t):
                    "HardsigmoidBackward0")
 
 
-def hardswish(t, inplace=False):
+def hardswish(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "hardswish",
-                        lambda: _hardswish_body(t))
+    return _inplace_arg(input, inplace, "hardswish",
+                        lambda: _hardswish_body(input))
 
 
 def _hardswish_body(t):
@@ -5103,12 +5115,12 @@ def _hardswish_body(t):
     return t._make(out, (t,), lambda g: (g * grad,), "HardswishBackward0")
 
 
-def hardtanh(t, min_val=-1.0, max_val=1.0, inplace=False):
+def hardtanh(input, min_val=-1.0, max_val=1.0, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "hardtanh",
-                        lambda: _hardtanh_body(t, min_val, max_val))
+    return _inplace_arg(input, inplace, "hardtanh",
+                        lambda: _hardtanh_body(input, min_val, max_val))
 
 
 def _hardtanh_body(t, min_val=-1.0, max_val=1.0):
@@ -5119,39 +5131,39 @@ def _hardtanh_body(t, min_val=-1.0, max_val=1.0):
                    lambda g: (g * inside,), "HardtanhBackward0")
 
 
-def logsigmoid(t):
+def logsigmoid(input):
     """log σ(x). **Computed directly at large negatives it becomes log(0)** — the
     stable form is used."""
-    t = _wrap(t)
-    d = t.data
+    input = _wrap(input)
+    d = input.data
     out = -(_np.logaddexp(0.0, -d))
     sig = _sigmoid_of(d)
-    return t._make(out.astype(d.dtype), (t,), lambda g: (g * (1.0 - sig),),
+    return input._make(out.astype(d.dtype), (input,), lambda g: (g * (1.0 - sig),),
                    "LogSigmoidBackward0")
 
 
-def softplus(t, beta=1.0, threshold=20.0):
+def softplus(input, beta=1.0, threshold=20.0):
     """(1/β)·log(1+e^{βx}). **Past the threshold, βx is simply x** — so it does
     not overflow.
 
     Without that branch, large input produces `inf` and every gradient after it
     becomes NaN.
     """
-    t = _wrap(t)
-    d = t.data
+    input = _wrap(input)
+    d = input.data
     big = beta * d > threshold
     out = _np.where(big, d, _np.logaddexp(0.0, beta * d) / beta)
     sig = _sigmoid_of(beta * d)
-    return t._make(out.astype(d.dtype), (t,),
+    return input._make(out.astype(d.dtype), (input,),
                    lambda g: (g * _np.where(big, 1.0, sig),), "SoftplusBackward0")
 
 
-def mish(t, inplace=False):
+def mish(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "mish",
-                        lambda: _mish_body(t))
+    return _inplace_arg(input, inplace, "mish",
+                        lambda: _mish_body(input))
 
 
 def _mish_body(t):
@@ -5166,12 +5178,12 @@ def _mish_body(t):
     return t._make(out, (t,), lambda g: (g * grad.astype(d.dtype),), "MishBackward0")
 
 
-def relu6(t, inplace=False):
+def relu6(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "relu6",
-                        lambda: _relu6_body(t))
+    return _inplace_arg(input, inplace, "relu6",
+                        lambda: _relu6_body(input))
 
 
 def _relu6_body(t):
@@ -5184,12 +5196,12 @@ def _relu6_body(t):
                    "Relu6Backward0")
 
 
-def selu(t, inplace=False):
+def selu(input, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "selu",
-                        lambda: _selu_body(t))
+    return _inplace_arg(input, inplace, "selu",
+                        lambda: _selu_body(input))
 
 
 def _selu_body(t):
@@ -5203,41 +5215,41 @@ def _selu_body(t):
                    "SeluBackward0")
 
 
-def softshrink(t, lambd=0.5):
+def softshrink(input, lambd=0.5):
     """**Pulls towards the origin** by λ. Unlike `hardshrink` the values stay
     continuous."""
-    t = _wrap(t)
-    d = t.data
+    input = _wrap(input)
+    d = input.data
     out = _np.where(d > lambd, d - lambd, _np.where(d < -lambd, d + lambd, 0.0))
     keep = _np.abs(d) > lambd
-    return t._make(out.astype(d.dtype), (t,), lambda g: (g * keep,),
+    return input._make(out.astype(d.dtype), (input,), lambda g: (g * keep,),
                    "SoftshrinkBackward0")
 
 
-def softsign(t):
+def softsign(input):
     """x/(1+|x|)."""
-    t = _wrap(t)
-    d = t.data
+    input = _wrap(input)
+    d = input.data
     denom = 1.0 + _np.abs(d)
-    return t._make((d / denom).astype(d.dtype), (t,),
+    return input._make((d / denom).astype(d.dtype), (input,),
                    lambda g: (g / (denom * denom),), "SoftsignBackward0")
 
 
-def tanhshrink(t):
+def tanhshrink(input):
     """x − tanh(x)."""
-    t = _wrap(t)
-    d = t.data
+    input = _wrap(input)
+    d = input.data
     th = _np.tanh(d)
-    return t._make((d - th).astype(d.dtype), (t,), lambda g: (g * (th * th),),
+    return input._make((d - th).astype(d.dtype), (input,), lambda g: (g * (th * th),),
                    "TanhshrinkBackward0")
 
 
-def threshold(t, threshold, value, inplace=False):       # noqa: A002
+def threshold(input, threshold, value, inplace=False):       # noqa: A002
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "threshold",
-                        lambda: _threshold_body(t, threshold, value))
+    return _inplace_arg(input, inplace, "threshold",
+                        lambda: _threshold_body(input, threshold, value))
 
 
 def _threshold_body(t, threshold, value):                # noqa: A002
@@ -5255,20 +5267,20 @@ def softmin(t, dim=-1):
     return softmax(-_wrap(t), dim=dim)
 
 
-def glu(t, dim=-1):
+def glu(input, dim=-1):
     """Split the axis in half and take `a · σ(b)`. The only activation that is
     not elementwise."""
-    t = _wrap(t)
-    n = t.data.shape[dim]
+    input = _wrap(input)
+    n = input.data.shape[dim]
     if n % 2:
         raise RuntimeError(f"glu needs an even length along dimension {dim} (got {n})")
     half = n // 2
-    a = narrow(t, dim, 0, half)
-    b = narrow(t, dim, half, half)
+    a = narrow(input, dim, 0, half)
+    b = narrow(input, dim, half, half)
     return a * sigmoid(b)
 
 
-def prelu(t, weight):
+def prelu(input, weight):
     """The slope on the negative side is **learned.** With one weight, every
     channel shares it.
 
@@ -5278,8 +5290,8 @@ def prelu(t, weight):
     point gave a max diff of 3.75, and the golden's `kinks` input contains a 0, so
     it was caught. With random input it would never have been.
     """
-    t, weight = _wrap(t), _wrap(weight)
-    d = t.data
+    input, weight = _wrap(input), _wrap(weight)
+    d = input.data
     w = weight.data
     if w.size != 1:
         # A different slope per channel — spread to line up with the channel
@@ -5296,7 +5308,7 @@ def prelu(t, weight):
         dw = _unbroadcast(g * _np.where(pos, 0.0, d), weight.data.shape)
         return (dx, dw)
 
-    return t._make(out.astype(d.dtype), (t, weight), back, "PreluBackward0")
+    return input._make(out.astype(d.dtype), (input, weight), back, "PreluBackward0")
 
 
 def log_softmax(t, dim=-1):
@@ -5312,12 +5324,12 @@ def log_softmax(t, dim=-1):
     return t._make(out, (t,), back, "LogSoftmaxBackward0")
 
 
-def dropout(t, p=0.5, training=True, inplace=False):
+def dropout(input, p=0.5, training=True, inplace=False):
     """torch takes `inplace` here; it is the underscore name by another
     spelling, routed through the same write-back rather than a second
     formula."""
-    return _inplace_arg(t, inplace, "dropout",
-                        lambda: _dropout_body(t, p, training))
+    return _inplace_arg(input, inplace, "dropout",
+                        lambda: _dropout_body(input, p, training))
 
 
 def _dropout_body(t, p=0.5, training=True):
@@ -5337,7 +5349,7 @@ def _dropout_body(t, p=0.5, training=True):
     return t * Tensor(mask)
 
 
-def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+def avg_pool2d(input, kernel_size, stride=None, padding=0, ceil_mode=False,
                count_include_pad=True, divisor_override=None):
     """**It takes a different window per axis.** Because
     `adaptive_avg_pool2d` has to be able to reduce the height and the width
@@ -5361,7 +5373,7 @@ def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
     kh, kw = _pair(kernel_size)
     sh, sw = _pair(stride if stride is not None else kernel_size)
     ph, pw = _pair(padding)
-    xd = x.data
+    xd = input.data
     N, C, H, W = xd.shape
     if ph or pw:
         xd = _np.pad(xd, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
@@ -5411,7 +5423,7 @@ def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
                 gx[:, :, i:i + OH * sh:sh, j:j + OW * sw:sw] += g
         return (gx[:, :, ph:ph + H, pw:pw + W],)
 
-    return x._make(out, (x,), back, "AvgPool2DBackward0")
+    return input._make(out, (input,), back, "AvgPool2DBackward0")
 
 
 def _pool_all(x):
@@ -5420,9 +5432,9 @@ def _pool_all(x):
     return x.mean(dim=2).mean(dim=2).reshape(x.data.shape[0], x.data.shape[1], 1, 1)
 
 
-def layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
-    mean = x.mean(dim=-1, keepdim=True)
-    centered = x - mean
+def layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
+    mean = input.mean(dim=-1, keepdim=True)
+    centered = input - mean
     var = (centered * centered).mean(dim=-1, keepdim=True)
     out = centered / (var + eps) ** 0.5
     if weight is not None:
@@ -5537,14 +5549,14 @@ def poisson_nll_loss(pred, target, log_input=True, full=False, eps=1e-8,
     return _reduce(out, reduction)
 
 
-def gaussian_nll_loss(pred, target, var, full=False, eps=1e-6, reduction="mean"):
+def gaussian_nll_loss(input, target, var, full=False, eps=1e-6, reduction="mean"):
     """The Gaussian negative log likelihood.
 
     **The variance is clamped by `eps`.** Unclamped it divides by zero and becomes
     infinite — at `var=1e-9` with the default `eps=1e-6` the clamped value gives
     124993 (measured).
     """
-    p, t, v = _wrap(pred), _wrap(target), _wrap(var)
+    p, t, v = _wrap(input), _wrap(target), _wrap(var)
     safe = clamp(v, min=eps)
     diff = p - t
     out = 0.5 * (safe.log() + diff * diff / safe)
@@ -5606,10 +5618,10 @@ def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
     return vector_norm(diff, ord=p, dim=-1, keepdim=keepdim)
 
 
-def pdist(x, p=2.0):
+def pdist(input, p=2.0):
     """The distance between **every pair** within one batch. It gives the upper
     triangle only."""
-    t = _wrap(x)
+    t = _wrap(input)
     _rank(t.data, (2,), "pdist only supports 2D tensors, got: {n}D")
     n = t.data.shape[0]
     rows = [i for i in range(n) for _ in range(i + 1, n)]
@@ -5762,10 +5774,10 @@ def unfold_im2col(x, kernel_size, dilation=1, padding=0, stride=1):
     return flat[:, idx.reshape(-1)].reshape(n, idx.shape[0], idx.shape[1])
 
 
-def fold(x, output_size, kernel_size, dilation=1, padding=0, stride=1):
+def fold(input, output_size, kernel_size, dilation=1, padding=0, stride=1):
     """Fold what was spread back. **Overlaps are added** — that is what this
     function means."""
-    t = _wrap(x)
+    t = _wrap(input)
     kernel, dil = _pair(kernel_size), _pair(dilation)
     pad_, strd = _pair(padding), _pair(stride)
     out_h, out_w = _pair(output_size)
@@ -5796,7 +5808,7 @@ def bilinear(input1, input2, weight, bias=None):
     return out + _wrap(bias) if bias is not None else out
 
 
-def local_response_norm(x, size, alpha=1e-4, beta=0.75, k=1.0):
+def local_response_norm(input, size, alpha=1e-4, beta=0.75, k=1.0):
     """Divide by the neighbouring channels.
 
     **The window is lopsided.** Channel `c`'s window is
@@ -5804,7 +5816,7 @@ def local_response_norm(x, size, alpha=1e-4, beta=0.75, k=1.0):
     `{c, c+1}` — confirmed by measurement. Centred, the values shift by one cell,
     and with the same size it is invisible in the shape.
     """
-    t = _wrap(x)
+    t = _wrap(input)
     left = size // 2
     sq = t * t
     total = None
@@ -5831,14 +5843,14 @@ def _roll_channels(t, shift):
                    "RollBackward0")
 
 
-def rrelu(x, lower=1.0 / 8, upper=1.0 / 3, training=False, inplace=False):
+def rrelu(input, lower=1.0 / 8, upper=1.0 / 3, training=False, inplace=False):
     """The slope on the negative side is drawn at random.
 
     **In evaluation mode it is fixed to the midpoint** — at the defaults,
     `(1/8 + 1/3)/2 = 0.2292`. It is drawn from `[lower, upper]` during training
     alone, so that is the only place randomness enters.
     """
-    t = _wrap(x)
+    t = _wrap(input)
     if not training:
         return leaky_relu(t, (lower + upper) / 2)
     slope = _rng.uniform(lower, upper, t.data.shape).astype(t.data.dtype)
@@ -5852,7 +5864,7 @@ def rrelu(x, lower=1.0 / 8, upper=1.0 / 3, training=False, inplace=False):
 # and `reshape` already do that job, so this is an assembly. With `arange` as the
 # input, where each position went reads straight off the answer.
 
-def pixel_shuffle(x, upscale_factor):
+def pixel_shuffle(input, upscale_factor):
     """`(N, C·r², H, W)` → `(N, C, H·r, W·r)`. The channels are cut up and planted
     into space.
 
@@ -5861,31 +5873,31 @@ def pixel_shuffle(x, upscale_factor):
     standing it up as `(N, C, H, r, W, r)` and then joining is what that means.
     Reordered, the shape matches and only the picture is scrambled.
     """
-    t = _wrap(x)
+    t = _wrap(input)
     r = upscale_factor
     n, c, h, w = t.data.shape
     out = t.reshape(n, c // (r * r), r, r, h, w).permute(0, 1, 4, 2, 5, 3)
     return out.reshape(n, c // (r * r), h * r, w * r)
 
 
-def pixel_unshuffle(x, downscale_factor):
+def pixel_unshuffle(input, downscale_factor):
     """The inverse of `pixel_shuffle`. Space is cut up and stacked into the
     channels."""
-    t = _wrap(x)
+    t = _wrap(input)
     r = downscale_factor
     n, c, h, w = t.data.shape
     out = t.reshape(n, c, h // r, r, w // r, r).permute(0, 1, 3, 5, 2, 4)
     return out.reshape(n, c * r * r, h // r, w // r)
 
 
-def channel_shuffle(x, groups):
+def channel_shuffle(input, groups):
     """Split the channels into groups and **lay them back interleaved.**
 
     `[0,1,2,3]` shuffled into two groups is `[0,2,1,3]` — this is where the
     information being trapped inside its group after a grouped convolution gets
     released, so the direction of the interleaving is the whole of the value.
     """
-    t = _wrap(x)
+    t = _wrap(input)
     n, c = t.data.shape[0], t.data.shape[1]
     rest = t.data.shape[2:]
     out = t.reshape(n, groups, c // groups, *rest)
@@ -5921,13 +5933,13 @@ def _feature_dropout(x, p, training, name):
     return t * Tensor(_channel_mask(t, p) / (1 - p))
 
 
-def dropout1d(x, p=0.5, training=True, inplace=False):
+def dropout1d(input, p=0.5, training=True, inplace=False):
     """These five took `inplace` from the day they were written and **threw it
     away** — the caller's tensor was never touched and nothing said so. An
     argument that is accepted and ignored is worse than one that is missing,
     because the missing one raises."""
-    return _inplace_arg(x, inplace, "dropout",
-                        lambda: _dropout1d_body(x, p, training))
+    return _inplace_arg(input, inplace, "dropout",
+                        lambda: _dropout1d_body(input, p, training))
 
 
 def _dropout1d_body(x, p=0.5, training=True):
@@ -5941,14 +5953,14 @@ def _dropout1d_body(x, p=0.5, training=True):
     return _feature_dropout(t, p, training, "dropout1d")
 
 
-def dropout2d(x, p=0.5, training=True, inplace=False):
-    return _inplace_arg(x, inplace, "dropout",
-                        lambda: _feature_dropout(x, p, training, "dropout2d"))
+def dropout2d(input, p=0.5, training=True, inplace=False):
+    return _inplace_arg(input, inplace, "dropout",
+                        lambda: _feature_dropout(input, p, training, "dropout2d"))
 
 
-def dropout3d(x, p=0.5, training=True, inplace=False):
-    return _inplace_arg(x, inplace, "dropout",
-                        lambda: _feature_dropout(x, p, training, "dropout3d"))
+def dropout3d(input, p=0.5, training=True, inplace=False):
+    return _inplace_arg(input, inplace, "dropout",
+                        lambda: _feature_dropout(input, p, training, "dropout3d"))
 
 
 # SELU's fixed point. The value `alpha_dropout` inserts at a dropped position
@@ -5963,9 +5975,9 @@ def _alpha_affine(p):
     return a, -a * p * _ALPHA_PRIME
 
 
-def alpha_dropout(x, p=0.5, training=False, inplace=False):
-    return _inplace_arg(x, inplace, "alpha_dropout",
-                        lambda: _alpha_dropout_body(x, p, training))
+def alpha_dropout(input, p=0.5, training=False, inplace=False):
+    return _inplace_arg(input, inplace, "alpha_dropout",
+                        lambda: _alpha_dropout_body(input, p, training))
 
 
 def _alpha_dropout_body(x, p=0.5, training=False):
@@ -5977,9 +5989,9 @@ def _alpha_dropout_body(x, p=0.5, training=False):
     return (t * keep + (1 - keep) * _ALPHA_PRIME) * a + b
 
 
-def feature_alpha_dropout(x, p=0.5, training=False, inplace=False):
-    return _inplace_arg(x, inplace, "feature_alpha_dropout",
-                        lambda: _feature_alpha_dropout_body(x, p, training))
+def feature_alpha_dropout(input, p=0.5, training=False, inplace=False):
+    return _inplace_arg(input, inplace, "feature_alpha_dropout",
+                        lambda: _feature_alpha_dropout_body(input, p, training))
 
 
 def _feature_alpha_dropout_body(x, p=0.5, training=False):
@@ -6083,37 +6095,49 @@ def pad(x, padding, mode="constant", value=0.0):
     return x._make(data, (x,), back, "PadBackward0")
 
 
-def normalize(x, p=2, dim=1, eps=1e-12):
-    x = _wrap(x)
-    denom = norm(x, p=p, dim=dim)
-    return x / maximum(denom.unsqueeze(dim), Tensor(_np.array(eps, dtype=_DEFAULT_DTYPE)))
+def normalize(input, p=2, dim=1, eps=1e-12, out=None):
+    """**`out` is written here rather than through `_accepts_out`.** That wrapper is
+    driven by `_TAKES_OUT`, which lists names on `torch` itself, and `normalize`
+    lives only under `torch.nn.functional` — putting it in that table asked
+    `test_out_names.py` for `torch.normalize`, which does not exist.
+
+    It surfaced when the core's first parameter became `input`: the row had been
+    filed as *cannot be aligned* on the name, and once the names matched, what was
+    actually missing showed through underneath. **A row in the vaguest bucket can be
+    hiding a specific one.**
+    """
+    input = _wrap(input)
+    denom = norm(input, p=p, dim=dim)
+    got = input / maximum(denom.unsqueeze(dim),
+                          Tensor(_np.array(eps, dtype=_DEFAULT_DTYPE)))
+    return _out(got, out, "normalize")
 
 
-def cosine_similarity(a, b, dim=1, eps=1e-8):
-    a, b = _wrap(a), _wrap(b)
-    return (a * b).sum(dim=dim) / maximum(
-        norm(a, dim=dim) * norm(b, dim=dim), Tensor(_np.array(eps, dtype=_DEFAULT_DTYPE)))
+def cosine_similarity(x1, x2, dim=1, eps=1e-8):
+    x1, x2 = _wrap(x1), _wrap(x2)
+    return (x1 * x2).sum(dim=dim) / maximum(
+        norm(x1, dim=dim) * norm(x2, dim=dim), Tensor(_np.array(eps, dtype=_DEFAULT_DTYPE)))
 
 
 
-def tril(t, diagonal=0):
+def tril(input, diagonal=0):
     """Keep the lower triangle alone. The backward **passes the same positions
     through** — the erased positions never appeared in the output, so their
     gradient is 0 too."""
-    t = _wrap(t)
-    _rank(t.data, range(2, 65), "tril: input tensor must have at least 2 dimensions")
-    return t._make(_np.tril(t.data, k=diagonal), (t,),
+    input = _wrap(input)
+    _rank(input.data, range(2, 65), "tril: input tensor must have at least 2 dimensions")
+    return input._make(_np.tril(input.data, k=diagonal), (input,),
                    lambda g: (_np.tril(_np.asarray(g), k=diagonal),), "TrilBackward0")
 
 
-def triu(t, diagonal=0):
-    t = _wrap(t)
-    _rank(t.data, range(2, 65), "triu: input tensor must have at least 2 dimensions")
-    return t._make(_np.triu(t.data, k=diagonal), (t,),
+def triu(input, diagonal=0):
+    input = _wrap(input)
+    _rank(input.data, range(2, 65), "triu: input tensor must have at least 2 dimensions")
+    return input._make(_np.triu(input.data, k=diagonal), (input,),
                    lambda g: (_np.triu(_np.asarray(g), k=diagonal),), "TriuBackward0")
 
 
-def allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
+def allclose(input, other, rtol=1e-5, atol=1e-8, equal_nan=False):
     """**It takes `equal_nan`.** The default is false, so NaN does not even equal
     NaN (measured).
 
@@ -6122,33 +6146,33 @@ def allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False):
     an argument and so do we, and whether to turn it on is the caller's
     decision.
     """
-    return bool(_np.allclose(_wrap(a).data, _wrap(b).data, rtol=rtol, atol=atol,
+    return bool(_np.allclose(_wrap(input).data, _wrap(other).data, rtol=rtol, atol=atol,
                              equal_nan=bool(equal_nan)))
 
 
-def equal(a, b):
-    return bool(_np.array_equal(_wrap(a).data, _wrap(b).data))
+def equal(input, other):
+    return bool(_np.array_equal(_wrap(input).data, _wrap(other).data))
 
 
-def isfinite(t):
-    return Tensor(_np.isfinite(_wrap(t).data))
+def isfinite(input):
+    return Tensor(_np.isfinite(_wrap(input).data))
 
 
-def bincount(t, weights=None, minlength=0):
+def bincount(input, weights=None, minlength=0):
     """How many times each cell occurred. **Given weights it sums the weights
     rather than the counts.**
 
     The dtype parts (measured): `int64` without weights and the weights' dtype
     with them — because counting and summing values are different jobs.
     """
-    t = _wrap(t)
-    _refuses_bool(t.data, "bincount does not take booleans.",
+    input = _wrap(input)
+    _refuses_bool(input.data, "bincount does not take booleans.",
                   '"bincount_cpu" not implemented for \'Bool\'',
                   kind=NotImplementedError)
     # `intp` — on wasm32, handing it int64 is refused. See `repeat_interleave`
     # above.
     w = None if weights is None else _np.asarray(_wrap(weights).data)
-    out = _np.bincount(t.data.astype(_np.intp), weights=w,
+    out = _np.bincount(input.data.astype(_np.intp), weights=w,
                        minlength=int(minlength))
     # numpy always gives float64 when there are weights. It is restored to the
     # weights' dtype.
@@ -6268,7 +6292,7 @@ class inference_mode:                                    # noqa: N801
         return wrapper
 
 
-def is_inference(t):
+def is_inference(input):
     """**Always false.** As written above, the mark is never attached, so it says
     so."""
     return False
@@ -6294,18 +6318,18 @@ def is_storage(x):
     return False
 
 
-def is_floating_point(x):
-    return _wrap(x).data.dtype.kind == "f"
+def is_floating_point(input):
+    return _wrap(input).data.dtype.kind == "f"
 
 
 def is_signed(x):
     return _wrap(x).data.dtype.kind in "fi"
 
 
-def is_nonzero(x):
+def is_nonzero(input):
     """**There has to be exactly one element.** torch throws otherwise — with
     several there is no defined answer to what is true."""
-    data = _wrap(x).data
+    data = _wrap(input).data
     if data.size != 1:
         raise RuntimeError(
             f"Boolean value of Tensor with {data.size} elements is ambiguous")
@@ -6334,7 +6358,7 @@ def typename(x):
 _PROMOTE_ORDER = ("bool", "int64", "float32", "float64")
 
 
-def promote_types(a, b):
+def promote_types(type1, type2):
     """The dtype that can hold both.
 
     **It uses the rule the arithmetic uses.** A separate ordering table here did
@@ -6346,7 +6370,7 @@ def promote_types(a, b):
     """
     from ._tensor import result_type                       # noqa: PLC0415
 
-    return _NP_TO_DTYPE[result_type(_np_of(a), _np_of(b))]
+    return _NP_TO_DTYPE[result_type(_np_of(type1), _np_of(type2))]
 
 
 def can_cast(from_type, to_type):
@@ -6611,46 +6635,47 @@ def _cholesky_checked(data, what):
 # at the point of differentiation, and there is no reason to block somebody asking
 # for a value as well.
 
-def det(t):
-    t = _mat(t, "det")
-    out = _np.linalg.det(t.data)
+def det(input):
+    input = _mat(input, "det")
+    out = _np.linalg.det(input.data)
 
     def back(g):
-        inv_t = _T(_guard("det", _np.linalg.inv, t.data))
+        inv_t = _T(_guard("det", _np.linalg.inv, input.data))
         # The determinant is a scalar per batch — multiplying it into a matrix
         # needs two axes stood up.
         return ((_np.asarray(g) * out)[..., None, None] * inv_t,)
 
-    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,), back, "DetBackward0")
+    return input._make(_np.asarray(out, dtype=input.data.dtype), (input,), back,
+                       "DetBackward0")
 
 
-def logdet(t):
-    t = _mat(t, "logdet")
-    sign, logabs = _np.linalg.slogdet(t.data)
+def logdet(input):
+    input = _mat(input, "logdet")
+    sign, logabs = _np.linalg.slogdet(input.data)
     out = _np.where(sign > 0, logabs, _np.nan)
-    return t._make(_np.asarray(out, dtype=t.data.dtype), (t,),
+    return input._make(_np.asarray(out, dtype=input.data.dtype), (input,),
                    lambda g: (_np.asarray(g)[..., None, None]
-                              * _T(_guard("logdet", _np.linalg.inv, t.data)),),
+                              * _T(_guard("logdet", _np.linalg.inv, input.data)),),
                    "LogdetBackward0")
 
 
-def slogdet(t):
-    t = _mat(t, "slogdet")
-    sign, logabs = _np.linalg.slogdet(t.data)
-    return _Slogdet(Tensor(_np.asarray(sign, dtype=t.data.dtype)),
-                    t._make(_np.asarray(logabs, dtype=t.data.dtype), (t,),
+def slogdet(input):
+    input = _mat(input, "slogdet")
+    sign, logabs = _np.linalg.slogdet(input.data)
+    return _Slogdet(Tensor(_np.asarray(sign, dtype=input.data.dtype)),
+                    input._make(_np.asarray(logabs, dtype=input.data.dtype), (input,),
                             lambda g: (_np.asarray(g)[..., None, None]
-                                       * _T(_guard("slogdet", _np.linalg.inv, t.data)),),
+                                       * _T(_guard("slogdet", _np.linalg.inv, input.data)),),
                             "SlogdetBackward0"))
 
 
-def inverse(t):
+def inverse(input):
     """The inverse. Its gradient is `-A⁻ᵀ G A⁻ᵀ`."""
-    t = _mat(t, "inverse")
-    _reject_singular(t.data, "inv")
-    out = _guard("inv", _np.linalg.inv, t.data)
+    input = _mat(input, "inverse")
+    _reject_singular(input.data, "inv")
+    out = _guard("inv", _np.linalg.inv, input.data)
     out_t = _T(out)
-    return t._make(out, (t,),
+    return input._make(out, (input,),
                    lambda g: (-(out_t @ _np.asarray(g) @ out_t),), "InverseBackward0")
 
 
@@ -6739,12 +6764,12 @@ def _cholesky_raw(data, upper):
     return _T(low) if upper else low
 
 
-def cholesky(t, upper=False):
+def cholesky(input, upper=False):
     """The lower triangle `L` of `A = L Lᵀ`. **It has a gradient** — Murray's
     algorithm was derived and compared against torch at a max diff of
     2.8e-17."""
-    t = _mat(t, "cholesky")
-    low = _cholesky_checked(t.data.astype(_np.float64), "cholesky")
+    input = _mat(input, "cholesky")
+    low = _cholesky_checked(input.data.astype(_np.float64), "cholesky")
     idx = _np.arange(low.shape[-1])
 
     def back(g):
@@ -6758,10 +6783,10 @@ def cholesky(t, upper=False):
         half[..., idx, idx] *= 0.5
         low_inv = _np.linalg.inv(low)
         sym = _T(low_inv) @ half @ low_inv
-        return (((sym + _T(sym)) * 0.5).astype(t.data.dtype),)
+        return (((sym + _T(sym)) * 0.5).astype(input.data.dtype),)
 
-    out = (_T(low) if upper else low).astype(t.data.dtype)
-    return t._make(out, (t,), back, "CholeskyBackward0")
+    out = (_T(low) if upper else low).astype(input.data.dtype)
+    return input._make(out, (input,), back, "CholeskyBackward0")
 
 
 def cholesky_ex(t, upper=False, check_errors=False):
@@ -6779,19 +6804,19 @@ def cholesky_ex(t, upper=False, check_errors=False):
     return _CholeskyEx(out, Tensor(_np.zeros(t.data.shape[:-2], dtype=_np.int32)))
 
 
-def matrix_power(t, n):
+def matrix_power(input, n):
     """**Built by chaining multiplications** — the backward then follows on its
     own. Built from a factorisation there would be a new derivative to write, and
     that is one more place to get it wrong."""
-    t = _mat(t, "matrix_power")
+    input = _mat(input, "matrix_power")
     if n < 0:
-        return matrix_power(inverse(t), -n)
+        return matrix_power(inverse(input), -n)
     if n == 0:
-        eye = _np.eye(t.data.shape[-1], dtype=t.data.dtype)
-        return Tensor(_np.broadcast_to(eye, t.data.shape).copy())
-    out = t
+        eye = _np.eye(input.data.shape[-1], dtype=input.data.dtype)
+        return Tensor(_np.broadcast_to(eye, input.data.shape).copy())
+    out = input
     for _ in range(n - 1):
-        out = out @ t
+        out = out @ input
     return out
 
 
@@ -6849,7 +6874,7 @@ def _svd_raw(data, full_matrices):
     return _np.ascontiguousarray(u), s, _np.ascontiguousarray(vh)
 
 
-def svd(t, some=True, compute_uv=True):
+def svd(input, some=True, compute_uv=True):
     """`torch.svd` — **which is not `torch.linalg.svd`,** and this was the latter
     under the former's name.
 
@@ -6877,8 +6902,8 @@ def svd(t, some=True, compute_uv=True):
     where singular values repeat, and that place is left out — the absence being
     loud is better.
     """
-    t = _mat(t, "svd", square=False)
-    u, s, vh = _svd_raw(t.data, not some)
+    input = _mat(input, "svd", square=False)
+    u, s, vh = _svd_raw(input.data, not some)
     k = s.shape[-1]
     u_thin, vh_thin = u[..., :, :k], vh[..., :k, :]
 
@@ -6889,7 +6914,7 @@ def svd(t, some=True, compute_uv=True):
         mid[..., idx, idx] = gg
         return (u_thin @ mid @ vh_thin,)
 
-    values = t._make(s, (t,), back, "SvdBackward0")
+    values = input._make(s, (input,), back, "SvdBackward0")
     if not compute_uv:
         # torch fills both with zeros of the shape they would have had rather than
         # returning a shorter tuple — the caller's unpacking keeps working.
@@ -6924,7 +6949,7 @@ def linalg_svd(t, full_matrices=True):
     return _SVD(Tensor(u), t._make(s, (t,), back, "SvdBackward0"), Tensor(vh))
 
 
-def pinverse(t, rcond=1e-15):
+def pinverse(input, rcond=1e-15):
     """The pseudo-inverse. **It has a gradient** — in three terms.
 
         Ā = −Pᵀ·Ḡ·Pᵀ + (I − A·P)·Ḡᵀ·P·Pᵀ + Pᵀ·P·Ḡᵀ·(I − P·A)
@@ -6936,9 +6961,9 @@ def pinverse(t, rcond=1e-15):
     way, and the square cases had been passing all along — which is why the golden
     asks with rectangles too.
     """
-    t = _mat(t, "pinverse", square=False)
-    p = _np.linalg.pinv(t.data, rcond=rcond)
-    m, n = t.data.shape[-2], t.data.shape[-1]
+    input = _mat(input, "pinverse", square=False)
+    p = _np.linalg.pinv(input.data, rcond=rcond)
+    m, n = input.data.shape[-2], input.data.shape[-1]
     eye_m = _np.eye(m, dtype=p.dtype)
     eye_n = _np.eye(n, dtype=p.dtype)
 
@@ -6946,11 +6971,11 @@ def pinverse(t, rcond=1e-15):
         gg = _np.asarray(g)
         pt = _T(p)
         left = -(pt @ gg @ pt)
-        mid = (eye_m - t.data @ p) @ _T(gg) @ p @ pt
-        right = pt @ p @ _T(gg) @ (eye_n - p @ t.data)
+        mid = (eye_m - input.data @ p) @ _T(gg) @ p @ pt
+        right = pt @ p @ _T(gg) @ (eye_n - p @ input.data)
         return (left + mid + right,)
 
-    return t._make(p, (t,), back, "PinverseBackward0")
+    return input._make(p, (input,), back, "PinverseBackward0")
 
 
 def matrix_rank(t, tol=None):
@@ -7247,15 +7272,15 @@ def ldl_solve(ld, pivots, b, hermitian=False):
     return Tensor(got.astype(_wrap(b).data.dtype))
 
 
-def geqrf(t):
+def geqrf(input):
     """QR **in reflector form.** `householder_product` builds `Q` out of it.
 
     It imitates LAPACK's two stages exactly — `geqrf` holds the reflectors and
     spreading them into `Q` is separate. They are kept apart because some code
     multiplies by `Q` without ever building it.
     """
-    t = _mat(t, "geqrf", square=False)
-    a = _np.asarray(t.data, dtype=_np.float64)
+    input = _mat(input, "geqrf", square=False)
+    a = _np.asarray(input.data, dtype=_np.float64)
     m, n = a.shape[-2], a.shape[-1]
     flat = a.reshape(-1, m, n).copy()
     taus = _np.zeros((flat.shape[0], min(m, n)))
@@ -7281,8 +7306,8 @@ def geqrf(t):
             mat[j, j] = beta
             mat[j + 1:, j] = v[1:]
             taus[b, j] = tau
-    return _Geqrf(Tensor(flat.reshape(a.shape).astype(t.data.dtype)),
-                  Tensor(taus.reshape(a.shape[:-2] + (min(m, n),)).astype(t.data.dtype)))
+    return _Geqrf(Tensor(flat.reshape(a.shape).astype(input.data.dtype)),
+                  Tensor(taus.reshape(a.shape[:-2] + (min(m, n),)).astype(input.data.dtype)))
 
 
 def householder_product(t, tau):
@@ -7565,7 +7590,7 @@ def _expm_raw(a):
     return out
 
 
-def matrix_exp(t):
+def matrix_exp(A):
     """The matrix exponential `e^A`. **It goes by scaling and squaring.**
 
     Taylor alone does not converge on a large matrix — the answer for `A*5` is
@@ -7583,7 +7608,7 @@ def matrix_exp(t):
     write a new derivative. That is why this method was chosen. A derived formula
     can be wrong, and wrong quietly.
     """
-    x = _mat(t, "matrix_exp")
+    x = _mat(A, "matrix_exp")
     a = x.data.astype(_np.float64)
     n = a.shape[-1]
 
@@ -7596,7 +7621,7 @@ def matrix_exp(t):
         block[..., n:, n:] = at
         return (_expm_raw(block)[..., :n, n:].astype(x.data.dtype),)
 
-    return t._make(_expm_raw(a).astype(x.data.dtype), (t,), back, "MatrixExpBackward0")
+    return A._make(_expm_raw(a).astype(x.data.dtype), (A,), back, "MatrixExpBackward0")
 
 
 class _Linalg(_Namespace):
@@ -7843,7 +7868,7 @@ def _grid_reflect(v, n, align_corners):
     return clamp(minimum(t, span - t) + lo, 0.0, n - 1.0)
 
 
-def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
+def grid_sample(input, grid, mode="bilinear", padding_mode="zeros",
                 align_corners=False):
     """Fetch the values at the positions the grid points at. `affine_grid`'s
     partner.
@@ -7854,8 +7879,8 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
     input and the grid — that is the path by which a spatial transformer learns
     `theta`.
     """
-    x, grid = _wrap(x), _wrap(grid)
-    n, c, h, w = x.data.shape
+    input, grid = _wrap(input), _wrap(grid)
+    n, c, h, w = input.data.shape
     oh, ow = grid.data.shape[1], grid.data.shape[2]
     gx = grid[:, :, :, 0]
     gy = grid[:, :, :, 1]
@@ -7869,7 +7894,7 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
     elif padding_mode != "zeros":
         _unsupported(f"grid_sample(padding_mode={padding_mode!r})")
 
-    flat = x.reshape(-1)
+    flat = input.reshape(-1)
     batch = _np.arange(n).reshape(n, 1, 1, 1)
     chan = _np.arange(c).reshape(1, c, 1, 1)
 
@@ -7883,7 +7908,7 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
         idx = (((batch * c + chan) * h + cy[:, None]) * w + cx[:, None])
         got = take(flat, Tensor(idx.reshape(-1).astype(_np.int64)))
         got = got.reshape(n, c, oh, ow)
-        return got * Tensor(inside[:, None].astype(x.data.dtype))
+        return got * Tensor(inside[:, None].astype(input.data.dtype))
 
     if mode == "nearest":
         # torch rounds. Only a value comes out and there is no weight, so nothing
@@ -7894,8 +7919,8 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
 
     x0 = _np.floor(sx.data).astype(int)
     y0 = _np.floor(sy.data).astype(int)
-    wx = (sx - Tensor(x0.astype(x.data.dtype))).reshape(n, 1, oh, ow)
-    wy = (sy - Tensor(y0.astype(x.data.dtype))).reshape(n, 1, oh, ow)
+    wx = (sx - Tensor(x0.astype(input.data.dtype))).reshape(n, 1, oh, ow)
+    wy = (sy - Tensor(y0.astype(input.data.dtype))).reshape(n, 1, oh, ow)
     one = 1.0
     return (pick(y0, x0) * (one - wy) * (one - wx)
             + pick(y0, x0 + 1) * (one - wy) * wx
@@ -7903,7 +7928,7 @@ def grid_sample(x, grid, mode="bilinear", padding_mode="zeros",
             + pick(y0 + 1, x0 + 1) * wy * wx)
 
 
-def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
+def batch_norm(input, running_mean=None, running_var=None, weight=None, bias=None,
                training=False, momentum=0.1, eps=1e-5):
     """The function form of `BatchNorm*d`. **The layer calls this** — one copy of
     the formula.
@@ -7918,8 +7943,8 @@ def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
     places, the values are off by 2.6% — a place this repository lived with for a
     long time, which is why it is written down here.
     """
-    x = _wrap(x)
-    rank = x.data.ndim
+    input = _wrap(input)
+    rank = input.data.ndim
     shape = (1, -1) + (1,) * (rank - 2)
     reduced = tuple(i for i in range(rank) if i != 1)
 
@@ -7930,16 +7955,16 @@ def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
         # The mean and the variance are computed **inside the graph.** Taken out
         # through numpy and used as constants, the path x → mean → y is cut, the
         # gradient is wrong, and nothing reaches weight at all.
-        mean = x.mean(dim=0)
+        mean = input.mean(dim=0)
         for _ in range(rank - 2):
             mean = mean.mean(dim=1)
-        centered = x - mean.reshape(shape)
+        centered = input - mean.reshape(shape)
         var = (centered * centered).mean(dim=0)
         for _ in range(rank - 2):
             var = var.mean(dim=1)
         if running_mean is not None:
             with no_grad():
-                unbiased = x.data.var(axis=reduced, ddof=1)
+                unbiased = input.data.var(axis=reduced, ddof=1)
                 _raw(running_mean)[...] = ((1 - momentum) * _raw(running_mean)
                                            + momentum * mean.data)
                 _raw(running_var)[...] = ((1 - momentum) * _raw(running_var)
@@ -7948,7 +7973,7 @@ def batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
     else:
         rm = _np.asarray(_raw(running_mean)).reshape(shape)
         rv = _np.sqrt(_np.asarray(_raw(running_var)) + eps).reshape(shape)
-        normed = (x - Tensor(rm)) / Tensor(rv)
+        normed = (input - Tensor(rm)) / Tensor(rv)
     if weight is not None:
         normed = normed * _wrap(weight).reshape(shape)
     if bias is not None:
@@ -7990,7 +8015,7 @@ def _renorm_rows(weight, ids, max_norm, norm_type):
         data[over] = data[over] * scale.reshape(-1, 1)
 
 
-def embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
+def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2.0,
                   scale_grad_by_freq=False, mode="mean", sparse=False,
                   per_sample_weights=None, include_last_offset=False,
                   padding_idx=None):
@@ -8006,14 +8031,14 @@ def embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
     mode here — the same call, two meanings, and both sides return a bag of the
     right shape.
     """
-    idx, weight = _wrap(idx), _wrap(weight)
+    input, weight = _wrap(input), _wrap(weight)
     if scale_grad_by_freq:
         _unsupported("embedding_bag(scale_grad_by_freq=True)")
     if sparse:
         _unsupported("embedding_bag(sparse=True) — there is no sparse gradient here")
     if max_norm is not None:
-        _renorm_rows(weight, idx.data, max_norm, norm_type)
-    picked = embedding(idx, weight)
+        _renorm_rows(weight, input.data, max_norm, norm_type)
+    picked = embedding(input, weight)
     if per_sample_weights is not None:
         picked = picked * _wrap(per_sample_weights).reshape(
             *_wrap(per_sample_weights).data.shape, 1)
@@ -8023,7 +8048,7 @@ def embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
     # padded entry has to leave the denominator too (measured against torch).
     keep = None
     if padding_idx is not None:
-        keep = (_np.asarray(idx.data).astype(int) != padding_idx).astype(_DEFAULT_DTYPE)
+        keep = (_np.asarray(input.data).astype(int) != padding_idx).astype(_DEFAULT_DTYPE)
         picked = picked * _wrap(keep).reshape(*keep.shape, 1)
 
     def squash(part, dim, mask=None):
@@ -8044,7 +8069,7 @@ def embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
     # than opening a new one — so the count of bags is one fewer than the offsets,
     # not one more than the gaps between them.
     if not include_last_offset:
-        bounds = bounds + [int(idx.data.size)]
+        bounds = bounds + [int(input.data.size)]
     parts = []
     for i in range(len(bounds) - 1):
         lo, hi = bounds[i], bounds[i + 1]
@@ -8105,21 +8130,21 @@ def gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
     return Tensor(onehot) - soft.detach() + soft
 
 
-def upsample(x, size=None, scale_factor=None, mode="nearest", align_corners=None):
+def upsample(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
     """`interpolate`'s old name. torch warns that it is deprecated and goes on
     accepting it."""
-    return interpolate(x, size, scale_factor, mode, align_corners)
+    return interpolate(input, size, scale_factor, mode, align_corners)
 
 
-def upsample_nearest(x, size=None, scale_factor=None):
-    return interpolate(x, size, scale_factor, mode="nearest")
+def upsample_nearest(input, size=None, scale_factor=None):
+    return interpolate(input, size, scale_factor, mode="nearest")
 
 
-def upsample_bilinear(x, size=None, scale_factor=None):
+def upsample_bilinear(input, size=None, scale_factor=None):
     """**`align_corners=True`.** `interpolate(mode='bilinear')` defaults to false,
     so making one an alias of the other by name alone puts the edges off — the
     interior is similar enough that the eye does not part them."""
-    return interpolate(x, size, scale_factor, mode="bilinear", align_corners=True)
+    return interpolate(input, size, scale_factor, mode="bilinear", align_corners=True)
 
 
 # ── bitwise operations and integer maths ────────────────────────────────────
@@ -8132,15 +8157,16 @@ def upsample_bilinear(x, size=None, scale_factor=None):
 # does not build gradients for integer dtypes either.
 
 def _bitwise(name, op, bool_op=None):
-    def call(a, b):
-        a, b = _wrap(a), _wrap(b)
+    def call(input, other):
+        input, other = _wrap(input), _wrap(other)
         # **Both have to be boolean, not just the first.** torch promotes to
         # `int64` when either side is not, so `bitwise_and(bool, int64)` is `int64`
         # there and came back `bool` here — the integer operand narrowed to a bit.
-        if (a.data.dtype.kind == "b" and b.data.dtype.kind == "b"
+        if (input.data.dtype.kind == "b" and other.data.dtype.kind == "b"
                 and bool_op is not None):
-            return Tensor(bool_op(a.data, b.data))
-        return Tensor(op(a.data.astype(_np.int64), b.data.astype(_np.int64)))
+            return Tensor(bool_op(input.data, other.data))
+        return Tensor(op(input.data.astype(_np.int64),
+                         other.data.astype(_np.int64)))
     call.__name__ = name
     return call
 
@@ -8152,21 +8178,21 @@ bitwise_left_shift = _bitwise("bitwise_left_shift", _np.left_shift)
 bitwise_right_shift = _bitwise("bitwise_right_shift", _np.right_shift)
 
 
-def bitwise_not(x):
-    x = _wrap(x)
-    if x.data.dtype.kind == "b":
-        return Tensor(_np.logical_not(x.data))
-    return Tensor(_np.bitwise_not(x.data.astype(_np.int64)))
+def bitwise_not(input):
+    input = _wrap(input)
+    if input.data.dtype.kind == "b":
+        return Tensor(_np.logical_not(input.data))
+    return Tensor(_np.bitwise_not(input.data.astype(_np.int64)))
 
 
-def gcd(a, b):
-    a, b = _wrap(a), _wrap(b)
-    return Tensor(_np.gcd(a.data.astype(_np.int64), b.data.astype(_np.int64)))
+def gcd(input, other):
+    input, other = _wrap(input), _wrap(other)
+    return Tensor(_np.gcd(input.data.astype(_np.int64), other.data.astype(_np.int64)))
 
 
-def lcm(a, b):
-    a, b = _wrap(a), _wrap(b)
-    return Tensor(_np.lcm(a.data.astype(_np.int64), b.data.astype(_np.int64)))
+def lcm(input, other):
+    input, other = _wrap(input), _wrap(other)
+    return Tensor(_np.lcm(input.data.astype(_np.int64), other.data.astype(_np.int64)))
 
 
 def gcd_(a, b):
@@ -8179,32 +8205,32 @@ def lcm_(a, b):
     return a._inplace(lambda: lcm(a, b), "lcm_")
 
 
-def nextafter(a, b):
-    """**The next representable number** from `a` towards `b`. It moves by one
-    ulp and no more."""
-    a, b = _wrap(a), _wrap(b)
-    return a._make(_np.nextafter(a.data, b.data), (a,), lambda g: (g,),
+def nextafter(input, other):
+    """**The next representable number** from `input` towards `other`. It moves by
+    one ulp and no more."""
+    input, other = _wrap(input), _wrap(other)
+    return input._make(_np.nextafter(input.data, other.data), (input,), lambda g: (g,),
                    "NextafterBackward0")
 
 
-def frexp(x):
+def frexp(input):
     """`x = mantissa × 2^exponent`. **The exponent is int32** — torch does that
     (measured)."""
-    x = _wrap(x)
-    mantissa, exponent = _np.frexp(x.data)
-    return _Frexp(Tensor(mantissa.astype(x.data.dtype)),
+    input = _wrap(input)
+    mantissa, exponent = _np.frexp(input.data)
+    return _Frexp(Tensor(mantissa.astype(input.data.dtype)),
                   Tensor(exponent.astype(_np.int32)))
 
 
-def logcumsumexp(x, dim):
+def logcumsumexp(input, dim):
     """A running `logsumexp`. Computed **without overflow** — the maximum is
     subtracted, summed and restored."""
-    x = _wrap(x)
+    input = _wrap(input)
     # **`logsumexp` takes integers and this does not** (measured). A hole in
     # torch's kernels rather than a rule, and handing back a value here means that
     # code breaks against real torch.
-    _refuses_nonfloat_kernel(x.data, "logcumsumexp", "logcumsumexp_out_cpu")
-    data = x.data
+    _refuses_nonfloat_kernel(input.data, "logcumsumexp", "logcumsumexp_out_cpu")
+    data = input.data
     big = _np.max(data, axis=dim, keepdims=True)
     shifted = _np.exp(data - big)
     total = _np.cumsum(shifted, axis=dim)
@@ -8220,7 +8246,7 @@ def logcumsumexp(x, dim):
         return (flipped * shifted,)
 
     del soft
-    return x._make(out, (x,), back, "LogcumsumexpBackward0")
+    return input._make(out, (input,), back, "LogcumsumexpBackward0")
 
 
 def clamp_max(x, value):
@@ -8241,8 +8267,8 @@ def clamp_min_(x, value):
     return x._inplace(lambda: clamp(x, value, None), "clamp_min_")
 
 
-def arctan2(a, b):
-    return atan2(a, b)
+def arctan2(input, other):
+    return atan2(input, other)
 
 
 def fill(x, value):
@@ -8287,14 +8313,14 @@ def _i1(x):
     return _np.sign(_np.asarray(x, dtype=_np.float64)) * total
 
 
-def i0(x):
+def i0(input):
     """The order-0 modified Bessel function. `kaiser_window` stands on it."""
-    x = _wrap(x)
-    data = _float_in(_np.asarray(x.data))
+    input = _wrap(input)
+    data = _float_in(_np.asarray(input.data))
     # Its derivative is `i1`. Here there was only a bare `Tensor(...)` and the
     # graph was quietly cut, and until `backward()` was called no value check
     # showed it.
-    return x._make(_np.i0(data).astype(data.dtype), (x,),
+    return input._make(_np.i0(data).astype(data.dtype), (input,),
                    lambda g: (_np.asarray(g) * _i1(data),), "I0Backward0")
 
 
@@ -8303,14 +8329,14 @@ def i0_(x):
     return x._inplace(lambda: i0(x), "i0_")
 
 
-def mvlgamma(x, p):
+def mvlgamma(input, p):
     """The multivariate log gamma.
     `log Γ_p(x) = p(p−1)/4 · log π + Σ log Γ(x + (1−i)/2)`."""
-    x = _wrap(x)
-    out = _np.full_like(x.data, p * (p - 1) / 4.0 * _math.log(_math.pi))
+    input = _wrap(input)
+    out = _np.full_like(input.data, p * (p - 1) / 4.0 * _math.log(_math.pi))
     for i in range(1, p + 1):
-        out = out + _np.asarray(lgamma(x + (1 - i) / 2.0).data)
-    return Tensor(out.astype(x.data.dtype))
+        out = out + _np.asarray(lgamma(input + (1 - i) / 2.0).data)
+    return Tensor(out.astype(input.data.dtype))
 
 
 # ── window functions ────────────────────────────────────────────────────────
@@ -8491,21 +8517,21 @@ def _strided_flat(size, stride, offset):
     return flat
 
 
-def as_strided(t, size, stride, storage_offset=0):
+def as_strided(input, size, stride, storage_offset=0):
     """Read a flat storage **with different strides.** They may overlap and they
     may skip."""
-    t = _wrap(t)
+    input = _wrap(input)
     flat = _strided_flat(size, stride, storage_offset)
-    out = t.data.reshape(-1)[flat]
+    out = input.data.reshape(-1)[flat]
 
     def back(g):
         # Overlapping positions **accumulate** — a cell read twice receives
         # gradient twice.
-        acc = _np.zeros(t.data.size, dtype=_np.asarray(g).dtype)
+        acc = _np.zeros(input.data.size, dtype=_np.asarray(g).dtype)
         _np.add.at(acc, flat.reshape(-1), _np.asarray(g).reshape(-1))
-        return (acc.reshape(t.data.shape),)
+        return (acc.reshape(input.data.shape),)
 
-    return t._make(out, (t,), back, "AsStridedBackward0")
+    return input._make(out, (input,), back, "AsStridedBackward0")
 
 
 def as_strided_(t, size, stride, storage_offset=0):
@@ -8550,29 +8576,29 @@ def _scatter_into(t, src, spots, name):
     return t._make(out, (t, src), back, name)
 
 
-def as_strided_scatter(t, src, size, stride, storage_offset=0):
+def as_strided_scatter(input, src, size, stride, storage_offset=0):
     """Produce a copy **written into** at the positions `as_strided` was
     viewing."""
-    return _scatter_into(t, src, _strided_flat(size, stride, storage_offset),
+    return _scatter_into(input, src, _strided_flat(size, stride, storage_offset),
                          "AsStridedScatterBackward0")
 
 
-def select_scatter(t, src, dim, index):
+def select_scatter(input, src, dim, index):
     """A copy with the slice `select` was taking **swapped out.**"""
-    spots = _marks(_wrap(t).data.shape)[(slice(None),) * dim + (int(index),)]
-    return _scatter_into(t, src, spots, "SelectScatterBackward0")
+    spots = _marks(_wrap(input).data.shape)[(slice(None),) * dim + (int(index),)]
+    return _scatter_into(input, src, spots, "SelectScatterBackward0")
 
 
-def slice_scatter(t, src, dim=0, start=None, end=None, step=1):
+def slice_scatter(input, src, dim=0, start=None, end=None, step=1):
     """A copy with the `x[..., start:end:step]` positions **swapped out.** `step`
     is the point — measured at 1 alone, nobody looks at the skipped
     positions."""
-    spots = _marks(_wrap(t).data.shape)[
+    spots = _marks(_wrap(input).data.shape)[
         (slice(None),) * dim + (slice(start, end, step),)]
-    return _scatter_into(t, src, spots, "SliceScatterBackward0")
+    return _scatter_into(input, src, spots, "SliceScatterBackward0")
 
 
-def diagonal_scatter(t, src, offset=0, dim1=0, dim2=1):
+def diagonal_scatter(input, src, offset=0, dim1=0, dim2=1):
     """A copy with the diagonal positions **swapped out.** A non-zero `offset`
     shifts them.
 
@@ -8580,37 +8606,37 @@ def diagonal_scatter(t, src, offset=0, dim1=0, dim2=1):
     **sending the diagonal axis to the back** and torch does the same. Written by
     hand, the order diverges once there is a batch axis.
     """
-    spots = _np.diagonal(_marks(_wrap(t).data.shape), offset=offset,
+    spots = _np.diagonal(_marks(_wrap(input).data.shape), offset=offset,
                          axis1=dim1, axis2=dim2)
-    return _scatter_into(t, src, spots, "DiagonalScatterBackward0")
+    return _scatter_into(input, src, spots, "DiagonalScatterBackward0")
 
 
-def diag_embed(t, offset=0, dim1=-2, dim2=-1):
+def diag_embed(input, offset=0, dim1=-2, dim2=-1):
     """**Spread the last axis onto a diagonal**, adding an axis. The inverse of
     `diagonal`."""
-    t = _wrap(t)
+    input = _wrap(input)
     # `abs` is **a tensor function** in this file — the Python builtin is
     # shadowed. `_np.abs` is this file's rule, and forgetting it arrives as
     # `'int' object has no attribute 'abs'`.
-    n = t.data.shape[-1] + int(_np.abs(offset))
-    rank = t.data.ndim + 1
+    n = input.data.shape[-1] + int(_np.abs(offset))
+    rank = input.data.ndim + 1
     d1, d2 = dim1 % rank, dim2 % rank
-    shape = list(t.data.shape[:-1])
+    shape = list(input.data.shape[:-1])
     for at in sorted((d1, d2)):
         shape.insert(at, n)
-    out = _np.zeros(tuple(shape), dtype=t.data.dtype)
+    out = _np.zeros(tuple(shape), dtype=input.data.dtype)
     spots = _np.diagonal(_marks(out.shape), offset=offset, axis1=d1, axis2=d2)
-    out.reshape(-1)[_np.asarray(spots).reshape(-1)] = t.data.reshape(-1)
+    out.reshape(-1)[_np.asarray(spots).reshape(-1)] = input.data.reshape(-1)
 
     def back(g):
         g = _np.asarray(g)
         return (g.reshape(-1)[_np.asarray(spots).reshape(-1)]
-                .reshape(t.data.shape),)
+                .reshape(input.data.shape),)
 
-    return t._make(out, (t,), back, "DiagEmbedBackward0")
+    return input._make(out, (input,), back, "DiagEmbedBackward0")
 
 
-def tensor_split(t, indices_or_sections, dim=0):
+def tensor_split(input, indices_or_sections, dim=0):
     """**The remainder is shared out from the front.** Splitting 10 into 4 gives
     3, 3, 2, 2 (measured).
 
@@ -8618,18 +8644,18 @@ def tensor_split(t, indices_or_sections, dim=0):
     takes what is left. Measured at sizes that divide evenly the two functions look
     the same.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     if isinstance(indices_or_sections, (list, tuple)):
         return tuple(_wrap(p) for p in
-                     _split_at(t, list(indices_or_sections), dim))
+                     _split_at(input, list(indices_or_sections), dim))
     k = int(indices_or_sections)
-    n = t.data.shape[dim]
+    n = input.data.shape[dim]
     base, extra = divmod(n, k)
     cuts, at = [], 0
     for i in range(k - 1):
         at += base + (1 if i < extra else 0)
         cuts.append(at)
-    return tuple(_wrap(p) for p in _split_at(t, cuts, dim))
+    return tuple(_wrap(p) for p in _split_at(input, cuts, dim))
 
 
 def _split_at(t, cuts, dim):
@@ -8818,7 +8844,7 @@ def _reduce_into(out, where, values, reduce, include_self):
     out[...] = _np.where(touched, acc, out)
 
 
-def index_reduce(t, dim, index, source, reduce, include_self=True):
+def index_reduce(input, dim, index, source, reduce, include_self=True):
     """Combine the **rows** the indices point at. `include_self` puts the original
     value in as the first term.
 
@@ -8826,24 +8852,24 @@ def index_reduce(t, dim, index, source, reduce, include_self=True):
     into an array filled with 1s gives the same answer on or off (measured). Mean
     and minimum show the split.
     """
-    t, source = _wrap(t), _wrap(source)
-    out = t.data.copy()
+    input, source = _wrap(input), _wrap(source)
+    out = input.data.copy()
     where = (slice(None),) * dim + (_as_index(index),)
     _reduce_into(out, where, _np.asarray(source.data), reduce, include_self)
     return Tensor(out)
 
 
-def scatter_reduce(t, dim, index, src, reduce, include_self=True):
+def scatter_reduce(input, dim, index, src, reduce, include_self=True):
     """`scatter`'s place, **combining instead of overwriting.**
 
     The reductions are `sum`, `prod`, `amax`, `amin` and `mean`, and with
     `include_self` the `mean` counts the original value as one term in the divisor
     too (measured).
     """
-    t, src = _wrap(t), _wrap(src)
+    input, src = _wrap(input), _wrap(src)
     idx = _as_index(index)
-    _in_bounds(idx, t.data.shape[dim], dim)
-    out = t.data.copy()
+    _in_bounds(idx, input.data.shape[dim], dim)
+    out = input.data.copy()
     grid = _np.indices(idx.shape)
     where = list(grid)
     where[dim] = idx
@@ -8851,7 +8877,7 @@ def scatter_reduce(t, dim, index, src, reduce, include_self=True):
     return Tensor(out)
 
 
-def renorm(t, p, dim, maxnorm):
+def renorm(input, p, dim, maxnorm):
     """Pull **each slice's norm below `maxnorm`**, slicing along `dim`.
 
     A slice that is already small is **left alone** — made all large, that
@@ -8863,11 +8889,11 @@ def renorm(t, p, dim, maxnorm):
     clipped slices alone, so measured with everything small that too never
     surfaces.
     """
-    t = _wrap(t)
-    x = t.data
+    input = _wrap(input)
+    x = input.data
     # `dim % x.ndim` wraps rather than complains, so an axis that does not exist
     # became the last one and the answer came back plausible. torch raises.
-    axes = tuple(a for a in range(x.ndim) if a != _pos_dim(t, dim))
+    axes = tuple(a for a in range(x.ndim) if a != _pos_dim(input, dim))
     norms = _np.sum(_np.abs(x) ** p, axis=axes, keepdims=True) ** (1.0 / p)
     # torch adds a very small number so that nothing divides by zero.
     cut = norms > maxnorm
@@ -8881,7 +8907,7 @@ def renorm(t, p, dim, maxnorm):
         dot = _np.sum(g * x, axis=axes, keepdims=True)
         return (g * scale + dot * ds,)
 
-    return t._make(x * scale, (t,), back, "RenormBackward0")
+    return input._make(x * scale, (input,), back, "RenormBackward0")
 
 
 def cartesian_prod(*tensors):
@@ -8896,13 +8922,13 @@ def cartesian_prod(*tensors):
     return Tensor(_np.stack([m.reshape(-1) for m in mesh], axis=1))
 
 
-def combinations(t, r=2, with_replacement=False):
+def combinations(input, r=2, with_replacement=False):
     """Combinations of `r`. **Order does not count**, and repetition is a
     separate option."""
     from itertools import combinations as _comb, combinations_with_replacement
 
-    _rank(_wrap(t).data, (1,), "Expect a 1D vector, but got shape {shape}")
-    flat = _wrap(t).data.reshape(-1)
+    _rank(_wrap(input).data, (1,), "Expect a 1D vector, but got shape {shape}")
+    flat = _wrap(input).data.reshape(-1)
     pick = combinations_with_replacement if with_replacement else _comb
     rows = [list(c) for c in pick(range(flat.shape[0]), r)]
     if not rows:
@@ -8953,9 +8979,9 @@ def chain_matmul(*matrices):
     return out
 
 
-def ger(a, b):
+def ger(input, vec2):
     """The old name for the outer product. The same as `outer`."""
-    return outer(a, b)
+    return outer(input, vec2)
 
 
 def mv(mat, vec):
@@ -9144,7 +9170,7 @@ def cholesky_inverse(factor, upper=False):
     return inverse(matmul(low, _mT(low)))
 
 
-def triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
+def triangular_solve(b, A, upper=True, transpose=False, unitriangular=False):
     """**It gives two things** — the solution and **a copy** of the coefficient
     matrix handed in (measured).
 
@@ -9155,8 +9181,8 @@ def triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
     The third parameter is named `transpose`, so inside this function the module's
     `transpose` is shadowed. The `_mT` alias fills that place.
     """
-    b, a = _wrap(b), _wrap(a)
-    tri = triu(a) if upper else tril(a)
+    b, A = _wrap(b), _wrap(A)
+    tri = triu(A) if upper else tril(A)
     if unitriangular:
         # **The diagonal is ignored and treated as 1.** Left as it is, a quietly
         # different answer comes out.
@@ -9165,7 +9191,7 @@ def triangular_solve(b, a, upper=True, transpose=False, unitriangular=False):
         tri = off + Tensor(_np.eye(n, dtype=tri.data.dtype))
     if transpose:
         tri = _mT(tri)
-    return _TriangularSolve(solve(tri, b), Tensor(_np.array(a.data, copy=True)))
+    return _TriangularSolve(solve(tri, b), Tensor(_np.array(A.data, copy=True)))
 
 
 def lu_solve_top(b, lu_data, pivots):
@@ -9223,13 +9249,13 @@ def lu_unpack(lu_data, lu_pivots, unpack_data=True, unpack_pivots=True):
         Tensor(up.astype(kind)) if unpack_data else empty)
 
 
-def orgqr(a, tau):
+def orgqr(input, tau):
     """Multiply the reflectors `geqrf` packed away and **build Q.** The same as
     `linalg.householder_product`; torch gives it two names."""
-    return householder_product(a, tau)
+    return householder_product(input, tau)
 
 
-def ormqr(a, tau, other, left=True, transpose=False):
+def ormqr(input, tau, other, left=True, transpose=False):
     """Multiply into `C` **without building Q.** That is the point on a large
     matrix, and here it is built and multiplied — the value is the same and there
     is nothing to save at this size.
@@ -9242,7 +9268,7 @@ def ormqr(a, tau, other, left=True, transpose=False):
 
     `left` says which side to multiply from and `transpose` whether to use `Qᵀ`.
     """
-    q = _full_q(a, tau)
+    q = _full_q(input, tau)
     if transpose:
         q = q.T
     c = _np.asarray(_wrap(other).data, dtype=_np.float64)
@@ -9370,7 +9396,7 @@ def _count_into(data, edges, weights=None):
     return out
 
 
-def histc(t, bins=100, min=0, max=0):
+def histc(input, bins=100, min=0, max=0):
     """How many fall in each bin. **With `min == max` the data's own range is
     used** (measured).
 
@@ -9378,38 +9404,38 @@ def histc(t, bins=100, min=0, max=0):
     end bins. Measured on data that is entirely inside the range that rule never
     surfaces.
     """
-    t = _wrap(t)
-    edges = _edges(t.data, bins, float(min), float(max))
-    return Tensor(_count_into(t.data, edges).astype(t.data.dtype))
+    input = _wrap(input)
+    edges = _edges(input.data, bins, float(min), float(max))
+    return Tensor(_count_into(input.data, edges).astype(input.data.dtype))
 
 
-def histogram(t, bins=100, range=None, weight=None, density=False):
+def histogram(input, bins=100, range=None, weight=None, density=False):
     """`histc`'s arithmetic **with the edges given as well.**
 
     A tensor for `bins` is the edges themselves — the bin widths may differ, and
     then `density` divides by a different value per bin.
     """
-    t = _wrap(t)
+    input = _wrap(input)
     if isinstance(bins, (Tensor, list, tuple, _np.ndarray)):
         edges = _np.asarray(_wrap(bins).data if isinstance(bins, Tensor) else bins,
                             dtype=_np.float64)
     else:
         low, high = (0.0, 0.0) if range is None else (float(range[0]), float(range[1]))
-        edges = _edges(t.data, bins, low, high)
-    counts = _count_into(t.data, edges,
+        edges = _edges(input.data, bins, low, high)
+    counts = _count_into(input.data, edges,
                          None if weight is None else _wrap(weight).data)
     if density:
         widths = _np.diff(edges)
         total = counts.sum()
         counts = counts / (widths * (total if total else 1.0))
-    kind = t.data.dtype
+    kind = input.data.dtype
     return _Histogram(Tensor(counts.astype(kind)), Tensor(edges.astype(kind)))
 
 
-def histogramdd(t, bins=10, range=None, weight=None, density=False):
-    """A histogram over several axes. `t` is `(sample count, dimensions)`."""
-    t = _wrap(t)
-    data = _np.asarray(t.data, dtype=_np.float64)
+def histogramdd(input, bins=10, range=None, weight=None, density=False):
+    """A histogram over several axes. `input` is `(sample count, dimensions)`."""
+    input = _wrap(input)
+    data = _np.asarray(input.data, dtype=_np.float64)
     dims = data.shape[-1]
     counts = [bins] * dims if isinstance(bins, int) else list(bins)
     edges = []
@@ -9421,12 +9447,12 @@ def histogramdd(t, bins=10, range=None, weight=None, density=False):
     hist, _ = _np.histogramdd(data, bins=edges, density=density,
                               weights=None if weight is None
                               else _np.asarray(_wrap(weight).data).reshape(-1))
-    kind = t.data.dtype
+    kind = input.data.dtype
     return _HistogramDD(Tensor(hist.astype(kind)),
                         [Tensor(e.astype(kind)) for e in edges])
 
 
-def mode(t, dim=-1, keepdim=False):
+def mode(input, dim=-1, keepdim=False):
     """The most frequent value. **On an equal count the smaller value wins, and
     the index is that value's last occurrence** (measured: `[4,4,5,5]` gives value
     4 and index 1).
@@ -9439,11 +9465,11 @@ def mode(t, dim=-1, keepdim=False):
     signature it wraps: until then this name read as `(*args, **kwargs)` and the
     sweep skipped it for want of a `dim` to ask about.
     """
-    t = _wrap(t)
-    if t.data.ndim == 0:
-        return _at_rank_0(t, lambda x: mode(x, 0, keepdim))
-    _pos_dim(t, dim)
-    data = _np.asarray(t.data)
+    input = _wrap(input)
+    if input.data.ndim == 0:
+        return _at_rank_0(input, lambda x: mode(x, 0, keepdim))
+    _pos_dim(input, dim)
+    data = _np.asarray(input.data)
     axis = dim % data.ndim
     moved = _np.moveaxis(data, axis, -1)
     flat = moved.reshape(-1, moved.shape[-1])
@@ -9479,7 +9505,7 @@ def mode(t, dim=-1, keepdim=False):
             gg = _np.squeeze(gg, axis)
         return (_np.expand_dims(gg, axis) * weight,)
 
-    return _Mode(t._make(vals, (t,), back, "ModeBackward0"), Tensor(idx))
+    return _Mode(input._make(vals, (input,), back, "ModeBackward0"), Tensor(idx))
 
 
 def nanmedian(t, dim=None, keepdim=False):
@@ -9542,7 +9568,7 @@ def nanmedian(t, dim=None, keepdim=False):
     return _NanMedian(t._make(vals, (t,), back, "NanmedianBackward0"), Tensor(idx))
 
 
-def gradient(t, spacing=1, dim=None, edge_order=1):
+def gradient(input, spacing=1, dim=None, edge_order=1):
     """Central differences. **One per axis, returned as a tuple** — with no axis
     given, all of them.
 
@@ -9550,14 +9576,14 @@ def gradient(t, spacing=1, dim=None, edge_order=1):
     quadratic (measured: on `x²`, 2 gives the exact derivative and 1 is off at
     both ends).
     """
-    t = _wrap(t)
-    data = _np.asarray(t.data, dtype=_np.float64)
+    input = _wrap(input)
+    data = _np.asarray(input.data, dtype=_np.float64)
     axes = (tuple(_builtin_range(data.ndim)) if dim is None
             else (dim,) if isinstance(dim, int) else tuple(dim))
     # `axis % data.ndim` below wraps rather than complains, so 7 became 1 on a 2-D
     # tensor and the answer was the last axis's gradient under another name.
     for axis in axes:
-        _pos_dim(t, axis)
+        _pos_dim(input, axis)
     step = spacing if isinstance(spacing, (list, tuple)) else [spacing] * len(axes)
     outs = []
     for axis, gap in zip(axes, step):
@@ -9565,7 +9591,7 @@ def gradient(t, spacing=1, dim=None, edge_order=1):
             gap = _np.asarray(gap.data, dtype=_np.float64)
         got = _np.gradient(data, gap, axis=axis % data.ndim,
                            edge_order=int(edge_order))
-        outs.append(Tensor(got.astype(t.data.dtype)))
+        outs.append(Tensor(got.astype(input.data.dtype)))
     return tuple(outs)
 
 
@@ -9574,7 +9600,7 @@ def trapz(y, x=None, dx=1.0, dim=-1):
     return trapezoid(y, x, dx, dim)
 
 
-def nonzero_static(t, size, fill_value=-1):
+def nonzero_static(input, size, fill_value=-1):
     """Give **a fixed number of** non-zero positions. Short, it pads; over, it
     trims.
 
@@ -9582,9 +9608,9 @@ def nonzero_static(t, size, fill_value=-1):
     GPU, and this is given the size in advance so there is no such round trip —
     the name exists for that place.
     """
-    t = _wrap(t)
-    found = _np.argwhere(_np.asarray(t.data) != 0)
-    rank = max(1, _np.asarray(t.data).ndim)
+    input = _wrap(input)
+    found = _np.argwhere(_np.asarray(input.data) != 0)
+    rank = max(1, _np.asarray(input.data).ndim)
     out = _np.full((int(size), rank), int(fill_value), dtype=_np.int64)
     take = min(int(size), found.shape[0])
     out[:take] = found[:take]
@@ -9730,7 +9756,7 @@ def _cgrad(local, g):
     return _np.conj(local) * g
 
 
-def real(t):
+def real(input):
     """The real part.
 
     On a real tensor it is **the tensor itself**, dtype included (`bool` stays
@@ -9738,15 +9764,15 @@ def real(t):
     the real slot alone** — which is what the gradient of `z.real` being `1+0j`
     means (measured).
     """
-    t = _wrap(t)
-    if not _is_complex(t):
-        return _alias(t, "RealBackward0")
-    return t._make(_np.real(t.data).copy(), (t,),
-                   lambda g: (_np.asarray(g).astype(t.data.dtype),),
+    input = _wrap(input)
+    if not _is_complex(input):
+        return _alias(input, "RealBackward0")
+    return input._make(_np.real(input.data).copy(), (input,),
+                   lambda g: (_np.asarray(g).astype(input.data.dtype),),
                    "RealBackward0")
 
 
-def imag(t):
+def imag(input):
     """The imaginary part.
 
     **torch refuses on a real tensor too** (measured) — not a limit of ours. On a
@@ -9754,31 +9780,31 @@ def imag(t):
     an `i`** — the gradient of `z.imag` is `0+1j` (measured). Written as `−1j` it
     runs plausibly with the sign flipped.
     """
-    t = _wrap(t)
-    if not _is_complex(t):
+    input = _wrap(input)
+    if not _is_complex(input):
         raise RuntimeError(_like_torch(
             "A real tensor has no imaginary part.",
             "imag is not implemented for tensors with non-complex dtypes."))
-    return t._make(_np.imag(t.data).copy(), (t,),
-                   lambda g: (_np.asarray(g).astype(t.data.dtype) * 1j,),
+    return input._make(_np.imag(input.data).copy(), (input,),
+                   lambda g: (_np.asarray(g).astype(input.data.dtype) * 1j,),
                    "ImagBackward0")
 
 
-def conj(t):
+def conj(input):
     """The conjugate. Over the reals it is the identity and **a view** — torch
     shares the buffer too (measured).
 
     **It is not holomorphic.** So its backward is **`conj(g)`** rather than the
     `conj(f')·g` form — being the conjugate of a conjugate.
     """
-    t = _wrap(t)
-    if not _is_complex(t):
-        return _alias(t, "ConjBackward0")
-    return t._make(_np.conj(t.data), (t,), lambda g: (_np.conj(_np.asarray(g)),),
+    input = _wrap(input)
+    if not _is_complex(input):
+        return _alias(input, "ConjBackward0")
+    return input._make(_np.conj(input.data), (input,), lambda g: (_np.conj(_np.asarray(g)),),
                    "ConjBackward0")
 
 
-def conj_physical(t):
+def conj_physical(input):
     """The same value as `conj`. torch splits the names to say this is **the
     version that actually copies.**
 
@@ -9787,10 +9813,10 @@ def conj_physical(t):
     complex was attached the same code became a wrong answer. "An identity that
     passes today" is the first thing to break when the domain widens.
     """
-    t = _wrap(t)
-    if not _is_complex(t):
-        return _alias(t, "ConjPhysicalBackward0")
-    return t._make(_np.conj(t.data), (t,), lambda g: (_np.conj(_np.asarray(g)),),
+    input = _wrap(input)
+    if not _is_complex(input):
+        return _alias(input, "ConjPhysicalBackward0")
+    return input._make(_np.conj(input.data), (input,), lambda g: (_np.conj(_np.asarray(g)),),
                    "ConjPhysicalBackward0")
 
 
@@ -9799,18 +9825,18 @@ def conj_physical_(t):
     return t._inplace(lambda: conj_physical(t), "conj_physical_")
 
 
-def resolve_conj(t):
+def resolve_conj(input):
     """Materialise the conjugate flag into actual values. The reals carry no such
     flag, so it is the identity."""
-    return _alias(t, "ResolveConjBackward0")
+    return _alias(input, "ResolveConjBackward0")
 
 
-def resolve_neg(t):
+def resolve_neg(input):
     """Materialise the negation flag. `resolve_conj`'s place."""
-    return _alias(t, "ResolveNegBackward0")
+    return _alias(input, "ResolveNegBackward0")
 
 
-def angle(t):
+def angle(input):
     """The angle. Over the reals it is **π for negatives and 0 for the rest** — the
     complex case specialised.
 
@@ -9818,8 +9844,8 @@ def angle(t):
     integer (measured). An angle does not fit in an integer cell, so that is right,
     and feeding it floats alone never surfaces the rule.
     """
-    t = _wrap(t)
-    data = _np.asarray(t.data)
+    input = _wrap(input)
+    data = _np.asarray(input.data)
     if data.dtype.kind == "c":
         return Tensor(_np.angle(data).astype(_DEFAULT_DTYPE))
     out = _np.where(data < 0, _math.pi, 0.0).astype(_DEFAULT_DTYPE)
@@ -9827,7 +9853,7 @@ def angle(t):
     # real is a step and its derivative is 0 everywhere, and torch fills 0 too
     # (measured). Without carrying the graph through, `backward()` stops, and what
     # comes out then points at the user rather than at this operation.
-    return t._make(out, (t,), lambda g: (_np.zeros_like(data, dtype=_np.float64),),
+    return input._make(out, (input,), lambda g: (_np.zeros_like(data, dtype=_np.float64),),
                    "AngleBackward0")
 
 
@@ -9849,17 +9875,17 @@ def _complex_abs(t):
     return t._make(out, (t,), back, "AbsBackward0")
 
 
-def complex(re, im):
+def complex(real, imag):
     """Bundle a real part and an imaginary part. **This name shadows the Python
     builtin** — which is why `_is_complex` is used for the complex test inside this
     file."""
-    re, im = _wrap(re), _wrap(im)
-    out = (_np.asarray(re.data, dtype=_np.float32)
-           + 1j * _np.asarray(im.data, dtype=_np.float32)).astype(_np.complex64)
+    real, imag = _wrap(real), _wrap(imag)
+    out = (_np.asarray(real.data, dtype=_np.float32)
+           + 1j * _np.asarray(imag.data, dtype=_np.float32)).astype(_np.complex64)
     # **The gradient flows into the real leaves.** The real part takes the real
     # share and the imaginary part the imaginary one — the reverse direction of the
     # `∂L/∂re + i·∂L/∂im` convention.
-    return re._make(out, (re, im),
+    return real._make(out, (real, imag),
                     lambda g: (_np.real(_np.asarray(g)).astype(_np.float32),
                                _np.imag(_np.asarray(g)).astype(_np.float32)),
                     "ComplexBackward0")
@@ -9873,47 +9899,47 @@ def polar(abs_, angle_):
     return Tensor((mag * _np.exp(1j * ang)).astype(_np.complex64))
 
 
-def view_as_real(t):
+def view_as_real(input):
     """View a complex tensor as `(…, 2)` reals. The last axis is `(re, im)`
     (measured).
 
     **It does not work on a real tensor** — torch refuses too.
     """
-    t = _wrap(t)
-    if not _is_complex(t):
+    input = _wrap(input)
+    if not _is_complex(input):
         raise RuntimeError(_like_torch(
             "Not available on a real tensor — complex only.",
             "view_as_real is only supported for complex tensors"))
-    out = _np.stack([_np.real(t.data), _np.imag(t.data)], axis=-1)
-    return t._make(out.astype(_np.float32), (t,),
+    out = _np.stack([_np.real(input.data), _np.imag(input.data)], axis=-1)
+    return input._make(out.astype(_np.float32), (input,),
                    lambda g: ((_np.asarray(g)[..., 0]
-                               + 1j * _np.asarray(g)[..., 1]).astype(t.data.dtype),),
+                               + 1j * _np.asarray(g)[..., 1]).astype(input.data.dtype),),
                    "ViewAsRealBackward0")
 
 
-def view_as_complex(t):
+def view_as_complex(input):
     """View `(…, 2)` reals as complex. The inverse of `view_as_real`."""
-    t = _wrap(t)
-    data = _np.asarray(t.data)
+    input = _wrap(input)
+    data = _np.asarray(input.data)
     if data.shape[-1] != 2:
         raise RuntimeError(_like_torch(
             "The last dimension must be 2.",
             "Tensor must have a last dimension of size 2"))
     out = (data[..., 0] + 1j * data[..., 1]).astype(_np.complex64)
-    return t._make(out, (t,),
+    return input._make(out, (input,),
                    lambda g: (_np.stack([_np.real(_np.asarray(g)),
                                          _np.imag(_np.asarray(g))],
                                         axis=-1).astype(data.dtype),),
                    "ViewAsComplexBackward0")
 
 
-def is_complex(t):
+def is_complex(input):
     """Is it complex. **Before complex numbers went in it was always false** — it
     now actually looks."""
-    return _is_complex(_wrap(t))
+    return _is_complex(_wrap(input))
 
 
-def is_conj(t):
+def is_conj(input):
     """Does it carry a conjugate flag. There is no way to create that flag, so it
     is always false."""
     return False

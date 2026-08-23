@@ -195,7 +195,8 @@ UNALIGNED = {
     # being called `times` — torch and the core both say `repeats`. A rename in the
     # **first** seat is the one that costs most: every keyword call written against
     # torch misses it, and the row reads as a spelling while behaving as an absence.
-    "Tensor": 5,
+    # 5 → 4. `isclose` left for `shorter`; see the note there.
+    "Tensor": 4,
     # `SmoothL1Loss` left this table when a peer fixed it: the core took
     # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
     # torch's live arguments are `(reduction, beta)`, with the deprecated
@@ -293,7 +294,22 @@ RENAMED = {
     #
     # Left as a rename here rather than fixed in passing: it is 42 signatures and
     # belongs in its own commit, not riding along with a declaration fix.
-    "Tensor": 60,
+    # **60 → 26.** The core's parameters are torch's names now.
+    #
+    # 235 core functions were positionally aligned against torch's docstrings and
+    # renamed: `t`/`x` → `input` on the unaries, `a`/`b` → `input`/`other` on the
+    # binaries. borch.ts had already taken torch's spelling in most of these places,
+    # so the rows were the core being the odd one — and **this axis was the only one
+    # that could see them**, because torch implements them in C and the prose rows on
+    # the core↔torch axis are compared by arity alone.
+    #
+    # Only 2 of the 235 named the parameter in their own docstring prose, which is
+    # what made a mechanical rename safe; both were read by hand. The rename runs in
+    # code spans only — an f-string's `{...}` is code, and treating the whole literal
+    # as text left `f"{t.data.shape}"` pointing at the module-level `t` (the
+    # transpose), which failed loudly. **A name that had resolved to something
+    # plausible would not have.**
+    "Tensor": 26,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
@@ -312,7 +328,11 @@ RENAMED = {
     # optimizer surface and borch.ts stayed where it was. See the note there.
     "optim": 1,
     "optim.lr_scheduler": 0,
-    "linalg": 17,
+    # 17 → 18. `linalg.matmul`: the core says `input, other` now and borch.ts still
+    # says `a, b`. **The row appeared because the core moved toward torch**, not
+    # because borch.ts moved away — the direction a rising count usually means, and
+    # the reason it is written here rather than only counted.
+    "linalg": 18,
     "utils.data": 0,
 }
 
@@ -343,7 +363,12 @@ SHORTER = {
     # `sorted`, `clone` took `memoryFormat`, `gather` took `sparseGrad`, `round`
     # took `decimals`, `quantile` and `nanquantile` took `dim`/`keepdim`/
     # `interpolation`, and `svd` was split from `linalgSvd`.
-    "Tensor": 15,
+    # 15 → 16, and `unaligned` went 5 → 4: **the same row moving to a truer
+    # bucket.** `isclose` had the core saying `b` where borch.ts said `other`, so
+    # the lists could not be aligned at all; with the core on torch's names they
+    # align, and what is left is borch.ts being short of `equal_nan`. An absence is
+    # a more useful thing to be told than "these cannot be compared".
+    "Tensor": 16,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

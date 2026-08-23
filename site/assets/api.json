@@ -10515,7 +10515,7 @@
     {
      "kind": "function",
      "name": "gridSample",
-     "signature": "export declare function gridSample(x: Tensor, grid: Tensor, mode?: \"bilinear\" | \"nearest\", paddingMode?: \"zeros\" | \"border\" | \"reflection\", alignCorners?: boolean): Tensor",
+     "signature": "export declare function gridSample(input: Tensor, grid: Tensor, mode?: \"bilinear\" | \"nearest\", paddingMode?: \"zeros\" | \"border\" | \"reflection\", alignCorners?: boolean): Tensor",
      "doc": "Lifts values from where the grid points. The counterpart of `affineGrid`.\n\n**The positions are constants and the weights are tensors.** A floored\ninteger has no derivative and its remainder becomes the weight, so\nkeeping only the weights in the graph lets gradient flow to both the\ninput and the grid.",
      "members": [],
      "torch": "grid_sample",
@@ -10524,7 +10524,7 @@
     {
      "kind": "function",
      "name": "batchNorm",
-     "signature": "export declare function batchNorm(x: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number): Tensor",
+     "signature": "export declare function batchNorm(input: Tensor, runningMean: Tensor | null, runningVar: Tensor | null, weight: Tensor | null, bias: Tensor | null, training?: boolean, momentum?: number, eps?: number): Tensor",
      "doc": "The function form of `BatchNormND`. **The layer calls this** — one copy\nof the formula.\n\n**In training it modifies the running statistics in place.** torch does,\nand the tensor you hand in comes back updated. Returning a new one leaves\nthe caller's buffer unmoved, so training runs and only eval-mode values\nare wrong.\n\n**It uses variance two ways.** Normalisation uses the biased estimate;\nthe running-statistics update uses the unbiased one. Merge them and it\ndiverges in eval mode only.",
      "members": [],
      "torch": "batch_norm",
@@ -10541,7 +10541,7 @@
     {
      "kind": "function",
      "name": "embeddingBag",
-     "signature": "export declare function embeddingBag(idx: Tensor, weight: Tensor, offsets?: readonly number[] | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, perSampleWeights?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null): Tensor",
+     "signature": "export declare function embeddingBag(input: Tensor, weight: Tensor, offsets?: readonly number[] | null, maxNorm?: number | null, normType?: number, scaleGradByFreq?: boolean, mode?: \"sum\" | \"mean\" | \"max\", sparse?: boolean, perSampleWeights?: Tensor | null, includeLastOffset?: boolean, paddingIdx?: number | null): Tensor",
      "doc": "One row per bag. Selecting from the table and **combining** is all one function.\n\nGiven `offsets`, a one-dimensional index run is cut into bags — the shape for\nwhen the bags have differing lengths. `perSampleWeights` is used in torch under\n`mode='sum'` alone.\n\n**`mode` sits sixth, where torch has it.** It used to be fourth, so\n`embeddingBag(idx, w, offsets, \"sum\")` handed a mode string to `maxNorm` — and\n`maxNorm` rewrites the table, so the layer would have been rescaling its own\nembeddings on every forward pass.",
      "members": [],
      "torch": "embedding_bag",
