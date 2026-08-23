@@ -1040,12 +1040,22 @@ export async function report(): Promise<Report> {
     nn.embeddingBag(flatIdx, ebW(), [0, 2, 4], null, 2, false, "sum", false, null, true),
     nn.embeddingBag(flatIdx, ebW(), [0, 2], null, 2, false, "sum"));
 
-  // **`maxNorm` rewrites the table, and that is the whole point of asking twice.**
+  // **`maxNorm` rewrites the table, and the check has to look at the table.**
   //
-  // A version that renormalised a copy would agree with this on the first call and
-  // part on the second — a difference no other instrument here can see, because the
-  // golden runs a case once, the axes read a signature, and every check above looks
-  // at one call. Once is not a sample.
+  // A version that renormalised a copy returns **the same numbers forever** — not
+  // just on the first call. Renormalising an already-short row is a no-op, so both
+  // implementations agree on the output at any number of repetitions (measured
+  // against real torch, three deep, identical to seven figures). They part on the
+  // *state*: `[0, 0.4472, 0.8944]` against `[0, 1, 2]`, at once.
+  //
+  // Every other instrument here compares a returned value — the golden runs a case,
+  // the axes read a signature, every check above weighs an output — and **no number
+  // of repetitions turns a value comparison into a state comparison.** So the check
+  // reads `weight` after the call, which is the only thing that separates the two.
+  //
+  // This comment said "agrees on the first call and parts on the second" for an
+  // hour. That reads correctly and points at the wrong check: run it twice, see
+  // agreement, call it confirmed. A peer re-measured and it was wrong.
   {
     const table = ebW();
     const before = Array.from(await table.toArray());
@@ -1062,8 +1072,10 @@ export async function report(): Promise<Report> {
       `row 4: ${after.slice(12).join(",")}`);
 
     // Renormalised once, a row is exactly at the limit, so asking again changes
-    // nothing. A copy-based version passes this one too — it is the pair that
-    // separates them.
+    // nothing. **This one separates nothing** — a copy-based version passes it, and
+    // so does a whole-table one. It is here because it pins torch's idempotence,
+    // which the two above do not, and it is labelled rather than left to look like
+    // part of the discrimination.
     nn.embeddingBag(ebI, table, null, 1.0, 2, false, "sum");
     const twice = Array.from(await table.toArray());
     want("maxNorm a second time is a no-op",

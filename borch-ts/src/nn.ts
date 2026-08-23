@@ -3175,10 +3175,20 @@ export function embedding(idx: Tensor, weight: Tensor): Tensor {
  *
  * A side effect on a parameter, which is unusual enough to say out loud:
  * `embeddingBag(idx, w, null, 1.0)` leaves `w` changed, permanently. torch does
- * exactly this — and a version that renormalised a copy **agrees on the first call
- * and parts on the second**, which is a difference no instrument in this repository
- * can see: the golden runs a case once, the axes read a signature, parity checks a
- * value. Once is not a sample.
+ * exactly this.
+ *
+ * **A version that renormalised a copy would never part on the output** — not on the
+ * second call, not on the hundredth, because renormalising an already-short row is a
+ * no-op. Measured against real torch three calls deep: identical to seven figures,
+ * while the tables read `[0, 0.4472, 0.8944]` against `[0, 1, 2]`. They part on the
+ * **state**, at once, and on the output only once training steps from the shortened
+ * weights.
+ *
+ * That matters for what a check has to look at. Every instrument here compares a
+ * returned value — the golden runs a case, the axes read a signature, parity weighs
+ * an output — and **no number of repetitions turns a value comparison into a state
+ * comparison.** The check below looks at `weight` after the call, which is the only
+ * thing that separates the two.
  *
  * Only the rows `idx` names are touched. A whole-table renormalisation is the
  * obvious shortcut and it is wrong — a row nobody looked up stays long in torch.

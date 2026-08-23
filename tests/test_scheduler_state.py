@@ -5,15 +5,25 @@ golden runs a case once, both signature axes read a declaration, `parity.ts` wei
 value. A difference that only appears the second time round is invisible to all of
 them, and three have been found by hand this week:
 
-- `embedding_bag(max_norm=…)` shortens the rows **in the table**, so a version that
-  renormalised a copy agrees on the first call and parts on the second.
 - `ReduceLROnPlateau`'s cooldown counter runs down *before* the patience is looked at.
   A counter that merely blocked the cut gives the same trajectory shifted by
   `cooldown` steps, which against a loss curve is indistinguishable.
 - an optimizer's momentum buffer, weeks ago, which was right on the first step.
+- the binding calling borch.ts with an argument order that had moved on one side —
+  repetition in space rather than in time, and no compiler reaches across it.
 
-They are all one shape: **a fault in a sequence, and every instrument here samples a
-sequence once.** Once is not a sample.
+**A fourth belongs beside them and does not belong in the list**, which is worth the
+line it costs. `embedding_bag(max_norm=…)` shortens rows in the table, and a version
+that renormalised a copy **never parts on the output at all** — not on the second
+call, not on the hundredth, because renormalising an already-short row is a no-op.
+It parts on the *state*, immediately. Repeating the call is the wrong prescription
+there; looking at `weight` instead of the return value is the right one. Two of us
+had it written down the other way for an hour, which is the shape of a reason that
+reads correctly and points somewhere useless.
+
+So the shape is not "once is not a sample". It is **the observable we compare is not
+the whole state** — sometimes repetition reveals the difference, and sometimes only
+looking somewhere else does.
 
 This file is the smallest general form of the missing instrument. It does not try to
 detect sequence faults in general — it asks the question that causes them, of the

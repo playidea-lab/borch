@@ -6962,8 +6962,24 @@ def _renorm_rows(weight, ids, max_norm, norm_type):
 
     It is a side effect on a parameter, which is unusual enough to be worth
     saying: `embedding_bag(idx, w, max_norm=1.0)` leaves `w` changed. torch does
-    exactly this (measured), and a version that renormalised a copy would agree on
-    the output of the first call and part on the second.
+    exactly this (measured).
+
+    **A version that renormalised a copy would never part on the output.** Not on
+    the second call, not on the hundredth — renormalising an already-short row is a
+    no-op, so both implementations return the same numbers forever. Measured against
+    real torch three calls deep: identical to seven figures, while the tables read
+
+        torch    [0.0, 0.4472, 0.8944]   shortened, and it stays shortened
+        a copy   [0.0, 1.0,    2.0   ]   untouched
+
+    The two part on the **state**, at once, and on the output only once training
+    steps from the shortened weights.
+
+    This paragraph said "agrees on the first call and parts on the second" for an
+    hour, which is a reason that reads correctly and points at the wrong check: run
+    it twice, see agreement, and conclude it was confirmed. What the difference wants
+    is **looking at `weight` after the call**, and no number of calls substitutes for
+    that.
     """
     rows = _np.unique(_np.asarray(ids).astype(int).reshape(-1))
     data = weight.data
