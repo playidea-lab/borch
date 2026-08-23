@@ -109,7 +109,12 @@ CEILINGS = {
     # says which marker it left and which it took — a change of ledger verdict that
     # does not say what it changed from is the kind this repository keeps finding.
     # The twelve case names that came with it are ASCII and cost nothing here.
-    "borch-ts/test": 3139,
+    #
+    # 3139 → 3141. **+2, the same kind again**: the `act::` row's cause was rewritten
+    # (no second shader is needed — `copyFrom` is the write-back and borch.ts has it),
+    # and the note says the marker `아직` was right while the reason under it was not.
+    # Naming the marker costs two characters and is the whole point of the note.
+    "borch-ts/test": 3141,
 }
 
 

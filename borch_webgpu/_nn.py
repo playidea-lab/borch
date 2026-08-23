@@ -1767,8 +1767,19 @@ def _batchnorm(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True,
 BatchNorm1d = BatchNorm2d = BatchNorm3d = _batchnorm
 
 
-def ReLU():
-    return _layer("ReLU")
+def _maybe_in_place(layer, inplace):
+    """The layer as built, or the same layer with its answer written back.
+
+    `_in_place` is defined further down and is looked up when the layer runs, not
+    when this returns — so the ordering here is the file's, not a dependency.
+    """
+    if not inplace:
+        return layer
+    return _Wrap(lambda x: _in_place(x, layer(x)))
+
+
+def ReLU(inplace=False):
+    return _maybe_in_place(_layer("ReLU"), inplace)
 
 
 def _max_pool_layer(js_name):
@@ -1931,13 +1942,13 @@ def LogSoftmax(dim=None):
     return _layer("LogSoftmax", dim)
 
 
-def LeakyReLU(negative_slope=0.01):
-    return _layer("LeakyReLU", negative_slope)
+def LeakyReLU(negative_slope=0.01, inplace=False):
+    return _maybe_in_place(_layer("LeakyReLU", negative_slope), inplace)
 
 
-def ELU(alpha=1.0):
+def ELU(alpha=1.0, inplace=False):
     """**Takes an alpha.** It did not, and `nn.ELU(0.5)` stopped on that line."""
-    return _layer("ELU", alpha)
+    return _maybe_in_place(_layer("ELU", alpha), inplace)
 
 
 def SiLU():
@@ -1964,22 +1975,57 @@ def Tanh():
 # arguments go to a kernel with that argument baked in as a constant — either
 # way Python only moves the name.
 
+def _in_place(x, out):
+    """`out`'s values written into `x`'s buffer, handing back **`x` itself.**
+
+    What `inplace=True` buys is not the value — `ReLU(inplace=True)(x)` returns
+    exactly what `ReLU()(x)` returns — but that the caller's tensor moved and the
+    thing returned is the caller's tensor. So the flag is honoured through the same
+    `_write_back` the underscore methods use rather than by returning a new tensor,
+    which would pass a value comparison and fail the only thing the flag is for.
+
+    The leaf refusal comes with it. torch stops there, the core stops there, and
+    letting it through means a backward pass reads a value that has already moved.
+    """
+    t = wrap(handle(x)) if not hasattr(x, "_write_back") else x
+    t._refuse_inplace_on_leaf("inplace")
+    return t._write_back(out)
+
+
 def _unary_layer(name):
-    return lambda: _Wrap(lambda x, n=name: wrap(handle(x).unary(n)))
+    def build(inplace=False, n=name):
+        def run(x):
+            out = wrap(handle(x).unary(n))
+            return _in_place(x, out) if inplace else out
+        return _Wrap(run)
+    return build
 
 
 Hardsigmoid = _unary_layer("hardsigmoid")
 Hardswish = _unary_layer("hardswish")
-LogSigmoid = _unary_layer("logsigmoid")
 Mish = _unary_layer("mish")
 ReLU6 = _unary_layer("relu6")
 SELU = _unary_layer("selu")
-Softsign = _unary_layer("softsign")
-Tanhshrink = _unary_layer("tanhshrink")
 
 
-def CELU(alpha=1.0):
-    return _Wrap(lambda x: wrap(handle(x).celu(alpha)))
+# **These three take no `inplace` and torch gives them none either.** Sharing
+# `_unary_layer` would have handed them one for free, which is the mirror of the
+# fault this repository keeps finding: an argument accepted where the authority
+# declines misleads as much as one accepted and inert.
+def _plain_unary_layer(name):
+    return lambda: _Wrap(lambda x, n=name: wrap(handle(x).unary(n)))
+
+
+LogSigmoid = _plain_unary_layer("logsigmoid")
+Softsign = _plain_unary_layer("softsign")
+Tanhshrink = _plain_unary_layer("tanhshrink")
+
+
+def CELU(alpha=1.0, inplace=False):
+    def run(x):
+        out = wrap(handle(x).celu(alpha))
+        return _in_place(x, out) if inplace else out
+    return _Wrap(run)
 
 
 def Hardshrink(lambd=0.5):
@@ -1990,8 +2036,11 @@ def Softshrink(lambd=0.5):
     return _Wrap(lambda x: wrap(handle(x).softshrink(lambd)))
 
 
-def Hardtanh(min_val=-1.0, max_val=1.0):
-    return _Wrap(lambda x: wrap(handle(x).hardtanh(min_val, max_val)))
+def Hardtanh(min_val=-1.0, max_val=1.0, inplace=False):
+    def run(x):
+        out = wrap(handle(x).hardtanh(min_val, max_val))
+        return _in_place(x, out) if inplace else out
+    return _Wrap(run)
 
 
 def Softplus(beta=1.0, threshold=20.0):
