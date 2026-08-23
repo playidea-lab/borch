@@ -1,4 +1,4 @@
-"""Every function that takes a `dim`, asked for an axis that does not exist.
+"""Every function taking a `dim` or an `index`, asked for one that does not exist.
 
 **The cases are not written down; they are enumerated.** `tests/test_refusal_classes.py`
 next door pins 29 refusals and says so honestly: it pins what it asks and nothing about
@@ -54,6 +54,8 @@ def _pieces(lib):
         "idx": lib.tensor(np.array([0], dtype=np.int64)),
         "flat": lib.tensor(np.array([[9., 9.]], dtype=np.float32)),
         "cell": lib.tensor(np.array([[9.]], dtype=np.float32)),
+        "badi": lib.tensor(np.array([BAD_INDEX], dtype=np.int64)),
+        "badi2": lib.tensor(np.array([[BAD_INDEX]], dtype=np.int64)),
     }
 
 
@@ -92,6 +94,42 @@ UNREACHABLE: dict[str, str] = {}
 
 LEAST_FUNCTIONS = 30
 
+# ── the second axis: an index that is not in the tensor ──────────────────────
+#
+# **Same enumeration, different question, and it parted six ways.** Fourteen public
+# functions take an `index` or `indices`; the six below all raised the wrong class.
+# None answered silently, which is worth recording as the negative result it is —
+# the `dim` axis had three silent answers and this one has none, so "enumerate a
+# surface and find silent wrong answers" is not a law.
+#
+# **torch is not consistent with itself here**, and matching torch means matching
+# that: `scatter`, `scatter_add`, `scatter_reduce` and `index_add` refuse with
+# `RuntimeError`, while `select` and `put` refuse with `IndexError`. A single rule
+# would have been tidier and wrong for half the surface.
+BAD_INDEX = 9
+
+INDEX_CALLS = {
+    "index_add": lambda v: ((v["t"], 0, v["badi"], v["flat"]), {}),
+    "index_copy": lambda v: ((v["t"], 0, v["badi"], v["flat"]), {}),
+    "index_fill": lambda v: ((v["t"], 0, v["badi"], 0.0), {}),
+    "index_reduce": lambda v: ((v["t"], 0, v["badi"], v["flat"], "prod"), {}),
+    "index_put": lambda v: ((v["t"], (v["badi"],), v["flat"]), {}),
+    "index_put_": lambda v: ((v["t"], (v["badi"],), v["flat"]), {}),
+    "put": lambda v: ((v["t"], v["badi"], v["flat"].reshape(2)), {}),
+    "scatter": lambda v: ((v["t"], 0, v["badi2"], v["cell"]), {}),
+    "scatter_add": lambda v: ((v["t"], 0, v["badi2"], v["cell"]), {}),
+    "scatter_reduce": lambda v: ((v["t"], 0, v["badi2"], v["cell"], "sum"), {}),
+    "select": lambda v: ((v["t"], 0, BAD_INDEX), {}),
+    "select_scatter": lambda v: ((v["t"], v["t"][0], 0, BAD_INDEX), {}),
+    "take": lambda v: ((v["t"], v["badi"]), {}),
+}
+
+# `unravel_index` takes an `indices` and means something else by it — the index is
+# into a shape the caller supplies, not into the tensor. Named rather than dropped.
+NOT_AN_INDEX_INTO_THE_TENSOR = {
+    "unravel_index": "`indices` are flat positions into the `shape` argument",
+}
+
 
 def _names():
     """Public `borch` functions torch also has, whose signature carries a `dim`."""
@@ -111,8 +149,28 @@ def _names():
     return out
 
 
-def _raised(lib, name):
-    args, kw = CALLS.get(name, lambda v: ((v["t"],), {"dim": BAD_DIM}))(_pieces(lib))
+def _index_names():
+    """Public `borch` functions torch also has, whose signature carries an index."""
+    out = []
+    for name in sorted(dir(borch)):
+        if name.startswith("_") or name in NOT_AN_INDEX_INTO_THE_TENSOR:
+            continue
+        mine, theirs = getattr(borch, name, None), getattr(torch, name, None)
+        if theirs is None or not callable(mine) or inspect.isclass(mine):
+            continue
+        try:
+            params = inspect.signature(mine).parameters
+        except (TypeError, ValueError):
+            continue
+        if "index" in params or "indices" in params:
+            out.append(name)
+    return out
+
+
+def _raised(lib, name, table=None):
+    table = CALLS if table is None else table
+    build = table.get(name, lambda v: ((v["t"],), {"dim": BAD_DIM}))
+    args, kw = build(_pieces(lib))
     try:
         getattr(lib, name)(*args, **kw)
     except Exception as e:                                    # noqa: BLE001
@@ -169,3 +227,41 @@ def test_every_extra_call_names_a_function_that_exists():
     assert not unused, (
         f"these have a CALLS entry and are not swept: {unused}\n"
         "  Either the name moved, or its signature no longer carries a `dim`.")
+
+
+@pytest.mark.parametrize("name", sorted(INDEX_CALLS))
+def test_an_index_that_is_not_there_is_refused_the_way_torch_refuses_it(name):
+    theirs = _raised(torch, name, INDEX_CALLS)
+    ours = _raised(borch, name, INDEX_CALLS)
+    assert theirs is not None, (
+        f"torch accepts `{name}` with an index of {BAD_INDEX} into a size-2 axis, "
+        "so this row measures nothing.")
+    assert ours is not None, (
+        f"torch refuses it with {theirs.__name__} and this answers — an index "
+        "outside the tensor producing a plausible answer.")
+    assert issubclass(ours, theirs), (
+        f"`{name}`: torch raises {theirs.__name__}, we raise {ours.__name__}. "
+        "torch is not uniform here — `scatter` says RuntimeError and `select` says "
+        "IndexError — so match the function, not a rule.")
+
+
+def test_every_index_taking_function_is_asked_or_explained():
+    """The index axis's own absence, and its unswept remainder.
+
+    A name that takes an index and is in neither table is a function nobody asks
+    about, which reads from outside exactly like a function that agrees.
+    """
+    missing = sorted(set(_index_names()) - set(INDEX_CALLS))
+    assert not missing, (
+        f"these take an index and are not swept: {missing}\n"
+        "  Add a call to INDEX_CALLS, or record it in "
+        "NOT_AN_INDEX_INTO_THE_TENSOR with the reason.")
+    stale = sorted(set(INDEX_CALLS) - set(_index_names()))
+    assert not stale, f"these have a call and are no longer found: {stale}"
+
+
+def test_the_index_sweep_asks_about_the_index_and_not_about_the_call():
+    """As the `dim` sweep: torch answering `TypeError` means this file is wrong."""
+    wrong = [n for n in INDEX_CALLS if _raised(torch, n, INDEX_CALLS) is TypeError]
+    assert not wrong, (
+        f"torch complained about the call rather than the index for: {wrong}")

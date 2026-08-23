@@ -2702,7 +2702,16 @@ def select(t, dim, index):
     """Take one slice from an axis and **remove that axis.** Unlike a slice, the
     rank drops by one."""
     t = _wrap(t)
-    return t[_slice_at(dim % t.data.ndim, index, index + 1)].squeeze(dim)
+    axis = _pos_dim(t, dim)
+    size = t.data.shape[axis]
+    if not -size <= index < size:
+        # torch says `IndexError` here and `RuntimeError` for `scatter`. numpy said
+        # `ValueError` about a squeeze, which is a complaint about the *next* step.
+        raise IndexError(
+            f"select(): index {index} out of range for tensor of size "
+            f"{list(t.data.shape)} at dimension {axis}")
+    at = index + size if index < 0 else index
+    return t[_slice_at(axis, at, at + 1)].squeeze(dim)
 
 
 def diagonal(t, offset=0, dim1=0, dim2=1):
@@ -3500,6 +3509,28 @@ def _as_index(index):
             else _np.asarray(index, dtype=int))
 
 
+def _in_bounds(idx, size, dim, kind=RuntimeError):
+    """Every index within `[-size, size)`, or torch's refusal.
+
+    **numpy's own complaint about an index is an `IndexError` and torch's is not
+    always one**, so a caller who wrote `except RuntimeError:` around a scatter —
+    which is what torch's own message asks for — caught nothing. `select` and `put`
+    are the two where torch says `IndexError` instead, so the class is an argument
+    rather than a constant: torch is not consistent with itself here, and matching
+    torch means matching that too.
+
+    Enumerated rather than written down. Fourteen functions take an index; six
+    parted, and no case list contained them because a case list is written by
+    somebody who already suspects.
+    """
+    bad = _np.asarray(idx).reshape(-1)
+    over = bad[(bad >= size) | (bad < -size)]
+    if over.size:
+        raise kind(
+            f"index {int(over[0])} is out of bounds for dimension {dim} "
+            f"with size {size}")
+
+
 def scatter(t, dim, index, src):
     """**Overwrites** at the positions the indices point at. On a collision the
     last write survives.
@@ -3510,6 +3541,7 @@ def scatter(t, dim, index, src):
     """
     t = _wrap(t)
     idx = _as_index(index)
+    _in_bounds(idx, t.data.shape[dim], dim)
     out = t.data.copy()
     scalar = not isinstance(src, Tensor)
     values = (_np.full(idx.shape, src, dtype=t.data.dtype) if scalar
@@ -3534,6 +3566,7 @@ def scatter_add(t, dim, index, src):
     where it parts from `scatter`."""
     t, src = _wrap(t), _wrap(src)
     idx = _as_index(index)
+    _in_bounds(idx, t.data.shape[dim], dim)
     out = t.data.copy()
     # `put_along_axis` overwrites and cannot be used. Accumulating colliding
     # indices properly needs `add.at` — that is the whole difference between this
@@ -3555,6 +3588,7 @@ def index_add(t, dim, index, source, alpha=1):
     accumulate."""
     t, source = _wrap(t), _wrap(source)
     idx = _as_index(index)
+    _in_bounds(idx, t.data.shape[dim], dim)
     out = t.data.copy()
     _np.add.at(out, (slice(None),) * dim + (idx,), source.data * alpha)
 
@@ -8022,6 +8056,11 @@ def put(t, index, source, accumulate=False):
     axis. The inverse of `take`."""
     t, source = _wrap(t), _wrap(source)
     idx = _as_index(index).reshape(-1)
+    over = idx[(idx >= t.data.size) | (idx < -t.data.size)]
+    if over.size:
+        raise IndexError(
+            f"out of range: tried to access index {int(over[0])} on a tensor of "
+            f"{t.data.size} elements.")
     out = t.data.copy().reshape(-1)
     if accumulate:
         _np.add.at(out, idx, _np.asarray(source.data).reshape(-1))
@@ -8102,6 +8141,7 @@ def scatter_reduce(t, dim, index, src, reduce, include_self=True):
     """
     t, src = _wrap(t), _wrap(src)
     idx = _as_index(index)
+    _in_bounds(idx, t.data.shape[dim], dim)
     out = t.data.copy()
     grid = _np.indices(idx.shape)
     where = list(grid)
