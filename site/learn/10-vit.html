@@ -275,16 +275,116 @@
       </script>
     </div>
 
+    <h2>Make it narrower and watch it stop</h2>
+    <p>
+      The run above passes a loss near 0.347 on its way down and leaves. At
+      <code>D = 16</code> with two heads it does not leave. Same code, same task — only
+      the width and the head count are different, and three seeds are run so the result
+      is not one draw's luck.
+    </p>
+
+    <div class="runnable" data-lang="js">
+      <script type="text/plain">
+        await init();
+
+        const D = 16, HEADS = 2, PATCH = 4, TOK = 4, N = 24;
+
+        const pixels = new Float32Array(N * 64);
+        const labels = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          const q = i % 4;
+          labels[i] = q;
+          const r0 = (q >> 1) * 4, c0 = (q & 1) * 4;
+          for (let r = 0; r < 4; r++)
+            for (let c = 0; c < 4; c++) pixels[i * 64 + (r0 + r) * 8 + (c0 + c)] = 1;
+        }
+        const x = keepAlive(Tensor.from(pixels, [N, 1, 8, 8]));
+        const y = keepAlive(Tensor.from(labels, [N], { dtype: "int64" }));
+
+        const perToken = (f, t, dOut) => {
+          const [n, k, d] = t.shape;
+          return f(t.reshape([n * k, d])).reshape([n, k, dOut]);
+        };
+
+        class Block extends nn.Module {
+          constructor() {
+            super();
+            this.n1 = new nn.LayerNorm([D]);
+            this.att = new nn.MultiheadAttention(D, HEADS);
+            this.n2 = new nn.LayerNorm([D]);
+            this.fc1 = new nn.Linear(D, D * 2);
+            this.fc2 = new nn.Linear(D * 2, D);
+          }
+          forward(t) {
+            const h = this.n1.call(t);
+            const r = t.add(this.att.call(h, h, h));
+            const z = this.n2.call(r);
+            const wide = perToken(u => this.fc1.call(u), z, D * 2).gelu();
+            return r.add(perToken(u => this.fc2.call(u), wide, D));
+          }
+        }
+
+        class ViT extends nn.Module {
+          constructor() {
+            super();
+            this.patchify = new nn.Conv2d(1, D, PATCH, PATCH, 0);
+            this.cls = new nn.Parameter(Tensor.randn([1, 1, D]).mul(Tensor.full([], 0.02)));
+            this.pos = new nn.Parameter(Tensor.randn([1, TOK + 1, D]).mul(Tensor.full([], 0.02)));
+            this.block = new Block();
+            this.norm = new nn.LayerNorm([D]);
+            this.head = new nn.Linear(D, 4);
+          }
+          forward(img) {
+            const n = img.shape[0];
+            const patches = this.patchify.call(img).reshape([n, D, TOK]).permute([0, 2, 1]);
+            const seq = Tensor.cat([this.cls.repeat(n, 1, 1), patches], 1).add(this.pos);
+            const done = this.norm.call(this.block.call(seq));
+            return this.head.call(done.narrow(1, 0, 1).reshape([n, D]));
+          }
+        }
+
+        log("D = 16, 2 heads — the same code, narrower");
+        for (const seed of [0, 1, 2]) {
+          manualSeed(seed);
+          const net = new ViT();
+          const opt = new optim.Adam(net.parameters(), 0.02);
+          const crit = new nn.CrossEntropyLoss();
+
+          let loss = 0;
+          for (let s = 0; s < 80; s++) {
+            await scope(async () => {
+              opt.zeroGrad();
+              const l = crit.call(net.call(x), y);
+              l.backward();
+              opt.step();
+              loss = await l.item();
+            });
+          }
+          await scope(async () => {
+            const pred = Array.from(await net.call(x).argmax(1).toArray());
+            const right = pred.filter((p, i) => p === labels[i]).length;
+            log(`  seed ${seed}   loss ${loss.toFixed(4)}   right ${right}/${N}`);
+          });
+        }
+        log(`ln(2) / 2 = ${(Math.log(2) / 2).toFixed(4)}`);
+      </script>
+    </div>
+
     <div class="note-box">
-      <strong>Make it smaller and watch it stall.</strong> At <code>D = 16</code> with two
-      heads this model settles at a loss of 0.3466 and gets exactly three quarters right,
-      on every seed — it separates one pair of quadrants and gives up on the other. That
-      number is <code>ln(2) / 2</code>, which is what a model scoring an even split on half
-      its examples earns. Before blaming the library it was worth checking:
+      <strong>The number it stops at is not arbitrary.</strong> <code>ln(2) / 2</code> is
+      what a model earns when it splits evenly between two answers on half its examples
+      and is right on the rest — which is what the accuracy above says it is doing: it
+      separates one pair of quadrants and gives up on the other, so <code>argmax</code>
+      takes the same one of the pair every time and three of the four classes come out
+      right.<br><br>
+      Before blaming the library it was worth checking, and it was checked:
       <code>cat</code>, <code>narrow</code> and <code>permute</code> all carry the right
       gradients, and the head count does change the answer. The plateau is the model's,
-      not the runtime's. The run above passes through that same value on its way down —
-      look for a loss near 0.347 that sits for a while and then leaves.
+      not the runtime's.<br><br>
+      This block exists because the sentence it replaces asserted those numbers instead of
+      producing them. It said the model settles at 0.3466 <em>on every seed</em>, measured
+      on three — and a page whose argument is that its examples run should not be making a
+      claim its examples do not make.
     </div>
 
     <p>
