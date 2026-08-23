@@ -42,6 +42,29 @@ _TYPE_NAMES = {"b": "Bool", "i": "Long", "u": "Long", "f": "Float",
                "c": "ComplexFloat"}
 
 
+def _float_in(data):
+    """The array a float-only function should compute on.
+
+    torch promotes an integral input to the default dtype and answers there;
+    numpy either promotes to `float64` — wider than torch's `float32` — or, where
+    the expression is written in terms that stay integral, **does not promote at
+    all and truncates the answer into the input's cells.** One line, applied at
+    the door, removes both.
+    """
+    return data.astype(_DEFAULT_DTYPE) if data.dtype.kind not in "fc" else data
+
+
+def _arith_in(data):
+    """The array an arithmetic function should compute on.
+
+    torch promotes a boolean to `int64` before arithmetic — `square(tensor([True,
+    False]))` is `tensor([1, 0])` and not `tensor([True, False])`. Booleans are the
+    one place where "the values are already right" and "the type is already right"
+    come apart, because `True * True` is `True` and also `1`.
+    """
+    return data.astype(_np.int64) if data.dtype.kind == "b" else data
+
+
 def _needs_float(data, said: str, torch_phrase: str):
     """**We stop where torch stops.**
 

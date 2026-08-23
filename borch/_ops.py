@@ -11,7 +11,9 @@ from ._tensor import (
     Tensor, _MinMax, _grad_mode, _unbroadcast, result_type,
 )
 from ._base import (
-    _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _like_torch, _math, _needs_float,
+    _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _arith_in, _float_in, _like_torch,
+    _math,
+    _needs_float,
     _np, _refuses_bool,
     _refuses_nonfloat_kernel, _resolve, _unsupported, Size, device as _device,
     dtype,
@@ -403,7 +405,7 @@ def where(cond, a, b):
 
 
 def sigmoid(t):
-    out = 1.0 / (1.0 + _np.exp(-_np.clip(t.data, -60, 60)))
+    out = 1.0 / (1.0 + _np.exp(-_np.clip(_float_in(t.data), -60, 60)))
     return t._make(out, (t,), lambda g: (g * out * (1 - out),), "SigmoidBackward0")
 
 
@@ -412,7 +414,7 @@ def relu(t):
 
 
 def tanh(t):
-    out = _np.tanh(t.data)
+    out = _np.tanh(_float_in(t.data))
     return t._make(out, (t,), lambda g: (g * (1 - out * out),), "TanhBackward0")
 
 
@@ -1781,8 +1783,10 @@ def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=1,
     return x._make(out, (x,), back)
 
 
-def sin(t): return t._make(_np.sin(t.data), (t,), lambda g: (g * _np.cos(t.data),), "SinBackward0")
-def cos(t): return t._make(_np.cos(t.data), (t,), lambda g: (-g * _np.sin(t.data),), "CosBackward0")
+def sin(t): return t._make(_np.sin(_float_in(t.data)), (t,),
+                           lambda g: (g * _np.cos(_float_in(t.data)),), "SinBackward0")
+def cos(t): return t._make(_np.cos(_float_in(t.data)), (t,),
+                           lambda g: (-g * _np.sin(_float_in(t.data)),), "CosBackward0")
 
 
 def clamp(t, min=None, max=None):
@@ -1802,13 +1806,42 @@ def clamp(t, min=None, max=None):
 # (floor, sign and the like) get a gradient of 0 — torch does that too, because a
 # step function's derivative is 0 almost everywhere.
 
+# **Which unary functions promote an integer input to a float**, and it is torch's
+# list rather than a judgement: `torch.sin(tensor([1, 2, 3]))` is `float32` and
+# `torch.abs` of the same is `int64`. Derived by asking torch once and written down,
+# because a library cannot ask torch at run time.
+#
+# Two families were wrong and they were wrong differently. Twelve — `sin`, `exp`,
+# `sqrt` and the rest — handed numpy an integer array, got `float64` back, and
+# returned that: right values, **twice the memory and a dtype that spreads**, since
+# everything downstream promotes to meet it. Eight others — `erf`, `erfc`, `erfinv`,
+# `digamma`, `lgamma`, `i0`, `reciprocal` — are written as numpy expressions that stay
+# integral, so `erf(tensor([1, 2, 3]))` was `tensor([0, 0, 0])`: **the answer
+# truncated into the input's type**, with no warning and no error.
+#
+# `erfinv` was the loudest of the silent ones: its answer runs to infinity, and cast
+# into an integer cell that is `9223372036854775807`.
+#
+# One line fixes both, because both come from the same place — the input crosses into
+# numpy as an integer. Cast it first and numpy produces the default dtype throughout.
+_PROMOTES_INTEGERS = frozenset({
+    "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Cos", "Cosh", "Digamma",
+    "Erf", "Erfc", "Erfinv", "Exp", "Exp2", "Expm1", "I0", "Lgamma", "Log", "Log10",
+    "Log1p", "Log2", "Logit", "Reciprocal", "Rsqrt", "Sigmoid", "Sin", "Sinc",
+    "Sinh", "Sqrt", "Tan", "Tanh", "Deg2rad", "Rad2deg",
+})
+
+
 def _unary(name, forward, derivative=None, op=None):
     def fn(t):
         t = _wrap(t)
-        out = forward(t.data)
+        data = t.data
+        if name in _PROMOTES_INTEGERS:
+            data = _float_in(data)
+        out = forward(data)
         if derivative is None:
             return Tensor(out)
-        return t._make(out, (t,), lambda g: (g * derivative(t.data, out),), op or f"{name}Backward0")
+        return t._make(out, (t,), lambda g: (g * derivative(data, out),), op or f"{name}Backward0")
     fn.__name__ = name
     return fn
 
@@ -1853,7 +1886,7 @@ def _one_plus_erf64(z):
 log2 = _unary("Log2", _np.log2, lambda x, o: 1.0 / (x * _np.log(2)))
 log10 = _unary("Log10", _np.log10, lambda x, o: 1.0 / (x * _np.log(10)))
 rsqrt = _unary("Rsqrt", lambda x: 1.0 / _np.sqrt(x), lambda x, o: -0.5 * o / x)
-square = _unary("Square", _np.square, lambda x, o: 2 * x)
+square = _unary("Square", lambda x: _np.square(_arith_in(x)), lambda x, o: 2 * x)
 reciprocal = _unary("Reciprocal", _np.reciprocal, lambda x, o: -o * o)
 tan = _unary("Tan", _np.tan, lambda x, o: 1 + o * o)
 sinh = _unary("Sinh", _np.sinh, lambda x, o: _np.cosh(x))
@@ -2454,8 +2487,11 @@ def empty_like(t, dtype=None, requires_grad=False, **kw):
     """It borrows the shape alone. The values are undefined — torch is the
     same."""
     _no_out(kw)
-    return _made(_np.zeros(_wrap(t).data.shape, dtype=_DEFAULT_DTYPE),
-                 dtype, requires_grad)
+    # **The dtype is borrowed as well as the shape** — `zeros_like` and `ones_like`
+    # next door already do, and this one did not, so `empty_like(int_tensor)` came
+    # back `float32`. The values being undefined is what made it invisible: nothing
+    # compares them, so only the type could have said anything and it was wrong.
+    return _made(_np.zeros_like(_wrap(t).data), dtype, requires_grad)
 
 
 def rand_like(t, dtype=None, requires_grad=False, **kw):
@@ -3307,7 +3343,7 @@ def lgamma(t):
     """The log of the gamma function. **Its derivative is `digamma`**, so having
     one of the two is half of it."""
     t = _wrap(t)
-    d = t.data
+    d = _float_in(t.data)
     out = _lgamma_np(d).astype(d.dtype)
     return t._make(out, (t,), lambda g: (g * _polygamma0(d).astype(d.dtype),),
                    "LgammaBackward0")
@@ -3316,7 +3352,7 @@ def lgamma(t):
 def digamma(t):
     """The logarithmic derivative of gamma. Its derivative is `trigamma`."""
     t = _wrap(t)
-    d = t.data
+    d = _float_in(t.data)
     out = _polygamma0(d).astype(d.dtype)
     return t._make(out, (t,), lambda g: (g * _polygamma1(d).astype(d.dtype),),
                    "DigammaBackward0")
@@ -3325,7 +3361,7 @@ def digamma(t):
 def erfinv(t):
     """The inverse of `erf`. Its derivative is `√π/2 · exp(erfinv(x)²)`."""
     t = _wrap(t)
-    d = t.data
+    d = _float_in(t.data)
     out = _erfinv_np(d)
     grad = (_math.sqrt(_math.pi) / 2.0) * _np.exp(out * out)
     return t._make(out.astype(d.dtype), (t,),
@@ -3479,8 +3515,13 @@ def dequantize(input):                                          # noqa: A002
     its not appearing is the decision.
 
     **It is not differentiable** — torch stops at `backward` (measured).
+
+    **The identity is over the values, not over the type.** torch's `dequantize`
+    always answers in a real dtype, so an integer tensor comes back `float32` there
+    and came back `int64` here. "Always the identity" was true of the arithmetic and
+    read as true of the whole function.
     """
-    return Tensor(_np.asarray(_wrap(input).data).copy())
+    return Tensor(_float_in(_np.asarray(_wrap(input).data).copy()))
 
 
 def resize_as_(input, other):                                   # noqa: A002
@@ -7589,11 +7630,11 @@ def _i1(x):
 def i0(x):
     """The order-0 modified Bessel function. `kaiser_window` stands on it."""
     x = _wrap(x)
-    data = _np.asarray(x.data)
+    data = _float_in(_np.asarray(x.data))
     # Its derivative is `i1`. Here there was only a bare `Tensor(...)` and the
     # graph was quietly cut, and until `backward()` was called no value check
     # showed it.
-    return x._make(_np.i0(data).astype(x.data.dtype), (x,),
+    return x._make(_np.i0(data).astype(data.dtype), (x,),
                    lambda g: (_np.asarray(g) * _i1(data),), "I0Backward0")
 
 
@@ -8225,8 +8266,12 @@ def vander(x, N=None, increasing=False):
     powers = _np.arange(n, dtype=_np.float64)
     if not increasing:
         powers = powers[::-1]
+    # **The result's type is the promoted one, not the input's.** Casting back to
+    # `x.data.dtype` gave a Vandermonde matrix of booleans, where torch answers in
+    # `int64` — every power of `True` is `True`, so the values looked right.
+    kind = _arith_in(x.data)
     out = x.data.reshape(-1, 1).astype(_np.float64) ** powers.reshape(1, -1)
-    return Tensor(out.astype(x.data.dtype))
+    return Tensor(out.astype(kind.dtype))
 
 
 def chain_matmul(*matrices):

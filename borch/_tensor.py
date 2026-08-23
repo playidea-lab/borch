@@ -5,7 +5,8 @@ import math as _math
 import numpy as _np
 
 from ._base import (
-    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _like_torch, _needs_float,
+    Size, _DEFAULT_DTYPE, _NP_TO_DTYPE, _TYPE_NAMES, _float_in, _like_torch,
+    _needs_float,
     _no_complex128, _np, _refuses_bool, _tensor_repr, _unsupported,
     device as _device, dtype, float32,
 )
@@ -945,6 +946,33 @@ class Tensor:
         if got.shape != self.data.shape:
             self._array = got                  # `.data` refuses an ndarray on purpose
             return self
+        # **A result that does not fit the buffer's type is refused, not cast.**
+        # `self.data[...] = got` let numpy narrow silently, so on an integer tensor
+        # `acos_()` wrote `[0, 0, 0]` and `sqrt_()` wrote `[1, 1, 1]` — the float
+        # answer truncated into the slots it was assigned to, with a numpy
+        # `RuntimeWarning` nobody reads and no error at all. About twenty in-place
+        # functions had it, all of them silently wrong numbers rather than wrong
+        # types.
+        #
+        # torch's rule is the one used here, in torch's words: an in-place operation
+        # writes into the tensor it was called on, so the result has to be
+        # representable there. `mul_(2)` on integers is fine and `div_(2)` is not,
+        # which is exactly `np.can_cast` under the "same_kind" rule numpy assignment
+        # already applies — it just applies it without complaining.
+        #
+        # Found by enumerating the dtype axis: every one-argument function called
+        # with an integer tensor. No case list had these, because writing one means
+        # already suspecting that `sqrt_` on integers is a thing anybody does.
+        if not _np.can_cast(got.dtype, self.data.dtype, casting="same_kind"):
+            raise RuntimeError(_like_torch(
+                f"`{what}` produced {_TYPE_NAMES.get(got.dtype.kind, got.dtype.name)} "
+                f"and this tensor holds "
+                f"{_TYPE_NAMES.get(self.data.dtype.kind, self.data.dtype.name)}. An "
+                "in-place operation writes into its own buffer, so the result has to "
+                "fit there — use the out-of-place form.",
+                f"result type {_TYPE_NAMES.get(got.dtype.kind, got.dtype.name)} can't "
+                "be cast to the desired output type "
+                f"{_TYPE_NAMES.get(self.data.dtype.kind, self.data.dtype.name)}"))
         self.data[...] = got
         return self
 
@@ -1170,15 +1198,23 @@ class Tensor:
                 lambda g: ((_np.asarray(g) * self.data / safe).astype(self.data.dtype),))
         return self._make(_np.abs(self.data), (self,), lambda g: (g * _np.sign(self.data),))
 
+    # **These three promote an integer input, as torch does.** Handed an integer
+    # array numpy answers in `float64`, which is right in value and wider than
+    # torch's `float32` — and a wider dtype spreads, because everything downstream
+    # promotes to meet it. `_float_in` is the same door the module-level functions
+    # use.
     def exp(self):
-        out = _np.exp(self.data)
+        data = _float_in(self.data)
+        out = _np.exp(data)
         return self._make(out, (self,), lambda g: (g * out,))
 
     def log(self):
-        return self._make(_np.log(self.data), (self,), lambda g: (g / self.data,))
+        data = _float_in(self.data)
+        return self._make(_np.log(data), (self,), lambda g: (g / data,))
 
     def sqrt(self):
-        out = _np.sqrt(self.data)
+        data = _float_in(self.data)
+        out = _np.sqrt(data)
         return self._make(out, (self,), lambda g: (g * 0.5 / out,))
 
     def masked_fill(self, mask, value):

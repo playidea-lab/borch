@@ -265,3 +265,149 @@ def test_the_index_sweep_asks_about_the_index_and_not_about_the_call():
     wrong = [n for n in INDEX_CALLS if _raised(torch, n, INDEX_CALLS) is TypeError]
     assert not wrong, (
         f"torch complained about the call rather than the index for: {wrong}")
+
+
+# ── the third axis: the dtype a function answers in ──────────────────────────
+#
+# Not a refusal question at all, which is why it belongs beside the other two rather
+# than in `test_refusal_classes.py`: **every call here succeeds on both sides.** What
+# differs is the type of the answer, and for eight functions the *values* differed
+# with it.
+#
+# 117 functions took a one-tensor call. **41 answered in a different dtype from
+# torch, in three families:**
+#
+#   32  `float64` where torch says `float32` — right values, twice the memory, and a
+#       dtype that spreads, since everything downstream promotes to meet it.
+#    8  integral where torch promotes — `erf(tensor([1, 2, 3]))` was `tensor([0, 0, 0])`.
+#       **The answer truncated into the input's cells.** `erfinv` was the loudest:
+#       its answer runs to infinity, and in an integer cell that is 9223372036854775807.
+#    1  `empty_like`, which borrowed the shape and not the dtype. Invisible because
+#       its values are undefined, so the type was the only thing that could speak.
+#
+# **Not one of the 981 tests noticed**, before or after. The golden never calls these
+# functions with an integer input, which is not an oversight anybody made — it is what
+# a case list looks like when it is written by people thinking about arithmetic.
+#
+# The sweep runs over three input types because the third found the last two rows on
+# its own: `square` and `vander` on booleans, where torch promotes to `int64` and we
+# answered `float32` and `bool`. Every power of `True` is `True`, so the values looked
+# right.
+# **Functions that configure the library rather than compute with it.** Excluded by
+# name, with the reason, because a sweep over "every public callable" reaches them and
+# calling them is not a read.
+#
+# `set_printoptions` is the one that taught this: handed a tensor it set `precision`
+# to a tensor, and **six golden tests in another file began to fail** with
+# `Format specifier missing precision` — a message that names neither this file nor
+# printing options. Restoring the random generators (below) was not enough, because
+# the state that moved was not random.
+CONFIGURES = {
+    "set_printoptions": "sets a global precision",
+    "set_default_dtype": "sets the dtype every later tensor is made in",
+    "set_default_device": "as `set_default_dtype`",
+    "set_grad_enabled": "switches the graph off for everything after it",
+    "manual_seed": "reseeds the generator",
+    "set_num_threads": "a runtime setting",
+    "set_num_interop_threads": "a runtime setting",
+    "use_deterministic_algorithms": "a runtime setting",
+    "save": "writes a file",
+    "load": "reads a file",
+    "compile": "returns a wrapper, not a value",
+}
+
+DTYPES = {
+    "int64": np.array([1, 2, 3], dtype=np.int64),
+    "bool": np.array([True, False]),
+    "float32": np.array([1., 2.], dtype=np.float32),
+}
+
+# **Per input type, because they differ and one number would be the smallest.**
+# Measured at 117 / 97 / 118. A single floor set to 97 would have let the integer
+# sweep lose twenty functions without a word, and the integer sweep is the one that
+# found eight wrong answers.
+LEAST_DTYPE_PAIRS = {"int64": 110, "bool": 90, "float32": 110}
+
+
+def _dtype_pairs(sample):
+    """`[(name, torch's dtype, ours), ...]` for every one-tensor call both take.
+
+    **The random generators are put back where they were found.** Calling every
+    public function includes `bernoulli`, `poisson`, `multinomial` and the
+    `*_like` draws, each of which advances a global stream — so this file ran and
+    six golden tests that had passed on their own began to fail, in a different
+    file, for a reason nothing in the failure named.
+
+    That is the cost of enumeration once more and in a new form: the first two axes
+    could produce a finding that was the probe's error, and this one can **move
+    state another test depends on.** A sweep over a whole surface is not a read.
+    """
+    import warnings
+
+    torch_rng = torch.get_rng_state()
+    numpy_rng = np.random.get_state()
+    try:
+        return _sweep(sample, warnings)
+    finally:
+        torch.set_rng_state(torch_rng)
+        np.random.set_state(numpy_rng)
+
+
+def _sweep(sample, warnings):
+    out = []
+    for name in sorted(dir(borch)):
+        if name.startswith("_") or name.endswith("_") or name in CONFIGURES:
+            continue
+        mine, theirs = getattr(borch, name, None), getattr(torch, name, None)
+        if theirs is None or not callable(mine):
+            continue
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                t = theirs(torch.tensor(sample.copy()))
+                o = mine(borch.tensor(sample.copy()))
+            except Exception:                                 # noqa: BLE001
+                continue
+        their_d, our_d = getattr(t, "dtype", None), getattr(o, "dtype", None)
+        if their_d is not None and our_d is not None:
+            out.append((name, str(their_d), str(our_d)))
+    return out
+
+
+@pytest.mark.parametrize("kind", sorted(DTYPES))
+def test_a_one_tensor_call_answers_in_torch_dtype(kind):
+    pairs = _dtype_pairs(DTYPES[kind])
+    assert len(pairs) >= LEAST_DTYPE_PAIRS[kind], (
+        f"only {len(pairs)} functions took a {kind} tensor, "
+        f"{LEAST_DTYPE_PAIRS[kind]} expected — the enumeration stopped working. "
+        "**Every assertion below passes on an empty list.**")
+    wrong = [(n, a, b) for n, a, b in pairs if a != b]
+    assert not wrong, (
+        f"these answer in a different dtype from torch on a {kind} input:\n  "
+        + "\n  ".join(f"{n}: torch {a}, ours {b}" for n, a, b in wrong[:12])
+        + "\n\n  A wider dtype spreads — everything downstream promotes to meet it.\n"
+          "  An integral one where torch promotes means the answer was truncated into "
+          "the input's cells, which is a wrong number rather than a wrong type.")
+
+
+def test_the_sweep_leaves_the_library_as_it_found_it():
+    """**A sweep over a whole surface is not a read**, and this is where that bites.
+
+    The first two axes could produce a finding that was the probe's own error. This
+    one can move state another file depends on, and when it did the failures appeared
+    in `test_golden.py` with a message about format specifiers. Nothing pointed here.
+
+    So the things that can move are checked directly rather than trusted to the
+    exclusion list, which is a list somebody has to keep right.
+    """
+    import copy
+
+    before = (borch.is_grad_enabled(), copy.copy(torch._tensor_str.PRINT_OPTS.__dict__))
+    for sample in DTYPES.values():
+        _dtype_pairs(sample)
+    after = (borch.is_grad_enabled(), copy.copy(torch._tensor_str.PRINT_OPTS.__dict__))
+    assert before == after, (
+        "the sweep changed global state:\n"
+        f"  before {before}\n  after  {after}\n"
+        "  Something reached by `dir(borch)` configures rather than computes — "
+        "name it in CONFIGURES.")
