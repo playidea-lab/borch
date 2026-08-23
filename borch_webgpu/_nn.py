@@ -1565,7 +1565,12 @@ for _lazy in ("LazyLinear",
 # the end, so it arrives by name and is unrolled into position.
 
 _LOSS_LAYERS = {
-    "HuberLoss": ("delta", "reduction"),
+    # **borch.ts moved this to torch's `(reduction, delta)` and the table stayed.**
+    # `HuberLoss(delta=0.5)` put 0.5 into `reduction`. It raised only because that
+    # constructor validates its own string — the same luck that made the scheduler
+    # table's break findable, and the opposite of what happened to `nll_loss` next
+    # door, where the wrong seat was a number and swallowed a string as NaN.
+    "HuberLoss": ("reduction", "delta"),
     "KLDivLoss": ("reduction", "log_target"),
     "PoissonNLLLoss": ("log_input", "full", "eps", "reduction"),
     "GaussianNLLLoss": ("full", "eps", "reduction"),
@@ -2061,9 +2066,20 @@ def Upsample(size=None, scale_factor=None, mode="nearest", align_corners=None):
 # with a `TypeError`. It was in that state, and textbook code uses the layers
 # more than the functions.
 #
-# `NLLLoss` and `CrossEntropyLoss` are not here yet — `nllLoss` and
-# `crossEntropy` in borch.ts produce a scalar only, so `none` cannot be built
-# here. Rather than invent what is missing, it stops.
+# **A reason that was true when it was written, and is why nobody looked.** It read:
+#
+#     `NLLLoss` and `CrossEntropyLoss` are not here yet — `nllLoss` and
+#     `crossEntropy` in borch.ts produce a scalar only, so `none` cannot be
+#     built here. Rather than invent what is missing, it stops.
+#
+# borch.ts has `ignoreIndex`, `reduction` and `labelSmoothing`, all implemented, and
+# `reduceIgnoring` was written specifically so that `"none"` is buildable. Nothing was
+# missing. The arguments were being handed across in the wrong seats — `reduction`
+# into `ignoreIndex` — and the paragraph above explained the resulting silence as a
+# decision.
+#
+# The failure mode is worth more than the fix: a stale reason is worse than no reason,
+# because no reason invites a check. This one survived every sweep of the file.
 def _no_class_weights(who, weight, pos_weight):
     """**`weight` and `pos_weight` are not here.** Accepted and unused, the loss
     quietly becomes a different one.
@@ -2098,9 +2114,11 @@ def SmoothL1Loss(reduction="mean", beta=1.0):
         handle(a).smoothL1Loss(handle(b), beta, reduction)))
 
 
-def NLLLoss(reduction="mean", *, weight=None):
+def NLLLoss(weight=None, ignore_index=-100, reduction="mean"):
+    """torch's order, minus the two it has deprecated."""
     _no_class_weights("NLLLoss", weight, None)
-    return _Wrap(lambda a, b: wrap(handle(a).nllLoss(handle(b), reduction)))
+    return _Wrap(lambda a, b: wrap(
+        handle(a).nllLoss(handle(b), int(ignore_index), reduction)))
 
 
 def BCEWithLogitsLoss(reduction="mean", *, weight=None, pos_weight=None):
@@ -2108,9 +2126,12 @@ def BCEWithLogitsLoss(reduction="mean", *, weight=None, pos_weight=None):
     return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
 
 
-def CrossEntropyLoss(reduction="mean", *, weight=None):
+def CrossEntropyLoss(weight=None, ignore_index=-100, reduction="mean",
+                     label_smoothing=0.0):
+    """torch's order, minus the two it has deprecated."""
     _no_class_weights("CrossEntropyLoss", weight, None)
-    return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(handle(b), reduction)))
+    return _Wrap(lambda a, b: wrap(handle(a).crossEntropy(
+        handle(b), int(ignore_index), reduction, float(label_smoothing))))
 
 
 class _Recurrent(Module):

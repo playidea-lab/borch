@@ -493,3 +493,83 @@ def test_a_forbidden_shift_is_not_reported_as_one():
     # in the tables above, which is why the totals read as "shorter" either way.
     assert ts_signatures._verdict(positional(ours), positional(theirs)) == "longer", (
         "asked of the reachable prefix, the same pair is a short tail and nothing more")
+
+
+# **Rows where torch reaches further by position than the core does.**
+#
+# **This was called `TORCH_REACHES_FURTHER_BY_POSITION` for about an hour**, which is
+# the same defect as `shifted` in a name written while arguing against it. The
+# evidence supports *torch accepts more positions than we do*. Whether any particular
+# call raises depends on how many the caller writes, and the extra positions are often
+# ones nobody passes positionally — measured:
+#
+#     Dropout(0.5, True)            torch ok · ours TypeError
+#     ELU(1.0, True)                torch ok · ours TypeError
+#     Flatten(1, -1)                torch ok · ours TypeError
+#     AvgPool2d(2, 2, 0, False)     torch ok · ours TypeError
+#     GroupNorm(2, 4, 1e-5, True)   torch ok · ours ok
+#     Bilinear(2, 3, 4, True)       torch ok · ours ok
+#
+# The last two are in the 57 and neither raises: torch's extra positions there are
+# `device` and `dtype`, which no recipe passes by position. So 57 is an **upper
+# bound on names**, not a count of broken calls, and the name has to say the thing
+# that was measured.
+#
+# 57, and the number is the point. It was first noticed on `Adagrad` —
+# `Adagrad(params, 0.01, 0, 0, 0, 1e-10, True)` sets `foreach` in torch and raises
+# here — and the tempting move was to give `Adagrad` a bucket of its own for it.
+# `Adagrad` is one of 57. `SGD`, `AvgPool2d`, the six `BatchNorm`s and fifty more
+# have exactly the same property, and `SHORTER` has been counting them all along
+# under a name that says what is missing rather than what happens.
+#
+# Naming the behaviour after the row it was noticed on would have been the same
+# scope mistake one level up: a true observation about `Adagrad` turned into a
+# category, in a file whose whole subject is categories claiming more than their
+# evidence.
+TORCH_REACHES_FURTHER_BY_POSITION = 57
+
+# **`agree` rows with the same problem: none.** Worth pinning precisely because it
+# is empty. `agree` means the two name lists match, and the worry — raised while
+# `positional()` was being written — is that two lists can match by name while one
+# side takes fewer of them positionally, so the row reads as identical and a torch
+# call still raises. Measured, that set is empty today.
+#
+# An empty set that nobody counts is the absorbing bucket this file keeps finding:
+# the check would pass the day it stops being empty and say nothing. Pinned at zero,
+# it fails.
+AGREE_ROWS_THAT_RAISE = 0
+
+
+def _positional_shortfalls():
+    """`[(space, name, verdict, how_many_more), ...]` — torch reaches further."""
+    import torch_signatures_core
+
+    rows = torch_signatures_core.compare()
+    out = []
+    for space, ours, theirs in torch_signatures_core._spaces():
+        for name, _mine, _kept, note in rows[space]:
+            if note in ("torch is C", "variadic", "no signature"):
+                continue
+            mine = torch_signatures_core._read(space, ours, name, reach=True)
+            yours = torch_signatures_core._read(space, theirs, name, reach=True)
+            if not isinstance(mine, list) or not isinstance(yours, list):
+                continue
+            yours = [p for p in yours if p not in torch_signatures_core.DEPRECATED]
+            if len(yours) > len(mine) and yours[:len(mine)] == mine:
+                out.append((space, name, note, len(yours) - len(mine)))
+    return out
+
+
+def test_where_torch_reaches_further_by_position_is_counted():
+    found = _positional_shortfalls()
+    assert len(found) == TORCH_REACHES_FURTHER_BY_POSITION, (
+        f"{len(found)} rows take fewer positional arguments than torch, "
+        f"{TORCH_REACHES_FURTHER_BY_POSITION} written.\n"
+        "  Lower means arguments were added — edit the number down.\n  "
+        + "\n  ".join(f"{s}.{n} ({v}) +{k}" for s, n, v, k in found[:8]))
+
+    slipped = [(s, n) for s, n, v, _k in found if v == "agree"]
+    assert len(slipped) == AGREE_ROWS_THAT_RAISE, (
+        f"{len(slipped)} rows read as `agree` while torch reaches further by "
+        "position — the name lists match and a torch call still raises here:\n  "
+        + "\n  ".join(f"{s}.{n}" for s, n in slipped[:8]))

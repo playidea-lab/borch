@@ -198,8 +198,18 @@ _SIGNATURE = {
     "mse_loss": ("target", "reduction"),
     "bce_with_logits": ("target", "reduction"),
     "binary_cross_entropy_with_logits": ("target", "reduction"),
-    "nll_loss": ("target", "reduction"),
-    "cross_entropy": ("target", "reduction"),
+    # **These two had `ignore_index` missing from the middle** and it did not raise.
+    # borch.ts is `nllLoss(target, ignoreIndex = -100, reduction = "mean")`, so
+    # `nll_loss(x, t, reduction="none")` handed the string `"mean"`… no: it handed
+    # `"none"` to `ignoreIndex`, which becomes `Tensor.full([], "none")` — NaN. Every
+    # row then compares unequal to NaN, `keep` is false everywhere, and `mean` divides
+    # by zero. **Twelve golden cases came back `nan` with no error anywhere.**
+    #
+    # A slot whose type is wide enough to swallow the wrong value is the quietest of
+    # the positional failures: a string into a string slot is invisible, a string into
+    # a *number* slot is invisible too when the number is only ever compared.
+    "nll_loss": ("target", "ignore_index", "reduction"),
+    "cross_entropy": ("target", "ignore_index", "reduction", "label_smoothing"),
     "huber_loss": ("target", "delta", "reduction"),
     "interpolate": ("scale_factor",),
     "max": ("dim", "keepdim"),
