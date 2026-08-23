@@ -252,7 +252,17 @@ SHORTER = {
     # by hand rather than generated, so it alone kept `_Lazy.__init__`'s
     # `(*args, **kw)` and was the one lazy layer this axis could not read. It is
     # short of torch's `device`/`dtype`, like every other layer in this bucket.
-    "nn": 58,
+    # 58 → 45. **Thirteen activation layers took `inplace`.** `nn.ReLU(inplace=True)`
+    # is a line every torch model writes and it raised here — a `TypeError` about an
+    # argument count, on the most common layer there is.
+    #
+    # Seven honour it through the `_` functions that already existed (`relu_`,
+    # `elu_`, `celu_`, `selu_`, `hardtanh_`, `leaky_relu_`, `threshold_`); six refuse
+    # it by name, because an activation that promises to reuse the buffer and quietly
+    # makes a new one is a promise about *memory*, which no value comparison catches.
+    # `Hardtanh` took torch's deprecated `min_value`/`max_value` with it, so a
+    # positional call reaching that far lands where torch lands.
+    "nn": 45,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
     # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are
@@ -643,7 +653,8 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # 47 → 48. `stft` joined when it became readable.
 # 48 → 49. `LazyLinear`, which is short of torch's `device`/`dtype` like the rest of
 # the layers, and could not be counted here at all while its signature was variadic.
-TORCH_REACHES_FURTHER_BY_POSITION = 49
+# 49 → 36. The thirteen activations, which were all short by exactly `inplace`.
+TORCH_REACHES_FURTHER_BY_POSITION = 36
 
 # **`agree` rows with the same problem: none.** Worth pinning precisely because it
 # is empty. `agree` means the two name lists match, and the worry — raised while

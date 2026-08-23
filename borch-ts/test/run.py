@@ -290,6 +290,12 @@ NOT_PORTED = {
     # `_grad_of` is where a leaf is checked for an arrived gradient and it is taken out, so
     # carrying that shape into TS would make a second copy of it. The seventeen value cases
     # were ported, and it was those that caught a defect in the kernel.
+    # **`inplace` on the thirteen activations is a kernel question, not an argument
+    # one.** Over there an activation is a WGSL shader that writes to a fresh output
+    # buffer; writing back into the input means a second shader per activation, not a
+    # flag threaded through. Twelve rows — six values and six identities.
+    "act::": (12, "아직 — `inplace` writes into the input buffer, which is a second "
+                  "shader per activation on that side rather than an argument"),
     "fft::": (4, "파이썬 — the gradient helper is what makes the leaf"),
     # **`opt::` has a row again, and its own comment above says the last three reasons
     # written here were each wrong in turn.** So this one names exactly what cannot

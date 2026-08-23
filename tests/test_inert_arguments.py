@@ -52,6 +52,14 @@ GOLDEN = ROOT / "tests" / "golden.json"
 # Pairs where the argument names something the answer genuinely cannot depend on.
 # **Checked one at a time**, not assumed from the name.
 ATTESTED = {
+    "act::nn.SELU(inplace)":
+        "**`inplace` changes the identity, not the value.** In place the layer writes "
+        "into the tensor it was handed and gives back the same object; the numbers are "
+        "the ones it would have computed anyway. That is what the flag is for, and it "
+        "is why `act::nn.SELU(inplace)/같은 객체` sits beside this row — a version "
+        "computing the right values into a *new* tensor passes here and fails there. "
+        "The other five activations escape this check only because their neighbour "
+        "differs on some other argument, which is luck rather than a better case",
     "grad::sum(dim)":
         "the gradient of a sum is ones everywhere, whichever axis it was taken over",
     "grad::sort(내림차순)":

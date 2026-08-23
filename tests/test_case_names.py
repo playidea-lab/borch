@@ -47,6 +47,19 @@ _TAIL = re.compile(r"\s*[（(][^()（）]*[)）]\s*$")
 # the parentheses is the default. A new one turns this check red, so adding one means writing
 # down why, here.
 DELIBERATE = {
+    # **The same attestation is written twice**, here and in
+    # `test_inert_arguments.ATTESTED`. Two files carry the same rule — *a case named
+    # after an argument must differ from the case beside it* — with separate tables,
+    # so a row that is deliberately equal has to be excused in both. That is not
+    # duplication to remove: each check reaches the rule from a different direction
+    # (one reads names, one reads answers) and folding them would lose whichever
+    # direction was kept. It is worth knowing before writing the second entry and
+    # wondering why the first one did not take.
+    "act::nn.SELU(inplace)":
+        "`inplace` changes the identity, not the value: the layer writes into the "
+        "tensor it was handed and gives back the same object, computing the numbers "
+        "it would have computed anyway. `act::nn.SELU(inplace)/같은 객체` beside it "
+        "is where that is asked.",
     # being equal is the answer
     "act::nn.Identity(인자를 삼킨다)":
         "torch's Identity swallows any argument — it is a placeholder, so users change the "

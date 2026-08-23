@@ -286,11 +286,6 @@ class Linear(Module):
                 f"bias={getattr(self, 'bias', None) is not None})")
 
 
-class ReLU(Module):
-    def forward(self, x):
-        return relu(x)
-
-
 class Sigmoid(Module):
     def forward(self, x):
         return sigmoid(x)
@@ -327,8 +322,15 @@ class Identity(Module):
 
 
 class Dropout(Module):
-    def __init__(self, p=0.5):
+    def __init__(self, p=0.5, inplace=False):
+        """**`inplace` is refused rather than ignored.** Dropout's mask is a fresh
+        tensor either way here, so honouring the flag would mean writing the product
+        back into the caller's buffer — which is what torch does and what a model
+        counts on for memory. Accepting it and making a new tensor is a promise about
+        memory that nothing would catch, so it says so instead."""
         super().__init__()
+        if inplace:
+            _unsupported("nn.Dropout(inplace=True)")
         self.p = p
 
     def forward(self, x):
@@ -1853,7 +1855,8 @@ class Transformer(Module):
 nn.Module = Module
 nn.Parameter = Parameter
 nn.Linear = Linear
-nn.ReLU = ReLU
+# `nn.ReLU` is assigned after the class, which now lives below `_Activation` —
+# see the note there.
 nn.Sigmoid = Sigmoid
 nn.Tanh = Tanh
 nn.Flatten = Flatten
@@ -1864,12 +1867,45 @@ nn.Embedding = Embedding
 nn.LayerNorm = LayerNorm
 nn.BatchNorm2d = BatchNorm2d
 class _Activation(Module):
-    """An activation layer — it has no state, so it wraps one function."""
+    """An activation layer — it has no state, so it wraps one function.
+
+    **`inplace` is torch's and thirteen layers here did not take it.**
+    `nn.ReLU(inplace=True)` is a line every torch model writes, and it stopped with
+    a `TypeError` about the argument count. It is not decoration: in place the
+    activation writes into the tensor it was handed and hands back **the same
+    object**, which is how a deep network holds its memory down.
+
+    Where the in-place form exists as a function (`relu_`, `elu_`, `celu_` and the
+    rest) it is used. Where it does not, the flag is **refused rather than
+    ignored** — an activation that promises to save the buffer and quietly makes a
+    new one is a promise about memory that nothing would catch.
+    """
 
     fn = staticmethod(relu)
+    fn_inplace = None
+
+    def __init__(self, inplace=False):
+        super().__init__()
+        if inplace and type(self).fn_inplace is None:
+            _unsupported(f"nn.{type(self).__name__}(inplace=True)")
+        self.inplace = inplace
 
     def forward(self, x):
-        return type(self).fn(x)
+        cls = type(self)
+        return cls.fn_inplace(x) if self.inplace else cls.fn(x)
+
+
+class ReLU(_Activation):
+    """**Moved down to here from the top of the file** so that it can share
+    `_Activation`, which is defined between the two. Nothing referenced it in
+    between — checked before moving, since a name defined twice in one module is
+    the shape `tests/test_one_definition.py` exists to catch."""
+
+    fn = staticmethod(relu)
+    fn_inplace = staticmethod(relu_)
+
+
+nn.ReLU = ReLU
 
 
 class GELU(Module):
@@ -1895,21 +1931,24 @@ class SiLU(_Activation):
 
 
 class LeakyReLU(Module):
-    def __init__(self, negative_slope=0.01):
+    def __init__(self, negative_slope=0.01, inplace=False):
+        """`inplace` — see `_Activation`."""
         super().__init__()
+        self.inplace = inplace
         self.negative_slope = negative_slope
 
     def forward(self, x):
-        return leaky_relu(x, self.negative_slope)
+        return leaky_relu_(x, self.negative_slope) if self.inplace else leaky_relu(x, self.negative_slope)
 
 
 class ELU(Module):
-    def __init__(self, alpha=1.0):
+    def __init__(self, alpha=1.0, inplace=False):
+        """`inplace` — see `_Activation`."""
         super().__init__()
-        self.alpha = alpha
+        self.alpha, self.inplace = alpha, inplace
 
     def forward(self, x):
-        return elu(x, self.alpha)
+        return elu_(x, self.alpha) if self.inplace else elu(x, self.alpha)
 
 
 # ── the stateless activation layers. Each wraps one function. ───────────────
@@ -1940,6 +1979,7 @@ class ReLU6(_Activation):
 
 class SELU(_Activation):
     fn = staticmethod(selu)
+    fn_inplace = staticmethod(selu_)
 
 
 class Softsign(_Activation):
@@ -1951,12 +1991,14 @@ class Tanhshrink(_Activation):
 
 
 class CELU(Module):
-    def __init__(self, alpha=1.0):
+    def __init__(self, alpha=1.0, inplace=False):
+        """`inplace` — see `_Activation`."""
         super().__init__()
+        self.inplace = inplace
         self.alpha = alpha
 
     def forward(self, x):
-        return celu(x, self.alpha)
+        return celu_(x, self.alpha) if self.inplace else celu(x, self.alpha)
 
 
 class Hardshrink(Module):
@@ -1978,12 +2020,21 @@ class Softshrink(Module):
 
 
 class Hardtanh(Module):
-    def __init__(self, min_val=-1.0, max_val=1.0):
+    def __init__(self, min_val=-1.0, max_val=1.0, inplace=False,
+                 min_value=None, max_value=None):
+        """`min_value` and `max_value` are torch's **deprecated** spellings and it
+        still takes them, so a positional call reaching that far lands on them.
+        Carried and forwarded rather than left out, which is what keeps the seats
+        lined up; `inplace` — see `_Activation`.
+        """
         super().__init__()
-        self.min_val, self.max_val = min_val, max_val
+        self.min_val = min_val if min_value is None else min_value
+        self.max_val = max_val if max_value is None else max_value
+        self.inplace = inplace
 
     def forward(self, x):
-        return hardtanh(x, self.min_val, self.max_val)
+        return (hardtanh_(x, self.min_val, self.max_val) if self.inplace
+                else hardtanh(x, self.min_val, self.max_val))
 
 
 class Softplus(Module):
@@ -1996,12 +2047,14 @@ class Softplus(Module):
 
 
 class Threshold(Module):
-    def __init__(self, threshold, value):
+    def __init__(self, threshold, value, inplace=False):
+        """`inplace` — see `_Activation`."""
         super().__init__()
-        self.threshold, self.value = threshold, value
+        self.threshold, self.value, self.inplace = threshold, value, inplace
 
     def forward(self, x):
-        return threshold_fn(x, self.threshold, self.value)
+        return (threshold_(x, self.threshold, self.value) if self.inplace
+                else threshold_fn(x, self.threshold, self.value))
 
 
 class Softmin(Module):

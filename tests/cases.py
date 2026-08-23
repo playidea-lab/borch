@@ -29,6 +29,17 @@ import hashlib
 import numpy as np
 
 
+def _same_object(L, layer):
+    """Whether an in-place layer handed back the tensor it was given.
+
+    **The value cannot show this.** `ReLU(inplace=True)` and `ReLU()` compute the
+    same numbers; what the flag buys is that the buffer is reused, and the only
+    observable is identity.
+    """
+    x = L.tensor(np.array([-1.0, 2.0], dtype=np.float32))
+    return str(layer(x) is x)
+
+
 def golden_inputs():
     """The inputs the cases use. The **order** they are drawn in decides the values, so it is left alone."""
     rng = np.random.default_rng(0)
@@ -987,6 +998,19 @@ def act_cases(inp=None):
                   lambda L: L.nn.LeakyReLU()(L.tensor(k))))
     cases.append((ACT_PREFIX + "nn.LeakyReLU(기울기)",
                   lambda L: L.nn.LeakyReLU(0.2)(L.tensor(k))))
+    # **`inplace` was not an argument on any of the thirteen activations**, so
+    # `nn.ReLU(inplace=True)` — a line every torch model writes — stopped with a
+    # `TypeError` about the argument count. Asked by *position*, because the seat is
+    # what a positional call sees, and asked for the identity as well as the value:
+    # in place the layer hands back **the same object**, and a version that computes
+    # the right numbers into a new tensor passes a value comparison and fails the
+    # thing the flag is for.
+    for _act, _args in (("ReLU", ()), ("LeakyReLU", (0.2,)), ("ELU", (0.5,)),
+                        ("CELU", (0.5,)), ("SELU", ()), ("Hardtanh", (-0.5, 0.5))):
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)",
+                      lambda L, a=_act, g=_args: getattr(L.nn, a)(*g, True)(L.tensor(k))))
+        cases.append((ACT_PREFIX + f"nn.{_act}(inplace)/같은 객체",
+                      lambda L, a=_act, g=_args: _same_object(L, getattr(L.nn, a)(*g, True))))
     cases.append((ACT_PREFIX + "nn.Identity", lambda L: L.nn.Identity()(L.tensor(k))))
     # torch's `Identity` **swallows any argument at all** (measured). It is a placeholder
     # layer, so swapping a layer out and leaving its arguments in place while changing the name

@@ -100,7 +100,9 @@ CEILINGS = {
     # The markers (`아직`, `별칭`, `파이썬`, `없음`) and these verdict words are keys
     # that `test_alias_rows.py`, `test_site.py` and the golden case names match on.
     # They move when those move and not before.
-    "borch-ts/test": 3133,
+    # 3133 → 3135. The `act::` row returning to the ledger, whose marker word `아직`
+    # is what `test_site.py` matches on to tell owed work from declined work.
+    "borch-ts/test": 3135,
 }
 
 

@@ -196,7 +196,9 @@ UNALIGNED = {
     # and can be judged now -- six of the six that moved here are the norms,
     # whose eager forms borch.ts spells differently. The count rose because the
     # measurement reaches further, not because anything parted.
-    "nn": 26,   # -1, Bilinear: borch.ts gained a fourth parameter and the two lists
+    # 26 → 27. `Hardtanh`, which took torch's deprecated `min_value`/`max_value`
+    # alongside `inplace` and so is no longer a prefix of borch.ts's list.
+    "nn": 27,   # -1, Bilinear: borch.ts gained a fourth parameter and the two lists
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be
@@ -250,7 +252,8 @@ RENAMED = {
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
-    "nn": 20,   # +1, Bilinear arrived from `unaligned`: borch.ts spells the flag
+    # 20 → 19. `Hardtanh` left for `unaligned`.
+    "nn": 19,   # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     "nn.functional": 1,
@@ -301,7 +304,11 @@ SHORTER = {
     # borch.ts writes out by hand.
     # 18 → 19. `LazyLinear` arrived when it stopped being uncomparable — see the
     # core-to-torch table.
-    "nn": 19,
+    # 19 → 24. The thirteen activations took torch's `inplace` and borch.ts has not
+    # followed; five of them are now longer than their borch.ts counterpart rather
+    # than the same length. The safe end of the parting — one argument too many
+    # raises rather than landing somewhere.
+    "nn": 24,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too
