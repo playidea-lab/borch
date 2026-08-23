@@ -308,7 +308,7 @@ because torch does take a copy and did not leak, sixteen places were wrong **in
 the core alone.** Run one at a time they all passed, so the cause was not at its
 own address. The remedy differs too — not more cases but **isolation.**
 
-### Six places where a green *check* can be a lie
+### Seven places where a green *check* can be a lie
 
 The seven above are places where a case passes and the library is wrong. These are
 one level up: places where **the check passes and the checking is wrong.** They came
@@ -379,11 +379,98 @@ merges have landed since — a line that turns an hour of reading diffs into a f
 The counts derived from the ledger fixed themselves, which is the point of deriving
 them.
 
-> **What the six have in common is not carelessness.** Each is a place where the
-> absence of a signal reads exactly like the signal being fine — no rows read, no
+**A reason can be true and still be about something else** (five times, in three
+files). This one is the hardest of the seven to see, because nothing about it is
+wrong.
+
+`datasets` was declined because a browser cannot reach torchvision's hosts. True —
+`cs.toronto.edu` and `ossci-datasets.s3.amazonaws.com` send no CORS header, measured.
+But the question the table was asking is *can this be built here*, and the sentence
+answers *can a browser fetch it*. Two claims. The second was checked, quoted, and
+survived a day; the first was never asked. Then `FER2013`: torchvision has no
+`download` for it, it wants a Kaggle account — true — written down as "there is
+nothing to compare an implementation against", which is *cannot fetch the data*
+carried into *cannot check the code*. Its reader takes a directory; a CSV written in
+the case table goes to both sides. `torch.narrow_copy` sat in the not-API bin as "a
+functionalisation-pass variant", a true sentence about how such names usually arise
+and a false one about this one, which torch documents with an example.
+`test_binding_arguments.py`'s `Bilinear` row said borch.ts's `Bilinear` always makes
+a bias — true, and the column it sat in asks whether an argument is being silently
+dropped.
+
+**Re-measuring does not catch this.** A stale reason fails when you check it; an
+over-wide one passes, every time, because it was never false. The row that said
+`Bilinear` was read eight times and believed eight times. What broke it was not a
+measurement but a change of question — somebody asked to fix it, and the sentence
+turned out to be a work instruction rather than a fact about the world.
+
+**It is not sample size**, which was the first explanation and was measured out of
+the way: `torch` carries 120 distinct reason sentences and `datasets` eight, and the
+failures are three from the eight. What the five share instead is that **each
+describes a system other than the one being judged** — two servers' headers, a
+browser's filesystem, torchvision's distribution, torch's naming conventions,
+borch.ts. That is where to look first when writing one.
+
+**It is a rule about reasons, and not about labels**, which is the boundary and was
+found by a counterexample rather than by reasoning. A reason is a sentence somebody
+wrote once about one target. A *label* — `shifted`, `agree`, `not API` — is a
+category name applied to rows automatically, and it can overclaim the same way while
+behaving differently in three respects. There is no paragraph to re-read, only the
+name. Its prescription is not "is this about us" but **"does the evidence support
+this name"**. And a reason that overreaches is wrong about its one row, where a label
+that overreaches is wrong about every row it touches: `shifted` on the core's
+`Adagrad` announced a danger of the wrong kind, and the question of what else shares
+its premise has to be asked separately, because the label cannot answer it.
+
+`shifted` claimed a positional call lands on the wrong parameter; the evidence under
+it was only that the name at position seven differs. Measured, a seven-argument
+positional call **works in torch and raises here** — real and loud rather than absent
+and silent, so moving those rows to a "no risk" bucket would have been wrong the
+other way round. **Rename before adding numbers**: numbers added under a name that
+overclaims only grow the half that invents danger.
+
+> **And this paragraph did it twice while being written**, which is the best evidence
+> in it that the shape is common.
+>
+> First: having found that names take fewer positional arguments here than in torch,
+> the draft said the rows sharing that premise "say nothing at all". The observation
+> did not support it — they were all already counted, and none of the rows labelled
+> `agree` raise. The count was never missing. What is missing is that the bucket's
+> name says **what is absent** rather than **what happens**, so a reader looking for
+> "calls that break here" finds nothing while the number sits in plain sight.
+>
+> Then, arguing about *which* bucket they sat in, both sessions were reading the same
+> output and quoting different words from it: the per-row label is `longer` (torch is
+> longer) and the summary column is `shorter` (we are shorter). **One phenomenon, two
+> names, one tool.** Neither of us was wrong and the disagreement was real, which is
+> its own small lesson about where an argument between careful people comes from.
+>
+> The remedy for the original was a pinned figure rather than a third label, since
+> inventing a category for one row is this same mistake one level up — and the figure
+> was itself renamed once, from `RAISES_ON_A_TORCH_POSITIONAL_CALL` to
+> `TORCH_REACHES_FURTHER_BY_POSITION`, because two of the names it counts do not
+> raise: their extra positions are `device` and `dtype`, which nobody passes
+> positionally. **The person disputing an overclaiming name made one within the
+> hour.** A second figure was pinned at zero for the empty set, because a set nobody
+> counts fills silently.
+
+And a cheap test on the sentence, which costs less than re-measuring and catches what
+re-measuring cannot: **a reason that begins "the other side does not have X" is
+describing a fixed world, and one that ends "to fix it you would need Y" is describing
+work.** Of the eight rows in that binding table, `Bilinear` was the only one written
+the second way, and it was the first to be repaid.
+
+> **What the first six have in common is not carelessness.** Each is a place where
+> the absence of a signal reads exactly like the signal being fine — no rows read, no
 > number to go stale, no size to watch, no question to ask, no output to see, no tree
 > that holds both branches. The remedy is the same shape every time and it is never
 > "look harder": make the absence produce a number, and then watch the number.
+>
+> **The seventh is the exception, and it is worth keeping separate.** There the
+> signal is present, correct, and answering a question nobody asked — so making it
+> produce a number does nothing, because the number would be right. It is the only
+> one of the seven whose remedy is to re-read a sentence rather than to build
+> something, which is also why it is the one most likely to still be here in a year.
 
 ---
 
