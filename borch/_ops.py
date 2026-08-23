@@ -7246,10 +7246,33 @@ def gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
     the familiar `hard - soft.detach() + soft` trick, whose value is hard and whose
     derivative is soft. Without keeping those two apart this function means
     nothing.
+
+    **`eps` is accepted and not used, which is what torch does with it.** torch
+    deprecated it when its noise moved to an exponential draw that needs no floor;
+    the parameter survives only so that old calls keep parsing.
+
+    This used to put the caller's `eps` inside the noise, and it moved the answer:
+    at `eps=1e-1` a single output shifted by 0.49 and the mean of 20,000 draws went
+    from `[0.728, 0.185, 0.087]` to `[0.743, 0.177, 0.080]`, while torch's was
+    **bit-identical** at both values. So this was one of the few places where the
+    two libraries returned different numbers for the same call — and no check here
+    could see it, because every structural check asks whether an accepted argument
+    is *used*, and this one was being used enthusiastically.
+
+    The binding and borch.ts were mended first; the core kept the old formula for
+    another day because the fix went in one layer at a time and nothing compares
+    this layer against torch on the question *what does torch do with this
+    argument.* Found by the axis built to ask exactly that, on its first probe.
     """
     logits = _wrap(logits)
+    if float(eps) != 1e-10:
+        _warnings.warn("`eps` parameter is deprecated and has no effect.",
+                       stacklevel=2)
+    # The constant stays inside, where borch.ts also pins it, so all three draw the
+    # same noise. What changed is that the **caller** can no longer reach it.
+    floor = 1e-10
     u = _rng.random(logits.data.shape).astype(logits.data.dtype)
-    gumbel = -_np.log(-_np.log(u + eps) + eps)
+    gumbel = -_np.log(-_np.log(u + floor) + floor)
     soft = softmax((logits + Tensor(gumbel)) / tau, dim=dim)
     if not hard:
         return soft
