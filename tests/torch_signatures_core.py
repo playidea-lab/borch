@@ -66,6 +66,44 @@ tensor surface. Two other sources were measured and **neither is used**:
 Neither door is shut. Both want a decision about where the authority comes from, and
 that is not a decision to take inside a measurement.
 
+## A third source, measured and rejected — **and it failed the way that is hard to see**
+
+An argument torch *accepts and then ignores* is invisible to every check here.
+`F.gumbel_softmax(eps=…)` was found by hand: accepted, and dropped on the floor. The
+binding check asks whether a call site drops what it accepts, so threading the argument
+dutifully through satisfies it **exactly as well as being right does** — the structural
+checks stayed green while the two libraries returned different numbers for the same
+call. torch's own answer is `warnings.warn("eps parameter is deprecated and has no
+effect")`.
+
+The obvious instrument is to scan torch's docstrings for parameters its prose calls
+deprecated or ignored. It was built and run. **108 rows** across `F`, `torch` and `nn`:
+
+- Almost all of them are `size_average` and `reduce` — the pair already folded above,
+  so that mass is a restatement of something known.
+- Much of the rest is the scan misreading itself. `F.cross_entropy.target` matched
+  because the *`ignore_index`* line contains the word "ignored"; `F.lp_pool1d.input`
+  matched on a sentence about padded windows.
+- **`gumbel_softmax.eps` is not among the 108.** Its docstring says nothing about it.
+  The deprecation exists only as a runtime warning.
+
+So the scan missed the single case known in advance to be positive, while producing a
+hundred-row report that reads as thorough. That is the failure mode this repository
+keeps meeting from a new direction: not an instrument that is quiet, but one that is
+**confidently full**. Nobody reading that output would go looking for what is absent.
+
+The general form is worth keeping even if the check never gets built: **prose about
+behaviour is not behaviour, and a scan over prose inherits every silence in the prose.**
+That applies to torch's documentation and to ours.
+
+The authority is the call. `warnings.catch_warnings(record=True)` around a real
+invocation answers it, and it asks a question no axis here asks — *what does torch do
+with this argument* — as opposed to *what argument does torch declare*. Left unbuilt on
+purpose: it is a new axis, not a fix. If it is built, one thing goes in at the first
+line — **it must fail when it probes nothing.** An empty warning list from a call that
+silently never happened is indistinguishable from torch warning about nothing, and an
+empty result reads as a pass. That is the absorbing bucket again, one level up.
+
 ## Which findings this repository is entitled to expect, measured
 
 How many argument lists actually get judged against torch, per namespace:
