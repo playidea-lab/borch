@@ -105,9 +105,15 @@
       셋 다 넣으면 self-attention 이다 — 토큰마다 모든 토큰에게 무엇을 가졌는지 묻는다.
     </p>
     <div class="note-box">
-      <strong>차이 2 — 어텐션은 텐서 하나를 낸다.</strong> torch 는
+      <strong>차이 2 — <em>층</em>이 텐서 하나를 낸다.</strong> torch 는
       <code>(출력, 가중치)</code> 를 내므로 <code>const [out] = att(...)</code> 는 여기서
-      텐서를 구조 분해해 쓸 수 없는 것을 준다.<br><br>
+      텐서를 구조 분해해 쓸 수 없는 것을 준다. 다만 가중치가 사라진 것은 아니다 —
+      <code>nn.multiHeadAttentionForward</code> 가 torch 의
+      <code>multi_head_attention_forward</code> 이고 둘 다 돌려준다(헤드 평균 또는
+      헤드별). 손대기 전에 알아야 할 것 둘: 짝이 아니라
+      <strong>객체</strong> <code>{ output, weights }</code> 를 내고, 층이 배치 우선인 것과
+      달리 <strong>길이 우선</strong> <code>(L, N, E)</code> 를 받는다. 배치 우선로 넣으면
+      아무 말 없이 엉뚱한 축을 섞는다.<br><br>
       <strong>차이 3 — <code>nn.Linear</code> 는 2차원 전용이다.</strong>
       <code>[N, 토큰, D]</code> 를 주면 거절하고 이유를 말한다:
       <em>mm 은 2차원 곱하기 2차원. 배치는 아직 없다.</em> 배치 축과 토큰 축을 접었다가
@@ -126,6 +132,14 @@
         const att = new nn.MultiheadAttention(D, 4);
         const out = att.call(seq, seq, seq);
         log("어텐션 출력:", JSON.stringify(out.shape), " — 짝이 아니라 텐서 하나");
+
+        // 같은 어텐션의 함수형. 층이 안 돌려주는 가중치가 여기 있다.
+        // 여기는 (L, N, E) 라 배치 우선 수열을 넣기 전에 축을 바꾼다.
+        const lengthFirst = seq.permute([1, 0, 2]);
+        const both = nn.multiHeadAttentionForward(lengthFirst, lengthFirst, lengthFirst, 4,
+          att.inWeight, att.inBias, att.outWeight, att.outBias);
+        log("함수형       :", Object.keys(both).join(", "),
+            "->", JSON.stringify(both.weights.shape), "가중치");
 
         const fc = new nn.Linear(D, D * 2);
         try {

@@ -108,9 +108,15 @@
       has.
     </p>
     <div class="note-box">
-      <strong>Divergence 2 — attention returns a bare tensor.</strong> torch returns
-      <code>(output, weights)</code>, so <code>const [out] = att(...)</code> destructures
-      a tensor here and gives you something unusable.<br><br>
+      <strong>Divergence 2 — the <em>layer</em> returns a bare tensor.</strong> torch
+      returns <code>(output, weights)</code>, so <code>const [out] = att(...)</code>
+      destructures a tensor here and gives you something unusable. The weights are not
+      gone, though — <code>nn.multiHeadAttentionForward</code> is torch's
+      <code>multi_head_attention_forward</code> and hands back both, averaged over heads
+      or one set per head. Two things to know before you reach for it: it returns an
+      <strong>object</strong>, <code>{ output, weights }</code>, not a pair, and it takes
+      <strong>length-first</strong> <code>(L, N, E)</code> where the layer is batch-first.
+      Feed it batch-first and it mixes the wrong axes without complaining.<br><br>
       <strong>Divergence 3 — <code>nn.Linear</code> is two-dimensional.</strong> Handed a
       <code>[N, tokens, D]</code> tensor it refuses, and says why:
       <em>mm is 2-D by 2-D. Batching is not here yet.</em> Folding the batch and token
@@ -129,6 +135,14 @@
         const att = new nn.MultiheadAttention(D, 4);
         const out = att.call(seq, seq, seq);
         log("attention out:", JSON.stringify(out.shape), " — a tensor, not a pair");
+
+        // Same attention, function form: the weights the layer does not hand back.
+        // (L, N, E) here, so the batch-first sequence is permuted on the way in.
+        const lengthFirst = seq.permute([1, 0, 2]);
+        const both = nn.multiHeadAttentionForward(lengthFirst, lengthFirst, lengthFirst, 4,
+          att.inWeight, att.inBias, att.outWeight, att.outBias);
+        log("function form  :", Object.keys(both).join(", "),
+            "->", JSON.stringify(both.weights.shape), "weights");
 
         const fc = new nn.Linear(D, D * 2);
         try {
