@@ -337,9 +337,26 @@ All the items are closed. What to keep in view when deciding what comes next:
 | | why |
 |---|---|
 | **CUDA, distributed, mixed precision** | not in a browser. Imitating them loses the lesson |
-| **pre-trained weights** | fetching them is itself the thing to learn |
+| **shipping pre-trained weights from here** | the bytes are somebody else's to host — `borch-hub` fetches what a manifest points at and re-hashes it, and this repository carries none of them |
 | **JIT and `torch.compile`** | out of range |
 | **speed** | see below |
+
+**That row used to read "pre-trained weights", with nothing narrowing it, and it
+had stopped being true.** `borch-hub` has `fetchWeights` and `load`: it resolves
+the URL a manifest carries, fetches the bytes, **re-hashes them even out of the
+cache**, and throws when the hash disagrees. The landing page's state table lists
+that as `partial` — built, not on npm — and says weights do load in a browser,
+measured, `access-control-allow-origin: *` on a 44.7MB safetensors.
+
+So this file was promising never to do a thing the front page advertises, and the
+old reason — *fetching them is itself the thing to learn* — had become an argument
+against a fetcher that exists. What survives is the narrow half, and it is the
+half that was always the point: **no weights are carried here.** The row says that
+instead of the thing it can no longer say.
+
+It was found by reading the two documents against each other. Nothing checks them,
+which is why the row could sit there through the commit that took the same name out
+of the landing page's `never` list.
 
 ### Speed — measured
 
