@@ -537,6 +537,18 @@ NOT_PORTED = {
     # catch a re-export quietly becoming a second implementation, which is a thing that
     # can happen on either side.
     "v2f::": (17, "아직 — v2.functional: the nine v2 adds, and eight of v1's re-exports"),
+    # **The first `misc::` row.** Every case with that prefix had been carried across
+    # until now, which is why this table has never had one — and it is worth a line
+    # because a prefix appearing here for the first time reads like an oversight.
+    #
+    # Eleven, and they are one kind: `Embedding` and `EmbeddingBag` with `max_norm`,
+    # plus `padding_idx`. Four of them read the **weight table after the call**, which
+    # is the only place the difference lives — `max_norm` shortens rows in place, and
+    # an implementation that shortened a copy would return the same numbers forever.
+    # Portable: nothing here needs a network or a model, and the side that carries
+    # them will want the state cases most, since a value case cannot see this at all.
+    "misc::": (11, "아직 — Embedding/EmbeddingBag: max_norm, padding_idx, and the "
+                   "table after the call"),
     "dataset::": (9, "아직 — the IDX and CIFAR batch decoders. The table builds the bytes"),
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),

@@ -90,26 +90,16 @@ SUFFIXES = (".ts", ".py", ".html")
 # Measured 2026-08-22. Lower these after a translation pass; see the module docstring
 # before raising one.
 CEILINGS = {
-    "borch-ts/src": 18,          # 5734 → 5736. **Two characters, and they are a key rather than prose.** A `v2f::`
-    # row went into the gap ledger and its reason begins with the marker `아직`; the
-    # reason itself is English, as the rest of that table is.
+    "borch-ts/src": 18,          # 3108 → 3110. **Two characters, and they are a key rather than prose.** A
+    # `misc::` row went into the gap ledger and its reason begins with the marker
+    # `아직`; the reason itself is English, as the rest of that table is.
     #
     # The markers (`아직`, `별칭`, `파이썬`, `없음`) are what `test_alias_rows.py` and
     # `test_site.py` match on to tell owed work from declined work, so they are keys
     # into the table and not words in a sentence. They move when those checks move and
-    # not before — which is why translating that file took the reasons and left these,
-    # and why every row added after it costs two characters here.
-    # 3091 → 3108. **+17, and every one of them is a golden case name.** Two new
-    # cases hold `ReduceLROnPlateau`'s resume — `이어서 학습하기` and `상태를 안 옮기면
-    # 갈린다`, copied character for character from the `StepLR` pair beside them, and
-    # one gap-table marker (`아직`) for `unique(dim=)`.
-    #
-    # A case name is a **key into `golden.json`**, matched by the runner against the
-    # answer frozen under it. Translating one renames the answer; naming a new case in
-    # English while its neighbours are Korean puts two conventions in one table. Both
-    # sides of a pair have to read alike, because the pair is the point: the second
-    # case exists only to show the first is measuring something.
-    "borch-ts/test": 3108,
+    # not before — which is why every row added after the translation costs two
+    # characters here, and why that is the rule working rather than a breach of it.
+    "borch-ts/test": 3110,
 }
 
 
