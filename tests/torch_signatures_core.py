@@ -288,6 +288,50 @@ def compare():
     return out
 
 
+# **The verdict words mean the opposite thing here, and the row said so out loud.**
+#
+# `_verdict(wanted, yours)` is `ts_signatures`'s, written for the axis that asks
+# *what has borch.ts not carried across from torch* — so it is handed `(torch,
+# borch.ts)` there and answers `shorter` when borch.ts is the short one. This axis
+# asks the other question, hands it `(ours, torch)`, and gets `shorter` back when
+# **torch** is the short one.
+#
+# The summary already compensated: its `shorter` column prints `shorter + longer`,
+# so the number a reader sees is right. The compensation stopped at the column. Rows
+# kept printing the raw word, so one screen carried `— longer` on `AvgPool2d` (where
+# ours is the shorter list) directly under `shorter 57`.
+#
+# Two sessions read that screen, quoted different halves of it, and disagreed for an
+# hour about which bucket those names were in. **Both quotes were accurate.** So the
+# flip happens once, here, before anything is printed, and the two halves of the
+# output say the same word about the same row.
+#
+# **The column is split too**, because the merged one answered a question nobody
+# asks. It printed `shorter + longer` under the name of one of them, and the two
+# have opposite consequences: where ours is the shorter list a torch call can raise
+# here, and where ours is the longer one nothing written against torch breaks. One
+# number cannot say which of those a namespace has.
+#
+# **Three numbers live near each other now and none of them is the same number.**
+# Written out because two of them were 57 on the day this was split, which is the
+# kind of coincidence that gets two things equated:
+#
+#     shorter   61   ours takes fewer names; torch's list is longer and ours a prefix
+#     …of which 57   torch also reaches further **by position**
+#     longer    12   ours takes more names than torch. Nothing of torch's breaks.
+#
+# (Those two lines were written the other way round first, an hour after the flip
+# above was added, by reading the words as they mean *before* the flip. The flip
+# fixes the output and not the habit.)
+#
+# The four in 61 and not in 57 are `Tensor.dim_order`, `optim.Adafactor`,
+# `optim.Rprop` and `optim.SGD`. Measured: in every one, torch's extra arguments are
+# keyword-only, so torch's name list is longer and no positional call can reach the
+# difference. `TORCH_REACHES_FURTHER_BY_POSITION` in the test file is that 57, and it
+# is a **subset** of this 61 rather than a second opinion about it.
+_FROM_HERE = {"shorter": "longer", "longer": "shorter"}
+
+
 def main(argv):
     show = argv[argv.index("--show") + 1] if "--show" in argv else None
     rows = compare()
@@ -295,6 +339,7 @@ def main(argv):
     for space, found in sorted(rows.items()):
         counts = {}
         for _n, _m, _y, note in found:
+            note = _FROM_HERE.get(note, note)
             counts[note] = counts.get(note, 0) + 1
             tally[note] = tally.get(note, 0) + 1
         shifted = counts.get("dropped", 0) + counts.get("inserted", 0) \
@@ -302,7 +347,8 @@ def main(argv):
         mark = " " if not shifted else "✘"
         print(f"  {mark} {space:22s} agree {counts.get('agree', 0):>4}   "
               f"shifted {shifted:>3}   unaligned {counts.get('unaligned', 0):>3}   "
-              f"shorter {counts.get('shorter', 0) + counts.get('longer', 0):>4}   "
+              f"shorter {counts.get('shorter', 0):>3}   "
+              f"longer {counts.get('longer', 0):>4}   "
               f"renamed {counts.get('renamed', 0):>4}   "
               f"variadic {counts.get('variadic', 0):>4}   "
               f"torch is C {counts.get('torch is C', 0):>4}")
@@ -312,13 +358,15 @@ def main(argv):
                     continue
                 print(f"      · {name}")
                 print(f"          torch ({', '.join(yours or [])})")
-                print(f"          core  ({', '.join(mine or [])})  — {note}")
+                print(f"          core  ({', '.join(mine or [])})  "
+                      f"— {_FROM_HERE.get(note, note)}")
     print("\n코어를 **진짜 torch** 와 인자로 대조한다 — 이 저장소에서 바깥 권위를 묻는 "
           "둘째 검사다.")
     print(f"  맞음 {tally.get('agree', 0)} · 밀림 "
           f"{tally.get('dropped', 0) + tally.get('inserted', 0) + tally.get('reordered', 0)}"
-          f" · 못 맞춤 {tally.get('unaligned', 0)} · 꼬리가 짧다 "
-          f"{tally.get('shorter', 0) + tally.get('longer', 0)} · 이름만 다르다 "
+          f" · 못 맞춤 {tally.get('unaligned', 0)} · 우리가 덜 받는다 "
+          f"{tally.get('shorter', 0)} · 우리가 더 받는다 "
+          f"{tally.get('longer', 0)} · 이름만 다르다 "
           f"{tally.get('renamed', 0)} · 못 잼 {tally.get('variadic', 0)}"
           f" · torch 가 C {tally.get('torch is C', 0)}")
     print("  `size_average` 와 `reduce` 는 접었다 — torch 가 폐기했다고 적어둔 둘이다.")
