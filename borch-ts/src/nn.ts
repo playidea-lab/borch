@@ -36,6 +36,13 @@ import {
  * about to go into `Embedding`. **Two copies is a coincidence and three is a rule that
  * belongs somewhere**, so both call sites now come here. Written once, the next
  * `describe` that needs it can be found by looking rather than by remembering.
+ *
+ * **Two layers never had it at all** — `RReLU`'s `lower` and `upper`, and
+ * `LocalResponseNorm.alpha`. All three passed because their defaults (`1/8`, `1/3`,
+ * `1e-4`) are never integral, so no golden case frozen at a default could see the
+ * difference. A sweep that classified fields by their declared default missed them
+ * for the same reason. `tests/test_describe_floats.py` asks torch's own signature
+ * instead, which has no such accident to be fooled by.
  */
 function pyFloat(v: number): string {
   return Number.isInteger(v) ? `${v}.0` : String(v);
@@ -1950,6 +1957,10 @@ export class LocalResponseNorm extends Module {
     // Knowing the rule and applying it to two of three arguments is not carelessness:
     // `beta` and `k` were the ones being edited. It is a claim of completeness scoped
     // to what the author had open, which is a shape this repository met twice today.
+    //
+    // `size` is torch's only integer here; the other three are floats and all three
+    // go through `pyFloat` now. `tests/test_describe_floats.py` asks torch's own
+    // signature which is which, so the next one cannot depend on anybody noticing.
     return `LocalResponseNorm(${this.size}, alpha=${pyFloat(this.alpha)}, ` +
       `beta=${pyFloat(this.beta)}, k=${pyFloat(this.k)})`;
   }
@@ -1972,7 +1983,7 @@ export class RReLU extends Module {
   }
 
   override describe(): string {
-    return `RReLU(lower=${this.lower}, upper=${this.upper})`;
+    return `RReLU(lower=${pyFloat(this.lower)}, upper=${pyFloat(this.upper)})`;
   }
 }
 

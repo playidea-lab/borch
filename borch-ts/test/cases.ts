@@ -2989,6 +2989,12 @@ function addMisc(out: Map<string, Case>): void {
     ["LocalResponseNorm", () => new nn.LocalResponseNorm(2)],
     ["Softmax2d", () => new nn.Softmax2d()],
     ["RReLU", () => new nn.RReLU()],
+    // **`RReLU`'s defaults are `1/8` and `1/3`, so the row above can never see a
+    // missing decimal point.** JavaScript prints `1.0` as `1`, and both of these
+    // were interpolated bare — the row stayed green because no value it was given
+    // was ever integral. That is not a case for `lower` and `upper`; it is a case
+    // for torch having picked fractional defaults.
+    ["RReLU(정수 경계)", () => new nn.RReLU(1.0, 2.0)],
     ["EmbeddingBag", () => new nn.EmbeddingBag(5, 3)],
   ] as const) {
     out.set(`misc::repr::${name}`,

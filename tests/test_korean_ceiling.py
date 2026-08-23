@@ -99,7 +99,11 @@ CEILINGS = {
     # into the table and not words in a sentence. They move when those checks move and
     # not before — which is why every row added after the translation costs two
     # characters here, and why that is the rule working rather than a breach of it.
-    "borch-ts/test": 3110,
+    # 3110 → 3114. A golden case name — `repr::RReLU(정수 경계)`, four characters —
+    # added on the Korean side of the case table because that is where the names live
+    # and they are keys, not prose: the Python and TypeScript tables have to agree on
+    # the string or the row reconciles against nothing. Same rule as the markers above.
+    "borch-ts/test": 3114,
 }
 
 

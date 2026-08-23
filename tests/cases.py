@@ -5945,6 +5945,16 @@ def misc_cases(inp=None):
         lambda L: F(L).rrelu(L.tensor(neg), lower=0.2, upper=0.4,
                              training=False))
     add("repr::RReLU", lambda L: repr(L.nn.RReLU()))
+    # **The defaults here are `1/8` and `1/3`, so the case above can never see a
+    # missing decimal point.** JavaScript prints `1.0` as `1`, and borch.ts printed
+    # both of these bare — the row stayed green because no value it was ever given
+    # was integral. That is not a case for `lower` and `upper`; it is a case for
+    # torch having picked fractional defaults, and it would turn red on a change
+    # upstream that nobody here made.
+    #
+    # Wrong by construction, not by arithmetic luck: integral values, where the two
+    # spellings differ.
+    add("repr::RReLU(정수 경계)", lambda L: repr(L.nn.RReLU(1.0, 2.0)))
 
     # ── Upsampling — the two old names ──
     add("층::UpsamplingNearest2d",
