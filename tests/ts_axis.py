@@ -116,7 +116,18 @@ def refused():
     """
     from borch import _tensor
 
-    factories = ("_bind_gone", "_bind_absent", "_needs_sparse", "_bind_absent_dtype")
+    # **`_sparse_only` was missing from this tuple and three stubs were being
+    # counted as gaps** — `resize_as_sparse_`, `sparse_resize_` and
+    # `sparse_resize_and_clear_`, all built by it and all carrying
+    # `_sparse_only.<locals>.method`.
+    #
+    # The docstring above names the hazard exactly ("a refusal counted as a gap
+    # looks exactly like a gap") and the floor below is what was meant to stop it.
+    # **A floor on the total cannot see partial drift.** Four factories of five
+    # still finds forty, which is comfortably over twenty, so the rule that was
+    # written to fail closed stayed open for three names.
+    factories = ("_bind_gone", "_bind_absent", "_needs_sparse", "_bind_absent_dtype",
+                 "_sparse_only")
     out = {name for name in dir(_tensor.Tensor)
            if not name.startswith("_")
            and getattr(getattr(_tensor.Tensor, name, None), "__qualname__", "")
@@ -200,6 +211,18 @@ DELIBERATE: dict[str, str] = {
     **{f"nn::{n}": "borch.ts's LazyModule has no parameters before it is built — "
                    "not uninitialised ones, none — so there is nothing to name"
        for n in ("UninitializedParameter", "UninitializedBuffer")},
+    # **The sparse queries, which the core answers only because a dense tensor is
+    # the trivial case.** `dense_dim` is the rank, `sparse_dim` is 0, `to_dense` is
+    # the tensor itself, and `is_coalesced` refuses because a dense tensor has no
+    # coalesce state at all. Every one is a question about a layout borch.ts does
+    # not have, and the three that answer do so by having nothing to answer about.
+    #
+    # Held apart from the `_sparse_only` stubs above: those three raise, and these
+    # four return. A name that answers and a name that refuses are different rows
+    # even when the reason underneath is one reason.
+    **{f"Tensor::{n}": "a question about the sparse layout; borch.ts has one layout, "
+                       "and the core only answers because dense is the trivial case"
+       for n in ("dense_dim", "sparse_dim", "is_coalesced", "to_dense")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

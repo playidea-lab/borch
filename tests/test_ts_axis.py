@@ -103,7 +103,12 @@ FROZEN = {
     # The golden cases are written out by hand on both sides rather than generated:
     # a table cannot check a table, because the same list would produce both.
     # 76 unchanged — the adaptive work was all `nn.functional`.
-    "Tensor": 76,
+    # 76 → 73. The three `_sparse_only` stubs moved to `REFUSALS`, where they
+    # always belonged. Four more (`dense_dim`, `sparse_dim`, `is_coalesced`,
+    # `to_dense`) took reasons rather than implementations: every one is a question
+    # about a layout borch.ts does not have, and the three that answer do so only
+    # because dense is the trivial case. Unexplained gaps 47 → 40.
+    "Tensor": 73,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's
@@ -226,7 +231,16 @@ FROZEN = {
 # gaps and pinned separately: a refusal turning into a gap, or a gap being quietly
 # reclassified as a refusal, are both movements worth seeing.
 REFUSALS = {
-    "Tensor": 40,
+    # **40 → 43, and the three were being counted as gaps.**
+    # `resize_as_sparse_`, `sparse_resize_` and `sparse_resize_and_clear_` are all
+    # built by `_sparse_only`, which was not in `ts_axis.refused()`'s factory tuple.
+    #
+    # That function's docstring names this exact hazard — *a refusal counted as a
+    # gap looks exactly like a gap* — and it has a floor that raises below twenty
+    # so the rule "fails closed". **A floor on the total cannot see partial
+    # drift.** Four factories of five still found forty, comfortably over the
+    # floor, and three names sat in the wrong column the whole time.
+    "Tensor": 43,
     "nn": 0,
     "nn.functional": 0,
     "optim": 0,

@@ -435,7 +435,12 @@ SHORTER = {
 # torch's docstring, it is weaker than `inspect`'s, and the weakness is carried in the
 # result rather than in a footnote — deferred rows are compared by arity alone and
 # counted in a separate `prose` column that is never folded into `agree`.
-UNREADABLE_IN_TORCH = 59
+# 59 → 58, and **it moved for a reason on the other axis.** `compare()` skips
+# `Tensor` rows that `ts_axis.refused()` names, and that function was missing the
+# `_sparse_only` factory — so three sparse stubs were being counted as gaps there
+# and filed here. One of them is C in torch, and it left this bucket when the
+# classification was fixed. Not a torch upgrade; a correction one file over.
+UNREADABLE_IN_TORCH = 58
 
 # **How many rows each namespace actually gets judged on, out of how many are filed.**
 # The measurement's docstring prints this table as prose, and prose goes stale in
@@ -482,7 +487,11 @@ JUDGED = {
     # column. And torch's docstring can simply be wrong — `atanh_` documents an
     # argument it refuses. That one is named in `TORCH_DOC_IS_WRONG` rather than
     # implemented: a check must not drive the code somewhere torch will not go.
-    "Tensor": (386, 512),
+    # 512 → 509 filed. Three `_sparse_only` stubs stopped being filed here when
+    # `ts_axis.refused()` learned to recognise their factory — they were refusals
+    # all along. **The judged count did not move**, which is what says nothing was
+    # lost: 386 of a smaller total is the same 386.
+    "Tensor": (386, 509),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
