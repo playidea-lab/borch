@@ -125,7 +125,10 @@ CEILINGS = {
     # binaries beside the function spelling that had been asked for months. Names
     # are keys, so both tables have to say the same string or the row reconciles
     # against nothing.
-    "borch-ts/test": 3148,
+    # 3148 → 3155. Two case names, `텐서 지수` and `수 지수` — `pow` with a tensor
+    # exponent beside `pow` with a number. The two are different kernels with
+    # different backwards, so one name could not stand for both.
+    "borch-ts/test": 3155,
 }
 
 

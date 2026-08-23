@@ -4565,6 +4565,15 @@ function addNewFn(out: Map<string, Case>, inp: Inputs): void {
     ["fmax(NaN 건너뜀)", () => nanSkip(withnan(), zeros5(), "maximum")],
     ["fmin(NaN 건너뜀)", () => nanSkip(withnan(), zeros5(), "minimum")],
     ["float_power", () => inp.get("xp").powScalar(2)],
+    // **`pow` with a tensor exponent** — the half `powScalar` cannot do, and the
+    // reason `pow` is not that method renamed: the elementwise kernel carries a
+    // two-sided backward and the scalar one does not.
+    ["pow(텐서 지수)",
+      () => inp.get("xp").pow(Tensor.from([2, 3, 0.5, 1, 2, 0], [6]))],
+    ["pow(수 지수)", () => inp.get("xp").pow(3)],
+    ["expand_as", () => Tensor.from([1, 2], [2, 1]).expandAs(Tensor.zeros([2, 3]))],
+    ["reshape_as", () => inp.get("xp").reshapeAs(Tensor.zeros([2, 3]))],
+    ["view_as", () => inp.get("xp").viewAs(Tensor.zeros([3, 2]))],
     ["logical_xor", () => {
       const a = Tensor.from([1, 0, 1, 0], [4]).binary("ne", Tensor.full([], 0));
       const b = Tensor.from([1, 1, 0, 0], [4]).binary("ne", Tensor.full([], 0));

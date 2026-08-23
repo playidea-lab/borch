@@ -730,8 +730,25 @@ class Tensor:
         return Tensor(_np.asarray(o, dtype=self.data.dtype)).__truediv__(self)
 
     def __pow__(self, p):
+        """**A tensor exponent works now.** It used to refuse, with no reason beyond
+        the refusal — and borch.ts had the kernel with both derivatives written all
+        along (`kernels.ts`, `pow`). torch has had it since always.
+
+        The second derivative is the one an implementation forgets:
+        `d(aᵇ)/db = aᵇ·ln a`, which is why the exponent side needs the *output* and
+        not just the inputs. It is 0 wherever `a` is 0 — `0ᵇ` does not move with `b`
+        — and `ln 0` is −∞, so that position is written rather than computed.
+        """
         if isinstance(p, Tensor):
-            _unsupported("a tensor exponent")
+            return self._binary(
+                p, lambda a, b: a ** b,
+                # `b·a^(b−1)` is `0·∞` at a = b = 0 and comes out NaN; the term
+                # is 0 wherever `b` is, whatever `a` does, and torch says 0.
+                lambda g, a, b: g * _np.where(b == 0, 0.0,
+                                              b * a ** (b - 1)),
+                lambda g, a, b: g * _np.where(a == 0, 0.0,
+                                              a ** b * _np.log(_np.abs(a) + (a == 0))),
+                "PowBackward0")
         return self._make(self.data ** p, (self,), lambda g: (g * p * self.data ** (p - 1),),
                           "PowBackward0")
 

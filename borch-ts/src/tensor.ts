@@ -2298,7 +2298,7 @@ export class Tensor implements Node<Tensor> {
    * moment views exist it has to be decided how far an in-place operation spreads —
    * which is not yet the time to decide.
    */
-  private viewAs(
+  private stridedView(
     rules: readonly AxisRule[],
     offset: number,
     outShape: readonly number[],
@@ -2438,7 +2438,7 @@ export class Tensor implements Node<Tensor> {
       rules.push({ size, stride, kind: "lin", wrap: size });
       outShape.push(size);
     }
-    return this.viewAs(rules, 0, outShape, "ExpandBackward0");
+    return this.stridedView(rules, 0, outShape, "ExpandBackward0");
   }
 
   /**
@@ -2465,7 +2465,7 @@ export class Tensor implements Node<Tensor> {
       });
       outShape.push(dim * k);
     }
-    return this.viewAs(rules, 0, outShape, "RepeatBackward0");
+    return this.stridedView(rules, 0, outShape, "RepeatBackward0");
   }
 
   /**
@@ -2485,7 +2485,7 @@ export class Tensor implements Node<Tensor> {
       kind: "lin" as const,
       wrap: this.shape[src] ?? 1,
     }));
-    return this.viewAs(rules, 0, order.map((src) => this.shape[src] ?? 1), "TransposeBackward0");
+    return this.stridedView(rules, 0, order.map((src) => this.shape[src] ?? 1), "TransposeBackward0");
   }
 
   /**
@@ -2517,7 +2517,7 @@ export class Tensor implements Node<Tensor> {
       });
       outShape.push(this.shape[d] ?? 1);
     }
-    return this.viewAs(rules, offset, outShape, "SelectBackward0");
+    return this.stridedView(rules, offset, outShape, "SelectBackward0");
   }
 
   /**
@@ -2559,7 +2559,7 @@ export class Tensor implements Node<Tensor> {
       size: length, stride: rowStride + colStride, kind: "lin", wrap: length,
     });
     const outShape = [...rest.map((i) => this.shape[i] ?? 1), length];
-    return this.viewAs(rules, start, outShape, "DiagonalBackward0");
+    return this.stridedView(rules, start, outShape, "DiagonalBackward0");
   }
 
   /**
@@ -2622,7 +2622,7 @@ export class Tensor implements Node<Tensor> {
       kind: d === axis ? ("rev" as const) : ("lin" as const),
       wrap: size,
     }));
-    return this.viewAs(rules, 0, this.shape, "FlipBackward0");
+    return this.stridedView(rules, 0, this.shape, "FlipBackward0");
   }
 
   fliplr(): Tensor {
@@ -2655,20 +2655,20 @@ export class Tensor implements Node<Tensor> {
         { size: rows, stride: rowStride, kind: "rev", wrap: rows },
         { size: cols, stride: colStride, kind: "rev", wrap: cols },
       ];
-      return this.viewAs(rules, 0, [rows, cols], "Rot90Backward0");
+      return this.stridedView(rules, 0, [rows, cols], "Rot90Backward0");
     }
     if (turns === 1) {
       const rules: AxisRule[] = [
         { size: cols, stride: colStride, kind: "rev", wrap: cols },
         { size: rows, stride: rowStride, kind: "lin", wrap: rows },
       ];
-      return this.viewAs(rules, 0, [cols, rows], "Rot90Backward0");
+      return this.stridedView(rules, 0, [cols, rows], "Rot90Backward0");
     }
     const rules: AxisRule[] = [
       { size: cols, stride: colStride, kind: "lin", wrap: cols },
       { size: rows, stride: rowStride, kind: "rev", wrap: rows },
     ];
-    return this.viewAs(rules, 0, [cols, rows], "Rot90Backward0");
+    return this.stridedView(rules, 0, [cols, rows], "Rot90Backward0");
   }
 
   /**
@@ -2701,7 +2701,7 @@ export class Tensor implements Node<Tensor> {
     // The inside of the window attaches as the last axis.
     rules.push({ size, stride: axisStride, kind: "lin", wrap: size });
     outShape.push(size);
-    return this.viewAs(rules, 0, outShape, "UnfoldBackward0");
+    return this.stridedView(rules, 0, outShape, "UnfoldBackward0");
   }
 
   /**
@@ -2725,7 +2725,7 @@ export class Tensor implements Node<Tensor> {
         wrap: d === axis ? each : size,
       }));
       const outShape = this.shape.map((size, d) => (d === axis ? each : size));
-      out.push(this.viewAs(rules, k * each * (own[axis] ?? 1), outShape, "SliceBackward0"));
+      out.push(this.stridedView(rules, k * each * (own[axis] ?? 1), outShape, "SliceBackward0"));
     }
     return out;
   }
@@ -2817,7 +2817,7 @@ export class Tensor implements Node<Tensor> {
       kind: "lin" as const,
       wrap: this.shape[s] ?? 1,
     }));
-    return this.viewAs(rules, 0, order.map((s) => this.shape[s] ?? 1), "PermuteBackward0");
+    return this.stridedView(rules, 0, order.map((s) => this.shape[s] ?? 1), "PermuteBackward0");
   }
 
   /**
@@ -2834,7 +2834,7 @@ export class Tensor implements Node<Tensor> {
       wrap: d === axis ? length : size,
     }));
     const outShape = this.shape.map((size, d) => (d === axis ? length : size));
-    return this.viewAs(rules, start * (own[axis] ?? 1), outShape, "SliceBackward0");
+    return this.stridedView(rules, start * (own[axis] ?? 1), outShape, "SliceBackward0");
   }
 
   /**
@@ -2856,7 +2856,7 @@ export class Tensor implements Node<Tensor> {
       wrap: s,
       ...(d === axis ? { bias } : {}),
     }));
-    return this.viewAs(rules, 0, this.shape, "RollBackward0");
+    return this.stridedView(rules, 0, this.shape, "RollBackward0");
   }
 
   /**
@@ -3263,7 +3263,7 @@ export class Tensor implements Node<Tensor> {
       wrap: d === axis ? repeats : size,
     }));
     const outShape = this.shape.map((s, d) => (d === axis ? s * repeats : s));
-    return this.viewAs(rules, 0, outShape, "RepeatInterleaveBackward0");
+    return this.stridedView(rules, 0, outShape, "RepeatInterleaveBackward0");
   }
 
   /**
@@ -7479,6 +7479,52 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.unary("logical_not");
   }
 
+
+
+  // ── Five more names over work that was already here ───────────────────
+  //
+  // Fourth time in one session that a name read as absent while the operation sat
+  // beside it under a spelling borch.ts chose: `default_collate` was `stackItems`,
+  // `avg_pool1d` was `poolND("avg", …)`, sixteen unaries were declared nowhere, and
+  // these are `powScalar`, `broadcastTo`, `reshape`, `view` and `size`.
+
+  /**
+   * `torch.Tensor.pow`. **The exponent may be a tensor**, which is why this is not
+   * simply `powScalar` renamed — that one takes a number, and the `pow` kernel next
+   * to it takes the elementwise case with its own two-sided backward.
+   */
+  pow(exponent: Tensor | number): Tensor {
+    return typeof exponent === "number"
+      ? this.powScalar(exponent)
+      : this.binary("pow", exponent);
+  }
+
+  /** How many elements. `torch.Tensor.numel`. */
+  numel(): number {
+    return this.size;
+  }
+
+  /** This, broadcast to `other`'s shape. `torch.Tensor.expand_as`. */
+  expandAs(other: Tensor): Tensor {
+    return this.broadcastTo(other.shape);
+  }
+
+  /** This, reshaped to `other`'s shape. `torch.Tensor.reshape_as`. */
+  reshapeAs(other: Tensor): Tensor {
+    return this.reshape(other.shape);
+  }
+
+  /**
+   * This, viewed as `other`'s shape. `torch.Tensor.view_as`.
+   *
+   * **The name was taken.** A private helper that builds a strided view held
+   * `viewAs`, which is a public torch name meaning something else entirely — so
+   * `x.viewAs(y)` was either a type error or, from inside the class, a call into
+   * the strider with an argument it does not take. It is `stridedView` now.
+   */
+  viewAs(other: Tensor): Tensor {
+    return this.view(...other.shape);
+  }
 
   // ── Six binary names the core has and this did not ────────────────────
   //

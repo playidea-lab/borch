@@ -479,13 +479,25 @@ BINARY_OPS = (
     "logical_or", "eq", "lt", "gt",
 )
 
-# **Pairs this library refuses on purpose.** `pow` with a tensor exponent is not in
-# the browser subset and says so; the row is here rather than absent so that the
-# refusal is a decision on the record instead of a gap in a sweep.
-REFUSED_PAIRS = {
-    ("pow", a, b): "a tensor exponent is not in the browser subset"
-    for a in ("bool", "int64", "float32") for b in ("bool", "int64", "float32")
-}
+# **Pairs this library refuses on purpose.** Empty now, and the way it emptied is
+# the point.
+#
+# All nine entries were `pow` with a tensor exponent. The note here said the row was
+# recorded "so that the refusal is a decision on the record instead of a gap in a
+# sweep" — and reading `__pow__` there was no decision under it, only
+# `_unsupported("a tensor exponent")` with nothing beside it. torch has had the
+# operation always, and **borch.ts had the kernel with both derivatives already
+# written** (`kernels.ts`, `pow`). So it was a gap wearing a refusal's clothes, and
+# this table was what dressed it.
+#
+# `test_no_refused_pair_has_started_working` is what caught the change, which is
+# the direction that matters: a refusal quietly becoming an answer is how a table
+# like this rots, and it fired on the same run.
+#
+# The gradient is the half a table cannot check. `d(aᵇ)/db = aᵇ·ln a` needs the
+# output rather than the inputs, and `d(aᵇ)/da = b·a^(b−1)` is `0·∞` at a = b = 0 —
+# NaN by the formula, 0 in torch. Both ends measured against torch before landing.
+REFUSED_PAIRS = {}
 
 # **Its own samples, all the same length.** Reusing `DTYPES` cost four of every nine
 # pairs and said nothing: its `int64` sample is three elements and its `bool` is two,

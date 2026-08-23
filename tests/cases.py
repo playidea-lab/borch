@@ -3193,6 +3193,19 @@ def new_function_cases(inp=None):
     add("fmin(NaN 건너뜀)",
         lambda L: L.fmin(L.tensor(withnan), L.tensor(np.zeros(5, dtype=np.float32))))
     add("float_power", lambda L: L.float_power(L.tensor(pos), 2.0))
+    # **`pow` with a tensor exponent**, which is the half `powScalar` cannot do and
+    # the reason borch.ts's `pow` is not that method renamed: the elementwise kernel
+    # has a two-sided backward and the scalar one does not.
+    add("pow(텐서 지수)",
+        lambda L: L.tensor(pos).pow(L.tensor(np.array([2., 3., 0.5, 1., 2., 0.],
+                                                      dtype=np.float32))))
+    add("pow(수 지수)", lambda L: L.tensor(pos).pow(3))
+    add("expand_as", lambda L: L.tensor(np.array([[1.], [2.]], dtype=np.float32))
+        .expand_as(L.tensor(np.zeros((2, 3), dtype=np.float32))))
+    add("reshape_as", lambda L: L.tensor(pos)
+        .reshape_as(L.tensor(np.zeros((2, 3), dtype=np.float32))))
+    add("view_as", lambda L: L.tensor(pos)
+        .view_as(L.tensor(np.zeros((3, 2), dtype=np.float32))))
     add("logical_xor",
         lambda L: L.logical_xor(L.tensor(np.array([1., 0., 1., 0.], dtype=np.float32)),
                                 L.tensor(np.array([1., 1., 0., 0.], dtype=np.float32))))

@@ -4,7 +4,7 @@
  "korean": {
   "done": 685,
   "stale": 0,
-  "missing": 108
+  "missing": 113
  },
  "modules": [
   {
@@ -3815,6 +3815,54 @@
        }
       },
       {
+       "name": "pow",
+       "signature": "pow(exponent: Tensor | number): Tensor",
+       "doc": "`torch.Tensor.pow`. **The exponent may be a tensor**, which is why this is not\nsimply `powScalar` renamed — that one takes a number, and the `pow` kernel next\nto it takes the elementwise case with its own two-sided backward.",
+       "section": {
+        "ko": "Five more names over work that was already here",
+        "en": "Five more names over work that was already here"
+       }
+      },
+      {
+       "name": "numel",
+       "signature": "numel(): number",
+       "doc": "How many elements. `torch.Tensor.numel`.",
+       "section": {
+        "ko": "Five more names over work that was already here",
+        "en": "Five more names over work that was already here"
+       }
+      },
+      {
+       "name": "expandAs",
+       "signature": "expandAs(other: Tensor): Tensor",
+       "doc": "This, broadcast to `other`'s shape. `torch.Tensor.expand_as`.",
+       "torch": "expand_as",
+       "section": {
+        "ko": "Five more names over work that was already here",
+        "en": "Five more names over work that was already here"
+       }
+      },
+      {
+       "name": "reshapeAs",
+       "signature": "reshapeAs(other: Tensor): Tensor",
+       "doc": "This, reshaped to `other`'s shape. `torch.Tensor.reshape_as`.",
+       "torch": "reshape_as",
+       "section": {
+        "ko": "Five more names over work that was already here",
+        "en": "Five more names over work that was already here"
+       }
+      },
+      {
+       "name": "viewAs",
+       "signature": "viewAs(other: Tensor): Tensor",
+       "doc": "This, viewed as `other`'s shape. `torch.Tensor.view_as`.\n\n**The name was taken.** A private helper that builds a strided view held\n`viewAs`, which is a public torch name meaning something else entirely — so\n`x.viewAs(y)` was either a type error or, from inside the class, a call into\nthe strider with an argument it does not take. It is `stridedView` now.",
+       "torch": "view_as",
+       "section": {
+        "ko": "Five more names over work that was already here",
+        "en": "Five more names over work that was already here"
+       }
+      },
+      {
        "name": "hypot",
        "signature": "hypot(other: Tensor): Tensor",
        "doc": "`sqrt(x² + y²)`.",
@@ -6701,7 +6749,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 694,
+   "count": 699,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -15763,5 +15811,5 @@
    "count": 9
   }
  ],
- "total": 2070
+ "total": 2075
 }

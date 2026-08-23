@@ -78,7 +78,18 @@ FROZEN = {
     # Third time today that a name read as absent while the work sat next to it:
     # `default_collate` was `stackItems`, `avg_pool1d` was `poolND("avg", …)`, and
     # these were kernels without a declaration.
-    "Tensor": 94,
+    # 94 → 89. `pow`, `numel`, `expand_as`, `reshape_as`, `view_as` — the fourth
+    # time in one session that a name read as absent while the operation sat beside
+    # it under a spelling borch.ts chose. `powScalar`, `size`, `broadcastTo`,
+    # `reshape` and `view` were all there.
+    #
+    # **`view_as` could not be added until a private method gave the name back.**
+    # A strided-view helper held `viewAs` — a public torch name meaning something
+    # else entirely — so `x.viewAs(y)` was a type error from outside and, from
+    # inside the class, a call into the strider with an argument it does not take.
+    # It is `stridedView` now. A private helper should not squat on a name the
+    # library it imitates has already spent.
+    "Tensor": 89,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's

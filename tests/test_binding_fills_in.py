@@ -85,7 +85,10 @@ ALIASED = {
     # `maxPoolWithIndices`, and the axis that counts names could not say so. That is
     # what this table is for, and it is also why the row could retire in an
     # afternoon: it recorded where the work already was.
-    "numel": "size",
+    # `numel` retired for the same reason as `max_pool1d_with_indices` above: the
+    # count was `size` all along and now it is also `numel`. **Two rows in this
+    # table retired the same day**, both to one-line delegations, both because a
+    # different check finally said the name was missing rather than the feature.
     "scatter": "scatterSet",
     "swapdims": "swapaxes",
     "take": "indexSelect (after flattening)",
