@@ -69,8 +69,18 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-TS = ROOT / "borch-ts" / "src" / "optim.ts"
-BINDING = ROOT / "borch_webgpu" / "_optim.py"
+
+# **Two pairs, one parser.** The pattern is not the optimizers' — it is every place
+# Python calls borch.ts positionally, and `nn` is the larger of the two. A second copy
+# of the argument reader would be a second place for one bug, which this repository
+# paid for once already the day three of them had the same variadic defect.
+#
+# `namespace` is what the call looks like on the Python side; a class arrives as
+# `_ts.nn.Linear.new(` and a free function as `_ts.nn.softmax(`, and both are read.
+SOURCES = (
+    ("optim", ROOT / "borch_webgpu" / "_optim.py", ROOT / "borch-ts" / "src" / "optim.ts"),
+    ("nn", ROOT / "borch_webgpu" / "_nn.py", ROOT / "borch-ts" / "src" / "nn.ts"),
+)
 
 # What is known to be wrong and not yet fixable here. Each row is removed by the fix,
 # and `test_no_owed_row_describes_something_that_now_works` fails if one is left behind.
@@ -80,14 +90,47 @@ BINDING = ROOT / "borch_webgpu" / "_optim.py"
 # one-prose-reason problem this repository keeps finding, and it very nearly went in
 # here: the first version of this table was keyed by name and hid exactly that.
 OWED = {
-    # borch.ts's `Adagrad` has no `maximize`. The binding accepts the argument so that
-    # it holds torch's position — `Adagrad(p, 0.1, 0, 0, 0.5)` has to reach
-    # `initial_accumulator_value` and not something else — and **raises when it is
-    # actually asked for**, which is the one shape this check cannot see: it reads the
-    # call site, and a refusal happens before the call.
-    ("Adagrad", "maximize"):
-        "accepted to hold torch's position, and refused rather than dropped — the "
-        "binding raises NotImplementedError before reaching borch.ts",
+    # ── nn ───────────────────────────────────────────────────────────────────
+    #
+    # **Keyed by the pair as well.** A reason about `_optim.py` must not excuse
+    # anything in `_nn.py`; that is the one-prose-reason problem this file already
+    # records one level down, and two pairs sharing one table is the same mistake
+    # one level up.
+    ("nn", "Bilinear", "bias"):
+        "borch.ts's `Bilinear` takes `(in1, in2, out)` and always builds a bias, so "
+        "`Bilinear(..., bias=False)` gets one anyway. The argument is held to keep "
+        "torch's position; the fix is a flag on the borch.ts constructor.",
+    ("nn", "_gumbel_softmax", "eps"):
+        "borch.ts's `gumbelSoftmax` has no `eps` — the floor under the log of a "
+        "uniform draw. Ours uses its own, so a caller's value is ignored rather than "
+        "refused.",
+    ("nn", "_mha_forward", "dropout_p"):
+        "borch.ts's `multiHeadAttentionForward` performs no dropout at all, so there "
+        "is nothing to hand it to.",
+    ("nn", "_mha_forward", "training"):
+        "only meaningful with dropout, which that function does not do. It goes with "
+        "`dropout_p`.",
+    ("nn", "_mha_forward", "embed_dim_to_check"):
+        "torch uses it as an assertion and nothing else. Ours does not assert it, "
+        "which is a missing check rather than a dropped computation — and it is here "
+        "rather than nowhere so that the difference is written down.",
+    ("nn", "_mha_forward", "q_proj_weight"):
+        "reachable only under `use_separate_proj_weight`, which this function refuses "
+        "loudly. **The refusal is on a different argument**, so nothing above sees "
+        "that these three are unreachable — which is exactly why the row exists.",
+    ("nn", "_mha_forward", "k_proj_weight"): "as `q_proj_weight`.",
+    ("nn", "_mha_forward", "v_proj_weight"): "as `q_proj_weight`.",
+    # ── optim ────────────────────────────────────────────────────────────────
+    # **`Adagrad.maximize` used to be here and the check can see it now.** The row read
+    # "refused rather than dropped — which is the one shape this check cannot see: it
+    # reads the call site, and a refusal happens before the call". Widening the second
+    # branch from *does it appear in the call* to *does the body mention it at all* made
+    # a refusal visible, and `test_no_owed_row_describes_something_that_now_works` took
+    # the row out on the spot.
+    #
+    # Worth the four lines it costs: **an exemption disappeared because the instrument
+    # improved**, not because anything was fixed. That is the direction this table is
+    # supposed to shrink in and the only time it has.
     # **It was six before that.** Every row came out with the fix that made it false:
     # borch.ts gained `weightDecay` on eight optimizers (`414af4d`) and the five call
     # sites here now pass it. The table stays because the next dropped argument needs
@@ -97,8 +140,9 @@ OWED = {
 
 # Call sites with no fixed argument list to compare. **Not a skip — a reason.**
 NOT_COMPARABLE = {
-    "_sched": "a factory: it takes the borch.ts name at runtime and forwards *args, so "
-              "there is no call site with a fixed shape to walk",
+    ("optim", "_sched"):
+        "a factory: it takes the borch.ts name at runtime and forwards *args, so there "
+        "is no call site with a fixed shape to walk",
 }
 
 
@@ -132,17 +176,34 @@ def _split(txt):
     return out
 
 
-def _constructors():
-    src = TS.read_text()
+def _declarations(path):
+    """`{name: [parameters]}` for the borch.ts side — **classes and free functions.**
+
+    A class arrives at the binding as `X.new(...)` and a free function as `x(...)`, and
+    the same comparison serves both. Reading only the classes was enough while this file
+    watched `optim.ts`, where everything is a class; `nn.ts` is nine free functions and a
+    hundred and twenty-nine classes, and taking only one kind would have left the other
+    unlooked-at with nothing saying so.
+    """
+    src = path.read_text()
     found = {}
-    for m in re.finditer(r"export class (\w+) extends", src):
+    # **`extends` is optional.** Requiring it read `SequentialLR` and
+    # `TripletMarginWithDistanceLoss` as absent — two classes that extend nothing — and
+    # a declaration the parser cannot find is a call site with no rule. They were the
+    # only two, and the check that they are readable is the assertion below, not this
+    # comment.
+    for m in re.finditer(r"export class (\w+)(?: extends \w+)? \{", src):
         after = re.search(r"constructor\(", src[m.end():])
         if not after:
             continue
         args = _split(_balanced(src, m.end() + after.end() - 1)[1:-1])
-        found[m.group(1)] = [
+        found[("class", m.group(1))] = [
             re.sub(r"^(private |readonly |public )+", "", a).split(":")[0].split("=")[0].strip()
             for a in args]
+    for m in re.finditer(r"export function (\w+)\(", src):
+        args = _split(_balanced(src, m.end() - 1)[1:-1])
+        found[("function", m.group(1))] = [
+            a.split(":")[0].split("=")[0].strip() for a in args]
     return found
 
 
@@ -151,9 +212,31 @@ def _camel(name):
     return head + "".join(w.capitalize() for w in rest)
 
 
-def _call_sites():
-    """`(python name, ts name, python parameters, arguments passed)` per optimizer."""
-    src = BINDING.read_text()
+def _reachable(body, params):
+    """Which parameters a call can still be carrying, **through the locals.**
+
+    `_ctc_loss` builds `rows` and `lens` out of `targets` and `target_lengths` and hands
+    those over, so asking whether the argument expression names the parameter answers no
+    about a parameter that is plainly there. Walking `name = expr` assignments closes
+    that, and without it the check manufactures a finding — which is the fault this file
+    exists to catch, arriving inside the instrument for the third time.
+
+    Deliberately shallow: it follows assignments and nothing else. Anything cleverer
+    would start agreeing with things it has not read.
+    """
+    carries = {p: {p} for p in params}
+    for _ in range(3):                                          # a short fixed point
+        for m in re.finditer(r"^\s*(\w+)\s*=\s*(.+)$", body, re.M):
+            local, expr = m.group(1), m.group(2)
+            for p in params:
+                if any(n in carries and p in carries[n] for n in _mentions(expr)):
+                    carries.setdefault(local, set()).add(p)
+    return carries
+
+
+def _call_sites(binding, namespace):
+    """`(python name, ts key, python parameters, arguments passed, body)` per call."""
+    src = binding.read_text()
     for m in re.finditer(r"^def (\w+)\(", src, re.M):
         # **The bare `*` is a marker, not a parameter.** It arrived the day the
         # optimizers took torch's argument lists, where `maximize` is keyword-only,
@@ -162,14 +245,28 @@ def _call_sites():
         # exists to catch one level down.
         params = [a.split(":")[0].split("=")[0].strip()
                   for a in _split(_balanced(src, m.end() - 1)[1:-1])]
-        params = [p for p in params if p and p != "*"]
+        # **`*`, `*args` and `**kw` are markers, not parameters.** The bare `*` arrived
+        # the day the optimizers took torch's lists, where `maximize` is keyword-only,
+        # and this read it as an argument named `*` that the call never passes. `**kw`
+        # is the same shape and arrived with `nn`: a catch-all that by definition is not
+        # forwarded, reported once per function as a dropped argument. Two manufactured
+        # findings from one habit of reading a signature as a list of names.
+        params = [p for p in params if p and not p.startswith("*")]
         end = src.find("\ndef ", m.end())
-        body = src[m.end(): end if end > 0 else len(src)]
-        call = re.search(r"_ts\.optim\.(\w+)\.new\(", body)
+        # **The body starts after the signature, not at it.** Slicing from the opening
+        # parenthesis leaves the parameter list inside `body`, so every parameter is
+        # "mentioned" and the branch below credits all of them. Written that way for one
+        # measurement it reported **zero findings across both pairs**, including three
+        # already established by hand — a check that passes everything, produced while
+        # weakening a rule that had been reporting too much.
+        signature = _balanced(src, m.end() - 1)
+        body = src[m.end() - 1 + len(signature): end if end > 0 else len(src)]
+        call = re.search(rf"_ts\.{namespace}\.(\w+)(\.new)?\(", body)
         if not call:
             continue
         passed = _split(_balanced(body, call.end() - 1)[1:-1])
-        yield m.group(1), call.group(1), params, passed
+        kind = "class" if call.group(2) else "function"
+        yield m.group(1), (kind, call.group(1)), params, passed, body
 
 
 _NAMES = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -186,10 +283,17 @@ def _mentions(expr):
     return set(_NAMES.findall(expr))
 
 
-def _dropped(ts_params, py_params, passed):
+def _dropped(ts_params, py_params, passed, body=""):
     """`{argument: what is wrong with it}` — per argument, so a reason about one of
     them cannot excuse the rest."""
     lost = {}
+    carries = _reachable(body, py_params)
+
+    def reaches(expr, name):
+        """Whether this argument expression is carrying that parameter, directly or
+        through a local built out of it."""
+        return any(name in carries.get(n, {n}) for n in _mentions(expr))
+
     if len(passed) > len(ts_params):
         # The surplus is charged to the last argument passed, which is the one falling
         # off the end into nothing.
@@ -200,33 +304,51 @@ def _dropped(ts_params, py_params, passed):
         if want in ts_params:
             at = ts_params.index(want)
             got = passed[at] if at < len(passed) else "(nothing)"
-            if name not in _mentions(got):
+            if not reaches(got, name):
                 lost[name] = f"belongs at position {at} and the call has {got}"
-        elif not any(name in _mentions(expr) for expr in passed):
-            lost[name] = "is accepted and never passed"
+        elif not any(reaches(expr, name) for expr in passed):
+            # **An argument can be honoured without being forwarded**, and three shapes
+            # of that live in `_nn.py`: refused before the call (`bias_k` raises),
+            # acted on by branching (`is_causal` builds the mask), and handled after it
+            # (`need_weights` chooses what to return; `batch_first` goes to the Python
+            # wrapper). Demanding that every parameter appear *in the call* reports all
+            # three as dropped, which is thirteen manufactured findings in one function.
+            #
+            # So this branch asks the weaker question — is it touched at all — while the
+            # positional branch above stays strict. An argument the body never mentions
+            # is the defect this file was written for: accepted, discarded, silent.
+            if name not in _mentions(body):
+                lost[name] = "is accepted and the body never mentions it"
     return lost
 
 
-def test_no_optimizer_drops_an_argument_it_accepts():
-    """Anything not written down as owed is a defect nobody has recorded."""
-    ctors = _constructors()
-    surprises = []
-    for name, ts_name, py_params, passed in _call_sites():
-        if name in NOT_COMPARABLE:
-            continue
-        ts_params = ctors.get(ts_name)
-        assert ts_params is not None, (
-            f"{name} forwards to borch.ts's {ts_name} and this file could not read that "
-            "constructor. A call site with nothing to compare against is a call site with "
-            "no rule — fix the parsing rather than letting it pass.")
-        for argument, wrong in _dropped(ts_params, py_params, passed).items():
-            if (name, argument) in OWED:
+def _live():
+    """`{(pair, name, argument): what is wrong}` across every source pair."""
+    found = {}
+    for pair, binding, ts in SOURCES:
+        declared = _declarations(ts)
+        for name, key, py_params, passed, body in _call_sites(binding, pair):
+            if (pair, name) in NOT_COMPARABLE:
                 continue
-            surprises.append(f"{name} -> {ts_name}: `{argument}` {wrong}")
+            ts_params = declared.get(key)
+            assert ts_params is not None, (
+                f"{binding.name}'s `{name}` forwards to borch.ts's {key[1]} and this "
+                f"file could not read that {key[0]}. **A call site with nothing to "
+                "compare against is a call site with no rule** — fix the parsing rather "
+                "than letting it pass.")
+            for argument, wrong in _dropped(ts_params, py_params, passed, body).items():
+                found[(pair, name, argument)] = f"-> {key[1]}: `{argument}` {wrong}"
+    return found
+
+
+def test_no_call_site_drops_an_argument_it_accepts():
+    """Anything not written down as owed is a defect nobody has recorded."""
+    surprises = [f"{pair}.{name} {wrong}" for (pair, name, _arg), wrong
+                 in sorted(_live().items()) if (pair, name, _arg) not in OWED]
     assert not surprises, (
-        "optimizers accepting arguments that never reach borch.ts:\n    "
+        "call sites accepting arguments that never reach borch.ts:\n    "
         + "\n    ".join(surprises) +
-        "\n\nJavaScript discards surplus arguments without a word, so this trains with "
+        "\n\nJavaScript discards surplus arguments without a word, so this runs with "
         "the argument ignored and raises nothing. Fix it, or add it to `OWED` with the "
         "reason it cannot be fixed here yet.")
 
@@ -238,12 +360,9 @@ def test_no_owed_row_describes_something_that_now_works():
     reasons survived in `tests/torch_gap.py` until they were re-measured. When borch.ts
     gains the argument and the call passes it, the row has to go with the fix.
     """
-    ctors = _constructors()
-    live = {name: _dropped(ctors[ts_name], py_params, passed)
-            for name, ts_name, py_params, passed in _call_sites()
-            if name not in NOT_COMPARABLE and ts_name in ctors}
-    stale = [f"{name}.{argument}" for (name, argument) in OWED
-             if argument not in live.get(name, {})]
+    live = _live()
+    stale = [f"{pair}.{name}.{argument}" for (pair, name, argument) in OWED
+             if (pair, name, argument) not in live]
     assert not stale, (
         f"`OWED` names arguments that now reach borch.ts: {sorted(stale)}\n"
         "  Take the rows out — the defect is fixed and the row now describes nothing. A "
@@ -255,8 +374,14 @@ def test_every_call_site_is_either_compared_or_explained():
     """**Nothing is skipped quietly.** A name absent from both tables and from the
     comparison is the shape this repository has lost to repeatedly — what is off the
     list has no rule."""
-    seen = {name for name, _ts, _p, _a in _call_sites()}
-    assert seen, "no call sites were found at all — the parsing broke, not the binding"
+    seen = {(pair, name) for pair, binding, _ts in SOURCES
+            for name, _k, _p, _a, _b in _call_sites(binding, pair)}
+    assert len(seen) > 20, (
+        f"only {len(seen)} call sites were found across both pairs — the parsing broke, "
+        "not the binding. **A parser that finds nothing holds no contracts while "
+        "passing**, and this file has produced that twice: once reading `**kw` as a "
+        "parameter, once slicing the body from the signature so every parameter counted "
+        "as mentioned, which reported zero findings across both pairs.")
     unexplained = {n for n in NOT_COMPARABLE if n not in seen}
     assert not unexplained, (
         f"`NOT_COMPARABLE` names call sites that no longer exist: {sorted(unexplained)}")
