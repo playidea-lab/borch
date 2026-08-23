@@ -2941,6 +2941,9 @@ def gather(t, dim, index):
     out the probability of the correct class."""
     t = _wrap(t)
     idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
+    # numpy's own complaint is an `IndexError`; torch says `RuntimeError` here and
+    # `IndexError` for `select` two files over. Matching torch means matching that.
+    _in_bounds(idx, t.data.shape[_pos_dim(t, dim)], dim)
     out = _np.take_along_axis(t.data, idx, axis=dim)
     shape = t.data.shape
 
@@ -8222,7 +8225,9 @@ def renorm(t, p, dim, maxnorm):
     """
     t = _wrap(t)
     x = t.data
-    axes = tuple(a for a in range(x.ndim) if a != (dim % x.ndim))
+    # `dim % x.ndim` wraps rather than complains, so an axis that does not exist
+    # became the last one and the answer came back plausible. torch raises.
+    axes = tuple(a for a in range(x.ndim) if a != _pos_dim(t, dim))
     norms = _np.sum(_np.abs(x) ** p, axis=axes, keepdims=True) ** (1.0 / p)
     # torch adds a very small number so that nothing divides by zero.
     cut = norms > maxnorm
@@ -8779,8 +8784,15 @@ def mode(t, dim=-1, keepdim=False):
     4 and index 1).
 
     Measured on data with no ties that rule never surfaces.
+
+    **The axis is checked.** `mode(x, dim=7)` on a 2-D tensor answered as though the
+    axis were the last one — the fourth silent wrong answer the `dim` sweep has
+    found, and it only became visible when `_accepts_out` started preserving the
+    signature it wraps: until then this name read as `(*args, **kwargs)` and the
+    sweep skipped it for want of a `dim` to ask about.
     """
     t = _wrap(t)
+    _pos_dim(t, dim)
     data = _np.asarray(t.data)
     axis = dim % data.ndim
     moved = _np.moveaxis(data, axis, -1)

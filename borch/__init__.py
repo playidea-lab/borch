@@ -411,6 +411,14 @@ for _name in dir(Tensor):
 # calling torch**, and `tests/test_out_names.py` measures that split again. The
 # core does not lean on torch, so the table lives here and the comparison lives
 # there.
+#
+# **47 names arrived at once, and their absence was the check's own doing.** That
+# file rejected the docstrings for deciding *whether* a name takes `out=` — and then
+# enumerated its candidates from `"out=None" in fn.__doc__`, which is the same source
+# doing the other half of the job. `abs`, `acos`, `asin`, `atan`, `log2`, `log10`,
+# `square`, `norm`, `nansum`, `msort`, `diff` and the rest of the inverse-trigonometric
+# family take `out=` in torch and are documented with a bare `out`, so they were never
+# asked about. The check passed on exactly the set the table already held.
 _TAKES_OUT = frozenset("""
     add addbmm addcdiv addcmul addmm addmv addr all amax amin any arange
     baddbmm bitwise_and bitwise_left_shift bitwise_not bitwise_right_shift
@@ -431,6 +439,12 @@ _TAKES_OUT = frozenset("""
     searchsorted sgn sigmoid sign signbit sin sinc sinh sqrt stack std sub
     subtract take_along_dim tan tanh tril triu trunc var vdot vstack xlogy
     zeros
+    abs absolute acos acosh angle arccos arccosh arcsin arcsinh
+    arctan arctan2 arctanh argmax argmin asin asinh atan atan2
+    atanh bernoulli bitwise_or chain_matmul clamp_max clamp_min diff hardshrink hash_tensor
+    isin log10 log2 log_softmax logical_xor msort nansum norm orgqr
+    rad2deg slice_scatter softmax square take tensordot threshold true_divide
+    
 """.split())
 
 # The ones taking **several**, as in `out=(values, indices)`. The same rule with
@@ -438,6 +452,7 @@ _TAKES_OUT = frozenset("""
 _TAKES_OUT_TUPLE = frozenset("""
     aminmax cummax cummin frexp geqrf histogram kthvalue mode sort svd topk
     triangular_solve
+    lu qr slogdet
 """.split())
 
 
@@ -450,6 +465,19 @@ def _accepts_out(fn, name):
         return _out(fn(*args, **kwargs), out, name)
     call.__name__ = getattr(fn, "__name__", name)
     call.__doc__ = getattr(fn, "__doc__", None)
+    # **The wrapped signature has to survive**, or every check that reads one goes
+    # blind at these names. `inspect.signature` follows `__wrapped__`, so setting it
+    # is what makes `narrow(t, dim, start, length)` still read as that rather than as
+    # `(*args, **kwargs)`.
+    #
+    # It was missing, and adding 50 names to the table above is what surfaced it:
+    # `slice_scatter` and `take` dropped out of `tests/test_axis_sweep.py` the moment
+    # they were wrapped, and the two guards there — *a call entry naming a function
+    # nobody sweeps* and *a function taking an index that is in neither table* — both
+    # fired. Without those two the axes would have quietly stopped asking about
+    # whatever the table grew to cover, which is the one direction a coverage check
+    # cannot report on itself.
+    call.__wrapped__ = fn
     return call
 
 

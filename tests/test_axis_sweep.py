@@ -57,6 +57,7 @@ def _pieces(lib):
         "cell": lib.tensor(np.array([[9.]], dtype=np.float32)),
         "badi": lib.tensor(np.array([BAD_INDEX], dtype=np.int64)),
         "badi2": lib.tensor(np.array([[BAD_INDEX]], dtype=np.int64)),
+        "three": lib.tensor(np.array([[1., 2., 3.], [4., 5., 6.]], dtype=np.float32)),
     }
 
 
@@ -87,6 +88,26 @@ CALLS = {
     "tensor_split": lambda v: ((v["t"], 2), {"dim": BAD_DIM}),
     "unflatten": lambda v: ((v["t"], BAD_DIM, (1, 2)), {}),
     "unsqueeze": lambda v: ((v["t"], BAD_DIM), {}),
+    # **These five became visible when `_accepts_out` started preserving the wrapped
+    # signature.** They were reading as `(*args, **kwargs)` and so were skipped for
+    # want of a `dim` — a name the enumeration never saw, which is the quietest way
+    # for a sweep to shrink. They take a sequence rather than one tensor.
+    "cat": lambda v: (([v["t"], v["t"]],), {"dim": BAD_DIM}),
+    "concat": lambda v: (([v["t"], v["t"]],), {"dim": BAD_DIM}),
+    "concatenate": lambda v: (([v["t"], v["t"]],), {"dim": BAD_DIM}),
+    "stack": lambda v: (([v["t"], v["t"]],), {"dim": BAD_DIM}),
+    "mode": lambda v: ((v["t"],), {"dim": BAD_DIM}),
+    # Nine more that the same signature fix made visible, each needing an argument
+    # before its `dim` means anything.
+    "cross": lambda v: ((v["three"], v["three"]), {"dim": BAD_DIM}),
+    "gather": lambda v: ((v["t"], BAD_DIM, v["idx"].reshape(1, 1)), {}),
+    "index_select": lambda v: ((v["t"], BAD_DIM, v["idx"]), {}),
+    "kthvalue": lambda v: ((v["t"], 1), {"dim": BAD_DIM}),
+    "quantile": lambda v: ((v["t"], 0.5), {"dim": BAD_DIM}),
+    "nanquantile": lambda v: ((v["t"], 0.5), {"dim": BAD_DIM}),
+    "renorm": lambda v: ((v["t"], 2, BAD_DIM, 1.0), {}),
+    "take_along_dim": lambda v: ((v["t"], v["idx"].reshape(1, 1)), {"dim": BAD_DIM}),
+    "topk": lambda v: ((v["t"], 1), {"dim": BAD_DIM}),
 }
 
 # Names whose `dim` this cannot reach with one tensor, each with the reason. Empty
@@ -123,12 +144,20 @@ INDEX_CALLS = {
     "select": lambda v: ((v["t"], 0, BAD_INDEX), {}),
     "select_scatter": lambda v: ((v["t"], v["t"][0], 0, BAD_INDEX), {}),
     "take": lambda v: ((v["t"], v["badi"]), {}),
+    # Three the signature fix made visible here too.
+    "gather": lambda v: ((v["t"], 0, v["badi2"]), {}),
+    "index_select": lambda v: ((v["t"], 0, v["badi"]), {}),
 }
 
 # `unravel_index` takes an `indices` and means something else by it — the index is
 # into a shape the caller supplies, not into the tensor. Named rather than dropped.
 NOT_AN_INDEX_INTO_THE_TENSOR = {
     "unravel_index": "`indices` are flat positions into the `shape` argument",
+    # **torch answers rather than refusing.** `take_along_dim(x, [[9]], dim=0)` on a
+    # size-2 axis gives `[[3., 4.]]` — it clamps. So there is no refusal to compare,
+    # and a row here would report *torch accepts this, the case measures nothing*,
+    # which is true and is about the case rather than about the library.
+    "take_along_dim": "torch clamps an out-of-range index instead of refusing",
 }
 
 

@@ -82,14 +82,44 @@ def _classify(name):
 
 
 def _candidates():
+    """**Every public callable, not the ones whose docstring says `out=None`.**
+
+    The paragraph at the top of this file rejects the docstrings for deciding
+    *whether* a name takes `out=`, and then the enumeration below used them anyway
+    to decide *which names get asked.* Two different jobs, one source, and only one
+    of them was examined.
+
+    It cost 24 names: `abs`, `acos`, `asin`, `atan`, `log2`, `log10`, `square`,
+    `norm`, `nansum`, `msort`, `diff`, `rad2deg`, `hardshrink` and the rest of the
+    inverse-trigonometric family. **torch takes `out=` on every one of them and none
+    has `out=None` in its docstring** — they are documented with a bare `out` or with
+    none at all. `test_the_out_table_is_not_short` was measuring exactly the set the
+    table already covered, so it passed while a quarter of the surface was missing.
+
+    That is the third time in this repository an instrument's entry condition removed
+    the class it was hunting, and the first where the file's own docstring named the
+    source as unreliable one screen above the line that used it.
+
+    `_classify` returns `None` for a name no shape can call, so widening the intake
+    costs nothing but time: an unjudgeable name is still not judged.
+
+    **Except that calling everything is not free.** The widened intake reached
+    `torch.set_printoptions` and set a global precision to a tensor, and ten golden
+    cases in another file began failing with `Format specifier missing precision` —
+    a message naming neither this file nor printing. `CONFIGURES` is
+    `tests/test_axis_sweep.py`'s list of names that configure rather than compute,
+    shared rather than copied: two lists of the same thing drift, and the second one
+    to drift is the one nobody re-reads.
+    """
+    from test_axis_sweep import CONFIGURES
+
     for name in sorted(dir(torch)):
-        if name.startswith("_"):
+        if name.startswith("_") or name in CONFIGURES:
             continue
         fn = getattr(torch, name)
         if not callable(fn) or inspect.isclass(fn):
             continue
-        if "out=None" in (fn.__doc__ or ""):
-            yield name
+        yield name
 
 
 def test_the_out_table_is_not_stale():
@@ -122,3 +152,28 @@ def test_the_out_table_is_not_short():
         "Add them. A missing name is refused by `_no_out` while torch accepts it, so\n"
         "**that line of the textbook stops here and nowhere else.**"
     )
+
+
+def test_this_file_leaves_the_library_as_it_found_it():
+    """**Calling every public name is not a read.**
+
+    This has bitten twice now, both times through `set_printoptions`, and both times
+    the failure appeared in a different file with a message about format specifiers.
+    So the state that can move is checked here rather than trusted to a list somebody
+    has to keep right.
+    """
+    import copy
+
+    before = copy.copy(torch._tensor_str.PRINT_OPTS.__dict__)
+    rng = torch.get_rng_state()
+    try:
+        for name in _candidates():
+            _classify(name)
+    finally:
+        torch.set_rng_state(rng)
+    after = copy.copy(torch._tensor_str.PRINT_OPTS.__dict__)
+    assert before == after, (
+        "classifying the candidates changed torch's print options:\n"
+        f"  before {before}\n  after  {after}\n"
+        "  Something reached by `dir(torch)` configures rather than computes — name "
+        "it in `test_axis_sweep.CONFIGURES`.")
