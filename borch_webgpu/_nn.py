@@ -442,15 +442,32 @@ def _batch_norm(x, running_mean=None, running_var=None, weight=None, bias=None,
         bool(training), float(momentum), float(eps)))
 
 
-def _embedding_bag(idx, weight, offsets=None, mode="mean",
-                   per_sample_weights=None, **kw):
+def _embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
+                   scale_grad_by_freq=False, mode="mean", sparse=False,
+                   per_sample_weights=None, include_last_offset=False,
+                   padding_idx=None, **kw):
+    """**torch's order, and the call across the boundary is positional.**
+
+    `mode` used to be fourth here and fourth over there, and both moved to sixth —
+    but they moved in two different commits, and in between this function was
+    handing a mode string to `maxNorm`, which rewrites the embedding table. Neither
+    compiler can see across this call: `tsc` reads the TypeScript side and stops at
+    the bridge, and Python has nothing to read at all.
+
+    That is the fourth kind of positional failure, and the only one no type system
+    reaches. `test_binding_arguments.py` is what covers it.
+    """
     return wrap(_ts.nn.embeddingBag(
         handle(idx), handle(weight),
         _js_list([int(v) for v in _np.asarray(
             offsets.numpy() if isinstance(offsets, Tensor) else offsets
         ).reshape(-1)]) if offsets is not None else None,
-        mode,
-        handle(per_sample_weights) if per_sample_weights is not None else None))
+        None if max_norm is None else float(max_norm),
+        float(norm_type), bool(scale_grad_by_freq),
+        mode, bool(sparse),
+        handle(per_sample_weights) if per_sample_weights is not None else None,
+        bool(include_last_offset),
+        None if padding_idx is None else int(padding_idx)))
 
 
 def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1, **kw):
@@ -1445,8 +1462,25 @@ def _to_list(t):
     return settle(got) if hasattr(got, "then") else list(got)
 
 
-def EmbeddingBag(num, dim, mode="mean", **kw):
-    return _EmbeddingBag(_ts.nn.EmbeddingBag.new(num, dim, mode))
+def EmbeddingBag(num, dim, max_norm=None, norm_type=2.0, scale_grad_by_freq=False,
+                 mode="mean", sparse=False, _weight=None, include_last_offset=False,
+                 padding_idx=None, **kw):
+    """torch's list, and **the call across the boundary is positional.**
+
+    `mode` was third here and third over there until both moved to sixth — in two
+    different commits, and in between this handed a mode string to `maxNorm`, which
+    rewrites the embedding table in place. It did not return a wrong number: it
+    raised `a leaf Variable that requires grad is being used in an in-place
+    operation`, from a layer nobody had asked to renormalise anything.
+
+    Neither compiler reaches this call. `tsc` reads the TypeScript and stops at the
+    bridge; Python has nothing to read. **The binding golden is what found it**, and
+    it only runs where real torch can dump the answers.
+    """
+    return _EmbeddingBag(_ts.nn.EmbeddingBag.new(
+        num, dim, max_norm, float(norm_type), bool(scale_grad_by_freq),
+        mode, bool(sparse), handle(_weight) if _weight is not None else None,
+        bool(include_last_offset), padding_idx))
 
 
 def _misc_layer(name):

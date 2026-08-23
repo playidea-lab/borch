@@ -99,8 +99,12 @@ _SIGNATURE = {
     "nanmean": ("dim", "keepdim", "dtype"),
     "amax": ("dim", "keepdim"),
     "amin": ("dim", "keepdim"),
-    "var": ("dim", "keepdim"),
-    "std": ("dim", "keepdim"),
+    # **`correction` sits between them**, as it does in torch and in borch.ts. The
+    # slot was missing while `std` took `(correction)` alone, and the day `dim` moved
+    # to the front `keepdim=True` began arriving as a correction of 1 — a real number
+    # in a real slot, so nothing raised and `std_mean` came back 4.13e-02 out.
+    "var": ("dim", "correction", "keepdim"),
+    "std": ("dim", "correction", "keepdim"),
     "logsumexp": ("dim", "keepdim"),
     "argmax": ("dim", "keepdim"),
     "argmin": ("dim", "keepdim"),
