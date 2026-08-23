@@ -1879,18 +1879,28 @@ export class Fold extends Module {
  */
 export class Bilinear extends Module {
   readonly weight: Tensor;
-  readonly bias: Tensor;
+  readonly bias: Tensor | null;
 
-  constructor(readonly in1: number, readonly in2: number, readonly out: number) {
+  /**
+   * **`bias` was accepted by the binding and had nowhere to go.** This constructor
+   * took three numbers and always built a bias, so `Bilinear(a, b, c, bias=False)`
+   * got one anyway — no error, a parameter the caller asked not to have, and a
+   * gradient flowing into it every step. Found by the argument check once it was
+   * pointed at `nn` as well as at `optim`.
+   */
+  constructor(readonly in1: number, readonly in2: number, readonly out: number,
+              useBias = true) {
     super();
     const bound = 1 / Math.sqrt(Math.max(1, in1));
     this.weight = uniform([out, in1, in2], bound);
-    this.bias = uniform([out], bound);
-    this.claim(this.weight, this.bias);
+    this.bias = useBias ? uniform([out], bound) : null;
+    this.claim(...(this.bias ? [this.weight, this.bias] : [this.weight]));
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return { weight: this.weight, bias: this.bias };
+    return this.bias
+      ? { weight: this.weight, bias: this.bias }
+      : { weight: this.weight };
   }
 
   override forward(x: Tensor): Tensor { return x; }
@@ -1901,7 +1911,7 @@ export class Bilinear extends Module {
 
   override describe(): string {
     return `Bilinear(in1_features=${this.in1}, in2_features=${this.in2}, ` +
-      `out_features=${this.out}, bias=True)`;
+      `out_features=${this.out}, bias=${this.bias ? "True" : "False"})`;
   }
 }
 
@@ -3322,6 +3332,23 @@ export function gumbelSoftmax(
 ): Tensor {
   const axis = dim < 0 ? dim + logits.shape.length : dim;
   // Gumbel noise — `-log(-log(u))`. Built from a single uniform draw.
+  //
+  // **`eps` stays a constant here, and that is torch's answer too.** The binding was
+  // taking `eps` and dropping it, which looked like an argument owed a home — so it
+  // got one: a fourth parameter, threaded through, with a parity check proving a
+  // caller's value changed the answer.
+  //
+  // Then torch was asked what it does with the same argument. It warns:
+  // `eps` parameter is deprecated and has no effect`. Its noise comes from an
+  // exponential draw, which needs no floor at all, and the parameter survives only so
+  // that old calls keep parsing. Honouring it here would have made `gumbel_softmax`
+  // one of the few places where this library and torch give different numbers for the
+  // same call — while passing every structural check, because the argument would have
+  // been visibly used.
+  //
+  // **A dropped argument is a defect; an argument torch itself ignores is not.** The
+  // silence was the real fault, and it is fixed one level up, where `_gumbel_softmax`
+  // raises torch's warning rather than saying nothing.
   const eps = 1e-10;
   const g = noise ?? Tensor.uniform(logits.shape)
     .binary("add", Tensor.full([], eps)).log().neg()
@@ -3634,6 +3661,8 @@ export function multiHeadAttentionForward(
   attnMask: Tensor | null = null,
   keyPaddingMask: Tensor | null = null,
   averageWeights = true,
+  dropoutP = 0.0,
+  training = true,
 ): { output: Tensor; weights: Tensor } {
   const L = query.shape[0] ?? 1;
   const N = query.shape[1] ?? 1;
@@ -3666,7 +3695,16 @@ export function multiHeadAttentionForward(
       let scores = cut(q, L).mm(cut(k, S).transpose()).binary("mul", scale);
       if (attnMask) scores = scores.add(attnMask);
       if (pad) scores = scores.add(pad);
-      const w = scores.softmax(1);
+      // **Dropout on the attention, torch's way round.** The binding took
+      // `dropout_p` and `training` and dropped them both, so a layer built to
+      // drop half its attention dropped none of it and said nothing — the kind
+      // of difference that shows up as a model that trains a little too well.
+      //
+      // torch drops *after* the softmax and hands back the dropped weights, not
+      // the ones before, so `need_weights=True` and the value matmul agree on
+      // what was attended to. At `dropoutP = 0` this is the identity, which is
+      // why every existing golden case is untouched by it.
+      const w = scores.softmax(1).dropout(dropoutP, training);
       perHeadWeights.push(w.reshape([1, L, S]));
       perHead.push(w.mm(cut(v, S)));
     }

@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 72
+  "missing": 73
  },
  "modules": [
   {
@@ -8389,13 +8389,13 @@
       },
       {
        "name": "bias",
-       "signature": "readonly bias: Tensor",
+       "signature": "readonly bias: Tensor | null",
        "doc": ""
       },
       {
        "name": "constructor",
-       "signature": "constructor(in1: number, in2: number, out: number)",
-       "doc": ""
+       "signature": "constructor(in1: number, in2: number, out: number, useBias?: boolean)",
+       "doc": "**`bias` was accepted by the binding and had nowhere to go.** This constructor\ntook three numbers and always built a bias, so `Bilinear(a, b, c, bias=False)`\ngot one anyway — no error, a parameter the caller asked not to have, and a\ngradient flowing into it every step. Found by the argument check once it was\npointed at `nn` as well as at `optim`."
       },
       {
        "name": "ownParameters",
@@ -10449,7 +10449,7 @@
     {
      "kind": "function",
      "name": "multiHeadAttentionForward",
-     "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, numHeads: number, inWeight: Tensor, inBias: Tensor | null, outWeight: Tensor, outBias: Tensor | null, attnMask?: Tensor | null, keyPaddingMask?: Tensor | null, averageWeights?: boolean): { output: Tensor; weights: Tensor; }",
+     "signature": "export declare function multiHeadAttentionForward(query: Tensor, key: Tensor, value: Tensor, numHeads: number, inWeight: Tensor, inBias: Tensor | null, outWeight: Tensor, outBias: Tensor | null, attnMask?: Tensor | null, keyPaddingMask?: Tensor | null, averageWeights?: boolean, dropoutP?: number, training?: boolean): { output: Tensor; weights: Tensor; }",
      "doc": "The function form of attention. Weights come from outside.\n\n**Input is `(L, N, E)` — length first.** torch's function of the same\nname is, and calling it with batch first quietly mixes the wrong axes.\n\n**The mask is an added float.** A boolean table is not accepted here —\n`-inf` is added so that softmax produces zero, rather than multiplying by\nzero, and multiplying after normalisation leaves the remaining slots not\nsumming back to 1. Turning booleans into floats happens where torch's\ncontract is imitated (the Python binding).",
      "members": [],
      "tags": [

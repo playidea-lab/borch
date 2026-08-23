@@ -96,30 +96,45 @@ OWED = {
     # anything in `_nn.py`; that is the one-prose-reason problem this file already
     # records one level down, and two pairs sharing one table is the same mistake
     # one level up.
-    ("nn", "Bilinear", "bias"):
-        "borch.ts's `Bilinear` takes `(in1, in2, out)` and always builds a bias, so "
-        "`Bilinear(..., bias=False)` gets one anyway. The argument is held to keep "
-        "torch's position; the fix is a flag on the borch.ts constructor.",
-    ("nn", "_gumbel_softmax", "eps"):
-        "borch.ts's `gumbelSoftmax` has no `eps` — the floor under the log of a "
-        "uniform draw. Ours uses its own, so a caller's value is ignored rather than "
-        "refused.",
-    ("nn", "_mha_forward", "dropout_p"):
-        "borch.ts's `multiHeadAttentionForward` performs no dropout at all, so there "
-        "is nothing to hand it to.",
-    ("nn", "_mha_forward", "training"):
-        "only meaningful with dropout, which that function does not do. It goes with "
-        "`dropout_p`.",
-    ("nn", "_mha_forward", "embed_dim_to_check"):
-        "torch uses it as an assertion and nothing else. Ours does not assert it, "
-        "which is a missing check rather than a dropped computation — and it is here "
-        "rather than nowhere so that the difference is written down.",
-    ("nn", "_mha_forward", "q_proj_weight"):
-        "reachable only under `use_separate_proj_weight`, which this function refuses "
-        "loudly. **The refusal is on a different argument**, so nothing above sees "
-        "that these three are unreachable — which is exactly why the row exists.",
-    ("nn", "_mha_forward", "k_proj_weight"): "as `q_proj_weight`.",
-    ("nn", "_mha_forward", "v_proj_weight"): "as `q_proj_weight`.",
+    # **All eight `nn` rows were paid, not re-explained.** They read as descriptions
+    # of borch.ts, which made them feel like facts about the world rather than work
+    # owed — `Bilinear` *has* no bias flag, `multiHeadAttentionForward` *does* no
+    # dropout. Each was one edit away from being false:
+    #
+    #   `Bilinear`        gained a `bias` flag; the constructor built one either way.
+    #   `gumbel_softmax`  warns, because torch warns — see below; `eps` stays a
+    #                     constant on the borch.ts side.
+    #   `multiHeadAttentionForward`  gained `dropoutP`/`training`, applied after the
+    #                     softmax and returned in the weights, as torch does.
+    #   `embed_dim_to_check`  became the assertion torch uses it as.
+    #   `q/k/v_proj_weight`   joined the refusal loop, so the three that could never
+    #                     be honoured are refused instead of ignored.
+    #
+    # The lesson is in how they were phrased. A row saying "the other side does not
+    # have it" describes a fixed world; a row saying "the fix is a flag on the borch.ts
+    # constructor" — which the `Bilinear` row did say — describes work. The first kind
+    # is the one that sits for months.
+    #
+    # **`eps` was a trap, and it is worth the space.** Its row read like the others, so
+    # it got the same treatment: a fourth parameter on `gumbelSoftmax`, threaded through
+    # the binding, with a parity check proving a caller's value moved the answer. That
+    # check passed. Then torch was asked what *it* does with `eps`:
+    #
+    #     warnings.warn("`eps` parameter is deprecated and has no effect.")
+    #
+    # torch's noise comes from an exponential draw with no floor to raise; the parameter
+    # survives only so that old calls keep parsing. Honouring it would have made
+    # `gumbel_softmax` the one call in this library that returns different numbers from
+    # torch's — **while every check here stayed green**, because the argument was now
+    # visibly used. This check reads whether a call site drops what it accepts; threading
+    # a dropped argument through satisfies it exactly as well as being right does.
+    #
+    # So the distinction this table has to keep is: *a dropped argument is a defect; an
+    # argument torch itself ignores is not.* The silence was the real fault, and it is
+    # paid one level up — `_gumbel_softmax` raises torch's warning instead of saying
+    # nothing, which is also what makes this check see the argument as handled.
+    #
+    # Nothing here can find the next one of these. It took reading torch.
     # ── optim ────────────────────────────────────────────────────────────────
     # **`Adagrad.maximize` used to be here and the check can see it now.** The row read
     # "refused rather than dropped — which is the one shape this check cannot see: it

@@ -14,6 +14,7 @@ not approximating what is missing, but naming what is there.
 """
 
 import collections as _collections
+import warnings as _warnings
 
 import numpy as _np
 
@@ -392,15 +393,37 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
                  static_k=None, static_v=None, average_attn_weights=True,
                  is_causal=False, **kw):
     """The computation `MultiheadAttention` performs inside. **Branches it does
-    not do are refused loudly.**"""
+    not do are refused loudly.**
+
+    Three of these arguments used to be accepted and then dropped without a word.
+
+    `embed_dim_to_check` is torch's own guard: the caller states the width it
+    believes the projection has, and torch asserts it. Taking the number and not
+    checking it turns a guard into decoration — the shape error still comes, but
+    later and from somewhere else.
+
+    `q_proj_weight` and the other two only mean anything under
+    `use_separate_proj_weight`, and that branch is refused above. torch ignores
+    them when the flag is off; here they are refused instead, because there is no
+    arrangement of arguments in which this function can honour them. Refusing is
+    the only answer that stays true after the branch lands.
+    """
     for name, given in (("bias_k", bias_k), ("bias_v", bias_v),
-                        ("static_k", static_k), ("static_v", static_v)):
+                        ("static_k", static_k), ("static_v", static_v),
+                        ("q_proj_weight", q_proj_weight),
+                        ("k_proj_weight", k_proj_weight),
+                        ("v_proj_weight", v_proj_weight)):
         if given is not None:
             raise RuntimeError(
                 f"multi_head_attention_forward({name}=…) is not here yet.")
     if add_zero_attn or use_separate_proj_weight:
         raise RuntimeError(
             "that branch of multi_head_attention_forward is not here yet.")
+    width = int(handle(query).shape[-1])
+    if embed_dim_to_check is not None and int(embed_dim_to_check) != width:
+        raise RuntimeError(
+            f"multi_head_attention_forward: query is {width} wide, "
+            f"embed_dim_to_check={int(embed_dim_to_check)}.")
     n, s = int(handle(query).shape[1]), int(handle(key).shape[0])
     length = int(handle(query).shape[0])
     if is_causal and attn_mask is None:
@@ -413,7 +436,7 @@ def _mha_forward(query, key, value, embed_dim_to_check, num_heads,
         handle(out_proj_bias) if out_proj_bias is not None else None,
         _additive_mask(attn_mask),
         _additive_mask(key_padding_mask, (n, s)),
-        bool(average_attn_weights))
+        bool(average_attn_weights), float(dropout_p), bool(training))
     out = wrap(got.output)
     return (out, None) if not need_weights else (out, wrap(got.weights))
 
@@ -472,7 +495,17 @@ def _embedding_bag(idx, weight, offsets=None, max_norm=None, norm_type=2.0,
 
 def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1, **kw):
     """**Random, and gradients still flow.** Even with `hard`, the gradient
-    taken is the soft one's."""
+    taken is the soft one's.
+
+    `eps` is passed and then not used, which is what torch does with it — it has
+    been deprecated there since the noise moved to an exponential draw that needs
+    no floor. What torch also does, and this did not, is **say so**. A caller
+    writing `eps=1e-5` was getting silence from a library that had quietly decided
+    to ignore them; now they get the same warning torch gives.
+    """
+    if float(eps) != 1e-10:
+        _warnings.warn("`eps` parameter is deprecated and has no effect.",
+                       stacklevel=2)
     return wrap(_ts.nn.gumbelSoftmax(handle(logits), float(tau), bool(hard),
                                      int(dim), None))
 
@@ -1445,7 +1478,7 @@ class _Bilinear(Module):
 
 
 def Bilinear(in1, in2, out, bias=True):
-    return _Bilinear(_ts.nn.Bilinear.new(in1, in2, out))
+    return _Bilinear(_ts.nn.Bilinear.new(in1, in2, out, bool(bias)))
 
 
 class _EmbeddingBag(Module):

@@ -1102,6 +1102,73 @@ export async function report(): Promise<Report> {
     () => new vision.Compose([new vision.FiveCrop([1, 1]), new vision.ToTensor()])
       .apply(pic));
 
+  // ── the three arguments the binding used to accept and drop ───────────────
+  //
+  // Each of these was an `OWED` row in `tests/test_binding_arguments.py`: the Python
+  // side took the argument, borch.ts had nowhere to put it, and the call went through
+  // without it. The rows have been paid; these check that the abilities are real
+  // rather than that the rows are gone, which is a different claim.
+  //
+  // All three are asked as **equivalences** — `bias=false` against the same weight with
+  // no bias term, `eps` against the same draw twice, dropout against its own `p = 0`.
+  // None writes a number down. The file's warning further up is about exactly that: a
+  // hand-written expected array here once failed a correct implementation.
+  {
+    const bare = new nn.Bilinear(2, 3, 4, false);
+    want("Bilinear(bias=false) keeps no bias", bare.bias === null);
+    want("and does not claim one as a parameter",
+      Object.keys(bare.ownParameters()).join(",") === "weight",
+      Object.keys(bare.ownParameters()).join(","));
+    want("its describe says so", bare.describe().includes("bias=False"),
+      bare.describe());
+
+    const full = new nn.Bilinear(2, 3, 4);
+    want("the default still builds one", full.bias !== null);
+
+    // **The flag has to be a fact about the arithmetic, not about a field being null.**
+    // One weight, called with and without its bias, must differ by exactly the bias.
+    const x1 = Tensor.from([1, 2], [1, 2]);
+    const x2 = Tensor.from([1, 2, 3], [1, 3]);
+    const without = await x1.bilinear(x2, full.weight, null).toArray();
+    const withIt = await x1.bilinear(x2, full.weight, full.bias).toArray();
+    const bias = await full.bias!.toArray();
+    want("and the bias is the whole of the difference",
+      withIt.every((v, i) => near(v - without[i]!, bias[i]!, 1e-6)));
+  }
+  {
+    // **`eps` is asked the other way round: it must *not* matter.** torch deprecated it
+    // — its noise is an exponential draw with no floor to raise — and warns rather than
+    // obeying. This started life as the opposite check, passing a caller's `eps` through
+    // and proving the answer moved. That check passed, and would have made this the one
+    // place where the two libraries disagree on the same call. Structural checks would
+    // all have stayed green, because the argument was visibly used.
+    const logits = Tensor.from([0, 0.5, 1, 1.5, 2, 2.5], [2, 3]);
+    const draw = Tensor.from([0.1, 0.5, 0.9, 0.2, 0.7, 0.4], [2, 3]);
+    const soft = await nn.gumbelSoftmax(logits, 1, false, -1, draw).toArray();
+    const again = await nn.gumbelSoftmax(logits, 1, false, -1, draw).toArray();
+    want("gumbelSoftmax is a function of the draw, not of the call", same(soft, again));
+    // The warning is the Python side's, so the golden asks for that; here it is enough
+    // that nothing in the signature between `hard` and `dim` takes a floor any more.
+    want("and takes no eps to be told about", nn.gumbelSoftmax.length === 1,
+      `it declares ${nn.gumbelSoftmax.length} required parameters`);
+  }
+  {
+    // Dropout is random, so what can be asked is the two ends: `p = 0` and
+    // `training = false` both have to be the identity, and dropping everything has to
+    // leave nothing behind.
+    const q = Tensor.from([0, 0.1, 0.2, 0.3, 0.4, 0.5], [3, 1, 2]);
+    const inW = Tensor.eye(2).repeat(3, 1);
+    const outW = Tensor.eye(2);
+    const attend = (p: number, training: boolean) =>
+      nn.multiHeadAttentionForward(q, q, q, 1, inW, null, outW, null,
+        null, null, true, p, training).output.toArray();
+    const plain = await attend(0, true);
+    want("attention at dropoutP=0 is the untouched answer", same(plain, await attend(0, false)));
+    want("and training=false ignores p", same(plain, await attend(0.5, false)));
+    want("while dropping all of it leaves nothing",
+      (await attend(1, true)).every((v) => v === 0));
+  }
+
   // **One validation fault and the green above cannot be believed.** WebGPU drops an
   // invalid command buffer quietly, so a check can come to read an unchanged value as a
   // pass.
