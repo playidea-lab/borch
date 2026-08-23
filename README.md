@@ -26,7 +26,7 @@ three against each other are a large share of this repository's history.
 | | built on | where it runs | ceiling |
 |---|---|---|---|
 | **`pyborch`** — imported as `borch` | numpy | anywhere, and Pyodide | MNIST scale |
-| **`borch`** (npm) — borch.ts | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
+| **`borch-ts`** (npm) | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
 | **`borch-webgpu`** (Python) | the borch.ts above | in a browser only | the same thing at **1.6 min/epoch** |
 
 The lower two **stand on the same kernels.** `borch-webgpu` is a 8,769 line
@@ -701,11 +701,11 @@ kernels are written directly in WGSL. **Zero** runtime dependencies, and it is
 an ES module a browser simply reads (297KB gzipped, 1085KB before compression).
 
 ```bash
-npm install borch
+npm install borch-ts
 ```
 
 ```ts
-import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
+import { init, Tensor, nn, optim, scope, keepAlive } from "borch-ts";
 
 await init();                                   // acquire a WebGPU adapter
 
@@ -911,7 +911,7 @@ This is `torch.cuda.is_available()`'s place. **It is asynchronous** — acquirin
 adapter is asynchronous and there is no way around it.
 
 ```ts
-import { init, isAvailable, probe, currentDevice, Tensor } from "borch";
+import { init, isAvailable, probe, currentDevice, Tensor } from "borch-ts";
 
 if (!(await isAvailable())) { /* not usable in this browser */ }
 
@@ -1007,7 +1007,7 @@ calling a loss or a convolution directly. borch had the first alone, so every li
 written as `F.` had to be rewritten wholesale.
 
 ```ts
-import { nn } from "borch";
+import { nn } from "borch-ts";
 const F = nn.functional;                 // the same path as torch.nn.functional
 
 F.relu(x);
@@ -1110,7 +1110,7 @@ shape as torch's and Python `borch`'s. Non-tensors travel with it too (numbers,
 strings, booleans, `null`, arrays).
 
 ```ts
-import { save, load } from "borch";
+import { save, load } from "borch-ts";
 
 const bytes = await save({
   model: model.stateDict(),

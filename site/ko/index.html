@@ -72,7 +72,7 @@
 
     <div class="cta-row">
       <a class="btn primary" href="playground.html">Playground 열기 →</a>
-      <a class="btn ghost mono" href="#install">npm install borch</a>
+      <a class="btn ghost mono" href="#install">npm install borch-ts</a>
       <a class="btn ghost" href="https://github.com/playidea-lab/borch">GitHub</a>
     </div>
     <p class="install">런타임 의존성 0개 · ES 모듈 gzip 297KB(압축 전 1085KB) · 체크포인트는 safetensors</p>
@@ -402,7 +402,7 @@ for step in range(201):
       <thead><tr><th></th><th>무엇 위에</th><th>어디서</th><th>천장</th></tr></thead>
       <tbody>
         <tr><td><strong>pyborch</strong> — <code>import borch</code></td><td>numpy</td><td>어디서나 · Pyodide</td><td>MNIST 급</td></tr>
-        <tr><td><strong>borch</strong> (npm) — borch.ts</td><td>WGSL 직접, 의존성 0</td><td>브라우저 안에서만</td><td>CIFAR ResNet-18 에폭 1.5분</td></tr>
+        <tr><td><strong>borch-ts</strong> (npm)</td><td>WGSL 직접, 의존성 0</td><td>브라우저 안에서만</td><td>CIFAR ResNet-18 에폭 1.5분</td></tr>
         <tr><td><strong>borch-webgpu</strong> (파이썬)</td><td>위의 borch.ts</td><td>브라우저 안에서만</td><td>같은 것이 에폭 1.6분</td></tr>
       </tbody>
     </table>
@@ -413,15 +413,19 @@ for step in range(201):
       <code>pyborch</code> 이고 <code>borch</code> 는 import 하는 이름이다. 그리고 PyPI 에
       올라가 있지도 않다 — 거기 <code>borch</code> 는 남의 패키지(확률 프로그래밍
       라이브러리)라서 <code>pip install borch</code> 는 모르는 사람의 코드를 받아 온다.
-      아래의 wheel 이 설치 방법이다.
+      아래의 wheel 이 설치 방법이다.<br><br>
+      npm 행도 <strong>borch</strong> 였고 그 패키지는 존재하지 않았다 — 레지스트리가
+      <code>borsh</code>·<code>batch</code>·<code>touch</code> 와 너무 비슷하다며
+      그 이름을 거부한다. <code>borch-ts</code> 로 올라가 있고, 이 저장소가 처음부터
+      그렇게 불러 온 이름이다.
     </p>
 
     <div class="grid c2" style="margin-top:1.6rem">
       <div class="tile">
         <h3>TypeScript 쪽 — 이 페이지가 쓰는 것</h3>
-        <pre class="small" style="overflow-x:auto"><code>npm install borch
+        <pre class="small" style="overflow-x:auto"><code>npm install borch-ts
 
-import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
+import { init, Tensor, nn, optim, scope, keepAlive } from "borch-ts";
 await init();</code></pre>
       </div>
       <div class="tile">

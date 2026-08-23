@@ -2,7 +2,7 @@
  * borch — a PyTorch-shaped tensor library running on WebGPU in the browser.
  *
  * ```ts
- * import { init, Tensor, nn, optim, scope, keepAlive } from "borch";
+ * import { init, Tensor, nn, optim, scope, keepAlive } from "borch-ts";
  *
  * await init();                                  // acquire the WebGPU adapter
  *

@@ -1,5 +1,5 @@
 {
-  "name": "borch",
+  "name": "borch-ts",
   "version": "0.1.0",
   "description": "A PyTorch-shaped tensor library running on WebGPU in the browser — no dependencies",
   "license": "Apache-2.0",
