@@ -277,7 +277,23 @@ RENAMED = {
     # `b` against `other`, `size` against `split_size`. A large jump in this
     # bucket from a change that compared *more* is the expected shape; the same
     # jump from a change that compared the same number would not be.
-    "Tensor": 55,
+    # **55 → 60, and the five are evidence about the core rather than about borch.ts.**
+    # `hypot`, `copysign`, `logaddexp`, `logaddexp2` and `xlogy` became `Tensor`
+    # methods over there; borch.ts calls the operand `other`, which is torch's name,
+    # and the core calls it `b`.
+    #
+    # Measured across the whole surface: **42 core functions name it `b` where
+    # torch's docstring says `other`**, and their first parameter is `a` where torch
+    # says `input` — so `borch.add(x, other=y)` raises where `torch.add(x, other=y)`
+    # works. Every one of those 42 is invisible to the core↔torch axis, because
+    # torch implements them in C and the docstring rows there are compared by arity
+    # alone: same count, different names, no row. **This axis is the only one that
+    # can see the class**, and it sees it only where borch.ts has already taken
+    # torch's spelling.
+    #
+    # Left as a rename here rather than fixed in passing: it is 42 signatures and
+    # belongs in its own commit, not riding along with a declaration fix.
+    "Tensor": 60,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.

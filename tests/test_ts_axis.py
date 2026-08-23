@@ -52,7 +52,33 @@ FROZEN = {
     # The count is higher than it started and the surface is better than it was.
     # A rule that misses in our favour is worse than no rule — the number improving
     # is what made this one findable.
-    "Tensor": 112,
+    # **112 → 94, and not one kernel was written.**
+    #
+    # `tensor.ts` attaches a method for every key in the `UNARY` table by walking it
+    # at load time, and `export interface Tensor` is what *declares* those methods.
+    # **Eighteen of the sixty-six had no line in that interface.** So `x.sinc()` ran,
+    # gave the right answer, was frozen in the golden through the module-level path
+    # — and did not exist as far as TypeScript, the API reference, or this axis were
+    # concerned.
+    #
+    # This axis counted them as **features borch.ts does not have**. They were
+    # features borch.ts did not declare, and the two repair differently: fourteen
+    # declaration lines, no arithmetic. (`nanToZero` and `notNan` stay undeclared —
+    # the kernel file says neither is a public torch name; `logical_not` and `elu`
+    # have declared spellings of their own.)
+    #
+    # The other four were `hypot`, `copysign`, `logaddexp`, `logaddexp2`, `xlogy`
+    # and `heaviside` as `Tensor` methods — **kernels with backwards already written
+    # and no name on the class.** The first attempt at those computed them by hand
+    # from the formulas; it would have shipped six duplicate implementations beside
+    # six analytic ones, and parted from the golden exactly where the kernels are
+    # careful — `logaddexp` written literally overflows in f32 past 89, and `xlogy`
+    # written literally gives NaN at (0, 0) where the whole point of the name is 0.
+    #
+    # Third time today that a name read as absent while the work sat next to it:
+    # `default_collate` was `stackItems`, `avg_pool1d` was `poolND("avg", …)`, and
+    # these were kernels without a declaration.
+    "Tensor": 94,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
     # folding the two reported the layer as present because the function was. torch's

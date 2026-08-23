@@ -7479,6 +7479,55 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.unary("logical_not");
   }
 
+
+  // ── Six binary names the core has and this did not ────────────────────
+  //
+  // **The kernels were already here and only the method names were missing** —
+  // `binary("hypot", …)` and its five neighbours are in `kernels.ts` with analytic
+  // backwards, and the golden has been asking them through the module-level
+  // functions the whole time. That is the third time today: `default_collate` was
+  // `stackItems`, `avgPool1d` was `poolND("avg", …)`, and these were kernels
+  // without a name on `Tensor`.
+  //
+  // **The first version of this block computed them by hand**, from the formulas,
+  // and would have shipped six duplicate implementations with autograd-composed
+  // gradients beside six analytic ones. Worse, it would have parted from the golden
+  // at exactly the points the kernels are careful about — `logaddexp` written
+  // literally overflows in f32 the moment an input passes 89, and `xlogy` written
+  // literally gives NaN at `x = 0, y = 0` where the whole purpose of the name is
+  // that it gives 0. **Not knowing the kernel was there is what would have caused
+  // it**, which is the same not-knowing this axis exists to end.
+
+  /** `sqrt(x² + y²)`. */
+  hypot(other: Tensor): Tensor {
+    return this.binary("hypot", other);
+  }
+
+  /** `log(exp(a) + exp(b))`, in the stable form — see the kernel. */
+  logaddexp(other: Tensor): Tensor {
+    return this.binary("logaddexp", other);
+  }
+
+  /** `log₂(2^a + 2^b)`. */
+  logaddexp2(other: Tensor): Tensor {
+    return this.binary("logaddexp2", other);
+  }
+
+  /** This magnitude with **that** sign. */
+  copysign(other: Tensor): Tensor {
+    return this.binary("copysign", other);
+  }
+
+  /** `0` below zero, `values` **at** zero, `1` above. */
+  heaviside(values: Tensor): Tensor {
+    return this.binary("heaviside", values);
+  }
+
+  /** `x·log(y)`, and **0 wherever `x` is 0** — including where `log(y)` is −∞. */
+  xlogy(other: Tensor): Tensor {
+    return this.binary("xlogy", other);
+  }
+
   // ── The thirty-eight in-place forms ───────────────────────────────────
   //
   // torch gives almost every operation an underscore partner. What was here was `i0_`
@@ -10981,6 +11030,27 @@ Object.defineProperty(Tensor.prototype, "elu", {
  * scaling is by a power of ten either side of it, so nothing about the rounding
  * itself moves. Attached after the loop for the same reason `elu` is.
  */
+/**
+ * **`logit` takes `eps` and the table cannot give it one**, exactly as `round` takes
+ * `decimals`. torch clamps the *input* into `[eps, 1 − eps]` before the division, so
+ * `logit(0, 0.1)` is −2.197 rather than −∞. Without it, 0 and 1 give ∓∞ — which is
+ * also torch's answer and the default.
+ *
+ * Attached after the table for the reason `abs`, `elu` and `bitwise_not` are: the
+ * loop overwrites whatever the class body wrote, so the ordering is the rule.
+ */
+{
+  const rawLogit = Tensor.prototype.logit;
+  Object.defineProperty(Tensor.prototype, "logit", {
+    value: function (this: Tensor, eps: number | null = null): Tensor {
+      if (eps === null || eps === undefined) return rawLogit.call(this);
+      return rawLogit.call(this.clamp(eps, 1 - eps));
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
 Object.defineProperty(Tensor.prototype, "round", {
   value: function (this: Tensor, decimals = 0): Tensor {
     if (!decimals) return this.unary("round");
@@ -11060,6 +11130,34 @@ export interface Tensor {
   floor(): Tensor;
   ceil(): Tensor;
   round(decimals?: number): Tensor;
+  // **Fourteen names that ran and could not be seen.** The loop over `UNARY`
+  // attaches a method for every kernel, and this interface is what declares them —
+  // eighteen of the sixty-six had no line here, so `x.sinc()` worked at runtime,
+  // was frozen in the golden through the module-level path, and was absent from
+  // TypeScript's view, from the API reference, and from `tests/ts_axis.py`.
+  //
+  // The axis counted them as **features borch.ts does not have**. They were
+  // features borch.ts did not declare, which is not the same thing and repairs
+  // differently: the fix is these lines, not a kernel.
+  //
+  // (`nanToZero` and `notNan` stay undeclared on purpose — the kernel file says
+  // neither is a public torch name; they are the pieces `nansum` is built from.
+  // `logical_not` and `elu` have declared spellings of their own.)
+  deg2rad(): Tensor;
+  rad2deg(): Tensor;
+  positive(): Tensor;
+  sgn(): Tensor;
+  sinc(): Tensor;
+  signbit(): Tensor;
+  isnan(): Tensor;
+  isinf(): Tensor;
+  isfinite(): Tensor;
+  erf(): Tensor;
+  erfc(): Tensor;
+  gelu(): Tensor;
+  silu(): Tensor;
+  // `logit` takes torch's `eps`, so it is attached after the table like `round`.
+  logit(eps?: number | null): Tensor;
   trunc(): Tensor;
   frac(): Tensor;
   lgamma(): Tensor;

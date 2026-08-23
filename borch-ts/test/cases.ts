@@ -467,6 +467,14 @@ export function cases(inputs: Inputs): Map<string, Case> {
   for (const name of MATH_BINARY) {
     out.set(`math::${name}`, () =>
       Tensor.from(plain).binary(name, Tensor.from(other)));
+    // **The method spelling reaches the same place.** These were kernels with no
+    // name on `Tensor`, so `x.hypot(y)` was a type error here while `binary("hypot")`
+    // had been frozen in the golden for months. Asking both is what says the two
+    // spellings are one operation rather than two that agree today.
+    out.set(`math::${name}/메서드`, () => {
+      const lhs = Tensor.from(plain) as unknown as Record<string, (t: Tensor) => Tensor>;
+      return lhs[name]!(Tensor.from(other));
+    });
     for (const [who, tag] of ["a", "b"].entries()) {
       out.set(`math::grad::${name}/${tag}`, () => {
         const leaves = [

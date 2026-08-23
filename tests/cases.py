@@ -10748,6 +10748,13 @@ def math_cases(inp=None):
     for name in _MATH_BINARY:
         cases.append((MATH_PREFIX + name,
                       lambda L, n=name: getattr(L, n)(L.tensor(plain), L.tensor(other))))
+        # **The method spelling reaches the same place.** Only the function form was
+        # ever asked, and borch.ts had these as kernels with no name on `Tensor` — so
+        # `x.hypot(y)` was a type error there while `hypot(x, y)` had been frozen in
+        # the golden for months. Asking both is what says the two spellings are one
+        # operation rather than two that happen to agree today.
+        cases.append((MATH_PREFIX + name + "/메서드",
+                      lambda L, n=name: getattr(L.tensor(plain), n)(L.tensor(other))))
         for who in (0, 1):
             def bgrad(L, n=name, w=who):
                 leaves = [L.tensor(plain, requires_grad=True),
