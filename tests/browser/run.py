@@ -197,7 +197,37 @@ def main():
         print("\nwhere it diverged:")
         for why in bad:
             print(f"  ✗ {why}")
+        # **A flat list says how many failures, not how many causes**, and those are
+        # different numbers: 94 failures here were about four defects, one of which
+        # accounted for 64. Reading that took a person opening `cases.py` and noticing
+        # which helper the failing cases shared and which sibling had none.
+        #
+        # Prints nothing when no helper stands out. A ranking on a run whose failures
+        # are unrelated is a plausible wrong lead, which costs more than no lead.
+        for line in _grouped(bad):
+            print(line)
     return 0 if result["ok"] else 1
+
+
+def _grouped(bad):
+    """The blame lines, or nothing at all if anything about building them fails.
+
+    **Wrapped, because this is a convenience printed after the answer.** The failure
+    list above is the result; a defect in the grouping must not take the exit code with
+    it, and `cases.py` needs numpy and torchvision that a bare runner may not have.
+    """
+    try:
+        import importlib.util                                    # noqa: PLC0415
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        import blame                                             # noqa: PLC0415
+
+        spec = importlib.util.spec_from_file_location(
+            "bt_cases", ROOT / "tests" / "cases.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return blame.report(bad, mod.golden_cases(mod.golden_inputs()))
+    except Exception as e:                                       # noqa: BLE001
+        return ["", f"  (the failure grouping could not run: {type(e).__name__})"]
 
 
 if __name__ == "__main__":
