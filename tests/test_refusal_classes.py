@@ -92,25 +92,35 @@ CASES = {
     "kthvalue with k past the end": lambda L: _t(L, [1., 2.]).kthvalue(9),
     "narrow past the end": lambda L: _t(L, [1., 2., 3.]).narrow(0, 1, 9),
     "repeat with fewer counts than dimensions": lambda L: _t(L, [[1., 2.]]).repeat(2),
-}
-
-# Rows where the *conversion* protocols part. Not ours to fix in this commit — they
-# belong to the protocol-surface sweep happening beside this one — and written down
-# rather than left out, so that they cannot quietly stay broken once that lands.
-#
-# **An exemption here is not a skip.** `test_no_exempt_row_still_disagrees` fails the
-# moment one starts passing, which is what makes the list shrink by itself.
-OWED = {
-    "bool on many": "numpy's ValueError escapes; torch raises RuntimeError",
-    "int on many": "delegates to `.item()`, whose refusal is right for `.item()`",
-    "float on many": "as `int`",
-}
-
-OWED_CASES = {
+    # **These three arrived from `OWED` by being fixed**, and they stay here rather
+    # than leaving with the exemption. A row that agrees is exactly the row worth
+    # keeping: it is what notices if the agreement stops.
+    #
+    # `bool` let *numpy's* `ValueError` escape where torch raises `RuntimeError`;
+    # `int` and `float` raised this repository's `RuntimeError`, correct for the
+    # `.item()` they delegated to, where torch raises `ValueError`. Crossed in
+    # opposite directions, and no value differed in either — which is why this file
+    # is the only thing that could ever have seen them.
     "bool on many": lambda L: bool(_t(L, [1., 2.])),
     "int on many": lambda L: int(_t(L, [1., 2.])),
     "float on many": lambda L: float(_t(L, [1., 2.])),
 }
+
+# Rows where the *conversion* protocols part.
+#
+# **Empty, and it held three for an hour.** `bool`, `int` and `float` were listed here
+# while the protocol-surface sweep ran beside this file, and
+# `test_no_exempt_row_still_disagrees` failed the moment they were fixed — telling the
+# next reader to delete the rows rather than letting three permanent exemptions sit
+# where nobody re-reads them. That is the whole design: **an exemption needs a check
+# that evicts it, or it becomes a reason**, and a reason that outlives its cause was
+# met five times in a single day before this file was written.
+#
+# The table stays. An empty one says *nothing is owed*; a deleted one says nothing at
+# all, and the next protocol that parts needs somewhere to be written down.
+OWED: dict[str, str] = {}
+
+OWED_CASES: dict[str, object] = {}
 
 
 def _raised(fn, lib):
