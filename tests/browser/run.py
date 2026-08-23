@@ -3,12 +3,27 @@
 A GitHub-hosted runner has no GPU and falls back to SwiftShader, which is a path no user
 walks. So this script runs on a self-hosted runner or a development machine.
 
-    uv run --with playwright python tests/browser/run.py
+    uv run --with playwright python tests/browser/run.py --lib borch
     uv run --with playwright python tests/browser/run.py --headed --lib borch_webgpu
 
 The golden answers have to exist first:
 
     uv run --with numpy --with torch python tests/golden.py dump
+
+**`--lib` has no default, on purpose.** It used to default to `borch` — the numpy core,
+running inside a browser. That is a real comparison and it is almost always green,
+because the core is the layer both goldens already cover. `borch_webgpu` is the binding,
+and the binding is the layer *between* the two things everything else checks.
+
+Run it bare while hunting a binding defect and it answered `3255/3255`, printed `(borch)`
+in a header nobody reads when they are looking for a number, and was completely correct
+about a question nobody asked. That happened: a `_SCHED_ARGS` row was fixed, this was
+run without the flag, and the green was reported as proof of the fix. What caught it was
+putting the defect back and running again — **the same number returned.**
+
+So the name of the library now comes back in the summary line whether or not anyone
+looks, and there is nothing to forget: leaving `--lib` off stops rather than measuring
+the layer that is always green.
 
 `file://` will not do — the runner fetches the sources and the golden answers, so a server is
 needed. The repository root is put on a temporary port here.
@@ -97,7 +112,10 @@ def run(lib, headed, probe=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lib", default="borch", help="the library to compare")
+    ap.add_argument("--lib", required=True, choices=("borch", "borch_webgpu"),
+                    help="the library to compare. **No default** — see the module "
+                         "docstring: the old one measured the layer that is always "
+                         "green, under a name that read as the binding")
     ap.add_argument("--headed", action="store_true",
                     help="opens a window. **WebGPU does not come up headless** (measured — it falls back to WebGL)")
     ap.add_argument("--probe", help="Python to run inside the browser after the comparison. For debugging")
@@ -162,8 +180,14 @@ def main():
     if result.get("error"):
         print("the runner blew up:\n" + result["error"])
         return 1
-    print(f"browser golden comparison ({result.get('lib', args.lib)}) — {total} cases")
-    print(f"  agreeing {total - len(bad)}/{total}")
+    # **The library goes on the line that carries the number, not only on the header.**
+    # It was on the header already, and that is not where a person looking for a score
+    # reads. Someone hunting a binding defect ran this bare, saw `agreeing 3255/3255`,
+    # and reported the binding clear — the word `borch` was three lines up and did its
+    # job for nobody.
+    lib = result.get("lib", args.lib)
+    print(f"browser golden comparison ({lib}) — {total} cases")
+    print(f"  {lib}: agreeing {total - len(bad)}/{total}")
     # **A validation error does not arrive as an exception.** If even one happened, the green
     # above is that much less trustworthy — an invalid command buffer quietly does nothing while
     # the wall clock keeps running.

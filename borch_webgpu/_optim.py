@@ -370,8 +370,23 @@ _SCHED_ARGS = {
     "ExponentialLR": ("gamma",),
     "CosineAnnealingLR": ("T_max", "eta_min"),
     "LambdaLR": ("lr_lambda",),
-    # borch.ts has no `mode` — there is only `rel`, so there is no slot for it.
-    "ReduceLROnPlateau": ("factor", "patience", "threshold"),
+    # **The comment here used to read "borch.ts has no `mode`", and it was true when it
+    # was written.** `mode` was then added to borch.ts as torch's second argument, and
+    # this row was not touched — so every name below shifted one seat left. `factor=0.5`
+    # arrived as `mode`, which is the error the binding golden was reporting fifty times
+    # over: `mode must be 'min' or 'max', got 0.5`.
+    #
+    # It raised only because that constructor checks its own argument. The five names
+    # missing from the end did not raise at all: `threshold_mode`, `cooldown`, `min_lr`
+    # and `eps` were simply unreachable through the binding, and a caller setting a
+    # cooldown got silence and no cooldown.
+    #
+    # **A comment stating a fact about another module is the same hazard as the table
+    # it explains** — it goes stale the same way, is read as current, and here it was
+    # the reason nobody re-checked the row. The measurement that found this compares
+    # every row against `borch-ts/src/optim.ts` directly; a sentence cannot.
+    "ReduceLROnPlateau": ("mode", "factor", "patience", "threshold",
+                          "threshold_mode", "cooldown", "min_lr", "eps"),
     "ConstantLR": ("factor", "total_iters"),
     "LinearLR": ("start_factor", "end_factor", "total_iters"),
     "PolynomialLR": ("total_iters", "power"),
