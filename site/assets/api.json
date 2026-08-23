@@ -4,7 +4,7 @@
  "korean": {
   "done": 685,
   "stale": 0,
-  "missing": 133
+  "missing": 143
  },
  "modules": [
   {
@@ -7095,14 +7095,14 @@
       },
       {
        "name": "forward",
-       "signature": "abstract forward(x: Tensor): Tensor",
+       "signature": "abstract forward(x: Tensor, ...rest: Tensor[]): Tensor",
        "doc": ""
       },
       {
        "name": "call",
-       "signature": "call(x: Tensor): Tensor",
-       "doc": "So it can be called — the same position as torch's `model(x)`.",
-       "doc_ko": "부를 수 있게 — torch 의 `model(x)` 와 같은 자리다."
+       "signature": "call(x: Tensor, ...rest: Tensor[]): Tensor",
+       "doc": "So it can be called — the same position as torch's `model(x)`.\n\n**It forwards everything it was given.** It used to take one tensor, and a\ndecoder layer takes two: JavaScript discards a surplus argument without a\nword, so `layer.call(tgt, memory)` ran the decoder against its own input and\nnever read the encoder. Every shape was right and the loss went down.\n\nThe Python binding calls through here, so that is where it surfaced — the\nborch.ts golden calls `forward` directly and was green.",
+       "doc_ko": "부를 수 있게 하는 것 — torch 의 `model(x)` 자리.\n\n**받은 것을 전부 넘긴다.** 예전엔 텐서 하나만 받았는데 디코더 층은 둘을 받는다:\nJavaScript 는 남는 인자를 아무 말 없이 버리므로, `layer.call(tgt, memory)` 는\n디코더를 자기 입력에 대고 돌리고 인코더는 한 번도 안 읽었다. 모양은 전부 맞고\n손실도 내려간다.\n\n파이썬 바인딩이 여기를 거쳐 부르기 때문에 거기서 드러났다 — borch.ts 골든은\n`forward` 를 직접 불러서 초록이었다."
       },
       {
        "name": "ownParameters",
@@ -11160,6 +11160,16 @@
      "doc": "",
      "members": [
       {
+       "name": "embed",
+       "signature": "readonly embed: number",
+       "doc": ""
+      },
+      {
+       "name": "heads",
+       "signature": "readonly heads: number",
+       "doc": ""
+      },
+      {
        "name": "inWeight",
        "signature": "readonly inWeight: Tensor",
        "doc": "",
@@ -11265,9 +11275,238 @@
      "signature": "export declare const functional: { affineGrid: typeof affineGrid; batchNorm: typeof batchNorm; ctcLoss: typeof ctcLoss; embedding: typeof embedding; embeddingBag: typeof embeddingBag; gridSample: typeof gridSample; gumbelSoftmax: typeof gumbelSoftmax; multiHeadAttentionForward: typeof multiHeadAttentionForward; scaledDotProductAttention: typeof scaledDotProductAttention; alphaDropout(input: Tensor, p?: number, training?: boolean, perChannel?: boolean): Tensor; avgPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; bilinear(input: Tensor, other: Tensor, weight: Tensor, bias?: Tensor | null): Tensor; celu(input: Tensor, alpha?: number): Tensor; channelShuffle(input: Tensor, groups: number): Tensor; conv1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; conv3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number, padding?: number): Tensor; cosineEmbeddingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; cosineSimilarity(input: Tensor, other: Tensor, dim?: number, eps?: number): Tensor; crossEntropy(input: Tensor, target: Tensor): Tensor; dropout(input: Tensor, p?: number, training?: boolean): Tensor; fold(input: Tensor, outputSize: number | [number, number], kernel: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; gaussianNllLoss(input: Tensor, target: Tensor, variance: Tensor, full?: boolean, eps?: number, reduction?: Reduction): Tensor; glu(input: Tensor, dim?: number): Tensor; groupNorm(input: Tensor, numGroups: number, eps?: number): Tensor; hardshrink(input: Tensor, lambd?: number): Tensor; hardtanh(input: Tensor, minVal?: number, maxVal?: number): Tensor; hingeEmbeddingLoss(input: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; instanceNorm(input: Tensor, eps?: number): Tensor; klDiv(input: Tensor, target: Tensor, reduction?: Reduction | \"batchmean\", logTarget?: boolean): Tensor; l1Loss(input: Tensor, target: Tensor): Tensor; leakyRelu(input: Tensor, slope?: number): Tensor; linear(input: Tensor, weight: Tensor): Tensor; localResponseNorm(input: Tensor, size: number, alpha?: number, beta?: number, k?: number): Tensor; logSoftmax(input: Tensor, dim?: number): Tensor; marginRankingLoss(input: Tensor, other: Tensor, target: Tensor, margin?: number, reduction?: Reduction): Tensor; maxPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool2d(input: Tensor, kernel?: number, stride?: number): Tensor; maxPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; mseLoss(input: Tensor, target: Tensor): Tensor; multiMarginLoss(input: Tensor, target: Tensor, p?: number, margin?: number, weight?: Tensor | null, reduction?: Reduction): Tensor; multilabelMarginLoss(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; multilabelSoftMarginLoss(input: Tensor, target: Tensor, weight?: Tensor, reduction?: Reduction): Tensor; nllLoss(input: Tensor, target: Tensor): Tensor; normalize(input: Tensor, dim?: number, eps?: number): Tensor; oneHot(input: Tensor, classes: number): Tensor; pairwiseDistance(input: Tensor, other: Tensor, p?: number, eps?: number, keepdim?: boolean): Tensor; pdist(input: Tensor, p?: number): Tensor; pixelShuffle(input: Tensor, upscaleFactor: number): Tensor; pixelUnshuffle(input: Tensor, downscaleFactor: number): Tensor; poissonNllLoss(input: Tensor, target: Tensor, logInput?: boolean, full?: boolean, eps?: number, reduction?: Reduction): Tensor; prelu(input: Tensor, weight: Tensor): Tensor; rrelu(input: Tensor, lower?: number, upper?: number, training?: boolean): Tensor; smoothL1Loss(input: Tensor, target: Tensor, beta?: number): Tensor; softMarginLoss(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; softmax(input: Tensor, dim?: number): Tensor; softmin(input: Tensor, dim?: number): Tensor; softplus(input: Tensor, beta?: number, threshold?: number): Tensor; softshrink(input: Tensor, lambd?: number): Tensor; threshold(input: Tensor, t: number, value: number): Tensor; tripletMarginLoss(input: Tensor, positive: Tensor, negative: Tensor, margin?: number, p?: number, eps?: number, swap?: boolean, reduction?: Reduction): Tensor; unfold(input: Tensor, kernelSize: number | [number, number], dilation?: number, padding?: number, stride?: number): Tensor; huberLoss(input: Tensor, target: Tensor, reduction?: Reduction, delta?: number): Tensor; relu(input: Tensor): Tensor; relu6(input: Tensor): Tensor; sigmoid(input: Tensor): Tensor; hardsigmoid(input: Tensor): Tensor; hardswish(input: Tensor): Tensor; logsigmoid(input: Tensor): Tensor; mish(input: Tensor): Tensor; selu(input: Tensor): Tensor; softsign(input: Tensor): Tensor; tanh(input: Tensor): Tensor; tanhshrink(input: Tensor): Tensor; avgPool1d(input: Tensor, kernel?: number, stride?: number): Tensor; avgPool3d(input: Tensor, kernel?: number, stride?: number): Tensor; convTranspose1d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose2d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; convTranspose3d(input: Tensor, weight: Tensor, bias?: Tensor | null, stride?: number | readonly number[], padding?: number | readonly number[], outputPadding?: number | readonly number[], groups?: number, dilation?: number | readonly number[]): Tensor; lpPool1d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool2d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; lpPool3d(input: Tensor, normType: number, kernel: number, stride?: number): Tensor; maxPool1dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool2dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxPool3dWithIndices(input: Tensor, kernel?: number, stride?: number): { values: Tensor; indices: Tensor; }; maxUnpool1d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool2d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; maxUnpool3d(input: Tensor, indices: Tensor, kernel: number, stride?: number, padding?: number, outputSize?: readonly number[]): Tensor; fractionalMaxPool2d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool2dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3d(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; fractionalMaxPool3dWithIndices(input: Tensor, kernel: number, outputSize: readonly number[], randomSamples: readonly (readonly number[])[]): { values: Tensor; indices: Tensor; }; binaryCrossEntropyWithLogits(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; binaryCrossEntropy(input: Tensor, target: Tensor, reduction?: Reduction): Tensor; adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor; adaptiveMaxPool1dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool2dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; adaptiveMaxPool3dWithIndices(input: Tensor, outputSize: number | readonly number[]): { values: Tensor; indices: Tensor; }; tripletMarginWithDistanceLoss(anchor: Tensor, positive: Tensor, negative: Tensor, distanceFunction?: ((u: Tensor, v: Tensor) => Tensor) | null, margin?: number, swap?: boolean, reduction?: Reduction): Tensor; }",
      "doc": "",
      "members": []
+    },
+    {
+     "kind": "class",
+     "name": "TransformerEncoderLayer",
+     "signature": "export declare class TransformerEncoderLayer extends Module",
+     "doc": "Attention, then a feed-forward, each with a residual and a normalisation.\n\n**`normFirst` moves the normalisation inside the residual**, which is the\ndifference between the 2017 paper and every model since — post-norm adds and then\nnormalises, pre-norm normalises and then adds, and the second is what trains at\ndepth. Both are here because torch has both and the default is torch's (false).",
+     "members": [
+      {
+       "name": "self_attn",
+       "signature": "readonly self_attn: MultiheadAttention",
+       "doc": ""
+      },
+      {
+       "name": "linear1",
+       "signature": "readonly linear1: Linear",
+       "doc": ""
+      },
+      {
+       "name": "linear2",
+       "signature": "readonly linear2: Linear",
+       "doc": ""
+      },
+      {
+       "name": "norm1",
+       "signature": "readonly norm1: LayerNorm",
+       "doc": ""
+      },
+      {
+       "name": "norm2",
+       "signature": "readonly norm2: LayerNorm",
+       "doc": ""
+      },
+      {
+       "name": "dropout",
+       "signature": "readonly dropout: Dropout",
+       "doc": ""
+      },
+      {
+       "name": "config",
+       "signature": "readonly config: readonly [number, number, number, number, string, number, boolean, boolean, boolean]",
+       "doc": "Its own arguments, so a stack can build more of it — see `TransformerEncoder`."
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(dModel: number, nhead: number, dimFeedforward?: number, dropout?: number, activation?: string, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean)",
+       "doc": "**torch's order**, which is not the order this was first written in:\n`(…, activation, layerNormEps, batchFirst, normFirst, bias)`. With `batchFirst`\nin the sixth seat, `new TransformerEncoderLayer(4, 2, 8, 0.1, \"relu\", true)` put\n`true` into torch's epsilon and the layer normalised with eps = 1. Nothing\nraises — the shapes are right and the loss goes down."
+      },
+      {
+       "name": "normFirst",
+       "signature": "readonly normFirst: boolean",
+       "doc": "",
+       "torch": "norm_first"
+      },
+      {
+       "name": "forward",
+       "signature": "forward(src: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TransformerEncoder",
+     "signature": "export declare class TransformerEncoder extends Module",
+     "doc": "The same layer stacked, named `layers.N.…` as in torch.\n\n**torch deep-copies the prototype and TypeScript cannot.** So the layer carries\nits own arguments and the stack builds `numLayers` fresh ones from them — the\nsignature stays torch's, and the alternative (holding one object N times) would\nshare weights between every layer while looking exactly right.\n\n`enableNestedTensor` and `maskCheck` are accepted and change nothing, as in the\ncore: the first asks for a packed representation that does not exist here, and the\nsecond guards a fast path that is not taken.",
+     "members": [
+      {
+       "name": "norm",
+       "signature": "readonly norm: LayerNorm | null",
+       "doc": ""
+      },
+      {
+       "name": "layers",
+       "signature": "readonly layers: ModuleList",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(encoderLayer: TransformerEncoderLayer, numLayers: number, norm?: LayerNorm | null, enableNestedTensor?: boolean, maskCheck?: boolean)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(src: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TransformerDecoderLayer",
+     "signature": "export declare class TransformerDecoderLayer extends Module",
+     "doc": "Self-attention, then attention over the encoder's output, then a feed-forward.\nThe extra `norm3` is what makes it a decoder layer rather than an encoder one.",
+     "members": [
+      {
+       "name": "self_attn",
+       "signature": "readonly self_attn: MultiheadAttention",
+       "doc": ""
+      },
+      {
+       "name": "multihead_attn",
+       "signature": "readonly multihead_attn: MultiheadAttention",
+       "doc": ""
+      },
+      {
+       "name": "linear1",
+       "signature": "readonly linear1: Linear",
+       "doc": ""
+      },
+      {
+       "name": "linear2",
+       "signature": "readonly linear2: Linear",
+       "doc": ""
+      },
+      {
+       "name": "norm1",
+       "signature": "readonly norm1: LayerNorm",
+       "doc": ""
+      },
+      {
+       "name": "norm2",
+       "signature": "readonly norm2: LayerNorm",
+       "doc": ""
+      },
+      {
+       "name": "norm3",
+       "signature": "readonly norm3: LayerNorm",
+       "doc": ""
+      },
+      {
+       "name": "dropout",
+       "signature": "readonly dropout: Dropout",
+       "doc": ""
+      },
+      {
+       "name": "normFirst",
+       "signature": "readonly normFirst: boolean",
+       "doc": "",
+       "torch": "norm_first"
+      },
+      {
+       "name": "config",
+       "signature": "readonly config: readonly [number, number, number, number, string, number, boolean, boolean, boolean]",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(dModel: number, nhead: number, dimFeedforward?: number, dropout?: number, activation?: string, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean)",
+       "doc": "torch's order — see `TransformerEncoderLayer`."
+      },
+      {
+       "name": "forward",
+       "signature": "forward(tgt: Tensor, memory?: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "TransformerDecoder",
+     "signature": "export declare class TransformerDecoder extends Module",
+     "doc": "The decoder layer stacked. `layers.N.…`, as the encoder is.",
+     "members": [
+      {
+       "name": "norm",
+       "signature": "readonly norm: LayerNorm | null",
+       "doc": ""
+      },
+      {
+       "name": "layers",
+       "signature": "readonly layers: ModuleList",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(decoderLayer: TransformerDecoderLayer, numLayers: number, norm?: LayerNorm | null)",
+       "doc": ""
+      },
+      {
+       "name": "forward",
+       "signature": "forward(tgt: Tensor, memory?: Tensor): Tensor",
+       "doc": ""
+      }
+     ]
+    },
+    {
+     "kind": "class",
+     "name": "Transformer",
+     "signature": "export declare class Transformer extends Module",
+     "doc": "The encoder and the decoder together — the whole diagram from the 2017 paper.",
+     "members": [
+      {
+       "name": "dModel",
+       "signature": "readonly dModel: number",
+       "doc": "",
+       "torch": "d_model"
+      },
+      {
+       "name": "nhead",
+       "signature": "readonly nhead: number",
+       "doc": ""
+      },
+      {
+       "name": "encoder",
+       "signature": "readonly encoder: TransformerEncoder",
+       "doc": ""
+      },
+      {
+       "name": "decoder",
+       "signature": "readonly decoder: TransformerDecoder",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(dModel?: number, nhead?: number, numEncoderLayers?: number, numDecoderLayers?: number, dimFeedforward?: number, dropout?: number, activation?: string, customEncoder?: TransformerEncoder | null, customDecoder?: TransformerDecoder | null, layerNormEps?: number, batchFirst?: boolean, normFirst?: boolean, bias?: boolean)",
+       "doc": "torch's order, with `customEncoder` and `customDecoder` in their seats — those\nlet a caller hand in an assembled stack instead of the one built here, and left\nout, torch's eighth and ninth positions land on `layerNormEps` and `batchFirst`."
+      },
+      {
+       "name": "forward",
+       "signature": "forward(src: Tensor, tgt?: Tensor): Tensor",
+       "doc": ""
+      },
+      {
+       "name": "generateSquareSubsequentMask",
+       "signature": "static generateSquareSubsequentMask(size: number): Tensor",
+       "doc": "A **float** mask whose upper triangle is −∞. It is *added* to the scores, not\nmultiplied — which is why the masked positions are −∞ and not 0.",
+       "torch": "generate_square_subsequent_mask"
+      }
+     ]
     }
    ],
-   "count": 696,
+   "count": 740,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -16218,5 +16457,5 @@
    "count": 9
   }
  ],
- "total": 2125
+ "total": 2169
 }

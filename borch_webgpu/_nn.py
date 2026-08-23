@@ -2465,3 +2465,74 @@ class _Attention(Module):
 def MultiheadAttention(embed, heads, batch_first=False):
     return _Attention(_ts.nn.MultiheadAttention.new(embed, heads), heads,
                       batch_first)
+
+
+# ── The transformer ───────────────────────────────────────────────────────
+#
+# **The third implementation, and it was missing again.** The core and borch.ts both
+# grew these in the same hour and this file did not, so the four cases raised
+# `AttributeError` while the other two sides were green. It is the second time in one
+# session, and the reason is the same both times: nothing automated runs this file.
+#
+# torch's argument order, which is `(…, activation, layer_norm_eps, batch_first,
+# norm_first, bias)` — the two middle seats were the other way round on all three
+# sides until an hour ago.
+
+def TransformerEncoderLayer(d_model, nhead, dim_feedforward=2048, dropout=0.1,
+                            activation="relu", layer_norm_eps=1e-5,
+                            batch_first=False, norm_first=False, bias=True):
+    # No `device`/`dtype` — no layer in this file takes them, because there is one
+    # of each in a browser. The core carries the pair only to refuse it.
+    return _layer("TransformerEncoderLayer", d_model, nhead, dim_feedforward,
+                  float(dropout), activation, float(layer_norm_eps),
+                  bool(batch_first), bool(norm_first), bool(bias))
+
+
+def TransformerDecoderLayer(d_model, nhead, dim_feedforward=2048, dropout=0.1,
+                            activation="relu", layer_norm_eps=1e-5,
+                            batch_first=False, norm_first=False, bias=True):
+    return _layer("TransformerDecoderLayer", d_model, nhead, dim_feedforward,
+                  float(dropout), activation, float(layer_norm_eps),
+                  bool(batch_first), bool(norm_first), bool(bias))
+
+
+def TransformerEncoder(encoder_layer, num_layers, norm=None,
+                       enable_nested_tensor=True, mask_check=True):
+    """**Both of torch's last two are accepted and change nothing**, as in the core:
+    the first asks for a packed representation that does not exist here and the
+    second guards a fast path that is not taken."""
+    return _layer("TransformerEncoder", handle(encoder_layer), int(num_layers),
+                  None if norm is None else handle(norm))
+
+
+def TransformerDecoder(decoder_layer, num_layers, norm=None):
+    return _layer("TransformerDecoder", handle(decoder_layer), int(num_layers),
+                  None if norm is None else handle(norm))
+
+
+def Transformer(d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
+                dim_feedforward=2048, dropout=0.1, activation="relu",
+                custom_encoder=None, custom_decoder=None, layer_norm_eps=1e-5,
+                batch_first=False, norm_first=False, bias=True):
+    return _layer("Transformer", d_model, nhead, num_encoder_layers,
+                  num_decoder_layers, dim_feedforward, float(dropout), activation,
+                  None if custom_encoder is None else handle(custom_encoder),
+                  None if custom_decoder is None else handle(custom_decoder),
+                  float(layer_norm_eps), bool(batch_first), bool(norm_first),
+                  bool(bias))
+
+
+def _square_subsequent_mask(size):
+    """`torch.nn.Transformer.generate_square_subsequent_mask` — a **float** mask
+    whose upper triangle is −∞. It is *added* to the scores, which is why the
+    masked positions are −∞ and not 0.
+
+    **Hung on the function**, because every layer in this file is a factory
+    function rather than a class, and a `staticmethod` has nowhere else to live.
+    Two golden cases reach for it through `nn.Transformer.…` and both said
+    `'function' object has no attribute` until it was attached.
+    """
+    return wrap(_ts.nn.Transformer.generateSquareSubsequentMask(int(size)))
+
+
+Transformer.generate_square_subsequent_mask = _square_subsequent_mask

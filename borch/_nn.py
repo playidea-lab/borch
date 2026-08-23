@@ -1808,10 +1808,29 @@ class TransformerEncoderLayer(Module):
     Chapter 10's Block exactly."""
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", batch_first=False, norm_first=False, layer_norm_eps=1e-5):
+                 activation="relu", layer_norm_eps=1e-5, batch_first=False,
+                 norm_first=False, bias=True, device=None, dtype=None):
+        """**torch's order, which is not the order this had.**
+
+        torch is `(…, activation, layer_norm_eps, batch_first, norm_first, bias)`
+        and the sixth seat here was `batch_first` — so
+        `TransformerEncoderLayer(4, 2, 8, 0.1, "relu", True)` put `True` into
+        torch's epsilon and the layer normalised with eps = 1. Nothing raises: the
+        shapes are right, the loss goes down, and the answer is wrong by however
+        much an epsilon of 1 moves a normalisation.
+
+        It sat in the `unaligned` bucket, which says *these lists cannot be lined
+        up* and then says nothing else — the same place `F.normalize` was hiding a
+        missing `out=`. **Clearing the vague reason is what shows the specific one.**
+
+        `bias`, `device` and `dtype` are torch's last three. They are carried and
+        refused rather than left out, so a positional call that reaches them lands
+        on the argument it was aimed at.
+        """
         super().__init__()
+        _no_device_dtype("TransformerEncoderLayer", device, dtype)
         self.self_attn = MultiheadAttention(d_model, nhead, batch_first=batch_first)
-        self.linear1 = Linear(d_model, dim_feedforward)
+        self.linear1 = Linear(d_model, dim_feedforward, bias=bias)
         self.linear2 = Linear(dim_feedforward, d_model)
         self.norm1 = LayerNorm(d_model, eps=layer_norm_eps)
         self.norm2 = LayerNorm(d_model, eps=layer_norm_eps)
@@ -1884,11 +1903,15 @@ class TransformerDecoderLayer(Module):
     """
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", batch_first=False, norm_first=False, layer_norm_eps=1e-5):
+                 activation="relu", layer_norm_eps=1e-5, batch_first=False,
+                 norm_first=False, bias=True, device=None, dtype=None):
+        """torch's order — see `TransformerEncoderLayer`, which had the same
+        two seats the other way round."""
         super().__init__()
+        _no_device_dtype("TransformerDecoderLayer", device, dtype)
         self.self_attn = MultiheadAttention(d_model, nhead, batch_first=batch_first)
         self.multihead_attn = MultiheadAttention(d_model, nhead, batch_first=batch_first)
-        self.linear1 = Linear(d_model, dim_feedforward)
+        self.linear1 = Linear(d_model, dim_feedforward, bias=bias)
         self.linear2 = Linear(dim_feedforward, d_model)
         self.norm1 = LayerNorm(d_model, eps=layer_norm_eps)
         self.norm2 = LayerNorm(d_model, eps=layer_norm_eps)
@@ -1943,10 +1966,20 @@ class Transformer(Module):
 
     def __init__(self, d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
                  dim_feedforward=2048, dropout=0.1, activation="relu",
-                 batch_first=False, norm_first=False, layer_norm_eps=1e-5):
+                 custom_encoder=None, custom_decoder=None, layer_norm_eps=1e-5,
+                 batch_first=False, norm_first=False, bias=True, device=None, dtype=None):
+        """torch's order, with `custom_encoder` and `custom_decoder` in their seats.
+
+        Those two let a caller hand in an assembled stack instead of the one built
+        here. Left out, torch's eighth and ninth positions landed on
+        `layer_norm_eps` and `batch_first` — the same shift as the layers above,
+        two arguments wide.
+        """
         super().__init__()
+        _no_device_dtype("Transformer", device, dtype)
         common = dict(dim_feedforward=dim_feedforward, dropout=dropout, activation=activation,
-                      batch_first=batch_first, norm_first=norm_first, layer_norm_eps=layer_norm_eps)
+                      batch_first=batch_first, norm_first=norm_first,
+                      layer_norm_eps=layer_norm_eps, bias=bias)
         self.encoder = TransformerEncoder(
             TransformerEncoderLayer(d_model, nhead, **common), num_encoder_layers,
             LayerNorm(d_model, eps=layer_norm_eps))

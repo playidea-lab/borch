@@ -260,8 +260,28 @@ UNALIGNED = {
     # the alternative is 74 rows of noise. What is written down instead is that a
     # rename-shaped divergence at equal arity does not appear here at all.
     "Tensor": 0,
-
-    "nn": 8,
+    # **8 → 5.** `TransformerEncoderLayer`, `TransformerDecoderLayer` and
+    # `Transformer` took torch's parameter order, which is not the order they had.
+    #
+    # torch is `(…, activation, layer_norm_eps, batch_first, norm_first, bias)` and
+    # the sixth seat here was `batch_first`, so
+    # `TransformerEncoderLayer(4, 2, 8, 0.1, "relu", True)` put `True` into torch's
+    # epsilon and the layer normalised with **eps = 1**. Nothing raises; the shapes
+    # are right and the loss goes down. `Transformer` was two arguments out, missing
+    # `custom_encoder` and `custom_decoder` from the middle of its list.
+    #
+    # **They were sitting in this bucket the whole time**, and `unaligned` says
+    # *these lists cannot be lined up* and then says nothing else. Third time today
+    # that clearing a vague classification showed a specific defect underneath —
+    # `F.normalize`'s missing `out=` and `isclose`'s missing `equal_nan` were the
+    # others. A row in the vaguest bucket can be hiding a sharp one.
+    #
+    # Found while writing a golden case for the layer: the case was frozen against
+    # real torch, and the core disagreed by 1.6e-01. Every intermediate step then
+    # matched to 1e-7 — so it was not the arithmetic, it was **my own call putting
+    # `True` where torch keeps an epsilon**, which is exactly what the row warns
+    # about and exactly what nobody had written a call to find out.
+    "nn": 5,
     # **27 → 16.** Eleven of these were activations whose only difference from torch
     # was the missing `inplace` at the end — `relu(t)` against `relu(input, inplace)`
     # cannot align, so they sat here rather than in `shorter`. Giving them the

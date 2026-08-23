@@ -29,7 +29,7 @@ three against each other are a large share of this repository's history.
 | **`borch`** (npm) — borch.ts | **WGSL directly, zero dependencies** | in a browser only | CIFAR ResNet-18, **1.5 min/epoch** |
 | **`borch-webgpu`** (Python) | the borch.ts above | in a browser only | the same thing at **1.6 min/epoch** |
 
-The lower two **stand on the same kernels.** `borch-webgpu` is a 8,278 line
+The lower two **stand on the same kernels.** `borch-webgpu` is a 8,769 line
 binding calling borch.ts from Python, and the difference (1.5 against 1.6 minutes)
 is the cost of one trip through Pyodide.
 
@@ -194,7 +194,7 @@ justification went first.
 
 **The public names did not change** — 197 of them, the same before and after the
 split. `import borch` gives the same thing. `borch_webgpu` has the same shape:
-8,278 lines across seven files.
+8,769 lines across seven files.
 
 It was not moved by hand. Only the cut points were chosen and a script did the
 rest — a person cutting and pasting a file that size quietly loses a line, and
@@ -211,7 +211,7 @@ uv run --with pytest --with numpy --with torch pytest tests/
 
 > **Code coverage cannot be measured on the GPU side.** It runs in a browser
 > alone, so `pytest --cov` does not reach it. All that can be said about that side
-> is that **3396 golden cases pass**, and that is a surface check rather than a
+> is that **3401 golden cases pass**, and that is a surface check rather than a
 > line check. The two numbers are not written down as though they were the same
 > thing.
 
@@ -751,9 +751,9 @@ If a submodule path is needed, as in `from borch_webgpu.nn import Linear`, call
 `borch_webgpu.install()`. It defaults to its own name, so somebody else's
 `import torch` is untouched — the same choice as the table above.
 
-It passes **3396 golden cases** — every one in the table but five. Those five are
+It passes **3401 golden cases** — every one in the table but five. Those five are
 the core's alone: complex eigenvalues, and there is no complex dtype on this side.
-The core covers 3343 cases, and the 53 *it* does not see are this side's alone
+The core covers 3348 cases, and the 53 *it* does not see are this side's alone
 (1-D and 3-D convolutions, ranks 7 and 8), which it refuses on purpose.
 
 > That sentence read "nothing in the table is skipped on this side alone" until
@@ -767,7 +767,7 @@ The core covers 3343 cases, and the 53 *it* does not see are this side's alone
 > figure went stale unwatched while the two beside it stayed current. It is 2938,
 > measured. The English wording now matches the pattern, so it is watched.
 
-borch.ts itself has written TS bodies for 2883 cases. **The remaining 513 are two
+borch.ts itself has written TS bodies for 2888 cases. **The remaining 513 are two
 things**: 347 deliberately not carried across, and 166 owed. The binding
 (`borch-webgpu`) already goes through borch.ts's kernels on all of them, so **the
 values are verified**, and what a TS body would add is not a value but this side's
@@ -1233,8 +1233,8 @@ check comparing values alone cannot see a cut graph — because the values are
 right. The GPU side's `roll` and `masked_select` really were cut that way, and the
 golden was entirely green at the time.
 
-And **3396 golden cases** compare all three implementations against **the same
-expected values.** The core covers 3343 cases, leaving out the 53 that are
+And **3401 golden cases** compare all three implementations against **the same
+expected values.** The core covers 3348 cases, leaving out the 53 that are
 browser-only (things the core refuses on purpose, such as 1-D and 3-D
 convolutions) — asking about something that is not there is a wrong answer rather
 than a check. Real torch cannot be put into a browser, so the expected values are

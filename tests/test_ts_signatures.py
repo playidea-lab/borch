@@ -427,7 +427,17 @@ SHORTER = {
     # 28 → 30. `Upsample` and the LP pools grew past borch.ts's lists when they took
     # torch's last arguments. The safe end of the parting: one argument too many
     # raises rather than landing somewhere.
-    "nn": 30,
+    # 30 → 33. The three transformer classes, and each differs by exactly
+    # `device` and `dtype` — **which is what every borch.ts layer does.** There is
+    # one device and one dtype over there, and the core carries the pair only to
+    # refuse it, so giving these three seats nobody else has would make them the
+    # odd ones rather than the correct ones.
+    #
+    # Measured before writing this: of the 33, twelve others also lack the pair
+    # (alongside other differences), and none of the 33 lacks *only* it. These
+    # three are the first to be that clean, which is why the row is worth a
+    # sentence rather than a nudge.
+    "nn": 33,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

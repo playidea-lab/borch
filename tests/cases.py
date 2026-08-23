@@ -7826,6 +7826,64 @@ def train_cases(inp=None):
                   lambda L: attention(L, lambda LL: LL.nn.Transformer
                                       .generate_square_subsequent_mask(5))))
 
+    # ── The transformer ────────────────────────────────────────────────────
+    #
+    # **The weights are built from each parameter's own shape**, not read from a
+    # fixture, so nothing has to be carried across by hand — and the two sides only
+    # agree if their `state_dict` **keys and shapes** agree, which is half of what
+    # this case is asking. The other half is the wiring: attention, feed-forward,
+    # two residuals and two normalisations, in an order that `norm_first` reverses.
+    def _ramp(L, mod):
+        """`0.1·((i mod 7) − 3)` down each parameter, flat. The same rule in both
+        languages, so no array crosses the boundary."""
+        filled = {}
+        for name, value in mod.state_dict().items():
+            n = int(np.prod(value.shape)) if len(value.shape) else 1
+            flat = np.array([0.1 * ((i % 7) - 3) for i in range(n)], dtype=np.float32)
+            filled[name] = L.tensor(flat.reshape(tuple(value.shape)))
+        mod.load_state_dict(filled)
+        return mod
+
+    _tseq = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4) * 0.1 - 1.0
+
+    def _encoder_layer(L, norm_first=False):
+        m = L.nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True, norm_first)
+        m.eval()
+        return _ramp(L, m)(L.tensor(_tseq))
+
+    # **`tsc` caught the first version of these**, because the sixth seat is now a
+    # number and the case handed it `true`. The lucky direction: two arguments of
+    # the same type would have compiled, and the case would have gone on asking
+    # about a layer normalising with eps = 1 under the name `batch_first`.
+    cases.append(("seq::TransformerEncoderLayer", lambda L: _encoder_layer(L)))
+    # **`norm_first` moves the normalisation inside the residual.** Post-norm adds
+    # then normalises; pre-norm normalises then adds, and asked at one setting alone
+    # the other branch is never run.
+    cases.append(("seq::TransformerEncoderLayer(norm_first)",
+                  lambda L: _encoder_layer(L, True)))
+
+    def _encoder_stack(L):
+        proto = L.nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True)
+        m = L.nn.TransformerEncoder(proto, 2)
+        m.eval()
+        return _ramp(L, m)(L.tensor(_tseq))
+
+    cases.append(("seq::TransformerEncoder(2층)", _encoder_stack))
+
+    def _decoder_layer(L):
+        m = L.nn.TransformerDecoderLayer(4, 2, 8, 0.0, "relu", 1e-5, True)
+        m.eval()
+        mem = L.tensor(_tseq * -0.5)
+        return _ramp(L, m)(L.tensor(_tseq), mem)
+
+    # **The one that reads `memory`.** A decoder layer that quietly ignored it would
+    # train and converge and never once look at the encoder, and every shape would
+    # be right — so the memory here is a *different* tensor from the target.
+    cases.append(("seq::TransformerDecoderLayer", _decoder_layer))
+
+    cases.append(("seq::Transformer/마스크",
+                  lambda L: L.nn.Transformer.generate_square_subsequent_mask(4)))
+
     # RMSprop — the one optimizer the golden cases were not looking at
     cases.append(("train::RMSprop/0.weight", lambda L: dict(
         trained(L, "RMSprop").named_parameters())["0.weight"]))

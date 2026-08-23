@@ -1387,6 +1387,59 @@ function addSeq(out: Map<string, Case>, inp: Inputs): void {
   // diverges here.
   out.set("seq::MultiheadAttention(인과 마스크)",
     () => attention(nn.MultiheadAttention.causalMask(5)));
+
+  // ── The transformer ──────────────────────────────────────────────────────
+  //
+  // **The weights come from each parameter's own shape**, by the same rule as
+  // `tests/cases.py`: `0.1·((i mod 7) − 3)` down the flat parameter. No array
+  // crosses the boundary, and the two sides only agree if their `stateDict` keys
+  // **and shapes** agree — which is half of what these ask. The other half is the
+  // wiring, in an order that `normFirst` reverses.
+  const ramp = <T extends nn.Module>(mod: T): T => {
+    const filled: Record<string, Tensor> = {};
+    for (const [name, value] of Object.entries(mod.stateDict())) {
+      const n = value.shape.reduce((a, b) => a * b, 1);
+      const flat: number[] = [];
+      for (let i = 0; i < n; i++) flat.push(0.1 * ((i % 7) - 3));
+      filled[name] = Tensor.from(flat, [...value.shape]);
+    }
+    mod.loadStateDict(filled);
+    return mod;
+  };
+  const tseq = (scale = 1): Tensor => {
+    const v: number[] = [];
+    for (let i = 0; i < 24; i++) v.push((i * 0.1 - 1.0) * scale);
+    return Tensor.from(v, [2, 3, 4]);
+  };
+
+  const encoderLayer = (normFirst: boolean): Tensor => {
+    const m = new nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true, normFirst);
+    m.eval();
+    return ramp(m).call(tseq());
+  };
+  out.set("seq::TransformerEncoderLayer", () => encoderLayer(false));
+  // **`normFirst` moves the normalisation inside the residual.** Asked at one
+  // setting alone the other branch is never run.
+  out.set("seq::TransformerEncoderLayer(norm_first)", () => encoderLayer(true));
+
+  out.set("seq::TransformerEncoder(2층)", () => {
+    const proto = new nn.TransformerEncoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true);
+    const m = new nn.TransformerEncoder(proto, 2);
+    m.eval();
+    return ramp(m).call(tseq());
+  });
+
+  // **The one that reads `memory`.** A decoder layer that quietly ignored it would
+  // train, converge, and never look at the encoder — with every shape right. So the
+  // memory here is a *different* tensor from the target.
+  out.set("seq::TransformerDecoderLayer", () => {
+    const m = new nn.TransformerDecoderLayer(4, 2, 8, 0.0, "relu", 1e-5, true);
+    m.eval();
+    return ramp(m).forward(tseq(), tseq(-0.5));
+  });
+
+  out.set("seq::Transformer/마스크",
+    () => nn.Transformer.generateSquareSubsequentMask(4));
 }
 
 /**

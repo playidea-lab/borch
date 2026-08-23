@@ -130,7 +130,9 @@ CEILINGS = {
     # different backwards, so one name could not stand for both.
     # 3155 → 3157. `quantile(0.3, …)` at the four interpolation rules the default
     # hides — the tag is `접힘` and the four new names reuse it.
-    "borch-ts/test": 3157,
+    # 3157 → 3161. Two case names, `2층` and `마스크` — the transformer stack and
+    # the causal mask, the last five names on the name axis.
+    "borch-ts/test": 3161,
 }
 
 

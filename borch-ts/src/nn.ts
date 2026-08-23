@@ -106,13 +106,21 @@ export abstract class Module {
    */
   training = true;
 
-  abstract forward(x: Tensor): Tensor;
+  abstract forward(x: Tensor, ...rest: Tensor[]): Tensor;
 
   /**
    * So it can be called — the same position as torch's `model(x)`.
+   *
+   * **It forwards everything it was given.** It used to take one tensor, and a
+   * decoder layer takes two: JavaScript discards a surplus argument without a
+   * word, so `layer.call(tgt, memory)` ran the decoder against its own input and
+   * never read the encoder. Every shape was right and the loss went down.
+   *
+   * The Python binding calls through here, so that is where it surfaced — the
+   * borch.ts golden calls `forward` directly and was green.
    */
-  call(x: Tensor): Tensor {
-    return this.forward(x);
+  call(x: Tensor, ...rest: Tensor[]): Tensor {
+    return this.forward(x, ...rest);
   }
 
   /**
@@ -4062,7 +4070,7 @@ export class MultiheadAttention extends Module {
   readonly outWeight: Tensor;
   readonly outBias: Tensor;
 
-  constructor(private readonly embed: number, private readonly heads: number) {
+  constructor(readonly embed: number, readonly heads: number) {
     super();
     const bound = 1 / Math.sqrt(Math.max(1, embed));
     this.inWeight = uniform([3 * embed, embed], bound);
@@ -4183,3 +4191,288 @@ export const functional = {
   multiHeadAttentionForward,
   scaledDotProductAttention,
 };
+
+// ── The transformer, the last five names on the name axis ─────────────────
+//
+// Everything under them was already here: `MultiheadAttention`, `Linear`,
+// `LayerNorm`, `Dropout`, `ModuleList`. What was missing is the assembly, and the
+// field names below are **the core's field names on purpose** — `self_attn`,
+// `linear1`, `norm1` and the rest become `state_dict` keys, and a checkpoint that
+// cannot cross between the two implementations is a checkpoint that does not exist.
+
+/**
+ * Apply a 2-D-only layer **per position** of an `(N, L, E)` sequence.
+ *
+ * **borch.ts's `Linear` is 2-D by 2-D** — `mm is 2-D by 2-D: [2,3,4] x [4,8]` is
+ * what the feed-forward said the first time these classes ran, and a peer had
+ * already found and documented that exact limit from the other direction. The four
+ * transformer cases were red on the borch.ts side while the core's were green: the
+ * name axis cannot see a rank, and this is what that costs.
+ *
+ * Flattening is not a workaround here, it is the operation: a feed-forward and an
+ * output projection are **position-wise by definition**, so `(N, L, E)` folded to
+ * `(N·L, E)` and back is the same arithmetic with the batch spelled out. It is kept
+ * local to these classes rather than pushed into `Linear`, because making `Linear`
+ * batch is a change to a name a lesson page currently teaches around.
+ */
+function positionwise(x: Tensor, f: (flat: Tensor) => Tensor): Tensor {
+  if (x.shape.length <= 2) return f(x);
+  const lead = x.shape.slice(0, -1);
+  const feat = x.shape[x.shape.length - 1] ?? 1;
+  const out = f(x.reshape([lead.reduce((a, b) => a * b, 1), feat]));
+  return out.reshape([...lead, out.shape[out.shape.length - 1] ?? 1]);
+}
+
+/** The activations torch names by string. */
+function namedActivation(name: string): (x: Tensor) => Tensor {
+  if (name === "relu") return (x) => x.relu();
+  if (name === "gelu") return (x) => x.gelu();
+  throw new Error(`activation must be "relu" or "gelu": ${name}`);
+}
+
+/**
+ * Attention, then a feed-forward, each with a residual and a normalisation.
+ *
+ * **`normFirst` moves the normalisation inside the residual**, which is the
+ * difference between the 2017 paper and every model since — post-norm adds and then
+ * normalises, pre-norm normalises and then adds, and the second is what trains at
+ * depth. Both are here because torch has both and the default is torch's (false).
+ */
+export class TransformerEncoderLayer extends Module {
+  readonly self_attn: MultiheadAttention;
+  readonly linear1: Linear;
+  readonly linear2: Linear;
+  readonly norm1: LayerNorm;
+  readonly norm2: LayerNorm;
+  readonly dropout: Dropout;
+  private readonly activation: (x: Tensor) => Tensor;
+  /** Its own arguments, so a stack can build more of it — see `TransformerEncoder`. */
+  readonly config: readonly [number, number, number, number, string, number, boolean, boolean, boolean];
+
+  /**
+   * **torch's order**, which is not the order this was first written in:
+   * `(…, activation, layerNormEps, batchFirst, normFirst, bias)`. With `batchFirst`
+   * in the sixth seat, `new TransformerEncoderLayer(4, 2, 8, 0.1, "relu", true)` put
+   * `true` into torch's epsilon and the layer normalised with eps = 1. Nothing
+   * raises — the shapes are right and the loss goes down.
+   */
+  constructor(
+    dModel: number, nhead: number, dimFeedforward = 2048, dropout = 0.1,
+    activation = "relu", layerNormEps = 1e-5, batchFirst = false,
+    normFirst = false, bias = true,
+  ) {
+    super();
+    void batchFirst;
+    this.self_attn = new MultiheadAttention(dModel, nhead);
+    this.linear1 = new Linear(dModel, dimFeedforward, bias);
+    this.linear2 = new Linear(dimFeedforward, dModel, bias);
+    this.norm1 = new LayerNorm(dModel, layerNormEps);
+    this.norm2 = new LayerNorm(dModel, layerNormEps);
+    this.dropout = new Dropout(dropout);
+    this.activation = namedActivation(activation);
+    this.normFirst = normFirst;
+    this.config = [dModel, nhead, dimFeedforward, dropout, activation, layerNormEps,
+                   batchFirst, normFirst, bias];
+  }
+
+  readonly normFirst: boolean;
+
+  private sa(x: Tensor): Tensor {
+    return this.dropout.call(this.self_attn.call(x));
+  }
+
+  private ff(x: Tensor): Tensor {
+    return this.dropout.call(positionwise(x, (v) =>
+      this.linear2.call(this.dropout.call(this.activation(this.linear1.call(v))))));
+  }
+
+  override forward(src: Tensor): Tensor {
+    if (this.normFirst) {
+      const a = src.add(this.sa(this.norm1.call(src)));
+      return a.add(this.ff(this.norm2.call(a)));
+    }
+    const a = this.norm1.call(src.add(this.sa(src)));
+    return this.norm2.call(a.add(this.ff(a)));
+  }
+}
+
+/**
+ * The same layer stacked, named `layers.N.…` as in torch.
+ *
+ * **torch deep-copies the prototype and TypeScript cannot.** So the layer carries
+ * its own arguments and the stack builds `numLayers` fresh ones from them — the
+ * signature stays torch's, and the alternative (holding one object N times) would
+ * share weights between every layer while looking exactly right.
+ *
+ * `enableNestedTensor` and `maskCheck` are accepted and change nothing, as in the
+ * core: the first asks for a packed representation that does not exist here, and the
+ * second guards a fast path that is not taken.
+ */
+export class TransformerEncoder extends Module {
+  readonly layers: ModuleList;
+
+  constructor(
+    encoderLayer: TransformerEncoderLayer, numLayers: number,
+    readonly norm: LayerNorm | null = null,
+    enableNestedTensor = true, maskCheck = true,
+  ) {
+    super();
+    void enableNestedTensor;
+    void maskCheck;
+    this.layers = new ModuleList(
+      Array.from({ length: numLayers },
+        () => new TransformerEncoderLayer(...encoderLayer.config)));
+  }
+
+  override forward(src: Tensor): Tensor {
+    let x = src;
+    for (const layer of this.layers.children()) x = layer.call(x);
+    return this.norm === null ? x : this.norm.call(x);
+  }
+}
+
+/**
+ * Self-attention, then attention over the encoder's output, then a feed-forward.
+ * The extra `norm3` is what makes it a decoder layer rather than an encoder one.
+ */
+export class TransformerDecoderLayer extends Module {
+  readonly self_attn: MultiheadAttention;
+  readonly multihead_attn: MultiheadAttention;
+  readonly linear1: Linear;
+  readonly linear2: Linear;
+  readonly norm1: LayerNorm;
+  readonly norm2: LayerNorm;
+  readonly norm3: LayerNorm;
+  readonly dropout: Dropout;
+  readonly normFirst: boolean;
+  private readonly activation: (x: Tensor) => Tensor;
+  readonly config: readonly [number, number, number, number, string, number, boolean, boolean, boolean];
+
+  /** torch's order — see `TransformerEncoderLayer`. */
+  constructor(
+    dModel: number, nhead: number, dimFeedforward = 2048, dropout = 0.1,
+    activation = "relu", layerNormEps = 1e-5, batchFirst = false,
+    normFirst = false, bias = true,
+  ) {
+    super();
+    void batchFirst;
+    this.self_attn = new MultiheadAttention(dModel, nhead);
+    this.multihead_attn = new MultiheadAttention(dModel, nhead);
+    this.linear1 = new Linear(dModel, dimFeedforward, bias);
+    this.linear2 = new Linear(dimFeedforward, dModel, bias);
+    this.norm1 = new LayerNorm(dModel, layerNormEps);
+    this.norm2 = new LayerNorm(dModel, layerNormEps);
+    this.norm3 = new LayerNorm(dModel, layerNormEps);
+    this.dropout = new Dropout(dropout);
+    this.activation = namedActivation(activation);
+    this.normFirst = normFirst;
+    this.config = [dModel, nhead, dimFeedforward, dropout, activation, layerNormEps,
+                   batchFirst, normFirst, bias];
+  }
+
+  private ff(x: Tensor): Tensor {
+    return this.dropout.call(positionwise(x, (v) =>
+      this.linear2.call(this.dropout.call(this.activation(this.linear1.call(v))))));
+  }
+
+  /**
+   * **Attention over `memory`, not a second self-attention.** The first version of
+   * this wrote `multihead_attn.attend(x, null)` and then added `memory * 0` so that
+   * the argument would look used. That is the defect this repository has a whole
+   * check for: an argument accepted, discarded, and made to *appear* consulted —
+   * the decoder would have trained, converged to something, and never once read the
+   * encoder.
+   *
+   * `multiHeadAttentionForward` takes query, key and value separately, which is what
+   * makes the real thing possible: the query is the decoder's own state and the key
+   * and value are the encoder's output.
+   */
+  private cross(x: Tensor, memory: Tensor): Tensor {
+    const a = this.multihead_attn;
+    const { output } = multiHeadAttentionForward(
+      x.swapaxes(0, 1), memory.swapaxes(0, 1), memory.swapaxes(0, 1),
+      a.heads, a.inWeight, a.inBias, a.outWeight, a.outBias);
+    return output.swapaxes(0, 1);
+  }
+
+  override forward(tgt: Tensor, memory?: Tensor): Tensor {
+    const mem = memory ?? tgt;
+    if (this.normFirst) {
+      let x = tgt.add(this.dropout.call(this.self_attn.call(this.norm1.call(tgt))));
+      x = x.add(this.dropout.call(this.cross(this.norm2.call(x), mem)));
+      return x.add(this.ff(this.norm3.call(x)));
+    }
+    let x = this.norm1.call(tgt.add(this.dropout.call(this.self_attn.call(tgt))));
+    x = this.norm2.call(x.add(this.dropout.call(this.cross(x, mem))));
+    return this.norm3.call(x.add(this.ff(x)));
+  }
+}
+
+/** The decoder layer stacked. `layers.N.…`, as the encoder is. */
+export class TransformerDecoder extends Module {
+  readonly layers: ModuleList;
+  /** The same objects the `ModuleList` holds, typed — `children()` gives `Module`. */
+  private readonly stack: TransformerDecoderLayer[];
+
+  constructor(
+    decoderLayer: TransformerDecoderLayer, numLayers: number,
+    readonly norm: LayerNorm | null = null,
+  ) {
+    super();
+    this.stack = Array.from({ length: numLayers },
+      () => new TransformerDecoderLayer(...decoderLayer.config));
+    this.layers = new ModuleList(this.stack);
+  }
+
+  override forward(tgt: Tensor, memory?: Tensor): Tensor {
+    let x = tgt;
+    for (const layer of this.stack) x = layer.forward(x, memory);
+    return this.norm === null ? x : this.norm.call(x);
+  }
+}
+
+/** The encoder and the decoder together — the whole diagram from the 2017 paper. */
+export class Transformer extends Module {
+  readonly encoder: TransformerEncoder;
+  readonly decoder: TransformerDecoder;
+
+  /**
+   * torch's order, with `customEncoder` and `customDecoder` in their seats — those
+   * let a caller hand in an assembled stack instead of the one built here, and left
+   * out, torch's eighth and ninth positions land on `layerNormEps` and `batchFirst`.
+   */
+  constructor(
+    readonly dModel = 512, readonly nhead = 8, numEncoderLayers = 6,
+    numDecoderLayers = 6, dimFeedforward = 2048, dropout = 0.1,
+    activation = "relu", customEncoder: TransformerEncoder | null = null,
+    customDecoder: TransformerDecoder | null = null, layerNormEps = 1e-5,
+    batchFirst = false, normFirst = false, bias = true,
+  ) {
+    super();
+    this.encoder = customEncoder ?? new TransformerEncoder(
+      new TransformerEncoderLayer(dModel, nhead, dimFeedforward, dropout, activation,
+        layerNormEps, batchFirst, normFirst, bias),
+      numEncoderLayers, new LayerNorm(dModel, layerNormEps));
+    this.decoder = customDecoder ?? new TransformerDecoder(
+      new TransformerDecoderLayer(dModel, nhead, dimFeedforward, dropout, activation,
+        layerNormEps, batchFirst, normFirst, bias),
+      numDecoderLayers, new LayerNorm(dModel, layerNormEps));
+  }
+
+  override forward(src: Tensor, tgt?: Tensor): Tensor {
+    const memory = this.encoder.call(src);
+    return this.decoder.forward(tgt ?? src, memory);
+  }
+
+  /**
+   * A **float** mask whose upper triangle is −∞. It is *added* to the scores, not
+   * multiplied — which is why the masked positions are −∞ and not 0.
+   */
+  static generateSquareSubsequentMask(size: number): Tensor {
+    const row: number[] = [];
+    for (let i = 0; i < size; i++) {
+      for (let j = 0; j < size; j++) row.push(j > i ? -Infinity : 0);
+    }
+    return Tensor.from(row, [size, size]);
+  }
+}

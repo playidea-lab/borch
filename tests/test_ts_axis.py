@@ -179,7 +179,32 @@ FROZEN = {
     # `UninitializedBuffer`) — all three are marks with nothing on this side to read
     # them, which is a reason rather than a hollow name. Six are unexplained: the
     # five `Transformer*` classes, and `AdaptiveAvgPool2d`, which is held.
-    "nn": 9,
+    # **9 → 4, and the whole axis has no unexplained gap left.**
+    #
+    # The five were `TransformerEncoderLayer`, `TransformerEncoder`,
+    # `TransformerDecoderLayer`, `TransformerDecoder` and `Transformer`. Everything
+    # under them was already here — `MultiheadAttention`, `Linear`, `LayerNorm`,
+    # `Dropout`, `ModuleList` — and what was missing was the assembly. The field
+    # names are **the core's field names on purpose**: `self_attn`, `linear1`,
+    # `norm1` become `state_dict` keys, and a checkpoint that cannot cross between
+    # two implementations is a checkpoint that does not exist.
+    #
+    # **torch deep-copies the prototype layer and TypeScript cannot**, so the layer
+    # carries its own arguments and the stack builds fresh ones. The alternative —
+    # holding one object N times — shares weights between every layer while looking
+    # exactly right.
+    #
+    # The decoder's cross-attention was nearly the defect this repository has a
+    # whole check for. The first version called `attend(x, null)` and added
+    # `memory * 0` so the argument would *look* used: the decoder would have
+    # trained, converged, and never once read the encoder, with every shape correct.
+    # `multiHeadAttentionForward` takes query, key and value separately, which is
+    # what makes the real thing possible.
+    #
+    # The four that remain all have reasons: `AdaptiveAvgPool2d` is held for a
+    # lesson page, and `Buffer`, `UninitializedParameter` and `UninitializedBuffer`
+    # are marks with nothing on this side to read them.
+    "nn": 4,
     # **30 → 10, and eighteen of the twenty were one delegation each.**
     #
     # `poolND`, `lpPool`, `maxUnpool`, `convTransposeND`, `maxPoolWithIndices` and
