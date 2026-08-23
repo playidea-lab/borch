@@ -88,18 +88,16 @@ CASES = {
         None),
 }
 
-# Known to have no `state_dict` today. **Listed by name rather than counted**, so that
-# a fourth fails here instead of joining them, and each carries what a resume loses.
-NO_STATE_DICT = {
-    "ReduceLROnPlateau":
-        "seven mutable attributes — best, num_bad_epochs, cooldown_counter among them "
-        "— and no way to save one of them. A resume restarts the plateau logic from "
-        "nothing: the bad-epoch count goes to zero, so the next cut is up to "
-        "`patience` steps late, and a resume inside a cooldown loses the cooldown "
-        "entirely. torch's carries fifteen keys.",
-    "ChainedScheduler": "holds the schedulers it chains, and none of their state.",
-    "SequentialLR": "holds the milestone it has reached and does not save it.",
-}
+# Schedulers that cannot survive a save. **Empty, and kept rather than deleted** — an
+# empty table says *nothing is owed* where a deleted one says nothing at all.
+#
+# It held three for an hour: `ReduceLROnPlateau` with seven mutable attributes and
+# nowhere to put them, and `ChainedScheduler` and `SequentialLR` holding what they wrap
+# without its state. All three were mended in one change, by a base whose `state_dict`
+# takes everything but the optimizer and recurses into nested schedulers, so the chained
+# pair now carries dictionaries rather than the objects themselves and the whole thing
+# is JSON-serialisable.
+NO_STATE_DICT: dict[str, str] = {}
 
 
 def _fresh():
@@ -128,20 +126,79 @@ def test_the_cases_cover_every_scheduler():
         "the failure this file exists to prevent, one level up.")
 
 
-def test_every_scheduler_can_be_saved():
-    """`state_dict` at all. Absent, there is nothing for the next test to check."""
-    absent = [name for name in _schedulers()
-              if not hasattr(getattr(S, name), "state_dict")]
-    surprise = [name for name in absent if name not in NO_STATE_DICT]
-    assert not surprise, (
-        f"these schedulers cannot be saved and are not written down as such: "
-        f"{surprise}\n  Either give them a `state_dict` or add them to "
-        "`NO_STATE_DICT` with what a resume loses.")
-    mended = [name for name in NO_STATE_DICT if name not in absent]
+def _resumes(name):
+    """Save after four steps, restore into a fresh pair, and see whether the two agree.
+
+    **The optimizer is restored with the scheduler**, which is torch's documented order
+    and not a detail. The learning rate lives on the optimizer; a scheduler carries the
+    counters that decide how it moves. Restore the scheduler alone into a fresh
+    optimizer and the rate starts at its initial value, so `StepLR`, `ExponentialLR`,
+    `MultiStepLR` and `MultiplicativeLR` all "fail" for a reason that is not theirs.
+
+    Written that way first, this reported **six broken schedulers and every one was
+    false** — the naive round trip is itself the wrong question, in the same way
+    `hasattr` was. One asks too little of the object and the other asks it of the wrong
+    object.
+    """
+    make, metrics = CASES[name]
+    first, second = _fresh(), _fresh()
+    live, restored = make(first), make(second)
+    for i in range(4):
+        first.step()
+        live.step(metrics[i]) if metrics else live.step()
+    saved_opt = copy.deepcopy(first.state_dict())
+    saved = copy.deepcopy(live.state_dict())
+    second.load_state_dict(saved_opt)
+    restored.load_state_dict(saved)
+    for i in range(4, 6):
+        first.step()
+        live.step(metrics[i]) if metrics else live.step()
+        second.step()
+        restored.step(metrics[i]) if metrics else restored.step()
+    return first.param_groups[0]["lr"], second.param_groups[0]["lr"]
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_a_saved_scheduler_resumes_where_it_left_off(name):
+    """**Ask the object to do the thing rather than asking whether it could.**
+
+    This asked `hasattr(cls, "state_dict")`, which is a proxy for *can this be saved*.
+    The day a base class arrived carrying `state_dict` for everything, the proxy went
+    true for every child and stopped having anything to do with the ability. It then
+    reported, confidently, that three schedulers written down as unsaveable could be
+    saved — and two of those rows were still true at the time.
+
+    A proxy keeps answering after it stops being connected to the question, which is
+    worse than falling silent: this repository has now paid for that three times —
+    `run.py` comparing modification times until it compared the name table instead,
+    `lessons.py` waiting on a button's text until it read `disabled`, and this.
+
+    So the ability is exercised: four steps, save both, restore into a fresh pair, and
+    the two have to arrive at the same rate.
+    """
+    if name in NO_STATE_DICT:
+        pytest.skip(NO_STATE_DICT[name])
+    live, restored = _resumes(name)
+    assert live == pytest.approx(restored, abs=1e-12), (
+        f"{name}: the run that continued reached {live} and the one restored from a "
+        f"checkpoint reached {restored}.\n  Something the stepping moves is not in "
+        "`state_dict`, so the resume starts that part again.")
+
+
+def test_no_unsaveable_row_describes_something_that_now_resumes():
+    """A row outliving its defect reads to the next person as a limit that is still
+    there. When one is mended the row goes with the fix."""
+    mended = []
+    for name in NO_STATE_DICT:
+        try:
+            live, restored = _resumes(name)
+        except Exception:                                       # noqa: BLE001
+            continue
+        if live == pytest.approx(restored, abs=1e-12):
+            mended.append(name)
     assert not mended, (
-        f"`NO_STATE_DICT` lists schedulers that can be saved now: {mended}. Take them "
-        "out — a row explaining something that is no longer true reads as a limit to "
-        "the next person.")
+        f"`NO_STATE_DICT` lists schedulers that resume correctly now: {mended}. Take "
+        "them out — the defect is fixed and the row now describes nothing.")
 
 
 @pytest.mark.parametrize("name", sorted(n for n in CASES if n not in NO_STATE_DICT))
