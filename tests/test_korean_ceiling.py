@@ -114,7 +114,11 @@ CEILINGS = {
     # (no second shader is needed — `copyFrom` is the write-back and borch.ts has it),
     # and the note says the marker `아직` was right while the reason under it was not.
     # Naming the marker costs two characters and is the whole point of the note.
-    "borch-ts/test": 3141,
+    # 3141 → 3143. One golden case name, `배율` — `scaled_dot_product_attention`'s
+    # `scale`, which was accepted and dropped. Names are keys: the Python and
+    # TypeScript tables have to agree on the string or the row reconciles against
+    # nothing.
+    "borch-ts/test": 3143,
 }
 
 

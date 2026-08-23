@@ -192,16 +192,28 @@ def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
         int(blank), reduction, bool(zero_infinity)))
 
 
-def _lp_pool(x, norm_type, kernel_size, stride=None, **kw):
+def _lp_pool(x, norm_type, kernel_size, stride=None, ceil_mode=False, **kw):
+    """`ceil_mode` was inside the `**kw` and went nowhere. borch.ts's `lpPool` has no
+    seat for it, so it is refused rather than swallowed."""
+    if ceil_mode:
+        from borch._base import _unsupported
+        _unsupported("lp_pool(ceil_mode=True) — not carried into the browser yet")
     return wrap(handle(x).lpPool(norm_type, kernel_size, stride))
 
 
 def _sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
           scale=None):
-    """A free function over there, so it does not go through a tensor method."""
+    """A free function over there, so it does not go through a tensor method.
+
+    **`dropout_p` and `scale` used to be taken and dropped.** borch.ts had neither,
+    so the call passed `is_causal` into their place and the two arguments never
+    crossed — a `scale` silently replaced by `1/√dim` is a model whose attention is
+    weighted wrong and still trains."""
     return wrap(_js.borch.nn.scaledDotProductAttention(
         handle(query), handle(key), handle(value),
-        handle(attn_mask) if attn_mask is not None else None, bool(is_causal)))
+        handle(attn_mask) if attn_mask is not None else None,
+        float(dropout_p), bool(is_causal),
+        None if scale is None else float(scale)))
 
 
 # ── losses and distances ────────────────────────────────────────────────

@@ -1290,13 +1290,27 @@ export function scaledDotProductAttention(
   key: Tensor,
   value: Tensor,
   attnMask: Tensor | null = null,
+  dropoutP = 0.0,
   isCausal = false,
+  scaleOverride: number | null = null,
 ): Tensor {
+  // **`dropoutP` and `scaleOverride` sit in torch's seats, and both were absent.**
+  //
+  // The binding accepted them and dropped them on the floor — `scaled_dot_product_
+  // attention(q, k, v, mask, 0.1)` set no dropout and said nothing, and a `scale`
+  // was ignored outright. `scale` is the sharper of the two: it *replaces*
+  // `1/√dim`, so a caller who set it got the default back and a model whose
+  // attention is scaled wrong trains to somewhere plausible.
+  //
+  // Their absence also put `isCausal` one seat early, which the signature axis read
+  // as `dropped` — the bucket that means *a positional call lands on the wrong
+  // parameter*. It was the last row in that bucket on either axis.
   const rank = query.shape.length;
   const dim = query.shape[rank - 1] ?? 1;
   const len = query.shape[rank - 2] ?? 1;
   const keyLen = key.shape[key.shape.length - 2] ?? 1;
-  const scale = Tensor.full([], 1 / Math.sqrt(dim));
+  const scale = Tensor.full(
+    [], scaleOverride === null ? 1 / Math.sqrt(dim) : scaleOverride);
 
   // The mask that blocks the upper triangle. Built from 0 and a large negative, and
   // **added.**
@@ -1313,7 +1327,7 @@ export function scaledDotProductAttention(
     let scores = q.mm(k.transpose()).binary("mul", scale);
     if (causal) scores = scores.add(causal);
     if (attnMask) scores = scores.add(attnMask);
-    return scores.softmax(-1).mm(v);
+    return scores.softmax(-1).dropout(dropoutP, true).mm(v);
   };
 
   if (rank === 2) return one(query, key, value);

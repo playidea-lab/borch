@@ -139,7 +139,20 @@ SHIFTED = {
     # and `F.embeddingBag` followed. **`tsc` named all eight call sites the instant it
     # moved** — five golden cases and the layer's own two — because a mode string does
     # not fit `number | null`. The identical move on the Python side was silent.
-    "nn.functional": 1,
+    # **1 → 0. `shifted` is empty on both axes now.**
+    #
+    # The row was `scaled_dot_product_attention`: borch.ts had neither
+    # `dropoutP` nor `scale`, so `isCausal` sat one seat early and a positional
+    # call landed a dropout where a boolean belongs. The binding accepted both
+    # missing arguments and dropped them — `scale` **replaces** `1/√dim`, so a
+    # caller who set it got the default back and a model whose attention is
+    # weighted wrong that trains to somewhere plausible.
+    #
+    # **Our own case table had made the mistake the row warns about**, and `tsc`
+    # caught it: `scaledDotProductAttention(x, x, x, null, true)` put a boolean
+    # in the new number slot. The lucky direction — the same two arguments with
+    # the same type would have compiled and asked about a dropout of 1.
+    "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
@@ -269,7 +282,10 @@ RENAMED = {
     "nn": 10,   # Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
-    "nn.functional": 1,
+    # 1 → 2. `scaled_dot_product_attention` arrived from `shifted`: same
+    # length now, and `scale` against `scaleOverride` is the whole of what
+    # differs.
+    "nn.functional": 2,
     # 7 → 1: the six went back to `unaligned` when the core took torch's whole
     # optimizer surface and borch.ts stayed where it was. See the note there.
     "optim": 1,

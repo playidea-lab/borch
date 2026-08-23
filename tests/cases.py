@@ -3421,9 +3421,18 @@ def sdpa_cases(inp=None):
         x = L.tensor(a) if q is None else q
         return L.nn.functional.scaled_dot_product_attention(x, x, x, is_causal=True)
 
+    def scaled(L, q=None):
+        """**`scale` replaces `1/√dim`.** It was accepted and dropped on the way to
+        borch.ts, which had no seat for it, so a caller who set it got the default
+        back — a model whose attention is weighted wrong and trains to somewhere
+        plausible. Asked at a value the default cannot produce."""
+        x = L.tensor(a) if q is None else q
+        return L.nn.functional.scaled_dot_product_attention(x, x, x, scale=0.25)
+
     add("맨 것", plain)
     add("더하는 가림막", masked)
     add("인과", causal)
+    add("배율", scaled)
 
     # **The place where q, k and v differ is looked at too.** Given all three the same, swapping
     # the three arguments around gives the same value and is not caught.

@@ -7621,7 +7621,7 @@
     {
      "kind": "function",
      "name": "scaledDotProductAttention",
-     "signature": "export declare function scaledDotProductAttention(query: Tensor, key: Tensor, value: Tensor, attnMask?: Tensor | null, isCausal?: boolean): Tensor",
+     "signature": "export declare function scaledDotProductAttention(query: Tensor, key: Tensor, value: Tensor, attnMask?: Tensor | null, dropoutP?: number, isCausal?: boolean, scaleOverride?: number | null): Tensor",
      "doc": "The core of attention. **The computation `MultiheadAttention` was doing\ninside, given a name.**\n\nThe layer existed and this function did not. Code that writes attention\nby hand rather than using the layer calls this name, and that is the\nbasic form of modern transformer code.\n\n**A mask is added, not multiplied.** A large negative number is added so\nthat softmax produces zero — it is not a multiplication by zero, because\nmultiplying after softmax has already normalised leaves the remaining\nslots not summing back to 1.\n\nWith a batch axis it runs per sample. That is because `mm` is\ntwo-dimensional; when a batched matrix multiply exists, this is the place\nto change.",
      "members": [],
      "torch": "scaled_dot_product_attention",

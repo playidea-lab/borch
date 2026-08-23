@@ -4304,7 +4304,15 @@ function addSdpa(out: Map<string, Case>, inp: Inputs): void {
   const shapes: [string, (x: Tensor) => Tensor][] = [
     ["맨 것", (x) => nn.scaledDotProductAttention(x, x, x)],
     ["더하는 가림막", (x) => nn.scaledDotProductAttention(x, x, x, mask())],
-    ["인과", (x) => nn.scaledDotProductAttention(x, x, x, null, true)],
+    // **`isCausal` moved from the fifth seat to the sixth** when `dropoutP` took
+    // torch's place, and this line is what caught it — `tsc` refused a boolean in a
+    // number slot. The *lucky* direction: had the two been the same type it would
+    // have compiled and the case would have asked about a dropout of 1.
+    ["인과", (x) => nn.scaledDotProductAttention(x, x, x, null, 0, true)],
+    // **`scale` replaces `1/√dim`**, so a caller who sets it and is ignored gets a
+    // model whose attention is weighted wrong and trains to somewhere plausible.
+    // Asked at a value the default cannot produce.
+    ["배율", (x) => nn.scaledDotProductAttention(x, x, x, null, 0, false, 0.25)],
   ];
   for (const [name, fn] of shapes) {
     out.set(`sdpa::${name}`, () => fn(inp.get("attn_x")));
