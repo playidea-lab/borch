@@ -397,6 +397,42 @@ for _name in dir(Tensor):
 # went through this once with `bool`.
 
 
+# ── the methods that forward to a module function ──────────────────────────
+#
+# `_tensor.py` binds a few dozen names as `def method(self, *args, **kw)` that call
+# `_ops.<name>`, because writing each list out twice is how the two drift. The cost is
+# that **`inspect.signature` sees the wrapper**, so every check that reads a signature
+# goes blind at those names: fifteen of the `variadic` rows on the core-to-torch axis
+# were this, and `variadic` means *cannot be compared at all.*
+#
+# `__wrapped__` is what `inspect` follows, and it is set here rather than in
+# `_tensor.py` because the module function does not exist yet when the binding runs —
+# `_ops` imports `_tensor`, not the other way round.
+#
+# The same omission in `_accepts_out` below cost two names on the `dim` sweep, and
+# widening it there turned up two silent wrong answers. This is the same repair on a
+# larger set.
+def _link_wrapped():
+    from . import _ops as _o
+    from ._tensor import Tensor as _T
+
+    for _n in dir(_T):
+        _m = getattr(_T, _n, None)
+        if getattr(_m, "__wrapped__", None) is not None:
+            continue
+        _target = getattr(_o, _n, None)
+        if callable(_m) and callable(_target) and "<locals>" in getattr(
+                _m, "__qualname__", "") and getattr(_m, "__name__", None) == _n:
+            try:
+                _m.__wrapped__ = _target
+            except (AttributeError, TypeError):
+                pass
+
+
+_link_wrapped()
+del _link_wrapped
+
+
 # ── `out=` — writing into a tensor made in advance ──────────────────────────
 #
 # For these names torch writes into the tensor it was handed rather than making

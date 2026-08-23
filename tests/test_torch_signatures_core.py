@@ -218,7 +218,10 @@ SHORTER = {
     # orders equally true and the function has to pick one. Without the flag it picks
     # silently — that is the default on both sides, and the flag is the only way to
     # find out that a pick was made.
-    "Tensor": 1,
+    # 1 → 2. `stft` and `backward` became comparable when the method binders started
+    # setting `__wrapped__`; both are short tails against torch (`align_to_window`,
+    # and `create_graph`/`inputs`).
+    "Tensor": 2,
     # 54 → 60 and the judged share 132 → 144 of 161. **Nothing got worse: twelve rows
     # became visible.** The twelve lazy layers declared `(*args, **kwargs)` and sat in
     # the uncomparable bucket while every other layer was measured; they declare their
@@ -245,7 +248,11 @@ SHORTER = {
     # So the count staying put is the right outcome and not a failure to improve:
     # what these thirteen are short of now is `device` and `dtype` alone, which is
     # what every layer in this bucket is short of.
-    "nn": 57,
+    # 57 → 58. `LazyLinear` joined when it stopped being uncomparable: it is written
+    # by hand rather than generated, so it alone kept `_Lazy.__init__`'s
+    # `(*args, **kw)` and was the one lazy layer this axis could not read. It is
+    # short of torch's `device`/`dtype`, like every other layer in this bucket.
+    "nn": 58,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
     # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are
@@ -291,14 +298,33 @@ UNREADABLE_IN_TORCH = 571
 # namespace is what makes that say something: `Tensor` going from 9-of-512 to
 # 0-of-512 moves a number here and moves nothing in any total.
 JUDGED = {
-    "Tensor": (9, 512),
+    # 9 → 15 of 512. **Six rows stopped being uncomparable.** `_as_method` and
+    # `_bind_from_module` write `(self, *args, **kw)` and forward everything, so
+    # `inspect.signature` saw the wrapper and the axis filed them under `variadic`,
+    # which means *cannot be compared at all* — for names whose module form is fully
+    # spelled out three lines away. Setting `__wrapped__` is the whole fix.
+    #
+    # What they turned out to be is worth recording as the negative result it is:
+    # four renames (`b` against `other`, `size` against `split_size`) and two short
+    # tails. **No silent mis-seat.** The last time this repair was made — on
+    # `_accepts_out` — it turned up two functions answering for an axis that does not
+    # exist, so the outcome was not predictable from the shape of the fix.
+    "Tensor": (15, 512),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
     # fix looks like here** — the total did not change, and no other number in this
     # file would have recorded that anything happened.
-    "nn": (144, 161),
-    "nn.functional": (76, 126),   # +1: embedding_bag became readable
+    # 144 → 145. `LazyLinear`, see `SHORTER`.
+    "nn": (145, 161),
+    # 76 → 84. **Eight pooling functions stopped being uncomparable.** They ended
+    # `(…, **_)`, which makes the whole signature read as `VARIADIC` — and on this
+    # axis `variadic` means *cannot be compared at all*, so one `**_` bought silence
+    # over eight names. What it swallowed was `return_indices`, which changes nothing
+    # in a `*_with_indices` function (measured: torch returns the pair whichever way
+    # it is set), so it is named and unused now. The difference between that and
+    # `**_` is that a reader can see it.
+    "nn.functional": (84, 126),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
     "linalg": (0, 42),
@@ -614,7 +640,10 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # 57 → 48. Nine optimizers stopped taking fewer positional arguments than torch when
 # they took `foreach`, `capturable` and the rest in torch's own seats.
 # 48 → 47. `DataLoader` took torch's whole list.
-TORCH_REACHES_FURTHER_BY_POSITION = 47
+# 47 → 48. `stft` joined when it became readable.
+# 48 → 49. `LazyLinear`, which is short of torch's `device`/`dtype` like the rest of
+# the layers, and could not be counted here at all while its signature was variadic.
+TORCH_REACHES_FURTHER_BY_POSITION = 49
 
 # **`agree` rows with the same problem: none.** Worth pinning precisely because it
 # is empty. `agree` means the two name lists match, and the worry — raised while

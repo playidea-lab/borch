@@ -1032,8 +1032,20 @@ def max_pool3d(x, kernel_size, stride=None, padding=0, dilation=1,
 # `max_pool2d(..., return_indices=True)` and `max_pool2d_with_indices(...)`. One
 # of them produces the value and the other lays a name on top.
 
+# **`return_indices` is named rather than swallowed.**
+#
+# These nine took `**_` at the end, which made their whole signature read as
+# `VARIADIC` to `inspect` — and `variadic` on the signature axis means *cannot be
+# compared at all*, so nothing had ever checked their argument lists against torch's.
+# One `**_` bought silence over seven names.
+#
+# What it was swallowing is `return_indices`, and it changes nothing: measured, a
+# `*_with_indices` function in torch hands back the pair whichever way the flag is
+# set — the name has already decided. So it is accepted and unused, like `foreach` on
+# the optimizers, and **the difference between that and `**_` is that a reader can
+# see it.**
 def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
-                            ceil_mode=False, **_):
+                            ceil_mode=False, return_indices=True):
     """**This name exists at torch's top level too**, and takes everything
     positionally. The three slots that used to be refused are implemented now and
     go through `_max_pool_nd`, which is where the window arithmetic lives."""
@@ -1047,7 +1059,7 @@ def max_pool1d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
 
 
 def max_pool2d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
-                            ceil_mode=False, **_):
+                            ceil_mode=False, return_indices=True):
     if not _pool_is_plain(padding, dilation, ceil_mode):
         return _max_pool_nd(x, 2, kernel_size, stride, padding, dilation,
                             ceil_mode, True)
@@ -1058,7 +1070,7 @@ def max_pool2d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
 
 
 def max_pool3d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
-                            ceil_mode=False, **_):
+                            ceil_mode=False, return_indices=True):
     if not _pool_is_plain(padding, dilation, ceil_mode):
         return _max_pool_nd(x, 3, kernel_size, stride, padding, dilation,
                             ceil_mode, True)
@@ -1068,15 +1080,15 @@ def max_pool3d_with_indices(x, kernel_size, stride=None, padding=0, dilation=1,
     return out, Tensor(pos)
 
 
-def adaptive_max_pool1d_with_indices(x, output_size, **_):
+def adaptive_max_pool1d_with_indices(x, output_size, return_indices=True):
     return _adaptive_with_indices(x, _spread(output_size, 1))
 
 
-def adaptive_max_pool2d_with_indices(x, output_size, **_):
+def adaptive_max_pool2d_with_indices(x, output_size, return_indices=True):
     return _adaptive_with_indices(x, _pair(output_size))
 
 
-def adaptive_max_pool3d_with_indices(x, output_size, **_):
+def adaptive_max_pool3d_with_indices(x, output_size, return_indices=True):
     return _adaptive_with_indices(x, _spread(output_size, 3))
 
 
@@ -1371,13 +1383,15 @@ def fractional_max_pool3d(x, kernel_size, output_size=None, output_ratio=None,
 
 
 def fractional_max_pool2d_with_indices(x, kernel_size, output_size=None,
-                                       output_ratio=None, _random_samples=None, **_):
+                                       output_ratio=None, return_indices=True,
+                                       _random_samples=None):
     return _fractional_pool(x, kernel_size, output_size, output_ratio,
                             _random_samples, 2)
 
 
 def fractional_max_pool3d_with_indices(x, kernel_size, output_size=None,
-                                       output_ratio=None, _random_samples=None, **_):
+                                       output_ratio=None, return_indices=True,
+                                       _random_samples=None):
     return _fractional_pool(x, kernel_size, output_size, output_ratio,
                             _random_samples, 3)
 
@@ -9474,6 +9488,13 @@ def _as_method(name):
 
     method.__name__ = name
     method.__doc__ = f"The same as `torch.{name}(x, ...)`. torch offers both."
+    # **The forwarded signature has to survive.** This binder writes
+    # `(self, *args, **kw)` and hands everything to `fn`, so the two lists are the
+    # same modulo the receiver — but `inspect.signature` sees the wrapper, and every
+    # check that reads one goes blind here. Fifteen rows on the core-to-torch axis
+    # read as `variadic`, which means *cannot be compared at all*, for names whose
+    # module form is fully spelled out three lines above.
+    method.__wrapped__ = fn
     return method
 
 

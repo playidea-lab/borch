@@ -1495,6 +1495,8 @@ def _bind_from_module(name):
     method.__name__ = name
     method.__qualname__ = f"Tensor.{name}"
     method.__doc__ = f"`borch.{name}` as a method. torch offers both."
+    # See `_ops._as_method` on `__wrapped__`. Bound lazily, because `_ops` is not
+    # importable at the time this runs — it imports this module.
     return method
 
 

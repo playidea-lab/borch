@@ -167,7 +167,16 @@ UNREADABLE_TOTAL = 238
 # weight_decay)` against borch.ts's `(params, lr, beta1, beta2, eps, weightDecay)`.
 # The pair became two positions, which is a real arity change and not a rename.
 UNALIGNED = {
-    "Tensor": 2,
+    # 2 → 6. **Thirty-odd `Tensor` methods stopped being uncomparable** when the
+    # method binders started setting `__wrapped__` — until then `inspect` saw
+    # `(self, *args, **kw)` and the axis filed them under `variadic`, which means
+    # *nothing was compared*. Four landed here: `stft`, `istft`, `isclose` and
+    # `random_`, where borch.ts takes the tensor as a first argument or stops
+    # short of torch's list.
+    #
+    # **`shifted` did not move**, which is the number that would have mattered:
+    # nothing newly visible has an argument in the wrong seat.
+    "Tensor": 6,
     # `SmoothL1Loss` left this table when a peer fixed it: the core took
     # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
     # torch's live arguments are `(reduction, beta)`, with the deprecated
@@ -233,7 +242,11 @@ RENAMED = {
     # `agree` when they took torch's arguments — `type()` with none names the
     # type, and `bincount` takes `weights` and `minlength` as `_ops.bincount`
     # next door already did.
-    "Tensor": 28,
+    # 28 → 55. The rest of the same thirty, almost all of them a spelling —
+    # `b` against `other`, `size` against `split_size`. A large jump in this
+    # bucket from a change that compared *more* is the expected shape; the same
+    # jump from a change that compared the same number would not be.
+    "Tensor": 55,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
@@ -255,7 +268,9 @@ RENAMED = {
 SHORTER = {
     # 16 → 15. `flatten` took torch's `end_dim`, so its list is no longer a
     # prefix of borch.ts's — it moved to `renamed` below.
-    "Tensor": 15,
+    # 15 → 17. Two short tails, `stft`'s `align_to_window` and `backward`'s
+    # `create_graph`/`inputs`.
+    "Tensor": 17,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -284,7 +299,9 @@ SHORTER = {
     # into the bucket that means *somebody has to read this*. They were given their
     # target's list, which is the rule the core already derives automatically and
     # borch.ts writes out by hand.
-    "nn": 18,
+    # 18 → 19. `LazyLinear` arrived when it stopped being uncomparable — see the
+    # core-to-torch table.
+    "nn": 19,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

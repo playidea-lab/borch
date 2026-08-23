@@ -3192,6 +3192,14 @@ def _make_lazies():
     return made
 
 
+# **`LazyLinear` gets the same declaration as the other eleven.** It is written by
+# hand above rather than generated, so it kept `_Lazy.__init__`'s `(*args, **kw)` and
+# was the one lazy layer the signature axis could not compare — `variadic` there means
+# *nothing was checked*, and the paragraph in `_lazy_declaration` about exactly that
+# hazard was three lines away from the class it did not cover.
+LazyLinear.__init__, LazyLinear._names = _lazy_declaration(Linear, 1)
+
+
 for _name, _lazy_cls in {"LazyLinear": LazyLinear, **_make_lazies()}.items():
     globals()[_name] = _lazy_cls
     setattr(nn, _name, _lazy_cls)
