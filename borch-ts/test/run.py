@@ -575,7 +575,11 @@ NOT_PORTED = {
     "v2::": (71, "아직 — the repr of fifty-two v2 names, and nineteen values at the "
                  "settings where the draw stops"),
     "cache::": (4, "별칭 — parity asks the same thing about soiling a global constant"),
-    "dataconv::": (3, "파이썬 — `default_convert` and `get_worker_info` are Python's"),
+    # 3 → 7. Four `DataLoader` rows: `generator`, `batch_sampler`, and `drop_last`
+    # given by position. **borch.ts has no `DataLoader` at all** — over there a batch
+    # comes from `Dataset.batches()`, so there is nothing to give a generator to.
+    "dataconv::": (7, "파이썬 — `default_convert`, `get_worker_info` and the "
+                      "`DataLoader`'s arguments. borch.ts has no DataLoader"),
 }
 
 

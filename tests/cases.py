@@ -5231,6 +5231,55 @@ def unpool_cases(inp=None):
 DATACONV_PREFIX = "dataconv::"
 
 
+def data_loader_cases(inp=None):
+    """`DataLoader`'s arguments, which were seven of torch's seventeen.
+
+    **Two of the seven were in the wrong seats.** `collate_fn` is torch's seventh and
+    `drop_last` its ninth; here they were sixth and seventh, so
+    `DataLoader(ds, 4, False, None, 0, True)` set `drop_last` on this side and handed
+    `True` to `collate_fn` on torch's — which then tries to call it. Every case below
+    passes its arguments **by position**, because a keyword call cannot see that.
+
+    `generator` is the one worth the most. Without it a shuffled loader cannot be made
+    to repeat, which is the first thing anybody wants from a dataset — and it is also
+    why no case had ever frozen a shuffled order: there was no way to make one twice.
+    It is asked as *the same seed twice and then a different seed*, since a single
+    draw agrees with any implementation that draws at all.
+    """
+    del inp
+    cases = []
+    items = list(range(10))
+
+    def order(L, seed):
+        g = L.Generator()
+        g.manual_seed(seed)
+        loader = L.utils.data.DataLoader(items, 3, True, None, None, 0, None, False,
+                                         False, 0, None, None, g)
+        return " | ".join(",".join(str(int(v)) for v in b) for b in loader)
+
+    # **As text, not as a boolean.** The harness takes a value out with
+    # `.detach().numpy()` and a `bool` has neither, so a comparison written as an
+    # answer stops in the dumper rather than being compared.
+    cases.append((DATACONV_PREFIX + "DataLoader(generator)/같은 씨앗은 같은 순서",
+                  lambda L: str(order(L, 7) == order(L, 7))))
+    cases.append((DATACONV_PREFIX + "DataLoader(generator)/다른 씨앗은 다른 순서",
+                  lambda L: str(order(L, 7) != order(L, 11))))
+    # Positional, and past the two seats that were swapped: the sixth is
+    # `num_workers` and the ninth is `drop_last`.
+    cases.append((DATACONV_PREFIX + "DataLoader(자리로 준 drop_last)",
+                  lambda L: " | ".join(
+                      ",".join(str(int(v)) for v in b)
+                      for b in L.utils.data.DataLoader(items, 4, False, None, None, 0,
+                                                       None, False, True))))
+    cases.append((DATACONV_PREFIX + "DataLoader(batch_sampler)",
+                  lambda L: " | ".join(
+                      ",".join(str(int(v)) for v in b)
+                      for b in L.utils.data.DataLoader(
+                          items, batch_sampler=L.utils.data.BatchSampler(
+                              L.utils.data.SequentialSampler(items), 4, True)))))
+    return cases
+
+
 def default_convert_cases(inp=None):
     """`utils.data.default_convert` — **what changes and what does not.**
 
@@ -10956,6 +11005,7 @@ def golden_cases(inp=None):
             + pad_cases(inp) + loss_cases(inp) + lazy_cases(inp)
             + shuffle_cases(inp) + misc_cases(inp) + cell_cases(inp)
             + method_name_cases(inp) + default_convert_cases(inp)
+            + data_loader_cases(inp)
             + unpool_cases(inp) + functional_name_cases(inp)
             + top_level_cases(inp)
             + opt_cases(inp) + dropout_cases(inp) + sdpa_cases(inp)

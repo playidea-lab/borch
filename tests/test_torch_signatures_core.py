@@ -202,13 +202,23 @@ UNALIGNED = {
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
-    "utils.data": 1,
+    # 1 → 0. `DataLoader` had seven of torch's seventeen names **and two of them
+    # in the wrong seats** — `collate_fn` is torch's seventh and `drop_last` its
+    # ninth, where here they were sixth and seventh. `DataLoader(ds, 4, False,
+    # None, 0, True)` set `drop_last` on this side and handed `True` to
+    # `collate_fn` on torch's, which then tries to call it.
+    "utils.data": 0,
 }
 
 # The core takes a prefix of torch's arguments — a **feature torch has and we do
 # not**, which is `torch_gap.py`'s kind of finding rather than a silent shift.
 SHORTER = {
-    "Tensor": 2,
+    # 2 → 1. `dim_order` took `ambiguity_check`, which refuses where the answer is
+    # not unique: an axis of length 1 has no position of its own, so `(1, 3)` has two
+    # orders equally true and the function has to pick one. Without the flag it picks
+    # silently — that is the default on both sides, and the flag is the only way to
+    # find out that a pick was made.
+    "Tensor": 1,
     # 54 → 60 and the judged share 132 → 144 of 161. **Nothing got worse: twelve rows
     # became visible.** The twelve lazy layers declared `(*args, **kwargs)` and sat in
     # the uncomparable bucket while every other layer was measured; they declare their
@@ -260,7 +270,7 @@ SHORTER = {
     "optim": 0,
     "optim.lr_scheduler": 1,
     "linalg": 0,
-    "utils.data": 1,
+    "utils.data": 0,
 }
 
 # **torch is implemented in C here and `inspect` cannot read it.** Pinned as a total
@@ -469,7 +479,19 @@ def test_the_measurement_still_runs_as_a_script():
 # all algorithm variants that change values, all absent, and **none of them on this
 # list**, because torch takes them positionally. This number was the list of what was
 # owed here, and the four things most worth owing were on the other axis.
-KEYWORD_ONLY_ABSENCES = 5
+# **5 → 0. The table is empty, and how to read an empty one is the lesson in it.**
+#
+# It counts *keyword-only* arguments torch has and the core does not. That filter is
+# in its name and not in anybody's reading of it, so while it stood at 33 it looked
+# like the list of what the optimizers owed — and `amsgrad`, `centered`, `momentum`
+# and `decoupled_weight_decay`, which all change values, sat outside it because torch
+# declares them positionally. **A number can be correct, complete and named, and
+# still be read as answering a wider question than it asks.**
+#
+# Stated once, in the form the next such table should copy: **this omits every
+# absence torch declares positionally, and that set is not empty** — those live in
+# `SHORTER` above.
+KEYWORD_ONLY_ABSENCES = 0
 
 
 def _keyword_only_gaps():
@@ -591,7 +613,8 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # evidence.
 # 57 → 48. Nine optimizers stopped taking fewer positional arguments than torch when
 # they took `foreach`, `capturable` and the rest in torch's own seats.
-TORCH_REACHES_FURTHER_BY_POSITION = 48
+# 48 → 47. `DataLoader` took torch's whole list.
+TORCH_REACHES_FURTHER_BY_POSITION = 47
 
 # **`agree` rows with the same problem: none.** Worth pinning precisely because it
 # is empty. `agree` means the two name lists match, and the worry — raised while

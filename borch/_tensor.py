@@ -1659,9 +1659,29 @@ def _stride(self, dim=None):
     return got if dim is None else got[dim]
 
 
-def _dim_order(self):
+def _dim_order(self, *, ambiguity_check=False):
     """The axes ordered from the fastest in memory. Contiguous it is
-    `(0, 1, …)`, and a transpose reverses it."""
+    `(0, 1, …)`, and a transpose reverses it.
+
+    **`ambiguity_check` refuses where the answer is not unique**, which is what
+    torch does with it and the whole reason it exists: an axis of length 1 has the
+    same stride whatever position it is given, so `(1, 3)` has two orders that are
+    equally true and this function has to pick one. Without the flag it picks
+    silently — that is the default on both sides. With it, torch raises, and does so
+    for **any** length-1 axis, `(1,)` included; only a shape with every axis longer
+    than one has a single answer.
+
+    It was the last keyword-only argument on the `Tensor` half of the signature
+    axis, and its absence made the flag look like a decoration rather than the
+    question the function cannot otherwise answer.
+    """
+    if ambiguity_check and any(n == 1 for n in self.data.shape):
+        raise RuntimeError(_like_torch(
+            "dim_order(ambiguity_check=True) needs every axis longer than 1 — an "
+            f"axis of length 1 has no position of its own, and {self.data.shape} "
+            "has one.",
+            "The tensor does not have unique dim order, or cannot map to exact one "
+            "of the given memory formats."))
     return tuple(int(i) for i in _np.argsort([-s for s in self.data.strides]))
 
 

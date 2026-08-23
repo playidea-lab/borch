@@ -68,25 +68,90 @@ class WeightedRandomSampler:
 
 
 class RandomSampler:
-    def __init__(self, data_source):
+    def __init__(self, data_source, replacement=False, num_samples=None,
+                 generator=None):
+        """torch's list. `generator` is the one that matters here: without it a
+        shuffled loader cannot be made to repeat, and `WeightedRandomSampler` next
+        door has taken one all along."""
         self.data_source = data_source
+        self.replacement = replacement
+        self._num_samples = num_samples
+        self.generator = generator
 
     def __iter__(self):
-        return iter(_rng.permutation(len(self.data_source)).tolist())
+        rng = self.generator.rng() if self.generator is not None else _rng
+        n = len(self.data_source)
+        if self.replacement:
+            return iter(rng.integers(0, n, size=len(self)).tolist())
+        return iter(rng.permutation(n).tolist()[:len(self)])
 
     def __len__(self):
-        return len(self.data_source)
+        return (len(self.data_source) if self._num_samples is None
+                else self._num_samples)
 
 
 class DataLoader:
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
-                 num_workers=0, drop_last=False, collate_fn=None):
+                 batch_sampler=None, num_workers=0, collate_fn=None,
+                 pin_memory=False, drop_last=False, timeout=0,
+                 worker_init_fn=None, multiprocessing_context=None,
+                 generator=None, *, prefetch_factor=None,
+                 persistent_workers=False, pin_memory_device="",
+                 in_order=True):
+        """**torch's list, and it was seven names of seventeen with two of them in
+        the wrong seats.** `collate_fn` is torch's seventh and `drop_last` its
+        ninth; here they were sixth and seventh, so
+        `DataLoader(ds, 4, False, None, 0, True)` set `drop_last` on this side and
+        `collate_fn` on torch's — a boolean into a callable's slot, which torch then
+        tries to call.
+
+        The rest divide three ways and the division is measured, not assumed.
+
+        **`generator` and `batch_sampler` are real and are implemented.** A shuffled
+        loader with no generator cannot be made to repeat, which is the first thing
+        anyone wants from a dataset; `batch_sampler` hands out whole batches of
+        indices and replaces `batch_size`, `shuffle`, `sampler` and `drop_last` at
+        once, as it does in torch.
+
+        **`pin_memory` and `pin_memory_device` are accepted and ignored.** They ask
+        for page-locked host memory so a copy to a GPU can be asynchronous. There is
+        no device to copy to here, and **no value changes either way** — the same
+        standing as `foreach` on the optimizers.
+
+        **The worker settings are refused, in torch's own words where torch has
+        them.** `num_workers` is accepted and runs in one process (a browser has no
+        fork); `prefetch_factor` and `persistent_workers` torch itself refuses when
+        `num_workers` is 0, and that is always true here, so the refusal is torch's
+        rather than ours. `timeout`, `worker_init_fn`, `multiprocessing_context` and
+        `in_order` mean nothing without workers and say so.
+        """
         if sampler is not None and shuffle:
             raise ValueError("sampler and shuffle cannot be used together.")
+        if batch_sampler is not None and (shuffle or sampler is not None
+                                          or drop_last or batch_size != 1):
+            raise ValueError(
+                "batch_sampler is mutually exclusive with batch_size, shuffle, "
+                "sampler and drop_last.")
+        if prefetch_factor is not None:
+            raise ValueError(
+                "prefetch_factor option could only be specified in multiprocessing."
+                "let num_workers > 0 to enable multiprocessing, and it is always 0 "
+                "here — a browser has no fork.")
+        if persistent_workers:
+            raise ValueError("persistent_workers option needs num_workers > 0")
+        for name, given in (("timeout", timeout), ("worker_init_fn", worker_init_fn),
+                            ("multiprocessing_context", multiprocessing_context)):
+            if given:
+                raise ValueError(f"{name} needs num_workers > 0")
+        if not in_order:
+            raise ValueError("in_order=False needs num_workers > 0")
+        del pin_memory, pin_memory_device   # no device to pin for; no value changes
         self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.collate_fn = collate_fn
+        self.batch_sampler = batch_sampler
+        self.generator = generator
         if isinstance(dataset, IterableDataset):
             # An iterable dataset has neither a length nor indices. Asked to
             # shuffle, it stops here — running on quietly unshuffled is worse.
@@ -94,12 +159,17 @@ class DataLoader:
                 raise ValueError("IterableDataset cannot be shuffled — it has no indices.")
             self.sampler = None
         else:
-            self.sampler = sampler or (RandomSampler(dataset) if shuffle
-                                       else SequentialSampler(dataset))
+            self.sampler = sampler or (
+                RandomSampler(dataset, generator=generator) if shuffle
+                else SequentialSampler(dataset))
 
     def __iter__(self):
         # **An iterable dataset uses no indices.** There are none for a sampler
         # to produce, so it is simply streamed.
+        if self.batch_sampler is not None:
+            for idx in self.batch_sampler:
+                yield self._collate([self.dataset[i] for i in idx])
+            return
         source = (self.dataset if isinstance(self.dataset, IterableDataset)
                   else (self.dataset[i] for i in self.sampler))
         batch = []
@@ -112,6 +182,8 @@ class DataLoader:
             yield self._collate(batch)
 
     def __len__(self):
+        if self.batch_sampler is not None:
+            return len(self.batch_sampler)
         n = len(self.sampler)
         return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
