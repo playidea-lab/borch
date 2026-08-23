@@ -408,12 +408,20 @@ for step in range(201):
     <table class="data">
       <thead><tr><th></th><th>On top of</th><th>Runs</th><th>Ceiling</th></tr></thead>
       <tbody>
-        <tr><td><strong>borch</strong> (PyPI)</td><td>numpy</td><td>anywhere · Pyodide</td><td>MNIST class</td></tr>
+        <tr><td><strong>pyborch</strong> — <code>import borch</code></td><td>numpy</td><td>anywhere · Pyodide</td><td>MNIST class</td></tr>
         <tr><td><strong>borch</strong> (npm) — borch.ts</td><td>WGSL directly, zero deps</td><td>browser only</td><td>CIFAR ResNet-18, 1.5 min/epoch</td></tr>
         <tr><td><strong>borch-webgpu</strong> (Python)</td><td>borch.ts above</td><td>browser only</td><td>the same at 1.6 min/epoch</td></tr>
       </tbody>
     </table>
     </div>
+
+    <p class="small" style="margin-top:1rem">
+      The first row said <strong>borch</strong> (PyPI) until it was checked. The
+      distribution is named <code>pyborch</code>; <code>borch</code> is what you import.
+      And it is not on PyPI — <code>borch</code> there is somebody else's package, a
+      probabilistic-programming library, so <code>pip install borch</code> fetches a
+      stranger's code. The wheel below is the install.
+    </p>
 
     <div class="grid c2" style="margin-top:1.6rem">
       <div class="tile">
