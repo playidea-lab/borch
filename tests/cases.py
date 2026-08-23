@@ -5966,6 +5966,87 @@ def misc_cases(inp=None):
                      L.tensor(np.array([0, 2], dtype=np.int64)))
 
     add("층::EmbeddingBag(offsets)", bag_offsets)
+
+    # **`max_norm` shrinks the table in place, and no case had ever looked at the
+    # table.** Every instrument here compares what a call returns; a call that also
+    # changes the thing it was called on is invisible to all of them.
+    #
+    # And the invisibility does not go away by calling twice. Re-normalising a row that
+    # is already short enough is a no-op, so an implementation that normalised a *copy*
+    # would return the same numbers as this one **forever** — the divergence lives in
+    # `weight` and nowhere else, until something trains on it.
+    def bag_renorm(L, what):
+        layer = L.nn.EmbeddingBag(5, 3, max_norm=1.0, mode="sum")
+        layer.load_state_dict({"weight": L.tensor(table)})
+        out = layer(L.tensor(bags))
+        return layer.weight if what == "weight" else out
+
+    add("층::EmbeddingBag(max_norm)", lambda L: bag_renorm(L, "out"))
+    # The table **after** the call. This is the case the block above is about.
+    add("층::EmbeddingBag(max_norm)/표가 줄었다", lambda L: bag_renorm(L, "weight"))
+
+    def bag_renorm_untouched(L):
+        """**Only the indexed rows are shrunk.** Rows 4 is never asked for and keeps
+        its own size — a version that normalised the whole table would agree on every
+        output and differ only here."""
+        layer = L.nn.EmbeddingBag(5, 3, max_norm=1.0, mode="sum")
+        layer.load_state_dict({"weight": L.tensor(table)})
+        layer(L.tensor(np.array([[0, 1]], dtype=np.int64)))
+        return layer.weight
+
+    add("층::EmbeddingBag(max_norm)/색인 안 된 행", bag_renorm_untouched)
+
+    def bag_renorm_norm_type(L):
+        """`norm_type=1` measures the row differently, so a different amount comes
+        off. Left at the default this argument is unasked and an implementation that
+        ignores it passes the two cases above."""
+        layer = L.nn.EmbeddingBag(5, 3, max_norm=1.0, norm_type=1.0, mode="sum")
+        layer.load_state_dict({"weight": L.tensor(table)})
+        layer(L.tensor(bags))
+        return layer.weight
+
+    add("층::EmbeddingBag(max_norm, norm_type=1)", bag_renorm_norm_type)
+
+    # ── Embedding ───────────────────────────────────────────────────────
+    # It took `(num_embeddings, embedding_dim)` and torch takes nine more. A name
+    # count could not see that — `torch_gap.py` counts names and `Embedding` was
+    # present — and `EmbeddingBag` next door had carried torch's full list all along.
+    def emb(L, what, **kw):
+        layer = L.nn.Embedding(4, 3, **kw)
+        layer.load_state_dict({"weight": L.tensor(table[:4])})
+        out = layer(L.tensor(np.array([0, 1, 2], dtype=np.int64)))
+        return layer.weight if what == "weight" else out
+
+    add("층::Embedding(padding_idx)", lambda L: emb(L, "out", padding_idx=1))
+    add("층::Embedding(max_norm)", lambda L: emb(L, "out", max_norm=1.0))
+    add("층::Embedding(max_norm)/표가 줄었다", lambda L: emb(L, "weight", max_norm=1.0))
+    add("층::Embedding(max_norm, norm_type=1)/표",
+        lambda L: emb(L, "weight", max_norm=1.0, norm_type=1.0))
+    add("repr::Embedding(전부)",
+        lambda L: repr(L.nn.Embedding(4, 3, padding_idx=1, max_norm=2.0)))
+
+    def emb_padding_grad(L):
+        """**The padding row learns nothing.** Left in, a pad token drifts toward
+        whatever the loss wants and the mask stops meaning "ignore this" — while the
+        forward stays right, so nothing else here would see it."""
+        layer = L.nn.Embedding(4, 3, padding_idx=1)
+        layer.load_state_dict({"weight": L.tensor(table[:4])})
+        layer(L.tensor(np.array([0, 1, 2, 1], dtype=np.int64))).sum().backward()
+        return layer.weight.grad
+
+    add("grad::Embedding(padding_idx)", emb_padding_grad)
+
+    def emb_fresh_padding(L):
+        """A **fresh** table zeroes the padding row and a **given** one does not.
+        torch draws the line at the same place, and both halves are asked because
+        either alone reads as a rule about padding rather than about who supplied
+        the weights."""
+        fresh = L.nn.Embedding(4, 3, padding_idx=2).weight
+        given = L.nn.Embedding(4, 3, padding_idx=2, _weight=L.tensor(table[:4])).weight
+        return L.tensor(np.concatenate([np.asarray(to_numpy(fresh))[2],
+                                        np.asarray(to_numpy(given))[2]]))
+
+    add("층::Embedding(padding_idx)/새 표와 준 표", emb_fresh_padding)
     return cases
 
 

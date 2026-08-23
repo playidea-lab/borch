@@ -188,7 +188,13 @@ SHORTER = {
     #
     # 60 → 58 from the other half of the split: two of the weight-first losses
     # stopped being short when they took torch's argument lists.
-    "nn": 58,
+    #
+    # 58 → 57. `Embedding` took `(num_embeddings, embedding_dim)` where torch takes
+    # nine more, and it is the one row this axis could see that `torch_gap.py` could
+    # not: that table counts names, `Embedding` was present, and `nn` read 95%.
+    # `EmbeddingBag` next door had carried torch's full list all along, so the two
+    # neighbours disagreed about the same five arguments and nothing said so.
+    "nn": 57,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
     # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are

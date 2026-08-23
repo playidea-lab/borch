@@ -13,7 +13,8 @@ from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _reduce, _rng, _spread, _wrap, adaptive_avg_pool1d,
+    _Namespace, _gelu, _pool_all, _reduce, _renorm_rows, _rng, _spread, _wrap,
+    adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
     celu, lp_pool1d, lp_pool2d, lp_pool3d,
@@ -817,28 +818,86 @@ class MaxPool2d(Module):
 
 class Embedding(Module):
     """A trainable table turning an index into a vector. The alternative chapter
-    8 offers to "do not just number them"."""
+    8 offers to "do not just number them".
 
-    def __init__(self, num_embeddings, embedding_dim):
+    **It took two arguments where torch takes nine**, and a name count cannot see
+    that: `torch_gap.py` counts names, `Embedding` was present, and the namespace
+    read 100%. `EmbeddingBag` next door has carried torch's full list all along, so
+    the two neighbours disagreed about the same five arguments.
+
+    Three of the nine are carried and refused rather than left out, for the reason
+    `_no_device_dtype` gives: left out, a positional call that reaches them lands on
+    nothing, and the two signatures part at every position after the gap.
+    """
+
+    def __init__(self, num_embeddings, embedding_dim, padding_idx=None,
+                 max_norm=None, norm_type=2.0, scale_grad_by_freq=False,
+                 sparse=False, _weight=None, _freeze=False, device=None, dtype=None):
         super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
-        self.weight = Parameter(_rng.standard_normal(
-            (num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE))
+        _no_device_dtype("Embedding", device, dtype)
+        if scale_grad_by_freq:
+            _unsupported("Embedding(scale_grad_by_freq=True)")
+        if sparse:
+            _unsupported("Embedding(sparse=True) — there is no sparse gradient here")
+        if padding_idx is not None:
+            if padding_idx >= num_embeddings or padding_idx < -num_embeddings:
+                raise ValueError("padding_idx must be within num_embeddings")
+            if padding_idx < 0:
+                padding_idx = num_embeddings + padding_idx
+        self.num_embeddings, self.embedding_dim = num_embeddings, embedding_dim
+        self.padding_idx = padding_idx
+        self.max_norm, self.norm_type = max_norm, norm_type
+        self.scale_grad_by_freq, self.sparse = scale_grad_by_freq, sparse
+        if _weight is None:
+            table = _rng.standard_normal(
+                (num_embeddings, embedding_dim)).astype(_DEFAULT_DTYPE)
+            # **A fresh table zeroes the padding row and a given one does not.**
+            # torch draws that line at the same place: `from_pretrained` leaves the
+            # row as it arrived, because the caller who supplied the weights meant
+            # them. Measured both ways.
+            if padding_idx is not None:
+                table[padding_idx] = 0.0
+        else:
+            table = _np.asarray(_weight.data if hasattr(_weight, "data") else _weight,
+                                dtype=_DEFAULT_DTYPE)
+            if table.shape != (num_embeddings, embedding_dim):
+                raise ValueError(
+                    "Shape of weight does not match num_embeddings and embedding_dim")
+        self.weight = Parameter(table)
+        self.weight.requires_grad = not _freeze
 
     def forward(self, idx):
         ids = idx.data.astype(int)
+        if self.max_norm is not None:
+            # **In the table itself**, as `embedding_bag` does it and as torch does.
+            # The same function, not a second copy of the rule.
+            _renorm_rows(self.weight, ids, self.max_norm, self.norm_type)
         out = self.weight.data[ids]
 
         def back(g):
             gw = _np.zeros_like(self.weight.data)
             _np.add.at(gw, ids.reshape(-1), _np.asarray(g).reshape(-1, self.embedding_dim))
+            # **The padding row learns nothing.** Left in, a pad token drifts toward
+            # whatever the loss wants and the mask stops meaning "ignore this".
+            if self.padding_idx is not None:
+                gw[self.padding_idx] = 0.0
             return (gw,)
 
         return self.weight._make(out, (self.weight,), back)
 
     def __repr__(self):
-        return f"Embedding({self.num_embeddings}, {self.embedding_dim})"
+        parts = [f"{self.num_embeddings}, {self.embedding_dim}"]
+        if self.padding_idx is not None:
+            parts.append(f"padding_idx={self.padding_idx}")
+        if self.max_norm is not None:
+            parts.append(f"max_norm={self.max_norm}")
+        if self.norm_type != 2.0:
+            parts.append(f"norm_type={self.norm_type}")
+        if self.scale_grad_by_freq:
+            parts.append("scale_grad_by_freq=True")
+        if self.sparse:
+            parts.append("sparse=True")
+        return f"Embedding({', '.join(parts)})"
 
 
 class LayerNorm(Module):
