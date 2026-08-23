@@ -409,7 +409,15 @@ def sigmoid(t):
     return t._make(out, (t,), lambda g: (g * out * (1 - out),), "SigmoidBackward0")
 
 
-def relu(t):
+def relu(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "relu",
+                        lambda: _relu_body(t))
+
+
+def _relu_body(t):
     return t._make(_np.maximum(t.data, 0), (t,), lambda g: (g * (t.data > 0),), "ReluBackward0")
 
 
@@ -4603,14 +4611,30 @@ def empty(*shape, dtype=None, requires_grad=False, device=None):
 
 
 
-def leaky_relu(t, negative_slope=0.01):
+def leaky_relu(t, negative_slope=0.01, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "leaky_relu",
+                        lambda: _leaky_relu_body(t, negative_slope))
+
+
+def _leaky_relu_body(t, negative_slope=0.01):
     t = _wrap(t)
     pick = t.data > 0
     return t._make(_np.where(pick, t.data, negative_slope * t.data), (t,),
                    lambda g: (g * _np.where(pick, 1.0, negative_slope),), "LeakyReluBackward0")
 
 
-def elu(t, alpha=1.0):
+def elu(t, alpha=1.0, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "elu",
+                        lambda: _elu_body(t, alpha))
+
+
+def _elu_body(t, alpha=1.0):
     t = _wrap(t)
     pick = t.data > 0
     out = _np.where(pick, t.data, alpha * (_np.exp(_np.minimum(t.data, 0)) - 1))
@@ -4618,7 +4642,15 @@ def elu(t, alpha=1.0):
                    "EluBackward0")
 
 
-def silu(t):
+def silu(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "silu",
+                        lambda: _silu_body(t))
+
+
+def _silu_body(t):
     """x·σ(x). Also called Swish."""
     t = _wrap(t)
     sig = 1.0 / (1.0 + _np.exp(-_np.clip(t.data, -60, 60)))
@@ -4702,7 +4734,15 @@ def _sigmoid_of(d):
     return 1.0 / (1.0 + _np.exp(-_np.clip(d, -60, 60)))
 
 
-def celu(t, alpha=1.0):
+def celu(t, alpha=1.0, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "celu",
+                        lambda: _celu_body(t, alpha))
+
+
+def _celu_body(t, alpha=1.0):
     """CELU. Unlike `ELU` it **divides** the negative side by α before taking the
     exponential.
 
@@ -4726,7 +4766,15 @@ def hardshrink(t, lambd=0.5):
                    lambda g: (g * keep,), "HardshrinkBackward0")
 
 
-def hardsigmoid(t):
+def hardsigmoid(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "hardsigmoid",
+                        lambda: _hardsigmoid_body(t))
+
+
+def _hardsigmoid_body(t):
     """Imitates a sigmoid with piecewise straight lines. The kinks are at ±3."""
     t = _wrap(t)
     d = t.data
@@ -4736,7 +4784,15 @@ def hardsigmoid(t):
                    "HardsigmoidBackward0")
 
 
-def hardswish(t):
+def hardswish(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "hardswish",
+                        lambda: _hardswish_body(t))
+
+
+def _hardswish_body(t):
     """x·hardsigmoid(x). Used instead of swish on mobile."""
     t = _wrap(t)
     d = t.data
@@ -4745,7 +4801,15 @@ def hardswish(t):
     return t._make(out, (t,), lambda g: (g * grad,), "HardswishBackward0")
 
 
-def hardtanh(t, min_val=-1.0, max_val=1.0):
+def hardtanh(t, min_val=-1.0, max_val=1.0, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "hardtanh",
+                        lambda: _hardtanh_body(t, min_val, max_val))
+
+
+def _hardtanh_body(t, min_val=-1.0, max_val=1.0):
     t = _wrap(t)
     d = t.data
     inside = (d > min_val) & (d < max_val)
@@ -4780,7 +4844,15 @@ def softplus(t, beta=1.0, threshold=20.0):
                    lambda g: (g * _np.where(big, 1.0, sig),), "SoftplusBackward0")
 
 
-def mish(t):
+def mish(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "mish",
+                        lambda: _mish_body(t))
+
+
+def _mish_body(t):
     """x·tanh(softplus(x))."""
     t = _wrap(t)
     d = t.data
@@ -4792,7 +4864,15 @@ def mish(t):
     return t._make(out, (t,), lambda g: (g * grad.astype(d.dtype),), "MishBackward0")
 
 
-def relu6(t):
+def relu6(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "relu6",
+                        lambda: _relu6_body(t))
+
+
+def _relu6_body(t):
     """clamp(x, 0, 6). **The gradient is 0 on the boundaries** — both of
     them."""
     t = _wrap(t)
@@ -4802,7 +4882,15 @@ def relu6(t):
                    "Relu6Backward0")
 
 
-def selu(t):
+def selu(t, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "selu",
+                        lambda: _selu_body(t))
+
+
+def _selu_body(t):
     t = _wrap(t)
     d = t.data
     pick = d > 0
@@ -4842,7 +4930,15 @@ def tanhshrink(t):
                    "TanhshrinkBackward0")
 
 
-def threshold(t, threshold, value):                      # noqa: A002
+def threshold(t, threshold, value, inplace=False):       # noqa: A002
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "threshold",
+                        lambda: _threshold_body(t, threshold, value))
+
+
+def _threshold_body(t, threshold, value):                # noqa: A002
     """The value where x > threshold and `value` otherwise. **The boundary goes
     to value.**"""
     t = _wrap(t)
@@ -4914,7 +5010,15 @@ def log_softmax(t, dim=-1):
     return t._make(out, (t,), back, "LogSoftmaxBackward0")
 
 
-def dropout(t, p=0.5, training=True):
+def dropout(t, p=0.5, training=True, inplace=False):
+    """torch takes `inplace` here; it is the underscore name by another
+    spelling, routed through the same write-back rather than a second
+    formula."""
+    return _inplace_arg(t, inplace, "dropout",
+                        lambda: _dropout_body(t, p, training))
+
+
+def _dropout_body(t, p=0.5, training=True):
     """The surviving values are scaled by `1/(1-p)` — **so that the magnitudes
     match between training and inference.**
 
@@ -5515,6 +5619,15 @@ def _feature_dropout(x, p, training, name):
 
 
 def dropout1d(x, p=0.5, training=True, inplace=False):
+    """These five took `inplace` from the day they were written and **threw it
+    away** — the caller's tensor was never touched and nothing said so. An
+    argument that is accepted and ignored is worse than one that is missing,
+    because the missing one raises."""
+    return _inplace_arg(x, inplace, "dropout",
+                        lambda: _dropout1d_body(x, p, training))
+
+
+def _dropout1d_body(x, p=0.5, training=True):
     t = _wrap(x)
     if t.data.ndim not in (2, 3):
         raise RuntimeError(
@@ -5526,11 +5639,13 @@ def dropout1d(x, p=0.5, training=True, inplace=False):
 
 
 def dropout2d(x, p=0.5, training=True, inplace=False):
-    return _feature_dropout(x, p, training, "dropout2d")
+    return _inplace_arg(x, inplace, "dropout",
+                        lambda: _feature_dropout(x, p, training, "dropout2d"))
 
 
 def dropout3d(x, p=0.5, training=True, inplace=False):
-    return _feature_dropout(x, p, training, "dropout3d")
+    return _inplace_arg(x, inplace, "dropout",
+                        lambda: _feature_dropout(x, p, training, "dropout3d"))
 
 
 # SELU's fixed point. The value `alpha_dropout` inserts at a dropped position
@@ -5546,6 +5661,11 @@ def _alpha_affine(p):
 
 
 def alpha_dropout(x, p=0.5, training=False, inplace=False):
+    return _inplace_arg(x, inplace, "alpha_dropout",
+                        lambda: _alpha_dropout_body(x, p, training))
+
+
+def _alpha_dropout_body(x, p=0.5, training=False):
     t = _wrap(x)
     if not training or p == 0:
         return t
@@ -5555,6 +5675,11 @@ def alpha_dropout(x, p=0.5, training=False, inplace=False):
 
 
 def feature_alpha_dropout(x, p=0.5, training=False, inplace=False):
+    return _inplace_arg(x, inplace, "feature_alpha_dropout",
+                        lambda: _feature_alpha_dropout_body(x, p, training))
+
+
+def _feature_alpha_dropout_body(x, p=0.5, training=False):
     """`alpha_dropout` dropping whole channels."""
     t = _wrap(x)
     if not training or p == 0:
@@ -7244,6 +7369,36 @@ def _make_functional_inplace(name):
 
 for _nm in _FUNCTIONAL_INPLACE:
     globals()[_nm + "_"] = _make_functional_inplace(_nm)
+
+
+# ── `inplace=` on the activations that take it ──────────────────────────────
+#
+# **twenty-six names took no `inplace` at all**, which `torch_signatures_core` counted
+# as the single largest real absence in `nn` — larger than any feature. torch's
+# textbook line is `nn.ReLU(inplace=True)`, and a caller writing it here met
+# `TypeError: __init__() got an unexpected keyword argument`.
+#
+# **`inplace=True` is exactly the underscore name**, routed through the same
+# `Tensor._inplace` the block above uses. Written a second way it would be a second
+# formula, and the two would drift while both looked right — the fault this file's
+# own comment fifteen lines up warns about.
+#
+# What it is *not* is a no-op. Three functions here already accepted `inplace` and
+# discarded it (`dropout1d`, `dropout2d`, `dropout3d`), which is the shape this
+# repository spent a day removing: an argument that is taken and dropped reads as one
+# that works, and a caller relying on the input being changed gets an unchanged input
+# and no complaint.
+
+def _inplace_arg(x, inplace, name, fn):
+    """`fn()`, or `fn()` written back into `x` — the same path the `_` name takes.
+
+    **Returns the input object itself when `inplace`**, which is what makes the
+    argument worth having: the caller's tensor is the one that changed, and code that
+    keeps a reference sees it.
+    """
+    if not inplace:
+        return fn()
+    return _wrap(x)._inplace(fn, name + "_")
 
 
 # ── the spatial transformer ─────────────────────────────────────────────────

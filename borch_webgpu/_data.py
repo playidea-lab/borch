@@ -83,14 +83,53 @@ class SequentialSampler:
 
 
 class RandomSampler:
-    def __init__(self, data_source):
+    def __init__(self, data_source, replacement=False, num_samples=None,
+                 generator=None):
+        """`generator` is what makes a shuffled loader repeatable, and it was
+        **not here** — so `DataLoader(ds, shuffle=True, generator=g)` gave a
+        different order every run on this side and the same order on the core's.
+        A seed that does not seed is worse than no seed, because the caller
+        stops checking."""
         self.data_source = data_source
+        self.replacement = replacement
+        self.num_samples = num_samples
+        self.generator = generator
+
+    def _rng(self):
+        return self.generator.rng() if self.generator is not None else _rng
 
     def __iter__(self):
-        return iter(_rng.permutation(len(self.data_source)).tolist())
+        n = len(self.data_source)
+        k = self.num_samples if self.num_samples is not None else n
+        if self.replacement:
+            return iter(self._rng().integers(0, n, size=k).tolist())
+        return iter(self._rng().permutation(n).tolist()[:k])
 
     def __len__(self):
-        return len(self.data_source)
+        return (self.num_samples if self.num_samples is not None
+                else len(self.data_source))
+
+
+class BatchSampler:
+    """Hands out indices **in groups.** For deciding the batch size on the
+    sampler side."""
+
+    def __init__(self, sampler, batch_size, drop_last=False):
+        self.sampler, self.batch_size, self.drop_last = sampler, batch_size, drop_last
+
+    def __iter__(self):
+        batch = []
+        for i in self.sampler:
+            batch.append(i)
+            if len(batch) == self.batch_size:
+                yield batch
+                batch = []
+        if batch and not self.drop_last:
+            yield batch
+
+    def __len__(self):
+        n = len(self.sampler)
+        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
 
 class WeightedRandomSampler:
@@ -133,17 +172,55 @@ class DataLoader:
     """
 
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
-                 num_workers=0, drop_last=False, collate_fn=None):
+                 batch_sampler=None, num_workers=0, collate_fn=None,
+                 pin_memory=False, drop_last=False, timeout=0,
+                 worker_init_fn=None, multiprocessing_context=None,
+                 generator=None, *, prefetch_factor=None,
+                 persistent_workers=False, pin_memory_device="",
+                 in_order=True):
+        """torch's list. **This side held seven of it with two in the wrong
+        seats** — `collate_fn` sixth and `drop_last` seventh, where torch has
+        them seventh and ninth. `DataLoader(ds, 4, False, None, 0, True)` set
+        `drop_last` here and `collate_fn` on torch's side: a boolean handed into
+        a callable's slot, which torch then tries to call.
+
+        The core's copy of this docstring explains the three-way division of the
+        rest; the division is the same here and is not repeated.
+        """
         if sampler is not None and shuffle:
             raise ValueError("sampler and shuffle cannot be used together.")
+        if batch_sampler is not None and (shuffle or sampler is not None
+                                          or drop_last or batch_size != 1):
+            raise ValueError(
+                "batch_sampler is mutually exclusive with batch_size, shuffle, "
+                "sampler and drop_last.")
+        if prefetch_factor is not None:
+            raise ValueError(
+                "prefetch_factor option could only be specified in multiprocessing."
+                "let num_workers > 0 to enable multiprocessing, and it is always 0 "
+                "here — a browser has no fork.")
+        if persistent_workers:
+            raise ValueError("persistent_workers option needs num_workers > 0")
+        for name, given in (("timeout", timeout), ("worker_init_fn", worker_init_fn),
+                            ("multiprocessing_context", multiprocessing_context)):
+            if given:
+                raise ValueError(f"{name} needs num_workers > 0")
+        if not in_order:
+            raise ValueError("in_order=False needs num_workers > 0")
+        del pin_memory, pin_memory_device   # no device to pin for; no value changes
         self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.collate_fn = collate_fn
-        self.sampler = sampler or (RandomSampler(dataset) if shuffle
-                                   else SequentialSampler(dataset))
+        self.batch_sampler = batch_sampler
+        self.generator = generator
+        self.sampler = sampler or (
+            RandomSampler(dataset, generator=generator) if shuffle
+            else SequentialSampler(dataset))
 
     def __len__(self):
+        if self.batch_sampler is not None:
+            return len(self.batch_sampler)
         n = len(self.sampler)
         return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
@@ -152,6 +229,14 @@ class DataLoader:
 
     def __iter__(self):
         plain = isinstance(self.dataset, TensorDataset) and self.collate_fn is None
+        # **A batch sampler hands out whole batches**, so the batching below does
+        # not run at all — it replaces `batch_size`, `shuffle`, `sampler` and
+        # `drop_last` at once, which is why the constructor refuses them together.
+        if self.batch_sampler is not None:
+            for idx in self.batch_sampler:
+                yield (self._fast(list(idx)) if plain
+                       else self._collate([self.dataset[i] for i in idx]))
+            return
         batch = []
         for i in self.sampler:
             batch.append(i if plain else self.dataset[i])
@@ -162,10 +247,27 @@ class DataLoader:
             yield self._fast(batch) if plain else self._collate(batch)
 
     def _collate(self, batch):
-        if self.collate_fn:
-            return self.collate_fn(batch)
-        return tuple(stack([x if isinstance(x, Tensor) else wrap(x) for x in col])
-                     for col in zip(*batch))
+        return self.collate_fn(batch) if self.collate_fn else default_collate(batch)
+
+
+def default_collate(batch):
+    """Folds a list of samples into a batch.
+
+    **The `zip(*batch)` that stood here assumed a sample is always a tuple.** That
+    holds for `TensorDataset` and for nothing else: a dataset that is a plain list
+    of numbers dies with `'int' object is not iterable`, two frames from the
+    cause. The core had already been moved off it; this side had not, and the
+    difference was invisible until a case used a bare list as a dataset.
+    """
+    first = batch[0]
+    if isinstance(first, (tuple, list)):
+        return type(first)(default_collate([b[i] for b in batch])
+                           for i in range(len(first)))
+    if isinstance(first, dict):
+        return {k: default_collate([b[k] for b in batch]) for k in first}
+    if isinstance(first, Tensor):
+        return stack(list(batch))
+    return stack([wrap(b) for b in batch])
 
 
 def default_convert(data):
@@ -214,9 +316,11 @@ class _UtilsData:
     Subset = Subset
     ConcatDataset = ConcatDataset
     DataLoader = DataLoader
+    BatchSampler = BatchSampler
     RandomSampler = RandomSampler
     SequentialSampler = SequentialSampler
     WeightedRandomSampler = WeightedRandomSampler
+    default_collate = staticmethod(default_collate)
     default_convert = staticmethod(default_convert)
     get_worker_info = staticmethod(get_worker_info)
     random_split = staticmethod(random_split)

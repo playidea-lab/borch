@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 78
+  "missing": 79
  },
  "modules": [
   {
@@ -10752,8 +10752,14 @@
        "doc_ko": "모든 그룹의 파라미터를 이어 붙인 것. 상태 은행이 이 자리로 색인된다."
       },
       {
+       "name": "maximize",
+       "signature": "protected readonly maximize: boolean",
+       "doc": "Ascend rather than descend. `torch.optim.*(maximize=True)`.\n\n**It lives here and not in each optimizer** because every one of torch's\napplies it in the same place: `g = -grad` at the very top, *before* weight\ndecay, so the decay term `+λθ` keeps its sign. Negating the gradient on the\nway into `update` is therefore not an approximation of the eleven separate\nalgorithms — it is what all eleven do, written once.\n\n`SGD` used to bake it into its shader instead, which was the same number by\na second route. The second route is gone; a flag with two implementations is\na flag with two behaviours waiting to happen.",
+       "protected": true
+      },
+      {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, defaultLr: number)",
+       "signature": "constructor(params: ParamsArg, defaultLr: number, { maximize }?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -10855,7 +10861,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, { maximize }?: { maximize?: boolean; })",
+       "signature": "constructor(params: ParamsArg, lr: number, momentum?: number, dampening?: number, weightDecay?: number, nesterov?: boolean, opts?: { maximize?: boolean; })",
        "doc": "torch's order — `dampening` third and `nesterov` sixth, with `maximize`\nkeyword-only behind them as torch has it.\n\n**This read `(params, lr, momentum, weightDecay)`**, so `new SGD(p, 0.1, 0.9,\n1e-4)` — the line a torch tutorial writes — set the dampening to the weight\ndecay and left the decay at zero. Two different things, both plausible small\nnumbers, and the run trains and trains slightly wrong."
       },
       {
@@ -10885,7 +10891,7 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -10922,7 +10928,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, amsgrad?: boolean, opts?: { maximize?: boolean; })",
        "doc": ""
       }
      ]
@@ -10935,7 +10941,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr: number, alpha?: number, eps?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr: number, alpha?: number, eps?: number, weightDecay?: number, momentum?: number, centered?: boolean, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -10954,7 +10960,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, initialAccumulatorValue?: number, eps?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, lrDecay?: number, weightDecay?: number, initialAccumulatorValue?: number, eps?: number, opts?: { maximize?: boolean; })",
        "doc": "**`weightDecay` sits fourth, before `eps`** — that is torch's order, and the\nbinding calls this positionally, so the position is the contract. It is one\nof the two here inserted into the middle rather than appended; every call in\nthis repository stops at `lr`, so nothing moved under them, and that was\nchecked rather than assumed."
       },
       {
@@ -10992,7 +10998,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, rho?: number, eps?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, rho?: number, eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -11012,7 +11018,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -11050,7 +11056,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, momentumDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, momentumDecay?: number, decoupledWeightDecay?: boolean, opts?: { maximize?: boolean; })",
        "doc": "**`weightDecay` goes before `momentumDecay`, not after** — torch's order,\nand the binding calls positionally.\n\nThis one is why an arity check cannot find a dropped argument. Before this,\nthe binding passed six and this took six, so the counts agreed perfectly\nwhile the sixth was `momentumDecay` at both ends and `weight_decay` reached\nnothing. It was the last of seven to be found, and the only one an\nargument-count comparison could never have shown."
       },
       {
@@ -11088,7 +11094,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta1?: number, beta2?: number, eps?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -11126,7 +11132,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, lambd?: number, alpha?: number, t0?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, lambd?: number, alpha?: number, t0?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -11164,7 +11170,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, etaMinus?: number, etaPlus?: number, sizeMin?: number, sizeMax?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, etaMinus?: number, etaPlus?: number, sizeMin?: number, sizeMax?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -11218,7 +11224,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(params: ParamsArg, lr?: number, beta2Decay?: number, eps1?: number | null, eps2?: number, d?: number, weightDecay?: number)",
+       "signature": "constructor(params: ParamsArg, lr?: number, beta2Decay?: number, eps1?: number | null, eps2?: number, d?: number, weightDecay?: number, opts?: { maximize?: boolean; })",
        "doc": ""
       },
       {
@@ -11657,7 +11663,7 @@
      "doc_ko": "값이 나아지지 않으면 학습률을 줄인다.\n\n다른 스케줄과 달리 **값을 받아야** 움직인다 — 그래서 `step(metric)` 이다."
     }
    ],
-   "count": 151,
+   "count": 152,
    "doc_ko": "옵티마이저와 학습률 스케줄.\n\n## 파라미터를 제자리에서 고친다\n\n새 텐서를 만들어 갈아끼우지 않는다. 모델이 들고 있는 손잡이와 옵티마이저가 보는\n손잡이가 같아야 하고, 갈아끼우면 그 둘이 갈려서 **학습은 도는데 파라미터가 안\n움직이는** 상태가 된다. 제자리 수정은 기울기가 켜진 잎에서 막혀 있으므로\n`no_grad` 안에서 한다 — torch 의 옵티마이저도 정확히 그렇게 한다.\n\n## 상태를 텐서로 든다\n\n모멘텀 버퍼 같은 것을 **기울기 텐서 그대로 물고 있으면 안 된다.** 다음 스텝에서\n그 기울기가 새것으로 바뀌면 버퍼가 엉뚱한 것을 가리킨다 — 이 저장소가 모멘텀\n없는 SGD 만 보다가 놓친 자리다. 그래서 버퍼는 자기 사본으로 시작한다."
   },
   {
@@ -14658,5 +14664,5 @@
    "count": 9
   }
  ],
- "total": 1915
+ "total": 1916
 }

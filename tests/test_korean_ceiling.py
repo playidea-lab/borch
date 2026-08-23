@@ -102,7 +102,14 @@ CEILINGS = {
     # They move when those move and not before.
     # 3133 → 3135. The `act::` row returning to the ledger, whose marker word `아직`
     # is what `test_site.py` matches on to tell owed work from declined work.
-    "borch-ts/test": 3135,
+    #
+    # 3135 → 3139. **+4, and all four are markers being named rather than used.**
+    # `opt::` moved from `아직` to `없음` when borch.ts gained `maximize`, `amsgrad`,
+    # `centered`, `momentum` and `decoupled_weight_decay`, and the note beside the row
+    # says which marker it left and which it took — a change of ledger verdict that
+    # does not say what it changed from is the kind this repository keeps finding.
+    # The twelve case names that came with it are ASCII and cost nothing here.
+    "borch-ts/test": 3139,
 }
 
 

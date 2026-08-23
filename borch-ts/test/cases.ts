@@ -3782,6 +3782,25 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
       { maximize: true })],
     ["Adagrad(initial_accumulator_value)",
       (ps) => new optim.Adagrad(ps, 0.1, 0, 0, 0.5)],
+    // **The six that borch.ts could not be asked about until it had them.** Each
+    // changes the values rather than the speed, so each waited on real work over
+    // here — `maximize` on the base, and one buffer apiece for the other four.
+    //
+    // The arguments are the Python table's, value for value. Picking different
+    // ones would ask a question torch never froze an answer to, and the row would
+    // pass by comparing borch.ts against itself.
+    ["Adam(maximize)", (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0,
+      false, { maximize: true })],
+    ["RMSprop(maximize)", (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0,
+      false, { maximize: true })],
+    ["Adam(amsgrad)",
+      (ps) => new optim.Adam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1, true)],
+    ["RMSprop(centered)",
+      (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0, true)],
+    ["RMSprop(momentum)",
+      (ps) => new optim.RMSprop(ps, 0.05, 0.99, 1e-8, 0, 0.9)],
+    ["NAdam(decoupled_weight_decay)",
+      (ps) => new optim.NAdam(ps, 0.05, 0.9, 0.999, 1e-8, 0.1, 4e-3, true)],
   ];
   for (const [name, make] of kinds) {
     out.set(`opt::${name}/0.weight`, () => {

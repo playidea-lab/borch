@@ -198,7 +198,17 @@ SHIFTED = {
 UNALIGNED = {
     "Tensor": 0,
     "nn": 8,
-    "nn.functional": 27,
+    # **27 → 16.** Eleven of these were activations whose only difference from torch
+    # was the missing `inplace` at the end — `relu(t)` against `relu(input, inplace)`
+    # cannot align, so they sat here rather than in `shorter`. Giving them the
+    # argument left the first parameter's name (`t` against `input`) as the whole of
+    # what remains, which is a spelling and not an absence.
+    #
+    # 16 → 14. `dropout` and `threshold`. The four other dropouts were already here
+    # for a different reason: they **took `inplace` and discarded it**, so they
+    # aligned with torch on paper while doing none of it. Alignment is a fact about
+    # names and this file cannot see that — `test_inert_arguments.py` can.
+    "nn.functional": 14,
     "optim": 0,
     "optim.lr_scheduler": 0,
     "linalg": 0,
@@ -252,17 +262,39 @@ SHORTER = {
     # by hand rather than generated, so it alone kept `_Lazy.__init__`'s
     # `(*args, **kw)` and was the one lazy layer this axis could not read. It is
     # short of torch's `device`/`dtype`, like every other layer in this bucket.
-    # 58 → 45. **Thirteen activation layers took `inplace`.** `nn.ReLU(inplace=True)`
-    # is a line every torch model writes and it raised here — a `TypeError` about an
-    # argument count, on the most common layer there is.
     #
-    # Seven honour it through the `_` functions that already existed (`relu_`,
-    # `elu_`, `celu_`, `selu_`, `hardtanh_`, `leaky_relu_`, `threshold_`); six refuse
-    # it by name, because an activation that promises to reuse the buffer and quietly
-    # makes a new one is a promise about *memory*, which no value comparison catches.
+    # **58 → 45, and two sessions lowered it, which is why both stories are here.**
+    # `inplace` went in — `nn.ReLU(inplace=True)` is a line every torch model writes
+    # and it raised, a `TypeError` about an argument count on the most common layer
+    # there is. It was the largest single absence left in this namespace and the
+    # second-largest overall after `device`/`dtype`, and unlike those two it is not a
+    # question the browser answers differently.
+    #
+    # **The two sessions disagreed about six of them and the disagreement was real.**
+    # One routed the layers through the `_` functions that already existed and refused
+    # `SELU`, `SiLU`, `Mish`, `ReLU6`, `Hardsigmoid`, `Hardswish` and `Dropout` by
+    # name, on the ground that an activation promising to reuse the buffer and quietly
+    # making a new one is a promise about *memory* that no value comparison catches.
+    # That ground was right; its premise stopped holding in the same window, because
+    # the other session gave `_ops` a write-back for every one of them through the
+    # same `Tensor._inplace` the underscore names use. Measured against torch: input
+    # moved, values equal, the same object returned, on all eleven. So the refusals
+    # went and the seven joined the rest — a refusal kept past its cause is the shape
+    # this repository keeps finding, and it would have been ours.
+    #
     # `Hardtanh` took torch's deprecated `min_value`/`max_value` with it, so a
-    # positional call reaching that far lands where torch lands.
-    # 45 → 20. **Seventeen layers took torch's `device` and `dtype`**, carried and
+    # positional call reaching that far lands where torch lands. `nn.Dropout` gave up
+    # **its own second copy of the dropout formula** — a copy that divided by zero at
+    # `p=1` where the function next door branched — because taking `inplace` meant
+    # calling the function. `RReLU` had been taking the flag, storing it, printing it
+    # in its `repr` and never passing it on.
+    #
+    # **The number did not move when the seven refusals became implementations.**
+    # This axis reads signatures, and a refusal has the same signature as an
+    # implementation — which is exactly why the argument had to be measured against
+    # torch's *behaviour* somewhere else. `test_inert_arguments.py` is that somewhere.
+    #
+    # 45 → 18. **Seventeen layers took torch's `device` and `dtype`**, carried and
     # refused, which is what `_no_device_dtype` was written for and what eight layers
     # already did. `AvgPool2d` took its four real ones at the same time and `Flatten`
     # took `end_dim`.
@@ -662,9 +694,11 @@ def test_a_forbidden_shift_is_not_reported_as_one():
 # 47 → 48. `stft` joined when it became readable.
 # 48 → 49. `LazyLinear`, which is short of torch's `device`/`dtype` like the rest of
 # the layers, and could not be counted here at all while its signature was variadic.
-# 49 → 36. The thirteen activations, which were all short by exactly `inplace`.
-# 36 → 11. Seventeen `device`/`dtype` pairs, `AvgPool2d`'s four and `Flatten`'s
-# `end_dim`. The eleven left are named arguments this library does not have —
+# 49 → 36. The thirteen activations plus `Dropout`, all short by exactly `inplace`.
+# Unlike the `device`/`dtype` rows below, these *were* calls that raise:
+# `nn.LeakyReLU(0.2, True)` is a line people actually write, and it did.
+# 36 → 9. Seventeen `device`/`dtype` pairs, `AvgPool2d`'s four and `Flatten`'s
+# `end_dim`. The nine left are named arguments this library does not have —
 # `create_graph`, `align_to_window`, `ceil_mode` on the LP pools, and the rest.
 TORCH_REACHES_FURTHER_BY_POSITION = 9
 

@@ -3076,9 +3076,16 @@ ${hasMomentum
 }
 
 /** One Adam step. The bias correction arrives by step count rather than being baked —
- *  it differs every step. */
+ *  it differs every step.
+ *
+ *  `amsgrad` adds a fifth buffer holding the **running maximum of the second moment**,
+ *  and divides by that instead of by the current one. The max is taken over the raw
+ *  `v`, before the bias correction, which is where torch takes it — correcting first
+ *  and then maximising is a different number, and both read plausible.
+ */
 export function adamStep(
   n: number, lr: number, beta1: number, beta2: number, eps: number,
+  amsgrad = false,
 ): string {
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
@@ -3086,6 +3093,7 @@ export function adamStep(
 @group(0) @binding(2) var<storage, read_write> M: array<f32>;
 @group(0) @binding(3) var<storage, read_write> V: array<f32>;
 @group(0) @binding(4) var<storage, read> Corr: array<f32>;
+${amsgrad ? "@group(0) @binding(5) var<storage, read_write> Vmax: array<f32>;" : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
@@ -3094,24 +3102,55 @@ ${flatId(n)}
   let v = V[gid] * ${beta2} + gv * gv * ${1 - beta2};
   M[gid] = m;
   V[gid] = v;
+${amsgrad ? `  let vd = max(Vmax[gid], v);
+  Vmax[gid] = vd;` : "  let vd = v;"}
   // Corr[0] = 1-β₁ᵗ, Corr[1] = 1-β₂ᵗ. They differ every step, so they arrive rather
   // than being baked.
-  P[gid] = P[gid] - ${lr} * (m / Corr[0]) / (sqrt(v / Corr[1]) + ${eps});
+  P[gid] = P[gid] - ${lr} * (m / Corr[0]) / (sqrt(vd / Corr[1]) + ${eps});
 }`;
 }
 
-export function rmspropStep(n: number, lr: number, alpha: number, eps: number): string {
+/**
+ * One RMSprop step.
+ *
+ * `centered` subtracts the squared running *mean* of the gradient from the running mean
+ * of the square — an estimate of the variance rather than of the second moment — and
+ * `momentum` puts the normalised step through a buffer before it reaches the weight.
+ * Both are torch's, and each adds one buffer; the bindings are numbered in the order
+ * the caller pushes them, so **the two flags are part of the pipeline key**. Left out,
+ * the cache would hand a centred optimizer the shader compiled for an uncentred one and
+ * bind its `GradAvg` to nothing.
+ *
+ * `eps` goes **outside** the square root, as torch has it. Inside, it would act as a
+ * floor on the variance instead of on the divisor, and the difference only shows where
+ * the gradient is small — which is exactly where it matters.
+ */
+export function rmspropStep(
+  n: number, lr: number, alpha: number, eps: number,
+  momentum = 0, centered = false,
+): string {
+  let slot = 3;
+  const gradAvg = centered ? slot++ : -1;
+  const buf = momentum !== 0 ? slot++ : -1;
   return `
 @group(0) @binding(0) var<storage, read_write> P: array<f32>;
 @group(0) @binding(1) var<storage, read> G: array<f32>;
 @group(0) @binding(2) var<storage, read_write> S: array<f32>;
+${centered ? `@group(0) @binding(${gradAvg}) var<storage, read_write> A: array<f32>;` : ""}
+${momentum !== 0 ? `@group(0) @binding(${buf}) var<storage, read_write> B: array<f32>;` : ""}
 @compute @workgroup_size(${WORKGROUP})
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 ${flatId(n)}
   let gv = G[gid];
   let s = S[gid] * ${alpha} + gv * gv * ${1 - alpha};
   S[gid] = s;
-  P[gid] = P[gid] - ${lr} * gv / (sqrt(s) + ${eps});
+${centered ? `  let a = A[gid] * ${alpha} + gv * ${1 - alpha};
+  A[gid] = a;
+  let avg = s - a * a;` : "  let avg = s;"}
+  let step = gv / (sqrt(avg) + ${eps});
+${momentum !== 0 ? `  let b = B[gid] * ${momentum} + step;
+  B[gid] = b;
+  P[gid] = P[gid] - ${lr} * b;` : `  P[gid] = P[gid] - ${lr} * step;`}
 }`;
 }
 

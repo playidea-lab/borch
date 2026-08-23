@@ -254,7 +254,24 @@ class Module:
             parts.append(f"  ({name}): {head}")
             parts.extend(f"  {line}" for line in rest)
         inner = "\n".join(parts)
-        return f"{type(self).__name__}(\n{inner}\n)" if inner else f"{type(self).__name__}()"
+        if inner:
+            return f"{type(self).__name__}(\n{inner}\n)"
+        # **`extra_repr` was defined and never called.** torch's `Module.__repr__`
+        # asks each layer for the arguments worth printing; here every class that
+        # wanted any wrote its own `__repr__` instead, so a base class could not add
+        # one for its subclasses — `nn.ReLU(inplace=True)` printed `ReLU()` while
+        # torch printed `ReLU(inplace=True)`, which the golden freezes character for
+        # character.
+        #
+        # Only reached when there are no children, and the default returns `""`, so
+        # no layer that does not define one moves.
+        extra = self.extra_repr()
+        return f"{type(self).__name__}({extra})"
+
+    def extra_repr(self):
+        """The arguments this layer prints inside its parentheses. Empty by default,
+        which is what makes adding it here safe for every layer that has none."""
+        return ""
 
 
 class Linear(Module):
@@ -327,22 +344,29 @@ class Identity(Module):
 
 
 class Dropout(Module):
+    """**The formula lived here in a second copy.** The one in `_ops.dropout`
+    branches on `p == 1`, where `1/(1-p)` is a division by zero; this one did not,
+    so `nn.Dropout(1.0)` produced NaN where `F.dropout(x, 1.0)` produced zeros —
+    the same library disagreeing with itself. Calling the function is also what
+    lets `inplace` arrive, which this layer never took at all.
+
+    **It was briefly refused here instead**, on the reasoning that dropout's mask is
+    a fresh tensor either way so honouring the flag would be a promise about memory
+    that nothing catches. The reasoning was right about the danger and wrong about
+    the premise: `_ops.dropout` now writes the product back through the same
+    `Tensor._inplace` the underscore names use, so the caller's buffer really does
+    move — measured against torch, input changed and the same object returned.
+    """
+
     def __init__(self, p=0.5, inplace=False):
-        """**`inplace` is refused rather than ignored.** Dropout's mask is a fresh
-        tensor either way here, so honouring the flag would mean writing the product
-        back into the caller's buffer — which is what torch does and what a model
-        counts on for memory. Accepting it and making a new tensor is a promise about
-        memory that nothing would catch, so it says so instead."""
         super().__init__()
-        if inplace:
-            _unsupported("nn.Dropout(inplace=True)")
-        self.p = p
+        self.p, self.inplace = p, inplace
 
     def forward(self, x):
-        if not self.training or self.p == 0:
-            return x
-        mask = (_rng.random(x.data.shape) > self.p).astype(_DEFAULT_DTYPE) / (1 - self.p)
-        return x * Tensor(mask)
+        return dropout(x, self.p, self.training, self.inplace)
+
+    def extra_repr(self):
+        return f"p={self.p}, inplace={self.inplace}"
 
 
 class Sequential(Module):
@@ -1915,24 +1939,45 @@ class _Activation(Module):
     activation writes into the tensor it was handed and hands back **the same
     object**, which is how a deep network holds its memory down.
 
-    Where the in-place form exists as a function (`relu_`, `elu_`, `celu_` and the
-    rest) it is used. Where it does not, the flag is **refused rather than
-    ignored** — an activation that promises to save the buffer and quietly makes a
-    new one is a promise about memory that nothing would catch.
+    **It is taken only where torch takes it**, which is not everywhere on this base.
+    `ReLU`, `ReLU6`, `SELU`, `SiLU`, `Mish`, `Hardsigmoid` and `Hardswish` have one;
+    `LogSigmoid`, `Softsign` and `Tanhshrink` do not. Offering it on all of them
+    would be an argument torch refuses — the mirror of the fault this library keeps
+    finding, since *accepted where the authority declines* misleads exactly as much
+    as *accepted and inert*.
+
+    Which is which is read from the function rather than written down: a name whose
+    function takes `inplace` gets one. A `fn_inplace` table beside `fn` stood here
+    for a few hours and said the same thing twice — the second copy also said six of
+    these have no in-place form, which was true of the functions as they were that
+    morning and not of the operation. `_ops` gives every one of them a write-back
+    now, so the table would have gone on refusing what the library had learned to do.
     """
 
     fn = staticmethod(relu)
-    fn_inplace = None
 
     def __init__(self, inplace=False):
         super().__init__()
-        if inplace and type(self).fn_inplace is None:
-            _unsupported(f"nn.{type(self).__name__}(inplace=True)")
+        if inplace and not self._takes_inplace():
+            raise TypeError(
+                f"{type(self).__name__}() got an unexpected keyword argument "
+                "'inplace' — torch does not give this one an in-place form either")
         self.inplace = inplace
 
+    @classmethod
+    def _takes_inplace(cls):
+        try:
+            return "inplace" in _inspect.signature(cls.fn).parameters
+        except (TypeError, ValueError):
+            return False
+
     def forward(self, x):
-        cls = type(self)
-        return cls.fn_inplace(x) if self.inplace else cls.fn(x)
+        if self.inplace:
+            return type(self).fn(x, inplace=True)
+        return type(self).fn(x)
+
+    def extra_repr(self):
+        return "inplace=True" if self.inplace else ""
 
 
 class ReLU(_Activation):
@@ -1942,7 +1987,6 @@ class ReLU(_Activation):
     the shape `tests/test_one_definition.py` exists to catch."""
 
     fn = staticmethod(relu)
-    fn_inplace = staticmethod(relu_)
 
 
 nn.ReLU = ReLU
@@ -1974,11 +2018,14 @@ class LeakyReLU(Module):
     def __init__(self, negative_slope=0.01, inplace=False):
         """`inplace` — see `_Activation`."""
         super().__init__()
-        self.inplace = inplace
-        self.negative_slope = negative_slope
+        self.negative_slope, self.inplace = negative_slope, inplace
 
     def forward(self, x):
-        return leaky_relu_(x, self.negative_slope) if self.inplace else leaky_relu(x, self.negative_slope)
+        return leaky_relu(x, self.negative_slope, inplace=self.inplace)
+
+    def extra_repr(self):
+        tail = ", inplace=True" if self.inplace else ""
+        return f"negative_slope={self.negative_slope}{tail}"
 
 
 class ELU(Module):
@@ -1988,7 +2035,11 @@ class ELU(Module):
         self.alpha, self.inplace = alpha, inplace
 
     def forward(self, x):
-        return elu_(x, self.alpha) if self.inplace else elu(x, self.alpha)
+        return elu(x, self.alpha, inplace=self.inplace)
+
+    def extra_repr(self):
+        tail = ", inplace=True" if self.inplace else ""
+        return f"alpha={self.alpha}{tail}"
 
 
 # ── the stateless activation layers. Each wraps one function. ───────────────
@@ -2019,7 +2070,6 @@ class ReLU6(_Activation):
 
 class SELU(_Activation):
     fn = staticmethod(selu)
-    fn_inplace = staticmethod(selu_)
 
 
 class Softsign(_Activation):
@@ -2034,11 +2084,14 @@ class CELU(Module):
     def __init__(self, alpha=1.0, inplace=False):
         """`inplace` — see `_Activation`."""
         super().__init__()
-        self.inplace = inplace
-        self.alpha = alpha
+        self.alpha, self.inplace = alpha, inplace
 
     def forward(self, x):
-        return celu_(x, self.alpha) if self.inplace else celu(x, self.alpha)
+        return celu(x, self.alpha, inplace=self.inplace)
+
+    def extra_repr(self):
+        tail = ", inplace=True" if self.inplace else ""
+        return f"alpha={self.alpha}{tail}"
 
 
 class Hardshrink(Module):
@@ -2073,8 +2126,11 @@ class Hardtanh(Module):
         self.inplace = inplace
 
     def forward(self, x):
-        return (hardtanh_(x, self.min_val, self.max_val) if self.inplace
-                else hardtanh(x, self.min_val, self.max_val))
+        return hardtanh(x, self.min_val, self.max_val, inplace=self.inplace)
+
+    def extra_repr(self):
+        tail = ", inplace=True" if self.inplace else ""
+        return f"min_val={self.min_val}, max_val={self.max_val}{tail}"
 
 
 class Softplus(Module):
@@ -2093,8 +2149,11 @@ class Threshold(Module):
         self.threshold, self.value, self.inplace = threshold, value, inplace
 
     def forward(self, x):
-        return (threshold_(x, self.threshold, self.value) if self.inplace
-                else threshold_fn(x, self.threshold, self.value))
+        return threshold_fn(x, self.threshold, self.value, inplace=self.inplace)
+
+    def extra_repr(self):
+        tail = ", inplace=True" if self.inplace else ""
+        return f"threshold={self.threshold}, value={self.value}{tail}"
 
 
 class Softmin(Module):
@@ -2945,7 +3004,12 @@ class RReLU(Module):
         self.lower, self.upper, self.inplace = lower, upper, inplace
 
     def forward(self, x):
-        return rrelu(x, self.lower, self.upper, self.training)
+        # **`inplace` was accepted here and dropped.** It was stored, printed by the
+        # repr above, and never passed on — so a caller relying on the input changing
+        # got an unchanged input and no complaint. Found while giving the other
+        # eleven activations the argument they had never taken at all.
+        return rrelu(x, self.lower, self.upper, self.training,
+                     inplace=self.inplace)
 
     def __repr__(self):
         return f"RReLU(lower={self.lower}, upper={self.upper})"
@@ -3085,7 +3149,11 @@ class _FeatureDropout(Module):
         self.p, self.inplace = p, inplace
 
     def forward(self, x):
-        return type(self)._fn(x, self.p, self.training)
+        # `self.inplace` was stored and **printed in the `repr` below** while
+        # `forward` never passed it on — `AlphaDropout(inplace=True)` reported a
+        # flag it did not act on, across all five of these classes. The `repr` was
+        # the only honest-looking part of it.
+        return type(self)._fn(x, self.p, self.training, self.inplace)
 
     def __repr__(self):
         return f"{type(self).__name__}(p={self.p}, inplace={self.inplace})"

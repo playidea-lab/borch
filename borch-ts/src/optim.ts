@@ -97,7 +97,27 @@ export abstract class Optimizer {
    */
   private readonly banks: { slots: Tensor[]; value: number }[] = [];
 
-  constructor(params: ParamsArg, private readonly defaultLr: number) {
+  /**
+   * Ascend rather than descend. `torch.optim.*(maximize=True)`.
+   *
+   * **It lives here and not in each optimizer** because every one of torch's
+   * applies it in the same place: `g = -grad` at the very top, *before* weight
+   * decay, so the decay term `+λθ` keeps its sign. Negating the gradient on the
+   * way into `update` is therefore not an approximation of the eleven separate
+   * algorithms — it is what all eleven do, written once.
+   *
+   * `SGD` used to bake it into its shader instead, which was the same number by
+   * a second route. The second route is gone; a flag with two implementations is
+   * a flag with two behaviours waiting to happen.
+   */
+  protected readonly maximize: boolean;
+
+  constructor(
+    params: ParamsArg,
+    private readonly defaultLr: number,
+    { maximize = false }: { maximize?: boolean } = {},
+  ) {
+    this.maximize = maximize;
     const groups: readonly ParamGroupInit[] = isGroups(params)
       ? params
       : [{ params: params as readonly Tensor[] }];
@@ -202,8 +222,14 @@ export abstract class Optimizer {
   step(): void {
     noGrad(() => {
       for (const [i, p] of this.params.entries()) {
-        const g = p.grad;
-        if (!g) continue;
+        const raw = p.grad;
+        if (!raw) continue;
+        // `p.grad` itself is never written to — the negation makes a new tensor.
+        // Flipping it in place would leave the caller's gradient inverted after
+        // `step()`, and anything reading gradients afterwards (a clip, a log, a
+        // second optimizer over shared parameters) would silently read the
+        // opposite of what backward produced.
+        const g = this.maximize ? raw.neg() : raw;
         // Which group a parameter belongs to has to be settled first for `this.lr` to
         // give the right value.
         this.currentGroup = this.groupOf[i] ?? 0;
@@ -305,7 +331,6 @@ export class SGD extends Optimizer {
   private readonly buffers: Tensor[];
 
   private stepCount = 0;
-  private readonly maximize: boolean;
 
   /**
    * torch's order — `dampening` third and `nesterov` sixth, with `maximize`
@@ -323,10 +348,9 @@ export class SGD extends Optimizer {
     private readonly dampening = 0,
     private readonly weightDecay = 0,
     private readonly nesterov = false,
-    { maximize = false }: { maximize?: boolean } = {},
+    opts: { maximize?: boolean } = {},
   ) {
-    super(params, lr);
-    this.maximize = maximize;
+    super(params, lr, opts);
     if (nesterov && (momentum <= 0 || dampening !== 0)) {
       throw new Error(
         "Nesterov momentum requires a momentum and zero dampening — torch " +
@@ -359,12 +383,16 @@ export class SGD extends Optimizer {
     // pipelines. Left out of the key, the cache would hand step two the shader
     // compiled for step one and the dampening would never apply.
     const first = this.stepCount === 0;
+    // **`maximize` is not passed to the shader any more.** The base already
+    // handed `update` a negated gradient, so baking the flag in as well would
+    // negate twice and quietly turn ascent back into descent. `sgdStep` still
+    // takes the argument for callers outside this class; here it stays false.
     d.run1d(
       d.pipeline(
         `sgd:${n}:${this.lr}:${this.momentum}:${decay}:${this.dampening}:` +
-        `${this.nesterov}:${this.maximize}:${first}`,
+        `${this.nesterov}:${first}`,
         () => sgdStep(n, this.lr, this.momentum, decay, this.dampening,
-                      this.nesterov, this.maximize, first)),
+                      this.nesterov, false, first)),
       buffers,
       n,
     );
@@ -379,6 +407,10 @@ export class SGD extends Optimizer {
 export class Adam extends Optimizer {
   private readonly first: Tensor[];
   private readonly second: Tensor[];
+  /** `amsgrad`'s running maximum of the second moment. Empty when it is off —
+   *  a bank that is allocated is a bank `addParamGroup` has to grow and
+   *  `stateDict` has to carry, for a flag nobody set. */
+  private readonly secondMax: Tensor[];
   private stepCount = 0;
 
   /**
@@ -395,10 +427,13 @@ export class Adam extends Optimizer {
     private readonly beta2 = 0.999,
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
+    private readonly amsgrad = false,
+    opts: { maximize?: boolean } = {},
   ) {
-    super(params, lr);
+    super(params, lr, opts);
     this.first = this.state(this.params);
     this.second = this.state(this.params);
+    this.secondMax = amsgrad ? this.state(this.params) : [];
   }
 
   override step(): void {
@@ -453,10 +488,17 @@ export class Adam extends Optimizer {
 
     const n = param.size;
     const d = device();
+    const buffers = [param.buffer, g.buffer, m.buffer, v.buffer, corr.buffer];
+    if (this.amsgrad) {
+      const vmax = this.secondMax[index];
+      if (!vmax) throw new Error(`Adam: no amsgrad state for parameter ${index}`);
+      buffers.push(vmax.buffer);
+    }
     d.run1d(
-      d.pipeline(`adam:${n}:${this.lr}:${this.beta1}:${this.beta2}:${this.eps}`,
-        () => adamStep(n, this.lr, this.beta1, this.beta2, this.eps)),
-      [param.buffer, g.buffer, m.buffer, v.buffer, corr.buffer],
+      d.pipeline(
+        `adam:${n}:${this.lr}:${this.beta1}:${this.beta2}:${this.eps}:${this.amsgrad}`,
+        () => adamStep(n, this.lr, this.beta1, this.beta2, this.eps, this.amsgrad)),
+      buffers,
       n,
     );
   }
@@ -485,13 +527,19 @@ export class AdamW extends Adam {
     beta2 = 0.999,
     eps = 1e-8,
     weightDecay = 0.01,
+    amsgrad = false,
+    opts: { maximize?: boolean } = {},
   ) {
-    super(params, lr, beta1, beta2, eps, weightDecay);
+    super(params, lr, beta1, beta2, eps, weightDecay, amsgrad, opts);
   }
 }
 
 export class RMSprop extends Optimizer {
   private readonly squares: Tensor[];
+  /** `centered`'s running mean of the gradient. Empty when it is off. */
+  private readonly gradAvgs: Tensor[];
+  /** `momentum`'s buffer. Empty when it is zero. */
+  private readonly buffers: Tensor[];
 
   constructor(
     params: ParamsArg,
@@ -499,9 +547,17 @@ export class RMSprop extends Optimizer {
     private readonly alpha = 0.99,
     private readonly eps = 1e-8,
     private readonly weightDecay = 0,
+    private readonly momentum = 0,
+    private readonly centered = false,
+    opts: { maximize?: boolean } = {},
   ) {
-    super(params, lr);
+    super(params, lr, opts);
     this.squares = this.state(this.params);
+    // **Order matters here.** The bank list is what `stateDict` walks and what
+    // `addParamGroup` grows, and the buffers are pushed to the dispatch in this
+    // same order below — centred first, momentum second.
+    this.gradAvgs = centered ? this.state(this.params) : [];
+    this.buffers = momentum !== 0 ? this.state(this.params) : [];
   }
 
   protected override update(index: number, param: Tensor, g: Tensor): void {
@@ -515,10 +571,23 @@ export class RMSprop extends Optimizer {
     const grad = decay === 0 ? g : g.add(param.mul(Tensor.full([], decay)));
     const n = param.size;
     const d = device();
+    const buffers = [param.buffer, grad.buffer, sq.buffer];
+    if (this.centered) {
+      const a = this.gradAvgs[index];
+      if (!a) throw new Error(`RMSprop: no centered state for parameter ${index}`);
+      buffers.push(a.buffer);
+    }
+    if (this.momentum !== 0) {
+      const b = this.buffers[index];
+      if (!b) throw new Error(`RMSprop: no momentum buffer for parameter ${index}`);
+      buffers.push(b.buffer);
+    }
     d.run1d(
-      d.pipeline(`rms:${n}:${this.lr}:${this.alpha}:${this.eps}`,
-        () => rmspropStep(n, this.lr, this.alpha, this.eps)),
-      [param.buffer, grad.buffer, sq.buffer],
+      d.pipeline(
+        `rms:${n}:${this.lr}:${this.alpha}:${this.eps}:${this.momentum}:${this.centered}`,
+        () => rmspropStep(n, this.lr, this.alpha, this.eps,
+                          this.momentum, this.centered)),
+      buffers,
       n,
     );
   }
@@ -551,8 +620,9 @@ abstract class Composed extends Optimizer {
    * comes here.
    */
   constructor(params: ParamsArg, lr: number,
-              protected readonly weightDecay = 0) {
-    super(params, lr);
+              protected readonly weightDecay = 0,
+              opts: { maximize?: boolean } = {}) {
+    super(params, lr, opts);
   }
 
   /**
@@ -593,8 +663,9 @@ export class Adagrad extends Composed {
    */
   constructor(params: ParamsArg, lr = 0.01, private readonly lrDecay = 0,
               weightDecay = 0, initialAccumulatorValue = 0,
-              private readonly eps = 1e-10) {
-    super(params, lr, weightDecay);
+              private readonly eps = 1e-10,
+              opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     // **`initialAccumulatorValue` sits fifth, before `eps`** — torch's order, and
     // this is the second argument inserted into this constructor's middle rather
     // than appended. Without it `new Adagrad(p, 0.01, 0, 0, 1e-8)` seeded the
@@ -634,8 +705,9 @@ export class Adadelta extends Composed {
   private readonly deltas: Tensor[];
 
   constructor(params: ParamsArg, lr = 1.0, private readonly rho = 0.9,
-              private readonly eps = 1e-6, weightDecay = 0) {
-    super(params, lr, weightDecay);
+              private readonly eps = 1e-6, weightDecay = 0,
+              opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     this.squares = this.state(this.params);
     this.deltas = this.state(this.params);
   }
@@ -665,8 +737,8 @@ export class Adamax extends Composed {
 
   constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8,
-              weightDecay = 0) {
-    super(params, lr, weightDecay);
+              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     this.first = this.state(this.params);
     this.inf = this.state(this.params);
   }
@@ -720,8 +792,10 @@ export class NAdam extends Composed {
    */
   constructor(params: ParamsArg, lr = 2e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8,
-              weightDecay = 0, private readonly momentumDecay = 4e-3) {
-    super(params, lr, weightDecay);
+              weightDecay = 0, private readonly momentumDecay = 4e-3,
+              private readonly decoupledWeightDecay = false,
+              opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     this.first = this.state(this.params);
     this.second = this.state(this.params);
   }
@@ -751,7 +825,17 @@ export class NAdam extends Composed {
   }
 
   protected override update(index: number, param: Tensor, g: Tensor): void {
-    const grad = this.decayed(param, g);
+    // **`decoupled_weight_decay` moves the decay off the gradient and onto the
+    // weight**, the same correction `AdamW` is to `Adam`. torch shrinks the
+    // parameter by `1 − lr·λ` before the step and then runs the step on the raw
+    // gradient, so the moments never see the decay term.
+    const wd = this.grouped(this.weightDecay);
+    let grad = g;
+    if (this.decoupledWeightDecay) {
+      if (wd !== 0) param.copyFrom(param.mul(this.k(1 - this.lr * wd)));
+    } else {
+      grad = this.decayed(param, g);
+    }
     const m = this.at(this.first, index, "NAdam");
     const v = this.at(this.second, index, "NAdam");
     m.copyFrom(m.mul(this.k(this.beta1)).add(grad.mul(this.k(1 - this.beta1))));
@@ -779,8 +863,8 @@ export class RAdam extends Composed {
 
   constructor(params: ParamsArg, lr = 1e-3, private readonly beta1 = 0.9,
               private readonly beta2 = 0.999, private readonly eps = 1e-8,
-              weightDecay = 0) {
-    super(params, lr, weightDecay);
+              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     this.first = this.state(this.params);
     this.second = this.state(this.params);
   }
@@ -839,8 +923,8 @@ export class ASGD extends Composed {
 
   constructor(params: ParamsArg, lr = 1e-2, private readonly lambd = 1e-4,
               private readonly alpha = 0.75, private readonly t0 = 1e6,
-              weightDecay = 0) {
-    super(params, lr, weightDecay);
+              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     this.ax = this.state(this.params);
     this.eta = lr;
   }
@@ -892,8 +976,9 @@ export class Rprop extends Composed {
 
   constructor(params: ParamsArg, lr = 1e-2, private readonly etaMinus = 0.5,
               private readonly etaPlus = 1.2, private readonly sizeMin = 1e-6,
-              private readonly sizeMax = 50) {
-    super(params, lr);
+              private readonly sizeMax = 50,
+              opts: { maximize?: boolean } = {}) {
+    super(params, lr, 0, opts);
     this.prev = this.state(this.params);
     // **It must not be built with `Tensor.full`.** On a size-1 parameter that hands back
     // the value-cached global `lr` constant, and `update` below writes into it with
@@ -1124,8 +1209,8 @@ export class Adafactor extends Composed {
   constructor(params: ParamsArg, lr = 1e-2, private readonly beta2Decay = -0.8,
               private readonly eps1: number | null = null,
               private readonly eps2 = 1e-3, private readonly d = 1.0,
-              weightDecay = 0) {
-    super(params, lr, weightDecay);
+              weightDecay = 0, opts: { maximize?: boolean } = {}) {
+    super(params, lr, weightDecay, opts);
     this.extendState(this.params);
   }
 

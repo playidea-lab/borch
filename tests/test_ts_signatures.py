@@ -286,7 +286,12 @@ SHORTER = {
     # prefix of borch.ts's — it moved to `renamed` below.
     # 15 → 17. Two short tails, `stft`'s `align_to_window` and `backward`'s
     # `create_graph`/`inputs`.
-    "Tensor": 17,
+    # 17 → 18. `relu` took torch's `inplace` in the core; borch.ts has no in-place
+    # write-back to route it to, so it takes the prefix. This is the paragraph below
+    # happening again, and the row is named rather than the count nudged: the whole
+    # increase is one row, and if a second one ever rides along on the same reason it
+    # has to be written down too.
+    "Tensor": 18,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and
@@ -317,10 +322,10 @@ SHORTER = {
     # borch.ts writes out by hand.
     # 18 → 19. `LazyLinear` arrived when it stopped being uncomparable — see the
     # core-to-torch table.
-    # 19 → 24. The thirteen activations took torch's `inplace` and borch.ts has not
-    # followed; five of them are now longer than their borch.ts counterpart rather
-    # than the same length. The safe end of the parting — one argument too many
-    # raises rather than landing somewhere.
+    # 19 → 24. The thirteen activations plus `Dropout` took torch's `inplace` and
+    # borch.ts has not followed; five of them are now longer than their borch.ts
+    # counterpart rather than the same length. The safe end of the parting — one
+    # argument too many raises rather than landing somewhere.
     # 24 → 27. `AvgPool2d`, `Flatten` and a third grew past borch.ts's list when
     # they took torch's arguments. The safe end of the parting.
     # 27 → 36. **The core-to-torch `shorter` row fell from 45 to 20 and this is
@@ -345,7 +350,14 @@ SHORTER = {
     # prefix of the core's after the core took torch's whole surface — the safe end
     # of the parting, where one argument too many raises rather than landing
     # somewhere. The six that are not prefixes are in `unaligned`.
-    "optim": 4,
+    #
+    # **4 → 0.** borch.ts caught up: `maximize` went onto the `Optimizer` base and
+    # reached all eleven at once, and `amsgrad`, `centered`, `momentum` and
+    # `decoupled_weight_decay` went into the four algorithms that have them. This is
+    # the far side of the mechanism the `nn` note above describes — the core moved
+    # toward torch first and this number rose, and it falls again when borch.ts
+    # follows. It is the first bucket on this axis to reach zero.
+    "optim": 0,
     # 12 → 11. borch.ts's `ReduceLROnPlateau` followed the core into torch's
     # list in the same edit, so the row stopped being a truncation. The
     # cooldown counter joined `stateDict` with it — left out, a resume inside

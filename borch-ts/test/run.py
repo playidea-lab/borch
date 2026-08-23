@@ -312,9 +312,16 @@ NOT_PORTED = {
     # `momentum`, `decoupled_weight_decay` and the execution switches — and borch.ts
     # has none of the four. **They are algorithm, not performance**: each changes the
     # values, so each is a kernel over there rather than an argument threaded through.
-    "opt::": (14, "아직 — `maximize`, `amsgrad`, `centered`, `momentum` and "
-                  "`decoupled_weight_decay` are each a kernel on that side; and "
-                  "borch.ts's SGD requires `lr`, so it has no default rate to ask about"),
+    #
+    # **14 → 2. The work was done, so the reason expired.** borch.ts has all five now:
+    # `maximize` is one negation on the `Optimizer` base (torch applies it before
+    # weight decay in every one of its optimizers, so it is not eleven decisions), and
+    # `amsgrad`, `centered` and `momentum` are one extra buffer each in the Adam and
+    # RMSprop shaders, with `decoupled_weight_decay` moving NAdam's decay onto the
+    # weight. The two that remain are `SGD(the default rate)` — `없음`, not `아직`,
+    # because borch.ts's `SGD` requires `lr` and has no default to disagree about.
+    "opt::": (2, "없음 — borch.ts's SGD requires `lr`, so it has no default rate to "
+                 "ask about. The other twelve were asked once borch.ts had them"),
     # 158 → 86. **One reason was covering eight groups.** `아직` means a backlog, and
     # what was actually backed up was `자리만::` 63 and `묻는것::` 9 alone — both pure
     # properties of the other side, asking `t.dtype` and nothing else, and both should have

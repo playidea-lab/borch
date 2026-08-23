@@ -736,25 +736,43 @@ class Tensor:
     def matmul(self, o):
         return self.__matmul__(o)
 
-    # In-place updates — allowed inside no_grad only (real torch's rule too)
-    def _inplace(self, fn, other):
-        if self.requires_grad and _grad_mode.enabled:
-            raise RuntimeError(
-                "A tensor that requires grad cannot be changed in place. "
-                "Do it inside `with torch.no_grad():`."
-            )
-        o = other.data if isinstance(other, Tensor) else other
-        self._array = fn(self._array, o).astype(self._array.dtype)
-        return self
-
+    # In-place updates. **These three route to the underscore names rather than
+    # carrying their own formula** — `a += b` and `a.add_(b)` are one operation
+    # spelled twice, and torch treats them as one.
+    #
+    # They used to call a second `_inplace` defined here, two hundred lines above
+    # the `_inplace` further down, in the same class. The later definition wins in
+    # Python, so every one of these three raised
+    # `TypeError: add() takes from 2 to 3 positional arguments but 0 were given`
+    # the moment anyone wrote `a += b`. `a.add_(b)` kept working, which is why it
+    # went unseen: the golden files reach the underscore names and not the
+    # operators.
     def __iadd__(self, o):
-        return self._inplace(_np.add, o)
+        return self.add_(o)
 
     def __isub__(self, o):
-        return self._inplace(_np.subtract, o)
+        return self.sub_(o)
 
     def __imul__(self, o):
-        return self._inplace(_np.multiply, o)
+        return self.mul_(o)
+
+    # The next four were **absent**, which does not raise — Python falls back to
+    # `a = a / b` and the value that comes out is right. What is lost is that the
+    # object the caller still holds did not move, and that a leaf carrying
+    # gradients was not refused. torch mutates and refuses on all four (measured).
+    # An operator that quietly rebinds is the shape of defect the golden files
+    # cannot see, because they compare values.
+    def __itruediv__(self, o):
+        return self.div_(o)
+
+    def __ipow__(self, o):
+        return self.pow_(o)
+
+    def __ifloordiv__(self, o):
+        return self.floor_divide_(o)
+
+    def __imod__(self, o):
+        return self.remainder_(o)
 
     # ---- comparison (no gradient)
 

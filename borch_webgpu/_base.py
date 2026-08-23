@@ -344,22 +344,28 @@ class Tensor:
     # The dtype-changing names. borch.ts takes them all as `to("float32")`.
     def to(self, dtype):
         name = dtype.plain if isinstance(dtype, _DType) else str(dtype)
-        return guarded(self._h.to, name.replace("torch.", ""))
+        name = name.replace("torch.", "")
+        # **Double precision stops here, and this is the one place it can** —
+        # `.double()`, `.to(float64)` and `.type(float64)` are one request spelled
+        # three ways and they all arrive at this line. It used to be guarded on
+        # `.double()` alone, so the other two spellings went through to borch.ts
+        # and **came back a float32 tensor claiming to be double.**
+        #
+        # The core places the same gate on its own `_cast`, in the same words. A
+        # refusal that reads differently in two of our libraries teaches that the
+        # limit is each library's habit rather than the platform's.
+        if name == "float64":
+            _absent_dtype("double", "float64")
+        return guarded(self._h.to, name)
 
     def float(self):
         return self.to("float32")
 
     def double(self):
-        """**Absent.** WebGPU shaders have no double precision.
-
-        The same place the sister library refuses for TF.js reasons — different
-        cause, same conclusion — and the golden froze that refusal as the
-        answer. Handing back float32 quietly produces code that believes it
-        computed in double.
-        """
-        raise RuntimeError(
-            "Only Tensors of floating point dtype float32 are supported — "
-            "float64 is not in WebGPU shaders")
+        """**Absent.** WebGPU shaders have no double precision, and TF.js has none
+        for its own reasons — different cause, same conclusion. Handing back
+        float32 quietly produces code that believes it computed in double."""
+        return self.to("float64")
 
     def long(self):
         return self.to("int64")
@@ -1012,10 +1018,41 @@ class Tensor:
             yield self[i]
 
     def __bool__(self):
+        """**It read element zero and answered**, whatever the size. `if t:` on a
+        three-element tensor returned the truth of the first value instead of
+        raising, which is torch's loudest refusal turned into a quiet wrong
+        answer. The core carries the same three methods; this side had one."""
+        if self._h.size != 1:
+            raise RuntimeError(
+                "Boolean value of Tensor with more than one value is ambiguous")
         return bool(_read(self._h)[0])
 
+    def _scalar(self):
+        """The single value, raising the way `int()` and `float()` raise in torch —
+        `ValueError`, where `.item()` next door raises `RuntimeError`. The two
+        classes are torch's and they really do differ."""
+        if self._h.size != 1:
+            raise ValueError(
+                "only one element tensors can be converted to Python scalars")
+        return _read(self._h)[0]
+
     def __float__(self):
-        return self.item()
+        return float(self._scalar())
+
+    def __int__(self):
+        """`int(t)`. **Absent**, so `int(t)` on a one-element tensor raised
+        `TypeError` here and answered on the core — a parting no value comparison
+        can see, because the call never produces a value."""
+        return int(self._scalar())
+
+    def __index__(self):
+        """What lets a tensor be an index — `xs[t]`, `range(t)`. torch demands an
+        integer dtype **and** a single element, and raises `TypeError` for both."""
+        if str(self._h.dtype) not in ("int32", "int64", "uint8", "bool") \
+                or self._h.size != 1:
+            raise TypeError(
+                "only integer tensors of a single element can be converted to an index")
+        return int(_read(self._h)[0])
 
     def __hash__(self):
         return id(self)
