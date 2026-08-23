@@ -3087,7 +3087,28 @@ def _igamma_np(a, x):
     xv = _np.asarray(x, dtype=_np.float64)
     av, xv = _np.broadcast_arrays(av, xv)
     out = _np.zeros(av.shape, dtype=_np.float64)
-    lg = _np.vectorize(_math.lgamma)(av)
+
+    # **Everything below runs on stand-in values wherever the domain says nothing.**
+    # `lnΓ(a)` used to be taken with `np.vectorize(math.lgamma)`, and `math.lgamma`
+    # raises `ValueError: math domain error` at every non-positive integer. So a single
+    # entry outside the domain **took the whole tensor down** — where torch puts a `nan`
+    # in that one position and answers for the rest. A batch with one bad row ended the
+    # training step rather than the row.
+    #
+    # Found by calling `igamma_` twice with a second operand: nothing here had ever
+    # given the binary in-place family its other argument, so nothing had ever asked.
+    #
+    # Two things changed and **either one alone is enough** (measured by reverting each
+    # separately — the check only goes red with both reverted): this mask, and the swap
+    # to the vectorised `_lgamma_np`, which returns `inf` at the poles rather than
+    # raising. Both are kept, because they answer different questions. The mask says
+    # which entries have an answer; `_lgamma_np` says what happens to the ones that do
+    # not. A later edit to either would otherwise silently restore the crash.
+    ok = (av > 0) & _np.isfinite(av) & (xv >= 0) & _np.isfinite(xv)
+    a0, x0 = av, xv                                    # kept for the edges, below
+    av = _np.where(ok, av, 1.0)
+    xv = _np.where(ok, xv, 1.0)
+    lg = _lgamma_np(av)
 
     # ── the series (x < a+1): P = e^(−x + a·ln x − lnΓ(a)) · Σ xⁿ / (a(a+1)…(a+n))
     low = xv < av + 1.0
@@ -3126,8 +3147,28 @@ def _igamma_np(a, x):
                 break
         q = _np.exp(-xv + av * _np.log(_np.where(xv > 0, xv, 1.0)) - lg) * h
         out = _np.where(high, 1.0 - q, out)
-    # At `x = 0`, P = 0. The logarithm above cannot pass that point.
-    return _np.where(xv <= 0, 0.0, out)
+
+    # ── the edges, **read off torch rather than reasoned out**
+    #
+    # Thirty-six pairs from {−1, 0, ½, 2, ∞, nan}² were measured, and three of the rows
+    # are hard to defend on their own: `P(nan, 0)` is 0, `P(nan, ∞)` is 1, `P(∞, nan)`
+    # is 0. They look like an ordering artefact — a `x == 0 → 0` short-circuit standing
+    # ahead of the nan check, with `nan < 0` quietly false on the way past.
+    #
+    # They are copied anyway, and that is the opposite of the call made for `polygamma`
+    # a few lines up. The difference is that there torch answers the *same input* three
+    # different ways depending on the order, so there was no single answer to copy;
+    # here there is one, it is stable, and a port that improves on its subject silently
+    # is a port whose differences you can no longer look up.
+    got = _np.where(a0 == 0, 1.0, out)                     # P(0, x>0) = 1
+    got = _np.where(_np.isnan(a0) | _np.isnan(x0), _np.nan, got)
+    got = _np.where(_np.isposinf(a0), 0.0, got)            # all the mass is beyond x
+    got = _np.where(_np.isposinf(x0), 1.0, got)            # the whole integral
+    got = _np.where(x0 == 0, 0.0, got)                     # ∫ from 0 to 0
+    got = _np.where(_np.isposinf(a0) & _np.isposinf(x0), _np.nan, got)
+    got = _np.where((a0 == 0) & (x0 == 0), _np.nan, got)
+    got = _np.where(a0 < 0, _np.nan, got)                  # Γ(a) has no branch here
+    return _np.where(x0 < 0, _np.nan, got)
 
 
 def _erfinv_np(d):
@@ -3222,9 +3263,17 @@ def igamma(input, other):                                       # noqa: A002
     av = _np.asarray(a.data, dtype=_np.float64)
     xv = _np.asarray(x.data, dtype=_np.float64)
     out = _igamma_np(av, xv)
-    lg = _np.vectorize(_math.lgamma)(av)
-    slope = _np.exp((av - 1.0) * _np.log(_np.where(xv > 0, xv, 1.0)) - xv - lg)
-    slope = _np.where(xv > 0, slope, 0.0)
+    # **The slope has to survive the same domain the value does.** `math.lgamma`
+    # through `np.vectorize` raises at every non-positive integer, so building the
+    # gradient used to end the call even for the entries that had an answer — and
+    # `back` is built eagerly, so it happened whether or not anything asked for a
+    # gradient. The vectorised `_lgamma_np` returns `inf` there instead, which drives
+    # the slope to 0 at exactly the places the value is `nan`.
+    lg = _lgamma_np(_np.where((av > 0) & _np.isfinite(av), av, 1.0))
+    lg = _np.where((av > 0) & _np.isfinite(av), lg, _np.inf)
+    with _np.errstate(over="ignore", invalid="ignore"):
+        slope = _np.exp((av - 1.0) * _np.log(_np.where(xv > 0, xv, 1.0)) - xv - lg)
+    slope = _np.where((xv > 0) & _np.isfinite(slope), slope, 0.0)
 
     def back(g):
         if a.requires_grad:
@@ -7567,6 +7616,17 @@ def ctc_loss_aten(log_probs, targets, input_lengths, target_lengths, blank=0,
 # The read-only uses (making windows, walking a diagonal) run unchanged, and code
 # that writes into the view is rare even in torch. `as_strided_scatter` does
 # "write into those positions" properly instead.
+#
+# **"Only on a write" was not the whole of it**, and the line above said so for
+# months. `as_strided_` twice shows it without writing anywhere: the first call
+# leaves a 2×2 where torch leaves a 2×2 *over an eight-element storage*, so a
+# second call with stride 4 reads position 4 — which torch still has and this
+# does not. torch answers; here it is an `IndexError`.
+#
+# Measured, not reasoned: the first call agrees exactly, and only the second parts.
+# Left as it stands, because the alternative is a storage model, and the shape of
+# the divergence is the one already chosen. Written down so the next reader does
+# not have to rediscover that the sentence above is narrower than it sounds.
 
 def _strided_flat(size, stride, offset):
     """Build the **flat index table** the strides point at. Its shape is
