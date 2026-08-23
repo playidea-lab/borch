@@ -3212,11 +3212,24 @@ function renormRows(weight: Tensor, idx: Tensor, maxNorm: number,
     .reshape([rows, 1]);
   const lengths = weight.abs().powScalar(normType).sumDim(1, true)
     .powScalar(1 / normType);
-  // `min(1, maxNorm / length)` where the row was looked up, and 1 everywhere else.
-  const wanted = lengths.reciprocal().mul(Tensor.full([], maxNorm)).minimum(1);
+  // `min(1, maxNorm / (length + 1e-7))` where the row was looked up, and 1 everywhere
+  // else. The epsilon is torch's own, in `renorm_`; the numpy core carries it too, so
+  // leaving it out here made the two sides of this library disagree with each other by
+  // about a part in ten million on exactly the rows this function exists to change.
+  const wanted = lengths.add(Tensor.full([], 1e-7)).reciprocal()
+    .mul(Tensor.full([], maxNorm)).minimum(1);
   const scale = wanted.mul(seen.gt(0).to("float32"))
     .add(seen.eq(0).to("float32"));
-  weight.copyFrom(weight.mul(scale));
+  // **The write has to be outside the graph.** `max_norm` shortens rows *in the table*,
+  // and the table is a leaf that requires grad, so the in-place guard refuses it —
+  // `a leaf Variable that requires grad is being used in an in-place operation`, from a
+  // layer the caller only asked to look something up. torch does the same edit inside
+  // its own `no_grad`, and the optimizer here already reaches this way; the numpy core
+  // sidesteps the question entirely by writing to the raw array.
+  //
+  // Four binding-golden cases were failing on this and none of them said `max_norm`:
+  // the message names the guard, which is correct and one layer below the mistake.
+  noGrad(() => weight.copyFrom(weight.mul(scale)));
 }
 
 /**
