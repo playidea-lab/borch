@@ -2541,6 +2541,17 @@ def stat_cases(inp=None):
     add("nonzero_static(fill=-9)",
         lambda L: L.nonzero_static(L.tensor(sparse), size=5, fill_value=-9))
 
+    # ── nonzero(as_tuple) ──
+    #
+    # **The tuple form is what indexing takes** — one 1-D tensor per axis rather
+    # than one (count, rank) table. `torch.nonzero` reads as "no signature found
+    # for builtin", so the signature axis had never compared it and the argument
+    # was simply absent on both sides.
+    add("nonzero(as_tuple)/행",
+        lambda L: L.nonzero(L.tensor(sparse), as_tuple=True)[0])
+    add("nonzero 표",
+        lambda L: L.nonzero(L.tensor(sparse)))
+
     # ── the four random ones — the deterministic limits only ──
     add("bernoulli(p=0)", lambda L: L.bernoulli(L.zeros(4)))
     add("bernoulli(p=1)", lambda L: L.bernoulli(L.ones(4)))

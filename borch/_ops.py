@@ -216,8 +216,12 @@ def manual_seed(seed):
     the name means finding and fixing every place that grabbed it, and that list
     grows.
     """
+    # torch takes a 0-D tensor here as well as an int, and numpy's generator does
+    # not — `SeedSequence expects int or sequence of ints`. Coerced rather than
+    # excused: the fix is one line and an excuse would be a sentence to keep true.
+    seed = int(seed)
     _rng.bit_generator.state = _np.random.default_rng(seed).bit_generator.state
-    _LAST_SEED[0] = int(seed)
+    _LAST_SEED[0] = seed
     return seed
 
 
@@ -350,7 +354,9 @@ def randperm(n, dtype=None, requires_grad=False, **kw):
     return _made(_rng.permutation(n).astype(_np.int64), dtype, requires_grad)
 
 
-def multinomial(probs, num_samples, replacement=True):
+def multinomial(probs, num_samples, replacement=True, *, generator=None):
+    if generator is not None:
+        _unsupported("multinomial(generator=…)")
     p = probs.data / probs.data.sum(axis=-1, keepdims=True)
     if p.ndim == 1:
         return Tensor(_rng.choice(len(p), size=num_samples, p=p).astype(_np.int64))
@@ -397,7 +403,24 @@ def cat(items, dim=0):
     return items[0]._make(out, tuple(items), back, "CatBackward0")
 
 
-def where(cond, a, b):
+_MISSING = object()
+
+
+def where(cond, a=_MISSING, b=_MISSING):
+    """**Given only the condition it answers with positions**, not with values —
+    torch's one-argument form is `nonzero(as_tuple=True)` under another name, and
+    it gives a tuple with one tensor per axis.
+
+    It was found by a probe asking about **rank**, which is not what it is. The
+    probe fed one tensor to every unary-looking name and read which ranks came
+    back; here torch answered at every rank and this library at none, so it landed
+    in the report as a rank row. It is an arity row. A probe names what it finds
+    after the axis it was built for, and the name can be wrong.
+    """
+    if a is _MISSING and b is _MISSING:
+        return nonzero(_wrap(cond), as_tuple=True)
+    if a is _MISSING or b is _MISSING:
+        raise RuntimeError("where() expects either one argument or three, but got two")
     c = cond.data if isinstance(cond, Tensor) else cond
     ta, tb = _wrap(a), _wrap(b)
     out = _np.where(c, ta.data, tb.data)
@@ -2021,7 +2044,27 @@ _zero_grad = lambda x, o: _np.zeros_like(x)                          # noqa: E73
 sign = _unary("Sign", _np.sign, _zero_grad)
 floor = _unary("Floor", _np.floor, _zero_grad)
 ceil = _unary("Ceil", _np.ceil, _zero_grad)
-round = _unary("Round", lambda x: _np.round(x), _zero_grad)
+_round_unary = _unary("Round", lambda x: _np.round(x), _zero_grad)
+
+
+def round(t, decimals=0):
+    """**torch takes `decimals` and this did not**, so `round(x, 2)` was a
+    `TypeError` where torch rounds to two places. The name is one of the most
+    ordinary in the library and the argument is the reason anybody reaches for it.
+
+    torch rounds **half to even** at every scale, which is numpy's rule too — 0.5
+    and 1.5 both give 0 and 2. Scaling by a power of ten before rounding keeps
+    that, which is what numpy does internally.
+    """
+    if decimals:
+        t = _wrap(t)
+        _needs_float(t.data,
+                     "Rounding to a number of places has no meaning in an "
+                     "integer cell.",
+                     "round_cpu not implemented for integer decimals")
+        scale = 10.0 ** int(decimals)
+        return _round_unary(t * scale) / scale
+    return _round_unary(t)
 
 
 def neg(t): return -_wrap(t)
@@ -2346,7 +2389,7 @@ def roll(t, shifts, dims=None):
 # copies of the same formula eventually diverge.
 
 _INPLACE_UNARY = ("abs", "sqrt", "exp", "log", "sin", "cos", "tan", "tanh", "sigmoid",
-                  "relu", "erf", "floor", "ceil", "round", "sign", "reciprocal",
+                  "relu", "erf", "floor", "ceil", "sign", "reciprocal",
                   "square", "trunc", "frac", "neg", "rsqrt", "log2", "log10",
                   "expm1", "log1p", "acos", "asin", "atan", "sinh", "cosh")
 
@@ -2370,6 +2413,11 @@ _INPLACE_BINARY = (
 )
 # The ones taking an axis or an index.
 _INPLACE_ARGS = (
+    # **`round` moved here from the nullary list**, because `round_` takes
+    # `decimals` exactly as `round` does. Left nullary, the two spellings of one
+    # operation took different arguments — which is what `div_` had against `div`
+    # with `rounding_mode`, found in the same run.
+    "round",
     "cumprod", "cumsum", "index_add", "index_copy", "index_fill", "ldexp",
     "masked_fill", "scatter", "scatter_add", "squeeze", "swapaxes", "swapdims",
     "transpose", "tril", "triu", "unsqueeze",
@@ -2545,7 +2593,21 @@ def rsub(a, b, alpha=1):
 multiply = mul
 divide = div
 subtract = sub
-true_divide = div
+
+
+def true_divide(a, b):
+    """**It cannot be `div`, because it is the one that has no `rounding_mode`.**
+
+    `divide` is an alias and takes the argument; torch refuses it here —
+    `true_divide() received an invalid combination of arguments` (measured) — and
+    the name is why: true division is the thing a rounding mode would undo.
+
+    Aliased, this library accepted `true_divide(x, y, rounding_mode="floor")` and
+    floored. The answer was an integer where torch will not produce one at all, so
+    code written here ran and the same code against torch raised — the divergence
+    surfacing at the port rather than at the call.
+    """
+    return div(a, b)
 
 greater = gt
 greater_equal = ge
@@ -2557,13 +2619,17 @@ not_equal = ne
 def t(x):
     """A 2-D transpose. **1-D and below are left alone** — torch does that."""
     x = _wrap(x)
+    _rank(x.data, (0, 1, 2), "t() expects a tensor with <= 2 dimensions, but self is {n}D")
     return x if len(x.data.shape) < 2 else x.transpose(0, 1)
 
 
 def adjoint(x):
     """Swap the last two axes. Everything is real, so the conjugate is the
     identity."""
-    return _wrap(x).transpose(-2, -1)
+    x = _wrap(x)
+    if x.data.ndim == 0:
+        return x.reshape(())
+    return x.transpose(-2, -1)
 
 
 def moveaxis(t, source, destination):
@@ -2660,6 +2726,17 @@ def randint_like(t, low, high=None, dtype=None, requires_grad=False, **kw):
 
 
 def scalar_tensor(value, dtype=None, requires_grad=False, **kw):
+    """A 0-D tensor from **a number**. torch refuses a tensor here outright, and
+    this passed one straight through — `scalar_tensor(ones(2, 3))` returned a
+    (2, 3), which is the one thing the name rules out."""
+    if _np.ndim(value.data if isinstance(value, Tensor) else value) != 0:
+        # **torch's message here is wider than torch's behaviour.** It says the
+        # argument "must be Number, not Tensor" and then accepts a 0-D tensor
+        # without complaint. Matching the behaviour rather than the sentence.
+        raise TypeError("scalar_tensor(): argument 's' (position 1) must be "
+                        f"Number, not {type(value).__name__}")
+    if isinstance(value, Tensor):
+        value = value.data
     return _made(_np.asarray(value, dtype=_DEFAULT_DTYPE), dtype, requires_grad)
 
 
@@ -2676,7 +2753,10 @@ def meshgrid(*tensors, indexing="ij"):
     `xy` has the first two axes swapped, so lumping the rule into one gets it
     right by accident in 2-D alone.
     """
+    # A 0-D input is one point on that axis, which is what torch makes of it —
+    # the grid comes back with a 1 in that position rather than an `IndexError`.
     ts = [_wrap(v) for v in tensors]
+    ts = [v.reshape(1) if v.data.ndim == 0 else v for v in ts]
     if indexing not in ("ij", "xy"):
         raise RuntimeError(f"indexing must be 'ij' or 'xy': {indexing!r}")
     order = list(range(len(ts)))
@@ -3071,9 +3151,15 @@ def masked_select(t, mask):
     return t[m]
 
 
-def gather(t, dim, index):
+def gather(t, dim, index, sparse_grad=False):
     """Take the positions the index points at. Used in classification to pull
-    out the probability of the correct class."""
+    out the probability of the correct class.
+
+    `sparse_grad` asks torch for a sparse gradient. There is no sparse layout here,
+    so it is **carried and refused** rather than left out — left out, torch's fourth
+    position lands on nothing."""
+    if sparse_grad:
+        _unsupported("gather(sparse_grad=True)")
     t = _wrap(t)
     idx = index.data.astype(int) if isinstance(index, Tensor) else _np.asarray(index, dtype=int)
     # numpy's own complaint is an `IndexError`; torch says `RuntimeError` here and
@@ -3106,12 +3192,30 @@ def cdist(a, b, p=2.0):
 
 def cov(t, correction=1, **kw):
     """Covariance. Rows are variables and columns are observations — the axes
-    are the reverse of numpy's, which makes it a confusing place."""
+    are the reverse of numpy's, which makes it a confusing place.
+
+    **Below rank 2 the answer is a scalar, not a 1×1 matrix.** One variable has
+    one number for its spread and torch returns it with no axes at all; this
+    reshaped to (1, -1), computed, and handed back the (1, 1) that fell out. The
+    value was right the whole time, which is why it lasted: `.item()` reads the
+    same from either, and so does anything that prints. It parts where the shape
+    is used — a `stack` of per-variable variances came out (n, 1, 1), and
+    broadcasting against it silently widens rather than raising.
+
+    Found by a probe asking which **ranks** each function accepts. Rank was the
+    question; the shape of the answer at that rank was the finding.
+    """
     t = _wrap(t)
+    _rank(t.data, (0, 1, 2),
+          "cov(): expected input to have two or fewer dimensions but got an "
+          "input with {n} dimensions")
     d = t.data
-    if d.ndim == 1:
-        d = d.reshape(1, -1)
-        t = t.reshape(1, d.shape[1])
+    if d.ndim <= 1:
+        n = int(d.size)
+        flat = t.reshape(1, n) if d.ndim else t.reshape(1, 1)
+        centered = flat - flat.mean(dim=1, keepdim=True)
+        pair = (centered @ centered.transpose(0, 1)) * (1.0 / max(1, n - correction))
+        return pair.reshape(())
     n = d.shape[1]
     centered = t - t.mean(dim=1, keepdim=True)
     return (centered @ centered.transpose(0, 1)) * (1.0 / max(1, n - correction))
@@ -3121,6 +3225,10 @@ def corrcoef(t):
     """Covariance divided by the standard deviations. **The diagonal becomes 1** —
     that is the check."""
     c = cov(t)
+    if c.data.ndim == 0:
+        # One variable correlates with itself perfectly, and torch says so with a
+        # scalar 1. Dividing by its own deviation would be 0/0 at zero variance.
+        return c * 0 + 1
     d = c.data
     scale = _np.sqrt(_np.outer(_np.diag(d), _np.diag(d)))
     return c / Tensor(scale.astype(d.dtype))
@@ -3701,6 +3809,64 @@ def _as_index(index):
             else _np.asarray(index, dtype=int))
 
 
+def _at_rank_0(t, call):
+    """torch's answer for a 0-D input: **one element, and no axes on the way out.**
+
+    Fourteen functions refused a 0-D tensor here, and not one of them had decided
+    to. The refusal was numpy's — `AxisError: axis -1 is out of bounds for array of
+    dimension 0`, `ValueError: Calling nonzero on 0d arrays is not allowed` — arriving
+    through a call that never mentioned rank. **An unmade decision still behaves like
+    a decision**, and this one behaved differently from torch while reading, in the
+    traceback, as though the library had chosen something.
+
+    torch is uniform about it: `sort`, `argsort`, `msort`, `mode`, `adjoint`,
+    `poisson` and `normal` all answer for a scalar as though it were the one element
+    it is, and give back a tensor with no axes. So the reshape goes out and comes
+    back, rather than each site growing its own `if ndim == 0`.
+
+    `nonzero` and `argwhere` are the exception and keep their own path — their answer
+    is (count, rank), and at rank 0 that is a (1, 0) or a (0, 0). Reshaping to `()`
+    would be wrong there, which is why this helper is called rather than applied.
+    """
+    out = call(t.reshape(1))
+    if hasattr(out, "reshape"):
+        return out.reshape(())
+    # (values, indices): `_MinMax`, a namedtuple, or a plain pair. Rebuilt through
+    # its own type so the caller keeps the field names it came with.
+    parts = tuple(out) if isinstance(out, tuple) else (out.values, out.indices)
+    return type(out)(*(o.reshape(()) for o in parts))
+
+
+def _rank(data, ok, message):
+    """The ranks torch accepts, or torch's own refusal.
+
+    The two implementations can part on **which input ranks a function takes**,
+    and neither the name axis nor the signature axis asks that: one asks whether
+    the name is there, the other whether the parameter list matches. A function
+    can pass both and still take a different set of shapes.
+
+    Parting in this direction is the quiet one. Ten functions here **answered a
+    question torch calls undefined** — `t` on a 3-D input transposed the first two
+    axes and returned a tensor, `pdist` on a 3-D input returned a (1, 3), `trace`
+    returned a batched diagonal sum that torch has no name for. Nothing raised.
+    Code written against this library got a number, and the same code against
+    torch got a `RuntimeError` — so the divergence surfaced not here but at the
+    port, with the value already flowing.
+
+    The mirror direction — refusing a rank torch accepts — is loud, and a peer hit
+    it in borch.ts the same day (`nn.Linear` at 3-D). Loud is better for the person
+    and **exactly as invisible to a checker**: `TORCH_REACHES_FURTHER_BY_POSITION`
+    is 0 and cannot see it, because that number counts `TypeError` from a positional
+    call and this is a `RuntimeError` about a shape.
+
+    The message is torch's, word for word, because a caller who searches the text
+    should land on torch's documentation rather than on ours.
+    """
+    n = len(data.shape)
+    if n not in ok:
+        raise RuntimeError(message.format(n=n, shape=list(data.shape)))
+
+
 def _in_bounds(idx, size, dim, kind=RuntimeError):
     """Every index within `[-size, size)`, or torch's refusal.
 
@@ -3888,9 +4054,13 @@ def bucketize(values, boundaries, right=False, **kw):
     return searchsorted(boundaries, values, right=right)
 
 
-def repeat_interleave(t, repeats, dim=None):
+def repeat_interleave(t, repeats, dim=None, *, output_size=None):
     """Stretch in place. The backward is **folding the stretched ones back per
-    group.**"""
+    group.**
+
+    `output_size` is torch telling the kernel the answer's length in advance so it
+    need not read the repeats back off the GPU. It changes no value, and a wrong one
+    is a caller error rather than a hint, so it is checked against what came out."""
     t = _wrap(t)
     out = _np.repeat(t.data, repeats, axis=dim)
     length = t.data.size if dim is None else t.data.shape[dim]
@@ -4286,7 +4456,10 @@ def kthvalue(t, k, dim=-1, keepdim=False):
 def msort(t):
     """Sort **along the first axis.** The same as the values side of
     `sort(dim=0)`."""
-    return sort(_wrap(t), dim=0).values
+    t = _wrap(t)
+    if t.data.ndim == 0:
+        return t.reshape(())
+    return sort(t, dim=0).values
 
 
 def diff(t, n=1, dim=-1, prepend=None, append=None):
@@ -4333,9 +4506,24 @@ def dist(a, b, p=2):
     return norm(_wrap(a) - _wrap(b), p=p)
 
 
-def quantile(t, q, dim=None, keepdim=False):
+_INTERPOLATIONS = ("linear", "lower", "higher", "midpoint", "nearest")
+
+
+def _interpolation(how):
+    """torch's `interpolation`, checked. **It changes the answer** — on `[1,2,3,4]`
+    the 0.3 quantile is 1.9 under `linear`, 1.0 under `lower` and 1.5 under
+    `midpoint`, all of them plausible numbers with no way to tell from the value
+    which rule produced it."""
+    if how not in _INTERPOLATIONS:
+        raise RuntimeError(
+            f"quantile() interpolation must be one of {_INTERPOLATIONS}, got {how!r}")
+    return how
+
+
+def quantile(t, q, dim=None, keepdim=False, *, interpolation="linear"):
     """Quantiles. torch's default is **linear interpolation**, the same as
-    numpy's."""
+    numpy's — and the other four rules were not reachable at all until this
+    argument existed."""
     t = _wrap(t)
     _needs_float(
         t.data,
@@ -4343,7 +4531,8 @@ def quantile(t, q, dim=None, keepdim=False):
         "in an integer cell.",
         "quantile() input tensor must be either float or double dtype")
     qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
-    out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim)
+    out = _np.quantile(t.data, qq, axis=dim, keepdims=keepdim,
+                       method=_interpolation(interpolation))
 
     # **The gradient splits across the two positions used in the interpolation** —
     # landing exactly gives one position (measured: the quantile(0.3) gradient of
@@ -4369,7 +4558,12 @@ def quantile(t, q, dim=None, keepdim=False):
     for k, one in enumerate(qs):
         pos = float(one) * (n - 1)
         lo, hi = int(_np.floor(pos)), int(_np.ceil(pos))
-        frac = pos - lo
+        # **The split follows the rule that produced the value.** Written for
+        # `linear` alone, the gradient kept splitting by the fraction while the
+        # forward had stopped interpolating — the two would have described
+        # different functions, with only the backward wrong and nothing to show it.
+        frac = {"linear": pos - lo, "lower": 0.0, "higher": 1.0, "midpoint": 0.5,
+                "nearest": float(round(pos) - lo)}[interpolation]
         _np.add.at(sheets[k], (rows, order[:, lo]), 1.0 - frac)
         _np.add.at(sheets[k], (rows, order[:, hi]), frac)
 
@@ -4388,17 +4582,44 @@ def quantile(t, q, dim=None, keepdim=False):
                    "QuantileBackward0")
 
 
-def nanquantile(t, q, dim=None, keepdim=False):
+def nanquantile(t, q, dim=None, keepdim=False, *, interpolation="linear"):
     t = _wrap(t)
     qq = q.data if isinstance(q, Tensor) else _np.asarray(q, dtype=t.data.dtype)
-    out = _np.nanquantile(t.data, qq, axis=dim, keepdims=keepdim)
+    out = _np.nanquantile(t.data, qq, axis=dim, keepdims=keepdim,
+                          method=_interpolation(interpolation))
     return Tensor(_np.asarray(out, dtype=t.data.dtype))
 
 
-def nonzero(t):
+def nonzero(t, as_tuple=False):
     """The coordinates of the non-zero positions. **The shape depends on the
-    values** — which is why there is no gradient."""
-    return Tensor(_np.stack(_np.nonzero(_wrap(t).data), axis=-1).astype(_np.int64))
+    values** — which is why there is no gradient.
+
+    `as_tuple` turns the (count, rank) table into **one 1-D tensor per axis**,
+    which is what indexing wants: `x[nonzero(m, as_tuple=True)]` works and
+    `x[nonzero(m)]` does not.
+
+    Both this and `where` are read by `inspect` as **"no signature found for
+    builtin"**, so the signature axis never compared either one. That bucket does
+    not mean *these agree*; it means *nothing was asked*. Two absences sat inside
+    it — this argument, and `where`'s one-argument form — while the axis reported
+    0 keyword-only absences, and both were found by a probe built for a different
+    question entirely.
+    """
+    data = _wrap(t).data
+    if data.ndim == 0:
+        # **torch answers the two forms with different ranks here.** The table
+        # form gives (count, 0) — no columns, because there are no axes to name a
+        # position along — and the tuple form gives a 1-tuple, as though the
+        # scalar were 1-D. Neither is derivable from the other, so both are
+        # written out rather than one being folded into the other.
+        hit = _np.asarray([0] if data != 0 else [], dtype=_np.int64)
+        if as_tuple:
+            return (Tensor(hit),)
+        return Tensor(_np.zeros((hit.size, 0), dtype=_np.int64))
+    idx = _np.nonzero(data)
+    if as_tuple:
+        return tuple(Tensor(i.astype(_np.int64)) for i in idx)
+    return Tensor(_np.stack(idx, axis=-1).astype(_np.int64))
 
 
 def argwhere(t):
@@ -4509,8 +4730,14 @@ def _order(data, dim, descending):
     return _np.argsort(-data if descending else data, axis=dim, kind="stable")
 
 
-def topk(t, k, dim=-1, largest=True):
-    """The top k as (values, indices). Chapter 32's top-k sampling is this."""
+def topk(t, k, dim=-1, largest=True, sorted=True):
+    """The top k as (values, indices). Chapter 32's top-k sampling is this.
+
+    **`sorted` is torch's fifth seat and was missing**, so `topk(k, dim, largest,
+    False)` was a `TypeError` rather than an unsorted answer. It is kept here
+    because the position is torch's; the values come back sorted either way, which
+    torch allows — `sorted=False` promises nothing about the order, not a different
+    order."""
     t = _wrap(t)
     if not 0 <= k <= t.data.shape[dim]:
         raise RuntimeError("selected index k out of range")
@@ -4519,14 +4746,20 @@ def topk(t, k, dim=-1, largest=True):
     return _MinMax(_pick(t, idx, dim, "TopkBackward0"), Tensor(idx))
 
 
-def sort(t, dim=-1, descending=False):
+def sort(t, dim=-1, descending=False, stable=False):
+    """**`stable` is torch's fourth seat.** The sort underneath is numpy's
+    `argsort`, which is stable by default, so equal values already keep their
+    original order and the flag asks for what happens anyway — carried because the
+    position is torch's and a positional call has to reach the same parameter."""
     t = _wrap(t)
+    if t.data.ndim == 0:
+        return _at_rank_0(t, lambda x: sort(x, 0, descending, stable))
     idx = _order(t.data, dim, descending)
     return _MinMax(_pick(t, idx, dim, "SortBackward0"), Tensor(idx))
 
 
-def argsort(t, dim=-1, descending=False):
-    return sort(t, dim, descending).indices
+def argsort(t, dim=-1, descending=False, stable=False):
+    return sort(t, dim, descending, stable).indices
 
 
 def unique(t, sorted=True, return_inverse=False, return_counts=False, dim=None):
@@ -4620,6 +4853,7 @@ def diag(t, diagonal=0):
 
 def trace(t):
     t = _wrap(t)
+    _rank(t.data, (2,), "trace: expected a matrix, but got tensor with dim {n}")
     return t._make(_np.trace(t.data), (t,),
                    lambda g: (_diagonal_scatter(t.data.shape, _np.asarray(g)),),
                    "TraceBackward0")
@@ -5376,6 +5610,7 @@ def pdist(x, p=2.0):
     """The distance between **every pair** within one batch. It gives the upper
     triangle only."""
     t = _wrap(x)
+    _rank(t.data, (2,), "pdist only supports 2D tensors, got: {n}D")
     n = t.data.shape[0]
     rows = [i for i in range(n) for _ in range(i + 1, n)]
     cols = [j for i in range(n) for j in range(i + 1, n)]
@@ -5866,12 +6101,14 @@ def tril(t, diagonal=0):
     through** — the erased positions never appeared in the output, so their
     gradient is 0 too."""
     t = _wrap(t)
+    _rank(t.data, range(2, 65), "tril: input tensor must have at least 2 dimensions")
     return t._make(_np.tril(t.data, k=diagonal), (t,),
                    lambda g: (_np.tril(_np.asarray(g), k=diagonal),), "TrilBackward0")
 
 
 def triu(t, diagonal=0):
     t = _wrap(t)
+    _rank(t.data, range(2, 65), "triu: input tensor must have at least 2 dimensions")
     return t._make(_np.triu(t.data, k=diagonal), (t,),
                    lambda g: (_np.triu(_np.asarray(g), k=diagonal),), "TriuBackward0")
 
@@ -6257,6 +6494,11 @@ def _named(kind, *fields):
 _Slogdet = _named("slogdet", "sign", "logabsdet")
 _QR = _named("linalg_qr", "Q", "R")
 _SVD = _named("linalg_svd", "U", "S", "Vh")
+# **`torch.svd` and `torch.linalg.svd` are two functions, and the third field is
+# not the same matrix.** `linalg.svd` gives `Vh`; `torch.svd` gives `V`, its
+# transpose. The fields are spelled out so an attribute access says which one it
+# reached rather than quietly handing over the other.
+_TorchSVD = _named("svd", "U", "S", "V")
 _Eigh = _named("linalg_eigh", "eigenvalues", "eigenvectors")
 _Eig = _named("linalg_eig", "eigenvalues", "eigenvectors")
 _Lstsq = _named("linalg_lstsq", "solution", "residuals", "rank", "singular_values")
@@ -6607,17 +6849,67 @@ def _svd_raw(data, full_matrices):
     return _np.ascontiguousarray(u), s, _np.ascontiguousarray(vh)
 
 
-def svd(t, full_matrices=True):
-    """The singular value decomposition. Returned in (U, S, Vh) order as in
-    torch.
+def svd(t, some=True, compute_uv=True):
+    """`torch.svd` — **which is not `torch.linalg.svd`,** and this was the latter
+    under the former's name.
 
-    **The singular values have a gradient and `U` and `Vh` do not.**
+    Three things part between them, and all three were wrong here:
+
+    - **The default is reduced, not full.** `torch.svd` defaults `some=True`, so a
+      3×2 input gives a 3×2 `U`; `linalg.svd` defaults `full_matrices=True` and
+      gives 3×3. `borch.svd(x)` and `torch.svd(x)` came back **different shapes
+      from the same call**, and the values in the overlapping block agreed, so
+      anything that read `U[:, :k]` or only `S` saw nothing wrong.
+    - **The third field is `V`, not `Vh`.** They are transposes. The docstring here
+      claimed "(U, S, Vh) order as in torch", which was true about `linalg.svd` and
+      written under `svd` — a reason true about one thing standing where a reason
+      about another belongs.
+    - **The argument is `some`, and it means the opposite of `full_matrices`.**
+      Named `full_matrices`, a caller porting from torch passes `False` for the
+      reduced form and gets the full one.
+
+    `borch.linalg.svd` is untouched and still takes `full_matrices`. Two functions,
+    two signatures, as torch has them.
+
+    **The singular values have a gradient and `U` and `V` do not.**
     `dS = diag(Uᵀ dA V)`, so the singular value side is one line with no
     repeated-value trouble. The vector side carries a `1/(sᵢ²−sⱼ²)` and blows up
     where singular values repeat, and that place is left out — the absence being
     loud is better.
     """
     t = _mat(t, "svd", square=False)
+    u, s, vh = _svd_raw(t.data, not some)
+    k = s.shape[-1]
+    u_thin, vh_thin = u[..., :, :k], vh[..., :k, :]
+
+    def back(g):
+        gg = _np.asarray(g)
+        idx = _np.arange(k)
+        mid = _np.zeros(gg.shape + (k,), dtype=u.dtype)
+        mid[..., idx, idx] = gg
+        return (u_thin @ mid @ vh_thin,)
+
+    values = t._make(s, (t,), back, "SvdBackward0")
+    if not compute_uv:
+        # torch fills both with zeros of the shape they would have had rather than
+        # returning a shorter tuple — the caller's unpacking keeps working.
+        return _TorchSVD(Tensor(_np.zeros_like(u)), values,
+                         Tensor(_np.zeros_like(_np.swapaxes(vh, -1, -2))))
+    return _TorchSVD(Tensor(u), values, Tensor(_np.ascontiguousarray(
+        _np.swapaxes(vh, -1, -2))))
+
+
+def linalg_svd(t, full_matrices=True):
+    """`torch.linalg.svd` — **the other one.** It gives `Vh` and defaults to the
+    full form, where `torch.svd` gives `V` and defaults to the reduced one.
+
+    Both names pointed at a single function for a long time and `_Linalg` said so:
+    "It points at the same implementation, so there is nowhere to diverge." That
+    sentence had already stopped being true three names earlier — `lu`, `lu_solve`
+    and `vander` all diverge and the note about them sits in `__init__.py`, in a
+    different file from the claim it contradicts.
+    """
+    t = _mat(t, "linalg.svd", square=False)
     u, s, vh = _svd_raw(t.data, full_matrices)
     k = s.shape[-1]
     u_thin, vh_thin = u[..., :, :k], vh[..., :k, :]
@@ -7098,7 +7390,7 @@ def diagonal_linalg(t, offset=0, dim1=-2, dim2=-1):
 
 def svdvals(t):
     """The singular values alone. The middle of `svd`."""
-    return svd(t, full_matrices=False).S
+    return linalg_svd(t, full_matrices=False).S
 
 
 def eigvalsh(t, UPLO="L"):
@@ -7308,8 +7600,19 @@ def matrix_exp(t):
 
 
 class _Linalg(_Namespace):
-    """The `torch.linalg` slot. It points at the same implementation, so there is
-    nowhere to diverge."""
+    """The `torch.linalg` slot.
+
+    **It mostly points at the same implementation — and where it does not, that is
+    torch's doing rather than ours.** This used to say "so there is nowhere to
+    diverge", which was true when written and had stopped being true three names
+    later: `lu` spreads `P`, `L`, `U` here and packs them at the top level,
+    `lu_solve` takes its arguments the other way round, and `vander` counts its
+    powers the other way. Four now, with `svd`: `torch.svd` gives `V` and the
+    reduced form, `torch.linalg.svd` gives `Vh` and the full one.
+
+    The note listing the first three sits in `__init__.py`, in a different file from
+    the sentence it contradicted — which is why the sentence went on being read.
+    """
 
     LinAlgError = LinAlgError
     det = staticmethod(det)
@@ -7322,7 +7625,7 @@ class _Linalg(_Namespace):
     cholesky_ex = staticmethod(cholesky_ex)
     matrix_power = staticmethod(matrix_power)
     qr = staticmethod(qr)
-    svd = staticmethod(svd)
+    svd = staticmethod(linalg_svd)
     pinv = staticmethod(pinverse)
     matrix_rank = staticmethod(matrix_rank)
     eig = staticmethod(eig)
@@ -8584,6 +8887,8 @@ def renorm(t, p, dim, maxnorm):
 def cartesian_prod(*tensors):
     """Every pair. **Given one it is simply that one** (measured) — it stays
     1-D."""
+    for a in tensors:
+        _rank(_wrap(a).data, (1,), "Expect a 1D vector, but got shape {shape}")
     arrays = [_wrap(a).data.reshape(-1) for a in tensors]
     if len(arrays) == 1:
         return Tensor(arrays[0].copy())
@@ -8596,6 +8901,7 @@ def combinations(t, r=2, with_replacement=False):
     separate option."""
     from itertools import combinations as _comb, combinations_with_replacement
 
+    _rank(_wrap(t).data, (1,), "Expect a 1D vector, but got shape {shape}")
     flat = _wrap(t).data.reshape(-1)
     pick = combinations_with_replacement if with_replacement else _comb
     rows = [list(c) for c in pick(range(flat.shape[0]), r)]
@@ -8621,6 +8927,7 @@ def vander(x, N=None, increasing=False):
     """The Vandermonde matrix. **The default has the powers decreasing** — the
     last column is 1 (measured)."""
     x = _wrap(x)
+    _rank(x.data, (1,), "x must be a one-dimensional tensor.")
     n = x.data.shape[0] if N is None else int(N)
     powers = _np.arange(n, dtype=_np.float64)
     if not increasing:
@@ -8638,6 +8945,8 @@ def chain_matmul(*matrices):
     thing as a list."""
     mats = list(matrices[0]) if len(matrices) == 1 and \
         isinstance(matrices[0], (list, tuple)) else list(matrices)
+    for m in mats:
+        _rank(_wrap(m).data, (2,), "Tensor dimension is {n}, expected 2 instead.")
     out = _wrap(mats[0])
     for m in mats[1:]:
         out = matmul(out, _wrap(m))
@@ -8829,6 +9138,8 @@ def cholesky_solve(b, factor, upper=False):
 def cholesky_inverse(factor, upper=False):
     """From a Cholesky factor, produce **the original matrix's inverse.** Not the
     factor's inverse."""
+    _rank(_wrap(factor).data, range(2, 65),
+          "cholesky_inverse: The input tensor A must have at least 2 dimensions.")
     low = _as_lower(_wrap(factor), upper)
     return inverse(matmul(low, _mT(low)))
 
@@ -9129,6 +9440,8 @@ def mode(t, dim=-1, keepdim=False):
     sweep skipped it for want of a `dim` to ask about.
     """
     t = _wrap(t)
+    if t.data.ndim == 0:
+        return _at_rank_0(t, lambda x: mode(x, 0, keepdim))
     _pos_dim(t, dim)
     data = _np.asarray(t.data)
     axis = dim % data.ndim
@@ -9297,7 +9610,8 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
         m = _np.asarray(_wrap(mean).data, dtype=_np.float64)
         s = _np.asarray(_wrap(std).data, dtype=_np.float64)
         m, s = _np.broadcast_arrays(m, s)
-        return _made(_rng.normal(m, s).astype(_DEFAULT_DTYPE), dtype, requires_grad)
+        return _made(_np.asarray(_rng.normal(m, s)).astype(_DEFAULT_DTYPE),
+                     dtype, requires_grad)
     shape = () if size is None else tuple(size)
     return _made(_rng.normal(float(mean), float(std), shape).astype(_DEFAULT_DTYPE),
                  dtype, requires_grad)
@@ -9325,7 +9639,10 @@ def poisson(t, **kw):
     (measured)."""
     t = _wrap(t)
     lam = _np.asarray(t.data, dtype=_np.float64)
-    return Tensor(_rng.poisson(lam).astype(t.data.dtype))
+    # `_np.asarray` around the draw: at rank 0 numpy hands back a **python int**,
+    # which has no `.astype`. The same leak sat in `normal`, and both are reachable
+    # from ordinary code — `normal(tensor(0.), tensor(1.))` is a scalar draw.
+    return Tensor(_np.asarray(_rng.poisson(lam)).astype(t.data.dtype))
 
 
 def binomial(count, prob, **kw):

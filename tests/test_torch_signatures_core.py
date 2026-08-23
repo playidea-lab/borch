@@ -14,10 +14,12 @@ and neither could say who was wrong. torch settled it, and borch.ts was right.
 
 ## What a green run does not say
 
-- **Not that most of the surface was compared.** 571 rows are `torch is C`, which
-  `inspect` cannot read — 496 of them in `Tensor`. This axis sees `nn`, `optim` and
-  the schedulers well and sees very little else. The measurement's docstring records
-  the two other sources that were tried and why neither is used.
+- **Not that most of the surface was measured the same way.** 59 rows are still
+  `torch is C`, down from 571, and 231 more are read from **torch's prose** rather
+  than from torch — a `prose` column that is deliberately never added to `agree`.
+  Those are compared by how many arguments each side takes, not by which, because a
+  docstring's order is not reliable. They are leads that have been checked, not
+  measurements.
 - **Not that a `shorter` row is harmless here.** On the core↔borch.ts axis a prefix
   is safe because passing one argument too many raises. Against torch it means a
   *feature* torch has and the core does not, which is `torch_gap.py`'s business.
@@ -196,7 +198,69 @@ SHIFTED = {
 # guessing. `nn.functional`'s 30 are mostly the core naming its first argument `x`
 # where torch says `input`.
 UNALIGNED = {
+    # **0 → 5, and 15 of 512 judged → 386 of 512.** Not a regression: the axis
+    # started reading a namespace it had been declaring unreadable.
+    #
+    # `inspect` gives no signature for a C implementation and `torch.Tensor` is
+    # almost entirely C, so 571 names — more than every other bucket on this axis
+    # together, and more than the 445 it now calls `agree` — sat in `torch is C`. A
+    # bucket that size does not read as *nothing was asked about most of the
+    # surface*. It reads as a footnote under a green run.
+    #
+    # **It was not empty, and that was found by accident.** A probe built to ask
+    # which input ranks each function accepts turned up `where`'s one-argument form
+    # and `nonzero(as_tuple=)`, both absent, both living here — while this axis
+    # reported 0 keyword-only absences. Two found by something that was not looking
+    # is not evidence of two.
+    #
+    # torch writes the argument list in the first line of the docstring, so
+    # `signature_read.from_docstring` reads it there. That is torch's prose rather
+    # than torch's behaviour and the rows are leads rather than measurements — the
+    # docstring for that function says so at length. Still much better than 571
+    # names nobody asked about.
+    #
+    # The five were real and all five are carried across, so this is 0 and the
+    # whole `Tensor` namespace is empty in every measured bucket. What they were:
+    #
+    #   copy_   short of `non_blocking`, and its first name was `other` for torch's
+    #           `src` — a rename in the first seat, which a keyword call misses.
+    #   div_    short of `rounding_mode`. **`div` had it and `div_` did not**, so
+    #           the two spellings of one operation took different arguments and the
+    #           in-place one quietly did true division where torch floors. `round`
+    #           and `round_` were the same pair, found in the same run.
+    #   type    took `dt` for torch's `dtype`. Spelling it torch's way shadows this
+    #           module's `dtype` class inside the function — `triangular_solve` has
+    #           the same collision on `transpose` and writes an alias for it.
+    #   svd     **was `torch.linalg.svd` under `torch.svd`'s name.** Three things
+    #           part between them and all three were wrong: the default is reduced
+    #           rather than full, the third field is `V` rather than `Vh`, and
+    #           `some` is the *opposite* of `full_matrices`. `borch.svd(x)` and
+    #           `torch.svd(x)` returned **different shapes from the same call**, and
+    #           the overlapping block agreed, so anything reading `S` alone or
+    #           `U[:, :k]` saw nothing wrong. `linalg_svd` now holds the other one.
+    #   true_divide  carried a `rounding_mode` **torch does not have** — the only
+    #           row of the five pointing the other way. It was an alias for `div`,
+    #           and `div` is the one that takes the argument; torch answers
+    #           `received an invalid combination of arguments`, because true
+    #           division is exactly the thing a rounding mode undoes. Accepted here,
+    #           `true_divide(x, y, rounding_mode="floor")` returned a floored value
+    #           that torch will not produce at all.
+    #
+    # **The last one is also where the arity rule is blind, and it took a second
+    # look to see that.** Once the docstring reading landed, `true_divide` moved to
+    # `prose agree` — torch documents `(dividend, divisor, out)` and the core takes
+    # `(b, rounding_mode)`, which is two against two, so counting arguments called it
+    # settled. It was not: the counts match and the names do not, and the row that
+    # said so was gone.
+    #
+    # It survived because the note above this line said all five were carried across
+    # while four of them were — **a claim of completeness scoped to what its author
+    # had open.** Checking the fifth against a call rather than against the axis is
+    # what found it. The rule stays as it is: arity is what prose can support, and
+    # the alternative is 74 rows of noise. What is written down instead is that a
+    # rename-shaped divergence at equal arity does not appear here at all.
     "Tensor": 0,
+
     "nn": 8,
     # **27 → 16.** Eleven of these were activations whose only difference from torch
     # was the missing `inplace` at the end — `relu(t)` against `relu(input, inplace)`
@@ -215,7 +279,10 @@ UNALIGNED = {
     "nn.functional": 11,
     "optim": 0,
     "optim.lr_scheduler": 0,
-    "linalg": 0,
+    # 0 → 4, from the same docstring reading as `Tensor` above. All four are
+    # `householder_product`, `lu`, `matrix_power` and `qr` naming their input `A`
+    # where the core says `t`, plus torch's `out` — a spelling and a tail.
+    "linalg": 4,
     # 1 → 0. `DataLoader` had seven of torch's seventeen names **and two of them
     # in the wrong seats** — `collate_fn` is torch's seventh and `drop_last` its
     # ninth, where here they were sixth and seventh. `DataLoader(ds, 4, False,
@@ -344,12 +411,19 @@ SHORTER = {
     "utils.data": 0,
 }
 
-# **torch is implemented in C here and `inspect` cannot read it.** Pinned as a total
-# rather than per namespace, because the number is a property of torch's build and
-# not of our work: it moves when torch moves. It is pinned at all so that a change in
-# how the measurement reads signatures — a fourth parser, say — cannot quietly turn
+# **torch is implemented in C here and neither `inspect` nor the docstring can read
+# it.** Pinned as a total rather than per namespace, because the number is a property
+# of torch's build and not of our work: it moves when torch moves. It is pinned at all
+# so that a change in how the measurement reads signatures cannot quietly turn
 # unreadable rows into comparisons nobody checked.
-UNREADABLE_IN_TORCH = 571
+#
+# **571 → 59, and this pin is what asked the question that decided how.** Its own
+# failure message says: *lower means something started reading C signatures — check
+# what authority it is using before believing the rows it produced*. The authority is
+# torch's docstring, it is weaker than `inspect`'s, and the weakness is carried in the
+# result rather than in a footnote — deferred rows are compared by arity alone and
+# counted in a separate `prose` column that is never folded into `agree`.
+UNREADABLE_IN_TORCH = 59
 
 # **How many rows each namespace actually gets judged on, out of how many are filed.**
 # The measurement's docstring prints this table as prose, and prose goes stale in
@@ -373,7 +447,30 @@ JUDGED = {
     # tails. **No silent mis-seat.** The last time this repair was made — on
     # `_accepts_out` — it turned up two functions answering for an axis that does not
     # exist, so the outcome was not predictable from the shape of the fix.
-    "Tensor": (15, 512),
+    # **15 of 512 → 386 of 512.** The axis was judging 3% of `torch.Tensor` and the
+    # run was green, because everything it could not read went into `torch is C` and
+    # a bucket is not a failure.
+    #
+    # `inspect` has no signature for a C implementation, so 571 names sat there —
+    # more than every other bucket on this axis together, and more than it called
+    # `agree`. torch writes the argument list in the first line of the docstring;
+    # `signature_read.from_docstring` reads it, and follows a `See :func:` when a
+    # method's line is only a pointer (`bitwise_and() -> Tensor`, with the operand
+    # named in `torch.bitwise_and`).
+    #
+    # **The bucket was not empty and nothing here found that out.** A probe built to
+    # ask which input *ranks* each function accepts turned up `where`'s one-argument
+    # form and `nonzero(as_tuple=)`, both absent, both living in it — while this axis
+    # reported 0 keyword-only absences. Reading the rest turned up five more.
+    #
+    # What the reading is worth is bounded, and the bound showed up on the first run:
+    # ordering from prose is not reliable (`torch.where(condition, input, other)` has
+    # its receiver *second*, and one docstring can hold several overloads), so the
+    # deferred rows are compared by **arity only** and counted in their own `prose`
+    # column. And torch's docstring can simply be wrong — `atanh_` documents an
+    # argument it refuses. That one is named in `TORCH_DOC_IS_WRONG` rather than
+    # implemented: a check must not drive the code somewhere torch will not go.
+    "Tensor": (386, 512),
     # 119 → 132. Thirteen loss constructors left the uncomparable bucket when they
     # stopped being `(*args, reduction='mean', **kw)` and grew torch's own parameter
     # list, and all thirteen landed in `agree`. **The ratio moving upward is what a
@@ -388,10 +485,13 @@ JUDGED = {
     # in a `*_with_indices` function (measured: torch returns the pair whichever way
     # it is set), so it is named and unused now. The difference between that and
     # `**_` is that a reader can see it.
-    "nn.functional": (84, 126),
+    # 84 → 109. Twenty-five `nn.functional` names are C too.
+    "nn.functional": (109, 126),
     "optim": (14, 14),
     "optim.lr_scheduler": (16, 16),
-    "linalg": (0, 42),
+    # 0 → 5, same reading. The four `unaligned` are `householder_product`, `lu`,
+    # `matrix_power` and `qr` naming their input `A` where the core says `t`.
+    "linalg": (5, 42),
     "utils.data": (13, 18),
 }
 

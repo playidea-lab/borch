@@ -87,7 +87,7 @@ export function qr(
 export function svd(
   a: Tensor, fullMatrices = true,
 ): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
-  return a.svd(fullMatrices);
+  return a.linalgSvd(fullMatrices);
 }
 
 /** `svdvals(A)` — the singular values alone. */

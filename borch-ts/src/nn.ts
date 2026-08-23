@@ -1123,14 +1123,74 @@ export class GroupNorm extends Module {
  * flipping the default changes every `stateDict` key.
  */
 export class InstanceNormND extends Module {
-  constructor(private readonly eps = 1e-5) {
+  readonly weight: Tensor | null;
+  readonly bias: Tensor | null;
+
+  /**
+   * torch's list, in torch's seats. **`affine` defaults to false here and true
+   * on `BatchNorm`** — that is torch, and flipping it swaps which layers carry
+   * parameters, so the `state_dict` keys part wholesale.
+   */
+  constructor(
+    numFeatures: number,
+    private readonly eps = 1e-5,
+    _momentum = 0.1,
+    affine = false,
+    trackRunningStats = false,
+    useBias = true,
+  ) {
     super();
+    if (trackRunningStats) {
+      // torch registers three running statistics here and **reads them in eval
+      // mode**. Accepting this and ignoring it leaves training right and
+      // evaluation quietly wrong, and registering the buffers without the
+      // forward using them only moves the parting to where the keys match and
+      // the values do not. The core refuses at the same place for the same
+      // reason (`borch/_nn.py`, `_InstanceNorm`).
+      throw new Error(
+        "InstanceNorm with trackRunningStats=true is not here yet.");
+    }
+    this.weight = affine ? Tensor.owned([numFeatures], 1) : null;
+    this.bias = affine && useBias ? Tensor.owned([numFeatures], 0) : null;
+    this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
+  }
+
+  override ownParameters(): Record<string, Tensor> {
+    const out: Record<string, Tensor> = {};
+    if (this.weight) out["weight"] = this.weight;
+    if (this.bias) out["bias"] = this.bias;
+    return out;
   }
 
   override forward(x: Tensor): Tensor {
-    return x.instanceNorm(this.eps);
+    let out = x.instanceNorm(this.eps);
+    // Per channel, so the vector is broadcast along axis 1 and nowhere else.
+    const spread = [1, -1, ...x.shape.slice(2).map(() => 1)];
+    if (this.weight) out = out.mul(this.weight.reshape(spread));
+    if (this.bias) out = out.add(this.bias.reshape(spread));
+    return out;
   }
 }
+
+/**
+ * `torch.nn.InstanceNorm1d`. **It inherits `InstanceNormND` unchanged** — the
+ * normalisation reduces everything but the channel axis, so the number in the
+ * name does not reach the computation. The core says the same at the same place.
+ *
+ * These three and `BatchNorm1d` were **absent while all six lazy variants were
+ * present**, so `LazyInstanceNorm2d` stood for the lazy form of a class that did
+ * not exist. `BatchNormND`'s own comment promised "BatchNorm1d, 2d and 3d are
+ * all this" with only two of the three written below it — documentation naming a
+ * class nobody could import.
+ *
+ * Nothing could see it. The name axis in `tests/torch_gap.py` reads the python
+ * core against torch; `borch-ts/test/run.py`'s ledger records golden cases. **The
+ * core's `nn` against borch.ts's `nn` was not a question any file asked** —
+ * `tests/test_nn_names.py` now asks it.
+ */
+export class InstanceNorm1d extends InstanceNormND {}
+export class InstanceNorm2d extends InstanceNormND {}
+export class InstanceNorm3d extends InstanceNormND {}
 
 /**
  * **It does not subtract the mean.** That is the only difference from
@@ -2394,7 +2454,7 @@ class LazyNormBase extends LazyModule {
     super(`Lazy${kind === "batch" ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
       (c) => (kind === "batch"
         ? new BatchNormND(c, eps, momentum, affine, trackRunningStats, useBias)
-        : new InstanceNormND(eps)),
+        : new InstanceNormND(c, eps)),
       channels);
   }
 }
@@ -3709,6 +3769,13 @@ export class BatchNormND extends Module {
  * name up.
  */
 export class BatchNorm2d extends BatchNormND {}
+
+/**
+ * `torch.nn.BatchNorm1d`. The same inheritance as `BatchNorm2d`, and it was
+ * **the one of the three that was never written** — see `InstanceNorm1d` for
+ * how four absent names sat inside a counter that was pinned as expected.
+ */
+export class BatchNorm1d extends BatchNormND {}
 
 /** `torch.nn.BatchNorm3d`. The computation is the same, for the reason above. */
 export class BatchNorm3d extends BatchNormND {}

@@ -63,7 +63,27 @@ FROZEN = {
     # It is the reason the rule exists, not a list of what the rule currently finds —
     # and a comment that describes today's data is a comment that goes stale the next
     # time the data moves, which this file has been bitten by twice today.
-    "nn": 15,
+    # 15 → 11. The four were `BatchNorm1d` and `InstanceNorm1d/2d/3d`, and the
+    # way they were found says more than the names do.
+    #
+    # **This axis had been printing them the whole time.** The `nn` row has read
+    # `✘ gap 15` for as long as the row has existed, and the number was written
+    # here and asserted equal — which turns a list of defects into a budget. A
+    # peer hit `is not a constructor` in a browser and went looking; the axis
+    # already knew, and `--show nn` would have named all four in one command.
+    #
+    # So the failure was not a missing instrument. It was **a red number that had
+    # been red long enough to read as furniture**, plus a test that made staying
+    # red the passing condition. The `Tensor: 112` comment above is the same
+    # hazard held the other way: it explains why its number moved, so the number
+    # stays legible. A pinned count with no reading beside it is an accepted loss.
+    #
+    # Two things had promised the missing names: `BatchNormND`'s comment said
+    # "`BatchNorm1d`, `2d` and `3d` are all this" with two written below it, and
+    # three golden cases named `nn.InstanceNorm1d/2d/3d` while constructing
+    # `InstanceNormND`. All six lazy variants existed, so `LazyInstanceNorm2d`
+    # stood for the lazy form of a class nobody could import.
+    "nn": 11,
     "nn.functional": 30,
     "optim": 0,
     "optim.lr_scheduler": 0,

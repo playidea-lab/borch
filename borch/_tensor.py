@@ -479,10 +479,22 @@ class Tensor:
     def detach(self):
         return Tensor(self.data)
 
-    def clone(self):
+    def clone(self, memory_format=None):
+        """`memory_format` is torch's second seat — **carried and refused.**
+
+        There is one layout here, so honouring it is not possible and swallowing it
+        would answer for a request that was not met. Left out, torch's position
+        lands on nothing.
+        """
+        if memory_format is not None:
+            _unsupported("Tensor.clone(memory_format=…)")
         return self._make(self.data.copy(), (self,), lambda g: (g,))
 
-    def numpy(self):
+    def numpy(self, *, force=False):
+        """`force` lets torch copy off a device or through a graph rather than
+        refusing. Everything here is already a host array outside a graph, so it has
+        nothing to force — carried because the name is torch's and a caller who
+        passes it should not get a `TypeError`."""
         return self.data
 
     # ---- dtype conversion
@@ -523,13 +535,28 @@ class Tensor:
         out = self.data.astype(target)
         return self._make(out, (self,), lambda g: (g.astype(self.data.dtype),), "ToCopyBackward0")
 
-    def float(self):
+    def _memory_format(self, name, memory_format):
+        """torch's `memory_format` on the dtype and device methods — **carried and
+        refused.**
+
+        Nine of them take it (`float`, `long`, `bool`, `double`, `int`, `cfloat`,
+        `cpu`, `contiguous`, `is_contiguous`) and none of them had a seat for it, so
+        the position torch documents landed on nothing. There is one layout here;
+        honouring the argument is not possible and swallowing it would answer for a
+        request that was not met.
+        """
+        if memory_format is not None:
+            _unsupported(f"Tensor.{name}(memory_format=…)")
+
+    def float(self, memory_format=None):
+        self._memory_format("float", memory_format)
         return self._cast(_np.float32)
 
-    def long(self):
+    def long(self, memory_format=None):
+        self._memory_format("long", memory_format)
         return Tensor(self.data.astype(_np.int64))
 
-    def int(self):
+    def int(self, memory_format=None):
         """**There is no int32 — so it refuses.**
 
         It handed back int64 for a long time. The values are plausible and code
@@ -538,14 +565,17 @@ class Tensor:
         torch's `.int()` is int32 (measured) — with no such storage here,
         stopping beats handing over a different cell instead.
         """
+        self._memory_format("int", memory_format)
         _unsupported("`.int()`(int32)")
 
-    def bool(self):
+    def bool(self, memory_format=None):
+        self._memory_format("bool", memory_format)
         return Tensor(self.data.astype(_np.bool_))
 
-    def double(self):
+    def double(self, memory_format=None):
         """**There is no float64 — so it refuses**, at `_cast` with `.to(float64)`
         and `.type(float64)`, which are the same request spelled three ways."""
+        self._memory_format("double", memory_format)
         return self._cast(_np.float64)
 
     def type_as(self, other):
@@ -555,16 +585,27 @@ class Tensor:
         return self.type(other.dtype if isinstance(other, Tensor)
                          else _np.asarray(other).dtype)
 
-    def cfloat(self):
+    def cfloat(self, memory_format=None):
         """complex64. This storage exists — unlike `cdouble` and `chalf`."""
+        self._memory_format("cfloat", memory_format)
         return Tensor(self.data.astype(_np.complex64))
 
 
-    def type(self, dt=None):
+    def type(self, dtype=None, non_blocking=False):
         """**With no argument it names the type**, as torch does —
         `torch.FloatTensor` for a float tensor. It required one, so `x.type()` — the
         first thing anybody writes to find out what they are holding — stopped.
+
+        The parameter was called `dt`, which is torch's `dtype` under another name —
+        a rename in the first seat, so a keyword call written against torch missed.
+        Spelled torch's way it **shadows this module's `dtype` class** inside the
+        function, so the class is reached through `globals()` here; `triangular_solve`
+        has the same collision on `transpose` and writes an alias for it.
+
+        `non_blocking` asks torch not to wait on an async device copy. Nothing here
+        is asynchronous, so the copy has finished by the time this returns.
         """
+        dt = dtype
         if dt is None:
             kind = {"f": "Float", "d": "Double", "i": "Int", "l": "Long",
                     "b": "Bool", "B": "Byte", "h": "Short",
@@ -572,7 +613,7 @@ class Tensor:
             if kind is None:
                 kind = _TYPE_NAMES.get(self.data.dtype.kind, "Float")
             return f"torch.{kind}Tensor"
-        target = dt.np if isinstance(dt, dtype) else dt
+        target = dt.np if isinstance(dt, globals()["dtype"]) else dt
         if _np.dtype(target).kind != "f":
             return Tensor(self.data.astype(target))
         return self._cast(target)
@@ -611,7 +652,8 @@ class Tensor:
                 target = a
         return self if target is None else self.type(target)
 
-    def cpu(self):
+    def cpu(self, memory_format=None):
+        self._memory_format("cpu", memory_format)
         return self
 
     # ---- arithmetic
@@ -901,12 +943,13 @@ class Tensor:
         return self._make(_np.transpose(self.data, dims), (self,),
                           lambda g: (_np.transpose(g, inv),))
 
-    def contiguous(self):
+    def contiguous(self, memory_format=None):
         """**It simply handed back `self`.** Right when it is already contiguous
         and wrong otherwise — called after a transpose it stayed non-contiguous,
         so `is_contiguous()` gave the opposite answer from torch. The gradient is
         the identity.
         """
+        self._memory_format("contiguous", memory_format)
         if self.data.flags["C_CONTIGUOUS"]:
             return self
         return self._make(_np.ascontiguousarray(self.data), (self,),
@@ -946,10 +989,12 @@ class Tensor:
         """A dense tensor has no sparse axes."""
         return 0
 
-    def to_dense(self):
+    def to_dense(self, dtype=None, *, masked_grad=True):
         """It is already dense — torch hands back the same object too
         (measured)."""
-        return self
+        if masked_grad is not True:
+            _unsupported("Tensor.to_dense(masked_grad=False) — there is no sparse layout")
+        return self if dtype is None else self.type(dtype)
 
     def dequantize(self):
         """The identity over the reals. Not a place that needs a quantised
@@ -971,7 +1016,8 @@ class Tensor:
         integers and complex are true."""
         return bool(self.data.dtype.kind in "fci")
 
-    def is_contiguous(self):
+    def is_contiguous(self, memory_format=None):
+        self._memory_format("is_contiguous", memory_format)
         return bool(self.data.flags["C_CONTIGUOUS"])
 
     def is_nonzero(self):
@@ -1081,8 +1127,15 @@ class Tensor:
     def mul_(self, other):
         return self._inplace(lambda: self * other, "mul_")
 
-    def div_(self, other):
-        return self._inplace(lambda: self / other, "div_")
+    def div_(self, other, *, rounding_mode=None):
+        """`rounding_mode` was on `div` and not on `div_`, so the two spellings of
+        one operation took different arguments — and the in-place one silently did
+        true division where torch would have floored."""
+        if rounding_mode is None:
+            return self._inplace(lambda: self / other, "div_")
+        from ._ops import div as _div
+        return self._inplace(lambda: _div(self, other, rounding_mode=rounding_mode),
+                             "div_")
 
     def pow_(self, exponent):
         return self._inplace(lambda: self ** exponent, "pow_")
@@ -1096,9 +1149,12 @@ class Tensor:
     def fill_(self, value):
         return self._inplace(lambda: _np.full_like(self.data, value), "fill_")
 
-    def copy_(self, other):
+    def copy_(self, src, non_blocking=False):
+        """`non_blocking` asks torch not to wait on an async device copy. There is
+        no device and no queue here, so every copy has already finished when this
+        returns — carried because the position is torch's."""
         return self._inplace(
-            lambda: (other.data if isinstance(other, Tensor) else _np.asarray(other)),
+            lambda: (src.data if isinstance(src, Tensor) else _np.asarray(src)),
             "copy_")
 
     def clamp_(self, min=None, max=None):
@@ -1703,12 +1759,30 @@ def _resize_(self, *sizes):
     return self
 
 
-def _set_(self, source=None):
+def _set_(self, source=None, storage_offset=0, size=None, stride=None):
     """**Swaps the storage wholesale.** With no arguments it becomes an empty
-    tensor."""
+    tensor.
+
+    torch's other three seats **make it a view of part of the source**:
+    `x.set_(y, 1, (2, 2), (2, 1))` takes four values starting one in. Without them
+    the whole of `source` came back under whatever shape it already had, so a call
+    written against torch got the right values in the wrong shape — and at a matching
+    total size, the wrong values in the right shape.
+    """
     _refuse_leaf_inplace(self, "set_")
-    self._array = (_np.empty(0, dtype=self.data.dtype) if source is None
-                   else _np.asarray(source.data))
+    if source is None:
+        self._array = _np.empty(0, dtype=self.data.dtype)
+        return self
+    flat = _np.asarray(source.data).reshape(-1)[int(storage_offset):]
+    if size is None:
+        self._array = _np.asarray(source.data)
+        return self
+    shape = tuple(int(v) for v in size)
+    if stride is None:
+        self._array = flat[:int(_np.prod(shape))].reshape(shape).copy()
+        return self
+    self._array = _np.lib.stride_tricks.as_strided(
+        flat, shape, tuple(int(v) * flat.itemsize for v in stride)).copy()
     return self
 
 
@@ -1869,13 +1943,41 @@ Tensor.new_ones = _new_like("new_ones", lambda s, d: _np.ones(s, dtype=d))
 Tensor.new_empty = _new_like("new_empty", lambda s, d: _np.zeros(s, dtype=d))
 
 
-def _new_full(self, size, fill_value, dtype=None, requires_grad=False):
+def _new_seats(name, device, layout, pin_memory):
+    """torch's last three seats on the `new_*` family — **carried and refused.**
+
+    They were simply absent, so `device` fell into `requires_grad`'s seat:
+
+        x.new_full((2, 3), 1.0, torch.float32, "cpu")
+
+    put the string `"cpu"` into `requires_grad`, which is truthy. The tensor came
+    back the right shape with the right values **and a live gradient**, and the next
+    backward walked into it. No error at the call and none at the use.
+
+    `_no_device_dtype` in `_nn.py` writes the rule this borrows: left out, the
+    position is somebody else's; carried, the refusal names which argument it was.
+    The rule was there and this family had not been brought under it — the axis
+    could not say so while `torch.Tensor` was one unread bucket.
+    """
+    if device is not None:
+        _unsupported(f"Tensor.{name}(device=…)")
+    if layout is not None:
+        _unsupported(f"Tensor.{name}(layout=…)")
+    if pin_memory:
+        _unsupported(f"Tensor.{name}(pin_memory=True)")
+
+
+def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False,
+              layout=None, pin_memory=False):
+    _new_seats("new_full", device, layout, pin_memory)
     want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
             (dtype if dtype is not None else self.data.dtype))
     return Tensor(_np.full(tuple(size), fill_value, dtype=want), requires_grad)
 
 
-def _new_tensor(self, data, dtype=None, requires_grad=False):
+def _new_tensor(self, data, dtype=None, device=None, requires_grad=False,
+                layout=None, pin_memory=False):
+    _new_seats("new_tensor", device, layout, pin_memory)
     want = (dtype.np if isinstance(dtype, globals()["dtype"]) else
             (dtype if dtype is not None else self.data.dtype))
     return Tensor(_np.array(data, dtype=want, copy=True), requires_grad)

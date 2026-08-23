@@ -118,7 +118,10 @@ CEILINGS = {
     # `scale`, which was accepted and dropped. Names are keys: the Python and
     # TypeScript tables have to agree on the string or the row reconciles against
     # nothing.
-    "borch-ts/test": 3143,
+    # 3143 → 3145. One case name, `표` — `nonzero`'s table form beside its new
+    # tuple form. Both had to be asked: `torch.nonzero` is unreadable to `inspect`,
+    # so the argument had never been compared on either axis.
+    "borch-ts/test": 3145,
 }
 
 

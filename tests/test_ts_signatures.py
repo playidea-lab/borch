@@ -189,7 +189,13 @@ UNALIGNED = {
     #
     # **`shifted` did not move**, which is the number that would have mattered:
     # nothing newly visible has an argument in the wrong seat.
-    "Tensor": 6,
+    #
+    # 6 → 5. `repeat_interleave` left this bucket for `renamed` when borch.ts took
+    # `outputSize`, and then left `renamed` too when its first parameter stopped
+    # being called `times` — torch and the core both say `repeats`. A rename in the
+    # **first** seat is the one that costs most: every keyword call written against
+    # torch misses it, and the row reads as a spelling while behaving as an absence.
+    "Tensor": 5,
     # `SmoothL1Loss` left this table when a peer fixed it: the core took
     # `(beta, reduction)` and borch.ts `(reduction, beta)`. **borch.ts was right** —
     # torch's live arguments are `(reduction, beta)`, with the deprecated
@@ -307,7 +313,21 @@ SHORTER = {
     # happening again, and the row is named rather than the count nudged: the whole
     # increase is one row, and if a second one ever rides along on the same reason it
     # has to be written down too.
-    "Tensor": 18,
+    #
+    # **18 → 15.** Eight rows came in and eleven went out in one pass, and both
+    # halves are the same work: the core↔torch axis learned to read torch's C
+    # signatures, so the core grew arguments it had been missing, and each of those
+    # is a row here until borch.ts has it too.
+    #
+    # In: seven `memoryFormat` seats (`float`, `long`, `bool`, `cfloat`, `int`,
+    # `double`, `cpu`) and `div_`'s `roundingMode` — that last one because **`div`
+    # took it and `div_` did not**, so the two spellings of one operation had
+    # different arguments and the in-place one quietly did true division where torch
+    # floors. Out: `sort`/`argsort` took `stable`, `topk` took `largest` and
+    # `sorted`, `clone` took `memoryFormat`, `gather` took `sparseGrad`, `round`
+    # took `decimals`, `quantile` and `nanquantile` took `dim`/`keepdim`/
+    # `interpolation`, and `svd` was split from `linalgSvd`.
+    "Tensor": 15,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

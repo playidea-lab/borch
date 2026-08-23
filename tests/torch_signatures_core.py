@@ -63,8 +63,33 @@ tensor surface. Two other sources were measured and **neither is used**:
   this week had the same defect in them, which is the reason `signature_read.py`
   exists; adding a fourth reader to close this gap would be undoing that.
 
-Neither door is shut. Both want a decision about where the authority comes from, and
-that is not a decision to take inside a measurement.
+**The second door was opened, and the objection above is what decided how.** The
+parser went *into* `signature_read.py` as `from_docstring`, beside the two readers
+already there — not a fourth reader, the same one growing a second source. That is
+the whole of the answer to "adding a fourth reader would be undoing that": there is
+still one place where an argument list is read, and a defect in it is still findable
+in one place.
+
+571 → 59. What made it worth doing was not the size of the number but that **the
+bucket turned out not to be empty, and nothing here found that out.** A probe built
+to ask which input *ranks* each function accepts turned up two absences living in it
+— `torch.where`'s one-argument form and `nonzero(as_tuple=)` — while this axis
+reported 0 keyword-only absences. Reading the rest turned up five more, one of them
+`svd` being `torch.linalg.svd` under `torch.svd`'s name, returning a different shape
+from the same call.
+
+**The authority is weaker than `inspect`'s and the rows say so.** A method's line is
+often only a pointer (`bitwise_and() -> Tensor`, with the operand named over in
+`torch.bitwise_and`), so a `See :func:` is followed — and past that follow the
+*order* is not usable: `torch.where(condition, input, other)` has its receiver
+second, and one docstring can hold several overloads. Those rows are compared by
+**arity alone** and counted in a `prose` column that is never added to `agree`. And
+torch's prose can be wrong outright: `Tensor.atanh_` documents `atanh_(other)` and
+raises `takes no arguments` when called that way. `TORCH_DOC_IS_WRONG` names it
+rather than the library growing a parameter torch refuses — **a check must not drive
+the code somewhere the thing it checks against will not go.**
+
+The first door is still shut, for the reason above it.
 
 ## A third source, measured and rejected — **and it failed the way that is hard to see**
 
@@ -147,7 +172,36 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 # torch keeps these in every loss signature and ignores them when `reduction` is
 # given. **A fold, and therefore a claim** — see the module docstring.
+#
+# **Scoped to the namespace the claim is about.** It used to apply everywhere, and
+# `reduce` is not only a deprecated loss argument: `Tensor.scatter_reduce` takes a
+# live, required `reduce` naming the operation ("sum", "amax", …). Folding it away
+# there removed a parameter the caller must pass, and the row came back reading as
+# *the core has an argument torch does not* — the fold inventing the opposite of
+# what is true.
+#
+# It could not be seen until this axis could read C signatures at all: the whole
+# `Tensor` namespace was one unjudged bucket, so the row did not exist to be wrong.
+# **A reason that is true about one thing, standing where a reason about another
+# belongs** — the same shape three times in this repository now.
 DEPRECATED = frozenset({"size_average", "reduce"})
+DEPRECATED_IN = ("nn", "nn.functional")
+
+# **Where torch's docstring contradicts torch.**
+#
+# `Tensor.atanh_` documents itself as `atanh_(other) -> Tensor`, and calling it that
+# way gives `TensorBase.atanh_() takes no arguments (1 given)`. `arctanh_` is its
+# alias and carries the same line. Both are measured, not assumed.
+#
+# This is the standing caveat on `signature_read.from_docstring` arriving in the
+# first run that used it: the docstring is what somebody wrote next to the function,
+# not the function. Implementing the argument to satisfy the axis would have put a
+# parameter into this library that torch refuses — **a check driving the code
+# somewhere the thing it checks against will not go**, which is worse than the row.
+#
+# Held here rather than by making the reader smarter, because there is nothing to be
+# smart about: only a call can tell, and the reader does not make calls.
+TORCH_DOC_IS_WRONG = {"Tensor::atanh_", "Tensor::arctanh_"}
 
 
 def _spaces():
@@ -253,7 +307,7 @@ def compare():
     import torch_gap
     import ts_axis
     import ts_signatures
-    from signature_read import VARIADIC
+    from signature_read import DEFERRED, VARIADIC, from_docstring
 
     stubs = ts_axis.refused()
     out = {}
@@ -268,18 +322,67 @@ def compare():
                 continue                             # not in torch — the name axis's row
             if yours is None:
                 # **torch has it and `inspect` cannot read it** — a C implementation.
-                # Counted, not skipped: it is most of `torch.Tensor`, and a namespace
-                # that quietly loses its whole content reads as a namespace that agrees.
-                rows.append((name, mine if isinstance(mine, list) else None, None,
-                             "torch is C"))
-                continue
+                # torch writes the argument list in the docstring's first line, so
+                # the list is read from there before the row is given up on. See
+                # `signature_read.from_docstring` for what that is worth: it is
+                # torch's prose rather than torch's behaviour, and a row from it is
+                # a lead to check rather than a measurement.
+                #
+                # It matters because this bucket was **571** — bigger than every
+                # other bucket on this axis together, and bigger than `agree`. Two
+                # real absences were found inside it by a probe built to ask about
+                # something else, which is not evidence of two.
+                # `compare()` reads full lists (`parameters`), so the docstring is
+                # read the same way — keyword-only names kept. `_reachable()` below
+                # re-asks with the positional prefix where a shift is claimed.
+                yours = from_docstring(getattr(theirs, name, None), name)
+                if yours is None or yours is VARIADIC:
+                    rows.append((name, mine if isinstance(mine, list) else None, None,
+                                 "torch is C" if yours is None else "variadic"))
+                    continue
+                if isinstance(yours, DEFERRED) and isinstance(mine, list):
+                    # Read from the module function this method's docstring points
+                    # at, so the order cannot be used — see `DEFERRED`.
+                    #
+                    # **Membership cannot be used either, and that took a second
+                    # run to see.** By name, 74 methods were missing something torch
+                    # documents; 42 of the 74 were missing `other`, which the core
+                    # calls `b`. `mat2`, `vec2`, `exponent`, `L`, `A`, `B` and
+                    # `tensor` are the same thing — torch's name for the operand
+                    # against ours. A set difference cannot tell a rename from an
+                    # absence, so it called every rename an absence and produced a
+                    # list where four of every five rows were noise.
+                    #
+                    # **Arity can be used.** How many arguments torch documents, and
+                    # how many the core takes, is a claim prose supports: fewer here
+                    # means at least one is genuinely missing, whatever it is called.
+                    # Exactly one of torch's names is the receiver, and `out` is
+                    # keyword-only and never a method argument — both come off.
+                    counted = [q for q in yours if q != "out"]
+                    rows.append((name, mine, list(yours),
+                                 "prose short" if len(mine) < len(counted) - 1
+                                 else "prose agree"))
+                    continue
+                if isinstance(yours, DEFERRED):
+                    # The core side is variadic or unreadable, so there is nothing to
+                    # match membership against either.
+                    rows.append((name, None, None, "variadic"))
+                    continue
+                if space == "Tensor" and yours and yours[0] in ("input", "self"):
+                    # Reached as a method, so torch's documented receiver is not an
+                    # argument the caller passes.
+                    yours = yours[1:]
             if mine is VARIADIC or yours is VARIADIC:
                 rows.append((name, None, None, "variadic"))
                 continue
             if mine is None:
                 rows.append((name, None, None, "no signature"))
                 continue
-            kept = [p for p in yours if p not in DEPRECATED]
+            if f"{space}::{name}" in TORCH_DOC_IS_WRONG:
+                rows.append((name, mine, list(yours), "torch doc is wrong"))
+                continue
+            kept = ([p for p in yours if p not in DEPRECATED]
+                    if space in DEPRECATED_IN else list(yours))
             note = ts_signatures._verdict(mine, kept)
             if note in SHIFTS:
                 note = _reachable(space, ours, theirs, name, note)
@@ -351,10 +454,17 @@ def main(argv):
               f"longer {counts.get('longer', 0):>4}   "
               f"renamed {counts.get('renamed', 0):>4}   "
               f"variadic {counts.get('variadic', 0):>4}   "
-              f"torch is C {counts.get('torch is C', 0):>4}")
+              f"torch is C {counts.get('torch is C', 0):>4}   "
+              # **Printed apart from every measured bucket, and never folded into
+              # one.** These come from torch's prose by way of a `See :func:` and
+              # are compared by membership only. Adding them to `agree` would let a
+              # count of what was *read* stand in for a count of what was *checked*
+              # — which is the fault this whole axis was built after.
+              f"prose {counts.get('prose agree', 0):>3}/"
+              f"{counts.get('prose short', 0):<3}")
         if show is not None and space.startswith(show):
             for name, mine, yours, note in found:
-                if note == "agree":
+                if note in ("agree", "prose agree"):
                     continue
                 print(f"      · {name}")
                 print(f"          torch ({', '.join(yours or [])})")
@@ -368,7 +478,15 @@ def main(argv):
           f"{tally.get('shorter', 0)} · 우리가 더 받는다 "
           f"{tally.get('longer', 0)} · 이름만 다르다 "
           f"{tally.get('renamed', 0)} · 못 잼 {tally.get('variadic', 0)}"
-          f" · torch 가 C {tally.get('torch is C', 0)}")
+          f" · torch 가 C {tally.get('torch is C', 0)}\n"
+          # **Apart from the measured tally, never inside it.** These come from
+          # torch's docstring by way of a `See :func:`, and are compared by how many
+          # arguments each side takes rather than by which. Folded into `맞음` they
+          # would let a count of what was *read* pass for a count of what was
+          # *checked*.
+          f"  산문에서 읽은 것 {tally.get('prose agree', 0)}"
+          f" · 그중 우리가 짧은 것 {tally.get('prose short', 0)}"
+          f" · torch 문서가 틀린 것 {tally.get('torch doc is wrong', 0)}")
     print("  `size_average` 와 `reduce` 는 접었다 — torch 가 폐기했다고 적어둔 둘이다.")
     return 0
 

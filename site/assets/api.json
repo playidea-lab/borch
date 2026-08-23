@@ -2,9 +2,9 @@
  "source": "borch-ts/dist/src/*.d.ts",
  "note": "The descriptions are the source's own TSDoc; fix them in the source. The Korean lives in site/api_ko.json and says so when its source has moved.",
  "korean": {
-  "done": 684,
+  "done": 685,
   "stale": 0,
-  "missing": 79
+  "missing": 82
  },
  "modules": [
   {
@@ -794,7 +794,7 @@
       },
       {
        "name": "clone",
-       "signature": "clone(): Tensor",
+       "signature": "clone(memoryFormat?: string | null): Tensor",
        "doc": "A new tensor with the same values. The graph stays connected — that is\nwhat differs from `detach`.",
        "section": {
         "ko": "Reductions",
@@ -1303,7 +1303,7 @@
       },
       {
        "name": "gather",
-       "signature": "gather(dim: number, index: Tensor): Tensor",
+       "signature": "gather(dim: number, index: Tensor, sparseGrad?: boolean): Tensor",
        "doc": "Selects along one axis as an index tensor points. The indices arrive\nheld in float32.",
        "section": {
         "ko": "Shape",
@@ -1355,7 +1355,7 @@
       },
       {
        "name": "repeatInterleave",
-       "signature": "repeatInterleave(times: number, dim?: number): Tensor",
+       "signature": "repeatInterleave(repeats: number, dim?: number, outputSize?: number | null): Tensor",
        "doc": "Repeats per slot. `[a,b]` twice each gives `[a,a,b,b]` — different from\n`tile`.",
        "torch": "repeat_interleave",
        "section": {
@@ -2452,13 +2452,16 @@
       },
       {
        "name": "nonzero",
-       "signature": "nonzero(): Promise<Tensor>",
-       "doc": "The coordinates of the non-zeros. Positions are not values, so there is\nno gradient.",
+       "signature": "nonzero(asTuple?: false): Promise<Tensor>",
+       "doc": "The coordinates of the non-zeros. Positions are not values, so there is\nno gradient.\n\n`asTuple` gives **one 1-D tensor per axis** instead of one (count, rank)\ntable — the form indexing takes.\n\n`torch.nonzero` is read by `inspect` as \"no signature found for builtin\",\nso the signature axis had never compared it. That bucket is not agreement;\nit is *nothing was asked*.",
+       "overloads": [
+        "nonzero(asTuple: true): Promise<Tensor[]>"
+       ],
        "section": {
         "ko": "Where the output size depends on the values",
         "en": "Where the output size depends on the values"
        },
-       "doc_ko": "0 이 아닌 자리의 좌표. 자리는 값이 아니라 기울기가 없다."
+       "doc_ko": "0 이 아닌 자리의 좌표. 자리는 값이 아니라 기울기가 없다.\n\n`asTuple` 은 (개수, 랭크) 표 대신 **축마다 1차원 텐서 하나씩** 준다 — 색인이 받는 형태다.\n\n`torch.nonzero` 는 `inspect` 가 \"no signature found for builtin\" 으로 읽어서 서명 축이\n이 이름을 대조한 적이 없다. 그 칸은 *일치한다* 가 아니라 *아무것도 안 물었다* 이다."
       },
       {
        "name": "argwhere",
@@ -2614,7 +2617,7 @@
       },
       {
        "name": "quantile",
-       "signature": "quantile(q: number | readonly number[]): Promise<Tensor>",
+       "signature": "quantile(q: number | readonly number[], dim?: number | null, keepdim?: boolean, interpolation?: string): Promise<Tensor>",
        "doc": "Quantiles. **Linear interpolation** — that is torch's default, and it\ndiffers from picking the nearest value.",
        "section": {
         "ko": "Where the output size depends on the values",
@@ -2624,7 +2627,7 @@
       },
       {
        "name": "nanquantile",
-       "signature": "nanquantile(q: number | readonly number[]): Promise<Tensor>",
+       "signature": "nanquantile(q: number | readonly number[], dim?: number | null, keepdim?: boolean, interpolation?: string): Promise<Tensor>",
        "doc": "Quantiles counted excluding NaN.\n\n**Removing NaN shifts the positions.** So a small tensor of the intact\nslots is built and the work is retraced on that — the way back to the\noriginal positions is `indexSelect`, which is already differentiable,\nso it stays connected.",
        "section": {
         "ko": "Where the output size depends on the values",
@@ -2752,9 +2755,10 @@
        "doc_ko": "QR 분해. **`reduced` 에는 기울기가 있다.**\n\n    N = Qᵀ·Q̄ − R̄·Rᵀ\n    Ā = [Q̄ + Q·(tril(N − Nᵀ, −1) − N)]·R⁻ᵀ\n\n아래 삼각만 남기는 자리가 이 유도의 전부다 — `QᵀQ = I` 를 미분하면 `Qᵀ·dQ` 가\n반대칭이 되고, 위쪽은 아래쪽의 거울이라 따로 셀 것이 없다.\n\n`complete` 는 `Q` 에 남는 열이 있어 유도가 다르다. 그쪽은 값만 낸다."
       },
       {
-       "name": "svd",
-       "signature": "svd(fullMatrices?: boolean): Promise<{ u: Tensor; s: Tensor; vt: Tensor; }>",
+       "name": "linalgSvd",
+       "signature": "linalgSvd(fullMatrices?: boolean): Promise<{ u: Tensor; s: Tensor; vt: Tensor; }>",
        "doc": "Singular value decomposition.\n\n**The singular values have a gradient and `U` and `Vh` do not.** Since\n`dS = diag(Uᵀ·dA·V)`, the singular-value side is the single line `Ā =\nU·diag(Ḡ)·Vᵀ` with no degeneracy problem. The vector side brings in\n`1/(sᵢ²−sⱼ²)` and blows up when singular values coincide, and that part\nwas left out.\n\n`fullMatrices` (true by default) fills `U` out to `rows×rows` — torch's\ndefault. The direction of the fill is not unique once more than one\ndimension is left over (see `completeBasis`). **What the backward uses\nis the reduced form, before the fill.**",
+       "torch": "linalg_svd",
        "section": {
         "ko": "Linear algebra",
         "en": "Linear algebra"
@@ -2770,6 +2774,16 @@
         "en": "Linear algebra"
        },
        "doc_ko": "대칭 행렬의 고윳값·고유벡터. 고윳값은 오름차순이다.\n\n**한쪽 삼각만 읽는다** — 기본은 아래쪽이다. 야코비는 행렬 전체를 보므로 먼저\n거울을 만들어 넘긴다. 자세한 것은 `linalg.ts` 의 `mirror` 에 적었다."
+      },
+      {
+       "name": "svd",
+       "signature": "svd(some?: boolean, computeUv?: boolean): Promise<{ u: Tensor; s: Tensor; v: Tensor; }>",
+       "doc": "`torch.svd` — **which is not `torch.linalg.svd`.** Two functions in torch, and\nborch.ts had one of them under both names.\n\n- **The default is reduced**, so a 3×2 gives a 3×2 `U`; `linalgSvd` defaults to\n  the full form and gives 3×3. The same call returned **different shapes** from\n  the two libraries, and the overlapping block agreed, so anything reading only\n  `S` or `U[:, :k]` saw nothing.\n- **The third field is `v`, not `vt`.** They are transposes.\n- **`some` is the opposite of `fullMatrices`**, so a caller porting from torch\n  passes `false` for the reduced form and receives the full one.\n\nThe core (`borch/_ops.py`) splits the two the same way and for the same reason.",
+       "section": {
+        "ko": "Linear algebra",
+        "en": "Linear algebra"
+       },
+       "doc_ko": "`torch.svd` — **`torch.linalg.svd` 가 아니다.** torch 에는 둘이고, borch.ts 는 그중\n하나를 두 이름으로 갖고 있었다.\n\n- **기본이 축소본이지 전체가 아니다.** 3×2 입력에 `U` 가 3×2 로 나온다. `linalgSvd` 는\n  기본이 전체라 3×3 이다. 같은 호출이 두 라이브러리에서 **다른 모양**을 돌려줬고,\n  겹치는 블록의 값은 같아서 `S` 만 읽거나 `U[:, :k]` 만 읽으면 아무 이상이 없었다.\n- **셋째 항이 `vt` 가 아니라 `v` 다.** 서로 전치다.\n- **`some` 은 `fullMatrices` 의 반대다.** torch 에서 옮겨 온 사람이 축소본을 얻으려고\n  `false` 를 넘기면 전체본을 받는다.\n\n코어(`borch/_ops.py`)도 같은 이유로 같은 자리에서 둘을 쪼갠다."
       },
       {
        "name": "svdvals",
@@ -3182,7 +3196,7 @@
       },
       {
        "name": "div_",
-       "signature": "div_(other: number): Tensor",
+       "signature": "div_(other: number, roundingMode?: \"trunc\" | \"floor\" | null): Tensor",
        "doc": "",
        "section": {
         "ko": "In-place operations",
@@ -4258,7 +4272,7 @@
       },
       {
        "name": "sort",
-       "signature": "sort(dim?: number, descending?: boolean): { values: Tensor; indices: Tensor; }",
+       "signature": "sort(dim?: number, descending?: boolean, stable?: boolean): { values: Tensor; indices: Tensor; }",
        "doc": "Sorts one axis and produces the values and the positions.\n\n**The gradient follows the values.** It flows only to the positions\ntaken and is zero elsewhere, and returning the values detached means no\ngradient reaches those positions and the whole classification loss\nbecomes non-differentiable. The core went through this with `topk` and\n`sort`, and the sister project was in the same state until review.",
        "section": {
         "ko": "Sorting",
@@ -4268,7 +4282,7 @@
       },
       {
        "name": "argsort",
-       "signature": "argsort(dim?: number, descending?: boolean): Tensor",
+       "signature": "argsort(dim?: number, descending?: boolean, stable?: boolean): Tensor",
        "doc": "The sorted positions only. Used when the values are not needed.",
        "section": {
         "ko": "Sorting",
@@ -4278,7 +4292,7 @@
       },
       {
        "name": "topk",
-       "signature": "topk(k: number, dim?: number): { values: Tensor; indices: Tensor; }",
+       "signature": "topk(k: number, dim?: number, largest?: boolean, sorted?: boolean): { values: Tensor; indices: Tensor; }",
        "doc": "The largest `k`. The front of `sort` — torch gives them descending too.",
        "section": {
         "ko": "Sorting",
@@ -5408,7 +5422,7 @@
       },
       {
        "name": "cpu",
-       "signature": "cpu(): Promise<Tensor>",
+       "signature": "cpu(memoryFormat?: string | null): Promise<Tensor>",
        "doc": "Brings the values down to the host. Where torch's `t.cpu()` goes, and\n**asynchronous** — a round trip to fetch GPU memory back, with no way\naround it.\n\n**It cuts the graph.** torch's `.cpu()` is differentiable and here it\ncannot be — there are no host kernels, so there is no path for a\nbackward to take. Better cut than left attached and quietly flowing\nzeros.",
        "section": {
         "ko": "Moving between devices",
@@ -5486,7 +5500,7 @@
       },
       {
        "name": "float",
-       "signature": "float(): Tensor",
+       "signature": "float(memoryFormat?: string | null): Tensor",
        "doc": "torch's **named type conversions.** The same work as `to(type)` under a\ndifferent name.\n\nWithout these names, `x.float()` failed in borch.ts alone. Both Python\nversions had them and the golden line stood as \"a Python-side matter,\nnot carried across\", when in fact it was not that the other side could\nnot — it was a name **nobody had asked about.**",
        "section": {
         "ko": "Reading values",
@@ -5496,7 +5510,7 @@
       },
       {
        "name": "long",
-       "signature": "long(): Tensor",
+       "signature": "long(memoryFormat?: string | null): Tensor",
        "doc": "",
        "section": {
         "ko": "Reading values",
@@ -5505,7 +5519,7 @@
       },
       {
        "name": "bool",
-       "signature": "bool(): Tensor",
+       "signature": "bool(memoryFormat?: string | null): Tensor",
        "doc": "",
        "section": {
         "ko": "Reading values",
@@ -5514,7 +5528,7 @@
       },
       {
        "name": "cfloat",
-       "signature": "cfloat(): Tensor",
+       "signature": "cfloat(memoryFormat?: string | null): Tensor",
        "doc": "Real to complex. **`to(\"complex64\")` will not do it** — a complex is\ntwo f32 per slot, so relabelling is blocked, and that block is right.\nIt is built by attaching a zero imaginary part.",
        "section": {
         "ko": "Reading values",
@@ -5599,7 +5613,7 @@
       },
       {
        "name": "int",
-       "signature": "int(): Tensor",
+       "signature": "int(memoryFormat?: string | null): Tensor",
        "doc": "",
        "section": {
         "ko": "Reading values",
@@ -5608,7 +5622,7 @@
       },
       {
        "name": "double",
-       "signature": "double(): Tensor",
+       "signature": "double(memoryFormat?: string | null): Tensor",
        "doc": "**Double precision is absent for a different reason.** The eight above\nare slots we chose not to have; this one is that WebGPU shaders have no\n`f64` at all. The wording differs accordingly — the Python binding\nstops with the same sentence.",
        "section": {
         "ko": "Reading values",
@@ -5786,7 +5800,7 @@
       },
       {
        "name": "round",
-       "signature": "round(): Tensor",
+       "signature": "round(decimals?: number): Tensor",
        "doc": ""
       },
       {
@@ -6534,7 +6548,7 @@
      "doc_ko": "그래프 마디 하나를 밖에서 만든다. **커널을 다른 파일에 쓰는 자리를 위한 문이다.**\n\n`Tensor.make` 는 비공개다 — 이 클래스 안의 연산들이 쓰는 것이라 그게 맞다. 그런데\n`fft.ts` 처럼 **자기 커널을 가진 모듈**이 생기면 그 문이 필요해진다. 여기서 조건을\n다시 적는 대신(`gradMode` 검사와 `requiresGrad` 전파를 두 벌로 두면 언젠가 갈린다)\n같은 자리로 넘긴다."
     }
    ],
-   "count": 670,
+   "count": 671,
    "doc_ko": "`Tensor` — GPU 버퍼 하나와 모양, 그리고 테이프의 마디 하나.\n\n레이아웃은 **NCHW**, dtype 은 **float32 하나**다. 자매(`borch_webgpu`)가\nNHWC 를 들고 int64 를 float32 에 담은 것은 TF.js 의 제약을 피한 우회였고, 우리\n커널에는 그 제약이 없다. 흉내 내면 이유 없이 남의 우회를 물려받는다."
   },
   {
@@ -7480,9 +7494,25 @@
      "doc": "Per sample and per channel. **The default is no parameters** — as in\ntorch.\n\nIt is the opposite of `BatchNorm`, which makes it a confusing place, and\nflipping the default changes every `stateDict` key.",
      "members": [
       {
-       "name": "constructor",
-       "signature": "constructor(eps?: number)",
+       "name": "weight",
+       "signature": "readonly weight: Tensor | null",
        "doc": ""
+      },
+      {
+       "name": "bias",
+       "signature": "readonly bias: Tensor | null",
+       "doc": ""
+      },
+      {
+       "name": "constructor",
+       "signature": "constructor(numFeatures: number, eps?: number, _momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
+       "doc": "torch's list, in torch's seats. **`affine` defaults to false here and true\non `BatchNorm`** — that is torch, and flipping it swaps which layers carry\nparameters, so the `state_dict` keys part wholesale."
+      },
+      {
+       "name": "ownParameters",
+       "signature": "ownParameters(): Record<string, Tensor>",
+       "doc": "",
+       "torch": "own_parameters"
       },
       {
        "name": "forward",
@@ -7491,6 +7521,27 @@
       }
      ],
      "doc_ko": "표본마다·채널마다 따로. **기본이 파라미터 없음이다** — torch 가 그렇다.\n\n`BatchNorm` 과 반대라 헷갈리는 자리이고, 기본을 뒤집으면 `stateDict` 열쇠가\n통째로 갈린다."
+    },
+    {
+     "kind": "class",
+     "name": "InstanceNorm1d",
+     "signature": "export declare class InstanceNorm1d extends InstanceNormND",
+     "doc": "`torch.nn.InstanceNorm1d`. **It inherits `InstanceNormND` unchanged** — the\nnormalisation reduces everything but the channel axis, so the number in the\nname does not reach the computation. The core says the same at the same place.\n\nThese three and `BatchNorm1d` were **absent while all six lazy variants were\npresent**, so `LazyInstanceNorm2d` stood for the lazy form of a class that did\nnot exist. `BatchNormND`'s own comment promised \"BatchNorm1d, 2d and 3d are\nall this\" with only two of the three written below it — documentation naming a\nclass nobody could import.\n\nNothing could see it. The name axis in `tests/torch_gap.py` reads the python\ncore against torch; `borch-ts/test/run.py`'s ledger records golden cases. **The\ncore's `nn` against borch.ts's `nn` was not a question any file asked** —\n`tests/test_nn_names.py` now asks it.",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "InstanceNorm2d",
+     "signature": "export declare class InstanceNorm2d extends InstanceNormND",
+     "doc": "",
+     "members": []
+    },
+    {
+     "kind": "class",
+     "name": "InstanceNorm3d",
+     "signature": "export declare class InstanceNorm3d extends InstanceNormND",
+     "doc": "",
+     "members": []
     },
     {
      "kind": "class",
@@ -10399,6 +10450,13 @@
     },
     {
      "kind": "class",
+     "name": "BatchNorm1d",
+     "signature": "export declare class BatchNorm1d extends BatchNormND",
+     "doc": "`torch.nn.BatchNorm1d`. The same inheritance as `BatchNorm2d`, and it was\n**the one of the three that was never written** — see `InstanceNorm1d` for\nhow four absent names sat inside a counter that was pinned as expected.",
+     "members": []
+    },
+    {
+     "kind": "class",
      "name": "BatchNorm3d",
      "signature": "export declare class BatchNorm3d extends BatchNormND",
      "doc": "`torch.nn.BatchNorm3d`. The computation is the same, for the reason above.",
@@ -10648,7 +10706,7 @@
      "members": []
     }
    ],
-   "count": 682,
+   "count": 689,
    "doc_ko": "층 — `nn.Module` 의 최소 뼈대.\n\n## 무엇을 위한 것인가\n\n단위 대조는 연산 하나씩만 본다. 모듈·손실·옵티마이저가 엮여야만 갈리는 것이 있고,\n이 저장소가 통합 시나리오에서 잡은 결함들은 전부 그 자리에서 나왔다. 그래서\n층을 세우는 것은 편의가 아니라 **볼 수 없던 자리를 보는 일**이다.\n\n## 이름이 곧 계약이다\n\n`state_dict` 의 열쇠가 `0.weight` 처럼 **자리 번호와 이름**으로 만들어진다. 골든이\n그 이름으로 가중치를 넣고 그 이름으로 결과를 꺼내므로, 이름이 갈리면 값이 아니라\n배선이 갈린다."
   },
   {
@@ -14664,5 +14722,5 @@
    "count": 9
   }
  ],
- "total": 1916
+ "total": 1924
 }

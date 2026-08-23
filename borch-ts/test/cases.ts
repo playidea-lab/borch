@@ -3627,9 +3627,13 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
   }
 
   add("F.instance_norm", (x) => x.instanceNorm(), "img");
+  // The three names, not the base three times. Each of these cases carried the
+  // name of a class that did not exist and built `InstanceNormND` instead — the
+  // case table promising a name the same way the docstring did.
   for (const [nd, key] of [["1d", "nd_seq"], ["2d", "img"], ["3d", "nd_vol"]] as const) {
+    const Cls = { "1d": nn.InstanceNorm1d, "2d": nn.InstanceNorm2d, "3d": nn.InstanceNorm3d }[nd];
     out.set(`norm::nn.InstanceNorm${nd}`,
-      () => new nn.InstanceNormND().call(inp.get(key)));
+      () => new Cls(inp.get(key).shape[1] ?? 1).call(inp.get(key)));
   }
 
   add("F.rms_norm", (x) => x.rmsNorm(1), "img");
@@ -5164,6 +5168,13 @@ function addRecent(out: Map<string, Case>): void {
   out.set("stat::nonzero_static(fill=-9)",
     async () => await sparse().nonzeroStatic(5, -9));
 
+  // **The tuple form is what indexing takes** — one 1-D tensor per axis rather than
+  // one (count, rank) table. `torch.nonzero` reads as "no signature found for
+  // builtin", so the signature axis had never compared it.
+  out.set("stat::nonzero(as_tuple)/행",
+    async () => (await sparse().nonzero(true))[0]!);
+  out.set("stat::nonzero 표", async () => await sparse().nonzero());
+
   // **`wrap` means something only on a tall matrix.** While it was asked with squares
   // alone, this version invented a rule that does not exist (skipping a row on wrapping
   // round) and was still green. It is asked through the binding as well, and **a place that
@@ -6268,9 +6279,9 @@ function addLinalg(out: Map<string, Case>): void {
     // **The sign convention differs per implementation.** Flipping a column's sign is the
     // same decomposition, so it is asked about in absolute value.
     ["qr/|Q|", async () => (await mat().qr()).q.abs()],
-    ["svd/|U|", async () => (await mat().svd()).u.abs()],
-    ["svd/S", async () => (await mat().svd()).s],
-    ["svd/|Vh|", async () => (await mat().svd()).vt.abs()],
+    ["svd/|U|", async () => (await mat().linalgSvd()).u.abs()],
+    ["svd/S", async () => (await mat().linalgSvd()).s],
+    ["svd/|Vh|", async () => (await mat().linalgSvd()).vt.abs()],
   ];
   for (const [name, fn] of value) out.set(`linalg::${name}`, fn);
 
@@ -6341,13 +6352,13 @@ function addLinalgStruct(out: Map<string, Case>): void {
     ["batch::matrix_rank", async () => bat().matrixRank()],
     ["batch::matrix_power", async () => bat().matrixPower(3)],
     ["batch::qr/R", async () => (await bat().qr()).r],
-    ["batch::svd/S", async () => (await bat().svd()).s],
+    ["batch::svd/S", async () => (await bat().linalgSvd()).s],
     ["batch::eigh/값", async () => (await sym().eigh()).values],
     ["batch::pinv", async () => bat().pinverse()],
     ["batch::logdet", async () => sym().logdet()],
     // 3×3 — at 2×2 there is one Jacobi rotation and the sweeping iteration never runs.
     ["3x3::eigh/값", async () => (await sym3().eigh()).values],
-    ["3x3::svd/S", async () => (await sym3().svd()).s],
+    ["3x3::svd/S", async () => (await sym3().linalgSvd()).s],
     ["3x3::det", async () => sym3().det()],
     ["3x3::inv", async () => sym3().inverse()],
 
@@ -6355,9 +6366,9 @@ function addLinalgStruct(out: Map<string, Case>): void {
     ["rect::qr/R", async () => (await rect().qr()).r],
     ["rect::qr/|Q|", async () => (await rect().qr()).q.abs()],
     ["rect::qr(complete)/|Q|", async () => (await rect().qr("complete")).q.abs()],
-    ["rect::svd/S", async () => (await rect().svd()).s],
-    ["rect::svd/|U|", async () => (await rect().svd()).u.abs()],
-    ["rect::svd(축소)/|U|", async () => (await rect().svd(false)).u.abs()],
+    ["rect::svd/S", async () => (await rect().linalgSvd()).s],
+    ["rect::svd/|U|", async () => (await rect().linalgSvd()).u.abs()],
+    ["rect::svd(축소)/|U|", async () => (await rect().linalgSvd(false)).u.abs()],
     ["rect::pinv", async () => rect().pinverse()],
     ["rect::matrix_rank", async () => rect().matrixRank()],
     ["rect::lstsq", async () => rect().lstsq(Tensor.from([1, 2, 3], [3]))],
@@ -6369,8 +6380,8 @@ function addLinalgStruct(out: Map<string, Case>): void {
     ["name::slogdet.logabsdet", async () => (await bat().slogdet()).logabs],
     ["name::qr.R", async () => (await rect().qr()).r],
     ["name::qr.|Q|", async () => (await rect().qr()).q.abs()],
-    ["name::svd.S", async () => (await rect().svd()).s],
-    ["name::svd.|Vh|", async () => (await rect().svd()).vt.abs()],
+    ["name::svd.S", async () => (await rect().linalgSvd()).s],
+    ["name::svd.|Vh|", async () => (await rect().linalgSvd()).vt.abs()],
     ["name::eigh.eigenvalues", async () => (await sym3().eigh()).values],
     ["name::eigh.|eigenvectors|", async () => (await sym3().eigh()).vectors.abs()],
 
@@ -6847,7 +6858,7 @@ function addInplace(out: Map<string, Case>): void {
   out.set("method2::inverse", async () => m2a().inverse());
   out.set("method2::pinverse", async () => m2a().pinverse());
   out.set("method2::qr", async () => (await m2a().qr()).r);
-  out.set("method2::svd", async () => (await m2a().svd()).s);
+  out.set("method2::svd", async () => (await m2a().linalgSvd()).s);
   out.set("method2::cholesky", async () => m2sym().cholesky());
   out.set("method2::slogdet", async () => (await m2a().slogdet()).logabs);
   out.set("method2::det", async () => m2a().det());

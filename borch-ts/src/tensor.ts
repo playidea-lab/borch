@@ -2035,7 +2035,10 @@ export class Tensor implements Node<Tensor> {
    * A new tensor with the same values. The graph stays connected — that is
    * what differs from `detach`.
    */
-  clone(): Tensor {
+  clone(memoryFormat: string | null = null): Tensor {
+    if (memoryFormat !== null) {
+      throw new Error("clone(memoryFormat) is not here — there is one layout.");
+    }
     return this.unary("positive");
   }
 
@@ -3024,7 +3027,10 @@ export class Tensor implements Node<Tensor> {
    * Selects along one axis as an index tensor points. The indices arrive
    * held in float32.
    */
-  gather(dim: number, index: Tensor): Tensor {
+  gather(dim: number, index: Tensor, sparseGrad = false): Tensor {
+    if (sparseGrad) {
+      throw new Error("gather(sparseGrad=true) is not here — there is no sparse layout.");
+    }
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const outer = this.shape.slice(0, axis).reduce((a, b) => a * b, 1);
@@ -3243,17 +3249,20 @@ export class Tensor implements Node<Tensor> {
    * Repeats per slot. `[a,b]` twice each gives `[a,a,b,b]` — different from
    * `tile`.
    */
-  repeatInterleave(times: number, dim = 0): Tensor {
+  repeatInterleave(repeats: number, dim = 0, outputSize: number | null = null): Tensor {
+    // torch takes this so the kernel need not read the repeat counts back off the
+    // device. It changes no value; the length is already known here.
+    void outputSize;
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const own = this.strides();
     const rules: AxisRule[] = this.shape.map((size, d) => ({
-      size: d === axis ? size * times : size,
+      size: d === axis ? size * repeats : size,
       stride: own[d] ?? 1,
       kind: d === axis ? ("div" as const) : ("lin" as const),
-      wrap: d === axis ? times : size,
+      wrap: d === axis ? repeats : size,
     }));
-    const outShape = this.shape.map((s, d) => (d === axis ? s * times : s));
+    const outShape = this.shape.map((s, d) => (d === axis ? s * repeats : s));
     return this.viewAs(rules, 0, outShape, "RepeatInterleaveBackward0");
   }
 
@@ -4979,8 +4988,17 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * The coordinates of the non-zeros. Positions are not values, so there is
    * no gradient.
+   *
+   * `asTuple` gives **one 1-D tensor per axis** instead of one (count, rank)
+   * table — the form indexing takes.
+   *
+   * `torch.nonzero` is read by `inspect` as "no signature found for builtin",
+   * so the signature axis had never compared it. That bucket is not agreement;
+   * it is *nothing was asked*.
    */
-  async nonzero(): Promise<Tensor> {
+  async nonzero(asTuple?: false): Promise<Tensor>;
+  async nonzero(asTuple: true): Promise<Tensor[]>;
+  async nonzero(asTuple = false): Promise<Tensor | Tensor[]> {
     const values = await this.toArray();
     const rank = Math.max(1, this.shape.length);
     const dims = this.shape.length === 0 ? [1] : this.shape;
@@ -4997,6 +5015,15 @@ fn gelu_tanh_grad(x: f32) -> f32 {
         rest = Math.floor(rest / size);
       }
       rows.push(...coord);
+    }
+    if (asTuple) {
+      const cols: Tensor[] = [];
+      for (let d = 0; d < rank; d++) {
+        const one: number[] = [];
+        for (let r = 0; r < count; r++) one.push(rows[r * rank + d] ?? 0);
+        cols.push(Tensor.from(one, [count], { dtype: "int64" }));
+      }
+      return cols;
     }
     return Tensor.from(rows, [count, rank], { dtype: "int64" });
   }
@@ -5566,8 +5593,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * Quantiles. **Linear interpolation** — that is torch's default, and it
    * differs from picking the nearest value.
    */
-  async quantile(q: number | readonly number[]): Promise<Tensor> {
-    return this.quantileOver(Array.from(await this.toArray()), q);
+  async quantile(q: number | readonly number[], dim: number | null = null,
+                 keepdim = false, interpolation = "linear"): Promise<Tensor> {
+    quantileSeats(dim, keepdim);
+    return this.quantileOver(Array.from(await this.toArray()), q, interpolation);
   }
 
   /**
@@ -5579,7 +5608,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * of the three 5s and `quantile(0.5)` gives **½ to each of the first two.** Both
    * values are 5, so only gathering back tells them apart.
    */
-  private quantileOver(host: number[], q: number | readonly number[]): Tensor {
+  private quantileOver(host: number[], q: number | readonly number[],
+                       interpolation = "linear"): Tensor {
     const order = host.map((_, i) => i).sort((a, b) => (host[a]! - host[b]!));
     const flat = this.flat();
     const wanted = typeof q === "number" ? [q] : [...q];
@@ -5587,7 +5617,10 @@ fn gelu_tanh_grad(x: f32) -> f32 {
       const at = p * (order.length - 1);
       const lo = Math.floor(at);
       const hi = Math.min(lo + 1, order.length - 1);
-      const w = at - lo;
+      // **The rule that produced the value has to be the rule the gradient
+      // splits by.** Written for `linear` alone, the two describe different
+      // functions with only the backward wrong, and nothing shows it.
+      const w = interpolationWeight(interpolation, at, lo);
       const pickLo = flat.select(0, order[lo] ?? 0);
       if (w === 0) return pickLo;
       const pickHi = flat.select(0, order[hi] ?? 0);
@@ -5606,14 +5639,16 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * original positions is `indexSelect`, which is already differentiable,
    * so it stays connected.
    */
-  async nanquantile(q: number | readonly number[]): Promise<Tensor> {
+  async nanquantile(q: number | readonly number[], dim: number | null = null,
+                    keepdim = false, interpolation = "linear"): Promise<Tensor> {
+    quantileSeats(dim, keepdim);
     const values = Array.from(await this.toArray());
     const keep = values.map((v, i) => [v, i] as const)
       .filter(([v]) => !Number.isNaN(v));
     const at = Tensor.from(keep.map(([, i]) => i), [keep.length],
       { dtype: "int64" });
     const clean = this.flat().indexSelect(0, at);
-    return clean.quantileOver(keep.map(([v]) => v), q);
+    return clean.quantileOver(keep.map(([v]) => v), q, interpolation);
   }
 
   // ── Linear algebra ────────────────────────────────────────────────────
@@ -6032,7 +6067,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * dimension is left over (see `completeBasis`). **What the backward uses
    * is the reduced form, before the fill.**
    */
-  async svd(fullMatrices = true): Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
+  async linalgSvd(fullMatrices = true):
+    Promise<{ u: Tensor; s: Tensor; vt: Tensor }> {
     const v = await this.asBatch(false);
     const { rows, cols } = v;
     const k = Math.min(rows, cols);
@@ -6104,11 +6140,38 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     };
   }
 
+
+  /**
+   * `torch.svd` — **which is not `torch.linalg.svd`.** Two functions in torch, and
+   * borch.ts had one of them under both names.
+   *
+   * - **The default is reduced**, so a 3×2 gives a 3×2 `U`; `linalgSvd` defaults to
+   *   the full form and gives 3×3. The same call returned **different shapes** from
+   *   the two libraries, and the overlapping block agreed, so anything reading only
+   *   `S` or `U[:, :k]` saw nothing.
+   * - **The third field is `v`, not `vt`.** They are transposes.
+   * - **`some` is the opposite of `fullMatrices`**, so a caller porting from torch
+   *   passes `false` for the reduced form and receives the full one.
+   *
+   * The core (`borch/_ops.py`) splits the two the same way and for the same reason.
+   */
+  async svd(some = true, computeUv = true):
+    Promise<{ u: Tensor; s: Tensor; v: Tensor }> {
+    const { u, s, vt } = await this.linalgSvd(!some);
+    const v = vt.swapaxes(-1, -2);
+    if (!computeUv) {
+      // torch hands back zeros of the shape they would have had rather than a
+      // shorter tuple, so the caller's destructuring keeps working.
+      return { u: u.mul(Tensor.full([], 0)), s, v: v.mul(Tensor.full([], 0)) };
+    }
+    return { u, s, v };
+  }
+
   /**
    * The singular values only. The middle of `svd`.
    */
   async svdvals(): Promise<Tensor> {
-    return (await this.svd(false)).s;
+    return (await this.linalgSvd(false)).s;
   }
 
   /**
@@ -6862,7 +6925,7 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     // as "not fully implemented" and puts the approximation back.
     void niter;
     const src = M === null ? this : this.sub(M);
-    const { u, s, vt } = await src.svd(false);
+    const { u, s, vt } = await src.linalgSvd(false);
     const cut = Math.min(q, s.shape[0] ?? 0);
     const take = Tensor.from(
       Array.from({ length: cut }, (_, i) => i), [cut]);
@@ -6969,8 +7032,11 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return this.mutate(() => this.binary("mul", Tensor.full([], other)));
   }
 
-  div_(other: number): Tensor {
-    return this.mutate(() => this.binary("div", Tensor.full([], other)));
+  div_(other: number, roundingMode: "trunc" | "floor" | null = null): Tensor {
+    // **`div` took `roundingMode` and `div_` did not**, so the two spellings of one
+    // operation had different arguments and the in-place one quietly did true
+    // division where torch floors. The core had the same pair, found in the same run.
+    return this.mutate(() => this.div(Tensor.full([], other), roundingMode));
   }
 
   pow_(k: number): Tensor {
@@ -7675,7 +7741,13 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * becomes non-differentiable. The core went through this with `topk` and
    * `sort`, and the sister project was in the same state until review.
    */
-  sort(dim = 0, descending = false): { values: Tensor; indices: Tensor } {
+  sort(dim = 0, descending = false, stable = false):
+    { values: Tensor; indices: Tensor } {
+    // **`stable` asks for what the kernel already does.** `sortAxis` keeps equal
+    // values in their original order, so the flag has nothing to switch on — it is
+    // taken because the seat is torch's, and a call that reaches it must land on
+    // this parameter rather than on the one after.
+    void stable;
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
     const len = this.shape[axis] ?? 1;
@@ -7701,20 +7773,26 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   /**
    * The sorted positions only. Used when the values are not needed.
    */
-  argsort(dim = 0, descending = false): Tensor {
-    return this.sort(dim, descending).indices;
+  argsort(dim = 0, descending = false, stable = false): Tensor {
+    return this.sort(dim, descending, stable).indices;
   }
 
   /**
    * The largest `k`. The front of `sort` — torch gives them descending too.
    */
-  topk(k: number, dim = 0): { values: Tensor; indices: Tensor } {
+  topk(k: number, dim = 0, largest = true, sorted = true):
+    { values: Tensor; indices: Tensor } {
+    // **`largest` was missing**, so `topk(k, dim, false)` — torch's way of asking
+    // for the smallest k — was a type error rather than the bottom of the sort.
+    // `sorted` promises nothing about the order when false, so answering sorted
+    // either way is within what torch allows.
+    void sorted;
     const rank = this.shape.length;
     const axis = dim < 0 ? dim + rank : dim;
-    const sorted = this.sort(axis, true);
+    const ordered = this.sort(axis, largest);
     return {
-      values: sorted.values.narrow(axis, 0, k),
-      indices: sorted.indices.narrow(axis, 0, k),
+      values: ordered.values.narrow(axis, 0, k),
+      indices: ordered.indices.narrow(axis, 0, k),
     };
   }
 
@@ -10275,7 +10353,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * backward to take. Better cut than left attached and quietly flowing
    * zeros.
    */
-  async cpu(): Promise<Tensor> {
+  async cpu(memoryFormat: string | null = null): Promise<Tensor> {
+    noMemoryFormat("cpu", memoryFormat);
     if (this.gpu === null) return this;
     // **It is `floats`.** Complex holds two per cell, so reading by `size` truncates
     // the second half — and the shape and dtype come out attached unchanged, so the
@@ -10402,15 +10481,18 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * not carried across", when in fact it was not that the other side could
    * not — it was a name **nobody had asked about.**
    */
-  float(): Tensor {
+  float(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("float", memoryFormat);
     return this.to("float32");
   }
 
-  long(): Tensor {
+  long(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("long", memoryFormat);
     return this.to("int64");
   }
 
-  bool(): Tensor {
+  bool(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("bool", memoryFormat);
     return this.to("bool");
   }
 
@@ -10419,7 +10501,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * two f32 per slot, so relabelling is blocked, and that block is right.
    * It is built by attaching a zero imaginary part.
    */
-  cfloat(): Tensor {
+  cfloat(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("cfloat", memoryFormat);
     if (isComplexDType(this.dtype)) return this;
     const re = this.dtype === "float32" ? this : this.to("float32");
     return Tensor.complex(re, Tensor.zeros(this.shape));
@@ -10469,7 +10552,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
     return absentDType("short", "int16");
   }
 
-  int(): Tensor {
+  int(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("int", memoryFormat);
     return absentDType("int", "int32");
   }
 
@@ -10479,7 +10563,8 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * `f64` at all. The wording differs accordingly — the Python binding
    * stops with the same sentence.
    */
-  double(): Tensor {
+  double(memoryFormat: string | null = null): Tensor {
+    noMemoryFormat("double", memoryFormat);
     throw new RuntimeError(
       "Only Tensors of floating point dtype float32 are supported — "
         + "float64 is not in WebGPU shaders",
@@ -10767,6 +10852,54 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 // loop below overwrites it with the table's argument-less form — the ordering problem
 // `abs` was already bitten by. It is restored after the loop. The in-place form (`elu_`)
 // uses the table's as it is (α=1).
+/**
+ * torch's `memoryFormat` on the dtype and device methods — **carried and refused.**
+ *
+ * Seven of them take it and none had a seat for it, so torch's position landed on
+ * nothing. There is one layout here; honouring it is impossible and swallowing it
+ * would answer for a request that was not met. The core refuses at the same place
+ * with the same sentence (`borch/_tensor.py`, `_memory_format`).
+ */
+function noMemoryFormat(name: string, memoryFormat: string | null): void {
+  if (memoryFormat !== null) {
+    throw new Error(`${name}(memoryFormat) is not here — there is one layout.`);
+  }
+}
+
+const INTERPOLATIONS = ["linear", "lower", "higher", "midpoint", "nearest"];
+
+/**
+ * torch's `interpolation`, as the weight given to the upper of the two positions.
+ *
+ * **It changes the answer.** On `[1,2,3,4]` the 0.3 quantile is 1.9 under `linear`,
+ * 1.0 under `lower` and 1.5 under `midpoint` — three plausible numbers with nothing
+ * in the value to say which rule made it. The argument was absent on both sides, so
+ * four of the five rules were unreachable.
+ */
+function interpolationWeight(how: string, at: number, lo: number): number {
+  switch (how) {
+    case "linear": return at - lo;
+    case "lower": return 0;
+    case "higher": return 1;
+    case "midpoint": return 0.5;
+    case "nearest": return Math.round(at) - lo;
+    default:
+      throw new Error(
+        `quantile() interpolation must be one of ${INTERPOLATIONS.join(", ")}, got ${how}`);
+  }
+}
+
+/**
+ * `dim` and `keepdim` — **carried and refused.** The body here flattens, so an axis
+ * cannot be honoured; accepting one and reducing everything would answer a question
+ * the caller did not ask, with a plausible number. Left out, torch's second and
+ * third positions land on somebody else.
+ */
+function quantileSeats(dim: number | null, keepdim: boolean): void {
+  if (dim !== null) throw new Error("quantile(dim) is not here yet — it flattens.");
+  if (keepdim) throw new Error("quantile(keepdim) is not here yet — it flattens.");
+}
+
 const eluWithAlpha = Tensor.prototype.elu;
 
 for (const name of Object.keys(UNARY)) {
@@ -10797,6 +10930,25 @@ for (const name of Object.keys(UNARY)) {
 // Restores the `elu` that takes α. It was captured above.
 Object.defineProperty(Tensor.prototype, "elu", {
   value: eluWithAlpha,
+  writable: true,
+  configurable: true,
+});
+
+/**
+ * **`round` takes `decimals` and the table cannot give it one.** The loop above
+ * attaches a no-argument method for every table unary, so `round(2)` was a type
+ * error — for the argument that is the reason most people reach for `round`.
+ *
+ * Half goes to even at every scale, which is the rule the kernel already has; the
+ * scaling is by a power of ten either side of it, so nothing about the rounding
+ * itself moves. Attached after the loop for the same reason `elu` is.
+ */
+Object.defineProperty(Tensor.prototype, "round", {
+  value: function (this: Tensor, decimals = 0): Tensor {
+    if (!decimals) return this.unary("round");
+    const scale = Tensor.full([], 10 ** decimals);
+    return this.mul(scale).unary("round").div(scale);
+  },
   writable: true,
   configurable: true,
 });
@@ -10869,7 +11021,7 @@ export interface Tensor {
   sign(): Tensor;
   floor(): Tensor;
   ceil(): Tensor;
-  round(): Tensor;
+  round(decimals?: number): Tensor;
   trunc(): Tensor;
   frac(): Tensor;
   lgamma(): Tensor;
