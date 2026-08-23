@@ -555,7 +555,48 @@ class Tensor:
         return self.numpy().tolist()
 
     def __len__(self):
-        return self.shape[0] if self.shape else 0
+        """**A scalar has no length, and saying `0` is worse than refusing.**
+
+        This returned `0` for a 0-dimensional tensor. torch raises
+        `TypeError: len() of a 0-d tensor` and the numpy core raises
+        `len() of unsized object`, and the difference is not cosmetic: `len()` is
+        how numpy decides whether something is a sequence, so `np.asarray(t)`
+        walked one level past the last axis, found `0` there, and built a
+        **(3, 5, 4, 0)** array from a (3, 5, 4) tensor. Empty, no error, wrong
+        shape.
+
+        It surfaced four golden rows away from here and in four different
+        wordings — `RandomErasing` disagreeing on shape, `F.erase` failing an
+        item assignment, `elastic` reshaping from size 0, and
+        `LinearTransformation` reporting an image that "flattens to 0". None of
+        them mentions `len`, and none of them is about vision.
+
+        A scalar reading as empty is wrong on its own terms too: `if len(t):` is
+        false for `tensor(5.)`, and `list(t)` is `[]`.
+        """
+        if not self.shape:
+            raise TypeError("len() of a 0-d tensor")
+        return self.shape[0]
+
+    def __array__(self, dtype=None, copy=None):
+        """What `np.asarray(t)` takes.
+
+        Without it numpy falls back to `__len__` and `__getitem__` and walks the
+        tensor element by element — one GPU read per scalar, and the shape decided
+        by whatever `len()` says at the bottom. With it, one read of the whole
+        buffer, which is what `numpy()` already does.
+
+        `copy=False` is numpy 2's *"do not copy"* request. `numpy()` builds a fresh
+        array from a buffer read out of the GPU, so there is nothing to share and
+        the honest answer is to refuse rather than to hand back a copy and stay
+        quiet — that is what numpy asks implementations to do.
+        """
+        if copy is False:
+            raise ValueError(
+                "a GPU tensor cannot be viewed without copying — the values are "
+                "read out of a device buffer.")
+        out = self.numpy()
+        return out if dtype is None else out.astype(dtype)
 
     def __repr__(self):
         """**Borrows the core's rules.** Written again here, a day comes when the
@@ -827,6 +868,97 @@ class Tensor:
 
     def __neg__(self):
         return wrap(self._h.neg())
+
+    def _spans(self, key):
+        """`key` as one `(start, stop)` per axis, in order, covering every axis.
+
+        Only basic indexing — integers, slices with step 1, and one `Ellipsis`.
+        An integer becomes a span of length one, which is what makes assignment
+        and slicing the same walk. Anything else is refused by name rather than
+        approximated, because a *nearly* right region is a wrong picture with no
+        error attached to it.
+        """
+        keys = list(key) if isinstance(key, tuple) else [key]
+        if keys.count(Ellipsis) > 1:
+            raise IndexError("an index can only have a single ellipsis ('...')")
+        if Ellipsis in keys:
+            at = keys.index(Ellipsis)
+            named = len(keys) - 1
+            keys[at:at + 1] = [slice(None)] * (len(self.shape) - named)
+        keys += [slice(None)] * (len(self.shape) - len(keys))
+        if len(keys) > len(self.shape):
+            raise IndexError(
+                f"too many indices: this tensor has {len(self.shape)} dimensions "
+                f"and {len(keys)} were given")
+        spans = []
+        for axis, k in enumerate(keys):
+            n = self.shape[axis]
+            if isinstance(k, slice):
+                if k.step not in (None, 1):
+                    raise NotImplementedError(
+                        "assigning into a strided slice is not here yet — "
+                        f"step {k.step} on dimension {axis}.")
+                start, stop, _ = k.indices(n)
+                spans.append((start, max(start, stop)))
+            elif isinstance(k, int):
+                at = k + n if k < 0 else k
+                if not 0 <= at < n:
+                    raise IndexError(
+                        f"index {k} is out of bounds for dimension {axis} "
+                        f"with size {n}")
+                spans.append((at, at + 1))
+            else:
+                raise NotImplementedError(
+                    f"assigning with {type(k).__name__} is not here yet — "
+                    "integers, slices and `...` are.")
+        return spans
+
+    def __setitem__(self, key, value):
+        """`x[0] = 1`, `img[..., y:y + h, x:x + w] = 0`.
+
+        **There was no `__setitem__` at all**, so any assignment stopped with
+        `'Tensor' object does not support item assignment` — including
+        `borchvision`'s `erase`, which is one line of exactly this and is how
+        `RandomErasing` blanks its rectangle. The numpy core has had it all
+        along, so the two libraries disagreed about whether a tutorial line works.
+
+        Built out of `sliceScatter` from the inside out: narrow to the region on
+        each axis in turn, put the value in at the innermost, then scatter each
+        result back into its parent. Doing it as one scatter per axis
+        independently is the tempting shape and it is wrong — two axes scattered
+        separately write two whole bands rather than their intersection, and on
+        a square region the two agree.
+        """
+        self._refuse_inplace_on_leaf("__setitem__")
+        spans = self._spans(key)
+        region = self
+        for axis, (start, stop) in enumerate(spans):
+            region = wrap(region._h.narrow(axis, start, stop - start))
+        # **`value` is not always a number.** `borchvision.erase` is called both
+        # ways — a scalar fill and a `(C, h, w)` patch — and `float(value)` on the
+        # second turns into `only length-1 arrays can be converted to Python
+        # scalars`, an error about conversion in code about assignment.
+        if not isinstance(value, Tensor) and not isinstance(value, (int, float)):
+            import numpy as _numpy
+            value = tensor(_numpy.asarray(value, dtype=_numpy.float32))
+        if isinstance(value, Tensor):
+            # Broadcast to the region: multiplying by zero and adding is the
+            # cheapest thing that applies borch.ts's own broadcasting rules rather
+            # than keeping a second copy of them here.
+            src = wrap(region._h.binary("mul", handle(0.0))).__add__(value)
+        else:
+            from ._ops import full_like
+            src = full_like(region, float(value))
+
+        def put(dst, axis):
+            if axis == len(spans):
+                return src
+            start, stop = spans[axis]
+            inner = wrap(dst._h.narrow(axis, start, stop - start))
+            return wrap(dst._h.sliceScatter(
+                handle(put(inner, axis + 1)), axis, start, stop, 1))
+
+        return self._write_back(put(self, 0))
 
     def __getitem__(self, key):
         """`x[0]`, `x[1:3]`, `x[:, 1]`. The most common thing torch code does."""
