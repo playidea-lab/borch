@@ -114,21 +114,23 @@ PROBE = [
 ]
 
 # Where the core refuses the argument outright rather than accepting and ignoring it.
-# **That is a deliberate divergence, not a gap**: `size_average` and `reduce` are folded
-# away here (the reasoning is in `torch_signatures_core`), so old code passing them gets
-# a `TypeError` where torch gives a warning and an answer.
 #
-# Listed by name so the fold stays attested at the place a reader meets its consequence.
-# A row that stops being a refusal — because somebody added the parameter — fails below
-# rather than passing quietly into the "warns correctly" bucket.
-REFUSED = {
-    ("cross_entropy", "size_average"), ("cross_entropy", "reduce"),
-    ("nll_loss", "size_average"), ("nll_loss", "reduce"),
-    ("mse_loss", "size_average"), ("mse_loss", "reduce"),
-    ("l1_loss", "size_average"), ("binary_cross_entropy", "size_average"),
-    ("kl_div", "size_average"), ("smooth_l1_loss", "size_average"),
-    ("soft_margin_loss", "size_average"),
-}
+# **This set held eleven rows and is empty.** They were the deprecated
+# `size_average`/`reduce`, folded away on the ground that torch ignores them once
+# `reduction` is given. Measured, torch does the opposite — the pair wins over
+# `reduction` — and folding them also moved every later argument one or two seats
+# forward, so `F.l1_loss(a, b, 'sum')` returned the sum here and the mean in torch.
+#
+# So they went in, at torch's own seats, folded by `_ops._legacy_reduction` and warned
+# about in torch's own wording. **This file's message is what said how**: *"if it was
+# added on purpose, take the row out of REFUSED — and make sure it warns, because torch
+# does."* The instruction was written by somebody who expected to be wrong about this,
+# and it was followed exactly.
+#
+# The set is kept rather than deleted, for the reason the docstring above gives about
+# empty buckets: at zero it fails the day a refusal comes back, and a set that is not
+# there cannot.
+REFUSED = set()
 
 
 def _said(call, arg, value):

@@ -204,7 +204,21 @@ sys.path.insert(0, str(ROOT / "tests"))
 # `Tensor` namespace was one unjudged bucket, so the row did not exist to be wrong.
 # **A reason that is true about one thing, standing where a reason about another
 # belongs** — the same shape three times in this repository now.
-DEPRECATED = frozenset({"size_average", "reduce"})
+#
+# **The fold is gone, and this set is empty.** Not because folding was wrong in
+# principle but because there is nothing left to fold: the core carries
+# `size_average` and `reduce` now, at torch's own seats, so the two lists agree
+# without help. A fold exists to make comparable things that differ only in a way
+# nobody acts on, and its cost is that it hides a difference somebody might.
+#
+# Here it hid one. Removing the pair moved every later argument one or two seats
+# forward, so `F.l1_loss(a, b, 'sum')` gave the sum here and the mean in torch while
+# this table read `agree`. The fold was not the cause of that, but it was the reason
+# nothing said so.
+#
+# The names stay written down. Empty, this attests that the fold was considered and
+# retired; deleted, the next reader meets a table with no history and folds again.
+DEPRECATED = frozenset()
 DEPRECATED_IN = ("nn", "nn.functional")
 
 # **Where torch's docstring contradicts torch.**

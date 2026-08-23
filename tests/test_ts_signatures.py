@@ -134,7 +134,22 @@ SHIFTED = {
     # **Zero here does not mean borch.ts matches the core.** Nineteen rows are
     # `shorter` and nineteen `unaligned`. What is empty is the bucket where an
     # argument sits in another's seat, and that was the dangerous one.
-    "nn": 0,
+    #
+    # **0 → 17, and this is the bucket that was empty an hour ago.** The core took
+    # torch's deprecated `size_average` and `reduce` — they win over `reduction` in
+    # torch (measured), and leaving them out had moved every later argument one or
+    # two seats forward, so `F.l1_loss(a, b, 'sum')` gave the sum here and the mean
+    # there. Seventeen losses now carry the pair at torch's seats and borch.ts does
+    # not, so `new nn.L1Loss('sum')` sets `reduction` over there and `size_average`
+    # here.
+    #
+    # **Raised with the reason rather than held.** The paragraph in `SHORTER` below
+    # describes this mechanism and says the danger is only ever a number held still
+    # while the sides part — and it is worse here than in `shorter`, because a prefix
+    # refuses what it cannot reach and a shift answers. Closing it is borch.ts's
+    # side of the same edit; the peer session holding that library has been told
+    # which seventeen and where the seats are.
+    "nn": 17,
     # 1 → 2 → 1. `F.embedding_bag` moved `mode` from third to sixth on the core side,
     # and `F.embeddingBag` followed. **`tsc` named all eight call sites the instant it
     # moved** — five golden cases and the layer's own two — because a mode string does

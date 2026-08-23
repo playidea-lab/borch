@@ -5517,12 +5517,15 @@ def _refuse_loss_weight(where_, weight):
                      "the weights, so accepting it unused would change the loss")
 
 
-def l1_loss(input, target, reduction="mean", weight=None):  # noqa: A002
+def l1_loss(input, target, size_average=None, reduce=None, reduction="mean",
+            weight=None):  # noqa: A002  # noqa: A002
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     _refuse_loss_weight("l1_loss", weight)
     return _reduce((_wrap(input) - _wrap(target)).abs(), reduction)
 
 
-def smooth_l1_loss(input, target, reduction="mean", beta=1.0):  # noqa: A002
+def smooth_l1_loss(input, target, size_average=None, reduce=None, reduction="mean",
+                   beta=1.0):  # noqa: A002  # noqa: A002
     """Squared for small errors and absolute for large ones. Less shaken by
     outliers.
 
@@ -5538,6 +5541,7 @@ def smooth_l1_loss(input, target, reduction="mean", beta=1.0):  # noqa: A002
     what it uncovered was not. That is the third time in this repository that
     clearing a vague classification showed a specific defect beneath it.
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     diff = _wrap(input) - _wrap(target)
     small = _np.abs(diff.data) < beta
     return _reduce(where(Tensor(small), 0.5 * diff * diff / beta,
@@ -5550,6 +5554,45 @@ def smooth_l1_loss(input, target, reduction="mean", beta=1.0):  # noqa: A002
 # by its value becomes elementwise, a mean or a sum. Gathered in one place,
 # thirteen of them use the same rule — written per loss there are thirteen places
 # that can drift, and what actually differs is the three lines here.
+
+def _legacy_reduction(size_average, reduce, reduction):     # noqa: A002
+    """torch's deprecated `size_average`/`reduce`, folded into a `reduction`.
+
+    **These were left out on the ground that torch ignores them whenever `reduction`
+    is given. Measured, torch does the opposite** — the pair wins:
+
+        F.l1_loss(a, b, size_average=True, reduce=True, reduction='sum')
+            → the *mean*, not the sum
+
+    and the whole truth table is
+    `reduce=False → none`, else `size_average=False → sum`, else `mean`,
+    with `None` reading as `True` on both.
+
+    Leaving them out also moved every later argument one or two seats forward, so a
+    positional call meant two different things:
+
+        F.l1_loss(a, b, 'sum')   torch 2.5 (the mean, from the legacy path)
+                                 here 10.0 (the sum) — before this
+
+    `huber_loss` was the control that showed it: newer, no deprecated pair, third
+    seat really is `reduction`, and it agreed all along.
+
+    The warning is torch's own wording, so a caller who hits it can search for the
+    same sentence in torch's issues. `stacklevel` points at the caller rather than
+    at this helper — a deprecation notice naming a private function inside the
+    library is a notice nobody can act on.
+    """
+    if size_average is None and reduce is None:
+        return reduction
+    got = ("none" if reduce is False
+           else "sum" if size_average is False
+           else "mean")
+    _warnings.warn(
+        f"size_average and reduce args will be deprecated, "
+        f"please use reduction='{got}' instead.",
+        UserWarning, stacklevel=3)
+    return got
+
 
 def _reduce(out, reduction):
     if reduction == "none":
@@ -5589,7 +5632,8 @@ def huber_loss(input, target, reduction="mean", delta=1.0,   # noqa: A002
                          delta * (diff.abs() - 0.5 * delta)), reduction)
 
 
-def kl_div(input, target, reduction="mean", log_target=False):  # noqa: A002
+def kl_div(input, target, size_average=None, reduce=None, reduction="mean",
+           log_target=False):  # noqa: A002  # noqa: A002
     """`target · (log target − input)`. `input` has to be **already logged.**
 
     **`reduction` has four settings here.** `mean` divides by the element count
@@ -5598,6 +5642,7 @@ def kl_div(input, target, reduction="mean", log_target=False):  # noqa: A002
     coming release. The present values have to match, so the present rule is
     followed.
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     p, t = _wrap(input), _wrap(target)
     out = (t.exp() * (t - p)) if log_target else (t * (t.log() - p))
     if reduction == "batchmean":
@@ -5605,14 +5650,15 @@ def kl_div(input, target, reduction="mean", log_target=False):  # noqa: A002
     return _reduce(out, reduction)
 
 
-def poisson_nll_loss(input, target, log_input=True, full=False, eps=1e-8,
-                     reduction="mean"):
+def poisson_nll_loss(input, target, log_input=True, full=False, size_average=None,
+                     eps=1e-8, reduce=None, reduction="mean"):  # noqa: A002
     """The Poisson negative log likelihood.
 
     **The Stirling correction is added only where `target > 1`.** Added
     unconditionally it is wrong only where the target is small — confirmed by
     measurement (at targets of 0, 0.5 and 1 the difference is 0).
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     p, t = _wrap(input), _wrap(target)
     out = (p.exp() - t * p) if log_input else (p - t * (p + eps).log())
     if full:
@@ -5639,21 +5685,26 @@ def gaussian_nll_loss(input, target, var, full=False, eps=1e-6, reduction="mean"
     return _reduce(out, reduction)
 
 
-def margin_ranking_loss(input1, input2, target, margin=0.0, reduction="mean"):
+def margin_ranking_loss(input1, input2, target, margin=0.0, size_average=None,
+                        reduce=None, reduction="mean"):
     """`max(0, −y·(x₁ − x₂) + margin)`."""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     a, b, t = _wrap(input1), _wrap(input2), _wrap(target)
     return _reduce(relu(-t * (a - b) + margin), reduction)
 
 
-def cosine_embedding_loss(input1, input2, target, margin=0.0, reduction="mean"):
+def cosine_embedding_loss(input1, input2, target, margin=0.0, size_average=None,
+                          reduce=None, reduction="mean"):
     """`1 − cos` at `y=1` and `max(0, cos − margin)` at `y=−1`."""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     a, b, t = _wrap(input1), _wrap(input2), _wrap(target)
     cos = cosine_similarity(a, b, dim=1)
     same = Tensor((t.data > 0).astype(cos.data.dtype))
     return _reduce(same * (1 - cos) + (1 - same) * relu(cos - margin), reduction)
 
 
-def hinge_embedding_loss(input, target, margin=1.0, reduction="mean"):  # noqa: A002
+def hinge_embedding_loss(input, target, margin=1.0, size_average=None, reduce=None,
+                         reduction="mean"):  # noqa: A002  # noqa: A002
     """`x` itself at `y=1` and `max(0, margin − x)` at `y=−1`.
 
     **The two are added rather than branched between.** torch puts the margin term
@@ -5665,6 +5716,7 @@ def hinge_embedding_loss(input, target, margin=1.0, reduction="mean"):  # noqa: 
     taking ±1 alone is no guarantee that the values arriving are only those, and
     `sign()` produces 0.
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     p, t = _wrap(input), _wrap(target)
     dt = p.data.dtype
     not_one = Tensor((t.data != 1).astype(dt))
@@ -5672,9 +5724,10 @@ def hinge_embedding_loss(input, target, margin=1.0, reduction="mean"):  # noqa: 
     return _reduce(not_one * relu(margin - p) + not_neg * p, reduction)
 
 
-def soft_margin_loss(input, target, reduction="mean"):  # noqa: A002
+def soft_margin_loss(input, target, size_average=None, reduce=None, reduction="mean"):  # noqa: A002  # noqa: A002
     """`log(1 + e^{−y·x})`. The log and the exponential used directly overflow at
     large values, so it goes through `softplus`."""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     p, t = _wrap(input), _wrap(target)
     return _reduce(softplus(-t * p), reduction)
 
@@ -5705,12 +5758,13 @@ def pdist(input, p=2.0):
 
 
 def triplet_margin_loss(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
-                        swap=False, reduction="mean"):
+                        swap=False, size_average=None, reduce=None, reduction="mean"):
     """`max(0, d(a,p) − d(a,n) + margin)`.
 
     `swap` uses `min(d(a,n), d(p,n))` instead of `d(a,n)` — when the negative is
     closer to the positive, that is the harder pair.
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     a, pos, neg = _wrap(anchor), _wrap(positive), _wrap(negative)
     dp = pairwise_distance(a, pos, p=p, eps=eps)
     dn = pairwise_distance(a, neg, p=p, eps=eps)
@@ -5732,9 +5786,11 @@ def triplet_margin_with_distance_loss(anchor, positive, negative,
     return _reduce(relu(dp - dn + margin), reduction)
 
 
-def multilabel_soft_margin_loss(input, target, weight=None, reduction="mean"):  # noqa: A002
+def multilabel_soft_margin_loss(input, target, weight=None, size_average=None,
+                                reduce=None, reduction="mean"):  # noqa: A002  # noqa: A002
     """An independent binary classification per position, **averaged over the
     whole class set.**"""
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     p, t = _wrap(input), _wrap(target)
     each = t * logsigmoid(p) + (1 - t) * logsigmoid(-p)
     if weight is not None:
@@ -5742,13 +5798,15 @@ def multilabel_soft_margin_loss(input, target, weight=None, reduction="mean"):  
     return _reduce(-each.mean(dim=-1), reduction)
 
 
-def multi_margin_loss(input, target, p=1, margin=1.0, weight=None, reduction="mean"):  # noqa: A002
+def multi_margin_loss(input, target, p=1, margin=1.0, weight=None, size_average=None,
+                      reduce=None, reduction="mean"):  # noqa: A002  # noqa: A002
     """The margin between the correct position and the rest.
 
     **Divided by the class count** — not by the number of pairs compared. That
     means the correct position enters the denominator too, and dividing by the
     pair count gives 3/2 times the value at three classes.
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     x, t = _wrap(input), _wrap(target)
     n, classes = x.data.shape
     idx = _np.arange(n)
@@ -5762,13 +5820,15 @@ def multi_margin_loss(input, target, p=1, margin=1.0, weight=None, reduction="me
     return _reduce((each * Tensor(keep)).sum(dim=1) / classes, reduction)
 
 
-def multilabel_margin_loss(input, target, reduction="mean"):  # noqa: A002
+def multilabel_margin_loss(input, target, size_average=None, reduce=None,
+                           reduction="mean"):  # noqa: A002  # noqa: A002
     """**The target is a list of positions and −1 marks the end.**
 
     `[3, 0, -1, 1]` means "3 and 0 are correct" and the trailing 1 is not read.
     Without that convention, −1 gets counted as one of the classes or reading
     continues past the end.
     """
+    reduction = _legacy_reduction(size_average, reduce, reduction)
     x, t = _wrap(input), _wrap(target)
     rows, classes = x.data.shape
     total = None

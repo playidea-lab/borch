@@ -13,8 +13,8 @@ from ._base import (
     _DEFAULT_DTYPE, _like_torch, _math, _np, _unsupported,
 )
 from ._ops import (
-    _Namespace, _gelu, _pool_all, _reduce, _refuse_loss_weight, _renorm_rows,
-    _rng, _spread, _wrap,
+    _Namespace, _gelu, _legacy_reduction, _pool_all, _reduce,
+    _refuse_loss_weight, _renorm_rows, _rng, _spread, _wrap,
     adaptive_avg_pool1d,
     adaptive_avg_pool2d, adaptive_avg_pool3d, adaptive_max_pool1d,
     adaptive_max_pool2d, adaptive_max_pool3d, avg_pool1d, avg_pool2d, avg_pool3d,
@@ -655,7 +655,8 @@ class _WrittenLoss(Module):
     """
 
     def __init__(self, reduction="mean", *, weight=None, pos_weight=None,
-                 ignore_index=-100, label_smoothing=0.0):
+                 ignore_index=-100, label_smoothing=0.0,
+                 size_average=None, reduce=None):
         """**One signature for six losses is what torch does not do**, and the
         subclasses below override this with torch's own list each.
 
@@ -667,34 +668,40 @@ class _WrittenLoss(Module):
         every loss that has one. `CrossEntropyLoss(class_weights)` used to put the
         tensor into `reduction` and fail later with a numpy message about comparing
         a float32 array to a string; it says what is actually wrong now.
+
+        `size_average` and `reduce` are keyword-only *here* and positional in the
+        subclasses, for the same reason: this is the shared body, and where torch
+        puts them differs per loss.
         """
         super().__init__()
         if weight is not None:
             _unsupported(f"{type(self).__name__}(weight=…) — class weights")
         if pos_weight is not None:
             _unsupported(f"{type(self).__name__}(pos_weight=…)")
-        self.reduction = reduction
+        self.reduction = _legacy_reduction(size_average, reduce, reduction)
         self.ignore_index = ignore_index
         self.label_smoothing = label_smoothing
 
 
 class MSELoss(_WrittenLoss):
-    def __init__(self, reduction="mean"):
+    def __init__(self, size_average=None, reduce=None, reduction="mean"):
         """**torch's `MSELoss` has no `weight` at all**, and this offered one —
         keyword-only, and refused when given, but offered. An argument that only
         exists to say no is a wrong entry in the reference and in every editor's
         completion list, and this axis found it looking the other way for once."""
-        super().__init__(reduction)
+        super().__init__(size_average=size_average, reduce=reduce, reduction=reduction)
 
     def forward(self, pred, target):
         return _reduce((pred - target) ** 2, self.reduction)
 
 
 class BCEWithLogitsLoss(_WrittenLoss):
-    def __init__(self, weight=None, reduction="mean", pos_weight=None):
+    def __init__(self, weight=None, size_average=None, reduce=None, reduction="mean",
+                       pos_weight=None):
         """torch's order — and `pos_weight` is **last**, after `reduction`, which is
         the only loss that puts it there."""
-        super().__init__(reduction, weight=weight, pos_weight=pos_weight)
+        super().__init__(weight=weight, size_average=size_average, reduce=reduce,
+                         reduction=reduction, pos_weight=pos_weight)
 
     def forward(self, logits, target):
         # log(1+e^-|x|) + max(x,0) - x*t  — the form that stays safe at large values
@@ -704,10 +711,11 @@ class BCEWithLogitsLoss(_WrittenLoss):
 
 
 class BCELoss(_WrittenLoss):
-    def __init__(self, weight=None, reduction="mean"):
+    def __init__(self, weight=None, size_average=None, reduce=None, reduction="mean"):
         """torch's order. **No `pos_weight`** — that belongs to the logits form
         alone, and offering it here would be an argument torch does not have."""
-        super().__init__(reduction, weight=weight)
+        super().__init__(weight=weight, size_average=size_average, reduce=reduce,
+                         reduction=reduction)
 
     def forward(self, p, t):
         """**torch clamps the log, and this was adding an epsilon to the
@@ -753,15 +761,16 @@ class BCELoss(_WrittenLoss):
 
 
 class CrossEntropyLoss(_WrittenLoss):
-    def __init__(self, weight=None, ignore_index=-100, reduction="mean",
-                 label_smoothing=0.0):
+    def __init__(self, weight=None, size_average=None, ignore_index=-100, reduce=None,
+                       reduction="mean", label_smoothing=0.0):
         """torch's order: `weight` first, `reduction` **third.**
 
         This was `(reduction, *, weight, pos_weight)`, so the two arguments people
         actually pass to this constructor — class weights, and an index to skip —
         were either unreachable by position or landed on `reduction`.
         """
-        super().__init__(reduction, weight=weight, ignore_index=ignore_index,
+        super().__init__(weight=weight, size_average=size_average,
+                         ignore_index=ignore_index, reduce=reduce, reduction=reduction,
                          label_smoothing=label_smoothing)
 
     def forward(self, logits, target):
@@ -2793,12 +2802,20 @@ class Unflatten(Module):
 
 
 class L1Loss(_WrittenLoss):
-    def __init__(self, reduction="mean"):
+    def __init__(self, size_average=None, reduce=None, reduction="mean"):
         """No `weight` in torch either — the same correction as `MSELoss`."""
-        super().__init__(reduction)
+        super().__init__(size_average=size_average, reduce=reduce, reduction=reduction)
 
     def forward(self, pred, target):
-        return l1_loss(pred, target, self.reduction)
+        # **By keyword, and it was not.** `l1_loss`'s third seat became
+        # `size_average` when the deprecated pair went in, so `self.reduction` — a
+        # string — landed in a flag and the fold read it as truthy: every `L1Loss`
+        # reduced by the mean, whatever the caller asked for.
+        #
+        # It is the failure this commit's own docstrings warn about, committed by
+        # the commit that warns about it, and no signature check could see it. A
+        # value comparison against torch did.
+        return l1_loss(pred, target, reduction=self.reduction)
 
 
 class SmoothL1Loss(_WrittenLoss):
@@ -2815,8 +2832,11 @@ class SmoothL1Loss(_WrittenLoss):
     of our own libraries can never tell apart. It took asking real torch.
     """
 
-    def __init__(self, reduction="mean", beta=1.0):
-        super().__init__(reduction)
+    def __init__(self, size_average=None, reduce=None, reduction="mean", beta=1.0):
+        # `beta` is this loss's own and the base does not take it — the shared body
+        # holds what six losses share, and `beta` is one loss's.
+        super().__init__(size_average=size_average, reduce=reduce,
+                         reduction=reduction)
         self.beta = beta
 
     def forward(self, pred, target):
@@ -2830,9 +2850,11 @@ class SmoothL1Loss(_WrittenLoss):
 
 
 class NLLLoss(_WrittenLoss):
-    def __init__(self, weight=None, ignore_index=-100, reduction="mean"):
+    def __init__(self, weight=None, size_average=None, ignore_index=-100, reduce=None,
+                       reduction="mean"):
         """torch's order — `weight`, then `ignore_index`, then `reduction`."""
-        super().__init__(reduction, weight=weight, ignore_index=ignore_index)
+        super().__init__(weight=weight, size_average=size_average,
+                         ignore_index=ignore_index, reduce=reduce, reduction=reduction)
 
     def forward(self, log_probs, target):
         idx = target.data.astype(int)
@@ -3605,10 +3627,19 @@ class _GeneratedLoss(Module):
         return f"{type(self).__name__}()"
 
 
-# Each row is **torch's own parameter list, in torch's order**, with the deprecated
-# `size_average` and `reduce` left out — torch documents both as dead and ignores them
-# whenever `reduction` is given, and keeping them would put two arguments nobody
-# passes in front of the ones everybody does.
+# Each row is **torch's own parameter list, in torch's order**, including the
+# deprecated `size_average` and `reduce`.
+#
+# **They were left out, on the ground that torch ignores them whenever `reduction` is
+# given. Measured, torch does the opposite** — the pair wins, and leaving them out
+# moved every later argument one or two seats forward, so `L1Loss('sum')` meant the
+# sum here and the mean in torch. The reason was written before it was checked and it
+# was checked by `_ops._legacy_reduction`, which now holds the fold.
+#
+# `PoissonNLLLoss` is why the pair is written per row rather than inserted by a rule:
+# torch puts `size_average` between `full` and `eps` and `reduce` after `eps`, so the
+# two are **not adjacent**. A rule that put them side by side would be right about
+# eleven of these thirteen.
 #
 # `"*"` marks the point after which torch takes keyword arguments only, and two of
 # these have one at the very front: `GaussianNLLLoss` and
@@ -3616,26 +3647,37 @@ class _GeneratedLoss(Module):
 # Following that is the difference between a subset you can practise on and one that
 # teaches a call real torch will reject.
 _LOSSES = (
+    # `HuberLoss` is the one with no deprecated pair — torch never gave it one, and
+    # it is the control that showed the others were wrong: its third seat really is
+    # `reduction` and it agreed with torch all along while the rest did not.
     ("HuberLoss", "huber_loss", ("reduction='mean'", "delta=1.0")),
-    ("KLDivLoss", "kl_div", ("reduction='mean'", "log_target=False")),
+    ("KLDivLoss", "kl_div",
+     ("size_average=None", "reduce=None", "reduction='mean'", "log_target=False")),
     ("PoissonNLLLoss", "poisson_nll_loss",
-     ("log_input=True", "full=False", "eps=1e-8", "reduction='mean'")),
+     ("log_input=True", "full=False", "size_average=None", "eps=1e-8",
+      "reduce=None", "reduction='mean'")),
     ("GaussianNLLLoss", "gaussian_nll_loss",
      ("*", "full=False", "eps=1e-6", "reduction='mean'")),
-    ("MarginRankingLoss", "margin_ranking_loss", ("margin=0.0", "reduction='mean'")),
+    ("MarginRankingLoss", "margin_ranking_loss",
+     ("margin=0.0", "size_average=None", "reduce=None", "reduction='mean'")),
     ("CosineEmbeddingLoss", "cosine_embedding_loss",
-     ("margin=0.0", "reduction='mean'")),
-    ("HingeEmbeddingLoss", "hinge_embedding_loss", ("margin=1.0", "reduction='mean'")),
-    ("SoftMarginLoss", "soft_margin_loss", ("reduction='mean'",)),
+     ("margin=0.0", "size_average=None", "reduce=None", "reduction='mean'")),
+    ("HingeEmbeddingLoss", "hinge_embedding_loss",
+     ("margin=1.0", "size_average=None", "reduce=None", "reduction='mean'")),
+    ("SoftMarginLoss", "soft_margin_loss",
+     ("size_average=None", "reduce=None", "reduction='mean'")),
     ("TripletMarginLoss", "triplet_margin_loss",
-     ("margin=1.0", "p=2.0", "eps=1e-6", "swap=False", "reduction='mean'")),
+     ("margin=1.0", "p=2.0", "eps=1e-6", "swap=False", "size_average=None",
+      "reduce=None", "reduction='mean'")),
     ("TripletMarginWithDistanceLoss", "triplet_margin_with_distance_loss",
      ("*", "distance_function=None", "margin=1.0", "swap=False", "reduction='mean'")),
     ("MultiLabelSoftMarginLoss", "multilabel_soft_margin_loss",
-     ("weight=None", "reduction='mean'")),
+     ("weight=None", "size_average=None", "reduce=None", "reduction='mean'")),
     ("MultiMarginLoss", "multi_margin_loss",
-     ("p=1", "margin=1.0", "weight=None", "reduction='mean'")),
-    ("MultiLabelMarginLoss", "multilabel_margin_loss", ("reduction='mean'",)),
+     ("p=1", "margin=1.0", "weight=None", "size_average=None", "reduce=None",
+      "reduction='mean'")),
+    ("MultiLabelMarginLoss", "multilabel_margin_loss",
+     ("size_average=None", "reduce=None", "reduction='mean'")),
 )
 
 
@@ -3990,8 +4032,8 @@ class _Functional(_Namespace):
     layer_norm = staticmethod(layer_norm)
     embedding = staticmethod(embedding)
     @staticmethod
-    def nll_loss(input, target, weight=None, ignore_index=-100,   # noqa: A002
-                 reduction="mean"):
+    def nll_loss(input, target, weight=None, size_average=None,   # noqa: A002
+                 ignore_index=-100, reduce=None, reduction="mean"):
         """torch's list, and **the work was already next door.**
 
         This was `staticmethod(nll_loss)` — the bare `_ops` function, which takes
@@ -4009,8 +4051,10 @@ class _Functional(_Namespace):
 
         By keyword, for the reason `cross_entropy`'s docstring gives.
         """
-        return NLLLoss(weight=weight, ignore_index=ignore_index,
+        return NLLLoss(weight=weight, size_average=size_average,
+                       ignore_index=ignore_index, reduce=reduce,
                        reduction=reduction)(input, target)
+
     l1_loss = staticmethod(l1_loss)
     smooth_l1_loss = staticmethod(smooth_l1_loss)
     pad = staticmethod(pad)
@@ -4034,21 +4078,27 @@ class _Functional(_Namespace):
     # positional call is a silent bet that the callee's parameter order never moves,
     # and this file has just moved six of them.
     @staticmethod
-    def mse_loss(input, target, reduction="mean", weight=None):   # noqa: A002
+    def mse_loss(input, target, size_average=None, reduce=None, reduction="mean",
+                 weight=None):  # noqa: A002   # noqa: A002
         """`weight` — the seat is torch's and the value is refused, for the reason
         `_ops._refuse_loss_weight` gives."""
+        reduction = _legacy_reduction(size_average, reduce, reduction)
         _refuse_loss_weight("mse_loss", weight)
         return MSELoss(reduction=reduction)(input, target)
 
     @staticmethod
-    def binary_cross_entropy_with_logits(logits, target, weight=None,
+    def binary_cross_entropy_with_logits(input, target, weight=None,   # noqa: A002
+                                         size_average=None, reduce=None,
                                          reduction="mean", pos_weight=None):
-        return BCEWithLogitsLoss(weight=weight, reduction=reduction,
-                                 pos_weight=pos_weight)(logits, target)
+        return BCEWithLogitsLoss(weight=weight, size_average=size_average,
+                                 reduce=reduce, reduction=reduction,
+                                 pos_weight=pos_weight)(input, target)
 
     @staticmethod
-    def binary_cross_entropy(p, target, weight=None, reduction="mean"):
-        return BCELoss(weight=weight, reduction=reduction)(p, target)
+    def binary_cross_entropy(input, target, weight=None,   # noqa: A002
+                             size_average=None, reduce=None, reduction="mean"):
+        return BCELoss(weight=weight, size_average=size_average, reduce=reduce,
+                       reduction=reduction)(input, target)
 
     @staticmethod
     def linear(input, weight, bias=None):
@@ -4059,8 +4109,9 @@ class _Functional(_Namespace):
     max_pool2d = staticmethod(max_pool2d)
 
     @staticmethod
-    def cross_entropy(logits, target, weight=None, ignore_index=-100,
-                      reduction="mean", label_smoothing=0.0):
+    def cross_entropy(input, target, weight=None, size_average=None,   # noqa: A002
+                      ignore_index=-100, reduce=None, reduction="mean",
+                      label_smoothing=0.0):
         """torch's argument list for the function form as well.
 
         **This read `CrossEntropyLoss(reduction)` — positionally.** The day the
@@ -4070,9 +4121,10 @@ class _Functional(_Namespace):
         is the argument for keywords at every internal call site: a positional call
         is a silent bet that the callee's order never moves.
         """
-        return CrossEntropyLoss(weight=weight, ignore_index=ignore_index,
+        return CrossEntropyLoss(weight=weight, size_average=size_average,
+                                ignore_index=ignore_index, reduce=reduce,
                                 reduction=reduction,
-                                label_smoothing=label_smoothing)(logits, target)
+                                label_smoothing=label_smoothing)(input, target)
 
 
 nn.functional = _Functional()
