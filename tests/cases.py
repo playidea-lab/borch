@@ -6952,6 +6952,24 @@ def norm_cases(inp=None):
     # **With a weight attached, a parameter has to be picked up.** The name is the state_dict key.
     cases.append((NORM_PREFIX + "nn.GroupNorm/파라미터 이름",
                   lambda L: " ".join(n for n, _ in L.nn.GroupNorm(3, 3).named_parameters())))
+    # **`affine` and `bias` are two different halves and the case above sees neither.**
+    # `affine=False` is no learnable scale or shift; `bias=False` keeps the scale and
+    # drops the shift. Both were absent from every normalisation layer here — thirteen
+    # of them — and the count in `test_torch_signatures_core.py` is what said so, because
+    # a layer built either way simply raised `TypeError` and no case had ever tried.
+    #
+    # The names are asked as well as the values: with `bias=False` torch's `state_dict`
+    # has one key where ours had two, so a checkpoint could not cross in strict mode.
+    # A value case alone would not have noticed — the arithmetic is right either way.
+    for _flag, _kw in (("affine=False", {"affine": False}), ("bias=False", {"bias": False})):
+        cases.append((NORM_PREFIX + f"nn.GroupNorm({_flag})",
+                      lambda L, k=_kw: L.nn.GroupNorm(3, 3, **k)(L.tensor(img))))
+        cases.append((NORM_PREFIX + f"nn.GroupNorm({_flag})/파라미터 이름",
+                      lambda L, k=_kw: " ".join(
+                          n for n, _ in L.nn.GroupNorm(3, 3, **k).named_parameters())))
+        cases.append((NORM_PREFIX + f"nn.BatchNorm2d({_flag})/파라미터 이름",
+                      lambda L, k=_kw: " ".join(
+                          n for n, _ in L.nn.BatchNorm2d(3, **k).named_parameters())))
 
     # ── InstanceNorm. Normalises separately per sample and per channel. ──
     add("F.instance_norm", lambda L, x: L.nn.functional.instance_norm(x), img)

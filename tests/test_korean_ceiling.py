@@ -103,7 +103,11 @@ CEILINGS = {
     # added on the Korean side of the case table because that is where the names live
     # and they are keys, not prose: the Python and TypeScript tables have to agree on
     # the string or the row reconciles against nothing. Same rule as the markers above.
-    "borch-ts/test": 3114,
+    # 3114 → 3126. Four golden case names carrying `파라미터 이름` (three characters
+    # each) for the `affine=False` and `bias=False` variants of `GroupNorm` and
+    # `BatchNorm2d`. Names, not prose: the Python and TypeScript tables have to agree
+    # on the string or the row reconciles against nothing.
+    "borch-ts/test": 3126,
 }
 
 

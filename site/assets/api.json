@@ -4,7 +4,7 @@
  "korean": {
   "done": 684,
   "stale": 0,
-  "missing": 76
+  "missing": 78
  },
  "modules": [
   {
@@ -7446,18 +7446,18 @@
      "members": [
       {
        "name": "weight",
-       "signature": "readonly weight: Tensor",
+       "signature": "readonly weight: Tensor | null",
        "doc": ""
       },
       {
        "name": "bias",
-       "signature": "readonly bias: Tensor",
+       "signature": "readonly bias: Tensor | null",
        "doc": ""
       },
       {
        "name": "constructor",
-       "signature": "constructor(numGroups: number, numChannels: number, eps?: number)",
-       "doc": ""
+       "signature": "constructor(numGroups: number, numChannels: number, eps?: number, affine?: boolean, useBias?: boolean)",
+       "doc": "**`affine` and `bias`, which this took neither of.** torch has both, and they\nare two different halves of the same idea: `affine=false` is the layer with no\nlearnable scale or shift at all, and `bias=false` keeps the scale and drops the\nshift. Without them the `stateDict` carried two keys torch's did not, so a\ncheckpoint written by a torch `GroupNorm(2, 4, affine=False)` could not be read\nhere in strict mode.\n\nThe signature axis had this counted across thirteen layers before anybody wrote\nit — the three `BatchNorm`s, the three `InstanceNorm`s, this, and the six lazy\nvariants. A counted absence is what makes the work happen."
       },
       {
        "name": "ownParameters",
@@ -8991,7 +8991,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(eps?: number, m?: number)",
+       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
        "doc": ""
       }
      ]
@@ -9004,7 +9004,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(eps?: number, m?: number)",
+       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
        "doc": ""
       }
      ]
@@ -9017,7 +9017,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(eps?: number, m?: number)",
+       "signature": "constructor(eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
        "doc": ""
       }
      ]
@@ -10338,12 +10338,12 @@
       },
       {
        "name": "weight",
-       "signature": "readonly weight: Tensor",
+       "signature": "readonly weight: Tensor | null",
        "doc": ""
       },
       {
        "name": "bias",
-       "signature": "readonly bias: Tensor",
+       "signature": "readonly bias: Tensor | null",
        "doc": ""
       },
       {
@@ -10360,8 +10360,8 @@
       },
       {
        "name": "constructor",
-       "signature": "constructor(channels: number, eps?: number, momentum?: number)",
-       "doc": ""
+       "signature": "constructor(channels: number, eps?: number, momentum?: number, affine?: boolean, trackRunningStats?: boolean, useBias?: boolean)",
+       "doc": "See `GroupNorm` on `affine` and `useBias`."
       },
       {
        "name": "ownParameters",

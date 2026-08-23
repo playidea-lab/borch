@@ -215,7 +215,10 @@ UNALIGNED = {
 # table, and it is deliberately a way that requires someone to write a sentence.
 RENAMED = {
     "Tensor": 30,
-    "nn": 19,   # +1, Bilinear arrived from `unaligned`: borch.ts spells the flag
+    # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
+    # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
+    # does in `LayerNorm`, `Bilinear` and the recurrent layers.
+    "nn": 20,   # +1, Bilinear arrived from `unaligned`: borch.ts spells the flag
                 #     `useBias`, as it already does in LayerNorm and the recurrent
                 #     layers, where the constructor has a `bias` field to not shadow
     "nn.functional": 1,
@@ -250,7 +253,15 @@ SHORTER = {
     # the split moved this number in opposite directions in the same window**, and it
     # is written with both reasons because a running total makes one of them
     # invisible.
-    "nn": 19,
+    # 19 → 18. `GroupNorm` left for `renamed` above.
+    #
+    # **The six lazy normalisation layers nearly landed in `unaligned` instead.**
+    # borch.ts declared them `(eps, m)` while the eager layers took five, so growing
+    # the core's list made them unalignable rather than short — three rows moving
+    # into the bucket that means *somebody has to read this*. They were given their
+    # target's list, which is the rule the core already derives automatically and
+    # borch.ts writes out by hand.
+    "nn": 18,
     "nn.functional": 0,
     # 0 → 1. `Adagrad`: the core grew torch's `maximize` and borch.ts has no place to
     # put it, so borch.ts takes a prefix. **The safe direction** — one argument too

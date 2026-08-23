@@ -3604,6 +3604,25 @@ function addNorm(out: Map<string, Case>, inp: Inputs): void {
   out.set("norm::nn.GroupNorm(3,3)", () => gn(3).call(inp.get("img")));
   out.set("norm::nn.GroupNorm/파라미터 이름",
     () => Object.keys(gn(3).namedParameters()).join(" "));
+  // **`affine` and `bias` are two different halves and the row above sees neither.**
+  // `affine=false` is no learnable scale or shift; `bias=false` keeps the scale and
+  // drops the shift. Neither existed on any of the thirteen normalisation layers
+  // here, so a layer built either way was a type error and no case had ever tried.
+  //
+  // The parameter names are asked as well as the values, because that is the half a
+  // value case cannot see: the arithmetic is right either way, and what goes wrong
+  // is a `stateDict` carrying a key torch's does not.
+  for (const [flag, affine, useBias] of
+    [["affine=False", false, true], ["bias=False", true, false]] as const) {
+    out.set(`norm::nn.GroupNorm(${flag})`,
+      () => new nn.GroupNorm(3, 3, 1e-5, affine, useBias).call(inp.get("img")));
+    out.set(`norm::nn.GroupNorm(${flag})/파라미터 이름`,
+      () => Object.keys(new nn.GroupNorm(3, 3, 1e-5, affine, useBias)
+        .namedParameters()).join(" "));
+    out.set(`norm::nn.BatchNorm2d(${flag})/파라미터 이름`,
+      () => Object.keys(new nn.BatchNormND(3, 1e-5, 0.1, affine, true, useBias)
+        .namedParameters()).join(" "));
+  }
 
   add("F.instance_norm", (x) => x.instanceNorm(), "img");
   for (const [nd, key] of [["1d", "nd_seq"], ["2d", "img"], ["3d", "nd_vol"]] as const) {
@@ -7136,7 +7155,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
       const x = inp.get("img", true);
       const bn = new nn.BatchNormND(3);
       bn.forward(x).sum().backward();
-      const leaf = which === "x" ? x : bn.weight;
+      const leaf = which === "x" ? x : bn.weight!;
       return gradOf(leaf, `BatchNorm2d/${which}`);
     });
     // **The `sum()` above hides half of BatchNorm's backward.** The input gradient is one
@@ -7148,7 +7167,7 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
       const x = inp.get("img", true);
       const bn = new nn.BatchNormND(3);
       seeded(bn.forward(x)).backward();
-      const leaf = which === "x" ? x : bn.weight;
+      const leaf = which === "x" ? x : bn.weight!;
       return gradOf(leaf, `BatchNorm2d(가중치)/${which}`);
     });
   }

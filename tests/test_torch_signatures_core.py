@@ -225,6 +225,16 @@ SHORTER = {
     # not: that table counts names, `Embedding` was present, and `nn` read 95%.
     # `EmbeddingBag` next door had carried torch's full list all along, so the two
     # neighbours disagreed about the same five arguments and nothing said so.
+    # **Still 57, and it dropped to 44 for an hour on the way here.** The thirteen
+    # normalisation layers took torch's `affine`, `track_running_stats` and `bias`,
+    # and briefly took `device` and `dtype` as well — which made them `agree` and
+    # this number fall. `LayerNorm` next door does not carry those two, and
+    # following torch past the repository's own settled choice would have put five
+    # rows on the borch.ts axis into `unaligned` to take thirteen out of here.
+    #
+    # So the count staying put is the right outcome and not a failure to improve:
+    # what these thirteen are short of now is `device` and `dtype` alone, which is
+    # what every layer in this bucket is short of.
     "nn": 57,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
@@ -406,7 +416,23 @@ def test_the_measurement_still_runs_as_a_script():
 # `InstanceNorm{1,2,3}d` and the six Lazy variants — `BatchNorm1d(..., *, bias=True)`.
 # Six more are `Adam`'s. None of them is fixed by this commit; they are made
 # countable by it, which is the difference between an absence and a silence.
-KEYWORD_ONLY_ABSENCES = 54
+# 54 → 41. **Thirteen of the thirteen `bias` flags are paid** — the three
+# `BatchNorm`s, the three `InstanceNorm`s, `GroupNorm` and the six lazy variants all
+# take it now, and `affine` came with it because the two are halves of one idea:
+# `affine=False` is no learnable scale or shift at all, `bias=False` keeps the scale
+# and drops the shift. Checked against real torch over 24 configurations, worst
+# difference 7.8e-07, and the `state_dict` keys match in every one.
+#
+# **The number is why it happened.** The absence had been sitting in this file since
+# `positional()` was written, as a count rather than as a paragraph, and a count is
+# something somebody eventually pays.
+#
+# The 41 left are a different kind and it is worth saying so rather than leaving them
+# to read as the same backlog: about thirty are torch's execution switches —
+# `foreach`, `capturable`, `differentiable`, `fused` — which change no value and are
+# absences in name only. The ones that do change values are `maximize` on eight
+# optimizers and `Adam`'s `decoupled_weight_decay`, and those are work.
+KEYWORD_ONLY_ABSENCES = 41
 
 
 def _keyword_only_gaps():

@@ -1736,8 +1736,16 @@ for _dims in (1, 2, 3):
         globals()[_pad_name] = _pad_layer(_pad_name)
 
 
-def _batchnorm(n, eps=1e-5, momentum=0.1):
-    return _layer("BatchNormND", n, eps, momentum)
+def _batchnorm(n, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True, *,
+               bias=True):
+    """torch's list. `affine` and `bias` are the two halves of the same idea —
+    `affine=False` is no learnable scale or shift at all, `bias=False` keeps the
+    scale and drops the shift. Neither crossed before, so a checkpoint from a torch
+    layer built either way could not be read here in strict mode."""
+    if not track_running_stats:
+        from borch._base import _unsupported
+        _unsupported("BatchNorm with track_running_stats=False")
+    return _layer("BatchNormND", n, eps, momentum, bool(affine), True, bool(bias))
 
 
 BatchNorm1d = BatchNorm2d = BatchNorm3d = _batchnorm
@@ -2008,22 +2016,30 @@ class GroupNorm(Module):
     """Normalise with the channels gathered into groups. It carries weights, so
     a `Module` rather than a `_Wrap`."""
 
-    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
+    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True, *,
+                 bias=True):
+        """`bias=False` keeps the scale and drops the shift — torch's, and the
+        half of `affine` that was missing on every normalisation layer here."""
         super().__init__()
         import numpy as _np
 
         self.num_groups, self.eps = num_groups, eps
         if affine:
             self.weight = Parameter(_np.ones(num_channels, dtype=_np.float32))
-            self.bias = Parameter(_np.zeros(num_channels, dtype=_np.float32))
+            if bias:
+                self.bias = Parameter(_np.zeros(num_channels, dtype=_np.float32))
 
     def forward(self, x):
         h = handle(x)
-        out = h.groupNorm(self.num_groups, self.eps)
-        if getattr(self, "weight", None) is None:
-            return wrap(out)
-        shape = [1, int(handle(self.weight).size)] + [1] * (len(h.shape) - 2)
-        return (wrap(out) * self.weight.reshape(*shape)) + self.bias.reshape(*shape)
+        out = wrap(h.groupNorm(self.num_groups, self.eps))
+        weight = getattr(self, "weight", None)
+        shift = getattr(self, "bias", None)
+        width = int(handle(weight if weight is not None else shift).size) \
+            if (weight is not None or shift is not None) else 0
+        shape = [1, width] + [1] * (len(h.shape) - 2)
+        if weight is not None:
+            out = out * weight.reshape(*shape)
+        return out if shift is None else out + shift.reshape(*shape)
 
 
 class _InstanceNorm(Module):
@@ -2041,7 +2057,8 @@ class _InstanceNorm(Module):
     """
 
     def __init__(self, num_features=0, eps=1e-5, momentum=0.1, affine=False,
-                 track_running_stats=False):
+                 track_running_stats=False, *, bias=True):
+        """See `GroupNorm` on `bias`."""
         super().__init__()
         if track_running_stats:
             # Registering the buffers without the forward pass using them makes
@@ -2052,7 +2069,8 @@ class _InstanceNorm(Module):
         self.eps = eps
         if affine:
             self.weight = Parameter(_np.ones(num_features, dtype=_np.float32))
-            self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
+            if bias:
+                self.bias = Parameter(_np.zeros(num_features, dtype=_np.float32))
 
     def forward(self, x):
         h = handle(x)

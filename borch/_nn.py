@@ -960,11 +960,33 @@ class BatchNorm2d(Module):
     """This batch during training and the accumulated values during evaluation —
     the layer eval() changes in chapter 6."""
 
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                 track_running_stats=True, *, bias=True):
+        """torch's `affine` and `bias`, which this took neither of.
+
+        `affine=False` is the layer with no learnable scale or shift at all —
+        common enough that torch makes it a positional argument — and `bias=True`
+        is the *other* half of it, keeping the scale and dropping the shift.
+        Neither was here, so `BatchNorm2d(3, affine=False)` was a `TypeError` and
+        the `state_dict` had two keys torch's did not.
+
+        `bias` is keyword-only, as it is in torch, and it only means anything under
+        `affine`: torch builds no bias when either is off. The signature axis
+        counted this absence across thirteen layers — three `BatchNorm`s, three
+        `InstanceNorm`s, `GroupNorm` and the six lazy variants — and the count is
+        what made it work rather than a note somebody would meet later.
+        """
         super().__init__()
-        self.eps, self.momentum = eps, momentum
-        self.weight = Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
-        self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+        if not track_running_stats:
+            # The forward pass reads the buffers in evaluation mode, so ignoring
+            # this would leave training right and evaluation quietly wrong — the
+            # shape `_InstanceNorm` next door already refuses for the same reason.
+            _unsupported(f"{type(self).__name__} with track_running_stats=False")
+        self.eps, self.momentum, self.affine = eps, momentum, affine
+        self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
+                       if affine else None)
+        self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+                     if affine and bias else None)
         self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
         self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
         self.register_buffer("num_batches_tracked", 0)
@@ -1996,14 +2018,15 @@ class GroupNorm(Module):
     independent of the batch size.
     """
 
-    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True):
+    def __init__(self, num_groups, num_channels, eps=1e-5, affine=True, *,
+                 bias=True):
+        """See `BatchNorm2d` on `bias` — it drops the shift and keeps the scale."""
         super().__init__()
         self.num_groups, self.num_channels, self.eps = num_groups, num_channels, eps
-        if affine:
-            self.weight = Parameter(_np.ones(num_channels, dtype=_DEFAULT_DTYPE))
-            self.bias = Parameter(_np.zeros(num_channels, dtype=_DEFAULT_DTYPE))
-        else:
-            self.weight = self.bias = None
+        self.weight = (Parameter(_np.ones(num_channels, dtype=_DEFAULT_DTYPE))
+                       if affine else None)
+        self.bias = (Parameter(_np.zeros(num_channels, dtype=_DEFAULT_DTYPE))
+                     if affine and bias else None)
 
     def forward(self, x):
         return group_norm(x, self.num_groups, self.weight, self.bias, self.eps)
@@ -2019,14 +2042,14 @@ class _InstanceNorm(Module):
     """
 
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=False,
-                 track_running_stats=False):
+                 track_running_stats=False, *, bias=True):
+        """See `BatchNorm2d` on `bias`."""
         super().__init__()
         self.num_features, self.eps = num_features, eps
-        if affine:
-            self.weight = Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
-            self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
-        else:
-            self.weight = self.bias = None
+        self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
+                       if affine else None)
+        self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+                     if affine and bias else None)
         # **An argument accepted and unused becomes a lie.**
         #
         # Given `track_running_stats=True`, torch registers three running
@@ -2490,11 +2513,17 @@ class NLLLoss(_Loss):
 
 
 class BatchNorm1d(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                 track_running_stats=True, *, bias=True):
+        """See `BatchNorm2d` on `affine` and `bias`."""
         super().__init__()
-        self.eps, self.momentum = eps, momentum
-        self.weight = Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
-        self.bias = Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+        if not track_running_stats:
+            _unsupported("BatchNorm1d with track_running_stats=False")
+        self.eps, self.momentum, self.affine = eps, momentum, affine
+        self.weight = (Parameter(_np.ones(num_features, dtype=_DEFAULT_DTYPE))
+                       if affine else None)
+        self.bias = (Parameter(_np.zeros(num_features, dtype=_DEFAULT_DTYPE))
+                     if affine and bias else None)
         self.register_buffer("running_mean", _np.zeros(num_features, dtype=_DEFAULT_DTYPE))
         self.register_buffer("running_var", _np.ones(num_features, dtype=_DEFAULT_DTYPE))
         self.register_buffer("num_batches_tracked", 0)
@@ -2514,7 +2543,9 @@ class BatchNorm1d(Module):
         else:
             normed = ((x - Tensor(self.running_mean))
                       / Tensor(_np.sqrt(self.running_var + self.eps)))
-        return normed * self.weight + self.bias
+        if self.weight is not None:
+            normed = normed * self.weight
+        return normed if self.bias is None else normed + self.bias
 
 
 # ---- the 1-D and 3-D families

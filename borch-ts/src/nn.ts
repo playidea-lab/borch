@@ -1071,28 +1071,47 @@ export class PReLU extends Module {
  * independent of batch size.
  */
 export class GroupNorm extends Module {
-  readonly weight: Tensor;
-  readonly bias: Tensor;
+  readonly weight: Tensor | null;
+  readonly bias: Tensor | null;
 
+  /**
+   * **`affine` and `bias`, which this took neither of.** torch has both, and they
+   * are two different halves of the same idea: `affine=false` is the layer with no
+   * learnable scale or shift at all, and `bias=false` keeps the scale and drops the
+   * shift. Without them the `stateDict` carried two keys torch's did not, so a
+   * checkpoint written by a torch `GroupNorm(2, 4, affine=False)` could not be read
+   * here in strict mode.
+   *
+   * The signature axis had this counted across thirteen layers before anybody wrote
+   * it — the three `BatchNorm`s, the three `InstanceNorm`s, this, and the six lazy
+   * variants. A counted absence is what makes the work happen.
+   */
   constructor(
     private readonly numGroups: number,
     numChannels: number,
     private readonly eps = 1e-5,
+    affine = true,
+    useBias = true,
   ) {
     super();
-    this.weight = Tensor.owned([numChannels], 1);
-    this.bias = Tensor.owned([numChannels], 0);
-    this.claim(this.weight, this.bias);
+    this.weight = affine ? Tensor.owned([numChannels], 1) : null;
+    this.bias = affine && useBias ? Tensor.owned([numChannels], 0) : null;
+    this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return { weight: this.weight, bias: this.bias };
+    const out: Record<string, Tensor> = {};
+    if (this.weight) out["weight"] = this.weight;
+    if (this.bias) out["bias"] = this.bias;
+    return out;
   }
 
   override forward(x: Tensor): Tensor {
-    const shape = [1, this.weight.size, ...new Array<number>(x.shape.length - 2).fill(1)];
-    return x.groupNorm(this.numGroups, this.eps)
-      .mul(this.weight.reshape(shape)).add(this.bias.reshape(shape));
+    const width = this.weight?.size ?? this.bias?.size ?? 0;
+    const shape = [1, width, ...new Array<number>(x.shape.length - 2).fill(1)];
+    let out = x.groupNorm(this.numGroups, this.eps);
+    if (this.weight) out = out.mul(this.weight.reshape(shape));
+    return this.bias ? out.add(this.bias.reshape(shape)) : out;
   }
 }
 
@@ -2342,25 +2361,47 @@ export class LazyConvTranspose3d extends LazyConvBase {
   constructor(...a: ConvArgs) { super(3, true, ...a); }
 }
 
+/**
+ * **A lazy layer takes its target's arguments, minus the one it infers.** These
+ * took `(eps, m)` while the eager layers took five, so `LazyBatchNorm2d(1e-5, 0.1,
+ * false)` — a layer built with no affine parameters — was a type error, and the
+ * signature axis read six rows as unalignable rather than as short.
+ *
+ * The core derives the list from the target automatically; here it is written out,
+ * so the two have to be kept level by hand. That is worth one comment: **the six
+ * names below are the only place in this file where a signature is a copy of
+ * another signature**, and `tests/ts_signatures.py` is what notices when the copy
+ * stops matching.
+ */
 class LazyNormBase extends LazyModule {
   constructor(kind: "batch" | "instance", spatial: number, eps = 1e-5,
-              momentum = 0.1) {
+              momentum = 0.1, affine = true, trackRunningStats = true,
+              useBias = true) {
     super(`Lazy${kind === "batch" ? "BatchNorm" : "InstanceNorm"}${spatial}d`,
       (c) => (kind === "batch"
-        ? new BatchNormND(c, eps, momentum)
+        ? new BatchNormND(c, eps, momentum, affine, trackRunningStats, useBias)
         : new InstanceNormND(eps)),
       channels);
   }
 }
 
 export class LazyBatchNorm1d extends LazyNormBase {
-  constructor(eps?: number, m?: number) { super("batch", 1, eps, m); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, useBias?: boolean) {
+    super("batch", 1, eps, momentum, affine, trackRunningStats, useBias);
+  }
 }
 export class LazyBatchNorm2d extends LazyNormBase {
-  constructor(eps?: number, m?: number) { super("batch", 2, eps, m); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, useBias?: boolean) {
+    super("batch", 2, eps, momentum, affine, trackRunningStats, useBias);
+  }
 }
 export class LazyBatchNorm3d extends LazyNormBase {
-  constructor(eps?: number, m?: number) { super("batch", 3, eps, m); }
+  constructor(eps?: number, momentum?: number, affine?: boolean,
+              trackRunningStats?: boolean, useBias?: boolean) {
+    super("batch", 3, eps, momentum, affine, trackRunningStats, useBias);
+  }
 }
 export class LazyInstanceNorm1d extends LazyNormBase {
   constructor(eps?: number) { super("instance", 1, eps); }
@@ -3517,8 +3558,8 @@ export function gumbelSoftmax(
 }
 
 export class BatchNormND extends Module {
-  readonly weight: Tensor;
-  readonly bias: Tensor;
+  readonly weight: Tensor | null;
+  readonly bias: Tensor | null;
   readonly runningMean: Tensor;
   readonly runningVar: Tensor;
   /**
@@ -3549,15 +3590,25 @@ export class BatchNormND extends Module {
    */
   private trackedBase: Tensor | null = null;
 
+  /** See `GroupNorm` on `affine` and `useBias`. */
   constructor(
     readonly channels: number,
     private readonly eps = 1e-5,
     private readonly momentum = 0.1,
+    affine = true,
+    trackRunningStats = true,
+    useBias = true,
   ) {
     super();
-    this.weight = Tensor.owned([channels], 1);
-    this.bias = Tensor.owned([channels], 0);
-    this.claim(this.weight, this.bias);
+    if (!trackRunningStats) {
+      // The forward pass reads the running statistics in eval mode, so accepting
+      // this and ignoring it leaves training right and evaluation quietly wrong.
+      throw new Error(
+        "BatchNorm with trackRunningStats=false is not here yet.");
+    }
+    this.weight = affine ? Tensor.owned([channels], 1) : null;
+    this.bias = affine && useBias ? Tensor.owned([channels], 0) : null;
+    this.claim(...[this.weight, this.bias].filter((t): t is Tensor => t !== null));
     this.runningMean = Tensor.owned([channels], 0);
     this.runningVar = Tensor.owned([channels], 1);
     // The running statistics take no gradient, and **still have to survive the scope
@@ -3567,7 +3618,10 @@ export class BatchNormND extends Module {
   }
 
   override ownParameters(): Record<string, Tensor> {
-    return { weight: this.weight, bias: this.bias };
+    const out: Record<string, Tensor> = {};
+    if (this.weight) out["weight"] = this.weight;
+    if (this.bias) out["bias"] = this.bias;
+    return out;
   }
 
   /**
