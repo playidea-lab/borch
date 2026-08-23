@@ -3592,7 +3592,15 @@ def median(t, dim=None, keepdim=False):
     return _MinMax(t._make(picked, (t,), back_dim, "MedianBackward0"), Tensor(take))
 
 
-def norm(t, p=2, dim=None, dtype=None):
+def norm(t, p=2, dim=None, keepdim=False, dtype=None):
+    """torch's order — `keepdim` between `dim` and `dtype`.
+
+    **It was missing from the middle**, so `x.norm(2, 1, True)` set the dtype to
+    `True` and folded the axis away; every later argument was one seat out. It
+    reaches all six branches of `p` rather than the two common ones, because a
+    reduction that keeps its rank for `p=2` and drops it for `p=inf` is a shape that
+    changes with a hyperparameter.
+    """
     t = _wrap(t)
     # **The dtype is converted before computing** — torch does that (measured:
     # a float32 asked with `dtype=float64` answers in float64). Converted after
@@ -3605,18 +3613,20 @@ def norm(t, p=2, dim=None, dtype=None):
         "integer cell. Call `.float()` first.",
         "linalg.vector_norm: Expected a floating point or complex tensor as input")
     if p == 1:
-        return t.abs().sum(dim=dim)
+        return t.abs().sum(dim=dim, keepdim=keepdim)
     if p == 2:
-        return (t * t).sum(dim=dim) ** 0.5
+        return (t * t).sum(dim=dim, keepdim=keepdim) ** 0.5
     # **`p` arrives as more than 1 and 2.** Everything else was counted as 2 for
     # a long time — `dist(a, b, 3)` handed back the L2 and the value was plausible
     # (the same order of magnitude), so it went unseen. `inf` is the largest
     # absolute value, `-inf` the smallest, and `0` the count of non-zeros
     # (measured).
     if p == float("inf"):
-        return t.abs().max(dim=dim) if dim is None else t.abs().amax(dim=dim)
+        return (t.abs().max(dim=dim) if dim is None
+                else t.abs().amax(dim=dim, keepdim=keepdim))
     if p == -float("inf"):
-        return t.abs().min(dim=dim) if dim is None else t.abs().amin(dim=dim)
+        return (t.abs().min(dim=dim) if dim is None
+                else t.abs().amin(dim=dim, keepdim=keepdim))
     if p == 0:
         # **`t * 0` is added to carry the graph through.** Counting is a step, so
         # the derivative is 0, and 0 is the right answer rather than "absent".
@@ -3625,8 +3635,9 @@ def norm(t, p=2, dim=None, dtype=None):
         # only difference is that 0 accumulates here and None stays there, and
         # added into a loss the effect on training is the same. **Stopping is the
         # furthest of the three from right.**
-        return (t != 0).float().sum(dim=dim) + (t * 0).sum(dim=dim)
-    return (t.abs() ** float(p)).sum(dim=dim) ** (1.0 / float(p))
+        return ((t != 0).float().sum(dim=dim, keepdim=keepdim)
+                + (t * 0).sum(dim=dim, keepdim=keepdim))
+    return (t.abs() ** float(p)).sum(dim=dim, keepdim=keepdim) ** (1.0 / float(p))
 
 
 # ---- the rest of the reductions
@@ -4065,9 +4076,44 @@ def argsort(t, dim=-1, descending=False):
     return sort(t, dim, descending).indices
 
 
-def unique(t, sorted=True, return_counts=False):
-    values, counts = _np.unique(_wrap(t).data, return_counts=True)
-    return (Tensor(values), Tensor(counts)) if return_counts else Tensor(values)
+def unique(t, sorted=True, return_inverse=False, return_counts=False, dim=None):
+    """torch's order — `return_inverse` **second**, and `dim` last.
+
+    **Two arguments were missing from the middle**, so `x.unique(True, True)` asked
+    for the inverse in torch and for the counts here: the same call, a different
+    tuple, and both sides return something plausible.
+
+    ## What `sorted=False` is, and is not
+
+    torch documents it as *may return the elements in a different order*, and its CPU
+    path sorts regardless. numpy always sorts. So the argument changes nothing here,
+    changes nothing in torch on the CPU, and **is not refused** — it is honoured to
+    exactly the degree torch honours it. Said out loud because a reader who sees it
+    accepted would otherwise assume it does something.
+
+    ## The inverse indexes the sorted values
+
+    `values[inverse]` rebuilds the input, and that holds only because the values are
+    sorted. torch's inverse means the same thing.
+    """
+    data = _wrap(t).data
+    if dim is None:
+        values, inverse, counts = _np.unique(
+            data, return_inverse=True, return_counts=True)
+        # **numpy shapes the inverse like the input and torch flattens first.**
+        # Measured: a (2, 3) input gives torch a (6,) inverse and numpy a (2, 3) one.
+        # A shape difference nothing else in this file would have looked at.
+        inverse = inverse.reshape(-1)
+    else:
+        values, inverse, counts = _np.unique(
+            data, axis=dim, return_inverse=True, return_counts=True)
+        inverse = inverse.reshape(-1)
+    out = (Tensor(values),)
+    if return_inverse:
+        out += (Tensor(inverse),)
+    if return_counts:
+        out += (Tensor(counts),)
+    return out[0] if len(out) == 1 else out
 
 
 # -------------------------------------------------------------- linear algebra

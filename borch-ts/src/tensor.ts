@@ -3369,12 +3369,32 @@ export class Tensor implements Node<Tensor> {
   /**
    * The L2 norm.
    */
-  norm(): Tensor {
+  norm(p: number = 2, dim?: number, keepdim = false): Tensor {
     // **It stops where torch stops** (measured). A division or a square root has no
     // answer that fits an integer cell — promoted quietly to float the way numpy does,
     // that code then breaks on real torch.
     this.needsFloat("norm is for floating point only", "linalg.vector_norm: Expected a floating point or complex tensor as input");
-    return this.square().sum().sqrt();
+    // torch's order is `(p, dim, keepdim, dtype)` and this took nothing at all, so
+    // every `x.norm(2, 1)` a reader transcribed was silently the norm over the whole
+    // tensor. `p` reaches the same branches the core has: 1, 2, ±inf, 0, and the
+    // general case.
+    const fold = (t: Tensor): Tensor =>
+      dim === undefined ? t.sum() : t.sumDim(dim, keepdim);
+    if (p === 1) return fold(this.abs());
+    if (p === 2) return fold(this.square()).sqrt();
+    // `amax`/`amin` rather than `max`/`min`: those return `{values, indices}` and
+    // torch's norm wants the value alone. With no `dim` they fold everything, which
+    // is what `amax()` does with its default.
+    if (p === Infinity) return this.abs().amax(dim, keepdim);
+    if (p === -Infinity) return this.abs().amin(dim, keepdim);
+    // **`p = 0` counts the non-zeros**, and the `* 0` term is what carries the graph
+    // through: counting is a step, so the derivative is zero rather than absent, and
+    // without it `norm(0).backward()` stops where torch keeps going.
+    if (p === 0) {
+      const nonzero = this.ne(Tensor.full([], 0)).float();
+      return fold(nonzero).add(fold(this.mul(Tensor.full([], 0))));
+    }
+    return fold(this.abs().powScalar(p)).powScalar(1 / p);
   }
 
   /**
@@ -5306,10 +5326,44 @@ fn gelu_tanh_grad(x: f32) -> f32 {
    * The distinct values, **ascending.** torch's default is to give them
    * sorted.
    */
-  async unique(): Promise<Tensor> {
+  // **Overloaded so the plain call keeps its narrow type.** Widening the return to
+  // `Tensor | Tensor[]` unconditionally made every existing `await x.unique()` stop
+  // type-checking — `tsc` named both call sites at once — and the fix is to say what
+  // torch's own shape is: one tensor when nothing extra is asked for, a tuple when it
+  // is. A caller that asks for neither should not have to narrow.
+  async unique(sorted?: boolean): Promise<Tensor>;
+  async unique(
+    sorted: boolean, returnInverse: boolean, returnCounts?: boolean,
+  ): Promise<Tensor[]>;
+  async unique(
+    sorted = true, returnInverse = false, returnCounts = false,
+  ): Promise<Tensor | Tensor[]> {
+    // torch's order — `returnInverse` **second**. Two arguments were missing from
+    // the middle here, so `x.unique(true, true)` asked for the inverse in torch and
+    // for nothing at all over here.
+    //
+    // `sorted` is accepted and changes nothing, which is what it does in torch on
+    // the CPU as well: torch documents it as *may* return a different order and
+    // sorts regardless. Said out loud, because an argument that is accepted and
+    // silent otherwise reads as one that works.
+    void sorted;
     const values = Array.from(await this.toArray());
     const seen = [...new Set(values)].sort((a, b) => a - b);
-    return Tensor.from(seen, [seen.length], { dtype: this.dtype });
+    const at = new Map(seen.map((v, i) => [v, i]));
+    const out: Tensor[] = [
+      Tensor.from(seen, [seen.length], { dtype: this.dtype }),
+    ];
+    if (returnInverse) {
+      // **Flat, over the flattened input** — torch flattens before it looks when no
+      // dimension is given, so the inverse is 1-D whatever the input's rank.
+      const inverse = values.map((v) => at.get(v) ?? 0);
+      out.push(Tensor.from(inverse, [inverse.length], { dtype: "int64" }));
+    }
+    if (returnCounts) {
+      const counts = seen.map((v) => values.filter((w) => w === v).length);
+      out.push(Tensor.from(counts, [counts.length], { dtype: "int64" }));
+    }
+    return out.length === 1 ? (out[0] as Tensor) : out;
   }
 
   /**

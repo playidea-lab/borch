@@ -54,6 +54,16 @@ pytest.importorskip("numpy")
 # the browser subset promises rather than a patch. Recorded so the decision is
 # findable — that is this table's job.
 SHIFTED = {
+    # `Tensor` 2 → 0. `norm` took torch's `keepdim` between `dim` and `dtype`,
+    # through all six branches of `p`; `unique` took `return_inverse` second and
+    # `dim` last. Both were middle-drops: `x.norm(2, 1, True)` set the dtype to
+    # `True` and folded the axis away, and `x.unique(True, True)` asked for the
+    # inverse in torch and the counts here — the same call, a different tuple,
+    # both sides plausible.
+    #
+    # **Zero here is worth less than the other zeros in this file.** Only 9 of
+    # `Tensor`'s 512 rows are judged at all; the rest are `torch is C`. The
+    # tensor surface is not clean, it is unwatched — see JUDGED below.
     # 13 → 11. MultiheadAttention grew torch's five middle arguments -- dropout,
     # add_bias_kv, add_zero_attn, kdim, vdim -- so MultiheadAttention(64, 8, 0.1),
     # torch's own way of writing a dropout, no longer sets bias=0.1. Four of the five
@@ -67,7 +77,7 @@ SHIFTED = {
     # `BCEWithLogitsLoss` out of this bucket. Two rows also left `unaligned` (10 → 8)
     # and `nn.functional` lost three (30 → 27): **one edit, seen from three
     # buckets**, which is what a real fix looks like against an outside authority.
-    "Tensor": 2,
+    "Tensor": 0,
     # 11 → 8. MaxPool1d/2d/3d grew torch's padding, dilation and ceil_mode in
     # torch's positions, implemented rather than refused: padding pads with -inf so
     # a padded cell never wins, the indices stay flat indices into the *unpadded*

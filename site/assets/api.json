@@ -1428,7 +1428,7 @@
       },
       {
        "name": "norm",
-       "signature": "norm(): Tensor",
+       "signature": "norm(p?: number, dim?: number, keepdim?: boolean): Tensor",
        "doc": "The L2 norm.",
        "section": {
         "ko": "Shape",
@@ -2570,8 +2570,11 @@
       },
       {
        "name": "unique",
-       "signature": "unique(): Promise<Tensor>",
+       "signature": "unique(sorted?: boolean): Promise<Tensor>",
        "doc": "The distinct values, **ascending.** torch's default is to give them\nsorted.",
+       "overloads": [
+        "unique(sorted: boolean, returnInverse: boolean, returnCounts?: boolean): Promise<Tensor[]>"
+       ],
        "section": {
         "ko": "Where the output size depends on the values",
         "en": "Where the output size depends on the values"

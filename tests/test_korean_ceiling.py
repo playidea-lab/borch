@@ -99,7 +99,17 @@ CEILINGS = {
     # into the table and not words in a sentence. They move when those checks move and
     # not before — which is why translating that file took the reasons and left these,
     # and why every row added after it costs two characters here.
-    "borch-ts/test": 3091,
+    # 3091 → 3108. **+17, and every one of them is a golden case name.** Two new
+    # cases hold `ReduceLROnPlateau`'s resume — `이어서 학습하기` and `상태를 안 옮기면
+    # 갈린다`, copied character for character from the `StepLR` pair beside them, and
+    # one gap-table marker (`아직`) for `unique(dim=)`.
+    #
+    # A case name is a **key into `golden.json`**, matched by the runner against the
+    # answer frozen under it. Translating one renames the answer; naming a new case in
+    # English while its neighbours are Korean puts two conventions in one table. Both
+    # sides of a pair have to read alike, because the pair is the point: the second
+    # case exists only to show the first is measuring something.
+    "borch-ts/test": 3108,
 }
 
 

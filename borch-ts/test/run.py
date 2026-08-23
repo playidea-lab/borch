@@ -386,7 +386,16 @@ NOT_PORTED = {
     #                     statement) · round-tripping the random state · top-level
     #                     signatures taking an integer enum.
     "top::": (39, "파이썬 — dtype introspection, the `device` object, with, integer enums"),
-    # `spot::` used to be here — 47 cases, `아직`. All ported, so the row is gone.
+    # `spot::` was gone — 47 cases, all ported — and it is back with two.
+    #
+    # **`unique(dim=)` is a different operation, not a longer argument list.** With no
+    # `dim` it works on values and can be done by reading the tensor back and using a
+    # `Set`, which is what borch.ts does. With `dim` it works on **whole rows**: it
+    # sorts them lexicographically, folds equal ones, and reports an inverse over
+    # rows. `return_inverse` and `return_counts` were carried across in the same edit
+    # because they *are* just a longer list; these two are the piece that is not.
+    "spot::": (2, "아직 — `unique(dim=)` folds whole rows, which is a different "
+                  "operation from the value-wise form beside it"),
     "toplin::": (42, "별칭 — a top-level second name, as `lu` = `linalg.lu_factor`"),
     # `stat::` used to be here — 42 cases. 31 of them had simply never been asked, and the
     # other 11 could not be ported because **the name was not over there**, so those five

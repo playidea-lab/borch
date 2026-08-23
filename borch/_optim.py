@@ -991,7 +991,41 @@ class CyclicLR(_Scheduler):
         return [lr for _ in self.optimizer.param_groups]
 
 
-class SequentialLR:
+class _Saves:
+    """`state_dict` and `load_state_dict` for the schedulers outside `_Scheduler`.
+
+    **Three of them had neither**, so a run that saved everything it could still
+    resumed with `ReduceLROnPlateau`'s patience, best value and cooldown all back at
+    their starting points — the cut arriving epochs late, or early, with nothing on
+    screen to say so. torch's `ReduceLROnPlateau` carries fifteen keys.
+
+    The rule is `_Scheduler`'s and is copied here rather than restated: **everything
+    except the optimizer**, which is not carried because the two would hold each other
+    in a cycle. A scheduler holding other schedulers carries theirs by recursion.
+
+    It was found by a peer's check that steps every scheduler, watches which
+    attributes move, and asserts each one is in `state_dict()` — the general form of
+    the cooldown counter I had just added to borch.ts and not to the core. **I checked
+    that the counter reached the save and not that there was a save.**
+    """
+
+    def state_dict(self):
+        out = {k: v for k, v in self.__dict__.items() if k != "optimizer"}
+        if "schedulers" in out:
+            out["schedulers"] = [s.state_dict() for s in self.schedulers]
+        return out
+
+    def load_state_dict(self, state):
+        state = dict(state)
+        inner = state.pop("schedulers", None)
+        if inner is not None:
+            for sch, saved in zip(self.schedulers, inner):
+                sch.load_state_dict(saved)
+        self.__dict__.update(state)
+        return self
+
+
+class SequentialLR(_Saves):
     """**Chains schedulers.** At a milestone it hands over to the next one.
 
     It does not inherit `_Scheduler` — it has no `get_lr` of its own and its job
@@ -1034,7 +1068,7 @@ class SequentialLR:
         return [g["lr"] for g in self.optimizer.param_groups]
 
 
-class ChainedScheduler:
+class ChainedScheduler(_Saves):
     """Applies several **at once.** Their factors multiply together."""
 
     def __init__(self, schedulers):
@@ -1049,7 +1083,7 @@ class ChainedScheduler:
         return [g["lr"] for g in self.optimizer.param_groups]
 
 
-class ReduceLROnPlateau:
+class ReduceLROnPlateau(_Saves):
     """Descends **when things stop improving.** Unlike the others it takes a
     value, as `step(metric)` — the same idea as chapter 6's early stopping,
     shrinking the step instead of stopping."""

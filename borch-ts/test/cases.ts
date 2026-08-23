@@ -257,6 +257,24 @@ function addWide(out: Map<string, Case>, inp: Inputs): void {
   // The ones whose output size depends on the values — they go to the CPU and back once,
   // so they are asynchronous.
   out.set("unique", async () => Tensor.from([1, 1, 2, 3], [4]).unique());
+  // `returnInverse` and `dim` were missing from the middle on both sides, so
+  // `x.unique(true, true)` asked for the inverse in torch and for nothing here.
+  // Asked by position rather than by keyword because that is the call the gap made
+  // wrong. `dim` is not carried across — a row in the gap table, not a silence.
+  {
+    const dups = (): Tensor =>
+      Tensor.from([3, 1, 2, 1, 3, 3], [6], { dtype: "int64" });
+    out.set("spot::unique(inverse)",
+      async () => (await dups().unique(true, true))[1] as Tensor);
+    out.set("spot::unique(inverse, counts)",
+      async () => (await dups().unique(true, true, true))[2] as Tensor);
+    // `norm`'s `p`, `dim` and `keepdim` arrived in the same edit — this took no
+    // arguments at all, so every `x.norm(2, 1)` was silently the norm of everything.
+    const plane = (): Tensor =>
+      Tensor.from([1, -2, 3, 4, 0, -1], [2, 3]);
+    out.set("spot::norm(p=2, dim=1, keepdim)", () => plane().norm(2, 1, true));
+    out.set("spot::norm(p=inf, dim=1, keepdim)", () => plane().norm(Infinity, 1, true));
+  }
   out.set("masked_select",
     async () => x1().maskedSelect(x1().binary("gt", Tensor.full([], 0))));
   out.set("bincount",
@@ -3812,6 +3830,36 @@ function addOpt(out: Map<string, Case>, inp: Inputs): void {
   // measuring nothing.
   out.set("opt::스케줄러 상태를 안 옮기면 갈린다",
     () => `${schedResume(true)} | ${schedResume(false)}`);
+
+  // **`ReduceLROnPlateau` had no `state_dict` on the Python side at all** — seven
+  // mutable attributes and nowhere to put one of them, so a run that saved everything
+  // it could still came back with the patience, the best value and the cooldown at
+  // their starting points. Asked **with a cooldown**, because that is the attribute a
+  // resume loses most visibly: without one the patience is re-earned in a step or two
+  // and the two traces rejoin.
+  const plateauResume = (carry: boolean): string => {
+    const p = Tensor.from([1.0], [1], { requiresGrad: true });
+    const opt = new optim.SGD([p], 1.0);
+    const build = (): optim.ReduceLROnPlateau =>
+      new optim.ReduceLROnPlateau(opt, "min", 0.5, 1, 1e-4, "rel", 2);
+    const sch = build();
+    const seen: string[] = [];
+    for (const metric of [1, 1, 0.5, 0.5, 0.5]) {
+      sch.step(metric);
+      seen.push(`${opt.paramGroups[0]?.lr ?? 0}`);
+    }
+    const saved = sch.stateDict();
+    const fresh = build();
+    if (carry) fresh.loadStateDict(saved);
+    for (const metric of [0.5, 0.5, 0.5, 0.5, 0.5]) {
+      fresh.step(metric);
+      seen.push(`${opt.paramGroups[0]?.lr ?? 0}`);
+    }
+    return seen.join(" ");
+  };
+  out.set("opt::ReduceLROnPlateau/이어서 학습하기", () => plateauResume(true));
+  out.set("opt::ReduceLROnPlateau 상태를 안 옮기면 갈린다",
+    () => `${plateauResume(true)} | ${plateauResume(false)}`);
 
   // ── `save`/`load` — for the above to be of use it has to become a file ──
   //

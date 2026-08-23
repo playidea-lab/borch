@@ -1388,6 +1388,33 @@ def shape_index_cases(inp=None):
     add("unique_consecutive(dim=0, counts)",
         lambda L: L.unique_consecutive(L.tensor(rows), return_counts=True,
                                        dim=0)[1])
+    # **`unique` had `return_inverse` and `dim` missing from the middle**, so
+    # `x.unique(True, True)` asked for the inverse in torch and the counts here —
+    # the same call, a different tuple, and both sides plausible. Asked by position
+    # rather than keyword on purpose: that is the call the gap made wrong.
+    #
+    # **The names below carry a `_uq`/`_nm` tail on purpose.** This function is very
+    # long and reuses short fixture names — `grid` alone is bound seven times. A plain
+    # `grid = ...` here rebound it as `int64` for every later case in the function, and
+    # forty `spot::` cases went red under real torch with dtype errors that had nothing
+    # to do with `unique`. The blast radius of a name in a scope this size is the whole
+    # scope below it.
+    dups_uq = np.array([3, 1, 2, 1, 3, 3], dtype=np.int64)
+    add("unique(inverse)", lambda L: L.unique(L.tensor(dups_uq), True, True)[1])
+    add("unique(inverse, counts)",
+        lambda L: L.unique(L.tensor(dups_uq), True, True, True)[2])
+    grid_uq = np.array([[1, 2], [3, 4], [1, 2]], dtype=np.int64)
+    add("unique(dim=0)", lambda L: L.unique(L.tensor(grid_uq), True, False, False, 0))
+    add("unique(dim=0, inverse)",
+        lambda L: L.unique(L.tensor(grid_uq), True, True, False, 0)[1])
+    # `norm`'s `keepdim` sat where `dtype` goes, so `x.norm(2, 1, True)` folded the
+    # axis away and set the dtype to `True`. Asked at two `p` values because the
+    # branches are separate code — a reduction that keeps its rank at `p=2` and drops
+    # it at `p=inf` is a shape that changes with a hyperparameter.
+    plane_nm = np.array([[1., -2., 3.], [4., 0., -1.]], dtype=np.float32)
+    for _p, _label in ((2, "2"), (float("inf"), "inf")):
+        add(f"norm(p={_label}, dim=1, keepdim)",
+            lambda L, p=_p: L.tensor(plane_nm).norm(p, 1, True))
 
     # ── masks, flat insertion ──
     mask = np.array([[True, False, True, False],
@@ -3952,6 +3979,43 @@ def opt_cases(inp=None):
     # measuring nothing.
     cases.append((OPT_PREFIX + "스케줄러 상태를 안 옮기면 갈린다",
                   lambda L: f"{sched_resume(L, True)} | {sched_resume(L, False)}"))
+
+    def plateau_resume(L, carry):
+        """**`ReduceLROnPlateau` had no `state_dict` at all** until this case.
+
+        Seven mutable attributes and nowhere to put one of them, so a run that saved
+        everything it could still came back with the patience, the best value and the
+        cooldown at their starting points — a cut arriving epochs early or late, and
+        nothing on screen to say so. torch carries fifteen keys here.
+
+        Asked **with a cooldown**, because that is the attribute the resume loses most
+        visibly: without one, the patience alone can be re-earned in a step or two and
+        the two trajectories rejoin.
+        """
+        p = L.tensor([1.0], requires_grad=True)
+        opt = L.optim.SGD([p], lr=1.0)
+        build = lambda: L.optim.lr_scheduler.ReduceLROnPlateau(
+            opt, factor=0.5, patience=1, cooldown=2)
+        sch = build()
+        seen = []
+        for metric in [1.0, 1.0, 0.5, 0.5, 0.5]:
+            sch.step(metric)
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+        saved = sch.state_dict()
+        fresh = build()
+        if carry:
+            fresh.load_state_dict(saved)
+        for metric in [0.5, 0.5, 0.5, 0.5, 0.5]:
+            fresh.step(metric)
+            seen.append(round(float(opt.param_groups[0]["lr"]), 6))
+        return " ".join(f"{v:g}" for v in seen)
+
+    cases.append((OPT_PREFIX + "ReduceLROnPlateau/이어서 학습하기",
+                  lambda L: plateau_resume(L, True)))
+    # And the pair that keeps the case above honest: if loading does nothing, the two
+    # trajectories are equal and the first case is measuring nothing.
+    cases.append((OPT_PREFIX + "ReduceLROnPlateau 상태를 안 옮기면 갈린다",
+                  lambda L: f"{plateau_resume(L, True)} | {plateau_resume(L, False)}"))
 
     # ── **`save`/`load`.** For any of the above to be useful it has to become a file. ──
     #
