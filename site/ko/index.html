@@ -336,8 +336,8 @@ for step in range(201):
             <td>플레이그라운드 예시 여섯이 그 자리의 시작이다</td></tr>
         <tr><td>Hub (<code>borch-hub</code>)</td><td><span class="state soon">일부</span></td>
             <td>매니페스트·해시 대조·환경 판정. 가중치는 브라우저에서 실제로 받아진다 — 44.7MB safetensors 에 <code>access-control-allow-origin: *</code>, 실측. npm 배포는 아직</td></tr>
-        <tr><td>WASM 폴백</td><td><span class="state soon">계획</span></td>
-            <td>PRD 의 P2. 지금은 WebGPU 가 없으면 거절한다</td></tr>
+        <tr><td>WebGPU 없이 — 파이썬 모드가 wasm 위에서</td><td><span class="state now">있다</span></td>
+            <td>Pyodide 가 <strong>곧</strong> wasm 이고 코어는 numpy 다. 어댑터 없이 <code>import borch as torch</code> 로 학습이 된다 — 브라우저에서 <code>navigator.gpu</code> 를 지우고 실측: loss 17.2945 → 0.000001. 그때 없는 것은 <code>borch_webgpu</code> 이고, 임포트가 안 되는 것으로 그렇게 말한다</td></tr>
         <tr><td>CUDA · 분산 · 혼합정밀도 · torch.compile</td>
             <td><span class="state never">안 한다</span></td>
             <td>브라우저에 존재할 수 없거나, 그것을 배우려면 브라우저를 벗어나야 하는 것들</td></tr>

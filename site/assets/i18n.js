@@ -101,6 +101,12 @@ const STRINGS = {
     en: "loading numpy…", ko: "numpy 를 올리는 중…" },
   "load.binding": {
     en: "loading borch_webgpu…", ko: "borch_webgpu 를 싣는 중…" },
+  // **What loads when there is no adapter.** The core is numpy and does not want one,
+  // so Python mode runs without WebGPU; `borch_webgpu` is what is missing, and the
+  // message names it rather than saying something general about the browser.
+  "load.core": {
+    en: "no WebGPU — loading the core (borch) on wasm, without borch_webgpu…",
+    ko: "WebGPU 가 없다 — 코어(borch)를 wasm 위에 싣는 중, borch_webgpu 없이…" },
   "load.moduleFailed": {
     en: "could not fetch {0} (HTTP {1})", ko: "{0} 를 못 받았다 (HTTP {1})" },
   "data.missing": {
