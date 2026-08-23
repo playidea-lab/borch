@@ -26,14 +26,42 @@
 #
 # ## Then how is the GPU path checked
 #
-# A person calls it. Typed directly on the development machine (the commands below are
-# all of it), or sent to a GPU server when there is one — it was actually put on a cq
+# A person calls it. Typed directly on the development machine, or sent to a GPU server
+# when there is one — it was actually put on a cq
 # worker and run on an RTX 4090 over 845 golden cases × two implementations, and the
 # values matched Apple Metal. That route uses an already authenticated channel, so it
 # opens no execution rights on the repository.
 #
 # When there is a reason to attach a runner, this trigger comes back. Attaching it is
 # a person's job.
+#
+# ## What this file does **not** run — counted, because it used to say it did
+#
+# The line above read "the commands below are all of it". They are all of the *golden
+# comparison*. There are **thirteen entry points that need a browser** and this file
+# names four:
+#
+#     here          run.py --lib borch · run.py --lib borch_webgpu ·
+#                   borch-ts/test/run.py · vendor.py check
+#
+#     not here      parity:ts · data:ts · device:ts · serialize:ts · example:ts ·
+#                   lessons:ts · scope:py          (seven more correctness checks)
+#                   cost:ts · bench:ts             (measurements, not checks)
+#
+# **Nothing runs any of the thirteen automatically** — the reason above is a good one
+# and it applies to all of them equally, so the nine below are in exactly the position
+# the four above are: run when a person runs them.
+#
+# The cost of that is not hypothetical. Three commits shipped in one session with the
+# binding behind — `nn.BCELoss` absent, `nonzero(as_tuple)` refused, `linalg.svd` and
+# `torch.svd` **each returning the other's answer** — because `pytest` and the borch.ts
+# golden were both green and two greens read as three. The core suite cannot see any of
+# this: `borch_webgpu` will not import outside Pyodide.
+#
+# **The list is here rather than a script.** Making it automatic means making it slower
+# to run, and slower means run less often — which is the road the miss above walked.
+# What a reader needs is not a longer command but the number, so that leaving one out
+# is a decision instead of an oversight.
 
 name: gpu
 
