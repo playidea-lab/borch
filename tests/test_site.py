@@ -496,19 +496,30 @@ def test_a_section_sidebar_lists_every_page_of_its_section():
 
 # ── where a page tells the reader a name is absent ─────────────────────
 #
-# A lesson that says "`AdaptiveAvgPool2d` is not here, use `AvgPool2d` instead" is making
-# a claim about **another file's contents**, and the usual way such a claim breaks is that
-# somebody closes the gap. Then the page teaches a workaround for a problem that no longer
-# exists, and the reader who tries the real name finds it works — which is worse than a
-# missing feature, because it teaches distrust of the page.
+# A lesson that says "`AdaptiveAvgPool2d` is not here" is making a claim about **another
+# file's contents**, and the usual way such a claim breaks is that somebody closes the gap.
+# Then the page teaches a workaround for a problem that no longer exists, and the reader
+# who tries the real name finds it works — worse than a missing feature, because it teaches
+# distrust of the page.
+#
+# It has already broken once in the other direction, which is why the sentences below are
+# the ones they are. The first version of the lesson read the gap list by name and told
+# readers to use `AvgPool2d` with a fixed size. `AdaptiveAvgPool1d` and `AdaptiveAvgPool3d`
+# were there the whole time with **identical bodies**, both calling `adaptivePool`, which
+# ignores how many spatial axes it gets — the absent thing was a one-line alias. **A name
+# missing from a gap list does not tell you the capability is missing**, and the workaround
+# was worse than the real call: `AvgPool2d(8)` on a `[2, 16, 5, 7]` input returns
+# `[2, 16, 0, 0]` and raises nothing.
 #
 # Both ends are checked, the same way the heading quotes above are: the page must still
 # carry the sentence, and the name must still be absent. Neither side can move alone.
 
 ABSENCES_A_PAGE_TEACHES = (
-    ("site/learn/09-resnet.html", "<code>AdaptiveAvgPool2d</code> is not here.",
+    ("site/learn/09-resnet.html",
+     "<code>AdaptiveAvgPool2d</code> is not here — but the pooling is.",
      "AdaptiveAvgPool2d"),
-    ("site/ko/learn/09-resnet.html", "<code>AdaptiveAvgPool2d</code> 는 여기 없다.",
+    ("site/ko/learn/09-resnet.html",
+     "<code>AdaptiveAvgPool2d</code> 는 여기 없다 — 그런데 그 풀링은 있다.",
      "AdaptiveAvgPool2d"),
 )
 

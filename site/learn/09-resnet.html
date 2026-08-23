@@ -188,11 +188,16 @@
           }
         }
 
+        // What torchvision writes as AdaptiveAvgPool2d([1, 1]).
+        class GlobalAvgPool extends nn.Module {
+          forward(x) { return x.adaptivePool("avg", [1, 1]); }
+        }
+
         const net = new nn.Sequential(
           new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
           new BasicBlock(8, 8, 1),
           new BasicBlock(8, 16, 2),
-          new nn.AvgPool2d(8), new nn.Flatten(), new nn.Linear(16, 3));
+          new GlobalAvgPool(), new nn.Flatten(), new nn.Linear(16, 3));
 
         const B = 12;
         const x = keepAlive(Tensor.randn([B, 1, 16, 16]));
@@ -219,22 +224,30 @@
     </div>
 
     <div class="note-box">
-      <strong><code>AdaptiveAvgPool2d</code> is not here.</strong> torchvision's ResNet
-      ends with it, so a line copied from there will not run; <code>AvgPool2d</code> with
-      the feature-map size — 8 above — does the same thing when you know that size, which
-      on a fixed input you do.<br><br>
-      This sentence first said the absence was one the measured table counts. It is not
-      — that table is about speed and agreement, and it has no row for this. What does
-      hold the absence is <code>tests/ts_axis.py</code>, which compares the TypeScript
-      surface against the numpy core and lists this name under <em>no reason</em>. Being
-      counted and being explained are different things, and only the first of them was
-      true here.
+      <strong><code>AdaptiveAvgPool2d</code> is not here — but the pooling is.</strong>
+      torchvision's ResNet ends with that name, so a line copied from there will not run.
+      What is absent is the name alone: <code>AdaptiveAvgPool1d</code> and
+      <code>AdaptiveAvgPool3d</code> are both here and <strong>their bodies are
+      identical</strong> — each calls <code>adaptivePool("avg", size)</code>, which does
+      not care how many spatial axes it is given. The missing piece is a one-line alias,
+      not a feature.<br><br>
+      This lesson first told you to use <code>AvgPool2d</code> with the feature-map size
+      instead, and called the absence one the measured table counts. Both were wrong. That
+      table is about speed and agreement and has no row for this; the absence is held by
+      <code>tests/ts_axis.py</code>, which lists the name under <em>no reason</em>. And a
+      fixed pool is not the same thing: given a <code>[2, 16, 5, 7]</code> input,
+      <code>AvgPool2d(8)</code> returns <code>[2, 16, 0, 0]</code> and raises nothing,
+      where the adaptive path returns the <code>[2, 16, 1, 1]</code> that was asked for.
+      Reading a gap list by name suggests the repair the name suggests, and that is how a
+      lesson ends up teaching a workaround for something that was never missing.
     </div>
 
     <p>
       A ready-made <code>ResNet18Cifar</code> lives in the model catalogue, built from the
       same <code>Conv2d</code> and batch-norm layers as the block above — nothing in it is
-      a special case the library knows about.
+      a special case the library knows about. The net above takes a
+      <code>[4, 1, 23, 17]</code> input and still answers <code>[4, 3]</code> — that is
+      what the adaptive pool buys, and what a fixed one cannot do.
     </p>
 
     <div class="pager">

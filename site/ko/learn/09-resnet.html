@@ -185,11 +185,16 @@
           }
         }
 
+        // torchvision 이 AdaptiveAvgPool2d([1, 1]) 로 쓰는 그것.
+        class GlobalAvgPool extends nn.Module {
+          forward(x) { return x.adaptivePool("avg", [1, 1]); }
+        }
+
         const net = new nn.Sequential(
           new nn.Conv2d(1, 8, 3, 1, 1), new nn.BatchNorm2d(8), new nn.ReLU(),
           new BasicBlock(8, 8, 1),
           new BasicBlock(8, 16, 2),
-          new nn.AvgPool2d(8), new nn.Flatten(), new nn.Linear(16, 3));
+          new GlobalAvgPool(), new nn.Flatten(), new nn.Linear(16, 3));
 
         const B = 12;
         const x = keepAlive(Tensor.randn([B, 1, 16, 16]));
@@ -216,20 +221,28 @@
     </div>
 
     <div class="note-box">
-      <strong><code>AdaptiveAvgPool2d</code> 는 여기 없다.</strong> torchvision 의 ResNet
-      은 그것으로 끝나므로 거기서 복사한 줄은 돌지 않는다. 특징 맵 크기 — 위에서는 8 —
-      를 준 <code>AvgPool2d</code> 가 같은 일을 하고, 입력이 고정이면 그 크기를 안다.<br><br>
-      이 문장은 처음에 그 부재를 실측 표가 세는 것 중 하나라고 했다. 아니다 — 그 표는
-      속도와 일치에 관한 것이고 여기에 해당하는 행이 없다. 이 부재를 실제로 들고 있는
-      것은 <code>tests/ts_axis.py</code> 다. TypeScript 표면을 numpy 코어와 대조해
-      이 이름을 <em>사유 없음</em> 아래에 올려 둔다. 세어지는 것과 설명되는 것은 다르고,
-      여기서는 앞의 것만 사실이었다.
+      <strong><code>AdaptiveAvgPool2d</code> 는 여기 없다 — 그런데 그 풀링은 있다.</strong>
+      torchvision 의 ResNet 은 그 이름으로 끝나므로 거기서 복사한 줄은 돌지 않는다. 없는
+      것은 이름뿐이다: <code>AdaptiveAvgPool1d</code> 와 <code>AdaptiveAvgPool3d</code> 가
+      둘 다 있고 <strong>본문이 완전히 같다</strong> — 둘 다
+      <code>adaptivePool("avg", 크기)</code> 를 부르고, 이 함수는 공간 축이 몇 개인지
+      신경 쓰지 않는다. 빠진 것은 한 줄짜리 별칭이지 기능이 아니다.<br><br>
+      이 레슨은 처음에 대신 <code>AvgPool2d</code> 에 특징 맵 크기를 주라고 했고, 이 부재를
+      실측 표가 세는 것 중 하나라고 했다. 둘 다 틀렸다. 그 표는 속도와 일치에 관한 것이라
+      해당 행이 없고, 부재를 들고 있는 것은 <code>tests/ts_axis.py</code> 다 — 거기서 이
+      이름은 <em>사유 없음</em> 아래에 있다. 그리고 고정 풀링은 같은 것이 아니다:
+      <code>[2, 16, 5, 7]</code> 입력에 <code>AvgPool2d(8)</code> 는 아무것도 안 던지고
+      <code>[2, 16, 0, 0]</code> 을 돌려주는데, adaptive 쪽은 시킨 대로
+      <code>[2, 16, 1, 1]</code> 을 준다. 결손 목록을 이름으로만 읽으면 그 이름이 제안하는
+      수리를 하게 되고, 그렇게 해서 레슨이 애초에 없지도 않았던 것의 우회법을 가르치게 된다.
     </div>
 
     <p>
       완성된 <code>ResNet18Cifar</code> 가 모델 카탈로그에 있고, 위 블록과 똑같은
       <code>Conv2d</code> 와 배치 정규화 층으로 만들어졌다 — 라이브러리가 따로 아는
-      특별한 것은 그 안에 없다.
+      특별한 것은 그 안에 없다. 위의 신경망은 <code>[4, 1, 23, 17]</code> 입력에도
+      <code>[4, 3]</code> 을 답한다. 그것이 adaptive 풀링이 사 주는 것이고, 고정 풀링이
+      못 하는 것이다.
     </p>
 
     <div class="pager">
