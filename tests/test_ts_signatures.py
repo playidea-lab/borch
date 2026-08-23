@@ -229,7 +229,11 @@ UNALIGNED = {
 # a person attests it and the row becomes `agree`. That is the only way out of this
 # table, and it is deliberately a way that requires someone to write a sentence.
 RENAMED = {
-    "Tensor": 30,
+    # 30 → 28. `flatten` arrived from `shorter`; `type` and `bincount` left for
+    # `agree` when they took torch's arguments — `type()` with none names the
+    # type, and `bincount` takes `weights` and `minlength` as `_ops.bincount`
+    # next door already did.
+    "Tensor": 28,
     # 19 → 20. `GroupNorm` arrived from `shorter` when both sides took `affine` and
     # `bias`: same length now, and borch.ts spells the flag `useBias`, as it already
     # does in `LayerNorm`, `Bilinear` and the recurrent layers.
@@ -249,7 +253,9 @@ RENAMED = {
 # too many raises. Held separately so that fixing a shift cannot be paid for by
 # turning it into a truncation without anyone noticing.
 SHORTER = {
-    "Tensor": 16,
+    # 16 → 15. `flatten` took torch's `end_dim`, so its list is no longer a
+    # prefix of borch.ts's — it moved to `renamed` below.
+    "Tensor": 15,
     # 15 → 10 → 13 → 24. The loss constructors followed the core into torch's argument
     # order, so five truncations became agreements; the twelve lazy layers stopped
     # being uncomparable and three landed here; then borch.ts's Conv and

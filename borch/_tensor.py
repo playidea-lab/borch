@@ -541,7 +541,18 @@ class Tensor:
         return Tensor(self.data.astype(_np.complex64))
 
 
-    def type(self, dt):
+    def type(self, dt=None):
+        """**With no argument it names the type**, as torch does —
+        `torch.FloatTensor` for a float tensor. It required one, so `x.type()` — the
+        first thing anybody writes to find out what they are holding — stopped.
+        """
+        if dt is None:
+            kind = {"f": "Float", "d": "Double", "i": "Int", "l": "Long",
+                    "b": "Bool", "B": "Byte", "h": "Short",
+                    "c": "ComplexFloat"}.get(self.data.dtype.char)
+            if kind is None:
+                kind = _TYPE_NAMES.get(self.data.dtype.kind, "Float")
+            return f"torch.{kind}Tensor"
         target = dt.np if isinstance(dt, dtype) else dt
         if _np.dtype(target).kind != "f":
             return Tensor(self.data.astype(target))
@@ -816,6 +827,17 @@ class Tensor:
                           "UnsqueezeBackward0")
 
     def squeeze(self, dim=None):
+        # **`squeeze(0, 2)` — several axes at once — is torch's form and is not
+        # taken here.** Widening it to `*dims` is three lines and it was written,
+        # measured against torch on every shape tried, and then withdrawn: with it
+        # in place `resize_as_` came back with the old shape and `stft`'s gradient
+        # chain went missing, both in a different file and neither naming `squeeze`.
+        #
+        # The behaviour it adds is right (torch leaves a non-length-1 axis alone
+        # where numpy raises), so something inside this library is standing on the
+        # raise. That is worth finding rather than guessing at, and shipping the
+        # widening before finding it would trade a `TypeError` a caller can read for
+        # a wrong shape they cannot.
         old = self.data.shape
         out = _np.squeeze(self.data) if dim is None else _np.squeeze(self.data, axis=dim)
         return self._make(out, (self,), lambda g: (g.reshape(old),))
@@ -927,8 +949,11 @@ class Tensor:
                 " is ambiguous"))
         return bool(self.data.reshape(-1)[0] != 0)
 
-    def flatten(self, start_dim=0):
-        shape = self.data.shape[:start_dim] + (-1,)
+    def flatten(self, start_dim=0, end_dim=-1):
+        rank = self.data.ndim
+        first = start_dim + rank if start_dim < 0 else start_dim
+        last = end_dim + rank if end_dim < 0 else end_dim
+        shape = self.data.shape[:first] + (-1,) + self.data.shape[last + 1:]
         return self.reshape(shape)
 
     def __getitem__(self, idx):
@@ -1256,7 +1281,7 @@ class Tensor:
         out = _np.where(m, _np.asarray(value, dtype=self.data.dtype), self.data)
         return self._make(out, (self,), lambda g: (_np.where(m, 0, g),))
 
-    def bincount(self):
+    def bincount(self, weights=None, minlength=0):
         # `intp` — on wasm32, handing it int64 is refused. See
         # `_ops.repeat_interleave`. **Booleans are refused** — torch stops with
         # `"bincount_cpu" not implemented for 'Bool'` (measured). `_ops.bincount`
@@ -1265,7 +1290,16 @@ class Tensor:
         _refuses_bool(self.data, "bincount does not take booleans.",
                       '"bincount_cpu" not implemented for \'Bool\'',
                       kind=NotImplementedError)
-        return Tensor(_np.bincount(self.data.astype(_np.intp)))
+        # **`weights` and `minlength` are torch's and were not taken.** Weights turn
+        # the count into a sum per bin — how a class-imbalance table is built — and
+        # `minlength` pads the answer so two batches can be added together. Neither
+        # crossed, and the method form stopped with a `TypeError` while
+        # `_ops.bincount` next door had both all along: **two copies of one function,
+        # and the argument list was the thing that differed.**
+        w = None if weights is None else _np.asarray(
+            weights.data if isinstance(weights, Tensor) else weights)
+        return Tensor(_np.bincount(self.data.astype(_np.intp), weights=w,
+                                   minlength=int(minlength)))
 
 
 class _MinMax:

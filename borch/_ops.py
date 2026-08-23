@@ -1832,6 +1832,32 @@ _PROMOTES_INTEGERS = frozenset({
 })
 
 
+def _loose(args, kw, key):
+    """The axes given as loose numbers, as a sequence, or by keyword.
+
+    **torch takes all three and each of these functions took one.** `x.flip(0, 1)`,
+    `x.flip([0, 1])` and `x.flip(dims=[0, 1])` are the same call there, and here the
+    first and third stopped with a `TypeError` about the argument count. Widening to
+    `*dims` alone fixes the first and breaks the third — `keep::count_nonzero(dim=1)`
+    in the golden went red on exactly that, which is what a frozen case is for.
+
+    Returns `()` when nothing was given, which every caller reads as *all axes*.
+    """
+    if key in kw:
+        got = kw.pop(key)
+        if got is None:
+            return ()
+        return tuple(got) if isinstance(got, (tuple, list)) else (got,)
+    if not args:
+        return ()
+    if len(args) == 1:
+        first = args[0]
+        if first is None:
+            return ()
+        return tuple(first) if isinstance(first, (tuple, list)) else (first,)
+    return tuple(args)
+
+
 def _unary(name, forward, derivative=None, op=None):
     def fn(t):
         t = _wrap(t)
@@ -1955,7 +1981,24 @@ sinc = _unary("Sinc", _np.sinc,
               lambda x, o: _np.where(x == 0, 0.0,
                                      (_np.cos(_np.pi * _np.where(x == 0, 1.0, x)) - o)
                                      / _np.where(x == 0, 1.0, x)))
-logit = _unary("Logit", lambda x: _np.log(x / (1 - x)), lambda x, o: 1.0 / (x * (1 - x)))
+def logit(t, eps=None):
+    """The inverse of the sigmoid. **`eps` clamps the input away from 0 and 1**,
+    where the answer runs to infinity — torch takes it and this did not, so
+    `x.logit(1e-6)`, the form used on probabilities that may be exactly 0, stopped
+    with a `TypeError`.
+
+    Without `eps` the infinities are torch's answer too, so the default is unchanged.
+    """
+    t = _wrap(t)
+    if eps is None:
+        return _logit_raw(t)
+    lo = float(eps)
+    return _logit_raw(_wrap(_np.clip(_np.asarray(t.data), lo, 1.0 - lo))
+                      if not isinstance(t, Tensor) else t.clamp(lo, 1.0 - lo))
+
+
+_logit_raw = _unary("Logit", lambda x: _np.log(x / (1 - x)),
+                    lambda x, o: 1.0 / (x * (1 - x)))
 
 # torch's aliases. They point at the same function.
 arccos, arcsin, arctan = acos, asin, atan
@@ -2192,9 +2235,10 @@ def narrow(t, dim, start, length):
     return t[_slice_at(axis, start, start + length)]
 
 
-def flip(t, dims):
+def flip(t, *dims, **kw):
+    """**Loose axis numbers, a list, or `dims=`** — torch takes all three."""
     t = _wrap(t)
-    dims = (dims,) if isinstance(dims, int) else tuple(dims)
+    dims = _loose(dims, kw, "dims")
     return t._make(_np.flip(t.data, dims).copy(), (t,),
                    lambda g: (_np.flip(_np.asarray(g), dims).copy(),), "FlipBackward0")
 
@@ -2442,8 +2486,9 @@ concat = cat
 concatenate = cat
 
 
-def broadcast_to(x, shape):
-    return expand(_wrap(x), *shape)
+def broadcast_to(x, *shape, **kw):
+    """**Loose sizes, a tuple, or `size=`** — torch takes all three."""
+    return expand(_wrap(x), *_loose(shape, kw, "size"))
 
 
 def broadcast_tensors(*tensors):
@@ -3778,7 +3823,7 @@ def repeat_interleave(t, repeats, dim=None):
     return t._make(out, (t,), back, "RepeatInterleaveBackward0")
 
 
-def tile(t, reps):
+def tile(t, *reps, **kw):
     """Repeat the whole thing and join. The backward is **summing the repeated
     pieces on top of each other.**
 
@@ -3786,7 +3831,8 @@ def tile(t, reps):
     in two and summing the repeat side is enough.
     """
     t = _wrap(t)
-    reps_t = (reps,) if isinstance(reps, int) else tuple(reps)
+    # **Loose counts, a list, or `dims=`** — torch takes all three.
+    reps_t = _loose(reps, kw, "dims")
     out = _np.tile(t.data, reps_t)
     src = t.data.shape
     nd = max(len(src), len(reps_t))
@@ -4339,8 +4385,11 @@ def cumprod(t, dim, dtype=None):
     return t._make(out, (t,), back, "CumprodBackward0")
 
 
-def count_nonzero(t, dim=None):
-    return Tensor(_np.count_nonzero(_wrap(t).data, axis=dim))
+def count_nonzero(t, *dim, **kw):
+    """**Several axes as loose numbers, a tuple, or `dim=`** — torch takes all
+    three."""
+    axes = _loose(dim, kw, "dim")
+    return Tensor(_np.count_nonzero(_wrap(t).data, axis=axes or None))
 
 
 def _pick(t, idx, dim, op):
@@ -8966,12 +9015,21 @@ def normal(mean=0.0, std=1.0, size=None, dtype=None, requires_grad=False, **kw):
                  dtype, requires_grad)
 
 
-def bernoulli(t, **kw):
+def bernoulli(t, p=None, *, generator=None, **kw):
     """A 1 at each position with that probability. **0 gives all zeros and 1 all
-    ones** — those two extremes are deterministic."""
+    ones** — those two extremes are deterministic.
+
+    **`p` as one number is torch's other form** and was not taken: `x.bernoulli(0.5)`
+    draws at that probability everywhere and ignores the tensor's values, where
+    `x.bernoulli()` uses them. It stopped with a `TypeError` about the argument
+    count — the tensor holding the probabilities is the form a tutorial uses second.
+    """
+    _no_out(kw)
     t = _wrap(t)
-    p = _np.asarray(t.data, dtype=_np.float64)
-    return Tensor((_rng.random(p.shape) < p).astype(t.data.dtype))
+    rng = generator.rng() if generator is not None else _rng
+    probs = (_np.full(t.data.shape, float(p)) if p is not None
+             else _np.asarray(t.data, dtype=_np.float64))
+    return Tensor((rng.random(probs.shape) < probs).astype(t.data.dtype))
 
 
 def poisson(t, **kw):

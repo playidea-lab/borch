@@ -61,6 +61,20 @@ def _classify(name):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         for args in ([HAND[name]] if name in HAND else PATTERNS):
+            # **Fresh tensors every attempt.** `PATTERNS` holds module-level tensors
+            # and the widened intake reaches torch's in-place family — `relu_`,
+            # `sigmoid_`, `clamp_` — which write into what they are given. The shared
+            # `_V` and `_M` were being edited under every later name in this file and
+            # under every later *file* in the suite: `test_golden.py` came back with
+            # `resize_as_ 는 제자리다: expected (1, 4), got (2, 2)` and a broken
+            # gradient chain, neither of which names this probe.
+            #
+            # Third cost of enumerating rather than reading, after *the probe's own
+            # call looked like a finding* and *the probe changed global state*: *the
+            # probe edited its own fixture.* The first two are about what the sweep
+            # reports; this one is about what it leaves behind.
+            args = tuple(a.clone() if isinstance(a, torch.Tensor) else a
+                         for a in args)
             try:
                 got = fn(*args)
             except Exception:                               # noqa: BLE001
