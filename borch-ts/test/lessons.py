@@ -50,34 +50,81 @@ PAGES = [
     "/site/ko/learn/10-vit.html",
 ]
 
-# **This list is hand-kept and reads as coverage.** Thirty-four pages under `site` carry a
-# `data-lang="js"` block. These press twelve.
+# **What is pressed is a decision; what is not pressed used to be a silence.** A page
+# absent from the list above is not reported as unwatched — it is not reported at all,
+# which on screen is indistinguishable from a page that passed. `coverage()` below ends
+# that: it counts the pages on disk that carry a JS block, subtracts what is pressed and
+# what is declined, and the run prints the remainder by name every time.
 #
-# (It said thirty-two, and thirty-two is `12 + 20` — the pages pressed plus the pages with
-# no reason. The two `04-image-classifier` pages, left out on purpose below, were counted
-# in neither and so fell out of the total as well. **A number that says "pages under
-# `site` carrying a block" has to include the ones deliberately skipped**, or the sentence
-# is about a different set from the one it names. Counted from the directory rather than
-# re-derived: 34 = 12 pressed + 20 unexplained + 2 deliberate.) The four lessons above were added only
-# because their author went looking for the harness after a sister session found it had
-# been running two of three implementations and calling it green.
+# **The numbers are not written here, because the ones that were written here were wrong
+# within a day.** This comment used to say "thirty-two pages carry a JS block" and
+# "about seventy-nine blocks". The truth is thirty-four and eighty-four: the thirty-two
+# was `pressed + unwatched`, silently dropping the two pages declined three lines below —
+# a sentence that says *pages that carry a JS block* has to count the ones skipped on
+# purpose too — and the seventy-nine was estimated rather than counted. A sister session
+# found it by counting the directory instead of re-deriving from the comment.
 #
-# **A page absent from here is not reported as unwatched — it is not reported at all**,
-# which on screen is indistinguishable from a page that passed. Twenty pages (**84
-# blocks**, counted; the estimate here read seventy-nine) are in that state with no reason
-# recorded: lessons 1–5, 7 and 8 in
-# both languages, tutorials 02 and 06, and `python.html`. Only `04-image-classifier` below
-# is left out on purpose.
-#
-# **The cost is why it is not simply derived from the directory.** Measured on a software
-# adapter: twelve pages take 544–554s (two runs, two trees), of which the two `10-vit`
-# pages are 154s — a ViT page
-# is about two and a half times an ordinary one, because its last block trains. Pressing
-# all thirty-two would be several times this, and `gpu.yml` carries no `push` trigger for
-# it (a real adapter is needed), so **this check runs only when a person runs it.** Making
-# it slower is making it run less often, which is the same road that ended in two-of-three
-# above. The number is written here rather than left as a silent budget; whoever decides
-# should decide against it and not against a guess.
+# So the count is taken from the directory at run time. `declined` versus `wants
+# reviewing` is the vocabulary `tests/torch_gap.py` and `tests/ts_axis.py` already use on
+# their own gaps, and it is the distinction that matters: not doing a thing is a choice,
+# not saying why is the defect.
+
+# **Pages left out on purpose**, and the reason each is left out. Anything with a JS
+# block that is in neither this nor `PAGES` comes out of the run as *wants reviewing*.
+DECLINED = {
+    "/site/tutorials/04-image-classifier.html":
+        "downloads CIFAR and runs convolutions for several epochs",
+    "/site/ko/tutorials/04-image-classifier.html":
+        "downloads CIFAR and runs convolutions for several epochs",
+}
+
+
+def coverage():
+    """`(pressed, declined, unwatched, problems)`, each a list of `(path, blocks)`.
+
+    Asked of the directory, never of the comment above. The pages are found by the same
+    mark the runner presses on — a `data-lang="js"` block — so a page cannot be in this
+    count and out of the run's reach.
+    """
+    found = {}
+    for path in sorted((ROOT / "site").rglob("*.html")):
+        text = path.read_text(encoding="utf-8")
+        n = text.count('data-lang="js"')
+        if n:
+            found["/" + path.relative_to(ROOT).as_posix()] = n
+
+    problems = [f"{rel} is listed to be pressed and has no JS block on disk"
+                for rel in PAGES if rel not in found]
+    problems += [f"{rel} is declined and has no JS block on disk"
+                 for rel in DECLINED if rel not in found]
+    problems += [f"{rel} is both pressed and declined" for rel in PAGES if rel in DECLINED]
+
+    pressed = [(r, n) for r, n in found.items() if r in PAGES]
+    declined = [(r, n) for r, n in found.items() if r in DECLINED and r not in PAGES]
+    unwatched = [(r, n) for r, n in found.items() if r not in PAGES and r not in DECLINED]
+    return pressed, declined, unwatched, problems
+
+
+def say_coverage():
+    """Prints the three groups. Called before the pressing, so a long run still says it."""
+    pressed, declined, unwatched, problems = coverage()
+    total = len(pressed) + len(declined) + len(unwatched)
+    blocks = sum(n for _, n in pressed + declined + unwatched)
+    print(f"{len(pressed)} of {total} pages pressed "
+          f"({sum(n for _, n in pressed)} of {blocks} JS blocks)")
+    if declined:
+        print(f"  declined {len(declined)}")
+        for rel, n in declined:
+            print(f"      {rel} — {n} blocks — {DECLINED[rel]}")
+    if unwatched:
+        print(f"  wants reviewing {len(unwatched)} "
+              f"({sum(n for _, n in unwatched)} blocks)")
+        for rel, n in unwatched:
+            print(f"      {rel} — {n} blocks")
+    for line in problems:
+        print(f"  ! {line}", file=sys.stderr)
+    return problems
+
 
 # **`10-vit` prints a caught exception on purpose.** Its second block shows `nn.Linear`
 # refusing a 3-D input, so the message `mm is 2-D by 2-D: ...` is the **right** output
@@ -162,6 +209,7 @@ def run_page(page, path):
 
 def main(argv):
     runner.require_fresh_dist()
+    listing_problems = say_coverage()
     port, stop = runner.serve(ROOT)
     rows = []
     try:
@@ -187,8 +235,11 @@ def main(argv):
             print(f"      {line}", file=sys.stderr)
         if not ok:
             bad += 1
-    print(f"{len(rows) - bad} of {len(rows)} pages passed")
-    return 0 if bad == 0 else 1
+    # **"12 of 12 passed" under "12 of 34 pressed" reads as the whole set passing.**
+    # The word says which twelve, so the two lines cannot be run together by a skimmer.
+    print(f"{len(rows) - bad} of {len(rows)} pressed pages passed")
+    # A list naming a page that is not there is not a smaller run, it is a wrong one.
+    return 0 if bad == 0 and not listing_problems else 1
 
 
 if __name__ == "__main__":
