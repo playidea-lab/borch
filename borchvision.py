@@ -83,10 +83,12 @@ import math as _math
 import os as _os
 import pickle as _pickle
 import string as _string
+import struct as _struct
 import sys as _sys
 import tarfile as _tarfile
 import types as _types
 import zipfile as _zipfile
+import zlib as _zlib
 import urllib.request as _urlreq
 import warnings as _warnings
 
@@ -3760,6 +3762,127 @@ def _read_cifar_batch(data):
     return _np.ascontiguousarray(images), [int(v) for v in labels]
 
 
+# MATLAB level 5, the format `.mat` files are written in and `scipy.io.loadmat` reads.
+#
+# **This is here so that `scipy` does not have to be.** The gap table said of `SVHN`
+# that "the refusal is the dependency, and it is the same answer PIL and a JPEG decoder
+# get" — and that lumped two different things together. A JPEG decoder is a *codec*:
+# thousands of lines, decades of edge cases, and no reasonable way to write one here.
+# A `.mat` file is a **documented container** — a header, then tagged elements, with
+# `zlib` around them — and the two arrays SVHN keeps in one are plain `uint8`. The
+# whole reader below is under a hundred lines and uses nothing outside the standard
+# library.
+#
+# So the line is not "no dependencies" but "**no dependency we could not have written
+# in an afternoon**", and those two had been the same sentence.
+
+_MAT_TYPES = {                                  # tag code → numpy dtype
+    1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4",
+    7: "f4", 9: "f8", 12: "i8", 13: "u8", 16: "u1", 18: "i4",
+}
+_MAT_CLASS = {                                  # array class → numpy dtype
+    6: "f8", 7: "f4", 8: "i1", 9: "u1", 10: "i2", 11: "u2",
+    12: "i4", 13: "u4", 14: "i8", 15: "u8",
+}
+
+
+def _mat_element(buf, at, pad=False):
+    """One tagged element: `(type, payload bytes, position after it)`.
+
+    `pad` rounds the end up to eight bytes, which is right **inside** a matrix body
+    and wrong between top-level elements — see the note below.
+
+    **The small-element form is the trap.** When a value fits in four bytes MATLAB
+    packs the size into the *high* half of the first word and the data into the next
+    four bytes, with no second word at all — so a reader that always takes eight bytes
+    of tag walks off by four and every field after it is garbage that still parses.
+    """
+    (word,) = _struct.unpack_from("<I", buf, at)
+    if word >> 16:                              # small form: size in the high half
+        kind, size, start = word & 0xFFFF, word >> 16, at + 4
+        return kind, buf[start:start + size], at + 8
+    kind, size = _struct.unpack_from("<II", buf, at)
+    start = at + 8
+    # **Padding to eight bytes applies inside a matrix and not between top-level
+    # elements**, and applying it everywhere walks four bytes past the end of the
+    # first compressed element. `scipy` writes each variable as its own `miCOMPRESSED`
+    # block, so the second one begins in the middle of nothing: the reader found `X`,
+    # then read `kind=0`, `kind=176`, `kind=1614` out of the tail and finally ran off
+    # the buffer. `y` came back absent — a file that parses, pictures with no labels,
+    # and nothing saying so.
+    #
+    # `pad` is passed by the caller, who knows which of the two it is in.
+    end = start + ((size + 7) // 8 * 8 if pad else size)
+    return kind, buf[start:start + size], end
+
+
+def _mat_read(data):
+    """`{name: ndarray}` from a MATLAB level-5 file. Numeric arrays only.
+
+    Column-major on disk, so the shape is reversed and the axes transposed back —
+    SVHN's `X` is `(32, 32, 3, N)` in MATLAB's order and has to stay that way, which
+    is what torchvision then transposes.
+    """
+    if not data.startswith(b"MATLAB 5.0"):
+        raise ValueError("not a MATLAB level-5 file — it does not begin `MATLAB 5.0`")
+    out, at = {}, 128
+    # **`at + 8 <= len` rather than `at < len`**, so a truncated file says so.
+    # Reading to the last byte and letting `struct` fall off the end gives
+    # `unpack_from requires a buffer of at least 1564 bytes` — a sentence about a
+    # buffer that names no file and offers no move. A download cut halfway produces
+    # exactly that, and so did a padding mistake in this reader.
+    while at + 8 <= len(data):
+        kind, payload, at = _mat_element(data, at)
+        # **An element whose payload runs past the end is where a cut file lands.**
+        # Carrying on gives `zlib.error: incomplete or truncated stream` from two
+        # frames down — again a message about a stream rather than about a file. The
+        # element is simply not there, so it is not read; the ones before it are, and
+        # `SVHN` then refuses by name because `y` is missing.
+        if at > len(data):
+            break
+        if kind == 15:                          # miCOMPRESSED
+            # **One compressed element can hold several matrices**, and reading only
+            # the first is a reader that finds `X` and loses `y` — a file that parses,
+            # a dataset with pictures and no labels, and nothing saying so. Measured
+            # against `scipy.io.loadmat`, which is the only reason it was noticed.
+            inner, seen = _zlib.decompress(payload), 0
+            while seen < len(inner):
+                k2, p2, seen = _mat_element(inner, seen)
+                if k2 != 14:
+                    continue
+                name, array = _mat_matrix(p2)
+                if array is not None:
+                    out[name] = array
+        elif kind == 14:                        # miMATRIX, stored uncompressed
+            name, array = _mat_matrix(payload)
+            if array is not None:
+                out[name] = array
+    return out
+
+
+def _mat_matrix(body):
+    """`(name, ndarray)` for one matrix element, or `(name, None)` when it is not
+    numeric — a struct or a cell array, which SVHN does not use and this does not
+    invent an answer for."""
+    _, flags, at = _mat_element(body, 0, pad=True)
+    cls = flags[0] & 0xFF
+    _, dims_raw, at = _mat_element(body, at, pad=True)
+    dims = list(_np.frombuffer(dims_raw, dtype="<i4"))
+    _, name_raw, at = _mat_element(body, at, pad=True)
+    name = name_raw.decode("ascii", "replace")
+    if cls not in _MAT_CLASS:
+        return name, None
+    kind, values, _ = _mat_element(body, at, pad=True)
+    dtype = _MAT_TYPES.get(kind)
+    if dtype is None:
+        return name, None
+    flat = _np.frombuffer(values, dtype="<" + dtype)
+    # **MATLAB writes column-major.** Reading the dimensions forward and reshaping
+    # row-major would give an array of the right size with every element in the wrong
+    # place — a shape that agrees and values that do not.
+    return name, flat.reshape(dims[::-1]).transpose().astype(_MAT_CLASS[cls])
+
+
 def _md5(data):
     return _hashlib.md5(data).hexdigest()
 
@@ -4507,6 +4630,85 @@ class USPS(VisionDataset):
         return f"Split: {'Train' if self.train else 'Test'}"
 
 
+class SVHN(VisionDataset):
+    """Street View House Numbers — 32×32 colour digits, **in a MATLAB file.**
+
+    **This was declined, and the reason confused two different walls.** It read: *the
+    refusal is the dependency, and it is the same answer PIL and a JPEG decoder get.*
+    A JPEG decoder is a codec — thousands of lines and no reasonable way to write one
+    here. A `.mat` is a **documented container**, and the reader for it (`_mat_read`
+    above) is under a hundred lines of `struct` and `zlib`, both already in the
+    standard library. Grouping them under one sentence made the cheap one look as
+    expensive as the dear one.
+
+    Two conversions that pass unnoticed when reversed:
+
+    - **The digit zero is labelled 10**, so every 10 becomes 0. Left alone, a loss
+      expecting classes `[0, C-1]` gets an index one past the end — and `CrossEntropy`
+      with `ignore_index` unset simply reads out of range rather than complaining.
+    - **The array is `(32, 32, 3, N)` on disk**, MATLAB's own order, and becomes
+      `(N, 3, 32, 32)`. Transposed the wrong way it is still a stack of colour
+      pictures of the right size, of something else.
+
+    `split` is `train`, `test` or `extra`; torchvision's three, with torchvision's
+    digests.
+    """
+
+    split_list = {
+        "train": ("http://ufldl.stanford.edu/housenumbers/train_32x32.mat",
+                  "train_32x32.mat", "e26dedcc434d2e4c54c9b2d4a06d8373"),
+        "test": ("http://ufldl.stanford.edu/housenumbers/test_32x32.mat",
+                 "test_32x32.mat", "eb5a983be6a315427106f1b164d9cef3"),
+        "extra": ("http://ufldl.stanford.edu/housenumbers/extra_32x32.mat",
+                  "extra_32x32.mat", "a93ce644f1a588dc4d68dda5feec44a7"),
+    }
+
+    def __init__(self, root, split="train", transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if split not in self.split_list:
+            raise ValueError(
+                f"Unknown value '{split}' for argument split. "
+                f"Valid values are {tuple(self.split_list)}.")
+        self.split = split
+        url, filename, digest = self.split_list[split]
+        path = _os.path.join(self.root, filename)
+        if download and not (_os.path.isfile(path) and _md5_of_file(path) == digest):
+            _os.makedirs(self.root, exist_ok=True)
+            _fetch_to(url, path, digest)
+        if not _os.path.isfile(path):
+            raise RuntimeError("Dataset not found or corrupted. You can use "
+                               "download=True to download it")
+        with open(path, "rb") as handle:
+            got = _mat_read(handle.read())
+        # **The `y` half is the one a reader can lose.** `scipy` writes each variable
+        # as its own compressed element, and a version of `_mat_read` that stopped
+        # after the first found `X` alone — pictures, no labels, and a file that
+        # parsed. Named here rather than assumed.
+        for key in ("X", "y"):
+            if key not in got:
+                raise RuntimeError(
+                    f"{filename} has no `{key}` — it holds {sorted(got)}")
+        labels = _np.asarray(got["y"]).astype(_np.int64).reshape(-1)
+        labels[labels == 10] = 0
+        self.labels = labels
+        self.data = _np.ascontiguousarray(
+            _np.transpose(_np.asarray(got["X"]), (3, 2, 0, 1)))
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        picture = _np.transpose(self.data[index], (1, 2, 0))
+        target = int(self.labels[index])
+        if self.transforms is not None:
+            picture, target = self.transforms(picture, target)
+        return picture, target
+
+    def extra_repr(self):
+        return f"Split: {self.split}"
+
+
 class DatasetFolder(VisionDataset):
     """A folder per class, and **a `loader` you hand it.**
 
@@ -4966,7 +5168,7 @@ datasets = _types.ModuleType("borchvision.datasets")
 _sys.modules["borchvision.datasets"] = datasets
 for _name in ("VisionDataset", "MNIST", "FashionMNIST", "KMNIST", "QMNIST", "EMNIST",
               "CIFAR10", "CIFAR100", "FakeData", "SEMEION", "USPS", "DatasetFolder",
-              "FER2013", "MovingMNIST", "STL10"):
+              "FER2013", "MovingMNIST", "STL10", "SVHN"):
     setattr(datasets, _name, globals()[_name])
 
 ops = _types.ModuleType("borchvision.ops")
