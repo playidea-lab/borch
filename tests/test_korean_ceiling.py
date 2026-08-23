@@ -90,27 +90,17 @@ SUFFIXES = (".ts", ".py", ".html")
 # Measured 2026-08-22. Lower these after a translation pass; see the module docstring
 # before raising one.
 CEILINGS = {
-    "borch-ts/src": 18,          # 3108 → 3110. **Two characters, and they are a key rather than prose.** A
-    # `misc::` row went into the gap ledger and its reason begins with the marker
-    # `아직`; the reason itself is English, as the rest of that table is.
+    "borch-ts/src": 18,          # 3132 → 3133. **One character, and it is the same key as the last two rises.**
+    # Two case names moved from `브라우저는거절` to `우리는거절` when the core stopped
+    # granting `.double()` in name and answering in `float32` — so a place where the
+    # implementations parted became a place where they agree, and the name had to say
+    # so. Shorter by two characters each, and a gap ledger row's marker made up the
+    # difference, which is why this is +1 rather than −4.
     #
-    # The markers (`아직`, `별칭`, `파이썬`, `없음`) are what `test_alias_rows.py` and
-    # `test_site.py` match on to tell owed work from declined work, so they are keys
-    # into the table and not words in a sentence. They move when those checks move and
-    # not before — which is why every row added after the translation costs two
-    # characters here, and why that is the rule working rather than a breach of it.
-    # 3110 → 3114. A golden case name — `repr::RReLU(정수 경계)`, four characters —
-    # added on the Korean side of the case table because that is where the names live
-    # and they are keys, not prose: the Python and TypeScript tables have to agree on
-    # the string or the row reconciles against nothing. Same rule as the markers above.
-    # 3114 → 3126. Four golden case names carrying `파라미터 이름` (three characters
-    # each) for the `affine=False` and `bias=False` variants of `GroupNorm` and
-    # `BatchNorm2d`. Names, not prose: the Python and TypeScript tables have to agree
-    # on the string or the row reconciles against nothing.
-    # 3126 → 3132. The `opt::` row returning to `run.py`'s ledger, whose reasons are
-    # written in Korean and whose marker words (`아직`, `없음`) are what `test_site.py`
-    # matches on to tell owed work from declined work. A marker is a key.
-    "borch-ts/test": 3132,
+    # The markers (`아직`, `별칭`, `파이썬`, `없음`) and these verdict words are keys
+    # that `test_alias_rows.py`, `test_site.py` and the golden case names match on.
+    # They move when those move and not before.
+    "borch-ts/test": 3133,
 }
 
 

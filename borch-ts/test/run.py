@@ -323,7 +323,12 @@ NOT_PORTED = {
     #   `별칭::` 16   — the name `torch.float` does not exist (a dtype is a string).
     #   `out::` 12    — there is no `out=` argument. Imitated, it saves nothing.
     #   `없는이름::` 11 · `조밀에도답::` 6 · `없는형::` 1 — the Python surface.
-    "dtype::": (86, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
+    # 86 → 88. Two spellings of one refusal — `.to(float64)` and `.type(float64)` —
+    # went in beside `.double()`, which the core had been granting in name and
+    # answering in `float32`. All three arrive at one gate now, and the rows are
+    # here rather than portable for the reason the rest of this group is: they ask
+    # about a Python signature, and borch.ts takes its dtypes as strings.
+    "dtype::": (88, "파이썬 — the factories' `dtype=`, the dtype aliases, `out=`"),
     # This number jumping from 82 to 88 was caught **the day the check went in** — the
     # batch that turned `x.real` and `x.device` into properties grew the cases by six.
     # 88 → 116. Twenty predicates and eight unpaired in-place variants went in. Both are

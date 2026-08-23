@@ -481,7 +481,26 @@ class Tensor:
 
         A conversion to an integer or boolean dtype does not come here. torch
         cuts the gradient there too.
+
+        **Double precision stops here**, and this is the one place it can: it is
+        where `.double()`, `.to(float64)` and `.type(float64)` all arrive, and they
+        are one request spelled three ways. `int32`, `float16` and `int16` already
+        refuse on all three, because their names are `_AbsentDtype` and the gate is
+        in the name. `float64`'s name cannot be — it has a **second job**, naming
+        what numpy hands over during promotion, the same reason `complex128` is a
+        real dtype object. So the gate goes on the conversion instead of the name.
+
+        Until now the request was granted in name and answered in another cell:
+        `Tensor.__init__` narrows double precision at construction, deliberately,
+        that being — as the comment there puts it — the library's first design
+        decision. `.int()` two methods up stopped doing exactly this and says why;
+        this one kept doing it because **the case watching it asks "did it
+        refuse?"** and a silent downcast is not a refusal. The sentence beside that
+        case read "the core has float64": true when written, untrue since the
+        narrowing went in, and nothing was positioned to notice.
         """
+        if _np.dtype(target) == _np.float64:
+            _unsupported("float64 (`.double()`, `.to(float64)`, `.type(float64)`)")
         out = self.data.astype(target)
         return self._make(out, (self,), lambda g: (g.astype(self.data.dtype),), "ToCopyBackward0")
 
@@ -506,6 +525,8 @@ class Tensor:
         return Tensor(self.data.astype(_np.bool_))
 
     def double(self):
+        """**There is no float64 — so it refuses**, at `_cast` with `.to(float64)`
+        and `.type(float64)`, which are the same request spelled three ways."""
         return self._cast(_np.float64)
 
     def type_as(self, other):

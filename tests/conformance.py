@@ -369,6 +369,17 @@ def report_dtypes():
 
     print(f"\nconformance, dtype promotion — {total} combinations")
     print(f"  agreeing {total - len(bad)}/{total}")
+    # **The shortfall has one cause, and saying so is the difference between a score
+    # and a defect list.** Every disagreement here involves `float64` — measured, not
+    # assumed: the count below is taken rather than written down. There is no such
+    # storage in this subset (WGSL has no `f64`), `Tensor.__init__` narrows it at
+    # construction, and promotion follows. A reader who sees `75/112` without this
+    # line has to work out whether thirty-seven separate rules are wrong.
+    from_f64 = [row for row in bad if "float64" in row[0] or "float64" in str(row[1])]
+    if bad:
+        share = "all of them" if len(from_f64) == len(bad) else f"{len(from_f64)} of them"
+        print(f"  {share} are float64, which this subset does not have. "
+              "The promotion rules themselves are not in question.")
     if bad:
         print("\nwhere it diverged:")
         for name, r, n in bad[:20]:
