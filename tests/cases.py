@@ -10859,7 +10859,7 @@ def golden_cases(inp=None):
     return _no_duplicate_names(
            wide_cases(inp) + grad_cases(inp) + train_cases(inp)
             + dtype_cases(inp) + repr_cases(inp) + error_cases(inp)
-            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + v2_functional_cases(inp) + dataset_cases(inp) + dataset_text_cases(inp) + method_cases(inp) + math_cases(inp)
+            + vision_cases(inp) + ops_cases(inp) + v2_cases(inp) + v2_functional_cases(inp) + dataset_cases(inp) + dataset_text_cases(inp) + dataset_last_three_cases(inp) + method_cases(inp) + math_cases(inp)
             + reduce_cases(inp) + shape_cases(inp) + inplace_cases(inp)
             + linalg_cases(inp) + linalg_struct_cases(inp) + linalg_name_cases(inp)
             + linalg_grad_cases(inp) + ndim_cases(inp) + flow_cases(inp)
@@ -12272,3 +12272,204 @@ def dataset_text_cases(inp=None):
         (DATASET_PREFIX + "IDX int32 table(negative)",
          on_idx(lambda: idx2(2, 2, [-1, 2147483647, -2147483648, 0]))),
     ]
+
+
+def dataset_last_three_cases(inp=None):
+    """The three that were the to-do list, **and the reason two of them can be frozen
+    here while the third could not until it was tried.**
+
+    `STL10` and `MovingMNIST` are raw bytes and a `.npy`; both can be built in memory
+    and handed to torchvision's own reader. `FER2013` was written down as impossible
+    to compare — torchvision cannot download it, it wants a Kaggle account — and that
+    was **cannot fetch the data carried over into cannot check the code.** Its reader
+    takes a directory. A CSV written here goes to both sides and the comparison is as
+    real as any other in this table.
+
+    Each case is a conversion that leaves a dataset which still trains when reversed.
+    STL10 is stored column-major and its labels start at 1; MovingMNIST's `split` cuts
+    the **frames** and not the clips; FER2013's pixels are a string of integers in a
+    cell, and one of its two layouts puts a **leading space in the column names.**
+    """
+    del inp
+    prefix = DATASET_PREFIX
+
+    def stl(build, want, transpose=True):
+        """torchvision has no public STL10 reader either, so what both sides run is
+        `np.frombuffer` and the reshape — six lines that are the whole format. The
+        case earns its place on the **transpose**: skip it and every picture comes out
+        rotated, which is still a picture and still trains."""
+        def run(L):
+            raw = build()
+            flat = np.frombuffer(raw, dtype=np.uint8)
+            if want == "labels":
+                out = flat.astype(np.int64) - 1
+            else:
+                out = flat.reshape(-1, 3, 4, 4)
+                out = out.transpose(0, 1, 3, 2) if transpose else out
+            return L.tensor(np.ascontiguousarray(np.asarray(out, dtype=np.float32)))
+        return run
+
+    # Two 4x4x3 pictures rather than 96x96 — the arrangement is the question and the
+    # size is not. Values count up, so a transposed read lands somewhere visible.
+    _pixels = bytes(range(96))
+    _labels = bytes([1, 10, 5, 3])          # 1-based on disk, as STL10's are
+
+    cases = [
+        (prefix + "STL10 bytes(pictures)", stl(lambda: _pixels, "data")),
+        # **The same bytes without the swap.** Frozen beside the one above so that the
+        # difference the swap makes is a value in this file rather than a claim about
+        # one — the two agree on shape and on every summary statistic.
+        (prefix + "STL10 bytes(no transpose)", stl(lambda: _pixels, "data", False)),
+        (prefix + "STL10 bytes(labels, 1-based)", stl(lambda: _labels, "labels")),
+    ]
+
+    def moving(split, ratio):
+        """`.npy` in, `(clips, frames, 1, H, W)` out. **The split cuts frames**, so
+        both halves keep every clip — and this is asked as a shape, because a reader
+        that split the clips instead would produce the right rank and half the count.
+        """
+        def run(L):
+            import io
+            import os
+            import tempfile
+            # (frames, clips, H, W), counting up so a mis-ordered axis is visible.
+            block = np.arange(6 * 2 * 4 * 4, dtype=np.uint8).reshape(6, 2, 4, 4)
+            handle, path = tempfile.mkstemp(suffix=".npy")
+            try:
+                with os.fdopen(handle, "wb") as out:
+                    np.save(out, block)
+                if _is_real_torch(L):
+                    from torchvision.datasets import MovingMNIST as real
+                    made = os.path.join(os.path.dirname(path), "MovingMNIST")
+                    os.makedirs(made, exist_ok=True)
+                    target = os.path.join(made, "mnist_test_seq.npy")
+                    with open(path, "rb") as src, open(target, "wb") as dst:
+                        dst.write(src.read())
+                    got = real(os.path.dirname(path), split=split,
+                               split_ratio=ratio).data
+                    os.unlink(target)
+                else:
+                    data = np.load(path)
+                    if split == "train":
+                        data = data[:ratio]
+                    elif split == "test":
+                        data = data[ratio:]
+                    got = np.ascontiguousarray(data.transpose(1, 0, 2, 3)[:, :, None])
+                del io
+            finally:
+                os.unlink(path)
+            return L.tensor(np.ascontiguousarray(
+                np.asarray(_as_numpy(got), dtype=np.float32)))
+        return run
+
+    def stl_item():
+        """**`.data` holds `(N,C,H,W)` and `__getitem__` gives `(H,W,C)`.** They
+        disagree on purpose: torchvision transposes at that line with the comment "so
+        that it is consistent with all other datasets", because its other datasets
+        hold HWC and this one does not.
+
+        This case exists because the door was wrong while the store was right. On the
+        real 105,000 pictures `data`, `labels`, `len` and `classes` all matched across
+        four splits and `__getitem__` did not — and nothing frozen here could see it,
+        since every other STL10 case reads the array rather than an item.
+        """
+        def run(L):
+            import os
+            import shutil
+            import tempfile
+            raw = (np.arange(2 * 3 * 96 * 96, dtype=np.int64) % 251).astype(np.uint8)
+            root = tempfile.mkdtemp()
+            try:
+                folder = os.path.join(root, "stl10_binary")
+                os.makedirs(folder)
+                with open(os.path.join(folder, "test_X.bin"), "wb") as out:
+                    out.write(raw.tobytes())
+                with open(os.path.join(folder, "test_y.bin"), "wb") as out:
+                    out.write(bytes([1, 10]))
+                if _is_real_torch(L):
+                    from torchvision.datasets import STL10 as real
+                    cls = real
+                else:
+                    cls = _vision_datasets(L).STL10
+                loaded = cls.__new__(cls)
+                loaded.root, loaded.base_folder = root, "stl10_binary"
+                loaded.transform = loaded.target_transform = None
+                loaded.transforms = None
+                loaded.split, loaded.folds = "test", None
+                pictures, labels = (loaded._STL10__loadfile("test_X.bin", "test_y.bin")
+                                    if _is_real_torch(L)
+                                    else loaded._load("test_X.bin", "test_y.bin"))
+                loaded.data, loaded.labels = pictures, labels
+                picture, target = loaded[1]
+                got = np.asarray(picture)
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(
+                np.concatenate([got.reshape(-1), [target]]).astype(np.float32)))
+        return run
+
+    cases += [
+        # The item, not the array — `(H,W,C)` on both sides, and the label with it.
+        (prefix + "STL10 item(H,W,C)", stl_item()),
+        (prefix + "MovingMNIST(whole)", moving(None, 3)),
+        (prefix + "MovingMNIST(train)", moving("train", 3)),
+        (prefix + "MovingMNIST(test)", moving("test", 3)),
+    ]
+
+    def fer(layout, split):
+        """**Both sides read the same CSV.** torchvision checks a digest before it
+        opens the file, so the digest is handed to it — which is the whole of what
+        "torchvision cannot download this" was preventing."""
+        def run(L):
+            import hashlib
+            import os
+            import shutil
+            import tempfile
+            space = " " if layout == "icml" else ""
+            head = f"emotion,{space}pixels,{space}Usage"
+            rows = [head]
+            for i, (emotion, usage) in enumerate(((3, "Training"), (0, "Training"),
+                                                  (6, "PublicTest"),
+                                                  (2, "PrivateTest"))):
+                cells = " ".join(str((i * 13 + k) % 256) for k in range(48 * 48))
+                rows.append(f"{emotion},{cells},{usage}")
+            body = "\n".join(rows) + "\n"
+            root = tempfile.mkdtemp()
+            try:
+                folder = os.path.join(root, "fer2013")
+                os.makedirs(folder)
+                name = "icml_face_data.csv" if layout == "icml" else "fer2013.csv"
+                with open(os.path.join(folder, name), "w", newline="") as out:
+                    out.write(body)
+                digest = hashlib.md5(body.encode()).hexdigest()
+                if _is_real_torch(L):
+                    from torchvision.datasets import FER2013 as real
+                    real._RESOURCES = dict(real._RESOURCES)
+                    real._RESOURCES[layout] = (name, digest)
+                    loaded = real(root, split=split)
+                else:
+                    mod = _vision_datasets(L).FER2013
+                    mod._RESOURCES = dict(mod._RESOURCES)
+                    mod._RESOURCES[layout] = (name, digest)
+                    loaded = mod(root, split=split)
+                stacked = np.stack([np.asarray(loaded[i][0])
+                                    for i in range(len(loaded))])
+                labels = np.asarray([loaded[i][1] for i in range(len(loaded))])
+            finally:
+                shutil.rmtree(root, ignore_errors=True)
+            return L.tensor(np.ascontiguousarray(
+                np.concatenate([stacked.reshape(len(labels), -1),
+                                labels[:, None]], axis=1).astype(np.float32)))
+        return run
+
+    cases += [
+        (prefix + "FER2013(train)", fer("fer", "train")),
+        # **`Usage` decides**, and test is two values rather than one — `PublicTest`
+        # and `PrivateTest` both land here. A reader that matched only the first
+        # returns half the set and no error.
+        (prefix + "FER2013(test, two usages)", fer("fer", "test")),
+        # The ICML layout's column names carry **a leading space**, and a reader
+        # written against the other file finds out with `KeyError: 'pixels'`.
+        (prefix + "FER2013(icml, spaced headers)", fer("icml", "train")),
+    ]
+    return cases

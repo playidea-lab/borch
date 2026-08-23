@@ -1594,3 +1594,146 @@ def test_EMNIST_unpacks_only_the_members_it_means_to(tmp_path, monkeypatch):
         "the climbing member should land flattened inside raw/, not above it")
     assert not (tmp_path.parent / "escaped").exists()
     assert "readme.txt" not in written and "readme" not in written
+
+
+def _stl_folder(root, **files):
+    folder = pathlib.Path(root) / "stl10_binary"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (folder / name.replace("__", ".")).write_bytes(body) if isinstance(body, bytes) \
+            else (folder / name.replace("__", ".")).write_text(body)
+    return folder
+
+
+def test_STL10_unlabeled_carries_a_sentinel_rather_than_nothing(tmp_path, monkeypatch):
+    """`-1`, not `None` and not `0`. **The sentinel keeps the pair shape** every other
+    dataset here has, so one loop reads both halves — and `-1` is loud in a loss where
+    `0` would quietly mean *aeroplane*.
+    """
+    _stl_folder(tmp_path, unlabeled_X__bin=bytes(2 * 3 * 96 * 96),
+                class_names__txt="\n".join(str(i) for i in range(10)) + "\n")
+    monkeypatch.setattr(DS.STL10, "_check_integrity", lambda self: True)
+    loaded = DS.STL10(tmp_path, split="unlabeled")
+    assert list(loaded.labels) == [-1, -1]
+    assert loaded[0][1] == -1 and len(loaded[0]) == 2
+
+
+def test_STL10_labels_come_down_one_and_pictures_get_transposed(tmp_path, monkeypatch):
+    """Two conversions, and each leaves a dataset that still trains when skipped.
+
+    The file stores **1 to 10** and the class names are ten, so class 10 indexes
+    nothing. And the pictures are column-major: reshape without the swap and every one
+    is transposed — still a picture, still learnable, and a model that learns
+    transposed features scores plausibly.
+    """
+    # **96×96 for real**, because the reshape is fixed at the format's size and a
+    # smaller stand-in would be testing a reshape this code does not do.
+    raw = (np.arange(2 * 3 * 96 * 96, dtype=np.int64) % 251).astype(np.uint8).tobytes()
+    _stl_folder(tmp_path, train_X__bin=raw, train_y__bin=bytes([1, 10]))
+    monkeypatch.setattr(DS.STL10, "_check_integrity", lambda self: True)
+    loaded = DS.STL10.__new__(DS.STL10)
+    loaded.root, loaded.base_folder = str(tmp_path), "stl10_binary"
+    pictures, labels = DS.STL10._load(loaded, "train_X.bin", "train_y.bin")
+    assert list(labels) == [0, 9], "the labels were not brought down to zero-based"
+    flat = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3, 96, 96)
+    assert np.array_equal(pictures, flat.transpose(0, 1, 3, 2))
+    assert not np.array_equal(pictures, flat), "the transpose did nothing"
+
+
+def test_STL10_refuses_a_fold_outside_the_ten(tmp_path):
+    """`folds` picks one of ten predefined subsets. Out of range it is torch's own
+    message, and the wrong *type* is a different message — both, because `folds=1.0`
+    is the plausible mistake and would otherwise index by a float."""
+    loaded = DS.STL10.__new__(DS.STL10)
+    assert DS.STL10._verify_folds(loaded, None) is None
+    assert DS.STL10._verify_folds(loaded, 0) == 0
+    with pytest.raises(ValueError, match=r"range \[0, 10\)"):
+        DS.STL10._verify_folds(loaded, 10)
+    with pytest.raises(ValueError, match="Expected type None or int"):
+        DS.STL10._verify_folds(loaded, 1.0)
+
+
+def test_MovingMNIST_splits_the_frames_and_keeps_every_clip(tmp_path):
+    """**`split` cuts frames, not clips**, which is the opposite of what the word
+    means everywhere else in this namespace. Both halves keep all the clips, so a
+    reader who takes it as a clip split trains and scores on the same videos and sees
+    nothing wrong.
+    """
+    folder = tmp_path / "MovingMNIST"
+    folder.mkdir()
+    block = np.arange(6 * 2 * 4 * 4, dtype=np.uint8).reshape(6, 2, 4, 4)
+    np.save(folder / "mnist_test_seq.npy", block)
+    whole = DS.MovingMNIST(tmp_path)
+    train = DS.MovingMNIST(tmp_path, split="train", split_ratio=4)
+    test = DS.MovingMNIST(tmp_path, split="test", split_ratio=4)
+    assert whole.data.shape == (2, 6, 1, 4, 4)
+    assert len(whole) == len(train) == len(test) == 2       # clips, all of them
+    assert train.data.shape[1] + test.data.shape[1] == 6    # frames, split
+    assert np.array_equal(np.concatenate([train.data, test.data], axis=1), whole.data)
+
+
+def test_MovingMNIST_gives_a_video_and_no_label(tmp_path):
+    """The only dataset here whose `__getitem__` is not a pair. It is a next-frame
+    problem — what to predict is the clip's own later frames — so there is nothing
+    else to hand back, and returning `(video, None)` would invite a loop to unpack a
+    label that means nothing."""
+    folder = tmp_path / "MovingMNIST"
+    folder.mkdir()
+    np.save(folder / "mnist_test_seq.npy",
+            np.zeros((4, 2, 4, 4), dtype=np.uint8))
+    item = DS.MovingMNIST(tmp_path)[0]
+    assert isinstance(item, np.ndarray) and item.shape == (4, 1, 4, 4)
+    with pytest.raises(ValueError, match="Unknown value"):
+        DS.MovingMNIST(tmp_path, split="validation")
+    with pytest.raises(TypeError, match="split_ratio"):
+        DS.MovingMNIST(tmp_path, split_ratio=1.5)
+    with pytest.raises(ValueError, match="1 <= split_ratio <= 19"):
+        DS.MovingMNIST(tmp_path, split_ratio=20)
+
+
+def _fer_csv(root, layout="fer"):
+    space = " " if layout == "icml" else ""
+    rows = [f"emotion,{space}pixels,{space}Usage"]
+    for i, (emotion, usage) in enumerate(((3, "Training"), (0, "PublicTest"),
+                                          (6, "PrivateTest"))):
+        rows.append(f"{emotion}," + " ".join(str((i + k) % 256) for k in range(48 * 48))
+                    + f",{usage}")
+    body = "\n".join(rows) + "\n"
+    folder = pathlib.Path(root) / "fer2013"
+    folder.mkdir(parents=True, exist_ok=True)
+    name = "icml_face_data.csv" if layout == "icml" else "fer2013.csv"
+    (folder / name).write_text(body)
+    import hashlib
+    return name, hashlib.md5(body.encode()).hexdigest()
+
+
+def test_FER2013_test_split_is_two_usages(tmp_path, monkeypatch):
+    """`PublicTest` **and** `PrivateTest`. A reader that matched only the first
+    returns half the set with no error and a test score off by however the two halves
+    differ."""
+    name, digest = _fer_csv(tmp_path)
+    monkeypatch.setitem(DS.FER2013._RESOURCES, "fer", (name, digest))
+    assert len(DS.FER2013(tmp_path, split="train")) == 1
+    assert len(DS.FER2013(tmp_path, split="test")) == 2
+    with pytest.raises(ValueError, match="Unknown value"):
+        DS.FER2013(tmp_path, split="validation")
+
+
+def test_FER2013_reads_the_layout_whose_headers_carry_a_space(tmp_path, monkeypatch):
+    """The ICML file's columns are ` pixels` and ` Usage`; the Kaggle one's are not.
+    **A reader written against one finds out on the other with `KeyError: 'pixels'`**,
+    which reads as a corrupt file rather than as a second layout."""
+    name, digest = _fer_csv(tmp_path, layout="icml")
+    monkeypatch.setitem(DS.FER2013._RESOURCES, "icml", (name, digest))
+    loaded = DS.FER2013(tmp_path, split="train")
+    picture, label = loaded[0]
+    assert picture.shape == (48, 48) and picture.dtype == np.uint8 and label == 3
+    assert len(DS.FER2013(tmp_path, split="test")) == 2
+
+
+def test_FER2013_says_where_to_get_it_rather_than_where_it_looked(tmp_path):
+    """torchvision cannot download this one, so the message has to carry the address —
+    a bare "not found" leaves a reader with a dataset they cannot obtain and no idea
+    that is the situation."""
+    with pytest.raises(RuntimeError, match="kaggle.com"):
+        DS.FER2013(tmp_path, split="train")
