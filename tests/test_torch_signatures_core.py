@@ -433,7 +433,32 @@ SHORTER = {
     # honouring it is not broken — it is measuring names, and it says so. It is the
     # reason `test_inert_arguments.py` exists next to it, and the reason a green run
     # here is not evidence that anything works.
-    "nn": 12,
+    #
+    # **12 → 0. This bucket is empty: the core takes no `nn` argument torch does
+    # not.** All twelve were one argument, `value`, on one shared base.
+    #
+    # `_PadNd.__init__(padding, value)` gave it to every subclass, and torch gives
+    # it to `ConstantPad*` alone — `ZeroPad2d(1, 9.0)` is a `TypeError` there. Here
+    # it was accepted, and what happened next depended on the mode:
+    #
+    #     ZeroPad2d(1, value=9)         filled with 9    ← a pad named Zero
+    #     ReflectionPad2d(1, value=9)   filled with 4    ← accepted, discarded
+    #     ReplicationPad2d(1, value=9)  filled with 0    ← accepted, discarded
+    #
+    # Two kinds of wrong at once: three answer with a number their own name rules
+    # out, and nine take an argument and drop it.
+    #
+    # **borch.ts had it right from the start** — its fifteen classes each write
+    # their own constructor and only `ConstantPad*` has a `v`. So this axis was
+    # reporting twelve rows about the core while the other implementation was
+    # already correct, which is the direction this axis is *for* and the one it is
+    # easiest to read past when the column is called `우리가 더 받는다`.
+    #
+    # The binding had the same defect in its own shape: `make(padding, value=0.0)`
+    # for all fifteen, forwarding it only for `ConstantPad*`. Nothing diverged
+    # there, because borch.ts has no seat to receive it — an argument accepted and
+    # discarded looks exactly like one honoured until somebody checks the answer.
+    "nn": 0,
     "nn.functional": 0,
     # 10 → 11. `SGD` left `shifted` and arrived here: it now agrees with torch as far
     # as `maximize` and stops, because `foreach`, `differentiable` and `fused` are

@@ -10684,7 +10684,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10697,7 +10697,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10710,7 +10710,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10723,7 +10723,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10736,7 +10736,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10749,7 +10749,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10762,7 +10762,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10775,7 +10775,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10788,7 +10788,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10801,7 +10801,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10814,7 +10814,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10827,7 +10827,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[])",
+       "signature": "constructor(padding: number | readonly number[])",
        "doc": ""
       }
      ]
@@ -10840,7 +10840,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[], v?: number)",
+       "signature": "constructor(padding: number | readonly number[], v?: number)",
        "doc": ""
       }
      ]
@@ -10853,7 +10853,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[], v?: number)",
+       "signature": "constructor(padding: number | readonly number[], v?: number)",
        "doc": ""
       }
      ]
@@ -10866,7 +10866,7 @@
      "members": [
       {
        "name": "constructor",
-       "signature": "constructor(p: number | readonly number[], v?: number)",
+       "signature": "constructor(padding: number | readonly number[], v?: number)",
        "doc": ""
       }
      ]

@@ -3152,60 +3152,60 @@ export class PadNd extends Module {
 // class makes TypeScript refuse on the grounds of `Module`'s private members, and three
 // lines each is cheaper than breaking the inheritance to open that up.
 export class ReflectionPad1d extends PadNd {
-  constructor(p: number | readonly number[]) { super("ReflectionPad1d", p, "reflect", 1); }
+  constructor(padding: number | readonly number[]) { super("ReflectionPad1d", padding, "reflect", 1); }
 }
 export class ReflectionPad2d extends PadNd {
-  constructor(p: number | readonly number[]) { super("ReflectionPad2d", p, "reflect", 2); }
+  constructor(padding: number | readonly number[]) { super("ReflectionPad2d", padding, "reflect", 2); }
 }
 export class ReflectionPad3d extends PadNd {
-  constructor(p: number | readonly number[]) { super("ReflectionPad3d", p, "reflect", 3); }
+  constructor(padding: number | readonly number[]) { super("ReflectionPad3d", padding, "reflect", 3); }
 }
 export class ReplicationPad1d extends PadNd {
-  constructor(p: number | readonly number[]) {
-    super("ReplicationPad1d", p, "replicate", 1);
+  constructor(padding: number | readonly number[]) {
+    super("ReplicationPad1d", padding, "replicate", 1);
   }
 }
 export class ReplicationPad2d extends PadNd {
-  constructor(p: number | readonly number[]) {
-    super("ReplicationPad2d", p, "replicate", 2);
+  constructor(padding: number | readonly number[]) {
+    super("ReplicationPad2d", padding, "replicate", 2);
   }
 }
 export class ReplicationPad3d extends PadNd {
-  constructor(p: number | readonly number[]) {
-    super("ReplicationPad3d", p, "replicate", 3);
+  constructor(padding: number | readonly number[]) {
+    super("ReplicationPad3d", padding, "replicate", 3);
   }
 }
 export class CircularPad1d extends PadNd {
-  constructor(p: number | readonly number[]) { super("CircularPad1d", p, "circular", 1); }
+  constructor(padding: number | readonly number[]) { super("CircularPad1d", padding, "circular", 1); }
 }
 export class CircularPad2d extends PadNd {
-  constructor(p: number | readonly number[]) { super("CircularPad2d", p, "circular", 2); }
+  constructor(padding: number | readonly number[]) { super("CircularPad2d", padding, "circular", 2); }
 }
 export class CircularPad3d extends PadNd {
-  constructor(p: number | readonly number[]) { super("CircularPad3d", p, "circular", 3); }
+  constructor(padding: number | readonly number[]) { super("CircularPad3d", padding, "circular", 3); }
 }
 export class ZeroPad1d extends PadNd {
-  constructor(p: number | readonly number[]) { super("ZeroPad1d", p, "constant", 1); }
+  constructor(padding: number | readonly number[]) { super("ZeroPad1d", padding, "constant", 1); }
 }
 export class ZeroPad2d extends PadNd {
-  constructor(p: number | readonly number[]) { super("ZeroPad2d", p, "constant", 2); }
+  constructor(padding: number | readonly number[]) { super("ZeroPad2d", padding, "constant", 2); }
 }
 export class ZeroPad3d extends PadNd {
-  constructor(p: number | readonly number[]) { super("ZeroPad3d", p, "constant", 3); }
+  constructor(padding: number | readonly number[]) { super("ZeroPad3d", padding, "constant", 3); }
 }
 export class ConstantPad1d extends PadNd {
-  constructor(p: number | readonly number[], v = 0) {
-    super("ConstantPad1d", p, "constant", 1, v);
+  constructor(padding: number | readonly number[], v = 0) {
+    super("ConstantPad1d", padding, "constant", 1, v);
   }
 }
 export class ConstantPad2d extends PadNd {
-  constructor(p: number | readonly number[], v = 0) {
-    super("ConstantPad2d", p, "constant", 2, v);
+  constructor(padding: number | readonly number[], v = 0) {
+    super("ConstantPad2d", padding, "constant", 2, v);
   }
 }
 export class ConstantPad3d extends PadNd {
-  constructor(p: number | readonly number[], v = 0) {
-    super("ConstantPad3d", p, "constant", 3, v);
+  constructor(padding: number | readonly number[], v = 0) {
+    super("ConstantPad3d", padding, "constant", 3, v);
   }
 }
 

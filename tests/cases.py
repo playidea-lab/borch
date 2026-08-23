@@ -7064,6 +7064,29 @@ def pad_cases(inp=None):
         cases.append((PAD_PREFIX + f"repr::{name}",
                       lambda L, c=name, a=arg: repr(getattr(L.nn, c)(a, 7.0))))
 
+    # **Only `ConstantPad*` takes a `value`, and asking that is the whole point.**
+    #
+    # `_PadNd` used to hand it to all fifteen, and the thirty-three cases above are
+    # every one of them at its default — so nothing here saw it. What it did depended
+    # on the mode: `ZeroPad2d(1, 9.0)` filled with 9 (a pad named Zero), while
+    # `ReflectionPad2d(1, 9.0)` took the argument and dropped it.
+    #
+    # A default-only case list cannot see an argument that should not exist. **The
+    # question has to be whether the call is refused**, and torch refuses it —
+    # `ZeroPad2d.__init__() takes 2 positional arguments but 3 were given`.
+    def refuses_value(L, cls):
+        try:
+            getattr(L.nn, cls)(1, 9.0)
+        except TypeError:
+            return "거절"
+        except Exception as exc:                                # noqa: BLE001
+            return f"다른 예외 <{type(exc).__name__}>"
+        return "안 던졌다"
+
+    for _cls in ("ZeroPad2d", "ReflectionPad2d", "ReplicationPad2d", "CircularPad2d"):
+        cases.append((PAD_PREFIX + f"거절::{_cls}(value)",
+                      lambda L, c=_cls: refuses_value(L, c)))
+
     # The gradient has to flow through the layer too — wire the function and not the layer and it is cut here.
     def layer_grad(L):
         x = L.tensor(_PAD_2D, requires_grad=True)

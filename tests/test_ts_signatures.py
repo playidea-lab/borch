@@ -242,7 +242,19 @@ UNALIGNED = {
     # have, which made their lists a length borch.ts's could be compared against —
     # **a row leaving `unaligned` because the core dropped an argument rather than
     # gaining one**, which is the rarer direction and worth naming.
-    "nn": 35,
+    #
+    # **35 → 23.** The twelve are the pad layers, and they moved in two steps.
+    #
+    # First the core dropped `value` from the twelve that torch does not give it to
+    # (`_PadNd` handed it to every subclass; torch gives it to `ConstantPad*`
+    # alone). That took them out of `unaligned` — lists that cannot be lined up —
+    # and into `renamed`, because what was left was `padding` here against `p`
+    # there. Then borch.ts took torch's spelling and the rows closed entirely.
+    #
+    # **borch.ts was right about `value` from the start**: its fifteen classes each
+    # write their own constructor and only `ConstantPad*` has one. The row was
+    # about the core the whole time.
+    "nn": 23,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be

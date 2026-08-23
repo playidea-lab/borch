@@ -132,7 +132,10 @@ CEILINGS = {
     # hides — the tag is `접힘` and the four new names reuse it.
     # 3157 → 3161. Two case names, `2층` and `마스크` — the transformer stack and
     # the causal mask, the last five names on the name axis.
-    "borch-ts/test": 3161,
+    # 3161 → 3172. `run.py` 의 unasked 원장 한 줄 — `pad::거절::` 넷과 그 사유.
+    # 케이스 이름은 두 언어가 같은 문자열을 써야 대조되므로 원장 항목도 같은
+    # 접두사를 그대로 든다.
+    "borch-ts/test": 3172,
 }
 
 

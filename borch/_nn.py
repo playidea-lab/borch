@@ -3685,15 +3685,34 @@ nn.CosineSimilarity = CosineSimilarity
 # answer.
 
 class _PadNd(Module):
+    """**Only `ConstantPad*` takes a `value`, and this used to give it to all
+    fifteen.**
+
+    torch refuses `ZeroPad2d(1, 9.0)` outright — the constructor takes one
+    argument. Here it was accepted, and what happened next depended on the mode:
+
+        ZeroPad2d(1, value=9)         filled with 9    ← a pad named Zero
+        ReflectionPad2d(1, value=9)   filled with 4    ← accepted, discarded
+        ReplicationPad2d(1, value=9)  filled with 0    ← accepted, discarded
+
+    Twelve of the fifteen, in two kinds of wrong at once: three answer with a
+    number their own name rules out, and nine take an argument and drop it, which
+    is the defect `test_inert_arguments.py` exists for.
+
+    **One shared base handing an argument to every subclass is how it happened.**
+    The value belongs to one mode, so it lives on the subclass that has that mode.
+    """
+
     _mode = "constant"
     _dims = 1
+    #: Constant padding fills with this. Only `_ConstantPadNd` lets a caller set it.
+    value = 0.0
 
-    def __init__(self, padding, value=0.0):
+    def __init__(self, padding):
         super().__init__()
         pairs = 2 * self._dims
         self.padding = ((padding,) * pairs if isinstance(padding, int)
                         else tuple(padding))
-        self.value = value
 
     def forward(self, x):
         return pad(x, self.padding, mode=self._mode, value=self.value)
@@ -3703,6 +3722,12 @@ class _PadNd(Module):
 
 
 class _ConstantPadNd(_PadNd):
+    """The only three with a `value`, as in torch."""
+
+    def __init__(self, padding, value=0.0):
+        super().__init__(padding)
+        self.value = value
+
     def __repr__(self):
         return (f"{type(self).__name__}(padding={self.padding}, "
                 f"value={self.value})")

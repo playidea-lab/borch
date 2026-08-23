@@ -413,6 +413,19 @@ NOT_PORTED = {
     # now. The two left are `asarray`, which takes a numpy array or a Python list, and TS
     # has neither.
     "make::": (2, "파이썬 — `asarray` takes an ndarray or a list; TS has neither"),
+    # **A question TypeScript cannot be asked.** Python refuses `ZeroPad2d(1, 9.0)`
+    # with a `TypeError` because the constructor takes one argument; JavaScript keeps
+    # no arity and simply does not receive the second. So the same case name would
+    # freeze `거절` on one side and `안 던졌다` on the other, and reconciling that
+    # would mean writing an arity check into fifteen constructors that no other layer
+    # in `nn.ts` has.
+    #
+    # **borch.ts was right about this from the start** — each pad class writes its
+    # own constructor and only `ConstantPad*` has a value. The core handed it to all
+    # fifteen, and `ZeroPad2d(1, 9.0)` filled with 9 while `ReflectionPad2d(1, 9.0)`
+    # took it and dropped it. The four cases are the core's own.
+    "pad::": (4, "파이썬 — JS keeps no arity, so a surplus argument is not received "
+                 "rather than refused"),
     # 47 → 50. The **kinds** of `finfo` and `iinfo`, and the no-argument default dtype. A
     # Python-side matter — neither name is in borch.ts.
     # 50 → 39. **The reason was explaining only eleven of them.** "top-level in-place

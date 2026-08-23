@@ -1790,11 +1790,22 @@ def _pad_arg(padding):
 
 
 def _pad_layer(name):
-    def make(padding, value=0.0):
-        args = (_pad_arg(padding),)
-        if name.startswith("ConstantPad"):
-            args += (float(value),)
-        return _layer(name, *args)
+    """**`value` belongs to `ConstantPad*` and this gave it to all fifteen.**
+
+    The twelve took it and dropped it — borch.ts's constructors have no seat for
+    it, so it never crossed. Nothing diverged, which is why it lasted: an argument
+    accepted and discarded looks exactly like an argument honoured until somebody
+    checks the answer. torch refuses `ZeroPad2d(1, 9.0)` outright.
+
+    Two shapes rather than one with a branch, so the signature itself says which
+    layers have a value.
+    """
+    if name.startswith("ConstantPad"):
+        def make(padding, value=0.0):
+            return _layer(name, _pad_arg(padding), float(value))
+    else:
+        def make(padding):
+            return _layer(name, _pad_arg(padding))
     make.__name__ = name
     return make
 
