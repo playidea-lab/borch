@@ -3819,7 +3819,17 @@ export class BatchNorm3d extends BatchNormND {}
  */
 export type RNNKind = "RNN" | "LSTM" | "GRU";
 
-export class Recurrent extends Module {
+/**
+ * What `RNN`, `LSTM` and `GRU` share — the weights and the time loop.
+ *
+ * **torch calls this `RNNBase`**, and the name was `Recurrent` alone, so the name
+ * axis counted the base class as a feature borch.ts does not have while `RNN
+ * extends` it two hundred lines down. `RNNBase` is the exported name now and
+ * `Recurrent` stays beside it, because `src/rnn.ts` and the golden's own comments
+ * refer to it by that name and a rename that reaches into prose is how a comment
+ * starts lying.
+ */
+export class RNNBase extends Module {
   readonly weightIh: Tensor;
   readonly weightHh: Tensor;
   readonly biasIh: Tensor;
@@ -3915,8 +3925,16 @@ export class Recurrent extends Module {
  * `track_running_stats`.
  */
 
+/**
+ * The former name of `RNNBase`. Kept because `src/rnn.ts` and the golden's own
+ * comments name it in prose, and a rename that reaches into prose is how a comment
+ * starts lying. **Both the value and the type**, because it was used as a type.
+ */
+export const Recurrent = RNNBase;
+export type Recurrent = RNNBase;
+
 /** `torch.nn.RNN` — one layer, time-first. */
-export class RNN extends Recurrent {
+export class RNN extends RNNBase {
   constructor(inputSize: number, hidden: number) {
     super(inputSize, hidden, "RNN");
   }
@@ -3926,14 +3944,14 @@ export class RNN extends Recurrent {
  * `torch.nn.LSTM` — one layer, time-first. It carries two states, so `cell`
  * comes back alongside `hidden`.
  */
-export class LSTM extends Recurrent {
+export class LSTM extends RNNBase {
   constructor(inputSize: number, hidden: number) {
     super(inputSize, hidden, "LSTM");
   }
 }
 
 /** `torch.nn.GRU` — one layer, time-first. */
-export class GRU extends Recurrent {
+export class GRU extends RNNBase {
   constructor(inputSize: number, hidden: number) {
     super(inputSize, hidden, "GRU");
   }

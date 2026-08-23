@@ -1198,6 +1198,11 @@ _TORCH_FIELDS = {
     ("sign", "logabs"): {"logabs": "logabsdet"},
     ("q", "r"): {"q": "Q", "r": "R"},
     ("u", "s", "vt"): {"u": "U", "s": "S", "vt": "Vh"},
+    # **`torch.svd` is a different function from `torch.linalg.svd`** and its third
+    # slot is `V`, the transpose of `Vh`. borch.ts returns `{u, s, v}` from one and
+    # `{u, s, vt}` from the other, so the two slot sets are what tells them apart —
+    # which is the reason this table is keyed on the whole set and not on names.
+    ("u", "s", "v"): {"u": "U", "s": "S", "v": "V"},
     ("values", "vectors"): {"values": "eigenvalues", "vectors": "eigenvectors"},
 }
 

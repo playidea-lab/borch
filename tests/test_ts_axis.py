@@ -102,6 +102,7 @@ FROZEN = {
     #
     # The golden cases are written out by hand on both sides rather than generated:
     # a table cannot check a table, because the same list would produce both.
+    # 76 unchanged — the adaptive work was all `nn.functional`.
     "Tensor": 76,
     # 14 until case-folding stopped erasing the class/function boundary. `Embedding`
     # was a layer the core had and borch.ts did not, `embedding` a function both had;
@@ -135,7 +136,20 @@ FROZEN = {
     # stood for the lazy form of a class nobody could import.
     # 11 → 10. `BCELoss`, whose logits form (`BCEWithLogitsLoss`) was already here —
     # the same shape as `BatchNorm1d` above, and as `default_collate` below.
-    "nn": 10,
+    # 10 → 9. `RNNBase` — **borch.ts had the class under the name `Recurrent`**, so
+    # the axis counted the base of `RNN`, `LSTM` and `GRU` as a feature borch.ts
+    # does not have while all three extended it a hundred lines below. Fifth time in
+    # one session that a name read as absent while the work sat beside it.
+    #
+    # `Recurrent` stays as an alias, value and type, because `src/rnn.ts` and the
+    # golden's own comments name it in prose — a rename that reaches into prose is
+    # how a comment starts lying.
+    #
+    # Three of the nine left have reasons now (`Buffer`, `UninitializedParameter`,
+    # `UninitializedBuffer`) — all three are marks with nothing on this side to read
+    # them, which is a reason rather than a hollow name. Six are unexplained: the
+    # five `Transformer*` classes, and `AdaptiveAvgPool2d`, which is held.
+    "nn": 9,
     # **30 → 10, and eighteen of the twenty were one delegation each.**
     #
     # `poolND`, `lpPool`, `maxUnpool`, `convTransposeND`, `maxPoolWithIndices` and
@@ -160,7 +174,25 @@ FROZEN = {
     # a peer's lesson page teaches a workaround for `AdaptiveAvgPool2d` being absent
     # and pins the absence at both ends, so filling it silently would leave a page
     # teaching a detour around a road that exists. It moves when that page does.
-    "nn.functional": 10,
+    # **10 → 0. `nn.functional` is empty: every name torch has, borch.ts has.**
+    #
+    # Nine were the `adaptive_*` family over `adaptivePool` and
+    # `adaptiveMaxPoolWithIndices`, which do the work and do not consult the rank —
+    # a peer measured `AdaptiveAvgPool1d` and `AdaptiveAvgPool3d` as byte-identical
+    # bodies over the same helper. The rank check lives in the wrapper because torch
+    # has one.
+    #
+    # The tenth was `triplet_margin_with_distance_loss`, which is
+    # `tripletMarginLoss` with the distance handed in — torch says they are the same
+    # function by giving them the same default.
+    #
+    # **`nn.AdaptiveAvgPool2d` is still absent on purpose** and this did not disturb
+    # that: a peer's lesson teaches a reader what to do without the class and pins
+    # the absence at both ends. These are `nn.functional` names in camelCase, a
+    # different string, and `_folds_onto` returns false for a capitalised name — so
+    # the class cannot fold onto any of them. Checked against the index rather than
+    # assumed, in both directions, including their positive control.
+    "nn.functional": 0,
     "optim": 0,
     "optim.lr_scheduler": 0,
     # 3 → 0. The three were `inv`, `pinv` and `matmul` — torch's spellings of

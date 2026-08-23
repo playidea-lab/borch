@@ -860,6 +860,14 @@ def grad_cases(inp=None):
     folds("quantile(0.3) 보간", lambda L, x: x.quantile(0.3))
     folds("quantile(0.5) 짝수는 둘로", lambda L, x: x.quantile(0.5), even)
     folds("quantile(0.75) 짝수", lambda L, x: x.quantile(0.75), even)
+    # **The four rules the default hides.** All four cases above pass no
+    # `interpolation`, so they exercise `linear` alone — and `lower`, `higher`,
+    # `midpoint` and `nearest` are different answers *and different gradients*: the
+    # split has to follow the rule that produced the value, or the forward stops
+    # interpolating while the backward goes on doing it.
+    for _how in ("lower", "higher", "midpoint", "nearest"):
+        folds(f"quantile(0.3, {_how})",
+              lambda L, x, h=_how: x.quantile(0.3, interpolation=h))
     # Its derivative is `i1`. borch.ts was **flowing a zero** here, and its comment cited the
     # core's hole as its grounds — one side had copied the other. A gradient whose value is zero
     # and a gradient that is absent are different statements, and in the copying the second
@@ -6670,6 +6678,14 @@ def loss_cases(inp=None):
         add(f"triplet_with_distance({tag})",
             lambda L, m=margin: F(L).triplet_margin_with_distance_loss(
                 L.tensor(anc), L.tensor(pos), L.tensor(neg), margin=m))
+    # **A distance that is not the default**, which is the only reason this name
+    # exists apart from `triplet_margin_loss`. Both cases above pass `None` and get
+    # the pairwise distance, so they agree with the plain form and would agree just
+    # as well with an implementation that ignored the argument entirely.
+    add("triplet_with_distance(L1)",
+        lambda L: F(L).triplet_margin_with_distance_loss(
+            L.tensor(anc), L.tensor(pos), L.tensor(neg),
+            distance_function=lambda u, v: (u - v).abs().sum(dim=-1)))
 
     # ── multi-label ──
     add("multilabel_soft_margin",

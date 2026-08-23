@@ -4621,6 +4621,30 @@ fn gelu_tanh_grad(x: f32) -> f32 {
   }
 
   /**
+   * `torch.nn.functional.triplet_margin_with_distance_loss`. **The distance is the
+   * caller's**, which is the whole difference from `tripletMarginLoss` below — that
+   * one is this with the pairwise distance, and torch says so by giving them the
+   * same default.
+   *
+   * It is a method rather than a function in `functional.ts` because the reduction
+   * is private to this class, and that file's rule is that every value comes from a
+   * `Tensor` method.
+   */
+  tripletMarginWithDistanceLoss(
+    positive: Tensor, negative: Tensor,
+    distanceFunction: ((u: Tensor, v: Tensor) => Tensor) | null = null,
+    margin = 1.0, swap = false, reduction: Reduction = "mean",
+  ): Tensor {
+    const dist = distanceFunction ?? ((u: Tensor, v: Tensor) => u.pairwiseDistance(v));
+    const dp = dist(this, positive);
+    let dn = dist(this, negative);
+    // A negative closer to the positive than to the anchor is the harder pair, and
+    // without this the loss never sees it.
+    if (swap) dn = dn.binary("minimum", dist(positive, negative));
+    return dp.sub(dn).add(Tensor.full([], margin)).unary("relu").reduceAs(reduction);
+  }
+
+  /**
    * `max(0, d(a,p) − d(a,n) + margin)`.
    */
   tripletMarginLoss(

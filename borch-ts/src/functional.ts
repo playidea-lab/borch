@@ -481,3 +481,78 @@ export function binaryCrossEntropy(
 ): Tensor {
   return input.bce(target, reduction);
 }
+
+// ── The adaptive family ───────────────────────────────────────────────────
+//
+// `adaptivePool` and `adaptiveMaxPoolWithIndices` do the work and do not consult
+// the rank — a peer measured that `AdaptiveAvgPool1d` and `AdaptiveAvgPool3d` have
+// byte-identical bodies over the same helper. So these nine are torch's per-rank
+// names over one computation, and the rank check is here because torch has one.
+//
+// **`nn.AdaptiveAvgPool2d` is deliberately still absent.** A peer's lesson page
+// teaches a reader what to do without it and pins the absence at both ends; these
+// are `nn.functional` names in camelCase, a different string from the class, so the
+// pin is untouched (checked, not assumed: `_folds_onto` returns false for a
+// capitalised name, so the class cannot fold onto any of these).
+
+export function adaptiveAvgPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor {
+  return atRank(input, 3, "adaptive_avg_pool1d").adaptivePool("avg", outputSize);
+}
+
+export function adaptiveAvgPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor {
+  return atRank(input, 4, "adaptive_avg_pool2d").adaptivePool("avg", outputSize);
+}
+
+export function adaptiveAvgPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor {
+  return atRank(input, 5, "adaptive_avg_pool3d").adaptivePool("avg", outputSize);
+}
+
+export function adaptiveMaxPool1d(input: Tensor, outputSize: number | readonly number[]): Tensor {
+  return atRank(input, 3, "adaptive_max_pool1d").adaptivePool("max", outputSize);
+}
+
+export function adaptiveMaxPool2d(input: Tensor, outputSize: number | readonly number[]): Tensor {
+  return atRank(input, 4, "adaptive_max_pool2d").adaptivePool("max", outputSize);
+}
+
+export function adaptiveMaxPool3d(input: Tensor, outputSize: number | readonly number[]): Tensor {
+  return atRank(input, 5, "adaptive_max_pool3d").adaptivePool("max", outputSize);
+}
+
+export function adaptiveMaxPool1dWithIndices(
+  input: Tensor, outputSize: number | readonly number[],
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 3, "adaptive_max_pool1d_with_indices")
+    .adaptiveMaxPoolWithIndices(outputSize);
+}
+
+export function adaptiveMaxPool2dWithIndices(
+  input: Tensor, outputSize: number | readonly number[],
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 4, "adaptive_max_pool2d_with_indices")
+    .adaptiveMaxPoolWithIndices(outputSize);
+}
+
+export function adaptiveMaxPool3dWithIndices(
+  input: Tensor, outputSize: number | readonly number[],
+): { values: Tensor; indices: Tensor } {
+  return atRank(input, 5, "adaptive_max_pool3d_with_indices")
+    .adaptiveMaxPoolWithIndices(outputSize);
+}
+
+/**
+ * `F.triplet_margin_with_distance_loss` — see `Tensor.tripletMarginWithDistanceLoss`
+ * on why the body is a method.
+ */
+export function tripletMarginWithDistanceLoss(
+  anchor: Tensor,
+  positive: Tensor,
+  negative: Tensor,
+  distanceFunction: ((u: Tensor, v: Tensor) => Tensor) | null = null,
+  margin = 1.0,
+  swap = false,
+  reduction: Reduction = "mean",
+): Tensor {
+  return anchor.tripletMarginWithDistanceLoss(
+    positive, negative, distanceFunction, margin, swap, reduction);
+}

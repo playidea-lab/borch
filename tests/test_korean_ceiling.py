@@ -128,7 +128,9 @@ CEILINGS = {
     # 3148 → 3155. Two case names, `텐서 지수` and `수 지수` — `pow` with a tensor
     # exponent beside `pow` with a number. The two are different kernels with
     # different backwards, so one name could not stand for both.
-    "borch-ts/test": 3155,
+    # 3155 → 3157. `quantile(0.3, …)` at the four interpolation rules the default
+    # hides — the tag is `접힘` and the four new names reuse it.
+    "borch-ts/test": 3157,
 }
 
 

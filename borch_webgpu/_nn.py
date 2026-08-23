@@ -254,6 +254,11 @@ def _loss(js_name, order):
 
 
 _LOSSES = {
+    # **`binary_cross_entropy` was the third implementation left behind.** The core
+    # and borch.ts both grew it in the same hour; this file did not, and only
+    # `tests/browser/run.py --lib borch_webgpu` says so — the core's suite and the
+    # borch.ts golden were both green while the binding could not run the case.
+    "binary_cross_entropy": ("bce", ("target", "reduction")),
     "huber_loss": ("huberLoss", ("target", "delta", "reduction")),
     "kl_div": ("klDiv", ("target", "reduction", "log_target")),
     "poisson_nll_loss": ("poissonNllLoss",
@@ -319,11 +324,47 @@ def _alpha_dropout(per_channel):
 def _triplet_with_distance(anchor, positive, negative, distance_function=None,
                            margin=1.0, swap=False, reduction="mean"):
     """The triplet that takes a distance function. What lives on the layer side
-    is offered under a function name as well."""
-    layer = _ts.nn.TripletMarginWithDistanceLoss.new(
-        distance_function, float(margin), bool(swap), reduction)
-    return wrap(guarded(layer.call, handle(anchor), handle(positive),
-                        handle(negative)))
+    is offered under a function name as well.
+
+    **The callable needs two things done to it and neither is optional.**
+
+    It is handed to JavaScript, so a bare Python function crosses as a *borrowed*
+    proxy — alive for the argument's own lifetime and destroyed before the call
+    that stores it uses it. The failure arrives later, as `borrowed proxy was
+    automatically destroyed`, from a line that no longer names the callback.
+    `create_proxy` is what keeps it, and `destroy()` is what stops it leaking.
+
+    And what arrives at the callback is **borch.ts handles, not binding tensors**,
+    so a Python body written in this library's own vocabulary — `(u - v).abs()` —
+    would find none of it. The bridge wraps on the way in and unwraps on the way
+    out, which is the same crossing `wrap`/`handle` make everywhere else here.
+
+    Both were found by `tests/browser/run.py --lib borch_webgpu`, which is the only
+    check that runs this file at all: the case existed and passed on the core and on
+    borch.ts while this raised.
+    """
+    if distance_function is not None:
+        from pyodide.ffi import create_proxy
+
+        given = distance_function
+
+        def bridge(u, v):
+            return handle(given(wrap(u), wrap(v)))
+
+        # **Rebound under its own name, not held in a `keep`.** The proxy *is* the
+        # distance function, and `test_binding_arguments.py` reads this call site as
+        # source: with the argument named anything else it reports position 0 as
+        # carrying something that is not `distance_function`, which is exactly the
+        # defect it exists to find. The name being accurate is what makes it quiet.
+        distance_function = create_proxy(bridge)
+    try:
+        layer = _ts.nn.TripletMarginWithDistanceLoss.new(
+            distance_function, float(margin), bool(swap), reduction)
+        return wrap(guarded(layer.call, handle(anchor), handle(positive),
+                            handle(negative)))
+    finally:
+        if hasattr(distance_function, "destroy"):
+            distance_function.destroy()
 
 
 def _interpolate(x, size=None, scale_factor=2, mode="nearest",
@@ -2324,6 +2365,14 @@ def NLLLoss(weight=None, ignore_index=-100, reduction="mean"):
         handle(a).nllLoss(handle(b), int(ignore_index), reduction)))
 
 
+def BCELoss(weight=None, reduction="mean"):
+    """torch's order. **No `pos_weight`** — that belongs to the logits form alone,
+    and offering it here would be an argument torch does not have. The core says the
+    same at the same place."""
+    _no_class_weights("BCELoss", weight, None)
+    return _Wrap(lambda a, b: wrap(handle(a).bce(handle(b), reduction)))
+
+
 def BCEWithLogitsLoss(reduction="mean", *, weight=None, pos_weight=None):
     _no_class_weights("BCEWithLogitsLoss", weight, pos_weight)
     return _Wrap(lambda a, b: wrap(handle(a).bceWithLogits(handle(b), reduction)))
@@ -2365,7 +2414,12 @@ class _Recurrent(Module):
 
 def _recurrent(kind):
     def make(inp, hid, **kw):
-        return _Recurrent(_ts.nn.Recurrent.new(inp, hid, kind))
+        # **`RNNBase` is the class's name now** — torch's, where borch.ts had
+        # `Recurrent` alone. The alias still resolves at runtime, and
+        # `test_binding_arguments.py` reads *source*: it looks for a `class` with
+        # this name and found a `const`, so the call site had nothing to compare
+        # against. Its own message says that is a call site with no rule.
+        return _Recurrent(_ts.nn.RNNBase.new(inp, hid, kind))
     return make
 
 

@@ -179,6 +179,27 @@ DELIBERATE: dict[str, str] = {
     "utils.data::default_convert":
         "converts numpy and Python containers into tensors; neither is on the "
         "TypeScript side of the bridge",
+    # **Three marks with nothing to read them.**
+    #
+    # `nn.Buffer(t)` is torch's way of saying *this value is not trained and is
+    # saved*, and in torch it is the tensor itself — what acts on the mark is
+    # `register_buffer`. borch.ts has `registerBuffer(name, value, persistent)`
+    # taking the tensor directly, so a `Buffer` wrapper would be a name that
+    # produces its own argument back and is read by nobody. **That is what this
+    # project calls a hollow name**, and `data.ts`'s header argues against exactly
+    # it: torch's shape with nothing inside, quietly ignoring what the caller
+    # passes.
+    "nn::Buffer":
+        "a mark that `registerBuffer` reads; borch.ts's takes the tensor directly, "
+        "so the wrapper would hand its argument back and nothing would read it",
+    # `LazyModule` holds `built: Module | null` and makes the real layer when the
+    # size arrives — before that there are **no parameters at all**, not parameters
+    # in an uninitialised state. The core has these because Python's `parameters()`
+    # has to produce *something* and its lazy layers put an object in a
+    # `state_dict`; borch.ts has nothing for the name to name.
+    **{f"nn::{n}": "borch.ts's LazyModule has no parameters before it is built — "
+                   "not uninitialised ones, none — so there is nothing to name"
+       for n in ("UninitializedParameter", "UninitializedBuffer")},
 }
 
 # **Names borch.ts has and the core does not.** The reverse direction is not

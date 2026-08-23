@@ -117,8 +117,8 @@ _SIGNATURE = {
     "clamp_max": ("max",),
     "clamp_min": ("min",),
     "fill": ("value",),
-    "sort": ("dim", "descending"),
-    "topk": ("k", "dim", "largest"),
+    "sort": ("dim", "descending", "stable"),
+    "topk": ("k", "dim", "largest", "sorted"),
     "squeeze": ("dim",),
     "unsqueeze": ("dim",),
     "flatten": ("start_dim", "end_dim"),
@@ -134,7 +134,14 @@ _SIGNATURE = {
     # exception but quietly a different answer** — `qr(mode="complete")` produces
     # the reduced form and `svd(full_matrices=False)` produces the full one.
     "qr": ("mode",),
-    "svd": ("full_matrices",),
+    # **`svd` is `torch.svd` here, not `torch.linalg.svd`.** The row said
+    # `full_matrices` and borch.ts's `svd` takes `some`, which is its *opposite* —
+    # so `svd(full_matrices=False)` would have been forwarded into `some` and
+    # produced the full form for a caller asking for the reduced one. Silently: the
+    # values in the overlapping block agree and only the shape parts.
+    # `linalg.svd` keeps `full_matrices` and is a different function.
+    "svd": ("some", "compute_uv"),
+    "linalgSvd": ("full_matrices",),
     # Keyword arguments of the composite layers.
     "vector_norm": ("ord", "dim"),
     "matrix_norm": ("ord",),
@@ -165,13 +172,13 @@ _SIGNATURE = {
     "diagflat": ("offset",),
     "allclose": ("other", "rtol", "atol", "equal_nan"),
     "median": ("dim", "keepdim"),
-    "gather": ("dim", "index"),
+    "gather": ("dim", "index", "sparse_grad"),
     "index_select": ("dim", "index"),
     "narrow": ("dim", "start", "length"),
     "transpose": ("dim0", "dim1"),
     "swapdims": ("dim0", "dim1"),
     "movedim": ("source", "destination"),
-    "repeat_interleave": ("repeats", "dim"),
+    "repeat_interleave": ("repeats", "dim", "output_size"),
     "cat": ("dim",),
     "stack": ("dim",),
     "split": ("size", "dim"),
@@ -221,8 +228,11 @@ _SIGNATURE = {
     "all": ("dim", "keepdim"),
     "any": ("dim", "keepdim"),
     "count_nonzero": ("dim",),
+    # `nonzero(as_tuple=True)` — borch.ts takes it positionally, so the name has to
+    # be here or the call is refused for having a keyword.
+    "nonzero": ("as_tuple",),
     "kthvalue": ("k", "dim", "keepdim"),
-    "quantile": ("q", "dim"),
+    "quantile": ("q", "dim", "keepdim", "interpolation"),
     "index_fill": ("dim", "index", "value"),
     "scatter": ("dim", "index", "src"),
     "cumulative_trapezoid": ("dim",),
@@ -230,7 +240,10 @@ _SIGNATURE = {
     "squeeze": ("dim",),
     "expand": ("shape",),
     "unflatten": ("dim", "sizes"),
-    "quantile": ("q", "dim"),
+    # **`quantile` was in this table twice**, thirteen lines apart and with the same
+    # value, so the second silently won and the first was dead. Identical, nothing
+    # diverged; the next edit to either one would have. One row now, up with
+    # `kthvalue`.
     "add_": ("other", "alpha"),
     "sub_": ("other", "alpha"),
     "add": ("other", "alpha"),
@@ -3109,7 +3122,16 @@ class _Linalg:
         # torch's abbreviations. `pinv` was empty for a long time and never
         # surfaced because the golden always asked under the long name
         # (`L.pinverse`) — it appeared as soon as one more spelling called it.
-        js_name = camel({"inv": "inverse", "pinv": "pinverse",
+        # **`svd` here is `torch.linalg.svd` and borch.ts calls that `linalgSvd`.**
+        # `svd` over there is `torch.svd`, which is a different function: reduced by
+        # default, and its third field is `V` rather than `Vh`. Routed to the wrong
+        # one, `linalg.svd(A)` came back (3, 2) where it must be (3, 3) and
+        # `linalg.svd(A, full_matrices=False)` came back (3, 3) — **each getting the
+        # other's answer**, because `some` is `full_matrices` negated.
+        #
+        # The values in the overlapping block agree, so the only thing that says so
+        # is a shape, and the only check that looks is this binding's golden.
+        js_name = camel({"inv": "inverse", "pinv": "pinverse", "svd": "linalgSvd",
                          "matmul": "mm", "matrix_rank": "matrixRank"}.get(name, name))
 
         def call(x, *args, **kw):
@@ -3121,7 +3143,14 @@ class _Linalg:
             # places, and discarded they give not an exception but **quietly a
             # different answer under the defaults** — the kind only a value
             # comparison catches.
-            return guarded(fn, *positional(name, args, kw))
+            # **The signature row has to follow the routing.** `positional` keys
+            # off the name it is given, and `linalg.svd` reaches borch.ts's
+            # `linalgSvd`, whose argument is `full_matrices` — while `svd`'s row is
+            # `torch.svd`'s `(some, compute_uv)`. Keyed by the python name it would
+            # read the other function's row and put `full_matrices` into `some`,
+            # which is that argument negated.
+            key = js_name if js_name in _SIGNATURE else name
+            return guarded(fn, *positional(key, args, kw))
 
         call.__name__ = name
         return call

@@ -228,7 +228,16 @@ UNALIGNED = {
     # `unaligned` for thirteen out of `shorter` was not worth it, twenty-five
     # for nine is. Written down because the two look like one decision made
     # twice and are one decision made on different numbers.
-    "nn": 36,
+    # 36 → 37. `RNNBase`, and it is a row that **became visible rather than
+    # appearing**: borch.ts called the class `Recurrent`, so the name existed on one
+    # side only and nothing was compared. Under torch's name the two lists can be
+    # put side by side, and they differ — the core takes torch's eleven
+    # (`mode, input_size, …, device, dtype`) and borch.ts takes three
+    # (`inputSize, hidden, kind`).
+    #
+    # The same thing the `torch is C` bucket did at scale, one row wide: a name
+    # nobody could compare is not a name that agrees.
+    "nn": 37,
                 #     are the same length again — it left for `renamed` below, which
                 #     is a spelling difference rather than a shape one
                 # +1, Embedding: a layer borch.ts did not have, so nothing could be

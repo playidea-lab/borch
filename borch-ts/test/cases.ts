@@ -33,6 +33,7 @@ import * as optim from "../src/optim.js";
 import { load, save, type Savable } from "../src/serialize.js";
 import * as vision from "../src/vision.js";
 import * as data from "../src/data.js";
+import * as F from "../src/functional.js";
 import { LinAlgError } from "../src/errors.js";
 import { noGrad, Tensor } from "../src/tensor.js";
 
@@ -3340,6 +3341,13 @@ function addLoss(out: Map<string, Case>): void {
       () => new nn.TripletMarginWithDistanceLoss().call(anc(), pos(), neg())],
     ["triplet_with_distance(margin=2)",
       () => new nn.TripletMarginWithDistanceLoss(null, 2.0).call(anc(), pos(), neg())],
+    // **A distance that is not the default**, which is the only reason this name
+    // exists apart from `tripletMarginLoss`. The two above pass null and get the
+    // pairwise distance, so they agree with the plain form — and would agree just as
+    // well with an implementation that ignored the argument.
+    ["triplet_with_distance(L1)",
+      () => F.tripletMarginWithDistanceLoss(
+        anc(), pos(), neg(), (u, v) => u.sub(v).abs().sumDim(-1))],
 
     ["multilabel_soft_margin", () => Tensor.from([0.5, -1, 2], [1, 3])
       .multilabelSoftMarginLoss(Tensor.from([1, 0, 1], [1, 3]))],
@@ -4494,18 +4502,21 @@ function addPool(out: Map<string, Case>, inp: Inputs): void {
   out.set("pool::nn.AvgPool3d",
     () => new nn.AvgPool3d(2, 2).call(inp.get("nd_vol")));
 
-  add("F.adaptive_avg_pool1d(4)", (x) => x.adaptivePool("avg", 4), "nd_seq");
-  add("F.adaptive_avg_pool1d(3)", (x) => x.adaptivePool("avg", 3), "nd_seq");
-  add("F.adaptive_avg_pool3d", (x) => x.adaptivePool("avg", 2), "nd_vol");
+  // **Through the `F.` names, as the Python side does.** The computation is
+  // `adaptivePool` either way; what these ask about is the wrapper — its name and
+  // its rank check, which is the only part of it that is not one line.
+  add("F.adaptive_avg_pool1d(4)", (x) => F.adaptiveAvgPool1d(x, 4), "nd_seq");
+  add("F.adaptive_avg_pool1d(3)", (x) => F.adaptiveAvgPool1d(x, 3), "nd_seq");
+  add("F.adaptive_avg_pool3d", (x) => F.adaptiveAvgPool3d(x, 2), "nd_vol");
   out.set("pool::nn.AdaptiveAvgPool1d",
     () => new nn.AdaptiveAvgPool1d(4).call(inp.get("nd_seq")));
   out.set("pool::nn.AdaptiveAvgPool3d",
     () => new nn.AdaptiveAvgPool3d(2).call(inp.get("nd_vol")));
 
-  add("F.adaptive_max_pool1d", (x) => x.adaptivePool("max", 4), "nd_seq");
-  add("F.adaptive_max_pool2d", (x) => x.adaptivePool("max", 2), "img");
-  add("F.adaptive_max_pool2d(안 떨어짐)", (x) => x.adaptivePool("max", 3), "img");
-  add("F.adaptive_max_pool3d", (x) => x.adaptivePool("max", 2), "nd_vol");
+  add("F.adaptive_max_pool1d", (x) => F.adaptiveMaxPool1d(x, 4), "nd_seq");
+  add("F.adaptive_max_pool2d", (x) => F.adaptiveMaxPool2d(x, 2), "img");
+  add("F.adaptive_max_pool2d(안 떨어짐)", (x) => F.adaptiveMaxPool2d(x, 3), "img");
+  add("F.adaptive_max_pool3d", (x) => F.adaptiveMaxPool3d(x, 2), "nd_vol");
   for (const [nd, key, size] of [
     ["1d", "nd_seq", 4], ["2d", "img", 2], ["3d", "nd_vol", 2],
   ] as const) {
@@ -7443,6 +7454,17 @@ function addGrad(out: Map<string, Case>, inp: Inputs): void {
     out.set(`grad::접힘::${tag}`, async () => {
       const x = src();
       return back(x, await x.quantile(q), tag);
+    });
+  }
+  // **The four rules the default hides.** The four above pass no `interpolation`,
+  // so they exercise `linear` alone — and the other four are different answers
+  // *and different gradients*: the split follows the rule that produced the value,
+  // or the forward stops interpolating while the backward goes on doing it.
+  for (const how of ["lower", "higher", "midpoint", "nearest"]) {
+    out.set(`grad::접힘::quantile(0.3, ${how})`, async () => {
+      const x = tied();
+      return back(x, await x.quantile(0.3, null, false, how),
+        `quantile(0.3, ${how})`);
     });
   }
   // The derivative is `i1`. This **was flowing 0**, and its comment cited the core's hole
