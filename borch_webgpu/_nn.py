@@ -1413,16 +1413,40 @@ def AdaptiveLogSoftmaxWithLoss(in_features, n_classes, cutoffs, div_value=4.0,
         float(div_value), bool(head_bias)))
 
 
-def Conv1d(cin, cout, k, stride=1, padding=0, bias=True):
-    return _layer("Conv1d", cin, cout, k, stride, padding, bias)
+# **torch's list, and the crossing is positional.** These three read
+# `(cin, cout, k, stride, padding, bias)` while borch.ts had already moved to torch's
+# `(inC, outC, kernel, stride, padding, dilation, groups, bias, paddingMode)`. So
+# `bias` was landing in `dilation`, and a boolean where a stride-like number belongs
+# came out the far side as `TypeError: v is not iterable` — from the kernel, several
+# frames below anything that mentions a convolution.
+#
+# The commit that moved borch.ts said it had carried the change "across core, borch.ts
+# and the binding". It had carried `conv{1,2,3}d`, the functions; these three are the
+# layers, in the same file, forty lines away. **Two call sites for one thing and only
+# one of them in mind** — the golden's `ndim::nn.Conv1d` and both `train::CNN` rows
+# have been red since, under an error naming neither convolutions nor arguments.
+def _conv(js_name, cin, cout, k, stride, padding, dilation, groups, bias,
+          padding_mode):
+    return _layer(js_name, cin, cout, k, stride, padding, int(dilation), int(groups),
+                  bool(bias), padding_mode)
 
 
-def Conv2d(cin, cout, k, stride=1, padding=0, bias=True):
-    return _layer("Conv2d", cin, cout, k, stride, padding, bias)
+def Conv1d(cin, cout, k, stride=1, padding=0, dilation=1, groups=1, bias=True,
+           padding_mode="zeros"):
+    return _conv("Conv1d", cin, cout, k, stride, padding, dilation, groups, bias,
+                 padding_mode)
 
 
-def Conv3d(cin, cout, k, stride=1, padding=0, bias=True):
-    return _layer("Conv3d", cin, cout, k, stride, padding, bias)
+def Conv2d(cin, cout, k, stride=1, padding=0, dilation=1, groups=1, bias=True,
+           padding_mode="zeros"):
+    return _conv("Conv2d", cin, cout, k, stride, padding, dilation, groups, bias,
+                 padding_mode)
+
+
+def Conv3d(cin, cout, k, stride=1, padding=0, dilation=1, groups=1, bias=True,
+           padding_mode="zeros"):
+    return _conv("Conv3d", cin, cout, k, stride, padding, dilation, groups, bias,
+                 padding_mode)
 
 
 # ── one step of a recurrence ────────────────────────────────────────────
